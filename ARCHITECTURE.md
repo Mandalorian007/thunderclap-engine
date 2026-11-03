@@ -9,9 +9,14 @@ packages/engine/
   package.json        # @thunderclap/engine; the "exports" map is the public API
   src/
     audio/  core/  fx/  input/  platform/  post/  render/  save/  ui/
+  harness/            # noun-free e2e page: boots the platform layer, publishes window.__harness
+  e2e/                # engine e2e specs, fixtures, ports, itch-style iframe wrapper
+  playwright.config.ts  # the viewport/device/wrapper matrix every engine spec runs on
   ARCHITECTURE.md     # this file
   CHANGELOG.md
 ```
+
+**Test ownership (D-041 addendum 2).** The engine verifies platform capability once, for every game: unit tests (`src/**/*.test.ts`, Vitest) and e2e specs (`e2e/`, Playwright) run against the `harness/` page. Every spec runs on the whole matrix in `playwright.config.ts`: desktop 1280×720 and 1920×1080, iPad 1180×820, four phones (667×320, 844×340, 932×380, 915×360, touch at DPR 2), and the harness inside an itch-style cross-origin iframe. A new platform capability (host, gestures, layout, lifecycle) adds a probe to the harness and a spec here, not in a game. Games test product only.
 
 Games import only the exports map: `@thunderclap/engine/<module>` for `audio`, `core`, `fx`, `input`, `platform`, `post`, `render`, `save` and `ui`, plus `@thunderclap/engine/testing` (the recording fake `GPUDevice`, for unit tests only). Each subpath is that module's `index.ts`; anything not re-exported there is internal. `pnpm check:boundaries` (`scripts/check-boundaries.mjs`, part of `pnpm check`) fails if a game, test or script imports a path outside the map or reaches into `packages/engine/` by a relative path, or if anything under `src/` imports a game. Inside the package, modules import each other by relative path.
 
@@ -28,7 +33,7 @@ The package ships TypeScript source; the game's Vite build compiles it. There is
 
 **Surface.** Owns the canvas, the swapchain, DPR, the backbuffer size and the letterbox or fill-width fit. It exposes `rect` (CSS px), `size` (device px), `clientToLogical` and `onResize`. Later an `XRSurface` provides a target per eye per frame through the same interface. *Today:* `Surface` / `mountSurface` in `platform/surface.ts` exposes `rect`, `backbuffer` (device px; the planned name is `size`), `clientToLogical`, `logicalToClient`, `onResize` and `setFill` (fill-width), over the pure letterbox math in `platform/letterbox.ts`; `initGpu` configures the swapchain. *Planned:* the `size` rename and the target-per-frame shape arrive with Phase 3's `render(camera, target)`; `XRSurface` is after Gate 5.
 
-**Camera.** A view-projection matrix plus `worldToScreen` and `screenToWorld` (the inverse projection; touch aiming uses it). Presets: `ortho2d(designW, designH)`, where 1 unit = 1 design px, and `fitRect(rect, viewport)`, which generalises the game's `zoom.ts`. Depth test and depth write are camera-preset flags; the 2D preset leaves both off. *Today:* `render/renderer.ts` has a 2D `Camera` (`x`, `y`, `zoom`, `rotation` over the logical space) read from `renderer.camera`; draw order is submission order with no depth. *Planned:* Phase 1 (ws/promote-ui) promotes the altar's pure camera functions as `render/camera2d.ts`; Phase 3 (ws/camera) adds the matrix `Camera`, `mat4` in `core/math.ts` and the camera uniform block.
+**Camera.** A view-projection matrix plus `worldToScreen` and `screenToWorld` (the inverse projection; touch aiming uses it). Presets: `ortho2d(designW, designH)`, where 1 unit = 1 design px, and `fitRect(rect, viewport)`, which fits a world rect into a viewport. Depth test and depth write are camera-preset flags; the 2D preset leaves both off. *Today:* `render/renderer.ts` has a 2D `Camera` (`x`, `y`, `zoom`, `rotation` over the logical space) read from `renderer.camera`; draw order is submission order with no depth. *Planned:* Phase 3 (ws/camera) adds the matrix `Camera`, `mat4` in `core/math.ts` and the camera uniform block.
 
 **Frame loop.** `GameLoop` as today (fixed 60 Hz update, variable render), but `render(camera, target, alpha)` takes the camera and the target as inputs instead of reading them from the renderer. The host decides who schedules frames (rAF, Electron, later `XRSession.requestAnimationFrame`). *Today:* `GameLoop` and `FixedStepper` in `core/loop.ts` (fixed step, `maxFps` cap, pause) call `render(alpha, time)` from `requestAnimationFrame`; `Scene<Ctx, Frame>` and `SceneStack` in `core/scene.ts`. *Planned:* the `render(camera, target, alpha)` signature in Phase 3 (ws/render-call); host-owned scheduling with the host layer.
 

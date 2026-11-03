@@ -15,5 +15,6 @@ Phase 1 of the refactor plan (D-041). Every promoted module is listed here befor
 ### Added
 - `ARCHITECTURE.md`: the contracts (Surface, Camera, Frame loop, Host, Input, Layout, UI/Audio/Save/FX/Post, Scene and Ctx), each marked as existing today or planned.
 - An import-boundary check (`scripts/check-boundaries.mjs` at the repo root, run by `pnpm check`).
+- The engine e2e harness (D-041 addendum 2). `harness/` is a noun-free page that boots the platform layer and publishes `window.__harness`. `e2e/` holds the specs and `playwright.config.ts` holds the matrix: desktop 1280×720 and 1920×1080, iPad 1180×820, four phones and an itch-style cross-origin iframe (`e2e/wrapper.mjs`). Its seed spec, `smoke.spec.ts`, checks WebGPU init, surface letterbox and resize, and one tap. Run it with `pnpm test:e2e` in the package or `pnpm test:e2e:engine` from the repo root.
 
 No runtime behaviour changed: Last Rune's production bundle is byte-identical to the one built from `engine/`.
