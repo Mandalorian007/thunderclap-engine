@@ -18,8 +18,20 @@ export {
   externalLink,
 } from './link';
 export { Loupe, type LoupeOptions, type LoupeView } from './loupe';
+export {
+  type MenuNavActions,
+  type MenuNavInput,
+  type MenuNavResult,
+  menuNav,
+} from './menu-nav';
 export { createOverlay, type Overlay, type OverlayOptions, type Rect } from './overlay';
 export { type PadLike, PadNav, type PadNavOptions } from './padnav';
+export {
+  createRotateCard,
+  type RotateCard,
+  type RotateCardColors,
+  type RotateCardOptions,
+} from './rotate-card';
 export {
   type CloseReason,
   NO_RESTORE_FOCUS_ATTR,
@@ -29,6 +41,15 @@ export {
   type PanelStackFocusOptions,
 } from './stack';
 export { BASE_CSS, ensureStyles, prefersReducedMotion } from './styles';
+export {
+  applyTextScale,
+  scaledPx,
+  scaleFontSizes,
+  scalePxCss,
+  TEXT_MIN_VAR,
+  TEXT_SCALE_VAR,
+  textScaleTokens,
+} from './text-scale';
 export {
   applyTheme,
   cssVar,

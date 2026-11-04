@@ -10,6 +10,16 @@ export {
   watchFullscreen,
   watchPointerKind,
 } from './device';
+export {
+  type CropInfo,
+  createDeviceMode,
+  type DeviceMode,
+  type DeviceModeController,
+  type DeviceModeOptions,
+  PHONE_SCALE,
+  PHONE_TAP_MIN,
+  PHONE_TEXT_MIN,
+} from './device-mode';
 export type { DeviceTraits, LifecycleHandlers } from './environment';
 export {
   deviceTraits,
