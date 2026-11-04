@@ -6,6 +6,7 @@
 //   node e2e/wrapper.mjs --port 4178 --target http://127.0.0.1:4177/
 //
 // Query params: ?w=960&h=540 sets the iframe size (default 960x540, the recommended itch size).
+// ?launch=1 is itch's click-to-launch: a "Run game" button that injects the iframe on click.
 import { createServer } from 'node:http';
 
 const ITCH_IFRAME_ALLOW =
@@ -34,26 +35,31 @@ const page = `<!doctype html>
     </style>
   </head>
   <body>
-    <main><div id="frame"></div></main>
+    <main><div id="frame"><button id="run_btn" type="button">Run game</button></div></main>
     <script>
       const q = new URLSearchParams(location.search);
       const frame = document.getElementById('frame');
       frame.style.width = (Number(q.get('w')) || 960) + 'px';
       frame.style.height = (Number(q.get('h')) || 540) + 'px';
-      const iframe = document.createElement('iframe');
-      iframe.id = 'game_drop';
-      // The same attributes itch.io sets on the game iframe.
-      iframe.setAttribute('frameborder', '0');
-      iframe.setAttribute('allowfullscreen', 'true');
-      iframe.setAttribute('scrolling', 'no');
-      iframe.setAttribute('allowtransparency', 'true');
-      iframe.setAttribute('webkitallowfullscreen', 'true');
-      iframe.setAttribute('mozallowfullscreen', 'true');
-      iframe.setAttribute('msallowfullscreen', 'true');
-      iframe.setAttribute('allow', ${JSON.stringify(ITCH_IFRAME_ALLOW)});
-      iframe.src = ${JSON.stringify(target)};
-      frame.append(iframe);
-      iframe.addEventListener('load', () => iframe.focus());
+      function launch() {
+        document.getElementById('run_btn')?.remove();
+        const iframe = document.createElement('iframe');
+        iframe.id = 'game_drop';
+        // The same attributes itch.io sets on the game iframe.
+        iframe.setAttribute('frameborder', '0');
+        iframe.setAttribute('allowfullscreen', 'true');
+        iframe.setAttribute('scrolling', 'no');
+        iframe.setAttribute('allowtransparency', 'true');
+        iframe.setAttribute('webkitallowfullscreen', 'true');
+        iframe.setAttribute('mozallowfullscreen', 'true');
+        iframe.setAttribute('msallowfullscreen', 'true');
+        iframe.setAttribute('allow', ${JSON.stringify(ITCH_IFRAME_ALLOW)});
+        iframe.src = ${JSON.stringify(target)};
+        frame.append(iframe);
+        iframe.addEventListener('load', () => iframe.focus());
+      }
+      if (q.get('launch') === '1') document.getElementById('run_btn').addEventListener('click', launch);
+      else launch();
     </script>
   </body>
 </html>

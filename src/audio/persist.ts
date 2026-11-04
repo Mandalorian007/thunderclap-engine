@@ -1,3 +1,4 @@
+import type { Host } from '../host/types';
 import { createSaveStore, type SaveStore, type StorageLike, s } from '../save';
 import {
   type AudioEngine,
@@ -19,6 +20,9 @@ export interface PersistMixerOptions {
   game: string;
   /** Default `audio` (key `thunderclap:<game>:audio`), separate from progress saves. */
   slot?: string;
+  /** Where the slot is stored (`host.storage`). Default: `defaultHost()`. */
+  host?: Pick<Host, 'storage'>;
+  /** A fixed storage instead of the host's (tests); `null` keeps it in memory. */
   storage?: StorageLike | null;
   debounceMs?: number;
   autoFlush?: boolean;
@@ -39,6 +43,7 @@ export function persistMixer(
     version: 1,
     defaults: () => sanitizeMixer(DEFAULT_MIXER),
     schema: (v: unknown): v is MixerSettings => Mixer.is(v),
+    host: opts.host,
     storage: opts.storage,
     debounceMs: opts.debounceMs ?? 300,
     autoFlush: opts.autoFlush,

@@ -3,7 +3,7 @@
  * the cross-origin iframe inside the itch-style wrapper. Specs read `window.__harness` through
  * `readHarness` and drive it the same way in both cases.
  */
-import { test as base, expect, type Frame } from '@playwright/test';
+import { test as base, expect, type Frame, type Page } from '@playwright/test';
 import type { HarnessState } from '../harness/state';
 import { HARNESS_PORT, HARNESS_URL, WRAPPER_URL } from './ports';
 
@@ -16,21 +16,38 @@ interface HarnessFixtures {
   harness: Frame;
 }
 
+/**
+ * Opens the harness for `wrapper` and returns the frame it runs in. `query` goes on the wrapper
+ * URL (e.g. `?launch=1`). Specs that stub browser APIs with `page.addInitScript` call this after
+ * installing the stubs; the `harness` fixture calls it for everyone else.
+ */
+export async function openHarness(
+  page: Page,
+  wrapper: HarnessOptions['wrapper'],
+  query = '',
+): Promise<Frame> {
+  if (wrapper === 'top') {
+    await page.goto(HARNESS_URL);
+    return page.mainFrame();
+  }
+  await page.goto(`${WRAPPER_URL}${query}`);
+  return harnessFrame(page);
+}
+
+/** The harness iframe inside the wrapper page, once it exists. */
+export async function harnessFrame(page: Page): Promise<Frame> {
+  await expect
+    .poll(() => page.frames().some((f) => f.url().includes(`:${HARNESS_PORT}/`)))
+    .toBe(true);
+  const frame = page.frames().find((f) => f.url().includes(`:${HARNESS_PORT}/`));
+  if (!frame) throw new Error('harness iframe not found');
+  return frame;
+}
+
 export const test = base.extend<HarnessFixtures & HarnessOptions>({
   wrapper: ['top', { option: true }],
   harness: async ({ page, wrapper }, use) => {
-    if (wrapper === 'top') {
-      await page.goto(HARNESS_URL);
-      await use(page.mainFrame());
-      return;
-    }
-    await page.goto(WRAPPER_URL);
-    await expect
-      .poll(() => page.frames().some((f) => f.url().includes(`:${HARNESS_PORT}/`)))
-      .toBe(true);
-    const frame = page.frames().find((f) => f.url().includes(`:${HARNESS_PORT}/`));
-    if (!frame) throw new Error('harness iframe not found');
-    await use(frame);
+    await use(await openHarness(page, wrapper));
   },
 });
 

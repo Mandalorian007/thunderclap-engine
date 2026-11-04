@@ -64,7 +64,7 @@ export class PadNav {
     const active = panel.ownerDocument.activeElement as HTMLElement | null;
     const inside = active !== null && active !== panel && panel.contains(active);
     if (fresh('activate')) {
-      // External links open via window.open with block detection (a pad press is no gesture).
+      // External links open through the host with block detection (a pad press is no gesture).
       if (inside) activateLink(active, 'gamepad');
       return;
     }

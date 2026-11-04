@@ -1,7 +1,9 @@
+import { defaultHost } from '../host/default';
+import type { Host } from '../host/types';
 import { decodeExport, type Envelope, encodeExport, isEnvelope } from './codec';
 import { assertMigrationChain, type Migrations, runMigrations } from './migrate';
 import type { Schema } from './schema';
-import { isQuotaError, probeStorage, type StorageLike } from './storage';
+import { isQuotaError, type StorageLike } from './storage';
 
 const NAME_RE = /^[a-z0-9][a-z0-9_-]*$/i;
 
@@ -13,7 +15,10 @@ export function saveKey(game: string, slot: string): string {
 }
 
 /** Slot names that currently have data for `game` (excludes backups). */
-export function listSlots(game: string, storage: StorageLike | null = probeStorage()): string[] {
+export function listSlots(
+  game: string,
+  storage: StorageLike | null = defaultHost().storage.open(),
+): string[] {
   if (!storage) return [];
   const prefix = `thunderclap:${game}:`;
   const out: string[] = [];
@@ -64,7 +69,12 @@ export interface SaveStoreOptions<T> {
   /** Debounce for writes, ms. Default 250. `0` writes synchronously on every `set`. */
   debounceMs?: number;
   /**
-   * Backing storage. Default: probed `localStorage`. Pass `null` to force memory only.
+   * Where the storage comes from: `host.storage.open()`, re-tried on each write while it is
+   * unavailable. Default: `defaultHost()` (the web host's `localStorage`).
+   */
+  host?: Pick<Host, 'storage'>;
+  /**
+   * A fixed backing storage instead of the host's. Pass `null` to force memory only.
    * Tests pass a `MemoryStorage` or a throwing stub.
    */
   storage?: StorageLike | null;
@@ -121,7 +131,8 @@ export function createSaveStore<T>(opts: SaveStoreOptions<T>): SaveStore<T> {
           (opts.schema as (v: unknown) => boolean)(v) ? null : 'save data failed schema check'
       : (v) => (opts.schema as Schema<T>).validate(v);
 
-  let storage: StorageLike | null = opts.storage === undefined ? probeStorage() : opts.storage;
+  const source = opts.storage === undefined ? (opts.host ?? defaultHost()).storage : null;
+  let storage: StorageLike | null = source ? source.open() : (opts.storage ?? null);
   const status: SaveStatus = {
     persistent: storage !== null,
     loadResult: 'fresh',
@@ -195,7 +206,7 @@ export function createSaveStore<T>(opts: SaveStoreOptions<T>): SaveStore<T> {
     const env: Envelope = { v: version, t: savedAt, d: data };
     if (!storage) {
       // Re-probe: storage may have become available (e.g. user changed a browser setting).
-      if (opts.storage === undefined) storage = probeStorage();
+      if (source) storage = source.open();
     }
     if (storage) {
       try {
