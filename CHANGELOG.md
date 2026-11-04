@@ -2,9 +2,10 @@
 
 Versions follow semver from `engine-v1.0.0` (Phase 5). Releases are cut with `pnpm engine:release <version>` from the repo root, which bumps the version, dates the top `(unreleased)` section and commits. A tag `engine-v<version>` is created only with `--tag` (D-041 addendum 3). Nothing else in the repo makes tags.
 
-## 0.2.0-dev (unreleased)
+## Next (unreleased)
 
 ### Added
+- `HostWindow.setTitle?(title)`: optional, for hosts with a window of their own. The Electron host (`@thunderclap/host-electron`, ws/host-electron) implements it.
 - Layout regions (D-041 Phase 2, ws/layout): `createLayout(overlay, spec?)` in `./ui`, with `LayoutSpec`, `FormFactor`, `RegionName`, `classifyFormFactor`, `resolveLayout`, `resolveTracks`, `parseAreas`, `effectiveInsets`, `readSafeArea` and `defaultForms`.
   - Four form factors (`phone-landscape`, `phone-portrait`, `tablet`, `desktop`), each with px/fraction/fill tracks and grid areas for `top`, `left`, `right`, `bottom`, `cardLane`, `captionLane` and `fill`, plus a `modal` rect. All of them sit inside the safe area.
   - Widgets register once with a region per form factor and move when it changes. The escape hatch `{ region: 'free', rect, reason }` is logged and listed in `layout.freeUses`.
