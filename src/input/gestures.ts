@@ -1,5 +1,5 @@
 import { Loupe } from '../ui/loupe';
-import { type Aim, loupeSpot, MAGNIFY_DEFAULTS, type MagnifyOptions } from './magnify';
+import { type Aim, loupeClear, loupeSpot, MAGNIFY_DEFAULTS, type MagnifyOptions } from './magnify';
 import type { GestureKind, PointerTransform } from './types';
 
 /** Device of the pointer that made a gesture. */
@@ -360,7 +360,10 @@ export class Gestures {
     const view = win
       ? { width: win.innerWidth, height: win.innerHeight }
       : { width: Number.POSITIVE_INFINITY, height: Number.POSITIVE_INFINITY };
-    const at = loupeSpot(finger, client, size, view);
+    const room = loupe && m.clear ? m.clear(target) : null;
+    const at = room
+      ? loupeClear(finger, client, size, view, room.keep, room.avoid)
+      : loupeSpot(finger, client, size, view);
     return { x, y, inside, client, finger, lifted, target, loupe, at, ended: false };
   }
 

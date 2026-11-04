@@ -21,10 +21,12 @@ export {
 export {
   type Aim,
   type Grid,
+  loupeClear,
   loupeSpot,
   MAGNIFY_DEFAULTS,
   type MagnifyOptions,
   type MagnifyTarget,
+  type Rect,
   snapToGrid,
 } from './magnify';
 export type {

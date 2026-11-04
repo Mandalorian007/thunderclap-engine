@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { type GestureOptions, Gestures } from './gestures';
-import { loupeSpot, type MagnifyOptions, snapToGrid } from './magnify';
+import { loupeClear, loupeSpot, type MagnifyOptions, type Rect, snapToGrid } from './magnify';
 
 // A 4×3 grid, pitch 20, cell (i, j) centred at (10 + 20i, 10 + 20j).
 const G = { left: 0, top: 0, pitch: 20, cols: 4, rows: 3 };
@@ -44,6 +44,41 @@ describe('loupeSpot', () => {
     const b = loupeSpot({ x: 790, y: 399 }, { x: 790, y: 399 }, 128, view);
     expect(b.x).toBeLessThanOrEqual(800 - 68);
     expect(b.y).toBe(400 - 68);
+  });
+});
+
+describe('loupeClear: the loupe leaves the kept area in sight', () => {
+  const view = { width: 800, height: 400 };
+  const disc = (c: { x: number; y: number }, q: Rect, half: number) =>
+    Math.hypot(Math.max(q.l - c.x, 0, c.x - q.r), Math.max(q.t - c.y, 0, c.y - q.b)) >= half;
+  it('never covers a kept rect or the fingertip, and stays on screen', () => {
+    for (const [fx, fy] of [
+      [60, 380],
+      [400, 300],
+      [760, 200],
+      [400, 120],
+      [200, 390],
+    ] as const) {
+      const aim = { x: fx, y: fy - 56 };
+      const keep = [{ l: aim.x - 45, t: aim.y - 45, r: aim.x + 45, b: aim.y + 45 }];
+      const c = loupeClear({ x: fx, y: fy }, aim, 128, view, keep);
+      expect(disc(c, keep[0]!, 64), `${fx},${fy}`).toBe(true);
+      expect(Math.hypot(c.x - fx, c.y - fy)).toBeGreaterThanOrEqual(64 + 22);
+      expect(c.x - 64).toBeGreaterThanOrEqual(4);
+      expect(c.x + 64).toBeLessThanOrEqual(796);
+      expect(c.y - 64).toBeGreaterThanOrEqual(4);
+      expect(c.y + 64).toBeLessThanOrEqual(396);
+      expect(c.y).toBeLessThanOrEqual(fy);
+    }
+  });
+  it('takes the nearest free side, and covers an avoided rect only when it must', () => {
+    const aim = { x: 300, y: 200 };
+    const keep = [{ l: 255, t: 155, r: 345, b: 245 }];
+    const near = loupeClear({ x: 300, y: 256 }, aim, 128, view, keep);
+    expect(Math.hypot(near.x - aim.x, near.y - aim.y)).toBeLessThan(64 + 45 + 6 + 2 + 32);
+    const right = { l: 340, t: 0, r: 800, b: 400 };
+    const off = loupeClear({ x: 300, y: 256 }, aim, 128, view, keep, [right]);
+    expect(disc(off, right, 64)).toBe(true);
   });
 });
 

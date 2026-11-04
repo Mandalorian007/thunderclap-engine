@@ -28,6 +28,7 @@ Versions follow semver from `engine-v1.0.0` (Phase 5). Releases are cut with `pn
 ### Magnify (ws/port-altar)
 - `GestureOptions.magnify` (`MagnifyOptions`: `pitch`, `below` 44, `size` 128, `zoom` 2.5, `lift` 56, `when`, `snap`, `over`, `toClient`, `source`, `className`, `parent`) and `Gestures.setMagnify()`. Each tick a touch pointer is down, `gestures.aim` (`Aim`) holds the aim point (lifted while dragging), the snapped `target` (`MagnifyTarget`, with `data` for the game's cell), and whether the loupe shows; the aim the finger lifted at comes once more with `ended` on the drag's `end` tick. With a `source` canvas the gestures draw a `Loupe` (`gestures.loupeElement`); `destroy()` removes it.
 - `snapToGrid(grid, x, y, ok?)` and `loupeSpot(finger, aim, size, view)` in `./input`.
+- `MagnifyOptions.clear(target)` (ws/dense-board-3): areas the loupe must leave in sight (`keep`, for example the target and its neighbours) and should rather not cover (`avoid`), client px (`Rect`). With it the loupe goes where `loupeClear(finger, aim, size, view, keep, avoid?)` puts it: the free spot nearest the aim, clear of `keep` and the fingertip, never below the finger, on screen.
 - Engine tests: `src/input/magnify.test.ts`, the loupe element in `gestures.dom.test.ts`, and two `e2e/gestures.spec.ts` cases on every row (snap off a refused cell, loupe only below 44 CSS px, mouse never aims; a drag aims 56 px up and lands there). The game's `scenes/altar/snap` test moved here.
 
 ### Gestures (ws/gestures)
