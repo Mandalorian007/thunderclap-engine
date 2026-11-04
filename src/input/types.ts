@@ -12,7 +12,16 @@ export type Binding =
   /** Standard-mapping gamepad button index (0 = A/Cross, 9 = Start …). `pad` omitted = any pad. */
   | { padButton: number; pad?: number; threshold?: number }
   /** Gamepad axis past `threshold` (default 0.5) in direction `dir`. Value is analog 0..1. */
-  | { padAxis: number; dir: 1 | -1; pad?: number; threshold?: number };
+  | { padAxis: number; dir: 1 | -1; pad?: number; threshold?: number }
+  /**
+   * A gesture from the `Gestures` linked with `Input.setGestures`. `tap` and `doubleTap` press
+   * for one tick; `longPress` holds until its pointer lifts; `pan`, `drag` and `pinch` hold
+   * from their start until they end. Reads inactive when no gestures are linked.
+   */
+  | { gesture: GestureKind };
+
+/** The gestures `Gestures` recognises (and a `{ gesture }` binding can name). */
+export type GestureKind = 'tap' | 'doubleTap' | 'longPress' | 'pan' | 'drag' | 'pinch';
 
 export type Bindings<A extends string> = { readonly [K in A]: readonly Binding[] };
 

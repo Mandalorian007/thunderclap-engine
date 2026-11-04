@@ -1,3 +1,4 @@
+import type { Gestures } from './gestures';
 import type {
   ActionState,
   Binding,
@@ -35,6 +36,8 @@ export interface InputOptions {
    * into one. Default true; pass false for the old one-press-per-tick behaviour.
    */
   queueTaps?: boolean;
+  /** Gestures to link (see `Input.setGestures`). */
+  gestures?: Gestures;
 }
 
 export interface AttachOptions {
@@ -185,6 +188,8 @@ export class Input<A extends string> {
   private readonly prevKeys = new Set<string>();
   private readonly prevButtons = new Set<number>();
   private detachFn: (() => void) | null = null;
+  private gestures: Gestures | null = null;
+  private attached: AttachOptions | null = null;
 
   constructor(bindings: Bindings<A>, opts: InputOptions = {}) {
     this.bindings = bindings;
@@ -194,6 +199,31 @@ export class Input<A extends string> {
     if (opts.globalKeys) this.setGlobalKeys(opts.globalKeys);
     if (opts.buttonKeys) this.setButtonKeys(opts.buttonKeys);
     this.setBindings(bindings);
+    if (opts.gestures) this.setGestures(opts.gestures);
+  }
+
+  /**
+   * Link gestures (or unlink with `null`). Linked gestures share this input's `blocked()` and
+   * pointer transform, attach to the same pointer target, and advance in `update()` before the
+   * actions are read, so `{ gesture }` bindings work. Don't call `gestures.update()` yourself.
+   */
+  setGestures(gestures: Gestures | null): void {
+    if (this.gestures === gestures) return;
+    if (this.gestures && this.attached) this.gestures.detach();
+    this.gestures = gestures;
+    if (!gestures) return;
+    gestures.blocked = () => this.blocked();
+    gestures.setPointerTransform(this.transform);
+    if (this.attached) {
+      gestures.attach({
+        pointerTarget: this.attached.pointerTarget,
+        disableTouchScroll: this.attached.disableTouchScroll,
+      });
+    }
+  }
+
+  getGestures(): Gestures | null {
+    return this.gestures;
   }
 
   /** Replace all bindings (e.g. after the player rebinds). Action states reset. */
@@ -238,6 +268,7 @@ export class Input<A extends string> {
   /** Install the client → game-space mapping (platform owns letterboxing). `null` = identity relative to the target. */
   setPointerTransform(fn: PointerTransform | null): void {
     this.transform = fn;
+    this.gestures?.setPointerTransform(fn);
   }
 
   // ---------------------------------------------------------------- queries
@@ -273,6 +304,7 @@ export class Input<A extends string> {
 
   /** Advance one tick: poll gamepads, compute edges, clear per-tick accumulators. */
   update(): void {
+    this.gestures?.update();
     const blocked = this.blocked();
     this.pads = this.getGamepads();
     let padActive = false;
@@ -352,6 +384,13 @@ export class Input<A extends string> {
           return btn.pressed || btn.value >= t ? Math.max(btn.value, btn.pressed ? 1 : 0) : 0;
         });
         if (v > 0) out.pad = true;
+      } else if ('gesture' in b) {
+        const g = this.gestures;
+        if (g?.active(b.gesture)) {
+          v = 1;
+          // A tap on consecutive ticks is a new press each time.
+          if (g.fired(b.gesture)) out.fresh = true;
+        }
       } else {
         v = this.padValue(b.pad, (p) => {
           const raw = (p.axes[b.padAxis] ?? 0) * b.dir;
@@ -542,7 +581,12 @@ export class Input<A extends string> {
     win.addEventListener('blur', onBlur);
     doc.addEventListener('visibilitychange', onVisibility);
 
+    this.attached = opts;
+    this.gestures?.attach({ pointerTarget: target, disableTouchScroll: opts.disableTouchScroll });
+
     this.detachFn = () => {
+      this.gestures?.detach();
+      this.attached = null;
       keyTarget.removeEventListener('keydown', onKeyDown);
       keyTarget.removeEventListener('keyup', onKeyUp);
       target.removeEventListener('pointerdown', onPointerDown);
