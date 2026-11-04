@@ -44,6 +44,8 @@ export interface HostWindow {
   close(): void;
   minimize?(): void;
   toggleMaximize?(): void;
+  /** Sets the window's title bar text. */
+  setTitle?(title: string): void;
 }
 
 export interface Host {
