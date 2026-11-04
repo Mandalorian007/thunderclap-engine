@@ -2,6 +2,21 @@
 
 Versions follow semver from `engine-v1.0.0` (Phase 5). Releases are cut with `pnpm engine:release <version>` from the repo root, which bumps the version, dates the top `(unreleased)` section and commits. A tag `engine-v<version>` is created only with `--tag` (D-041 addendum 3). Nothing else in the repo makes tags.
 
+## 0.2.0-dev (unreleased)
+
+### Added
+- Layout regions (D-041 Phase 2, ws/layout): `createLayout(overlay, spec?)` in `./ui`, with `LayoutSpec`, `FormFactor`, `RegionName`, `classifyFormFactor`, `resolveLayout`, `resolveTracks`, `parseAreas`, `effectiveInsets`, `readSafeArea` and `defaultForms`.
+  - Four form factors (`phone-landscape`, `phone-portrait`, `tablet`, `desktop`), each with px/fraction/fill tracks and grid areas for `top`, `left`, `right`, `bottom`, `cardLane`, `captionLane` and `fill`, plus a `modal` rect. All of them sit inside the safe area.
+  - Widgets register once with a region per form factor and move when it changes. The escape hatch `{ region: 'free', rect, reason }` is logged and listed in `layout.freeUses`.
+  - `layout.freeRect` (the `fill` region, CSS px) and `onChange` are there for the camera. Tracks with no widgets collapse.
+  - `layout.dockCaption()` places the caption card in `captionLane`. `caption.dock(host)` is new, and `avoid()` is unchanged.
+- `createOverlay({ legacyScale: false })`, a CSS-px overlay mode (`data-units="css"`, `cssPxTheme`, `overlay.onRect`). `legacyScale: true` stays the default, so existing scenes are unchanged.
+- In CSS-px mode, buttons, toggles and sliders honour `--tc-tap-min` (44 on touch forms), and panels and toasts honour the safe area and the modal region. `textScaleTokens` takes a base size table (`DESIGN_FONT_PX`, `CSS_FONT_PX`).
+- The engine e2e has a layout harness page (`harness/layout.html`) and `e2e/layout.spec.ts`. It checks every matrix row plus two new upright rows (`phone-port` 390×844 and `tablet-port` 820×1180) for region placement, no overlap, the safe area (insets emulated through CDP), 44 px taps on touch, rotation and the modal at 150% text.
+
+### Changed
+- `platform/device-mode.ts` no longer writes the density tokens on a CSS-px overlay root, because the layout owns them there.
+
 ## 0.2.0-alpha.1 (2026-11-04)
 
 Phase 1 of the refactor plan (D-041). Every promoted module is listed here before Gate 1.

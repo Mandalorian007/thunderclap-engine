@@ -39,12 +39,14 @@ interface MatrixEntry {
   /** Touch device: isMobile + hasTouch + DPR 2. */
   touch?: boolean;
   wrapper?: HarnessOptions['wrapper'];
+  /** Run only these specs on this row (rows added for one capability). */
+  testMatch?: RegExp;
 }
 
 /**
  * The phones match the game's mobile specs (tests/e2e/mobile*.spec.ts, landscape CSS px). Their
- * safe-area insets (iphone 47, promax 59) are not emulated yet, because the harness has no
- * safe-area layout to test. That arrives with the layout contract.
+ * safe-area insets (iphone 47, promax 59) are emulated by e2e/layout.spec.ts through CDP
+ * (`Emulation.setSafeAreaInsetsOverride`), so `env(safe-area-inset-*)` is real there.
  */
 const MATRIX: MatrixEntry[] = [
   { name: 'desktop-1280', width: 1280, height: 720 },
@@ -55,6 +57,9 @@ const MATRIX: MatrixEntry[] = [
   { name: 'phone-promax', width: 932, height: 380, touch: true },
   { name: 'phone-android', width: 915, height: 360, touch: true },
   { name: 'itch-iframe', width: 1280, height: 720, wrapper: 'itch-iframe' },
+  // Upright rows for the layout regions (ws/layout): the portrait form factors.
+  { name: 'phone-port', width: 390, height: 844, touch: true, testMatch: /layout\.spec\.ts/ },
+  { name: 'tablet-port', width: 820, height: 1180, touch: true, testMatch: /layout\.spec\.ts/ },
 ];
 
 export default defineConfig<HarnessOptions>({
@@ -76,6 +81,7 @@ export default defineConfig<HarnessOptions>({
   },
   projects: MATRIX.map((m) => ({
     name: m.name,
+    ...(m.testMatch ? { testMatch: m.testMatch } : {}),
     use: {
       browserName: 'chromium',
       viewport: { width: m.width, height: m.height },

@@ -98,7 +98,7 @@ export const BASE_CSS = `
 .tc-overlay[data-units="css"] .tc-button { min-height: var(--tc-tap-min, 32px); min-width: var(--tc-tap-min, 32px);
   padding: var(--tc-space-2) var(--tc-space-4); }
 .tc-overlay[data-units="css"] .tc-field { min-height: var(--tc-tap-min, 32px); }
-.tc-overlay[data-units="css"] .tc-field input[type="range"] { min-height: var(--tc-tap-min, 32px); }
+.tc-overlay[data-units="css"] .tc-field input[type="range"] { min-height: var(--tc-tap-min, 32px); margin: 0; }
 .tc-overlay[data-units="css"] .tc-field input[type="checkbox"] { width: 20px; height: 20px; }
 .tc-overlay[data-units="css"] .tc-panel-host { padding: var(--tc-modal-top, 8px) var(--tc-modal-right, 8px) var(--tc-modal-bottom, 8px) var(--tc-modal-left, 8px); }
 .tc-overlay[data-units="css"] .tc-panel { max-width: 100%; max-height: 100%; }

@@ -517,7 +517,14 @@ export function createLayout(overlay: Overlay, spec: LayoutSpec = {}): Layout {
   let insetOverride: Insets | null = spec.safeArea ?? null;
 
   const regionEls = Object.fromEntries(
-    REGIONS.map((n) => [n, h('div', { class: 'tc-region', dataset: { region: n } })]),
+    REGIONS.map((n) => [
+      n,
+      h('div', {
+        class: 'tc-region',
+        dataset: { region: n },
+        style: n === 'modal' ? {} : { gridArea: n },
+      }),
+    ]),
   ) as unknown as Record<RegionName, HTMLElement>;
   const free = h('div', { class: 'tc-layout-free' });
   const element = h(
