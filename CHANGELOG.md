@@ -2,7 +2,7 @@
 
 Versions follow semver from `engine-v1.0.0` (Phase 5). Releases are cut with `pnpm engine:release <version>` from the repo root, which bumps the version, dates the top `(unreleased)` section and commits. A tag `engine-v<version>` is created only with `--tag` (D-041 addendum 3). Nothing else in the repo makes tags.
 
-## 0.2.0-dev (unreleased)
+## 0.2.0-alpha.1 (2026-11-04)
 
 Phase 1 of the refactor plan (D-041). Every promoted module is listed here before Gate 1.
 

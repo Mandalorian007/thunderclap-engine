@@ -1,6 +1,6 @@
 {
   "name": "@thunderclap/engine",
-  "version": "0.2.0-dev",
+  "version": "0.2.0-alpha.1",
   "private": true,
   "type": "module",
   "description": "ThunderClap: a WebGPU game engine for the browser. It knows nothing about any game.",
