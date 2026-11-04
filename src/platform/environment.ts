@@ -53,6 +53,25 @@ export interface LifecycleHandlers {
   onShow(reason: 'visible' | 'pageshow' | 'resume'): void;
 }
 
+/**
+ * A game is input, not a document: stop double-tap, pinch and trackpad smart-zoom (and
+ * ctrl+wheel) from zooming the page. Keyboard zoom (Cmd/Ctrl +/-) is left alone for
+ * accessibility. Returns unsubscribe.
+ */
+export function blockBrowserZoom(doc: Document = document): () => void {
+  const block = (e: Event) => e.preventDefault();
+  const wheel = (e: WheelEvent) => {
+    if (e.ctrlKey) e.preventDefault();
+  };
+  const types = ['gesturestart', 'gesturechange', 'dblclick'];
+  for (const t of types) doc.addEventListener(t, block, { passive: false });
+  doc.addEventListener('wheel', wheel, { passive: false });
+  return () => {
+    for (const t of types) doc.removeEventListener(t, block);
+    doc.removeEventListener('wheel', wheel);
+  };
+}
+
 /** Page lifecycle across the events phones actually send. Returns unsubscribe. */
 export function watchLifecycle(h: LifecycleHandlers): () => void {
   const visible = () => document.visibilityState === 'visible';

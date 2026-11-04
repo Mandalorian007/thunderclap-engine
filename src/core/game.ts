@@ -1,7 +1,7 @@
 /**
  * `createGame` (D-041 Phase 1): the noun-free wiring every ThunderClap game starts from.
  *
- * It boots WebGPU on a letterboxed surface and builds, in this order: renderer, post stack,
+ * It blocks browser zoom, boots WebGPU on a letterboxed surface and builds, in this order: renderer, post stack,
  * particles, host, the game's save, overlay and pad navigation, device mode with fill bands,
  * audio (mixer persisted through the host), input, the scene stack and the frame loop. It also
  * wires the page lifecycle (hide, pagehide and freeze stop frames and flush the save; show
@@ -16,6 +16,7 @@ import { ParticleSystem, type ParticleSystemOptions } from '../fx';
 import { createWebHost, type Host } from '../host';
 import { type Bindings, Input } from '../input';
 import {
+  blockBrowserZoom,
   boot,
   createDeviceMode,
   type DeviceMode,
@@ -94,6 +95,8 @@ export interface CreateGameOptions<A extends string, S extends FlushableSave> {
   fillBands?: Readonly<Record<string, FillWidthOptions>>;
   /** Called once WebGPU is up, before anything else is built (load-timing marks). */
   onGpuReady?(gpu: GpuContext): void;
+  /** Stop double-tap, pinch and ctrl+wheel from zooming the page (`blockBrowserZoom`). Default true. */
+  blockBrowserZoom?: boolean;
   /** Dev aid: show the unsupported screen as if WebGPU were missing. */
   forceUnsupported?: boolean;
 }
@@ -148,6 +151,8 @@ export async function createGame<A extends string, S extends FlushableSave, C = 
   opts: CreateGameOptions<A, S>,
 ): Promise<EngineCtx<A, S, C> | null> {
   const design = { width: opts.design?.width ?? 1920, height: opts.design?.height ?? 1080 };
+  // Before boot, so it holds from the first frame (and on the fatal screens too).
+  if (opts.blockBrowserZoom !== false) blockBrowserZoom(opts.root.ownerDocument);
   const res = await boot(opts.root, {
     ...opts.surface,
     logicalWidth: design.width,

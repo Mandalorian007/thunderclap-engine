@@ -4,6 +4,7 @@
  * `readHarness` and drive it the same way in both cases.
  */
 import { test as base, expect, type Frame, type Page } from '@playwright/test';
+import type { HarnessGameState } from '../harness/game-state';
 import type { HarnessState } from '../harness/state';
 import { HARNESS_PORT, HARNESS_URL, WRAPPER_URL } from './ports';
 
@@ -32,6 +33,41 @@ export async function openHarness(
   }
   await page.goto(`${WRAPPER_URL}${query}`);
   return harnessFrame(page);
+}
+
+/**
+ * Opens the createGame harness page (harness/game.html) for `wrapper`, waits until it has drawn
+ * `frames` frames and returns the frame it runs in.
+ */
+export async function openGameHarness(
+  page: Page,
+  wrapper: HarnessOptions['wrapper'],
+  frames = 3,
+): Promise<Frame> {
+  let frame: Frame;
+  if (wrapper === 'top') {
+    await page.goto(`${HARNESS_URL}game.html`);
+    frame = page.mainFrame();
+  } else {
+    await page.goto(`${WRAPPER_URL}?page=game.html`);
+    frame = await harnessFrame(page);
+  }
+  await expect
+    .poll(async () => {
+      const s = await readGame(frame).catch(() => null);
+      if (s?.ready && s.gpu !== 'ok') throw new Error(`createGame: ${s.gpu}`);
+      return s?.ready ? s.frames : -1;
+    })
+    .toBeGreaterThanOrEqual(frames);
+  return frame;
+}
+
+export function readGame(frame: Frame): Promise<HarnessGameState> {
+  return frame.evaluate(() => {
+    const g = window.__harnessGame;
+    if (!g) throw new Error('window.__harnessGame missing');
+    return JSON.parse(JSON.stringify(g.state())) as HarnessGameState;
+  });
 }
 
 /** The harness iframe inside the wrapper page, once it exists. */

@@ -7,6 +7,7 @@
 //
 // Query params: ?w=960&h=540 sets the iframe size (default 960x540, the recommended itch size).
 // ?launch=1 is itch's click-to-launch: a "Run game" button that injects the iframe on click.
+// ?page=game.html embeds that harness page instead of the index.
 import { createServer } from 'node:http';
 
 const ITCH_IFRAME_ALLOW =
@@ -54,7 +55,8 @@ const page = `<!doctype html>
         iframe.setAttribute('mozallowfullscreen', 'true');
         iframe.setAttribute('msallowfullscreen', 'true');
         iframe.setAttribute('allow', ${JSON.stringify(ITCH_IFRAME_ALLOW)});
-        iframe.src = ${JSON.stringify(target)};
+        // ?page=game.html embeds another harness page (path relative to the target).
+        iframe.src = new URL(q.get('page') || '', ${JSON.stringify(target)}).href;
         frame.append(iframe);
         iframe.addEventListener('load', () => iframe.focus());
       }

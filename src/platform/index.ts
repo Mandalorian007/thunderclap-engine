@@ -22,6 +22,7 @@ export {
 } from './device-mode';
 export type { DeviceTraits, LifecycleHandlers } from './environment';
 export {
+  blockBrowserZoom,
   deviceTraits,
   HANDHELD_SHORT_SIDE,
   prefersReducedMotion,
