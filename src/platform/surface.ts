@@ -48,6 +48,7 @@ export class Surface {
   backbuffer: BackbufferSize = { width: 1, height: 1, pixelRatio: 1 };
 
   private fill: FillWidthOptions | null = null;
+  private frame: { x: number; y: number; width: number; height: number } | null = null;
   private readonly maxDpr: number;
   private readonly maxPixels: number;
   private readonly listeners = new Set<(size: SurfaceSize) => void>();
@@ -136,14 +137,45 @@ export class Surface {
     this.layout();
   }
 
+  /**
+   * Keep the canvas inside a part of the container (CSS px, relative to `root`), e.g. the
+   * world's region of a layout (`Layout.freeRect`) when UI regions take the rest of the screen.
+   * The letterbox and fill are computed inside it; `null` (the default) uses the whole
+   * container. `fitRect` is always the whole container's fit, so device-mode decisions do not
+   * depend on the frame. Lays out again at once if the result changes.
+   */
+  setFrame(frame: { x: number; y: number; width: number; height: number } | null): void {
+    const f = this.frame;
+    if (
+      f === frame ||
+      (f &&
+        frame &&
+        f.x === frame.x &&
+        f.y === frame.y &&
+        f.width === frame.width &&
+        f.height === frame.height)
+    )
+      return;
+    this.frame = frame
+      ? { x: frame.x, y: frame.y, width: frame.width, height: frame.height }
+      : null;
+    this.layout();
+  }
+
   /** Force a re-layout (e.g. after fullscreen toggles). */
   layout(): void {
-    const w = this.root.clientWidth;
-    const h = this.root.clientHeight;
-    this.fitRect = computeLetterbox(w, h, this.logicalWidth, this.logicalHeight);
-    const rect = this.fill
+    const cw = this.root.clientWidth;
+    const ch = this.root.clientHeight;
+    this.fitRect = computeLetterbox(cw, ch, this.logicalWidth, this.logicalHeight);
+    const fr = this.frame;
+    const w = fr ? Math.max(1, Math.min(fr.width, cw)) : cw;
+    const h = fr ? Math.max(1, Math.min(fr.height, ch)) : ch;
+    let rect = this.fill
       ? computeFillWidth(w, h, this.logicalWidth, this.logicalHeight, this.fill)
-      : this.fitRect;
+      : fr
+        ? computeLetterbox(w, h, this.logicalWidth, this.logicalHeight)
+        : this.fitRect;
+    if (fr) rect = { ...rect, x: rect.x + fr.x, y: rect.y + fr.y };
     const bb = computeBackbuffer(
       rect.width,
       rect.height,

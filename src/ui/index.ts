@@ -9,6 +9,12 @@ export {
   revealDelayMs,
   type SayOptions,
 } from './caption';
+export {
+  type CssChrome,
+  type CssChromeOptions,
+  createCssChrome,
+  PHONE_FORMS,
+} from './css-chrome';
 export { append, type Child, focusableWithin, h } from './dom';
 export {
   type ClassifyInput,

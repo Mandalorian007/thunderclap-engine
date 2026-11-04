@@ -29,7 +29,15 @@ import {
 } from '../platform';
 import { type PostSettingsPatch, PostStack } from '../post';
 import { type Frame, installGpuErrorLogging, Renderer } from '../render';
-import { createOverlay, type Overlay, PadNav } from '../ui';
+import {
+  type CssChrome,
+  createCssChrome,
+  createOverlay,
+  type FormFactor,
+  type LayoutSpec,
+  type Overlay,
+  PadNav,
+} from '../ui';
 import type { Time } from './loop';
 import { GameLoop } from './loop';
 import { SceneStack } from './scene';
@@ -93,6 +101,16 @@ export interface CreateGameOptions<A extends string, S extends FlushableSave> {
    * is below `PHONE_SCALE`, the surface fills the width and crops top and bottom to the band.
    */
   fillBands?: Readonly<Record<string, FillWidthOptions>>;
+  /**
+   * A CSS-px overlay with layout regions beside the legacy scaled one (`createCssChrome`; see
+   * ARCHITECTURE.md, "Two overlays"). Omit it and `ctx.chrome` is null.
+   */
+  overlay?: {
+    /** Form factors that use the CSS-px overlay. Default: both phone form factors. */
+    cssForms?: readonly FormFactor[];
+    /** Region tracks per form factor (see `createLayout`). */
+    layout?: LayoutSpec;
+  };
   /** Called once WebGPU is up, before anything else is built (load-timing marks). */
   onGpuReady?(gpu: GpuContext): void;
   /** Stop double-tap, pinch and ctrl+wheel from zooming the page (`blockBrowserZoom`). Default true. */
@@ -122,6 +140,11 @@ export interface EngineCtx<
   readonly padNav: PadNav;
   readonly audio: AudioEngine;
   readonly ui: Overlay;
+  /**
+   * The CSS-px overlay and its layout (`CreateGameOptions.overlay`), or null. While
+   * `chrome.active`, the panels and toasts of `ui` lay out in it.
+   */
+  readonly chrome: CssChrome | null;
   /** The page the game runs in: links, copying, fullscreen and save storage. */
   readonly host: Host;
   /** Phone-sized screen and touch input flags (interim until Phase 2's layout). */
@@ -186,6 +209,21 @@ export async function createGame<A extends string, S extends FlushableSave, C = 
   // Input is blocked while a modal panel is up, so the pad drives panels through this.
   const padNav = new PadNav(ui.stack);
   const device = createDeviceMode(ui.root);
+  const chrome = opts.overlay
+    ? createCssChrome({
+        parent: surface.root,
+        legacy: ui,
+        forms: opts.overlay.cssForms,
+        layout: opts.overlay.layout,
+        focusHome: () => surface.canvas,
+      })
+    : null;
+  if (chrome) {
+    // The last input's kind (`data-touch`) goes on both roots.
+    const touch = () => chrome.ui.root.toggleAttribute('data-touch', device.touch);
+    touch();
+    device.onChange(touch);
+  }
 
   // Fill bands (D-040): on a phone-sized letterbox a keyed scene fills the width instead.
   let fillKey = 'boot';
@@ -211,6 +249,7 @@ export async function createGame<A extends string, S extends FlushableSave, C = 
   surface.onResize(({ rect, backbuffer }) => {
     renderer.resize(backbuffer.width, backbuffer.height);
     ui.setRect(rect);
+    chrome?.resize();
     applyScale();
     applyFill();
   });
@@ -284,6 +323,7 @@ export async function createGame<A extends string, S extends FlushableSave, C = 
     padNav,
     audio,
     ui,
+    chrome,
     host,
     device,
     save,

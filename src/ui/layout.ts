@@ -133,7 +133,10 @@ export interface WidgetHandle {
   readonly region: RegionName | 'free' | 'hidden';
   /** Change the placement; the layout re-applies at once. */
   setPlace(place: WidgetOptions['place']): void;
-  /** Take it out of the layout (the element is removed from its region). */
+  /**
+   * Take it out of the layout. An element that had a parent when it was added goes back there
+   * (before the sibling it had, if that is still there); one added detached is removed.
+   */
   remove(): void;
 }
 
@@ -698,6 +701,7 @@ export function createLayout(overlay: Overlay, spec: LayoutSpec = {}): Layout {
         order: opts.order ?? 0,
         seq: seq++,
         current: 'hidden',
+        home: el.parentNode ? { parent: el.parentNode, next: el.nextSibling } : undefined,
         loggedFree: false,
       };
       entries.push(e);
@@ -732,7 +736,8 @@ export function createLayout(overlay: Overlay, spec: LayoutSpec = {}): Layout {
       unwatch();
       subs.clear();
       for (const e of entries.splice(0)) {
-        e.caption?.dock(null);
+        if (e.caption) e.caption.dock(null);
+        else if (e.home) goHome(e);
         e.el.removeAttribute(HIDDEN_ATTR);
       }
       element.remove();
@@ -741,6 +746,17 @@ export function createLayout(overlay: Overlay, spec: LayoutSpec = {}): Layout {
       delete root.dataset.formFactor;
     },
   };
+
+  /** Back where it was before `add`, or out of the document if it had no parent then. */
+  function goHome(e: Entry): void {
+    const home = e.home;
+    if (!home?.parent) {
+      e.el.remove();
+      return;
+    }
+    const next = home.next && home.next.parentNode === home.parent ? home.next : null;
+    home.parent.insertBefore(e.el, next);
+  }
 
   function handle(e: Entry): WidgetHandle {
     return {
@@ -758,8 +774,13 @@ export function createLayout(overlay: Overlay, spec: LayoutSpec = {}): Layout {
         if (i < 0) return;
         entries.splice(i, 1);
         if (e.caption) e.caption.dock(null);
-        else e.el.remove();
+        else goHome(e);
         e.el.removeAttribute(HIDDEN_ATTR);
+        e.el.style.order = '';
+        if (e.current === 'free') {
+          for (const k of ['position', 'left', 'top', 'width', 'height'] as const)
+            e.el.style[k] = '';
+        }
         apply();
       },
     };

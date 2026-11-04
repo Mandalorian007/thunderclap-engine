@@ -350,6 +350,31 @@ describe('createLayout (DOM)', () => {
     layout.destroy();
   });
 
+  it('remove() returns an element to where it was before add()', () => {
+    const layout = createLayout(ov, {
+      classify,
+      forms: { 'phone-landscape': { columns: ['fill'], rows: ['fill'], areas: ['fill'] } },
+    });
+    const home = h('div');
+    const a = h('div');
+    const b = h('div');
+    home.append(a, b);
+    const hd = layout.add(a, { place: { default: 'fill' } });
+    expect(a.parentElement).toBe(layout.region('fill'));
+    hd.remove();
+    expect(a.parentElement).toBe(home);
+    expect(a.nextSibling).toBe(b);
+    // A sibling that has gone since: it goes last.
+    const hd2 = layout.add(a, { place: { default: 'fill' } });
+    b.remove();
+    hd2.remove();
+    expect(home.lastChild).toBe(a);
+    // destroy() sends every widget home too.
+    layout.add(a, { place: { default: 'fill' } });
+    layout.destroy();
+    expect(a.parentElement).toBe(home);
+  });
+
   it("the 'free' escape hatch: an explicit CSS-px rect, logged once and listed", () => {
     const info = vi.spyOn(console, 'info').mockImplementation(() => {});
     const layout = createLayout(ov, { classify });
