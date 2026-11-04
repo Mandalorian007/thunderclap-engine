@@ -1,6 +1,6 @@
 # Changelog: @thunderclap/engine
 
-Versions follow semver from `engine-v1.0.0` (Phase 5). Until then, `0.x` releases are tagged `engine-v<version>` on the Last Rune repo. The tag `engine-v0.1` marks the last state with the engine at `engine/` (Last Rune v1.0).
+Versions follow semver from `engine-v1.0.0` (Phase 5). Releases are cut with `pnpm engine:release <version>` from the repo root, which bumps the version, dates the top `(unreleased)` section and commits. A tag `engine-v<version>` is created only with `--tag` (D-041 addendum 3). Nothing else in the repo makes tags.
 
 ## 0.2.0-dev (unreleased)
 
