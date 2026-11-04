@@ -2,7 +2,10 @@
 
 Versions follow semver from `engine-v1.0.0` (Phase 5). Releases are cut with `pnpm engine:release <version>` from the repo root, which bumps the version, dates the top `(unreleased)` section and commits. A tag `engine-v<version>` is created only with `--tag` (D-041 addendum 3). Nothing else in the repo makes tags.
 
-## 0.2.0-dev (unreleased)
+## Next (unreleased)
+
+### Added
+- `HostWindow.setTitle?(title)`: optional, for hosts with a window of their own. The Electron host (`@thunderclap/host-electron`, ws/host-electron) implements it.
 
 ### Gestures (ws/gestures)
 - `Gestures` in `@thunderclap/engine/input` (`input/gestures.ts`): `tap`, `doubleTap`, `longPress` (default 450 ms), `pan` (threshold default 10 CSS px, with `dx`, `dy` in game space and `pointers` 1 or 2), `drag` (`start`, `move`, `end`, `cancel`, with the `origin`) and `pinch` (`scale` and per-tick `delta`). Thresholds are CSS px; positions are game space through the same `PointerTransform` as `Input` (`inside: false` in the letterbox bars). Options: `panThreshold`, `longPressMs`, `doubleTapMs` (300), `doubleTapDistance` (24 CSS px), `blocked`, `now`. Public feed methods for tests: `pointerDown`, `pointerMove`, `pointerUp`, `pointerCancel`, `cancelAll`. Types `TapGesture`, `PanGesture`, `DragGesture`, `PinchGesture`, `GesturePoint`, `GesturePhase`, `GestureDevice`, `GestureKind`, `GestureOptions`, `GestureAttachOptions`.

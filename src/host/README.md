@@ -1,8 +1,9 @@
 # host
 
 What the engine needs from the place it runs: open a link, copy text, fullscreen, save storage,
-and where it is embedded. The web host is the only one today; an Electron host (Phase 4) fills the
-same interface from a preload bridge. Nothing else in the engine touches `window.open`,
+and where it is embedded. The web host is here; the Electron host, `createElectronHost()` in
+`@thunderclap/host-electron` (packages/host-electron), fills the same interface from a preload
+bridge and adds `window` (close, minimize, toggleMaximize, setTitle). Nothing else in the engine touches `window.open`,
 `navigator.clipboard` or `localStorage`.
 
 ```ts
