@@ -55,12 +55,22 @@ export interface FillWidthOptions {
   minVisible: number;
   /** Logical y the visible band is centred on (clamped inside the design). Default: the middle. */
   focusY?: number;
+  /**
+   * The other way round, for a container taller than the design's aspect (an upright phone):
+   * the least logical width that must stay on screen. Set, the canvas grows to fill the height
+   * and the sides are cropped instead, only as far as this allows. Absent: a tall container
+   * keeps the contain fit.
+   */
+  minVisibleWidth?: number;
+  /** Logical x the visible width is centred on (clamped inside the design). Default: the middle. */
+  focusX?: number;
 }
 
 /**
  * Like `computeLetterbox`, but on a container wider than the design's aspect the canvas grows
  * to fill the width and the top and bottom are cropped instead (the rect's `y` goes negative
- * and its height overflows the container). Never smaller than the contain fit.
+ * and its height overflows the container). With `minVisibleWidth`, a taller container is filled
+ * on its height and the sides are cropped (`x` goes negative). Never smaller than the contain fit.
  */
 export function computeFillWidth(
   containerW: number,
@@ -71,6 +81,11 @@ export function computeFillWidth(
 ): Letterbox {
   const fit = computeLetterbox(containerW, containerH, logicalW, logicalH);
   if (fit.scale === 0) return fit;
+  if (containerW * logicalH < containerH * logicalW) {
+    return opts.minVisibleWidth === undefined
+      ? fit
+      : fillHeight(containerW, containerH, logicalW, logicalH, fit, opts);
+  }
   const band = Math.min(logicalH, Math.max(1, opts.minVisible));
   const want = Math.min(containerW / logicalW, containerH / band);
   if (want <= fit.scale) return fit;
@@ -83,6 +98,32 @@ export function computeFillWidth(
   return {
     x: Math.floor((containerW - width) / 2),
     y: -Math.round(top * scale) || 0,
+    width,
+    height,
+    scale,
+  };
+}
+
+function fillHeight(
+  containerW: number,
+  containerH: number,
+  logicalW: number,
+  logicalH: number,
+  fit: Letterbox,
+  opts: FillWidthOptions,
+): Letterbox {
+  const band = Math.min(logicalW, Math.max(1, opts.minVisibleWidth ?? logicalW));
+  const want = Math.min(containerH / logicalH, containerW / band);
+  if (want <= fit.scale) return fit;
+  const height = Math.min(containerH, Math.round(logicalH * want));
+  const scale = height / logicalH;
+  const width = Math.round(logicalW * scale);
+  const visible = containerW / scale;
+  const focus = opts.focusX ?? logicalW / 2;
+  const left = Math.min(Math.max(0, focus - visible / 2), Math.max(0, logicalW - visible));
+  return {
+    x: -Math.round(left * scale) || 0,
+    y: Math.floor((containerH - height) / 2),
     width,
     height,
     scale,

@@ -111,4 +111,40 @@ describe('computeFillWidth', () => {
     const bottom = computeFillWidth(750, 340, 1920, 1080, { minVisible: 800, focusY: 1080 });
     expect(bottom.y + bottom.height).toBe(340);
   });
+
+  it('keeps the contain fit on a tall container without minVisibleWidth', () => {
+    expect(computeFillWidth(390, 500, 1920, 1080, { minVisible: 800 })).toEqual(
+      computeLetterbox(390, 500, 1920, 1080),
+    );
+  });
+
+  it('fills a tall container on its height and crops the sides around focusX', () => {
+    const r = computeFillWidth(390, 480, 1920, 1080, {
+      minVisible: 800,
+      minVisibleWidth: 800,
+      focusX: 600,
+    });
+    expect(r.y).toBe(0);
+    expect(r.height).toBe(480);
+    expect(r.x).toBeLessThan(0);
+    const left = -r.x / r.scale;
+    const right = left + 390 / r.scale;
+    expect((left + right) / 2).toBeCloseTo(600, -1);
+  });
+
+  it('keeps at least minVisibleWidth logical px across, leaving bars above and below', () => {
+    const r = computeFillWidth(390, 844, 1920, 1080, { minVisible: 800, minVisibleWidth: 900 });
+    expect(390 / r.scale).toBeGreaterThanOrEqual(899);
+    expect(r.y).toBeGreaterThan(0);
+    expect(r.height).toBeLessThan(844);
+  });
+
+  it('clamps the side crop inside the design', () => {
+    const r = computeFillWidth(390, 480, 1920, 1080, {
+      minVisible: 800,
+      minVisibleWidth: 600,
+      focusX: 0,
+    });
+    expect(r.x).toBe(0);
+  });
 });
