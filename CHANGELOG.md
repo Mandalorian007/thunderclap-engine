@@ -18,6 +18,13 @@ Versions follow semver from `engine-v1.0.0` (Phase 5). Releases are cut with `pn
 ### Changed
 - `platform/device-mode.ts` no longer writes the density tokens on a CSS-px overlay root, because the layout owns them there.
 
+### Gestures (ws/gestures)
+- `Gestures` in `@thunderclap/engine/input` (`input/gestures.ts`): `tap`, `doubleTap`, `longPress` (default 450 ms), `pan` (threshold default 10 CSS px, with `dx`, `dy` in game space and `pointers` 1 or 2), `drag` (`start`, `move`, `end`, `cancel`, with the `origin`) and `pinch` (`scale` and per-tick `delta`). Thresholds are CSS px; positions are game space through the same `PointerTransform` as `Input` (`inside: false` in the letterbox bars). Options: `panThreshold`, `longPressMs`, `doubleTapMs` (300), `doubleTapDistance` (24 CSS px), `blocked`, `now`. Public feed methods for tests: `pointerDown`, `pointerMove`, `pointerUp`, `pointerCancel`, `cancelAll`. Types `TapGesture`, `PanGesture`, `DragGesture`, `PinchGesture`, `GesturePoint`, `GesturePhase`, `GestureDevice`, `GestureKind`, `GestureOptions`, `GestureAttachOptions`.
+- `Input.setGestures(g)` (or the `gestures` option) links gestures to an input: they share `blocked()` and the pointer transform, attach and detach with `Input.attach`, and advance in `Input.update()`.
+- New binding kind `{ gesture: GestureKind }`: `tap` and `doubleTap` press for one tick, `longPress` holds until the pointer lifts, `pan`, `drag` and `pinch` hold from start to end. It reads inactive with no gestures linked.
+- Engine e2e: `harness/gestures.html` (no WebGPU; a 4:3 stage letterboxed so every row has bars) and `e2e/gestures.spec.ts` on the whole matrix with real CDP touch on the iPad and phone rows and the mouse on desktop and in the itch iframe: tap position and binding, the 10 CSS px tap-versus-pan boundary, long-press timing, double tap, drag origin and drag-off into the bar, `blocked()` and its cancel, and a two-finger pinch.
+- No change for games that don't link gestures; Last Rune does not use them yet.
+
 ## 0.2.0-alpha.1 (2026-11-04)
 
 Phase 1 of the refactor plan (D-041). Every promoted module is listed here before Gate 1.

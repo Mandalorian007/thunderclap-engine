@@ -48,5 +48,38 @@ const { x, y, inside, down, dx, dy, wheelY } = input.pointer;   // game space
 - All keys/buttons release on window `blur` and when the tab is hidden: no stuck keys.
 - Gamepad access is wrapped in `try` (permissions policy can block it inside iframes).
 
+## Gestures
+
+`Gestures` recognises touch and pointer gestures and reports them in the same tick model.
+
+```ts
+import { Gestures, Input } from '@thunderclap/engine/input';
+
+const gestures = new Gestures();                 // { panThreshold: 10, longPressMs: 450, doubleTapMs: 300, doubleTapDistance: 24 }
+const input = new Input({
+  select: [{ mouse: 0 }, { gesture: 'tap' }],
+  info:   [{ gesture: 'longPress' }],
+}, { gestures });                                // or input.setGestures(gestures)
+input.attach({ pointerTarget: canvas });         // attaches the gestures too
+input.setPointerTransform(clientToLogical);      // shared with the gestures
+
+// each tick: input.update() advances the gestures first (don't call gestures.update() yourself)
+input.update();
+if (input.pressed('info')) showInfo();
+const d = gestures.drag;                         // null, or { phase, x, y, inside, dx, dy, origin, device }
+if (d?.phase === 'move') moveBy(d.dx, d.dy);
+if (gestures.pinch) zoom *= gestures.pinch.delta;
+```
+
+- **tap**: down and up within `panThreshold` CSS px, before `longPressMs`. **doubleTap**: a second tap that starts within `doubleTapMs` of the first ending and within `doubleTapDistance`; each of the two taps also reports `tap`.
+- **longPress**: fires once after `longPressMs` without passing the threshold; no tap follows, and moving afterwards does not drag. As a binding it is held until the pointer lifts.
+- **pan** and **drag**: one pointer past the threshold starts both (`phase: 'start'`, with the travel so far in `dx`/`dy`), then `move` every tick (merged; `dx: 0` when idle), then `end`. Every `dx` of one gesture sums to the total travel. `drag` carries the `origin`; `pan` also covers two fingers moving together (`pointers: 2`).
+- **pinch**: a second pointer cancels the drag and starts a pinch; `scale` is the distance now over the distance at the start, `delta` the change since the last report. Lifting either pointer ends it; nothing more is reported until all pointers are up.
+- Thresholds are CSS px (client coordinates); positions are game space through the transform. A point the transform maps to `null` reports `inside: false` with the last inside position.
+- One tap, double tap and long-press per tick; extras queue for the following ticks (up to 8). `start` and `end` each get their own tick.
+- `blocked()` (shared with the linked `Input`): nothing is reported and the press in progress is dropped; a running pan, drag or pinch gets one `cancel` so the game can put things back. Browser `pointercancel`, window blur and a hidden tab cancel the same way.
+- Mouse: primary button only. Each pointer is captured, so a drag off the target keeps reporting.
+- Feed methods for tests and replays: `pointerDown(id, x, y, device?, time?)`, `pointerMove`, `pointerUp`, `pointerCancel`, `cancelAll`. Pass `now` to drive long-press timing from a fake clock.
+
 ## Testing / automation
 The low-level feed methods (`keyDown`, `keyUp`, `buttonDown`, `buttonUp`, `wheel`, `pointerAt`, `releaseAll`) are public, so tests, replays and the automated playtest can drive input without a DOM. Pass `getGamepads` to inject pads.
