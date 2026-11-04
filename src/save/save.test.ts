@@ -222,11 +222,13 @@ describe('save store', () => {
   });
 
   it('recovers from corrupt, invalid and future saves with a backup', () => {
+    // The five shapes the game's robustness e2e used to boot through (now one there, D-041).
     for (const raw of [
       '{not json',
       JSON.stringify({ v: 1, t: 1, d: { name: 5 } }),
       JSON.stringify({ hello: 1 }),
       JSON.stringify({ v: 9, t: 1, d: defaults() }),
+      '',
     ]) {
       mem.clear();
       mem.setItem('thunderclap:test-game:main', raw);

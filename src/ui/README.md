@@ -117,7 +117,7 @@ await ui.caption.say('Something old is listening.', {
 
 A real new-tab link plus a **Copy link** button, with "Copied" feedback and a fallback popover
 (the URL in a selected read-only field) for when the browser blocks the copy or the new tab. Logic
-lives in `engine/platform/links.ts`; the widget only builds DOM and wires it. Labels come from the
+lives in the host (`host/web-links.ts` on the web); the widget only builds DOM and wires it. Labels come from the
 caller; the look comes from theme tokens (override `.tc-link`, `.tc-link-row`, `.tc-link-copy`,
 `.tc-link-fallback`, `.tc-link-message`, `.tc-link-field`, `.tc-link-close`).
 
@@ -157,16 +157,14 @@ activateLink(focusedElement, 'gamepad');
   through `activateLink`.
 - Nothing opens or copies until the player acts. No network calls.
 
-Platform API (`@thunderclap/engine/platform`), usable without the widget:
+Opening and copying go through the host (`@thunderclap/engine/host`): pass `host` to
+`externalLink`, or it uses `defaultHost()`. Usable without the widget:
 
-- `safeExternalUrl(url)`: the trimmed URL if it is plain `https` (no credentials, no spaces), else
-  null.
-- `embedContext(win?)`: `'top' | 'same-origin-frame' | 'cross-origin-frame'`, detected.
-- `openExternal(url, { activation }, win?)`: `'opened' | 'blocked' | 'invalid'`. `pointer` and
-  `keyboard` click a temporary `<a>`; `gamepad` and `script` call `window.open` and report `null`
-  as `blocked` (the opened tab's `opener` is cleared).
-- `copyText(text, win?)`: `Promise<'copied' | 'manual'>`; `execCopy(text, doc?)`;
-  `clipboardWriteAllowed(doc?)`.
+- `host.openExternal(url, { activation })`: `'opened' | 'blocked' | 'invalid'`. On the web,
+  `pointer` and `keyboard` click a temporary `<a>`; `gamepad` and `script` call `window.open` and
+  report `null` as `blocked` (the opened tab's `opener` is cleared).
+- `host.copyText(text)`: `Promise<'copied' | 'manual'>`; `host.clipboardWriteAllowed()`.
+- `safeExternalUrl(url)` and `embedContext(win?)` stay in `@thunderclap/engine/platform`.
 
 ## Theme
 

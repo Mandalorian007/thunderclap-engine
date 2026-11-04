@@ -2,12 +2,14 @@
  * Engine e2e harness page (D-041 addendum 2). Noun-free: it boots the engine's platform layer
  * and nothing else, so the specs in e2e/ verify platform capability once for every game.
  *
- * Today it covers WebGPU init, the surface (letterbox, DPR, resize, swapchain size) and one
- * input action. Later workstreams add host, gestures, layout and lifecycle probes here.
+ * Today it covers WebGPU init, the surface (letterbox, DPR, resize, swapchain size), one
+ * input action and the web host (host-probe.ts: open, copy, fullscreen, storage). Later
+ * workstreams add gesture, layout and lifecycle probes here.
  */
 import { GameLoop } from '../src/core';
 import { Input } from '../src/input';
 import { boot } from '../src/platform';
+import { createHostProbe } from './host-probe';
 import type { HarnessState } from './state';
 
 const root = document.getElementById('root') as HTMLElement;
@@ -26,6 +28,8 @@ const state: HarnessState = {
   taps: [],
 };
 window.__harness = state;
+// The host does not need WebGPU: it is up before boot, and on a failed boot too.
+window.__host = createHostProbe();
 
 async function main(): Promise<void> {
   const res = await boot(root, { title: 'Engine harness' });

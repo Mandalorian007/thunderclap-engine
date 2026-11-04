@@ -1,20 +1,22 @@
 /**
  * External link widget (D-036): a real new-tab link, a "Copy link" button beside it with
  * "Copied" feedback, and a fallback popover with the URL in a selected read-only field for when
- * the browser blocks the copy or the new tab. Logic lives in engine/platform/links.ts.
+ * the browser blocks the copy or the new tab. Opening and copying go through the host
+ * (`Host.openExternal`, `Host.copyText`; engine/host).
  *
  * - Mouse and Enter use the anchor natively (a user gesture, so popup blockers allow it).
  * - A gamepad press is not a gesture: route it through `activateLink(el, 'gamepad')`
- *   (PadNav does this for modals), which uses `window.open` and shows the fallback if blocked.
+ *   (PadNav does this for modals), which opens through the host with block detection (the web
+ *   host uses `window.open`) and shows the fallback if blocked.
  * - Nothing opens or copies without the player acting. No network calls.
  * Labels come from the caller; the look comes from theme tokens (override the `tc-link-*` classes).
  */
+import { defaultHost } from '../host/default';
+import type { Host } from '../host/types';
 import {
   type CopyResult,
-  copyText,
   type LinkActivation,
   type OpenResult,
-  openExternal,
   safeExternalUrl,
 } from '../platform/links';
 import { type Child, h } from './dom';
@@ -38,6 +40,8 @@ export interface ExternalLinkLabels {
 
 export interface ExternalLinkOptions {
   url: string;
+  /** Opens and copies the link. Default: `defaultHost()`. */
+  host?: Pick<Host, 'openExternal' | 'copyText'>;
   /** The link's visible content (text, icon). */
   content: Child | Child[];
   labels: ExternalLinkLabels;
@@ -99,6 +103,7 @@ export function externalLink(opts: ExternalLinkOptions): ExternalLink | null {
   const url = safeExternalUrl(opts.url);
   if (!url) return null;
   const { labels } = opts;
+  const host = opts.host ?? defaultHost();
   const act = (part: string) => (opts.action ? { action: `${opts.action}${part}` } : undefined);
 
   const anchor = h(
@@ -179,12 +184,12 @@ export function externalLink(opts: ExternalLinkOptions): ExternalLink | null {
     anchor,
     copyButton,
     open(activation) {
-      const r = openExternal(url, { activation });
+      const r = host.openExternal(url, { activation });
       if (r === 'blocked') widget.showFallback('popup');
       return r;
     },
     async copy() {
-      const r = await copyText(url);
+      const r = await host.copyText(url);
       if (r === 'manual') {
         widget.showFallback('copy');
         return r;
@@ -229,7 +234,7 @@ export function externalLink(opts: ExternalLinkOptions): ExternalLink | null {
 
 /**
  * Activates `el` for a non-native input (a gamepad press): an external-link anchor opens through
- * `window.open` with block detection; anything else is clicked. Returns the open result for an
+ * its host with block detection (`window.open` on the web); anything else is clicked. Returns the open result for an
  * external link, else null.
  */
 export function activateLink(el: HTMLElement, activation: LinkActivation): OpenResult | null {

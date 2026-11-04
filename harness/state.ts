@@ -35,8 +35,45 @@ export interface HarnessState {
   taps: HarnessTap[];
 }
 
+/** What the web host reports, and every open and copy result so far (harness/host-probe.ts). */
+export interface HarnessHostInfo {
+  kind: string;
+  embed: string;
+  /** `host.storage.open()` gave a working backend. */
+  storage: boolean;
+  clipboardWriteAllowed: boolean;
+  fullscreenAvailable: boolean;
+  fullscreenActive: boolean;
+  copies: string[];
+  opens: string[];
+  /** Every `host.fullscreen.watch` report since `mount()`. */
+  fullscreen: boolean[];
+}
+
+export interface HarnessSaveResult {
+  persistent: boolean;
+  loadResult: string;
+  error: string | null;
+  n: number;
+}
+
+/** `window.__host`: drives the web host the way a game does. */
+export interface HarnessHostProbe {
+  info(): HarnessHostInfo;
+  /** Adds an `externalLink` widget (through the host) and a fullscreen button, top left. */
+  mount(): void;
+  /** `activateLink` on the probe link, as PadNav does for a pad press. */
+  activate(activation: 'pointer' | 'keyboard' | 'gamepad' | 'script'): string | null;
+  /** Writes `{ n }` to a save slot whose storage comes from the host. */
+  save(n: number): HarnessSaveResult;
+  /** Loads that slot fresh. */
+  load(): HarnessSaveResult;
+  clearSave(): void;
+}
+
 declare global {
   interface Window {
     __harness?: HarnessState;
+    __host?: HarnessHostProbe;
   }
 }

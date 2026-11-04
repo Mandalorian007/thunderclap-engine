@@ -1,7 +1,9 @@
 /**
- * Storage backends. `localStorage` can be missing, throw on access (sandboxed or
+ * Storage backends. Web storage can be missing, throw on access (sandboxed or
  * cross-origin iframes with third-party storage blocked), throw on write (quota,
  * Safari private mode), or be silently partitioned. Everything here is defensive.
+ * The real backend comes from the host (`Host.storage`, engine/host); the web host
+ * probes `localStorage` with `probeStorage`.
  */
 
 /** The subset of the Web Storage API the save module uses. */
@@ -45,16 +47,13 @@ export class MemoryStorage implements StorageLike {
 const PROBE_KEY = 'thunderclap:__probe__';
 
 /**
- * Returns a working `localStorage`, or `null` if it is unavailable, throws, or
- * cannot round-trip a value. Never throws.
+ * Returns the storage `get` yields if it works, or `null` if it is unavailable,
+ * throws, or cannot round-trip a value. Never throws.
  *
- * @param get how to obtain the storage (defaults to `globalThis.localStorage`).
- *   Merely reading `window.localStorage` throws a SecurityError in some iframes,
- *   so the getter itself is guarded.
+ * @param get how to obtain the storage. Merely reading `window.localStorage`
+ *   throws a SecurityError in some iframes, so the getter itself is guarded.
  */
-export function probeStorage(
-  get: () => StorageLike | undefined | null = () => globalThis.localStorage,
-): StorageLike | null {
+export function probeStorage(get: () => StorageLike | undefined | null): StorageLike | null {
   try {
     const storage = get();
     if (!storage) return null;
