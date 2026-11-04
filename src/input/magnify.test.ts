@@ -80,6 +80,29 @@ describe('loupeClear: the loupe leaves the kept area in sight', () => {
     const off = loupeClear({ x: 300, y: 256 }, aim, 128, view, keep, [right]);
     expect(disc(off, right, 64)).toBe(true);
   });
+  it('leaves spared rects in sight when it can, ranked below keep and above avoid', () => {
+    const aim = { x: 300, y: 200 };
+    const finger = { x: 300, y: 256 };
+    const keep = [{ l: 255, t: 155, r: 345, b: 245 }];
+    // A label right of the kept area and one above it: the loupe finds a spot clear of both.
+    const labels = [
+      { l: 350, t: 150, r: 450, b: 250 },
+      { l: 200, t: 20, r: 400, b: 150 },
+    ];
+    const c = loupeClear(finger, aim, 128, view, keep, [], labels);
+    for (const q of labels) expect(disc(c, q, 64)).toBe(true);
+    expect(disc(c, keep[0]!, 64)).toBe(true);
+    // Covering a spared rect beats covering an avoided one.
+    const left = { l: 0, t: 0, r: 254, b: 400 };
+    const rest = { l: 346, t: 0, r: 800, b: 400 };
+    const pick = loupeClear(finger, aim, 128, view, keep, [rest], [left]);
+    expect(disc(pick, left, 64)).toBe(true);
+    // Spared rects never win over the kept area or the fingertip.
+    const all = { l: 0, t: 0, r: 800, b: 400 };
+    const forced = loupeClear(finger, aim, 128, view, keep, [], [all]);
+    expect(disc(forced, keep[0]!, 64)).toBe(true);
+    expect(Math.hypot(forced.x - finger.x, forced.y - finger.y)).toBeGreaterThanOrEqual(64 + 22);
+  });
 });
 
 /** Gestures with magnify on a fake clock, over the 4×3 grid (game space = client px). */

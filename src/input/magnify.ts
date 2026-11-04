@@ -51,11 +51,12 @@ export interface MagnifyOptions {
   parent?: HTMLElement;
   /**
    * Areas (client CSS px) the loupe must leave in sight while it shows `target`, for example
-   * the target and its neighbours (`keep`), and areas it should rather not cover (`avoid`).
-   * With one, the loupe goes where `loupeClear` puts it; without, beside the finger
-   * (`loupeSpot`).
+   * the target and its neighbours (`keep`), areas it should leave in sight when it can
+   * (`spare`, for example labels; ranked below `keep` and the fingertip), and areas it should
+   * rather not cover (`avoid`, ranked below `spare`). With one, the loupe goes where
+   * `loupeClear` puts it; without, beside the finger (`loupeSpot`).
    */
-  clear?: (target: MagnifyTarget | null) => { keep: Rect[]; avoid?: Rect[] } | null;
+  clear?: (target: MagnifyTarget | null) => { keep: Rect[]; spare?: Rect[]; avoid?: Rect[] } | null;
 }
 
 /** An axis-aligned rectangle, client CSS px. */
@@ -160,8 +161,9 @@ export function loupeSpot(
 /**
  * Where a loupe of diameter `size` goes when it must leave `keep` in sight: the nearest spot to
  * the aim point, 6 px clear of every `keep` rect and of the fingertip (a 44 px disc), its centre
- * never below the finger's (the hand is there), kept 4 px inside the view; it covers `avoid` rects only
- * when no other spot is free. With no spot clear of `keep` it falls back to `loupeSpot`.
+ * never below the finger's (the hand is there), kept 4 px inside the view. Among those spots it
+ * takes one that covers the fewest `spare` rects, then one that covers no `avoid` rect, then the
+ * nearest. With no spot clear of `keep` it falls back to `loupeSpot`.
  */
 export function loupeClear(
   finger: { x: number; y: number },
@@ -170,6 +172,7 @@ export function loupeClear(
   view: { width: number; height: number },
   keep: Rect[],
   avoid: Rect[] = [],
+  spare: Rect[] = [],
 ): { x: number; y: number } {
   const half = size / 2;
   const gap = 6;
@@ -185,8 +188,9 @@ export function loupeClear(
     y <= finger.y &&
     Math.hypot(x - finger.x, y - finger.y) >= half + 22 + gap &&
     !keep.some((q) => hits(x, y, q, gap));
-  // Candidates: tangent to the kept area on each side and corner, slid along it, plus beside
-  // the finger.
+  // Candidates: tangent to the kept area on each side and corner, slid along it, beside the
+  // finger, and (so a spot clear of the spared rects is found when there is one) a coarse grid
+  // over the view.
   const box = keep.reduce(
     (a, q) => ({
       l: Math.min(a.l, q.l),
@@ -204,6 +208,11 @@ export function loupeClear(
     for (const x of xs) cands.push({ x, y: aim.y + sx });
     for (const y of ys) cands.push({ x: aim.x + sx, y });
   }
+  if (spare.length > 0 && Number.isFinite(view.width) && Number.isFinite(view.height)) {
+    const step = Math.max(8, half / 4);
+    for (let y = half + 4; y <= view.height - half - 4; y += step)
+      for (let x = half + 4; x <= view.width - half - 4; x += step) cands.push({ x, y });
+  }
   const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
   let best: { x: number; y: number } | null = null;
   let bestCost = Number.POSITIVE_INFINITY;
@@ -214,7 +223,9 @@ export function loupeClear(
     };
     if (!clearOf(c.x, c.y)) continue;
     const cost =
-      Math.hypot(c.x - aim.x, c.y - aim.y) + (avoid.some((q) => hits(c.x, c.y, q, 0)) ? 1e4 : 0);
+      Math.hypot(c.x - aim.x, c.y - aim.y) +
+      (avoid.some((q) => hits(c.x, c.y, q, 0)) ? 1e4 : 0) +
+      spare.filter((q) => hits(c.x, c.y, q, 0)).length * 1e6;
     if (cost < bestCost) {
       bestCost = cost;
       best = c;

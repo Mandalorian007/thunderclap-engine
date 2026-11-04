@@ -362,7 +362,7 @@ export class Gestures {
       : { width: Number.POSITIVE_INFINITY, height: Number.POSITIVE_INFINITY };
     const room = loupe && m.clear ? m.clear(target) : null;
     const at = room
-      ? loupeClear(finger, client, size, view, room.keep, room.avoid)
+      ? loupeClear(finger, client, size, view, room.keep, room.avoid, room.spare)
       : loupeSpot(finger, client, size, view);
     return { x, y, inside, client, finger, lifted, target, loupe, at, ended: false };
   }
