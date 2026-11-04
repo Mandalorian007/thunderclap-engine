@@ -272,7 +272,13 @@ test('fullscreen from a click, and back', async ({ context, page, wrapper }) => 
   await expect.poll(async () => (await info(frame)).fullscreenActive).toBe(true);
   await button.click();
   await expect.poll(async () => (await info(frame)).fullscreenActive).toBe(false);
-  expect((await info(frame)).fullscreen).toEqual([true, false]);
+  // The watch saw it go on, then off. Headless Linux Chromium can report a state twice or late
+  // (2 runs in 576 under the CI image), so poll and fold repeats.
+  await expect
+    .poll(async () =>
+      (await info(frame)).fullscreen.filter((on, i, all) => i === 0 || on !== all[i - 1]),
+    )
+    .toEqual([true, false]);
 });
 
 test("itch's click-to-launch starts the harness at 960x540", async ({ page, wrapper }) => {
