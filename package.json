@@ -6,6 +6,7 @@
   "description": "ThunderClap: a WebGPU game engine for the browser. It knows nothing about any game.",
   "license": "MIT",
   "exports": {
+    ".": "./src/index.ts",
     "./audio": "./src/audio/index.ts",
     "./core": "./src/core/index.ts",
     "./fx": "./src/fx/index.ts",
