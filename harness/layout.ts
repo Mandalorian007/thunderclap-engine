@@ -124,6 +124,11 @@ const handles = [
     },
   ),
 ];
+// ⚙ opens Options through `stack.replace`, the pattern a game menu uses, so tapping it again
+// (or spamming it) never stacks a second copy.
+const openOptions = () =>
+  ui.stack.replace({ title: 'Options', content: button('Done', () => ui.stack.pop()) });
+document.getElementById('w-options')!.addEventListener('click', openOptions);
 const caption = layout.dockCaption();
 ui.caption.say('A caption line in its lane.', { speaker: 'Speaker', hold: 0 });
 
@@ -170,6 +175,10 @@ const api: HarnessLayoutApi = {
     }
     ui.stack.push({ title: 'Panel', content });
   },
+  spamOptions(times) {
+    for (let i = 0; i < times; i++) openOptions();
+  },
+  panels: () => ({ stack: ui.stack.size, dom: ui.root.querySelectorAll('.tc-panel').length }),
 };
 window.__harnessLayout = api;
 state.ready = true;

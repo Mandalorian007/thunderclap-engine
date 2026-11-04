@@ -28,6 +28,10 @@ export interface HarnessLayoutApi {
   refresh(): void;
   /** Open a modal panel with `items` buttons (the last one is "Last"). */
   openPanel(items: number): void;
+  /** Open the ⚙ Options panel `times` times in one tick (`stack.replace`). */
+  spamOptions(times: number): void;
+  /** Panels on the stack and `.tc-panel` elements in the overlay. */
+  panels(): { stack: number; dom: number };
 }
 
 declare global {

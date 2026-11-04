@@ -15,8 +15,14 @@ Versions follow semver from `engine-v1.0.0` (Phase 5). Releases are cut with `pn
 - In CSS-px mode, buttons, toggles and sliders honour `--tc-tap-min` (44 on touch forms), and panels and toasts honour the safe area and the modal region. `textScaleTokens` takes a base size table (`DESIGN_FONT_PX`, `CSS_FONT_PX`).
 - The engine e2e has a layout harness page (`harness/layout.html`) and `e2e/layout.spec.ts`. It checks every matrix row plus two new upright rows (`phone-port` 390×844 and `tablet-port` 820×1180) for region placement, no overlap, the safe area (insets emulated through CDP), 44 px taps on touch, rotation and the modal at 150% text.
 
+- Two overlays (ws/port-chrome): `createCssChrome({ parent, legacy, forms?, layout?, focusHome? })` in `./ui` (`CssChrome`, `CssChromeOptions`, `PHONE_FORMS`), a CSS-px overlay with layout regions beside the legacy scaled one. While `chrome.active` (form factor in `forms`), the legacy `panels` and `toasts` layers move into it; otherwise it is hidden and the legacy overlay is untouched. See ARCHITECTURE.md, "Two overlays".
+- `createGame({ overlay: { layout?, cssForms? } })` builds it, and `EngineCtx.chrome` is the `CssChrome` (null without the option). `data-touch` is mirrored on both roots and `chrome.resize()` runs on every resize.
+- `Surface.setFrame(rect | null)`: the canvas letterboxes inside a part of the container (CSS px), so a scene can frame the world into `layout.freeRect`; `null` restores the whole container. `clientToLogical` follows it.
+- Engine e2e: "panel-stack spam leaves at most one panel" in `e2e/layout.spec.ts` (real taps on the harness ⚙, then 20 `stack.replace` opens in one tick).
+
 ### Changed
 - `platform/device-mode.ts` no longer writes the density tokens on a CSS-px overlay root, because the layout owns them there.
+- `WidgetHandle.remove()` returns the element to where it was before `layout.add()` (its old parent and position); an element added detached is removed, as before.
 
 ### Gestures (ws/gestures)
 - `Gestures` in `@thunderclap/engine/input` (`input/gestures.ts`): `tap`, `doubleTap`, `longPress` (default 450 ms), `pan` (threshold default 10 CSS px, with `dx`, `dy` in game space and `pointers` 1 or 2), `drag` (`start`, `move`, `end`, `cancel`, with the `origin`) and `pinch` (`scale` and per-tick `delta`). Thresholds are CSS px; positions are game space through the same `PointerTransform` as `Input` (`inside: false` in the letterbox bars). Options: `panThreshold`, `longPressMs`, `doubleTapMs` (300), `doubleTapDistance` (24 CSS px), `blocked`, `now`. Public feed methods for tests: `pointerDown`, `pointerMove`, `pointerUp`, `pointerCancel`, `cancelAll`. Types `TapGesture`, `PanGesture`, `DragGesture`, `PinchGesture`, `GesturePoint`, `GesturePhase`, `GestureDevice`, `GestureKind`, `GestureOptions`, `GestureAttachOptions`.

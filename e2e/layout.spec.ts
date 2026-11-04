@@ -10,6 +10,7 @@
  * - Tap targets at least 44 CSS px on touch rows (`--tc-tap-min`), text at least 12 px on phones.
  * - The caption card docked in `captionLane`; the `'free'` escape hatch inside `freeRect`.
  * - Widgets move when a phone turns upright and back.
+ * - Spamming a panel open (real taps, then many opens in one tick) leaves at most one panel.
  * - A modal panel at 150% text fits the modal region (inside the safe area) or scrolls to its
  *   last control, and focus goes home when it closes.
  *
@@ -314,4 +315,32 @@ test('a panel at 150% text fits the modal region or scrolls to its last control'
   await page.keyboard.press('Escape');
   await expect(panel).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => document.activeElement?.id)).toBe('home');
+});
+
+test('panel-stack spam leaves at most one panel', async ({ page }) => {
+  const touch = !!test.info().project.use.hasTouch;
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const panels = () => page.evaluate(() => window.__harnessLayout!.panels());
+  // Real taps (or clicks) on ⚙, as fast as the input goes. The first opens Options; its
+  // backdrop takes the next (a dismiss), so the count alternates, but never exceeds one.
+  const b = (await page.locator('#w-options').boundingBox())!;
+  const [x, y] = [b.x + b.width / 2, b.y + b.height / 2];
+  for (let i = 0; i < 9; i++) {
+    if (touch) await page.touchscreen.tap(x, y);
+    else await page.mouse.click(x, y);
+    const n = await panels();
+    expect(n.dom).toBeLessThanOrEqual(1);
+    expect(n.stack).toBe(n.dom);
+  }
+  // Settle with exactly one open, whatever the last tap did.
+  if ((await panels()).dom === 0) await page.evaluate(() => window.__harnessLayout!.spamOptions(1));
+  await expect(page.locator('.tc-panel')).toHaveCount(1);
+  expect(await panels()).toEqual({ stack: 1, dom: 1 });
+  // Opening it again in one tick, many times over, still leaves one.
+  await page.evaluate(() => window.__harnessLayout!.spamOptions(20));
+  await expect(page.locator('.tc-panel')).toHaveCount(1);
+  expect(await panels()).toEqual({ stack: 1, dom: 1 });
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.tc-panel')).toHaveCount(0);
+  expect(await panels()).toEqual({ stack: 0, dom: 0 });
 });
