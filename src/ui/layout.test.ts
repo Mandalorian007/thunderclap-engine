@@ -328,6 +328,28 @@ describe('createLayout (DOM)', () => {
     layout.destroy();
   });
 
+  it("setForms: a scene's own tracks over the spec's, field by field, until cleared", () => {
+    const layout = createLayout(ov, { classify });
+    layout.add(h('button'), { place: { default: 'left' } });
+    layout.add(h('div'), { place: { default: 'cardLane' } });
+    const seen: number[] = [];
+    layout.onChange((s) => seen.push(s.columns.length));
+    const spec = layout.element.style.gridTemplateColumns;
+    layout.setForms({ 'phone-landscape': { columns: [50, 'fill', 200, 58] } });
+    expect(seen).toEqual([4]);
+    expect(layout.element.style.gridTemplateColumns).toBe('50px 594px 200px 0px');
+    expect(layout.freeRect).toMatchObject({ x: 50, width: 594 });
+    // Other form factors keep the spec's (portrait: the 56 px left rail, then fill).
+    ff = 'phone-portrait';
+    ov.setRect({ x: 0, y: 0, width: 340, height: 844 });
+    expect(layout.freeRect).toMatchObject({ x: 56, width: 284 });
+    ff = 'phone-landscape';
+    ov.setRect({ x: 0, y: 0, width: 844, height: 340 });
+    layout.setForms(null);
+    expect(layout.element.style.gridTemplateColumns).toBe(spec);
+    layout.destroy();
+  });
+
   it('hidden, missing regions and remove()', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const layout = createLayout(ov, {

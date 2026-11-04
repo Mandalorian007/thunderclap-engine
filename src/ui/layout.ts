@@ -479,6 +479,13 @@ export interface Layout {
   ): WidgetHandle;
   /** Override the safe-area insets (`null` = read them from the page again). */
   setSafeArea(insets: Insets | null): void;
+  /**
+   * A scene's own tracks over the spec's, per form factor, field by field (`null` = the spec's
+   * again). For a scene whose regions follow its content (a board sized first, a column taking
+   * what is left): set on enter and on every resize that changes them, clear on exit.
+   * Re-lays out now.
+   */
+  setForms(forms: LayoutSpec['forms'] | null): void;
   /** Recompute now (the layout already follows `overlay.setRect`). */
   refresh(): void;
   /** Called after every re-layout with the new state. Returns unsubscribe. */
@@ -518,6 +525,7 @@ export function createLayout(overlay: Overlay, spec: LayoutSpec = {}): Layout {
   const classify = spec.classify ?? classifyFormFactor;
   const collapseEmpty = spec.collapseEmpty !== false;
   let insetOverride: Insets | null = spec.safeArea ?? null;
+  let formOverride: LayoutSpec['forms'] | null = null;
 
   const regionEls = Object.fromEntries(
     REGIONS.map((n) => [
@@ -574,7 +582,7 @@ export function createLayout(overlay: Overlay, spec: LayoutSpec = {}): Layout {
 
   const apply = () => {
     const ff = classifyNow();
-    const form = formSpec(ff, spec);
+    const form = { ...formSpec(ff, spec), ...formOverride?.[ff] };
     // Which grid regions hold a widget in this form factor.
     const occupied = new Set<RegionName>();
     for (const e of entries) {
@@ -725,6 +733,10 @@ export function createLayout(overlay: Overlay, spec: LayoutSpec = {}): Layout {
     },
     setSafeArea(insets) {
       insetOverride = insets ? { ...insets } : null;
+      apply();
+    },
+    setForms(forms) {
+      formOverride = forms ? { ...forms } : null;
       apply();
     },
     refresh: () => apply(),
