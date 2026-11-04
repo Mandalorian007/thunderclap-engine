@@ -11,6 +11,36 @@ export {
 } from './caption';
 export { append, type Child, focusableWithin, h } from './dom';
 export {
+  type ClassifyInput,
+  classifyFormFactor,
+  createLayout,
+  defaultForms,
+  effectiveInsets,
+  FORM_FACTORS,
+  type FormFactor,
+  type FormSpec,
+  type FreePlacement,
+  formSpec,
+  type Insets,
+  type Layout,
+  type LayoutSpec,
+  type LayoutState,
+  NO_INSETS,
+  PHONE_MAX_SHORT_SIDE,
+  PHONE_MAX_VIEW_SHORT,
+  type Placement,
+  parseAreas,
+  placementFor,
+  REGIONS,
+  type RegionName,
+  readSafeArea,
+  resolveLayout,
+  resolveTracks,
+  type Track,
+  type WidgetHandle,
+  type WidgetOptions,
+} from './layout';
+export {
   activateLink,
   type ExternalLink,
   type ExternalLinkLabels,
@@ -43,6 +73,8 @@ export {
 export { BASE_CSS, ensureStyles, prefersReducedMotion } from './styles';
 export {
   applyTextScale,
+  CSS_FONT_PX,
+  DESIGN_FONT_PX,
   scaledPx,
   scaleFontSizes,
   scalePxCss,
@@ -52,6 +84,7 @@ export {
 } from './text-scale';
 export {
   applyTheme,
+  cssPxTheme,
   cssVar,
   defaultTheme,
   type ThemeOverrides,

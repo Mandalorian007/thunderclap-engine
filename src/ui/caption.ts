@@ -109,6 +109,8 @@ export class CaptionCard {
   private readonly sideEl: HTMLElement;
   private readonly bodyEl: HTMLElement;
   private avoidRects: Rect[] = [];
+  private readonly homeEl: HTMLElement;
+  private dockHost: HTMLElement | null = null;
   private lineCps = 0;
   private isSuspended = false;
   reducedMotion: boolean;
@@ -145,7 +147,29 @@ export class CaptionCard {
       this.bodyEl,
     );
     if (opts.clickToAdvance !== false) this.element.addEventListener('click', () => this.advance());
+    this.homeEl = container;
     container.append(this.element, this.liveEl);
+  }
+
+  /** The region the card is docked in (see `dock`), or null in its corner. */
+  get docked(): HTMLElement | null {
+    return this.dockHost;
+  }
+
+  /**
+   * Region placement (layout regions, `Layout.dockCaption`): move the card into `host` and let
+   * it fill that region instead of floating in a corner. While docked, corners and `avoid()` do
+   * not apply; the region never overlaps another, so there is nothing to avoid. `null` returns
+   * it to its corner in the original container (the legacy path). The live region stays put.
+   */
+  dock(host: HTMLElement | null): void {
+    if (host === this.dockHost) return;
+    this.dockHost = host;
+    this.element.toggleAttribute('data-docked', !!host);
+    this.element.style.maxWidth = '';
+    if (host) host.append(this.element);
+    else this.homeEl.insertBefore(this.element, this.liveEl);
+    this.place();
   }
 
   /** True while a line is showing or queued. */
@@ -172,7 +196,8 @@ export class CaptionCard {
    * card stays in its corner if it fits there, else narrows (down to `minWidth`), else moves to
    * the mirrored corner, then the other edge, taking the first spot that touches no region (or
    * the one that covers least). `null` or `[]` lifts the constraint. Re-applied to every line
-   * until changed, and immediately to the line on screen.
+   * until changed, and immediately to the line on screen. Legacy path: a docked card (`dock`)
+   * keeps the regions but ignores them until it is undocked.
    */
   avoid(regions: Rect | readonly Rect[] | null): void {
     this.avoidRects = !regions ? [] : Array.isArray(regions) ? [...regions] : [regions as Rect];
@@ -272,7 +297,7 @@ export class CaptionCard {
   private place() {
     const el = this.element;
     const line = this.current;
-    if (!line || el.hidden || this.isSuspended) return;
+    if (!line || el.hidden || this.isSuspended || this.dockHost) return;
     const preferred = line.opts.corner ?? this.corner;
     el.dataset.corner = preferred;
     el.style.maxWidth = '';

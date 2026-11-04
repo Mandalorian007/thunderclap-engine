@@ -4,8 +4,9 @@
  * - `--tc-text-scale` is the player's text size as a factor (1, 1.25, 1.5 …). A game passes each
  *   stylesheet through `scaleFontSizes()` when it injects it, so all overlay text follows the
  *   token live. `applyTextScale()` sets it, plus the engine's own font tokens to match.
- * - `--tc-text-min` is a floor for every scaled font size, in design px. Unset (0) unless a
- *   device mode sets it (`platform/device-mode.ts` does on phones).
+ * - `--tc-text-min` is a floor for every scaled font size, in the overlay's px (design px on a
+ *   scaled overlay, CSS px on a CSS-px one). Unset (0) unless a device mode sets it
+ *   (`platform/device-mode.ts` does on scaled phones; `createLayout` does from its form spec).
  *
  * Small text scales fully. Large display text is already big, so it only grows as far as needed
  * to stay at least as large as scaled body text: a size N becomes max(N, min(N, 30) × scale).
@@ -42,13 +43,38 @@ export function scaleFontSizes(css: string): string {
     );
 }
 
-/** Engine theme font tokens at a text scale (the engine's own captions, panels and buttons). */
-export function textScaleTokens(scale: number): Record<string, string> {
-  const base = { fontSizeS: 24, fontSizeM: 30, fontSizeL: 40, fontSizeXl: 56, fontSizeXxl: 84 };
+/** The engine's font sizes at 100% on a scaled design-px overlay. */
+export const DESIGN_FONT_PX = {
+  fontSizeS: 24,
+  fontSizeM: 30,
+  fontSizeL: 40,
+  fontSizeXl: 56,
+  fontSizeXxl: 84,
+};
+/** The engine's font sizes at 100% on a CSS-px overlay (`cssPxTheme`). */
+export const CSS_FONT_PX = {
+  fontSizeS: 14,
+  fontSizeM: 16,
+  fontSizeL: 20,
+  fontSizeXl: 28,
+  fontSizeXxl: 40,
+};
+
+/**
+ * Engine theme font tokens at a text scale (the engine's own captions, panels and buttons).
+ * `base` is `DESIGN_FONT_PX` (default) or `CSS_FONT_PX` for a CSS-px overlay. Body sizes scale
+ * as `scaledPx` does relative to the design body size, so both bases grow the same way.
+ */
+export function textScaleTokens(
+  scale: number,
+  base: Record<string, number> = DESIGN_FONT_PX,
+): Record<string, string> {
+  // scaledPx's body/display split is in design px; map CSS sizes onto it by the M ratio.
+  const k = (base.fontSizeM ?? 30) / 30;
   const out: Record<string, string> = {};
-  for (const [k, px] of Object.entries(base)) {
-    const v = Math.round(scaledPx(px, scale));
-    out[k] = v < 50 ? `max(${v}px, ${MIN})` : `${v}px`;
+  for (const [name, px] of Object.entries(base)) {
+    const v = Math.round(scaledPx(px / k, scale) * k);
+    out[name] = v < 50 * k ? `max(${v}px, ${MIN})` : `${v}px`;
   }
   return out;
 }
@@ -56,7 +82,8 @@ export function textScaleTokens(scale: number): Record<string, string> {
 /**
  * Sets the text scale (1 = 100%) on the overlay root: `--tc-text-scale`, and
  * `data-text-scale="<percent>"` when it is not 100% so stylesheets can make room for larger
- * text. `setTheme` (usually `overlay.setTheme`) gets the engine font tokens to match.
+ * text. `setTheme` (usually `overlay.setTheme`) gets the engine font tokens to match: CSS-px
+ * sizes when the root is a CSS-px overlay (`data-units="css"`), design px otherwise.
  */
 export function applyTextScale(
   root: HTMLElement,
@@ -67,5 +94,5 @@ export function applyTextScale(
   const pct = Math.round(scale * 100);
   if (pct === 100) delete root.dataset.textScale;
   else root.dataset.textScale = String(pct);
-  setTheme?.(textScaleTokens(scale));
+  setTheme?.(textScaleTokens(scale, root.dataset.units === 'css' ? CSS_FONT_PX : DESIGN_FONT_PX));
 }

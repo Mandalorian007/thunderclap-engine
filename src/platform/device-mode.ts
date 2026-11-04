@@ -17,6 +17,8 @@
  * - `--tc-crop-t` / `--tc-crop-b` (always set) and `data-fill`: design px cut off the top and
  *   bottom when a phone fills the width instead of letterboxing (0 otherwise).
  * - `data-touch`: the last input was a finger. A mouse press or a key switches it off again.
+ *
+ * On a CSS-px overlay (`data-units="css"`) the density tokens are left to `createLayout`.
  */
 import { isTouchOnly, type PointerKind, watchPointerKind } from './device';
 
@@ -137,7 +139,10 @@ export function createDeviceMode(
       bar = b;
       cropT = ct;
       cropB = cb;
-      if (p) {
+      // A CSS-px overlay's density tokens belong to its layout (ui/layout.ts), not to this mode.
+      if (root.dataset.units === 'css') {
+        // Leave them alone.
+      } else if (p) {
         root.style.setProperty('--tc-text-min', `${(textMin / s).toFixed(1)}px`);
         root.style.setProperty('--tc-tap-min', `${(tapMin / s).toFixed(1)}px`);
         root.style.setProperty('--tc-css-px', `${(1 / s).toFixed(3)}px`);

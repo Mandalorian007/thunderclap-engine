@@ -94,6 +94,34 @@ export const BASE_CSS = `
 .tc-link-field { width: 100%; box-sizing: border-box; padding: 6px 10px; border-radius: var(--tc-radius-s); font-family: var(--tc-font-mono);
   font-size: calc(var(--tc-font-size-s) * 0.83); color: var(--tc-color-text); background: var(--tc-color-bg); border: 1px solid var(--tc-color-border); }
 
+/* CSS-px overlay (createOverlay({ legacyScale: false })): base widgets honour the density tokens. */
+.tc-overlay[data-units="css"] .tc-button { min-height: var(--tc-tap-min, 32px); min-width: var(--tc-tap-min, 32px);
+  padding: var(--tc-space-2) var(--tc-space-4); }
+.tc-overlay[data-units="css"] .tc-field { min-height: var(--tc-tap-min, 32px); }
+.tc-overlay[data-units="css"] .tc-field input[type="range"] { min-height: var(--tc-tap-min, 32px); }
+.tc-overlay[data-units="css"] .tc-field input[type="checkbox"] { width: 20px; height: 20px; }
+.tc-overlay[data-units="css"] .tc-panel-host { padding: var(--tc-modal-top, 8px) var(--tc-modal-right, 8px) var(--tc-modal-bottom, 8px) var(--tc-modal-left, 8px); }
+.tc-overlay[data-units="css"] .tc-panel { max-width: 100%; max-height: 100%; }
+.tc-overlay[data-units="css"] .tc-toasts { top: calc(var(--tc-safe-top-px, 0px) + var(--tc-space-4)); width: max-content; max-width: calc(100% - 32px); }
+.tc-overlay[data-units="css"] .tc-toast { max-width: 560px; }
+.tc-overlay[data-units="css"] .tc-caption { --tc-caption-max-width: 480px; --tc-caption-margin: var(--tc-space-4); }
+.tc-overlay[data-units="css"] .tc-link-fallback { min-width: 0; width: min(480px, 90vw); }
+
+/* Layout regions (ui/layout.ts). The grid is laid out in the safe area; regions scroll rather than spill. */
+.tc-layout { position: absolute; inset: 0; display: grid; pointer-events: none; }
+.tc-region { position: relative; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain;
+  display: flex; gap: var(--tc-region-pad, 8px); padding: var(--tc-region-pad, 8px); pointer-events: none; }
+.tc-region[hidden] { display: none; }
+.tc-region > * { flex: none; }
+.tc-region[data-region="top"], .tc-region[data-region="bottom"] { flex-direction: row; align-items: center; }
+.tc-region[data-region="left"], .tc-region[data-region="right"], .tc-region[data-region="cardLane"] { flex-direction: column; align-items: stretch; }
+.tc-region[data-region="captionLane"] { flex-direction: row; align-items: stretch; }
+.tc-region[data-region="fill"], .tc-region[data-region="modal"] { flex-direction: column; align-items: center; justify-content: center; }
+.tc-region[data-region="modal"] { position: absolute; }
+.tc-layout-free { position: absolute; inset: 0; pointer-events: none; }
+.tc-overlay [data-tc-layout-hidden] { display: none !important; }
+.tc-caption[data-docked] { position: relative; inset: auto; width: 100%; max-width: none; max-height: 100%; overflow: auto; flex: 1 1 auto; }
+
 .tc-sr-only { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
   clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
 

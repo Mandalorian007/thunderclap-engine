@@ -54,6 +54,31 @@ export const defaultTheme = {
 };
 
 export type ThemeTokens = { [K in keyof typeof defaultTheme]: string };
+/**
+ * Size tokens for a CSS-px overlay (`createOverlay({ legacyScale: false })`), applied over
+ * `defaultTheme`: the same scale at screen size (about half the design-px values), so 16 px body
+ * text reads as 16 px on every screen. Colours, fonts and timings are shared.
+ */
+export const cssPxTheme: Partial<ThemeTokens> = {
+  fontSizeS: '14px',
+  fontSizeM: '16px',
+  fontSizeL: '20px',
+  fontSizeXl: '28px',
+  fontSizeXxl: '40px',
+  space1: '2px',
+  space2: '4px',
+  space3: '8px',
+  space4: '12px',
+  space5: '20px',
+  space6: '32px',
+  radiusS: '4px',
+  radiusM: '8px',
+  radiusL: '12px',
+  borderWidth: '1px',
+  shadow: '0 6px 24px rgba(0, 0, 0, 0.55)',
+  focusRing: '2px',
+};
+
 /** Games may add their own tokens too; they become `--tc-<kebab-name>` the same way. */
 export type ThemeOverrides = Partial<ThemeTokens> & Record<string, string>;
 
