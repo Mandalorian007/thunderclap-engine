@@ -27,8 +27,11 @@ export interface MagnifyTarget {
 export interface MagnifyOptions {
   /** The loupe shows while the target pitch is below this many CSS px. Default 44. */
   below?: number;
-  /** Loupe diameter, CSS px. Default 128. */
-  size?: number;
+  /**
+   * Loupe diameter, CSS px. Default 128. A function is read each tick, so the loupe can be
+   * smaller where targets are dense (it is rebuilt when the size changes).
+   */
+  size?: number | (() => number);
   /** Loupe magnification. Default 2.5. */
   zoom?: number;
   /** CSS px the aim point sits above a dragging finger. Default 56. */
@@ -56,7 +59,12 @@ export interface MagnifyOptions {
    * rather not cover (`avoid`, ranked below `spare`). With one, the loupe goes where
    * `loupeClear` puts it; without, beside the finger (`loupeSpot`).
    */
-  clear?: (target: MagnifyTarget | null) => { keep: Rect[]; spare?: Rect[]; avoid?: Rect[] } | null;
+  clear?: (
+    target: MagnifyTarget | null,
+    aim: { x: number; y: number },
+  ) => { keep: Rect[]; spare?: Rect[]; avoid?: Rect[] } | null;
+  /** Draw a thin leader from the loupe's rim to the snapped target (`Loupe` `leader`). */
+  leader?: boolean;
 }
 
 /** An axis-aligned rectangle, client CSS px. */
@@ -94,6 +102,12 @@ export interface Aim {
 }
 
 export const MAGNIFY_DEFAULTS = { below: 44, size: 128, zoom: 2.5, lift: 56 } as const;
+
+/** The loupe diameter `m` asks for now (CSS px). */
+export function magnifySize(m: Pick<MagnifyOptions, 'size'>): number {
+  const s = typeof m.size === 'function' ? m.size() : m.size;
+  return s ?? MAGNIFY_DEFAULTS.size;
+}
 
 /** A square grid of cells: `cols × rows`, cell (i, j) spans `left + i·pitch` to `+ pitch`. */
 export interface Grid {

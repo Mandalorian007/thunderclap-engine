@@ -26,6 +26,7 @@ export {
   MAGNIFY_DEFAULTS,
   type MagnifyOptions,
   type MagnifyTarget,
+  magnifySize,
   type Rect,
   snapToGrid,
 } from './magnify';

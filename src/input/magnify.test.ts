@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
+import { loupeLeader } from '../ui/loupe';
 import { type GestureOptions, Gestures } from './gestures';
-import { loupeClear, loupeSpot, type MagnifyOptions, type Rect, snapToGrid } from './magnify';
+import {
+  loupeClear,
+  loupeSpot,
+  type MagnifyOptions,
+  magnifySize,
+  type Rect,
+  snapToGrid,
+} from './magnify';
 
 // A 4×3 grid, pitch 20, cell (i, j) centred at (10 + 20i, 10 + 20j).
 const G = { left: 0, top: 0, pitch: 20, cols: 4, rows: 3 };
@@ -246,5 +254,30 @@ describe('Gestures magnify: aim, lift, snap and loupe', () => {
     g.pointerDown(1, 10, 10);
     g.update();
     expect(g.aim).toBeNull();
+  });
+});
+
+describe('magnifySize and loupeLeader (dense-board-4)', () => {
+  it('reads a fixed or a live loupe size, defaulting to 128', () => {
+    expect(magnifySize({})).toBe(128);
+    expect(magnifySize({ size: 100 })).toBe(100);
+    let s = 96;
+    const m = { size: () => s };
+    expect(magnifySize(m)).toBe(96);
+    s = 120;
+    expect(magnifySize(m)).toBe(120);
+  });
+
+  it('runs a leader from the rim to just short of the spot', () => {
+    const seg = loupeLeader({ x: 0, y: 0 }, 100, { x: 100, y: 0, r: 10 })!;
+    expect(seg.x0).toBeCloseTo(51);
+    expect(seg.x1).toBeCloseTo(88);
+    expect(seg.y0).toBe(0);
+    expect(seg.y1).toBe(0);
+  });
+
+  it('draws no leader when the spot touches or sits under the loupe', () => {
+    expect(loupeLeader({ x: 0, y: 0 }, 100, { x: 60, y: 0, r: 10 })).toBeNull();
+    expect(loupeLeader({ x: 0, y: 0 }, 100, { x: 0, y: 0, r: 10 })).toBeNull();
   });
 });

@@ -1,5 +1,12 @@
 import { Loupe } from '../ui/loupe';
-import { type Aim, loupeClear, loupeSpot, MAGNIFY_DEFAULTS, type MagnifyOptions } from './magnify';
+import {
+  type Aim,
+  loupeClear,
+  loupeSpot,
+  MAGNIFY_DEFAULTS,
+  type MagnifyOptions,
+  magnifySize,
+} from './magnify';
 import type { GestureKind, PointerTransform } from './types';
 
 /** Device of the pointer that made a gesture. */
@@ -325,8 +332,13 @@ export class Gestures {
       this.loupe?.hide();
       return;
     }
+    const size = magnifySize(m);
+    if (this.loupe && this.loupe.size !== size) {
+      this.loupe.destroy();
+      this.loupe = null;
+    }
     this.loupe ??= new Loupe(m.source, {
-      size: m.size ?? MAGNIFY_DEFAULTS.size,
+      size,
       zoom: m.zoom ?? MAGNIFY_DEFAULTS.zoom,
       className: m.className,
       parent: m.parent,
@@ -339,7 +351,7 @@ export class Gestures {
       const b = to(t.x + t.r, t.y);
       ring = { x: a.x, y: a.y, r: Math.abs(b.x - a.x) };
     }
-    this.loupe.show({ focus: aim.client, at: aim.at, ring });
+    this.loupe.show({ focus: aim.client, at: aim.at, ring, leader: m.leader ? ring : null });
   }
 
   /** The aim of touch contact `c` (`null` for mouse and pen, or while `when()` is false). */
@@ -354,13 +366,13 @@ export class Gestures {
     const y = p?.y ?? this.lastInside.y;
     const target = inside && m.snap ? m.snap(x, y) : null;
     const over = inside && (m.over ? m.over(x, y) : target !== null);
-    const size = m.size ?? MAGNIFY_DEFAULTS.size;
+    const size = magnifySize(m);
     const loupe = over && m.pitch() < (m.below ?? MAGNIFY_DEFAULTS.below);
     const win = (m.source?.ownerDocument ?? globalThis.document)?.defaultView;
     const view = win
       ? { width: win.innerWidth, height: win.innerHeight }
       : { width: Number.POSITIVE_INFINITY, height: Number.POSITIVE_INFINITY };
-    const room = loupe && m.clear ? m.clear(target) : null;
+    const room = loupe && m.clear ? m.clear(target, { x, y }) : null;
     const at = room
       ? loupeClear(finger, client, size, view, room.keep, room.avoid, room.spare)
       : loupeSpot(finger, client, size, view);

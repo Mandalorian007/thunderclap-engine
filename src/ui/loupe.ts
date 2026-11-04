@@ -27,6 +27,32 @@ export interface LoupeView {
   at: { x: number; y: number };
   /** Optional ring: a client point and radius (CSS px, before zoom). */
   ring?: { x: number; y: number; r: number; color?: string } | null;
+  /**
+   * Optional leader: a thin line from the loupe's rim to a client point and radius (the real
+   * spot the loupe magnifies, outside it), so the eye joins the two. Hidden when the spot is
+   * under or touching the loupe.
+   */
+  leader?: { x: number; y: number; r: number } | null;
+}
+
+/**
+ * The leader's segment (client px) from the rim of a loupe `size` across at `at` to `r` short
+ * of the spot, or `null` when there is no room for one.
+ */
+export function loupeLeader(
+  at: { x: number; y: number },
+  size: number,
+  spot: { x: number; y: number; r: number },
+): { x0: number; y0: number; x1: number; y1: number } | null {
+  const dx = spot.x - at.x;
+  const dy = spot.y - at.y;
+  const d = Math.hypot(dx, dy);
+  const from = size / 2 + 1;
+  const to = d - spot.r - 2;
+  if (to - from < 6) return null;
+  const ux = dx / d;
+  const uy = dy / d;
+  return { x0: at.x + ux * from, y0: at.y + uy * from, x1: at.x + ux * to, y1: at.y + uy * to };
 }
 
 export class Loupe {
@@ -34,6 +60,8 @@ export class Loupe {
   readonly size: number;
   readonly zoom: number;
   private readonly cv: HTMLCanvasElement;
+  /** The leader line (`tc-loupe-leader`), a sibling of the loupe so it draws outside it. */
+  readonly leaderEl: HTMLElement;
   private readonly g: CanvasRenderingContext2D | null;
   private on = false;
   private pending: { view: LoupeView; px: number; dpr: number } | null = null;
@@ -65,7 +93,22 @@ export class Loupe {
     );
     Object.assign(this.cv.style, { width: '100%', height: '100%', display: 'block' });
     this.g = this.cv.getContext('2d');
-    (opts.parent ?? doc.body).append(this.el);
+    this.leaderEl = h('div', {
+      class: `tc-loupe-leader${opts.className ? ` ${opts.className}-leader` : ''}`,
+      'aria-hidden': 'true',
+      hidden: true,
+      style: {
+        position: 'fixed',
+        left: '0px',
+        top: '0px',
+        height: '2px',
+        transformOrigin: '0 50%',
+        pointerEvents: 'none',
+        background: '#ffd56a',
+        boxShadow: '0 0 0 1px #000a',
+      },
+    });
+    (opts.parent ?? doc.body).append(this.leaderEl, this.el);
   }
 
   get visible(): boolean {
@@ -82,6 +125,14 @@ export class Loupe {
     }
     const d = this.size;
     this.el.style.transform = `translate(${Math.round(v.at.x - d / 2)}px, ${Math.round(v.at.y - d / 2)}px)`;
+    const seg = v.leader ? loupeLeader(v.at, d, v.leader) : null;
+    this.leaderEl.hidden = !seg;
+    if (seg) {
+      const len = Math.hypot(seg.x1 - seg.x0, seg.y1 - seg.y0);
+      const deg = (Math.atan2(seg.y1 - seg.y0, seg.x1 - seg.x0) * 180) / Math.PI;
+      this.leaderEl.style.width = `${len.toFixed(1)}px`;
+      this.leaderEl.style.transform = `translate(${seg.x0.toFixed(1)}px, ${(seg.y0 - 1).toFixed(1)}px) rotate(${deg.toFixed(2)}deg)`;
+    }
     if (!this.on) {
       this.on = true;
       this.el.dataset.on = '';
@@ -148,11 +199,13 @@ export class Loupe {
     this.pending = null;
     if (!this.on) return;
     this.on = false;
+    this.leaderEl.hidden = true;
     delete this.el.dataset.on;
     this.el.style.opacity = '0';
   }
 
   destroy(): void {
     this.el.remove();
+    this.leaderEl.remove();
   }
 }

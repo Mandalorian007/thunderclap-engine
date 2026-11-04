@@ -53,7 +53,7 @@ export {
   type ExternalLinkOptions,
   externalLink,
 } from './link';
-export { Loupe, type LoupeOptions, type LoupeView } from './loupe';
+export { Loupe, type LoupeOptions, type LoupeView, loupeLeader } from './loupe';
 export {
   type MenuNavActions,
   type MenuNavInput,
