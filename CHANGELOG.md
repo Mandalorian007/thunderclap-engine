@@ -18,6 +18,7 @@ Versions follow semver from `engine-v1.0.0` (Phase 5). Releases are cut with `pn
 - Two overlays (ws/port-chrome): `createCssChrome({ parent, legacy, forms?, layout?, focusHome? })` in `./ui` (`CssChrome`, `CssChromeOptions`, `PHONE_FORMS`), a CSS-px overlay with layout regions beside the legacy scaled one. While `chrome.active` (form factor in `forms`), the legacy `panels` and `toasts` layers move into it; otherwise it is hidden and the legacy overlay is untouched. See ARCHITECTURE.md, "Two overlays".
 - `createGame({ overlay: { layout?, cssForms? } })` builds it, and `EngineCtx.chrome` is the `CssChrome` (null without the option). `data-touch` is mirrored on both roots and `chrome.resize()` runs on every resize.
 - `Surface.setFrame(rect | null)`: the canvas letterboxes inside a part of the container (CSS px), so a scene can frame the world into `layout.freeRect`; `null` restores the whole container. `clientToLogical` follows it.
+- Height fill (ws/chrome-polish-3): `FillWidthOptions.minVisibleWidth` and `focusX`. Where a frame is too narrow to show `minVisibleWidth` of the design at full height, the fit fills the frame's height and crops the sides about `focusX`, the same way `minVisible`/`focusY` crops top and bottom. `computeFillWidth` covers both; `surface.setFill` compares the new fields. Tests are in `platform/letterbox.test.ts`.
 - Engine e2e: "panel-stack spam leaves at most one panel" in `e2e/layout.spec.ts` (real taps on the harness ⚙, then 20 `stack.replace` opens in one tick).
 
 ### Changed

@@ -126,12 +126,20 @@ export class Surface {
   }
 
   /**
-   * Fill the width and crop top and bottom (`computeFillWidth`), or `null` for the plain
-   * letterbox. Lays out again at once if the result changes.
+   * Fill the width and crop top and bottom (`computeFillWidth`; with `minVisibleWidth`, a tall
+   * container or frame fills its height and crops the sides), or `null` for the plain letterbox. Lays out again at once if the result changes.
    */
   setFill(fill: FillWidthOptions | null): void {
     const f = this.fill;
-    if (f === fill || (f && fill && f.minVisible === fill.minVisible && f.focusY === fill.focusY))
+    if (
+      f === fill ||
+      (f &&
+        fill &&
+        f.minVisible === fill.minVisible &&
+        f.focusY === fill.focusY &&
+        f.minVisibleWidth === fill.minVisibleWidth &&
+        f.focusX === fill.focusX)
+    )
       return;
     this.fill = fill ? { ...fill } : null;
     this.layout();
