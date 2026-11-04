@@ -18,6 +18,15 @@ export {
   isInteractiveTarget,
   isTextEntryTarget,
 } from './input';
+export {
+  type Aim,
+  type Grid,
+  loupeSpot,
+  MAGNIFY_DEFAULTS,
+  type MagnifyOptions,
+  type MagnifyTarget,
+  snapToGrid,
+} from './magnify';
 export type {
   ActionState,
   Binding,

@@ -35,6 +35,30 @@ export interface HarnessGesturesState {
   pressed: Record<string, number>;
   /** `released` counts per action. */
   released: Record<string, number>;
+  /** The magnify grid (game space) and its one refused cell. */
+  grid: {
+    left: number;
+    top: number;
+    pitch: number;
+    cols: number;
+    rows: number;
+    refused: { x: number; y: number };
+  };
+  /** Every tick's aim (while a finger is down, and once with `ended` after it lifts). */
+  aims: AimLogEntry[];
+  /** Ticks on which the loupe element was shown. */
+  loupeShown: number;
+}
+
+export interface AimLogEntry {
+  tick: number;
+  x: number;
+  y: number;
+  lifted: boolean;
+  ended: boolean;
+  loupe: boolean;
+  /** The snapped cell, or `null`. */
+  cell: { x: number; y: number } | null;
 }
 
 export interface HarnessGesturesApi {

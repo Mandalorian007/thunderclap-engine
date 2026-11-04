@@ -1,3 +1,5 @@
+import { Loupe } from '../ui/loupe';
+import { type Aim, loupeSpot, MAGNIFY_DEFAULTS, type MagnifyOptions } from './magnify';
 import type { GestureKind, PointerTransform } from './types';
 
 /** Device of the pointer that made a gesture. */
@@ -66,6 +68,11 @@ export interface GestureOptions {
   blocked?: () => boolean;
   /** Clock in ms. Default `performance.now()`. Tests pass a fake one. */
   now?: () => number;
+  /**
+   * Loupe and snap for small touch targets (see `magnify.ts`): while one touch pointer is down
+   * each tick reports `aim`, and below `below` CSS px of pitch a loupe shows the aim point.
+   */
+  magnify?: MagnifyOptions;
 }
 
 export interface GestureAttachOptions {
@@ -172,6 +179,8 @@ export class Gestures {
   pan: PanGesture | null = null;
   drag: DragGesture | null = null;
   pinch: PinchGesture | null = null;
+  /** This tick's aim while one touch pointer is down (with the `magnify` option), or `null`. */
+  aim: Aim | null = null;
   blocked: () => boolean;
 
   readonly panThreshold: number;
@@ -197,6 +206,10 @@ export class Gestures {
   /** The session whose long-press has been reported, while its pointer stays down. */
   private longPressSession: Session | null = null;
   private detachFn: (() => void) | null = null;
+  private magnify: MagnifyOptions | null;
+  private loupe: Loupe | null = null;
+  /** The aim at the moment the finger lifted, reported (with `ended`) on the next tick. */
+  private endedAim: Aim | null = null;
 
   constructor(opts: GestureOptions = {}) {
     this.panThreshold = opts.panThreshold ?? DEFAULTS.panThreshold;
@@ -205,6 +218,20 @@ export class Gestures {
     this.doubleTapDistance = opts.doubleTapDistance ?? DEFAULTS.doubleTapDistance;
     this.blocked = opts.blocked ?? (() => false);
     this.now = opts.now ?? defaultNow;
+    this.magnify = opts.magnify ?? null;
+  }
+
+  /** Turn magnify on (or off with `null`) after construction. */
+  setMagnify(opts: MagnifyOptions | null): void {
+    this.magnify = opts;
+    this.aim = null;
+    this.loupe?.destroy();
+    this.loupe = null;
+  }
+
+  /** The loupe element, once one has been shown (for styling and tests). */
+  get loupeElement(): HTMLElement | null {
+    return this.loupe?.el ?? null;
   }
 
   /** Install the client → game-space mapping. `null` = identity (relative to the target when attached). */
@@ -261,6 +288,7 @@ export class Gestures {
       this.drag = this.cancelled('drag');
       this.pinch = this.cancelled('pinch');
       this.running.clear();
+      this.updateAim();
       return;
     }
     this.checkLongPress(t);
@@ -274,6 +302,66 @@ export class Gestures {
     this.pan = this.publish('pan', this.pans, mergePan, idlePan);
     this.drag = this.publish('drag', this.drags, mergePan, idlePan);
     this.pinch = this.publish('pinch', this.pinches, mergePinch, idlePinch);
+    this.updateAim();
+  }
+
+  /**
+   * This tick's aim (the `magnify` option): one touch pointer down, not blocked, `when()`. The
+   * aim point is the finger, raised by `lift` while it drags; `snap` picks the target; the
+   * loupe shows while the pitch is below `below` and the aim is over the targets.
+   */
+  private updateAim(): void {
+    const m = this.magnify;
+    const s = this.session;
+    const c = s && !s.void && !s.multi ? (s.contacts.values().next().value as Contact) : null;
+    // The aim the finger lifted at comes with the drag's `end` (moves before it get their own
+    // ticks first, still aiming there).
+    let ended = this.endedAim;
+    if (ended && this.drags.length > 0) ended = { ...ended, ended: false };
+    else this.endedAim = null;
+    const aim = !m || this.blocked() ? null : c ? this.aimOf(m, c, s?.moving === true) : ended;
+    this.aim = aim;
+    if (!m?.source || !aim?.loupe || aim.ended) {
+      this.loupe?.hide();
+      return;
+    }
+    this.loupe ??= new Loupe(m.source, {
+      size: m.size ?? MAGNIFY_DEFAULTS.size,
+      zoom: m.zoom ?? MAGNIFY_DEFAULTS.zoom,
+      className: m.className,
+      parent: m.parent,
+    });
+    let ring: { x: number; y: number; r: number } | null = null;
+    const t = aim.target;
+    if (t) {
+      const to = m.toClient ?? ((tx: number, ty: number) => ({ x: tx, y: ty }));
+      const a = to(t.x, t.y);
+      const b = to(t.x + t.r, t.y);
+      ring = { x: a.x, y: a.y, r: Math.abs(b.x - a.x) };
+    }
+    this.loupe.show({ focus: aim.client, at: aim.at, ring });
+  }
+
+  /** The aim of touch contact `c` (`null` for mouse and pen, or while `when()` is false). */
+  private aimOf(m: MagnifyOptions, c: Contact, lifted: boolean): Aim | null {
+    if (c.device !== 'touch' || (m.when && !m.when())) return null;
+    const lift = lifted ? (m.lift ?? MAGNIFY_DEFAULTS.lift) : 0;
+    const finger = { x: c.lastX, y: c.lastY };
+    const client = { x: c.lastX, y: c.lastY - lift };
+    const p = this.transform ? this.transform(client.x, client.y) : { x: client.x, y: client.y };
+    const inside = p !== null;
+    const x = p?.x ?? this.lastInside.x;
+    const y = p?.y ?? this.lastInside.y;
+    const target = inside && m.snap ? m.snap(x, y) : null;
+    const over = inside && (m.over ? m.over(x, y) : target !== null);
+    const size = m.size ?? MAGNIFY_DEFAULTS.size;
+    const loupe = over && m.pitch() < (m.below ?? MAGNIFY_DEFAULTS.below);
+    const win = (m.source?.ownerDocument ?? globalThis.document)?.defaultView;
+    const view = win
+      ? { width: win.innerWidth, height: win.innerHeight }
+      : { width: Number.POSITIVE_INFINITY, height: Number.POSITIVE_INFINITY };
+    const at = loupeSpot(finger, client, size, view);
+    return { x, y, inside, client, finger, lifted, target, loupe, at, ended: false };
   }
 
   /** The `cancel` report for a running `kind` (blocked), or `null`. */
@@ -409,6 +497,10 @@ export class Gestures {
     if (!s || !c) return;
     if (clientX !== undefined && clientY !== undefined)
       this.pointerMove(id, clientX, clientY, time);
+    if (this.magnify && !s.void && !s.multi && !this.blocked()) {
+      const aim = this.aimOf(this.magnify, c, s.moving);
+      this.endedAim = aim ? { ...aim, ended: true } : null;
+    }
     s.contacts.delete(id);
     if (this.longPressSession === s) this.longPressSession = null;
     if (!s.void) {
@@ -619,6 +711,16 @@ export class Gestures {
     this.detachFn?.();
     this.detachFn = null;
     this.cancelAll();
+    this.aim = null;
+    this.endedAim = null;
+    this.loupe?.hide();
+  }
+
+  /** Detach and remove the loupe element. */
+  destroy(): void {
+    this.detach();
+    this.loupe?.destroy();
+    this.loupe = null;
   }
 }
 

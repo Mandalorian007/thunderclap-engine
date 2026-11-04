@@ -134,3 +134,35 @@ describe('Gestures DOM attachment', () => {
     input.detach();
   });
 });
+
+describe('Gestures magnify: the loupe element', () => {
+  it('shows while a finger holds below the pitch, and hides when it lifts', () => {
+    const source = document.createElement('canvas');
+    document.body.appendChild(source);
+    let t = 0;
+    const g = new Gestures({
+      now: () => t,
+      magnify: {
+        pitch: () => 30,
+        source,
+        className: 'my-loupe',
+        snap: (x, y) => ({ x, y, r: 10 }),
+      },
+    });
+    g.pointerDown(1, 100, 100);
+    t += 16;
+    g.update();
+    const el = g.loupeElement;
+    expect(el?.classList.contains('tc-loupe')).toBe(true);
+    expect(el?.classList.contains('my-loupe')).toBe(true);
+    expect(el?.dataset.on).toBe('');
+    expect(el?.style.width).toBe('128px');
+    g.pointerUp(1, 100, 100);
+    t += 16;
+    g.update();
+    expect(el?.dataset.on).toBeUndefined();
+    g.destroy();
+    expect(el?.isConnected).toBe(false);
+    source.remove();
+  });
+});

@@ -300,3 +300,66 @@ test('pinch: two real touches report scale', async ({ page }) => {
   expect(s.pressed.select ?? 0).toBe(0);
   expect(s.pressed.grab ?? 0).toBe(0);
 });
+
+/** Centre of grid cell (i, j), game space. */
+async function cellPoint(i: number, j: number): Promise<{ x: number; y: number }> {
+  const { grid } = await read();
+  return { x: grid.left + (i + 0.5) * grid.pitch, y: grid.top + (j + 0.5) * grid.pitch };
+}
+
+test('magnify: a held finger snaps off a refused cell; the loupe shows below 44 CSS px', async ({
+  page,
+}) => {
+  const { toPage, scale } = await stageMapper();
+  const f = new Finger(page);
+  const { grid } = await read();
+  // Right of the refused cell's centre: its right neighbour is the nearest accepted one.
+  const c = await cellPoint(grid.refused.x, grid.refused.y);
+  await f.down(toPage(c.x + grid.pitch * 0.2, c.y));
+  await frames(4);
+  let s = await read();
+  if (!touch) {
+    // A mouse has a precise tip and hovers: it never aims.
+    await f.up();
+    expect(s.aims).toEqual([]);
+    expect(s.loupeShown).toBe(0);
+    return;
+  }
+  const held = s.aims.at(-1);
+  expect(held).toMatchObject({ lifted: false, ended: false });
+  expect(held?.cell).toEqual({ x: grid.refused.x + 1, y: grid.refused.y });
+  const small = grid.pitch * scale < 44;
+  expect(held?.loupe).toBe(small);
+  expect(s.loupeShown > 0).toBe(small);
+  await f.up();
+  await frames(3);
+  s = await read();
+  expect(s.aims.at(-1)?.ended).toBe(true);
+  // Off the grid: no target, no loupe.
+  await clear();
+  await f.down(toPage(60, 60));
+  await frames(3);
+  s = await read();
+  expect(s.aims.at(-1)).toMatchObject({ cell: null, loupe: false });
+  await f.up();
+});
+
+test('magnify: a dragging finger aims 56 CSS px above itself and lands there', async ({ page }) => {
+  test.skip(!touch, 'touch rows only (a mouse never aims)');
+  const { toPage, scale } = await stageMapper();
+  const f = new Finger(page);
+  const aimAt = await cellPoint(5, 1);
+  const lift = 56 / scale;
+  await f.drag(toPage(aimAt.x - 120, aimAt.y + lift), toPage(aimAt.x, aimAt.y + lift), 6);
+  await expect.poll(async () => (await read()).released.grab ?? 0).toBe(1);
+  await frames(3);
+  const s = await read();
+  expect(s.aims.filter((a) => a.lifted && !a.ended).length).toBeGreaterThan(0);
+  const last = s.aims.at(-1);
+  expect(last).toMatchObject({ ended: true, lifted: true, cell: { x: 5, y: 1 } });
+  expect(Math.abs((last?.y ?? 0) - aimAt.y)).toBeLessThanOrEqual(2 / scale + 1);
+  // The ended aim comes on the drag's end tick.
+  const dragEnd = of(s.log, 'drag').at(-1);
+  expect(dragEnd?.phase).toBe('end');
+  expect(last?.tick).toBe(dragEnd?.tick);
+});
