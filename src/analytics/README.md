@@ -48,6 +48,10 @@ Each `AnalyticsEvent` is `{ name, props, session, seq, t, context? }`. `session`
 
 Games add their own through the generic `E`. A batch is flushed on `flush()`, on every `session_end`, and automatically at `maxBatch` (default 20).
 
+## Types
+
+`createAnalytics<E>(opts: AnalyticsOptions): Analytics<E>`. `AnalyticsOptions` is `{ sink, session?, clock?, context?, onError?, maxBatch? }`; `AnalyticsSink` is `(events: AnalyticsEvent[]) => void | Promise<void>`; `AnalyticsContext` is the read-only record of strings, numbers and booleans attached to every event. `Analytics<E>` has `session`, `pending` (queued, not yet flushed), `emit`, `flush` and `attach`. `EngineEvents` types the three built-in events above; `SessionEndReason` is `HideReason | 'deviceLost'`. `AttachTarget` is the part of `EngineCtx` that `attach` reads (`hooks` and `host`, and `ui` and `surface` when present).
+
 ## `attach(ctx)`
 
 It wraps `ctx.hooks.hide`, `ctx.hooks.show` and `ctx.hooks.deviceLost` (your own hooks still run, after it). `createGame` calls `hide(reason)` with the lifecycle reason (`hidden`, `pagehide`, `freeze`), which becomes `session_end.reason`; `show` re-arms it for the next hidden stretch. It adds no listeners of its own. The returned function restores the hooks (unless something wrapped them since).

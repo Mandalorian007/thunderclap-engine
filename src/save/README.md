@@ -1,6 +1,6 @@
 # engine/save
 
-Versioned save slots in `localStorage`. Survives the itch.io iframe: storage that is missing, blocked, partitioned, full, or throws on every call. No dependencies.
+Versioned save slots in the host's storage (`host.storage`; `localStorage` on the web). Survives the itch.io iframe: storage that is missing, blocked, partitioned, full, or throws on every call. No dependencies.
 
 ## Usage
 
@@ -59,10 +59,11 @@ Partitioned storage note: in some browsers, itch's iframe gets storage keyed to 
 
 ## API
 
-- `createSaveStore(opts) → SaveStore<T>`: `get, set, update, flush, reset, clear, exportString, importString, subscribe, dispose`, plus `key`, `persistent`, `status`, `savedAt`.
-- `s`: schema builders `boolean, string, number({min,max,int}), literal(...), array, record, object(shape, {strict}), optional, nullable, union, unknown`. `Infer<typeof schema>`.
-- `runMigrations(data, from, to, migrations)`, `assertMigrationChain(version, migrations)`, `MigrationError`.
-- `probeStorage(get)`, `MemoryStorage`, `isQuotaError`, `saveKey(game, slot)`, `listSlots(game, storage?)`.
+- `createSaveStore(opts: SaveStoreOptions<T>) → SaveStore<T>`: `get, set, update, flush, reset, clear, exportString, importString, subscribe, dispose`, plus `key`, `persistent`, `status`, `savedAt`. `SaveStoreOptions` is `{ game, slot?, version, migrations?, defaults, schema, debounceMs?, host?, storage?, autoFlush?, now? }`.
+- `SaveStatus` is `{ persistent, loadResult, error, dirty }`; `LoadResult` is `'fresh' | 'loaded' | 'migrated' | 'recovered'`; `ImportResult` is `{ ok: true, migrated } | { ok: false, error }`.
+- `s`: schema builders `boolean, string({maxLength}), number({min,max,int}), literal(...), array, record, object(shape, {strict}), optional, nullable, union, unknown`, each returning a `Schema<T>` (`validate(value, path?)` → `null` or a message, `is(value)`). `Infer<typeof schema>`.
+- `runMigrations(data, from, to, migrations)`, `assertMigrationChain(version, migrations)`, `MigrationError`. `Migration` is `(data) => unknown`; `Migrations` maps a version `n` to the migration from v`n` to v`n+1`.
+- `probeStorage(get)`, `MemoryStorage`, `isQuotaError`, `StorageLike` (the `localStorage` subset the store uses), `saveKey(game, slot)`, `listSlots(game, storage?)` (default storage: `defaultHost().storage.open()`).
 - `encodeExport / decodeExport / fnv1a` (low level).
 
 ## Storage

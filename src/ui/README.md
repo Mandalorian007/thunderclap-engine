@@ -9,7 +9,7 @@ widgets and theme tokens. It has no dependencies and no game nouns.
 import { createOverlay } from '@thunderclap/engine/ui';
 
 const ui = createOverlay({ parent: stageEl, theme: { colorAccent: '#7fd' } });
-platform.onResize((rect) => ui.setFrame(rect)); // letterboxed canvas rect, CSS px relative to parent
+surface.onResize(({ rect }) => ui.setFrame(rect)); // letterboxed canvas rect, CSS px relative to parent
 input.blocked = () => ui.stack.hasModal;       // the game ignores input while a modal is open
 ```
 
@@ -186,6 +186,90 @@ licence and put it first in the stack.
 The base stylesheet (`BASE_CSS`) is injected once per document, and every rule in it is scoped under
 `.tc-overlay`. Under `prefers-reduced-motion: reduce` it turns off all animations and transitions
 inside the overlay.
+
+## Layout API: `ui.layout`
+
+`createOverlay` builds the one layout from `OverlayOptions.layout` (a `LayoutSpec`: `forms`,
+`classify`, `safeArea`, `collapseEmpty`); a game reads it as `ui.layout` (`Layout`). What follows
+lists the exported names; ARCHITECTURE.md *Layout* describes the model.
+
+- **Form factors.** `FormFactor` is one of `FORM_FACTORS` (`phone-landscape`, `phone-portrait`,
+  `tablet`, `desktop`). `classifyFormFactor(i: ClassifyInput)` picks one from `{ width, height,
+  coarsePointer, shortSide }`: a phone is a coarse pointer with a short side of at most
+  `PHONE_MAX_SHORT_SIDE` (600) or any view under `PHONE_MAX_VIEW_SHORT` (480).
+- **Forms.** `FormSpec` is `{ columns, rows, areas, tapMin, textMin, pad, modalMargin, units }`;
+  a `Track` is CSS px, `'fill'` or `{ frac, min?, max? }`; `Units` is `'frame' | 'css'`.
+  `defaultForms` holds the engine's forms; `formSpec(ff, spec?)` merges a spec's overrides over
+  them.
+- **Regions and widgets.** `RegionName` is one of `REGIONS` (`top`, `left`, `right`, `bottom`,
+  `cardLane`, `captionLane`, `modal`, `fill`). `layout.add(el, opts: WidgetOptions)` (`place`
+  per form factor plus `default`, `order`, `id`) returns a `WidgetHandle` (`element`, `region`,
+  `setPlace`, `remove`). A `Placement` is a region, `'hidden'` or a `FreePlacement` (`{ region:
+  'free', rect, reason }`); `placementFor(place, ff)` resolves one.
+- **State.** `LayoutState` is the pure result for one size (`formFactor`, `units`, `width`,
+  `height`, `safeArea`, `columns`, `rows`, `regions`, `freeRect`). `Layout` adds `element`,
+  `freeUses`, `region(name)`, `dockCaption`, `setSafeArea`, `setForms`, `refresh`, `onChange` and
+  `destroy`. `LayoutHost` is what the layout needs from its overlay.
+- **Pure helpers** (tested in Node): `parseAreas(areas)`, `resolveTracks(tracks, length,
+  collapsed?)`, `resolveLayout(ff, form, width, height, safeArea?, occupied?)`,
+  `effectiveInsets(rect, viewport, insets)`; `Insets` is `{ top, right, bottom, left }`,
+  `NO_INSETS` is all zero, and `readSafeArea(doc?)` reads `env(safe-area-inset-*)` (or the
+  `--tc-safe-*` overrides).
+
+## Text scale and units
+
+- `applyTextScale(root, scale, setTheme?)` sets `--tc-text-scale` (`TEXT_SCALE_VAR`) and
+  `data-text-scale`, and hands `setTheme` the engine's font tokens at that scale
+  (`textScaleTokens(scale, base?)`, from `DESIGN_FONT_PX` or, in `css` units, `CSS_FONT_PX`).
+- `scaleFontSizes(css)` rewrites every `font-size: Npx` to `scalePxCss(N)`, a length that follows
+  the scale and floors at `--tc-text-min` (`TEXT_MIN_VAR`); `scaledPx(px, scale)` is the number
+  it computes (small text scales fully, display text only as far as body text).
+- `toFrameUnits(css)` rewrites every `Npx` to `calc(N * var(--tc-unit, 1px))` (`UNIT_VAR`).
+
+## Theme functions
+
+`ThemeTokens` is the shape of `defaultTheme`; `cssPxTheme` is its size tokens for `css` units;
+`ThemeOverrides` adds a game's own tokens. `tokenVar(name)` gives the custom property
+(`colorAccent` → `--tc-color-accent`), `cssVar(name)` its `var(...)`, `themeToCss(tokens)` the
+declarations, and `applyTheme(el, tokens)` sets them on an element. `ensureStyles(doc?)` injects
+`BASE_CSS` once; `prefersReducedMotion(win?)` reads the media query.
+
+## More widgets and helpers
+
+- **Overlay types.** `createOverlay(opts: OverlayOptions)` (`parent`, `designWidth`,
+  `designHeight`, `layout`, `theme`, `caption`, `maxToasts`, `focusHome`) returns an `Overlay`;
+  `Rect` is `{ x, y, width, height }` in CSS px.
+- **Panels.** `PanelOptions` (`content`, `title`, `label`, `modal`, `dismissible`,
+  `closeOnBackdrop`, `chrome`, `className`, `initialFocus`, `role`, `onClose`) and
+  `PanelHandle` (`element`, `open`, `close(reason?)`); `CloseReason` is `'escape' | 'backdrop' |
+  'programmatic' | 'replaced'`. `PanelStackFocusOptions` is `{ home }`. `PadNav(stack, opts?:
+  PadNavOptions)` takes `{ getGamepads?, axisThreshold? }`; `PadLike` is the slice of `Gamepad`
+  it reads.
+- **Toasts.** `Toaster` is `ui.toasts`; `show(text, opts?: ToastOptions)` (`duration`, `tone:
+  ToastTone` = `info | success | warn | danger`) returns a `ToastHandle` (`element`, `dismiss()`).
+- **Captions.** `CaptionCard(parent, opts?: CaptionOptions)` (`corner`, `reducedMotion`, `cps`,
+  `clickToAdvance`); `say(text, opts?: SayOptions)`; `Corner`; `readingTimeMs(text, opts?:
+  ReadingTimeOptions)` (`baseMs`, `perCharMs`, `minMs`, `maxMs`); `overlapArea(box, regions)` and
+  `cornerOrder(preferred)` for `onPlace` handlers.
+- **Widget options.** `ButtonOptions` (`variant`, `disabled`, `ariaLabel`, `className`) and
+  `SliderOptions` (`min`, `max`, `step`, `format`). `h`'s children are `Child` (`Node`, string,
+  number or nothing); `append(el, ...children)` adds them to an existing element.
+- **External links.** `externalLink(opts: ExternalLinkOptions)` returns an `ExternalLink`
+  (`element`, `anchor`, `copyButton`, …) or null; `ExternalLinkLabels` are the strings shown
+  above.
+- **Menus.** `menuNav(input: MenuNavInput<A>, root, actions?: MenuNavActions<A>): MenuNavResult`
+  is one tick of up/down/confirm over a non-modal menu's focusable controls (`'moved' |
+  'clicked' | null`); confirm is taken only from a gamepad, since a focused control handles Enter
+  and Space itself.
+- **Loupe.** `new Loupe(source, opts?: LoupeOptions)` (`size` 120, `zoom` 2.5, `parent`,
+  `className`) magnifies a patch of the `source` canvas; `show(view: LoupeView)` takes the
+  `focus` point, where to draw it (`at`), an optional `ring` and `leader`; `loupeLeader(at, size, spot)` is the
+  leader's segment, or null. The input module's `magnify` option drives it for touch.
+- **Rotate card (interim).** `createRotateCard(opts: RotateCardOptions)` (`title`, `lines`,
+  `note`, `ariaLabel`, `device`, `colors: RotateCardColors`, `doc`) returns a `RotateCard`
+  (`element`, `visible`, `update()`, `destroy()`): the "turn it sideways" card for a landscape
+  game on an upright phone. It reads `platform/device-mode.ts`; both stay until the layout's
+  portrait forms replace them (E-010).
 
 ## Accessibility checklist
 
