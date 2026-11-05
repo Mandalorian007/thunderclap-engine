@@ -215,4 +215,15 @@ describe('Camera layers and block', () => {
     expect(u[64]).toBe(1);
     expect(f[0]).toBe(-1); // nothing before the offset
   });
+
+  it("view_index defaults to the camera's viewIndex (0), which a stereo eye sets", () => {
+    const c = Camera.perspective(1, 1, 0.5, 50);
+    const f = new Float32Array(CAMERA_BLOCK_FLOATS);
+    const u = new Uint32Array(f.buffer);
+    c.writeBlock(f, u, 0, { x: 0, y: 0, width: 1, height: 1 });
+    expect(u[56]).toBe(0);
+    c.viewIndex = 1;
+    c.writeBlock(f, u, 0, { x: 0, y: 0, width: 1, height: 1 });
+    expect(u[56]).toBe(1);
+  });
 });

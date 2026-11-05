@@ -741,7 +741,7 @@ export class Renderer implements FrameSink {
     const full = vp.x === 0 && vp.y === 0 && vp.width === tw && vp.height === th;
 
     const slot = this.viewSlot(this.viewCount);
-    this.writeView(frame, camera, target, slot, this.viewCount);
+    this.writeView(frame, camera, target, slot);
     this.viewCount++;
 
     // First view into this target clears it; later ones draw over.
@@ -1236,14 +1236,11 @@ export class Renderer implements FrameSink {
     return slot;
   }
 
-  /** Upload the globals and camera block of one view (`viewRect` holds its viewport). */
-  private writeView(
-    frame: Frame,
-    camera: Camera,
-    target: SceneTarget,
-    slot: ViewSlot,
-    viewIndex: number,
-  ): void {
+  /**
+   * Upload the globals and camera block of one view (`viewRect` holds its viewport;
+   * `view_index` is `camera.viewIndex`).
+   */
+  private writeView(frame: Frame, camera: Camera, target: SceneTarget, slot: ViewSlot): void {
     const g = this.globalsData;
     g[0] = this.logicalWidth;
     g[1] = this.logicalHeight;
@@ -1251,7 +1248,7 @@ export class Renderer implements FrameSink {
     g[3] = target.height;
     g[4] = frame.time;
     g[5] = frame.dt;
-    camera.writeBlock(g, this.globalsU32, CAMERA_OFFSET_FLOATS, this.viewRect, viewIndex);
+    camera.writeBlock(g, this.globalsU32, CAMERA_OFFSET_FLOATS, this.viewRect);
     this.device.queue.writeBuffer(slot.buffer, 0, g);
   }
 }

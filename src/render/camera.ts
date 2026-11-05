@@ -66,6 +66,12 @@ export class Camera {
   layers = ALL_LAYERS;
   /** The rect clip space spans, in screen units (see the class comment). */
   readonly screen: CameraRect = { x: 0, y: 0, width: 1, height: 1 };
+  /**
+   * The `view_index` the camera block carries (u32): 0 by default; a stereo pair sets 0 and 1
+   * so a material can tell the eyes apart. The renderer writes it as given, whatever the order
+   * of the frame's `render` calls.
+   */
+  viewIndex = 0;
 
   private readonly viewM = mat4.create();
   private readonly projM = mat4.create();
@@ -310,7 +316,7 @@ export class Camera {
     u32: Uint32Array,
     o: number,
     viewport: CameraRect,
-    viewIndex = 0,
+    viewIndex = this.viewIndex,
   ): void {
     this.update();
     f32.set(this.viewM, o);
