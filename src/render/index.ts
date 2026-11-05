@@ -35,7 +35,7 @@ export {
   Material,
   SPRITE_WGSL,
 } from './material';
-export type { MeshDesc, VertexLayout } from './mesh';
+export type { MeshCapacity, MeshDesc, MeshUpdate, VertexLayout } from './mesh';
 export {
   Mesh,
   quadGeometry,

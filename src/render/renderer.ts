@@ -831,7 +831,9 @@ export class Renderer implements FrameSink {
         if (mesh.indexBuffer) pass.setIndexBuffer(mesh.indexBuffer, mesh.indexFormat);
         curMesh = mesh;
       }
-      if (mesh.indexBuffer && mesh.indexCount > 0) {
+      if (mesh.indexBuffer) {
+        // An indexed mesh with no indices (e.g. a streamed chunk that is empty) draws nothing.
+        if (mesh.indexCount === 0) continue;
         pass.drawIndexed(mesh.indexCount, c.count, 0, 0, c.first);
       } else {
         pass.draw(mesh.vertexCount, c.count, 0, c.first);
