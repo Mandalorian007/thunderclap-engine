@@ -20,6 +20,7 @@
   ],
   "exports": {
     ".": "./src/index.ts",
+    "./analytics": "./src/analytics/index.ts",
     "./audio": "./src/audio/index.ts",
     "./core": "./src/core/index.ts",
     "./fx": "./src/fx/index.ts",
