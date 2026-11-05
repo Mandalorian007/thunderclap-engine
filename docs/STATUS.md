@@ -6,7 +6,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 
 | Wave | Workstream | Branch | Scope | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
-| 1 | One overlay | ws/one-overlay | Port last-rune's `ws/one-overlay`: `ctx.ui` in CSS px on every form factor; delete `legacyScale`, `createCssChrome`, `avoid()`, `ctx.chrome` (D-044 Phase 3 entry condition) | — | 🔄 |
+| 1 | One overlay | ws/one-overlay | Port last-rune's `ws/one-overlay`: `ctx.ui` in CSS px on every form factor; delete `legacyScale`, `createCssChrome`, `avoid()`, `ctx.chrome` (D-044 Phase 3 entry condition) | — | ✅ merged `a15652b` (357 tests; e2e 283 passed / 31 skipped) |
 | 1 | Camera | ws/camera | Matrix `Camera`, `mat4`, camera uniform block, `ortho2d`, `perspective`, `fitRect`, `worldToScreen`/`screenToWorld` | — | 🔄 |
 | 1 | Transforms | ws/transforms | `Transform`, 28-float instance (3×4 matrix), `layers` mask + sort `order`, vertex layout per `Mesh`, depth-sorted lists | — | 🔄 |
 | 1 | Electron host | ws/host-electron | Bring `@thunderclap/host-electron` from last-rune into `packages/host-electron`; repo becomes a pnpm workspace with the engine at the root | — | ✅ merged `dae37e8` (24 unit tests, Electron smoke 5/5; desktop CI job unverified on runners) |
@@ -15,7 +15,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 2 | Render call | ws/render-call | `Renderer.render(frame, camera, target)`; `Host.requestFrame`; `GameLoop` takes its frame source from the host | camera, transforms, one-overlay | ⏳ |
 | 2 | Demo mesh | ws/demo-mesh | `?demo=mesh` harness page: perspective camera, depth, lit mesh, orbit by pointer and pad; e2e on the matrix | camera, transforms | ⏳ |
 | 2 | Input rays | ws/input-rays | Pointer router (mouse, touch, pen, pad cursor → rays), `Hit` events, `{ xr }` binding kinds | camera | ⏳ |
-| 2 | Client mode | ws/client-mode | `createGame` with opt-in fixed-step sim and save store, for server-authoritative clients | one-overlay | ⏳ |
+| 2 | Client mode | ws/client-mode | `createGame` with opt-in fixed-step sim and save store, for server-authoritative clients | one-overlay | 🔄 |
 | 2 | Puzzle template | ws/template-puzzle | `templates/puzzle`: `createGame`, a scene, `rules/`, save schema, layout spec, `CLAUDE.md` naming the engine concepts | camera, transforms, client-mode | ⏳ |
 
 ## Gates
