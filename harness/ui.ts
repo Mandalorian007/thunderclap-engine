@@ -2,8 +2,9 @@
  * UI harness page (D-041 addendum 2): the engine's overlay with no WebGPU, so the specs in
  * e2e/ui.spec.ts can verify the UI platform layer on every matrix row. Noun-free.
  *
- * - A scaled overlay letterboxed into the viewport, with base widgets (a button, a caption, a
- *   field) and a stylesheet passed through `scaleFontSizes`: the text-scale and text-min tokens.
+ * - The overlay with its frame letterboxed into the viewport, base widgets (a button, a caption,
+ *   a field) on the frame's HUD layer and a design-px stylesheet passed through `scaleFontSizes`
+ *   and `toFrameUnits`: the text-scale and text-min tokens, in frame or CSS units per form.
  * - `createDeviceMode` on the overlay root: `data-phone`, `data-touch`.
  * - `createRotateCard` with placeholder words.
  * - A non-modal menu driven by `menuNav` from a fake gamepad and the arrow keys.
@@ -21,6 +22,7 @@ import {
   menuNav,
   NO_RESTORE_FOCUS_ATTR,
   scaleFontSizes,
+  toFrameUnits,
 } from '../src/ui';
 import type { HarnessUiApi, HarnessUiState } from './ui-state';
 
@@ -30,6 +32,7 @@ const root = document.getElementById('root') as HTMLElement;
 const state: HarnessUiState = {
   ready: false,
   scale: 0,
+  units: 'frame',
   phone: false,
   touch: false,
   rotate: false,
@@ -45,17 +48,19 @@ root.append(home);
 const ui = createOverlay({ parent: root, focusHome: () => home });
 const device = createDeviceMode(ui.root);
 
-// A game stylesheet: passes through scaleFontSizes like every game sheet does.
+// A game stylesheet in design px: text follows the text scale, every px is a frame px.
 document.head.append(
   h(
     'style',
     null,
-    scaleFontSizes(`
+    toFrameUnits(
+      scaleFontSizes(`
 .probe-text { position: absolute; left: 40px; top: 40px; font-size: 20px; color: #fff; }
 .probe-title { position: absolute; left: 40px; top: 100px; font-size: 40px; color: #fff; }
 .probe-menu { position: absolute; left: 40px; top: 260px; display: flex; flex-direction: column; gap: 16px; pointer-events: auto; }
 .probe-panels { position: absolute; right: 40px; top: 260px; display: flex; flex-direction: column; gap: 16px; pointer-events: auto; }
 `),
+    ),
   ),
 );
 
@@ -115,9 +120,10 @@ input.attach({ pointerTarget: home, disableTouchScroll: false });
 
 const layout = () => {
   const r = computeLetterbox(root.clientWidth, root.clientHeight, DESIGN.width, DESIGN.height);
-  ui.setRect(r);
+  ui.setFrame(r);
   device.setScale(ui.scale, r.x);
   state.scale = ui.scale;
+  state.units = ui.units;
 };
 window.addEventListener('resize', layout);
 layout();

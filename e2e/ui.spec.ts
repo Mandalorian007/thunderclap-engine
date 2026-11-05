@@ -2,8 +2,9 @@
  * Engine UI platform, on every top-level matrix row (playwright.config.ts), against the UI
  * harness page (harness/ui.html, no WebGPU):
  *
- * - the text-scale density tokens at 100/125/150 on base widgets and a `scaleFontSizes` sheet,
- *   with the `--tc-text-min` floor on phones;
+ * - the text-scale density tokens at 100/125/150 on base widgets and a design-px sheet
+ *   (`scaleFontSizes`, `toFrameUnits`) on the frame, in CSS px, with the `--tc-text-min` floor
+ *   on phones;
  * - the device-mode flags `data-phone` and `data-touch`;
  * - the rotate card on upright phones;
  * - `menuNav` from a gamepad and the arrows;
@@ -35,7 +36,7 @@ function read(page: Page): Promise<HarnessUiState> {
   });
 }
 
-/** Computed font size in design px (before the overlay's scale transform). */
+/** Computed font size, CSS px. */
 function fontPx(page: Page, selector: string): Promise<number> {
   return page.evaluate((sel) => {
     const el = document.querySelector(sel);
@@ -55,17 +56,23 @@ test('text-scale tokens at 100/125/150 on base widgets, floored by text-min on p
   page,
 }) => {
   const project = test.info().project.name;
-  const { scale } = await read(page);
+  const { scale, units } = await read(page);
   const phone = PHONES.has(project);
-  // Phones floor every scaled size at 12 CSS px (in design px: 12 / scale).
-  const floor = phone ? Number((12 / scale).toFixed(1)) : 0;
+  // Phones are in CSS units (the theme's sizes are CSS px) and floor every size at 12 CSS px.
+  expect(units).toBe(phone ? 'css' : 'frame');
+  const floor = phone ? 12 : 0;
   const cases = [
-    // [factor, body 20 px, display 40 px, engine button (font-size-m, 30 px)]
-    [1, 20, 40, 30],
-    [1.25, 25, 40, 38],
-    [1.5, 30, 45, 45],
+    // [factor, body 20 px, display 40 px, engine button (font-size-m: 30 design px, 16 CSS px)]
+    [1, 20, 40, phone ? 16 : 30],
+    [1.25, 25, 40, phone ? 20 : 38],
+    [1.5, 30, 45, phone ? 24 : 45],
   ] as const;
-  for (const [factor, body, display, buttonPx] of cases) {
+  // The sheet is design px on the frame, so its sizes are `scale` CSS px each everywhere; the
+  // theme's are frame px off phones and CSS px on them.
+  const k = phone ? 1 : scale;
+  for (const [factor, design, designDisplay, buttonPx] of cases) {
+    const body = design * scale;
+    const display = designDisplay * scale;
     await page.evaluate((f) => window.__harnessUi?.setTextScale(f), factor);
     const root = page.locator('.tc-overlay');
     if (factor === 1) await expect(root).not.toHaveAttribute('data-text-scale');
@@ -75,11 +82,14 @@ test('text-scale tokens at 100/125/150 on base widgets, floored by text-min on p
     ).toBe(String(factor));
     expect(await fontPx(page, '#probe-text')).toBeCloseTo(Math.max(body, floor), 0);
     expect(await fontPx(page, '#probe-title')).toBeCloseTo(Math.max(display, floor), 0);
-    expect(await fontPx(page, '.probe-menu .tc-button')).toBeCloseTo(Math.max(buttonPx, floor), 0);
+    expect(await fontPx(page, '.probe-menu .tc-button')).toBeCloseTo(
+      Math.max(buttonPx * k, floor),
+      0,
+    );
     if (phone) {
       // Nothing renders under 12 CSS px.
       for (const sel of ['#probe-text', '.probe-menu .tc-button', '.tc-caption-text']) {
-        expect((await fontPx(page, sel)) * scale, sel).toBeGreaterThanOrEqual(11.9);
+        expect(await fontPx(page, sel), sel).toBeGreaterThanOrEqual(11.9);
       }
     }
   }

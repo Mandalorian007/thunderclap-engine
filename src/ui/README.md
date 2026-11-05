@@ -9,18 +9,25 @@ widgets and theme tokens. It has no dependencies and no game nouns.
 import { createOverlay } from '@thunderclap/engine/ui';
 
 const ui = createOverlay({ parent: stageEl, theme: { colorAccent: '#7fd' } });
-platform.onResize((rect) => ui.setRect(rect)); // letterboxed canvas rect, CSS px relative to parent
+platform.onResize((rect) => ui.setFrame(rect)); // letterboxed canvas rect, CSS px relative to parent
 input.blocked = () => ui.stack.hasModal;       // the game ignores input while a modal is open
 ```
 
-- The UI is laid out at **design resolution** (1920×1080 by default) and one CSS transform scales it
-  into the rect. Sizes in CSS and theme tokens are therefore design pixels. When the rect's aspect
-  ratio differs from the design's, the overlay is centred inside it.
+- One root over the whole parent, laid out in **CSS px** with no transform. The canvas rect is the
+  **frame** (`setFrame`, exposed as `--tc-frame-x/y/w/h`), and `--tc-dpx` is one design px of it
+  (1920×1080 by default) in CSS px; `ui.scale` is the same number.
+- `ui.layout` is the overlay's layout (`ui/layout.ts`): regions per form factor over the whole root.
+  Each form's units (`ui.units`, `data-units`) size the base UI: `frame` (desktop, tablet) in design
+  px of the frame, `css` (phones) in CSS px (`cssPxTheme`).
+- A design-px game sheet goes through `toFrameUnits` (and `scaleFontSizes`): each `Npx` becomes
+  `N * var(--tc-unit)`, one design px on the frame's layers and one CSS px in the regions.
 - The root and its layers are `pointer-events: none`. Only interactive elements (buttons, panels,
   toasts, the caption card) take the pointer, so clicks on empty space still reach the canvas.
-- Layers, bottom to top: `hud`, `captions`, `panels`, `toasts`. A modal panel always covers the
-  caption card, and the overlay also suspends the card (hidden, timers frozen) while a modal is open. Game HUD elements go in
-  `ui.layers.hud`.
+- Layers, bottom to top: `hud`, `captions` (both on the frame, clipped to it), `layout` (the whole
+  root), `panels`, `toasts` (on the frame in `frame` units, the whole root in `css` units). A modal
+  panel always covers the caption card, and the overlay also suspends the card (hidden, timers
+  frozen) while a modal is open. World-anchored HUD elements go in `ui.layers.hud`, at their design
+  coordinates times `--tc-unit`.
 - `ui.clientToDesign(clientX, clientY)` maps viewport coordinates to design space, or returns null
   outside the overlay. Platform owns the canonical transform, so prefer that one.
 - The `parent` must be a positioned element (`position: relative`, `fixed` or `absolute`).
@@ -92,12 +99,10 @@ await ui.caption.say('Something old is listening.', {
 - Size: the card is as wide as its text needs, up to `--tc-caption-max-width` (default 720px), and
   sits `--tc-caption-margin` from the edges. It has no max height and long words wrap, so text is
   never clipped. Set both vars on `.tc-overlay` to tune them per game.
-- `avoid(rect | rect[] | null)` keeps the card off parts of the screen (container px, i.e. design px
-  for `ui.caption`). The card stays in its corner if it fits, else narrows (down to
-  `caption: { minWidth }`, default 480), else tries the mirrored corner, then the opposite edge, and
-  takes the first spot that touches nothing (or the one that covers least). It applies to the line
-  on screen and every later one until changed. It is not cleared on its own: a scene that sets it
-  clears it (`avoid(null)`) when it leaves.
+- `onPlace(fn)` runs whenever the card is laid out in its corner (a new line, back from
+  suspension, undocked), after its corner is reset and its inline `max-width` cleared. A game that
+  must keep the card off parts of its scene moves or narrows it there (`overlapArea` and
+  `cornerOrder` help); `relayout()` lays it out again when the scene moved. Returns unsubscribe.
 - `suspend(on)` hides the card and freezes its typing and hold. `suspend(false)` resumes where it
   was with a fresh hold. `say()` still queues while suspended. The overlay calls it for modals.
 
@@ -194,6 +199,6 @@ inside the overlay.
 
 `ui.test.ts` runs under happy-dom and covers theme var names, overlay mount and scaling,
 client→design mapping, the modal focus trap, Esc, focus restore, inert stacking, non-modal panels,
-backdrop clicks, toast caps and timers, caption typing / hold / skip / queue / reduced motion / suspend / avoid placement, and
+backdrop clicks, toast caps and timers, caption typing / hold / skip / queue / reduced motion / suspend / onPlace, and
 the slider's aria-valuetext. Layout and focus were also checked once in Chromium via Playwright (not
 part of CI).

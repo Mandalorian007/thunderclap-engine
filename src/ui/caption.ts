@@ -72,11 +72,6 @@ export interface CaptionOptions {
   cps?: number;
   /** Clicking the card skips the reveal, then advances. Default true. */
   clickToAdvance?: boolean;
-  /**
-   * Narrowest the card may get when it squeezes past an `avoid()` region, in container px.
-   * Default 480. Narrower cards wrap onto more lines; text is never clipped.
-   */
-  minWidth?: number;
 }
 
 interface Line {
@@ -105,10 +100,9 @@ export class CaptionCard {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private phase: 'idle' | 'typing' | 'holding' = 'idle';
   private readonly corner: Corner;
-  private readonly minWidth: number;
   private readonly sideEl: HTMLElement;
   private readonly bodyEl: HTMLElement;
-  private avoidRects: Rect[] = [];
+  private readonly placeSubs = new Set<(el: HTMLElement) => void>();
   private readonly homeEl: HTMLElement;
   private dockHost: HTMLElement | null = null;
   private lineCps = 0;
@@ -118,7 +112,6 @@ export class CaptionCard {
 
   constructor(container: HTMLElement, opts: CaptionOptions = {}) {
     this.corner = opts.corner ?? 'bottom-right';
-    this.minWidth = opts.minWidth ?? 480;
     this.reducedMotion = opts.reducedMotion ?? prefersReducedMotion();
     this.cps = opts.cps ?? 45;
     this.portraitEl = h('div', { class: 'tc-caption-portrait', 'aria-hidden': 'true' });
@@ -158,9 +151,9 @@ export class CaptionCard {
 
   /**
    * Region placement (layout regions, `Layout.dockCaption`): move the card into `host` and let
-   * it fill that region instead of floating in a corner. While docked, corners and `avoid()` do
-   * not apply; the region never overlaps another, so there is nothing to avoid. `null` returns
-   * it to its corner in the original container (the legacy path). The live region stays put.
+   * it fill that region instead of floating in a corner. While docked, corners and `onPlace` do
+   * not apply; the region never overlaps another. `null` returns it to its corner in the
+   * original container. The live region stays put.
    */
   dock(host: HTMLElement | null): void {
     if (host === this.dockHost) return;
@@ -192,15 +185,18 @@ export class CaptionCard {
   }
 
   /**
-   * Keep the card out of these regions (container px: design px for the overlay's card). The
-   * card stays in its corner if it fits there, else narrows (down to `minWidth`), else moves to
-   * the mirrored corner, then the other edge, taking the first spot that touches no region (or
-   * the one that covers least). `null` or `[]` lifts the constraint. Re-applied to every line
-   * until changed, and immediately to the line on screen. Legacy path: a docked card (`dock`)
-   * keeps the regions but ignores them until it is undocked.
+   * Called whenever the card is laid out in its corner (a new line, back from suspension or
+   * undocked), after its corner is reset to the line's and its inline `max-width` cleared. A
+   * game that must keep the card off parts of its scene moves or narrows it here (`overlapArea`
+   * and `cornerOrder` help). Returns unsubscribe.
    */
-  avoid(regions: Rect | readonly Rect[] | null): void {
-    this.avoidRects = !regions ? [] : Array.isArray(regions) ? [...regions] : [regions as Rect];
+  onPlace(fn: (el: HTMLElement) => void): () => void {
+    this.placeSubs.add(fn);
+    return () => this.placeSubs.delete(fn);
+  }
+
+  /** Lay the card out again in its corner and run `onPlace` (e.g. after the scene moved). */
+  relayout(): void {
     this.place();
   }
 
@@ -249,6 +245,7 @@ export class CaptionCard {
 
   destroy(): void {
     this.clear();
+    this.placeSubs.clear();
     this.element.remove();
     this.liveEl.remove();
   }
@@ -293,40 +290,14 @@ export class CaptionCard {
     }
   }
 
-  /** Choose the corner and width for the current line (see `avoid`). */
+  /** Reset the card to the line's corner and let `onPlace` adjust it. */
   private place() {
     const el = this.element;
     const line = this.current;
     if (!line || el.hidden || this.isSuspended || this.dockHost) return;
-    const preferred = line.opts.corner ?? this.corner;
-    el.dataset.corner = preferred;
+    el.dataset.corner = line.opts.corner ?? this.corner;
     el.style.maxWidth = '';
-    if (this.avoidRects.length === 0) return;
-    const full = el.offsetWidth;
-    // Widths to try per corner: as laid out, then narrower in ~15% steps down to minWidth.
-    const widths = [full];
-    for (let w = full * 0.85; w > this.minWidth; w *= 0.85) widths.push(Math.round(w));
-    if (full > this.minWidth) widths.push(this.minWidth);
-    let best: { corner: Corner; width: number; area: number } | null = null;
-    for (const corner of cornerOrder(preferred)) {
-      el.dataset.corner = corner;
-      for (const w of widths) {
-        el.style.maxWidth = `${w}px`;
-        const box = {
-          x: el.offsetLeft,
-          y: el.offsetTop,
-          width: el.offsetWidth,
-          height: el.offsetHeight,
-        };
-        const area = overlapArea(box, this.avoidRects);
-        if (area === 0) return;
-        if (!best || area < best.area) best = { corner, width: w, area };
-      }
-    }
-    if (best) {
-      el.dataset.corner = best.corner;
-      el.style.maxWidth = `${best.width}px`;
-    }
+    for (const fn of this.placeSubs) fn(el);
   }
 
   private tick(cps: number) {

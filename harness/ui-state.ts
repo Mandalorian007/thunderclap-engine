@@ -6,8 +6,10 @@
 export interface HarnessUiState {
   /** True once the page is mounted. */
   ready: boolean;
-  /** Overlay scale (CSS px per design px). */
+  /** Overlay scale (CSS px per design px of the frame). */
   scale: number;
+  /** The overlay's units in this form factor (`frame` on desktops and tablets, `css` on phones). */
+  units: 'frame' | 'css';
   /** Device mode. */
   phone: boolean;
   touch: boolean;

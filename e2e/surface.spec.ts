@@ -21,7 +21,8 @@ function trackProblems(page: Page): string[] {
 function overlayMatchesCanvas(frame: Frame) {
   return frame.evaluate(() => {
     const canvas = document.querySelector<HTMLCanvasElement>('#root canvas');
-    const overlay = document.querySelector('.tc-overlay');
+    // The overlay's frame: its HUD layer sits on the canvas rect (one overlay, no transform).
+    const overlay = document.querySelector('.tc-overlay > .tc-layer[data-layer="hud"]');
     if (!canvas || !overlay) throw new Error('canvas or overlay missing');
     const c = canvas.getBoundingClientRect();
     const o = overlay.getBoundingClientRect();

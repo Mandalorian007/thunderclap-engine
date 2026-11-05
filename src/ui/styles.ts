@@ -1,7 +1,14 @@
-/** Base stylesheet for the overlay. Injected once per document. Everything is under `.tc-overlay`. */
-export const BASE_CSS = `
+import { toFrameUnits } from './text-scale';
+
+/**
+ * The overlay's root and layers (ui/overlay.ts), in CSS px. `--tc-unit` is what one px of a
+ * design-px stylesheet (`toFrameUnits`) draws as on each layer: one design px of the frame
+ * (`--tc-dpx`) on the frame's layers, one CSS px in the layout's regions and, in `css` units,
+ * in the panels and toasts.
+ */
+const ROOT_CSS = `
 .tc-overlay {
-  position: absolute; left: 0; top: 0; transform-origin: 0 0;
+  position: absolute; inset: 0; --tc-unit: var(--tc-dpx, 1px);
   pointer-events: none; overflow: hidden; contain: layout style;
   font-family: var(--tc-font-body); font-size: var(--tc-font-size-m);
   line-height: var(--tc-line-height); color: var(--tc-color-text);
@@ -9,7 +16,28 @@ export const BASE_CSS = `
   user-select: none; -webkit-user-select: none;
 }
 .tc-overlay *, .tc-overlay *::before, .tc-overlay *::after { box-sizing: border-box; }
-.tc-layer { position: absolute; inset: 0; pointer-events: none; }
+/* Each layer is its own stacking context: a z-index inside one never lifts it over a later layer. */
+.tc-layer { position: absolute; inset: 0; pointer-events: none; isolation: isolate; }
+.tc-layer[data-layer="hud"], .tc-layer[data-layer="captions"],
+.tc-overlay[data-units="frame"] > .tc-layer:is([data-layer="panels"], [data-layer="toasts"]) {
+  inset: auto; left: var(--tc-frame-x, 0px); top: var(--tc-frame-y, 0px);
+  width: var(--tc-frame-w, 100%); height: var(--tc-frame-h, 100%); overflow: hidden; }
+.tc-layer[data-layer="layout"],
+.tc-overlay[data-units="css"] > .tc-layer:is([data-layer="panels"], [data-layer="toasts"]) { --tc-unit: 1px; }
+/* Native controls draw their thumb, track and arrow in CSS px whatever their box: on the frame's
+   layers they are zoomed by the frame's scale instead, their own px read as design px. */
+.tc-layer:is([data-layer="hud"], [data-layer="captions"]) :is(input[type="range"], select),
+.tc-overlay[data-units="frame"] > .tc-layer:is([data-layer="panels"], [data-layer="toasts"]) :is(input[type="range"], select) {
+  zoom: var(--tc-zoom, 1); --tc-unit: 1px; }
+/* Theme lengths are already frame px there: undo the zoom for them (a hair over, so the
+   whole-pixel ring the token rounds to does not snap down a pixel). */
+.tc-layer:is([data-layer="hud"], [data-layer="captions"]) :is(input[type="range"], select):focus-visible,
+.tc-overlay[data-units="frame"] > .tc-layer:is([data-layer="panels"], [data-layer="toasts"]) :is(input[type="range"], select):focus-visible {
+  outline-width: calc(var(--tc-focus-ring) / var(--tc-zoom, 1) + 0.1px); }
+`;
+
+/** Base widgets, in design px (`toFrameUnits`: one px is `--tc-unit`). */
+const WIDGET_CSS = `
 .tc-interactive { pointer-events: auto; }
 
 .tc-panel-host { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
@@ -94,18 +122,25 @@ export const BASE_CSS = `
 .tc-link-field { width: 100%; box-sizing: border-box; padding: 6px 10px; border-radius: var(--tc-radius-s); font-family: var(--tc-font-mono);
   font-size: calc(var(--tc-font-size-s) * 0.83); color: var(--tc-color-text); background: var(--tc-color-bg); border: 1px solid var(--tc-color-border); }
 
-/* CSS-px overlay (createOverlay({ legacyScale: false })): base widgets honour the density tokens. */
-.tc-overlay[data-units="css"] .tc-button { min-height: var(--tc-tap-min, 32px); min-width: var(--tc-tap-min, 32px);
+`;
+
+/** The layers that follow the form's units (regions, and panels and toasts in `css` units). */
+const CSSU =
+  '.tc-overlay[data-units="css"] :is(.tc-layer[data-layer="layout"], .tc-layer[data-layer="panels"], .tc-layer[data-layer="toasts"])';
+
+/** `css` units: base widgets in regions, panels and toasts honour the density tokens (CSS px). */
+const CSS_UNITS_CSS = `
+${CSSU} .tc-button { min-height: var(--tc-tap-min, 32px); min-width: var(--tc-tap-min, 32px);
   padding: var(--tc-space-2) var(--tc-space-4); }
-.tc-overlay[data-units="css"] .tc-field { min-height: var(--tc-tap-min, 32px); }
-.tc-overlay[data-units="css"] .tc-field input[type="range"] { min-height: var(--tc-tap-min, 32px); margin: 0; }
-.tc-overlay[data-units="css"] .tc-field input[type="checkbox"] { width: 20px; height: 20px; }
-.tc-overlay[data-units="css"] .tc-panel-host { padding: var(--tc-modal-top, 8px) var(--tc-modal-right, 8px) var(--tc-modal-bottom, 8px) var(--tc-modal-left, 8px); }
-.tc-overlay[data-units="css"] .tc-panel { max-width: 100%; max-height: 100%; }
-.tc-overlay[data-units="css"] .tc-toasts { top: calc(var(--tc-safe-top-px, 0px) + var(--tc-space-4)); width: max-content; max-width: calc(100% - 32px); }
-.tc-overlay[data-units="css"] .tc-toast { max-width: 560px; }
-.tc-overlay[data-units="css"] .tc-caption { --tc-caption-max-width: 480px; --tc-caption-margin: var(--tc-space-4); }
-.tc-overlay[data-units="css"] .tc-link-fallback { min-width: 0; width: min(480px, 90vw); }
+${CSSU} .tc-field { min-height: var(--tc-tap-min, 32px); }
+${CSSU} .tc-field input[type="range"] { min-height: var(--tc-tap-min, 32px); margin: 0; }
+${CSSU} .tc-field input[type="checkbox"] { width: 20px; height: 20px; }
+${CSSU} .tc-panel-host { padding: var(--tc-modal-top, 8px) var(--tc-modal-right, 8px) var(--tc-modal-bottom, 8px) var(--tc-modal-left, 8px); }
+${CSSU} .tc-panel { max-width: 100%; max-height: 100%; }
+${CSSU} .tc-toasts { top: calc(var(--tc-safe-top-px, 0px) + var(--tc-space-4)); width: max-content; max-width: calc(100% - 32px); }
+${CSSU} .tc-toast { max-width: 560px; }
+${CSSU} .tc-caption { --tc-caption-max-width: 480px; --tc-caption-margin: var(--tc-space-4); }
+${CSSU} .tc-link-fallback { min-width: 0; width: min(480px, 90vw); }
 
 /* Layout regions (ui/layout.ts). The grid is laid out in the safe area; regions scroll rather than spill. */
 .tc-layout { position: absolute; inset: 0; display: grid; pointer-events: none; }
@@ -132,6 +167,9 @@ export const BASE_CSS = `
   .tc-overlay *, .tc-overlay *::before, .tc-overlay *::after { animation: none !important; transition: none !important; }
 }
 `;
+
+/** Base stylesheet for the overlay. Injected once per document. Everything is under `.tc-overlay`. */
+export const BASE_CSS = ROOT_CSS + toFrameUnits(WIDGET_CSS) + CSS_UNITS_CSS;
 
 const STYLE_ID = 'tc-ui-base';
 

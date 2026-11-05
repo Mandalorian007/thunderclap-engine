@@ -4,13 +4,13 @@ import { createDeviceMode } from '../platform/device-mode';
 import { h } from './dom';
 import {
   classifyFormFactor,
-  createLayout,
   defaultForms,
   effectiveInsets,
   FORM_FACTORS,
   type FormFactor,
   formSpec,
   type Insets,
+  type LayoutSpec,
   parseAreas,
   placementFor,
   type RegionName,
@@ -262,11 +262,36 @@ describe('resolveLayout: region assignment per form factor', () => {
   });
 });
 
-describe('createLayout (DOM)', () => {
+/** A parent of `size` CSS px (happy-dom has no layout, so its client size is stubbed). */
+function sizedParent(size: { w: number; h: number }): HTMLElement {
+  const parent = h('div');
+  Object.defineProperty(parent, 'clientWidth', { get: () => size.w });
+  Object.defineProperty(parent, 'clientHeight', { get: () => size.h });
+  document.body.append(parent);
+  return parent;
+}
+
+describe('overlay.layout (DOM)', () => {
   let parent: HTMLElement;
-  let ov: Overlay;
+  let ov: Overlay | null = null;
   let ff: FormFactor;
+  const size = { w: 844, h: 340 };
   const classify = () => ff;
+  /** The overlay over the whole parent, its frame the 16:9 canvas centred in it. */
+  const frameOf = (w: number, h: number): Rect => {
+    const s = Math.min(w / 1920, h / 1080);
+    return { x: (w - 1920 * s) / 2, y: (h - 1080 * s) / 2, width: 1920 * s, height: 1080 * s };
+  };
+  const make = (spec: LayoutSpec = {}) => {
+    ov = createOverlay({ parent, caption: { reducedMotion: true }, layout: spec });
+    ov!.setFrame(frameOf(size.w, size.h));
+    return ov!.layout;
+  };
+  const resize = (w: number, h: number) => {
+    size.w = w;
+    size.h = h;
+    ov!.setFrame(frameOf(w, h));
+  };
   beforeEach(() => {
     document.body.innerHTML = '';
     // The viewport the safe-area insets are relative to.
@@ -274,22 +299,55 @@ describe('createLayout (DOM)', () => {
       width: 844,
       height: 340,
     });
-    parent = h('div');
-    document.body.append(parent);
-    ov = createOverlay({ parent, legacyScale: false, caption: { reducedMotion: true } });
-    ov.setRect({ x: 0, y: 0, width: 844, height: 340 });
+    size.w = 844;
+    size.h = 340;
+    parent = sizedParent(size);
     ff = 'phone-landscape';
   });
-  afterEach(() => ov.destroy());
+  afterEach(() => {
+    ov?.destroy();
+    ov = null;
+  });
 
-  it('refuses a legacy scaled overlay', () => {
-    const legacy = createOverlay({ parent });
-    expect(() => createLayout(legacy)).toThrow(/legacyScale: false/);
-    legacy.destroy();
+  it('regions cover the whole overlay in its layout layer; the phone is in css units', () => {
+    const layout = make({ classify });
+    expect(layout.element.parentElement).toBe(ov!.layers.layout);
+    expect(layout.state.units).toBe('css');
+    expect(ov!.units).toBe('css');
+    expect(ov!.root.dataset.units).toBe('css');
+    expect(ov!.root.style.getPropertyValue('--tc-font-size-m')).toBe('16px');
+    // The frame is still there for world-anchored DOM: 844x340 letterboxes 16:9 at ~0.3148.
+    expect(ov!.scale).toBeCloseTo(340 / 1080, 6);
+    expect(ov!.rect).toEqual({ x: 0, y: 0, width: 844, height: 340 });
+  });
+
+  it('desktop is in frame units; a resize to a phone switches units and keeps overrides', () => {
+    ff = 'desktop';
+    const layout = make({ classify });
+    ov!.setTheme({ fontDisplay: 'serif' });
+    expect(layout.state.units).toBe('frame');
+    expect(ov!.root.style.getPropertyValue('--tc-font-size-m')).toBe(
+      'calc(30 * var(--tc-unit, 1px))',
+    );
+    ff = 'phone-landscape';
+    resize(844, 340);
+    expect(ov!.units).toBe('css');
+    expect(ov!.root.style.getPropertyValue('--tc-font-size-m')).toBe('16px');
+    expect(ov!.root.style.getPropertyValue('--tc-font-display')).toBe('serif');
+    // The text scale keeps its CSS-px tokens across the switch.
+    applyTextScale(ov!.root, 1.5, (t) => ov!.setTheme(t));
+    expect(ov!.root.style.getPropertyValue('--tc-font-size-m')).toBe(
+      textScaleTokens(1.5, CSS_FONT_PX).fontSizeM,
+    );
+    expect(textScaleTokens(1.5, CSS_FONT_PX).fontSizeM).toBe('max(24px, var(--tc-text-min, 0px))');
+    ff = 'desktop';
+    resize(1280, 720);
+    expect(ov!.units).toBe('frame');
+    expect(ov!.root.style.getPropertyValue('--tc-font-size-m')).toContain('var(--tc-unit, 1px)');
   });
 
   it('places widgets in their regions and sets the density tokens', () => {
-    const layout = createLayout(ov, {
+    const layout = make({
       classify,
       safeArea: { top: 0, right: 47, bottom: 21, left: 47 },
     });
@@ -297,9 +355,9 @@ describe('createLayout (DOM)', () => {
     const hd = layout.add(back, { place: { default: 'left' } });
     expect(back.parentElement).toBe(layout.region('left'));
     expect(hd.region).toBe('left');
-    expect(ov.root.dataset.formFactor).toBe('phone-landscape');
-    expect(ov.root.style.getPropertyValue('--tc-tap-min')).toBe('44px');
-    expect(ov.root.style.getPropertyValue('--tc-text-min')).toBe('12px');
+    expect(ov!.root.dataset.formFactor).toBe('phone-landscape');
+    expect(ov!.root.style.getPropertyValue('--tc-tap-min')).toBe('44px');
+    expect(ov!.root.style.getPropertyValue('--tc-text-min')).toBe('12px');
     expect(layout.safeArea).toEqual({ top: 0, right: 47, bottom: 21, left: 47 });
     expect(layout.element.style.padding).toBe('0px 47px 21px');
     expect(layout.element.style.gridTemplateColumns).toBe('56px 694px 0px 0px');
@@ -308,7 +366,7 @@ describe('createLayout (DOM)', () => {
   });
 
   it('moves widgets on an orientation change and reports the new freeRect', () => {
-    const layout = createLayout(ov, { classify });
+    const layout = make({ classify });
     const btn = h('button');
     const card = h('div');
     layout.add(btn, { place: { 'phone-landscape': 'right', 'phone-portrait': 'bottom' } });
@@ -318,7 +376,7 @@ describe('createLayout (DOM)', () => {
     expect(btn.parentElement).toBe(layout.region('right'));
     const before = layout.freeRect;
     ff = 'phone-portrait';
-    ov.setRect({ x: 0, y: 0, width: 340, height: 844 });
+    resize(340, 844);
     expect(seen).toEqual(['phone-portrait']);
     expect(layout.formFactor).toBe('phone-portrait');
     expect(btn.parentElement).toBe(layout.region('bottom'));
@@ -329,7 +387,7 @@ describe('createLayout (DOM)', () => {
   });
 
   it("setForms: a scene's own tracks over the spec's, field by field, until cleared", () => {
-    const layout = createLayout(ov, { classify });
+    const layout = make({ classify });
     layout.add(h('button'), { place: { default: 'left' } });
     layout.add(h('div'), { place: { default: 'cardLane' } });
     const seen: number[] = [];
@@ -341,10 +399,10 @@ describe('createLayout (DOM)', () => {
     expect(layout.freeRect).toMatchObject({ x: 50, width: 594 });
     // Other form factors keep the spec's (portrait: the 56 px left rail, then fill).
     ff = 'phone-portrait';
-    ov.setRect({ x: 0, y: 0, width: 340, height: 844 });
+    resize(340, 844);
     expect(layout.freeRect).toMatchObject({ x: 56, width: 284 });
     ff = 'phone-landscape';
-    ov.setRect({ x: 0, y: 0, width: 844, height: 340 });
+    resize(844, 340);
     layout.setForms(null);
     expect(layout.element.style.gridTemplateColumns).toBe(spec);
     layout.destroy();
@@ -352,7 +410,7 @@ describe('createLayout (DOM)', () => {
 
   it('hidden, missing regions and remove()', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const layout = createLayout(ov, {
+    const layout = make({
       classify,
       forms: { 'phone-landscape': { columns: ['fill'], rows: ['fill'], areas: ['fill'] } },
     });
@@ -373,7 +431,7 @@ describe('createLayout (DOM)', () => {
   });
 
   it('remove() returns an element to where it was before add()', () => {
-    const layout = createLayout(ov, {
+    const layout = make({
       classify,
       forms: { 'phone-landscape': { columns: ['fill'], rows: ['fill'], areas: ['fill'] } },
     });
@@ -399,7 +457,7 @@ describe('createLayout (DOM)', () => {
 
   it("the 'free' escape hatch: an explicit CSS-px rect, logged once and listed", () => {
     const info = vi.spyOn(console, 'info').mockImplementation(() => {});
-    const layout = createLayout(ov, { classify });
+    const layout = make({ classify });
     const el = h('div');
     layout.add(el, {
       id: 'probe',
@@ -416,72 +474,32 @@ describe('createLayout (DOM)', () => {
     layout.destroy();
   });
 
-  it('docks the caption in captionLane, where avoid() no longer applies', async () => {
-    const layout = createLayout(ov, { classify });
-    ov.caption.avoid({ x: 0, y: 0, width: 2000, height: 2000 });
+  it('docks the caption in captionLane, where onPlace no longer applies', async () => {
+    const layout = make({ classify });
+    const placed = vi.fn();
+    ov!.caption.onPlace(placed);
     layout.dockCaption();
-    expect(ov.caption.docked).toBe(layout.region('captionLane'));
-    expect(ov.caption.element.parentElement).toBe(layout.region('captionLane'));
-    expect(ov.caption.element.hasAttribute('data-docked')).toBe(true);
-    const said = ov.caption.say('Hello.', { hold: 0 });
-    expect(ov.caption.element.style.maxWidth).toBe('');
+    expect(ov!.caption.docked).toBe(layout.region('captionLane'));
+    expect(ov!.caption.element.parentElement).toBe(layout.region('captionLane'));
+    expect(ov!.caption.element.hasAttribute('data-docked')).toBe(true);
+    const said = ov!.caption.say('Hello.', { hold: 0 });
+    expect(placed).not.toHaveBeenCalled();
     // The caption lane holds space (a registered widget), so it is not collapsed.
     expect(layout.state.regions.captionLane!.height).toBeGreaterThan(0);
-    ov.caption.clear();
+    ov!.caption.clear();
     await said;
     layout.destroy();
-    // Undocked: back in the captions layer, legacy corner placement.
-    expect(ov.caption.element.parentElement).toBe(ov.layers.captions);
-    expect(ov.caption.docked).toBeNull();
+    // Undocked: back in the captions layer, in its corner on the frame.
+    expect(ov!.caption.element.parentElement).toBe(ov!.layers.captions);
+    expect(ov!.caption.docked).toBeNull();
   });
 
-  it("device mode leaves a CSS-px overlay's density tokens to the layout", () => {
-    const layout = createLayout(ov, { classify });
-    const dm = createDeviceMode(ov.root);
+  it('device mode leaves the density tokens to the layout', () => {
+    make({ classify });
+    const dm = createDeviceMode(ov!.root);
     dm.setScale(1);
     dm.setScale(0.3);
-    expect(ov.root.style.getPropertyValue('--tc-tap-min')).toBe('44px');
+    expect(ov!.root.style.getPropertyValue('--tc-tap-min')).toBe('44px');
     dm.destroy();
-    layout.destroy();
-  });
-});
-
-describe('CSS-px overlay', () => {
-  it('is the rect in CSS px, unscaled, with CSS-px theme sizes', () => {
-    document.body.innerHTML = '';
-    const parent = h('div');
-    document.body.append(parent);
-    const ov = createOverlay({ parent, legacyScale: false });
-    const rects: Rect[] = [];
-    ov.onRect((r) => rects.push({ ...r }));
-    ov.setRect({ x: 10, y: 20, width: 400, height: 300 });
-    expect(ov.legacyScale).toBe(false);
-    expect(ov.scale).toBe(1);
-    expect(ov.root.dataset.units).toBe('css');
-    expect(ov.root.style.width).toBe('400px');
-    expect(ov.root.style.transform).toBe('translate(10px, 20px)');
-    expect(ov.root.style.getPropertyValue('--tc-font-size-m')).toBe('16px');
-    expect(rects).toEqual([{ x: 10, y: 20, width: 400, height: 300 }]);
-    // The text scale picks CSS-px font tokens on a CSS-px root.
-    applyTextScale(ov.root, 1.5, (t) => ov.setTheme(t));
-    expect(ov.root.style.getPropertyValue('--tc-font-size-m')).toBe(
-      textScaleTokens(1.5, CSS_FONT_PX).fontSizeM,
-    );
-    expect(textScaleTokens(1.5, CSS_FONT_PX).fontSizeM).toBe('max(24px, var(--tc-text-min, 0px))');
-    ov.destroy();
-  });
-
-  it('legacy stays the default: design-px root, scale transform', () => {
-    document.body.innerHTML = '';
-    const parent = h('div');
-    document.body.append(parent);
-    const ov = createOverlay({ parent });
-    ov.setRect({ x: 0, y: 0, width: 960, height: 540 });
-    expect(ov.legacyScale).toBe(true);
-    expect(ov.scale).toBe(0.5);
-    expect(ov.root.dataset.units).toBeUndefined();
-    expect(ov.root.style.width).toBe('1920px');
-    expect(ov.root.style.getPropertyValue('--tc-font-size-m')).toBe('30px');
-    ov.destroy();
   });
 });

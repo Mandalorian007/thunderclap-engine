@@ -1,6 +1,6 @@
 /**
- * Layout harness page (D-041 Phase 2, ws/layout): a CSS-px overlay over the whole viewport with
- * `createLayout` and a widget in every region, so e2e/layout.spec.ts can check region placement,
+ * Layout harness page (D-041 Phase 2, ws/layout): the overlay over the whole viewport with its
+ * layout (`ui.layout`) and a widget in every region, so e2e/layout.spec.ts can check region placement,
  * safe areas, tap sizes and orientation changes on every matrix row. Noun-free; no WebGPU.
  *
  * - `top`: a title and a menu button; upright phones also take the help button here.
@@ -12,7 +12,7 @@
  * - `fill`: nothing; a dashed outline below the overlay shows `freeRect` (the world's space).
  * - `free`: one badge, the escape hatch, pinned to the top-right corner of `freeRect`.
  */
-import { button, createLayout, createOverlay, h, slider, toggle } from '../src/ui';
+import { button, createOverlay, h, slider, toggle } from '../src/ui';
 import { applyTextScale } from '../src/ui/text-scale';
 import type { HarnessLayoutApi, HarnessLayoutState } from './layout-state';
 
@@ -24,14 +24,15 @@ const world = h('div', {
 const home = h('div', { id: 'home', tabindex: '-1', 'aria-label': 'Home' });
 root.append(world, home);
 
+// Every form in CSS px (`units: 'css'`), so the widgets measure the same on every matrix row.
 const ui = createOverlay({
   parent: root,
-  legacyScale: false,
   focusHome: () => home,
   caption: { reducedMotion: true },
+  layout: { forms: { desktop: { units: 'css' }, tablet: { units: 'css' } } },
 });
-ui.setRect({ x: 0, y: 0, width: root.clientWidth, height: root.clientHeight });
-const layout = createLayout(ui);
+ui.setFrame({ x: 0, y: 0, width: root.clientWidth, height: root.clientHeight });
+const layout = ui.layout;
 
 const state: HarnessLayoutState = {
   ready: false,
@@ -155,7 +156,7 @@ layout.onChange(() => {
 publish();
 
 window.addEventListener('resize', () => {
-  ui.setRect({ x: 0, y: 0, width: root.clientWidth, height: root.clientHeight });
+  ui.setFrame({ x: 0, y: 0, width: root.clientWidth, height: root.clientHeight });
 });
 
 const api: HarnessLayoutApi = {

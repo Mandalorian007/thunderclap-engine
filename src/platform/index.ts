@@ -17,8 +17,6 @@ export {
   type DeviceModeController,
   type DeviceModeOptions,
   PHONE_SCALE,
-  PHONE_TAP_MIN,
-  PHONE_TEXT_MIN,
 } from './device-mode';
 export type { DeviceTraits, LifecycleHandlers } from './environment';
 export {

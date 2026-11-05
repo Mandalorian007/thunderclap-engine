@@ -8,7 +8,24 @@ import {
   TEXT_MIN_VAR,
   TEXT_SCALE_VAR,
   textScaleTokens,
+  toFrameUnits,
 } from './text-scale';
+
+describe('toFrameUnits', () => {
+  it('rewrites px lengths as design px; leaves queries, urls and other units alone', () => {
+    expect(toFrameUnits('.a { padding: 6px -2.5px; top: .5px; width: 50%; }')).toBe(
+      '.a { padding: calc(6 * var(--tc-unit, 1px)) calc(-2.5 * var(--tc-unit, 1px)); ' +
+        'top: calc(.5 * var(--tc-unit, 1px)); width: 50%; }',
+    );
+    expect(toFrameUnits('@media (max-width: 600px) { .b { margin: 2px; } }')).toBe(
+      '@media (max-width: 600px) { .b { margin: calc(2 * var(--tc-unit, 1px)); } }',
+    );
+    expect(toFrameUnits("background: url('x-4px.svg') 3em")).toBe(
+      "background: url('x-4px.svg') 3em",
+    );
+    expect(toFrameUnits('--k: 12pxs; .h2px {}')).toBe('--k: 12pxs; .h2px {}');
+  });
+});
 
 describe('text scale', () => {
   it('names the density tokens', () => {
