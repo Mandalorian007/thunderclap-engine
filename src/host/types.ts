@@ -1,7 +1,7 @@
 /**
  * The host: what the page or shell the game runs in can do for it (D-041, ARCHITECTURE.md
- * "Host"). The engine reaches the outside world only through this: opening a link, copying
- * text, fullscreen, and where saves are kept. `createWebHost()` (host/web.ts) is the browser,
+ * "Host"). The engine reaches the outside world only through this: frame scheduling, opening a
+ * link, copying text, fullscreen, and where saves are kept. `createWebHost()` (host/web.ts) is the browser,
  * at top level or in a frame such as itch.io's; a later `createElectronHost()` satisfies the same
  * interface through a preload bridge, and adds `window`.
  */
@@ -48,7 +48,22 @@ export interface HostWindow {
   setTitle?(title: string): void;
 }
 
-export interface Host {
+/**
+ * Where frames come from: the display's refresh (`requestAnimationFrame` in a browser), a
+ * test's manual stepping, later an XR session's `requestAnimationFrame`. `GameLoop` schedules
+ * every frame through this, never through the globals.
+ */
+export interface FrameSource {
+  /**
+   * Calls `cb(timeMs)` once, at the next frame, with the frame's timestamp in ms on the same
+   * clock as `performance.now()`. Returns a handle for `cancelFrame`.
+   */
+  requestFrame(cb: (timeMs: number) => void): number;
+  /** Drops a pending request; a handle already run or cancelled is ignored. */
+  cancelFrame(handle: number): void;
+}
+
+export interface Host extends FrameSource {
   readonly kind: HostKind;
   /** Where the page runs: top level, or framed by the same or another origin (itch.io). */
   readonly embed: EmbedContext;

@@ -63,3 +63,37 @@ describe('ParticleSystem.clear', () => {
     expect(fake.errors).toEqual([]);
   });
 });
+
+describe('ParticleSystem.draw', () => {
+  function pass(fake: FakeDevice) {
+    const enc = fake.device.createCommandEncoder();
+    const p = enc.beginRenderPass({ label: 'scene', colorAttachments: [] });
+    return { p, last: () => fake.passes[fake.passes.length - 1]! };
+  }
+  function pipelineOf(fake: FakeDevice) {
+    const cmd = fake.passes[fake.passes.length - 1]!.commands.find((c) => c.op === 'setPipeline');
+    return (cmd as { pipeline: { label: string; desc: GPURenderPipelineDescriptor } }).pipeline;
+  }
+
+  it('uses the plain pipeline without depth and a test-only depth pipeline with it', () => {
+    const { fake, ps } = makeSystem();
+    const { p } = pass(fake);
+    ps.draw(p, { depthFormat: null } as never);
+    expect(pipelineOf(fake).label).toBe('particles-render');
+    expect(pipelineOf(fake).desc.depthStencil).toBeUndefined();
+    ps.draw(pass(fake).p, { depthFormat: 'depth24plus' } as never);
+    const d = pipelineOf(fake);
+    expect(d.label).toBe('particles-render:depth24plus');
+    expect(d.desc.depthStencil).toEqual({
+      format: 'depth24plus',
+      depthWriteEnabled: false,
+      depthCompare: 'less-equal',
+    });
+    expect(d.desc.fragment).toBe(pipelineOf(fake).desc.fragment);
+    // Cached: a second depth frame makes no new pipeline.
+    const before = fake.passes.length;
+    ps.draw(pass(fake).p, { depthFormat: 'depth24plus' } as never);
+    expect(fake.passes.length).toBe(before + 1);
+    expect(pipelineOf(fake)).toBe(d);
+  });
+});

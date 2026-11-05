@@ -546,7 +546,7 @@ describe('depth', () => {
     const cap = captureInstances(fake);
     r.camera.depthTest = true;
     r.camera.depthWrite = true;
-    const [o5, g2, o1, g9, o3] = zs(-5, -2, -1, -9, -3); // ortho2d: z = 0 near, -1 far
+    const [o5, g2, o1, g9, o3] = zs(5, 2, 1, 9, 3); // ortho2d: z into the screen (larger = farther)
     const f = r.beginFrame(0, 0);
     f.sprite(opaque, o5!, { params: [5] });
     f.sprite(glass, g2!, { params: [2] });
@@ -667,5 +667,185 @@ describe('draw list steady state', () => {
     for (let i = 0; i < 5; i++) frame();
     expect(counts()).toEqual(before);
     expect(fake.errors).toEqual([]);
+  });
+});
+
+describe('render call', () => {
+  function scenePasses(fake: FakeDevice) {
+    return fake.passes.filter((p) => p.label === 'scene');
+  }
+
+  it('endFrame renders through renderer.camera when nothing called render', () => {
+    const { fake, r } = setup();
+    const f = r.beginFrame(0, 0);
+    f.sprite(null, { x: 1, y: 1 });
+    r.endFrame();
+    expect(scenePasses(fake).length).toBe(1);
+    expect(r.stats.instances).toBe(1);
+  });
+
+  it('two cameras in one frame: two scene passes, own uniforms, clear then load', () => {
+    const { fake, r } = setup();
+    r.resize(800, 400);
+    // The pass descriptor is reused, so record the load ops as each pass begins.
+    const colorOps: string[][] = [];
+    const dev = fake.device as unknown as {
+      createCommandEncoder: (d?: unknown) => GPUCommandEncoder;
+    };
+    const mk = dev.createCommandEncoder.bind(dev);
+    dev.createCommandEncoder = (d?: unknown) => {
+      const enc = mk(d);
+      const begin = enc.beginRenderPass.bind(enc);
+      enc.beginRenderPass = (desc: GPURenderPassDescriptor) => {
+        if (desc.label === 'scene') {
+          const atts = desc.colorAttachments as GPURenderPassColorAttachment[];
+          colorOps.push(atts.map((a) => a.loadOp));
+        }
+        return begin(desc);
+      };
+      return enc;
+    };
+    const world = Camera.ortho2d(1920, 1080);
+    const ui = Camera.ortho2d(1920, 1080);
+    ui.layers = 2;
+    const f = r.beginFrame(1, 0.1);
+    f.sprite(null, { x: 1, y: 1 }); // layer 1: the world camera (all layers) only
+    f.sprite(null, { x: 2, y: 2, layers: 2 }); // both cameras
+    r.render(f, world);
+    r.render(f, ui);
+    r.endFrame();
+    expect(fake.errors).toEqual([]);
+    const passes = scenePasses(fake);
+    expect(passes.length).toBe(2);
+    expect(colorOps).toEqual([
+      ['clear', 'clear'],
+      ['load', 'load'],
+    ]);
+    // Each view binds its own engine uniforms.
+    const groups = passes.map(
+      (p) =>
+        (p.commands.find((c) => c.op === 'setBindGroup') as { group: { label: string } }).group
+          .label,
+    );
+    expect(groups).toEqual(['engine-globals-group', 'engine-globals-group-1']);
+    const writes = fake.writes.filter((w) => (w.buffer.label ?? '').startsWith('engine-globals'));
+    expect(writes.map((w) => w.buffer.label)).toEqual(['engine-globals', 'engine-globals-1']);
+    // The second view's instances follow the first's two in the instance buffer.
+    const inst = fake.writes.filter((w) => w.buffer.label === 'instances');
+    expect(inst.map((w) => w.offset)).toEqual([0, 2 * INSTANCE_FLOATS * 4]);
+    expect(r.stats.instances).toBe(3);
+    expect(r.stats.drawCalls).toBe(2);
+  });
+
+  it('a half-screen camera sets a viewport in target pixels; a full one sets none', () => {
+    const { fake, r } = setup();
+    r.resize(960, 540);
+    const left = Camera.ortho2d(1920, 1080);
+    left.screen.width = 960; // left half of the logical space
+    const persp = Camera.perspective(1, 1, 0.1, 10);
+    persp.screen.x = 0.5;
+    persp.screen.width = 0.5; // right half, normalised
+    const f = r.beginFrame(0, 0);
+    f.sprite(null, { x: 1, y: 1 });
+    r.render(f, left);
+    r.render(f, persp);
+    r.render(f, r.camera);
+    r.endFrame();
+    expect(fake.errors).toEqual([]);
+    const names = scenePasses(fake).map(
+      (p) => p.commands.filter((c) => c.op === 'other' && c.name === 'setViewport').length,
+    );
+    expect(names).toEqual([1, 1, 0]);
+    // The camera block's viewport field is the sub-rect, in target pixels.
+    const seen: number[][] = [];
+    const q = fake.device.queue as unknown as { writeBuffer: (...a: unknown[]) => void };
+    const orig = q.writeBuffer.bind(q);
+    q.writeBuffer = (buffer: unknown, offset: unknown, data: unknown, ...rest: unknown[]) => {
+      if ((buffer as { label?: string }).label?.startsWith('engine-globals')) {
+        seen.push([...new Float32Array(data as Float32Array).subarray(116, 120)]);
+      }
+      orig(buffer, offset, data, ...rest);
+    };
+    const g = r.beginFrame(0, 0);
+    r.render(g, left);
+    r.render(g, persp);
+    r.endFrame();
+    expect(seen).toEqual([
+      [0, 0, 480, 540],
+      [480, 0, 480, 540],
+    ]);
+  });
+
+  it('renders into another SceneTarget, with its own depth, and the surface shows the default', () => {
+    const { fake, r } = setup();
+    r.resize(800, 450);
+    const portal = r.createSceneTarget({ width: 64, height: 32, label: 'portal' });
+    const cam = Camera.perspective(1, 2, 0.1, 10);
+    const f = r.beginFrame(0, 0);
+    f.sprite(null, { x: 1, y: 1 });
+    r.render(f, cam, portal);
+    r.render(f, r.camera);
+    r.endFrame();
+    expect(fake.errors).toEqual([]);
+    const [p0, p1] = scenePasses(fake).map((p) => p.desc as GPURenderPassDescriptor);
+    const view0 = (p0!.colorAttachments as GPURenderPassColorAttachment[])[0]!.view as unknown as {
+      texture: { label: string };
+    };
+    expect(view0.texture.label).toBe('portal-color');
+    expect(p0!.depthStencilAttachment).toBeDefined();
+    expect(portal.depth?.width).toBe(64);
+    expect(p1!.depthStencilAttachment).toBeUndefined();
+    expect(r.target.depth).toBeNull();
+    expect(fake.textures.find((t) => t.label === 'portal-depth')?.destroyed).toBe(false);
+    portal.destroy();
+    expect(fake.textures.find((t) => t.label === 'portal-depth')?.destroyed).toBe(true);
+  });
+
+  it('two-camera frames allocate nothing after the first', () => {
+    const { fake, r } = setup();
+    const a = Camera.ortho2d(1920, 1080);
+    const b = Camera.perspective(1, 1, 0.1, 10);
+    b.depthTest = true;
+    b.screen.width = 0.5;
+    const frame = () => {
+      const f = r.beginFrame(0, 0);
+      for (let i = 0; i < 20; i++) f.sprite(null, { x: i, y: 0 });
+      r.render(f, a);
+      r.render(f, b);
+      r.endFrame();
+    };
+    frame();
+    frame();
+    const counts = () => [fake.buffers.length, fake.textures.length, fake.bindGroups.length];
+    const before = counts();
+    for (let i = 0; i < 5; i++) frame();
+    expect(counts()).toEqual(before);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('grows the instance buffer across views and retires the old one after submit', () => {
+    const fake = createFakeDevice();
+    const r = new Renderer(fakeRendererGpu(fake), { initialInstances: 4 });
+    const cam = Camera.ortho2d(1920, 1080);
+    const f = r.beginFrame(0, 0);
+    for (let i = 0; i < 3; i++) f.sprite(null, { x: i, y: 0 });
+    r.render(f, r.camera);
+    r.render(f, cam);
+    r.endFrame();
+    expect(fake.errors).toEqual([]);
+    const bufs = fake.buffers.filter((b) => b.label === 'instances');
+    expect(bufs.length).toBe(2);
+    expect(bufs[0]!.destroyed).toBe(true);
+    expect(bufs[1]!.destroyed).toBe(false);
+    expect(bufs[1]!.size).toBeGreaterThanOrEqual(6 * INSTANCE_FLOATS * 4);
+  });
+
+  it('rejects render outside a frame or with a foreign frame', () => {
+    const { r } = setup();
+    expect(() => r.render(r.beginFrame(0, 0), r.camera)).not.toThrow();
+    r.endFrame();
+    const f = r.beginFrame(0, 0);
+    r.endFrame();
+    expect(() => r.render(f, r.camera)).toThrow(/outside/);
   });
 });

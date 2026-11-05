@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Camera } from '../render/camera';
+import { Camera, ORTHO2D_HALF_DEPTH } from '../render/camera';
 import { type Aabb, aabbTester, createRay, planeTester, type Ray, rayAt, screenRay } from './rays';
 
 function ray(o: [number, number, number], d: [number, number, number]): Ray {
@@ -13,13 +13,13 @@ function ray(o: [number, number, number], d: [number, number, number]): Ray {
 }
 
 describe('screenRay', () => {
-  it('ortho2d: the origin is the world point at z = 0 and the ray points +z', () => {
+  it('ortho2d: the origin is the world point on the near plane and the ray points +z', () => {
     const cam = Camera.ortho2d(800, 600);
     const r = createRay();
     expect(screenRay(cam, 100, 50, r)).toBe(true);
     expect(r.origin[0]).toBeCloseTo(100);
     expect(r.origin[1]).toBeCloseTo(50);
-    expect(r.origin[2]).toBeCloseTo(0);
+    expect(r.origin[2]).toBeCloseTo(-ORTHO2D_HALF_DEPTH, 3);
     expect(r.dir[0]).toBeCloseTo(0);
     expect(r.dir[1]).toBeCloseTo(0);
     expect(r.dir[2]).toBeCloseTo(1);
@@ -77,14 +77,14 @@ describe('planeTester', () => {
     expect(h?.target).toBe('ground');
   });
 
-  it('through ortho2d it is the world point under the pointer at distance 0', () => {
+  it('through ortho2d it is the world point under the pointer, one near-plane depth away', () => {
     const cam = Camera.ortho2d(800, 600);
     const r = createRay();
     screenRay(cam, 123, 456, r);
     const h = planeTester()(r);
     expect(h?.point[0]).toBeCloseTo(123);
     expect(h?.point[1]).toBeCloseTo(456);
-    expect(h?.distance).toBeCloseTo(0);
+    expect(h?.distance).toBeCloseTo(ORTHO2D_HALF_DEPTH, 3);
     expect(h?.target).toBeNull();
   });
 

@@ -1,4 +1,4 @@
-import type { Drawable } from '../render/frame';
+import type { Drawable, Frame } from '../render/frame';
 import type { Renderer } from '../render/renderer';
 import { createShaderModule } from '../render/wgsl';
 import { PARTICLE_COMPUTE_WGSL, PARTICLE_RENDER_WGSL } from './particles-wgsl';
@@ -80,6 +80,9 @@ export class ParticleSystem implements Drawable {
   private readonly spawnPipeline: GPUComputePipeline;
   private readonly updatePipeline: GPUComputePipeline;
   private readonly renderPipeline: GPURenderPipeline;
+  /** Per depth format: the same pipeline with a test-only `depthStencil` (made on first use). */
+  private readonly depthPipelines = new Map<GPUTextureFormat, GPURenderPipeline>();
+  private readonly renderDesc: GPURenderPipelineDescriptor;
   private readonly computeGroup: GPUBindGroup;
   private readonly renderGroup: GPUBindGroup;
   private spawnCount = 0;
@@ -159,7 +162,7 @@ export class ParticleSystem implements Drawable {
       color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
       alpha: { srcFactor: 'zero', dstFactor: 'one', operation: 'add' },
     };
-    this.renderPipeline = device.createRenderPipeline({
+    this.renderDesc = {
       label: 'particles-render',
       layout: device.createPipelineLayout({
         bindGroupLayouts: [renderer.globalsLayout, renderLayout],
@@ -171,7 +174,8 @@ export class ParticleSystem implements Drawable {
         targets: renderer.sceneFormats.map((format) => ({ format, blend: additive })),
       },
       primitive: { topology: 'triangle-list' },
-    });
+    };
+    this.renderPipeline = device.createRenderPipeline(this.renderDesc);
     this.renderGroup = device.createBindGroup({
       label: 'particles-render',
       layout: renderLayout,
@@ -297,10 +301,28 @@ export class ParticleSystem implements Drawable {
     this.warnedOverflow = false;
   }
 
-  draw(pass: GPURenderPassEncoder): void {
-    pass.setPipeline(this.renderPipeline);
+  /**
+   * Draw inside the scene pass. With a depth camera (`frame.depthFormat` set) the pipeline
+   * tests against depth without writing it, like any blended material.
+   */
+  draw(pass: GPURenderPassEncoder, frame?: Frame): void {
+    const fmt = frame?.depthFormat ?? null;
+    pass.setPipeline(fmt ? this.depthPipeline(fmt) : this.renderPipeline);
     pass.setBindGroup(1, this.renderGroup);
     pass.draw(6, this.capacity);
+  }
+
+  private depthPipeline(format: GPUTextureFormat): GPURenderPipeline {
+    let p = this.depthPipelines.get(format);
+    if (!p) {
+      p = this.device.createRenderPipeline({
+        ...this.renderDesc,
+        label: `particles-render:${format}`,
+        depthStencil: { format, depthWriteEnabled: false, depthCompare: 'less-equal' },
+      });
+      this.depthPipelines.set(format, p);
+    }
+    return p;
   }
 
   /**

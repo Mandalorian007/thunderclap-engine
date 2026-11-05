@@ -8,13 +8,36 @@ take custom WGSL. It has no runtime dependencies.
 ```
 beginFrame(time, dt) → Frame
   frame.sprite / frame.mesh / frame.drawable   (record only; nothing hits the GPU yet)
+render(frame, camera, target = renderer.target)   once per camera
+  1. first call of the frame: pre-passes, then drawable.prepare() (compute, uploads)
+  2. write this view's globals + camera block (one 512 B buffer per view) and its instances
+     (appended to the shared instance buffer)
+  3. scene pass into the target: colour (@location 0) and emissive (@location 1), both
+     rgba16float, plus depth24plus when camera.depthTest; the first view into a target
+     clears it, later views load
 endFrame()
-  1. write globals + all instance data (one writeBuffer each)
-  2. pre-passes, then drawable.prepare() (compute, uploads); each runs once per frame
-  3. scene pass → two rgba16float targets: colour (@location 0) and emissive (@location 1)
-  4. renderer.post (e.g. PostStack) or the built-in present pass → swapchain
-  5. submit
+  4. render(frame, renderer.camera) if nothing was rendered (the single-camera path)
+  5. renderer.post (e.g. PostStack) or the built-in present pass: renderer.target → swapchain
+  6. submit
 ```
+
+```ts
+const frame = renderer.beginFrame(time, dt);
+frame.sprite(null, { x, y, w, h });
+renderer.render(frame, world);   // world.screen = { x: 0, y: 0, width: 0.5, height: 1 }: left half
+renderer.render(frame, hud);     // hud.layers picks the UI draws; full screen, loads over world
+renderer.endFrame();
+```
+
+- **Views.** `camera.screen` places the view: a rect inside the unit square is a fraction of
+  the target (viewport and scissor), anything else is logical px (the `ortho2d` default, the
+  whole target). Each view has its own uniform buffer and bind group (`engine-globals`,
+  `engine-globals-1`, …), pooled across frames, so two cameras per frame allocate nothing in
+  steady state. `renderer.stats` sums over the views.
+- **Targets.** `renderer.target` is the `SceneTarget` the post stack reads;
+  `renderer.createSceneTarget({ width, height, label? })` makes an offscreen one (a portal, a
+  minimap) whose `color` and `emissive` are sampleable `Texture`s. `target.depth` exists once
+  a depth camera has rendered into it.
 
 - **Logical space** is 1920×1080 by default, with the origin at top-left and y pointing down.
   `renderer.camera` is a matrix `Camera` (`Camera.ortho2d(1920, 1080)` by default); its
@@ -25,11 +48,12 @@ endFrame()
   when grouped by material.
 - **Layers.** Every draw takes `layers` (u32 mask, default 1). When `renderer.camera.layers`
   is set, draws with `layers & camera.layers === 0` are skipped; without it, all draw.
-- **Depth is opt-in.** With `renderer.camera.depthTest = true` the scene pass gets a
-  `depth24plus` attachment (allocated on first use), and draws sort by `order`, then opaque
-  (front-to-back) before blended (back-to-front), by view-space depth through `camera.view`.
-  `camera.depthWrite` (off for `ortho2d`, on for `perspective`) lets opaque draws write depth.
-  `frame.depthFormat` tells drawables which format to declare.
+- **Depth is opt-in.** With `camera.depthTest = true` the scene pass gets a `depth24plus`
+  attachment (allocated on first use), and draws sort by `order`, then opaque (front-to-back)
+  before blended (back-to-front), by clip-space depth, so the sort agrees with the depth
+  buffer. `camera.depthWrite` (off for `ortho2d`, on for `perspective`) lets opaque draws
+  write depth. `frame.depthFormat` tells drawables which format to declare; `ParticleSystem`
+  builds a depth pipeline per format from it.
 - **The emissive target feeds bloom.** Anything written to it glows. The final image is
   colour + emissive + bloom.
 - In steady state the renderer allocates nothing per frame. The instance buffer doubles in
@@ -117,15 +141,19 @@ const world = cam.screenToWorld(p.x, p.y, 0, hit);        // touch aiming; pass 
 
 const eye = Camera.perspective(Math.PI / 3, 16 / 9, 0.1, 500).lookAt([0, 4, 10], [0, 0, 0]);
 eye.screen.width = 1920; eye.screen.height = 1080;      // screen units for worldToScreen
-renderer.camera = eye;                                    // depth needs ws/render-call
+renderer.render(frame, eye);                              // or renderer.camera = eye
 ```
 
 - `worldToScreen(x, y, z?)` returns screen units (the `screen` rect; the design space for
   `ortho2d`) and clip depth in `z`. `screenToWorld(sx, sy, depth?)` inverts it; depth 0 and 1
   give a pick ray.
+- `ortho2d` looks down +z: larger z is farther, and world z in ±`ORTHO2D_HALF_DEPTH` (1024)
+  survives the near and far planes (z = 0 is clip depth 0.5). x and y are the old 2D camera's.
 - `depthTest` and `depthWrite` (off for `ortho2d`, on for `perspective`) and the `layers` mask
-  (u32, default all bits; `sees(mask)`) are carried for the render call and the draw sort; the
-  renderer does not read them yet.
+  (u32, default all bits; `sees(mask)`) drive the render call's depth attachment and draw sort.
+- A 2D game frames the space the UI leaves (`ui.layout.freeRect`, CSS px) with
+  `cam.fitRect(worldRect, viewportInLogicalPx)`; convert the rect's corners with
+  `surface.clientToLogical`.
 
 ## Custom materials
 

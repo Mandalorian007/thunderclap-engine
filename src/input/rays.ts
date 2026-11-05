@@ -58,7 +58,8 @@ const far = { x: 0, y: 0, z: 0 };
 /**
  * The ray through screen point (`sx`, `sy`) (the camera's screen units): from the near plane
  * (`screenToWorld(…, 0)`) towards the far one (`…, 1`; depth 0.5 when the far plane is at
- * infinity). For `Camera.ortho2d` the origin is the world point at z = 0 and `dir` is +z.
+ * infinity). For `Camera.ortho2d` the origin is the world point on the near plane
+ * (z = -ORTHO2D_HALF_DEPTH) and `dir` is +z, into the screen.
  * Returns false (and leaves `out` alone) when the camera gives no usable ray.
  */
 export function screenRay(camera: RayCamera, sx: number, sy: number, out: Ray): boolean {

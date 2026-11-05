@@ -1,5 +1,5 @@
 import type { BindingSet } from './bindings';
-import { ALL_LAYERS, CAMERA_BLOCK_FLOATS, Camera } from './camera';
+import { ALL_LAYERS, CAMERA_BLOCK_FLOATS, Camera, type CameraRect } from './camera';
 import { installGpuErrorLogging } from './diagnostics';
 import {
   type Drawable,
@@ -21,6 +21,7 @@ import {
 } from './material';
 import { Mesh, type MeshDesc, quadGeometry } from './mesh';
 import { PingPong } from './ping-pong';
+import { SCENE_FORMAT, SceneTarget, type SceneTargetDesc } from './scene-target';
 import {
   bytesPerTexel,
   createSamplers,
@@ -32,9 +33,6 @@ import {
   type TextureSource,
 } from './texture';
 import { type Transform, writeMatrix2d } from './transform';
-
-/** HDR scene targets: [0] colour, [1] emissive (feeds bloom). */
-export const SCENE_FORMAT: GPUTextureFormat = 'rgba16float';
 
 export interface PostInputs {
   color: TextureLike;
@@ -148,6 +146,12 @@ const CAMERA_OFFSET_FLOATS = 64;
 /** One upload covers both blocks. */
 const ENGINE_UNIFORM_FLOATS = CAMERA_OFFSET_FLOATS + CAMERA_BLOCK_FLOATS;
 
+/** The engine uniforms (globals + camera block) and their bind group for one view of a frame. */
+interface ViewSlot {
+  buffer: GPUBuffer;
+  group: GPUBindGroup;
+}
+
 /** One recorded draw (instance or drawable), kept until `endFrame` sorts and batches them. */
 interface DrawRec {
   material: Material | null;
@@ -161,7 +165,7 @@ interface DrawRec {
   layers: number;
   /** Depth sort: 0 = opaque, 1 = blended (drawables count as blended). */
   group: number;
-  /** Depth sort: view-space depth of the instance origin (larger = farther). */
+  /** Depth sort: clip-space depth of the instance origin (larger = farther). */
   dist: number;
 }
 
@@ -174,8 +178,14 @@ interface DrawRec {
  * r.resize(w, h);
  * const f = r.beginFrame(time, dt);
  * f.sprite(myMaterial, { x: 960, y: 540, w: 200, h: 200 });
- * r.endFrame();
+ * r.endFrame();                      // = r.render(f, r.camera) into r.target, then post + present
  * ```
+ *
+ * A frame is `beginFrame` → record → `render(frame, camera, target?, viewport?)` any number of
+ * times → `endFrame`. Each `render` runs the recorded draw lists through one camera (its layer
+ * mask, sort and depth) into a `SceneTarget` (default `renderer.target`, what the surface
+ * shows); `endFrame` renders through `renderer.camera` when nothing called `render`, then runs
+ * the post stack (or the built-in present) from `renderer.target` to the swapchain and submits.
  */
 export class Renderer implements FrameSink {
   readonly device: GPUDevice;
@@ -193,6 +203,7 @@ export class Renderer implements FrameSink {
   camera: Camera;
   readonly samplers: Record<SamplerKind, GPUSampler>;
   readonly globalsLayout: GPUBindGroupLayout;
+  /** The engine uniforms of the frame's first view (`@group(0)`: globals and camera block). */
   readonly globalsBindGroup: GPUBindGroup;
   readonly quad: Mesh;
   /** 1×1 white texture (default for unbound texture slots). */
@@ -223,15 +234,27 @@ export class Renderer implements FrameSink {
   /** Output (canvas backbuffer) size, as passed to `resize`. */
   outputWidth = 1;
   outputHeight = 1;
-  sceneColor!: Texture;
-  sceneEmissive!: Texture;
+  /**
+   * The default `SceneTarget`, at the scene resolution: what `render` draws into unless given
+   * another, what the post stack reads and what the surface shows.
+   */
+  readonly target: SceneTarget;
 
-  private readonly globalsBuffer: GPUBuffer;
+  private readonly views: ViewSlot[] = [];
+  private viewCount = 0;
   private readonly globalsData = new Float32Array(ENGINE_UNIFORM_FLOATS);
   private readonly globalsU32 = new Uint32Array(this.globalsData.buffer);
-  private readonly cameraViewport = { x: 0, y: 0, width: 1, height: 1 };
+  private readonly viewRect: CameraRect = { x: 0, y: 0, width: 1, height: 1 };
+  /** Targets rendered into so far this frame, and whether their depth was cleared. */
+  private readonly usedTargets: SceneTarget[] = [];
+  private readonly usedDepth: boolean[] = [];
+  private usedCount = 0;
   private instanceData: Float32Array;
   private instanceBuffer: GPUBuffer;
+  /** Byte offset in `instanceBuffer` where the next view's instances go. */
+  private instanceBase = 0;
+  /** Instance buffers outgrown this frame, destroyed after submit (passes still reference them). */
+  private readonly retired: GPUBuffer[] = [];
   private instanceCount = 0;
   private readonly cmds: DrawCmd[] = [];
   private cmdCount = 0;
@@ -249,13 +272,6 @@ export class Renderer implements FrameSink {
   private uploadData: Float32Array;
   /** Instances `endFrame` uploads (layer-culled draws excluded). */
   private uploadCount = 0;
-  private depthTexture: Texture | null = null;
-  private readonly depthAtt: GPURenderPassDepthStencilAttachment = {
-    view: undefined as unknown as GPUTextureView,
-    depthClearValue: 1,
-    depthLoadOp: 'clear',
-    depthStoreOp: 'store',
-  };
   private readonly prePasses: ((encoder: GPUCommandEncoder) => void)[] = [];
   private readonly prepared = new Set<Drawable>();
   /** Per-draw uniform sets with blocks staged this frame. */
@@ -264,9 +280,10 @@ export class Renderer implements FrameSink {
   private readonly frame: Frame;
   private readonly present: FullscreenPass;
   private presentGroup: GPUBindGroup | null = null;
-  private readonly scenePassDesc: GPURenderPassDescriptor;
-  private readonly colorAtt: GPURenderPassColorAttachment;
-  private readonly emissiveAtt: GPURenderPassColorAttachment;
+  private readonly postInputs: PostInputs;
+  /** The frame's command encoder, opened by the first `render`, submitted by `endFrame`. */
+  private encoder: GPUCommandEncoder | null = null;
+  private sampled = false;
   private readonly resizeListeners = new Set<(w: number, h: number) => void>();
   private readonly resolution: Required<ResolutionOptions> = {
     scale: 1,
@@ -322,26 +339,7 @@ export class Renderer implements FrameSink {
         },
       ],
     });
-    this.globalsBuffer = device.createBuffer({
-      label: 'engine-globals',
-      size: ENGINE_UNIFORM_FLOATS * 4,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    this.globalsBindGroup = device.createBindGroup({
-      label: 'engine-globals-group',
-      layout: this.globalsLayout,
-      entries: [
-        { binding: 0, resource: { buffer: this.globalsBuffer, size: GLOBALS_FLOATS * 4 } },
-        {
-          binding: 1,
-          resource: {
-            buffer: this.globalsBuffer,
-            offset: CAMERA_OFFSET_FLOATS * 4,
-            size: CAMERA_BLOCK_FLOATS * 4,
-          },
-        },
-      ],
-    });
+    this.globalsBindGroup = this.viewSlot(0).group;
 
     const cap = opts.initialInstances ?? 4096;
     this.instanceData = new Float32Array(cap * INSTANCE_FLOATS);
@@ -373,22 +371,25 @@ export class Renderer implements FrameSink {
 }`,
     });
 
-    this.colorAtt = {
-      view: this.white.view,
-      loadOp: 'clear',
-      storeOp: 'store',
-      clearValue: { r: 0, g: 0, b: 0, a: 1 },
-    };
-    this.emissiveAtt = {
-      view: this.white.view,
-      loadOp: 'clear',
-      storeOp: 'store',
-      clearValue: { r: 0, g: 0, b: 0, a: 0 },
-    };
-    this.scenePassDesc = { label: 'scene', colorAttachments: [this.colorAtt, this.emissiveAtt] };
     this.frame = new Frame(this, this.logicalWidth, this.logicalHeight);
-    this.colorAtt.clearValue = this.frame.clearColor;
+    this.target = new SceneTarget(device, { width: 1, height: 1 });
+    this.postInputs = {
+      color: this.target.color,
+      emissive: this.target.emissive,
+      time: 0,
+      dt: 0,
+    };
     this.resize(1, 1);
+  }
+
+  /** The default target's HDR colour texture (`target.color`). */
+  get sceneColor(): Texture {
+    return this.target.color;
+  }
+
+  /** The default target's HDR emissive texture (`target.emissive`). */
+  get sceneEmissive(): Texture {
+    return this.target.emissive;
   }
 
   /**
@@ -425,35 +426,16 @@ export class Renderer implements FrameSink {
 
   private applyResolution(): void {
     const { width: w, height: h } = sceneSize(this.outputWidth, this.outputHeight, this.resolution);
-    if (this.sceneColor && w === this.width && h === this.height) return;
+    const changed = this.target.resize(w, h);
+    if (!changed && this.presentGroup) return;
     this.width = w;
     this.height = h;
-    this.sceneColor?.destroy();
-    this.sceneEmissive?.destroy();
-    // The depth target (only ever made for a depth camera) is rebuilt at the new size lazily.
-    this.depthTexture?.destroy();
-    this.depthTexture = null;
-    const usage = GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING;
-    this.sceneColor = new Texture(this.device, {
-      width: w,
-      height: h,
-      format: SCENE_FORMAT,
-      usage,
-      label: 'scene-color',
-    });
-    this.sceneEmissive = new Texture(this.device, {
-      width: w,
-      height: h,
-      format: SCENE_FORMAT,
-      usage,
-      label: 'scene-emissive',
-    });
-    this.colorAtt.view = this.sceneColor.view;
-    this.emissiveAtt.view = this.sceneEmissive.view;
     this.presentGroup = this.present.createBindGroup([
-      this.sceneColor.view,
-      this.sceneEmissive.view,
+      this.target.color.view,
+      this.target.emissive.view,
     ]);
+    this.postInputs.color = this.target.color;
+    this.postInputs.emissive = this.target.emissive;
     this.post?.resize(w, h);
     for (const fn of this.resizeListeners) fn(w, h);
   }
@@ -506,6 +488,15 @@ export class Renderer implements FrameSink {
 
   createTexture(desc: TextureDesc): Texture {
     return new Texture(this.device, desc);
+  }
+
+  /**
+   * A scene target of its own size for `render` to draw a view into offscreen (a portal, a
+   * minimap, a picture-in-picture camera). Its `color`/`emissive` are sampleable textures;
+   * it is not resized with the surface. The caller destroys it.
+   */
+  createSceneTarget(desc: SceneTargetDesc): SceneTarget {
+    return new SceneTarget(this.device, desc);
   }
 
   /** Offscreen render target (sampleable). Default format is the HDR scene format. */
@@ -666,50 +657,132 @@ export class Renderer implements FrameSink {
     this.prepared.clear();
     for (const b of this.drawUniformSets) b.discardDrawUniforms();
     this.drawUniformSets.length = 0;
+    this.stats.drawCalls = 0;
+    this.stats.instances = 0;
+    this.stats.drawables = 0;
     const f = this.frame;
     f.time = time;
     f.dt = dt;
     return f;
   }
 
-  /** Encode and submit: pre-passes, drawable prepare, scene pass, post, present. */
-  endFrame(): void {
-    if (!this.inFrame) throw new Error('endFrame without beginFrame');
-    this.inFrame = false;
+  /**
+   * Run the draw lists recorded in `frame` through `camera` into `target` (default: the
+   * renderer's own, which the surface shows). Call it any number of times between
+   * `beginFrame` and `endFrame`; `endFrame` calls it with `renderer.camera` when nothing did.
+   *
+   * Each call is one scene pass: the camera's layer mask culls, its depth flags pick the sort
+   * and the depth attachment, and its `screen` rect is the viewport. A `screen` in logical
+   * units (the `ortho2d` default is the whole design space) maps onto the target in
+   * proportion; one inside the unit square (the perspective default `0,0,1,1`) is a fraction
+   * of it. The first view into a target this frame clears it (`frame.clearColor`); later ones
+   * draw over it, so a UI camera over a world camera or two half-screen cameras just work.
+   * The first call opens the frame's command encoder and runs the pre-passes and drawable
+   * `prepare` hooks (once per frame). No allocation in steady state.
+   */
+  render(frame: Frame, camera: Camera, target: SceneTarget = this.target): void {
+    if (!this.inFrame) throw new Error('render outside beginFrame/endFrame');
+    if (frame !== this.frame) throw new Error("render: frame is not this renderer's");
     if (this.destroyed) return;
     const device = this.device;
-    this.writeGlobals();
-
-    const depth = this.buildDraws();
-    const uploadCount = this.uploadCount;
-    if (uploadCount > 0) {
-      const needed = uploadCount * INSTANCE_STRIDE;
-      if (needed > this.instanceBuffer.size) {
-        this.instanceBuffer.destroy();
-        this.instanceBuffer = this.makeInstanceBuffer(this.instanceData.length / INSTANCE_FLOATS);
-      }
-      device.queue.writeBuffer(this.instanceBuffer, 0, this.uploadData.buffer, 0, needed);
-    }
-    for (const b of this.drawUniformSets) b.flushDrawUniforms();
-    this.drawUniformSets.length = 0;
-
-    const enc = device.createCommandEncoder({ label: 'frame' });
     const timer = this.gpuTimer;
-    const sampled = this.timingEvery > 0 && this.wantSample();
-    if (timer && sampled && timer.begin()) timer.mark(enc);
-    for (const fn of this.prePasses) fn(enc);
+    let enc = this.encoder;
+    if (!enc) {
+      enc = this.encoder = device.createCommandEncoder({ label: 'frame' });
+      this.sampled = this.timingEvery > 0 && this.wantSample();
+      if (timer && this.sampled && timer.begin()) timer.mark(enc);
+      for (const fn of this.prePasses) fn(enc);
+      for (const b of this.drawUniformSets) b.flushDrawUniforms();
+      this.drawUniformSets.length = 0;
+    }
+
+    const depth = this.buildDraws(camera);
     for (let i = 0; i < this.cmdCount; i++) {
       const d = this.cmds[i]!.drawable;
       if (d?.prepare && !this.prepared.has(d)) {
         this.prepared.add(d);
-        d.prepare(enc, this.frame);
+        d.prepare(enc, frame);
       }
     }
 
-    this.scenePassDesc.timestampWrites = timer?.pass('scene');
-    this.scenePassDesc.depthStencilAttachment = depth ? this.depthAttachment() : undefined;
-    const pass = enc.beginRenderPass(this.scenePassDesc);
-    pass.setBindGroup(0, this.globalsBindGroup);
+    // Instances of this view go after the previous views' in the shared buffer.
+    const base = this.instanceBase;
+    const uploadCount = this.uploadCount;
+    if (uploadCount > 0) {
+      const needed = uploadCount * INSTANCE_STRIDE;
+      if (base + needed > this.instanceBuffer.size) {
+        this.retired.push(this.instanceBuffer);
+        let cap = this.instanceData.length / INSTANCE_FLOATS;
+        while (cap * INSTANCE_STRIDE < base + needed) cap *= 2;
+        this.instanceBuffer = this.makeInstanceBuffer(cap);
+      }
+      device.queue.writeBuffer(this.instanceBuffer, base, this.uploadData.buffer, 0, needed);
+      this.instanceBase = base + needed;
+    }
+
+    // Viewport: camera.screen in target pixels (see the doc comment).
+    const vp = this.viewRect;
+    const sc = camera.screen;
+    const tw = target.width;
+    const th = target.height;
+    if (sc.x >= 0 && sc.y >= 0 && sc.x + sc.width <= 1 && sc.y + sc.height <= 1) {
+      vp.x = sc.x * tw;
+      vp.y = sc.y * th;
+      vp.width = sc.width * tw;
+      vp.height = sc.height * th;
+    } else {
+      const kx = tw / frame.logicalWidth;
+      const ky = th / frame.logicalHeight;
+      vp.x = sc.x * kx;
+      vp.y = sc.y * ky;
+      vp.width = sc.width * kx;
+      vp.height = sc.height * ky;
+    }
+    const full = vp.x === 0 && vp.y === 0 && vp.width === tw && vp.height === th;
+
+    const slot = this.viewSlot(this.viewCount);
+    this.writeView(frame, camera, target, slot, this.viewCount);
+    this.viewCount++;
+
+    // First view into this target clears it; later ones draw over.
+    let used = -1;
+    for (let i = 0; i < this.usedCount; i++) {
+      if (this.usedTargets[i] === target) {
+        used = i;
+        break;
+      }
+    }
+    const first = used < 0;
+    if (first) {
+      used = this.usedCount++;
+      this.usedTargets[used] = target;
+      this.usedDepth[used] = false;
+    }
+    target.colorAtt.clearValue = frame.clearColor;
+    target.colorAtt.loadOp = first ? 'clear' : 'load';
+    target.emissiveAtt.loadOp = first ? 'clear' : 'load';
+    const desc = target.passDesc;
+    desc.timestampWrites = timer?.pass('scene');
+    if (depth) {
+      const att = target.depthAttachment();
+      att.depthLoadOp = this.usedDepth[used] ? 'load' : 'clear';
+      this.usedDepth[used] = true;
+      desc.depthStencilAttachment = att;
+    } else {
+      desc.depthStencilAttachment = undefined;
+    }
+
+    const pass = enc.beginRenderPass(desc);
+    if (!full) {
+      pass.setViewport(vp.x, vp.y, vp.width, vp.height, 0, 1);
+      pass.setScissorRect(
+        Math.floor(vp.x),
+        Math.floor(vp.y),
+        Math.ceil(vp.width),
+        Math.ceil(vp.height),
+      );
+    }
+    pass.setBindGroup(0, slot.group);
     let curPipeline: GPURenderPipeline | null = null;
     let curMaterial: Material | null = null;
     let curOffset = -1;
@@ -719,13 +792,13 @@ export class Renderer implements FrameSink {
     for (let i = 0; i < this.cmdCount; i++) {
       const c = this.cmds[i]!;
       if (c.drawable) {
-        c.drawable.draw(pass, this.frame);
+        c.drawable.draw(pass, frame);
         drawables++;
         curPipeline = null;
         curMaterial = null;
         curOffset = -1;
         curMesh = null;
-        pass.setBindGroup(0, this.globalsBindGroup);
+        pass.setBindGroup(0, slot.group);
         continue;
       }
       const m = c.material!;
@@ -746,7 +819,7 @@ export class Renderer implements FrameSink {
       }
       if (mesh !== curMesh) {
         pass.setVertexBuffer(0, mesh.vertexBuffer);
-        pass.setVertexBuffer(1, this.instanceBuffer);
+        pass.setVertexBuffer(1, this.instanceBuffer, base);
         if (mesh.indexBuffer) pass.setIndexBuffer(mesh.indexBuffer, mesh.indexFormat);
         curMesh = mesh;
       }
@@ -758,22 +831,34 @@ export class Renderer implements FrameSink {
       drawCalls++;
     }
     pass.end();
-    this.stats.drawCalls = drawCalls;
-    this.stats.instances = uploadCount;
-    this.stats.drawables = drawables;
+    this.stats.drawCalls += drawCalls;
+    this.stats.instances += uploadCount;
+    this.stats.drawables += drawables;
+  }
+
+  /**
+   * Finish the frame: `render(frame, renderer.camera)` when nothing rendered yet, then the
+   * post stack (or the built-in present) from `renderer.target` to the swapchain, and submit.
+   */
+  endFrame(): void {
+    if (!this.inFrame) throw new Error('endFrame without beginFrame');
+    if (this.destroyed) {
+      this.inFrame = false;
+      return;
+    }
+    if (!this.encoder) this.render(this.frame, this.camera);
+    this.inFrame = false;
+    const enc = this.encoder!;
+    this.encoder = null;
+    const timer = this.gpuTimer;
+    const sampled = this.sampled;
 
     const out = this.context.getCurrentTexture().createView();
     if (this.post) {
-      this.post.encode(
-        enc,
-        {
-          color: this.sceneColor,
-          emissive: this.sceneEmissive,
-          time: this.frame.time,
-          dt: this.frame.dt,
-        },
-        out,
-      );
+      const inputs = this.postInputs;
+      inputs.time = this.frame.time;
+      inputs.dt = this.frame.dt;
+      this.post.encode(enc, inputs, out);
     } else {
       this.present.encode(enc, out, {
         bindGroup: this.presentGroup!,
@@ -781,7 +866,14 @@ export class Renderer implements FrameSink {
       });
     }
     timer?.resolve(enc);
-    device.queue.submit([enc.finish()]);
+    this.device.queue.submit([enc.finish()]);
+    this.viewCount = 0;
+    this.usedCount = 0;
+    this.instanceBase = 0;
+    if (this.retired.length > 0) {
+      for (const b of this.retired) b.destroy();
+      this.retired.length = 0;
+    }
     if (this.timingEvery > 0) {
       const now = performance.now();
       this.timing.cpuMs = now - this.frameStart;
@@ -811,11 +903,12 @@ export class Renderer implements FrameSink {
   destroy(): void {
     this.destroyed = true;
     this.gpuTimer?.destroy();
-    this.sceneColor?.destroy();
-    this.sceneEmissive?.destroy();
+    this.target.destroy();
     this.instanceBuffer.destroy();
-    this.depthTexture?.destroy();
-    this.globalsBuffer.destroy();
+    for (const b of this.retired) b.destroy();
+    this.retired.length = 0;
+    for (const v of this.views) v.buffer.destroy();
+    this.views.length = 0;
     this.quad.destroy();
     this.white.destroy();
   }
@@ -928,11 +1021,10 @@ export class Renderer implements FrameSink {
    * camera's mask are dropped. Without depth, draws sort by `order` then submission index;
    * when every `order` is already non-decreasing (the default) nothing moves and the instance
    * data uploads as recorded. With `camera.depthTest`, the keys are `order`, then opaque
-   * before blended, then view-space depth (opaque front-to-back, blended back-to-front),
-   * then submission index. Sets `uploadData` / `uploadCount`; returns whether depth is on.
+   * before blended, then depth (opaque front-to-back, blended back-to-front), then submission
+   * index. Sets `uploadData` / `uploadCount`; returns whether depth is on.
    */
-  private buildDraws(): boolean {
-    const cam = this.camera;
+  private buildDraws(cam: Camera): boolean {
     const camLayers = cam.layers >>> 0;
     const depth = cam.depthTest;
     const depthWrite = cam.depthWrite;
@@ -962,9 +1054,10 @@ export class Renderer implements FrameSink {
     }
     const idx = this.sortIdx;
     const src = this.instanceData;
-    // View-space depth (what the depth buffer compares) for both presets: ortho2d and
-    // perspective both look down -z in view space, so depth = -(view row 2 . world).
-    const v = depth ? cam.view : null;
+    // Clip-space z of the instance origin (row 2 of view_proj, before the w divide): what the
+    // depth buffer compares, up to a monotonic map, for any projection (ortho2d looks down +z,
+    // perspective down -z).
+    const v = depth ? cam.viewProjection : null;
     let k = 0;
     for (let i = 0; i < n; i++) {
       const r = recs[i]!;
@@ -982,7 +1075,7 @@ export class Renderer implements FrameSink {
       const x = src[o + 3]!;
       const y = src[o + 7]!;
       const z = src[o + 11]!;
-      r.dist = -(v![2]! * x + v![6]! * y + v![10]! * z + v![14]!);
+      r.dist = v![2]! * x + v![6]! * y + v![10]! * z + v![14]!;
     }
     this.sortDepth = depth;
     if (depth || !this.ordered) this.sortDraws(k);
@@ -1085,21 +1178,6 @@ export class Renderer implements FrameSink {
     }
   }
 
-  /** The scene pass depth attachment, allocated at scene size on first use. */
-  private depthAttachment(): GPURenderPassDepthStencilAttachment {
-    if (!this.depthTexture) {
-      this.depthTexture = new Texture(this.device, {
-        width: this.width,
-        height: this.height,
-        format: DEPTH_FORMAT,
-        usage: GPUTextureUsage.RENDER_ATTACHMENT,
-        label: 'scene-depth',
-      });
-      this.depthAtt.view = this.depthTexture.view;
-    }
-    return this.depthAtt;
-  }
-
   // ---------------------------------------------------------------- internals
 
   private nextCmd(): DrawCmd {
@@ -1131,18 +1209,49 @@ export class Renderer implements FrameSink {
     });
   }
 
-  private writeGlobals(): void {
+  /** The engine uniform slot for view `i` of a frame, made on first use (slot 0 at startup). */
+  private viewSlot(i: number): ViewSlot {
+    let slot = this.views[i];
+    if (slot) return slot;
+    const device = this.device;
+    const suffix = i === 0 ? '' : `-${i}`;
+    const buffer = device.createBuffer({
+      label: `engine-globals${suffix}`,
+      size: ENGINE_UNIFORM_FLOATS * 4,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    const group = device.createBindGroup({
+      label: `engine-globals-group${suffix}`,
+      layout: this.globalsLayout,
+      entries: [
+        { binding: 0, resource: { buffer, size: GLOBALS_FLOATS * 4 } },
+        {
+          binding: 1,
+          resource: { buffer, offset: CAMERA_OFFSET_FLOATS * 4, size: CAMERA_BLOCK_FLOATS * 4 },
+        },
+      ],
+    });
+    slot = { buffer, group };
+    this.views[i] = slot;
+    return slot;
+  }
+
+  /** Upload the globals and camera block of one view (`viewRect` holds its viewport). */
+  private writeView(
+    frame: Frame,
+    camera: Camera,
+    target: SceneTarget,
+    slot: ViewSlot,
+    viewIndex: number,
+  ): void {
     const g = this.globalsData;
     g[0] = this.logicalWidth;
     g[1] = this.logicalHeight;
-    g[2] = this.width;
-    g[3] = this.height;
-    g[4] = this.frame.time;
-    g[5] = this.frame.dt;
-    const vp = this.cameraViewport;
-    vp.width = this.width;
-    vp.height = this.height;
-    this.camera.writeBlock(g, this.globalsU32, CAMERA_OFFSET_FLOATS, vp, 0);
-    this.device.queue.writeBuffer(this.globalsBuffer, 0, g);
+    g[2] = target.width;
+    g[3] = target.height;
+    g[4] = frame.time;
+    g[5] = frame.dt;
+    camera.writeBlock(g, this.globalsU32, CAMERA_OFFSET_FLOATS, this.viewRect, viewIndex);
+    this.device.queue.writeBuffer(slot.buffer, 0, g);
   }
 }

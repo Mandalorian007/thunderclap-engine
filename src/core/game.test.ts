@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 /**
  * createGame wiring on a fake GPU device: lifecycle (hide flushes and stops, show resumes),
- * device loss (halt for good), hook order in a frame, fill bands and the modal input block.
+ * device loss (halt for good), hook order in a frame, the host's frames, the pointer router
+ * and the modal input block.
  * The real-browser checks are in e2e/lifecycle.spec.ts and e2e/surface.spec.ts.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -38,7 +39,6 @@ function options(log: string[]): CreateGameOptions<'go', Save> {
     root: document.getElementById('root') as HTMLElement,
     save: () => ({ flush: () => log.push('flush') }),
     input: { bindings: { go: [{ key: 'Space' }] } },
-    fillBands: { wide: { minVisible: 700, focusY: 540 } },
   };
 }
 
@@ -54,13 +54,10 @@ beforeEach(() => {
   document.body.innerHTML = '<main id="root"></main>';
   bootOk = true;
   lost.clear();
-  vi.stubGlobal('requestAnimationFrame', () => 1);
-  vi.stubGlobal('cancelAnimationFrame', () => {});
 });
 
 afterEach(() => {
   setHidden(false);
-  vi.unstubAllGlobals();
 });
 
 describe('createGame', () => {
@@ -201,18 +198,52 @@ describe('createGame', () => {
     expect(ctx.loop.time.step).toBeCloseTo(1 / 30);
   });
 
-  it('fill bands apply only on a phone-sized letterbox', async () => {
+  it('the loop takes its frames from the host, never from the globals', async () => {
+    const { createWebHost } = await import('../host');
+    const calls: string[] = [];
+    const host = {
+      ...createWebHost(),
+      requestFrame: (_cb: (t: number) => void) => {
+        calls.push('request');
+        return 3;
+      },
+      cancelFrame: (h: number) => calls.push(`cancel ${h}`),
+    };
+    const raf = vi.fn(() => 1);
+    vi.stubGlobal('requestAnimationFrame', raf);
+    try {
+      const ctx = await createGame({ ...options([]), host });
+      if (!ctx) throw new Error('no ctx');
+      expect(ctx.host).toBe(host);
+      ctx.loop.start();
+      ctx.loop.stop();
+      expect(calls).toEqual(['request', 'cancel 3']);
+      expect(raf).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('wires a pointer router through the renderer camera and the input', async () => {
     const ctx = await createGame(options([]));
     if (!ctx) throw new Error('no ctx');
-    const setFill = vi.spyOn(ctx.surface, 'setFill');
-    ctx.surface.fitRect = { ...ctx.surface.fitRect, scale: 0.4 };
-    ctx.setFill('wide');
-    expect(setFill).toHaveBeenLastCalledWith({ minVisible: 700, focusY: 540 });
-    ctx.setFill('other');
-    expect(setFill).toHaveBeenLastCalledWith(null);
-    ctx.surface.fitRect = { ...ctx.surface.fitRect, scale: 0.9 };
-    ctx.setFill('wide');
-    expect(setFill).toHaveBeenLastCalledWith(null);
+    expect(ctx.input.getPointers()).toBe(ctx.pointers);
+    const hits: number[] = [];
+    ctx.pointers.addTester(() => {
+      hits.push(1);
+      return null;
+    });
+    // A pointer over the canvas is routed each update, through the camera the renderer draws with.
+    ctx.surface.canvas.dispatchEvent(
+      new PointerEvent('pointermove', { pointerId: 1, clientX: 10, clientY: 10, bubbles: true }),
+    );
+    ctx.input.update();
+    expect(hits.length).toBeGreaterThan(0);
+    // Blocked under a modal, like the rest of the input.
+    hits.length = 0;
+    ctx.ui.stack.push({ title: 'Modal', content: document.createElement('p') });
+    ctx.input.update();
+    expect(hits).toEqual([]);
   });
 
   it('input is blocked while a modal panel is open', async () => {
