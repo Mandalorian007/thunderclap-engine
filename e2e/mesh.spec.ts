@@ -214,7 +214,8 @@ test('the right stick orbits and the triggers zoom', async ({ page, wrapper }) =
 });
 
 test('the wheel zooms', async ({ page, wrapper }) => {
-  test.skip(touch, 'no wheel on a touch row');
+  // From the project, not `touch`: `open` has not set it yet for this test.
+  test.skip(test.info().project.use.hasTouch === true, 'no wheel on a touch row');
   await open(page, wrapper);
   const before = await read();
   const box = await canvasBox();

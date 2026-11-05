@@ -11,6 +11,8 @@
  * - `magnify` is on over a grid of small cells drawn on a canvas in the stage (GRID, game
  *   space): cell (3, 2) is refused, so aiming at it snaps to a neighbour. Each tick's aim is
  *   logged, and whether the loupe element is shown.
+ * - The gesture clock can be pinned (`setClock`), so the spec decides how long a press lasts
+ *   instead of the wall clock under load.
  */
 import { Gestures, Input, snapToGrid } from '@thunderclap/engine/input';
 import { computeLetterbox } from '@thunderclap/engine/platform';
@@ -54,7 +56,10 @@ const state: HarnessGesturesState = {
 };
 
 let blocked = false;
+/** The gesture clock: `performance.now()` until the spec pins it with `setClock`. */
+let clockMs: number | null = null;
 const gestures = new Gestures({
+  now: () => clockMs ?? performance.now(),
   magnify: {
     pitch: () => GRID.pitch * state.rect.scale,
     source: canvas,
@@ -151,6 +156,9 @@ const api: HarnessGesturesApi = {
   state,
   setBlocked(b) {
     blocked = b;
+  },
+  setClock(ms) {
+    clockMs = ms;
   },
   clear() {
     state.log = [];
