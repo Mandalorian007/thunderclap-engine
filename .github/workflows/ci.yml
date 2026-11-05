@@ -58,3 +58,41 @@ jobs:
             playwright-report/
             test-results/
           retention-days: 7
+
+  desktop:
+    # Unsigned desktop builds of the harness shell (packages/host-electron), one per OS.
+    # Non-blocking. Build-time downloads only (Electron, packaging tools); no signing material.
+    name: desktop build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: --linux
+          - os: macos-latest
+            target: --mac
+          - os: windows-latest
+            target: --win
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm desktop:build ${{ matrix.target }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-${{ matrix.os }}
+          path: |
+            dist/desktop/*.dmg
+            dist/desktop/*.zip
+            dist/desktop/*.exe
+            dist/desktop/*.AppImage
+            dist/desktop/*.tar.gz
+          if-no-files-found: error
+          retention-days: 14

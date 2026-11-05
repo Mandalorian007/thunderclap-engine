@@ -1,0 +1,3 @@
+# The engine stays the root package; sub-packages live under packages/.
+packages:
+  - packages/*

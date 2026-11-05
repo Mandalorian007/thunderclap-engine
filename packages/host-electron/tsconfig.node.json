@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["@webgpu/types", "node"]
+  },
+  "include": [
+    "src/bridge.ts",
+    "src/main",
+    "src/preload",
+    "e2e",
+    "harness/state.ts",
+    "playwright.config.ts",
+    "vitest.config.ts"
+  ]
+}

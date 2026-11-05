@@ -135,6 +135,8 @@ Import only from the public entry points listed under [Modules](#modules). Anyth
 | `@thunderclap/engine/host` | `Host` interface, `createWebHost()` (top-level page or iframe): links, clipboard, fullscreen, storage ([README](src/host/README.md)) |
 | `@thunderclap/engine/testing` | A recording fake `GPUDevice` for unit tests |
 
+**Packages.** `packages/host-electron` (`@thunderclap/host-electron`) is the Electron desktop host: a sandboxed shell, a preload bridge and `createElectronHost()`. It lives in this repo as a pnpm workspace package and the engine never imports it. Run `pnpm desktop:dev`, `pnpm desktop:build` or `pnpm test:e2e:desktop` ([README](packages/host-electron/README.md)).
+
 [ARCHITECTURE.md](ARCHITECTURE.md) has the contracts for each one: what exists today and what is planned.
 
 ## How a frame runs
@@ -193,7 +195,6 @@ Next up:
 - **One CSS-px overlay** on every form factor, replacing the legacy scaled one.
 - **A matrix `Camera`** with `worldToScreen`/`screenToWorld` that frames the world into the space the UI leaves.
 - **`render(camera, target, alpha)`**, with frame scheduling owned by the host.
-- **The Electron desktop host** (`@thunderclap/host-electron`) joining this repo.
 - **Publishing** `engine-v1.0.0`.
 
 ## Built with ThunderClap

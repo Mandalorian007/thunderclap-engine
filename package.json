@@ -39,12 +39,16 @@
     "lint": "biome check .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "pnpm typecheck && pnpm lint && pnpm check:boundaries && pnpm test",
+    "check": "pnpm typecheck && pnpm lint && pnpm check:boundaries && pnpm test && pnpm check:host-electron",
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "release": "node scripts/release.mjs",
     "test:e2e": "playwright test",
     "harness": "vite --config vite.harness.config.ts --host 127.0.0.1",
-    "example": "vite examples/hello --host 127.0.0.1"
+    "example": "vite examples/hello --host 127.0.0.1",
+    "check:host-electron": "pnpm --filter @thunderclap/host-electron check",
+    "desktop:dev": "pnpm --filter @thunderclap/host-electron dev",
+    "desktop:build": "pnpm --filter @thunderclap/host-electron dist",
+    "test:e2e:desktop": "pnpm --filter @thunderclap/host-electron test:e2e"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.4",
