@@ -164,7 +164,7 @@ renderer.endFrame()
 ## Testing
 
 ```sh
-pnpm check       # typecheck + Biome lint + import boundaries + Vitest unit tests (466 tests in 38 files)
+pnpm check       # typecheck + Biome lint + import boundaries + README coverage (check:docs) + Vitest unit tests (480 tests in 39 files)
 pnpm test:e2e    # Playwright e2e against the harness pages, on a device matrix
 pnpm harness     # serve the harness pages yourself
 ```

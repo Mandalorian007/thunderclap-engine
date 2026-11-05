@@ -1,7 +1,7 @@
 # engine/render
 
-A raw WebGPU 2D renderer: HDR scene targets, instanced quads and meshes, and materials that
-take custom WGSL. It has no runtime dependencies.
+A raw WebGPU renderer for 2D and 3D: HDR scene targets, instanced quads and meshes, depth,
+lights, and materials that take custom WGSL. It has no runtime dependencies.
 
 ## Frame model
 
@@ -38,6 +38,8 @@ renderer.endFrame();
   `renderer.createSceneTarget({ width, height, label? })` makes an offscreen one (a portal, a
   minimap) whose `color` and `emissive` are sampleable `Texture`s. `target.depth` exists once
   a depth camera has rendered into it.
+  `SceneTargetDesc` is `{ width, height, label? }`; both colour targets use `SCENE_FORMAT`
+  (`rgba16float`).
 
 - **Logical space** is 1920×1080 by default, with the origin at top-left and y pointing down.
   `renderer.camera` is a matrix `Camera` (`Camera.ortho2d(1920, 1080)` by default); its
@@ -74,6 +76,13 @@ renderer.post = new PostStack(renderer);
 res.surface.onResize(({ backbuffer }) => renderer.resize(backbuffer.width, backbuffer.height));
 ```
 
+- `new Renderer(gpu: RendererGpu, opts?: RendererOptions)`. `RendererGpu` is `{ device, context,
+  format }` (what `boot` returns as `res.gpu`); `RendererOptions` has `logicalWidth` and
+  `logicalHeight` (1920×1080) and `initialInstances` (4096, doubles when full).
+- `renderer.post` takes any `PostProcessor`: `resize(width, height)` and `encode(encoder, inputs,
+  output)`, where `PostInputs` is `{ color, emissive, time, dt }`. `PostStack` is the engine's;
+  a game writes its own only to replace the whole final stage.
+
 ## Drawing
 
 ```ts
@@ -107,6 +116,13 @@ A `Transform` has position xyz, a rotation (`rotation` about Z for 2D, or
 `setQuaternion` / `setAxisAngle` for 3D), scale xyz and an optional parent. Its `world` is a
 cached 3×4 row-major matrix that recomputes only when it or an ancestor changed. The quad
 spans -0.5..0.5, so a transform's scale is the sprite's size.
+`transform.position`, `scale` (`ReadonlyVec3`) and `quaternion` (`ReadonlyQuat`) are
+read-only views; set them through the transform's setters.
+
+The matrix helpers behind it, for a drawable that writes its own instances:
+`writeMatrix2d(out, o, x, y, w, h, rotation)` writes a 2D draw's 3×4 matrix (what
+`frame.sprite(material, params)` builds), `multiplyMatrix3x4(out, a, b)` composes two affine
+matrices, and `MATRIX3X4_FLOATS` (12) is the size of one. None of them allocates.
 
 ### Instance format (28 floats, 112 bytes)
 
@@ -122,6 +138,9 @@ spans -0.5..0.5, so a transform's scale is the sprite's size.
 needs no change; one that read the old 20-float fields (`v.xform`, the old `v.misc`, or the
 old locations of `uvRect`/`tint`/`params`) must switch to `engine_world_position(v)` or the
 matrix rows.
+`INSTANCE_FLOATS` (28) and `INSTANCE_STRIDE` (112) size one instance, and
+`INSTANCE_BUFFER_LAYOUT` is its vertex buffer layout (locations 3..9, step mode instance), for
+a `Drawable` that builds its own pipeline over the shared instance format.
 
 ## Camera
 
@@ -154,6 +173,10 @@ renderer.render(frame, eye);                              // or renderer.camera 
 - A 2D game frames the space the UI leaves (`ui.layout.freeRect`, CSS px) with
   `cam.fitRect(worldRect, viewportInLogicalPx)`; convert the rect's corners with
   `surface.clientToLogical`.
+- `CameraRect` (`x`, `y`, `width`, `height`, y down) is the type of `screen` and of the
+  `fitRect`/`fitFreeRect` arguments; `CameraPoint` (`x`, `y`, `z`) is what `worldToScreen` and
+  `screenToWorld` fill. `ALL_LAYERS` (`0xffffffff`) is the default `layers` mask.
+  `CAMERA_BLOCK_FLOATS` (64, 256 bytes) is the size of the WGSL `EngineCamera` block.
 
 ## Lighting
 
@@ -193,6 +216,8 @@ layout (`LIGHTS_BLOCK_FLOATS` = 140 floats; `POINT_LIGHTS_OFFSET_FLOATS`, `POINT
 and allocates nothing; `lights.reset()` returns to the unlit default. Drawables that want the
 block add `WGSL_LIGHTS` to their shader; `renderer.globalsLayout` already has binding 2.
 Shadows are not part of the block yet.
+`lights.sun` is a `DirectionalLight`: `dir` (the direction the light travels, any length) and
+`color` (linear RGB; all zero means no sun).
 
 ## Custom materials
 
@@ -204,7 +229,7 @@ engine prepends a prelude that provides:
   px) and `view_index` (from `camera.viewIndex`) at `@group(0) @binding(1)`
 - `lights`: `ambient`, `point_count`, `sun_dir`, `sun_color` and `points[16]` (`position`,
   `radius`, `color`) at `@group(0) @binding(2)`, with `engine_lambert(normal, world_pos)` and
-  `engine_point_lights(normal, world_pos)`. See "Lighting" below.
+  `engine_point_lights(normal, world_pos)`. See "Lighting" above.
 - noise helpers: `engine_hash21`, `engine_hash22`, `engine_noise`, `engine_fbm(p, octaves)`,
   `engine_luma`
 - `VSOut { clip, uv, local, color, params, world, emissive, size, normal, worldPos }`, where
@@ -244,6 +269,23 @@ orb.setTexture(0, someTexture);                   // bind group rebuilt lazily, 
 A material can also override the vertex stage with `vertexEntry`. Use `engine_vertex(v)`
 inside it to keep the standard transform.
 
+- `renderer.createMaterial(desc: MaterialDesc)` returns a `Material`. `MaterialDesc` takes
+  `label`, `wgsl`, `blend` (`BlendMode`: `alpha`, `premultiplied`, `additive`, `opaque`),
+  `uniformBytes`, `textures`, `sampler` (`SamplerKind`: `linear-clamp`, `linear-repeat`,
+  `nearest-clamp`), `perDrawUniforms`, `vertexEntry` and `fragmentEntry`.
+- `material.pipelineFor(layout, depth)` returns the pipeline for a `VertexLayout` and a
+  `DepthMode` (0 = no depth attachment, the 2D path; 1 = test without writes, for blended draws;
+  2 = test and write, for opaque draws). Depth pipelines use `DEPTH_FORMAT` (`depth24plus`).
+- `SPRITE_WGSL` is the built-in sprite fragment (`texture × vertex colour × tint`), the shader
+  behind `createSpriteMaterial`.
+- The WGSL pieces, for a `Drawable` that compiles its own shader against the engine's bindings:
+  `WGSL_GLOBALS` (the `globals` and `camera` blocks), `WGSL_LIGHTS`, `WGSL_NOISE` (the
+  `engine_hash*`/`engine_noise`/`engine_fbm`/`engine_luma` helpers), `materialPrelude(layout)`
+  (the whole prelude for a vertex layout) and `WGSL_MATERIAL_PRELUDE` (the 2D layout's).
+- `blendState(mode)` maps a `BlendMode` to its `GPUBlendState` (`undefined` for opaque) and
+  `createSamplers(device)` builds the three `SamplerKind` samplers, so a hand-built pipeline
+  blends and samples the way materials do.
+
 ### Per-draw uniforms
 
 Set `perDrawUniforms: true` so one material can draw many objects with different uniforms in
@@ -270,17 +312,21 @@ textures every frame, as ping-pong does, builds no new bind groups after the fir
 
 ## Textures
 
-- `renderer.createTexture(desc)` and `renderer.createRenderTarget(desc)`
-- `renderer.textureFromSource(ImageBitmap | ImageData | OffscreenCanvas | HTMLCanvasElement, label?, { linear? })`
+- `renderer.createTexture(desc)` and `renderer.createRenderTarget(desc)`, where `TextureDesc` is
+  `{ width, height, format?, usage?, label? }`. Anything with a `view`, `width` and `height`
+  (`TextureLike`) can be bound with `setTexture`.
+- `renderer.textureFromSource(source: TextureSource, label?, { linear? })` (`ImageBitmap`,
+  `ImageData`, `HTMLCanvasElement`, `OffscreenCanvas` or `HTMLImageElement`)
   uploads colour as `rgba8unorm-srgb`. Pass `{ linear: true }` for data such as masks, height
   or normal maps, or noise, so the bytes are sampled exactly as written (`rgba8unorm`).
 - `renderer.textureFromPixels({ width, height, data, format?, label?, usage? })` uploads raw
   typed pixels. It defaults to linear `rgba8unorm` and also takes `r8unorm`, `rg8unorm`,
   `r16float`, `rgba16float`, `r32float`, `rgba32float` and others; `bytesPerTexel(format)`
-  lists them. `renderer.writePixels(tex, data)` refreshes it later and checks the size.
+  lists them. `data` is `PixelData` (`Uint8Array`, `Uint8ClampedArray`, `Uint16Array` or
+  `Float32Array`). `renderer.writePixels(tex, data)` refreshes it later and checks the size.
 - `renderer.createPingPong({ width, height, format?, label? })` returns two same-size render
-  targets for feedback effects such as fluid sims or trails. The format defaults to
-  `rgba16float`. Each `pp.step(encoder, pass, { slot?, clear? })` reads `pp.read` in texture
+  targets (a `PingPong`) for feedback effects such as fluid sims or trails. The format defaults to
+  `rgba16float`. Each `pp.step(encoder, pass, opts?: PingPongStepOptions)` (`{ slot?, clear? }`) reads `pp.read` in texture
   `slot` (default 0), writes `pp.write`, then swaps. Run it inside a `frame.prePass` and then
   call `material.setTexture(0, pp.read)` to show the newest state. `pp.resize(w, h)` and
   `pp.destroy()` handle the rest. It replaces hand-rolled A/B plus `copyTextureToTexture`.
@@ -293,28 +339,47 @@ textures every frame, as ping-pong does, builds no new bind groups after the fir
 
 ## Lower-level pieces
 
-- `renderer.createFullscreenPass({ label, wgsl, targets, blend, uniformBytes, textures })` is
-  the building block for post effects. It uses `vs_fullscreen` with `FullscreenIn { pos, uv }`.
-- `renderer.createMesh({ vertices?, indices?, layout?, capacity?, indexFormat? })`. With the
+- `renderer.createFullscreenPass(desc: FullscreenPassDesc)` (`label`, `wgsl`, `targets`,
+  `blend`, `fragmentEntry`, `uniformBytes`, `textures`, `sampler`) returns a `FullscreenPass`,
+  the building block for post effects. Its WGSL follows `WGSL_FULLSCREEN_PRELUDE`:
+  `vs_fullscreen` with `FullscreenIn { pos, uv }`. `pass.encode(encoder, view, opts?:
+  FullscreenEncodeOptions)` takes `clear` (`null` loads), an explicit `bindGroup`,
+  `blendConstant` and `timestampWrites`; `setUniforms`, `setTexture`, `createBindGroup` and
+  `destroy` as on a material.
+- `BindingSet(device, desc: BindingDesc, sampler, defaultView, label, opts?: BindingSetOptions)` is the uniform buffer, sampler
+  and textures behind every material and fullscreen pass (`BindingDesc`: `uniformBytes`,
+  `textures`, `sampler`, `visibility`; `BindingSetOptions.perDraw` for per-draw blocks). It
+  rebuilds its bind group lazily and caches the last few texture sets.
+- `renderer.createMesh(desc: MeshDesc)` returns a `Mesh` (`MeshDesc`: `vertices?`, `indices?`,
+  `layout?`, `capacity?`, `indexFormat?`, `label?`). With the
   default `VERTEX_LAYOUT_2D` a vertex is `pos.xy, uv.xy, color.rgba` (8 floats); with
   `VERTEX_LAYOUT_3D` it is `pos.xyz, normal.xyz, uv.xy, color.rgba` (12 floats, normal at
-  `@location(10)`). A material builds one pipeline per (vertex layout, depth mode) on first
+  `@location(10)`). A `VertexLayout` is the buffer layout plus the WGSL that reads it;
+  layouts compare by identity. `VERTEX_FLOATS`/`VERTEX_STRIDE` (8, 32 B) and
+  `VERTEX3D_FLOATS`/`VERTEX3D_STRIDE` (12, 48 B) size a vertex, and `VERTEX_BUFFER_LAYOUT` and
+  `VERTEX3D_BUFFER_LAYOUT` are the two `GPUVertexBufferLayout`s. `quadGeometry()` returns the
+  unit quad (-0.5..0.5, white) as `{ vertices, indices }`. A material builds one pipeline per (vertex layout, depth mode) on first
   use (`material.pipelineFor(layout, depth)`).
 - Dynamic meshes: `capacity: { vertices, indices }` reserves room (a mesh may start empty, with
-  just a capacity); `mesh.capacity` reads it. `mesh.update({ vertices?, indices?, vertexCount?,
-  indexCount? })` takes any `ArrayBufferView`s and writes them with `queue.writeBuffer` straight
+  just a capacity); `mesh.capacity` (a `MeshCapacity`) reads it. `mesh.update(u: MeshUpdate)`
+  (`{ vertices?, indices?, vertexCount?, indexCount? }`) takes any `ArrayBufferView`s and writes them with `queue.writeBuffer` straight
   from their own `buffer`/`byteOffset`, so a Worker can build a chunk into one `ArrayBuffer`,
   transfer it, and the page uploads it with no copy (see `harness/stream.ts`). Buffers are
   reused while the counts fit the capacity and grow 1.5× only when they do not or the index
   format changes; `update` returns true then and `mesh.growths` counts it. Counts alone
   (`{ indexCount: n }`) move the draw range, so a chunk shrinks without touching the GPU.
-  Typed `Uint16Array`/`Uint32Array` views set the index format; other views keep it. Set both
-  counts to 0 for an empty mesh (an indexed mesh with `indexCount` 0 falls back to a
-  non-indexed draw of `vertexCount`).
+  Typed `Uint16Array`/`Uint32Array` views set the index format; other views keep it. An
+  indexed mesh with `indexCount` 0 draws nothing (an empty streamed chunk); a non-indexed mesh
+  draws `vertexCount`.
 - `Drawable { prepare?(encoder, frame); draw(pass, frame) }` lets you run your own pipelines
   inside the scene pass. Build them with `layout: [renderer.globalsLayout, yours]` and
   `targets: renderer.sceneFormats`.
 - `frame.prePass(fn)` runs before the scene pass, for things like render-to-texture.
+- `SnapshotRenderer(device, format, opts: SnapshotOptions)` is a second `Renderer` on the same
+  device that draws one frame into an `OffscreenCanvas`: `shot.capture(draw, time?)` returns an
+  `ImageBitmap` for baking icons, thumbnails and previews with real materials. `SnapshotOptions`
+  is `{ width, height }`, which is also its logical size. Its materials belong to
+  `shot.renderer`.
 - `ParticleSystem.clear()` (in `engine/fx`) drops every live particle and any emits queued
   this frame. The particle buffer is zeroed on the GPU in the next `prepare`, so nothing
   allocates. Particles emitted after `clear()` in the same frame survive.
@@ -323,6 +388,13 @@ textures every frame, as ping-pong does, builds no new bind groups after the fir
   usage flags such as COPY_DST, catches writes past the end of a buffer, and records pass
   commands such as `setBindGroup` offsets and draws. That means `new Renderer(...)` and the
   props run in Node. It is test-only and not exported from the index.
+  `installGpuGlobals()` defines `GPUBufferUsage`, `GPUTextureUsage` and `GPUShaderStage` in Node;
+  `fakeCanvasContext(fake)` is the context `fakeRendererGpu` uses. What a test inspects on a
+  `FakeDevice`: `buffers` (`FakeBuffer`: `size`, `usage`, `destroyed`), `textures`
+  (`FakeTexture`, whose views are `FakeView`s), `bindGroups` (`FakeBindGroup`: layout and
+  entries), `writes`, `textureWrites`, `passes` (`FakePass`: `kind`, `label`, `commands`) and
+  `errors`. A `PassCommand` is one recorded `setPipeline`, `setBindGroup`, `draw`, `drawIndexed`,
+  `dispatch` or other call.
 
 ## Diagnostics
 
@@ -330,8 +402,10 @@ textures every frame, as ping-pong does, builds no new bind groups after the fir
   the problem.
 - `installGpuErrorLogging(device)` loudly logs `uncapturederror` events. The errors also
   collect in `gpuDiagnostics.errors` and `gpuDiagnostics.errorCount`, which headless tests
-  can check.
-- `renderer.stats` reports `{ drawCalls, instances, drawables }` for the last frame.
+  can check. `onGpuError(fn)` subscribes to them (a dev toast; returns the unsubscribe), and
+  `reportGpuError(message)` logs and records one (`createShaderModule` reports compile errors
+  through it; a game can report its own GPU failures the same way).
+- `renderer.stats` (`RenderStats`) reports `{ drawCalls, instances, drawables }` for the last frame.
 
 ## Resolution and timing
 
@@ -345,14 +419,22 @@ renderer.setResolution({ scale: 0.8 });            // extra scale on top (0.25..
 renderer.resolutionScale;                          // scene width / output width
 ```
 
+- `ResolutionOptions` is `{ scale?, maxPixels? }`; `scale` is clamped to
+  `MIN_RESOLUTION_SCALE` (0.25)..1.
 - `sceneSize(outW, outH, opts)` is the pure helper behind it (even sizes, full size when the
   scale rounds to 1). `onResize` listeners get the **scene** size.
 - `renderer.timingEvery = N` samples GPU time every N frames, measured from submit to
   `queue.onSubmittedWorkDone()` (no timestamp-query feature needed; one sample in flight).
-  Subscribe with `renderer.onGpuTime(ms => ...)`; `renderer.timing` holds the last value.
-  Off (0) by default.
+  Subscribe with `renderer.onGpuTime(ms => ...)`; `renderer.timing` (`FrameTiming`: `gpuMs`,
+  `source`, `passes`, `cpuMs`, `samples`) holds the last value. Off (0) by default.
+- When the device has `timestamp-query` (`supportsTimestamps(device)`), `renderer.gpuTimer` is a
+  `GpuTimer` and samples come from timestamps (`source: 'timestamp'`) with a per-pass breakdown
+  (`GpuPassTimes`, label to ms); passes label themselves with `gpuTimer.pass(label)`. Its
+  `onResult` listeners get a `GpuTimerResult` (`totalMs`, `passes`, `samples`). Without the
+  feature `gpuTimer` is null and timing falls back to the queue.
 - `DynamicResolution` turns GPU-time samples into a scale. It drops after 1 s over budget
   (smoothed), raises only after 3 s with the predicted cost under 85% of budget, waits
   1.5 s after any change, and blocks a level for 20 s when raising to it was followed by a
   drop. That stops it pumping at the edge. `saturated` says it is at the floor and still
-  over budget.
+  over budget. `DynamicResolutionOptions`: `budgetMs` (14), `minScale` (0.5), `maxScale` (1),
+  `step` (0.1), `dropAfterMs`, `raiseAfterMs`, `raiseMargin`, `cooldownMs`, `burnMs`, `smoothing`.

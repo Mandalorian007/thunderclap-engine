@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-// Doc-coverage check (docs/PM.md, "Docs"). Run by `pnpm check:docs`; not yet part of `pnpm check`.
+// Doc-coverage check (docs/PM.md, "Docs"). Run by `pnpm check:docs`, which `pnpm check` runs.
 //
 // For every entry of package.json "exports" that points into src/, every name the entry file
 // exports must appear (as a whole word) in that module's README: src/<module>/README.md, or the
 // root README.md for the "." entry. A missing README counts every export as missing.
 //
-// Exit 1 and print each subpath with its README and the names it does not mention. Node built-ins only.
+// On failure: exit 1 and print only the list (each subpath, its README and the names it does not
+// mention, then a count). On success: print nothing. Node built-ins only.
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -60,4 +61,3 @@ if (failures > 0) {
   console.log(`check-docs: ${failures} exported name(s) missing from module READMEs`);
   process.exit(1);
 }
-console.log('check-docs: every exported name appears in its module README');

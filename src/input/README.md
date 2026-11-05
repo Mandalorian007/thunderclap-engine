@@ -28,6 +28,18 @@ const { x, y, inside, down, dx, dy, wheelY } = input.pointer;   // game space
 
 `Binding` kinds: `{ key: code }` (`KeyboardEvent.code`, layout independent), `{ mouse: button }` (0 is also touch/pen contact), `{ wheel: 1 | -1 }`, `{ padButton, pad?, threshold? }` (standard mapping), `{ padAxis, dir, pad?, threshold? }` (analog `value()`).
 
+Types a game names when it wraps or configures `Input`:
+
+- `Bindings<A>`: the map from each action name to its `Binding` list, passed to `new Input` and `setBindings`.
+- `InputOptions`: `getGamepads`, `blocked`, `globalKeys`, `buttonKeys`, `queueTaps`, and the `gestures` and `pointers` to link.
+- `AttachOptions`: `pointerTarget`, `keyTarget` (default the target's window), `disableTouchScroll` (default true).
+- `ActionState`: one action's `pressed`, `held`, `released`, `value` (0..1) and `heldTicks`.
+- `PointerState`: `input.pointer`: `x`, `y`, `dx`, `dy`, `inside`, `down`, `wheelX`, `wheelY` and `type` (`mouse | touch | pen`).
+- `PointerTransform`: `(clientX, clientY) => { x, y } | null`, client CSS px to game space; `null` means outside the game rect.
+- `InputDevice`: the `lastDevice` union, `keyboard | mouse | touch | pen | gamepad`.
+- `GamepadLike`: the slice of `Gamepad` the engine reads (`connected`, `buttons`, `axes`), for a fake `getGamepads` in tests.
+- `PointerButton` (`select | secondary`), `XrButton` (`trigger | squeeze | pinch`) and `GestureKind` (`tap | doubleTap | longPress | pan | drag | pinch`): what `{ pointer }`, `{ xr }` and `{ gesture }` bindings can name.
+
 ## Semantics
 - `pressed` is true for exactly one `update()` when an action becomes active; `released` for one `update()` after it stops. `held` while active. `heldTicks` counts ticks.
 - A tap that goes down and up between two ticks still produces `pressed` (and `held`) for one tick and `released` on the next.
@@ -42,6 +54,7 @@ const { x, y, inside, down, dx, dy, wheelY } = input.pointer;   // game space
 - Only **bound** keys are `preventDefault`ed, and only when no Ctrl/Meta/Alt is held, the event target isn't a text field/button/link, input isn't blocked, and the document has focus. Browser shortcuts and the parent page keep working.
 - Keys typed on a focused button, link or other control are ignored, so Space and Enter activate the control rather than the game. The exception is **global keys**: `new Input(b, { globalKeys: ['KeyC', 'KeyO'] })` or `input.setGlobalKeys([...])`. These still register on buttons, links and checkboxes, so HUD shortcuts keep working after a HUD button is clicked. The control keeps its default action, since global keys are never `preventDefault`ed there. They never register in text entry (`isTextEntryTarget`: text inputs, textarea, select, contenteditable, `role=textbox|searchbox|combobox`).
 - **Button keys** (`buttonKeys: ['Escape', 'ArrowLeft', ...]` or `input.setButtonKeys`) are a narrower version of global keys. They register only while a plain button or link has focus (`isButtonTarget`: `button`, `a`, `summary`, button-type inputs, `role=button|link|menuitem`), so a clicked button doesn't swallow Back or arrow navigation. They never register on controls that use those keys themselves (sliders, checkboxes, radios, selects, text). They are not `preventDefault`ed there either.
+- `isInteractiveTarget(target)`: true for an element that owns its keyboard input (`input`, `textarea`, `select`, `button`, `a`, `summary`, contenteditable, `role=button|textbox|slider|menuitem`): the test `Input` applies before ignoring a key, for a game's own key handlers.
 - Wheel is `preventDefault`ed only if a wheel binding exists; right-click menu only if mouse button 2 is bound.
 - `touch-action: none` is set on the pointer target (restored on `detach`).
 - Pointer down on the target calls `window.focus()` so the iframe receives keys after a click.
@@ -82,6 +95,17 @@ if (gestures.pinch) zoom *= gestures.pinch.delta;
 - `blocked()` (shared with the linked `Input`): nothing is reported and the press in progress is dropped; a running pan, drag or pinch gets one `cancel` so the game can put things back. Browser `pointercancel`, window blur and a hidden tab cancel the same way.
 - Mouse: primary button only. Each pointer is captured, so a drag off the target keeps reporting.
 - Feed methods for tests and replays: `pointerDown(id, x, y, device?, time?)`, `pointerMove`, `pointerUp`, `pointerCancel`, `cancelAll`. Pass `now` to drive long-press timing from a fake clock.
+- Gesture types: `GesturePoint` (`x`, `y`, `inside`, game space), `GesturePhase` (`start | move | end | cancel`), `GestureDevice` (`mouse | touch | pen`), `TapGesture` (tap, double tap, long press), `PanGesture` (`phase`, `dx`, `dy`, `pointers`), `DragGesture` (a pan with its `origin`) and `PinchGesture` (`phase`, `scale`, `delta`, centre in `x`/`y`). `GestureAttachOptions`: `pointerTarget`, `disableTouchScroll`.
+
+### Magnify (small touch targets)
+
+A finger covers about 44 CSS px. With `GestureOptions.magnify` (or `gestures.setMagnify(opts)`), while one touch pointer is down `gestures.aim` reports where it aims, and a loupe beside the finger magnifies the area under it while targets are small. Mouse and pen never aim.
+
+- `MagnifyOptions`: `pitch()` (the current target pitch, CSS px) is required; `below` (loupe shows under this pitch, 44), `size` (loupe diameter, 128, or a function read each tick), `zoom` (2.5), `lift` (aim point raised this far above a dragging finger, 56), `when`, `snap(x, y)` (the game's target picker), `over`, `toClient`, `source` (the canvas to magnify; without one only `aim` is reported), `className`, `parent`, `clear` (areas the loupe must, should or would rather not cover) and `leader`. `MAGNIFY_DEFAULTS` holds the four defaults.
+- `MagnifyTarget`: what `snap` returns: centre `x`, `y`, radius `r` and the game's `data`.
+- `Aim`: one tick's aim: game-space `x`, `y`, `inside`, `client` and `finger` (CSS px), `lifted`, the snapped `target`, `loupe` (wanted this tick), `ended` (the tick after the finger lifted: where a dragged thing lands) and `at` (the loupe centre).
+- `Grid` and `snapToGrid(grid, x, y, ok?)`: the accepted cell nearest a point within half a pitch, or `null`; the usual `snap` for a board or list.
+- `Rect` (`l`, `t`, `r`, `b`, client CSS px), `loupeSpot(finger, aim, size, view)` (beside the finger, towards the screen's middle) and `loupeClear(finger, aim, size, view, keep, avoid?, spare?)` (the nearest spot that leaves `keep` in sight): the loupe placement rules, exported so a game drawing its own loupe places it the same way. `magnifySize(opts)` reads the current diameter.
 
 ## Rays and the pointer router
 
@@ -111,6 +135,12 @@ router.on('select', (e) => e.hit && toggle(e.hit.target));
 - `blocked()` is shared with the input: every hit ends (`hitEnd`), `pointers` is empty, nothing selects, and a button held through the block does not fire after it.
 - `PadCursor` appears at the screen centre when the stick deflects or select is pressed, moves `speed` × the short screen side per tick and is clamped to `camera.screen`. Call `hide()` when the mouse moves.
 - No allocation per tick in steady state: rays, samples, hits and events are pooled.
+- `PointerRouter<T>` (what `createPointerRouter(opts)` builds): `screen` (the built-in `ScreenPointers`), `pointers` (live `RoutedPointer`s, reused), `camera`, `hit` (the primary pointer's), `addTester`, `addSource` (each returns its remover), `held`/`fired` per `PointerButton`, `xrHeld`/`xrFired` per `XrButton`, `attach`, `detach`, `update()`; events `hit`, `hitEnd`, `select`, `secondary` (`PointerRouterEvents`).
+- `PointerRouterOptions`: `camera` (a camera or a getter), `testers`, `sources`, `selectAction`, `secondaryAction`, `blocked`.
+- `PointerHitEvent`: every event's payload (`pointer`, `hit`), reused between emits: read it in the listener or copy it. `RoutedPointer`: one live pointer's sample (`source`, `key`, `device`, `hand`, `x`, `y`, `ray`, buttons, `xr`) plus its nearest `hit`.
+- `PointerActions`: the slice of `Input` the router reads (`bound`, `pressed`); a game that drives the router without an `Input` supplies its own.
+- `PadCursorOptions`: `getGamepads`, `pad`, `axes` ([0, 1], the left stick), `deadzone` (0.2), `speed` (0.012 of the short side per tick), `selectButton` (0), `secondaryButton` (2).
+- Ray helpers for writing a `HitTester`: `Vec3` (a mutable `[x, y, z]`), `Aabb` (`min`, `max`, `target`, for `aabbTester`), `createRay()`, `createHit(target)` (allocate once and reuse) and `rayAt(ray, t, out)` (the point at distance `t`).
 
 ### The `PointerSource` seam (XR)
 
@@ -131,7 +161,7 @@ interface PointerSample {
 }
 ```
 
-An XR source fills `ray` from each input source's target-ray pose, sets `select = trigger || pinch` and `secondary = squeeze`, and owns its thresholds (pinch distances in metres). It is added with `router.addSource(src)`; nothing in the router changes. The engine ships no WebXR calls yet.
+An XR source fills `ray` from each input source's target-ray pose, sets `select = trigger || pinch` and `secondary = squeeze`, and owns its thresholds (pinch distances in metres). It is added with `router.addSource(src)`; nothing in the router changes. `createSample(key, device)` allocates a blank `PointerSample` for a source to keep and refill. The engine ships no WebXR calls yet.
 
 ## Testing / automation
 The low-level feed methods (`keyDown`, `keyUp`, `buttonDown`, `buttonUp`, `wheel`, `pointerAt`, `releaseAll`) are public, so tests, replays and the automated playtest can drive input without a DOM. Pass `getGamepads` to inject pads.
