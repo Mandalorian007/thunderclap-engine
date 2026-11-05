@@ -1,4 +1,5 @@
 import type { Gestures } from './gestures';
+import type { Look } from './look';
 import type { PointerActions, PointerRouter } from './pointer-router';
 import type {
   ActionState,
@@ -42,6 +43,8 @@ export interface InputOptions {
   /** Pointer router to link (see `Input.setPointers`). */
   // biome-ignore lint/suspicious/noExplicitAny: any hit target type links
   pointers?: PointerRouter<any>;
+  /** Look controls to link (see `Input.setLook`). */
+  look?: Look;
 }
 
 export interface AttachOptions {
@@ -194,6 +197,7 @@ export class Input<A extends string> {
   private detachFn: (() => void) | null = null;
   private gestures: Gestures | null = null;
   private pointers: PointerRouter<unknown> | null = null;
+  private look: Look | null = null;
   private attached: AttachOptions | null = null;
   private readonly actionReader: PointerActions = {
     bound: (action) => this.states.has(action as A),
@@ -210,6 +214,7 @@ export class Input<A extends string> {
     this.setBindings(bindings);
     if (opts.gestures) this.setGestures(opts.gestures);
     if (opts.pointers) this.setPointers(opts.pointers);
+    if (opts.look) this.setLook(opts.look);
   }
 
   /**
@@ -258,6 +263,28 @@ export class Input<A extends string> {
 
   getPointers(): PointerRouter<unknown> | null {
     return this.pointers;
+  }
+
+  /**
+   * Link look controls (or unlink with `null`). Linked, they share this input's `blocked()`, read
+   * their move keys from its raw key state, attach to the same pointer target and advance in
+   * `update()`, so `look.look` and `look.move` are this tick's. Don't call `look.update()` yourself.
+   */
+  setLook(look: Look | null): void {
+    if (this.look === look) return;
+    if (this.look) {
+      if (this.attached) this.look.detach();
+      this.look.keyHeld = null;
+    }
+    this.look = look;
+    if (!look) return;
+    look.blocked = () => this.blocked();
+    look.keyHeld = (code) => this.keysDown.has(code);
+    if (this.attached) look.attach(this.attached.pointerTarget);
+  }
+
+  getLook(): Look | null {
+    return this.look;
   }
 
   /** Replace all bindings (e.g. after the player rebinds). Action states reset. */
@@ -340,6 +367,7 @@ export class Input<A extends string> {
   /** Advance one tick: poll gamepads, compute edges, clear per-tick accumulators. */
   update(): void {
     this.gestures?.update();
+    this.look?.update();
     this.pointers?.poll();
     const blocked = this.blocked();
     this.pads = this.getGamepads();
@@ -634,10 +662,12 @@ export class Input<A extends string> {
     this.attached = opts;
     this.gestures?.attach({ pointerTarget: target, disableTouchScroll: opts.disableTouchScroll });
     this.pointers?.attach(target);
+    this.look?.attach(target);
 
     this.detachFn = () => {
       this.gestures?.detach();
       this.pointers?.detach();
+      this.look?.detach();
       this.attached = null;
       keyTarget.removeEventListener('keydown', onKeyDown);
       keyTarget.removeEventListener('keyup', onKeyUp);

@@ -31,7 +31,7 @@ const { x, y, inside, down, dx, dy, wheelY } = input.pointer;   // game space
 Types a game names when it wraps or configures `Input`:
 
 - `Bindings<A>`: the map from each action name to its `Binding` list, passed to `new Input` and `setBindings`.
-- `InputOptions`: `getGamepads`, `blocked`, `globalKeys`, `buttonKeys`, `queueTaps`, and the `gestures` and `pointers` to link.
+- `InputOptions`: `getGamepads`, `blocked`, `globalKeys`, `buttonKeys`, `queueTaps`, and the `gestures`, `pointers` and `look` to link.
 - `AttachOptions`: `pointerTarget`, `keyTarget` (default the target's window), `disableTouchScroll` (default true).
 - `ActionState`: one action's `pressed`, `held`, `released`, `value` (0..1) and `heldTicks`.
 - `PointerState`: `input.pointer`: `x`, `y`, `dx`, `dy`, `inside`, `down`, `wheelX`, `wheelY` and `type` (`mouse | touch | pen`).
@@ -162,6 +162,35 @@ interface PointerSample {
 ```
 
 An XR source fills `ray` from each input source's target-ray pose, sets `select = trigger || pinch` and `secondary = squeeze`, and owns its thresholds (pinch distances in metres). It is added with `router.addSource(src)`; nothing in the router changes. `createSample(key, device)` allocates a blank `PointerSample` for a custom source (a game's own device, or XR) to keep and refill. The engine ships no WebXR calls yet.
+
+## Look
+
+`Look` turns pointer-locked mouse, a two-zone touch layout, the pad's sticks and the move keys into two per-tick numbers a first- or third-person game reads: `look` (yaw and pitch deltas, radians) and `move` (x, y in -1..1). The game never sees which device moved.
+
+```ts
+import { Input, Look } from '@thunderclap/engine/input';
+
+// The two lines a 3D game adds (createGame builds no Look, so a 2D game pays nothing):
+const look = new Look({ keys: { forward: ['KeyW'], back: ['KeyS'], left: ['KeyA'], right: ['KeyD'] } });
+ctx.input.setLook(look);                         // or new Input(bindings, { look })
+
+canvas.addEventListener('pointerdown', () => void look.request());   // the lock needs a gesture
+look.onLockChange((locked) => showClickToPlay(!locked));
+
+// each tick, after input.update() (which advances the look; don't call look.update() yourself):
+yaw += look.look.dx;                             // > 0 turns right
+pitch = clamp(pitch + look.look.dy, -1.4, 1.4);  // > 0 looks up
+walk(look.move.x, look.move.y);                  // y > 0 is forward, length ≤ 1
+```
+
+- **Mouse**: `movementX/Y` count only while `document.pointerLockElement` is the attached element, times `sensitivity` (radians per CSS px, 0.0025). `request()` asks for the lock and resolves with whether it is held (false when detached, blocked, refused or unsupported; it never rejects). Browsers grant it only inside a user gesture. `release()` calls `document.exitPointerLock()` only when this element holds the lock. `locked` follows `pointerlockchange`; `onLockChange(fn)` (or `on('lockChange', fn)`, core `Emitter`, `LookEvents`) reports each change.
+- **Touch**: the first touch that lands in the move zone (`touch.moveZone`, the `'left'` half of the element by default; `'right'`, or `'none'` for look only) is a floating stick: its offset from where it landed, clamped to `touch.radius` (56 CSS px), through a radial `touch.deadzone` (0.12 of the radius), is `move`. Any other touch drags the view at `touch.sensitivity` (default `sensitivity`). `look.stick` (`LookStick`: `active`, `originX`/`originY`, `x`/`y`, client CSS px) is there to draw the stick.
+- **Pad**: the left stick is `move`, the right stick `look` at `padSensitivity` (radians per second at full deflection, 3) × the tick's `dt` from `now`; both through `padDeadzone` (0.15, radial). `pad` picks one pad (default the first connected).
+- **Keys**: `keys` (`LookKeys`: `forward`, `back`, `left`, `right`, `KeyboardEvent.code` lists, no defaults) are read from the linked `Input`'s raw key state. Every source sums and `move` is clamped to length 1.
+- `invertY` flips vertical look for every device.
+- `blocked()` (shared with the linked `Input`): `look` and `move` read zero, the lock is released, and fingers already down are ignored until they lift. Window blur and a hidden tab drop the touches too.
+- Feed methods for tests and replays: `mouseMove(dx, dy)`, `touchDown(id, x, y, inMoveZone)`, `touchMove`, `touchUp`, `cancelAll`. `attach(el)`/`detach()` are called by `Input.attach`/`detach`.
+- Types: `LookOptions`, `LookTouchOptions` (`moveZone`, `deadzone`, `radius`, `sensitivity`), `MoveZone`, `LookKeys`, `LookStick`, `LookEvents`. No allocation per tick.
 
 ## Testing / automation
 The low-level feed methods (`keyDown`, `keyUp`, `buttonDown`, `buttonUp`, `wheel`, `pointerAt`, `releaseAll`) are public, so tests, replays and the automated playtest can drive input without a DOM. Pass `getGamepads` to inject pads.
