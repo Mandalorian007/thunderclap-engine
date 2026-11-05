@@ -17,8 +17,8 @@
  * The itch-iframe row is skipped: the UI layer does not depend on the frame.
  */
 import type { CDPSession, Page } from '@playwright/test';
+import type { Insets } from '@thunderclap/engine/ui';
 import type { HarnessLayoutState } from '../harness/layout-state';
-import type { Insets } from '../src/ui/layout';
 import { expect, test } from './fixtures';
 import { HARNESS_URL } from './ports';
 

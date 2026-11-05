@@ -10,8 +10,8 @@
  * - Two panel openers: one restores focus on close, one is marked `NO_RESTORE_FOCUS_ATTR`, so
  *   focus goes to the stack's home. Escape is a button key bound to `back`.
  */
-import { Input } from '../src/input';
-import { computeLetterbox, createDeviceMode } from '../src/platform';
+import { Input } from '@thunderclap/engine/input';
+import { computeLetterbox, createDeviceMode } from '@thunderclap/engine/platform';
 import {
   applyTextScale,
   button,
@@ -21,7 +21,7 @@ import {
   menuNav,
   NO_RESTORE_FOCUS_ATTR,
   scaleFontSizes,
-} from '../src/ui';
+} from '@thunderclap/engine/ui';
 import type { HarnessUiApi, HarnessUiState } from './ui-state';
 
 const DESIGN = { width: 1920, height: 1080 };

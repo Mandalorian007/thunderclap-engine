@@ -1,6 +1,6 @@
 # Changelog: @thunderclap/engine
 
-Versions follow semver from `engine-v1.0.0`. Entries before this repo existed were written while the engine lived in [The Last Rune](https://github.com/Mandalorian007/last-rune) (`packages/engine`); their decision numbers (`D-0xx`) and paths refer to that repo.
+Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--dry]` (`scripts/release.mjs`) cuts a release from `main`: it runs `pnpm check` and `pnpm test:e2e`, bumps `package.json`, dates the top "Next (unreleased)" section and commits; with `--tag` it also creates the annotated tag `v<version>`. It never pushes. Entries before this repo existed were written while the engine lived in [The Last Rune](https://github.com/Mandalorian007/last-rune) (`packages/engine`); their decision numbers (`D-0xx`) and paths refer to that repo.
 
 ## Next (unreleased)
 

@@ -10,6 +10,8 @@ A WebGPU game engine for the browser, written in TypeScript. It renders with raw
   <sub><a href="https://mandalorian007.github.io/last-rune/">The Last Rune</a>, the first game built on ThunderClap</sub>
 </p>
 
+**Vision:** [docs/VISION.md](docs/VISION.md) says what ThunderClap is for and where it is going.
+
 ## Contents
 
 - [Features](#features)
@@ -156,7 +158,7 @@ Draw order is submission order; there is no depth buffer. Consecutive draws with
 ## Testing
 
 ```sh
-pnpm check       # typecheck + Biome lint + Vitest unit tests (351 tests)
+pnpm check       # typecheck + Biome lint + import boundaries + Vitest unit tests (351 tests in 30 files)
 pnpm test:e2e    # Playwright e2e against the harness pages, on a device matrix
 pnpm harness     # serve the harness pages yourself
 ```
@@ -182,7 +184,7 @@ Headless Chromium gets a WebGPU adapter with `--enable-unsafe-webgpu`. On macOS 
 
 ## Status and roadmap
 
-Version **0.2.0-alpha.1**. The API is still settling: see [CHANGELOG.md](CHANGELOG.md).
+Version **0.2.0-alpha.1**. The API is still settling: see [CHANGELOG.md](CHANGELOG.md). Current work is in [docs/STATUS.md](docs/STATUS.md), and the decisions behind the engine are in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 The engine was built inside The Last Rune and extracted into this repo with its git history. That's why commit messages, decision numbers (`D-0xx`) and `docs/` paths in comments point at [that repo](https://github.com/Mandalorian007/last-rune), where the design notes live.
 
