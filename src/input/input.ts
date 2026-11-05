@@ -1,4 +1,5 @@
 import type { Gestures } from './gestures';
+import type { PointerActions, PointerRouter } from './pointer-router';
 import type {
   ActionState,
   Binding,
@@ -38,6 +39,9 @@ export interface InputOptions {
   queueTaps?: boolean;
   /** Gestures to link (see `Input.setGestures`). */
   gestures?: Gestures;
+  /** Pointer router to link (see `Input.setPointers`). */
+  // biome-ignore lint/suspicious/noExplicitAny: any hit target type links
+  pointers?: PointerRouter<any>;
 }
 
 export interface AttachOptions {
@@ -189,7 +193,12 @@ export class Input<A extends string> {
   private readonly prevButtons = new Set<number>();
   private detachFn: (() => void) | null = null;
   private gestures: Gestures | null = null;
+  private pointers: PointerRouter<unknown> | null = null;
   private attached: AttachOptions | null = null;
+  private readonly actionReader: PointerActions = {
+    bound: (action) => this.states.has(action as A),
+    pressed: (action) => this.states.get(action as A)?.pressed ?? false,
+  };
 
   constructor(bindings: Bindings<A>, opts: InputOptions = {}) {
     this.bindings = bindings;
@@ -200,6 +209,7 @@ export class Input<A extends string> {
     if (opts.buttonKeys) this.setButtonKeys(opts.buttonKeys);
     this.setBindings(bindings);
     if (opts.gestures) this.setGestures(opts.gestures);
+    if (opts.pointers) this.setPointers(opts.pointers);
   }
 
   /**
@@ -214,6 +224,7 @@ export class Input<A extends string> {
     if (!gestures) return;
     gestures.blocked = () => this.blocked();
     gestures.setPointerTransform(this.transform);
+    this.pointers?.setGestures(gestures);
     if (this.attached) {
       gestures.attach({
         pointerTarget: this.attached.pointerTarget,
@@ -224,6 +235,29 @@ export class Input<A extends string> {
 
   getGestures(): Gestures | null {
     return this.gestures;
+  }
+
+  /**
+   * Link a pointer router (or unlink with `null`). A linked router shares this input's
+   * `blocked()`, pointer transform (client → camera screen units) and gestures (the magnify aim),
+   * attaches to the same pointer target, and is polled in `update()` before the actions are
+   * read, so `{ pointer }` and `{ xr }` bindings work; after them its `select` and `secondary`
+   * events follow the actions named by `selectAction` / `secondaryAction` when bound. Don't call
+   * `router.update()` yourself.
+   */
+  setPointers<T>(router: PointerRouter<T> | null): void {
+    if (this.pointers === router) return;
+    if (this.pointers && this.attached) this.pointers.detach();
+    this.pointers = router as PointerRouter<unknown> | null;
+    if (!router) return;
+    router.blocked = () => this.blocked();
+    router.setPointerTransform(this.transform);
+    router.setGestures(this.gestures);
+    if (this.attached) router.attach(this.attached.pointerTarget);
+  }
+
+  getPointers(): PointerRouter<unknown> | null {
+    return this.pointers;
   }
 
   /** Replace all bindings (e.g. after the player rebinds). Action states reset. */
@@ -269,6 +303,7 @@ export class Input<A extends string> {
   setPointerTransform(fn: PointerTransform | null): void {
     this.transform = fn;
     this.gestures?.setPointerTransform(fn);
+    this.pointers?.setPointerTransform(fn);
   }
 
   // ---------------------------------------------------------------- queries
@@ -305,6 +340,7 @@ export class Input<A extends string> {
   /** Advance one tick: poll gamepads, compute edges, clear per-tick accumulators. */
   update(): void {
     this.gestures?.update();
+    this.pointers?.poll();
     const blocked = this.blocked();
     this.pads = this.getGamepads();
     let padActive = false;
@@ -351,6 +387,7 @@ export class Input<A extends string> {
     this.pointer.dy = this.pointer.y - this.prevY;
     this.prevX = this.pointer.x;
     this.prevY = this.pointer.y;
+    this.pointers?.resolve(this.actionReader);
   }
 
   private readonly evalOut = { value: 0, pad: false, fresh: false };
@@ -384,6 +421,19 @@ export class Input<A extends string> {
           return btn.pressed || btn.value >= t ? Math.max(btn.value, btn.pressed ? 1 : 0) : 0;
         });
         if (v > 0) out.pad = true;
+      } else if ('pointer' in b) {
+        const r = this.pointers;
+        // A press shorter than a tick still holds for one tick (the sources keep it).
+        if (r?.held(b.pointer)) {
+          v = 1;
+          if (r.fired(b.pointer)) out.fresh = true;
+        }
+      } else if ('xr' in b) {
+        const r = this.pointers;
+        if (r?.xrHeld(b.xr, b.hand)) {
+          v = 1;
+          if (r.xrFired(b.xr, b.hand)) out.fresh = true;
+        }
       } else if ('gesture' in b) {
         const g = this.gestures;
         if (g?.active(b.gesture)) {
@@ -583,9 +633,11 @@ export class Input<A extends string> {
 
     this.attached = opts;
     this.gestures?.attach({ pointerTarget: target, disableTouchScroll: opts.disableTouchScroll });
+    this.pointers?.attach(target);
 
     this.detachFn = () => {
       this.gestures?.detach();
+      this.pointers?.detach();
       this.attached = null;
       keyTarget.removeEventListener('keydown', onKeyDown);
       keyTarget.removeEventListener('keyup', onKeyUp);

@@ -18,7 +18,28 @@ export type Binding =
    * for one tick; `longPress` holds until its pointer lifts; `pan`, `drag` and `pinch` hold
    * from their start until they end. Reads inactive when no gestures are linked.
    */
-  | { gesture: GestureKind };
+  | { gesture: GestureKind }
+  /**
+   * A button of any pointer the linked `PointerRouter` routes (`Input.setPointers`): `select` is
+   * mouse button 0, a touch or pen contact, the pad cursor's press button and an XR trigger or
+   * pinch; `secondary` is mouse button 2, the pad cursor's second button and an XR squeeze.
+   * Pressed when one goes down; held while any is down. Inactive with no router linked.
+   */
+  | { pointer: PointerButton }
+  /**
+   * An XR controller or hand button from an XR `PointerSource` (`hand` omitted = either hand).
+   * No XR source ships yet, so this reads inactive until one is added to the router.
+   */
+  | { xr: XrButton; hand?: Hand };
+
+/** Pointer buttons a `{ pointer }` binding can name. */
+export type PointerButton = 'select' | 'secondary';
+
+/** XR buttons a `{ xr }` binding can name: controller trigger, grip squeeze, hand pinch. */
+export type XrButton = 'trigger' | 'squeeze' | 'pinch';
+
+/** Which hand an XR pointer is in. */
+export type Hand = 'left' | 'right';
 
 /** The gestures `Gestures` recognises (and a `{ gesture }` binding can name). */
 export type GestureKind = 'tap' | 'doubleTap' | 'longPress' | 'pan' | 'drag' | 'pinch';

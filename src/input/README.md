@@ -81,5 +81,55 @@ if (gestures.pinch) zoom *= gestures.pinch.delta;
 - Mouse: primary button only. Each pointer is captured, so a drag off the target keeps reporting.
 - Feed methods for tests and replays: `pointerDown(id, x, y, device?, time?)`, `pointerMove`, `pointerUp`, `pointerCancel`, `cancelAll`. Pass `now` to drive long-press timing from a fake clock.
 
+## Rays and the pointer router
+
+Every pointer (mouse, pen, touch, the pad cursor, later XR controllers and hands) becomes a ray through the camera, tested against the game's hit testers. 2D and 3D pick the same way.
+
+```ts
+import { aabbTester, createPointerRouter, Input, PadCursor, planeTester } from '@thunderclap/engine/input';
+
+const boxes = [{ min: [100, 100, 0], max: [250, 250, 0], target: card }];   // live array: edit freely
+const router = createPointerRouter({
+  camera: () => renderer.camera,          // or a Camera; anything with screen + screenToWorld
+  testers: [aabbTester(boxes), planeTester(0)],
+  sources: [new PadCursor()],             // ScreenPointers (mouse/pen/touch) is built in
+});
+const input = new Input({ select: [{ pointer: 'select' }, { key: 'Enter' }, { gesture: 'tap' }] }, { pointers: router });
+
+router.on('hit', (e) => highlight(e.hit?.target));      // a pointer's nearest target changed to this
+router.on('hitEnd', (e) => unhighlight(e.hit?.target));  // ... and left this
+router.on('select', (e) => e.hit && toggle(e.hit.target));
+```
+
+- `screenRay(camera, sx, sy, out)` unprojects screen units at depth 0 and 1 (0.5 with an infinite far plane). For `Camera.ortho2d` the ray points along +z from z = 0, so flat quads at z = 0 are hit at distance 0.
+- `HitTester<T> = (ray) => Hit<T> | null`. Return the tester's own reused `Hit`; the router copies the nearest. `planeTester(z, target?)` and `aabbTester(boxes)` ship; write your own for grids, meshes or spheres.
+- Hover: mouse and pen are pointers while over the target. A touch is a pointer only while down, plus one tail tick after it lifts, so a `{ gesture: 'tap' }` select still sees its hit. A single touch aims with the magnify `aim` (the snapped target, else the lifted aim point).
+- Select: if the input binds the router's `selectAction` (default `'select'`), any press of that action selects the **primary** pointer's hit (the one with the latest activity), so a key, a tap gesture or a pad button all select what is hovered. Otherwise each pointer's button down-edge selects. The same goes for `secondary`. The event's `hit` may be `null`.
+- `{ pointer: 'select' | 'secondary' }` binds any pointer's button; `{ xr: 'trigger' | 'squeeze' | 'pinch', hand? }` binds an XR source's button.
+- `blocked()` is shared with the input: every hit ends (`hitEnd`), `pointers` is empty, nothing selects, and a button held through the block does not fire after it.
+- `PadCursor` appears at the screen centre when the stick deflects or select is pressed, moves `speed` × the short screen side per tick and is clamped to `camera.screen`. Call `hide()` when the mouse moves.
+- No allocation per tick in steady state: rays, samples, hits and events are pooled.
+
+### The `PointerSource` seam (XR)
+
+```ts
+interface PointerSource {
+  poll(camera: RayCamera | null): readonly PointerSample[];   // once per Input.update(); the source owns and reuses the array and samples
+  attach?(target: HTMLElement): void;
+  detach?(): void;
+}
+interface PointerSample {
+  key: number;                 // stable per pointer within the source; a key missing from poll() ends that pointer
+  device: PointerDevice;       // 'mouse' | 'touch' | 'pen' | 'gamepad' | 'xr'
+  hand: Hand | null;
+  readonly ray: Ray;           // world space, dir normalised
+  x: number; y: number;        // screen units, NaN for XR
+  select: boolean; secondary: boolean;
+  xr: XrButtons | null;        // { trigger, squeeze, pinch }
+}
+```
+
+An XR source fills `ray` from each input source's target-ray pose, sets `select = trigger || pinch` and `secondary = squeeze`, and owns its thresholds (pinch distances in metres). It is added with `router.addSource(src)`; nothing in the router changes. The engine ships no WebXR calls yet.
+
 ## Testing / automation
 The low-level feed methods (`keyDown`, `keyUp`, `buttonDown`, `buttonUp`, `wheel`, `pointerAt`, `releaseAll`) are public, so tests, replays and the automated playtest can drive input without a DOM. Pass `getGamepads` to inject pads.
