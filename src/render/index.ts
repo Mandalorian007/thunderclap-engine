@@ -2,6 +2,8 @@ export type { BindingDesc, BindingSetOptions } from './bindings';
 export { BindingSet } from './bindings';
 export type { BlendMode } from './blend';
 export { blendState } from './blend';
+export type { CameraPoint, CameraRect } from './camera';
+export { ALL_LAYERS, CAMERA_BLOCK_FLOATS, Camera } from './camera';
 export type { RGBA } from './color';
 export { hex, linearToSrgb, rgba, scaleRgb, srgbToLinear } from './color';
 export { gpuDiagnostics, installGpuErrorLogging, onGpuError, reportGpuError } from './diagnostics';
@@ -28,7 +30,6 @@ export { Mesh, quadGeometry, VERTEX_BUFFER_LAYOUT, VERTEX_FLOATS, VERTEX_STRIDE 
 export type { PingPongStepOptions } from './ping-pong';
 export { PingPong } from './ping-pong';
 export type {
-  Camera,
   FrameTiming,
   PostInputs,
   PostProcessor,

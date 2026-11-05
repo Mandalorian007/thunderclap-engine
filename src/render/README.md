@@ -17,7 +17,8 @@ endFrame()
 ```
 
 - **Logical space** is 1920×1080 by default, with the origin at top-left and y pointing down.
-  `renderer.camera` holds `{ x, y, zoom, rotation }`.
+  `renderer.camera` is a matrix `Camera` (`Camera.ortho2d(1920, 1080)` by default); its
+  `x`, `y`, `zoom` and `rotation` pan, zoom and turn the 2D view. See "Camera" below.
 - **Draw order is submission order.** There is no depth buffer. Consecutive draws that use
   the same material and mesh merge into one instanced draw call, so draws batch best when
   grouped by material.
@@ -58,12 +59,42 @@ renderer.endFrame();
 `DrawParams` fields: `x, y, w, h, rotation` (radians, clockwise), `tint` (linear RGBA),
 `uv` (u0, v0, u1, v1), `params` (a free vec4 passed to your shader), and `emissive`.
 
+## Camera
+
+`Camera` holds `view`, `projection` and `viewProjection` (column-major `Float32Array(16)`,
+built with `mat4` from `@thunderclap/engine/core`), cached until something changes. The renderer
+uploads `renderer.camera` to the camera block every frame.
+
+```ts
+import { Camera } from '@thunderclap/engine/render';
+
+const cam = renderer.camera;               // Camera.ortho2d(1920, 1080): 1 unit = 1 design px
+cam.x = 120; cam.zoom = 1.5;               // the 2D controls, as before
+cam.fitRect({ x: 0, y: 0, width: 800, height: 600 },     // frame a world rect…
+            { x: 400, y: 0, width: 1520, height: 1080 }); // …into part of the screen
+const p = surface.clientToLogical(e.clientX, e.clientY);
+const world = cam.screenToWorld(p.x, p.y, 0, hit);        // touch aiming; pass `out` per frame
+
+const eye = Camera.perspective(Math.PI / 3, 16 / 9, 0.1, 500).lookAt([0, 4, 10], [0, 0, 0]);
+eye.screen.width = 1920; eye.screen.height = 1080;      // screen units for worldToScreen
+renderer.camera = eye;                                    // depth needs ws/render-call
+```
+
+- `worldToScreen(x, y, z?)` returns screen units (the `screen` rect; the design space for
+  `ortho2d`) and clip depth in `z`. `screenToWorld(sx, sy, depth?)` inverts it; depth 0 and 1
+  give a pick ray.
+- `depthTest` and `depthWrite` (off for `ortho2d`, on for `perspective`) and the `layers` mask
+  (u32, default all bits; `sees(mask)`) are carried for the render call and the draw sort; the
+  renderer does not read them yet.
+
 ## Custom materials
 
 A material is your WGSL fragment shader plus an optional uniform block and textures. The
 engine prepends a prelude that provides:
 
-- `globals`: `viewProj`, `logicalSize`, `targetSize`, `time`, `dt` at `@group(0) @binding(0)`
+- `globals`: `logicalSize`, `targetSize`, `time`, `dt` at `@group(0) @binding(0)`
+- `camera`: `view`, `proj`, `view_proj` (world → clip), `camera_pos`, `viewport` (scene target
+  px) and `view_index` at `@group(0) @binding(1)`
 - noise helpers: `engine_hash21`, `engine_hash22`, `engine_noise`, `engine_fbm(p, octaves)`,
   `engine_luma`
 - `VSOut { clip, uv, local, color, params, world, emissive, size }`, where `local` is 0..1
