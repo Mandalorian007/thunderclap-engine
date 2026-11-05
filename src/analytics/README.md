@@ -1,0 +1,55 @@
+# engine/analytics
+
+Typed, batched game events handed to a **sink the game supplies**. The engine has no network sink: no `fetch`, no `sendBeacon` (VISION rule 4: the engine makes no network calls; the game decides where data goes, or whether it goes at all). No dependencies.
+
+## Usage
+
+```ts
+import { createAnalytics } from '@thunderclap/engine/analytics';
+
+type MyEvents = {
+  level_start: { level: string };
+  level_complete: { level: string; ms: number };
+};
+
+const analytics = createAnalytics<MyEvents>({
+  sink: (events) => { navigator.sendBeacon('/collect', JSON.stringify(events)); },
+  context: { build: '0.4.1' },          // on every event; `build` also lands in game_start
+  onError: (e) => console.warn(e),      // sink failures land here, never thrown
+});
+
+const ctx = await createGame({ /* ... */ });
+if (ctx) analytics.attach(ctx);         // game_start now; session_end + flush on hide
+
+analytics.emit('level_start', { level: 'intro' });   // props are type-checked
+```
+
+## A sendBeacon sink is three lines
+
+```ts
+sink: (events) => {
+  if (!navigator.sendBeacon('https://example.com/collect', JSON.stringify(events))) {
+    throw new Error('beacon refused'); // reported through onError
+  }
+}
+```
+
+The engine will not ship this for you. Delivery is a product decision (consent, endpoint, privacy), so it lives in the game.
+
+## Events
+
+Each `AnalyticsEvent` is `{ name, props, session, seq, t, context? }`. `session` is random per page load; `seq` counts from 1; `t` is `clock()` (default `Date.now`, injectable for tests).
+
+| Built-in | Props | When |
+| --- | --- | --- |
+| `game_start` | `formFactor`, `deviceKind` (host kind), `dpr`, `viewport`, `embed`, `build` | `attach` |
+| `session_end` | `durationMs`, `reason`: `hidden`, `pagehide`, `freeze`, `deviceLost` | page hides (once per hidden stretch), or device lost |
+| `device_lost` | `reason`, `message` | `ctx.hooks.deviceLost` |
+
+Games add their own through the generic `E`. A batch is flushed on `flush()`, on every `session_end`, and automatically at `maxBatch` (default 20).
+
+## `attach(ctx)`
+
+Needs no change to `createGame`. It wraps `ctx.hooks.deviceLost` (your own hook still runs) and listens to the same page lifecycle events the save store flushes on. The returned function detaches both. `GameHooks.hide` carries no reason, so the lifecycle events are watched directly to tell `hidden`, `pagehide` and `freeze` apart.
+
+`emit` and `flush` never throw. A failing sink is reported to `onError` and its batch is dropped (no retry, no persistence).

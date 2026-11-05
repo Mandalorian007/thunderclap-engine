@@ -8,6 +8,7 @@ Versions follow semver from `engine-v1.0.0`. Entries before this repo existed we
 - The engine has its own repo, `Mandalorian007/thunderclap-engine`, with the `packages/engine` history from The Last Rune. It adds a standalone pnpm setup, CI (`pnpm check`), a README and a runnable example (`examples/hello`, `pnpm example`). The Last Rune keeps its in-repo copy for now.
 
 ### Added
+- `@thunderclap/engine/analytics` (E-002, ws/analytics): `createAnalytics<E>({ sink, session?, clock?, context?, onError?, maxBatch? })` with typed `emit`, batched `flush`, built-in `game_start`, `session_end` and `device_lost`, and `attach(ctx)`, which wraps `ctx.hooks.deviceLost` and flushes on hidden/pagehide/freeze. No network sink ships; the game supplies one.
 - `HostWindow.setTitle?(title)`: optional, for hosts with a window of their own. The Electron host (`@thunderclap/host-electron`, ws/host-electron) implements it.
 - Layout regions (D-041 Phase 2, ws/layout): `createLayout(overlay, spec?)` in `./ui`, with `LayoutSpec`, `FormFactor`, `RegionName`, `classifyFormFactor`, `resolveLayout`, `resolveTracks`, `parseAreas`, `effectiveInsets`, `readSafeArea` and `defaultForms`.
   - Four form factors (`phone-landscape`, `phone-portrait`, `tablet`, `desktop`), each with px/fraction/fill tracks and grid areas for `top`, `left`, `right`, `bottom`, `cardLane`, `captionLane` and `fill`, plus a `modal` rect. All of them sit inside the safe area.
