@@ -1,0 +1,38 @@
+# Common brief: every engineer agent
+
+You are an engineer on one workstream of the ThunderClap engine (`/Users/matthewfontana/repos/thunderclap-engine`, a raw-WebGPU game engine in TypeScript with zero runtime dependencies). You work in your own git worktree.
+
+## Branch
+
+Run `git checkout -b ws/<name>` first (rename the throwaway worktree branch if there is one). Commit on that branch only. Never push. Never merge. Never touch `main`. Never check out branches in another repo you are told to read.
+
+## Read first
+
+`docs/VISION.md`, the `docs/DECISIONS.md` entries your brief names, `docs/STATUS.md` (your row), the `ARCHITECTURE.md` sections your brief names, and the README of each module you touch. Read nothing else up front; read on need.
+
+## Rules
+
+- **No game nouns.** Code joins the engine only if a shipped game uses it and the next game plausibly would, and its API names nothing from either.
+- **One direction.** The engine never imports a game, the harness or the tests.
+- **No runtime dependencies.** No network calls from the engine.
+- **Rendering, not mechanics.**
+- **Zero allocations per frame** in steady state on render paths.
+- Stay inside the files your brief gives you. If you need a change in a file another workstream owns, write it down in your report instead of making it.
+- Stop only your own processes, by PID.
+
+## Done when
+
+- `pnpm check` is green (typecheck, Biome, boundaries, Vitest, host-electron).
+- `pnpm test:e2e` is green on the harness matrix, run once on your final head (Playwright Chromium is installed locally; do not download browsers). Refactors leave the 2D harness pages pixel-identical.
+- Unit tests cover what you added; the fake GPU (`src/render/fake-gpu.ts`) covers renderer changes.
+- `ARCHITECTURE.md` *Today* text, the module README and `CHANGELOG.md` ("Next (unreleased)") describe the change, in the same branch.
+- Public API is exported only from the module's `index.ts`; new subpaths go in `package.json` `exports` and the root README table.
+
+## Report back (under 400 words)
+
+1. Branch, worktree path, commit hashes.
+2. What shipped: public API added, changed or removed, exact names and signatures.
+3. Gate: `pnpm check` test count; e2e passed/skipped/failed.
+4. Changes to shared files (function names and line ranges) for the integrator.
+5. Decisions you made that the brief left open, and anything you wished another module offered.
+6. Deviations from the brief, and anything you did not finish.
