@@ -74,6 +74,13 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 - `Input.setPointers(router)`, `getPointers()` and the `pointers` option; binding kinds `{ pointer: PointerButton }` and `{ xr: XrButton, hand? }` with `PointerButton`, `XrButton`, `Hand`. XR is a seam only: no WebXR calls ship.
 - Engine tests: `rays.test.ts`, `pointer-router.test.ts`, `pointer-router.dom.test.ts`; harness page `harness/rays.html` (2D canvas, ortho quads or `?mode=persp` boxes, hover and select toggles, a fake pad) and `e2e/rays.spec.ts` on the whole matrix (mouse, CDP touch, itch iframe, pad cursor, perspective picking, `blocked()`).
 
+### Removed (ws/prune, E-013)
+Internals that leaked into the public surface; the engine still uses each one inside its module.
+- `@thunderclap/engine/render`: `BindingSet`, `BindingDesc`, `BindingSetOptions` (use `Material` or `FullscreenPass`); `blendState` and `createSamplers` (a hand-built pipeline writes its own `GPUBlendState` and samplers); `CAMERA_BLOCK_FLOATS` (`WGSL_GLOBALS` declares the block; the renderer binds it); `MATRIX3X4_FLOATS`, `multiplyMatrix3x4`, `writeMatrix2d` (use `Transform`, whose `parent` composes); `WGSL_MATERIAL_PRELUDE` (use `materialPrelude(VERTEX_LAYOUT_2D)`).
+- `@thunderclap/engine/input`: `loupeSpot`, `loupeClear`, `magnifySize` (a game drawing its own loupe places it at `aim.at`; the size is its own `MagnifyOptions.size`).
+- Kept, with the reason in the module README: `INSTANCE_BUFFER_LAYOUT` (a drawable's pipeline over the shared instance format), `DepthMode` (`material.pipelineFor`'s argument), `GpuTimer` (the type of `renderer.gpuTimer`, which a custom `PostProcessor` labels passes with), `PointerActions` (`router.resolve`'s argument), `createSample` (a custom `PointerSource`).
+- `src/render/mesh.ts`: the `indexCount` doc comment now says the renderer skips an indexed draw with `indexCount` 0, as it does.
+
 ### Removed (ws/render-call, D-044)
 - `EngineCtx.device`, `EngineCtx.setFill(key)` and `CreateGameOptions.fillBands`: a 2D game frames `ui.layout.freeRect` with `renderer.camera.fitRect` instead. `createGame` no longer builds a device mode, masks the canvas or calls `surface.setFill`.
 - `GameLoopOptions.raf` / `caf`: pass `frames: FrameSource`.

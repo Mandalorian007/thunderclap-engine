@@ -105,7 +105,7 @@ A finger covers about 44 CSS px. With `GestureOptions.magnify` (or `gestures.set
 - `MagnifyTarget`: what `snap` returns: centre `x`, `y`, radius `r` and the game's `data`.
 - `Aim`: one tick's aim: game-space `x`, `y`, `inside`, `client` and `finger` (CSS px), `lifted`, the snapped `target`, `loupe` (wanted this tick), `ended` (the tick after the finger lifted: where a dragged thing lands) and `at` (the loupe centre).
 - `Grid` and `snapToGrid(grid, x, y, ok?)`: the accepted cell nearest a point within half a pitch, or `null`; the usual `snap` for a board or list.
-- `Rect` (`l`, `t`, `r`, `b`, client CSS px), `loupeSpot(finger, aim, size, view)` (beside the finger, towards the screen's middle) and `loupeClear(finger, aim, size, view, keep, avoid?, spare?)` (the nearest spot that leaves `keep` in sight): the loupe placement rules, exported so a game drawing its own loupe places it the same way. `magnifySize(opts)` reads the current diameter.
+- `Rect` (`l`, `t`, `r`, `b`, client CSS px): the type of the `clear` areas. A game drawing its own loupe (no `source`) places it at `aim.at`, which already follows the engine's placement rules.
 
 ## Rays and the pointer router
 
@@ -138,7 +138,7 @@ router.on('select', (e) => e.hit && toggle(e.hit.target));
 - `PointerRouter<T>` (what `createPointerRouter(opts)` builds): `screen` (the built-in `ScreenPointers`), `pointers` (live `RoutedPointer`s, reused), `camera`, `hit` (the primary pointer's), `addTester`, `addSource` (each returns its remover), `held`/`fired` per `PointerButton`, `xrHeld`/`xrFired` per `XrButton`, `attach`, `detach`, `update()`; events `hit`, `hitEnd`, `select`, `secondary` (`PointerRouterEvents`).
 - `PointerRouterOptions`: `camera` (a camera or a getter), `testers`, `sources`, `selectAction`, `secondaryAction`, `blocked`.
 - `PointerHitEvent`: every event's payload (`pointer`, `hit`), reused between emits: read it in the listener or copy it. `RoutedPointer`: one live pointer's sample (`source`, `key`, `device`, `hand`, `x`, `y`, `ray`, buttons, `xr`) plus its nearest `hit`.
-- `PointerActions`: the slice of `Input` the router reads (`bound`, `pressed`); a game that drives the router without an `Input` supplies its own.
+- `PointerActions`: the slice of `Input` the router reads (`bound`, `pressed`); a game that drives the router without an `Input` calls `router.poll()` then `router.resolve(actions)` with its own (`update()` is `poll()` then `resolve(null)`).
 - `PadCursorOptions`: `getGamepads`, `pad`, `axes` ([0, 1], the left stick), `deadzone` (0.2), `speed` (0.012 of the short side per tick), `selectButton` (0), `secondaryButton` (2).
 - Ray helpers for writing a `HitTester`: `Vec3` (a mutable `[x, y, z]`), `Aabb` (`min`, `max`, `target`, for `aabbTester`), `createRay()`, `createHit(target)` (allocate once and reuse) and `rayAt(ray, t, out)` (the point at distance `t`).
 
@@ -161,7 +161,7 @@ interface PointerSample {
 }
 ```
 
-An XR source fills `ray` from each input source's target-ray pose, sets `select = trigger || pinch` and `secondary = squeeze`, and owns its thresholds (pinch distances in metres). It is added with `router.addSource(src)`; nothing in the router changes. `createSample(key, device)` allocates a blank `PointerSample` for a source to keep and refill. The engine ships no WebXR calls yet.
+An XR source fills `ray` from each input source's target-ray pose, sets `select = trigger || pinch` and `secondary = squeeze`, and owns its thresholds (pinch distances in metres). It is added with `router.addSource(src)`; nothing in the router changes. `createSample(key, device)` allocates a blank `PointerSample` for a custom source (a game's own device, or XR) to keep and refill. The engine ships no WebXR calls yet.
 
 ## Testing / automation
 The low-level feed methods (`keyDown`, `keyUp`, `buttonDown`, `buttonUp`, `wheel`, `pointerAt`, `releaseAll`) are public, so tests, replays and the automated playtest can drive input without a DOM. Pass `getGamepads` to inject pads.

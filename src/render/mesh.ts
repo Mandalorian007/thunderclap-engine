@@ -147,7 +147,7 @@ export class Mesh {
   vertexCount = 0;
   /**
    * Indices drawn (`drawIndexed`) when > 0. With an index buffer and `indexCount` 0 the renderer
-   * falls back to a non-indexed draw of `vertexCount`, so an empty mesh sets both to 0.
+   * skips the draw (no non-indexed fallback), so `update({ indexCount: 0 })` empties the mesh.
    */
   indexCount = 0;
   /**

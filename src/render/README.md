@@ -119,11 +119,6 @@ spans -0.5..0.5, so a transform's scale is the sprite's size.
 `transform.position`, `scale` (`ReadonlyVec3`) and `quaternion` (`ReadonlyQuat`) are
 read-only views; set them through the transform's setters.
 
-The matrix helpers behind it, for a drawable that writes its own instances:
-`writeMatrix2d(out, o, x, y, w, h, rotation)` writes a 2D draw's 3×4 matrix (what
-`frame.sprite(material, params)` builds), `multiplyMatrix3x4(out, a, b)` composes two affine
-matrices, and `MATRIX3X4_FLOATS` (12) is the size of one. None of them allocates.
-
 ### Instance format (28 floats, 112 bytes)
 
 | floats | WGSL `VertexIn` | content |
@@ -176,7 +171,6 @@ renderer.render(frame, eye);                              // or renderer.camera 
 - `CameraRect` (`x`, `y`, `width`, `height`, y down) is the type of `screen` and of the
   `fitRect`/`fitFreeRect` arguments; `CameraPoint` (`x`, `y`, `z`) is what `worldToScreen` and
   `screenToWorld` fill. `ALL_LAYERS` (`0xffffffff`) is the default `layers` mask.
-  `CAMERA_BLOCK_FLOATS` (64, 256 bytes) is the size of the WGSL `EngineCamera` block.
 
 ## Lighting
 
@@ -276,15 +270,14 @@ inside it to keep the standard transform.
 - `material.pipelineFor(layout, depth)` returns the pipeline for a `VertexLayout` and a
   `DepthMode` (0 = no depth attachment, the 2D path; 1 = test without writes, for blended draws;
   2 = test and write, for opaque draws). Depth pipelines use `DEPTH_FORMAT` (`depth24plus`).
+  `DepthMode` is exported so a `Drawable` that records with a material's pipeline can type the
+  argument (from `frame.depthFormat`).
 - `SPRITE_WGSL` is the built-in sprite fragment (`texture × vertex colour × tint`), the shader
   behind `createSpriteMaterial`.
 - The WGSL pieces, for a `Drawable` that compiles its own shader against the engine's bindings:
   `WGSL_GLOBALS` (the `globals` and `camera` blocks), `WGSL_LIGHTS`, `WGSL_NOISE` (the
   `engine_hash*`/`engine_noise`/`engine_fbm`/`engine_luma` helpers), `materialPrelude(layout)`
-  (the whole prelude for a vertex layout) and `WGSL_MATERIAL_PRELUDE` (the 2D layout's).
-- `blendState(mode)` maps a `BlendMode` to its `GPUBlendState` (`undefined` for opaque) and
-  `createSamplers(device)` builds the three `SamplerKind` samplers, so a hand-built pipeline
-  blends and samples the way materials do.
+  (the whole prelude for a vertex layout; `materialPrelude(VERTEX_LAYOUT_2D)` for the 2D path).
 
 ### Per-draw uniforms
 
@@ -346,10 +339,6 @@ textures every frame, as ping-pong does, builds no new bind groups after the fir
   FullscreenEncodeOptions)` takes `clear` (`null` loads), an explicit `bindGroup`,
   `blendConstant` and `timestampWrites`; `setUniforms`, `setTexture`, `createBindGroup` and
   `destroy` as on a material.
-- `BindingSet(device, desc: BindingDesc, sampler, defaultView, label, opts?: BindingSetOptions)` is the uniform buffer, sampler
-  and textures behind every material and fullscreen pass (`BindingDesc`: `uniformBytes`,
-  `textures`, `sampler`, `visibility`; `BindingSetOptions.perDraw` for per-draw blocks). It
-  rebuilds its bind group lazily and caches the last few texture sets.
 - `renderer.createMesh(desc: MeshDesc)` returns a `Mesh` (`MeshDesc`: `vertices?`, `indices?`,
   `layout?`, `capacity?`, `indexFormat?`, `label?`). With the
   default `VERTEX_LAYOUT_2D` a vertex is `pos.xy, uv.xy, color.rgba` (8 floats); with
@@ -429,7 +418,8 @@ renderer.resolutionScale;                          // scene width / output width
   `source`, `passes`, `cpuMs`, `samples`) holds the last value. Off (0) by default.
 - When the device has `timestamp-query` (`supportsTimestamps(device)`), `renderer.gpuTimer` is a
   `GpuTimer` and samples come from timestamps (`source: 'timestamp'`) with a per-pass breakdown
-  (`GpuPassTimes`, label to ms); passes label themselves with `gpuTimer.pass(label)`. Its
+  (`GpuPassTimes`, label to ms); passes label themselves with `gpuTimer.pass(label)`, which a
+  custom `PostProcessor` calls for its own passes (the class is exported for that type). Its
   `onResult` listeners get a `GpuTimerResult` (`totalMs`, `passes`, `samples`). Without the
   feature `gpuTimer` is null and timing falls back to the queue.
 - `DynamicResolution` turns GPU-time samples into a scale. It drops after 1 s over budget

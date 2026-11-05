@@ -19,7 +19,7 @@ export interface HarnessMeshState {
   logical: { width: number; height: number };
   /** The orbit: yaw and pitch in radians, distance in world units, and the eye it places. */
   camera: { yaw: number; pitch: number; distance: number; eye: [number, number, number] };
-  /** `renderer.camera.depthTest` / `depthWrite` as the renderer saw them. */
+  /** The page's own camera's `depthTest` / `depthWrite`, read after the frame it drew. */
   depth: { test: boolean; write: boolean };
   /**
    * Screen positions (logical px) of three world points, recomputed every frame:
