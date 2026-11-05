@@ -5,11 +5,16 @@
  *
  * - tap at a game-space point through the letterbox transform, and the `select` action;
  * - the tap-versus-pan boundary in CSS px (a 6 px wobble is a tap, a 30 px move is a drag);
- * - long-press timing (a 150 ms press taps, a 700 ms press is `info` and never taps);
+ * - long-press timing on the pinned clock (a 150 ms press taps, a 700 ms press is `info` and
+ *   never taps);
  * - double tap;
  * - drag origin, and drag-off into the letterbox bar (outside the game rect);
  * - `blocked()` (nothing while blocked; a running drag gets one cancel);
  * - pinch with two real touches (touch rows only).
+ *
+ * The gestures' clock is pinned (`setClock`) for every test: how long a press lasts is set by the
+ * spec, never by the wall clock, so a loaded machine cannot turn a tap into a long-press or split
+ * a double tap. Pointer events are still real.
  */
 import type { CDPSession, Frame, Page } from '@playwright/test';
 import type { GestureLogEntry, HarnessGesturesState } from '../harness/gestures-state';
@@ -23,10 +28,12 @@ interface Pt {
 }
 
 let frame: Frame;
+/** Set per test in `beforeEach`; skips read `touchRow()` so they never see a stale value. */
 let touch = false;
+const touchRow = () => test.info().project.use.hasTouch === true;
 
 test.beforeEach(async ({ page, wrapper }) => {
-  touch = test.info().project.use.hasTouch === true;
+  touch = touchRow();
   if (wrapper === 'top') {
     await page.goto(`${HARNESS_URL}gestures.html`);
     frame = page.mainFrame();
@@ -35,6 +42,7 @@ test.beforeEach(async ({ page, wrapper }) => {
     frame = await harnessFrame(page);
   }
   await expect.poll(() => read().then((s) => s.ready && s.ticks > 2)).toBe(true);
+  await setClock(0);
 });
 
 function read(): Promise<HarnessGesturesState> {
@@ -51,6 +59,11 @@ async function clear(): Promise<void> {
 
 async function setBlocked(b: boolean): Promise<void> {
   await frame.evaluate((v) => window.__harnessGestures?.setBlocked(v), b);
+}
+
+/** Pins the gestures' clock (ms). */
+async function setClock(ms: number): Promise<void> {
+  await frame.evaluate((v) => window.__harnessGestures?.setClock(v), ms);
 }
 
 /** Maps game space to page CSS px (the stage's box on the page, iframe included). */
@@ -180,17 +193,24 @@ test('long-press fires after its time and never taps; a short press taps', async
   const { toPage } = await stageMapper();
   const f = new Finger(page);
   const p = toPage(300, 300);
+  // Down at 0 ms, up at 150 ms: a tap.
   await f.down(p);
-  await page.waitForTimeout(150);
+  await frames(2);
+  await setClock(150);
   await f.up();
   await expect.poll(async () => (await read()).pressed.select ?? 0).toBe(1);
   expect((await read()).pressed.info ?? 0).toBe(0);
   await clear();
 
+  // Down at 1000 ms: nothing while the clock stands still, `info` once it reads 1700 ms.
+  await setClock(1000);
   await f.down(p);
+  await frames(3);
+  expect((await read()).pressed.info ?? 0).toBe(0);
+  await setClock(1700);
   await expect.poll(async () => (await read()).pressed.info ?? 0).toBe(1);
   // Held: info stays held until the finger lifts.
-  await page.waitForTimeout(250);
+  await frames(3);
   expect((await read()).released.info ?? 0).toBe(0);
   await f.up();
   await expect.poll(async () => (await read()).released.info ?? 0).toBe(1);
@@ -274,7 +294,7 @@ test('blocked: nothing is reported, and a running drag is cancelled once', async
 });
 
 test('pinch: two real touches report scale', async ({ page }) => {
-  test.skip(!touch, 'two-finger touch rows only');
+  test.skip(!touchRow(), 'two-finger touch rows only');
   const { toPage } = await stageMapper();
   const f = new Finger(page);
   const c = toPage(400, 300);
@@ -345,7 +365,7 @@ test('magnify: a held finger snaps off a refused cell; the loupe shows below 44 
 });
 
 test('magnify: a dragging finger aims 56 CSS px above itself and lands there', async ({ page }) => {
-  test.skip(!touch, 'touch rows only (a mouse never aims)');
+  test.skip(!touchRow(), 'touch rows only (a mouse never aims)');
   const { toPage, scale } = await stageMapper();
   const f = new Finger(page);
   const aimAt = await cellPoint(5, 1);

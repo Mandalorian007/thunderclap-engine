@@ -70,6 +70,8 @@ export interface HarnessGesturesApi {
   state: HarnessGesturesState;
   /** Block input (as a modal panel would). */
   setBlocked(blocked: boolean): void;
+  /** Pin the gestures' clock to `ms`, or `null` for `performance.now()`. */
+  setClock(ms: number | null): void;
   /** Empty the log and counts. */
   clear(): void;
 }
