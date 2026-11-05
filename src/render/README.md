@@ -334,6 +334,61 @@ textures every frame, as ping-pong does, builds no new bind groups after the fir
   `fn shade(uv: vec2f) -> vec4f` once into a texture. Use it for procedural stone, noise,
   and glyphs. The default format is `rgba8unorm-srgb`, and `shade` returns linear colour.
 - `renderer.createSpriteMaterial(texture, label, { blend, sampler })`
+- `SamplerKind` is `'linear-clamp'`, `'linear-repeat'`, `'nearest-clamp'`, `'linear-mip-repeat'`
+  or `'nearest-mip-clamp'`. The two `-mip` kinds blend between mip levels: linear for tiling
+  surfaces, nearest for pixel-art faces that stay crisp up close and calm far away.
+
+### Texture arrays and mipmaps
+
+A voxel or tile game binds one `texture_2d_array` of block faces and picks a face by layer
+index, instead of an atlas whose tiles bleed into each other at a distance.
+
+- `TextureDesc` also takes `layers?: number` (set, even to 1, it makes a 2D array texture whose
+  view is `'2d-array'`) and `mips?: boolean` (allocate the full chain, `mipLevelCount(width,
+  height)` levels). A `Texture` reports `layers`, `mipLevels` and `viewDimension`
+  (`'2d' | '2d-array'`).
+- `createTextureArray(device, desc: TextureArrayDesc)` (`{ width, height, layers, mips?, format?,
+  usage?, label? }`) makes an empty array you fill yourself (`writeTexture` with `origin.z` as
+  the layer).
+- `loadTextureArray(device, sources: TextureLayerSource[], opts?: LoadTextureArrayOptions)`
+  uploads one source per layer, in order: an image (`TextureSource`) through
+  `copyExternalImageToTexture`, or pixel data (`PixelSource`: `{ width, height, data }`, which
+  `ImageData` also is) through `writeTexture`. All sources must share the first one's size (it
+  throws otherwise). Options: `mips` (default true: the full chain is generated on the GPU),
+  `mipFilter` (`'linear'` default, or `'nearest'`), `format` (default `rgba8unorm-srgb`) and
+  `label`.
+- `generateMipmaps(device, texture, { filter?: MipFilter })` fills levels 1.. of any `Texture`
+  created with `mips: true` (2D or array), each from the level above, layer by layer, with a
+  tiny blit pipeline per format and filter cached per device. `'linear'` averages each 2×2 block
+  (in linear space for sRGB formats); `'nearest'` keeps one texel. The texture needs
+  `TEXTURE_BINDING | RENDER_ATTACHMENT` usage (the default) and a renderable float format. Run it
+  after uploading level 0; it allocates, so do it at load time. Options type:
+  `GenerateMipmapsOptions`.
+- A material binds an array through `BindingDesc.viewDimension` (`'2d-array'` for every slot, or
+  one value per slot): the slot becomes `texture_2d_array<f32>`, and reads a 1-layer white array
+  until `setTexture` binds yours.
+
+```ts
+const blocks = loadTextureArray(renderer.device, [grass, sand, clay, stone], { label: 'blocks' });
+const mat = renderer.createMaterial({
+  label: 'blocks', blend: 'opaque', wgsl, textures: 1,
+  viewDimension: '2d-array', sampler: 'nearest-mip-clamp',
+});
+mat.setTexture(0, blocks);
+```
+
+```wgsl
+@group(1) @binding(1) var blockSampler: sampler;
+@group(1) @binding(2) var blocks: texture_2d_array<f32>;
+// in fs_main: the layer rides in the vertex colour's alpha (see below)
+let albedo = textureSample(blocks, blockSampler, in.uv, u32(round(in.color.a)));
+```
+
+**Layer convention for `VERTEX_LAYOUT_3D`.** The 3D layout has `uv` only, so a mesher writes the
+face's layer as a whole number in the vertex colour's alpha (all four corners of a face alike)
+and the material reads `u32(round(in.color.a))`. `VSOut.color` is vertex colour × tint, so draw
+such meshes with tint alpha 1 (the default); the rgb stays free. `harness/stream.html` textures
+its Worker-meshed chunks this way.
 - Colour helpers: `hex('#rrggbb', intensity)` returns linear RGBA; also `rgba`, `scaleRgb`,
   `srgbToLinear`, `linearToSrgb`.
 
@@ -348,7 +403,8 @@ textures every frame, as ping-pong does, builds no new bind groups after the fir
   `destroy` as on a material.
 - `BindingSet(device, desc: BindingDesc, sampler, defaultView, label, opts?: BindingSetOptions)` is the uniform buffer, sampler
   and textures behind every material and fullscreen pass (`BindingDesc`: `uniformBytes`,
-  `textures`, `sampler`, `visibility`; `BindingSetOptions.perDraw` for per-draw blocks). It
+  `textures`, `sampler`, `visibility`, `viewDimension`; `BindingSetOptions.perDraw` for
+  per-draw blocks). It
   rebuilds its bind group lazily and caches the last few texture sets.
 - `renderer.createMesh(desc: MeshDesc)` returns a `Mesh` (`MeshDesc`: `vertices?`, `indices?`,
   `layout?`, `capacity?`, `indexFormat?`, `label?`). With the

@@ -6,12 +6,20 @@ import type { SamplerKind, TextureLike } from './texture';
  *
  * - `@binding(0)` `var<uniform>`: present when `uniformBytes > 0`
  * - `@binding(1)` `sampler`: present when `textures > 0`
- * - `@binding(2 + i)` `texture_2d<f32>`: one per texture slot
+ * - `@binding(2 + i)` `texture_2d<f32>`: one per texture slot (`texture_2d_array<f32>` for a
+ *   slot whose `viewDimension` is `'2d-array'`)
  */
 export interface BindingDesc {
   uniformBytes?: number;
   textures?: number;
   sampler?: SamplerKind;
+  /**
+   * View dimension of the texture slots: one value for every slot, or one per slot. Default
+   * `'2d'`. Use `'2d-array'` to bind a texture array (`createTextureArray` /
+   * `loadTextureArray`) as `texture_2d_array<f32>`; an array slot left unbound reads a
+   * 1-layer white array.
+   */
+  viewDimension?: GPUTextureViewDimension | readonly GPUTextureViewDimension[];
   /** Which stages see the bindings. Default fragment + vertex. */
   visibility?: GPUShaderStageFlags;
 }
@@ -28,6 +36,38 @@ export interface BindingSetOptions {
 
 export function hasBindings(desc: BindingDesc): boolean {
   return (desc.uniformBytes ?? 0) > 0 || (desc.textures ?? 0) > 0;
+}
+
+/** The view dimension of texture slot `slot` under `desc.viewDimension` (default `'2d'`). */
+export function slotViewDimension(desc: BindingDesc, slot: number): GPUTextureViewDimension {
+  const d = desc.viewDimension;
+  if (d === undefined) return '2d';
+  if (typeof d === 'string') return d;
+  return d[slot] ?? '2d';
+}
+
+/** 1×1, 1-layer white `'2d-array'` views, one per device: the default for unbound array slots. */
+const whiteArrays = new WeakMap<GPUDevice, GPUTextureView>();
+
+function whiteArrayView(device: GPUDevice): GPUTextureView {
+  let view = whiteArrays.get(device);
+  if (!view) {
+    const texture = device.createTexture({
+      label: 'white-array',
+      size: [1, 1, 1],
+      format: 'rgba8unorm',
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    });
+    device.queue.writeTexture(
+      { texture },
+      new Uint8Array([255, 255, 255, 255]),
+      { bytesPerRow: 4 },
+      [1, 1, 1],
+    );
+    view = texture.createView({ label: 'white-array', dimension: '2d-array' });
+    whiteArrays.set(device, view);
+  }
+  return view;
 }
 
 export function createBindingLayout(
@@ -49,7 +89,13 @@ export function createBindingLayout(
   if (n > 0) {
     entries.push({ binding: 1, visibility: vis, sampler: {} });
     for (let i = 0; i < n; i++) {
-      entries.push({ binding: 2 + i, visibility: vis, texture: { sampleType: 'float' } });
+      const viewDimension = slotViewDimension(desc, i);
+      entries.push({
+        binding: 2 + i,
+        visibility: vis,
+        texture:
+          viewDimension === '2d' ? { sampleType: 'float' } : { sampleType: 'float', viewDimension },
+      });
     }
   }
   return device.createBindGroupLayout({ label, entries });
@@ -105,6 +151,9 @@ export class BindingSet {
     }
     this.uniformBuffer = bytes > 0 ? this.makeUniformBuffer() : null;
     this.views = new Array(desc.textures ?? 0).fill(defaultView);
+    for (let i = 0; i < this.views.length; i++) {
+      if (slotViewDimension(desc, i) === '2d-array') this.views[i] = whiteArrayView(device);
+    }
   }
 
   setUniforms(data: BufferSource, byteOffset = 0): void {

@@ -1,7 +1,8 @@
 /**
  * The mesher Worker of the streaming page (harness/stream.html): game code, not engine code. It
  * fills the chunk buffer the page sent it with a heightfield of columns in `VERTEX_LAYOUT_3D`
- * (12 floats: xyz, normal, uv, rgba) followed by uint16 indices, and transfers it back. The page
+ * (12 floats: xyz, normal, uv, rgb + texture-array layer in alpha) followed by uint16 indices,
+ * and transfers it back. The page
  * hands the same buffer straight to `mesh.update()`, so no copy happens on the main thread.
  */
 import {
@@ -13,6 +14,7 @@ import {
   STREAM_VERTEX_FLOATS,
   type StreamReply,
   type StreamRequest,
+  streamChunkLayer,
 } from './stream-state';
 
 /** Face normal, then the two tangents spanning the quad (right, up), as in the mesh demo. */
@@ -53,6 +55,8 @@ function height(wx: number, wz: number, phase: number): number {
 }
 
 function mesh(req: StreamRequest): StreamReply {
+  // The texture-array layer of every face, carried in the vertex colour's alpha.
+  const layer = streamChunkLayer(req.chunk);
   const verts = new Float32Array(req.buffer, 0, STREAM_MAX_VERTICES * STREAM_VERTEX_FLOATS);
   const idx = new Uint16Array(req.buffer, STREAM_INDEX_OFFSET, STREAM_MAX_INDICES);
   let v = 0;
@@ -85,7 +89,7 @@ function mesh(req: StreamRequest): StreamReply {
       verts[v + 8] = red;
       verts[v + 9] = green;
       verts[v + 10] = blue;
-      verts[v + 11] = 1;
+      verts[v + 11] = layer;
       v += STREAM_VERTEX_FLOATS;
     }
     idx[i++] = base;
