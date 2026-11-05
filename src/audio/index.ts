@@ -7,6 +7,8 @@ export {
   type BusName,
   type BusSettings,
   busGain,
+  type CameraLike,
+  type ConeOptions,
   DEFAULT_LIMITER,
   DEFAULT_MIXER,
   DEFAULT_REVERB_SENDS,
@@ -15,6 +17,9 @@ export {
   type OutputBus,
   type PlayOptions,
   type ReverbOptions,
+  type Rolloff,
+  SpatialListener,
+  type SpatialOptions,
   sanitizeMixer,
   type Voice,
 } from './audio';

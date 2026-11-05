@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Camera } from '../render/camera';
 import { MemoryStorage } from '../save';
 import { AudioEngine, busGain, DEFAULT_MIXER, sanitizeMixer } from './audio';
 import { persistMixer } from './persist';
@@ -583,5 +584,266 @@ describe('master limiter and reverb', () => {
     await audio.unlock();
     expect((audio.busNode('music') as unknown as FakeNode).outputs).toHaveLength(1);
     audio.setReverbSend('music', 1);
+  });
+});
+
+// ---------------------------------------------------------------- spatial audio
+
+type FakePanner = FakeNode & {
+  context: unknown;
+  panningModel: string;
+  distanceModel: string;
+  refDistance: number;
+  maxDistance: number;
+  rolloffFactor: number;
+  coneInnerAngle: number;
+  coneOuterAngle: number;
+  coneOuterGain: number;
+  positionX: FakeParam;
+  positionY: FakeParam;
+  positionZ: FakeParam;
+  orientationX: FakeParam;
+  orientationY: FakeParam;
+  orientationZ: FakeParam;
+};
+
+/** Adds `listener` and `createPanner` (the modern AudioParam shape). */
+class SpatialFakeContext extends FakeContext {
+  panners: FakePanner[] = [];
+  listener = {
+    positionX: new FakeParam(0),
+    positionY: new FakeParam(0),
+    positionZ: new FakeParam(0),
+    forwardX: new FakeParam(0),
+    forwardY: new FakeParam(0),
+    forwardZ: new FakeParam(-1),
+    upX: new FakeParam(0),
+    upY: new FakeParam(1),
+    upZ: new FakeParam(0),
+  };
+  createPanner(): FakePanner {
+    const p = Object.assign(new FakeNode(), {
+      context: this,
+      panningModel: 'HRTF',
+      distanceModel: 'inverse',
+      refDistance: 1,
+      maxDistance: 10000,
+      rolloffFactor: 1,
+      coneInnerAngle: 360,
+      coneOuterAngle: 360,
+      coneOuterGain: 0,
+      positionX: new FakeParam(0),
+      positionY: new FakeParam(0),
+      positionZ: new FakeParam(0),
+      orientationX: new FakeParam(1),
+      orientationY: new FakeParam(0),
+      orientationZ: new FakeParam(0),
+    });
+    this.panners.push(p);
+    return p;
+  }
+}
+
+/** Older Safari: no AudioParams on the listener or panner, only the deprecated setters. */
+class LegacyFakeContext extends FakeContext {
+  calls: string[] = [];
+  listener = {
+    setPosition: (...a: number[]) => this.calls.push(`listener.pos ${a.join(',')}`),
+    setOrientation: (...a: number[]) => this.calls.push(`listener.ori ${a.join(',')}`),
+  };
+  createPanner() {
+    return Object.assign(new FakeNode(), {
+      context: this,
+      setPosition: (...a: number[]) => this.calls.push(`panner.pos ${a.join(',')}`),
+      setOrientation: (...a: number[]) => this.calls.push(`panner.ori ${a.join(',')}`),
+    });
+  }
+}
+
+async function spatialSetup(ctx: FakeContext) {
+  const audio = new AudioEngine({ createContext: () => ctx as unknown as AudioContext });
+  audio.define('beep', async () => fakeBuffer);
+  await audio.prepare();
+  return audio;
+}
+
+function listenerValues(ctx: SpatialFakeContext): number[] {
+  const l = ctx.listener;
+  const params = [l.positionX, l.positionY, l.positionZ, l.forwardX, l.forwardY, l.forwardZ];
+  return [...params, l.upX, l.upY, l.upZ].map((p) => p.value);
+}
+
+function pannerPos(p: FakePanner): number[] {
+  return [p.positionX.value, p.positionY.value, p.positionZ.value];
+}
+
+describe('spatial audio', () => {
+  it('listener.set before unlock is applied when the context is built', async () => {
+    const ctx = new SpatialFakeContext();
+    const audio = await spatialSetup(ctx);
+    audio.listener.set([1, 2, 3], [0, 0, 1]);
+    expect([...Array.from(audio.listener.position)]).toEqual([1, 2, 3]);
+    expect(listenerValues(ctx)).toEqual([0, 0, 0, 0, 0, -1, 0, 1, 0]);
+    await audio.unlock();
+    expect(listenerValues(ctx)).toEqual([1, 2, 3, 0, 0, 1, 0, 1, 0]);
+    audio.listener.set([4, 5, 6], [1, 0, 0], [0, 0, 1]);
+    expect(listenerValues(ctx)).toEqual([4, 5, 6, 1, 0, 0, 0, 0, 1]);
+  });
+
+  it('listener.fromCamera reads position and the view rows', async () => {
+    const ctx = new SpatialFakeContext();
+    const audio = await spatialSetup(ctx);
+    await audio.unlock();
+    // The camera at (5, 1, 0) looks down -x. Column-major world→view whose rows are
+    // right (0, 0, -1), up (0, 1, 0) and back (1, 0, 0).
+    const view = new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, -1, -5, 1]);
+    audio.listener.fromCamera({ view, position: new Float32Array([5, 1, 0]) });
+    expect(listenerValues(ctx).map((v) => v + 0)).toEqual([5, 1, 0, -1, 0, 0, 0, 1, 0]);
+  });
+
+  it('listener.fromCamera follows the renderer Camera', async () => {
+    const ctx = new SpatialFakeContext();
+    const audio = await spatialSetup(ctx);
+    await audio.unlock();
+    const cam = Camera.perspective(1, 1, 0.1, 100).lookAt([2, 3, 4], [2, 3, -6]);
+    audio.listener.fromCamera(cam);
+    const got = listenerValues(ctx);
+    const want = [2, 3, 4, 0, 0, -1, 0, 1, 0];
+    got.forEach((v, i) => {
+      expect(v).toBeCloseTo(want[i]!, 5);
+    });
+  });
+
+  it('PlayOptions.at routes gain → PannerNode → bus with the spatial options', async () => {
+    const ctx = new SpatialFakeContext();
+    const audio = await spatialSetup(ctx);
+    await audio.unlock();
+    const v = audio.play('beep', {
+      at: [3, 0, -4],
+      spatial: {
+        refDistance: 2,
+        maxDistance: 50,
+        rolloff: 'linear',
+        rolloffFactor: 0.5,
+        cone: { inner: 60, outer: 120, outerGain: 0.2 },
+        direction: [0, 0, 1],
+      },
+    });
+    const gain = ctx.played[0]!.outputs[0] as FakeGain;
+    const p = gain.outputs[0] as FakePanner;
+    expect(p).toBe(ctx.panners[0]);
+    expect(p.outputs[0]).toBe(audio.busNode('sfx'));
+    expect(pannerPos(p)).toEqual([3, 0, -4]);
+    expect([p.orientationX.value, p.orientationY.value, p.orientationZ.value]).toEqual([0, 0, 1]);
+    expect(p).toMatchObject({
+      panningModel: 'equalpower',
+      distanceModel: 'linear',
+      refDistance: 2,
+      maxDistance: 50,
+      rolloffFactor: 0.5,
+      coneInnerAngle: 60,
+      coneOuterAngle: 120,
+      coneOuterGain: 0.2,
+    });
+    v.setPosition(7, 8, 9);
+    v.setDirection(1, 0, 0);
+    expect(pannerPos(p)).toEqual([7, 8, 9]);
+    expect(p.orientationX.value).toBe(1);
+    expect(ctx.panners).toHaveLength(1);
+  });
+
+  it('HRTF is opt-in, and at wins over pan', async () => {
+    const ctx = new SpatialFakeContext();
+    const audio = await spatialSetup(ctx);
+    await audio.unlock();
+    audio.play('beep', { at: [0, 0, 0], pan: 0.5, spatial: { panningModel: 'HRTF' } });
+    const gain = ctx.played[0]!.outputs[0] as FakeGain;
+    expect(gain.outputs).toHaveLength(1);
+    expect(gain.outputs[0]).toBe(ctx.panners[0]);
+    expect(ctx.panners[0]!.panningModel).toBe('HRTF');
+  });
+
+  it('pan alone goes through a StereoPannerNode; setPosition is a no-op there', async () => {
+    const ctx = new SpatialFakeContext();
+    const audio = await spatialSetup(ctx);
+    await audio.unlock();
+    const v = audio.play('beep', { pan: 0.25 });
+    const gain = ctx.played[0]!.outputs[0] as FakeGain;
+    expect((gain.outputs[0] as FakeNode & { pan: FakeParam }).pan.value).toBe(0.25);
+    v.setPosition(1, 2, 3);
+    v.setDirection(1, 2, 3);
+    expect(ctx.panners).toHaveLength(0);
+  });
+
+  it('pools panners: returned on end, reused and reset by the next spatial voice', async () => {
+    const ctx = new SpatialFakeContext();
+    const audio = await spatialSetup(ctx);
+    await audio.unlock();
+    const a = audio.play('beep', {
+      at: [1, 0, 0],
+      spatial: { rolloff: 'exponential', refDistance: 9 },
+    });
+    const b = audio.play('beep', { at: [2, 0, 0] });
+    expect(ctx.panners).toHaveLength(2);
+    const first = ctx.panners[0]!;
+    a.stop();
+    await vi.waitFor(() => expect(audio.pooledPanners).toBe(1));
+    expect(first.outputs).toHaveLength(0);
+    // The ended voice's gain no longer feeds the pooled panner.
+    expect((ctx.played[0]!.outputs[0] as FakeGain).outputs).toHaveLength(0);
+    audio.play('beep', { at: [5, 6, 7] });
+    expect(ctx.panners).toHaveLength(2);
+    expect(audio.pooledPanners).toBe(0);
+    expect(pannerPos(first)).toEqual([5, 6, 7]);
+    expect(first.distanceModel).toBe('inverse');
+    expect(first.refDistance).toBe(1);
+    expect(first.outputs[0]).toBe(audio.busNode('sfx'));
+    b.stop();
+    await vi.waitFor(() => expect(audio.pooledPanners).toBe(1));
+  });
+
+  it('a deferred spatial loop keeps setPosition until it starts', async () => {
+    const ctx = new SpatialFakeContext();
+    const audio = await spatialSetup(ctx);
+    const v = audio.loop('beep', { at: [0, 0, 0] });
+    v.setPosition(4, 4, 4);
+    await audio.unlock();
+    await vi.waitFor(() => expect(ctx.panners).toHaveLength(1));
+    expect(pannerPos(ctx.panners[0]!)).toEqual([4, 4, 4]);
+    expect(ctx.panners[0]!.outputs[0]).toBe(audio.busNode('music'));
+  });
+
+  it('falls back to the deprecated setters, and plays dry without createPanner', async () => {
+    const legacy = new LegacyFakeContext();
+    const audio = await spatialSetup(legacy);
+    await audio.unlock();
+    audio.listener.set([1, 2, 3], [0, 0, -1]);
+    const v = audio.play('beep', { at: [9, 8, 7] });
+    v.setPosition(1, 1, 1);
+    // The listener is untouched until a game first reaches for `audio.listener`.
+    expect(legacy.calls).toEqual([
+      'listener.pos 1,2,3',
+      'listener.ori 0,0,-1,0,1,0',
+      'panner.pos 9,8,7',
+      'panner.ori 1,0,0',
+      'panner.pos 1,1,1',
+    ]);
+
+    const plain = new FakeContext();
+    const dry = await spatialSetup(plain);
+    await dry.unlock();
+    dry.listener.set([1, 0, 0], [0, 0, -1]);
+    dry.play('beep', { at: [1, 2, 3] }).setPosition(0, 0, 0);
+    expect((plain.played[0]!.outputs[0] as FakeGain).outputs[0]).toBe(dry.busNode('sfx'));
+  });
+
+  it('dispose drops the pool', async () => {
+    const ctx = new SpatialFakeContext();
+    const audio = await spatialSetup(ctx);
+    await audio.unlock();
+    audio.play('beep', { at: [0, 0, 0] }).stop();
+    await vi.waitFor(() => expect(audio.pooledPanners).toBe(1));
+    await audio.dispose();
+    expect(audio.pooledPanners).toBe(0);
   });
 });
