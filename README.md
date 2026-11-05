@@ -137,6 +137,8 @@ Import only from the public entry points listed under [Modules](#modules). Anyth
 | `@thunderclap/engine/host` | `Host` interface, `createWebHost()` (top-level page or iframe): links, clipboard, fullscreen, storage ([README](src/host/README.md)) |
 | `@thunderclap/engine/testing` | A recording fake `GPUDevice` for unit tests |
 
+**Templates.** `templates/puzzle` (`@thunderclap/template-puzzle`) is a copyable 2D puzzle game: `createGame`, one scene, pure `rules/` with tests, a versioned save with a migration, a layout spec placing a HUD on every form factor, and a `CLAUDE.md` that names the engine concepts for an agent extending it. Run `pnpm template:puzzle`; `pnpm check` runs its typecheck and tests (`check:template-puzzle`).
+
 **Packages.** `packages/host-electron` (`@thunderclap/host-electron`) is the Electron desktop host: a sandboxed shell, a preload bridge and `createElectronHost()`. It lives in this repo as a pnpm workspace package and the engine never imports it. Run `pnpm desktop:dev`, `pnpm desktop:build` or `pnpm test:e2e:desktop` ([README](packages/host-electron/README.md)).
 
 [ARCHITECTURE.md](ARCHITECTURE.md) has the contracts for each one: what exists today and what is planned.

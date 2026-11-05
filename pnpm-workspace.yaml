@@ -1,3 +1,4 @@
-# The engine stays the root package; sub-packages live under packages/.
+# The engine stays the root package; sub-packages live under packages/, game templates under templates/.
 packages:
   - packages/*
+  - templates/*
