@@ -19,6 +19,15 @@ export {
   isTextEntryTarget,
 } from './input';
 export {
+  Look,
+  type LookEvents,
+  type LookKeys,
+  type LookOptions,
+  type LookStick,
+  type LookTouchOptions,
+  type MoveZone,
+} from './look';
+export {
   type Aim,
   type Grid,
   loupeClear,
