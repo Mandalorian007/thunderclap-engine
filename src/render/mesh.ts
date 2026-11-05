@@ -116,7 +116,27 @@ export interface MeshDesc {
    * initial `indices`, else `uint16` when `capacity.vertices` fits, `uint32` otherwise.
    */
   indexFormat?: GPUIndexFormat;
+  /**
+   * Bounding sphere in mesh space, for frustum culling (`camera.cull`). Default: computed from
+   * `vertices` when `autoBounds` is on, else unbounded (never culled).
+   */
+  bounds?: MeshBounds;
+  /**
+   * Recompute `bounds` from the positions on every `update()` that uploads vertices without
+   * passing `bounds`. Default on under `AUTO_BOUNDS_MAX_VERTICES` (65 536) of capacity, off
+   * above it, so a chunk pipeline that knows its bounds passes them itself.
+   */
+  autoBounds?: boolean;
 }
+
+/** A bounding sphere: `center` (x, y, z) and `radius`. `radius` Infinity means unbounded. */
+export interface MeshBounds {
+  center: [number, number, number];
+  radius: number;
+}
+
+/** Capacity (vertices) up to which `MeshDesc.autoBounds` defaults to on. */
+export const AUTO_BOUNDS_MAX_VERTICES = 65536;
 
 /**
  * One geometry upload. Views are read from their own `ArrayBuffer` (`buffer`, `byteOffset`),
@@ -131,6 +151,11 @@ export interface MeshUpdate {
   vertexCount?: number;
   /** Indices to upload and draw. Default: all of `indices`. */
   indexCount?: number;
+  /**
+   * New bounding sphere (copied). Without it, bounds are recomputed from `vertices` only when
+   * the mesh's `autoBounds` is on.
+   */
+  bounds?: MeshBounds;
 }
 
 /** 1.5× growth, like a vector: amortised reallocations when a streamed mesh keeps growing. */
@@ -156,6 +181,17 @@ export class Mesh {
    * when this changes.
    */
   growths = 0;
+  /**
+   * Bounding sphere in mesh space (the renderer carries it through each draw's instance matrix
+   * and culls against `camera.frustum`). From `MeshDesc.bounds`, `MeshUpdate.bounds` or, with
+   * `autoBounds`, the positions; `radius` Infinity when unknown (never culled). The object is
+   * owned by the mesh; read it, set it through `update({ bounds })`.
+   */
+  readonly bounds: MeshBounds = { center: [0, 0, 0], radius: Number.POSITIVE_INFINITY };
+  /** Whether `update()` recomputes `bounds` from uploaded vertices (`MeshDesc.autoBounds`). */
+  readonly autoBounds: boolean;
+  /** The layout's position attribute (location 0) has a z component. */
+  private readonly pos3: boolean;
   private readonly cap: { vertices: number; indices: number } = { vertices: 0, indices: 0 };
   /** 4-byte scratch for the last index of an odd uint16 count at the end of its buffer. */
   private readonly tail16 = new Uint16Array(2);
@@ -168,6 +204,8 @@ export class Mesh {
     this.layout = desc.layout ?? VERTEX_LAYOUT_2D;
     const vCount = desc.vertices ? desc.vertices.length / this.layout.floats : 0;
     this.cap.vertices = Math.max(vCount, desc.capacity?.vertices ?? 0, 1);
+    this.autoBounds = desc.autoBounds ?? this.cap.vertices < AUTO_BOUNDS_MAX_VERTICES;
+    this.pos3 = positionHasZ(this.layout);
     this.vertexBuffer = this.makeVertexBuffer(this.cap.vertices);
     const iCap = Math.max(desc.indices?.length ?? 0, desc.capacity?.indices ?? 0);
     if (iCap > 0) {
@@ -177,8 +215,8 @@ export class Mesh {
       this.cap.indices = iCap;
       this.indexBuffer = this.makeIndexBuffer(iCap);
     }
-    if (desc.vertices || desc.indices) {
-      this.update({ vertices: desc.vertices, indices: desc.indices });
+    if (desc.vertices || desc.indices || desc.bounds) {
+      this.update({ vertices: desc.vertices, indices: desc.indices, bounds: desc.bounds });
     }
   }
 
@@ -191,7 +229,9 @@ export class Mesh {
    * Replace geometry (`MeshUpdate`). Writes with `queue.writeBuffer` straight from each view's
    * buffer and reuses the GPU buffers while the counts fit `capacity`; grows them (1.5×) only
    * when a count exceeds it or the index format changes. Returns true when a buffer was
-   * reallocated (`growths` counts them). Allocation-free otherwise.
+   * reallocated (`growths` counts them). `bounds` are copied when given, else recomputed from
+   * the uploaded positions when `autoBounds` is on (a `Float32Array` view is read in place;
+   * any other view type gets one over the same buffer). Allocation-free otherwise.
    */
   update(u: MeshUpdate): boolean {
     let grew = false;
@@ -214,6 +254,7 @@ export class Mesh {
           count * stride,
         );
       }
+      if (!u.bounds && this.autoBounds) this.computeBounds(u.vertices, count);
     } else if (u.vertexCount !== undefined) {
       this.vertexCount = Math.min(u.vertexCount, this.cap.vertices);
     }
@@ -234,8 +275,70 @@ export class Mesh {
     } else if (u.indexCount !== undefined && this.indexBuffer) {
       this.indexCount = Math.min(u.indexCount, this.cap.indices);
     }
+    if (u.bounds) {
+      const b = this.bounds;
+      const c = u.bounds.center;
+      b.center[0] = c[0];
+      b.center[1] = c[1];
+      b.center[2] = c[2];
+      b.radius = u.bounds.radius;
+    }
     if (grew) this.growths++;
     return grew;
+  }
+
+  /**
+   * Bounding sphere of the first `count` vertices of `view` in this layout: the centre of their
+   * axis-aligned box, the radius the farthest vertex from it. 2D positions have z = 0.
+   */
+  private computeBounds(view: ArrayBufferView, count: number): void {
+    const b = this.bounds;
+    if (count === 0) {
+      b.center[0] = 0;
+      b.center[1] = 0;
+      b.center[2] = 0;
+      b.radius = 0;
+      return;
+    }
+    const floats = this.layout.floats;
+    const f =
+      view instanceof Float32Array
+        ? view
+        : new Float32Array(view.buffer, view.byteOffset, count * floats);
+    const has3 = this.pos3;
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let minZ = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    let maxZ = Number.NEGATIVE_INFINITY;
+    const end = count * floats;
+    for (let o = 0; o < end; o += floats) {
+      const x = f[o]!;
+      const y = f[o + 1]!;
+      const z = has3 ? f[o + 2]! : 0;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+      if (z < minZ) minZ = z;
+      if (z > maxZ) maxZ = z;
+    }
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    const cz = (minZ + maxZ) / 2;
+    let r2 = 0;
+    for (let o = 0; o < end; o += floats) {
+      const dx = f[o]! - cx;
+      const dy = f[o + 1]! - cy;
+      const dz = (has3 ? f[o + 2]! : 0) - cz;
+      const d = dx * dx + dy * dy + dz * dz;
+      if (d > r2) r2 = d;
+    }
+    b.center[0] = cx;
+    b.center[1] = cy;
+    b.center[2] = cz;
+    b.radius = Math.sqrt(r2);
   }
 
   /** `writeBuffer` wants 4-byte sizes and offsets; a uint16 count may be odd. */
@@ -286,6 +389,14 @@ export class Mesh {
       usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
     });
   }
+}
+
+/** Does the layout's position attribute (shader location 0) carry three components? */
+function positionHasZ(layout: VertexLayout): boolean {
+  for (const a of layout.buffer.attributes) {
+    if (a.shaderLocation === 0) return a.format === 'float32x3' || a.format === 'float32x4';
+  }
+  return false;
 }
 
 /** Index format implied by a typed array; any other view keeps `fallback`. */

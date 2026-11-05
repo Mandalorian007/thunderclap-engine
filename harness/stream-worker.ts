@@ -57,6 +57,7 @@ function mesh(req: StreamRequest): StreamReply {
   const idx = new Uint16Array(req.buffer, STREAM_INDEX_OFFSET, STREAM_MAX_INDICES);
   let v = 0;
   let i = 0;
+  let maxY = 0;
   const half = STREAM_COLUMNS / 2;
   const cx = (req.chunk % STREAM_GRID) * STREAM_COLUMNS - (STREAM_GRID * STREAM_COLUMNS) / 2;
   const cz =
@@ -105,6 +106,7 @@ function mesh(req: StreamRequest): StreamReply {
       const lx = x - half + 0.5;
       const lz = z - half + 0.5;
       const g = 0.45 + 0.18 * h;
+      if (h > maxY) maxY = h;
       quad([lx, h, lz], [0, 1, 0], [1, 0, 0], [0, 0, -1], 0.5, 0.5, 0.3, g, 0.25);
       for (const [n, r, u] of SIDES) {
         const c = [lx + n[0]! * 0.5, h / 2, lz + n[2]! * 0.5];
@@ -112,11 +114,13 @@ function mesh(req: StreamRequest): StreamReply {
       }
     }
   }
+  // The chunk's bounds: the floor spans ±half in x and z, the columns rise to maxY.
   return {
     chunk: req.chunk,
     buffer: req.buffer,
     vertexCount: v / STREAM_VERTEX_FLOATS,
     indexCount: i,
+    bounds: { center: [0, maxY / 2, 0], radius: Math.hypot(half, maxY / 2, half) },
   };
 }
 

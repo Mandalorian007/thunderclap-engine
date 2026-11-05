@@ -1,5 +1,5 @@
 import type { BindingSet } from './bindings';
-import { ALL_LAYERS, CAMERA_BLOCK_FLOATS, Camera, type CameraRect } from './camera';
+import { ALL_LAYERS, CAMERA_BLOCK_FLOATS, Camera, type CameraRect, FRUSTUM_FLOATS } from './camera';
 import { installGpuErrorLogging } from './diagnostics';
 import {
   type Drawable,
@@ -20,7 +20,7 @@ import {
   type MaterialDesc,
   SPRITE_WGSL,
 } from './material';
-import { Mesh, type MeshDesc, quadGeometry } from './mesh';
+import { Mesh, type MeshBounds, type MeshDesc, quadGeometry } from './mesh';
 import { PingPong } from './ping-pong';
 import { SCENE_FORMAT, SceneTarget, type SceneTargetDesc } from './scene-target';
 import {
@@ -65,6 +65,8 @@ export interface RenderStats {
   drawCalls: number;
   instances: number;
   drawables: number;
+  /** Mesh draws skipped by frustum culling (`camera.cull`), summed over the frame's views. */
+  culled: number;
 }
 
 /**
@@ -170,6 +172,11 @@ interface DrawRec {
   group: number;
   /** Depth sort: clip-space depth of the instance origin (larger = farther). */
   dist: number;
+  /** World-space bounding sphere for frustum culling; `br` < 0 means never culled. */
+  bx: number;
+  by: number;
+  bz: number;
+  br: number;
 }
 
 /**
@@ -213,7 +220,7 @@ export class Renderer implements FrameSink {
   readonly white: Texture;
   /** Built-in sprite material bound to `white` (solid colour quads via tint). */
   readonly defaultSprite: Material;
-  readonly stats: RenderStats = { drawCalls: 0, instances: 0, drawables: 0 };
+  readonly stats: RenderStats = { drawCalls: 0, instances: 0, drawables: 0, culled: 0 };
   /** See `FrameTiming`. Only updated while `timingEvery > 0`. */
   readonly timing: FrameTiming = { gpuMs: 0, source: 'queue', passes: {}, cpuMs: 0, samples: 0 };
   /**
@@ -275,6 +282,8 @@ export class Renderer implements FrameSink {
   private uploadData: Float32Array;
   /** Instances `endFrame` uploads (layer-culled draws excluded). */
   private uploadCount = 0;
+  /** Draws the last `buildDraws` dropped by the frustum test. */
+  private culledCount = 0;
   private readonly prePasses: ((encoder: GPUCommandEncoder) => void)[] = [];
   private readonly prepared = new Set<Drawable>();
   /** Per-draw uniform sets with blocks staged this frame. */
@@ -668,6 +677,7 @@ export class Renderer implements FrameSink {
     this.stats.drawCalls = 0;
     this.stats.instances = 0;
     this.stats.drawables = 0;
+    this.stats.culled = 0;
     const f = this.frame;
     f.time = time;
     f.dt = dt;
@@ -705,6 +715,7 @@ export class Renderer implements FrameSink {
     }
 
     const depth = this.buildDraws(camera);
+    this.stats.culled += this.culledCount;
     for (let i = 0; i < this.cmdCount; i++) {
       const d = this.cmds[i]!.drawable;
       if (d?.prepare && !this.prepared.has(d)) {
@@ -930,6 +941,7 @@ export class Renderer implements FrameSink {
     mesh: Mesh,
     tr: Transform | null,
     p: DrawParams | InstanceParams,
+    bounds: MeshBounds | null,
   ): void {
     let offset = -1;
     const b = material.bindings;
@@ -987,6 +999,24 @@ export class Renderer implements FrameSink {
     r.drawable = null;
     r.offset = offset;
     r.inst = idx;
+    if (bounds && bounds.radius !== Number.POSITIVE_INFINITY) {
+      // The sphere through the 3×4 instance matrix: centre by the matrix, radius by the largest
+      // axis scale (column length), which bounds any rotation and non-uniform scale.
+      const m = idx * INSTANCE_FLOATS;
+      const c = bounds.center;
+      const cx = c[0];
+      const cy = c[1];
+      const cz = c[2];
+      r.bx = d[m]! * cx + d[m + 1]! * cy + d[m + 2]! * cz + d[m + 3]!;
+      r.by = d[m + 4]! * cx + d[m + 5]! * cy + d[m + 6]! * cz + d[m + 7]!;
+      r.bz = d[m + 8]! * cx + d[m + 9]! * cy + d[m + 10]! * cz + d[m + 11]!;
+      const s0 = d[m]! * d[m]! + d[m + 4]! * d[m + 4]! + d[m + 8]! * d[m + 8]!;
+      const s1 = d[m + 1]! * d[m + 1]! + d[m + 5]! * d[m + 5]! + d[m + 9]! * d[m + 9]!;
+      const s2 = d[m + 2]! * d[m + 2]! + d[m + 6]! * d[m + 6]! + d[m + 10]! * d[m + 10]!;
+      r.br = bounds.radius * Math.sqrt(Math.max(s0, s1, s2));
+    } else {
+      r.br = -1;
+    }
   }
 
   pushDrawable(d: Drawable, order: number, layers: number): void {
@@ -996,6 +1026,7 @@ export class Renderer implements FrameSink {
     r.drawable = d;
     r.offset = -1;
     r.inst = -1;
+    r.br = -1;
   }
 
   pushPrePass(fn: (encoder: GPUCommandEncoder) => void): void {
@@ -1018,6 +1049,10 @@ export class Renderer implements FrameSink {
         layers: 1,
         group: 0,
         dist: 0,
+        bx: 0,
+        by: 0,
+        bz: 0,
+        br: -1,
       });
     }
     const r = this.recs[this.recCount++]!;
@@ -1028,27 +1063,31 @@ export class Renderer implements FrameSink {
 
   /**
    * Turn this frame's draw records into batched commands. Draws whose `layers` miss the
-   * camera's mask are dropped. Without depth, draws sort by `order` then submission index;
-   * when every `order` is already non-decreasing (the default) nothing moves and the instance
-   * data uploads as recorded. With `camera.depthTest`, the keys are `order`, then opaque
-   * before blended, then depth (opaque front-to-back, blended back-to-front), then submission
-   * index. Sets `uploadData` / `uploadCount`; returns whether depth is on.
+   * camera's mask are dropped; with `camera.cull`, so are mesh draws whose world bounding
+   * sphere lies outside any plane of `camera.frustum` (counted in `culledCount`). Without
+   * depth or culling, draws sort by `order` then submission index; when every `order` is
+   * already non-decreasing (the default) nothing moves and the instance data uploads as
+   * recorded. With `camera.depthTest`, the keys are `order`, then opaque before blended, then
+   * depth (opaque front-to-back, blended back-to-front), then submission index. Sets
+   * `uploadData` / `uploadCount`; returns whether depth is on.
    */
   private buildDraws(cam: Camera): boolean {
     const camLayers = cam.layers >>> 0;
     const depth = cam.depthTest;
     const depthWrite = cam.depthWrite;
+    const cull = cam.cull;
     this.frame.depthFormat = depth ? DEPTH_FORMAT : null;
     const recs = this.recs;
     const n = this.recCount;
     this.cmdCount = 0;
+    this.culledCount = 0;
 
     let visible = n;
     if (camLayers !== ALL_LAYERS) {
       visible = 0;
       for (let i = 0; i < n; i++) if ((recs[i]!.layers & camLayers) !== 0) visible++;
     }
-    if (!depth && this.ordered && visible === n) {
+    if (!depth && !cull && this.ordered && visible === n) {
       for (let i = 0; i < n; i++) {
         const r = recs[i]!;
         this.batch(r, r.inst, 0);
@@ -1068,10 +1107,16 @@ export class Renderer implements FrameSink {
     // depth buffer compares, up to a monotonic map, for any projection (ortho2d looks down +z,
     // perspective down -z).
     const v = depth ? cam.viewProjection : null;
+    const planes = cull ? cam.frustum : null;
+    let culled = 0;
     let k = 0;
     for (let i = 0; i < n; i++) {
       const r = recs[i]!;
       if ((r.layers & camLayers) === 0) continue;
+      if (planes && r.br >= 0 && outside(planes, r.bx, r.by, r.bz, r.br)) {
+        culled++;
+        continue;
+      }
       idx[k++] = i;
       if (!depth) continue;
       if (r.drawable) {
@@ -1087,6 +1132,7 @@ export class Renderer implements FrameSink {
       const z = src[o + 11]!;
       r.dist = v![2]! * x + v![6]! * y + v![10]! * z + v![14]!;
     }
+    this.culledCount = culled;
     this.sortDepth = depth;
     if (depth || !this.ordered) this.sortDraws(k);
 
@@ -1266,4 +1312,14 @@ export class Renderer implements FrameSink {
     frame.lights.writeBlock(g, this.globalsU32, LIGHTS_OFFSET_FLOATS);
     this.device.queue.writeBuffer(slot.buffer, 0, g);
   }
+}
+
+/** Is the sphere `(x, y, z, r)` wholly outside one of the six `planes` (`Camera.frustum`)? */
+function outside(planes: Float32Array, x: number, y: number, z: number, r: number): boolean {
+  for (let i = 0; i < FRUSTUM_FLOATS; i += 4) {
+    if (planes[i]! * x + planes[i + 1]! * y + planes[i + 2]! * z + planes[i + 3]! < -r) {
+      return true;
+    }
+  }
+  return false;
 }

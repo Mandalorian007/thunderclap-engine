@@ -31,13 +31,21 @@ export interface StreamRequest {
   buffer: ArrayBuffer;
 }
 
-/** Worker → page: `buffer` (transferred back) holds `vertexCount` vertices and `indexCount` indices. */
+/**
+ * Worker → page: `buffer` (transferred back) holds `vertexCount` vertices and `indexCount`
+ * indices; `bounds` is their bounding sphere in chunk space (what `mesh.update` takes, so the
+ * page never scans the vertices).
+ */
 export interface StreamReply {
   chunk: number;
   buffer: ArrayBuffer;
   vertexCount: number;
   indexCount: number;
+  bounds: { center: [number, number, number]; radius: number };
 }
+
+/** Where the page's camera looks: `grid` (the default, every chunk in view) or `edge` (half). */
+export type StreamLook = 'grid' | 'edge';
 
 export interface HarnessStreamState {
   /** True once boot resolved (whether or not WebGPU came up). */
@@ -64,14 +72,18 @@ export interface HarnessStreamState {
    * covered by a floor or a column), and `sky`, well above and behind the grid.
    */
   probes: { ground: StreamProbe; sky: StreamProbe };
-  /** `renderer.stats` of the last frame. */
-  stats: { drawCalls: number; instances: number };
+  /** `renderer.stats` of the last frame (`culled`: chunk draws the frustum test skipped). */
+  stats: { drawCalls: number; instances: number; culled: number };
+  /** Current camera aim (`api.look`). */
+  look: StreamLook;
   /** `gpuDiagnostics.errorCount` (WGSL compile errors, uncaptured errors). */
   gpuErrors: number;
 }
 
 export interface HarnessStreamApi {
   state: HarnessStreamState;
+  /** Re-aim the camera: `edge` looks at the grid's far corner so about half the chunks leave the frustum. */
+  look(where: StreamLook): void;
 }
 
 declare global {

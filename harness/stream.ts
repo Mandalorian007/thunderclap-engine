@@ -9,7 +9,10 @@
  * - One chunk is re-meshed per frame, round-robin, with a phase that moves its columns, so
  *   vertex counts change while the meshes keep their buffers (`growths` stays 0: the capacity
  *   is a full chunk).
- * - A fixed perspective camera; the HUD and `state.uploaded` show vertices uploaded per frame.
+ * - A perspective camera; the HUD and `state.uploaded` show vertices uploaded per frame. Each
+ *   reply carries the chunk's bounding sphere, passed to `mesh.update({ bounds })`, so the
+ *   renderer frustum-culls the chunks (`state.stats.culled`); `api.look('edge')` aims the
+ *   camera at one corner of the grid so about half of them leave the frustum.
  */
 import { GameLoop } from '@thunderclap/engine/core';
 import { boot } from '@thunderclap/engine/platform';
@@ -33,6 +36,7 @@ import {
   STREAM_MAX_INDICES,
   STREAM_MAX_VERTICES,
   STREAM_VERTEX_FLOATS,
+  type StreamLook,
   type StreamReply,
   type StreamRequest,
 } from './stream-state';
@@ -57,10 +61,17 @@ const state: HarnessStreamState = {
   uploaded: { vertices: 0, indices: 0, peakVertices: 0 },
   vertexCounts: Array.from({ length: CHUNKS }, () => 0),
   probes: { ground: { x: 0, y: 0 }, sky: { x: 0, y: 0 } },
-  stats: { drawCalls: 0, instances: 0 },
+  stats: { drawCalls: 0, instances: 0, culled: 0 },
+  look: 'grid',
   gpuErrors: 0,
 };
-const api: HarnessStreamApi = { state };
+let lookAt: (where: StreamLook) => void = (where) => {
+  state.look = where;
+};
+const api: HarnessStreamApi = {
+  state,
+  look: (where) => lookAt(where),
+};
 window.__harnessStream = api;
 
 /** Lambert + ambient from the world normal and the vertex colour. */
@@ -77,7 +88,11 @@ const LIT_WGSL = /* wgsl */ `
 }`;
 
 const EYE = [0, 26, 30] as const;
-const TARGET = [0, 0, 0] as const;
+/** `grid`: the grid centre, every chunk in view; `edge`: past the far-left corner, half of them out. */
+const TARGETS: Record<StreamLook, readonly [number, number, number]> = {
+  grid: [0, 0, 0],
+  edge: [-60, 0, -40],
+};
 const probePoint: CameraPoint = { x: 0, y: 0, z: 0 };
 
 function probe(camera: Camera, x: number, y: number, z: number, out: { x: number; y: number }) {
@@ -101,8 +116,12 @@ async function main(): Promise<void> {
 
   const camera = Camera.perspective((50 * Math.PI) / 180, LOGICAL.width / LOGICAL.height, 0.1, 200);
   Object.assign(camera.screen, { x: 0, y: 0, ...LOGICAL });
-  camera.lookAt(EYE, TARGET);
+  camera.lookAt(EYE, TARGETS[state.look]);
   renderer.camera = camera;
+  lookAt = (where) => {
+    state.look = where;
+    camera.lookAt(EYE, TARGETS[where]);
+  };
 
   const lit = renderer.createMaterial({ label: 'lit', blend: 'opaque', wgsl: LIT_WGSL });
   const meshes: Mesh[] = [];
@@ -134,14 +153,16 @@ async function main(): Promise<void> {
   let pendingVertices = 0;
   let pendingIndices = 0;
   worker.addEventListener('message', (e: MessageEvent<StreamReply>) => {
-    const { chunk, buffer, vertexCount, indexCount } = e.data;
+    const { chunk, buffer, vertexCount, indexCount, bounds } = e.data;
     const mesh = meshes[chunk]!;
-    // Views over the transferred buffer: the upload reads them in place.
+    // Views over the transferred buffer: the upload reads them in place; the Worker's bounds
+    // go with it, so the mesh never scans the vertices for them.
     mesh.update({
       vertices: new Float32Array(buffer, 0, vertexCount * STREAM_VERTEX_FLOATS),
       indices: new Uint16Array(buffer, STREAM_INDEX_OFFSET, indexCount),
       vertexCount,
       indexCount,
+      bounds,
     });
     state.growths = meshes.reduce((n, m) => n + m.growths, 0);
     if (state.vertexCounts[chunk] !== vertexCount && state.updates >= CHUNKS) state.changed++;
@@ -189,12 +210,13 @@ async function main(): Promise<void> {
       pendingIndices = 0;
       state.stats.drawCalls = renderer.stats.drawCalls;
       state.stats.instances = renderer.stats.instances;
+      state.stats.culled = renderer.stats.culled;
       state.gpuErrors = gpuDiagnostics.errorCount;
       probe(camera, 0, 0, 0, state.probes.ground);
       probe(camera, 0, 0, -40, state.probes.sky);
       hud.textContent =
         `uploaded/frame: ${state.uploaded.vertices} vertices, ${state.uploaded.indices} indices\n` +
-        `updates: ${state.updates}  growths: ${state.growths}  chunks: ${CHUNKS}`;
+        `updates: ${state.updates}  growths: ${state.growths}  chunks: ${CHUNKS}  culled: ${state.stats.culled}`;
     },
   });
   res.onDeviceLost(() => {
