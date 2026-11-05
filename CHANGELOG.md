@@ -8,6 +8,7 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 - The engine has its own repo, `Mandalorian007/thunderclap-engine`, with the `packages/engine` history from The Last Rune. It adds a standalone pnpm setup, CI (`pnpm check`), a README and a runnable example (`examples/hello`, `pnpm example`). The Last Rune keeps its in-repo copy for now.
 
 - `packages/host-electron` (`@thunderclap/host-electron`) joins this repo, and the repo becomes a pnpm workspace (`pnpm-workspace.yaml`, `packages/*`) with the engine at the root. New root scripts: `desktop:dev`, `desktop:build`, `test:e2e:desktop`, `check:host-electron`; `pnpm check` runs the last one.
+- e2e (ws/flake-client): `e2e/client.spec.ts` "the full mode reads storage through the host" polls `updates > 0` instead of reading it once, since in fixed-step mode frames can render before the first update.
 
 ### Docs
 - Doc sweep (ws/doc-sweep): `src/fx/README.md` and `src/platform/README.md` are new; the analytics, audio, host, post, save and ui READMEs name every export of their module; the root README's module table, harness page list, frame description and roadmap match the code; ARCHITECTURE *Surface*, *Host*, *Layout*, *Analytics* and the module paragraph drop landed *Planned* lines. New script `pnpm check:docs` (`scripts/check-docs.mjs`, not part of `pnpm check`) lists exported names a module README does not mention.

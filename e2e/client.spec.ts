@@ -58,10 +58,11 @@ test('the full mode reads storage through the host (the probe works)', async ({
   wrapper,
 }) => {
   const frame = await openGameHarness(page, wrapper);
+  // Frames can render before the first 1/60 s fixed step has run: wait for the update itself.
+  await expect.poll(async () => (await readGame(frame)).updates).toBeGreaterThan(0);
   const s = await readGame(frame);
   expect(s.mode).toBe('full');
   expect(s.saveNull).toBe(false);
-  expect(s.updates).toBeGreaterThan(0);
   expect(s.clientFrames).toBe(0);
   expect(s.storageReads).toBeGreaterThan(0);
 });
