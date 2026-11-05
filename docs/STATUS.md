@@ -17,10 +17,16 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 2 | Input rays | ws/input-rays | Pointer router (mouse, touch, pen, pad cursor → rays), `Hit` events, `{ xr }` binding kinds | camera | ✅ merged `cd27ff1` (454 tests, e2e 339/31; `ctx.pointers` wiring → render-call) |
 | 2 | Client mode | ws/client-mode | `createGame` with opt-in fixed-step sim and save store, for server-authoritative clients | one-overlay | ✅ merged `ccdf598` (385 tests, e2e 299/31) |
 | 2 | Puzzle template | ws/template-puzzle | `templates/puzzle`: `createGame`, a scene, `rules/`, save schema, layout spec, `CLAUDE.md` naming the engine concepts | camera, transforms, client-mode | ✅ merged `a266b04` (14 template tests; 17 min empty→green) |
+| 3 | Lighting block | ws/lights | `EngineLights` uniform at `@group(0) @binding(2)`: ambient, one directional, N point lights (position, colour, radius), read by game WGSL through `materialPrelude`; harness mesh page lit by it; Last Rune candles and Forgewilds sun are the named needs | render-call | ⏳ proposed |
+| 3 | Dynamic meshes | ws/mesh-stream | `Mesh` with updatable vertex/index ranges and a capacity, fed from a Worker-built `ArrayBuffer` without a copy on the main thread; a harness page streaming chunk-like meshes; Forgewilds chunk meshes are the named need | transforms | ⏳ proposed |
+| 3 | Two views | ws/two-views | `render(frame, camera, target)` called twice per frame into two viewports of one surface (`view_index` 0/1); harness page; proves the stereo seam without WebXR (ARCHITECTURE: XR after Gate 5) | render-call | ⏳ proposed |
+| 3 | Game plumbing | ws/plumbing | `createGame` wires gestures and pointers; `layout.freeRect` → design px helper for `Camera.fitRect`; `Gestures.pan` ignores multi-pointer; template `sendBeacon` sink + `level_start`/`level_complete`; layout README rows note | render-call, template-puzzle | ⏳ proposed |
+| 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ⏳ proposed |
 
 ## Gates
 
 - **Gate A (after wave 1), met 2026-11-05 at `e340ed7`:** `pnpm check` and the e2e matrix green on `main`; 2D harness pages pixel-identical before and after camera + transforms; `ARCHITECTURE.md` *Today* text matches the code.
+- **Gate C (after wave 3):** the mesh page is lit by the lighting block; a streamed mesh updates without a main-thread copy; two views render per frame; the template boots with gestures and pointers from `createGame`; ARCHITECTURE has no stale *Planned* line.
 - **Gate B (after wave 2):** mesh demo met at `2b1032e`; template timed at 17 min (`a266b04`); client mode met at `1b09225`. Remaining: render-call merge. `?demo=mesh` runs on the matrix; a template game boots from zero in under a day of agent time (timed); client mode runs the harness without a save store.
 
 ## Backlog (from engineer reports, unscheduled)
