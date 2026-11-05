@@ -17,6 +17,14 @@ export type { FullscreenEncodeOptions, FullscreenPassDesc } from './fullscreen';
 export { FullscreenPass } from './fullscreen';
 export type { GpuPassTimes, GpuTimerResult } from './gpu-timer';
 export { GpuTimer, supportsTimestamps } from './gpu-timer';
+export type { DirectionalLight, PointLight } from './lights';
+export {
+  LIGHTS_BLOCK_FLOATS,
+  Lights,
+  MAX_POINT_LIGHTS,
+  POINT_LIGHT_FLOATS,
+  POINT_LIGHTS_OFFSET_FLOATS,
+} from './lights';
 export type { DepthMode, MaterialDesc } from './material';
 export {
   DEPTH_FORMAT,
@@ -63,6 +71,7 @@ export {
   materialPrelude,
   WGSL_FULLSCREEN_PRELUDE,
   WGSL_GLOBALS,
+  WGSL_LIGHTS,
   WGSL_MATERIAL_PRELUDE,
   WGSL_NOISE,
 } from './wgsl';

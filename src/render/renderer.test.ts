@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Camera } from './camera';
 import { createFakeDevice, type FakeDevice, fakeRendererGpu, type PassCommand } from './fake-gpu';
+import { LIGHTS_BLOCK_FLOATS, Lights } from './lights';
 import { INSTANCE_FLOATS } from './material';
 import { Renderer } from './renderer';
 import { Transform, writeMatrix2d } from './transform';
@@ -280,16 +281,50 @@ describe('camera block', () => {
     return seen;
   }
 
-  it('binds globals at 0 and the camera block at 1 of group 0', () => {
+  it('binds globals at 0, the camera block at 1 and the lights at 2 of group 0', () => {
     const { fake } = setup();
     const g = fake.bindGroups.find((b) => b.label === 'engine-globals-group')!;
-    expect(g.layout.entries.map((e) => e.binding)).toEqual([0, 1]);
+    expect(g.layout.entries.map((e) => e.binding)).toEqual([0, 1, 2]);
     expect(g.entries.map((e) => e.resource)).toMatchObject([
       { size: 32 },
       { offset: 256, size: 256 },
+      { offset: 512, size: LIGHTS_BLOCK_FLOATS * 4 },
     ]);
     const buf = fake.buffers.find((b) => b.label === 'engine-globals')!;
-    expect(buf.size).toBe(512);
+    expect(buf.size).toBe(512 + LIGHTS_BLOCK_FLOATS * 4);
+  });
+
+  it('uploads the default unlit block, then the frame.lights the game sets, per view', () => {
+    const { fake, r } = setup();
+    const seen = captureGlobals(fake);
+    const f = r.beginFrame(0, 0);
+    r.endFrame();
+    expect(f.lights).toBeInstanceOf(Lights);
+    const unlit = seen[0]!.subarray(128, 128 + LIGHTS_BLOCK_FLOATS);
+    expect([...unlit.subarray(0, 3)]).toEqual([1, 1, 1]);
+    expect(new Uint32Array(unlit.buffer, unlit.byteOffset)[3]).toBe(0);
+    expect([...unlit.subarray(4, 12)]).toEqual([0, -1, 0, 0, 0, 0, 0, 0]);
+    expect(unlit.subarray(12).every((v) => v === 0)).toBe(true);
+
+    f.lights.ambient.set([0.2, 0.3, 0.4]);
+    f.lights.sun.color = [1, 0.9, 0.8];
+    f.lights.points.push({ position: [1, 2, 3], color: [5, 6, 7], radius: 9 });
+    const b = Camera.perspective(1, 1, 0.1, 10);
+    b.screen.width = 0.5;
+    r.beginFrame(1, 0);
+    r.render(f, r.camera);
+    r.render(f, b);
+    r.endFrame();
+    // `captureGlobals` sees view 0's buffer; view 1 (`engine-globals-1`) gets the same bytes.
+    expect(seen.length).toBe(2);
+    const l = seen[1]!.subarray(128, 128 + LIGHTS_BLOCK_FLOATS);
+    expect([...l.subarray(0, 3)]).toEqual([0.2, 0.3, 0.4].map(Math.fround));
+    expect(new Uint32Array(l.buffer, l.byteOffset)[3]).toBe(1);
+    expect([...l.subarray(8, 11)]).toEqual([1, 0.9, 0.8].map(Math.fround));
+    expect([...l.subarray(12, 20)]).toEqual([1, 2, 3, 9, 5, 6, 7, 0]);
+    const writes = fake.writes.filter((w) => (w.buffer.label ?? '').startsWith('engine-globals'));
+    expect(writes.map((w) => w.bytes)).toEqual(Array(3).fill(512 + LIGHTS_BLOCK_FLOATS * 4));
+    expect(fake.errors).toEqual([]);
   });
 
   it('uploads globals and the default ortho2d camera once per frame', () => {
@@ -305,7 +340,7 @@ describe('camera block', () => {
     expect(fake.errors).toEqual([]);
     expect(seen.length).toBe(1);
     const g = seen[0]!;
-    expect(g.length).toBe(128);
+    expect(g.length).toBe(128 + LIGHTS_BLOCK_FLOATS);
     expect([...g.subarray(0, 6)]).toEqual([1920, 1080, 800, 450, 1.5, 0.25]);
     expect([...g.subarray(64, 80)]).toEqual([...r.camera.view]);
     expect([...g.subarray(80, 96)]).toEqual([...r.camera.projection]);

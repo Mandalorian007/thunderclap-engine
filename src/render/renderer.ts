@@ -10,6 +10,7 @@ import {
 } from './frame';
 import { FullscreenPass, type FullscreenPassDesc } from './fullscreen';
 import { type GpuPassTimes, GpuTimer, supportsTimestamps } from './gpu-timer';
+import { LIGHTS_BLOCK_FLOATS } from './lights';
 import {
   DEPTH_FORMAT,
   type DepthMode,
@@ -143,10 +144,12 @@ interface DrawCmd {
 const GLOBALS_FLOATS = 8;
 /** The camera block (binding 1) starts at this float offset (256 bytes: uniform alignment). */
 const CAMERA_OFFSET_FLOATS = 64;
-/** One upload covers both blocks. */
-const ENGINE_UNIFORM_FLOATS = CAMERA_OFFSET_FLOATS + CAMERA_BLOCK_FLOATS;
+/** The lighting block (binding 2) starts at this float offset (512 bytes, after the camera). */
+const LIGHTS_OFFSET_FLOATS = CAMERA_OFFSET_FLOATS + CAMERA_BLOCK_FLOATS;
+/** One upload covers all three blocks. */
+const ENGINE_UNIFORM_FLOATS = LIGHTS_OFFSET_FLOATS + LIGHTS_BLOCK_FLOATS;
 
-/** The engine uniforms (globals + camera block) and their bind group for one view of a frame. */
+/** The engine uniforms (globals, camera and lights) and their bind group for one view of a frame. */
 interface ViewSlot {
   buffer: GPUBuffer;
   group: GPUBindGroup;
@@ -334,6 +337,11 @@ export class Renderer implements FrameSink {
         },
         {
           binding: 1,
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE,
+          buffer: {},
+        },
+        {
+          binding: 2,
           visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE,
           buffer: {},
         },
@@ -1229,6 +1237,10 @@ export class Renderer implements FrameSink {
           binding: 1,
           resource: { buffer, offset: CAMERA_OFFSET_FLOATS * 4, size: CAMERA_BLOCK_FLOATS * 4 },
         },
+        {
+          binding: 2,
+          resource: { buffer, offset: LIGHTS_OFFSET_FLOATS * 4, size: LIGHTS_BLOCK_FLOATS * 4 },
+        },
       ],
     });
     slot = { buffer, group };
@@ -1236,7 +1248,7 @@ export class Renderer implements FrameSink {
     return slot;
   }
 
-  /** Upload the globals and camera block of one view (`viewRect` holds its viewport). */
+  /** Upload the globals, camera and lighting blocks of one view (`viewRect` holds its viewport). */
   private writeView(
     frame: Frame,
     camera: Camera,
@@ -1252,6 +1264,7 @@ export class Renderer implements FrameSink {
     g[4] = frame.time;
     g[5] = frame.dt;
     camera.writeBlock(g, this.globalsU32, CAMERA_OFFSET_FLOATS, this.viewRect, viewIndex);
+    frame.lights.writeBlock(g, this.globalsU32, LIGHTS_OFFSET_FLOATS);
     this.device.queue.writeBuffer(slot.buffer, 0, g);
   }
 }

@@ -54,6 +54,51 @@ struct EngineCamera {
 @group(0) @binding(1) var<uniform> camera: EngineCamera;
 `;
 
+/**
+ * The lighting block, `@group(0) @binding(2)` (see `Lights` / `lights.ts`), in every material
+ * prelude. `lights.ambient`, `lights.point_count`, `lights.sun_dir` (normalised, the direction
+ * the light travels), `lights.sun_color` and `lights.points[i]` (`position`, `radius`, `color`).
+ *
+ * Helpers a game may call or ignore: `engine_point_lights(normal, world_pos)` sums the point
+ * lights' diffuse (Lambert × a smooth falloff that reaches zero at `radius`);
+ * `engine_lambert(normal, world_pos)` is ambient + sun Lambert + the point lights, so with the
+ * default block it returns `vec3f(1.0)` and `albedo * engine_lambert(...)` is unlit.
+ */
+export const WGSL_LIGHTS = /* wgsl */ `
+struct EnginePointLight {
+  position: vec3f,
+  radius: f32,
+  color: vec3f,
+  _pad: f32,
+};
+struct EngineLights {
+  ambient: vec3f,
+  point_count: u32,
+  sun_dir: vec3f,
+  _pad0: f32,
+  sun_color: vec3f,
+  _pad1: f32,
+  points: array<EnginePointLight, 16>,
+};
+@group(0) @binding(2) var<uniform> lights: EngineLights;
+fn engine_point_lights(normal: vec3f, world_pos: vec3f) -> vec3f {
+  var sum = vec3f(0.0);
+  for (var i = 0u; i < lights.point_count; i++) {
+    let l = lights.points[i];
+    let to = l.position - world_pos;
+    let d = length(to);
+    let falloff = saturate(1.0 - d / max(l.radius, 1e-4));
+    let diffuse = max(dot(normal, to / max(d, 1e-4)), 0.0);
+    sum += l.color * (falloff * falloff * diffuse);
+  }
+  return sum;
+}
+fn engine_lambert(normal: vec3f, world_pos: vec3f) -> vec3f {
+  let sun = lights.sun_color * max(dot(normal, -lights.sun_dir), 0.0);
+  return lights.ambient + sun + engine_point_lights(normal, world_pos);
+}
+`;
+
 /** Hash / value-noise / fbm helpers available to every material and fullscreen pass. */
 export const WGSL_NOISE = /* wgsl */ `
 fn engine_hash21(p: vec2f) -> f32 {
@@ -99,11 +144,13 @@ fn engine_luma(c: vec3f) -> f32 {
  * `vs_main`, the `VSOut` varyings and the `FragOut` MRT struct.
  *
  * Helpers: `engine_local_position(v)` / `engine_local_normal(v)` (object space, `vec3f` for
- * every layout), `engine_world_position(v)` and `engine_vertex(v)`.
+ * every layout), `engine_world_position(v)` and `engine_vertex(v)`; the lighting block and
+ * `engine_lambert` / `engine_point_lights` from `WGSL_LIGHTS`.
  */
 export function materialPrelude(layout: VertexLayout): string {
   return /* wgsl */ `
 ${WGSL_GLOBALS}
+${WGSL_LIGHTS}
 ${WGSL_NOISE}
 struct VertexIn {
 ${layout.wgslFields}

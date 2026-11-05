@@ -1,7 +1,8 @@
 /**
  * The mesh demo (harness/mesh.html) on every matrix row: the Phase 3 seams together (E-001).
  *
- * - the page boots WebGPU, draws a perspective scene with depth on and logs no error;
+ * - the page boots WebGPU, draws a perspective scene with depth on and logs no error, lit by
+ *   the engine's lighting block (a sun and a point light that moves between frames);
  * - occlusion: a near block stays in front of a taller block drawn after it and behind it
  *   (pixels sampled from a screenshot, no golden image), and the ground renders;
  * - orbit: a pointer drag (mouse, or touch through CDP) and the right stick move the camera;
@@ -145,6 +146,12 @@ test('boots a perspective scene with depth, and a near block occludes a far one'
   // The five instances share one material and two meshes; the depth sort keeps batching.
   expect(s.stats.drawCalls).toBeLessThanOrEqual(5);
   expect(s.gpuErrors).toBe(0);
+  // The scene is lit by the engine's lighting block: a sun and one point light that moves.
+  expect(s.lights.sun).toBe(true);
+  expect(s.lights.points).toBe(1);
+  await frames(3);
+  const later = await read();
+  expect(later.lights.lamp).not.toEqual(s.lights.lamp);
 
   const [near, far, ground] = await sample(page, [
     await toPage(s.probes.near),
