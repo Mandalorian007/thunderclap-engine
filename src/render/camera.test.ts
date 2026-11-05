@@ -140,6 +140,41 @@ describe('Camera.ortho2d', () => {
     expect(br.y).toBeCloseTo(270, 2);
   });
 
+  it('fitFreeRect converts a CSS-px free rect through the surface rect into screen units', () => {
+    const c = Camera.ortho2d(1920, 1080);
+    // The canvas sits at (10, 20) and is half design size in CSS px; the HUD leaves the right half.
+    const surface = { rect: { x: 10, y: 20, width: 960, height: 540 } };
+    const free = { x: 490, y: 20, width: 480, height: 540 };
+    c.fitFreeRect({ x: 100, y: 100, width: 400, height: 200 }, free, surface);
+    // Same result as fitRect with the right half of the screen in design px.
+    const d = Camera.ortho2d(1920, 1080).fitRect(
+      { x: 100, y: 100, width: 400, height: 200 },
+      { x: 960, y: 0, width: 960, height: 1080 },
+    );
+    expect([c.x, c.y, c.zoom]).toEqual([d.x, d.y, d.zoom]);
+    expect(c.worldToScreen(100, 100).x).toBeCloseTo(960, 2);
+  });
+
+  it('fitFreeRect ignores an empty free rect or surface', () => {
+    const c = Camera.ortho2d(1920, 1080);
+    c.zoom = 3;
+    c.fitFreeRect(
+      { x: 0, y: 0, width: 10, height: 10 },
+      { x: 0, y: 0, width: 0, height: 100 },
+      {
+        rect: { x: 0, y: 0, width: 960, height: 540 },
+      },
+    );
+    c.fitFreeRect(
+      { x: 0, y: 0, width: 10, height: 10 },
+      { x: 0, y: 0, width: 100, height: 100 },
+      {
+        rect: { x: 0, y: 0, width: 0, height: 0 },
+      },
+    );
+    expect(c.zoom).toBe(3);
+  });
+
   it('fitRect needs the 2D preset', () => {
     const c = Camera.perspective(1, 1, 0.1, 10);
     expect(() => c.fitRect({ x: 0, y: 0, width: 1, height: 1 })).toThrow(/ortho2d/);

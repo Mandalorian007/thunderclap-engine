@@ -28,6 +28,8 @@ export const ORTHO2D_HALF_DEPTH = 1024;
 export const CAMERA_BLOCK_FLOATS = 64;
 
 const tmp: number[] = [0, 0, 0];
+/** `fitFreeRect`'s viewport in screen units (one per module; the camera reads it synchronously). */
+const freeScratch: CameraRect = { x: 0, y: 0, width: 0, height: 0 };
 
 /**
  * A view-projection camera. Matrices are column-major `Float32Array(16)` (see `mat4` in
@@ -226,6 +228,25 @@ export class Camera {
     this._x = rect.x + rect.width / 2 - (vcx - W / 2) / zoom - W / 2;
     this._y = rect.y + rect.height / 2 - (vcy - H / 2) / zoom - H / 2;
     return this.touch();
+  }
+
+  /**
+   * `fitRect` into the part of the surface a layout leaves free: `free` is in CSS px relative to
+   * the surface's parent (`ui.layout.freeRect`), `surface.rect` is where the canvas sits in the
+   * same CSS px (`Surface.rect`); the free rect is mapped onto `screen` (its share of the canvas)
+   * and the world rect is fitted into that. Allocates nothing.
+   */
+  fitFreeRect(rect: CameraRect, free: CameraRect, surface: { readonly rect: CameraRect }): this {
+    const r = surface.rect;
+    if (!(r.width > 0) || !(r.height > 0) || !(free.width > 0) || !(free.height > 0)) return this;
+    const s = this.screen;
+    const kx = s.width / r.width;
+    const ky = s.height / r.height;
+    freeScratch.x = s.x + (free.x - r.x) * kx;
+    freeScratch.y = s.y + (free.y - r.y) * ky;
+    freeScratch.width = free.width * kx;
+    freeScratch.height = free.height * ky;
+    return this.fitRect(rect, freeScratch);
   }
 
   // ------------------------------------------------------------------ matrices

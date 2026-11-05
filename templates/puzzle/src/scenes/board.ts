@@ -3,10 +3,11 @@
  *
  * - `update(dt)` runs each fixed step: reads actions (`select` with the tap's position, the
  *   cursor keys, `confirm`, `newGame`), calls `reveal`/`settle`, advances the flip animation.
- * - `render(frame)` draws one sprite per cell through a `Transform` and pre-built `DrawParams`;
- *   nothing is allocated per frame.
- * - The camera (`ctx.renderer.camera`, `Camera.ortho2d` in design px) is fitted to the board
- *   inside the space the HUD leaves (`ctx.ui.layout.freeRect`), on enter and on every re-layout.
+ * - `render(frame, camera)` draws one sprite per cell through a `Transform` and pre-built
+ *   `DrawParams`; nothing is allocated per frame.
+ * - The camera (`ctx.camera`, `Camera.ortho2d` in design px) is fitted to the board inside the
+ *   space the HUD leaves (`ctx.ui.layout.freeRect`, through `camera.fitFreeRect`), on enter and
+ *   on every re-layout. A win emits `level_complete` through `ctx.analytics`.
  */
 import type { Scene } from '@thunderclap/engine/core';
 import {
@@ -59,7 +60,8 @@ interface Cell {
 export function createBoardScene(ctx: GameCtx): Scene<GameCtx, Frame> {
   const cells: Cell[] = [];
   const boardRect: CameraRect = { x: 0, y: 0, width: 0, height: 0 };
-  const viewport: CameraRect = { x: 0, y: 0, width: 0, height: 0 };
+  /** The board padded by half a tile, so the cursor ring is never cut off. */
+  const paddedRect: CameraRect = { x: 0, y: 0, width: 0, height: 0 };
   const ringParams = { tint: CURSOR, emissive: 0.6, order: -1 };
   const tap: CameraPoint = { x: 0, y: 0, z: 0 };
   let mismatchFor = 0;
@@ -76,6 +78,11 @@ export function createBoardScene(ctx: GameCtx): Scene<GameCtx, Frame> {
     boardRect.y = (ctx.design.height - hgt) / 2;
     boardRect.width = w;
     boardRect.height = hgt;
+    const pad = PITCH / 2;
+    paddedRect.x = boardRect.x - pad;
+    paddedRect.y = boardRect.y - pad;
+    paddedRect.width = w + 2 * pad;
+    paddedRect.height = hgt + 2 * pad;
     for (let i = 0; i < b.faces.length; i++) {
       const col = i % b.cols;
       const row = Math.floor(i / b.cols);
@@ -92,32 +99,14 @@ export function createBoardScene(ctx: GameCtx): Scene<GameCtx, Frame> {
     builtSeed = b.seed;
   };
 
-  /** Fits the camera to the board inside the layout's free rect (CSS px → design px). */
+  /** Fits the camera to the board inside the layout's free rect (the camera converts CSS px). */
   const frameBoard = () => {
-    const free = ctx.ui.layout.freeRect;
-    const rect = ctx.surface.rect;
-    const scale = ctx.ui.scale;
-    if (!(scale > 0) || free.width <= 0 || free.height <= 0) return;
-    viewport.x = (free.x - rect.x) / scale;
-    viewport.y = (free.y - rect.y) / scale;
-    viewport.width = free.width / scale;
-    viewport.height = free.height / scale;
-    // Pad the board by half a tile so the cursor ring is never cut off.
-    const pad = PITCH / 2;
-    ctx.renderer.camera.fitRect(
-      {
-        x: boardRect.x - pad,
-        y: boardRect.y - pad,
-        width: boardRect.width + 2 * pad,
-        height: boardRect.height + 2 * pad,
-      },
-      viewport,
-    );
+    ctx.camera.fitFreeRect(paddedRect, ctx.ui.layout.freeRect, ctx.surface);
   };
 
   /** The cell under a point in camera screen units (design px), or -1. */
   const cellAt = (sx: number, sy: number): number => {
-    ctx.renderer.camera.screenToWorld(sx, sy, 0, tap);
+    ctx.camera.screenToWorld(sx, sy, 0, tap);
     const col = Math.floor((tap.x - boardRect.x) / PITCH);
     const row = Math.floor((tap.y - boardRect.y) / PITCH);
     const b = ctx.game.board;
@@ -138,6 +127,11 @@ export function createBoardScene(ctx: GameCtx): Scene<GameCtx, Frame> {
         bestMoves: d.bestMoves === null ? next.moves : Math.min(d.bestMoves, next.moves),
       }));
       ctx.ui.toasts.show(`Solved in ${next.moves} moves`, { tone: 'success', duration: 3000 });
+      ctx.analytics?.emit('level_complete', {
+        level: `${next.cols}x${next.rows}`,
+        ms: Date.now() - g.dealtAt,
+        moves: next.moves,
+      });
     }
     ctx.refreshHud();
   };

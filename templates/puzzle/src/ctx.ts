@@ -3,7 +3,9 @@
  * engine part; `main.ts` widens the same object with `Object.assign`, so every scene sees one ctx.
  */
 import type { EngineCtx } from '@thunderclap/engine';
-import type { Bindings, Gestures } from '@thunderclap/engine/input';
+import type { Analytics } from '@thunderclap/engine/analytics';
+import type { Bindings } from '@thunderclap/engine/input';
+import type { Events } from './analytics';
 import type { Board } from './rules/board';
 import type { ProgressStore } from './save/schema';
 
@@ -30,11 +32,14 @@ export interface Game {
   board: Board;
   /** Keyboard and pad cursor, a cell index. */
   cursor: number;
+  /** `Date.now()` when the board was dealt (for `level_complete.ms`). */
+  dealtAt: number;
 }
 
 export interface GameCtx extends EngineCtx<Action, ProgressStore, GameCtx> {
-  readonly gestures: Gestures;
   readonly game: Game;
+  /** The game's events (`level_start`, `level_complete`), or `null` when `COLLECT_URL` is unset. */
+  readonly analytics: Analytics<Events> | null;
   /** Deals a fresh board (new seed) and tells the HUD. */
   newGame(): void;
   /** The HUD re-reads the game state. Call after every move. */

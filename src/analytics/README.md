@@ -34,7 +34,18 @@ sink: (events) => {
 }
 ```
 
-The engine will not ship this for you. Delivery is a product decision (consent, endpoint, privacy), so it lives in the game.
+The engine will not ship this for you. Delivery is a product decision (consent, endpoint, privacy), so it lives in the game. `templates/puzzle/src/analytics.ts` has it as `createBeaconSink(url)`, built only when the template's `COLLECT_URL` is set.
+
+## Convention: `level_start` and `level_complete`
+
+Games name their own events, but two names are the convention so dashboards and the template agree:
+
+| Event | Props | When |
+| --- | --- | --- |
+| `level_start` | `level: string` (a stable name: `'intro'`, `'4x4'`, a seed) | a level, board or round begins (including the first one after `game_start`) |
+| `level_complete` | `level: string`, `ms: number` (since `level_start`), plus the game's score fields (the template adds `moves`) | the goal is reached |
+
+Restarting a level emits a fresh `level_start`; an abandoned level has no `level_complete` (session_end's `durationMs` covers the time). `templates/puzzle` emits both from `main.ts` (the deal) and `scenes/board.ts` (the win).
 
 ## Events
 

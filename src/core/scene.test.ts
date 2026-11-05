@@ -2,15 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { Emitter } from './events';
 import { type Scene, SceneStack } from './scene';
 
-function rec(name: string, log: string[], extra: Partial<Scene<string, string[]>> = {}) {
-  const s: Scene<string, string[]> = {
+function rec(name: string, log: string[], extra: Partial<Scene<string, string[], string>> = {}) {
+  const s: Scene<string, string[], string> = {
     name,
     enter: (ctx) => log.push(`${name}.enter(${ctx})`),
     exit: () => log.push(`${name}.exit`),
     pause: () => log.push(`${name}.pause`),
     resume: () => log.push(`${name}.resume`),
     update: () => log.push(`${name}.update`),
-    render: (frame) => frame.push(name),
+    render: (frame, camera) => frame.push(`${name}@${camera}`),
     ...extra,
   };
   return s;
@@ -19,7 +19,7 @@ function rec(name: string, log: string[], extra: Partial<Scene<string, string[]>
 describe('SceneStack', () => {
   it('push/pop lifecycle', () => {
     const log: string[] = [];
-    const st = new SceneStack<string, string[]>('ctx');
+    const st = new SceneStack<string, string[], string>('ctx');
     st.push(rec('a', log));
     st.push(rec('b', log));
     st.pop();
@@ -29,7 +29,7 @@ describe('SceneStack', () => {
 
   it('replace exits the top and enters the new one', () => {
     const log: string[] = [];
-    const st = new SceneStack<string, string[]>('c');
+    const st = new SceneStack<string, string[], string>('c');
     st.push(rec('a', log));
     st.replace(rec('b', log));
     expect(log).toEqual(['a.enter(c)', 'a.exit', 'b.enter(c)']);
@@ -38,7 +38,7 @@ describe('SceneStack', () => {
 
   it('updates only the top scene', () => {
     const log: string[] = [];
-    const st = new SceneStack<string, string[]>('c');
+    const st = new SceneStack<string, string[], string>('c');
     st.push(rec('a', log));
     st.push(rec('b', log));
     log.length = 0;
@@ -48,18 +48,18 @@ describe('SceneStack', () => {
 
   it('renders from the highest opaque scene upward', () => {
     const log: string[] = [];
-    const st = new SceneStack<string, string[]>('c');
+    const st = new SceneStack<string, string[], string>('c');
     st.push(rec('a', log));
     st.push(rec('b', log));
     st.push(rec('menu', log, { transparent: true }));
     const frame: string[] = [];
-    st.render(frame);
-    expect(frame).toEqual(['b', 'menu']);
+    st.render(frame, 'cam');
+    expect(frame).toEqual(['b@cam', 'menu@cam']);
   });
 
   it('defers stack ops issued during update', () => {
     const log: string[] = [];
-    const st = new SceneStack<string, string[]>('c');
+    const st = new SceneStack<string, string[], string>('c');
     const b = rec('b', log);
     st.push(
       rec('a', log, {
@@ -75,7 +75,7 @@ describe('SceneStack', () => {
 
   it('clear exits all scenes top first', () => {
     const log: string[] = [];
-    const st = new SceneStack<string, string[]>('c');
+    const st = new SceneStack<string, string[], string>('c');
     st.push(rec('a', log));
     st.push(rec('b', log));
     log.length = 0;
