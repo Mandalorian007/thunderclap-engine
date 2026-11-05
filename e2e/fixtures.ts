@@ -37,19 +37,20 @@ export async function openHarness(
 
 /**
  * Opens the createGame harness page (harness/game.html) for `wrapper`, waits until it has drawn
- * `frames` frames and returns the frame it runs in.
+ * `frames` frames and returns the frame it runs in. `query` goes on the page (`?mode=client`).
  */
 export async function openGameHarness(
   page: Page,
   wrapper: HarnessOptions['wrapper'],
   frames = 3,
+  query = '',
 ): Promise<Frame> {
   let frame: Frame;
   if (wrapper === 'top') {
-    await page.goto(`${HARNESS_URL}game.html`);
+    await page.goto(`${HARNESS_URL}game.html${query}`);
     frame = page.mainFrame();
   } else {
-    await page.goto(`${WRAPPER_URL}?page=game.html`);
+    await page.goto(`${WRAPPER_URL}?page=${encodeURIComponent(`game.html${query}`)}`);
     frame = await harnessFrame(page);
   }
   await expect

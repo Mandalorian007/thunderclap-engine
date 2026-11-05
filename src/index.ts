@@ -3,5 +3,13 @@
  * and wires every noun-free system into one ctx. The modules under it stay reachable through
  * their own subpaths (`@thunderclap/engine/<module>`).
  */
-export type { CreateGameOptions, EngineCtx, FlushableSave, GameHooks } from './core/game';
+export type {
+  CreateGameOptions,
+  EngineCtx,
+  FlushableSave,
+  GameHooks,
+  HideReason,
+  ShowReason,
+  SimOption,
+} from './core/game';
 export { createGame } from './core/game';

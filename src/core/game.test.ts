@@ -103,22 +103,24 @@ describe('createGame', () => {
     const log: string[] = [];
     const ctx = await createGame(options(log));
     if (!ctx) throw new Error('no ctx');
-    ctx.hooks.hide = () => log.push(`hide running=${ctx.loop.isRunning}`);
+    ctx.hooks.hide = (why) => log.push(`hide ${why} running=${ctx.loop.isRunning}`);
+    ctx.hooks.show = (why) => log.push(`show ${why} running=${ctx.loop.isRunning}`);
     ctx.loop.start();
     setHidden(true);
-    expect(log).toEqual(['hide running=false', 'flush']);
+    expect(log).toEqual(['hide hidden running=false', 'flush']);
     expect(ctx.loop.isRunning).toBe(false);
     setHidden(false);
     expect(ctx.loop.isRunning).toBe(true);
+    expect(log.at(-1)).toBe('show visible running=true');
 
     log.length = 0;
     window.dispatchEvent(new Event('pagehide'));
-    expect(log).toEqual(['hide running=false', 'flush']);
+    expect(log).toEqual(['hide pagehide running=false', 'flush']);
     window.dispatchEvent(new Event('pageshow'));
     expect(ctx.loop.isRunning).toBe(true);
     log.length = 0;
     document.dispatchEvent(new Event('freeze'));
-    expect(log).toEqual(['hide running=false', 'flush']);
+    expect(log).toEqual(['hide freeze running=false', 'flush']);
   });
 
   it('a lost device halts the loop, audio and captions for good and flushes the save', async () => {
@@ -126,6 +128,7 @@ describe('createGame', () => {
     const ctx = await createGame(options(log));
     if (!ctx) throw new Error('no ctx');
     ctx.hooks.deviceLost = () => log.push(`lost halted=${ctx.loop.halted}`);
+    ctx.hooks.show = () => log.push('show');
     ctx.loop.start();
     for (const fn of lost) fn({ reason: 'unknown', message: 'test' } as GPUDeviceLostInfo);
     expect(log).toEqual(['lost halted=true', 'flush']);
@@ -134,6 +137,68 @@ describe('createGame', () => {
     setHidden(true);
     setHidden(false);
     expect(ctx.loop.isRunning).toBe(false);
+  });
+
+  it('without save: ctx.save is null, host.storage is never read, hide and loss still work', async () => {
+    const reads: string[] = [];
+    const { createWebHost } = await import('../host');
+    const web = createWebHost();
+    const host = { ...web };
+    Object.defineProperty(host, 'storage', {
+      get: () => {
+        reads.push('storage');
+        return web.storage;
+      },
+    });
+    const { save: _drop, ...rest } = options([]);
+    const ctx = await createGame({ ...rest, host });
+    if (!ctx) throw new Error('no ctx');
+    const save: null = ctx.save;
+    expect(save).toBeNull();
+    const log: string[] = [];
+    ctx.hooks.hide = (why) => log.push(why);
+    ctx.loop.start();
+    setHidden(true);
+    setHidden(false);
+    for (const fn of lost) fn({ reason: 'unknown', message: 'test' } as GPUDeviceLostInfo);
+    expect(log).toEqual(['hidden']);
+    expect(ctx.loop.halted).toBe(true);
+    expect(reads).toEqual([]);
+  });
+
+  it('sim: false runs hooks.frame and the scenes once per frame with the real delta', async () => {
+    const log: string[] = [];
+    const ctx = await createGame({ ...options([]), sim: false });
+    if (!ctx) throw new Error('no ctx');
+    ctx.hooks.update = () => log.push('update');
+    ctx.hooks.frame = (dt) => log.push(`frame ${dt.toFixed(3)}`);
+    ctx.hooks.afterRender = () => log.push('after');
+    ctx.stack.push({
+      update: (dt) => log.push(`scene.update ${dt.toFixed(3)}`),
+      render: (_f, alpha) => log.push(`scene.render ${alpha}`),
+    });
+    ctx.loop.tickOnce(1 / 30);
+    ctx.loop.tickOnce(0.007);
+    expect(log).toEqual([
+      'frame 0.033',
+      'scene.update 0.033',
+      'scene.render 1',
+      'after',
+      'frame 0.007',
+      'scene.update 0.007',
+      'scene.render 1',
+      'after',
+    ]);
+  });
+
+  it('sim.step sets the fixed step', async () => {
+    const ctx = await createGame({ ...options([]), sim: { step: 1 / 30 } });
+    if (!ctx) throw new Error('no ctx');
+    let updates = 0;
+    ctx.hooks.update = () => updates++;
+    ctx.loop.tickOnce(1 / 15);
+    expect(updates).toBe(2);
+    expect(ctx.loop.time.step).toBeCloseTo(1 / 30);
   });
 
   it('fill bands apply only on a phone-sized letterbox', async () => {
