@@ -58,16 +58,19 @@ describe('analytics', () => {
     expect(onError).toHaveBeenCalledTimes(2);
   });
 
-  it('attach emits game_start, flushes on hidden, wraps deviceLost', async () => {
+  it('attach emits game_start, flushes on hidden, wraps hide, show and deviceLost', async () => {
     const own = vi.fn();
-    const hooks = { deviceLost: own };
+    const ownHide = vi.fn();
+    const hooks: AttachTarget['hooks'] = { deviceLost: own, hide: ownHide };
     const { a, batches } = setup({ context: { build: '1.2.3' } });
     const detach = a.attach({ hooks, host });
     expect(a.pending).toBe(1);
 
-    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
-    document.dispatchEvent(new Event('visibilitychange'));
-    window.dispatchEvent(new Event('pagehide')); // second signal: no second session_end
+    // createGame calls hooks.hide with the lifecycle reason.
+    hooks.hide?.('hidden');
+    hooks.hide?.('pagehide'); // second signal: no second session_end
+    expect(ownHide).toHaveBeenCalledTimes(2);
+    expect(ownHide).toHaveBeenLastCalledWith('pagehide');
     await a.flush();
     const names = batches.flat().map((e) => e.name);
     expect(names).toEqual(['game_start', 'session_end']);
@@ -76,13 +79,22 @@ describe('analytics', () => {
     expect(start.deviceKind).toBe('web');
     expect((batches[0]![1]!.props as { reason: string }).reason).toBe('hidden');
 
-    hooks.deviceLost({ reason: 'destroyed', message: 'gone' } as GPUDeviceLostInfo);
+    // Back, then hidden again: a new session_end.
+    hooks.show?.('visible');
+    hooks.hide?.('freeze');
+    await a.flush();
+    expect((batches.flat().at(-1)!.props as { reason: string }).reason).toBe('freeze');
+
+    hooks.show?.('visible');
+    hooks.deviceLost?.({ reason: 'destroyed', message: 'gone' } as GPUDeviceLostInfo);
     expect(own).toHaveBeenCalledOnce();
     await a.flush();
     expect(batches.flat().map((e) => e.name)).toContain('device_lost');
 
     detach();
     expect(hooks.deviceLost).toBe(own);
+    expect(hooks.hide).toBe(ownHide);
+    expect(hooks.show).toBeUndefined();
   });
 
   it('typed props compile', () => {

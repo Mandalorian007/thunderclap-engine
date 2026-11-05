@@ -102,6 +102,8 @@ if (ctx) {
 }
 ```
 
+A pure client of a server-authoritative game leaves out `save` (then `ctx.save` is `null` and the engine never touches storage) and passes `sim: false`, so the loop runs once per rendered frame and calls `ctx.hooks.frame(dt)`, where it applies the latest server state.
+
 The world is a 1920×1080 logical space by default (origin top-left, y down). The surface scales it to fit any screen. A game typically widens `ctx` with its own nouns (`Object.assign(ctx, { ... })`), so every scene gets one typed ctx.
 
 ### Using it in a game

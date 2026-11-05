@@ -11,6 +11,13 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 
 ### Added
 - `@thunderclap/engine/analytics` (E-002, ws/analytics): `createAnalytics<E>({ sink, session?, clock?, context?, onError?, maxBatch? })` with typed `emit`, batched `flush`, built-in `game_start`, `session_end` and `device_lost`, and `attach(ctx)`, which wraps `ctx.hooks.deviceLost` and flushes on hidden/pagehide/freeze. No network sink ships; the game supplies one.
+- Client mode (ws/client-mode, VISION pillar 6): `createGame` serves a pure client of a server-authoritative game.
+  - `CreateGameOptions.save` is optional. Without it, `S` defaults to `null`, `ctx.save` is `null` (typed `null`), hide and device loss flush nothing, and `host.storage` is never read.
+  - `CreateGameOptions.sim?: SimOption` (`{ step?: number } | false`). The default keeps the fixed 1/60 s step (`step` sets another); `false` runs the loop at render rate: input, pad nav, `hooks.frame(dt)`, particles and the scenes' `update(dt)` run once per rendered frame with the real delta, and `hooks.update` does not run.
+  - `GameHooks.frame?(dt)` (client mode only) and `GameHooks.show?(reason: ShowReason)` (after the loop restarts on show).
+  - `GameLoopOptions.fixed?: boolean` (default true): `false` calls `update` once per frame with the real clamped delta and renders with `alpha` 1.
+  - Types `HideReason`, `ShowReason` and `SimOption` from `@thunderclap/engine`.
+  - Harness `game.html?mode=client` and `e2e/client.spec.ts`: client mode renders, updates once per frame, takes input, hides and shows, and never reads `host.storage`.
 - `HostWindow.setTitle?(title)`: optional, for hosts with a window of their own. The Electron host (`@thunderclap/host-electron`, `packages/host-electron`) implements it.
 - Layout regions (D-041 Phase 2, ws/layout): `overlay.layout` (built by `createOverlay({ layout })`), with `LayoutSpec`, `FormFactor`, `RegionName`, `classifyFormFactor`, `resolveLayout`, `resolveTracks`, `parseAreas`, `effectiveInsets`, `readSafeArea` and `defaultForms`.
   - Four form factors (`phone-landscape`, `phone-portrait`, `tablet`, `desktop`), each with px/fraction/fill tracks and grid areas for `top`, `left`, `right`, `bottom`, `cardLane`, `captionLane` and `fill`, plus a `modal` rect. All of them sit inside the safe area.
@@ -35,6 +42,9 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 - `createLayout` from `./ui` (the overlay builds its own layout) and `PHONE_TAP_MIN` / `PHONE_TEXT_MIN` from `./platform` (the layout's `FormSpec` owns the density tokens).
 
 ### Changed
+- `GameHooks.hide(reason)` gets the lifecycle reason, `HideReason` (`'hidden' | 'pagehide' | 'freeze'`); hooks that take no argument still fit.
+- `EngineCtx`'s and `CreateGameOptions`'s save parameter is `S extends FlushableSave | null`; `createGame`'s defaults to `null` (no save) and is inferred only from `opts.save`, not from a return annotation. Callers that pass `save` see no change.
+- Analytics `attach(ctx)` wraps `ctx.hooks.hide` and `ctx.hooks.show` instead of watching the page lifecycle itself; `session_end.reason` comes from `hide(reason)`. `detach` restores all three hooks.
 - `createOverlay` builds one root over the whole parent in CSS px, with no transform. `hud` and `captions` sit on the frame (the canvas rect); each layer is its own stacking context (`isolation: isolate`), so a z-index in one never lifts it over a later layer; the base UI is sized in design px of the frame (`frame` units, desktop and tablet) or in CSS px (`css` units, phones) per the layout's form. In `frame` units the focus-ring token rounds up to whole px (`round(up, …, 1px)`): outlines snap down to whole pixels, and the old transform drew the scaled ring at its full width, so a ring under 2 px would have thinned. Native range/select controls on the frame's layers are zoomed by `--tc-zoom`; their focus ring is un-zoomed.
 - `platform/device-mode.ts` no longer writes the density tokens (`--tc-tap-min`, `--tc-text-min`); the layout owns them. It keeps `data-phone`, `data-touch`, `data-fill` and the crop and bar vars until ws/camera.
 - `WidgetHandle.remove()` returns the element to where it was before `layout.add()` (its old parent and position); an element added detached is removed, as before.

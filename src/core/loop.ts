@@ -2,7 +2,8 @@
  * Fixed-step simulation + variable-rate render.
  *
  * `FixedStepper` is the pure accumulator (unit-tested); `GameLoop` drives it from
- * requestAnimationFrame.
+ * requestAnimationFrame. With `fixed: false` the loop has no fixed step: update runs once per
+ * rendered frame with the real (clamped) delta, for a client that applies another's state.
  */
 
 export interface FixedStepperOptions {
@@ -68,13 +69,24 @@ export interface Time {
 }
 
 export interface LoopCallbacks {
-  /** Fixed-step update. `dt` is always `time.step`. */
+  /**
+   * Fixed-step update: `dt` is always `time.step`. With `fixed: false`, once per rendered frame
+   * before render, `dt` the real frame delta (`time.frameDt`).
+   */
   update(dt: number, time: Time): void;
-  /** Variable-rate render. `alpha` is the interpolation factor between sim states. */
+  /**
+   * Variable-rate render. `alpha` is the interpolation factor between sim states (always 1 with
+   * `fixed: false`, 0 while paused).
+   */
   render(alpha: number, time: Time): void;
 }
 
 export interface GameLoopOptions extends FixedStepperOptions {
+  /**
+   * Default true: update runs in fixed steps of `step`. False: once per rendered frame with the
+   * real frame delta (render-rate only, no accumulator); `time.tick` then counts those updates.
+   */
+  fixed?: boolean;
   /** Injected for tests. Defaults to `performance.now` / `requestAnimationFrame`. */
   now?: () => number;
   raf?: (cb: (t: number) => void) => number;
@@ -88,6 +100,7 @@ export class GameLoop {
   readonly time: Time;
   private readonly stepper: FixedStepper;
   private readonly cb: LoopCallbacks;
+  private readonly fixed: boolean;
   private readonly now: () => number;
   private readonly raf: (cb: (t: number) => void) => number;
   private readonly caf: (id: number) => void;
@@ -101,6 +114,7 @@ export class GameLoop {
   constructor(cb: LoopCallbacks, opts: GameLoopOptions = {}) {
     this.cb = cb;
     this.stepper = new FixedStepper(opts);
+    this.fixed = opts.fixed !== false;
     this.now = opts.now ?? (() => performance.now());
     this.raf = opts.raf ?? ((f) => requestAnimationFrame(f));
     this.caf = opts.caf ?? ((id) => cancelAnimationFrame(id));
@@ -187,7 +201,11 @@ export class GameLoop {
     const dt = Math.min(Math.max(rawDt, 0), this.stepper.maxFrameDt);
     time.frameDt = dt;
     time.realTime += dt;
-    if (!this._paused) {
+    if (!this._paused && !this.fixed) {
+      time.simTime += dt;
+      time.tick++;
+      this.cb.update(dt, time);
+    } else if (!this._paused) {
       const steps = this.stepper.advance(dt);
       for (let i = 0; i < steps; i++) {
         time.simTime += this.stepper.step;
@@ -196,6 +214,6 @@ export class GameLoop {
       }
     }
     time.frame++;
-    this.cb.render(this._paused ? 0 : this.stepper.alpha, time);
+    this.cb.render(this._paused ? 0 : this.fixed ? this.stepper.alpha : 1, time);
   }
 }

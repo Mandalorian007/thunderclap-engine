@@ -3,13 +3,12 @@
  * network sink (VISION rule 4): nothing here calls fetch or sendBeacon.
  */
 import type { EventMap } from '../core/events';
-import type { EngineCtx } from '../core/game';
+import type { EngineCtx, GameHooks, HideReason } from '../core/game';
 import type { HostKind } from '../host/types';
-import { watchLifecycle } from '../platform/environment';
 import type { EmbedContext } from '../platform/links';
 import { classifyFormFactor, type FormFactor } from '../ui/layout';
 
-export type SessionEndReason = 'hidden' | 'pagehide' | 'freeze' | 'deviceLost';
+export type SessionEndReason = HideReason | 'deviceLost';
 
 /** Props of the events the engine emits itself. */
 export interface EngineEvents {
@@ -72,7 +71,8 @@ export interface Analytics<E extends EventMap = EventMap> {
   flush(): Promise<void>;
   /**
    * Emits `game_start`, then `session_end` and a flush when the page hides, and `device_lost`
-   * when the GPU goes. Wraps `ctx.hooks.deviceLost`, keeping the game's own. Returns detach.
+   * when the GPU goes. Wraps `ctx.hooks.hide`, `show` and `deviceLost`, keeping the game's own.
+   * Returns detach.
    */
   attach(ctx: AttachTarget): () => void;
 }
@@ -169,26 +169,32 @@ export function createAnalytics<E extends EventMap = EventMap>(
       emit('session_end', { durationMs: clock() - start, reason });
       void flush();
     };
-    const unwatch = watchLifecycle({
-      onHide: (why) => end(why as SessionEndReason),
-      onShow: () => {
-        ended = false;
-      },
-    });
-
     const hooks = ctx.hooks;
-    const prev = hooks.deviceLost;
-    const wrapped = (info: GPUDeviceLostInfo) => {
+    const prevHide = hooks.hide;
+    const prevShow = hooks.show;
+    const prevLost = hooks.deviceLost;
+    const hide: NonNullable<GameHooks['hide']> = (reason) => {
+      end(reason);
+      prevHide?.call(hooks, reason);
+    };
+    const show: NonNullable<GameHooks['show']> = (reason) => {
+      ended = false;
+      prevShow?.call(hooks, reason);
+    };
+    const lost = (info: GPUDeviceLostInfo) => {
       emit('device_lost', { reason: String(info.reason), message: String(info.message) });
       end('deviceLost');
-      prev?.call(hooks, info);
+      prevLost?.call(hooks, info);
     };
-    hooks.deviceLost = wrapped;
+    hooks.hide = hide;
+    hooks.show = show;
+    hooks.deviceLost = lost;
 
     return () => {
-      unwatch();
       // Restore only if nobody wrapped us since; otherwise the chain stays.
-      if (hooks.deviceLost === wrapped) hooks.deviceLost = prev;
+      if (hooks.hide === hide) hooks.hide = prevHide;
+      if (hooks.show === show) hooks.show = prevShow;
+      if (hooks.deviceLost === lost) hooks.deviceLost = prevLost;
     };
   };
 

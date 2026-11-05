@@ -50,6 +50,6 @@ Games add their own through the generic `E`. A batch is flushed on `flush()`, on
 
 ## `attach(ctx)`
 
-Needs no change to `createGame`. It wraps `ctx.hooks.deviceLost` (your own hook still runs) and listens to the same page lifecycle events the save store flushes on. The returned function detaches both. `GameHooks.hide` carries no reason, so the lifecycle events are watched directly to tell `hidden`, `pagehide` and `freeze` apart.
+It wraps `ctx.hooks.hide`, `ctx.hooks.show` and `ctx.hooks.deviceLost` (your own hooks still run, after it). `createGame` calls `hide(reason)` with the lifecycle reason (`hidden`, `pagehide`, `freeze`), which becomes `session_end.reason`; `show` re-arms it for the next hidden stretch. It adds no listeners of its own. The returned function restores the hooks (unless something wrapped them since).
 
 `emit` and `flush` never throw. A failing sink is reported to `onError` and its batch is dropped (no retry, no persistence).

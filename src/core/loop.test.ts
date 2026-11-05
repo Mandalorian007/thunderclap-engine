@@ -73,6 +73,26 @@ describe('GameLoop', () => {
     expect(renders).toBe(1);
   });
 
+  it('fixed: false updates once per frame with the real delta, alpha 1', () => {
+    const log: string[] = [];
+    const loop = new GameLoop(
+      {
+        update: (dt) => log.push(`u${dt.toFixed(3)}`),
+        render: (alpha) => log.push(`r${alpha}`),
+      },
+      { raf: () => 0, caf: () => {}, now: () => 0, fixed: false },
+    );
+    loop.tickOnce(1 / 30);
+    loop.tickOnce(0.004);
+    loop.tickOnce(5); // clamped to maxFrameDt
+    expect(log).toEqual(['u0.033', 'r1', 'u0.004', 'r1', 'u0.250', 'r1']);
+    expect(loop.time.tick).toBe(3);
+    expect(loop.time.simTime).toBeCloseTo(1 / 30 + 0.004 + 0.25);
+    loop.paused = true;
+    loop.tickOnce(1 / 60);
+    expect(log.slice(-1)).toEqual(['r0']);
+  });
+
   it('drives frames from raf', () => {
     let t = 0;
     let pending: ((t: number) => void) | null = null;
