@@ -15,7 +15,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 2 | Render call | ws/render-call | `Renderer.render(frame, camera, target)`; `Host.requestFrame`; `GameLoop` takes its frame source from the host; deletes `device`/`setFill`/fill bands for `layout.freeRect` + `Camera.fitRect` (E-006) | camera, transforms, one-overlay | ⏳ |
 | 2 | Demo mesh | ws/demo-mesh | `?demo=mesh` harness page: perspective camera, depth, lit mesh, orbit by pointer and pad; e2e on the matrix | camera, transforms | ⏳ |
 | 2 | Input rays | ws/input-rays | Pointer router (mouse, touch, pen, pad cursor → rays), `Hit` events, `{ xr }` binding kinds | camera | 🔄 stacked on ws/camera |
-| 2 | Client mode | ws/client-mode | `createGame` with opt-in fixed-step sim and save store, for server-authoritative clients | one-overlay | 🔄 |
+| 2 | Client mode | ws/client-mode | `createGame` with opt-in fixed-step sim and save store, for server-authoritative clients | one-overlay | ✅ branch green (361 tests, e2e 299/31); integrating |
 | 2 | Puzzle template | ws/template-puzzle | `templates/puzzle`: `createGame`, a scene, `rules/`, save schema, layout spec, `CLAUDE.md` naming the engine concepts | camera, transforms, client-mode | ⏳ |
 
 ## Gates
