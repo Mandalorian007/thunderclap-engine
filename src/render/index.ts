@@ -1,9 +1,6 @@
-export type { BindingDesc, BindingSetOptions } from './bindings';
-export { BindingSet } from './bindings';
 export type { BlendMode } from './blend';
-export { blendState } from './blend';
 export type { CameraPoint, CameraRect } from './camera';
-export { ALL_LAYERS, CAMERA_BLOCK_FLOATS, Camera, ORTHO2D_HALF_DEPTH } from './camera';
+export { ALL_LAYERS, Camera, ORTHO2D_HALF_DEPTH } from './camera';
 export type { RGBA } from './color';
 export { hex, linearToSrgb, rgba, scaleRgb, srgbToLinear } from './color';
 export { gpuDiagnostics, installGpuErrorLogging, onGpuError, reportGpuError } from './diagnostics';
@@ -63,15 +60,14 @@ export { MIN_RESOLUTION_SCALE, Renderer, sceneSize } from './renderer';
 export { SCENE_FORMAT, SceneTarget, type SceneTargetDesc } from './scene-target';
 export { type SnapshotOptions, SnapshotRenderer } from './snapshot';
 export type { PixelData, SamplerKind, TextureDesc, TextureLike, TextureSource } from './texture';
-export { bytesPerTexel, createSamplers, Texture } from './texture';
+export { bytesPerTexel, Texture } from './texture';
 export type { ReadonlyQuat, ReadonlyVec3 } from './transform';
-export { MATRIX3X4_FLOATS, multiplyMatrix3x4, Transform, writeMatrix2d } from './transform';
+export { Transform } from './transform';
 export {
   createShaderModule,
   materialPrelude,
   WGSL_FULLSCREEN_PRELUDE,
   WGSL_GLOBALS,
   WGSL_LIGHTS,
-  WGSL_MATERIAL_PRELUDE,
   WGSL_NOISE,
 } from './wgsl';
