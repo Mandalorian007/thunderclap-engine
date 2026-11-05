@@ -39,7 +39,7 @@
     "lint": "biome check .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "pnpm typecheck && pnpm lint && pnpm check:boundaries && pnpm test && pnpm check:host-electron && pnpm check:template-puzzle",
+    "check": "pnpm typecheck && pnpm lint && pnpm check:boundaries && pnpm check:docs && pnpm test && pnpm check:host-electron && pnpm check:template-puzzle",
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "check:docs": "node scripts/check-docs.mjs",
     "release": "node scripts/release.mjs",
