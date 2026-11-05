@@ -3,10 +3,15 @@
  * storage, driven the way a game drives them. Published as `window.__host`; nothing is on the
  * page until a spec calls `mount()`, so the platform smoke sees the bare harness.
  */
-import { createWebHost, type Host } from '../src/host';
-import type { CopyResult, LinkActivation, OpenResult } from '../src/platform';
-import { createSaveStore, s } from '../src/save';
-import { activateLink, type ExternalLink, ensureStyles, externalLink } from '../src/ui';
+import { createWebHost, type Host } from '@thunderclap/engine/host';
+import type { CopyResult, LinkActivation, OpenResult } from '@thunderclap/engine/platform';
+import { createSaveStore, s } from '@thunderclap/engine/save';
+import {
+  activateLink,
+  type ExternalLink,
+  ensureStyles,
+  externalLink,
+} from '@thunderclap/engine/ui';
 import type { HarnessHostInfo, HarnessHostProbe, HarnessSaveResult } from './state';
 
 /** The probe's link. The specs fulfil it locally, so no request leaves the machine. */

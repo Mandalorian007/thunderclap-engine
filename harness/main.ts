@@ -6,9 +6,9 @@
  * input action and the web host (host-probe.ts: open, copy, fullscreen, storage). Later
  * workstreams add gesture, layout and lifecycle probes here.
  */
-import { GameLoop } from '../src/core';
-import { Input } from '../src/input';
-import { boot } from '../src/platform';
+import { GameLoop } from '@thunderclap/engine/core';
+import { Input } from '@thunderclap/engine/input';
+import { boot } from '@thunderclap/engine/platform';
 import { createHostProbe } from './host-probe';
 import type { HarnessState } from './state';
 

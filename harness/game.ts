@@ -8,8 +8,8 @@
  * - e2e/surface.spec.ts: resize and DPR changes mid-scene keep canvas, overlay and backbuffer in
  *   step; a lost device shows the reload screen and halts everything behind it.
  */
-import { createGame } from '../src';
-import { createSaveStore, s } from '../src/save';
+import { createGame } from '@thunderclap/engine';
+import { createSaveStore, s } from '@thunderclap/engine/save';
 import type { HarnessGameApi, HarnessGameState } from './game-state';
 
 const root = document.getElementById('root') as HTMLElement;

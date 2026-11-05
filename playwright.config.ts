@@ -3,8 +3,7 @@ import type { HarnessOptions } from './e2e/fixtures';
 import { HARNESS_PORT, HARNESS_URL, WRAPPER_PORT, WRAPPER_URL } from './e2e/ports';
 
 // Engine e2e (D-041 addendum 2): verifies the engine's platform capability once for every game,
-// on the noun-free harness page (harness/). Run with `pnpm test:e2e` here, or
-// `pnpm test:e2e:engine` from the repo root. The game's own e2e (tests/e2e) tests product only.
+// on the noun-free harness page (harness/). Run with `pnpm test:e2e`. The game's own e2e (tests/e2e) tests product only.
 //
 // Every spec runs on every entry of the matrix below: desktop, iPad and the four phones from
 // the game's mobile specs, plus the harness inside an itch-style cross-origin iframe.

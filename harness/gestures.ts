@@ -12,8 +12,8 @@
  *   space): cell (3, 2) is refused, so aiming at it snaps to a neighbour. Each tick's aim is
  *   logged, and whether the loupe element is shown.
  */
-import { Gestures, Input, snapToGrid } from '../src/input';
-import { computeLetterbox } from '../src/platform';
+import { Gestures, Input, snapToGrid } from '@thunderclap/engine/input';
+import { computeLetterbox } from '@thunderclap/engine/platform';
 import type { GestureLogEntry, HarnessGesturesApi, HarnessGesturesState } from './gestures-state';
 
 const LOGICAL = { width: 800, height: 600 };

@@ -27,7 +27,7 @@ const overlaps = (a: Rect, b: Rect) =>
 const GRID: RegionName[] = ['top', 'left', 'right', 'bottom', 'cardLane', 'captionLane', 'fill'];
 const ALL = new Set<RegionName>(GRID);
 
-/** The engine matrix (packages/engine/playwright.config.ts) plus the portrait rows. */
+/** The engine matrix (playwright.config.ts) plus the portrait rows. */
 const ROWS: {
   name: string;
   w: number;

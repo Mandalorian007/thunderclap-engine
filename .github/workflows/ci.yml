@@ -1,4 +1,4 @@
-# Typecheck, lint and unit tests on every push and pull request. No secrets are used or needed.
+# Two jobs on every push and pull request: `check` (typecheck, lint, import boundaries, unit tests) and `e2e` (Playwright). No secrets are used or needed.
 name: CI
 
 on:
@@ -29,3 +29,32 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
+
+  e2e:
+    # Engine platform e2e (D-041 addendum 2, a gate): the harness smoke on the viewport/device/iframe
+    # matrix in playwright.config.ts. Headless Chromium gets WebGPU from SwiftShader on Linux (the
+    # flags are in the config). GitHub sets CI=true, which means 1 worker, 1 retry and the HTML
+    # report. In last-rune the same suite ran in the Playwright container on arm64; if SwiftShader
+    # loses the WebGPU device here ("A valid external Instance reference no longer exists"), that
+    # is the fix to try.
+    name: e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:e2e
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7

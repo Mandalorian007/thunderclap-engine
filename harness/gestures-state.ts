@@ -2,7 +2,12 @@
  * What the gestures harness page (harness/gestures.html) publishes on `window.__harnessGestures`
  * for e2e/gestures.spec.ts. Shared by the page (harness/gestures.ts) and the spec.
  */
-import type { GestureDevice, GestureKind, GesturePhase, GesturePoint } from '../src/input';
+import type {
+  GestureDevice,
+  GestureKind,
+  GesturePhase,
+  GesturePoint,
+} from '@thunderclap/engine/input';
 
 /** One gesture report from one tick. Idle `move` reports (nothing changed) are not logged. */
 export interface GestureLogEntry {

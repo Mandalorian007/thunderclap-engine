@@ -16,7 +16,7 @@ function offset(): number {
   const cwd = process.cwd();
   const i = cwd.indexOf(WORKTREES);
   if (i < 0) return 0;
-  // Hash the worktree root (not packages/engine), so the offset matches the game's.
+  // Hash the worktree root (the repo root of a checkout), so the offset matches the game's.
   const name = cwd.slice(i + WORKTREES.length).split('/')[0];
   const n = createHash('sha1')
     .update(`${cwd.slice(0, i)}${WORKTREES}${name}`)
