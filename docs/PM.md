@@ -21,6 +21,8 @@
 4. The integrator merges, resolves, runs `pnpm check` and the e2e matrix on the merged `main`, commits, and reports counts and every conflict it resolved.
 5. The PM updates STATUS (hash, counts) and starts the next wave the merge unblocked.
 
+While an integrator is working, the main checkout is **its**: the PM writes no files and runs no `git commit` there until the report arrives (a PM docs commit once closed an in-progress merge under the wrong message).
+
 ## Briefs
 
 A brief is the whole context an engineer gets, so it carries:
