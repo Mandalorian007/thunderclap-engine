@@ -14,7 +14,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 1 | Foundation | ws/foundation | `scripts/check-boundaries.mjs` + `pnpm check:boundaries`; e2e in CI; stale `packages/`/`check-boundaries` refs; README links VISION | — | ✅ merged (24 relative `../src` imports in harness/e2e/examples rewritten to the public map; `scripts/release.mjs`) |
 | 2 | Render call | ws/render-call | `Renderer.render(frame, camera, target)`; `Host.requestFrame`; `GameLoop` takes its frame source from the host; deletes `device`/`setFill`/fill bands for `layout.freeRect` + `Camera.fitRect` (E-006); widens `ortho2d` depth range, drawable `depthStencil`, `ctx.pointers` wiring (E-009) | camera, transforms, one-overlay | 🔄 |
 | 2 | Demo mesh | ws/demo-mesh | `?demo=mesh` harness page: perspective camera, depth, lit mesh, orbit by pointer and pad; e2e on the matrix | camera, transforms | 🔄 |
-| 2 | Input rays | ws/input-rays | Pointer router (mouse, touch, pen, pad cursor → rays), `Hit` events, `{ xr }` binding kinds | camera | ✅ branch green (421 tests, e2e 323/31, rays.spec 40/40); integrating |
+| 2 | Input rays | ws/input-rays | Pointer router (mouse, touch, pen, pad cursor → rays), `Hit` events, `{ xr }` binding kinds | camera | ✅ merged `cd27ff1` (454 tests, e2e 339/31; `ctx.pointers` wiring → render-call) |
 | 2 | Client mode | ws/client-mode | `createGame` with opt-in fixed-step sim and save store, for server-authoritative clients | one-overlay | ✅ merged `ccdf598` (385 tests, e2e 299/31) |
 | 2 | Puzzle template | ws/template-puzzle | `templates/puzzle`: `createGame`, a scene, `rules/`, save schema, layout spec, `CLAUDE.md` naming the engine concepts | camera, transforms, client-mode | 🔄 |
 
