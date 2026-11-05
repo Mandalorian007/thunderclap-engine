@@ -8,8 +8,10 @@
  * - A depth buffer: the camera preset turns `depthTest`/`depthWrite` on and the renderer sorts
  *   opaque draws front-to-back. A tall block behind the near one is drawn after it and must stay
  *   behind it (e2e/mesh.spec.ts samples both).
- * - A lit `Mesh` in `VERTEX_LAYOUT_3D` (a cube and a ground quad) drawn through `Transform`s with
- *   a Lambert + ambient fragment shader written here, from `VSOut.normal` and `VSOut.worldPos`.
+ * - A lit `Mesh` in `VERTEX_LAYOUT_3D` (a cube and a ground quad) drawn through `Transform`s.
+ *   The light comes from the engine's lighting block (`frame.lights`: ambient, a sun and one
+ *   warm point light circling the blocks); the fragment shader written here reads it through
+ *   `engine_lambert(normal, world_pos)` from the material prelude.
  */
 import { GameLoop } from '@thunderclap/engine/core';
 import { type GamepadLike, Gestures, Input } from '@thunderclap/engine/input';
@@ -20,6 +22,8 @@ import {
   gpuDiagnostics,
   type InstanceParams,
   installGpuErrorLogging,
+  Lights,
+  type PointLight,
   Renderer,
   Transform,
   VERTEX_LAYOUT_3D,
@@ -40,6 +44,7 @@ const state: HarnessMeshState = {
   stats: { drawCalls: 0, instances: 0 },
   gpuErrors: 0,
   zoom: { in: 0, out: 0 },
+  lights: { sun: false, points: 0, lamp: [0, 0, 0] },
 };
 
 /** A fake gamepad the spec installs; `null` reads the real ones. */
@@ -137,12 +142,13 @@ function groundGeometry(): { vertices: Float32Array; indices: Uint16Array } {
 
 // ------------------------------------------------------------------ the material
 
-/** Lambert + ambient from the world normal; `params.x` > 0 draws a checker from the world position. */
+/**
+ * Albedo × the engine lighting block (`engine_lambert`: ambient + sun + point lights) plus a
+ * faint sky term from above; `params.x` > 0 draws a checker from the world position.
+ */
 const LIT_WGSL = /* wgsl */ `
 @fragment fn fs_main(in: VSOut) -> FragOut {
   let n = normalize(in.normal);
-  let l = normalize(vec3f(0.45, 1.0, 0.65));
-  let diffuse = max(dot(n, l), 0.0);
   var albedo = in.color.rgb;
   if (in.params.x > 0.0) {
     let cell = floor(in.worldPos.x) + floor(in.worldPos.z);
@@ -151,10 +157,20 @@ const LIT_WGSL = /* wgsl */ `
   // A faint sky term from above keeps the shadowed faces readable.
   let sky = 0.5 + 0.5 * n.y;
   var o: FragOut;
-  o.color = vec4f(albedo * (0.18 + 0.12 * sky + 0.8 * diffuse), 1.0);
+  o.color = vec4f(albedo * (engine_lambert(n, in.worldPos) + 0.12 * sky), 1.0);
   o.emissive = vec4f(0.0);
   return o;
 }`;
+
+/** The lights: a sun from up-right-front (the direction it travels) and a warm circling lamp. */
+const AMBIENT = [0.18, 0.18, 0.2] as const;
+const SUN_DIR = [-0.45, -1.0, -0.65] as const;
+const SUN_COLOR = [0.8, 0.8, 0.78] as const;
+const LAMP_COLOR = [1.6, 0.9, 0.4] as const;
+const LAMP_RADIUS = 5;
+const LAMP_ORBIT = 3.2;
+const LAMP_HEIGHT = 1.6;
+const LAMP_RAD_PER_S = 0.9;
 
 // ------------------------------------------------------------------ the scene
 
@@ -246,6 +262,15 @@ async function main(): Promise<void> {
   const rightP: InstanceParams = { tint: [0.95, 0.8, 0.2, 1] };
   let spin = 0;
 
+  // The lights: set once, mutated per frame (the lamp's position), uploaded by the renderer.
+  const lights = new Lights();
+  lights.ambient.set(AMBIENT);
+  lights.sun.dir = SUN_DIR;
+  lights.sun.color = SUN_COLOR;
+  const lampPos = new Float32Array(3);
+  const lamp: PointLight = { position: lampPos, color: LAMP_COLOR, radius: LAMP_RADIUS };
+  lights.points.push(lamp);
+
   const gestures = new Gestures();
   const input = new Input<Action>(bindings, {
     gestures,
@@ -281,6 +306,10 @@ async function main(): Promise<void> {
     render(_alpha, time) {
       const frame = renderer.beginFrame(time.realTime, time.frameDt);
       frame.clear(0.05, 0.07, 0.12);
+      frame.lights = lights;
+      lampPos[0] = TARGET[0] + LAMP_ORBIT * Math.cos(spin * LAMP_RAD_PER_S);
+      lampPos[1] = LAMP_HEIGHT;
+      lampPos[2] = TARGET[2] + LAMP_ORBIT * Math.sin(spin * LAMP_RAD_PER_S);
       left.setAxisAngle(0, 1, 0, spin * 0.6);
       right.setAxisAngle(1, 1, 0, spin * 0.4);
       frame.mesh(ground, lit, groundT, groundP);
@@ -295,6 +324,12 @@ async function main(): Promise<void> {
       state.stats.drawCalls = renderer.stats.drawCalls;
       state.stats.instances = renderer.stats.instances;
       state.gpuErrors = gpuDiagnostics.errorCount;
+      const ls = state.lights;
+      ls.sun = frame.lights.sun.color[0]! > 0;
+      ls.points = frame.lights.points.length;
+      ls.lamp[0] = lampPos[0]!;
+      ls.lamp[1] = lampPos[1]!;
+      ls.lamp[2] = lampPos[2]!;
       probe(camera, 0, 0.75, 2, state.probes.near);
       probe(camera, 0, 2.5, 0, state.probes.far);
       probe(camera, 1.2, 0, 3.6, state.probes.ground);

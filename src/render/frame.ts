@@ -1,3 +1,4 @@
+import { Lights } from './lights';
 import type { Material } from './material';
 import type { Mesh } from './mesh';
 import { Transform } from './transform';
@@ -91,6 +92,13 @@ export class Frame {
    * (the 2D path). Set by the renderer before `prepare`/`draw` run.
    */
   depthFormat: GPUTextureFormat | null = null;
+  /**
+   * The frame's lights, uploaded as `EngineLights` (`@group(0) @binding(2)`) with every view.
+   * Defaults to an unlit block (ambient 1, no sun, no points), so materials that read it draw
+   * their albedo unchanged until the game sets it. Mutate it or assign another `Lights`; the
+   * object persists across frames (it is not reset by `beginFrame`).
+   */
+  lights: Lights = new Lights();
 
   constructor(
     private readonly sink: FrameSink,

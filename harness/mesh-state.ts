@@ -34,6 +34,11 @@ export interface HarnessMeshState {
   gpuErrors: number;
   /** Ticks a zoom action was active, by source. */
   zoom: { in: number; out: number };
+  /**
+   * The lighting block the page hands the renderer (`frame.lights`): whether the sun has a
+   * colour, how many point lights, and the circling lamp's world position (it moves each frame).
+   */
+  lights: { sun: boolean; points: number; lamp: [number, number, number] };
 }
 
 export interface HarnessMeshApi {

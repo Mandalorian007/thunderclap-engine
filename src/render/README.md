@@ -10,7 +10,7 @@ beginFrame(time, dt) → Frame
   frame.sprite / frame.mesh / frame.drawable   (record only; nothing hits the GPU yet)
 render(frame, camera, target = renderer.target)   once per camera
   1. first call of the frame: pre-passes, then drawable.prepare() (compute, uploads)
-  2. write this view's globals + camera block (one 512 B buffer per view) and its instances
+  2. write this view's globals + camera + lighting blocks (one 1072 B buffer per view) and its instances
      (appended to the shared instance buffer)
   3. scene pass into the target: colour (@location 0) and emissive (@location 1), both
      rgba16float, plus depth24plus when camera.depthTest; the first view into a target
@@ -155,6 +155,45 @@ renderer.render(frame, eye);                              // or renderer.camera 
   `cam.fitRect(worldRect, viewportInLogicalPx)`; convert the rect's corners with
   `surface.clientToLogical`.
 
+## Lighting
+
+The engine supplies the lights; the style is your WGSL. `frame.lights` is a `Lights` (ambient
+rgb, one `sun { dir, color }`, `points: PointLight[]` with `position`, `color`, `radius`, the
+first `MAX_POINT_LIGHTS` = 16 uploaded) that the renderer writes as `EngineLights` at
+`@group(0) @binding(2)` with every view, in the same upload as the globals and the camera. The
+default is unlit (ambient 1, no sun, no points), so a material that never reads the block, or
+one that multiplies by `engine_lambert`, draws exactly as before until the game sets lights.
+
+```ts
+const lights = new Lights();                       // or mutate frame.lights in place
+lights.ambient.set([0.18, 0.18, 0.2]);
+lights.sun.dir = [-0.45, -1, -0.65];              // the direction the light travels; normalised on upload
+lights.sun.color = [0.8, 0.8, 0.78];
+const lamp = { position: new Float32Array(3), color: [1.6, 0.9, 0.4], radius: 5 };
+lights.points.push(lamp);                         // keep the object; move lamp.position per frame
+frame.lights = lights;                            // once; the Frame persists
+```
+
+```wgsl
+@fragment fn fs_main(in: VSOut) -> FragOut {
+  let n = normalize(in.normal);
+  var o: FragOut;
+  o.color = vec4f(in.color.rgb * engine_lambert(n, in.worldPos), 1.0);  // ambient + sun + points
+  o.emissive = vec4f(0.0);
+  return o;
+}
+```
+
+In WGSL the block is `lights.ambient`, `lights.point_count` (u32), `lights.sun_dir`
+(normalised), `lights.sun_color` and `lights.points[i].position / radius / color`.
+`engine_point_lights(n, p)` sums the point lights' Lambert diffuse with a `(1 - d/radius)²`
+falloff; `engine_lambert(n, p)` adds the ambient and the sun. Toon, rim or wrapped lighting
+reads the same fields and ignores the helpers. `Lights.writeBlock(f32, u32, offset)` is the CPU
+layout (`LIGHTS_BLOCK_FLOATS` = 140 floats; `POINT_LIGHTS_OFFSET_FLOATS`, `POINT_LIGHT_FLOATS`),
+and allocates nothing; `lights.reset()` returns to the unlit default. Drawables that want the
+block add `WGSL_LIGHTS` to their shader; `renderer.globalsLayout` already has binding 2.
+Shadows are not part of the block yet.
+
 ## Custom materials
 
 A material is your WGSL fragment shader plus an optional uniform block and textures. The
@@ -163,6 +202,9 @@ engine prepends a prelude that provides:
 - `globals`: `logicalSize`, `targetSize`, `time`, `dt` at `@group(0) @binding(0)`
 - `camera`: `view`, `proj`, `view_proj` (world → clip), `camera_pos`, `viewport` (scene target
   px) and `view_index` (from `camera.viewIndex`) at `@group(0) @binding(1)`
+- `lights`: `ambient`, `point_count`, `sun_dir`, `sun_color` and `points[16]` (`position`,
+  `radius`, `color`) at `@group(0) @binding(2)`, with `engine_lambert(normal, world_pos)` and
+  `engine_point_lights(normal, world_pos)`. See "Lighting" below.
 - noise helpers: `engine_hash21`, `engine_hash22`, `engine_noise`, `engine_fbm(p, octaves)`,
   `engine_luma`
 - `VSOut { clip, uv, local, color, params, world, emissive, size, normal, worldPos }`, where
