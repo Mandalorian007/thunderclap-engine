@@ -1,4 +1,13 @@
 export {
+  type AnchorCamera,
+  type AnchorHandle,
+  type AnchorOptions,
+  type AnchorRect,
+  type AnchorSurface,
+  Anchors,
+  type AnchorsOptions,
+} from './anchor';
+export {
   CaptionCard,
   type CaptionOptions,
   type Corner,

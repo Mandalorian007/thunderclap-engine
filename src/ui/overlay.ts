@@ -1,3 +1,4 @@
+import { type AnchorCamera, Anchors } from './anchor';
 import { CaptionCard, type CaptionOptions } from './caption';
 import { h } from './dom';
 import { createLayout, type Layout, type LayoutSpec, type Units } from './layout';
@@ -92,6 +93,14 @@ export interface Overlay {
    * the parent's bounding box.
    */
   clientToDesign(clientX: number, clientY: number): { x: number; y: number } | null;
+  /**
+   * The overlay's one `Anchors` (DOM that follows world points; see `ui/anchor.ts`), built on the
+   * first call with `camera` and laid on the `hud` layer (other layers by name through
+   * `AnchorOptions.layer`). A later call with a camera switches it; the first call needs one.
+   */
+  anchors(camera?: () => AnchorCamera): Anchors;
+  /** `anchors().update()` if `anchors` was ever called, else nothing. `createGame` calls it after every frame. */
+  updateAnchors(): void;
   destroy(): void;
 }
 
@@ -207,6 +216,8 @@ export function createOverlay(opts: OverlayOptions): Overlay {
     if (st.units !== units) applyUnits(st.units);
   });
 
+  let anchors: Anchors | null = null;
+
   const overlay: Overlay = {
     root,
     layers,
@@ -244,7 +255,38 @@ export function createOverlay(opts: OverlayOptions): Overlay {
       const y = (cy - pb.top - frame.y) / scale;
       return x >= 0 && y >= 0 && x <= dw && y <= dh ? { x, y } : null;
     },
+    anchors(camera) {
+      if (anchors) {
+        if (camera) anchors.setCamera(camera);
+        return anchors;
+      }
+      if (!camera) throw new Error('overlay.anchors: the first call needs a camera');
+      anchors = new Anchors({
+        root: layers.hud,
+        camera,
+        // The frame is the canvas rect; the design size is the logical size it shows.
+        surface: {
+          get rect() {
+            return frame;
+          },
+          logicalWidth: dw,
+          logicalHeight: dh,
+        },
+        layers,
+        // hud and captions sit on the frame; layout covers the root; panels and toasts follow units.
+        onFrame: (l) =>
+          l === 'hud' ||
+          l === 'captions' ||
+          ((l === 'panels' || l === 'toasts') && units === 'frame'),
+      });
+      return anchors;
+    },
+    updateAnchors() {
+      anchors?.update();
+    },
     destroy() {
+      anchors?.clear();
+      anchors = null;
       unwatch();
       offLayout();
       layout.destroy();

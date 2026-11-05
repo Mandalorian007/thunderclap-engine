@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>ThunderClap engine anchors demo</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+      #root { position: fixed; inset: 0; }
+      .label {
+        font: 600 12px/1 system-ui, sans-serif; color: #fff; white-space: nowrap;
+        padding: 3px 6px; border-radius: 4px; background: rgb(0 0 0 / 0.6);
+      }
+      .label[hidden] { display: none; }
+      .marker { width: 20px; height: 20px; border-radius: 50%; background: #fd3; box-sizing: border-box; }
+      .marker[data-anchor-clamped] { border: 3px solid #f60; }
+    </style>
+  </head>
+  <body>
+    <main id="root"></main>
+    <script type="module" src="./anchors.ts"></script>
+  </body>
+</html>

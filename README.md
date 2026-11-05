@@ -176,7 +176,7 @@ The e2e specs run against small harness pages that don't contain any game (`harn
 - four landscape phones with touch and safe-area insets;
 - the harness inside a cross-origin iframe.
 
-The layout spec also runs on upright phone and tablet rows. The pages: `index.html` (2D renderer), `game.html` (`createGame`), `ui.html` (the overlay, text scale, menus and panels, no WebGPU), `layout.html` (layout regions and safe areas on every form factor, no WebGPU), `gestures.html` (gestures and the magnify loupe, no WebGPU), `rays.html` (pointer router and rays) `mesh.html` (perspective camera, depth and a lit mesh orbiting under pointer and pad input) and `stream.html` (chunk meshes rebuilt in a Worker and uploaded without a copy). The engine tests what the platform can do; a game built on it tests only its own product.
+The layout spec also runs on upright phone and tablet rows. The pages: `index.html` (2D renderer), `game.html` (`createGame`), `ui.html` (the overlay, text scale, menus and panels, no WebGPU), `layout.html` (layout regions and safe areas on every form factor, no WebGPU), `gestures.html` (gestures and the magnify loupe, no WebGPU), `rays.html` (pointer router and rays) `mesh.html` (perspective camera, depth and a lit mesh orbiting under pointer and pad input), `stream.html` (chunk meshes rebuilt in a Worker and uploaded without a copy) and `anchors.html` (DOM labels and a clamped marker following cubes through `ctx.ui.anchors`). The engine tests what the platform can do; a game built on it tests only its own product.
 
 Headless Chromium gets a WebGPU adapter with `--enable-unsafe-webgpu`. On macOS that's Metal; on Linux it's SwiftShader. `playwright.config.ts` sets the flags.
 
