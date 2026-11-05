@@ -253,11 +253,22 @@ textures every frame, as ping-pong does, builds no new bind groups after the fir
 
 - `renderer.createFullscreenPass({ label, wgsl, targets, blend, uniformBytes, textures })` is
   the building block for post effects. It uses `vs_fullscreen` with `FullscreenIn { pos, uv }`.
-- `renderer.createMesh({ vertices, indices, layout? })`. With the default
-  `VERTEX_LAYOUT_2D` a vertex is `pos.xy, uv.xy, color.rgba` (8 floats); with
+- `renderer.createMesh({ vertices?, indices?, layout?, capacity?, indexFormat? })`. With the
+  default `VERTEX_LAYOUT_2D` a vertex is `pos.xy, uv.xy, color.rgba` (8 floats); with
   `VERTEX_LAYOUT_3D` it is `pos.xyz, normal.xyz, uv.xy, color.rgba` (12 floats, normal at
-  `@location(10)`). `mesh.update()` replaces the data. A material builds one pipeline per
-  (vertex layout, depth mode) on first use (`material.pipelineFor(layout, depth)`).
+  `@location(10)`). A material builds one pipeline per (vertex layout, depth mode) on first
+  use (`material.pipelineFor(layout, depth)`).
+- Dynamic meshes: `capacity: { vertices, indices }` reserves room (a mesh may start empty, with
+  just a capacity); `mesh.capacity` reads it. `mesh.update({ vertices?, indices?, vertexCount?,
+  indexCount? })` takes any `ArrayBufferView`s and writes them with `queue.writeBuffer` straight
+  from their own `buffer`/`byteOffset`, so a Worker can build a chunk into one `ArrayBuffer`,
+  transfer it, and the page uploads it with no copy (see `harness/stream.ts`). Buffers are
+  reused while the counts fit the capacity and grow 1.5× only when they do not or the index
+  format changes; `update` returns true then and `mesh.growths` counts it. Counts alone
+  (`{ indexCount: n }`) move the draw range, so a chunk shrinks without touching the GPU.
+  Typed `Uint16Array`/`Uint32Array` views set the index format; other views keep it. Set both
+  counts to 0 for an empty mesh (an indexed mesh with `indexCount` 0 falls back to a
+  non-indexed draw of `vertexCount`).
 - `Drawable { prepare?(encoder, frame); draw(pass, frame) }` lets you run your own pipelines
   inside the scene pass. Build them with `layout: [renderer.globalsLayout, yours]` and
   `targets: renderer.sceneFormats`.

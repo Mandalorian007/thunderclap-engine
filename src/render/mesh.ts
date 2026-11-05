@@ -88,20 +88,53 @@ export const VERTEX_LAYOUT_3D: VertexLayout = {
   wgslNormal: 'v.normal',
 };
 
+/** Room reserved in a mesh's buffers, in vertices and indices. */
+export interface MeshCapacity {
+  readonly vertices: number;
+  readonly indices: number;
+}
+
 export interface MeshDesc {
   label?: string;
   /**
    * Interleaved vertices in `layout`: 8 floats each for 2D (x, y, u, v, r, g, b, a), 12 for
-   * 3D (x, y, z, nx, ny, nz, u, v, r, g, b, a).
+   * 3D (x, y, z, nx, ny, nz, u, v, r, g, b, a). Optional when `capacity` is given: the mesh
+   * then starts empty (`vertexCount` 0) and is filled by `update()`.
    */
-  vertices: Float32Array;
+  vertices?: Float32Array;
   /** Vertex layout. Default `VERTEX_LAYOUT_2D`. */
   layout?: VertexLayout;
   indices?: Uint16Array | Uint32Array;
-  /** Reserve room for this many vertices/indices so `update()` can grow without realloc. */
-  maxVertices?: number;
-  maxIndices?: number;
+  /**
+   * Reserve room for this many vertices and indices so `update()` can rewrite the geometry
+   * without reallocating. Defaults to the initial data's size. `indices` > 0 gives the mesh an
+   * index buffer even when no initial indices are passed.
+   */
+  capacity?: { vertices?: number; indices?: number };
+  /**
+   * Index format of a mesh created with only an index capacity. Default: the format of the
+   * initial `indices`, else `uint16` when `capacity.vertices` fits, `uint32` otherwise.
+   */
+  indexFormat?: GPUIndexFormat;
 }
+
+/**
+ * One geometry upload. Views are read from their own `ArrayBuffer` (`buffer`, `byteOffset`),
+ * so a buffer transferred from a Worker is uploaded in place, with no copy on the main thread.
+ * Any view type works; counts default to the view's whole length in the mesh's layout and
+ * index format. `vertexCount`/`indexCount` without a view only move the draw range.
+ */
+export interface MeshUpdate {
+  vertices?: ArrayBufferView;
+  indices?: ArrayBufferView;
+  /** Vertices to upload and draw. Default: all of `vertices`. */
+  vertexCount?: number;
+  /** Indices to upload and draw. Default: all of `indices`. */
+  indexCount?: number;
+}
+
+/** 1.5× growth, like a vector: amortised reallocations when a streamed mesh keeps growing. */
+const GROWTH = 1.5;
 
 export class Mesh {
   readonly label: string;
@@ -110,10 +143,22 @@ export class Mesh {
   vertexBuffer: GPUBuffer;
   indexBuffer: GPUBuffer | null = null;
   indexFormat: GPUIndexFormat = 'uint16';
+  /** Vertices drawn (non-indexed) and uploaded by the last `update`. */
   vertexCount = 0;
+  /**
+   * Indices drawn (`drawIndexed`) when > 0. With an index buffer and `indexCount` 0 the renderer
+   * falls back to a non-indexed draw of `vertexCount`, so an empty mesh sets both to 0.
+   */
   indexCount = 0;
-  private vertexCapacity: number;
-  private indexCapacity = 0;
+  /**
+   * Buffers reallocated so far, by `update()` exceeding `capacity` or changing the index format.
+   * A caller that caches `vertexBuffer`/`indexBuffer` (a drawable, a bind group) re-reads them
+   * when this changes.
+   */
+  growths = 0;
+  private readonly cap: { vertices: number; indices: number } = { vertices: 0, indices: 0 };
+  /** 4-byte scratch for the last index of an odd uint16 count at the end of its buffer. */
+  private readonly tail16 = new Uint16Array(2);
 
   constructor(
     private readonly device: GPUDevice,
@@ -121,71 +166,98 @@ export class Mesh {
   ) {
     this.label = desc.label ?? 'mesh';
     this.layout = desc.layout ?? VERTEX_LAYOUT_2D;
-    const vCount = desc.vertices.length / this.layout.floats;
-    this.vertexCapacity = Math.max(vCount, desc.maxVertices ?? 0, 1);
-    this.vertexBuffer = this.makeVertexBuffer(this.vertexCapacity);
-    if (desc.indices || desc.maxIndices) {
-      this.indexFormat = desc.indices instanceof Uint32Array ? 'uint32' : 'uint16';
-      this.indexCapacity = Math.max(desc.indices?.length ?? 0, desc.maxIndices ?? 0, 1);
-      this.indexBuffer = this.makeIndexBuffer(this.indexCapacity);
+    const vCount = desc.vertices ? desc.vertices.length / this.layout.floats : 0;
+    this.cap.vertices = Math.max(vCount, desc.capacity?.vertices ?? 0, 1);
+    this.vertexBuffer = this.makeVertexBuffer(this.cap.vertices);
+    const iCap = Math.max(desc.indices?.length ?? 0, desc.capacity?.indices ?? 0);
+    if (iCap > 0) {
+      this.indexFormat =
+        desc.indexFormat ??
+        (desc.indices ? formatOf(desc.indices) : this.cap.vertices > 0xffff ? 'uint32' : 'uint16');
+      this.cap.indices = iCap;
+      this.indexBuffer = this.makeIndexBuffer(iCap);
     }
-    this.update(desc.vertices, desc.indices);
+    if (desc.vertices || desc.indices) {
+      this.update({ vertices: desc.vertices, indices: desc.indices });
+    }
+  }
+
+  /** Room in the buffers (vertices, indices); `indices` is 0 for a non-indexed mesh. */
+  get capacity(): MeshCapacity {
+    return this.cap;
   }
 
   /**
-   * Replace geometry. Reuses buffers when it fits (no allocation); grows them otherwise.
-   * Pass `vertexCount`/`indexCount` to upload only a prefix of the arrays.
+   * Replace geometry (`MeshUpdate`). Writes with `queue.writeBuffer` straight from each view's
+   * buffer and reuses the GPU buffers while the counts fit `capacity`; grows them (1.5×) only
+   * when a count exceeds it or the index format changes. Returns true when a buffer was
+   * reallocated (`growths` counts them). Allocation-free otherwise.
    */
-  update(
-    vertices: Float32Array,
-    indices?: Uint16Array | Uint32Array,
-    vertexCount = vertices.length / this.layout.floats,
-    indexCount = indices?.length ?? 0,
-  ): void {
-    if (vertexCount > this.vertexCapacity) {
-      this.vertexBuffer.destroy();
-      this.vertexCapacity = Math.ceil(vertexCount * 1.5);
-      this.vertexBuffer = this.makeVertexBuffer(this.vertexCapacity);
-    }
-    this.vertexCount = vertexCount;
-    if (vertexCount > 0) {
-      this.device.queue.writeBuffer(
-        this.vertexBuffer,
-        0,
-        vertices.buffer,
-        vertices.byteOffset,
-        vertexCount * this.layout.stride,
-      );
-    }
-    if (indices) {
-      const fmt: GPUIndexFormat = indices instanceof Uint32Array ? 'uint32' : 'uint16';
-      if (!this.indexBuffer || indexCount > this.indexCapacity || fmt !== this.indexFormat) {
-        this.indexBuffer?.destroy();
-        this.indexCapacity = Math.max(Math.ceil(indexCount * 1.5), 1);
-        this.indexFormat = fmt;
-        this.indexBuffer = this.makeIndexBuffer(this.indexCapacity);
+  update(u: MeshUpdate): boolean {
+    let grew = false;
+    const { stride } = this.layout;
+    if (u.vertices) {
+      const count = u.vertexCount ?? Math.floor(u.vertices.byteLength / stride);
+      if (count > this.cap.vertices) {
+        this.vertexBuffer.destroy();
+        this.cap.vertices = Math.ceil(count * GROWTH);
+        this.vertexBuffer = this.makeVertexBuffer(this.cap.vertices);
+        grew = true;
       }
-      this.indexCount = indexCount;
-      const bytes = indexCount * indices.BYTES_PER_ELEMENT;
-      // writeBuffer needs a 4-byte multiple size.
-      const padded = Math.ceil(bytes / 4) * 4;
-      if (padded > 0 && padded <= indices.buffer.byteLength - indices.byteOffset) {
+      this.vertexCount = count;
+      if (count > 0) {
         this.device.queue.writeBuffer(
-          this.indexBuffer,
+          this.vertexBuffer,
           0,
-          indices.buffer,
-          indices.byteOffset,
-          padded,
+          u.vertices.buffer,
+          u.vertices.byteOffset,
+          count * stride,
         );
-      } else if (bytes > 0) {
-        const copy = new Uint16Array(Math.ceil(bytes / 4) * 2);
-        // Odd uint16 count at the very end of its ArrayBuffer: copy into a padded array.
-        copy.set((indices as Uint16Array).subarray(0, indexCount));
-        this.device.queue.writeBuffer(this.indexBuffer, 0, copy);
       }
-    } else if (!this.indexBuffer) {
-      this.indexCount = 0;
+    } else if (u.vertexCount !== undefined) {
+      this.vertexCount = Math.min(u.vertexCount, this.cap.vertices);
     }
+
+    if (u.indices) {
+      const fmt = formatOf(u.indices, this.indexFormat);
+      const bpi = fmt === 'uint32' ? 4 : 2;
+      const count = u.indexCount ?? Math.floor(u.indices.byteLength / bpi);
+      if (!this.indexBuffer || count > this.cap.indices || fmt !== this.indexFormat) {
+        this.indexBuffer?.destroy();
+        this.cap.indices = Math.max(Math.ceil(count * GROWTH), 1);
+        this.indexFormat = fmt;
+        this.indexBuffer = this.makeIndexBuffer(this.cap.indices);
+        grew = true;
+      }
+      this.indexCount = count;
+      this.writeIndices(u.indices, count * bpi);
+    } else if (u.indexCount !== undefined && this.indexBuffer) {
+      this.indexCount = Math.min(u.indexCount, this.cap.indices);
+    }
+    if (grew) this.growths++;
+    return grew;
+  }
+
+  /** `writeBuffer` wants 4-byte sizes and offsets; a uint16 count may be odd. */
+  private writeIndices(view: ArrayBufferView, bytes: number): void {
+    if (bytes === 0) return;
+    const ib = this.indexBuffer!;
+    const { buffer, byteOffset } = view;
+    const even = bytes & ~3;
+    if (even === bytes) {
+      this.device.queue.writeBuffer(ib, 0, buffer, byteOffset, bytes);
+      return;
+    }
+    if (byteOffset + bytes + 2 <= buffer.byteLength) {
+      // Two bytes of slack after the data: upload them as padding.
+      this.device.queue.writeBuffer(ib, 0, buffer, byteOffset, bytes + 2);
+      return;
+    }
+    // The odd index ends its buffer: write the even prefix, then the last index via the scratch.
+    if (even > 0) this.device.queue.writeBuffer(ib, 0, buffer, byteOffset, even);
+    const bytesView = new DataView(buffer, byteOffset + even, 2);
+    this.tail16[0] = bytesView.getUint16(0, true);
+    this.device.queue.writeBuffer(ib, even, this.tail16.buffer, 0, 4);
   }
 
   /** The `GPUVertexBufferLayout` of `layout` (buffer slot 0 of every pipeline drawing it). */
@@ -214,6 +286,13 @@ export class Mesh {
       usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
     });
   }
+}
+
+/** Index format implied by a typed array; any other view keeps `fallback`. */
+function formatOf(view: ArrayBufferView, fallback: GPUIndexFormat = 'uint16'): GPUIndexFormat {
+  if (view instanceof Uint32Array) return 'uint32';
+  if (view instanceof Uint16Array) return 'uint16';
+  return fallback;
 }
 
 /** Unit quad centred on the origin (-0.5..0.5), uv (0,0) top-left, white. */

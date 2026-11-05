@@ -159,3 +159,189 @@ describe('pipelines keyed by (material, layout, depth)', () => {
     expect(fake.errors).toEqual([]);
   });
 });
+
+describe('Mesh capacity and update (ws/mesh-stream)', () => {
+  const alive = (fake: ReturnType<typeof createFakeDevice>, label: string) =>
+    fake.buffers.filter((b) => b.label === label && !b.destroyed);
+
+  it('a capacity-only mesh starts empty with buffers sized by capacity', () => {
+    const fake = createFakeDevice();
+    const m = new Mesh(fake.device, {
+      label: 'c',
+      layout: VERTEX_LAYOUT_3D,
+      capacity: { vertices: 100, indices: 150 },
+    });
+    expect(m.vertexCount).toBe(0);
+    expect(m.indexCount).toBe(0);
+    expect(m.capacity).toEqual({ vertices: 100, indices: 150 });
+    expect(m.indexFormat).toBe('uint16');
+    expect(alive(fake, 'c-vb')[0]!.size).toBe(100 * 48);
+    expect(alive(fake, 'c-ib')[0]!.size).toBe(300);
+    expect(fake.writes).toHaveLength(0);
+    // A capacity beyond uint16 picks uint32; `indexFormat` overrides.
+    const big = new Mesh(fake.device, { capacity: { vertices: 70_000, indices: 3 } });
+    expect(big.indexFormat).toBe('uint32');
+    const forced = new Mesh(fake.device, {
+      capacity: { vertices: 70_000, indices: 3 },
+      indexFormat: 'uint16',
+    });
+    expect(forced.indexFormat).toBe('uint16');
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('update within capacity writes from the view in place and keeps the buffers', () => {
+    const fake = createFakeDevice();
+    const m = new Mesh(fake.device, {
+      label: 'u',
+      layout: VERTEX_LAYOUT_3D,
+      capacity: { vertices: 64, indices: 96 },
+    });
+    const vb = m.vertexBuffer;
+    const ib = m.indexBuffer;
+    // One transferred buffer: 20 vertices then 30 indices, as a Worker would pack it.
+    const buf = new ArrayBuffer(20 * 48 + 30 * 2);
+    const verts = new Float32Array(buf, 0, 20 * 12);
+    const idx = new Uint16Array(buf, 20 * 48, 30);
+    fake.writes.length = 0;
+    expect(m.update({ vertices: verts, indices: idx })).toBe(false);
+    expect(m.vertexBuffer).toBe(vb);
+    expect(m.indexBuffer).toBe(ib);
+    expect(m.vertexCount).toBe(20);
+    expect(m.indexCount).toBe(30);
+    expect(m.growths).toBe(0);
+    expect(fake.writes.map((w) => [w.buffer.label, w.offset, w.bytes])).toEqual([
+      ['u-vb', 0, 960],
+      ['u-ib', 0, 60],
+    ]);
+    // A smaller upload, counted explicitly, moves the draw range without touching capacity.
+    fake.writes.length = 0;
+    m.update({ vertices: verts, indices: idx, vertexCount: 8, indexCount: 12 });
+    expect(m.vertexCount).toBe(8);
+    expect(m.indexCount).toBe(12);
+    expect(fake.writes.map((w) => w.bytes)).toEqual([384, 24]);
+    expect(m.capacity).toEqual({ vertices: 64, indices: 96 });
+    // Counts alone (no views) only move the draw range.
+    fake.writes.length = 0;
+    m.update({ vertexCount: 0, indexCount: 0 });
+    expect(m.vertexCount).toBe(0);
+    expect(m.indexCount).toBe(0);
+    expect(fake.writes).toHaveLength(0);
+    expect(alive(fake, 'u-vb')).toHaveLength(1);
+    expect(alive(fake, 'u-ib')).toHaveLength(1);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('exceeding capacity grows 1.5x, destroys the old buffers and reports it', () => {
+    const fake = createFakeDevice();
+    const m = new Mesh(fake.device, { label: 'g', capacity: { vertices: 4, indices: 6 } });
+    const vb = m.vertexBuffer as unknown as { destroyed: boolean };
+    const ib = m.indexBuffer as unknown as { destroyed: boolean };
+    const verts = new Float32Array(10 * 8);
+    const idx = new Uint16Array(15);
+    expect(m.update({ vertices: verts, indices: idx })).toBe(true);
+    expect(m.growths).toBe(1);
+    expect(vb.destroyed).toBe(true);
+    expect(ib.destroyed).toBe(true);
+    expect(m.vertexBuffer).not.toBe(vb);
+    expect(m.capacity).toEqual({ vertices: 15, indices: 23 });
+    expect(alive(fake, 'g-vb')[0]!.size).toBe(15 * 32);
+    expect(alive(fake, 'g-ib')[0]!.size).toBe(Math.ceil((23 * 2) / 4) * 4);
+    // Fits now: no further growth.
+    expect(m.update({ vertices: verts, indices: idx })).toBe(false);
+    expect(m.growths).toBe(1);
+    // Only the index buffer grows when only the indices overflow.
+    const vb2 = m.vertexBuffer;
+    expect(m.update({ indices: new Uint16Array(40) })).toBe(true);
+    expect(m.vertexBuffer).toBe(vb2);
+    expect(m.capacity.indices).toBe(60);
+    expect(m.growths).toBe(2);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('switching to uint32 indices rebuilds the index buffer; other views keep the format', () => {
+    const fake = createFakeDevice();
+    const m = new Mesh(fake.device, { label: 'f', vertices: new Float32Array(8 * 3) });
+    expect(m.indexBuffer).toBeNull();
+    expect(m.update({ indices: new Uint32Array([0, 1, 2]) })).toBe(true);
+    expect(m.indexFormat).toBe('uint32');
+    expect(m.indexCount).toBe(3);
+    const ib = m.indexBuffer;
+    // A plain byte view of 12 bytes: 3 uint32 indices in the current format.
+    m.update({ indices: new Uint8Array(12) });
+    expect(m.indexCount).toBe(3);
+    expect(m.indexBuffer).toBe(ib);
+    expect(m.update({ indices: new Uint16Array([0, 1, 2]) })).toBe(true);
+    expect(m.indexFormat).toBe('uint16');
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('an odd uint16 count at the end of its buffer uploads without a 4-byte violation', () => {
+    const fake = createFakeDevice();
+    const m = new Mesh(fake.device, {
+      vertices: new Float32Array(8 * 3),
+      capacity: { indices: 8 },
+    });
+    fake.writes.length = 0;
+    m.update({ indices: new Uint16Array([0, 1, 2, 2, 1]) });
+    expect(m.indexCount).toBe(5);
+    expect(fake.writes.map((w) => [w.offset, w.bytes])).toEqual([
+      [0, 8],
+      [8, 4],
+    ]);
+    // With slack after the data the padding comes from the buffer itself: one write.
+    fake.writes.length = 0;
+    const buf = new ArrayBuffer(16);
+    m.update({ indices: new Uint16Array(buf, 0, 7) });
+    expect(fake.writes.map((w) => [w.offset, w.bytes])).toEqual([[0, 16]]);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('createMesh takes initial 3D data, a capacity, or both; the quad is unchanged', () => {
+    const fake = createFakeDevice();
+    const r = new Renderer(fakeRendererGpu(fake));
+    const data = new Mesh(fake.device, {
+      layout: VERTEX_LAYOUT_3D,
+      vertices: new Float32Array(24),
+    });
+    expect(data.vertexCount).toBe(2);
+    expect(data.capacity).toEqual({ vertices: 2, indices: 0 });
+    const both = r.createMesh({
+      layout: VERTEX_LAYOUT_3D,
+      vertices: new Float32Array(24),
+      indices: new Uint16Array([0, 1, 1]),
+      capacity: { vertices: 50, indices: 75 },
+    });
+    expect(both.vertexCount).toBe(2);
+    expect(both.indexCount).toBe(3);
+    expect(both.capacity).toEqual({ vertices: 50, indices: 75 });
+    const q = r.createMesh(quadGeometry());
+    expect(q.vertexCount).toBe(4);
+    expect(q.indexCount).toBe(6);
+    expect(q.capacity).toEqual({ vertices: 4, indices: 6 });
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('a mesh updated between frames draws its new indexCount', () => {
+    const fake = createFakeDevice();
+    const r = new Renderer(fakeRendererGpu(fake));
+    const mat = r.createMaterial({ label: 's', wgsl: FS });
+    const m = r.createMesh({ layout: VERTEX_LAYOUT_3D, capacity: { vertices: 64, indices: 96 } });
+    const indexed = (): number[] => {
+      const scene = [...fake.passes].reverse().find((p) => p.label === 'scene')!;
+      return scene.commands
+        .filter((c) => c.op === 'drawIndexed')
+        .map((c) => (c as { indices: number }).indices);
+    };
+    m.update({ vertices: new Float32Array(12 * 24), indices: new Uint16Array(36) });
+    let f = r.beginFrame(0, 0);
+    f.mesh(m, mat, { x: 0, y: 0 });
+    r.endFrame();
+    expect(indexed()).toEqual([36]);
+    m.update({ indexCount: 12 });
+    f = r.beginFrame(0.016, 0.016);
+    f.mesh(m, mat, { x: 0, y: 0 });
+    r.endFrame();
+    expect(indexed()).toEqual([12]);
+    expect(fake.errors).toEqual([]);
+  });
+});
