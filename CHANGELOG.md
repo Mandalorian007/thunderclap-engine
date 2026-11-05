@@ -18,6 +18,7 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
   - `GameLoopOptions.fixed?: boolean` (default true): `false` calls `update` once per frame with the real clamped delta and renders with `alpha` 1.
   - Types `HideReason`, `ShowReason` and `SimOption` from `@thunderclap/engine`.
   - Harness `game.html?mode=client` and `e2e/client.spec.ts`: client mode renders, updates once per frame, takes input, hides and shows, and never reads `host.storage`.
+- Mesh demo (ws/demo-mesh, E-001): `harness/mesh.html` draws a lit `VERTEX_LAYOUT_3D` cube and ground through `Transform`s under `Camera.perspective` with the depth buffer on, orbiting by pointer drag or right stick and zooming by wheel, pinch or triggers; `e2e/mesh.spec.ts` samples the presented pixels to prove a near block occludes a later-drawn far one, on the whole matrix.
 - `HostWindow.setTitle?(title)`: optional, for hosts with a window of their own. The Electron host (`@thunderclap/host-electron`, `packages/host-electron`) implements it.
 - Layout regions (D-041 Phase 2, ws/layout): `overlay.layout` (built by `createOverlay({ layout })`), with `LayoutSpec`, `FormFactor`, `RegionName`, `classifyFormFactor`, `resolveLayout`, `resolveTracks`, `parseAreas`, `effectiveInsets`, `readSafeArea` and `defaultForms`.
   - Four form factors (`phone-landscape`, `phone-portrait`, `tablet`, `desktop`), each with px/fraction/fill tracks and grid areas for `top`, `left`, `right`, `bottom`, `cardLane`, `captionLane` and `fill`, plus a `modal` rect. All of them sit inside the safe area.
