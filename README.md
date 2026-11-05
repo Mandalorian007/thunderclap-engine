@@ -123,19 +123,19 @@ Import only from the public entry points listed under [Modules](#modules). Anyth
 
 | Import | What it holds |
 | --- | --- |
-| `@thunderclap/engine` | `createGame()`, `EngineCtx`, `GameHooks`: the top layer a game touches |
-| `@thunderclap/engine/core` | `GameLoop` (fixed step, fps cap, pause), `Scene` and `SceneStack`, math, timing |
-| `@thunderclap/engine/platform` | WebGPU boot, `Surface` (canvas, DPR, letterbox and fill-width fit), device detection, the unsupported and reload screens |
-| `@thunderclap/engine/render` | `Renderer`, `Frame`, materials and custom WGSL, meshes, textures, colour helpers ([README](src/render/README.md)) |
+| `@thunderclap/engine` | `createGame(opts: CreateGameOptions)`, `EngineCtx`, `GameHooks` (with `HideReason`, `ShowReason`), `SimOption`, `FlushableSave`: the top layer a game touches |
+| `@thunderclap/engine/core` | `GameLoop` (fixed step, fps cap, pause), `Scene` and `SceneStack`, `Emitter`, `mat4`, timing |
+| `@thunderclap/engine/platform` | WebGPU boot, `Surface` (canvas, DPR, letterbox fit), page lifecycle, device detection, the unsupported and reload screens ([README](src/platform/README.md)) |
+| `@thunderclap/engine/render` | `Renderer`, `Frame`, `Camera` (`ortho2d`, `perspective`), `render(frame, camera, target)`, materials and custom WGSL, meshes, transforms, textures, colour helpers ([README](src/render/README.md)) |
 | `@thunderclap/engine/post` | `PostStack`: bloom, god rays, fog, vignette, grade, quality tiers ([README](src/post/README.md)) |
-| `@thunderclap/engine/fx` | GPU particles, flicker |
-| `@thunderclap/engine/input` | `Input` action map, `Gestures`, magnify/loupe, `snapToGrid` ([README](src/input/README.md)) |
+| `@thunderclap/engine/fx` | GPU particles, flicker and pulse ([README](src/fx/README.md)) |
+| `@thunderclap/engine/input` | `Input` action map, `Gestures`, pointer router and rays, magnify/loupe, `snapToGrid` ([README](src/input/README.md)) |
 | `@thunderclap/engine/ui` | Overlay, panels and widgets, toasts, captions, pad navigation, layout regions (`ui.layout`) ([README](src/ui/README.md)) |
 | `@thunderclap/engine/audio` | WebAudio buses, synth, sound recipes, mixer persistence ([README](src/audio/README.md)) |
 | `@thunderclap/engine/save` | `createSaveStore`, schemas (`s`), slots and migrations ([README](src/save/README.md)) |
 | `@thunderclap/engine/analytics` | `createAnalytics`: typed, batched events to a game-supplied sink; no network code ([README](src/analytics/README.md)) |
 | `@thunderclap/engine/host` | `Host` interface, `createWebHost()` (top-level page or iframe): links, clipboard, fullscreen, storage ([README](src/host/README.md)) |
-| `@thunderclap/engine/testing` | A recording fake `GPUDevice` for unit tests |
+| `@thunderclap/engine/testing` | A recording fake `GPUDevice` for unit tests (`src/render/fake-gpu.ts`) |
 
 **Templates.** `templates/puzzle` (`@thunderclap/template-puzzle`) is a copyable 2D puzzle game: `createGame`, one scene, pure `rules/` with tests, a versioned save with a migration, a layout spec placing a HUD on every form factor, and a `CLAUDE.md` that names the engine concepts for an agent extending it. Run `pnpm template:puzzle`; `pnpm check` runs its typecheck and tests (`check:template-puzzle`).
 
@@ -153,18 +153,18 @@ createGame()
 
 renderer.endFrame()
   1. upload globals and all instance data (one writeBuffer each)
-  2. pre-passes and drawable.prepare() (compute, uploads)
-  3. scene pass → HDR colour + emissive targets
+  2. pre-passes and drawable.prepare() (compute, uploads), on the first render() of the frame
+  3. scene pass per render(frame, camera, target) → HDR colour + emissive targets (+ depth)
   4. post stack (bloom, god rays, fog, vignette, grade) → swapchain
   5. submit
 ```
 
-Draw order is submission order; there is no depth buffer. Consecutive draws with the same material and mesh batch into one instanced call.
+`renderer.render(frame, camera, target)` runs the recorded draw lists through a camera into a target, any number of times per frame; `endFrame` calls it with `renderer.camera` when nothing did. With the default `ortho2d` camera draw order is submission order (then `order`) and there is no depth attachment; a camera with depth sorts by view-space depth and tests depth. Consecutive draws with the same material and mesh batch into one instanced call.
 
 ## Testing
 
 ```sh
-pnpm check       # typecheck + Biome lint + import boundaries + Vitest unit tests (351 tests in 30 files)
+pnpm check       # typecheck + Biome lint + import boundaries + Vitest unit tests (466 tests in 38 files)
 pnpm test:e2e    # Playwright e2e against the harness pages, on a device matrix
 pnpm harness     # serve the harness pages yourself
 ```
@@ -176,7 +176,7 @@ The e2e specs run against small harness pages that don't contain any game (`harn
 - four landscape phones with touch and safe-area insets;
 - the harness inside a cross-origin iframe.
 
-The layout spec also runs on upright phone and tablet rows. The pages: `index.html` (2D renderer), `game.html` (`createGame`), `rays.html` (pointer router and rays) and `mesh.html` (perspective camera, depth and a lit mesh orbiting under pointer and pad input). The engine tests what the platform can do; a game built on it tests only its own product.
+The layout spec also runs on upright phone and tablet rows. The pages: `index.html` (2D renderer), `game.html` (`createGame`), `ui.html` (the overlay, text scale, menus and panels, no WebGPU), `layout.html` (layout regions and safe areas on every form factor, no WebGPU), `gestures.html` (gestures and the magnify loupe, no WebGPU), `rays.html` (pointer router and rays) and `mesh.html` (perspective camera, depth and a lit mesh orbiting under pointer and pad input). The engine tests what the platform can do; a game built on it tests only its own product.
 
 Headless Chromium gets a WebGPU adapter with `--enable-unsafe-webgpu`. On macOS that's Metal; on Linux it's SwiftShader. `playwright.config.ts` sets the flags.
 
@@ -196,9 +196,10 @@ The engine was built inside The Last Rune and extracted into this repo with its 
 
 Next up:
 
-- **One CSS-px overlay** on every form factor, replacing the legacy scaled one.
-- **A matrix `Camera`** with `worldToScreen`/`screenToWorld` that frames the world into the space the UI leaves.
-- **`render(camera, target, alpha)`**, with frame scheduling owned by the host.
+- **A lighting block** (ambient, directional and point lights) that game WGSL reads.
+- **Dynamic meshes** streamed from a Worker without a main-thread copy.
+- **Two views per frame**, the stereo seam XR will plug into.
+- **`createGame` plumbing**: gestures and pointers wired, a design-px helper for fitting a camera to `layout.freeRect`.
 - **Publishing** `engine-v1.0.0`.
 
 ## Built with ThunderClap

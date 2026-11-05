@@ -9,6 +9,9 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 
 - `packages/host-electron` (`@thunderclap/host-electron`) joins this repo, and the repo becomes a pnpm workspace (`pnpm-workspace.yaml`, `packages/*`) with the engine at the root. New root scripts: `desktop:dev`, `desktop:build`, `test:e2e:desktop`, `check:host-electron`; `pnpm check` runs the last one.
 
+### Docs
+- Doc sweep (ws/doc-sweep): `src/fx/README.md` and `src/platform/README.md` are new; the analytics, audio, host, post, save and ui READMEs name every export of their module; the root README's module table, harness page list, frame description and roadmap match the code; ARCHITECTURE *Surface*, *Host*, *Layout*, *Analytics* and the module paragraph drop landed *Planned* lines. New script `pnpm check:docs` (`scripts/check-docs.mjs`, not part of `pnpm check`) lists exported names a module README does not mention.
+
 ### Added
 - `templates/puzzle` (`@thunderclap/template-puzzle`, ws/template-puzzle): a copyable 2D puzzle game (pairs) wired the way the next game should be: `createGame` with a save and a layout spec, one scene drawing with `frame.sprite` and `Transform` and fitting `renderer.camera` to `layout.freeRect`, pure `rules/` with unit tests, a versioned save schema with a v1 → v2 migration, a HUD placed through `ctx.ui.layout`, and a `CLAUDE.md` naming the engine concepts. Workspace gains `templates/*`; root scripts `check:template-puzzle` (in `pnpm check`) and `template:puzzle`.
 - `@thunderclap/engine/analytics` (E-002, ws/analytics): `createAnalytics<E>({ sink, session?, clock?, context?, onError?, maxBatch? })` with typed `emit`, batched `flush`, built-in `game_start`, `session_end` and `device_lost`, and `attach(ctx)`, which wraps `ctx.hooks.deviceLost` and flushes on hidden/pagehide/freeze. No network sink ships; the game supplies one.

@@ -6,6 +6,19 @@ storage, and where it is embedded. The web host is here; the Electron host, `cre
 bridge and adds `window` (close, minimize, toggleMaximize, setTitle). Nothing else in the engine touches `window.open`,
 `navigator.clipboard` or `localStorage`.
 
+## Exports
+
+| Name | What it is |
+| --- | --- |
+| `Host` | The interface: `FrameSource` plus `kind`, `embed`, `openExternal`, `copyText`, `clipboardWriteAllowed`, `fullscreen`, `storage` and an optional `window` |
+| `HostKind` | `'web' \| 'electron'` |
+| `FrameSource` | `requestFrame(cb: (timeMs) => void): number` and `cancelFrame(handle)`; what `GameLoop` schedules through |
+| `HostFullscreen` | `available()`, `active()`, `toggle({ lockLandscape? }): Promise<boolean>`, `watch(fn): () => void` |
+| `HostStorage` | `kind` (`'local'` on the web host) and `open(): StorageLike \| null`, probed on every call |
+| `HostWindow` | Desktop window controls: `close()`, optional `minimize`, `toggleMaximize`, `setTitle` |
+| `createWebHost(opts?: WebHostOptions)` | The browser host; `WebHostOptions` is `{ win?: Window }` (tests pass a stub) |
+| `defaultHost()` / `setDefaultHost(host \| null)` | The shared host the engine falls back to; `null` resets it to a fresh web host |
+
 ```ts
 import { createWebHost, defaultHost, setDefaultHost } from '@thunderclap/engine/host';
 
