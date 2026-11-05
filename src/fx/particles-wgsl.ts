@@ -136,7 +136,7 @@ struct FragOut {
   let len = size + speed * sim.stretch;
   let perp = vec2f(-dir.y, dir.x);
   let world = p.posVel.xy + dir * (q.x * len * 0.5) + perp * (q.y * size * 0.5);
-  o.clip = globals.viewProj * vec4f(world, 0.0, 1.0);
+  o.clip = camera.view_proj * vec4f(world, 0.0, 1.0);
   o.q = q;
   o.color = mix(p.c0, p.c1, t);
   o.emissive = p.phys.w;

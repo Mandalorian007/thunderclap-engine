@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { Camera } from './camera';
 import { createFakeDevice, type FakeDevice, fakeRendererGpu, type PassCommand } from './fake-gpu';
 import { Renderer } from './renderer';
 
@@ -259,5 +260,65 @@ describe('resolution', () => {
     }
     expect(got.length).toBe(2);
     expect(r.timing.samples).toBe(2);
+  });
+});
+
+describe('camera block', () => {
+  /** Capture the floats of every write to the engine globals buffer. */
+  function captureGlobals(fake: FakeDevice): Float32Array[] {
+    const seen: Float32Array[] = [];
+    const q = fake.device.queue as unknown as { writeBuffer: (...a: unknown[]) => void };
+    const orig = q.writeBuffer.bind(q);
+    q.writeBuffer = (buffer: unknown, offset: unknown, data: unknown, ...rest: unknown[]) => {
+      if ((buffer as { label?: string }).label === 'engine-globals') {
+        seen.push(new Float32Array(data as Float32Array));
+      }
+      orig(buffer, offset, data, ...rest);
+    };
+    return seen;
+  }
+
+  it('binds globals at 0 and the camera block at 1 of group 0', () => {
+    const { fake } = setup();
+    const g = fake.bindGroups.find((b) => b.label === 'engine-globals-group')!;
+    expect(g.layout.entries.map((e) => e.binding)).toEqual([0, 1]);
+    expect(g.entries.map((e) => e.resource)).toMatchObject([
+      { size: 32 },
+      { offset: 256, size: 256 },
+    ]);
+    const buf = fake.buffers.find((b) => b.label === 'engine-globals')!;
+    expect(buf.size).toBe(512);
+  });
+
+  it('uploads globals and the default ortho2d camera once per frame', () => {
+    const { fake, r } = setup();
+    expect(r.camera).toBeInstanceOf(Camera);
+    expect(r.camera.screen).toEqual({ x: 0, y: 0, width: 1920, height: 1080 });
+    r.resize(800, 450);
+    const seen = captureGlobals(fake);
+    r.camera.x = 100;
+    r.camera.zoom = 2;
+    r.beginFrame(1.5, 0.25);
+    r.endFrame();
+    expect(fake.errors).toEqual([]);
+    expect(seen.length).toBe(1);
+    const g = seen[0]!;
+    expect(g.length).toBe(128);
+    expect([...g.subarray(0, 6)]).toEqual([1920, 1080, 800, 450, 1.5, 0.25]);
+    expect([...g.subarray(64, 80)]).toEqual([...r.camera.view]);
+    expect([...g.subarray(80, 96)]).toEqual([...r.camera.projection]);
+    expect([...g.subarray(96, 112)]).toEqual([...r.camera.viewProjection]);
+    expect([...g.subarray(116, 120)]).toEqual([0, 0, 800, 450]); // viewport: scene target px
+    expect(new Uint32Array(g.buffer)[120]).toBe(0); // view_index
+  });
+
+  it('draws through an assigned camera', () => {
+    const { fake, r } = setup();
+    const seen = captureGlobals(fake);
+    r.camera = Camera.perspective(1, 16 / 9, 0.1, 100).lookAt([0, 0, 5], [0, 0, 0]);
+    r.beginFrame(0, 0);
+    r.endFrame();
+    expect([...seen[0]!.subarray(96, 112)]).toEqual([...r.camera.viewProjection]);
+    expect(seen[0]![114]).toBeCloseTo(5, 4); // camera_pos.z
   });
 });

@@ -1,4 +1,5 @@
 import type { BindingSet } from './bindings';
+import { CAMERA_BLOCK_FLOATS, Camera } from './camera';
 import { installGpuErrorLogging } from './diagnostics';
 import { type Drawable, type DrawParams, Frame, type FrameSink } from './frame';
 import { FullscreenPass, type FullscreenPassDesc } from './fullscreen';
@@ -50,14 +51,6 @@ export interface RendererGpu {
   device: GPUDevice;
   context: GPUCanvasContext;
   format: GPUTextureFormat;
-}
-
-/** 2D camera over the logical space. Offsets in logical px; zoom about the view centre. */
-export interface Camera {
-  x: number;
-  y: number;
-  zoom: number;
-  rotation: number;
 }
 
 export interface RenderStats {
@@ -137,7 +130,12 @@ interface DrawCmd {
   offset: number;
 }
 
-const GLOBALS_FLOATS = 24;
+/** Globals block (binding 0) floats: logicalSize, targetSize, time, dt, pad. */
+const GLOBALS_FLOATS = 8;
+/** The camera block (binding 1) starts at this float offset (256 bytes: uniform alignment). */
+const CAMERA_OFFSET_FLOATS = 64;
+/** One upload covers both blocks. */
+const ENGINE_UNIFORM_FLOATS = CAMERA_OFFSET_FLOATS + CAMERA_BLOCK_FLOATS;
 
 /**
  * WebGPU renderer: owns the HDR scene targets, instanced batch, materials and the hand-off to
@@ -159,7 +157,12 @@ export class Renderer implements FrameSink {
   readonly sceneFormats: readonly GPUTextureFormat[] = [SCENE_FORMAT, SCENE_FORMAT];
   readonly logicalWidth: number;
   readonly logicalHeight: number;
-  readonly camera: Camera = { x: 0, y: 0, zoom: 1, rotation: 0 };
+  /**
+   * The camera the scene pass draws through, uploaded to the camera block each frame.
+   * Default `Camera.ortho2d(logicalWidth, logicalHeight)`; its `x`, `y`, `zoom` and
+   * `rotation` pan the 2D view. Assign another `Camera` to swap presets.
+   */
+  camera: Camera;
   readonly samplers: Record<SamplerKind, GPUSampler>;
   readonly globalsLayout: GPUBindGroupLayout;
   readonly globalsBindGroup: GPUBindGroup;
@@ -196,7 +199,9 @@ export class Renderer implements FrameSink {
   sceneEmissive!: Texture;
 
   private readonly globalsBuffer: GPUBuffer;
-  private readonly globalsData = new Float32Array(GLOBALS_FLOATS);
+  private readonly globalsData = new Float32Array(ENGINE_UNIFORM_FLOATS);
+  private readonly globalsU32 = new Uint32Array(this.globalsData.buffer);
+  private readonly cameraViewport = { x: 0, y: 0, width: 1, height: 1 };
   private instanceData: Float32Array;
   private instanceBuffer: GPUBuffer;
   private instanceCount = 0;
@@ -242,6 +247,7 @@ export class Renderer implements FrameSink {
     this.format = gpu.format;
     this.logicalWidth = opts.logicalWidth ?? 1920;
     this.logicalHeight = opts.logicalHeight ?? 1080;
+    this.camera = Camera.ortho2d(this.logicalWidth, this.logicalHeight);
     const device = this.device;
     installGpuErrorLogging(device);
     this.gpuTimer = supportsTimestamps(device) ? new GpuTimer(device) : null;
@@ -260,17 +266,32 @@ export class Renderer implements FrameSink {
           visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE,
           buffer: {},
         },
+        {
+          binding: 1,
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE,
+          buffer: {},
+        },
       ],
     });
     this.globalsBuffer = device.createBuffer({
       label: 'engine-globals',
-      size: GLOBALS_FLOATS * 4,
+      size: ENGINE_UNIFORM_FLOATS * 4,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
     this.globalsBindGroup = device.createBindGroup({
       label: 'engine-globals-group',
       layout: this.globalsLayout,
-      entries: [{ binding: 0, resource: { buffer: this.globalsBuffer } }],
+      entries: [
+        { binding: 0, resource: { buffer: this.globalsBuffer, size: GLOBALS_FLOATS * 4 } },
+        {
+          binding: 1,
+          resource: {
+            buffer: this.globalsBuffer,
+            offset: CAMERA_OFFSET_FLOATS * 4,
+            size: CAMERA_BLOCK_FLOATS * 4,
+          },
+        },
+      ],
     });
 
     const cap = opts.initialInstances ?? 4096;
@@ -849,30 +870,16 @@ export class Renderer implements FrameSink {
 
   private writeGlobals(): void {
     const g = this.globalsData;
-    const W = this.logicalWidth;
-    const H = this.logicalHeight;
-    const cam = this.camera;
-    const sx = 2 / W;
-    const sy = 2 / H;
-    const c = Math.cos(-cam.rotation) * cam.zoom;
-    const s = Math.sin(-cam.rotation) * cam.zoom;
-    const cx = W / 2 + cam.x;
-    const cy = H / 2 + cam.y;
-    g.fill(0);
-    g[0] = c * sx;
-    g[1] = -s * sy;
-    g[4] = -s * sx;
-    g[5] = -c * sy;
-    g[10] = 1;
-    g[12] = -c * sx * cx + s * sx * cy;
-    g[13] = s * sy * cx + c * sy * cy;
-    g[15] = 1;
-    g[16] = W;
-    g[17] = H;
-    g[18] = this.width;
-    g[19] = this.height;
-    g[20] = this.frame.time;
-    g[21] = this.frame.dt;
+    g[0] = this.logicalWidth;
+    g[1] = this.logicalHeight;
+    g[2] = this.width;
+    g[3] = this.height;
+    g[4] = this.frame.time;
+    g[5] = this.frame.dt;
+    const vp = this.cameraViewport;
+    vp.width = this.width;
+    vp.height = this.height;
+    this.camera.writeBlock(g, this.globalsU32, CAMERA_OFFSET_FLOATS, vp, 0);
     this.device.queue.writeBuffer(this.globalsBuffer, 0, g);
   }
 }

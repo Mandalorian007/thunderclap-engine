@@ -24,10 +24,16 @@ export function createShaderModule(
   return module;
 }
 
-/** Per-frame globals, bound at @group(0) @binding(0) for every material and drawable. */
+/**
+ * Per-frame engine bindings for every material and drawable, in `@group(0)`:
+ *
+ * - `@binding(0) globals`: `logicalSize`, `targetSize` (scene target px), `time`, `dt`.
+ * - `@binding(1) camera` (the camera block): `view`, `proj`, `view_proj` (world → clip),
+ *   `camera_pos` (world eye position, w = 1), `viewport` (target px: x, y, w, h) and
+ *   `view_index` (0 today; 0/1 per eye later).
+ */
 export const WGSL_GLOBALS = /* wgsl */ `
 struct EngineGlobals {
-  viewProj: mat4x4f,
   logicalSize: vec2f,
   targetSize: vec2f,
   time: f32,
@@ -35,6 +41,16 @@ struct EngineGlobals {
   _pad: vec2f,
 };
 @group(0) @binding(0) var<uniform> globals: EngineGlobals;
+struct EngineCamera {
+  view: mat4x4f,
+  proj: mat4x4f,
+  view_proj: mat4x4f,
+  camera_pos: vec4f,
+  viewport: vec4f,
+  view_index: u32,
+  _pad: vec3u,
+};
+@group(0) @binding(1) var<uniform> camera: EngineCamera;
 `;
 
 /** Hash / value-noise / fbm helpers available to every material and fullscreen pass. */
@@ -116,7 +132,7 @@ fn engine_vertex(v: VertexIn) -> VSOut {
   let r = vec2f(p.x * c - p.y * s, p.x * s + p.y * c);
   let world = v.xform.xy + r;
   var o: VSOut;
-  o.clip = globals.viewProj * vec4f(world, 0.0, 1.0);
+  o.clip = camera.view_proj * vec4f(world, 0.0, 1.0);
   o.uv = mix(v.uvRect.xy, v.uvRect.zw, v.uv);
   o.local = v.uv;
   o.color = v.color * v.tint;
