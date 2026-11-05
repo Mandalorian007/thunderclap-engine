@@ -1,39 +1,80 @@
 import type { Drawable, Frame } from '../render/frame';
 import type { Renderer } from '../render/renderer';
+import type { SceneTarget } from '../render/scene-target';
+import type { Texture } from '../render/texture';
 import { createShaderModule } from '../render/wgsl';
-import { PARTICLE_COMPUTE_WGSL, PARTICLE_RENDER_WGSL } from './particles-wgsl';
+import {
+  PARTICLE_COMPUTE_WGSL,
+  PARTICLE_COUNT_WGSL,
+  PARTICLE_DEPTH_COPY_WGSL,
+  PARTICLE_RENDER_WGSL,
+  PARTICLE_WORLD_COMPUTE_WGSL,
+  PARTICLE_WORLD_RENDER_WGSL,
+} from './particles-wgsl';
 
 const PARTICLE_BYTES = 80;
 const SPAWN_FLOATS = 28;
 const SIM_FLOATS = 8;
+const WORLD_PARTICLE_BYTES = 112;
+const WORLD_SPAWN_FLOATS = 36;
+const WORLD_SIM_FLOATS = 16;
+/** The soft-particle depth copy's format (sampleable as `texture_depth_2d`). */
+const SOFT_DEPTH_FORMAT: GPUTextureFormat = 'depth32float';
 
 export type EmitShape =
   | { kind: 'point' }
+  /** Disc of `radius` in the XY plane. */
   | { kind: 'circle'; radius: number }
+  /** Rectangle centred on (x, y) in the XY plane. */
   | { kind: 'rect'; width: number; height: number }
-  /** Segment from (x, y) to (x + dx, y + dy). */
-  | { kind: 'line'; dx: number; dy: number };
+  /** Segment from (x, y, z) to (x + dx, y + dy, z + dz). `dz` is world space only. */
+  | { kind: 'line'; dx: number; dy: number; dz?: number }
+  /** Box centred on (x, y, z). In 2D it is a `rect` of `width × height`. */
+  | { kind: 'box'; width: number; height: number; depth: number }
+  /** Ball of `radius` around (x, y, z). In 2D it is a `circle`. */
+  | { kind: 'sphere'; radius: number };
 
-/** How new particles are born. Colours are linear RGBA (HDR ok). Units: logical px, seconds. */
+/**
+ * How new particles are born. Colours are linear RGBA (HDR ok). Units: logical px and seconds
+ * in 2D; world units and seconds in world space (defaults differ, see each field).
+ */
 export interface EmitParams {
   x: number;
   y: number;
+  /** World space only. Default 0. */
+  z?: number;
   shape?: EmitShape;
-  /** Launch direction in radians (0 = right, -π/2 = up). Default -π/2. */
+  /**
+   * Launch direction in radians, in the XY plane. 2D: 0 = right, -π/2 = up (y down); default
+   * -π/2. World space (y up): π/2 = up, -π/2 = down; default π/2.
+   */
   angle?: number;
-  /** Full cone width in radians. Default 2π (all directions). */
+  /**
+   * Full cone width in radians around `angle`. Default 2π: all directions (a circle in 2D, a
+   * sphere in world space).
+   */
   spread?: number;
-  /** [min, max] px/s. Default [80, 300]. */
+  /** [min, max] speed. Default [80, 300] px/s in 2D, [0.5, 2] units/s in world space. */
   speed?: readonly [number, number];
+  /** World space only: added to every launch velocity's z (units/s). Default 0. */
+  vz?: number;
   /** [min, max] seconds. Default [0.5, 1.2]. */
   life?: readonly [number, number];
-  /** Size in px at [birth, death]. Default [6, 1]. */
+  /** Size at [birth, death]. Default [6, 1] px in 2D, [0.1, 0.02] units in world space. */
   size?: readonly [number, number];
   colorStart: ArrayLike<number>;
   /** Default: `colorStart` with alpha 0. */
   colorEnd?: ArrayLike<number>;
-  /** px/s². Default [0, 400] (falls). */
-  gravity?: readonly [number, number];
+  /**
+   * Acceleration. 2D: [x, y] px/s², default [0, 400] (falls). World space: [x, y, z] units/s²
+   * (a pair has z 0), default [0, -9.8, 0].
+   */
+  gravity?: readonly [number, number] | readonly [number, number, number];
+  /**
+   * World space only: the air's velocity [x, y, z] (units/s), which `drag` pulls particles
+   * toward. Default [0, 0, 0] (drag slows them to rest, as in 2D).
+   */
+  wind?: readonly [number, number, number];
   /** Linear drag per second. Default 1. */
   drag?: number;
   /** How much the particle also feeds bloom (0..). Default 1. */
@@ -41,41 +82,137 @@ export interface EmitParams {
 }
 
 export interface ParticleSystemOptions {
+  /**
+   * `'2d'` (default): logical px in the XY plane, the original behaviour, pixel for pixel.
+   * `'world'`: particles in 3D world space, drawn as quads facing the camera (`size` in world
+   * units), with distance and soft-depth fades and optional lighting.
+   */
+  space?: '2d' | 'world';
   /** Max live particles (ring buffer). Default 65536. */
   capacity?: number;
   /** Max emit() calls between frames. Default 256. */
   maxSpawnsPerFrame?: number;
-  /** Logical y of a bouncy floor. Default: none. */
+  /**
+   * A bouncy floor. 2D: the logical y below which particles bounce (y down). World: the plane
+   * y = `floorY` (y up). Default none.
+   */
   floorY?: number;
   /** Floor restitution 0..1. Default 0.35. */
   bounce?: number;
   /** Seconds of velocity added to the quad length (motion streaks). Default 0.02. */
   stretch?: number;
+  /**
+   * `'additive'` (default): colour adds, for sparks, embers and rain. `'alpha'`: premultiplied
+   * alpha over the scene, for smoke and dust that should cover what is behind.
+   */
+  blend?: 'additive' | 'alpha';
+  /**
+   * World space only: shade each particle as a small sphere through the lighting block
+   * (`engine_lambert`, so `frame.lights` ambient, sun and point lights apply). Default false.
+   */
+  lit?: boolean;
+  /**
+   * World space only: fade out with distance to the camera: whole nearer than `near`, gone
+   * beyond `far` (world units). Default none.
+   */
+  fade?: { near: number; far: number };
+  /**
+   * World space only: soft particles. Within this view-space distance (world units) of the
+   * scene's depth a particle fades out, so quads do not cut hard lines into geometry. Needs a
+   * depth camera; 0 turns it off. Default 0.25.
+   */
+  softness?: number;
+  /** World space only: the scene target whose depth soft particles read. Default `renderer.target`. */
+  depthTarget?: SceneTarget;
+  /**
+   * Count live particles on the GPU and read the count back into `alive` (a few frames late).
+   * Costs one small dispatch per frame and a 4-byte readback every other frame. Default false.
+   */
+  countAlive?: boolean;
 }
 
 const POINT: EmitShape = { kind: 'point' };
-const SHAPE_ID = { point: 0, circle: 1, rect: 2, line: 3 } as const;
+/** 2D maps `box` to `rect` and `sphere` to `circle`, so the 2D shader is unchanged. */
+const SHAPE_ID = { point: 0, circle: 1, rect: 2, line: 3, box: 2, sphere: 1 } as const;
+const WORLD_SHAPE_ID = { point: 0, circle: 1, rect: 2, line: 3, box: 4, sphere: 5 } as const;
+const WORLD_GRAVITY = [0, -9.8, 0] as const;
+const ZERO3 = [0, 0, 0] as const;
+const WORLD_SPEED = [0.5, 2] as const;
+const WORLD_SIZE = [0.1, 0.02] as const;
+
+const ADDITIVE: GPUBlendState = {
+  color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+  alpha: { srcFactor: 'zero', dstFactor: 'one', operation: 'add' },
+};
+const PREMULTIPLIED: GPUBlendState = {
+  color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+  alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+};
+
+/** World-space soft-particle resources, made only for `space: 'world'`. */
+interface SoftDepth {
+  copyLayout: GPUBindGroupLayout;
+  copyPipeline: GPURenderPipeline;
+  renderLayout: GPUBindGroupLayout;
+  /** 1×1 stand-in bound while there is no depth to read. */
+  dummy: GPUTexture;
+  copy: GPUTexture | null;
+  copyGroup: GPUBindGroup | null;
+  /** The source depth texture `srcGroup` was made for. */
+  src: Texture | null;
+  srcGroup: GPUBindGroup | null;
+  att: GPURenderPassDepthStencilAttachment;
+  passDesc: GPURenderPassDescriptor;
+}
+
+/** Live-particle counter and its readback. */
+interface AliveCounter {
+  pipeline: GPUComputePipeline;
+  group: GPUBindGroup;
+  count: GPUBuffer;
+  read: GPUBuffer;
+  params: GPUBuffer;
+  /** idle → copied (count recorded) → mapping (next frame) → idle. */
+  state: 'idle' | 'copied' | 'mapping' | 'dead';
+}
 
 /**
- * GPU particles: spawn + integrate in compute, rendered as additive velocity-stretched quads
- * into both scene targets (colour + emissive → bloom). Draw with `frame.drawable(system)`.
+ * GPU particles: spawn + integrate in compute, rendered as additive (or alpha) quads into both
+ * scene targets (colour + emissive → bloom). Draw with `frame.drawable(system)`.
+ *
+ * In 2D (`space: '2d'`, the default) quads are velocity-stretched in the XY plane. In world
+ * space they face the camera, stretch along the velocity's projection on the view plane,
+ * test depth, fade by distance and near scene geometry, and may be lit.
  *
  * Particles live in a ring buffer: when full, the oldest are overwritten.
  */
 export class ParticleSystem implements Drawable {
   readonly capacity: number;
+  readonly space: '2d' | 'world';
   /** Multiplier on every emit count (set < 1 for prefers-reduced-motion). */
   spawnScale = 1;
   floorY: number;
   bounce: number;
   stretch: number;
+  /** World space only: see `ParticleSystemOptions.lit`. */
+  lit: boolean;
+  /** World space only: see `ParticleSystemOptions.fade` (null = no distance fade). */
+  fade: { near: number; far: number } | null;
+  /** World space only: see `ParticleSystemOptions.softness`. */
+  softness: number;
+  /** World space only: the target soft particles read depth from (null = `renderer.target`). */
+  depthTarget: SceneTarget | null;
+  /** Live particles at the last readback (`countAlive` only; -1 before the first). */
+  alive = -1;
 
+  private readonly renderer: Renderer;
   private readonly device: GPUDevice;
   private readonly particleBuffer: GPUBuffer;
   private readonly spawnBuffer: GPUBuffer;
   private readonly simBuffer: GPUBuffer;
   private readonly spawnData: Float32Array<ArrayBuffer>;
-  private readonly simData = new Float32Array(SIM_FLOATS);
+  private readonly simData: Float32Array<ArrayBuffer>;
+  private readonly spawnFloats: number;
   private readonly maxSpawns: number;
   private readonly spawnPipeline: GPUComputePipeline;
   private readonly updatePipeline: GPUComputePipeline;
@@ -85,6 +222,10 @@ export class ParticleSystem implements Drawable {
   private readonly renderDesc: GPURenderPipelineDescriptor;
   private readonly computeGroup: GPUBindGroup;
   private readonly renderGroup: GPUBindGroup;
+  private readonly soft: SoftDepth | null = null;
+  private readonly counter: AliveCounter | null = null;
+  /** Whether this frame's `prepare` copied scene depth (world space). */
+  private softActive = false;
   private spawnCount = 0;
   private maxSpawnInCmd = 0;
   private head = 0;
@@ -95,20 +236,29 @@ export class ParticleSystem implements Drawable {
 
   constructor(renderer: Renderer, opts: ParticleSystemOptions = {}) {
     const device = renderer.device;
+    this.renderer = renderer;
     this.device = device;
+    const world = opts.space === 'world';
+    this.space = world ? 'world' : '2d';
     this.capacity = Math.max(64, Math.floor(opts.capacity ?? 65536));
     this.maxSpawns = opts.maxSpawnsPerFrame ?? 256;
-    this.floorY = opts.floorY ?? 1e9;
+    this.floorY = opts.floorY ?? (world ? -1e9 : 1e9);
     this.bounce = opts.bounce ?? 0.35;
     this.stretch = opts.stretch ?? 0.02;
+    this.lit = opts.lit ?? false;
+    this.fade = opts.fade ? { near: opts.fade.near, far: opts.fade.far } : null;
+    this.softness = opts.softness ?? 0.25;
+    this.depthTarget = opts.depthTarget ?? null;
+    this.spawnFloats = world ? WORLD_SPAWN_FLOATS : SPAWN_FLOATS;
+    this.simData = new Float32Array(world ? WORLD_SIM_FLOATS : SIM_FLOATS);
 
     this.particleBuffer = device.createBuffer({
       label: 'particles',
-      size: this.capacity * PARTICLE_BYTES,
+      size: this.capacity * (world ? WORLD_PARTICLE_BYTES : PARTICLE_BYTES),
       // COPY_DST: `clear()` zeroes it with `encoder.clearBuffer`.
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     });
-    this.spawnData = new Float32Array(this.maxSpawns * SPAWN_FLOATS);
+    this.spawnData = new Float32Array(this.maxSpawns * this.spawnFloats);
     this.spawnBuffer = device.createBuffer({
       label: 'particle-spawns',
       size: this.spawnData.byteLength,
@@ -116,7 +266,7 @@ export class ParticleSystem implements Drawable {
     });
     this.simBuffer = device.createBuffer({
       label: 'particle-sim',
-      size: SIM_FLOATS * 4,
+      size: this.simData.byteLength,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
@@ -128,7 +278,11 @@ export class ParticleSystem implements Drawable {
         { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: {} },
       ],
     });
-    const cmod = createShaderModule(device, PARTICLE_COMPUTE_WGSL, 'particles-compute');
+    const cmod = createShaderModule(
+      device,
+      world ? PARTICLE_WORLD_COMPUTE_WGSL : PARTICLE_COMPUTE_WGSL,
+      world ? 'particles-world-compute' : 'particles-compute',
+    );
     const cpl = device.createPipelineLayout({ bindGroupLayouts: [computeLayout] });
     this.spawnPipeline = device.createComputePipeline({
       label: 'particles-spawn',
@@ -150,20 +304,29 @@ export class ParticleSystem implements Drawable {
       ],
     });
 
+    const renderEntries: GPUBindGroupLayoutEntry[] = [
+      { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+      { binding: 1, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} },
+    ];
+    if (world) {
+      renderEntries.push({
+        binding: 2,
+        visibility: GPUShaderStage.FRAGMENT,
+        texture: { sampleType: 'depth' },
+      });
+    }
     const renderLayout = device.createBindGroupLayout({
-      label: 'particles-render-layout',
-      entries: [
-        { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
-        { binding: 1, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} },
-      ],
+      label: world ? 'particles-world-render-layout' : 'particles-render-layout',
+      entries: renderEntries,
     });
-    const rmod = createShaderModule(device, PARTICLE_RENDER_WGSL, 'particles-render');
-    const additive: GPUBlendState = {
-      color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
-      alpha: { srcFactor: 'zero', dstFactor: 'one', operation: 'add' },
-    };
+    const rmod = createShaderModule(
+      device,
+      world ? PARTICLE_WORLD_RENDER_WGSL : PARTICLE_RENDER_WGSL,
+      world ? 'particles-world-render' : 'particles-render',
+    );
+    const blend = opts.blend === 'alpha' ? PREMULTIPLIED : ADDITIVE;
     this.renderDesc = {
-      label: 'particles-render',
+      label: world ? 'particles-world' : 'particles-render',
       layout: device.createPipelineLayout({
         bindGroupLayouts: [renderer.globalsLayout, renderLayout],
       }),
@@ -171,19 +334,128 @@ export class ParticleSystem implements Drawable {
       fragment: {
         module: rmod,
         entryPoint: 'fs',
-        targets: renderer.sceneFormats.map((format) => ({ format, blend: additive })),
+        targets: renderer.sceneFormats.map((format) => ({ format, blend })),
       },
       primitive: { topology: 'triangle-list' },
     };
     this.renderPipeline = device.createRenderPipeline(this.renderDesc);
+
+    const renderBindings: GPUBindGroupEntry[] = [
+      { binding: 0, resource: { buffer: this.particleBuffer } },
+      { binding: 1, resource: { buffer: this.simBuffer } },
+    ];
+    if (world) {
+      this.soft = this.makeSoftDepth(renderLayout);
+      renderBindings.push({ binding: 2, resource: this.soft.dummy.createView() });
+    }
     this.renderGroup = device.createBindGroup({
-      label: 'particles-render',
+      label: world ? 'particles-world-render' : 'particles-render',
       layout: renderLayout,
+      entries: renderBindings,
+    });
+    if (opts.countAlive) this.counter = this.makeCounter(world);
+  }
+
+  private makeSoftDepth(renderLayout: GPUBindGroupLayout): SoftDepth {
+    const device = this.device;
+    const copyLayout = device.createBindGroupLayout({
+      label: 'particles-depth-copy-layout',
       entries: [
-        { binding: 0, resource: { buffer: this.particleBuffer } },
-        { binding: 1, resource: { buffer: this.simBuffer } },
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'depth' } },
       ],
     });
+    const mod = createShaderModule(device, PARTICLE_DEPTH_COPY_WGSL, 'particles-depth-copy');
+    const copyPipeline = device.createRenderPipeline({
+      label: 'particles-depth-copy',
+      layout: device.createPipelineLayout({ bindGroupLayouts: [copyLayout] }),
+      vertex: { module: mod, entryPoint: 'vs' },
+      fragment: { module: mod, entryPoint: 'fs', targets: [] },
+      primitive: { topology: 'triangle-list' },
+      depthStencil: {
+        format: SOFT_DEPTH_FORMAT,
+        depthWriteEnabled: true,
+        depthCompare: 'always',
+      },
+    });
+    const dummy = device.createTexture({
+      label: 'particles-depth-none',
+      size: [1, 1],
+      format: SOFT_DEPTH_FORMAT,
+      usage: GPUTextureUsage.TEXTURE_BINDING,
+    });
+    const att: GPURenderPassDepthStencilAttachment = {
+      view: undefined as unknown as GPUTextureView,
+      depthClearValue: 1,
+      depthLoadOp: 'clear',
+      depthStoreOp: 'store',
+    };
+    return {
+      copyLayout,
+      copyPipeline,
+      renderLayout,
+      dummy,
+      copy: null,
+      copyGroup: null,
+      src: null,
+      srcGroup: null,
+      att,
+      passDesc: {
+        label: 'particles-depth-copy',
+        colorAttachments: [],
+        depthStencilAttachment: att,
+      },
+    };
+  }
+
+  private makeCounter(world: boolean): AliveCounter {
+    const device = this.device;
+    const count = device.createBuffer({
+      label: 'particles-alive',
+      size: 4,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+    });
+    const read = device.createBuffer({
+      label: 'particles-alive-read',
+      size: 4,
+      usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+    });
+    const params = device.createBuffer({
+      label: 'particles-alive-params',
+      size: 16,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    // capacity, vec4s per particle, index of the `life` vec4.
+    device.queue.writeBuffer(
+      params,
+      0,
+      new Uint32Array([this.capacity, world ? 7 : 5, world ? 4 : 3, 0]),
+    );
+    const layout = device.createBindGroupLayout({
+      label: 'particles-alive-layout',
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+        { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: {} },
+      ],
+    });
+    const pipeline = device.createComputePipeline({
+      label: 'particles-alive',
+      layout: device.createPipelineLayout({ bindGroupLayouts: [layout] }),
+      compute: {
+        module: createShaderModule(device, PARTICLE_COUNT_WGSL, 'particles-alive'),
+        entryPoint: 'count',
+      },
+    });
+    const group = device.createBindGroup({
+      label: 'particles-alive',
+      layout,
+      entries: [
+        { binding: 0, resource: { buffer: this.particleBuffer } },
+        { binding: 1, resource: { buffer: count } },
+        { binding: 2, resource: { buffer: params } },
+      ],
+    });
+    return { pipeline, group, count, read, params, state: 'idle' };
   }
 
   /** Queue `count` new particles. Cheap: one small record, spawned on the GPU next frame. */
@@ -197,13 +469,21 @@ export class ParticleSystem implements Drawable {
       }
       return;
     }
+    const o = this.spawnCount++ * this.spawnFloats;
+    if (this.space === 'world') this.writeWorldSpawn(p, n, o);
+    else this.writeSpawn(p, n, o);
+    this.head = (this.head + n) % this.capacity;
+    if (n > this.maxSpawnInCmd) this.maxSpawnInCmd = n;
+  }
+
+  private writeSpawn(p: EmitParams, n: number, at: number): void {
     const d = this.spawnData;
-    let o = this.spawnCount++ * SPAWN_FLOATS;
+    let o = at;
     const shape = p.shape ?? POINT;
     let sa = 0;
     let sb = 0;
-    if (shape.kind === 'circle') sa = shape.radius;
-    else if (shape.kind === 'rect') {
+    if (shape.kind === 'circle' || shape.kind === 'sphere') sa = shape.radius;
+    else if (shape.kind === 'rect' || shape.kind === 'box') {
       sa = shape.width;
       sb = shape.height;
     } else if (shape.kind === 'line') {
@@ -232,14 +512,7 @@ export class ParticleSystem implements Drawable {
     d[o++] = size[0];
     d[o++] = size[1];
     // c0, c1
-    d[o++] = c0[0]!;
-    d[o++] = c0[1]!;
-    d[o++] = c0[2]!;
-    d[o++] = c0[3] ?? 1;
-    d[o++] = c1 ? c1[0]! : c0[0]!;
-    d[o++] = c1 ? c1[1]! : c0[1]!;
-    d[o++] = c1 ? c1[2]! : c0[2]!;
-    d[o++] = c1 ? (c1[3] ?? 1) : 0;
+    o = writeColors(d, o, c0, c1);
     // d
     d[o++] = g[0];
     d[o++] = g[1];
@@ -250,8 +523,70 @@ export class ParticleSystem implements Drawable {
     d[o++] = n;
     d[o++] = Math.floor(Math.random() * 16777215);
     d[o++] = p.emissive ?? 1;
-    this.head = (this.head + n) % this.capacity;
-    if (n > this.maxSpawnInCmd) this.maxSpawnInCmd = n;
+  }
+
+  private writeWorldSpawn(p: EmitParams, n: number, at: number): void {
+    const d = this.spawnData;
+    let o = at;
+    const shape = p.shape ?? POINT;
+    let sa = 0;
+    let sb = 0;
+    let sc = 0;
+    if (shape.kind === 'circle' || shape.kind === 'sphere') sa = shape.radius;
+    else if (shape.kind === 'rect') {
+      sa = shape.width;
+      sb = shape.height;
+    } else if (shape.kind === 'box') {
+      sa = shape.width;
+      sb = shape.height;
+      sc = shape.depth;
+    } else if (shape.kind === 'line') {
+      sa = shape.dx;
+      sb = shape.dy;
+      sc = shape.dz ?? 0;
+    }
+    const speed = p.speed ?? WORLD_SPEED;
+    const life = p.life ?? [0.5, 1.2];
+    const size = p.size ?? WORLD_SIZE;
+    const g = p.gravity ?? WORLD_GRAVITY;
+    const w = p.wind ?? ZERO3;
+    // a
+    d[o++] = p.x;
+    d[o++] = p.y;
+    d[o++] = p.z ?? 0;
+    d[o++] = WORLD_SHAPE_ID[shape.kind];
+    // b
+    d[o++] = sa;
+    d[o++] = sb;
+    d[o++] = sc;
+    d[o++] = p.spread ?? Math.PI * 2;
+    // c
+    d[o++] = p.angle ?? Math.PI / 2;
+    d[o++] = p.vz ?? 0;
+    d[o++] = speed[0];
+    d[o++] = speed[1];
+    // d
+    d[o++] = life[0];
+    d[o++] = life[1];
+    d[o++] = size[0];
+    d[o++] = size[1];
+    // c0, c1
+    o = writeColors(d, o, p.colorStart, p.colorEnd);
+    // e
+    d[o++] = g[0];
+    d[o++] = g[1];
+    d[o++] = g[2] ?? 0;
+    d[o++] = p.drag ?? 1;
+    // f
+    d[o++] = w[0];
+    d[o++] = w[1];
+    d[o++] = w[2];
+    d[o++] = p.emissive ?? 1;
+    // g
+    d[o++] = this.head;
+    d[o++] = n;
+    d[o++] = Math.floor(Math.random() * 16777215);
+    d[o++] = 0;
   }
 
   /** Advance simulation time. Call from fixed update; integration happens on the GPU. */
@@ -259,7 +594,7 @@ export class ParticleSystem implements Drawable {
     this.pendingDt += dt;
   }
 
-  prepare(encoder: GPUCommandEncoder): void {
+  prepare(encoder: GPUCommandEncoder, frame?: Frame): void {
     const dt = Math.min(this.pendingDt, 0.1);
     this.pendingDt = 0;
     this.time += dt;
@@ -272,12 +607,25 @@ export class ParticleSystem implements Drawable {
     s[5] = this.stretch;
     s[6] = this.spawnCount;
     s[7] = 0;
+    if (this.soft) {
+      this.softActive = this.copyDepth(encoder, frame);
+      const f = this.fade;
+      s[8] = f ? f.near : 0;
+      s[9] = f ? f.far : 0;
+      s[10] = this.softness;
+      s[11] = this.softActive ? 1 : 0;
+      s[12] = this.lit ? 1 : 0;
+    }
     const q = this.device.queue;
     q.writeBuffer(this.simBuffer, 0, s);
     if (this.clearPending) {
       encoder.clearBuffer(this.particleBuffer);
       this.clearPending = false;
     }
+    const counter = this.counter;
+    if (counter?.state === 'copied') this.readAlive(counter);
+    const count = counter?.state === 'idle';
+    if (count) encoder.clearBuffer(counter.count);
     const pass = encoder.beginComputePass({ label: 'particles' });
     pass.setBindGroup(0, this.computeGroup);
     if (this.spawnCount > 0) {
@@ -286,7 +634,7 @@ export class ParticleSystem implements Drawable {
         0,
         this.spawnData.buffer,
         0,
-        this.spawnCount * SPAWN_FLOATS * 4,
+        this.spawnCount * this.spawnFloats * 4,
       );
       pass.setPipeline(this.spawnPipeline);
       pass.dispatchWorkgroups(Math.ceil(this.maxSpawnInCmd / 64), this.spawnCount);
@@ -295,10 +643,87 @@ export class ParticleSystem implements Drawable {
       pass.setPipeline(this.updatePipeline);
       pass.dispatchWorkgroups(Math.ceil(this.capacity / 64));
     }
+    if (count) {
+      pass.setPipeline(counter.pipeline);
+      pass.setBindGroup(0, counter.group);
+      pass.dispatchWorkgroups(Math.ceil(this.capacity / 64));
+    }
     pass.end();
+    if (count) {
+      encoder.copyBufferToBuffer(counter.count, 0, counter.read, 0, 4);
+      counter.state = 'copied';
+    }
     this.spawnCount = 0;
     this.maxSpawnInCmd = 0;
     this.warnedOverflow = false;
+  }
+
+  /**
+   * Map last frame's count (its commands were submitted by now). This frame records nothing
+   * into the readback buffer, so mapping it while this frame is encoded is valid.
+   */
+  private readAlive(c: AliveCounter): void {
+    c.state = 'mapping';
+    c.read.mapAsync(GPUMapMode.READ).then(
+      () => {
+        if (c.state !== 'mapping') return;
+        this.alive = new Uint32Array(c.read.getMappedRange(0, 4))[0]!;
+        c.read.unmap();
+        c.state = 'idle';
+      },
+      () => {
+        c.state = 'dead';
+      },
+    );
+  }
+
+  /**
+   * World space: copy the scene's depth into this system's own depth32float texture, which the
+   * fragment shader samples for the soft fade. It runs before this frame's scene pass, so it
+   * holds what the target's depth held then: the previous frame's, or that of an earlier
+   * `render` call this frame (draw the particles on their own layer in a second view of the
+   * same camera for a same-frame fade). Returns false (soft fade off) without depth.
+   */
+  private copyDepth(encoder: GPUCommandEncoder, frame: Frame | undefined): boolean {
+    const sd = this.soft!;
+    if (this.softness <= 0 || !frame?.depthFormat) return false;
+    const src = (this.depthTarget ?? this.renderer.target).depth;
+    if (!src) return false;
+    const device = this.device;
+    if (!sd.copy || sd.copy.width !== src.width || sd.copy.height !== src.height) {
+      sd.copy?.destroy();
+      sd.copy = device.createTexture({
+        label: 'particles-depth',
+        size: [src.width, src.height],
+        format: SOFT_DEPTH_FORMAT,
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+      });
+      const view = sd.copy.createView();
+      sd.att.view = view;
+      sd.copyGroup = device.createBindGroup({
+        label: 'particles-world-render-soft',
+        layout: sd.renderLayout,
+        entries: [
+          { binding: 0, resource: { buffer: this.particleBuffer } },
+          { binding: 1, resource: { buffer: this.simBuffer } },
+          { binding: 2, resource: view },
+        ],
+      });
+    }
+    if (sd.src !== src) {
+      sd.src = src;
+      sd.srcGroup = device.createBindGroup({
+        label: 'particles-depth-copy',
+        layout: sd.copyLayout,
+        entries: [{ binding: 0, resource: src.view }],
+      });
+    }
+    const pass = encoder.beginRenderPass(sd.passDesc);
+    pass.setPipeline(sd.copyPipeline);
+    pass.setBindGroup(0, sd.srcGroup!);
+    pass.draw(3);
+    pass.end();
+    return true;
   }
 
   /**
@@ -308,7 +733,8 @@ export class ParticleSystem implements Drawable {
   draw(pass: GPURenderPassEncoder, frame?: Frame): void {
     const fmt = frame?.depthFormat ?? null;
     pass.setPipeline(fmt ? this.depthPipeline(fmt) : this.renderPipeline);
-    pass.setBindGroup(1, this.renderGroup);
+    const soft = this.soft;
+    pass.setBindGroup(1, soft && this.softActive ? soft.copyGroup! : this.renderGroup);
     pass.draw(6, this.capacity);
   }
 
@@ -317,7 +743,7 @@ export class ParticleSystem implements Drawable {
     if (!p) {
       p = this.device.createRenderPipeline({
         ...this.renderDesc,
-        label: `particles-render:${format}`,
+        label: `${this.renderDesc.label}:${format}`,
         depthStencil: { format, depthWriteEnabled: false, depthCompare: 'less-equal' },
       });
       this.depthPipelines.set(format, p);
@@ -341,7 +767,37 @@ export class ParticleSystem implements Drawable {
     this.particleBuffer.destroy();
     this.spawnBuffer.destroy();
     this.simBuffer.destroy();
+    if (this.soft) {
+      this.soft.dummy.destroy();
+      this.soft.copy?.destroy();
+      this.soft.copy = null;
+    }
+    if (this.counter) {
+      this.counter.state = 'dead';
+      this.counter.count.destroy();
+      this.counter.read.destroy();
+      this.counter.params.destroy();
+    }
   }
+}
+
+/** Write `c0` and `c1` (default: `c0` with alpha 0) at `o`; returns the next offset. */
+function writeColors(
+  d: Float32Array,
+  at: number,
+  c0: ArrayLike<number>,
+  c1: ArrayLike<number> | undefined,
+): number {
+  let o = at;
+  d[o++] = c0[0]!;
+  d[o++] = c0[1]!;
+  d[o++] = c0[2]!;
+  d[o++] = c0[3] ?? 1;
+  d[o++] = c1 ? c1[0]! : c0[0]!;
+  d[o++] = c1 ? c1[1]! : c0[1]!;
+  d[o++] = c1 ? c1[2]! : c0[2]!;
+  d[o++] = c1 ? (c1[3] ?? 1) : 0;
+  return o;
 }
 
 /** Continuous emission at `rate` particles/second, plus bursts. Mutate `params` freely. */

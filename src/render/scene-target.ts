@@ -58,7 +58,10 @@ export class SceneTarget {
     this.resize(desc.width, desc.height);
   }
 
-  /** The depth texture, once a depth camera has rendered here; null before. */
+  /**
+   * The depth texture, once a depth camera has rendered here; null before. Sampleable
+   * (`texture_depth_2d`) outside the scene pass that writes it.
+   */
   get depth(): Texture | null {
     return this.depthTex;
   }
@@ -102,7 +105,8 @@ export class SceneTarget {
         width: this.width,
         height: this.height,
         format: DEPTH_FORMAT,
-        usage: GPUTextureUsage.RENDER_ATTACHMENT,
+        // TEXTURE_BINDING: world-space particles copy it for their soft fade (`depth`).
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
         label: `${this.label}-depth`,
       });
       this.depthAtt.view = this.depthTex.view;
