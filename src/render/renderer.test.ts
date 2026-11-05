@@ -776,6 +776,33 @@ describe('render call', () => {
     ]);
   });
 
+  it("each view carries its camera's viewIndex as view_index, whatever the call order", () => {
+    const { fake, r } = setup();
+    const right = Camera.perspective(1, 1, 0.1, 10);
+    right.viewIndex = 1;
+    right.screen.x = 0.5;
+    right.screen.width = 0.5;
+    const left = Camera.perspective(1, 1, 0.1, 10);
+    left.screen.width = 0.5;
+    const seen: number[] = [];
+    const q = fake.device.queue as unknown as { writeBuffer: (...a: unknown[]) => void };
+    const orig = q.writeBuffer.bind(q);
+    q.writeBuffer = (buffer: unknown, offset: unknown, data: unknown, ...rest: unknown[]) => {
+      if ((buffer as { label?: string }).label?.startsWith('engine-globals')) {
+        seen.push(new Uint32Array((data as Float32Array).buffer)[120]!);
+      }
+      orig(buffer, offset, data, ...rest);
+    };
+    const f = r.beginFrame(0, 0);
+    f.sprite(null, { x: 1, y: 1 });
+    r.render(f, right);
+    r.render(f, left);
+    r.render(f, r.camera);
+    r.endFrame();
+    expect(fake.errors).toEqual([]);
+    expect(seen).toEqual([1, 0, 0]);
+  });
+
   it('renders into another SceneTarget, with its own depth, and the surface shows the default', () => {
     const { fake, r } = setup();
     r.resize(800, 450);

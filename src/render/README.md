@@ -162,7 +162,7 @@ engine prepends a prelude that provides:
 
 - `globals`: `logicalSize`, `targetSize`, `time`, `dt` at `@group(0) @binding(0)`
 - `camera`: `view`, `proj`, `view_proj` (world → clip), `camera_pos`, `viewport` (scene target
-  px) and `view_index` at `@group(0) @binding(1)`
+  px) and `view_index` (from `camera.viewIndex`) at `@group(0) @binding(1)`
 - noise helpers: `engine_hash21`, `engine_hash22`, `engine_noise`, `engine_fbm(p, octaves)`,
   `engine_luma`
 - `VSOut { clip, uv, local, color, params, world, emissive, size, normal, worldPos }`, where
