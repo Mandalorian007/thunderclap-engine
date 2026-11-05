@@ -1,15 +1,25 @@
 /**
- * Mesh: vertex buffer (+ optional index buffer) in the engine's fixed vertex layout:
- * `pos: vec2f, uv: vec2f, color: vec4f` (8 floats, 32 bytes per vertex).
+ * Mesh: a vertex buffer (+ optional index buffer) in one of the engine's vertex layouts.
  *
- * Positions are in the mesh's local space; each draw's instance transform (x, y, w, h,
- * rotation) maps local → logical space as `xy + rotate(pos * wh)`. The built-in quad spans
- * -0.5..0.5 so `w, h` are its size in logical pixels; for arbitrary meshes authored directly
- * in logical pixels, draw with `x = 0, y = 0, w = 1, h = 1`.
+ * - `VERTEX_LAYOUT_2D` (the default): `pos: vec2f, uv: vec2f, color: vec4f`, 8 floats
+ *   (`VERTEX_FLOATS`), 32 bytes per vertex.
+ * - `VERTEX_LAYOUT_3D`: `pos: vec3f, normal: vec3f, uv: vec2f, color: vec4f`, 12 floats
+ *   (`VERTEX3D_FLOATS`), 48 bytes per vertex.
+ *
+ * Positions are in the mesh's local space; each draw's 3×4 instance matrix (built from
+ * `DrawParams` x, y, w, h, rotation, or taken from a `Transform`) maps local → world space.
+ * For `DrawParams` that is `xy + rotate(pos * wh)`: the built-in quad spans -0.5..0.5 so
+ * `w, h` are its size in logical pixels; for arbitrary meshes authored directly in logical
+ * pixels, draw with `x = 0, y = 0, w = 1, h = 1`.
+ *
+ * Materials build one pipeline per (vertex layout, depth mode), lazily, on first use.
  */
 export const VERTEX_FLOATS = 8;
 export const VERTEX_STRIDE = VERTEX_FLOATS * 4;
+export const VERTEX3D_FLOATS = 12;
+export const VERTEX3D_STRIDE = VERTEX3D_FLOATS * 4;
 
+/** The 2D layout's buffer layout (locations 0..2). */
 export const VERTEX_BUFFER_LAYOUT: GPUVertexBufferLayout = {
   arrayStride: VERTEX_STRIDE,
   stepMode: 'vertex',
@@ -20,10 +30,73 @@ export const VERTEX_BUFFER_LAYOUT: GPUVertexBufferLayout = {
   ],
 };
 
+/** The 3D layout's buffer layout: position 0, normal 10, uv 1, colour 2. */
+export const VERTEX3D_BUFFER_LAYOUT: GPUVertexBufferLayout = {
+  arrayStride: VERTEX3D_STRIDE,
+  stepMode: 'vertex',
+  attributes: [
+    { shaderLocation: 0, offset: 0, format: 'float32x3' },
+    { shaderLocation: 10, offset: 12, format: 'float32x3' },
+    { shaderLocation: 1, offset: 24, format: 'float32x2' },
+    { shaderLocation: 2, offset: 32, format: 'float32x4' },
+  ],
+};
+
+/**
+ * A vertex layout: the GPU buffer layout plus the WGSL that reads it. The material prelude is
+ * generated per layout (`materialPrelude(layout)`), so `engine_vertex`, `VSOut` and the
+ * fragment side are the same for every layout. Layouts compare by identity.
+ */
+export interface VertexLayout {
+  /** Short name, used in pipeline labels. */
+  readonly name: string;
+  readonly floats: number;
+  readonly stride: number;
+  readonly buffer: GPUVertexBufferLayout;
+  /** The vertex-attribute fields of WGSL `VertexIn` (the instance fields follow them). */
+  readonly wgslFields: string;
+  /** WGSL expression over `v: VertexIn` for the object-space position (`vec3f`). */
+  readonly wgslPosition: string;
+  /** WGSL expression over `v: VertexIn` for the object-space normal (`vec3f`). */
+  readonly wgslNormal: string;
+}
+
+/** 2D layout: `v.pos` is a `vec2f` (z = 0); the normal faces the viewer, `(0, 0, -1)`. */
+export const VERTEX_LAYOUT_2D: VertexLayout = {
+  name: '2d',
+  floats: VERTEX_FLOATS,
+  stride: VERTEX_STRIDE,
+  buffer: VERTEX_BUFFER_LAYOUT,
+  wgslFields: `  @location(0) pos: vec2f,
+  @location(1) uv: vec2f,
+  @location(2) color: vec4f,`,
+  wgslPosition: 'vec3f(v.pos, 0.0)',
+  wgslNormal: 'vec3f(0.0, 0.0, -1.0)',
+};
+
+/** 3D layout: `v.pos` and `v.normal` are `vec3f`. */
+export const VERTEX_LAYOUT_3D: VertexLayout = {
+  name: '3d',
+  floats: VERTEX3D_FLOATS,
+  stride: VERTEX3D_STRIDE,
+  buffer: VERTEX3D_BUFFER_LAYOUT,
+  wgslFields: `  @location(0) pos: vec3f,
+  @location(10) normal: vec3f,
+  @location(1) uv: vec2f,
+  @location(2) color: vec4f,`,
+  wgslPosition: 'v.pos',
+  wgslNormal: 'v.normal',
+};
+
 export interface MeshDesc {
   label?: string;
-  /** Interleaved vertices, 8 floats each (x, y, u, v, r, g, b, a). */
+  /**
+   * Interleaved vertices in `layout`: 8 floats each for 2D (x, y, u, v, r, g, b, a), 12 for
+   * 3D (x, y, z, nx, ny, nz, u, v, r, g, b, a).
+   */
   vertices: Float32Array;
+  /** Vertex layout. Default `VERTEX_LAYOUT_2D`. */
+  layout?: VertexLayout;
   indices?: Uint16Array | Uint32Array;
   /** Reserve room for this many vertices/indices so `update()` can grow without realloc. */
   maxVertices?: number;
@@ -32,6 +105,8 @@ export interface MeshDesc {
 
 export class Mesh {
   readonly label: string;
+  /** Vertex layout of this mesh's buffer; pipelines are keyed by (material, layout). */
+  readonly layout: VertexLayout;
   vertexBuffer: GPUBuffer;
   indexBuffer: GPUBuffer | null = null;
   indexFormat: GPUIndexFormat = 'uint16';
@@ -45,7 +120,8 @@ export class Mesh {
     desc: MeshDesc,
   ) {
     this.label = desc.label ?? 'mesh';
-    const vCount = desc.vertices.length / VERTEX_FLOATS;
+    this.layout = desc.layout ?? VERTEX_LAYOUT_2D;
+    const vCount = desc.vertices.length / this.layout.floats;
     this.vertexCapacity = Math.max(vCount, desc.maxVertices ?? 0, 1);
     this.vertexBuffer = this.makeVertexBuffer(this.vertexCapacity);
     if (desc.indices || desc.maxIndices) {
@@ -63,7 +139,7 @@ export class Mesh {
   update(
     vertices: Float32Array,
     indices?: Uint16Array | Uint32Array,
-    vertexCount = vertices.length / VERTEX_FLOATS,
+    vertexCount = vertices.length / this.layout.floats,
     indexCount = indices?.length ?? 0,
   ): void {
     if (vertexCount > this.vertexCapacity) {
@@ -78,7 +154,7 @@ export class Mesh {
         0,
         vertices.buffer,
         vertices.byteOffset,
-        vertexCount * VERTEX_STRIDE,
+        vertexCount * this.layout.stride,
       );
     }
     if (indices) {
@@ -112,6 +188,11 @@ export class Mesh {
     }
   }
 
+  /** The `GPUVertexBufferLayout` of `layout` (buffer slot 0 of every pipeline drawing it). */
+  get vertexBufferLayout(): GPUVertexBufferLayout {
+    return this.layout.buffer;
+  }
+
   destroy(): void {
     this.vertexBuffer.destroy();
     this.indexBuffer?.destroy();
@@ -120,7 +201,7 @@ export class Mesh {
   private makeVertexBuffer(count: number): GPUBuffer {
     return this.device.createBuffer({
       label: `${this.label}-vb`,
-      size: count * VERTEX_STRIDE,
+      size: count * this.layout.stride,
       usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     });
   }

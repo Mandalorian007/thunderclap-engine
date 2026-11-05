@@ -24,7 +24,17 @@ Versions follow semver from `engine-v1.0.0`. Entries before this repo existed we
 - Height fill (ws/chrome-polish-3): `FillWidthOptions.minVisibleWidth` and `focusX`. Where a frame is too narrow to show `minVisibleWidth` of the design at full height, the fit fills the frame's height and crops the sides about `focusX`, the same way `minVisible`/`focusY` crops top and bottom. `computeFillWidth` covers both; `surface.setFill` compares the new fields. Tests are in `platform/letterbox.test.ts`.
 - Engine e2e: "panel-stack spam leaves at most one panel" in `e2e/layout.spec.ts` (real taps on the harness ⚙, then 20 `stack.replace` opens in one tick).
 
+- Transforms, layers and instances (ws/transforms), in `./render`:
+  - `Transform` (position xyz, `rotation` about Z or a quaternion via `setQuaternion` / `setAxisAngle`, scale xyz, optional `parent`) with a cached 3×4 `world` matrix; `writeMatrix2d`, `multiplyMatrix3x4`, `MATRIX3X4_FLOATS`.
+  - `frame.sprite(mat, transform, params?)` and `frame.mesh(mesh, mat, transform, params?)` overloads; `InstanceParams` is `DrawParams` without placement.
+  - `layers` (u32 mask, default 1) and `order` (sort key, default 0) on every draw, and `frame.drawable(d, order?, layers?)`. Draws skip when `layers & camera.layers === 0` (a camera without `layers` sees all).
+  - Optional depth: `camera.depthTest` (and `depthWrite`, `position`) allocates a `depth24plus` attachment (`DEPTH_FORMAT`, `frame.depthFormat`) and sorts opaque front-to-back, blended back-to-front.
+  - Vertex layouts per mesh: `VertexLayout`, `VERTEX_LAYOUT_2D` (unchanged 8 floats) and `VERTEX_LAYOUT_3D` (xyz, normal, uv, rgba = 12 floats; `VERTEX3D_*`), `MeshDesc.layout`, `mesh.layout`, `mesh.vertexBufferLayout`. `material.pipelineFor(layout, depth)` builds pipelines lazily per (layout, depth mode). `materialPrelude(layout)`, `INSTANCE_OFFSET`, `DepthMode`.
+  - WGSL: `VSOut.normal` (@location 7) and `VSOut.worldPos` (@location 8); helpers `engine_local_position`, `engine_local_normal`, `engine_world_position`.
+
 ### Changed
+- **Breaking for custom vertex shaders:** the per-instance format is 28 floats (112 bytes) instead of 20: a 3×4 world matrix (`m0..m2` at @location 3..5), `uvRect` @6, `tint` @7, `params` @8, `misc` @9 (emissive, flags, size.xy). `INSTANCE_FLOATS`/`INSTANCE_STRIDE`/`INSTANCE_BUFFER_LAYOUT` change with it. Fragment shaders (`fs_main`) and vertex entries that only wrap `engine_vertex(v)` need no change; existing `VSOut` fields keep their locations. The 2D output is unchanged (a pixel probe differs by at most 1/255 on a handful of channels of rotated sprites, from CPU instead of GPU sin/cos).
+- Draws render sorted by `order`, then submission order; with the default `order` this is exactly the old submission order and batching. `renderer.stats.instances` counts only the instances drawn (after layer culling).
 - `platform/device-mode.ts` no longer writes the density tokens on a CSS-px overlay root, because the layout owns them there.
 - `WidgetHandle.remove()` returns the element to where it was before `layout.add()` (its old parent and position); an element added detached is removed, as before.
 

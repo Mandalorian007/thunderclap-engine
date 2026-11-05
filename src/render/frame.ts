@@ -1,16 +1,12 @@
 import type { Material } from './material';
 import type { Mesh } from './mesh';
+import { Transform } from './transform';
 
-/** Parameters for one instanced draw. Reuse the object across frames to avoid garbage. */
-export interface DrawParams {
-  /** Position (logical px). For the built-in quad this is the centre. */
-  x: number;
-  y: number;
-  /** Scale. For the quad: size in logical px. Default 1. */
-  w?: number;
-  h?: number;
-  /** Radians, clockwise on screen (y is down). */
-  rotation?: number;
+/**
+ * Per-draw instance fields other than placement. A draw placed by a `Transform` takes these;
+ * `DrawParams` adds the 2D placement (x, y, w, h, rotation). Reuse the object across frames.
+ */
+export interface InstanceParams {
   /** Linear RGBA multiplier (HDR allowed). Default white. */
   tint?: ArrayLike<number>;
   /** Sub-rectangle of the texture: u0, v0, u1, v1. Default 0,0,1,1. */
@@ -24,13 +20,37 @@ export interface DrawParams {
    * `perDrawUniforms`. Lets many instances share one material, each with its own uniforms.
    */
   uniforms?: ArrayLike<number>;
+  /**
+   * Layer membership mask (u32). The draw is skipped when `layers & camera.layers` is 0.
+   * Default 1. A camera without `layers` sees every layer.
+   */
+  layers?: number;
+  /**
+   * Sort key. Draws render by `order`, then submission order, so leaving it at the default 0
+   * keeps plain submission order. With depth on it is still the first key (see the renderer).
+   */
+  order?: number;
+}
+
+/** Parameters for one instanced draw. Reuse the object across frames to avoid garbage. */
+export interface DrawParams extends InstanceParams {
+  /** Position (logical px). For the built-in quad this is the centre. */
+  x: number;
+  y: number;
+  /** Scale. For the quad: size in logical px. Default 1. */
+  w?: number;
+  h?: number;
+  /** Radians, clockwise on screen (y is down). */
+  rotation?: number;
 }
 
 /**
  * Something that draws itself inside the scene pass (particles, custom pipelines).
  * `prepare` runs once per frame before the scene pass (compute work, uploads);
- * `draw` runs in submission order inside the scene pass, which has two colour targets
+ * `draw` runs in draw order inside the scene pass, which has two colour targets
  * (HDR colour, HDR emissive) in `renderer.sceneFormats` and `@group(0)` = engine globals.
+ * When the camera asks for depth the pass also has a depth attachment
+ * (`frame.depthFormat`), and the drawable's pipeline must declare a matching `depthStencil`.
  */
 export interface Drawable {
   prepare?(encoder: GPUCommandEncoder, frame: Frame): void;
@@ -39,17 +59,25 @@ export interface Drawable {
 
 /** Hooks the renderer exposes to Frame (kept internal). */
 export interface FrameSink {
-  pushInstance(material: Material, mesh: Mesh, p: DrawParams): void;
-  pushDrawable(d: Drawable): void;
+  /** `t` places the draw when given; otherwise `p` is a `DrawParams`. */
+  pushInstance(
+    material: Material,
+    mesh: Mesh,
+    t: Transform | null,
+    p: DrawParams | InstanceParams,
+  ): void;
+  pushDrawable(d: Drawable, order: number, layers: number): void;
   pushPrePass(fn: (encoder: GPUCommandEncoder) => void): void;
   readonly defaultSprite: Material;
   readonly quad: Mesh;
 }
 
+const NO_PARAMS: InstanceParams = Object.freeze({});
+
 /**
  * Per-frame draw recorder. Obtained from `renderer.beginFrame()`; the same object is reused
- * every frame. Draws are rendered in call order; consecutive draws with the same material
- * and mesh merge into one instanced draw call.
+ * every frame. Draws render sorted by `order` (default 0), then call order; consecutive draws
+ * with the same material, mesh and uniforms merge into one instanced draw call.
  */
 export class Frame {
   /** Seconds since renderer start (or whatever the caller passed to beginFrame). */
@@ -58,6 +86,11 @@ export class Frame {
   dt = 0;
   /** Linear clear colour for the HDR colour target. */
   readonly clearColor: GPUColorDict = { r: 0, g: 0, b: 0, a: 1 };
+  /**
+   * Depth attachment format of this frame's scene pass, or null when the camera has no depth
+   * (the 2D path). Set by the renderer before `prepare`/`draw` run.
+   */
+  depthFormat: GPUTextureFormat | null = null;
 
   constructor(
     private readonly sink: FrameSink,
@@ -73,19 +106,33 @@ export class Frame {
     c.a = a;
   }
 
-  /** Draw a quad with `material` (default: built-in white sprite). */
-  sprite(material: Material | null, p: DrawParams): void {
-    this.sink.pushInstance(material ?? this.sink.defaultSprite, this.sink.quad, p);
+  /**
+   * Draw a quad with `material` (default: built-in white sprite), placed by `DrawParams`
+   * (x, y = centre, w, h = size, rotation) or by a `Transform` (the quad spans -0.5..0.5 in
+   * its local space, so the transform's scale is the size).
+   */
+  sprite(material: Material | null, p: DrawParams): void;
+  sprite(material: Material | null, t: Transform, p?: InstanceParams): void;
+  sprite(material: Material | null, a: DrawParams | Transform, b?: InstanceParams): void {
+    const m = material ?? this.sink.defaultSprite;
+    if (a instanceof Transform) this.sink.pushInstance(m, this.sink.quad, a, b ?? NO_PARAMS);
+    else this.sink.pushInstance(m, this.sink.quad, null, a);
   }
 
-  /** Draw `mesh` with `material`, transformed by `p` (x, y, w, h, rotation). */
-  mesh(mesh: Mesh, material: Material, p: DrawParams): void {
-    this.sink.pushInstance(material, mesh, p);
+  /** Draw `mesh` with `material`, placed by `DrawParams` (x, y, w, h, rotation) or a `Transform`. */
+  mesh(mesh: Mesh, material: Material, p: DrawParams): void;
+  mesh(mesh: Mesh, material: Material, t: Transform, p?: InstanceParams): void;
+  mesh(mesh: Mesh, material: Material, a: DrawParams | Transform, b?: InstanceParams): void {
+    if (a instanceof Transform) this.sink.pushInstance(material, mesh, a, b ?? NO_PARAMS);
+    else this.sink.pushInstance(material, mesh, null, a);
   }
 
-  /** Insert a custom drawable (e.g. a particle system) at this point in the draw order. */
-  drawable(d: Drawable): void {
-    this.sink.pushDrawable(d);
+  /**
+   * Insert a custom drawable (e.g. a particle system) at this point in the draw order, with
+   * sort key `order` (default 0) and layer mask `layers` (default 1).
+   */
+  drawable(d: Drawable, order = 0, layers = 1): void {
+    this.sink.pushDrawable(d, order, layers);
   }
 
   /** Run `fn` before the scene pass (offscreen passes, compute). Pass a stable function. */

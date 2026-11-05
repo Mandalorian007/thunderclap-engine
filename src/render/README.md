@@ -18,9 +18,17 @@ endFrame()
 
 - **Logical space** is 1920×1080 by default, with the origin at top-left and y pointing down.
   `renderer.camera` holds `{ x, y, zoom, rotation }`.
-- **Draw order is submission order.** There is no depth buffer. Consecutive draws that use
-  the same material and mesh merge into one instanced draw call, so draws batch best when
-  grouped by material.
+- **Draw order is `order`, then submission order.** Every draw takes an optional `order`
+  (sort key, default 0), so by default draws render in submission order. Consecutive draws
+  that use the same material and mesh merge into one instanced draw call, so draws batch best
+  when grouped by material.
+- **Layers.** Every draw takes `layers` (u32 mask, default 1). When `renderer.camera.layers`
+  is set, draws with `layers & camera.layers === 0` are skipped; without it, all draw.
+- **Depth is opt-in.** With `renderer.camera.depthTest = true` the scene pass gets a
+  `depth24plus` attachment (allocated on first use), and draws sort by `order`, then opaque
+  (front-to-back) before blended (back-to-front), by distance to `camera.position` (or by
+  world z without one). `camera.depthWrite = false` keeps opaque draws from writing depth.
+  `frame.depthFormat` tells drawables which format to declare.
 - **The emissive target feeds bloom.** Anything written to it glows. The final image is
   colour + emissive + bloom.
 - In steady state the renderer allocates nothing per frame. The instance buffer doubles in
@@ -56,7 +64,39 @@ renderer.endFrame();
 ```
 
 `DrawParams` fields: `x, y, w, h, rotation` (radians, clockwise), `tint` (linear RGBA),
-`uv` (u0, v0, u1, v1), `params` (a free vec4 passed to your shader), and `emissive`.
+`uv` (u0, v0, u1, v1), `params` (a free vec4 passed to your shader), `emissive`, `uniforms`,
+`layers` and `order`.
+
+### Transforms
+
+```ts
+const ship = new Transform({ x: 960, y: 540, scaleX: 64, scaleY: 64 });
+const turret = new Transform({ x: 0.3, parent: ship }); // local to the ship
+ship.rotation += dt;                                     // radians about +Z
+frame.sprite(shipMat, ship, { tint });                   // InstanceParams: no x/y/w/h
+frame.sprite(turretMat, turret);
+frame.mesh(cube, litMat, cubeT.setAxisAngle(0, 1, 0, t)); // 3D rotation (quaternion)
+```
+
+A `Transform` has position xyz, a rotation (`rotation` about Z for 2D, or
+`setQuaternion` / `setAxisAngle` for 3D), scale xyz and an optional parent. Its `world` is a
+cached 3×4 row-major matrix that recomputes only when it or an ancestor changed. The quad
+spans -0.5..0.5, so a transform's scale is the sprite's size.
+
+### Instance format (28 floats, 112 bytes)
+
+| floats | WGSL `VertexIn` | content |
+| --- | --- | --- |
+| 0..11 | `m0`, `m1`, `m2` (@location 3..5) | 3×4 world matrix rows |
+| 12..15 | `uvRect` (@6) | u0, v0, u1, v1 |
+| 16..19 | `tint` (@7) | linear RGBA |
+| 20..23 | `params` (@8) | free vec4 |
+| 24..27 | `misc` (@9) | emissive, flags (reserved, 0), size.x, size.y |
+
+`INSTANCE_OFFSET` names these offsets. A custom vertex entry that wraps `engine_vertex(v)`
+needs no change; one that read the old 20-float fields (`v.xform`, the old `v.misc`, or the
+old locations of `uvRect`/`tint`/`params`) must switch to `engine_world_position(v)` or the
+matrix rows.
 
 ## Custom materials
 
@@ -66,8 +106,11 @@ engine prepends a prelude that provides:
 - `globals`: `viewProj`, `logicalSize`, `targetSize`, `time`, `dt` at `@group(0) @binding(0)`
 - noise helpers: `engine_hash21`, `engine_hash22`, `engine_noise`, `engine_fbm(p, octaves)`,
   `engine_luma`
-- `VSOut { clip, uv, local, color, params, world, emissive, size }`, where `local` is 0..1
-  across the quad and `world` is the logical position
+- `VSOut { clip, uv, local, color, params, world, emissive, size, normal, worldPos }`, where
+  `local` is 0..1 across the quad, `world` is the logical position (xy), `normal` is the
+  world-space normal (`(0, 0, -1)` for 2D meshes) and `worldPos` the world xyz
+- `engine_local_position(v)`, `engine_local_normal(v)`, `engine_world_position(v)` and
+  `engine_vertex(v)`, the same for every vertex layout
 - `FragOut { color: @location(0), emissive: @location(1) }`
 - the default vertex shader `vs_main`
 
@@ -151,8 +194,11 @@ textures every frame, as ping-pong does, builds no new bind groups after the fir
 
 - `renderer.createFullscreenPass({ label, wgsl, targets, blend, uniformBytes, textures })` is
   the building block for post effects. It uses `vs_fullscreen` with `FullscreenIn { pos, uv }`.
-- `renderer.createMesh({ vertices, indices })`. A vertex is `pos.xy, uv.xy, color.rgba`
-  (8 floats). `mesh.update()` replaces the data.
+- `renderer.createMesh({ vertices, indices, layout? })`. With the default
+  `VERTEX_LAYOUT_2D` a vertex is `pos.xy, uv.xy, color.rgba` (8 floats); with
+  `VERTEX_LAYOUT_3D` it is `pos.xyz, normal.xyz, uv.xy, color.rgba` (12 floats, normal at
+  `@location(10)`). `mesh.update()` replaces the data. A material builds one pipeline per
+  (vertex layout, depth mode) on first use (`material.pipelineFor(layout, depth)`).
 - `Drawable { prepare?(encoder, frame); draw(pass, frame) }` lets you run your own pipelines
   inside the scene pass. Build them with `layout: [renderer.globalsLayout, yours]` and
   `targets: renderer.sceneFormats`.

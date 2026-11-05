@@ -1,4 +1,5 @@
 import { reportGpuError } from './diagnostics';
+import { VERTEX_LAYOUT_2D, type VertexLayout } from './mesh';
 
 /**
  * Create a shader module and surface compile errors with file/line context. Compilation is
@@ -76,21 +77,27 @@ fn engine_luma(c: vec3f) -> f32 {
 `;
 
 /**
- * Prelude prepended to every material. Declares the vertex/instance layout, the default
- * vertex entry `vs_main`, the `VSOut` varyings and the `FragOut` MRT struct.
+ * Prelude prepended to every material, generated per vertex layout. Declares `VertexIn` (the
+ * layout's vertex fields plus the 28-float instance: 3×4 world matrix rows `m0..m2`,
+ * `uvRect`, `tint`, `params`, `misc` = emissive, flags, size.xy), the default vertex entry
+ * `vs_main`, the `VSOut` varyings and the `FragOut` MRT struct.
+ *
+ * Helpers: `engine_local_position(v)` / `engine_local_normal(v)` (object space, `vec3f` for
+ * every layout), `engine_world_position(v)` and `engine_vertex(v)`.
  */
-export const WGSL_MATERIAL_PRELUDE = /* wgsl */ `
+export function materialPrelude(layout: VertexLayout): string {
+  return /* wgsl */ `
 ${WGSL_GLOBALS}
 ${WGSL_NOISE}
 struct VertexIn {
-  @location(0) pos: vec2f,
-  @location(1) uv: vec2f,
-  @location(2) color: vec4f,
-  @location(3) xform: vec4f,
-  @location(4) misc: vec4f,
-  @location(5) uvRect: vec4f,
-  @location(6) tint: vec4f,
-  @location(7) params: vec4f,
+${layout.wgslFields}
+  @location(3) m0: vec4f,
+  @location(4) m1: vec4f,
+  @location(5) m2: vec4f,
+  @location(6) uvRect: vec4f,
+  @location(7) tint: vec4f,
+  @location(8) params: vec4f,
+  @location(9) misc: vec4f,
 };
 
 struct VSOut {
@@ -102,6 +109,8 @@ struct VSOut {
   @location(4) world: vec2f,
   @location(5) emissive: f32,
   @location(6) size: vec2f,
+  @location(7) normal: vec3f,
+  @location(8) worldPos: vec3f,
 };
 
 struct FragOut {
@@ -109,12 +118,23 @@ struct FragOut {
   @location(1) emissive: vec4f,
 };
 
+fn engine_local_position(v: VertexIn) -> vec3f {
+  return ${layout.wgslPosition};
+}
+
+fn engine_local_normal(v: VertexIn) -> vec3f {
+  return ${layout.wgslNormal};
+}
+
+fn engine_world_position(v: VertexIn) -> vec3f {
+  let p = vec4f(engine_local_position(v), 1.0);
+  return vec3f(dot(v.m0, p), dot(v.m1, p), dot(v.m2, p));
+}
+
 fn engine_vertex(v: VertexIn) -> VSOut {
-  let c = cos(v.misc.x);
-  let s = sin(v.misc.x);
-  let p = v.pos * v.xform.zw;
-  let r = vec2f(p.x * c - p.y * s, p.x * s + p.y * c);
-  let world = v.xform.xy + r;
+  let world3 = engine_world_position(v);
+  let world = world3.xy;
+  let n = engine_local_normal(v);
   var o: VSOut;
   o.clip = globals.viewProj * vec4f(world, 0.0, 1.0);
   o.uv = mix(v.uvRect.xy, v.uvRect.zw, v.uv);
@@ -122,8 +142,10 @@ fn engine_vertex(v: VertexIn) -> VSOut {
   o.color = v.color * v.tint;
   o.params = v.params;
   o.world = world;
-  o.emissive = v.misc.y;
-  o.size = v.xform.zw;
+  o.emissive = v.misc.x;
+  o.size = v.misc.zw;
+  o.normal = normalize(vec3f(dot(v.m0.xyz, n), dot(v.m1.xyz, n), dot(v.m2.xyz, n)));
+  o.worldPos = world3;
   return o;
 }
 
@@ -131,6 +153,10 @@ fn engine_vertex(v: VertexIn) -> VSOut {
   return engine_vertex(v);
 }
 `;
+}
+
+/** The material prelude for the 2D vertex layout (what every 2D material compiles with). */
+export const WGSL_MATERIAL_PRELUDE = materialPrelude(VERTEX_LAYOUT_2D);
 
 /** Prelude for fullscreen passes: `vs_fullscreen` emits one triangle covering the target. */
 export const WGSL_FULLSCREEN_PRELUDE = /* wgsl */ `

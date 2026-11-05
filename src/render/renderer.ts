@@ -1,9 +1,17 @@
 import type { BindingSet } from './bindings';
 import { installGpuErrorLogging } from './diagnostics';
-import { type Drawable, type DrawParams, Frame, type FrameSink } from './frame';
+import {
+  type Drawable,
+  type DrawParams,
+  Frame,
+  type FrameSink,
+  type InstanceParams,
+} from './frame';
 import { FullscreenPass, type FullscreenPassDesc } from './fullscreen';
 import { type GpuPassTimes, GpuTimer, supportsTimestamps } from './gpu-timer';
 import {
+  DEPTH_FORMAT,
+  type DepthMode,
   INSTANCE_FLOATS,
   INSTANCE_STRIDE,
   Material,
@@ -22,6 +30,7 @@ import {
   type TextureLike,
   type TextureSource,
 } from './texture';
+import { type Transform, writeMatrix2d } from './transform';
 
 /** HDR scene targets: [0] colour, [1] emissive (feeds bloom). */
 export const SCENE_FORMAT: GPUTextureFormat = 'rgba16float';
@@ -131,11 +140,45 @@ interface DrawCmd {
   material: Material | null;
   mesh: Mesh | null;
   drawable: Drawable | null;
+  /** Pipeline for (material, mesh layout, depth mode); null for drawables. */
+  pipeline: GPURenderPipeline | null;
   first: number;
   count: number;
   /** Dynamic uniform offset for per-draw materials, else -1. */
   offset: number;
 }
+
+/** One recorded draw (instance or drawable), kept until `endFrame` sorts and batches them. */
+interface DrawRec {
+  material: Material | null;
+  mesh: Mesh | null;
+  drawable: Drawable | null;
+  /** Dynamic uniform offset for per-draw materials, else -1. */
+  offset: number;
+  /** Instance index in `instanceData` (submission order), -1 for drawables. */
+  inst: number;
+  order: number;
+  layers: number;
+  /** Depth sort: 0 = opaque, 1 = blended (drawables count as blended). */
+  group: number;
+  /** Depth sort: distance key (larger = farther). */
+  dist: number;
+}
+
+/**
+ * Draw-list flags read from `renderer.camera` when present. Until the matrix camera lands
+ * (ws/camera) these are optional fields on the camera object: `layers` (u32 mask, default all
+ * bits), `depthTest` (default false), `depthWrite` (default true when testing) and
+ * `position` (xyz, for the depth sort distance; without it the sort uses world z).
+ */
+interface CameraDrawFlags {
+  layers?: number;
+  depthTest?: boolean;
+  depthWrite?: boolean;
+  position?: ArrayLike<number>;
+}
+
+const ALL_LAYERS = 0xffffffff;
 
 const GLOBALS_FLOATS = 24;
 
@@ -202,6 +245,27 @@ export class Renderer implements FrameSink {
   private instanceCount = 0;
   private readonly cmds: DrawCmd[] = [];
   private cmdCount = 0;
+  private readonly recs: DrawRec[] = [];
+  private recCount = 0;
+  /** True while every draw this frame had `order` >= the previous draw's. */
+  private ordered = true;
+  private lastOrder = Number.NEGATIVE_INFINITY;
+  private sortIdx = new Uint32Array(256);
+  private sortTmp = new Uint32Array(256);
+  private sortDepth = false;
+  /** Instance data in draw order, used when sorting or layer culling reorders draws. */
+  private sortedData = new Float32Array(0);
+  /** The array `endFrame` uploads: `instanceData` (submission order) or `sortedData`. */
+  private uploadData: Float32Array;
+  /** Instances `endFrame` uploads (layer-culled draws excluded). */
+  private uploadCount = 0;
+  private depthTexture: Texture | null = null;
+  private readonly depthAtt: GPURenderPassDepthStencilAttachment = {
+    view: undefined as unknown as GPUTextureView,
+    depthClearValue: 1,
+    depthLoadOp: 'clear',
+    depthStoreOp: 'store',
+  };
   private readonly prePasses: ((encoder: GPUCommandEncoder) => void)[] = [];
   private readonly prepared = new Set<Drawable>();
   /** Per-draw uniform sets with blocks staged this frame. */
@@ -275,6 +339,7 @@ export class Renderer implements FrameSink {
 
     const cap = opts.initialInstances ?? 4096;
     this.instanceData = new Float32Array(cap * INSTANCE_FLOATS);
+    this.uploadData = this.instanceData;
     this.instanceBuffer = this.makeInstanceBuffer(cap);
 
     this.quad = new Mesh(device, { label: 'quad', ...quadGeometry() });
@@ -359,6 +424,9 @@ export class Renderer implements FrameSink {
     this.height = h;
     this.sceneColor?.destroy();
     this.sceneEmissive?.destroy();
+    // The depth target (only ever made for a depth camera) is rebuilt at the new size lazily.
+    this.depthTexture?.destroy();
+    this.depthTexture = null;
     const usage = GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING;
     this.sceneColor = new Texture(this.device, {
       width: w,
@@ -585,6 +653,9 @@ export class Renderer implements FrameSink {
     if (this.timingEvery > 0) this.frameStart = performance.now();
     this.instanceCount = 0;
     this.cmdCount = 0;
+    this.recCount = 0;
+    this.ordered = true;
+    this.lastOrder = Number.NEGATIVE_INFINITY;
     this.prePasses.length = 0;
     this.prepared.clear();
     for (const b of this.drawUniformSets) b.discardDrawUniforms();
@@ -603,13 +674,15 @@ export class Renderer implements FrameSink {
     const device = this.device;
     this.writeGlobals();
 
-    if (this.instanceCount > 0) {
-      const needed = this.instanceCount * INSTANCE_STRIDE;
+    const depth = this.buildDraws();
+    const uploadCount = this.uploadCount;
+    if (uploadCount > 0) {
+      const needed = uploadCount * INSTANCE_STRIDE;
       if (needed > this.instanceBuffer.size) {
         this.instanceBuffer.destroy();
         this.instanceBuffer = this.makeInstanceBuffer(this.instanceData.length / INSTANCE_FLOATS);
       }
-      device.queue.writeBuffer(this.instanceBuffer, 0, this.instanceData.buffer, 0, needed);
+      device.queue.writeBuffer(this.instanceBuffer, 0, this.uploadData.buffer, 0, needed);
     }
     for (const b of this.drawUniformSets) b.flushDrawUniforms();
     this.drawUniformSets.length = 0;
@@ -628,6 +701,7 @@ export class Renderer implements FrameSink {
     }
 
     this.scenePassDesc.timestampWrites = timer?.pass('scene');
+    this.scenePassDesc.depthStencilAttachment = depth ? this.depthAttachment() : undefined;
     const pass = enc.beginRenderPass(this.scenePassDesc);
     pass.setBindGroup(0, this.globalsBindGroup);
     let curPipeline: GPURenderPipeline | null = null;
@@ -650,9 +724,9 @@ export class Renderer implements FrameSink {
       }
       const m = c.material!;
       const mesh = c.mesh!;
-      if (m.pipeline !== curPipeline) {
-        pass.setPipeline(m.pipeline);
-        curPipeline = m.pipeline;
+      if (c.pipeline !== curPipeline) {
+        pass.setPipeline(c.pipeline!);
+        curPipeline = c.pipeline;
       }
       if (m !== curMaterial || c.offset !== curOffset) {
         if (c.offset >= 0) {
@@ -679,7 +753,7 @@ export class Renderer implements FrameSink {
     }
     pass.end();
     this.stats.drawCalls = drawCalls;
-    this.stats.instances = this.instanceCount;
+    this.stats.instances = uploadCount;
     this.stats.drawables = drawables;
 
     const out = this.context.getCurrentTexture().createView();
@@ -734,6 +808,7 @@ export class Renderer implements FrameSink {
     this.sceneColor?.destroy();
     this.sceneEmissive?.destroy();
     this.instanceBuffer.destroy();
+    this.depthTexture?.destroy();
     this.globalsBuffer.destroy();
     this.quad.destroy();
     this.white.destroy();
@@ -741,7 +816,12 @@ export class Renderer implements FrameSink {
 
   // ---------------------------------------------------------------- FrameSink
 
-  pushInstance(material: Material, mesh: Mesh, p: DrawParams): void {
+  pushInstance(
+    material: Material,
+    mesh: Mesh,
+    tr: Transform | null,
+    p: DrawParams | InstanceParams,
+  ): void {
     let offset = -1;
     const b = material.bindings;
     if (b?.perDraw) {
@@ -759,14 +839,19 @@ export class Renderer implements FrameSink {
     if (this.instanceCount * INSTANCE_FLOATS > this.instanceData.length) this.growInstances();
     const d = this.instanceData;
     let o = idx * INSTANCE_FLOATS;
-    d[o++] = p.x;
-    d[o++] = p.y;
-    d[o++] = p.w ?? 1;
-    d[o++] = p.h ?? 1;
-    d[o++] = p.rotation ?? 0;
-    d[o++] = p.emissive ?? 0;
-    d[o++] = 0;
-    d[o++] = 0;
+    let sx: number;
+    let sy: number;
+    if (tr) {
+      d.set(tr.world, o);
+      sx = tr.scale.x;
+      sy = tr.scale.y;
+    } else {
+      const dp = p as DrawParams;
+      sx = dp.w ?? 1;
+      sy = dp.h ?? 1;
+      writeMatrix2d(d, o, dp.x, dp.y, sx, sy, dp.rotation ?? 0);
+    }
+    o += 12;
     const uv = p.uv;
     d[o++] = uv ? uv[0]! : 0;
     d[o++] = uv ? uv[1]! : 0;
@@ -782,14 +867,169 @@ export class Renderer implements FrameSink {
     d[o++] = q ? (q[1] ?? 0) : 0;
     d[o++] = q ? (q[2] ?? 0) : 0;
     d[o++] = q ? (q[3] ?? 0) : 0;
+    d[o++] = p.emissive ?? 0;
+    d[o++] = 0; // flags (reserved)
+    d[o++] = sx;
+    d[o] = sy;
 
+    const r = this.nextRec(p.order ?? 0, p.layers ?? 1);
+    r.material = material;
+    r.mesh = mesh;
+    r.drawable = null;
+    r.offset = offset;
+    r.inst = idx;
+  }
+
+  pushDrawable(d: Drawable, order: number, layers: number): void {
+    const r = this.nextRec(order, layers);
+    r.material = null;
+    r.mesh = null;
+    r.drawable = d;
+    r.offset = -1;
+    r.inst = -1;
+  }
+
+  pushPrePass(fn: (encoder: GPUCommandEncoder) => void): void {
+    this.prePasses.push(fn);
+  }
+
+  // ---------------------------------------------------------------- draw list
+
+  private nextRec(order: number, layers: number): DrawRec {
+    if (order < this.lastOrder) this.ordered = false;
+    this.lastOrder = order;
+    if (this.recCount === this.recs.length) {
+      this.recs.push({
+        material: null,
+        mesh: null,
+        drawable: null,
+        offset: -1,
+        inst: -1,
+        order: 0,
+        layers: 1,
+        group: 0,
+        dist: 0,
+      });
+    }
+    const r = this.recs[this.recCount++]!;
+    r.order = order;
+    r.layers = layers;
+    return r;
+  }
+
+  /**
+   * Turn this frame's draw records into batched commands. Draws whose `layers` miss the
+   * camera's mask are dropped. Without depth, draws sort by `order` then submission index;
+   * when every `order` is already non-decreasing (the default) nothing moves and the instance
+   * data uploads as recorded. With `camera.depthTest`, the keys are `order`, then opaque
+   * before blended, then distance (opaque front-to-back, blended back-to-front), then
+   * submission index. Sets `uploadData` / `uploadCount`; returns whether depth is on.
+   */
+  private buildDraws(): boolean {
+    const cam = this.camera as CameraDrawFlags;
+    const camLayers = cam.layers === undefined ? ALL_LAYERS : cam.layers >>> 0;
+    const depth = cam.depthTest === true;
+    const depthWrite = cam.depthWrite !== false;
+    this.frame.depthFormat = depth ? DEPTH_FORMAT : null;
+    const recs = this.recs;
+    const n = this.recCount;
+    this.cmdCount = 0;
+
+    let visible = n;
+    if (camLayers !== ALL_LAYERS) {
+      visible = 0;
+      for (let i = 0; i < n; i++) if ((recs[i]!.layers & camLayers) !== 0) visible++;
+    }
+    if (!depth && this.ordered && visible === n) {
+      for (let i = 0; i < n; i++) {
+        const r = recs[i]!;
+        this.batch(r, r.inst, 0);
+      }
+      this.uploadData = this.instanceData;
+      this.uploadCount = this.instanceCount;
+      return false;
+    }
+
+    if (this.sortIdx.length < n) {
+      this.sortIdx = new Uint32Array(n * 2);
+      this.sortTmp = new Uint32Array(n * 2);
+    }
+    const idx = this.sortIdx;
+    const src = this.instanceData;
+    const pos = depth ? cam.position : undefined;
+    let k = 0;
+    for (let i = 0; i < n; i++) {
+      const r = recs[i]!;
+      if ((r.layers & camLayers) === 0) continue;
+      idx[k++] = i;
+      if (!depth) continue;
+      if (r.drawable) {
+        // No position: sorts as the nearest blended draw of its order (drawn after the rest).
+        r.group = 1;
+        r.dist = Number.NEGATIVE_INFINITY;
+        continue;
+      }
+      r.group = r.material!.blend === 'opaque' ? 0 : 1;
+      const o = r.inst * INSTANCE_FLOATS;
+      const tz = src[o + 11]!;
+      if (pos) {
+        const dx = src[o + 3]! - pos[0]!;
+        const dy = src[o + 7]! - pos[1]!;
+        const dz = tz - (pos[2] ?? 0);
+        r.dist = dx * dx + dy * dy + dz * dz;
+      } else {
+        r.dist = tz;
+      }
+    }
+    this.sortDepth = depth;
+    if (depth || !this.ordered) this.sortDraws(k);
+
+    if (this.sortedData.length < src.length) this.sortedData = new Float32Array(src.length);
+    const dst = this.sortedData;
+    let inst = 0;
+    for (let j = 0; j < k; j++) {
+      const r = recs[idx[j]!]!;
+      if (r.drawable) {
+        this.batch(r, 0, 0);
+        continue;
+      }
+      const from = r.inst * INSTANCE_FLOATS;
+      const to = inst * INSTANCE_FLOATS;
+      for (let f = 0; f < INSTANCE_FLOATS; f++) dst[to + f] = src[from + f]!;
+      const mode: DepthMode = !depth ? 0 : r.group === 0 && depthWrite ? 2 : 1;
+      this.batch(r, inst, mode);
+      inst++;
+    }
+    this.uploadData = dst;
+    this.uploadCount = inst;
+    return depth;
+  }
+
+  /** Append a record as a command, merging into the previous one when it continues it. */
+  private batch(r: DrawRec, first: number, depth: DepthMode): void {
+    if (r.drawable) {
+      const c = this.nextCmd();
+      c.material = null;
+      c.mesh = null;
+      c.drawable = r.drawable;
+      c.pipeline = null;
+      c.first = 0;
+      c.count = 0;
+      c.offset = -1;
+      return;
+    }
+    const material = r.material!;
+    const mesh = r.mesh!;
+    const pipeline = material.pipelineFor(mesh.layout, depth);
     const last = this.cmdCount > 0 ? this.cmds[this.cmdCount - 1]! : null;
     if (
       last &&
       !last.drawable &&
+      last.pipeline === pipeline &&
       last.material === material &&
       last.mesh === mesh &&
-      last.offset === offset
+      last.offset === r.offset &&
+      last.first + last.count === first
     ) {
       last.count++;
       return;
@@ -798,23 +1038,63 @@ export class Renderer implements FrameSink {
     c.material = material;
     c.mesh = mesh;
     c.drawable = null;
-    c.first = idx;
+    c.pipeline = pipeline;
+    c.first = first;
     c.count = 1;
-    c.offset = offset;
+    c.offset = r.offset;
   }
 
-  pushDrawable(d: Drawable): void {
-    const c = this.nextCmd();
-    c.material = null;
-    c.mesh = null;
-    c.drawable = d;
-    c.first = 0;
-    c.count = 0;
-    c.offset = -1;
+  /** True when record `a` draws before record `b` (a total order: ties go by index). */
+  private drawsBefore(a: number, b: number): boolean {
+    const ra = this.recs[a]!;
+    const rb = this.recs[b]!;
+    if (ra.order !== rb.order) return ra.order < rb.order;
+    if (this.sortDepth) {
+      if (ra.group !== rb.group) return ra.group < rb.group;
+      if (ra.dist !== rb.dist) return ra.group === 0 ? ra.dist < rb.dist : ra.dist > rb.dist;
+    }
+    return a < b;
   }
 
-  pushPrePass(fn: (encoder: GPUCommandEncoder) => void): void {
-    this.prePasses.push(fn);
+  /** Bottom-up merge sort of `sortIdx[0..n)` with `drawsBefore`; no allocation. */
+  private sortDraws(n: number): void {
+    let src = this.sortIdx;
+    let dst = this.sortTmp;
+    for (let width = 1; width < n; width *= 2) {
+      for (let lo = 0; lo < n; lo += 2 * width) {
+        const mid = Math.min(lo + width, n);
+        const hi = Math.min(lo + 2 * width, n);
+        let i = lo;
+        let j = mid;
+        let k = lo;
+        while (i < mid && j < hi) {
+          dst[k++] = this.drawsBefore(src[j]!, src[i]!) ? src[j++]! : src[i++]!;
+        }
+        while (i < mid) dst[k++] = src[i++]!;
+        while (j < hi) dst[k++] = src[j++]!;
+      }
+      const t = src;
+      src = dst;
+      dst = t;
+    }
+    if (src !== this.sortIdx) {
+      for (let i = 0; i < n; i++) this.sortIdx[i] = src[i]!;
+    }
+  }
+
+  /** The scene pass depth attachment, allocated at scene size on first use. */
+  private depthAttachment(): GPURenderPassDepthStencilAttachment {
+    if (!this.depthTexture) {
+      this.depthTexture = new Texture(this.device, {
+        width: this.width,
+        height: this.height,
+        format: DEPTH_FORMAT,
+        usage: GPUTextureUsage.RENDER_ATTACHMENT,
+        label: 'scene-depth',
+      });
+      this.depthAtt.view = this.depthTexture.view;
+    }
+    return this.depthAtt;
   }
 
   // ---------------------------------------------------------------- internals
@@ -825,6 +1105,7 @@ export class Renderer implements FrameSink {
         material: null,
         mesh: null,
         drawable: null,
+        pipeline: null,
         first: 0,
         count: 0,
         offset: -1,
