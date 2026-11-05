@@ -31,16 +31,16 @@ describe('device mode', () => {
     expect(changes()).toBe(0);
   });
 
-  it('a phone scale sets data-phone and the density tokens in design px', () => {
+  it('a phone scale sets data-phone and the bar tokens in CSS px', () => {
     const { root, mode, v, changes } = setup();
     // 844×390 landscape: the 1920×1080 design at 0.36, 40 CSS px bars.
     mode.setScale(0.36, 40);
     expect(mode.phone).toBe(true);
     expect(root.hasAttribute('data-phone')).toBe(true);
-    expect(v('--tc-text-min')).toBe(`${(12 / 0.36).toFixed(1)}px`);
-    expect(v('--tc-tap-min')).toBe(`${(44 / 0.36).toFixed(1)}px`);
-    expect(v('--tc-css-px')).toBe(`${(1 / 0.36).toFixed(3)}px`);
-    expect(v('--tc-bar')).toBe(`${Math.round(40 / 0.36)}px`);
+    // The density tokens belong to the overlay's layout.
+    expect(v('--tc-text-min')).toBe('');
+    expect(v('--tc-tap-min')).toBe('');
+    expect(v('--tc-bar')).toBe('40px');
     expect(v('--tc-third')).not.toBe('');
     expect(mode.cssPx).toBeCloseTo(1 / 0.36, 6);
     expect(mode.bar).toBe(Math.round(40 / 0.36));
@@ -50,7 +50,6 @@ describe('device mode', () => {
     mode.setScale(0.5);
     expect(mode.phone).toBe(false);
     expect(root.hasAttribute('data-phone')).toBe(false);
-    expect(v('--tc-text-min')).toBe('');
     expect(v('--tc-bar')).toBe('');
     expect(changes()).toBe(2);
   });
@@ -61,7 +60,7 @@ describe('device mode', () => {
     expect(mode.phone).toBe(true);
     expect(mode.cropT).toBe(Math.round(30 / 0.44));
     expect(mode.cropB).toBe(Math.round(20 / 0.44));
-    expect(v('--tc-crop-t')).toBe(`${Math.round(30 / 0.44)}px`);
+    expect(v('--tc-crop-t')).toBe('30px');
     expect(root.hasAttribute('data-fill')).toBe(true);
     // Filling never flips a phone to desktop: a big fill scale with a small fit is still a phone.
     mode.setScale(0.5, 0, { fitScale: 0.36, top: 0, bottom: 0 });
@@ -70,13 +69,11 @@ describe('device mode', () => {
   });
 
   it('options change the thresholds', () => {
-    const { mode, v } = setup({ phoneScale: 0.3, textMin: 14, tapMin: 48 });
+    const { mode } = setup({ phoneScale: 0.3 });
     mode.setScale(0.36);
     expect(mode.phone).toBe(false);
     mode.setScale(0.25);
     expect(mode.phone).toBe(true);
-    expect(v('--tc-text-min')).toBe(`${(14 / 0.25).toFixed(1)}px`);
-    expect(v('--tc-tap-min')).toBe(`${(48 / 0.25).toFixed(1)}px`);
   });
 
   it('data-touch follows the last input: a finger sets it, a mouse press clears it', () => {

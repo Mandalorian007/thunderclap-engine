@@ -9,17 +9,10 @@ export {
   revealDelayMs,
   type SayOptions,
 } from './caption';
-export {
-  type CssChrome,
-  type CssChromeOptions,
-  createCssChrome,
-  PHONE_FORMS,
-} from './css-chrome';
 export { append, type Child, focusableWithin, h } from './dom';
 export {
   type ClassifyInput,
   classifyFormFactor,
-  createLayout,
   defaultForms,
   effectiveInsets,
   FORM_FACTORS,
@@ -29,6 +22,7 @@ export {
   formSpec,
   type Insets,
   type Layout,
+  type LayoutHost,
   type LayoutSpec,
   type LayoutState,
   NO_INSETS,
@@ -43,6 +37,7 @@ export {
   resolveLayout,
   resolveTracks,
   type Track,
+  type Units,
   type WidgetHandle,
   type WidgetOptions,
 } from './layout';
@@ -87,6 +82,8 @@ export {
   TEXT_MIN_VAR,
   TEXT_SCALE_VAR,
   textScaleTokens,
+  toFrameUnits,
+  UNIT_VAR,
 } from './text-scale';
 export {
   applyTheme,

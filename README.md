@@ -128,7 +128,7 @@ Import only from the public entry points listed under [Modules](#modules). Anyth
 | `@thunderclap/engine/post` | `PostStack`: bloom, god rays, fog, vignette, grade, quality tiers ([README](src/post/README.md)) |
 | `@thunderclap/engine/fx` | GPU particles, flicker |
 | `@thunderclap/engine/input` | `Input` action map, `Gestures`, magnify/loupe, `snapToGrid` ([README](src/input/README.md)) |
-| `@thunderclap/engine/ui` | Overlay, panels and widgets, toasts, captions, pad navigation, `createLayout` regions ([README](src/ui/README.md)) |
+| `@thunderclap/engine/ui` | Overlay, panels and widgets, toasts, captions, pad navigation, layout regions (`ui.layout`) ([README](src/ui/README.md)) |
 | `@thunderclap/engine/audio` | WebAudio buses, synth, sound recipes, mixer persistence ([README](src/audio/README.md)) |
 | `@thunderclap/engine/save` | `createSaveStore`, schemas (`s`), slots and migrations ([README](src/save/README.md)) |
 | `@thunderclap/engine/analytics` | `createAnalytics`: typed, batched events to a game-supplied sink; no network code ([README](src/analytics/README.md)) |

@@ -4,9 +4,11 @@
  * - `--tc-text-scale` is the player's text size as a factor (1, 1.25, 1.5 …). A game passes each
  *   stylesheet through `scaleFontSizes()` when it injects it, so all overlay text follows the
  *   token live. `applyTextScale()` sets it, plus the engine's own font tokens to match.
- * - `--tc-text-min` is a floor for every scaled font size, in the overlay's px (design px on a
- *   scaled overlay, CSS px on a CSS-px one). Unset (0) unless a device mode sets it
- *   (`platform/device-mode.ts` does on scaled phones; `createLayout` does from its form spec).
+ * - `--tc-text-min` is a floor for every scaled font size, CSS px. The layout sets it from its
+ *   form spec (`FormSpec.textMin`; 0 = no floor).
+ *
+ * A stylesheet written in design px (sizes that scale with the canvas frame) also passes
+ * through `toFrameUnits()`, after `scaleFontSizes()`: every `Npx` becomes N design px.
  *
  * Small text scales fully. Large display text is already big, so it only grows as far as needed
  * to stay at least as large as scaled body text: a size N becomes max(N, min(N, 30) × scale).
@@ -31,6 +33,26 @@ export function scalePxCss(px: number): string {
   if (px <= BODY_PX) return `max(calc(${px}px * ${v}), ${MIN})`;
   if (px < BODY_PX * 1.5) return `max(${px}px, calc(${BODY_PX}px * ${v}), ${MIN})`;
   return `${px}px`;
+}
+
+/**
+ * What one px of a `toFrameUnits` stylesheet draws as, CSS px: one design px of the frame
+ * (`--tc-dpx`, `Overlay.scale`) on the frame's layers; 1px in the layout's regions and, in `css`
+ * units, in the panels and toasts.
+ */
+export const UNIT_VAR = '--tc-unit';
+
+/**
+ * Rewrites every `Npx` length in `css` (a stylesheet, a declaration or one value) as N design
+ * px: `calc(N * var(--tc-unit, 1px))`, so it scales with the canvas frame. Media and container
+ * queries and `url()`s are left alone (custom properties can't be used there).
+ */
+export function toFrameUnits(css: string): string {
+  return css.replace(
+    /(@(?:media|container|supports)[^{]*)|(url\([^)]*\))|(?<![\w.-])(-?(?:\d+\.?\d*|\.\d+))px\b/g,
+    (m, at: string | undefined, url: string | undefined, n: string | undefined) =>
+      at || url || n === undefined ? m : `calc(${n} * var(${UNIT_VAR}, 1px))`,
+  );
 }
 
 /** Rewrites every `font-size: Npx` (and `font: … Npx/…` shorthand) in a stylesheet. */
@@ -83,7 +105,8 @@ export function textScaleTokens(
  * Sets the text scale (1 = 100%) on the overlay root: `--tc-text-scale`, and
  * `data-text-scale="<percent>"` when it is not 100% so stylesheets can make room for larger
  * text. `setTheme` (usually `overlay.setTheme`) gets the engine font tokens to match: CSS-px
- * sizes when the root is a CSS-px overlay (`data-units="css"`), design px otherwise.
+ * sizes while the overlay is in `css` units (`data-units="css"`), design px otherwise (the
+ * overlay scales those with the frame, and re-derives them when its units change).
  */
 export function applyTextScale(
   root: HTMLElement,

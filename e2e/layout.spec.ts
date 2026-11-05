@@ -10,6 +10,7 @@
  * - Tap targets at least 44 CSS px on touch rows (`--tc-tap-min`), text at least 12 px on phones.
  * - The caption card docked in `captionLane`; the `'free'` escape hatch inside `freeRect`.
  * - Widgets move when a phone turns upright and back.
+ * - One overlay: crossing the phone/desktop line keeps the same root, layers and open panel.
  * - Spamming a panel open (real taps, then many opens in one tick) leaves at most one panel.
  * - A modal panel at 150% text fits the modal region (inside the safe area) or scrolls to its
  *   last control, and focus goes home when it closes.
@@ -279,6 +280,81 @@ test('turning a phone upright moves the widgets and back again', async ({ page }
   await page.evaluate(() => window.__harnessLayout!.refresh());
   expect((await read(page)).placed['w-help']).toBe('right');
   await checkLayout(page, ins?.land ?? NONE, true, 'phone-landscape');
+});
+
+test('one overlay: a phone and a desktop share one root, and nothing moves between layers', async ({
+  page,
+}) => {
+  const project = test.info().project.name;
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.evaluate(() => window.__harnessLayout!.openPanel(2));
+  await expect(page.locator('.tc-panel')).toBeVisible();
+  // Tag every layer and the open panel, then cross the phone/desktop line and back.
+  const tag = () =>
+    page.evaluate(() => {
+      const roots = document.querySelectorAll('.tc-overlay');
+      const root = roots[0] as HTMLElement;
+      for (const l of root.querySelectorAll<HTMLElement>(':scope > [data-layer]')) {
+        l.dataset.probe = l.dataset.layer;
+      }
+      const panel = document.querySelector<HTMLElement>('.tc-panel')!;
+      panel.dataset.probe = 'panel';
+      // A HUD element with a huge z-index: it must stay under the panels layer.
+      const high = document.createElement('div');
+      high.dataset.probe = 'high';
+      Object.assign(high.style, {
+        position: 'absolute',
+        inset: '0',
+        zIndex: '99999',
+        pointerEvents: 'auto',
+      });
+      root.querySelector('[data-layer="hud"]')!.append(high);
+      return roots.length;
+    });
+  const check = () =>
+    page.evaluate(() => {
+      const roots = document.querySelectorAll('.tc-overlay');
+      const root = roots[0] as HTMLElement;
+      const layers = [...root.querySelectorAll<HTMLElement>(':scope > [data-layer]')].map(
+        (l) => `${l.dataset.layer}=${l.dataset.probe ?? '?'}`,
+      );
+      const panel = document.querySelector<HTMLElement>('[data-probe="panel"]');
+      // Hit testing follows paint order; the HUD is inert under the modal, so lift that to look.
+      const r = panel!.getBoundingClientRect();
+      const hud = root.querySelector<HTMLElement>('[data-layer="hud"]')!;
+      const inert = hud.inert;
+      hud.inert = false;
+      const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      hud.inert = inert;
+      return {
+        onTop: top?.closest<HTMLElement>('[data-layer]')?.dataset.layer ?? null,
+        roots: roots.length,
+        units: root.dataset.units,
+        layers,
+        panelLayer: panel?.closest<HTMLElement>('[data-layer]')?.dataset.layer ?? null,
+      };
+    });
+  expect(await tag()).toBe(1);
+  const was = page.viewportSize()!;
+  const phone = FORM[project]!.startsWith('phone');
+  await page.setViewportSize(phone ? { width: 1280, height: 720 } : { width: 460, height: 320 });
+  await expect.poll(() => read(page).then((s) => !!s.formFactor?.startsWith('phone'))).toBe(!phone);
+  const other = await check();
+  await page.setViewportSize(was);
+  await expect.poll(() => read(page).then((s) => s.formFactor)).toBe(FORM[project]);
+  const back = await check();
+  for (const c of [other, back]) {
+    expect(c.roots).toBe(1);
+    expect(c.layers).toEqual([
+      'hud=hud',
+      'captions=captions',
+      'layout=layout',
+      'panels=panels',
+      'toasts=toasts',
+    ]);
+    expect(c.panelLayer).toBe('panels');
+    expect(c.onTop, 'a z-index in the HUD lifts it over the panel').toBe('panels');
+  }
 });
 
 test('a panel at 150% text fits the modal region or scrolls to its last control', async ({

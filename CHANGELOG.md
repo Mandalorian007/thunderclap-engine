@@ -12,23 +12,31 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 ### Added
 - `@thunderclap/engine/analytics` (E-002, ws/analytics): `createAnalytics<E>({ sink, session?, clock?, context?, onError?, maxBatch? })` with typed `emit`, batched `flush`, built-in `game_start`, `session_end` and `device_lost`, and `attach(ctx)`, which wraps `ctx.hooks.deviceLost` and flushes on hidden/pagehide/freeze. No network sink ships; the game supplies one.
 - `HostWindow.setTitle?(title)`: optional, for hosts with a window of their own. The Electron host (`@thunderclap/host-electron`, `packages/host-electron`) implements it.
-- Layout regions (D-041 Phase 2, ws/layout): `createLayout(overlay, spec?)` in `./ui`, with `LayoutSpec`, `FormFactor`, `RegionName`, `classifyFormFactor`, `resolveLayout`, `resolveTracks`, `parseAreas`, `effectiveInsets`, `readSafeArea` and `defaultForms`.
+- Layout regions (D-041 Phase 2, ws/layout): `overlay.layout` (built by `createOverlay({ layout })`), with `LayoutSpec`, `FormFactor`, `RegionName`, `classifyFormFactor`, `resolveLayout`, `resolveTracks`, `parseAreas`, `effectiveInsets`, `readSafeArea` and `defaultForms`.
   - Four form factors (`phone-landscape`, `phone-portrait`, `tablet`, `desktop`), each with px/fraction/fill tracks and grid areas for `top`, `left`, `right`, `bottom`, `cardLane`, `captionLane` and `fill`, plus a `modal` rect. All of them sit inside the safe area.
   - Widgets register once with a region per form factor and move when it changes. The escape hatch `{ region: 'free', rect, reason }` is logged and listed in `layout.freeUses`.
   - `layout.freeRect` (the `fill` region, CSS px) and `onChange` are there for the camera. Tracks with no widgets collapse.
-  - `layout.dockCaption()` places the caption card in `captionLane`. `caption.dock(host)` is new, and `avoid()` is unchanged.
-- `createOverlay({ legacyScale: false })`, a CSS-px overlay mode (`data-units="css"`, `cssPxTheme`, `overlay.onRect`). `legacyScale: true` stays the default, so existing scenes are unchanged.
-- In CSS-px mode, buttons, toggles and sliders honour `--tc-tap-min` (44 on touch forms), and panels and toasts honour the safe area and the modal region. `textScaleTokens` takes a base size table (`DESIGN_FONT_PX`, `CSS_FONT_PX`).
+  - `layout.dockCaption()` places the caption card in `captionLane`. `caption.dock(host)` is new.
+- One overlay in CSS px on every form factor (ws/one-overlay, D-044): `overlay.frame`, `overlay.setFrame(rect)`, `overlay.onResize(fn)`, `overlay.units` (`Units`: `'frame' | 'css'`, also `data-units`), `overlay.layout`, the `layout` layer, `FormSpec.units`, `LayoutState.units`, `LayoutHost`, `toFrameUnits(css)` and `UNIT_VAR` (`--tc-unit`). The root carries `--tc-frame-x/y/w/h`, `--tc-dpx` and `--tc-zoom`. See ARCHITECTURE.md, "Layout".
+- `CreateGameOptions.layout` (the overlay's `LayoutSpec`); a game reads the layout as `ctx.ui.layout`.
+- `caption.onPlace(fn)` and `caption.relayout()`: the game steers the undocked card (with `overlapArea` and `cornerOrder`).
+- Engine e2e: "one overlay: a phone and a desktop share one root, and nothing moves between layers" in `e2e/layout.spec.ts` (also: a HUD z-index stays under an open panel); the UI harness puts its probes on the frame through `toFrameUnits` and checks units per row.
+- In `css` units, buttons, toggles and sliders honour `--tc-tap-min` (44 on touch forms), and panels and toasts honour the safe area and the modal region. `textScaleTokens` takes a base size table (`DESIGN_FONT_PX`, `CSS_FONT_PX`).
 - The engine e2e has a layout harness page (`harness/layout.html`) and `e2e/layout.spec.ts`. It checks every matrix row plus two new upright rows (`phone-port` 390×844 and `tablet-port` 820×1180) for region placement, no overlap, the safe area (insets emulated through CDP), 44 px taps on touch, rotation and the modal at 150% text.
 
-- Two overlays (ws/port-chrome): `createCssChrome({ parent, legacy, forms?, layout?, focusHome? })` in `./ui` (`CssChrome`, `CssChromeOptions`, `PHONE_FORMS`), a CSS-px overlay with layout regions beside the legacy scaled one. While `chrome.active` (form factor in `forms`), the legacy `panels` and `toasts` layers move into it; otherwise it is hidden and the legacy overlay is untouched. See ARCHITECTURE.md, "Two overlays".
-- `createGame({ overlay: { layout?, cssForms? } })` builds it, and `EngineCtx.chrome` is the `CssChrome` (null without the option). `data-touch` is mirrored on both roots and `chrome.resize()` runs on every resize.
 - `Surface.setFrame(rect | null)`: the canvas letterboxes inside a part of the container (CSS px), so a scene can frame the world into `layout.freeRect`; `null` restores the whole container. `clientToLogical` follows it.
 - Height fill (ws/chrome-polish-3): `FillWidthOptions.minVisibleWidth` and `focusX`. Where a frame is too narrow to show `minVisibleWidth` of the design at full height, the fit fills the frame's height and crops the sides about `focusX`, the same way `minVisible`/`focusY` crops top and bottom. `computeFillWidth` covers both; `surface.setFill` compares the new fields. Tests are in `platform/letterbox.test.ts`.
 - Engine e2e: "panel-stack spam leaves at most one panel" in `e2e/layout.spec.ts` (real taps on the harness ⚙, then 20 `stack.replace` opens in one tick).
 
+### Removed (ws/one-overlay, D-044)
+- The scaled overlay: `createOverlay({ legacyScale })`, `overlay.legacyScale`, `overlay.setRect()` and `overlay.onRect()` (use `setFrame` and `onResize`), and `OverlayOptions.designWidth/Height` as a layout size (they are now only the frame's design size).
+- The second overlay: `createCssChrome`, `CssChrome`, `CssChromeOptions`, `PHONE_FORMS` (`ui/css-chrome.ts`), `EngineCtx.chrome` and `CreateGameOptions.overlay`.
+- `caption.avoid()` and `CaptionOptions.minWidth`: the corner and width search moves to the game, through `caption.onPlace`.
+- `createLayout` from `./ui` (the overlay builds its own layout) and `PHONE_TAP_MIN` / `PHONE_TEXT_MIN` from `./platform` (the layout's `FormSpec` owns the density tokens).
+
 ### Changed
-- `platform/device-mode.ts` no longer writes the density tokens on a CSS-px overlay root, because the layout owns them there.
+- `createOverlay` builds one root over the whole parent in CSS px, with no transform. `hud` and `captions` sit on the frame (the canvas rect); each layer is its own stacking context (`isolation: isolate`), so a z-index in one never lifts it over a later layer; the base UI is sized in design px of the frame (`frame` units, desktop and tablet) or in CSS px (`css` units, phones) per the layout's form. In `frame` units the focus-ring token rounds up to whole px (`round(up, …, 1px)`): outlines snap down to whole pixels, and the old transform drew the scaled ring at its full width, so a ring under 2 px would have thinned. Native range/select controls on the frame's layers are zoomed by `--tc-zoom`; their focus ring is un-zoomed.
+- `platform/device-mode.ts` no longer writes the density tokens (`--tc-tap-min`, `--tc-text-min`); the layout owns them. It keeps `data-phone`, `data-touch`, `data-fill` and the crop and bar vars until ws/camera.
 - `WidgetHandle.remove()` returns the element to where it was before `layout.add()` (its old parent and position); an element added detached is removed, as before.
 
 ### Magnify (ws/port-altar)

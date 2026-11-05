@@ -8,8 +8,10 @@
  * and the DOM grid uses the same resolved track sizes, so the rects the layout reports are the
  * rects the browser draws.
  */
+
+import type { CaptionCard } from './caption';
 import { h } from './dom';
-import type { Overlay, Rect } from './overlay';
+import type { Rect } from './overlay';
 
 export type FormFactor = 'phone-landscape' | 'phone-portrait' | 'tablet' | 'desktop';
 export const FORM_FACTORS: readonly FormFactor[] = [
@@ -62,6 +64,12 @@ export const NO_INSETS: Readonly<Insets> = { top: 0, right: 0, bottom: 0, left: 
  */
 export type Track = number | 'fill' | { frac: number; min?: number; max?: number };
 
+/**
+ * How the base UI is sized in a form factor (see `Overlay.units`): `frame` = design px scaled
+ * with the canvas frame, `css` = CSS px.
+ */
+export type Units = 'frame' | 'css';
+
 export interface FormSpec {
   /** One entry per column of `areas`. */
   columns: Track[];
@@ -80,6 +88,11 @@ export interface FormSpec {
   pad: number;
   /** Margin between the safe area and the modal region, CSS px. */
   modalMargin: number;
+  /**
+   * The base UI's units in this form (`Overlay.units`): `frame` scales the theme, panels and
+   * toasts with the canvas frame; `css` keeps them at CSS px over the whole overlay.
+   */
+  units: Units;
 }
 
 export interface ClassifyInput {
@@ -143,6 +156,8 @@ export interface WidgetHandle {
 /** The pure result of laying out one form factor at one size. */
 export interface LayoutState {
   formFactor: FormFactor;
+  /** The form's `units`. */
+  units: Units;
   /** Overlay size, CSS px. */
   width: number;
   height: number;
@@ -211,6 +226,7 @@ export const defaultForms: Readonly<Record<FormFactor, FormSpec>> = {
     textMin: 0,
     pad: 12,
     modalMargin: 24,
+    units: 'frame',
   },
   tablet: {
     columns: [
@@ -225,6 +241,7 @@ export const defaultForms: Readonly<Record<FormFactor, FormSpec>> = {
     textMin: 0,
     pad: 12,
     modalMargin: 20,
+    units: 'frame',
   },
   'phone-landscape': {
     columns: [56, 'fill', { frac: 0.24, min: 140, max: 200 }, 56],
@@ -239,6 +256,7 @@ export const defaultForms: Readonly<Record<FormFactor, FormSpec>> = {
     textMin: 12,
     pad: 4,
     modalMargin: 8,
+    units: 'css',
   },
   'phone-portrait': {
     columns: [56, 'fill', 56],
@@ -254,6 +272,7 @@ export const defaultForms: Readonly<Record<FormFactor, FormSpec>> = {
     textMin: 12,
     pad: 4,
     modalMargin: 8,
+    units: 'css',
   },
 };
 
@@ -424,7 +443,17 @@ export function resolveLayout(
     width: innerW,
     height: innerH,
   };
-  return { formFactor, width, height, safeArea, columns, rows, regions, freeRect: { ...freeRect } };
+  return {
+    formFactor,
+    units: form.units,
+    width,
+    height,
+    safeArea,
+    columns,
+    rows,
+    regions,
+    freeRect: { ...freeRect },
+  };
 }
 
 /** Where `place` puts a widget in `ff`. Pure. */
@@ -453,7 +482,7 @@ export function readSafeArea(doc: Document = document): Insets {
 }
 
 export interface Layout {
-  /** `.tc-layout`, the grid (in the overlay's `hud` layer). */
+  /** `.tc-layout`, the grid (in the overlay's `layout` layer). */
   readonly element: HTMLElement;
   readonly formFactor: FormFactor;
   /** The latest resolved layout. */
@@ -470,8 +499,8 @@ export interface Layout {
   add(element: HTMLElement, opts: WidgetOptions): WidgetHandle;
   /**
    * Dock a caption card (`overlay.caption` by default) in a region, `captionLane` unless
-   * `place` says otherwise. Docked, it fills its region and ignores `avoid()`; `hidden` or
-   * `free` placements undock it to its legacy corner. Returns the handle.
+   * `place` says otherwise. Docked, it fills its region; `hidden` or `free` placements undock
+   * it to its corner on the frame. Returns the handle.
    */
   dockCaption(
     caption?: { element: HTMLElement; dock(host: HTMLElement | null): void },
@@ -486,7 +515,7 @@ export interface Layout {
    * Re-lays out now.
    */
   setForms(forms: LayoutSpec['forms'] | null): void;
-  /** Recompute now (the layout already follows `overlay.setRect`). */
+  /** Recompute now (the layout already follows `overlay.setFrame`). */
   refresh(): void;
   /** Called after every re-layout with the new state. Returns unsubscribe. */
   onChange(fn: (state: LayoutState) => void): () => void;
@@ -507,18 +536,24 @@ interface Entry {
 
 const HIDDEN_ATTR = 'data-tc-layout-hidden';
 
+/** What the layout needs from its overlay (`createOverlay` builds the one layout). */
+export interface LayoutHost {
+  readonly root: HTMLElement;
+  readonly layers: { readonly layout: HTMLElement };
+  readonly caption: Pick<CaptionCard, 'element' | 'dock'>;
+  /** The overlay's box, CSS px. */
+  readonly rect: Readonly<Rect>;
+  onResize(fn: () => void): () => void;
+}
+
 /**
- * Lays out regions on a CSS-px overlay (`createOverlay({ legacyScale: false })`). Throws on a
- * legacy scaled overlay: its units are design px and its scenes keep their own CSS.
+ * Lays out regions over the overlay (`createOverlay` calls it; read it as `overlay.layout`).
  *
- * The density tokens `--tc-tap-min` and `--tc-text-min` (from the form spec) and
- * `data-form-factor` go on the overlay root, so the base widgets in the panels layer follow them
- * too.
+ * The density tokens `--tc-tap-min` and `--tc-text-min` (from the form spec), `data-form-factor`
+ * and the form's `units` go on the overlay root, so the base widgets in the panels layer follow
+ * them too.
  */
-export function createLayout(overlay: Overlay, spec: LayoutSpec = {}): Layout {
-  if (overlay.legacyScale) {
-    throw new Error('createLayout needs a CSS-px overlay: createOverlay({ legacyScale: false })');
-  }
+export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout {
   const root = overlay.root;
   const doc = root.ownerDocument;
   const win = doc.defaultView;
@@ -543,7 +578,7 @@ export function createLayout(overlay: Overlay, spec: LayoutSpec = {}): Layout {
     { class: 'tc-layout' },
     ...REGIONS.filter((n) => n !== 'modal').map((n) => regionEls[n]),
   );
-  overlay.layers.hud.append(element, regionEls.modal, free);
+  overlay.layers.layout.append(element, regionEls.modal, free);
 
   const entries: Entry[] = [];
   const subs = new Set<(s: LayoutState) => void>();
@@ -679,7 +714,7 @@ export function createLayout(overlay: Overlay, spec: LayoutSpec = {}): Layout {
     for (const f of subs) f(state);
   };
 
-  const unwatch = overlay.onRect(() => apply());
+  const unwatch = overlay.onResize(() => apply());
 
   const layout: Layout = {
     element,

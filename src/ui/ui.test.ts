@@ -37,7 +37,7 @@ describe('overlay', () => {
 
   it('mounts layers, injects styles once, applies theme vars', () => {
     expect(parent.querySelector('.tc-overlay')).toBe(ov.root);
-    expect(Object.keys(ov.layers)).toEqual(['hud', 'captions', 'panels', 'toasts']);
+    expect(Object.keys(ov.layers)).toEqual(['hud', 'captions', 'layout', 'panels', 'toasts']);
     createOverlay({ parent }).destroy();
     expect(document.querySelectorAll('#tc-ui-base').length).toBe(1);
     expect(ov.root.style.getPropertyValue('--tc-color-accent')).toBeTruthy();
@@ -52,14 +52,28 @@ describe('overlay', () => {
     expect(ov.caption.currentText).toBe('Over the hall');
   });
 
-  it('scales and centres into the letterbox rect; maps client coords', () => {
-    ov.setRect({ x: 10, y: 20, width: 960, height: 540 });
+  it('puts the frame in CSS custom properties, never a transform; maps client coords', () => {
+    const v = (k: string) => ov.root.style.getPropertyValue(k);
+    ov.setFrame({ x: 10, y: 20, width: 960, height: 540 });
     expect(ov.scale).toBe(0.5);
-    expect(ov.root.style.transform).toBe('translate(10px, 20px) scale(0.5)');
+    expect(ov.root.style.transform).toBe('');
+    expect([v('--tc-frame-x'), v('--tc-frame-y'), v('--tc-frame-w'), v('--tc-frame-h')]).toEqual([
+      '10px',
+      '20px',
+      '960px',
+      '540px',
+    ]);
+    expect(v('--tc-dpx')).toBe('0.5px');
+    expect(v('--tc-zoom')).toBe('0.5');
+    expect(ov.frame).toEqual({ x: 10, y: 20, width: 960, height: 540 });
     expect(ov.clientToDesign(10 + 480, 20 + 270)).toEqual({ x: 960, y: 540 });
     expect(ov.clientToDesign(0, 0)).toBeNull();
-    ov.setRect({ x: 0, y: 0, width: 1000, height: 540 }); // wider than 16:9
-    expect(ov.root.style.transform).toBe('translate(20px, 0px) scale(0.5)');
+  });
+
+  it('desktop is in frame units: the theme is design px times --tc-dpx', () => {
+    expect(ov.units).toBe('frame');
+    expect(ov.root.dataset.units).toBe('frame');
+    expect(ov.root.style.getPropertyValue('--tc-space-3')).toBe('calc(16 * var(--tc-unit, 1px))');
   });
 
   it('modal panels: focus first control, trap Tab, Esc closes and restores focus', () => {
@@ -331,36 +345,27 @@ describe('caption card', () => {
     expect(card.element.querySelector<HTMLElement>('.tc-caption-side')!.hidden).toBe(true);
   });
 
-  it('avoid() narrows, then switches corners, to keep off a region', () => {
+  it('onPlace runs when a line is laid out in its corner, after the corner is reset', () => {
     const host = h('div');
-    const card = new CaptionCard(host, { reducedMotion: true, minWidth: 300 });
-    const el = card.element;
-    // Fake layout in a 1920x1080 container: the card is as wide as max-width allows (720).
-    const width = () => Math.min(720, Number.parseFloat(el.style.maxWidth) || 720);
-    const right = () => el.dataset.corner!.endsWith('right');
-    const top = () => el.dataset.corner!.startsWith('top');
-    Object.defineProperties(el, {
-      offsetWidth: { get: width },
-      offsetHeight: { get: () => 100 },
-      offsetLeft: { get: () => (right() ? 1920 - 24 - width() : 24) },
-      offsetTop: { get: () => (top() ? 24 : 1080 - 24 - 100) },
+    const card = new CaptionCard(host, { reducedMotion: true });
+    const seen: string[] = [];
+    card.onPlace((el) => {
+      seen.push(el.dataset.corner!);
+      el.dataset.corner = 'top-left';
+      el.style.maxWidth = '300px';
     });
-    card.say('Line', { hold: 0 });
-    expect(el.dataset.corner).toBe('bottom-right');
-    // Something at the left of the card's spot: narrowing clears it.
-    card.avoid({ x: 1150, y: 900, width: 100, height: 100 });
-    expect(el.dataset.corner).toBe('bottom-right');
-    expect(width()).toBeLessThan(720 - 70);
-    // The whole bottom-right: the card moves across.
-    card.avoid([{ x: 1100, y: 800, width: 820, height: 280 }]);
-    expect(el.dataset.corner).toBe('bottom-left');
-    expect(el.style.maxWidth).toBe('720px');
-    // The whole bottom edge: it goes up.
-    card.avoid({ x: 0, y: 800, width: 1920, height: 280 });
-    expect(el.dataset.corner).toBe('top-right');
-    card.avoid(null);
-    expect(el.dataset.corner).toBe('bottom-right');
-    expect(el.style.maxWidth).toBe('');
+    card.say('One', { hold: 0 });
+    expect(seen).toEqual(['bottom-right']);
+    expect(card.element.dataset.corner).toBe('top-left');
+    card.advance();
+    card.say('Two', { hold: 0, corner: 'bottom-left' });
+    expect(seen).toEqual(['bottom-right', 'bottom-left']);
+    card.dock(h('div'));
+    card.relayout();
+    expect(seen.length).toBe(2);
+    card.dock(null);
+    expect(seen.length).toBe(3);
+    card.destroy();
   });
 
   it('reduced motion shows the line at once', () => {

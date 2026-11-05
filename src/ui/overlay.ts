@@ -1,8 +1,16 @@
 import { CaptionCard, type CaptionOptions } from './caption';
 import { h } from './dom';
+import { createLayout, type Layout, type LayoutSpec, type Units } from './layout';
 import { PanelStack } from './stack';
 import { ensureStyles } from './styles';
-import { applyTheme, cssPxTheme, defaultTheme, type ThemeOverrides } from './theme';
+import {
+  CSS_FONT_PX,
+  DESIGN_FONT_PX,
+  TEXT_SCALE_VAR,
+  textScaleTokens,
+  toFrameUnits,
+} from './text-scale';
+import { cssPxTheme, defaultTheme, type ThemeOverrides, tokenVar } from './theme';
 import { Toaster } from './toast';
 
 /** A rectangle in CSS pixels relative to the overlay's parent (what platform's letterbox gives). */
@@ -16,18 +24,15 @@ export interface Rect {
 export interface OverlayOptions {
   /** Element to mount into. It should be `position: relative` (or fixed/absolute) and contain the canvas. */
   parent: HTMLElement;
-  /**
-   * `true` (the default until the Phase 2 scene ports land): the UI is laid out at
-   * `designWidth`×`designHeight` and one CSS `scale()` shrinks it into the rect, so sizes are
-   * design px. `false`: CSS-px mode. The root is the rect itself in CSS px, nothing is scaled,
-   * the theme's sizes are CSS px (`cssPxTheme`), `data-units="css"` is set on the root, and
-   * `createLayout` can place regions in it.
-   */
-  legacyScale?: boolean;
-  /** Logical size the UI is laid out at with `legacyScale`. Default 1920×1080. Ignored in CSS-px mode. */
+  /** The frame's logical size (the canvas's design size). Default 1920×1080. */
   designWidth?: number;
   designHeight?: number;
-  /** Token overrides on top of `defaultTheme`. */
+  /** Region tracks per form factor and the form-factor rule (see `Layout`). */
+  layout?: LayoutSpec;
+  /**
+   * Token overrides on top of `defaultTheme`. Sizes are design px: in `frame` units they scale
+   * with the frame, in `css` units they are taken as CSS px.
+   */
   theme?: ThemeOverrides;
   caption?: CaptionOptions;
   /** Max simultaneous toasts. Default 3. */
@@ -40,51 +45,68 @@ export interface OverlayOptions {
 }
 
 export interface Overlay {
-  /**
-   * `.tc-overlay`. With `legacyScale`, sized designWidth×designHeight and scaled into the rect;
-   * in CSS-px mode, the rect itself.
-   */
+  /** `.tc-overlay`: the whole parent, in CSS px. */
   readonly root: HTMLElement;
-  /** Layers, bottom to top. Put game HUD in `hud`. Panels sit above captions. */
+  /**
+   * Layers, bottom to top, all in CSS px.
+   * - `hud` and `captions` cover the **frame** (the canvas rect; see `frame`) and clip to it:
+   *   world-anchored DOM goes in `hud`, at design coordinates times `--tc-dpx`.
+   * - `layout` covers the whole overlay: the layout's regions (`layout`).
+   * - `panels` and `toasts` cover the frame in `frame` units and the whole overlay in `css`
+   *   units (see `units`).
+   */
   readonly layers: {
     hud: HTMLElement;
     captions: HTMLElement;
+    layout: HTMLElement;
     panels: HTMLElement;
     toasts: HTMLElement;
   };
   readonly stack: PanelStack;
   readonly toasts: Toaster;
   readonly caption: CaptionCard;
-  /** True for the scaled design-px overlay, false in CSS-px mode. */
-  readonly legacyScale: boolean;
-  /** Current scale (CSS px per design px); always 1 in CSS-px mode. */
+  /** Regions per form factor over the whole overlay; it also picks `units`. */
+  readonly layout: Layout;
+  /**
+   * How the base UI (theme, panels, toasts, captions) is sized in the current form factor (the
+   * layout's `FormSpec.units`, also `data-units` on the root):
+   * - `frame`: design px scaled with the frame (`--tc-dpx` CSS px each), so the UI keeps its
+   *   proportions to the canvas, as a fixed 16:9 game does on desktops and tablets;
+   * - `css`: CSS px (`cssPxTheme`), so text and targets keep a readable size on a small screen.
+   */
+  readonly units: Units;
+  /** CSS px per design px of the frame (`--tc-dpx`). */
   readonly scale: number;
+  /** The overlay's own box, CSS px (the parent's size; x and y are 0). */
   readonly rect: Readonly<Rect>;
-  /** Position over the letterboxed canvas. Call on every resize. */
-  setRect(rect: Rect): void;
-  /** Called after every `setRect` (the layout follows it). Returns unsubscribe. */
-  onRect(fn: (rect: Readonly<Rect>) => void): () => void;
-  /** Apply token overrides. */
+  /** The frame: the canvas rect in overlay CSS px (`--tc-frame-x/y/w/h`). */
+  readonly frame: Readonly<Rect>;
+  /** Place the frame over the canvas and re-measure the parent. Call on every resize. */
+  setFrame(frame: Rect): void;
+  /** Called after every `setFrame` (the layout follows it). Returns unsubscribe. */
+  onResize(fn: (frame: Readonly<Rect>) => void): () => void;
+  /** Apply token overrides (sizes in design px, as `OverlayOptions.theme`). */
   setTheme(theme: ThemeOverrides): void;
   /**
-   * Client (CSS px, viewport) → overlay coordinates (design px, or CSS px relative to the rect in
-   * CSS-px mode), or null outside. Uses the parent's bounding box.
+   * Client (CSS px, viewport) → frame coordinates (design px), or null outside the frame. Uses
+   * the parent's bounding box.
    */
   clientToDesign(clientX: number, clientY: number): { x: number; y: number } | null;
   destroy(): void;
 }
 
 /**
- * The DOM overlay. With `legacyScale` (the default), layout happens at the design resolution and
- * a single CSS transform scales it into the letterboxed rect, so UI sizes are in design pixels
- * and scale with the canvas. With `legacyScale: false` it is laid out in CSS px over the rect.
- * The root is `pointer-events: none`; only interactive children take the pointer, so clicks on
- * empty space fall through to the canvas.
+ * The DOM overlay: one root over the whole parent, laid out in CSS px on every form factor. The
+ * frame (the canvas rect) is exposed as CSS custom properties on the root, `--tc-frame-x/y/w/h`
+ * and `--tc-dpx` (one design px in CSS px), and the `hud` and `captions` layers sit on it, so
+ * DOM anchored to the world is placed at `logicalToClient` of its design coordinates. The
+ * layout's regions (`overlay.layout`) cover the whole overlay. The root is
+ * `pointer-events: none`; only interactive children take the pointer, so clicks on empty space
+ * fall through to the canvas.
  */
 export function createOverlay(opts: OverlayOptions): Overlay {
   const doc = opts.parent.ownerDocument;
   ensureStyles(doc);
-  const legacy = opts.legacyScale !== false;
   const dw = opts.designWidth ?? 1920;
   const dh = opts.designHeight ?? 1080;
 
@@ -92,26 +114,23 @@ export function createOverlay(opts: OverlayOptions): Overlay {
   const layers = {
     hud: layer('hud'),
     captions: layer('captions'),
+    layout: layer('layout'),
     panels: layer('panels'),
     toasts: layer('toasts'),
   };
   const root = h(
     'div',
-    {
-      class: 'tc-overlay',
-      style: legacy ? { width: `${dw}px`, height: `${dh}px` } : {},
-      dataset: legacy ? {} : { units: 'css' },
-    },
+    { class: 'tc-overlay' },
     layers.hud,
     layers.captions,
+    layers.layout,
     layers.panels,
     layers.toasts,
   );
-  applyTheme(root, { ...defaultTheme, ...(legacy ? {} : cssPxTheme), ...opts.theme });
   opts.parent.append(root);
 
-  // Captions and HUD go inert under a modal; toasts stay readable.
-  const stack = new PanelStack(layers.panels, [layers.hud, layers.captions], {
+  // Captions, HUD and regions go inert under a modal; toasts stay readable.
+  const stack = new PanelStack(layers.panels, [layers.hud, layers.captions, layers.layout], {
     home: opts.focusHome,
   });
   const toasts = new Toaster(layers.toasts, opts.maxToasts ?? 3);
@@ -120,16 +139,73 @@ export function createOverlay(opts: OverlayOptions): Overlay {
   // dialog; it picks up again when the last modal closes.
   const unwatch = stack.onChange((s) => caption.suspend(s.hasModal));
 
-  let rect: Rect = legacy
-    ? { x: 0, y: 0, width: dw, height: dh }
-    : { x: 0, y: 0, width: opts.parent.clientWidth, height: opts.parent.clientHeight };
+  const measure = (): Rect => ({
+    x: 0,
+    y: 0,
+    width: opts.parent.clientWidth,
+    height: opts.parent.clientHeight,
+  });
+  let rect = measure();
+  let frame: Rect = { ...rect };
   let scale = 1;
-  const rectSubs = new Set<(r: Readonly<Rect>) => void>();
-  // Where the scaled design canvas starts inside the parent (legacy only).
-  const origin = () =>
-    legacy
-      ? { x: rect.x + (rect.width - dw * scale) / 2, y: rect.y + (rect.height - dh * scale) / 2 }
-      : { x: rect.x, y: rect.y };
+  let units: Units = 'frame';
+  const subs = new Set<(r: Readonly<Rect>) => void>();
+
+  // Theme: the defaults, the game's overrides (design px), then the text-scale tokens, written
+  // in the current units.
+  const overrides: Record<string, string> = { ...opts.theme };
+  const writeTheme = (tokens: Record<string, string>) => {
+    for (const [k, v] of Object.entries(tokens)) {
+      let css = units === 'frame' ? toFrameUnits(v) : v;
+      // Outlines snap down to whole pixels; a scaled ring (the old transform) was drawn
+      // antialiased at its full width. Round up so the focus ring never thins.
+      if (units === 'frame' && k === 'focusRing') css = `round(up, ${css}, 1px)`;
+      root.style.setProperty(tokenVar(k), css);
+    }
+  };
+  const applyUnits = (u: Units) => {
+    units = u;
+    root.dataset.units = u;
+    writeTheme({ ...defaultTheme, ...(u === 'css' ? cssPxTheme : {}), ...overrides });
+    // A text scale already applied (`applyTextScale`) is re-derived for the new units.
+    const ts = Number.parseFloat(root.style.getPropertyValue(TEXT_SCALE_VAR));
+    if (ts > 0) writeTheme(textScaleTokens(ts, u === 'css' ? CSS_FONT_PX : DESIGN_FONT_PX));
+  };
+
+  const place = (f: Rect) => {
+    frame = { ...f };
+    rect = measure();
+    scale = Math.min(f.width / dw, f.height / dh) || 1;
+    const s = root.style;
+    s.setProperty('--tc-frame-x', `${f.x}px`);
+    s.setProperty('--tc-frame-y', `${f.y}px`);
+    s.setProperty('--tc-frame-w', `${f.width}px`);
+    s.setProperty('--tc-frame-h', `${f.height}px`);
+    s.setProperty('--tc-dpx', `${scale}px`);
+    // The same scale as a number, for `zoom` on native controls (ui/styles.ts).
+    s.setProperty('--tc-zoom', String(scale));
+  };
+  place(frame);
+  applyUnits('frame');
+  const layout = createLayout(
+    {
+      root,
+      layers,
+      caption,
+      get rect() {
+        return rect;
+      },
+      onResize: (fn) => {
+        subs.add(fn);
+        return () => subs.delete(fn);
+      },
+    },
+    opts.layout,
+  );
+  applyUnits(layout.state.units);
+  const offLayout = layout.onChange((st) => {
+    if (st.units !== units) applyUnits(st.units);
+  });
 
   const overlay: Overlay = {
     root,
@@ -137,53 +213,47 @@ export function createOverlay(opts: OverlayOptions): Overlay {
     stack,
     toasts,
     caption,
-    legacyScale: legacy,
+    layout,
+    get units() {
+      return units;
+    },
     get scale() {
       return scale;
     },
     get rect() {
       return rect;
     },
-    setRect(r) {
-      rect = { ...r };
-      if (legacy) {
-        scale = Math.min(r.width / dw, r.height / dh) || 1;
-        // Centre inside the rect if its aspect differs from the design's.
-        const o = origin();
-        root.style.transform = `translate(${o.x}px, ${o.y}px) scale(${scale})`;
-      } else {
-        scale = 1;
-        root.style.width = `${r.width}px`;
-        root.style.height = `${r.height}px`;
-        root.style.transform = `translate(${r.x}px, ${r.y}px)`;
-      }
-      for (const f of rectSubs) f(rect);
+    get frame() {
+      return frame;
     },
-    onRect(fn) {
-      rectSubs.add(fn);
-      return () => rectSubs.delete(fn);
+    setFrame(f) {
+      place(f);
+      for (const fn of subs) fn(frame);
+    },
+    onResize(fn) {
+      subs.add(fn);
+      return () => subs.delete(fn);
     },
     setTheme(theme) {
-      applyTheme(root, theme);
+      Object.assign(overrides, theme);
+      writeTheme(theme);
     },
     clientToDesign(cx, cy) {
       const pb = opts.parent.getBoundingClientRect();
-      const o = origin();
-      const x = (cx - pb.left - o.x) / scale;
-      const y = (cy - pb.top - o.y) / scale;
-      const w = legacy ? dw : rect.width;
-      const hh = legacy ? dh : rect.height;
-      return x >= 0 && y >= 0 && x <= w && y <= hh ? { x, y } : null;
+      const x = (cx - pb.left - frame.x) / scale;
+      const y = (cy - pb.top - frame.y) / scale;
+      return x >= 0 && y >= 0 && x <= dw && y <= dh ? { x, y } : null;
     },
     destroy() {
       unwatch();
-      rectSubs.clear();
+      offLayout();
+      layout.destroy();
+      subs.clear();
       stack.destroy();
       caption.destroy();
       toasts.clear();
       root.remove();
     },
   };
-  overlay.setRect(rect);
   return overlay;
 }

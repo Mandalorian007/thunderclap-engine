@@ -79,7 +79,7 @@ export interface Analytics<E extends EventMap = EventMap> {
 
 /** The part of `EngineCtx` `attach` reads. */
 export type AttachTarget = Pick<EngineCtx, 'hooks' | 'host'> &
-  Partial<Pick<EngineCtx, 'chrome' | 'surface'>>;
+  Partial<Pick<EngineCtx, 'ui' | 'surface'>>;
 
 function randomId(): string {
   const c = (globalThis as { crypto?: Crypto }).crypto;
@@ -145,7 +145,7 @@ export function createAnalytics<E extends EventMap = EventMap>(
     const width = win?.innerWidth ?? 0;
     const height = win?.innerHeight ?? 0;
     const formFactor =
-      ctx.chrome?.layout.formFactor ??
+      ctx.ui?.layout.formFactor ??
       classifyFormFactor({
         width,
         height,

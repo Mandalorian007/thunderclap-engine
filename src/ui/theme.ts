@@ -1,7 +1,7 @@
 /**
  * Theme tokens, exposed as CSS custom properties on the overlay root: `colorAccent` becomes
- * `--tc-color-accent`. Sizes are in **design pixels** (the overlay is laid out at the logical
- * resolution, 1920×1080 by default, and scaled to fit), so 30px reads as ~15px in a 960×540 embed.
+ * `--tc-color-accent`. Sizes are in **design pixels** of the frame (1920×1080 by default): in
+ * `frame` units each is `--tc-dpx` CSS px, so 30px reads as ~15px in a 960×540 embed.
  *
  * Fonts are system stacks only: nothing is fetched at runtime. A game may add a self-hosted
  * font with `@font-face` (committed with its licence) and put it first in a stack.
@@ -55,7 +55,7 @@ export const defaultTheme = {
 
 export type ThemeTokens = { [K in keyof typeof defaultTheme]: string };
 /**
- * Size tokens for a CSS-px overlay (`createOverlay({ legacyScale: false })`), applied over
+ * Size tokens for the overlay's `css` units (phones; `FormSpec.units`), applied over
  * `defaultTheme`: the same scale at screen size (about half the design-px values), so 16 px body
  * text reads as 16 px on every screen. Colours, fonts and timings are shared.
  */
