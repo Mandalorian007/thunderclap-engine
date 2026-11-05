@@ -1,8 +1,11 @@
 # Changelog: @thunderclap/engine
 
-Versions follow semver from `engine-v1.0.0` (Phase 5). Releases are cut with `pnpm engine:release <version>` from the repo root, which bumps the version, dates the top `(unreleased)` section and commits. A tag `engine-v<version>` is created only with `--tag` (D-041 addendum 3). Nothing else in the repo makes tags.
+Versions follow semver from `engine-v1.0.0`. Entries before this repo existed were written while the engine lived in [The Last Rune](https://github.com/Mandalorian007/last-rune) (`packages/engine`); their decision numbers (`D-0xx`) and paths refer to that repo.
 
 ## Next (unreleased)
+
+### Repository
+- The engine has its own repo, `Mandalorian007/thunderclap-engine`, with the `packages/engine` history from The Last Rune. It adds a standalone pnpm setup, CI (`pnpm check`), a README and a runnable example (`examples/hello`, `pnpm example`). The Last Rune keeps its in-repo copy for now.
 
 ### Added
 - `HostWindow.setTitle?(title)`: optional, for hosts with a window of their own. The Electron host (`@thunderclap/host-electron`, ws/host-electron) implements it.

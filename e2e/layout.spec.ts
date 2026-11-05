@@ -246,7 +246,7 @@ test('regions per form factor: in place, inside the safe area, no overlap, 44 px
     FORM[project.name]!,
   );
   if (process.env.LAYOUT_SHOTS) {
-    await page.screenshot({ path: `../../docs/design/screens/local/layout-${project.name}.png` });
+    await page.screenshot({ path: `screens/layout-${project.name}.png` });
   }
 });
 
@@ -269,7 +269,7 @@ test('turning a phone upright moves the widgets and back again', async ({ page }
   await checkLayout(page, ins?.port ?? NONE, true, 'phone-portrait');
   if (process.env.LAYOUT_SHOTS) {
     await page.screenshot({
-      path: `../../docs/design/screens/local/layout-${project}-upright.png`,
+      path: `screens/layout-${project}-upright.png`,
     });
   }
 

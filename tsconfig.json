@@ -14,5 +14,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src", "harness", "vitest.config.ts"]
+  "include": ["src", "harness", "examples", "vitest.config.ts"]
 }

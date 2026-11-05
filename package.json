@@ -5,6 +5,19 @@
   "type": "module",
   "description": "ThunderClap: a WebGPU game engine for the browser. It knows nothing about any game.",
   "license": "MIT",
+  "author": "ThunderClap Gaming",
+  "homepage": "https://github.com/Mandalorian007/thunderclap-engine#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Mandalorian007/thunderclap-engine.git"
+  },
+  "keywords": [
+    "webgpu",
+    "game-engine",
+    "typescript",
+    "browser",
+    "2d"
+  ],
   "exports": {
     ".": "./src/index.ts",
     "./audio": "./src/audio/index.ts",
@@ -27,7 +40,8 @@
     "test:watch": "vitest",
     "check": "pnpm typecheck && pnpm lint && pnpm test",
     "test:e2e": "playwright test",
-    "harness": "vite --config vite.harness.config.ts --host 127.0.0.1"
+    "harness": "vite --config vite.harness.config.ts --host 127.0.0.1",
+    "example": "vite examples/hello --host 127.0.0.1"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.4",
@@ -38,5 +52,9 @@
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
     "vitest": "^5.0.5"
+  },
+  "packageManager": "pnpm@10.27.0",
+  "engines": {
+    "node": ">=22"
   }
 }

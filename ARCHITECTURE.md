@@ -1,11 +1,11 @@
 # ThunderClap engine: architecture and contracts
 
-`@thunderclap/engine` is the WebGPU engine The Last Rune is built on. It knows nothing about any game. This file is the target the PM reviews promotions and public API changes against (D-041, [refactor plan](../../docs/engine/refactor-plan.md)). Each contract says what exists **today** (0.2.0-dev) and what is **planned**, with the phase that delivers it.
+`@thunderclap/engine` is the WebGPU engine The Last Rune is built on. It knows nothing about any game. This file is the target the PM reviews promotions and public API changes against (D-041, [refactor plan](https://github.com/Mandalorian007/last-rune/blob/main/docs/engine/refactor-plan.md)). Decision numbers (D-0xx) and `docs/` paths in this repo refer to [The Last Rune](https://github.com/Mandalorian007/last-rune), where the engine was built. Each contract says what exists **today** (0.2.0-dev) and what is **planned**, with the phase that delivers it.
 
 ## Package shape
 
 ```
-packages/engine/
+thunderclap-engine/
   package.json        # @thunderclap/engine; the "exports" map is the public API
   src/
     index.ts          # the "." entry: createGame and its types
