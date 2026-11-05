@@ -67,8 +67,19 @@ export interface PlayOptions {
   rate?: number;
   /** Cents. */
   detune?: number;
-  /** -1..1. */
+  /**
+   * 2D stereo position, -1 (left) .. 1 (right), through a `StereoPannerNode`. The shorthand
+   * for a flat game (a sound from the left of the board). Ignored when `at` is set.
+   */
   pan?: number;
+  /**
+   * World position `[x, y, z]` of the emitter. Routes the voice through a pooled `PannerNode`
+   * (distance and direction relative to `audio.listener`); move it with `Voice.setPosition`.
+   * Read once at play time (the array is not kept). Takes precedence over `pan`.
+   */
+  at?: ArrayLike<number>;
+  /** How a voice with `at` attenuates and pans. Ignored without `at`. */
+  spatial?: SpatialOptions;
   /** Seconds from now. */
   delay?: number;
   /** Seconds to fade in. Default 0 for one-shots, 0.5 for loops. */
@@ -81,7 +92,158 @@ export interface Voice {
   stop(fade?: number): void;
   setGain(gain: number, ramp?: number): void;
   setRate(rate: number, ramp?: number): void;
+  /**
+   * Move a spatial voice (one played with `at`) to world `(x, y, z)`. Writes the voice's own
+   * `PannerNode` in place, so it is safe to call every frame. No-op on a non-spatial voice;
+   * on a voice still waiting to start, the position is kept and applied at start.
+   */
+  setPosition(x: number, y: number, z: number): void;
+  /** Point a spatial voice's cone (`spatial.cone`) along `(x, y, z)`. Same rules as `setPosition`. */
+  setDirection(x: number, y: number, z: number): void;
   readonly playing: boolean;
+}
+
+/** Distance model of a spatial voice (`PannerNode.distanceModel`). */
+export type Rolloff = 'linear' | 'inverse' | 'exponential';
+
+/** Directional emitter: full gain inside `inner`, `outerGain` beyond `outer` (degrees, whole angle). */
+export interface ConeOptions {
+  /** Degrees. Default 360. */
+  inner?: number;
+  /** Degrees. Default 360. */
+  outer?: number;
+  /** Linear gain outside the outer cone. Default 0. */
+  outerGain?: number;
+}
+
+/** Attenuation and panning of a voice played with `PlayOptions.at`. */
+export interface SpatialOptions {
+  /** Distance (world units) at which attenuation starts. Default 1. */
+  refDistance?: number;
+  /** Distance beyond which the voice gets no quieter. Default 10000. */
+  maxDistance?: number;
+  /** Distance model. Default `'inverse'`. */
+  rolloff?: Rolloff;
+  /** How fast the model attenuates. Default 1 (WebAudio clamps it to 0..1 for `linear`). */
+  rolloffFactor?: number;
+  /** `'equalpower'` (default, cheap) or `'HRTF'` (binaural, for headphones and headsets). */
+  panningModel?: PanningModelType;
+  /** Directional emitter. Omit for an omnidirectional one. */
+  cone?: ConeOptions;
+  /** Cone direction `[x, y, z]`. Default `[1, 0, 0]` (the WebAudio default). */
+  direction?: ArrayLike<number>;
+}
+
+/** Anything with a world→view matrix and an eye position, such as the renderer's `Camera`. */
+export interface CameraLike {
+  /** Column-major world→view matrix (16 numbers). */
+  readonly view: ArrayLike<number>;
+  /** Eye position in world space. */
+  readonly position: ArrayLike<number>;
+}
+
+/**
+ * Where the ears are: one per `AudioEngine` (`audio.listener`), written to the context's
+ * `AudioListener`. Safe before unlock: the pose is kept and applied when the context exists.
+ * Every method writes in place and allocates nothing, so call `fromCamera` every frame.
+ */
+export class SpatialListener {
+  /** px, py, pz, fx, fy, fz, ux, uy, uz. */
+  private readonly pose = new Float64Array([0, 0, 0, 0, 0, -1, 0, 1, 0]);
+  /** Current pose, read-only (change it with `set` or `fromCamera`). */
+  readonly position: ArrayLike<number> = this.pose.subarray(0, 3);
+  readonly forward: ArrayLike<number> = this.pose.subarray(3, 6);
+  readonly up: ArrayLike<number> = this.pose.subarray(6, 9);
+
+  /** Built by `AudioEngine`; reach it as `audio.listener`. */
+  constructor(private readonly engine: AudioEngine) {}
+
+  /** Place the listener at `position`, facing `forward`, with `up` (default `[0, 1, 0]`). */
+  set(position: ArrayLike<number>, forward: ArrayLike<number>, up?: ArrayLike<number>): void {
+    const p = this.pose;
+    p[0] = position[0] ?? 0;
+    p[1] = position[1] ?? 0;
+    p[2] = position[2] ?? 0;
+    p[3] = forward[0] ?? 0;
+    p[4] = forward[1] ?? 0;
+    p[5] = forward[2] ?? -1;
+    p[6] = up ? (up[0] ?? 0) : 0;
+    p[7] = up ? (up[1] ?? 1) : 1;
+    p[8] = up ? (up[2] ?? 0) : 0;
+    this.apply();
+  }
+
+  /**
+   * Follow a camera: position from `camera.position`, forward and up from the view matrix
+   * (forward is minus its third row, up its second; the view looks down -z).
+   */
+  fromCamera(camera: CameraLike): void {
+    const v = camera.view;
+    const pos = camera.position;
+    const p = this.pose;
+    p[0] = pos[0]!;
+    p[1] = pos[1]!;
+    p[2] = pos[2]!;
+    p[3] = -v[2]!;
+    p[4] = -v[6]!;
+    p[5] = -v[10]!;
+    p[6] = v[1]!;
+    p[7] = v[5]!;
+    p[8] = v[9]!;
+    this.apply();
+  }
+
+  /** Write the pose to the context's listener (on every change, and when the context is built). */
+  apply(): void {
+    const l = this.engine.context?.listener;
+    if (!l) return;
+    const p = this.pose;
+    if (l.positionX) {
+      l.positionX.value = p[0]!;
+      l.positionY.value = p[1]!;
+      l.positionZ.value = p[2]!;
+      l.forwardX.value = p[3]!;
+      l.forwardY.value = p[4]!;
+      l.forwardZ.value = p[5]!;
+      l.upX.value = p[6]!;
+      l.upY.value = p[7]!;
+      l.upZ.value = p[8]!;
+    } else {
+      // Older Safari: the deprecated setters.
+      const legacy = l as unknown as LegacyListener;
+      legacy.setPosition?.(p[0]!, p[1]!, p[2]!);
+      legacy.setOrientation?.(p[3]!, p[4]!, p[5]!, p[6]!, p[7]!, p[8]!);
+    }
+  }
+}
+
+interface LegacyListener {
+  setPosition?(x: number, y: number, z: number): void;
+  setOrientation?(fx: number, fy: number, fz: number, ux: number, uy: number, uz: number): void;
+}
+interface LegacyPanner {
+  setPosition?(x: number, y: number, z: number): void;
+  setOrientation?(x: number, y: number, z: number): void;
+}
+
+function writePannerPosition(p: PannerNode, x: number, y: number, z: number): void {
+  if (p.positionX) {
+    p.positionX.value = x;
+    p.positionY.value = y;
+    p.positionZ.value = z;
+  } else {
+    (p as unknown as LegacyPanner).setPosition?.(x, y, z);
+  }
+}
+
+function writePannerDirection(p: PannerNode, x: number, y: number, z: number): void {
+  if (p.orientationX) {
+    p.orientationX.value = x;
+    p.orientationY.value = y;
+    p.orientationZ.value = z;
+  } else {
+    (p as unknown as LegacyPanner).setOrientation?.(x, y, z);
+  }
 }
 
 type SoundSource = SoundSpec | (() => Promise<AudioBuffer>);
@@ -99,6 +261,8 @@ const NULL_VOICE: Voice = {
   stop() {},
   setGain() {},
   setRate() {},
+  setPosition() {},
+  setDirection() {},
   playing: false,
 };
 
@@ -130,6 +294,15 @@ class VoiceImpl implements Voice {
   private targetGain: number;
   private rate: number;
   private ended = false;
+  private panner: PannerNode | null = null;
+  /** Emitter position and cone direction (kept for a voice that has not started yet). */
+  private readonly spatial: boolean;
+  private px = 0;
+  private py = 0;
+  private pz = 0;
+  private dx = 1;
+  private dy = 0;
+  private dz = 0;
 
   constructor(
     private readonly engine: AudioEngine,
@@ -139,6 +312,19 @@ class VoiceImpl implements Voice {
   ) {
     this.targetGain = opts.gain ?? 1;
     this.rate = opts.rate ?? 1;
+    const at = opts.at;
+    this.spatial = at !== undefined;
+    if (at) {
+      this.px = at[0] ?? 0;
+      this.py = at[1] ?? 0;
+      this.pz = at[2] ?? 0;
+      const d = opts.spatial?.direction;
+      if (d) {
+        this.dx = d[0] ?? 0;
+        this.dy = d[1] ?? 0;
+        this.dz = d[2] ?? 0;
+      }
+    }
   }
 
   get playing(): boolean {
@@ -174,7 +360,14 @@ class VoiceImpl implements Voice {
       g.gain.value = this.targetGain;
     }
     let tail: AudioNode = g;
-    if (this.opts.pan) {
+    const panner = this.spatial ? this.engine.acquirePanner(this.opts.spatial) : null;
+    if (panner) {
+      writePannerPosition(panner, this.px, this.py, this.pz);
+      writePannerDirection(panner, this.dx, this.dy, this.dz);
+      g.connect(panner);
+      tail = panner;
+      this.panner = panner;
+    } else if (this.opts.pan && !this.spatial) {
       const p = ctx.createStereoPanner();
       p.pan.value = this.opts.pan;
       g.connect(p);
@@ -184,7 +377,12 @@ class VoiceImpl implements Voice {
     tail.connect(bus);
     src.onended = () => {
       this.ended = true;
+      g.disconnect();
       tail.disconnect();
+      if (this.panner) {
+        this.engine.releasePanner(this.panner);
+        this.panner = null;
+      }
       this.onEnd(this);
     };
     src.start(t);
@@ -229,6 +427,22 @@ class VoiceImpl implements Voice {
     const ctx = this.engine.context;
     if (!this.src || !ctx) return;
     this.src.playbackRate.setTargetAtTime(rate, ctx.currentTime, Math.max(0.001, ramp / 3));
+  }
+
+  setPosition(x: number, y: number, z: number): void {
+    if (!this.spatial) return;
+    this.px = x;
+    this.py = y;
+    this.pz = z;
+    if (this.panner) writePannerPosition(this.panner, x, y, z);
+  }
+
+  setDirection(x: number, y: number, z: number): void {
+    if (!this.spatial) return;
+    this.dx = x;
+    this.dy = y;
+    this.dz = z;
+    if (this.panner) writePannerDirection(this.panner, x, y, z);
   }
 }
 
@@ -329,6 +543,9 @@ export class AudioEngine {
   private reverbOpts: ReverbOptions | null;
   private reverbSends: Record<OutputBus, number>;
   private reverbNodes: ReverbNodes | null = null;
+  /** Panners of ended spatial voices, reused by the next ones (cleared with the context). */
+  private readonly pannerPool: PannerNode[] = [];
+  private _listener: SpatialListener | null = null;
 
   constructor(opts: AudioEngineOptions = {}) {
     this._settings = sanitizeMixer(opts.settings);
@@ -358,6 +575,15 @@ export class AudioEngine {
   }
   get settings(): Readonly<MixerSettings> {
     return this._settings;
+  }
+  /** Where spatial voices are heard from. A 3D game calls `audio.listener.fromCamera(camera)` each frame. */
+  get listener(): SpatialListener {
+    this._listener ??= new SpatialListener(this);
+    return this._listener;
+  }
+  /** Idle panners waiting for the next spatial voice (tests, diagnostics). */
+  get pooledPanners(): number {
+    return this.pannerPool.length;
   }
   /** True after `halt()`: silent for good. */
   get halted(): boolean {
@@ -570,6 +796,7 @@ export class AudioEngine {
     this.buses = {};
     this.limiterNode = null;
     this.reverbNodes = null;
+    this.pannerPool.length = 0;
     if (ctx) await ctx.close().catch(() => {});
     this.setState('locked');
   }
@@ -595,6 +822,31 @@ export class AudioEngine {
     }
     for (const name of BUS_NAMES) this.buses[name]!.gain.value = busGain(this._settings[name]);
     this.buildReverb();
+    this._listener?.apply();
+  }
+
+  /**
+   * Internal: a `PannerNode` set up from `opts`, from the pool when one is idle. Null where the
+   * context has no panner (the voice then plays unspatialised, straight into its bus).
+   */
+  acquirePanner(opts: SpatialOptions | undefined): PannerNode | null {
+    const ctx = this.ctx;
+    if (!ctx || typeof ctx.createPanner !== 'function') return null;
+    const p = this.pannerPool.pop() ?? ctx.createPanner();
+    p.panningModel = opts?.panningModel ?? 'equalpower';
+    p.distanceModel = opts?.rolloff ?? 'inverse';
+    p.refDistance = opts?.refDistance ?? 1;
+    p.maxDistance = opts?.maxDistance ?? 10000;
+    p.rolloffFactor = opts?.rolloffFactor ?? 1;
+    p.coneInnerAngle = opts?.cone?.inner ?? 360;
+    p.coneOuterAngle = opts?.cone?.outer ?? 360;
+    p.coneOuterGain = opts?.cone?.outerGain ?? 0;
+    return p;
+  }
+
+  /** Internal: take back an ended voice's (disconnected) panner. Dropped if its context is gone. */
+  releasePanner(p: PannerNode): void {
+    if (this.ctx && p.context === this.ctx) this.pannerPool.push(p);
   }
 
   /** The master limiter node, once the context exists (null when disabled or unsupported). */
