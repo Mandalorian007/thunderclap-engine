@@ -1,11 +1,16 @@
 /**
  * `createGame` (D-041 Phase 1): the noun-free wiring every ThunderClap game starts from.
  *
- * It blocks browser zoom, boots WebGPU on a letterboxed surface and builds, in this order: renderer, post stack,
- * particles, host, the game's save (if any), overlay and pad navigation, device mode with fill
- * bands, audio (mixer persisted through the host), input, the scene stack and the frame loop. It
- * also wires the page lifecycle (hide, pagehide and freeze stop frames and flush the save; show
- * resumes) and device loss (the reload screen, then loop, audio and captions halt for good).
+ * It blocks browser zoom, boots WebGPU on a letterboxed surface and builds, in this order:
+ * renderer, post stack, particles, host, the game's save (if any), overlay and pad navigation,
+ * audio (mixer persisted through the host), input with its pointer router, the scene stack and
+ * the frame loop (frames come from the host). It also wires the page lifecycle (hide, pagehide
+ * and freeze stop frames and flush the save; show resumes) and device loss (the reload screen,
+ * then loop, audio and captions halt for good).
+ *
+ * The surface letterboxes the design space; what the overlay's layout leaves free of UI is
+ * `ctx.ui.layout.freeRect`, and a 2D game frames its world into it with
+ * `renderer.camera.fitRect(worldRect, freeRectInLogicalPx)`.
  *
  * Two parts are opt-in, so a pure client of a server-authoritative game (VISION pillar 6) uses
  * the same wiring: `save` (omit it and `ctx.save` is null, and nothing touches `host.storage`)
@@ -18,15 +23,11 @@
 import { AudioEngine, persistMixer } from '../audio';
 import { ParticleSystem, type ParticleSystemOptions } from '../fx';
 import { createWebHost, type Host } from '../host';
-import { type Bindings, Input } from '../input';
+import { type Bindings, createPointerRouter, Input, type PointerRouter } from '../input';
 import {
   blockBrowserZoom,
   boot,
-  createDeviceMode,
-  type DeviceMode,
-  type FillWidthOptions,
   type GpuContext,
-  PHONE_SCALE,
   type Surface,
   type SurfaceOptions,
   watchLifecycle,
@@ -129,11 +130,6 @@ export interface CreateGameOptions<A extends string, S extends FlushableSave | n
    */
   styles?(doc: Document): void;
   /**
-   * Phones: fill bands by key (D-040). While the fill key names a band and the letterbox scale
-   * is below `PHONE_SCALE`, the surface fills the width and crops top and bottom to the band.
-   */
-  fillBands?: Readonly<Record<string, FillWidthOptions>>;
-  /**
    * The overlay's layout: region tracks per form factor, the form-factor rule and each form's
    * units (see `Layout`; read it as `ctx.ui.layout`).
    */
@@ -165,26 +161,25 @@ export interface EngineCtx<
   /** Shared GPU particle pool; updated by the loop, drawn by views. */
   readonly particles: ParticleSystem;
   readonly input: Input<A>;
+  /**
+   * Pointer rays through `renderer.camera` (mouse, pen, touch; a `PadCursor` when added):
+   * register hit testers on it and listen for `hover`/`select`. Linked to `input`, which polls
+   * it each update and shares its block and pointer transform.
+   */
+  readonly pointers: PointerRouter<unknown>;
   /** Drives modal panels from the pad (d-pad moves focus, A activates, B closes). */
   readonly padNav: PadNav;
   readonly audio: AudioEngine;
   /** The DOM overlay, CSS px, with its layout (`ui.layout`). */
   readonly ui: Overlay;
-  /** The page the game runs in: links, copying, fullscreen and save storage. */
+  /** The page the game runs in: frames, links, copying, fullscreen and save storage. */
   readonly host: Host;
-  /** Phone-sized screen and touch input flags (interim until Phase 2's layout). */
-  readonly device: DeviceMode;
   /** The game's save, or null when `createGame` was given none (`S` is then `null`). */
   readonly save: S;
   readonly stack: SceneStack<C, Frame>;
   readonly loop: GameLoop;
   /** Game logic in the frame and lifecycle; see `GameHooks`. */
   readonly hooks: GameHooks;
-  /**
-   * Selects the fill band by key (see `CreateGameOptions.fillBands`; the key starts as
-   * `'boot'`) and re-fits the surface. A key with no band letterboxes.
-   */
-  setFill(key: string): void;
   /** Runs `fn` after the device-lost screen and the engine's halt. Returns unsubscribe. */
   onDeviceLost(fn: (info: GPUDeviceLostInfo) => void): () => void;
 }
@@ -194,7 +189,7 @@ export interface EngineCtx<
  * engine has already shown the unsupported screen and there is nothing more to do.
  *
  * Nothing runs until the game calls `ctx.loop.start()`, except the lifecycle handlers (a show
- * starts the loop) and resize, which keeps the renderer, overlay and fill in step.
+ * starts the loop) and resize, which keeps the renderer and overlay in step.
  */
 export async function createGame<
   A extends string,
@@ -238,34 +233,9 @@ export async function createGame<
   });
   // Input is blocked while a modal panel is up, so the pad drives panels through this.
   const padNav = new PadNav(ui.stack);
-  const device = createDeviceMode(ui.root);
-
-  // Fill bands (D-040): on a phone-sized letterbox a keyed scene fills the width instead.
-  let fillKey = 'boot';
-  const applyFill = () => {
-    const band = opts.fillBands?.[fillKey];
-    surface.setFill(band && surface.fitRect.scale < PHONE_SCALE ? band : null);
-  };
-  const applyScale = () => {
-    const r = surface.rect;
-    const ch = surface.root.clientHeight;
-    device.setScale(ui.scale, r.x, {
-      fitScale: surface.fitRect.scale,
-      top: Math.max(0, -r.y),
-      bottom: Math.max(0, r.y + r.height - ch),
-    });
-    // A filled scene that still leaves slim bars (very wide phones) fades its side edges into
-    // them, so the art ends softly instead of at a hard letterbox line.
-    const soft = r.height > ch + 1 && r.x > 0;
-    surface.canvas.style.maskImage = soft
-      ? 'linear-gradient(90deg, transparent, #000 4%, #000 96%, transparent)'
-      : '';
-  };
   surface.onResize(({ rect, backbuffer }) => {
     renderer.resize(backbuffer.width, backbuffer.height);
     ui.setFrame(rect);
-    applyScale();
-    applyFill();
   });
 
   // ── Audio ──────────────────────────────────────────────────────────────
@@ -283,6 +253,9 @@ export async function createGame<
   });
   input.attach({ pointerTarget: surface.canvas });
   input.setPointerTransform((x, y) => surface.clientToLogical(x, y));
+  // Pointer rays go through whatever camera the renderer draws with (read each tick).
+  const pointers = createPointerRouter({ camera: () => renderer.camera });
+  input.setPointers(pointers);
 
   // ── Scenes + loop ──────────────────────────────────────────────────────
   const hooks: GameHooks = {};
@@ -309,7 +282,7 @@ export async function createGame<
         hooks.afterRender?.(time);
       },
     },
-    { step: opts.sim ? opts.sim.step : undefined, fixed },
+    { step: opts.sim ? opts.sim.step : undefined, fixed, frames: host },
   );
 
   // Hidden, pagehide (iOS app switch) or freeze (Android): stop drawing and persist now; a
@@ -344,19 +317,15 @@ export async function createGame<
     post,
     particles,
     input,
+    pointers,
     padNav,
     audio,
     ui,
     host,
-    device,
     save,
     stack,
     loop,
     hooks,
-    setFill(key: string) {
-      fillKey = key;
-      applyFill();
-    },
     onDeviceLost: res.onDeviceLost,
   } satisfies EngineCtx<A, S, C>);
   return ctx;

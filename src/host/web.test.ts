@@ -55,6 +55,25 @@ describe('createWebHost', () => {
     expect(createWebHost().window).toBeUndefined();
   });
 
+  it("schedules frames through its window's requestAnimationFrame", () => {
+    const calls: string[] = [];
+    const host = createWebHost({
+      win: fakeWin({
+        requestAnimationFrame: (cb: (t: number) => void) => {
+          calls.push('request');
+          cb(16);
+          return 42;
+        },
+        cancelAnimationFrame: (h: number) => calls.push(`cancel ${h}`),
+      }),
+    });
+    const seen: number[] = [];
+    expect(host.requestFrame((t) => seen.push(t))).toBe(42);
+    host.cancelFrame(42);
+    expect(seen).toEqual([16]);
+    expect(calls).toEqual(['request', 'cancel 42']);
+  });
+
   it('opens through its window: a pad press uses window.open, null means blocked', () => {
     const open = vi.fn(() => null);
     const host = createWebHost({ win: fakeWin({ open }) });

@@ -24,6 +24,8 @@ export function createWebHost(opts: WebHostOptions = {}): Host {
   let embed: EmbedContext | null = null;
   return {
     kind: 'web',
+    requestFrame: (cb) => win.requestAnimationFrame(cb),
+    cancelFrame: (handle) => win.cancelAnimationFrame(handle),
     get embed() {
       embed ??= embedContext(win);
       return embed;

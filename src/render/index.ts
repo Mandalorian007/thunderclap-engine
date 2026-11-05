@@ -3,7 +3,7 @@ export { BindingSet } from './bindings';
 export type { BlendMode } from './blend';
 export { blendState } from './blend';
 export type { CameraPoint, CameraRect } from './camera';
-export { ALL_LAYERS, CAMERA_BLOCK_FLOATS, Camera } from './camera';
+export { ALL_LAYERS, CAMERA_BLOCK_FLOATS, Camera, ORTHO2D_HALF_DEPTH } from './camera';
 export type { RGBA } from './color';
 export { hex, linearToSrgb, rgba, scaleRgb, srgbToLinear } from './color';
 export { gpuDiagnostics, installGpuErrorLogging, onGpuError, reportGpuError } from './diagnostics';
@@ -51,7 +51,8 @@ export type {
   RenderStats,
   ResolutionOptions,
 } from './renderer';
-export { MIN_RESOLUTION_SCALE, Renderer, SCENE_FORMAT, sceneSize } from './renderer';
+export { MIN_RESOLUTION_SCALE, Renderer, sceneSize } from './renderer';
+export { SCENE_FORMAT, SceneTarget, type SceneTargetDesc } from './scene-target';
 export { type SnapshotOptions, SnapshotRenderer } from './snapshot';
 export type { PixelData, SamplerKind, TextureDesc, TextureLike, TextureSource } from './texture';
 export { bytesPerTexel, createSamplers, Texture } from './texture';

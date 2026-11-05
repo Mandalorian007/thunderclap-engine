@@ -124,6 +124,8 @@ export function createFakeDevice(limits: Partial<Record<string, number>> = {}): 
       setVertexBuffer: () => cmd({ op: 'other', name: 'setVertexBuffer' }),
       setIndexBuffer: () => cmd({ op: 'other', name: 'setIndexBuffer' }),
       setBlendConstant: () => cmd({ op: 'other', name: 'setBlendConstant' }),
+      setViewport: () => cmd({ op: 'other', name: 'setViewport' }),
+      setScissorRect: () => cmd({ op: 'other', name: 'setScissorRect' }),
       end: () => cmd({ op: 'other', name: 'end' }),
     };
   };

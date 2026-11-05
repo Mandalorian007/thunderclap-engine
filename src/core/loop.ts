@@ -1,10 +1,13 @@
 /**
  * Fixed-step simulation + variable-rate render.
  *
- * `FixedStepper` is the pure accumulator (unit-tested); `GameLoop` drives it from
- * requestAnimationFrame. With `fixed: false` the loop has no fixed step: update runs once per
- * rendered frame with the real (clamped) delta, for a client that applies another's state.
+ * `FixedStepper` is the pure accumulator (unit-tested); `GameLoop` drives it from the host's
+ * frames (`Host.requestFrame`: the browser's requestAnimationFrame, a test's manual stepping).
+ * With `fixed: false` the loop has no fixed step: update runs once per rendered frame with the
+ * real (clamped) delta, for a client that applies another's state.
  */
+import { defaultHost } from '../host/default';
+import type { FrameSource } from '../host/types';
 
 export interface FixedStepperOptions {
   /** Simulation step in seconds. Default 1/60. */
@@ -87,10 +90,13 @@ export interface GameLoopOptions extends FixedStepperOptions {
    * real frame delta (render-rate only, no accumulator); `time.tick` then counts those updates.
    */
   fixed?: boolean;
-  /** Injected for tests. Defaults to `performance.now` / `requestAnimationFrame`. */
+  /** Clock for frame deltas (ms). Default `performance.now`. */
   now?: () => number;
-  raf?: (cb: (t: number) => void) => number;
-  caf?: (id: number) => void;
+  /**
+   * Where frames come from: the game's `Host` (`createGame` passes its own), or a stub a test
+   * steps by hand. Default: `defaultHost()`, read when the loop first starts.
+   */
+  frames?: FrameSource;
 }
 
 /** Early-frame tolerance for `GameLoop.maxFps`, ms. */
@@ -102,9 +108,8 @@ export class GameLoop {
   private readonly cb: LoopCallbacks;
   private readonly fixed: boolean;
   private readonly now: () => number;
-  private readonly raf: (cb: (t: number) => void) => number;
-  private readonly caf: (id: number) => void;
-  private rafId = 0;
+  private source: FrameSource | null;
+  private frameId = 0;
   private last = 0;
   private running = false;
   private _paused = false;
@@ -116,8 +121,7 @@ export class GameLoop {
     this.stepper = new FixedStepper(opts);
     this.fixed = opts.fixed !== false;
     this.now = opts.now ?? (() => performance.now());
-    this.raf = opts.raf ?? ((f) => requestAnimationFrame(f));
-    this.caf = opts.caf ?? ((id) => cancelAnimationFrame(id));
+    this.source = opts.frames ?? null;
     this.time = { step: this.stepper.step, simTime: 0, realTime: 0, frameDt: 0, frame: 0, tick: 0 };
   }
 
@@ -158,13 +162,19 @@ export class GameLoop {
     this.running = true;
     this.last = this.now();
     this.stepper.reset();
-    this.rafId = this.raf(this.frame);
+    this.frameId = this.frames.requestFrame(this.frame);
   }
 
   /** Stop scheduling frames entirely (e.g. tab hidden, device lost). */
   stop(): void {
     this.running = false;
-    this.caf(this.rafId);
+    this.source?.cancelFrame(this.frameId);
+  }
+
+  /** The frame source, resolved on first use so a loop that is only ticked by hand needs none. */
+  private get frames(): FrameSource {
+    this.source ??= defaultHost();
+    return this.source;
   }
 
   /**
@@ -187,13 +197,13 @@ export class GameLoop {
     const t = this.now();
     // A few ms of slack: vsync timestamps jitter, and a 33.3 ms target must not miss 33.2.
     if (this.minFrameMs > 0 && t - this.last < this.minFrameMs - FRAME_CAP_SLACK_MS) {
-      this.rafId = this.raf(this.frame);
+      this.frameId = this.frames.requestFrame(this.frame);
       return;
     }
     const dt = (t - this.last) / 1000;
     this.last = t;
     this.runFrame(dt);
-    if (this.running) this.rafId = this.raf(this.frame);
+    if (this.running) this.frameId = this.frames.requestFrame(this.frame);
   };
 
   private runFrame(rawDt: number): void {

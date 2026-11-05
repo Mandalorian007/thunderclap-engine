@@ -18,6 +18,12 @@ export interface CameraPoint {
 /** Every layer bit set: the default `Camera.layers`. */
 export const ALL_LAYERS = 0xffffffff;
 
+/**
+ * Half the depth range of `Camera.ortho2d`, in design units: its near plane is at world
+ * z = -ORTHO2D_HALF_DEPTH, the far plane at +ORTHO2D_HALF_DEPTH, z = 0 at clip depth 0.5.
+ */
+export const ORTHO2D_HALF_DEPTH = 1024;
+
 /** Floats in the WGSL `EngineCamera` block (256 bytes). */
 export const CAMERA_BLOCK_FLOATS = 64;
 
@@ -30,8 +36,11 @@ const tmp: number[] = [0, 0, 0];
  * Two presets:
  *
  * - `Camera.ortho2d(designW, designH)`: 1 world unit = 1 design px, origin top-left, y down,
- *   z = depth (0 near, 1 far). The 2D controls `x`, `y`, `zoom` and `rotation` move it over
- *   that space exactly like the engine's earlier 2D camera; `fitRect` frames a world rect.
+ *   z into the screen (right-handed with y down): world z in `±ORTHO2D_HALF_DEPTH` spans the
+ *   depth buffer, z = 0 sits at clip depth 0.5 and larger z is farther. The 2D controls `x`,
+ *   `y`, `zoom` and `rotation` move it over that space exactly like the engine's earlier 2D
+ *   camera; `fitRect` frames a world rect.
+ *   `Transform.z` is thus a stacking axis for 2D draws under a depth camera.
  * - `Camera.perspective(fovY, aspect, near, far)`: right-handed, looking down -z; place it with
  *   `lookAt` or `setView`.
  *
@@ -267,8 +276,8 @@ export class Camera {
 
   /**
    * Screen point (screen units) → world, at clip depth `depth` (0 = near plane, which for
-   * `ortho2d` is world z = 0). Call it at depth 0 and 1 for a pick ray. Pass `out` to avoid
-   * allocating.
+   * `ortho2d` is world z = -ORTHO2D_HALF_DEPTH; 0.5 is z = 0). Call it at depth 0 and 1 for
+   * a pick ray. Pass `out` to avoid allocating.
    */
   screenToWorld(
     sx: number,
@@ -342,8 +351,8 @@ export class Camera {
       mat4.view2d(this.viewM, this._x, this._y, this._zoom, this._rotation, W, H);
     }
     if (this.projSource === 'ortho2d') {
-      // y down; z passes through as depth (near 0 → 0, far -1 → 1 in view-z terms).
-      mat4.ortho(this.projM, 0, W, H, 0, 0, -1);
+      // y down; z into the screen: ±ORTHO2D_HALF_DEPTH → clip 0..1 (near at -D, far at +D).
+      mat4.ortho(this.projM, 0, W, H, 0, ORTHO2D_HALF_DEPTH, -ORTHO2D_HALF_DEPTH);
     }
     if (this.viewSource === 'view2d' && this.projSource === 'ortho2d') {
       ortho2dViewProj(this.viewProjM, this._x, this._y, this._zoom, this._rotation, W, H);
@@ -380,8 +389,9 @@ function ortho2dViewProj(
   g[1] = -s * sy;
   g[4] = -s * sx;
   g[5] = -c * sy;
-  g[10] = 1;
+  g[10] = 1 / (2 * ORTHO2D_HALF_DEPTH);
   g[12] = -c * sx * cx + s * sx * cy;
   g[13] = s * sy * cx + c * sy * cy;
+  g[14] = 0.5;
   g[15] = 1;
 }

@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { setDefaultHost } from '../host/default';
+import type { Host } from '../host/types';
 import { FixedStepper, GameLoop } from './loop';
 
 describe('FixedStepper', () => {
@@ -50,7 +52,7 @@ describe('GameLoop', () => {
     let renders = 0;
     const loop = new GameLoop(
       { update: () => updates++, render: () => renders++ },
-      { raf: () => 0, caf: () => {}, now: () => 0 },
+      { now: () => 0 },
     );
     loop.tickOnce(1 / 30);
     loop.tickOnce(1 / 30);
@@ -65,7 +67,7 @@ describe('GameLoop', () => {
     let renders = 0;
     const loop = new GameLoop(
       { update: () => updates++, render: () => renders++ },
-      { raf: () => 0, caf: () => {}, now: () => 0 },
+      { now: () => 0 },
     );
     loop.paused = true;
     loop.tickOnce(0.1);
@@ -80,7 +82,7 @@ describe('GameLoop', () => {
         update: (dt) => log.push(`u${dt.toFixed(3)}`),
         render: (alpha) => log.push(`r${alpha}`),
       },
-      { raf: () => 0, caf: () => {}, now: () => 0, fixed: false },
+      { now: () => 0, fixed: false },
     );
     loop.tickOnce(1 / 30);
     loop.tickOnce(0.004);
@@ -93,7 +95,7 @@ describe('GameLoop', () => {
     expect(log.slice(-1)).toEqual(['r0']);
   });
 
-  it('drives frames from raf', () => {
+  it('drives frames from the frame source', () => {
     let t = 0;
     let pending: ((t: number) => void) | null = null;
     let updates = 0;
@@ -101,12 +103,14 @@ describe('GameLoop', () => {
       { update: () => updates++, render: () => {} },
       {
         now: () => t,
-        raf: (cb) => {
-          pending = cb;
-          return 1;
-        },
-        caf: () => {
-          pending = null;
+        frames: {
+          requestFrame: (cb) => {
+            pending = cb;
+            return 1;
+          },
+          cancelFrame: () => {
+            pending = null;
+          },
         },
       },
     );
@@ -120,6 +124,26 @@ describe('GameLoop', () => {
     expect(loop.isRunning).toBe(false);
   });
 
+  it('without a frame source, start() schedules through the default host', () => {
+    const calls: string[] = [];
+    const host = {
+      requestFrame: (_cb: (t: number) => void) => {
+        calls.push('request');
+        return 7;
+      },
+      cancelFrame: (h: number) => calls.push(`cancel ${h}`),
+    } as unknown as Host;
+    setDefaultHost(host);
+    try {
+      const loop = new GameLoop({ update: () => {}, render: () => {} }, { now: () => 0 });
+      loop.start();
+      loop.stop();
+      expect(calls).toEqual(['request', 'cancel 7']);
+    } finally {
+      setDefaultHost(null);
+    }
+  });
+
   it('halt stops for good: a later start (tab visible again) schedules nothing', () => {
     let scheduled = 0;
     let renders = 0;
@@ -127,11 +151,13 @@ describe('GameLoop', () => {
       { update: () => {}, render: () => renders++ },
       {
         now: () => 0,
-        raf: () => {
-          scheduled++;
-          return scheduled;
+        frames: {
+          requestFrame: () => {
+            scheduled++;
+            return scheduled;
+          },
+          cancelFrame: () => {},
         },
-        caf: () => {},
       },
     );
     loop.start();
@@ -166,12 +192,14 @@ describe('GameLoop.maxFps', () => {
       { update: () => updates++, render: () => renders++ },
       {
         now: () => clock.t,
-        raf: (f) => {
-          clock.cb = () => f(clock.t);
-          return 1;
-        },
-        caf: () => {
-          clock.cb = null;
+        frames: {
+          requestFrame: (f) => {
+            clock.cb = () => f(clock.t);
+            return 1;
+          },
+          cancelFrame: () => {
+            clock.cb = null;
+          },
         },
       },
     );

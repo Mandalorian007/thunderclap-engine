@@ -48,6 +48,9 @@ export function createElectronHost(opts: ElectronHostOptions = {}): Host {
 
   return {
     kind: 'electron',
+    // The shell's window is a Chromium page: frames come from its requestAnimationFrame.
+    requestFrame: (cb) => win.requestAnimationFrame(cb),
+    cancelFrame: (handle) => win.cancelAnimationFrame(handle),
     embed: embedContext(win),
     openExternal(url) {
       // Checked here so a bad link is `invalid` at once, and again in the main process.

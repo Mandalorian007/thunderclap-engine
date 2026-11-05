@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { mat4 } from '../core/math';
-import { ALL_LAYERS, CAMERA_BLOCK_FLOATS, Camera } from './camera';
+import { ALL_LAYERS, CAMERA_BLOCK_FLOATS, Camera, ORTHO2D_HALF_DEPTH } from './camera';
 
 /** The renderer's pre-matrix-camera viewProj, verbatim: the 2D path must match it bit for bit. */
 function legacyViewProj(
@@ -19,9 +19,10 @@ function legacyViewProj(
   g[1] = -s * sy;
   g[4] = -s * sx;
   g[5] = -c * sy;
-  g[10] = 1;
+  g[10] = 1 / 2048; // the legacy matrix had z pass through (1, 0); only the depth row widened
   g[12] = -c * sx * cx + s * sx * cy;
   g[13] = s * sy * cx + c * sy * cy;
+  g[14] = 0.5;
   g[15] = 1;
   return g;
 }
@@ -51,9 +52,26 @@ describe('Camera.ortho2d', () => {
     }
   });
 
+  it('spans world z in ±ORTHO2D_HALF_DEPTH, z = 0 at clip depth 0.5, larger z farther', () => {
+    const c = Camera.ortho2d(1920, 1080);
+    expect(ORTHO2D_HALF_DEPTH).toBe(1024);
+    expect(c.worldToScreen(5, 5, -ORTHO2D_HALF_DEPTH).z).toBeCloseTo(0, 6);
+    expect(c.worldToScreen(5, 5, 0).z).toBeCloseTo(0.5, 6);
+    expect(c.worldToScreen(5, 5, ORTHO2D_HALF_DEPTH).z).toBeCloseTo(1, 6);
+    expect(c.worldToScreen(5, 5, 100).z).toBeGreaterThan(c.worldToScreen(5, 5, -100).z);
+    // x/y do not depend on z, and pan/zoom do not touch the depth mapping.
+    c.x = 30;
+    c.zoom = 1.7;
+    const a = c.worldToScreen(300, 200, -900);
+    const b = c.worldToScreen(300, 200, 900);
+    expect([a.x, a.y]).toEqual([b.x, b.y]);
+    expect(c.screenToWorld(10, 10, 0).z).toBeCloseTo(-ORTHO2D_HALF_DEPTH, 3);
+    expect(c.screenToWorld(10, 10, 1).z).toBeCloseTo(ORTHO2D_HALF_DEPTH, 3);
+  });
+
   it('maps world to screen 1:1 at rest (origin top-left, y down)', () => {
     const c = Camera.ortho2d(1920, 1080);
-    expect(c.worldToScreen(0, 0)).toEqual({ x: 0, y: 0, z: 0 });
+    expect(c.worldToScreen(0, 0)).toEqual({ x: 0, y: 0, z: 0.5 });
     const p = c.worldToScreen(1920, 1080);
     expect(p.x).toBeCloseTo(1920, 3);
     expect(p.y).toBeCloseTo(1080, 3);
@@ -72,10 +90,10 @@ describe('Camera.ortho2d', () => {
       [1500, 80],
     ] as const) {
       const s = c.worldToScreen(x, y, 0, out);
-      const w = c.screenToWorld(s.x, s.y, 0);
+      const w = c.screenToWorld(s.x, s.y, s.z);
       expect(w.x).toBeCloseTo(x, 2);
       expect(w.y).toBeCloseTo(y, 2);
-      expect(w.z).toBeCloseTo(0, 5);
+      expect(w.z).toBeCloseTo(0, 3);
     }
     // The pan target sits on the screen centre.
     const centre = c.worldToScreen(960 + 200, 540 - 50);
