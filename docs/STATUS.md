@@ -22,13 +22,13 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 3 | Two views | ws/two-views | `render(frame, camera, target)` called twice per frame into two viewports of one surface (`view_index` 0/1); harness page; proves the stereo seam without WebXR (ARCHITECTURE: XR after Gate 5) | render-call | ✅ merged `749b992` (468 tests; `Camera.viewIndex`) |
 | 3 | Game plumbing | ws/plumbing | `createGame` wires gestures and pointers; `layout.freeRect` → design px helper for `Camera.fitRect`; `Gestures.pan` ignores multi-pointer; template `sendBeacon` sink + `level_start`/`level_complete`; layout README rows note; delete `Surface.setFill`/`computeFillWidth`; `Scene.render(frame, camera, alpha)` (E-010) | render-call, template-puzzle | ✅ merged `8f3cb9d` (465 engine, 17 template; e2e 390/36) |
 | 3 | e2e determinism | ws/flake-gestures | `gestures.spec` tap/pan timing; `touch` flag read before `open()` in mesh and gestures specs (E-011) | — | ✅ merged `7c528e2` (e2e 390/36; skip count stable at 36 across four runs) |
-| 4 | Doc sweep 2 | ws/doc-sweep-2 | 132 undocumented exports in core/input/render/testing READMEs; ARCHITECTURE principle 4 reword, stale *Planned* lines; chain `check:docs` into `check` | wave 3 | 🔄 dispatched 2026-11-05 |
+| 4 | Doc sweep 2 | ws/doc-sweep-2 | 132 undocumented exports in core/input/render/testing READMEs; ARCHITECTURE principle 4 reword, stale *Planned* lines; chain `check:docs` into `check` | wave 3 | ✅ merged `1ebca03` (134 names documented; `check:docs` in `check`) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
 
 - **Gate A (after wave 1), met 2026-11-05 at `e340ed7`:** `pnpm check` and the e2e matrix green on `main`; 2D harness pages pixel-identical before and after camera + transforms; `ARCHITECTURE.md` *Today* text matches the code.
-- **Gate C (after wave 3), met 2026-11-05 at `bde5299` except the last clause:** mesh page lit by the lighting block (`af36d1c`); streamed mesh updates without a main-thread copy (`bde5299`); two views per frame (`749b992`); template boots with gestures and pointers from `createGame` (`8f3cb9d`). Open: ARCHITECTURE *Planned* lines and principle 4 reword → ws/doc-sweep-2.
+- **Gate C (after wave 3), met 2026-11-05, closed at `1ebca03`:** mesh page lit by the lighting block (`af36d1c`); streamed mesh updates without a main-thread copy (`bde5299`); two views per frame (`749b992`); template boots with gestures and pointers from `createGame` (`8f3cb9d`). ARCHITECTURE *Planned* lines current and principle 4 reworded (`1ebca03`).
 - **Gate B (after wave 2):** mesh demo met at `2b1032e`; template timed at 17 min (`a266b04`); client mode met at `1b09225`. Gate B met at `2b89c82` (E-010). `?demo=mesh` runs on the matrix; a template game boots from zero in under a day of agent time (timed); client mode runs the harness without a save store.
 
 ## Backlog (from engineer reports, unscheduled)
@@ -36,3 +36,5 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - `Gestures.pan` that ignores multi-pointer input so pinch does not also pan (demo-mesh).
 - `createGame` wires gestures as it will pointers; a CSS-px → design-px helper for fitting a camera to `layout.freeRect` (template-puzzle). Layout README: `top`/`bottom` regions are rows (template-puzzle).
 - Read a camera's depth state in the harness without going through `renderer.camera` (demo-mesh; may fall out of `render(frame, camera, target)`).
+- Export pruning: doc-sweep-2 flagged exports that look like leaked internals (render: `BindingSet`/`BindingDesc`/`BindingSetOptions`, `blendState`, `createSamplers`, `CAMERA_BLOCK_FLOATS`, `MATRIX3X4_FLOATS`, `multiplyMatrix3x4`, `writeMatrix2d`, `WGSL_MATERIAL_PRELUDE`, `INSTANCE_BUFFER_LAYOUT`, `DepthMode`, `GpuTimer`; input: `PointerActions`, `createSample`, `loupeSpot`, `loupeClear`, `magnifySize`). An engineer decides per name; `materialPrelude` stays public.
+- `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
