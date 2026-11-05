@@ -29,14 +29,14 @@ export interface TapGesture extends GesturePoint {
   device: GestureDevice;
 }
 
-/** `pan`: one pointer moved past the threshold, or two pointers whose centre moved past it. */
+/** `pan`: one pointer moved past the threshold. Two or more pointers pinch and never pan. */
 export interface PanGesture extends GesturePoint {
   phase: GesturePhase;
   /** Movement since the previous report, game space. Every `dx` of one pan sums to its total travel from the down point. */
   dx: number;
   dy: number;
-  /** Pointers in the pan: 1, or 2 for a two-finger pan. */
-  pointers: number;
+  /** Pointers in the pan: always 1 (a second pointer cancels the pan and starts a pinch). */
+  pointers: 1;
   device: GestureDevice;
 }
 
@@ -121,11 +121,8 @@ interface Session {
   pinchStartDist: number;
   pinchLastDist: number;
   pinching: boolean;
-  /** Centre of the two pointers at the second down, and the last reported centre (game space). */
-  centreStartX: number;
-  centreStartY: number;
+  /** The last inside centre of the two pointers (game space), where the pinch is reported. */
   centreLast: GesturePoint | null;
-  twoPanning: boolean;
   /** Last inside game-space position of the one-pointer pan and drag (for `dx`, `dy`). */
   last: GesturePoint | null;
   /** Last reported point of the one-pointer pan and drag (may be outside). */
@@ -170,8 +167,9 @@ function defaultNow(): number {
  *   double tap also reports a tap for each of its two taps.
  * - A long-press fires once, after `longPressMs` within the threshold; no tap follows it.
  * - Moving past the threshold starts a pan and a drag (one pointer) for the rest of the press.
- * - A second pointer cancels the drag (and any tap or long-press) and starts a pinch and a
- *   two-pointer pan. Lifting either ends them; nothing more is reported until every pointer is up.
+ * - A second pointer cancels the pan and drag (and any tap or long-press) and starts a pinch;
+ *   while two or more pointers are down, pan and drag report nothing (pinch wins). Lifting
+ *   either pointer ends the pinch; nothing more is reported until every pointer is up.
  * - Discrete gestures that arrive faster than ticks are queued, one per kind per tick. Moves in
  *   one tick are merged; `start` and `end` each get their own tick. While a pan, drag or pinch
  *   runs, every tick reports it (a `move` with no change when nothing moved).
@@ -443,10 +441,7 @@ export class Gestures {
         pinchStartDist: 0,
         pinchLastDist: 0,
         pinching: false,
-        centreStartX: 0,
-        centreStartY: 0,
         centreLast: null,
-        twoPanning: false,
         last: null,
         at: null,
       };
@@ -468,15 +463,14 @@ export class Gestures {
       // A third pointer is ignored; it still has to lift before the session ends.
       return;
     }
-    // Second pointer: the press becomes a pinch and two-pointer pan.
+    // Second pointer: the press becomes a pinch; a running pan and drag are cancelled, and
+    // neither reports again until every pointer is up.
     s.multi = true;
     this.endOnePointer(s, s.contacts.values().next().value as Contact, 'cancel');
     const [a, b] = [...s.contacts.values()] as [Contact, Contact];
     s.pinchStartDist = Math.max(1, dist(a.lastX, a.lastY, b.lastX, b.lastY));
     s.pinchLastDist = s.pinchStartDist;
-    s.centreStartX = (a.lastX + b.lastX) / 2;
-    s.centreStartY = (a.lastY + b.lastY) / 2;
-    const centre = this.map(s.centreStartX, s.centreStartY);
+    const centre = this.map((a.lastX + b.lastX) / 2, (a.lastY + b.lastY) / 2);
     s.centreLast = centre;
     s.pinching = true;
     push(this.pinches, { phase: 'start', ...centre, scale: 1, delta: 1 });
@@ -604,47 +598,28 @@ export class Gestures {
     this.drags.push({ phase, ...at, origin: c.origin, dx: 0, dy: 0, device: c.device });
   }
 
+  /** Two pointers: only the pinch moves. Their centre moving is not a pan (pinch wins). */
   private moveTwo(s: Session): void {
     const [a, b] = [...s.contacts.values()] as [Contact, Contact];
     const d = Math.max(1, dist(a.lastX, a.lastY, b.lastX, b.lastY));
-    const cx = (a.lastX + b.lastX) / 2;
-    const cy = (a.lastY + b.lastY) / 2;
-    const centre = this.map(cx, cy);
-    if (d !== s.pinchLastDist) {
-      const delta = d / s.pinchLastDist;
-      s.pinchLastDist = d;
-      push(this.pinches, { phase: 'move', ...centre, scale: d / s.pinchStartDist, delta });
-    }
-    const last = s.centreLast ?? centre;
-    let phase: 'start' | 'move' = 'move';
-    if (!s.twoPanning) {
-      if (dist(s.centreStartX, s.centreStartY, cx, cy) <= this.panThreshold) return;
-      s.twoPanning = true;
-      phase = 'start';
-    }
-    const dx = centre.inside && last.inside ? centre.x - last.x : 0;
-    const dy = centre.inside && last.inside ? centre.y - last.y : 0;
+    const centre = this.map((a.lastX + b.lastX) / 2, (a.lastY + b.lastY) / 2);
     if (centre.inside) s.centreLast = centre;
-    const at = centre.inside ? centre : { ...last, inside: false };
-    this.pans.push({ phase, ...at, dx, dy, pointers: 2, device: a.device });
+    if (d === s.pinchLastDist) return;
+    const delta = d / s.pinchLastDist;
+    s.pinchLastDist = d;
+    const at = centre.inside ? centre : { ...(s.centreLast ?? centre), inside: false };
+    push(this.pinches, { phase: 'move', ...at, scale: d / s.pinchStartDist, delta });
   }
 
   private endTwo(s: Session, phase: 'end' | 'cancel'): void {
-    const centre = s.centreLast ?? this.lastInside;
-    if (s.pinching) {
-      s.pinching = false;
-      this.pinches.push({
-        phase,
-        ...centre,
-        scale: s.pinchLastDist / s.pinchStartDist,
-        delta: 1,
-      });
-    }
-    if (s.twoPanning) {
-      s.twoPanning = false;
-      const c = s.contacts.values().next().value as Contact | undefined;
-      this.pans.push({ phase, ...centre, dx: 0, dy: 0, pointers: 2, device: c?.device ?? 'touch' });
-    }
+    if (!s.pinching) return;
+    s.pinching = false;
+    this.pinches.push({
+      phase,
+      ...(s.centreLast ?? this.lastInside),
+      scale: s.pinchLastDist / s.pinchStartDist,
+      delta: 1,
+    });
   }
 
   private map(clientX: number, clientY: number): GesturePoint {

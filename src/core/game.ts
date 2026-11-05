@@ -3,14 +3,16 @@
  *
  * It blocks browser zoom, boots WebGPU on a letterboxed surface and builds, in this order:
  * renderer, post stack, particles, host, the game's save (if any), overlay and pad navigation,
- * audio (mixer persisted through the host), input with its pointer router, the scene stack and
- * the frame loop (frames come from the host). It also wires the page lifecycle (hide, pagehide
+ * audio (mixer persisted through the host), input with its gestures and pointer router, the scene
+ * stack and the frame loop (frames come from the host). It also wires the page lifecycle (hide, pagehide
  * and freeze stop frames and flush the save; show resumes) and device loss (the reload screen,
  * then loop, audio and captions halt for good).
  *
  * The surface letterboxes the design space; what the overlay's layout leaves free of UI is
  * `ctx.ui.layout.freeRect`, and a 2D game frames its world into it with
- * `renderer.camera.fitRect(worldRect, freeRectInLogicalPx)`.
+ * `ctx.camera.fitFreeRect(worldRect, ctx.ui.layout.freeRect, ctx.surface)`. Scenes draw through
+ * `ctx.camera` (`Scene.render(frame, camera, alpha)`); the loop calls
+ * `renderer.render(frame, ctx.camera)` once per frame.
  *
  * Two parts are opt-in, so a pure client of a server-authoritative game (VISION pillar 6) uses
  * the same wiring: `save` (omit it and `ctx.save` is null, and nothing touches `host.storage`)
@@ -23,7 +25,14 @@
 import { AudioEngine, persistMixer } from '../audio';
 import { ParticleSystem, type ParticleSystemOptions } from '../fx';
 import { createWebHost, type Host } from '../host';
-import { type Bindings, createPointerRouter, Input, type PointerRouter } from '../input';
+import {
+  type Bindings,
+  createPointerRouter,
+  Gestures,
+  Input,
+  type MagnifyOptions,
+  type PointerRouter,
+} from '../input';
 import {
   blockBrowserZoom,
   boot,
@@ -33,7 +42,7 @@ import {
   watchLifecycle,
 } from '../platform';
 import { type PostSettingsPatch, PostStack } from '../post';
-import { type Frame, installGpuErrorLogging, Renderer } from '../render';
+import { type Camera, type Frame, installGpuErrorLogging, Renderer } from '../render';
 import { createOverlay, type LayoutSpec, type Overlay, PadNav } from '../ui';
 import type { Time } from './loop';
 import { GameLoop } from './loop';
@@ -123,6 +132,11 @@ export interface CreateGameOptions<A extends string, S extends FlushableSave | n
     buttonKeys?: Iterable<string>;
     /** Extra block on top of "a modal panel is open". */
     blocked?: () => boolean;
+    /**
+     * Loupe and snap for small touch targets, passed to the `Gestures` `createGame` builds
+     * (`GestureOptions.magnify`); see `input/magnify.ts`. Omit for no magnify.
+     */
+    magnify?: MagnifyOptions;
   };
   /**
    * Injects the game's stylesheets. Runs before the overlay adds the engine's, so the cascade
@@ -157,10 +171,22 @@ export interface EngineCtx<
   readonly surface: Surface;
   readonly gpu: GpuContext;
   readonly renderer: Renderer;
+  /**
+   * The camera the scenes draw through (`renderer.camera`, `Camera.ortho2d(design)` by default):
+   * the loop passes it to `Scene.render(frame, camera, alpha)` and `renderer.render`. Re-aim it
+   * in place (`fitRect`, `setPerspective`, `lookAt`); its identity does not change.
+   */
+  readonly camera: Camera;
   readonly post: PostStack;
   /** Shared GPU particle pool; updated by the loop, drawn by views. */
   readonly particles: ParticleSystem;
   readonly input: Input<A>;
+  /**
+   * Tap, double tap, long-press, pan, drag and pinch, linked to `input` (shared block and
+   * transform, advanced in `input.update()`), so `{ gesture }` bindings work out of the box.
+   * Read a gesture's position here (`gestures.tap`) when an action fires.
+   */
+  readonly gestures: Gestures;
   /**
    * Pointer rays through `renderer.camera` (mouse, pen, touch; a `PadCursor` when added):
    * register hit testers on it and listen for `hover`/`select`. Linked to `input`, which polls
@@ -176,7 +202,7 @@ export interface EngineCtx<
   readonly host: Host;
   /** The game's save, or null when `createGame` was given none (`S` is then `null`). */
   readonly save: S;
-  readonly stack: SceneStack<C, Frame>;
+  readonly stack: SceneStack<C, Frame, Camera>;
   readonly loop: GameLoop;
   /** Game logic in the frame and lifecycle; see `GameHooks`. */
   readonly hooks: GameHooks;
@@ -246,22 +272,26 @@ export async function createGame<
 
   // ── Input (blocked under modal panels) ─────────────────────────────────
   const extraBlock = opts.input.blocked;
+  // Gestures and pointer rays link to the input: same block, same transform, same attach,
+  // advanced in `input.update()`. The rays go through whatever camera the renderer draws with.
+  const gestures = new Gestures({ magnify: opts.input.magnify });
+  const pointers = createPointerRouter({ camera: () => renderer.camera });
   const input = new Input<A>(opts.input.bindings, {
     blocked: extraBlock ? () => ui.stack.hasModal || extraBlock() : () => ui.stack.hasModal,
     globalKeys: opts.input.globalKeys,
     buttonKeys: opts.input.buttonKeys,
+    gestures,
+    pointers,
   });
   input.attach({ pointerTarget: surface.canvas });
   input.setPointerTransform((x, y) => surface.clientToLogical(x, y));
-  // Pointer rays go through whatever camera the renderer draws with (read each tick).
-  const pointers = createPointerRouter({ camera: () => renderer.camera });
-  input.setPointers(pointers);
 
   // ── Scenes + loop ──────────────────────────────────────────────────────
   const hooks: GameHooks = {};
   // The stack hands scenes this object on enter; the game fills in its nouns before then.
   const ctx = {} as EngineCtx<A, S, C>;
-  const stack = new SceneStack<C, Frame>(ctx as C);
+  const stack = new SceneStack<C, Frame, Camera>(ctx as C);
+  const camera = renderer.camera;
   // With `sim: false` the loop calls update once per rendered frame with the real delta.
   const fixed = opts.sim !== false;
   const loop = new GameLoop(
@@ -277,7 +307,8 @@ export async function createGame<
       render: (alpha: number, time: Time) => {
         hooks.beforeRender?.(time);
         const frame = renderer.beginFrame(time.realTime, time.frameDt);
-        stack.render(frame, alpha);
+        stack.render(frame, camera, alpha);
+        renderer.render(frame, camera);
         renderer.endFrame();
         hooks.afterRender?.(time);
       },
@@ -314,9 +345,11 @@ export async function createGame<
     surface,
     gpu,
     renderer,
+    camera,
     post,
     particles,
     input,
+    gestures,
     pointers,
     padNav,
     audio,

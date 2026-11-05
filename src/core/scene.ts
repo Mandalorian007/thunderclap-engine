@@ -1,14 +1,18 @@
+import type { Camera } from '../render/camera';
+
 /**
  * Scene stack (C7 draft).
  *
  * - Only the top scene receives `update`.
+ * - `render(frame, camera, alpha)` hands scenes the camera the game draws with (`ctx.camera` in
+ *   `createGame`), so a scene never reaches for `renderer.camera`.
  * - Rendering starts at the highest scene that is not `transparent` and goes up, so a
  *   transparent scene (pause menu, modal) draws over the scene beneath it.
  * - push/pop/replace called during `update` or `render` are deferred until that call returns,
  *   so a scene can safely replace itself mid-update.
  * - Covered scenes get `pause()` and `resume()` when they lose and regain the top.
  */
-export interface Scene<Ctx = unknown, Frame = unknown> {
+export interface Scene<Ctx = unknown, Frame = unknown, Cam = Camera> {
   /** Debug name. */
   readonly name?: string;
   /** If true, the scene below keeps rendering underneath this one. */
@@ -20,14 +24,15 @@ export interface Scene<Ctx = unknown, Frame = unknown> {
   /** This scene became the top again. */
   resume?(): void;
   update?(dt: number): void;
-  render?(frame: Frame, alpha: number): void;
+  /** Record this scene's draws into `frame` as seen by `camera`; `alpha` interpolates between fixed steps. */
+  render?(frame: Frame, camera: Cam, alpha: number): void;
 }
 
-type Op<C, F> = { kind: 'push' | 'replace'; scene: Scene<C, F> } | { kind: 'pop' | 'clear' };
+type Op<C, F, K> = { kind: 'push' | 'replace'; scene: Scene<C, F, K> } | { kind: 'pop' | 'clear' };
 
-export class SceneStack<Ctx = unknown, Frame = unknown> {
-  private readonly scenes: Scene<Ctx, Frame>[] = [];
-  private readonly pending: Op<Ctx, Frame>[] = [];
+export class SceneStack<Ctx = unknown, Frame = unknown, Cam = Camera> {
+  private readonly scenes: Scene<Ctx, Frame, Cam>[] = [];
+  private readonly pending: Op<Ctx, Frame, Cam>[] = [];
   private busy = 0;
 
   constructor(private readonly ctx: Ctx) {}
@@ -36,16 +41,16 @@ export class SceneStack<Ctx = unknown, Frame = unknown> {
     return this.scenes.length;
   }
 
-  get top(): Scene<Ctx, Frame> | undefined {
+  get top(): Scene<Ctx, Frame, Cam> | undefined {
     return this.scenes[this.scenes.length - 1];
   }
 
   /** Snapshot of the stack, bottom first (debugging/tests). */
-  list(): readonly Scene<Ctx, Frame>[] {
+  list(): readonly Scene<Ctx, Frame, Cam>[] {
     return this.scenes.slice();
   }
 
-  push(scene: Scene<Ctx, Frame>): void {
+  push(scene: Scene<Ctx, Frame, Cam>): void {
     this.queue({ kind: 'push', scene });
   }
 
@@ -53,7 +58,7 @@ export class SceneStack<Ctx = unknown, Frame = unknown> {
     this.queue({ kind: 'pop' });
   }
 
-  replace(scene: Scene<Ctx, Frame>): void {
+  replace(scene: Scene<Ctx, Frame, Cam>): void {
     this.queue({ kind: 'replace', scene });
   }
 
@@ -74,21 +79,22 @@ export class SceneStack<Ctx = unknown, Frame = unknown> {
     }
   }
 
-  render(frame: Frame, alpha = 0): void {
+  /** Render every visible scene (highest opaque one upward) into `frame` through `camera`. */
+  render(frame: Frame, camera: Cam, alpha = 0): void {
     const n = this.scenes.length;
     if (n === 0) return;
     let start = n - 1;
     while (start > 0 && this.scenes[start]!.transparent) start--;
     this.busy++;
     try {
-      for (let i = start; i < n; i++) this.scenes[i]!.render?.(frame, alpha);
+      for (let i = start; i < n; i++) this.scenes[i]!.render?.(frame, camera, alpha);
     } finally {
       this.busy--;
       this.flush();
     }
   }
 
-  private queue(op: Op<Ctx, Frame>): void {
+  private queue(op: Op<Ctx, Frame, Cam>): void {
     this.pending.push(op);
     if (this.busy === 0) this.flush();
   }
@@ -101,7 +107,7 @@ export class SceneStack<Ctx = unknown, Frame = unknown> {
     }
   }
 
-  private apply(op: Op<Ctx, Frame>): void {
+  private apply(op: Op<Ctx, Frame, Cam>): void {
     switch (op.kind) {
       case 'push': {
         this.top?.pause?.();

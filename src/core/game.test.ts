@@ -172,7 +172,7 @@ describe('createGame', () => {
     ctx.hooks.afterRender = () => log.push('after');
     ctx.stack.push({
       update: (dt) => log.push(`scene.update ${dt.toFixed(3)}`),
-      render: (_f, alpha) => log.push(`scene.render ${alpha}`),
+      render: (_f, _camera, alpha) => log.push(`scene.render ${alpha}`),
     });
     ctx.loop.tickOnce(1 / 30);
     ctx.loop.tickOnce(0.007);
@@ -222,6 +222,58 @@ describe('createGame', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it('passes ctx.camera to the scenes and renders the frame through it', async () => {
+    const ctx = await createGame(options([]));
+    if (!ctx) throw new Error('no ctx');
+    expect(ctx.camera).toBe(ctx.renderer.camera);
+    const seen: unknown[] = [];
+    const rendered: unknown[] = [];
+    const render = ctx.renderer.render.bind(ctx.renderer);
+    ctx.renderer.render = (frame, camera, target) => {
+      rendered.push(camera);
+      return render(frame, camera, target);
+    };
+    ctx.stack.push({ render: (_f, camera) => seen.push(camera) });
+    ctx.loop.tickOnce(1 / 60);
+    expect(seen).toEqual([ctx.camera]);
+    expect(rendered).toEqual([ctx.camera]);
+  });
+
+  it('builds the gestures, linked to the input, with the magnify option', async () => {
+    const log: string[] = [];
+    const base = options(log);
+    const ctx = await createGame({
+      ...base,
+      input: {
+        bindings: { go: [{ key: 'Space' }, { gesture: 'tap' }] },
+        magnify: { pitch: () => 100, snap: (x, y) => ({ x, y, r: 10 }) },
+      },
+    });
+    if (!ctx) throw new Error('no ctx');
+    expect(ctx.input.getGestures()).toBe(ctx.gestures);
+    const canvas = ctx.surface.canvas;
+    const ev = (type: string, extra: PointerEventInit = {}) =>
+      canvas.dispatchEvent(
+        new PointerEvent(type, {
+          pointerId: 7,
+          pointerType: 'touch',
+          clientX: 100,
+          clientY: 100,
+          isPrimary: true,
+          bubbles: true,
+          ...extra,
+        }),
+      );
+    ev('pointerdown', { button: 0, buttons: 1 });
+    ctx.input.update();
+    // One touch down with `magnify` set reports an aim; without it `aim` stays null.
+    expect(ctx.gestures.aim).not.toBeNull();
+    ev('pointerup', { button: 0, buttons: 0 });
+    ctx.input.update();
+    expect(ctx.gestures.tap).not.toBeNull();
+    expect(ctx.input.pressed('go')).toBe(true);
   });
 
   it('wires a pointer router through the renderer camera and the input', async () => {

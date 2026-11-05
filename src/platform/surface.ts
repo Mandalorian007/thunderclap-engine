@@ -2,9 +2,7 @@ import {
   type BackbufferSize,
   clientToLogical,
   computeBackbuffer,
-  computeFillWidth,
   computeLetterbox,
-  type FillWidthOptions,
   type Letterbox,
   logicalToClient,
   type Vec2,
@@ -43,11 +41,10 @@ export class Surface {
   readonly logicalHeight: number;
   /** Letterboxed rect, CSS px, relative to `root`. Updated in place on resize. */
   rect: Letterbox = { x: 0, y: 0, width: 0, height: 0, scale: 0 };
-  /** The plain contain fit for the current container (what `rect` is unless a fill is set). */
+  /** The plain contain fit for the whole container (what `rect` is unless a frame is set). */
   fitRect: Letterbox = { x: 0, y: 0, width: 0, height: 0, scale: 0 };
   backbuffer: BackbufferSize = { width: 1, height: 1, pixelRatio: 1 };
 
-  private fill: FillWidthOptions | null = null;
   private frame: { x: number; y: number; width: number; height: number } | null = null;
   private readonly maxDpr: number;
   private readonly maxPixels: number;
@@ -126,29 +123,9 @@ export class Surface {
   }
 
   /**
-   * Fill the width and crop top and bottom (`computeFillWidth`; with `minVisibleWidth`, a tall
-   * container or frame fills its height and crops the sides), or `null` for the plain letterbox. Lays out again at once if the result changes.
-   */
-  setFill(fill: FillWidthOptions | null): void {
-    const f = this.fill;
-    if (
-      f === fill ||
-      (f &&
-        fill &&
-        f.minVisible === fill.minVisible &&
-        f.focusY === fill.focusY &&
-        f.minVisibleWidth === fill.minVisibleWidth &&
-        f.focusX === fill.focusX)
-    )
-      return;
-    this.fill = fill ? { ...fill } : null;
-    this.layout();
-  }
-
-  /**
    * Keep the canvas inside a part of the container (CSS px, relative to `root`), e.g. the
    * world's region of a layout (`Layout.freeRect`) when UI regions take the rest of the screen.
-   * The letterbox and fill are computed inside it; `null` (the default) uses the whole
+   * The letterbox is computed inside it; `null` (the default) uses the whole
    * container. `fitRect` is always the whole container's fit, so device-mode decisions do not
    * depend on the frame. Lays out again at once if the result changes.
    */
@@ -178,11 +155,7 @@ export class Surface {
     const fr = this.frame;
     const w = fr ? Math.max(1, Math.min(fr.width, cw)) : cw;
     const h = fr ? Math.max(1, Math.min(fr.height, ch)) : ch;
-    let rect = this.fill
-      ? computeFillWidth(w, h, this.logicalWidth, this.logicalHeight, this.fill)
-      : fr
-        ? computeLetterbox(w, h, this.logicalWidth, this.logicalHeight)
-        : this.fitRect;
+    let rect = fr ? computeLetterbox(w, h, this.logicalWidth, this.logicalHeight) : this.fitRect;
     if (fr) rect = { ...rect, x: rect.x + fr.x, y: rect.y + fr.y };
     const bb = computeBackbuffer(
       rect.width,

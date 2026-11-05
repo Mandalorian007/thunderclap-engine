@@ -276,7 +276,7 @@ describe('Gestures: double tap', () => {
   });
 });
 
-describe('Gestures: pinch and two-pointer pan', () => {
+describe('Gestures: pinch and multi-pointer', () => {
   it('reports scale and per-tick delta, ending when a pointer lifts', () => {
     const { g, tick } = setup();
     g.pointerDown(1, 100, 100);
@@ -307,23 +307,60 @@ describe('Gestures: pinch and two-pointer pan', () => {
     expect(g.pan).toBeNull();
   });
 
-  it('two pointers moving together pan by their centre past the threshold', () => {
+  it('two pointers moving together never pan or drag: pinch wins', () => {
     const { g, tick } = setup();
     g.pointerDown(1, 100, 100);
     g.pointerDown(2, 200, 100);
     tick();
-    g.pointerMove(1, 105, 100);
-    g.pointerMove(2, 205, 100);
-    tick();
-    expect(g.pan).toBeNull();
-    // Each pointer moves on its own event: the centre crosses the threshold after the first.
+    expect(g.pinch?.phase).toBe('start');
+    // The centre travels 60 CSS px, well past the pan threshold.
     g.pointerMove(1, 130, 100);
     g.pointerMove(2, 230, 100);
     tick();
-    expect(g.pan).toMatchObject({ phase: 'start', pointers: 2, dx: 17.5, x: 167.5 });
-    expect(g.drag).toBeNull();
+    g.pointerMove(1, 160, 100);
+    g.pointerMove(2, 260, 100);
     tick();
-    expect(g.pan).toMatchObject({ phase: 'move', dx: 12.5, x: 180 });
+    expect(g.pan).toBeNull();
+    expect(g.drag).toBeNull();
+    expect(g.pinch).toMatchObject({ phase: 'move', x: 210 });
+    g.pointerUp(2);
+    g.pointerUp(1);
+    tick();
+    expect(g.pinch?.phase).toBe('end');
+    expect(g.pan).toBeNull();
+    tick();
+    expect(g.pan).toBeNull();
+    expect(g.drag).toBeNull();
+  });
+
+  it('a second pointer cancels a running pan and drag, and neither resumes while two are down', () => {
+    const { g, tick } = setup();
+    g.pointerDown(1, 100, 100);
+    g.pointerMove(1, 130, 100);
+    tick();
+    expect(g.pan).toMatchObject({ phase: 'start', pointers: 1, dx: 30 });
+    expect(g.drag?.phase).toBe('start');
+    g.pointerDown(2, 200, 100);
+    tick();
+    expect(g.pan).toMatchObject({ phase: 'cancel', dx: 0, dy: 0 });
+    expect(g.drag).toMatchObject({ phase: 'cancel', origin: { x: 100, y: 100 } });
+    expect(g.pinch?.phase).toBe('start');
+    g.pointerMove(1, 170, 140);
+    g.pointerMove(2, 240, 140);
+    tick();
+    expect(g.pan).toBeNull();
+    expect(g.drag).toBeNull();
+    // Lifting one pointer ends the pinch; the remaining pointer cannot start a new pan.
+    g.pointerUp(2);
+    tick();
+    expect(g.pinch?.phase).toBe('end');
+    g.pointerMove(1, 300, 300);
+    tick();
+    expect(g.pan).toBeNull();
+    expect(g.drag).toBeNull();
+    g.pointerUp(1);
+    tick();
+    expect(g.pan).toBeNull();
   });
 });
 

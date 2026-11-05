@@ -55,6 +55,8 @@ const { x, y, inside, down, dx, dy, wheelY } = input.pointer;   // game space
 ```ts
 import { Gestures, Input } from '@thunderclap/engine/input';
 
+// In a game, `createGame` builds the Gestures (`CreateGameOptions.input.magnify` → `GestureOptions.magnify`)
+// and links them: read them as `ctx.gestures`. By hand:
 const gestures = new Gestures();                 // { panThreshold: 10, longPressMs: 450, doubleTapMs: 300, doubleTapDistance: 24 }
 const input = new Input({
   select: [{ mouse: 0 }, { gesture: 'tap' }],
@@ -73,8 +75,8 @@ if (gestures.pinch) zoom *= gestures.pinch.delta;
 
 - **tap**: down and up within `panThreshold` CSS px, before `longPressMs`. **doubleTap**: a second tap that starts within `doubleTapMs` of the first ending and within `doubleTapDistance`; each of the two taps also reports `tap`.
 - **longPress**: fires once after `longPressMs` without passing the threshold; no tap follows, and moving afterwards does not drag. As a binding it is held until the pointer lifts.
-- **pan** and **drag**: one pointer past the threshold starts both (`phase: 'start'`, with the travel so far in `dx`/`dy`), then `move` every tick (merged; `dx: 0` when idle), then `end`. Every `dx` of one gesture sums to the total travel. `drag` carries the `origin`; `pan` also covers two fingers moving together (`pointers: 2`).
-- **pinch**: a second pointer cancels the drag and starts a pinch; `scale` is the distance now over the distance at the start, `delta` the change since the last report. Lifting either pointer ends it; nothing more is reported until all pointers are up.
+- **pan** and **drag**: one pointer past the threshold starts both (`phase: 'start'`, with the travel so far in `dx`/`dy`), then `move` every tick (merged; `dx: 0` when idle), then `end`. Every `dx` of one gesture sums to the total travel. `drag` carries the `origin`; `pan.pointers` is always 1.
+- **pinch**: a second pointer cancels a running pan and drag (one `cancel` each) and starts a pinch; while two or more pointers are down, pan and drag report nothing (pinch wins; two fingers moving together are not a pan). `scale` is the distance now over the distance at the start, `delta` the change since the last report. Lifting either pointer ends it; nothing more is reported until all pointers are up.
 - Thresholds are CSS px (client coordinates); positions are game space through the transform. A point the transform maps to `null` reports `inside: false` with the last inside position.
 - One tap, double tap and long-press per tick; extras queue for the following ticks (up to 8). `start` and `end` each get their own tick.
 - `blocked()` (shared with the linked `Input`): nothing is reported and the press in progress is dropped; a running pan, drag or pinch gets one `cancel` so the game can put things back. Browser `pointercancel`, window blur and a hidden tab cancel the same way.

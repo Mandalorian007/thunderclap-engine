@@ -19,6 +19,10 @@ input.blocked = () => ui.stack.hasModal;       // the game ignores input while a
 - `ui.layout` is the overlay's layout (`ui/layout.ts`): regions per form factor over the whole root.
   Each form's units (`ui.units`, `data-units`) size the base UI: `frame` (desktop, tablet) in design
   px of the frame, `css` (phones) in CSS px (`cssPxTheme`).
+- Widgets inside a region flow in a flex box: `top` and `bottom` are **rows** (widgets side by
+  side, in `order`), `left` and `right` (and `cardLane`) are **columns**; `captionLane` is a row,
+  `fill` and `modal` centre their content. A game that wants another arrangement wraps its widgets
+  in one element and lays that out itself.
 - A design-px game sheet goes through `toFrameUnits` (and `scaleFontSizes`): each `Npx` becomes
   `N * var(--tc-unit)`, one design px on the frame's layers and one CSS px in the regions.
 - The root and its layers are `pointer-events: none`. Only interactive elements (buttons, panels,

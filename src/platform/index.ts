@@ -30,11 +30,10 @@ export {
 } from './environment';
 export type { GpuContext, GpuFailureReason, GpuInitOptions, GpuInitResult } from './gpu';
 export { initGpu } from './gpu';
-export type { BackbufferSize, FillWidthOptions, Letterbox, Rect, Vec2 } from './letterbox';
+export type { BackbufferSize, Letterbox, Rect, Vec2 } from './letterbox';
 export {
   clientToLogical,
   computeBackbuffer,
-  computeFillWidth,
   computeLetterbox,
   logicalToClient,
 } from './letterbox';
