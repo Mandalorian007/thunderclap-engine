@@ -23,6 +23,15 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 3 | Game plumbing | ws/plumbing | `createGame` wires gestures and pointers; `layout.freeRect` → design px helper for `Camera.fitRect`; `Gestures.pan` ignores multi-pointer; template `sendBeacon` sink + `level_start`/`level_complete`; layout README rows note; delete `Surface.setFill`/`computeFillWidth`; `Scene.render(frame, camera, alpha)` (E-010) | render-call, template-puzzle | ✅ merged `8f3cb9d` (465 engine, 17 template; e2e 390/36) |
 | 3 | e2e determinism | ws/flake-gestures | `gestures.spec` tap/pan timing; `touch` flag read before `open()` in mesh and gestures specs (E-011) | — | ✅ merged `7c528e2` (e2e 390/36; skip count stable at 36 across four runs) |
 | 4 | Doc sweep 2 | ws/doc-sweep-2 | 132 undocumented exports in core/input/render/testing READMEs; ARCHITECTURE principle 4 reword, stale *Planned* lines; chain `check:docs` into `check` | wave 3 | ✅ merged `1ebca03` (134 names documented; `check:docs` in `check`) |
+| 4 | Prune | ws/prune | Leaked internals from the doc-sweep-2 list un-exported or kept with a reason; `mesh.ts` doc comment fixed; harness reads depth state without `renderer.camera` | doc-sweep-2 | 🔧 in progress |
+| 4 | Shadows + fog | ws/shadows | Sun shadow map rendered by the engine and sampled through `engine_shadow(world_pos)`; `engine_fog(color, world_pos)` with distance fog from the block; mesh page shows both; 2D harness pixel-identical | lights | 🔧 in progress |
+| 4 | Frustum cull | ws/cull | `Mesh.bounds`, per-draw frustum cull against the camera's six planes, `renderer.stats.culled`, stream page culls and the e2e asserts it; 2D harness pixel-identical | mesh-stream | 🔧 in progress |
+| 4 | Look controls | ws/look | `Look` linked through `input.setLook` reports `look`/`move` from pointer lock, touch zones and sticks; pointer lock requested and released through it; harness `look.html` on the matrix | plumbing | 🔧 in progress |
+| 4 | World anchors | ws/anchors | `overlay.anchors` places DOM nodes at world points through a camera each frame with clamping, occlusion-by-frustum and optional distance scale; harness `anchors.html` on the matrix | two-views | 🔧 in progress |
+| 4 | 3D particles | ws/particles-3d | `ParticleSystem` in world space with camera billboarding, depth, soft fade and lit/emissive modes; `EmitParams` gains 3D position, velocity, gravity, wind; weather page on the matrix; 2D particles pixel-identical | lights | 🔧 in progress |
+| 4 | Texture arrays | ws/texture-array | `createTextureArray`/`loadTextureArray` with GPU mip generation, `Texture.mipLevels`, a sampler kind for it, stream page textures its chunks; documented | mesh-stream | 🔧 in progress |
+| 4 | Spatial audio | ws/spatial-audio | `audio.listener` (position, orientation) and `PlayOptions.at` / `Voice.setPosition` through a `PannerNode` per spatial voice, with a 2D stereo-pan shorthand; unit tests on a fake `AudioContext`; documented | — | 🔧 in progress |
+| 4 | WebXR | ws/xr | `createXrHost(session)` as a `FrameSource`; `XrSurface` giving a `SceneTarget` per eye per frame; per-eye `Camera`s from `XRView`; `XrPointerSource` for controllers/hands; `createGame({ xr })` + `ctx.xr.enter()/exit()`; unit tests on a fake XR system; harness `xr.html` boots on the matrix | two-views, input-rays | 🔧 in progress |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
@@ -31,10 +40,15 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - **Gate C (after wave 3), met 2026-11-05, closed at `1ebca03`:** mesh page lit by the lighting block (`af36d1c`); streamed mesh updates without a main-thread copy (`bde5299`); two views per frame (`749b992`); template boots with gestures and pointers from `createGame` (`8f3cb9d`). ARCHITECTURE *Planned* lines current and principle 4 reworded (`1ebca03`).
 - **Gate B (after wave 2):** mesh demo met at `2b1032e`; template timed at 17 min (`a266b04`); client mode met at `1b09225`. Gate B met at `2b89c82` (E-010). `?demo=mesh` runs on the matrix; a template game boots from zero in under a day of agent time (timed); client mode runs the harness without a save store.
 
+- **Gate D (after wave 4):** mesh page shadowed and fogged; stream page culls and samples a texture array; look, anchors, weather and xr pages boot on the matrix; spatial voices tested; every XR *Planned* line in ARCHITECTURE is *Today*; 2D harness pixel-identical throughout.
+
+## Wave 5 candidates (after wave 4 merges)
+
+- `templates/first-person`: a copyable 3D game on look controls, culled chunk meshes, shadows, anchors and weather (stacks on wave 4).
+- Doc sweep 3; a Last Rune and Forgewilds "what the engine now offers" note for their PMs.
+- Post stack per eye in XR; spot lights and per-light layer masks; glTF loader (secondary per VISION).
+
 ## Backlog (from engineer reports, unscheduled)
 
-- `Gestures.pan` that ignores multi-pointer input so pinch does not also pan (demo-mesh).
-- `createGame` wires gestures as it will pointers; a CSS-px → design-px helper for fitting a camera to `layout.freeRect` (template-puzzle). Layout README: `top`/`bottom` regions are rows (template-puzzle).
-- Read a camera's depth state in the harness without going through `renderer.camera` (demo-mesh; may fall out of `render(frame, camera, target)`).
-- Export pruning: doc-sweep-2 flagged exports that look like leaked internals (render: `BindingSet`/`BindingDesc`/`BindingSetOptions`, `blendState`, `createSamplers`, `CAMERA_BLOCK_FLOATS`, `MATRIX3X4_FLOATS`, `multiplyMatrix3x4`, `writeMatrix2d`, `WGSL_MATERIAL_PRELUDE`, `INSTANCE_BUFFER_LAYOUT`, `DepthMode`, `GpuTimer`; input: `PointerActions`, `createSample`, `loupeSpot`, `loupeClear`, `magnifySize`). An engineer decides per name; `materialPrelude` stays public.
+- Scheduled in ws/prune (wave 4): depth-state read in the harness; export pruning: doc-sweep-2 flagged exports that look like leaked internals (render: `BindingSet`/`BindingDesc`/`BindingSetOptions`, `blendState`, `createSamplers`, `CAMERA_BLOCK_FLOATS`, `MATRIX3X4_FLOATS`, `multiplyMatrix3x4`, `writeMatrix2d`, `WGSL_MATERIAL_PRELUDE`, `INSTANCE_BUFFER_LAYOUT`, `DepthMode`, `GpuTimer`; input: `PointerActions`, `createSample`, `loupeSpot`, `loupeClear`, `magnifySize`). An engineer decides per name; `materialPrelude` stays public.
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
