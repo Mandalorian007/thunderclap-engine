@@ -7,7 +7,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | Wave | Workstream | Branch | Scope | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
 | 1 | One overlay | ws/one-overlay | Port last-rune's `ws/one-overlay`: `ctx.ui` in CSS px on every form factor; delete `legacyScale`, `createCssChrome`, `avoid()`, `ctx.chrome` (D-044 Phase 3 entry condition) | — | ✅ merged `a15652b` (357 tests; e2e 283 passed / 31 skipped) |
-| 1 | Camera | ws/camera | Matrix `Camera`, `mat4`, camera uniform block, `ortho2d`, `perspective`, `fitRect`, `worldToScreen`/`screenToWorld` | — | ✅ branch green (381 tests, e2e 283/31, byte-identical PNGs); integrating |
+| 1 | Camera | ws/camera | Matrix `Camera`, `mat4`, camera uniform block, `ortho2d`, `perspective`, `fitRect`, `worldToScreen`/`screenToWorld` | — | ✅ merged `a5d95a7` (381 tests, e2e 283/31; byte-identical PNGs main vs branch) |
 | 1 | Transforms | ws/transforms | `Transform`, 28-float instance (3×4 matrix), `layers` mask + sort `order`, vertex layout per `Mesh`, depth-sorted lists | — | 🔄 |
 | 1 | Electron host | ws/host-electron | Bring `@thunderclap/host-electron` from last-rune into `packages/host-electron`; repo becomes a pnpm workspace with the engine at the root | — | ✅ merged `dae37e8` (24 unit tests, Electron smoke 5/5; desktop CI job unverified on runners) |
 | 1 | Analytics | ws/analytics | `@thunderclap/engine/analytics`: typed events, pluggable sink, lifecycle flush (E-002) | — | ✅ merged `0eb151e` (356 engine tests) |
