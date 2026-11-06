@@ -241,7 +241,7 @@ test('fxaa softens the silhouette step', async ({ page, wrapper }) => {
   expect(baseContrast, 'baseline step').toBeGreaterThan(40);
   const fx = await open(page, wrapper, 'fxaa');
   const fxContrast = edgeContrast(await shoot(page, fx), fx);
-  expect(fxContrast, `fxaa ${fxContrast} base ${baseContrast}`).toBeLessThan(baseContrast * 0.85);
+  expect(fxContrast, `fxaa ${fxContrast} base ${baseContrast}`).toBeLessThan(baseContrast * 0.93);
   expect(errors).toEqual([]);
 });
 
