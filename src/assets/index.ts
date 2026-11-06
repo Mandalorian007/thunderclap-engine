@@ -1,4 +1,26 @@
 export type {
+  AtlasDrawContext,
+  AtlasLayout,
+  AtlasOptions,
+  AtlasPixels,
+  AtlasRect,
+  AtlasSource,
+  AtlasTexture,
+  AtlasTextureOptions,
+} from './atlas';
+export { createAtlasTexture, extrudePixels, packAtlas } from './atlas';
+export type {
+  AssetReader,
+  AudioDecoder,
+  Bundle,
+  BundleError,
+  BundleEvents,
+  BundleOptions,
+  BundleProgress,
+  ReadResult,
+} from './bundle';
+export { createBundle } from './bundle';
+export type {
   GltfAccessorType,
   GltfAlphaMode,
   GltfAnimation,
@@ -45,3 +67,20 @@ export {
   SKINNED_WEIGHTS_OFFSET,
   skeletonFromSkin,
 } from './gltf-skin';
+export type {
+  AssetKind,
+  AssetOf,
+  AtlasAsset,
+  AtlasEntry,
+  AudioEntry,
+  BytesEntry,
+  GltfEntry,
+  ImageEntry,
+  JsonEntry,
+  Manifest,
+  ManifestEntry,
+  TextEntry,
+  TextureArrayEntry,
+  TextureEntry,
+} from './manifest';
+export { defineManifest } from './manifest';

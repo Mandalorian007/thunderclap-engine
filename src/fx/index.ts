@@ -36,3 +36,6 @@ export { TextAtlas } from './text-atlas';
 export type { TrailBlend, TrailFacing, TrailOptions } from './trail';
 export { Trail, TrailBatch } from './trail';
 export { TRAIL_TEXTURED_WGSL, TRAIL_WGSL } from './trail-wgsl';
+export type { WaterFoam, WaterOptions, WaterWave } from './water';
+export { WATER_PARAMS_FLOATS, Water, waterHeight } from './water';
+export { WATER_DEPTH_COPY_WGSL, WATER_MAX_WAVES, WATER_WGSL } from './water-wgsl';

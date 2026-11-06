@@ -287,3 +287,58 @@ sky.sunSize = 0.04; // every field is live
 
 Tests: `sky.test.ts` (fake GPU, `skyRay` against `Camera.screenToWorld`). Demo:
 `harness/sky.html` (`?still` parks the sun at noon).
+
+## Water
+
+`Water(renderer, opts?: WaterOptions)` is a `Drawable`: a flat plane of `geom.plane` in the 3D
+vertex layout, shaded as a water surface, no asset, no instance. `frame.drawable(water, order,
+layers)` draws it; `water.update(dt)` advances its waves.
+
+```ts
+import { Water, waterHeight } from '@thunderclap/engine/fx';
+
+const water = new Water(renderer, { size: 60, segments: 64, displace: 0.1, level: 0 });
+// each frame
+water.update(dt);
+frame.lights = lights; // the sun it glints under, the fog and sky tint
+frame.drawable(water, 1);
+water.foam = null; // every field is live
+const y = waterHeight(water, boat.x, boat.z); // the surface under something floating
+```
+
+- `size` (100, or `[x, z]`) and `segments` (1, or `[x, z]`) build the plane once (`mesh`,
+  centred on the origin at `level`); `level` is the resting height.
+- Colour: `shallowColor` (0.1, 0.45, 0.45) at the shoreline fades to `deepColor` (0.01, 0.07,
+  0.14) over `depthFade` (4) world units of water below the surface, measured from the scene
+  depth (below). `fresnel` (0.6) scales a Schlick term that lerps that towards a sky colour
+  (the fog colour at the horizon, bluer at the zenith; darkened at night, like `Sky`).
+  `roughness` (0.08) sizes the sun's GGX highlight, which also goes to the emissive target so
+  bloom picks it up. `opacity` (0.85) is the alpha away from the shore; the alpha ramps up from
+  zero at the shoreline over a quarter of `depthFade`.
+- `waves: WaterWave[]` (`scale`, `speed`, `amplitude`, `direction: [x, z]`): up to
+  `WATER_MAX_WAVES` (4) analytic layers summed for the normal; `displace` (0) multiplies the sum
+  into a vertex offset, so `displace: 0` is a flat mesh with animated shading. Two layers by
+  default.
+- `foam: { width (0.4), color }` draws a noisy foam line where the water is shallower than
+  `width`; `null` for none.
+- `waterHeight(water, x, z, t = water.time)` is the surface height at a point, the shader's
+  formula in TypeScript (`level + displace × Σ amplitude × wave`), allocation-free.
+- Depth: the water writes depth (`depthCompare: 'less-equal'`) and sorts with the blended
+  draws. In `prepare` it copies the scene depth (`renderer.target.depth`, or
+  `WaterOptions.depthTarget`) into its own `depth32float` texture, like soft particles, so
+  the depth fade, shoreline alpha and foam follow the geometry under the surface. The copy is
+  taken before the pass that draws the water, so in a single `renderer.render` view it holds
+  the previous frame's depth, including the water's own surface; the shader treats a texel at
+  its own depth as no information (deep, no foam). For a true shoreline draw the water in a
+  second view of the same camera after the opaque one (`camera.layers` switched, water on its
+  own layer, see `harness/water.ts`): its copy then holds this frame's opaque depth. Without a
+  depth texture or under a camera without depth the surface is deep everywhere and foam is off.
+- Uploads: one params block (`WATER_PARAMS_FLOATS` floats) per frame in `prepare`, plus the
+  depth copy pass. No allocation per frame. `destroy()` releases the mesh, buffer and copy.
+- `WATER_WGSL` (the surface, `WGSL_GLOBALS` + `WGSL_LIGHTS` + `WGSL_NOISE` + `WGSL_PBR`, group 1
+  = params + depth copy) and `WATER_DEPTH_COPY_WGSL` (the copy pass) are exported for reuse.
+  `WaterFoam` is the foam block's type.
+
+Tests: `water.test.ts` (fake GPU, `waterHeight` against the WGSL formula). Demo:
+`harness/water.html` (a basin with a ramp running into the water under a `Sky`; `?still` parks
+the sun on the specular probe).
