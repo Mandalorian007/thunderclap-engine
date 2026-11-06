@@ -114,14 +114,11 @@ export class Camera {
 
   /**
    * Perspective camera at the origin looking down -z. `fovY` in radians; `far` may be
-   * `Infinity`. Depth test, depth write and frustum culling are on.
+   * `Infinity`. Depth test, depth write and frustum culling are on (`setPerspective` sets them).
    */
   static perspective(fovY: number, aspect: number, near: number, far: number): Camera {
     const c = new Camera().setPerspective(fovY, aspect, near, far);
     c.setView(mat4.identity(c.viewM));
-    c.depthTest = true;
-    c.depthWrite = true;
-    c.cull = true;
     return c;
   }
 
@@ -142,14 +139,22 @@ export class Camera {
     return this.touch();
   }
 
-  /** Replace the projection with a perspective one (radians; `far` may be `Infinity`). */
+  /**
+   * Replace the projection with a perspective one (radians; `far` may be `Infinity`) and
+   * configure the camera the way `Camera.perspective` does: `depthTest`, `depthWrite` and
+   * `cull` on (ws/camera-ergo). The view is untouched, so `cam.setPerspective(...)` on a
+   * default camera renders like `Camera.perspective(...)`; `setProjection` stays raw.
+   */
   setPerspective(fovY: number, aspect: number, near: number, far: number): this {
     mat4.perspective(this.projM, fovY, aspect, near, far);
     this.projSource = 'custom';
+    this.depthTest = true;
+    this.depthWrite = true;
+    this.cull = true;
     return this.touch();
   }
 
-  /** Replace the projection matrix (copied). */
+  /** Replace the projection matrix (copied). Raw: no depth or cull flag changes. */
   setProjection(m: ArrayLike<number>): this {
     mat4.copy(this.projM, m);
     this.projSource = 'custom';
@@ -304,9 +309,86 @@ export class Camera {
     return this.pos;
   }
 
+  /**
+   * Clip → world (`viewProjection⁻¹`), column-major like `viewProj`; cached and recomputed
+   * lazily after any view or projection change. Identity when `viewProjection` is singular.
+   * Read-only.
+   */
+  get invViewProj(): Mat4 {
+    this.update();
+    if (this.invDirty) {
+      this.invDirty = false;
+      if (!mat4.invert(this.invViewProjM, this.viewProjM)) mat4.identity(this.invViewProjM);
+    }
+    return this.invViewProjM;
+  }
+
   /** Is a draw with layer mask `mask` seen by this camera? */
   sees(mask: number): boolean {
     return (this.layers & mask) !== 0;
+  }
+
+  /**
+   * View-space depth of a world point: its distance along the view axis, positive in front of
+   * the eye. Reads the view matrix's third row and negates it (`perspective` and `lookAt`
+   * look down -z). `ortho2d` looks down +z, so there it is `-worldZ` at rest. Allocates nothing.
+   */
+  viewZ(x: number, y: number, z = 0): number {
+    const v = this.view;
+    return -(v[2]! * x + v[6]! * y + v[10]! * z + v[14]!);
+  }
+
+  /**
+   * `worldToScreen` for many points without the per-point object: reads `count` points from
+   * `points` (x, y, z at `i * stride`; `stride` ≥ 3, default 3, `count` defaults to what fits)
+   * and writes screen x, screen y and clip depth as 3 floats per point at `out[i * 3]`, the
+   * same values `worldToScreen` returns. Returns how many landed inside the viewport: in
+   * front of the eye, within `screen` and with clip depth in 0..1. Allocates nothing.
+   */
+  projectMany(
+    points: ArrayLike<number>,
+    out: Float32Array,
+    count = Math.floor(points.length / 3),
+    stride = 3,
+  ): number {
+    const vp = this.viewProjection;
+    const s = this.screen;
+    const n = Math.min(count, Math.floor(points.length / stride), Math.floor(out.length / 3));
+    let inside = 0;
+    for (let i = 0; i < n; i++) {
+      const p = i * stride;
+      const w = mat4.transformPoint(tmp, vp, points[p]!, points[p + 1]!, points[p + 2]!);
+      const cx = tmp[0]!;
+      const cy = tmp[1]!;
+      const cz = tmp[2]!;
+      const o = i * 3;
+      out[o] = s.x + ((cx + 1) / 2) * s.width;
+      out[o + 1] = s.y + ((1 - cy) / 2) * s.height;
+      out[o + 2] = cz;
+      if (w > 0 && cx >= -1 && cx <= 1 && cy >= -1 && cy <= 1 && cz >= 0 && cz <= 1) inside++;
+    }
+    return inside;
+  }
+
+  /**
+   * The eight world-space corners of the view frustum into `out` (24 floats, x y z each):
+   * near plane first, then far, each as bottom-left, bottom-right, top-right, top-left in
+   * clip space (clip depth 0 then 1, through `invViewProj`). With `far = Infinity` the far
+   * corners have no finite position (w = 0) and come back as the undivided homogeneous
+   * coordinates, which are directions. Allocates nothing.
+   */
+  frustumCorners(out: Float32Array): Float32Array {
+    const inv = this.invViewProj;
+    let o = 0;
+    for (let d = 0; d <= 1; d++) {
+      for (let k = 0; k < 4; k++) {
+        mat4.transformPoint(tmp, inv, CORNER_X[k]!, CORNER_Y[k]!, d);
+        out[o++] = tmp[0]!;
+        out[o++] = tmp[1]!;
+        out[o++] = tmp[2]!;
+      }
+    }
+    return out;
   }
 
   /**
@@ -333,15 +415,11 @@ export class Camera {
     depth = 0,
     out: CameraPoint = { x: 0, y: 0, z: 0 },
   ): CameraPoint {
-    this.update();
-    if (this.invDirty) {
-      this.invDirty = false;
-      if (!mat4.invert(this.invViewProjM, this.viewProjM)) mat4.identity(this.invViewProjM);
-    }
+    const inv = this.invViewProj;
     const s = this.screen;
     const nx = ((sx - s.x) / s.width) * 2 - 1;
     const ny = 1 - ((sy - s.y) / s.height) * 2;
-    mat4.transformPoint(tmp, this.invViewProjM, nx, ny, depth);
+    mat4.transformPoint(tmp, inv, nx, ny, depth);
     out.x = tmp[0]!;
     out.y = tmp[1]!;
     out.z = tmp[2]!;
@@ -440,6 +518,9 @@ export class Camera {
 }
 
 const UP = [0, 1, 0] as const;
+/** Clip-space corner order for `frustumCorners`: bottom-left, bottom-right, top-right, top-left. */
+const CORNER_X = [-1, 1, 1, -1] as const;
+const CORNER_Y = [-1, -1, 1, 1] as const;
 
 /**
  * `ortho × view2d` in one step, with the same arithmetic the renderer used before the matrix
