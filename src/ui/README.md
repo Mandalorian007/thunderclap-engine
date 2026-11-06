@@ -184,7 +184,21 @@ reticle.pulse();              // a short flash on a hit
   MeterTone` = `accent | info | success | warn | danger`, `width` 240, `format(value, max)` for a
   readout and `aria-valuetext`). `Meter`: `el` (`role="meter"`, `aria-valuemin/now/max`,
   `aria-label` = label), `value`, `max`, `set(value, max?)`, `setTone()`, `remove()`. The fill is
-  `scaleX(--tc-meter-value)`.
+  `scaleX(--tc-meter-value)`. ws/ui-5 adds, on both shapes: `shape: MeterShape` (`'bar' | 'orb'`,
+  see below), `trail: boolean | MeterTrailOptions` (a damage trail: a lighter band in
+  `--tc-color-meter-trail` holds where the value was for `delay` ms, 400, then drains to it over
+  `duration` ms, 600; off under `prefers-reduced-motion` or `reducedMotion: true`), `readout:
+  MeterReadout` (`'value' | 'percent' | 'none'`), `color` (a CSS colour over the tone), `size`
+  (the orb's diameter, theme px, 128), `reducedMotion` and `now` (the trail's clock, ms). `Meter`
+  gains `shape`, `trail` (where the band is now, in `value` units, never under the value) and
+  `setColor(color | null)`. A bar with none of these is unchanged.
+- **Orb** (`ui.meter({ shape: 'orb' })`, `createOrbMeter(host, opts)`): a round well whose fill
+  rises from the bottom with a bright meniscus on its surface and a gloss over it; the readout
+  (default `'value'`) sits in the middle. The fill and the trail are full-height layers moved by
+  `translateY((1 - v) × 100%)` on CSS transitions, so a `set` writes custom properties and costs
+  nothing per frame; the trail's `linear` transition with the delay is the same curve `trail`
+  reports. `data-empty` drops the meniscus at 0. `ORB_CSS` is injected once (`ensureOrbStyles`,
+  `#tc-ui-orb`).
 - **Slots** (`SlotsOptions`: `count`, `region` `bottom`, `order`, `hints` per slot, `label`
   `Slots`, `selected` 0, `size` 72). `Slots`: `el` (`role="listbox"`), `count`, `selected`,
   `select(i)` (**wraps**: `select(count)` is 0, `select(-1)` the last, so a wheel cycles),
@@ -511,6 +525,11 @@ declarations, and `applyTheme(el, tokens)` sets them on an element. `ensureStyle
   `BarOptions`, `KeyPromptOptions`, `StepperOptions`, `CooldownOptions` and the handles `WidgetReticle`,
   `Bar`, `Segmented`, `Select`, `KeyPrompt`, `Stepper`, `Cooldown`. `h`'s children are `Child` (`Node`, string,
   number or nothing); `append(el, ...children)` adds them to an existing element.
+- **ws/ui-5 types.** `MeterShape`, `MeterReadout`, `MeterTrailOptions` (the meter, above);
+  `Floats`, `FloatsHost`, `FloatsOptions`, `FloatTextOptions` (floating text); `CanvasMinimap`,
+  `CanvasMinimapHost`, `CanvasMinimapOptions`, `MinimapWorld`, `MinimapRotate`, `MinimapShape`,
+  `MinimapMarker`, `MinimapMarkerShape`, `MinimapKindStyle`, `MinimapBackground` (the canvas
+  minimap).
 - **External links.** `externalLink(opts: ExternalLinkOptions)` returns an `ExternalLink`
   (`element`, `anchor`, `copyButton`, …) or null; `ExternalLinkLabels` are the strings shown
   above.
@@ -619,6 +638,30 @@ oldest; `update` projects each live number through `anchors.project` and writes 
 pool with the defaults, made on first use (it needs `ui.anchors(camera)`). `FLOAT_CSS` is
 injected once (`ensureFloatStyles`).
 
+## Floating text: `createFloats`
+
+```ts
+const floats = createFloats(ui, () => camera);              // ws/ui-5
+floats.spawn('-12', hitPoint, { color: '#ff5a4a' });
+floats.spawn('84!', hitPoint, { crit: true, size: 1.4 });
+floats.update(dt);                                           // once per update
+```
+
+`createFloats(host: FloatsHost, camera?, opts?: FloatsOptions)` returns `Floats`: floating text
+from a world point through the overlay's anchors (`FloatsHost` is `layers.hud` and
+`anchors(camera?)`; `camera` is handed to `ui.anchors` once). `FloatsOptions`: `max` (pool, 64),
+`life` (s, 1), `rise` (design px, 56), `stackRadius` (world, 0.35), `stackStep` (design px, `[30,
+18]`), `style` (an extra class), `reducedMotion`. `spawn(text, world, opts?: FloatTextOptions)`
+takes `color`, `size` (a factor on `--tc-font-size-m`; a crit defaults to 1.3), `rise`, `life`,
+`crit` (a scale pop, 0.6 → 1.5 → 1.15 over the first fifth of the life) and `stack` (default
+true: spawns on a point with younger labels fan out right, left, each a step higher). `Floats`:
+`live`, `pooled`, `max`, `spawn`, `update(dt)`, `clear()`, `dispose()`. Nodes are pooled (past
+`max` the oldest is recycled) and hidden when the point is behind the camera or off screen;
+`update` writes `transform` (Typed OM where it exists) and `opacity` from precomputed strings, so a
+steady frame allocates nothing. Reduced motion keeps them still (fade only). `FLOATS_CSS`
+(`ensureFloatsStyles`, `#tc-ui-floats`). It sits beside ws/ui-4's `ui.floats` (below), whose API
+it does not change.
+
 ## Ring and compass: `ui.ring`, `ui.compass`
 
 - `ui.ring(opts)` / `createRing(host, opts)` (`Widgets3Host`: `layers.hud`, `layout`):
@@ -648,6 +691,34 @@ never knows the map), `region` (default `right`), `order`. `Minimap`: `el`, `siz
 `{ x, y, outside }` in design px from the centre), `remove()`. Markers are pooled DOM nodes moved
 by `transform`; one past `worldRadius` is held on the rim with the `tc-minimap-outside` class.
 `MINIMAP_CSS` is injected once (`ensureMinimapStyles`).
+
+### Canvas minimap: `createCanvasMinimap`
+
+```ts
+const map = createCanvasMinimap(ui, {                         // ws/ui-5
+  size: 200, world: { minX: -64, minZ: -64, maxX: 64, maxZ: 64 }, rotate: 'player',
+  background: painted, onPick: (x, z) => moveTo(x, z),
+});
+map.setPlayer(p.x, p.z, yaw);                                 // radians, clockwise from north
+map.setMarkers([{ id: 'a', x: 4, z: -9, kind: 'enemy' }]);
+```
+
+`createCanvasMinimap(host: CanvasMinimapHost, opts: CanvasMinimapOptions)` draws the map on its
+own canvas in a layout region. `CanvasMinimapOptions`: `size` (design px, 200), `world:
+MinimapWorld` (`{ minX, minZ, maxX, maxZ }`, the rectangle the background covers), `rotate:
+MinimapRotate` (`'north' | 'player'`), `shape: MinimapShape` (`'round' | 'square'`), `center`
+(`'player'` or `'world'`), `zoom` (1: the world's longer side spans the map), `background`
+(`MinimapBackground`: a canvas, `ImageBitmap` or image the game paints), `kinds` (per marker
+kind, `MinimapKindStyle { shape: MinimapMarkerShape, color, size }`; the shapes are `dot`,
+`square`, `diamond`, `triangle`, `ring`; defaults for `ally`, `enemy`, `objective`, `info`),
+`onPick(worldX, worldZ)`, `region` (`right`), `order`, `label`. `CanvasMinimap`: `el`, `canvas`,
+`size`, `redraws`, `markers`, `zoom` (get and set), `setMarkers(list: MinimapMarker[])` (`{ id,
+x, z, kind, color? }`), `setPlayer(x, z, yaw)`, `setBackground(bg | null)`, `toMap(x, z, out)`,
+`toWorld(u, v, out)` (exact inverses, map px from the top-left), `flush()`, `remove()`. It
+redraws only on change: each setter compares with what it holds and schedules one draw on the
+next animation frame. Markers past the edge sit on the rim, dimmed; colours may be `var(--tc-…)`
+tokens. A click or tap gives `onPick` through `toWorld` (ignored off a round map's disc).
+`CANVAS_MINIMAP_CSS` (`ensureCanvasMinimapStyles`, `#tc-ui-cminimap`).
 
 ## Loading screen: `ui.loading`
 
@@ -771,5 +842,11 @@ owner transitions, the cursor latch reset and two cursors on one transition, `fl
 the pool cap and lifetime, `widgets-3.test.ts` the ring's aria and compass offsets, `minimap.test.ts`
 the rim clamp and rotation, `world-panel/panel.test.ts` a press on the input tick.
 `e2e/ui4.spec.ts` runs `harness/ui4.html` (`?floats`, `?ring`, `?compass`, `?minimap`, `?modal`,
-`?still`) on the matrix. Layout and
+`?still`) on the matrix.
+ws/ui-5: `orb.test.ts` covers the orb's fill and aria, the readouts, the colour override, the trail
+hold, drain and retarget on an injected clock, reduced motion and the bar's trail;
+`floats.test.ts` pool reuse and the `max` recycle, a spawn behind the camera hidden, life end,
+the stack fan, the rise and fade and the crit pop; `minimap-canvas.test.ts` the mapping in both
+`rotate` modes, `toWorld` inverting `toMap`, no redraw without a change and the pick.
+`e2e/ui5.spec.ts` runs `harness/ui5.html` (`?orb`, `?floats`, `?minimap`, `?still`). Layout and
 focus were also checked once in Chromium via Playwright (not part of CI).
