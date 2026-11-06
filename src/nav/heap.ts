@@ -1,16 +1,16 @@
 /**
- * A binary min-heap of cell indices keyed by a caller-owned `Float64Array`, with decrease-key
+ * A binary min-heap of cell indices keyed by a caller-owned float array, with decrease-key
  * through a position table. Sized to the grid once; nothing allocates afterwards. Internal to
- * A* and the flow field.
+ * A*, the flow field and `reachable`.
  */
 export class CellHeap {
   private readonly items: Int32Array;
   /** Heap slot of each cell, or -1 when not in the heap. */
   private readonly where: Int32Array;
-  private readonly key: Float64Array;
+  private readonly key: Float64Array | Float32Array;
   private count = 0;
 
-  constructor(cells: number, key: Float64Array) {
+  constructor(cells: number, key: Float64Array | Float32Array) {
     this.items = new Int32Array(cells);
     this.where = new Int32Array(cells).fill(-1);
     this.key = key;

@@ -3,12 +3,19 @@
  * scores and parents are allocated once per grid (the first query is the warm-up) and reused by
  * every query after it.
  */
-import { type Cell, hasLineOfWalkable, type NavGrid } from './grid';
+import {
+  type Cell,
+  hasLineOfWalkable,
+  type NavGrid,
+  NEIGHBOUR_X,
+  NEIGHBOUR_Y,
+  stepCost,
+} from './grid';
 import { CellHeap } from './heap';
 import { type NavPath, reservePath } from './path';
 
 export interface FindPathOptions {
-  /** Allow the eight-neighbour moves (√2 steps). Default true. */
+  /** Allow the eight-neighbour moves (√2 steps). Default: `grid.neighbours === 8`. */
   diagonal?: boolean;
   /**
    * Corner cutting is never allowed: a diagonal step needs both cells beside it walkable, so a
@@ -17,12 +24,21 @@ export interface FindPathOptions {
   cutCorners?: false;
   /** Give up (return false) after expanding this many cells. Default: the whole grid. */
   maxExpand?: number;
+  /**
+   * The most a path may cost (cost-weighted, inclusive). A cell beyond it is never opened, so
+   * an unreachable goal costs the budget's area, not the grid's. Default: no cap.
+   */
+  maxCost?: number;
+  /**
+   * Multiplies the heuristic (weighted A*): > 1 expands fewer cells and may return a path up
+   * to that factor longer than the best; 1 (default) is exact; 0 is Dijkstra.
+   */
+  heuristicWeight?: number;
 }
 
 const SQRT2 = Math.SQRT2;
-/** Neighbour offsets: the four orthogonal first, then the four diagonal. */
-const NX = [1, -1, 0, 0, 1, 1, -1, -1];
-const NY = [0, 0, 1, -1, 1, -1, 1, -1];
+const NX = NEIGHBOUR_X;
+const NY = NEIGHBOUR_Y;
 
 interface Scratch {
   g: Float64Array;
@@ -84,11 +100,11 @@ export function findPath(
   out.cursor = 0;
   out.version = grid.version;
   if (!grid.isWalkable(from.x, from.y) || !grid.isWalkable(to.x, to.y)) return false;
-  const diagonal = opts.diagonal ?? true;
+  const diagonal = opts.diagonal ?? grid.neighbours === 8;
   const maxExpand = opts.maxExpand ?? grid.size;
+  const maxCost = opts.maxCost ?? Infinity;
+  const weight = opts.heuristicWeight ?? 1;
   const width = grid.width;
-  const height = grid.height;
-  const costs = grid.costs;
   const s = scratch(grid);
   const { g, f, parent, seen, closed, heap } = s;
   // Stamps wrap at 2^32; a wrap to 0 would alias a stale entry, so skip 0.
@@ -101,7 +117,7 @@ export function findPath(
   const start = from.y * width + from.x;
   const goal = ty * width + tx;
   g[start] = 0;
-  f[start] = heuristic(from.x, from.y, tx, ty, diagonal);
+  f[start] = weight * heuristic(from.x, from.y, tx, ty, diagonal);
   parent[start] = -1;
   seen[start] = stamp;
   heap.pushOrDecrease(start);
@@ -121,25 +137,18 @@ export function findPath(
     const cy = (cur - cx) / width;
     const gc = g[cur]!;
     for (let d = 0; d < dirs; d++) {
+      const step = stepCost(grid, cur, cx, cy, d);
+      if (step === Infinity) continue;
       const nx = cx + NX[d]!;
       const ny = cy + NY[d]!;
-      if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
       const ni = ny * width + nx;
-      const nc = costs[ni]!;
-      if (nc <= 0 || closed[ni] === stamp) continue;
-      let step: number;
-      if (d < 4) {
-        step = nc;
-      } else {
-        // No corner cutting: both orthogonal neighbours of the diagonal must be open.
-        if (costs[cy * width + nx]! <= 0 || costs[ny * width + cx]! <= 0) continue;
-        step = SQRT2 * nc;
-      }
+      if (closed[ni] === stamp) continue;
       const ng = gc + step;
+      if (ng > maxCost) continue;
       if (seen[ni] === stamp && ng >= g[ni]!) continue;
       seen[ni] = stamp;
       g[ni] = ng;
-      f[ni] = ng + heuristic(nx, ny, tx, ty, diagonal);
+      f[ni] = ng + weight * heuristic(nx, ny, tx, ty, diagonal);
       parent[ni] = cur;
       heap.pushOrDecrease(ni);
     }
@@ -169,8 +178,10 @@ const sb: Cell = { x: 0, y: 0 };
 
 /**
  * String pulling: drops every waypoint that a straight line of walkable cells can skip, in
- * place, so a staircase of cell centres becomes a few straight legs. `path.cursor` is reset to 0.
- * Returns the path. Allocation-free.
+ * place, so a staircase of cell centres becomes a few straight legs. On a 4-neighbour grid a
+ * leg never leaves its row or column: only collinear waypoints are dropped, so the path keeps
+ * every corner and makes no diagonal cut. `path.cursor` is reset to 0. Returns the path.
+ * Allocation-free.
  */
 export function smoothPath(grid: NavGrid, path: NavPath): NavPath {
   const n = path.length;
@@ -178,6 +189,24 @@ export function smoothPath(grid: NavGrid, path: NavPath): NavPath {
   if (n < 3) return path;
   const p = path.points;
   let write = 1;
+  if (grid.neighbours === 4) {
+    for (let i = 1; i < n - 1; i++) {
+      const ax = p[i * 2]! - p[write * 2 - 2]!;
+      const az = p[i * 2 + 1]! - p[write * 2 - 1]!;
+      const bx = p[i * 2 + 2]! - p[i * 2]!;
+      const bz = p[i * 2 + 3]! - p[i * 2 + 1]!;
+      // Keep the waypoint when the run bends (the cross product of the two legs is not zero).
+      if (ax * bz - az * bx !== 0) {
+        p[write * 2] = p[i * 2]!;
+        p[write * 2 + 1] = p[i * 2 + 1]!;
+        write++;
+      }
+    }
+    p[write * 2] = p[n * 2 - 2]!;
+    p[write * 2 + 1] = p[n * 2 - 1]!;
+    path.length = write + 1;
+    return path;
+  }
   let anchor = 0;
   while (anchor < n - 1) {
     grid.toCell(p[anchor * 2]!, p[anchor * 2 + 1]!, sa);
