@@ -11,11 +11,13 @@ beginFrame(time, dt) → Frame
 render(frame, camera, target = renderer.target)   once per camera
   1. first call of the frame: pre-passes and the per-draw uniform upload; every call: drawable.prepare()
      for each drawable in this view not yet prepared this frame (compute, uploads)
-  2. write this view's globals + camera + lighting blocks (one 1776 B buffer per view) and its instances
+  2. write this view's globals + camera + lighting blocks (one 2032 B buffer per view) and its instances
      (appended to the shared instance buffer)
   3. scene pass into the target: colour (@location 0) and emissive (@location 1), both
      rgba16float, plus depth24plus when camera.depthTest; the first view into a target
-     clears it, later views load
+     clears it, later views load. When a visible drawable has `readsDepth` (and the view
+     has depth), the pass splits at the opaque/blended boundary: opaque pass, depth copy,
+     drawable.afterOpaque(encoder, view), blended pass ("Depth hooks" below)
 endFrame(opts?)
   4. render(frame, renderer.camera) if nothing was rendered (the single-camera path)
   5. renderer.post (e.g. PostStack) or the built-in present pass: renderer.target → swapchain
@@ -84,6 +86,12 @@ renderer.endFrame();
   builds a depth pipeline per format from it.
 - **The emissive target feeds bloom.** Anything written to it glows. The final image is
   colour + emissive + bloom.
+- **Depth hooks (ws/render-hooks).** A drawable with `readsDepth: true` gets this frame's
+  opaque depth: the view's scene pass is encoded as an opaque pass (`scene`), a copy of the
+  depth attachment into `target.depthCopy`, the drawable's `afterOpaque(encoder, view)`, then
+  a blended pass (`scene-blend`) that loads colour, emissive and depth. Without a hooked
+  drawable a frame encodes exactly the passes it did before. `renderer.stats.passes` counts
+  scene passes (two for a split view).
 - In steady state the renderer allocates nothing per frame. The instance buffer doubles in
   size when it runs out of room. Reuse your `DrawParams` objects.
 
@@ -583,7 +591,10 @@ engine prepends a prelude that provides:
 
 - `globals`: `logicalSize`, `targetSize`, `time`, `dt` at `@group(0) @binding(0)`
 - `camera`: `view`, `proj`, `view_proj` (world → clip), `camera_pos`, `viewport` (scene target
-  px) and `view_index` (from `camera.viewIndex`) at `@group(0) @binding(1)`
+  px), `view_index` (from `camera.viewIndex`) and `inv_view_proj` (clip → world, the inverse
+  of `view_proj`: `camera.invViewProj`, at float `CAMERA_INV_VIEW_PROJ_OFFSET` = 60 of the
+  `CAMERA_BLOCK_FLOATS` block, for reconstructing world positions from depth) at
+  `@group(0) @binding(1)`
 - `lights`: `ambient`, `point_count`, `sun_dir`, `sun_color`, `points[16]` (`position`,
   `radius`, `color`), `sun_view_proj`, `shadow_params`, `fog` and `fog_range` at
   `@group(0) @binding(2)`, the sun's shadow map `engine_shadow_map` and comparison sampler
@@ -607,7 +618,7 @@ You write `@fragment fn fs_main(in: VSOut) -> FragOut`. Your own bindings go in 
 ```ts
 const orb = renderer.createMaterial({
   label: 'orb',
-  blend: 'alpha',            // 'alpha' | 'premultiplied' | 'additive' | 'opaque'
+  blend: 'alpha',            // 'alpha' | 'premultiplied' | 'additive' | 'multiply' | 'opaque'
   uniformBytes: 16,          // optional
   textures: 1,               // optional
   sampler: 'linear-clamp',   // 'linear-repeat' | 'nearest-clamp'
@@ -631,7 +642,8 @@ A material can also override the vertex stage with `vertexEntry`. Use `engine_ve
 inside it to keep the standard transform.
 
 - `renderer.createMaterial(desc: MaterialDesc)` returns a `Material`. `MaterialDesc` takes
-  `label`, `wgsl`, `blend` (`BlendMode`: `alpha`, `premultiplied`, `additive`, `opaque`),
+  `label`, `wgsl`, `blend` (`BlendMode`: `alpha`, `premultiplied`, `additive`, `multiply`
+  (`dst × rgb`, destination alpha kept), `opaque`; `blendState(mode)` is the `GPUBlendState`),
   `uniformBytes`, `textures`, `sampler` (`SamplerKind`: `linear-clamp`, `linear-repeat`, `linear-mip-repeat`, `nearest-mip-clamp`,
   `nearest-clamp`), `perDrawUniforms`, `vertexEntry` and `fragmentEntry`.
 - `material.pipelineFor(layout, depth)` returns the pipeline for a `VertexLayout` and a
@@ -843,6 +855,21 @@ its Worker-meshed chunks this way.
 - `Drawable { prepare?(encoder, frame); draw(pass, frame) }` lets you run your own pipelines
   inside the scene pass. Build them with `layout: [renderer.globalsLayout, yours]` and
   `targets: renderer.sceneFormats`.
+
+### Depth hooks
+
+A drawable that reads the scene depth (soft particles, water, decals) sets `readsDepth: true`
+and may implement `afterOpaque?(encoder: GPUCommandEncoder, view: ViewInfo): void`. For each
+view with `camera.depthTest` that sees such a drawable, the renderer ends the scene pass after
+the opaque draws (plus every draw of a lower `order`), copies the depth attachment with
+`copyTextureToTexture` into the target's `depthCopy` (a `depth24plus` texture usable as a
+`texture_depth_2d` binding) and calls `afterOpaque` once per hooked drawable before the
+blended pass. `ViewInfo { camera, target, depthCopy, depthView, viewport }` is valid until that
+view's blended pass ends; bind `depthView` (a new bind group only when the texture changed) and
+draw as usual. `ortho2d` cameras never split. `SceneTarget.depthCopy` (null until a view split
+into it), `canCopyDepth` (false for an adopted XR depth without `COPY_SRC`, in which case the
+view does not split and the hook is not called), `copyDepth(encoder)` and `blendPassDesc` are
+the pieces. `Water` and `ParticleSystem` take `readsDepth` and then skip their own copy.
 - `frame.prePass(fn)` runs before the scene pass, for things like render-to-texture.
 - `SnapshotRenderer(device, format, opts: SnapshotOptions)` is a second `Renderer` on the same
   device that draws one frame into an `OffscreenCanvas`: `shot.capture(draw, time?)` returns an
@@ -875,11 +902,12 @@ its Worker-meshed chunks this way.
   `reportGpuError(message)` logs and records one (`createShaderModule` reports compile errors
   through it; a game can report its own GPU failures the same way).
 - `renderer.stats` (`RenderStats`) reports `{ drawCalls, instances, drawables, culled, batches,
-  shadowDraws, triangles }` for the last frame; `culled` is the mesh instances the frustum test skipped
+  shadowDraws, triangles, passes }` for the last frame; `culled` is the mesh instances the frustum test skipped
   and `batches` the `frame.meshes` batches and `frame.list` lists drawn, summed over the views.
   `triangles` (ws/ergo-3d) is the triangles the scene passes drew (index or vertex count ÷ 3,
   times the instance count), summed over the views; drawables and the shadow pass are not
-  counted, so a demo's readout needs no per-mesh arithmetic.
+  counted, so a demo's readout needs no per-mesh arithmetic. `passes` (ws/render-hooks) is the
+  scene passes encoded (one per view, two per view split by a depth hook).
 
 ## Resolution and timing
 

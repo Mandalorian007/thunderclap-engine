@@ -9,6 +9,7 @@ import {
   INSTANCE_PARAM_FLOATS,
   type InstanceBatch,
   type InstanceParams,
+  type ViewInfo,
   writeInstanceParams,
 } from './frame';
 import { FullscreenPass, type FullscreenPassDesc } from './fullscreen';
@@ -121,6 +122,12 @@ export interface RenderStats {
    * casters inside the sun's box, whether or not the view's frustum sees them.
    */
   shadowDraws: number;
+  /**
+   * Scene render passes encoded this frame: one per view, two for a view that split at the
+   * opaque/blended boundary for a `readsDepth` drawable (ws/render-hooks). Shadow and post
+   * passes are not counted.
+   */
+  passes: number;
 }
 
 /** Options of `Renderer.textureFromSource`. */
@@ -230,7 +237,7 @@ const PRESENT_CLEAR: GPUColorDict = { r: 0, g: 0, b: 0, a: 1 };
 const GLOBALS_FLOATS = 8;
 /** The camera block (binding 1) starts at this float offset (256 bytes: uniform alignment). */
 const CAMERA_OFFSET_FLOATS = 64;
-/** The lighting block (binding 2) starts at this float offset (512 bytes, after the camera). */
+/** The lighting block (binding 2) starts at this float offset (768 bytes, after the camera). */
 const LIGHTS_OFFSET_FLOATS = CAMERA_OFFSET_FLOATS + CAMERA_BLOCK_FLOATS;
 /** One upload covers all three blocks. */
 const ENGINE_UNIFORM_FLOATS = LIGHTS_OFFSET_FLOATS + LIGHTS_BLOCK_FLOATS;
@@ -328,6 +335,7 @@ export class Renderer implements FrameSink {
     batches: 0,
     culled: 0,
     shadowDraws: 0,
+    passes: 0,
   };
   /** See `FrameTiming`. Only updated while `timingEvery > 0`. */
   readonly timing: FrameTiming = {
@@ -433,6 +441,22 @@ export class Renderer implements FrameSink {
   private culledCount = 0;
   private readonly prePasses: ((encoder: GPUCommandEncoder) => void)[] = [];
   private readonly prepared = new Set<Drawable>();
+  /**
+   * Where the last `buildDraws` would split the scene commands for a `readsDepth` drawable:
+   * the index of the first blended command at or above the lowest hooked order; -1 when no
+   * visible drawable asked (or the camera has no depth test).
+   */
+  private splitAt = -1;
+  /** Drawables whose `afterOpaque` ran for the current view (once each). */
+  private readonly hooked = new Set<Drawable>();
+  /** The `ViewInfo` handed to `afterOpaque`, reused across views. */
+  private readonly viewInfo: ViewInfo = {
+    camera: undefined as unknown as Camera,
+    target: undefined as unknown as SceneTarget,
+    depthCopy: undefined as unknown as GPUTexture,
+    depthView: undefined as unknown as GPUTextureView,
+    viewport: { x: 0, y: 0, width: 0, height: 0 },
+  };
   /** Per-draw uniform sets with blocks staged this frame. */
   private readonly drawUniformSets: BindingSet[] = [];
   private readonly dynamicOffsets = [0];
@@ -836,6 +860,7 @@ export class Renderer implements FrameSink {
     this.stats.batches = 0;
     this.stats.culled = 0;
     this.stats.shadowDraws = 0;
+    this.stats.passes = 0;
     const f = this.frame;
     f.time = time;
     f.dt = dt;
@@ -958,17 +983,73 @@ export class Renderer implements FrameSink {
       desc.depthStencilAttachment = undefined;
     }
 
+    // A view with a `readsDepth` drawable splits here: opaque draws, a copy of the depth
+    // attachment, the drawables' `afterOpaque`, then the blended draws loading everything.
+    const split = depth && this.splitAt >= 0 && target.canCopyDepth ? this.splitAt : -1;
     const pass = enc.beginRenderPass(desc);
-    if (!full) {
-      pass.setViewport(vp.x, vp.y, vp.width, vp.height, 0, 1);
-      pass.setScissorRect(
-        Math.floor(vp.x),
-        Math.floor(vp.y),
-        Math.ceil(vp.width),
-        Math.ceil(vp.height),
-      );
-    }
+    this.setViewRect(pass, vp, full);
     pass.setBindGroup(0, slot.group);
+    this.encodeDraws(pass, frame, slot, base, 0, split >= 0 ? split : scene.count);
+    pass.end();
+    this.stats.passes++;
+    if (split >= 0) {
+      const copy = target.copyDepth(enc)!;
+      const info = this.viewInfo;
+      info.camera = camera;
+      info.target = target;
+      info.depthCopy = copy.texture;
+      info.depthView = copy.view;
+      info.viewport.x = vp.x;
+      info.viewport.y = vp.y;
+      info.viewport.width = vp.width;
+      info.viewport.height = vp.height;
+      const hooked = this.hooked;
+      hooked.clear();
+      for (let i = split; i < scene.count; i++) {
+        const d = scene.cmds[i]!.drawable;
+        if (d?.readsDepth && d.afterOpaque && !hooked.has(d)) {
+          hooked.add(d);
+          d.afterOpaque(enc, info);
+        }
+      }
+      const blendDesc = target.blendPassDesc;
+      blendDesc.timestampWrites = timer?.pass('scene-blend');
+      const blend = enc.beginRenderPass(blendDesc);
+      this.setViewRect(blend, vp, full);
+      blend.setBindGroup(0, slot.group);
+      this.encodeDraws(blend, frame, slot, base, split, scene.count);
+      blend.end();
+      this.stats.passes++;
+    }
+    this.stats.instances += this.sceneCount + this.sceneListInstances;
+    this.stats.batches += this.sceneBatches;
+  }
+
+  /** Viewport and scissor of a view that does not cover its target. */
+  private setViewRect(pass: GPURenderPassEncoder, vp: CameraRect, full: boolean): void {
+    if (full) return;
+    pass.setViewport(vp.x, vp.y, vp.width, vp.height, 0, 1);
+    pass.setScissorRect(
+      Math.floor(vp.x),
+      Math.floor(vp.y),
+      Math.ceil(vp.width),
+      Math.ceil(vp.height),
+    );
+  }
+
+  /**
+   * Encode scene commands `[from, to)` into `pass` (group 0 already bound to `slot.group`),
+   * counting draw calls and drawables into `stats`.
+   */
+  private encodeDraws(
+    pass: GPURenderPassEncoder,
+    frame: Frame,
+    slot: ViewSlot,
+    base: number,
+    from: number,
+    to: number,
+  ): void {
+    const scene = this.scene;
     let curPipeline: GPURenderPipeline | null = null;
     let curMaterial: Material | null = null;
     let curOffset = -1;
@@ -977,7 +1058,7 @@ export class Renderer implements FrameSink {
     let drawCalls = 0;
     let triangles = 0;
     let drawables = 0;
-    for (let i = 0; i < scene.count; i++) {
+    for (let i = from; i < to; i++) {
       const c = scene.cmds[i]!;
       if (c.drawable) {
         c.drawable.draw(pass, frame);
@@ -1025,12 +1106,9 @@ export class Renderer implements FrameSink {
       }
       drawCalls++;
     }
-    pass.end();
     this.stats.drawCalls += drawCalls;
     this.stats.triangles += triangles;
-    this.stats.instances += this.sceneCount + this.sceneListInstances;
     this.stats.drawables += drawables;
-    this.stats.batches += this.sceneBatches;
   }
 
   /**
@@ -1426,6 +1504,7 @@ export class Renderer implements FrameSink {
     this.scene.count = 0;
     this.shadowCmds.count = 0;
     this.culledCount = 0;
+    this.splitAt = -1;
 
     let visible = n;
     if (camLayers !== ALL_LAYERS) {
@@ -1457,6 +1536,9 @@ export class Renderer implements FrameSink {
     const planes = cull ? cam.frustum : null;
     let culled = 0;
     let k = 0;
+    // The lowest `order` of a visible drawable that reads depth: the view splits before the
+    // first blended draw of that order (ws/render-hooks).
+    let hookOrder = Number.POSITIVE_INFINITY;
     for (let i = 0; i < n; i++) {
       const r = recs[i]!;
       if ((r.layers & camLayers) === 0) continue;
@@ -1471,6 +1553,7 @@ export class Renderer implements FrameSink {
         // No position: sorts as the nearest blended draw of its order (drawn after the rest).
         r.group = 1;
         r.dist = Number.NEGATIVE_INFINITY;
+        if (r.drawable.readsDepth && r.order < hookOrder) hookOrder = r.order;
         continue;
       }
       r.group = r.material!.blend === 'opaque' ? 0 : 1;
@@ -1514,6 +1597,9 @@ export class Renderer implements FrameSink {
     let listInst = 0;
     for (let j = 0; j < k; j++) {
       const r = recs[idx[j]!]!;
+      if (this.splitAt < 0 && r.group === 1 && r.order >= hookOrder) {
+        this.splitAt = this.scene.count;
+      }
       if (r.drawable) {
         this.batch(this.scene, r, null, 0);
         continue;

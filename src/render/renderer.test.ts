@@ -1,14 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { Camera } from './camera';
+import { mat4 } from '../core/math';
+import { CAMERA_INV_VIEW_PROJ_OFFSET, Camera } from './camera';
 import {
   createFakeDevice,
   type FakeBindGroup,
   type FakeDevice,
+  type FakeTexture,
   type FakeView,
   fakeRendererGpu,
   type PassCommand,
 } from './fake-gpu';
-import { type Frame, INSTANCE_PARAM_FLOATS } from './frame';
+import { type Frame, INSTANCE_PARAM_FLOATS, type ViewInfo } from './frame';
 import {
   DEFAULT_SHADOW_BIAS,
   LAYERS_OFFSET_FLOATS,
@@ -378,8 +380,8 @@ describe('camera block', () => {
     expect(g.layout.entries[4]).toMatchObject({ sampler: { type: 'comparison' } });
     expect(g.entries.map((e) => e.resource)).toMatchObject([
       { size: 32 },
-      { offset: 256, size: 256 },
-      { offset: 512, size: LIGHTS_BLOCK_FLOATS * 4 },
+      { offset: 256, size: 512 },
+      { offset: 768, size: LIGHTS_BLOCK_FLOATS * 4 },
       {
         texture: {
           label: 'engine-shadow-placeholder',
@@ -391,7 +393,7 @@ describe('camera block', () => {
       { label: 'engine-shadow-sampler' },
     ]);
     const buf = fake.buffers.find((b) => b.label === 'engine-globals')!;
-    expect(buf.size).toBe(512 + LIGHTS_BLOCK_FLOATS * 4);
+    expect(buf.size).toBe(768 + LIGHTS_BLOCK_FLOATS * 4);
   });
 
   it('uploads the default unlit block, then the frame.lights the game sets, per view', () => {
@@ -400,7 +402,7 @@ describe('camera block', () => {
     const f = r.beginFrame(0, 0);
     r.endFrame();
     expect(f.lights).toBeInstanceOf(Lights);
-    const unlit = seen[0]!.subarray(128, 128 + LIGHTS_BLOCK_FLOATS);
+    const unlit = seen[0]!.subarray(192, 192 + LIGHTS_BLOCK_FLOATS);
     expect([...unlit.subarray(0, 3)]).toEqual([1, 1, 1]);
     expect(new Uint32Array(unlit.buffer, unlit.byteOffset)[3]).toBe(0);
     expect([...unlit.subarray(4, 12)]).toEqual([0, -1, 0, 0, 0, 0, 0, 0]);
@@ -421,13 +423,13 @@ describe('camera block', () => {
     r.endFrame();
     // `captureGlobals` sees view 0's buffer; view 1 (`engine-globals-1`) gets the same bytes.
     expect(seen.length).toBe(2);
-    const l = seen[1]!.subarray(128, 128 + LIGHTS_BLOCK_FLOATS);
+    const l = seen[1]!.subarray(192, 192 + LIGHTS_BLOCK_FLOATS);
     expect([...l.subarray(0, 3)]).toEqual([0.2, 0.3, 0.4].map(Math.fround));
     expect(new Uint32Array(l.buffer, l.byteOffset)[3]).toBe(1);
     expect([...l.subarray(8, 11)]).toEqual([1, 0.9, 0.8].map(Math.fround));
     expect([...l.subarray(12, 20)]).toEqual([1, 2, 3, 9, 5, 6, 7, 0]);
     const writes = fake.writes.filter((w) => (w.buffer.label ?? '').startsWith('engine-globals'));
-    expect(writes.map((w) => w.bytes)).toEqual(Array(3).fill(512 + LIGHTS_BLOCK_FLOATS * 4));
+    expect(writes.map((w) => w.bytes)).toEqual(Array(3).fill(768 + LIGHTS_BLOCK_FLOATS * 4));
     expect(fake.errors).toEqual([]);
   });
 
@@ -444,13 +446,37 @@ describe('camera block', () => {
     expect(fake.errors).toEqual([]);
     expect(seen.length).toBe(1);
     const g = seen[0]!;
-    expect(g.length).toBe(128 + LIGHTS_BLOCK_FLOATS);
+    expect(g.length).toBe(192 + LIGHTS_BLOCK_FLOATS);
     expect([...g.subarray(0, 6)]).toEqual([1920, 1080, 800, 450, 1.5, 0.25]);
     expect([...g.subarray(64, 80)]).toEqual([...r.camera.view]);
     expect([...g.subarray(80, 96)]).toEqual([...r.camera.projection]);
     expect([...g.subarray(96, 112)]).toEqual([...r.camera.viewProjection]);
     expect([...g.subarray(116, 120)]).toEqual([0, 0, 800, 450]); // viewport: scene target px
     expect(new Uint32Array(g.buffer)[120]).toBe(0); // view_index
+  });
+
+  it('carries inv_view_proj after view_index: a world point round-trips through the bytes (ws/render-hooks)', () => {
+    const { fake, r } = setup();
+    const seen = captureGlobals(fake);
+    r.camera = Camera.perspective(1, 1.5, 0.1, 100).lookAt([3, 4, 10], [0, 1, 0]);
+    const f = r.beginFrame(0, 0);
+    f.sprite(null, { x: 0, y: 0 });
+    r.endFrame();
+    const g = seen[0]!;
+    expect(CAMERA_INV_VIEW_PROJ_OFFSET).toBe(60); // byte 240: after view_index + vec3u pad
+    const vp = g.subarray(96, 112);
+    const inv = g.subarray(64 + CAMERA_INV_VIEW_PROJ_OFFSET, 64 + CAMERA_INV_VIEW_PROJ_OFFSET + 16);
+    expect([...inv]).toEqual([...r.camera.invViewProj]);
+    const clip = [0, 0, 0];
+    mat4.transformPoint(clip, vp, 1.5, -2, 3);
+    const back = [0, 0, 0];
+    mat4.transformPoint(back, inv, clip[0]!, clip[1]!, clip[2]!);
+    expect(back[0]).toBeCloseTo(1.5, 3);
+    expect(back[1]).toBeCloseTo(-2, 3);
+    expect(back[2]).toBeCloseTo(3, 3);
+    // The pad after the matrix is zero up to the lights block.
+    expect(g.subarray(64 + 76, 192).every((v) => v === 0)).toBe(true);
+    expect(fake.errors).toEqual([]);
   });
 
   it('draws through an assigned camera', () => {
@@ -1290,7 +1316,7 @@ describe('shadow pass', () => {
     expect((sceneBind.group.entries[3]!.resource as unknown as FakeView).texture).toBe(map);
     expect(r.globalsBindGroup).toBe(sceneBind.group);
     // The view's lights block carries the sun matrix, enabled 1 and the map's texel size.
-    const l = seen.at(-1)!.subarray(128, 128 + LIGHTS_BLOCK_FLOATS);
+    const l = seen.at(-1)!.subarray(192, 192 + LIGHTS_BLOCK_FLOATS);
     expect(l[SHADOW_PARAMS_OFFSET_FLOATS + 2]).toBe(1);
     expect(l[SHADOW_PARAMS_OFFSET_FLOATS + 1]).toBe(Math.fround(1 / 2048));
     expect(l[SHADOW_PARAMS_OFFSET_FLOATS]).toBe(Math.fround(DEFAULT_SHADOW_BIAS));
@@ -1368,7 +1394,7 @@ describe('shadow pass', () => {
     f.lights.sun.shadow = { extent: 10, size: 1024, bias: 0.01 };
     f.mesh(cube, m, new Transform());
     r.endFrame();
-    const l = seen.at(-1)!.subarray(128, 128 + LIGHTS_BLOCK_FLOATS);
+    const l = seen.at(-1)!.subarray(192, 192 + LIGHTS_BLOCK_FLOATS);
     const vp = l.subarray(SUN_VIEW_PROJ_OFFSET_FLOATS, SUN_VIEW_PROJ_OFFSET_FLOATS + 16);
     const project = (p: number[]) => {
       const x = vp[0]! * p[0]! + vp[4]! * p[1]! + vp[8]! * p[2]! + vp[12]!;
@@ -1902,5 +1928,226 @@ describe('Renderer.white (ws/pbr-lights)', () => {
     expect((d.white.texture as unknown as { destroyed: boolean }).destroyed).toBeFalsy();
     const r2 = new Renderer(fakeRendererGpu(fake));
     expect(r2.white).toBe(d.white);
+  });
+});
+
+describe('depth hooks (ws/render-hooks)', () => {
+  const CUBE = new Float32Array(VERTEX3D_FLOATS * 3);
+  const OPAQUE = { label: 'o', wgsl: WGSL, uniformBytes: 16, blend: 'opaque' as const };
+
+  /** A drawable that records the views it was hooked into. */
+  function hooked(readsDepth = true) {
+    const calls: { camera: Camera; target: unknown; copy: unknown; vp: number[] }[] = [];
+    const d = {
+      readsDepth,
+      draw(pass: GPURenderPassEncoder) {
+        pass.draw(3);
+      },
+      afterOpaque(_enc: GPUCommandEncoder, v: ViewInfo) {
+        calls.push({
+          camera: v.camera,
+          target: v.target,
+          copy: v.depthCopy,
+          vp: [v.viewport.x, v.viewport.y, v.viewport.width, v.viewport.height],
+        });
+      },
+    };
+    return { d, calls };
+  }
+
+  function sceneLabels(fake: FakeDevice) {
+    return fake.passes
+      .map((p) => p.label)
+      .filter((l) => l === 'scene' || l === 'scene-blend' || l === 'shadow');
+  }
+
+  /** Every pass label but the first frame's white-texture mipmaps. */
+  function labels(fake: FakeDevice) {
+    return fake.passes.map((p) => p.label).filter((l) => !l?.startsWith('mipmap:'));
+  }
+
+  function scene3d(r: Renderer) {
+    const m = r.createMaterial(OPAQUE);
+    const glass = r.createMaterial({ ...OPAQUE, label: 'g', blend: 'alpha' });
+    const cube = r.createMesh({ vertices: CUBE, layout: VERTEX_LAYOUT_3D });
+    return { m, glass, cube };
+  }
+
+  it('a view without a hook encodes exactly the passes it did before', () => {
+    const { fake, r } = setup();
+    const { m, glass, cube } = scene3d(r);
+    r.camera = Camera.perspective(1, 1, 0.1, 100).lookAt([0, 5, 10], [0, 0, 0]);
+    const plain = { draw: (pass: GPURenderPassEncoder) => pass.draw(3) };
+    const f = r.beginFrame(0, 0);
+    f.mesh(cube, m, new Transform({ x: 1 }));
+    f.mesh(cube, glass, new Transform({ x: 3 }));
+    f.drawable(plain, 1);
+    r.endFrame();
+    expect(labels(fake)).toEqual(['scene', 'pass:present-basic']);
+    expect(fake.textureCopies).toEqual([]);
+    expect(fake.textures.filter((t) => t.label === 'scene-depth-copy')).toEqual([]);
+    expect(r.stats.passes).toBe(1);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('one hooked drawable: opaque pass, depth copy, afterOpaque, blended pass that loads', () => {
+    const { fake, r } = setup();
+    const { m, glass, cube } = scene3d(r);
+    r.camera = Camera.perspective(1, 1, 0.1, 100).lookAt([0, 5, 10], [0, 0, 0]);
+    const { d, calls } = hooked();
+    const f = r.beginFrame(0, 0);
+    f.drawable(d, 1);
+    f.mesh(cube, glass, new Transform({ x: 3 })); // blended, order 0: before the split
+    f.mesh(cube, m, new Transform({ x: 1 }));
+    f.mesh(cube, glass, new Transform({ x: 5 }), { order: 1 }); // blended, order 1: after
+    f.mesh(cube, m, new Transform({ x: 2 }), { order: 1 }); // opaque, order 1: before
+    r.endFrame();
+    expect(labels(fake)).toEqual(['scene', 'scene-blend', 'pass:present-basic']);
+    expect(r.stats.passes).toBe(2);
+    // Opaque half: order 0 (opaque then glass), then order 1's opaque cube.
+    const scenePasses = fake.passes.filter((p) => !p.label?.startsWith('mipmap:'));
+    const opaque = scenePasses[0]!.commands;
+    expect(pipelineLabels(opaque)).toEqual([
+      'material:o:3d:d2',
+      'material:g:3d:d1',
+      'material:o:3d:d2',
+    ]);
+    expect(draws(opaque).length).toBe(3);
+    // Blended half: order 1's glass, then the drawable (nearest blended of its order).
+    const blend = scenePasses[1]!.commands;
+    expect(pipelineLabels(blend)).toEqual(['material:g:3d:d1']);
+    expect(draws(blend).length).toBe(2);
+    // The copy sits between the two passes, depth → depth copy, same format.
+    expect(fake.textureCopies.length).toBe(1);
+    const copy = fake.textureCopies[0]!;
+    expect(copy.afterPasses).toBe(fake.passes.indexOf(scenePasses[0]!) + 1);
+    expect(copy.src.label).toBe('scene-depth');
+    expect(copy.dst.label).toBe('scene-depth-copy');
+    expect([copy.dst.format, copy.dst.width, copy.dst.height]).toEqual([
+      'depth24plus',
+      r.width,
+      r.height,
+    ]);
+    expect(copy.dst.usage & GPUTextureUsage.TEXTURE_BINDING).toBeTruthy();
+    expect(r.target.depthCopy!.texture).toBe(copy.dst);
+    // afterOpaque once, with the view's camera, target and copy, full viewport.
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.camera).toBe(r.camera);
+    expect(calls[0]!.target).toBe(r.target);
+    expect(calls[0]!.copy).toBe(copy.dst);
+    expect(calls[0]!.vp).toEqual([0, 0, r.width, r.height]);
+    // The blended pass loads colour, emissive and depth; the opaque one cleared.
+    const bd = scenePasses[1]!.desc as GPURenderPassDescriptor;
+    const atts = bd.colorAttachments as GPURenderPassColorAttachment[];
+    expect(atts.map((a) => a.loadOp)).toEqual(['load', 'load']);
+    expect(bd.depthStencilAttachment).toMatchObject({ depthLoadOp: 'load', depthStoreOp: 'store' });
+    const od = scenePasses[0]!.desc as GPURenderPassDescriptor;
+    expect((od.colorAttachments as GPURenderPassColorAttachment[])[0]!.loadOp).toBe('clear');
+    expect(od.depthStencilAttachment).toMatchObject({ depthLoadOp: 'clear' });
+    expect((atts[0]!.view as unknown as FakeView).texture).toBe(
+      ((od.colorAttachments as GPURenderPassColorAttachment[])[0]!.view as unknown as FakeView)
+        .texture,
+    );
+    expect(fake.errors).toEqual([]);
+
+    // Steady state: no new GPU objects on the next frame.
+    const textures = fake.textures.length;
+    const groups = fake.bindGroups.length;
+    const g = r.beginFrame(0, 0);
+    g.drawable(d, 1);
+    g.mesh(cube, m, new Transform({ x: 1 }));
+    r.endFrame();
+    expect(fake.textures.length).toBe(textures);
+    expect(fake.bindGroups.length).toBe(groups);
+    expect(calls.length).toBe(2);
+  });
+
+  it('two views, one hooked: only that view splits; the shadow pass stays per view', () => {
+    const { fake, r } = setup();
+    const { m, cube } = scene3d(r);
+    const a = Camera.perspective(1, 1, 0.1, 100);
+    a.screen.width = 0.5;
+    a.layers = 1;
+    const b = Camera.perspective(1, 1, 0.1, 100);
+    b.screen.x = 0.5;
+    b.screen.width = 0.5;
+    b.layers = 2;
+    const { d, calls } = hooked();
+    const f = r.beginFrame(0, 0);
+    f.lights.sun.dir = [-0.4, -1, -0.3];
+    f.lights.sun.shadow = { extent: 20 };
+    f.mesh(cube, m, new Transform(), { layers: 3 });
+    f.drawable(d, 0, 2); // layer 2: only view b sees it
+    r.render(f, a);
+    r.render(f, b);
+    r.endFrame();
+    expect(sceneLabels(fake)).toEqual(['shadow', 'scene', 'shadow', 'scene', 'scene-blend']);
+    expect(r.stats.passes).toBe(3);
+    expect(fake.textureCopies.length).toBe(1);
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.camera).toBe(b);
+    expect(calls[0]!.vp).toEqual([r.width / 2, 0, r.width / 2, r.height]);
+    // The blended half keeps the view's viewport and scissor.
+    const blend = fake.passes.find((p) => p.label === 'scene-blend')!;
+    const rects = blend.commands.filter(
+      (c) => c.op === 'other' && (c as { name: string }).name === 'setViewport',
+    );
+    expect(rects.map((c) => (c as { args?: number[] }).args)).toEqual([
+      [r.width / 2, 0, r.width / 2, r.height, 0, 1],
+    ]);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('ortho2d (no depthTest) never splits, hooked or not; neither does readsDepth without afterOpaque alone split a 2D frame', () => {
+    const { fake, r } = setup();
+    const { d, calls } = hooked();
+    const f = r.beginFrame(0, 0);
+    f.sprite(null, { x: 0, y: 0 });
+    f.drawable(d);
+    r.endFrame();
+    expect(labels(fake)).toEqual(['scene', 'pass:present-basic']);
+    expect(calls).toEqual([]);
+    expect(fake.textureCopies).toEqual([]);
+    expect(r.stats.passes).toBe(1);
+    expect(f.depthFormat).toBeNull();
+  });
+
+  it('readsDepth without afterOpaque still splits and fills target.depthCopy', () => {
+    const { fake, r } = setup();
+    const { m, cube } = scene3d(r);
+    r.camera = Camera.perspective(1, 1, 0.1, 100);
+    const { d } = hooked();
+    delete (d as { afterOpaque?: unknown }).afterOpaque;
+    const f = r.beginFrame(0, 0);
+    f.mesh(cube, m, new Transform());
+    f.drawable(d);
+    r.endFrame();
+    expect(sceneLabels(fake)).toEqual(['scene', 'scene-blend']);
+    expect(fake.textureCopies.length).toBe(1);
+    expect(r.target.depthCopy).not.toBeNull();
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('the depth copy follows a resize and dies with the target', () => {
+    const { r } = setup();
+    const { m, cube } = scene3d(r);
+    r.camera = Camera.perspective(1, 1, 0.1, 100);
+    const { d } = hooked();
+    const frame = () => {
+      const f = r.beginFrame(0, 0);
+      f.mesh(cube, m, new Transform());
+      f.drawable(d);
+      r.endFrame();
+    };
+    frame();
+    const first = r.target.depthCopy!.texture as unknown as FakeTexture;
+    r.resize(r.outputWidth * 2, r.outputHeight * 2);
+    frame();
+    const second = r.target.depthCopy!.texture as unknown as FakeTexture;
+    expect(first.destroyed).toBe(true);
+    expect(second).not.toBe(first);
+    expect([second.width, second.height]).toEqual([r.width, r.height]);
+    r.destroy();
+    expect(second.destroyed).toBe(true);
   });
 });

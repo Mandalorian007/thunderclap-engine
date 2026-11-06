@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createFakeDevice, type FakeDevice, type FakeTexture } from '../render/fake-gpu';
-import type { Frame } from '../render/frame';
+import type { Frame, ViewInfo } from '../render/frame';
 import { Mesh, type MeshDesc } from '../render/mesh';
 import type { Renderer } from '../render/renderer';
 import { WATER_PARAMS_FLOATS, Water, type WaterOptions, waterHeight } from './water';
@@ -51,6 +51,14 @@ function params(water: Water): Float32Array {
 function lastPipeline(fake: FakeDevice) {
   const cmd = fake.passes.at(-1)!.commands.find((c) => c.op === 'setPipeline');
   return (cmd as { pipeline: { label: string; desc: GPURenderPipelineDescriptor } }).pipeline;
+}
+
+/** The group 1 bind of the last pass. */
+function lastGroup(fake: FakeDevice): unknown {
+  const cmd = fake.passes
+    .at(-1)!
+    .commands.find((c) => c.op === 'setBindGroup' && (c as { index: number }).index === 1);
+  return (cmd as { group: unknown }).group;
 }
 
 describe('Water', () => {
@@ -266,6 +274,56 @@ describe('Water', () => {
     expect(WATER_WGSL).toContain('@group(1) @binding(0) var<uniform> water');
     expect(WATER_WGSL).toContain('@group(1) @binding(1) var scene_depth: texture_depth_2d');
     expect(WATER_WGSL).toContain(`array<vec4f, ${WATER_MAX_WAVES}>`);
+  });
+});
+
+describe('Water depth hook (ws/render-hooks)', () => {
+  it('readsDepth: no copy pass of its own; afterOpaque binds the renderer copy and flips the flag', () => {
+    const { fake, water, target } = makeWater({ readsDepth: true });
+    expect(water.readsDepth).toBe(true);
+    water.prepare(encoder(fake), DEPTH_FRAME);
+    // The own copy pass (`water-depth-copy`) and texture are gone; the flag is off.
+    expect(fake.passes.filter((p) => p.label === 'water-depth-copy')).toHaveLength(0);
+    expect(fake.textures.filter((t) => t.label === 'water-depth')).toHaveLength(0);
+    expect(params(water)[18]).toBe(0);
+    water.draw(scenePass(fake), DEPTH_FRAME);
+    expect((lastGroup(fake) as { label: string }).label).toBe('water');
+
+    // The renderer's hook: the copy it made is bound and the 4-byte flag write lands.
+    const copyTex = fake.device.createTexture({
+      label: 'scene-depth-copy',
+      size: [320, 180],
+      format: 'depth24plus',
+      usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
+    });
+    const view: ViewInfo = {
+      camera: null as never,
+      target: target as never,
+      depthCopy: copyTex,
+      depthView: copyTex.createView(),
+      viewport: { x: 0, y: 0, width: 320, height: 180 },
+    };
+    const writes = fake.writes.length;
+    water.afterOpaque(encoder(fake), view);
+    expect(params(water)[18]).toBe(1);
+    expect(fake.writes.slice(writes)).toEqual([
+      { buffer: fake.buffers.find((b) => b.label === 'water-params'), offset: 72, bytes: 4 },
+    ]);
+    water.draw(scenePass(fake), DEPTH_FRAME);
+    const hook = lastGroup(fake) as { label: string; entries: GPUBindGroupEntry[] };
+    expect(hook.label).toBe('water-hook');
+    expect((hook.entries[1]!.resource as unknown as { texture: FakeTexture }).texture).toBe(
+      copyTex,
+    );
+
+    // Steady state: the same copy view makes no new group; the next prepare resets the flag.
+    const groups = fake.bindGroups.length;
+    water.prepare(encoder(fake), DEPTH_FRAME);
+    expect(params(water)[18]).toBe(0);
+    water.afterOpaque(encoder(fake), view);
+    expect(fake.bindGroups.length).toBe(groups);
+    expect(fake.passes.filter((p) => p.label === 'water-depth-copy')).toHaveLength(0);
+    expect(fake.errors).toEqual([]);
   });
 });
 

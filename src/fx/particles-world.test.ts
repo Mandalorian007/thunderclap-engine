@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createFakeDevice, type FakeDevice, type FakeTexture } from '../render/fake-gpu';
-import type { Frame } from '../render/frame';
+import type { Frame, ViewInfo } from '../render/frame';
 import type { Renderer } from '../render/renderer';
 import { WGSL_GLOBALS, WGSL_LIGHTS } from '../render/wgsl';
 import { ParticleSystem, type ParticleSystemOptions } from './particles';
@@ -287,6 +287,59 @@ describe('ParticleSystem world space', () => {
     ps.prepare(fake.device.createCommandEncoder(), DEPTH_FRAME);
     expect(simFloats(ps)[11]).toBe(0);
     expect(fake.passes.slice(passes).filter((p) => p.kind === 'render')).toHaveLength(0);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('readsDepth: no copy pass of its own; afterOpaque binds the renderer copy (ws/render-hooks)', () => {
+    const { fake, ps, target } = makeSystem({ space: 'world', readsDepth: true });
+    expect(ps.readsDepth).toBe(true);
+    target.depth = depthTexture(fake, 64, 32);
+    ps.prepare(fake.device.createCommandEncoder(), DEPTH_FRAME);
+    // Own copy pass and texture are gone; the soft flag is off until the hook.
+    expect(fake.passes.filter((p) => p.label === 'particles-depth-copy')).toHaveLength(0);
+    expect(fake.textures.filter((t) => t.label === 'particles-depth')).toHaveLength(0);
+    expect(simFloats(ps)[11]).toBe(0);
+    ps.draw(scenePass(fake), DEPTH_FRAME);
+    expect(lastBindGroup(fake, 1).label).toBe('particles-world-render');
+
+    const copyTex = fake.device.createTexture({
+      label: 'scene-depth-copy',
+      size: [64, 32],
+      format: 'depth24plus',
+      usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
+    });
+    const view: ViewInfo = {
+      camera: null as never,
+      target: target as never,
+      depthCopy: copyTex,
+      depthView: copyTex.createView(),
+      viewport: { x: 0, y: 0, width: 64, height: 32 },
+    };
+    const writes = fake.writes.length;
+    ps.afterOpaque(fake.device.createCommandEncoder(), view);
+    expect(simFloats(ps)[11]).toBe(1);
+    expect(fake.writes.slice(writes)).toEqual([
+      { buffer: fake.buffers.find((b) => b.label === 'particle-sim'), offset: 44, bytes: 4 },
+    ]);
+    ps.draw(scenePass(fake), DEPTH_FRAME);
+    const hook = lastBindGroup(fake, 1);
+    expect(hook.label).toBe('particles-world-render-hook');
+    expect((hook.entries[2]!.resource as unknown as { texture: FakeTexture }).texture).toBe(
+      copyTex,
+    );
+
+    // Steady state: same copy view, no new group; softness 0 ignores the hook.
+    const groups = fake.bindGroups.length;
+    ps.prepare(fake.device.createCommandEncoder(), DEPTH_FRAME);
+    expect(simFloats(ps)[11]).toBe(0);
+    ps.afterOpaque(fake.device.createCommandEncoder(), view);
+    expect(fake.bindGroups.length).toBe(groups);
+    ps.softness = 0;
+    ps.prepare(fake.device.createCommandEncoder(), DEPTH_FRAME);
+    ps.afterOpaque(fake.device.createCommandEncoder(), view);
+    expect(simFloats(ps)[11]).toBe(0);
+    ps.draw(scenePass(fake), DEPTH_FRAME);
+    expect(lastBindGroup(fake, 1).label).toBe('particles-world-render');
     expect(fake.errors).toEqual([]);
   });
 

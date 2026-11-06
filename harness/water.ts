@@ -8,6 +8,9 @@
  *   `prepare`, before that view's pass) holds this frame's opaque depth and the depth fade,
  *   shoreline alpha and foam line up with the ramp. One view would show the previous frame's
  *   depth with the water itself in it (deep everywhere; see the fx README).
+ * - `?hook=1` (ws/render-hooks): one view of every layer with `water.readsDepth`; the renderer
+ *   splits the scene pass at the water, copies the opaque depth and hands it to the water the
+ *   same frame (`stats.passes` is 2). Default stays the two-view path.
  * - The sun circles slowly around the direction whose reflection lands on the specular probe;
  *   `?still` parks it there (E-017).
  * - State on `window.__harnessWater` (harness/water-state.ts): the wave clock, the height at a
@@ -33,6 +36,7 @@ const root = document.getElementById('root') as HTMLElement;
 const LOGICAL = { width: 1920, height: 1080 };
 const query = new URLSearchParams(location.search);
 const STILL = query.has('still');
+const HOOK = query.get('hook') === '1';
 
 const state: HarnessWaterState = {
   ready: false,
@@ -40,6 +44,7 @@ const state: HarnessWaterState = {
   frames: 0,
   logical: LOGICAL,
   still: STILL,
+  depthHook: HOOK,
   t: 0,
   height: 0,
   probes: {
@@ -48,7 +53,7 @@ const state: HarnessWaterState = {
     foamPixel: { x: 0, y: 0 },
     specularPixel: { x: 0, y: 0 },
   },
-  stats: { drawCalls: 0, drawables: 0 },
+  stats: { drawCalls: 0, drawables: 0, passes: 0 },
   gpuErrors: 0,
 };
 
@@ -193,6 +198,7 @@ async function main(): Promise<void> {
     displace: 0.05,
     roughness: 0.18,
     foam: { width: 0.4 },
+    readsDepth: HOOK,
   });
 
   const lights = new Lights();
@@ -234,12 +240,18 @@ async function main(): Promise<void> {
       frame.mesh(backWall, lit, backT, wallP);
       frame.mesh(rampMesh, lit, rampT, rampP);
       frame.drawable(water, 1, 2);
-      // Opaque scene first, then the water in a second view of the same camera, so the water's
-      // depth copy holds this frame's geometry.
-      camera.layers = 1;
-      renderer.render(frame, camera);
-      camera.layers = 2;
-      renderer.render(frame, camera);
+      if (HOOK) {
+        // One view: the renderer splits its pass at the water and hands it this frame's depth.
+        camera.layers = 3;
+        renderer.render(frame, camera);
+      } else {
+        // Opaque scene first, then the water in a second view of the same camera, so the water's
+        // depth copy holds this frame's geometry.
+        camera.layers = 1;
+        renderer.render(frame, camera);
+        camera.layers = 2;
+        renderer.render(frame, camera);
+      }
       renderer.endFrame();
 
       state.frames++;
@@ -247,6 +259,7 @@ async function main(): Promise<void> {
       state.height = waterHeight(water, HEIGHT_X, HEIGHT_Z);
       state.stats.drawCalls = renderer.stats.drawCalls;
       state.stats.drawables = renderer.stats.drawables;
+      state.stats.passes = renderer.stats.passes;
       state.gpuErrors = gpuDiagnostics.errorCount;
 
       rampSurface(rampT, RAMP_WATERLINE + FOAM_DEPTH / Math.sin(RAMP_ANGLE), rampPoint);
