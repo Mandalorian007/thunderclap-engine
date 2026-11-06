@@ -32,7 +32,8 @@ where the widgets `bar` is a panel progress row (`role="progressbar"`). The spec
 
 - A 40×30 tile map (nine rooms, L-shaped corridors, pillars) drawn from a 128×128 atlas that `atlas.ts` paints on a canvas at boot: floor, wall, torch, coin, player, four bat wing frames and a white cell for the fog. One material, one draw call for the whole room (about 2200 instances).
 - 60 bats with a four-frame flipbook, bouncing off walls; touching one plays a synthesised thud, flashes the player and costs one of ten health points (`ui.meter`); a coin gives one back.
-- A player square moved by arrows/WASD, a gamepad (d-pad or left stick) or a touch drag, with axis-separated box collision so it stops flush against walls (`map.ts`, `moveBox`).
+- A player square moved by arrows/WASD, a gamepad (d-pad or left stick) or a touch drag, read as one stick (`input.stick`, length clamped to 1), with axis-separated box collision so it stops flush against walls (`map.ts`, `moveBox`).
+- The room layout, the coins and the bats come from `createRandom` (`core`); the hit cooldown is a `createScheduler` cooldown.
 - Torches whose tint follows `flicker`, with `emissive` so bloom glows them.
 - A fog-of-war layer: one dark quad per tile on layer 2, alpha by distance from the player and the torches; the pause menu's "Fog" button masks the layer off through `camera.layers`.
 - A pause menu (Escape, P or Start) on `ui.stack`, walked by the stack's arrow keys and a `PadNav` that also reads the demo's fake pad. A fake press (`__demo.pad(i, true)`) stays down until the `PadNav` has observed it in an update, so a release in the same frame, or a frame the loop skipped under load, cannot lose the step.
@@ -41,7 +42,7 @@ where the widgets `bar` is a panel progress row (`role="progressbar"`). The spec
 
 ## Engine modules
 
-`createGame` (core), `render` (`textureFromSource`, `createSpriteMaterial`, `DrawParams`, layers), `fx` (`flicker`), `input` (bindings, gestures), `ui` (`stack`, `PadNav`, `button`, `h`, `layout`, `meter`, toasts), `save`, `audio`, `post` (bloom).
+`createGame` (core), `core` (`createRandom`, `createScheduler`), `render` (`textureFromSource`, `createSpriteMaterial`, `DrawParams`, layers), `fx` (`flicker`), `input` (bindings, gestures), `ui` (`stack`, `PadNav`, `button`, `h`, `layout`, `meter`, toasts), `save`, `audio`, `post` (bloom).
 
 ## What the spec checks
 

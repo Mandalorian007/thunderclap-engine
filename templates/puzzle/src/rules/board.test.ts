@@ -1,31 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { createBoard, isFaceUp, pairsLeft, phase, reveal, settle } from './board';
-import { rng, shuffle } from './random';
 
 /** Index of the other card with the same face as `index`. */
 const partnerOf = (faces: readonly number[], index: number) =>
   faces.findIndex((f, i) => f === faces[index] && i !== index);
-
-describe('random', () => {
-  it('is deterministic per seed and in [0, 1)', () => {
-    const a = rng(7);
-    const b = rng(7);
-    for (let i = 0; i < 100; i++) {
-      const v = a();
-      expect(v).toBe(b());
-      expect(v).toBeGreaterThanOrEqual(0);
-      expect(v).toBeLessThan(1);
-    }
-    expect(rng(7)()).not.toBe(rng(8)());
-  });
-
-  it('shuffle keeps every item once and does not touch the input', () => {
-    const items = [1, 2, 3, 4, 5, 6];
-    const out = shuffle(items, rng(1));
-    expect(items).toEqual([1, 2, 3, 4, 5, 6]);
-    expect(out.slice().sort()).toEqual(items);
-  });
-});
 
 describe('createBoard', () => {
   it('deals every face exactly twice, face down, from a seed', () => {

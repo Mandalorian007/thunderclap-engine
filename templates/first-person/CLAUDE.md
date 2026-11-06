@@ -17,7 +17,7 @@ an agent needs to extend it is in this file; it should not have to read the engi
 index.html            the page: a positioned #app the engine mounts into
 src/main.ts           createGame({ sim: false }) → engine ctx; a Look linked to the input; one scene pushed
 src/ctx.ts            Action names and bindings, World, Player, GameCtx (= EngineCtx + game nouns)
-src/world/terrain.ts  pure: seeded height field, heightAt/surfaceY, layers by height, findLandmarks
+src/world/terrain.ts  pure: SEED, a height field from createNoise(SEED), heightAt/surfaceY, layers by height, findLandmarks
 src/world/mesher.ts   pure: meshChunk(terrain, cx, cz, buffer) → VERTEX_LAYOUT_3D floats + uint16 indices + bounds
 src/world/protocol.ts the messages between the scene and the Worker
 src/world/worker.ts   the Worker: builds the terrain once, meshes chunks into transferred buffers
@@ -28,7 +28,7 @@ src/ui/hud.ts         crosshair (ui.layers.hud), prompt and focus line (ui.layou
 
 ## Rules of the house
 
-1. **`world/` is pure.** It imports nothing from the engine or the DOM and never reads time or `Math.random` (everything derives from the seed through `hash2`). The mesher writes a numeric layout, not engine types, so the same code runs in the Worker and in a test. Every generator and mesher rule has a unit test.
+1. **`world/` is pure.** It imports nothing from the DOM and nothing from the engine but `createNoise` (`@thunderclap/engine/core`, seeded, no DOM), and never reads time or `Math.random`: the terrain is `createNoise(SEED)`'s value noise, the texture speckle a `hash2` of the pixel. The mesher writes a numeric layout, not engine types, so the same code runs in the Worker and in a test. Every generator and mesher rule has a unit test.
 2. **Rendering, not mechanics.** The scene draws what `world/` says and turns `Look` and actions into movement and inspections. Collision is the game's (three lines against `surfaceY`), not the engine's.
 3. **A client keeps nothing.** `sim: false` and no `save`: the engine never touches storage and the loop runs at render rate (`update(dt)` gets the real frame delta). A server-driven game applies its state in `ctx.hooks.frame`. No network call anywhere in the engine; add your own transport.
 4. **Zero allocations per frame.** `update` and `render` mutate pre-built `Transform`s, `Float32Array`s and emitter params; the Worker's buffers are views, never copies. Nothing is created inside them in steady state.

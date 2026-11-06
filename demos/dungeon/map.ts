@@ -2,6 +2,7 @@
  * The 40×30 tile map: rooms joined by corridors, carved deterministically from a seed so the
  * spec can rely on the spawn room. Pure data and arithmetic, no engine.
  */
+import { createRandom } from '@thunderclap/engine/core';
 import { TILE } from './atlas';
 
 export const MAP_W = 40;
@@ -28,17 +29,6 @@ export interface DungeonMap {
   coins: { x: number; y: number }[];
   /** Floor tiles outside the spawn room (bat spawns). */
   openTiles: { x: number; y: number }[];
-}
-
-/** Small deterministic PRNG (mulberry32). */
-export function rng(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
 }
 
 export function isSolid(map: DungeonMap, tx: number, ty: number): boolean {
@@ -93,13 +83,13 @@ export function buildMap(seed = 7): DungeonMap {
     const sy = Math.sign(q.y - p.y);
     for (let y = p.y; y !== q.y + sy; y += sy) carve(q.x, y);
   }
-  const random = rng(seed);
+  const random = createRandom(seed);
   // Pillars in the larger rooms, never in the spawn room's walking row.
   for (const r of ROOMS.slice(1)) {
-    const n = Math.floor(random() * 3);
+    const n = random.int(0, 2);
     for (let i = 0; i < n; i++) {
-      const x = r.x0 + 1 + Math.floor(random() * (r.x1 - r.x0 - 2));
-      const y = r.y0 + 1 + Math.floor(random() * (r.y1 - r.y0 - 2));
+      const x = random.int(r.x0 + 1, r.x1 - 2);
+      const y = random.int(r.y0 + 1, r.y1 - 2);
       const c = centre(r);
       if (x !== c.x && y !== c.y) solid[y * MAP_W + x] = 1;
     }
@@ -122,10 +112,10 @@ export function buildMap(seed = 7): DungeonMap {
   // Coins: the spec's coin first, then one or two per other room.
   map.coins.push({ ...FIRST_COIN_TILE });
   for (const r of ROOMS.slice(1)) {
-    const n = 1 + Math.floor(random() * 2);
+    const n = random.int(1, 2);
     for (let i = 0; i < n; i++) {
-      const x = r.x0 + Math.floor(random() * (r.x1 - r.x0 + 1));
-      const y = r.y0 + Math.floor(random() * (r.y1 - r.y0 + 1));
+      const x = random.int(r.x0, r.x1);
+      const y = random.int(r.y0, r.y1);
       if (!isSolid(map, x, y) && !map.coins.some((c) => c.x === x && c.y === y))
         map.coins.push({ x, y });
     }

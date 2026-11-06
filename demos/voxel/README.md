@@ -1,7 +1,7 @@
 # demos/voxel
 
 A Forgewilds-class voxel world: 8×8 columns of 16³ chunks (128×64×128 blocks, 256 chunks) of
-value-noise hills, beaches, caves, trees and glowstone, meshed by the engine in a Web Worker and
+value-noise hills (the engine's `createNoise`), beaches, caves, trees and glowstone, meshed by the engine in a Web Worker and
 walked in first person. Run it with `pnpm demo voxel` (or `pnpm exec vite demos/voxel --host
 127.0.0.1`). `?still&time=0.25` parks the day cycle at noon (`time` in days, 0 = midnight).
 
@@ -14,7 +14,11 @@ sun, the `Sky`, the fog and the shadow; glowstone flickers into the bloom.
 
 ## What to look at
 
-- The game is the blocks: `world.ts` writes the noise terrain, caves, trees and glowstone into a
+- The game is the blocks: `world.ts` writes the noise terrain (`createNoise(SEED)`: `fbm` over
+  `value2` for the hills, `value3` for the caves; the world changed shape when it moved off its
+  own value noise, terrain tops now 19..39, checked at boot against 16..44 with the spawn on
+  grass above the sea, a console error otherwise; `WINDOW_Z` slides the world over the noise so
+  the spawn looks north over flat grass), caves, trees and glowstone into a
   `createVoxelGrid` and names the block rules (`blockLayer` per face, `outsideBlock` for the
   world's edges); `mesher.worker.ts` is the engine's Worker recipe, `installVoxelMesherWorker`
   with those two rules.

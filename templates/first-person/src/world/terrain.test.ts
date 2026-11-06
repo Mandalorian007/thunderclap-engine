@@ -11,8 +11,9 @@ import {
   layerForTop,
   MAX_HEIGHT,
   MIN_HEIGHT,
+  SEED,
   surfaceY,
-  valueNoise,
+  WORLD_SIZE,
 } from './terrain';
 
 describe('terrain', () => {
@@ -45,15 +46,22 @@ describe('terrain', () => {
     expect(surfaceY(t, 5.7, 9.2)).toBe(heightAt(t, 5, 9));
   });
 
-  it('value noise is continuous and inside 0..1', () => {
-    for (let i = 0; i < 50; i++) {
-      const v = valueNoise(i * 0.37, i * 0.11, 5);
-      expect(v).toBeGreaterThanOrEqual(0);
-      expect(v).toBeLessThanOrEqual(1);
+  it('the shipped seed keeps the height range and spawns on solid ground', () => {
+    // createNoise's field, not the old hand-rolled value noise: the shape moved, the band did not.
+    const t = createTerrain(SEED);
+    let lo = Number.POSITIVE_INFINITY;
+    let hi = 0;
+    for (const h of t.heights) {
+      lo = Math.min(lo, h);
+      hi = Math.max(hi, h);
     }
-    const a = valueNoise(2.5, 3.5, 5);
-    const b = valueNoise(2.51, 3.5, 5);
-    expect(Math.abs(a - b)).toBeLessThan(0.05);
+    expect(lo).toBeGreaterThanOrEqual(MIN_HEIGHT);
+    expect(hi).toBeLessThanOrEqual(MAX_HEIGHT);
+    expect(hi - lo).toBeGreaterThanOrEqual(6);
+    // `respawn` stands the player on the middle column's top: a column above the shore sand.
+    const mid = WORLD_SIZE / 2;
+    expect(heightAt(t, mid, mid)).toBeGreaterThan(MIN_HEIGHT + 1);
+    expect(surfaceY(t, mid + 0.5, mid + 0.5)).toBe(heightAt(t, mid, mid));
   });
 
   it('assigns layers by height', () => {

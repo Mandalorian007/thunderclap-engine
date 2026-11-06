@@ -9,7 +9,7 @@
  *   space the HUD leaves (`ctx.ui.layout.freeRect`, through `camera.fitFreeRect`), on enter and
  *   on every re-layout. A win emits `level_complete` through `ctx.analytics`.
  */
-import type { Scene } from '@thunderclap/engine/core';
+import { createScheduler, type Scene, type TimerHandle } from '@thunderclap/engine/core';
 import {
   type CameraPoint,
   type CameraRect,
@@ -64,7 +64,13 @@ export function createBoardScene(ctx: GameCtx): Scene<GameCtx, Frame> {
   const paddedRect: CameraRect = { x: 0, y: 0, width: 0, height: 0 };
   const ringParams = { tint: CURSOR, emissive: 0.6, order: -1 };
   const tap: CameraPoint = { x: 0, y: 0, z: 0 };
-  let mismatchFor = 0;
+  // The scene's clock: a mismatch turns back on its own `MISMATCH_S` after it is dealt.
+  const timers = createScheduler();
+  let settling: TimerHandle = 0;
+  const settleNow = () => {
+    settling = 0;
+    apply(settle(ctx.game.board));
+  };
   /** The seed the cells were built for; a different `board.seed` means a new deal. */
   let builtSeed = Number.NaN;
   let unsubscribe: (() => void)[] = [];
@@ -95,7 +101,8 @@ export function createBoardScene(ctx: GameCtx): Scene<GameCtx, Frame> {
         flip: 0,
       });
     }
-    mismatchFor = 0;
+    timers.cancel(settling);
+    settling = 0;
     builtSeed = b.seed;
   };
 
@@ -119,7 +126,8 @@ export function createBoardScene(ctx: GameCtx): Scene<GameCtx, Frame> {
     if (next === g.board) return;
     const wasWon = phase(g.board) === 'won';
     g.board = next;
-    mismatchFor = phase(next) === 'mismatch' ? MISMATCH_S : 0;
+    timers.cancel(settling);
+    settling = phase(next) === 'mismatch' ? timers.after(MISMATCH_S, settleNow) : 0;
     if (!wasWon && phase(next) === 'won') {
       ctx.save.update((d) => ({
         ...d,
@@ -186,10 +194,7 @@ export function createBoardScene(ctx: GameCtx): Scene<GameCtx, Frame> {
       syncCells();
 
       // A mismatch turns back on its own after a moment.
-      if (mismatchFor > 0) {
-        mismatchFor -= dt;
-        if (mismatchFor <= 0) apply(settle(game.board));
-      }
+      timers.update(dt);
 
       // Flip animation toward the rules' truth.
       const b = game.board;

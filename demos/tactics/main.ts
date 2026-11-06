@@ -17,7 +17,7 @@
  */
 import { createGame } from '@thunderclap/engine';
 import { recipes } from '@thunderclap/engine/audio';
-import type { Scene } from '@thunderclap/engine/core';
+import { createRandom, type Scene } from '@thunderclap/engine/core';
 import type { GamepadLike } from '@thunderclap/engine/input';
 import { createFlowField, createNavGrid } from '@thunderclap/engine/nav';
 import {
@@ -31,16 +31,7 @@ import { createTweens, ease } from '@thunderclap/engine/tween';
 import { button, h } from '@thunderclap/engine/ui';
 import { buildAtlas, CELL, CELL_SIZE, cellUv } from './atlas';
 import { DESIGN_H, DESIGN_W, MAP, tileToWorld, worldToTile } from './iso';
-import {
-  buildMap,
-  inBounds,
-  index,
-  MAX_ELEVATION,
-  rng,
-  TERRAIN_COST,
-  TERRAIN_NAME,
-  WATER,
-} from './map';
+import { buildMap, inBounds, index, MAX_ELEVATION, TERRAIN_COST, TERRAIN_NAME, WATER } from './map';
 import {
   canReach,
   createMoveRange,
@@ -172,7 +163,7 @@ if (ctx) {
   for (let i = 0; i < map.terrain.length; i++) {
     state.mapHash = (Math.imul(state.mapHash, 31) + map.terrain[i]! * 4 + map.elevation[i]!) | 0;
   }
-  const random = rng(SEED ^ 0x9e3779b9);
+  const random = createRandom(SEED).fork('ai');
   const tweens = createTweens();
 
   // --- Atlas, material and reusable draw params --------------------------------------------------
@@ -575,7 +566,7 @@ if (ctx) {
     const targets = attackTargets(e);
     if (targets.length > 0) {
       // Weakest target; the seeded roll breaks ties.
-      targets.sort((a, b) => a.hp - b.hp || (random() < 0.5 ? -1 : 1));
+      targets.sort((a, b) => a.hp - b.hp || (random.bool(0.5) ? -1 : 1));
       await attack(e, targets[0]!);
     }
   };
