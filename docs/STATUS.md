@@ -81,6 +81,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Camera helpers: `viewZ`, `invViewProj`, `projectMany`, `frustumCorners`, `setPerspective` parity | ws/camera-ergo | ✅ green at `10b60b5` (907 tests; e2e 747/95/0; snap 5/5); queued chain 3 after batch-submit |
 | 5 | UI widgets 2: reticle, bar, segmented, select, keyPrompt, stepper, cooldown | ws/ui-widgets | 🔧 engineer running (offset 320) |
 | 5 | Audio 2: beat-grid music layers, variations, reverb/lowpass sends, ducking | ws/audio-2 | 🔧 engineer running (offset 330) |
+| 5 | Save 2: slot manager with meta sidecar, settings store + bind, undo journal, typed-array codec | ws/save-2 | 🔧 engineer running (offset 340) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
