@@ -121,6 +121,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Geom 3: `cloneGeometry`, positions-only collider source, tangent-aware merge/transform, quadric simplify + LOD chain + `selectLod`, convex hull + collision proxy, split/slice with caps, 2D tile slide (one-way, carried) | ws/geom-3 | 🔧 dispatched from `b28b958` (offset 720); restarted on Opus after Fable credit stop 2026-11-06 |
 | 5 | Core 2: seeded `Random` with forked streams + state, value/perlin/simplex noise + fbm, scheduler (after/every/cooldown on `dt`), typed pool, scene `preload` + transition hook | ws/core-2 | 🔧 dispatched from `60351e9` (offset 730); restarted on Opus after Fable credit stop 2026-11-06 |
 | 5 | Input 5: action contexts, input buffer + consume, shaped stick read, gyro aim, `Look.onTap`, recordings carry every pointer | ws/input-5 | 🔧 dispatched from `470f37f` (offset 740, Opus) |
+| 5 | Assets 3: `KHR_mesh_quantization`, `EXT_meshopt_compression` decoder, `KHR_lights_punctual` + cameras as descriptors, `KHR_materials_variants` (cosmetics), KTX2 container parse, refcounted LRU asset cache | ws/assets-3 | 🔧 dispatched from `b27b7e5` (offset 750, Opus) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
