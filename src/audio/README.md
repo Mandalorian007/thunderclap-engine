@@ -49,9 +49,11 @@ audio.setReverb(null);                        // off; send levels are remembered
 Both are safe to call before unlock, and the graph is built with the buses. Where `createConvolver` is missing, reverb is a no-op.
 
 ## Voices
-`play`/`loop` return a `Voice`: `stop(fade?)`, `setGain(g, ramp?)`, `setRate(r, ramp?)`, `setPosition(x, y, z)`, `setDirection(x, y, z)`, `playing`. Each named sound has `maxVoices` (default 8); the oldest is stolen past that. `stopAll(fade?, bus?)`. Options: `bus, gain, rate, detune (cents), pan, at, spatial, delay, fadeIn` (`pan`, `at` and `spatial` under *Spatial audio*).
+`play`/`loop` return a `Voice`: `stop(fade?)`, `setGain(g, ramp?)`, `setRate(r, ramp?)`, `setPosition(x, y, z)`, `setDirection(x, y, z)`, `follow(target | null)`, `position`, `playing`. Each named sound has `maxVoices` (default 8); the oldest is stolen past that. `stopAll(fade?, bus?)`. Options: `bus, gain, rate, detune (cents), pan, at, spatial, delay, fadeIn` (`pan`, `at` and `spatial` under *Spatial audio*).
 
 One-shots of a sound not yet rendered are rendered on demand and dropped if that takes > 150 ms; call `prepare()` at boot to avoid that.
+
+`voice.follow(target)` makes a spatial voice (one played with `at`) read its position from `target.world`, a 3×4 row-major world matrix with the translation at floats 3, 7 and 11 (a `Transform` from `render/`, or any `FollowTarget`), on every `audio.update(dt)`, so the game stops copying positions each frame; `follow(null)` stops. `voice.position` is the emitter's world position as last set or followed (zeros on a non-spatial voice). Both are no-ops on a non-spatial voice.
 
 ## Spatial audio
 
@@ -76,6 +78,32 @@ audio.play('zap', { pan: (cellX / cols) * 2 - 1 });
 - **Pool.** Each playing spatial voice holds one panner; when it ends the panner is disconnected and returned, and the next spatial voice reuses it with its own options (`audio.pooledPanners` counts the idle ones). `dispose()` drops the pool.
 - **2D.** `PlayOptions.pan` goes through a `StereoPannerNode`, for a flat game that wants a sound from one side of the board. `at` and `pan` are exclusive; when both are given, `at` wins.
 - Where `createPanner` is missing, a spatial voice plays dry into its bus.
+
+## Zones
+
+A 3D space sounds like a place: walking into a cave raises the reverb and brings in a drip loop, leaving it fades both out. `audio.zones` (an `AudioZones`) holds regions of the world; `audio.update(dt)` weighs the listener against each one and drives the rest. Pure bookkeeping over the existing graph: no new nodes, nothing allocated per update.
+
+```ts
+const cave = audio.zones.add({
+  shape: { sphere: { center: [40, 2, -8], radius: 6 } },   // or { box: { center, halfExtents } }
+  feather: 2,                                               // weight 1 → 0 over 2 units outside the shape
+  ambient: { sound: 'drip', bus: 'sfx', gain: 0.6 },        // one loop per zone, started lazily
+  reverbSend: { sfx: 0.9, music: 0.5 },                     // while inside
+  fade: 0.5,                                                // ramp seconds; also the silence before the loop stops
+});
+// Each frame, after the camera moved (createGame does the update call for you):
+audio.listener.fromCamera(camera);
+audio.update(dt);
+audio.zones.weights();   // [1] inside, smoothstep to [0] across the feather; the same array every call
+cave.weight; cave.ambientGain; cave.voice;
+audio.zones.remove(cave); // fades its loop out over `fade`
+```
+
+- **Weight.** `zoneWeight(desc, position)` (pure, exported): 1 inside the shape, smoothstep to 0 at `feather` world units outside it (default 1; 0 is a hard edge). A box measures the distance to its nearest face, edge or corner. `update(dt, listenerPosition?)` defaults to `audio.listener.position`.
+- **Ambient.** The first update with a weight above 0 starts `audio.loop(sound, { bus, gain: 0, fadeIn: 0 })` (bus default `sfx`); its gain moves linearly towards `weight × gain` at `gain / fade` per second and is written through `setGain` only when it changed by more than 1e-3. Once the weight has been 0 for `fade` seconds the voice is stopped and a later visit starts a new one. Before unlock the loop is queued like any other, so the ramp is already at its value when sound starts.
+- **Reverb.** Per bus the largest `weight × send` over the zones is the zones' contribution, and `max(base, zones)` reaches the send node, where `base` is what `setReverbSend` or the reverb options set (so the game's own sends keep working and a zone can only add room, never dry one out). The node is written only when the value moves by more than 1e-3. `audio.reverbSendLevels` stays the base; `audio.effectiveReverbSendLevels` is what the graph has.
+- **Safe anywhere.** Before unlock and when audio is unavailable the weights, gains and sends still compute; nothing plays. `AudioZoneHost` is the slice of the engine `AudioZones` is built on (`listener`, `loop`, `setZoneReverbSend`), for tests.
+- `createGame`'s loop calls `audio.update(dt)` after input and pad navigation, before the hooks and scenes, in both the fixed-step and `sim: false` paths. Harness: `zones.html`.
 
 ## Synth toolkit
 
@@ -115,7 +143,8 @@ Measured in Chromium: all eight render in ~80 ms total (drone pad, the heaviest,
 ## Types and constants
 
 - **Engine**: `new AudioEngine(opts?: AudioEngineOptions)` (`createContext`, `createOffline`, `settings`, `limiter: boolean | LimiterOptions`, `reverb: ReverbOptions | null`); `attach(opts?: AttachAudioOptions)` takes `{ target?, pauseWhenHidden? }` and returns detach. `AudioState` is `'locked' | 'running' | 'suspended' | 'unavailable'`. `PlayOptions` are the `play`/`loop` options above; `Voice` is what they return.
-- **Spatial**: `SpatialListener` (`audio.listener`), `CameraLike`, `SpatialOptions`, `Rolloff` and `ConeOptions`, all described under *Spatial audio*.
+- **Spatial**: `SpatialListener` (`audio.listener`), `CameraLike`, `SpatialOptions`, `Rolloff` and `ConeOptions`, all described under *Spatial audio*; `FollowTarget` (`{ world }`) is what `Voice.follow` takes.
+- **Zones**: `AudioZones` (`audio.zones`) with `add(desc: AudioZoneDesc): AudioZone`, `remove(zone)`, `update(dt, listenerPosition?)`, `weights()`, `size`; `ZoneShape` is the sphere-or-box shape; `zoneWeight(desc, position)` is the pure weight; `AudioZoneHost` is the engine slice the class takes. All under *Zones*.
 - **Mixer**: `BUS_NAMES` (`master`, `music`, `sfx`, `ui`) and `BusName`; `OutputBus` is every bus but `master`. `MixerSettings` maps each bus to `BusSettings` (`{ volume, muted }`); `DEFAULT_MIXER` is 0.8 / 0.7 / 0.9 / 0.8, unmuted. `sanitizeMixer(input)` clamps and fills any object into valid settings; `busGain(settings)` is the effective linear gain. `DEFAULT_LIMITER` and `DEFAULT_REVERB_SENDS` are the defaults quoted above.
 - **Persistence**: `persistMixer(audio, opts: PersistMixerOptions)` (`{ game, slot?, host?, storage?, debounceMs?, autoFlush? }`) returns `{ store, unbind }`.
 - **Synth specs**: `SoundSpec` holds `Layer`s; a layer's `source` is a `Source` (`OscSource` with a `Wave`, `NoiseSource` with a `NoiseColor`, or `CrackleSource`), its `filter` one or more `FilterSpec`s and its `env` an `Envelope`. `Segment` is one envelope breakpoint (`{ t, v, ramp }`); `envelopeLength(env, gate)` is an envelope's total length. `OfflineContextFactory` is the offline renderer factory `renderSound` and the engine take.

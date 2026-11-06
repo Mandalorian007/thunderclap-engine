@@ -4,6 +4,7 @@
  */
 import { reverbImpulse, volumeToGain } from './dsp';
 import { type OfflineContextFactory, renderSound, type SoundSpec } from './synth';
+import { AudioZones } from './zones';
 
 export const BUS_NAMES = ['master', 'music', 'sfx', 'ui'] as const;
 export type BusName = (typeof BUS_NAMES)[number];
@@ -100,7 +101,20 @@ export interface Voice {
   setPosition(x: number, y: number, z: number): void;
   /** Point a spatial voice's cone (`spatial.cone`) along `(x, y, z)`. Same rules as `setPosition`. */
   setDirection(x: number, y: number, z: number): void;
+  /**
+   * Make a spatial voice read its position from `target.world` (a 3×4 row-major world matrix,
+   * translation at floats 3, 7 and 11, such as a `Transform`'s) on every `audio.update(dt)`,
+   * so the game stops copying positions. `null` stops following. No-op on a non-spatial voice.
+   */
+  follow(target: { readonly world: ArrayLike<number> } | null): void;
+  /** World position of a spatial voice as last set or followed (zeros on a non-spatial voice). */
+  readonly position: ArrayLike<number>;
   readonly playing: boolean;
+}
+
+/** Anything with a 3×4 world matrix a voice can follow (`Voice.follow`). */
+export interface FollowTarget {
+  readonly world: ArrayLike<number>;
 }
 
 /** Distance model of a spatial voice (`PannerNode.distanceModel`). */
@@ -263,6 +277,8 @@ const NULL_VOICE: Voice = {
   setRate() {},
   setPosition() {},
   setDirection() {},
+  follow() {},
+  position: new Float64Array(3),
   playing: false,
 };
 
@@ -297,9 +313,8 @@ class VoiceImpl implements Voice {
   private panner: PannerNode | null = null;
   /** Emitter position and cone direction (kept for a voice that has not started yet). */
   private readonly spatial: boolean;
-  private px = 0;
-  private py = 0;
-  private pz = 0;
+  private readonly pos = new Float64Array(3);
+  private target: FollowTarget | null = null;
   private dx = 1;
   private dy = 0;
   private dz = 0;
@@ -315,9 +330,9 @@ class VoiceImpl implements Voice {
     const at = opts.at;
     this.spatial = at !== undefined;
     if (at) {
-      this.px = at[0] ?? 0;
-      this.py = at[1] ?? 0;
-      this.pz = at[2] ?? 0;
+      this.pos[0] = at[0] ?? 0;
+      this.pos[1] = at[1] ?? 0;
+      this.pos[2] = at[2] ?? 0;
       const d = opts.spatial?.direction;
       if (d) {
         this.dx = d[0] ?? 0;
@@ -329,6 +344,10 @@ class VoiceImpl implements Voice {
 
   get playing(): boolean {
     return !this.stopped && !this.ended;
+  }
+
+  get position(): ArrayLike<number> {
+    return this.pos;
   }
 
   get started(): boolean {
@@ -362,7 +381,7 @@ class VoiceImpl implements Voice {
     let tail: AudioNode = g;
     const panner = this.spatial ? this.engine.acquirePanner(this.opts.spatial) : null;
     if (panner) {
-      writePannerPosition(panner, this.px, this.py, this.pz);
+      writePannerPosition(panner, this.pos[0]!, this.pos[1]!, this.pos[2]!);
       writePannerDirection(panner, this.dx, this.dy, this.dz);
       g.connect(panner);
       tail = panner;
@@ -431,10 +450,22 @@ class VoiceImpl implements Voice {
 
   setPosition(x: number, y: number, z: number): void {
     if (!this.spatial) return;
-    this.px = x;
-    this.py = y;
-    this.pz = z;
+    this.pos[0] = x;
+    this.pos[1] = y;
+    this.pos[2] = z;
     if (this.panner) writePannerPosition(this.panner, x, y, z);
+  }
+
+  follow(target: FollowTarget | null): void {
+    if (!this.spatial) return;
+    this.target = target;
+    this.engine.trackFollower(this, target !== null && this.playing);
+  }
+
+  /** Internal: copy the followed matrix's translation into the panner. */
+  syncFollow(): void {
+    const m = this.target?.world;
+    if (m) this.setPosition(m[3]!, m[7]!, m[11]!);
   }
 
   setDirection(x: number, y: number, z: number): void {
@@ -541,8 +572,15 @@ export class AudioEngine {
   private readonly limiterOpts: Required<LimiterOptions> | null;
   private limiterNode: DynamicsCompressorNode | null = null;
   private reverbOpts: ReverbOptions | null;
+  /** The base sends (what the game set); the zones add `zoneSends` on top (`max`). */
   private reverbSends: Record<OutputBus, number>;
+  private readonly zoneSends: Record<OutputBus, number> = { music: 0, sfx: 0, ui: 0 };
+  private readonly effectiveSends: Record<OutputBus, number> = { music: 0, sfx: 0, ui: 0 };
+  private readonly appliedSends: Record<OutputBus, number> = { music: 0, sfx: 0, ui: 0 };
   private reverbNodes: ReverbNodes | null = null;
+  private _zones: AudioZones | null = null;
+  /** Spatial voices following a matrix (`Voice.follow`), synced in `update`. */
+  private readonly followers = new Set<VoiceImpl>();
   /** Panners of ended spatial voices, reused by the next ones (cleared with the context). */
   private readonly pannerPool: PannerNode[] = [];
   private _listener: SpatialListener | null = null;
@@ -553,6 +591,9 @@ export class AudioEngine {
     this.limiterOpts = lim === false ? null : { ...DEFAULT_LIMITER, ...(lim === true ? {} : lim) };
     this.reverbOpts = opts.reverb ?? null;
     this.reverbSends = { ...DEFAULT_REVERB_SENDS, ...opts.reverb?.sends };
+    for (const b of BUS_NAMES) {
+      if (b !== 'master') this.effectiveSends[b] = this.appliedSends[b] = this.reverbSends[b];
+    }
     this.createOffline = opts.createOffline;
     this.createContext =
       opts.createContext ??
@@ -580,6 +621,28 @@ export class AudioEngine {
   get listener(): SpatialListener {
     this._listener ??= new SpatialListener(this);
     return this._listener;
+  }
+  /**
+   * Regions that drive ambient loops and reverb sends by listener position. Built on first use;
+   * advanced by `update(dt)`.
+   */
+  get zones(): AudioZones {
+    this._zones ??= new AudioZones(this);
+    return this._zones;
+  }
+  /**
+   * Per-frame bookkeeping: the zones (weights, ambient gains, reverb sends) and the followers
+   * (`Voice.follow`). `createGame`'s loop calls it after input, before the scenes. Safe before
+   * unlock and when audio is unavailable: the numbers still move, nothing plays.
+   */
+  update(dt: number): void {
+    this._zones?.update(dt);
+    for (const v of this.followers) v.syncFollow();
+  }
+  /** Internal: a voice starts or stops following a matrix. */
+  trackFollower(v: VoiceImpl, on: boolean): void {
+    if (on) this.followers.add(v);
+    else this.followers.delete(v);
   }
   /** Idle panners waiting for the next spatial voice (tests, diagnostics). */
   get pooledPanners(): number {
@@ -866,22 +929,48 @@ export class AudioEngine {
    */
   setReverb(opts: ReverbOptions | null): void {
     this.reverbOpts = opts;
-    if (opts?.sends) this.reverbSends = { ...this.reverbSends, ...opts.sends };
+    if (opts?.sends) {
+      this.reverbSends = { ...this.reverbSends, ...opts.sends };
+      for (const b of BUS_NAMES) if (b !== 'master') this.applySend(b, false);
+    }
     this.teardownReverb();
     this.buildReverb();
   }
 
-  /** Change one bus's reverb send (linear, ramped). Remembered while reverb is off. */
+  /**
+   * Change one bus's base reverb send (linear, ramped). Remembered while reverb is off. The
+   * zones (`audio.zones`) raise the effective send above it, never below.
+   */
   setReverbSend(bus: OutputBus, level: number): void {
     const v = Math.max(0, Number.isFinite(level) ? level : 0);
     this.reverbSends = { ...this.reverbSends, [bus]: v };
+    this.applySend(bus, true);
+  }
+
+  /** Internal: the zones' contribution to one bus's send; `max(base, zone)` reaches the graph. */
+  setZoneReverbSend(bus: OutputBus, level: number): void {
+    this.zoneSends[bus] = Math.max(0, Number.isFinite(level) ? level : 0);
+    this.applySend(bus, false);
+  }
+
+  /** Write `max(base, zone)` to the send node when it moved by more than 1e-3 (or `force`). */
+  private applySend(bus: OutputBus, force: boolean): void {
+    const v = Math.max(this.reverbSends[bus], this.zoneSends[bus]);
+    this.effectiveSends[bus] = v;
+    if (!force && Math.abs(v - this.appliedSends[bus]) <= 1e-3) return;
+    this.appliedSends[bus] = v;
     const node = this.reverbNodes?.sends[bus];
     if (node && this.ctx) node.gain.setTargetAtTime(v, this.ctx.currentTime, 0.015);
   }
 
-  /** Current send levels per bus. */
+  /** Base send levels per bus (what `setReverbSend` and the reverb options set). */
   get reverbSendLevels(): Readonly<Record<OutputBus, number>> {
     return this.reverbSends;
+  }
+
+  /** What reaches the reverb per bus: `max(base, zones)`. The same object every call. */
+  get effectiveReverbSendLevels(): Readonly<Record<OutputBus, number>> {
+    return this.effectiveSends;
   }
 
   private buildReverb() {
@@ -905,7 +994,10 @@ export class AudioEngine {
     for (const name of BUS_NAMES) {
       if (name === 'master') continue;
       const g = ctx.createGain();
-      g.gain.value = this.reverbSends[name];
+      const level = Math.max(this.reverbSends[name], this.zoneSends[name]);
+      this.effectiveSends[name] = level;
+      this.appliedSends[name] = level;
+      g.gain.value = level;
       this.buses[name]!.connect(g);
       g.connect(convolver);
       sends[name] = g;
@@ -1076,6 +1168,7 @@ export class AudioEngine {
     }
     const voice: VoiceImpl = new VoiceImpl(this, loop, opts, (v) => {
       this.active.delete(v);
+      this.followers.delete(v);
       if (entry) {
         const i = entry.voices.indexOf(v);
         if (i >= 0) entry.voices.splice(i, 1);
