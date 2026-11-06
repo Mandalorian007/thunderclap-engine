@@ -4,7 +4,7 @@
  * style (Lambert, toon, rim, nothing at all) is the game's WGSL. A game fills `frame.lights`
  * each frame; the renderer uploads it with the camera block of every view.
  *
- * The default block is unlit: ambient 1, no sun, no point lights, no shadow, no fog. A material
+ * The default block is unlit: ambient 1, no sun, no point or spot lights, no shadow, no fog. A material
  * that multiplies by `engine_lambert(n, p)` therefore draws its albedo unchanged until the game
  * lights the scene, `engine_shadow` returns 1 and `engine_fog` returns its input, and materials
  * that never read the block are untouched.
@@ -29,8 +29,59 @@ export const SHADOW_PARAMS_OFFSET_FLOATS = SUN_VIEW_PROJ_OFFSET_FLOATS + 16;
 /** Float offset of `fog` (rgb, density) inside the block; `fog_range` (near, far) follows it. */
 export const FOG_OFFSET_FLOATS = SHADOW_PARAMS_OFFSET_FLOATS + 4;
 
-/** Floats in the WGSL `EngineLights` block (672 bytes). */
-export const LIGHTS_BLOCK_FLOATS = FOG_OFFSET_FLOATS + 8;
+/**
+ * Float offset of `spot_count` (u32) inside the block; `sun_layers` (u32, the sun's layer mask)
+ * is the next float, then two pad words.
+ */
+export const LAYERS_OFFSET_FLOATS = FOG_OFFSET_FLOATS + 8;
+
+/** Float offset of `point_layers` (`array<vec4u, 4>`: one u32 mask per point light slot). */
+export const POINT_LAYERS_OFFSET_FLOATS = LAYERS_OFFSET_FLOATS + 4;
+
+/** Spot lights the block carries; `Lights.spots` beyond this many are ignored. */
+export const MAX_SPOT_LIGHTS = 8;
+
+/**
+ * Floats per spot light: position xyz, radius, direction xyz, cos(outerAngle), colour rgb,
+ * cos(innerAngle), layers (u32), three pad words (64 bytes).
+ */
+export const SPOT_LIGHT_FLOATS = 16;
+
+/** Float offset of `spots[0]` inside the block. */
+export const SPOT_LIGHTS_OFFSET_FLOATS = POINT_LAYERS_OFFSET_FLOATS + MAX_POINT_LIGHTS;
+
+/** Floats in the WGSL `EngineLights` block (1264 bytes). */
+export const LIGHTS_BLOCK_FLOATS = SPOT_LIGHTS_OFFSET_FLOATS + MAX_SPOT_LIGHTS * SPOT_LIGHT_FLOATS;
+
+/** The layer mask a light has when `layers` is unset: every layer. */
+export const ALL_LIGHT_LAYERS = 0xffffffff;
+
+/**
+ * Instance flag bits (`VertexIn.misc.y`, `VSOut.flags`): bit 0 is "does not receive shadow";
+ * bits 1..23 carry the instance's low `INSTANCE_LAYER_BITS` layer bits, so a fragment shader
+ * can mask lights against them (`engine_instance_layers(in.flags)` in WGSL). The float that
+ * carries the flags holds 24 integer bits exactly, so layers above bit 22 are invisible to lights
+ * (they still cull against the camera).
+ */
+export const INSTANCE_LAYER_SHIFT = 1;
+export const INSTANCE_LAYER_BITS = 23;
+const INSTANCE_LAYER_MASK = (1 << INSTANCE_LAYER_BITS) - 1;
+
+/** The instance flags float for `receiveShadow` and a layer mask (see `INSTANCE_LAYER_SHIFT`). */
+export function packInstanceFlags(receiveShadow: boolean, layers: number): number {
+  return (receiveShadow ? 0 : 1) | ((layers & INSTANCE_LAYER_MASK) << INSTANCE_LAYER_SHIFT);
+}
+
+/**
+ * The cone factor of a spot light, 0..1, mirrored by `engine_spot_cone` in WGSL: 1 inside
+ * `innerAngle` of the axis, 0 outside `outerAngle`, a smooth Hermite step between. All three
+ * arguments are cosines (`cosTheta` = dot of the light's direction with the direction to the
+ * fragment); with `cosInner <= cosOuter` the edge is hard.
+ */
+export function spotCone(cosTheta: number, cosOuter: number, cosInner: number): number {
+  const t = Math.min(1, Math.max(0, (cosTheta - cosOuter) / Math.max(cosInner - cosOuter, 1e-4)));
+  return t * t * (3 - 2 * t);
+}
 
 /**
  * The sun's shadow map: an orthographic box centred on the rendering camera's position, looking
@@ -58,6 +109,8 @@ export interface DirectionalLight {
   color: ArrayLike<number>;
   /** The sun's shadow map, or null/undefined for none (the default). */
   shadow?: SunShadow | null;
+  /** Layer mask (u32): the light reaches instances whose `layers` share a bit. Default all. */
+  layers?: number;
 }
 
 /** A point light: world position, linear RGB colour and the radius where it falls to zero. */
@@ -65,6 +118,24 @@ export interface PointLight {
   position: ArrayLike<number>;
   color: ArrayLike<number>;
   radius: number;
+  /** Layer mask (u32): the light reaches instances whose `layers` share a bit. Default all. */
+  layers?: number;
+}
+
+/**
+ * A spot light: a point light with a cone. `direction` is the way the light travels (any
+ * length); the cone is full inside `innerAngle` radians of it and gone outside `outerAngle`,
+ * with a smooth step between (`spotCone`). `radius` is the distance falloff, as for points.
+ */
+export interface SpotLight {
+  position: ArrayLike<number>;
+  direction: ArrayLike<number>;
+  color: ArrayLike<number>;
+  radius: number;
+  innerAngle: number;
+  outerAngle: number;
+  /** Layer mask (u32): the light reaches instances whose `layers` share a bit. Default all. */
+  layers?: number;
 }
 
 /**
@@ -106,17 +177,21 @@ export class Lights {
   };
   /** Point lights, in order; the first `MAX_POINT_LIGHTS` reach the shader. */
   readonly points: PointLight[] = [];
+  /** Spot lights, in order; the first `MAX_SPOT_LIGHTS` reach the shader. */
+  readonly spots: SpotLight[] = [];
   /** Distance fog. Default density 0: `engine_fog` is the identity. */
   readonly fog: Fog = { color: new Float32Array([0, 0, 0]), density: 0, near: 0, far: 0 };
 
-  /** Back to the unlit default: ambient 1, no sun or shadow, `points` emptied, no fog. */
+  /** Back to the unlit default: ambient 1, no sun or shadow, `points` and `spots` emptied, no fog. */
   reset(): this {
     this.ambient.fill(1);
     const s = this.sun;
     set3(s.dir, 0, -1, 0);
     set3(s.color, 0, 0, 0);
     s.shadow = null;
+    s.layers = undefined;
     this.points.length = 0;
+    this.spots.length = 0;
     const f = this.fog;
     set3(f.color, 0, 0, 0);
     f.density = 0;
@@ -131,7 +206,10 @@ export class Lights {
    * buffer as `out`, like `Camera.writeBlock`), normalised `sun_dir` (4–6), `sun_color` (8–10),
    * `MAX_POINT_LIGHTS` × (`position`, `radius`, `color`, pad), then `sun_view_proj`,
    * `shadow_params` (bias, texel size, enabled) from `shadow` (zeros and enabled 0 when null),
-   * `fog` (rgb, density) and `fog_range` (near, far). Unused slots are zeroed. No allocation.
+   * `fog` (rgb, density) and `fog_range` (near, far), then `spot_count` and `sun_layers` (u32),
+   * `point_layers` (one u32 per point slot) and `MAX_SPOT_LIGHTS` × (`position`, `radius`,
+   * normalised `direction`, cos `outerAngle`, `color`, cos `innerAngle`, `layers`, pad). Unset
+   * masks are `ALL_LIGHT_LAYERS`. Unused slots are zeroed. No allocation.
    */
   writeBlock(
     out: Float32Array,
@@ -198,6 +276,45 @@ export class Lights {
     out[fo + 5] = f.far;
     out[fo + 6] = 0;
     out[fo + 7] = 0;
+    const ns = Math.min(this.spots.length, MAX_SPOT_LIGHTS);
+    const lo = o + LAYERS_OFFSET_FLOATS;
+    u32[lo] = ns;
+    u32[lo + 1] = (this.sun.layers ?? ALL_LIGHT_LAYERS) >>> 0;
+    u32[lo + 2] = 0;
+    u32[lo + 3] = 0;
+    const pl = o + POINT_LAYERS_OFFSET_FLOATS;
+    for (let i = 0; i < MAX_POINT_LIGHTS; i++) {
+      u32[pl + i] = i < n ? (this.points[i]!.layers ?? ALL_LIGHT_LAYERS) >>> 0 : 0;
+    }
+    let sp2 = o + SPOT_LIGHTS_OFFSET_FLOATS;
+    for (let i = 0; i < ns; i++, sp2 += SPOT_LIGHT_FLOATS) {
+      const l = this.spots[i]!;
+      const pos = l.position;
+      const dir = l.direction;
+      const col = l.color;
+      out[sp2] = pos[0] ?? 0;
+      out[sp2 + 1] = pos[1] ?? 0;
+      out[sp2 + 2] = pos[2] ?? 0;
+      out[sp2 + 3] = l.radius;
+      const ddx = dir[0] ?? 0;
+      const ddy = dir[1] ?? 0;
+      const ddz = dir[2] ?? 0;
+      const dl = Math.hypot(ddx, ddy, ddz);
+      const dk = dl > 0 ? 1 / dl : 0;
+      out[sp2 + 4] = ddx * dk;
+      out[sp2 + 5] = ddy * dk;
+      out[sp2 + 6] = ddz * dk;
+      out[sp2 + 7] = Math.cos(l.outerAngle);
+      out[sp2 + 8] = col[0] ?? 0;
+      out[sp2 + 9] = col[1] ?? 0;
+      out[sp2 + 10] = col[2] ?? 0;
+      out[sp2 + 11] = Math.cos(l.innerAngle);
+      u32[sp2 + 12] = (l.layers ?? ALL_LIGHT_LAYERS) >>> 0;
+      out[sp2 + 13] = 0;
+      out[sp2 + 14] = 0;
+      out[sp2 + 15] = 0;
+    }
+    out.fill(0, sp2, o + LIGHTS_BLOCK_FLOATS);
   }
 }
 
