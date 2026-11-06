@@ -22,15 +22,19 @@ function makeWater(opts: WaterOptions = {}, depth = true) {
       ? { view: depthTex.createView(), width: 320, height: 180, texture: depthTex }
       : null,
   };
+  const descs: MeshDesc[] = [];
   const renderer = {
     device,
     globalsLayout: device.createBindGroupLayout({ entries: [] }),
     sceneFormats: ['rgba16float', 'rgba16float'],
     target,
-    createMesh: (desc: MeshDesc) => new Mesh(device, desc),
+    createMesh: (desc: MeshDesc) => {
+      descs.push(desc);
+      return new Mesh(device, desc);
+    },
   } as unknown as Renderer;
   const water = new Water(renderer, opts);
-  return { fake, water, target };
+  return { fake, water, target, descs };
 }
 
 const DEPTH_FRAME = { depthFormat: 'depth24plus' } as unknown as Frame;
@@ -217,6 +221,31 @@ describe('Water', () => {
     expect(noFoam.foam).toBeNull();
     const { water: wide } = makeWater({ size: [20, 10], segments: [4, 2] });
     expect(wide.mesh.indexCount).toBe(4 * 2 * 6);
+  });
+
+  it('origin moves the plane: x/z baked into the vertices, y added to the level', () => {
+    const { fake, water, descs } = makeWater({ size: 10, origin: [32, 5, 64], level: 1.5 });
+    expect(Array.from(water.origin)).toEqual([32, 5, 64]);
+    const v = descs[0]!.vertices as Float32Array;
+    const xs: number[] = [];
+    const zs: number[] = [];
+    for (let i = 0; i < v.length; i += 12) {
+      xs.push(v[i]!);
+      zs.push(v[i + 2]!);
+      expect(v[i + 1]).toBe(0);
+    }
+    expect(Math.min(...xs)).toBe(27);
+    expect(Math.max(...xs)).toBe(37);
+    expect(Math.min(...zs)).toBe(59);
+    expect(Math.max(...zs)).toBe(69);
+    expect(Array.from(water.mesh.bounds.center)).toEqual([32, 0, 64]);
+    water.prepare(encoder(fake), FLAT_FRAME);
+    expect(params(water)[19]).toBe(5);
+    expect(params(water)[11]).toBe(1.5);
+    expect(waterHeight(water, 0, 0)).toBe(6.5);
+    expect(WATER_WGSL).toContain('water.misc.w + water.surface.w');
+    const { water: plain } = makeWater();
+    expect(Array.from(plain.origin)).toEqual([0, 0, 0]);
   });
 
   it('allocates no GPU objects per frame after the first depth frame', () => {

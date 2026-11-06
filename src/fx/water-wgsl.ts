@@ -43,7 +43,7 @@ struct WaterParams {
   deep: vec4f,        // rgb, depth fade (world units)
   surface: vec4f,     // fresnel, roughness, displace, level
   foam: vec4f,        // rgb, width (0 = off)
-  misc: vec4f,        // time, wave count, depth copy on, pad
+  misc: vec4f,        // time, wave count, depth copy on, origin y
   waves: array<vec4f, ${WATER_MAX_WAVES}>, // scale, speed, amplitude, direction angle
 };
 @group(1) @binding(0) var<uniform> water: WaterParams;
@@ -99,7 +99,7 @@ fn water_field(xz: vec2f, t: f32) -> vec3f {
 @vertex fn vs(v: VertexIn) -> WaterOut {
   let t = water.misc.x;
   let f = water_field(v.pos.xz, t);
-  let world = vec3f(v.pos.x, water.surface.w + water.surface.z * f.x, v.pos.z);
+  let world = vec3f(v.pos.x, water.misc.w + water.surface.w + water.surface.z * f.x, v.pos.z);
   var o: WaterOut;
   o.clip = camera.view_proj * vec4f(world, 1.0);
   o.world = world;

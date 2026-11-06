@@ -275,7 +275,8 @@ sky.sunSize = 0.04; // every field is live
   1) sit at `lights.sun`, tinted by its colour. Below the horizon the dome darkens and the stars
   come out; with no sun (colour zero) the dome is as set.
 - `stars`: `true` for the defaults or `{ density, seed }` (`SkyStars`; default density 24, seed
-  0); `null` for none. `exposure` multiplies the whole dome.
+  0); `null` for none. `exposure` multiplies the whole dome. `ambientFloor` (0.06) is how dark
+  the dome goes at night, as a fraction of its daytime colour.
 - Emissive: the sun disc and the stars are also written to the emissive target, so bloom picks
   them up.
 - Depth: under a depth camera the triangle sits at the far plane with depth test on and depth
@@ -366,7 +367,9 @@ const y = waterHeight(water, boat.x, boat.z); // the surface under something flo
 ```
 
 - `size` (100, or `[x, z]`) and `segments` (1, or `[x, z]`) build the plane once (`mesh`,
-  centred on the origin at `level`); `level` is the resting height.
+  centred on `origin` (`[0, 0, 0]`) at `level`); `level` is the resting height above the
+  origin's y. A world whose corner is the origin puts its water at `origin: [sizeX / 2, 0,
+  sizeZ / 2]`.
 - Colour: `shallowColor` (0.1, 0.45, 0.45) at the shoreline fades to `deepColor` (0.01, 0.07,
   0.14) over `depthFade` (4) world units of water below the surface, measured from the scene
   depth (below). `fresnel` (0.6) scales a Schlick term that lerps that towards a sky colour

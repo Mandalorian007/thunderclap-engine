@@ -30,6 +30,12 @@ export interface SkyOptions {
   stars?: boolean | Partial<SkyStars>;
   /** Multiplier on the whole dome. Default 1. */
   exposure?: number;
+  /**
+   * How dark the dome goes at night, as a fraction of its daytime colour (the floor of the
+   * day/night fade driven by the sun's elevation). Default 0.06. Raise it for brighter nights,
+   * lower it towards 0 for black skies behind the stars.
+   */
+  ambientFloor?: number;
 }
 
 const DEFAULT_ZENITH = [0.18, 0.38, 0.85] as const;
@@ -66,6 +72,8 @@ export class Sky implements Drawable {
   stars: SkyStars | null;
   /** Multiplier on the whole dome. Live. */
   exposure: number;
+  /** Night brightness as a fraction of day (`SkyOptions.ambientFloor`). Live. */
+  ambientFloor: number;
 
   private readonly device: GPUDevice;
   private readonly params: Float32Array<ArrayBuffer>;
@@ -85,6 +93,7 @@ export class Sky implements Drawable {
     this.sunSize = opts.sunSize ?? 0.03;
     this.sunGlow = opts.sunGlow ?? 1;
     this.exposure = opts.exposure ?? 1;
+    this.ambientFloor = opts.ambientFloor ?? 0.06;
     const s = opts.stars;
     this.stars = s
       ? {
@@ -125,7 +134,8 @@ export class Sky implements Drawable {
 
   /**
    * Pack the live fields into the params block (`SKY_PARAMS_FLOATS` floats: zenith rgb +
-   * exposure, horizon rgb + sunSize, ground rgb + sunGlow, stars density, seed, enabled, 0) and
+   * exposure, horizon rgb + sunSize, ground rgb + sunGlow, stars density, seed, enabled,
+   * ambientFloor) and
    * upload it. Called by the renderer once per frame. No allocation.
    */
   prepare(_encoder: GPUCommandEncoder, _frame?: Frame): void {
@@ -146,7 +156,7 @@ export class Sky implements Drawable {
     p[12] = s ? s.density : 0;
     p[13] = s ? s.seed : 0;
     p[14] = s ? 1 : 0;
-    p[15] = 0;
+    p[15] = this.ambientFloor;
     this.device.queue.writeBuffer(this.paramsBuffer, 0, p);
   }
 
