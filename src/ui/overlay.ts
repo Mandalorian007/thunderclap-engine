@@ -27,6 +27,7 @@ import {
 } from './text-scale';
 import { cssPxTheme, defaultTheme, type ThemeOverrides, tokenVar } from './theme';
 import { Toaster } from './toast';
+import { ensureWidgets2Styles } from './widgets-2';
 
 /** A rectangle in CSS pixels relative to the overlay's parent (what platform's letterbox gives). */
 export interface Rect {
@@ -138,6 +139,7 @@ export interface Overlay {
 export function createOverlay(opts: OverlayOptions): Overlay {
   const doc = opts.parent.ownerDocument;
   ensureStyles(doc);
+  ensureWidgets2Styles(doc);
   const dw = opts.designWidth ?? 1920;
   const dh = opts.designHeight ?? 1080;
 

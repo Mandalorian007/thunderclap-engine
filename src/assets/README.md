@@ -118,6 +118,92 @@ draw. A skinned primitive is built in the skinned layout once `VERTEX_LAYOUT_SKI
 `render/mesh.ts`; until then it is built in `VERTEX_LAYOUT_3D` and the joints and weights stay on
 the document.
 
+## Bundles
+
+A manifest is a typed map of keys to entries, and a bundle loads it from bytes the game supplies.
+The engine never fetches: the only I/O is the game's `read(uri)` (VISION rule 4), so a bundle works
+the same over `fetch`, a zip in memory, IndexedDB, or an Electron file read.
+
+```ts
+import { createBundle, defineManifest } from '@thunderclap/engine/assets';
+
+const manifest = defineManifest({
+  hero: { kind: 'texture', uri: 'hero.png', options: { mips: false } },
+  tiles: { kind: 'texture-array', uris: ['grass.png', 'stone.png'] },
+  level: { kind: 'gltf', uri: 'level.gltf', resources: { 'level.bin': 'bin/level.bin' } },
+  jump: { kind: 'audio', uri: 'jump.wav' },
+  config: { kind: 'json', uri: 'config.json' },
+  credits: { kind: 'text', uri: 'credits.txt' },
+  raw: { kind: 'bytes', uri: 'table.bin' },
+  icon: { kind: 'image', uri: 'icon.png' },
+  sprites: { kind: 'atlas', uris: { coin: 'coin.png', gem: 'gem.png' }, options: { padding: 2 } },
+});
+
+const bundle = createBundle(manifest, {
+  read: async (uri) => (await fetch(`assets/${uri}`)).arrayBuffer(),
+  renderer,
+  audio: audioEngine, // or an OfflineAudioContext, to decode before the first gesture
+});
+bundle.on('progress', (p) => bar.set(p.fraction));
+await bundle.load();
+const hero = bundle.get('hero'); // Texture
+const sprites = bundle.get('sprites'); // AtlasAsset<'coin' | 'gem'>
+```
+
+**Manifest.** `defineManifest(entries)` is an identity function that keeps the literal types, so
+`bundle.get(key)` returns the right asset type (`AssetOf<Entry>`). `ManifestEntry` is one of
+`TextureEntry` (`Texture`), `TextureArrayEntry` (`Texture` with layers, every uri the same size),
+`GltfEntry` (`GltfScene`; `.gltf` buffers and images listed in `externalUris` are read through
+`read` too, with `resources` mapping a relative uri to the one to read), `AudioEntry`
+(`AudioBuffer`), `JsonEntry` (`unknown`), `TextEntry` (`string`), `BytesEntry` (`ArrayBuffer`),
+`ImageEntry` (`ImageBitmap`) and `AtlasEntry` (`AtlasAsset`: `texture`, `rects`, `layout`, see
+*Atlas*). `AssetKind` is the union of their `kind`s and `Manifest` the map type. A texture entry's
+`options` are `LoadTextureOptions`; a gltf entry's are `LoadGltfOptions`.
+
+**The `read` contract.** `AssetReader = (uri: string) => Promise<ReadResult>`, where `ReadResult`
+is an `ArrayBuffer`, a `Blob`, an `ImageBitmap` (for the image kinds), or `{ data, total? }` with
+`total` the size in bytes, so `progress.bytes` and `bytesTotal` can be reported. A thrown or
+rejected `read` fails that key (after `retries` more attempts); the bundle never retries a decode.
+One uri shared by several entries is read once per `load`, and its bytes are counted once.
+
+**Options** (`BundleOptions`): `read` (required), `renderer` (needed by texture, texture-array,
+gltf and atlas entries; without it those keys fail with a message naming the option), `audio`
+(`AudioDecoder`: an `AudioEngine`, whose `context` is null before the first gesture, or any object
+with `decodeAudioData` such as an `OfflineAudioContext`), `concurrency` (reads in flight, default
+4), `retries` (default 0), `priority(key)` (higher first among queued reads), `strict` (reject
+`load` on the first failure and cancel the rest), `decodeImage(blob)` (default
+`createImageBitmap`).
+
+**Bundle** (`Bundle<M>`): `load(keys?)` loads everything or the listed keys and resolves when they
+have settled; `progress: BundleProgress` (`loaded`, `failed`, `total`, `bytes`, `bytesTotal`, which
+is null until every read has reported a total, and `fraction = (loaded + failed) / total`);
+`errors: BundleError[]` (`key`, `uri`, `message`, `cause`); `get`, `has`; `on(event, fn)` for
+`BundleEvents` `progress`, `asset` (`{ key, asset }`), `error` and `done` (fired once per `load`
+that was not cancelled); `cancel()` stops queued reads, lets in-flight ones finish and keeps the
+cancelled keys in `total` so `fraction` stays below 1 until a later `load` resumes them;
+`release(key?)` destroys a texture or scene, closes a bitmap and forgets the key; `dispose()` is
+cancel, release all and drop listeners. Failed assets count toward `fraction` so a bar still
+reaches 1; a failed key loads again on the next `load`.
+
+## Atlas
+
+`packAtlas(images, options?)` packs named images into one sheet with shelf packing and returns an
+`AtlasLayout`: `width`, `height`, `rects: Record<name, AtlasRect>` (`x`, `y`, `w`, `h` in pixels
+and `u0`, `v0`, `u1`, `v1` normalised) and `draw(ctx)`, which draws every image into a 2D context
+(`AtlasDrawContext`: `drawImage`, `createImageData`, `putImageData`). An `AtlasSource` is an
+`ImageBitmap`, a canvas, or `AtlasPixels` (`width`, `height`, RGBA `data`). `AtlasOptions`:
+`padding` (gap between sprites, default 1), `extrude` (edge pixels repeated around each sprite so
+bilinear sampling and mips do not bleed, default 1; `extrudePixels` does it for raw pixels),
+`maxSize` (default 4096; packing throws naming the image that does not fit), `powerOfTwo`
+(default true) and `sort` (tallest first, default true; `false` keeps input order). The sheet is
+never taller than wide. Packing is deterministic for the same inputs.
+
+`createAtlasTexture(device, layout, images, options?)` draws the layout into an `OffscreenCanvas`
+and uploads it with `loadTexture`, returning an `AtlasTexture` (`texture`, `rects`);
+`AtlasTextureOptions` are `LoadTextureOptions` plus `canvas` to supply the canvas. An `atlas`
+manifest entry does all of this from the uris; draw a sprite from it with
+`frame.sprite(material, { x, y, w, h, uv: [r.u0, r.v0, r.u1, r.v1] })`.
+
 ## Not yet
 
 Morph targets (the `weights` channel parses; nothing consumes it), cameras, lights, `KHR_*`
@@ -129,3 +215,7 @@ tolerated and warned about; `extensionsRequired` throws.
 `harness/gltf.html` builds a GLB in the page (`harness/gltf-writer.ts`: a textured cube placed by
 a `matrix` node, an unlit-looking mossy plane with no normals placed by TRS) and draws it through
 the two calls above; `e2e/gltf.spec.ts` checks the counts and the rendered pixels on the matrix.
+`harness/assets.html` loads a 12-entry manifest of every kind from an in-memory map through
+`createBundle` (`?slow` delays reads, `?fail=one` fails one, `?cancel` cancels after the first
+asset) and draws the packed atlas as sprites; `e2e/assets.spec.ts` checks progress, the error
+path, cancel and a sprite's colour.

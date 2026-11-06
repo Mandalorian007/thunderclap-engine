@@ -163,6 +163,81 @@ frame.drawable(debug);                              // inside the scene pass; cl
 - `frame.drawable(debug, order)` places the lines in draw order like any drawable; with
   `depth: 'test'` they hide behind opaque geometry already drawn, so draw them after the scene.
 
+## Billboards
+
+`createBillboards(renderer, opts?: BillboardsOptions)` (or `new Billboards(renderer, opts)`) is one
+batch of world-anchored, camera-facing quads: name plates, damage numbers, health bars, markers.
+Each shows a region of the batch's text atlas or a solid colour, is sized in world units or in
+screen px, optionally fades out over `life` and drifts by `velocity`. The batch is alpha blended,
+depth tested without writing (`depth: 'test'`) or drawn over everything (`'always'`), sorted back
+to front each `update`, and drawn in one or two calls through `frame.drawable(billboards)`.
+
+```ts
+import { createBillboards } from '@thunderclap/engine/fx';
+
+const bb = createBillboards(renderer, { capacity: 256, atlas: { size: 1024, font: 'sans-serif' } });
+const plate = bb.add({
+  position: body.position,             // a Float32Array is followed live; a tuple is copied
+  offset: [0, 2.2, 0],
+  size: { px: [160, 40] },             // the same px size at any distance
+  region: bb.text('Hero', { size: 28, stroke: '#000', strokeWidth: 4 }),
+});
+const hp = bb.add({ position: body.position, offset: [0, 1.9, 0], ...bb.bar(1, [1.4, 0.15], GREEN, DARK) });
+hp.fraction = 0.6;
+bb.add({                               // a damage number: rises, fades over the second half, removes itself
+  position: [x, y, z], size: { px: [90, 40] }, region: bb.text('-37', { color: '#f44' }),
+  life: 0.9, velocity: [0, 1.2, 0], depth: 'always',
+});
+bb.update(dt, camera);                 // in the update step
+frame.drawable(bb, 10);                // in the render step, after the scene's meshes
+```
+
+- `BillboardDesc`: `position` (`Float32Array` or `[x, y, z]`), `offset?`, `size: BillboardSize`
+  (`[w, h]` world units or `{ px: [w, h] }` logical px), `region?: AtlasRegion | null`, `color?`
+  (straight-alpha RGBA, default white), `facing?: BillboardFacing` (`'camera'` or `'cameraY'`,
+  upright and turning about y only), `depth?: BillboardDepth` (`'test'` or `'always'`), `life?`,
+  `velocity?`, `bar?: { fraction, bg }`.
+- `BillboardHandle`: `alive`, and setters `position`, `offset`, `color`, `size`, `region`,
+  `fraction`. A dead handle's setters do nothing; `remove(handle)` is idempotent.
+- `Billboards`: `add(desc)`, `remove(handle)`, `clear()`, `update(dt, camera?)` (ages, drifts,
+  removes expired quads, touches their atlas regions, sorts back to front for `camera`),
+  `prepare`/`draw` (the `Drawable` pair; `prepare` uploads the instances and, when the atlas
+  changed, its canvas, once per frame at most), `text(text, style?: TextStyle): AtlasRegion`
+  (throws when the string is larger than the atlas), `bar(fraction, size, fg, bg)` (a one-quad
+  health bar: `fg` over `fraction` of the width, `bg` beyond; spread into `add` with a
+  `position`), `count`, `atlasUsed`, `draws`, `atlasTexture` (the atlas as a `Texture`), `atlas`
+  (the `TextAtlas`), `destroy()`.
+- `BillboardsOptions`: `capacity` (default 1024; the arrays and the storage buffer double when
+  `add` finds the batch full, never per frame otherwise), `atlas: TextAtlasOptions`, `label`.
+- `pxToWorld(px, viewDistance, projection, viewportPx)`: the world span a `px` logical-px size
+  covers at `viewDistance`, the CPU side of the shader's `{ px }` math.
+- `BILLBOARD_WGSL` is the shader (six vertices per instance from a storage buffer, group 1:
+  instances, `linear-clamp` sampler, atlas); `BILLBOARD_FLOATS` (20) and `BILLBOARD_BYTES` (80)
+  are the instance stride, `BB_FLAG_PX`, `BB_FLAG_YAW`, `BB_FLAG_TEXTURED` and `BB_FLAG_BAR` the
+  flag bits carried in `pos.w`. `{ px }` quads are placed in clip space from `camera.viewport`,
+  `globals.targetSize` and `globals.logicalSize`; world quads take right and up from
+  `camera.view`.
+
+### Text atlas
+
+`TextAtlas` (`new TextAtlas(opts?: TextAtlasOptions)`) rasterises strings once with the canvas
+2D API into one square canvas, packed on shelves and cached by text and style; `Billboards`
+owns one, and it works alone for any text-on-a-texture need.
+
+- `TextAtlasOptions`: `size` (default 1024), `font` (default `'sans-serif'`), `canvas?:
+  AtlasCanvas` (an `OffscreenCanvas` or `HTMLCanvasElement` by default; tests pass a stub whose
+  `getContext('2d')` returns an `AtlasContext2D`, the subset of the 2D context the atlas uses).
+- `TextStyle`: `font`, `size` (32), `color` (`'#fff'`), `stroke`, `strokeWidth`, `padding` (2);
+  all part of the cache key.
+- `text(text, style?): AtlasRegion | null` returns the cached region or draws a new one (`null`
+  when the string is larger than the canvas). `AtlasRegion` is `u0, v0, u1, v1` (v down, as in
+  the canvas) and `width, height` in atlas px.
+- When the canvas is full the shelf whose newest entry is least recently used is cleared and
+  reused (`evictions` counts them); `touch(region)` marks a region used now (`Billboards.update`
+  does it for every live quad), `has(region)` says whether it is still valid, `clear()` forgets
+  everything. `dirty` is set when the canvas has text the GPU has not seen; the owner uploads
+  `canvas` and calls `markUploaded()`. `count` and `used` (shelf area share) describe the fill.
+
 ## Light helpers
 
 Pure functions of time; feed the result into a tint, emissive or light intensity.

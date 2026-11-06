@@ -126,3 +126,6 @@ texture; `renderer.endFrame({ present: false })` then only submits. Inside `enco
   into a settings object in place (shallow per section); `defaultPostSettings()` returns a
   fresh default.
 - `Ease` is `(t: number) => number` on 0..1.
+  The easing functions (`easeLinear`, `easeIn`, `easeOut`, `easeInOut`) are aliases of the
+  table in `@thunderclap/engine/tween` (`ease.linear`, `ease.quadIn`, `ease.quadOut`,
+  `ease.smoothstep`), which also has the full set.
