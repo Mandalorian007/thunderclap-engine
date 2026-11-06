@@ -164,13 +164,16 @@ async function padPress(page: Page, button: number): Promise<void> {
 test('menuNav: the d-pad walks the menu and A clicks; arrows move, Enter clicks once', async ({
   page,
 }) => {
+  // Each focus step is polled: a press is read on a tick, and under load the tick after the
+  // release can land after the read (E-017).
   await padPress(page, 13);
-  expect(await focusedLabel(page)).toBe('First');
+  await expect.poll(() => focusedLabel(page)).toBe('First');
   await padPress(page, 13);
-  expect(await focusedLabel(page)).toBe('Second');
+  await expect.poll(() => focusedLabel(page)).toBe('Second');
   await padPress(page, 12);
+  await expect.poll(() => focusedLabel(page)).toBe('First');
   await padPress(page, 12);
-  expect(await focusedLabel(page)).toBe('Third');
+  await expect.poll(() => focusedLabel(page)).toBe('Third');
   await padPress(page, 0);
   await expect.poll(async () => (await read(page)).clicks).toEqual(['Third']);
 
