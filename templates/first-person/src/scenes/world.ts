@@ -310,9 +310,6 @@ export function createWorldScene(ctx: GameCtx): Scene<GameCtx, Frame> {
     name: 'world',
     enter() {
       camera.setPerspective(FOV, ctx.design.width / ctx.design.height, NEAR, FAR);
-      camera.depthTest = true;
-      camera.depthWrite = true;
-      camera.cull = true;
       aim();
 
       worker = new Worker(new URL('../world/worker.ts', import.meta.url), { type: 'module' });

@@ -10,6 +10,7 @@ import type { Scene } from '@thunderclap/engine/core';
 import type { EmitParams } from '@thunderclap/engine/fx';
 import {
   createFlipbook,
+  createFollow2D,
   type DrawParams,
   type Flipbook,
   type Frame,
@@ -32,7 +33,6 @@ import {
 } from '../physics/player';
 import { recordRun, START_LIVES } from '../save/schema';
 import { createHud, formatTime, type Hud } from '../ui/hud';
-import { createFollow, type FollowOptions, snapFollow, updateFollow } from '../world/follow';
 import { buildWorld, UV, type World } from '../world/world';
 import { createPauseScene } from './pause';
 
@@ -125,18 +125,15 @@ export function createLevelScene(ctx: GameCtx, level: Level): Scene<GameCtx, Fra
   const coinBook: Flipbook = createFlipbook({ frames: ctx.frames.coin, fps: 8 });
   const intent: Intent = { move: 0, jumpPressed: false, jumpHeld: false, dashPressed: false };
 
-  const followOpts: FollowOptions = {
-    viewW: design.width,
-    viewH: design.height,
-    worldW,
-    worldH,
-    deadX: 90,
-    deadY: 120,
-    lookAhead: 260,
-    lookAheadTime: 0.35,
-    smoothY: 0.18,
-  };
-  const follow = createFollow(0, 0);
+  // The camera: a 180×240 dead zone around the player, 260 px of look-ahead in the run direction,
+  // eased over 0.18 s, never showing outside the level. Writes `ctx.camera.x/y`.
+  const follow = createFollow2D(ctx.camera, {
+    deadZone: { w: 180, h: 240 },
+    lookAhead: { x: 260, y: 0 },
+    lookAheadSmoothing: 0.35,
+    smoothing: 0.18,
+    bounds: { minX: 0, minY: 0, maxX: worldW, maxY: worldH },
+  });
 
   const dust: EmitParams = {
     x: 0,
@@ -183,7 +180,7 @@ export function createLevelScene(ctx: GameCtx, level: Level): Scene<GameCtx, Fra
   const respawn = () => {
     const at = spawnPoint();
     placePlayer(player, at.x, at.y);
-    snapFollow(follow, at.x + PLAYER_W / 2, at.y + PLAYER_H / 2, followOpts);
+    follow.teleport(at.x + PLAYER_W / 2, at.y + PLAYER_H / 2);
     hurtLeft = HURT_TIME;
   };
 
@@ -293,7 +290,6 @@ export function createLevelScene(ctx: GameCtx, level: Level): Scene<GameCtx, Fra
       simTime = 0;
       coinsGot = 0;
       finished = false;
-      ctx.touch.update([]);
       updateMovers(0);
       respawn();
       hurtLeft = 0;
@@ -308,9 +304,6 @@ export function createLevelScene(ctx: GameCtx, level: Level): Scene<GameCtx, Fra
       hud?.remove();
       hud = null;
     },
-    pause() {
-      ctx.touch.update([]);
-    },
     update(dt) {
       if (finished) return;
       const { input } = ctx;
@@ -322,16 +315,11 @@ export function createLevelScene(ctx: GameCtx, level: Level): Scene<GameCtx, Fra
       timeMs += dt * 1000;
       hurtLeft = Math.max(0, hurtLeft - dt);
 
-      // Intent: keyboard and pad through the bindings, touch through the zones.
-      ctx.touch.update(ctx.pointers.pointers);
-      const touch = ctx.touch.reading;
-      intent.move = Math.max(
-        -1,
-        Math.min(1, input.value('right') - input.value('left') + touch.move),
-      );
-      intent.jumpPressed = input.pressed('jump') || touch.jumpPressed;
-      intent.jumpHeld = input.held('jump') || touch.jumpHeld;
-      intent.dashPressed = input.pressed('dash') || touch.dashPressed;
+      // Intent: keyboard, pad and the touch zones all arrive through the same actions.
+      intent.move = input.axis('left', 'right');
+      intent.jumpPressed = input.pressed('jump');
+      intent.jumpHeld = input.held('jump');
+      intent.dashPressed = input.pressed('dash');
 
       updateMovers(dt);
       stepPlayer(player, intent, level, moverBoxes, dt);
@@ -378,13 +366,12 @@ export function createLevelScene(ctx: GameCtx, level: Level): Scene<GameCtx, Fra
       }
 
       // Camera and animation.
-      updateFollow(
-        follow,
+      follow.update(
+        dt,
         b.x + PLAYER_W / 2,
         b.y + PLAYER_H / 2,
         Math.abs(b.vx) > 40 ? player.facing : 0,
-        dt,
-        followOpts,
+        0,
       );
       setBook(player.state);
       book.update(dt);
@@ -395,13 +382,8 @@ export function createLevelScene(ctx: GameCtx, level: Level): Scene<GameCtx, Fra
     },
     render(frame) {
       if (!world) return;
-      const camLeft = follow.x - design.width / 2;
-      const camTop = follow.y - design.height / 2;
-      ctx.camera.x = camLeft;
-      ctx.camera.y = camTop;
-
       frame.clear(SKY[0], SKY[1], SKY[2]);
-      world.parallax.update(camLeft, camTop);
+      world.parallax.update(ctx.camera.x, ctx.camera.y);
       world.parallax.draw(frame);
       world.map.draw(frame);
 

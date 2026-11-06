@@ -14,6 +14,12 @@ import { Follow, Look } from '@thunderclap/engine/input';
 import { type Action, bindings, type GameCtx, type Player } from './ctx';
 import { createArenaScene } from './scenes/arena';
 
+declare global {
+  interface Window {
+    __template?: { scene: string; frames: number; x: number; z: number };
+  }
+}
+
 const engine = await createGame<Action, null, GameCtx>({
   root: document.getElementById('app')!,
   title: 'Ember Reach',
@@ -23,10 +29,12 @@ const engine = await createGame<Action, null, GameCtx>({
 });
 
 if (engine) {
-  // The Look: the move keys, the left touch zone as a stick, the pad's left stick for `move`;
-  // a mouse drag, the right touch zone and the right stick for `look`; the wheel, a pinch and
-  // the shoulder buttons for `zoom`.
+  // The Look in orbit mode: a plain primary-button drag turns the view, no pointer lock. The
+  // move keys, the left touch zone as a stick and the pad's left stick for `move`; the drag, the
+  // right touch zone and the right stick for `look`; the wheel, a pinch and the shoulder buttons
+  // for `zoom`.
   const look = new Look({
+    mode: 'orbit',
     keys: {
       forward: ['KeyW', 'ArrowUp'],
       back: ['KeyS', 'ArrowDown'],
@@ -37,24 +45,6 @@ if (engine) {
     zoom: { wheel: true, pinch: true, pad: 'shoulders' },
   });
   engine.input.setLook(look);
-
-  // A third-person camera orbits on a plain drag, no pointer lock: `Look.attach` only feeds the
-  // mouse while locked, so the page forwards an unlocked drag itself.
-  const canvas = engine.surface.canvas;
-  let dragging = false;
-  canvas.addEventListener('pointerdown', (e) => {
-    if (e.pointerType === 'mouse') dragging = true;
-  });
-  canvas.addEventListener('pointermove', (e) => {
-    if (dragging && e.pointerType === 'mouse' && !look.locked)
-      look.mouseMove(e.movementX, e.movementY);
-  });
-  const stop = () => {
-    dragging = false;
-  };
-  canvas.addEventListener('pointerup', stop);
-  canvas.addEventListener('pointercancel', stop);
-  canvas.addEventListener('pointerleave', stop);
 
   // The Follow: an over-the-shoulder orbit around the controller (feet + eyeHeight), zoomed by
   // `Look.zoom`, eased so a sprint does not jerk the frame.
@@ -78,6 +68,17 @@ if (engine) {
     player,
     hud: null as unknown as GameCtx['hud'],
   });
+
+  // `window.__template`: the top scene's name, the frame count and the followed character's
+  // x/z, for the repo's smoke e2e (`e2e/templates.spec.ts`). Updated after every rendered frame.
+  const probe = { scene: '', frames: 0, x: 0, z: 0 };
+  window.__template = probe;
+  engine.hooks.afterRender = () => {
+    probe.scene = ctx.stack.top?.name ?? '';
+    probe.frames++;
+    probe.x = follow.target?.position[0] ?? 0;
+    probe.z = follow.target?.position[2] ?? 0;
+  };
 
   ctx.stack.push(createArenaScene(ctx));
   ctx.loop.start();
