@@ -49,7 +49,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Pick | ws/pick | `sphereTester`, `obbTester`, `meshTester` (bounds reject + Möller–Trumbore), `transformRayInto`; harness `pick.html` | rays, cull | ✅ green at `0a0bec1` (650 tests; e2e 548/57/5 mesh.spec flakes); queued in chain 2 after look-zoom |
 | 5 | Look zoom | ws/look-zoom | `Look.zoom` axis (wheel, pinch, pad opt-in); `Follow` reads it; harness follow drops its wheel binding | follow | ✅ green at `d5bb746` (640 tests; e2e 526/57/3 fog flake); queued in chain 2 after template-first-person |
 | 5 | e2e flake under load | ws/flake-input | mesh.spec fog/drag and ui.spec menuNav poll the state they assert; `?still` lamp flag; common brief rule | flake-client | 🔧 in progress |
-| 5 | Sky | ws/sky | `Sky` drawable: gradient dome, sun disc/glow from `Lights.sun`, horizon to `fog.color`, stars; harness `sky.html` | lights | 🔧 in progress |
+| 5 | Sky | ws/sky | `Sky` drawable: gradient dome, sun disc/glow from `Lights.sun`, horizon to `fog.color`, stars; harness `sky.html` | lights | ✅ green at `edab70e` (641 tests; e2e 552/57/1 fog flake); queued in chain 2 after sockets |
 | 5 | Bench | ws/bench | `harness/bench.html` scene ladder, `pnpm bench` → `docs/BENCH.md`; e2e one rung | gpu-timer | 🔧 in progress |
 | 5 | Sockets | ws/sockets | `createSocket`, `socketWorld`, `attachTransform`, `Skeleton.names`; harness `sockets.html` | anim | ✅ green at `08085b6` (625 tests; e2e 510/52/0); queued in chain 2 after pick |
 | 5 | Texture registry | ws/texture-registry | `loadTexture` with mips, `defaultTextures` (white, black, flatNormal, metalRough, checker), unset slots bind white | pbr (wish) | ✅ green at `69a0d32` (705 tests; e2e 524/57/5 E-017 flakes); queued in chain 1 after spot-lights |
@@ -87,6 +87,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - ws/spot-lights follow-up: `material.ts` / render README "Instance format" table still says the flags float is reserved beyond bit 0; layers now ride bits 1..23 (`INSTANCE_LAYER_SHIFT`, `INSTANCE_LAYER_BITS`). Fold into ws/comment-sweep.
 - `VertexLayout.positionOffset` in render so a game passes the layout straight to `meshTester` (ws/pick wish).
 - ws/texture-registry wishes: `Renderer.white` → `defaultTextures(device).white` (renderer.ts); rename `LoadTextureArrayOptions.mipFilter` to `filter` to match `LoadTextureOptions`; a `pbr.html` case using the defaults once pbr lands.
+- `e2e/mesh.spec.ts:195` fog assertion uses a fixed `0.7` factor that sits within noise under load (ws/sky observation; ws/flake-input owns the fix).
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
