@@ -148,7 +148,7 @@ Import only from the public entry points listed under [Modules](#modules). Anyth
 **Templates.** Copyable games under `templates/`, each with a `CLAUDE.md` that names the engine concepts for an agent extending it; `pnpm check` runs each one's typecheck and tests.
 
 - `templates/puzzle` (`@thunderclap/template-puzzle`): a 2D puzzle game: `createGame`, one scene, pure `rules/` with tests, a versioned save with a migration and a layout spec placing a HUD on every form factor. Run `pnpm template:puzzle` (`check:template-puzzle`).
-- `templates/first-person` (ws/template-first-person, in progress): a 3D walk on `Look`, Worker chunks with bounds and a texture array, sun shadow and fog, weather and anchors.
+- `templates/first-person` (`@thunderclap/template-first-person`): a first-person 3D game in client mode (`sim: false`, no save): `Look` for mouse, touch zones, sticks and keys, Worker-meshed chunks with bounds and a texture array, a sun with a shadow map and fog, world-space snow, world-anchored landmark labels, pointer hits and a pure `world/` with tests. Run `pnpm template:first-person` (`check:template-first-person`).
 
 **Packages.** `packages/host-electron` (`@thunderclap/host-electron`) is the Electron desktop host: a sandboxed shell, a preload bridge and `createElectronHost()`. It lives in this repo as a pnpm workspace package and the engine never imports it. Run `pnpm desktop:dev`, `pnpm desktop:build` or `pnpm test:e2e:desktop` ([README](packages/host-electron/README.md)).
 
@@ -211,11 +211,9 @@ The engine was built inside The Last Rune and extracted into this repo with its 
 
 Landed through wave 4 (Gate D, `65800b7`): the lighting block with sun shadows and fog, streamed meshes with frustum culling and texture arrays, two views per frame and WebXR on top of them, first-person `Look`, world-anchored DOM, world-space particles, spatial audio and glTF static geometry. [docs/OFFERING.md](docs/OFFERING.md) lists each with its entry point.
 
-Landed in wave 5 so far: the pure animation module (`@thunderclap/engine/anim`: clips, `Pose`, `Skeleton`, mixer), glTF skins and animations, a `Follow` third-person controller on `Look`, `Trail` ribbons in 2D or world space, shadow casters outside the view frustum (`stats.shadowDraws`), the post stack per eye in VR (`renderer.resolve`), a standard PBR material over the lights block (`createStandardMaterial`), attachment sockets on a skeleton (`attachTransform`), and GPU skinning in the scene and shadow passes (`VERTEX_LAYOUT_SKINNED`, `SkinPalette`).
+Landed in wave 5 so far: the pure animation module (`@thunderclap/engine/anim`: clips, `Pose`, `Skeleton`, mixer), glTF skins and animations, a `Follow` third-person controller on `Look`, `Trail` ribbons in 2D or world space, shadow casters outside the view frustum (`stats.shadowDraws`), the post stack per eye in VR (`renderer.resolve`), a standard PBR material over the lights block (`createStandardMaterial`), attachment sockets on a skeleton (`attachTransform`), GPU skinning in the scene and shadow passes (`VERTEX_LAYOUT_SKINNED`, `SkinPalette`), and `templates/first-person`, a copyable 3D walk.
 
-In flight (wave 5, see [docs/STATUS.md](docs/STATUS.md)):
-
-- **`templates/first-person`**: a copyable 3D walk.
+In flight: see [docs/STATUS.md](docs/STATUS.md).
 
 After that: spot lights and per-light layer masks, a third-person showcase template, GPU picking, and publishing `engine-v1.0.0`.
 
