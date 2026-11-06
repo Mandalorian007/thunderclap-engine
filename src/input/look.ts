@@ -73,6 +73,13 @@ export interface LookOptions {
   blocked?: () => boolean;
   /** Clock in ms, for the stick's `dt`. Default `performance.now()`. */
   now?: () => number;
+  /**
+   * A mouse (or pen) `pointerdown` on the attached element while the lock is not held calls
+   * `request()`, so the first click into the game locks the pointer and, after the player
+   * presses Escape, the next click locks it again. Touches never lock. Blocked, nothing is
+   * requested. Default false: the game calls `request()` from its own click handler.
+   */
+  lockOnFirstClick?: boolean;
 }
 
 /** `Look` events. */
@@ -175,6 +182,7 @@ export class Look {
   private zoomAcc = 0;
   private target: HTMLElement | null = null;
   private detachFn: (() => void) | null = null;
+  private readonly lockOnFirstClick: boolean;
 
   constructor(opts: LookOptions = {}) {
     this.sensitivity = opts.sensitivity ?? 0.0025;
@@ -194,6 +202,7 @@ export class Look {
     this.getGamepads = opts.getGamepads ?? defaultGamepads;
     this.blocked = opts.blocked ?? (() => false);
     this.now = opts.now ?? defaultNow;
+    this.lockOnFirstClick = opts.lockOnFirstClick ?? false;
   }
 
   /** Subscribe to `lockChange`. Returns the unsubscriber. */
@@ -480,7 +489,10 @@ export class Look {
     const win = doc.defaultView ?? window;
 
     const onDown = (e: PointerEvent) => {
-      if (e.pointerType !== 'touch') return;
+      if (e.pointerType !== 'touch') {
+        if (this.lockOnFirstClick && !this.locked) void this.request();
+        return;
+      }
       let inZone = false;
       if (this.moveZone !== 'none') {
         const r = target.getBoundingClientRect();

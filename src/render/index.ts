@@ -15,7 +15,7 @@ export {
   type DynamicResolutionOptions,
 } from './dynamic-resolution';
 export type { Drawable, DrawParams, InstanceBatch, InstanceParams } from './frame';
-export { Frame, INSTANCE_PARAM_FLOATS, writeInstanceParams } from './frame';
+export { Frame, INSTANCE_PARAM_FLOATS, SKIN_PARAM, writeInstanceParams } from './frame';
 export type { FullscreenEncodeOptions, FullscreenPassDesc } from './fullscreen';
 export { FullscreenPass } from './fullscreen';
 export type { GpuPassTimes, GpuTimerResult } from './gpu-timer';
@@ -60,7 +60,14 @@ export {
   Material,
   SPRITE_WGSL,
 } from './material';
-export type { MeshBounds, MeshCapacity, MeshDesc, MeshUpdate, VertexLayout } from './mesh';
+export type {
+  MeshBounds,
+  MeshCapacity,
+  MeshDesc,
+  MeshReply,
+  MeshUpdate,
+  VertexLayout,
+} from './mesh';
 export {
   AUTO_BOUNDS_MAX_VERTICES,
   Mesh,
@@ -94,6 +101,7 @@ export type {
   RendererGpu,
   RendererOptions,
   RenderStats,
+  TextureFromSourceOptions,
   ResolutionOptions,
 } from './renderer';
 export { MIN_RESOLUTION_SCALE, Renderer, sceneSize } from './renderer';

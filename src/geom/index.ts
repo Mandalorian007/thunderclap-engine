@@ -28,6 +28,7 @@ export {
   heightAt,
   heightfieldGeometry,
   normalAt,
+  rayHeightfield,
   raycastHeightfield,
 } from './heightfield';
 export type { ProjectUvOptions, UvProjection } from './ops';
