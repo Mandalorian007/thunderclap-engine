@@ -1,5 +1,6 @@
 import { type AnchorCamera, Anchors } from './anchor';
 import { CaptionCard, type CaptionOptions } from './caption';
+import { type CursorOptions, createCursor, type WorldCursor } from './cursor';
 import { h } from './dom';
 import {
   createHeading,
@@ -27,6 +28,8 @@ import { createDragContext, type DragContext } from './inventory-drag';
 import { grid as createGrid, type Grid, type GridOptions } from './inventory-grid';
 import { radial as createRadial, type Radial, type RadialOptions } from './inventory-radial';
 import { createLayout, type Layout, type LayoutSpec, type Units } from './layout';
+import { createLoading, type LoadingOptions, type LoadingScreen } from './loading';
+import { createNotifier, type Notification, type Notifier, type NotifyOptions } from './notify';
 import { PanelStack } from './stack';
 import { ensureStyles } from './styles';
 import {
@@ -38,6 +41,13 @@ import {
 } from './text-scale';
 import { cssPxTheme, defaultTheme, type ThemeOverrides, tokenVar } from './theme';
 import { Toaster } from './toast';
+import {
+  createTooltips,
+  type Tooltip,
+  type TooltipOptions,
+  type Tooltips,
+  type TooltipTarget,
+} from './tooltip';
 import { ensureWidgets2Styles } from './widgets-2';
 
 /** A rectangle in CSS pixels relative to the overlay's parent (what platform's letterbox gives). */
@@ -145,6 +155,22 @@ export interface Overlay {
   contextList(items: ContextItem[], opts: ContextListOptions): ContextList;
   /** The drag context grids and `slotsTarget`s register with; made on first use (`ui/inventory-drag.ts`). */
   readonly drag: DragContext;
+  /**
+   * A tooltip on an element (hover after `delay`, focus; leave, blur, Escape hide) or a world
+   * point (rides `anchors()`), in the overlay's one shared `role="tooltip"` element on the
+   * `toasts` layer (`ui/tooltip.ts`).
+   */
+  tooltip(target: TooltipTarget, content: string | Node, opts?: TooltipOptions): Tooltip;
+  /** The shared tooltip element and the tooltip showing now; made on first use. */
+  readonly tooltips: Tooltips;
+  /** A pad/keyboard world cursor on the `hud` layer, yielding to modal panels (`ui/cursor.ts`). */
+  cursor(opts: CursorOptions): WorldCursor;
+  /** A loading screen on the `panels` layer; root `aria-busy` while shown (`ui/loading.ts`). */
+  loading(opts?: LoadingOptions): LoadingScreen;
+  /** A notification card stacked top-right on the `toasts` layer (`ui/notify.ts`). */
+  notify(opts: NotifyOptions): Notification;
+  /** The notification stack (`dismissAll`, the `menuNav` root); made on first use. */
+  readonly notifications: Notifier;
   destroy(): void;
 }
 
@@ -264,6 +290,8 @@ export function createOverlay(opts: OverlayOptions): Overlay {
 
   let anchors: Anchors | null = null;
   let drag: DragContext | null = null;
+  let tooltips: Tooltips | null = null;
+  let notifications: Notifier | null = null;
 
   const overlay: Overlay = {
     root,
@@ -330,6 +358,7 @@ export function createOverlay(opts: OverlayOptions): Overlay {
     },
     updateAnchors() {
       anchors?.update();
+      tooltips?.update();
     },
     reticle(o) {
       return createReticle(overlay, o);
@@ -361,9 +390,33 @@ export function createOverlay(opts: OverlayOptions): Overlay {
       drag ??= createDragContext(overlay);
       return drag;
     },
+    get tooltips() {
+      tooltips ??= createTooltips(overlay);
+      return tooltips;
+    },
+    tooltip(target, content, o) {
+      return overlay.tooltips.tooltip(target, content, o);
+    },
+    cursor(o) {
+      return createCursor(overlay, o);
+    },
+    loading(o) {
+      return createLoading(overlay, o);
+    },
+    get notifications() {
+      notifications ??= createNotifier(layers.toasts);
+      return notifications;
+    },
+    notify(o) {
+      return overlay.notifications.notify(o);
+    },
     destroy() {
       drag?.destroy();
       drag = null;
+      tooltips?.dispose();
+      tooltips = null;
+      notifications?.dispose();
+      notifications = null;
       anchors?.clear();
       anchors = null;
       unwatch();

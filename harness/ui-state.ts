@@ -23,6 +23,17 @@ export interface HarnessUiState {
   backs: number;
   /** Ticks run (input updates). */
   ticks: number;
+  /** `?tooltip`: the shared tooltip's state (ws/ui-3). */
+  tooltipVisible: boolean;
+  tooltipPlacement: string | null;
+  /** `?cursor`: the grid cell the cursor is on, `[col, row]`, and the picked target's id. */
+  cursorCell: [number, number];
+  cursorTarget: string | null;
+  /** `?loading`: the bar's progress 0..1, or -1 once done. */
+  loadingProgress: number;
+  /** `?notify`: open notifications, and the actions fired, by label. */
+  notifications: number;
+  notifyActions: string[];
 }
 
 export interface HarnessUiApi {
@@ -31,6 +42,8 @@ export interface HarnessUiApi {
   setTextScale(scale: number): void;
   /** Hold (or release) a standard-mapping button on the fake gamepad. */
   pad(button: number, pressed: boolean): void;
+  /** `?loading`: finish the load (resolves after the fade). */
+  finishLoading(): Promise<void>;
 }
 
 declare global {
