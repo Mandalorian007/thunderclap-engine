@@ -1,4 +1,4 @@
-import type { SamplerKind, TextureLike } from './texture';
+import { defaultTextures, type SamplerKind, type TextureLike } from './texture';
 
 /**
  * Shared "uniform + sampler + N textures" binding convention used by materials (group 1) and
@@ -128,7 +128,10 @@ const INITIAL_DRAW_SLOTS = 16;
 /**
  * Owns the uniform buffer + bind group for one binding set; rebuilds the group lazily.
  * Bind groups for the last few texture sets are cached, so alternating textures (ping-pong)
- * allocates nothing after the first round.
+ * allocates nothing after the first round. Every texture slot starts bound to a 1×1 white
+ * texture (`defaultView`, or `defaultTextures(device).white` when none is given; a 1-layer white
+ * array for `'2d-array'` slots), so a material with four slots draws with none of them set;
+ * `setTexture` later rebuilds the group.
  */
 export class BindingSet {
   readonly layout: GPUBindGroupLayout;
@@ -152,7 +155,7 @@ export class BindingSet {
     private readonly device: GPUDevice,
     desc: BindingDesc,
     private readonly sampler: GPUSampler,
-    defaultView: GPUTextureView,
+    defaultView: GPUTextureView | null | undefined,
     private readonly label: string,
     opts: BindingSetOptions = {},
   ) {
@@ -170,8 +173,11 @@ export class BindingSet {
       this.stagingF32 = new Float32Array(this.staging.buffer);
     }
     this.uniformBuffer = bytes > 0 ? this.makeUniformBuffer() : null;
-    this.views = new Array(desc.textures ?? 0).fill(defaultView);
-    for (let i = 0; i < this.views.length; i++) {
+    const n = desc.textures ?? 0;
+    // Unset 2D slots read white: the caller's view when it has one, else the device's registry.
+    const white = n > 0 ? (defaultView ?? defaultTextures(device).white.view) : null;
+    this.views = new Array(n).fill(white);
+    for (let i = 0; i < n; i++) {
       if (slotViewDimension(desc, i) === '2d-array') this.views[i] = whiteArrayView(device);
     }
     this.buffers = desc.buffers ? [...desc.buffers] : [];

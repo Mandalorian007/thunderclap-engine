@@ -60,12 +60,16 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Gesture long-press | ws/gesture-longpress | pan threshold before long-press, cumulative travel, `Gestures.onGesture` observer | gestures | ✅ green at `e8d64e7` (722 tests; snap 5/5 delta 0; e2e 552/92/6, all E-017 mesh.spec under load 43–54; A/B shows flake independent of the change); queued chain 3 after flake-input |
 | 5 | Audio zones | ws/audio-zones | `audio.zones` (ambient loops, reverb sends by listener position), `Voice.follow`, `audio.update(dt)`; harness `zones.html` | audio | ✅ green at `2816026` (735 tests; e2e 596/92/2 E-017 fog); queued chain 1 after texture-registry |
 | 5 | Retargeting | ws/retarget | `createRetargetMap`, `retargetPose`, `retargetClip`; name matching; harness `retarget.html` | anim | ✅ green at `eab3f78` (753 tests; e2e 610/92/4 E-017); queued chain 4 after anim-graph |
-| 5 | Morph targets | ws/morph | glTF targets + default weights parse; `MorphBlender` CPU blend into `Mesh.update`; `sampleWeights`; `scene.morph(node)`; harness `morph.html` | assets, anim | 🔧 in progress |
+| 5 | Morph targets | ws/morph | glTF targets + default weights parse; `MorphBlender` CPU blend into `Mesh.update`; `sampleWeights`; `scene.morph(node)`; harness `morph.html` | assets, anim | ✅ green at `6c20bf8` (752 tests; e2e 601/92/5 E-017); queued chain 5 after audio-zones |
 | 5 | AO + depth of field | ws/post-depth | `PostInputs.depth/projection`; `post.ao` (depth-reconstructed SSAO), `post.dof` (CoC gather); off by default, 2D goldens delta 0; harness `depth-post.html` | post, xr-post | 🔧 in progress |
 | 5 | Scaffolder | ws/scaffold | `pnpm create-game <dir> --template puzzle|first-person` copies a template to a standalone project on the published engine | templates | ✅ green at `706e47f` (752+8 tests; e2e 629/92/1 E-017 fog); queued chain 2 after look-zoom |
 | 5 | Localisation | ws/i18n | `@thunderclap/engine/i18n`: ICU-style messages, plurals via Intl, fallback chain, runtime locale switch, `negotiateLocale` | — | 🔧 in progress |
 | 5 | Navigation | ws/nav | `@thunderclap/engine/nav`: grid field, A*, flow field, string pulling, path follower, local steering | — | 🔧 in progress |
 | 5 | Tweens | ws/tween | `@thunderclap/engine/tween`: easing table, property/value tweens, sequences, loops/yoyo, springs, `Tweens.update(dt)` | post easing | 🔧 in progress |
+| 5 | Demo: arena | ws/demo-arena | `demos/arena` third-person skinned character, sockets+trail, follow cam, PBR+shadows, particles; owns `pnpm demo` infra | skinning, anim, sockets, pbr | 🔧 in progress |
+| 5 | Demo: dungeon | ws/demo-dungeon | `demos/dungeon` 2D tile crawl: atlas, 60 sprites, flicker, menu, save, synth audio | — | 🔧 in progress |
+| 5 | Demo: showroom | ws/demo-showroom | `demos/showroom` PBR sphere grid, moving lights, post looks via `blendTo`, GPU readout | pbr | 🔧 in progress |
+| 5 | Demo: range | ws/demo-range | `demos/range` first-person target range: Look, meshTester picks, sparks, trails, spatial audio | pick | 🔧 in progress |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
@@ -109,6 +113,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - `e2e/skin.spec.ts` "joints sway" fails under 8+ parallel matrices (passes 40/40 alone): E-020 added it to the E-017 list; ws/flake-input style polled assertion wanted.
 - A `Transform`-level "position changed" flag so audio followers skip unchanged matrices (ws/audio-zones wish).
 - Template `package.json` descriptions still say "Copy the folder..."; `create-game` keeps them verbatim (ws/scaffold note). → ws/comment-sweep.
+- GPU morph targets (storage-buffer deltas) for big meshes; TANGENT deltas (ws/morph wishes).
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.

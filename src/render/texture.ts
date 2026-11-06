@@ -216,28 +216,146 @@ export function loadTextureArray(
     format,
     label: opts.label ?? 'texture-array',
   });
-  const texel = bytesPerTexel(format);
   sources.forEach((s, layer) => {
-    if (isPixels(s)) {
-      if (s.data.byteLength < width * height * texel) {
-        throw new Error(`loadTextureArray: layer ${layer} has too few bytes for ${format}`);
-      }
-      device.queue.writeTexture(
-        { texture: tex.texture, origin: [0, 0, layer] },
-        s.data,
-        { bytesPerRow: width * texel, rowsPerImage: height },
-        [width, height, 1],
-      );
-    } else {
-      device.queue.copyExternalImageToTexture(
-        { source: s as Exclude<TextureSource, ImageData> },
-        { texture: tex.texture, origin: [0, 0, layer] },
-        [width, height, 1],
-      );
-    }
+    uploadLayer(device, tex, s, layer, 'loadTextureArray');
   });
   if (tex.mipLevels > 1) generateMipmaps(device, tex, { filter: opts.mipFilter });
   return tex;
+}
+
+/** Write `source` into level 0, layer `layer` of `tex` (`writeTexture` for pixels, a GPU copy for images). */
+function uploadLayer(
+  device: GPUDevice,
+  tex: Texture,
+  source: TextureLayerSource,
+  layer: number,
+  who: string,
+): void {
+  const { width, height } = tex;
+  if (isPixels(source)) {
+    const texel = bytesPerTexel(tex.format);
+    if (source.data.byteLength < width * height * texel) {
+      throw new Error(`${who}: layer ${layer} has too few bytes for ${tex.format}`);
+    }
+    device.queue.writeTexture(
+      { texture: tex.texture, origin: [0, 0, layer] },
+      source.data,
+      { bytesPerRow: width * texel, rowsPerImage: height },
+      [width, height, 1],
+    );
+  } else {
+    device.queue.copyExternalImageToTexture(
+      { source: source as Exclude<TextureSource, ImageData> },
+      { texture: tex.texture, origin: [0, 0, layer] },
+      [width, height, 1],
+    );
+  }
+}
+
+export interface LoadTextureOptions {
+  /** Build the full mip chain on the GPU after upload (default true; a 1×1 source has one level). */
+  mips?: boolean;
+  /** How each mip level is reduced from the one above (default `'linear'`, a 2×2 box). */
+  filter?: MipFilter;
+  /**
+   * Default `rgba8unorm-srgb` (colour). An image source needs an 8-bit RGBA/BGRA format; a pixel
+   * source any format `bytesPerTexel` lists. Data such as normal maps wants `rgba8unorm`.
+   */
+  format?: GPUTextureFormat;
+  label?: string;
+}
+
+/**
+ * One call for a single 2D texture: create it, upload `source` (an image through
+ * `copyExternalImageToTexture`, `ImageData` or `{ width, height, data }` through `writeTexture`)
+ * as level 0 and, with `mips` (default), allocate the full chain and fill it with
+ * `generateMipmaps`. Non-power-of-two sizes get `mipLevelCount(width, height)` levels too.
+ * Allocates; call it at load time.
+ */
+export function loadTexture(
+  device: GPUDevice,
+  source: TextureLayerSource,
+  opts: LoadTextureOptions = {},
+): Texture {
+  const tex = new Texture(device, {
+    width: source.width,
+    height: source.height,
+    mips: opts.mips ?? true,
+    format: opts.format ?? 'rgba8unorm-srgb',
+    label: opts.label ?? 'texture',
+  });
+  uploadLayer(device, tex, source, 0, 'loadTexture');
+  if (tex.mipLevels > 1) generateMipmaps(device, tex, { filter: opts.filter });
+  return tex;
+}
+
+/**
+ * Textures a material slot can read when the game sets nothing: one set per device, created on
+ * first use by `defaultTextures(device)` and alive as long as the device.
+ */
+export interface DefaultTextures {
+  /** 1×1 `(255, 255, 255, 255)`, sRGB: a colour map that changes nothing. The unset-slot default. */
+  readonly white: Texture;
+  /** 1×1 `(0, 0, 0, 255)`, sRGB: no emissive, no light. */
+  readonly black: Texture;
+  /** 1×1 `(128, 128, 255, 255)`, linear: a tangent-space normal map that keeps the mesh normal. */
+  readonly flatNormal: Texture;
+  /**
+   * 1×1 `(255, 255, 0, 255)`, linear, in the glTF channel layout (G roughness, B metallic):
+   * a dielectric, fully rough surface (metallic 0, roughness 1).
+   */
+  readonly metalRough: Texture;
+  /**
+   * 8×8 sRGB checker of 2×2-texel magenta `(255, 0, 255)` and black squares, mipmapped: bind it
+   * where a texture failed to load so the gap is visible.
+   */
+  readonly checker: Texture;
+}
+
+const DEFAULT_TEXTURES = new WeakMap<GPUDevice, DefaultTextures>();
+
+function solid(
+  device: GPUDevice,
+  rgba: [number, number, number, number],
+  opts: LoadTextureOptions,
+) {
+  return loadTexture(device, { width: 1, height: 1, data: new Uint8Array(rgba) }, opts);
+}
+
+/** The device's `DefaultTextures`, made on first call and cached (a `WeakMap` keyed by device). */
+export function defaultTextures(device: GPUDevice): DefaultTextures {
+  let set = DEFAULT_TEXTURES.get(device);
+  if (set) return set;
+  const checker = new Uint8Array(8 * 8 * 4);
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 8; x++) {
+      const on = ((x >> 1) + (y >> 1)) % 2 === 0;
+      const o = (y * 8 + x) * 4;
+      checker[o] = on ? 255 : 0;
+      checker[o + 1] = 0;
+      checker[o + 2] = on ? 255 : 0;
+      checker[o + 3] = 255;
+    }
+  }
+  set = {
+    white: solid(device, [255, 255, 255, 255], { label: 'default-white' }),
+    black: solid(device, [0, 0, 0, 255], { label: 'default-black' }),
+    flatNormal: solid(device, [128, 128, 255, 255], {
+      label: 'default-flat-normal',
+      format: 'rgba8unorm',
+    }),
+    metalRough: solid(device, [255, 255, 0, 255], {
+      label: 'default-metal-rough',
+      format: 'rgba8unorm',
+    }),
+    checker: loadTexture(
+      device,
+      { width: 8, height: 8, data: checker },
+      { label: 'default-checker' },
+    ),
+  };
+  DEFAULT_TEXTURES.set(device, set);
+  return set;
 }
 
 const TEXEL_BYTES: Partial<Record<GPUTextureFormat, number>> = {
