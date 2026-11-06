@@ -8,3 +8,4 @@ export type {
   HostWindow,
 } from './types';
 export { createWebHost, type WebHostOptions } from './web';
+export { createXrHost, type XrHost } from './xr';

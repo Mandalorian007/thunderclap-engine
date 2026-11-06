@@ -8,17 +8,26 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BootResult } from '../platform';
 import { mountSurface } from '../platform/surface';
-import { createFakeDevice, fakeRendererGpu, installGpuGlobals } from '../render/fake-gpu';
+import { type FakeXr, FakeXrInputSource, installFakeXr } from '../platform/xr-fake';
+import {
+  createFakeDevice,
+  type FakeDevice,
+  fakeRendererGpu,
+  installGpuGlobals,
+} from '../render/fake-gpu';
 import { type CreateGameOptions, createGame } from './game';
 
 const lost = new Set<(info: GPUDeviceLostInfo) => void>();
 let bootOk = true;
+/** The fake device of the last boot. */
+let lastFake: FakeDevice | null = null;
 
 vi.mock('../platform/boot', () => ({
   boot: async (root: HTMLElement, opts: { logicalWidth?: number }): Promise<BootResult> => {
     if (!bootOk) return { ok: false, reason: 'no-webgpu' as never };
     installGpuGlobals();
     const fake = createFakeDevice();
+    lastFake = fake;
     const surface = mountSurface(root, opts);
     return {
       ok: true,
@@ -56,8 +65,12 @@ beforeEach(() => {
   lost.clear();
 });
 
+let xr: FakeXr | null = null;
+
 afterEach(() => {
   setHidden(false);
+  xr?.uninstall();
+  xr = null;
 });
 
 describe('createGame', () => {
@@ -313,5 +326,156 @@ describe('createGame', () => {
     ctx.ui.stack.push({ title: 'Modal', content: document.createElement('p') });
     expect(ctx.ui.stack.hasModal).toBe(true);
     expect(press()).toBe(false);
+  });
+});
+
+describe('createGame: xr', () => {
+  it('ctx.xr.supported() is false without WebXR or the binding, and enter() rejects', async () => {
+    const ctx = await createGame(options([]));
+    if (!ctx) throw new Error('no ctx');
+    expect(ctx.xr.active).toBe(false);
+    expect(ctx.xr.session).toBeNull();
+    expect(await ctx.xr.supported()).toBe(false);
+    await expect(ctx.xr.enter()).rejects.toThrow(/WebXR/);
+    xr = installFakeXr({ supported: false });
+    expect(await ctx.xr.supported()).toBe(false);
+    await expect(ctx.xr.enter()).rejects.toThrow();
+    expect(ctx.xr.active).toBe(false);
+    await ctx.xr.exit();
+  });
+
+  it('enter: the session drives frames, both eyes render into the layer, no present; exit restores', async () => {
+    const { createWebHost } = await import('../host');
+    const web = createWebHost();
+    const frames = { log: [] as string[], pending: null as ((t: number) => void) | null };
+    const host = {
+      ...web,
+      requestFrame: (cb: (t: number) => void) => {
+        frames.log.push('web.request');
+        frames.pending = cb;
+        return 1;
+      },
+      cancelFrame: () => {
+        frames.log.push('web.cancel');
+        frames.pending = null;
+      },
+    };
+    const events: string[] = [];
+    const ctx = await createGame({
+      ...options([]),
+      host,
+      xr: {
+        referenceSpace: 'local',
+        onEnter: () => events.push('enter'),
+        onExit: () => events.push('exit'),
+      },
+    });
+    if (!ctx) throw new Error('no ctx');
+    const fake = lastFake!;
+    xr = installFakeXr();
+    expect(await ctx.xr.supported()).toBe(true);
+    const cameras: { viewIndex: number; screenX: number }[] = [];
+    ctx.stack.push({
+      render: (_f, camera) => {
+        cameras.push({ viewIndex: camera.viewIndex, screenX: camera.screen.x });
+      },
+    });
+    ctx.loop.start();
+    expect(frames.log).toEqual(['web.request']);
+
+    const entering = ctx.xr.enter();
+    const again = ctx.xr.enter();
+    expect(again).toBe(entering);
+    await entering;
+    await ctx.xr.enter();
+    expect(events).toEqual(['enter']);
+    expect(ctx.xr.active).toBe(true);
+    const session = xr.system.session;
+    expect(ctx.xr.session).toBe(session);
+    expect(session.init).toEqual({
+      requiredFeatures: ['webgpu', 'local'],
+      optionalFeatures: ['hand-tracking'],
+    });
+    expect(session.referenceSpaceRequests).toEqual(['local']);
+    // The page's pending frame was cancelled; the session has one.
+    expect(frames.log).toEqual(['web.request', 'web.cancel']);
+    expect(frames.pending).toBeNull();
+    expect(session.pendingFrames).toBe(1);
+    expect(ctx.host).toBe(host);
+
+    // One XR frame: the scenes record once through the head, each eye is a scene pass into
+    // the shared layer target, and nothing goes to the swapchain.
+    const before = fake.passes.length;
+    const right = new FakeXrInputSource('right');
+    right.buttons[0]!.pressed = true;
+    session.addInputSource(right);
+    let xrPointers = 0;
+    ctx.hooks.beforeRender = () => {
+      xrPointers = ctx.pointers.pointers.filter((p) => p.device === 'xr').length;
+    };
+    // The loop clocks frames with performance.now: move it past one fixed step so update
+    // (and with it the pointer poll) runs inside this XR frame.
+    const realNow = performance.now;
+    const later = (ms: number, fn: () => void) => {
+      const t0 = realNow.call(performance);
+      performance.now = () => t0 + ms;
+      try {
+        fn();
+      } finally {
+        performance.now = realNow;
+      }
+    };
+    later(40, () => xr!.step(40));
+    const passes = fake.passes.slice(before);
+    const scene = passes.filter((p) => p.label === 'scene');
+    expect(scene.length).toBe(2);
+    expect(passes.some((p) => p.label?.includes('present') || p.label?.includes('post'))).toBe(
+      false,
+    );
+    expect(cameras).toEqual([{ viewIndex: 0, screenX: 0 }]);
+    const eyes = ctx.xr.surface!.views(xr.step(0));
+    expect(eyes.map((e) => e.camera.viewIndex)).toEqual([0, 1]);
+    expect(eyes.map((e) => e.camera.screen.x)).toEqual([0, 0.5]);
+    expect(xrPointers).toBe(1);
+    expect(session.pendingFrames).toBe(1);
+    expect(fake.errors).toEqual([]);
+
+    // Exit: the session ends, the page host schedules again, the surface is gone.
+    const layer = ctx.xr.surface!.layer as { destroyed?: boolean };
+    await ctx.xr.exit();
+    expect(events).toEqual(['enter', 'exit']);
+    expect(ctx.xr.active).toBe(false);
+    expect(ctx.xr.surface).toBeNull();
+    expect(layer.destroyed).toBe(true);
+    expect(frames.log).toEqual(['web.request', 'web.cancel', 'web.request']);
+    expect(frames.pending).not.toBeNull();
+    await ctx.xr.exit();
+    expect(events).toEqual(['enter', 'exit']);
+    // The next page frame renders the ordinary way (one camera, presented to the swapchain).
+    cameras.length = 0;
+    const b2 = fake.passes.length;
+    later(40, () => frames.pending!(40));
+    const after = fake.passes.slice(b2);
+    expect(after.filter((p) => p.label === 'scene').length).toBe(1);
+    expect(after.some((p) => p.label?.includes('present') || p.label?.includes('post'))).toBe(true);
+    expect(cameras).toEqual([{ viewIndex: 0, screenX: 0 }]);
+    expect(ctx.pointers.pointers.filter((p) => p.device === 'xr').length).toBe(0);
+  });
+
+  it('the headset ending the session restores the page host too', async () => {
+    xr = installFakeXr();
+    const exits: number[] = [];
+    const ctx = await createGame({ ...options([]), xr: { onExit: () => exits.push(1) } });
+    if (!ctx) throw new Error('no ctx');
+    ctx.loop.start();
+    await ctx.xr.enter();
+    const session = xr.system.session;
+    expect(session.init?.requiredFeatures).toEqual(['webgpu', 'local-floor']);
+    await session.end();
+    expect(ctx.xr.active).toBe(false);
+    expect(exits).toEqual([1]);
+    expect(ctx.loop.isRunning).toBe(true);
+    await ctx.xr.exit();
+    expect(exits).toEqual([1]);
   });
 });

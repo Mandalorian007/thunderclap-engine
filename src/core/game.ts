@@ -1,3 +1,4 @@
+/// <reference path="../platform/xr-types.d.ts" />
 /**
  * `createGame` (D-041 Phase 1): the noun-free wiring every ThunderClap game starts from.
  *
@@ -21,10 +22,15 @@
  * Games add their nouns by extending the returned object (`Object.assign(ctx, { ... })`): the
  * scene stack hands scenes this same object, so a scene typed against the game's own ctx sees
  * them. Game logic plugs into the frame and the lifecycle through `ctx.hooks`.
+ *
+ * VR is one call (`ctx.xr.enter()`, ws/xr): frames then come from the session through an XR
+ * host, the scenes record once through the surface's head camera and the renderer draws each
+ * eye into the session's layer; controllers and hands join `ctx.pointers`. Leaving (`exit()` or
+ * the session ending) puts everything back; a game that never enters runs the same code as before.
  */
 import { AudioEngine, persistMixer } from '../audio';
 import { ParticleSystem, type ParticleSystemOptions } from '../fx';
-import { createWebHost, type Host } from '../host';
+import { createWebHost, createXrHost, type Host, type XrHost } from '../host';
 import {
   type Bindings,
   createPointerRouter,
@@ -32,6 +38,7 @@ import {
   Input,
   type MagnifyOptions,
   type PointerRouter,
+  XrPointerSource,
 } from '../input';
 import {
   blockBrowserZoom,
@@ -40,6 +47,8 @@ import {
   type Surface,
   type SurfaceOptions,
   watchLifecycle,
+  type XrEyeView,
+  XrSurface,
 } from '../platform';
 import { type PostSettingsPatch, PostStack } from '../post';
 import { type Camera, type Frame, installGpuErrorLogging, Renderer } from '../render';
@@ -154,6 +163,46 @@ export interface CreateGameOptions<A extends string, S extends FlushableSave | n
   blockBrowserZoom?: boolean;
   /** Dev aid: show the unsupported screen as if WebGPU were missing. */
   forceUnsupported?: boolean;
+  /** VR (ws/xr): the reference space and session callbacks `ctx.xr.enter()` uses. */
+  xr?: XrOptions;
+}
+
+/** `CreateGameOptions.xr`: how `ctx.xr.enter()` sets the session up. */
+export interface XrOptions {
+  /**
+   * The reference space poses and pointer rays are expressed in. Default `local-floor` (the
+   * origin on the floor; standing play), `local` (at the headset's start) or `viewer`.
+   */
+  referenceSpace?: 'local-floor' | 'local' | 'viewer';
+  /** The session is up and frames come from it. */
+  onEnter?(session: XRSession): void;
+  /** The session ended (by `exit()` or the headset); frames come from the page again. */
+  onExit?(): void;
+}
+
+/**
+ * `ctx.xr`: entering and leaving VR. `supported()` is false and `enter()` rejects where the
+ * browser has no WebXR or no WebXR/WebGPU binding, so the same build runs on the page and in a
+ * headset.
+ */
+export interface XrControl {
+  /** Whether `enter()` can work here: WebXR with the WebGPU binding and `immersive-vr`. */
+  supported(): Promise<boolean>;
+  /**
+   * Request an `immersive-vr` session (call from a user gesture) and move the game into it: the
+   * loop's frames come from the session, each eye renders into the session's layer, controllers
+   * and hands are pointers. Resolves once the first frame can run; rejects when the browser
+   * refuses. A call while active resolves at once.
+   */
+  enter(): Promise<void>;
+  /** End the session and return to the page; resolves when everything is restored. */
+  exit(): Promise<void>;
+  /** True while a session runs. */
+  readonly active: boolean;
+  /** The running session, or null. */
+  readonly session: XRSession | null;
+  /** The XR surface (eye views, head camera, layer) while active, or null. */
+  readonly surface: XrSurface | null;
 }
 
 /**
@@ -208,6 +257,8 @@ export interface EngineCtx<
   readonly hooks: GameHooks;
   /** Runs `fn` after the device-lost screen and the engine's halt. Returns unsubscribe. */
   onDeviceLost(fn: (info: GPUDeviceLostInfo) => void): () => void;
+  /** Entering and leaving VR; see `XrControl`. */
+  readonly xr: XrControl;
 }
 
 /**
@@ -292,6 +343,9 @@ export async function createGame<
   const ctx = {} as EngineCtx<A, S, C>;
   const stack = new SceneStack<C, Frame, Camera>(ctx as C);
   const camera = renderer.camera;
+  // While a session runs: its host (frames and the current `XRFrame`) and its surface (eyes).
+  let xrHost: XrHost | null = null;
+  let xrSurface: XrSurface | null = null;
   // With `sim: false` the loop calls update once per rendered frame with the real delta.
   const fixed = opts.sim !== false;
   const loop = new GameLoop(
@@ -307,15 +361,110 @@ export async function createGame<
       render: (alpha: number, time: Time) => {
         hooks.beforeRender?.(time);
         const frame = renderer.beginFrame(time.realTime, time.frameDt);
-        stack.render(frame, camera, alpha);
-        renderer.render(frame, camera);
-        renderer.endFrame();
+        if (xrSurface && xrHost) {
+          // The scenes record once, through the head; each eye draws the record into the layer.
+          const xrFrame = xrHost.frame;
+          const eyes = xrFrame ? xrSurface.views(xrFrame) : NO_EYES;
+          stack.render(frame, xrSurface.head, alpha);
+          for (let i = 0; i < eyes.length; i++) {
+            const eye = eyes[i]!;
+            renderer.render(frame, eye.camera, eye.target);
+          }
+          renderer.endFrame({ present: false });
+        } else {
+          stack.render(frame, camera, alpha);
+          renderer.render(frame, camera);
+          renderer.endFrame();
+        }
         hooks.afterRender?.(time);
         ui.updateAnchors();
       },
     },
     { step: opts.sim ? opts.sim.step : undefined, fixed, frames: host },
   );
+
+  // ── XR ─────────────────────────────────────────────────────────────────
+  let xrSession: XRSession | null = null;
+  let xrEntering: Promise<void> | null = null;
+  // Restores the page host, pointers and surface; set while a session runs, idempotent.
+  let leaveXr: (() => void) | null = null;
+  const xr: XrControl = {
+    get active() {
+      return xrSession !== null;
+    },
+    get session() {
+      return xrSession;
+    },
+    get surface() {
+      return xrSurface;
+    },
+    async supported() {
+      const sys = globalThis.navigator?.xr;
+      if (!sys || !XrSurface.supported()) return false;
+      try {
+        return await sys.isSessionSupported('immersive-vr');
+      } catch {
+        return false;
+      }
+    },
+    enter() {
+      if (xrSession) return Promise.resolve();
+      if (xrEntering) return xrEntering;
+      const sys = globalThis.navigator?.xr;
+      if (!sys || !XrSurface.supported()) {
+        return Promise.reject(new Error('WebXR with the WebGPU binding is not available here'));
+      }
+      const refType = opts.xr?.referenceSpace ?? 'local-floor';
+      xrEntering = (async () => {
+        const session = await sys.requestSession('immersive-vr', {
+          requiredFeatures: ['webgpu', refType],
+          optionalFeatures: ['hand-tracking'],
+        });
+        let referenceSpace: XRReferenceSpace;
+        try {
+          referenceSpace = await session.requestReferenceSpace(refType);
+        } catch (err) {
+          await session.end().catch(() => {});
+          throw err;
+        }
+        const surface = new XrSurface(session, gpu.device, { referenceSpace });
+        const sessionHost = createXrHost(session, host);
+        const source = new XrPointerSource(session, referenceSpace, () => sessionHost.frame);
+        const removeSource = pointers.addSource(source);
+        const onEnd = () => leaveXr?.();
+        leaveXr = () => {
+          leaveXr = null;
+          session.removeEventListener('end', onEnd);
+          removeSource();
+          loop.setFrames(host);
+          xrHost = null;
+          xrSurface = null;
+          xrSession = null;
+          surface.destroy();
+          opts.xr?.onExit?.();
+        };
+        session.addEventListener('end', onEnd);
+        xrSession = session;
+        xrSurface = surface;
+        xrHost = sessionHost;
+        loop.setFrames(sessionHost);
+        opts.xr?.onEnter?.(session);
+      })().finally(() => {
+        xrEntering = null;
+      });
+      return xrEntering;
+    },
+    async exit() {
+      const session = xrSession;
+      if (!session) return;
+      try {
+        await session.end();
+      } finally {
+        // The `end` event normally restored everything; a session ending without it does here.
+        leaveXr?.();
+      }
+    },
+  };
 
   // Hidden, pagehide (iOS app switch) or freeze (Android): stop drawing and persist now; a
   // phone may kill a background tab without another word.
@@ -361,6 +510,10 @@ export async function createGame<
     loop,
     hooks,
     onDeviceLost: res.onDeviceLost,
+    xr,
   } satisfies EngineCtx<A, S, C>);
   return ctx;
 }
+
+/** What the XR render step iterates when the frame has no viewer pose. */
+const NO_EYES: readonly XrEyeView[] = [];

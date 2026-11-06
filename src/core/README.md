@@ -18,7 +18,10 @@ loop.maxFps = 30;    // steady 30 fps on a 60 Hz display; null = every display f
 - `GameLoop(cb: LoopCallbacks, opts?: GameLoopOptions)`: fixed-step update plus variable-rate
   render, driven by the host's frames (`Host.requestFrame`). `start()`, `stop()` (tab hidden),
   `halt()` (device lost: later `start()` calls are ignored), `tickOnce(dt)` (tests, frame
-  stepping), `isRunning`, `halted`, `paused`, `maxFps`, `time`.
+  stepping), `setFrames(src)` (swap the `FrameSource` while running: the pending frame on the
+  old source is cancelled and the next comes from the new one; called from inside a frame, the
+  running frame finishes and reschedules through the new source; `createGame` uses it to move
+  onto an XR session's host and back), `isRunning`, `halted`, `paused`, `maxFps`, `time`.
 - `LoopCallbacks`: `update(dt, time)` runs in fixed steps of `time.step`; `render(alpha, time)`
   once per rendered frame, `alpha` interpolating between sim states (0 while paused).
 - `GameLoopOptions` extends `FixedStepperOptions` with `fixed` (default true; false runs update

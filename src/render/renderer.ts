@@ -886,8 +886,10 @@ export class Renderer implements FrameSink {
   /**
    * Finish the frame: `render(frame, renderer.camera)` when nothing rendered yet, then the
    * post stack (or the built-in present) from `renderer.target` to the swapchain, and submit.
+   * `{ present: false }` skips the post stack and the swapchain (no `getCurrentTexture`): the
+   * frame's views went to their own targets, as an XR session's eyes do (ws/xr).
    */
-  endFrame(): void {
+  endFrame(opts?: { present?: boolean }): void {
     if (!this.inFrame) throw new Error('endFrame without beginFrame');
     if (this.destroyed) {
       this.inFrame = false;
@@ -900,17 +902,19 @@ export class Renderer implements FrameSink {
     const timer = this.gpuTimer;
     const sampled = this.sampled;
 
-    const out = this.context.getCurrentTexture().createView();
-    if (this.post) {
-      const inputs = this.postInputs;
-      inputs.time = this.frame.time;
-      inputs.dt = this.frame.dt;
-      this.post.encode(enc, inputs, out);
-    } else {
-      this.present.encode(enc, out, {
-        bindGroup: this.presentGroup!,
-        clear: { r: 0, g: 0, b: 0, a: 1 },
-      });
+    if (opts?.present !== false) {
+      const out = this.context.getCurrentTexture().createView();
+      if (this.post) {
+        const inputs = this.postInputs;
+        inputs.time = this.frame.time;
+        inputs.dt = this.frame.dt;
+        this.post.encode(enc, inputs, out);
+      } else {
+        this.present.encode(enc, out, {
+          bindGroup: this.presentGroup!,
+          clear: { r: 0, g: 0, b: 0, a: 1 },
+        });
+      }
     }
     timer?.resolve(enc);
     this.device.queue.submit([enc.finish()]);

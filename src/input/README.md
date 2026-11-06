@@ -161,7 +161,9 @@ interface PointerSample {
 }
 ```
 
-An XR source fills `ray` from each input source's target-ray pose, sets `select = trigger || pinch` and `secondary = squeeze`, and owns its thresholds (pinch distances in metres). It is added with `router.addSource(src)`; nothing in the router changes. `createSample(key, device)` allocates a blank `PointerSample` for a custom source (a game's own device, or XR) to keep and refill. The engine ships no WebXR calls yet.
+An XR source fills `ray` from each input source's target-ray pose, sets `select = trigger || pinch` and `secondary = squeeze`, and owns its thresholds (pinch distances in metres). It is added with `router.addSource(src)`; nothing in the router changes. `createSample(key, device)` allocates a blank `PointerSample` for a source to keep and refill.
+
+`XrPointerSource` (ws/xr) is that source: `new XrPointerSource(session, referenceSpace, frame, opts?)` where `frame` returns the current `XRFrame` (an `XrHost`'s `frame`) or `null` outside one. Each `XRInputSource` with a target-ray pose is one pointer (`device: 'xr'`, `hand` from `handedness`, `x`/`y` NaN, `ray` from `targetRaySpace`, origin and -z of the pose matrix); `trigger` is gamepad button 0 or the `selectstart`/`selectend` events, `squeeze` button 1 or `squeezestart`/`squeezeend`, `pinch` the distance between the `index-finger-tip` and `thumb-tip` joints of a tracked hand with hysteresis: `XrPointerSourceOptions` `pinchStart` (0.02 m) and `pinchEnd` (0.035 m). Sources that leave (`inputsourceschange`) drop their key. `attach()`/`detach()` add and remove the session listeners; `createGame` adds it to `ctx.pointers` on `ctx.xr.enter()` and removes it on exit, so `{ xr: 'trigger' }` bindings and `router.hit` work the same in a headset. The WebXR types live in `src/platform/xr-types.d.ts`.
 
 ## Look
 

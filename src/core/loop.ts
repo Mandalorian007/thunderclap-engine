@@ -115,6 +115,8 @@ export class GameLoop {
   private _paused = false;
   private _halted = false;
   private minFrameMs = 0;
+  /** True while `frame` runs its callbacks (so `setFrames` leaves rescheduling to it). */
+  private inFrame = false;
 
   constructor(cb: LoopCallbacks, opts: GameLoopOptions = {}) {
     this.cb = cb;
@@ -171,6 +173,21 @@ export class GameLoop {
     this.source?.cancelFrame(this.frameId);
   }
 
+  /**
+   * Swap the frame source while the loop runs (or before): a pending frame on the old source
+   * is cancelled and the next is requested from `src`. Called from inside a frame callback
+   * (an action handler), the current frame finishes and reschedules through `src`. Entering and
+   * leaving an XR session swaps between the XR host and the page's host this way (ws/xr).
+   */
+  setFrames(src: FrameSource): void {
+    if (src === this.source) return;
+    const prev = this.source;
+    this.source = src;
+    if (!this.running || this.inFrame) return;
+    prev?.cancelFrame(this.frameId);
+    this.frameId = src.requestFrame(this.frame);
+  }
+
   /** The frame source, resolved on first use so a loop that is only ticked by hand needs none. */
   private get frames(): FrameSource {
     this.source ??= defaultHost();
@@ -202,7 +219,12 @@ export class GameLoop {
     }
     const dt = (t - this.last) / 1000;
     this.last = t;
-    this.runFrame(dt);
+    this.inFrame = true;
+    try {
+      this.runFrame(dt);
+    } finally {
+      this.inFrame = false;
+    }
     if (this.running) this.frameId = this.frames.requestFrame(this.frame);
   };
 

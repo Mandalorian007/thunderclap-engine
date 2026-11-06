@@ -48,3 +48,4 @@ export {
 } from './screens';
 export type { SurfaceOptions, SurfaceSize } from './surface';
 export { mountSurface, Surface } from './surface';
+export { type XrEyeView, XrSurface, type XrSurfaceOptions } from './xr-surface';

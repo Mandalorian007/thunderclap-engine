@@ -11,19 +11,21 @@ bridge and adds `window` (close, minimize, toggleMaximize, setTitle). Nothing el
 | Name | What it is |
 | --- | --- |
 | `Host` | The interface: `FrameSource` plus `kind`, `embed`, `openExternal`, `copyText`, `clipboardWriteAllowed`, `fullscreen`, `storage` and an optional `window` |
-| `HostKind` | `'web' \| 'electron'` |
+| `HostKind` | `'web' \| 'electron' \| 'xr'` |
 | `FrameSource` | `requestFrame(cb: (timeMs) => void): number` and `cancelFrame(handle)`; what `GameLoop` schedules through |
 | `HostFullscreen` | `available()`, `active()`, `toggle({ lockLandscape? }): Promise<boolean>`, `watch(fn): () => void` |
 | `HostStorage` | `kind` (`'local'` on the web host) and `open(): StorageLike \| null`, probed on every call |
 | `HostWindow` | Desktop window controls: `close()`, optional `minimize`, `toggleMaximize`, `setTitle` |
 | `createWebHost(opts?: WebHostOptions)` | The browser host; `WebHostOptions` is `{ win?: Window }` (tests pass a stub) |
 | `defaultHost()` / `setDefaultHost(host \| null)` | The shared host the engine falls back to; `null` resets it to a fresh web host |
+| `createXrHost(session, base)` | The host of an immersive session (ws/xr): frames come from `XRSession.requestAnimationFrame`, everything else is `base`'s |
+| `XrHost` | What it returns: `Host` with `kind: 'xr'`, `session`, `base` and `frame` (the current `XRFrame` for the length of a frame callback, else `null`) |
 
 ```ts
 import { createWebHost, defaultHost, setDefaultHost } from '@thunderclap/engine/host';
 
 const host = createWebHost(); // or defaultHost(); setDefaultHost(electronHost) to replace it
-host.kind; // 'web' | 'electron'
+host.kind; // 'web' | 'electron' | 'xr'
 const h = host.requestFrame((timeMs) => {}); // the window's requestAnimationFrame
 host.cancelFrame(h);
 host.embed; // 'top' | 'same-origin-frame' | 'cross-origin-frame' (detected)
@@ -39,6 +41,9 @@ host.window?.close(); // desktop shells only
 
 `GameLoop` schedules its frames through `FrameSource` (`requestFrame` / `cancelFrame`; a test
 passes a stub it steps by hand), never through the globals, so an XR session is a host, not a
-redesign. `createSaveStore`, `listSlots`, `persistMixer` and `externalLink` take `host` and
-default to `defaultHost()`. Tests: `web.test.ts`, `web-links.test.ts`, and `e2e/host.spec.ts` on every row of
+redesign: `createXrHost(session, pageHost)` wraps `session.requestAnimationFrame` and keeps the
+`XRFrame` it was called with on `frame` while the callback runs (`xr-surface.ts` reads the eyes
+from it, `XrPointerSource` the controllers). `createGame({ xr })` swaps the loop onto it with
+`loop.setFrames(xrHost)` on `ctx.xr.enter()` and back on exit. `createSaveStore`, `listSlots`, `persistMixer` and `externalLink` take `host` and
+default to `defaultHost()`. Tests: `web.test.ts`, `web-links.test.ts`, `xr.test.ts`, and `e2e/host.spec.ts` on every row of
 the engine matrix.

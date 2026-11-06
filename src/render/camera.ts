@@ -163,6 +163,14 @@ export class Camera {
     return this.touch();
   }
 
+  /**
+   * Replace the view matrix (copied); the same as `setView`, named for an XR eye whose
+   * `XRView.transform.inverse.matrix` is handed over as-is each frame (ws/xr).
+   */
+  setViewMatrix(m: ArrayLike<number>): this {
+    return this.setView(m);
+  }
+
   /** Place the camera at `eye` looking at `target` (`up` defaults to +y). */
   lookAt(eye: ArrayLike<number>, target: ArrayLike<number>, up: ArrayLike<number> = UP): this {
     mat4.lookAt(this.viewM, eye, target, up);
