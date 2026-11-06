@@ -23,3 +23,5 @@ Merge commit hashes; every conflict resolved (file, what each side wanted, what 
 > Note (2026-11-06): since `templates/first-person` landed as a workspace package, a fresh integration worktree needs `pnpm install --frozen-lockfile --offline` before `pnpm check` can pass; this changes no tracked file.
 
 > E-026 (2026-11-06): if main moved only by docs (`docs/**`, README, CHANGELOG, ARCHITECTURE), merge it and run `pnpm check:docs` + `pnpm lint` only, then land. Any other file → `pnpm check`; E-025 decides e2e.
+
+> Before landing, `git grep -n '^<<<<<<<\|^>>>>>>>' HEAD -- . ` must be empty: a resolver pass once committed stale markers (chain 3, ws/audio-2) and only a grep caught it.
