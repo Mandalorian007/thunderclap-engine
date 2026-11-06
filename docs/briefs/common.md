@@ -23,7 +23,7 @@ Your worktree may start from an old commit. First `git reset --hard main` (or th
 ## Done when
 
 - `pnpm check` is green (typecheck, Biome, boundaries, Vitest, host-electron).
-- `pnpm test:e2e` is green on the harness matrix, run once on your final head (Playwright Chromium is installed locally; do not download browsers). Refactors leave the 2D harness pages pixel-identical.
+- `pnpm test:e2e` is green on the harness matrix, run once on your final head (Playwright Chromium is installed locally; do not download browsers). Refactors leave the 2D harness pages pixel-identical. An e2e assertion on a value that moves over time polls (`expect.poll`); a single read is a flake waiting to happen.
 - Unit tests cover what you added; the fake GPU (`src/render/fake-gpu.ts`) covers renderer changes.
 - `ARCHITECTURE.md` *Today* text, the module README and `CHANGELOG.md` ("Next (unreleased)") describe the change, in the same branch.
 - Public API is exported only from the module's `index.ts`; new subpaths go in `package.json` `exports` and the root README table.
