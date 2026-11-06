@@ -82,3 +82,11 @@ Decisions made in this repo. Numbers are `E-0xx`; `D-0xx` refers to [The Last Ru
 - Soft particles read the previous frame's depth (a copy of `SceneTarget.depth`). Same-frame depth needs a renderer hook after the opaque pass; backlog.
 - Process: worktrees start without `node_modules` (`pnpm install --frozen-lockfile --offline`); the hashed e2e port can collide with other services (`E2E_PORT_OFFSET`). Integrators merge in brief order and keep every CHANGELOG/README/ARCHITECTURE entry from both sides.
 - Wave 5 starts before wave 4 closes where it can: ws/gltf (new `src/assets`, no render files) branched from `767228f`. template-first-person and doc-sweep-3 wait for shadows and xr.
+
+## E-015: characters, first and third person, cosmetics (2026-11-05)
+
+The user named a direction from a Diablo Immortal cosmetics screen: a 3D character shown from behind or through its own eyes, wearing layered cosmetics (armour, weapon, wings, idle "floating" animation, trails), at a quality bar well above the harness cubes. Both views matter; cosmetics will carry revenue in future games, so this is a named need, not spec.
+
+Engine pieces, all style-and-rendering (no inventory, no economy): a follow camera (`ws/follow`), a pure animation module (`ws/anim`), GPU skinning in the scene and shadow passes (`ws/skinning`), a standard PBR material over the lights block with shadows and fog (`ws/pbr`), glTF static geometry now and skins/animations next (`ws/gltf`), then attachment sockets, a third-person showcase template and GPU picking (STATUS wave 5 candidates). The quality threshold is judged on the `pbr.html` and later showcase pages against the screenshot's look: PBR, soft shadows, emissive into the post stack, particles on sockets.
+
+Parallelism note: during wave 4 only three engineers were running when the user looked in. The limit was sequencing on shared render files plus too few briefs written ahead, not a tool limit. Rule from here: keep enough disjoint briefs written that eight or more agents run at all times; stack a stream on another branch rather than wait for its merge when the file sets are disjoint.

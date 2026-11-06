@@ -21,4 +21,4 @@ STATUS row, *done when*: `templates/first-person`: `createGame({ sim: false })` 
 
 `templates/first-person/**`, root `package.json` scripts (the two lines), root `README.md` (one row), `CHANGELOG.md` (one line). Nothing under `src/`. What you wish the engine offered goes in report item 5.
 
-Running alongside: ws/doc-sweep-3 (docs only, `src/*/README.md`, `ARCHITECTURE.md`, root `README.md` tables: coordinate on the README by adding your row at the end of the templates list), ws/xr-post (`src/post`, `src/core/game.ts`).
+Stack on `ws/shadows` (head `2696952`): `git reset --hard ws/shadows` then `git checkout -b ws/template-first-person`; ws/shadows is merging into main as you start, so `git merge main` once early if it has landed. Running alongside: ws/doc-sweep-3 (docs only, `src/*/README.md`, `ARCHITECTURE.md`, root `README.md` tables: coordinate on the README by adding your row at the end of the templates list), ws/xr-post (`src/post`, `src/core/game.ts`).
