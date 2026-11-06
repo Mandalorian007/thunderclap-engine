@@ -67,7 +67,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Navigation | ws/nav | `@thunderclap/engine/nav`: grid field, A*, flow field, string pulling, path follower, local steering | — | ✅ green at `1c61629` (801 tests; e2e 671/92/7 E-017; nav.spec 32/32); queued chain 1 after post-depth |
 | 5 | Tweens | ws/tween | `@thunderclap/engine/tween`: easing table, property/value tweens, sequences, loops/yoyo, springs, `Tweens.update(dt)` | post easing | ✅ green at `23d6644` (924 tests, 162 tween; e2e 659/92/11 load; tween.spec all rows); queued chain 2 after scaffold |
 | 5 | Demo: arena | ws/demo-arena | `demos/arena` third-person skinned character, sockets+trail, follow cam, PBR+shadows, particles; owns `pnpm demo` infra | skinning, anim, sockets, pbr | 🔧 in progress |
-| 5 | Demo: dungeon | ws/demo-dungeon | `demos/dungeon` 2D tile crawl: atlas, 60 sprites, flicker, menu, save, synth audio | — | 🔧 in progress |
+| 5 | Demo: dungeon | ws/demo-dungeon | `demos/dungeon` 2D tile crawl: atlas, 60 sprites, flicker, menu, save, synth audio | — | ✅ green at `802bbd2` (768 tests; e2e 680/96/18 load timeouts, dungeon.spec 28/4 alone; snap 5/5); land after demo-arena (shared infra) |
 | 5 | Demo: showroom | ws/demo-showroom | `demos/showroom` PBR sphere grid, moving lights, post looks via `blendTo`, GPU readout | pbr | 🔧 in progress |
 | 5 | Demo: range | ws/demo-range | `demos/range` first-person target range: Look, meshTester picks, sparks, trails, spatial audio | pick | 🔧 in progress |
 | 5 | Shared light loop | ws/pbr-lights | PBR sees spots, masks, layers via one generated light loop; default textures unified | spot-lights, texture-registry | 🔧 in progress |
@@ -123,6 +123,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - `game.test.ts:288` (gestures/magnify option) failed once under load avg 60 (chain 2); watch.
 - `PostProjection` re-export from `src/render/index.ts` + render README mention (ws/post-depth wish; integrator may add). AO projected radius assumes perspective; DoF CoC is half-res. → ws/comment-sweep.
 - ws/tween diagnostic: `mesh.spec.ts:174` fog probe read 49 vs <42 on all three desktop rows in a targeted rerun at load 50–80 (base 36c5266); chain 1 saw 0 failures at 40cb5cd. If the desktop rows keep failing at low load, it is a regression, not a flake: ws/flake-input checks main.
+- ws/demo-dungeon wishes: `createGame` accepting `input.getGamepads` (or an injectable `PadNav`) so specs drive `ctx.padNav`; `PanelStack` walking focus with ArrowUp/Down itself; a tilemap/flipbook helper in `render` to replace per-tile DrawParams bookkeeping. → ws/ergo-2d brief.
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
