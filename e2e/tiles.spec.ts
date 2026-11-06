@@ -39,6 +39,13 @@ async function open(page: Page, wrapper: string): Promise<void> {
     .toBeGreaterThanOrEqual(5);
 }
 
+/** harness/tiles.ts walks cells `[2, 3, 2, 1]` of a 2 × 2 atlas: the `UvRect` of each frame. */
+const WALK_RECTS = [2, 3, 2, 1].map((cell) => {
+  const c = cell % 2;
+  const r = Math.floor(cell / 2);
+  return [c / 2, r / 2, (c + 1) / 2, (r + 1) / 2];
+});
+
 function read(): Promise<HarnessTilesState> {
   return frame.evaluate(() => {
     const s = window.__harnessTiles?.state;
@@ -123,9 +130,16 @@ test('the layer fills the grid and is one draw call; the sprite adds one', async
 test('the flipbook frame advances and its uv follows', async ({ page, wrapper }) => {
   await open(page, wrapper);
   const first = await read();
-  await expect.poll(async () => (await read()).frame).not.toBe(first.frame);
-  const next = await read();
-  expect(next.uv).not.toEqual(first.uv);
+  // Keep the sample the poll accepted (a later read() could be a whole loop on), and check its uv
+  // is the rect of *that* frame: the walk cycle repeats a cell, so two frames can share a rect.
+  let next = first;
+  await expect
+    .poll(async () => {
+      next = await read();
+      return next.frame;
+    })
+    .not.toBe(first.frame);
+  expect(next.uv).toEqual(WALK_RECTS[next.frame]);
   expect(next.uv.every((v) => v >= 0 && v <= 1)).toBe(true);
   expect(errors).toEqual([]);
 });
