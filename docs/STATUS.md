@@ -53,6 +53,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Bench | ws/bench | `harness/bench.html` scene ladder, `pnpm bench` → `docs/BENCH.md`; e2e one rung | gpu-timer | 🔧 in progress |
 | 5 | Sockets | ws/sockets | `createSocket`, `socketWorld`, `attachTransform`, `Skeleton.names`; harness `sockets.html` | anim | 🔧 in progress (on ws/anim) |
 | 5 | Texture registry | ws/texture-registry | `loadTexture` with mips, `defaultTextures` (white, black, flatNormal, metalRough, checker), unset slots bind white | pbr (wish) | 🔧 in progress |
+| 5 | Geometry | ws/geom | `@thunderclap/engine/geom`: box/plane/sphere/icosphere/capsule/cylinder/torus, `Heightfield` with `heightAt`/`raycastHeightfield`, merge/transform; harness `geom.html` | — | 🔧 in progress |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
