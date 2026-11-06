@@ -311,6 +311,7 @@ export async function createGame<
         renderer.render(frame, camera);
         renderer.endFrame();
         hooks.afterRender?.(time);
+        ui.updateAnchors();
       },
     },
     { step: opts.sim ? opts.sim.step : undefined, fixed, frames: host },

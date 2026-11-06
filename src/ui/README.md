@@ -220,6 +220,48 @@ lists the exported names; ARCHITECTURE.md *Layout* describes the model.
   `NO_INSETS` is all zero, and `readSafeArea(doc?)` reads `env(safe-area-inset-*)` (or the
   `--tc-safe-*` overrides).
 
+## Anchors: `ui.anchors(camera)`
+
+DOM that follows a world point: a name over a character, a damage number, a hint on a tile, a
+marker that stays on screen for something off it.
+
+```ts
+const anchors = ctx.ui.anchors(() => ctx.camera); // built on the first call, on the hud layer
+const tag = anchors.add(nameEl, [x, y + 2, z], { align: [0.5, 1], scale: 'distance' });
+const goal = anchors.add(arrowEl, goalPos, { clamp: true, margin: 24 });
+tag.set(npc.position); // each tick it moves; createGame calls update() after every frame
+```
+
+- `Anchors` (`new Anchors(opts: AnchorsOptions)`): `root` (the default layer, laid over the frame),
+  `surface` (an `AnchorSurface`: `rect` in CSS px relative to the overlay's parent plus
+  `logicalWidth` / `logicalHeight`; `Surface` fits), `camera: () => AnchorCamera` (anything with
+  `viewProjection` and `screen`; `Camera` fits), optional `layers` by name and `onFrame(layer)`
+  (false for a layer laid over the parent, so the frame's offset is added). Methods: `add(el,
+  world, opts?)`, `update()`, `setCamera(fn)`, `clear()`, `size`.
+- `update()` projects each point through `camera.viewProjection` (one reused `Float32Array(4)`),
+  maps clip space onto `camera.screen` (logical px, or a fraction of the canvas when it lies inside
+  the unit square: the renderer's viewport rule, so a split-screen camera works), and that onto the
+  canvas rect in CSS px (`logicalToClient`). It writes `transform` only (the element is absolutely
+  placed at the layer's top-left), and only when the point moved; with CSS Typed OM (Chromium,
+  WebKit) it reuses one `CSSTransformValue` per element and allocates nothing, elsewhere a moved
+  element gets one transform string.
+- `AnchorOptions`: `offset` (CSS px), `align` (fraction of the element's box put on the point,
+  default centred), `clamp` (keep inside the camera's viewport `margin` CSS px from the edges,
+  default 16; a point behind the camera is pinned toward its side, never mirrored; while pinned
+  the element has `data-anchor-clamped`), `scale` (`'none'` or `'distance'`: `distance / w`,
+  `w` being the view depth, between `min` and `max`, defaults 10, 0.25 and 2), `hideBehind`
+  (default true: a point behind the camera or outside clip space sets `hidden`; clamped anchors
+  are never hidden), `layer` (an overlay layer name: `hud` by default, or `captions`, `layout`,
+  `panels`, `toasts`).
+- `AnchorHandle`: `el`, `visible`, `clamped`, `x`, `y` (the placed point in the layer, CSS px),
+  `scale`, `set(world)`, `remove()`. `AnchorRect` is the rect shape both `screen` and `rect` use.
+- `overlay.anchors(camera?)` returns the overlay's one `Anchors`, built on the first call (which
+  needs the camera; a later call with one switches it). `overlay.updateAnchors()` updates it if it
+  was built; `createGame` calls it after `hooks.afterRender` on every frame, so a game never
+  calls `update()` itself. Outside `createGame`, call `ui.updateAnchors()` after rendering.
+- `hidden` loses to a stylesheet that sets `display` on the element; add `[hidden] { display:
+  none }` for such a class. One camera per `Anchors`: a stereo UI is not this step.
+
 ## Text scale and units
 
 - `applyTextScale(root, scale, setTheme?)` sets `--tc-text-scale` (`TEXT_SCALE_VAR`) and
