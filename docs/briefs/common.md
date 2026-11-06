@@ -24,6 +24,14 @@ Your worktree may start from an old commit. First `git reset --hard main` (or th
 
 - `pnpm check` is green (typecheck, Biome, boundaries, Vitest, host-electron).
 - `pnpm test:e2e` is green on the harness matrix, run once on your final head (Playwright Chromium is installed locally; do not download browsers). Refactors leave the 2D harness pages pixel-identical. An e2e assertion on a value that moves over time polls (`expect.poll`); a single read is a flake waiting to happen.
+- **Full e2e takes a slot (E-030).** At most two full `pnpm test:e2e` runs at once on this machine. Take a slot, run, give it back:
+
+  ```sh
+  S=; until [ -n "$S" ]; do for s in 1 2; do mkdir /tmp/thunderclap-e2e-slot$s 2>/dev/null && { S=$s; break; }; done; [ -n "$S" ] || sleep 60; done
+  E2E_PORT_OFFSET=<n> pnpm test:e2e; rmdir /tmp/thunderclap-e2e-slot$S
+  ```
+
+  A slot directory older than 45 minutes (`find /tmp -maxdepth 1 -name 'thunderclap-e2e-slot*' -mmin +45`) is stale: remove it. Holding a slot, still check `uptime` and wait while the 1-min load is above 40. Single-spec runs (`pnpm test:e2e e2e/x.spec.ts`) need no slot. Report the 1-min load at the start and end of the run.
 - Unit tests cover what you added; the fake GPU (`src/render/fake-gpu.ts`) covers renderer changes.
 - `ARCHITECTURE.md` *Today* text, the module README and `CHANGELOG.md` ("Next (unreleased)") describe the change, in the same branch.
 - Public API is exported only from the module's `index.ts`; new subpaths go in `package.json` `exports` and the root README table.

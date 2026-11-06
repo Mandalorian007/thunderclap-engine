@@ -146,3 +146,8 @@ ws/demo-polish landed at a3be7c2: the spec holds the fake pad button until focus
 ## E-029: a barrel-only overlap is disjoint (2026-11-06, PM)
 
 Chain 3 (host-mobile) asked after a second full matrix forced by main moving under it: both moves overlapped the branch only in `src/ui/index.ts`, the barrel, where each side appended exports and git auto-merged. Every landing now adds exports to one barrel or another and main moves about every 15 minutes, so E-025's letter would cost a ten-minute matrix per landing with nothing new under test. Ruling: an overlap confined to module barrels (`src/**/index.ts`, `src/index.ts`) and to the README count line counts as disjoint for E-025 when git auto-merged it and `pnpm check` (which type-checks every export) is green. Any other shared file, or a barrel conflict a human resolved, is still a code overlap and takes the full e2e. The integrator names the barrel files it waived in its report.
+
+## E-030: full e2e runs take one of two machine slots (2026-11-06, PM)
+
+With eight engineers and an integrator gating at once the 1-min load sat at 40–61 for over half an hour: ws/nav-4 and ws/ui-4 both came back with failures outside their code, and the nav-4 integrator could not find a 25 window in 30 minutes. Under E-023 none of those runs is a gate result, so parallel gates were buying nothing. Ruling: a full `pnpm test:e2e` takes one of two `mkdir` slots in `/tmp` (recipe in `docs/briefs/common.md`), released on exit, stale after 45 minutes. Engineers keep building in parallel; only the matrix queues. Load above 40 while holding a slot still means wait.
+
