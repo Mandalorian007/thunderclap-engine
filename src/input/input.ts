@@ -1,6 +1,7 @@
 import type { Gestures } from './gestures';
 import type { Look } from './look';
 import type { PointerActions, PointerRouter } from './pointer-router';
+import type { InputPlayback, InputRecorder } from './record';
 import type {
   ActionState,
   Binding,
@@ -45,6 +46,23 @@ export interface InputOptions {
   pointers?: PointerRouter<any>;
   /** Look controls to link (see `Input.setLook`). */
   look?: Look;
+}
+
+/**
+ * Sees every low-level feed call and the pads `update()` reads, in call order. `input/record.ts`
+ * builds the two implementations (`createInputRecorder`, `createInputPlayback`); `Input.onFeed`
+ * installs one. Nothing here changes how `Input` evaluates bindings.
+ */
+export interface InputFeedHook {
+  keyDown(code: string): void;
+  keyUp(code: string): void;
+  buttonDown(button: number): void;
+  buttonUp(button: number): void;
+  wheel(dx: number, dy: number): void;
+  pointerAt(clientX: number, clientY: number, type: PointerState['type']): void;
+  releaseAll(): void;
+  /** Called once per `update()` with the pads `getGamepads` returned; what it returns is used. */
+  gamepads(pads: readonly (GamepadLike | null)[]): readonly (GamepadLike | null)[];
 }
 
 export interface AttachOptions {
@@ -166,6 +184,12 @@ export class Input<A extends string> {
   /** Device that produced the most recent input. Useful for showing the right button prompts. */
   lastDevice: InputDevice = 'keyboard';
   blocked: () => boolean;
+  /** The recorder capturing this input's feed (`createInputRecorder`), until `stop()`. */
+  recorder: InputRecorder | null = null;
+  /** The playback feeding this input (`createInputPlayback`), until `detach()`. */
+  playback: InputPlayback | null = null;
+  /** Feed hooks in install order (`onFeed`). Read-only for callers. */
+  private readonly feedHooks: InputFeedHook[] = [];
 
   private bindings: Bindings<A>;
   private readonly states = new Map<A, ActionState>();
@@ -326,6 +350,20 @@ export class Input<A extends string> {
     return this.bindings;
   }
 
+  /**
+   * Install a feed hook: it sees every `keyDown`, `keyUp`, `buttonDown`, `buttonUp`, `wheel`,
+   * `pointerAt` and `releaseAll` call (DOM or direct) and the pads read in `update()`, and may
+   * substitute those pads. Returns the uninstaller. Used by `createInputRecorder` and
+   * `createInputPlayback`; hooks never change how bindings are evaluated.
+   */
+  onFeed(hook: InputFeedHook): () => void {
+    this.feedHooks.push(hook);
+    return () => {
+      const i = this.feedHooks.indexOf(hook);
+      if (i >= 0) this.feedHooks.splice(i, 1);
+    };
+  }
+
   /** Install the client → game-space mapping (platform owns letterboxing). `null` = identity relative to the target. */
   setPointerTransform(fn: PointerTransform | null): void {
     this.transform = fn;
@@ -370,7 +408,10 @@ export class Input<A extends string> {
     this.look?.update();
     this.pointers?.poll();
     const blocked = this.blocked();
-    this.pads = this.getGamepads();
+    let pads = this.getGamepads();
+    const hooks = this.feedHooks;
+    for (let i = 0; i < hooks.length; i++) pads = hooks[i]!.gamepads(pads);
+    this.pads = pads;
     let padActive = false;
 
     for (const [action, st] of this.states) {
@@ -500,6 +541,8 @@ export class Input<A extends string> {
   // Public so tests, replays and automated playtests can drive input without a DOM.
 
   keyDown(code: string): void {
+    const hooks = this.feedHooks;
+    for (let i = 0; i < hooks.length; i++) hooks[i]!.keyDown(code);
     if (!this.keysDown.has(code)) {
       if (this.queueTaps && (this.keysTapped.has(code) || this.keyRepeats.has(code))) {
         queueRepeat(this.keyRepeats, code);
@@ -511,9 +554,13 @@ export class Input<A extends string> {
     this.lastDevice = 'keyboard';
   }
   keyUp(code: string): void {
+    const hooks = this.feedHooks;
+    for (let i = 0; i < hooks.length; i++) hooks[i]!.keyUp(code);
     this.keysDown.delete(code);
   }
   buttonDown(button: number): void {
+    const hooks = this.feedHooks;
+    for (let i = 0; i < hooks.length; i++) hooks[i]!.buttonDown(button);
     if (!this.buttonsDown.has(button)) {
       if (this.queueTaps && (this.buttonsTapped.has(button) || this.buttonRepeats.has(button))) {
         queueRepeat(this.buttonRepeats, button);
@@ -525,15 +572,21 @@ export class Input<A extends string> {
     if (button === 0) this.pointer.down = true;
   }
   buttonUp(button: number): void {
+    const hooks = this.feedHooks;
+    for (let i = 0; i < hooks.length; i++) hooks[i]!.buttonUp(button);
     this.buttonsDown.delete(button);
     if (button === 0) this.pointer.down = false;
   }
   wheel(dx: number, dy: number): void {
+    const hooks = this.feedHooks;
+    for (let i = 0; i < hooks.length; i++) hooks[i]!.wheel(dx, dy);
     this.wheelAccX += dx;
     this.wheelAccY += dy;
   }
   /** Set the pointer position from client coordinates (runs the transform). */
   pointerAt(clientX: number, clientY: number, type: PointerState['type'] = 'mouse'): void {
+    const hooks = this.feedHooks;
+    for (let i = 0; i < hooks.length; i++) hooks[i]!.pointerAt(clientX, clientY, type);
     const p = this.transform ? this.transform(clientX, clientY) : { x: clientX, y: clientY };
     this.pointer.type = type;
     this.lastDevice = type;
@@ -547,6 +600,8 @@ export class Input<A extends string> {
   }
   /** Release every key and button (focus loss, tab hidden). */
   releaseAll(): void {
+    const hooks = this.feedHooks;
+    for (let i = 0; i < hooks.length; i++) hooks[i]!.releaseAll();
     this.keysDown.clear();
     this.buttonsDown.clear();
     this.keyRepeats.clear();

@@ -26,6 +26,17 @@ export interface HarnessMusicState {
   reverb: number;
   /** Frames the update loop has run. */
   frames: number;
+  /** Live voices per bus from `audio.forEachVoice` (`master` is every bus; stems count). */
+  voices: Record<string, number>;
+  /** Live sends on the probe voice (0 without one). */
+  sends: number;
+  /** `audio.paused`, `audio.pausedBuses` and whether the paused voices were frozen (`audio.pausedRate`). */
+  paused: boolean;
+  pausedBuses: string[];
+  pausedRate: boolean;
+  /** Each bus node's `gain.value`, and the value its settings ask for (`busGain(settings)`). */
+  busGains: Record<string, number>;
+  busTargets: Record<string, number>;
 }
 
 export interface HarnessMusicApi {
@@ -38,6 +49,15 @@ export interface HarnessMusicApi {
   speak(): void;
   /** The reverb send's amount. */
   setReverb(amount: number): void;
+  /** Start one looping probe voice on `sfx` (several may run); the newest is the probe for `sendProbe`. */
+  playSfx(): void;
+  /** Stop every probe voice. */
+  stopSfx(): void;
+  /** `probe.sendTo(reverb, amount)` on the newest probe voice. */
+  sendProbe(amount: number): void;
+  /** `audio.pause()` / `audio.unpause()`; `?pause` in the URL pauses once audio runs. */
+  pause(): void;
+  unpause(): void;
 }
 
 declare global {

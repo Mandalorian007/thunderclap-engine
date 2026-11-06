@@ -34,10 +34,13 @@ import { ParticleSystem, type ParticleSystemOptions } from '../fx';
 import { createWebHost, createXrHost, type Host, type XrHost } from '../host';
 import {
   type Bindings,
+  createInputPlayback,
+  createInputRecorder,
   createPointerRouter,
   type GamepadLike,
   Gestures,
   Input,
+  type InputRecording,
   type MagnifyOptions,
   type PointerRouter,
   XrPointerSource,
@@ -154,6 +157,18 @@ export interface CreateGameOptions<A extends string, S extends FlushableSave | n
      * (`GestureOptions.magnify`); see `input/magnify.ts`. Omit for no magnify.
      */
     magnify?: MagnifyOptions;
+    /**
+     * Record everything the input is fed (ws/input-replay): `ctx.input.recorder` is the
+     * `InputRecorder`; `stop()` it for the `InputRecording`. Default false.
+     */
+    record?: boolean;
+    /**
+     * Run from a recording instead of the DOM (ws/input-replay): the input is not attached to the
+     * canvas or the window, and before each fixed step `ctx.input.playback.step()` feeds that
+     * tick's keys, buttons, pointer, wheel and pads. Once the recording is done the input holds
+     * its last state.
+     */
+    replay?: InputRecording;
   };
   /**
    * Injects the game's stylesheets. Runs before the overlay adds the engine's, so the cascade
@@ -343,7 +358,10 @@ export async function createGame<
     gestures,
     pointers,
   });
-  input.attach({ pointerTarget: surface.canvas });
+  // A replay feeds the input itself: no DOM listeners, so a real key never leaks in (E-011).
+  const playback = opts.input.replay ? createInputPlayback(input, opts.input.replay) : null;
+  if (opts.input.record) createInputRecorder(input);
+  if (!playback) input.attach({ pointerTarget: surface.canvas });
   input.setPointerTransform((x, y) => surface.clientToLogical(x, y));
 
   // ── Scenes + loop ──────────────────────────────────────────────────────
@@ -360,6 +378,7 @@ export async function createGame<
   const loop = new GameLoop(
     {
       update: (dt: number) => {
+        playback?.step();
         input.update();
         padNav.update();
         audio.update(dt);

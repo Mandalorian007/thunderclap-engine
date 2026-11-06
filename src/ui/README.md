@@ -199,6 +199,83 @@ reticle.pulse();              // a short flash on a hit
   `createSlots`, `createHeading`, where `HudHost` is `{ layers: { hud }, layout, stack }` (an
   `Overlay` fits). `harness/hud.html` shows all four over the mesh scene.
 
+## Inventory: `ui.grid`, `ui.card`, `ui.radial`, `ui.contextList`
+
+Item grids with drag and drop, item cards, a radial menu and a context list (`ui/inventory*.ts`,
+ws/ui-inventory). Noun-free: a cell holds a `CellItem`, a tone is a colour.
+
+```ts
+const card = ui.card({ title: '', rows: [] });                       // hud layer, role=tooltip
+const bag = ui.grid({ cols: 6, rows: 4, label: 'Bag', card, describe: (item) => ({ title: item.label ?? item.id, rows: [] }),
+  onMove: (from, to, item) => save(item, to), onContext: (cell, item, anchor) =>
+    ui.contextList([{ id: 'use', label: 'Use' }, { id: 'drop', label: 'Drop', danger: true }], { at: anchor, onPick: (id) => act(id, item) }) });
+const gear = ui.grid({ cols: 2, rows: 3, label: 'Gear', card, describe, canDrop: (from, to, item) => item.tone === 'accent' });
+panel.append(bag.element, gear.element);                            // ui.grid registers both with ui.drag
+bag.set({ col: 0, row: 0 }, { id: 'potion', icon: potionCanvas, label: 'Potion', count: 3, tone: 'info' });
+ui.drag.register(slotsTarget(ui.slots({ count: 4 }), (index, item) => bind(index, item)));
+const wheel = ui.radial({ items: eight, onPick });                  // sector 0 east, clockwise
+wheel.open(); wheel.aim(stick.x, stick.y); if (pad.a) wheel.pick(); // or arrows, Enter, Escape
+pad.on('select', () => bag.act('select'));                          // pad: select, back, secondary, left/right/up/down
+```
+
+- **Grid** (`GridOptions`: `cols`, `rows`, `cellSize` 56, `gap` 4 (theme px), `label`,
+  `canDrop(from, to, item)`, `onMove(from, to, item)`, `onActivate(cell, item)`, `onFocus(cell)`,
+  `onContext(cell, item, anchor)`, `card` + `describe(item, cell)`, `hoverMs` 250, `labels:
+  InventoryLabels` (`defaultInventoryLabels`: live-region phrases). `grid(opts)` → `Grid`:
+  `element` (`role="grid"` of `gridcell`s, `aria-rowcount/colcount`), `cols`, `rows`,
+  `set(cell, item | null)`, `get(cell)`, `find(item)`, `move(from, to)`, `items: GridEntry[]`,
+  `focus(cell)`, `focused`, `held`, `act(action: PadAction)`, `clear()`, `remove()`. A `CellItem`
+  is `{ id, icon, label?, count?, span?, tone?, locked? }` (`Cell` is `{ col, row }`, `CellRef`
+  adds `grid`); a span covers its cells (`data-covered`), a count shows in `.tc-cell-count`.
+  Keyboard: a roving tabindex, arrows clamp (no wrap), Home/End, Enter or Space activates on
+  release, a **held** Enter or Space picks up (`aria-grabbed="true"`), the next Enter drops,
+  Escape puts it back; Shift+F10, the ContextMenu key, the secondary button and the pad's
+  `secondary` call `onContext`. The structural rule (in bounds, the span's cells free) is checked
+  before the game's `canDrop`; a refused target shows `data-reject`. `ui.grid` registers the
+  grid with `ui.drag`; `grid()` alone needs `drag.register(grid)` for cross-grid moves.
+- **Drag** (`createDragContext(host: InventoryHost, opts?: DragContextOptions)` → `DragContext`:
+  `register(target)`, `unregister(target)`, `dragging: DragPick | null`, `cancel()`, `targets`,
+  `destroy()`; `ui.drag` is the overlay's, made on first use). A mouse or pen drags after 4 CSS px
+  (`moveThreshold`), a touch after a 160 ms hold (`longPressMs`; a pan before it scrolls). The
+  ghost (a clone of the item) rides the `hud` layer with `pointer-events: none`; the spot under
+  it gets `data-over`, plus `data-reject` when refused. A drop calls `onMove` on **both** grids
+  (`release` on the source, `drop` on the target); a refused drop snaps the ghost back over
+  `--tc-duration-fast` (at once under reduced motion). Pad and keyboard: a pick-up at a grid's
+  left or right edge walks to the next target in reading order (`cross`). Any `DropTarget`
+  (`element`, `spotAt`, `spots`, `canDrop`, `drop`, `hover`, optional `release`, `pickAt`,
+  `carryIn`, `carryEnd`) can register; the context wires `link: DragLink` (`pointerStart`,
+  `carryStart`, `cross`, `commit`, `cancelCarry`, `pointerActive`). A `DropSpot` is
+  `{ el, col, row }`, a `DragPick` is `{ item, from, source }`. `slotsTarget(slots, onAssign,
+  opts?: SlotsTargetOptions)` → `SlotsTarget` makes a `ui.slots` strip a target: a drop calls
+  `onAssign(index, item, from)` and the item stays in its grid (an assignment); `canAssign` is
+  the rule. Slots are not focusable, so the pad walk skips the strip.
+- **Card** (`card(host, opts: CardOptions)` → `Card`; `CardOptions`: `title`, `subtitle`,
+  `tone`, `rows: CardRow[]` (`label`, `value`, `tone`, `compare: up | down | same`, an arrow in
+  CSS), `footer`, `width` 280). `Card`: `element` (`role="tooltip"` on the `hud` layer), `set`,
+  `show(anchor, placement?: CardPlacement)` (an element gets `aria-describedby`), `hide`,
+  `visible`, `placement: CardSide | null`, `remove`. A grid shows it on focus and on hover after
+  `hoverMs`. Pure: `placeCard(anchorRect, size, frame, placement = 'auto', gap = 0)` → `{ x, y,
+  placement }` tries right, left, below, above (a named side flips to its opposite) and clamps.
+- **Radial** (`radial(host, opts: RadialOptions)` → `Radial`; `RadialOptions`: `items:
+  RadialItem[]` (`id`, `icon`, `label`, `disabled`; 4–8, more are cut), `radius` 110, `deadzone`
+  0.35, `onPick(id)`, `onCancel`, `label`). `Radial`: `element` (`role="menu"` of `menuitem`s,
+  `data-active` on the highlight), `open(at?)` (client px; the frame centre by default),
+  `close`, `aim(x, y)` (sector 0 east, clockwise; inside the dead zone none), `highlighted`,
+  `pick()`, `visible`, `remove`. Arrows rotate, Enter picks, Escape cancels; `data-modal` hides
+  it while `stack.hasModal`.
+- **Context list** (`contextList(host, items: ContextItem[], opts: ContextListOptions)` →
+  `ContextList`; items `{ id, label, hint?, disabled?, danger? }`; opts `at` (a client point or
+  an element), `onPick`, `onCancel`, `label`). On the `toasts` layer (never inert), placed below
+  the anchor (flipping above), `role="menu"`; the first item is focused, ArrowUp/Down wrap over
+  the enabled items, Enter or Space picks, Escape and a press outside cancel; `close()`, `open`.
+  The focus returns to the opener.
+- `INVENTORY_CSS` is the stylesheet (tokens only, lengths in theme px), injected once by
+  `createOverlay` or the first widget (`ensureInventoryStyles(doc)`, `#tc-ui-inventory`);
+  `iconNode(icon, doc)` wraps a string icon in a span. The hosts take an `InventoryHost`
+  (`{ layers: { hud, toasts? }, stack? }`; an `Overlay` fits). The `hud` layer is inert under a
+  modal: for grids inside a modal panel, build the card, radial and drag context with a host
+  whose `layers.hud` is `ui.layers.toasts`. `harness/inventory.html` shows the set.
+
 ## External links: `externalLink`
 
 A real new-tab link plus a **Copy link** button, with "Copied" feedback and a fallback popover
@@ -403,10 +480,16 @@ declarations, and `applyTheme(el, tokens)` sets them on an element. `ensureStyle
 - Every focusable element gets a visible `:focus-visible` ring (`--tc-focus-ring`, `--tc-color-focus`).
 - Captions and toasts use polite live regions.
 - Buttons are at least 64 design px tall, which is about 32 CSS px at a 960×540 embed.
+- Grids are `role="grid"` with a roving tabindex, no wrap, and a polite live region that says what
+  was picked up, dropped, refused or put back; `aria-grabbed` marks the source while carrying.
+- Cards are `role="tooltip"` and name their anchor through `aria-describedby`; radials and context
+  lists are `role="menu"` of `menuitem`s, close on Escape and give the focus back to the opener.
+- Drag and drop always has a keyboard and pad path: hold Enter or Space (pad `select`) to pick up,
+  arrows to the target (across grids at the edge), Enter (`select`) to drop, Escape (`back`) to cancel.
 
 ## Tests
 
-`hud.test.ts` covers the HUD widgets (DOM shape, aria, clamping, wrapping, heading offsets, the modal rule, pulse). `ui.test.ts` runs under happy-dom and covers theme var names, overlay mount and scaling,
+`inventory.test.ts` covers the grid (shape, aria, clamping, hold to pick up, drop, cancel, `canDrop`, context hooks, the card on focus), the drag context (pad walk across grids, both-end `onMove`, pointer thresholds, the long press, `slotsTarget`), `placeCard`, the card, the radial and the context list. `hud.test.ts` covers the HUD widgets (DOM shape, aria, clamping, wrapping, heading offsets, the modal rule, pulse). `ui.test.ts` runs under happy-dom and covers theme var names, overlay mount and scaling,
 client→design mapping, the modal focus trap, Esc, focus restore, inert stacking, non-modal panels,
 backdrop clicks, toast caps and timers, caption typing / hold / skip / queue / reduced motion / suspend / onPlace, and
 the slider's aria-valuetext. Layout and focus were also checked once in Chromium via Playwright (not

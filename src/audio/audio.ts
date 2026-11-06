@@ -3,6 +3,7 @@
  * (master ← music, sfx, ui), named sounds rendered from specs, one-shots and loops.
  */
 import { reverbImpulse, volumeToGain } from './dsp';
+import type { Send } from './send';
 import { type OfflineContextFactory, renderSound, type SoundSpec } from './synth';
 import { AudioZones } from './zones';
 
@@ -107,9 +108,148 @@ export interface Voice {
    * so the game stops copying positions. `null` stops following. No-op on a non-spatial voice.
    */
   follow(target: { readonly world: ArrayLike<number> } | null): void;
+  /**
+   * Route a copy of this voice into an effect: a parallel path from the voice's output (after
+   * its gain and panner) through a send gain of `amount` into `input`, a `Send` (its `input`)
+   * or any `AudioNode`. The dry path to the bus is untouched. Calling again with the same
+   * `input` ramps the amount over `ramp` seconds (default 0.05); `amount` 0 disconnects it and
+   * frees the gain. At most `MAX_VOICE_SENDS` (4) inputs per voice; the fifth throws a
+   * `RangeError`. Torn down with the voice. No-op on an inert voice.
+   */
+  sendTo(input: AudioNode | Send, amount: number, ramp?: number): void;
   /** World position of a spatial voice as last set or followed (zeros on a non-spatial voice). */
   readonly position: ArrayLike<number>;
   readonly playing: boolean;
+}
+
+/** Sends one voice can hold at once (`Voice.sendTo`). */
+export const MAX_VOICE_SENDS = 4;
+
+/** `stopAll` as an options object (the positional `stopAll(fade?, bus?)` form still works). */
+export interface StopAllOptions {
+  /** Seconds to fade out. Default 0. */
+  fade?: number;
+  /** Only this bus. */
+  bus?: OutputBus;
+  /** Buses left playing, e.g. `['music']` to keep the score through a scene change. */
+  except?: readonly BusName[];
+}
+
+/** `audio.pause` options. */
+export interface PauseOptions {
+  /** Buses that keep playing. Default `['ui']` (menu clicks stay audible). `master` never ramps. */
+  keep?: readonly OutputBus[];
+}
+
+/** Seconds `pause` / `unpause` ramp bus gains and voice rates over. */
+const PAUSE_RAMP = 0.05;
+
+/**
+ * Internal: write `value` to an AudioParam as a linear ramp over `ramp` seconds from `t`,
+ * cancelling what was scheduled (a step when `ramp` is 0).
+ */
+export function rampParamTo(param: AudioParam, value: number, t: number, ramp: number): void {
+  param.cancelScheduledValues(t);
+  param.setValueAtTime(param.value, t);
+  if (ramp > 0) param.linearRampToValueAtTime(value, t + ramp);
+  else param.setValueAtTime(value, t);
+}
+
+function sendInputOf(target: AudioNode | Send): AudioNode | null {
+  return typeof (target as AudioNode).connect === 'function'
+    ? (target as AudioNode)
+    : (target as Send).input;
+}
+
+interface SendTap {
+  target: AudioNode | Send;
+  gain: GainNode | null;
+  amount: number;
+}
+
+/**
+ * Internal: the parallel sends behind `Voice.sendTo`, one per voice, shared by the mixer's own
+ * voices and music stems. `attach` names the node to tap once it exists; sends set before that
+ * are built then. Each live send is one `GainNode`: tap → gain → input.
+ */
+export class VoiceSends {
+  private readonly taps: SendTap[] = [];
+  private from: AudioNode | null = null;
+  private ctx: AudioContext | null = null;
+
+  /** True once `attach` ran (the sends are in the graph). */
+  get attached(): boolean {
+    return this.from !== null;
+  }
+
+  /** Live sends. */
+  get count(): number {
+    return this.taps.length;
+  }
+
+  /** The voice's output node is known: build the sends set so far. */
+  attach(ctx: AudioContext, from: AudioNode): void {
+    this.ctx = ctx;
+    this.from = from;
+    for (const tap of this.taps) if (!tap.gain) this.build(tap, 0);
+  }
+
+  set(target: AudioNode | Send, amount: number, ramp: number): void {
+    const i = this.taps.findIndex((t) => t.target === target);
+    if (!(amount > 0)) {
+      if (i >= 0) this.remove(i);
+      return;
+    }
+    if (i < 0) {
+      if (this.taps.length >= MAX_VOICE_SENDS) {
+        throw new RangeError(`a voice has at most ${MAX_VOICE_SENDS} sends`);
+      }
+      const tap: SendTap = { target, gain: null, amount };
+      this.taps.push(tap);
+      if (this.from) this.build(tap, ramp);
+      return;
+    }
+    const tap = this.taps[i]!;
+    tap.amount = amount;
+    if (tap.gain && this.ctx) rampParamTo(tap.gain.gain, amount, this.ctx.currentTime, ramp);
+  }
+
+  private build(tap: SendTap, ramp: number): void {
+    const ctx = this.ctx;
+    const from = this.from;
+    if (!ctx || !from) return;
+    const input = sendInputOf(tap.target);
+    // A `Send` without a node (context lacks the effect) stays pending and silent.
+    if (!input) return;
+    const g = ctx.createGain();
+    if (ramp > 0) {
+      g.gain.value = 0;
+      rampParamTo(g.gain, tap.amount, ctx.currentTime, ramp);
+    } else {
+      g.gain.value = tap.amount;
+    }
+    from.connect(g);
+    g.connect(input);
+    tap.gain = g;
+  }
+
+  private remove(i: number): void {
+    const tap = this.taps[i]!;
+    this.taps.splice(i, 1);
+    if (!tap.gain) return;
+    try {
+      this.from?.disconnect(tap.gain);
+    } catch {
+      // Not connected.
+    }
+    tap.gain.disconnect();
+  }
+
+  /** Disconnect and drop every send (the voice ended). */
+  dispose(): void {
+    for (let i = this.taps.length - 1; i >= 0; i--) this.remove(i);
+    this.from = null;
+  }
 }
 
 /** Anything with a 3×4 world matrix a voice can follow (`Voice.follow`). */
@@ -278,6 +418,7 @@ const NULL_VOICE: Voice = {
   setPosition() {},
   setDirection() {},
   follow() {},
+  sendTo() {},
   position: new Float64Array(3),
   playing: false,
 };
@@ -311,6 +452,11 @@ class VoiceImpl implements Voice {
   private rate: number;
   private ended = false;
   private panner: PannerNode | null = null;
+  /** The last node before the bus (gain, panner or stereo panner): what the sends tap. */
+  private tail: AudioNode | null = null;
+  private sends: VoiceSends | null = null;
+  /** `audio.pause` set the playback rate to 0; `rate` keeps the value to restore. */
+  private frozen = false;
   /** Emitter position and cone direction (kept for a voice that has not started yet). */
   private readonly spatial: boolean;
   private readonly pos = new Float64Array(3);
@@ -367,7 +513,9 @@ class VoiceImpl implements Voice {
     const src = ctx.createBufferSource();
     src.buffer = buffer;
     src.loop = this.loop;
-    src.playbackRate.value = this.rate;
+    // Starting on a paused bus whose voices are frozen: start frozen too.
+    if (this.engine.isBusPaused(this.bus) && this.engine.pausedRate) this.frozen = true;
+    src.playbackRate.value = this.frozen ? 0 : this.rate;
     if (this.opts.detune) src.detune.value = this.opts.detune;
     const g = ctx.createGain();
     const t = ctx.currentTime + (this.opts.delay ?? 0);
@@ -394,10 +542,15 @@ class VoiceImpl implements Voice {
     }
     src.connect(g);
     tail.connect(bus);
+    this.tail = tail;
+    this.sends?.attach(ctx, tail);
     src.onended = () => {
       this.ended = true;
+      this.sends?.dispose();
+      this.sends = null;
       g.disconnect();
       tail.disconnect();
+      this.tail = null;
       if (this.panner) {
         this.engine.releasePanner(this.panner);
         this.panner = null;
@@ -432,6 +585,45 @@ class VoiceImpl implements Voice {
     } catch {
       // Already stopped.
     }
+    // Out of the mixer's books now (not when `onended` fires); the nodes are torn down there.
+    this.onEnd(this);
+  }
+
+  sendTo(input: AudioNode | Send, amount: number, ramp = 0.05): void {
+    if (this.ended) return;
+    this.sends ??= new VoiceSends();
+    const sends = this.sends;
+    const ctx = this.engine.context;
+    if (this.tail && ctx && !sends.attached) sends.attach(ctx, this.tail);
+    sends.set(input, amount, ramp);
+  }
+
+  /** Live sends (tests, diagnostics). */
+  get sendCount(): number {
+    return this.sends?.count ?? 0;
+  }
+
+  /** Internal: whether this voice's `playbackRate` accepts 0 (null before it has a source). */
+  rateZeroAllowed(): boolean | null {
+    if (!this.src) return null;
+    const min = this.src.playbackRate.minValue;
+    return !(typeof min === 'number' && min > 0);
+  }
+
+  /** Internal (`audio.pause`): hold the source at rate 0, keeping `rate` for `thawRate`. */
+  freezeRate(ramp: number): void {
+    if (this.frozen) return;
+    this.frozen = true;
+    const ctx = this.engine.context;
+    if (this.src && ctx) rampParamTo(this.src.playbackRate, 0, ctx.currentTime, ramp);
+  }
+
+  /** Internal (`audio.unpause`): back to the rate the game set. */
+  thawRate(ramp: number): void {
+    if (!this.frozen) return;
+    this.frozen = false;
+    const ctx = this.engine.context;
+    if (this.src && ctx) rampParamTo(this.src.playbackRate, this.rate, ctx.currentTime, ramp);
   }
 
   setGain(gain: number, ramp = 0.05): void {
@@ -444,7 +636,8 @@ class VoiceImpl implements Voice {
   setRate(rate: number, ramp = 0.05): void {
     this.rate = rate;
     const ctx = this.engine.context;
-    if (!this.src || !ctx) return;
+    // While frozen by `pause` the new rate waits for `unpause`.
+    if (!this.src || !ctx || this.frozen) return;
     this.src.playbackRate.setTargetAtTime(rate, ctx.currentTime, Math.max(0.001, ramp / 3));
   }
 
@@ -584,6 +777,15 @@ export class AudioEngine {
   /** Panners of ended spatial voices, reused by the next ones (cleared with the context). */
   private readonly pannerPool: PannerNode[] = [];
   private _listener: SpatialListener | null = null;
+  /** Externally owned voices (`register`): music stems, a game's own players. */
+  private readonly registered = new Map<Voice, BusName>();
+  private _paused = false;
+  private readonly pausedList: OutputBus[] = [];
+  private _pausedRate = false;
+  /** Whether this context's `playbackRate` accepts 0, once a voice told us. */
+  private rateZeroOk: boolean | null = null;
+  /** Registered voices frozen by `pause`, with the rate to restore. */
+  private readonly frozenExternal = new Map<Voice, number>();
 
   constructor(opts: AudioEngineOptions = {}) {
     this._settings = sanitizeMixer(opts.settings);
@@ -860,6 +1062,11 @@ export class AudioEngine {
     this.limiterNode = null;
     this.reverbNodes = null;
     this.pannerPool.length = 0;
+    this.registered.clear();
+    this.frozenExternal.clear();
+    this.pausedList.length = 0;
+    this._paused = false;
+    this._pausedRate = false;
     if (ctx) await ctx.close().catch(() => {});
     this.setState('locked');
   }
@@ -884,6 +1091,8 @@ export class AudioEngine {
       this.buses[name] = g;
     }
     for (const name of BUS_NAMES) this.buses[name]!.gain.value = busGain(this._settings[name]);
+    // Paused before the context existed: the paused buses are born silent.
+    for (const name of this.pausedList) this.buses[name]!.gain.value = 0;
     this.buildReverb();
     this._listener?.apply();
   }
@@ -1031,8 +1240,97 @@ export class AudioEngine {
   private applyBus(name: BusName) {
     const node = this.buses[name];
     if (!node || !this.ctx) return;
+    // A paused bus stays silent; the new setting is applied by `unpause`.
+    if (this.isBusPaused(name)) return;
     // Short time-constant ramp avoids zipper clicks.
     node.gain.setTargetAtTime(busGain(this._settings[name]), this.ctx.currentTime, 0.015);
+  }
+
+  // ------------------------------------------------------------ pause
+
+  /**
+   * The pause-menu recipe: ramp every output bus except `keep` (default `['ui']`, so menu
+   * clicks stay audible) to silence over 50 ms and hold the voices on those buses still by
+   * setting their playback rate to 0, where the context's `playbackRate` allows it (every
+   * current browser; elsewhere the voices keep running under the muted bus). `unpause` ramps
+   * the bus gains back to the mixer settings and the rates back to what the game set. Music
+   * stems pause the same way through their registered voices. The context keeps running
+   * (`suspend()` is the other tool); `master` never ramps. Idempotent.
+   */
+  pause(opts: PauseOptions = {}): void {
+    if (this._paused) return;
+    this._paused = true;
+    const keep = opts.keep ?? ['ui'];
+    this.pausedList.length = 0;
+    for (const b of BUS_NAMES) if (b !== 'master' && !keep.includes(b)) this.pausedList.push(b);
+    const ctx = this.ctx;
+    const t = ctx?.currentTime ?? 0;
+    if (ctx) {
+      for (const b of this.pausedList) {
+        const node = this.buses[b];
+        if (node) rampParamTo(node.gain, 0, t, PAUSE_RAMP);
+      }
+    }
+    if (this.rateZeroOk === null) {
+      for (const v of this.active) {
+        const ok = v.rateZeroAllowed();
+        if (ok !== null) {
+          this.rateZeroOk = ok;
+          break;
+        }
+      }
+    }
+    this._pausedRate = this.rateZeroOk !== false;
+    if (!this._pausedRate) return;
+    for (const v of this.active) if (this.isBusPaused(v.bus)) v.freezeRate(PAUSE_RAMP);
+    for (const [v, b] of this.registered) {
+      const rate = (v as Partial<RatedVoice>).rate;
+      if (!this.isBusPaused(b) || typeof rate !== 'number') continue;
+      this.frozenExternal.set(v, rate);
+      v.setRate(0, PAUSE_RAMP);
+    }
+  }
+
+  /** Undo `pause`: bus gains back to the settings, voice rates back to the game's. */
+  unpause(): void {
+    if (!this._paused) return;
+    this._paused = false;
+    const ctx = this.ctx;
+    if (ctx) {
+      for (const b of this.pausedList) {
+        const node = this.buses[b];
+        if (node) rampParamTo(node.gain, busGain(this._settings[b]), ctx.currentTime, PAUSE_RAMP);
+      }
+    }
+    this.pausedList.length = 0;
+    for (const v of this.active) v.thawRate(PAUSE_RAMP);
+    for (const [v, rate] of this.frozenExternal) v.setRate(rate, PAUSE_RAMP);
+    this.frozenExternal.clear();
+    this._pausedRate = false;
+  }
+
+  /** True between `pause` and `unpause`. */
+  get paused(): boolean {
+    return this._paused;
+  }
+
+  /** The buses `pause` silenced (empty while not paused). The same array every call. */
+  get pausedBuses(): readonly OutputBus[] {
+    return this.pausedList;
+  }
+
+  /**
+   * Which pause path ran: true when the paused voices' playback rates were set to 0 as well
+   * (they resume where they stopped), false when the context refuses rate 0 and the buses were
+   * only muted (the voices keep running). False while not paused.
+   */
+  get pausedRate(): boolean {
+    return this._pausedRate;
+  }
+
+  /** Internal: whether `pause` silenced this bus. */
+  isBusPaused(bus: BusName): boolean {
+    return this._paused && this.pausedList.includes(bus as OutputBus);
   }
 
   private emitSettings() {
@@ -1222,15 +1520,65 @@ export class AudioEngine {
     }
   }
 
-  /** Stop every voice (or only those on `bus`), with an optional fade. */
-  stopAll(fade = 0, bus?: OutputBus): void {
-    for (const v of [...this.active]) if (!bus || v.bus === bus) v.stop(fade);
+  /**
+   * Stop every voice the mixer knows (its own and the registered ones, so music stems too),
+   * with an optional fade, or only those on `bus`. The options form adds `except`:
+   * `stopAll({ except: ['music'] })` clears the effects and keeps the score.
+   */
+  stopAll(fade: number | StopAllOptions = 0, bus?: OutputBus): void {
+    const o: StopAllOptions = typeof fade === 'object' ? fade : { fade, bus };
+    const f = o.fade ?? 0;
+    const hit = (b: BusName) => (!o.bus || b === o.bus) && !o.except?.includes(b);
+    for (const v of [...this.active]) if (hit(v.bus)) v.stop(f);
+    for (const [v, b] of [...this.registered]) if (hit(b)) v.stop(f);
   }
 
-  /** Number of voices playing or waiting to start. */
-  get voiceCount(): number {
-    return this.active.size;
+  /**
+   * The live voices (playing or waiting to start, not yet stopped or ended) on `bus`, or on
+   * every bus when `bus` is omitted or `master`. A voice leaves the list the moment `stop` is
+   * called or its source ends. Allocates one array per call; `forEachVoice` allocates nothing.
+   */
+  voices(bus?: BusName): readonly Voice[] {
+    const out: Voice[] = [];
+    this.forEachVoice(bus, (v) => {
+      out.push(v);
+    });
+    return out;
   }
+
+  /** `voices(bus)` without the array: `fn(voice, bus)` for each live voice. */
+  forEachVoice(bus: BusName | undefined, fn: (voice: Voice, bus: BusName) => void): void {
+    const all = bus === undefined || bus === 'master';
+    for (const v of this.active) if (all || v.bus === bus) fn(v, v.bus);
+    for (const [v, b] of this.registered) if ((all || b === bus) && v.playing) fn(v, b);
+  }
+
+  /**
+   * Put an externally owned voice (anything implementing `Voice`) on the mixer's books, so
+   * `voices`, `voiceCount`, `stopAll` and `pause` see it; `createMusic` does this for each
+   * playing stem. A registered voice with a numeric `rate` property has its rate frozen by
+   * `pause` and restored by `unpause`. Returns the unregister; a voice whose `playing` is false
+   * is skipped meanwhile.
+   */
+  register(voice: Voice, bus: BusName): () => void {
+    this.registered.set(voice, bus);
+    return () => {
+      this.registered.delete(voice);
+      this.frozenExternal.delete(voice);
+    };
+  }
+
+  /** Number of live voices: `voices().length` without the array. */
+  get voiceCount(): number {
+    let n = this.active.size;
+    for (const [v] of this.registered) if (v.playing) n++;
+    return n;
+  }
+}
+
+/** A registered voice that also exposes its rate, so `pause` can freeze and restore it. */
+interface RatedVoice extends Voice {
+  rate: number;
 }
 
 function createLimiter(

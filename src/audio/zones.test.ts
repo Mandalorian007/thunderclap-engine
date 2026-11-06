@@ -62,6 +62,7 @@ class FakeVoice implements Voice {
   setPosition() {}
   setDirection() {}
   follow() {}
+  sendTo() {}
 }
 
 class Host implements AudioZoneHost {

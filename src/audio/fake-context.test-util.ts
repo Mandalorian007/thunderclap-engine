@@ -14,6 +14,8 @@ export interface ParamEvent {
 export class FakeParam {
   value: number;
   events: ParamEvent[] = [];
+  /** Lower bound, like `AudioParam.minValue`; unset means any value (a test may raise it). */
+  minValue?: number;
   constructor(v = 1) {
     this.value = v;
   }
