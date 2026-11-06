@@ -20,6 +20,9 @@ export {
   sampleChannel,
   sampleClip,
 } from './clip';
+// IK and root motion (ik.ts, root-motion.ts): pose arithmetic after sampling, before poseToWorld.
+export type { IkChain, IkChainDesc, LookAtOptions, TwoBoneIkOptions } from './ik';
+export { createIkChain, lookAt, twoBoneIk } from './ik';
 export type { AnimationEventListener, AnimationMixerOptions, PlayOptions } from './mixer';
 export { AnimationAction, AnimationMixer } from './mixer';
 export type { Pose, Skeleton } from './pose';
@@ -49,3 +52,5 @@ export {
   quatNormalize,
   quatSlerp,
 } from './quat';
+export type { RootMotionDelta, RootMotionOptions, RootMotionSplit } from './root-motion';
+export { applyRootMotionDelta, extractRootMotion } from './root-motion';
