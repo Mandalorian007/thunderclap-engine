@@ -110,6 +110,8 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | UI 3: tooltip (element or world target), pad/keyboard world cursor, loading screen, notifications, `h` string style, select zoom fix | ws/ui-3 | 🔧 dispatched from `ffd4157` (offset 600) |
 | 5 | Build-time bake: `pnpm bake` (navmesh + colliders → bytes + manifest, `--check` for CI), template wiring, geom in-place callout, register-form raycast | ws/scripts-bake | 📝 brief written; dispatch after ws/collide lands (offset 610) |
 | 5 | Input 4: one pointer dispatcher with claims (`ScreenPointers.claim`, orbit hover fix), `input.onUpdated` + router `moved`/`released`, touch zones primitive (two thumbs, no pinch) | ws/input-4 | 🔧 dispatched from `ffd4157` (offset 620) |
+| 5 | FX 3: particle sprite sheets + flipbook, spin, multi-stop curves, forces (attract/vortex/turbulence/drag) + depth collision, sub-emission, mesh-surface emission, `EffectDesc` JSON + `createEffect` | ws/fx-3 | 🔧 dispatched from `538be36` (offset 640) |
+| 5 | Anim 4: 2D blend space, aim offset, foot placement IK, spring chains for cosmetics, pose matching on transitions, clip compression + quantisation | ws/anim-4 | 🔧 dispatched from `538be36` (offset 650) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
