@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { RoutedPointer } from '../../input/pointer-router';
+import type { PointerRouter, RoutedPointer } from '../../input/pointer-router';
 import { createRay, type Ray } from '../../input/rays';
 import { Camera } from '../../render/camera';
 import { createFakeDevice, type FakeDevice, fakeRendererGpu } from '../../render/fake-gpu';
@@ -582,5 +582,70 @@ describe('text and theme', () => {
     expect(panel.theme.tokens.colorAccent).toBe('#123456');
     expect(panel.theme.space3).toBe(20);
     expect(panel.theme.fontSizeM).toBe(16);
+  });
+});
+
+describe('attach (ws/ui-4)', () => {
+  it('a press reaches the panel on the input tick without the page calling poll', () => {
+    const { panel } = make();
+    let presses = 0;
+    const b = panel.add(button({ text: 'x', onPress: () => presses++ }));
+    panel.repaint();
+    panel.transform.setPosition(0, 0, -5);
+    const [px, py] = centre(b.layoutRect);
+    const lx = px / panel.resolution - panel.width / 2;
+    const ly = panel.height / 2 - py / panel.resolution;
+    const p = {
+      source: {},
+      key: 1,
+      device: 'mouse',
+      ray: ray([lx, ly, 0], [0, 0, -1]),
+      select: false,
+      hit: null as unknown,
+    } as unknown as RoutedPointer & { select: boolean; hit: unknown };
+    let testers = 0;
+    const ticks: (() => void)[] = [];
+    const router = {
+      pointers: [p],
+      camera: null,
+      addTester: () => {
+        testers++;
+        return () => testers--;
+      },
+    };
+    const input = {
+      getPointers: () => router as unknown as PointerRouter<unknown>,
+      onUpdated: (fn: () => void) => {
+        ticks.push(fn);
+        return () => ticks.splice(ticks.indexOf(fn), 1);
+      },
+    };
+    panel.attach(input);
+    expect(testers).toBe(1);
+    expect(ticks.length).toBe(1);
+    const tick = () => {
+      p.hit = worldPanelTarget(panel)(p.ray);
+      for (const t of ticks) t();
+    };
+    tick();
+    expect(panel.hovered).toBe(b);
+    p.select = true;
+    tick();
+    expect(b.pressed).toBe(true);
+    p.select = false;
+    tick();
+    expect(presses).toBe(1);
+    panel.detach();
+    expect(testers).toBe(0);
+    expect(ticks.length).toBe(0);
+    panel.attach(input);
+    panel.dispose();
+    expect(testers).toBe(0);
+    expect(ticks.length).toBe(0);
+  });
+
+  it('attach needs a pointer router', () => {
+    const { panel } = make();
+    expect(() => panel.attach({ getPointers: () => null, onUpdated: () => () => {} })).toThrow();
   });
 });

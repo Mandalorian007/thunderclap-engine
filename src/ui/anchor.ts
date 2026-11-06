@@ -81,6 +81,17 @@ export interface AnchorHandle {
   remove(): void;
 }
 
+/**
+ * The frame anchors project into (ws/ui-4): the logical (design) size the camera's `screen` is
+ * in and the CSS rect it fills, relative to the overlay's parent. `Anchors.frame` is kept current
+ * with the surface, so tooltips, the cursor, float numbers and the minimap read one source.
+ */
+export interface AnchorFrame {
+  readonly width: number;
+  readonly height: number;
+  readonly rect: Readonly<AnchorRect>;
+}
+
 export interface AnchorsOptions {
   /** The default layer. It should be laid over the frame (the canvas rect), like `ui.layers.hud`. */
   root: HTMLElement;
@@ -97,11 +108,13 @@ export interface AnchorsOptions {
 }
 
 const BEHIND = 1e-6;
+const IDENTITY: ArrayLike<number> = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+const ZERO_RECT: Readonly<AnchorRect> = { x: 0, y: 0, width: 0, height: 0 };
 /** How far past the viewport an off-screen point is pushed before clamping (clip units). */
 const FAR = 1e6;
 
 /** Typed OM parts reused for one element, so a move allocates nothing where the API exists. */
-interface TypedTransform {
+export interface TypedTransform {
   x: CSSUnitValue;
   y: CSSUnitValue;
   s: CSSUnitValue;
@@ -193,8 +206,12 @@ class Anchor implements AnchorHandle {
   }
 }
 
-/** CSS Typed OM where the browser has it (Chromium, WebKit); null elsewhere (string fallback). */
-function typedTransform(el: HTMLElement, ax: number, ay: number): TypedTransform | null {
+/**
+ * CSS Typed OM where the browser has it (Chromium, WebKit); null elsewhere (string fallback).
+ * `translate3d(x, y, 0) scale(s) translate(-ax%, -ay%)` with its three values reusable.
+ * @internal shared with the float numbers.
+ */
+export function typedTransform(el: HTMLElement, ax: number, ay: number): TypedTransform | null {
   if (
     typeof CSSUnitValue === 'undefined' ||
     typeof CSSTransformValue === 'undefined' ||
@@ -237,6 +254,22 @@ export class Anchors {
   private readonly clip = new Float32Array(4);
   private readonly pt: Vec2 = { x: 0, y: 0 };
   private cam: () => AnchorCamera;
+  private readonly frameState: {
+    width: number;
+    height: number;
+    rect: Readonly<AnchorRect>;
+  } = { width: 0, height: 0, rect: ZERO_RECT };
+  // The camera and viewport as of `prepare()`, shared by `update()` and `project()`.
+  private m: ArrayLike<number> = IDENTITY;
+  private sc: Readonly<AnchorRect> = ZERO_RECT;
+  private kx = 1;
+  private ky = 1;
+  private vx0 = 0;
+  private vy0 = 0;
+  private vx1 = 0;
+  private vy1 = 0;
+  /** The clip w of the last projected point (view depth under a perspective camera). */
+  private depth = 1;
 
   constructor(private readonly opts: AnchorsOptions) {
     this.cam = opts.camera;
@@ -245,6 +278,27 @@ export class Anchors {
   /** Anchored elements. */
   get size(): number {
     return this.list.length;
+  }
+
+  /** The logical size and CSS rect projected into, as the surface has them now (one reused object). */
+  get frame(): AnchorFrame {
+    const surf = this.opts.surface;
+    const f = this.frameState;
+    f.width = surf.logicalWidth;
+    f.height = surf.logicalHeight;
+    f.rect = surf.rect;
+    return f;
+  }
+
+  /**
+   * Project a world point into frame CSS px (the hud layer's coordinates), written to `out`, the
+   * way an anchor is placed before its offset and clamp. Returns whether the point is in view: a
+   * point behind the camera is pushed far out along its direction, one outside the viewport
+   * lands where it would. Allocates nothing.
+   */
+  project(x: number, y: number, z: number, out: Vec2): boolean {
+    this.prepare();
+    return this.projectPrepared(x, y, z, out);
   }
 
   /** Project through another camera from the next `update()` on. */
@@ -285,62 +339,25 @@ export class Anchors {
 
   /** Place every element for the camera as it is now. Call once a frame, after the camera moved. */
   update(): void {
-    const cam = this.cam();
-    const m = cam.viewProjection;
-    const sc = cam.screen;
-    const surf = this.opts.surface;
-    const lw = surf.logicalWidth;
-    const lh = surf.logicalHeight;
-    const rect = surf.rect;
-    // camera.screen → logical px: a rect inside the unit square is a fraction of the canvas.
-    const frac = sc.x >= 0 && sc.y >= 0 && sc.x + sc.width <= 1 && sc.y + sc.height <= 1;
-    const kx = frac ? lw : 1;
-    const ky = frac ? lh : 1;
-    const pt = this.pt;
-    // The viewport (camera.screen) in frame CSS px.
-    logicalToClient(rect, lw, lh, sc.x * kx, sc.y * ky, pt);
-    const vx0 = pt.x - rect.x;
-    const vy0 = pt.y - rect.y;
-    logicalToClient(rect, lw, lh, (sc.x + sc.width) * kx, (sc.y + sc.height) * ky, pt);
-    const vx1 = pt.x - rect.x;
-    const vy1 = pt.y - rect.y;
-    const c = this.clip;
+    this.prepare();
+    const rect = this.opts.surface.rect;
     const onFrame = this.opts.onFrame;
+    const pt = this.pt;
+    const vx0 = this.vx0;
+    const vy0 = this.vy0;
+    const vx1 = this.vx1;
+    const vy1 = this.vy1;
 
     for (let i = 0; i < this.list.length; i++) {
       const a = this.list[i]!;
-      const wx = a.world[0]!;
-      const wy = a.world[1]!;
-      const wz = a.world[2]!;
-      for (let r = 0; r < 4; r++) {
-        c[r] = m[r]! * wx + m[4 + r]! * wy + m[8 + r]! * wz + m[12 + r]!;
-      }
-      const w = c[3]!;
-      const inside =
-        w > BEHIND && Math.abs(c[0]!) <= w && Math.abs(c[1]!) <= w && c[2]! >= 0 && c[2]! <= w;
+      const inside = this.projectPrepared(a.world[0]!, a.world[1]!, a.world[2]!, pt);
       if (!inside && !a.clamp && a.hideBehind) {
         a.place(a.x, a.y, a.scale, false, false);
         continue;
       }
-      let nx: number;
-      let ny: number;
-      if (w > BEHIND) {
-        nx = c[0]! / w;
-        ny = c[1]! / w;
-      } else {
-        // Behind the eye the projection mirrors; the point's direction is x, y over |w|, and it
-        // is off screen whatever its size, so push it far out before clamping.
-        const d = Math.max(Math.abs(c[0]!), Math.abs(c[1]!)) || 1;
-        nx = (c[0]! / d) * FAR;
-        ny = (c[1]! / d) * FAR;
-        if (nx === 0 && ny === 0) ny = -FAR;
-      }
-      // NDC → screen units → logical px → frame CSS px.
-      const sx = (sc.x + ((nx + 1) / 2) * sc.width) * kx;
-      const sy = (sc.y + ((1 - ny) / 2) * sc.height) * ky;
-      logicalToClient(rect, lw, lh, sx, sy, pt);
-      let x = pt.x - rect.x + a.ox;
-      let y = pt.y - rect.y + a.oy;
+      const w = this.depth;
+      let x = pt.x + a.ox;
+      let y = pt.y + a.oy;
       let clamped = false;
       if (a.clamp) {
         const mg = a.margin;
@@ -361,5 +378,66 @@ export class Anchors {
       }
       a.place(x, y, s, true, clamped);
     }
+  }
+
+  /** Read the camera and the viewport (camera.screen in frame CSS px) for the projections after. */
+  private prepare(): void {
+    const cam = this.cam();
+    const sc = cam.screen;
+    const surf = this.opts.surface;
+    const lw = surf.logicalWidth;
+    const lh = surf.logicalHeight;
+    const rect = surf.rect;
+    // camera.screen → logical px: a rect inside the unit square is a fraction of the canvas.
+    const frac = sc.x >= 0 && sc.y >= 0 && sc.x + sc.width <= 1 && sc.y + sc.height <= 1;
+    const kx = frac ? lw : 1;
+    const ky = frac ? lh : 1;
+    const pt = this.pt;
+    logicalToClient(rect, lw, lh, sc.x * kx, sc.y * ky, pt);
+    this.vx0 = pt.x - rect.x;
+    this.vy0 = pt.y - rect.y;
+    logicalToClient(rect, lw, lh, (sc.x + sc.width) * kx, (sc.y + sc.height) * ky, pt);
+    this.vx1 = pt.x - rect.x;
+    this.vy1 = pt.y - rect.y;
+    this.m = cam.viewProjection;
+    this.sc = sc;
+    this.kx = kx;
+    this.ky = ky;
+  }
+
+  /** One point through the prepared camera: `out` gets frame CSS px, `depth` the clip w. */
+  private projectPrepared(wx: number, wy: number, wz: number, out: Vec2): boolean {
+    const m = this.m;
+    const sc = this.sc;
+    const surf = this.opts.surface;
+    const rect = surf.rect;
+    const c = this.clip;
+    for (let r = 0; r < 4; r++) {
+      c[r] = m[r]! * wx + m[4 + r]! * wy + m[8 + r]! * wz + m[12 + r]!;
+    }
+    const w = c[3]!;
+    this.depth = w;
+    const inside =
+      w > BEHIND && Math.abs(c[0]!) <= w && Math.abs(c[1]!) <= w && c[2]! >= 0 && c[2]! <= w;
+    let nx: number;
+    let ny: number;
+    if (w > BEHIND) {
+      nx = c[0]! / w;
+      ny = c[1]! / w;
+    } else {
+      // Behind the eye the projection mirrors; the point's direction is x, y over |w|, and it
+      // is off screen whatever its size, so push it far out before clamping.
+      const d = Math.max(Math.abs(c[0]!), Math.abs(c[1]!)) || 1;
+      nx = (c[0]! / d) * FAR;
+      ny = (c[1]! / d) * FAR;
+      if (nx === 0 && ny === 0) ny = -FAR;
+    }
+    // NDC → screen units → logical px → frame CSS px.
+    const sx = (sc.x + ((nx + 1) / 2) * sc.width) * this.kx;
+    const sy = (sc.y + ((1 - ny) / 2) * sc.height) * this.ky;
+    logicalToClient(rect, surf.logicalWidth, surf.logicalHeight, sx, sy, out);
+    out.x -= rect.x;
+    out.y -= rect.y;
+    return inside;
   }
 }

@@ -64,6 +64,9 @@ let idCounter = 0;
  */
 export const NO_RESTORE_FOCUS_ATTR = 'data-tc-no-restore-focus';
 
+/** Who the gamepad belongs to: the panel stack while a modal is open, else the game. */
+export type PadOwner = 'stack' | 'game';
+
 export interface PanelStackFocusOptions {
   /**
    * Where focus goes when a panel closes and there is nowhere better: the opener is gone,
@@ -94,6 +97,8 @@ function arrowStep(key: string, nav: ArrowNav): number {
 export class PanelStack {
   private readonly entries: Entry[] = [];
   private readonly listeners = new Set<(stack: PanelStack) => void>();
+  private readonly padListeners = new Set<(owner: PadOwner) => void>();
+  private owner: PadOwner = 'game';
   private readonly doc: Document;
   private readonly onKey = (e: KeyboardEvent) => this.handleKey(e);
 
@@ -122,6 +127,24 @@ export class PanelStack {
 
   get top(): PanelHandle | null {
     return this.entries.at(-1)?.handle ?? null;
+  }
+
+  /**
+   * Who the gamepad belongs to (ws/ui-4): `'stack'` while any modal panel is open (PadNav drives
+   * the panel; the world cursor and the game's input yield), else `'game'`.
+   */
+  get padOwner(): PadOwner {
+    return this.owner;
+  }
+
+  /**
+   * Called once per transition of `padOwner`, after the panel that caused it opened or closed
+   * (not on every push or pop: a second modal over the first changes nothing). Returns the
+   * remover. `PadNav` and `ui.cursor` subscribe to this instead of polling `hasModal` each frame.
+   */
+  onPadOwnerChange(fn: (owner: PadOwner) => void): () => void {
+    this.padListeners.add(fn);
+    return () => this.padListeners.delete(fn);
   }
 
   onChange(fn: (stack: PanelStack) => void): () => void {
@@ -180,6 +203,7 @@ export class PanelStack {
     this.container.append(host);
     this.refresh();
     this.focusInitial(entry);
+    this.syncPadOwner();
     this.emit();
     return entry.handle;
   }
@@ -225,6 +249,7 @@ export class PanelStack {
     this.clear();
     this.doc.removeEventListener('keydown', this.onKey);
     this.listeners.clear();
+    this.padListeners.clear();
   }
 
   private closeEntry(entry: Entry, reason: CloseReason, restore = true) {
@@ -247,7 +272,16 @@ export class PanelStack {
       }
     }
     entry.opts.onClose?.(reason);
+    this.syncPadOwner();
     this.emit();
+  }
+
+  /** Tell the pad-owner listeners once when `hasModal` flipped. */
+  private syncPadOwner() {
+    const next: PadOwner = this.hasModal ? 'stack' : 'game';
+    if (next === this.owner) return;
+    this.owner = next;
+    for (const fn of this.padListeners) fn(next);
   }
 
   private canRestore(el: HTMLElement | null): el is HTMLElement {
