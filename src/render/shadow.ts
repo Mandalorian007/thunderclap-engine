@@ -43,6 +43,12 @@ export class ShadowMap {
   private readonly device: GPUDevice;
   private readonly pipelineLayout: GPUPipelineLayout;
   private readonly pipelines = new Map<VertexLayout, GPURenderPipeline>();
+  /** Skinned layouts: one pipeline per material bind group layout (the palette is group 1). */
+  private readonly skinnedPipelines = new Map<
+    VertexLayout,
+    Map<GPUBindGroupLayout, GPURenderPipeline>
+  >();
+  private readonly globalsLayout: GPUBindGroupLayout;
   private readonly viewM: Mat4 = mat4.create();
   private readonly projM: Mat4 = mat4.create();
   private readonly eye = new Float32Array(3);
@@ -53,6 +59,7 @@ export class ShadowMap {
 
   constructor(device: GPUDevice, globalsLayout: GPUBindGroupLayout) {
     this.device = device;
+    this.globalsLayout = globalsLayout;
     this.sampler = device.createSampler({
       label: 'engine-shadow-sampler',
       compare: 'less-equal',
@@ -156,11 +163,24 @@ export class ShadowMap {
   /**
    * The depth-only pipeline for meshes in `layout`: the engine prelude's `vs_main` (so the same
    * `engine_vertex` path as the scene pass), no fragment stage, `SHADOW_FORMAT` depth with
-   * writes on. Built on first use and cached.
+   * writes on. Built on first use and cached. A skinned layout with `bindingsLayout` (the
+   * material's group 1, which holds the joint palette) gets a pipeline layout of both groups.
    */
-  pipelineFor(layout: VertexLayout): GPURenderPipeline {
-    const hit = this.pipelines.get(layout);
-    if (hit) return hit;
+  pipelineFor(layout: VertexLayout, bindingsLayout?: GPUBindGroupLayout): GPURenderPipeline {
+    const skinned = layout.skinned === true && bindingsLayout !== undefined;
+    let byGroup: Map<GPUBindGroupLayout, GPURenderPipeline> | undefined;
+    if (skinned) {
+      byGroup = this.skinnedPipelines.get(layout);
+      if (!byGroup) {
+        byGroup = new Map();
+        this.skinnedPipelines.set(layout, byGroup);
+      }
+      const hit = byGroup.get(bindingsLayout);
+      if (hit) return hit;
+    } else {
+      const hit = this.pipelines.get(layout);
+      if (hit) return hit;
+    }
     const module = createShaderModule(
       this.device,
       materialPrelude(layout),
@@ -168,12 +188,18 @@ export class ShadowMap {
     );
     const pipeline = this.device.createRenderPipeline({
       label: `engine-shadow:${layout.name}`,
-      layout: this.pipelineLayout,
+      layout: skinned
+        ? this.device.createPipelineLayout({
+            label: `engine-shadow-layout:${layout.name}`,
+            bindGroupLayouts: [this.globalsLayout, bindingsLayout],
+          })
+        : this.pipelineLayout,
       vertex: { module, entryPoint: 'vs_main', buffers: [layout.buffer, INSTANCE_BUFFER_LAYOUT] },
       primitive: { topology: 'triangle-list', cullMode: 'none' },
       depthStencil: { format: SHADOW_FORMAT, depthWriteEnabled: true, depthCompare: 'less' },
     });
-    this.pipelines.set(layout, pipeline);
+    if (byGroup) byGroup.set(bindingsLayout!, pipeline);
+    else this.pipelines.set(layout, pipeline);
     return pipeline;
   }
 
@@ -190,5 +216,6 @@ export class ShadowMap {
     this.texture = null;
     this.placeholderTex.destroy();
     this.pipelines.clear();
+    this.skinnedPipelines.clear();
   }
 }
