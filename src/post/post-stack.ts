@@ -1,12 +1,17 @@
+import { mat4 } from '../core/math';
 import type { FullscreenPass } from '../render/fullscreen';
 import type { PostInputs, PostProcessor, Renderer } from '../render/renderer';
 import type { SceneTargetViewport } from '../render/scene-target';
+import { AO_BLUR_WGSL, AO_WGSL } from './ao';
 import { type Ease, easeInOut, PostBlender } from './blend';
+import { DepthPass } from './depth-pass';
+import { DOF_WGSL } from './dof';
 import {
   applyPostPatch,
   defaultPostQuality,
   defaultPostSettings,
   POST_UNIFORM_FLOATS,
+  type PostDepthInfo,
   type PostQuality,
   type PostSettings,
   type PostSettingsPatch,
@@ -15,11 +20,14 @@ import {
 import { COMPOSITE_WGSL, DOWN_WGSL, PREFILTER_WGSL, RAYS_WGSL, UP_WGSL } from './shaders';
 
 const HDR: GPUTextureFormat = 'rgba16float';
+const AO: GPUTextureFormat = 'r8unorm';
 const COMPOSITE_CLEAR: GPUColorDict = { r: 0, g: 0, b: 0, a: 1 };
 
 /**
  * The painterly post stack: bloom (mip chain), floor mist, god rays, ACES tonemap, colour
- * grade, vignette, dither. Plug it into a renderer with `renderer.post = new PostStack(r)`.
+ * grade, vignette, dither, plus ambient occlusion and depth of field over the scene depth when
+ * the frame has one (ws/post-depth; off by default). Plug it into a renderer with
+ * `renderer.post = new PostStack(r)`.
  *
  * Settings are plain objects you can mutate at runtime (`post.settings.bloom.intensity = 2`)
  * or patch with `post.set({ fog: { density: 0.4 } })`. Disabled passes are skipped entirely.
@@ -42,6 +50,10 @@ export class PostStack implements PostProcessor {
   private readonly composite: FullscreenPass;
   /** Bilinear upscale of the scene-resolution composite (`quality.compositeAtScene`). */
   private readonly upscale: FullscreenPass;
+  /** Depth passes (ws/post-depth): run only on frames with `inputs.depth` and the pass enabled. */
+  private readonly ao: DepthPass;
+  private readonly aoBlur: DepthPass;
+  private readonly dof: DepthPass;
 
   private bloomTex: GPUTexture | null = null;
   private mipViews: GPUTextureView[] = [];
@@ -54,6 +66,25 @@ export class PostStack implements PostProcessor {
   private height = 0;
   private boundColor: GPUTextureView | null = null;
   private boundEmissive: GPUTextureView | null = null;
+  private boundDepth: GPUTextureView | null = null;
+  /** Half-res AO (raw and blurred) and DoF targets, made on the first frame that needs them. */
+  private aoTex: GPUTexture | null = null;
+  private aoView: GPUTextureView | null = null;
+  private aoBlurTex: GPUTexture | null = null;
+  private aoBlurView: GPUTextureView | null = null;
+  private dofTex: GPUTexture | null = null;
+  private dofView: GPUTextureView | null = null;
+  private aoGroup: GPUBindGroup | null = null;
+  private aoBlurGroup: GPUBindGroup | null = null;
+  private dofGroup: GPUBindGroup | null = null;
+  private readonly depthInfo: PostDepthInfo = {
+    near: 0,
+    far: 0,
+    invProj: new Float32Array(16),
+    projX: 1,
+    projY: 1,
+    outputWidth: 1,
+  };
 
   private prefilterGroup: GPUBindGroup | null = null;
   private downGroups: GPUBindGroup[] = [];
@@ -108,7 +139,20 @@ export class PostStack implements PostProcessor {
       wgsl: COMPOSITE_WGSL,
       targets: [renderer.format],
       uniformBytes: bytes,
-      textures: 4,
+      textures: 6,
+    });
+    this.ao = new DepthPass(renderer, { label: 'post-ao', wgsl: AO_WGSL, format: AO, textures: 0 });
+    this.aoBlur = new DepthPass(renderer, {
+      label: 'post-ao-blur',
+      wgsl: AO_BLUR_WGSL,
+      format: AO,
+      textures: 1,
+    });
+    this.dof = new DepthPass(renderer, {
+      label: 'post-dof',
+      wgsl: DOF_WGSL,
+      format: HDR,
+      textures: 1,
     });
     this.upscale = renderer.createFullscreenPass({
       label: 'post-upscale',
@@ -216,8 +260,11 @@ export class PostStack implements PostProcessor {
     }
     this.raysGroup = this.rays.createBindGroup([this.mipViews[0]!]);
     this.freeLdr();
+    // Depth targets come back on the next frame that needs them, at the new size.
+    this.freeDepthTargets();
     this.boundColor = null;
     this.boundEmissive = null;
+    this.boundDepth = null;
   }
 
   /**
@@ -241,10 +288,28 @@ export class PostStack implements PostProcessor {
     if (iw !== this.width || ih !== this.height || this.wantLevels() !== this.requestedLevels) {
       this.resize(iw, ih);
     }
-    this.bindInputs(inputs.color.view, inputs.emissive.view);
     const outW = viewport ? viewport.width : r.outputWidth;
     const outH = viewport ? viewport.height : r.outputHeight;
     const clear = viewport ? this.noClear : COMPOSITE_CLEAR;
+
+    // Depth passes only on a frame that rendered depth (never the 2D path).
+    const proj = inputs.projection;
+    const depth = proj && inputs.depth ? inputs.depth : null;
+    const wantAo = depth !== null && s.ao.enabled;
+    const wantDof = depth !== null && s.dof.enabled;
+    if (wantAo && !this.aoTex) this.allocAo();
+    if (wantDof && !this.dofTex) this.allocDof();
+    this.bindInputs(inputs.color.view, inputs.emissive.view, depth ? depth.view : null);
+    let depthInfo: PostDepthInfo | null = null;
+    if (depth && proj) {
+      depthInfo = this.depthInfo;
+      depthInfo.near = proj.near;
+      depthInfo.far = proj.far;
+      depthInfo.projX = proj.proj[0]!;
+      depthInfo.projY = proj.proj[5]!;
+      depthInfo.outputWidth = outW;
+      if (!mat4.invert(depthInfo.invProj as Float32Array, proj.proj)) depthInfo = null;
+    }
 
     packPostUniforms(
       this.uniforms,
@@ -255,11 +320,23 @@ export class PostStack implements PostProcessor {
       r.logicalWidth,
       r.logicalHeight,
       this.quality,
+      depthInfo,
     );
     const needBloomChain = s.bloom.enabled || (s.godRays.enabled && s.godRays.bloomSource > 0);
     this.composite.setUniforms(this.uniforms);
     // GPU timing labels (undefined unless this frame is sampled; see Renderer.gpuTimer).
     const timer = r.gpuTimer;
+
+    if (wantAo && depthInfo) {
+      this.ao.setUniforms(this.uniforms);
+      this.aoBlur.setUniforms(this.uniforms);
+      this.ao.encode(encoder, this.aoView!, this.aoGroup!, timer?.pass('ao'));
+      this.aoBlur.encode(encoder, this.aoBlurView!, this.aoBlurGroup!, timer?.pass('ao'));
+    }
+    if (wantDof && depthInfo) {
+      this.dof.setUniforms(this.uniforms);
+      this.dof.encode(encoder, this.dofView!, this.dofGroup!, timer?.pass('dof'));
+    }
 
     if (needBloomChain) {
       this.prefilter.setUniforms(this.uniforms);
@@ -338,22 +415,74 @@ export class PostStack implements PostProcessor {
     this.upscaleGroup = null;
   }
 
-  private bindInputs(color: GPUTextureView, emissive: GPUTextureView): void {
-    if (color === this.boundColor && emissive === this.boundEmissive) return;
+  /** Half-res AO targets (raw and blurred). Forces the bind groups to be rebuilt. */
+  private allocAo(): void {
+    const device = this.renderer.device;
+    const size = [Math.max(1, this.width >> 1), Math.max(1, this.height >> 1)];
+    const usage = GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING;
+    this.aoTex = device.createTexture({ label: 'post-ao', size, format: AO, usage });
+    this.aoView = this.aoTex.createView();
+    this.aoBlurTex = device.createTexture({ label: 'post-ao-blur', size, format: AO, usage });
+    this.aoBlurView = this.aoBlurTex.createView();
+    this.boundColor = null;
+  }
+
+  /** Half-res DoF target: blurred colour, CoC in alpha. Forces the bind groups to be rebuilt. */
+  private allocDof(): void {
+    const device = this.renderer.device;
+    const size = [Math.max(1, this.width >> 1), Math.max(1, this.height >> 1)];
+    const usage = GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING;
+    this.dofTex = device.createTexture({ label: 'post-dof', size, format: HDR, usage });
+    this.dofView = this.dofTex.createView();
+    this.boundColor = null;
+  }
+
+  private freeDepthTargets(): void {
+    this.aoTex?.destroy();
+    this.aoBlurTex?.destroy();
+    this.dofTex?.destroy();
+    this.aoTex = this.aoBlurTex = this.dofTex = null;
+    this.aoView = this.aoBlurView = this.dofView = null;
+    this.aoGroup = this.aoBlurGroup = this.dofGroup = null;
+  }
+
+  private bindInputs(
+    color: GPUTextureView,
+    emissive: GPUTextureView,
+    depth: GPUTextureView | null,
+  ): void {
+    if (color === this.boundColor && emissive === this.boundEmissive && depth === this.boundDepth) {
+      return;
+    }
     this.boundColor = color;
     this.boundEmissive = emissive;
+    this.boundDepth = depth;
     this.prefilterGroup = this.prefilter.createBindGroup([color, emissive]);
+    const mip0 = this.mipViews[0]!;
     this.compositeGroup = this.composite.createBindGroup([
       color,
       emissive,
-      this.mipViews[0]!,
+      mip0,
       this.raysView!,
+      this.aoBlurView ?? mip0,
+      this.dofView ?? mip0,
     ]);
+    if (depth) {
+      this.aoGroup = this.aoView ? this.ao.createBindGroup(depth, []) : null;
+      this.aoBlurGroup = this.aoView ? this.aoBlur.createBindGroup(depth, [this.aoView]) : null;
+      this.dofGroup = this.dofView ? this.dof.createBindGroup(depth, [color]) : null;
+    } else {
+      this.aoGroup = this.aoBlurGroup = this.dofGroup = null;
+    }
   }
 
   destroy(): void {
     this.bloomTex?.destroy();
     this.raysTex?.destroy();
+    this.freeDepthTargets();
+    this.ao.destroy();
+    this.aoBlur.destroy();
+    this.dof.destroy();
     this.prefilter.destroy();
     this.rays.destroy();
     this.composite.destroy();

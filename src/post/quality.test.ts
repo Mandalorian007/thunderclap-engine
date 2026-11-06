@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { Renderer } from '../render';
 import { createFakeDevice, fakeRendererGpu } from '../render/fake-gpu';
 import { PostStack } from './post-stack';
-import { defaultPostQuality, defaultPostSettings, packPostUniforms } from './settings';
+import {
+  defaultPostQuality,
+  defaultPostSettings,
+  POST_UNIFORM_FLOATS,
+  packPostUniforms,
+} from './settings';
 
 function frame(r: Renderer) {
   r.beginFrame(0, 1 / 60);
@@ -44,8 +49,8 @@ describe('PostStack quality caps', () => {
     expect(fake.textures.filter((t) => t.label === 'post-bloom').length).toBe(n);
   });
 
-  it('packs ray samples and fog octaves into the last uniform slot', () => {
-    const out = new Float32Array(72);
+  it('packs ray samples and fog octaves into the quality slot', () => {
+    const out = new Float32Array(POST_UNIFORM_FLOATS);
     const q = defaultPostQuality();
     packPostUniforms(out, defaultPostSettings(), 0, 100, 100, 100, 100, q);
     expect([out[68], out[69]]).toEqual([64, 5]);

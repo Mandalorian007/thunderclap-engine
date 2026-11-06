@@ -51,10 +51,13 @@ post.finishBlend(); // jump to the end values
 
 | Pass | Where | Key settings |
 |---|---|---|
+| AO (ws/post-depth) | half res, over the scene depth | `ao.radius` (world units), `intensity`, `bias`, `power`. Normals from depth derivatives; 12 (`aoSamples`) spiral samples rotated per pixel by interleaved-gradient noise. Off by default. |
+| AO blur | half res | 4×4 depth-aware blur of the AO term. |
+| DoF (ws/post-depth) | half res, over the scene depth and colour | `dof.focusDistance`, `focusRange` (world units), `maxBlur` (px at output res), `nearBlur`. Circle of confusion from linear depth; 24 (`dofTaps`) golden-angle disc taps weighted by each tap's own CoC. Off by default. |
 | Bloom prefilter | half res | `threshold`, `knee` (soft knee on scene colour), `emissiveWeight` (the emissive target always blooms). Karis average to stop fireflies. |
 | Bloom down/up | half-res mip chain, `levels` deep | 13-tap downsample, 9-tap tent upsample blended by `scatter` |
 | God rays | half res | `x, y` light point, `intensity`, `decay`, `density`, `weight`, `color`. Marches 64 samples radially over a light disc (`sourceRadius`, `sourceIntensity`) plus `bloomSource` × bloom, so bright things in the scene also cast shafts. |
-| Composite | full res → swapchain | colour + emissive + `bloom.intensity` × bloom + rays, then fog, exposure, tonemap, grade, vignette, dither |
+| Composite | full res → swapchain | colour × AO, blended toward the DoF result by CoC, + emissive + `bloom.intensity` × bloom + rays, then fog, exposure, tonemap, grade, vignette, dither |
 
 - **Fog** is a screen-space floor mist: a height band from `top` to `bottom` (0..1 of the
   screen, measured down) shaped by `falloff`. Animated fbm sets `noiseScale` and `speed`.
@@ -64,6 +67,13 @@ post.finishBlend(); // jump to the end values
   It runs in display space after tonemapping.
 - **Vignette** takes `intensity`, `radius`, `softness`, and `color`.
 - **Dither** adds ±½ LSB of noise to hide banding in dark gradients.
+- **AO** (`AoSettings`) and **DoF** (`DofSettings`) need the scene depth: the renderer fills
+  `PostInputs.depth` (the target's `depth24plus` attachment) and `PostInputs.projection`
+  (`near`, `far`, the camera's `proj`) on frames a depth camera rendered, else both are `null`
+  and the stack skips both passes with the composite unchanged, so 2D pages stay pixel-identical.
+  The passes allocate their half-res textures the first time they run and free them on resize.
+  AO multiplies the scene colour only (not the emissive target). Both blend through `blendTo`
+  (`enabled` and `nearBlur` switch when the blend ends).
 
 When bloom is disabled the bloom chain is skipped. It still runs if god rays need it
 (`bloomSource > 0`).
@@ -75,12 +85,13 @@ When bloom is disabled the bloom chain is skipped. It still runs if god rays nee
 - Output is encoded to sRGB in the shader because the swapchain is `bgra8unorm`.
 - All intermediate textures are reallocated only on resize (or a bloom level cap change).
 - **Quality caps** (`PostQuality`, `post.quality`, `defaultPostQuality()`) are separate from
-  the look: `post.setQuality({ maxBloomLevels, raySamples, fogOctaves, compositeAtScene })`
-  (defaults 8, 64, 5, false; `compositeAtScene` composites at the scene's resolution and
+  the look: `post.setQuality({ maxBloomLevels, raySamples, fogOctaves, compositeAtScene, aoSamples, dofTaps })`
+  (defaults 8, 64, 5, false, 12, 24; `compositeAtScene` composites at the scene's resolution and
   upscales when the scene is smaller than the output). Fewer ray samples rescale decay and weight
   per step so the shafts keep their reach; fewer fog octaves add back the dropped octaves'
-  mean so the mist keeps its density. Bloom and rays run at half the scene resolution; the
-  composite runs at output resolution and samples the scene by UV.
+  mean so the mist keeps its density. Bloom, rays, AO and DoF run at half the scene resolution;
+  the composite runs at output resolution and samples the scene by UV. `aoSamples` is clamped
+  to 4..16 and `dofTaps` to 8..32.
 - Write your own processor by implementing `PostProcessor { resize(w, h); encode(encoder,
   inputs, outputView, viewport?) }` and assigning it to `renderer.post`. `viewport` (texture px)
   asks for the result in that part of the output only, loading the rest; the inputs may differ
@@ -109,7 +120,7 @@ texture; `renderer.endFrame({ present: false })` then only submits. Inside `enco
 
 - `PostSettings` has one section per pass: `bloom: BloomSettings`, `fog: FogSettings`,
   `godRays: GodRaySettings`, `vignette: VignetteSettings`, `grade: GradeSettings` (which holds
-  `tonemap: Tonemap`). `RGB` is `[r, g, b]`.
+  `tonemap: Tonemap`), `ao: AoSettings`, `dof: DofSettings`. `RGB` is `[r, g, b]`.
 - `PostSettingsPatch` is a per-section partial of `PostSettings`, the argument of `new
   PostStack(renderer, patch?)`, `set` and `blendTo`. `applyPostPatch(target, patch)` merges one
   into a settings object in place (shallow per section); `defaultPostSettings()` returns a
