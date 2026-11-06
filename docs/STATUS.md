@@ -85,6 +85,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Post 2: FXAA, 3D LUT, grain, aberration, sharpen, depth/normal outline | ws/post-2 | 🔧 engineer running (offset 350) |
 | 5 | Water surface: scrolling normals, Fresnel, sun specular, depth fade, foam, `waterHeight` | ws/water | `src/fx/water.ts` Drawable; harness `water.html` | sky, post-depth, camera-ergo | 🔧 engineer running (offset 360) |
 | 5 | Decals: depth-projected box decals + quad fallback, atlas, lifetime, one instanced draw | ws/decals | `src/fx/decals.ts` Drawable; harness `decals.html` | post-depth, camera-ergo | 🔧 engineer running (offset 370) |
+| 5 | Assets 2: typed manifest, progress/concurrency/cancel bundle loader (game-supplied `read`, no engine fetch), sprite atlas packer + texture | ws/assets-2 | `src/assets/manifest.ts`, `bundle.ts`, `atlas.ts`; harness `assets.html` | gltf, texture | 🔧 engineer running (offset 380) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
