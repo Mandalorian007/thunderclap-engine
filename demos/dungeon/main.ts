@@ -2,7 +2,7 @@
  * ThunderClap demo: dungeon. A 2D top-down crawl at game scale: a 40×30 tile map from a
  * canvas-drawn atlas, 60 flipbook bats, a player square moved by keys, pad or touch drag with
  * wall collision, flickering emissive torches feeding bloom, a fog-of-war layer, a pause menu
- * walked with the d-pad, a coin counter kept in `save`, a health meter (`ui.meter`) the bats
+ * walked by the `PanelStack`'s arrow keys and a `PadNav` d-pad, a coin counter kept in `save`, a health meter (`ui.meter`) the bats
  * chip at, and synthesised pickup/hit sounds on the `sfx` bus. Everything the room draws is one
  * material and one draw call.
  *
@@ -15,7 +15,7 @@ import type { Scene } from '@thunderclap/engine/core';
 import { flicker } from '@thunderclap/engine/fx';
 import type { DrawParams, Frame, RenderStats } from '@thunderclap/engine/render';
 import { createSaveStore, s } from '@thunderclap/engine/save';
-import { button, focusableWithin, h, type PadLike, PadNav } from '@thunderclap/engine/ui';
+import { button, h, type PadLike, PadNav } from '@thunderclap/engine/ui';
 import { buildAtlas, CELL, cellUv, TILE } from './atlas';
 import { buildMap, FIRST_COIN_TILE, isSolid, MAP_H, MAP_W, moveBox, rng, SPAWN_TILE } from './map';
 
@@ -297,18 +297,8 @@ if (ctx) {
       fogBtn,
       reset,
     );
-    // The d-pad keys walk the menu too: the engine's panel only handles Tab and Escape.
-    content.addEventListener('keydown', (e) => {
-      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
-      const panel = ui.stack.topModalElement;
-      if (!panel) return;
-      const items = focusableWithin(panel);
-      if (items.length === 0) return;
-      const i = items.indexOf(document.activeElement as HTMLElement);
-      const step = e.key === 'ArrowDown' ? 1 : -1;
-      items[(i + step + items.length) % items.length]?.focus();
-      e.preventDefault();
-    });
+    // The `PanelStack` walks the panel with ArrowUp/ArrowDown (its default `arrowNav`) and the
+    // `PadNav` above drives the same stack from the d-pad: the demo handles no keys of its own.
     ui.stack.push({
       title: 'Paused',
       content,
