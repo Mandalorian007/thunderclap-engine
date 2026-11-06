@@ -133,6 +133,7 @@ Import only from the public entry points listed under [Modules](#modules). Anyth
 | `@thunderclap/engine/ui` | Overlay, panels and widgets, toasts, captions, pad navigation, layout regions (`ui.layout`) ([README](src/ui/README.md)) |
 | `@thunderclap/engine/audio` | WebAudio buses, synth, sound recipes, mixer persistence ([README](src/audio/README.md)) |
 | `@thunderclap/engine/save` | `createSaveStore`, schemas (`s`), slots and migrations ([README](src/save/README.md)) |
+| `@thunderclap/engine/assets` | `parseGltf` and `loadGltf`: glTF 2.0 static geometry to meshes, transforms, textures and a lit material ([README](src/assets/README.md)) |
 | `@thunderclap/engine/analytics` | `createAnalytics`: typed, batched events to a game-supplied sink; no network code ([README](src/analytics/README.md)) |
 | `@thunderclap/engine/host` | `Host` interface, `createWebHost()` (top-level page or iframe): links, clipboard, fullscreen, storage ([README](src/host/README.md)) |
 | `@thunderclap/engine/testing` | A recording fake `GPUDevice` for unit tests (`src/render/fake-gpu.ts`) |
@@ -176,7 +177,7 @@ The e2e specs run against small harness pages that don't contain any game (`harn
 - four landscape phones with touch and safe-area insets;
 - the harness inside a cross-origin iframe.
 
-The layout spec also runs on upright phone and tablet rows. The pages: `index.html` (2D renderer), `game.html` (`createGame`), `ui.html` (the overlay, text scale, menus and panels, no WebGPU), `layout.html` (layout regions and safe areas on every form factor, no WebGPU), `gestures.html` (gestures and the magnify loupe, no WebGPU), `rays.html` (pointer router and rays) `mesh.html` (perspective camera, depth and a lit mesh orbiting under pointer and pad input), `weather.html` (world-space rain, snow and lit dust over the mesh scene), `look.html` (a first-person walk on `Look`: pointer lock, touch zones, sticks, WASD), `stream.html` (chunk meshes rebuilt in a Worker and uploaded without a copy) and `anchors.html` (DOM labels and a clamped marker following cubes through `ctx.ui.anchors`). The engine tests what the platform can do; a game built on it tests only its own product.
+The layout spec also runs on upright phone and tablet rows. The pages: `index.html` (2D renderer), `game.html` (`createGame`), `ui.html` (the overlay, text scale, menus and panels, no WebGPU), `layout.html` (layout regions and safe areas on every form factor, no WebGPU), `gestures.html` (gestures and the magnify loupe, no WebGPU), `rays.html` (pointer router and rays) `mesh.html` (perspective camera, depth and a lit mesh orbiting under pointer and pad input), `weather.html` (world-space rain, snow and lit dust over the mesh scene), `look.html` (a first-person walk on `Look`: pointer lock, touch zones, sticks, WASD), `stream.html` (chunk meshes rebuilt in a Worker and uploaded without a copy), `anchors.html` (DOM labels and a clamped marker following cubes through `ctx.ui.anchors`) and `gltf.html` (a GLB built in the page parsed and drawn through `@thunderclap/engine/assets`). The engine tests what the platform can do; a game built on it tests only its own product.
 
 Headless Chromium gets a WebGPU adapter with `--enable-unsafe-webgpu`. On macOS that's Metal; on Linux it's SwiftShader. `playwright.config.ts` sets the flags.
 
