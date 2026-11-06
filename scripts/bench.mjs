@@ -169,6 +169,7 @@ ${table(state.results)}
 ## Rungs
 
 - \`instances-*\`: that many cubes (one \`Mesh\`, one lit \`Material\`, one \`Transform\` each) in a 120×14×120 field the camera looks into from one side; \`-cull\` has \`camera.cull\` on, so the cubes outside the frustum are dropped before sorting (\`Culled\`), the other has it off and draws them all.
+- \`batch-*\`: the same cubes as one \`frame.meshes\` batch (matrices and params in typed arrays built once, no batch bounds, so \`-cull\` culls per instance over the array); \`list-*\`: the same cubes in one retained \`InstanceList\` (\`frame.list\`), filled when the rung starts and unchanged after, so the frame uploads nothing (\`camera.cull\` off, like the plain \`instances-*\` and \`batch-*\` rungs; a list is culled as one sphere either way).
 - \`lights-N\`: 10k culled cubes under a sun and N point lights (\`Lights.points\`).
 - \`shadow-on|off\`: 10k culled cubes with \`lights.sun.shadow\` set (2048² map, extent 40) or not.
 - \`sprites-N\`: N 24 px sprites through \`frame.sprite\` under the \`ortho2d\` camera (the 2D path).

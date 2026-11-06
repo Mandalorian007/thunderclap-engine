@@ -6,11 +6,21 @@
 
 export type BenchKind = 'instances' | 'lights' | 'shadow' | 'sprites' | 'particles';
 
+/**
+ * How the 3D kinds submit their cubes: `mesh` is one `frame.mesh` per cube, `batch` one
+ * `frame.meshes` with the matrices and params in typed arrays, `list` one `frame.list` of a
+ * retained `InstanceList` filled when the rung starts (ws/batch-submit). Sprites and particles
+ * ignore it.
+ */
+export type BenchMode = 'mesh' | 'batch' | 'list';
+
 /** One rung of the ladder: a scene configuration the page holds for `frames` frames. */
 export interface BenchRungDef {
   /** Stable id, the `?rung=` value: `instances-10k-cull`, `lights-8`, `sprites-50k`, ... */
   id: string;
   kind: BenchKind;
+  /** Submission path of the 3D kinds; `?mode=` overrides it for every rung. */
+  mode: BenchMode;
   /** Mesh instances drawn (3D kinds), sprites (`sprites`) or particles alive (`particles`). */
   count: number;
   /** `camera.cull` for the 3D kinds (sprites are never culled). */
@@ -26,6 +36,8 @@ export interface BenchRungDef {
 export interface BenchRungResult {
   id: string;
   kind: BenchKind;
+  /** The submission path the rung ran with (after `?mode=`). */
+  mode: BenchMode;
   /** The rung's `count`: instances submitted, sprites, or particles alive. */
   count: number;
   /** Measured frames (after warm-up). */
@@ -80,6 +92,14 @@ export interface HarnessBenchState {
   gpuErrors: number;
   /** Message of the first error a rung threw, else null. */
   error: string | null;
+  /** The camera's `screen`: logical px the `probe` is in. */
+  logical: { width: number; height: number };
+  /**
+   * Screen position (logical px) of the centre of the current rung's cube nearest the camera
+   * among those projecting inside the middle of the view, so a spec can sample a drawn cube and
+   * not the sky; null for the 2D and particle kinds or when no cube qualifies.
+   */
+  probe: { x: number; y: number } | null;
 }
 
 export interface HarnessBenchApi {
@@ -99,11 +119,12 @@ function rung(
   id: string,
   kind: BenchKind,
   count: number,
-  opts: Partial<Pick<BenchRungDef, 'cull' | 'points' | 'shadow' | 'frames'>> = {},
+  opts: Partial<Pick<BenchRungDef, 'mode' | 'cull' | 'points' | 'shadow' | 'frames'>> = {},
 ): BenchRungDef {
   return {
     id,
     kind,
+    mode: opts.mode ?? 'mesh',
     count,
     cull: opts.cull ?? true,
     points: opts.points ?? 0,
@@ -113,8 +134,9 @@ function rung(
 }
 
 /**
- * The ladder (STATUS row 5): instances with culling on and off, point lights, the sun shadow,
- * 2D sprites and world particles. The lights and shadow rungs draw 10k culled instances.
+ * The ladder (STATUS row 5): instances with culling on and off through each submission path,
+ * point lights, the sun shadow, 2D sprites and world particles. The lights and shadow rungs
+ * draw 10k culled instances through `frame.mesh`.
  */
 export const BENCH_LADDER: BenchRungDef[] = [
   rung('instances-1k-cull', 'instances', 1_000),
@@ -123,6 +145,12 @@ export const BENCH_LADDER: BenchRungDef[] = [
   rung('instances-10k', 'instances', 10_000, { cull: false }),
   rung('instances-50k-cull', 'instances', 50_000),
   rung('instances-50k', 'instances', 50_000, { cull: false }),
+  rung('batch-10k-cull', 'instances', 10_000, { mode: 'batch' }),
+  rung('batch-10k', 'instances', 10_000, { mode: 'batch', cull: false }),
+  rung('batch-50k-cull', 'instances', 50_000, { mode: 'batch' }),
+  rung('batch-50k', 'instances', 50_000, { mode: 'batch', cull: false }),
+  rung('list-10k', 'instances', 10_000, { mode: 'list', cull: false }),
+  rung('list-50k', 'instances', 50_000, { mode: 'list', cull: false }),
   rung('lights-0', 'lights', 10_000, { points: 0 }),
   rung('lights-8', 'lights', 10_000, { points: 8 }),
   rung('lights-16', 'lights', 10_000, { points: 16 }),
@@ -148,6 +176,13 @@ export function benchRungsFor(query: string | null): BenchRungDef[] {
     if (!r) throw new Error(`bench: unknown rung '${id}'`);
     return r;
   });
+}
+
+/** A `?mode=` value, or null for none; anything else throws. */
+export function benchModeFor(query: string | null): BenchMode | null {
+  if (query === null || query === '') return null;
+  if (query === 'mesh' || query === 'batch' || query === 'list') return query;
+  throw new Error(`bench: unknown mode '${query}'`);
 }
 
 declare global {
