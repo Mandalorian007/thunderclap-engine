@@ -18,6 +18,17 @@ export {
   revealDelayMs,
   type SayOptions,
 } from './caption';
+export {
+  CURSOR_CSS,
+  type CursorHost,
+  type CursorOptions,
+  type CursorRepeat,
+  createCursor,
+  ensureCursorStyles,
+  pickTarget,
+  type WorldCursor,
+  type WorldTarget,
+} from './cursor';
 export { append, type Child, focusableWithin, h } from './dom';
 export {
   createHeading,
@@ -127,6 +138,14 @@ export {
   type ExternalLinkOptions,
   externalLink,
 } from './link';
+export {
+  createLoading,
+  ensureLoadingStyles,
+  LOADING_CSS,
+  type LoadingHost,
+  type LoadingOptions,
+  type LoadingScreen,
+} from './loading';
 export { Loupe, type LoupeOptions, type LoupeView, loupeLeader } from './loupe';
 export {
   type MenuNavActions,
@@ -134,8 +153,26 @@ export {
   type MenuNavResult,
   menuNav,
 } from './menu-nav';
+export {
+  createNotifier,
+  ensureNotifyStyles,
+  NOTIFY_CSS,
+  type Notification,
+  type Notifier,
+  type NotifyAction,
+  type NotifyOptions,
+  type NotifyTone,
+} from './notify';
 export { createOverlay, type Overlay, type OverlayOptions, type Rect } from './overlay';
-export { type PadLike, PadNav, type PadNavOptions } from './padnav';
+export {
+  defaultPads,
+  type PadControl,
+  type PadDir,
+  type PadLike,
+  PadNav,
+  type PadNavOptions,
+  readPad,
+} from './padnav';
 export {
   createPerfMonitor,
   createPerfOverlay,
@@ -189,6 +226,20 @@ export {
   tokenVar,
 } from './theme';
 export { Toaster, type ToastHandle, type ToastOptions, type ToastTone } from './toast';
+export {
+  createTooltips,
+  ensureTooltipStyles,
+  placeTooltip,
+  TOOLTIP_CSS,
+  type Tooltip,
+  type TooltipHost,
+  type TooltipOptions,
+  type TooltipPlace,
+  type TooltipPlacement,
+  type TooltipSide,
+  type Tooltips,
+  type TooltipTarget,
+} from './tooltip';
 export { type ButtonOptions, button, type SliderOptions, slider, toggle } from './widgets';
 export {
   type Bar,

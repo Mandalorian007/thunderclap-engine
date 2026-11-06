@@ -146,9 +146,10 @@ await ui.caption.say('Something old is listening.', {
   - `cooldown({ size })` returns `{ element, set(fraction), ready }`: a `conic-gradient` sweep on
     `--tc-ui-sweep`, `data-ready` at 1, `aria-hidden`.
   `reticle` is a plain element; use `createReticle` from the HUD (or `ui.reticle`) for one that hides under modals.
-- `h(tag, props, ...children)` is hyperscript. It handles `class`, `style` (including `--custom`
-  properties), `dataset` and `on: { click }`. Any other prop becomes an attribute: `true` sets an
-  empty attribute and `false`/null omits it.
+- `h(tag, props, ...children)` is hyperscript. It handles `class`, `style` (an object including
+  `--custom` properties, or a `cssText` string: `h('div', { style: 'color: red' })`), `dataset`
+  and `on: { click }`. Any other prop becomes an attribute: `true` sets an empty attribute and
+  `false`/null omits it.
 - `focusableWithin(el)` lists the focusable descendants of an element, skipping `inert` and `hidden`
   subtrees.
 
@@ -506,6 +507,86 @@ declarations, and `applyTheme(el, tokens)` sets them on an element. `ensureStyle
   game on an upright phone. It reads `platform/device-mode.ts`; both stay until the layout's
   portrait forms replace them (E-010).
 
+## Tooltip: `ui.tooltip`
+
+`ui.tooltip(target, content, { delay, placement, arrow, interactive, gap })` attaches a tooltip to
+an element or a world point and returns a `Tooltip` (`element`, `target`, `visible`, `placement`
+(the side it landed on), `set(content)`, `show()`, `hide()`, `dispose()`). Every overlay has one
+shared `role="tooltip"` element (`ui.tooltips.element`, on the `toasts` layer, so it reads over a
+modal panel too); the latest `show` owns it and `ui.tooltips.active` is the tooltip showing now.
+
+- An **element** target shows after `delay` ms (default 400) of hover and at once on focus; pointer
+  leave, blur and Escape hide it. While shown the element carries `aria-describedby` pointing at
+  the tooltip. `interactive: true` keeps it up while the pointer is over the tooltip itself.
+- An **`AnchorHandle`** or a **world point** `[x, y, z]` target rides `ui.anchors(camera)` (build
+  it first, or the call throws), shows at once and hides while the point is behind the camera;
+  `ui.updateAnchors()` (which `createGame` calls each frame) re-places it.
+- `placement` is `top`, `bottom`, `left`, `right` or `auto` (default; the first of top, bottom,
+  right, left that fits). A side that would leave the layer flips to its opposite, then the box is
+  clamped in; `data-placement` on the element and `--tc-tooltip-arrow` place the arrow. The pure
+  `placeTooltip(anchor, size, frame, placement, gap)` does the sums and is exported for tests.
+- `TOOLTIP_CSS` is injected once on first use (`ensureTooltipStyles`); the plain overlay page is
+  unchanged until then. `createTooltips(host)` builds a set outside an overlay.
+- Types: `TooltipOptions`, `TooltipTarget`, `TooltipSide`, `TooltipPlacement` (a side or `auto`),
+  `TooltipPlace` (what `placeTooltip` returns), `TooltipHost` (the layers, `rect`, `frame`,
+  `units` and `anchors()` an overlay provides).
+
+## World cursor: `ui.cursor`
+
+`ui.cursor({ mode, step, at, targets, onSelect, onMove, repeat, weight, getGamepads, keys, enabled })`
+is a pad- and keyboard-driven selection cursor over the world (tactics grids, tile pickers). Call
+`cursor.update(now?)` once per frame; it reads the pads through `readPad` (the same latch as
+`PadNav`: a control is fresh when it is held this frame and was not last frame) plus the arrow
+keys and Enter (skipped when the focused control uses the arrows itself; `keys: false` turns them
+off), and `cursor.press(dir)` feeds a press from the game's own input.
+
+- `mode: 'grid'`: each fresh direction calls `step(dx, dy)` (y down); holding repeats after
+  `repeat.delay` (400 ms) every `repeat.interval` (80 ms). `at()` returns the cursor's world point
+  (or null) so the `.tc-cursor` element rides `ui.anchors()` on the `hud` layer.
+- `mode: 'targets'`: `targets()` lists `WorldTarget`s (`{ id, x, y, world }`); a press snaps to the
+  nearest in that direction by `pickTarget(from, targets, dir, weight)`: among targets with a
+  positive component along the direction, the least `along + weight × perpendicular` (default
+  weight 2) wins, so a neighbour in line beats a nearer one to the side. `cursor.target`,
+  `cursor.position`, `cursor.setTarget(t)`; `onMove(target)` on every move.
+- A or Enter calls `onSelect(target)`. While `ui.stack.hasModal` the cursor ignores the pad and
+  resets its latch (the panel has it, through `PadNav`); it resumes after the panel closes without
+  taking a press that outlived it. `enable()` / `disable()` / `dispose()`.
+- `CURSOR_CSS` is injected once on first use (`ensureCursorStyles`); `createCursor(host, opts)`
+  builds one outside an overlay. `defaultPads()` is the guarded `navigator.getGamepads()`.
+- Types: `CursorOptions`, `CursorRepeat`, `WorldCursor`, `CursorHost` (`layers.hud`, `stack.hasModal`,
+  `anchors()`), and from `padnav.ts` `PadDir` (`up | down | left | right`) and `PadControl`
+  (a `PadDir`, `activate` or `back`), the set `readPad` fills.
+
+## Loading screen: `ui.loading`
+
+`ui.loading({ title, tip, tipInterval, progress, label, reducedMotion })` pushes a full-frame,
+non-dismissible modal panel (`.tc-loading`, `chrome: 'none'`) on the `panels` layer with a title,
+a `bar` and a tip line (`role="status"`, polite; an array of tips rotates every `tipInterval` ms,
+default 4000). While it shows the overlay root carries `aria-busy="true"`, the lower layers are
+inert, the game's `Input` is blocked through `ui.stack.hasModal`, and every key but Tab is
+swallowed at the document's capture phase. `set(progress, label?)` moves the bar (the label
+replaces the percent text), `tip(text)` shows one tip and stops rotating, `progress` and
+`visible` read back, and `done()` fades it out and resolves after the transition (at once under
+reduced motion or `reducedMotion: true`; a 400 ms fallback when no `transitionend` arrives), then
+closes the panel and clears `aria-busy`. `LOADING_CSS` is injected once (`ensureLoadingStyles`);
+`createLoading(host, opts)` builds one outside an overlay. Types: `LoadingOptions`, `LoadingScreen`,
+`LoadingHost` (`root` and `stack`).
+
+## Notifications: `ui.notify`
+
+`ui.notify({ title, body, icon, tone, actions, timeout })` stacks a card top-right on the `toasts`
+layer, in `ui.notifications.element` (`role="status"`, `aria-live="polite"`; made on first use).
+Toasts stay the one-line, top-centre notice; a notification has a title, a body, an icon, a tone
+(`info`, `success`, `warn`, `danger`: the left edge), action buttons (`{ label, onClick, keep }`:
+an action dismisses the card unless `keep`) and a close button. It disappears after `timeout` ms
+(default 6000; `0` keeps it until dismissed), paused while hovered or focused; Escape inside it
+dismisses it. The handle is `{ element, open, dismiss() }`. `ui.notifications.count`,
+`dismissAll()` and `focus()` (the newest card's first button, for pad users) manage the stack; a
+game drives the actions with its pad through `menuNav(input, ui.notifications.element)`. At most
+4 are shown; the oldest goes first. `NOTIFY_CSS` is injected once (`ensureNotifyStyles`);
+`createNotifier(container, max)` builds one outside an overlay. Types: `NotifyOptions`, `NotifyTone`,
+`NotifyAction`, `Notification` (the handle), `Notifier` (the stack).
+
 ## Perf: `createPerfMonitor`, `createPerfOverlay`
 
 A frame-cost readout for demos, the bench and quality checks: the same numbers as a plain object
@@ -569,6 +650,14 @@ hud.update();
   lists are `role="menu"` of `menuitem`s, close on Escape and give the focus back to the opener.
 - Drag and drop always has a keyboard and pad path: hold Enter or Space (pad `select`) to pick up,
   arrows to the target (across grids at the edge), Enter (`select`) to drop, Escape (`back`) to cancel.
+- Tooltips are one `role="tooltip"` element per overlay; an element target names it through
+  `aria-describedby` while it shows, focus shows it without a delay and Escape hides it.
+- The world cursor answers the arrow keys and Enter as well as the pad, never steals them from a
+  focused text field, slider or select, and yields to a modal panel.
+- The loading screen is a non-dismissible modal: the root is `aria-busy`, the lower layers inert,
+  the tip line a polite live region, and Tab still moves focus while every other key is swallowed.
+- Notifications are a polite live region of cards with real buttons: pad users reach the actions
+  through `menuNav`, Escape dismisses the focused card and focus moves to the next card, not the body.
 
 ## Tests
 
@@ -576,5 +665,12 @@ hud.update();
 client→design mapping, the modal focus trap, Esc, focus restore, inert stacking, non-modal panels,
 backdrop clicks, toast caps and timers, caption typing / hold / skip / queue / reduced motion / suspend / onPlace, and
 the slider's aria-valuetext. `perf.test.ts` covers the monitor's ring, p95, dynamic counter keys
-and GPU records against a fake `RenderStats`, and the overlay's DOM under happy-dom. Layout and
+and GPU records against a fake `RenderStats`, and the overlay's DOM under happy-dom.
+`tooltip.test.ts` covers `placeTooltip` (sides, the flip, clamping, the arrow inset), the shared
+element's delay, leave, focus, Escape and hand-over, and a world point riding the anchors;
+`cursor.test.ts` covers `pickTarget`, the latch and repeat, the keys, the modal rule and the
+anchored element in targets mode; `loading.test.ts` the bar, tips, `aria-busy`, key swallowing
+and `done`; `notify.test.ts` the stack, timeouts, actions, `menuNav` and Escape; `dom.test.ts`
+the `h` string style; `styles.test.ts` the select zoom rule. `e2e/ui.spec.ts` runs the four
+harness modes (`harness/ui.html?tooltip`, `?cursor&mode=`, `?loading&stall`, `?notify`) on the matrix. Layout and
 focus were also checked once in Chromium via Playwright (not part of CI).

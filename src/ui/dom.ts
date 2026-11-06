@@ -3,7 +3,8 @@
 export type Child = Node | string | number | null | undefined | false;
 type Props = {
   class?: string;
-  style?: Partial<CSSStyleDeclaration> | Record<string, string>;
+  /** An object of properties (`--custom` ones included) or a `cssText` string. */
+  style?: Partial<CSSStyleDeclaration> | Record<string, string> | string;
   dataset?: Record<string, string>;
   /** Event listeners: `on: { click: fn }`. */
   on?: { [K in keyof HTMLElementEventMap]?: (e: HTMLElementEventMap[K]) => void };
@@ -12,7 +13,8 @@ type Props = {
 
 /**
  * Hyperscript: `h('div', { class: 'row', 'aria-label': 'x', on: { click } }, 'text', child)`.
- * Unknown props become attributes (`true` → empty attribute, `false`/null → omitted).
+ * Unknown props become attributes (`true` → empty attribute, `false`/null → omitted). `style`
+ * takes an object (`--custom` properties included) or a `cssText` string.
  */
 export function h<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -25,6 +27,10 @@ export function h<K extends keyof HTMLElementTagNameMap>(
       if (v === undefined || v === null || v === false) continue;
       if (k === 'class') el.className = String(v);
       else if (k === 'style') {
+        if (typeof v === 'string') {
+          el.style.cssText = v;
+          continue;
+        }
         for (const [sk, sv] of Object.entries(v as Record<string, string>)) {
           if (sk.startsWith('--')) el.style.setProperty(sk, sv);
           else (el.style as unknown as Record<string, string>)[sk] = sv;
