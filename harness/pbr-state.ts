@@ -2,6 +2,7 @@
  * What the PBR demo page (harness/pbr.html) publishes on `window.__harnessPbr` for
  * e2e/pbr.spec.ts. Shared by the page (harness/pbr.ts) and the spec.
  */
+import type { PerfSample } from '@thunderclap/engine/ui';
 
 /** A point on the canvas, logical px (the camera's `screen`, 1920×1080). */
 export interface PbrProbe {
@@ -47,6 +48,8 @@ export interface HarnessPbrState {
   stats: { drawCalls: number; instances: number };
   /** `gpuDiagnostics.errorCount` (WGSL compile errors, uncaptured errors). */
   gpuErrors: number;
+  /** `createPerfMonitor().sample(renderer)` after each frame (ws/perf-overlay). */
+  perf: PerfSample | null;
   /**
    * `frame.lights`: whether the sun has a colour, how many point and spot lights, shadow and fog
    * on.

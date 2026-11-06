@@ -137,6 +137,19 @@ export {
 export { createOverlay, type Overlay, type OverlayOptions, type Rect } from './overlay';
 export { type PadLike, PadNav, type PadNavOptions } from './padnav';
 export {
+  createPerfMonitor,
+  createPerfOverlay,
+  type PerfCorner,
+  type PerfFrameStats,
+  type PerfGpuStats,
+  type PerfMonitor,
+  type PerfMonitorOptions,
+  type PerfOverlay,
+  type PerfOverlayOptions,
+  type PerfSample,
+  type PerfSource,
+} from './perf';
+export {
   createRotateCard,
   type RotateCard,
   type RotateCardColors,
