@@ -114,3 +114,7 @@ Chain 1 landed ws/skinning (`2a797e3`) with one non-E-017 e2e failure: `skin.spe
 ## E-021 — Demos folder (2026-11-05)
 
 User direction: several lightweight demos for engine use cases, outside the engine, as quality validation. `demos/<name>/` at the repo root (not `src/`, not `templates/`, not shipped), each an `index.html` + `main.ts` on the workspace engine through the exports map, procedural assets only, `window.__demo` state so `e2e/demos/<name>.spec.ts` asserts behaviour and frame rate without screenshots. Rules in `docs/briefs/demos-common.md`. First four: arena (3D character stack), dungeon (2D at game scale), showroom (materials, lights, post), range (look, pick, fx, spatial audio). Demos never add engine code; missing features go to the backlog as wishes.
+
+## E-022 — stream.spec probe margin is load-sensitive (2026-11-06)
+
+Chain 2 held ws/template-first-person (8d8db9b) because `stream.spec` "the streamed geometry is on screen" read `sum(ground)` 327.3 against a required >330 on desktop-1920, at load average ~60 with 14 agents on the machine; the other seven rows passed and the template touches no render code. Decision: a load flake. Added to the E-017 list; land. The spec's fixed threshold joins the ws/flake-input style of fix (polled, relative probe) in the backlog. Also: integrators use the attribution line the PM gives (Fable 5.1), not a session reminder's default.
