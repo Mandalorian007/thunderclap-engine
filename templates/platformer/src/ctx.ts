@@ -1,23 +1,19 @@
 /**
  * The game's ctx: the engine's `EngineCtx` plus this game's nouns. `createGame` returns the
  * engine part; `main.ts` widens the same object with `Object.assign`, so every scene sees one ctx.
- * Devices never leak past the bindings below and `input/touch.ts`.
+ * Devices never leak past the bindings and touch zones below.
  */
 import type { EngineCtx } from '@thunderclap/engine';
-import type { Bindings } from '@thunderclap/engine/input';
+import type { Bindings, TouchZoneOptions, TouchZonesOptions } from '@thunderclap/engine/input';
 import type { Material } from '@thunderclap/engine/render';
 import type { Tweens } from '@thunderclap/engine/tween';
-import type { TouchZones } from './input/touch';
 import type { Level } from './levels/format';
 import type { ProgressStore } from './save/schema';
 import type { Frames } from './world/world';
 
 export type Action = 'left' | 'right' | 'jump' | 'dash' | 'pause' | 'confirm';
 
-/**
- * Keyboard and pad per action. Touch is not here: the two thumb zones read the router's pointer
- * list directly (`input/touch.ts`), because the gesture recogniser treats two fingers as a pinch.
- */
+/** Keyboard and pad per action. Touch comes through the zones below. */
 export const bindings: Bindings<Action> = {
   left: [{ key: 'ArrowLeft' }, { key: 'KeyA' }, { padButton: 14 }, { padAxis: 0, dir: -1 }],
   right: [{ key: 'ArrowRight' }, { key: 'KeyD' }, { padButton: 15 }, { padAxis: 0, dir: 1 }],
@@ -31,6 +27,40 @@ export const bindings: Bindings<Action> = {
   ],
   pause: [{ key: 'Escape' }, { key: 'KeyP' }, { padButton: 9 }],
   confirm: [{ key: 'Enter' }, { key: 'Space' }, { padButton: 0 }],
+};
+
+/**
+ * The two thumbs on a touch screen, as engine touch zones (`createTouchZones` in `main.ts`): the
+ * left half is a stick that steers (x only; a thumb's travel of `radius` CSS px is a full run,
+ * the first `deadZone` of it reads 0), the right half jumps, except its top third, which dashes.
+ * Separate zones so a second finger on the right still lands. Each zone claims its pointer from
+ * the gesture recogniser, so two thumbs never pinch.
+ */
+export const touchZones: TouchZonesOptions<Record<'move' | 'jump' | 'dash', TouchZoneOptions>> = {
+  zones: {
+    move: {
+      kind: 'stick',
+      rect: (w, h) => ({ x: 0, y: 0, w: w / 2, h }),
+      deadZone: 12 / 64,
+      radius: 64,
+    },
+    jump: {
+      kind: 'buttons',
+      rect: (w, h) => ({ x: w / 2, y: h / 3, w: w / 2, h: (2 * h) / 3 }),
+      buttons: { jump: (w, h) => ({ x: w / 2, y: h / 3, w: w / 2, h: (2 * h) / 3 }) },
+    },
+    dash: {
+      kind: 'buttons',
+      rect: (w, h) => ({ x: w / 2, y: 0, w: w / 2, h: h / 3 }),
+      buttons: { dash: (w, h) => ({ x: w / 2, y: 0, w: w / 2, h: h / 3 }) },
+    },
+  },
+  bindings: {
+    left: { zone: 'move', axis: 'x', dir: -1 },
+    right: { zone: 'move', axis: 'x', dir: 1 },
+    jump: { zone: 'jump', button: 'jump' },
+    dash: { zone: 'dash', button: 'dash' },
+  },
 };
 
 /** Keys the engine keeps from the page (no scrolling on Space or the arrows). */
@@ -48,7 +78,6 @@ export interface GameCtx extends EngineCtx<Action, ProgressStore, GameCtx> {
   readonly atlas: Material;
   readonly frames: Frames;
   readonly tweens: Tweens;
-  readonly touch: TouchZones;
   readonly run: Run;
   /** Starts (or restarts) the level at `run.levelIndex`. */
   startLevel(level: Level): void;

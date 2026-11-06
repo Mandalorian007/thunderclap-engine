@@ -1,6 +1,14 @@
 import { defineConfig } from '@playwright/test';
 import type { HarnessOptions } from './e2e/fixtures';
-import { HARNESS_PORT, HARNESS_URL, WRAPPER_PORT, WRAPPER_URL } from './e2e/ports';
+import {
+  HARNESS_PORT,
+  HARNESS_URL,
+  TEMPLATE_PORTS,
+  type TemplateName,
+  templateUrl,
+  WRAPPER_PORT,
+  WRAPPER_URL,
+} from './e2e/ports';
 
 // Engine e2e (D-041 addendum 2): verifies the engine's platform capability once for every game,
 // on the noun-free harness page (harness/). Run with `pnpm test:e2e`. The game's own e2e (tests/e2e) tests product only.
@@ -103,5 +111,13 @@ export default defineConfig<HarnessOptions>({
       reuseExistingServer: !isCI,
       timeout: 30_000,
     },
+    // One Vite dev server per template for e2e/templates.spec.ts (the template's own `pnpm dev`
+    // on a fixed port): cheaper than a build and the same code path a developer runs.
+    ...(Object.keys(TEMPLATE_PORTS) as TemplateName[]).map((name) => ({
+      command: `pnpm --filter @thunderclap/template-${name} exec vite --port ${TEMPLATE_PORTS[name]} --strictPort --host 127.0.0.1`,
+      url: templateUrl(name),
+      reuseExistingServer: !isCI,
+      timeout: 60_000,
+    })),
   ],
 });
