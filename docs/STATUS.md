@@ -57,7 +57,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | IK + root motion | ws/ik | `twoBoneIk`, `lookAt`, `extractRootMotion`, `applyRootMotionDelta`; harness `ik.html` | anim | ✅ merged `10475ed` (chain 4; 902 tests; e2e 747/95/0; snap 5/5) |
 | 5 | Anim graph | ws/anim-graph | `createAnimGraph`: states, 1D blend spaces with phase sync, conditional transitions, enter/exit hooks; harness `anim-graph.html` | anim | ✅ green at `cea21ae` (727 tests; e2e 578/92/4, all mesh.spec fog E-017); queued chain 4 after ui-hud |
 | 5 | HUD widgets | ws/ui-hud | `ui.reticle`, `ui.meter`, `ui.slots`, `ui.heading` on the overlay; harness `hud.html` | ui | ✅ green at `97e0af3` (723 tests; e2e 587/92/3, all E-017 list); queued chain 4 after ik |
-| 5 | Gesture long-press | ws/gesture-longpress | pan threshold before long-press, cumulative travel, `Gestures.onGesture` observer | gestures | ✅ green at `e8d64e7` (722 tests; snap 5/5 delta 0; e2e 552/92/6, all E-017 mesh.spec under load 43–54; A/B shows flake independent of the change); queued chain 3 after flake-input |
+| 5 | Gesture long-press | ws/gesture-longpress | pan threshold before long-press, cumulative travel, `Gestures.onGesture` observer | gestures | ✅ merged `06048c2` (chain 3; 911 tests; e2e 748/102/0; snap 5/5) |
 | 5 | Audio zones | ws/audio-zones | `audio.zones` (ambient loops, reverb sends by listener position), `Voice.follow`, `audio.update(dt)`; harness `zones.html` | audio | ✅ green at `2816026` (735 tests; e2e 596/92/2 E-017 fog); queued chain 1 after texture-registry |
 | 5 | Retargeting | ws/retarget | `createRetargetMap`, `retargetPose`, `retargetClip`; name matching; harness `retarget.html` | anim | ✅ green at `eab3f78` (753 tests; e2e 610/92/4 E-017); queued chain 4 after anim-graph |
 | 5 | Morph targets | ws/morph | glTF targets + default weights parse; `MorphBlender` CPU blend into `Mesh.update`; `sampleWeights`; `scene.morph(node)`; harness `morph.html` | assets, anim | ✅ green at `6c20bf8` (752 tests; e2e 601/92/5 E-017); queued chain 5 after audio-zones |
@@ -76,9 +76,11 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Billboards | ws/billboards | name plates, health bars, damage numbers: camera-facing quads + canvas text atlas (fx) | — | ✅ green at `54984ea` (837 tests; e2e 709/92/1 mesh fog, pre-flake-input base; billboards 24/24); queued chain 4 after debug-draw |
 | 5 | Perf overlay | ws/perf-overlay | `createPerfMonitor`/`createPerfOverlay`: frame/GPU/draw stats + sparkline; `?perf` on harness pages | — | ✅ green at `032ae68` (830 tests; e2e 694/92/8, all pre-flake-input flakes, perf.spec 16/16); queued chain 5 after morph |
 | 5 | 2D ergonomics: `input.getGamepads`, PanelStack arrows, tile layer + flipbook | ws/ergo-2d | ✅ green at `f5aa8c1` (845 tests; e2e 734/92/0); queued chain 6 after demo-range |
-| 5 | Input recording and replay (`createInputRecorder`, `createInputPlayback`, `createGame({ input: { replay } })`) | ws/input-replay | 🔧 engineer running (offset 290) |
+| 5 | Input recording and replay (`createInputRecorder`, `createInputPlayback`, `createGame({ input: { replay } })`) | ws/input-replay | ✅ green at `adda342` (888 tests; e2e 747/95/0); queued chain 6 after ergo-2d |
 | 5 | Geometry kit 2: extrude/lathe/sweep/tube/polygon, stairs/arch, tangents + `VERTEX_LAYOUT_3D_TANGENT`, weld/flatShade/projectUv/fitBounds | ws/geom-2 | 🔧 engineer running (offset 300) |
 | 5 | Camera helpers: `viewZ`, `invViewProj`, `projectMany`, `frustumCorners`, `setPerspective` parity | ws/camera-ergo | 🔧 engineer running (offset 310) |
+| 5 | UI widgets 2: reticle, bar, segmented, select, keyPrompt, stepper, cooldown | ws/ui-widgets | 🔧 engineer running (offset 320) |
+| 5 | Audio 2: beat-grid music layers, variations, reverb/lowpass sends, ducking | ws/audio-2 | 🔧 engineer running (offset 330) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
