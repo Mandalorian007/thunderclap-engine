@@ -1,0 +1,29 @@
+{
+  "name": "@thunderclap/host-capacitor",
+  "version": "0.1.0-dev",
+  "private": true,
+  "type": "module",
+  "description": "ThunderClap's Capacitor host: createCapacitorHost() fills the engine's Host interface from Capacitor's plugins for an iOS or Android store app. It knows nothing about any game and has no dependencies; the @capacitor/* plugins are the app's own (not declared here: pnpm would try to install them), handed in through the plugins option.",
+  "license": "MIT",
+  "author": "ThunderClap",
+  "exports": {
+    ".": "./src/index.ts",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "test": "vitest run",
+    "check": "pnpm typecheck && pnpm lint && pnpm test"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.6.4",
+    "@thunderclap/engine": "workspace:*",
+    "@types/node": "^26.6.6",
+    "@webgpu/types": "^0.1.74",
+    "happy-dom": "^21.0.4",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  }
+}

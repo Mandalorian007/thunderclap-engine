@@ -296,6 +296,13 @@ lists the exported names; ARCHITECTURE.md *Layout* describes the model.
   `effectiveInsets(rect, viewport, insets)`; `Insets` is `{ top, right, bottom, left }`,
   `NO_INSETS` is all zero, and `readSafeArea(doc?)` reads `env(safe-area-inset-*)` (or the
   `--tc-safe-*` overrides).
+- **Host safe area** (ws/host-mobile). `followSafeArea(layout, source: SafeAreaSource)` sets
+  `layout.setSafeArea(source.insets())` now and on every `source.watch` report, so the regions
+  keep clear of a notch and a home indicator; it returns an unsubscribe that also clears the
+  override. A `SafeAreaSource` is `{ insets(): Insets; watch(fn): () => void }`, which a
+  `Host.safeArea` satisfies; `createGame` calls it with `host.safeArea` when the host has one.
+  The layout keeps only the part of each inset the overlay reaches into (`effectiveInsets`), so a
+  letterboxed canvas is not padded twice.
 
 ## Anchors: `ui.anchors(camera)`
 

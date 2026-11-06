@@ -251,3 +251,130 @@ describe('default host', () => {
     expect(await link?.copy()).toBe('copied');
   });
 });
+
+describe('web host lifecycle', () => {
+  const setHidden = (hidden: boolean) => {
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => (hidden ? 'hidden' : 'visible'),
+    });
+    document.dispatchEvent(new Event('visibilitychange'));
+  };
+  afterEach(() => setHidden(false));
+
+  it('is active while visible, background when hidden or paged out, and reports each change once', () => {
+    const win = fakeWin({ addEventListener: vi.fn(), removeEventListener: vi.fn() });
+    const host = createWebHost({ win });
+    const seen: string[] = [];
+    expect(host.lifecycle?.state()).toBe('active');
+    const off = host.lifecycle!.watch((s) => seen.push(s));
+    setHidden(true);
+    setHidden(true);
+    expect(host.lifecycle?.state()).toBe('background');
+    setHidden(false);
+    expect(seen).toEqual(['background', 'active']);
+    // freeze (Android) counts as paged out until resume, whatever visibilityState says.
+    document.dispatchEvent(new Event('freeze'));
+    expect(host.lifecycle?.state()).toBe('background');
+    document.dispatchEvent(new Event('resume'));
+    expect(seen).toEqual(['background', 'active', 'background', 'active']);
+    // pagehide / pageshow go through the window.
+    const add = win.addEventListener as unknown as ReturnType<typeof vi.fn>;
+    expect(add.mock.calls.map((c) => c[0])).toEqual(['pagehide', 'pageshow']);
+    (add.mock.calls[0]![1] as () => void)();
+    expect(host.lifecycle?.state()).toBe('background');
+    (add.mock.calls[1]![1] as () => void)();
+    expect(seen).toEqual(['background', 'active', 'background', 'active', 'background', 'active']);
+    off();
+    setHidden(true);
+    expect(seen).toHaveLength(6);
+    const remove = win.removeEventListener as unknown as ReturnType<typeof vi.fn>;
+    expect(remove.mock.calls).toHaveLength(2);
+  });
+});
+
+describe('web host haptics', () => {
+  it('is unavailable without navigator.vibrate and every call is a no-op', () => {
+    const host = createWebHost({ win: fakeWin() });
+    expect(host.haptics?.available()).toBe(false);
+    expect(() => {
+      host.haptics?.impact('light');
+      host.haptics?.notification('error');
+      host.haptics?.vibrate(50);
+    }).not.toThrow();
+  });
+
+  it('maps impact, notification and vibrate onto navigator.vibrate', () => {
+    const vibrate = vi.fn((_pattern: number | number[]) => true);
+    const host = createWebHost({ win: fakeWin({ navigator: { vibrate } }) });
+    expect(host.haptics?.available()).toBe(true);
+    host.haptics?.impact('light');
+    host.haptics?.impact('heavy');
+    host.haptics?.notification('success');
+    host.haptics?.vibrate(50.4);
+    host.haptics?.vibrate(0);
+    expect(vibrate.mock.calls.map((c) => c[0])).toEqual([10, 35, [10, 40, 10], 50]);
+    // A refusal is swallowed.
+    vibrate.mockImplementation(() => {
+      throw new Error('no gesture');
+    });
+    expect(() => host.haptics?.vibrate(5)).not.toThrow();
+  });
+});
+
+describe('web host safe area', () => {
+  it('reads the probe (env()/--tc-safe-* padding), caches until a resize, and reports changes', () => {
+    // happy-dom does not resolve env(); the probe's computed padding is stubbed. The CSS itself
+    // is the layout's `readSafeArea` rule, which e2e/layout.spec.ts exercises under CDP insets.
+    const padding = { top: '0px', right: '0px', bottom: '0px', left: '0px' };
+    const probes: Element[] = [];
+    const listeners = new Map<string, () => void>();
+    const win = fakeWin({
+      getComputedStyle: (el: Element) => {
+        probes.push(el);
+        return {
+          paddingTop: padding.top,
+          paddingRight: padding.right,
+          paddingBottom: padding.bottom,
+          paddingLeft: padding.left,
+        };
+      },
+      addEventListener: (t: string, fn: () => void) => listeners.set(t, fn),
+      removeEventListener: vi.fn(),
+    });
+    const host = createWebHost({ win });
+    const sa = host.safeArea!;
+    expect(sa.insets()).toEqual({ top: 0, right: 0, bottom: 0, left: 0 });
+    expect(probes).toHaveLength(1);
+    expect(probes[0]!.isConnected).toBe(false);
+    expect((probes[0] as HTMLElement).style.padding).toContain('env(safe-area-inset-top');
+    padding.top = '44px';
+    padding.bottom = '34px';
+    // Cached: no re-read until the window resizes.
+    expect(sa.insets().top).toBe(0);
+    expect(probes).toHaveLength(1);
+    const seen: number[] = [];
+    const off = sa.watch((i) => seen.push(i.top));
+    listeners.get('resize')!();
+    expect(seen).toEqual([44]);
+    expect(sa.insets()).toEqual({ top: 44, right: 0, bottom: 34, left: 0 });
+    // The same values again: no report.
+    listeners.get('resize')!();
+    expect(seen).toEqual([44]);
+    padding.top = '59px';
+    listeners.get('orientationchange')!();
+    expect(seen).toEqual([44, 59]);
+    off();
+    padding.top = '0px';
+    listeners.get('resize')!();
+    expect(seen).toEqual([44, 59]);
+    expect(sa.insets().top).toBe(0);
+    expect(document.querySelectorAll('div')).toHaveLength(0);
+  });
+
+  it('is all zero when there is no body to probe', () => {
+    const doc = { body: null } as unknown as Document;
+    const host = createWebHost({ win: fakeWin({ document: doc, getComputedStyle: () => ({}) }) });
+    expect(host.safeArea?.insets()).toEqual({ top: 0, right: 0, bottom: 0, left: 0 });
+  });
+});

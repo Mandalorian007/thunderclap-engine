@@ -8,6 +8,7 @@ import {
   effectiveInsets,
   FORM_FACTORS,
   type FormFactor,
+  followSafeArea,
   formSpec,
   type Insets,
   type LayoutSpec,
@@ -501,5 +502,67 @@ describe('overlay.layout (DOM)', () => {
     dm.setScale(0.3);
     expect(ov!.root.style.getPropertyValue('--tc-tap-min')).toBe('44px');
     dm.destroy();
+  });
+});
+
+describe('followSafeArea', () => {
+  it('pads the layout by the source now and on every report, and hands back on unsubscribe', () => {
+    const calls: (Insets | null)[] = [];
+    let report: ((i: Insets) => void) | null = null;
+    let unwatched = 0;
+    const off = followSafeArea(
+      { setSafeArea: (i) => calls.push(i) },
+      {
+        insets: () => ({ top: 44, right: 0, bottom: 34, left: 0 }),
+        watch: (fn) => {
+          report = fn;
+          return () => {
+            unwatched++;
+          };
+        },
+      },
+    );
+    expect(calls).toEqual([{ top: 44, right: 0, bottom: 34, left: 0 }]);
+    report!({ top: 0, right: 59, bottom: 0, left: 59 });
+    expect(calls[1]).toEqual({ top: 0, right: 59, bottom: 0, left: 59 });
+    // A copy, not the source's object.
+    const src = { top: 1, right: 2, bottom: 3, left: 4 };
+    report!(src);
+    expect(calls[2]).toEqual(src);
+    expect(calls[2]).not.toBe(src);
+    off();
+    expect(unwatched).toBe(1);
+    expect(calls[3]).toBeNull();
+  });
+
+  it('moves the top region down and the bottom region up in the DOM layout', () => {
+    document.body.innerHTML = '';
+    (window as unknown as { happyDOM: { setViewport(v: object): void } }).happyDOM.setViewport({
+      width: 1280,
+      height: 720,
+    });
+    const parent = sizedParent({ w: 1280, h: 720 });
+    const ov = createOverlay({
+      parent,
+      caption: { reducedMotion: true },
+      layout: { classify: () => 'desktop', collapseEmpty: false },
+    });
+    ov.setFrame({ x: 0, y: 0, width: 1280, height: 720 });
+    expect(ov.layout.state.regions.top!.y).toBe(0);
+    let report: ((i: Insets) => void) | null = null;
+    followSafeArea(ov.layout, {
+      insets: () => ({ top: 44, right: 0, bottom: 34, left: 0 }),
+      watch: (fn) => {
+        report = fn;
+        return () => {};
+      },
+    });
+    const after = ov.layout.state;
+    expect(after.regions.top!.y).toBe(44);
+    const bottom = after.regions.bottom!;
+    expect(720 - (bottom.y + bottom.height)).toBe(34);
+    report!({ top: 0, right: 0, bottom: 0, left: 0 });
+    expect(ov.layout.state.regions.top!.y).toBe(0);
+    ov.destroy();
   });
 });

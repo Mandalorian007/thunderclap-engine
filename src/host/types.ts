@@ -2,14 +2,17 @@
  * The host: what the page or shell the game runs in can do for it (D-041, ARCHITECTURE.md
  * "Host"). The engine reaches the outside world only through this: frame scheduling, opening a
  * link, copying text, fullscreen, and where saves are kept. `createWebHost()` (host/web.ts) is the browser,
- * at top level or in a frame such as itch.io's; a later `createElectronHost()` satisfies the same
- * interface through a preload bridge, and adds `window`.
+ * at top level or in a frame such as itch.io's; `createElectronHost()` (`@thunderclap/host-electron`)
+ * satisfies the same interface through a preload bridge and adds `window`;
+ * `createCapacitorHost()` (`@thunderclap/host-capacitor`) fills it from Capacitor's plugins for a
+ * store app. The optional facets `lifecycle`, `haptics` and `safeArea` (ws/host-mobile) are what
+ * a mobile shell adds and the web host can also answer.
  */
 import type { CopyResult, EmbedContext, LinkActivation, OpenResult } from '../platform/links';
 import type { StorageLike } from '../save/storage';
 
 /** Which implementation this is. */
-export type HostKind = 'web' | 'electron' | 'xr';
+export type HostKind = 'web' | 'electron' | 'xr' | 'capacitor';
 
 /**
  * Where saves are kept. `open()` returns a working backend right now, or null when there is
@@ -48,6 +51,60 @@ export interface HostWindow {
   setTitle?(title: string): void;
 }
 
+/** Whether the app is in front of the player or paged out (a hidden tab, a backgrounded app). */
+export type HostLifecycleState = 'active' | 'background';
+
+/**
+ * The app's lifecycle (ws/host-mobile). `createGame` stops requesting frames and flushes the
+ * save on `background` and starts them again on `active`; a game autosaves from
+ * `hooks.lifecycle`. The web host reads it from `visibilitychange` and `pagehide`/`pageshow`; a
+ * store app's host reads it from the shell (Capacitor's `appStateChange`).
+ */
+export interface HostLifecycle {
+  state(): HostLifecycleState;
+  /** Calls `fn` on every change (never twice with the same state). Returns unsubscribe. */
+  watch(fn: (state: HostLifecycleState) => void): () => void;
+}
+
+export type HapticImpact = 'light' | 'medium' | 'heavy';
+export type HapticNotification = 'success' | 'warning' | 'error';
+
+/**
+ * Haptic feedback. Every call is fire-and-forget and safe when `available()` is false (it does
+ * nothing). The web host maps everything onto `navigator.vibrate`; a store app's host onto the
+ * platform's haptics engine.
+ */
+export interface HostHaptics {
+  /** True when the device can produce any haptic at all. */
+  available(): boolean;
+  /** A short tap of the given weight, for a press or a landing. */
+  impact(style: HapticImpact): void;
+  /** A patterned buzz for an outcome. */
+  notification(kind: HapticNotification): void;
+  /** A plain vibration of `ms` milliseconds. */
+  vibrate(ms: number): void;
+}
+
+/** Safe-area insets in CSS px: what a notch, a home indicator or rounded corners cover. */
+export interface HostInsets {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
+/**
+ * The viewport's safe-area insets, CSS px. The UI layout pads its regions by them
+ * (`followSafeArea` in `ui/layout`). The web host reads `env(safe-area-inset-*)` and re-reads
+ * on resize.
+ */
+export interface HostSafeArea {
+  /** The insets now. The object is reused: copy it to keep it. */
+  insets(): Readonly<HostInsets>;
+  /** Calls `fn` when the insets change (a rotation, a resize). Returns unsubscribe. */
+  watch(fn: (insets: Readonly<HostInsets>) => void): () => void;
+}
+
 /**
  * Where frames come from: the display's refresh (`requestAnimationFrame` in a browser), a
  * test's manual stepping, later an XR session's `requestAnimationFrame`. `GameLoop` schedules
@@ -81,4 +138,10 @@ export interface Host extends FrameSource {
   readonly storage: HostStorage;
   /** Desktop window controls, when the host has a window of its own. */
   readonly window?: HostWindow;
+  /** The app's foreground/background state, when the host can tell (web and capacitor do). */
+  readonly lifecycle?: HostLifecycle;
+  /** Haptic feedback, when the host offers any (`available()` says whether the device does). */
+  readonly haptics?: HostHaptics;
+  /** The viewport's safe-area insets, when the host can measure them. */
+  readonly safeArea?: HostSafeArea;
 }
