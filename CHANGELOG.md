@@ -4,6 +4,7 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 
 ## Next (unreleased)
 
+- World panels (ws/ui-world-panel): `createWorldPanel(renderer, { width, height, resolution?, theme?, background?, billboard?, headLocked? })` paints a widget set (`worldLabel`, `worldButton`, `worldToggle`, `worldSlider`, `worldList`, `worldProgress`) with Canvas2D in the theme's tokens onto one blended quad in the world, or head-locked in front of the camera (`update(camera)`, no depth test). Widgets `set` only what changed; the panel repaints the dirty union and uploads it once per frame at most (`stats { repaints, uploads, bytes }`). `worldPanelTarget(panel)` is a router `HitTester`, so mouse, touch, pad-cursor and XR rays press the same buttons; `panel.poll(router.pointers)` drives hover, press and release; `focusNext/Prev`, `activate` and `key(event)` drive it without a ray. Harness `world-panel.html`, spec `e2e/world-panel.spec.ts`. A Worker `OffscreenCanvas` is out of scope.
 - `templates/third-person` (`@thunderclap/template-third-person`, ws/template-third-person): a copyable third-person action game: a procedurally generated skinned glb parsed at startup, `createAnimGraph`, `Follow` with zoom, two-bone foot IK on a `geom` heightfield, root motion, `lookAt`, three cosmetic sockets via `attachTransform`, anchored enemy plates, PBR with shadows and fog. New root scripts `template:third-person` and `check:template-third-person`; `pnpm check` runs the latter.
 
 ### Repository
