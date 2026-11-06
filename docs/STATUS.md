@@ -32,8 +32,9 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 4 | 3D particles | ws/particles-3d | `ParticleSystem` in world space with camera billboarding, depth, soft fade and lit/emissive modes; `EmitParams` gains 3D position, velocity, gravity, wind; weather page on the matrix; 2D particles pixel-identical | lights | ✅ merged `767228f` (541 tests; e2e 470/52; `space: 'world'`, soft fade, `lit`, 3D emit) |
 | 4 | Texture arrays | ws/texture-array | `createTextureArray`/`loadTextureArray` with GPU mip generation, `Texture.mipLevels`, a sampler kind for it, stream page textures its chunks; documented | mesh-stream | ✅ merged `e96a9e8` (530 tests; e2e 454/52; `loadTextureArray`, `generateMipmaps`, `viewDimension` on `MaterialDesc`) |
 | 4 | Spatial audio | ws/spatial-audio | `audio.listener` (position, orientation) and `PlayOptions.at` / `Voice.setPosition` through a `PannerNode` per spatial voice, with a 2D stereo-pan shorthand; unit tests on a fake `AudioContext`; documented | — | ✅ merged `6c96af8` (490 tests; `audio.listener`, `PlayOptions.at/spatial`, `Voice.setPosition/setDirection`) |
-| 4 | WebXR | ws/xr | `createXrHost(session)` as a `FrameSource`; `XrSurface` giving a `SceneTarget` per eye per frame; per-eye `Camera`s from `XRView`; `XrPointerSource` for controllers/hands; `createGame({ xr })` + `ctx.xr.enter()/exit()`; unit tests on a fake XR system; harness `xr.html` boots on the matrix | two-views, input-rays | 🔧 in progress |
-| 5 | glTF | ws/gltf | `parseGltf` (.glb/.gltf, engine-free) and `loadGltf(renderer, doc)` → meshes in `VERTEX_LAYOUT_3D`, transforms, base-colour textures, `GltfScene.draw`; `@thunderclap/engine/assets`; harness `gltf.html` on the matrix; static geometry only | texture-array, cull | ✅ green at `8812877` (557 tests; e2e 478/52); merging |
+| 4 | WebXR | ws/xr | `createXrHost(session)` as a `FrameSource`; `XrSurface` giving a `SceneTarget` per eye per frame; per-eye `Camera`s from `XRView`; `XrPointerSource` for controllers/hands; `createGame({ xr })` + `ctx.xr.enter()/exit()`; unit tests on a fake XR system; harness `xr.html` boots on the matrix | two-views, input-rays | ✅ green at `fdd4127` (512 tests; e2e 414/36); merging |
+| 5 | XR post per eye | ws/xr-post | post stack runs per eye into the projection layer; `present: false` path kept; fake-XR test | xr | 🔧 in progress (on ws/xr) |
+| 5 | glTF | ws/gltf | `parseGltf` (.glb/.gltf, engine-free) and `loadGltf(renderer, doc)` → meshes in `VERTEX_LAYOUT_3D`, transforms, base-colour textures, `GltfScene.draw`; `@thunderclap/engine/assets`; harness `gltf.html` on the matrix; static geometry only | texture-array, cull | ✅ merged `57706f1` (579 tests; e2e 494/52; meshes carry primitive bounds) |
 | 5 | glTF skins + animations | ws/gltf-anim | `GltfDocument.skins`/`animations` in `anim` shapes, `JOINTS_0`/`WEIGHTS_0`, `interleaveSkinned`, `skeletonFromSkin`; tests on a generated rigged GLB | gltf, anim (shape) | 🔧 in progress (on ws/gltf) |
 | 5 | Trails | ws/trails | `Trail` ribbon in 2D or world space: ring buffer into one `Mesh` range, width/colour curves, camera or axis facing; harness `trails.html` | particles-3d | 🔧 in progress |
 | 5 | Shadow casters vs cull | ws/shadow-cull | shadow pass draws casters inside the sun box regardless of the view frustum; `stats.shadowDraws` | shadows, cull | 🔧 in progress |
@@ -56,7 +57,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 
 - Doc sweep 3; a Last Rune and Forgewilds "what the engine now offers" note for their PMs.
 - Rule from ws/cull: perspective cameras cull by default, so a 3D harness asserting `stats.instances` counts `culled` too.
-- Post stack per eye in XR (after ws/xr); spot lights and per-light layer masks (after ws/shadows).
+- Spot lights and per-light layer masks (after ws/shadows).
 - Character pipeline, stage 2 (E-015): glTF skins + animations into `anim`/`skinning`; attachment sockets for cosmetics; a `templates/third-person` showcase; GPU picking.
 
 ## Backlog (from engineer reports, unscheduled)
