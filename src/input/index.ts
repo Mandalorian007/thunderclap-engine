@@ -1,4 +1,12 @@
 export {
+  Follow,
+  type FollowCamera,
+  type FollowMode,
+  type FollowObstacle,
+  type FollowOptions,
+  type FollowTarget,
+} from './follow';
+export {
   type DragGesture,
   type GestureAttachOptions,
   type GestureDevice,

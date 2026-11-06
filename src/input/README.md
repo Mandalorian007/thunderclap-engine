@@ -194,5 +194,30 @@ walk(look.move.x, look.move.y);                  // y > 0 is forward, length ≤
 - Feed methods for tests and replays: `mouseMove(dx, dy)`, `touchDown(id, x, y, inMoveZone)`, `touchMove`, `touchUp`, `cancelAll`. `attach(el)`/`detach()` are called by `Input.attach`/`detach`.
 - Types: `LookOptions`, `LookTouchOptions` (`moveZone`, `deadzone`, `radius`, `sensitivity`), `MoveZone`, `LookKeys`, `LookStick`, `LookEvents`. No allocation per tick.
 
+## Follow
+
+`Follow` is a third-person camera that follows a target, orbits from the same `look` deltas `Look` reports, swings in on obstacles the game reports, and becomes a first-person camera with one assignment. It drives any `FollowCamera` (`Pick<Camera, 'lookAt'>`; the renderer's `Camera`) through `lookAt` each `update(dt)`, so the orientation maths stays here and nothing allocates per frame.
+
+```ts
+import { Follow, Input, Look } from '@thunderclap/engine/input';
+
+const follow = new Follow(camera, { distance: 5, shoulder: [0.6, 0], obstacle: world.lineOfSight });
+follow.target = player;                 // { position: [x, y, z] | Float32Array; yaw?: number }
+follow.setLook(look);                   // the Look linked to the Input; Follow only reads look.look
+
+// each tick, after input.update():
+follow.update(dt);                      // yaw/pitch from the look, clamp, follow, test, camera.lookAt
+if (input.pressed('view')) follow.mode = follow.mode === 'third' ? 'first' : 'third';
+if (input.pressed('zoomOut')) follow.zoom(1);   // Look has no zoom input: bind the wheel or a button
+```
+
+- **Conventions** match `Look` and the look harness: `yaw` 0 looks down -z and positive turns right; positive `pitch` looks up, so in third person the camera sinks below the pivot and a negative pitch (the default, -0.35) raises it. The pivot is `target.position + (0, eyeHeight, 0)` (1.6) shifted by `shoulder` `[right, up]` along the camera's right and up; the eye sits `distance` behind it along the view direction and the camera looks at the pivot. `pitch` is clamped to `pitchMin..pitchMax` (-1.2..1.2) every update.
+- **Smoothing**: `smoothing` (seconds, a time constant; 0.12; 0 follows exactly) eases the pivot towards the target, so a moving character is followed with a little lag while the orbit answers the look at once. `snap()` forgets the lag (teleports, scene changes).
+- **Obstacles** (`FollowObstacle`, `(from, to, outHit) => boolean`): the engine has no world, so the game tests the line from the pivot to the wanted eye and writes the first hit into `outHit`. The camera moves to the hit minus `margin` (0.2); `currentDistance` is what it used (`distance` stays what was wanted). It snaps in and eases back out with `smoothing`.
+- **Zoom**: `zoom(steps)` steps `distance` by `zoomStep` (0.5) within `minDistance..maxDistance` (1..12). `Look` offers no zoom axis, so the game binds the wheel or pad buttons through `Input`.
+- **Modes** (`FollowMode`): `mode = 'first'` puts the eye at `target.position + eyeHeight` looking along the same yaw and pitch, with no lag, shoulder or obstacle test, so a game toggles views with one assignment and the look continues where it was.
+- `realign` (seconds; 0 = off) eases `yaw` back to `target.yaw` while the look is still. `position`, `pivot` and `forward` (`Vec3`) are what the last update placed; read them for audio listeners, anchors or movement relative to the camera.
+- Types: `FollowOptions` (`distance`, `minDistance`, `maxDistance`, `shoulder`, `pitchMin`, `pitchMax`, `smoothing`, `eyeHeight`, `zoomStep`, `obstacle`, `margin`, `realign`, `yaw`, `pitch`, `mode`), `FollowTarget`, `FollowCamera`, `FollowMode`, `FollowObstacle`. `harness/follow.html` shows it: a capsule between walls, `V` toggles the mode.
+
 ## Testing / automation
 The low-level feed methods (`keyDown`, `keyUp`, `buttonDown`, `buttonUp`, `wheel`, `pointerAt`, `releaseAll`) are public, so tests, replays and the automated playtest can drive input without a DOM. Pass `getGamepads` to inject pads.
