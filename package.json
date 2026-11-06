@@ -35,6 +35,7 @@
     "./post": "./src/post/index.ts",
     "./render": "./src/render/index.ts",
     "./save": "./src/save/index.ts",
+    "./tween": "./src/tween/index.ts",
     "./ui": "./src/ui/index.ts",
     "./testing": "./src/render/fake-gpu.ts",
     "./package.json": "./package.json"
