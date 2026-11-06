@@ -72,7 +72,10 @@ describe('createTouchZones', () => {
         moveLeft: { zone: 'move', axis: 'x', dir: -1 },
         moveRight: { zone: 'move', axis: 'x', dir: 1 },
         moveUp: { zone: 'move', axis: 'y', dir: -1 },
-        moveDown: [{ zone: 'move', axis: 'y', dir: 1 }, { zone: 'nav', swipe: 'down' }],
+        moveDown: [
+          { zone: 'move', axis: 'y', dir: 1 },
+          { zone: 'nav', swipe: 'down' },
+        ],
         jump: { zone: 'act', button: 'jump' },
         dash: { zone: 'nav', swipe: 'right' },
       },
