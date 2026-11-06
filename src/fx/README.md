@@ -117,6 +117,52 @@ trail.clear();
   options and `push(i, …)`, `count(i)`, `pointAt(i, j, out)`, `clear(i?)`; it packs the ribbons
   contiguously and rewrites its index buffer each frame.
 
+## Debug draw
+
+World-space lines without a mesh: wire boxes and spheres, axes, arrows, rays, grids, circles,
+paths and frustums, for a game, a demo or a test. Every call appends line segments (two
+vertices of xyz + rgba, 7 floats each) to one CPU `Float32Array`; `draw(pass, frame)` uploads
+the used range with a single `writeBuffer` and records one `'line-list'` draw with the pipeline
+for `frame.depthFormat` (built on first use, so the same object works under a 2D camera and a
+depth camera). Lines are 1 px wide (WebGPU `line-list`; no width, no anti-aliasing), unlit and
+alpha blended, and never write depth.
+
+```ts
+const debug = createDebugDraw(renderer, {
+  capacity: 16384,     // segments before the array and buffer grow by 1.5×
+  depth: 'test',       // or 'always': no depth test, shows through walls
+  retain: false,       // true keeps the segments after draw (static scenes)
+});
+debug.line(a, b, 0xff0000ff);                       // colours: 0xRRGGBBAA or [r, g, b, a]
+debug.ray(origin, dir, 2, [1, 1, 0]);               // dir normalised here
+debug.arrow(a, b, 0xffffffff, 0.2);                 // head length (default 15%)
+debug.box(center, halfExtents, 0x00ff00ff, transform.quaternion);
+debug.wireSphere(center, 0.5, 0x00ffffff, 12);      // 3 great circles of 2 × rings segments
+debug.axes(transform, 1);                           // or a 3×4 row-major matrix; x red, y green, z blue
+debug.grid([0, 0, 0], 20, 1, 0x404040ff);           // XZ plane
+debug.circle(center, [0, 1, 0], 1, 0xffffffff, 32);
+debug.path(points, 0xffffffff, 3, 0);               // Float32Array | number[], stride, offset, count?
+debug.frustum(invViewProj, 0xff00ffff);             // column-major inverse view-projection
+frame.drawable(debug);                              // inside the scene pass; clears unless retain
+```
+
+- `createDebugDraw(renderer, opts?: DebugDrawOptions)` returns a `DebugDraw` (a `Drawable`):
+  the shape calls above, `clear()`, `draw(pass, frame)`, `destroy()`, and read-only `count`
+  (segments appended), `capacity` (segments before the next growth) and `uploads`
+  (`writeBuffer` calls so far). `DEBUG_VERTEX_FLOATS` is 7; `DEBUG_DRAW_WGSL` is the shader.
+- Points (`DebugVec3`) are `[x, y, z]`, any typed array or an `{ x, y, z }` such as
+  `Transform.position`; a rotation (`DebugQuat`) is `[x, y, z, w]` or `Transform.quaternion`.
+  A `DebugColor` is `[r, g, b, a]` in linear 0..1 (alpha defaults to 1) or a packed
+  `0xRRGGBBAA` whose bytes are divided by 255.
+- Segment counts: `line` and `ray` 1, `arrow` 5, `box` and `frustum` 12, `wireSphere` `6 ×
+  rings`, `axes` 3, `grid` `2 × (floor(size / step) + 1)`, `circle` `segments`, `path`
+  `count - 1`.
+- Growth happens on the CPU array when a call needs more room (1.5× until it fits); the GPU
+  buffer is recreated at the next `draw`. After the capacity settles nothing allocates per
+  frame. `draw` records nothing when there are no segments.
+- `frame.drawable(debug, order)` places the lines in draw order like any drawable; with
+  `depth: 'test'` they hide behind opaque geometry already drawn, so draw them after the scene.
+
 ## Light helpers
 
 Pure functions of time; feed the result into a tint, emissive or light intensity.
