@@ -8,6 +8,7 @@ import type { SamplerKind, TextureLike } from './texture';
  * - `@binding(1)` `sampler`: present when `textures > 0`
  * - `@binding(2 + i)` `texture_2d<f32>`: one per texture slot (`texture_2d_array<f32>` for a
  *   slot whose `viewDimension` is `'2d-array'`)
+ * - `@binding(16 + i)` (`BUFFER_BINDING_BASE`) `var<storage, read>`: one per `buffers` entry
  */
 export interface BindingDesc {
   uniformBytes?: number;
@@ -22,7 +23,15 @@ export interface BindingDesc {
   viewDimension?: GPUTextureViewDimension | readonly GPUTextureViewDimension[];
   /** Which stages see the bindings. Default fragment + vertex. */
   visibility?: GPUShaderStageFlags;
+  /**
+   * Read-only storage buffers, bound whole at `@binding(BUFFER_BINDING_BASE + i)` (a
+   * `SkinPalette.buffer`, a lookup table). Swap one later with `BindingSet.setBuffer`.
+   */
+  buffers?: readonly GPUBuffer[];
 }
+
+/** First binding of `BindingDesc.buffers` (textures stop at 15, so up to 14 texture slots). */
+export const BUFFER_BINDING_BASE = 16;
 
 /** Extra `BindingSet` behaviour. */
 export interface BindingSetOptions {
@@ -35,7 +44,9 @@ export interface BindingSetOptions {
 }
 
 export function hasBindings(desc: BindingDesc): boolean {
-  return (desc.uniformBytes ?? 0) > 0 || (desc.textures ?? 0) > 0;
+  return (
+    (desc.uniformBytes ?? 0) > 0 || (desc.textures ?? 0) > 0 || (desc.buffers?.length ?? 0) > 0
+  );
 }
 
 /** The view dimension of texture slot `slot` under `desc.viewDimension` (default `'2d'`). */
@@ -98,6 +109,14 @@ export function createBindingLayout(
       });
     }
   }
+  const nb = desc.buffers?.length ?? 0;
+  for (let i = 0; i < nb; i++) {
+    entries.push({
+      binding: BUFFER_BINDING_BASE + i,
+      visibility: vis,
+      buffer: { type: 'read-only-storage' },
+    });
+  }
   return device.createBindGroupLayout({ label, entries });
 }
 
@@ -122,6 +141,7 @@ export class BindingSet {
   /** Byte distance between per-draw blocks (block size rounded up to the offset alignment). */
   readonly stride: number;
   private readonly views: GPUTextureView[];
+  private readonly buffers: GPUBuffer[];
   private group: GPUBindGroup | null = null;
   private readonly cache: { views: GPUTextureView[]; group: GPUBindGroup }[] = [];
   private staging: Uint8Array<ArrayBuffer> | null = null;
@@ -154,6 +174,7 @@ export class BindingSet {
     for (let i = 0; i < this.views.length; i++) {
       if (slotViewDimension(desc, i) === '2d-array') this.views[i] = whiteArrayView(device);
     }
+    this.buffers = desc.buffers ? [...desc.buffers] : [];
   }
 
   setUniforms(data: BufferSource, byteOffset = 0): void {
@@ -243,6 +264,16 @@ export class BindingSet {
     this.group = null;
   }
 
+  /** Rebind storage buffer slot `i` (`@binding(BUFFER_BINDING_BASE + i)`); groups rebuild lazily. */
+  setBuffer(slot: number, buffer: GPUBuffer): void {
+    if (slot < 0 || slot >= this.buffers.length) {
+      throw new Error(`${this.label}: buffer slot ${slot} out of range`);
+    }
+    if (this.buffers[slot] === buffer) return;
+    this.buffers[slot] = buffer;
+    this.invalidateGroups();
+  }
+
   /** Build a bind group for an explicit set of views (callers cache it). */
   createGroup(views: readonly GPUTextureView[] = this.views): GPUBindGroup {
     const entries: GPUBindGroupEntry[] = [];
@@ -260,6 +291,9 @@ export class BindingSet {
         entries.push({ binding: 2 + i, resource: v });
       });
     }
+    this.buffers.forEach((b, i) => {
+      entries.push({ binding: BUFFER_BINDING_BASE + i, resource: { buffer: b } });
+    });
     return this.device.createBindGroup({
       label: `${this.label}-group`,
       layout: this.layout,
