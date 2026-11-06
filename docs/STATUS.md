@@ -116,6 +116,8 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Nav 4: area types + costs on the navmesh, dynamic obstacles (carve), time-sliced path queue, corridors + crowd clamped to the mesh, mesh flow field, `directionAt` step cost, cliff-aware `hasLineOfWalkable` | ws/nav-4 | 🔧 dispatched from `9cd1a2f` (offset 670) |
 | 5 | Demo voxel 2: migrate `demos/voxel` onto `@thunderclap/engine/voxel` (grid, mesher worker, culled chunks, DDA pick, uv prelude, water origin, sky floor); riser triangle re-checked | ws/demo-voxel-2 | 🔧 dispatched from `2067ad7` (offset 680) |
 | 5 | Audio 4: occlusion via a game probe + pooled per-voice lowpass, Doppler, voice filters, audio sprites, streamed music, background flag, `Voice.sendCount`, voice adapter, `Transform.changed` | ws/audio-4 | 🔧 dispatched from `262223b` (offset 690) |
+| 5 | UI 4: `Anchors.frame` shared by tooltip/cursor, `PanelStack.padOwner` latch shared by PadNav/cursor, world panel `attach(input)` on `onUpdated`, float numbers, ring + compass, minimap | ws/ui-4 | 🔧 dispatched from `9beb576` (offset 700) |
+| 5 | Template sweep: platformer onto `createTouchZones`/`createFollow2D`/`createParallax`, third-person onto `createStandardMaterial({ skin })` + `Look` orbit, first-person `lockOnFirstClick`, puzzle drift check, `e2e/templates.spec.ts` boot smoke per template | ws/template-sweep | 🔧 dispatched from `9beb576` (offset 710) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
