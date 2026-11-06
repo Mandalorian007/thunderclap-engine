@@ -24,6 +24,7 @@ Your worktree may start from an old commit. First `git reset --hard main` (or th
 
 - `pnpm check` is green (typecheck, Biome, boundaries, Vitest, host-electron).
 - **E2E (E-031).** Engineers do not run the full `pnpm test:e2e`; the integration train does. Your gate is `pnpm check` green, `pnpm snap:check` at 0 px, and every spec your branch owns or touches green on its own (`E2E_PORT_OFFSET=<n> pnpm test:e2e e2e/x.spec.ts`), run on your final head. Refactors leave the 2D harness pages pixel-identical. An e2e assertion on a value that moves over time polls (`expect.poll`); a single read is a flake waiting to happen.
+  Set state and read the frame counter in the same `page.evaluate`: two round trips let several rAF ticks pass under load (the ws/ui-4 lost pad press).
   While `/tmp/thunderclap-e2e-slot1` exists, a train matrix is running. Do not start an e2e spec, `pnpm check` or `pnpm snap:check` until it is gone; poll with `while [ -d /tmp/thunderclap-e2e-slot1 ]; do sleep 60; done`. Editing and targeted `pnpm vitest run <file>` are fine.
   Write logs inside your own worktree (for example `.e2e-<branch>.log`, deleted before commit), never under a shared scratchpad name. Report the 1-min load (`uptime`) with each e2e result.
 - Unit tests cover what you added; the fake GPU (`src/render/fake-gpu.ts`) covers renderer changes.

@@ -162,3 +162,13 @@ E-030's two slots did not bring the load down: with seven engineers and five int
   - A failure inside a member's area is that member's: the integrator reverts that member's merge from the train and reruns the specs that failed.
   - A failure outside every member's area, in a run that started under 30, is a real failure. The integrator reports it, and the PM decides.
 
+## E-032: audio4 sprites and the voxel demo click join the E-017 list until ws/e2e-harden lands (2026-11-06, PM)
+
+Two specs failed on every full matrix today, whatever the branch:
+- `e2e/audio4.spec.ts:73` (`?sprites`, voice count stays 0)
+- `e2e/demos/voxel.spec.ts:159` (click-break edits)
+
+That covers nav-4, core-2, fx-3, render-4 and ui-4, and geom-3 at load 35→23, the lowest load of the day. None of those branches touches audio or the voxel demo. ws/e2e-harden owns both specs and is reproducing them now. If audio4 turns out to be a real engine race, it is reported as a finding.
+
+Ruling: until ws/e2e-harden lands, a failure of either test while every other test passes counts as the spec's, not the merge's. Land, and name it in the report, as for the E-017 list. When ws/e2e-harden lands, both leave the list, as the dungeon pad walk did under E-028.
+
