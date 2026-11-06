@@ -289,6 +289,8 @@ cancelled keys in `total` so `fraction` stays below 1 until a later `load` resum
 cancel, release all and drop listeners. Failed assets count toward `fraction` so a bar still
 reaches 1; a failed key loads again on the next `load`.
 
+**Audio sprite sidecars.** A sprite packer's JSON (`{ src, sprites, loopPoints? }`, the audio module's `SpriteSidecar`) needs no loader kind of its own: load it as a `json` entry and its `src` as an `audio` entry, then `spriteSheetFrom(sidecar, buffer)` from `@thunderclap/engine/audio` builds the sheet for `audio.defineSprites`.
+
 ## Baked bytes
 
 A navmesh or collider baked at build time (`pnpm bake <config>`, `scripts/bake.mjs`, see the

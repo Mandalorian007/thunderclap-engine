@@ -135,3 +135,27 @@ describe('multiplyMatrix3x4', () => {
     expect([...out]).toEqual([2, 0, 0, 11, 0, 3, 0, 20, 0, 0, 4, 31]);
   });
 });
+
+describe('Transform.changed (ws/audio-4)', () => {
+  it('counts every setter on the transform and its ancestors, never decreasing', () => {
+    const t = new Transform();
+    const c0 = t.changed;
+    t.setPosition(1, 2, 3);
+    expect(t.changed).toBe(c0 + 1);
+    t.setScale(2, 2, 2);
+    t.rotation = 0.5;
+    t.setQuaternion(0, 0, 0, 1);
+    t.setMatrix(new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0]));
+    expect(t.changed).toBe(c0 + 5);
+    // Reading world does not count; a parent change does, and so does reparenting.
+    void t.world;
+    expect(t.changed).toBe(c0 + 5);
+    const p = new Transform({ x: 1 });
+    const pc = p.changed;
+    t.parent = p;
+    expect(t.changed).toBe(c0 + 6 + pc);
+    p.setPosition(5, 0, 0);
+    expect(t.changed).toBe(c0 + 7 + pc);
+    expect(t.world[3]).toBe(5);
+  });
+});

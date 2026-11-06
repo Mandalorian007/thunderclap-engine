@@ -268,7 +268,7 @@ spans -0.5..0.5, so a transform's scale is the sprite's size.
 `transform.position`, `scale` (`ReadonlyVec3`) and `quaternion` (`ReadonlyQuat`) are
 read-only views; set them through the transform's setters.
 `Transform.setMatrix(m)` takes a raw 3×4 (sockets write through it); later setters rebuild
-T·R·S from the decomposed values.
+T·R·S from the decomposed values. `Transform.changed` is a version counter bumped by every setter and parent change (ws/audio-4), so a consumer such as `Voice.follow` can skip an unchanged `world`.
 
 `frame.mesh(...)` also carries the mesh's bounding sphere (`mesh.bounds`) through the instance
 matrix into a world sphere: the centre by the matrix, the radius by the largest axis scale

@@ -67,17 +67,22 @@ export class FakeSource extends FakeNode {
   loop = false;
   playbackRate = new FakeParam(1);
   detune = new FakeParam(0);
+  loopStart = 0;
+  loopEnd = 0;
   onended: (() => void) | null = null;
   startedAt: number | null = null;
   offset: number | null = null;
+  /** The `duration` argument of `start`, null when not given (a sprite one-shot passes it). */
+  duration: number | null = null;
   stoppedAt: number | null = null;
   constructor(private readonly ctx: FakeContext) {
     super();
     ctx.sources.push(this);
   }
-  start(t = 0, offset?: number) {
+  start(t = 0, offset?: number, duration?: number) {
     this.startedAt = t;
     this.offset = offset ?? null;
+    this.duration = duration ?? null;
   }
   stop(t = 0) {
     this.stoppedAt = t;
@@ -104,6 +109,60 @@ export class FakeBiquad extends FakeNode {
   type = 'lowpass';
   frequency = new FakeParam(350);
   Q = new FakeParam(1);
+  constructor(readonly context?: FakeContext) {
+    super();
+  }
+}
+
+/** A `PannerNode` in the modern AudioParam shape. */
+export class FakePanner extends FakeNode {
+  panningModel = 'HRTF';
+  distanceModel = 'inverse';
+  refDistance = 1;
+  maxDistance = 10000;
+  rolloffFactor = 1;
+  coneInnerAngle = 360;
+  coneOuterAngle = 360;
+  coneOuterGain = 0;
+  positionX = new FakeParam(0);
+  positionY = new FakeParam(0);
+  positionZ = new FakeParam(0);
+  orientationX = new FakeParam(1);
+  orientationY = new FakeParam(0);
+  orientationZ = new FakeParam(0);
+  constructor(readonly context: FakeContext) {
+    super();
+  }
+  get position(): number[] {
+    return [this.positionX.value, this.positionY.value, this.positionZ.value];
+  }
+}
+
+/** What a streamed stem plays through (`StreamElement`): a clock a test moves by hand. */
+export class FakeMediaElement {
+  src = '';
+  loop = false;
+  currentTime = 0;
+  duration = Number.NaN;
+  paused = true;
+  playbackRate = 1;
+  plays = 0;
+  constructor(duration = Number.NaN) {
+    this.duration = duration;
+  }
+  async play() {
+    this.paused = false;
+    this.plays++;
+  }
+  pause() {
+    this.paused = true;
+  }
+}
+
+export class FakeMediaSource extends FakeNode {
+  constructor(readonly mediaElement: FakeMediaElement) {
+    super();
+  }
 }
 
 export class FakeAnalyser extends FakeNode {
@@ -124,6 +183,7 @@ export class FakeContext {
   convolvers: FakeConvolver[] = [];
   biquads: FakeBiquad[] = [];
   analysers: FakeAnalyser[] = [];
+  mediaSources: FakeMediaSource[] = [];
   onstatechange: (() => void) | null = null;
   createGain() {
     return new FakeGain();
@@ -140,9 +200,14 @@ export class FakeContext {
     return c;
   }
   createBiquadFilter() {
-    const f = new FakeBiquad();
+    const f = new FakeBiquad(this);
     this.biquads.push(f);
     return f;
+  }
+  createMediaElementSource(el: FakeMediaElement) {
+    const n = new FakeMediaSource(el);
+    this.mediaSources.push(n);
+    return n;
   }
   createAnalyser() {
     const a = new FakeAnalyser();
@@ -186,6 +251,27 @@ export class FakeContext {
   }
 }
 
+/** `FakeContext` plus a listener and `createPanner`, for spatial voices. */
+export class FakeSpatialContext extends FakeContext {
+  panners: FakePanner[] = [];
+  listener = {
+    positionX: new FakeParam(0),
+    positionY: new FakeParam(0),
+    positionZ: new FakeParam(0),
+    forwardX: new FakeParam(0),
+    forwardY: new FakeParam(0),
+    forwardZ: new FakeParam(-1),
+    upX: new FakeParam(0),
+    upY: new FakeParam(1),
+    upZ: new FakeParam(0),
+  };
+  createPanner() {
+    const p = new FakePanner(this);
+    this.panners.push(p);
+    return p;
+  }
+}
+
 /** A buffer of `seconds` at the fake's rate (duration is what music scheduling reads). */
 export function fakeBuffer(seconds: number): AudioBuffer {
   return {
@@ -198,6 +284,16 @@ export function fakeBuffer(seconds: number): AudioBuffer {
 /** A fake context and an engine on it. `unlock()` to get buses. */
 export function setupEngine(settings?: unknown) {
   const ctx = new FakeContext();
+  const audio = new AudioEngine({
+    createContext: () => ctx as unknown as AudioContext,
+    settings,
+  });
+  return { ctx, audio };
+}
+
+/** Like `setupEngine`, on a `FakeSpatialContext`. */
+export function setupSpatialEngine(settings?: unknown) {
+  const ctx = new FakeSpatialContext();
   const audio = new AudioEngine({
     createContext: () => ctx as unknown as AudioContext,
     settings,
