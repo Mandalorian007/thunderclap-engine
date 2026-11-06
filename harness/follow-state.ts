@@ -29,6 +29,13 @@ export interface HarnessFollowState {
   culled: number;
   /** `gpuDiagnostics.errorCount`. */
   gpuErrors: number;
+  /**
+   * `camera.projectMany` over the six draw centres (ground, four walls, capsule): how many
+   * landed inside the viewport last frame (ws/camera-ergo).
+   */
+  projected: number;
+  /** `camera.viewZ` of the first `frustumCorners` corner: the near distance (0.1). */
+  nearCornerZ: number;
 }
 
 export interface HarnessFollowApi {
