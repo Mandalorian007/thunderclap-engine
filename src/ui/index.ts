@@ -129,3 +129,28 @@ export {
 } from './theme';
 export { Toaster, type ToastHandle, type ToastOptions, type ToastTone } from './toast';
 export { type ButtonOptions, button, type SliderOptions, slider, toggle } from './widgets';
+export {
+  type Bar,
+  type BarOptions,
+  bar,
+  type ChoiceOption,
+  type Cooldown,
+  type CooldownOptions,
+  cooldown,
+  ensureWidgets2Styles,
+  type KeyPrompt,
+  type KeyPromptOptions,
+  keyPrompt,
+  reticle,
+  type Segmented,
+  type Select,
+  type Stepper,
+  type StepperOptions,
+  segmented,
+  select,
+  stepper,
+  WIDGETS2_CSS,
+  type WidgetReticle,
+  type WidgetReticleOptions,
+  type WidgetTone,
+} from './widgets-2';
