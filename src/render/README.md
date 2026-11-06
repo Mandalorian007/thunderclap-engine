@@ -304,6 +304,59 @@ lights.fog = { color: [0.6, 0.65, 0.75], density: 1, near: 6, far: 24 };
 o.color = vec4f(engine_fog(albedo * engine_lambert(n, in.worldPos), in.worldPos), 1.0);
 ```
 
+## Standard material
+
+A metallic-roughness PBR material a game uses without writing WGSL, the glTF 2.0 model: GGX
+distribution, height-correlated Smith visibility, Schlick Fresnel, Lambert diffuse, lit by the
+frame's `Lights` (ambient, sun with its shadow map, point lights, fog) in the same units as
+`engine_lambert`.
+
+```ts
+import { createStandardMaterial } from '@thunderclap/engine/render';
+
+const skin = createStandardMaterial(renderer, {
+  baseColor: albedoTex,         // sRGB; default 1×1 white
+  metallicRoughness: mrTex,     // G roughness, B metallic (glTF); default white
+  metallic: 0, roughness: 0.6,  // factors multiplied into the map
+  normal: normalTex,            // tangent space, +Y up (OpenGL / glTF); default flat
+  occlusion: aoTex,             // R; default white
+  emissive: glowTex, emissiveFactor: [1, 1, 1],
+  alphaMode: 'mask', alphaCutoff: 0.5, doubleSided: true,
+});
+frame.mesh(mesh, skin, transform, { tint: [1, 0.9, 0.8, 1] });
+```
+
+- `createStandardMaterial(renderer, desc: StandardMaterialDesc): Material` returns an ordinary
+  `Material` (`setUniforms`, `setTexture`, `perDrawUniforms` off). Every field of the desc is
+  optional; `label` defaults to `'standard'`. Defaults: `baseColorFactor` [1,1,1,1], `metallic`
+  0, `roughness` 0.5, `normalScale` 1, `alphaCutoff` 0.5, `emissiveFactor` [1,1,1] when an
+  `emissive` map is given and [0,0,0] otherwise, `alphaMode` `'opaque'`, `doubleSided` false.
+- Per-instance: `tint` multiplies the base colour (and vertex colour), `uv` picks the sub-rect
+  of every map, `emissive` adds `base × emissive` to the emissive target, `receiveShadow` and
+  `castShadow` as for any material.
+- Maps are sampled with `'linear-mip-repeat'` (trilinear when the map has mips). Missing maps bind four 1×1 defaults (white, sRGB
+  white, flat normal `[128,128,255]`, black) created once per renderer.
+- `alphaMode: 'mask'` discards below `alphaCutoff` (the shadow pass has no fragment stage, so
+  a masked object still casts its whole silhouette); `'blend'` uses `blend: 'alpha'`, so it
+  draws after the opaque draws, writes no depth and casts no shadow. `doubleSided` flips the
+  normal on back faces; materials never cull, so single-sided only changes the lighting.
+- Tangents come from screen-space derivatives (`dpdx` / `dpdy` of world position and uv), so
+  `VERTEX_LAYOUT_3D` (which has no tangent slot) and any mesh without tangents normal-map as is.
+- `STANDARD_WGSL` is the fragment shader (entry `fs_main`); `STANDARD_TEXTURE_SLOTS` names the
+  five texture slots (`baseColor` 0 … `emissive` 4, at `@group(1) @binding(2 + slot)`);
+  `packStandardUniforms(desc, out?)` fills the `STANDARD_UNIFORM_FLOATS` (12) block the shader
+  reads: base rgba, metallic, roughness, normal scale, alpha cutoff, emissive rgb, flags
+  (1 double-sided, 2 mask, 4 blend). Pass the packed block to `material.setUniforms` to change a
+  factor later.
+- `WGSL_PBR` is the helper text a custom material can prepend to its own WGSL:
+  `engine_pbr(base, metallic, roughness, n, v, world_pos, ao, emissive) -> vec3f` (lit, fogged
+  colour), `engine_brdf`, `engine_d_ggx`, `engine_v_smith_ggx`, `engine_f_schlick` and
+  `engine_perturb_normal(n, world_pos, uv, map_texel, scale)`.
+
+`harness/pbr.html` draws a 5×5 metallic × roughness sphere grid through one material and a
+normal-mapped tile from a procedural height map; `e2e/pbr.spec.ts` checks the highlight and
+the bump on every matrix row.
+
 ## Custom materials
 
 A material is your WGSL fragment shader plus an optional uniform block and textures. The

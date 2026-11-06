@@ -1,0 +1,208 @@
+import type { Material } from './material';
+import { WGSL_PBR } from './pbr-wgsl';
+import type { Renderer } from './renderer';
+import type { Texture, TextureLike } from './texture';
+
+/**
+ * The standard physically based material (`createStandardMaterial`): base colour,
+ * metallic-roughness, normal, occlusion and emissive maps with factors, over the engine's sun,
+ * point lights, shadows and fog through `engine_pbr` (`WGSL_PBR`). Every map is optional: a
+ * missing one is a 1×1 default (white, white, flat normal, white, black), so any subset works.
+ * Texture conventions follow glTF: `metallicRoughness` has roughness in G and metallic in B,
+ * `occlusion` is in R, the normal map is +Y up (OpenGL / glTF), `baseColor` and `emissive` are
+ * sRGB and the data maps linear (`textureFromSource(src, label, { linear: true })`).
+ */
+export interface StandardMaterialDesc {
+  /** Pipeline / bind group label. Default `'standard'`. */
+  label?: string;
+  /** sRGB colour with alpha; multiplied by `baseColorFactor` and the instance colour × tint. */
+  baseColor?: TextureLike;
+  /** Linear RGBA, default `[1, 1, 1, 1]`. */
+  baseColorFactor?: ArrayLike<number>;
+  /** Linear; G = roughness, B = metallic, each multiplied by its factor. */
+  metallicRoughness?: TextureLike;
+  /** 0 (dielectric) .. 1 (metal). Default 0. */
+  metallic?: number;
+  /** 0 (mirror) .. 1 (matte). Default 0.5. */
+  roughness?: number;
+  /** Tangent-space normal map, linear, +Y up; applied without mesh tangents (derivatives). */
+  normal?: TextureLike;
+  /** Scales the normal map's xy. Default 1. */
+  normalScale?: number;
+  /** Linear; R darkens the ambient term only. */
+  occlusion?: TextureLike;
+  /** sRGB; × `emissiveFactor`, written to the emissive target (bloom), not the colour. */
+  emissive?: TextureLike;
+  /** Linear RGB. Default `[1, 1, 1]` when `emissive` is given, else `[0, 0, 0]`. */
+  emissiveFactor?: ArrayLike<number>;
+  /**
+   * `opaque` (default): alpha is written as 1 and the draw is opaque (depth write, shadow
+   * caster). `mask`: opaque, and fragments with alpha below `alphaCutoff` are discarded (they
+   * still cast a full shadow: the shadow pass has no fragment stage). `blend`: the renderer's
+   * alpha-blended path (sorted back to front, no depth write, casts no shadow).
+   */
+  alphaMode?: 'opaque' | 'mask' | 'blend';
+  /** Alpha below this is discarded in `mask` mode. Default 0.5. */
+  alphaCutoff?: number;
+  /**
+   * Back faces are shaded with their normal flipped toward the viewer. Default false: back
+   * faces shade with the front normal, as every engine material does (the renderer never
+   * culls, so single-sided here means nothing is hidden, only that the normal is not flipped).
+   */
+  doubleSided?: boolean;
+}
+
+/** Texture slots of a standard material (`material.setTexture(slot, tex)` swaps a map). */
+export const STANDARD_TEXTURE_SLOTS = {
+  baseColor: 0,
+  metallicRoughness: 1,
+  normal: 2,
+  occlusion: 3,
+  emissive: 4,
+} as const;
+
+/** The standard material's uniform block, in floats (`setUniforms` takes the whole block). */
+export const STANDARD_UNIFORM_FLOATS = 12;
+
+/** Flag bits in `StandardParams.emissive.w`. */
+const FLAG_DOUBLE_SIDED = 1;
+const FLAG_MASK = 2;
+const FLAG_BLEND = 4;
+
+/**
+ * Pack a desc's factors into the standard material's uniform block:
+ * `base_color` (rgba), `factors` (metallic, roughness, normal_scale, alpha_cutoff),
+ * `emissive` (rgb, flags: bit 0 double-sided, bit 1 alpha mask, bit 2 alpha blend). `out` must hold
+ * `STANDARD_UNIFORM_FLOATS`; returns it.
+ */
+export function packStandardUniforms(
+  desc: StandardMaterialDesc,
+  out: Float32Array<ArrayBuffer> = new Float32Array(STANDARD_UNIFORM_FLOATS),
+): Float32Array<ArrayBuffer> {
+  if (out.length < STANDARD_UNIFORM_FLOATS) {
+    throw new Error(`packStandardUniforms: need ${STANDARD_UNIFORM_FLOATS} floats`);
+  }
+  const bc = desc.baseColorFactor;
+  out[0] = bc?.[0] ?? 1;
+  out[1] = bc?.[1] ?? 1;
+  out[2] = bc?.[2] ?? 1;
+  out[3] = bc?.[3] ?? 1;
+  out[4] = desc.metallic ?? 0;
+  out[5] = desc.roughness ?? 0.5;
+  out[6] = desc.normalScale ?? 1;
+  out[7] = desc.alphaCutoff ?? 0.5;
+  const ef = desc.emissiveFactor;
+  const e = desc.emissive ? 1 : 0;
+  out[8] = ef?.[0] ?? e;
+  out[9] = ef?.[1] ?? e;
+  out[10] = ef?.[2] ?? e;
+  let flags = 0;
+  if (desc.doubleSided) flags |= FLAG_DOUBLE_SIDED;
+  if (desc.alphaMode === 'mask') flags |= FLAG_MASK;
+  if (desc.alphaMode === 'blend') flags |= FLAG_BLEND;
+  out[11] = flags;
+  return out;
+}
+
+/**
+ * The standard material's fragment shader, after the prelude and `WGSL_PBR`. Bindings follow
+ * the material convention: the block at `@group(1) @binding(0)`, the sampler at 1, the five
+ * maps at 2..6 in `STANDARD_TEXTURE_SLOTS` order.
+ */
+export const STANDARD_WGSL = /* wgsl */ `
+struct StandardParams {
+  base_color: vec4f,
+  factors: vec4f,
+  emissive: vec4f,
+};
+@group(1) @binding(0) var<uniform> standard: StandardParams;
+@group(1) @binding(1) var standard_sampler: sampler;
+@group(1) @binding(2) var standard_base_color: texture_2d<f32>;
+@group(1) @binding(3) var standard_metallic_roughness: texture_2d<f32>;
+@group(1) @binding(4) var standard_normal: texture_2d<f32>;
+@group(1) @binding(5) var standard_occlusion: texture_2d<f32>;
+@group(1) @binding(6) var standard_emissive: texture_2d<f32>;
+
+@fragment fn fs_main(in: VSOut, @builtin(front_facing) front: bool) -> FragOut {
+  let base = textureSample(standard_base_color, standard_sampler, in.uv) * standard.base_color * in.color;
+  let mr = textureSample(standard_metallic_roughness, standard_sampler, in.uv);
+  let nmap = textureSample(standard_normal, standard_sampler, in.uv).xyz;
+  let ao = textureSample(standard_occlusion, standard_sampler, in.uv).r;
+  let em = textureSample(standard_emissive, standard_sampler, in.uv).rgb * standard.emissive.rgb;
+  let flags = u32(standard.emissive.w);
+  var n = normalize(in.normal);
+  if ((flags & 1u) != 0u && !front) { n = -n; }
+  let v = normalize(camera.camera_pos.xyz - in.worldPos);
+  n = engine_perturb_normal(n, in.worldPos, in.uv, nmap, standard.factors.z);
+  if ((flags & 2u) != 0u && base.a < standard.factors.w) { discard; }
+  let metallic = mr.b * standard.factors.x;
+  let roughness = mr.g * standard.factors.y;
+  let lit = engine_pbr(base.rgb, metallic, roughness, n, v, in.worldPos, ao, vec3f(0.0));
+  let glow = em + base.rgb * in.emissive;
+  // Fog attenuates the emissive without tinting it: fog(e) - fog(0) = e × (1 - f).
+  let fogged_glow = engine_fog(glow, in.worldPos) - engine_fog(vec3f(0.0), in.worldPos);
+  let alpha = select(1.0, base.a, (flags & 4u) != 0u);
+  var o: FragOut;
+  o.color = vec4f(lit, alpha);
+  o.emissive = vec4f(fogged_glow, alpha);
+  return o;
+}
+`;
+
+interface StandardDefaults {
+  white: Texture;
+  whiteSrgb: Texture;
+  flatNormal: Texture;
+  black: Texture;
+}
+
+/** One set of 1×1 default maps per renderer, made on the first standard material. */
+const DEFAULTS = new WeakMap<Renderer, StandardDefaults>();
+
+function defaultsFor(renderer: Renderer): StandardDefaults {
+  let d = DEFAULTS.get(renderer);
+  if (d) return d;
+  const px = (label: string, rgba: [number, number, number, number], format: GPUTextureFormat) =>
+    renderer.textureFromPixels({
+      width: 1,
+      height: 1,
+      data: new Uint8Array(rgba),
+      format,
+      label: `standard:default-${label}`,
+    });
+  d = {
+    white: px('white', [255, 255, 255, 255], 'rgba8unorm'),
+    whiteSrgb: px('white-srgb', [255, 255, 255, 255], 'rgba8unorm-srgb'),
+    flatNormal: px('flat-normal', [128, 128, 255, 255], 'rgba8unorm'),
+    black: px('black', [0, 0, 0, 255], 'rgba8unorm-srgb'),
+  };
+  DEFAULTS.set(renderer, d);
+  return d;
+}
+
+/**
+ * A standard PBR `Material` for `desc`: `createMaterial` with `STANDARD_WGSL`, a 48-byte block
+ * from `packStandardUniforms` and the five maps (defaults for the missing ones). The instance
+ * tint (and vertex colour) multiplies the base colour; `InstanceParams.emissive` adds
+ * `base × emissive` to the glow like the sprite material. Call `setTexture(slot, tex)` with a
+ * `STANDARD_TEXTURE_SLOTS` entry to swap a map, or `setUniforms(packStandardUniforms(next))`
+ * to change factors. The sampler is `linear-mip-repeat` (trilinear on maps with mips; level 0 otherwise).
+ */
+export function createStandardMaterial(renderer: Renderer, desc: StandardMaterialDesc): Material {
+  const d = defaultsFor(renderer);
+  const m = renderer.createMaterial({
+    label: desc.label ?? 'standard',
+    wgsl: `${WGSL_PBR}\n${STANDARD_WGSL}`,
+    blend: desc.alphaMode === 'blend' ? 'alpha' : 'opaque',
+    uniformBytes: STANDARD_UNIFORM_FLOATS * 4,
+    textures: 5,
+    sampler: 'linear-mip-repeat',
+  });
+  m.setUniforms(packStandardUniforms(desc));
+  m.setTexture(STANDARD_TEXTURE_SLOTS.baseColor, desc.baseColor ?? d.whiteSrgb);
+  m.setTexture(STANDARD_TEXTURE_SLOTS.metallicRoughness, desc.metallicRoughness ?? d.white);
+  m.setTexture(STANDARD_TEXTURE_SLOTS.normal, desc.normal ?? d.flatNormal);
+  m.setTexture(STANDARD_TEXTURE_SLOTS.occlusion, desc.occlusion ?? d.white);
+  m.setTexture(STANDARD_TEXTURE_SLOTS.emissive, desc.emissive ?? d.black);
+  return m;
+}

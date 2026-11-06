@@ -34,6 +34,7 @@
 | Third-person follow camera on `Look` | `Follow` (`mode: 'first' \| 'third'`) | follow |
 | Ribbon trails in 2D or world space | `Trail` in `@thunderclap/engine/fx` | trails |
 | Shadow casters outside the view frustum still cast (the shadow list is culled against the sun box) | `renderer.stats.shadowDraws` | shadow-cull |
+| Standard PBR material (glTF metallic-roughness) over the lights block, shadows and fog; its BRDF and normal mapping exposed to custom WGSL | `createStandardMaterial`, `WGSL_PBR` | pbr |
 
 ## In flight (wave 5, `docs/STATUS.md`)
 
@@ -42,7 +43,6 @@ Branches exist; nothing here is on `main`. Names are the briefs' and may change 
 | Stream | What it adds | Entry point (planned) |
 | --- | --- | --- |
 | ws/skinning | GPU skinning in the scene and shadow passes | `VERTEX_LAYOUT_SKINNED`, `SkinPalette` |
-| ws/pbr | standard PBR material over the lights block, shadows and fog | `createStandardMaterial`, `WGSL_PBR` |
 | ws/template-first-person | copyable 3D walk: `Look`, Worker chunks, texture array, shadow, fog, weather, anchors | `templates/first-person` |
 
 After wave 5 (candidates, unscheduled): spot lights and per-light layer masks, attachment sockets, a third-person showcase template, GPU picking, publishing `engine-v1.0.0`.
