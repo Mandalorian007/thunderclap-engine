@@ -35,6 +35,7 @@ const state: HarnessLookState = {
   locked: false,
   stick: false,
   instances: 0,
+  culled: 0,
   gpuErrors: 0,
 };
 
@@ -220,6 +221,7 @@ async function main(): Promise<void> {
       renderer.endFrame();
       state.frames++;
       state.instances = renderer.stats.instances;
+      state.culled = renderer.stats.culled;
       state.gpuErrors = gpuDiagnostics.errorCount;
     },
   });

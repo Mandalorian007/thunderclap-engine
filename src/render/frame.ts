@@ -1,6 +1,6 @@
 import { Lights } from './lights';
 import type { Material } from './material';
-import type { Mesh } from './mesh';
+import type { Mesh, MeshBounds } from './mesh';
 import { Transform } from './transform';
 
 /**
@@ -60,12 +60,17 @@ export interface Drawable {
 
 /** Hooks the renderer exposes to Frame (kept internal). */
 export interface FrameSink {
-  /** `t` places the draw when given; otherwise `p` is a `DrawParams`. */
+  /**
+   * `t` places the draw when given; otherwise `p` is a `DrawParams`. `bounds` is the mesh-space
+   * sphere the draw is frustum-culled by (through its instance matrix), or null for a draw that
+   * is never culled (sprites).
+   */
   pushInstance(
     material: Material,
     mesh: Mesh,
     t: Transform | null,
     p: DrawParams | InstanceParams,
+    bounds: MeshBounds | null,
   ): void;
   pushDrawable(d: Drawable, order: number, layers: number): void;
   pushPrePass(fn: (encoder: GPUCommandEncoder) => void): void;
@@ -123,16 +128,22 @@ export class Frame {
   sprite(material: Material | null, t: Transform, p?: InstanceParams): void;
   sprite(material: Material | null, a: DrawParams | Transform, b?: InstanceParams): void {
     const m = material ?? this.sink.defaultSprite;
-    if (a instanceof Transform) this.sink.pushInstance(m, this.sink.quad, a, b ?? NO_PARAMS);
-    else this.sink.pushInstance(m, this.sink.quad, null, a);
+    const q = this.sink.quad;
+    if (a instanceof Transform) this.sink.pushInstance(m, q, a, b ?? NO_PARAMS, null);
+    else this.sink.pushInstance(m, q, null, a, null);
   }
 
-  /** Draw `mesh` with `material`, placed by `DrawParams` (x, y, w, h, rotation) or a `Transform`. */
+  /**
+   * Draw `mesh` with `material`, placed by `DrawParams` (x, y, w, h, rotation) or a `Transform`.
+   * The draw carries `mesh.bounds` through its instance matrix, so a camera with `cull` on
+   * skips it when the sphere is outside the frustum (sprites are never culled).
+   */
   mesh(mesh: Mesh, material: Material, p: DrawParams): void;
   mesh(mesh: Mesh, material: Material, t: Transform, p?: InstanceParams): void;
   mesh(mesh: Mesh, material: Material, a: DrawParams | Transform, b?: InstanceParams): void {
-    if (a instanceof Transform) this.sink.pushInstance(material, mesh, a, b ?? NO_PARAMS);
-    else this.sink.pushInstance(material, mesh, null, a);
+    const bounds = mesh.bounds;
+    if (a instanceof Transform) this.sink.pushInstance(material, mesh, a, b ?? NO_PARAMS, bounds);
+    else this.sink.pushInstance(material, mesh, null, a, bounds);
   }
 
   /**

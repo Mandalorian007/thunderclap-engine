@@ -1,6 +1,11 @@
 export type { BlendMode } from './blend';
 export type { CameraPoint, CameraRect } from './camera';
-export { ALL_LAYERS, Camera, ORTHO2D_HALF_DEPTH } from './camera';
+export {
+  ALL_LAYERS,
+  Camera,
+  FRUSTUM_FLOATS,
+  ORTHO2D_HALF_DEPTH,
+} from './camera';
 export type { RGBA } from './color';
 export { hex, linearToSrgb, rgba, scaleRgb, srgbToLinear } from './color';
 export { gpuDiagnostics, installGpuErrorLogging, onGpuError, reportGpuError } from './diagnostics';
@@ -32,8 +37,9 @@ export {
   Material,
   SPRITE_WGSL,
 } from './material';
-export type { MeshCapacity, MeshDesc, MeshUpdate, VertexLayout } from './mesh';
+export type { MeshBounds, MeshCapacity, MeshDesc, MeshUpdate, VertexLayout } from './mesh';
 export {
+  AUTO_BOUNDS_MAX_VERTICES,
   Mesh,
   quadGeometry,
   VERTEX_BUFFER_LAYOUT,

@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { mat4 } from '../core/math';
-import { ALL_LAYERS, CAMERA_BLOCK_FLOATS, Camera, ORTHO2D_HALF_DEPTH } from './camera';
+import {
+  ALL_LAYERS,
+  CAMERA_BLOCK_FLOATS,
+  Camera,
+  FRUSTUM_FLOATS,
+  ORTHO2D_HALF_DEPTH,
+} from './camera';
 
 /** The renderer's pre-matrix-camera viewProj, verbatim: the 2D path must match it bit for bit. */
 function legacyViewProj(
@@ -225,6 +231,52 @@ describe('Camera.perspective', () => {
     expect(c.worldToScreen(60, 50).x).toBeCloseTo(70, 4);
     c.setOrtho2d(100, 100);
     expect(c.worldToScreen(80, 50).x).toBeCloseTo(50, 4);
+  });
+});
+
+describe('Camera.frustum (ws/cull)', () => {
+  it('is on for perspective, off for ortho2d, and has six unit planes', () => {
+    expect(Camera.perspective(1, 1, 0.1, 100).cull).toBe(true);
+    expect(Camera.ortho2d(100, 100).cull).toBe(false);
+    const c = Camera.perspective(Math.PI / 2, 1, 1, 100);
+    const f = c.frustum;
+    expect(f).toHaveLength(FRUSTUM_FLOATS);
+    for (let i = 0; i < FRUSTUM_FLOATS; i += 4) {
+      expect(Math.hypot(f[i]!, f[i + 1]!, f[i + 2]!)).toBeCloseTo(1, 5);
+    }
+  });
+
+  it('seesSphere accepts spheres in view and rejects those past any plane', () => {
+    const c = Camera.perspective(Math.PI / 2, 1, 1, 100); // looks down -z from the origin
+    expect(c.seesSphere(0, 0, -10, 1)).toBe(true);
+    expect(c.seesSphere(0, 0, 10, 1)).toBe(false); // behind
+    expect(c.seesSphere(0, 0, -0.5, 0.1)).toBe(false); // nearer than near
+    expect(c.seesSphere(0, 0, -150, 1)).toBe(false); // past far
+    expect(c.seesSphere(-12, 0, -10, 1)).toBe(false); // left of the 90° cone
+    expect(c.seesSphere(12, 0, -10, 1)).toBe(false);
+    expect(c.seesSphere(0, 12, -10, 1)).toBe(false);
+    expect(c.seesSphere(0, -12, -10, 1)).toBe(false);
+    // Straddling a plane keeps it: the centre is out, the radius reaches in.
+    expect(c.seesSphere(-12, 0, -10, 3)).toBe(true);
+    expect(c.seesSphere(0, 0, 10, 20)).toBe(true);
+  });
+
+  it('follows the view, is cached, and an infinite far plane never rejects', () => {
+    const c = Camera.perspective(Math.PI / 2, 1, 1, 100);
+    const a = c.frustum;
+    expect(c.frustum).toBe(a);
+    const before = Array.from(a);
+    c.lookAt([0, 0, 0], [0, 0, 1]); // turn round
+    expect(Array.from(c.frustum)).not.toEqual(before);
+    expect(c.seesSphere(0, 0, 10, 1)).toBe(true);
+    expect(c.seesSphere(0, 0, -10, 1)).toBe(false);
+    const inf = Camera.perspective(Math.PI / 2, 1, 1, Number.POSITIVE_INFINITY);
+    expect(inf.seesSphere(0, 0, -1e9, 1)).toBe(true);
+    const ortho = Camera.ortho2d(100, 100);
+    ortho.cull = true;
+    expect(ortho.seesSphere(50, 50, 0, 1)).toBe(true);
+    expect(ortho.seesSphere(150, 50, 0, 1)).toBe(false);
+    expect(ortho.seesSphere(150, 50, 0, 60)).toBe(true);
   });
 });
 

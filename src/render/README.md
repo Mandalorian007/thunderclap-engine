@@ -34,6 +34,10 @@ renderer.endFrame();
   whole target). Each view has its own uniform buffer and bind group (`engine-globals`,
   `engine-globals-1`, …), pooled across frames, so two cameras per frame allocate nothing in
   steady state. `renderer.stats` sums over the views.
+- **Frustum culling.** With `camera.cull` (on for `perspective`, off for `ortho2d`), a mesh
+  draw whose world bounding sphere (`mesh.bounds` through its instance matrix) is outside any
+  of the camera's six `frustum` planes is dropped before sorting and counted in
+  `renderer.stats.culled`. Sprites and meshes without bounds are never culled.
 - **Targets.** `renderer.target` is the `SceneTarget` the post stack reads;
   `renderer.createSceneTarget({ width, height, label? })` makes an offscreen one (a portal, a
   minimap) whose `color` and `emissive` are sampleable `Texture`s. `target.depth` exists once
@@ -119,6 +123,12 @@ spans -0.5..0.5, so a transform's scale is the sprite's size.
 `transform.position`, `scale` (`ReadonlyVec3`) and `quaternion` (`ReadonlyQuat`) are
 read-only views; set them through the transform's setters.
 
+`frame.mesh(...)` also carries the mesh's bounding sphere (`mesh.bounds`) through the instance
+matrix into a world sphere: the centre by the matrix, the radius by the largest axis scale
+(column length), so rotation and non-uniform scale stay conservative. A camera with `cull`
+tests that sphere against its frustum. `frame.sprite(...)` records no sphere; sprites are
+never culled.
+
 ### Instance format (28 floats, 112 bytes)
 
 | floats | WGSL `VertexIn` | content |
@@ -165,6 +175,13 @@ renderer.render(frame, eye);                              // or renderer.camera 
   survives the near and far planes (z = 0 is clip depth 0.5). x and y are the old 2D camera's.
 - `depthTest` and `depthWrite` (off for `ortho2d`, on for `perspective`) and the `layers` mask
   (u32, default all bits; `sees(mask)`) drive the render call's depth attachment and draw sort.
+- `cull` (off for `ortho2d`, on for `perspective`) turns frustum culling on for the render
+  call. `frustum` is the six planes of `viewProjection` as one flat `Float32Array` of
+  `FRUSTUM_FLOATS` (24): left, right, bottom, top, near, far, each `(a, b, c, d)` with a unit
+  normal pointing inwards, cached like the matrices. `seesSphere(x, y, z, radius)` tests a
+  world sphere against them (true when it touches the frustum); the renderer runs the same
+  test per draw on the flat array, so a frame culls without allocating. An infinite far plane
+  (`perspective(..., Infinity)`) never rejects.
 - A 2D game frames the space the UI leaves (`ui.layout.freeRect`, CSS px) with
   `cam.fitRect(worldRect, viewportInLogicalPx)`; convert the rect's corners with
   `surface.clientToLogical`.
@@ -412,7 +429,13 @@ its Worker-meshed chunks this way.
   reused while the counts fit the capacity and grow 1.5× only when they do not or the index
   format changes; `update` returns true then and `mesh.growths` counts it. Counts alone
   (`{ indexCount: n }`) move the draw range, so a chunk shrinks without touching the GPU.
-  Typed `Uint16Array`/`Uint32Array` views set the index format; other views keep it. An
+  Typed `Uint16Array`/`Uint32Array` views set the index format; other views keep it.
+  `mesh.bounds` (a `MeshBounds`, `{ center: [x, y, z], radius }` in mesh space) is the sphere
+  the renderer frustum-culls the mesh's draws by: `MeshDesc.bounds` or `MeshUpdate.bounds` set
+  it (copied; a Worker that meshed the chunk knows them), otherwise it is computed from the
+  uploaded positions when `autoBounds` is on, which `MeshDesc.autoBounds` defaults to for a
+  capacity under `AUTO_BOUNDS_MAX_VERTICES` (65536) vertices and off above (a big streamed
+  mesh passes its own). A mesh with no bounds yet has `radius` Infinity and is never culled. An
   indexed mesh with `indexCount` 0 draws nothing (an empty streamed chunk); a non-indexed mesh
   draws `vertexCount`.
 - `Drawable { prepare?(encoder, frame); draw(pass, frame) }` lets you run your own pipelines
@@ -449,7 +472,8 @@ its Worker-meshed chunks this way.
   can check. `onGpuError(fn)` subscribes to them (a dev toast; returns the unsubscribe), and
   `reportGpuError(message)` logs and records one (`createShaderModule` reports compile errors
   through it; a game can report its own GPU failures the same way).
-- `renderer.stats` (`RenderStats`) reports `{ drawCalls, instances, drawables }` for the last frame.
+- `renderer.stats` (`RenderStats`) reports `{ drawCalls, instances, drawables, culled }` for the
+  last frame; `culled` is the mesh draws the frustum test skipped, summed over the views.
 
 ## Resolution and timing
 

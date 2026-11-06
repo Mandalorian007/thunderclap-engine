@@ -21,6 +21,8 @@ export interface HarnessLookState {
   stick: boolean;
   /** `renderer.stats.instances` of the last frame. */
   instances: number;
+  /** `renderer.stats.culled` of the last frame (mesh draws outside the frustum, ws/cull). */
+  culled: number;
   /** `gpuDiagnostics.errorCount`. */
   gpuErrors: number;
 }

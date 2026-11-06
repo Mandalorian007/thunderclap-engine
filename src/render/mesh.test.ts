@@ -7,6 +7,7 @@ import {
   INSTANCE_STRIDE,
 } from './material';
 import {
+  AUTO_BOUNDS_MAX_VERTICES,
   Mesh,
   quadGeometry,
   VERTEX_BUFFER_LAYOUT,
@@ -359,5 +360,73 @@ describe('Mesh capacity and update (ws/mesh-stream)', () => {
     expect(scene.commands.filter((c) => c.op === 'draw' || c.op === 'drawIndexed')).toEqual([]);
     expect(r.stats.drawCalls).toBe(0);
     expect(fake.errors).toEqual([]);
+  });
+});
+
+describe('Mesh.bounds (ws/cull)', () => {
+  const tri3 = (scale: number) => {
+    const v = new Float32Array(3 * 12);
+    v.set([scale, 0, 0], 0);
+    v.set([-scale, 0, 0], 12);
+    v.set([0, 0, 2 * scale], 24);
+    return v;
+  };
+
+  it('computes a sphere from the positions by default, in 2D and 3D', () => {
+    const fake = createFakeDevice();
+    const m = new Mesh(fake.device, { layout: VERTEX_LAYOUT_3D, vertices: tri3(1) });
+    expect(m.autoBounds).toBe(true);
+    expect(m.bounds.center).toEqual([0, 0, 1]);
+    expect(m.bounds.radius).toBeCloseTo(Math.hypot(1, 1), 6);
+    const q = new Mesh(fake.device, { ...quadGeometry() });
+    expect(q.bounds.center).toEqual([0, 0, 0]);
+    expect(q.bounds.radius).toBeCloseTo(Math.SQRT1_2, 6);
+    // A capacity-only mesh is unbounded until its first update.
+    const c = new Mesh(fake.device, { layout: VERTEX_LAYOUT_3D, capacity: { vertices: 8 } });
+    expect(c.bounds.radius).toBe(Number.POSITIVE_INFINITY);
+    c.update({ vertices: tri3(2), vertexCount: 3 });
+    expect(c.bounds.center).toEqual([0, 0, 2]);
+    expect(c.bounds.radius).toBeCloseTo(Math.hypot(2, 2), 6);
+    c.update({ vertices: tri3(2), vertexCount: 0 });
+    expect(c.bounds.radius).toBe(0);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('takes given bounds over the positions, and keeps one object', () => {
+    const fake = createFakeDevice();
+    const m = new Mesh(fake.device, {
+      layout: VERTEX_LAYOUT_3D,
+      vertices: tri3(1),
+      bounds: { center: [1, 2, 3], radius: 9 },
+    });
+    const b = m.bounds;
+    expect(b).toEqual({ center: [1, 2, 3], radius: 9 });
+    m.update({ vertices: tri3(5) }); // autoBounds recomputes
+    expect(m.bounds).toBe(b);
+    expect(b.center).toEqual([0, 0, 5]);
+    m.update({ vertices: tri3(5), bounds: { center: [0, 0, 0], radius: 1 } });
+    expect(b).toEqual({ center: [0, 0, 0], radius: 1 });
+    m.update({ bounds: { center: [4, 4, 4], radius: 2 } }); // bounds alone
+    expect(b).toEqual({ center: [4, 4, 4], radius: 2 });
+  });
+
+  it('autoBounds is off above the vertex threshold unless asked for', () => {
+    const fake = createFakeDevice();
+    const big = new Mesh(fake.device, {
+      layout: VERTEX_LAYOUT_3D,
+      capacity: { vertices: AUTO_BOUNDS_MAX_VERTICES },
+    });
+    expect(big.autoBounds).toBe(false);
+    big.update({ vertices: tri3(1), vertexCount: 3 });
+    expect(big.bounds.radius).toBe(Number.POSITIVE_INFINITY);
+    const forced = new Mesh(fake.device, {
+      layout: VERTEX_LAYOUT_3D,
+      capacity: { vertices: AUTO_BOUNDS_MAX_VERTICES },
+      autoBounds: true,
+    });
+    forced.update({ vertices: tri3(1), vertexCount: 3 });
+    expect(forced.bounds.radius).toBeCloseTo(Math.SQRT2, 6);
+    const off = new Mesh(fake.device, { vertices: quadGeometry().vertices, autoBounds: false });
+    expect(off.bounds.radius).toBe(Number.POSITIVE_INFINITY);
   });
 });

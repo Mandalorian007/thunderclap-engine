@@ -3,6 +3,7 @@ import { Camera } from './camera';
 import { createFakeDevice, type FakeDevice, fakeRendererGpu, type PassCommand } from './fake-gpu';
 import { LIGHTS_BLOCK_FLOATS, Lights } from './lights';
 import { INSTANCE_FLOATS } from './material';
+import { quadGeometry } from './mesh';
 import { Renderer } from './renderer';
 import { Transform, writeMatrix2d } from './transform';
 
@@ -702,6 +703,119 @@ describe('draw list steady state', () => {
     for (let i = 0; i < 5; i++) frame();
     expect(counts()).toEqual(before);
     expect(fake.errors).toEqual([]);
+  });
+});
+
+describe('frustum cull (ws/cull)', () => {
+  /** A perspective camera at the origin looking down -z, 90° fov, so |x| or |y| beyond |z| is out. */
+  function cullSetup() {
+    const { fake, r } = setup();
+    r.camera = Camera.perspective(Math.PI / 2, 1, 0.1, 1000);
+    r.camera.depthTest = false; // no depth sort: alternating materials stay separate draws
+    const a = r.createMaterial({ label: 'a', wgsl: WGSL, uniformBytes: 16, blend: 'opaque' });
+    const b = r.createMaterial({ label: 'b', wgsl: WGSL, uniformBytes: 16, blend: 'opaque' });
+    const sphere = r.createMesh({ ...quadGeometry(), bounds: { center: [0, 0, 0], radius: 1 } });
+    return { fake, r, a, b, sphere };
+  }
+
+  it('skips 1000 spheres round the camera to the half it sees, and the draw calls fall', () => {
+    const { fake, r, a, b, sphere } = cullSetup();
+    // Alternating materials keep every draw separate: 1000 instances are 1000 draw calls.
+    const ts: Transform[] = [];
+    for (let i = 0; i < 1000; i++) {
+      // Two in front, two behind, with the material alternating: no two neighbours merge.
+      const z = i % 4 < 2 ? -10 - (i % 7) : 10 + (i % 7);
+      ts.push(new Transform({ x: (i % 5) - 2, y: (i % 3) - 1, z }));
+    }
+    const frame = () => {
+      const f = r.beginFrame(0, 0);
+      for (let i = 0; i < ts.length; i++) f.mesh(sphere, i % 2 === 0 ? a : b, ts[i]!);
+      r.endFrame();
+    };
+    r.camera.cull = false;
+    frame();
+    expect(r.stats.culled).toBe(0);
+    expect(r.stats.drawCalls).toBe(1000);
+    expect(r.stats.instances).toBe(1000);
+    r.camera.cull = true;
+    frame();
+    expect(r.stats.culled).toBe(500);
+    expect(r.stats.instances).toBe(500);
+    expect(r.stats.drawCalls).toBe(500);
+    expect(draws(sceneCommands(fake))).toHaveLength(500);
+    // Steady state: culled frames allocate no GPU objects.
+    const counts = () => [fake.buffers.length, fake.textures.length, fake.bindGroups.length];
+    const before = counts();
+    for (let i = 0; i < 3; i++) frame();
+    expect(counts()).toEqual(before);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('carries the sphere through the instance matrix: scale and translation', () => {
+    const { r, a, sphere } = cullSetup();
+    const frame = (t: Transform) => {
+      const f = r.beginFrame(0, 0);
+      f.mesh(sphere, a, t);
+      r.endFrame();
+      return r.stats.culled;
+    };
+    expect(frame(new Transform({ x: 30, z: -10 }))).toBe(1); // right of the cone
+    expect(frame(new Transform({ x: 30, z: -10, scaleX: 25 }))).toBe(0); // max axis reaches in
+    expect(frame(new Transform({ x: 30, z: -10, scaleZ: 25 }))).toBe(0); // any axis counts
+    expect(frame(new Transform({ x: 30, z: -10, scaleX: 0.5, scaleY: 0.5, scaleZ: 0.5 }))).toBe(1);
+    expect(frame(new Transform({ z: -10 }))).toBe(0);
+    expect(frame(new Transform({ z: 10 }))).toBe(1); // behind
+    // A mesh placed by DrawParams is culled from its 2D position too.
+    const f = r.beginFrame(0, 0);
+    f.mesh(sphere, a, { x: 500, y: 0, w: 1, h: 1 });
+    r.endFrame();
+    expect(r.stats.culled).toBe(1);
+  });
+
+  it('never culls sprites or meshes without bounds; a camera with cull off draws everything', () => {
+    const { r, a } = cullSetup();
+    const unbounded = r.createMesh({ ...quadGeometry(), autoBounds: false });
+    expect(unbounded.bounds.radius).toBe(Number.POSITIVE_INFINITY);
+    const far = new Transform({ x: 500, z: 10 });
+    const f = r.beginFrame(0, 0);
+    f.sprite(a, far);
+    f.sprite(null, { x: 9000, y: 9000 });
+    f.mesh(unbounded, a, far);
+    r.endFrame();
+    expect(r.stats.culled).toBe(0);
+    expect(r.stats.instances).toBe(3);
+    // The default ortho2d camera has cull off: an off-screen mesh with bounds still draws.
+    const { r: r2 } = setup();
+    const a2 = r2.createMaterial({ label: 'a2', wgsl: WGSL, uniformBytes: 16, blend: 'opaque' });
+    const q = r2.createMesh(quadGeometry());
+    expect(q.bounds.radius).toBeCloseTo(Math.SQRT1_2, 6);
+    const g = r2.beginFrame(0, 0);
+    g.mesh(q, a2, { x: -5000, y: -5000, w: 1, h: 1 });
+    r2.endFrame();
+    expect(r2.camera.cull).toBe(false);
+    expect(r2.stats.culled).toBe(0);
+    expect(r2.stats.instances).toBe(1);
+  });
+
+  it('sums culled over views and resets it each frame', () => {
+    const { r, a, sphere } = cullSetup();
+    const front = new Transform({ z: -10 });
+    const back = new Transform({ z: 10 });
+    const f = r.beginFrame(0, 0);
+    f.mesh(sphere, a, front);
+    f.mesh(sphere, a, back);
+    r.endFrame();
+    expect(r.stats.culled).toBe(1);
+    const turned = Camera.perspective(Math.PI / 2, 1, 0.1, 1000);
+    turned.lookAt([0, 0, 0], [0, 0, 1]);
+    const g = r.beginFrame(0, 0);
+    g.mesh(sphere, a, front);
+    g.mesh(sphere, a, back);
+    r.render(g, r.camera);
+    r.render(g, turned);
+    r.endFrame();
+    expect(r.stats.culled).toBe(2);
+    expect(r.stats.instances).toBe(2);
   });
 });
 

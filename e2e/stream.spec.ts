@@ -7,9 +7,11 @@
  *   a full chunk), and no GPU error is logged;
  * - a pixel sampled at the grid centre shows lit geometry and one above the grid shows sky;
  * - two neighbouring chunks show two layers of the texture array (ws/texture-array).
+ * - aimed at the grid's corner (`api.look('edge')`), the renderer frustum-culls the chunks that
+ *   leave the view (`stats.culled`) and draws only the rest (ws/cull).
  */
 import type { Frame, Page } from '@playwright/test';
-import type { HarnessStreamState, StreamProbe } from '../harness/stream-state';
+import type { HarnessStreamState, StreamLook, StreamProbe } from '../harness/stream-state';
 import { expect, harnessFrame, test } from './fixtures';
 import { HARNESS_URL, WRAPPER_URL } from './ports';
 
@@ -137,6 +139,35 @@ test('two chunks sample two layers of the texture array', async ({ page, wrapper
   const [na, nb] = [chroma(ca!), chroma(cb!)];
   const apart = Math.max(...na.map((v, i) => Math.abs(v - nb[i]!)));
   expect(apart, `layer ${a!.layer} ${ca}, layer ${b!.layer} ${cb}`).toBeGreaterThan(0.08);
+  expect(s.gpuErrors).toBe(0);
+  expect(errors).toEqual([]);
+});
+
+test('chunks outside the frustum are culled', async ({ page, wrapper }) => {
+  await open(page, wrapper);
+  const chunks = (await read()).chunks;
+  // Looking at the grid centre, every chunk is in view and drawn.
+  await expect.poll(async () => (await read()).stats.instances).toBe(chunks);
+  expect((await read()).stats.culled).toBe(0);
+  const look = (where: StreamLook) =>
+    frame.evaluate((w) => {
+      const api = window.__harnessStream;
+      if (!api) throw new Error('window.__harnessStream missing');
+      api.look(w);
+    }, where);
+  // Aimed past the far corner, about half the chunks leave the frustum: they are counted as
+  // culled and not drawn, so the drawn instances and the culled draws still add up to the grid.
+  await look('edge');
+  await expect.poll(async () => (await read()).stats.culled).toBeGreaterThan(0);
+  const s = await read();
+  expect(s.stats.culled).toBeLessThan(chunks);
+  expect(s.stats.culled).toBeGreaterThanOrEqual(chunks / 4);
+  expect(s.stats.instances + s.stats.culled).toBe(chunks);
+  expect(s.stats.drawCalls).toBeLessThanOrEqual(s.stats.instances);
+  // Back to the centre: nothing culled again.
+  await look('grid');
+  await expect.poll(async () => (await read()).stats.culled).toBe(0);
+  expect((await read()).stats.instances).toBe(chunks);
   expect(s.gpuErrors).toBe(0);
   expect(errors).toEqual([]);
 });

@@ -68,7 +68,8 @@ function touchAt(cdp: CDPSession, type: 'touchStart' | 'touchMove', x: number, y
 
 test('boots the cube field with no errors', async () => {
   const s = await read();
-  expect(s.instances).toBe(26);
+  // 26 cubes recorded; the camera frustum-culls the ones out of view (ws/cull).
+  expect(s.instances + s.culled).toBe(26);
   expect(s.gpuErrors).toBe(0);
   expect(s.locked).toBe(false);
   expect(errors).toEqual([]);

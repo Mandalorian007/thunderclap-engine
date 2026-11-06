@@ -27,6 +27,9 @@ export const ORTHO2D_HALF_DEPTH = 1024;
 /** Floats in the WGSL `EngineCamera` block (256 bytes). */
 export const CAMERA_BLOCK_FLOATS = 64;
 
+/** Floats in `Camera.frustum`: six planes × (a, b, c, d). */
+export const FRUSTUM_FLOATS = 24;
+
 const tmp: number[] = [0, 0, 0];
 /** `fitFreeRect`'s viewport in screen units (one per module; the camera reads it synchronously). */
 const freeScratch: CameraRect = { x: 0, y: 0, width: 0, height: 0 };
@@ -74,6 +77,13 @@ export class Camera {
    * of the frame's `render` calls.
    */
   viewIndex = 0;
+  /**
+   * Frustum-cull mesh draws through this camera: a draw whose bounding sphere (`mesh.bounds`
+   * through its instance matrix) lies outside any plane of `frustum` is skipped before the sort
+   * and counted in `renderer.stats.culled`. Off for `ortho2d` (the 2D path is untouched), on
+   * for `perspective`. Sprites and meshes without bounds are never culled.
+   */
+  cull = false;
 
   private readonly viewM = mat4.create();
   private readonly projM = mat4.create();
@@ -94,6 +104,8 @@ export class Camera {
   private dirty = true;
   private invDirty = true;
   private posDirty = true;
+  private frustumDirty = true;
+  private readonly frustumM = new Float32Array(FRUSTUM_FLOATS);
 
   /** 1 world unit = 1 design px over a `designW × designH` space, origin top-left, y down. */
   static ortho2d(designW: number, designH: number): Camera {
@@ -102,13 +114,14 @@ export class Camera {
 
   /**
    * Perspective camera at the origin looking down -z. `fovY` in radians; `far` may be
-   * `Infinity`. Depth test and write are on.
+   * `Infinity`. Depth test, depth write and frustum culling are on.
    */
   static perspective(fovY: number, aspect: number, near: number, far: number): Camera {
     const c = new Camera().setPerspective(fovY, aspect, near, far);
     c.setView(mat4.identity(c.viewM));
     c.depthTest = true;
     c.depthWrite = true;
+    c.cull = true;
     return c;
   }
 
@@ -356,6 +369,34 @@ export class Camera {
     for (let i = 57; i < CAMERA_BLOCK_FLOATS; i++) f32[o + i] = 0;
   }
 
+  /**
+   * The six frustum planes of `viewProjection` as `FRUSTUM_FLOATS` (24) floats: left, right,
+   * bottom, top, near, far, each `(a, b, c, d)` with a unit normal pointing inside, so a point
+   * `p` is inside when `a·x + b·y + c·z + d >= 0` on every plane and a sphere of radius `r`
+   * is outside when that is `< -r` on any. Cached like the matrices. An infinite far plane
+   * (`far = Infinity`) is all zeros but `d > 0`, which never rejects. Read-only.
+   */
+  get frustum(): Float32Array {
+    this.update();
+    if (this.frustumDirty) {
+      this.frustumDirty = false;
+      extractFrustum(this.frustumM, this.viewProjM);
+    }
+    return this.frustumM;
+  }
+
+  /**
+   * Is a world-space sphere at least partly inside the frustum? `radius` 0 tests a point. Pure
+   * plane tests; nothing allocates.
+   */
+  seesSphere(x: number, y: number, z: number, radius: number): boolean {
+    const f = this.frustum;
+    for (let i = 0; i < FRUSTUM_FLOATS; i += 4) {
+      if (f[i]! * x + f[i + 1]! * y + f[i + 2]! * z + f[i + 3]! < -radius) return false;
+    }
+    return true;
+  }
+
   // ------------------------------------------------------------------ internals
 
   private touch2d(): void {
@@ -366,6 +407,7 @@ export class Camera {
     this.dirty = true;
     this.invDirty = true;
     this.posDirty = true;
+    this.frustumDirty = true;
     return this;
   }
 
@@ -421,4 +463,50 @@ function ortho2dViewProj(
   g[13] = s * sy * cx + c * sy * cy;
   g[14] = 0.5;
   g[15] = 1;
+}
+
+/**
+ * The six planes of a column-major clip matrix `m` (WebGPU clip space: `-w ≤ x, y ≤ w`,
+ * `0 ≤ z ≤ w`) into `out` (24 floats), normals normalised and pointing inside. Row `i` of `m`
+ * is `(m[i], m[4+i], m[8+i], m[12+i])`; the planes are `row3 ± row0`, `row3 ± row1`, `row2`
+ * and `row3 - row2`. A degenerate plane (an infinite far plane) is left unnormalised.
+ */
+function extractFrustum(out: Float32Array, m: ArrayLike<number>): void {
+  const r0 = 0;
+  const r1 = 1;
+  const r2 = 2;
+  const r3 = 3;
+  plane(out, 0, m, r3, r0, 1);
+  plane(out, 4, m, r3, r0, -1);
+  plane(out, 8, m, r3, r1, 1);
+  plane(out, 12, m, r3, r1, -1);
+  plane(out, 16, m, r2, r2, 0);
+  plane(out, 20, m, r3, r2, -1);
+}
+
+/** `out[o..o+4) = normalise(row a + sign · row b)` of `m`; `sign` 0 copies row `a`. */
+function plane(
+  out: Float32Array,
+  o: number,
+  m: ArrayLike<number>,
+  a: number,
+  b: number,
+  sign: number,
+): void {
+  let x = m[a]! + sign * m[b]!;
+  let y = m[4 + a]! + sign * m[4 + b]!;
+  let z = m[8 + a]! + sign * m[8 + b]!;
+  let d = m[12 + a]! + sign * m[12 + b]!;
+  const len = Math.hypot(x, y, z);
+  if (len > 0) {
+    const k = 1 / len;
+    x *= k;
+    y *= k;
+    z *= k;
+    d *= k;
+  }
+  out[o] = x;
+  out[o + 1] = y;
+  out[o + 2] = z;
+  out[o + 3] = d;
 }
