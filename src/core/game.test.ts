@@ -408,6 +408,45 @@ describe('createGame', () => {
     expect(panel.open).toBe(false);
     expect(ctx.ui.stack.size).toBe(0);
   });
+
+  it('input.replay drives ctx.input from the recording with no DOM attached', async () => {
+    // Record a session on one game: Space held for ticks 1 and 2, then released.
+    const recorded = await createGame({
+      ...options([]),
+      input: { ...options([]).input, record: true },
+    });
+    if (!recorded) throw new Error('no ctx');
+    const rec = recorded.input.recorder;
+    if (!rec) throw new Error('no recorder');
+    const held: boolean[] = [];
+    recorded.hooks.update = () => held.push(recorded.input.held('go'));
+    recorded.loop.tickOnce(1 / 60);
+    recorded.input.keyDown('Space');
+    recorded.loop.tickOnce(1 / 60);
+    recorded.loop.tickOnce(1 / 60);
+    recorded.input.keyUp('Space');
+    recorded.loop.tickOnce(1 / 60);
+    const recording = rec.stop();
+    expect(recorded.input.recorder).toBeNull();
+    expect(held).toEqual([false, true, true, false]);
+    expect(recording.ticks.length).toBeGreaterThan(0);
+
+    // Replay it on a second game: a real key press on the window is never seen.
+    document.body.innerHTML = '<main id="root"></main>';
+    const ctx = await createGame({
+      ...options([]),
+      input: { ...options([]).input, replay: recording },
+    });
+    if (!ctx) throw new Error('no ctx');
+    expect(ctx.input.playback).not.toBeNull();
+    expect(ctx.input.recorder).toBeNull();
+    const seen: boolean[] = [];
+    ctx.hooks.update = () => seen.push(ctx.input.held('go'));
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space' }));
+    for (let i = 0; i < 6; i++) ctx.loop.tickOnce(1 / 60);
+    expect(seen).toEqual([false, true, true, false, false, false]);
+    expect(ctx.input.playback?.done).toBe(true);
+  });
 });
 
 describe('createGame: xr', () => {
