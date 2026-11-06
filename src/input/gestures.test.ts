@@ -706,3 +706,86 @@ describe('Gestures as action bindings', () => {
     expect(input.getGestures()).toBeNull();
   });
 });
+
+describe("Gestures: pan: 'prefer' and the pan candidate (ws/input-3)", () => {
+  it('3 px, a 500 ms frame gap, then 12 px is a pan, never a long-press', () => {
+    const { g, tick } = setup({ pan: 'prefer' });
+    g.pointerDown(1, 0, 0);
+    g.pointerMove(1, 3, 0);
+    tick();
+    expect(g.longPress).toBeNull();
+    // A stalled frame: the next tick lands past longPressMs with the pointer still down.
+    tick(500);
+    expect(g.longPress).toBeNull();
+    g.pointerMove(1, 12, 0);
+    tick();
+    expect(g.pan).toMatchObject({ phase: 'start', dx: 12 });
+    expect(g.longPress).toBeNull();
+  });
+
+  it('the same sequence without prefer long-presses (the default is unchanged)', () => {
+    const { g, tick } = setup();
+    g.pointerDown(1, 0, 0);
+    g.pointerMove(1, 3, 0);
+    tick();
+    tick(500);
+    expect(g.longPress).not.toBeNull();
+    g.pointerMove(1, 12, 0);
+    tick();
+    expect(g.pan).toBeNull();
+  });
+
+  it('a candidate that lifts under the threshold is a tap in time, nothing when late', () => {
+    const { g, tick, advance } = setup({ pan: 'prefer' });
+    g.pointerDown(1, 0, 0);
+    g.pointerMove(1, 4, 0);
+    g.pointerUp(1, 4, 0);
+    tick();
+    expect(g.tap).not.toBeNull();
+    g.pointerDown(2, 0, 0);
+    g.pointerMove(2, 4, 0);
+    advance(600);
+    g.pointerUp(2, 4, 0);
+    tick();
+    expect(g.tap).toBeNull();
+    expect(g.longPress).toBeNull();
+  });
+
+  it('onPanCandidate is called once per press when travel passes a quarter of the threshold', () => {
+    const calls: [number, number][] = [];
+    const { g, tick } = setup({ onPanCandidate: (p, travel) => calls.push([p, travel]) });
+    g.pointerDown(1, 0, 0);
+    g.pointerMove(1, 2, 0);
+    expect(calls).toEqual([]);
+    g.pointerMove(1, 3, 0);
+    g.pointerMove(1, 20, 0);
+    tick();
+    expect(calls).toEqual([[1, 3]]);
+    // Without prefer the candidate still long-presses if it stays put.
+    g.pointerUp(1);
+    tick();
+    g.pointerDown(2, 0, 0);
+    g.pointerMove(2, 4, 0);
+    tick(500);
+    expect(calls).toEqual([
+      [1, 3],
+      [2, 4],
+    ]);
+    expect(g.longPress).not.toBeNull();
+  });
+
+  it('a claimed pointer is not a gesture at all', () => {
+    const { g, tick } = setup();
+    g.claim = (id, device) => device === 'mouse' && id === 9;
+    g.pointerDown(9, 0, 0, 'mouse');
+    g.pointerMove(9, 40, 0);
+    g.pointerDown(1, 0, 0);
+    g.pointerMove(1, 40, 0);
+    tick();
+    expect(g.pan).toMatchObject({ pointers: 1, dx: 40 });
+    g.pointerUp(9);
+    g.pointerUp(1);
+    tick();
+    expect(g.pan?.phase).toBe('end');
+  });
+});

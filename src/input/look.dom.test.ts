@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Gestures } from './gestures';
 import { Input } from './input';
 import { Look } from './look';
 
@@ -280,5 +281,87 @@ describe('Look lockOnFirstClick (ws/ergo-3d)', () => {
     look.attach(canvas);
     canvas.dispatchEvent(click());
     expect(req).not.toHaveBeenCalled();
+  });
+});
+
+describe('Look orbit mode in the DOM (ws/input-3)', () => {
+  let canvas: HTMLElement;
+
+  beforeEach(() => {
+    canvas = document.createElement('div');
+    document.body.appendChild(canvas);
+    vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 800, 400));
+  });
+
+  afterEach(() => {
+    canvas.remove();
+    vi.restoreAllMocks();
+    delete (document as { pointerLockElement?: unknown }).pointerLockElement;
+    delete (document as { exitPointerLock?: unknown }).exitPointerLock;
+  });
+
+  const mouse = (type: string, x: number, y: number, button = 0) =>
+    new PointerEvent(type, {
+      pointerId: 7,
+      pointerType: 'mouse',
+      isPrimary: true,
+      clientX: x,
+      clientY: y,
+      button,
+      bubbles: true,
+    });
+
+  it('never requests the lock, warns once about lockOnFirstClick, and drags via its own listeners', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const look = new Look({
+      mode: 'orbit',
+      sensitivity: 0.01,
+      lockOnFirstClick: true,
+      getGamepads: () => [],
+    });
+    const { req } = fakeLock(canvas, true);
+    look.attach(canvas);
+    canvas.dispatchEvent(mouse('pointerdown', 100, 100));
+    canvas.dispatchEvent(mouse('pointermove', 120, 100));
+    canvas.dispatchEvent(mouse('pointerdown', 100, 100));
+    look.update();
+    expect(req).not.toHaveBeenCalled();
+    expect(look.locked).toBe(false);
+    expect(look.look.dx).toBeCloseTo(0.2);
+    expect(warn).toHaveBeenCalledTimes(1);
+    await expect(look.request()).resolves.toBe(false);
+    expect(req).not.toHaveBeenCalled();
+    canvas.dispatchEvent(mouse('pointerup', 120, 100));
+    canvas.dispatchEvent(mouse('pointermove', 220, 100));
+    look.update();
+    expect(look.look.dx).toBe(0);
+    look.detach();
+  });
+
+  it('linked to an Input with Gestures, an orbit drag turns the view and never pans', () => {
+    const look = new Look({ mode: 'orbit', sensitivity: 0.01, getGamepads: () => [] });
+    const gestures = new Gestures({ now: () => 0 });
+    const input = new Input(
+      { pan: [{ gesture: 'pan' }] },
+      { look, gestures, getGamepads: () => [] },
+    );
+    input.attach({ pointerTarget: canvas });
+    canvas.dispatchEvent(mouse('pointerdown', 100, 100));
+    canvas.dispatchEvent(mouse('pointermove', 140, 100));
+    input.update();
+    expect(look.look.dx).toBeCloseTo(0.4);
+    expect(gestures.pan).toBeNull();
+    expect(input.held('pan')).toBe(false);
+    canvas.dispatchEvent(mouse('pointerup', 140, 100));
+    input.update();
+    // In locked mode the same drag is a pan again.
+    look.setMode('locked');
+    canvas.dispatchEvent(mouse('pointerdown', 100, 100));
+    canvas.dispatchEvent(mouse('pointermove', 140, 100));
+    input.update();
+    expect(look.look.dx).toBe(0);
+    expect(gestures.pan).not.toBeNull();
+    expect(input.held('pan')).toBe(true);
+    input.detach();
   });
 });

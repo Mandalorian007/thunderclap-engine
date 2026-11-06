@@ -29,6 +29,13 @@ export interface LookKeys {
 /** Which pad control zooms. */
 export type LookZoomPad = 'rightStickY' | 'shoulders' | 'none';
 
+/**
+ * How the mouse (and pen) look (ws/input-3). `'locked'`: pointer-locked `movementX/Y` after
+ * `request()`. `'orbit'`: a button-down drag on the attached element turns the view at the same
+ * `sensitivity`, no lock is ever requested, and the drag never reaches the linked `Gestures`.
+ */
+export type LookMode = 'locked' | 'orbit';
+
 export interface LookZoomOptions {
   /** The mouse wheel zooms (one notch, 100 px or `stepPx`, is 1). Default true. */
   wheel?: boolean;
@@ -80,6 +87,12 @@ export interface LookOptions {
    * requested. Default false: the game calls `request()` from its own click handler.
    */
   lockOnFirstClick?: boolean;
+  /**
+   * `'locked'` (default) or `'orbit'` (see `LookMode`). In orbit mode `lockOnFirstClick` is
+   * ignored (with one warning) and `request()` resolves false without asking. `setMode` switches
+   * at runtime.
+   */
+  mode?: LookMode;
 }
 
 /** `Look` events. */
@@ -183,6 +196,17 @@ export class Look {
   private target: HTMLElement | null = null;
   private detachFn: (() => void) | null = null;
   private readonly lockOnFirstClick: boolean;
+  private modeValue: LookMode;
+  private warnedLockOnFirstClick = false;
+  /** The orbit drag in progress (client CSS px), or NaN when none. */
+  private orbitX = Number.NaN;
+  private orbitY = Number.NaN;
+  /**
+   * True once a linked `Input` feeds the orbit drag through its own pointer feed (so the drag is
+   * recorded and replayed); the DOM listener here then leaves mouse and pen alone. Set by
+   * `Input.setLook`.
+   */
+  orbitFromInput = false;
 
   constructor(opts: LookOptions = {}) {
     this.sensitivity = opts.sensitivity ?? 0.0025;
@@ -203,6 +227,33 @@ export class Look {
     this.blocked = opts.blocked ?? (() => false);
     this.now = opts.now ?? defaultNow;
     this.lockOnFirstClick = opts.lockOnFirstClick ?? false;
+    this.modeValue = opts.mode ?? 'locked';
+  }
+
+  /** The look mode (`LookOptions.mode`); change it with `setMode`. */
+  get mode(): LookMode {
+    return this.modeValue;
+  }
+
+  /**
+   * Switch between pointer-locked and orbit look at runtime. Into orbit the lock is released;
+   * into locked a drag in progress ends (the game asks for the lock from its next click).
+   */
+  setMode(mode: LookMode): void {
+    if (mode === this.modeValue) return;
+    this.modeValue = mode;
+    if (mode === 'orbit') this.release();
+    else this.orbitUp();
+  }
+
+  /** True when the look takes mouse and pen pointers for itself (orbit mode), so gestures must not. */
+  claimsPointer(device: 'mouse' | 'touch' | 'pen'): boolean {
+    return this.modeValue === 'orbit' && device !== 'touch';
+  }
+
+  /** True while an orbit drag is in progress. */
+  get orbiting(): boolean {
+    return !Number.isNaN(this.orbitX);
   }
 
   /** Subscribe to `lockChange`. Returns the unsubscriber. */
@@ -325,6 +376,32 @@ export class Look {
     this.mouseY += dy;
   }
 
+  /**
+   * An orbit drag began at client (x, y) (mouse or pen, primary button). Nothing in locked mode.
+   * A linked `Input` feeds these from its own `buttonDown`, `pointerAt` and `buttonUp`.
+   */
+  orbitDown(x: number, y: number): void {
+    if (this.modeValue !== 'orbit' || this.blocked()) return;
+    this.orbitX = x;
+    this.orbitY = y;
+  }
+
+  /** The orbit pointer moved to client (x, y): the delta turns the view at `sensitivity`. */
+  orbitMove(x: number, y: number): void {
+    if (Number.isNaN(this.orbitX)) return;
+    if (!this.blocked()) {
+      this.mouseX += x - this.orbitX;
+      this.mouseY += y - this.orbitY;
+    }
+    this.orbitX = x;
+    this.orbitY = y;
+  }
+
+  /** The orbit drag ended. */
+  orbitUp(): void {
+    this.orbitX = this.orbitY = Number.NaN;
+  }
+
   /** Zoom units (wheel notches) to add to this tick's `zoom`; positive is closer. */
   wheel(units: number): void {
     if (this.blocked() || !this.zoomWheel) return;
@@ -409,6 +486,7 @@ export class Look {
   /** Drop every touch (blur, hidden tab, blocked). Fingers still down are ignored until lifted. */
   cancelAll(): void {
     this.voidTouches();
+    this.orbitUp();
     this.mouseX = this.mouseY = this.touchX = this.touchY = this.zoomAcc = 0;
   }
 
@@ -428,7 +506,7 @@ export class Look {
    */
   async request(): Promise<boolean> {
     const el = this.target;
-    if (!el || this.blocked()) return false;
+    if (!el || this.blocked() || this.modeValue === 'orbit') return false;
     const doc = el.ownerDocument;
     if (doc.pointerLockElement === el) return true;
     if (typeof el.requestPointerLock !== 'function') return false;
@@ -490,7 +568,13 @@ export class Look {
 
     const onDown = (e: PointerEvent) => {
       if (e.pointerType !== 'touch') {
-        if (this.lockOnFirstClick && !this.locked) void this.request();
+        if (this.modeValue === 'orbit') {
+          if (this.lockOnFirstClick && !this.warnedLockOnFirstClick) {
+            this.warnedLockOnFirstClick = true;
+            console.warn('[look] lockOnFirstClick is ignored in orbit mode');
+          }
+          if (!this.orbitFromInput && e.button === 0) this.orbitDown(e.clientX, e.clientY);
+        } else if (this.lockOnFirstClick && !this.locked) void this.request();
         return;
       }
       let inZone = false;
@@ -503,9 +587,11 @@ export class Look {
     };
     const onMove = (e: PointerEvent) => {
       if (e.pointerType === 'touch') this.touchMove(e.pointerId, e.clientX, e.clientY);
+      else if (!this.orbitFromInput && e.isPrimary) this.orbitMove(e.clientX, e.clientY);
     };
     const onUp = (e: PointerEvent) => {
       if (e.pointerType === 'touch') this.touchUp(e.pointerId);
+      else if (!this.orbitFromInput && e.button <= 0) this.orbitUp();
     };
     const onMouse = (e: MouseEvent) => {
       if (doc.pointerLockElement === target) this.mouseMove(e.movementX, e.movementY);
