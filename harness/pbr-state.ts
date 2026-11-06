@@ -1,0 +1,51 @@
+/**
+ * What the PBR demo page (harness/pbr.html) publishes on `window.__harnessPbr` for
+ * e2e/pbr.spec.ts. Shared by the page (harness/pbr.ts) and the spec.
+ */
+
+/** A point on the canvas, logical px (the camera's `screen`, 1920×1080). */
+export interface PbrProbe {
+  x: number;
+  y: number;
+}
+
+export interface HarnessPbrState {
+  /** True once boot resolved (whether or not WebGPU came up). */
+  ready: boolean;
+  /** 'ok', a `GpuFailureReason` or an error message. */
+  gpu: string;
+  /** Frames presented. */
+  frames: number;
+  logical: { width: number; height: number };
+  /** The orbit: yaw and pitch in radians, distance in world units, and the eye it places. */
+  camera: { yaw: number; pitch: number; distance: number; eye: [number, number, number] };
+  /** The sphere grid: metallic 0..1 across `cols`, roughness 0..1 down `rows`. */
+  grid: { cols: number; rows: number };
+  /**
+   * Screen positions (logical px) of four world points, recomputed every frame: `rough`, the
+   * centre of the rough dielectric sphere (metallic 0, roughness 1) as seen from the eye;
+   * `highlight`, the sun's specular highlight on the mid-roughness metal sphere (metallic 1,
+   * roughness 0.5; the point whose normal is the half vector of the sun and the eye);
+   * `tileLit` and `tileDark`, two points on the flat normal-mapped tile where the bump's slope
+   * faces toward and away from the sun. Only the normal map tells them apart.
+   */
+  probes: { rough: PbrProbe; highlight: PbrProbe; tileLit: PbrProbe; tileDark: PbrProbe };
+  /** `renderer.stats` of the last frame. */
+  stats: { drawCalls: number; instances: number };
+  /** `gpuDiagnostics.errorCount` (WGSL compile errors, uncaptured errors). */
+  gpuErrors: number;
+  /** `frame.lights`: whether the sun has a colour, how many point lights, shadow and fog on. */
+  lights: { sun: boolean; points: number; shadow: boolean; fog: boolean };
+  /** Standard materials created by the page. */
+  materials: number;
+}
+
+export interface HarnessPbrApi {
+  state: HarnessPbrState;
+}
+
+declare global {
+  interface Window {
+    __harnessPbr?: HarnessPbrApi;
+  }
+}
