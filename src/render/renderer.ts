@@ -10,7 +10,7 @@ import {
 } from './frame';
 import { FullscreenPass, type FullscreenPassDesc } from './fullscreen';
 import { type GpuPassTimes, GpuTimer, supportsTimestamps } from './gpu-timer';
-import { LIGHTS_BLOCK_FLOATS, type ShadowUniforms } from './lights';
+import { LIGHTS_BLOCK_FLOATS, packInstanceFlags, type ShadowUniforms } from './lights';
 import {
   DEPTH_FORMAT,
   type DepthMode,
@@ -1136,7 +1136,7 @@ export class Renderer implements FrameSink {
     d[o++] = q ? (q[2] ?? 0) : 0;
     d[o++] = q ? (q[3] ?? 0) : 0;
     d[o++] = p.emissive ?? 0;
-    d[o++] = p.receiveShadow === false ? 1 : 0; // flags: bit 0 = does not receive shadow
+    d[o++] = packInstanceFlags(p.receiveShadow !== false, p.layers ?? 1); // flags: bit 0 = no shadow, bits 1.. = layers
     d[o++] = sx;
     d[o] = sy;
 

@@ -44,11 +44,11 @@ p.close();
 ```
 
 - **Modal** (the default): dims the background, traps Tab inside the panel, and makes lower panels
-  plus the `hud` and `captions` layers `inert`. `hasModal` stays true while it is open.
+  plus the `hud`, `captions` and `layout` layers `inert`. `hasModal` stays true while it is open.
 - **Esc** closes the top panel if it is dismissible (the default). The handler calls
   `preventDefault` and `stopPropagation` from a `document` listener, so a key listener on `window`,
   which is where `Input.attach` listens, does not see that Escape. Clicking the backdrop also
-  closes the panel unless `closeOnBackdrop: false`.
+  closes the panel when `closeOnBackdrop` (default: the panel's `dismissible`) is true.
 - On open, focus moves to `initialFocus`, otherwise to the first focusable element, otherwise to the
   panel itself. On close, focus goes back to whatever had it before.
 - **Focus home.** `createOverlay({ focusHome: () => canvas })` names where focus goes when a
@@ -88,7 +88,7 @@ await ui.caption.say('Something old is listening.', {
 ```
 
 - The full line goes into a polite live region (`role=status`) immediately. Screen readers read the
-  sentence once and never hear the typewriter, and the visible card is `aria-hidden`.
+  sentence once and never hear the typewriter, and the card's portrait, speaker and text are `aria-hidden`.
 - Unrevealed characters are rendered `visibility: hidden`, so the card has its final size from the
   first frame and never reflows while typing.
 - The first click (or `advance()`) skips the reveal. The next one dismisses the line. `clear()`
@@ -100,9 +100,9 @@ await ui.caption.say('Something old is listening.', {
 - Corners: `bottom-right` (the default), `bottom-left`, `top-right`, `top-left`. Set one per card
   with `caption: { corner }` or per line with `say(…, { corner })`. For a second, independent card,
   create one: `new CaptionCard(ui.layers.captions, opts)`.
-- Size: the card is as wide as its text needs, up to `--tc-caption-max-width` (default 720px), and
-  sits `--tc-caption-margin` from the edges. It has no max height and long words wrap, so text is
-  never clipped. Set both vars on `.tc-overlay` to tune them per game.
+- Size: the card is as wide as its text needs, up to `--tc-caption-max-width` (default 720px; 480px for a card
+  docked in `css` units), and sits `--tc-caption-margin` from the edges. It has no max height and
+  long words wrap, so text is never clipped. Set both vars on `.tc-caption` to tune them per game.
 - `onPlace(fn)` runs whenever the card is laid out in its corner (a new line, back from
   suspension, undocked), after its corner is reset and its inline `max-width` cleared. A game that
   must keep the card off parts of its scene moves or narrows it there (`overlapArea` and
@@ -234,8 +234,8 @@ Fonts come from system stacks: the serif body uses Iowan / Palatino / Georgia, a
 `system-ui`. Nothing is fetched at runtime. To use a custom font, self-host an OFL font with its
 licence and put it first in the stack.
 
-The base stylesheet (`BASE_CSS`) is injected once per document, and every rule in it is scoped under
-`.tc-overlay`. Under `prefers-reduced-motion: reduce` it turns off all animations and transitions
+The base stylesheet (`BASE_CSS`) is injected once per document; its rules match only the overlay's own
+`.tc-*` classes (most under `.tc-overlay`, the layer and region classes at top level). Under `prefers-reduced-motion: reduce` it turns off all animations and transitions
 inside the overlay.
 
 ## Layout API: `ui.layout`

@@ -38,15 +38,12 @@ const p = surface.clientToLogical(e.offsetX, e.offsetY); // design px
   `backbuffer` (`BackbufferSize`: device px and the `pixelRatio` used), `onResize(fn)` (called
   with a `SurfaceSize` `{ rect, backbuffer }`), `clientToLogical` / `logicalToClient`,
   `containsLogical`, `setFrame(rect | null)` (letterbox inside part of the container, e.g. the
-  layout's `freeRect`), `setFill(opts | null)` (fill-width), `layout()` and `destroy()`.
+  layout's `freeRect`), `layout()` and `destroy()`.
 - Pure math (no DOM, tested in Node): `computeLetterbox(containerW, containerH, logicalW,
-  logicalH): Letterbox`, `computeFillWidth(...)` with `FillWidthOptions` (`minVisible`,
-  `focusY`, `minVisibleWidth`, `focusX`), `computeBackbuffer(cssW, cssH, dpr, maxDpr?,
+  logicalH): Letterbox`, `computeBackbuffer(cssW, cssH, dpr, maxDpr?,
   maxPixels?)`, and `clientToLogical(box, logicalW, logicalH, cx, cy, out?)` /
   `logicalToClient(...)`. `Rect` is `{ x, y, width, height }`; `Letterbox` adds `scale` (CSS px per
   logical unit); `Vec2` is `{ x, y }`.
-- `setFill`, `computeFillWidth` and `FillWidthOptions` have no engine caller since ws/render-call
-  and are being deleted by ws/plumbing (E-010).
 
 ## Page, device and fullscreen
 
