@@ -54,6 +54,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Sockets | ws/sockets | `createSocket`, `socketWorld`, `attachTransform`, `Skeleton.names`; harness `sockets.html` | anim | 🔧 in progress (on ws/anim) |
 | 5 | Texture registry | ws/texture-registry | `loadTexture` with mips, `defaultTextures` (white, black, flatNormal, metalRough, checker), unset slots bind white | pbr (wish) | ✅ green at `69a0d32` (705 tests; e2e 524/57/5 E-017 flakes); queued in chain 1 after spot-lights |
 | 5 | Geometry | ws/geom | `@thunderclap/engine/geom`: box/plane/sphere/icosphere/capsule/cylinder/torus, `Heightfield` with `heightAt`/`raycastHeightfield`, merge/transform; harness `geom.html` | — | 🔧 in progress |
+| 5 | IK + root motion | ws/ik | `twoBoneIk`, `lookAt`, `extractRootMotion`, `applyRootMotionDelta`; harness `ik.html` | anim | 🔧 in progress (on ws/anim) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
