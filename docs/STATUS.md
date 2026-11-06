@@ -54,11 +54,12 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Sockets | ws/sockets | `createSocket`, `socketWorld`, `attachTransform`, `Skeleton.names`; harness `sockets.html` | anim | ✅ green at `08085b6` (625 tests; e2e 510/52/0); queued in chain 2 after pick |
 | 5 | Texture registry | ws/texture-registry | `loadTexture` with mips, `defaultTextures` (white, black, flatNormal, metalRough, checker), unset slots bind white | pbr (wish) | ✅ green at `69a0d32` (705 tests; e2e 524/57/5 E-017 flakes); queued in chain 1 after spot-lights |
 | 5 | Geometry | ws/geom | `@thunderclap/engine/geom`: box/plane/sphere/icosphere/capsule/cylinder/torus, `Heightfield` with `heightAt`/`raycastHeightfield`, merge/transform; harness `geom.html` | — | ✅ green at `ec57488` (747 tests; e2e 569/57/0); queued chain 4 |
-| 5 | IK + root motion | ws/ik | `twoBoneIk`, `lookAt`, `extractRootMotion`, `applyRootMotionDelta`; harness `ik.html` | anim | 🔧 in progress (on ws/anim) |
+| 5 | IK + root motion | ws/ik | `twoBoneIk`, `lookAt`, `extractRootMotion`, `applyRootMotionDelta`; harness `ik.html` | anim | ✅ green at `4885580` (638 tests; e2e 491/52/3, all mesh.spec drag under load, E-017); queued chain 4 after geom |
 | 5 | Anim graph | ws/anim-graph | `createAnimGraph`: states, 1D blend spaces with phase sync, conditional transitions, enter/exit hooks; harness `anim-graph.html` | anim | 🔧 in progress |
-| 5 | HUD widgets | ws/ui-hud | `ui.reticle`, `ui.meter`, `ui.slots`, `ui.heading` on the overlay; harness `hud.html` | ui | 🔧 in progress |
+| 5 | HUD widgets | ws/ui-hud | `ui.reticle`, `ui.meter`, `ui.slots`, `ui.heading` on the overlay; harness `hud.html` | ui | ✅ green at `97e0af3` (723 tests; e2e 587/92/3, all E-017 list); queued chain 4 after ik |
 | 5 | Gesture long-press | ws/gesture-longpress | pan threshold before long-press, cumulative travel, `Gestures.onGesture` observer | gestures | 🔧 in progress |
 | 5 | Audio zones | ws/audio-zones | `audio.zones` (ambient loops, reverb sends by listener position), `Voice.follow`, `audio.update(dt)`; harness `zones.html` | audio | 🔧 in progress |
+| 5 | Retargeting | ws/retarget | `createRetargetMap`, `retargetPose`, `retargetClip`; name matching; harness `retarget.html` | anim | 🔧 in progress |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
@@ -95,6 +96,8 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - `Gestures.pointerMove` runs `checkLongPress` before the pan threshold is crossed, so a slow drag under a long frame becomes a long-press and later moves are ignored (ws/flake-input root cause of the drag flake). A `Gestures` option or hook to observe pan events was wished for. → ws/gesture-longpress.
 - Replace the hand-built cube/ground/tube/icosphere geometry in `harness/mesh.ts`, `pick.ts`, `skin.ts` and the first-person template terrain with `geom` builders (ws/geom wish). → ws/comment-sweep.
 - Tangents in a vertex layout, for a normal-mapped material (ws/geom wish). → ws/gltf-materials.
+- A mat3→quat helper in `anim/quat.ts` (ws/ik wish). → ws/comment-sweep.
+- Fold `HUD_CSS` (second `<style id="tc-ui-hud">`) into `styles.ts` `BASE_CSS` (ws/ui-hud note). → ws/comment-sweep.
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
