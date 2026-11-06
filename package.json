@@ -26,6 +26,7 @@
     "./audio": "./src/audio/index.ts",
     "./core": "./src/core/index.ts",
     "./fx": "./src/fx/index.ts",
+    "./geom": "./src/geom/index.ts",
     "./host": "./src/host/index.ts",
     "./input": "./src/input/index.ts",
     "./platform": "./src/platform/index.ts",
