@@ -118,3 +118,7 @@ User direction: several lightweight demos for engine use cases, outside the engi
 ## E-022 — stream.spec probe margin is load-sensitive (2026-11-06)
 
 Chain 2 held ws/template-first-person (8d8db9b) because `stream.spec` "the streamed geometry is on screen" read `sum(ground)` 327.3 against a required >330 on desktop-1920, at load average ~60 with 14 agents on the machine; the other seven rows passed and the template touches no render code. Decision: a load flake. Added to the E-017 list; land. The spec's fixed threshold joins the ws/flake-input style of fix (polled, relative probe) in the backlog. Also: integrators use the attribution line the PM gives (Fable 5.1), not a session reminder's default.
+
+## E-023 — landing priority under machine load (2026-11-06)
+
+With five integrator chains and twelve engineers on one machine, load average reached 76–91; e2e runs took 24 min instead of 5 and timed out on predicates rather than failing on assertions. Each code landing on main forces every other integrator to re-merge and rerun. Decision: when an integrator reports an unusable run from load, the PM names one chain to land next and asks the others to finish their merge and gates but hold the land step until that landing is announced. A run with widespread 10 s predicate / 30 s test timeouts is not a gate result and is rerun when load falls, which is not a flake retry (the E-017/E-020 rules concern assertion failures). Engineers keep working; their single gate run comes at the end.
