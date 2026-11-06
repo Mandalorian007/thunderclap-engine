@@ -9,8 +9,9 @@ lights, and materials that take custom WGSL. It has no runtime dependencies.
 beginFrame(time, dt) → Frame
   frame.sprite / frame.mesh / frame.drawable   (record only; nothing hits the GPU yet)
 render(frame, camera, target = renderer.target)   once per camera
-  1. first call of the frame: pre-passes, then drawable.prepare() (compute, uploads)
-  2. write this view's globals + camera + lighting blocks (one 1072 B buffer per view) and its instances
+  1. first call of the frame: pre-passes and the per-draw uniform upload; every call: drawable.prepare()
+     for each drawable in this view not yet prepared this frame (compute, uploads)
+  2. write this view's globals + camera + lighting blocks (one 1184 B buffer per view) and its instances
      (appended to the shared instance buffer)
   3. scene pass into the target: colour (@location 0) and emissive (@location 1), both
      rgba16float, plus depth24plus when camera.depthTest; the first view into a target
@@ -43,13 +44,13 @@ renderer.endFrame();
 - **Targets.** `renderer.target` is the `SceneTarget` the post stack reads;
   `renderer.createSceneTarget({ width, height, label? })` makes an offscreen one (a portal, a
   minimap) whose `color` and `emissive` are sampleable `Texture`s. `target.depth` exists once
-  a depth camera has rendered into it.
+  a depth camera has rendered into it (or as soon as an external target adopts a depth texture).
   `SceneTargetDesc` is `{ width, height, label? }`; both colour targets use `SCENE_FORMAT`
   (`rgba16float`).
 - **External targets (XR).** `SceneTarget.external({ device, color, depth?, view?, viewport?,
   label? })` (`SceneTargetExternal`) wraps a colour texture someone else owns (a WebXR projection
   layer's `getViewSubImage` colour, one array layer through `view`) and optionally its depth,
-  allocating only the emissive target; `isExternal`, `adoptedColor`, `viewport`
+  allocating only the emissive target (and its own depth, if none was adopted, on first depth use); `isExternal`, `adoptedColor`, `viewport`
   (`SceneTargetViewport`, the sub-image rect in px) and `adopt(desc)` (re-point at the next
   frame's textures; a no-op when they are the same) are its extras; `resize` throws, `destroy`
   never destroys what it adopted. `XrSurface` in `@thunderclap/engine/platform` builds one per
@@ -158,7 +159,7 @@ never culled.
 | 12..15 | `uvRect` (@6) | u0, v0, u1, v1 |
 | 16..19 | `tint` (@7) | linear RGBA |
 | 20..23 | `params` (@8) | free vec4 |
-| 24..27 | `misc` (@9) | emissive, flags (reserved, 0), size.x, size.y |
+| 24..27 | `misc` (@9) | emissive, flags (bit 0 = does not receive shadow; the rest reserved), size.x, size.y |
 
 `INSTANCE_OFFSET` names these offsets. A custom vertex entry that wraps `engine_vertex(v)`
 needs no change; one that read the old 20-float fields (`v.xform`, the old `v.misc`, or the
@@ -219,7 +220,8 @@ renderer.render(frame, eye);                              // or renderer.camera 
 
 The engine supplies the lights; the style is your WGSL. `frame.lights` is a `Lights` (ambient
 rgb, one `sun { dir, color }`, `points: PointLight[]` with `position`, `color`, `radius`, the
-first `MAX_POINT_LIGHTS` = 16 uploaded) that the renderer writes as `EngineLights` at
+first `MAX_POINT_LIGHTS` = 16 uploaded, `spots: SpotLight[]`, the first `MAX_SPOT_LIGHTS` = 8
+uploaded, each light with an optional `layers` mask) that the renderer writes as `EngineLights` at
 `@group(0) @binding(2)` with every view, in the same upload as the globals and the camera. The
 default is unlit (ambient 1, no sun, no points), so a material that never reads the block, or
 one that multiplies by `engine_lambert`, draws exactly as before until the game sets lights.
@@ -249,9 +251,11 @@ In WGSL the block is `lights.ambient`, `lights.point_count` (u32), `lights.sun_d
 `engine_point_lights(n, p)` sums the point lights' Lambert diffuse with a `(1 - d/radius)²`
 falloff; `engine_lambert(n, p)` adds the ambient and the sun. Toon, rim or wrapped lighting
 reads the same fields and ignores the helpers. `Lights.writeBlock(f32, u32, offset, shadow?)`
-is the CPU layout (`LIGHTS_BLOCK_FLOATS` = 168 floats; `POINT_LIGHTS_OFFSET_FLOATS`,
+is the CPU layout (`LIGHTS_BLOCK_FLOATS` = 316 floats; `POINT_LIGHTS_OFFSET_FLOATS`,
 `POINT_LIGHT_FLOATS`, `SUN_VIEW_PROJ_OFFSET_FLOATS`, `SHADOW_PARAMS_OFFSET_FLOATS`,
-`FOG_OFFSET_FLOATS`), and allocates nothing; `lights.reset()` returns to the unlit default.
+`FOG_OFFSET_FLOATS`, `LAYERS_OFFSET_FLOATS`, `POINT_LAYERS_OFFSET_FLOATS`,
+`SPOT_LIGHTS_OFFSET_FLOATS`, `SPOT_LIGHT_FLOATS`), and allocates nothing; `lights.reset()`
+returns to the unlit default.
 Drawables that want the block add `WGSL_LIGHTS` to their shader (it also declares bindings 3
 and 4 below); `renderer.globalsLayout` already has bindings 2 to 4.
 `lights.sun` is a `DirectionalLight`: `dir` (the direction the light travels, any length),
@@ -270,7 +274,7 @@ the same `engine_vertex` as the scene, then binds the map as `engine_shadow_map`
 on the camera's layers still shadows what the view sees; it is sorted by mesh then material,
 its instances are uploaded after the scene's, and `renderer.stats.shadowDraws` counts them)
 (`texture_depth_2d`, `@group(0) @binding(3)`) with the comparison sampler
-`engine_shadow_sampler` (`@binding(4)`). Without a shadow a 1×1 depth placeholder is bound, so
+`engine_shadow_sampler` (`@binding(4)`). Until the first shadow pass a 1×1 depth placeholder is bound (afterwards the last map stays bound and `shadow_params.z` = 0 makes `engine_shadow` return 1), so
 one bind group layout serves both. The block gains `lights.sun_view_proj` (`mat4x4f`) and
 `lights.shadow_params` (bias, texel size, enabled, -).
 
@@ -281,11 +285,53 @@ one bind group layout serves both. The block gains `lights.sun_view_proj` (`mat4
   `VERTEX_LAYOUT_2D` sprites and quads, so a 2D scene never renders a shadow pass; blended
   materials never cast. `InstanceParams.receiveShadow: false` sets instance flag bit 0, read as
   `in.flags & 1u` in the fragment shader (`VSOut.flags`); the engine helpers do not read it.
-- `ShadowMap` (`SHADOW_FORMAT` = `depth32float`) is the renderer's piece: the texture, the
-  sampler, the placeholder, `sunCamera`, `place(center, sunDir, shadow, size)`,
+- `ShadowMap` (`SHADOW_FORMAT` = `depth32float`) is the renderer's piece: `view` (the map's
+  view, or the placeholder before a pass has rendered), the sampler, `sunCamera`, `place(center, sunDir, shadow, size)`,
   `pipelineFor(layout)` and `ShadowUniforms` (`viewProj`, `bias`, `texelSize`), what
-  `writeBlock` takes as its fourth argument. Games set `lights.sun.shadow`; drawables that
-  render their own passes may use it directly.
+  `writeBlock` takes as its fourth argument. Games set `lights.sun.shadow`; the renderer's
+  instance is private, so a drawable that renders its own shadow pass builds its own `ShadowMap`.
+
+### Spot lights and layer masks
+
+`lights.spots` holds `SpotLight`s: `position`, `direction` (the way the light travels, any
+length; normalised on upload), `color`, `radius` (distance falloff, as for points),
+`innerAngle` and `outerAngle` (radians from the axis: full inside the inner, gone outside the
+outer, a smooth Hermite step between; `spotCone(cosTheta, cosOuter, cosInner)` is the CPU twin
+of `engine_spot_cone`). The first `MAX_SPOT_LIGHTS` = 8 reach the shader as `lights.spots[i]`
+(`position`, `radius`, `direction`, `cos_outer`, `color`, `cos_inner`, `layers`) with
+`lights.spot_count`.
+
+Every light takes an optional `layers` mask (u32; default `ALL_LIGHT_LAYERS` = all bits):
+`DirectionalLight.layers` (`lights.sun_layers`), `PointLight.layers` (`lights.point_layers`,
+an `array<vec4u, 4>`: the mask of point `i` is `point_layers[i >> 2u][i & 3u]`) and
+`SpotLight.layers`. A light reaches an instance when the two masks share a bit, against the
+instance's `InstanceParams.layers` (the same mask the camera culls by). The instance's low
+`INSTANCE_LAYER_BITS` = 23 layer bits travel in the instance flags float above the shadow bit
+(`packInstanceFlags(receiveShadow, layers)`, `INSTANCE_LAYER_SHIFT` = 1), so a fragment shader
+reads them as `engine_instance_layers(in.flags)`; layers above bit 22 still cull but are
+invisible to lights.
+
+- `engine_light_accum(world_pos, normal, layer_mask) -> vec3f`: the sun (× `engine_shadow`),
+  point and spot Lambert terms of every light whose mask shares a bit with `layer_mask`; no
+  ambient. Custom WGSL (toon, PBR) builds on it.
+- `engine_lambert_layers(normal, world_pos, layer_mask)`: ambient + `engine_light_accum`.
+- `engine_lambert(normal, world_pos)`: the same over every layer (`0xffffffffu`), so a material
+  that ignores masks keeps its two-argument call; `engine_point_lights` likewise sums every
+  point light.
+
+```ts
+lights.spots.push({ position: [0, 5, 3], direction: [0, -1, 0], color: [3, 2.6, 1.8],
+  radius: 12, innerAngle: 0.18, outerAngle: 0.3 });              // a torch cone
+lights.points.push({ position: [0, 3, -1], color: [2.4, 2, 1.5], radius: 7, layers: 0b10 });
+frame.mesh(cube, lit, t, { layers: 0b10 });                      // only this cube sees the lamp
+```
+
+```wgsl
+let light = engine_lambert_layers(n, in.worldPos, engine_instance_layers(in.flags));
+```
+
+`harness/lights.html` sweeps a spot over the ground beside two cubes on different layers with a
+point light masked to one of them; `e2e/lights.spec.ts` samples both effects on the matrix.
 
 ### Fog
 
@@ -460,7 +506,7 @@ inside it to keep the standard transform.
 
 - `renderer.createMaterial(desc: MaterialDesc)` returns a `Material`. `MaterialDesc` takes
   `label`, `wgsl`, `blend` (`BlendMode`: `alpha`, `premultiplied`, `additive`, `opaque`),
-  `uniformBytes`, `textures`, `sampler` (`SamplerKind`: `linear-clamp`, `linear-repeat`,
+  `uniformBytes`, `textures`, `sampler` (`SamplerKind`: `linear-clamp`, `linear-repeat`, `linear-mip-repeat`, `nearest-mip-clamp`,
   `nearest-clamp`), `perDrawUniforms`, `vertexEntry` and `fragmentEntry`.
 - `material.pipelineFor(layout, depth)` returns the pipeline for a `VertexLayout` and a
   `DepthMode` (0 = no depth attachment, the 2D path; 1 = test without writes, for blended draws;
@@ -486,7 +532,8 @@ glow.setUniforms(shared);                            // used by draws without `u
 frame.sprite(glow, { x, y, w, h, uniforms: obj.u });  // own block, bound at a dynamic offset
 ```
 
-- Blocks are staged on the CPU and uploaded in one `writeBuffer` per material in `endFrame`.
+- Blocks are staged on the CPU and uploaded in one `writeBuffer` per material in the frame's first
+  `render()` call (or in the `render` that `endFrame` runs itself when nothing rendered).
   The buffer doubles when it runs out of room, so a steady scene allocates nothing.
 - Draws only batch together when they share a block. Draws without `uniforms` use the shared
   block (`setUniforms`) and still merge with each other.
