@@ -1,6 +1,6 @@
 # engine/anim
 
-Keyframe animation with no GPU in it: clips with glTF sampler semantics sampled into poses, a mixer that layers, weights and cross-fades them, and two resolutions a renderer consumes: node world matrices and skin joint matrices. Flat `Float32Array`s throughout; after setup nothing allocates per frame. No dependency on `render/`; `render/skin.ts` (ws/skinning) uploads what `skinMatrices` writes.
+Keyframe animation with no GPU in it: clips with glTF sampler semantics sampled into poses, a mixer that layers, weights and cross-fades them, a state graph over the mixer (states, 1D blend spaces, conditional transitions), and two resolutions a renderer consumes: node world matrices and skin joint matrices. Flat `Float32Array`s throughout; after setup nothing allocates per frame. No dependency on `render/`; `render/skin.ts` (ws/skinning) uploads what `skinMatrices` writes.
 
 ## Quick start
 
@@ -53,6 +53,36 @@ mixer.crossFade(walk, runClip, 0.3);       // weights sum to 1 throughout
 - `stop(action, seconds = 0)` (fade-out or at once), `stopAll()`.
 - `update(dt)`: `pose = rest`; per layer ascending, the override actions are averaged by effective weight (cumulative `w_i / Σ`) and lerped onto the pose by `min(1, Σ)`, so a lone half-weight action is half rest; then the layer's additive actions add their deltas at their weights. Nodes a layer does not animate pass through from below.
 - `onEvent(cb: AnimationEventListener)` → unsubscribe. `cb(name, action)` fires once per crossing of each `clip.events` time in playback order, across loop wraps (an event at `0` fires again on every wrap), in reverse when `speed < 0`, and for events at the start time on the first update after `play`.
+
+## Graph (`graph.ts`)
+
+`createAnimGraph(mixer, desc: AnimGraphDesc): AnimGraph` puts a small state graph over a mixer so a game sets parameters instead of calling `crossFade` from its own state.
+
+```ts
+const graph = createAnimGraph(mixer, {
+  params: { speed: 0, jump: false },
+  states: {
+    move: { blend: { param: 'speed', points: [{ at: 0, clip: idle }, { at: 0.5, clip: walk }, { at: 1, clip: run }] } },
+    jump: { clip: jumpClip, loop: false },
+  },
+  transitions: [
+    { from: '*', to: 'jump', when: (p) => p.jump === true, fade: 0.1 },
+    { from: 'jump', to: 'move', when: () => true, fade: 0.25, exitTime: 0.9 },
+  ],
+  initial: 'move',
+});
+graph.onEnter('jump', () => graph.set('jump', false));
+function frame(dt: number) {
+  graph.set('speed', velocity / runSpeed);
+  graph.update(dt);                        // transitions, fades, then mixer.update(dt)
+}
+```
+
+- **`AnimGraphDesc`** `{ params: AnimGraphParams; states: Record<string, AnimGraphStateDesc>; transitions: AnimGraphTransition[]; initial }`. `AnimGraphParams` is `Record<string, number | boolean>`; the graph copies it once and passes that same object to every condition, so conditions allocate nothing.
+- **States** (`AnimGraphStateDesc`): `AnimGraphClipState { clip; speed?; loop? }` plays one clip; `AnimGraphBlendState { blend: { param; points: AnimGraphBlendPoint[]; syncPhase? } }` is a 1D blend space (`AnimGraphBlendPoint { at; clip }`, sorted by `at`): the two points around the parameter share the weight linearly, beyond the ends the nearest point takes it all. With `syncPhase` (default true) every clip of the space runs at one normalised phase, advancing at the rate of the blended cycle (weighted mean of the durations) with each action's `speed` set to `duration / cycle`, so a walk→run blend keeps its feet in step; `false` plays each clip at speed 1.
+- **Transitions** (`AnimGraphTransition`) `{ from: string | '*'; to; when: (params) => boolean; fade; exitTime? }` are evaluated in order on every `update`; the first that applies wins and only one fires per update. `'*'` applies from any state except `to`. `exitTime` (0..1) holds a transition until the current state's phase (`time / duration` for a clip, 1 once a non-looping clip finished, the shared phase for a synced blend space) reaches it. Entering a state rewinds its clips to their start.
+- **Weights.** Every clip of every state is started on the mixer at construction with weight 0 (one `AnimationAction` each; size `maxActions` to fit) and keeps its slot. A transition lerps every state's weight from where it is toward 1 for the state entered and 0 for the rest over `fade` seconds (0 switches at once), so the weights sum to 1 at every instant, also when a fade interrupts another; a blend state spreads its weight over its points.
+- **`AnimGraph`**: `params`, `state` (the target of the latest transition, from the instant it fires), `previous`, `set(param, value)` (throws for an undeclared name), `get(param)`, `update(dt)`, `onEnter(state, fn)` / `onExit(state, fn)` → unsubscribe (`AnimGraphListener = (from, to) => void`; exit fires before enter, once per change), `weight(state)`, `actions(state)` (the state's mixer actions, in `points` order), `phase(state)`, `go(state, fade?)` (force a state, ignoring the transitions).
 
 ## Pose (`pose.ts`)
 

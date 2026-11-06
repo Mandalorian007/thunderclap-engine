@@ -20,6 +20,18 @@ export {
   sampleChannel,
   sampleClip,
 } from './clip';
+export type {
+  AnimGraph,
+  AnimGraphBlendPoint,
+  AnimGraphBlendState,
+  AnimGraphClipState,
+  AnimGraphDesc,
+  AnimGraphListener,
+  AnimGraphParams,
+  AnimGraphStateDesc,
+  AnimGraphTransition,
+} from './graph';
+export { createAnimGraph } from './graph';
 export type { AnimationEventListener, AnimationMixerOptions, PlayOptions } from './mixer';
 export { AnimationAction, AnimationMixer } from './mixer';
 export type { Pose, Skeleton } from './pose';
