@@ -36,3 +36,5 @@ Your worktree may start from an old commit. First `git reset --hard main` (or th
 4. Changes to shared files (function names and line ranges) for the integrator.
 5. Decisions you made that the brief left open, and anything you wished another module offered.
 6. Deviations from the brief, and anything you did not finish.
+
+Every commit message ends with the project's attribution line: `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` (the user's convention for this repo, whatever model runs the session).
