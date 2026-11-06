@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createIso } from '../geom/iso';
 import { createFakeDevice, type FakeDevice, fakeRendererGpu } from './fake-gpu';
 import { INSTANCE_FLOATS, INSTANCE_OFFSET } from './material';
 import { VERTEX_FLOATS, VERTEX_STRIDE } from './mesh';
@@ -179,5 +180,124 @@ describe('createTileLayer', () => {
 
   it('vertex layout is the 2D one: 8 floats per vertex', () => {
     expect(VERTEX_FLOATS).toBe(8);
+  });
+});
+
+describe("createTileLayer order: 'painter'", () => {
+  /** Captures the floats of every vertex upload, by buffer label. */
+  function capture(r: Renderer) {
+    const uploads = new Map<string, Float32Array[]>();
+    const queue = r.device.queue;
+    const original = queue.writeBuffer.bind(queue);
+    queue.writeBuffer = ((buffer, offset, data, dataOffset, size) => {
+      if (buffer.label.endsWith('-vb')) {
+        const list = uploads.get(buffer.label) ?? [];
+        list.push(new Float32Array((data as ArrayBuffer).slice(dataOffset!, dataOffset! + size!)));
+        uploads.set(buffer.label, list);
+      }
+      original(buffer, offset, data as ArrayBuffer, dataOffset, size);
+    }) as typeof queue.writeBuffer;
+    return uploads;
+  }
+
+  it('builds one mesh per diagonal and draws the non-empty bands back to front', () => {
+    const elev = (col: number, row: number) => (col === 1 && row === 1 ? 2 : 0);
+    const { layer, fake, r } = setup({ columns: 3, rows: 3, order: 'painter', elevation: elev });
+    expect(layer.order).toBe('painter');
+    expect(layer.meshes.length).toBe(5);
+    expect(layer.mesh).toBe(layer.meshes[0]);
+    expect(layer.meshes.map((m) => m.vertexCount)).toEqual([4, 8, 12, 8, 4]);
+    const uploads = capture(r);
+    layer.fill([0, 0, 0, 0, 1, 0, 0, 0, 0]);
+    const f = r.beginFrame(0, 0);
+    layer.draw(f, { order: 10 });
+    r.endFrame();
+    expect(sceneDraws(fake).length).toBe(5);
+    expect(r.stats.drawCalls).toBe(5);
+    // Each band uploaded once; the lifted tile (1, 1) sits in band 2 at slot 1 (after (2, 0)),
+    // 2 × elevH = 20 px up: y 20..40 becomes 0..20.
+    expect([...uploads.keys()]).toEqual([0, 1, 2, 3, 4].map((b) => `tile-layer-${b}-vb`));
+    const band2 = uploads.get('tile-layer-2-vb')![0]!;
+    const vert = (slot: number, i: number) => [
+      ...band2.slice(slot * 32 + i * 8, slot * 32 + i * 8 + 2),
+    ];
+    expect(vert(0, 0)).toEqual([20, 0]); // (2, 0)
+    expect(vert(1, 0)).toEqual([10, 0]); // (1, 1) lifted
+    expect(vert(1, 2)).toEqual([20, 20]);
+    expect(vert(2, 0)).toEqual([0, 40]); // (0, 2)
+    expect(layer.elevationAt(1, 1)).toBe(2);
+    expect(layer.elevationAt(0, 0)).toBe(0);
+    // The bands' orders: base + diagonal, in submission order.
+    const recs = (r as unknown as { recs: { order: number }[] }).recs;
+    expect(recs.slice(0, 5).map((x) => x.order)).toEqual([10, 11, 12, 13, 14]);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('skips empty bands, uploads nothing and draws the same when the map is static', () => {
+    const { layer, fake, r } = setup({ columns: 3, rows: 3, order: 'painter' });
+    layer.set(1, 1, 0);
+    const draw = () => {
+      const f = r.beginFrame(0, 0);
+      layer.draw(f);
+      r.endFrame();
+    };
+    draw();
+    expect(sceneDraws(fake).length).toBe(1);
+    expect(fake.writes.filter((w) => w.buffer.label?.endsWith('-vb')).length).toBe(1);
+    draw();
+    draw();
+    expect(fake.writes.filter((w) => w.buffer.label?.endsWith('-vb')).length).toBe(1);
+    expect(sceneDraws(fake).length).toBe(1);
+    expect(layer.count).toBe(1);
+  });
+
+  it('depthOf agrees with Iso.depth and refresh re-reads a changed elevation', () => {
+    const iso = createIso({ tileW: 10, tileH: 20, originX: 100, originY: 50 });
+    let lift = 0;
+    const { layer, r } = setup({
+      columns: 3,
+      rows: 3,
+      order: 'painter',
+      diamond: true,
+      iso,
+      elevation: (c, row) => (c === 2 && row === 0 ? lift : 0),
+    });
+    const uploads = capture(r);
+    layer.fill([0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    expect(layer.depthOf(2, 0)).toBe(iso.depth(2, 0, 0));
+    expect(layer.depthOf(1, 1, 3)).toBe(iso.depth(1, 1, 3));
+    expect(layer.depthOf(0, 2)).toBeLessThan(layer.depthOf(2, 1));
+    // Diamond placement: tile (2, 0)'s quad top-left is its centre less (tileW / 2, iso.tileH / 2).
+    const draw = () => {
+      const f = r.beginFrame(0, 0);
+      layer.draw(f);
+      r.endFrame();
+    };
+    draw();
+    const pt = { x: 0, y: 0 };
+    iso.toScreen(2, 0, 0, pt);
+    let band2 = uploads.get('tile-layer-2-vb')!;
+    expect([...band2[0]!.slice(0, 2)]).toEqual([pt.x - 5, pt.y - 10]);
+    // Lift it: nothing moves until refresh; then one upload of that band.
+    lift = 1;
+    draw();
+    expect(band2.length).toBe(1);
+    layer.refresh(2, 0);
+    expect(layer.elevationAt(2, 0)).toBe(1);
+    expect(layer.depthOf(2, 0)).toBe(iso.depth(2, 0, 1));
+    draw();
+    band2 = uploads.get('tile-layer-2-vb')!;
+    expect(band2.length).toBe(2);
+    iso.toScreen(2, 0, 1, pt);
+    expect([...band2[1]!.slice(0, 2)]).toEqual([pt.x - 5, pt.y - 10]);
+    expect(uploads.get('tile-layer-0-vb')!.length).toBe(1);
+    // refresh() without arguments walks every tile; nothing changed, nothing uploads.
+    layer.refresh();
+    draw();
+    expect(uploads.get('tile-layer-2-vb')!.length).toBe(2);
+  });
+
+  it('refuses diamond without an iso', () => {
+    expect(() => setup({ order: 'painter', diamond: true })).toThrow(/diamond/);
   });
 });

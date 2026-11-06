@@ -8,6 +8,8 @@ export {
   FRUSTUM_FLOATS,
   ORTHO2D_HALF_DEPTH,
 } from './camera';
+export type { Follow2D, Follow2DBounds, Follow2DCamera, Follow2DOptions } from './camera-2d';
+export { createFollow2D } from './camera-2d';
 export type { RGBA } from './color';
 export { hex, linearToSrgb, rgba, scaleRgb, srgbToLinear } from './color';
 export { gpuDiagnostics, installGpuErrorLogging, onGpuError, reportGpuError } from './diagnostics';
@@ -93,6 +95,8 @@ export {
 } from './mesh';
 export type { GenerateMipmapsOptions, MipFilter } from './mipmap';
 export { generateMipmaps } from './mipmap';
+export type { Parallax, ParallaxLayer, ParallaxLayerOptions } from './parallax';
+export { createParallax, parallaxOffset } from './parallax';
 export { WGSL_PBR } from './pbr-wgsl';
 export type { PingPongStepOptions } from './ping-pong';
 export { PingPong } from './ping-pong';
@@ -144,7 +148,7 @@ export {
   mipLevelCount,
   Texture,
 } from './texture';
-export type { TileLayer, TileLayerOptions } from './tile-layer';
+export type { TileLayer, TileLayerOptions, TileLayerOrder } from './tile-layer';
 export { createTileLayer } from './tile-layer';
 export type { ReadonlyQuat, ReadonlyVec3 } from './transform';
 export { Transform } from './transform';
