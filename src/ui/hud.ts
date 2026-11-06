@@ -13,6 +13,14 @@
  */
 import { h } from './dom';
 import type { Layout, RegionName, WidgetHandle } from './layout';
+import {
+  createOrbMeter,
+  meterClock,
+  meterReducedMotion,
+  readoutText,
+  TrailClock,
+  trailTimings,
+} from './orb';
 import type { PanelStack } from './stack';
 
 /** What the HUD factories need from the overlay. */
@@ -67,6 +75,11 @@ export const HUD_CSS = `
 .tc-overlay .tc-meter[data-tone="success"] .tc-meter-fill { background: var(--tc-color-success); }
 .tc-overlay .tc-meter[data-tone="warn"] .tc-meter-fill { background: var(--tc-color-warn); }
 .tc-overlay .tc-meter[data-tone="danger"] .tc-meter-fill { background: var(--tc-color-danger); }
+.tc-overlay .tc-meter-trail { position: absolute; inset: 0; transform-origin: left center; transform: scaleX(var(--tc-meter-trail, 1));
+  background: var(--tc-color-meter-trail); transition: transform var(--tc-meter-trail-duration, 600ms) linear var(--tc-meter-trail-delay, 400ms); }
+.tc-overlay .tc-meter[data-color] .tc-meter-fill { background: var(--tc-meter-color); }
+.tc-overlay .tc-meter[data-reduced] .tc-meter-fill { transition: none; }
+@media (prefers-reduced-motion: reduce) { .tc-overlay .tc-meter-trail { display: none; } }
 
 .tc-overlay .tc-slots { display: flex; gap: var(--tc-space-2); pointer-events: none; font-family: var(--tc-font-ui); }
 .tc-overlay .tc-slot { position: relative; display: grid; place-items: center; width: var(--tc-slot-size, ${themePx(72)}); height: var(--tc-slot-size, ${themePx(72)});
@@ -217,26 +230,77 @@ export interface MeterOptions {
   width?: number;
   /** Show the value as text beside the label (`v => \`${v}/${max}\``). Default none. */
   format?: (value: number, max: number) => string;
+  /** `'bar'` (default) or `'orb'`, a round fill gauge (`ui/orb.ts`, ws/ui-5). */
+  shape?: MeterShape;
+  /**
+   * A lagging damage band behind the fill: it holds where the value was, then drains to it.
+   * `true` for the defaults (`delay` 400 ms, `duration` 600 ms). Off under reduced motion.
+   */
+  trail?: boolean | MeterTrailOptions;
+  /**
+   * What the readout shows: the value (`format`, else the rounded value), a whole percent or
+   * nothing. Default `'value'` on an orb; a bar shows `format` only, as before.
+   */
+  readout?: MeterReadout;
+  /** A CSS colour for the fill, over the `tone` token. */
+  color?: string;
+  /** An orb's diameter, theme px. Default 128. */
+  size?: number;
+  /** Turn the trail and the fill's easing off. Default: `prefers-reduced-motion`. */
+  reducedMotion?: boolean;
+  /** The clock the trail is read on, ms. Default `performance.now`. */
+  now?: () => number;
+}
+
+/** A meter's shape: a horizontal bar or a round orb. */
+export type MeterShape = 'bar' | 'orb';
+
+/** What a meter's readout shows. */
+export type MeterReadout = 'value' | 'percent' | 'none';
+
+/** The damage trail's timing, ms. */
+export interface MeterTrailOptions {
+  /** How long the band holds before it drains. Default 400. */
+  delay?: number;
+  /** How long it takes to drain. Default 600. */
+  duration?: number;
 }
 
 export interface Meter {
   readonly el: HTMLElement;
+  readonly shape: MeterShape;
   readonly value: number;
   readonly max: number;
+  /** Where the damage trail is now (same units as `value`); `value` without a trail. */
+  readonly trail: number;
   /** Clamped to `[0, max]`; a new `max` re-clamps. */
   set(value: number, max?: number): void;
   setTone(tone: MeterTone): void;
+  /** A CSS colour for the fill over the tone, or null for the tone's token. */
+  setColor(color: string | null): void;
   remove(): void;
 }
 
 /** A labelled bar with `role="meter"`, in a layout region. */
 export function createMeter(host: HudHost, opts: MeterOptions = {}): Meter {
+  if (opts.shape === 'orb') return createOrbMeter(host, opts);
   ensureHudStyles(host.layers.hud.ownerDocument);
   let max = opts.max ?? 1;
   let value = Math.min(max, Math.max(0, opts.value ?? max));
+  const reduced = opts.trail || opts.reducedMotion ? meterReducedMotion(host, opts) : false;
+  const timings = trailTimings(opts, reduced);
+  const clock = timings ? new TrailClock(timings.delay, timings.duration, meterClock(opts)) : null;
   const label = h('span', null, opts.label ?? '');
   const readout = h('span', { class: 'tc-meter-readout' });
   const fill = h('div', { class: 'tc-meter-fill' });
+  const trailEl = clock ? h('div', { class: 'tc-meter-trail' }) : null;
+  const style: Record<string, string> = {};
+  if (opts.width !== undefined) style['--tc-meter-width'] = themePx(opts.width);
+  if (opts.color) style['--tc-meter-color'] = opts.color;
+  if (timings) {
+    style['--tc-meter-trail-delay'] = `${timings.delay}ms`;
+    style['--tc-meter-trail-duration'] = `${timings.duration}ms`;
+  }
   const el = h(
     'div',
     {
@@ -244,20 +308,37 @@ export function createMeter(host: HudHost, opts: MeterOptions = {}): Meter {
       role: 'meter',
       'aria-label': opts.label,
       'aria-valuemin': '0',
-      dataset: { tone: opts.tone ?? 'accent' },
-      style: opts.width !== undefined ? { '--tc-meter-width': themePx(opts.width) } : undefined,
+      dataset: {
+        tone: opts.tone ?? 'accent',
+        ...(reduced ? { reduced: '' } : {}),
+        ...(opts.color ? { color: '' } : {}),
+      },
+      style: Object.keys(style).length > 0 ? style : undefined,
     },
     h('div', { class: 'tc-meter-label' }, label, readout),
-    h('div', { class: 'tc-meter-track' }, fill),
+    h('div', { class: 'tc-meter-track' }, trailEl, fill),
   );
+  const frac = () => (max > 0 ? value / max : 0);
+  if (clock && trailEl) {
+    clock.reset(frac());
+    trailEl.style.setProperty('--tc-meter-trail', String(frac()));
+  }
   const write = () => {
     el.setAttribute('aria-valuenow', String(value));
     el.setAttribute('aria-valuemax', String(max));
-    fill.style.setProperty('--tc-meter-value', String(max > 0 ? value / max : 0));
+    fill.style.setProperty('--tc-meter-value', String(frac()));
     if (opts.format) {
       const text = opts.format(value, max);
       el.setAttribute('aria-valuetext', text);
       readout.textContent = text;
+    } else if (opts.readout && opts.readout !== 'none') {
+      const text = readoutText(opts.readout, value, max);
+      if (opts.readout === 'percent') el.setAttribute('aria-valuetext', text);
+      readout.textContent = text;
+    }
+    if (clock && trailEl) {
+      clock.retarget(frac());
+      trailEl.style.setProperty('--tc-meter-trail', String(frac()));
     }
   };
   write();
@@ -267,11 +348,15 @@ export function createMeter(host: HudHost, opts: MeterOptions = {}): Meter {
   });
   return {
     el,
+    shape: 'bar',
     get value() {
       return value;
     },
     get max() {
       return max;
+    },
+    get trail() {
+      return clock ? Math.max(value, clock.at() * max) : value;
     },
     set(v, m) {
       if (m !== undefined) max = Math.max(0, m);
@@ -282,6 +367,11 @@ export function createMeter(host: HudHost, opts: MeterOptions = {}): Meter {
     },
     setTone(tone) {
       el.dataset.tone = tone;
+    },
+    setColor(color) {
+      if (color) el.style.setProperty('--tc-meter-color', color);
+      else el.style.removeProperty('--tc-meter-color');
+      el.toggleAttribute('data-color', !!color);
     },
     remove() {
       handle.remove();

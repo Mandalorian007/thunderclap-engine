@@ -33,6 +33,8 @@ export const defaultTheme = {
   colorSuccess: '#8fd18a',
   colorWarn: '#f0b45a',
   colorDanger: '#e8766a',
+  /** The damage trail behind a meter's fill (ws/ui-5). */
+  colorMeterTrail: 'rgba(255, 236, 200, 0.75)',
 
   space1: '4px',
   space2: '8px',
