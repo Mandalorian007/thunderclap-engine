@@ -14,7 +14,7 @@ import {
 } from './frame';
 import { FullscreenPass, type FullscreenPassDesc } from './fullscreen';
 import { type GpuPassTimes, GpuTimer, supportsTimestamps } from './gpu-timer';
-import { InstanceList } from './instance-list';
+import { InstanceList, type InstanceListOptions } from './instance-list';
 import { LIGHTS_BLOCK_FLOATS, packInstanceFlags, type ShadowUniforms } from './lights';
 import {
   DEPTH_FORMAT,
@@ -30,6 +30,7 @@ import { PingPong } from './ping-pong';
 import {
   SCENE_FORMAT,
   SceneTarget,
+  type SceneTargetAux,
   type SceneTargetDesc,
   type SceneTargetViewport,
 } from './scene-target';
@@ -63,6 +64,25 @@ export interface PostInputs {
   depth: TextureLike | null;
   /** The last depth camera's projection, with `depth`; `null` without it. */
   projection: PostProjection | null;
+  /**
+   * The matrices of the last camera that rendered into the target this frame (ws/render-4):
+   * what a reprojecting pass (TAA, motion blur) needs. `null` before any view.
+   */
+  view: PostView | null;
+  /** The target's `rg8unorm` roughness/metalness attachment (`SceneTargetDesc.aux`), else null. */
+  roughMetal: TextureLike | null;
+  /** The target's `rg16float` screen-space velocity attachment (`SceneTargetDesc.aux`), else null. */
+  velocity: TextureLike | null;
+}
+
+/** A view's matrices for post passes: this frame's (with jitter) and last frame's (without). */
+export interface PostView {
+  viewProj: Float32Array;
+  invViewProj: Float32Array;
+  previousViewProj: Float32Array;
+  previousView: Float32Array;
+  /** The sub-pixel jitter applied this frame, in target pixels; `[0, 0]` without. */
+  jitter: [number, number];
 }
 
 /** A frame's projection for depth-reading post passes: clip planes and the column-major matrix. */
@@ -80,6 +100,12 @@ export interface PostProjection {
  * inputs may be smaller or larger than the last `resize`: a processor sizes itself to them.
  */
 export interface PostProcessor {
+  /**
+   * The processor reads `PostInputs.view.jitter` and reprojects (TAA): the renderer then applies
+   * each camera's `setJitter` offset to its projection. Without it no camera is ever jittered,
+   * whatever `setJitter` was given, so existing pages never move.
+   */
+  wantsJitter?: boolean;
   resize(width: number, height: number): void;
   encode(
     encoder: GPUCommandEncoder,
@@ -94,6 +120,8 @@ export interface RendererOptions {
   logicalHeight?: number;
   /** Initial instance capacity (grows by doubling). Default 4096. */
   initialInstances?: number;
+  /** Aux attachments of the default `target` (`SceneTargetDesc.aux`); none by default. */
+  aux?: SceneTargetAux;
 }
 
 export interface RendererGpu {
@@ -229,6 +257,11 @@ interface DrawCmd {
   castShadow: boolean;
   /** Instance buffer of a retained list (`frame.list`); null: the shared buffer at this view's base. */
   buffer: GPUBuffer | null;
+  /** The list's previous-matrix lane (vertex slot 2), when the pipeline reads one. */
+  prevBuffer: GPUBuffer | null;
+  /** Index range (`InstanceParams.range`): `firstIndex`, `indexCount` (-1: the whole mesh). */
+  firstIndex: number;
+  indexCount: number;
 }
 
 /** What `resolve`'s built-in present clears to when it covers the whole output. */
@@ -279,6 +312,9 @@ interface DrawRec {
   list: InstanceList | null;
   /** Mesh-space sphere a batch without `bounds` is culled by per instance; null: never. */
   mb: MeshBounds | null;
+  /** Index range of the draw (`InstanceParams.range`); `rangeCount` -1: the whole mesh. */
+  rangeFirst: number;
+  rangeCount: number;
 }
 
 /**
@@ -391,7 +427,12 @@ export class Renderer implements FrameSink {
   private readonly usedDepth: boolean[] = [];
   /** The last depth camera into each used target (ws/post-depth: `PostInputs.projection`). */
   private readonly usedCamera: Camera[] = [];
+  /** The target `buildDraws` is building for (its aux set keys the pipelines). */
+  private drawTarget: SceneTarget | null = null;
   private readonly postProjection: PostProjection = { near: 0, far: 0, proj: new Float32Array(16) };
+  /** `PostInputs.view` storage, one per inputs object (`postInputs`, `resolveInputs`). */
+  private readonly postView: PostView = newPostView();
+  private readonly resolveView: PostView = newPostView();
   private usedCount = 0;
   private instanceData: Float32Array;
   private instanceBuffer: GPUBuffer;
@@ -569,7 +610,7 @@ export class Renderer implements FrameSink {
     });
 
     this.frame = new Frame(this, this.logicalWidth, this.logicalHeight);
-    this.target = new SceneTarget(device, { width: 1, height: 1 });
+    this.target = new SceneTarget(device, { width: 1, height: 1, aux: opts.aux });
     this.postInputs = {
       color: this.target.color,
       emissive: this.target.emissive,
@@ -577,6 +618,9 @@ export class Renderer implements FrameSink {
       dt: 0,
       depth: null,
       projection: null,
+      view: null,
+      roughMetal: null,
+      velocity: null,
     };
     this.resolveInputs = { ...this.postInputs };
     this.resize(1, 1);
@@ -636,6 +680,8 @@ export class Renderer implements FrameSink {
     ]);
     this.postInputs.color = this.target.color;
     this.postInputs.emissive = this.target.emissive;
+    this.postInputs.roughMetal = this.target.roughMetal;
+    this.postInputs.velocity = this.target.velocity;
     this.post?.resize(w, h);
     for (const fn of this.resizeListeners) fn(w, h);
   }
@@ -897,13 +943,39 @@ export class Renderer implements FrameSink {
       this.drawUniformSets.length = 0;
     }
 
+    // Viewport: camera.screen in target pixels (see the doc comment).
+    const vp = this.viewRect;
+    const sc = camera.screen;
+    const tw = target.width;
+    const th = target.height;
+    if (sc.x >= 0 && sc.y >= 0 && sc.x + sc.width <= 1 && sc.y + sc.height <= 1) {
+      vp.x = sc.x * tw;
+      vp.y = sc.y * th;
+      vp.width = sc.width * tw;
+      vp.height = sc.height * th;
+    } else {
+      const kx = tw / frame.logicalWidth;
+      const ky = th / frame.logicalHeight;
+      vp.x = sc.x * kx;
+      vp.y = sc.y * ky;
+      vp.width = sc.width * kx;
+      vp.height = sc.height * ky;
+    }
+    const full = vp.x === 0 && vp.y === 0 && vp.width === tw && vp.height === th;
+
+    // History first, before anything reads the camera: last frame's matrices are what the
+    // camera held at its previous view. Jitter applies only when the post stack asks for it.
+    camera.recordHistory();
+    if (this.post?.wantsJitter) camera.setJitterTarget(vp.width, vp.height);
+    else camera.setJitterTarget(0, 0);
+
     // The sun box is placed before the draw lists are built: the shadow list culls against it.
     const shadowCfg = frame.lights.sun.shadow;
     if (shadowCfg) {
       const size = shadowCfg.size ?? DEFAULT_SHADOW_SIZE;
       this.shadow.place(camera.position, frame.lights.sun.dir, shadowCfg, size);
     }
-    const depth = this.buildDraws(camera);
+    const depth = this.buildDraws(camera, target);
     this.stats.culled += this.culledCount;
     const scene = this.scene;
     for (let i = 0; i < scene.count; i++) {
@@ -929,26 +1001,6 @@ export class Renderer implements FrameSink {
       this.instanceBase = base + needed;
     }
 
-    // Viewport: camera.screen in target pixels (see the doc comment).
-    const vp = this.viewRect;
-    const sc = camera.screen;
-    const tw = target.width;
-    const th = target.height;
-    if (sc.x >= 0 && sc.y >= 0 && sc.x + sc.width <= 1 && sc.y + sc.height <= 1) {
-      vp.x = sc.x * tw;
-      vp.y = sc.y * th;
-      vp.width = sc.width * tw;
-      vp.height = sc.height * th;
-    } else {
-      const kx = tw / frame.logicalWidth;
-      const ky = th / frame.logicalHeight;
-      vp.x = sc.x * kx;
-      vp.y = sc.y * ky;
-      vp.width = sc.width * kx;
-      vp.height = sc.height * ky;
-    }
-    const full = vp.x === 0 && vp.y === 0 && vp.width === tw && vp.height === th;
-
     const shadow = this.encodeShadow(enc, frame, camera, base);
     const slot = this.viewSlot(this.viewCount);
     this.writeView(frame, camera, target, slot, shadow);
@@ -971,13 +1023,14 @@ export class Renderer implements FrameSink {
     target.colorAtt.clearValue = frame.clearColor;
     target.colorAtt.loadOp = first ? 'clear' : 'load';
     target.emissiveAtt.loadOp = first ? 'clear' : 'load';
+    target.setAuxLoadOp(first ? 'clear' : 'load');
+    this.usedCamera[used] = camera;
     const desc = target.passDesc;
     desc.timestampWrites = timer?.pass('scene');
     if (depth) {
       const att = target.depthAttachment();
       att.depthLoadOp = this.usedDepth[used] ? 'load' : 'clear';
       this.usedDepth[used] = true;
-      this.usedCamera[used] = camera;
       desc.depthStencilAttachment = att;
     } else {
       desc.depthStencilAttachment = undefined;
@@ -1055,6 +1108,7 @@ export class Renderer implements FrameSink {
     let curOffset = -1;
     let curMesh: Mesh | null = null;
     let curBuffer: GPUBuffer | null = null;
+    let curPrev: GPUBuffer | null = null;
     let drawCalls = 0;
     let triangles = 0;
     let drawables = 0;
@@ -1068,6 +1122,7 @@ export class Renderer implements FrameSink {
         curOffset = -1;
         curMesh = null;
         curBuffer = null;
+        curPrev = null;
         pass.setBindGroup(0, slot.group);
         continue;
       }
@@ -1076,6 +1131,10 @@ export class Renderer implements FrameSink {
       if (c.pipeline !== curPipeline) {
         pass.setPipeline(c.pipeline!);
         curPipeline = c.pipeline;
+      }
+      if (c.prevBuffer && c.prevBuffer !== curPrev) {
+        pass.setVertexBuffer(2, c.prevBuffer, 0);
+        curPrev = c.prevBuffer;
       }
       if (m !== curMaterial || c.offset !== curOffset) {
         if (c.offset >= 0) {
@@ -1097,9 +1156,10 @@ export class Renderer implements FrameSink {
       }
       if (mesh.indexBuffer) {
         // An indexed mesh with no indices (e.g. a streamed chunk that is empty) draws nothing.
-        if (mesh.indexCount === 0) continue;
-        pass.drawIndexed(mesh.indexCount, c.count, 0, 0, c.first);
-        triangles += ((mesh.indexCount / 3) | 0) * c.count;
+        const indices = c.indexCount >= 0 ? c.indexCount : mesh.indexCount;
+        if (indices === 0) continue;
+        pass.drawIndexed(indices, c.count, c.firstIndex, 0, c.first);
+        triangles += ((indices / 3) | 0) * c.count;
       } else {
         pass.draw(mesh.vertexCount, c.count, 0, c.first);
         triangles += ((mesh.vertexCount / 3) | 0) * c.count;
@@ -1167,8 +1227,20 @@ export class Renderer implements FrameSink {
   private fillDepthInputs(inputs: PostInputs, target: SceneTarget): void {
     inputs.depth = null;
     inputs.projection = null;
+    inputs.view = null;
+    inputs.roughMetal = target.roughMetal;
+    inputs.velocity = target.velocity;
     for (let i = 0; i < this.usedCount; i++) {
-      if (this.usedTargets[i] !== target || !this.usedDepth[i]) continue;
+      if (this.usedTargets[i] !== target) continue;
+      const cam = this.usedCamera[i]!;
+      const view = inputs === this.postInputs ? this.postView : this.resolveView;
+      view.viewProj.set(cam.viewProjection);
+      view.invViewProj.set(cam.invViewProj);
+      view.previousViewProj.set(cam.previousViewProj);
+      view.previousView.set(cam.previousView);
+      cam.getJitter(view.jitter);
+      inputs.view = view;
+      if (!this.usedDepth[i]) return;
       const depth = target.depth;
       if (!depth) return;
       const p = this.postProjection;
@@ -1381,6 +1453,11 @@ export class Renderer implements FrameSink {
       r.br = -1;
     }
     r.castShadow = p.castShadow ?? mesh.layout !== VERTEX_LAYOUT_2D;
+    const range = p.range;
+    if (range) {
+      r.rangeFirst = range.first;
+      r.rangeCount = range.count;
+    }
   }
 
   pushBatch(
@@ -1422,11 +1499,16 @@ export class Renderer implements FrameSink {
    * A retained `InstanceList` of up to `capacity` instances of `mesh` with `material`, drawn
    * with `frame.list(list)`. Owns a GPU buffer; `list.destroy()` releases it.
    */
-  createInstanceList(mesh: Mesh, material: Material, capacity: number): InstanceList {
+  createInstanceList(
+    mesh: Mesh,
+    material: Material,
+    capacity: number,
+    opts?: InstanceListOptions,
+  ): InstanceList {
     if (material.bindings?.perDraw) {
       throw new Error(`material ${material.label}: an InstanceList cannot use perDrawUniforms`);
     }
-    return new InstanceList(this.device, mesh, material, capacity);
+    return new InstanceList(this.device, mesh, material, capacity, opts);
   }
 
   pushDrawable(d: Drawable, order: number, layers: number): void {
@@ -1470,12 +1552,16 @@ export class Renderer implements FrameSink {
         batch: null,
         list: null,
         mb: null,
+        rangeFirst: 0,
+        rangeCount: -1,
       });
     }
     const r = this.recs[this.recCount++]!;
     r.batch = null;
     r.list = null;
     r.mb = null;
+    r.rangeFirst = 0;
+    r.rangeCount = -1;
     r.order = order;
     r.layers = layers;
     return r;
@@ -1492,7 +1578,8 @@ export class Renderer implements FrameSink {
    * `uploadData` / `uploadCount`; returns whether depth is on. With `frame.lights.sun.shadow`
    * set, `buildShadowDraws` then appends the shadow list's instances to the same upload.
    */
-  private buildDraws(cam: Camera): boolean {
+  private buildDraws(cam: Camera, target: SceneTarget): boolean {
+    this.drawTarget = target;
     const camLayers = cam.layers >>> 0;
     const depth = cam.depthTest;
     const depthWrite = cam.depthWrite;
@@ -1762,9 +1849,14 @@ export class Renderer implements FrameSink {
     return k;
   }
 
-  /** The scene pipeline of a mesh record for `depth`. */
+  /** The scene pipeline of a mesh record for `depth` into the view's target. */
   private scenePipeline(r: DrawRec, depth: DepthMode): GPURenderPipeline {
-    return r.material!.pipelineFor(r.mesh!.layout, depth);
+    return r.material!.pipelineFor(
+      r.mesh!.layout,
+      depth,
+      this.drawTarget,
+      r.list !== null && r.list.prevBuffer !== null,
+    );
   }
 
   /**
@@ -1791,6 +1883,9 @@ export class Renderer implements FrameSink {
       c.offset = -1;
       c.castShadow = false;
       c.buffer = null;
+      c.prevBuffer = null;
+      c.firstIndex = 0;
+      c.indexCount = -1;
       return;
     }
     const material = r.material!;
@@ -1806,6 +1901,8 @@ export class Renderer implements FrameSink {
       last.castShadow === r.castShadow &&
       last.buffer === null &&
       buffer === null &&
+      last.firstIndex === r.rangeFirst &&
+      last.indexCount === r.rangeCount &&
       last.first + last.count === first
     ) {
       last.count += count;
@@ -1821,6 +1918,10 @@ export class Renderer implements FrameSink {
     c.offset = r.offset;
     c.castShadow = r.castShadow;
     c.buffer = buffer;
+    // The lane is read only by a pipeline built for it (an aux material into a velocity target).
+    c.prevBuffer = list === this.scene && r.list ? r.list.prevBuffer : null;
+    c.firstIndex = r.rangeFirst;
+    c.indexCount = r.rangeCount;
   }
 
   /**
@@ -1884,6 +1985,9 @@ export class Renderer implements FrameSink {
         offset: -1,
         castShadow: false,
         buffer: null,
+        prevBuffer: null,
+        firstIndex: 0,
+        indexCount: -1,
       });
     }
     return list.cmds[list.count++]!;
@@ -2042,8 +2146,9 @@ export class Renderer implements FrameSink {
         curBuffer = c.buffer;
       }
       if (mesh.indexBuffer) {
-        if (mesh.indexCount === 0) continue;
-        pass.drawIndexed(mesh.indexCount, c.count, 0, 0, c.first);
+        const indices = c.indexCount >= 0 ? c.indexCount : mesh.indexCount;
+        if (indices === 0) continue;
+        pass.drawIndexed(indices, c.count, c.firstIndex, 0, c.first);
       } else {
         pass.draw(mesh.vertexCount, c.count, 0, c.first);
       }
@@ -2076,6 +2181,16 @@ export class Renderer implements FrameSink {
     frame.lights.writeBlock(g, this.globalsU32, LIGHTS_OFFSET_FLOATS, shadow);
     this.device.queue.writeBuffer(slot.buffer, 0, g);
   }
+}
+
+function newPostView(): PostView {
+  return {
+    viewProj: new Float32Array(16),
+    invViewProj: new Float32Array(16),
+    previousViewProj: new Float32Array(16),
+    previousView: new Float32Array(16),
+    jitter: [0, 0],
+  };
 }
 
 /** Is the sphere `(x, y, z, r)` wholly outside one of the six `planes` (`Camera.frustum`)? */

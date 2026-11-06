@@ -59,11 +59,30 @@ export function sharedEmissiveCount(device: GPUDevice): number {
   return sharedEmissive.get(device)?.size ?? 0;
 }
 
+/**
+ * Extra attachments a scene target carries beside colour and emissive (ws/render-4), what a
+ * screen-space post pass (SSR, TAA, motion blur) reads through `PostInputs.roughMetal` /
+ * `PostInputs.velocity`: `roughMetal` an `rg8unorm` (roughness, metalness) target,
+ * `velocity` an `rg16float` screen-space motion target (uv units since last frame). Materials
+ * declaring `aux` (the standard material) write them; others leave them cleared.
+ */
+export interface SceneTargetAux {
+  roughMetal?: boolean;
+  velocity?: boolean;
+}
+
+/** Format of the `roughMetal` aux attachment. */
+export const ROUGH_METAL_FORMAT: GPUTextureFormat = 'rg8unorm';
+/** Format of the `velocity` aux attachment. */
+export const VELOCITY_FORMAT: GPUTextureFormat = 'rg16float';
+
 export interface SceneTargetDesc {
   width: number;
   height: number;
   /** Prefix of the texture labels. Default `scene`. */
   label?: string;
+  /** Aux attachments; none by default (the target writes identical bytes to before). */
+  aux?: SceneTargetAux;
 }
 
 /** A rect in texture pixels, origin top-left. */
@@ -91,6 +110,8 @@ export interface SceneTargetExternal {
   viewport?: SceneTargetViewport;
   /** Prefix of the labels of what the target still allocates (emissive, depth). Default `external`. */
   label?: string;
+  /** Aux attachments, allocated at the adopted size (`SceneTargetDesc.aux`). */
+  aux?: SceneTargetAux;
 }
 
 /** A texture owned by someone else, in the shape of `Texture` (its `destroy` does nothing). */
@@ -139,6 +160,12 @@ class AdoptedTexture {
 export class SceneTarget {
   color!: Texture;
   emissive!: Texture;
+  /** The `rg8unorm` roughness/metalness attachment (`aux.roughMetal`), else null. */
+  roughMetal: Texture | null = null;
+  /** The `rg16float` screen-space velocity attachment (`aux.velocity`), else null. */
+  velocity: Texture | null = null;
+  /** Bit 0: has `roughMetal`; bit 1: has `velocity`. Keys material pipeline variants. */
+  readonly auxKey: number;
   width = 0;
   height = 0;
   /**
@@ -160,6 +187,9 @@ export class SceneTarget {
   readonly blendPassDesc: GPURenderPassDescriptor;
   private readonly blendColorAtt: GPURenderPassColorAttachment;
   private readonly blendEmissiveAtt: GPURenderPassColorAttachment;
+  /** Aux attachments in order (rough-metal, velocity), for the clear and the blend pass. */
+  private readonly auxAtts: GPURenderPassColorAttachment[] = [];
+  private readonly blendAuxAtts: GPURenderPassColorAttachment[] = [];
   private readonly blendDepthAtt: GPURenderPassDepthStencilAttachment = {
     view: undefined as unknown as GPUTextureView,
     depthLoadOp: 'load',
@@ -190,6 +220,7 @@ export class SceneTarget {
     external = false,
   ) {
     this.label = desc.label ?? 'scene';
+    this.auxKey = (desc.aux?.roughMetal ? 1 : 0) | (desc.aux?.velocity ? 2 : 0);
     this.colorAtt = {
       view: undefined as unknown as GPUTextureView,
       loadOp: 'clear',
@@ -202,7 +233,27 @@ export class SceneTarget {
       storeOp: 'store',
       clearValue: { r: 0, g: 0, b: 0, a: 0 },
     };
-    this.passDesc = { label: 'scene', colorAttachments: [this.colorAtt, this.emissiveAtt] };
+    const colorAttachments: GPURenderPassColorAttachment[] = [this.colorAtt, this.emissiveAtt];
+    const blendAttachments: GPURenderPassColorAttachment[] = [];
+    for (let k = 0; k < 2; k++) {
+      if (!(this.auxKey & (1 << k))) continue;
+      const att: GPURenderPassColorAttachment = {
+        view: undefined as unknown as GPUTextureView,
+        loadOp: 'clear',
+        storeOp: 'store',
+        clearValue: { r: 0, g: 0, b: 0, a: 0 },
+      };
+      const blendAtt: GPURenderPassColorAttachment = {
+        view: undefined as unknown as GPUTextureView,
+        loadOp: 'load',
+        storeOp: 'store',
+      };
+      this.auxAtts.push(att);
+      this.blendAuxAtts.push(blendAtt);
+      colorAttachments.push(att);
+      blendAttachments.push(blendAtt);
+    }
+    this.passDesc = { label: 'scene', colorAttachments };
     this.blendColorAtt = {
       view: undefined as unknown as GPUTextureView,
       loadOp: 'load',
@@ -215,7 +266,7 @@ export class SceneTarget {
     };
     this.blendPassDesc = {
       label: 'scene-blend',
-      colorAttachments: [this.blendColorAtt, this.blendEmissiveAtt],
+      colorAttachments: [this.blendColorAtt, this.blendEmissiveAtt, ...blendAttachments],
       depthStencilAttachment: this.blendDepthAtt,
     };
     if (external) {
@@ -229,7 +280,7 @@ export class SceneTarget {
   static external(desc: SceneTargetExternal): SceneTarget {
     const t = new SceneTarget(
       desc.device,
-      { width: 0, height: 0, label: desc.label ?? 'external' },
+      { width: 0, height: 0, label: desc.label ?? 'external', aux: desc.aux },
       true,
     );
     t.adopt(desc);
@@ -299,6 +350,7 @@ export class SceneTarget {
       this.depthTex = null;
       this.depthCopyTex?.destroy();
       this.depthCopyTex = null;
+      this.resizeAux(w, h);
     }
     this.color = new AdoptedTexture(desc.color, desc.view);
     this.colorAtt.view = this.color.view;
@@ -347,7 +399,47 @@ export class SceneTarget {
     this.emissiveAtt.view = this.emissive.view;
     this.blendColorAtt.view = this.color.view;
     this.blendEmissiveAtt.view = this.emissive.view;
+    this.resizeAux(w, h);
     return true;
+  }
+
+  /** Load op of the aux attachments for the next scene pass (the renderer: clear on first view). */
+  setAuxLoadOp(op: GPULoadOp): void {
+    for (const a of this.auxAtts) a.loadOp = op;
+  }
+
+  /** (Re)create the aux attachments at `w × h`. */
+  private resizeAux(w: number, h: number): void {
+    if (this.auxKey === 0) return;
+    const usage = GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING;
+    this.roughMetal?.destroy();
+    this.velocity?.destroy();
+    this.roughMetal = null;
+    this.velocity = null;
+    let i = 0;
+    if (this.auxKey & 1) {
+      this.roughMetal = new Texture(this.device, {
+        width: w,
+        height: h,
+        format: ROUGH_METAL_FORMAT,
+        usage,
+        label: `${this.label}-rough-metal`,
+      });
+      this.auxAtts[i]!.view = this.roughMetal.view;
+      this.blendAuxAtts[i]!.view = this.roughMetal.view;
+      i++;
+    }
+    if (this.auxKey & 2) {
+      this.velocity = new Texture(this.device, {
+        width: w,
+        height: h,
+        format: VELOCITY_FORMAT,
+        usage,
+        label: `${this.label}-velocity`,
+      });
+      this.auxAtts[i]!.view = this.velocity.view;
+      this.blendAuxAtts[i]!.view = this.velocity.view;
+    }
   }
 
   /**
@@ -422,6 +514,10 @@ export class SceneTarget {
 
   destroy(): void {
     this.color?.destroy();
+    this.roughMetal?.destroy();
+    this.velocity?.destroy();
+    this.roughMetal = null;
+    this.velocity = null;
     if (this.externalColor) {
       if (this.emissive) releaseSharedEmissive(this.device, this.emissive);
     } else this.emissive?.destroy();

@@ -16,8 +16,12 @@ import { defaultTextures, type SamplerKind, type TextureLike } from './texture';
  * sRGB and the data maps linear (`textureFromSource(src, label, { linear: true })`).
  */
 export interface StandardMaterialDesc {
-  /** Pipeline / bind group label. Default `'standard'`. */
+  /** Pipeline / bind group label. Default `name`, else `'standard'`. */
   label?: string;
+  /** `Material.name` (a file's material name). Default: the label. */
+  name?: string;
+  /** `MaterialDesc.depthTest`: false draws over the scene on its layer (a panel in a room). */
+  depthTest?: boolean;
   /** sRGB colour with alpha; multiplied by `baseColorFactor` and the instance colour × tint. */
   baseColor?: TextureLike;
   /** Linear RGBA, default `[1, 1, 1, 1]`. */
@@ -34,6 +38,8 @@ export interface StandardMaterialDesc {
   normalScale?: number;
   /** Linear; R darkens the ambient term only. */
   occlusion?: TextureLike;
+  /** How much of the occlusion map applies: `ao = mix(1, R, strength)`. Default 1. */
+  occlusionStrength?: number;
   /** sRGB; × `emissiveFactor`, written to the emissive target (bloom), not the colour. */
   emissive?: TextureLike;
   /** Linear RGB. Default `[1, 1, 1]` when `emissive` is given, else `[0, 0, 0]`. */
@@ -68,9 +74,24 @@ export interface StandardMaterialDesc {
    * shader does two multiply-adds per map whether or not one is given.
    */
   uvTransform?: ArrayLike<number>;
+  /**
+   * Per-map overrides (ws/render-4): a map's own `uvTransform` (else the material's) and the
+   * texture coordinate set it reads, `0` (`uv`, default) or `1` (`uv1`, a `VERTEX_LAYOUT_3D_UV2`
+   * mesh's second set; `uv` again on a layout without one).
+   */
+  maps?: Partial<Record<StandardMapSlot, StandardMapDesc>>;
   /** The sampler every map is read with. Default `'linear-mip-repeat'`. */
   sampler?: SamplerKind;
 }
+
+/** A map's own settings (`StandardMaterialDesc.maps`). */
+export interface StandardMapDesc {
+  uvTransform?: ArrayLike<number>;
+  texCoord?: 0 | 1;
+}
+
+/** The map names of `STANDARD_TEXTURE_SLOTS`. */
+export type StandardMapSlot = keyof typeof STANDARD_TEXTURE_SLOTS;
 
 /** Texture slots of a standard material (`material.setTexture(slot, tex)` swaps a map). */
 export const STANDARD_TEXTURE_SLOTS = {
@@ -81,8 +102,20 @@ export const STANDARD_TEXTURE_SLOTS = {
   emissive: 4,
 } as const;
 
+/** Floats of the shared head of the block, before the five per-map slots. */
+const STANDARD_HEAD_FLOATS = 20;
+/** Floats per map slot: `scale_offset` (4), `rot` (cos, sin, texCoord, 0). */
+const STANDARD_SLOT_FLOATS = 8;
 /** The standard material's uniform block, in floats (`setUniforms` takes the whole block). */
-export const STANDARD_UNIFORM_FLOATS = 20;
+export const STANDARD_UNIFORM_FLOATS = STANDARD_HEAD_FLOATS + 5 * STANDARD_SLOT_FLOATS;
+
+const SLOT_NAMES: readonly StandardMapSlot[] = [
+  'baseColor',
+  'metallicRoughness',
+  'normal',
+  'occlusion',
+  'emissive',
+];
 
 /** Flag bits in `StandardParams.emissive.w`. */
 const FLAG_DOUBLE_SIDED = 1;
@@ -93,8 +126,10 @@ const FLAG_BLEND = 4;
  * Pack a desc's factors into the standard material's uniform block:
  * `base_color` (rgba), `factors` (metallic, roughness, normal_scale, alpha_cutoff),
  * `emissive` (rgb, flags: bit 0 double-sided, bit 1 alpha mask, bit 2 alpha blend),
- * `uv_scale_offset` (sx, sy, ox, oy) and `uv_rot` (cos, sin, 0, 0) from `uvTransform`. `out`
- * must hold `STANDARD_UNIFORM_FLOATS`; returns it.
+ * `uv_scale_offset` (sx, sy, ox, oy) and `uv_rot` (cos, sin, occlusion_strength, 0) from
+ * `uvTransform`, then one `StandardSlot` per map (`scale_offset`, `rot` = cos, sin, texCoord,
+ * 0) from `maps`, defaulting to the material's transform. `out` must hold
+ * `STANDARD_UNIFORM_FLOATS`; returns it.
  */
 export function packStandardUniforms(
   desc: StandardMaterialDesc,
@@ -130,25 +165,47 @@ export function packStandardUniforms(
   const rot = t?.[4] ?? 0;
   out[16] = Math.cos(rot);
   out[17] = Math.sin(rot);
-  out[18] = 0;
+  out[18] = desc.occlusionStrength ?? 1;
   out[19] = 0;
+  for (let k = 0; k < 5; k++) {
+    const slot = desc.maps?.[SLOT_NAMES[k]!];
+    const st = slot?.uvTransform ?? t;
+    const o = STANDARD_HEAD_FLOATS + k * STANDARD_SLOT_FLOATS;
+    out[o] = st?.[0] ?? 1;
+    out[o + 1] = st?.[1] ?? 1;
+    out[o + 2] = st?.[2] ?? 0;
+    out[o + 3] = st?.[3] ?? 0;
+    const sr = st?.[4] ?? 0;
+    out[o + 4] = Math.cos(sr);
+    out[o + 5] = Math.sin(sr);
+    out[o + 6] = slot?.texCoord === 1 ? 1 : 0;
+    out[o + 7] = 0;
+  }
   return out;
 }
 
 /**
  * The standard material's shader text, after the prelude and `WGSL_PBR`. Bindings follow the
  * material convention: the block at `@group(1) @binding(0)`, the sampler at 1, the five maps at
- * 2..6 in `STANDARD_TEXTURE_SLOTS` order. Every map is read through `standard_uv`, the
- * `uvTransform`; the normal map perturbs through `engine_perturb_normal` (screen-space
- * derivatives), so the material draws any 3D layout, tangents or not.
+ * 2..6 in `STANDARD_TEXTURE_SLOTS` order. Every map is read through `standard_uv_slot`, its
+ * own transform and texture coordinate set (`maps`); `standard_uv` is the material-wide
+ * transform. The normal map perturbs along the mesh tangent (`VSOut.tangent`, a
+ * `VERTEX_LAYOUT_3D_TANGENT` mesh) or, without one, through `engine_perturb_normal`
+ * (screen-space derivatives), so the material draws any 3D layout. Roughness, metalness and
+ * the velocity go to the target's aux attachments through `engine_write_aux`.
  */
 export const STANDARD_WGSL = /* wgsl */ `
+struct StandardSlot {
+  scale_offset: vec4f,
+  rot: vec4f,
+};
 struct StandardParams {
   base_color: vec4f,
   factors: vec4f,
   emissive: vec4f,
   uv_scale_offset: vec4f,
   uv_rot: vec4f,
+  slots: array<StandardSlot, 5>,
 };
 @group(1) @binding(0) var<uniform> standard: StandardParams;
 @group(1) @binding(1) var standard_sampler: sampler;
@@ -162,19 +219,38 @@ fn standard_uv(uv: vec2f) -> vec2f {
   let r = standard.uv_rot.xy;
   return vec2f(r.x * s.x - r.y * s.y, r.y * s.x + r.x * s.y) + standard.uv_scale_offset.zw;
 }
+// Map slot's coordinates: its texture coordinate set through its own transform.
+fn standard_uv_slot(in: VSOut, slot: u32) -> vec2f {
+  let p = standard.slots[slot];
+  let uv = select(in.uv, in.uv1, p.rot.z > 0.5);
+  let s = uv * p.scale_offset.xy;
+  return vec2f(p.rot.x * s.x - p.rot.y * s.y, p.rot.y * s.x + p.rot.x * s.y) + p.scale_offset.zw;
+}
 
 @fragment fn fs_main(in: VSOut, @builtin(front_facing) front: bool) -> FragOut {
-  let uv = standard_uv(in.uv);
-  let base = textureSample(standard_base_color, standard_sampler, uv) * standard.base_color * in.color;
-  let mr = textureSample(standard_metallic_roughness, standard_sampler, uv);
+  let uv = standard_uv_slot(in, 2u);
+  let base = textureSample(standard_base_color, standard_sampler, standard_uv_slot(in, 0u)) * standard.base_color * in.color;
+  let mr = textureSample(standard_metallic_roughness, standard_sampler, standard_uv_slot(in, 1u));
   let nmap = textureSample(standard_normal, standard_sampler, uv).xyz;
-  let ao = textureSample(standard_occlusion, standard_sampler, uv).r;
-  let em = textureSample(standard_emissive, standard_sampler, uv).rgb * standard.emissive.rgb;
+  let ao_tex = textureSample(standard_occlusion, standard_sampler, standard_uv_slot(in, 3u)).r;
+  let em = textureSample(standard_emissive, standard_sampler, standard_uv_slot(in, 4u)).rgb * standard.emissive.rgb;
+  let ao = mix(1.0, ao_tex, standard.uv_rot.z);
   let flags = u32(standard.emissive.w);
   var n = normalize(in.normal);
   if ((flags & 1u) != 0u && !front) { n = -n; }
   let v = normalize(camera.camera_pos.xyz - in.worldPos);
-  n = engine_perturb_normal(n, in.worldPos, uv, nmap, standard.factors.z);
+  // Derivative path first (uniform control flow), then the tangent frame when the mesh has one.
+  let nd = engine_perturb_normal(n, in.worldPos, uv, nmap, standard.factors.z);
+  let tp = in.tangent.xyz - n * dot(n, in.tangent.xyz);
+  let tl = length(tp);
+  if (in.tangent.w != 0.0 && tl > 1e-6) {
+    let t = tp / tl;
+    let b = in.tangent.w * cross(n, t);
+    let m = (nmap * 2.0 - 1.0) * vec3f(standard.factors.z, standard.factors.z, 1.0);
+    n = normalize(t * m.x + b * m.y + n * m.z);
+  } else {
+    n = nd;
+  }
   if ((flags & 2u) != 0u && base.a < standard.factors.w) { discard; }
   let metallic = mr.b * standard.factors.x;
   let roughness = mr.g * standard.factors.y;
@@ -189,12 +265,13 @@ fn standard_uv(uv: vec2f) -> vec2f {
   var o: FragOut;
   o.color = vec4f(lit, alpha);
   o.emissive = vec4f(fogged_glow, alpha);
+  engine_write_aux(&o, vec2f(roughness, metallic), engine_velocity(in));
   return o;
 }
 `;
 
 /**
- * A standard PBR `Material` for `desc`: `createMaterial` with `STANDARD_WGSL`, an 80-byte block
+ * A standard PBR `Material` for `desc`: `createMaterial` with `STANDARD_WGSL`, a 240-byte block
  * from `packStandardUniforms` and the five maps (the device's `defaultTextures` for the missing
  * ones: `white` for the base colour, metallic-roughness and occlusion, since a 255 texel reads
  * as 1.0 whether the view is sRGB or linear, `flatNormal` and `black`). The instance
@@ -212,7 +289,10 @@ export function createStandardMaterial(renderer: Renderer, desc: StandardMateria
   // A palette carries its `buffer`; a bare `GPUBuffer` has no such field (no `instanceof`: tests run without the global).
   const buffers = skin ? ['buffer' in skin ? skin.buffer : skin] : undefined;
   const m = renderer.createMaterial({
-    label: desc.label ?? 'standard',
+    label: desc.label ?? desc.name ?? 'standard',
+    name: desc.name,
+    depthTest: desc.depthTest,
+    aux: true,
     wgsl: `${WGSL_PBR}\n${STANDARD_WGSL}`,
     blend: desc.alphaMode === 'blend' ? 'alpha' : 'opaque',
     uniformBytes: STANDARD_UNIFORM_FLOATS * 4,

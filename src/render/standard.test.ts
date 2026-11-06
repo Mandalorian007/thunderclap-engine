@@ -162,9 +162,38 @@ describe('createStandardMaterial', () => {
 
 describe('packStandardUniforms', () => {
   it('fills the defaults, the uv transform identity included', () => {
-    expect([...packStandardUniforms({})]).toEqual([
-      1, 1, 1, 1, 0, 0.5, 1, 0.5, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0,
+    const out = [...packStandardUniforms({})];
+    expect(out.slice(0, 20)).toEqual([
+      1, 1, 1, 1, 0, 0.5, 1, 0.5, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 1, 0,
     ]);
+    // Five map slots, each the identity transform on texCoord 0 (ws/render-4).
+    expect(out).toHaveLength(STANDARD_UNIFORM_FLOATS);
+    for (let k = 0; k < 5; k++) {
+      expect(out.slice(20 + k * 8, 28 + k * 8)).toEqual([1, 1, 0, 0, 1, 0, 0, 0]);
+    }
+  });
+
+  it('packs per-map transforms, texCoord and the occlusion strength (ws/render-4)', () => {
+    const out = packStandardUniforms({
+      uvTransform: [2, 2, 0, 0, 0],
+      occlusionStrength: 0.25,
+      maps: {
+        occlusion: { texCoord: 1 },
+        emissive: { uvTransform: [1, 1, 0.5, 0.5, Math.PI / 2], texCoord: 0 },
+      },
+    });
+    expect(out[18]).toBe(0.25);
+    // Slots without their own transform take the material's.
+    expect([...out.slice(20, 24)]).toEqual([2, 2, 0, 0]);
+    expect(out[26]).toBe(0);
+    // Occlusion: the material's transform on texCoord 1.
+    expect([...out.slice(44, 48)]).toEqual([2, 2, 0, 0]);
+    expect(out[50]).toBe(1);
+    // Emissive: its own transform, texCoord 0.
+    expect([...out.slice(52, 56)]).toEqual([1, 1, 0.5, 0.5]);
+    expect(out[56]).toBeCloseTo(0, 6);
+    expect(out[57]).toBeCloseTo(1, 6);
+    expect(out[58]).toBe(0);
   });
 
   it("packs uvTransform as scale, offset and the rotation's cos and sin", () => {
@@ -172,7 +201,7 @@ describe('packStandardUniforms', () => {
     expect([...out.slice(12, 16)]).toEqual([2, 3, 0.5, 0.25]);
     expect(out[16]).toBeCloseTo(0, 6);
     expect(out[17]).toBeCloseTo(1, 6);
-    expect([...out.slice(18)]).toEqual([0, 0]);
+    expect([...out.slice(18, 20)]).toEqual([1, 0]);
   });
 
   it('packs factors and flags', () => {
@@ -211,22 +240,29 @@ describe('standard material variants (ws/gltf-materials)', () => {
     expect(STANDARD_WGSL).toContain('fn standard_uv(uv: vec2f) -> vec2f');
     expect(STANDARD_WGSL).toContain('uv_scale_offset: vec4f');
     expect(STANDARD_WGSL).toContain('uv_rot: vec4f');
-    // Five samples, all through the transformed `uv`, none through `in.uv` directly.
-    expect(STANDARD_WGSL.match(/standard_sampler, uv\)/g)).toHaveLength(5);
+    // Five samples, each through its own slot's transform (ws/render-4), none through `in.uv`.
+    expect(STANDARD_WGSL.match(/standard_sampler, standard_uv_slot\(in, \du\)\)/g)).toHaveLength(4);
+    expect(STANDARD_WGSL.match(/standard_sampler, uv\)/g)).toHaveLength(1);
+    expect(STANDARD_WGSL).toContain('let uv = standard_uv_slot(in, 2u);');
     expect(STANDARD_WGSL).not.toContain('standard_sampler, in.uv');
     expect(STANDARD_WGSL).toContain('engine_perturb_normal(n, in.worldPos, uv, nmap');
+    expect(STANDARD_WGSL).toContain('select(in.uv, in.uv1, p.rot.z > 0.5)');
   });
 
-  it('draws tangent-layout meshes through the derivative path (no tangent vertex entry)', () => {
+  it('draws tangent-layout meshes with the file tangent, others through derivatives (ws/render-4)', () => {
     const { fake, r } = setup();
     const m = createStandardMaterial(r, { label: 'tan' });
     const pipeline = m.pipelineFor(VERTEX_LAYOUT_3D_TANGENT, 2) as unknown as FakePipeline;
     expect(pipeline.desc.vertex.entryPoint).toBe('vs_main');
     const module = pipeline.desc.vertex.module as unknown as { code: string };
     expect(module.code).toContain('@location(13) tangent: vec4f');
+    expect(module.code).toContain('return v.tangent;');
     expect(module.code).toContain('engine_perturb_normal(n, in.worldPos, uv, nmap');
+    expect(module.code).toContain('if (in.tangent.w != 0.0 && tl > 1e-6)');
     const pp = m.pipelineFor(VERTEX_LAYOUT_3D, 2) as unknown as FakePipeline;
     expect(pp.desc.vertex.entryPoint).toBe('vs_main');
+    const code3d = (pp.desc.vertex.module as unknown as { code: string }).code;
+    expect(code3d).toContain('return vec4f(0.0);\n}\n\nfn engine_world_position');
     expect(fake.errors).toEqual([]);
   });
 

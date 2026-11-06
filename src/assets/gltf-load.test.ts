@@ -3,7 +3,7 @@ import { createFakeDevice, fakeRendererGpu } from '../render/fake-gpu';
 import { VERTEX_LAYOUT_3D, VERTEX_LAYOUT_3D_TANGENT, VERTEX_LAYOUT_SKINNED } from '../render/mesh';
 import { Renderer } from '../render/renderer';
 import { SkinPalette } from '../render/skin';
-import { STANDARD_TEXTURE_SLOTS } from '../render/standard';
+import { STANDARD_TEXTURE_SLOTS, STANDARD_UNIFORM_FLOATS } from '../render/standard';
 import { type GltfJson, parseGltf } from './gltf';
 import {
   type GltfImageSource,
@@ -131,7 +131,7 @@ describe('loadGltf on the fake GPU', () => {
     const block1 = fake.writes.find(
       (w) => (w.buffer as unknown) === scene.materials[1]!.bindings!.uniformBuffer,
     )!;
-    expect(block1.bytes).toBe(80);
+    expect(block1.bytes).toBe(STANDARD_UNIFORM_FLOATS * 4);
     expect(scene.materials[0]!.blend).toBe('opaque');
     expect(scene.bounds.center[1]).toBeCloseTo(doc.bounds.center[1], 6);
     // Each mesh carries its primitive's bounding sphere, so `camera.cull` can skip it.
@@ -498,6 +498,45 @@ describe('loadGltf standard materials on the fake GPU', () => {
       (g1.entries.find((e) => e.binding === 1)!.resource as { label?: string }).label,
     ).toContain('linear-mip-repeat');
     expect([...blocks.get('t:material1')!.slice(12, 18)]).toEqual([1, 1, 0, 0, 1, 0]);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('wires per-slot texCoord and transforms, the occlusion strength and the name (ws/render-4)', async () => {
+    const fake = createFakeDevice();
+    const r = new Renderer(fakeRendererGpu(fake));
+    const blocks = new Map<string, Float32Array>();
+    const names = new Map<string, string | undefined>();
+    const create = r.createMaterial.bind(r);
+    r.createMaterial = (desc) => {
+      const m = create(desc);
+      names.set(m.label, desc.name);
+      const set = m.setUniforms.bind(m);
+      m.setUniforms = (data, off) => {
+        blocks.set(m.label, new Float32Array(data as Float32Array));
+        set(data, off);
+      };
+      return m;
+    };
+    const doc = pbrDoc();
+    const full = doc.materials[0]!;
+    full.occlusion!.texCoord = 1;
+    full.occlusionStrength = 0.5;
+    full.emissive!.transform = { offset: [0.25, 0], rotation: 0, scale: [3, 3] };
+    await loadGltf(r, doc, { decodeImage, label: 't' });
+    const block = blocks.get('t:material0')!;
+    expect(names.get('t:material0')).toBe('full');
+    expect(block[18]).toBe(0.5);
+    // Base colour: the material transform, texCoord 0.
+    expect([...block.slice(20, 24)]).toEqual([2, 2, 0.5, 0]);
+    expect(block[26]).toBe(0);
+    // Occlusion: texCoord 1 on the material transform.
+    const occ = 20 + STANDARD_TEXTURE_SLOTS.occlusion * 8;
+    expect([...block.slice(occ, occ + 4)]).toEqual([2, 2, 0.5, 0]);
+    expect(block[occ + 6]).toBe(1);
+    // Emissive: its own transform.
+    const em = 20 + STANDARD_TEXTURE_SLOTS.emissive * 8;
+    expect([...block.slice(em, em + 6)]).toEqual([3, 3, 0.25, 0, 1, 0]);
+    expect(block[em + 6]).toBe(0);
     expect(fake.errors).toEqual([]);
   });
 
