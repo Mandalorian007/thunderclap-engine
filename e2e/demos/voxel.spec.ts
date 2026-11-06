@@ -1,13 +1,15 @@
 /**
- * Voxel demo (`demos/voxel`) on every matrix row: the voxel path end to end with the mesher in
- * the game.
+ * Voxel demo (`demos/voxel`) on every matrix row: a voxel game on `@thunderclap/engine/voxel`
+ * end to end (the grid, the mesher Worker, the culled chunk meshes and the picking ray are the
+ * engine's; the blocks are the demo's).
  *
  * - boots to a steady state with all 256 chunks meshed in the Worker and no console errors, and
  *   the spawn view draws well under one call per chunk;
  * - a click (touch rows: a tap on the right half, real touch events through CDP) breaks the
  *   block under the reticle: `lookingAt` changes and, on desktop, the re-mesh round trip is
- *   under 50 ms;
- * - a right click (touch rows: the place key) puts the hotbar block on the looked-at face;
+ *   under 50 ms, with no mesh growth;
+ * - a right click (touch rows: the place key) puts the hotbar block on the looked-at face, as
+ *   fast and with no growth either;
  * - walking forward for a second moves `playerPos`;
  * - `?still&time=0.25` parks the day cycle at noon;
  * - desktop rows run above 20 fps once settled.
@@ -172,6 +174,7 @@ test('a click breaks the looked-at block and re-meshes fast', async ({ page, wra
   await expect.poll(async () => (await read()).remeshMs).toBeGreaterThanOrEqual(0);
   const after = await read();
   if (/^desktop-/.test(test.info().project.name)) expect(after.remeshMs).toBeLessThan(50);
+  expect(after.growths).toBe(0);
   expect(after.gpuErrors).toBe(0);
   expect(pageErrors()).toEqual([]);
 });
@@ -197,6 +200,12 @@ test('a right click places the hotbar block on the looked-at face', async ({ pag
   ];
   const placed = await Promise.all(faces.map((f) => blockAt(f)));
   expect(placed).toContain(before.selectedBlock);
+  // The place re-meshes as fast as a break: the chunk mesh is rewritten in place, no growth.
+  await expect.poll(async () => (await read()).remeshMs).toBeGreaterThanOrEqual(0);
+  const after = await read();
+  if (/^desktop-/.test(test.info().project.name)) expect(after.remeshMs).toBeLessThan(50);
+  expect(after.growths).toBe(0);
+  expect(after.gpuErrors).toBe(0);
   expect(pageErrors()).toEqual([]);
 });
 
