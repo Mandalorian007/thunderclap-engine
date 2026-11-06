@@ -1,3 +1,5 @@
+// ws/ui-4: anchors frame, pad owner, float numbers, ring and compass, minimap.
+export type { AnchorFrame } from './anchor';
 export {
   type AnchorCamera,
   type AnchorHandle,
@@ -30,6 +32,16 @@ export {
   type WorldTarget,
 } from './cursor';
 export { append, type Child, focusableWithin, h } from './dom';
+export {
+  createFloatNumbers,
+  ensureFloatStyles,
+  FLOAT_CSS,
+  type FloatKind,
+  type FloatNumbers,
+  type FloatNumbersHost,
+  type FloatNumbersOptions,
+  type FloatSpawnOptions,
+} from './float-numbers';
 export {
   createHeading,
   createMeter,
@@ -154,6 +166,17 @@ export {
   menuNav,
 } from './menu-nav';
 export {
+  createMinimap,
+  ensureMinimapStyles,
+  MINIMAP_CSS,
+  type Minimap,
+  type MinimapHost,
+  type MinimapMarkerKind,
+  type MinimapMarkerOptions,
+  type MinimapMarkerPlace,
+  type MinimapOptions,
+} from './minimap';
+export {
   createNotifier,
   ensureNotifyStyles,
   NOTIFY_CSS,
@@ -192,7 +215,7 @@ export {
   type RotateCardColors,
   type RotateCardOptions,
 } from './rotate-card';
-export type { ArrowNav } from './stack';
+export type { ArrowNav, PadOwner } from './stack';
 export {
   type CloseReason,
   NO_RESTORE_FOCUS_ATTR,
@@ -266,6 +289,20 @@ export {
   type WidgetReticleOptions,
   type WidgetTone,
 } from './widgets-2';
+export {
+  bearingOffset,
+  type Compass,
+  type CompassMarker,
+  type CompassOptions,
+  createCompass,
+  createRing,
+  ensureWidgets3Styles,
+  type Ring,
+  type RingOptions,
+  WIDGETS3_CSS,
+  type Widgets3Host,
+} from './widgets-3';
+export type { WorldPanelInput } from './world-panel';
 export {
   createWorldPanel,
   type FlowItem,

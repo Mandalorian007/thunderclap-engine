@@ -3,13 +3,15 @@
  * steps by (dx, dy) on each fresh d-pad or arrow press, with latch and repeat (hold to keep
  * stepping); targets mode snaps to the nearest target in the pressed direction. A/Enter selects.
  * The cursor element rides `Anchors` on the hud layer when the game says where the cursor is
- * (`at`) or a target is picked. It yields to a modal panel: while the stack has one, presses are
- * ignored and the latch resets, so the pad is the panel's and the cursor resumes afterwards.
+ * (`at`) or a target is picked. It yields to a modal panel: while the stack owns the pad
+ * (`stack.padOwner`, followed through `onPadOwnerChange`, ws/ui-4) nothing is read and the latch
+ * is reset, so the pad is the panel's and the cursor resumes afterwards with a fresh latch.
  * Call `update()` once per frame (before or after `padNav.update()`, both latch on their own).
  */
 import type { AnchorHandle, Anchors } from './anchor';
 import { consumesArrows, h } from './dom';
 import { defaultPads, type PadControl, type PadDir, type PadLike, readPad } from './padnav';
+import type { PadOwner } from './stack';
 import { toFrameUnits } from './text-scale';
 
 /** A thing the cursor can land on in targets mode: a plane position plus its world point. */
@@ -57,6 +59,11 @@ export interface WorldCursor {
   /** The cursor element on the hud layer (`aria-hidden`; a game's own class may style it). */
   readonly element: HTMLElement;
   readonly enabled: boolean;
+  /**
+   * True while the latch holds a control (a direction or A is held, or a direction repeats), as
+   * of the last `update()`. It resets on each pad-owner transition.
+   */
+  readonly latched: boolean;
   /** Targets mode: the target under the cursor. */
   readonly target: WorldTarget | null;
   /** The cursor's world position (`at()` in grid mode, the target's `world` in targets mode). */
@@ -75,7 +82,12 @@ export interface WorldCursor {
 /** What the cursor needs from its overlay (`Overlay` fits). */
 export interface CursorHost {
   readonly layers: { readonly hud: HTMLElement };
-  readonly stack: { readonly hasModal: boolean };
+  readonly stack: {
+    /** Read once at creation (and each frame only by a host without `onPadOwnerChange`). */
+    readonly hasModal: boolean;
+    /** The pad-owner transition (ws/ui-4); a host without it is polled through `hasModal`. */
+    onPadOwnerChange?(fn: (owner: PadOwner) => void): () => void;
+  };
   /** The overlay's `Anchors`; throws until a camera built it. */
   anchors(): Anchors;
 }
@@ -144,6 +156,23 @@ export function createCursor(host: CursorHost, opts: CursorOptions): WorldCursor
   const pressed = new Set<PadControl>();
   let repeatDir: PadDir | null = null;
   let repeatAt = 0;
+  // Who owns the pad: a subscribing host tells us on each transition (the latch resets, and
+  // nothing is read while the panel has the pad); a polling host is asked each frame.
+  const subscribed = typeof host.stack.onPadOwnerChange === 'function';
+  let yielded = host.stack.hasModal;
+  const resetLatch = () => {
+    held.clear();
+    pressed.clear();
+    repeatDir = null;
+  };
+  const unwatch = subscribed
+    ? host.stack.onPadOwnerChange!((owner) => {
+        yielded = owner === 'stack';
+        resetLatch();
+        // Getting the pad back: what is still held from the panel is not a fresh press here.
+        if (!yielded) readPad(getPads(), threshold, held);
+      })
+    : null;
 
   const anchorAt = (world: ArrayLike<number> | null) => {
     if (!world) {
@@ -211,6 +240,9 @@ export function createCursor(host: CursorHost, opts: CursorOptions): WorldCursor
     get enabled() {
       return enabled;
     },
+    get latched() {
+      return held.size > 0 || repeatDir !== null;
+    },
     get target() {
       return target;
     },
@@ -220,13 +252,19 @@ export function createCursor(host: CursorHost, opts: CursorOptions): WorldCursor
     },
     update(t = typeof performance !== 'undefined' ? performance.now() : Date.now()) {
       if (disposed) return;
+      if (!subscribed) yielded = host.stack.hasModal;
+      if (yielded) {
+        // The panel has the pad: nothing is read, and the latch stays reset.
+        pressed.clear();
+        if (opts.mode === 'grid') anchorAt(opts.at?.() ?? null);
+        return;
+      }
       readPad(getPads(), threshold, now);
       for (const k of keys) now.add(k);
       for (const k of pressed) now.add(k);
       pressed.clear();
-      const blocked = !enabled || host.stack.hasModal;
-      if (blocked) {
-        // The panel has the pad: a press that outlives it is not a fresh one.
+      if (!enabled) {
+        // Disabled: a press that outlives it is not a fresh one.
         held.clear();
         for (const k of now) held.add(k);
         repeatDir = null;
@@ -262,6 +300,7 @@ export function createCursor(host: CursorHost, opts: CursorOptions): WorldCursor
     },
     dispose() {
       disposed = true;
+      unwatch?.();
       if (useKeys) {
         doc.removeEventListener('keydown', onKeyDown);
         doc.removeEventListener('keyup', onKeyUp);

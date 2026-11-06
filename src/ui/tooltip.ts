@@ -48,9 +48,14 @@ export interface Tooltip {
 /** What the tooltips need from their overlay (`Overlay` fits). */
 export interface TooltipHost {
   readonly layers: { readonly hud: HTMLElement; readonly toasts: HTMLElement };
-  /** The overlay's box and the frame: the toasts layer is the frame in frame units, else the box. */
+  /** The overlay's box: in `css` units the toasts layer covers it. */
   readonly rect: Readonly<Rect>;
-  readonly frame: Readonly<Rect>;
+  /**
+   * @deprecated (ws/ui-4) The frame is read from `anchors().frame.rect` once a camera built the
+   * anchors; this is only read before then (an element target with no camera yet).
+   */
+  readonly frame?: Readonly<Rect>;
+  /** In `frame` units the toasts layer is the frame (`anchors().frame.rect`), else the box. */
   readonly units: 'frame' | 'css';
   /** The overlay's `Anchors`; throws until a camera built it. Needed for world-point targets. */
   anchors(): Anchors;
@@ -188,6 +193,11 @@ export function createTooltips(host: TooltipHost): Tooltips {
   const anchorRect: Rect = { x: 0, y: 0, width: 0, height: 0 };
   const frameRect: Rect = { x: 0, y: 0, width: 0, height: 0 };
   const size = { width: 0, height: 0 };
+  const NO_FRAME: Readonly<Rect> = { x: 0, y: 0, width: 0, height: 0 };
+  // The overlay's anchors once a world point built them: their frame is the one source for
+  // where the frame is (ws/ui-4); before that the host's own (deprecated) `frame`.
+  let anchors: Anchors | null = null;
+  const frameOf = (): Readonly<Rect> => anchors?.frame.rect ?? host.frame ?? NO_FRAME;
 
   function place(entry: Entry): void {
     const t = entry.target;
@@ -208,15 +218,16 @@ export function createTooltips(host: TooltipHost): Tooltips {
       // Our proxy rides the tooltip layer; a caller's handle rides the hud layer (the frame),
       // which the toasts layer only matches in frame units (in css units it is the whole root).
       const shift = entry.ownsHandle || host.units === 'frame';
-      anchorRect.x = handle.x + (shift ? 0 : host.frame.x);
-      anchorRect.y = handle.y + (shift ? 0 : host.frame.y);
+      const fr = frameOf();
+      anchorRect.x = handle.x + (shift ? 0 : fr.x);
+      anchorRect.y = handle.y + (shift ? 0 : fr.y);
       anchorRect.width = 0;
       anchorRect.height = 0;
     }
     if (element.hidden) element.hidden = false;
     size.width = element.offsetWidth;
     size.height = element.offsetHeight;
-    const box = host.units === 'frame' ? host.frame : host.rect;
+    const box = host.units === 'frame' ? frameOf() : host.rect;
     frameRect.width = box.width;
     frameRect.height = box.height;
     const p = placeTooltip(anchorRect, size, frameRect, entry.asked, entry.gap);
@@ -290,7 +301,8 @@ export function createTooltips(host: TooltipHost): Tooltips {
         else {
           // A world point: a zero-size proxy on the hud layer rides the anchors.
           const proxy = h('span', { class: 'tc-tooltip-anchor', 'aria-hidden': 'true' });
-          handle = host.anchors().add(proxy, target, { layer: 'toasts' });
+          anchors = host.anchors();
+          handle = anchors.add(proxy, target, { layer: 'toasts' });
           ownsHandle = true;
         }
       }

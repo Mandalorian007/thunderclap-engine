@@ -42,6 +42,14 @@ import {
 import { WORLD_PANEL_UNIFORM_BYTES, WORLD_PANEL_UNIFORM_FLOATS, WORLD_PANEL_WGSL } from './wgsl';
 import type { PanelKeyEvent, WorldWidget, WorldWidgetHost } from './widgets';
 
+/** What `attach` needs from the input (`Input` from `@thunderclap/engine/input` fits). */
+export interface WorldPanelInput {
+  /** The input's pointer router, or null when it has none. */
+  getPointers(): PointerRouter<unknown> | null;
+  /** Called after every `update()`; returns the remover. */
+  onUpdated(fn: () => void): () => void;
+}
+
 export interface WorldPanelOptions {
   /** Panel size in world units. */
   width: number;
@@ -151,6 +159,7 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
   private readonly routerHit: Hit<WorldPanel>;
   private readonly routerNormal: Vec3 = [0, 0, 0];
   private readonly basis = new Float32Array(12);
+  private detachFn: (() => void) | null = null;
 
   constructor(renderer: Renderer, opts: WorldPanelOptions) {
     this.device = renderer.device;
@@ -644,6 +653,38 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
     return router.addTester(this.tester() as HitTester<unknown>);
   }
 
+  /**
+   * Drive the panel on the input tick (ws/ui-4): registers the panel's tester with the input's
+   * pointer router and, through `input.onUpdated`, calls `poll(router.pointers)` after every
+   * `input.update()` and `update(camera)` with the router's camera (the one the rays go through,
+   * `renderer.camera` in a game). Call once; `detach()` (and `dispose()`) undoes it. Manual
+   * `poll`/`update` still work for an input without a router.
+   */
+  attach(input: WorldPanelInput): void {
+    this.detach();
+    const router = input.getPointers();
+    if (!router) throw new Error('WorldPanel.attach: the input has no pointer router');
+    const offTester = this.attachTo(router);
+    const offTick = input.onUpdated(() => {
+      if (this.disposed) return;
+      this.poll(router.pointers);
+      // The router sees a `RayCamera`; a full `Camera` (a game's `renderer.camera`) has `view`.
+      const cam = router.camera;
+      if (cam && 'view' in cam) this.update(cam as Camera);
+    });
+    this.detachFn = () => {
+      offTick();
+      offTester();
+    };
+  }
+
+  /** Stop following the input `attach` hooked; nothing without one. */
+  detach(): void {
+    const off = this.detachFn;
+    this.detachFn = null;
+    off?.();
+  }
+
   // ------------------------------------------------------------------------------------------
   // Focus and keys
 
@@ -789,6 +830,7 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.detach();
     for (const w of this.widgets) w.detach();
     this.widgets.length = 0;
     this.focused = null;

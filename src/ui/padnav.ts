@@ -39,12 +39,17 @@ export function defaultPads(): readonly (PadLike | null)[] {
  * keyboard: the d-pad (or left stick) moves focus through the panel's controls, A activates
  * the focused one, B dismisses the panel. On a focused range slider left/right step its value,
  * and on a `select` they pick the previous/next option. Call `update()` once per frame. It does
- * nothing while no modal is open, so the game's own input map keeps the pad.
+ * nothing (and reads no pad) while the stack does not own the pad (`stack.padOwner`), so the
+ * game's own input map keeps it; the latch resets on each owner transition.
  */
 export class PadNav {
   private readonly getGamepads: () => readonly (PadLike | null)[];
   private readonly threshold: number;
   private prev = new Set<PadControl>();
+  private next = new Set<PadControl>();
+  /** True while the stack owns the pad (a modal is open); kept by `onPadOwnerChange`. */
+  private owning: boolean;
+  private readonly unwatch: () => void;
 
   constructor(
     private readonly stack: PanelStack,
@@ -52,12 +57,29 @@ export class PadNav {
   ) {
     this.getGamepads = opts.getGamepads ?? defaultPads;
     this.threshold = opts.axisThreshold ?? 0.6;
+    this.owning = stack.padOwner === 'stack';
+    // The latch resets on each transition: what is held when the panel opens is not a fresh
+    // press on it (the A that opened a menu never activates its first control), and nothing is
+    // read while the game owns the pad.
+    this.unwatch = stack.onPadOwnerChange((owner) => {
+      this.owning = owner === 'stack';
+      this.prev.clear();
+      if (this.owning) readPad(this.getGamepads(), this.threshold, this.prev);
+    });
+  }
+
+  /** Stop following the stack; `update()` does nothing after. */
+  dispose(): void {
+    this.unwatch();
+    this.owning = false;
   }
 
   update(): void {
-    const now = this.read();
+    if (!this.owning) return;
+    const now = readPad(this.getGamepads(), this.threshold, this.next);
     const before = this.prev;
     const fresh = (k: PadControl) => now.has(k) && !before.has(k);
+    this.next = before;
     this.prev = now;
     const panel = this.stack.topModalElement;
     if (!panel) return;
@@ -106,10 +128,6 @@ export class PadNav {
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
     return true;
-  }
-
-  private read(): Set<PadControl> {
-    return readPad(this.getGamepads(), this.threshold);
   }
 }
 

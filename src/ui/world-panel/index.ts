@@ -11,6 +11,7 @@ export {
   createWorldPanel,
   WorldPanel,
   type WorldPanelHit,
+  type WorldPanelInput,
   type WorldPanelOptions,
   type WorldPanelStats,
   worldPanelTarget,
