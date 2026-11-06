@@ -182,6 +182,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - ws/render-hooks wishes: a `Renderer` test helper for "frame label list minus first-frame mipmaps"; retire the two-view water harness path once a pixel comparison against `?hook=1` is cheap. `CAMERA_BLOCK_FLOATS` is now 128 (lights at byte 768): any branch with camera-block offsets in tests rebases onto it. → ws/comment-sweep.
 - ws/voxel-render (after ws/demo-voxel reports): the wishes list from the demo (layer-index + AO vertex layout, transfer upload, frustum-vs-AABB) plus `readsDepth` hook consumers for water in voxel worlds.
 - host-mobile integrator: check its `AudioEngine` background flag / `audio.update` pause code against audio-3's `pause({ keep })` / `unpause()` now on main.
+- `e2e/music.spec.ts:125` (audio-3 pause ramp, `busGains.music` poll) timed out once on desktop-1280 at load 24–31 on chain 6's render-hooks gate, 18/18 on targeted rerun: load-sensitive like post2's sharpen/grain; widen the poll budget or assert the ramp direction → ws/comment-sweep.
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
