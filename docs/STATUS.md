@@ -104,7 +104,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Post 3: TAA with history + jitter, SSR, auto-exposure histogram, white balance, camera motion blur, lens dirt, quality tiers | ws/post-3 | 🔧 engineer dispatched (offset 540) |
 | 5 | Host PWA: `packages/host-pwa` installable shell (manifest + service worker vite plugin, install/update/offline through the Host seam) | ws/host-pwa | ✅ merged `26e8223` (chain 1; full gate: check 1517/118 + host-pwa 37, e2e 1537/145/0, snap 0; package.json check chain keep-both) |
 | 5 | Nav 3: edge costs, 4-neighbour, `reachable` with parents, incremental grid edits, multi-goal flow fields, path caps | ws/nav-3 | ✅ green `674991e` (check 1522/118, snap 0, e2e 1509/139/2: decals.spec:143 phone rows, load 26, E-023 watch); queued chain 1 |
-| 5 | Ergo 2D 2: iso projection/inverse with elevation probe, tile-layer painter order + diamond + elevation, parallax helper, 2D camera follow | ws/ergo-2d-2 | 🔧 engineer dispatched (offset 570) |
+| 5 | Ergo 2D 2: iso projection/inverse with elevation probe, tile-layer painter order + diamond + elevation, parallax helper, 2D camera follow | ws/ergo-2d-2 | ✅ green `72e3f65` (check 1528/120, snap 0, e2e 1518/139/1: music.spec:125 pause ramp desktop-1280, known load-sensitive); queued chain 3 |
 | 5 | Voxel render: `@thunderclap/engine/voxel` grid, greedy mesher + AO, worker bridge, culled chunk Drawable with slack, DDA pick, WGSL prelude, `nearest-mip-repeat` sampler, water origin, sky ambient floor | ws/voxel-render | 🔧 engineer dispatched (offset 580) |
 | 5 | Demo polish 2: arena/dungeon/range/showroom adopt `timing.ready()`, skinned standard, decals, `PanelStack`, widgets `bar`, tween hinge | ws/demo-polish-2 | 🔧 engineer dispatched (offset 590) |
 | 5 | UI 3: tooltip (element or world target), pad/keyboard world cursor, loading screen, notifications, `h` string style, select zoom fix | ws/ui-3 | 📝 brief written; dispatch after ws/ui-world-panel lands (offset 600) |
@@ -201,6 +201,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - decals.spec:143 failed again under load on nav-3's matrix (phone-promax, phone-android; contrast 0). Third sighting: ws/comment-sweep should raise its poll budget or make the decal row load-proof.
 - ws/collide wishes: register-form `raycast` (no `ArrayLike` origin/dir) so `slide`'s lip check drops its two scratch arrays; `transformGeometry` mutates in place and needs a louder geom README note (→ ws/scripts-bake or comment-sweep).
 - post2.spec timed out 10× (fxaa/sharpen/LUT/grain/aberration, desktop-1920 + ipad, 30 s) on collide's matrix at load 33: another poll-budget candidate for ws/comment-sweep.
+- ws/ergo-2d-2 wishes: index sub-range draws in `Frame.mesh` so painter-order tile layers are one mesh instead of `cols + rows - 1` (→ ws/render-4). Painter mode interleaves sprites by `dp.order = base + layer.depthOf(...)`; no SpriteBatch sort key was added.
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
