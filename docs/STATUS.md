@@ -55,7 +55,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Texture registry | ws/texture-registry | `loadTexture` with mips, `defaultTextures` (white, black, flatNormal, metalRough, checker), unset slots bind white | pbr (wish) | ✅ merged `853f444` (chain 1; e2e 662/92/8 all E-017/E-020) |
 | 5 | Geometry | ws/geom | `@thunderclap/engine/geom`: box/plane/sphere/icosphere/capsule/cylinder/torus, `Heightfield` with `heightAt`/`raycastHeightfield`, merge/transform; harness `geom.html` | — | ✅ merged `a775df4` (chain 4; 840 tests; e2e 679/92/7 E-017) |
 | 5 | IK + root motion | ws/ik | `twoBoneIk`, `lookAt`, `extractRootMotion`, `applyRootMotionDelta`; harness `ik.html` | anim | ✅ merged `10475ed` (chain 4; 902 tests; e2e 747/95/0; snap 5/5) |
-| 5 | Anim graph | ws/anim-graph | `createAnimGraph`: states, 1D blend spaces with phase sync, conditional transitions, enter/exit hooks; harness `anim-graph.html` | anim | ✅ green at `cea21ae` (727 tests; e2e 578/92/4, all mesh.spec fog E-017); queued chain 4 after ui-hud |
+| 5 | Anim graph | ws/anim-graph | `createAnimGraph`: states, 1D blend spaces with phase sync, conditional transitions, enter/exit hooks; harness `anim-graph.html` | anim | ✅ merged `089bf49` (chain 4; e2e 772/102/0; snap 5/5; check 944 after E-025 disjoint merges) |
 | 5 | HUD widgets | ws/ui-hud | `ui.reticle`, `ui.meter`, `ui.slots`, `ui.heading` on the overlay; harness `hud.html` | ui | ✅ green at `97e0af3` (723 tests; e2e 587/92/3, all E-017 list); queued chain 4 after ik |
 | 5 | Gesture long-press | ws/gesture-longpress | pan threshold before long-press, cumulative travel, `Gestures.onGesture` observer | gestures | ✅ merged `06048c2` (chain 3; 911 tests; e2e 748/102/0; snap 5/5) |
 | 5 | Audio zones | ws/audio-zones | `audio.zones` (ambient loops, reverb sends by listener position), `Voice.follow`, `audio.update(dt)`; harness `zones.html` | audio | ✅ green at `2816026` (735 tests; e2e 596/92/2 E-017 fog); queued chain 1 after texture-registry |
@@ -83,6 +83,8 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Audio 2: beat-grid music layers, variations, reverb/lowpass sends, ducking | ws/audio-2 | ✅ green at `8c5db70` (933 tests; e2e 776/106/0); queued chain 3 after ui-widgets |
 | 5 | Save 2: slot manager with meta sidecar, settings store + bind, undo journal, typed-array codec | ws/save-2 | 🔧 engineer running (offset 340) |
 | 5 | Post 2: FXAA, 3D LUT, grain, aberration, sharpen, depth/normal outline | ws/post-2 | 🔧 engineer running (offset 350) |
+| 5 | Water surface: scrolling normals, Fresnel, sun specular, depth fade, foam, `waterHeight` | ws/water | `src/fx/water.ts` Drawable; harness `water.html` | sky, post-depth, camera-ergo | 🔧 engineer running (offset 360) |
+| 5 | Decals: depth-projected box decals + quad fallback, atlas, lifetime, one instanced draw | ws/decals | `src/fx/decals.ts` Drawable; harness `decals.html` | post-depth, camera-ergo | 🔧 engineer running (offset 370) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
