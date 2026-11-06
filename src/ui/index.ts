@@ -20,6 +20,28 @@ export {
 } from './caption';
 export { append, type Child, focusableWithin, h } from './dom';
 export {
+  createHeading,
+  createMeter,
+  createReticle,
+  createSlots,
+  ensureHudStyles,
+  type Heading,
+  type HeadingOptions,
+  HUD_CSS,
+  type HudHost,
+  headingOffset,
+  type Meter,
+  type MeterOptions,
+  type MeterTone,
+  type Reticle,
+  type ReticleOptions,
+  type ReticleStyle,
+  type Slots,
+  type SlotsOptions,
+  themePx,
+  wrapDegrees,
+} from './hud';
+export {
   type ClassifyInput,
   classifyFormFactor,
   defaultForms,

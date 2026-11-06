@@ -146,6 +146,53 @@ await ui.caption.say('Something old is listening.', {
 - `focusableWithin(el)` lists the focusable descendants of an element, skipping `inert` and `hidden`
   subtrees.
 
+## HUD widgets: `ui.reticle`, `ui.meter`, `ui.slots`, `ui.heading`
+
+What a first- or third-person game puts over its world, in the theme and the overlay's units
+(`ui/hud.ts`). Noun-free: a meter is a meter, a strip is a strip.
+
+```ts
+const reticle = ui.reticle({ style: 'cross', size: 28, gap: 8 }); // hud layer, frame centre
+const stamina = ui.meter({ label: 'Stamina', max: 100, region: 'left', tone: 'warn' });
+const strip = ui.slots({ count: 6, hints: ['1', '2', '3', '4', '5', '6'] }); // bottom region
+const compass = ui.heading({ region: 'top', width: 480 });
+stamina.set(42);              // clamps to [0, max]; set(v, max) changes the max
+strip.select(strip.selected + 1); // wraps
+strip.setContent(0, iconCanvas);
+compass.setYaw(camera.yaw);   // radians, clockwise from N
+reticle.pulse();              // a short flash on a hit
+```
+
+- **Lengths are theme px.** `themePx(n)` is `calc(n * var(--tc-space-1) / 4)`: `n` design px of
+  the frame on the `hud` layer, `n` CSS px in a region in `frame` units and `n / 2` CSS px in
+  `css` units, so the widgets shrink on phones with the rest of the theme. Colours, radii, fonts
+  and timings are the `--tc-*` tokens; `HUD_CSS` is the stylesheet, injected once per document by
+  the first widget (`ensureHudStyles(doc)`, `#tc-ui-hud`).
+- **Reticle** (`ReticleOptions`: `style: ReticleStyle` = `dot | cross | circle`, `size` 24,
+  `gap` 6 for the cross, `color`). `Reticle`: `el`, `visible`, `style`, `show()`, `hide()`,
+  `pulse()` (adds `tc-reticle-pulse`, removed on `animationend` or after 400 ms), `setStyle()`,
+  `remove()`. It sits at the centre of the frame in `layers.hud`, is `aria-hidden`, and gets
+  `data-modal` (display none) while `ui.stack.hasModal`; the layer is `inert` then too.
+- **Meter** (`MeterOptions`: `label`, `max` 1, `value` = max, `region` `bottom`, `order`, `tone:
+  MeterTone` = `accent | info | success | warn | danger`, `width` 240, `format(value, max)` for a
+  readout and `aria-valuetext`). `Meter`: `el` (`role="meter"`, `aria-valuemin/now/max`,
+  `aria-label` = label), `value`, `max`, `set(value, max?)`, `setTone()`, `remove()`. The fill is
+  `scaleX(--tc-meter-value)`.
+- **Slots** (`SlotsOptions`: `count`, `region` `bottom`, `order`, `hints` per slot, `label`
+  `Slots`, `selected` 0, `size` 72). `Slots`: `el` (`role="listbox"`), `count`, `selected`,
+  `select(i)` (**wraps**: `select(count)` is 0, `select(-1)` the last, so a wheel cycles),
+  `setContent(i, text | HTMLElement)`, `setHint(i, text)`, `remove()`. Each slot is a
+  `role="option"` with `aria-selected`, a `.tc-slot-hint` badge and `data-selected` on the one
+  highlighted. Not focusable: a game's input map drives it.
+- **Heading** (`HeadingOptions`: `region` `top`, `order`, `width` 480, `span` 90 degrees across
+  the width, `tickEvery` 15, `labels` `['N', 'E', 'S', 'W']`). `Heading`: `el` (`role="img"`,
+  `aria-label` "Heading 90°"), `strip`, `yaw`, `offset`, `setYaw(radians)`, `remove()`. The strip
+  holds two turns (−180° to 540°) so it never jumps at north; `setYaw` writes one `translate3d`
+  when the offset changed. Pure: `wrapDegrees(deg)`, `headingOffset(yaw, width, span)`.
+- The factories also stand alone: `createReticle(host: HudHost, opts)`, `createMeter`,
+  `createSlots`, `createHeading`, where `HudHost` is `{ layers: { hud }, layout, stack }` (an
+  `Overlay` fits). `harness/hud.html` shows all four over the mesh scene.
+
 ## External links: `externalLink`
 
 A real new-tab link plus a **Copy link** button, with "Copied" feedback and a fallback popover
@@ -353,7 +400,7 @@ declarations, and `applyTheme(el, tokens)` sets them on an element. `ensureStyle
 
 ## Tests
 
-`ui.test.ts` runs under happy-dom and covers theme var names, overlay mount and scaling,
+`hud.test.ts` covers the HUD widgets (DOM shape, aria, clamping, wrapping, heading offsets, the modal rule, pulse). `ui.test.ts` runs under happy-dom and covers theme var names, overlay mount and scaling,
 client→design mapping, the modal focus trap, Esc, focus restore, inert stacking, non-modal panels,
 backdrop clicks, toast caps and timers, caption typing / hold / skip / queue / reduced motion / suspend / onPlace, and
 the slider's aria-valuetext. Layout and focus were also checked once in Chromium via Playwright (not

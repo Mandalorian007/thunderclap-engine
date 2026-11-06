@@ -1,6 +1,20 @@
 import { type AnchorCamera, Anchors } from './anchor';
 import { CaptionCard, type CaptionOptions } from './caption';
 import { h } from './dom';
+import {
+  createHeading,
+  createMeter,
+  createReticle,
+  createSlots,
+  type Heading,
+  type HeadingOptions,
+  type Meter,
+  type MeterOptions,
+  type Reticle,
+  type ReticleOptions,
+  type Slots,
+  type SlotsOptions,
+} from './hud';
 import { createLayout, type Layout, type LayoutSpec, type Units } from './layout';
 import { PanelStack } from './stack';
 import { ensureStyles } from './styles';
@@ -102,6 +116,14 @@ export interface Overlay {
   anchors(camera?: () => AnchorCamera): Anchors;
   /** `anchors().update()` if `anchors` was ever called, else nothing. `createGame` calls it after every frame. */
   updateAnchors(): void;
+  /** A reticle centred on the frame (`hud` layer), hidden while a modal is open (`ui/hud.ts`). */
+  reticle(opts?: ReticleOptions): Reticle;
+  /** A `role="meter"` bar in a layout region. */
+  meter(opts?: MeterOptions): Meter;
+  /** A strip of slots with key-hint badges and a selected highlight, in a layout region. */
+  slots(opts: SlotsOptions): Slots;
+  /** A sliding cardinal strip driven by `setYaw`, in a layout region. */
+  heading(opts?: HeadingOptions): Heading;
   destroy(): void;
 }
 
@@ -285,6 +307,18 @@ export function createOverlay(opts: OverlayOptions): Overlay {
     },
     updateAnchors() {
       anchors?.update();
+    },
+    reticle(o) {
+      return createReticle(overlay, o);
+    },
+    meter(o) {
+      return createMeter(overlay, o);
+    },
+    slots(o) {
+      return createSlots(overlay, o);
+    },
+    heading(o) {
+      return createHeading(overlay, o);
     },
     destroy() {
       anchors?.clear();
