@@ -32,7 +32,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 4 | 3D particles | ws/particles-3d | `ParticleSystem` in world space with camera billboarding, depth, soft fade and lit/emissive modes; `EmitParams` gains 3D position, velocity, gravity, wind; weather page on the matrix; 2D particles pixel-identical | lights | ✅ merged `767228f` (541 tests; e2e 470/52; `space: 'world'`, soft fade, `lit`, 3D emit) |
 | 4 | Texture arrays | ws/texture-array | `createTextureArray`/`loadTextureArray` with GPU mip generation, `Texture.mipLevels`, a sampler kind for it, stream page textures its chunks; documented | mesh-stream | ✅ merged `e96a9e8` (530 tests; e2e 454/52; `loadTextureArray`, `generateMipmaps`, `viewDimension` on `MaterialDesc`) |
 | 4 | Spatial audio | ws/spatial-audio | `audio.listener` (position, orientation) and `PlayOptions.at` / `Voice.setPosition` through a `PannerNode` per spatial voice, with a 2D stereo-pan shorthand; unit tests on a fake `AudioContext`; documented | — | ✅ merged `6c96af8` (490 tests; `audio.listener`, `PlayOptions.at/spatial`, `Voice.setPosition/setDirection`) |
-| 4 | WebXR | ws/xr | `createXrHost(session)` as a `FrameSource`; `XrSurface` giving a `SceneTarget` per eye per frame; per-eye `Camera`s from `XRView`; `XrPointerSource` for controllers/hands; `createGame({ xr })` + `ctx.xr.enter()/exit()`; unit tests on a fake XR system; harness `xr.html` boots on the matrix | two-views, input-rays | ✅ green at `fdd4127` (512 tests; e2e 414/36); merging |
+| 4 | WebXR | ws/xr | `createXrHost(session)` as a `FrameSource`; `XrSurface` giving a `SceneTarget` per eye per frame; per-eye `Camera`s from `XRView`; `XrPointerSource` for controllers/hands; `createGame({ xr })` + `ctx.xr.enter()/exit()`; unit tests on a fake XR system; harness `xr.html` boots on the matrix | two-views, input-rays | ✅ merged `65800b7` (611 tests; e2e 502/52; `createGame({ xr })`, `ctx.xr`, `XrSurface`, `XrPointerSource`) |
 | 5 | XR post per eye | ws/xr-post | post stack runs per eye into the projection layer; `present: false` path kept; fake-XR test | xr | 🔧 in progress (on ws/xr) |
 | 5 | glTF | ws/gltf | `parseGltf` (.glb/.gltf, engine-free) and `loadGltf(renderer, doc)` → meshes in `VERTEX_LAYOUT_3D`, transforms, base-colour textures, `GltfScene.draw`; `@thunderclap/engine/assets`; harness `gltf.html` on the matrix; static geometry only | texture-array, cull | ✅ merged `57706f1` (579 tests; e2e 494/52; meshes carry primitive bounds) |
 | 5 | glTF skins + animations | ws/gltf-anim | `GltfDocument.skins`/`animations` in `anim` shapes, `JOINTS_0`/`WEIGHTS_0`, `interleaveSkinned`, `skeletonFromSkin`; tests on a generated rigged GLB | gltf, anim (shape) | 🔧 in progress (on ws/gltf) |
@@ -43,6 +43,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Animation | ws/anim | `@thunderclap/engine/anim`: clips (glTF sampler semantics), `Pose`, `Skeleton`, mixer with layers and crossfade, `poseToWorld`, `skinMatrices`; pure, tested | — | 🔧 in progress |
 | 5 | Skinning | ws/skinning | `VERTEX_LAYOUT_SKINNED`, `SkinPalette`, skinning in `materialPrelude` and the shadow pass; harness `skin.html` | shadows, anim (layout) | 🔧 in progress (on ws/shadows) |
 | 5 | Standard PBR material | ws/pbr | `createStandardMaterial` (base, metal-rough, normal, occlusion, emissive; GGX) over the lights block, shadows and fog; `WGSL_PBR`; harness `pbr.html` | shadows | 🔧 in progress (on ws/shadows) |
+| 5 | Doc sweep 3 | ws/doc-sweep-3 | `check:docs` clean; ARCHITECTURE *Planned* lines current after wave 4 (XR lines all *Today*); root README page list and roadmap current; contradictions fixed and listed | wave 4 | 🔧 in progress |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
@@ -51,11 +52,10 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - **Gate C (after wave 3), met 2026-11-05, closed at `1ebca03`:** mesh page lit by the lighting block (`af36d1c`); streamed mesh updates without a main-thread copy (`bde5299`); two views per frame (`749b992`); template boots with gestures and pointers from `createGame` (`8f3cb9d`). ARCHITECTURE *Planned* lines current and principle 4 reworded (`1ebca03`).
 - **Gate B (after wave 2):** mesh demo met at `2b1032e`; template timed at 17 min (`a266b04`); client mode met at `1b09225`. Gate B met at `2b89c82` (E-010). `?demo=mesh` runs on the matrix; a template game boots from zero in under a day of agent time (timed); client mode runs the harness without a save store.
 
-- **Gate D (after wave 4):** mesh page shadowed and fogged; stream page culls and samples a texture array; look, anchors, weather and xr pages boot on the matrix; spatial voices tested; every XR *Planned* line in ARCHITECTURE is *Today*; 2D harness pixel-identical throughout.
+- **Gate D (after wave 4), met 2026-11-05 at `65800b7`:** all nine wave-4 streams merged; 611 engine tests, e2e 502/52/0. Definition: mesh page shadowed and fogged; stream page culls and samples a texture array; look, anchors, weather and xr pages boot on the matrix; spatial voices tested; every XR *Planned* line in ARCHITECTURE is *Today*; 2D harness pixel-identical throughout.
 
 ## Wave 5 candidates (after wave 4 merges)
 
-- Doc sweep 3; a Last Rune and Forgewilds "what the engine now offers" note for their PMs.
 - Rule from ws/cull: perspective cameras cull by default, so a 3D harness asserting `stats.instances` counts `culled` too.
 - Spot lights and per-light layer masks (after ws/shadows).
 - Character pipeline, stage 2 (E-015): glTF skins + animations into `anim`/`skinning`; attachment sockets for cosmetics; a `templates/third-person` showcase; GPU picking.
