@@ -3,6 +3,7 @@ import type { GyroSource } from './gyro';
 import { type StickOptions, shapeStick } from './input';
 import {
   createPointerDispatcher,
+  eventTime,
   POINTER_PRIORITY,
   type PointerConsumer,
   type PointerDispatcher,
@@ -746,7 +747,8 @@ export class Look {
     if (!p.primary || p.button !== 0 || this.tapFns.length === 0 || this.blocked()) return;
     this.tapId = p.id;
     this.tapDevice = p.device;
-    this.tapAt = this.now();
+    // When the press happened, not when it was handled (ws/input-6).
+    this.tapAt = eventTime(p.time, this.now);
     this.tapLastX = p.x;
     this.tapLastY = p.y;
     this.tapTravel = 0;
@@ -763,7 +765,8 @@ export class Look {
     this.tapMove(p);
     const id = this.tapId;
     this.tapId = null;
-    if (id === null || this.now() - this.tapAt > this.tapMaxMs || this.blocked()) return;
+    const held = eventTime(p.time, this.now) - this.tapAt;
+    if (id === null || held > this.tapMaxMs || this.blocked()) return;
     let x = p.x;
     let y = p.y;
     const t = this.pointerTransform;
