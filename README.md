@@ -183,6 +183,8 @@ The layout spec also runs on upright phone and tablet rows. The pages: `index.ht
 
 Headless Chromium gets a WebGPU adapter with `--enable-unsafe-webgpu`. On macOS that's Metal; on Linux it's SwiftShader. `playwright.config.ts` sets the flags.
 
+**Bench.** `pnpm bench` (`scripts/bench.mjs`) runs `harness/bench.html` in headless Chromium at the `desktop-1280` size through a fixed scene ladder (cube instances 1k/10k/50k with culling on and off, 0/8/16 point lights, the sun shadow on and off, 10k/50k sprites, 10k/100k world particles), holds each rung for 140 frames and records the median CPU ms (`performance.now()` around the render callback) and GPU ms (`renderer.gpuTimer`, `n/a` without `timestamp-query`) with `renderer.stats`. It prints the table and rewrites [`docs/BENCH.md`](docs/BENCH.md) with the machine line (user agent, adapter) and date; `--rung <id,id>` runs part of the ladder without writing. The numbers are what that machine measured at that moment, not a ceiling. `e2e/bench.spec.ts` runs one tiny rung on `desktop-1280` only.
+
 ## Design rules
 
 1. **No game nouns.** Code joins the engine only if a shipped game uses it, the next game plausibly would, and its API names nothing from that game.
