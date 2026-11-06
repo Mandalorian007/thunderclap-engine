@@ -59,6 +59,11 @@ export interface VertexLayout {
   readonly wgslPosition: string;
   /** WGSL expression over `v: VertexIn` for the object-space normal (`vec3f`). */
   readonly wgslNormal: string;
+  /**
+   * The layout carries joints and weights: `materialPrelude` emits `WGSL_SKIN` (the palette
+   * binding and `engine_skin`) so `wgslPosition` / `wgslNormal` may call it. See `skin.ts`.
+   */
+  readonly skinned?: boolean;
 }
 
 /** 2D layout: `v.pos` is a `vec2f` (z = 0); the normal faces the viewer, `(0, 0, -1)`. */
@@ -86,6 +91,57 @@ export const VERTEX_LAYOUT_3D: VertexLayout = {
   @location(2) color: vec4f,`,
   wgslPosition: 'v.pos',
   wgslNormal: 'v.normal',
+};
+
+/**
+ * Skinned layout: the 3D layout's 12 floats followed by four joint indices (`uint8x4`, read as
+ * `vec4u`) and four weights (`unorm8x4`, read as `vec4f`), 8 bytes that occupy the slots of
+ * floats 12 and 13: 14 "floats" (`VERTEX_SKINNED_FLOATS`), 56 bytes per vertex. Write the
+ * joints and weights through a byte view of the vertex buffer (`setVertexSkin` in `skin.ts`),
+ * not as floats (a packed value may be a NaN pattern). `materialPrelude` applies the four
+ * weighted joint matrices from the material's `SkinPalette` before the instance matrix.
+ */
+export const VERTEX_SKINNED_FLOATS = 14;
+export const VERTEX_SKINNED_STRIDE = VERTEX_SKINNED_FLOATS * 4;
+/** Byte offset of the four joint indices inside a skinned vertex. */
+export const SKIN_JOINTS_BYTE_OFFSET = 48;
+/** Byte offset of the four weights (unorm8) inside a skinned vertex. */
+export const SKIN_WEIGHTS_BYTE_OFFSET = 52;
+
+/** The skinned layout's buffer layout: the 3D attributes, joints at 11 and weights at 12. */
+export const VERTEX_SKINNED_BUFFER_LAYOUT: GPUVertexBufferLayout = {
+  arrayStride: VERTEX_SKINNED_STRIDE,
+  stepMode: 'vertex',
+  attributes: [
+    { shaderLocation: 0, offset: 0, format: 'float32x3' },
+    { shaderLocation: 10, offset: 12, format: 'float32x3' },
+    { shaderLocation: 1, offset: 24, format: 'float32x2' },
+    { shaderLocation: 2, offset: 32, format: 'float32x4' },
+    { shaderLocation: 11, offset: SKIN_JOINTS_BYTE_OFFSET, format: 'uint8x4' },
+    { shaderLocation: 12, offset: SKIN_WEIGHTS_BYTE_OFFSET, format: 'unorm8x4' },
+  ],
+};
+
+/**
+ * Skinned layout: `v.pos`, `v.normal`, `v.uv`, `v.color` as in 3D plus `v.joints: vec4u` and
+ * `v.weights: vec4f`. The prelude's `engine_local_position` / `engine_local_normal` return the
+ * skinned position and normal (`engine_skin`), so `engine_vertex` and every material work
+ * unchanged. The instance's palette slot travels in `params.w` (see `skin.ts`).
+ */
+export const VERTEX_LAYOUT_SKINNED: VertexLayout = {
+  name: 'skinned',
+  floats: VERTEX_SKINNED_FLOATS,
+  stride: VERTEX_SKINNED_STRIDE,
+  buffer: VERTEX_SKINNED_BUFFER_LAYOUT,
+  wgslFields: `  @location(0) pos: vec3f,
+  @location(10) normal: vec3f,
+  @location(1) uv: vec2f,
+  @location(2) color: vec4f,
+  @location(11) joints: vec4u,
+  @location(12) weights: vec4f,`,
+  wgslPosition: 'engine_skin(v, v.pos, v.normal).position',
+  wgslNormal: 'engine_skin(v, v.pos, v.normal).normal',
+  skinned: true,
 };
 
 /** Room reserved in a mesh's buffers, in vertices and indices. */

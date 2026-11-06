@@ -1,5 +1,5 @@
 export type { BindingDesc, BindingSetOptions } from './bindings';
-export { BindingSet } from './bindings';
+export { BindingSet, BUFFER_BINDING_BASE } from './bindings';
 export type { BlendMode } from './blend';
 export { blendState } from './blend';
 export type { CameraPoint, CameraRect } from './camera';
@@ -43,10 +43,16 @@ export type { MeshCapacity, MeshDesc, MeshUpdate, VertexLayout } from './mesh';
 export {
   Mesh,
   quadGeometry,
+  SKIN_JOINTS_BYTE_OFFSET,
+  SKIN_WEIGHTS_BYTE_OFFSET,
   VERTEX_BUFFER_LAYOUT,
   VERTEX_FLOATS,
   VERTEX_LAYOUT_2D,
   VERTEX_LAYOUT_3D,
+  VERTEX_LAYOUT_SKINNED,
+  VERTEX_SKINNED_BUFFER_LAYOUT,
+  VERTEX_SKINNED_FLOATS,
+  VERTEX_SKINNED_STRIDE,
   VERTEX_STRIDE,
   VERTEX3D_BUFFER_LAYOUT,
   VERTEX3D_FLOATS,
@@ -66,6 +72,8 @@ export type {
 export { MIN_RESOLUTION_SCALE, Renderer, sceneSize } from './renderer';
 export { SCENE_FORMAT, SceneTarget, type SceneTargetDesc } from './scene-target';
 export { DEFAULT_SHADOW_SIZE, SHADOW_FORMAT, ShadowMap } from './shadow';
+export type { SkinPaletteDesc } from './skin';
+export { JOINT_FLOATS, SKIN_PALETTE_HEADER_FLOATS, SkinPalette, setVertexSkin } from './skin';
 export { type SnapshotOptions, SnapshotRenderer } from './snapshot';
 export type { PixelData, SamplerKind, TextureDesc, TextureLike, TextureSource } from './texture';
 export { bytesPerTexel, createSamplers, Texture } from './texture';
@@ -74,9 +82,11 @@ export { MATRIX3X4_FLOATS, multiplyMatrix3x4, Transform, writeMatrix2d } from '.
 export {
   createShaderModule,
   materialPrelude,
+  SKIN_PALETTE_BINDING,
   WGSL_FULLSCREEN_PRELUDE,
   WGSL_GLOBALS,
   WGSL_LIGHTS,
   WGSL_MATERIAL_PRELUDE,
   WGSL_NOISE,
+  WGSL_SKIN,
 } from './wgsl';

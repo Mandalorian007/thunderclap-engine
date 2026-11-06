@@ -1,3 +1,4 @@
+import { BUFFER_BINDING_BASE } from './bindings';
 import { reportGpuError } from './diagnostics';
 import { VERTEX_LAYOUT_2D, type VertexLayout } from './mesh';
 
@@ -180,6 +181,50 @@ fn engine_luma(c: vec3f) -> f32 {
 }
 `;
 
+/** The `SkinPalette` binding inside the material's group: `@group(1) @binding(16)`. */
+export const SKIN_PALETTE_BINDING = BUFFER_BINDING_BASE;
+
+/**
+ * GPU skinning, emitted by `materialPrelude` for a layout with `skinned: true` (after
+ * `VertexIn`, which it reads). The palette is the material's storage buffer slot 0
+ * (`SkinPalette.buffer` passed as `buffers: [palette.buffer]`): a header (`joints` per
+ * instance, `instances`) and `rows`, three `vec4f` rows per joint (row-major 3×4, the layout
+ * `anim`'s `skinMatrices` writes), instance after instance. `engine_skin(v, position, normal)`
+ * sums the four weighted joint matrices of the vertex (`v.joints`, `v.weights`) for the
+ * instance's palette slot `u32(v.params.w)` and applies them to an object-space position and
+ * normal, before the instance matrix. A weight of 0 skips the fetch.
+ */
+export const WGSL_SKIN = /* wgsl */ `struct EngineSkinPalette {
+  joints: u32,
+  instances: u32,
+  _pad0: u32,
+  _pad1: u32,
+  rows: array<vec4f>,
+};
+@group(1) @binding(${SKIN_PALETTE_BINDING}) var<storage, read> engine_skin_palette: EngineSkinPalette;
+struct EngineSkinned {
+  position: vec3f,
+  normal: vec3f,
+};
+fn engine_skin(v: VertexIn, position: vec3f, normal: vec3f) -> EngineSkinned {
+  let base = u32(v.params.w) * engine_skin_palette.joints * 3u;
+  let p = vec4f(position, 1.0);
+  var skinned: EngineSkinned;
+  skinned.position = vec3f(0.0);
+  skinned.normal = vec3f(0.0);
+  for (var k = 0u; k < 4u; k++) {
+    let w = v.weights[k];
+    if (w == 0.0) { continue; }
+    let r = base + v.joints[k] * 3u;
+    let r0 = engine_skin_palette.rows[r];
+    let r1 = engine_skin_palette.rows[r + 1u];
+    let r2 = engine_skin_palette.rows[r + 2u];
+    skinned.position += w * vec3f(dot(r0, p), dot(r1, p), dot(r2, p));
+    skinned.normal += w * vec3f(dot(r0.xyz, normal), dot(r1.xyz, normal), dot(r2.xyz, normal));
+  }
+  return skinned;
+}`;
+
 /**
  * Prelude prepended to every material, generated per vertex layout. Declares `VertexIn` (the
  * layout's vertex fields plus the 28-float instance: 3×4 world matrix rows `m0..m2`,
@@ -188,8 +233,10 @@ fn engine_luma(c: vec3f) -> f32 {
  * `receiveShadow: false`) and the `FragOut` MRT struct.
  *
  * Helpers: `engine_local_position(v)` / `engine_local_normal(v)` (object space, `vec3f` for
- * every layout), `engine_world_position(v)` and `engine_vertex(v)`; the lighting block and
- * `engine_lambert` / `engine_point_lights` from `WGSL_LIGHTS`.
+ * every layout; skinned for a `skinned` layout), `engine_world_position(v)` and
+ * `engine_vertex(v)`; the lighting block and `engine_lambert` / `engine_point_lights` from
+ * `WGSL_LIGHTS`; `WGSL_SKIN` (`engine_skin`, the palette binding) for a skinned layout only.
+ * The text for the 2D and 3D layouts does not change with skinning (E-008).
  */
 export function materialPrelude(layout: VertexLayout): string {
   return /* wgsl */ `
@@ -225,7 +272,7 @@ struct FragOut {
   @location(0) color: vec4f,
   @location(1) emissive: vec4f,
 };
-
+${layout.skinned ? `\n${WGSL_SKIN}\n` : ''}
 fn engine_local_position(v: VertexIn) -> vec3f {
   return ${layout.wgslPosition};
 }
