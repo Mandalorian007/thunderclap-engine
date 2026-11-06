@@ -8,7 +8,9 @@
  * - foam: the foam probe at the waterline is brighter than the water 30 px below it on screen;
  * - specular: the probe under the sun's reflection is far brighter than the deep water (the
  *   emissive target cannot be read from a screenshot, so the highlight itself is the evidence);
- * - waves: `height` (`waterHeight` at a fixed point) changes between two reads.
+ * - waves: `height` (`waterHeight` at a fixed point) changes between two reads;
+ * - `?hook=1` (ws/render-hooks): one view, the renderer's depth hook feeds the water the same
+ *   frame (two scene passes) and the shoreline and foam probes still hold.
  *
  * Pixels are sampled from a screenshot (no golden image) and every assertion polls.
  */
@@ -29,17 +31,17 @@ const SHALLOW: Rgb = [0.1, 0.45, 0.45];
 let frame: Frame;
 const errors: string[] = [];
 
-async function open(page: Page, wrapper: string): Promise<void> {
+async function open(page: Page, wrapper: string, query = 'still'): Promise<void> {
   errors.length = 0;
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => {
     if (m.type() === 'error') errors.push(m.text());
   });
   if (wrapper === 'top') {
-    await page.goto(`${HARNESS_URL}water.html?still`);
+    await page.goto(`${HARNESS_URL}water.html?${query}`);
     frame = page.mainFrame();
   } else {
-    await page.goto(`${WRAPPER_URL}?page=${encodeURIComponent('water.html?still')}`);
+    await page.goto(`${WRAPPER_URL}?page=${encodeURIComponent(`water.html?${query}`)}`);
     frame = await harnessFrame(page);
   }
   await expect
@@ -193,5 +195,29 @@ test('the surface height moves with the wave clock', async ({ page, wrapper }) =
   const second = await read();
   // Displacement is 0.05 and the two default layers sum to at most 0.37 before it.
   expect(Math.abs(second.height)).toBeLessThan(0.05 * 0.37 + 1e-6);
+  expect(errors).toEqual([]);
+});
+
+test('?hook=1: one view splits at the water, the depth hook keeps the shoreline and foam', async ({
+  page,
+  wrapper,
+}) => {
+  await open(page, wrapper, 'still&hook=1');
+  const s = await read();
+  expect(s.depthHook).toBe(true);
+  expect(s.stats.drawables).toBe(2);
+  await expect.poll(async () => (await read()).stats.passes).toBe(2);
+  const shallow = srgb(SHALLOW);
+  await expect
+    .poll(async () => {
+      const { shoreline, deep, foam, below } = await probes(page);
+      const ok =
+        hueDistance(shoreline, shallow) + 0.05 < hueDistance(deep, shallow) &&
+        sum(shoreline) > sum(deep) &&
+        sum(foam) - sum(below) > 40;
+      return `${ok} shoreline ${shoreline} deep ${deep} foam ${foam} below ${below}`;
+    })
+    .toMatch(/^true/);
+  expect((await read()).gpuErrors).toBe(0);
   expect(errors).toEqual([]);
 });

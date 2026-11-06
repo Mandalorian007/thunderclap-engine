@@ -3,8 +3,10 @@
  * - `premultiplied`: shader outputs rgb already multiplied by alpha.
  * - `additive`: `rgb * a + dst`. Destination alpha untouched. Glows, sparks.
  * - `opaque`: overwrite.
+ * - `multiply`: `dst * rgb` (colour factors `dst` / `zero`); destination alpha kept (alpha
+ *   factors `zero` / `one`). Decals, stains, tinted glass: white leaves the surface alone.
  */
-export type BlendMode = 'alpha' | 'premultiplied' | 'additive' | 'opaque';
+export type BlendMode = 'alpha' | 'premultiplied' | 'additive' | 'opaque' | 'multiply';
 
 export function blendState(mode: BlendMode): GPUBlendState | undefined {
   switch (mode) {
@@ -23,6 +25,11 @@ export function blendState(mode: BlendMode): GPUBlendState | undefined {
     case 'additive':
       return {
         color: { srcFactor: 'src-alpha', dstFactor: 'one', operation: 'add' },
+        alpha: { srcFactor: 'zero', dstFactor: 'one', operation: 'add' },
+      };
+    case 'multiply':
+      return {
+        color: { srcFactor: 'dst', dstFactor: 'zero', operation: 'add' },
         alpha: { srcFactor: 'zero', dstFactor: 'one', operation: 'add' },
       };
   }

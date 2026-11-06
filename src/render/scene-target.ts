@@ -72,6 +72,13 @@ class AdoptedTexture {
  * XR layer's eye textures; `adopt(desc)` re-points it at the next frame's. It still allocates
  * its own emissive target at that size (the post stack does not run on an external target; its
  * emissive is written and dropped).
+ *
+ * Depth hooks (ws/render-hooks): when a view splits its scene pass for a `readsDepth` drawable
+ * the renderer copies `depth` into `depthCopy` (same format and size, `COPY_DST` +
+ * `TEXTURE_BINDING`, made on first use, recreated with `depth`) between the opaque pass
+ * (`passDesc`, label `scene`) and the blended pass (`blendPassDesc`, label `scene-blend`,
+ * which loads every attachment). An allocated depth texture carries `COPY_SRC`; an adopted one
+ * (an XR layer's) can be copied only if its owner gave it `COPY_SRC` (`canCopyDepth`).
  */
 export class SceneTarget {
   color!: Texture;
@@ -93,7 +100,26 @@ export class SceneTarget {
     depthLoadOp: 'clear',
     depthStoreOp: 'store',
   };
+  /** The blended half of a split view: the same attachments, every load op `load`. */
+  readonly blendPassDesc: GPURenderPassDescriptor;
+  private readonly blendColorAtt: GPURenderPassColorAttachment;
+  private readonly blendEmissiveAtt: GPURenderPassColorAttachment;
+  private readonly blendDepthAtt: GPURenderPassDepthStencilAttachment = {
+    view: undefined as unknown as GPUTextureView,
+    depthLoadOp: 'load',
+    depthStoreOp: 'store',
+  };
   private depthTex: Texture | null = null;
+  private depthCopyTex: Texture | null = null;
+  /** `copyDepth`'s reused copy descriptors (no allocation per frame). */
+  private readonly copySrc: GPUTexelCopyTextureInfo = {
+    texture: undefined as unknown as GPUTexture,
+    origin: { x: 0, y: 0, z: 0 },
+  };
+  private readonly copyDst: GPUTexelCopyTextureInfo = {
+    texture: undefined as unknown as GPUTexture,
+  };
+  private readonly copySize: GPUExtent3DDict = { width: 0, height: 0, depthOrArrayLayers: 1 };
   private readonly label: string;
   /** The adopted colour texture of an external target; null for an allocated one. */
   private externalColor: GPUTexture | null = null;
@@ -121,6 +147,21 @@ export class SceneTarget {
       clearValue: { r: 0, g: 0, b: 0, a: 0 },
     };
     this.passDesc = { label: 'scene', colorAttachments: [this.colorAtt, this.emissiveAtt] };
+    this.blendColorAtt = {
+      view: undefined as unknown as GPUTextureView,
+      loadOp: 'load',
+      storeOp: 'store',
+    };
+    this.blendEmissiveAtt = {
+      view: undefined as unknown as GPUTextureView,
+      loadOp: 'load',
+      storeOp: 'store',
+    };
+    this.blendPassDesc = {
+      label: 'scene-blend',
+      colorAttachments: [this.blendColorAtt, this.blendEmissiveAtt],
+      depthStencilAttachment: this.blendDepthAtt,
+    };
     if (!external) this.resize(desc.width, desc.height);
   }
 
@@ -154,6 +195,20 @@ export class SceneTarget {
   }
 
   /**
+   * The sampleable copy of `depth` a split view fills before its blended pass
+   * (`Drawable.afterOpaque`); null until the first view that split here. Same format and
+   * size as `depth`, recreated with it.
+   */
+  get depthCopy(): Texture | null {
+    return this.depthCopyTex;
+  }
+
+  /** Whether `depth` can be the source of a copy (an adopted texture may lack `COPY_SRC`). */
+  get canCopyDepth(): boolean {
+    return this.depthTex !== null && (this.depthTex.texture.usage & GPUTextureUsage.COPY_SRC) !== 0;
+  }
+
+  /**
    * Point an external target at this frame's textures (an XR layer rotates them). A no-op
    * when `color`, `depth` and the view's array layer are the ones already adopted; otherwise
    * new views are made and, if the size changed, the emissive and own depth textures too.
@@ -184,14 +239,19 @@ export class SceneTarget {
         label: `${this.label}-emissive`,
       });
       this.emissiveAtt.view = this.emissive.view;
+      this.blendEmissiveAtt.view = this.emissive.view;
       this.depthTex?.destroy();
       this.depthTex = null;
+      this.depthCopyTex?.destroy();
+      this.depthCopyTex = null;
     }
     this.color = new AdoptedTexture(desc.color, desc.view);
     this.colorAtt.view = this.color.view;
+    this.blendColorAtt.view = this.color.view;
     if (depth) {
       this.depthTex = new AdoptedTexture(depth, desc.view);
       this.depthAtt.view = this.depthTex.view;
+      this.blendDepthAtt.view = this.depthTex.view;
     } else if (this.depthTex && this.depthTex instanceof AdoptedTexture) {
       this.depthTex = null;
     }
@@ -211,6 +271,8 @@ export class SceneTarget {
     // The depth target (only ever made for a depth camera) is rebuilt at the new size lazily.
     this.depthTex?.destroy();
     this.depthTex = null;
+    this.depthCopyTex?.destroy();
+    this.depthCopyTex = null;
     const usage = GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING;
     this.color = new Texture(this.device, {
       width: w,
@@ -228,6 +290,8 @@ export class SceneTarget {
     });
     this.colorAtt.view = this.color.view;
     this.emissiveAtt.view = this.emissive.view;
+    this.blendColorAtt.view = this.color.view;
+    this.blendEmissiveAtt.view = this.emissive.view;
     return true;
   }
 
@@ -242,12 +306,63 @@ export class SceneTarget {
         height: this.height,
         format: DEPTH_FORMAT,
         // TEXTURE_BINDING: world-space particles copy it for their soft fade (`depth`).
-        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+        // COPY_SRC: a split view copies it into `depthCopy` (ws/render-hooks).
+        usage:
+          GPUTextureUsage.RENDER_ATTACHMENT |
+          GPUTextureUsage.TEXTURE_BINDING |
+          GPUTextureUsage.COPY_SRC,
         label: `${this.label}-depth`,
       });
       this.depthAtt.view = this.depthTex.view;
+      this.blendDepthAtt.view = this.depthTex.view;
     }
     return this.depthAtt;
+  }
+
+  /**
+   * `depthCopy`, allocated at `depth`'s size and format on first use (the renderer calls this
+   * when a view splits; `depth` exists by then). Null when `depth` is not copyable.
+   */
+  depthCopyTexture(): Texture | null {
+    if (!this.depthTex || !this.canCopyDepth) return null;
+    const d = this.depthTex;
+    if (
+      this.depthCopyTex &&
+      (this.depthCopyTex.width !== d.width ||
+        this.depthCopyTex.height !== d.height ||
+        this.depthCopyTex.format !== d.format)
+    ) {
+      this.depthCopyTex.destroy();
+      this.depthCopyTex = null;
+    }
+    if (!this.depthCopyTex) {
+      this.depthCopyTex = new Texture(this.device, {
+        width: d.width,
+        height: d.height,
+        format: d.format,
+        usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
+        label: `${this.label}-depth-copy`,
+      });
+    }
+    return this.depthCopyTex;
+  }
+
+  /**
+   * Encode a copy of `depth` (the adopted layer of an external one) into `depthCopy`, making
+   * the copy texture first; returns it, or null when `depth` is missing or not copyable.
+   * Nothing is allocated per call once the copy texture exists.
+   */
+  copyDepth(encoder: GPUCommandEncoder): Texture | null {
+    const copy = this.depthCopyTexture();
+    const d = this.depthTex;
+    if (!copy || !d) return null;
+    this.copySrc.texture = d.texture;
+    (this.copySrc.origin as GPUOrigin3DDict).z = this.externalDepth ? this.adoptedLayer : 0;
+    this.copyDst.texture = copy.texture;
+    this.copySize.width = d.width;
+    this.copySize.height = d.height;
+    encoder.copyTextureToTexture(this.copySrc, this.copyDst, this.copySize);
+    return copy;
   }
 
   destroy(): void {
@@ -255,5 +370,7 @@ export class SceneTarget {
     this.emissive?.destroy();
     this.depthTex?.destroy();
     this.depthTex = null;
+    this.depthCopyTex?.destroy();
+    this.depthCopyTex = null;
   }
 }

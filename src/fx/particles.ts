@@ -1,4 +1,4 @@
-import type { Drawable, Frame } from '../render/frame';
+import type { Drawable, Frame, ViewInfo } from '../render/frame';
 import type { Renderer } from '../render/renderer';
 import type { SceneTarget } from '../render/scene-target';
 import type { Texture } from '../render/texture';
@@ -125,6 +125,13 @@ export interface ParticleSystemOptions {
   /** World space only: the scene target whose depth soft particles read. Default `renderer.target`. */
   depthTarget?: SceneTarget;
   /**
+   * World space only: take this frame's opaque depth from the renderer's depth hook
+   * (`Drawable.readsDepth`, ws/render-hooks) instead of copying the previous frame's in
+   * `prepare`. Only a view with `depthTest` splits for it; elsewhere the fade is then off (no
+   * copy of the system's own). Default false.
+   */
+  readsDepth?: boolean;
+  /**
    * Count live particles on the GPU and read the count back into `alive` (a few frames late).
    * Costs one small dispatch per frame and a 4-byte readback every other frame. Default false.
    */
@@ -202,6 +209,8 @@ export class ParticleSystem implements Drawable {
   softness: number;
   /** World space only: the target soft particles read depth from (null = `renderer.target`). */
   depthTarget: SceneTarget | null;
+  /** See `ParticleSystemOptions.readsDepth`. Live. */
+  readsDepth: boolean;
   /** Live particles at the last readback (`countAlive` only; -1 before the first). */
   alive = -1;
 
@@ -226,6 +235,11 @@ export class ParticleSystem implements Drawable {
   private readonly counter: AliveCounter | null = null;
   /** Whether this frame's `prepare` copied scene depth (world space). */
   private softActive = false;
+  /** The renderer's `depthCopy` view `hookGroup` was made for (`readsDepth`). */
+  private hookView: GPUTextureView | null = null;
+  private hookGroup: GPUBindGroup | null = null;
+  /** The group `draw` binds: own copy, the renderer's copy, or the stand-in. */
+  private depthGroup: GPUBindGroup | null = null;
   private spawnCount = 0;
   private maxSpawnInCmd = 0;
   private head = 0;
@@ -249,6 +263,7 @@ export class ParticleSystem implements Drawable {
     this.fade = opts.fade ? { near: opts.fade.near, far: opts.fade.far } : null;
     this.softness = opts.softness ?? 0.25;
     this.depthTarget = opts.depthTarget ?? null;
+    this.readsDepth = opts.readsDepth ?? false;
     this.spawnFloats = world ? WORLD_SPAWN_FLOATS : SPAWN_FLOATS;
     this.simData = new Float32Array(world ? WORLD_SIM_FLOATS : SIM_FLOATS);
 
@@ -608,7 +623,9 @@ export class ParticleSystem implements Drawable {
     s[6] = this.spawnCount;
     s[7] = 0;
     if (this.soft) {
-      this.softActive = this.copyDepth(encoder, frame);
+      // With `readsDepth` the renderer's hook (`afterOpaque`) supplies this frame's depth.
+      this.softActive = this.readsDepth ? false : this.copyDepth(encoder, frame);
+      this.depthGroup = this.softActive ? this.soft.copyGroup : null;
       const f = this.fade;
       s[8] = f ? f.near : 0;
       s[9] = f ? f.far : 0;
@@ -733,9 +750,35 @@ export class ParticleSystem implements Drawable {
   draw(pass: GPURenderPassEncoder, frame?: Frame): void {
     const fmt = frame?.depthFormat ?? null;
     pass.setPipeline(fmt ? this.depthPipeline(fmt) : this.renderPipeline);
-    const soft = this.soft;
-    pass.setBindGroup(1, soft && this.softActive ? soft.copyGroup! : this.renderGroup);
+    pass.setBindGroup(1, this.depthGroup ?? this.renderGroup);
     pass.draw(6, this.capacity);
+  }
+
+  /**
+   * The renderer's depth hook (`readsDepth`, world space with `softness` > 0): bind this
+   * frame's opaque depth copy and flip the shader's soft flag on (a 4-byte write that lands
+   * before the frame's commands run). A new bind group only when the copy texture changed.
+   */
+  afterOpaque(_encoder: GPUCommandEncoder, view: ViewInfo): void {
+    const sd = this.soft;
+    if (!sd || this.softness <= 0) return;
+    if (view.depthView !== this.hookView) {
+      this.hookView = view.depthView;
+      this.hookGroup = this.device.createBindGroup({
+        label: 'particles-world-render-hook',
+        layout: sd.renderLayout,
+        entries: [
+          { binding: 0, resource: { buffer: this.particleBuffer } },
+          { binding: 1, resource: { buffer: this.simBuffer } },
+          { binding: 2, resource: view.depthView },
+        ],
+      });
+    }
+    this.softActive = true;
+    this.depthGroup = this.hookGroup;
+    const s = this.simData;
+    s[11] = 1;
+    this.device.queue.writeBuffer(this.simBuffer, 11 * 4, s.buffer, 11 * 4, 4);
   }
 
   private depthPipeline(format: GPUTextureFormat): GPURenderPipeline {

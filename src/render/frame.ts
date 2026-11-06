@@ -1,7 +1,9 @@
+import type { Camera } from './camera';
 import type { InstanceList } from './instance-list';
 import { Lights, packInstanceFlags } from './lights';
 import type { Material } from './material';
 import type { Mesh, MeshBounds } from './mesh';
+import type { SceneTarget } from './scene-target';
 import { Transform } from './transform';
 
 /**
@@ -134,10 +136,37 @@ export interface DrawParams extends InstanceParams {
  * (HDR colour, HDR emissive) in `renderer.sceneFormats` and `@group(0)` = engine globals.
  * When the camera asks for depth the pass also has a depth attachment
  * (`frame.depthFormat`), and the drawable's pipeline must declare a matching `depthStencil`.
+ *
+ * Depth hook (ws/render-hooks): a drawable with `readsDepth` set makes the renderer split the
+ * view's scene pass at the opaque/blended boundary when the camera has `depthTest`: the opaque
+ * draws end their pass, the depth attachment is copied into the target's `depthCopy`, every
+ * hooked drawable's `afterOpaque(encoder, view)` runs (the same encoder, between the passes),
+ * and the blended draws follow in a second pass that loads everything. `readsDepth` is the
+ * flag; a drawable may set it without an `afterOpaque` (it then reads `view.target.depthCopy`
+ * itself in `draw`). Without `depthTest` (`ortho2d`), or on a target whose depth cannot be
+ * copied, nothing splits and `afterOpaque` never fires; the drawable keeps its fallback.
  */
 export interface Drawable {
   prepare?(encoder: GPUCommandEncoder, frame: Frame): void;
   draw(pass: GPURenderPassEncoder, frame: Frame): void;
+  /** Ask for this frame's opaque depth before `draw` (see above). Default off. */
+  readsDepth?: boolean;
+  /** Runs between the opaque and blended passes of each view that split for this drawable. */
+  afterOpaque?(encoder: GPUCommandEncoder, view: ViewInfo): void;
+}
+
+/**
+ * What `Drawable.afterOpaque` gets: the view's camera and target, the sampleable copy of the
+ * opaque depth (`depthCopy`, `frame.depthFormat`, the whole target; `depthView` is its `'2d'`
+ * view) and the viewport the view draws into (target px). Valid until the view's blended pass
+ * ends; the copy is overwritten by the next view that splits into the same target.
+ */
+export interface ViewInfo {
+  camera: Camera;
+  target: SceneTarget;
+  depthCopy: GPUTexture;
+  depthView: GPUTextureView;
+  viewport: { x: number; y: number; width: number; height: number };
 }
 
 /** Hooks the renderer exposes to Frame (kept internal). */

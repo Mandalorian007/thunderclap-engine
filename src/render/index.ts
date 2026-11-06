@@ -3,6 +3,7 @@ export type { BlendMode } from './blend';
 export type { CameraPoint, CameraRect } from './camera';
 export {
   ALL_LAYERS,
+  CAMERA_INV_VIEW_PROJ_OFFSET,
   Camera,
   FRUSTUM_FLOATS,
   ORTHO2D_HALF_DEPTH,
@@ -14,7 +15,8 @@ export {
   DynamicResolution,
   type DynamicResolutionOptions,
 } from './dynamic-resolution';
-export type { Drawable, DrawParams, InstanceBatch, InstanceParams } from './frame';
+// ws/render-hooks (appended; ws/ergo-3d edits the lines above).
+export type { Drawable, DrawParams, InstanceBatch, InstanceParams, ViewInfo } from './frame';
 export { Frame, INSTANCE_PARAM_FLOATS, writeInstanceParams } from './frame';
 export type { FullscreenEncodeOptions, FullscreenPassDesc } from './fullscreen';
 export { FullscreenPass } from './fullscreen';

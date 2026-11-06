@@ -24,8 +24,14 @@ export const ALL_LAYERS = 0xffffffff;
  */
 export const ORTHO2D_HALF_DEPTH = 1024;
 
-/** Floats in the WGSL `EngineCamera` block (256 bytes). */
-export const CAMERA_BLOCK_FLOATS = 64;
+/**
+ * Floats in the WGSL `EngineCamera` block: 76 used (`inv_view_proj` ends at byte 304), padded
+ * to 512 bytes so the lights block that follows it in the view's uniform buffer stays on a
+ * 256-byte boundary (`minUniformBufferOffsetAlignment`).
+ */
+export const CAMERA_BLOCK_FLOATS = 128;
+/** Float offset of `inv_view_proj` inside the camera block (byte 240). */
+export const CAMERA_INV_VIEW_PROJ_OFFSET = 60;
 
 /** Floats in `Camera.frustum`: six planes × (a, b, c, d). */
 export const FRUSTUM_FLOATS = 24;
@@ -428,8 +434,9 @@ export class Camera {
 
   /**
    * Write the WGSL `EngineCamera` block (`CAMERA_BLOCK_FLOATS` floats) at float offset `o`:
-   * `view`, `proj`, `view_proj`, `camera_pos`, `viewport` (target px: x, y, w, h) and
-   * `view_index`. `u32` must view the same buffer as `f32`. Engine-internal.
+   * `view`, `proj`, `view_proj`, `camera_pos`, `viewport` (target px: x, y, w, h),
+   * `view_index` and, at `CAMERA_INV_VIEW_PROJ_OFFSET`, `inv_view_proj`. `u32` must view the
+   * same buffer as `f32`. Engine-internal.
    */
   writeBlock(
     f32: Float32Array,
@@ -452,7 +459,11 @@ export class Camera {
     f32[o + 54] = viewport.width;
     f32[o + 55] = viewport.height;
     u32[o + 56] = viewIndex >>> 0;
-    for (let i = 57; i < CAMERA_BLOCK_FLOATS; i++) f32[o + i] = 0;
+    f32[o + 57] = 0;
+    f32[o + 58] = 0;
+    f32[o + 59] = 0;
+    f32.set(this.invViewProj, o + CAMERA_INV_VIEW_PROJ_OFFSET);
+    for (let i = CAMERA_INV_VIEW_PROJ_OFFSET + 16; i < CAMERA_BLOCK_FLOATS; i++) f32[o + i] = 0;
   }
 
   /**
