@@ -31,6 +31,7 @@ Your worktree may start from an old commit. First `git reset --hard main` (or th
   E2E_PORT_OFFSET=<n> pnpm test:e2e; rmdir /tmp/thunderclap-e2e-slot$S
   ```
 
+  Write e2e and check logs inside your own worktree (for example `.e2e-<branch>.log`, git-ignored or deleted before commit), never to a shared scratchpad name: two agents writing `e2e.log` in one scratchpad cost ws/render-4 a full run.
   A slot directory older than 45 minutes (`find /tmp -maxdepth 1 -name 'thunderclap-e2e-slot*' -mmin +45`) is stale: remove it. Holding a slot, still check `uptime` and wait while the 1-min load is above 40. Single-spec runs (`pnpm test:e2e e2e/x.spec.ts`) need no slot. Report the 1-min load at the start and end of the run.
 - Unit tests cover what you added; the fake GPU (`src/render/fake-gpu.ts`) covers renderer changes.
 - `ARCHITECTURE.md` *Today* text, the module README and `CHANGELOG.md` ("Next (unreleased)") describe the change, in the same branch.
