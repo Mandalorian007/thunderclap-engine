@@ -77,6 +77,78 @@ audio.play('zap', { pan: (cellX / cols) * 2 - 1 });
 - **2D.** `PlayOptions.pan` goes through a `StereoPannerNode`, for a flat game that wants a sound from one side of the board. `at` and `pan` are exclusive; when both are given, `at` wins.
 - Where `createPanner` is missing, a spatial voice plays dry into its bus.
 
+## Music
+
+A beat grid over the mixer's `music` bus: looping stems that start sample-accurately on the next beat or bar from the context clock, grouped in layers and crossfaded by `fadeBeats` or by an intensity level. Stems are `AudioBuffer`s (synth-rendered, so still no files) whose length is a whole number of bars.
+
+```ts
+import { createMusic } from '@thunderclap/engine/audio';
+
+const music = createMusic(audio, { bpm: 120, beatsPerBar: 4 });        // a 2 s bar
+music.add({ name: 'pad', buffer: audio.buffer('pad')!, layer: 'pad' });
+music.add({ name: 'drums-low', buffer: lowBuf, layer: 'drums', intensity: [0, 0.5] });
+music.add({ name: 'drums-high', buffer: highBuf, layer: 'drums', intensity: [0.5, 1] });
+music.play('pad', { at: 'now' });            // joins the grid in phase
+music.play('drums-low');                     // on the next bar (the default)
+music.play('drums-high', { at: 'beat' });
+music.setIntensity(0.7);                     // drums-low → drums-high, linear, over 1 beat
+music.play({ name: 'tense', buffer: b, layer: 'pad' }, { fadeBeats: 4 });  // replaces 'pad' with a 4-beat crossfade
+music.onBeat((beat, bar) => flash(beat === 0));
+music.update(dt);                            // once per frame: advances beat/bar, fires onBeat
+music.stop('drums', 2);  music.stop();       // a layer, or everything, fading in beats
+```
+
+- **Grid.** The origin is the context time of the first `play` (or `update`) after unlock. `beat` (in the bar, 0-based), `bar`, `totalBeats`, `beatDuration`, `nextBeatTime()` and `nextBarTime()` are computed from `ctx.currentTime` and the origin, never accumulated from `dt`, so they do not drift; `update` fires `onBeat` once for every beat crossed since the last call (a long frame skips none). A suspended context pauses the grid with it.
+- **Scheduling.** `MusicPlayOptions.at` is `'now' | 'beat' | 'bar'` (`MusicStart`; default `bar`). A stem starts with `AudioBufferSourceNode.start(when, offset)` where `offset` is the grid time elapsed modulo the loop length, so every stem stays in phase whenever it joins. `fadeBeats` is a linear gain ramp in beats; `gain` scales the stem.
+- **Layers and intensity.** A `Stem` is `{ name, buffer, layer?, intensity? }` (layer defaults to the name). Within a layer, stems with an `intensity: [lo, hi]` range are mixed by `setIntensity(level)`: full gain inside the range, a linear crossfade between one stem's `hi` and the next's `lo` (sorted by `lo`; a gap or an overlap is the crossfade region, touching ranges switch hard), so the layer's gains always sum to 1 (`intensityGains(ranges, level, out)` is that pure function). A stem without a range replaces the layer's other rangeless stem when played, with a `fadeBeats` crossfade (default 1 beat). `intensity` reads the level, `gain(name)` a stem's current target gain, `playing` the names on now. `MusicOptions.intensityFadeBeats` (default 1) is the crossfade length of `setIntensity`.
+- **Before unlock** `play` queues; the stems start together when the context runs. Music owns its source nodes (not voices), so `audio.stopAll` and `voiceCount` do not see them: use `music.stop()` / `music.dispose()`.
+
+## Variations
+
+Footsteps, impacts, hits: one of several buffers at random, never the one just played, with a little jitter so repeats do not sound stamped.
+
+```ts
+import { createVariations } from '@thunderclap/engine/audio';
+
+const steps = createVariations(audio, [bufA, bufB, bufC], { pitchJitter: 2, gainJitter: 3 });
+steps.play({ at: [x, y, z] });   // any PlayOptions; rate and gain are multiplied by the jitter
+steps.last;                       // index just played, -1 before the first
+```
+
+`VariationsOptions`: `bus` (default `sfx`), `pitchJitter` in ± semitones (through `playbackRate`), `gainJitter` in ± dB, `noRepeat` (default true: uniform over the other buffers), `random` (a `() => number` in [0, 1) for tests). `Variations.play(opts?)` returns the mixer's `Voice` (inert while locked, like `audio.play`); `count` is the buffer count.
+
+## Sends
+
+An effect send is a parallel path from one bus through an effect and back into `master`, next to the dry path: a reverb (`ConvolverNode` on a procedural impulse) or a lowpass (`BiquadFilterNode`). A zone drives its `amount` and `cutoff` as the listener moves; the engine's own shared reverb (`setReverb`) is one room for every bus, a send is an extra one you place.
+
+```ts
+import { createSend, impulseResponse } from '@thunderclap/engine/audio';
+
+const cave = createSend(audio, { kind: 'reverb', bus: 'sfx', seconds: 3, decay: 2 });
+cave.amount = 0.6;                                    // 0..1, ramped
+const muffle = createSend(audio, { kind: 'lowpass', bus: 'sfx', amount: 1, cutoff: 800 });
+muffle.cutoff = 300;                                  // Hz, ramped
+someNode.connect(muffle.input!);                      // anything with `connect` can feed a send directly
+const ir = impulseResponse(ctx, { seconds: 2, decay: 3, seed: 1 });   // the convolver's buffer, no asset
+```
+
+`SendOptions`: `kind: SendKind` (`'reverb' | 'lowpass'`), `bus` (default `sfx`), `amount` (default 0), reverb `seconds` / `decay` / `seed`, lowpass `cutoff` (default 800) / `q` (0.7). `Send`: `amount`, `cutoff` (undefined on a reverb), `node` (the effect node, null before unlock or where the context lacks it), `input` (the send gain; the source bus is connected for you), `dispose()`. Safe before unlock: built when the context runs, remembering the values set meanwhile. `impulseResponse(ctx: BufferFactory, opts?: ImpulseResponseOptions)` (`{ seconds, decay, seed, channels }`) wraps `reverbImpulse` into an `AudioBuffer`; `BufferFactory` is the `sampleRate` + `createBuffer` slice of a context, so it runs on the test fake. The lowpass is a parallel darkened copy, not an insert: a true occlusion insert needs a per-voice send on `Voice`, which is on the wish list.
+
+## Ducking
+
+Dialogue lowers music: while anything plays on a trigger bus, the target bus drops by `amount`, with an attack and a release.
+
+```ts
+import { createDucker } from '@thunderclap/engine/audio';
+
+const duck = createDucker(audio, { trigger: 'ui', target: 'music', amount: 0.7, attack: 0.05, release: 0.4 });
+duck.watch(audio.play('line', { bus: 'ui' }));   // counts as activity while it plays
+duck.update(dt);                                  // once per frame
+duck.active; duck.level; duck.gain;               // bool, 0..1 envelope, 1 - amount × level
+```
+
+`DuckerOptions`: `trigger`, `target`, `amount` (fraction of the target's gain removed, default 0.6), `attack` (seconds to fully ducked, 0.1), `release` (0.6), `threshold` (dB; when set, an `AnalyserNode` on the trigger bus counts RMS above it as active, so unwatched voices duck too; off by default). `Ducker`: `watch(voice)` (returns the voice), `update(dt)`, `active`, `level`, `gain`, `dispose()` (restores the bus). The envelope is linear in `dt`; the target bus gain is rewritten as `busGain(settings) × gain` with a 5 ms time constant, and again after every `onSettingsChange`, so `setVolume` and `setMuted` keep working while ducked. Nothing allocates per frame.
+
 ## Synth toolkit
 
 A `SoundSpec` is data:
@@ -110,7 +182,7 @@ Measured in Chromium: all eight render in ~80 ms total (drone pad, the heaviest,
 `envelopeSegments / envelopeValueAt / scheduleEnvelope` (one source of truth for envelope maths and the AudioParam automation), `reverbImpulse`, `rng`, `fillNoise`, `fillCrackle`, `foldLoop`, `normalize`, `peakOf`, `loopSafeFreq`, `midiToHz`, `semitones`, `dbToGain`, `gainToDb`, `volumeToGain`.
 
 ## Testing
-`AudioEngine` takes `createContext` / `createOffline` factories (the `OfflineContextFactory` type is exported), so the unlock/bus/voice logic is tested with a fake context (`audio.test.ts`). Offline rendering needs a browser; it was checked in headless Chromium (no NaNs, one-shots start and end silent, loops continuous at the wrap).
+`AudioEngine` takes `createContext` / `createOffline` factories (the `OfflineContextFactory` type is exported), so the unlock/bus/voice logic is tested with a fake context (`audio.test.ts`); `fake-context.test-util.ts` is the same fake with recording params, used by the music, variations, send and ducker tests. Offline rendering needs a browser; it was checked in headless Chromium (no NaNs, one-shots start and end silent, loops continuous at the wrap).
 
 ## Types and constants
 
@@ -119,4 +191,5 @@ Measured in Chromium: all eight render in ~80 ms total (drone pad, the heaviest,
 - **Mixer**: `BUS_NAMES` (`master`, `music`, `sfx`, `ui`) and `BusName`; `OutputBus` is every bus but `master`. `MixerSettings` maps each bus to `BusSettings` (`{ volume, muted }`); `DEFAULT_MIXER` is 0.8 / 0.7 / 0.9 / 0.8, unmuted. `sanitizeMixer(input)` clamps and fills any object into valid settings; `busGain(settings)` is the effective linear gain. `DEFAULT_LIMITER` and `DEFAULT_REVERB_SENDS` are the defaults quoted above.
 - **Persistence**: `persistMixer(audio, opts: PersistMixerOptions)` (`{ game, slot?, host?, storage?, debounceMs?, autoFlush? }`) returns `{ store, unbind }`.
 - **Synth specs**: `SoundSpec` holds `Layer`s; a layer's `source` is a `Source` (`OscSource` with a `Wave`, `NoiseSource` with a `NoiseColor`, or `CrackleSource`), its `filter` one or more `FilterSpec`s and its `env` an `Envelope`. `Segment` is one envelope breakpoint (`{ t, v, ramp }`); `envelopeLength(env, gate)` is an envelope's total length. `OfflineContextFactory` is the offline renderer factory `renderSound` and the engine take.
+- **Music, variations, sends, ducking**: `createMusic(mixer, opts: MusicOptions)` → `Music`, `Stem`, `MusicPlayOptions`, `MusicStart`, `intensityGains`; `createVariations(mixer, buffers, opts?: VariationsOptions)` → `Variations`; `createSend(mixer, opts: SendOptions)` → `Send`, `SendKind`, `impulseResponse`, `ImpulseResponseOptions`, `BufferFactory`; `createDucker(mixer, opts: DuckerOptions)` → `Ducker`. All described above.
 - **Recipes**: `recipes` maps each `RecipeName` to its function; every recipe takes `RecipeOptions` (`{ pitch, length, brightness, seed, level }`, plus the per-recipe extras listed above).
