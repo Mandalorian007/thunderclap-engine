@@ -47,6 +47,12 @@ export interface ArenaDemoState {
    * before the trail ages them, so a spec asserts the arc was sampled whatever the frame pacing.
    */
   trailPeak: number;
+  /** Blade hits on a pillar or an orb since load (one per target per swing); each stamped a decal. */
+  hits: number;
+  /** Decals alive (`Decals.count`); a scorch lives 12 s. */
+  decals: number;
+  /** The HUD stamina bar's value, 0..100: a swing costs 25, it refills at 20 per second. */
+  stamina: number;
   /** `?still`: the idle bob and the dust are parked. */
   still: boolean;
   /** `gpuDiagnostics.errorCount`. */

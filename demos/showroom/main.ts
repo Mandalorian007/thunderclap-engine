@@ -19,7 +19,13 @@ import { GameLoop } from '@thunderclap/engine/core';
 import { box, plane, sphere } from '@thunderclap/engine/geom';
 import { Gestures, Input, Look } from '@thunderclap/engine/input';
 import { boot } from '@thunderclap/engine/platform';
-import { type PostSettingsPatch, PostStack } from '@thunderclap/engine/post';
+import {
+  applyPostPatch,
+  defaultPostSettings,
+  type PostSettings,
+  type PostSettingsPatch,
+  PostStack,
+} from '@thunderclap/engine/post';
 import {
   Camera,
   type CameraPoint,
@@ -132,43 +138,35 @@ const BLEND_SECONDS = 1.2;
 
 // ------------------------------------------------------------------ post looks
 
-/** Every section names its `enabled` flag, so any look can follow any other through `blendTo`. */
-const LOOKS: Record<LookName, PostSettingsPatch> = {
-  neutral: {
-    bloom: { enabled: true, intensity: 0.35, threshold: 1.3, knee: 0.5, scatter: 0.6 },
-    fog: { enabled: false, density: 0 },
-    godRays: { enabled: false, intensity: 0 },
-    vignette: { enabled: true, intensity: 0.3, radius: 0.6, softness: 0.5, color: [0, 0, 0] },
-    grade: {
-      enabled: true,
-      exposure: 1,
-      tonemap: 'aces',
-      lift: [0, 0, 0],
-      gamma: [1, 1, 1],
-      gain: [1, 1, 1],
-      saturation: 1,
-      contrast: 1,
-    },
-  },
-  warm: {
-    bloom: { enabled: true, intensity: 1.2, threshold: 0.9, knee: 0.6, scatter: 0.8 },
+/**
+ * The looks are full `PostSettings`, so any look can follow any other through `blendTo`: a
+ * neutral base on the engine defaults, then each look as the patch that differs from it.
+ */
+const NEUTRAL: PostSettings = applyPostPatch(defaultPostSettings(), {
+  bloom: { enabled: true, intensity: 0.35, threshold: 1.3, knee: 0.5, scatter: 0.6 },
+  fog: { enabled: false, density: 0 },
+  godRays: { enabled: false, intensity: 0 },
+  vignette: { enabled: true, intensity: 0.3, radius: 0.6, softness: 0.5, color: [0, 0, 0] },
+  grade: { enabled: true, exposure: 1, tonemap: 'aces', saturation: 1, contrast: 1 },
+});
+const look = (patch: PostSettingsPatch): PostSettings =>
+  applyPostPatch(structuredClone(NEUTRAL), patch);
+const LOOKS: Record<LookName, PostSettings> = {
+  neutral: NEUTRAL,
+  warm: look({
+    bloom: { intensity: 1.2, threshold: 0.9, knee: 0.6, scatter: 0.8 },
     fog: { enabled: true, density: 0.35, color: [0.36, 0.22, 0.12], top: 0.6, bottom: 1 },
-    godRays: { enabled: false, intensity: 0 },
-    vignette: { enabled: true, intensity: 0.45, radius: 0.5, softness: 0.6, color: [0.05, 0, 0] },
+    vignette: { intensity: 0.45, radius: 0.5, softness: 0.6, color: [0.05, 0, 0] },
     grade: {
-      enabled: true,
       exposure: 1.1,
-      tonemap: 'aces',
       lift: [0.02, 0.01, 0],
-      gamma: [1, 1, 1],
       gain: [1.12, 0.98, 0.82],
       saturation: 1.2,
       contrast: 1.02,
     },
-  },
-  rays: {
-    bloom: { enabled: true, intensity: 0.5, threshold: 1.1, knee: 0.5, scatter: 0.7 },
-    fog: { enabled: false, density: 0 },
+  }),
+  rays: look({
+    bloom: { intensity: 0.5, threshold: 1.1, scatter: 0.7 },
     godRays: {
       enabled: true,
       intensity: 0.7,
@@ -180,50 +178,24 @@ const LOOKS: Record<LookName, PostSettingsPatch> = {
       sourceIntensity: 1.2,
       bloomSource: 0.3,
     },
-    vignette: { enabled: true, intensity: 0.3, radius: 0.6, softness: 0.5, color: [0, 0, 0] },
+    grade: { saturation: 1.05 },
+  }),
+  contrast: look({
+    bloom: { intensity: 0.25, threshold: 1.5, knee: 0.4, scatter: 0.5 },
+    vignette: { intensity: 0.7, radius: 0.4 },
     grade: {
-      enabled: true,
-      exposure: 1,
-      tonemap: 'aces',
-      lift: [0, 0, 0],
-      gamma: [1, 1, 1],
-      gain: [1, 1, 1],
-      saturation: 1.05,
-      contrast: 1,
-    },
-  },
-  contrast: {
-    bloom: { enabled: true, intensity: 0.25, threshold: 1.5, knee: 0.4, scatter: 0.5 },
-    fog: { enabled: false, density: 0 },
-    godRays: { enabled: false, intensity: 0 },
-    vignette: { enabled: true, intensity: 0.7, radius: 0.4, softness: 0.5, color: [0, 0, 0] },
-    grade: {
-      enabled: true,
       exposure: 1.15,
-      tonemap: 'aces',
       lift: [-0.03, -0.03, -0.03],
-      gamma: [1, 1, 1],
       gain: [1.05, 1.05, 1.05],
       saturation: 0.85,
       contrast: 1.45,
     },
-  },
-  off: {
+  }),
+  off: look({
     bloom: { enabled: false, intensity: 0 },
-    fog: { enabled: false, density: 0 },
-    godRays: { enabled: false, intensity: 0 },
     vignette: { enabled: false, intensity: 0 },
-    grade: {
-      enabled: false,
-      exposure: 1,
-      tonemap: 'none',
-      lift: [0, 0, 0],
-      gamma: [1, 1, 1],
-      gain: [1, 1, 1],
-      saturation: 1,
-      contrast: 1,
-    },
-  },
+    grade: { enabled: false, tonemap: 'none' },
+  }),
 };
 
 // ------------------------------------------------------------------ camera
@@ -286,6 +258,11 @@ async function main(): Promise<void> {
   installGpuErrorLogging(gpu.device);
   const renderer = new Renderer(gpu);
   renderer.timingEvery = 10;
+  // `gpuMs` is published once the first GPU sample has landed (`timing.ready()`), not polled.
+  let timed = false;
+  void renderer.timing.ready().then(() => {
+    timed = true;
+  });
   const post = new PostStack(renderer, LOOKS.neutral);
   renderer.post = post;
   renderer.resize(surface.backbuffer.width, surface.backbuffer.height);
@@ -496,7 +473,7 @@ async function main(): Promise<void> {
         state.fps = state.fps === 0 ? fps : state.fps + (fps - state.fps) * 0.05;
       }
       const timing = renderer.timing;
-      state.gpuMs = timing.samples > 0 ? timing.gpuMs : null;
+      state.gpuMs = timed ? timing.gpuMs : null;
       state.gpuSource = timing.source;
       const st = renderer.stats;
       state.drawCalls = st.drawCalls;

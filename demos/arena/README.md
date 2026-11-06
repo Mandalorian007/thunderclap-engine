@@ -25,12 +25,20 @@ public API.
   `mergeGeometry`, `transformGeometry`); the stone albedo is `textureFromPixels` of hashed texels.
 - Zoom comes from `Look.zoom` (wheel, pinch, shoulder buttons) read by `Follow`; the demo has no
   zoom bindings of its own.
+- The body is drawn by `createStandardMaterial({ skin })`: the palette rides the material and the
+  vertex colours multiply its white base, so the demo writes no shader.
+- A swing that reaches a pillar shaft or an orb stamps a scorch `Decals` mark where the blade tip
+  met it (one per target per swing, fading over 12 s); `__demo.hits` and `__demo.decals` count them.
+- The stamina `bar` (ui widgets) in the bottom region: a swing costs a quarter, it refills in a few
+  seconds and its tone turns `warn` while a swing's worth is missing.
 
 ## Known limits
 
 The body mesh keeps a local skinned builder (`geom.ts`), since `geom`'s builders write the
-unskinned 3D layout; there are no name plates, health bars or hit decals (fx billboards and
-decals are not on main yet).
+unskinned 3D layout. The hit decals read the previous frame's depth (the `Decals` box mode copies
+depth in `prepare`), so a mark on a moving orb lags it by a frame; the arena has no name plates.
+The stamina bar never blocks a swing. The demo has no warm-up of its own to replace with
+`timing.ready()`: it does not publish GPU timing.
 
 ## Engine modules
 
@@ -39,10 +47,12 @@ decals are not on main yet).
   by speed on layer 0 with the swing on layer 1, `poseToWorld` + `skinMatrices` into a
   `SkinPalette`, `createSocket` + `attachTransform` for the sword.
 - `geom`: `plane` (ground), `box` + `cylinder` merged into a pillar and the sword, `cylinder` orbs.
-- `render`: `VERTEX_LAYOUT_SKINNED`, a custom skinned PBR material on `WGSL_PBR`,
-  `createStandardMaterial` with `textureFromPixels` stone, `Lights` (sun shadow, two point
-  lights, fog), `renderer.stats`.
-- `fx`: `Trail` (world space, camera facing, additive) from the blade tip; `ParticleSystem` dust.
+- `render`: `VERTEX_LAYOUT_SKINNED`, `createStandardMaterial` with `skin` for the body and with
+  `textureFromPixels` stone for the arena, `Lights` (sun shadow, two point lights, fog),
+  `renderer.stats`.
+- `fx`: `Trail` (world space, camera facing, additive) from the blade tip; `ParticleSystem` dust;
+  `Decals` scorch marks on hit pillars and orbs.
+- `ui`: `bar` (widgets) stamina in `layout`'s bottom region; toasts.
 - `input`: `Look` (keys, pointer lock, touch, pad, zoom axis) driving `Follow`; `{ gesture: 'tap' }`
   swings.
 
