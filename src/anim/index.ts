@@ -49,3 +49,5 @@ export {
   quatNormalize,
   quatSlerp,
 } from './quat';
+export type { RetargetClipOptions, RetargetMap, RetargetOptions } from './retarget';
+export { createRetargetMap, normalizeJointName, retargetClip, retargetPose } from './retarget';

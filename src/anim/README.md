@@ -62,6 +62,26 @@ mixer.crossFade(walk, runClip, 0.3);       // weights sum to 1 throughout
 
 All on `(x, y, z, w)` at an offset, allocation-free: `quatIdentity(out, o)`, `quatNormalize(q, o)`, `quatDot(a, ao, b, bo)`, `quatMultiply(out, oo, a, ao, b, bo)` (`a · b`: apply `b`, then `a`; may alias), `quatSlerp(out, oo, a, ao, b, bo, t)` (shorter arc, nlerp fallback when nearly parallel; may alias), `quatNlerp(...)`, `quatFromAxisAngle(out, o, ax, ay, az, radians)`, `quatFromEuler(out, o, x, y, z)` (about X, then Y, then Z: `qz · qy · qx`).
 
+## Retargeting (`retarget.ts`)
+
+One clip, every rig: a clip authored for one `Skeleton` drives another with different joint names, bone lengths and rest orientations (E-015: each cosmetic is a rig of its own).
+
+- `createRetargetMap(source, target, opts?: RetargetOptions): RetargetMap`. Pairs target joints with source joints and precomputes the rest frames. Per source joint: `opts.pairs` (`[source, target]` by name or node index) first; then `opts.match(sourceName)` (returns the target name or `null`) when given, else the target joint with the same name, else the one whose `normalizeJointName` matches (lowercase, `namespace:` / `Armature|` prefix dropped, `_ - . : |` and spaces stripped: `mixamorig:LeftArm` ↔ `left_arm`). Names come from `Skeleton.names` (glTF `node.name`); two skeletons without names pair by index, and numeric `pairs` work without names. `opts.rootNode` (default: the first matched target node) is the node whose translation follows its source; `opts.scaleTranslation` (default true) scales that delta by the hip-height ratio (length of each root's rest world position). Allocates; build once per clip rig × character.
+- `RetargetMap { source; target; pairs: Int32Array (target node → source node, -1 none); unmatched: string[] (target joints without a source, by name or index); root; translationScale (settable); pre; post }`. `pre[j]` and `post[j]` are the two constant quaternions per target node such that `Rt[j] = pre[j] · Rs[i] · post[j]`: the source joint's rest-relative rotation delta in its parent's frame, carried into the target parent's frame and applied on the target's rest rotation. When both rigs' bones point the same way in world space at rest (T- or A-pose), the target's bones follow the source's directions whatever its local joint frames are.
+- `retargetPose(map, sourcePose, targetPose)` writes the whole target pose: unmatched joints hold the target rest; matched joints get the transferred rotation; translations and scales stay at the target rest except the root's translation (source delta rotated into the target frame × `translationScale`). No allocation.
+- `retargetClip(map, clip, opts?: RetargetClipOptions): AnimationClip` bakes a source clip to the target: at each sample time (the clip's merged key times, or `opts.sampleRate` per second) the source is sampled and retargeted into `LINEAR` rotation keys per matched joint the clip rotates, plus root translation keys; `events` and `duration` kept, `opts.name` optional. Allocates once, for games that would rather not call `retargetPose` per frame.
+- `normalizeJointName(name)` is exported for tests and custom `match` functions.
+
+```ts
+const map = createRetargetMap(clipRig, outfitRig);        // once
+if (map.unmatched.length) console.warn(map.unmatched);    // joints that will hold rest
+function frame(dt: number) {
+  mixer.update(dt);                                       // mixer on clipRig
+  retargetPose(map, mixer.pose, outfitPose);              // zero allocation
+  poseToWorld(outfitRig, outfitPose, world);
+}
+```
+
 ## Not here
 
-IK, retargeting, root motion extraction, morph-target application (sample `'weights'` channels yourself), any GPU upload (`render/skin.ts`), glTF parsing (`assets/`).
+IK, root motion extraction, morph-target application (sample `'weights'` channels yourself), any GPU upload (`render/skin.ts`), glTF parsing (`assets/`).
