@@ -47,7 +47,8 @@ sky, `MASK` cutoff in `params.x`, `BLEND` as alpha blend). Options:
 file order), `nodes: GltfSceneNode[]` (the draw list: `{ node, transform, mesh, material, params,
 skin }` with `params` an `InstanceParams` built once and `skin` the node's skin index or null),
 `skins` and `animations` (the document's, passed through), `bounds: { center, radius }` in world
-space, `draw(frame)` and `destroy()` (meshes, textures, its own materials; not `opts.material`).
+space, `morphs` and `morph(nodeIndex)` (below), `draw(frame)` and `destroy()` (meshes, textures,
+its own materials; not `opts.material`).
 
 ## The document
 
@@ -62,8 +63,10 @@ space, `draw(frame)` and `destroy()` (meshes, textures, its own materials; not `
 - `meshes: GltfMesh[]`: `name`, `primitives: GltfPrimitive[]` with `vertexCount`, `position`,
   `normal` (flat normals computed when the file has none: `hadNormals` false, the primitive
   unwelded), `uv0` (zeros when missing), `color0` (ones when missing, `VEC3` padded), `indices`
-  (`Uint16Array` or `Uint32Array`, generated when missing), `material`, `bounds`, and for skinned
-  primitives `joints` and `weights` (below). Triangles only.
+  (`Uint16Array` or `Uint32Array`, generated when missing), `material`, `bounds`, for skinned
+  primitives `joints` and `weights` (below), and `targets` and `ignoredTargetAttributes` for
+  morph targets (below). `GltfMesh.weights` holds the file's default morph weights or null.
+  Triangles only.
 - `skins: GltfSkin[]` and `animations: GltfAnimation[]`: see *Skins and animations*.
 - `materials: GltfMaterial[]`: `name`, `baseColorFactor`, `baseColorTexture` (texture index),
   `texCoord`, `doubleSided`, `alphaMode: GltfAlphaMode` (`'OPAQUE' | 'MASK' | 'BLEND'`),
@@ -72,19 +75,48 @@ space, `draw(frame)` and `destroy()` (meshes, textures, its own materials; not `
   `images: GltfImage[]`: `name`, `bytes` (embedded or `data:`), `mimeType`, `uri` (external).
 
 Accessors: every `GltfComponentType` (5120–5126), every `GltfAccessorType`, `byteStride`,
-`normalized` integers. Sparse accessors, non-triangle modes, `extensionsRequired`, a missing
-`POSITION`, a buffer too short for its view, a node with two parents or in a cycle, and anything
-else the parser cannot honour throw `GltfError` (message prefixed `gltf: `).
+`normalized` integers. Sparse accessors (`GltfJsonSparse`) are read for morph target attributes
+only (below); sparse elsewhere, non-triangle modes, `extensionsRequired`, a missing `POSITION`,
+a buffer too short for its view, a node with two parents or in a cycle, and anything else the
+parser cannot honour throw `GltfError` (message prefixed `gltf: `).
 
 The JSON shapes the parser reads are exported for writers and tests: `GltfJson`,
-`GltfJsonAccessor`, `GltfJsonBufferView`, `GltfJsonPrimitive`, `GltfJsonNode`,
-`GltfJsonMaterial`, `GltfJsonSkin`, `GltfJsonAnimation`, `GltfJsonAnimationChannel`,
-`GltfJsonAnimationSampler`, `GltfJsonInterpolation`, `GltfJsonSource`.
+`GltfJsonAccessor`, `GltfJsonSparse`, `GltfJsonBufferView`, `GltfJsonMesh`, `GltfJsonPrimitive`,
+`GltfJsonNode`, `GltfJsonMaterial`, `GltfJsonSkin`, `GltfJsonAnimation`,
+`GltfJsonAnimationChannel`, `GltfJsonAnimationSampler`, `GltfJsonInterpolation`,
+`GltfJsonSource`.
+
+## Morph targets
+
+`primitive.targets: GltfMorphTarget[]` holds one `{ position, normal }` per target in file order:
+per-vertex deltas, `vertexCount × 3` floats each, or null when the target lacks that attribute.
+`POSITION` and `NORMAL` are read; every other target attribute (`TANGENT`, `TEXCOORD_n`,
+`COLOR_n`) is skipped and named once in `primitive.ignoredTargetAttributes`. Target accessors
+may be sparse, the usual encoding for deltas: `sparse.count` values at `sparse.indices`
+(unsigned 8/16/32-bit) overlay the dense data, or zeros when the accessor has no `bufferView`.
+Sparse base attributes still throw. Every primitive of a mesh must carry the same number of
+targets, and `mesh.weights` (→ `GltfMesh.weights`, null when absent) must have one entry per
+target; a wrong count, a non-`VEC3` target or a target whose count differs from the primitive's
+vertex count throw `GltfError`. When flat normals are generated the targets are unwelded with
+the vertices, so they always line up with `position`.
+
+The blend is CPU arithmetic in `@thunderclap/engine/anim` (`createMorphBlender`, `sampleWeights`);
+the loader wires it: for a mesh with targets `loadGltf` keeps each primitive's interleaved base
+buffer, builds one `MorphBlender` per primitive over one shared weights array (starting at the
+file's `mesh.weights`, else zeros) and exposes them as `GltfMorph` on `scene.morphs` and
+`scene.morph(nodeIndex)` (null for a node without a mesh or a mesh without targets; nodes sharing
+a mesh share the object). `GltfMorph { mesh; weights; targetCount; blenders; apply() }`: write
+`weights` (by hand, or `sampleWeights(clip, node, t, morph.weights)` with a clip from
+`scene.animations`), call `apply()` (true when any primitive changed), and the next
+`scene.draw(frame)` uploads the changed primitives through `Mesh.update` (bounds recomputed).
+Nothing is kept on the CPU for meshes without targets, and nothing allocates per frame. The
+parser (`gltf.ts`) still imports nothing from `anim`; the loader (`gltf-load.ts`) imports
+`anim/morph` only.
 
 ## Skins and animations
 
 A rigged character from a DCC tool parses straight into the shapes `@thunderclap/engine/anim`
-samples and `VERTEX_LAYOUT_SKINNED` draws, with no converter. `assets` does not import `anim`:
+samples and `VERTEX_LAYOUT_SKINNED` draws, with no converter. The parser does not import `anim`:
 the types below restate `AnimationClip`, `AnimationChannel` and `Skeleton` structurally, so a
 `GltfAnimation` is an `AnimationClip` and a `GltfSkeleton` is a `Skeleton`.
 
@@ -120,12 +152,16 @@ the document.
 
 ## Not yet
 
-Morph targets (the `weights` channel parses; nothing consumes it), cameras, lights, `KHR_*`
-extensions (`KHR_texture_transform`, `KHR_materials_*`, Draco, meshopt). `extensionsUsed` is
-tolerated and warned about; `extensionsRequired` throws.
+Cameras, lights, `KHR_*` extensions (`KHR_texture_transform`, `KHR_materials_*`, Draco,
+meshopt), morph targets on the GPU (the blend is CPU-side; a mesh with many targets and many
+vertices pays for it every frame its weights change), `TANGENT` and texture-coordinate morph
+deltas. `extensionsUsed` is tolerated and warned about; `extensionsRequired` throws.
 
 ## Demo
 
 `harness/gltf.html` builds a GLB in the page (`harness/gltf-writer.ts`: a textured cube placed by
 a `matrix` node, an unlit-looking mossy plane with no normals placed by TRS) and draws it through
 the two calls above; `e2e/gltf.spec.ts` checks the counts and the rendered pixels on the matrix.
+`harness/morph.html` builds a `.gltf` sphere with two morph targets (squash, bulge) and a
+`weights` clip, samples it with `sampleWeights`, applies and draws; `e2e/morph.spec.ts` polls the
+weights, the upload count, the bounds and a pixel at the silhouette through both phases.

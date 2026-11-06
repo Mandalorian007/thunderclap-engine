@@ -200,7 +200,7 @@ const delta = new Float32Array(4);
  *   idle on top of a walk is one additive channel on the root.
  *
  * `'weights'` (morph) channels are skipped: a pose has no morph slots; sample them with
- * `sampleChannel`. A channel whose node is outside the pose is skipped. `cursor` defaults to a
+ * `sampleWeights`. A channel whose node is outside the pose is skipped. `cursor` defaults to a
  * cursor shared per clip; pass your own when one clip plays at two times at once (the mixer
  * does). No allocation.
  */
@@ -255,4 +255,30 @@ export function sampleClip(
       quatNormalize(pose, o + 3);
     }
   }
+}
+
+/**
+ * Sample the `'weights'` channel of `clip` targeting `node` at `t` into `out[0..n)`, where `n`
+ * is the channel's weight count (`channelComponents`): the same interpolation as `sampleClip`
+ * (STEP, LINEAR, CUBICSPLINE, hold outside the key range). Returns false, writing nothing, when
+ * the clip has no weights channel for `node`. Throws `RangeError` when `out` is too short.
+ * `cursor` as in `sampleClip`. No allocation.
+ */
+export function sampleWeights(
+  clip: AnimationClip,
+  node: number,
+  t: number,
+  out: Float32Array,
+  cursor: ClipCursor = cursorFor(clip),
+): boolean {
+  const channels = clip.channels;
+  for (let ci = 0; ci < channels.length; ci++) {
+    const ch = channels[ci]!;
+    if (ch.path !== 'weights' || ch.node !== node) continue;
+    const n = channelComponents(ch);
+    if (out.length < n) throw new RangeError(`sampleWeights: ${out.length} slots for ${n} weights`);
+    sampleChannel(ch, t, out, 0, cursor, ci);
+    return true;
+  }
+  return false;
 }

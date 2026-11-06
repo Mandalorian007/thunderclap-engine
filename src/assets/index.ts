@@ -17,12 +17,15 @@ export type {
   GltfJsonBufferView,
   GltfJsonInterpolation,
   GltfJsonMaterial,
+  GltfJsonMesh,
   GltfJsonNode,
   GltfJsonPrimitive,
   GltfJsonSkin,
   GltfJsonSource,
+  GltfJsonSparse,
   GltfMaterial,
   GltfMesh,
+  GltfMorphTarget,
   GltfNode,
   GltfPrimitive,
   GltfSkin,
@@ -33,6 +36,7 @@ export type {
 export { composeTrs, decodeDataUri, GltfError, parseGltf } from './gltf';
 export type {
   GltfImageSource,
+  GltfMorph,
   GltfSceneNode,
   LoadGltfOptions,
 } from './gltf-load';

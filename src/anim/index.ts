@@ -19,9 +19,12 @@ export {
   findKeyframe,
   sampleChannel,
   sampleClip,
+  sampleWeights,
 } from './clip';
 export type { AnimationEventListener, AnimationMixerOptions, PlayOptions } from './mixer';
 export { AnimationAction, AnimationMixer } from './mixer';
+export type { MorphBlender, MorphLayout, MorphTarget } from './morph';
+export { createMorphBlender } from './morph';
 export type { Pose, Skeleton } from './pose';
 export {
   blendPose,

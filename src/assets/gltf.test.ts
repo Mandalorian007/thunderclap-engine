@@ -760,11 +760,23 @@ describe('parseGltf errors', () => {
     expect(() =>
       parseGltf({
         json: minimal({
-          accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: 'VEC3', sparse: {} }],
+          accessors: [
+            {
+              bufferView: 0,
+              componentType: 5126,
+              count: 3,
+              type: 'VEC3',
+              sparse: {
+                count: 1,
+                indices: { bufferView: 0, componentType: 5123 },
+                values: { bufferView: 0 },
+              },
+            },
+          ],
         }),
         buffers: [bin],
       }),
-    ).toThrow(/accessor 0 is sparse/);
+    ).toThrow(/accessor 0 is sparse \(supported for morph target attributes only\)/);
     expect(() =>
       parseGltf({
         json: minimal({
@@ -797,5 +809,154 @@ describe('parseGltf errors', () => {
     expect(err).toBeInstanceOf(GltfError);
     expect((err as Error).name).toBe('GltfError');
     expect((err as Error).message.startsWith('gltf: ')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------- morph targets
+
+/**
+ * A unit quad (4 vertices, 2 triangles) with three morph targets:
+ * 0: dense POSITION and NORMAL deltas;
+ * 1: sparse POSITION over zeros (vertices 1 and 3 move), plus a TANGENT the parser ignores;
+ * 2: dense POSITION overlaid by a sparse override at vertex 2, no NORMAL.
+ * `mesh.weights` is `[0.25, 0, 1]` unless `weights` says otherwise (null: none).
+ */
+function morphGlb(opts: { weights?: number[] | null; normals?: boolean } = {}): GlbWriter {
+  const w = new GlbWriter();
+  const pos = w.floats([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0], 'VEC3');
+  const nrm = w.floats([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1], 'VEC3');
+  const idx = w.indices16([0, 1, 2, 0, 2, 3]);
+  // Target 0: dense.
+  const t0p = w.floats([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1], 'VEC3', false);
+  const t0n = w.floats([1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0], 'VEC3', false);
+  // Target 1: sparse over zeros: vertex 1 → (0, 0, 2), vertex 3 → (0, 0, 3).
+  const sIdx = w.view(new Uint8Array(new Uint16Array([1, 3]).buffer));
+  const sVal = w.view(new Uint8Array(new Float32Array([0, 0, 2, 0, 0, 3]).buffer));
+  const t1p = w.accessor({
+    componentType: 5126,
+    count: 4,
+    type: 'VEC3',
+    sparse: {
+      count: 2,
+      indices: { bufferView: sIdx, componentType: 5123 },
+      values: { bufferView: sVal },
+    },
+  });
+  const tan = w.floats(new Array(16).fill(0), 'VEC4', false);
+  // Target 2: dense (0.5 in x) with a sparse override at vertex 2 → (9, 9, 9).
+  const t2Dense = w.view(
+    new Uint8Array(new Float32Array([0.5, 0, 0, 0.5, 0, 0, 0.5, 0, 0, 0.5, 0, 0]).buffer),
+  );
+  const s2Idx = w.view(new Uint8Array([2, 0, 0, 0]));
+  const s2Val = w.view(new Uint8Array(new Float32Array([9, 9, 9]).buffer));
+  const t2p = w.accessor({
+    bufferView: t2Dense,
+    componentType: 5126,
+    count: 4,
+    type: 'VEC3',
+    sparse: {
+      count: 1,
+      indices: { bufferView: s2Idx, componentType: 5121 },
+      values: { bufferView: s2Val },
+    },
+  });
+  const attributes: Record<string, number> = { POSITION: pos };
+  if (opts.normals !== false) attributes.NORMAL = nrm;
+  w.json.meshes!.push({
+    name: 'quad',
+    primitives: [
+      {
+        attributes,
+        indices: idx,
+        targets: [
+          { POSITION: t0p, NORMAL: t0n },
+          { POSITION: t1p, TANGENT: tan },
+          { POSITION: t2p },
+        ],
+      },
+    ],
+    ...(opts.weights === null ? {} : { weights: opts.weights ?? [0.25, 0, 1] }),
+  });
+  w.json.nodes!.push({ mesh: 0 });
+  w.json.scenes!.push({ nodes: [0] });
+  return w;
+}
+
+describe('parseGltf (morph targets)', () => {
+  it('reads dense and sparse target deltas, default weights and ignored attributes', () => {
+    const doc = parseGltf(morphGlb().finish());
+    const mesh = doc.meshes[0]!;
+    const p = mesh.primitives[0]!;
+    expect(p.targets).toHaveLength(3);
+    expect([...mesh.weights!]).toEqual([0.25, 0, 1]);
+    expect(p.ignoredTargetAttributes).toEqual(['TANGENT']);
+    expect([...p.targets[0]!.position!]).toEqual([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]);
+    expect([...p.targets[0]!.normal!]).toEqual([1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0]);
+    // Sparse over zeros: only the named vertices move.
+    expect([...p.targets[1]!.position!]).toEqual([0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 3]);
+    expect(p.targets[1]!.normal).toBeNull();
+    // Sparse over a dense base: the override replaces one vertex, the rest keep the base.
+    expect([...p.targets[2]!.position!]).toEqual([0.5, 0, 0, 0.5, 0, 0, 9, 9, 9, 0.5, 0, 0]);
+    expect(p.targets[2]!.normal).toBeNull();
+    // The base attributes are untouched, and a primitive without targets has none.
+    expect(p.position[5]).toBe(0);
+    const plain = parseGltf(sampleGlb().glb).meshes[0]!;
+    expect(plain.primitives[0]!.targets).toEqual([]);
+    expect(plain.primitives[0]!.ignoredTargetAttributes).toEqual([]);
+    expect(plain.weights).toBeNull();
+  });
+
+  it('weights are null when the file gives none; targets follow the unwelding', () => {
+    expect(parseGltf(morphGlb({ weights: null }).finish()).meshes[0]!.weights).toBeNull();
+    const p = parseGltf(morphGlb({ normals: false }).finish()).meshes[0]!.primitives[0]!;
+    expect(p.hadNormals).toBe(false);
+    expect(p.vertexCount).toBe(6);
+    // Index order 0 1 2 0 2 3: the sparse target's vertex 1 lands at slot 1, vertex 3 at slot 5.
+    expect([...p.targets[1]!.position!]).toEqual([
+      0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3,
+    ]);
+    expect(p.targets[0]!.normal).toHaveLength(18);
+  });
+
+  it('names bad targets, weights and sparse data as GltfError', () => {
+    const bad = (mutate: (w: GlbWriter) => void, re: RegExp) => {
+      const w = morphGlb();
+      mutate(w);
+      expect(() => parseGltf(w.finish())).toThrow(re);
+      let err: unknown;
+      try {
+        parseGltf(w.finish());
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(GltfError);
+    };
+    bad((w) => {
+      w.json.meshes![0]!.weights = [1];
+    }, /mesh 0: 1 default weights for 3 morph targets/);
+    bad((w) => {
+      const prim = w.json.meshes![0]!.primitives[0]!;
+      w.json.meshes![0]!.primitives.push({ ...prim, targets: [] });
+      delete w.json.meshes![0]!.weights;
+    }, /mesh 0: primitive 1 has 0 morph targets, primitive 0 has 3/);
+    bad((w) => {
+      w.json.accessors![3]!.count = 3;
+    }, /mesh 0 primitive 0 target 0 POSITION: 3 values for 4 vertices/);
+    bad((w) => {
+      w.json.accessors![3]!.type = 'VEC2';
+    }, /target 0 POSITION: VEC2, expected VEC3/);
+    bad((w) => {
+      w.json.accessors![5]!.sparse!.count = 5;
+    }, /target 1 POSITION: sparse count 5 for 4 elements/);
+    bad((w) => {
+      w.json.accessors![5]!.sparse!.count = 3;
+    }, /target 1 POSITION: sparse data runs past its bufferView/);
+    bad((w) => {
+      w.json.accessors![5]!.sparse!.indices.componentType = 5126 as unknown as 5123;
+    }, /sparse index componentType 5126 must be unsigned/);
+    bad((w) => {
+      // Sparse on a base attribute stays unsupported.
+      w.json.accessors![0]!.sparse = w.json.accessors![5]!.sparse;
+    }, /primitive 0: accessor 0 is sparse \(supported for morph target attributes only\)/);
   });
 });

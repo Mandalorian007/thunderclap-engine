@@ -64,4 +64,14 @@ All on `(x, y, z, w)` at an offset, allocation-free: `quatIdentity(out, o)`, `qu
 
 ## Not here
 
-IK, retargeting, root motion extraction, morph-target application (sample `'weights'` channels yourself), any GPU upload (`render/skin.ts`), glTF parsing (`assets/`).
+IK, retargeting, root motion extraction, any GPU upload (`render/skin.ts`, `assets/gltf-load.ts` for morphed vertex buffers), glTF parsing (`assets/`).
+
+## Morph targets (`morph.ts`)
+
+Blend shapes on the CPU, written into an interleaved vertex buffer the mesh uploads (`Mesh.update`). `MorphTarget { position: Float32Array | null; normal: Float32Array | null }` is one target's per-vertex deltas (3 floats per vertex; `assets`' `GltfMorphTarget` is the same shape). `MorphLayout { floats; positionOffset?; normalOffset? }` says where the lanes sit (defaults 0 and 3, `normalOffset: null` for a layout without normals); `VERTEX_LAYOUT_3D` fits as is.
+
+- `createMorphBlender(base, targets, layout, weights?)` → `MorphBlender { weights; targetCount; vertexCount; apply(out) }`. `base` is the primitive's interleaved vertices; `weights` (one per target) may be an array shared between the primitives of a mesh, else it is zeros. Throws `RangeError` when a target's deltas or `weights` are too short.
+- `apply(out)` writes `base + Σ weights[i] × targets[i]` into `out`'s position and normal lanes, normals renormalised (a zero-length normal stays zero), every other lane copied from `base`. It returns false and writes nothing when no weight changed since the last apply into the same `out`; the first call, or a new `out`, copies the whole base first. Targets at weight 0 cost nothing. No allocation after creation.
+- `sampleWeights(clip, node, t, out, cursor?)` (in `clip.ts`) fills `out[0..n)` from the clip's `'weights'` channel for `node` with the same interpolation rules as `sampleClip` (STEP, LINEAR, CUBICSPLINE, hold outside the key range, keyframe cursor); false when the clip has no such channel, `RangeError` when `out` is shorter than the channel. `sampleClip` is unchanged and still skips `'weights'` channels.
+
+A frame: `sampleWeights(clip, node, t, blender.weights); if (blender.apply(buffer)) mesh.update({ vertices: buffer })`. `assets`' `loadGltf` does exactly this per primitive behind `scene.morph(node)`.
