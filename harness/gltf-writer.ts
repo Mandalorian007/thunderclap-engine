@@ -4,7 +4,11 @@
  * scene is the one `src/assets/gltf.test.ts` builds: a textured cube placed by a `matrix` node
  * and an untextured plane (no normals, no uv, no indices) placed by a TRS node. `buildPbrGlb`
  * is the `?pbr` scene: every material slot, tangents, a texture transform and a skinned mesh.
+ * The ws/assets-3 builders at the end (`buildQuantGlb`, `buildMeshoptGlbs`, `buildLightsGlb`,
+ * `buildVariantsGlb`, `buildCacheGlb`) feed harness/gltf3.html.
  */
+
+import { encodeIndexBuffer, encodeVertexBuffer } from './gltf3-encode';
 
 // ---------------------------------------------------------------- PNG (stored deflate)
 
@@ -91,6 +95,7 @@ interface Accessor {
   type: string;
   min?: number[];
   max?: number[];
+  normalized?: boolean;
 }
 
 class GlbWriter {
@@ -150,6 +155,23 @@ class GlbWriter {
       count: data.length / 4,
       type: 'VEC4',
     });
+    return this.json.accessors.length - 1;
+  }
+
+  /** An accessor over raw `bytes` of any component type (quantized attributes; `stride` pads). */
+  typed(
+    bytes: Uint8Array,
+    componentType: number,
+    count: number,
+    type: string,
+    extra: { normalized?: boolean; stride?: number; min?: number[]; max?: number[] } = {},
+  ): number {
+    const { stride, ...rest } = extra;
+    const bv = this.view(bytes);
+    if (stride !== undefined) {
+      (this.json.bufferViews[bv] as { byteStride?: number }).byteStride = stride;
+    }
+    this.json.accessors.push({ bufferView: bv, componentType, count, type, ...rest });
     return this.json.accessors.length - 1;
   }
 
@@ -756,6 +778,532 @@ export function buildSampleGlb(): ArrayBuffer {
       },
     ],
     scenes: [{ nodes: [0, 1] }],
+    scene: 0,
+  });
+  return w.finish();
+}
+
+// ---------------------------------------------------------------- ws/assets-3 (harness/gltf3)
+
+/** A GLB from a JSON object and its BIN chunk; the JSON's `buffers[0]` must describe the chunk. */
+export function packGlb(json: unknown, bin: Uint8Array): ArrayBuffer {
+  const binLength = Math.ceil(bin.byteLength / 4) * 4;
+  const jsonBytes = new TextEncoder().encode(JSON.stringify(json));
+  const jsonLength = Math.ceil(jsonBytes.byteLength / 4) * 4;
+  const total = 12 + 8 + jsonLength + 8 + binLength;
+  const out = new ArrayBuffer(total);
+  const dv = new DataView(out);
+  const u8 = new Uint8Array(out);
+  dv.setUint32(0, 0x46546c67, true);
+  dv.setUint32(4, 2, true);
+  dv.setUint32(8, total, true);
+  dv.setUint32(12, jsonLength, true);
+  dv.setUint32(16, 0x4e4f534a, true);
+  u8.set(jsonBytes, 20);
+  u8.fill(0x20, 20 + jsonBytes.byteLength, 20 + jsonLength);
+  const binAt = 20 + jsonLength;
+  dv.setUint32(binAt, binLength, true);
+  dv.setUint32(binAt + 4, 0x004e4942, true);
+  u8.set(bin, binAt + 8);
+  return out;
+}
+
+/** `?quant`: the two cubes sit at ∓`QUANT_CUBE_X` (quantized left, float right), side 1. */
+export const QUANT_CUBE_X = 1.1;
+export const QUANT_CUBE_Y = 0.5;
+export const QUANT_BASE_COLOR = [0.85, 0.45, 0.15, 1] as const;
+
+/**
+ * `?quant`: one GLB, two nodes drawing the same unit cube. Mesh 0 is `KHR_mesh_quantization`:
+ * normalized SHORT positions (±32767 = ±1, the node's scale 0.5 brings them back to ±0.5, 8-byte
+ * stride), normalized BYTE normals (4-byte stride) and normalized USHORT uvs, with min / max as
+ * the raw integers gltfpack writes. Mesh 1 is the float twin.
+ */
+export function buildQuantGlb(): ArrayBuffer {
+  const w = new GlbWriter();
+  const c = cube();
+  const n = c.pos.length / 3;
+  const pos = new Int16Array(n * 4);
+  const nrm = new Int8Array(n * 4);
+  const uv = new Uint16Array(n * 2);
+  for (let i = 0; i < n; i++) {
+    for (let k = 0; k < 3; k++) {
+      pos[i * 4 + k] = Math.round(c.pos[i * 3 + k]! * 2 * 32767);
+      nrm[i * 4 + k] = Math.round(c.nrm[i * 3 + k]! * 127);
+    }
+    uv[i * 2] = Math.round(c.uv[i * 2]! * 65535);
+    uv[i * 2 + 1] = Math.round(c.uv[i * 2 + 1]! * 65535);
+  }
+  const quant = {
+    attributes: {
+      POSITION: w.typed(new Uint8Array(pos.buffer), 5122, n, 'VEC3', {
+        normalized: true,
+        stride: 8,
+        min: [-32767, -32767, -32767],
+        max: [32767, 32767, 32767],
+      }),
+      NORMAL: w.typed(new Uint8Array(nrm.buffer), 5120, n, 'VEC3', { normalized: true, stride: 4 }),
+      TEXCOORD_0: w.typed(new Uint8Array(uv.buffer), 5123, n, 'VEC2', { normalized: true }),
+    },
+    indices: w.indices16(c.idx),
+    material: 0,
+  };
+  const float = {
+    attributes: {
+      POSITION: w.floats(c.pos, 'VEC3'),
+      NORMAL: w.floats(c.nrm, 'VEC3'),
+      TEXCOORD_0: w.floats(c.uv, 'VEC2'),
+    },
+    indices: w.indices16(c.idx),
+    material: 0,
+  };
+  Object.assign(w.json, {
+    extensionsUsed: ['KHR_mesh_quantization'],
+    extensionsRequired: ['KHR_mesh_quantization'],
+    meshes: [
+      { name: 'quantized', primitives: [quant] },
+      { name: 'float', primitives: [float] },
+    ],
+    materials: [
+      {
+        name: 'clay',
+        pbrMetallicRoughness: {
+          baseColorFactor: [...QUANT_BASE_COLOR],
+          metallicFactor: 0,
+          roughnessFactor: 0.7,
+        },
+      },
+    ],
+    nodes: [
+      {
+        name: 'quantized',
+        mesh: 0,
+        translation: [-QUANT_CUBE_X, QUANT_CUBE_Y, 0],
+        scale: [0.5, 0.5, 0.5],
+      },
+      { name: 'float', mesh: 1, translation: [QUANT_CUBE_X, QUANT_CUBE_Y, 0] },
+    ],
+    scenes: [{ nodes: [0, 1] }],
+    scene: 0,
+  });
+  return w.finish();
+}
+
+/** `?meshopt`: a lumpy icosphere (deterministic), radius about `ROCK_RADIUS`, at the origin. */
+export const ROCK_RADIUS = 1;
+
+function rock(): { pos: number[]; nrm: number[]; idx: number[] } {
+  const t = (1 + Math.sqrt(5)) / 2;
+  let verts: number[][] = [
+    [-1, t, 0],
+    [1, t, 0],
+    [-1, -t, 0],
+    [1, -t, 0],
+    [0, -1, t],
+    [0, 1, t],
+    [0, -1, -t],
+    [0, 1, -t],
+    [t, 0, -1],
+    [t, 0, 1],
+    [-t, 0, -1],
+    [-t, 0, 1],
+  ].map((v) => {
+    const l = Math.hypot(v[0]!, v[1]!, v[2]!);
+    return [v[0]! / l, v[1]! / l, v[2]! / l];
+  });
+  // biome-ignore format: the icosahedron's faces, one triangle per row of three
+  let faces = [0,11,5, 0,5,1, 0,1,7, 0,7,10, 0,10,11, 1,5,9, 5,11,4, 11,10,2, 10,7,6, 7,1,8,
+    3,9,4, 3,4,2, 3,2,6, 3,6,8, 3,8,9, 4,9,5, 2,4,11, 6,2,10, 8,6,7, 9,8,1];
+  for (let level = 0; level < 3; level++) {
+    const mid = new Map<string, number>();
+    const midpoint = (a: number, b: number): number => {
+      const key = a < b ? `${a},${b}` : `${b},${a}`;
+      const known = mid.get(key);
+      if (known !== undefined) return known;
+      const p = verts[a]!;
+      const q = verts[b]!;
+      const m = [(p[0]! + q[0]!) / 2, (p[1]! + q[1]!) / 2, (p[2]! + q[2]!) / 2];
+      const l = Math.hypot(m[0]!, m[1]!, m[2]!);
+      verts = [...verts, [m[0]! / l, m[1]! / l, m[2]! / l]];
+      mid.set(key, verts.length - 1);
+      return verts.length - 1;
+    };
+    const next: number[] = [];
+    for (let f = 0; f < faces.length; f += 3) {
+      const a = faces[f]!;
+      const b = faces[f + 1]!;
+      const c = faces[f + 2]!;
+      const ab = midpoint(a, b);
+      const bc = midpoint(b, c);
+      const ca = midpoint(c, a);
+      next.push(a, ab, ca, b, bc, ab, c, ca, bc, ab, bc, ca);
+    }
+    faces = next;
+  }
+  const pos: number[] = [];
+  for (const [x, y, z] of verts) {
+    const r =
+      ROCK_RADIUS *
+      (1 + 0.16 * Math.sin(3 * x! + 1) * Math.sin(4 * y! + 2) * Math.sin(5 * z! + 0.5));
+    pos.push(x! * r, y! * r * 0.8, z! * r);
+  }
+  const nrm = new Array<number>(pos.length).fill(0);
+  for (let f = 0; f < faces.length; f += 3) {
+    const [a, b, c] = [faces[f]! * 3, faces[f + 1]! * 3, faces[f + 2]! * 3];
+    const e1 = [pos[b]! - pos[a]!, pos[b + 1]! - pos[a + 1]!, pos[b + 2]! - pos[a + 2]!];
+    const e2 = [pos[c]! - pos[a]!, pos[c + 1]! - pos[a + 1]!, pos[c + 2]! - pos[a + 2]!];
+    const n = [
+      e1[1]! * e2[2]! - e1[2]! * e2[1]!,
+      e1[2]! * e2[0]! - e1[0]! * e2[2]!,
+      e1[0]! * e2[1]! - e1[1]! * e2[0]!,
+    ];
+    for (const v of [a, b, c]) for (let k = 0; k < 3; k++) nrm[v + k]! += n[k]!;
+  }
+  for (let i = 0; i < nrm.length; i += 3) {
+    const l = Math.hypot(nrm[i]!, nrm[i + 1]!, nrm[i + 2]!) || 1;
+    nrm[i]! /= l;
+    nrm[i + 1]! /= l;
+    nrm[i + 2]! /= l;
+  }
+  return { pos, nrm, idx: faces };
+}
+
+export const ROCK_BASE_COLOR = [0.55, 0.5, 0.45, 1] as const;
+
+/**
+ * `?meshopt`: the rock twice. `plain` is a float GLB (interleaved position + normal, 24-byte
+ * stride, u16 indices); `packed` stores the same views through `EXT_meshopt_compression`
+ * (`ATTRIBUTES` for the vertices, `TRIANGLES` for the indices) in the BIN chunk, against a
+ * fallback buffer with no data.
+ */
+export function buildMeshoptGlbs(): { plain: ArrayBuffer; packed: ArrayBuffer } {
+  const r = rock();
+  const count = r.pos.length / 3;
+  const verts = new Float32Array(count * 6);
+  for (let i = 0; i < count; i++) {
+    for (let k = 0; k < 3; k++) {
+      verts[i * 6 + k] = r.pos[i * 3 + k]!;
+      verts[i * 6 + 3 + k] = r.nrm[i * 3 + k]!;
+    }
+  }
+  const vBytes = new Uint8Array(verts.buffer);
+  const iBytes = new Uint8Array(new Uint16Array(r.idx).buffer);
+  const iAt = vBytes.byteLength;
+  const rawLength = iAt + Math.ceil(iBytes.byteLength / 4) * 4;
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < count; i++) {
+    for (let k = 0; k < 3; k++) {
+      min[k] = Math.min(min[k]!, verts[i * 6 + k]!);
+      max[k] = Math.max(max[k]!, verts[i * 6 + k]!);
+    }
+  }
+  const base = {
+    asset: { version: '2.0', generator: 'thunderclap-harness' },
+    accessors: [
+      { bufferView: 0, byteOffset: 0, componentType: 5126, count, type: 'VEC3', min, max },
+      { bufferView: 0, byteOffset: 12, componentType: 5126, count, type: 'VEC3' },
+      { bufferView: 1, componentType: 5123, count: r.idx.length, type: 'SCALAR' },
+    ],
+    meshes: [
+      {
+        name: 'rock',
+        primitives: [{ attributes: { POSITION: 0, NORMAL: 1 }, indices: 2, material: 0 }],
+      },
+    ],
+    materials: [
+      {
+        name: 'stone',
+        pbrMetallicRoughness: {
+          baseColorFactor: [...ROCK_BASE_COLOR],
+          metallicFactor: 0,
+          roughnessFactor: 0.9,
+        },
+      },
+    ],
+    nodes: [{ name: 'rock', mesh: 0 }],
+    scenes: [{ nodes: [0] }],
+    scene: 0,
+  };
+  const plainBin = new Uint8Array(rawLength);
+  plainBin.set(vBytes);
+  plainBin.set(iBytes, iAt);
+  const plain = packGlb(
+    {
+      ...base,
+      buffers: [{ byteLength: rawLength }],
+      bufferViews: [
+        { buffer: 0, byteOffset: 0, byteLength: vBytes.byteLength, byteStride: 24 },
+        { buffer: 0, byteOffset: iAt, byteLength: iBytes.byteLength },
+      ],
+    },
+    plainBin,
+  );
+  const vEnc = encodeVertexBuffer(vBytes, count, 24);
+  const iEnc = encodeIndexBuffer(r.idx);
+  const vLen = Math.ceil(vEnc.byteLength / 4) * 4;
+  const packedBin = new Uint8Array(vLen + iEnc.byteLength);
+  packedBin.set(vEnc);
+  packedBin.set(iEnc, vLen);
+  const packed = packGlb(
+    {
+      ...base,
+      extensionsUsed: ['EXT_meshopt_compression'],
+      extensionsRequired: ['EXT_meshopt_compression'],
+      buffers: [
+        { byteLength: Math.ceil(packedBin.byteLength / 4) * 4 },
+        { byteLength: rawLength, extensions: { EXT_meshopt_compression: { fallback: true } } },
+      ],
+      bufferViews: [
+        {
+          buffer: 1,
+          byteOffset: 0,
+          byteLength: vBytes.byteLength,
+          byteStride: 24,
+          extensions: {
+            EXT_meshopt_compression: {
+              buffer: 0,
+              byteOffset: 0,
+              byteLength: vEnc.byteLength,
+              byteStride: 24,
+              count,
+              mode: 'ATTRIBUTES',
+            },
+          },
+        },
+        {
+          buffer: 1,
+          byteOffset: iAt,
+          byteLength: iBytes.byteLength,
+          extensions: {
+            EXT_meshopt_compression: {
+              buffer: 0,
+              byteOffset: vLen,
+              byteLength: iEnc.byteLength,
+              byteStride: 2,
+              count: r.idx.length,
+              mode: 'TRIANGLES',
+            },
+          },
+        },
+      ],
+    },
+    packedBin,
+  );
+  return { plain, packed };
+}
+
+/** `?lights`: where the file's point (red) and spot (blue) lights stand, and the ground's half size. */
+export const LIGHTS_POINT_AT = [-1.8, 0.5, 0.6] as const;
+export const LIGHTS_SPOT_AT = [1.8, 2.4, 0.6] as const;
+export const LIGHTS_GROUND_HALF = 5;
+
+/**
+ * `?lights`: a grey ground and a cube lit only by the file's `KHR_lights_punctual` lights (a dim
+ * directional, a red point light low over the ground on the left, a blue spot pointing straight
+ * down on the right), seen through the file's own perspective camera.
+ */
+export function buildLightsGlb(): ArrayBuffer {
+  const w = new GlbWriter();
+  const c = cube();
+  const h = LIGHTS_GROUND_HALF;
+  const ground = {
+    attributes: {
+      POSITION: w.floats([-h, 0, h, h, 0, h, h, 0, -h, -h, 0, -h], 'VEC3'),
+      NORMAL: w.floats([0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0], 'VEC3'),
+    },
+    indices: w.indices16([0, 1, 2, 0, 2, 3]),
+    material: 0,
+  };
+  const box = {
+    attributes: { POSITION: w.floats(c.pos, 'VEC3'), NORMAL: w.floats(c.nrm, 'VEC3') },
+    indices: w.indices16(c.idx),
+    material: 0,
+  };
+  // Light and camera nodes look down their local -Z; -90° about X points it at -Y.
+  const down = [-Math.SQRT1_2, 0, 0, Math.SQRT1_2];
+  const pitch = -Math.atan2(3, 7);
+  Object.assign(w.json, {
+    extensionsUsed: ['KHR_lights_punctual'],
+    extensions: {
+      KHR_lights_punctual: {
+        lights: [
+          { name: 'sky', type: 'directional', color: [1, 1, 1], intensity: 0.25 },
+          { name: 'ember', type: 'point', color: [1, 0.15, 0.1], intensity: 3, range: 3 },
+          {
+            name: 'beam',
+            type: 'spot',
+            color: [0.15, 0.3, 1],
+            intensity: 6,
+            range: 6,
+            spot: { innerConeAngle: 0.25, outerConeAngle: 0.5 },
+          },
+        ],
+      },
+    },
+    cameras: [
+      {
+        name: 'view',
+        type: 'perspective',
+        perspective: { yfov: 0.9, znear: 0.1, zfar: 100 },
+      },
+    ],
+    meshes: [
+      { name: 'ground', primitives: [ground] },
+      { name: 'box', primitives: [box] },
+    ],
+    materials: [
+      {
+        name: 'plaster',
+        pbrMetallicRoughness: {
+          baseColorFactor: [0.8, 0.8, 0.8, 1],
+          metallicFactor: 0,
+          roughnessFactor: 0.9,
+        },
+      },
+    ],
+    nodes: [
+      { name: 'ground', mesh: 0 },
+      { name: 'box', mesh: 1, translation: [0, 0.5, -0.5] },
+      {
+        name: 'sky',
+        rotation: [-0.3, 0.2, 0, 0.93],
+        extensions: { KHR_lights_punctual: { light: 0 } },
+      },
+      {
+        name: 'ember',
+        translation: [...LIGHTS_POINT_AT],
+        extensions: { KHR_lights_punctual: { light: 1 } },
+      },
+      {
+        name: 'beam',
+        translation: [...LIGHTS_SPOT_AT],
+        rotation: down,
+        extensions: { KHR_lights_punctual: { light: 2 } },
+      },
+      {
+        name: 'eye',
+        camera: 0,
+        translation: [0, 3, 7],
+        rotation: [Math.sin(pitch / 2), 0, 0, Math.cos(pitch / 2)],
+      },
+    ],
+    scenes: [{ nodes: [0, 1, 2, 3, 4, 5] }],
+    scene: 0,
+  });
+  return w.finish();
+}
+
+/** `?variants`: the variant names and each one's body colour, in file order. */
+export const VARIANT_NAMES = ['ember', 'moss', 'tide'] as const;
+export const VARIANT_COLORS = [
+  [0.9, 0.15, 0.1, 1],
+  [0.15, 0.75, 0.2, 1],
+  [0.15, 0.3, 0.95, 1],
+] as const;
+/** The figure's torso centre (world). */
+export const VARIANT_BODY_AT = [0, 1.1, 0] as const;
+
+/**
+ * `?variants`: a figure (a box torso on two box legs, a sphere head) whose torso and legs carry
+ * `KHR_materials_variants` mappings: three variants, each binding one colour material (1..3);
+ * with no variant they draw the grey material 0. The head keeps its own material (4).
+ */
+export function buildVariantsGlb(): ArrayBuffer {
+  const w = new GlbWriter();
+  const c = cube();
+  const head = {
+    pos: [] as number[],
+    nrm: [] as number[],
+    uv: [] as number[],
+    idx: [] as number[],
+  };
+  sphere(0, 0, 0, 0.5, 0.5, 0.5, 0, head);
+  const mappings = VARIANT_NAMES.map((_, v) => ({ material: v + 1, variants: [v] }));
+  const boxPrim = {
+    attributes: { POSITION: w.floats(c.pos, 'VEC3'), NORMAL: w.floats(c.nrm, 'VEC3') },
+    indices: w.indices16(c.idx),
+    material: 0,
+    extensions: { KHR_materials_variants: { mappings } },
+  };
+  const headPrim = {
+    attributes: { POSITION: w.floats(head.pos, 'VEC3'), NORMAL: w.floats(head.nrm, 'VEC3') },
+    indices: w.indices16(head.idx),
+    material: 4,
+  };
+  const flat = (name: string, rgba: readonly number[]) => ({
+    name,
+    pbrMetallicRoughness: { baseColorFactor: [...rgba], metallicFactor: 0, roughnessFactor: 0.8 },
+  });
+  const [bx, by, bz] = VARIANT_BODY_AT;
+  Object.assign(w.json, {
+    extensionsUsed: ['KHR_materials_variants'],
+    extensions: { KHR_materials_variants: { variants: VARIANT_NAMES.map((name) => ({ name })) } },
+    meshes: [
+      { name: 'cloth', primitives: [boxPrim] },
+      { name: 'head', primitives: [headPrim] },
+    ],
+    materials: [
+      flat('plain', [0.5, 0.5, 0.5, 1]),
+      ...VARIANT_NAMES.map((n, i) => flat(n, VARIANT_COLORS[i]!)),
+      flat('skin', [0.9, 0.75, 0.6, 1]),
+    ],
+    nodes: [
+      { name: 'torso', mesh: 0, translation: [bx, by, bz], scale: [0.9, 0.9, 0.5] },
+      { name: 'leg.l', mesh: 0, translation: [bx - 0.25, by - 0.8, bz], scale: [0.3, 0.7, 0.3] },
+      { name: 'leg.r', mesh: 0, translation: [bx + 0.25, by - 0.8, bz], scale: [0.3, 0.7, 0.3] },
+      { name: 'head', mesh: 1, translation: [bx, by + 0.85, bz], scale: [0.7, 0.7, 0.7] },
+    ],
+    scenes: [{ nodes: [0, 1, 2, 3] }],
+    scene: 0,
+  });
+  return w.finish();
+}
+
+/** `?cache`: how many assets the page loads, and where asset `i`'s cube stands (x). */
+export const CACHE_ASSETS = 10;
+export function cacheAssetX(i: number): number {
+  return (i - (CACHE_ASSETS - 1) / 2) * 0.9;
+}
+
+/** `?cache`: asset `i`, a small cube at `cacheAssetX(i)` in a hue of its own. */
+export function buildCacheGlb(i: number): ArrayBuffer {
+  const w = new GlbWriter();
+  const c = cube();
+  const hue = (i / CACHE_ASSETS) * Math.PI * 2;
+  const rgb = [0, 2, 4].map((o) => 0.55 + 0.4 * Math.cos(hue - (o * Math.PI) / 3));
+  Object.assign(w.json, {
+    meshes: [
+      {
+        name: `asset-${i}`,
+        primitives: [
+          {
+            attributes: { POSITION: w.floats(c.pos, 'VEC3'), NORMAL: w.floats(c.nrm, 'VEC3') },
+            indices: w.indices16(c.idx),
+            material: 0,
+          },
+        ],
+      },
+    ],
+    materials: [
+      {
+        name: `hue-${i}`,
+        pbrMetallicRoughness: {
+          baseColorFactor: [...rgb, 1],
+          metallicFactor: 0,
+          roughnessFactor: 0.8,
+        },
+      },
+    ],
+    nodes: [
+      {
+        name: `asset-${i}`,
+        mesh: 0,
+        translation: [cacheAssetX(i), 0.4, 0],
+        scale: [0.6, 0.6, 0.6],
+      },
+    ],
+    scenes: [{ nodes: [0] }],
     scene: 0,
   });
   return w.finish();

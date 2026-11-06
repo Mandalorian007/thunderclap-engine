@@ -600,6 +600,14 @@ describe('parseGltf (GLB)', () => {
       occlusionStrength: 1,
       emissive: null,
       emissiveFactor: [0, 0, 0],
+      extensions: {
+        clearcoat: null,
+        sheen: null,
+        transmission: null,
+        volume: null,
+        ior: null,
+        specular: null,
+      },
     };
     expect(doc.materials).toEqual([
       {
@@ -629,6 +637,7 @@ describe('parseGltf (GLB)', () => {
       {
         name: null,
         source: 0,
+        basisuSource: null,
         wrapS: 33071,
         wrapT: 10497,
         magFilter: 9728,
@@ -673,7 +682,7 @@ describe('parseGltf (.gltf JSON)', () => {
       textures: [{ source: 0 }, { source: 1 }],
       images: [{ uri: 'textures/wood.jpg' }, { uri: 'data:image/png;base64,AAEC' }],
       nodes: [{ mesh: 0 }],
-      extensionsUsed: ['KHR_materials_emissive_strength', 'KHR_lights_punctual'],
+      extensionsUsed: ['KHR_materials_emissive_strength', 'EXT_texture_webp'],
     };
     const doc = parseGltf({ json });
     expect([...doc.meshes[0]!.primitives[0]!.position]).toEqual([...pos]);
@@ -687,7 +696,7 @@ describe('parseGltf (.gltf JSON)', () => {
     });
     expect([...doc.images[1]!.bytes!]).toEqual([0, 1, 2]);
     expect(doc.images[1]!.mimeType).toBe('image/png');
-    expect(doc.warnings).toEqual(['extension ignored: KHR_lights_punctual']);
+    expect(doc.warnings).toEqual(['extension ignored: EXT_texture_webp']);
     // The same JSON as UTF-8 bytes parses too.
     const text = new TextEncoder().encode(JSON.stringify(json));
     const buf = text.buffer.slice(text.byteOffset, text.byteOffset + text.byteLength);
@@ -1121,6 +1130,14 @@ describe('parseGltf (materials)', () => {
       doubleSided: false,
       alphaMode: 'OPAQUE',
       alphaCutoff: 0.5,
+      extensions: {
+        clearcoat: null,
+        sheen: null,
+        transmission: null,
+        volume: null,
+        ior: null,
+        specular: null,
+      },
       baseColorTexture: null,
       texCoord: 0,
     });
@@ -1199,5 +1216,504 @@ describe('parseGltf (materials)', () => {
     expect(() => parseGltf(w3.finish())).toThrow(
       /required extensions not supported: KHR_draco_mesh_compression/,
     );
+  });
+});
+
+// ---------------------------------------------------------------- extensions (ws/assets-3)
+
+/** Pack `parts` into one buffer (4-byte aligned) and return the bytes plus one view per part. */
+function packViews(parts: { bytes: ArrayBufferView; stride?: number }[]): {
+  bin: ArrayBuffer;
+  views: NonNullable<GltfJson['bufferViews']>;
+} {
+  let size = 0;
+  const offsets = parts.map((p) => {
+    const at = size;
+    size += Math.ceil(p.bytes.byteLength / 4) * 4;
+    return at;
+  });
+  const bin = new Uint8Array(size);
+  const views = parts.map((p, i) => {
+    bin.set(new Uint8Array(p.bytes.buffer, p.bytes.byteOffset, p.bytes.byteLength), offsets[i]);
+    const v: NonNullable<GltfJson['bufferViews']>[number] = {
+      buffer: 0,
+      byteOffset: offsets[i]!,
+      byteLength: p.bytes.byteLength,
+    };
+    if (p.stride !== undefined) v.byteStride = p.stride;
+    return v;
+  });
+  return { bin: bin.buffer, views };
+}
+
+/** The 24-vertex unit cube: positions ±0.5, face normals, uvs, tangents along the face's u. */
+function cubeAttributes(): { pos: number[]; nrm: number[]; uv: number[]; tan: number[] } {
+  const pos: number[] = [];
+  const nrm: number[] = [];
+  const uv: number[] = [];
+  const tan: number[] = [];
+  const faces: [number, number, number][] = [
+    [1, 0, 0],
+    [-1, 0, 0],
+    [0, 1, 0],
+    [0, -1, 0],
+    [0, 0, 1],
+    [0, 0, -1],
+  ];
+  const corners: [number, number][] = [
+    [-1, -1],
+    [1, -1],
+    [1, 1],
+    [-1, 1],
+  ];
+  for (const n of faces) {
+    const axis = n.findIndex((c) => c !== 0);
+    const u = (axis + 1) % 3;
+    const v = (axis + 2) % 3;
+    for (const [a, b] of corners) {
+      const p = [0, 0, 0];
+      p[axis] = n[axis]! * 0.5;
+      p[u] = a * 0.5;
+      p[v] = b * 0.5;
+      pos.push(...p);
+      nrm.push(...n);
+      uv.push((a + 1) / 2, (b + 1) / 2);
+      const t = [0, 0, 0];
+      t[u] = 1;
+      tan.push(...t, 1);
+    }
+  }
+  return { pos, nrm, uv, tan };
+}
+
+/** Apply a 3×4 row-major matrix to the points of `p`. */
+function transformPoints(m: Float32Array, p: Float32Array): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < p.length; i += 3) {
+    for (let r = 0; r < 3; r++) {
+      out.push(
+        m[r * 4]! * p[i]! + m[r * 4 + 1]! * p[i + 1]! + m[r * 4 + 2]! * p[i + 2]! + m[r * 4 + 3]!,
+      );
+    }
+  }
+  return out;
+}
+
+describe('KHR_mesh_quantization', () => {
+  it('loads a quantized cube to the float twin within 1e-4 after the node transform', () => {
+    const c = cubeAttributes();
+    const count = c.pos.length / 3;
+    const plain = packViews([
+      { bytes: new Float32Array(c.pos) },
+      { bytes: new Float32Array(c.nrm) },
+      { bytes: new Float32Array(c.uv) },
+      { bytes: new Float32Array(c.tan) },
+    ]);
+    const floatJson: GltfJson = {
+      asset: { version: '2.0' },
+      buffers: [{ byteLength: plain.bin.byteLength }],
+      bufferViews: plain.views,
+      accessors: [
+        { bufferView: 0, componentType: 5126, count, type: 'VEC3' },
+        { bufferView: 1, componentType: 5126, count, type: 'VEC3' },
+        { bufferView: 2, componentType: 5126, count, type: 'VEC2' },
+        { bufferView: 3, componentType: 5126, count, type: 'VEC4' },
+      ],
+      meshes: [
+        { primitives: [{ attributes: { POSITION: 0, NORMAL: 1, TEXCOORD_0: 2, TANGENT: 3 } }] },
+      ],
+      nodes: [{ mesh: 0, translation: [2, 0, 0] }],
+    };
+    // Positions: SHORT, not normalised, in 1/1000 units (node scale undoes it); 8-byte stride.
+    const qpos = new Int16Array(count * 4);
+    for (let i = 0; i < count; i++) {
+      for (let k = 0; k < 3; k++) qpos[i * 4 + k] = Math.round(c.pos[i * 3 + k]! * 1000);
+    }
+    // Normals: normalised BYTE padded to 4; tangents normalised SHORT; uvs normalised USHORT.
+    const qnrm = new Int8Array(count * 4);
+    for (let i = 0; i < count; i++) {
+      for (let k = 0; k < 3; k++) qnrm[i * 4 + k] = Math.round(c.nrm[i * 3 + k]! * 127);
+    }
+    const qtan = new Int16Array(c.tan.map((x) => Math.round(x * 32767)));
+    const quv = new Uint16Array(c.uv.map((x) => Math.round(x * 65535)));
+    const q = packViews([
+      { bytes: qpos, stride: 8 },
+      { bytes: qnrm, stride: 4 },
+      { bytes: quv },
+      { bytes: qtan },
+    ]);
+    const quantJson: GltfJson = {
+      asset: { version: '2.0' },
+      extensionsUsed: ['KHR_mesh_quantization'],
+      extensionsRequired: ['KHR_mesh_quantization'],
+      buffers: [{ byteLength: q.bin.byteLength }],
+      bufferViews: q.views,
+      accessors: [
+        // min / max in the component type (raw integers), as gltfpack writes them.
+        {
+          bufferView: 0,
+          componentType: 5122,
+          count,
+          type: 'VEC3',
+          min: [-500, -500, -500],
+          max: [500, 500, 500],
+        },
+        { bufferView: 1, componentType: 5120, normalized: true, count, type: 'VEC3' },
+        { bufferView: 2, componentType: 5123, normalized: true, count, type: 'VEC2' },
+        { bufferView: 3, componentType: 5122, normalized: true, count, type: 'VEC4' },
+      ],
+      meshes: [
+        { primitives: [{ attributes: { POSITION: 0, NORMAL: 1, TEXCOORD_0: 2, TANGENT: 3 } }] },
+      ],
+      nodes: [{ mesh: 0, translation: [2, 0, 0], scale: [0.001, 0.001, 0.001] }],
+    };
+    const a = parseGltf({ json: floatJson, buffers: [plain.bin] });
+    const b = parseGltf({ json: quantJson, buffers: [q.bin] });
+    expect(b.warnings).toEqual([]);
+    const pa = a.meshes[0]!.primitives[0]!;
+    const pb = b.meshes[0]!.primitives[0]!;
+    const wa = transformPoints(a.nodes[0]!.world, pa.position);
+    const wb = transformPoints(b.nodes[0]!.world, pb.position);
+    expect(wb).toHaveLength(wa.length);
+    wa.forEach((x, i) => {
+      expect(Math.abs(x - wb[i]!)).toBeLessThan(1e-4);
+    });
+    pa.normal.forEach((x, i) => {
+      expect(Math.abs(x - pb.normal[i]!)).toBeLessThan(1e-4);
+    });
+    pa.uv0!.forEach((x, i) => {
+      expect(Math.abs(x - pb.uv0![i]!)).toBeLessThan(1e-4);
+    });
+    pa.tangent!.forEach((x, i) => {
+      expect(Math.abs(x - pb.tangent![i]!)).toBeLessThan(1e-4);
+    });
+    // Bounds come from the decoded positions, not the raw-integer min / max.
+    expect(pb.bounds.radius).toBeCloseTo(a.meshes[0]!.primitives[0]!.bounds.radius * 1000, 1);
+    expect(b.bounds.radius).toBeCloseTo(a.bounds.radius, 4);
+  });
+
+  it('measures the bounds of normalized positions (their min / max are raw integers)', () => {
+    const p = packViews([
+      { bytes: new Int16Array([-32767, 0, 0, 0, 0, 32767, 0, 0, 0, 0, 32767, 0]), stride: 8 },
+    ]);
+    const doc = parseGltf({
+      json: {
+        asset: { version: '2.0' },
+        extensionsRequired: ['KHR_mesh_quantization'],
+        buffers: [{ byteLength: p.bin.byteLength }],
+        bufferViews: p.views,
+        accessors: [
+          {
+            bufferView: 0,
+            componentType: 5122,
+            normalized: true,
+            count: 3,
+            type: 'VEC3',
+            min: [-32767, 0, 0],
+            max: [0, 32767, 32767],
+          },
+        ],
+        meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
+        nodes: [{ mesh: 0 }],
+      },
+      buffers: [p.bin],
+    });
+    const b = doc.meshes[0]!.primitives[0]!.bounds;
+    expect(b.min).toEqual([-1, 0, 0]);
+    expect(b.max).toEqual([0, 1, 1]);
+  });
+
+  it('renormalises a quantized normal that is only near unit length', () => {
+    const p = packViews([
+      { bytes: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]) },
+      { bytes: new Int8Array([90, 90, 0, 0, 0, 90, 90, 0, 0, 0, 127, 0]), stride: 4 },
+    ]);
+    const doc = parseGltf({
+      json: {
+        asset: { version: '2.0' },
+        buffers: [{ byteLength: p.bin.byteLength }],
+        bufferViews: p.views,
+        accessors: [
+          { bufferView: 0, componentType: 5126, count: 3, type: 'VEC3' },
+          { bufferView: 1, componentType: 5120, normalized: true, count: 3, type: 'VEC3' },
+        ],
+        meshes: [{ primitives: [{ attributes: { POSITION: 0, NORMAL: 1 } }] }],
+        nodes: [{ mesh: 0 }],
+      },
+      buffers: [p.bin],
+    });
+    const n = doc.meshes[0]!.primitives[0]!.normal;
+    for (let i = 0; i < 9; i += 3)
+      expect(Math.hypot(n[i]!, n[i + 1]!, n[i + 2]!)).toBeCloseTo(1, 6);
+    expect(n[0]).toBeCloseTo(Math.SQRT1_2, 6);
+  });
+});
+
+describe('KHR_lights_punctual and cameras', () => {
+  const half = Math.SQRT1_2;
+  const json = (): GltfJson => ({
+    asset: { version: '2.0' },
+    extensionsUsed: ['KHR_lights_punctual'],
+    extensions: {
+      KHR_lights_punctual: {
+        lights: [
+          {
+            name: 'lamp',
+            type: 'spot',
+            color: [1, 0.5, 0.25],
+            intensity: 40,
+            range: 12,
+            spot: { innerConeAngle: 0.2, outerConeAngle: 0.6 },
+          },
+          { type: 'directional' },
+          { type: 'point', intensity: 3 },
+        ],
+      },
+    },
+    cameras: [
+      {
+        name: 'eye',
+        type: 'perspective',
+        perspective: { yfov: 0.8, aspectRatio: 1.5, znear: 0.1, zfar: 200 },
+      },
+      { type: 'orthographic', orthographic: { xmag: 4, ymag: 3, znear: 0.5, zfar: 50 } },
+      { type: 'perspective', perspective: { yfov: 1, znear: 0.01 } },
+    ],
+    nodes: [
+      // Rotated -90° about X: a child's local -Z (forward) points down world -Y, +Z up +Y.
+      { children: [1, 2], translation: [0, 10, 0], rotation: [-half, 0, 0, half] },
+      { extensions: { KHR_lights_punctual: { light: 0 } }, translation: [1, 0, 0] },
+      { camera: 0, translation: [0, 0, 5], scale: [2, 2, 2] },
+      { camera: 1, extensions: { KHR_lights_punctual: { light: 1 } } },
+      { camera: 2, extensions: { KHR_lights_punctual: { light: 2 } }, translation: [3, 4, 5] },
+    ],
+    scenes: [{ nodes: [0, 3, 4] }],
+  });
+
+  it('places a node-attached spot light in world space, cone intact', () => {
+    const doc = parseGltf({ json: json() });
+    expect(doc.warnings).toEqual([]);
+    expect(doc.lights.map((l) => l.type)).toEqual(['spot', 'directional', 'point']);
+    const spot = doc.lights[0]!;
+    expect(spot.name).toBe('lamp');
+    expect(spot.node).toBe(1);
+    expect(spot.color).toEqual([1, 0.5, 0.25]);
+    expect(spot.intensity).toBe(40);
+    expect(spot.range).toBe(12);
+    expect(spot.innerConeAngle).toBeCloseTo(0.2, 6);
+    expect(spot.outerConeAngle).toBeCloseTo(0.6, 6);
+    spot.position.forEach((x, i) => {
+      expect(x).toBeCloseTo([1, 10, 0][i]!, 5);
+    });
+    spot.direction.forEach((x, i) => {
+      expect(x).toBeCloseTo([0, -1, 0][i]!, 5);
+    });
+    const dir = doc.lights[1]!;
+    expect(dir.color).toEqual([1, 1, 1]);
+    expect(dir.intensity).toBe(1);
+    expect(dir.range).toBeUndefined();
+    expect(dir.innerConeAngle).toBeUndefined();
+    dir.direction.forEach((x, i) => {
+      expect(x).toBeCloseTo([0, 0, -1][i]!, 6);
+    });
+    expect(doc.lights[2]!.position).toEqual([3, 4, 5]);
+  });
+
+  it('round-trips perspective yfov, aspect, znear, zfar and orthographic extents', () => {
+    const doc = parseGltf({ json: json() });
+    expect(doc.cameras).toHaveLength(3);
+    const p = doc.cameras[0]!;
+    expect(p).toMatchObject({ name: 'eye', node: 2, camera: 0, type: 'perspective' });
+    expect(p.yfov).toBeCloseTo(0.8, 6);
+    expect(p.aspectRatio).toBeCloseTo(1.5, 6);
+    expect(p.znear).toBeCloseTo(0.1, 6);
+    expect(p.zfar).toBe(200);
+    // The child's +Z offset of 5 is world +Y after the parent's rotation.
+    p.position.forEach((x, i) => {
+      expect(x).toBeCloseTo([0, 15, 0][i]!, 5);
+    });
+    // The view takes the camera to the origin and its forward (world -Y) to view -Z, unscaled.
+    const v = p.view;
+    const at = (x: number, y: number, z: number) =>
+      [0, 1, 2].map((r) => v[r]! * x + v[4 + r]! * y + v[8 + r]! * z + v[12 + r]!);
+    for (const x of at(0, 15, 0)) expect(x).toBeCloseTo(0, 5);
+    at(0, 14, 0).forEach((x, i) => {
+      expect(x).toBeCloseTo([0, 0, -1][i]!, 5);
+    });
+    const o = doc.cameras[1]!;
+    expect(o).toMatchObject({ type: 'orthographic', xmag: 4, ymag: 3, znear: 0.5, zfar: 50 });
+    const inf = doc.cameras[2]!;
+    expect(inf.aspectRatio).toBeNull();
+    expect(inf.zfar).toBeNull();
+  });
+
+  it('rejects dangling light and camera indices and bad cones', () => {
+    const j = json();
+    j.nodes![1]!.extensions = { KHR_lights_punctual: { light: 7 } };
+    expect(() => parseGltf({ json: j })).toThrow(/node 1 names light 7/);
+    const k = json();
+    k.nodes![2]!.camera = 9;
+    expect(() => parseGltf({ json: k })).toThrow(/node 2 names camera 9/);
+    const s = json();
+    s.extensions!.KHR_lights_punctual!.lights![0]!.spot = {
+      innerConeAngle: 0.7,
+      outerConeAngle: 0.6,
+    };
+    expect(() => parseGltf({ json: s })).toThrow(/light 0: cone angles/);
+  });
+});
+
+describe('KHR_materials_variants', () => {
+  it('reads variant names and per-primitive mappings', () => {
+    const p = packViews([{ bytes: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]) }]);
+    const doc = parseGltf({
+      json: {
+        asset: { version: '2.0' },
+        extensionsUsed: ['KHR_materials_variants'],
+        extensions: {
+          KHR_materials_variants: { variants: [{ name: 'red' }, { name: 'blue' }, {}] },
+        },
+        buffers: [{ byteLength: p.bin.byteLength }],
+        bufferViews: p.views,
+        accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: 'VEC3' }],
+        materials: [{ name: 'base' }, { name: 'r' }, { name: 'b' }],
+        meshes: [
+          {
+            primitives: [
+              {
+                attributes: { POSITION: 0 },
+                material: 0,
+                extensions: {
+                  KHR_materials_variants: {
+                    mappings: [
+                      { material: 1, variants: [0] },
+                      { material: 2, variants: [1, 2] },
+                    ],
+                  },
+                },
+              },
+            ],
+          },
+        ],
+        nodes: [{ mesh: 0 }],
+      },
+      buffers: [p.bin],
+    });
+    expect(doc.warnings).toEqual([]);
+    expect(doc.variants).toEqual(['red', 'blue', 'variant2']);
+    expect(doc.meshes[0]!.primitives[0]!.variants).toEqual([
+      { material: 1, variants: [0] },
+      { material: 2, variants: [1, 2] },
+    ]);
+  });
+
+  it('rejects a mapping to a variant or material that does not exist', () => {
+    const base = (mapping: { material: number; variants: number[] }): GltfJson => ({
+      asset: { version: '2.0' },
+      extensions: { KHR_materials_variants: { variants: [{ name: 'a' }] } },
+      buffers: [{ byteLength: 36 }],
+      bufferViews: [{ buffer: 0, byteLength: 36 }],
+      accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: 'VEC3' }],
+      materials: [{}],
+      meshes: [
+        {
+          primitives: [
+            {
+              attributes: { POSITION: 0 },
+              extensions: { KHR_materials_variants: { mappings: [mapping] } },
+            },
+          ],
+        },
+      ],
+    });
+    const bin = new ArrayBuffer(36);
+    expect(() => parseGltf({ json: base({ material: 0, variants: [3] }), buffers: [bin] })).toThrow(
+      /variant 3 does not exist/,
+    );
+    expect(() => parseGltf({ json: base({ material: 4, variants: [0] }), buffers: [bin] })).toThrow(
+      /material 4/,
+    );
+  });
+});
+
+describe('KHR_materials_* records and unsupportedExtensions', () => {
+  it('parses the six material extensions with defaults and reports each once', () => {
+    const p = packViews([{ bytes: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]) }]);
+    const used = [
+      'KHR_materials_clearcoat',
+      'KHR_materials_sheen',
+      'KHR_materials_transmission',
+      'KHR_materials_volume',
+      'KHR_materials_ior',
+      'KHR_materials_specular',
+      'KHR_texture_basisu',
+    ];
+    const doc = parseGltf({
+      json: {
+        asset: { version: '2.0' },
+        extensionsUsed: used,
+        extensionsRequired: ['KHR_materials_ior'],
+        buffers: [{ byteLength: p.bin.byteLength }],
+        bufferViews: p.views,
+        accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: 'VEC3' }],
+        images: [{ uri: 'a.png' }, { uri: 'a.ktx2', mimeType: 'image/ktx2' }],
+        textures: [{ source: 0, extensions: { KHR_texture_basisu: { source: 1 } } }],
+        materials: [
+          {
+            extensions: {
+              KHR_materials_clearcoat: { clearcoatFactor: 0.5, clearcoatTexture: { index: 0 } },
+              KHR_materials_sheen: { sheenColorFactor: [0.1, 0.2, 0.3] },
+              KHR_materials_transmission: { transmissionFactor: 0.9 },
+              KHR_materials_volume: { thicknessFactor: 2 },
+              KHR_materials_ior: {},
+              KHR_materials_specular: { specularColorFactor: [0.5, 0.5, 0.5] },
+            },
+          },
+          {},
+        ],
+        // Two primitives share the material: still reported once.
+        meshes: [
+          {
+            primitives: [
+              { attributes: { POSITION: 0 }, material: 0 },
+              { attributes: { POSITION: 0 }, material: 0 },
+            ],
+          },
+        ],
+        nodes: [{ mesh: 0 }],
+      },
+      buffers: [p.bin],
+    });
+    expect(doc.warnings).toEqual([]);
+    expect(doc.unsupportedExtensions).toEqual(used);
+    const x = doc.materials[0]!.extensions;
+    expect(x.clearcoat).toEqual({
+      clearcoatFactor: 0.5,
+      clearcoatTexture: { index: 0, texCoord: 0, transform: null },
+      clearcoatRoughnessFactor: 0,
+      clearcoatRoughnessTexture: null,
+      clearcoatNormalTexture: null,
+    });
+    expect(x.sheen!.sheenColorFactor).toEqual([0.1, 0.2, 0.3]);
+    expect(x.transmission!.transmissionFactor).toBe(0.9);
+    expect(x.volume).toEqual({
+      thicknessFactor: 2,
+      thicknessTexture: null,
+      attenuationDistance: Infinity,
+      attenuationColor: [1, 1, 1],
+    });
+    expect(x.ior).toEqual({ ior: 1.5 });
+    expect(x.specular!.specularFactor).toBe(1);
+    expect(doc.materials[1]!.extensions.clearcoat).toBeNull();
+    expect(doc.textures[0]!.basisuSource).toBe(1);
+    expect(doc.textures[0]!.source).toBe(0);
+  });
+
+  it('still throws for an unhandled required extension', () => {
+    expect(() =>
+      parseGltf({
+        json: { asset: { version: '2.0' }, extensionsRequired: ['KHR_materials_ior', 'EXT_foo'] },
+      }),
+    ).toThrow(/required extensions not supported: EXT_foo$/);
   });
 });

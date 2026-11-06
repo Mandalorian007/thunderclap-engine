@@ -1,7 +1,8 @@
 # engine/assets
 
-Asset formats the engine turns into its own objects. Today: glTF 2.0 geometry, skins and
-animations. No dependencies, no network: the game fetches the bytes, the engine parses and
+Asset formats the engine turns into its own objects. Today: glTF 2.0 geometry, skins,
+animations, lights, cameras and material variants (quantized and meshopt-compressed meshes
+included), KTX2 containers, and a reference-counted asset cache. No dependencies, no network: the game fetches the bytes, the engine parses and
 uploads them.
 
 ## glTF in one call
@@ -64,8 +65,11 @@ palette).
 `GltfDocument` is plain data, usable without a GPU (a Worker can parse and post it):
 
 - `version`, `scene` (root node indices), `sceneNodes` (every node in the scene, parents first),
-  `warnings` (`extension ignored: X` for each `extensionsUsed`), `externalUris`, `bounds`
-  (`GltfBounds`: `min`, `max`, `center`, `radius`, in world space).
+  `warnings` (`extension ignored: X` for each `extensionsUsed` the parser does not read),
+  `unsupportedExtensions` (read into the document, not rendered yet: *Materials*),
+  `externalUris`, `bounds` (`GltfBounds`: `min`, `max`, `center`, `radius`, in world space).
+- `lights: GltfLight[]`, `cameras: GltfCamera[]` and `variants: string[]`: see *Lights and
+  cameras* and *Material variants (cosmetics)*.
 - `nodes: GltfNode[]`: `name`, `parent`, `children`, `mesh`, `skin`, `translation`, `rotation`,
   `scale` (`Vec3`/`Vec4`; a `matrix` node is decomposed), `local` and `world` as the engine's 3×4
   row-major `Float32Array` (`composeTrs(t, q, s, out)` builds one the way `Transform` does).
@@ -97,7 +101,8 @@ The JSON shapes the parser reads are exported for writers and tests: `GltfJson`,
 `GltfJsonAccessor`, `GltfJsonSparse`, `GltfJsonBufferView`, `GltfJsonMesh`, `GltfJsonPrimitive`,
 `GltfJsonNode`, `GltfJsonMaterial`, `GltfJsonTextureInfo`, `GltfJsonTextureTransform`, `GltfJsonSkin`, `GltfJsonAnimation`,
 `GltfJsonAnimationChannel`, `GltfJsonAnimationSampler`, `GltfJsonInterpolation`,
-`GltfJsonSource`.
+`GltfJsonSource`, and for the extensions below `GltfJsonMeshoptView`, `GltfJsonLight`,
+`GltfJsonCamera` and `GltfJsonVariantMapping`.
 
 ## Materials
 
@@ -149,9 +154,17 @@ specification says, and the engine's material has the same slots.
 - **Skinned.** With `opts.palette`, a skinned primitive is built in `VERTEX_LAYOUT_SKINNED` and
   its material takes `skin: palette`: see *Skins and animations*. A skinned primitive's
   `TANGENT` is dropped (the skinned layout has no tangent slot).
-- `extensionsUsed` is tolerated: the two extensions above are handled, every other one is listed
-  in `doc.warnings` as `extension ignored: X`; `extensionsRequired` throws for anything but
-  those two.
+- **Parsed, not rendered.** `KHR_materials_clearcoat`, `_sheen`, `_transmission`, `_volume`,
+  `_ior` and `_specular` are read into `GltfMaterial.extensions` (`GltfMaterialExtensions`:
+  `clearcoat: GltfClearcoat`, `sheen: GltfSheen`, `transmission: GltfTransmission`, `volume:
+  GltfVolume`, `ior: GltfIor`, `specular: GltfSpecular`, each null when absent, spec defaults
+  filled) for a custom material; the standard material does not draw them yet. Each one used is
+  listed once in `doc.unsupportedExtensions`, as is `KHR_texture_basisu` (*KTX2*).
+- `extensionsUsed` is tolerated. Handled: `KHR_texture_transform`,
+  `KHR_materials_emissive_strength`, `KHR_mesh_quantization`, `EXT_meshopt_compression`,
+  `KHR_lights_punctual`, `KHR_materials_variants`; parsed into the document: the six above and
+  `KHR_texture_basisu`. Every other one is listed in `doc.warnings` as `extension ignored: X`;
+  `extensionsRequired` throws for anything outside those thirteen.
 
 ## Morph targets
 
@@ -221,6 +234,98 @@ so the game's frame is `sampleClip` → `poseToWorld` → `skinMatrices` → `pa
 instance). Without a palette the primitive is built in `VERTEX_LAYOUT_3D` and the joints and
 weights stay on the document; a material cannot take a palette later (`setBuffer` needs a slot
 declared at creation), so pass it to `loadGltf`.
+
+## Quantized meshes
+
+`KHR_mesh_quantization` needs nothing from the game: `POSITION`, `NORMAL`, `TANGENT` and
+`TEXCOORD_n` may be `BYTE` / `SHORT` (normalized or not) and are dequantized to floats at parse
+time; the node's transform carries the file's scale and offset as usual. Normals and tangents
+read from integers are renormalized. A normalized position accessor's `min` / `max` hold raw
+integers, so the parser measures such a primitive's bounds instead of trusting them.
+
+## Meshopt
+
+`EXT_meshopt_compression` buffer views are decoded in `parseGltf` (sync, no WASM) before
+anything reads them, so the rest of the document is the uncompressed one. A fallback buffer
+(`extensions.EXT_meshopt_compression.fallback`) may have no data. The decoder is public for
+other containers:
+
+```ts
+decodeMeshopt(target: Uint8Array, count: number, stride: number, source: Uint8Array,
+  mode: MeshoptMode, filter?: MeshoptFilter): void
+```
+
+`MeshoptMode` is `'ATTRIBUTES' | 'TRIANGLES' | 'INDICES'` (vertex codec v0, index codecs v0 and
+v1), `MeshoptFilter` is `'NONE' | 'OCTAHEDRAL' | 'QUATERNION' | 'EXPONENTIAL'`. A bad stream
+throws `MeshoptError`. The triangle codec keeps every triangle and its winding but may start it at
+another corner.
+
+## Lights and cameras
+
+`doc.lights: GltfLight[]` holds each `KHR_lights_punctual` light placed by a node of the default
+scene, in glTF units (`type`, `color`, `intensity`, `range`, cone angles, world `position` and
+`direction`, the node's -Z). `loadGltf` converts them to the render module's records on
+`scene.lights: GltfSceneLights` (`directional`, `points`, `spots`): `color` is `color ×
+intensity × lightScale` (`LoadGltfOptions.lightScale`, default 1), `radius` is `range` or
+`16·√(intensity × lightScale)`. The game decides what to light with:
+
+```ts
+lights.points.push(...scene.lights.points);
+lights.spots.push(...scene.lights.spots);
+const sun = scene.lights.directional[0];
+if (sun) { lights.sun.dir = sun.dir; lights.sun.color = sun.color; } // lights: the game's Lights
+```
+
+`doc.cameras: GltfCamera[]` (perspective `yfov` / `aspectRatio` / `znear` / `zfar`, orthographic
+`xmag` / `ymag`, plus the node's `world` and the `view` matrix) are passed through as
+`scene.cameras`. `applyGltfCamera(camera, c, aspect): Camera` sets an engine `Camera` to one
+(projection and view, no allocation).
+
+## Material variants (cosmetics)
+
+`KHR_materials_variants` is the cosmetic path: one mesh, several looks, no new materials at
+switch time. `doc.variants` holds the names, each primitive's `variants: GltfVariantMapping[]`
+the mappings (`{ material, variants }`). `loadGltf` builds every mapped material up front:
+
+```ts
+const scene = await loadGltf(renderer, parseGltf(bytes));
+scene.setVariant('moss');   // every mapped draw swaps material in place
+scene.setVariant(null);     // back to each primitive's own material
+```
+
+`scene.variants` lists the names, `scene.variant` is the active one, and each `GltfSceneNode`'s
+`materialIndex` follows the switch. An unknown name throws `GltfError` listing the file's
+variants.
+
+## KTX2
+
+`parseKtx2(bytes: Uint8Array): Ktx2Texture` reads a KTX2 container: `vkFormat`, size, layers,
+faces, `levels: Ktx2Level[]` (`bytes`, `width`, `height`, views into the file, largest first),
+`dataFormat: Ktx2DataFormat` (colour model, primaries, transfer) and `supercompression:
+Ktx2Supercompression` (`'none' | 'basislz' | 'zstd' | 'zlib'`; levels are empty unless
+`'none'`). `isKtx2(bytes)` checks the identifier; a bad file throws `Ktx2Error`.
+`ktx2ToWebGpuFormat(vkFormat)` names the `GPUTextureFormat` (BC, ETC2, ASTC, plain) or null.
+`KHR_texture_basisu` textures parse with `GltfTexture.basisuSource` (the KTX2 image) and load
+the file's PNG / JPEG fallback. Uploading a KTX2 file waits on the render module: a
+compressed-format `createTexture` with per-level `writeTexture`, behind the device features
+`texture-compression-bc` / `-etc2` / `-astc` (ws/render-5).
+
+## Asset cache
+
+`createAssetCache<T>(opts: AssetCacheOptions<T>): AssetCache<T>` keeps loaded assets by key under
+a byte budget (`budgetBytes`), least recently used first out:
+
+```ts
+const cache = createAssetCache<GltfScene>({ budgetBytes: 64 << 20, onEvict: (_k, s) => s.destroy() });
+const scene = await cache.acquire('rock.glb', async () => loadGltf(renderer, parseGltf(await read('rock.glb'))), () => bytes);
+cache.release('rock.glb'); // evictable once nothing holds it
+```
+
+`acquire(key, load, size)` returns the cached value or runs `load` once, however many callers ask
+at the same time; every call holds a reference until `release(key)`. Held and `pin(key)`-ned
+entries are never evicted (`unpin` undoes it). `has`, `refs`, `dispose(key)` (free an
+unreferenced entry now) and `stats(): AssetCacheStats` (`bytes`, `entries`, `hits`, `misses`,
+`evictions`) complete it. `onEvict` is the free hook; a failed load leaves nothing behind.
 
 ## Bundles
 
@@ -333,11 +438,12 @@ manifest entry does all of this from the uris; draw a sprite from it with
 
 ## Not yet
 
-Cameras, lights, `KHR_*` extensions beyond `KHR_texture_transform` and
-`KHR_materials_emissive_strength` (the rest of `KHR_materials_*`, Draco, meshopt), `occlusionStrength`,
-a second texture coordinate set or transform per material, morph targets on the GPU (the blend is
-CPU-side; a mesh with many targets and many vertices pays for it every frame its weights change),
-`TANGENT` and texture-coordinate morph deltas. `extensionsUsed` is tolerated and warned about;
+Draco (`KHR_draco_mesh_compression`); KTX2 upload and Basis transcoding (the container parses,
+the render module cannot upload a compressed texture yet, and BasisLZ / UASTC need a
+transcoder); drawing the parsed `KHR_materials_*` records; `occlusionStrength`; a second texture
+coordinate set or transform per material; morph targets on the GPU (the blend is CPU-side; a
+mesh with many targets and many vertices pays for it every frame its weights change), `TANGENT`
+and texture-coordinate morph deltas. Other `extensionsUsed` are warned about;
 `extensionsRequired` throws.
 
 ## Demo
@@ -355,6 +461,13 @@ no warnings, the strip glowing and a metal sphere shading unlike a matte one.
 `createBundle` (`?slow` delays reads, `?fail=one` fails one, `?cancel` cancels after the first
 asset) and draws the packed atlas as sprites; `e2e/assets.spec.ts` checks progress, the error
 path, cancel and a sprite's colour.
+
+`harness/gltf3.html` builds a GLB per mode: `?quant` a quantized cube beside its float twin
+(state `maxError`), `?meshopt` a meshopt rock checked against its uncompressed twin (`triangles`,
+`match`), `?lights` a scene lit only by its own lights through its own camera (`lights`),
+`?variants` a figure cycling three variants each second (`variant`, `materialId`; `?still` parks
+on one), `?cache` ten assets through a four-asset budget (`stats`); `e2e/gltf3.spec.ts` checks
+the state and probe pixels.
 
 `harness/morph.html` builds a `.gltf` sphere with two morph targets (squash, bulge) and a
 `weights` clip, samples it with `sampleWeights`, applies and draws; `e2e/morph.spec.ts` polls the
