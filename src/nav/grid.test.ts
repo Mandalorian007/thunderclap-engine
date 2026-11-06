@@ -108,3 +108,35 @@ describe('hasLineOfWalkable', () => {
     expect(hasLineOfWalkable(w, 0, 0, 4, 1)).toBe(false);
   });
 });
+
+describe('NavGridOptions.neighbours, edgeCost and index edits', () => {
+  it('defaults to 8 neighbours, takes 4 and rejects anything else', () => {
+    expect(createNavGrid({ width: 2, height: 2, cellSize: 1 }).neighbours).toBe(8);
+    expect(createNavGrid({ width: 2, height: 2, cellSize: 1, neighbours: 4 }).neighbours).toBe(4);
+    expect(() =>
+      createNavGrid({ width: 2, height: 2, cellSize: 1, neighbours: 6 as unknown as 4 }),
+    ).toThrow();
+  });
+
+  it('keeps the hook and edits by index, bumping version; touch bumps it alone', () => {
+    const hook = () => 0;
+    const g = createNavGrid({ width: 3, height: 2, cellSize: 1, edgeCost: hook });
+    expect(g.edgeCost).toBe(hook);
+    g.setCost(4, 2.5);
+    expect(g.costAt(1, 1)).toBe(2.5);
+    expect(g.version).toBe(1);
+    g.setCost(4, 2.5);
+    expect(g.version).toBe(1);
+    g.setWalkable(4, false);
+    expect(g.isWalkable(1, 1)).toBe(false);
+    expect(g.version).toBe(2);
+    g.setWalkable(4, true);
+    expect(g.costAt(1, 1)).toBe(1);
+    g.setWalkable(6, false);
+    g.setCost(-1, 3);
+    expect(g.version).toBe(3);
+    g.touch();
+    expect(g.version).toBe(4);
+    expect(g.costs).toEqual(new Float32Array([1, 1, 1, 1, 1, 1]));
+  });
+});

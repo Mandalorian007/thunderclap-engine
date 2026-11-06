@@ -7,19 +7,23 @@
  * - closing one gap cell reroutes through the other, closing both leaves no path, reopening
  *   restores the first route;
  * - a tap on the stage moves the goal to that cell;
- * - all 32 agents arrive within a bound of sim time, stepped synchronously at 1/60 s.
+ * - all 32 agents arrive within a bound of sim time, stepped synchronously at 1/60 s;
+ * - `?reach`: the cells `reachable` within a budget grow with the budget and shrink on the
+ *   4-neighbour grid, and a hovered cell's path comes from the reach's parents;
+ * - `?multi`: a flow field with three goals points every probe cell to its nearest goal, and a
+ *   toggled wall leaves it stale until the next step updates it in place.
  */
 import type { CDPSession, Frame, Page } from '@playwright/test';
-import type { HarnessNavState } from '../harness/nav-state';
+import type { HarnessNavApi, HarnessNavState } from '../harness/nav-state';
 import { expect, harnessFrame, test } from './fixtures';
 import { HARNESS_URL, WRAPPER_URL } from './ports';
 
 let frame: Frame;
 let touch = false;
 
-async function open(page: Page, wrapper: string): Promise<void> {
+async function open(page: Page, wrapper: string, query = ''): Promise<void> {
   touch = test.info().project.use.hasTouch === true;
-  const file = 'nav.html';
+  const file = `nav.html${query}`;
   if (wrapper === 'top') {
     await page.goto(`${HARNESS_URL}${file}`);
     frame = page.mainFrame();
@@ -156,4 +160,125 @@ test('all 32 agents flow to the goal within 15 s of sim time', async ({ page, wr
     // Past the wall.
     expect(a.x).toBeGreaterThan(21 * s.grid.cellSize);
   }
+});
+
+function call<K extends 'setBudget' | 'setNeighbours' | 'hover'>(
+  method: K,
+  ...args: Parameters<HarnessNavApi[K]>
+): Promise<void> {
+  return frame.evaluate(
+    ([m, a]) => {
+      const api = window.__harnessNav;
+      if (!api) throw new Error('window.__harnessNav missing');
+      (api[m] as (...x: number[]) => void)(...(a as number[]));
+    },
+    [method, args] as const,
+  );
+}
+
+function fieldAt(cx: number, cy: number): Promise<{ x: number; z: number; distance: number }> {
+  return frame.evaluate(
+    ([x, y]) => {
+      const api = window.__harnessNav;
+      if (!api) throw new Error('window.__harnessNav missing');
+      return api.fieldAt(x, y);
+    },
+    [cx, cy] as const,
+  );
+}
+
+/** Follows the field's arrows from a cell to the goal it reaches (or null after 200 steps). */
+async function follow(cx: number, cy: number): Promise<{ x: number; y: number } | null> {
+  let x = cx;
+  let y = cy;
+  let last = Infinity;
+  for (let i = 0; i < 200; i++) {
+    const f = await fieldAt(x, y);
+    if (f.distance === 0) return { x, y };
+    if (!(f.distance < last)) return null;
+    last = f.distance;
+    x += Math.sign(f.x);
+    y += Math.sign(f.z);
+  }
+  return null;
+}
+
+test('?reach: the reach grows with the budget and shrinks on the 4-neighbour grid', async ({
+  page,
+  wrapper,
+}) => {
+  await open(page, wrapper, '?reach');
+  const s0 = await read();
+  expect(s0.mode).toBe('reach');
+  expect(s0.grid).toEqual({ width: 32, height: 32, cellSize: 15 });
+  expect(s0.neighbours).toBe(8);
+  expect(s0.budget).toBe(8);
+  expect(s0.reachCount).toBeGreaterThan(50);
+  expect(s0.queryMs).toBeGreaterThanOrEqual(0);
+  // A bigger budget reaches more cells; the same budget on four neighbours reaches fewer.
+  await call('setBudget', 16);
+  await expect.poll(async () => (await read()).budget).toBe(16);
+  const s16 = await read();
+  expect(s16.reachCount).toBeGreaterThan(s0.reachCount);
+  await call('setNeighbours', 4);
+  await expect.poll(async () => (await read()).neighbours).toBe(4);
+  const s4 = await read();
+  expect(s4.reachCount).toBeLessThan(s16.reachCount);
+  expect(s4.reachCount).toBeGreaterThan(1);
+  await call('setNeighbours', 8);
+  await expect.poll(async () => (await read()).reachCount).toBe(s16.reachCount);
+  // A budget of zero is the start alone; its own path is the one point.
+  await call('setBudget', 0);
+  await expect.poll(async () => (await read()).reachCount).toBe(1);
+  await call('hover', s0.reachStart.x, s0.reachStart.y);
+  await expect.poll(async () => (await read()).hoverPathLength).toBe(1);
+  // Back at the default: a cell past the wall's gap has a path, one across the plateau does not.
+  await call('setBudget', 8);
+  await call('hover', 8, 15);
+  await expect.poll(async () => (await read()).hoverPathLength).toBeGreaterThanOrEqual(2);
+  await call('hover', 28, 2);
+  await expect.poll(async () => (await read()).hoverPathLength).toBe(0);
+});
+
+test('?multi: every probe cell points to its nearest goal; a wall leaves the field stale for one step', async ({
+  page,
+  wrapper,
+}) => {
+  await open(page, wrapper, '?multi');
+  const s0 = await read();
+  expect(s0.mode).toBe('multi');
+  expect(s0.goals).toHaveLength(3);
+  expect(s0.fieldStale).toBe(false);
+  expect(s0.agents).toHaveLength(0);
+  const w = s0.grid.width;
+  const goals = s0.goals.map((i) => ({ x: i % w, y: Math.floor(i / w) }));
+  expect(goals).toEqual([
+    { x: 5, y: 4 },
+    { x: 34, y: 6 },
+    { x: 18, y: 20 },
+  ]);
+  // West of the wall near the top: the goal at (5,4). East of it: the goal at (34,6).
+  const west = await fieldAt(2, 2);
+  expect(west.x).toBeGreaterThan(0);
+  expect(west.z).toBeGreaterThan(0);
+  expect(west.distance).toBeCloseTo(2 * Math.SQRT2 + 1, 3);
+  expect(await follow(2, 2)).toEqual({ x: 5, y: 4 });
+  const east = await fieldAt(37, 9);
+  expect(east.x).toBeLessThan(0);
+  expect(east.z).toBeLessThan(0);
+  expect(east.distance).toBeCloseTo(3 * Math.SQRT2, 3);
+  expect(await follow(37, 9)).toEqual({ x: 34, y: 6 });
+  // South of the top-left goal and nearer the bottom one, the arrows run to the bottom goal.
+  expect(await follow(14, 22)).toEqual({ x: 18, y: 20 });
+  // A toggled wall marks the field stale; the next step updates it in place.
+  await toggleWall(3, 3);
+  await expect.poll(async () => (await read()).gridVersion).toBe(s0.gridVersion + 1);
+  await advance(1);
+  await expect.poll(async () => (await read()).fieldStale).toBe(false);
+  const s1 = await read();
+  expect(s1.builds).toBe(s0.builds + 1);
+  expect(s1.walls).toBe(s0.walls + 1);
+  const detour = await fieldAt(2, 2);
+  expect(detour.distance).toBeGreaterThan(west.distance);
+  expect(await follow(2, 2)).toEqual({ x: 5, y: 4 });
 });

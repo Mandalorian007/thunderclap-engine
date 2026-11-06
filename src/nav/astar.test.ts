@@ -224,3 +224,180 @@ describe('smoothPath', () => {
     expect(smoothPath(g, p).length).toBe(2);
   });
 });
+
+describe('findPath with edge costs', () => {
+  it('goes around a climb when the penalty beats the detour', () => {
+    // A ridge: column 2 sits one level up; crossing it costs the climb both ways.
+    const level = (i: number) => (i % 5 === 2 ? 1 : 0);
+    const g = createNavGrid({
+      width: 5,
+      height: 3,
+      cellSize: 1,
+      neighbours: 4,
+      edgeCost: (from, to) => Math.abs(level(to) - level(from)) * 10,
+    });
+    const p = createNavPath();
+    expect(findPath(g, { x: 0, y: 1 }, { x: 4, y: 1 }, p)).toBe(true);
+    // No way round: the ridge spans every row, so the path pays the climb: 4 steps.
+    expect(p.length).toBe(5);
+    // Open a gap in the ridge at row 0 (level 0 there): the path detours through it.
+    const lv = (i: number) => (i % 5 === 2 && i >= 5 ? 1 : 0);
+    const ridge = createNavGrid({
+      width: 5,
+      height: 3,
+      cellSize: 1,
+      neighbours: 4,
+      edgeCost: (from, to) => Math.abs(lv(to) - lv(from)) * 10,
+    });
+    expect(findPath(ridge, { x: 0, y: 1 }, { x: 4, y: 1 }, p)).toBe(true);
+    expect(p.length).toBe(7);
+    expect(cells(ridge, p)).toContainEqual([2, 0]);
+    expect(cells(ridge, p)).not.toContainEqual([2, 1]);
+  });
+
+  it('blocks an edge one way only with Infinity', () => {
+    // A ledge between (1,0) and (2,0): dropping east is free, climbing west is impossible.
+    const g = createNavGrid({
+      width: 4,
+      height: 1,
+      cellSize: 1,
+      edgeCost: (from, to) => (from === 2 && to === 1 ? Infinity : 0),
+    });
+    const p = createNavPath();
+    expect(findPath(g, { x: 0, y: 0 }, { x: 3, y: 0 }, p)).toBe(true);
+    expect(p.length).toBe(4);
+    expect(findPath(g, { x: 3, y: 0 }, { x: 0, y: 0 }, p)).toBe(false);
+    expect(p.length).toBe(0);
+  });
+
+  it('adds the hook to the weighted step and clamps a negative hook to zero', () => {
+    const g = createNavGrid({
+      width: 3,
+      height: 1,
+      cellSize: 1,
+      cost: (x) => (x === 1 ? 2 : 1),
+      edgeCost: (_from, to) => (to === 1 ? 0.5 : -5),
+    });
+    const p = createNavPath();
+    expect(findPath(g, { x: 0, y: 0 }, { x: 2, y: 0 }, p)).toBe(true);
+    expect(p.length).toBe(3);
+    expect(findPath(g, { x: 0, y: 0 }, { x: 2, y: 0 }, p, { maxCost: 3.4 })).toBe(false);
+    expect(findPath(g, { x: 0, y: 0 }, { x: 2, y: 0 }, p, { maxCost: 3.5 })).toBe(true);
+  });
+});
+
+describe('findPath and smoothPath on a 4-neighbour grid', () => {
+  // A corridor two cells wide with a jog: 8 neighbours cut the corners, 4 cannot.
+  const make = (neighbours: 4 | 8) =>
+    createNavGrid({
+      width: 8,
+      height: 4,
+      cellSize: 1,
+      neighbours,
+      walkable: (x, y) => (x < 4 ? y < 2 : y >= 2),
+    });
+
+  it('gives different lengths for 4 and 8 neighbours on the same corridor', () => {
+    const p = createNavPath();
+    const g8 = make(8);
+    expect(findPath(g8, { x: 0, y: 0 }, { x: 7, y: 3 }, p)).toBe(false);
+    // Join the halves with a cell at the jog.
+    g8.setWalkable(4, 1, true);
+    expect(findPath(g8, { x: 0, y: 0 }, { x: 7, y: 3 }, p)).toBe(true);
+    const eight = pathDistance(p);
+    expectConnected(g8, p);
+    const g4 = make(4);
+    g4.setWalkable(4, 1, true);
+    expect(findPath(g4, { x: 0, y: 0 }, { x: 7, y: 3 }, p)).toBe(true);
+    expectConnected(g4, p, false);
+    expect(pathDistance(p)).toBe(10);
+    expect(eight).toBeLessThan(10);
+    // `diagonal` overrides the grid either way.
+    expect(findPath(g4, { x: 0, y: 0 }, { x: 7, y: 3 }, p, { diagonal: true })).toBe(true);
+    expect(pathDistance(p)).toBeCloseTo(eight, 6);
+    expect(findPath(g8, { x: 0, y: 0 }, { x: 7, y: 3 }, p, { diagonal: false })).toBe(true);
+    expect(pathDistance(p)).toBe(10);
+  });
+
+  it('smoothPath keeps every corner in 4 mode: no diagonal legs', () => {
+    const g4 = make(4);
+    g4.setWalkable(4, 1, true);
+    const p = createNavPath();
+    findPath(g4, { x: 0, y: 0 }, { x: 7, y: 3 }, p);
+    const before = pathDistance(p);
+    p.cursor = 2;
+    smoothPath(g4, p);
+    expect(p.cursor).toBe(0);
+    expect(pathDistance(p)).toBe(before);
+    const cs = cells(g4, p);
+    expect(cs[0]).toEqual([0, 0]);
+    expect(cs[cs.length - 1]).toEqual([7, 3]);
+    for (let i = 1; i < cs.length; i++) {
+      // Each leg is along a row or a column, and the kept points are the bends only.
+      expect(cs[i]![0] === cs[i - 1]![0] || cs[i]![1] === cs[i - 1]![1]).toBe(true);
+    }
+    expect(p.length).toBeLessThan(11);
+    expect(p.length).toBeGreaterThanOrEqual(4);
+    // An open 4-grid row collapses to its two ends.
+    const open4 = createNavGrid({ width: 6, height: 1, cellSize: 1, neighbours: 4 });
+    findPath(open4, { x: 0, y: 0 }, { x: 5, y: 0 }, p);
+    expect(smoothPath(open4, p).length).toBe(2);
+  });
+});
+
+describe('findPath options maxCost and heuristicWeight', () => {
+  it('gives up on a cost cap without exploring the whole grid', () => {
+    const g = createNavGrid({ width: 50, height: 50, cellSize: 1, neighbours: 4 });
+    const p = createNavPath();
+    expect(findPath(g, { x: 0, y: 0 }, { x: 49, y: 49 }, p, { maxCost: 97 })).toBe(false);
+    expect(p.length).toBe(0);
+    expect(findPath(g, { x: 0, y: 0 }, { x: 49, y: 49 }, p, { maxCost: 98 })).toBe(true);
+    expect(p.length).toBe(99);
+    // A cap of 4 opens at most the cells within 4 steps (41), so a `maxExpand` of 60 is never
+    // hit: the false comes from the cap. Without the cap the same `maxExpand` gives up.
+    const far = { x: 49, y: 49 };
+    expect(findPath(g, { x: 25, y: 25 }, far, p, { maxCost: 4, maxExpand: 60 })).toBe(false);
+    expect(findPath(g, { x: 25, y: 25 }, far, p, { maxExpand: 60 })).toBe(false);
+    expect(findPath(g, { x: 25, y: 25 }, { x: 27, y: 27 }, p, { maxCost: 4 })).toBe(true);
+    expect(findPath(g, { x: 25, y: 25 }, { x: 27, y: 27 }, p, { maxCost: 3 })).toBe(false);
+    // Cell costs count towards the cap.
+    const mud = createNavGrid({ width: 4, height: 1, cellSize: 1, cost: () => 3 });
+    expect(findPath(mud, { x: 0, y: 0 }, { x: 3, y: 0 }, p, { maxCost: 8 })).toBe(false);
+    expect(findPath(mud, { x: 0, y: 0 }, { x: 3, y: 0 }, p, { maxCost: 9 })).toBe(true);
+  });
+
+  it('a weighted heuristic expands fewer cells for the same route, and 0 is Dijkstra', () => {
+    // A wall with one gap: exact A* must spread wide; weighted A* dives for the gap.
+    const g = createNavGrid({
+      width: 60,
+      height: 30,
+      cellSize: 1,
+      walkable: (x, y) => x !== 30 || y === 0,
+    });
+    const p = createNavPath();
+    const from = { x: 5, y: 29 };
+    const to = { x: 55, y: 29 };
+    expect(findPath(g, from, to, p)).toBe(true);
+    const exact = pathDistance(p);
+    // The smallest `maxExpand` that finds the path measures the cells expanded.
+    const expanded = (heuristicWeight: number): number => {
+      let lo = 1;
+      let hi = g.size;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (findPath(g, from, to, p, { maxExpand: mid, heuristicWeight })) hi = mid;
+        else lo = mid + 1;
+      }
+      return lo;
+    };
+    const w1 = expanded(1);
+    const w3 = expanded(3);
+    expect(w3).toBeLessThan(w1);
+    expect(findPath(g, from, to, p, { heuristicWeight: 3 })).toBe(true);
+    expect(pathDistance(p)).toBeLessThanOrEqual(exact * 3 + 1e-9);
+    expect(pathDistance(p)).toBeGreaterThanOrEqual(exact - 1e-9);
+    expect(findPath(g, from, to, p, { heuristicWeight: 0 })).toBe(true);
+    expect(pathDistance(p)).toBeCloseTo(exact, 6);
+    expect(expanded(0)).toBeGreaterThanOrEqual(w1);
+  });
+});

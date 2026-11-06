@@ -53,27 +53,54 @@ for (const a of agents) {
 ## Grid
 
 - `createNavGrid(opts: NavGridOptions): NavGrid` – `width`, `height`, `cellSize`, optional
-  `origin: NavPoint` (world XZ of the grid's corner; default 0,0), `walkable(x, y)` and
-  `cost(x, y)`. Throws on an empty grid or a non-positive cell size.
+  `origin: NavPoint` (world XZ of the grid's corner; default 0,0), `walkable(x, y)`, `cost(x, y)`,
+  `edgeCost` (below) and `neighbours: 4 | 8` (below). Throws on an empty grid, a non-positive
+  cell size or another neighbour count.
 - `NavGrid` – `width`, `height`, `cellSize`, `origin`, `size`, `costs: Float32Array` (row-major
-  cost multiplier, 0 = unwalkable; read it in hot loops) and `version`, which increments on every
-  `setWalkable(x, y, w)` or `setCost(x, y, c)` that changes a cell, so a `NavPath` or `FlowField`
-  whose `version` differs is stale. `isWalkable`, `costAt`, `inBounds`, `index`,
-  `toCell(worldX, worldZ, out)` (clamped into the grid) and `toWorld(cx, cy, out)` (cell centre).
+  cost multiplier, 0 = unwalkable; read it in hot loops), `edgeCost`, `neighbours` and `version`,
+  which increments on every `setWalkable(x, y, w)` or `setCost(x, y, c)` that changes a cell, so
+  a `NavPath`, `FlowField` or `Reach` whose `version` differs is stale. `isWalkable`, `costAt`,
+  `inBounds`, `index`, `toCell(worldX, worldZ, out)` (clamped into the grid) and
+  `toWorld(cx, cy, out)` (cell centre).
 - `Cell { x, y }` is a grid cell; `NavPoint { x, z }` is a world point on the XZ plane.
 - `hasLineOfWalkable(grid, x0, y0, x1, y1)` – true when the supercover line between two cells
   crosses only walkable cells and never squeezes between two diagonal walls; string pulling uses
   it, and it serves as a cheap line-of-sight test.
 
+## Edge costs
+
+`createNavGrid({ edgeCost })` takes an `EdgeCost` hook, `(fromIndex, toIndex, grid) => number`,
+called per step with the row-major indices of the two cells. Its value is added to the step's
+`(1 | √2) × cost(dest)`; `Infinity` (or `NaN`) blocks that step in that direction only, a value
+of zero or below adds nothing. A climb penalty is `elevation(to) - elevation(from)` when positive;
+a one-way ledge returns `Infinity` for the upward pair. `findPath`, `createFlowField` (whose
+goal-outward search asks the hook in the direction of travel, so the ledge is never pointed up)
+and `reachable` all honour it; without a hook every number is what it was. The hook reads state
+of its own, so after that state changes call `grid.touch()` to bump `version` and mark paths,
+fields and reaches stale.
+
+## Neighbourhood
+
+`createNavGrid({ neighbours: 4 })` makes a grid whose steps are orthogonal only (the default is
+8). `findPath` (its `diagonal` option defaults to the grid's neighbourhood and still overrides
+it), `smoothPath` (on a 4-neighbour grid string pulling keeps every bend, so the path stays a
+chain of orthogonal runs), `createFlowField` (`direction` is one of four), and `reachable` follow
+it; `hasLineOfWalkable` is unchanged. The neighbourhood is fixed at creation: keep one grid per
+mode when a page toggles between them.
+
 ## Paths
 
 - `findPath(grid, from: Cell, to: Cell, out: NavPath, opts?: FindPathOptions): boolean` – A* with
   a binary heap and per-grid scratch arrays (allocated once per grid, in a `WeakMap`), octile
-  heuristic, step cost `(1 | √2) × cost(dest)`. Writes cell centres in world XZ into `out`,
-  resets `out.cursor`, stamps `out.version = grid.version` and returns false (with an empty path)
-  when an endpoint is unwalkable, no route exists or `maxExpand` is exceeded. `FindPathOptions`:
-  `diagonal` (default true), `maxExpand`, and `cutCorners: false`, which is the only value: a
-  diagonal step needs both orthogonal neighbours walkable.
+  heuristic (Manhattan on a 4-neighbour grid), step cost `(1 | √2) × cost(dest)` plus the edge
+  cost. Writes cell centres in world XZ into `out`, resets `out.cursor`, stamps
+  `out.version = grid.version` and returns false (with an empty path) when an endpoint is
+  unwalkable, no route exists, `maxExpand` is exceeded or the cheapest route costs more than
+  `maxCost`. `FindPathOptions`: `diagonal` (default: the grid's neighbourhood), `maxExpand`,
+  `maxCost` (the search never expands past it, so a bounded query stays cheap),
+  `heuristicWeight` (default 1; above 1 trades optimality for fewer expansions, 0 is Dijkstra),
+  and `cutCorners: false`, which is the only value: a diagonal step needs both orthogonal
+  neighbours walkable.
 - `smoothPath(grid, path): NavPath` – string pulling in place: drops every waypoint the previous
   kept one can see (`hasLineOfWalkable`), so a staircase becomes its two ends and a bend around a
   wall stays.
@@ -88,13 +115,47 @@ for (const a of agents) {
 
 ## Flow field
 
-- `createFlowField(grid): FlowField` – `build(goals: Cell[])` runs Dijkstra from the goals
-  (unwalkable and out-of-grid goals are skipped) over the eight-neighbour graph with the same
-  corner rule as A*, filling `distances` (cost-weighted, `Infinity` unreachable) and
-  `directions` (unit `x, z` per cell toward the cheapest neighbour; zero at a goal or an
-  unreachable cell). `direction(cx, cy, out)`, `directionAt(worldX, worldZ, out)` and
+- `createFlowField(grid, opts?: FlowFieldOptions): FlowField` – `build(goals: Cell[])` runs
+  Dijkstra from the goals (unwalkable and out-of-grid goals are skipped) over the grid's
+  neighbour graph with the same corner rule as A*, filling `distances` (cost-weighted, `Infinity`
+  unreachable) and `directions` (unit `x, z` per cell toward the cheapest neighbour; zero at a
+  goal or an unreachable cell). `direction(cx, cy, out)`, `directionAt(worldX, worldZ, out)` and
   `distance(cx, cy)` read it; `version` is the grid version it was built at (-1 before the first
-  build). One build serves any number of agents; rebuild when the goal or the grid changes.
+  build). One build serves any number of agents.
+
+## Incremental edits
+
+`grid.setCost(index, cost)` and `grid.setWalkable(index, walkable)` edit one cell by its
+row-major index (the `x, y` forms stay), bounds-checked, and bump `version` on a real change;
+`grid.touch()` bumps it alone. `field.stale` is true while the field's `version` lags the grid's,
+and `field.update()` recomputes it in place from the goals it keeps, allocating nothing: a game
+that edits a few cells a frame marks the field and rebuilds it once, in its own step. `Reach`
+has the same `stale` flag.
+
+## Multi-goal fields
+
+`createFlowField(grid, { goals })` seeds the search from several goal cells at once (row-major
+indices, `ArrayLike<number>`), as does `field.setGoals(goals)` afterwards, so every cell runs to
+its nearest goal; `field.goals` (`Int32Array`, the first `goalCount` entries) are the goals it
+keeps, out-of-grid and unwalkable ones skipped at each `update()`. `build(cells)` is the same
+with `Cell`s.
+
+## Reachability
+
+- `reachable(grid, start: number | number[], budget, out?: Reach): Reach` – bounded Dijkstra
+  from one or more start cells (row-major indices; unwalkable or out-of-grid starts are skipped)
+  over the grid's neighbourhood, cell costs and edge costs, stopping at `budget` inclusive (a
+  cell at exactly the budget is in). It reuses one `Reach` per grid (a `WeakMap`) or the `out`
+  given (`createReach(grid)` makes one; another grid's is refused), and allocates nothing after
+  the first call. It is what a move-range query is: the cells a unit can step to this turn, with
+  the route to each.
+- `Reach` – `count` and `cells: Int32Array` (the reached indices in order of distance, the start
+  first), `distances: Float32Array` and `parents: Int32Array` over the whole grid (`Infinity` /
+  -1 off the reach; a start's parent is -1), `budget`, `version` (the grid version queried at, -1
+  before the first) and `stale`. `has(index)`, `pathTo(index, path: NavPath): boolean` (walks the
+  parents into world cell centres, start first, the same route `findPath` would give for the same
+  costs; false with an empty path off the reach), and `forEach((index, distance) => void)`
+  nearest first.
 
 ## Steering
 
@@ -228,8 +289,17 @@ is a few kilobytes per hundred polygons.
 goal, 32 agents flow to it with separation and the probe path from a fixed start is drawn after
 string pulling. `window.__harnessNav` exposes `state` (`goal`, `agents`, `arrived`, `pathLength`,
 `pathDistance`, `buildMs`, `gridVersion`, …), `setGoal`, `toggleWall`, `advance(steps)` (fixed
-1/60 s steps, so `e2e/nav.spec.ts` measures sim time) and `reset`. Unit tests cover every export,
-including no-path, the corner rule and grid edits marking paths stale.
+1/60 s steps, so `e2e/nav.spec.ts` measures sim time) and `reset`. `?reach` is a 32×32 grid with
+a stepped plateau (climbs cost through `edgeCost`, its north edge a one-way cliff) and a wall:
+the cells `reachable` from a start within the budget slider are painted, a button toggles 4 and
+8 neighbours, and the hovered cell's path comes from the reach's parents (`state.reachCount`,
+`neighbours`, `budget`, `hoverPathLength`, `queryMs`; `setBudget`, `setNeighbours`, `hover`).
+`?multi` is the 40×24 grid with three goals in one flow field, every arrow drawn; a click toggles
+a wall and leaves the field stale until the next step updates it in place (`state.goals`,
+`fieldStale`; `fieldAt`). The spec checks the reach grows with the budget and shrinks on four
+neighbours, and that the arrows from probe cells on either side of the wall run to their nearest
+goal. Unit tests cover every export, including no-path, the corner rule, grid edits marking
+paths stale, a one-way ledge, bounded and weighted searches and a reach matching A*.
 
 `harness/navmesh.html` bakes a level of `geom` boxes and a ramp (a floor, four pillars, a raised
 platform reached by the ramp) on the page, draws the polygons, a path and its follower with
