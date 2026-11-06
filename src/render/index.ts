@@ -52,6 +52,7 @@ export {
   VERTEX3D_FLOATS,
   VERTEX3D_STRIDE,
 } from './mesh';
+export { WGSL_PBR } from './pbr-wgsl';
 export type { PingPongStepOptions } from './ping-pong';
 export { PingPong } from './ping-pong';
 export type {
@@ -67,6 +68,14 @@ export { MIN_RESOLUTION_SCALE, Renderer, sceneSize } from './renderer';
 export { SCENE_FORMAT, SceneTarget, type SceneTargetDesc } from './scene-target';
 export { DEFAULT_SHADOW_SIZE, SHADOW_FORMAT, ShadowMap } from './shadow';
 export { type SnapshotOptions, SnapshotRenderer } from './snapshot';
+export type { StandardMaterialDesc } from './standard';
+export {
+  createStandardMaterial,
+  packStandardUniforms,
+  STANDARD_TEXTURE_SLOTS,
+  STANDARD_UNIFORM_FLOATS,
+  STANDARD_WGSL,
+} from './standard';
 export type { PixelData, SamplerKind, TextureDesc, TextureLike, TextureSource } from './texture';
 export { bytesPerTexel, createSamplers, Texture } from './texture';
 export type { ReadonlyQuat, ReadonlyVec3 } from './transform';
