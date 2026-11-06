@@ -151,6 +151,73 @@ describe('XrSurface', () => {
     expect(fake.errors).toEqual([]);
   });
 
+  it('scene mode: an LDR layer without depth, full-screen eye cameras and one eye-sized HDR target', async () => {
+    const { fake, surface, xr } = await setup({ scene: true, colorFormat: 'bgra8unorm' });
+    expect(xr.bindings[0]!.layers[0]!.init).toEqual({
+      colorFormat: 'bgra8unorm',
+      textureType: 'texture',
+    });
+    expect(surface.scene).toBeNull();
+    const [l, r] = surface.views(xr.step());
+    const scene = surface.scene!;
+    expect(scene).not.toBeNull();
+    expect(scene.isExternal).toBe(false);
+    expect([scene.width, scene.height]).toEqual([64, 32]);
+    expect(l!.camera.screen).toEqual({ x: 0, y: 0, width: 1, height: 1 });
+    expect(r!.camera.screen).toEqual({ x: 0, y: 0, width: 1, height: 1 });
+    expect(l!.viewport).toEqual({ x: 0, y: 0, width: 64, height: 32 });
+    expect(r!.viewport).toEqual({ x: 64, y: 0, width: 64, height: 32 });
+    expect(l!.target).toBe(r!.target);
+    expect(l!.target.adoptedColor!.format).toBe('bgra8unorm');
+    expect(fake.textures.some((t) => t.label === 'xr-layer-depth')).toBe(false);
+    // Each eye: scene pass into the HDR target (cleared each time), resolved into its viewport.
+    const renderer = new Renderer(fakeRendererGpu(fake));
+    const frame = () => {
+      const f = renderer.beginFrame(0, 1 / 72);
+      for (const eye of surface.views(xr.step())) {
+        renderer.render(f, eye.camera, surface.scene!);
+        renderer.resolve(surface.scene!, eye.target.color.view, eye.viewport);
+      }
+      renderer.endFrame({ present: false });
+    };
+    const before = fake.passes.length;
+    frame();
+    const passes = fake.passes.slice(before);
+    expect(passes.map((p) => p.label)).toEqual([
+      'scene',
+      'pass:present-basic',
+      'scene',
+      'pass:present-basic',
+    ]);
+    const colorOf = (i: number) =>
+      (
+        (passes[i]!.desc as GPURenderPassDescriptor)
+          .colorAttachments as GPURenderPassColorAttachment[]
+      )[0]!;
+    expect(colorOf(0).loadOp).toBe('clear');
+    expect(colorOf(2).loadOp).toBe('clear');
+    expect((colorOf(0).view as unknown as { texture: { label: string } }).texture.label).toBe(
+      'xr-scene-color',
+    );
+    expect((colorOf(1).view as unknown as { texture: { label: string } }).texture.label).toBe(
+      'xr-layer-color',
+    );
+    expect(colorOf(1).loadOp).toBe('load');
+    expect(fake.textures.some((t) => t.label === 'xr-scene-depth')).toBe(true);
+    // Same scene target across frames; nothing allocated once warm.
+    frame();
+    const counts = () => [fake.buffers.length, fake.textures.length, fake.bindGroups.length];
+    const n = counts();
+    frame();
+    frame();
+    expect(counts()).toEqual(n);
+    expect(surface.scene).toBe(scene);
+    expect(fake.errors).toEqual([]);
+    surface.destroy();
+    expect(surface.scene).toBeNull();
+    expect(fake.textures.find((t) => t.label === 'xr-scene-color')?.destroyed).toBe(true);
+  });
+
   it('destroy frees the eye targets and the layer, and views() is then empty', async () => {
     const { fake, surface, xr } = await setup();
     surface.views(xr.step());

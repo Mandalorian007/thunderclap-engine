@@ -48,14 +48,16 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Snapshot gate | ws/snap-gate | `pnpm snap` / `snap:check`: golden PNGs for 2D harness pages on `desktop-1280`, E-008 tolerance, in `test:e2e`; integrate brief step | — | ✅ merged (landed on main; counts pending integrator report) |
 | 5 | Pick | ws/pick | `sphereTester`, `obbTester`, `meshTester` (bounds reject + Möller–Trumbore), `transformRayInto`; harness `pick.html` | rays, cull | ✅ green at `0a0bec1` (650 tests; e2e 548/57/5 mesh.spec flakes); queued in chain 2 after look-zoom |
 | 5 | Look zoom | ws/look-zoom | `Look.zoom` axis (wheel, pinch, pad opt-in); `Follow` reads it; harness follow drops its wheel binding | follow | ✅ green at `d5bb746` (640 tests; e2e 526/57/3 fog flake); queued in chain 2 after template-first-person |
-| 5 | e2e flake under load | ws/flake-input | mesh.spec fog/drag and ui.spec menuNav poll the state they assert; `?still` lamp flag; common brief rule | flake-client | 🔧 in progress |
+| 5 | e2e flake under load | ws/flake-input | mesh.spec fog/drag and ui.spec menuNav poll the state they assert; `?still` lamp flag; common brief rule | flake-client | ✅ green at `22839fa` (632 tests; two parallel matrices 529/57/0 each); queued in chain 3 after bench |
 | 5 | Sky | ws/sky | `Sky` drawable: gradient dome, sun disc/glow from `Lights.sun`, horizon to `fog.color`, stars; harness `sky.html` | lights | ✅ green at `edab70e` (641 tests; e2e 552/57/1 fog flake); queued in chain 2 after sockets |
-| 5 | Bench | ws/bench | `harness/bench.html` scene ladder, `pnpm bench` → `docs/BENCH.md`; e2e one rung | gpu-timer | 🔧 in progress |
+| 5 | Bench | ws/bench | `harness/bench.html` scene ladder, `pnpm bench` → `docs/BENCH.md`; e2e one rung | gpu-timer | ✅ green at `d32c978` (709 tests; e2e 525/64/5 E-017 flakes); queued in chain 3 after sky |
 | 5 | Sockets | ws/sockets | `createSocket`, `socketWorld`, `attachTransform`, `Skeleton.names`; harness `sockets.html` | anim | ✅ green at `08085b6` (625 tests; e2e 510/52/0); queued in chain 2 after pick |
 | 5 | Texture registry | ws/texture-registry | `loadTexture` with mips, `defaultTextures` (white, black, flatNormal, metalRough, checker), unset slots bind white | pbr (wish) | ✅ green at `69a0d32` (705 tests; e2e 524/57/5 E-017 flakes); queued in chain 1 after spot-lights |
 | 5 | Geometry | ws/geom | `@thunderclap/engine/geom`: box/plane/sphere/icosphere/capsule/cylinder/torus, `Heightfield` with `heightAt`/`raycastHeightfield`, merge/transform; harness `geom.html` | — | 🔧 in progress |
 | 5 | IK + root motion | ws/ik | `twoBoneIk`, `lookAt`, `extractRootMotion`, `applyRootMotionDelta`; harness `ik.html` | anim | 🔧 in progress (on ws/anim) |
 | 5 | Anim graph | ws/anim-graph | `createAnimGraph`: states, 1D blend spaces with phase sync, conditional transitions, enter/exit hooks; harness `anim-graph.html` | anim | 🔧 in progress |
+| 5 | HUD widgets | ws/ui-hud | `ui.reticle`, `ui.meter`, `ui.slots`, `ui.heading` on the overlay; harness `hud.html` | ui | 🔧 in progress |
+| 5 | Gesture long-press | ws/gesture-longpress | pan threshold before long-press, cumulative travel, `Gestures.onGesture` observer | gestures | 🔧 in progress |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
@@ -88,6 +90,8 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - `VertexLayout.positionOffset` in render so a game passes the layout straight to `meshTester` (ws/pick wish).
 - ws/texture-registry wishes: `Renderer.white` → `defaultTextures(device).white` (renderer.ts); rename `LoadTextureArrayOptions.mipFilter` to `filter` to match `LoadTextureOptions`; a `pbr.html` case using the defaults once pbr lands.
 - `e2e/mesh.spec.ts:195` fog assertion uses a fixed `0.7` factor that sits within noise under load (ws/sky observation; ws/flake-input owns the fix).
+- First bench (`docs/BENCH.md`, shared machine): 10k culled cubes 3.6 ms CPU / 0.35 ms GPU; 50k cubes 29–38 ms CPU with the GPU idle: the per-call `frame.mesh` push path is the ceiling, not the GPU. → ws/batch-submit: a `frame.meshes(mesh, material, transforms[], params[])` bulk path or a retained instance list. Also wished: `RenderStats.shadowDraws` exposed (shadow-cull added it; bench should read it once merged) and `renderer.adapterInfo`.
+- `Gestures.pointerMove` runs `checkLongPress` before the pan threshold is crossed, so a slow drag under a long frame becomes a long-press and later moves are ignored (ws/flake-input root cause of the drag flake). A `Gestures` option or hook to observe pan events was wished for. → ws/gesture-longpress.
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.

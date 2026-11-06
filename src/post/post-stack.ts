@@ -1,5 +1,6 @@
 import type { FullscreenPass } from '../render/fullscreen';
 import type { PostInputs, PostProcessor, Renderer } from '../render/renderer';
+import type { SceneTargetViewport } from '../render/scene-target';
 import { type Ease, easeInOut, PostBlender } from './blend';
 import {
   applyPostPatch,
@@ -219,14 +220,31 @@ export class PostStack implements PostProcessor {
     this.boundEmissive = null;
   }
 
-  encode(encoder: GPUCommandEncoder, inputs: PostInputs, output: GPUTextureView): void {
+  /**
+   * Record the stack from `inputs` into `output`. With `viewport` (ws/xr-post: one eye of a
+   * shared XR layer) the composite covers that rect only and loads the rest of the output;
+   * otherwise it clears and covers the whole output. Inputs of another size than the last
+   * `resize` (an eye-sized target through `renderer.resolve`) resize the stack first, so the
+   * same stack serves the screen and a headset in turn.
+   */
+  encode(
+    encoder: GPUCommandEncoder,
+    inputs: PostInputs,
+    output: GPUTextureView,
+    viewport?: SceneTargetViewport,
+  ): void {
     this.advanceBlend(inputs.time);
     const s = this.settings;
     const r = this.renderer;
-    if (this.wantLevels() !== this.requestedLevels) {
-      this.resize(this.width, this.height);
+    const iw = inputs.color.width;
+    const ih = inputs.color.height;
+    if (iw !== this.width || ih !== this.height || this.wantLevels() !== this.requestedLevels) {
+      this.resize(iw, ih);
     }
     this.bindInputs(inputs.color.view, inputs.emissive.view);
+    const outW = viewport ? viewport.width : r.outputWidth;
+    const outH = viewport ? viewport.height : r.outputHeight;
+    const clear = viewport ? this.noClear : COMPOSITE_CLEAR;
 
     packPostUniforms(
       this.uniforms,
@@ -278,10 +296,7 @@ export class PostStack implements PostProcessor {
       });
     }
 
-    if (
-      this.quality.compositeAtScene &&
-      (this.width < r.outputWidth || this.height < r.outputHeight)
-    ) {
+    if (this.quality.compositeAtScene && (this.width < outW || this.height < outH)) {
       if (!this.ldrView) this.allocLdr();
       this.composite.encode(encoder, this.ldrView!, {
         bindGroup: this.compositeGroup!,
@@ -290,14 +305,16 @@ export class PostStack implements PostProcessor {
       });
       this.upscale.encode(encoder, output, {
         bindGroup: this.upscaleGroup!,
-        clear: COMPOSITE_CLEAR,
+        clear,
+        viewport,
         timestampWrites: timer?.pass('upscale'),
       });
       return;
     }
     this.composite.encode(encoder, output, {
       bindGroup: this.compositeGroup!,
-      clear: COMPOSITE_CLEAR,
+      clear,
+      viewport,
       timestampWrites: timer?.pass('composite'),
     });
   }
