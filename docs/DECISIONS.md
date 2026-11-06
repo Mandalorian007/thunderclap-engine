@@ -126,3 +126,8 @@ With five integrator chains and twelve engineers on one machine, load average re
 ## E-024: mesh.spec leaves the E-017 list (2026-11-06)
 
 ws/flake-input landed at `9c6a921` with the `?still` probe fix; the first full matrix on that tree was 710/92/0 at load 27. The mesh.spec fog and drag tests are no longer tolerated failures: a miss there fails the merge like any other spec. The rest of the E-017 list stands until a branch fixes each one.
+
+## E-025: landing on a disjoint main (2026-11-06)
+
+With six integrator chains the full matrix takes 4–6 minutes and main lands code about that often, so a chain whose branch is gate-green can loop forever re-merging and re-running (chain 5 ran ui-hud green five times without landing). The rule in `integrate.md` step 6 is relaxed: after a green full gate, if main has moved only by (a) PM docs commits and (b) landed merges whose changed files (`git diff --name-only <old main> <new main>`) are disjoint from the branch's changed files (`git diff --name-only <merge-base> <branch>`), the integrator merges main, reruns `pnpm check` only, and lands. Shared docs (`CHANGELOG.md`, `README.md`, `ARCHITECTURE.md`, `docs/*`, any `README.md`) do not count as overlap. An overlap in any `src/`, `harness/`, `e2e/`, `demos/`, `templates/` or config file still means a full e2e rerun (and snap:check when a 2D file is in the overlap). The branch's last full gate must be on a tree that includes every code change on main up to that disjoint window. Load threshold for starting a matrix is the 1-minute average under 40 (E-023 still governs what counts as a result).
+

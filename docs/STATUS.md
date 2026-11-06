@@ -71,17 +71,18 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Demo: showroom | ws/demo-showroom | `demos/showroom` PBR sphere grid, moving lights, post looks via `blendTo`, GPU readout | pbr | ✅ green at `71c29d4` (768 tests; e2e 684/92/2 E-017; showroom.spec 16/16; snap 0 px); land after demo-arena |
 | 5 | Demo: range | ws/demo-range | `demos/range` first-person target range: Look, meshTester picks, sparks, trails, spatial audio | pick | ✅ green at `38ce3d1` (768 tests; range.spec 31/9/0; full matrix unusable at load 52, E-023); queued chain 6 last |
 | 5 | Shared light loop | ws/pbr-lights | PBR sees spots, masks, layers via one generated light loop; default textures unified | spot-lights, texture-registry | ✅ green at `bb6f799` (784 tests; e2e 686/92/0; snap 0 px; pbr probes identical); queued chain 1 after nav |
-| 5 | Batch submit | ws/batch-submit | `frame.meshes(batch)` + retained `InstanceList`; 50k instances in a few ms CPU; BENCH numbers | bench | ✅ green at `246e1be` (786 tests; e2e 672/106/0; snap 0; BENCH 10k mesh 4.1 ms / batch 0.7 / list 0.2); queued chain 3 after bench (supersedes bench files) |
+| 5 | Batch submit | ws/batch-submit | `frame.meshes(batch)` + retained `InstanceList`; 50k instances in a few ms CPU; BENCH numbers | bench | ✅ merged `f463878` (chain 3; 926 tests; e2e 781/109/0; snap 5/5) |
 | 5 | Debug draw | ws/debug-draw | `createDebugDraw`: lines, wire shapes, axes, paths in one draw (fx) | — | ✅ green at `8d30969` (827 tests; e2e 707/92/3 mesh fog, pre-flake-input base; snap 0 px); queued chain 4 after retarget |
 | 5 | Billboards | ws/billboards | name plates, health bars, damage numbers: camera-facing quads + canvas text atlas (fx) | — | ✅ green at `54984ea` (837 tests; e2e 709/92/1 mesh fog, pre-flake-input base; billboards 24/24); queued chain 4 after debug-draw |
 | 5 | Perf overlay | ws/perf-overlay | `createPerfMonitor`/`createPerfOverlay`: frame/GPU/draw stats + sparkline; `?perf` on harness pages | — | ✅ green at `032ae68` (830 tests; e2e 694/92/8, all pre-flake-input flakes, perf.spec 16/16); queued chain 5 after morph |
 | 5 | 2D ergonomics: `input.getGamepads`, PanelStack arrows, tile layer + flipbook | ws/ergo-2d | ✅ green at `f5aa8c1` (845 tests; e2e 734/92/0); queued chain 6 after demo-range |
 | 5 | Input recording and replay (`createInputRecorder`, `createInputPlayback`, `createGame({ input: { replay } })`) | ws/input-replay | ✅ green at `adda342` (888 tests; e2e 747/95/0); queued chain 6 after ergo-2d |
-| 5 | Geometry kit 2: extrude/lathe/sweep/tube/polygon, stairs/arch, tangents + `VERTEX_LAYOUT_3D_TANGENT`, weld/flatShade/projectUv/fitBounds | ws/geom-2 | 🔧 engineer running (offset 300) |
+| 5 | Geometry kit 2: extrude/lathe/sweep/tube/polygon, stairs/arch, tangents + `VERTEX_LAYOUT_3D_TANGENT`, weld/flatShade/projectUv/fitBounds | ws/geom-2 | ✅ check green at `c307337` (934 tests); e2e not run by engineer (load 45), integrator runs it; queued chain 1 after pbr-lights |
 | 5 | Camera helpers: `viewZ`, `invViewProj`, `projectMany`, `frustumCorners`, `setPerspective` parity | ws/camera-ergo | ✅ green at `10b60b5` (907 tests; e2e 747/95/0; snap 5/5); queued chain 3 after batch-submit |
-| 5 | UI widgets 2: reticle, bar, segmented, select, keyPrompt, stepper, cooldown | ws/ui-widgets | 🔧 engineer running (offset 320) |
+| 5 | UI widgets 2: reticle, bar, segmented, select, keyPrompt, stepper, cooldown | ws/ui-widgets | ✅ check green at `73267a5` (922 tests; widgets.spec 15/15); full e2e not run by engineer (load 40+), integrator runs it; queued chain 5 after perf-overlay |
 | 5 | Audio 2: beat-grid music layers, variations, reverb/lowpass sends, ducking | ws/audio-2 | 🔧 engineer running (offset 330) |
 | 5 | Save 2: slot manager with meta sidecar, settings store + bind, undo journal, typed-array codec | ws/save-2 | 🔧 engineer running (offset 340) |
+| 5 | Post 2: FXAA, 3D LUT, grain, aberration, sharpen, depth/normal outline | ws/post-2 | 🔧 engineer running (offset 350) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
@@ -109,7 +110,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - A shared default-texture registry and a mip sampler (`'linear-mip-repeat'`) for materials (ws/pbr wish); a vertex layout without normals (8 floats) for trails (ws/trails wish).
 - Stale code comments listed in the ws/doc-sweep-3 report (host/types.ts, core/game.ts, assets/gltf-load.ts, platform/README 'No dependencies', post/README bgra8unorm, input types/pointer-sources/pointer-router/xr-source, ui styles/overlay, render material/lights/wgsl/scene-target/shadow/renderer/frame): a ws/comment-sweep brief after wave 5 merges.
 - ws/template-first-person wishes (→ ws/ergo-3d after look-zoom and skinning land): `camera.setPerspective` sets depth/cull like `Camera.perspective`; a `Look` 'lock on first click' option; `Mesh.update` taking a `{ buffer, vertexCount, indexCount, bounds }` worker reply; a ray-vs-heightfield / sampled height helper.
-- ws/skinning follow-ups (→ ws/skin-shadow if the integrator skips them): `ShadowMap.pipelineFor` takes the bindings layout for skinned casters and `encodeShadow` binds group 1, so skinned meshes can `castShadow`; a dedicated `InstanceParams.skin` slot instead of `params.w`.
+- Skinned shadow casters are done (`ShadowMap.pipelineFor(layout, bindings)` on main); remaining ws/skinning wish: a dedicated `InstanceParams.skin` slot instead of `params.w`. → ws/comment-sweep or ws/ergo-3d. No ws/skin-shadow brief needed.
 - ws/spot-lights follow-up: `material.ts` / render README "Instance format" table still says the flags float is reserved beyond bit 0; layers now ride bits 1..23 (`INSTANCE_LAYER_SHIFT`, `INSTANCE_LAYER_BITS`). Fold into ws/comment-sweep.
 - `VertexLayout.positionOffset` in render so a game passes the layout straight to `meshTester` (ws/pick wish).
 - ws/texture-registry wishes: `Renderer.white` → `defaultTextures(device).white` (renderer.ts); rename `LoadTextureArrayOptions.mipFilter` to `filter` to match `LoadTextureOptions`; a `pbr.html` case using the defaults once pbr lands.
@@ -138,6 +139,8 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - ws/demo-range wishes: ui reticle widget; hinge/tween helper (tween lands soon); geom cube helper (geom on main). → ws/ergo-3d.
 - ws/debug-draw wish: `Camera` exposes an inverse view-projection publicly (harness could then demo `frustum`). → ws/ergo-3d.
 - ws/billboards wish: `Camera.viewZ(x, y, z)` helper (view-space depth of a point). → ws/ergo-3d.
+- ws/geom-2 wishes: `mergeGeometry`/`transformGeometry` accept the tangent layout (today 3D only); tangent attribute sits at `@location(13)` (3..9 instance, 11/12 skinning), document the location map in render README. → ws/ergo-3d.
+- ws/ui-widgets wish: `styles.ts` select/range zoom rule renders native selects on frame layers at `--tc-dpx²` (token already scaled, then zoomed again), so selects look small on the HUD layer. → ws/comment-sweep.
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
