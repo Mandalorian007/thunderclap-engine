@@ -2,7 +2,7 @@
 // Import-boundary check (ARCHITECTURE.md, "Package shape"). Run by `pnpm check`. Node built-ins only.
 //
 //   1. Nothing under src/ imports from outside src/ (no ../harness, ../e2e, a game, a host package).
-//   2. harness/, e2e/, examples/ and templates/ (if present) reach the engine only through the
+//   2. harness/, e2e/, examples/, demos/ and templates/ (if present) reach the engine only through the
 //      public exports map: `@thunderclap/engine` or `@thunderclap/engine/<subpath>` for a key of
 //      package.json "exports". Never a relative path into src/, never a subpath outside the map.
 //   3. Files in src/<module>/ import other modules by relative path, never through the package
@@ -102,7 +102,7 @@ for (const file of srcFiles) {
 }
 
 // 2: consumers of the engine inside this repo.
-const consumerDirs = ['harness', 'e2e', 'examples', 'templates'];
+const consumerDirs = ['harness', 'e2e', 'examples', 'demos', 'templates'];
 const consumerFiles = consumerDirs.flatMap((d) => walk(join(root, d)));
 for (const file of consumerFiles) {
   for (const { spec, line } of importsOf(readFileSync(file, 'utf8'))) {
@@ -125,5 +125,5 @@ if (problems.length) {
   process.exit(1);
 }
 console.log(
-  `check-boundaries: ok (${srcFiles.length} src files, ${consumerFiles.length} harness/e2e/examples files, ${allowed.size} public entries)`,
+  `check-boundaries: ok (${srcFiles.length} src files, ${consumerFiles.length} harness/e2e/examples/demos files, ${allowed.size} public entries)`,
 );

@@ -39,6 +39,8 @@ const state: HarnessFollowState = {
   instances: 0,
   culled: 0,
   gpuErrors: 0,
+  projected: 0,
+  nearCornerZ: 0,
 };
 
 /** A unit cube centred on the origin, 24 vertices (12 floats each), 36 indices, white. */
@@ -289,6 +291,14 @@ async function main(): Promise<void> {
   }));
   const body = new Transform({});
   const bodyP: InstanceParams = { tint: [0.9, 0.55, 0.2, 1] };
+  // The six draw centres a HUD would label, projected in one call per frame (ws/camera-ergo).
+  const centres = new Float32Array(6 * 3);
+  centres.set([0, -0.5, 0], 0);
+  WALLS.forEach((w, i) => {
+    centres.set([w.cx, w.cy, w.cz], 3 + i * 3);
+  });
+  const projected = new Float32Array(6 * 3);
+  const corners = new Float32Array(24);
 
   const lights = new Lights();
   lights.ambient.set([0.2, 0.2, 0.22]);
@@ -349,6 +359,12 @@ async function main(): Promise<void> {
     state.target[2] = target.position[2];
     state.yaw = follow.yaw;
     state.pitch = follow.pitch;
+    centres[15] = target.position[0];
+    centres[16] = 0.9;
+    centres[17] = target.position[2];
+    state.projected = camera.projectMany(centres, projected);
+    camera.frustumCorners(corners);
+    state.nearCornerZ = camera.viewZ(corners[0]!, corners[1]!, corners[2]!);
   };
 
   const loop = new GameLoop({
