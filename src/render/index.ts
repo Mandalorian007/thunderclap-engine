@@ -14,12 +14,13 @@ export {
   DynamicResolution,
   type DynamicResolutionOptions,
 } from './dynamic-resolution';
-export type { Drawable, DrawParams, InstanceParams } from './frame';
-export { Frame } from './frame';
+export type { Drawable, DrawParams, InstanceBatch, InstanceParams } from './frame';
+export { Frame, INSTANCE_PARAM_FLOATS, writeInstanceParams } from './frame';
 export type { FullscreenEncodeOptions, FullscreenPassDesc } from './fullscreen';
 export { FullscreenPass } from './fullscreen';
 export type { GpuPassTimes, GpuTimerResult } from './gpu-timer';
 export { GpuTimer, supportsTimestamps } from './gpu-timer';
+export { InstanceList } from './instance-list';
 export type {
   DirectionalLight,
   Fog,
@@ -88,6 +89,7 @@ export type {
   FrameTiming,
   PostInputs,
   PostProcessor,
+  PostProjection,
   RendererGpu,
   RendererOptions,
   RenderStats,

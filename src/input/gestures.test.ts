@@ -218,6 +218,176 @@ describe('Gestures: long-press', () => {
   });
 });
 
+describe('Gestures: travel before the long-press timer', () => {
+  it('a slow drag in 6 px steps across a 500 ms frame gap pans and never long-presses', () => {
+    const { g, tick, advance } = setup();
+    g.pointerDown(1, 0, 0);
+    g.pointerMove(1, 6, 0);
+    // A long frame: the next move arrives well past longPressMs.
+    advance(500);
+    g.pointerMove(1, 12, 0);
+    tick();
+    expect(g.longPress).toBeNull();
+    expect(g.pan).toMatchObject({ phase: 'start', dx: 12 });
+    expect(g.drag?.phase).toBe('start');
+    g.pointerMove(1, 18, 0);
+    tick();
+    expect(g.drag).toMatchObject({ phase: 'move', dx: 6 });
+    g.pointerUp(1, 18, 0);
+    tick();
+    expect(g.drag?.phase).toBe('end');
+    expect(g.longPress).toBeNull();
+    expect(g.tap).toBeNull();
+  });
+
+  it('a still finger for 500 ms long-presses', () => {
+    const { g, tick } = setup();
+    g.pointerDown(1, 20, 20);
+    tick(500);
+    expect(g.longPress).toMatchObject({ x: 20, y: 20 });
+    expect(g.pan).toBeNull();
+  });
+
+  it('4 px, 4 px, 4 px (12 cumulative) pans; travel is cumulative, not the last step', () => {
+    const { g, tick } = setup();
+    g.pointerDown(1, 0, 0);
+    g.pointerMove(1, 4, 0);
+    g.pointerMove(1, 8, 0);
+    tick();
+    expect(g.pan).toBeNull();
+    g.pointerMove(1, 12, 0);
+    tick();
+    expect(g.pan).toMatchObject({ phase: 'start', dx: 12 });
+    expect(g.drag).toMatchObject({ phase: 'start', origin: { x: 0, y: 0 } });
+  });
+
+  it('a mouse follows the same rule', () => {
+    const { g, tick, advance } = setup();
+    g.pointerDown(1, 0, 0, 'mouse');
+    g.pointerMove(1, 5, 0);
+    advance(600);
+    g.pointerMove(1, 11, 0);
+    tick();
+    expect(g.longPress).toBeNull();
+    expect(g.drag).toMatchObject({ phase: 'start', device: 'mouse' });
+  });
+
+  it('a pointer within the threshold still long-presses when its late move arrives', () => {
+    const { g, tick, advance } = setup();
+    g.pointerDown(1, 0, 0);
+    advance(500);
+    g.pointerMove(1, 3, 0);
+    tick();
+    expect(g.longPress).not.toBeNull();
+    expect(g.pan).toBeNull();
+  });
+});
+
+describe('Gestures: onGesture', () => {
+  type Seen = [string, string, number, number];
+  function observe(g: Gestures) {
+    const seen: Seen[] = [];
+    const off = g.onGesture((kind, phase, p) => seen.push([kind, phase, p.x, p.y]));
+    return { seen, off };
+  }
+
+  it('reports start, move and end for a pan at recognition time, not per tick', () => {
+    const { g, tick } = setup();
+    const { seen } = observe(g);
+    g.pointerDown(1, 0, 0);
+    g.pointerMove(1, 20, 0);
+    g.pointerMove(1, 30, 0);
+    expect(seen).toEqual([
+      ['pan', 'start', 20, 0],
+      ['drag', 'start', 20, 0],
+      ['pan', 'move', 30, 0],
+      ['drag', 'move', 30, 0],
+    ]);
+    tick();
+    tick();
+    // Idle ticks are not events.
+    expect(seen).toHaveLength(4);
+    g.pointerUp(1, 30, 0);
+    expect(seen.slice(4)).toEqual([
+      ['pan', 'end', 30, 0],
+      ['drag', 'end', 30, 0],
+    ]);
+  });
+
+  it('one call for a tap, and a doubleTap on the second of two', () => {
+    const { g, tick, advance } = setup();
+    const { seen } = observe(g);
+    g.pointerDown(1, 5, 5);
+    g.pointerUp(1, 5, 5);
+    expect(seen).toEqual([['tap', 'end', 5, 5]]);
+    tick();
+    tick();
+    expect(seen).toHaveLength(1);
+    advance(100);
+    g.pointerDown(2, 6, 5);
+    g.pointerUp(2, 6, 5);
+    expect(seen.slice(1)).toEqual([
+      ['tap', 'end', 6, 5],
+      ['doubleTap', 'end', 6, 5],
+    ]);
+  });
+
+  it('long-press, pinch and a blocked cancel reach the listener', () => {
+    let blocked = false;
+    const { g, tick } = setup({ blocked: () => blocked });
+    const { seen } = observe(g);
+    g.pointerDown(1, 10, 10);
+    tick(500);
+    expect(seen).toEqual([['longPress', 'end', 10, 10]]);
+    g.pointerUp(1);
+    tick();
+
+    g.pointerDown(1, 100, 100);
+    g.pointerDown(2, 200, 100);
+    g.pointerMove(2, 300, 100);
+    expect(seen.slice(1)).toEqual([
+      ['pinch', 'start', 150, 100],
+      ['pinch', 'move', 200, 100],
+    ]);
+    g.pointerUp(2);
+    g.pointerUp(1);
+    expect(seen.at(-1)).toEqual(['pinch', 'end', 200, 100]);
+    tick();
+    tick();
+
+    g.pointerDown(1, 0, 0);
+    g.pointerMove(1, 50, 0);
+    tick();
+    const n = seen.length;
+    blocked = true;
+    tick();
+    expect(seen.slice(n)).toEqual([
+      ['pan', 'cancel', 50, 0],
+      ['drag', 'cancel', 50, 0],
+    ]);
+  });
+
+  it('unsubscribe stops the calls; other listeners keep theirs', () => {
+    const { g, advance } = setup();
+    const a = observe(g);
+    const b = observe(g);
+    g.pointerDown(1, 1, 1);
+    g.pointerUp(1, 1, 1);
+    a.off();
+    advance(400); // past doubleTapMs: plain taps only
+    g.pointerDown(1, 2, 2);
+    g.pointerUp(1, 2, 2);
+    expect(a.seen).toHaveLength(1);
+    expect(b.seen).toHaveLength(2);
+    a.off(); // a second call is harmless
+    b.off();
+    advance(400);
+    g.pointerDown(1, 3, 3);
+    g.pointerUp(1, 3, 3);
+    expect(b.seen).toHaveLength(2);
+  });
+});
+
 describe('Gestures: double tap', () => {
   it('two quick taps near each other: two taps and one double tap on the second', () => {
     const { g, tick, advance } = setup();
