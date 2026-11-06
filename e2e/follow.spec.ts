@@ -56,6 +56,11 @@ test('boots the walled ground with the capsule in third person behind it', async
   // Yaw 0 looks down -z: the eye sits behind (+z of) and above the feet.
   expect(s.position[2]).toBeGreaterThan(s.target[2] + 3);
   expect(s.position[1]).toBeGreaterThan(1.5);
+  // projectMany (ws/camera-ergo): the capsule the camera looks at is on screen, the back wall
+  // behind the eye is not; the near frustum corner sits at the near plane.
+  expect(s.projected).toBeGreaterThanOrEqual(1);
+  expect(s.projected).toBeLessThan(6);
+  expect(s.nearCornerZ).toBeCloseTo(0.1, 3);
   expect(errors).toEqual([]);
 });
 
