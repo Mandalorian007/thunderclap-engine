@@ -116,6 +116,30 @@ await ui.caption.say('Something old is listening.', {
 - `slider(label, value, onInput, { min, max, step, format })` returns `{ element, input, set }`.
   `format` fills in `aria-valuetext`.
 - `toggle(label, checked, onChange)` returns `{ element, input, set }`.
+- The second set (`ui/widgets-2.ts`, ws/ui-widgets): plain elements with a small handle, classes
+  `tc-ui-*`, styled by `WIDGETS2_CSS` (design px through `toFrameUnits`, theme tokens only), which
+  `createOverlay` injects once as `#tc-ui-widgets-2` (`ensureWidgets2Styles(doc)` does it by hand).
+  Every `set` writes the DOM only when the value changed. `ChoiceOption` is `{ value, label }`.
+  - `reticle({ size, thickness, gap, dot, color })` returns `{ element, set(spread), hit(), hide(),
+    show() }`: four CSS lines and a dot, `aria-hidden`, centred in its positioned parent (put it on
+    the `hud` layer); `set(0..1)` opens the lines, `hit()` plays the flash (`data-hit`).
+  - `bar(label, value, { min, max, segments, tone, format })` returns `{ element, set(value),
+    tone(t) }`: `role=progressbar` with `aria-valuemin/max/now` and `aria-valuetext` (`format`,
+    else a percent; with `format` the text also shows); `segments` draws pips; `tone` is
+    `WidgetTone` (`accent | info | success | warn | danger`).
+  - `segmented(label, options, value, onChange)` returns `{ element, set(value), value }`:
+    `role=radiogroup` of `role=radio` buttons with a roving tabindex, ArrowLeft/ArrowRight to move
+    (wrapping) and a click to pick; it consumes only those two keys. `set` never calls `onChange`.
+  - `select(label, options, value, onChange)` returns `{ element, select, set }`: a native
+    `<select>` in a `.tc-field.tc-ui-select` label.
+  - `keyPrompt(action, { key, pad })` returns `{ element, set(key, pad?) }`: a key chip (`<kbd>`),
+    a pad chip when a glyph string is given, and the action's text; strings in, no icon font.
+  - `stepper(label, value, onChange, { min, max, step, format })` returns `{ element, set, value }`:
+    `−` and `+` buttons around a focusable `role=spinbutton`; ArrowUp/ArrowDown step, Home/End jump
+    (only those four keys are consumed); values snap to `step` and clamp; buttons disable at the
+    bounds.
+  - `cooldown({ size })` returns `{ element, set(fraction), ready }`: a `conic-gradient` sweep on
+    `--tc-ui-sweep`, `data-ready` at 1, `aria-hidden`.
 - `h(tag, props, ...children)` is hyperscript. It handles `class`, `style` (including `--custom`
   properties), `dataset` and `on: { click }`. Any other prop becomes an attribute: `true` sets an
   empty attribute and `false`/null omits it.
@@ -298,7 +322,9 @@ declarations, and `applyTheme(el, tokens)` sets them on an element. `ensureStyle
   ReadingTimeOptions)` (`baseMs`, `perCharMs`, `minMs`, `maxMs`); `overlapArea(box, regions)` and
   `cornerOrder(preferred)` for `onPlace` handlers.
 - **Widget options.** `ButtonOptions` (`variant`, `disabled`, `ariaLabel`, `className`) and
-  `SliderOptions` (`min`, `max`, `step`, `format`). `h`'s children are `Child` (`Node`, string,
+  `SliderOptions` (`min`, `max`, `step`, `format`); for the second set, `ReticleOptions`,
+  `BarOptions`, `KeyPromptOptions`, `StepperOptions`, `CooldownOptions` and the handles `Reticle`,
+  `Bar`, `Segmented`, `Select`, `KeyPrompt`, `Stepper`, `Cooldown`. `h`'s children are `Child` (`Node`, string,
   number or nothing); `append(el, ...children)` adds them to an existing element.
 - **External links.** `externalLink(opts: ExternalLinkOptions)` returns an `ExternalLink`
   (`element`, `anchor`, `copyButton`, …) or null; `ExternalLinkLabels` are the strings shown
