@@ -19,12 +19,18 @@ const PLAYER_HALF = 12;
 const WALL_TILE = { x: 1, y: 5 };
 const STOP_TILE = { x: 2, y: 5 };
 
+/** Read the state after a `requestAnimationFrame` settle, so the probe sees a whole frame's values. */
 function readState(page: Page): Promise<DemoState> {
-  return page.evaluate(() => {
-    const d = (window as unknown as { __demo?: DemoApi }).__demo;
-    if (!d) throw new Error('window.__demo missing');
-    return JSON.parse(JSON.stringify(d.state)) as DemoState;
-  });
+  return page.evaluate(
+    () =>
+      new Promise<DemoState>((resolve, reject) =>
+        requestAnimationFrame(() => {
+          const d = (window as unknown as { __demo?: DemoApi }).__demo;
+          if (!d) return reject(new Error('window.__demo missing'));
+          resolve(JSON.parse(JSON.stringify(d.state)) as DemoState);
+        }),
+      ),
+  );
 }
 
 async function openDemo(page: Page, errors: string[]): Promise<void> {
@@ -60,7 +66,13 @@ test.describe('demo: dungeon', () => {
     expect(s.drawCalls).toBe(1);
     expect(s.stats?.instances).toBeGreaterThan(1200);
     expect(s.coins).toBe(0);
+    // Bats roam from boot, so health is anywhere in range; the bar is a `ui.meter` in the top region.
+    expect(s.health).toBeGreaterThanOrEqual(0);
+    expect(s.health).toBeLessThanOrEqual(10);
     expect(s.playerTile).toEqual({ x: 3, y: 5 });
+    const meter = page.locator('#dungeon-health');
+    await expect(meter).toHaveAttribute('role', 'meter');
+    await expect(meter).toHaveAttribute('aria-valuemax', '10');
     if (testInfo.project.name.startsWith('desktop')) expect(s.fps).toBeGreaterThan(20);
     expect(errors).toEqual([]);
   });
@@ -129,24 +141,25 @@ test.describe('demo: dungeon', () => {
     await page.keyboard.press('ArrowUp');
     await expect.poll(() => readState(page).then((s) => s.focused)).toBe('Fog: on');
 
-    // The d-pad (standard mapping: 12 up, 13 down, 0 = A) through the demo's fake pad.
-    const padPress = async (i: number) => {
-      const t = (await readState(page)).frame;
-      await page.evaluate((b) => (window as unknown as { __demo: DemoApi }).__demo.pad(b, true), i);
-      await expect.poll(() => readState(page).then((s) => s.frame)).toBeGreaterThan(t + 2);
-      await page.evaluate(
-        (b) => (window as unknown as { __demo: DemoApi }).__demo.pad(b, false),
-        i,
-      );
+    // The d-pad (standard mapping: 12 up, 13 down, 0 = A) through the demo's fake pad. A press is
+    // held until the focused label reads as expected (the demo latches it until its `PadNav` has
+    // seen the edge, so one press is one step however the frames pace), then released and the
+    // release given a frame to be observed before the next press.
+    const pad = (b: number, pressed: boolean) =>
+      page.evaluate(([i, p]) => (window as unknown as { __demo: DemoApi }).__demo.pad(i, p), [
+        b,
+        pressed,
+      ] as const);
+    const padPress = async (i: number, focused: string) => {
+      await pad(i, true);
+      await expect.poll(() => readState(page).then((s) => s.focused)).toBe(focused);
+      await pad(i, false);
       const u = (await readState(page)).frame;
       await expect.poll(() => readState(page).then((s) => s.frame)).toBeGreaterThan(u + 2);
     };
-    await padPress(13);
-    await expect.poll(() => readState(page).then((s) => s.focused)).toBe('Reset coins');
-    await padPress(12);
-    await expect.poll(() => readState(page).then((s) => s.focused)).toBe('Fog: on');
-    await padPress(0);
-    await expect.poll(() => readState(page).then((s) => s.focused)).toBe('Fog: off');
+    await padPress(13, 'Reset coins');
+    await padPress(12, 'Fog: on');
+    await padPress(0, 'Fog: off');
     await expect.poll(() => readState(page).then((s) => s.fog)).toBe(false);
 
     // The game is parked while the menu is up: the player ignores movement keys.
