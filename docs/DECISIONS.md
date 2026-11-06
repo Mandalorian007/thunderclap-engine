@@ -98,3 +98,7 @@ Parallelism note: during wave 4 only three engineers were running when the user 
 ## E-017 — e2e assertions on moving values poll; load is the test (2026-11-05)
 
 Four wave-5 branches reported single e2e failures on pages they never touched (mesh.spec fog and drag, ui.spec menuNav), every time while eight or more matrices ran on one machine. The engine was not at fault: the fog probe sits under a lamp that orbits on real time, the drag and pad assertions read state once after an input burst. Rule: an e2e assertion on a value that moves over time polls (`expect.poll` or `waitForFunction`) and never reads once; pages used by such specs expose a flag that parks time-driven motion. The no-retry rule stays: a red gate is reported as red and the spec gets fixed (ws/flake-input), not re-run. Integrators treat a failure in a spec on this list as the spec's, merge if everything else is green, and say so in the report.
+
+## E-018 — integrators work in their own worktree; main moves by fast-forward (2026-11-05)
+
+The ws/gltf-anim integrator had its merge staged in the main checkout when the PM committed a STATUS update there. The PM's `git commit` swallowed the staged merge, so `3813f8c` is the gltf-anim merge under a docs message, committed before its gates ran (they passed afterwards: 632 tests, e2e 528/57/1 with the E-017 fog flake). History stays as it is. Rule: integrators merge in a detached worktree and land by fast-forward into `main`; the main checkout belongs to the PM, who commits docs whenever it likes. `docs/briefs/integrate.md` carries the steps.
