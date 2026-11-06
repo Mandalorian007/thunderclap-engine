@@ -500,6 +500,7 @@ export function createMusic(mixer: AudioEngine, opts: MusicOptions): Music {
         return p.sends?.count ?? 0;
       },
       occlusion: 0,
+      doppler: 1,
     };
     return voice;
   }

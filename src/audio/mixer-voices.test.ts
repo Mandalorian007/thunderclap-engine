@@ -54,6 +54,7 @@ function fakeVoice(
     filter() {},
     sendCount: 0,
     occlusion: 0,
+    doppler: 1,
     bus,
   };
   return v;

@@ -152,3 +152,29 @@ test('?pause ramps music and sfx to silence, keeps ui, and unpause restores the 
     .toBeLessThan(1e-5);
   expect((await read(page)).pausedBuses).toEqual([]);
 });
+
+test('?pause keeps music silent while a spoken line ducks it (ws/audio-5)', async ({ page }) => {
+  await expect.poll(() => read(page).then((s) => s.paused)).toBe(true);
+  // The 50 ms pause ramp ends on exactly 0.
+  await expect.poll(() => read(page).then((s) => s.busGains.music), { timeout: 20_000 }).toBe(0);
+  await speak(page);
+  // Every read while the ducker attacks, holds and releases sees 0: the ducker's writes wait for
+  // unpause. Before ws/audio-5 a line raised paused music (0 → 0.147 → 0.36).
+  const seen: number[] = [];
+  const f0 = (await read(page)).frames;
+  await expect
+    .poll(async () => {
+      const s = await read(page);
+      seen.push(s.busGains.music!);
+      return s.ducked && s.duckGain < 0.5 && s.frames >= f0 + 20;
+    })
+    .toBe(true);
+  await expect
+    .poll(async () => {
+      const s = await read(page);
+      seen.push(s.busGains.music!);
+      return s.paused && !s.ducked && s.duckGain === 1;
+    })
+    .toBe(true);
+  expect(Math.max(...seen)).toBe(0);
+});
