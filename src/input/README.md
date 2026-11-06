@@ -109,7 +109,7 @@ A finger covers about 44 CSS px. With `GestureOptions.magnify` (or `gestures.set
 
 ## Rays and the pointer router
 
-Every pointer (mouse, pen, touch, the pad cursor, later XR controllers and hands) becomes a ray through the camera, tested against the game's hit testers. 2D and 3D pick the same way.
+Every pointer (mouse, pen, touch, the pad cursor, XR controllers and hands through `XrPointerSource`) becomes a ray through the camera, tested against the game's hit testers. 2D and 3D pick the same way.
 
 ```ts
 import { aabbTester, createPointerRouter, Input, PadCursor, planeTester } from '@thunderclap/engine/input';
