@@ -4,8 +4,9 @@
  * look deltas. Noun-free; the world and its line-of-sight test are what a game would write.
  *
  * - Desktop: click the canvas for the pointer lock, then the mouse orbits; WASD moves relative
- *   to the camera; `V` toggles first and third person; the wheel zooms.
- * - Touch: left-half finger moves, right-half drag orbits. Pad: left stick moves, right looks.
+ *   to the camera; `V` toggles first and third person; the wheel zooms through `Look.zoom`.
+ * - Touch: left-half finger moves, right-half drag orbits, a second finger pinches to zoom. Pad:
+ *   left stick moves, right looks.
  */
 import { GameLoop } from '@thunderclap/engine/core';
 import { Follow, Input, Look, type Vec3 } from '@thunderclap/engine/input';
@@ -247,7 +248,7 @@ const look = new Look({
   },
 });
 
-type Action = 'view' | 'zoomIn' | 'zoomOut';
+type Action = 'view';
 
 async function main(): Promise<void> {
   const res = await boot(root, { title: 'Engine follow camera demo' });
@@ -310,8 +311,6 @@ async function main(): Promise<void> {
   const input = new Input<Action>(
     {
       view: [{ key: 'KeyV' }, { padButton: 3 }],
-      zoomIn: [{ wheel: -1 }],
-      zoomOut: [{ wheel: 1 }],
     },
     { look },
   );
@@ -355,8 +354,6 @@ async function main(): Promise<void> {
     update(dt) {
       input.update();
       if (input.pressed('view')) follow.mode = follow.mode === 'third' ? 'first' : 'third';
-      if (input.pressed('zoomIn')) follow.zoom(-1);
-      if (input.pressed('zoomOut')) follow.zoom(1);
       // Move relative to the camera's yaw; the capsule faces where it walks.
       const mv = look.move;
       const fx = Math.sin(follow.yaw);

@@ -167,7 +167,7 @@ An XR source fills `ray` from each input source's target-ray pose, sets `select 
 
 ## Look
 
-`Look` turns pointer-locked mouse, a two-zone touch layout, the pad's sticks and the move keys into two per-tick numbers a first- or third-person game reads: `look` (yaw and pitch deltas, radians) and `move` (x, y in -1..1). The game never sees which device moved.
+`Look` turns pointer-locked mouse, a two-zone touch layout, the pad's sticks and the move keys into three per-tick numbers a first- or third-person game reads: `look` (yaw and pitch deltas, radians), `move` (x, y in -1..1) and `zoom` (wheel notches, pinch or stick units; positive is closer). The game never sees which device moved.
 
 ```ts
 import { Input, Look } from '@thunderclap/engine/input';
@@ -183,16 +183,18 @@ look.onLockChange((locked) => showClickToPlay(!locked));
 yaw += look.look.dx;                             // > 0 turns right
 pitch = clamp(pitch + look.look.dy, -1.4, 1.4);  // > 0 looks up
 walk(look.move.x, look.move.y);                  // y > 0 is forward, length ≤ 1
+distance -= look.zoom * step;                    // > 0 is closer (Follow does this itself)
 ```
 
 - **Mouse**: `movementX/Y` count only while `document.pointerLockElement` is the attached element, times `sensitivity` (radians per CSS px, 0.0025). `request()` asks for the lock and resolves with whether it is held (false when detached, blocked, refused or unsupported; it never rejects). Browsers grant it only inside a user gesture. `release()` calls `document.exitPointerLock()` only when this element holds the lock. `locked` follows `pointerlockchange`; `onLockChange(fn)` (or `on('lockChange', fn)`, core `Emitter`, `LookEvents`) reports each change.
 - **Touch**: the first touch that lands in the move zone (`touch.moveZone`, the `'left'` half of the element by default; `'right'`, or `'none'` for look only) is a floating stick: its offset from where it landed, clamped to `touch.radius` (56 CSS px), through a radial `touch.deadzone` (0.12 of the radius), is `move`. Any other touch drags the view at `touch.sensitivity` (default `sensitivity`). `look.stick` (`LookStick`: `active`, `originX`/`originY`, `x`/`y`, client CSS px) is there to draw the stick.
 - **Pad**: the left stick is `move`, the right stick `look` at `padSensitivity` (radians per second at full deflection, 3) × the tick's `dt` from `now`; both through `padDeadzone` (0.15, radial). `pad` picks one pad (default the first connected).
 - **Keys**: `keys` (`LookKeys`: `forward`, `back`, `left`, `right`, `KeyboardEvent.code` lists, no defaults) are read from the linked `Input`'s raw key state. Every source sums and `move` is clamped to length 1.
+- **Zoom** (`zoom: LookZoomOptions`; `Look.zoom` resets each tick like `look.dx`): the wheel (`wheel`, on) on the attached element, listened passively, counts one unit per notch (wheel up is closer): `deltaMode` pixels over `stepPx` (100 CSS px), lines over 3, pages as is. A pinch (`pinch`, on) starts when a second finger lands while a look drag is live and neither takes the move stick: the change in finger distance over `stepPx` is the zoom, the drag reports no look while pinching, and when either finger lifts the other carries on as the drag; the move stick is never stolen. `pad` (`LookZoomPad`, default `'none'`): `'rightStickY'` makes the right stick's vertical axis the zoom (`PAD_ZOOM_PER_S` = 4 units per second at full deflection) and the stick then never pitches `look.dy` (the trade a game makes when the wheel is its only other zoom); `'shoulders'` reads the standard-mapping shoulder buttons as -1 (left, 4) and +1 (right, 5) per tick while held and leaves the stick to look. `wheel(units)` feeds notches for tests.
 - `invertY` flips vertical look for every device.
 - `blocked()` (shared with the linked `Input`): `look` and `move` read zero, the lock is released, and fingers already down are ignored until they lift. Window blur and a hidden tab drop the touches too.
-- Feed methods for tests and replays: `mouseMove(dx, dy)`, `touchDown(id, x, y, inMoveZone)`, `touchMove`, `touchUp`, `cancelAll`. `attach(el)`/`detach()` are called by `Input.attach`/`detach`.
-- Types: `LookOptions`, `LookTouchOptions` (`moveZone`, `deadzone`, `radius`, `sensitivity`), `MoveZone`, `LookKeys`, `LookStick`, `LookEvents`. No allocation per tick.
+- Feed methods for tests and replays: `mouseMove(dx, dy)`, `wheel(units)`, `touchDown(id, x, y, inMoveZone)`, `touchMove`, `touchUp`, `cancelAll`. `attach(el)`/`detach()` are called by `Input.attach`/`detach`.
+- Types: `LookOptions`, `LookTouchOptions` (`moveZone`, `deadzone`, `radius`, `sensitivity`), `LookZoomOptions` (`wheel`, `pinch`, `pad`, `stepPx`), `LookZoomPad`, `MoveZone`, `LookKeys`, `LookStick`, `LookEvents`; constant `PAD_ZOOM_PER_S`. No allocation per tick.
 
 ## Follow
 
@@ -203,18 +205,18 @@ import { Follow, Input, Look } from '@thunderclap/engine/input';
 
 const follow = new Follow(camera, { distance: 5, shoulder: [0.6, 0], obstacle: world.lineOfSight });
 follow.target = player;                 // { position: [x, y, z] | Float32Array; yaw?: number }
-follow.setLook(look);                   // the Look linked to the Input; Follow only reads look.look
+follow.setLook(look);                   // the Look linked to the Input; Follow reads look.look and look.zoom
 
 // each tick, after input.update():
-follow.update(dt);                      // yaw/pitch from the look, clamp, follow, test, camera.lookAt
+follow.update(dt);                      // yaw/pitch and zoom from the look, clamp, follow, test, camera.lookAt
 if (input.pressed('view')) follow.mode = follow.mode === 'third' ? 'first' : 'third';
-if (input.pressed('zoomOut')) follow.zoom(1);   // Look has no zoom input: bind the wheel or a button
+if (input.pressed('zoomOut')) follow.zoom(1);   // extra keys or buttons step it too
 ```
 
 - **Conventions** match `Look` and the look harness: `yaw` 0 looks down -z and positive turns right; positive `pitch` looks up, so in third person the camera sinks below the pivot and a negative pitch (the default, -0.35) raises it. The pivot is `target.position + (0, eyeHeight, 0)` (1.6) shifted by `shoulder` `[right, up]` along the camera's right and up; the eye sits `distance` behind it along the view direction and the camera looks at the pivot. `pitch` is clamped to `pitchMin..pitchMax` (-1.2..1.2) every update.
 - **Smoothing**: `smoothing` (seconds, a time constant; 0.12; 0 follows exactly) eases the pivot towards the target, so a moving character is followed with a little lag while the orbit answers the look at once. `snap()` forgets the lag (teleports, scene changes).
 - **Obstacles** (`FollowObstacle`, `(from, to, outHit) => boolean`): the engine has no world, so the game tests the line from the pivot to the wanted eye and writes the first hit into `outHit`. The camera moves to the hit minus `margin` (0.2); `currentDistance` is what it used (`distance` stays what was wanted). It snaps in and eases back out with `smoothing`.
-- **Zoom**: `zoom(steps)` steps `distance` by `zoomStep` (0.5) within `minDistance..maxDistance` (1..12). `Look` offers no zoom axis, so the game binds the wheel or pad buttons through `Input`.
+- **Zoom**: `zoom(steps)` steps `distance` by `zoomStep` (0.5) within `minDistance..maxDistance` (1..12), positive farther. With a `Look` linked, each `update` calls `zoom(-look.zoom)` (the look's axis is positive closer), so the wheel, a pinch and the opted-in pad control zoom with no binding of the game's own; `zoom(steps)` stays for keys and buttons.
 - **Modes** (`FollowMode`): `mode = 'first'` puts the eye at `target.position + eyeHeight` looking along the same yaw and pitch, with no lag, shoulder or obstacle test, so a game toggles views with one assignment and the look continues where it was.
 - `realign` (seconds; 0 = off) eases `yaw` back to `target.yaw` while the look is still. `position`, `pivot` and `forward` (`Vec3`) are what the last update placed; read them for audio listeners, anchors or movement relative to the camera.
 - Types: `FollowOptions` (`distance`, `minDistance`, `maxDistance`, `shoulder`, `pitchMin`, `pitchMax`, `smoothing`, `eyeHeight`, `zoomStep`, `obstacle`, `margin`, `realign`, `yaw`, `pitch`, `mode`), `FollowTarget`, `FollowCamera`, `FollowMode`, `FollowObstacle`. `harness/follow.html` shows it: a capsule between walls, `V` toggles the mode.

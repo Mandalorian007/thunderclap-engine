@@ -33,7 +33,10 @@ export {
   type LookOptions,
   type LookStick,
   type LookTouchOptions,
+  type LookZoomOptions,
+  type LookZoomPad,
   type MoveZone,
+  PAD_ZOOM_PER_S,
 } from './look';
 export {
   type Aim,
