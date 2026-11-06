@@ -82,6 +82,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | UI widgets 2: reticle, bar, segmented, select, keyPrompt, stepper, cooldown | ws/ui-widgets | 🔧 engineer running (offset 320) |
 | 5 | Audio 2: beat-grid music layers, variations, reverb/lowpass sends, ducking | ws/audio-2 | 🔧 engineer running (offset 330) |
 | 5 | Save 2: slot manager with meta sidecar, settings store + bind, undo journal, typed-array codec | ws/save-2 | 🔧 engineer running (offset 340) |
+| 5 | Post 2: FXAA, 3D LUT, grain, aberration, sharpen, depth/normal outline | ws/post-2 | 🔧 engineer running (offset 350) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
@@ -109,7 +110,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - A shared default-texture registry and a mip sampler (`'linear-mip-repeat'`) for materials (ws/pbr wish); a vertex layout without normals (8 floats) for trails (ws/trails wish).
 - Stale code comments listed in the ws/doc-sweep-3 report (host/types.ts, core/game.ts, assets/gltf-load.ts, platform/README 'No dependencies', post/README bgra8unorm, input types/pointer-sources/pointer-router/xr-source, ui styles/overlay, render material/lights/wgsl/scene-target/shadow/renderer/frame): a ws/comment-sweep brief after wave 5 merges.
 - ws/template-first-person wishes (→ ws/ergo-3d after look-zoom and skinning land): `camera.setPerspective` sets depth/cull like `Camera.perspective`; a `Look` 'lock on first click' option; `Mesh.update` taking a `{ buffer, vertexCount, indexCount, bounds }` worker reply; a ray-vs-heightfield / sampled height helper.
-- ws/skinning follow-ups (→ ws/skin-shadow if the integrator skips them): `ShadowMap.pipelineFor` takes the bindings layout for skinned casters and `encodeShadow` binds group 1, so skinned meshes can `castShadow`; a dedicated `InstanceParams.skin` slot instead of `params.w`.
+- Skinned shadow casters are done (`ShadowMap.pipelineFor(layout, bindings)` on main); remaining ws/skinning wish: a dedicated `InstanceParams.skin` slot instead of `params.w`. → ws/comment-sweep or ws/ergo-3d. No ws/skin-shadow brief needed.
 - ws/spot-lights follow-up: `material.ts` / render README "Instance format" table still says the flags float is reserved beyond bit 0; layers now ride bits 1..23 (`INSTANCE_LAYER_SHIFT`, `INSTANCE_LAYER_BITS`). Fold into ws/comment-sweep.
 - `VertexLayout.positionOffset` in render so a game passes the layout straight to `meshTester` (ws/pick wish).
 - ws/texture-registry wishes: `Renderer.white` → `defaultTextures(device).white` (renderer.ts); rename `LoadTextureArrayOptions.mipFilter` to `filter` to match `LoadTextureOptions`; a `pbr.html` case using the defaults once pbr lands.
