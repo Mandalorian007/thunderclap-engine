@@ -4,8 +4,10 @@ export {
   type ColliderSource,
   type ColliderTransform,
   createStaticCollider,
+  type GeometryMeshSource,
   type GeometrySource,
   type HeightfieldSource,
+  type PositionsSource,
   SOURCE_GEOMETRY,
   SOURCE_GRID,
   SOURCE_HEIGHTFIELD,
@@ -64,3 +66,17 @@ export {
   slide,
   slide2,
 } from './slide';
+export {
+  carryBy,
+  createTileSlideResult,
+  slideTiles,
+  TILE_EMPTY,
+  TILE_ONE_WAY,
+  TILE_SOLID,
+  type TileBox,
+  type TileKind,
+  type TileMover,
+  type TileQuery,
+  type TileSlideOptions,
+  type TileSlideResult,
+} from './tile-slide';
