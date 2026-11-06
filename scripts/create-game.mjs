@@ -53,6 +53,7 @@ const CLAUDE_MD_RULES = [
 export const REWRITES = {
   puzzle: CLAUDE_MD_RULES,
   'first-person': CLAUDE_MD_RULES,
+  'third-person': CLAUDE_MD_RULES,
 };
 
 const USAGE = `usage: pnpm create-game <dir> [--template <name>] [--name <pkg>] [--engine <spec>] [--force] [--dry-run]
