@@ -140,6 +140,7 @@ await ui.caption.say('Something old is listening.', {
     bounds.
   - `cooldown({ size })` returns `{ element, set(fraction), ready }`: a `conic-gradient` sweep on
     `--tc-ui-sweep`, `data-ready` at 1, `aria-hidden`.
+  `reticle` is a plain element; use `createReticle` from the HUD (or `ui.reticle`) for one that hides under modals.
 - `h(tag, props, ...children)` is hyperscript. It handles `class`, `style` (including `--custom`
   properties), `dataset` and `on: { click }`. Any other prop becomes an attribute: `true` sets an
   empty attribute and `false`/null omits it.
@@ -369,8 +370,8 @@ declarations, and `applyTheme(el, tokens)` sets them on an element. `ensureStyle
   ReadingTimeOptions)` (`baseMs`, `perCharMs`, `minMs`, `maxMs`); `overlapArea(box, regions)` and
   `cornerOrder(preferred)` for `onPlace` handlers.
 - **Widget options.** `ButtonOptions` (`variant`, `disabled`, `ariaLabel`, `className`) and
-  `SliderOptions` (`min`, `max`, `step`, `format`); for the second set, `ReticleOptions`,
-  `BarOptions`, `KeyPromptOptions`, `StepperOptions`, `CooldownOptions` and the handles `Reticle`,
+  `SliderOptions` (`min`, `max`, `step`, `format`); for the second set, `WidgetReticleOptions`,
+  `BarOptions`, `KeyPromptOptions`, `StepperOptions`, `CooldownOptions` and the handles `WidgetReticle`,
   `Bar`, `Segmented`, `Select`, `KeyPrompt`, `Stepper`, `Cooldown`. `h`'s children are `Child` (`Node`, string,
   number or nothing); `append(el, ...children)` adds them to an existing element.
 - **External links.** `externalLink(opts: ExternalLinkOptions)` returns an `ExternalLink`

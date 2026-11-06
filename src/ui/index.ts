@@ -140,8 +140,6 @@ export {
   type KeyPrompt,
   type KeyPromptOptions,
   keyPrompt,
-  type Reticle,
-  type ReticleOptions,
   reticle,
   type Segmented,
   type Select,
@@ -151,5 +149,7 @@ export {
   select,
   stepper,
   WIDGETS2_CSS,
+  type WidgetReticle,
+  type WidgetReticleOptions,
   type WidgetTone,
 } from './widgets-2';

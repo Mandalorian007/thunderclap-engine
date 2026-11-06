@@ -24,7 +24,7 @@ const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 
 // ---------------------------------------------------------------- reticle
 
-export interface ReticleOptions {
+export interface WidgetReticleOptions {
   /** Box the lines fit in at spread 0, design px. Default 48. */
   size?: number;
   /** Line thickness, design px. Default 2. */
@@ -37,7 +37,7 @@ export interface ReticleOptions {
   color?: string;
 }
 
-export interface Reticle {
+export interface WidgetReticle {
   element: HTMLDivElement;
   /** Open the lines: 0 is the resting gap, 1 is a quarter of the size further out. */
   set(spread: number): void;
@@ -52,7 +52,7 @@ export interface Reticle {
  * (`position: absolute; left: 50%; top: 50%`), so it goes on the `hud` layer or any positioned
  * box. Decorative: `aria-hidden`. `set(spread)` opens the lines; `hit()` flashes them.
  */
-export function reticle(opts: ReticleOptions = {}): Reticle {
+export function reticle(opts: WidgetReticleOptions = {}): WidgetReticle {
   const { size = 48, thickness = 2, gap = 6, dot = true, color } = opts;
   const style: Record<string, string> = {
     '--tc-ui-size': String(size),
