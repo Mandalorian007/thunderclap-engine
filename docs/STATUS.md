@@ -56,7 +56,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Geometry | ws/geom | `@thunderclap/engine/geom`: box/plane/sphere/icosphere/capsule/cylinder/torus, `Heightfield` with `heightAt`/`raycastHeightfield`, merge/transform; harness `geom.html` | — | ✅ green at `ec57488` (747 tests; e2e 569/57/0); queued chain 4 |
 | 5 | IK + root motion | ws/ik | `twoBoneIk`, `lookAt`, `extractRootMotion`, `applyRootMotionDelta`; harness `ik.html` | anim | ✅ green at `4885580` (638 tests; e2e 491/52/3, all mesh.spec drag under load, E-017); queued chain 4 after geom |
 | 5 | Anim graph | ws/anim-graph | `createAnimGraph`: states, 1D blend spaces with phase sync, conditional transitions, enter/exit hooks; harness `anim-graph.html` | anim | 🔧 in progress |
-| 5 | HUD widgets | ws/ui-hud | `ui.reticle`, `ui.meter`, `ui.slots`, `ui.heading` on the overlay; harness `hud.html` | ui | 🔧 in progress |
+| 5 | HUD widgets | ws/ui-hud | `ui.reticle`, `ui.meter`, `ui.slots`, `ui.heading` on the overlay; harness `hud.html` | ui | ✅ green at `97e0af3` (723 tests; e2e 587/92/3, all E-017 list); queued chain 4 after ik |
 | 5 | Gesture long-press | ws/gesture-longpress | pan threshold before long-press, cumulative travel, `Gestures.onGesture` observer | gestures | 🔧 in progress |
 | 5 | Audio zones | ws/audio-zones | `audio.zones` (ambient loops, reverb sends by listener position), `Voice.follow`, `audio.update(dt)`; harness `zones.html` | audio | 🔧 in progress |
 | 5 | Retargeting | ws/retarget | `createRetargetMap`, `retargetPose`, `retargetClip`; name matching; harness `retarget.html` | anim | 🔧 in progress |
@@ -97,6 +97,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - Replace the hand-built cube/ground/tube/icosphere geometry in `harness/mesh.ts`, `pick.ts`, `skin.ts` and the first-person template terrain with `geom` builders (ws/geom wish). → ws/comment-sweep.
 - Tangents in a vertex layout, for a normal-mapped material (ws/geom wish). → ws/gltf-materials.
 - A mat3→quat helper in `anim/quat.ts` (ws/ik wish). → ws/comment-sweep.
+- Fold `HUD_CSS` (second `<style id="tc-ui-hud">`) into `styles.ts` `BASE_CSS` (ws/ui-hud note). → ws/comment-sweep.
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
