@@ -152,6 +152,7 @@ Import only from the public entry points listed under [Modules](#modules). Anyth
 
 - `templates/puzzle` (`@thunderclap/template-puzzle`): a 2D puzzle game: `createGame`, one scene, pure `rules/` with tests, a versioned save with a migration and a layout spec placing a HUD on every form factor. Run `pnpm template:puzzle` (`check:template-puzzle`).
 - `templates/first-person` (`@thunderclap/template-first-person`): a first-person 3D game in client mode (`sim: false`, no save): `Look` for mouse, touch zones, sticks and keys, Worker-meshed chunks with bounds and a texture array, a sun with a shadow map and fog, world-space snow, world-anchored landmark labels, pointer hits and a pure `world/` with tests. Run `pnpm template:first-person` (`check:template-first-person`).
+- `templates/third-person` (`@thunderclap/template-third-person`): a third-person action game in client mode: a skinned biped generated as a glb at startup (no asset) and parsed through `assets`, `createAnimGraph` over idle/locomotion/attack/hit, `Follow` orbit and zoom, foot IK on a `geom` heightfield, root motion on the attack, a head `lookAt`, three cosmetic sockets through `attachTransform`, four roaming enemies with anchored name plates and health bars, PBR, shadows and fog. Run `pnpm template:third-person` (`check:template-third-person`).
 
 **Demos.** Playable showcases under `demos/` (E-021), each a page on the public API with no network assets, exposing `window.__demo` for its spec under `e2e/demos/`. `pnpm demo <name>` serves one (`pnpm demo` lists them); the harness server also serves them at `/demos/<name>/`, so the matrix runs them. [demos/README.md](demos/README.md) has the table.
 
@@ -222,7 +223,7 @@ Landed in wave 5 so far: the pure animation module (`@thunderclap/engine/anim`: 
 
 In flight: see [docs/STATUS.md](docs/STATUS.md).
 
-After that: a third-person showcase template, GPU picking, and publishing `engine-v1.0.0`.
+After that: GPU picking and publishing `engine-v1.0.0`. The third-person showcase template (`templates/third-person`) has landed.
 
 ## Built with ThunderClap
 
