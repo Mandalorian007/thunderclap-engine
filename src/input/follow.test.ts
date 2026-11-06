@@ -30,9 +30,9 @@ function fakeCamera() {
   };
 }
 
-/** A `Look` stand-in: only `look` is read. */
+/** A `Look` stand-in: only `look` and `zoom` are read. */
 function fakeLook(): Look {
-  return { look: { dx: 0, dy: 0 } } as unknown as Look;
+  return { look: { dx: 0, dy: 0 }, zoom: 0 } as unknown as Look;
 }
 
 function setup(opts: FollowOptions = {}) {
@@ -177,6 +177,22 @@ describe('Follow: third person', () => {
     expect(follow.distance).toBe(5);
     follow.zoom(-10);
     expect(follow.distance).toBe(2);
+  });
+
+  it("reads the linked look's zoom axis each update: positive is closer, within min..max", () => {
+    const { follow, look } = setup({ distance: 4, minDistance: 2, maxDistance: 5, zoomStep: 1 });
+    look.zoom = 1;
+    follow.update(1 / 60);
+    expect(follow.distance).toBe(3);
+    follow.update(1 / 60);
+    follow.update(1 / 60);
+    expect(follow.distance).toBe(2);
+    look.zoom = -0.5;
+    follow.update(1 / 60);
+    expect(follow.distance).toBe(2.5);
+    look.zoom = 0;
+    follow.update(1 / 60);
+    expect(follow.distance).toBe(2.5);
   });
 
   it('realign eases the yaw back to target.yaw only while the look is still', () => {

@@ -26,7 +26,30 @@ export interface LookKeys {
   right?: readonly string[];
 }
 
+/** Which pad control zooms. */
+export type LookZoomPad = 'rightStickY' | 'shoulders' | 'none';
+
+export interface LookZoomOptions {
+  /** The mouse wheel zooms (one notch, 100 px or `stepPx`, is 1). Default true. */
+  wheel?: boolean;
+  /**
+   * A second finger beside a look drag pinches: the change in finger distance over `stepPx` is
+   * the zoom. Default true.
+   */
+  pinch?: boolean;
+  /**
+   * `'rightStickY'`: the right stick's vertical axis zooms (`PAD_ZOOM_PER_S` units per second at
+   * full deflection) and no longer pitches the look. `'shoulders'`: the shoulder buttons (standard
+   * mapping 4 and 5) read -1 and +1 per tick while held. Default `'none'`.
+   */
+  pad?: LookZoomPad;
+  /** CSS px per zoom unit for the wheel (`deltaMode` pixels) and the pinch. Default 100. */
+  stepPx?: number;
+}
+
 export interface LookOptions {
+  /** The zoom axis (`Look.zoom`). Default: wheel and pinch on, pad `'none'`. */
+  zoom?: LookZoomOptions;
   /** Radians per CSS px of pointer-locked mouse movement. Default 0.0025. */
   sensitivity?: number;
   /** Radians per second at full right-stick deflection. Default 3. */
@@ -72,6 +95,13 @@ export interface LookStick {
 /** Longest gap between two ticks the stick integrates over, seconds. */
 const MAX_DT = 0.1;
 
+/** Zoom units per second the right stick reports at full deflection (`zoom.pad: 'rightStickY'`). */
+export const PAD_ZOOM_PER_S = 4;
+
+/** Standard-mapping shoulder buttons: left zooms out, right zooms in. */
+const SHOULDER_OUT = 4;
+const SHOULDER_IN = 5;
+
 function defaultGamepads(): readonly (GamepadLike | null)[] {
   try {
     return typeof navigator !== 'undefined' && navigator.getGamepads ? navigator.getGamepads() : [];
@@ -90,13 +120,19 @@ const defaultNow = () => (typeof performance !== 'undefined' ? performance.now()
  * with `Input.attach` and advances in `Input.update()`.
  *
  * Signs: `look.dx` > 0 turns right, `look.dy` > 0 looks up (`invertY` flips it); `move.x` > 0 is
- * right, `move.y` > 0 is forward. No allocation per tick.
+ * right, `move.y` > 0 is forward. `zoom` > 0 is closer (wheel up, fingers apart). No allocation
+ * per tick.
  */
 export class Look {
   /** This tick's look delta, radians. */
   readonly look = { dx: 0, dy: 0 };
   /** This tick's move, each axis -1..1, length at most 1. */
   readonly move = { x: 0, y: 0 };
+  /**
+   * This tick's zoom: wheel notches, pinch distance over `stepPx`, or stick units; positive is
+   * closer. `Follow` reads it when linked.
+   */
+  zoom = 0;
   /** The touch move stick (client CSS px). */
   readonly stick: LookStick = { active: false, originX: 0, originY: 0, x: 0, y: 0 };
   /** True while the attached element holds the pointer lock. */
@@ -114,6 +150,10 @@ export class Look {
   touchSensitivity: number | undefined;
   padDeadzone: number;
   keys: LookKeys;
+  zoomWheel: boolean;
+  zoomPinch: boolean;
+  zoomPad: LookZoomPad;
+  zoomStepPx: number;
 
   private readonly pad: number | undefined;
   private readonly getGamepads: () => readonly (GamepadLike | null)[];
@@ -128,6 +168,11 @@ export class Look {
   private lookId: number | null = null;
   private lookLastX = 0;
   private lookLastY = 0;
+  private pinchId: number | null = null;
+  private pinchX = 0;
+  private pinchY = 0;
+  private pinchDist = 0;
+  private zoomAcc = 0;
   private target: HTMLElement | null = null;
   private detachFn: (() => void) | null = null;
 
@@ -142,6 +187,10 @@ export class Look {
     this.padDeadzone = opts.padDeadzone ?? 0.15;
     this.pad = opts.pad;
     this.keys = opts.keys ?? {};
+    this.zoomWheel = opts.zoom?.wheel ?? true;
+    this.zoomPinch = opts.zoom?.pinch ?? true;
+    this.zoomPad = opts.zoom?.pad ?? 'none';
+    this.zoomStepPx = opts.zoom?.stepPx ?? 100;
     this.getGamepads = opts.getGamepads ?? defaultGamepads;
     this.blocked = opts.blocked ?? (() => false);
     this.now = opts.now ?? defaultNow;
@@ -170,8 +219,8 @@ export class Look {
     const move = this.move;
 
     if (this.blocked()) {
-      look.dx = look.dy = move.x = move.y = 0;
-      this.mouseX = this.mouseY = this.touchX = this.touchY = 0;
+      look.dx = look.dy = move.x = move.y = this.zoom = 0;
+      this.mouseX = this.mouseY = this.touchX = this.touchY = this.zoomAcc = 0;
       this.voidTouches();
       this.release();
       return;
@@ -183,6 +232,8 @@ export class Look {
     const down = this.mouseY * this.sensitivity + this.touchY * touchSens;
     let dy = this.invertY ? down : 0 - down;
     this.mouseX = this.mouseY = this.touchX = this.touchY = 0;
+    let zoom = this.zoomAcc;
+    this.zoomAcc = 0;
 
     let mx = 0;
     let my = 0;
@@ -205,8 +256,18 @@ export class Look {
       const ry = -(a[3] ?? 0);
       const k = this.padSensitivity * dt;
       dx += deadzoneScale(rx, ry, this.padDeadzone, 0) * k;
-      // Stick up looks up (dy > 0) unless inverted.
-      dy += deadzoneScale(rx, ry, this.padDeadzone, 1) * k * (this.invertY ? -1 : 1);
+      const zp = this.zoomPad;
+      if (zp === 'rightStickY') {
+        // The stick's vertical axis is the zoom, so the look pitches only from other devices.
+        zoom += deadzoneScale(rx, ry, this.padDeadzone, 1) * PAD_ZOOM_PER_S * dt;
+      } else {
+        // Stick up looks up (dy > 0) unless inverted.
+        dy += deadzoneScale(rx, ry, this.padDeadzone, 1) * k * (this.invertY ? -1 : 1);
+      }
+      if (zp === 'shoulders') {
+        const b = p.buttons;
+        zoom += (b[SHOULDER_IN]?.pressed ? 1 : 0) - (b[SHOULDER_OUT]?.pressed ? 1 : 0);
+      }
     }
 
     const held = this.keyHeld;
@@ -225,6 +286,7 @@ export class Look {
     look.dy = dy;
     move.x = mx;
     move.y = my;
+    this.zoom = zoom;
   }
 
   private padState(): GamepadLike | null {
@@ -254,7 +316,17 @@ export class Look {
     this.mouseY += dy;
   }
 
-  /** A touch went down at client (x, y); `inMoveZone` says whether it landed in the move zone. */
+  /** Zoom units (wheel notches) to add to this tick's `zoom`; positive is closer. */
+  wheel(units: number): void {
+    if (this.blocked() || !this.zoomWheel) return;
+    this.zoomAcc += units;
+  }
+
+  /**
+   * A touch went down at client (x, y); `inMoveZone` says whether it landed in the move zone. A
+   * touch that neither takes the stick nor starts a look drag pinches against the drag in progress
+   * when `zoom.pinch` is on.
+   */
   touchDown(id: number, x: number, y: number, inMoveZone: boolean): void {
     // A touch that lands while blocked is ignored until it lifts.
     if (this.blocked()) return;
@@ -268,6 +340,11 @@ export class Look {
       this.lookId = id;
       this.lookLastX = x;
       this.lookLastY = y;
+    } else if (this.zoomPinch && this.pinchId === null) {
+      this.pinchId = id;
+      this.pinchX = x;
+      this.pinchY = y;
+      this.pinchDist = Math.hypot(x - this.lookLastX, y - this.lookLastY);
     }
   }
 
@@ -284,10 +361,17 @@ export class Look {
       s.x = s.originX + ox;
       s.y = s.originY + oy;
     } else if (id === this.lookId) {
-      this.touchX += x - this.lookLastX;
-      this.touchY += y - this.lookLastY;
+      if (this.pinchId === null) {
+        this.touchX += x - this.lookLastX;
+        this.touchY += y - this.lookLastY;
+      }
       this.lookLastX = x;
       this.lookLastY = y;
+      if (this.pinchId !== null) this.pinchMoved();
+    } else if (id === this.pinchId) {
+      this.pinchX = x;
+      this.pinchY = y;
+      this.pinchMoved();
     }
   }
 
@@ -296,19 +380,33 @@ export class Look {
       this.moveId = null;
       this.stick.active = false;
     } else if (id === this.lookId) {
-      this.lookId = null;
+      // The pinch finger, if any, carries on as the look drag.
+      this.lookId = this.pinchId;
+      this.lookLastX = this.pinchX;
+      this.lookLastY = this.pinchY;
+      this.pinchId = null;
+    } else if (id === this.pinchId) {
+      this.pinchId = null;
     }
+  }
+
+  /** The distance between the look and pinch fingers changed: fingers apart is closer. */
+  private pinchMoved(): void {
+    const d = Math.hypot(this.pinchX - this.lookLastX, this.pinchY - this.lookLastY);
+    if (this.zoomStepPx > 0) this.zoomAcc += (d - this.pinchDist) / this.zoomStepPx;
+    this.pinchDist = d;
   }
 
   /** Drop every touch (blur, hidden tab, blocked). Fingers still down are ignored until lifted. */
   cancelAll(): void {
     this.voidTouches();
-    this.mouseX = this.mouseY = this.touchX = this.touchY = 0;
+    this.mouseX = this.mouseY = this.touchX = this.touchY = this.zoomAcc = 0;
   }
 
   private voidTouches(): void {
     this.moveId = null;
     this.lookId = null;
+    this.pinchId = null;
     this.stick.active = false;
   }
 
@@ -371,8 +469,9 @@ export class Look {
   // ---------------------------------------------------------------- DOM
 
   /**
-   * Listen on the element: touch pointers (zones), pointer-locked mouse movement and the lock's
-   * change and error events. `Input.setLook` calls this from `Input.attach`.
+   * Listen on the element: touch pointers (zones, pinch), the wheel (passive), pointer-locked
+   * mouse movement and the lock's change and error events. `Input.setLook` calls this from
+   * `Input.attach`.
    */
   attach(target: HTMLElement): void {
     this.detach();
@@ -399,6 +498,17 @@ export class Look {
     const onMouse = (e: MouseEvent) => {
       if (doc.pointerLockElement === target) this.mouseMove(e.movementX, e.movementY);
     };
+    const onWheel = (e: WheelEvent) => {
+      // Wheel up (deltaY < 0) is closer. deltaMode 0 = px (stepPx a notch), 1 = lines (3 a
+      // notch), 2 = pages (1 a notch).
+      const units =
+        e.deltaMode === 1
+          ? e.deltaY / 3
+          : e.deltaMode === 2
+            ? e.deltaY
+            : e.deltaY / this.zoomStepPx;
+      this.wheel(0 - units);
+    };
     const onLock = () => this.syncLock();
     const onBlur = () => this.cancelAll();
     const onVisibility = () => {
@@ -409,6 +519,7 @@ export class Look {
     target.addEventListener('pointermove', onMove);
     target.addEventListener('pointerup', onUp);
     target.addEventListener('pointercancel', onUp);
+    target.addEventListener('wheel', onWheel, { passive: true });
     doc.addEventListener('mousemove', onMouse);
     doc.addEventListener('pointerlockchange', onLock);
     doc.addEventListener('pointerlockerror', onLock);
@@ -421,6 +532,7 @@ export class Look {
       target.removeEventListener('pointermove', onMove);
       target.removeEventListener('pointerup', onUp);
       target.removeEventListener('pointercancel', onUp);
+      target.removeEventListener('wheel', onWheel);
       doc.removeEventListener('mousemove', onMouse);
       doc.removeEventListener('pointerlockchange', onLock);
       doc.removeEventListener('pointerlockerror', onLock);
