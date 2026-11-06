@@ -1,13 +1,15 @@
 import type { Material } from './material';
 import { WGSL_PBR } from './pbr-wgsl';
 import type { Renderer } from './renderer';
-import type { Texture, TextureLike } from './texture';
+import { defaultTextures, type TextureLike } from './texture';
 
 /**
  * The standard physically based material (`createStandardMaterial`): base colour,
- * metallic-roughness, normal, occlusion and emissive maps with factors, over the engine's sun,
- * point lights, shadows and fog through `engine_pbr` (`WGSL_PBR`). Every map is optional: a
- * missing one is a 1×1 default (white, white, flat normal, white, black), so any subset works.
+ * metallic-roughness, normal, occlusion and emissive maps with factors, over every light of the
+ * engine's block (sun with its shadow, point and spot lights masked against the instance's
+ * layers, fog) through `engine_pbr_layers` (`WGSL_PBR`, the shared light loop). Every map is
+ * optional: a missing one is a 1×1 `defaultTextures` entry (white, white, flat normal, white,
+ * black), so any subset works.
  * Texture conventions follow glTF: `metallicRoughness` has roughness in G and metallic in B,
  * `occlusion` is in R, the normal map is +Y up (OpenGL / glTF), `baseColor` and `emissive` are
  * sRGB and the data maps linear (`textureFromSource(src, label, { linear: true })`).
@@ -137,7 +139,10 @@ struct StandardParams {
   if ((flags & 2u) != 0u && base.a < standard.factors.w) { discard; }
   let metallic = mr.b * standard.factors.x;
   let roughness = mr.g * standard.factors.y;
-  let lit = engine_pbr(base.rgb, metallic, roughness, n, v, in.worldPos, ao, vec3f(0.0));
+  let lit = engine_pbr_layers(
+    base.rgb, metallic, roughness, n, v, in.worldPos, ao, vec3f(0.0),
+    engine_instance_layers(in.flags),
+  );
   let glow = em + base.rgb * in.emissive;
   // Fog attenuates the emissive without tinting it: fog(e) - fog(0) = e × (1 - f).
   let fogged_glow = engine_fog(glow, in.worldPos) - engine_fog(vec3f(0.0), in.worldPos);
@@ -149,47 +154,18 @@ struct StandardParams {
 }
 `;
 
-interface StandardDefaults {
-  white: Texture;
-  whiteSrgb: Texture;
-  flatNormal: Texture;
-  black: Texture;
-}
-
-/** One set of 1×1 default maps per renderer, made on the first standard material. */
-const DEFAULTS = new WeakMap<Renderer, StandardDefaults>();
-
-function defaultsFor(renderer: Renderer): StandardDefaults {
-  let d = DEFAULTS.get(renderer);
-  if (d) return d;
-  const px = (label: string, rgba: [number, number, number, number], format: GPUTextureFormat) =>
-    renderer.textureFromPixels({
-      width: 1,
-      height: 1,
-      data: new Uint8Array(rgba),
-      format,
-      label: `standard:default-${label}`,
-    });
-  d = {
-    white: px('white', [255, 255, 255, 255], 'rgba8unorm'),
-    whiteSrgb: px('white-srgb', [255, 255, 255, 255], 'rgba8unorm-srgb'),
-    flatNormal: px('flat-normal', [128, 128, 255, 255], 'rgba8unorm'),
-    black: px('black', [0, 0, 0, 255], 'rgba8unorm-srgb'),
-  };
-  DEFAULTS.set(renderer, d);
-  return d;
-}
-
 /**
  * A standard PBR `Material` for `desc`: `createMaterial` with `STANDARD_WGSL`, a 48-byte block
- * from `packStandardUniforms` and the five maps (defaults for the missing ones). The instance
+ * from `packStandardUniforms` and the five maps (the device's `defaultTextures` for the missing
+ * ones: `white` for the base colour, metallic-roughness and occlusion, since a 255 texel reads
+ * as 1.0 whether the view is sRGB or linear, `flatNormal` and `black`). The instance
  * tint (and vertex colour) multiplies the base colour; `InstanceParams.emissive` adds
  * `base × emissive` to the glow like the sprite material. Call `setTexture(slot, tex)` with a
  * `STANDARD_TEXTURE_SLOTS` entry to swap a map, or `setUniforms(packStandardUniforms(next))`
  * to change factors. The sampler is `linear-mip-repeat` (trilinear on maps with mips; level 0 otherwise).
  */
 export function createStandardMaterial(renderer: Renderer, desc: StandardMaterialDesc): Material {
-  const d = defaultsFor(renderer);
+  const d = defaultTextures(renderer.device);
   const m = renderer.createMaterial({
     label: desc.label ?? 'standard',
     wgsl: `${WGSL_PBR}\n${STANDARD_WGSL}`,
@@ -199,7 +175,7 @@ export function createStandardMaterial(renderer: Renderer, desc: StandardMateria
     sampler: 'linear-mip-repeat',
   });
   m.setUniforms(packStandardUniforms(desc));
-  m.setTexture(STANDARD_TEXTURE_SLOTS.baseColor, desc.baseColor ?? d.whiteSrgb);
+  m.setTexture(STANDARD_TEXTURE_SLOTS.baseColor, desc.baseColor ?? d.white);
   m.setTexture(STANDARD_TEXTURE_SLOTS.metallicRoughness, desc.metallicRoughness ?? d.white);
   m.setTexture(STANDARD_TEXTURE_SLOTS.normal, desc.normal ?? d.flatNormal);
   m.setTexture(STANDARD_TEXTURE_SLOTS.occlusion, desc.occlusion ?? d.white);

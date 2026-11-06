@@ -27,15 +27,31 @@ export interface HarnessPbrState {
    * `highlight`, the sun's specular highlight on the mid-roughness metal sphere (metallic 1,
    * roughness 0.5; the point whose normal is the half vector of the sun and the eye);
    * `tileLit` and `tileDark`, two points on the flat normal-mapped tile where the bump's slope
-   * faces toward and away from the sun. Only the normal map tells them apart.
+   * faces toward and away from the sun. Only the normal map tells them apart. `spotIn` and
+   * `spotOut`, the floor under the spot light's axis and the floor at the same depth outside its
+   * cone, reached by no other lamp. `litSphere` and `maskedSphere`, the camera-facing point of
+   * each sphere of the masked pair: same material, tint, size and distance from the pair's lamp,
+   * which is masked to the lit sphere's layer.
    */
-  probes: { rough: PbrProbe; highlight: PbrProbe; tileLit: PbrProbe; tileDark: PbrProbe };
+  probes: {
+    rough: PbrProbe;
+    highlight: PbrProbe;
+    tileLit: PbrProbe;
+    tileDark: PbrProbe;
+    spotIn: PbrProbe;
+    spotOut: PbrProbe;
+    litSphere: PbrProbe;
+    maskedSphere: PbrProbe;
+  };
   /** `renderer.stats` of the last frame. */
   stats: { drawCalls: number; instances: number };
   /** `gpuDiagnostics.errorCount` (WGSL compile errors, uncaptured errors). */
   gpuErrors: number;
-  /** `frame.lights`: whether the sun has a colour, how many point lights, shadow and fog on. */
-  lights: { sun: boolean; points: number; shadow: boolean; fog: boolean };
+  /**
+   * `frame.lights`: whether the sun has a colour, how many point and spot lights, shadow and fog
+   * on.
+   */
+  lights: { sun: boolean; points: number; spots: number; shadow: boolean; fog: boolean };
   /** Standard materials created by the page. */
   materials: number;
 }

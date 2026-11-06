@@ -56,6 +56,60 @@ struct EngineCamera {
 `;
 
 /**
+ * The Lambert BRDF for `wgslLightLoop`: `N·L` clamped at 0, the reflected fraction of a light's
+ * colour before the albedo (the light's colour × this is what `engine_lambert` returns per light).
+ */
+export const WGSL_LAMBERT_BRDF = 'vec3f(max(dot(normal, l), 0.0))';
+
+/**
+ * Generate the engine light loop as a WGSL function `name(world_pos: vec3f, normal: vec3f,
+ * layer_mask: u32${params}) -> vec3f`: the sum over the lights whose `layers` share a bit with
+ * `layer_mask` of the light's colour × its attenuation × `brdf`. The sun (× `engine_shadow`),
+ * the `(1 - d/radius)²` point falloff and the spot cone (`engine_spot_cone` × the same falloff)
+ * are the loop's; the BRDF is the material's.
+ *
+ * WGSL has no function pointers, so the material supplies `brdf` as a WGSL expression that the
+ * loop body inlines once per light kind. In it, `l` is the unit direction from the surface to
+ * the light, `normal` and `world_pos` are the function's parameters and `params` (`', v: vec3f,
+ * f0: vec3f'` and so on; leading comma) adds whatever else it needs to the signature. The
+ * expression must be finite for any `l` (it is multiplied by 0 for lights that do not reach).
+ * `WGSL_LIGHTS` instantiates it as `engine_light_accum` with `WGSL_LAMBERT_BRDF`; `WGSL_PBR` as
+ * `engine_pbr_accum` with `engine_brdf(...)`. Generate rather than copy: the loop then changes
+ * in one place when the block gains a light kind.
+ */
+export function wgslLightLoop(name: string, brdf: string, params = ''): string {
+  return /* wgsl */ `fn ${name}(world_pos: vec3f, normal: vec3f, layer_mask: u32${params}) -> vec3f {
+  var sum = vec3f(0.0);
+  if ((lights.sun_layers & layer_mask) != 0u) {
+    let l = -lights.sun_dir;
+    sum += lights.sun_color * (${brdf}) * engine_shadow(world_pos);
+  }
+  for (var i = 0u; i < lights.point_count; i++) {
+    if ((lights.point_layers[i >> 2u][i & 3u] & layer_mask) == 0u) { continue; }
+    let light = lights.points[i];
+    let to = light.position - world_pos;
+    let d = length(to);
+    let falloff = saturate(1.0 - d / max(light.radius, 1e-4));
+    if (falloff <= 0.0) { continue; }
+    let l = to / max(d, 1e-4);
+    sum += light.color * (falloff * falloff * (${brdf}));
+  }
+  for (var i = 0u; i < lights.spot_count; i++) {
+    let light = lights.spots[i];
+    if ((light.layers & layer_mask) == 0u) { continue; }
+    let to = light.position - world_pos;
+    let d = length(to);
+    let l = to / max(d, 1e-4);
+    let falloff = saturate(1.0 - d / max(light.radius, 1e-4));
+    if (falloff <= 0.0) { continue; }
+    let cone = engine_spot_cone(dot(-l, light.direction), light.cos_outer, light.cos_inner);
+    sum += light.color * (falloff * falloff * cone * (${brdf}));
+  }
+  return sum;
+}`;
+}
+
+/**
  * The lighting block, `@group(0) @binding(2)` (see `Lights` / `lights.ts`), in every material
  * and drawable prelude: `lights.ambient`, `lights.point_count`, `lights.sun_dir` (the way
  * the light travels), `lights.sun_color`, `lights.points[i]` (`position`, `radius`, `color`),
@@ -81,6 +135,9 @@ struct EngineCamera {
  * with the default block it returns `vec3f(1.0)` and `albedo * engine_lambert(...)` is unlit;
  * `engine_lambert_layers(normal, world_pos, layer_mask)` is the same against the instance's
  * layers (`engine_instance_layers(in.flags)`), so masked lights skip it.
+ *
+ * `engine_light_accum` is `wgslLightLoop('engine_light_accum', WGSL_LAMBERT_BRDF)`: the one
+ * light loop, generated with a Lambert BRDF; `WGSL_PBR` generates the same loop with its GGX BRDF.
  */
 export const WGSL_LIGHTS = /* wgsl */ `
 struct EnginePointLight {
@@ -169,33 +226,7 @@ fn engine_spot_cone(cos_theta: f32, cos_outer: f32, cos_inner: f32) -> f32 {
 fn engine_instance_layers(flags: u32) -> u32 {
   return flags >> 1u;
 }
-fn engine_light_accum(world_pos: vec3f, normal: vec3f, layer_mask: u32) -> vec3f {
-  var sum = vec3f(0.0);
-  if ((lights.sun_layers & layer_mask) != 0u) {
-    sum += lights.sun_color * max(dot(normal, -lights.sun_dir), 0.0) * engine_shadow(world_pos);
-  }
-  for (var i = 0u; i < lights.point_count; i++) {
-    if ((lights.point_layers[i >> 2u][i & 3u] & layer_mask) == 0u) { continue; }
-    let l = lights.points[i];
-    let to = l.position - world_pos;
-    let d = length(to);
-    let falloff = saturate(1.0 - d / max(l.radius, 1e-4));
-    let diffuse = max(dot(normal, to / max(d, 1e-4)), 0.0);
-    sum += l.color * (falloff * falloff * diffuse);
-  }
-  for (var i = 0u; i < lights.spot_count; i++) {
-    let l = lights.spots[i];
-    if ((l.layers & layer_mask) == 0u) { continue; }
-    let to = l.position - world_pos;
-    let d = length(to);
-    let ld = to / max(d, 1e-4);
-    let falloff = saturate(1.0 - d / max(l.radius, 1e-4));
-    let cone = engine_spot_cone(dot(-ld, l.direction), l.cos_outer, l.cos_inner);
-    let diffuse = max(dot(normal, ld), 0.0);
-    sum += l.color * (falloff * falloff * cone * diffuse);
-  }
-  return sum;
-}
+${wgslLightLoop('engine_light_accum', WGSL_LAMBERT_BRDF)}
 fn engine_lambert_layers(normal: vec3f, world_pos: vec3f, layer_mask: u32) -> vec3f {
   return lights.ambient + engine_light_accum(world_pos, normal, layer_mask);
 }
