@@ -1,21 +1,31 @@
 export type {
   GltfAccessorType,
   GltfAlphaMode,
+  GltfAnimation,
+  GltfAnimationChannel,
+  GltfAnimationPath,
   GltfBounds,
   GltfComponentType,
   GltfDocument,
   GltfImage,
+  GltfInterpolation,
   GltfJson,
   GltfJsonAccessor,
+  GltfJsonAnimation,
+  GltfJsonAnimationChannel,
+  GltfJsonAnimationSampler,
   GltfJsonBufferView,
+  GltfJsonInterpolation,
   GltfJsonMaterial,
   GltfJsonNode,
   GltfJsonPrimitive,
+  GltfJsonSkin,
   GltfJsonSource,
   GltfMaterial,
   GltfMesh,
   GltfNode,
   GltfPrimitive,
+  GltfSkin,
   GltfTexture,
   Vec3,
   Vec4,
@@ -27,3 +37,11 @@ export type {
   LoadGltfOptions,
 } from './gltf-load';
 export { GLTF_LIT_WGSL, GltfScene, interleave3d, loadGltf } from './gltf-load';
+export type { GltfSkeleton, SkinnedVertices } from './gltf-skin';
+export {
+  interleaveSkinned,
+  SKINNED_JOINTS_OFFSET,
+  SKINNED_VERTEX_STRIDE,
+  SKINNED_WEIGHTS_OFFSET,
+  skeletonFromSkin,
+} from './gltf-skin';

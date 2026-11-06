@@ -7,18 +7,29 @@
  */
 import type { Frame, InstanceParams } from '../render/frame';
 import type { Material } from '../render/material';
-import { Mesh, VERTEX_LAYOUT_3D, VERTEX3D_FLOATS } from '../render/mesh';
+import { Mesh, VERTEX_LAYOUT_3D, VERTEX3D_FLOATS, type VertexLayout } from '../render/mesh';
 import { generateMipmaps } from '../render/mipmap';
 import type { Renderer } from '../render/renderer';
 import type { Texture } from '../render/texture';
 import { Transform } from '../render/transform';
 import {
+  type GltfAnimation,
   type GltfDocument,
   GltfError,
   type GltfImage,
   type GltfMaterial,
   type GltfPrimitive,
+  type GltfSkin,
 } from './gltf';
+import { interleaveSkinned } from './gltf-skin';
+
+/**
+ * The vertex layout for skinned primitives. `null` until `src/render/mesh.ts` exports
+ * `VERTEX_LAYOUT_SKINNED` (ws/skinning): skinned primitives are then built in the 3D layout and
+ * their joints and weights stay on the document (`primitive.joints`, `node.skin`). Integrator:
+ * import `VERTEX_LAYOUT_SKINNED` from `'../render/mesh'` and set this constant to it.
+ */
+const SKINNED_LAYOUT: VertexLayout | null = null;
 
 /** A decoded image the loader can upload: an `ImageBitmap` or anything `copyExternalImageToTexture` takes. */
 export type GltfImageSource = ImageBitmap | HTMLCanvasElement | OffscreenCanvas;
@@ -54,6 +65,8 @@ export interface GltfSceneNode {
   material: Material;
   /** Base colour factor as `tint`, alpha cutoff as `params.x`; mutate to recolour the draw. */
   params: InstanceParams;
+  /** The node's skin (index into `GltfScene.skins`), or null for a static draw. */
+  skin: number | null;
 }
 
 /**
@@ -90,11 +103,17 @@ export class GltfScene {
   readonly nodes: GltfSceneNode[] = [];
   /** World-space bounds of the default scene (from the document). */
   readonly bounds: { center: [number, number, number]; radius: number };
+  /** The document's skins (`skeletonFromSkin(doc, i)` builds the animation module's skeleton). */
+  readonly skins: readonly GltfSkin[];
+  /** The document's clips, in the animation module's `AnimationClip` shape. */
+  readonly animations: readonly GltfAnimation[];
   /** Whether the default material or textures were created here (and so destroyed here). */
   private readonly ownsMaterials: boolean;
 
   constructor(doc: GltfDocument, ownsMaterials: boolean) {
     this.bounds = { center: [...doc.bounds.center], radius: doc.bounds.radius };
+    this.skins = doc.skins;
+    this.animations = doc.animations;
     this.ownsMaterials = ownsMaterials;
   }
 
@@ -183,13 +202,15 @@ export async function loadGltf(
     });
   }
 
-  // Meshes: one per primitive, interleaved into VERTEX_LAYOUT_3D.
+  // Meshes: one per primitive, interleaved into VERTEX_LAYOUT_3D (or the skinned layout when a
+  // skinned primitive meets a renderer that has one).
   const meshIndex: Mesh[][] = doc.meshes.map((gm, mi) =>
     gm.primitives.map((p, pi) => {
+      const skinned = p.joints !== null && p.joints instanceof Uint8Array && SKINNED_LAYOUT;
       const mesh = new Mesh(renderer.device, {
         label: `${label}:mesh${mi}.${pi}`,
-        layout: VERTEX_LAYOUT_3D,
-        vertices: interleave3d(p),
+        layout: skinned || VERTEX_LAYOUT_3D,
+        vertices: skinned ? new Float32Array(interleaveSkinned(p).vertices) : interleave3d(p),
         indices: p.indices,
         bounds: { center: [...p.bounds.center], radius: p.bounds.radius },
       });
@@ -227,6 +248,7 @@ export async function loadGltf(
         mesh: meshIndex[mi]![pi]!,
         material,
         params: paramsFor(gm),
+        skin: n.skin,
       });
     });
   }

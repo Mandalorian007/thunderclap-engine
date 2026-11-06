@@ -1,7 +1,8 @@
 # engine/assets
 
-Asset formats the engine turns into its own objects. Today: glTF 2.0 static geometry. No
-dependencies, no network: the game fetches the bytes, the engine parses and uploads them.
+Asset formats the engine turns into its own objects. Today: glTF 2.0 geometry, skins and
+animations. No dependencies, no network: the game fetches the bytes, the engine parses and
+uploads them.
 
 ## glTF in one call
 
@@ -43,9 +44,10 @@ sky, `MASK` cutoff in `params.x`, `BLEND` as alpha blend). Options:
 `GltfImageSource` is `ImageBitmap | HTMLCanvasElement | OffscreenCanvas`.
 
 `GltfScene` owns what it made: `meshes`, `textures`, `materials`, `transforms` (one per node,
-file order), `nodes: GltfSceneNode[]` (the draw list: `{ node, transform, mesh, material, params }`
-with `params` an `InstanceParams` built once), `bounds: { center, radius }` in world space,
-`draw(frame)` and `destroy()` (meshes, textures, its own materials; not `opts.material`).
+file order), `nodes: GltfSceneNode[]` (the draw list: `{ node, transform, mesh, material, params,
+skin }` with `params` an `InstanceParams` built once and `skin` the node's skin index or null),
+`skins` and `animations` (the document's, passed through), `bounds: { center, radius }` in world
+space, `draw(frame)` and `destroy()` (meshes, textures, its own materials; not `opts.material`).
 
 ## The document
 
@@ -54,13 +56,15 @@ with `params` an `InstanceParams` built once), `bounds: { center, radius }` in w
 - `version`, `scene` (root node indices), `sceneNodes` (every node in the scene, parents first),
   `warnings` (`extension ignored: X` for each `extensionsUsed`), `externalUris`, `bounds`
   (`GltfBounds`: `min`, `max`, `center`, `radius`, in world space).
-- `nodes: GltfNode[]`: `name`, `parent`, `children`, `mesh`, `translation`, `rotation`, `scale`
-  (`Vec3`/`Vec4`; a `matrix` node is decomposed), `local` and `world` as the engine's 3×4 row-major
-  `Float32Array` (`composeTrs(t, q, s, out)` builds one the way `Transform` does).
+- `nodes: GltfNode[]`: `name`, `parent`, `children`, `mesh`, `skin`, `translation`, `rotation`,
+  `scale` (`Vec3`/`Vec4`; a `matrix` node is decomposed), `local` and `world` as the engine's 3×4
+  row-major `Float32Array` (`composeTrs(t, q, s, out)` builds one the way `Transform` does).
 - `meshes: GltfMesh[]`: `name`, `primitives: GltfPrimitive[]` with `vertexCount`, `position`,
   `normal` (flat normals computed when the file has none: `hadNormals` false, the primitive
   unwelded), `uv0` (zeros when missing), `color0` (ones when missing, `VEC3` padded), `indices`
-  (`Uint16Array` or `Uint32Array`, generated when missing), `material`, `bounds`. Triangles only.
+  (`Uint16Array` or `Uint32Array`, generated when missing), `material`, `bounds`, and for skinned
+  primitives `joints` and `weights` (below). Triangles only.
+- `skins: GltfSkin[]` and `animations: GltfAnimation[]`: see *Skins and animations*.
 - `materials: GltfMaterial[]`: `name`, `baseColorFactor`, `baseColorTexture` (texture index),
   `texCoord`, `doubleSided`, `alphaMode: GltfAlphaMode` (`'OPAQUE' | 'MASK' | 'BLEND'`),
   `alphaCutoff`. The engine's 3D pipelines cull nothing, so `doubleSided` is informational.
@@ -74,13 +78,51 @@ else the parser cannot honour throw `GltfError` (message prefixed `gltf: `).
 
 The JSON shapes the parser reads are exported for writers and tests: `GltfJson`,
 `GltfJsonAccessor`, `GltfJsonBufferView`, `GltfJsonPrimitive`, `GltfJsonNode`,
-`GltfJsonMaterial`, `GltfJsonSource`.
+`GltfJsonMaterial`, `GltfJsonSkin`, `GltfJsonAnimation`, `GltfJsonAnimationChannel`,
+`GltfJsonAnimationSampler`, `GltfJsonInterpolation`, `GltfJsonSource`.
+
+## Skins and animations
+
+A rigged character from a DCC tool parses straight into the shapes `@thunderclap/engine/anim`
+samples and `VERTEX_LAYOUT_SKINNED` draws, with no converter. `assets` does not import `anim`:
+the types below restate `AnimationClip`, `AnimationChannel` and `Skeleton` structurally, so a
+`GltfAnimation` is an `AnimationClip` and a `GltfSkeleton` is a `Skeleton`.
+
+- `GltfSkin` (`doc.skins[i]`, `node.skin`): `name`, `joints` (node index per joint), `skeleton`
+  (the root node the file named, or null) and `inverseBind`: 12 floats per joint, the engine's
+  3×4 row-major layout (`anim`'s `skinMatrices` and `render/skin.ts` read it), converted from the
+  file's column-major `MAT4`; identity when the file has none.
+- `GltfAnimation` (`doc.animations[i]`): `name` (the file's, or `animation<i>`), `duration` (the
+  last keyframe over every channel) and `channels: GltfAnimationChannel[]`, each `{ node, path,
+  interpolation, times, values }` with `path: GltfAnimationPath` (`'translation' | 'rotation' |
+  'scale' | 'weights'`), `interpolation: GltfInterpolation` (`'STEP' | 'LINEAR' | 'CUBICSPLINE'`),
+  `times` ascending seconds and `values` 3, 4 or `k` floats per key (quaternions exactly as
+  stored, xyzw), or in-tangent, value, out-tangent triplets per key for `CUBICSPLINE`, glTF
+  sampler semantics throughout. A channel without a target node is skipped with a warning.
+- `GltfPrimitive.joints`: `JOINTS_0` from any unsigned integer type, 4 per vertex, a
+  `Uint8Array` when every index fits a byte, else a `Uint16Array`; `GltfPrimitive.weights`:
+  `WEIGHTS_0` as 4 floats per vertex (normalised integers divided). Both or neither, else
+  `GltfError`; both follow the unwelding when flat normals are generated.
+- `interleaveSkinned(primitive): SkinnedVertices` (`{ vertices: ArrayBuffer; layout: 'skinned' }`)
+  packs `SKINNED_VERTEX_STRIDE` (56) bytes per vertex: the 12 `VERTEX_LAYOUT_3D` floats, the four
+  joint bytes at `SKINNED_JOINTS_OFFSET` (48), the four weights as `unorm8` at
+  `SKINNED_WEIGHTS_OFFSET` (52), renormalised and rounded so they sum to exactly 255. Throws for
+  an unskinned primitive or joint indices above 255.
+- `skeletonFromSkin(doc, skinIndex): GltfSkeleton` spans every node of the document, so a
+  channel's `node` indexes the pose directly: `parents: Int16Array` (-1 for a root), `rest`
+  (10 floats per node from its TRS: `tx ty tz qx qy qz qw sx sy sz`), `inverseBind` (the skin's
+  array, shared) and `joints: Uint16Array` (node per joint).
+
+`loadGltf` passes `skins` and `animations` through on the `GltfScene` and sets `skin` on each
+draw. A skinned primitive is built in the skinned layout once `VERTEX_LAYOUT_SKINNED` exists in
+`render/mesh.ts`; until then it is built in `VERTEX_LAYOUT_3D` and the joints and weights stay on
+the document.
 
 ## Not yet
 
-Skins, morph targets, animation, cameras, lights, `KHR_*` extensions (`KHR_texture_transform`,
-`KHR_materials_*`, Draco, meshopt). `extensionsUsed` is tolerated and warned about;
-`extensionsRequired` throws.
+Morph targets (the `weights` channel parses; nothing consumes it), cameras, lights, `KHR_*`
+extensions (`KHR_texture_transform`, `KHR_materials_*`, Draco, meshopt). `extensionsUsed` is
+tolerated and warned about; `extensionsRequired` throws.
 
 ## Demo
 

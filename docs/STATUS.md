@@ -37,7 +37,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | glTF | ws/gltf | `parseGltf` (.glb/.gltf, engine-free) and `loadGltf(renderer, doc)` → meshes in `VERTEX_LAYOUT_3D`, transforms, base-colour textures, `GltfScene.draw`; `@thunderclap/engine/assets`; harness `gltf.html` on the matrix; static geometry only | texture-array, cull | ✅ merged `57706f1` (579 tests; e2e 494/52; meshes carry primitive bounds) |
 | 5 | glTF skins + animations | ws/gltf-anim | `GltfDocument.skins`/`animations` in `anim` shapes, `JOINTS_0`/`WEIGHTS_0`, `interleaveSkinned`, `skeletonFromSkin`; tests on a generated rigged GLB | gltf, anim (shape) | ✅ green at `3f0333f` (565 tests; e2e 478/52); merging |
 | 5 | Trails | ws/trails | `Trail` ribbon in 2D or world space: ring buffer into one `Mesh` range, width/colour curves, camera or axis facing; harness `trails.html` | particles-3d | 🔧 in progress |
-| 5 | Shadow casters vs cull | ws/shadow-cull | shadow pass draws casters inside the sun box regardless of the view frustum; `stats.shadowDraws` | shadows, cull | 🔧 in progress |
+| 5 | Shadow casters vs cull | ws/shadow-cull | shadow pass draws casters inside the sun box regardless of the view frustum; `stats.shadowDraws` | shadows, cull | ✅ green at `541d0d2` (565 tests; e2e 486/52); queued behind gltf-anim |
 | 5 | First-person template | ws/template-first-person | `templates/first-person`: `Look`, Worker chunks with bounds and a texture array, sun shadow + fog, weather, anchors, `CLAUDE.md`; `check:template-first-person`; timed | shadows, cull, look, anchors, particles-3d, texture-array | 🔧 in progress (on ws/shadows) |
 | 5 | Follow camera | ws/follow | `Follow` third-person controller on `Look` input: orbit, distance, shoulder, obstacle callback, `mode: 'first' \| 'third'`; harness `follow.html` | look | ✅ merged `a161eca` (624 tests; e2e 529/57; `Follow`, `FollowOptions`, `mode`) |
 | 5 | Animation | ws/anim | `@thunderclap/engine/anim`: clips (glTF sampler semantics), `Pose`, `Skeleton`, mixer with layers and crossfade, `poseToWorld`, `skinMatrices`; pure, tested | — | 🔧 in progress |
@@ -67,6 +67,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - Soft particles read last frame's depth (ws/particles-3d copies `SceneTarget.depth` before the particle pass). A renderer hook after the opaque pass would give same-frame depth.
 - `ARCHITECTURE.md` harness tree does not list `weather.html`; texture-array's CHANGELOG line says `BindingDesc.viewDimension` though `BindingDesc` is internal since prune (doc-sweep-3).
 - `anim` should export `Skeleton` with `inverseBind`/`joints` required so `GltfSkeleton` becomes a type alias (ws/gltf-anim wish); `gltf-load.ts` `SKINNED_LAYOUT` flips to `VERTEX_LAYOUT_SKINNED` (stride 56, 14 floats) once ws/skinning lands.
+- Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `Look.zoom` axis (wheel, right-stick vertical) so `Follow` reads zoom directly (ws/follow wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
