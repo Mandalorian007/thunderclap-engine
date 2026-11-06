@@ -70,7 +70,7 @@ export type PassCommand =
   | { op: 'draw'; vertices: number; instances: number; firstInstance: number }
   | { op: 'drawIndexed'; indices: number; instances: number; firstInstance: number }
   | { op: 'dispatch'; x: number; y: number }
-  | { op: 'other'; name: string };
+  | { op: 'other'; name: string; args?: number[] };
 
 export interface FakePass {
   kind: 'render' | 'compute';
@@ -124,8 +124,8 @@ export function createFakeDevice(limits: Partial<Record<string, number>> = {}): 
       setVertexBuffer: () => cmd({ op: 'other', name: 'setVertexBuffer' }),
       setIndexBuffer: () => cmd({ op: 'other', name: 'setIndexBuffer' }),
       setBlendConstant: () => cmd({ op: 'other', name: 'setBlendConstant' }),
-      setViewport: () => cmd({ op: 'other', name: 'setViewport' }),
-      setScissorRect: () => cmd({ op: 'other', name: 'setScissorRect' }),
+      setViewport: (...args: number[]) => cmd({ op: 'other', name: 'setViewport', args }),
+      setScissorRect: (...args: number[]) => cmd({ op: 'other', name: 'setScissorRect', args }),
       end: () => cmd({ op: 'other', name: 'end' }),
     };
   };

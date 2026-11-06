@@ -10,9 +10,19 @@
  * `camera.screen`, so the renderer clears it once and scissors each eye to its viewport; a
  * `texture-array` layer gives each eye its own target over its array layer.
  *
- * No post stack runs on the eyes: their colour goes to the layer as linear HDR and the emissive
- * target is written and dropped. `head` is a camera at the viewer pose with the first eye's
- * projection, for the scenes' one `render(frame, camera, alpha)` call per frame.
+ * Two ways to draw the eyes. Direct (the default): each eye is a scene pass into its layer
+ * target; the colour goes to the layer as linear HDR, the emissive target is written and
+ * dropped and no post stack runs. Through the post stack (`scene: true`, ws/xr-post, what
+ * `createGame` uses): the surface keeps `scene`, one HDR `SceneTarget` the size of an eye
+ * (allocated on the first frame, resized when the layer's eye size changes), every eye camera
+ * covers it whole and the caller renders each eye into it and resolves it into the eye's layer
+ * target at `eye.viewport` (`renderer.render(frame, eye.camera, surface.scene)` then
+ * `renderer.resolve(surface.scene, eye.target.color.view, eye.viewport)`), so the headset sees
+ * the same bloom, tone map and grade as the screen; the layer then takes `colorFormat`, the
+ * format the post stack writes (`renderer.format`), and no depth by default.
+ *
+ * `head` is a camera at the viewer pose with the first eye's projection, for the scenes' one
+ * `render(frame, camera, alpha)` call per frame.
  */
 import { Camera } from '../render/camera';
 import { DEPTH_FORMAT } from '../render/material';
@@ -21,10 +31,22 @@ import { SCENE_FORMAT, SceneTarget, type SceneTargetViewport } from '../render/s
 export interface XrSurfaceOptions {
   /** The space poses are expressed in (the game's `local-floor`, `local` or `viewer` space). */
   referenceSpace: XRReferenceSpace;
-  /** Colour format of the layer. Default `SCENE_FORMAT`, what the engine's materials write. */
+  /**
+   * Colour format of the layer. Default `SCENE_FORMAT`, what the engine's materials write;
+   * with `scene` pass the format the post stack writes (`renderer.format`).
+   */
   colorFormat?: GPUTextureFormat;
-  /** Depth format of the layer, or null for a layer without depth. Default `DEPTH_FORMAT`. */
+  /**
+   * Depth format of the layer, or null for a layer without depth. Default `DEPTH_FORMAT`, or
+   * null with `scene` (depth then lives in the scene target; the layer never receives it).
+   */
   depthStencilFormat?: GPUTextureFormat | null;
+  /**
+   * Draw the eyes through the post stack (ws/xr-post): keep `scene`, an eye-sized HDR target,
+   * give every eye camera the whole of it (`screen` 0,0,1,1) and leave the layer target for
+   * `renderer.resolve`. Default false: eyes draw into the layer directly.
+   */
+  scene?: boolean;
   /** `texture` (default, eyes side by side in one texture) or `texture-array` (a layer per eye). */
   textureType?: 'texture' | 'texture-array';
   /** The session's near and far planes, metres. Defaults 0.1 and 1000. */
@@ -37,11 +59,17 @@ export interface XrEyeView {
   /** The eye's index in the viewer pose (0 left, 1 right on a headset); `camera.viewIndex`. */
   readonly index: number;
   readonly eye: XREye;
-  /** Projection and view from the `XRView`; `screen` is the viewport as a fraction of the target. */
+  /**
+   * Projection and view from the `XRView`; `screen` is the viewport as a fraction of the target,
+   * or the whole unit square when the surface has a `scene` target.
+   */
   readonly camera: Camera;
-  /** The target adopting the layer's texture for this eye; shared when the eyes share a texture. */
+  /**
+   * The target adopting the layer's texture for this eye; shared when the eyes share a texture.
+   * With `scene`, what the eye is resolved into, not what it is rendered into.
+   */
   readonly target: SceneTarget;
-  /** The eye's part of `target`, in texture pixels. */
+  /** The eye's part of `target`, in texture pixels (`renderer.resolve`'s viewport). */
   readonly viewport: SceneTargetViewport;
 }
 
@@ -84,8 +112,15 @@ export class XrSurface {
    * updated by `views`: what the scenes record through once per frame.
    */
   readonly head: Camera = new Camera();
+  /**
+   * With `scene: true`, the eye-sized HDR target every eye renders into before `resolve`;
+   * made by the first `views` with a pose and resized when the eye size changes. Null before
+   * then, and always null for a direct surface.
+   */
+  scene: SceneTarget | null = null;
   private readonly eyes: EyeView[] = [];
   private readonly out: EyeView[] = [];
+  private readonly viaScene: boolean;
   private destroyed = false;
 
   /**
@@ -100,8 +135,14 @@ export class XrSurface {
     const Binding = globalThis.XRGPUBinding;
     if (!Binding) throw new Error('XrSurface: this browser has no WebXR/WebGPU binding');
     this.referenceSpace = opts.referenceSpace;
+    this.viaScene = opts.scene === true;
     this.binding = new Binding(session, device);
-    const depth = opts.depthStencilFormat === undefined ? DEPTH_FORMAT : opts.depthStencilFormat;
+    const depth =
+      opts.depthStencilFormat === undefined
+        ? this.viaScene
+          ? null
+          : DEPTH_FORMAT
+        : opts.depthStencilFormat;
     this.layer = this.binding.createProjectionLayer({
       colorFormat: opts.colorFormat ?? SCENE_FORMAT,
       ...(depth ? { depthStencilFormat: depth } : {}),
@@ -173,10 +214,20 @@ export class XrSurface {
       eye.target = target;
       eye.layer = layer;
       const s = cam.screen;
-      s.x = vp.x / target.width;
-      s.y = vp.y / target.height;
-      s.width = vp.width / target.width;
-      s.height = vp.height / target.height;
+      if (this.viaScene) {
+        // The eye renders into the whole scene target; `viewport` places the resolve.
+        s.x = 0;
+        s.y = 0;
+        s.width = 1;
+        s.height = 1;
+        const sc = this.scene ?? this.makeScene();
+        sc.resize(vp.width, vp.height);
+      } else {
+        s.x = vp.x / target.width;
+        s.y = vp.y / target.height;
+        s.width = vp.width / target.width;
+        s.height = vp.height / target.height;
+      }
       out.push(eye);
     }
     if (views.length > 0) {
@@ -186,12 +237,19 @@ export class XrSurface {
     return out;
   }
 
-  /** Frees the eye targets' own textures and the layer. The session is left to its owner. */
+  private makeScene(): SceneTarget {
+    this.scene = new SceneTarget(this.device, { width: 1, height: 1, label: 'xr-scene' });
+    return this.scene;
+  }
+
+  /** Frees the eye targets' own textures, the scene target and the layer. The session is left to its owner. */
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
     for (const e of this.eyes) e.own.destroy();
     this.eyes.length = 0;
+    this.scene?.destroy();
+    this.scene = null;
     this.layer.destroy();
   }
 }

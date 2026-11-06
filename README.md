@@ -104,7 +104,7 @@ if (ctx) {
 
 A pure client of a server-authoritative game leaves out `save` (then `ctx.save` is `null` and the engine never touches storage) and passes `sim: false`, so the loop runs once per rendered frame and calls `ctx.hooks.frame(dt)`, where it applies the latest server state.
 
-VR: `createGame({ xr: XrOptions })` (`{ referenceSpace?, onEnter?, onExit? }`) gives `ctx.xr: XrControl` (`supported()`, `enter()`, `exit()`, `active`, `session`, `surface`). `enter()` requests an `immersive-vr` session with the WebGPU binding, moves the loop onto the session's frames, renders the scenes once per eye into its layer and adds the controllers and hands to `ctx.pointers` as rays; `exit()` (or the headset ending the session) restores the page. Nothing changes for a game that never calls it.
+VR: `createGame({ xr: XrOptions })` (`{ referenceSpace?, onEnter?, onExit? }`) gives `ctx.xr: XrControl` (`supported()`, `enter()`, `exit()`, `active`, `session`, `surface`). `enter()` requests an `immersive-vr` session with the WebGPU binding, moves the loop onto the session's frames, renders the scenes once per eye through the post stack into its layer (the headset sees what the screen would) and adds the controllers and hands to `ctx.pointers` as rays; `exit()` (or the headset ending the session) restores the page. Nothing changes for a game that never calls it.
 
 The world is a 1920×1080 logical space by default (origin top-left, y down). The surface scales it to fit any screen. A game typically widens `ctx` with its own nouns (`Object.assign(ctx, { ... })`), so every scene gets one typed ctx.
 
@@ -159,7 +159,8 @@ renderer.endFrame()
   1. upload globals and all instance data (one writeBuffer each)
   2. pre-passes and drawable.prepare() (compute, uploads), on the first render() of the frame
   3. scene pass per render(frame, camera, target) → HDR colour + emissive targets (+ depth)
-  4. post stack (bloom, god rays, fog, vignette, grade) → swapchain
+  4. post stack (bloom, god rays, fog, vignette, grade) → swapchain (in VR: per eye, into the
+     session's layer, via renderer.resolve)
   5. submit
 ```
 

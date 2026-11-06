@@ -25,6 +25,11 @@ export interface FullscreenEncodeOptions {
   blendConstant?: GPUColor;
   /** Timestamp writes for this pass (see `GpuTimer.pass`). */
   timestampWrites?: GPURenderPassTimestampWrites;
+  /**
+   * Draw into this part of `target` only (texture px): viewport and scissor. Pair it with
+   * `clear: null`, since a clear covers the whole attachment (ws/xr-post: one eye of a layer).
+   */
+  viewport?: { x: number; y: number; width: number; height: number };
 }
 
 /**
@@ -115,6 +120,11 @@ export class FullscreenPass {
     this.passDesc.timestampWrites = opts.timestampWrites;
     const pass = encoder.beginRenderPass(this.passDesc);
     pass.setPipeline(this.pipeline);
+    const vp = opts.viewport;
+    if (vp) {
+      pass.setViewport(vp.x, vp.y, vp.width, vp.height, 0, 1);
+      pass.setScissorRect(vp.x, vp.y, vp.width, vp.height);
+    }
     const group = opts.bindGroup ?? this.bindings?.bindGroup;
     if (group) pass.setBindGroup(0, group);
     if (opts.blendConstant) pass.setBlendConstant(opts.blendConstant);
