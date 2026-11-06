@@ -19,6 +19,11 @@ export interface HarnessWaterState {
   logical: { width: number; height: number };
   /** `?still` parks the sun where its highlight lands on the specular probe. */
   still: boolean;
+  /**
+   * `?hook=1`: the water takes this frame's depth from the renderer's depth hook
+   * (`readsDepth`, ws/render-hooks) in one view instead of two views and its own copy.
+   */
+  depthHook: boolean;
   /** Seconds the water has advanced (`water.time`). */
   t: number;
   /** `waterHeight(water, HEIGHT_X, HEIGHT_Z)` this frame. */
@@ -35,8 +40,8 @@ export interface HarnessWaterState {
     foamPixel: WaterProbe;
     specularPixel: WaterProbe;
   };
-  /** `renderer.stats` of the last frame. */
-  stats: { drawCalls: number; drawables: number };
+  /** `renderer.stats` of the last frame; `passes` counts scene passes (two per split view). */
+  stats: { drawCalls: number; drawables: number; passes: number };
   /** `gpuDiagnostics.errorCount` (WGSL compile errors, uncaptured errors). */
   gpuErrors: number;
 }

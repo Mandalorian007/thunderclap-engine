@@ -31,8 +31,9 @@ export function createShaderModule(
  *
  * - `@binding(0) globals`: `logicalSize`, `targetSize` (scene target px), `time`, `dt`.
  * - `@binding(1) camera` (the camera block): `view`, `proj`, `view_proj` (world → clip),
- *   `camera_pos` (world eye position, w = 1), `viewport` (target px: x, y, w, h) and
- *   `view_index` (0 today; 0/1 per eye later).
+ *   `camera_pos` (world eye position, w = 1), `viewport` (target px: x, y, w, h),
+ *   `view_index` (0 today; 0/1 per eye later) and `inv_view_proj` (clip → world, the inverse
+ *   of `view_proj`; `camera.invViewProj` on the CPU side).
  */
 export const WGSL_GLOBALS = /* wgsl */ `
 struct EngineGlobals {
@@ -51,6 +52,7 @@ struct EngineCamera {
   viewport: vec4f,
   view_index: u32,
   _pad: vec3u,
+  inv_view_proj: mat4x4f,
 };
 @group(0) @binding(1) var<uniform> camera: EngineCamera;
 `;

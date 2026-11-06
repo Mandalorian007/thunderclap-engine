@@ -1,5 +1,5 @@
 import { plane } from '../geom';
-import type { Drawable, Frame } from '../render/frame';
+import type { Drawable, Frame, ViewInfo } from '../render/frame';
 import { type Mesh, VERTEX_LAYOUT_3D } from '../render/mesh';
 import type { Renderer } from '../render/renderer';
 import type { SceneTarget } from '../render/scene-target';
@@ -58,6 +58,13 @@ export interface WaterOptions {
   opacity?: number;
   /** Where to copy the scene depth from (`renderer.target` by default). */
   depthTarget?: SceneTarget;
+  /**
+   * Take this frame's opaque depth from the renderer's depth hook (`Drawable.readsDepth`,
+   * ws/render-hooks) instead of copying the previous frame's in `prepare`: the view splits its
+   * scene pass and the water samples the renderer's copy. Only a view with `depthTest` splits;
+   * elsewhere the water is then deep everywhere (no copy of its own). Default false.
+   */
+  readsDepth?: boolean;
 }
 
 const DEFAULT_SHALLOW = [0.1, 0.45, 0.45] as const;
@@ -118,6 +125,8 @@ export class Water implements Drawable {
   opacity: number;
   /** Where the scene depth is copied from; null for `renderer.target`. Live. */
   depthTarget: SceneTarget | null;
+  /** See `WaterOptions.readsDepth`. Live. */
+  readsDepth: boolean;
   /** Seconds `update` has advanced; the waves' clock. */
   time = 0;
   /** The plane, owned; drawn through this drawable's own pipeline. */
@@ -144,6 +153,11 @@ export class Water implements Drawable {
   private srcGroup: GPUBindGroup | null = null;
   /** The depth copy ran this frame (`draw` binds it and the shader reads it). */
   private depthOn = false;
+  /** The renderer's `depthCopy` view the hook group was made for (`readsDepth`). */
+  private hookView: GPUTextureView | null = null;
+  private hookGroup: GPUBindGroup | null = null;
+  /** The group `draw` binds: own copy, the renderer's copy, or the 1×1 stand-in. */
+  private depthGroup: GPUBindGroup | null = null;
 
   constructor(renderer: Renderer, opts: WaterOptions = {}) {
     const device = renderer.device;
@@ -164,6 +178,7 @@ export class Water implements Drawable {
     this.displace = opts.displace ?? 0;
     this.opacity = opts.opacity ?? 0.85;
     this.depthTarget = opts.depthTarget ?? null;
+    this.readsDepth = opts.readsDepth ?? false;
 
     this.mesh = renderer.createMesh({
       ...plane({ size: opts.size ?? 100, segments: opts.segments ?? 1 }),
@@ -248,7 +263,9 @@ export class Water implements Drawable {
    * No allocation in steady state.
    */
   prepare(encoder: GPUCommandEncoder, frame?: Frame): void {
-    this.depthOn = this.copyDepth(encoder, frame);
+    // With `readsDepth` the renderer's hook (`afterOpaque`) supplies this frame's depth.
+    this.depthOn = this.readsDepth ? false : this.copyDepth(encoder, frame);
+    this.depthGroup = this.depthOn ? this.copyGroup : null;
     const p = this.params;
     p[0] = this.shallowColor[0]!;
     p[1] = this.shallowColor[1]!;
@@ -289,10 +306,27 @@ export class Water implements Drawable {
     if (mesh.indexCount <= 0) return;
     const fmt = frame?.depthFormat ?? null;
     pass.setPipeline(fmt ? this.depthPipeline(fmt) : this.flatPipeline);
-    pass.setBindGroup(1, this.depthOn && this.copyGroup ? this.copyGroup : this.dummyGroup);
+    pass.setBindGroup(1, this.depthGroup ?? this.dummyGroup);
     pass.setVertexBuffer(0, mesh.vertexBuffer);
     pass.setIndexBuffer(mesh.indexBuffer!, mesh.indexFormat);
     pass.drawIndexed(mesh.indexCount);
+  }
+
+  /**
+   * The renderer's depth hook (`readsDepth`): bind this frame's opaque depth copy and flip the
+   * shader's depth flag on (a 4-byte write; `queue.writeBuffer` lands before the frame's
+   * commands run). A new bind group only when the copy texture changed (resize).
+   */
+  afterOpaque(_encoder: GPUCommandEncoder, view: ViewInfo): void {
+    if (view.depthView !== this.hookView) {
+      this.hookView = view.depthView;
+      this.hookGroup = this.makeGroup('water-hook', view.depthView);
+    }
+    this.depthOn = true;
+    this.depthGroup = this.hookGroup;
+    const p = this.params;
+    p[18] = 1;
+    this.device.queue.writeBuffer(this.paramsBuffer, 18 * 4, p.buffer, 18 * 4, 4);
   }
 
   private copyDepth(encoder: GPUCommandEncoder, frame: Frame | undefined): boolean {
