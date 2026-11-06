@@ -138,6 +138,88 @@ describe('Look DOM attachment', () => {
     input.detach();
   });
 
+  it('wheel notches zoom: up is closer, 100 px (or stepPx) a notch, reset each tick', () => {
+    look.attach(canvas);
+    canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: -100 }));
+    canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: -50 }));
+    look.update();
+    expect(look.zoom).toBeCloseTo(1.5);
+    look.update();
+    expect(look.zoom).toBe(0);
+    look.zoomStepPx = 50;
+    canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: 100 }));
+    look.update();
+    expect(look.zoom).toBeCloseTo(-2);
+    expect(look.look.dy).toBe(0);
+  });
+
+  it('wheel deltaMode lines (3 a notch) and pages (1 a notch); wheel: false ignores it', () => {
+    look.attach(canvas);
+    canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: -3, deltaMode: 1 }));
+    canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: 2, deltaMode: 2 }));
+    look.update();
+    expect(look.zoom).toBeCloseTo(-1);
+    look.zoomWheel = false;
+    canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: -100 }));
+    look.update();
+    expect(look.zoom).toBe(0);
+  });
+
+  it('a second finger beside a look drag pinches without stealing a live move stick', () => {
+    look.attach(canvas);
+    // Stick in the left half, look drag in the right half.
+    canvas.dispatchEvent(touch('pointerdown', 1, 100, 200));
+    canvas.dispatchEvent(touch('pointermove', 1, 100, 150));
+    canvas.dispatchEvent(touch('pointerdown', 2, 500, 200));
+    canvas.dispatchEvent(touch('pointermove', 2, 510, 200));
+    look.update();
+    expect(look.move.y).toBeCloseTo(50 / 56 / (1 - 0.12) - 0.12 / (1 - 0.12), 2);
+    expect(look.look.dx).toBeCloseTo(0.1);
+    expect(look.zoom).toBe(0);
+
+    // A third finger (right half, drag already live) starts the pinch at distance 100.
+    canvas.dispatchEvent(touch('pointerdown', 3, 610, 200));
+    canvas.dispatchEvent(touch('pointermove', 3, 660, 200)); // apart: 150
+    canvas.dispatchEvent(touch('pointermove', 2, 480, 200)); // apart: 180; no look while pinching
+    canvas.dispatchEvent(touch('pointermove', 1, 100, 250)); // the stick still moves
+    look.update();
+    expect(look.zoom).toBeCloseTo(0.8);
+    expect(look.look.dx).toBe(0);
+    expect(look.stick.active).toBe(true);
+    expect(look.move.y).toBeLessThan(0);
+
+    // Release the pinch finger: the look drag resumes from where it is.
+    canvas.dispatchEvent(touch('pointerup', 3, 660, 200));
+    canvas.dispatchEvent(touch('pointermove', 2, 500, 200));
+    look.update();
+    expect(look.zoom).toBe(0);
+    expect(look.look.dx).toBeCloseTo(0.2);
+
+    // Pinch again, lift the original look finger: the pinch finger becomes the drag.
+    canvas.dispatchEvent(touch('pointerdown', 4, 600, 200));
+    canvas.dispatchEvent(touch('pointermove', 4, 650, 200)); // 100 -> 150
+    canvas.dispatchEvent(touch('pointerup', 2, 500, 200));
+    canvas.dispatchEvent(touch('pointermove', 4, 640, 200));
+    look.update();
+    expect(look.zoom).toBeCloseTo(0.5);
+    expect(look.look.dx).toBeCloseTo(-0.1);
+    canvas.dispatchEvent(touch('pointerup', 4, 640, 200));
+    canvas.dispatchEvent(touch('pointerup', 1, 100, 250));
+    look.update();
+    expect(look.move).toEqual({ x: 0, y: 0 });
+  });
+
+  it('pinch: false leaves a second right-half finger ignored', () => {
+    look.zoomPinch = false;
+    look.attach(canvas);
+    canvas.dispatchEvent(touch('pointerdown', 2, 500, 200));
+    canvas.dispatchEvent(touch('pointerdown', 3, 600, 200));
+    canvas.dispatchEvent(touch('pointermove', 3, 700, 200));
+    look.update();
+    expect(look.zoom).toBe(0);
+    expect(look.look.dx).toBe(0);
+  });
+
   it('detach releases the lock and stops listening', async () => {
     const { exit } = fakeLock(canvas, true);
     look.attach(canvas);
