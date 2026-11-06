@@ -30,6 +30,7 @@
     "./host": "./src/host/index.ts",
     "./i18n": "./src/i18n/index.ts",
     "./input": "./src/input/index.ts",
+    "./nav": "./src/nav/index.ts",
     "./platform": "./src/platform/index.ts",
     "./post": "./src/post/index.ts",
     "./render": "./src/render/index.ts",
