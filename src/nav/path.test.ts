@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import type { NavPoint } from './grid';
-import { clearPath, createNavPath, followPath, pathDistance, pathPoint, reservePath } from './path';
+import { findPath } from './astar';
+import { createNavGrid, type NavPoint } from './grid';
+import {
+  clearPath,
+  createNavPath,
+  followPath,
+  hasLineOfWalkable,
+  pathDistance,
+  pathPoint,
+  reservePath,
+  smoothPath,
+} from './path';
 
 function pathOf(...pts: [number, number][]) {
   const p = createNavPath(pts.length);
@@ -88,5 +98,39 @@ describe('followPath', () => {
     expect(followPath(p, { x: 0, z: 0 }, 1, 0.1, v)).toBe('moving');
     expect(p.cursor).toBe(1);
     expect(v).toEqual({ x: 1, z: 0 });
+  });
+});
+
+describe('hasLineOfWalkable and smoothPath with an edge-cost hook (ws/nav-4)', () => {
+  it('keeps the bend at a one-way ledge the grid hook forbids', () => {
+    // A 5 × 3 grid: rows 0 and 2 are plateaus, row 1 a ramp cell at x = 4 only; the hook
+    // forbids every row-0 → row-1 step except through the ramp column.
+    const g = createNavGrid({
+      width: 5,
+      height: 3,
+      cellSize: 1,
+      neighbours: 8,
+      edgeCost: (from, to) => {
+        const fy = Math.floor(from / 5);
+        const ty = Math.floor(to / 5);
+        if (fy === ty) return 0;
+        return to % 5 === 4 && from % 5 === 4 ? 0 : Infinity;
+      },
+    });
+    const path = createNavPath();
+    expect(findPath(g, { x: 0, y: 0 }, { x: 0, y: 2 }, path)).toBe(true);
+    expect(path.length).toBeGreaterThan(3);
+    // The hook-aware line test refuses the straight cut, so smoothing keeps the detour.
+    expect(hasLineOfWalkable(g, 0, 0, 0, 2)).toBe(false);
+    expect(hasLineOfWalkable(g, 0, 0, 0, 2, { edgeCost: null })).toBe(true);
+    smoothPath(g, path);
+    expect(path.length).toBeGreaterThanOrEqual(3);
+    const p = { x: 0, z: 0 };
+    pathPoint(path, 1, p);
+    expect(p.x).toBeGreaterThan(3);
+    // Without the hook the smoothing collapses the path to a straight line.
+    expect(findPath(g, { x: 0, y: 0 }, { x: 0, y: 2 }, path)).toBe(true);
+    smoothPath(g, path, { edgeCost: null });
+    expect(path.length).toBe(2);
   });
 });

@@ -7,6 +7,15 @@ import type { Cell, NavGrid, NavPoint } from './grid';
 import { edgeCostOf, NEIGHBOUR_X, NEIGHBOUR_Y, stepLength } from './grid';
 import { CellHeap } from './heap';
 
+/**
+ * A flow direction with the cost of the step it points along: what `findPath` charges for the
+ * same move (`(1 | √2) × cost(dest)` plus the edge cost). 0 at a goal, `Infinity` off the field
+ * (an unwalkable, unreachable or out-of-grid cell).
+ */
+export interface FlowDirection extends NavPoint {
+  cost: number;
+}
+
 export interface FlowFieldOptions {
   /** Goal cells (row-major indices) to build from at once; the field is built immediately. */
   goals?: ArrayLike<number>;
@@ -29,16 +38,24 @@ export interface FlowField {
    * a 4-neighbour grid never gives a diagonal.
    */
   readonly directions: Float32Array;
+  /**
+   * Per cell, the cost of the step `directions` points along (`findPath`'s charge for it): 0 at
+   * a goal, `Infinity` where the direction is zero. Summed along a walk it equals `distances`.
+   */
+  readonly stepCosts: Float32Array;
   /** Dijkstra from `goals` (cells; unwalkable or out-of-grid ones are skipped). */
   build(goals: ArrayLike<Readonly<Cell>>): void;
   /** Dijkstra from `goals` given as row-major indices (unwalkable or out-of-grid are skipped). */
   setGoals(goals: ArrayLike<number>): void;
   /** Recomputes from the kept goals, in place: after a grid edit, or to clear `stale`. */
   update(): void;
-  /** The step direction at a cell into `out` (zero outside the grid). */
-  direction(cx: number, cy: number, out: NavPoint): NavPoint;
-  /** The step direction under a world point into `out`. */
-  directionAt(worldX: number, worldZ: number, out: NavPoint): NavPoint;
+  /**
+   * The step direction at a cell into `out` (zero outside the grid). An `out` with a `cost`
+   * field (`FlowDirection`) also receives the step's cost (`Infinity` off the field).
+   */
+  direction<T extends NavPoint>(cx: number, cy: number, out: T): T;
+  /** The step direction under a world point into `out`; a `FlowDirection` gets the step cost too. */
+  directionAt<T extends NavPoint>(worldX: number, worldZ: number, out: T): T;
   /** Cost-weighted distance from a cell to the nearest goal (`Infinity` when unreachable). */
   distance(cx: number, cy: number): number;
 }
@@ -50,6 +67,7 @@ class Field implements FlowField {
   readonly grid: NavGrid;
   readonly distances: Float32Array;
   readonly directions: Float32Array;
+  readonly stepCosts: Float32Array;
   readonly goals: Int32Array;
   goalCount = 0;
   version = -1;
@@ -61,6 +79,7 @@ class Field implements FlowField {
     const n = grid.size;
     this.distances = new Float32Array(n).fill(Infinity);
     this.directions = new Float32Array(n * 2);
+    this.stepCosts = new Float32Array(n).fill(Infinity);
     this.goals = new Int32Array(n);
     this.key = new Float64Array(n);
     this.heap = new CellHeap(n, this.key);
@@ -132,6 +151,7 @@ class Field implements FlowField {
     // With an edge-cost hook the step itself counts, so a one-way ledge is never pointed at:
     // the neighbour minimising step + distance, which equals the cell's own distance.
     const dirs = this.directions;
+    const steps = this.stepCosts;
     const out = this.distances;
     for (let cy = 0; cy < height; cy++) {
       for (let cx = 0; cx < width; cx++) {
@@ -170,31 +190,40 @@ class Field implements FlowField {
         if (bd < 0) {
           dirs[i * 2] = 0;
           dirs[i * 2 + 1] = 0;
-        } else if (bd < 4) {
-          dirs[i * 2] = NX[bd]!;
-          dirs[i * 2 + 1] = NY[bd]!;
+          steps[i] = own === 0 ? 0 : Infinity;
         } else {
-          dirs[i * 2] = NX[bd]! * Math.SQRT1_2;
-          dirs[i * 2 + 1] = NY[bd]! * Math.SQRT1_2;
+          const ni = (cy + NY[bd]!) * width + cx + NX[bd]!;
+          // What A* charges for this step: its length × the destination's cost, plus the hook.
+          steps[i] =
+            (bd < 4 ? 1 : Math.SQRT2) * costs[ni]! + (hooked ? edgeCostOf(grid, i, ni) : 0);
+          if (bd < 4) {
+            dirs[i * 2] = NX[bd]!;
+            dirs[i * 2 + 1] = NY[bd]!;
+          } else {
+            dirs[i * 2] = NX[bd]! * Math.SQRT1_2;
+            dirs[i * 2 + 1] = NY[bd]! * Math.SQRT1_2;
+          }
         }
       }
     }
     this.version = grid.version;
   }
 
-  direction(cx: number, cy: number, out: NavPoint): NavPoint {
+  direction<T extends NavPoint>(cx: number, cy: number, out: T): T {
     if (!this.grid.inBounds(cx, cy)) {
       out.x = 0;
       out.z = 0;
+      if ('cost' in out) (out as FlowDirection).cost = Infinity;
       return out;
     }
-    const i = (cy * this.grid.width + cx) * 2;
-    out.x = this.directions[i]!;
-    out.z = this.directions[i + 1]!;
+    const i = cy * this.grid.width + cx;
+    out.x = this.directions[i * 2]!;
+    out.z = this.directions[i * 2 + 1]!;
+    if ('cost' in out) (out as FlowDirection).cost = this.stepCosts[i]!;
     return out;
   }
 
-  directionAt(worldX: number, worldZ: number, out: NavPoint): NavPoint {
+  directionAt<T extends NavPoint>(worldX: number, worldZ: number, out: T): T {
     const g = this.grid;
     const cx = Math.floor((worldX - g.origin.x) / g.cellSize);
     const cy = Math.floor((worldZ - g.origin.z) / g.cellSize);
