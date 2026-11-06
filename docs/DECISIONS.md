@@ -122,3 +122,7 @@ Chain 2 held ws/template-first-person (8d8db9b) because `stream.spec` "the strea
 ## E-023 — landing priority under machine load (2026-11-06)
 
 With five integrator chains and twelve engineers on one machine, load average reached 76–91; e2e runs took 24 min instead of 5 and timed out on predicates rather than failing on assertions. Each code landing on main forces every other integrator to re-merge and rerun. Decision: when an integrator reports an unusable run from load, the PM names one chain to land next and asks the others to finish their merge and gates but hold the land step until that landing is announced. A run with widespread 10 s predicate / 30 s test timeouts is not a gate result and is rerun when load falls, which is not a flake retry (the E-017/E-020 rules concern assertion failures). Engineers keep working; their single gate run comes at the end.
+
+## E-024: mesh.spec leaves the E-017 list (2026-11-06)
+
+ws/flake-input landed at `9c6a921` with the `?still` probe fix; the first full matrix on that tree was 710/92/0 at load 27. The mesh.spec fog and drag tests are no longer tolerated failures: a miss there fails the merge like any other spec. The rest of the E-017 list stands until a branch fixes each one.
