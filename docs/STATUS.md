@@ -74,7 +74,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Batch submit | ws/batch-submit | `frame.meshes(batch)` + retained `InstanceList`; 50k instances in a few ms CPU; BENCH numbers | bench | ✅ green at `246e1be` (786 tests; e2e 672/106/0; snap 0; BENCH 10k mesh 4.1 ms / batch 0.7 / list 0.2); queued chain 3 after bench (supersedes bench files) |
 | 5 | Debug draw | ws/debug-draw | `createDebugDraw`: lines, wire shapes, axes, paths in one draw (fx) | — | ✅ green at `8d30969` (827 tests; e2e 707/92/3 mesh fog, pre-flake-input base; snap 0 px); queued chain 4 after retarget |
 | 5 | Billboards | ws/billboards | name plates, health bars, damage numbers: camera-facing quads + canvas text atlas (fx) | — | 🔧 in progress |
-| 5 | Perf overlay | ws/perf-overlay | `createPerfMonitor`/`createPerfOverlay`: frame/GPU/draw stats + sparkline; `?perf` on harness pages | — | 🔧 in progress |
+| 5 | Perf overlay | ws/perf-overlay | `createPerfMonitor`/`createPerfOverlay`: frame/GPU/draw stats + sparkline; `?perf` on harness pages | — | ✅ green at `032ae68` (830 tests; e2e 694/92/8, all pre-flake-input flakes, perf.spec 16/16); queued chain 5 after morph |
 | 5 | 2D ergonomics: `input.getGamepads`, PanelStack arrows, tile layer + flipbook | ws/ergo-2d | 🔧 engineer running (offset 280) |
 | 5 | Input recording and replay (`createInputRecorder`, `createInputPlayback`, `createGame({ input: { replay } })`) | ws/input-replay | 🔧 engineer running (offset 290) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
