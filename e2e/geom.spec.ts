@@ -1,18 +1,20 @@
 /**
  * The geometry page (harness/geom.html) on every matrix row (ws/geom):
  *
- * - the page boots WebGPU, draws every builder of `@thunderclap/engine/geom` over a heightfield
- *   ground and logs no error;
+ * - the page boots WebGPU, draws every builder of `@thunderclap/engine/geom` (primitives in
+ *   front, the sweep kit behind: ws/geom-2) over a heightfield ground and logs no error;
  * - a probe pixel on each shape is lit: it differs from the clear colour behind the ground;
+ * - `computeTangents` over the extruded star is right-handed on every vertex (the handedness
+ *   signs sum to the vertex count);
  * - the height the page reads under the camera with `heightAt` is the bump map the ground was
  *   built from, at the point the page sampled (a grid node, so bilinear equals the sample).
  */
 import type { Frame, Page } from '@playwright/test';
 import {
+  ALL_SHAPE_NAMES,
   bumpHeight,
   type GeomProbe,
   type HarnessGeomState,
-  SHAPE_NAMES,
 } from '../harness/geom-state';
 import { expect, harnessFrame, test } from './fixtures';
 import { HARNESS_URL, WRAPPER_URL } from './ports';
@@ -97,23 +99,26 @@ test('every builder draws lit over the heightfield ground', async ({ page, wrapp
   await open(page, wrapper);
   const s = await read();
   expect(s.gpuErrors).toBe(0);
-  expect(s.shapes).toBe(SHAPE_NAMES.length);
-  // Seven shapes and the ground; a perspective camera culls (E-014), so count both sides.
-  expect(s.stats.instances + s.stats.culled).toBe(SHAPE_NAMES.length + 1);
+  expect(s.shapes).toBe(ALL_SHAPE_NAMES.length);
+  // Twelve shapes and the ground; a perspective camera culls (E-014), so count both sides.
+  expect(s.stats.instances + s.stats.culled).toBe(ALL_SHAPE_NAMES.length + 1);
   expect(s.stats.instances).toBeGreaterThanOrEqual(1);
+  // The tangent-space probe is computed once at start-up: no polling needed.
+  expect(s.tangentVertices).toBeGreaterThan(0);
+  expect(s.tangentW).toBe(s.tangentVertices);
 
   const points = await Promise.all([
     toPage(s.probes.sky),
-    ...SHAPE_NAMES.map((n) => toPage(s.probes[n])),
+    ...ALL_SHAPE_NAMES.map((n) => toPage(s.probes[n])),
   ]);
   const [sky, ...shapes] = await sample(page, points);
   const dist = (a: Rgb, b: Rgb) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
   // The sky probe is the clear colour after the tonemap: dim and blue-leaning.
   expect(sky![0] + sky![1] + sky![2], `sky ${sky}`).toBeLessThan(300);
   expect(sky![2], `sky ${sky}`).toBeGreaterThan(sky![0]);
-  for (let i = 0; i < SHAPE_NAMES.length; i++) {
+  for (let i = 0; i < ALL_SHAPE_NAMES.length; i++) {
     const c = shapes[i]!;
-    expect(dist(c, sky!), `${SHAPE_NAMES[i]} ${c} vs sky ${sky}`).toBeGreaterThan(40);
+    expect(dist(c, sky!), `${ALL_SHAPE_NAMES[i]} ${c} vs sky ${sky}`).toBeGreaterThan(40);
   }
   expect(errors).toEqual([]);
 });

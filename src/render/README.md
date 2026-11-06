@@ -726,8 +726,10 @@ its Worker-meshed chunks this way.
   `layout?`, `capacity?`, `indexFormat?`, `label?`). With the
   default `VERTEX_LAYOUT_2D` a vertex is `pos.xy, uv.xy, color.rgba` (8 floats); with
   `VERTEX_LAYOUT_3D` it is `pos.xyz, normal.xyz, uv.xy, color.rgba` (12 floats, normal at
-  `@location(10)`). A `VertexLayout` is the buffer layout plus the WGSL that reads it;
-  layouts compare by identity. `VERTEX_FLOATS`/`VERTEX_STRIDE` (8, 32 B) and
+  `@location(10)`). `VERTEX_LAYOUT_3D_TANGENT` (ws/geom-2) is the 3D layout plus `tangent: vec4f`
+  at `@location(13)` (xyz along +u, w the handedness ±1; 16 floats, 64 B), the layout
+  `geom`'s `computeTangents` returns. A `VertexLayout` is the buffer layout plus the WGSL that
+  reads it; layouts compare by identity. `VERTEX_FLOATS`/`VERTEX_STRIDE` (8, 32 B) and
   `VERTEX3D_FLOATS`/`VERTEX3D_STRIDE` (12, 48 B) size a vertex, and `VERTEX_BUFFER_LAYOUT` and
   `VERTEX3D_BUFFER_LAYOUT` are the two `GPUVertexBufferLayout`s. `quadGeometry()` returns the
   unit quad (-0.5..0.5, white) as `{ vertices, indices }`. A material builds one pipeline per (vertex layout, depth mode) on first

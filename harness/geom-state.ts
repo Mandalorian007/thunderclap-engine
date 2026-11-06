@@ -10,7 +10,7 @@ export interface GeomProbe {
   y: number;
 }
 
-/** The names of the builders the page draws, left to right. */
+/** The names of the primitive builders the page draws on the front row, left to right. */
 export const SHAPE_NAMES = [
   'box',
   'plane',
@@ -20,7 +20,11 @@ export const SHAPE_NAMES = [
   'cylinder',
   'torus',
 ] as const;
-export type ShapeName = (typeof SHAPE_NAMES)[number];
+/** The sweep-kit shapes on the row behind, left to right (ws/geom-2). */
+export const SHAPE_NAMES_2 = ['extrude', 'lathe', 'tube', 'stairs', 'arch'] as const;
+/** Every shape the page draws: front row, then back row. */
+export const ALL_SHAPE_NAMES = [...SHAPE_NAMES, ...SHAPE_NAMES_2] as const;
+export type ShapeName = (typeof ALL_SHAPE_NAMES)[number];
 
 /**
  * The ground: a `GROUND_SAMPLES`² heightfield, `GROUND_SPACING` world units apart, starting at
@@ -54,6 +58,13 @@ export interface HarnessGeomState {
   probes: Record<ShapeName, GeomProbe> & { sky: GeomProbe };
   /** `renderer.stats` of the last frame. */
   stats: { drawCalls: number; instances: number; culled: number };
+  /**
+   * Tangent-space probe: `computeTangents` over the extruded star, the sum of every vertex's
+   * handedness sign (`tangent.w`) and the vertex count. The star's uvs run u around and v along
+   * every face, so all its frames are right-handed and the two are equal.
+   */
+  tangentW: number;
+  tangentVertices: number;
   /** `gpuDiagnostics.errorCount` (WGSL compile errors, uncaptured errors). */
   gpuErrors: number;
 }
