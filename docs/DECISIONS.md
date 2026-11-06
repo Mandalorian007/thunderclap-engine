@@ -142,3 +142,7 @@ Refines E-025. When main moved only by commits that touch `docs/**`, `README.md`
 ## E-028: the dungeon pad walk leaves the E-017 list (2026-11-06, PM)
 
 ws/demo-polish landed at a3be7c2: the spec holds the fake pad button until focus reaches the expected item and the demo latches a press until `PadNav.update()` has seen it, so the walk is deterministic by construction. On the landing gate the test passed on all seven rows that run demos (itch-iframe skips every demo spec by design). A miss of this test is now a real failure again, as mesh.spec became under E-024.
+
+## E-029: a barrel-only overlap is disjoint (2026-11-06, PM)
+
+Chain 3 (host-mobile) asked after a second full matrix forced by main moving under it: both moves overlapped the branch only in `src/ui/index.ts`, the barrel, where each side appended exports and git auto-merged. Every landing now adds exports to one barrel or another and main moves about every 15 minutes, so E-025's letter would cost a ten-minute matrix per landing with nothing new under test. Ruling: an overlap confined to module barrels (`src/**/index.ts`, `src/index.ts`) and to the README count line counts as disjoint for E-025 when git auto-merged it and `pnpm check` (which type-checks every export) is green. Any other shared file, or a barrel conflict a human resolved, is still a code overlap and takes the full e2e. The integrator names the barrel files it waived in its report.
