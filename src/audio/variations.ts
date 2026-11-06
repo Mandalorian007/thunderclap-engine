@@ -34,6 +34,7 @@ const SILENT: Voice = {
   setPosition() {},
   setDirection() {},
   follow() {},
+  sendTo() {},
   position: new Float64Array(3),
   playing: false,
 };

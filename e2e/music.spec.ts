@@ -14,7 +14,8 @@ import { HARNESS_URL } from './ports';
 
 test.beforeEach(async ({ page, wrapper }) => {
   test.skip(wrapper !== 'top', 'music harness runs top-level only');
-  await page.goto(`${HARNESS_URL}music.html`);
+  const query = test.info().title.includes('?pause') ? '?pause' : '';
+  await page.goto(`${HARNESS_URL}music.html${query}`);
   await expect.poll(() => read(page).then((s) => s.ready), { timeout: 20_000 }).toBe(true);
   // The first gesture unlocks the context; the stems queued at boot start on it.
   const root = page.locator('#root');
@@ -35,6 +36,11 @@ const setIntensity = (page: Page, level: number) =>
   page.evaluate((l) => window.__harnessMusic?.setIntensity(l), level);
 const step = (page: Page) => page.evaluate(() => window.__harnessMusic?.step());
 const speak = (page: Page) => page.evaluate(() => window.__harnessMusic?.speak());
+const playSfx = (page: Page) => page.evaluate(() => window.__harnessMusic?.playSfx());
+const stopSfx = (page: Page) => page.evaluate(() => window.__harnessMusic?.stopSfx());
+const sendProbe = (page: Page, amount: number) =>
+  page.evaluate((a) => window.__harnessMusic?.sendProbe(a), amount);
+const unpause = (page: Page) => page.evaluate(() => window.__harnessMusic?.unpause());
 
 test('the beat grid advances from the context clock and fires onBeat', async ({ page }) => {
   const s0 = await read(page);
@@ -92,4 +98,52 @@ test('speak ducks the music bus and releases it when the line ends', async ({ pa
   await expect.poll(() => read(page).then((s) => s.ducked)).toBe(false);
   await expect.poll(() => read(page).then((s) => s.duckGain)).toBe(1);
   expect((await read(page)).reverb).toBeCloseTo(0.3);
+});
+
+test('voices counts the stems under music and two probes under sfx; sendTo shows one send', async ({
+  page,
+}) => {
+  // The three stems queued at boot are registered voices on `music`.
+  await expect.poll(() => read(page).then((s) => s.voices.music)).toBe(3);
+  let s = await read(page);
+  expect(s.voices.sfx).toBe(0);
+  expect(s.sends).toBe(0);
+  await playSfx(page);
+  await playSfx(page);
+  await expect.poll(() => read(page).then((s) => s.voices.sfx)).toBe(2);
+  s = await read(page);
+  expect(s.voices.master).toBe(s.voices.music + s.voices.sfx + s.voices.ui);
+  await sendProbe(page, 1);
+  await expect.poll(() => read(page).then((s) => s.sends)).toBe(1);
+  await sendProbe(page, 0);
+  await expect.poll(() => read(page).then((s) => s.sends)).toBe(0);
+  await stopSfx(page);
+  await expect.poll(() => read(page).then((s) => s.voices.sfx)).toBe(0);
+  expect((await read(page)).voices.music).toBe(3);
+});
+
+test('?pause ramps music and sfx to silence, keeps ui, and unpause restores the bus gains', async ({
+  page,
+}) => {
+  await expect.poll(() => read(page).then((s) => s.paused)).toBe(true);
+  let s = await read(page);
+  expect(s.pausedBuses).toEqual(['music', 'sfx']);
+  // The 50 ms ramp lands; `ui` and `master` are untouched.
+  await expect.poll(() => read(page).then((s) => s.busGains.sfx)).toBe(0);
+  await expect.poll(() => read(page).then((s) => s.busGains.music)).toBe(0);
+  s = await read(page);
+  expect(s.busGains.ui).toBeCloseTo(s.busTargets.ui!, 5);
+  expect(s.busGains.master).toBeCloseTo(s.busTargets.master!, 5);
+  // The stems are still on the books while paused.
+  expect(s.voices.music).toBe(3);
+  await unpause(page);
+  await expect.poll(() => read(page).then((s) => s.paused)).toBe(false);
+  // Restored to exactly what the settings ask for.
+  await expect
+    .poll(() => read(page).then((s) => Math.abs(s.busGains.sfx! - s.busTargets.sfx!)))
+    .toBeLessThan(1e-5);
+  await expect
+    .poll(() => read(page).then((s) => Math.abs(s.busGains.music! - s.busTargets.music!)))
+    .toBeLessThan(1e-5);
+  expect((await read(page)).pausedBuses).toEqual([]);
 });
