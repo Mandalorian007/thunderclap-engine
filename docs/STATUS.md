@@ -70,7 +70,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Demo: dungeon | ws/demo-dungeon | `demos/dungeon` 2D tile crawl: atlas, 60 sprites, flicker, menu, save, synth audio | — | ✅ green at `802bbd2` (768 tests; e2e 680/96/18 load timeouts, dungeon.spec 28/4 alone; snap 5/5); land after demo-arena (shared infra) |
 | 5 | Demo: showroom | ws/demo-showroom | `demos/showroom` PBR sphere grid, moving lights, post looks via `blendTo`, GPU readout | pbr | ✅ green at `71c29d4` (768 tests; e2e 684/92/2 E-017; showroom.spec 16/16; snap 0 px); land after demo-arena |
 | 5 | Demo: range | ws/demo-range | `demos/range` first-person target range: Look, meshTester picks, sparks, trails, spatial audio | pick | 🔧 in progress |
-| 5 | Shared light loop | ws/pbr-lights | PBR sees spots, masks, layers via one generated light loop; default textures unified | spot-lights, texture-registry | 🔧 in progress |
+| 5 | Shared light loop | ws/pbr-lights | PBR sees spots, masks, layers via one generated light loop; default textures unified | spot-lights, texture-registry | ✅ green at `bb6f799` (784 tests; e2e 686/92/0; snap 0 px; pbr probes identical); queued chain 1 after nav |
 | 5 | Batch submit | ws/batch-submit | `frame.meshes(batch)` + retained `InstanceList`; 50k instances in a few ms CPU; BENCH numbers | bench | 🔧 in progress |
 | 5 | Debug draw | ws/debug-draw | `createDebugDraw`: lines, wire shapes, axes, paths in one draw (fx) | — | 🔧 in progress |
 | 5 | Billboards | ws/billboards | name plates, health bars, damage numbers: camera-facing quads + canvas text atlas (fx) | — | 🔧 in progress |
@@ -126,6 +126,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - ws/demo-dungeon wishes: `createGame` accepting `input.getGamepads` (or an injectable `PadNav`) so specs drive `ctx.padNav`; `PanelStack` walking focus with ArrowUp/Down itself; a tilemap/flipbook helper in `render` to replace per-tile DrawParams bookkeeping. → ws/ergo-2d brief.
 - ws/demo-showroom wishes: `Renderer.timing` 'first sample ready' promise; a retained `worldToScreen` projection; geom builders replacing the copied harness helpers (geom now on main). → ws/ergo-3d.
 - ws/demo-arena wishes: `RenderStats.triangles`; `createStandardMaterial({ buffers })` or a `skinned` option so a skinned PBR needs no custom WGSL; `tsconfig.json` `include` adds `demos` (chain 6 integrator may add it as a semantic fix if typecheck stays green). → ws/ergo-3d.
+- Brief pbr-lights said `WGSL_PBR` lives in `standard.ts`; it is `src/render/pbr-wgsl.ts`. Fix in the next brief that names it (gltf-materials).
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
