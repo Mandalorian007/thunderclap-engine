@@ -81,7 +81,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Camera helpers: `viewZ`, `invViewProj`, `projectMany`, `frustumCorners`, `setPerspective` parity | ws/camera-ergo | ✅ merged `8f32ab9` (chain 3; check 931; e2e 781/109/0; snap 5/5; E-025 applied for docs-only main move) |
 | 5 | UI widgets 2: reticle, bar, segmented, select, keyPrompt, stepper, cooldown | ws/ui-widgets | ✅ check green at `73267a5` (922 tests; widgets.spec 15/15); full e2e not run by engineer (load 40+), integrator runs it; queued chain 3 after geom-2 (moved from chain 5) |
 | 5 | Audio 2: beat-grid music layers, variations, reverb/lowpass sends, ducking | ws/audio-2 | ✅ green at `8c5db70` (933 tests; e2e 776/106/0); queued chain 3 after ui-widgets |
-| 5 | Save 2: slot manager with meta sidecar, settings store + bind, undo journal, typed-array codec | ws/save-2 | 🔧 engineer running (offset 340) |
+| 5 | Save 2: slot manager with meta sidecar, settings store + bind, undo journal, typed-array codec | ws/save-2 | ✅ green at `55e6074` (938 tests; e2e 803/102/1 E-017 menuNav); queued chain 1 after pbr-lights |
 | 5 | Post 2: FXAA, 3D LUT, grain, aberration, sharpen, depth/normal outline | ws/post-2 | 🔧 engineer running (offset 350) |
 | 5 | Water surface: scrolling normals, Fresnel, sun specular, depth fade, foam, `waterHeight` | ws/water | `src/fx/water.ts` Drawable; harness `water.html` | sky, post-depth, camera-ergo | 🔧 engineer running (offset 360) |
 | 5 | Decals: depth-projected box decals + quad fallback, atlas, lifetime, one instanced draw | ws/decals | `src/fx/decals.ts` Drawable; harness `decals.html` | post-depth, camera-ergo | 🔧 engineer running (offset 370) |
