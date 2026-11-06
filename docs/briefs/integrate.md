@@ -19,3 +19,5 @@ A failure in a spec on the E-017 list (ui.spec menuNav, skin.spec joints sway, s
 ## Report back (under 300 words)
 
 Merge commit hashes; every conflict resolved (file, what each side wanted, what you kept); semantic fixes; `pnpm check` counts and e2e passed/skipped/failed on the final `main`; anything the PM must decide or log.
+
+> Note (2026-11-06): since `templates/first-person` landed as a workspace package, a fresh integration worktree needs `pnpm install --frozen-lockfile --offline` before `pnpm check` can pass; this changes no tracked file.
