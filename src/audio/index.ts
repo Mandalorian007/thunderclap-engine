@@ -25,11 +25,14 @@ export {
   type Voice,
 } from './audio';
 export {
+  type BufferFactory,
   dbToGain,
   fillCrackle,
   fillNoise,
   foldLoop,
   gainToDb,
+  type ImpulseResponseOptions,
+  impulseResponse,
   loopSafeFreq,
   midiToHz,
   type NoiseColor,
@@ -40,6 +43,7 @@ export {
   semitones,
   volumeToGain,
 } from './dsp';
+export { createDucker, type Ducker, type DuckerOptions } from './duck';
 export {
   type Envelope,
   envelopeLength,
@@ -49,6 +53,15 @@ export {
   type Segment,
   scheduleEnvelope,
 } from './envelope';
+export {
+  createMusic,
+  intensityGains,
+  type Music,
+  type MusicOptions,
+  type MusicPlayOptions,
+  type MusicStart,
+  type Stem,
+} from './music';
 export { type PersistMixerOptions, persistMixer } from './persist';
 export {
   chime,
@@ -63,6 +76,7 @@ export {
   whoosh,
   zap,
 } from './recipes';
+export { createSend, type Send, type SendKind, type SendOptions } from './send';
 export {
   type CrackleSource,
   type FilterSpec,
@@ -76,6 +90,11 @@ export {
   validateSpec,
   type Wave,
 } from './synth';
+export {
+  createVariations,
+  type Variations,
+  type VariationsOptions,
+} from './variations';
 export {
   type AudioZone,
   type AudioZoneDesc,

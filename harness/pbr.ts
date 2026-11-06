@@ -12,8 +12,12 @@
  *   tangent frame from screen-space derivatives.
  * - A ground plane in the same material (rough dielectric), the engine's sun with a shadow map,
  *   fog and one warm point light; the orbit camera of `mesh.html` (drag, pinch, wheel).
+ * - A spot light straight down onto the floor left of the grid (ws/pbr-lights: the standard
+ *   material runs the shared light loop, so it sees spots and masks), and under the tile a pair of
+ *   grey spheres on layers 2 and 4 with a lamp masked to layer 2 between them.
  * - Probes for e2e/pbr.spec.ts: the rough dielectric sphere's centre, the specular highlight
- *   on a metal sphere, and the lit and unlit slopes of a bump on the tile.
+ *   on a metal sphere, the lit and unlit slopes of a bump on the tile, the floor inside and
+ *   outside the spot's cone, and the camera-facing point of each sphere of the masked pair.
  */
 import { GameLoop } from '@thunderclap/engine/core';
 import { Gestures, Input } from '@thunderclap/engine/input';
@@ -28,6 +32,7 @@ import {
   Lights,
   type PointLight,
   Renderer,
+  type SpotLight,
   Transform,
   VERTEX_LAYOUT_3D,
 } from '@thunderclap/engine/render';
@@ -51,10 +56,14 @@ const state: HarnessPbrState = {
     highlight: { x: 0, y: 0 },
     tileLit: { x: 0, y: 0 },
     tileDark: { x: 0, y: 0 },
+    spotIn: { x: 0, y: 0 },
+    spotOut: { x: 0, y: 0 },
+    litSphere: { x: 0, y: 0 },
+    maskedSphere: { x: 0, y: 0 },
   },
   stats: { drawCalls: 0, instances: 0 },
   gpuErrors: 0,
-  lights: { sun: false, points: 0, shadow: false, fog: false },
+  lights: { sun: false, points: 0, spots: 0, shadow: false, fog: false },
   materials: 0,
 };
 
@@ -151,6 +160,28 @@ const SHADOW_SIZE = 2048;
 const FOG_COLOR = [0.6, 0.65, 0.75] as const;
 const FOG_NEAR = 12;
 const FOG_FAR = 40;
+/** The spot: high over the floor left of the grid, pointing straight down, a sharp cone. */
+const SPOT_POS = [-4.2, 5, 1.5] as const;
+const SPOT_COLOR = [3.2, 2.9, 2.2] as const;
+const SPOT_RADIUS = 14;
+const SPOT_INNER = 0.2;
+const SPOT_OUTER = 0.32;
+/** Floor probe outside the cone: the same depth, 2.7 units right (the cone is 1.7 wide on the floor). */
+const SPOT_OUT_DX = 2.7;
+/**
+ * The masked pair under the tile: two grey rough spheres on their own layers and a lamp between
+ * them, in front, that reaches only `PAIR_LIT_LAYER`. The grid, tile and floor stay on layer 1.
+ */
+const PAIR_Y = 0.5;
+const PAIR_Z = 1.0;
+const PAIR_LIT_X = 3.6;
+const PAIR_MASKED_X = 4.8;
+const PAIR_LIT_LAYER = 2;
+const PAIR_MASKED_LAYER = 4;
+const PAIR_LAMP_POS = [4.2, 0.5, 2.2] as const;
+const PAIR_LAMP_COLOR = [2.6, 2.2, 1.6] as const;
+const PAIR_LAMP_RADIUS = 4;
+const PAIR_TINT = [0.8, 0.8, 0.8, 1] as const;
 
 // ------------------------------------------------------------------ the scene
 
@@ -352,6 +383,13 @@ async function main(): Promise<void> {
   const tileP: InstanceParams = { tint: [0.62, 0.6, 0.58, 1] };
   const groundT = new Transform({ scaleX: 60, scaleY: 1, scaleZ: 60 });
   const groundP: InstanceParams = { tint: [0.34, 0.37, 0.3, 1] };
+  // The masked pair: the grid's material at its rough dielectric texel (col 0, last row).
+  const pairUv = [0.5 / COLS, (ROWS - 0.5) / ROWS, 0.5 / COLS, (ROWS - 0.5) / ROWS] as const;
+  const pairScale = { scaleX: SPHERE_RADIUS, scaleY: SPHERE_RADIUS, scaleZ: SPHERE_RADIUS };
+  const litT = new Transform({ x: PAIR_LIT_X, y: PAIR_Y, z: PAIR_Z, ...pairScale });
+  const maskedT = new Transform({ x: PAIR_MASKED_X, y: PAIR_Y, z: PAIR_Z, ...pairScale });
+  const litP: InstanceParams = { tint: PAIR_TINT, uv: pairUv, layers: PAIR_LIT_LAYER };
+  const maskedP: InstanceParams = { tint: PAIR_TINT, uv: pairUv, layers: PAIR_MASKED_LAYER };
 
   const lights = new Lights();
   lights.ambient.set(AMBIENT);
@@ -359,6 +397,22 @@ async function main(): Promise<void> {
   lights.sun.color = SUN_COLOR;
   const lamp: PointLight = { position: LAMP_POS, color: LAMP_COLOR, radius: LAMP_RADIUS };
   lights.points.push(lamp);
+  const pairLamp: PointLight = {
+    position: PAIR_LAMP_POS,
+    color: PAIR_LAMP_COLOR,
+    radius: PAIR_LAMP_RADIUS,
+    layers: PAIR_LIT_LAYER,
+  };
+  lights.points.push(pairLamp);
+  const spot: SpotLight = {
+    position: SPOT_POS,
+    direction: [0, -1, 0],
+    color: SPOT_COLOR,
+    radius: SPOT_RADIUS,
+    innerAngle: SPOT_INNER,
+    outerAngle: SPOT_OUTER,
+  };
+  lights.spots.push(spot);
   lights.sun.shadow = { extent: SHADOW_EXTENT, size: SHADOW_SIZE };
   lights.fog.color = FOG_COLOR;
   lights.fog.density = 1;
@@ -372,6 +426,8 @@ async function main(): Promise<void> {
 
   const roughCentre = sphereCentre(0, ROWS - 1);
   const metalCentre = sphereCentre(COLS - 1, (ROWS - 1) / 2);
+  const litCentre = [PAIR_LIT_X, PAIR_Y, PAIR_Z] as const;
+  const maskedCentre = [PAIR_MASKED_X, PAIR_Y, PAIR_Z] as const;
   const point = new Float32Array(3);
   // The tile's bump peaks at uv (0.5, 0.5); u runs +x and v runs -y across it.
   const tileLit = [
@@ -409,6 +465,8 @@ async function main(): Promise<void> {
         frame.mesh(sphere, spheresMat, sphereT[i]!, sphereP[i]!);
       }
       frame.mesh(wall, tileMat, tileT, tileP);
+      frame.mesh(sphere, spheresMat, litT, litP);
+      frame.mesh(sphere, spheresMat, maskedT, maskedP);
       renderer.endFrame();
       state.frames++;
       state.stats.drawCalls = renderer.stats.drawCalls;
@@ -417,6 +475,7 @@ async function main(): Promise<void> {
       const ls = state.lights;
       ls.sun = frame.lights.sun.color[0]! > 0;
       ls.points = frame.lights.points.length;
+      ls.spots = frame.lights.spots.length;
       ls.shadow = frame.lights.sun.shadow !== null;
       ls.fog = frame.lights.fog.density > 0;
       facingPoint(roughCentre, point);
@@ -425,6 +484,12 @@ async function main(): Promise<void> {
       probe(camera, point[0]!, point[1]!, point[2]!, state.probes.highlight);
       probe(camera, tileLit[0], tileLit[1], tileLit[2], state.probes.tileLit);
       probe(camera, tileDark[0], tileDark[1], tileDark[2], state.probes.tileDark);
+      probe(camera, SPOT_POS[0], 0, SPOT_POS[2], state.probes.spotIn);
+      probe(camera, SPOT_POS[0] + SPOT_OUT_DX, 0, SPOT_POS[2], state.probes.spotOut);
+      facingPoint(litCentre, point);
+      probe(camera, point[0]!, point[1]!, point[2]!, state.probes.litSphere);
+      facingPoint(maskedCentre, point);
+      probe(camera, point[0]!, point[1]!, point[2]!, state.probes.maskedSphere);
     },
   });
   res.onDeviceLost(() => loop.stop());

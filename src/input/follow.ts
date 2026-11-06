@@ -84,9 +84,8 @@ const MAX_DT = 0.1;
  * follow.target = player;              // { position: Float32Array(3), yaw }
  * follow.setLook(look);
  * // each tick, after input.update():
- * follow.update(dt);
+ * follow.update(dt);                   // the look's zoom axis (wheel, pinch, pad) steps distance
  * if (input.pressed('view')) follow.mode = follow.mode === 'third' ? 'first' : 'third';
- * if (input.pressed('zoomOut')) follow.zoom(1);
  * ```
  */
 export class Follow {
@@ -147,12 +146,15 @@ export class Follow {
     this.currentDistance = this.distance;
   }
 
-  /** Read yaw and pitch deltas from this `Look` each update (`null` stops reading). */
+  /** Read yaw and pitch deltas and the zoom axis from this `Look` each update (`null` stops reading). */
   setLook(look: Look | null): void {
     this.look = look;
   }
 
-  /** Step `distance` by `steps × zoomStep` (positive zooms out), clamped to min..max. */
+  /**
+   * Step `distance` by `steps × zoomStep` (positive zooms out), clamped to min..max. A linked
+   * `Look` calls it through `update` with its `zoom` axis negated; games call it for extra keys.
+   */
   zoom(steps: number): void {
     this.distance = clamp(
       this.distance + steps * this.zoomStep,
@@ -181,6 +183,8 @@ export class Follow {
       this.yaw += dx;
       this.pitch += dy;
       turned = dx !== 0 || dy !== 0;
+      // `Look.zoom` > 0 is closer; `zoom(steps)` > 0 is farther.
+      if (look.zoom !== 0) this.zoom(0 - look.zoom);
     }
     this.pitch = clamp(this.pitch, this.pitchMin, this.pitchMax);
     this.distance = clamp(this.distance, this.minDistance, this.maxDistance);

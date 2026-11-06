@@ -64,6 +64,8 @@ export {
   quatNormalize,
   quatSlerp,
 } from './quat';
+export type { RetargetClipOptions, RetargetMap, RetargetOptions } from './retarget';
+export { createRetargetMap, normalizeJointName, retargetClip, retargetPose } from './retarget';
 export type { RootMotionDelta, RootMotionOptions, RootMotionSplit } from './root-motion';
 export { applyRootMotionDelta, extractRootMotion } from './root-motion';
 export type { Socket, SocketLocal } from './socket';
