@@ -4,7 +4,8 @@ Grid navigation on the XZ plane: a `NavGrid` of walkable cells with costs, A* wi
 pulling into a reusable `NavPath`, a flow field that one build serves every agent with, a path
 follower and local steering. For non-grid worlds, a `NavMesh` baked from triangle geometry
 (*Navmesh*, below): polygon A* with a funnel, off-mesh links, a raycast and a height query, with
-an ORCA crowd (*Crowd*) and a byte format to ship baked meshes (*Serialisation*). Pure CPU, no GPU
+an ORCA crowd (*Crowd*), a move-range query with its outline (*Reachability on a mesh*) and a
+byte format to ship baked meshes (*Serialisation*). Pure CPU, no GPU
 and no import from any other engine module, and no allocation per query after warm-up: every call
 writes into an `out` you own.
 
@@ -239,6 +240,49 @@ world units; polygons are counter-clockwise seen from above.
   writes a 3D velocity of magnitude `speed` toward the current one and returns `'moving'`, or
   `'arrived'` with zero velocity at the last point. The game integrates the position itself; to
   stick to the surface, set `y = mesh.height(x, z)` after the step.
+- `NavPath3.cost` (ws/nav-5) – the search's priced cost of the route found: the legs between
+  portal midpoints (the goal point last) times their polygon's `areaCost`, plus each link's cost;
+  0 when both ends share a polygon or no route exists. It is the same quantity a mesh `reachable`
+  measures, so a path and a range agree.
+- `heuristicWeight` (ws/nav-5, `FindMeshPathOptions`) scales the straight-line heuristic; default
+  1. A node's position is the portal it was entered through, so the default A* can settle a
+  polygon through a costlier portal and its `cost` may exceed the cheapest; 0 turns the search
+  into a Dijkstra whose `cost` is exactly the one `reachable(mesh, …)` gives the goal's polygon.
+
+### Reachability on a mesh
+
+The move-range query for a non-grid world (ws/nav-5): which polygons a unit at `from` reaches
+within a movement budget, and the outline to draw around them.
+
+- `reachable(mesh, from: NavPoint3, opts: MeshReachOptions, out?: MeshReach): MeshReach` – the
+  mesh overload of `reachable`. It snaps `from` to its polygon (`snapRadius`, default any
+  distance) and runs a Dijkstra over the polygons with the `findMeshPath` cost model (portal
+  midpoints as node positions, each leg priced by its polygon's `areaCost`, off-mesh links with
+  their cost), stopping at `opts.budget` inclusive. A polygon is in reach when its centre is: its
+  cost is the cheapest route to the centre, the start polygon's is 0. It reuses one `MeshReach`
+  per mesh (a `WeakMap`) or the `out` given (`createMeshReach(mesh)` makes one; another mesh's is
+  refused) and allocates nothing after the first call. An empty mesh, a negative or NaN budget or
+  a `from` off the mesh gives an empty reach.
+- `MeshReachOptions { budget; areaCost?; areaMask?; maxPolys?; snapRadius? }` – `areaCost` and
+  `areaMask` as for `findMeshPath` (*Area types*; `OBSTACLE_AREA` is never entered); `maxPolys`
+  stops after that many polygons joined (the nearest, since they join in cost order).
+- `MeshReach` – `count`, `polys: Int32Array` (the reached polygons in cost order, the start
+  first), `costs: Float32Array` and `parents: Int32Array` over the whole mesh (`Infinity` / -1 off
+  the reach), `startPoly`, `start` (the snapped point), `budget`, `version` (the mesh version
+  queried at) and `stale`. `has(poly)`, `pathTo(poly, path: NavPath3): boolean` (the parents'
+  corridor, string pulled to the polygon's centre, `path.cost` the reach cost; false with an empty
+  path off the reach) and `forEach((poly, cost) => void)` cheapest first.
+- `reachableOutline(reach, out?: ReachOutline): ReachOutline` – the boundary of the reach as
+  closed loops of polygon edges: every edge of a reached polygon whose neighbour is a wall or
+  unreached, chained at shared vertices. Outer loops run counter-clockwise seen from above, holes
+  (a block inside the range) clockwise. One outline per reach is reused (a `WeakMap`) unless `out`
+  is given (`createReachOutline(capacity?)`); its buffers grow on demand.
+- `ReachOutline { points: Float32Array; pointCount; loopStart: Int32Array; loopCount }` – loop `k`
+  is points `loopStart[k]` to `loopStart[k + 1] - 1`, world `x, y, z` triples.
+
+On a 100×100 quad mesh (10 000 polygons), the whole-mesh reach takes 1.3 ms best and 3.4 ms
+median on an M-series laptop under load (`mesh-reach-bench.test.ts`, which asserts the best under
+2 ms); a budget of 12 (401 polygons) takes 0.06 ms and its outline 0.004 ms.
 
 ## Off-mesh links
 
@@ -384,7 +428,10 @@ Bake at build time, ship the bytes: a bake takes tens to hundreds of millisecond
 is a few kilobytes per hundred polygons. `pnpm bake <config>` (`scripts/bake.mjs`, see the root
 README's *Baking*) does it from the command line: a `bake.config.json` names the glTF or geometry
 JSON sources and the `NavBakeOptions` per entry, and the script writes `<name>.navm` next to a
-manifest that `--check` verifies in CI.
+manifest that `--check` verifies in CI. `pnpm bake:nav <input> <output> [--options file.json]`
+(`scripts/bake-nav.mjs`, ws/nav-5) is the single-file form: one glTF or geometry JSON in, read
+the same way, baked with the `NavBakeOptions` in the options file (fields it leaves out take a
+1.8 m human agent on 0.3 m cells), and one format-2 file out; no network, no manifest.
 
 - `exportNavMesh(mesh): ArrayBuffer` – a little-endian, self-describing buffer (magic `NAVM`,
   format 2): the vertices, polygons, adjacency, the area byte per polygon (padded to four) and
@@ -394,6 +441,12 @@ manifest that `--check` verifies in CI.
   links with their ids (`version` starts at 0); throws on a buffer that is not a navmesh or has
   another format number. Format 1 (before ws/nav-4, no areas) still imports with every area 0.
   `exportNavMesh(importNavMesh(bytes))` is byte-equal to `bytes`.
+- `loadNavMesh(bytes: ArrayBuffer | ArrayBufferView): NavMesh` (ws/nav-5) – the runtime loader
+  for a shipped bake: `importNavMesh` plus validation, so a truncated or corrupt file throws a
+  `loadNavMesh: …` error naming what is wrong (the byte length against the header, vertices per
+  polygon outside 3..6, a non-finite vertex, a polygon under three vertices or naming a vertex out
+  of range, a neighbour out of range) instead of yielding a mesh that fails later. A game fetches
+  the `.navm` and passes the bytes.
 
 ## Harness and tests
 
@@ -443,3 +496,16 @@ bounded, a grid layer), 200 queued requests matching `findPath`, budget, cancel 
 corridor advancing and invalidating, 48 corridor agents crossing a pillar floor, a queued
 replan after an obstacle, and a mesh field monotone to its goal, within 10 % of `findMeshPath`,
 walked by 48 starters through every portal, and rebuilt after an obstacle.
+
+`harness/nav5.html` (ws/nav-5, no WebGPU) builds a 24×16 tactics board, one unit tile per
+polygon with four blocks left out and two columns of mud priced at 3×, and draws it top-down on a
+canvas. `?range` (the default): every fixed step recomputes a unit's movement range with
+`reachable(mesh, …)` and `reachableOutline` into reused objects, fills the polygons in range and
+strokes the outline loops; the unit patrols four tiles until parked. `window.__harnessNav5`
+exposes `state` (`polys`, `outlineLoops`, `outlinePoints`, `ms`, `maxMs`, `polyCount`, `budget`,
+`unit`, `queries`), `setBudget`, `moveUnit` and `advance(steps)`; `?still` parks the loop.
+`e2e/nav5.spec.ts` checks the range covers part of the board with a hole around a block inside
+it, grows with the budget to the whole board, and recomputes every frame. Unit tests cover reach
+costs equal to a Dijkstra `findMeshPath` (and never above the default A*) on a baked level, mud
+priced and masked, a link, `maxPolys`, reuse without allocation, `pathTo`, outlines with a hole,
+the `loadNavMesh` round trip against an in-memory bake and its errors, and the 10k-polygon bench.
