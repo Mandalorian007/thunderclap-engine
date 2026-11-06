@@ -44,6 +44,20 @@ export interface HarnessInputState {
   panOrLong: 'pan' | 'longPress' | null;
   /** `gpuDiagnostics.errorCount`. */
   gpuErrors: number;
+  /** `?zones`: the move stick's vector this tick (`[input.axis('moveLeft', 'moveRight'), stick.y]`). */
+  zoneMove: [number, number];
+  /** `?zones`: times `jump` was pressed (the zone button binding, or any other jump binding). */
+  zoneJump: number;
+  /** `?zones`: a pinch gesture was reported (two zone thumbs must never make one). */
+  pinchSeen: boolean;
+  /** `?claim`: router `hit` events seen in all. */
+  hoverHits: number;
+  /** `?claim`: router `hit` events seen while an orbit drag was in progress. */
+  hoverHitsDuringDrag: number;
+  /** Times `jump` was pressed, counted in `tick()` after `input.update()`. */
+  jumps: number;
+  /** Times `input.onUpdated` saw `pressed('jump')` (must equal `jumps`: same tick, same view). */
+  hookSawJump: number;
 }
 
 export interface HarnessInputApi {

@@ -38,6 +38,7 @@ export {
   padButtonLabel,
 } from './glyphs';
 export {
+  type ActionSource,
   type AttachOptions,
   DEFAULT_DOUBLE_TAP_MS,
   DEFAULT_HOLD_MS,
@@ -73,6 +74,15 @@ export {
   type Rect,
   snapToGrid,
 } from './magnify';
+export {
+  createPointerDispatcher,
+  POINTER_PRIORITY,
+  type PointerConsumer,
+  type PointerDispatcher,
+  type PointerDispatcherOptions,
+  type PointerRecord,
+  type PointerRecordDevice,
+} from './pointer-dispatch';
 export {
   createPointerRouter,
   type PointerActions,
@@ -131,6 +141,24 @@ export {
   recordingLength,
   serializeRecording,
 } from './record';
+export {
+  type ButtonsZone,
+  type ButtonsZoneOptions,
+  createTouchZones,
+  type StickZone,
+  type StickZoneOptions,
+  type SwipeDirection,
+  type SwipeZone,
+  type SwipeZoneOptions,
+  type TouchZoneBinding,
+  type TouchZoneKind,
+  type TouchZoneOptions,
+  type TouchZoneReading,
+  type TouchZones,
+  type TouchZonesOptions,
+  type ZoneRect,
+  type ZoneRectFn,
+} from './touch-zones';
 export type {
   ActionState,
   Binding,

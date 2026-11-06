@@ -8,6 +8,13 @@ import {
   type PadLayout,
 } from './glyphs';
 import type { Look } from './look';
+import {
+  createPointerDispatcher,
+  POINTER_PRIORITY,
+  type PointerConsumer,
+  type PointerDispatcher,
+  type PointerRecord,
+} from './pointer-dispatch';
 import type { PointerActions, PointerRouter } from './pointer-router';
 import type { InputPlayback, InputRecorder } from './record';
 import type {
@@ -70,6 +77,22 @@ export interface InputEvents {
   device: InputDevice;
   /** `rumble` was issued (whether or not a pad could play it). */
   rumble: RumbleOptions;
+  /** `attach` built its pointer dispatcher (touch zones and other consumers join here). */
+  attach: PointerDispatcher;
+  /** `detach` is about to destroy the dispatcher. */
+  detach: PointerDispatcher;
+}
+
+/**
+ * Something that feeds action values from outside the bindings (ws/input-4): touch zones. The
+ * input calls `update()` every tick before evaluating actions, then `value(action)` per action
+ * (0..1, folded in like a `press` binding) and `fresh(action)` for a new press while already
+ * active (a repeated button tap).
+ */
+export interface ActionSource {
+  update?(): void;
+  value(action: string): number;
+  fresh?(action: string): boolean;
 }
 
 /** `Input.rumble` parameters: magnitudes 0..1, duration in ms. */
@@ -121,6 +144,12 @@ export interface AttachOptions {
   keyTarget?: Window | HTMLElement;
   /** Set `touch-action: none` on the pointer target so touch drags don't scroll/zoom. Default true. */
   disableTouchScroll?: boolean;
+  /**
+   * Let a pointer claimed through the dispatcher (an orbit drag, a touch-zone thumb) still hover
+   * the linked router (`hit`/`hitEnd`, no select). Default false: a claimed pointer is hidden
+   * from the router until it is released.
+   */
+  hoverWhileClaimed?: boolean;
 }
 
 const DEFAULT_AXIS_THRESHOLD = 0.5;
@@ -319,6 +348,9 @@ export class Input<A extends string> {
   private pointers: PointerRouter<unknown> | null = null;
   private look: Look | null = null;
   private attached: AttachOptions | null = null;
+  private dispatcherValue: PointerDispatcher | null = null;
+  private readonly updatedFns: (() => void)[] = [];
+  private readonly actionSources: ActionSource[] = [];
   private readonly actionReader: PointerActions = {
     bound: (action) => this.states.has(action as A),
     pressed: (action) => this.states.get(action as A)?.pressed ?? false,
@@ -400,7 +432,8 @@ export class Input<A extends string> {
     router.blocked = () => this.blocked();
     router.setPointerTransform(this.transform);
     router.setGestures(this.gestures);
-    if (this.attached) router.attach(this.attached.pointerTarget);
+    if (this.attached)
+      router.attach(this.attached.pointerTarget, this.dispatcherValue ?? undefined);
   }
 
   getPointers(): PointerRouter<unknown> | null {
@@ -426,7 +459,42 @@ export class Input<A extends string> {
     look.keyHeld = (code) => this.keysDown.has(code);
     // Orbit drags come through this input's own pointer feed, so recordings capture them.
     look.orbitFromInput = true;
-    if (this.attached) look.attach(this.attached.pointerTarget);
+    if (this.attached) look.attach(this.attached.pointerTarget, this.dispatcherValue ?? undefined);
+  }
+
+  /**
+   * The pointer dispatcher `attach` built (one DOM listener set shared by the feed, gestures,
+   * look, router and touch zones), or `null` while detached.
+   */
+  get dispatcher(): PointerDispatcher | null {
+    return this.dispatcherValue;
+  }
+
+  /**
+   * Run `fn` at the end of every `update()`, after gestures, look, router and triggers have
+   * advanced (same tick, registration order): the place to poll a world panel or read
+   * `pressed()` for the frame. Returns the remover.
+   */
+  onUpdated(fn: () => void): () => void {
+    this.updatedFns.push(fn);
+    return () => {
+      const i = this.updatedFns.indexOf(fn);
+      if (i >= 0) this.updatedFns.splice(i, 1);
+    };
+  }
+
+  /** Add an `ActionSource` (touch zones). Returns the remover. */
+  addActionSource(src: ActionSource): () => void {
+    this.actionSources.push(src);
+    return () => {
+      const i = this.actionSources.indexOf(src);
+      if (i >= 0) this.actionSources.splice(i, 1);
+    };
+  }
+
+  /** `value(positive) - value(negative)`, -1..1: a move axis from two actions. */
+  axis(negative: A, positive: A): number {
+    return this.value(positive) - this.value(negative);
   }
 
   /**
@@ -635,6 +703,7 @@ export class Input<A extends string> {
     this.transform = fn;
     this.gestures?.setPointerTransform(fn);
     this.pointers?.setPointerTransform(fn);
+    this.dispatcherValue?.setTransform(fn);
   }
 
   // ---------------------------------------------------------------- queries
@@ -681,9 +750,11 @@ export class Input<A extends string> {
     this.tick++;
     let padActive = false;
     if (this.listening) this.pollListen();
+    const sources = this.actionSources;
+    for (let i = 0; i < sources.length; i++) sources[i]!.update?.();
 
     for (const [action, st] of this.states) {
-      const v = this.evaluate(this.map[action], this.triggers.get(action)!);
+      const v = this.evaluate(action, this.map[action], this.triggers.get(action)!);
       if (v.pad) padActive = true;
       const active = v.value > 0;
       if (blocked) {
@@ -731,6 +802,8 @@ export class Input<A extends string> {
     this.prevX = this.pointer.x;
     this.prevY = this.pointer.y;
     this.pointers?.resolve(this.actionReader);
+    const fns = this.updatedFns;
+    for (let i = 0; i < fns.length; i++) fns[i]!();
   }
 
   /** A pending `listen`: pad buttons newly down, XR presses, the timeout. Keys and mouse come via the feed. */
@@ -771,12 +844,19 @@ export class Input<A extends string> {
    * second down edge within `doubleTapMs`). `fresh` marks a new press while already active,
    * `hold` the furthest hold progress, `pad` that a pad produced the value.
    */
-  private evaluate(list: readonly Binding[], ts: TriggerState[]): EvalOut {
+  private evaluate(action: A, list: readonly Binding[], ts: TriggerState[]): EvalOut {
     const out = this.evalOut;
     out.value = 0;
     out.pad = false;
     out.fresh = false;
     out.hold = 0;
+    const sources = this.actionSources;
+    for (let i = 0; i < sources.length; i++) {
+      const src = sources[i]!;
+      const v = src.value(action);
+      if (v > out.value) out.value = v;
+      if (v > 0 && src.fresh?.(action)) out.fresh = true;
+    }
     for (let i = 0; i < list.length; i++) {
       const b = list[i]!;
       const t = ts[i]!;
@@ -1010,12 +1090,6 @@ export class Input<A extends string> {
     const prevTouchAction = target.style.touchAction;
     if (opts.disableTouchScroll !== false) target.style.touchAction = 'none';
 
-    const clientToLocal = (e: PointerEvent | WheelEvent) => {
-      if (this.transform) return [e.clientX, e.clientY] as const;
-      const r = target.getBoundingClientRect();
-      return [e.clientX - r.left, e.clientY - r.top] as const;
-    };
-
     const onKeyDown = (ev: Event) => {
       const e = ev as KeyboardEvent;
       if (isInteractiveTarget(e.target)) {
@@ -1042,36 +1116,37 @@ export class Input<A extends string> {
     const onKeyUp = (ev: Event) => {
       this.keyUp((ev as KeyboardEvent).code);
     };
-    const pointerType = (e: PointerEvent): PointerState['type'] =>
-      e.pointerType === 'touch' || e.pointerType === 'pen' ? e.pointerType : 'mouse';
-    const onPointerDown = (e: PointerEvent) => {
-      if (!e.isPrimary && e.pointerType === 'touch') return;
-      const [x, y] = clientToLocal(e);
-      this.pointerAt(x, y, pointerType(e));
-      this.buttonDown(Math.max(e.button, 0));
-      try {
-        target.setPointerCapture(e.pointerId);
-      } catch {
-        // Synthetic events have no active pointer.
-      }
-      // Clicking the canvas should give the iframe keyboard focus.
-      if (!doc.hasFocus()) win.focus();
+    const dispatcher = createPointerDispatcher(target, {
+      transform: this.transform,
+      hoverWhileClaimed: opts.hoverWhileClaimed,
+    });
+    this.dispatcherValue = dispatcher;
+    // The feed sees every pointer, claimed or not, so recordings stay complete and identical.
+    const consumer: PointerConsumer = {
+      pointerDown: (p: PointerRecord) => {
+        if (!p.primary && p.device === 'touch') return;
+        this.pointerAt(p.x, p.y, p.device);
+        this.buttonDown(p.button);
+        // Clicking the canvas should give the iframe keyboard focus.
+        if (!doc.hasFocus()) win.focus();
+      },
+      pointerMove: (p: PointerRecord) => {
+        if (!p.primary) return;
+        this.pointerAt(p.x, p.y, p.device);
+      },
+      pointerUp: (p: PointerRecord) => {
+        if (!p.primary && p.device === 'touch') return;
+        this.buttonUp(p.button);
+      },
+      pointerCancel: (p: PointerRecord) => {
+        if (p.primary) this.buttonUp(0);
+      },
+      pointerLeave: (p: PointerRecord) => {
+        if (p.device === 'mouse') this.pointer.inside = false;
+      },
+      cancelAll: () => this.releaseAll(),
     };
-    const onPointerMove = (e: PointerEvent) => {
-      if (!e.isPrimary) return;
-      const [x, y] = clientToLocal(e);
-      this.pointerAt(x, y, pointerType(e));
-    };
-    const onPointerUp = (e: PointerEvent) => {
-      if (!e.isPrimary && e.pointerType === 'touch') return;
-      this.buttonUp(Math.max(e.button, 0));
-    };
-    const onPointerCancel = (e: PointerEvent) => {
-      if (e.isPrimary) this.buttonUp(0);
-    };
-    const onPointerLeave = (e: PointerEvent) => {
-      if (e.pointerType === 'mouse') this.pointer.inside = false;
-    };
+    const removeConsumer = dispatcher.add(consumer, POINTER_PRIORITY.feed, true);
     const onWheel = (e: WheelEvent) => {
       // deltaMode 1 = lines, 2 = pages; normalise roughly to pixels.
       const k = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
@@ -1081,44 +1156,35 @@ export class Input<A extends string> {
     const onContextMenu = (e: Event) => {
       if (this.boundMouse.has(2) && !this.blocked()) e.preventDefault();
     };
-    const onBlur = () => this.releaseAll();
-    const onVisibility = () => {
-      if (doc.visibilityState === 'hidden') this.releaseAll();
-    };
 
     keyTarget.addEventListener('keydown', onKeyDown);
     keyTarget.addEventListener('keyup', onKeyUp);
-    target.addEventListener('pointerdown', onPointerDown);
-    target.addEventListener('pointermove', onPointerMove);
-    target.addEventListener('pointerup', onPointerUp);
-    target.addEventListener('pointercancel', onPointerCancel);
-    target.addEventListener('pointerleave', onPointerLeave);
     target.addEventListener('wheel', onWheel, { passive: false });
     target.addEventListener('contextmenu', onContextMenu);
-    win.addEventListener('blur', onBlur);
-    doc.addEventListener('visibilitychange', onVisibility);
 
     this.attached = opts;
-    this.gestures?.attach({ pointerTarget: target, disableTouchScroll: opts.disableTouchScroll });
-    this.pointers?.attach(target);
-    this.look?.attach(target);
+    this.gestures?.attach({
+      pointerTarget: target,
+      disableTouchScroll: opts.disableTouchScroll,
+      dispatcher,
+    });
+    this.pointers?.attach(target, dispatcher);
+    this.look?.attach(target, dispatcher);
+    this.events.emit('attach', dispatcher);
 
     this.detachFn = () => {
+      this.events.emit('detach', dispatcher);
       this.gestures?.detach();
       this.pointers?.detach();
       this.look?.detach();
       this.attached = null;
       keyTarget.removeEventListener('keydown', onKeyDown);
       keyTarget.removeEventListener('keyup', onKeyUp);
-      target.removeEventListener('pointerdown', onPointerDown);
-      target.removeEventListener('pointermove', onPointerMove);
-      target.removeEventListener('pointerup', onPointerUp);
-      target.removeEventListener('pointercancel', onPointerCancel);
-      target.removeEventListener('pointerleave', onPointerLeave);
       target.removeEventListener('wheel', onWheel);
       target.removeEventListener('contextmenu', onContextMenu);
-      win.removeEventListener('blur', onBlur);
-      doc.removeEventListener('visibilitychange', onVisibility);
+      removeConsumer();
+      dispatcher.destroy();
+      this.dispatcherValue = null;
       target.style.touchAction = prevTouchAction;
     };
   }

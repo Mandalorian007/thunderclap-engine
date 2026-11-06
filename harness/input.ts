@@ -12,10 +12,20 @@
  *   last used.
  * - Gestures run in `pan: 'prefer'` mode; the last pan or long press that reached an action is
  *   reported. The gesture clock can be pinned (`setClock`) like the gestures page.
+ * - `?zones` (ws/input-4): two touch zones over the canvas, a move stick in the bottom-left
+ *   quarter and a jump button in the bottom-right corner, drawn as circles; `zoneMove`, `zoneJump`
+ *   and `pinchSeen` report them.
+ * - `?claim` (ws/input-4): orbit mode with a pointer router over a slab behind the cube;
+ *   `hoverHits` counts its `hit` events and `hoverHitsDuringDrag` those during an orbit drag.
+ * - `jumps` and `hookSawJump` compare `pressed('jump')` after `update()` with what an
+ *   `onUpdated` hook saw.
  */
 import { GameLoop } from '@thunderclap/engine/core';
 import {
+  aabbTester,
   type Binding,
+  createPointerRouter,
+  createTouchZones,
   findConflicts,
   Gestures,
   glyphForBinding,
@@ -40,9 +50,20 @@ const root = document.getElementById('root') as HTMLElement;
 const panel = document.getElementById('panel') as HTMLElement;
 const LOGICAL = { width: 1920, height: 1080 };
 const query = new URLSearchParams(location.search);
-const mode: LookMode = query.has('orbit') ? 'orbit' : 'locked';
+const zonesOn = query.has('zones');
+const claimOn = query.has('claim');
+const mode: LookMode = query.has('orbit') || claimOn ? 'orbit' : 'locked';
 
-const ACTIONS = ['jump', 'fire', 'charge', 'combo', 'pan', 'long'] as const;
+const ACTIONS = [
+  'jump',
+  'fire',
+  'charge',
+  'combo',
+  'pan',
+  'long',
+  'moveLeft',
+  'moveRight',
+] as const;
 type Action = (typeof ACTIONS)[number];
 const DEFAULTS: Record<Action, Binding[]> = {
   jump: [{ key: 'Space' }, { padButton: 0 }, { gesture: 'tap' }],
@@ -51,6 +72,9 @@ const DEFAULTS: Record<Action, Binding[]> = {
   combo: [{ chord: [{ key: 'ShiftLeft' }, { key: 'KeyK' }] }],
   pan: [{ gesture: 'pan' }],
   long: [{ gesture: 'longPress' }],
+  // Fed by the touch zones with `?zones` (zone bindings live outside the binding map).
+  moveLeft: [],
+  moveRight: [],
 };
 
 const state: HarnessInputState = {
@@ -74,20 +98,78 @@ const state: HarnessInputState = {
   rumbles: 0,
   panOrLong: null,
   gpuErrors: 0,
+  zoneMove: [0, 0],
+  zoneJump: 0,
+  pinchSeen: false,
+  hoverHits: 0,
+  hoverHitsDuringDrag: 0,
+  jumps: 0,
+  hookSawJump: 0,
 };
 
 /** The gesture clock: `performance.now()` until the spec pins it with `setClock`. */
 let clockMs: number | null = null;
+const camera = Camera.perspective((60 * Math.PI) / 180, LOGICAL.width / LOGICAL.height, 0.1, 100);
 const gestures = new Gestures({ now: () => clockMs ?? performance.now(), pan: 'prefer' });
 // Every touch drags the view in orbit mode: no move stick.
 const look = new Look({ mode, sensitivity: 0.005, touch: { moveZone: 'none' } });
+/** `?claim`: a router over a slab at the origin, so any pointer on the canvas middle hovers it. */
+const router = claimOn
+  ? createPointerRouter<string>({
+      camera: () => camera,
+      testers: [aabbTester([{ min: [-50, -50, -0.5], max: [50, 50, 0.5], target: 'slab' }])],
+    })
+  : null;
 const input = new Input<Action>(
   { ...DEFAULTS },
-  { look, gestures, getGamepads: () => navigator.getGamepads?.() ?? [] },
+  {
+    look,
+    gestures,
+    pointers: router ?? undefined,
+    getGamepads: () => navigator.getGamepads?.() ?? [],
+  },
 );
 input.on('rumble', () => {
   state.rumbles++;
 });
+router?.on('hit', () => {
+  state.hoverHits++;
+  if (look.orbiting) state.hoverHitsDuringDrag++;
+});
+gestures.onGesture((kind) => {
+  if (kind === 'pinch') state.pinchSeen = true;
+});
+// Registered before the loop: runs at the end of every `input.update()`, same tick as `tick()`.
+input.onUpdated(() => {
+  if (input.pressed('jump')) state.hookSawJump++;
+});
+
+/** `?zones`: the move stick (bottom-left quarter) and the jump button (bottom-right corner). */
+const JUMP_SIZE = 120;
+const zones = zonesOn
+  ? createTouchZones(input, {
+      zones: {
+        move: { kind: 'stick', rect: (w, h) => ({ x: 0, y: h / 2, w: w / 2, h: h / 2 }) },
+        act: {
+          kind: 'buttons',
+          rect: (w, h) => ({ x: w / 2, y: h / 2, w: w / 2, h: h / 2 }),
+          buttons: {
+            jump: (w, h) => ({
+              x: w - JUMP_SIZE - 20,
+              y: h - JUMP_SIZE - 20,
+              w: JUMP_SIZE,
+              h: JUMP_SIZE,
+            }),
+          },
+        },
+      },
+      bindings: {
+        moveLeft: { zone: 'move', axis: 'x', dir: -1 },
+        moveRight: { zone: 'move', axis: 'x', dir: 1 },
+        jump: { zone: 'act', button: 'jump' },
+      },
+    })
+  : null;
 
 /** `performance.now()` when C last went down, for `holdFiredAfterMs`. */
 let chargeDownAt = -1;
@@ -280,9 +362,36 @@ function placeCamera(camera: Camera): void {
   camera.lookAt(eye, target);
 }
 
+/** `?zones`: circles over the canvas for the stick (where the thumb is, else the zone centre) and the button. */
+const zoneLayer = document.getElementById('zones') as HTMLElement;
+const stickRing = zoneLayer.firstElementChild as HTMLElement;
+const jumpRing = zoneLayer.lastElementChild as HTMLElement;
+zoneLayer.hidden = !zonesOn;
+function drawZones(canvas: HTMLElement): void {
+  if (!zones) return;
+  const r = canvas.getBoundingClientRect();
+  const move = zones.zones.move;
+  const sx = move.active ? move.originX : r.width / 4;
+  const sy = move.active ? move.originY : (r.height * 3) / 4;
+  stickRing.style.transform = `translate(${r.left + sx - 64}px, ${r.top + sy - 64}px)`;
+  stickRing.style.background = move.active
+    ? 'rgba(120, 200, 255, 0.35)'
+    : 'rgba(120, 200, 255, 0.15)';
+  jumpRing.style.transform = `translate(${r.left + r.width - JUMP_SIZE - 20}px, ${r.top + r.height - JUMP_SIZE - 20}px)`;
+  jumpRing.style.background = zones.zones.act.held('jump')
+    ? 'rgba(255, 200, 120, 0.5)'
+    : 'rgba(255, 200, 120, 0.2)';
+}
+
 function tick(): void {
   input.update();
   state.ticks++;
+  if (input.pressed('jump')) state.jumps++;
+  if (zones) {
+    state.zoneMove[0] = input.axis('moveLeft', 'moveRight');
+    state.zoneMove[1] = zones.zones.move.y;
+    if (input.pressed('jump')) state.zoneJump++;
+  }
   state.yaw += look.look.dx;
   state.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, state.pitch + look.look.dy));
   state.locked = look.locked;
@@ -317,7 +426,6 @@ async function main(): Promise<void> {
   renderer.resize(surface.backbuffer.width, surface.backbuffer.height);
   surface.onResize(({ backbuffer }) => renderer.resize(backbuffer.width, backbuffer.height));
 
-  const camera = Camera.perspective((60 * Math.PI) / 180, LOGICAL.width / LOGICAL.height, 0.1, 100);
   Object.assign(camera.screen, { x: 0, y: 0, ...LOGICAL });
   renderer.camera = camera;
   placeCamera(camera);
@@ -339,6 +447,7 @@ async function main(): Promise<void> {
     update() {
       tick();
       placeCamera(camera);
+      drawZones(surface.canvas);
     },
     render(_alpha, time) {
       const frame = renderer.beginFrame(time.realTime, time.frameDt);

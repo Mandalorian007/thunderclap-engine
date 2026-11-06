@@ -4,6 +4,13 @@
  * by a gamepad stick). XR controllers and hands are a later `PointerSource` (see the README).
  */
 import type { Gestures } from './gestures';
+import {
+  createPointerDispatcher,
+  POINTER_PRIORITY,
+  type PointerConsumer,
+  type PointerDispatcher,
+  type PointerRecord,
+} from './pointer-dispatch';
 import { createRay, type Ray, type RayCamera, screenRay } from './rays';
 import type { GamepadLike, Hand, PointerTransform } from './types';
 
@@ -51,7 +58,8 @@ export interface PointerSample {
  */
 export interface PointerSource {
   poll(camera: RayCamera | null): readonly PointerSample[];
-  attach?(target: HTMLElement): void;
+  /** `dispatcher` is the one the linked `Input` built (ws/input-4); absent when attached alone. */
+  attach?(target: HTMLElement, dispatcher?: PointerDispatcher): void;
   detach?(): void;
 }
 
@@ -104,9 +112,16 @@ export class ScreenPointers implements PointerSource {
   private readonly contacts: Contact[] = [];
   private readonly out: PointerSample[] = [];
   private detachFn: (() => void) | null = null;
+  /**
+   * Hides a pointer from `poll` while it reads true: installed by `attach` with a dispatcher as
+   * "claimed and not `hoverWhileClaimed`", so an orbit drag or a touch-zone thumb produces no
+   * hits until it is released. Public so tests can stand one in.
+   */
+  claim: ((id: number) => boolean) | null = null;
 
   setPointerTransform(fn: PointerTransform | null): void {
     this.transform = fn;
+    this.ownDispatcher?.setTransform(fn);
   }
 
   setGestures(g: Gestures | null): void {
@@ -200,6 +215,7 @@ export class ScreenPointers implements PointerSource {
       s.secondary = c.secondary;
       c.tapped = false;
       if (c.gone) this.contacts.splice(i--, 1);
+      if (this.claim?.(c.id)) continue;
       if (!camera || Number.isNaN(sx) || !screenRay(camera, sx, sy, s.ray)) continue;
       s.x = sx;
       s.y = sy;
@@ -214,52 +230,32 @@ export class ScreenPointers implements PointerSource {
    * Listen to pointer events on `target` (the router calls this from its `attach`). Positions are
    * client px with a transform, target-relative px without one.
    */
-  attach(target: HTMLElement): void {
+  attach(target: HTMLElement, dispatcher?: PointerDispatcher): void {
     this.detach();
-    const doc = target.ownerDocument;
-    const win = doc.defaultView ?? window;
-    const local = (e: PointerEvent): [number, number] => {
-      if (this.transform) return [e.clientX, e.clientY];
-      const r = target.getBoundingClientRect();
-      return [e.clientX - r.left, e.clientY - r.top];
-    };
-    const device = (e: PointerEvent): Contact['device'] =>
-      e.pointerType === 'touch' || e.pointerType === 'pen' ? e.pointerType : 'mouse';
-    const onDown = (e: PointerEvent) => {
-      const [x, y] = local(e);
-      this.pointerDown(e.pointerId, x, y, device(e), Math.max(e.button, 0));
-    };
-    const onMove = (e: PointerEvent) => {
-      const [x, y] = local(e);
-      this.pointerMove(e.pointerId, x, y, device(e));
-    };
-    const onUp = (e: PointerEvent) => {
-      const [x, y] = local(e);
-      this.pointerUp(e.pointerId, x, y, Math.max(e.button, 0));
-    };
-    const onLeave = (e: PointerEvent) => this.pointerLeave(e.pointerId);
-    const onCancel = (e: PointerEvent) => this.pointerCancel(e.pointerId);
-    const onBlur = () => this.cancelAll();
-    const onVisibility = () => {
-      if (doc.visibilityState === 'hidden') this.cancelAll();
-    };
-    target.addEventListener('pointerdown', onDown);
-    target.addEventListener('pointermove', onMove);
-    target.addEventListener('pointerup', onUp);
-    target.addEventListener('pointerleave', onLeave);
-    target.addEventListener('pointercancel', onCancel);
-    win.addEventListener('blur', onBlur);
-    doc.addEventListener('visibilitychange', onVisibility);
+    const shared = dispatcher ?? null;
+    const d = shared ?? createPointerDispatcher(target, { transform: this.transform });
+    if (!shared) this.ownDispatcher = d;
+    // Sees claimed pointers too (their contacts must end cleanly); `poll` hides them.
+    const remove = d.add(this.consumer, POINTER_PRIORITY.screen, true);
+    this.claim = (id) => !d.hoverWhileClaimed && d.claimed(id);
     this.detachFn = () => {
-      target.removeEventListener('pointerdown', onDown);
-      target.removeEventListener('pointermove', onMove);
-      target.removeEventListener('pointerup', onUp);
-      target.removeEventListener('pointerleave', onLeave);
-      target.removeEventListener('pointercancel', onCancel);
-      win.removeEventListener('blur', onBlur);
-      doc.removeEventListener('visibilitychange', onVisibility);
+      remove();
+      if (!shared) d.destroy();
+      this.ownDispatcher = null;
+      this.claim = null;
     };
   }
+
+  private ownDispatcher: PointerDispatcher | null = null;
+
+  private readonly consumer: PointerConsumer = {
+    pointerDown: (p: PointerRecord) => this.pointerDown(p.id, p.x, p.y, p.device, p.button),
+    pointerMove: (p: PointerRecord) => this.pointerMove(p.id, p.x, p.y, p.device),
+    pointerUp: (p: PointerRecord) => this.pointerUp(p.id, p.x, p.y, p.button),
+    pointerLeave: (p: PointerRecord) => this.pointerLeave(p.id),
+    pointerCancel: (p: PointerRecord) => this.pointerCancel(p.id),
+    cancelAll: () => this.cancelAll(),
+  };
 
   detach(): void {
     this.detachFn?.();
