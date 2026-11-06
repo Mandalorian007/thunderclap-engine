@@ -6,8 +6,11 @@
  * Handles the GLB container, `.gltf` JSON (as text bytes or a parsed object), `data:` URIs in
  * buffers and images, and every accessor component type (float, normalised and unnormalised
  * integers, interleaved strides). Static geometry only: `triangles` primitives, base colour
- * materials, node hierarchies. Sparse accessors, other primitive modes and required extensions
- * throw a `GltfError`; `extensionsUsed` is listed in `warnings`.
+ * materials, node hierarchies, plus skins (joints, inverse bind matrices, `JOINTS_0`/`WEIGHTS_0`)
+ * and animations (every sampler interpolation, cubic-spline tangents kept). Sparse accessors,
+ * other primitive modes and required extensions throw a `GltfError`; `extensionsUsed` is listed
+ * in `warnings`. `gltf-skin.ts` turns skins into the animation module's `Skeleton` shape and
+ * skinned primitives into the skinned vertex layout.
  *
  * Matrices follow the engine's `Transform` convention: 3×4 row-major, `local = T · R · S`,
  * `world = parent.world · local`.
@@ -55,6 +58,7 @@ export interface GltfJsonNode {
   name?: string;
   children?: number[];
   mesh?: number;
+  skin?: number;
   matrix?: number[];
   translation?: number[];
   rotation?: number[];
@@ -70,6 +74,36 @@ export interface GltfJsonMaterial {
   doubleSided?: boolean;
   alphaMode?: 'OPAQUE' | 'MASK' | 'BLEND';
   alphaCutoff?: number;
+}
+
+export interface GltfJsonSkin {
+  name?: string;
+  /** Accessor of `MAT4` inverse bind matrices, one per joint (identity when absent). */
+  inverseBindMatrices?: number;
+  /** The skeleton root node. */
+  skeleton?: number;
+  joints: number[];
+}
+
+export type GltfJsonInterpolation = 'LINEAR' | 'STEP' | 'CUBICSPLINE';
+
+export interface GltfJsonAnimationSampler {
+  /** Accessor of keyframe times (`SCALAR` float, seconds, ascending). */
+  input: number;
+  /** Accessor of keyframe values (`VEC3`, `VEC4` or `SCALAR` weights; ×3 for `CUBICSPLINE`). */
+  output: number;
+  interpolation?: GltfJsonInterpolation;
+}
+
+export interface GltfJsonAnimationChannel {
+  sampler: number;
+  target: { node?: number; path: string };
+}
+
+export interface GltfJsonAnimation {
+  name?: string;
+  channels: GltfJsonAnimationChannel[];
+  samplers: GltfJsonAnimationSampler[];
 }
 
 /** The parts of a glTF 2.0 JSON document the parser reads. Other properties pass through. */
@@ -88,6 +122,8 @@ export interface GltfJson {
   textures?: { name?: string; source?: number; sampler?: number }[];
   images?: { name?: string; uri?: string; mimeType?: string; bufferView?: number }[];
   samplers?: { magFilter?: number; minFilter?: number; wrapS?: number; wrapT?: number }[];
+  skins?: GltfJsonSkin[];
+  animations?: GltfJsonAnimation[];
 }
 
 // ---------------------------------------------------------------- the document
@@ -122,6 +158,14 @@ export interface GltfPrimitive {
   bounds: GltfBounds;
   /** Whether the file carried normals (`false`: generated flat). */
   hadNormals: boolean;
+  /**
+   * `JOINTS_0`, 4 joint indices per vertex (into the node's skin `joints`), or null when the
+   * primitive is not skinned. `Uint8Array` when every index fits a byte (the skinned vertex
+   * layout's `uint8x4`), `Uint16Array` otherwise.
+   */
+  joints: Uint8Array | Uint16Array | null;
+  /** `WEIGHTS_0`, 4 floats per vertex (normalised integers already divided), or null. */
+  weights: Float32Array | null;
 }
 
 export interface GltfMesh {
@@ -134,6 +178,8 @@ export interface GltfNode {
   parent: number | null;
   children: number[];
   mesh: number | null;
+  /** Index into `GltfDocument.skins`, or null. */
+  skin: number | null;
   /** TRS, decomposed from `matrix` when the node gave one. */
   translation: Vec3;
   rotation: Vec4;
@@ -181,6 +227,48 @@ export interface GltfImage {
   uri: string | null;
 }
 
+/** A skin: which nodes are joints and the matrix that takes a vertex into each joint's space. */
+export interface GltfSkin {
+  name: string | null;
+  /** Node index per joint (`joints[j]` is the node joint `j` follows). */
+  joints: number[];
+  /**
+   * Inverse bind matrix per joint, 3×4 row-major, 12 floats each (`joints.length * 12`),
+   * converted from the file's column-major 4×4; identity when the file has none.
+   */
+  inverseBind: Float32Array;
+  /** The skeleton root node the file named, or null. */
+  skeleton: number | null;
+}
+
+export type GltfAnimationPath = 'translation' | 'rotation' | 'scale' | 'weights';
+export type GltfInterpolation = 'STEP' | 'LINEAR' | 'CUBICSPLINE';
+
+/**
+ * One animated property of one node, in the shape of the animation module's `AnimationChannel`
+ * (`src/anim/clip.ts`; restated here so `assets` does not import `anim`). `times` holds `n`
+ * ascending seconds; `values` holds `n` elements of 3 (`translation`, `scale`), 4 (`rotation`,
+ * quaternion xyzw exactly as the file stored them) or `k` (`weights`, one per morph target)
+ * floats, or `3 * n` elements for `CUBICSPLINE` (in-tangent, value, out-tangent per keyframe).
+ */
+export interface GltfAnimationChannel {
+  /** Index into `GltfDocument.nodes`. */
+  node: number;
+  path: GltfAnimationPath;
+  interpolation: GltfInterpolation;
+  times: Float32Array;
+  values: Float32Array;
+}
+
+/** One clip, in the shape of the animation module's `AnimationClip`. */
+export interface GltfAnimation {
+  /** The file's name, or `animation<i>`. */
+  name: string;
+  /** The last keyframe time over every channel (0 for an empty clip). */
+  duration: number;
+  channels: GltfAnimationChannel[];
+}
+
 export interface GltfDocument {
   /** `asset.version`. */
   version: string;
@@ -193,6 +281,8 @@ export interface GltfDocument {
   materials: GltfMaterial[];
   textures: GltfTexture[];
   images: GltfImage[];
+  skins: GltfSkin[];
+  animations: GltfAnimation[];
   /** External (non-`data:`) URIs the game must fetch: images here, buffers at parse time. */
   externalUris: string[];
   /** `extensionsUsed` entries (ignored), and anything else the parser skipped. */
@@ -362,7 +452,11 @@ function parseJson(json: GltfJson, given: ArrayBuffer[]): GltfDocument {
     primitives: m.primitives.map((p, pi) => parsePrimitive(ctx, p, `mesh ${mi} primitive ${pi}`)),
   }));
 
-  const nodes = parseNodes(json.nodes ?? [], meshes.length);
+  const nodes = parseNodes(json.nodes ?? [], meshes.length, (json.skins ?? []).length);
+  const skins = (json.skins ?? []).map((s, i) => parseSkin(ctx, s, i, nodes.length));
+  const animations = (json.animations ?? []).map((a, i) =>
+    parseAnimation(ctx, a, i, nodes.length, warnings),
+  );
   const roots = sceneRoots(json, nodes);
   const sceneNodes: number[] = [];
   const visit = (i: number) => {
@@ -380,6 +474,8 @@ function parseJson(json: GltfJson, given: ArrayBuffer[]): GltfDocument {
     materials,
     textures,
     images,
+    skins,
+    animations,
     externalUris,
     warnings,
     bounds: sceneBounds(nodes, meshes, sceneNodes),
@@ -402,16 +498,20 @@ function sceneRoots(json: GltfJson, nodes: GltfNode[]): number[] {
 
 // ---------------------------------------------------------------- nodes and matrices
 
-function parseNodes(src: GltfJsonNode[], meshCount: number): GltfNode[] {
+function parseNodes(src: GltfJsonNode[], meshCount: number, skinCount: number): GltfNode[] {
   const nodes: GltfNode[] = src.map((n, i) => {
     if (n.mesh !== undefined && (n.mesh < 0 || n.mesh >= meshCount)) {
       throw new GltfError(`node ${i} names mesh ${n.mesh}, which does not exist`);
+    }
+    if (n.skin !== undefined && (n.skin < 0 || n.skin >= skinCount)) {
+      throw new GltfError(`node ${i} names skin ${n.skin}, which does not exist`);
     }
     const node: GltfNode = {
       name: n.name ?? null,
       parent: null,
       children: [...(n.children ?? [])],
       mesh: n.mesh ?? null,
+      skin: n.skin ?? null,
       translation: [0, 0, 0],
       rotation: [0, 0, 0, 1],
       scale: [1, 1, 1],
@@ -460,11 +560,119 @@ function parseNodes(src: GltfJsonNode[], meshCount: number): GltfNode[] {
   return nodes;
 }
 
-/** glTF column-major 4×4 → the engine's 3×4 row-major (the last row is dropped). */
-function columnMajorToRows(m: number[], out: Float32Array): void {
+/** glTF column-major 4×4 at `m[from..]` → the engine's 3×4 row-major at `out[to..]` (last row dropped). */
+function columnMajorToRows(m: ArrayLike<number>, out: Float32Array, from = 0, to = 0): void {
   for (let r = 0; r < 3; r++) {
-    for (let c = 0; c < 4; c++) out[r * 4 + c] = m[c * 4 + r]!;
+    for (let c = 0; c < 4; c++) out[to + r * 4 + c] = m[from + c * 4 + r]!;
   }
+}
+
+// ---------------------------------------------------------------- skins and animations
+
+function parseSkin(ctx: Ctx, s: GltfJsonSkin, i: number, nodeCount: number): GltfSkin {
+  const where = `skin ${i}`;
+  if (!Array.isArray(s.joints) || s.joints.length === 0) {
+    throw new GltfError(`${where} has no joints`);
+  }
+  for (const j of s.joints) {
+    if (!Number.isInteger(j) || j < 0 || j >= nodeCount) {
+      throw new GltfError(`${where} names joint node ${j}, which does not exist`);
+    }
+  }
+  if (s.skeleton !== undefined && (s.skeleton < 0 || s.skeleton >= nodeCount)) {
+    throw new GltfError(`${where} names skeleton node ${s.skeleton}, which does not exist`);
+  }
+  const n = s.joints.length;
+  const inverseBind = new Float32Array(n * 12);
+  if (s.inverseBindMatrices !== undefined) {
+    const acc = accessor(ctx, s.inverseBindMatrices, where);
+    if (acc.type !== 'MAT4') {
+      throw new GltfError(`${where}: inverseBindMatrices is ${acc.type}, expected MAT4`);
+    }
+    if (acc.count !== n) {
+      throw new GltfError(`${where}: ${acc.count} inverse bind matrices for ${n} joints`);
+    }
+    const m = readFloats(ctx, acc, 16, where);
+    for (let j = 0; j < n; j++) columnMajorToRows(m, inverseBind, j * 16, j * 12);
+  } else {
+    for (let j = 0; j < n; j++) {
+      inverseBind[j * 12] = 1;
+      inverseBind[j * 12 + 5] = 1;
+      inverseBind[j * 12 + 10] = 1;
+    }
+  }
+  return { name: s.name ?? null, joints: [...s.joints], inverseBind, skeleton: s.skeleton ?? null };
+}
+
+/** Components per keyframe value; null for `weights` (one per morph target, any count). */
+const PATH_COMPONENTS: Record<GltfAnimationPath, number | null> = {
+  translation: 3,
+  rotation: 4,
+  scale: 3,
+  weights: null,
+};
+
+function parseAnimation(
+  ctx: Ctx,
+  a: GltfJsonAnimation,
+  i: number,
+  nodeCount: number,
+  warnings: string[],
+): GltfAnimation {
+  const where = `animation ${i}`;
+  const channels: GltfAnimationChannel[] = [];
+  let duration = 0;
+  (a.channels ?? []).forEach((c, ci) => {
+    const here = `${where} channel ${ci}`;
+    const target = c.target;
+    if (!target) throw new GltfError(`${here} has no target`);
+    if (target.node === undefined) {
+      warnings.push(`${here} ignored: no target node`);
+      return;
+    }
+    if (target.node < 0 || target.node >= nodeCount) {
+      throw new GltfError(`${here} targets node ${target.node}, which does not exist`);
+    }
+    const path = target.path as GltfAnimationPath;
+    if (!(path in PATH_COMPONENTS)) throw new GltfError(`${here}: path "${target.path}" unknown`);
+    const sampler = (a.samplers ?? [])[c.sampler];
+    if (!sampler) throw new GltfError(`${here}: sampler ${c.sampler} does not exist`);
+    const interpolation = sampler.interpolation ?? 'LINEAR';
+    if (interpolation !== 'LINEAR' && interpolation !== 'STEP' && interpolation !== 'CUBICSPLINE') {
+      throw new GltfError(`${here}: interpolation "${interpolation}" unknown`);
+    }
+    const inAcc = accessor(ctx, sampler.input, here);
+    if (inAcc.type !== 'SCALAR') {
+      throw new GltfError(`${here}: input is ${inAcc.type}, expected SCALAR`);
+    }
+    const times = readFloats(ctx, inAcc, 1, here);
+    for (let k = 1; k < times.length; k++) {
+      if (!(times[k]! >= times[k - 1]!)) {
+        throw new GltfError(`${here}: keyframe times are not ascending`);
+      }
+    }
+    const outAcc = accessor(ctx, sampler.output, here);
+    const have = COMPONENTS[outAcc.type];
+    const want = PATH_COMPONENTS[path];
+    if (want !== null && have !== want) {
+      throw new GltfError(`${here}: ${path} output is ${outAcc.type}, expected ${want} components`);
+    }
+    const perKey = interpolation === 'CUBICSPLINE' ? 3 : 1;
+    const n = times.length;
+    // `weights` holds one value per morph target per key; the TRS paths exactly one.
+    const wrong =
+      want === null
+        ? outAcc.count === 0 || outAcc.count % (n * perKey) !== 0
+        : outAcc.count !== n * perKey;
+    if (n > 0 && wrong) {
+      const hint = perKey === 3 ? ' (×3 for CUBICSPLINE)' : '';
+      throw new GltfError(`${here}: ${outAcc.count} output values for ${n} keyframes${hint}`);
+    }
+    const values = readFloats(ctx, outAcc, have, here);
+    if (n > 0) duration = Math.max(duration, times[n - 1]!);
+    channels.push({ node: target.node, path, interpolation, times, values });
+  });
+  return { name: a.name ?? `animation${i}`, duration, channels };
 }
 
 /** `T · R · S` as 3×4 row-major (the same formula as `Transform.updateLocal`). */
@@ -634,6 +842,11 @@ function parsePrimitive(ctx: Ctx, p: GltfJsonPrimitive, where: string): GltfPrim
   if (!uv0) uv0 = new Float32Array(vertexCount * 2);
   if (!color0) color0 = new Float32Array(vertexCount * 4).fill(1);
 
+  let joints = readJoints(ctx, p.attributes.JOINTS_0, vertexCount, `${where} JOINTS_0`);
+  let weights = optionalFloats(ctx, p.attributes.WEIGHTS_0, vertexCount, 4, `${where} WEIGHTS_0`);
+  if (joints && !weights) throw new GltfError(`${where}: JOINTS_0 without WEIGHTS_0`);
+  if (weights && !joints) throw new GltfError(`${where}: WEIGHTS_0 without JOINTS_0`);
+
   let normal = optionalFloats(ctx, p.attributes.NORMAL, vertexCount, 3, `${where} NORMAL`);
   const hadNormals = normal !== null;
   let count = vertexCount;
@@ -643,13 +856,23 @@ function parsePrimitive(ctx: Ctx, p: GltfJsonPrimitive, where: string): GltfPrim
     const pos = new Float32Array(n * 3);
     const uv = new Float32Array(n * 2);
     const col = new Float32Array(n * 4);
+    const jnt = joints
+      ? joints instanceof Uint8Array
+        ? new Uint8Array(n * 4)
+        : new Uint16Array(n * 4)
+      : null;
+    const wgt = weights ? new Float32Array(n * 4) : null;
     normal = new Float32Array(n * 3);
     for (let i = 0; i < n; i++) {
       const src = indices[i]!;
       pos.set(position.subarray(src * 3, src * 3 + 3), i * 3);
       uv.set(uv0.subarray(src * 2, src * 2 + 2), i * 2);
       col.set(color0.subarray(src * 4, src * 4 + 4), i * 4);
+      if (jnt && joints) jnt.set(joints.subarray(src * 4, src * 4 + 4), i * 4);
+      if (wgt && weights) wgt.set(weights.subarray(src * 4, src * 4 + 4), i * 4);
     }
+    joints = jnt;
+    weights = wgt;
     for (let t = 0; t < n; t += 3) {
       const ax = pos[t * 3]!;
       const ay = pos[t * 3 + 1]!;
@@ -717,7 +940,44 @@ function parsePrimitive(ctx: Ctx, p: GltfJsonPrimitive, where: string): GltfPrim
     material: p.material ?? null,
     bounds,
     hadNormals,
+    joints,
+    weights,
   };
+}
+
+/** `JOINTS_0`: any unsigned integer type, 4 per vertex → bytes when every index fits, else shorts. */
+function readJoints(
+  ctx: Ctx,
+  index: number | undefined,
+  vertexCount: number,
+  where: string,
+): Uint8Array | Uint16Array | null {
+  if (index === undefined) return null;
+  const acc = accessor(ctx, index, where);
+  if (acc.type !== 'VEC4') throw new GltfError(`${where}: ${acc.type}, expected VEC4`);
+  if (acc.count !== vertexCount) {
+    throw new GltfError(`${where}: ${acc.count} values for ${vertexCount} vertices`);
+  }
+  const t = acc.componentType;
+  if (t !== 5121 && t !== 5123 && t !== 5125) {
+    throw new GltfError(`${where}: componentType ${t} must be unsigned byte, short or int`);
+  }
+  const wide = new Uint32Array(vertexCount * 4);
+  const r = readerFor(ctx, acc, where);
+  let max = 0;
+  if (r) {
+    const cb = COMPONENT_BYTES[t];
+    for (let i = 0; i < vertexCount; i++) {
+      const at = r.base + i * r.stride;
+      for (let k = 0; k < 4; k++) {
+        const v = readComponent(r.view, at + k * cb, t, false);
+        wide[i * 4 + k] = v;
+        if (v > max) max = v;
+      }
+    }
+  }
+  if (max > 0xffff) throw new GltfError(`${where}: joint index ${max} exceeds 65535`);
+  return max <= 0xff ? Uint8Array.from(wide) : Uint16Array.from(wide);
 }
 
 function accessor(ctx: Ctx, index: number, where: string): GltfJsonAccessor {

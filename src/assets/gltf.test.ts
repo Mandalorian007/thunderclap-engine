@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { composeTrs, decodeDataUri, GltfError, type GltfJson, parseGltf } from './gltf';
+import {
+  interleaveSkinned,
+  SKINNED_JOINTS_OFFSET,
+  SKINNED_VERTEX_STRIDE,
+  SKINNED_WEIGHTS_OFFSET,
+  skeletonFromSkin,
+} from './gltf-skin';
 
 // ---------------------------------------------------------------- a tiny GLB writer
 
@@ -43,8 +50,12 @@ class GlbWriter {
   }
 
   /** A float accessor in its own tightly packed view, with min/max. */
-  floats(data: number[], type: 'VEC2' | 'VEC3' | 'VEC4', minMax = true): number {
-    const n = { VEC2: 2, VEC3: 3, VEC4: 4 }[type];
+  floats(
+    data: number[],
+    type: 'SCALAR' | 'VEC2' | 'VEC3' | 'VEC4' | 'MAT4',
+    minMax = true,
+  ): number {
+    const n = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT4: 16 }[type];
     const f = new Float32Array(data);
     const bv = this.view(new Uint8Array(f.buffer));
     const count = data.length / n;
@@ -73,6 +84,26 @@ class GlbWriter {
       componentType: 5123,
       count: data.length,
       type: 'SCALAR',
+    });
+  }
+
+  /** `JOINTS_0`: 4 unsigned integers per vertex as bytes (5121) or shorts (5123). */
+  joints(data: number[], componentType: 5121 | 5123): number {
+    const u = componentType === 5121 ? new Uint8Array(data) : new Uint16Array(data);
+    const bv = this.view(new Uint8Array(u.buffer));
+    return this.accessor({ bufferView: bv, componentType, count: data.length / 4, type: 'VEC4' });
+  }
+
+  /** `WEIGHTS_0` as normalised unsigned bytes. */
+  weights8(data: number[]): number {
+    const u = new Uint8Array(data.map((w) => Math.round(w * 255)));
+    const bv = this.view(new Uint8Array(u.buffer));
+    return this.accessor({
+      bufferView: bv,
+      componentType: 5121,
+      normalized: true,
+      count: data.length / 4,
+      type: 'VEC4',
     });
   }
 
@@ -223,7 +254,260 @@ function sampleGlb(): { glb: ArrayBuffer; w: GlbWriter } {
   return { glb: w.finish(), w };
 }
 
+/** Rotation of 90° about +Z as a quaternion. */
+const ROT_Z90 = [0, 0, Math.SQRT1_2, Math.SQRT1_2];
+
+/** Cubic-spline scale channel: two keys, each (in-tangent, value, out-tangent). */
+const SPLINE_SCALE = [0, 0, 0, 1, 1, 1, 0.5, 0.5, 0.5, -0.5, -0.5, -0.5, 2, 2, 2, 0, 0, 0];
+
+/**
+ * A two-bone skin: `root` (joint 0, at the origin) → `tip` (joint 1, one unit up), and a `strip`
+ * node carrying a skinned quad whose top vertices follow the tip. The second primitive is the
+ * same quad without normals or indices (unwelded by the parser). The `wave` animation moves the
+ * tip (LINEAR translation), snaps it (STEP rotation) and breathes it (CUBICSPLINE scale).
+ */
+function skinnedGlb(): { glb: ArrayBuffer; w: GlbWriter } {
+  const w = new GlbWriter();
+  // Quad in the XY plane: bottom edge at y 0, top edge at y 1, facing +Z.
+  const pos = [-0.5, 0, 0, 0.5, 0, 0, 0.5, 1, 0, -0.5, 1, 0];
+  const nrm = [0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1];
+  const idx = [0, 1, 2, 0, 2, 3];
+  const jnt = [0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0];
+  const wgt = [1, 0, 0, 0, 1, 0, 0, 0, 0.25, 0.75, 0, 0, 1, 0, 0, 0];
+  const welded = {
+    attributes: {
+      POSITION: w.floats(pos, 'VEC3'),
+      NORMAL: w.floats(nrm, 'VEC3'),
+      JOINTS_0: w.joints(jnt, 5123),
+      WEIGHTS_0: w.floats(wgt, 'VEC4', false),
+    },
+    indices: w.indices16(idx),
+  };
+  const bare = {
+    attributes: {
+      POSITION: w.floats(pos, 'VEC3'),
+      JOINTS_0: w.joints(jnt, 5121),
+      WEIGHTS_0: w.weights8(wgt),
+    },
+    indices: w.indices16(idx),
+  };
+  w.json.meshes = [{ name: 'strip', primitives: [welded, bare] }];
+  // Column-major inverse bind: joint 0 identity, joint 1 translates by (0, -1, 0).
+  const ibm = [
+    ...[1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+    ...[1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, -1, 0, 1],
+  ];
+  w.json.skins = [
+    { name: 'arm', joints: [0, 1], inverseBindMatrices: w.floats(ibm, 'MAT4', false), skeleton: 0 },
+  ];
+  w.json.nodes = [
+    { name: 'root', children: [1], translation: [0, 0, 0] },
+    { name: 'tip', translation: [0, 1, 0], rotation: ROT_Z90, scale: [1, 2, 1] },
+    { name: 'strip', mesh: 0, skin: 0 },
+  ];
+  w.json.animations = [
+    {
+      name: 'wave',
+      samplers: [
+        {
+          input: w.floats([0, 1], 'SCALAR', false),
+          output: w.floats([0, 1, 0, 0, 2, 0], 'VEC3', false),
+          interpolation: 'LINEAR',
+        },
+        {
+          input: w.floats([0, 0.5, 1], 'SCALAR', false),
+          output: w.floats([0, 0, 0, 1, ...ROT_Z90, 0, 0, 1, 0], 'VEC4', false),
+          interpolation: 'STEP',
+        },
+        {
+          input: w.floats([0, 1], 'SCALAR', false),
+          output: w.floats(SPLINE_SCALE, 'VEC3', false),
+          interpolation: 'CUBICSPLINE',
+        },
+      ],
+      channels: [
+        { sampler: 0, target: { node: 1, path: 'translation' } },
+        { sampler: 1, target: { node: 1, path: 'rotation' } },
+        { sampler: 2, target: { node: 1, path: 'scale' } },
+      ],
+    },
+  ];
+  w.json.scenes = [{ nodes: [0, 2] }];
+  w.json.scene = 0;
+  return { glb: w.finish(), w };
+}
+
 // ---------------------------------------------------------------- tests
+
+describe('parseGltf (skins and animations)', () => {
+  const { glb } = skinnedGlb();
+  const doc = parseGltf(glb);
+
+  it('reads the skin: joints, skeleton root and row-major inverse bind matrices', () => {
+    expect(doc.skins).toHaveLength(1);
+    const s = doc.skins[0]!;
+    expect(s.name).toBe('arm');
+    expect(s.joints).toEqual([0, 1]);
+    expect(s.skeleton).toBe(0);
+    expect(s.inverseBind).toHaveLength(24);
+    expect([...s.inverseBind.slice(0, 12)]).toEqual([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0]);
+    // Column-major translation (m[13] = -1) lands in row 1's last column.
+    expect([...s.inverseBind.slice(12, 24)]).toEqual([1, 0, 0, 0, 0, 1, 0, -1, 0, 0, 1, 0]);
+    expect(doc.nodes[2]!.skin).toBe(0);
+    expect(doc.nodes[0]!.skin).toBeNull();
+    expect(doc.warnings).toEqual([]);
+  });
+
+  it('reads JOINTS_0 of any integer type as bytes when they fit, and WEIGHTS_0 as floats', () => {
+    const welded = doc.meshes[0]!.primitives[0]!;
+    expect(welded.joints).toBeInstanceOf(Uint8Array);
+    expect([...welded.joints!]).toEqual([0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0]);
+    expect([...welded.weights!]).toEqual([1, 0, 0, 0, 1, 0, 0, 0, 0.25, 0.75, 0, 0, 1, 0, 0, 0]);
+    // The bare primitive is unwelded for flat normals; joints and weights follow the indices.
+    const bare = doc.meshes[0]!.primitives[1]!;
+    expect(bare.hadNormals).toBe(false);
+    expect(bare.vertexCount).toBe(6);
+    expect(bare.joints).toBeInstanceOf(Uint8Array);
+    expect([...bare.joints!.slice(8, 12)]).toEqual([0, 1, 0, 0]); // vertex 2
+    expect([...bare.joints!.slice(20, 24)]).toEqual([1, 0, 0, 0]); // vertex 3
+    expect(bare.weights![8]).toBeCloseTo(0.25, 2);
+    expect(bare.weights![9]).toBeCloseTo(0.75, 2);
+    expect(bare.weights![20]).toBe(1);
+  });
+
+  it('reads the animation into the AnimationClip shape, values untouched', () => {
+    expect(doc.animations).toHaveLength(1);
+    const a = doc.animations[0]!;
+    expect(a.name).toBe('wave');
+    expect(a.duration).toBe(1);
+    expect(a.channels).toHaveLength(3);
+    const [t, r, s] = a.channels as [
+      (typeof a.channels)[0],
+      (typeof a.channels)[0],
+      (typeof a.channels)[0],
+    ];
+    expect(t.node).toBe(1);
+    expect(t.path).toBe('translation');
+    expect(t.interpolation).toBe('LINEAR');
+    expect([...t.times]).toEqual([0, 1]);
+    expect([...t.values]).toEqual([0, 1, 0, 0, 2, 0]);
+    expect(r.path).toBe('rotation');
+    expect(r.interpolation).toBe('STEP');
+    expect([...r.times]).toEqual([0, 0.5, 1]);
+    expect([...r.values]).toEqual([0, 0, 0, 1, ...ROT_Z90.map(Math.fround), 0, 0, 1, 0]);
+    expect(s.path).toBe('scale');
+    expect(s.interpolation).toBe('CUBICSPLINE');
+    expect(s.values).toHaveLength(2 * 3 * 3);
+    expect([...s.values]).toEqual(SPLINE_SCALE);
+    expect(s.times).toBeInstanceOf(Float32Array);
+  });
+
+  it('builds a Skeleton over every node: parents, rest TRS, inverse bind and joint nodes', () => {
+    const sk = skeletonFromSkin(doc, 0);
+    expect(sk.parents).toBeInstanceOf(Int16Array);
+    expect([...sk.parents]).toEqual([-1, 0, -1]);
+    expect(sk.rest).toHaveLength(30);
+    expect([...sk.rest.slice(0, 10)]).toEqual([0, 0, 0, 0, 0, 0, 1, 1, 1, 1]);
+    expect([...sk.rest.slice(10, 20)]).toEqual([0, 1, 0, ...ROT_Z90.map(Math.fround), 1, 2, 1]);
+    expect(sk.inverseBind).toBe(doc.skins[0]!.inverseBind);
+    expect(sk.joints).toBeInstanceOf(Uint16Array);
+    expect([...sk.joints]).toEqual([0, 1]);
+    expect(() => skeletonFromSkin(doc, 1)).toThrow(/skin 1 does not exist/);
+  });
+
+  it('interleaves the skinned layout: 12 floats, 4 joint bytes, 4 unorm8 weights per vertex', () => {
+    const p = doc.meshes[0]!.primitives[0]!;
+    const packed = interleaveSkinned(p);
+    expect(packed.layout).toBe('skinned');
+    expect(SKINNED_VERTEX_STRIDE).toBe(56);
+    expect(packed.vertices.byteLength).toBe(4 * 56);
+    const f32 = new Float32Array(packed.vertices);
+    const u8 = new Uint8Array(packed.vertices);
+    // Vertex 2: position (0.5, 1, 0), normal +Z, uv 0, colour 1.
+    expect([...f32.slice(2 * 14, 2 * 14 + 12)]).toEqual([0.5, 1, 0, 0, 0, 1, 0, 0, 1, 1, 1, 1]);
+    const j = 2 * 56 + SKINNED_JOINTS_OFFSET;
+    expect([...u8.slice(j, j + 4)]).toEqual([0, 1, 0, 0]);
+    const wAt = 2 * 56 + SKINNED_WEIGHTS_OFFSET;
+    expect([...u8.slice(wAt, wAt + 4)]).toEqual([64, 191, 0, 0]);
+    // Every vertex's weights sum to exactly 255.
+    for (let i = 0; i < 4; i++) {
+      const o = i * 56 + SKINNED_WEIGHTS_OFFSET;
+      expect(u8[o]! + u8[o + 1]! + u8[o + 2]! + u8[o + 3]!).toBe(255);
+    }
+    const unskinned = parseGltf(sampleGlb().glb).meshes[0]!.primitives[0]!;
+    expect(() => interleaveSkinned(unskinned)).toThrow(/not skinned/);
+  });
+
+  it('keeps JOINTS_0 as shorts above 255 and refuses to pack them', () => {
+    const w = new GlbWriter();
+    const prim = {
+      attributes: {
+        POSITION: w.floats([0, 0, 0, 1, 0, 0, 0, 1, 0], 'VEC3'),
+        NORMAL: w.floats([0, 0, 1, 0, 0, 1, 0, 0, 1], 'VEC3'),
+        JOINTS_0: w.joints([0, 300, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 5123),
+        WEIGHTS_0: w.floats([0.5, 0.5, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0], 'VEC4', false),
+      },
+    };
+    w.json.meshes = [{ primitives: [prim] }];
+    w.json.nodes = Array.from({ length: 301 }, (_, i) => (i === 0 ? { mesh: 0, skin: 0 } : {}));
+    w.json.skins = [{ joints: Array.from({ length: 301 }, (_, i) => i) }];
+    const d = parseGltf(w.finish());
+    const p = d.meshes[0]!.primitives[0]!;
+    expect(p.joints).toBeInstanceOf(Uint16Array);
+    expect(p.joints![1]).toBe(300);
+    expect(() => interleaveSkinned(p)).toThrow(/above 255/);
+    // No inverseBindMatrices: identity per joint.
+    expect([...d.skins[0]!.inverseBind.slice(12, 24)]).toEqual([
+      1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0,
+    ]);
+    expect(d.skins[0]!.skeleton).toBeNull();
+  });
+
+  it('names bad skins, channels and half-skinned primitives', () => {
+    const base = (): GltfJson => JSON.parse(JSON.stringify(skinnedGlb().w.json)) as GltfJson;
+    const bin = (): ArrayBuffer => {
+      const glb = skinnedGlb().glb;
+      const dv = new DataView(glb);
+      const jsonLength = dv.getUint32(12, true);
+      const binAt = 20 + jsonLength;
+      return glb.slice(binAt + 8, binAt + 8 + dv.getUint32(binAt, true));
+    };
+    const parse = (mutate: (j: GltfJson) => void) => {
+      const json = base();
+      mutate(json);
+      return () => parseGltf({ json, buffers: [bin()] });
+    };
+    expect(parse((j) => (j.skins![0]!.joints = [0, 7]))).toThrow(/skin 0 names joint node 7/);
+    expect(parse((j) => (j.skins![0]!.joints = [0]))).toThrow(
+      /skin 0: 2 inverse bind matrices for 1 joints/,
+    );
+    expect(parse((j) => (j.nodes![2]!.skin = 3))).toThrow(/node 2 names skin 3/);
+    expect(parse((j) => (j.animations![0]!.channels[0]!.target.path = 'spin'))).toThrow(
+      /animation 0 channel 0: path "spin" unknown/,
+    );
+    expect(parse((j) => (j.animations![0]!.channels[0]!.target.node = 9))).toThrow(
+      /channel 0 targets node 9/,
+    );
+    expect(parse((j) => (j.animations![0]!.samplers[2]!.interpolation = 'LINEAR'))).toThrow(
+      /channel 2: 6 output values for 2 keyframes/,
+    );
+    expect(parse((j) => (j.animations![0]!.samplers[0]!.interpolation = 'CUBICSPLINE'))).toThrow(
+      /channel 0: 2 output values for 2 keyframes \(×3 for CUBICSPLINE\)/,
+    );
+    expect(parse((j) => (j.animations![0]!.samplers[1]!.output = 1))).toThrow(
+      /channel 1: rotation output is VEC3, expected 4 components/,
+    );
+    expect(parse((j) => delete j.meshes![0]!.primitives[0]!.attributes.WEIGHTS_0)).toThrow(
+      /JOINTS_0 without WEIGHTS_0/,
+    );
+    // A channel without a target node is skipped with a warning, not an error.
+    const json = base();
+    delete json.animations![0]!.channels[1]!.target.node;
+    const d = parseGltf({ json, buffers: [bin()] });
+    expect(d.animations[0]!.channels).toHaveLength(2);
+    expect(d.warnings).toEqual(['animation 0 channel 1 ignored: no target node']);
+  });
+});
 
 describe('parseGltf (GLB)', () => {
   const { glb } = sampleGlb();

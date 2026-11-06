@@ -4,6 +4,7 @@ import { VERTEX_LAYOUT_3D } from '../render/mesh';
 import { Renderer } from '../render/renderer';
 import { type GltfJson, parseGltf } from './gltf';
 import { type GltfImageSource, interleave3d, loadGltf } from './gltf-load';
+import { interleaveSkinned, skeletonFromSkin } from './gltf-skin';
 
 /** A 4×4 "decoded image" for the fake GPU (`copyExternalImageToTexture` is a no-op there). */
 const decodeImage = async (): Promise<GltfImageSource> =>
@@ -158,6 +159,72 @@ describe('loadGltf on the fake GPU', () => {
     expect(scene.nodes.every((n) => n.material === own)).toBe(true);
     expect(scene.textures).toHaveLength(1);
     scene.destroy();
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('passes skins and animations through and marks skinned draws with their skin', async () => {
+    // One skinned triangle under a two-joint skin, one LINEAR translation channel on joint 1.
+    const pos = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+    const nrm = new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]);
+    const jnt = new Uint8Array([0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0]);
+    const wgt = new Float32Array([1, 0, 0, 0, 0.5, 0.5, 0, 0, 0, 1, 0, 0]);
+    const times = new Float32Array([0, 2]);
+    const values = new Float32Array([0, 0, 0, 0, 1, 0]);
+    const parts = [pos, nrm, jnt, wgt, times, values].map(
+      (p) => new Uint8Array(p.buffer, p.byteOffset, p.byteLength),
+    );
+    const total = parts.reduce((n, p) => n + p.byteLength, 0);
+    const bin = new Uint8Array(total);
+    const views: GltfJson['bufferViews'] = [];
+    let off = 0;
+    for (const p of parts) {
+      bin.set(p, off);
+      views.push({ buffer: 0, byteOffset: off, byteLength: p.byteLength });
+      off += p.byteLength;
+    }
+    const json: GltfJson = {
+      asset: { version: '2.0' },
+      buffers: [{ byteLength: total }],
+      bufferViews: views,
+      accessors: [
+        { bufferView: 0, componentType: 5126, count: 3, type: 'VEC3' },
+        { bufferView: 1, componentType: 5126, count: 3, type: 'VEC3' },
+        { bufferView: 2, componentType: 5121, count: 3, type: 'VEC4' },
+        { bufferView: 3, componentType: 5126, count: 3, type: 'VEC4' },
+        { bufferView: 4, componentType: 5126, count: 2, type: 'SCALAR' },
+        { bufferView: 5, componentType: 5126, count: 2, type: 'VEC3' },
+      ],
+      meshes: [
+        {
+          primitives: [{ attributes: { POSITION: 0, NORMAL: 1, JOINTS_0: 2, WEIGHTS_0: 3 } }],
+        },
+      ],
+      skins: [{ joints: [0, 1] }],
+      nodes: [{ children: [1] }, { translation: [0, 1, 0] }, { mesh: 0, skin: 0 }],
+      animations: [
+        {
+          samplers: [{ input: 4, output: 5 }],
+          channels: [{ sampler: 0, target: { node: 1, path: 'translation' } }],
+        },
+      ],
+      scenes: [{ nodes: [0, 2] }],
+    };
+    const doc = parseGltf({ json, buffers: [bin.buffer] });
+    const fake = createFakeDevice();
+    const r = new Renderer(fakeRendererGpu(fake));
+    const scene = await loadGltf(r, doc, { decodeImage });
+    expect(scene.skins).toBe(doc.skins);
+    expect(scene.animations).toBe(doc.animations);
+    expect(scene.animations[0]!.name).toBe('animation0');
+    expect(scene.animations[0]!.duration).toBe(2);
+    expect(scene.nodes).toHaveLength(1);
+    expect(scene.nodes[0]!.skin).toBe(0);
+    // Until VERTEX_LAYOUT_SKINNED lands, the skinned primitive is built in the 3D layout.
+    expect(scene.meshes[0]!.layout).toBe(VERTEX_LAYOUT_3D);
+    expect(scene.meshes[0]!.vertexCount).toBe(3);
+    const sk = skeletonFromSkin(doc, 0);
+    expect([...sk.parents]).toEqual([-1, 0, -1]);
+    expect(interleaveSkinned(doc.meshes[0]!.primitives[0]!).vertices.byteLength).toBe(3 * 56);
     expect(fake.errors).toEqual([]);
   });
 
