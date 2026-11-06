@@ -94,7 +94,7 @@ describe('AO and DoF settings', () => {
     const q = defaultPostQuality();
     packPostUniforms(out, s, 0, 100, 100, 100, 100, q, null);
     expect([out[72], out[80]]).toEqual([0, 0]);
-    expect(Array.from(out.subarray(88))).toEqual(new Array(16).fill(0));
+    expect(Array.from(out.subarray(88, 104))).toEqual(new Array(16).fill(0));
     const invProj = new Float32Array(16).map((_, i) => i + 1);
     packPostUniforms(out, s, 0, 100, 100, 100, 100, q, {
       near: 0.1,
@@ -108,7 +108,7 @@ describe('AO and DoF settings', () => {
     expect(Array.from(out.subarray(76, 80))).toEqual([1.5, 12, 2, 3]);
     expect(Array.from(out.subarray(80, 84))).toEqual([1, 10, 6, Math.fround(8 / 200)]);
     expect(Array.from(out.subarray(84, 88))).toEqual([1, 24, Math.fround(0.1), 50]);
-    expect(Array.from(out.subarray(88))).toEqual(Array.from(invProj));
+    expect(Array.from(out.subarray(88, 104))).toEqual(Array.from(invProj));
   });
 });
 
