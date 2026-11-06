@@ -59,12 +59,16 @@ post.finishBlend(); // jump to the end values
 | Outline (ws/post-2) | scene res, over the scene depth | `outline.thickness` (px), `depthThreshold`, `normalThreshold`. A Roberts cross over linear depth and normals-from-depth written as an edge mask the composite mixes toward `outline.color` × `intensity` before fog. Off by default; off with a one-time warning when the frame has no depth. |
 | AO (ws/post-depth) | half res, over the scene depth | `ao.radius` (world units), `intensity`, `bias`, `power`. Normals from depth derivatives; 12 (`aoSamples`) spiral samples rotated per pixel by interleaved-gradient noise. Off by default. |
 | AO blur | half res | 4×4 depth-aware blur of the AO term. |
+| TAA (ws/post-3) | scene res, over the scene depth, into an `rgba16float` history pair | `taa.feedback` 0.9, `sharpen` 0.2, `clampMode` `aabb` \| `variance`. Reprojects last frame's resolve by the previous view-projection against the current depth, clamps it to the 3×3 neighbourhood, blends; the raw colour is read at the frame's Halton (2, 3) jitter. The resolve replaces the scene colour downstream. Off by default; needs depth. |
+| Motion blur (ws/post-3) | scene res, over the scene depth | `motionBlur.intensity`, `maxSamples` 8. Per-pixel velocity from the depth reprojected by the previous view-projection (camera motion only), the colour gathered along it. Off by default; needs depth. |
 | DoF (ws/post-depth) | half res, over the scene depth and colour | `dof.focusDistance`, `focusRange` (world units), `maxBlur` (px at output res), `nearBlur`. Circle of confusion from linear depth; 24 (`dofTaps`) golden-angle disc taps weighted by each tap's own CoC. Off by default. |
+| SSR (ws/post-3) | half res, over the scene depth and colour | `ssr.maxSteps` 32, `thickness`, `maxDistance`, `roughnessCutoff` 0.6, `intensity`, `fadeEdges`. A view-space ray march from normals-from-depth (the AO helper), faded by roughness and at the screen edges, added to the scene before bloom. Off by default; needs depth. |
+| Exposure histogram, exposure average (ws/post-3) | two compute passes over the scene colour | `exposure.histogramLow` 0.4, `histogramHigh` 0.95, `keyValue` 0.18, `minEv`, `maxEv`, `speedUp`, `speedDown`. A 64-bin log-luminance histogram, then the mean log luminance between the percentiles, read back the next frame; the EV eases toward the target. Only while `exposure.mode` is `'auto'`. |
 | Bloom prefilter | half res | `threshold`, `knee` (soft knee on scene colour), `emissiveWeight` (the emissive target always blooms). Karis average to stop fireflies. |
 | Bloom down/up | half-res mip chain, `levels` deep | 13-tap downsample, 9-tap tent upsample blended by `scatter` |
 | God rays | half res | `x, y` light point, `intensity`, `decay`, `density`, `weight`, `color`. Marches 64 samples radially over a light disc (`sourceRadius`, `sourceIntensity`) plus `bloomSource` × bloom, so bright things in the scene also cast shafts. |
-| Composite | full res → swapchain | colour × AO, blended toward the DoF result by CoC, + emissive (sampled three times along the radius for `aberration`, then `sharpen`ed), outline, + `bloom.intensity` × bloom + rays, then fog, exposure, tonemap, grade, LUT, grain, vignette, dither |
-| FXAA (ws/post-2) | one extra full-res pass over the composite's output | `fxaa.subpixel`, `edgeThreshold`. FXAA 3.11 console preset on the display-encoded output. Only recorded (and its target only allocated) while `fxaa.enabled`. |
+| Composite | full res → swapchain | colour × AO, blended toward the DoF result by CoC, + SSR, + emissive (sampled three times along the radius for `aberration`, then `sharpen`ed), outline, + `bloom.intensity` × bloom (× (1 + lens dirt)) + rays, then fog, white balance, exposure, tonemap, grade, LUT, grain, vignette, dither |
+| FXAA (ws/post-2) | one extra full-res pass over the composite's output | `fxaa.subpixel`, `edgeThreshold`. FXAA 3.11 console preset on the display-encoded output. Only recorded (and its target only allocated) while `fxaa.enabled`, and skipped while TAA runs (ws/post-3). |
 
 - **Fog** is a screen-space floor mist: a height band from `top` to `bottom` (0..1 of the
   screen, measured down) shaped by `falloff`. Animated fbm sets `noiseScale` and `speed`.
@@ -120,6 +124,84 @@ output is unchanged and no extra pass or texture exists.
 When bloom is disabled the bloom chain is skipped. It still runs if god rays need it
 (`bloomSource > 0`).
 
+### Post 3 (ws/post-3)
+
+Temporal anti-aliasing, screen-space reflections, auto exposure, white balance, camera motion
+blur and lens dirt. Everything is off by default and free while off: with every section off
+the uniform block carries identity matrices and zero flags, no extra pass or texture exists
+and the 2D goldens are unchanged. TAA, SSR and motion blur need a frame with depth and a view
+(the 3D path) and stay off, with the passes unrecorded, on a flat frame.
+
+- **TAA** (`TaaSettings`: `enabled`, `feedback` 0.9, `sharpen` 0.2, `clampMode` `'aabb' |
+  'variance'`) keeps a pair of `rgba16float` histories at scene res. Each frame reprojects the
+  last resolve by the previous frame's view-projection (`taaReprojection(out, prevViewProj,
+  invViewProj)`: current clip → previous clip) against the current depth, clamps it to the raw
+  colour's 3×3 neighbourhood (min/max, or mean ± σ) and blends by `taaBlendWeight(feedback)`
+  (capped at `TAA_MAX_FEEDBACK`); `sharpen` is an unsharp mask on the result. The resolve
+  replaces the scene colour for every later pass, and FXAA is skipped while TAA runs
+  (`PostStack.taaActive`). The first frame and every resize reset the history
+  (`PostStack.historyResets` counts them). Jitter: `PostStack.taa` is a `Taa(samples)`
+  (8 or 16) whose `jitter(frame)` returns the frame's `[x, y]` offset in px from the Halton
+  (2, 3) sequence (`halton(index, base)`), zero-mean over a cycle and within ±0.5; the stack
+  samples the raw colour at that sub-pixel UV offset, which is the hand-off until the camera
+  can jitter its projection (see the wishes).
+- **SSR** (`SsrSettings`: `enabled`, `maxSteps` 32, `thickness`, `maxDistance`,
+  `roughnessCutoff` 0.6, `intensity`, `fadeEdges`) marches a reflected view-space ray from
+  normals-from-depth at half res, `ssrStep(maxDistance, maxSteps)` per step, accepting a hit
+  within `thickness` of the depth, and writes the scene colour there faded by
+  `ssrEdgeFade(u, v, fadeEdges)` and `ssrRoughnessFade(roughness, cutoff)` and scaled by
+  `intensity`; the composite adds it before bloom. Roughness is one global value (0) for now:
+  every surface the depth covers is a mirror, so the standard material's roughness has no say
+  until a target carries it (see the wishes). `PostStack.ssrActive` reads whether it ran.
+- **Auto exposure** (`ExposureSettings`: `mode` `'manual' | 'auto'`, `minEv` -4, `maxEv` 4,
+  `speedUp` 3, `speedDown` 1, `keyValue` 0.18, `histogramLow` 0.4, `histogramHigh` 0.95). In
+  manual mode `grade.exposure` is the multiplier as before. In auto mode two compute passes
+  build a 64-bin (`EXPOSURE_BINS`) log-luminance histogram of the scene colour over
+  `EXPOSURE_LOG_MIN`..`EXPOSURE_LOG_MAX` (`exposureBin(luminance)`, `exposureBinLog(i)`) and
+  average the bins between the percentiles; the value is read back through a staging buffer
+  on a later frame (never a stall), the EV target is `exposureTarget(averageLog, keyValue,
+  minEv, maxEv)` and `adaptExposure(ev, target, dt, speedUp, speedDown)` eases toward it with
+  `PostInputs.dt`. `PostStack.exposure` is the current EV (`2^EV` multiplies the image).
+  `exposureHistogram(rgba, count)` and `exposureAverage(hist, low, high)` are the CPU
+  references of the two kernels, for tests.
+- **White balance** (`WhiteBalanceSettings`: `temperature` 6500, `tint` 0) applies a 3×3
+  matrix before the exposure and grade: `whiteBalanceMatrix(out, kelvin, tint)` is the
+  Bradford chromatic adaptation transform (Lam 1985, as in ICC) from the 6500 K white to the
+  black body at `temperature` (its chromaticity from `planckianXy(out, kelvin)`, Kim et al.
+  2002, 1667..25000 K) shifted by `tint`, in linear sRGB. 6500 / 0 is the identity; a lower
+  temperature warms the image.
+- **Motion blur** (`MotionBlurSettings`: `enabled`, `intensity` 1, `maxSamples` 8) gathers the
+  scene colour along each pixel's velocity, `motionVelocity(out, reproj, u, v, depth)`: the
+  depth reprojected by the previous view-projection (the matrix TAA keeps), so only the
+  camera's movement blurs (`PostStack.motionBlurActive`).
+- **Lens dirt** (`BloomSettings.dirt?: LensDirtSettings` `{ texture, intensity }`) multiplies
+  the bloom term by `1 + dirt × intensity`. `createLensDirtTexture(device, size = 256, seed)`
+  paints a procedural `rgba8unorm` map of soft discs and streaks, `lensDirtTexels(size,
+  seed)` its bytes; `texture: null` leaves the composite path unchanged.
+- **Quality tiers**: `PostQuality` gains `taa`, `ssr`, `autoExposure`, `motionBlur`.
+  `lowPostQuality()` switches SSR and motion blur off and keeps TAA (it is the cheapest
+  anti-aliasing a phone has). `postQualityFor(tier: PostQualityTier)` gives the caps for
+  `'phone'` (the low tier), `'tablet'`, `'desktop'` and `'xr'` (see XR).
+- The uniform block is one struct, grown in place (`POST_UNIFORM_FLOATS`), and the settings
+  test asserts the packed size equals the WGSL struct's for every field. `PostFrameState` is
+  the per-frame part the stack fills (jitter, reset flag, reprojection, auto exposure).
+
+Renderer needs, as wishes (nothing in `src/render` changed):
+
+- `Camera.setJitter(x, y)` (px) to offset the projection, so TAA samples the scene itself at
+  the jitter instead of resampling the raw colour; `PostStack.taa.jitter(frame)` is ready to
+  feed it.
+- `PostInputs.view` (and the previous frame's), so the stack need not read
+  `renderer.camera.view` for the reprojection.
+- A roughness (or roughness + metalness) target from the standard material, so SSR can fade
+  per surface instead of by the one `roughnessCutoff`.
+- A velocity target written by moving instances and skinned meshes, so motion blur covers
+  object motion too.
+
+The harness page `harness/post3.html` (a lit scene with a mirror floor, a grey block and a
+bright sky patch over a dark backdrop; `?taa ?ssr ?autoexp ?wb=3200 ?mblur ?dirt ?still`)
+publishes the passes, the EV and the probes `e2e/post3.spec.ts` reads.
+
 ## Notes
 
 - `defaultPostSettings()` is tuned for a dark, jewel-toned scene: a strong emissive glow, a
@@ -159,6 +241,10 @@ texture; `renderer.endFrame({ present: false })` then only submits. Inside `enco
   `godRays.x/y` stay in logical px of the design space.
 - Output is encoded to sRGB as on screen, so the layer is made in the swap-chain format
   (`XrSurfaceOptions.colorFormat = renderer.format`).
+- `postQualityFor('xr')` keeps TAA, SSR and motion blur off (ws/post-3): the stack composites
+  one eye at a time through a single history pair and one previous view-projection, so a TAA
+  resolve or a velocity would mix the left eye's last frame into the right eye; per-eye
+  histories are the step that lifts the cap. Auto exposure runs per eye on the same readback.
 
 ## Types
 
@@ -166,7 +252,9 @@ texture; `renderer.endFrame({ present: false })` then only submits. Inside `enco
   `godRays: GodRaySettings`, `vignette: VignetteSettings`, `grade: GradeSettings` (which holds
   `tonemap: Tonemap`), `ao: AoSettings`, `dof: DofSettings`, and the finishing sections
   `fxaa: FxaaSettings`, `lut: LutSettings`, `grain: GrainSettings`, `aberration:
-  AberrationSettings`, `sharpen: SharpenSettings`, `outline: OutlineSettings`. `RGB` is
+  AberrationSettings`, `sharpen: SharpenSettings`, `outline: OutlineSettings`, and the post-3
+  sections `taa: TaaSettings`, `ssr: SsrSettings`, `exposure: ExposureSettings`,
+  `whiteBalance: WhiteBalanceSettings`, `motionBlur: MotionBlurSettings`. `RGB` is
   `[r, g, b]`. `LutSize` is `16 | 32`; `LutFn` is `(r, g, b) => readonly [r, g, b]`.
 - `PostSettingsPatch` is a per-section partial of `PostSettings`, the argument of `new
   PostStack(renderer, patch?)`, `set` and `blendTo`. `applyPostPatch(target, patch)` merges one
