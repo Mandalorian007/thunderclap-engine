@@ -362,6 +362,7 @@ export async function createGame<
       update: (dt: number) => {
         input.update();
         padNav.update();
+        audio.update(dt);
         if (fixed) hooks.update?.(dt);
         else hooks.frame?.(dt);
         particles.update(dt);
