@@ -84,12 +84,43 @@ export interface GradeSettings {
   dither: boolean;
 }
 
+/**
+ * Screen-space ambient occlusion over the scene depth (ws/post-depth). Needs a frame with a
+ * depth buffer (`PostInputs.depth`); the 2D path has none and the pass is skipped.
+ */
+export interface AoSettings {
+  enabled: boolean;
+  /** Sample radius in world units. */
+  radius: number;
+  /** Strength of the darkening (0 = none). */
+  intensity: number;
+  /** Depth tolerance (world units along the normal) before a sample counts as occluding. */
+  bias: number;
+  /** Contrast of the occlusion term (>1 deepens creases). */
+  power: number;
+}
+
+/** Depth of field from linear depth (ws/post-depth): sharp at `focusDistance`, blurred by CoC. */
+export interface DofSettings {
+  enabled: boolean;
+  /** Distance from the eye (world units) in sharp focus. */
+  focusDistance: number;
+  /** Depth either side of the focus distance over which the blur ramps to `maxBlur`. */
+  focusRange: number;
+  /** Largest circle of confusion, in px at the output resolution. */
+  maxBlur: number;
+  /** Blur what is closer than the focus too (off: only the far side blurs). */
+  nearBlur: boolean;
+}
+
 export interface PostSettings {
   bloom: BloomSettings;
   fog: FogSettings;
   godRays: GodRaySettings;
   vignette: VignetteSettings;
   grade: GradeSettings;
+  ao: AoSettings;
+  dof: DofSettings;
 }
 
 export function defaultPostSettings(): PostSettings {
@@ -139,6 +170,8 @@ export function defaultPostSettings(): PostSettings {
       contrast: 1.05,
       dither: true,
     },
+    ao: { enabled: false, radius: 0.5, intensity: 1, bias: 0.02, power: 1.5 },
+    dof: { enabled: false, focusDistance: 10, focusRange: 6, maxBlur: 8, nearBlur: true },
   };
 }
 
@@ -172,14 +205,41 @@ export interface PostQuality {
    * saves most of the composite's fill at high DPR.
    */
   compositeAtScene: boolean;
+  /** Ambient-occlusion spiral samples per pixel (4..16). */
+  aoSamples: number;
+  /** Depth-of-field gather taps per pixel (8..32). */
+  dofTaps: number;
 }
 
 export function defaultPostQuality(): PostQuality {
-  return { maxBloomLevels: 8, raySamples: 64, fogOctaves: 5, compositeAtScene: false };
+  return {
+    maxBloomLevels: 8,
+    raySamples: 64,
+    fogOctaves: 5,
+    compositeAtScene: false,
+    aoSamples: 12,
+    dofTaps: 24,
+  };
 }
 
-/** Uniform layout shared by all post shaders: 18 × vec4f. */
-export const POST_UNIFORM_FLOATS = 72;
+/**
+ * What the depth passes need from the frame's projection (ws/post-depth): the clip → view
+ * inverse, the clip planes and the output width (`dof.maxBlur` is in output px). `null` when
+ * the frame rendered no depth; the packed uniforms then turn AO and DoF off.
+ */
+export interface PostDepthInfo {
+  near: number;
+  far: number;
+  /** Inverse of the projection, column-major. */
+  invProj: ArrayLike<number>;
+  /** The projection's own x/y scale (`proj[0]`, `proj[5]`), to project a world radius. */
+  projX: number;
+  projY: number;
+  outputWidth: number;
+}
+
+/** Uniform layout shared by all post shaders: 22 × vec4f + mat4x4f. */
+export const POST_UNIFORM_FLOATS = 104;
 
 export const WGSL_POST_UNIFORMS = /* wgsl */ `
 struct PostUniforms {
@@ -201,6 +261,11 @@ struct PostUniforms {
   gain: vec4f,
   grade: vec4f,      // saturation, contrast, -, -
   quality: vec4f,    // ray samples, fog octaves, -, -
+  ao: vec4f,         // enabled (0 without depth), radius, intensity, bias
+  ao2: vec4f,        // power, samples, proj x scale, proj y scale
+  dof: vec4f,        // enabled (0 without depth), focus distance, focus range, max blur (uv of width)
+  dof2: vec4f,       // near blur, taps, near plane, far plane
+  invProj: mat4x4f,  // clip -> view
 };
 @group(0) @binding(0) var<uniform> P: PostUniforms;
 `;
@@ -217,6 +282,7 @@ export function packPostUniforms(
   logicalWidth: number,
   logicalHeight: number,
   quality: PostQuality = DEFAULT_QUALITY,
+  depth: PostDepthInfo | null = null,
 ): void {
   const b = s.bloom;
   const f = s.fog;
@@ -241,7 +307,7 @@ export function packPostUniforms(
   o = put(out, o, g.gamma[0], g.gamma[1], g.gamma[2], 0);
   o = put(out, o, g.gain[0], g.gain[1], g.gain[2], 0);
   o = put(out, o, g.saturation, g.contrast, 0, 0);
-  put(
+  o = put(
     out,
     o,
     Math.round(Math.min(64, Math.max(8, quality.raySamples))),
@@ -249,6 +315,34 @@ export function packPostUniforms(
     0,
     0,
   );
+  const a = s.ao;
+  const d = s.dof;
+  const ao = depth !== null && a.enabled ? 1 : 0;
+  const dof = depth !== null && d.enabled ? 1 : 0;
+  o = put(out, o, ao, a.radius, a.intensity, a.bias);
+  o = put(
+    out,
+    o,
+    a.power,
+    Math.round(Math.min(16, Math.max(4, quality.aoSamples))),
+    depth?.projX ?? 1,
+    depth?.projY ?? 1,
+  );
+  const blurUv = depth ? d.maxBlur / Math.max(1, depth.outputWidth) : 0;
+  o = put(out, o, dof, d.focusDistance, Math.max(1e-3, d.focusRange), blurUv);
+  o = put(
+    out,
+    o,
+    +d.nearBlur,
+    Math.round(Math.min(32, Math.max(8, quality.dofTaps))),
+    depth?.near ?? 0,
+    depth?.far ?? 0,
+  );
+  if (depth) {
+    for (let i = 0; i < 16; i++) out[o + i] = depth.invProj[i]!;
+  } else {
+    for (let i = 0; i < 16; i++) out[o + i] = 0;
+  }
 }
 
 const DEFAULT_QUALITY = defaultPostQuality();

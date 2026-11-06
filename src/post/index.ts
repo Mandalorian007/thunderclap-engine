@@ -1,7 +1,9 @@
 export { type Ease, easeIn, easeInOut, easeLinear, easeOut, PostBlender } from './blend';
 export { PostStack } from './post-stack';
 export type {
+  AoSettings,
   BloomSettings,
+  DofSettings,
   FogSettings,
   GodRaySettings,
   GradeSettings,
