@@ -62,7 +62,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Retargeting | ws/retarget | `createRetargetMap`, `retargetPose`, `retargetClip`; name matching; harness `retarget.html` | anim | ✅ green at `eab3f78` (753 tests; e2e 610/92/4 E-017); queued chain 4 after anim-graph |
 | 5 | Morph targets | ws/morph | glTF targets + default weights parse; `MorphBlender` CPU blend into `Mesh.update`; `sampleWeights`; `scene.morph(node)`; harness `morph.html` | assets, anim | 🔧 in progress |
 | 5 | AO + depth of field | ws/post-depth | `PostInputs.depth/projection`; `post.ao` (depth-reconstructed SSAO), `post.dof` (CoC gather); off by default, 2D goldens delta 0; harness `depth-post.html` | post, xr-post | 🔧 in progress |
-| 5 | Scaffolder | ws/scaffold | `pnpm create-game <dir> --template puzzle|first-person` copies a template to a standalone project on the published engine | templates | 🔧 in progress |
+| 5 | Scaffolder | ws/scaffold | `pnpm create-game <dir> --template puzzle|first-person` copies a template to a standalone project on the published engine | templates | ✅ green at `706e47f` (752+8 tests; e2e 629/92/1 E-017 fog); queued chain 2 after look-zoom |
 | 5 | Localisation | ws/i18n | `@thunderclap/engine/i18n`: ICU-style messages, plurals via Intl, fallback chain, runtime locale switch, `negotiateLocale` | — | 🔧 in progress |
 | 5 | Navigation | ws/nav | `@thunderclap/engine/nav`: grid field, A*, flow field, string pulling, path follower, local steering | — | 🔧 in progress |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
@@ -107,6 +107,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - WGSL_PBR runs its own sun + point loop, so PBR materials ignore spot lights and layers once ws/spot-lights lands (chain 1 integrator). → ws/pbr-lights: share the light loop between standard and PBR.
 - `e2e/skin.spec.ts` "joints sway" fails under 8+ parallel matrices (passes 40/40 alone): E-020 added it to the E-017 list; ws/flake-input style polled assertion wanted.
 - A `Transform`-level "position changed" flag so audio followers skip unchanged matrices (ws/audio-zones wish).
+- Template `package.json` descriptions still say "Copy the folder..."; `create-game` keeps them verbatim (ws/scaffold note). → ws/comment-sweep.
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
