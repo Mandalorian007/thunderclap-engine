@@ -53,6 +53,15 @@ pnpm install
 pnpm example     # http://127.0.0.1:5173: a glowing square; click or press Space to flare it
 ```
 
+To start a game of your own, scaffold one from a template into its own folder and run it:
+
+```sh
+pnpm create-game ../my-game --template puzzle   # or first-person; `pnpm create-game --list` shows them
+cd ../my-game && pnpm install && pnpm dev
+```
+
+The new project is standalone: `@thunderclap/engine` is a dependency (`^<this version>`, or `--engine <spec>` for a `github:`, `link:` or `file:` spec, or a directory holding the engine for local work), `package.json` is renamed (`--name`, default the folder's name), a `README.md`, `.gitignore` and `biome.json` are written, and the template's `CLAUDE.md` names the engine concepts it uses. `--dry-run` prints the plan; a non-empty folder needs `--force`.
+
 This is the whole example (`examples/hello/main.ts`):
 
 ```ts
@@ -141,7 +150,7 @@ Import only from the public entry points listed under [Modules](#modules). Anyth
 | `@thunderclap/engine/host` | `Host` interface, `createWebHost()` (top-level page or iframe): links, clipboard, fullscreen, storage ([README](src/host/README.md)) |
 | `@thunderclap/engine/testing` | A recording fake `GPUDevice` for unit tests (`src/render/fake-gpu.ts`) |
 
-**Templates.** `templates/puzzle` (`@thunderclap/template-puzzle`) is a copyable 2D puzzle game: `createGame`, one scene, pure `rules/` with tests, a versioned save with a migration, a layout spec placing a HUD on every form factor, and a `CLAUDE.md` that names the engine concepts for an agent extending it. Run `pnpm template:puzzle`; `pnpm check` runs its typecheck and tests (`check:template-puzzle`).
+**Templates.** `templates/puzzle` (`@thunderclap/template-puzzle`) is a copyable 2D puzzle game: `createGame`, one scene, pure `rules/` with tests, a versioned save with a migration, a layout spec placing a HUD on every form factor, and a `CLAUDE.md` that names the engine concepts for an agent extending it. Run `pnpm template:puzzle`; `pnpm check` runs its typecheck and tests (`check:template-puzzle`). `pnpm create-game <dir> --template <name>` (`scripts/create-game.mjs`) copies a template out of the repo into a standalone project on the published engine (see [Quick start](#quick-start)); `pnpm check` scaffolds one into a temp dir and typechecks it (`check:create-game`).
 
 **Packages.** `packages/host-electron` (`@thunderclap/host-electron`) is the Electron desktop host: a sandboxed shell, a preload bridge and `createElectronHost()`. It lives in this repo as a pnpm workspace package and the engine never imports it. Run `pnpm desktop:dev`, `pnpm desktop:build` or `pnpm test:e2e:desktop` ([README](packages/host-electron/README.md)).
 

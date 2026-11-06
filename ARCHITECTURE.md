@@ -18,6 +18,8 @@ thunderclap-engine/
                       # game.html boots through createGame (window.__harnessGame); rays.html and
                       # mesh.html use cameras; ui.html, layout.html and gestures.html are DOM only
   e2e/                # engine e2e specs, fixtures, ports, itch-style iframe wrapper
+  templates/          # copyable games (puzzle, first-person); `pnpm create-game <dir> --template <name>`
+                      # (scripts/create-game.mjs) copies one out as a standalone project on the engine
   playwright.config.ts  # the viewport/device/wrapper matrix every engine spec runs on
   ARCHITECTURE.md     # this file
   CHANGELOG.md
@@ -29,7 +31,7 @@ Games import only the exports map: `@thunderclap/engine` (the `"."` entry: `crea
 
 **Workspace.** The engine is the root package, so a dependency on this repo by URL still resolves to it. `packages/host-electron` is a workspace package that depends on the engine with `"workspace:*"`, which pnpm links to the root. It is self-contained: the root `tsconfig.json` does not include `packages/`, and `pnpm check` runs `check:host-electron` (typecheck, lint, unit tests) after the engine's own checks. Desktop builds go to `dist/desktop/` at the repo root (gitignored). The engine never imports the package.
 
-The package ships TypeScript source; the game's Vite build compiles it. There is no separate engine build until Phase 5 (extraction and publishing).
+The package ships TypeScript source; the game's Vite build compiles it. There is no separate engine build until Phase 5 (extraction and publishing). A game starts in its own repo with `pnpm create-game <dir> --template <name>` (ws/scaffold): the template is copied out of `templates/`, its `package.json` renamed and pointed at the engine by version (or `--engine <spec>` for a `link:`, `file:` or `github:` spec), and its `CLAUDE.md` kept; `pnpm check` scaffolds and typechecks one (`check:create-game`).
 
 ## Ground rules
 
