@@ -4,6 +4,7 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 
 ## Next (unreleased)
 
+- `templates/platformer` (`@thunderclap/template-platformer`, ws/template-platformer): a copyable 2D side-scrolling platformer: string levels into `createTileLayer`, a flipbook player with coyote time and jump buffering, one-way and moving platforms, three-layer parallax, a look-ahead camera, a `ui.meter` HUD, a pause panel, synthesised sounds and a save with a v1 migration. New root scripts `template:platformer` and `check:template-platformer`; `pnpm check` runs the latter.
 - `templates/third-person` (`@thunderclap/template-third-person`, ws/template-third-person): a copyable third-person action game: a procedurally generated skinned glb parsed at startup, `createAnimGraph`, `Follow` with zoom, two-bone foot IK on a `geom` heightfield, root motion, `lookAt`, three cosmetic sockets via `attachTransform`, anchored enemy plates, PBR with shadows and fog. New root scripts `template:third-person` and `check:template-third-person`; `pnpm check` runs the latter.
 
 ### Repository
