@@ -151,6 +151,56 @@ matrix into a world sphere: the centre by the matrix, the radius by the largest 
 tests that sphere against its frustum. `frame.sprite(...)` records no sphere; sprites are
 never culled.
 
+### Drawing many things
+
+Three ways to draw many instances of one mesh and material (ws/batch-submit; `docs/BENCH.md`
+has their numbers):
+
+```ts
+// 1. frame.mesh: one call per instance, each with its own Transform and InstanceParams.
+for (const t of transforms) frame.mesh(cube, lit, t, { tint });
+
+// 2. frame.meshes: one call per batch; the game owns the typed arrays.
+const batch: InstanceBatch = {
+  count: n,
+  matrices: new Float32Array(n * MATRIX3X4_FLOATS), // 3×4 row-major, 12 floats each
+  params: new Float32Array(n * INSTANCE_PARAM_FLOATS), // uv, tint, params, emissive, flags, size
+  bounds: null, // a world sphere: one cull test for the batch; null: per instance
+};
+writeInstanceParams(batch.params, i * INSTANCE_PARAM_FLOATS, { tint }, sizeX, sizeY);
+frame.meshes(cube, lit, batch);
+
+// 3. frame.list: a retained list in its own GPU buffer; set/remove by index.
+const list = renderer.createInstanceList(cube, lit, 50_000);
+list.set(list.count, transform, { tint }); // appends; set(i, matrix | Transform, params?)
+const moved = list.remove(i); // swap-remove: the old last index now lives at i (or -1)
+frame.list(list);
+```
+
+- `frame.mesh` for anything that changes shape every frame and needs per-draw uniforms,
+  blending order per instance or a different material each. The renderer copies each instance
+  into the shared buffer, culls and depth-sorts it on its own.
+- `frame.meshes` when the game already keeps its instances in typed arrays (a simulation, a
+  chunk of a world): the matrices and `params` (`INSTANCE_PARAM_FLOATS` floats each, in the
+  instance format from `uvRect` on; null for the defaults, with size from the matrix's column
+  lengths) are copied straight into the frame's upload with no per-instance objects. The batch
+  is one sort key (`order`, then the depth of its `bounds` centre or first instance) and one
+  draw; without `bounds` each instance is culled through the mesh's sphere (the same test
+  `frame.mesh` makes) over the typed array, allocating nothing; with `bounds` the batch is
+  culled as a whole and no instance is tested (`stats.culled` then adds `count`). `layerBits`
+  and `castShadow` (default: 3D layouts yes) apply to the batch; the shadow pass draws it.
+- `frame.list` when most instances stay the same from frame to frame (scenery, a crowd that
+  moves a little): `InstanceList` keeps `matrices` and `params` on the CPU and the instance
+  format in its own vertex buffer, tracks the dirty index range (`set`, `remove`, `touch(i)`
+  after writing the arrays directly; `dirty`) and uploads only that range once per frame when
+  `frame.list` records it, so an unchanged list costs no CPU and no `writeBuffer`. It is
+  culled as one unit by `bounds`: computed from the mesh sphere through every instance when
+  they change (null for a mesh without bounds), or fixed by `setBounds(sphere | null)`.
+  `clear()`, `capacity`, `layerBits`, `order`, `castShadow`, `destroy()`.
+
+A batch or list cannot use a material with `perDrawUniforms` (both throw). `stats.batches`
+counts the batches and lists drawn; `stats.instances` counts their instances too.
+
 ### Instance format (28 floats, 112 bytes)
 
 | floats | WGSL `VertexIn` | content |
@@ -716,8 +766,9 @@ its Worker-meshed chunks this way.
   can check. `onGpuError(fn)` subscribes to them (a dev toast; returns the unsubscribe), and
   `reportGpuError(message)` logs and records one (`createShaderModule` reports compile errors
   through it; a game can report its own GPU failures the same way).
-- `renderer.stats` (`RenderStats`) reports `{ drawCalls, instances, drawables, culled }` for the
-  last frame; `culled` is the mesh draws the frustum test skipped, summed over the views.
+- `renderer.stats` (`RenderStats`) reports `{ drawCalls, instances, drawables, culled, batches,
+  shadowDraws }` for the last frame; `culled` is the mesh instances the frustum test skipped
+  and `batches` the `frame.meshes` batches and `frame.list` lists drawn, summed over the views.
 
 ## Resolution and timing
 
@@ -745,6 +796,8 @@ renderer.resolutionScale;                          // scene width / output width
   custom `PostProcessor` calls for its own passes (the class is exported for that type). Its
   `onResult` listeners get a `GpuTimerResult` (`totalMs`, `passes`, `samples`). Without the
   feature `gpuTimer` is null and timing falls back to the queue.
+  `pnpm bench` (`harness/bench.html`, `scripts/bench.mjs`) uses these to record what a frame
+  affords on one machine, per scene rung, in `docs/BENCH.md`.
 - `DynamicResolution` turns GPU-time samples into a scale. It drops after 1 s over budget
   (smoothed), raises only after 3 s with the predicted cost under 85% of budget, waits
   1.5 s after any change, and blocks a level for 20 s when raising to it was followed by a

@@ -55,7 +55,8 @@
     "template:puzzle": "pnpm --filter @thunderclap/template-puzzle dev",
     "desktop:dev": "pnpm --filter @thunderclap/host-electron dev",
     "desktop:build": "pnpm --filter @thunderclap/host-electron dist",
-    "test:e2e:desktop": "pnpm --filter @thunderclap/host-electron test:e2e"
+    "test:e2e:desktop": "pnpm --filter @thunderclap/host-electron test:e2e",
+    "bench": "node scripts/bench.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.4",
