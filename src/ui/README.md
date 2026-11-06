@@ -317,6 +317,56 @@ declarations, and `applyTheme(el, tokens)` sets them on an element. `ensureStyle
   game on an upright phone. It reads `platform/device-mode.ts`; both stay until the layout's
   portrait forms replace them (E-010).
 
+## Perf: `createPerfMonitor`, `createPerfOverlay`
+
+A frame-cost readout for demos, the bench and quality checks: the same numbers as a plain object
+and as a small DOM box with a sparkline. No key binding is included; a game binds one to
+`toggle()`.
+
+```ts
+import { createPerfMonitor, createPerfOverlay } from '@thunderclap/engine/ui';
+
+const perf = createPerfMonitor({ window: 120 });                 // frames kept (default 120)
+const hud = createPerfOverlay(perf, { parent: stageEl, corner: 'tr' });
+// each frame, after renderer.endFrame():
+state.perf = perf.sample(renderer);
+hud.update();
+```
+
+- `createPerfMonitor(opts?: PerfMonitorOptions)` (`window`, `gpuEvery`, `now`) returns a
+  `PerfMonitor`, which *is* its `PerfSample` plus `begin(nowMs?)`, `end(nowMs?)`,
+  `sample(source: PerfSource)`, `history: Float32Array`, `head` and `reset()`. Pure: no DOM, no GPU.
+- `sample(renderer)` once per frame reads `renderer.stats`, `renderer.timing` and
+  `renderer.resolutionScale` (`PerfSource` is that slice, so a fake fits) and returns the reused
+  sample: `frame: PerfFrameStats` (`last`, `avg`, `p95`, `max`, `fps`, over the ring), `gpu:
+  PerfGpuStats | null` (`total` ms and `passes` by label; `null` until the renderer has resolved
+  a GPU sample), `counts` (every numeric field of `stats`, read by key so a new counter such as
+  `batches` shows up without a code change, plus `draws` as an alias of `drawCalls`),
+  `resolutionScale`, `memory` (`performance.memory.usedJSHeapSize` bytes where Chromium exposes it,
+  otherwise absent), `samples`, `filled` and `window`. It is JSON-safe, so a harness page can
+  expose it as state.
+- Frame time: bracket the CPU frame with `begin()`/`end()` for an exact span; without them
+  `sample` measures the interval between its own calls (the frame interval). `history` is a ring
+  of `window` ms values; `filled` says how many hold data and `head` where the next goes.
+- GPU time comes from `renderer.timing`, which only fills while `renderer.timingEvery > 0`. When
+  `sample` finds it at 0 it sets it to `gpuEvery` (default 1; `0` leaves the renderer alone), so
+  the one-line setup works. Per-pass times need `timestamp-query`; otherwise `passes` is empty and
+  `total` is the queue's submit-to-done time.
+- Steady state allocates nothing: the ring, the sort scratch, the stats object and the records are
+  reused; a new counter or pass label adds a key once.
+- `createPerfOverlay(monitor, opts?: PerfOverlayOptions)` (`corner: PerfCorner` = `'tl' | 'tr' |
+  'bl' | 'br'`, `graph` default true, `parent` default `<body>` where the box is `position: fixed`,
+  `updateEvery` frames, default 10) returns a `PerfOverlay`: `el` (`.tc-perf`, `aria-hidden`,
+  `pointer-events: none`), `update()` (call once a frame; it redraws the text and the `<canvas>`
+  sparkline every `updateEvery` calls, nothing while hidden), `show()`, `hide()`, `toggle()`,
+  `visible`, `destroy()`. It is styled from the theme tokens (`--tc-font-mono`, `--tc-color-text`,
+  `--tc-color-surface`, `--tc-color-border`, `--tc-color-accent`, `--tc-radius-s`) with the
+  default theme's values as fallbacks, so it reads the same on a page without an overlay root; its
+  sizes are CSS px (a debug readout, not game UI). The sparkline draws `history` oldest to newest
+  with a 16.7 ms guide line and a floor of 33 ms, so a steady 60 Hz sits at half height.
+- The harness pages `mesh.html`, `lights.html` and `pbr.html` sample every frame and show the
+  overlay with `?perf` (`e2e/perf.spec.ts`); without it they draw nothing extra.
+
 ## Accessibility checklist
 
 - Panels have `role=dialog` (or `alertdialog`), `aria-modal`, and are labelled by their title.
@@ -330,5 +380,6 @@ declarations, and `applyTheme(el, tokens)` sets them on an element. `ensureStyle
 `ui.test.ts` runs under happy-dom and covers theme var names, overlay mount and scaling,
 client→design mapping, the modal focus trap, Esc, focus restore, inert stacking, non-modal panels,
 backdrop clicks, toast caps and timers, caption typing / hold / skip / queue / reduced motion / suspend / onPlace, and
-the slider's aria-valuetext. Layout and focus were also checked once in Chromium via Playwright (not
-part of CI).
+the slider's aria-valuetext. `perf.test.ts` covers the monitor's ring, p95, dynamic counter keys
+and GPU records against a fake `RenderStats`, and the overlay's DOM under happy-dom. Layout and
+focus were also checked once in Chromium via Playwright (not part of CI).

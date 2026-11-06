@@ -32,6 +32,7 @@ import {
   Transform,
   VERTEX_LAYOUT_3D,
 } from '@thunderclap/engine/render';
+import { createPerfMonitor, createPerfOverlay } from '@thunderclap/engine/ui';
 import type { HarnessMeshApi, HarnessMeshState } from './mesh-state';
 
 const root = document.getElementById('root') as HTMLElement;
@@ -54,6 +55,7 @@ const state: HarnessMeshState = {
   },
   stats: { drawCalls: 0, instances: 0 },
   gpuErrors: 0,
+  perf: null,
   zoom: { in: 0, out: 0 },
   lights: { sun: false, points: 0, lamp: [0, 0, 0] },
   shadow: { enabled: false, size: 0, extent: 0 },
@@ -306,6 +308,12 @@ async function main(): Promise<void> {
   input.attach({ pointerTarget: surface.canvas });
   input.setPointerTransform((x, y) => surface.clientToLogical(x, y));
 
+  // ws/perf-overlay: the frame-cost readout, shown with `?perf` (the monitor always samples).
+  const perf = createPerfMonitor();
+  const perfHud = new URLSearchParams(location.search).has('perf')
+    ? createPerfOverlay(perf, { parent: root })
+    : null;
+
   const loop = new GameLoop({
     update(dt) {
       input.update();
@@ -351,6 +359,8 @@ async function main(): Promise<void> {
       state.stats.drawCalls = renderer.stats.drawCalls;
       state.stats.instances = renderer.stats.instances;
       state.gpuErrors = gpuDiagnostics.errorCount;
+      state.perf = perf.sample(renderer);
+      perfHud?.update();
       const ls = state.lights;
       ls.sun = frame.lights.sun.color[0]! > 0;
       ls.points = frame.lights.points.length;

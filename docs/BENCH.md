@@ -1,0 +1,7 @@
+# Bench
+
+*ws/bench writes the machine line and the numbers table here (`pnpm bench`); this file holds only the perf-overlay section until that lands.*
+
+## Reading the perf overlay against the bench
+
+The perf overlay (`createPerfMonitor` / `createPerfOverlay` in `@thunderclap/engine/ui`; `?perf` on the harness's `mesh`, `lights` and `pbr` pages) shows the same quantities the bench table reports, but live and per frame rather than as a median over a rung. Its `cpu` line is the frame interval (or the `begin`/`end` span a page brackets), so it includes the page's own update work, vsync waiting and whatever else the tab is doing; the bench's `cpuMs` is the renderer's `beginFrame` → `endFrame` span only, so the overlay's CPU number is the upper bound of the bench's. `gpu` is `renderer.timing.gpuMs` on both: per-pass lines appear only where the device has `timestamp-query`, otherwise the total is the queue's submit-to-done time, which on a vsynced page approximates the frame's GPU cost and reads as "over budget" when the GPU falls behind. `drawCalls`, `instances`, `culled` and `shadowDraws` are `renderer.stats` of the last frame, the bench's per-rung counts; `scale` is the dynamic-resolution scale in effect. `avg`, `p95` and `max` are over the last 120 frames (the sparkline, with a 16.7 ms guide), so compare the overlay's `avg` after a few seconds of steady state with a rung's median, and use `p95` and `max` to see the stalls a median hides.

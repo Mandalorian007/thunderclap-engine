@@ -27,6 +27,7 @@ import {
   Transform,
   VERTEX_LAYOUT_3D,
 } from '@thunderclap/engine/render';
+import { createPerfMonitor, createPerfOverlay } from '@thunderclap/engine/ui';
 import type { HarnessLightsApi, HarnessLightsState } from './lights-state';
 
 const root = document.getElementById('root') as HTMLElement;
@@ -52,6 +53,7 @@ const state: HarnessLightsState = {
   lights: { points: 0, spots: 0, lampLayers: 0, cubeLayers: [LIT_LAYER, MASKED_LAYER] },
   stats: { drawCalls: 0, instances: 0 },
   gpuErrors: 0,
+  perf: null,
 };
 
 const api: HarnessLightsApi = {
@@ -242,6 +244,12 @@ async function main(): Promise<void> {
 
   let sweep = 0;
   const aim = state.spotAim;
+  // ws/perf-overlay: the frame-cost readout, shown with `?perf` (the monitor always samples).
+  const perf = createPerfMonitor();
+  const perfHud = new URLSearchParams(location.search).has('perf')
+    ? createPerfOverlay(perf, { parent: root })
+    : null;
+
   const loop = new GameLoop({
     update(dt) {
       if (state.sweeping) sweep += dt * SWEEP_RAD_PER_S;
@@ -266,6 +274,8 @@ async function main(): Promise<void> {
       state.stats.drawCalls = renderer.stats.drawCalls;
       state.stats.instances = renderer.stats.instances;
       state.gpuErrors = gpuDiagnostics.errorCount;
+      state.perf = perf.sample(renderer);
+      perfHud?.update();
       state.lights.points = lights.points.length;
       state.lights.spots = lights.spots.length;
       state.lights.lampLayers = lamp.layers ?? 0;
