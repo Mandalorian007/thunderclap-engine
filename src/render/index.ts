@@ -14,6 +14,8 @@ export {
   DynamicResolution,
   type DynamicResolutionOptions,
 } from './dynamic-resolution';
+export type { Flipbook, FlipbookOptions, UvRect } from './flipbook';
+export { atlasFrames, createFlipbook } from './flipbook';
 export type { Drawable, DrawParams, InstanceParams } from './frame';
 export { Frame } from './frame';
 export type { FullscreenEncodeOptions, FullscreenPassDesc } from './fullscreen';
@@ -130,6 +132,8 @@ export {
   mipLevelCount,
   Texture,
 } from './texture';
+export type { TileLayer, TileLayerOptions } from './tile-layer';
+export { createTileLayer } from './tile-layer';
 export type { ReadonlyQuat, ReadonlyVec3 } from './transform';
 export { Transform } from './transform';
 export {

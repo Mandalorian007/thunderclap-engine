@@ -72,6 +72,7 @@ export {
   type RotateCardColors,
   type RotateCardOptions,
 } from './rotate-card';
+export type { ArrowNav } from './stack';
 export {
   type CloseReason,
   NO_RESTORE_FOCUS_ATTR,

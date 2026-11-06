@@ -4,6 +4,11 @@ The game loop, the scene stack, a typed event emitter and 4×4 matrix helpers. `
 (root `@thunderclap/engine`) wires these together; a game reaches for this subpath when it needs
 one of them on its own (a tool, a test, a second loop).
 
+`createGame({ input: { getGamepads } })` names the gamepad source for both the action map
+(`InputOptions.getGamepads`) and the pad navigation of modal panels (`PadNav`); the default is
+`navigator.getGamepads()`, guarded. A test passes a fake `GamepadLike` here and drives
+`ctx.padNav` by ticking the loop.
+
 ## Loop
 
 ```ts

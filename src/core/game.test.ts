@@ -327,6 +327,49 @@ describe('createGame', () => {
     expect(ctx.ui.stack.hasModal).toBe(true);
     expect(press()).toBe(false);
   });
+
+  it('input.getGamepads feeds the action map and the pad navigation of modal panels', async () => {
+    const buttons = Array.from({ length: 17 }, () => ({ pressed: false, value: 0 }));
+    const pad = { connected: true, buttons, axes: [0, 0, 0, 0] };
+    const press = (i: number, down: boolean) => {
+      buttons[i]!.pressed = down;
+      buttons[i]!.value = down ? 1 : 0;
+    };
+    const ctx = await createGame<'go' | 'fire', Save>({
+      ...options([]),
+      input: {
+        bindings: { go: [{ key: 'Space' }], fire: [{ padButton: 0 }] },
+        getGamepads: () => [pad],
+      },
+    });
+    if (!ctx) throw new Error('no ctx');
+    // The action map reads the fake pad.
+    press(0, true);
+    ctx.loop.tickOnce(1 / 60);
+    expect(ctx.input.held('fire')).toBe(true);
+    press(0, false);
+    ctx.loop.tickOnce(1 / 60);
+    expect(ctx.input.held('fire')).toBe(false);
+
+    // The pad drives a modal panel: d-pad down moves focus, B dismisses it.
+    const first = document.createElement('button');
+    first.textContent = 'First';
+    const second = document.createElement('button');
+    second.textContent = 'Second';
+    const content = document.createElement('div');
+    content.append(first, second);
+    const panel = ctx.ui.stack.push({ title: 'Pad', content });
+    expect(document.activeElement).toBe(first);
+    press(13, true);
+    ctx.loop.tickOnce(1 / 60);
+    expect(document.activeElement).toBe(second);
+    press(13, false);
+    ctx.loop.tickOnce(1 / 60);
+    press(1, true);
+    ctx.loop.tickOnce(1 / 60);
+    expect(panel.open).toBe(false);
+    expect(ctx.ui.stack.size).toBe(0);
+  });
 });
 
 describe('createGame: xr', () => {
