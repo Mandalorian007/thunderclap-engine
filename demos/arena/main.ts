@@ -1,0 +1,470 @@
+/**
+ * Arena demo (E-021): a third-person skinned humanoid runs around a lit arena. Idle and run
+ * clips blend by speed in an `AnimationMixer`; a sword rides a hand socket and leaves a `Trail`
+ * when swung; a `Follow` camera is driven by `Look`; PBR ground and pillars under a shadowing
+ * sun and two coloured point lights; dust at the feet from the engine's world-space particles;
+ * fog; a toast on each swing.
+ *
+ * Controls: WASD / left stick / left-half touch stick moves (relative to the camera); mouse
+ * (click for the pointer lock) / right stick / right-half drag looks; click, tap, Space or the
+ * pad's A button swings; the wheel zooms.
+ */
+
+import { createGame } from '@thunderclap/engine';
+import {
+  AnimationMixer,
+  attachTransform,
+  createSocket,
+  poseToWorld,
+  skinMatrices,
+  WORLD_NODE_FLOATS,
+} from '@thunderclap/engine/anim';
+import type { Scene } from '@thunderclap/engine/core';
+import { Trail } from '@thunderclap/engine/fx';
+import { Follow, Look } from '@thunderclap/engine/input';
+import {
+  type Camera,
+  createStandardMaterial,
+  type Frame,
+  gpuDiagnostics,
+  type InstanceParams,
+  JOINT_FLOATS,
+  Lights,
+  type Mesh,
+  SkinPalette,
+  Transform,
+  VERTEX_LAYOUT_3D,
+  VERTEX_LAYOUT_SKINNED,
+  WGSL_PBR,
+} from '@thunderclap/engine/render';
+import { MeshBuilder, tilePixels } from './geom';
+import {
+  createBodyMesh,
+  createIdleClip,
+  createRunClip,
+  createSkeleton,
+  createSwingClip,
+  createSwordMesh,
+  NODE_COUNT,
+  NODES,
+  SWORD_LENGTH,
+} from './rig';
+import type { ArenaDemoState } from './state';
+
+const state: ArenaDemoState = {
+  ready: false,
+  gpu: 'pending',
+  frame: 0,
+  fps: 0,
+  simTime: 0,
+  speed: 0,
+  swinging: false,
+  swings: 0,
+  position: [0, 0, 0],
+  yaw: 0,
+  camera: { yaw: 0, pitch: 0, distance: 0 },
+  drawCalls: 0,
+  shadowDraws: 0,
+  triangles: 0,
+  stats: { drawCalls: 0, instances: 0, drawables: 0, culled: 0, shadowDraws: 0 },
+  trailPoints: 0,
+  gpuErrors: 0,
+};
+window.__demo = state;
+
+const RUN_SPEED = 5.5;
+const ACCEL = 28;
+const TURN_RATE = 12;
+const ARENA_RADIUS = 11;
+const PILLAR_RING = 8.5;
+const PILLAR_COUNT = 8;
+const FOV = (55 * Math.PI) / 180;
+
+/** Skinned PBR: vertex colours as albedo, rough dielectric; the palette slot rides in params.w. */
+const SKINNED_PBR_WGSL = /* wgsl */ `${WGSL_PBR}
+@fragment fn fs_main(in: VSOut) -> FragOut {
+  let n = normalize(in.normal);
+  let v = normalize(camera.camera_pos.xyz - in.worldPos);
+  let lit = engine_pbr(in.color.rgb, 0.0, 0.72, n, v, in.worldPos, 1.0, vec3f(0.0));
+  var o: FragOut;
+  o.color = vec4f(lit, 1.0);
+  o.emissive = vec4f(0.0);
+  return o;
+}`;
+
+type Action = 'swing' | 'zoomIn' | 'zoomOut';
+
+const look = new Look({
+  keys: {
+    forward: ['KeyW', 'ArrowUp'],
+    back: ['KeyS', 'ArrowDown'],
+    left: ['KeyA', 'ArrowLeft'],
+    right: ['KeyD', 'ArrowRight'],
+  },
+});
+
+async function main(): Promise<void> {
+  const root = document.getElementById('app') as HTMLElement;
+  const ctx = await createGame<Action>({
+    root,
+    title: 'ThunderClap demo: arena',
+    design: { width: 1920, height: 1080 },
+    particles: {
+      space: 'world',
+      blend: 'alpha',
+      lit: true,
+      floorY: 0,
+      capacity: 2048,
+      softness: 0.3,
+    },
+    input: {
+      bindings: {
+        swing: [{ gesture: 'tap' }, { key: 'Space' }, { padButton: 0 }],
+        zoomIn: [{ wheel: -1 }],
+        zoomOut: [{ wheel: 1 }],
+      },
+    },
+  });
+  if (!ctx) {
+    state.gpu = 'unsupported';
+    state.ready = true;
+    return;
+  }
+  const { renderer, camera, surface, input, particles, hooks, ui } = ctx;
+
+  // ── Camera: perspective, aspect from the backbuffer ─────────────────────
+  surface.onResize(({ backbuffer }) => {
+    camera.setPerspective(FOV, backbuffer.width / Math.max(1, backbuffer.height), 0.1, 120);
+  });
+
+  // ── The arena ───────────────────────────────────────────────────────────
+  const stoneTex = renderer.textureFromPixels({
+    width: 128,
+    height: 128,
+    data: tilePixels({
+      size: 128,
+      tiles: 4,
+      grout: 3,
+      base: [0.62, 0.6, 0.56],
+      groutColor: [0.22, 0.2, 0.19],
+      jitter: 0.35,
+      seed: 3,
+    }),
+    format: 'rgba8unorm-srgb',
+    label: 'arena-stone',
+  });
+  const pillarTex = renderer.textureFromPixels({
+    width: 64,
+    height: 64,
+    data: tilePixels({
+      size: 64,
+      tiles: 2,
+      grout: 2,
+      base: [0.78, 0.74, 0.68],
+      groutColor: [0.4, 0.37, 0.34],
+      jitter: 0.2,
+      seed: 11,
+    }),
+    format: 'rgba8unorm-srgb',
+    label: 'arena-pillar',
+  });
+  const groundMat = createStandardMaterial(renderer, {
+    label: 'arena-ground',
+    baseColor: stoneTex,
+    metallic: 0,
+    roughness: 0.9,
+  });
+  const pillarMat = createStandardMaterial(renderer, {
+    label: 'arena-pillar',
+    baseColor: pillarTex,
+    metallic: 0.05,
+    roughness: 0.55,
+  });
+  const orbMat = createStandardMaterial(renderer, {
+    label: 'arena-orb',
+    metallic: 0,
+    roughness: 0.4,
+    baseColorFactor: [0.6, 0.6, 0.6, 1],
+  });
+  const palette = new SkinPalette(renderer.device, {
+    joints: NODE_COUNT,
+    instances: 1,
+    label: 'arena-skin',
+  });
+  const skinMat = renderer.createMaterial({
+    label: 'arena-skinned',
+    wgsl: SKINNED_PBR_WGSL,
+    blend: 'opaque',
+    buffers: [palette.buffer],
+  });
+
+  const mesh = (
+    data: { vertices: Float32Array; indices: Uint16Array },
+    label: string,
+    skinned = false,
+  ): Mesh =>
+    renderer.createMesh({
+      ...data,
+      layout: skinned ? VERTEX_LAYOUT_SKINNED : VERTEX_LAYOUT_3D,
+      label,
+    });
+
+  const groundMesh = mesh(
+    new MeshBuilder().ground(ARENA_RADIUS * 2 + 8, 15, [1, 1, 1]).build(),
+    'ground',
+  );
+  const pillarMesh = mesh(
+    new MeshBuilder()
+      .box(0, 0.2, 0, 0.55, 0.2, 0.55, [1, 1, 1])
+      .cylinder(0, 0.4, 0, 0.36, 3.2, 14, [1, 1, 1])
+      .box(0, 3.75, 0, 0.5, 0.15, 0.5, [1, 1, 1])
+      .build(),
+    'pillar',
+  );
+  const orbMesh = mesh(
+    new MeshBuilder().cylinder(0, -0.12, 0, 0.14, 0.24, 10, [1, 1, 1]).build(),
+    'orb',
+  );
+  const groundT = new Transform({});
+  const groundP: InstanceParams = { receiveShadow: true, castShadow: false };
+  const pillars: Transform[] = [];
+  for (let i = 0; i < PILLAR_COUNT; i++) {
+    const a = (i / PILLAR_COUNT) * Math.PI * 2 + Math.PI / PILLAR_COUNT;
+    pillars.push(new Transform({ x: Math.cos(a) * PILLAR_RING, z: Math.sin(a) * PILLAR_RING }));
+  }
+  const pillarP: InstanceParams = { castShadow: true, receiveShadow: true };
+
+  // ── Lights: a low sun with a shadow map, two coloured points on orbs, fog ─
+  const lights = new Lights();
+  lights.ambient.set([0.16, 0.17, 0.2]);
+  lights.sun.dir = [-0.55, -1.0, 0.35];
+  lights.sun.color = [1.05, 0.98, 0.88];
+  lights.sun.shadow = { extent: 18, size: 2048 };
+  const POINTS = [
+    { position: [-4.5, 1.6, -3.5], color: [2.4, 0.9, 0.3], radius: 9 },
+    { position: [4.5, 1.6, 3.5], color: [0.3, 0.9, 2.6], radius: 9 },
+  ];
+  for (const p of POINTS) lights.points.push(p);
+  lights.fog.color = [0.38, 0.42, 0.52];
+  lights.fog.density = 1;
+  lights.fog.near = 14;
+  lights.fog.far = 48;
+  const orbs = POINTS.map((p) => ({
+    t: new Transform({ x: p.position[0]!, y: p.position[1]!, z: p.position[2]! }),
+    p: {
+      tint: [p.color[0]! / 2.6, p.color[1]! / 2.6, p.color[2]! / 2.6, 1],
+      emissive: 2.5,
+      castShadow: false,
+    } as InstanceParams,
+  }));
+
+  // ── The character: skeleton, skinned body, mixer, sword on a hand socket ─
+  const skeleton = createSkeleton();
+  const bodyMesh = mesh(createBodyMesh(skeleton), 'body', true);
+  const swordMesh = mesh(createSwordMesh(), 'sword');
+  const world = new Float32Array(NODE_COUNT * WORLD_NODE_FLOATS);
+  const jointMats = new Float32Array(NODE_COUNT * JOINT_FLOATS);
+  const mixer = new AnimationMixer(skeleton);
+  const idle = mixer.play(createIdleClip(), { layer: 0, weight: 1 });
+  const run = mixer.play(createRunClip(), { layer: 0, weight: 0 });
+  const swingClip = createSwingClip();
+  let swing: ReturnType<typeof mixer.play> | null = null;
+  const body = new Transform({});
+  const bodyP: InstanceParams = { params: [0, 0, 0, 0], castShadow: true, receiveShadow: true };
+  const handSocket = createSocket(skeleton, NODES.handR, { position: [0, -0.07, 0] });
+  const sword = new Transform({});
+  const swordP: InstanceParams = { castShadow: true, receiveShadow: true };
+  const tip = new Float32Array(3);
+  const trail = new Trail(renderer, {
+    space: 'world',
+    maxPoints: 48,
+    width: 0.16,
+    color: [1.0, 0.85, 0.5, 0.9],
+    lifetime: 0.28,
+    minDistance: 0.02,
+    facing: 'camera',
+    blend: 'additive',
+  });
+
+  // ── Movement and camera ─────────────────────────────────────────────────
+  const target = { position: [0, 0, 0] as [number, number, number], yaw: 0 };
+  const vel = { x: 0, z: 0 };
+  const follow = new Follow(camera, {
+    distance: 4.5,
+    minDistance: 1.6,
+    maxDistance: 9,
+    shoulder: [0.45, 0],
+    eyeHeight: 1.45,
+    smoothing: 10,
+    pitch: 0.28,
+  });
+  follow.target = target;
+  follow.setLook(look);
+  follow.update(0);
+  input.setLook(look);
+  surface.canvas.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse' && !look.locked) void look.request();
+  });
+
+  let dustCarry = 0;
+  const DUST_RATE = 60;
+
+  const startSwing = () => {
+    if (swing && !swing.finished) return;
+    swing = mixer.play(swingClip, { layer: 1, loop: false, fadeIn: 0.04 });
+    state.swings++;
+    trail.clear();
+    ui.toasts.show(`Swing ${state.swings}`, { tone: 'info', duration: 900 });
+  };
+
+  hooks.update = (dt) => {
+    state.simTime += dt;
+    if (input.pressed('swing')) startSwing();
+    if (input.pressed('zoomIn')) follow.zoom(-1);
+    if (input.pressed('zoomOut')) follow.zoom(1);
+
+    // Move relative to the camera's yaw; the character turns toward its velocity.
+    const mv = look.move;
+    const fx = Math.sin(follow.yaw);
+    const fz = -Math.cos(follow.yaw);
+    const wantX = (fx * mv.y + -fz * mv.x) * RUN_SPEED;
+    const wantZ = (fz * mv.y + fx * mv.x) * RUN_SPEED;
+    const k = Math.min(1, ACCEL * dt);
+    vel.x += (wantX - vel.x) * k;
+    vel.z += (wantZ - vel.z) * k;
+    const p = target.position;
+    p[0] += vel.x * dt;
+    p[2] += vel.z * dt;
+    const r = Math.hypot(p[0], p[2]);
+    if (r > ARENA_RADIUS) {
+      p[0] *= ARENA_RADIUS / r;
+      p[2] *= ARENA_RADIUS / r;
+    }
+    const speed = Math.hypot(vel.x, vel.z);
+    if (speed > 0.3) {
+      const wantYaw = Math.atan2(vel.x, -vel.z);
+      let d = wantYaw - target.yaw;
+      d = Math.atan2(Math.sin(d), Math.cos(d));
+      target.yaw += d * Math.min(1, TURN_RATE * dt);
+    }
+    follow.update(dt);
+    body.setPosition(p[0], 0, p[2]);
+    body.setAxisAngle(0, 1, 0, target.yaw);
+
+    // Blend idle and run by speed; the run clip keeps pace with the feet.
+    const t = Math.min(1, speed / RUN_SPEED);
+    idle.weight = 1 - t;
+    run.weight = t;
+    run.speed = 0.6 + 0.4 * t;
+    mixer.update(dt);
+    poseToWorld(skeleton, mixer.pose, world);
+    skinMatrices(skeleton, world, jointMats);
+    attachTransform(handSocket, world, body.world, sword);
+    const swinging = swing !== null && !swing.finished;
+    if (swinging) {
+      const m = sword.world;
+      const y = -SWORD_LENGTH;
+      tip[0] = m[1]! * y + m[3]!;
+      tip[1] = m[5]! * y + m[7]!;
+      tip[2] = m[9]! * y + m[11]!;
+      trail.push(tip[0]!, tip[1]!, tip[2]!);
+    }
+    trail.update(dt, camera);
+
+    // Dust kicked up at the feet while running.
+    dustCarry += DUST_RATE * t * dt;
+    const n = Math.floor(dustCarry);
+    if (n > 0) {
+      dustCarry -= n;
+      particles.emit(
+        {
+          x: p[0] - Math.sin(target.yaw) * 0.2,
+          y: 0.05,
+          z: p[2] + Math.cos(target.yaw) * 0.2,
+          shape: { kind: 'sphere', radius: 0.18 },
+          speed: [0.4, 1.4],
+          vz: 0,
+          life: [0.5, 1.1],
+          size: [0.12, 0.3],
+          colorStart: [0.6, 0.55, 0.45, 0.45],
+          colorEnd: [0.6, 0.55, 0.45, 0],
+          gravity: [0, -0.6, 0],
+          drag: 2.5,
+        },
+        n,
+      );
+    }
+
+    state.speed = speed;
+    state.swinging = swinging;
+    state.position[0] = p[0];
+    state.position[1] = p[1];
+    state.position[2] = p[2];
+    state.yaw = target.yaw;
+    state.camera.yaw = follow.yaw;
+    state.camera.pitch = follow.pitch;
+    state.camera.distance = follow.currentDistance;
+  };
+
+  // ── Render: one scene draws the arena ───────────────────────────────────
+  let triangles = 0;
+  const draw = (
+    frame: Frame,
+    m: Mesh,
+    mat: Parameters<Frame['mesh']>[1],
+    t: Transform,
+    p: InstanceParams,
+  ) => {
+    frame.mesh(m, mat, t, p);
+    triangles += m.indexCount / 3;
+  };
+  const scene: Scene<unknown, Frame, Camera> = {
+    render(frame) {
+      triangles = 0;
+      frame.clear(0.38, 0.42, 0.52);
+      frame.lights = lights;
+      palette.set(0, jointMats);
+      palette.flush();
+      draw(frame, groundMesh, groundMat, groundT, groundP);
+      for (const t of pillars) draw(frame, pillarMesh, pillarMat, t, pillarP);
+      for (const o of orbs) draw(frame, orbMesh, orbMat, o.t, o.p);
+      draw(frame, bodyMesh, skinMat, body, bodyP);
+      draw(frame, swordMesh, pillarMat, sword, swordP);
+      trail.draw(frame);
+      frame.drawable(particles);
+    },
+  };
+  ctx.stack.push(scene);
+
+  let fps = 0;
+  hooks.afterRender = (time) => {
+    state.frame++;
+    const dt = time.frameDt;
+    if (dt > 0 && dt < 1) {
+      const inst = 1 / dt;
+      fps = fps === 0 ? inst : fps + (inst - fps) * 0.08;
+    }
+    state.fps = fps;
+    const s = renderer.stats;
+    state.stats = { ...s };
+    state.drawCalls = s.drawCalls;
+    state.shadowDraws = s.shadowDraws;
+    state.triangles = triangles;
+    state.trailPoints = trail.count;
+    state.gpuErrors = gpuDiagnostics.errorCount;
+  };
+
+  ui.toasts.show('WASD / stick: run · mouse / drag: look · click / tap: swing', {
+    tone: 'info',
+    duration: 5000,
+  });
+  ctx.loop.start();
+  state.gpu = 'ok';
+  state.ready = true;
+}
+
+main().catch((err) => {
+  console.error('[arena]', err);
+  state.gpu = `error: ${err instanceof Error ? err.message : String(err)}`;
+  state.ready = true;
+});
