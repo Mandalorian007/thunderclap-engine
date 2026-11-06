@@ -32,6 +32,7 @@ import { DEFAULT_SHADOW_SIZE, ShadowMap } from './shadow';
 import {
   bytesPerTexel,
   createSamplers,
+  defaultTextures,
   type PixelData,
   type SamplerKind,
   Texture,
@@ -255,8 +256,10 @@ export class Renderer implements FrameSink {
    */
   globalsBindGroup: GPUBindGroup;
   readonly quad: Mesh;
-  /** 1×1 white texture (default for unbound texture slots). */
-  readonly white: Texture;
+  /** The device's `defaultTextures(device).white` (1×1 sRGB white, the unbound-slot default). */
+  get white(): Texture {
+    return defaultTextures(this.device).white;
+  }
   /** Built-in sprite material bound to `white` (solid colour quads via tint). */
   readonly defaultSprite: Material;
   readonly stats: RenderStats = {
@@ -443,13 +446,6 @@ export class Renderer implements FrameSink {
     this.instanceBuffer = this.makeInstanceBuffer(cap);
 
     this.quad = new Mesh(device, { label: 'quad', ...quadGeometry() });
-    this.white = new Texture(device, { width: 1, height: 1, label: 'white' });
-    device.queue.writeTexture(
-      { texture: this.white.texture },
-      new Uint8Array([255, 255, 255, 255]),
-      { bytesPerRow: 4 },
-      [1, 1],
-    );
     this.defaultSprite = this.createSpriteMaterial(this.white, 'sprite-default');
 
     this.present = this.createFullscreenPass({
@@ -1078,7 +1074,7 @@ export class Renderer implements FrameSink {
     this.shadowSlots.length = 0;
     this.shadow.destroy();
     this.quad.destroy();
-    this.white.destroy();
+    // `white` belongs to the device's `defaultTextures` registry and outlives the renderer.
   }
 
   // ---------------------------------------------------------------- FrameSink

@@ -20,6 +20,7 @@ import {
 import { INSTANCE_FLOATS, INSTANCE_OFFSET } from './material';
 import { quadGeometry, VERTEX_LAYOUT_3D, VERTEX3D_FLOATS } from './mesh';
 import { Renderer } from './renderer';
+import { defaultTextures } from './texture';
 import { Transform, writeMatrix2d } from './transform';
 
 const WGSL = /* wgsl */ `
@@ -1478,5 +1479,23 @@ describe('shadow pass', () => {
         .filter((x) => (x.label ?? '').startsWith('engine-shadow-globals'))
         .every((x) => x.destroyed),
     ).toBe(true);
+  });
+});
+
+describe('Renderer.white (ws/pbr-lights)', () => {
+  it('is the device registry white and survives destroy()', () => {
+    const { fake, r } = setup();
+    const d = defaultTextures(fake.device);
+    expect(r.white).toBe(d.white);
+    expect(r.white.format).toBe('rgba8unorm-srgb');
+    expect([r.white.width, r.white.height]).toEqual([1, 1]);
+    const write = fake.textureWrites.find((w) => (w.texture as unknown) === d.white.texture);
+    expect([...(write!.data as Uint8Array)]).toEqual([255, 255, 255, 255]);
+    // No second white: the renderer makes none of its own.
+    expect(fake.textures.filter((t) => t.label === 'white')).toEqual([]);
+    r.destroy();
+    expect((d.white.texture as unknown as { destroyed: boolean }).destroyed).toBeFalsy();
+    const r2 = new Renderer(fakeRendererGpu(fake));
+    expect(r2.white).toBe(d.white);
   });
 });

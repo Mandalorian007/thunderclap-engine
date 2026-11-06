@@ -1,3 +1,5 @@
+import { wgslLightLoop } from './wgsl';
+
 /**
  * Physically based shading helpers for custom materials (`WGSL_PBR`). Appended by
  * `createStandardMaterial`; a game's own material appends the same text after the prelude and
@@ -11,11 +13,15 @@
  * it returns about `c` (the specular lobe is scaled by π to match, so a PBR material and a Lambert
  * one agree on brightness under the same `Lights`).
  *
- * `engine_pbr(base, metallic, roughness, N, V, world_pos, ao, emissive)` sums ambient × `ao`
- * (diffuse plus a roughness-aware Fresnel term so metals are not black in the dark), the sun ×
- * `engine_shadow`, the point lights (the `(1 - d/radius)²` falloff of `engine_point_lights`) and
- * `emissive`, then applies `engine_fog`. `N` and `V` are unit world-space vectors; `V` points
- * from the surface to the eye.
+ * `engine_pbr_layers(base, metallic, roughness, N, V, world_pos, ao, emissive, layer_mask)` sums
+ * ambient × `ao` (diffuse plus a roughness-aware Fresnel term so metals are not black in the
+ * dark), every light of the block whose `layers` share a bit with `layer_mask` through
+ * `engine_pbr_accum` (the engine light loop, `wgslLightLoop` with `engine_brdf`: the sun ×
+ * `engine_shadow`, the point lights with the `(1 - d/radius)²` falloff of `engine_point_lights`,
+ * the spot lights with that falloff × `engine_spot_cone`) and `emissive`, then applies
+ * `engine_fog`. `N` and `V` are unit world-space vectors; `V` points from the surface to the eye.
+ * `engine_pbr(base, metallic, roughness, N, V, world_pos, ao, emissive)` is the same over every
+ * layer (`0xffffffffu`); the standard material passes `engine_instance_layers(in.flags)`.
  *
  * `engine_perturb_normal(n, world_pos, uv, map, scale)` applies a tangent-space normal map
  * (`map` is the decoded texel, 0..1; +Y is up in the image, the OpenGL / glTF convention; `scale`
@@ -60,9 +66,15 @@ fn engine_brdf(
   return (diffuse_color + specular) * n_dot_l;
 }
 
-fn engine_pbr(
+${wgslLightLoop(
+  'engine_pbr_accum',
+  'engine_brdf(normal, v, l, diffuse_color, f0, a2, n_dot_v)',
+  ', v: vec3f, diffuse_color: vec3f, f0: vec3f, a2: f32, n_dot_v: f32',
+)}
+
+fn engine_pbr_layers(
   base: vec3f, metallic: f32, roughness: f32, n: vec3f, v: vec3f, world_pos: vec3f,
-  ao: f32, emissive: vec3f,
+  ao: f32, emissive: vec3f, layer_mask: u32,
 ) -> vec3f {
   let r = clamp(roughness, ENGINE_MIN_ROUGHNESS, 1.0);
   let a = r * r;
@@ -75,24 +87,16 @@ fn engine_pbr(
   let fr = max(vec3f(1.0 - r), f0) - f0;
   let ambient_spec = f0 + fr * pow(1.0 - n_dot_v, 5.0);
   var color = lights.ambient * ao * (diffuse_color + ambient_spec);
-  // Sun.
-  let sun_l = -lights.sun_dir;
-  let sun = engine_brdf(n, v, sun_l, diffuse_color, f0, a2, n_dot_v);
-  if (any(sun > vec3f(0.0))) {
-    color += lights.sun_color * sun * engine_shadow(world_pos);
-  }
-  // Point lights, with the falloff of engine_point_lights.
-  for (var i = 0u; i < lights.point_count; i++) {
-    let p = lights.points[i];
-    let to = p.position - world_pos;
-    let dist = length(to);
-    let falloff = saturate(1.0 - dist / max(p.radius, 1e-4));
-    if (falloff <= 0.0) { continue; }
-    let l = to / max(dist, 1e-4);
-    color += p.color * (falloff * falloff) * engine_brdf(n, v, l, diffuse_color, f0, a2, n_dot_v);
-  }
+  color += engine_pbr_accum(world_pos, n, layer_mask, v, diffuse_color, f0, a2, n_dot_v);
   color += emissive;
   return engine_fog(color, world_pos);
+}
+
+fn engine_pbr(
+  base: vec3f, metallic: f32, roughness: f32, n: vec3f, v: vec3f, world_pos: vec3f,
+  ao: f32, emissive: vec3f,
+) -> vec3f {
+  return engine_pbr_layers(base, metallic, roughness, n, v, world_pos, ao, emissive, 0xffffffffu);
 }
 
 fn engine_perturb_normal(n: vec3f, world_pos: vec3f, uv: vec2f, map: vec3f, scale: f32) -> vec3f {
