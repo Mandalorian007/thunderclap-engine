@@ -14,7 +14,7 @@ Work in your own worktree, never in the main checkout (E-018: the PM commits doc
 6. Commit in your worktree. Read the e2e summary first; the land command is a separate step, never chained in the same shell line as the test run (E-020). Then land it: `git -C /Users/matthewfontana/repos/thunderclap-engine merge --ff-only <your HEAD>` (run from anywhere; it moves `main` and the PM's checkout together and refuses anything but a fast-forward). If it refuses because main moved (the PM's docs commits), `git merge main` in your worktree (docs only; keep both sides), rerun `pnpm check` only (a docs-only merge needs no e2e rerun; a code change on main does), commit, and land again. Tell the PM main's new hash. Only then take the next branch.
 7. Remove your worktree (`git worktree remove --force`) and the branch worktrees the PM names. Nothing else.
 
-A failure in a spec on the E-017 list (mesh.spec fog and drag, ui.spec menuNav, skin.spec joints sway) while every other test passes is the spec's, not the merge's: land, and say so in the report.
+A failure in a spec on the E-017 list (mesh.spec fog and drag, ui.spec menuNav, skin.spec joints sway, stream.spec streamed geometry on screen) while every other test passes is the spec's, not the merge's: land, and say so in the report.
 
 ## Report back (under 300 words)
 
