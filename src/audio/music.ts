@@ -2,9 +2,10 @@
  * Music on a beat grid: looping stems started sample-accurately on the next beat or bar from the
  * context clock, grouped in layers, crossfaded by `fadeBeats` and by an intensity level. Sits on
  * the mixer's buses; it owns its own `AudioBufferSourceNode`s so they can start at an offset
- * that keeps every stem in phase with the grid.
+ * that keeps every stem in phase with the grid. Each playing stem is registered with the mixer
+ * through a `Voice` adapter, so `audio.voices('music')`, `stopAll` and `pause` see it.
  */
-import type { AudioEngine, OutputBus } from './audio';
+import { type AudioEngine, type OutputBus, rampParamTo, type Voice, VoiceSends } from './audio';
 
 export interface MusicOptions {
   bpm: number;
@@ -89,6 +90,15 @@ interface Playing {
   playGain: number;
   target: number;
   stopping: boolean;
+  /** The stem as the mixer sees it (`mixer.register`); `unregister` while it is on the books. */
+  voice: StemVoice;
+  unregister: (() => void) | null;
+  sends: VoiceSends | null;
+}
+
+/** A stem's `Voice` adapter; `rate` lets `audio.pause` freeze and restore it. */
+interface StemVoice extends Voice {
+  rate: number;
 }
 
 interface Pending {
@@ -229,7 +239,19 @@ export function createMusic(mixer: AudioEngine, opts: MusicOptions): Music {
     src.loop = true;
     const gainNode = ctx.createGain();
     const playGain = o.gain ?? 1;
-    const p: Playing = { stem, layer, src, gainNode, playGain, target: 0, stopping: false };
+    const p: Playing = {
+      stem,
+      layer,
+      src,
+      gainNode,
+      playGain,
+      target: 0,
+      stopping: false,
+      voice: null as unknown as StemVoice,
+      unregister: null,
+      sends: null,
+    };
+    p.voice = stemVoice(p);
     const target = stem.intensity ? 0 : playGain;
     if (fade > 0) {
       gainNode.gain.setValueAtTime(0, when);
@@ -241,7 +263,11 @@ export function createMusic(mixer: AudioEngine, opts: MusicOptions): Music {
     src.connect(gainNode);
     gainNode.connect(busNode);
     src.onended = () => {
+      p.sends?.dispose();
+      p.sends = null;
       gainNode.disconnect();
+      p.unregister?.();
+      p.unregister = null;
       if (active.get(stem.name) === p) active.delete(stem.name);
     };
     // Keep the loop in phase with the grid: offset by the grid time elapsed, modulo the loop.
@@ -249,13 +275,51 @@ export function createMusic(mixer: AudioEngine, opts: MusicOptions): Music {
     const offset = duration > 0 ? (((when - origin) % duration) + duration) % duration : 0;
     src.start(when, offset);
     active.set(stem.name, p);
+    p.unregister = mixer.register(p.voice, bus);
     if (stem.intensity) applyLayer(layer, fade, when);
+  }
+
+  /** The `Voice` the mixer sees for a stem: stop fades in seconds, gain and rate write its nodes. */
+  function stemVoice(p: Playing): StemVoice {
+    const voice: StemVoice = {
+      rate: 1,
+      stop(fade = 0) {
+        stopOne(p, fade, ctxTime());
+      },
+      setGain(gain, r = 0.05) {
+        p.playGain = gain;
+        const when = ctxTime();
+        if (p.stopping) return;
+        if (p.stem.intensity) applyLayer(p.layer, r, when);
+        else ramp(p, gain, r, when);
+      },
+      setRate(rate, r = 0.05) {
+        voice.rate = rate;
+        rampParamTo(p.src.playbackRate, rate, ctxTime(), r);
+      },
+      setPosition() {},
+      setDirection() {},
+      follow() {},
+      sendTo(input, amount, r = 0.05) {
+        p.sends ??= new VoiceSends();
+        const sends = p.sends;
+        if (!sends.attached) sends.attach(mixer.context!, p.gainNode);
+        sends.set(input, amount, r);
+      },
+      position: new Float64Array(3),
+      get playing() {
+        return !p.stopping;
+      },
+    };
+    return voice;
   }
 
   function stopOne(p: Playing, fade: number, when: number): void {
     if (p.stopping) return;
     p.stopping = true;
     active.delete(p.stem.name);
+    p.unregister?.();
+    p.unregister = null;
     const g = p.gainNode.gain;
     g.cancelScheduledValues(when);
     g.setValueAtTime(g.value, when);
