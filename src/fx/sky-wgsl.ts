@@ -29,7 +29,7 @@ struct SkyParams {
   zenith: vec4f,   // rgb, exposure
   horizon: vec4f,  // rgb, sun angular radius (radians)
   ground: vec4f,   // rgb, sun glow
-  stars: vec4f,    // density, seed, enabled, pad
+  stars: vec4f,    // density, seed, enabled, night floor
 };
 @group(1) @binding(0) var<uniform> sky: SkyParams;
 
@@ -102,7 +102,7 @@ fn sky_stars(d: vec3f, density: f32, seed: f32) -> f32 {
   let sun_color = lights.sun_color;
   let has_sun = dot(sun_color, vec3f(1.0)) > 0.0;
   let day = select(1.0, smoothstep(-0.12, 0.08, to_sun.y), has_sun);
-  col *= mix(0.06, 1.0, day);
+  col *= mix(sky.stars.w, 1.0, day);
 
   // Sun disc and glow.
   let cos_a = dot(d, to_sun);

@@ -88,12 +88,13 @@ describe('Sky', () => {
       sunGlow: 2,
       exposure: 1.5,
       stars: { density: 32, seed: 7 },
+      ambientFloor: 0.1,
     });
     sky.prepare(encoder(fake), DEPTH_FRAME);
     const p = params(sky);
     expect(p.length).toBe(SKY_PARAMS_FLOATS);
     expect(Array.from(p).map((x) => Math.round(x * 1000) / 1000)).toEqual([
-      0.1, 0.2, 0.3, 1.5, 0.4, 0.5, 0.6, 0.05, 0.7, 0.8, 0.9, 2, 32, 7, 1, 0,
+      0.1, 0.2, 0.3, 1.5, 0.4, 0.5, 0.6, 0.05, 0.7, 0.8, 0.9, 2, 32, 7, 1, 0.1,
     ]);
     const write = fake.writes.at(-1)!;
     expect(write.buffer.label).toBe('sky-params');
@@ -105,7 +106,10 @@ describe('Sky', () => {
     sky.prepare(encoder(fake), DEPTH_FRAME);
     expect(p[2]).toBeCloseTo(0.9);
     expect(p[7]).toBeCloseTo(0.1);
-    expect(Array.from(p.subarray(12))).toEqual([0, 0, 0, 0]);
+    expect(Array.from(p.subarray(12, 15))).toEqual([0, 0, 0]);
+    sky.ambientFloor = 0.2;
+    sky.prepare(encoder(fake), DEPTH_FRAME);
+    expect(p[15]).toBeCloseTo(0.2);
   });
 
   it('defaults: a blue zenith, no stars; `stars: true` takes the default field', () => {
@@ -115,6 +119,8 @@ describe('Sky', () => {
     expect(sky.sunSize).toBe(0.03);
     expect(sky.sunGlow).toBe(1);
     expect(sky.exposure).toBe(1);
+    expect(sky.ambientFloor).toBe(0.06);
+    sky.prepare(encoder(makeSky().fake), DEPTH_FRAME);
     const { sky: starry } = makeSky({ stars: true });
     expect(starry.stars).toEqual({ density: 24, seed: 0 });
     const { sky: seeded } = makeSky({ stars: { seed: 3 } });

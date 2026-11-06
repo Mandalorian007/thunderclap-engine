@@ -76,15 +76,17 @@ export class Texture implements TextureLike {
 /**
  * Sampler presets. The `-mip` kinds blend between mip levels (`mipmapFilter: 'linear'`):
  * `'linear-mip-repeat'` for tiling textures seen at a distance, `'nearest-mip-clamp'` for
- * pixel-art faces (crisp up close, no shimmer far away). Without mips they act like their
- * plain counterparts.
+ * pixel-art faces (crisp up close, no shimmer far away), `'nearest-mip-repeat'` for pixel-art
+ * faces tiled across a quad (block faces whose uv spans whole cells). Without mips they act
+ * like their plain counterparts.
  */
 export type SamplerKind =
   | 'linear-clamp'
   | 'linear-repeat'
   | 'nearest-clamp'
   | 'linear-mip-repeat'
-  | 'nearest-mip-clamp';
+  | 'nearest-mip-clamp'
+  | 'nearest-mip-repeat';
 
 export function createSamplers(device: GPUDevice): Record<SamplerKind, GPUSampler> {
   return {
@@ -122,6 +124,14 @@ export function createSamplers(device: GPUDevice): Record<SamplerKind, GPUSample
       mipmapFilter: 'linear',
       addressModeU: 'clamp-to-edge',
       addressModeV: 'clamp-to-edge',
+    }),
+    'nearest-mip-repeat': device.createSampler({
+      label: 'nearest-mip-repeat',
+      magFilter: 'nearest',
+      minFilter: 'nearest',
+      mipmapFilter: 'linear',
+      addressModeU: 'repeat',
+      addressModeV: 'repeat',
     }),
   };
 }

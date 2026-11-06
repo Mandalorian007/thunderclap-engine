@@ -254,6 +254,13 @@ describe('samplers', () => {
       mipmapFilter: 'linear',
       addressModeU: 'clamp-to-edge',
     });
+    expect(calls.find((c) => c.label === 'nearest-mip-repeat')).toMatchObject({
+      magFilter: 'nearest',
+      minFilter: 'nearest',
+      mipmapFilter: 'linear',
+      addressModeU: 'repeat',
+      addressModeV: 'repeat',
+    });
   });
 });
 
