@@ -73,7 +73,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Shared light loop | ws/pbr-lights | PBR sees spots, masks, layers via one generated light loop; default textures unified | spot-lights, texture-registry | ✅ green at `bb6f799` (784 tests; e2e 686/92/0; snap 0 px; pbr probes identical); queued chain 1 after nav |
 | 5 | Batch submit | ws/batch-submit | `frame.meshes(batch)` + retained `InstanceList`; 50k instances in a few ms CPU; BENCH numbers | bench | ✅ green at `246e1be` (786 tests; e2e 672/106/0; snap 0; BENCH 10k mesh 4.1 ms / batch 0.7 / list 0.2); queued chain 3 after bench (supersedes bench files) |
 | 5 | Debug draw | ws/debug-draw | `createDebugDraw`: lines, wire shapes, axes, paths in one draw (fx) | — | ✅ green at `8d30969` (827 tests; e2e 707/92/3 mesh fog, pre-flake-input base; snap 0 px); queued chain 4 after retarget |
-| 5 | Billboards | ws/billboards | name plates, health bars, damage numbers: camera-facing quads + canvas text atlas (fx) | — | 🔧 in progress |
+| 5 | Billboards | ws/billboards | name plates, health bars, damage numbers: camera-facing quads + canvas text atlas (fx) | — | ✅ green at `54984ea` (837 tests; e2e 709/92/1 mesh fog, pre-flake-input base; billboards 24/24); queued chain 4 after debug-draw |
 | 5 | Perf overlay | ws/perf-overlay | `createPerfMonitor`/`createPerfOverlay`: frame/GPU/draw stats + sparkline; `?perf` on harness pages | — | ✅ green at `032ae68` (830 tests; e2e 694/92/8, all pre-flake-input flakes, perf.spec 16/16); queued chain 5 after morph |
 | 5 | 2D ergonomics: `input.getGamepads`, PanelStack arrows, tile layer + flipbook | ws/ergo-2d | 🔧 engineer running (offset 280) |
 | 5 | Input recording and replay (`createInputRecorder`, `createInputPlayback`, `createGame({ input: { replay } })`) | ws/input-replay | 🔧 engineer running (offset 290) |
@@ -132,6 +132,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - ws/batch-submit wish: fake GPU records `writeBuffer` data so tests need no queue monkey-patch. → ws/comment-sweep.
 - ws/demo-range wishes: ui reticle widget; hinge/tween helper (tween lands soon); geom cube helper (geom on main). → ws/ergo-3d.
 - ws/debug-draw wish: `Camera` exposes an inverse view-projection publicly (harness could then demo `frustum`). → ws/ergo-3d.
+- ws/billboards wish: `Camera.viewZ(x, y, z)` helper (view-space depth of a point). → ws/ergo-3d.
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
