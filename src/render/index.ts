@@ -19,13 +19,17 @@ export type { FullscreenEncodeOptions, FullscreenPassDesc } from './fullscreen';
 export { FullscreenPass } from './fullscreen';
 export type { GpuPassTimes, GpuTimerResult } from './gpu-timer';
 export { GpuTimer, supportsTimestamps } from './gpu-timer';
-export type { DirectionalLight, PointLight } from './lights';
+export type { DirectionalLight, Fog, PointLight, ShadowUniforms, SunShadow } from './lights';
 export {
+  DEFAULT_SHADOW_BIAS,
+  FOG_OFFSET_FLOATS,
   LIGHTS_BLOCK_FLOATS,
   Lights,
   MAX_POINT_LIGHTS,
   POINT_LIGHT_FLOATS,
   POINT_LIGHTS_OFFSET_FLOATS,
+  SHADOW_PARAMS_OFFSET_FLOATS,
+  SUN_VIEW_PROJ_OFFSET_FLOATS,
 } from './lights';
 export type { DepthMode, MaterialDesc } from './material';
 export {
@@ -66,6 +70,7 @@ export type {
 } from './renderer';
 export { MIN_RESOLUTION_SCALE, Renderer, sceneSize } from './renderer';
 export { SCENE_FORMAT, SceneTarget, type SceneTargetDesc } from './scene-target';
+export { DEFAULT_SHADOW_SIZE, SHADOW_FORMAT, ShadowMap } from './shadow';
 export { type SnapshotOptions, SnapshotRenderer } from './snapshot';
 export type {
   LoadTextureArrayOptions,

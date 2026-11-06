@@ -12,6 +12,10 @@
  *   The light comes from the engine's lighting block (`frame.lights`: ambient, a sun and one
  *   warm point light circling the blocks); the fragment shader written here reads it through
  *   `engine_lambert(normal, world_pos)` from the material prelude.
+ * - The sun casts shadows (`lights.sun.shadow`: one shadow map the renderer draws before the
+ *   scene; `engine_lambert` reads it) and the ground fades into a haze with distance
+ *   (`lights.fog`, applied by `engine_fog`). e2e/mesh.spec.ts samples a shadowed patch of
+ *   ground against a lit one and a far patch against a near one.
  */
 import { GameLoop } from '@thunderclap/engine/core';
 import { type GamepadLike, Gestures, Input } from '@thunderclap/engine/input';
@@ -40,11 +44,20 @@ const state: HarnessMeshState = {
   logical: LOGICAL,
   camera: { yaw: 0, pitch: 0, distance: 0, eye: [0, 0, 0] },
   depth: { test: false, write: false },
-  probes: { near: { x: 0, y: 0 }, far: { x: 0, y: 0 }, ground: { x: 0, y: 0 } },
+  probes: {
+    near: { x: 0, y: 0 },
+    far: { x: 0, y: 0 },
+    ground: { x: 0, y: 0 },
+    shadow: { x: 0, y: 0 },
+    shadowLit: { x: 0, y: 0 },
+    fog: { x: 0, y: 0 },
+  },
   stats: { drawCalls: 0, instances: 0 },
   gpuErrors: 0,
   zoom: { in: 0, out: 0 },
   lights: { sun: false, points: 0, lamp: [0, 0, 0] },
+  shadow: { enabled: false, size: 0, extent: 0 },
+  fog: { enabled: false, color: [0, 0, 0], near: 0, far: 0 },
 };
 
 /** A fake gamepad the spec installs; `null` reads the real ones. */
@@ -143,8 +156,9 @@ function groundGeometry(): { vertices: Float32Array; indices: Uint16Array } {
 // ------------------------------------------------------------------ the material
 
 /**
- * Albedo × the engine lighting block (`engine_lambert`: ambient + sun + point lights) plus a
- * faint sky term from above; `params.x` > 0 draws a checker from the world position.
+ * Albedo × the engine lighting block (`engine_lambert`: ambient + shadowed sun + point lights)
+ * plus a faint sky term from above, then `engine_fog` by distance from the eye; `params.x` > 0
+ * draws a checker from the world position.
  */
 const LIT_WGSL = /* wgsl */ `
 @fragment fn fs_main(in: VSOut) -> FragOut {
@@ -157,7 +171,8 @@ const LIT_WGSL = /* wgsl */ `
   // A faint sky term from above keeps the shadowed faces readable.
   let sky = 0.5 + 0.5 * n.y;
   var o: FragOut;
-  o.color = vec4f(albedo * (engine_lambert(n, in.worldPos) + 0.12 * sky), 1.0);
+  let lit = albedo * (engine_lambert(n, in.worldPos) + 0.12 * sky);
+  o.color = vec4f(engine_fog(lit, in.worldPos), 1.0);
   o.emissive = vec4f(0.0);
   return o;
 }`;
@@ -171,6 +186,13 @@ const LAMP_RADIUS = 5;
 const LAMP_ORBIT = 3.2;
 const LAMP_HEIGHT = 1.6;
 const LAMP_RAD_PER_S = 0.9;
+/** The sun's shadow map: a 2048² box 20 units either side of the eye. */
+const SHADOW_EXTENT = 20;
+const SHADOW_SIZE = 2048;
+/** A pale haze the ground fades into between 6 and 24 units from the eye. */
+const FOG_COLOR = [0.6, 0.65, 0.75] as const;
+const FOG_NEAR = 6;
+const FOG_FAR = 24;
 
 // ------------------------------------------------------------------ the scene
 
@@ -270,6 +292,11 @@ async function main(): Promise<void> {
   const lampPos = new Float32Array(3);
   const lamp: PointLight = { position: lampPos, color: LAMP_COLOR, radius: LAMP_RADIUS };
   lights.points.push(lamp);
+  lights.sun.shadow = { extent: SHADOW_EXTENT, size: SHADOW_SIZE };
+  lights.fog.color = FOG_COLOR;
+  lights.fog.density = 1;
+  lights.fog.near = FOG_NEAR;
+  lights.fog.far = FOG_FAR;
 
   const gestures = new Gestures();
   const input = new Input<Action>(bindings, {
@@ -333,6 +360,22 @@ async function main(): Promise<void> {
       probe(camera, 0, 0.75, 2, state.probes.near);
       probe(camera, 0, 2.5, 0, state.probes.far);
       probe(camera, 1.2, 0, 3.6, state.probes.ground);
+      // The near block (x -0.5..0.5, y 0..1, z 1..2) shadows the ground towards -x, -z; both
+      // shadow probes are on the checker tile floor(x) + floor(z) = -1.
+      probe(camera, -0.75, 0, 0.9, state.probes.shadow);
+      probe(camera, -0.75, 0, 2.6, state.probes.shadowLit);
+      probe(camera, -7, 0, -7, state.probes.fog);
+      const sh = frame.lights.sun.shadow;
+      state.shadow.enabled = sh !== null;
+      state.shadow.size = sh?.size ?? 0;
+      state.shadow.extent = sh?.extent ?? 0;
+      const fog = frame.lights.fog;
+      state.fog.enabled = fog.density > 0;
+      state.fog.color[0] = fog.color[0]!;
+      state.fog.color[1] = fog.color[1]!;
+      state.fog.color[2] = fog.color[2]!;
+      state.fog.near = fog.near;
+      state.fog.far = fog.far;
     },
   });
   res.onDeviceLost(() => loop.stop());

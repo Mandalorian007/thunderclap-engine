@@ -5,6 +5,8 @@
  *   the engine's lighting block (a sun and a point light that moves between frames);
  * - occlusion: a near block stays in front of a taller block drawn after it and behind it
  *   (pixels sampled from a screenshot, no golden image), and the ground renders;
+ * - shadows and fog: ground in the near block's sun shadow is darker than the same tile in the
+ *   sun, and ground far from the eye is closer to the fog colour than ground near it;
  * - orbit: a pointer drag (mouse, or touch through CDP) and the right stick move the camera;
  *   the triggers zoom.
  */
@@ -166,6 +168,34 @@ test('boots a perspective scene with depth, and a near block occludes a far one'
   // The lit ground is neither the sky (dark blue) nor a block.
   expect(ground![1], `ground ${ground}`).toBeGreaterThan(ground![2]);
   expect(ground![0] + ground![1] + ground![2]).toBeGreaterThan(120);
+  expect(errors).toEqual([]);
+});
+
+test('the sun casts a shadow and distance fades the ground into the fog', async ({
+  page,
+  wrapper,
+}) => {
+  await open(page, wrapper);
+  const s = await read();
+  expect(s.shadow).toEqual({ enabled: true, size: 2048, extent: 20 });
+  expect(s.fog.enabled).toBe(true);
+  expect(s.stats.instances).toBe(5);
+  const [shadow, lit, fog, ground] = await sample(page, [
+    await toPage(s.probes.shadow),
+    await toPage(s.probes.shadowLit),
+    await toPage(s.probes.fog),
+    await toPage(s.probes.ground),
+  ]);
+  const sum = (c: Rgb) => c[0] + c[1] + c[2];
+  // Same checker tile, same albedo: the patch under the near block's shadow lost the sun.
+  expect(sum(shadow!), `shadow ${shadow} lit ${lit}`).toBeLessThan(sum(lit!) - 60);
+  // The far patch has moved towards the fog colour; the near one (inside `near`) has not.
+  const fogRgb = s.fog.color.map((c) => c * 255) as Rgb;
+  const dist = (c: Rgb) => Math.hypot(c[0] - fogRgb[0], c[1] - fogRgb[1], c[2] - fogRgb[2]);
+  expect(dist(fog!), `fog ${fog} ground ${ground} target ${fogRgb}`).toBeLessThan(
+    dist(ground!) * 0.7,
+  );
+  expect(s.gpuErrors).toBe(0);
   expect(errors).toEqual([]);
 });
 

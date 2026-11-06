@@ -1,9 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import { Camera } from './camera';
-import { createFakeDevice, type FakeDevice, fakeRendererGpu, type PassCommand } from './fake-gpu';
-import { LIGHTS_BLOCK_FLOATS, Lights } from './lights';
-import { INSTANCE_FLOATS } from './material';
-import { quadGeometry } from './mesh';
+import {
+  createFakeDevice,
+  type FakeBindGroup,
+  type FakeDevice,
+  type FakeView,
+  fakeRendererGpu,
+  type PassCommand,
+} from './fake-gpu';
+import type { Frame } from './frame';
+import {
+  DEFAULT_SHADOW_BIAS,
+  LIGHTS_BLOCK_FLOATS,
+  Lights,
+  SHADOW_PARAMS_OFFSET_FLOATS,
+  SUN_VIEW_PROJ_OFFSET_FLOATS,
+} from './lights';
+import { INSTANCE_FLOATS, INSTANCE_OFFSET } from './material';
+import { quadGeometry, VERTEX_LAYOUT_3D, VERTEX3D_FLOATS } from './mesh';
 import { Renderer } from './renderer';
 import { Transform, writeMatrix2d } from './transform';
 
@@ -282,14 +296,25 @@ describe('camera block', () => {
     return seen;
   }
 
-  it('binds globals at 0, the camera block at 1 and the lights at 2 of group 0', () => {
+  it('binds globals at 0, the camera block at 1, the lights at 2, the shadow map and sampler at 3 and 4', () => {
     const { fake } = setup();
     const g = fake.bindGroups.find((b) => b.label === 'engine-globals-group')!;
-    expect(g.layout.entries.map((e) => e.binding)).toEqual([0, 1, 2]);
+    expect(g.layout.entries.map((e) => e.binding)).toEqual([0, 1, 2, 3, 4]);
+    expect(g.layout.entries[3]).toMatchObject({ texture: { sampleType: 'depth' } });
+    expect(g.layout.entries[4]).toMatchObject({ sampler: { type: 'comparison' } });
     expect(g.entries.map((e) => e.resource)).toMatchObject([
       { size: 32 },
       { offset: 256, size: 256 },
       { offset: 512, size: LIGHTS_BLOCK_FLOATS * 4 },
+      {
+        texture: {
+          label: 'engine-shadow-placeholder',
+          width: 1,
+          height: 1,
+          format: 'depth32float',
+        },
+      },
+      { label: 'engine-shadow-sampler' },
     ]);
     const buf = fake.buffers.find((b) => b.label === 'engine-globals')!;
     expect(buf.size).toBe(512 + LIGHTS_BLOCK_FLOATS * 4);
@@ -1023,5 +1048,273 @@ describe('render call', () => {
     const f = r.beginFrame(0, 0);
     r.endFrame();
     expect(() => r.render(f, r.camera)).toThrow(/outside/);
+  });
+});
+
+describe('shadow pass', () => {
+  /** Floats of every write to view 0's engine uniform buffer. */
+  function captureGlobals(fake: FakeDevice): Float32Array[] {
+    const seen: Float32Array[] = [];
+    const q = fake.device.queue as unknown as { writeBuffer: (...a: unknown[]) => void };
+    const orig = q.writeBuffer.bind(q);
+    q.writeBuffer = (buffer: unknown, offset: unknown, data: unknown, ...rest: unknown[]) => {
+      if ((buffer as { label?: string }).label === 'engine-globals') {
+        seen.push(new Float32Array(data as Float32Array));
+      }
+      orig(buffer, offset, data, ...rest);
+    };
+    return seen;
+  }
+
+  const CUBE = new Float32Array(VERTEX3D_FLOATS * 3);
+  const OPAQUE = { label: 'o', wgsl: WGSL, uniformBytes: 16, blend: 'opaque' as const };
+
+  function shadowPasses(fake: FakeDevice) {
+    return fake.passes.filter((p) => p.label === 'shadow');
+  }
+
+  function sunShadowOn(f: Frame, extent = 20) {
+    f.lights.sun.dir = [-0.4, -1, -0.3];
+    f.lights.sun.color = [1, 1, 1];
+    f.lights.sun.shadow = { extent };
+  }
+
+  it('is not encoded for a frame without sun.shadow, and the lights block says disabled', () => {
+    const { fake, r } = setup();
+    const m = r.createMaterial(OPAQUE);
+    const cube = r.createMesh({ vertices: CUBE, layout: VERTEX_LAYOUT_3D });
+    r.camera = Camera.perspective(1, 1, 0.1, 100);
+    const f = r.beginFrame(0, 0);
+    f.mesh(cube, m, new Transform());
+    r.endFrame();
+    expect(shadowPasses(fake)).toEqual([]);
+    expect(fake.textures.filter((t) => t.format === 'depth32float').map((t) => t.width)).toEqual([
+      1,
+    ]);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('encodes one depth-only pass before the scene pass over opaque 3D draws, skipping 2D sprites and blended meshes', () => {
+    const { fake, r } = setup();
+    const m = r.createMaterial(OPAQUE);
+    const glass = r.createMaterial({ ...OPAQUE, label: 'g', blend: 'alpha' });
+    const cube = r.createMesh({ vertices: CUBE, layout: VERTEX_LAYOUT_3D });
+    r.camera = Camera.perspective(1, 1, 0.1, 100).lookAt([0, 5, 10], [0, 0, 0]);
+    const seen = captureGlobals(fake);
+    const f = r.beginFrame(0, 0);
+    sunShadowOn(f);
+    f.sprite(null, { x: 0, y: 0 });
+    f.mesh(cube, m, new Transform({ x: 1 }));
+    f.mesh(cube, m, new Transform({ x: 2 }));
+    f.mesh(cube, glass, new Transform({ x: 3 }));
+    r.endFrame();
+    const labels = fake.passes.map((p) => p.label);
+    expect(labels.indexOf('shadow')).toBeGreaterThanOrEqual(0);
+    expect(labels.indexOf('shadow')).toBeLessThan(labels.indexOf('scene'));
+    const sp = shadowPasses(fake)[0]!;
+    const desc = sp.desc as GPURenderPassDescriptor;
+    expect(desc.colorAttachments).toEqual([]);
+    expect(desc.depthStencilAttachment).toMatchObject({
+      depthClearValue: 1,
+      depthLoadOp: 'clear',
+      depthStoreOp: 'store',
+    });
+    const map = fake.textures.find((t) => t.label === 'engine-shadow-map')!;
+    expect([map.width, map.height, map.format]).toEqual([2048, 2048, 'depth32float']);
+    // Only the two opaque cubes (one instanced call); the sprite and the blended mesh stay out.
+    // Depth sort puts the opaque cubes first; the sprite (alpha) follows them.
+    expect(draws(sp.commands).map((d) => [d.firstInstance, d.instances])).toEqual([[0, 2]]);
+    const pipe = sp.commands.find((c) => c.op === 'setPipeline') as {
+      pipeline: { label: string; desc: GPURenderPipelineDescriptor };
+    };
+    expect(pipe.pipeline.label).toBe('engine-shadow:3d');
+    expect(pipe.pipeline.desc.fragment).toBeUndefined();
+    expect(pipe.pipeline.desc.depthStencil).toMatchObject({
+      format: 'depth32float',
+      depthWriteEnabled: true,
+    });
+    // The shadow pass binds the placeholder (the map is its attachment); the scene pass binds the map.
+    const bind = sp.commands.find((c) => c.op === 'setBindGroup') as { group: FakeBindGroup };
+    expect(bind.group.label).toBe('engine-shadow-globals-group-0');
+    expect((bind.group.entries[3]!.resource as unknown as FakeView).texture.label).toBe(
+      'engine-shadow-placeholder',
+    );
+    const sceneBind = sceneCommands(fake).find((c) => c.op === 'setBindGroup') as {
+      group: FakeBindGroup;
+    };
+    expect((sceneBind.group.entries[3]!.resource as unknown as FakeView).texture).toBe(map);
+    expect(r.globalsBindGroup).toBe(sceneBind.group);
+    // The view's lights block carries the sun matrix, enabled 1 and the map's texel size.
+    const l = seen.at(-1)!.subarray(128, 128 + LIGHTS_BLOCK_FLOATS);
+    expect(l[SHADOW_PARAMS_OFFSET_FLOATS + 2]).toBe(1);
+    expect(l[SHADOW_PARAMS_OFFSET_FLOATS + 1]).toBe(Math.fround(1 / 2048));
+    expect(l[SHADOW_PARAMS_OFFSET_FLOATS]).toBe(Math.fround(DEFAULT_SHADOW_BIAS));
+    expect(
+      l
+        .subarray(SUN_VIEW_PROJ_OFFSET_FLOATS, SUN_VIEW_PROJ_OFFSET_FLOATS + 16)
+        .some((v) => v !== 0),
+    ).toBe(true);
+    // Scene stats count scene draws only.
+    expect(r.stats.instances).toBe(4);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('castShadow overrides the layout default both ways; a frame with no casters renders no pass', () => {
+    const { fake, r } = setup();
+    const m = r.createMaterial(OPAQUE);
+    const cube = r.createMesh({ vertices: CUBE, layout: VERTEX_LAYOUT_3D });
+    r.camera = Camera.perspective(1, 1, 0.1, 100);
+    r.camera.cull = false; // the cube sits at the camera; keep it out of the frustum test
+    const seen = captureGlobals(fake);
+    let f = r.beginFrame(0, 0);
+    sunShadowOn(f);
+    f.mesh(cube, m, new Transform(), { castShadow: false });
+    f.sprite(m, { x: 0, y: 0, castShadow: true });
+    r.endFrame();
+    const sp = shadowPasses(fake)[0]!;
+    expect(draws(sp.commands).map((d) => [d.firstInstance, d.instances])).toEqual([[1, 1]]);
+    expect(
+      (sp.commands.find((c) => c.op === 'setPipeline') as { pipeline: { label: string } }).pipeline
+        .label,
+    ).toBe('engine-shadow:2d');
+
+    f = r.beginFrame(1, 0);
+    sunShadowOn(f);
+    f.mesh(cube, m, new Transform(), { castShadow: false });
+    r.endFrame();
+    expect(shadowPasses(fake).length).toBe(1);
+    expect(seen.at(-1)![128 + SHADOW_PARAMS_OFFSET_FLOATS + 2]).toBe(0);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('receiveShadow: false sets instance flag bit 0; the default leaves it 0', () => {
+    const { fake, r } = setup();
+    const cap = captureInstances(fake);
+    const f = r.beginFrame(0, 0);
+    f.sprite(null, { x: 0, y: 0 });
+    f.sprite(null, { x: 1, y: 0, receiveShadow: false });
+    f.sprite(null, { x: 2, y: 0, receiveShadow: true });
+    r.endFrame();
+    expect(column(cap.last(), INSTANCE_OFFSET.flags)).toEqual([0, 1, 0]);
+  });
+
+  it('a 2D frame with sun.shadow set but only sprites is untouched: no pass, no map', () => {
+    const { fake, r } = setup();
+    const f = r.beginFrame(0, 0);
+    sunShadowOn(f);
+    f.sprite(null, { x: 0, y: 0 });
+    r.endFrame();
+    expect(shadowPasses(fake)).toEqual([]);
+    expect(fake.textures.some((t) => t.label === 'engine-shadow-map')).toBe(false);
+  });
+
+  it('places the sun camera as an ortho box of half-width extent centred on the camera', () => {
+    const { fake, r } = setup();
+    const m = r.createMaterial(OPAQUE);
+    const cube = r.createMesh({ vertices: CUBE, layout: VERTEX_LAYOUT_3D });
+    r.camera = Camera.perspective(1, 1, 0.1, 100).lookAt([3, 4, 5], [0, 0, 0]);
+    const seen = captureGlobals(fake);
+    const f = r.beginFrame(0, 0);
+    f.lights.sun.dir = [0, -1, 0];
+    f.lights.sun.shadow = { extent: 10, size: 1024, bias: 0.01 };
+    f.mesh(cube, m, new Transform());
+    r.endFrame();
+    const l = seen.at(-1)!.subarray(128, 128 + LIGHTS_BLOCK_FLOATS);
+    const vp = l.subarray(SUN_VIEW_PROJ_OFFSET_FLOATS, SUN_VIEW_PROJ_OFFSET_FLOATS + 16);
+    const project = (p: number[]) => {
+      const x = vp[0]! * p[0]! + vp[4]! * p[1]! + vp[8]! * p[2]! + vp[12]!;
+      const y = vp[1]! * p[0]! + vp[5]! * p[1]! + vp[9]! * p[2]! + vp[13]!;
+      const z = vp[2]! * p[0]! + vp[6]! * p[1]! + vp[10]! * p[2]! + vp[14]!;
+      return [x, y, z];
+    };
+    // The camera position maps to the centre of the box at mid depth.
+    const centre = project([3, 4, 5]);
+    expect(centre[0]).toBeCloseTo(0, 5);
+    expect(centre[1]).toBeCloseTo(0, 5);
+    expect(centre[2]).toBeCloseTo(0.5, 5);
+    // `extent` world units sideways reach the clip edge; the light's far end (down) maps to 1.
+    const edge = project([13, 4, 5]);
+    expect(Math.hypot(edge[0]!, edge[1]!)).toBeCloseTo(1, 5);
+    expect(project([3, -6, 5])[2]).toBeCloseTo(1, 5);
+    expect(project([3, 14, 5])[2]).toBeCloseTo(0, 5);
+    expect([...l.subarray(SHADOW_PARAMS_OFFSET_FLOATS, SHADOW_PARAMS_OFFSET_FLOATS + 3)]).toEqual(
+      [0.01, 1 / 1024, 1].map(Math.fround),
+    );
+    const map = fake.textures.find((t) => t.label === 'engine-shadow-map')!;
+    expect(map.width).toBe(1024);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('allocates nothing after the first shadowed frame; a size change replaces the map after submit', () => {
+    const { fake, r } = setup();
+    const m = r.createMaterial(OPAQUE);
+    const cube = r.createMesh({ vertices: CUBE, layout: VERTEX_LAYOUT_3D });
+    r.camera = Camera.perspective(1, 1, 0.1, 100);
+    r.camera.cull = false; // the cube sits at the camera; keep it out of the frustum test
+    const frame = (size: 1024 | 2048) => {
+      const f = r.beginFrame(0, 0);
+      sunShadowOn(f);
+      f.lights.sun.shadow!.size = size;
+      f.mesh(cube, m, new Transform());
+      r.endFrame();
+    };
+    frame(2048);
+    const counts = () => [fake.buffers.length, fake.textures.length, fake.bindGroups.length];
+    const before = counts();
+    for (let i = 0; i < 5; i++) frame(2048);
+    expect(counts()).toEqual(before);
+    frame(1024);
+    const maps = fake.textures.filter((t) => t.label === 'engine-shadow-map');
+    expect(maps.map((t) => [t.width, t.destroyed])).toEqual([
+      [2048, true],
+      [1024, false],
+    ]);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('two shadowed views in one frame get their own shadow uniforms and passes', () => {
+    const { fake, r } = setup();
+    const m = r.createMaterial(OPAQUE);
+    const cube = r.createMesh({ vertices: CUBE, layout: VERTEX_LAYOUT_3D });
+    const a = Camera.perspective(1, 1, 0.1, 100);
+    const b = Camera.perspective(1, 1, 0.1, 100);
+    b.screen.width = 0.5;
+    a.cull = b.cull = false; // the cube sits at the cameras; keep it out of the frustum test
+    const f = r.beginFrame(0, 0);
+    sunShadowOn(f);
+    f.mesh(cube, m, new Transform());
+    r.render(f, a);
+    r.render(f, b);
+    r.endFrame();
+    expect(fake.passes.map((p) => p.label).filter((l) => l === 'shadow' || l === 'scene')).toEqual([
+      'shadow',
+      'scene',
+      'shadow',
+      'scene',
+    ]);
+    expect(
+      fake.buffers.filter((x) => (x.label ?? '').startsWith('engine-shadow-globals')).length,
+    ).toBe(2);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('destroy releases the map, the placeholder and the shadow uniform buffers', () => {
+    const { fake, r } = setup();
+    const m = r.createMaterial(OPAQUE);
+    const cube = r.createMesh({ vertices: CUBE, layout: VERTEX_LAYOUT_3D });
+    r.camera = Camera.perspective(1, 1, 0.1, 100);
+    const f = r.beginFrame(0, 0);
+    sunShadowOn(f);
+    f.mesh(cube, m, new Transform());
+    r.endFrame();
+    r.destroy();
+    expect(fake.textures.filter((t) => t.format === 'depth32float').every((t) => t.destroyed)).toBe(
+      true,
+    );
+    expect(
+      fake.buffers
+        .filter((x) => (x.label ?? '').startsWith('engine-shadow-globals'))
+        .every((x) => x.destroyed),
+    ).toBe(true);
   });
 });

@@ -10,7 +10,7 @@ import {
 } from './frame';
 import { FullscreenPass, type FullscreenPassDesc } from './fullscreen';
 import { type GpuPassTimes, GpuTimer, supportsTimestamps } from './gpu-timer';
-import { LIGHTS_BLOCK_FLOATS } from './lights';
+import { LIGHTS_BLOCK_FLOATS, type ShadowUniforms } from './lights';
 import {
   DEPTH_FORMAT,
   type DepthMode,
@@ -20,9 +20,10 @@ import {
   type MaterialDesc,
   SPRITE_WGSL,
 } from './material';
-import { Mesh, type MeshBounds, type MeshDesc, quadGeometry } from './mesh';
+import { Mesh, type MeshBounds, type MeshDesc, quadGeometry, VERTEX_LAYOUT_2D } from './mesh';
 import { PingPong } from './ping-pong';
 import { SCENE_FORMAT, SceneTarget, type SceneTargetDesc } from './scene-target';
+import { DEFAULT_SHADOW_SIZE, ShadowMap } from './shadow';
 import {
   bytesPerTexel,
   createSamplers,
@@ -140,6 +141,8 @@ interface DrawCmd {
   count: number;
   /** Dynamic uniform offset for per-draw materials, else -1. */
   offset: number;
+  /** The instances cast the sun's shadow (see `DrawParams.castShadow`). */
+  castShadow: boolean;
 }
 
 /** Globals block (binding 0) floats: logicalSize, targetSize, time, dt, pad. */
@@ -177,6 +180,8 @@ interface DrawRec {
   by: number;
   bz: number;
   br: number;
+  /** Drawn into the sun's shadow map (`DrawParams.castShadow`; default: not a 2D-layout mesh). */
+  castShadow: boolean;
 }
 
 /**
@@ -213,8 +218,11 @@ export class Renderer implements FrameSink {
   camera: Camera;
   readonly samplers: Record<SamplerKind, GPUSampler>;
   readonly globalsLayout: GPUBindGroupLayout;
-  /** The engine uniforms of the frame's first view (`@group(0)`: globals and camera block). */
-  readonly globalsBindGroup: GPUBindGroup;
+  /**
+   * The engine uniforms of the frame's first view (`@group(0)`: globals, camera and lights
+   * blocks, the sun's shadow map and its sampler). Replaced when the shadow map is (re)created.
+   */
+  globalsBindGroup: GPUBindGroup;
   readonly quad: Mesh;
   /** 1×1 white texture (default for unbound texture slots). */
   readonly white: Texture;
@@ -252,6 +260,12 @@ export class Renderer implements FrameSink {
 
   private readonly views: ViewSlot[] = [];
   private viewCount = 0;
+  /** The sun's shadow map and its pipelines (see `shadow.ts`). */
+  private readonly shadow: ShadowMap;
+  /** Engine uniform slots for the shadow passes of a frame (the sun camera in the camera block). */
+  private readonly shadowSlots: ViewSlot[] = [];
+  private shadowCount = 0;
+  private readonly shadowRect: CameraRect = { x: 0, y: 0, width: 1, height: 1 };
   private readonly globalsData = new Float32Array(ENGINE_UNIFORM_FLOATS);
   private readonly globalsU32 = new Uint32Array(this.globalsData.buffer);
   private readonly viewRect: CameraRect = { x: 0, y: 0, width: 1, height: 1 };
@@ -354,8 +368,19 @@ export class Renderer implements FrameSink {
           visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE,
           buffer: {},
         },
+        {
+          binding: 3,
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE,
+          texture: { sampleType: 'depth' },
+        },
+        {
+          binding: 4,
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE,
+          sampler: { type: 'comparison' },
+        },
       ],
     });
+    this.shadow = new ShadowMap(device, this.globalsLayout);
     this.globalsBindGroup = this.viewSlot(0).group;
 
     const cap = opts.initialInstances ?? 4096;
@@ -759,8 +784,9 @@ export class Renderer implements FrameSink {
     }
     const full = vp.x === 0 && vp.y === 0 && vp.width === tw && vp.height === th;
 
+    const shadow = this.encodeShadow(enc, frame, camera, base);
     const slot = this.viewSlot(this.viewCount);
-    this.writeView(frame, camera, target, slot);
+    this.writeView(frame, camera, target, slot, shadow);
     this.viewCount++;
 
     // First view into this target clears it; later ones draw over.
@@ -889,8 +915,10 @@ export class Renderer implements FrameSink {
     timer?.resolve(enc);
     this.device.queue.submit([enc.finish()]);
     this.viewCount = 0;
+    this.shadowCount = 0;
     this.usedCount = 0;
     this.instanceBase = 0;
+    this.shadow.flush();
     if (this.retired.length > 0) {
       for (const b of this.retired) b.destroy();
       this.retired.length = 0;
@@ -930,6 +958,9 @@ export class Renderer implements FrameSink {
     this.retired.length = 0;
     for (const v of this.views) v.buffer.destroy();
     this.views.length = 0;
+    for (const v of this.shadowSlots) v.buffer.destroy();
+    this.shadowSlots.length = 0;
+    this.shadow.destroy();
     this.quad.destroy();
     this.white.destroy();
   }
@@ -989,7 +1020,7 @@ export class Renderer implements FrameSink {
     d[o++] = q ? (q[2] ?? 0) : 0;
     d[o++] = q ? (q[3] ?? 0) : 0;
     d[o++] = p.emissive ?? 0;
-    d[o++] = 0; // flags (reserved)
+    d[o++] = p.receiveShadow === false ? 1 : 0; // flags: bit 0 = does not receive shadow
     d[o++] = sx;
     d[o] = sy;
 
@@ -1017,6 +1048,7 @@ export class Renderer implements FrameSink {
     } else {
       r.br = -1;
     }
+    r.castShadow = p.castShadow ?? mesh.layout !== VERTEX_LAYOUT_2D;
   }
 
   pushDrawable(d: Drawable, order: number, layers: number): void {
@@ -1027,6 +1059,7 @@ export class Renderer implements FrameSink {
     r.offset = -1;
     r.inst = -1;
     r.br = -1;
+    r.castShadow = false;
   }
 
   pushPrePass(fn: (encoder: GPUCommandEncoder) => void): void {
@@ -1053,6 +1086,7 @@ export class Renderer implements FrameSink {
         by: 0,
         bz: 0,
         br: -1,
+        castShadow: false,
       });
     }
     const r = this.recs[this.recCount++]!;
@@ -1168,6 +1202,7 @@ export class Renderer implements FrameSink {
       c.first = 0;
       c.count = 0;
       c.offset = -1;
+      c.castShadow = false;
       return;
     }
     const material = r.material!;
@@ -1181,6 +1216,7 @@ export class Renderer implements FrameSink {
       last.material === material &&
       last.mesh === mesh &&
       last.offset === r.offset &&
+      last.castShadow === r.castShadow &&
       last.first + last.count === first
     ) {
       last.count++;
@@ -1194,6 +1230,7 @@ export class Renderer implements FrameSink {
     c.first = first;
     c.count = 1;
     c.offset = r.offset;
+    c.castShadow = r.castShadow;
   }
 
   /** True when record `a` draws before record `b` (a total order: ties go by index). */
@@ -1246,6 +1283,7 @@ export class Renderer implements FrameSink {
         first: 0,
         count: 0,
         offset: -1,
+        castShadow: false,
       });
     }
     return this.cmds[this.cmdCount++]!;
@@ -1265,19 +1303,45 @@ export class Renderer implements FrameSink {
     });
   }
 
-  /** The engine uniform slot for view `i` of a frame, made on first use (slot 0 at startup). */
+  /**
+   * The engine uniform slot for view `i` of a frame, made on first use (slot 0 at startup).
+   * Its bind group carries the sun's shadow map at binding 3 (the 1×1 placeholder until a
+   * shadow pass has rendered; `encodeShadow` rebuilds the groups when the map changes).
+   */
   private viewSlot(i: number): ViewSlot {
     let slot = this.views[i];
     if (slot) return slot;
-    const device = this.device;
-    const suffix = i === 0 ? '' : `-${i}`;
-    const buffer = device.createBuffer({
-      label: `engine-globals${suffix}`,
+    const buffer = this.device.createBuffer({
+      label: `engine-globals${i === 0 ? '' : `-${i}`}`,
       size: ENGINE_UNIFORM_FLOATS * 4,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
-    const group = device.createBindGroup({
-      label: `engine-globals-group${suffix}`,
+    slot = { buffer, group: this.globalsGroup(buffer, i, false) };
+    this.views[i] = slot;
+    return slot;
+  }
+
+  /** The uniform slot for shadow pass `i` of a frame; binds the placeholder, not the map. */
+  private shadowSlot(i: number): ViewSlot {
+    let slot = this.shadowSlots[i];
+    if (slot) return slot;
+    const buffer = this.device.createBuffer({
+      label: `engine-shadow-globals-${i}`,
+      size: ENGINE_UNIFORM_FLOATS * 4,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    slot = { buffer, group: this.globalsGroup(buffer, i, true) };
+    this.shadowSlots[i] = slot;
+    return slot;
+  }
+
+  /** A `globalsLayout` bind group over `buffer`, with the shadow map (or its placeholder) at 3. */
+  private globalsGroup(buffer: GPUBuffer, i: number, placeholder: boolean): GPUBindGroup {
+    const label = placeholder
+      ? `engine-shadow-globals-group-${i}`
+      : `engine-globals-group${i === 0 ? '' : `-${i}`}`;
+    return this.device.createBindGroup({
+      label,
       layout: this.globalsLayout,
       entries: [
         { binding: 0, resource: { buffer, size: GLOBALS_FLOATS * 4 } },
@@ -1289,18 +1353,103 @@ export class Renderer implements FrameSink {
           binding: 2,
           resource: { buffer, offset: LIGHTS_OFFSET_FLOATS * 4, size: LIGHTS_BLOCK_FLOATS * 4 },
         },
+        { binding: 3, resource: placeholder ? this.shadow.placeholder : this.shadow.view },
+        { binding: 4, resource: this.shadow.sampler },
       ],
     });
-    slot = { buffer, group };
-    this.views[i] = slot;
-    return slot;
+  }
+
+  /**
+   * When `frame.lights.sun.shadow` is set and this view has opaque shadow casters, encode one
+   * depth-only pass into the sun's shadow map (through `ShadowMap.sunCamera`, an ortho box
+   * centred on `camera.position`) over this view's casting commands, before its scene pass.
+   * Returns what `writeView` puts in the lights block, or null when no shadow was rendered.
+   */
+  private encodeShadow(
+    enc: GPUCommandEncoder,
+    frame: Frame,
+    camera: Camera,
+    base: number,
+  ): ShadowUniforms | null {
+    const cfg = frame.lights.sun.shadow;
+    if (!cfg) return null;
+    const cmds = this.cmds;
+    const n = this.cmdCount;
+    let casters = 0;
+    for (let i = 0; i < n; i++) {
+      const c = cmds[i]!;
+      if (c.castShadow && c.material!.blend === 'opaque') casters++;
+    }
+    if (casters === 0) return null;
+    const shadow = this.shadow;
+    const size = cfg.size ?? DEFAULT_SHADOW_SIZE;
+    if (shadow.ensure(size)) {
+      // The map is new: every view's bind group must point at it.
+      for (let i = 0; i < this.views.length; i++) {
+        const v = this.views[i]!;
+        v.group = this.globalsGroup(v.buffer, i, false);
+      }
+      this.globalsBindGroup = this.views[0]!.group;
+    }
+    shadow.place(camera.position, frame.lights.sun.dir, cfg, size);
+    const slot = this.shadowSlot(this.shadowCount++);
+    const g = this.globalsData;
+    g[0] = this.logicalWidth;
+    g[1] = this.logicalHeight;
+    g[2] = size;
+    g[3] = size;
+    g[4] = frame.time;
+    g[5] = frame.dt;
+    const rect = this.shadowRect;
+    rect.width = size;
+    rect.height = size;
+    shadow.sunCamera.writeBlock(g, this.globalsU32, CAMERA_OFFSET_FLOATS, rect, camera.viewIndex);
+    frame.lights.writeBlock(g, this.globalsU32, LIGHTS_OFFSET_FLOATS, null);
+    this.device.queue.writeBuffer(slot.buffer, 0, g);
+
+    const desc = shadow.passDesc;
+    desc.timestampWrites = this.gpuTimer?.pass('shadow');
+    const pass = enc.beginRenderPass(desc);
+    pass.setBindGroup(0, slot.group);
+    let curPipeline: GPURenderPipeline | null = null;
+    let curMesh: Mesh | null = null;
+    for (let i = 0; i < n; i++) {
+      const c = cmds[i]!;
+      if (!c.castShadow || c.material!.blend !== 'opaque') continue;
+      const mesh = c.mesh!;
+      const pipeline = shadow.pipelineFor(mesh.layout);
+      if (pipeline !== curPipeline) {
+        pass.setPipeline(pipeline);
+        curPipeline = pipeline;
+      }
+      if (mesh !== curMesh) {
+        pass.setVertexBuffer(0, mesh.vertexBuffer);
+        pass.setVertexBuffer(1, this.instanceBuffer, base);
+        if (mesh.indexBuffer) pass.setIndexBuffer(mesh.indexBuffer, mesh.indexFormat);
+        curMesh = mesh;
+      }
+      if (mesh.indexBuffer) {
+        if (mesh.indexCount === 0) continue;
+        pass.drawIndexed(mesh.indexCount, c.count, 0, 0, c.first);
+      } else {
+        pass.draw(mesh.vertexCount, c.count, 0, c.first);
+      }
+    }
+    pass.end();
+    return shadow.uniforms;
   }
 
   /**
    * Upload the globals, camera and lighting blocks of one view (`viewRect` holds its viewport;
-   * `view_index` is `camera.viewIndex`).
+   * `view_index` is `camera.viewIndex`; `shadow` is this view's shadow pass, if any).
    */
-  private writeView(frame: Frame, camera: Camera, target: SceneTarget, slot: ViewSlot): void {
+  private writeView(
+    frame: Frame,
+    camera: Camera,
+    target: SceneTarget,
+    slot: ViewSlot,
+    shadow: ShadowUniforms | null,
+  ): void {
     const g = this.globalsData;
     g[0] = this.logicalWidth;
     g[1] = this.logicalHeight;
@@ -1309,7 +1458,7 @@ export class Renderer implements FrameSink {
     g[4] = frame.time;
     g[5] = frame.dt;
     camera.writeBlock(g, this.globalsU32, CAMERA_OFFSET_FLOATS, this.viewRect);
-    frame.lights.writeBlock(g, this.globalsU32, LIGHTS_OFFSET_FLOATS);
+    frame.lights.writeBlock(g, this.globalsU32, LIGHTS_OFFSET_FLOATS, shadow);
     this.device.queue.writeBuffer(slot.buffer, 0, g);
   }
 }
