@@ -20,7 +20,18 @@ export interface AudioZoneDesc {
    * first time the weight rises above 0, gain = weight × `gain` (default 1) ramped over `fade`,
    * stopped once the weight has stayed 0 for `fade` seconds.
    */
-  ambient?: { sound: string; bus?: OutputBus; gain?: number };
+  ambient?: {
+    /** A registered sound to loop. Optional when `voice` is given. */
+    sound?: string;
+    bus?: OutputBus;
+    gain?: number;
+    /**
+     * Or a factory for the voice (ws/audio-4): any `Voice`, such as a `createVoiceAdapter` over a
+     * worklet or media source. Called when the zone first weighs in; the voice should start at
+     * gain 0 (the zone ramps it) and is stopped when the zone falls silent.
+     */
+    voice?: () => Voice;
+  };
   /**
    * Reverb send per bus while inside (linear). Across zones the largest `weight × send` wins,
    * and the engine applies `max(base, zone)` where `base` is what `setReverbSend` set.
@@ -182,7 +193,10 @@ export class AudioZones {
     const target = w * peak;
     if (!z.voice) {
       if (target <= 0) return;
-      z.voice = this.host.loop(a.sound, { bus: a.bus ?? 'sfx', gain: 0, fadeIn: 0 });
+      if (a.voice) z.voice = a.voice();
+      else if (a.sound !== undefined) {
+        z.voice = this.host.loop(a.sound, { bus: a.bus ?? 'sfx', gain: 0, fadeIn: 0 });
+      } else return;
       z.ambientGain = 0;
       z.silentFor = 0;
     }

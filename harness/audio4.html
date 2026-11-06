@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>ThunderClap engine audio-4 harness</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #000; color: #fff; overflow: hidden; font: 16px system-ui, sans-serif; }
+      #root { position: fixed; inset: 0; padding: 16px; box-sizing: border-box; }
+      .row { display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; align-items: center; }
+      button { font: inherit; padding: 4px 12px; }
+      #readout { font-family: ui-monospace, monospace; white-space: pre; opacity: 0.85; }
+      #map { display: block; width: 240px; height: 240px; background: #111; border: 1px solid #333; margin-bottom: 12px; }
+    </style>
+  </head>
+  <body>
+    <main id="root">
+      <h1>Audio 4 <small id="mode"></small></h1>
+      <p id="hint">Click or tap anywhere to unlock audio. Modes: ?occlude ?doppler ?sprites ?stream (&still parks).</p>
+      <div class="row">
+        <button id="clip1" type="button">1 one</button>
+        <button id="clip2" type="button">2 two</button>
+        <button id="clip3" type="button">3 three</button>
+        <button id="still" type="button">Still / move</button>
+        <button id="bg" type="button">Background / foreground</button>
+      </div>
+      <canvas id="map" width="240" height="240"></canvas>
+      <div id="readout"></div>
+    </main>
+    <script type="module" src="./audio4.ts"></script>
+  </body>
+</html>

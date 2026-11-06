@@ -4,8 +4,20 @@
  * the mixer's buses; it owns its own `AudioBufferSourceNode`s so they can start at an offset
  * that keeps every stem in phase with the grid. Each playing stem is registered with the mixer
  * through a `Voice` adapter, so `audio.voices('music')`, `stopAll` and `pause` see it.
+ *
+ * A stem with a `url` can also be streamed (`play(name, { stream: true })`, ws/audio-4): a
+ * `MediaElementAudioSourceNode` over an `<audio>` element the page decodes as it goes, so a long
+ * track costs no decoded buffer. The grid then follows the element's `currentTime`.
  */
-import { type AudioEngine, type OutputBus, rampParamTo, type Voice, VoiceSends } from './audio';
+import {
+  type AudioEngine,
+  type OutputBus,
+  rampParamTo,
+  type Voice,
+  type VoiceFilterKind,
+  type VoiceFilterOptions,
+  VoiceSends,
+} from './audio';
 
 export interface MusicOptions {
   bpm: number;
@@ -15,12 +27,34 @@ export interface MusicOptions {
   bus?: OutputBus;
   /** Beats a `setIntensity` crossfade takes. Default 1. */
   intensityFadeBeats?: number;
+  /**
+   * Makes the media element a streamed stem plays through. Default `document.createElement('audio')`
+   * where a document exists; without one (and without `createMediaElementSource` on the
+   * context) streamed stems fall back to their buffer.
+   */
+  createElement?: () => StreamElement;
 }
 
-/** A looping piece of music: a buffer whose length is a whole number of bars. */
+/** What music needs from an `<audio>` element (a fake in tests). */
+export interface StreamElement {
+  src: string;
+  loop: boolean;
+  currentTime: number;
+  /** NaN until the metadata loaded. */
+  readonly duration: number;
+  readonly paused: boolean;
+  playbackRate: number;
+  play(): Promise<void> | void;
+  pause(): void;
+}
+
+/** A looping piece of music: a buffer (or a streamable URL) whose length is a whole number of bars. */
 export interface Stem {
   name: string;
-  buffer: AudioBuffer;
+  /** The decoded loop. Optional when `url` is set and the stem is only ever streamed. */
+  buffer?: AudioBuffer;
+  /** A URL to stream the stem from (`play(name, { stream: true })`). */
+  url?: string;
   /**
    * Layer the stem belongs to (default: its own name). Within a layer, stems with an `intensity`
    * range are mixed by `setIntensity`; a stem without one replaces the layer's other rangeless
@@ -47,6 +81,13 @@ export interface MusicPlayOptions {
   at?: MusicStart;
   /** Linear gain on top of the intensity gain. Default 1. */
   gain?: number;
+  /**
+   * Stream the stem from its `url` through a media element instead of a decoded buffer
+   * (ws/audio-4). A streamed stem starts now, in phase with the grid (`at` is ignored); if the
+   * grid has not started it starts from the element's clock. Falls back to the buffer path
+   * where the context has no `createMediaElementSource` or no element can be made.
+   */
+  stream?: boolean;
 }
 
 export interface Music {
@@ -85,8 +126,16 @@ export interface Music {
 interface Playing {
   stem: Stem;
   layer: string;
-  src: AudioBufferSourceNode;
+  /** The buffer source, or null for a streamed stem. */
+  src: AudioBufferSourceNode | null;
+  /** The element and its node of a streamed stem. */
+  el: StreamElement | null;
+  elNode: AudioNode | null;
+  /** Context time a stopping stream's fade ends (it is paused then, from `update`). */
+  stopAt: number;
   gainNode: GainNode;
+  /** `Voice.filter`'s pooled biquad between the gain and the bus. */
+  filterNode: BiquadFilterNode | null;
   playGain: number;
   target: number;
   stopping: boolean;
@@ -156,7 +205,16 @@ export function createMusic(mixer: AudioEngine, opts: MusicOptions): Music {
   const scratchGains: number[] = [];
   const scratchStems: Playing[] = [];
   const scratchLayers: string[] = [];
+  /** Streams fading out, paused once their `stopAt` passes. */
+  const stoppingStreams: Playing[] = [];
   let origin = -1;
+  /** The streamed stem whose element clock the grid follows (the first one playing). */
+  let clockStream: Playing | null = null;
+  const makeElement =
+    opts.createElement ??
+    (typeof document !== 'undefined'
+      ? () => document.createElement('audio') as unknown as StreamElement
+      : null);
   let lastBeat = -1;
   let intensity = 0;
   let unsub: (() => void) | null = null;
@@ -219,8 +277,19 @@ export function createMusic(mixer: AudioEngine, opts: MusicOptions): Music {
     const ctx = mixer.context!;
     const busNode = mixer.busNode(bus)!;
     const layer = layerOf(stem, o);
-    const at = o.at ?? 'bar';
-    const when = startTime(at);
+    const streamed =
+      o.stream === true &&
+      stem.url !== undefined &&
+      makeElement !== null &&
+      typeof ctx.createMediaElementSource === 'function';
+    if (!streamed && !stem.buffer) {
+      console.warn(
+        `[audio] stem "${stem.name}" has no buffer${stem.url ? ' and cannot stream here' : ''}`,
+      );
+      return;
+    }
+    // A stream cannot be scheduled ahead: it starts now, and so do the fades around it.
+    const when = streamed ? ctxTime() : startTime(o.at ?? 'bar');
     const existing = active.get(stem.name);
     if (existing) stopOne(existing, (o.fadeBeats ?? 1) * beatDuration, when);
     // A rangeless stem replaces the layer's other rangeless stems (a crossfade).
@@ -234,16 +303,17 @@ export function createMusic(mixer: AudioEngine, opts: MusicOptions): Music {
       }
     }
     const fade = (o.fadeBeats ?? (replaced ? 1 : 0)) * beatDuration;
-    const src = ctx.createBufferSource();
-    src.buffer = stem.buffer;
-    src.loop = true;
     const gainNode = ctx.createGain();
     const playGain = o.gain ?? 1;
     const p: Playing = {
       stem,
       layer,
-      src,
+      src: null,
+      el: null,
+      elNode: null,
+      stopAt: 0,
       gainNode,
+      filterNode: null,
       playGain,
       target: 0,
       stopping: false,
@@ -260,23 +330,105 @@ export function createMusic(mixer: AudioEngine, opts: MusicOptions): Music {
       gainNode.gain.setValueAtTime(target, when);
     }
     p.target = target;
-    src.connect(gainNode);
     gainNode.connect(busNode);
-    src.onended = () => {
-      p.sends?.dispose();
-      p.sends = null;
-      gainNode.disconnect();
-      p.unregister?.();
-      p.unregister = null;
-      if (active.get(stem.name) === p) active.delete(stem.name);
-    };
-    // Keep the loop in phase with the grid: offset by the grid time elapsed, modulo the loop.
-    const duration = stem.buffer.duration;
-    const offset = duration > 0 ? (((when - origin) % duration) + duration) % duration : 0;
-    src.start(when, offset);
+    if (streamed) {
+      const el = makeElement!();
+      el.src = stem.url!;
+      el.loop = true;
+      const node = ctx.createMediaElementSource(el as unknown as HTMLMediaElement);
+      node.connect(gainNode);
+      p.el = el;
+      p.elNode = node;
+      // In phase with the grid where the element's length is known; else it sets the grid.
+      const duration = el.duration;
+      if (Number.isFinite(duration) && duration > 0) {
+        el.currentTime = (((when - origin) % duration) + duration) % duration;
+      }
+      if (clockStream === null) {
+        clockStream = p;
+        if (active.size === 0) {
+          origin = when - (Number.isFinite(el.currentTime) ? el.currentTime : 0);
+          lastBeat = -1;
+        }
+      }
+      void Promise.resolve(el.play()).catch(() => {});
+    } else {
+      const src = ctx.createBufferSource();
+      src.buffer = stem.buffer!;
+      src.loop = true;
+      p.src = src;
+      src.connect(gainNode);
+      src.onended = () => endOne(p);
+      // Keep the loop in phase with the grid: offset by the grid time elapsed, modulo the loop.
+      const duration = stem.buffer!.duration;
+      const offset = duration > 0 ? (((when - origin) % duration) + duration) % duration : 0;
+      src.start(when, offset);
+    }
     active.set(stem.name, p);
     p.unregister = mixer.register(p.voice, bus);
     if (stem.intensity) applyLayer(layer, fade, when);
+  }
+
+  /** The stem's source is done (buffer ended, or stream paused after its fade): tear it down. */
+  function endOne(p: Playing): void {
+    p.sends?.dispose();
+    p.sends = null;
+    p.gainNode.disconnect();
+    if (p.filterNode) {
+      p.filterNode.disconnect();
+      mixer.releaseBiquad(p.filterNode);
+      p.filterNode = null;
+    }
+    if (p.el) {
+      p.el.pause();
+      p.elNode?.disconnect();
+      p.el.src = '';
+      if (clockStream === p) clockStream = null;
+    }
+    p.unregister?.();
+    p.unregister = null;
+    if (active.get(p.stem.name) === p) active.delete(p.stem.name);
+  }
+
+  /** Wire gain → [filter] → bus and move the sends to the tail. */
+  function relink(p: Playing): void {
+    const busNode = mixer.busNode(bus);
+    const ctx = mixer.context;
+    if (!busNode || !ctx) return;
+    p.gainNode.disconnect();
+    p.filterNode?.disconnect();
+    const tail: AudioNode = p.filterNode ? p.gainNode.connect(p.filterNode) : p.gainNode;
+    tail.connect(busNode);
+    if (p.sends) {
+      if (p.sends.attached) p.sends.retarget(tail);
+      else p.sends.attach(ctx, tail);
+    }
+  }
+
+  /** Streams cannot `stop(when)`: pause the ones whose fade has ended. */
+  function reapStreams(now: number): void {
+    for (let i = stoppingStreams.length - 1; i >= 0; i--) {
+      const p = stoppingStreams[i]!;
+      if (now < p.stopAt) continue;
+      stoppingStreams.splice(i, 1);
+      endOne(p);
+    }
+  }
+
+  /** Follow the clock stream's element: the grid origin is its `currentTime` ago, modulo its length. */
+  function followClock(now: number): void {
+    const p = clockStream;
+    if (!p || p.stopping) return;
+    const el = p.el!;
+    const t = el.currentTime;
+    const duration = el.duration;
+    if (!Number.isFinite(t) || el.paused) return;
+    let o = now - t;
+    if (Number.isFinite(duration) && duration > 0 && origin >= 0) {
+      // The element wrapped; keep the origin the candidate nearest the one we had.
+      o -= Math.round((o - origin) / duration) * duration;
+    }
+    origin = o;
   }
 
   /** The `Voice` the mixer sees for a stem: stop fades in seconds, gain and rate write its nodes. */
@@ -295,7 +447,17 @@ export function createMusic(mixer: AudioEngine, opts: MusicOptions): Music {
       },
       setRate(rate, r = 0.05) {
         voice.rate = rate;
-        rampParamTo(p.src.playbackRate, rate, ctxTime(), r);
+        if (p.src) {
+          rampParamTo(p.src.playbackRate, rate, ctxTime(), r);
+        } else if (p.el && !p.stopping) {
+          // An element cannot run at 0: pause it, and resume where it was.
+          if (rate <= 0) {
+            p.el.pause();
+          } else {
+            p.el.playbackRate = rate;
+            if (p.el.paused) void Promise.resolve(p.el.play()).catch(() => {});
+          }
+        }
       },
       setPosition() {},
       setDirection() {},
@@ -303,13 +465,41 @@ export function createMusic(mixer: AudioEngine, opts: MusicOptions): Music {
       sendTo(input, amount, r = 0.05) {
         p.sends ??= new VoiceSends();
         const sends = p.sends;
-        if (!sends.attached) sends.attach(mixer.context!, p.gainNode);
+        if (!sends.attached) sends.attach(mixer.context!, p.filterNode ?? p.gainNode);
         sends.set(input, amount, r);
+      },
+      filter(kind: VoiceFilterKind | null, o: VoiceFilterOptions = {}) {
+        if (p.stopping) return;
+        const now = ctxTime();
+        const ramp = o.ramp ?? 0.05;
+        if (kind === null) {
+          const f = p.filterNode;
+          if (!f) return;
+          p.filterNode = null;
+          relink(p);
+          mixer.releaseBiquad(f);
+          return;
+        }
+        let f = p.filterNode;
+        const fresh = f === null;
+        f ??= mixer.acquireBiquad();
+        if (!f) return;
+        f.type = kind;
+        rampParamTo(f.frequency, o.cutoff ?? 1000, now, fresh ? 0 : ramp);
+        rampParamTo(f.Q, o.q ?? 1, now, fresh ? 0 : ramp);
+        if (fresh) {
+          p.filterNode = f;
+          relink(p);
+        }
       },
       position: new Float64Array(3),
       get playing() {
         return !p.stopping;
       },
+      get sendCount() {
+        return p.sends?.count ?? 0;
+      },
+      occlusion: 0,
     };
     return voice;
   }
@@ -328,10 +518,20 @@ export function createMusic(mixer: AudioEngine, opts: MusicOptions): Music {
     } else {
       g.setValueAtTime(0, when);
     }
-    try {
-      p.src.stop(when + fade);
-    } catch {
-      // Already stopped.
+    if (p.src) {
+      try {
+        p.src.stop(when + fade);
+      } catch {
+        // Already stopped.
+      }
+    } else if (p.el) {
+      if (clockStream === p) {
+        clockStream = null;
+        for (const q of active.values()) if (q.el && !q.stopping) clockStream = q;
+      }
+      p.stopAt = when + fade;
+      if (fade > 0) stoppingStreams.push(p);
+      else endOne(p);
     }
   }
 
@@ -428,7 +628,10 @@ export function createMusic(mixer: AudioEngine, opts: MusicOptions): Music {
     },
     update() {
       if (disposed || !ensureGrid()) return;
-      const total = Math.max(0, Math.floor((ctxTime() - origin) / beatDuration));
+      const now = ctxTime();
+      if (stoppingStreams.length > 0) reapStreams(now);
+      if (clockStream) followClock(now);
+      const total = Math.max(0, Math.floor((now - origin) / beatDuration));
       if (total === lastBeat) return;
       if (lastBeat < 0) lastBeat = total - 1;
       // Fire each beat crossed since the last update (a long frame skips none).
@@ -442,6 +645,8 @@ export function createMusic(mixer: AudioEngine, opts: MusicOptions): Music {
     dispose() {
       disposed = true;
       music.stop(undefined, 0);
+      for (const p of stoppingStreams) endOne(p);
+      stoppingStreams.length = 0;
       beatListeners.clear();
       unsub?.();
       unsub = null;

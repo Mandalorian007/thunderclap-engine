@@ -53,7 +53,7 @@ Both are safe to call before unlock, and the graph is built with the buses. Wher
 **Pause.** `audio.pause(opts?: PauseOptions)` ramps every bus except `keep` (default `['ui']`, so menu clicks stay audible; `master` is never touched) to silence over 50 ms, and sets the `playbackRate` of the voices and stems on those buses to 0 so they hold their place; where the context refuses rate 0 (`playbackRate.minValue > 0`) they are only muted, and `audio.pausedRate` says which path ran. `audio.unpause()` ramps the buses back to exactly what the settings ask for and restores every rate (one set with `setRate` while paused is applied then). `audio.paused` and `audio.pausedBuses` report the state; `setVolume` / `setMuted` on a paused bus is remembered and applied on unpause; a voice started on a paused bus starts frozen. Neither call touches the context state (`suspend` is what `attach`'s `pauseWhenHidden` does): `pause` is the in-game pause menu, not the tab going away. Both are idempotent and safe before unlock.
 
 ## Voices
-`play`/`loop` return a `Voice`: `stop(fade?)`, `setGain(g, ramp?)`, `setRate(r, ramp?)`, `setPosition(x, y, z)`, `setDirection(x, y, z)`, `follow(target | null)`, `sendTo(input, amount, ramp?)`, `position`, `playing`. Each named sound has `maxVoices` (default 8); the oldest is stolen past that. `stopAll(fade?, bus?)` (see *Buses* for the options form). Options: `bus, gain, rate, detune (cents), pan, at, spatial, delay, fadeIn` (`pan`, `at` and `spatial` under *Spatial audio*).
+`play`/`loop` return a `Voice`: `stop(fade?)`, `setGain(g, ramp?)`, `setRate(r, ramp?)`, `setPosition(x, y, z)`, `setDirection(x, y, z)`, `follow(target | null)`, `sendTo(input, amount, ramp?)`, `filter(kind | null, opts?)`, `position`, `playing`, `sendCount` (live `sendTo` inputs), `occlusion` (see *Occlusion*). Each named sound has `maxVoices` (default 8); the oldest is stolen past that. `stopAll(fade?, bus?)` (see *Buses* for the options form). Options: `bus, gain, rate, detune (cents), pan, at, spatial, delay, fadeIn` (`pan`, `at` and `spatial` under *Spatial audio*).
 
 One-shots of a sound not yet rendered are rendered on demand and dropped if that takes > 150 ms; call `prepare()` at boot to avoid that.
 
@@ -73,7 +73,7 @@ voice.setGain(1, 0.1);
 
 Whether a voice is occluded is the game's call (its own raycast and its own test); the mixer only routes.
 
-`voice.follow(target)` makes a spatial voice (one played with `at`) read its position from `target.world`, a 3×4 row-major world matrix with the translation at floats 3, 7 and 11 (a `Transform` from `render/`, or any `FollowTarget`), on every `audio.update(dt)`, so the game stops copying positions each frame; `follow(null)` stops. `voice.position` is the emitter's world position as last set or followed (zeros on a non-spatial voice). Both are no-ops on a non-spatial voice.
+`voice.follow(target)` makes a spatial voice (one played with `at`) read its position from `target.world`, a 3×4 row-major world matrix with the translation at floats 3, 7 and 11 (a `Transform` from `render/`, or any `FollowTarget`), on every `audio.update(dt)`, so the game stops copying positions each frame; `follow(null)` stops. A target with a numeric `changed` (a `Transform`'s version counter) is read only when it changed since the last update. `voice.position` is the emitter's world position as last set or followed (zeros on a non-spatial voice). Both are no-ops on a non-spatial voice.
 
 ## Spatial audio
 
@@ -94,10 +94,68 @@ audio.play('zap', { pan: (cellX / cols) * 2 - 1 });
 ```
 
 - **Listener.** `audio.listener` is a `SpatialListener`. `set(position, forward, up = [0, 1, 0])` and `fromCamera(camera)` write the context's `AudioListener` (its `positionX`… AudioParams, or the deprecated `setPosition` / `setOrientation` on older Safari). `fromCamera` takes any `CameraLike` (`{ view, position }`, a column-major world→view matrix and the eye): position from `camera.position`, forward = minus the view's third row, up = its second, so the renderer's `Camera` works as is. A pose set before unlock is applied when the context is built. `listener.position`, `forward` and `up` read the current pose. Nothing allocates.
-- **Emitters.** `PlayOptions.at` routes the voice gain → `PannerNode` → bus. `PlayOptions.spatial` (`SpatialOptions`) sets `refDistance` (default 1), `maxDistance` (10000), `rolloff: Rolloff` (`'linear' | 'inverse' | 'exponential'`, default `'inverse'`), `rolloffFactor` (1), `panningModel` (`'equalpower'` by default; `'HRTF'` for binaural on headphones and headsets), `cone: ConeOptions` (`{ inner, outer, outerGain }`, degrees) and `direction` (`[1, 0, 0]` by default). `Voice.setPosition(x, y, z)` and `Voice.setDirection(x, y, z)` write the voice's panner in place; on a voice still waiting for unlock they are kept and applied at start; on a non-spatial voice they do nothing. No occlusion: what is between emitter and listener does not matter.
+- **Emitters.** `PlayOptions.at` routes the voice gain → `PannerNode` → bus. `PlayOptions.spatial` (`SpatialOptions`) sets `refDistance` (default 1), `maxDistance` (10000), `rolloff: Rolloff` (`'linear' | 'inverse' | 'exponential'`, default `'inverse'`), `rolloffFactor` (1), `panningModel` (`'equalpower'` by default; `'HRTF'` for binaural on headphones and headsets), `cone: ConeOptions` (`{ inner, outer, outerGain }`, degrees) and `direction` (`[1, 0, 0]` by default). `Voice.setPosition(x, y, z)` and `Voice.setDirection(x, y, z)` write the voice's panner in place; on a voice still waiting for unlock they are kept and applied at start; on a non-spatial voice they do nothing. What is between emitter and listener is the game's call, answered through `audio.occlusion` (see *Occlusion*).
 - **Pool.** Each playing spatial voice holds one panner; when it ends the panner is disconnected and returned, and the next spatial voice reuses it with its own options (`audio.pooledPanners` counts the idle ones). `dispose()` drops the pool.
 - **2D.** `PlayOptions.pan` goes through a `StereoPannerNode`, for a flat game that wants a sound from one side of the board. `at` and `pan` are exclusive; when both are given, `at` wins.
 - Where `createPanner` is missing, a spatial voice plays dry into its bus.
+
+## Occlusion
+
+The game answers one probe per spatial voice with how much world sits between the ears and the emitter; the engine never casts a ray. Each probed voice gets a pooled lowpass whose cutoff and gain ramp with the answer.
+
+```ts
+audio.occlusion = {
+  probe: (listener, emitter, out) => { out.amount = world.raycast(listener, emitter) ? 1 : 0; },
+  interval: 0.1,                               // seconds between probes of one voice, and its ramp
+};
+const torch = audio.loop('crackle', { at: [12, 1, -4] });   // probed
+const ui = audio.play('tick', { at: p, spatial: { occlude: false } });  // never probed
+torch.occlusion;                               // 0 clear .. 1 occluded, as last answered
+```
+
+- **`OcclusionOptions`** (`audio.occlusion`, `null` turns it off and opens every filter): `probe(listener, emitter, out: OcclusionResult)` writes `out.amount` (0 clear .. 1 occluded, clamped; both positions are live views); `interval` (default 0.1 s), `openCutoff` (20000 Hz), `closedCutoff` (600 Hz), `closedGain` (0.4) and `budget` (8, the most probes per `audio.update`). `DEFAULT_OCCLUSION` holds those defaults.
+- **Scheduling.** `audio.update(dt)` runs an `OcclusionScheduler`: round-robin over the spatial voices, probing those due (`interval` since their last probe) until the budget is spent, the rest next call; a scene with many emitters costs a fixed number of probes per frame and allocates nothing. `SpatialOptions.occlude: false` opts a voice out. `OccludableVoice` is the slice the scheduler takes (`position`, `occlusionProbedAt`, `applyOcclusion`); `audio.occludedVoiceCount` counts the probed voices.
+- **The filter.** The first probe of a voice takes a `BiquadFilterNode` from the engine's pool (`audio.pooledFilters` counts the idle ones, shared with `Voice.filter`) and inserts it between the voice's gain and its panner. Cutoff is `occlusionCutoff(amount, open, closed)` = `open × (closed/open)^amount` (log-interpolated, so a sweep sounds even); gain is `occlusionGain(amount, closedGain)` = `1 − amount × (1 − closedGain)`, folded into the voice's own gain (so `setGain` keeps the dip). Both ramp over `interval`. The node goes back to the pool when the voice ends. Per-voice sends tap after the filter and the panner, so a muffled voice's reverb is muffled too.
+
+## Doppler
+
+A moving emitter or listener shifts pitch. `SpatialOptions.doppler` (0 off, 1 physical, in between tamer) turns it on per voice; velocities come from successive `setPosition` / `follow` and `listener.set` / `fromCamera` calls, differenced in `audio.update(dt)`, so the game only moves things.
+
+```ts
+const engineNote = audio.loop('whine', { at: car.position, spatial: { doppler: 0.7 } });
+engineNote.setPosition(x, y, z);  // every frame
+audio.update(dt);                 // rate = base rate × (c − v_listener·n) / (c − v_emitter·n)
+```
+
+`SPEED_OF_SOUND` (343 m/s in world units) is `c`; `n` points from emitter to listener; both velocities are scaled by `doppler` and the closing speeds clamped to ±0.9 c. `setRate` sets the base rate; the multiplier is applied on top, written to `playbackRate` only when it changes by more than 1e-4, and left alone while the voice is frozen by `pause`. A jump beyond `maxDopplerSpeed × dt` (`SpatialOptions.maxDopplerSpeed`, default `DEFAULT_MAX_DOPPLER_SPEED` = 100 units/s; `listener.maxSpeed` for the ears) is a teleport: the velocity resets to zero instead of chirping. `listener.velocity` reads the ears' velocity. Voices without `doppler` cost nothing.
+
+## Voice filters
+
+`voice.filter(kind, { cutoff, q, ramp })` inserts one pooled `BiquadFilterNode` (`VoiceFilterKind`: `'lowpass' | 'highpass' | 'bandpass'`) between the voice's gain and its panner or bus, ramping `cutoff` (Hz) and `q` over `ramp` seconds (default 0.05, `VoiceFilterOptions`). Calling again retunes it; `filter(null)` removes it and returns the node to the pool. It is independent of the occlusion lowpass (an occluded voice with a filter has two biquads in series, filter first), a no-op on an inert voice, and applied at start when set before unlock. A radio voice, an underwater mix or a muffled hit without a `Send`:
+
+```ts
+const radio = audio.play('line', { bus: 'ui' });
+radio.filter('bandpass', { cutoff: 1800, q: 2 });
+radio.filter('lowpass', { cutoff: 400, ramp: 0.3 });   // retunes the same node
+radio.filter(null);
+```
+
+## Sprites
+
+One buffer, many named ranges. `audio.defineSprites(name, sheet: SpriteSheet, { maxVoices? })` registers a sheet and `audio.play('name#clip')` plays one range with the whole `Voice` surface; `audio.loop('name#clip')` loops it.
+
+```ts
+audio.defineSprites('fx', {
+  buffer: ui,                                      // or source: () => Promise<AudioBuffer>
+  sprites: { hit: [0, 180], miss: [200, 90], charge: [320, 1400] },   // [startMs, lengthMs]
+  loopPoints: { charge: [400, 1400] },             // audio.loop('fx#charge'): intro, then the loop
+});
+audio.play('fx#hit', { gain: 0.8, pan: -0.3 });
+```
+
+- A one-shot starts with `source.start(when, offset, duration)`, a loop with `loopStart` / `loopEnd` at the clip's `loopPoints` (or its whole range) after playing in from the clip's start. `SpriteRange` is `[startMs, lengthMs]`; `SpriteSchedule` (`{ offset, duration, loopStart, loopEnd }`, seconds) is what `spriteSchedule(sheet, sheetName, clip, out?)` computes, with a readable error for an unknown clip (`play` throws the same for an unknown sheet or clip). `parseSpriteRef('fx#hit')` splits a reference (`null` for a plain name). `audio.spriteSheet(name)` reads a sheet back; defining a sound of the same name again drops it.
+- The sheet is a sound like any other (`prepare`, `load`, `buffer`, `maxVoices`, stealing). `buffer` is used as is; `source` is the game's own decode (a bundle `audio` entry), so the engine still makes no network call.
+- **Sidecar.** A sprite packer's JSON (`SpriteSidecar`: `{ src, sprites, loopPoints? }`) goes through the bundle as a `json` entry beside an `audio` entry for `src`; `spriteSheetFrom(sidecar, buffer)` turns the pair into a `SpriteSheet`. No new loader kind.
 
 ## Music
 
@@ -125,6 +183,10 @@ music.stop('drums', 2);  music.stop();       // a layer, or everything, fading i
 - **Layers and intensity.** A `Stem` is `{ name, buffer, layer?, intensity? }` (layer defaults to the name). Within a layer, stems with an `intensity: [lo, hi]` range are mixed by `setIntensity(level)`: full gain inside the range, a linear crossfade between one stem's `hi` and the next's `lo` (sorted by `lo`; a gap or an overlap is the crossfade region, touching ranges switch hard), so the layer's gains always sum to 1 (`intensityGains(ranges, level, out)` is that pure function). A stem without a range replaces the layer's other rangeless stem when played, with a `fadeBeats` crossfade (default 1 beat). `intensity` reads the level, `gain(name)` a stem's current target gain, `playing` the names on now. `MusicOptions.intensityFadeBeats` (default 1) is the crossfade length of `setIntensity`.
 - **Before unlock** `play` queues; the stems start together when the context runs.
 - **Stems are voices.** Music owns its source nodes, but each playing stem is registered with the mixer through a `Voice` adapter: it shows under `audio.voices('music')` and `voiceCount`, `audio.stopAll()` stops it (`stopAll({ except: ['music'] })` spares it), `audio.pause()` freezes it with the rest of the bus, and the adapter's `stop(fade)` / `setGain(g)` / `setRate(r)` / `sendTo(...)` act on the stem (spatial calls are no-ops; `playing` is false once it is fading out). `music.stop()` / `music.dispose()` still work as before.
+
+### Streaming music
+
+A long track need not be decoded into memory: `music.play(name, { stream: true })` plays a stem given as `{ name, url }` (`Stem.url`, a URL the game owns, a Blob URL included) through a media element and `createMediaElementSource`, so the browser streams and decodes it. `MusicOptions.createElement` supplies the element (`StreamElement`: `src`, `loop`, `currentTime`, `duration`, `paused`, `playbackRate`, `play()`, `pause()`; default `document.createElement('audio')` where there is a document). A streamed stem starts now rather than on the grid, seeks to the grid time elapsed modulo its duration, and from then on the grid follows the element's clock (`update` re-derives the origin from `currentTime`, so a stall shifts the beat rather than drifting past it). Gains, `fadeBeats`, intensity crossfades, ducking, `stopAll` and `pause` (which pauses the element through `setRate(0)`) work as for buffers. Where `createMediaElementSource` or the element is missing, a stem with a `buffer` falls back to it and one without warns and stays silent.
 
 ## Variations
 
@@ -171,6 +233,18 @@ duck.active; duck.level; duck.gain;               // bool, 0..1 envelope, 1 - am
 ```
 
 `DuckerOptions`: `trigger`, `target`, `amount` (fraction of the target's gain removed, default 0.6), `attack` (seconds to fully ducked, 0.1), `release` (0.6), `threshold` (dB; when set, an `AnalyserNode` on the trigger bus counts RMS above it as active, so unwatched voices duck too; off by default). `Ducker`: `watch(voice)` (returns the voice), `update(dt)`, `active`, `level`, `gain`, `dispose()` (restores the bus). The envelope is linear in `dt`; the target bus gain is rewritten as `busGain(settings) × gain` with a 5 ms time constant, and again after every `onSettingsChange`, so `setVolume` and `setMuted` keep working while ducked. Nothing allocates per frame.
+
+## Background and pause
+
+Three things can hold the mixer, independently; `audio.state` reports the context, the table the rest.
+
+| | What holds it | Set by | Released by | Effect |
+|---|---|---|---|---|
+| **Background** | `audio.inBackground` | `audio.background(true)`: `attach({ pauseWhenHidden })` on a hidden document, `createGame`'s host lifecycle on `'background'`, or the game | `background(false)` | the context is suspended; nothing else changes, so on return everything carries on in time |
+| **Suspended** | `audio.state === 'suspended'` | `audio.suspend()` | `audio.resume()` | the context is suspended; held through `background(false)` until `resume` |
+| **Paused** | `audio.paused` | `audio.pause({ keep })` | `audio.unpause()` | the context runs; every bus but `keep` ramps to silence and its voices freeze at rate 0 (see *Buses*) |
+
+`background` is a flag, not a counter: calling it with the current value is a no-op, and `createGame` calls it once per lifecycle change (`audio.background(state === 'background')`), so a game with its own lifecycle source can do the same.
 
 ## Zones
 
@@ -236,10 +310,11 @@ Measured in Chromium: all eight render in ~80 ms total (drone pad, the heaviest,
 ## Types and constants
 
 - **Engine**: `new AudioEngine(opts?: AudioEngineOptions)` (`createContext`, `createOffline`, `settings`, `limiter: boolean | LimiterOptions`, `reverb: ReverbOptions | null`); `attach(opts?: AttachAudioOptions)` takes `{ target?, pauseWhenHidden? }` and returns detach. `AudioState` is `'locked' | 'running' | 'suspended' | 'unavailable'`. `PlayOptions` are the `play`/`loop` options above; `Voice` is what they return. `StopAllOptions` (`{ fade?, bus?, except? }`) is `stopAll`'s options form, `PauseOptions` (`{ keep? }`) is `pause`'s, and `MAX_VOICE_SENDS` (4) caps `Voice.sendTo` inputs per voice.
-- **Spatial**: `SpatialListener` (`audio.listener`), `CameraLike`, `SpatialOptions`, `Rolloff` and `ConeOptions`, all described under *Spatial audio*; `FollowTarget` (`{ world }`) is what `Voice.follow` takes.
+- **Spatial**: `SpatialListener` (`audio.listener`), `CameraLike`, `SpatialOptions`, `Rolloff` and `ConeOptions`, all described under *Spatial audio*; `FollowTarget` (`{ world, changed? }`) is what `Voice.follow` takes; `SpatialOptions.doppler` / `maxDopplerSpeed` / `occlude`, `SPEED_OF_SOUND` and `DEFAULT_MAX_DOPPLER_SPEED` under *Doppler* and *Occlusion*.
+- **Occlusion, filters, sprites, adapters** (ws/audio-4): `OcclusionOptions` (`audio.occlusion`), `OcclusionResult` (the probe's `out`), `DEFAULT_OCCLUSION`, `OcclusionScheduler` (`run(opts, listener, voices, now)` → probes made), `OccludableVoice`, `occlusionCutoff(amount, open, closed)`, `occlusionGain(amount, closedGain)`; `VoiceFilterKind`, `VoiceFilterOptions` (`{ cutoff?, q?, ramp? }`); `SpriteSheet`, `SpriteRange`, `SpriteSchedule`, `SpriteSidecar`, `parseSpriteRef`, `spriteSchedule`, `spriteSheetFrom`; `StreamElement` (`MusicOptions.createElement`). `createVoiceAdapter(audio, opts: VoiceAdapterOptions)` → `VoiceAdapter`: wraps any `AudioNode` (`{ source, bus?, gain?, onEnd?, register? }`) as a `Voice` on the books, with `rate` (frozen by `pause`), `gainNode` and `end()` (what music stems use; inert on a locked engine). `audio.background(hidden)` / `inBackground` under *Background and pause*.
 - **Zones**: `AudioZones` (`audio.zones`) with `add(desc: AudioZoneDesc): AudioZone`, `remove(zone)`, `update(dt, listenerPosition?)`, `weights()`, `size`; `ZoneShape` is the sphere-or-box shape; `zoneWeight(desc, position)` is the pure weight; `AudioZoneHost` is the engine slice the class takes. All under *Zones*.
 - **Mixer**: `BUS_NAMES` (`master`, `music`, `sfx`, `ui`) and `BusName`; `OutputBus` is every bus but `master`. `MixerSettings` maps each bus to `BusSettings` (`{ volume, muted }`); `DEFAULT_MIXER` is 0.8 / 0.7 / 0.9 / 0.8, unmuted. `sanitizeMixer(input)` clamps and fills any object into valid settings; `busGain(settings)` is the effective linear gain. `DEFAULT_LIMITER` and `DEFAULT_REVERB_SENDS` are the defaults quoted above.
 - **Persistence**: `persistMixer(audio, opts: PersistMixerOptions)` (`{ game, slot?, host?, storage?, debounceMs?, autoFlush? }`) returns `{ store, unbind }`.
 - **Synth specs**: `SoundSpec` holds `Layer`s; a layer's `source` is a `Source` (`OscSource` with a `Wave`, `NoiseSource` with a `NoiseColor`, or `CrackleSource`), its `filter` one or more `FilterSpec`s and its `env` an `Envelope`. `Segment` is one envelope breakpoint (`{ t, v, ramp }`); `envelopeLength(env, gate)` is an envelope's total length. `OfflineContextFactory` is the offline renderer factory `renderSound` and the engine take.
-- **Music, variations, sends, ducking**: `createMusic(mixer, opts: MusicOptions)` → `Music`, `Stem`, `MusicPlayOptions`, `MusicStart`, `intensityGains`; `createVariations(mixer, buffers, opts?: VariationsOptions)` → `Variations`; `createSend(mixer, opts: SendOptions)` → `Send`, `SendKind`, `impulseResponse`, `ImpulseResponseOptions`, `BufferFactory`; `createDucker(mixer, opts: DuckerOptions)` → `Ducker`. All described above.
+- **Music, variations, sends, ducking**: `createMusic(mixer, opts: MusicOptions)` → `Music`, `Stem` (`buffer` or `url`), `MusicPlayOptions` (`at`, `fadeBeats`, `gain`, `stream`), `MusicStart`, `intensityGains`; `createVariations(mixer, buffers, opts?: VariationsOptions)` → `Variations`; `createSend(mixer, opts: SendOptions)` → `Send`, `SendKind`, `impulseResponse`, `ImpulseResponseOptions`, `BufferFactory`; `createDucker(mixer, opts: DuckerOptions)` → `Ducker`. All described above.
 - **Recipes**: `recipes` maps each `RecipeName` to its function; every recipe takes `RecipeOptions` (`{ pitch, length, brightness, seed, level }`, plus the per-recipe extras listed above).

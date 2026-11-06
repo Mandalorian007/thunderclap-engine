@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fakeBuffer, setupEngine } from './fake-context.test-util';
+import { type FakeGain, FakeMediaElement, fakeBuffer, setupEngine } from './fake-context.test-util';
 import { createMusic, intensityGains } from './music';
 
 // 120 bpm, 4/4: a beat is 0.5 s, a bar 2 s.
@@ -189,5 +189,118 @@ describe('createMusic', () => {
     expect(ctx.played.length).toBe(1);
     expect(m.gain('inline')).toBe(0.5);
     warn.mockRestore();
+  });
+});
+
+describe('streamed stems (ws/audio-4)', () => {
+  it('plays through a media element source, derives the grid from its clock and reaps after the fade', async () => {
+    const el = new FakeMediaElement(8);
+    const { ctx, audio, m } = await music({ createElement: () => el });
+    m.add({ name: 'track', url: 'blob:track' });
+    m.play('track', { stream: true, fadeBeats: 2 });
+    expect(ctx.played).toHaveLength(0);
+    expect(ctx.mediaSources).toHaveLength(1);
+    const node = ctx.mediaSources[0]!;
+    expect(node.mediaElement).toBe(el);
+    expect(el.src).toBe('blob:track');
+    expect(el.loop).toBe(true);
+    expect(el.plays).toBe(1);
+    const g = node.outputs[0] as FakeGain;
+    expect(g.outputs).toEqual([audio.busNode('music')]);
+    expect(g.gain.events).toContainEqual({ type: 'set', value: 0, time: 10 });
+    expect(g.gain.last).toEqual({ type: 'linear', value: 1, time: 11 });
+    expect(m.playing).toEqual(['track']);
+    // The grid follows the element: 1 s into the track at context time 13.2 means 2 beats.
+    el.currentTime = 1;
+    ctx.currentTime = 13.2;
+    m.update(1 / 60);
+    expect(m.totalBeats).toBe(2);
+    expect([m.beat, m.bar]).toEqual([2, 0]);
+    // The element wrapped: the origin stays near where it was.
+    el.currentTime = 0.5;
+    ctx.currentTime = 20.7;
+    m.update(1 / 60);
+    expect(m.totalBeats).toBe(17);
+    // Rate 0 (audio.pause) pauses the element; back above 0 plays it again.
+    const voice = audio.voices('music')[0]!;
+    voice.setRate(0);
+    expect(el.paused).toBe(true);
+    voice.setRate(1.25);
+    expect(el.paused).toBe(false);
+    expect(el.playbackRate).toBe(1.25);
+    // Stop: the gain fades, the element is paused once the fade has passed (from update).
+    m.stop(undefined, 2);
+    expect(g.gain.last).toEqual({ type: 'linear', value: 0, time: 21.7 });
+    expect(el.paused).toBe(false);
+    ctx.currentTime = 21.5;
+    m.update(1 / 60);
+    expect(el.paused).toBe(false);
+    ctx.currentTime = 21.8;
+    m.update(1 / 60);
+    expect(el.paused).toBe(true);
+    expect(node.outputs).toEqual([]);
+    expect(audio.voices('music')).toEqual([]);
+  });
+
+  it('crossfades a streamed stem over another and starts it now, in phase', async () => {
+    const els: FakeMediaElement[] = [];
+    const { ctx, m } = await music({
+      createElement: () => {
+        const el = new FakeMediaElement(4);
+        els.push(el);
+        return el;
+      },
+    });
+    m.add({ name: 'calm', url: 'blob:calm', layer: 'theme' });
+    m.add({ name: 'tense', url: 'blob:tense', layer: 'theme' });
+    m.play('calm', { stream: true });
+    ctx.currentTime = 11;
+    m.play('tense', { stream: true, at: 'bar', fadeBeats: 2 });
+    const [calm, tense] = ctx.mediaSources;
+    const cg = calm!.outputs[0] as FakeGain;
+    const tg = tense!.outputs[0] as FakeGain;
+    expect(tg.gain.events).toContainEqual({ type: 'set', value: 0, time: 11 });
+    expect(tg.gain.last).toEqual({ type: 'linear', value: 1, time: 12 });
+    expect(cg.gain.last).toEqual({ type: 'linear', value: 0, time: 12 });
+    expect(els[1]!.currentTime).toBe(1); // 1 s into a 4 s loop that started at 10
+    expect(m.playing).toEqual(['tense']);
+    ctx.currentTime = 12;
+    m.update(1 / 60);
+    expect(els[0]!.paused).toBe(true);
+    expect(els[1]!.paused).toBe(false);
+    m.dispose();
+    expect(els[1]!.paused).toBe(true);
+  });
+
+  it('falls back to the buffer where the context cannot take a media element, warns without one', async () => {
+    const { ctx, m } = await music({ createElement: () => new FakeMediaElement(2) });
+    (ctx as { createMediaElementSource?: unknown }).createMediaElementSource = undefined;
+    m.add({ name: 'both', url: 'blob:both', buffer: fakeBuffer(2) });
+    m.add({ name: 'urlOnly', url: 'blob:only' });
+    m.play('both', { stream: true, at: 'now' });
+    expect(ctx.played).toHaveLength(1);
+    expect(ctx.mediaSources).toHaveLength(0);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    m.play('urlOnly', { stream: true, at: 'now' });
+    expect(warn).toHaveBeenCalledOnce();
+    expect(m.playing).toEqual(['both']);
+    warn.mockRestore();
+  });
+
+  it('stem voices carry the ws/audio-4 surface: filter between gain and bus, sendCount', async () => {
+    const { ctx, audio, m } = await music();
+    m.add({ name: 'pad', buffer: fakeBuffer(2) });
+    m.play('pad', { at: 'now' });
+    const v = audio.voices('music')[0]!;
+    expect(v.sendCount).toBe(0);
+    expect(v.occlusion).toBe(0);
+    v.filter('lowpass', { cutoff: 500 });
+    const g = ctx.played[0]!.gainNode;
+    const f = ctx.biquads.at(-1)!;
+    expect(g.outputs).toEqual([f]);
+    expect(f.outputs).toEqual([audio.busNode('music')]);
+    v.filter(null);
+    expect(g.outputs).toEqual([audio.busNode('music')]);
+    expect(audio.pooledFilters).toBe(1);
   });
 });
