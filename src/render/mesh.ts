@@ -72,6 +72,23 @@ export interface VertexLayout {
    * binding and `engine_skin`) so `wgslPosition` / `wgslNormal` may call it. See `skin.ts`.
    */
   readonly skinned?: boolean;
+  /**
+   * WGSL expression over `v: VertexIn` for the file tangent (`vec4f`: xyz along +u, w the
+   * handedness) when the layout carries one; the prelude's `engine_local_tangent(v)` returns it,
+   * or `vec4f(0)` (w = 0: "no tangent", the derivative fallback) for a layout without.
+   */
+  readonly wgslTangent?: string;
+  /**
+   * WGSL expression over `v: VertexIn` for the second texture coordinate set (`vec2f`), the
+   * `uv1` varying (`TEXCOORD_1`); `v.uv` is used when absent.
+   */
+  readonly wgslUv1?: string;
+  /**
+   * WGSL expression over `v: VertexIn` for the object-space position of the previous frame as
+   * a `vec4f` (w = 0 means "unknown": the velocity target reads zero). Default: the current
+   * position with w = 1. A skinned layout reads the palette's previous block.
+   */
+  readonly wgslPreviousPosition?: string;
 }
 
 /** 2D layout: `v.pos` is a `vec2f` (z = 0); the normal faces the viewer, `(0, 0, -1)`. */
@@ -133,6 +150,43 @@ export const VERTEX_LAYOUT_3D_TANGENT: VertexLayout = {
   @location(13) tangent: vec4f,`,
   wgslPosition: 'v.pos',
   wgslNormal: 'v.normal',
+  wgslTangent: 'v.tangent',
+};
+
+/** Floats of `VERTEX_LAYOUT_3D_UV2` (the 3D layout plus a second uv). */
+export const VERTEX3D_UV2_FLOATS = 14;
+export const VERTEX3D_UV2_STRIDE = VERTEX3D_UV2_FLOATS * 4;
+
+/**
+ * Two-uv layout (ws/render-4): the 3D layout's 12 floats followed by `uv1: vec2f` at
+ * `@location(14)` (glTF `TEXCOORD_1`, the usual home of a light or occlusion map): 14 floats,
+ * 56 bytes. The prelude carries it as `VSOut.uv1`; the standard material's maps pick it with
+ * `texCoord: 1`. Materials that ignore it draw as with the 3D layout.
+ */
+export const VERTEX_LAYOUT_3D_UV2: VertexLayout = {
+  name: '3d-uv2',
+  positionOffset: 0,
+  floats: VERTEX3D_UV2_FLOATS,
+  stride: VERTEX3D_UV2_STRIDE,
+  buffer: {
+    arrayStride: VERTEX3D_UV2_STRIDE,
+    stepMode: 'vertex',
+    attributes: [
+      { shaderLocation: 0, offset: 0, format: 'float32x3' },
+      { shaderLocation: 10, offset: 12, format: 'float32x3' },
+      { shaderLocation: 1, offset: 24, format: 'float32x2' },
+      { shaderLocation: 2, offset: 32, format: 'float32x4' },
+      { shaderLocation: 14, offset: 48, format: 'float32x2' },
+    ],
+  },
+  wgslFields: `  @location(0) pos: vec3f,
+  @location(10) normal: vec3f,
+  @location(1) uv: vec2f,
+  @location(2) color: vec4f,
+  @location(14) uv1: vec2f,`,
+  wgslPosition: 'v.pos',
+  wgslNormal: 'v.normal',
+  wgslUv1: 'v.uv1',
 };
 
 /**
@@ -184,8 +238,15 @@ export const VERTEX_LAYOUT_SKINNED: VertexLayout = {
   @location(12) weights: vec4f,`,
   wgslPosition: 'engine_skin(v, v.pos, v.normal).position',
   wgslNormal: 'engine_skin(v, v.pos, v.normal).normal',
+  wgslPreviousPosition: 'engine_skin_previous(v, v.pos)',
   skinned: true,
 };
+
+/** An index sub-range of a mesh: `first` index and `count` indices (`InstanceParams.range`). */
+export interface MeshRange {
+  first: number;
+  count: number;
+}
 
 /** Room reserved in a mesh's buffers, in vertices and indices. */
 export interface MeshCapacity {
@@ -226,6 +287,11 @@ export interface MeshDesc {
    * above it, so a chunk pipeline that knows its bounds passes them itself.
    */
   autoBounds?: boolean;
+  /**
+   * Named index ranges (storage only, ws/render-4): a sub-mesh per material of a file, say.
+   * Draw one with `frame.mesh(mesh, material, transform, { range: mesh.ranges.door })`.
+   */
+  ranges?: Record<string, MeshRange>;
 }
 
 /** A bounding sphere: `center` (x, y, z) and `radius`. `radius` Infinity means unbounded. */
@@ -307,6 +373,8 @@ export class Mesh {
   readonly bounds: MeshBounds = { center: [0, 0, 0], radius: Number.POSITIVE_INFINITY };
   /** Whether `update()` recomputes `bounds` from uploaded vertices (`MeshDesc.autoBounds`). */
   readonly autoBounds: boolean;
+  /** Named index ranges from `MeshDesc.ranges`; storage only, the renderer never reads it. */
+  readonly ranges: Record<string, MeshRange> | undefined;
   /** The layout's position attribute (location 0) has a z component. */
   private readonly pos3: boolean;
   private readonly cap: { vertices: number; indices: number } = { vertices: 0, indices: 0 };
@@ -322,6 +390,7 @@ export class Mesh {
     const vCount = desc.vertices ? desc.vertices.length / this.layout.floats : 0;
     this.cap.vertices = Math.max(vCount, desc.capacity?.vertices ?? 0, 1);
     this.autoBounds = desc.autoBounds ?? this.cap.vertices < AUTO_BOUNDS_MAX_VERTICES;
+    this.ranges = desc.ranges;
     this.pos3 = positionHasZ(this.layout);
     this.vertexBuffer = this.makeVertexBuffer(this.cap.vertices);
     const iCap = Math.max(desc.indices?.length ?? 0, desc.capacity?.indices ?? 0);

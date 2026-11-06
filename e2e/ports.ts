@@ -31,6 +31,20 @@ export const HARNESS_PORT = 4177 + PORT_OFFSET;
 /** The itch-style wrapper page, which embeds the harness from a different site. */
 export const WRAPPER_PORT = 4178 + PORT_OFFSET;
 
+/**
+ * One Vite dev server per template (`templates/<name>`, e2e/templates.spec.ts), on ports that end
+ * in 2, 4, 6 and 9: clear of the harness (7, 8) and the game (3, 5, 0, 1) at every offset.
+ */
+export const TEMPLATE_PORTS = {
+  puzzle: 4172 + PORT_OFFSET,
+  'first-person': 4174 + PORT_OFFSET,
+  'third-person': 4176 + PORT_OFFSET,
+  platformer: 4179 + PORT_OFFSET,
+} as const;
+export type TemplateName = keyof typeof TEMPLATE_PORTS;
+export const templateUrl = (name: TemplateName): string =>
+  `http://127.0.0.1:${TEMPLATE_PORTS[name]}/`;
+
 /** The harness is served from 127.0.0.1 and the wrapper from localhost: two sites, like itch. */
 export const HARNESS_URL = `http://127.0.0.1:${HARNESS_PORT}/`;
 export const WRAPPER_URL = `http://localhost:${WRAPPER_PORT}/`;

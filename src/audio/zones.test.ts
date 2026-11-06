@@ -63,6 +63,9 @@ class FakeVoice implements Voice {
   setDirection() {}
   follow() {}
   sendTo() {}
+  filter() {}
+  readonly sendCount = 0;
+  readonly occlusion = 0;
 }
 
 class Host implements AudioZoneHost {
@@ -471,5 +474,43 @@ describe('AudioEngine zones and followers', () => {
     expect(z.weight).toBe(1);
     expect(audio.voiceCount).toBe(0);
     expect(audio.effectiveReverbSendLevels.sfx).toBe(1);
+  });
+});
+
+describe('ambient voice factory (ws/audio-4)', () => {
+  it('takes the factory voice instead of looping a sound and ramps and stops it the same way', () => {
+    const host = new Host();
+    const zones = new AudioZones(host);
+    const made: FakeVoice[] = [];
+    const z = zones.add({
+      shape: { sphere: { center: [0, 0, 0], radius: 1 } },
+      ambient: {
+        gain: 0.5,
+        voice: () => {
+          const v = new FakeVoice('custom', {});
+          made.push(v);
+          return v;
+        },
+      },
+      fade: 0.5,
+    });
+    at(host, 10);
+    zones.update(0.1);
+    expect(made).toHaveLength(0);
+    at(host, 0);
+    zones.update(0.1);
+    expect(made).toHaveLength(1);
+    expect(host.voices).toHaveLength(0);
+    expect(z.voice).toBe(made[0]);
+    expect(made[0]!.gains).toEqual([expect.closeTo(0.1, 9)]);
+    at(host, 10);
+    for (let i = 0; i < 6; i++) zones.update(0.1);
+    expect(made[0]!.stopped).toBe(0);
+    expect(z.voice).toBeNull();
+    // An ambient with neither a sound nor a factory does nothing.
+    const bare = zones.add({ shape: { sphere: { center: [0, 0, 0], radius: 1 } }, ambient: {} });
+    at(host, 0);
+    zones.update(0.1);
+    expect(bare.voice).toBeNull();
   });
 });

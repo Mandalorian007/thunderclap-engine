@@ -53,6 +53,9 @@ struct EngineCamera {
   view_index: u32,
   _pad: vec3u,
   inv_view_proj: mat4x4f,
+  prev_view_proj: mat4x4f,
+  prev_view: mat4x4f,
+  jitter: vec4f,
 };
 @group(0) @binding(1) var<uniform> camera: EngineCamera;
 `;
@@ -291,7 +294,7 @@ export const SKIN_PALETTE_BINDING = BUFFER_BINDING_BASE;
 export const WGSL_SKIN = /* wgsl */ `struct EngineSkinPalette {
   joints: u32,
   instances: u32,
-  _pad0: u32,
+  history: u32,
   _pad1: u32,
   rows: array<vec4f>,
 };
@@ -317,22 +320,108 @@ fn engine_skin(v: VertexIn, position: vec3f, normal: vec3f) -> EngineSkinned {
     skinned.normal += w * vec3f(dot(r0.xyz, normal), dot(r1.xyz, normal), dot(r2.xyz, normal));
   }
   return skinned;
+}
+// The previous frame's skinned position from the palette's history block (SkinPalette
+// with history), w = 1; w = 0 when the palette keeps none (velocity reads zero).
+fn engine_skin_previous(v: VertexIn, position: vec3f) -> vec4f {
+  if (engine_skin_palette.history == 0u) { return vec4f(0.0); }
+  let base = (engine_skin_palette.instances + u32(v.params.w)) * engine_skin_palette.joints * 3u;
+  let p = vec4f(position, 1.0);
+  var out = vec3f(0.0);
+  for (var k = 0u; k < 4u; k++) {
+    let w = v.weights[k];
+    if (w == 0.0) { continue; }
+    let r = base + v.joints[k] * 3u;
+    out += w * vec3f(dot(engine_skin_palette.rows[r], p), dot(engine_skin_palette.rows[r + 1u], p), dot(engine_skin_palette.rows[r + 2u], p));
+  }
+  return vec4f(out, 1.0);
 }`;
 
 /**
- * Prelude prepended to every material, generated per vertex layout. Declares `VertexIn` (the
- * layout's vertex fields plus the 28-float instance: 3×4 world matrix rows `m0..m2`,
- * `uvRect`, `tint`, `params`, `misc` = emissive, flags, size.xy), the default vertex entry
- * `vs_main`, the `VSOut` varyings (`flags` is the instance's flag bits: bit 0 set means
- * `receiveShadow: false`) and the `FragOut` MRT struct.
- *
- * Helpers: `engine_local_position(v)` / `engine_local_normal(v)` (object space, `vec3f` for
- * every layout; skinned for a `skinned` layout), `engine_world_position(v)` and
- * `engine_vertex(v)`; the lighting block and `engine_lambert` / `engine_point_lights` from
- * `WGSL_LIGHTS`; `WGSL_SKIN` (`engine_skin`, the palette binding) for a skinned layout only.
- * The text for the 2D and 3D layouts does not change with skinning (E-008).
+ * What a material prelude is generated for beyond the vertex layout (ws/render-4): the aux
+ * attachments of the target it draws into (`roughMetal`, `velocity`: `FragOut` gains
+ * `rough_metal` / `velocity` and `engine_write_aux` fills them) and `prevLane`, a third vertex
+ * buffer carrying each instance's previous 3×4 matrix (`InstanceList` with `velocity`), read
+ * by `engine_previous_world_position`. Every flag off is the plain prelude.
  */
-export function materialPrelude(layout: VertexLayout): string {
+export interface PreludeVariant {
+  roughMetal?: boolean;
+  velocity?: boolean;
+  prevLane?: boolean;
+}
+
+/** The plain variant: what every material compiled with before aux targets. */
+export const PLAIN_VARIANT: PreludeVariant = Object.freeze({});
+
+/**
+ * Three vertex locations in 10..15 the layout's attributes leave free, for the previous-matrix
+ * lane (`prevLane`), as `[p0, p1, p2]`.
+ */
+export function prevLaneLocations(layout: VertexLayout): [number, number, number] {
+  const used = new Set<number>();
+  for (const a of layout.buffer.attributes) used.add(a.shaderLocation);
+  const out: number[] = [];
+  for (let loc = 10; loc <= 15 && out.length < 3; loc++) if (!used.has(loc)) out.push(loc);
+  if (out.length < 3)
+    throw new Error(`layout ${layout.name}: no free locations for a previous-matrix lane`);
+  return [out[0]!, out[1]!, out[2]!];
+}
+
+/** The previous-matrix vertex buffer layout (slot 2) for `layout`: 48 bytes per instance. */
+export function prevLaneBufferLayout(layout: VertexLayout): GPUVertexBufferLayout {
+  let lane = laneLayouts.get(layout);
+  if (lane) return lane;
+  const [a, b, c] = prevLaneLocations(layout);
+  lane = {
+    arrayStride: 48,
+    stepMode: 'instance',
+    attributes: [
+      { shaderLocation: a, offset: 0, format: 'float32x4' },
+      { shaderLocation: b, offset: 16, format: 'float32x4' },
+      { shaderLocation: c, offset: 32, format: 'float32x4' },
+    ],
+  };
+  laneLayouts.set(layout, lane);
+  return lane;
+}
+const laneLayouts = new WeakMap<VertexLayout, GPUVertexBufferLayout>();
+
+/**
+ * Prelude prepended to every material, generated per vertex layout (and `PreludeVariant`).
+ * Declares `VertexIn` (the layout's vertex fields plus the 28-float instance: 3×4 world matrix
+ * rows `m0..m2`, `uvRect`, `tint`, `params`, `misc` = emissive, flags, size.xy), the default
+ * vertex entry `vs_main`, the `VSOut` varyings (`flags` is the instance's flag bits: bit 0 set
+ * means `receiveShadow: false`; `tangent` the world-space file tangent, w = 0 without one;
+ * `uv1` the second uv set, `uv` without one) and the `FragOut` MRT struct.
+ *
+ * Helpers: `engine_local_position(v)` / `engine_local_normal(v)` / `engine_local_tangent(v)`
+ * (object space; skinned for a `skinned` layout), `engine_world_position(v)`,
+ * `engine_previous_world_position(v)` (last frame's, `vec4f`, w = 0 when unknown),
+ * `engine_vertex(v)`, `engine_velocity(in)` (screen-space uv motion since last frame, zero
+ * without a velocity target) and `engine_write_aux(&o, rough_metal, velocity)` (fills the
+ * target's aux outputs, a no-op without them); the lighting block and `engine_lambert` /
+ * `engine_point_lights` from `WGSL_LIGHTS`; `WGSL_SKIN` (`engine_skin`, the palette binding)
+ * for a skinned layout only. The text for the 2D and 3D layouts does not change with skinning
+ * (E-008).
+ */
+export function materialPrelude(
+  layout: VertexLayout,
+  variant: PreludeVariant = PLAIN_VARIANT,
+): string {
+  const velocity = variant.velocity === true;
+  const prevLane = variant.prevLane === true;
+  const roughMetal = variant.roughMetal === true;
+  let auxFields = '';
+  let auxLoc = 2;
+  if (roughMetal) auxFields += `\n  @location(${auxLoc++}) rough_metal: vec2f,`;
+  if (velocity) auxFields += `\n  @location(${auxLoc++}) velocity: vec2f,`;
+  let laneFields = '';
+  if (prevLane) {
+    const [a, b, c] = prevLaneLocations(layout);
+    laneFields = `\n  @location(${a}) p0: vec4f,\n  @location(${b}) p1: vec4f,\n  @location(${c}) p2: vec4f,`;
+  }
+  const prevRows = prevLane ? 'v.p0, v.p1, v.p2' : 'v.m0, v.m1, v.m2';
+  const prevPos = layout.wgslPreviousPosition ?? 'vec4f(engine_local_position(v), 1.0)';
   return /* wgsl */ `
 ${WGSL_GLOBALS}
 ${WGSL_LIGHTS}
@@ -345,7 +434,7 @@ ${layout.wgslFields}
   @location(6) uvRect: vec4f,
   @location(7) tint: vec4f,
   @location(8) params: vec4f,
-  @location(9) misc: vec4f,
+  @location(9) misc: vec4f,${laneFields}
 };
 
 struct VSOut {
@@ -360,11 +449,13 @@ struct VSOut {
   @location(7) normal: vec3f,
   @location(8) worldPos: vec3f,
   @location(9) @interpolate(flat) flags: u32,
+  @location(10) tangent: vec4f,
+  @location(12) uv1: vec2f,${velocity ? '\n  @location(11) prev_clip: vec4f,' : ''}
 };
 
 struct FragOut {
   @location(0) color: vec4f,
-  @location(1) emissive: vec4f,
+  @location(1) emissive: vec4f,${auxFields}
 };
 ${layout.skinned ? `\n${WGSL_SKIN}\n` : ''}
 fn engine_local_position(v: VertexIn) -> vec3f {
@@ -375,15 +466,27 @@ fn engine_local_normal(v: VertexIn) -> vec3f {
   return ${layout.wgslNormal};
 }
 
+fn engine_local_tangent(v: VertexIn) -> vec4f {
+  return ${layout.wgslTangent ?? 'vec4f(0.0)'};
+}
+
 fn engine_world_position(v: VertexIn) -> vec3f {
   let p = vec4f(engine_local_position(v), 1.0);
   return vec3f(dot(v.m0, p), dot(v.m1, p), dot(v.m2, p));
+}
+
+fn engine_previous_world_position(v: VertexIn) -> vec4f {
+  let lp = ${prevPos};
+  let p = vec4f(lp.xyz, 1.0);
+  let rows = array<vec4f, 3>(${prevRows});
+  return vec4f(dot(rows[0], p), dot(rows[1], p), dot(rows[2], p), lp.w);
 }
 
 fn engine_vertex(v: VertexIn) -> VSOut {
   let world3 = engine_world_position(v);
   let world = world3.xy;
   let n = engine_local_normal(v);
+  let t = engine_local_tangent(v);
   var o: VSOut;
   o.clip = camera.view_proj * vec4f(world3, 1.0);
   o.uv = mix(v.uvRect.xy, v.uvRect.zw, v.uv);
@@ -396,7 +499,35 @@ fn engine_vertex(v: VertexIn) -> VSOut {
   o.normal = normalize(vec3f(dot(v.m0.xyz, n), dot(v.m1.xyz, n), dot(v.m2.xyz, n)));
   o.worldPos = world3;
   o.flags = u32(v.misc.y);
+  o.tangent = vec4f(vec3f(dot(v.m0.xyz, t.xyz), dot(v.m1.xyz, t.xyz), dot(v.m2.xyz, t.xyz)), t.w);
+  o.uv1 = mix(v.uvRect.xy, v.uvRect.zw, ${layout.wgslUv1 ?? 'v.uv'});${
+    velocity
+      ? `
+  let prev = engine_previous_world_position(v);
+  o.prev_clip = select(vec4f(0.0), camera.prev_view_proj * vec4f(prev.xyz, 1.0), prev.w != 0.0);`
+      : ''
+  }
   return o;
+}
+
+// Screen-space motion since the previous frame in uv units (+x right, +y down), jitter
+// removed; zero when the target has no velocity attachment or the previous position is unknown.
+fn engine_velocity(in: VSOut) -> vec2f {${
+    velocity
+      ? `
+  if (in.prev_clip.w == 0.0) { return vec2f(0.0); }
+  let cur = (in.clip.xy - camera.viewport.xy) / camera.viewport.zw - camera.jitter.xy * vec2f(0.5, -0.5);
+  let pn = in.prev_clip.xy / in.prev_clip.w;
+  let prev = vec2f(pn.x * 0.5 + 0.5, 0.5 - pn.y * 0.5);
+  return cur - prev;`
+      : '\n  return vec2f(0.0);'
+  }
+}
+
+// Write the aux outputs the target has (roughness, metalness; velocity); nothing otherwise.
+fn engine_write_aux(o: ptr<function, FragOut>, rough_metal: vec2f, velocity: vec2f) {${
+    roughMetal ? '\n  (*o).rough_metal = rough_metal;' : ''
+  }${velocity ? '\n  (*o).velocity = velocity;' : ''}
 }
 
 @vertex fn vs_main(v: VertexIn) -> VSOut {

@@ -4,6 +4,7 @@
  * construction and write into an `out`. Polygons are wound counter-clockwise seen from above
  * (`area2 > 0`), so for edge `e` the right portal vertex is `v[e]` and the left is `v[e + 1]`.
  */
+import { type AreaStamp, markArea } from './areas';
 import { buildContours } from './contour';
 import type { OffMeshLink } from './links';
 import { buildPolyMesh } from './polymesh';
@@ -60,8 +61,14 @@ export class NavMesh {
   /** The bake's cell size and height, kept for serialisation and for defaults in queries. */
   readonly cellSize: number;
   readonly cellHeight: number;
-  /** Bumps whenever the mesh changes (off-mesh links added or removed). */
+  /** The area byte per polygon (0 default; `markArea` stamps, 255 is reserved for obstacles). */
+  readonly area: Uint8Array;
+  /** Bumps whenever the mesh changes (links added or removed, areas stamped, obstacles applied). */
   version = 0;
+  /** The polygons the last `polysInBox` found (its return value says how many). */
+  readonly polysFound: Int32Array;
+  private readonly foundStamp: Uint32Array;
+  private findStamp = 0;
 
   /** Off-mesh links by index (holes stay `null` after removal); edit with `addOffMeshLink`. */
   readonly links: (OffMeshLink | null)[] = [];
@@ -92,6 +99,7 @@ export class NavMesh {
     cellSize: number,
     cellHeight: number,
     adjacency?: Int32Array,
+    area?: Uint8Array,
   ) {
     this.verts = verts;
     this.vertCount = vertCount;
@@ -110,6 +118,9 @@ export class NavMesh {
     this.normaliseWinding();
     this.adjacency = adjacency ?? buildAdjacency(polys, polyCount, nvp, this.nverts, vertCount);
     this.triArea = new Float64Array(Math.max(1, nvp));
+    this.area = area ?? new Uint8Array(Math.max(1, polyCount));
+    this.polysFound = new Int32Array(Math.max(1, polyCount));
+    this.foundStamp = new Uint32Array(Math.max(1, polyCount));
 
     const min = {
       x: Number.POSITIVE_INFINITY,
@@ -207,6 +218,43 @@ export class NavMesh {
   private gz(z: number): number {
     const i = Math.floor((z - this.bounds.min.z) / this.gridCell);
     return i < 0 ? 0 : i >= this.gridH ? this.gridH - 1 : i;
+  }
+
+  /**
+   * Collects every polygon whose XZ bounding box overlaps the box into `polysFound` (each
+   * once) and returns how many. Allocation-free; the next call overwrites the list.
+   */
+  polysInBox(minX: number, minZ: number, maxX: number, maxZ: number): number {
+    if (this.polyCount === 0) return 0;
+    this.findStamp = (this.findStamp + 1) >>> 0;
+    if (this.findStamp === 0) {
+      this.foundStamp.fill(0);
+      this.findStamp = 1;
+    }
+    const stamp = this.findStamp;
+    const cx0 = this.gx(minX);
+    const cz0 = this.gz(minZ);
+    const cx1 = this.gx(maxX);
+    const cz1 = this.gz(maxZ);
+    let count = 0;
+    for (let cz = cz0; cz <= cz1; cz++) {
+      for (let cx = cx0; cx <= cx1; cx++) {
+        const c = cx + cz * this.gridW;
+        const end = this.gridStart[c + 1]!;
+        for (let i = this.gridStart[c]!; i < end; i++) {
+          const p = this.gridItems[i]!;
+          if (this.foundStamp[p] === stamp) continue;
+          this.foundStamp[p] = stamp;
+          const bx0 = this.polyBox[p * 4]!;
+          const bz0 = this.polyBox[p * 4 + 1]!;
+          const bx1 = this.polyBox[p * 4 + 2]!;
+          const bz1 = this.polyBox[p * 4 + 3]!;
+          if (bx0 > maxX || bx1 < minX || bz0 > maxZ || bz1 < minZ) continue;
+          this.polysFound[count++] = p;
+        }
+      }
+    }
+    return count;
   }
 
   /** Reverses any clockwise polygon so every polygon is counter-clockwise seen from above. */
@@ -606,10 +654,18 @@ export function buildAdjacency(
 /**
  * Bakes a navmesh from triangle soup: voxelise, filter by height, climb and slope, erode by the
  * agent radius, partition into regions, trace and simplify contours, triangulate and merge into
- * convex polygons. Bake-time only; allocates freely. An input with no walkable surface gives an
- * empty mesh.
+ * convex polygons, then stamp `opts.areas` (if any). Bake-time only; allocates freely. An input
+ * with no walkable surface gives an empty mesh.
  */
-export function bakeNavMesh(input: NavBakeSource | NavBakeSource[], opts: NavBakeOptions): NavMesh {
+export interface NavBakeAreaOptions {
+  /** Area stamps applied to the baked polygons (`markArea` for each, in order). Optional. */
+  areas?: AreaStamp[];
+}
+
+export function bakeNavMesh(
+  input: NavBakeSource | NavBakeSource[],
+  opts: NavBakeOptions & NavBakeAreaOptions,
+): NavMesh {
   const sources = Array.isArray(input) ? input : [input];
   const cs = opts.cellSize;
   const ch = opts.cellHeight;
@@ -655,5 +711,10 @@ export function bakeNavMesh(input: NavBakeSource | NavBakeSource[], opts: NavBak
     verts[i * 3 + 2] = bmin[2] + pm.verts[i * 3 + 2]! * cs;
   }
   const polys = pm.polys.slice(0, Math.max(1, pm.polyCount) * nvp);
-  return new NavMesh(verts, pm.vertCount, polys, pm.polyCount, nvp, cs, ch);
+  const mesh = new NavMesh(verts, pm.vertCount, polys, pm.polyCount, nvp, cs, ch);
+  if (opts.areas) {
+    for (const stamp of opts.areas) markArea(mesh, stamp.shape, stamp.area);
+    mesh.version = 0;
+  }
+  return mesh;
 }

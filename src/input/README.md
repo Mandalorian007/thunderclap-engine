@@ -51,7 +51,7 @@ Types a game names when it wraps or configures `Input`:
 
 ## Touch zones
 
-`createTouchZones(input, { zones, bindings?, devices? })` (`input/touch-zones.ts`, ws/input-4) turns screen regions into a stick, buttons or swipes that feed actions. Each zone has a `rect: (w, h) => ZoneRect` (`{ x, y, w, h }` in CSS px of the pointer target, evaluated when a pointer lands, so it follows resizes; `ZoneRectFn`) and a `kind: TouchZoneKind`: `'stick'` (`StickZoneOptions`: `deadZone` 0.12, `radius` 64 px, `anchor: 'down' | 'center'`), `'buttons'` (`ButtonsZoneOptions`: `buttons: Record<name, ZoneRectFn>` sub-rects) or `'swipe'` (`SwipeZoneOptions`: `threshold` 24 px). A pointer of one of `devices` (default `['touch']`) that goes down inside a free zone is claimed through the input's dispatcher, so gestures and the router never see it (two thumbs never pinch); each zone tracks at most one pointer, a pointer starting outside every zone is left alone. Readings (`zones.zones.<name>`, `TouchZoneReading`): `StickZone` (`active`, `vector` `[x, y]` -1..1 reused, `x`, `y`, `originX`, `originY`), `ButtonsZone` (`pressed(name)` on the landing tick, `held(name)`, `down`), `SwipeZone` (`swipe: SwipeDirection | null`, once per gesture). `bindings` map actions to `TouchZoneBinding`s (`{ zone, axis: 'x' | 'y', dir }`, `{ zone, button }`, `{ zone, swipe }`, one or a list) through an `ActionSource`, so `input.pressed('jump')`, `input.value('moveRight')` and `input.axis('moveLeft', 'moveRight')` read the thumbs; zone bindings live beside the binding map, not in it (`Bindings` and the glyphs are unchanged). The returned `TouchZones` has `enabled`, `update()` (called by `input.update()`), `attach()`/`detach()` (automatic on `input.attach`/`detach`) and `destroy()`. Recordings capture a zone thumb only when it is the input's primary pointer (the feed records one pointer); `harness/input.html?zones` draws a stick and a jump button. Types: `TouchZonesOptions`, `TouchZoneOptions`, `ZoneRect`.
+`createTouchZones(input, { zones, bindings?, devices? })` (`input/touch-zones.ts`, ws/input-4) turns screen regions into a stick, buttons or swipes that feed actions. Each zone has a `rect: (w, h) => ZoneRect` (`{ x, y, w, h }` in CSS px of the pointer target, evaluated when a pointer lands, so it follows resizes; `ZoneRectFn`) and a `kind: TouchZoneKind`: `'stick'` (`StickZoneOptions`: `deadZone` 0.12, `radius` 64 px, `anchor: 'down' | 'center'`), `'buttons'` (`ButtonsZoneOptions`: `buttons: Record<name, ZoneRectFn>` sub-rects) or `'swipe'` (`SwipeZoneOptions`: `threshold` 24 px). A pointer of one of `devices` (default `['touch']`) that goes down inside a free zone is claimed through the input's dispatcher, so gestures and the router never see it (two thumbs never pinch); each zone tracks at most one pointer, a pointer starting outside every zone is left alone. Readings (`zones.zones.<name>`, `TouchZoneReading`): `StickZone` (`active`, `vector` `[x, y]` -1..1 reused, `x`, `y`, `originX`, `originY`), `ButtonsZone` (`pressed(name)` on the landing tick, `held(name)`, `down`), `SwipeZone` (`swipe: SwipeDirection | null`, once per gesture). `bindings` map actions to `TouchZoneBinding`s (`{ zone, axis: 'x' | 'y', dir }`, `{ zone, button }`, `{ zone, swipe }`, one or a list) through an `ActionSource`, so `input.pressed('jump')`, `input.value('moveRight')` and `input.axis('moveLeft', 'moveRight')` read the thumbs; zone bindings live beside the binding map, not in it (`Bindings` and the glyphs are unchanged). The returned `TouchZones` has `enabled`, `update()` (called by `input.update()`), `attach()`/`detach()` (automatic on `input.attach`/`detach`) and `destroy()`. Recordings capture every zone thumb (the `ptr` lane, ws/input-5); `harness/input.html?zones` draws a stick and a jump button. Types: `TouchZonesOptions`, `TouchZoneOptions`, `ZoneRect`.
 
 ## Semantics
 - `pressed` is true for exactly one `update()` when an action becomes active; `released` for one `update()` after it stops. `held` while active. `heldTicks` counts ticks.
@@ -102,6 +102,40 @@ input.setBindings(parseBindings(localStorage.getItem('bindings'), DEFAULTS));
 - `input.listen(action, opts?: ListenOptions)` resolves with the next key (`{ key }`), mouse or pen button (`{ mouse }`), pad button that was up when the listen began (`{ padButton }`) or XR button (`{ xr }`), swallowing it (no action sees it). Escape resolves `null`, as does `timeoutMs` (ticks of `tickMs`) or a newer `listen`. Keys typed into text fields never reach `Input`, so they are not captured. `listeningFor()` names the pending action.
 - `serializeBindings(map)` is JSON; `parseBindings(text | object, defaults)` returns a map with the shape of `defaults`: actions it does not know are dropped and bindings that fail `isBinding` are dropped, each with one `console.warn`; unreadable text returns `defaults`. A rebind of a chord member or a trigger survives the round trip.
 - `findConflicts(map)` returns one `BindingConflict { binding, actions }` per binding two or more actions share, comparing the whole binding: a `hold` and a `press` on one key are different bindings and do not conflict; chords conflict only with identical chords.
+
+## Contexts
+
+A menu, gameplay and a vehicle each own their bindings (ws/input-5); the game pushes and pops instead of toggling `blocked`.
+
+```ts
+const pop = input.pushContext('menu', {
+  bindings: { confirm: [{ key: 'Enter' }, { padButton: 0 }], back: [{ key: 'Escape' }] },
+  pass: 'none',                          // nothing below the menu fires
+});
+input.context;                           // 'menu'
+pop();                                   // or input.popContext('menu')
+```
+
+- `pushContext(name, opts?: ContextOptions)` → a remover; `popContext(name): boolean` removes the topmost entry of that name. Pushing a name already on the stack moves it to the top. `ContextOptions.bindings` is a partial map over the same action names (an unknown action throws); `pass: ContextPass` says what the contexts below contribute: `'unbound'` (default) the bindings of every action this context leaves out, `'all'` theirs after its own (an overlay), `'none'` nothing.
+- `context` (the top name or null), `contextStack()` (bottom first) and `onContextChange(fn)` (also the `'context'` event) read it.
+- **Edges across a change.** Only actions whose effective bindings changed are rebuilt: their hold, double-tap and chord progress restarts and their buffered press is dropped. A rebuilt action whose input is down when the context changes is latched: it reads nothing until that input lifts, so the Space that opened a menu does not also press its `confirm`. An action that loses its bindings releases on the next `update()`.
+- `bindings(context?)`, `rebind(action, list, context?)` and glyphs follow the stack: with no argument `bindings()` is the effective map and `rebind` writes the top context (the base map when none is pushed); `null` names the base map, a string a context on the stack. `glyphFor` reads the effective map, so a prompt shows the menu's key while the menu is up.
+- Recordings note pushes and pops (`cx`, below); a replay pushes them again from the same inputs.
+
+## Input buffer
+
+`input.buffered(action, windowMs)` is true when `action` went `pressed` within the last `windowMs` and that press was not yet consumed; `input.consume(action)` marks the latest press used, clears `pressed` for the rest of the tick and returns whether there was one. The window counts ticks of the fixed step (`ceil(windowMs / tickMs)`, `InputOptions.tickMs`, default 1000 / 60: 100 ms is 6 ticks), so a replay gives the same answers. A press while `blocked()` does not buffer.
+
+```ts
+if (grounded && input.buffered('jump', 100)) {
+  input.consume('jump');                 // a jump pressed up to 6 ticks before landing still lands
+  jump();
+}
+```
+
+## Sticks
+
+`input.stick(negX, posX, negY, posY, out, opts?: StickOptions)` reads four actions as a 2D stick into `out` (`[x, y]`, reused, returned) and shapes it; `input.stickAngle(out)` is `atan2(y, x)` or null at rest. Keys give a diagonal of length 1, pad axes their analogue value (bind them with `threshold: 0` to keep the low end). `shapeStick(x, y, out, opts?)` is the same shaping on raw values. `StickOptions`: `deadzone` (default 0.15), `shape: StickShape` (`'scaledRadial'` default: zero inside the dead zone, the length rescaled from its edge so it is continuous; `'radial'`: the value unchanged past the dead zone; `'axial'`: each axis on its own, which snaps near-axis input to the axis), `curve` (the length to this power, default 1), `clamp` (length at most 1, default true). `Look`'s touch stick and pad sticks use the same function, scaled radial at their own dead zones.
 
 ## Rumble
 
@@ -292,7 +326,8 @@ distance -= look.zoom * step;                    // > 0 is closer (Follow does t
 - `lockOnFirstClick` (ws/ergo-3d, default false): a mouse or pen `pointerdown` on the attached element while the lock is not held calls `request()`, so the first click into the game locks the pointer and, after Escape, the next click locks it again; touches never lock and a `blocked()` session requests nothing. Without it the game wires `request()` to its own click handler as above.
 - `blocked()` (shared with the linked `Input`): `look` and `move` read zero, the lock is released, and fingers already down are ignored until they lift. Window blur and a hidden tab drop the touches too.
 - Feed methods for tests and replays: `mouseMove(dx, dy)`, `wheel(units)`, `touchDown(id, x, y, inMoveZone)`, `touchMove`, `touchUp`, `cancelAll`. `attach(el, dispatcher?)`/`detach()` are called by `Input.attach`/`detach`; attached, the pointer events come from the dispatcher (the wheel, the locked mouse and the lock events stay the look's own listeners).
-- Types: `LookOptions`, `LookMode`, `LookTouchOptions` (`moveZone`, `deadzone`, `radius`, `sensitivity`), `LookZoomOptions` (`wheel`, `pinch`, `pad`, `stepPx`), `LookZoomPad`, `MoveZone`, `LookKeys`, `LookStick`, `LookEvents`; constant `PAD_ZOOM_PER_S`. No allocation per tick.
+- `gyro` (`LookOptions.gyro`, a `GyroSource`) adds gyro aim; `onTap` reports taps (see *Gyro aim* and *Look tap*).
+- Types: `LookOptions`, `LookMode`, `LookTapOptions`, `LookTapListener`, `LookTouchOptions` (`moveZone`, `deadzone`, `radius`, `sensitivity`), `LookZoomOptions` (`wheel`, `pinch`, `pad`, `stepPx`), `LookZoomPad`, `MoveZone`, `LookKeys`, `LookStick`, `LookEvents`; constant `PAD_ZOOM_PER_S`. No allocation per tick.
 
 ## Orbit look
 
@@ -306,6 +341,25 @@ ctx.input.setLook(look);                        // a left-button drag now feeds 
 - `request()` resolves false without asking and `lockOnFirstClick` is ignored (one `console.warn`). The touch zones, the wheel, the pinch and the pad are unchanged, so a touch drag turns the view in both modes.
 - A drag claims its pointer through the dispatcher (`dispatcher.claim`, ws/input-4; `gestures.claim`, the hook `Input` installs from `look.claimsPointer(device)`, covers the feed path), so it never pans or taps, and the router's screen source stops producing hits for it until it lifts (`hit` again on the next hover) unless `hoverWhileClaimed`; touches are not claimed, and in locked mode nothing is.
 - Through an `Input` the drag comes from its feed (`buttonDown(0)`, `pointerAt`, `buttonUp(0)` with a non-touch pointer), so a recording replays an orbit; a `Look` attached on its own consumes a private dispatcher's pointer events. Feed methods for tests: `orbitDown(x, y)`, `orbitMove(x, y)`, `orbitUp()`; `orbiting` is true while a drag is live. `blocked()` zeroes it like the locked mouse.
+
+## Gyro aim
+
+A phone aims by turning it (ws/input-5). `createGyroSource(opts?: GyroSourceOptions)` (`input/gyro.ts`) reads `devicemotion`'s rotation rate into a look delta; give it to `Look` (`new Look({ gyro })` or `look.gyro = src`) and it is added to the pointer and stick look each tick.
+
+```ts
+const gyro = createGyroSource({ sensitivity: 1.2, smoothing: 0.3 });
+button.onclick = async () => {
+  if ((await gyro.requestPermission()) === 'granted') look.gyro = gyro;   // iOS asks from a tap
+};
+```
+
+- `GyroSource`: `enabled`, `sensitivity` (look radians per device radian, default 1), `invertY` (its own; `Look.invertY` does not apply), `smoothing` (0..1 low-pass per tick), `available` (the API exists), `receiving` (a rotation rate arrived: desktops have the API, no sensor), `permission` (`'prompt'` until asked), `requestPermission(): Promise<GyroPermission>` (`'granted' | 'denied' | 'unavailable'`, never rejects), `take(out)` (what `Look` calls), `feed(alpha, beta, gamma, ms)` and `dispose()`.
+- Rotation about the screen's vertical axis yaws and about its horizontal axis pitches, following `screen.orientation.angle`. Each event integrates over its own interval, capped at 100 ms so a stalled sensor does not jump the view. While `Look` is blocked the turn is dropped, not saved up.
+- `GyroSourceOptions.env: GyroEnv` (`target`, `requestPermission`, `screenAngle`) replaces the page's `window`: tests and `harness/input5.html?gyro` feed a fake (`GyroMotionEvent` is the slice of the event read). Headless there is no target and the source is `'unavailable'`.
+
+## Look tap
+
+`look.onTap((x, y, device) => ...)` (`LookTapListener`) reports a press that lifts within `maxMs` (450) having moved at most `maxMove` (10) px in all (`LookOptions.tap: LookTapOptions`), so a page with an orbit or touch look can pick on a tap without writing its own pointerup detection. Only a primary, main-button pointer taps; a second pointer cancels it, and so does the touch move stick, a drag past `maxMove` or `blocked()`. `(x, y)` are in the router's units: through `Input.setPointerTransform` when one is set (`null` from it drops the tap), else CSS px of the target. The tap is reported beside the gestures' `tap`, not instead of it. Returns a remover.
 
 ## Follow
 
@@ -344,7 +398,7 @@ import { createInputPlayback, createInputRecorder, parseRecording, serializeReco
 
 const rec = createInputRecorder(input);            // input.recorder === rec; one tick per input.update()
 // ... play ...
-const recording = rec.stop();                      // { version: 1, ticks: [...] }
+const recording = rec.stop();                      // { version: 2, ticks: [...] }
 localStorage.setItem('bug-42', serializeRecording(recording));
 
 // Later, on an identical game (same bindings, same layout, same fixed step):
@@ -357,8 +411,8 @@ if (!pb.step()) finished();
 
 - `createInputRecorder(input, opts?)` → `InputRecorder { tick(), stop(): InputRecording, recording, ticks }`. It closes a tick on every `input.update()` (the hook's pad read), so `tick()` is only for driving it by hand. `InputRecorderOptions.pads` (default true) captures the pads `update()` read. `stop()` uninstalls it and returns the same object `recording` points at.
 - `createInputPlayback(input, recording, opts?)` → `InputPlayback { step(): boolean, done, tick, length, seek(tick), speed, detach() }`. `step()` feeds the next tick's events and returns false once the recording is finished (the input then holds its last state; call `releaseAll()` yourself if you want it cleared). While installed, `update()` reads the recorded pad snapshot instead of `getGamepads`. `speed` (`InputPlaybackOptions.speed`, ticks per `step()`, default 1) fast-forwards in tests: the extra ticks are fed and `update()`d inside the call, so only the last one is seen by the caller. `seek(tick)` calls `releaseAll()` first, restores the pad snapshot in force at that tick and feeds nothing that was skipped; `seek(0)` restarts. `detach()` uninstalls the hook.
-- **Format** (`InputRecording`, plain JSON, deltas only): `{ version: 1, ticks: InputTick[] }`. A tick with events is an `InputTickEvents` `{ t, k?, b?, p?, w?, r?, g? }`: `k` keys in call order as `[code, 1 | 0]` (down, up), `b` mouse buttons the same way, `p` the last pointer position fed that tick as `[clientX, clientY]` plus `'touch' | 'pen'` when not a mouse, `w` the wheel delta summed over the tick, `r: 1` for `releaseAll`, `d: 1` when a key went down after the tick's last pointer position (so the keyboard, not the pointer, is `lastDevice`), `g` the pads when they changed: `PadSnapshot[]`, each `{ buttons: number[], axes: number[] }` (a `pressed` button records as 1) or `null` for an empty or disconnected slot (the implied starting state is no pads, so a page whose `navigator.getGamepads()` is four empty slots records nothing). Ticks on which nothing was fed collapse into an `InputTickRun` `{ t, n }`. `recordingLength(rec)` is the tick count. **Size:** a tick with one key edge is about 20 bytes; a pointer move 25; idle stretches of any length are one run. A minute of busy play is tens of kilobytes.
-- `serializeRecording(rec)` is `JSON.stringify`; `parseRecording(json | value)` validates the version, the tick order and every field and throws `InputRecordingError` otherwise.
-- **Replay order** within a tick: `r`, then `k`, `b`, `p`, `w` (`p` before `k` when `d` is set). A `releaseAll` that arrived after other events on the same tick (a blur mid-burst) is replayed before them; keys are in call order among themselves, buttons likewise, and `Input` does not otherwise care about the order of the groups.
-- **Not captured:** gesture timing (`Gestures` reads DOM pointer events and a clock, not the feed methods), `Look`'s pointer lock and raw `movementX/Y`, `PointerRouter` sources, `blocked()` (replay with the same UI state), the pointer transform (positions are client CSS px, so replay on the same layout), and the state before the recording started: `releaseAll()` clears keys and buttons but not the pointer position, so a session that reads `pointer` should begin by placing it. The recording holds what reached `Input`; the game's own randomness and timing are the game's to pin.
+- **Format** (`InputRecording`, plain JSON, deltas only): `{ version: 2, ticks: InputTick[] }`. A tick with events is an `InputTickEvents` `{ t, k?, b?, p?, w?, r?, d?, g?, ptr?, cx?, cs? }`: `k` keys in call order as `[code, 1 | 0]` (down, up), `b` mouse buttons the same way, `p` the last pointer position fed that tick as `[clientX, clientY]` plus `'touch' | 'pen'` when not a mouse, `w` the wheel delta summed over the tick, `r: 1` for `releaseAll`, `d: 1` when a key went down after the tick's last pointer position (so the keyboard, not the pointer, is `lastDevice`), `g` the pads when they changed: `PadSnapshot[]`, each `{ buttons: number[], axes: number[] }` (a `pressed` button records as 1) or `null` for an empty or disconnected slot (the implied starting state is no pads, so a page whose `navigator.getGamepads()` is four empty slots records nothing). `ptr` (version 2) every pointer event the dispatcher delivered, in order, as an `InputPointerEntry` `[phase, id, device, clientX, clientY, button, primary]` (phase 0 down, 1 move, 2 up, 3 cancel, 4 leave: `InputPointerPhase`; consecutive moves of one pointer keep the last; a blur records a cancel per pointer still down), so touch zones, gestures and a second thumb replay. `cx` context pushes `[name, 1]` and pops `[name, 0]`, `cs` the actions `consume`d: both observational, like `rumble` (the game makes the same calls from the same inputs). Ticks on which nothing was fed collapse into an `InputTickRun` `{ t, n }`. `recordingLength(rec)` is the tick count. **Size:** a tick with one key edge is about 20 bytes; a pointer move 25; idle stretches of any length are one run. A minute of busy play is tens of kilobytes.
+- `serializeRecording(rec)` is `JSON.stringify`; `parseRecording(json | value)` validates the version, the tick order and every field and throws `InputRecordingError` otherwise. **Versions:** the recorder writes 2; version 1 recordings (no `ptr`, `cx`, `cs`) still parse and play.
+- **Replay order** within a tick: `r`, then `k`, `b`, `p`, `w` (`p` before `k` when `d` is set), then `ptr`, dispatched as `PointerEvent`s on the attached pointer target (`input.replayPointer`) (headless, with no target, the lane is skipped; `seek` cancels replayed pointers still down). A `releaseAll` that arrived after other events on the same tick (a blur mid-burst) is replayed before them; keys are in call order among themselves, buttons likewise, and `Input` does not otherwise care about the order of the groups.
+- **Not captured:** gesture timing (`Gestures` reads a clock; the `ptr` lane replays its pointers, so a gesture replays when its clock is the tick clock), `Look`'s pointer lock and raw `movementX/Y`, `PointerRouter` sources, `blocked()` (replay with the same UI state), the pointer transform (positions are client CSS px, so replay on the same layout), and the state before the recording started: `releaseAll()` clears keys and buttons but not the pointer position, so a session that reads `pointer` should begin by placing it. The recording holds what reached `Input`; the game's own randomness and timing are the game's to pin.
 - Zero allocations per tick while nothing happens: the recorder bumps the current run's count. `harness/replay.html` records a scripted 3 s session, replays it and compares every tick (`e2e/replay.spec.ts`).

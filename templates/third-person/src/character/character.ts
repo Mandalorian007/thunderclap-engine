@@ -35,7 +35,6 @@ import {
   SkinPalette,
   Transform,
   VERTEX_LAYOUT_SKINNED,
-  WGSL_PBR,
 } from '@thunderclap/engine/render';
 import type { Ground } from '../world/ground';
 import { groundHeight } from '../world/ground';
@@ -43,18 +42,6 @@ import { type Controller, createController, moveController, RUN_SPEED } from './
 import { COSMETICS, type CosmeticSlot, nextOption } from './cosmetics';
 import { type Clips, createCharacterGraph } from './graph';
 import { buildCharacterGlb, J, JOINT_COUNT, JOINT_NAMES } from './rig';
-
-/** Skinned PBR: vertex colours as albedo, a rough dielectric; the palette slot rides in params.w. */
-const SKINNED_PBR_WGSL = /* wgsl */ `${WGSL_PBR}
-@fragment fn fs_main(in: VSOut) -> FragOut {
-  let n = normalize(in.normal);
-  let v = normalize(camera.camera_pos.xyz - in.worldPos);
-  let lit = engine_pbr(in.color.rgb, 0.0, 0.7, n, v, in.worldPos, 1.0, vec3f(0.0));
-  var o: FragOut;
-  o.color = vec4f(lit, 1.0);
-  o.emissive = vec4f(0.0);
-  return o;
-}`;
 
 /** Normalised attack time at which the swing connects. */
 export const ATTACK_HIT_PHASE = 0.45;
@@ -125,11 +112,13 @@ export function createCharacter(
     bounds: { center: [0, 0.95, 0], radius: 2.2 },
   });
   const palette = new SkinPalette(renderer.device, { joints: JOINT_COUNT, label: 'character' });
-  const material = renderer.createMaterial({
+  // The standard PBR material over the palette: vertex colours as albedo, a rough dielectric;
+  // the palette slot rides in params.w.
+  const material = createStandardMaterial(renderer, {
     label: 'character-skinned',
-    wgsl: SKINNED_PBR_WGSL,
-    blend: 'opaque',
-    buffers: [palette.buffer],
+    skin: palette,
+    metallic: 0,
+    roughness: 0.7,
   });
   const bodyParams: InstanceParams = { params: [0, 0, 0, 0] };
 

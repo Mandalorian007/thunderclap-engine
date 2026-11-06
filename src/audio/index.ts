@@ -1,3 +1,4 @@
+// ws/audio-4
 export {
   type AttachAudioOptions,
   AudioEngine,
@@ -9,7 +10,9 @@ export {
   busGain,
   type CameraLike,
   type ConeOptions,
+  createVoiceAdapter,
   DEFAULT_LIMITER,
+  DEFAULT_MAX_DOPPLER_SPEED,
   DEFAULT_MIXER,
   DEFAULT_REVERB_SENDS,
   type FollowTarget,
@@ -21,11 +24,16 @@ export {
   type PlayOptions,
   type ReverbOptions,
   type Rolloff,
+  SPEED_OF_SOUND,
   SpatialListener,
   type SpatialOptions,
   type StopAllOptions,
   sanitizeMixer,
   type Voice,
+  type VoiceAdapter,
+  type VoiceAdapterOptions,
+  type VoiceFilterKind,
+  type VoiceFilterOptions,
 } from './audio';
 export {
   type BufferFactory,
@@ -64,7 +72,17 @@ export {
   type MusicPlayOptions,
   type MusicStart,
   type Stem,
+  type StreamElement,
 } from './music';
+export {
+  DEFAULT_OCCLUSION,
+  type OccludableVoice,
+  type OcclusionOptions,
+  type OcclusionResult,
+  OcclusionScheduler,
+  occlusionCutoff,
+  occlusionGain,
+} from './occlusion';
 export { type PersistMixerOptions, persistMixer } from './persist';
 export {
   chime,
@@ -80,6 +98,15 @@ export {
   zap,
 } from './recipes';
 export { createSend, type Send, type SendKind, type SendOptions } from './send';
+export {
+  parseSpriteRef,
+  type SpriteRange,
+  type SpriteSchedule,
+  type SpriteSheet,
+  type SpriteSidecar,
+  spriteSchedule,
+  spriteSheetFrom,
+} from './sprites';
 export {
   type CrackleSource,
   type FilterSpec,

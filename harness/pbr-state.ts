@@ -57,6 +57,12 @@ export interface HarnessPbrState {
   lights: { sun: boolean; points: number; spots: number; shadow: boolean; fog: boolean };
   /** Standard materials created by the page. */
   materials: number;
+  /**
+   * Meshes in `VERTEX_LAYOUT_3D_TANGENT` drawn per frame (ws/render-4): 1 with `?tangents`, a
+   * floor tile with file tangents from `computeTangents` under the normal-mapped material, 0
+   * otherwise.
+   */
+  tangentMeshes: number;
 }
 
 export interface HarnessPbrApi {

@@ -1,26 +1,27 @@
 /**
- * Three-layer parallax from tile layers. Each layer is a short pattern (strings, like a level)
- * repeated across the view; `update` slides the layer's origin so it scrolls at `factor` of the
- * camera and wraps every pattern period. One draw per layer.
- *
- * The engine has `createTileLayer` but no parallax helper; this is what the template wrote.
+ * Three-layer parallax: each layer is a short pattern (strings, like a level) repeated across the
+ * view as a tile layer; the engine's `createParallax` slides every layer's origin at `factor` of
+ * the camera and wraps it every pattern period. One draw per layer.
  */
 import {
+  createParallax as createEngineParallax,
   createTileLayer,
-  type Frame,
   type Material,
+  type Parallax,
+  type ParallaxLayerOptions,
   type Renderer,
-  type TileLayer,
 } from '@thunderclap/engine/render';
 import { TILE } from '../levels/format';
 import { ATLAS_COLS, ATLAS_ROWS, CELL } from './atlas';
+
+export type { Parallax } from '@thunderclap/engine/render';
 
 interface LayerSpec {
   /** 0 = pinned to the sky, 1 = moves with the world. */
   factor: number;
   /** Pattern characters, see `GLYPH`. All rows the same length; the width is the period. */
   pattern: readonly string[];
-  /** Rows of air above the pattern when the view is taller than it. */
+  /** Brightness: far layers are darker. */
   tint: number;
 }
 
@@ -69,13 +70,11 @@ const SPECS: readonly LayerSpec[] = [
   },
 ];
 
-export interface Parallax {
-  /** Aims every layer for a view whose top-left is `(camLeft, camTop)`. */
-  update(camLeft: number, camTop: number): void;
-  draw(frame: Frame): void;
-  destroy(): void;
-}
-
+/**
+ * Builds the three layers for a view of `viewW × viewH` over a world `worldH` tall and hands them
+ * to the engine's `createParallax`; `update(camLeft, camTop)` aims them, `draw` draws them in
+ * far-to-near order, `destroy` releases them.
+ */
 export function createParallax(
   renderer: Renderer,
   material: Material,
@@ -84,13 +83,8 @@ export function createParallax(
   worldH: number,
 ): Parallax {
   const viewCols = Math.ceil(viewW / TILE) + 1;
-  const layers: {
-    layer: TileLayer;
-    spec: LayerSpec;
-    periodPx: number;
-    params: { tint: [number, number, number, number] };
-  }[] = [];
-  for (const spec of SPECS) {
+  const groundY = worldH - TILE;
+  const layers: ParallaxLayerOptions[] = SPECS.map((spec) => {
     const period = spec.pattern[0]!.length;
     const rows = spec.pattern.length;
     const columns = viewCols + period;
@@ -110,27 +104,19 @@ export function createParallax(
         if (idx >= 0) layer.set(c, r, idx);
       }
     }
+    // The pattern's bottom row sits on the world's ground line when the view's bottom is there,
+    // eased by the same factor so climbing lifts the far layers less than the near ones. The
+    // engine adds `camTop × (1 - factor)` to this base on every `update`.
+    const baseTop = groundY - rows * TILE;
+    layer.origin.y = baseTop + (viewH - rows * TILE - baseTop) * (1 - spec.factor);
     const t = spec.tint;
-    layers.push({ layer, spec, periodPx: period * TILE, params: { tint: [t, t, t, 1] } });
-  }
-  const groundY = worldH - TILE;
-  return {
-    update(camLeft, camTop) {
-      for (const l of layers) {
-        const scroll = camLeft * l.spec.factor;
-        l.layer.origin.x = camLeft - (((scroll % l.periodPx) + l.periodPx) % l.periodPx);
-        // The pattern's bottom row sits on the world's ground line, eased by the same factor so
-        // climbing lifts the far layers less than the near ones.
-        const baseTop = groundY - l.layer.rows * TILE;
-        const pinned = camTop + viewH - l.layer.rows * TILE;
-        l.layer.origin.y = baseTop + (pinned - baseTop) * (1 - l.spec.factor);
-      }
-    },
-    draw(frame) {
-      for (const l of layers) l.layer.draw(frame, l.params);
-    },
-    destroy() {
-      for (const l of layers) l.layer.destroy();
-    },
-  };
+    return {
+      layer,
+      factorX: spec.factor,
+      factorY: spec.factor,
+      wrapW: period * TILE,
+      params: { tint: [t, t, t, 1] },
+    };
+  });
+  return createEngineParallax(renderer, layers);
 }

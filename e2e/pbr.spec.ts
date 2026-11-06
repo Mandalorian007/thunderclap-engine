@@ -9,7 +9,9 @@
  *   them, differ in luminance;
  * - the shared light loop (ws/pbr-lights): the spot light's cone shows on the PBR floor (inside
  *   vs outside), and a lamp masked to one layer lights the sphere on that layer but not its
- *   twin on another.
+ *   twin on another;
+ * - `?tangents` (ws/render-4): the normal-mapped material drawn over a mesh with file tangents
+ *   (`VERTEX_LAYOUT_3D_TANGENT`) compiles and draws without a GPU error.
  */
 import type { Frame, Page } from '@playwright/test';
 import type { HarnessPbrState, PbrProbe } from '../harness/pbr-state';
@@ -25,17 +27,18 @@ type Rgb = [number, number, number];
 let frame: Frame;
 const errors: string[] = [];
 
-async function open(page: Page, wrapper: string): Promise<void> {
+async function open(page: Page, wrapper: string, flags = ''): Promise<void> {
   errors.length = 0;
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => {
     if (m.type() === 'error') errors.push(m.text());
   });
+  const file = `pbr.html${flags ? `?${flags}` : ''}`;
   if (wrapper === 'top') {
-    await page.goto(`${HARNESS_URL}pbr.html`);
+    await page.goto(`${HARNESS_URL}${file}`);
     frame = page.mainFrame();
   } else {
-    await page.goto(`${WRAPPER_URL}?page=${encodeURIComponent('pbr.html')}`);
+    await page.goto(`${WRAPPER_URL}?page=${encodeURIComponent(file)}`);
     frame = await harnessFrame(page);
   }
   await expect
@@ -177,6 +180,20 @@ test('a lamp masked to one layer lights the sphere on that layer, not its twin',
   expect(sum(lit!), `lit ${lit} masked ${masked}`).toBeGreaterThan(sum(masked!) + 40);
   // The masked sphere still sees the sun and ambient: it is lit, not black.
   expect(sum(masked!), `masked ${masked}`).toBeGreaterThan(150);
+  expect(s.gpuErrors).toBe(0);
+  expect(errors).toEqual([]);
+});
+
+test('the standard material draws a mesh with file tangents without a GPU error (ws/render-4)', async ({
+  page,
+  wrapper,
+}) => {
+  await open(page, wrapper, 'tangents');
+  // The tangent read is on the shader, not the layout: the pipeline for
+  // VERTEX_LAYOUT_3D_TANGENT compiles and draws beside the derivative-tangent tile.
+  await expect.poll(async () => (await read()).tangentMeshes).toBeGreaterThanOrEqual(1);
+  const s = await read();
+  expect(s.stats.instances).toBe(30);
   expect(s.gpuErrors).toBe(0);
   expect(errors).toEqual([]);
 });

@@ -31,14 +31,24 @@ const y = heightAt(ground, player.x, player.z);
   returns the index, `tri(a, b, c)` and `quad(a, b, c, d)` write indices, `finish()` checks the
   counts and computes the bounds. The builders below use it.
 - `mergeGeometry(...parts)` concatenates geometries of one layout, offsetting indices and
-  promoting to 32-bit indices when the total passes 65535 vertices. Inputs are untouched. The
-  3D and `VERTEX_LAYOUT_3D_TANGENT` layouts get bounds; any other layout is left unbounded.
+  promoting to 32-bit indices when the total passes 65535 vertices. Inputs are untouched. Any
+  layout whose position (`@location(0)`, `float32x3`) sits at float 0 gets bounds (the 3D, tangent
+  and skinned layouts, or a game's own); any other layout is left unbounded.
 - `transformGeometry(g, world)` **mutates `g` in place** (see *Operations* for the copy-first
-  recipe): it applies a 3×4 row-major matrix (`Transform.world`) to positions and its inverse
+  recipe, `cloneGeometry`): it applies a 3×4 row-major matrix (`Transform.world`) to positions and its inverse
   transpose to normals (renormalised, flipped under a mirroring matrix), recomputes `bounds` and
-  returns the same `g`. It takes `VERTEX_LAYOUT_3D` or `VERTEX_LAYOUT_3D_TANGENT`
-  (ws/ergo-3d): a tangent's xyz is rotated by the 3×3 part and renormalised, its w kept, negated
-  under a mirror so the bitangent still follows `w · cross(n, t)`.
+  returns the same `g`. It takes any layout with the position at float 0 and finds the normal
+  (`@location(10)`) and tangent (`@location(13)`) lanes from the layout's attributes wherever they
+  sit (ws/geom-3; `VERTEX_LAYOUT_3D`, `VERTEX_LAYOUT_3D_TANGENT`, the skinned layout): a
+  tangent's xyz is rotated by the 3×3 part and renormalised, its w kept, negated under a mirror so
+  the bitangent still follows `w · cross(n, t)`. Other lanes (uv, colour, joints) are untouched.
+
+## Clone
+
+`cloneGeometry(g)` is a deep copy (ws/geom-3): new `vertices`, `indices` (same array type) and
+`bounds`, the same `layout` object (layouts compare by identity). It is the copy step before an
+in-place op when the source is reused, and what a baker keeps when it hands one geometry to two
+consumers.
 
 ## Builders
 
@@ -124,8 +134,7 @@ All operations accept `VERTEX_LAYOUT_3D` or `VERTEX_LAYOUT_3D_TANGENT` geometry.
 > source is reused:
 >
 > ```ts
-> const copy = { ...g, vertices: g.vertices.slice(), indices: g.indices.slice() };
-> transformGeometry(copy, world); // g is untouched
+> transformGeometry(cloneGeometry(g), world); // g is untouched
 > // or build one per placement: transformGeometry(box({ size }), world)
 > ```
 
@@ -147,6 +156,69 @@ All operations accept `VERTEX_LAYOUT_3D` or `VERTEX_LAYOUT_3D_TANGENT` geometry.
   `size`, recomputes `bounds` and returns `g`.
 - `recenter(g)` translates positions so the AABB centre is the origin, recomputes `bounds` and
   returns `g`.
+
+## Simplify and LODs
+
+Build-time, CPU (ws/geom-3). Nothing here runs per frame except `selectLod`, which is pure
+arithmetic.
+
+- `simplifyGeometry(g, opts?: SimplifyOptions): SimplifyResult` is quadric-error edge collapse
+  (Garland–Heckbert, half-edge: every kept vertex is an input vertex, so its uv, normal, colour
+  and tangent come along). Positions within a tiny epsilon are welded first, so a uv seam or hard
+  edge does not tear the surface. `SimplifyOptions { targetRatio?; targetTriangles?;
+  preserveBorders?; preserveUvSeams?; errorLimit? }`: keep `targetRatio` (default 0.5) of the
+  triangles or at most `targetTriangles`; `preserveBorders` pins open-border vertices,
+  `preserveUvSeams` pins positions whose vertices disagree (seams, creases); `errorLimit` (world
+  units, default unlimited) stops before a collapse that would move the surface further. A
+  collapse that would flip a triangle or pinch the surface is refused. `SimplifyResult {
+  geometry; error }`: a new geometry in `g`'s layout (3D or tangent; `g` untouched) and the
+  largest error made. Deterministic: two runs give identical bytes. A 10k-triangle sphere takes
+  about a second.
+- `createLodChain(g, ratios, opts?)` is `[g, simplify(g, ratios[0]), …]`, each level from the
+  source (not the previous level), so the errors do not compound.
+- `projectedSizePx(radius, distance, fovY, viewportHeight)` is the bounding sphere's projected
+  diameter-ish size in pixels (`radius · height / (distance · tan(fovY / 2))`, infinite at or
+  behind the eye). `selectLod(chain, boundsRadius, distance, fovY, viewportHeight, thresholdsPx)`
+  returns the first level whose size is at least `thresholdsPx[i]`, else the last; `chain` is the
+  levels (any array) or their count, and the result is clamped to it. `LodChain<M> {
+  geometries; meshes?; thresholdsPx }` is storage for a chain and its meshes; the renderer does
+  not pick levels itself. The loop:
+
+```ts
+const lod = { geometries: createLodChain(rock, [0.4, 0.15, 0.05]), thresholdsPx: [400, 160, 60] };
+const meshes = lod.geometries.map((g) => renderer.createMesh(g));
+// per frame, per instance:
+const level = selectLod(meshes, rock.bounds.radius, distToEye, fovY, viewportHeight, lod.thresholdsPx);
+frame.mesh(meshes[level], material, transform);
+```
+
+## Hull and collision proxy
+
+- `convexHull(points: Float32Array | Geometry)` is the 3D convex hull (quickhull) of xyz
+  triples or a geometry's positions, as a flat-shaded `VERTEX_LAYOUT_3D` geometry wound outward
+  (three vertices per triangle, face normals, white). Points within a tolerance scaled to the
+  cloud's extent count as on a face. Fewer than four points, or a flat cloud, gives an empty
+  geometry.
+- `collisionProxy(g, opts: CollisionProxyOptions)` is a cheap stand-in for a render mesh to hand
+  `createStaticCollider` as `{ geometry }`: `CollisionProxyOptions { maxTriangles; kind? }`,
+  `'hull'` (default: the convex hull, simplified further if it is over budget; fills
+  concavities) or `'simplified'` (the mesh itself simplified to the budget; keeps them). A
+  20k-triangle rock as a 1500-triangle simplified proxy raycasts within 2% of the full mesh.
+
+## Split and slice
+
+- `splitGeometry(g, by)` returns parts, each a compact new geometry in `g`'s layout. `by` is
+  `'island'` (triangles connected through shared positions, so a uv seam does not split; parts in
+  order of first triangle) or a function `(triangle) => group` (parts by ascending group, a
+  negative group dropped).
+- `sliceGeometry(g, plane: SlicePlane, opts?: SliceOptions): SliceResult` cuts by the plane
+  `SlicePlane { nx, ny, nz, d }` (points with `n · p = d`; "above" is the side `n` points to)
+  into `SliceResult { above; below }`. Triangles crossing it are split, the new corners' lanes
+  interpolated (normals and tangents renormalised). `SliceOptions { cap? }`: with `cap: true` the
+  cut's closed loops are triangulated into a cap on each half (below faces `+n`, above `-n`;
+  planar uvs), so a closed mesh gives two closed halves; nested loops (a cut through a hollow
+  shape) are capped as separate solids, not as holes. A plane missing the mesh returns a copy on
+  one side and an empty part on the other. 3D and tangent layouts.
 
 ## Heightfields
 
@@ -184,7 +256,10 @@ work in typed-array registers, never in doubles passed between calls).
 - `createStaticCollider(sources: ColliderSource[], opts?: StaticColliderOptions)` builds a
   `StaticCollider` from `GeometrySource { geometry; transform?; layer?; userData? }` (any
   `Geometry` whose first three floats per vertex are the position, optionally placed by a 3×4
-  `Transform.world` or a 4×4 column-major matrix: `ColliderTransform`), `HeightfieldSource
+  `Transform.world` or a 4×4 column-major matrix: `ColliderTransform`; the `{ geometry }` form
+  is `GeometryMeshSource`, and `PositionsSource { positions; indices; transform?; layer?;
+  userData? }` is the positions-only form, three floats per vertex, for bakers and proxies that
+  never had a render layout: ws/geom-3), `HeightfieldSource
   { heightfield; layer?; userData? }` (two triangles per cell) and `TileGridSource { grid; layer?;
   userData? }`. `leafSize` (default 4) is the most triangles per leaf. `layer` is a bit index
   0..31; every query takes a `layerMask` (default `ALL_LAYERS`). Each source gets its own subtree
@@ -283,6 +358,47 @@ or the stick through `slide`, the collider's triangles or BVH leaves drawn throu
 through the page's `advance`. `e2e/collide.spec.ts` checks the wall stops the capsule, the stairs
 lift it by rise × steps, the ramp grounds it with a tilted normal and the circle rounds the
 corridor's bend.
+
+## Tile slide
+
+`slide2` moves a shape against triangles; a platformer wants an axis-aligned box against tiles,
+with one-way platforms and platforms that carry it. `slideTiles` is that (ws/geom-3), in screen
+convention: **y grows downward**, so `+dy` falls and the ground is at `y + h`.
+
+- `slideTiles(tiles, box: TileBox, dx, dy, out: TileSlideResult, opts?: TileSlideOptions)`.
+  `tiles` is a `GridSource` (column `x`, row `z` as tile `(cx, cy)`, `origin` `[x, z]` as world
+  x, y) or a `TileQuery { cellSize; origin?; solidAt(cx, cy): TileKind }`, `TileKind` being
+  `TILE_EMPTY`, `TILE_SOLID` or `TILE_ONE_WAY`. `TileBox { x, y, w, h }` is the top-left corner
+  and size; it is not changed (copy `out.x`, `out.y` back). Axis-separated, x then y, in
+  sub-steps of at most half a tile (no tunnelling); each axis tests only the tiles past its
+  leading edge, inset by a small epsilon, so a box sliding along a floor or wall of separate tiles
+  never snags on their seams. A one-way tile holds a box only moving down whose bottom was at or
+  above the tile's top; rising or sideways it passes. Allocation-free.
+- `TileSlideOptions { oneWay?; stepUp?; movers? }`: `oneWay: false` drops through one-way tiles;
+  `stepUp` (world units, default 0) lets a grounded box climb a ledge that low; `movers` are
+  `TileMover` boxes (`TileBox` plus this tick's `dx`, `dy`), solid, and a box landing on one rides
+  it.
+- `TileSlideResult { x, y, dx, dy, onGround, hitCeiling, hitWall, riding, carried }` from
+  `createTileSlideResult()`: `riding` is the mover index stood on, or -1. `carryBy(out, mover)`
+  queues a mover's motion into `out.carried`, which the next `slideTiles` with that result applies
+  first (still blocked by walls), then clears.
+
+```ts
+for (const m of movers) { m.dx = …; m.dy = …; m.x += m.dx; m.y += m.dy; } // platforms first
+if (out.riding >= 0) carryBy(out, movers[out.riding]);
+slideTiles(tiles, player, vx * dt, vy * dt, out, { movers, stepUp: 0.25 });
+player.x = out.x; player.y = out.y;
+if (out.onGround || out.hitCeiling) vy = 0;
+```
+
+## Geometry pipeline harness
+
+`harness/geom3.html` (ws/geom-3): `?lod` (default) four rocks at rising distances, each drawn
+at the level `selectLod` picks; `?hull` a torus beside its `convexHull`; `?slice` a cube cut by
+a sweeping plane, capped; `?tiles` a box landing on a moving platform over a tile map and carried
+by it; `?still` parks the animation. `e2e/geom3.spec.ts` checks the levels step with distance,
+the hull is drawn, every cut is capped and closed, and the box rides the platform.
+
 ## Iso
 
 The 2:1 diamond projection and its inverse (ws/ergo-2d-2), pure arithmetic in whatever 2D

@@ -47,8 +47,8 @@ renderer.endFrame();
   `renderer.createSceneTarget({ width, height, label? })` makes an offscreen one (a portal, a
   minimap) whose `color` and `emissive` are sampleable `Texture`s. `target.depth` exists once
   a depth camera has rendered into it (or as soon as an external target adopts a depth texture).
-  `SceneTargetDesc` is `{ width, height, label? }`; both colour targets use `SCENE_FORMAT`
-  (`rgba16float`).
+  `SceneTargetDesc` is `{ width, height, label?, aux? }`; both colour targets use `SCENE_FORMAT`
+  (`rgba16float`). `aux` adds the attachments of *Aux targets* below.
 - **External targets (XR).** `SceneTarget.external({ device, color, depth?, view?, viewport?,
   label? })` (`SceneTargetExternal`) wraps a colour texture someone else owns (a WebXR projection
   layer's `getViewSubImage` colour, one array layer through `view`) and optionally its depth,
@@ -112,13 +112,19 @@ res.surface.onResize(({ backbuffer }) => renderer.resize(backbuffer.width, backb
 
 - `new Renderer(gpu: RendererGpu, opts?: RendererOptions)`. `RendererGpu` is `{ device, context,
   format }` (what `boot` returns as `res.gpu`); `RendererOptions` has `logicalWidth` and
-  `logicalHeight` (1920×1080) and `initialInstances` (4096, doubles when full).
+  `logicalHeight` (1920×1080), `initialInstances` (4096, doubles when full) and `aux`
+  (`SceneTargetAux`, the aux attachments of `renderer.target`; see *Aux targets*).
 - `renderer.post` takes any `PostProcessor`: `resize(width, height)` and `encode(encoder, inputs,
-  output)`, where `PostInputs` is `{ color, emissive, time, dt, depth, projection }`: `depth` is
-  the target's depth texture and `projection` a `PostProjection` (`{ near, far, proj }`, `far`
-  `Infinity` for an infinite far plane) when a depth camera rendered into it this frame, both
-  `null` otherwise (the 2D path). `PostStack` is the engine's; a game writes its own only to
-  replace the whole final stage.
+  output)`, where `PostInputs` is `{ color, emissive, time, dt, depth, projection, view,
+  roughMetal, velocity }`: `depth` is the target's depth texture and `projection` a
+  `PostProjection` (`{ near, far, proj }`, `far` `Infinity` for an infinite far plane) when a
+  depth camera rendered into it this frame, both `null` otherwise (the 2D path); `view` is a
+  `PostView` (`{ viewProj, invViewProj, previousViewProj, previousView, jitter: [x, y] }`) of
+  the last camera that rendered into the target this frame, `null` before any view (see
+  *Camera jitter and history*); `roughMetal` and `velocity` are the target's aux attachments or
+  `null` (see *Aux targets*). A processor with `wantsJitter: true` tells the renderer to apply
+  each camera's `setJitter` offset; without it no camera is ever jittered. `PostStack` is the
+  engine's; a game writes its own only to replace the whole final stage.
 
 ## Drawing
 
@@ -268,7 +274,7 @@ spans -0.5..0.5, so a transform's scale is the sprite's size.
 `transform.position`, `scale` (`ReadonlyVec3`) and `quaternion` (`ReadonlyQuat`) are
 read-only views; set them through the transform's setters.
 `Transform.setMatrix(m)` takes a raw 3×4 (sockets write through it); later setters rebuild
-T·R·S from the decomposed values.
+T·R·S from the decomposed values. `Transform.changed` is a version counter bumped by every setter and parent change (ws/audio-4), so a consumer such as `Voice.follow` can skip an unchanged `world`.
 
 `frame.mesh(...)` also carries the mesh's bounding sphere (`mesh.bounds`) through the instance
 matrix into a world sphere: the centre by the matrix, the radius by the largest axis scale
@@ -334,7 +340,7 @@ counts the batches and lists drawn; `stats.instances` counts their instances too
 | 12..15 | `uvRect` (@6) | u0, v0, u1, v1 |
 | 16..19 | `tint` (@7) | linear RGBA |
 | 20..23 | `params` (@8) | free vec4 |
-| 24..27 | `misc` (@9) | emissive, flags (bit 0 = does not receive shadow, bits 1..23 = the instance's layer mask, packed by `packInstanceFlags`; the rest reserved), size.x, size.y |
+| 24..27 | `misc` (@9) | emissive, flags (`u32` bits: bit 0 = does not receive shadow, bits 1..23 = the instance's layer mask, packed by `packInstanceFlags` and read back by `engine_instance_layers`; bits 24..31 reserved), size.x, size.y |
 
 `INSTANCE_OFFSET` names these offsets. A custom vertex entry that wraps `engine_vertex(v)`
 needs no change; one that read the old 20-float fields (`v.xform`, the old `v.misc`, or the
@@ -343,6 +349,35 @@ matrix rows.
 `INSTANCE_FLOATS` (28) and `INSTANCE_STRIDE` (112) size one instance, and
 `INSTANCE_BUFFER_LAYOUT` is its vertex buffer layout (locations 3..9, step mode instance), for
 a `Drawable` that builds its own pipeline over the shared instance format.
+
+### Index ranges
+
+A mesh that holds several parts in one buffer (the primitives of a glTF node, the rooms of a
+level) draws one part at a time with `InstanceParams.range: MeshRange` (`{ first, count }`,
+indices): `frame.mesh(mesh, material, transform, { range: mesh.ranges.door })` issues
+`drawIndexed(count, n, first)` for that sub-range only. Instances batch per (mesh, material,
+range), so three ranges of one mesh drawn in turn are three draw calls, and adjacent draws of
+the same range still merge into one instanced call. `MeshDesc.ranges` (`Record<string,
+MeshRange>`) stores named ranges on the `Mesh` (`mesh.ranges`, storage only: the renderer
+never reads it). Indexed meshes only; `frame.meshes` batches and `InstanceList`s ignore
+`range`. Mode `?ranges` of `harness/render4.html` draws one mesh of three quads through three
+ranges in three tints and publishes `drawCalls` = 3.
+
+### Lazy pipelines
+
+A `Material` builds a pipeline the first time a draw needs it, per (vertex layout, depth mode,
+aux attachments): the 2D pipeline too, on the first 2D draw, not at construction (ws/render-4).
+So a material whose WGSL reads an attribute only some layouts have (`v.tangent`, `v.uv1`,
+`v.joints`) compiles only against the layouts it is drawn in, and a 3D-only material never
+compiles a 2D variant. `material.pipelineFor(layout, depth)` still returns (and builds) one on
+demand. The prelude's `engine_local_tangent(v)` returns the file tangent (`vec4f`: xyz and
+handedness w) when the layout declares `VertexLayout.wgslTangent` (`VERTEX_LAYOUT_3D_TANGENT`)
+and `vec4f(0)` otherwise, which `VSOut.tangent` carries to the fragment stage; the standard
+material uses it when its w is non-zero and falls back to screen-space derivatives otherwise,
+so one shader serves every layout. `materialPrelude(layout, variant?)` takes a
+`PreludeVariant` (`{ roughMetal?, velocity?, prevLane? }`, `PLAIN_VARIANT` the default) for a
+`Drawable` that compiles against an aux-attached target; `prevLaneLocations(layout)` and
+`prevLaneBufferLayout(layout)` describe the previous-matrix vertex lane (see *Aux targets*).
 
 ## Camera
 
@@ -404,6 +439,30 @@ renderer.render(frame, eye);                              // or renderer.camera 
 - `CameraRect` (`x`, `y`, `width`, `height`, y down) is the type of `screen` and of the
   `fitRect`/`fitFreeRect` arguments; `CameraPoint` (`x`, `y`, `z`) is what `worldToScreen` and
   `screenToWorld` fill. `ALL_LAYERS` (`0xffffffff`) is the default `layers` mask.
+
+### Camera jitter and history
+
+- `camera.setJitter(x, y)` offsets the projection by `(x, y)` pixels of the target it is drawn
+  into (a TAA sample sequence; +x right, +y down); `clearJitter()` is `setJitter(0, 0)`;
+  `jitter` reads it back. The offset reaches `viewProjection`, `invViewProj` and
+  `worldToScreen`, never `previousViewProj` or the frustum. The renderer applies it only while
+  `renderer.post.wantsJitter` is true (it then sets the target size per view through
+  `setJitterTarget`), and never through `ortho2d`: a page without a jittering post processor,
+  and every 2D camera, draws exactly as before. `getJitter(out)` fills the pixels actually
+  applied (`0, 0` when not).
+- `camera.previousViewProj` and `camera.previousView` (`Float32Array` 16 each, column-major)
+  hold the unjittered matrices of the last frame this camera rendered: the renderer calls
+  `camera.recordHistory()` at the start of each view, before the camera is read, so a camera
+  moved during `update` sees its old matrices there during `render`. Identity until the first
+  view (that view reads `previous == current`, so reprojection starts still). The camera block
+  carries them for WGSL as `camera.prev_view_proj` (float `CAMERA_PREV_VIEW_PROJ_OFFSET` = 76)
+  and `camera.prev_view` (`CAMERA_PREV_VIEW_OFFSET` = 92), and the jitter as `camera.jitter`
+  (`CAMERA_JITTER_OFFSET` = 108: clip-space dx, dy, then the pixel offset x, y).
+- A post processor reads the same through `PostInputs.view` (`PostView`): the jittered
+  `viewProj` and `invViewProj`, `previousViewProj`, `previousView` and the `jitter` applied,
+  for the last camera that rendered into the target. Mode `?jitter` of `harness/render4.html`
+  alternates `setJitter(±0.25, ±0.25)` under a post processor that wants it and publishes the
+  projected shift per frame (`shiftPx`, √0.5 target px).
 
 ## Lighting
 
@@ -563,9 +622,9 @@ weights: vec4f`); `VERTEX_SKINNED_BUFFER_LAYOUT` is its `GPUVertexBufferLayout`.
 packed words through a byte view, not as floats: `setVertexSkin(bytes, vertex, joints, weights)`
 normalises the weights so the four bytes sum to 255. `VertexLayout.skinned` marks such a layout.
 
-A `SkinPalette(device, { joints, instances?, label? })` (`SkinPaletteDesc`) is the storage buffer
+A `SkinPalette(device, { joints, instances?, label?, history? })` (`SkinPaletteDesc`) is the storage buffer
 the vertex shader reads: a 16-byte header (`SKIN_PALETTE_HEADER_FLOATS` = 4: joints per instance,
-instances) and then `instances × joints` joint matrices of `JOINT_FLOATS` = 12 floats each, the
+instances, history flag) and then `instances × joints` joint matrices of `JOINT_FLOATS` = 12 floats each, the
 3×4 row-major affine layout the instance matrix and `anim`'s `skinMatrices` (world × inverse
 bind, one per joint) use, so an `anim` output goes in with one call. `palette.set(slot, matrices,
 offset = 0)` copies one instance's block into CPU staging (`palette.offsetOf(slot)` is its float
@@ -643,23 +702,38 @@ frame.mesh(mesh, skin, transform, { tint: [1, 0.9, 0.8, 1] });
   a masked object still casts its whole silhouette); `'blend'` uses `blend: 'alpha'`, so it
   draws after the opaque draws, writes no depth and casts no shadow. `doubleSided` flips the
   normal on back faces; materials never cull, so single-sided only changes the lighting.
-- Tangents come from screen-space derivatives (`dpdx` / `dpdy` of world position and uv), so
-  `VERTEX_LAYOUT_3D` (which has no tangent slot) and any mesh without tangents normal-map as is.
+- Tangents come from the mesh when its layout has them (`VERTEX_LAYOUT_3D_TANGENT`, through
+  the prelude's `engine_local_tangent`) and from screen-space derivatives (`dpdx` / `dpdy` of
+  world position and uv) otherwise, so `VERTEX_LAYOUT_3D` (which has no tangent slot) and any
+  mesh without tangents normal-map as is. `harness/pbr.html?tangents` draws a tangent-layout
+  tile through the normal-mapped material.
 - `uvTransform: [sx, sy, ox, oy, rot]` (ws/gltf-materials) applies glTF's `KHR_texture_transform`
   to every map before sampling: `uv' = offset + R(rot) · (scale ⊙ uv)`, the rotation's cosine
   and sine packed on the CPU (`standard_uv` in the shader; two multiply-adds per map, transform
   or not). `sampler: SamplerKind` picks the one sampler the five maps share (default
-  `'linear-mip-repeat'`). A mesh in `VERTEX_LAYOUT_3D_TANGENT` draws through the same
-  derivative path: the material compiles against every layout (its 2D pipeline is built at
-  creation), and the prelude has no per-layout tangent hook yet, so a vertex entry reading
-  `v.tangent` cannot exist until `materialPrelude` offers `engine_local_tangent(v)`; the
-  attribute is carried for that day.
+  `'linear-mip-repeat'`).
+- Per map (ws/render-4): `maps: { [slot]: StandardMapDesc }` (`StandardMapSlot`: `baseColor`,
+  `metallicRoughness`, `normal`, `occlusion`, `emissive`) gives one map its own `uvTransform`
+  (else the material's) and `texCoord: 0 | 1`: `1` samples `uv1`, the second set of a
+  `VERTEX_LAYOUT_3D_UV2` mesh (`VERTEX3D_UV2_FLOATS` 14, `VERTEX3D_UV2_STRIDE` 56: the 3D
+  layout then `uv1` at `@location(14)`, glTF `TEXCOORD_1`; `VertexLayout.wgslUv1`), and `uv`
+  again on a layout without one (`standard_uv_slot(in, slot)` in the shader).
+  `occlusionStrength` (default 1) is how much of the occlusion map applies: `ao = mix(1, R,
+  strength)`. `name` sets `Material.name` (a file's material name; default the label) and
+  `depthTest: false` draws the material over the scene on its layer without writing depth (a
+  panel inside a room: mode `?depth-test-off` of `harness/render4.html`). `gltf-load` wires
+  all four from a file's `KHR_texture_transform`, `texCoord`, `occlusionTexture.strength` and
+  material names.
+- The material writes the aux attachments of a target that has them (`MaterialDesc.aux`,
+  *Aux targets*): roughness and metalness after the factors and maps, and the instance's
+  screen-space velocity.
 - `STANDARD_WGSL` is the fragment shader (entry `fs_main`); `STANDARD_TEXTURE_SLOTS` names the
   five texture slots (`baseColor` 0 … `emissive` 4, at `@group(1) @binding(2 + slot)`);
-  `packStandardUniforms(desc, out?)` fills the `STANDARD_UNIFORM_FLOATS` (20) block the shader
+  `packStandardUniforms(desc, out?)` fills the `STANDARD_UNIFORM_FLOATS` (60) block the shader
   reads: base rgba, metallic, roughness, normal scale, alpha cutoff, emissive rgb, flags
-  (1 double-sided, 2 mask, 4 blend), uv scale and offset, the uv rotation's cos and sin. Pass the packed block to `material.setUniforms` to change a
-  factor later.
+  (1 double-sided, 2 mask, 4 blend), uv scale and offset, the uv rotation's cos and sin,
+  the occlusion strength, a pad, then five 8-float map slots (scale and offset, cos, sin,
+  texCoord, pad). Pass the packed block to `material.setUniforms` to change a factor later.
 - `WGSL_PBR` is the helper text a custom material can prepend to its own WGSL:
   `engine_pbr(base, metallic, roughness, n, v, world_pos, ao, emissive) -> vec3f` (lit, fogged
   colour, every layer), `engine_pbr_layers(..., layer_mask)` (the same, lit only by the lights
@@ -734,18 +808,62 @@ inside it to keep the standard transform.
   `label`, `wgsl`, `blend` (`BlendMode`: `alpha`, `premultiplied`, `additive`, `multiply`
   (`dst × rgb`, destination alpha kept), `opaque`; `blendState(mode)` is the `GPUBlendState`),
   `uniformBytes`, `textures`, `sampler` (`SamplerKind`: `linear-clamp`, `linear-repeat`, `linear-mip-repeat`, `nearest-mip-clamp`,
-  `nearest-mip-repeat`, `nearest-clamp`), `perDrawUniforms`, `vertexEntry` and `fragmentEntry`.
+  `nearest-mip-repeat`, `nearest-clamp`), `perDrawUniforms`, `vertexEntry`, `fragmentEntry`,
+  `name` (`Material.name`, default the label), `depthTest` (default true; false draws over the
+  scene on its layer, writing no depth) and `aux` (the shader writes the aux attachments through
+  `engine_write_aux`; see *Aux targets*).
 - `material.pipelineFor(layout, depth)` returns the pipeline for a `VertexLayout` and a
   `DepthMode` (0 = no depth attachment, the 2D path; 1 = test without writes, for blended draws;
-  2 = test and write, for opaque draws). Depth pipelines use `DEPTH_FORMAT` (`depth24plus`).
+  2 = test and write, for opaque draws), built on first use (*Lazy pipelines*). Depth pipelines
+  use `DEPTH_FORMAT` (`depth24plus`).
   `DepthMode` is exported so a `Drawable` that records with a material's pipeline can type the
   argument (from `frame.depthFormat`).
 - `SPRITE_WGSL` is the built-in sprite fragment (`texture × vertex colour × tint`), the shader
   behind `createSpriteMaterial`.
 - The WGSL pieces, for a `Drawable` that compiles its own shader against the engine's bindings:
   `WGSL_GLOBALS` (the `globals` and `camera` blocks), `WGSL_LIGHTS`, `WGSL_NOISE` (the
-  `engine_hash*`/`engine_noise`/`engine_fbm`/`engine_luma` helpers), `materialPrelude(layout)`
-  (the whole prelude for a vertex layout; `materialPrelude(VERTEX_LAYOUT_2D)` for the 2D path).
+  `engine_hash*`/`engine_noise`/`engine_fbm`/`engine_luma` helpers), `materialPrelude(layout,
+  variant?)` (the whole prelude for a vertex layout and a `PreludeVariant`;
+  `materialPrelude(VERTEX_LAYOUT_2D)` for the 2D path).
+
+### Aux targets
+
+`SceneTargetDesc.aux: SceneTargetAux` (`{ roughMetal?, velocity? }`; `RendererOptions.aux`
+for `renderer.target`) adds colour attachments beside colour and emissive, for the
+screen-space passes that need per-pixel surface data: `roughMetal`, `rg8unorm`
+(`ROUGH_METAL_FORMAT`: roughness, metalness), and `velocity`, `rg16float` (`VELOCITY_FORMAT`:
+screen-space motion since the previous frame in uv units, +x right, +y down, jitter removed).
+`target.roughMetal` and `target.velocity` are the `Texture`s (null without), cleared with the
+colour and reaching post through `PostInputs.roughMetal` / `velocity`; `target.auxKey` (bit 0
+rough-metal, bit 1 velocity) keys the pipeline variants.
+
+- A material writes them only when its desc says `aux: true`: its prelude then gains the
+  fields on `FragOut` and `engine_write_aux(&o, rough_metal, velocity)` stores them (a no-op
+  without the attachment), with `engine_velocity(in)` computing the motion of the fragment
+  from `VSOut.prev_clip`. The standard material does both. Every other material draws into an
+  aux target with the extra attachments masked off (`writeMask: 0`) and its shader text
+  unchanged, so a target without `aux` and a material without it record exactly the bytes they
+  did before (the fake-GPU tests assert the attachment count).
+- Velocity needs last frame's placement. The prelude's `engine_previous_world_position(v)`
+  takes it from a previous-matrix vertex lane when the draw carries one, else from the current
+  matrix (camera motion only): `renderer.createInstanceList(mesh, material, capacity, {
+  velocity: true })` (`InstanceListOptions`) keeps `prevMatrices` and a second vertex buffer
+  (`prevBuffer`, 48 bytes per instance) that `frame.list` binds at slot 2, settled by the
+  list's own flush (a slot set this frame keeps what it held as previous; one left alone reads
+  zero motion). The lane uses three vertex locations in 10..15 the layout leaves free
+  (`prevLaneLocations(layout)`, `prevLaneBufferLayout(layout)`): 11, 12, 13 for the 3D layout,
+  11, 12, 14 with tangents, 13, 14, 15 when skinned. Skinned draws add the palette's previous
+  frame when the `SkinPalette` keeps one (`SkinPaletteDesc.history`, `engine_skin_previous`;
+  the buffer then holds `[header][current][previous]`, `palette.previousOffsetOf(slot)`), else
+  the current pose. `frame.mesh` and `frame.meshes` draws carry no lane: a per-frame instance
+  draw of a moving object reports camera motion only, so put what moves in a list.
+- `camera.previousViewProj` (see *Camera jitter and history*) is the other half: the previous
+  clip position is `prev_view_proj × previous world position`.
+
+Mode `?aux` of `harness/render4.html` renders into a target with both attachments: a quad
+with a roughness gradient and a cube sliding through a velocity list, both read back through a
+debug blit (`roughSample`, `velocitySample`); `e2e/render4.spec.ts` checks them. Switching
+TAA, SSR and motion blur over to these inputs is ws/post-4 (see `src/post/README.md`).
 
 ### Per-draw uniforms
 
@@ -840,8 +958,8 @@ index, instead of an atlas whose tiles bleed into each other at a distance.
   `copyExternalImageToTexture`, or pixel data (`PixelSource`: `{ width, height, data }`, which
   `ImageData` also is) through `writeTexture`. All sources must share the first one's size (it
   throws otherwise). Options: `mips` (default true: the full chain is generated on the GPU),
-  `mipFilter` (`'linear'` default, or `'nearest'`), `format` (default `rgba8unorm-srgb`) and
-  `label`.
+  `filter` (`MipFilter`: `'linear'` default, or `'nearest'`; `mipFilter` is the deprecated
+  old name, read when `filter` is absent), `format` (default `rgba8unorm-srgb`) and `label`.
 - `generateMipmaps(device, texture, { filter?: MipFilter })` fills levels 1.. of any `Texture`
   created with `mips: true` (2D or array), each from the level above, layer by layer, with a
   tiny blit pipeline per format and filter cached per device. `'linear'` averages each 2×2 block

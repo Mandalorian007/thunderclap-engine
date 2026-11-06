@@ -3,7 +3,14 @@
  * (master ← music, sfx, ui), named sounds rendered from specs, one-shots and loops.
  */
 import { reverbImpulse, volumeToGain } from './dsp';
+import {
+  DEFAULT_OCCLUSION,
+  type OccludableVoice,
+  type OcclusionOptions,
+  OcclusionScheduler,
+} from './occlusion';
 import type { Send } from './send';
+import { parseSpriteRef, type SpriteSchedule, type SpriteSheet, spriteSchedule } from './sprites';
 import { type OfflineContextFactory, renderSound, type SoundSpec } from './synth';
 import { AudioZones } from './zones';
 
@@ -117,10 +124,39 @@ export interface Voice {
    * `RangeError`. Torn down with the voice. No-op on an inert voice.
    */
   sendTo(input: AudioNode | Send, amount: number, ramp?: number): void;
+  /**
+   * Insert one pooled `BiquadFilterNode` of `kind` between the voice's gain and its panner or
+   * bus (ws/audio-4), ramping `cutoff` (Hz) and `q` over `ramp` seconds (default 0.05); calling
+   * again retunes it, `null` removes it and returns the node to the pool. Independent of the
+   * occlusion lowpass: an occluded voice with a filter has two biquads in series. No-op on an
+   * inert voice; set before start, it is applied at start.
+   */
+  filter(kind: VoiceFilterKind | null, opts?: VoiceFilterOptions): void;
   /** World position of a spatial voice as last set or followed (zeros on a non-spatial voice). */
   readonly position: ArrayLike<number>;
   readonly playing: boolean;
+  /** Live sends (`sendTo` inputs with a non-zero amount). */
+  readonly sendCount: number;
+  /** The last answer of `audio.occlusion.probe` for this voice, 0 clear .. 1 occluded (0 when unprobed). */
+  readonly occlusion: number;
 }
+
+/** `Voice.filter` kinds (the `BiquadFilterNode` types a voice offers). */
+export type VoiceFilterKind = 'lowpass' | 'highpass' | 'bandpass';
+
+export interface VoiceFilterOptions {
+  /** Hz. Default 1000. */
+  cutoff?: number;
+  /** Resonance. Default 1. */
+  q?: number;
+  /** Seconds the cutoff and Q ramp over. Default 0.05. */
+  ramp?: number;
+}
+
+/** m/s, the Doppler reference (`SpatialOptions.doppler`). */
+export const SPEED_OF_SOUND = 343;
+/** m/s: a move faster than this between two `update`s is a teleport, not a velocity. */
+export const DEFAULT_MAX_DOPPLER_SPEED = 100;
 
 /** Sends one voice can hold at once (`Voice.sendTo`). */
 export const MAX_VOICE_SENDS = 4;
@@ -194,6 +230,22 @@ export class VoiceSends {
     for (const tap of this.taps) if (!tap.gain) this.build(tap, 0);
   }
 
+  /** The voice's output node changed (a filter went in or out): move the taps to `from`. */
+  retarget(from: AudioNode): void {
+    const old = this.from;
+    if (old === from) return;
+    this.from = from;
+    for (const tap of this.taps) {
+      if (!tap.gain) continue;
+      try {
+        old?.disconnect(tap.gain);
+      } catch {
+        // Not connected.
+      }
+      from.connect(tap.gain);
+    }
+  }
+
   set(target: AudioNode | Send, amount: number, ramp: number): void {
     const i = this.taps.findIndex((t) => t.target === target);
     if (!(amount > 0)) {
@@ -255,6 +307,8 @@ export class VoiceSends {
 /** Anything with a 3×4 world matrix a voice can follow (`Voice.follow`). */
 export interface FollowTarget {
   readonly world: ArrayLike<number>;
+  /** A counter that moves whenever `world` may have (a `Transform.changed`); lets the follower skip the read. */
+  readonly changed?: number;
 }
 
 /** Distance model of a spatial voice (`PannerNode.distanceModel`). */
@@ -286,6 +340,20 @@ export interface SpatialOptions {
   cone?: ConeOptions;
   /** Cone direction `[x, y, z]`. Default `[1, 0, 0]` (the WebAudio default). */
   direction?: ArrayLike<number>;
+  /**
+   * Doppler factor (ws/audio-4): 0 (default) off; 1 the textbook shift
+   * `(c - v_listener·n) / (c - v_emitter·n)` with `c = SPEED_OF_SOUND`, applied as a
+   * `playbackRate` multiplier on top of `setRate`. Velocities come from successive
+   * `setPosition` / `follow` and `listener.set` / `fromCamera` calls per `audio.update(dt)`.
+   */
+  doppler?: number;
+  /**
+   * m/s above which a move between two updates counts as a teleport and resets the velocity
+   * instead of chirping. Default `DEFAULT_MAX_DOPPLER_SPEED` (100).
+   */
+  maxDopplerSpeed?: number;
+  /** Probe this voice through `audio.occlusion` (ws/audio-4). Default true when a probe is set. */
+  occlude?: boolean;
 }
 
 /** Anything with a world→view matrix and an eye position, such as the renderer's `Camera`. */
@@ -308,6 +376,14 @@ export class SpatialListener {
   readonly position: ArrayLike<number> = this.pose.subarray(0, 3);
   readonly forward: ArrayLike<number> = this.pose.subarray(3, 6);
   readonly up: ArrayLike<number> = this.pose.subarray(6, 9);
+  /** Position at the previous `audio.update`, and the velocity derived from it (m/s). */
+  private readonly prev = new Float64Array(3);
+  private hasPrev = false;
+  private readonly vel = new Float64Array(3);
+  /** Velocity over the last `audio.update(dt)` (ws/audio-4), read-only; zeros after a teleport. */
+  readonly velocity: ArrayLike<number> = this.vel;
+  /** m/s above which a move between updates resets the velocity (a teleport). Default 100. */
+  maxSpeed = DEFAULT_MAX_DOPPLER_SPEED;
 
   /** Built by `AudioEngine`; reach it as `audio.listener`. */
   constructor(private readonly engine: AudioEngine) {}
@@ -345,6 +421,28 @@ export class SpatialListener {
     p[7] = v[5]!;
     p[8] = v[9]!;
     this.apply();
+  }
+
+  /** Internal (`audio.update`): derive the velocity from the move since the last call. */
+  tick(dt: number): void {
+    const p = this.pose;
+    const q = this.prev;
+    const v = this.vel;
+    if (this.hasPrev && dt > 0) {
+      const vx = (p[0]! - q[0]!) / dt;
+      const vy = (p[1]! - q[1]!) / dt;
+      const vz = (p[2]! - q[2]!) / dt;
+      const teleport = vx * vx + vy * vy + vz * vz > this.maxSpeed * this.maxSpeed;
+      v[0] = teleport ? 0 : vx;
+      v[1] = teleport ? 0 : vy;
+      v[2] = teleport ? 0 : vz;
+    } else {
+      v[0] = v[1] = v[2] = 0;
+    }
+    q[0] = p[0]!;
+    q[1] = p[1]!;
+    q[2] = p[2]!;
+    this.hasPrev = true;
   }
 
   /** Write the pose to the context's listener (on every change, and when the context is built). */
@@ -419,9 +517,26 @@ const NULL_VOICE: Voice = {
   setDirection() {},
   follow() {},
   sendTo() {},
+  filter() {},
   position: new Float64Array(3),
   playing: false,
+  sendCount: 0,
+  occlusion: 0,
 };
+
+/** Internal: set a pooled biquad's type, cutoff and Q (a step, or a ramp from the current values). */
+function tuneBiquad(
+  f: BiquadFilterNode,
+  type: BiquadFilterType,
+  cutoff: number,
+  q: number,
+  t: number,
+  ramp: number,
+): void {
+  f.type = type;
+  rampParamTo(f.frequency, cutoff, t, ramp);
+  rampParamTo(f.Q, q, t, ramp);
+}
 
 /** One-shots requested while their buffer is still rendering are dropped after this long. */
 const MAX_LATE_START = 0.15;
@@ -444,7 +559,7 @@ function yieldToEventLoop(): Promise<void> {
   });
 }
 
-class VoiceImpl implements Voice {
+class VoiceImpl implements Voice, OccludableVoice {
   private src: AudioBufferSourceNode | null = null;
   private gainNode: GainNode | null = null;
   private stopped = false;
@@ -452,7 +567,12 @@ class VoiceImpl implements Voice {
   private rate: number;
   private ended = false;
   private panner: PannerNode | null = null;
-  /** The last node before the bus (gain, panner or stereo panner): what the sends tap. */
+  /** The node after the filters (panner or stereo panner), or null when the chain ends at the bus. */
+  private out: AudioNode | null = null;
+  /** `out` is connected to the bus (done once; `relink` never breaks that link). */
+  private outWired = false;
+  private bus_: GainNode | null = null;
+  /** The last node before the bus (gain, filter, panner or stereo panner): what the sends tap. */
   private tail: AudioNode | null = null;
   private sends: VoiceSends | null = null;
   /** `audio.pause` set the playback rate to 0; `rate` keeps the value to restore. */
@@ -461,15 +581,34 @@ class VoiceImpl implements Voice {
   private readonly spatial: boolean;
   private readonly pos = new Float64Array(3);
   private target: FollowTarget | null = null;
+  /** `target.changed` at the last `syncFollow`; a target without one is read every update. */
+  private followSeen = -1;
   private dx = 1;
   private dy = 0;
   private dz = 0;
+  /** `Voice.filter`: the pooled biquad and what it was last asked for (applied at start). */
+  private userFilter: BiquadFilterNode | null = null;
+  private userKind: VoiceFilterKind | null = null;
+  private userCutoff = 1000;
+  private userQ = 1;
+  /** Occlusion: the pooled lowpass and the last probe (ws/audio-4). */
+  private occFilter: BiquadFilterNode | null = null;
+  private occAmount = 0;
+  private occGain = 1;
+  private occApplied = false;
+  occlusionProbedAt = Number.NEGATIVE_INFINITY;
+  /** Doppler: the previous position per update, and the multiplier on `rate`. */
+  private readonly prevPos = new Float64Array(3);
+  private hasPrev = false;
+  private dopplerRate = 1;
 
   constructor(
     private readonly engine: AudioEngine,
     readonly loop: boolean,
     private readonly opts: PlayOptions,
     private readonly onEnd: (v: VoiceImpl) => void,
+    /** A sprite clip's range, or null for the whole buffer. */
+    private readonly schedule: SpriteSchedule | null = null,
   ) {
     this.targetGain = opts.gain ?? 1;
     this.rate = opts.rate ?? 1;
@@ -504,6 +643,25 @@ class VoiceImpl implements Voice {
     return this.opts.bus ?? (this.loop ? 'music' : 'sfx');
   }
 
+  get occlusion(): number {
+    return this.occAmount;
+  }
+
+  /** Internal: a spatial voice `audio.occlusion` may probe (`spatial.occlude` not false). */
+  get occludable(): boolean {
+    return this.spatial && this.panner !== null && this.opts.spatial?.occlude !== false;
+  }
+
+  /** The Doppler multiplier on `rate` as of the last `audio.update` (1 without `spatial.doppler`; diagnostics). */
+  get doppler(): number {
+    return this.dopplerRate;
+  }
+
+  /** Internal: `spatial.doppler` above 0. */
+  get dopplerFactor(): number {
+    return this.spatial ? Math.max(0, this.opts.spatial?.doppler ?? 0) : 0;
+  }
+
   /** Create nodes and start. Returns false if it can't (no context). */
   start(buffer: AudioBuffer): boolean {
     const ctx = this.engine.context;
@@ -515,8 +673,13 @@ class VoiceImpl implements Voice {
     src.loop = this.loop;
     // Starting on a paused bus whose voices are frozen: start frozen too.
     if (this.engine.isBusPaused(this.bus) && this.engine.pausedRate) this.frozen = true;
-    src.playbackRate.value = this.frozen ? 0 : this.rate;
+    src.playbackRate.value = this.frozen ? 0 : this.rate * this.dopplerRate;
     if (this.opts.detune) src.detune.value = this.opts.detune;
+    const sched = this.schedule;
+    if (sched && this.loop) {
+      src.loopStart = sched.loopStart;
+      src.loopEnd = sched.loopEnd;
+    }
     const g = ctx.createGain();
     const t = ctx.currentTime + (this.opts.delay ?? 0);
     const fadeIn = this.opts.fadeIn ?? (this.loop ? 0.5 : 0);
@@ -526,41 +689,198 @@ class VoiceImpl implements Voice {
     } else {
       g.gain.value = this.targetGain;
     }
-    let tail: AudioNode = g;
     const panner = this.spatial ? this.engine.acquirePanner(this.opts.spatial) : null;
     if (panner) {
       writePannerPosition(panner, this.pos[0]!, this.pos[1]!, this.pos[2]!);
       writePannerDirection(panner, this.dx, this.dy, this.dz);
-      g.connect(panner);
-      tail = panner;
+      this.out = panner;
       this.panner = panner;
     } else if (this.opts.pan && !this.spatial) {
       const p = ctx.createStereoPanner();
       p.pan.value = this.opts.pan;
-      g.connect(p);
-      tail = p;
+      this.out = p;
     }
     src.connect(g);
-    tail.connect(bus);
-    this.tail = tail;
-    this.sends?.attach(ctx, tail);
+    this.gainNode = g;
+    this.bus_ = bus;
+    // A filter asked for before start.
+    if (this.userKind && !this.userFilter) {
+      const f = this.engine.acquireBiquad();
+      if (f) {
+        tuneBiquad(f, this.userKind, this.userCutoff, this.userQ, t, 0);
+        this.userFilter = f;
+      }
+    }
+    this.relink();
     src.onended = () => {
       this.ended = true;
       this.sends?.dispose();
       this.sends = null;
       g.disconnect();
-      tail.disconnect();
+      this.out?.disconnect();
+      this.out = null;
+      this.outWired = false;
       this.tail = null;
+      this.bus_ = null;
+      if (this.userFilter) {
+        this.userFilter.disconnect();
+        this.engine.releaseBiquad(this.userFilter);
+        this.userFilter = null;
+      }
+      if (this.occFilter) {
+        this.occFilter.disconnect();
+        this.engine.releaseBiquad(this.occFilter);
+        this.occFilter = null;
+      }
       if (this.panner) {
         this.engine.releasePanner(this.panner);
         this.panner = null;
       }
       this.onEnd(this);
     };
-    src.start(t);
+    if (sched) {
+      if (this.loop) src.start(t, sched.offset);
+      else src.start(t, sched.offset, sched.duration);
+    } else {
+      src.start(t);
+    }
     this.src = src;
-    this.gainNode = g;
+    this.engine.trackSpatial(this);
     return true;
+  }
+
+  /**
+   * (Re)wire gain → [user filter] → [occlusion lowpass] → [panner | stereo panner] → bus and
+   * point the sends at the new tail. Only the links that can change are touched.
+   */
+  private relink(): void {
+    const g = this.gainNode;
+    const bus = this.bus_;
+    const ctx = this.engine.context;
+    if (!g || !bus || !ctx) return;
+    // The panner (or stereo panner) stays last, so its own links (bus, send taps) are kept;
+    // only the nodes before it are rewired.
+    g.disconnect();
+    this.userFilter?.disconnect();
+    this.occFilter?.disconnect();
+    let node: AudioNode = g;
+    if (this.userFilter) {
+      node.connect(this.userFilter);
+      node = this.userFilter;
+    }
+    if (this.occFilter) {
+      node.connect(this.occFilter);
+      node = this.occFilter;
+    }
+    if (this.out) {
+      node.connect(this.out);
+      node = this.out;
+      if (!this.outWired) {
+        this.out.connect(bus);
+        this.outWired = true;
+      }
+    } else {
+      node.connect(bus);
+    }
+    this.tail = node;
+    if (this.sends) {
+      if (this.sends.attached) this.sends.retarget(node);
+      else this.sends.attach(ctx, node);
+    }
+  }
+
+  filter(kind: VoiceFilterKind | null, o: VoiceFilterOptions = {}): void {
+    if (this.ended || this.stopped) return;
+    const ctx = this.engine.context;
+    const ramp = o.ramp ?? 0.05;
+    if (kind === null) {
+      this.userKind = null;
+      const f = this.userFilter;
+      if (!f) return;
+      this.userFilter = null;
+      this.relink();
+      this.engine.releaseBiquad(f);
+      return;
+    }
+    this.userKind = kind;
+    this.userCutoff = o.cutoff ?? this.userCutoff;
+    this.userQ = o.q ?? this.userQ;
+    if (!this.src || !ctx) return;
+    if (this.userFilter) {
+      tuneBiquad(this.userFilter, kind, this.userCutoff, this.userQ, ctx.currentTime, ramp);
+      return;
+    }
+    const f = this.engine.acquireBiquad();
+    if (!f) return;
+    tuneBiquad(f, kind, this.userCutoff, this.userQ, ctx.currentTime, 0);
+    this.userFilter = f;
+    this.relink();
+  }
+
+  /** Internal (`OcclusionScheduler`): ramp the lowpass and the voice gain to the probe's answer. */
+  applyOcclusion(amount: number, cutoff: number, gain: number, ramp: number): void {
+    const ctx = this.engine.context;
+    if (!ctx || !this.gainNode || this.ended) return;
+    const t = ctx.currentTime;
+    if (!this.occFilter) {
+      const f = this.engine.acquireBiquad();
+      if (!f) return;
+      f.type = 'lowpass';
+      f.frequency.value = this.engine.occlusion?.openCutoff ?? DEFAULT_OCCLUSION.openCutoff;
+      f.Q.value = 0.7;
+      this.occFilter = f;
+      this.relink();
+    }
+    if (this.occApplied && Math.abs(amount - this.occAmount) <= 1e-3) return;
+    this.occApplied = true;
+    this.occAmount = amount;
+    this.occGain = gain;
+    rampParamTo(this.occFilter.frequency, cutoff, t, ramp);
+    this.gainNode.gain.setTargetAtTime(this.targetGain * gain, t, Math.max(0.001, ramp / 3));
+  }
+
+  /**
+   * Internal (`audio.update`): the emitter's velocity from its move since the last update, and
+   * the Doppler ratio against the listener's, written to `playbackRate` when it changed.
+   */
+  syncDoppler(dt: number, listener: SpatialListener): void {
+    const f = this.dopplerFactor;
+    const p = this.pos;
+    const q = this.prevPos;
+    let ratio = 1;
+    if (this.hasPrev && dt > 0 && f > 0) {
+      const max = this.opts.spatial?.maxDopplerSpeed ?? DEFAULT_MAX_DOPPLER_SPEED;
+      let vx = (p[0]! - q[0]!) / dt;
+      let vy = (p[1]! - q[1]!) / dt;
+      let vz = (p[2]! - q[2]!) / dt;
+      if (vx * vx + vy * vy + vz * vz > max * max) vx = vy = vz = 0;
+      const lp = listener.position;
+      const lv = listener.velocity;
+      // n: unit vector from the emitter to the listener.
+      let nx = lp[0]! - p[0]!;
+      let ny = lp[1]! - p[1]!;
+      let nz = lp[2]! - p[2]!;
+      const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+      if (len > 1e-6) {
+        nx /= len;
+        ny /= len;
+        nz /= len;
+        const c = SPEED_OF_SOUND;
+        const vl = f * (lv[0]! * nx + lv[1]! * ny + lv[2]! * nz);
+        const ve = f * (vx * nx + vy * ny + vz * nz);
+        const lim = c * 0.9;
+        ratio = (c - Math.min(lim, Math.max(-lim, vl))) / (c - Math.min(lim, Math.max(-lim, ve)));
+      }
+    }
+    q[0] = p[0]!;
+    q[1] = p[1]!;
+    q[2] = p[2]!;
+    this.hasPrev = true;
+    if (Math.abs(ratio - this.dopplerRate) <= 1e-4) return;
+    this.dopplerRate = ratio;
+    const ctx = this.engine.context;
+    if (!this.src || !ctx || this.frozen) return;
+    this.src.playbackRate.setTargetAtTime(this.rate * ratio, ctx.currentTime, 0.01);
   }
 
   stop(fade = 0): void {
@@ -623,14 +943,20 @@ class VoiceImpl implements Voice {
     if (!this.frozen) return;
     this.frozen = false;
     const ctx = this.engine.context;
-    if (this.src && ctx) rampParamTo(this.src.playbackRate, this.rate, ctx.currentTime, ramp);
+    if (this.src && ctx) {
+      rampParamTo(this.src.playbackRate, this.rate * this.dopplerRate, ctx.currentTime, ramp);
+    }
   }
 
   setGain(gain: number, ramp = 0.05): void {
     this.targetGain = gain;
     const ctx = this.engine.context;
     if (!this.gainNode || !ctx) return;
-    this.gainNode.gain.setTargetAtTime(gain, ctx.currentTime, Math.max(0.001, ramp / 3));
+    this.gainNode.gain.setTargetAtTime(
+      gain * this.occGain,
+      ctx.currentTime,
+      Math.max(0.001, ramp / 3),
+    );
   }
 
   setRate(rate: number, ramp = 0.05): void {
@@ -638,7 +964,11 @@ class VoiceImpl implements Voice {
     const ctx = this.engine.context;
     // While frozen by `pause` the new rate waits for `unpause`.
     if (!this.src || !ctx || this.frozen) return;
-    this.src.playbackRate.setTargetAtTime(rate, ctx.currentTime, Math.max(0.001, ramp / 3));
+    this.src.playbackRate.setTargetAtTime(
+      rate * this.dopplerRate,
+      ctx.currentTime,
+      Math.max(0.001, ramp / 3),
+    );
   }
 
   setPosition(x: number, y: number, z: number): void {
@@ -652,13 +982,24 @@ class VoiceImpl implements Voice {
   follow(target: FollowTarget | null): void {
     if (!this.spatial) return;
     this.target = target;
+    this.followSeen = -1;
     this.engine.trackFollower(this, target !== null && this.playing);
   }
 
-  /** Internal: copy the followed matrix's translation into the panner. */
+  /**
+   * Internal: copy the followed matrix's translation into the panner. A target with a
+   * `changed` counter (a `Transform`) is read only when it moved since the last sync.
+   */
   syncFollow(): void {
-    const m = this.target?.world;
-    if (m) this.setPosition(m[3]!, m[7]!, m[11]!);
+    const t = this.target;
+    if (!t) return;
+    const c = t.changed;
+    if (c !== undefined) {
+      if (c === this.followSeen) return;
+      this.followSeen = c;
+    }
+    const m = t.world;
+    this.setPosition(m[3]!, m[7]!, m[11]!);
   }
 
   setDirection(x: number, y: number, z: number): void {
@@ -776,6 +1117,26 @@ export class AudioEngine {
   private readonly followers = new Set<VoiceImpl>();
   /** Panners of ended spatial voices, reused by the next ones (cleared with the context). */
   private readonly pannerPool: PannerNode[] = [];
+  /** Biquads of ended voices' filters and occlusion lowpasses, reused the same way. */
+  private readonly biquadPool: BiquadFilterNode[] = [];
+  /**
+   * The game's occlusion probe (ws/audio-4), or null for none. Set it once; every spatial voice
+   * (unless `spatial.occlude` is false) is then probed round-robin from `update`.
+   */
+  occlusion: OcclusionOptions | null = null;
+  private readonly occluder = new OcclusionScheduler();
+  /** Started spatial voices the probe may ask about, in start order. */
+  private readonly occludable: VoiceImpl[] = [];
+  /** Started voices with a Doppler factor. */
+  private readonly dopplers = new Set<VoiceImpl>();
+  /** Sprite sheets by name (`defineSprites`); the buffer itself is a sound of the same name. */
+  private readonly spriteSheets = new Map<string, SpriteSheet>();
+  private readonly scratchSchedule: SpriteSchedule = {
+    offset: 0,
+    duration: 0,
+    loopStart: 0,
+    loopEnd: 0,
+  };
   private _listener: SpatialListener | null = null;
   /** Externally owned voices (`register`): music stems, a game's own players. */
   private readonly registered = new Map<Voice, BusName>();
@@ -840,15 +1201,57 @@ export class AudioEngine {
   update(dt: number): void {
     this._zones?.update(dt);
     for (const v of this.followers) v.syncFollow();
+    if (this.dopplers.size > 0) {
+      const l = this.listener;
+      l.tick(dt);
+      for (const v of this.dopplers) v.syncDoppler(dt, l);
+    }
+    const occ = this.occlusion;
+    if (occ && this.ctx && this.occludable.length > 0 && this._state === 'running') {
+      this.occluder.run(occ, this.listener.position, this.occludable, this.ctx.currentTime);
+    }
   }
   /** Internal: a voice starts or stops following a matrix. */
   trackFollower(v: VoiceImpl, on: boolean): void {
     if (on) this.followers.add(v);
     else this.followers.delete(v);
   }
+  /** Internal: a spatial voice started; it joins the occlusion and Doppler rounds it asks for. */
+  trackSpatial(v: VoiceImpl): void {
+    if (v.occludable) this.occludable.push(v);
+    if (v.dopplerFactor > 0) this.dopplers.add(v);
+  }
+  private untrackSpatial(v: VoiceImpl): void {
+    this.dopplers.delete(v);
+    const i = this.occludable.indexOf(v);
+    if (i >= 0) this.occludable.splice(i, 1);
+  }
   /** Idle panners waiting for the next spatial voice (tests, diagnostics). */
   get pooledPanners(): number {
     return this.pannerPool.length;
+  }
+  /** Idle biquads waiting for the next `Voice.filter` or occluded voice (tests, diagnostics). */
+  get pooledFilters(): number {
+    return this.biquadPool.length;
+  }
+  /** Voices `occlusion.probe` may be asked about (tests, diagnostics). */
+  get occludedVoiceCount(): number {
+    return this.occludable.length;
+  }
+  /**
+   * The page lifecycle's flag (ws/audio-4): `true` suspends the context while the app is hidden
+   * or backgrounded, `false` brings back whatever the user state is (`suspend()` still holds it
+   * suspended; otherwise it resumes). `attach({ pauseWhenHidden })` and `createGame`'s host
+   * lifecycle call this; a game with its own lifecycle source can too. Independent of `pause()`.
+   */
+  background(hidden: boolean): void {
+    if (this.hidden === hidden) return;
+    this.hidden = hidden;
+    void this.syncSuspension();
+  }
+  /** True while `background(true)` holds (the document hidden or the app in the background). */
+  get inBackground(): boolean {
+    return this.hidden;
   }
   /** True after `halt()`: silent for good. */
   get halted(): boolean {
@@ -893,19 +1296,10 @@ export class AudioEngine {
     }
     if (opts.pauseWhenHidden !== false && typeof document !== 'undefined') {
       const visible = () => document.visibilityState !== 'hidden';
-      const onVis = () => {
-        this.hidden = !visible();
-        void this.syncSuspension();
-      };
+      const onVis = () => this.background(!visible());
       // pagehide (iOS app switch, bfcache) and freeze can arrive while still "visible".
-      const onAway = () => {
-        this.hidden = true;
-        void this.syncSuspension();
-      };
-      const onBack = () => {
-        this.hidden = !visible();
-        void this.syncSuspension();
-      };
+      const onAway = () => this.background(true);
+      const onBack = () => this.background(!visible());
       document.addEventListener('visibilitychange', onVis);
       window.addEventListener('pagehide', onAway);
       window.addEventListener('pageshow', onBack);
@@ -1062,6 +1456,9 @@ export class AudioEngine {
     this.limiterNode = null;
     this.reverbNodes = null;
     this.pannerPool.length = 0;
+    this.biquadPool.length = 0;
+    this.occludable.length = 0;
+    this.dopplers.clear();
     this.registered.clear();
     this.frozenExternal.clear();
     this.pausedList.length = 0;
@@ -1119,6 +1516,18 @@ export class AudioEngine {
   /** Internal: take back an ended voice's (disconnected) panner. Dropped if its context is gone. */
   releasePanner(p: PannerNode): void {
     if (this.ctx && p.context === this.ctx) this.pannerPool.push(p);
+  }
+
+  /** Internal: a `BiquadFilterNode` from the pool, or a new one. Null where the context has none. */
+  acquireBiquad(): BiquadFilterNode | null {
+    const ctx = this.ctx;
+    if (!ctx || typeof ctx.createBiquadFilter !== 'function') return null;
+    return this.biquadPool.pop() ?? ctx.createBiquadFilter();
+  }
+
+  /** Internal: take back a (disconnected) biquad. Dropped if its context is gone. */
+  releaseBiquad(f: BiquadFilterNode): void {
+    if (this.ctx && f.context === this.ctx) this.biquadPool.push(f);
   }
 
   /** The master limiter node, once the context exists (null when disabled or unsupported). */
@@ -1373,6 +1782,7 @@ export class AudioEngine {
   define(name: string, source: SoundSource, opts: { maxVoices?: number } = {}): void {
     const prev = this.sounds.get(name);
     for (const v of prev?.voices ?? []) v.stop();
+    this.spriteSheets.delete(name);
     this.sounds.set(name, {
       source,
       buffer: null,
@@ -1384,6 +1794,27 @@ export class AudioEngine {
 
   has(name: string): boolean {
     return this.sounds.has(name);
+  }
+
+  /**
+   * Register a sprite sheet (ws/audio-4): one buffer (or a factory for it) and named
+   * `[startMs, lengthMs]` ranges. `play('name#clip')` and `loop('name#clip')` then play one range
+   * (a loop repeats between the clip's `loopPoints`, or its whole range); `play('name')` still
+   * plays the whole buffer. `maxVoices` caps the sheet's simultaneous plays, every clip counted.
+   */
+  defineSprites(name: string, sheet: SpriteSheet, opts: { maxVoices?: number } = {}): void {
+    const source: SoundSource = sheet.buffer
+      ? ((() => Promise.resolve(sheet.buffer!)) as () => Promise<AudioBuffer>)
+      : (sheet.source ?? (() => Promise.reject(new Error(`sprite sheet "${name}" has no buffer`))));
+    this.define(name, source, opts);
+    const e = this.sounds.get(name)!;
+    if (sheet.buffer) e.buffer = sheet.buffer;
+    this.spriteSheets.set(name, sheet);
+  }
+
+  /** The sprite sheet registered under `name`, if any. */
+  spriteSheet(name: string): SpriteSheet | null {
+    return this.spriteSheets.get(name) ?? null;
   }
 
   /** Render (or fetch) the buffer for a sound. Needs no gesture. Cached. */
@@ -1459,20 +1890,37 @@ export class AudioEngine {
     opts: PlayOptions,
     defer: boolean,
   ): Voice {
+    let schedule: SpriteSchedule | null = null;
+    if (typeof sound === 'string') {
+      const ref = parseSpriteRef(sound);
+      if (ref) {
+        const sheet = this.spriteSheets.get(ref.sheet);
+        if (!sheet) throw new Error(`[audio] unknown sprite sheet "${ref.sheet}"`);
+        schedule = { ...spriteSchedule(sheet, ref.sheet, ref.clip, this.scratchSchedule) };
+        sound = ref.sheet;
+      }
+    }
     const entry = typeof sound === 'string' ? this.sounds.get(sound) : undefined;
     if (typeof sound === 'string' && !entry) {
       console.warn(`[audio] unknown sound "${sound}"`);
       return NULL_VOICE;
     }
-    const voice: VoiceImpl = new VoiceImpl(this, loop, opts, (v) => {
-      this.active.delete(v);
-      this.followers.delete(v);
-      if (entry) {
-        const i = entry.voices.indexOf(v);
-        if (i >= 0) entry.voices.splice(i, 1);
-      }
-      for (const d of this.deferred) if (d.voice === v) this.deferred.delete(d);
-    });
+    const voice: VoiceImpl = new VoiceImpl(
+      this,
+      loop,
+      opts,
+      (v) => {
+        this.active.delete(v);
+        this.followers.delete(v);
+        this.untrackSpatial(v);
+        if (entry) {
+          const i = entry.voices.indexOf(v);
+          if (i >= 0) entry.voices.splice(i, 1);
+        }
+        for (const d of this.deferred) if (d.voice === v) this.deferred.delete(d);
+      },
+      schedule,
+    );
     this.active.add(voice);
     if (entry) {
       entry.voices.push(voice);
@@ -1579,6 +2027,169 @@ export class AudioEngine {
 /** A registered voice that also exposes its rate, so `pause` can freeze and restore it. */
 interface RatedVoice extends Voice {
   rate: number;
+}
+
+/** `createVoiceAdapter` options. */
+export interface VoiceAdapterOptions {
+  /** The raw source: a buffer or oscillator source, a media element source, a worklet. */
+  source: AudioNode;
+  /** Bus the adapter's gain feeds. Default `sfx`. */
+  bus?: OutputBus;
+  /** Linear gain to start at. Default 1. */
+  gain?: number;
+  /** Called once the voice is stopped (after its fade) or `end()` ran. */
+  onEnd?: () => void;
+  /** Put the voice on the mixer's books (`audio.register`). Default true. */
+  register?: boolean;
+}
+
+/** The `Voice` `createVoiceAdapter` returns; `rate` lets `audio.pause` freeze and restore it. */
+export interface VoiceAdapter extends Voice {
+  rate: number;
+  /** The gain node between the source and the bus. */
+  readonly gainNode: GainNode | null;
+  /** Internal to the owner: the source ended on its own; tear down without a fade. */
+  end(): void;
+}
+
+/**
+ * A `Voice` over a raw `AudioNode` another owner runs (ws/audio-4): source → gain → bus, with
+ * `setGain`, `stop(fade)` (ramps the gain, stops a scheduled source at the fade's end, else
+ * disconnects it then), `setRate` (writes the source's `playbackRate` when it has one, so
+ * `audio.pause` freezes it), `sendTo` and `filter` on the same pool as the mixer's voices. Not
+ * spatial: `setPosition`, `follow` and `occlusion` are inert. Registered with the mixer unless
+ * `register` is false, so `voices`, `stopAll` and `pause` see it. Null context: an inert voice.
+ */
+export function createVoiceAdapter(audio: AudioEngine, opts: VoiceAdapterOptions): VoiceAdapter {
+  const ctx = audio.context;
+  const bus = opts.bus ?? 'sfx';
+  const busNode = audio.busNode(bus);
+  const inert: VoiceAdapter = {
+    ...NULL_VOICE,
+    rate: 1,
+    gainNode: null,
+    end() {},
+  };
+  if (!ctx || !busNode) return inert;
+  const g = ctx.createGain();
+  g.gain.value = opts.gain ?? 1;
+  const source = opts.source;
+  let filterNode: BiquadFilterNode | null = null;
+  let sends: VoiceSends | null = null;
+  let playing = true;
+  let unregister: (() => void) | null = null;
+  const rateParam = (source as Partial<AudioBufferSourceNode>).playbackRate;
+  const relink = () => {
+    g.disconnect();
+    filterNode?.disconnect();
+    const tail: AudioNode = filterNode ? g.connect(filterNode) : g;
+    tail.connect(busNode);
+    if (sends) {
+      if (sends.attached) sends.retarget(tail);
+      else sends.attach(ctx, tail);
+    }
+  };
+  const teardown = () => {
+    if (!playing) return;
+    playing = false;
+    unregister?.();
+    unregister = null;
+    sends?.dispose();
+    sends = null;
+    try {
+      source.disconnect(g);
+    } catch {
+      // Not connected.
+    }
+    g.disconnect();
+    if (filterNode) {
+      filterNode.disconnect();
+      audio.releaseBiquad(filterNode);
+      filterNode = null;
+    }
+    opts.onEnd?.();
+  };
+  const voice: VoiceAdapter = {
+    rate: 1,
+    get gainNode() {
+      return playing ? g : null;
+    },
+    stop(fade = 0) {
+      if (!playing) return;
+      const t = ctx.currentTime;
+      rampParamTo(g.gain, 0, t, fade);
+      const scheduled = source as Partial<AudioScheduledSourceNode>;
+      if (typeof scheduled.stop === 'function') {
+        const prev = scheduled.onended;
+        scheduled.onended = (ev) => {
+          if (typeof prev === 'function') prev.call(source as AudioScheduledSourceNode, ev);
+          teardown();
+        };
+        try {
+          scheduled.stop(t + fade);
+        } catch {
+          teardown();
+        }
+      } else if (fade > 0) {
+        setTimeout(teardown, fade * 1000);
+      } else {
+        teardown();
+      }
+      unregister?.();
+      unregister = null;
+    },
+    end: teardown,
+    setGain(gain, ramp = 0.05) {
+      if (!playing) return;
+      g.gain.setTargetAtTime(gain, ctx.currentTime, Math.max(0.001, ramp / 3));
+    },
+    setRate(rate, ramp = 0.05) {
+      voice.rate = rate;
+      if (rateParam && playing) rampParamTo(rateParam, rate, ctx.currentTime, ramp);
+    },
+    setPosition() {},
+    setDirection() {},
+    follow() {},
+    sendTo(input, amount, ramp = 0.05) {
+      if (!playing) return;
+      sends ??= new VoiceSends();
+      if (!sends.attached) sends.attach(ctx, filterNode ?? g);
+      sends.set(input, amount, ramp);
+    },
+    filter(kind, o = {}) {
+      if (!playing) return;
+      if (kind === null) {
+        if (!filterNode) return;
+        const f = filterNode;
+        filterNode = null;
+        relink();
+        audio.releaseBiquad(f);
+        return;
+      }
+      const ramp = o.ramp ?? 0.05;
+      if (filterNode) {
+        tuneBiquad(filterNode, kind, o.cutoff ?? 1000, o.q ?? 1, ctx.currentTime, ramp);
+        return;
+      }
+      const f = audio.acquireBiquad();
+      if (!f) return;
+      tuneBiquad(f, kind, o.cutoff ?? 1000, o.q ?? 1, ctx.currentTime, 0);
+      filterNode = f;
+      relink();
+    },
+    position: new Float64Array(3),
+    get playing() {
+      return playing;
+    },
+    get sendCount() {
+      return sends?.count ?? 0;
+    },
+    occlusion: 0,
+  };
+  source.connect(g);
+  g.connect(busNode);
+  if (opts.register !== false) unregister = audio.register(voice, bus);
+  return voice;
 }
 
 function createLimiter(

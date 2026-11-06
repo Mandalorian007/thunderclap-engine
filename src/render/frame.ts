@@ -2,7 +2,7 @@ import type { Camera } from './camera';
 import type { InstanceList } from './instance-list';
 import { Lights, packInstanceFlags } from './lights';
 import type { Material } from './material';
-import type { Mesh, MeshBounds } from './mesh';
+import type { Mesh, MeshBounds, MeshRange } from './mesh';
 import type { SceneTarget } from './scene-target';
 import { Transform } from './transform';
 
@@ -125,6 +125,12 @@ export interface InstanceParams {
    * keeps plain submission order. With depth on it is still the first key (see the renderer).
    */
   order?: number;
+  /**
+   * Draw only the indices `[first, first + count)` of the mesh (ws/render-4): a sub-mesh of a
+   * file, one of `mesh.ranges`. Instances batch per (mesh, material, range). Indexed meshes
+   * only; ignored by `frame.meshes` batches and lists.
+   */
+  range?: MeshRange;
 }
 
 /** Parameters for one instanced draw. Reuse the object across frames to avoid garbage. */

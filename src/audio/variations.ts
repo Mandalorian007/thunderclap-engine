@@ -35,8 +35,11 @@ const SILENT: Voice = {
   setDirection() {},
   follow() {},
   sendTo() {},
+  filter() {},
   position: new Float64Array(3),
   playing: false,
+  sendCount: 0,
+  occlusion: 0,
 };
 
 export function createVariations(
