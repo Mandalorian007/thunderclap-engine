@@ -49,3 +49,5 @@ export {
   quatNormalize,
   quatSlerp,
 } from './quat';
+export type { Socket, SocketLocal } from './socket';
+export { attachTransform, createSocket, socketWorld } from './socket';
