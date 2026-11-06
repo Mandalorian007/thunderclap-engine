@@ -65,6 +65,9 @@ const state: HarnessAudio4State = {
   emitterX: -30,
   lastClip: '',
   voices: 0,
+  voicesAtPlay: 0,
+  clipsPlayed: 0,
+  clipsEnded: 0,
   grid: { bar: 0, beat: 0, totalBeats: 0 },
   streaming: false,
   background: false,
@@ -121,11 +124,16 @@ audio.occlusion = {
   interval: 0.1,
 };
 
+/** `playClip` voices still playing; `frame` counts them into `clipsEnded` as they stop. */
+const clipVoices: Voice[] = [];
+
 const api: HarnessAudio4Api = {
   state,
   playClip(name) {
     if (mode !== 'sprites') return;
-    audio.play(`fx#${name}`);
+    clipVoices.push(audio.play(`fx#${name}`));
+    state.voicesAtPlay = audio.voices('sfx').length;
+    state.clipsPlayed++;
     state.lastClip = name;
   },
   setStill(s) {
@@ -220,6 +228,11 @@ function frame(now: number): void {
   );
   state.rate = e?.doppler ?? 1;
   state.voices = audio.voices('sfx').length;
+  for (let i = clipVoices.length - 1; i >= 0; i--) {
+    if (clipVoices[i]!.playing) continue;
+    clipVoices.splice(i, 1);
+    state.clipsEnded++;
+  }
   if (music) {
     state.grid.bar = music.bar;
     state.grid.beat = music.beat;
