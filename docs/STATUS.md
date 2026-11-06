@@ -103,7 +103,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Input 3: `Look` orbit mode, rebinding + listen + serialise, hold/doubleTap/chord triggers, pan observer (long-press ordering fix), rumble, prompt glyphs | ws/input-3 | ✅ merged `c5d663b` (chain 2; E-025 check-only 1557/120; docs-only conflicts) |
 | 5 | Post 3: TAA with history + jitter, SSR, auto-exposure histogram, white balance, camera motion blur, lens dirt, quality tiers | ws/post-3 | 🔧 engineer dispatched (offset 540) |
 | 5 | Host PWA: `packages/host-pwa` installable shell (manifest + service worker vite plugin, install/update/offline through the Host seam) | ws/host-pwa | ✅ merged `26e8223` (chain 1; full gate: check 1517/118 + host-pwa 37, e2e 1537/145/0, snap 0; package.json check chain keep-both) |
-| 5 | Nav 3: edge costs, 4-neighbour, `reachable` with parents, incremental grid edits, multi-goal flow fields, path caps | ws/nav-3 | 🔧 engineer dispatched (offset 560) |
+| 5 | Nav 3: edge costs, 4-neighbour, `reachable` with parents, incremental grid edits, multi-goal flow fields, path caps | ws/nav-3 | ✅ green `674991e` (check 1522/118, snap 0, e2e 1509/139/2: decals.spec:143 phone rows, load 26, E-023 watch); queued chain 1 |
 | 5 | Ergo 2D 2: iso projection/inverse with elevation probe, tile-layer painter order + diamond + elevation, parallax helper, 2D camera follow | ws/ergo-2d-2 | 🔧 engineer dispatched (offset 570) |
 | 5 | Voxel render: `@thunderclap/engine/voxel` grid, greedy mesher + AO, worker bridge, culled chunk Drawable with slack, DDA pick, WGSL prelude, `nearest-mip-repeat` sampler, water origin, sky ambient floor | ws/voxel-render | 🔧 engineer dispatched (offset 580) |
 | 5 | Demo polish 2: arena/dungeon/range/showroom adopt `timing.ready()`, skinned standard, decals, `PanelStack`, widgets `bar`, tween hinge | ws/demo-polish-2 | 🔧 engineer dispatched (offset 590) |
@@ -196,6 +196,8 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - ws/ui-world-panel wishes: post-`input.update()` hook or router moved/released callbacks (→ ws/input-3 follow-up); `Material` `depthTest` flag so world panels can use `frame.mesh` (→ ws/pbr-lights or ergo-3d-2).
 - `e2e/decals.spec.ts:143` short-lived decal contrast poll timed out once on itch-iframe under load (perf-overlay gate; 32/32 targeted). Watch; → ws/comment-sweep poll budgets if it recurs.
 - ws/input-3 wishes: a `claim` hook on `ScreenPointers` so a viewer suppresses hover during an orbit drag; one pointer dispatcher in `Input` shared by `Gestures` and `Look` (both attach their own listeners and parse `pointerType` twice). → ws/input-4 with the world-panel post-update hook and the platformer multitouch zones.
+- ws/nav-3 wishes: `FlowField.directionAt` variant returning the step cost so agents weigh climbs; `hasLineOfWalkable` taking the `edgeCost` hook so string pulling respects cliffs (→ ws/nav-4 or crowd-2).
+- decals.spec:143 failed again under load on nav-3's matrix (phone-promax, phone-android; contrast 0). Third sighting: ws/comment-sweep should raise its poll budget or make the decal row load-proof.
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
