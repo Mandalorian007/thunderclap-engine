@@ -25,11 +25,19 @@ export interface SkinPaletteDesc {
   /** Instances (palette slots) the buffer holds. Default 1. */
   instances?: number;
   label?: string;
+  /**
+   * Keep last frame's matrices too (ws/render-4): the buffer holds `[header][current]
+   * [previous]` and the prelude's `engine_skin_previous` reads the previous block, so a
+   * skinned draw into a target with a velocity attachment writes its own motion. `flush()`
+   * settles it: a slot set this frame keeps what it held before as "previous"; one left alone
+   * reads the same matrices both frames (zero motion). Default false (velocity reads zero).
+   */
+  history?: boolean;
 }
 
 /** Floats in one joint matrix: 3 rows × 4 (row-major 3×4 affine). */
 export const JOINT_FLOATS = 12;
-/** Floats of the palette header before the first joint row (`joints`, `instances`, pad, pad). */
+/** Floats of the palette header before the first joint row (`joints`, `instances`, `history`, pad). */
 export const SKIN_PALETTE_HEADER_FLOATS = 4;
 
 export class SkinPalette {
@@ -40,10 +48,18 @@ export class SkinPalette {
   readonly buffer: GPUBuffer;
   /** Floats per instance block (`joints × JOINT_FLOATS`). */
   readonly instanceFloats: number;
+  /** `SkinPaletteDesc.history`: the buffer carries last frame's matrices after the current. */
+  readonly history: boolean;
   private readonly data: Float32Array<ArrayBuffer>;
   /** Dirty instance range, inclusive; `lo > hi` means clean. */
   private dirtyLo = 0;
   private dirtyHi = -1;
+  /** With history: the flush each slot was last written in (0 = never); `flushes` counts them. */
+  private readonly stamp: Uint32Array;
+  private flushes = 1;
+  /** With history: slots whose previous block must follow their current one at the next flush. */
+  private settleLo = 0;
+  private settleHi = -1;
 
   constructor(
     private readonly device: GPUDevice,
@@ -59,10 +75,16 @@ export class SkinPalette {
     this.joints = joints;
     this.instances = instances;
     this.instanceFloats = joints * JOINT_FLOATS;
-    this.data = new Float32Array(SKIN_PALETTE_HEADER_FLOATS + instances * this.instanceFloats);
+    this.history = desc.history === true;
+    const blocks = this.history ? 2 : 1;
+    this.data = new Float32Array(
+      SKIN_PALETTE_HEADER_FLOATS + blocks * instances * this.instanceFloats,
+    );
+    this.stamp = new Uint32Array(this.history ? instances : 0);
     const header = new Uint32Array(this.data.buffer, 0, SKIN_PALETTE_HEADER_FLOATS);
     header[0] = joints;
     header[1] = instances;
+    header[2] = this.history ? 1 : 0;
     this.buffer = device.createBuffer({
       label: `${this.label}-buffer`,
       size: this.data.byteLength,
@@ -70,6 +92,14 @@ export class SkinPalette {
     });
     // Identity everywhere, so an unset slot draws the mesh in its bind pose.
     for (let i = 0; i < instances; i++) this.setIdentity(i);
+    if (this.history) {
+      const n = instances * this.instanceFloats;
+      this.data.copyWithin(
+        SKIN_PALETTE_HEADER_FLOATS + n,
+        SKIN_PALETTE_HEADER_FLOATS,
+        SKIN_PALETTE_HEADER_FLOATS + n,
+      );
+    }
     // The header goes up with the first flush (the whole buffer is dirty).
     this.device.queue.writeBuffer(
       this.buffer,
@@ -83,6 +113,11 @@ export class SkinPalette {
   /** Float offset of `instance`'s first joint row inside the buffer (tests, custom writers). */
   offsetOf(instance: number): number {
     return SKIN_PALETTE_HEADER_FLOATS + instance * this.instanceFloats;
+  }
+
+  /** Float offset of `instance`'s previous-frame block (`history` palettes only; else -1). */
+  previousOffsetOf(instance: number): number {
+    return this.history ? this.offsetOf(this.instances + instance) : -1;
   }
 
   /**
@@ -99,6 +134,7 @@ export class SkinPalette {
     }
     const d = this.data;
     const o = this.offsetOf(instance);
+    this.capture(instance);
     for (let i = 0; i < n; i++) d[o + i] = matrices[offset + i]!;
     this.dirty(instance);
   }
@@ -108,6 +144,7 @@ export class SkinPalette {
     this.check(instance);
     const d = this.data;
     let o = this.offsetOf(instance);
+    this.capture(instance);
     for (let j = 0; j < this.joints; j++) {
       d.fill(0, o, o + JOINT_FLOATS);
       d[o] = 1;
@@ -122,12 +159,45 @@ export class SkinPalette {
   flush(): void {
     const lo = this.dirtyLo;
     const hi = this.dirtyHi;
+    if (this.history) {
+      // Slots written last flush but not this one move on: previous := current.
+      const sLo = Math.max(this.settleLo, 0);
+      const sHi = this.settleHi;
+      const n = this.instanceFloats;
+      for (let i = sLo; i <= sHi; i++) {
+        if (this.stamp[i] === this.flushes) continue;
+        const cur = this.offsetOf(i);
+        this.data.copyWithin(this.previousOffsetOf(i), cur, cur + n);
+      }
+      const uLo = lo > hi ? sLo : sHi < sLo ? lo : Math.min(lo, sLo);
+      const uHi = lo > hi ? sHi : Math.max(hi, sHi);
+      this.settleLo = lo;
+      this.settleHi = hi;
+      this.flushes++;
+      this.dirtyLo = this.instances;
+      this.dirtyHi = -1;
+      if (uLo > uHi) return;
+      const first = this.offsetOf(uLo) * 4;
+      const bytes = (uHi - uLo + 1) * n * 4;
+      this.device.queue.writeBuffer(this.buffer, first, this.data.buffer, first, bytes);
+      const pFirst = this.previousOffsetOf(uLo) * 4;
+      this.device.queue.writeBuffer(this.buffer, pFirst, this.data.buffer, pFirst, bytes);
+      return;
+    }
     if (lo > hi) return;
     this.dirtyLo = this.instances;
     this.dirtyHi = -1;
     const first = this.offsetOf(lo) * 4;
     const bytes = (hi - lo + 1) * this.instanceFloats * 4;
     this.device.queue.writeBuffer(this.buffer, first, this.data.buffer, first, bytes);
+  }
+
+  /** With history: the first write to a slot in a frame keeps its current block as previous. */
+  private capture(instance: number): void {
+    if (!this.history || this.stamp[instance] === this.flushes) return;
+    this.stamp[instance] = this.flushes;
+    const cur = this.offsetOf(instance);
+    this.data.copyWithin(this.previousOffsetOf(instance), cur, cur + this.instanceFloats);
   }
 
   /** True when a `flush()` would upload something. */

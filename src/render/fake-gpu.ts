@@ -68,9 +68,16 @@ export type PassCommand =
   | { op: 'setPipeline'; pipeline: unknown }
   | { op: 'setBindGroup'; index: number; group: unknown; offsets: number[] }
   | { op: 'draw'; vertices: number; instances: number; firstInstance: number }
-  | { op: 'drawIndexed'; indices: number; instances: number; firstInstance: number }
+  | {
+      op: 'drawIndexed';
+      indices: number;
+      instances: number;
+      firstInstance: number;
+      /** Recorded when non-zero (an `InstanceParams.range` draw). */
+      firstIndex?: number;
+    }
   | { op: 'dispatch'; x: number; y: number }
-  | { op: 'other'; name: string; args?: number[] };
+  | { op: 'other'; name: string; args?: number[]; slot?: number; buffer?: unknown };
 
 export interface FakePass {
   kind: 'render' | 'compute';
@@ -124,10 +131,15 @@ export function createFakeDevice(limits: Partial<Record<string, number>> = {}): 
         cmd({ op: 'setBindGroup', index, group, offsets: offsets ? [...offsets] : [] }),
       draw: (vertices: number, instances = 1, _fv = 0, firstInstance = 0) =>
         cmd({ op: 'draw', vertices, instances, firstInstance }),
-      drawIndexed: (indices: number, instances = 1, _fi = 0, _bv = 0, firstInstance = 0) =>
-        cmd({ op: 'drawIndexed', indices, instances, firstInstance }),
+      drawIndexed: (indices: number, instances = 1, firstIndex = 0, _bv = 0, firstInstance = 0) =>
+        cmd(
+          firstIndex === 0
+            ? { op: 'drawIndexed', indices, instances, firstInstance }
+            : { op: 'drawIndexed', indices, instances, firstInstance, firstIndex },
+        ),
       dispatchWorkgroups: (x: number, y = 1) => cmd({ op: 'dispatch', x, y }),
-      setVertexBuffer: () => cmd({ op: 'other', name: 'setVertexBuffer' }),
+      setVertexBuffer: (slot: number, buffer: unknown) =>
+        cmd({ op: 'other', name: 'setVertexBuffer', slot, buffer }),
       setIndexBuffer: () => cmd({ op: 'other', name: 'setIndexBuffer' }),
       setBlendConstant: () => cmd({ op: 'other', name: 'setBlendConstant' }),
       setViewport: (...args: number[]) => cmd({ op: 'other', name: 'setViewport', args }),

@@ -25,13 +25,19 @@ export const ALL_LAYERS = 0xffffffff;
 export const ORTHO2D_HALF_DEPTH = 1024;
 
 /**
- * Floats in the WGSL `EngineCamera` block: 76 used (`inv_view_proj` ends at byte 304), padded
+ * Floats in the WGSL `EngineCamera` block: 112 used (`jitter` ends at byte 448), padded
  * to 512 bytes so the lights block that follows it in the view's uniform buffer stays on a
  * 256-byte boundary (`minUniformBufferOffsetAlignment`).
  */
 export const CAMERA_BLOCK_FLOATS = 128;
 /** Float offset of `inv_view_proj` inside the camera block (byte 240). */
 export const CAMERA_INV_VIEW_PROJ_OFFSET = 60;
+/** Float offset of `prev_view_proj` (last frame's unjittered `view_proj`) inside the block. */
+export const CAMERA_PREV_VIEW_PROJ_OFFSET = 76;
+/** Float offset of `prev_view` (last frame's `view`) inside the block. */
+export const CAMERA_PREV_VIEW_OFFSET = 92;
+/** Float offset of `jitter` (clip-space dx, dy; the pixel offset x, y) inside the block. */
+export const CAMERA_JITTER_OFFSET = 108;
 
 /** Floats in `Camera.frustum`: six planes × (a, b, c, d). */
 export const FRUSTUM_FLOATS = 24;
@@ -90,8 +96,29 @@ export class Camera {
    * for `perspective`. Sprites and meshes without bounds are never culled.
    */
   cull = false;
+  /**
+   * Last frame's unjittered `viewProjection`, copied by the renderer at the start of each view
+   * it draws this camera through (`recordHistory`), before the camera is read; identity until
+   * the first frame. What a reprojecting post pass (TAA, motion blur) reads through
+   * `PostInputs.view.previousViewProj`. Read-only (`Float32Array(16)`).
+   */
+  readonly previousViewProj: Mat4 = mat4.create();
+  /** Last frame's `view`, kept like `previousViewProj`. Read-only. */
+  readonly previousView: Mat4 = mat4.create();
 
   private readonly viewM = mat4.create();
+  /** `viewProjM` before the jitter offset (what `previousViewProj` and the frustum use). */
+  private readonly steadyViewProjM = mat4.create();
+  /** What the last `recordHistory` saw: the matrices the next one moves into `previous*`. */
+  private readonly historyViewProjM = mat4.create();
+  private readonly historyViewM = mat4.create();
+  private hasHistory = false;
+  /** Sub-pixel jitter in pixels of the current target (`setJitter`). */
+  private jitterX = 0;
+  private jitterY = 0;
+  /** The target size the jitter is measured against; 0 × 0 (the default) applies none. */
+  private jitterW = 0;
+  private jitterH = 0;
   private readonly projM = mat4.create();
   private readonly viewProjM = mat4.create();
   private readonly invViewProjM = mat4.create();
@@ -329,6 +356,77 @@ export class Camera {
     return this.invViewProjM;
   }
 
+  /**
+   * Offset the projection by `(x, y)` pixels of the current target (a TAA sample sequence):
+   * `viewProjection` and `invViewProj` carry it, `previousViewProj` and the frustum never do.
+   * Zero by default. The renderer applies it only when its post processor declares
+   * `wantsJitter` (and never through the 2D `ortho2d` projection), so a page without one
+   * draws exactly as before. +x moves the image right, +y down.
+   */
+  setJitter(x: number, y: number): this {
+    if (x === this.jitterX && y === this.jitterY) return this;
+    this.jitterX = x;
+    this.jitterY = y;
+    if (this.jitterW > 0) this.touch();
+    return this;
+  }
+
+  /** `setJitter(0, 0)`. */
+  clearJitter(): this {
+    return this.setJitter(0, 0);
+  }
+
+  /** The jitter set by `setJitter`, in pixels: `[x, y]`. */
+  get jitter(): [number, number] {
+    return [this.jitterX, this.jitterY];
+  }
+
+  /** `jitter` into `out` (no allocation): the pixels applied, `0, 0` when not applied. */
+  getJitter(out: [number, number] | Float32Array): void {
+    const on = this.jitterW > 0 && this.projSource !== 'ortho2d';
+    out[0] = on ? this.jitterX : 0;
+    out[1] = on ? this.jitterY : 0;
+  }
+
+  /**
+   * The target size the jitter applies against (0 × 0 ignores it). Engine-internal: the
+   * renderer sets it per view from the viewport when the post processor wants jitter.
+   */
+  setJitterTarget(width: number, height: number): void {
+    if (width === this.jitterW && height === this.jitterH) return;
+    this.jitterW = width;
+    this.jitterH = height;
+    if (this.jitterX !== 0 || this.jitterY !== 0) this.touch();
+  }
+
+  /** The clip-space offset the current jitter adds: `[dx, dy]` (0 when not applied). */
+  jitterClip(out: [number, number] | Float32Array): void {
+    const on = this.jitterW > 0 && this.projSource !== 'ortho2d';
+    out[0] = on ? (2 * this.jitterX) / this.jitterW : 0;
+    out[1] = on ? (-2 * this.jitterY) / this.jitterH : 0;
+  }
+
+  /**
+   * Move the (unjittered) `viewProjection` and `view` seen by the last call into
+   * `previousViewProj` and `previousView`, and remember the current ones for the next call.
+   * Engine-internal: the renderer calls it at the start of each view, before reading the
+   * camera, so a post pass sees last frame's matrices beside this frame's. The first call
+   * (a camera's first view) sets previous = current: no motion.
+   */
+  recordHistory(): void {
+    this.update();
+    if (this.hasHistory) {
+      this.previousViewProj.set(this.historyViewProjM);
+      this.previousView.set(this.historyViewM);
+    } else {
+      this.previousViewProj.set(this.steadyViewProjM);
+      this.previousView.set(this.viewM);
+      this.hasHistory = true;
+    }
+    this.historyViewProjM.set(this.steadyViewProjM);
+    this.historyViewM.set(this.viewM);
+  }
+
   /** Is a draw with layer mask `mask` seen by this camera? */
   sees(mask: number): boolean {
     return (this.layers & mask) !== 0;
@@ -435,8 +533,9 @@ export class Camera {
   /**
    * Write the WGSL `EngineCamera` block (`CAMERA_BLOCK_FLOATS` floats) at float offset `o`:
    * `view`, `proj`, `view_proj`, `camera_pos`, `viewport` (target px: x, y, w, h),
-   * `view_index` and, at `CAMERA_INV_VIEW_PROJ_OFFSET`, `inv_view_proj`. `u32` must view the
-   * same buffer as `f32`. Engine-internal.
+   * `view_index`, at `CAMERA_INV_VIEW_PROJ_OFFSET` `inv_view_proj`, then `prev_view_proj`,
+   * `prev_view` and `jitter` (clip dx, dy, pixel x, y). `u32` must view the same buffer as
+   * `f32`. Engine-internal.
    */
   writeBlock(
     f32: Float32Array,
@@ -463,7 +562,15 @@ export class Camera {
     f32[o + 58] = 0;
     f32[o + 59] = 0;
     f32.set(this.invViewProj, o + CAMERA_INV_VIEW_PROJ_OFFSET);
-    for (let i = CAMERA_INV_VIEW_PROJ_OFFSET + 16; i < CAMERA_BLOCK_FLOATS; i++) f32[o + i] = 0;
+    f32.set(this.previousViewProj, o + CAMERA_PREV_VIEW_PROJ_OFFSET);
+    f32.set(this.previousView, o + CAMERA_PREV_VIEW_OFFSET);
+    const j = o + CAMERA_JITTER_OFFSET;
+    this.jitterClip(jitterScratch);
+    f32[j] = jitterScratch[0];
+    f32[j + 1] = jitterScratch[1];
+    f32[j + 2] = this.jitterW > 0 ? this.jitterX : 0;
+    f32[j + 3] = this.jitterW > 0 ? this.jitterY : 0;
+    for (let i = CAMERA_JITTER_OFFSET + 4; i < CAMERA_BLOCK_FLOATS; i++) f32[o + i] = 0;
   }
 
   /**
@@ -477,7 +584,7 @@ export class Camera {
     this.update();
     if (this.frustumDirty) {
       this.frustumDirty = false;
-      extractFrustum(this.frustumM, this.viewProjM);
+      extractFrustum(this.frustumM, this.steadyViewProjM);
     }
     return this.frustumM;
   }
@@ -525,8 +632,25 @@ export class Camera {
     } else {
       mat4.multiply(this.viewProjM, this.projM, this.viewM);
     }
+    this.steadyViewProjM.set(this.viewProjM);
+    if (
+      this.jitterW > 0 &&
+      this.projSource !== 'ortho2d' &&
+      (this.jitterX !== 0 || this.jitterY !== 0)
+    ) {
+      // A clip-space translation by (dx, dy): add dx·w, dy·w to x and y, column by column.
+      const dx = (2 * this.jitterX) / this.jitterW;
+      const dy = (-2 * this.jitterY) / this.jitterH;
+      const m = this.viewProjM;
+      for (let c = 0; c < 16; c += 4) {
+        m[c] = m[c]! + dx * m[c + 3]!;
+        m[c + 1] = m[c + 1]! + dy * m[c + 3]!;
+      }
+    }
   }
 }
+
+const jitterScratch: [number, number] = [0, 0];
 
 const UP = [0, 1, 0] as const;
 /** Clip-space corner order for `frustumCorners`: bottom-left, bottom-right, top-right, top-left. */

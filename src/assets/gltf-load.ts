@@ -520,16 +520,28 @@ function standardDesc(
     if (!transform) transform = ref.transform;
   }
   if (sampler) d.sampler = gltfSamplerKind(sampler, mips);
-  if (transform) {
-    d.uvTransform = [
-      transform.scale[0],
-      transform.scale[1],
-      transform.offset[0],
-      transform.offset[1],
-      transform.rotation,
-    ];
+  if (transform) d.uvTransform = uvTransformOf(transform);
+  // Per-map texCoord and transform, and the occlusion strength (ws/render-4).
+  if (gm.name) d.name = gm.name;
+  if (gm.occlusionStrength !== 1) d.occlusionStrength = gm.occlusionStrength;
+  const names = ['baseColor', 'metallicRoughness', 'normal', 'occlusion', 'emissive'] as const;
+  for (let k = 0; k < slots.length; k++) {
+    const ref = slots[k];
+    if (!ref) continue;
+    const texCoord = ref.texCoord === 1 ? 1 : 0;
+    const own = ref.transform && ref.transform !== transform;
+    if (texCoord === 0 && !own) continue;
+    d.maps ??= {};
+    d.maps[names[k]!] = {
+      texCoord,
+      ...(own ? { uvTransform: uvTransformOf(ref.transform!) } : {}),
+    };
   }
   return d;
+}
+
+function uvTransformOf(t: GltfTextureTransform): number[] {
+  return [t.scale[0], t.scale[1], t.offset[0], t.offset[1], t.rotation];
 }
 
 /**

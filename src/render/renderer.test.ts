@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { mat4 } from '../core/math';
-import { CAMERA_INV_VIEW_PROJ_OFFSET, Camera } from './camera';
+import {
+  CAMERA_INV_VIEW_PROJ_OFFSET,
+  CAMERA_JITTER_OFFSET,
+  CAMERA_PREV_VIEW_OFFSET,
+  CAMERA_PREV_VIEW_PROJ_OFFSET,
+  Camera,
+} from './camera';
 import {
   createFakeDevice,
   type FakeBindGroup,
@@ -474,8 +480,17 @@ describe('camera block', () => {
     expect(back[0]).toBeCloseTo(1.5, 3);
     expect(back[1]).toBeCloseTo(-2, 3);
     expect(back[2]).toBeCloseTo(3, 3);
-    // The pad after the matrix is zero up to the lights block.
-    expect(g.subarray(64 + 76, 192).every((v) => v === 0)).toBe(true);
+    // After it: prev_view_proj, prev_view, jitter (ws/render-4), then zero up to the lights block.
+    expect([
+      ...g.subarray(64 + CAMERA_PREV_VIEW_PROJ_OFFSET, 64 + CAMERA_PREV_VIEW_PROJ_OFFSET + 16),
+    ]).toEqual([...r.camera.previousViewProj]);
+    expect([
+      ...g.subarray(64 + CAMERA_PREV_VIEW_OFFSET, 64 + CAMERA_PREV_VIEW_OFFSET + 16),
+    ]).toEqual([...r.camera.previousView]);
+    expect([...g.subarray(64 + CAMERA_JITTER_OFFSET, 64 + CAMERA_JITTER_OFFSET + 4)]).toEqual([
+      0, 0, 0, 0,
+    ]);
+    expect(g.subarray(64 + CAMERA_JITTER_OFFSET + 4, 192).every((v) => v === 0)).toBe(true);
     expect(fake.errors).toEqual([]);
   });
 

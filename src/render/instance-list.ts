@@ -10,6 +10,16 @@ import { MATRIX3X4_FLOATS, Transform } from './transform';
 
 const NO_PARAMS: InstanceParams = Object.freeze({});
 
+/** `renderer.createInstanceList` options. */
+export interface InstanceListOptions {
+  /**
+   * Keep each instance's previous-frame matrix in a second vertex buffer (`prevBuffer`), so a
+   * material writing a velocity attachment (`SceneTargetDesc.aux.velocity`) sees the
+   * instance's own motion rather than the camera's alone. Default false.
+   */
+  velocity?: boolean;
+}
+
 /**
  * A retained list of up to `capacity` instances of one mesh and material, drawn with
  * `frame.list(list)`; made by `renderer.createInstanceList`. Instances are set and removed by
@@ -35,6 +45,16 @@ export class InstanceList implements InstanceBatch {
   castShadow?: boolean;
   /** The GPU vertex buffer the instances live in (`capacity` × `INSTANCE_STRIDE` bytes). */
   readonly buffer: GPUBuffer;
+  /**
+   * With `velocity` (ws/render-4): the previous frame's matrices (12 floats per instance) and
+   * the vertex buffer (48 bytes per instance, slot 2) a material writing a velocity attachment
+   * reads them from; null otherwise. A slot `set` this frame keeps what it held before as
+   * previous; one left alone settles to its current matrix at the next flush (no motion).
+   */
+  readonly prevMatrices: Float32Array | null;
+  readonly prevBuffer: GPUBuffer | null;
+  /** Keeps a previous-matrix lane (`createInstanceList(..., { velocity: true })`). */
+  readonly velocity: boolean;
   private _count = 0;
   private _bounds: MeshBounds | null = null;
   private fixedBounds = false;
@@ -45,12 +65,19 @@ export class InstanceList implements InstanceBatch {
   /** Interleaved staging for the upload, in the instance format. */
   private readonly data: Float32Array;
   private readonly center: [number, number, number] = [0, 0, 0];
+  /** With velocity: the flush each slot was last captured in (0: never); `flushes` counts them. */
+  private readonly stamp: Uint32Array;
+  private flushes = 1;
+  /** With velocity: the range dirty at the last flush, settled (prev := current) at the next. */
+  private settleLo = 0;
+  private settleHi = 0;
 
   constructor(
     device: GPUDevice,
     readonly mesh: Mesh,
     readonly material: Material,
     readonly capacity: number,
+    opts: InstanceListOptions = {},
   ) {
     if (!(capacity >= 1)) throw new Error(`InstanceList: capacity ${capacity}`);
     this.matrices = new Float32Array(capacity * MATRIX3X4_FLOATS);
@@ -61,6 +88,20 @@ export class InstanceList implements InstanceBatch {
       size: capacity * INSTANCE_STRIDE,
       usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     });
+    this.velocity = opts.velocity === true;
+    if (this.velocity) {
+      this.prevMatrices = new Float32Array(capacity * MATRIX3X4_FLOATS);
+      this.prevBuffer = device.createBuffer({
+        label: 'instance-list-prev',
+        size: capacity * MATRIX3X4_FLOATS * 4,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      });
+      this.stamp = new Uint32Array(capacity);
+    } else {
+      this.prevMatrices = null;
+      this.prevBuffer = null;
+      this.stamp = new Uint32Array(0);
+    }
   }
 
   /** Live instances (the first `count` slots). */
@@ -99,6 +140,7 @@ export class InstanceList implements InstanceBatch {
     if (i === this._count) this._count++;
     const mats = this.matrices;
     const o = i * MATRIX3X4_FLOATS;
+    if (this.velocity) this.capture(i, o);
     let sx: number;
     let sy: number;
     if (m instanceof Transform) {
@@ -129,6 +171,15 @@ export class InstanceList implements InstanceBatch {
     const mats = this.matrices;
     const prm = this.params;
     mats.copyWithin(i * MATRIX3X4_FLOATS, last * MATRIX3X4_FLOATS, (last + 1) * MATRIX3X4_FLOATS);
+    if (this.velocity) {
+      // The moved instance keeps its own history.
+      this.prevMatrices!.copyWithin(
+        i * MATRIX3X4_FLOATS,
+        last * MATRIX3X4_FLOATS,
+        (last + 1) * MATRIX3X4_FLOATS,
+      );
+      this.stamp[i] = this.stamp[last]!;
+    }
     prm.copyWithin(
       i * INSTANCE_PARAM_FLOATS,
       last * INSTANCE_PARAM_FLOATS,
@@ -185,6 +236,7 @@ export class InstanceList implements InstanceBatch {
     const lo = this.dirtyLo;
     const hi = Math.min(this.dirtyHi, this._count);
     this.dirtyLo = this.dirtyHi = 0;
+    if (this.velocity) this.flushPrevious(queue, lo, hi);
     if (lo >= hi) return;
     const d = this.data;
     const mats = this.matrices;
@@ -207,7 +259,52 @@ export class InstanceList implements InstanceBatch {
 
   destroy(): void {
     this.buffer.destroy();
+    this.prevBuffer?.destroy();
     this._count = 0;
+  }
+
+  /** With velocity: the first `set` of a slot in a frame keeps its current matrix as previous. */
+  private capture(i: number, o: number): void {
+    // A slot never flushed has no history: `flushPrevious` settles it from its first matrix.
+    if (this.stamp[i] === this.flushes || this.stamp[i] === 0) return;
+    this.stamp[i] = this.flushes;
+    const prev = this.prevMatrices!;
+    const cur = this.matrices;
+    for (let k = 0; k < MATRIX3X4_FLOATS; k++) prev[o + k] = cur[o + k]!;
+  }
+
+  /**
+   * Settle the slots dirty last flush but untouched this one (previous := current), give a
+   * brand-new instance its current matrix as previous, and upload the previous lane over the
+   * union of both ranges.
+   */
+  private flushPrevious(queue: GPUQueue, lo: number, hi: number): void {
+    const prev = this.prevMatrices!;
+    const cur = this.matrices;
+    const sLo = this.settleLo;
+    const sHi = Math.min(this.settleHi, this._count);
+    const now = this.flushes;
+    for (let i = sLo; i < sHi; i++) {
+      if (this.stamp[i] === now) continue;
+      const o = i * MATRIX3X4_FLOATS;
+      for (let k = 0; k < MATRIX3X4_FLOATS; k++) prev[o + k] = cur[o + k]!;
+    }
+    for (let i = lo; i < hi; i++) {
+      // Never flushed (a new slot) or touched directly without `set`: no history → settle.
+      const o = i * MATRIX3X4_FLOATS;
+      if (this.stamp[i] !== now) {
+        for (let k = 0; k < MATRIX3X4_FLOATS; k++) prev[o + k] = cur[o + k]!;
+        this.stamp[i] = now;
+      }
+    }
+    this.settleLo = lo;
+    this.settleHi = hi;
+    this.flushes = now + 1;
+    const uLo = sLo < sHi ? (lo < hi ? Math.min(lo, sLo) : sLo) : lo;
+    const uHi = sLo < sHi ? (lo < hi ? Math.max(hi, sHi) : sHi) : hi;
+    if (uLo >= uHi) return;
+    const bytes = MATRIX3X4_FLOATS * 4;
+    queue.writeBuffer(this.prevBuffer!, uLo * bytes, prev.buffer, uLo * bytes, (uHi - uLo) * bytes);
   }
 
   /** The automatic sphere: `mesh.bounds` through every live instance. */
