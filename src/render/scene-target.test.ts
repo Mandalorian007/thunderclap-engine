@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { createFakeDevice, type FakeTexture } from './fake-gpu';
 import { DEPTH_FORMAT } from './material';
-import { SCENE_FORMAT, SceneTarget } from './scene-target';
+import { SCENE_FORMAT, SceneTarget, sharedEmissiveCount } from './scene-target';
 
 function labels(fake: ReturnType<typeof createFakeDevice>): string[] {
   return fake.textures.filter((t) => !t.destroyed).map((t) => t.label ?? '?');
@@ -106,6 +106,31 @@ describe('SceneTarget.external', () => {
     expect(t.emissive).not.toBe(emissive);
     expect((emissive as unknown as { texture: FakeTexture }).texture.destroyed).toBe(true);
     expect(t.depth?.texture).toBe(c.depth);
+  });
+
+  it('external targets of one size share one emissive, stored with discard, freed by the last', () => {
+    const fake = createFakeDevice();
+    const a = textures(fake);
+    const b = textures(fake);
+    const left = SceneTarget.external({ device: fake.device, color: a.color, label: 'left' });
+    const right = SceneTarget.external({ device: fake.device, color: b.color, label: 'right' });
+    expect(right.emissive).toBe(left.emissive);
+    expect(left.emissiveAtt.storeOp).toBe('discard');
+    expect(labels(fake).filter((l) => l.endsWith('emissive'))).toEqual(['left-emissive']);
+    expect(sharedEmissiveCount(fake.device)).toBe(1);
+    // Another size is another texture; the first stays while someone holds it.
+    const c = textures(fake, 64, 64);
+    right.adopt({ color: c.color });
+    expect(right.emissive).not.toBe(left.emissive);
+    expect(sharedEmissiveCount(fake.device)).toBe(2);
+    left.destroy();
+    expect(sharedEmissiveCount(fake.device)).toBe(1);
+    expect((left.emissive as unknown as { texture: FakeTexture }).texture.destroyed).toBe(true);
+    right.destroy();
+    expect(sharedEmissiveCount(fake.device)).toBe(0);
+    // An allocated target keeps its own emissive with store.
+    const own = new SceneTarget(fake.device, { width: 8, height: 8 });
+    expect(own.emissiveAtt.storeOp).toBe('store');
   });
 
   it('without an adopted depth texture it allocates its own on first use, then drops it when one arrives', () => {

@@ -361,6 +361,45 @@ describe('Mesh capacity and update (ws/mesh-stream)', () => {
     expect(r.stats.drawCalls).toBe(0);
     expect(fake.errors).toEqual([]);
   });
+
+  it('update takes a Worker reply: one buffer, counts and optional bounds (ws/ergo-3d)', () => {
+    const fake = createFakeDevice();
+    const m = new Mesh(fake.device, {
+      label: 'w',
+      layout: VERTEX_LAYOUT_3D,
+      capacity: { vertices: 16, indices: 32 },
+    });
+    // 5 vertices (240 bytes) then 10 uint16 indices, right after them (240 is 4-aligned).
+    const vBytes = 5 * 48;
+    const buffer = new ArrayBuffer(vBytes + 10 * 2);
+    fake.writes.length = 0;
+    expect(m.update({ buffer, vertexCount: 5, indexCount: 10 })).toBe(false);
+    expect(m.vertexCount).toBe(5);
+    expect(m.indexCount).toBe(10);
+    expect(fake.writes.map((w) => [w.buffer.label, w.offset, w.bytes])).toEqual([
+      ['w-vb', 0, 240],
+      ['w-ib', 0, 20],
+    ]);
+    // An explicit index offset, bounds passed through, no indices at all.
+    const padded = new ArrayBuffer(vBytes + 8 + 6 * 2);
+    m.update({
+      buffer: padded,
+      vertexCount: 5,
+      indexCount: 6,
+      indexOffset: vBytes + 8,
+      bounds: { center: [1, 2, 3], radius: 4 },
+    });
+    expect(m.indexCount).toBe(6);
+    expect(m.bounds).toEqual({ center: [1, 2, 3], radius: 4 });
+    m.update({ buffer: new ArrayBuffer(3 * 48), vertexCount: 3 });
+    expect(m.vertexCount).toBe(3);
+    expect(m.indexCount).toBe(0);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('layouts carry positionOffset 0 for meshTester (ws/ergo-3d)', () => {
+    for (const l of [VERTEX_LAYOUT_2D, VERTEX_LAYOUT_3D]) expect(l.positionOffset).toBe(0);
+  });
 });
 
 describe('Mesh.bounds (ws/cull)', () => {

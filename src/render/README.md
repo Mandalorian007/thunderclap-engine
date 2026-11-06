@@ -50,7 +50,9 @@ renderer.endFrame();
 - **External targets (XR).** `SceneTarget.external({ device, color, depth?, view?, viewport?,
   label? })` (`SceneTargetExternal`) wraps a colour texture someone else owns (a WebXR projection
   layer's `getViewSubImage` colour, one array layer through `view`) and optionally its depth,
-  allocating only the emissive target (and its own depth, if none was adopted, on first depth use); `isExternal`, `adoptedColor`, `viewport`
+  allocating only the emissive target (and its own depth, if none was adopted, on first depth use); every
+  external target of one size on a device shares one emissive texture, stored with `discard`, released by the last
+  (`sharedEmissiveCount(device)` reads the pool size; two XR eyes allocate one, ws/ergo-3d); `isExternal`, `adoptedColor`, `viewport`
   (`SceneTargetViewport`, the sub-image rect in px) and `adopt(desc)` (re-point at the next
   frame's textures; a no-op when they are the same) are its extras; `resize` throws, `destroy`
   never destroys what it adopted. `XrSurface` in `@thunderclap/engine/platform` builds one per
@@ -456,8 +458,10 @@ read-only storage buffers at `@group(1) @binding(BUFFER_BINDING_BASE + i)`, `BUF
 buffer)` swaps one later). The palette is slot 0, `SKIN_PALETTE_BINDING` = 16; a material has one
 palette, and two skinned materials take two palettes or share one buffer.
 
-A draw names its palette slot in `InstanceParams.params[3]` (`params.w`, read as `u32`); several
-draws may share a slot. For a skinned layout `materialPrelude` emits `WGSL_SKIN` after `VertexIn`:
+A draw names its palette slot in `InstanceParams.params[3]` (`params.w`, read as `u32`;
+`SKIN_PARAM` = 3 names the index, ws/ergo-3d); several draws may share a slot.
+`createStandardMaterial(renderer, { skin: palette })` (a `SkinPalette` or its `GPUBuffer`) binds
+the palette as `buffers[0]`, so a skinned PBR character needs no custom WGSL. For a skinned layout `materialPrelude` emits `WGSL_SKIN` after `VertexIn`:
 the `engine_skin_palette` binding and `engine_skin(v, position, normal) -> EngineSkinned`
 (`position`, `normal`), the four weighted joint matrices applied in object space before the
 instance matrix; the layout's `engine_local_position` / `engine_local_normal` call it, so
@@ -640,10 +644,13 @@ textures every frame, as ping-pong does, builds no new bind groups after the fir
 - `renderer.createTexture(desc)` and `renderer.createRenderTarget(desc)`, where `TextureDesc` is
   `{ width, height, format?, usage?, label? }`. Anything with a `view`, `width` and `height`
   (`TextureLike`) can be bound with `setTexture`.
-- `renderer.textureFromSource(source: TextureSource, label?, { linear? })` (`ImageBitmap`,
+- `renderer.textureFromSource(source: TextureSource, label?, { linear?, mips? })` (`ImageBitmap`,
   `ImageData`, `HTMLCanvasElement`, `OffscreenCanvas` or `HTMLImageElement`)
   uploads colour as `rgba8unorm-srgb`. Pass `{ linear: true }` for data such as masks, height
-  or normal maps, or noise, so the bytes are sampled exactly as written (`rgba8unorm`).
+  or normal maps, or noise, so the bytes are sampled exactly as written (`rgba8unorm`), and
+  `{ mips: true }` for a full mip chain (generated as `loadTexture` does, so a `linear-mip-*`
+  sampler filters a distant PBR map instead of shimmering). The options may also come second
+  (`textureFromSource(src, { mips: true, label })`, `TextureFromSourceOptions`), ws/ergo-3d.
 - `renderer.textureFromPixels({ width, height, data, format?, label?, usage? })` uploads raw
   typed pixels. It defaults to linear `rgba8unorm` and also takes `r8unorm`, `rg8unorm`,
   `r16float`, `rgba16float`, `r32float`, `rgba32float` and others; `bytesPerTexel(format)`
@@ -757,11 +764,35 @@ its Worker-meshed chunks this way.
   `VERTEX3D_BUFFER_LAYOUT` are the two `GPUVertexBufferLayout`s. `quadGeometry()` returns the
   unit quad (-0.5..0.5, white) as `{ vertices, indices }`. A material builds one pipeline per (vertex layout, depth mode) on first
   use (`material.pipelineFor(layout, depth)`).
+
+  **Vertex attribute locations.** Every layout and the instance buffer share one numbering, so
+  a custom layout (or a `Drawable`'s own pipeline) picks a free slot:
+
+  | location | attribute | buffer | layouts |
+  |---|---|---|---|
+  | 0 | `pos` (`vec2f` 2D, `vec3f` 3D) | vertex | all |
+  | 1 | `uv: vec2f` | vertex | all |
+  | 2 | `color: vec4f` | vertex | all |
+  | 3..5 | `m0`, `m1`, `m2` (3×4 world matrix rows) | instance | all |
+  | 6 | `uvRect` | instance | all |
+  | 7 | `tint` | instance | all |
+  | 8 | `params` (`params.w` = skin palette slot, `SKIN_PARAM`) | instance | all |
+  | 9 | `misc` (emissive, flags, size) | instance | all |
+  | 10 | `normal: vec3f` | vertex | 3D, tangent, skinned |
+  | 11 | `joints: vec4u` (`uint8x4`) | vertex | skinned |
+  | 12 | `weights: vec4f` (`unorm8x4`) | vertex | skinned |
+  | 13 | `tangent: vec4f` (xyz along +u, w handedness) | vertex | tangent |
+
+  Locations 14 and 15 are free for a custom layout.
 - Dynamic meshes: `capacity: { vertices, indices }` reserves room (a mesh may start empty, with
   just a capacity); `mesh.capacity` (a `MeshCapacity`) reads it. `mesh.update(u: MeshUpdate)`
   (`{ vertices?, indices?, vertexCount?, indexCount? }`) takes any `ArrayBufferView`s and writes them with `queue.writeBuffer` straight
   from their own `buffer`/`byteOffset`, so a Worker can build a chunk into one `ArrayBuffer`,
-  transfer it, and the page uploads it with no copy (see `harness/stream.ts`). Buffers are
+  transfer it, and the page uploads it with no copy (see `harness/stream.ts`). It also takes the
+  Worker's reply as-is (`MeshReply`, ws/ergo-3d: `{ buffer, vertexCount, indexCount?, indexOffset?,
+  bounds? }`, the vertices from byte 0 and the indices at `indexOffset`, default right after the
+  vertices rounded up to 4 bytes; an indexed mesh given no `indexCount` draws nothing), so the
+  page never builds views; extra fields such as a chunk id are ignored. Buffers are
   reused while the counts fit the capacity and grow 1.5× only when they do not or the index
   format changes; `update` returns true then and `mesh.growths` counts it. Counts alone
   (`{ indexCount: n }`) move the draw range, so a chunk shrinks without touching the GPU.
@@ -772,8 +803,11 @@ its Worker-meshed chunks this way.
   uploaded positions when `autoBounds` is on, which `MeshDesc.autoBounds` defaults to for a
   capacity under `AUTO_BOUNDS_MAX_VERTICES` (65536) vertices and off above (a big streamed
   mesh passes its own). A mesh with no bounds yet has `radius` Infinity and is never culled. An
-  indexed mesh with `indexCount` 0 draws nothing (an empty streamed chunk); a non-indexed mesh
-  draws `vertexCount`.
+  indexed mesh with `indexCount` 0 is skipped entirely, no draw call and nothing in `stats` (an
+  empty streamed chunk); a non-indexed mesh draws `vertexCount`. Every shipped layout has
+  `positionOffset` 0 (ws/ergo-3d): a custom layout that puts something before `pos` sets it so a
+  picker reads `meshTester(..., { stride: layout.floats, offset: layout.positionOffset })`
+  without knowing the layout.
 - `Drawable { prepare?(encoder, frame); draw(pass, frame) }` lets you run your own pipelines
   inside the scene pass. Build them with `layout: [renderer.globalsLayout, yours]` and
   `targets: renderer.sceneFormats`.
@@ -809,8 +843,11 @@ its Worker-meshed chunks this way.
   `reportGpuError(message)` logs and records one (`createShaderModule` reports compile errors
   through it; a game can report its own GPU failures the same way).
 - `renderer.stats` (`RenderStats`) reports `{ drawCalls, instances, drawables, culled, batches,
-  shadowDraws }` for the last frame; `culled` is the mesh instances the frustum test skipped
+  shadowDraws, triangles }` for the last frame; `culled` is the mesh instances the frustum test skipped
   and `batches` the `frame.meshes` batches and `frame.list` lists drawn, summed over the views.
+  `triangles` (ws/ergo-3d) is the triangles the scene passes drew (index or vertex count ÷ 3,
+  times the instance count), summed over the views; drawables and the shadow pass are not
+  counted, so a demo's readout needs no per-mesh arithmetic.
 
 ## Resolution and timing
 
@@ -832,6 +869,10 @@ renderer.resolutionScale;                          // scene width / output width
   `queue.onSubmittedWorkDone()` (no timestamp-query feature needed; one sample in flight).
   Subscribe with `renderer.onGpuTime(ms => ...)`; `renderer.timing` (`FrameTiming`: `gpuMs`,
   `source`, `passes`, `cpuMs`, `samples`) holds the last value. Off (0) by default.
+  `renderer.timing.ready()` (ws/ergo-3d) resolves once the first sample has landed (at once when
+  `samples` > 0, the renderer is destroyed, or the device can time nothing), so a bench awaits a
+  real `gpuMs` instead of polling; set `timingEvery` first, since with timing off no sample ever
+  comes.
 - When the device has `timestamp-query` (`supportsTimestamps(device)`), `renderer.gpuTimer` is a
   `GpuTimer` and samples come from timestamps (`source: 'timestamp'`) with a per-pass breakdown
   (`GpuPassTimes`, label to ms); passes label themselves with `gpuTimer.pass(label)`, which a
