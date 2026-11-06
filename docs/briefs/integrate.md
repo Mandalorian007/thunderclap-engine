@@ -11,10 +11,10 @@ Work in your own worktree, never in the main checkout (E-018: the PM commits doc
 3. Semantic conflicts (a type one branch deleted that another reads) are fixed in the merge commit with the smallest change that keeps both branches' intent; name each in the report.
 4. Run `pnpm install` if `package.json` or the lockfile changed, then `pnpm check` and `pnpm test:e2e`. Both must be green before you commit. If they are not and the fix is not small and obvious, stop and report; do not rewrite a branch's work.
 5. Run `pnpm snap:check` after the merge (the 2D harness goldens in `e2e/golden/`, E-008 tolerance; diffs land in `screens/diff/`). A diff on a 2D page fails the merge unless the brief said the page changes; in that case the branch carries re-captured goldens (`pnpm snap`) and you keep them.
-6. Commit in your worktree. Then land it: `git -C /Users/matthewfontana/repos/thunderclap-engine merge --ff-only <your HEAD>` (run from anywhere; it moves `main` and the PM's checkout together and refuses anything but a fast-forward). If it refuses because main moved (the PM's docs commits), `git merge main` in your worktree (docs only; keep both sides), rerun `pnpm check` only (a docs-only merge needs no e2e rerun; a code change on main does), commit, and land again. Tell the PM main's new hash. Only then take the next branch.
+6. Commit in your worktree. Read the e2e summary first; the land command is a separate step, never chained in the same shell line as the test run (E-020). Then land it: `git -C /Users/matthewfontana/repos/thunderclap-engine merge --ff-only <your HEAD>` (run from anywhere; it moves `main` and the PM's checkout together and refuses anything but a fast-forward). If it refuses because main moved (the PM's docs commits), `git merge main` in your worktree (docs only; keep both sides), rerun `pnpm check` only (a docs-only merge needs no e2e rerun; a code change on main does), commit, and land again. Tell the PM main's new hash. Only then take the next branch.
 7. Remove your worktree (`git worktree remove --force`) and the branch worktrees the PM names. Nothing else.
 
-A failure in a spec on the E-017 list (mesh.spec fog and drag, ui.spec menuNav) while every other test passes is the spec's, not the merge's: land, and say so in the report.
+A failure in a spec on the E-017 list (mesh.spec fog and drag, ui.spec menuNav, skin.spec joints sway) while every other test passes is the spec's, not the merge's: land, and say so in the report.
 
 ## Report back (under 300 words)
 
