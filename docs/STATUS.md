@@ -108,6 +108,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Voxel render: `@thunderclap/engine/voxel` grid, greedy mesher + AO, worker bridge, culled chunk Drawable with slack, DDA pick, WGSL prelude, `nearest-mip-repeat` sampler, water origin, sky ambient floor | ws/voxel-render | 🔧 engineer dispatched (offset 580) |
 | 5 | Demo polish 2: arena/dungeon/range/showroom adopt `timing.ready()`, skinned standard, decals, `PanelStack`, widgets `bar`, tween hinge | ws/demo-polish-2 | 🔧 engineer dispatched (offset 590) |
 | 5 | UI 3: tooltip (element or world target), pad/keyboard world cursor, loading screen, notifications, `h` string style, select zoom fix | ws/ui-3 | 📝 brief written; dispatch after ws/ui-world-panel lands (offset 600) |
+| 5 | Build-time bake: `pnpm bake` (navmesh + colliders → bytes + manifest, `--check` for CI), template wiring, geom in-place callout, register-form raycast | ws/scripts-bake | 📝 brief written; dispatch after ws/collide lands (offset 610) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
