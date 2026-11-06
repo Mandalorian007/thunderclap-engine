@@ -28,6 +28,7 @@
     "./fx": "./src/fx/index.ts",
     "./host": "./src/host/index.ts",
     "./input": "./src/input/index.ts",
+    "./nav": "./src/nav/index.ts",
     "./platform": "./src/platform/index.ts",
     "./post": "./src/post/index.ts",
     "./render": "./src/render/index.ts",
