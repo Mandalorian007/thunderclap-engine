@@ -7,6 +7,7 @@ import {
   heightfieldGeometry,
   normalAt,
   raycastHeightfield,
+  rayHeightfield,
 } from './heightfield';
 
 const F = GEOMETRY_FLOATS;
@@ -207,5 +208,18 @@ describe('heightfieldGeometry', () => {
       expect(flat.vertices[o + 3]).toBeCloseTo(-Math.SQRT1_2, 5);
       expect(flat.vertices[o + 4]).toBeCloseTo(Math.SQRT1_2, 5);
     }
+  });
+});
+
+describe('rayHeightfield (ws/ergo-3d)', () => {
+  it('is raycastHeightfield with origin and dir arrays, hit point in out', () => {
+    const s = slope();
+    const d = Math.SQRT1_2;
+    const out = new Float32Array(3);
+    const t = rayHeightfield(s, [0, 3, 2], new Float32Array([d, -d, 0]), out);
+    expect(t).toBeCloseTo(raycastHeightfield(s, { origin: [0, 3, 2], dir: [d, -d, 0] }), 5);
+    expect(out[0]).toBeCloseTo(1.5, 5);
+    expect(out[1]).toBeCloseTo(1.5, 5);
+    expect(rayHeightfield(s, [0, 10, 2], [0, 1, 0])).toBe(-1);
   });
 });

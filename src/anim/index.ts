@@ -61,6 +61,7 @@ export {
   quatDot,
   quatFromAxisAngle,
   quatFromEuler,
+  quatFromMat3,
   quatIdentity,
   quatMultiply,
   quatNlerp,

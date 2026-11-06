@@ -233,3 +233,52 @@ describe('Look DOM attachment', () => {
     expect(look.look.dx).toBe(0);
   });
 });
+
+describe('Look lockOnFirstClick (ws/ergo-3d)', () => {
+  const click = () =>
+    new PointerEvent('pointerdown', { pointerId: 9, pointerType: 'mouse', bubbles: true });
+  let canvas: HTMLElement;
+  let look: Look;
+  afterEach(() => {
+    look.detach();
+    canvas.remove();
+    delete (document as { pointerLockElement?: unknown }).pointerLockElement;
+    delete (document as { exitPointerLock?: unknown }).exitPointerLock;
+  });
+
+  it('a mouse pointerdown requests the lock while unlocked; touches and blocked never do', async () => {
+    canvas = document.createElement('div');
+    document.body.appendChild(canvas);
+    look = new Look({ lockOnFirstClick: true, getGamepads: () => [] });
+    const { req } = fakeLock(canvas, true);
+    look.attach(canvas);
+    canvas.dispatchEvent(touch('pointerdown', 1, 600, 200));
+    expect(req).not.toHaveBeenCalled();
+    canvas.dispatchEvent(click());
+    expect(req).toHaveBeenCalledTimes(1);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(look.locked).toBe(true);
+    // Held: another click asks for nothing.
+    canvas.dispatchEvent(click());
+    expect(req).toHaveBeenCalledTimes(1);
+    // Released (Escape): the next click locks again.
+    look.release();
+    canvas.dispatchEvent(click());
+    expect(req).toHaveBeenCalledTimes(2);
+    look.blocked = () => true;
+    look.release();
+    canvas.dispatchEvent(click());
+    expect(req).toHaveBeenCalledTimes(2);
+  });
+
+  it('is off by default', () => {
+    canvas = document.createElement('div');
+    document.body.appendChild(canvas);
+    look = new Look({ getGamepads: () => [] });
+    const { req } = fakeLock(canvas, true);
+    look.attach(canvas);
+    canvas.dispatchEvent(click());
+    expect(req).not.toHaveBeenCalled();
+  });
+});

@@ -31,10 +31,13 @@ const y = heightAt(ground, player.x, player.z);
   returns the index, `tri(a, b, c)` and `quad(a, b, c, d)` write indices, `finish()` checks the
   counts and computes the bounds. The builders below use it.
 - `mergeGeometry(...parts)` concatenates geometries of one layout, offsetting indices and
-  promoting to 32-bit indices when the total passes 65535 vertices. Inputs are untouched.
+  promoting to 32-bit indices when the total passes 65535 vertices. Inputs are untouched. The
+  3D and `VERTEX_LAYOUT_3D_TANGENT` layouts get bounds; any other layout is left unbounded.
 - `transformGeometry(g, world)` applies a 3×4 row-major matrix (`Transform.world`) to positions
   and its inverse transpose to normals (renormalised, flipped under a mirroring matrix) in place,
-  recomputes `bounds` and returns `g`.
+  recomputes `bounds` and returns `g`. It takes `VERTEX_LAYOUT_3D` or `VERTEX_LAYOUT_3D_TANGENT`
+  (ws/ergo-3d): a tangent's xyz is rotated by the 3×3 part and renormalised, its w kept, negated
+  under a mirror so the bitangent still follows `w · cross(n, t)`.
 
 ## Builders
 
@@ -138,6 +141,9 @@ All operations accept `VERTEX_LAYOUT_3D` or `VERTEX_LAYOUT_3D_TANGENT` geometry.
   `createHeightfield(width, depth, opts?: HeightfieldOptions)` (`scale`, `origin`, `heights`)
   allocates one (at least 2×2).
 - `heightAt(hf, x, z)` is the bilinear height at a world x, z (clamped to the edge outside).
+- `rayHeightfield(hf, origin, dir, out?)` (ws/ergo-3d) is `raycastHeightfield` taking the ray as
+  two arrays (a camera's eye and look direction, a `Ray`'s fields, or plain `[x, y, z]`s), no
+  `HeightfieldRay` object and no allocation.
 - `normalAt(hf, x, z, out)` writes the unit surface normal (central differences) into `out`, a
   `HeightfieldVec3` (`[x, y, z]`, `Float32Array` or `Float64Array`), and returns it.
 - `raycastHeightfield(hf, ray, out?)` walks the cells the ray crosses (DDA) and solves each cell's
