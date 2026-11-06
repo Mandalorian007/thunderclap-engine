@@ -1354,7 +1354,9 @@ export class Renderer implements FrameSink {
       const from = r.inst * INSTANCE_FLOATS;
       const to = inst * INSTANCE_FLOATS;
       for (let f = 0; f < INSTANCE_FLOATS; f++) dst[to + f] = src[from + f]!;
-      this.batch(this.shadowCmds, r, shadow.pipelineFor(r.mesh!.layout), inst);
+      const layout = r.mesh!.layout;
+      const bindings = layout.skinned ? r.material!.bindings?.layout : undefined;
+      this.batch(this.shadowCmds, r, shadow.pipelineFor(layout, bindings), inst);
       inst++;
     }
     return inst;
@@ -1610,6 +1612,8 @@ export class Renderer implements FrameSink {
     pass.setBindGroup(0, slot.group);
     let curPipeline: GPURenderPipeline | null = null;
     let curMesh: Mesh | null = null;
+    let curMaterial: Material | null = null;
+    let curOffset = -1;
     let drawn = 0;
     for (let i = 0; i < n; i++) {
       const c = cmds[i]!;
@@ -1618,6 +1622,18 @@ export class Renderer implements FrameSink {
       if (pipeline !== curPipeline) {
         pass.setPipeline(pipeline);
         curPipeline = pipeline;
+      }
+      // A skinned caster's pipeline has the material group (its joint palette) as group 1.
+      const m = c.material!;
+      if (mesh.layout.skinned && m.bindings && (m !== curMaterial || c.offset !== curOffset)) {
+        if (c.offset >= 0) {
+          this.dynamicOffsets[0] = c.offset;
+          pass.setBindGroup(1, m.bindings.bindGroup, this.dynamicOffsets);
+        } else {
+          pass.setBindGroup(1, m.bindings.bindGroup);
+        }
+        curMaterial = m;
+        curOffset = c.offset;
       }
       if (mesh !== curMesh) {
         pass.setVertexBuffer(0, mesh.vertexBuffer);

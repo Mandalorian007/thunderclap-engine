@@ -306,6 +306,52 @@ lights.fog = { color: [0.6, 0.65, 0.75], density: 1, near: 6, far: 24 };
 o.color = vec4f(engine_fog(albedo * engine_lambert(n, in.worldPos), in.worldPos), 1.0);
 ```
 
+### Skinning
+
+`VERTEX_LAYOUT_SKINNED` is the 3D layout plus four joint indices and four weights per vertex:
+`VERTEX_SKINNED_FLOATS` = 14 (`VERTEX_SKINNED_STRIDE` = 56 bytes): the 12 floats of
+`VERTEX_LAYOUT_3D`, then joints as `uint8x4` at byte `SKIN_JOINTS_BYTE_OFFSET` (48, `@location(11)
+joints: vec4u`) and weights as `unorm8x4` at `SKIN_WEIGHTS_BYTE_OFFSET` (52, `@location(12)
+weights: vec4f`); `VERTEX_SKINNED_BUFFER_LAYOUT` is its `GPUVertexBufferLayout`. Write the two
+packed words through a byte view, not as floats: `setVertexSkin(bytes, vertex, joints, weights)`
+normalises the weights so the four bytes sum to 255. `VertexLayout.skinned` marks such a layout.
+
+A `SkinPalette(device, { joints, instances?, label? })` (`SkinPaletteDesc`) is the storage buffer
+the vertex shader reads: a 16-byte header (`SKIN_PALETTE_HEADER_FLOATS` = 4: joints per instance,
+instances) and then `instances × joints` joint matrices of `JOINT_FLOATS` = 12 floats each, the
+3×4 row-major affine layout the instance matrix and `anim`'s `skinMatrices` (world × inverse
+bind, one per joint) use, so an `anim` output goes in with one call. `palette.set(slot, matrices,
+offset = 0)` copies one instance's block into CPU staging (`palette.offsetOf(slot)` is its float
+offset; `setIdentity(slot)` is the bind pose, every slot's initial state), and `palette.flush()`
+uploads the dirty slot range in one `writeBuffer`, once per frame, allocating nothing
+(`isDirty` says whether it would; `destroy()` frees the buffer). Bind it to the material as a
+storage buffer: `createMaterial({ ..., buffers: [palette.buffer] })` (`BindingDesc.buffers`:
+read-only storage buffers at `@group(1) @binding(BUFFER_BINDING_BASE + i)`, `BUFFER_BINDING_BASE`
+= 16, in the same group as the material's uniform and textures; `BindingSet.setBuffer(slot,
+buffer)` swaps one later). The palette is slot 0, `SKIN_PALETTE_BINDING` = 16; a material has one
+palette, and two skinned materials take two palettes or share one buffer.
+
+A draw names its palette slot in `InstanceParams.params[3]` (`params.w`, read as `u32`); several
+draws may share a slot. For a skinned layout `materialPrelude` emits `WGSL_SKIN` after `VertexIn`:
+the `engine_skin_palette` binding and `engine_skin(v, position, normal) -> EngineSkinned`
+(`position`, `normal`), the four weighted joint matrices applied in object space before the
+instance matrix; the layout's `engine_local_position` / `engine_local_normal` call it, so
+`engine_vertex`, `vs_main` and every `fs_main` are unchanged and the 2D and 3D preludes keep
+their exact text. The shadow pass builds its depth pipeline from the same prelude, so a skinned
+caster's shadow pipeline skins too: for a skinned layout its pipeline layout holds the material
+group as group 1 and the pass binds it, so a skinned caster's shadow follows the pose. `harness/skin.html` drives two tubes, 24 rings over three joints, from one
+palette; `e2e/skin.spec.ts` checks the tip moves.
+
+```ts
+const palette = new SkinPalette(renderer.device, { joints: 3, instances: 2 });
+const mat = renderer.createMaterial({ wgsl, blend: 'opaque', buffers: [palette.buffer] });
+const mesh = renderer.createMesh({ vertices, indices, layout: VERTEX_LAYOUT_SKINNED });
+// each frame
+palette.set(0, skinMatrices0);
+palette.flush();
+frame.mesh(mesh, mat, transform, { params: [0, 0, 0, 0] });
+```
+
 ## Standard material
 
 A metallic-roughness PBR material a game uses without writing WGSL, the glTF 2.0 model: GGX
