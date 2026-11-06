@@ -112,6 +112,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Input 4: one pointer dispatcher with claims (`ScreenPointers.claim`, orbit hover fix), `input.onUpdated` + router `moved`/`released`, touch zones primitive (two thumbs, no pinch) | ws/input-4 | 🔧 dispatched from `ffd4157` (offset 620) |
 | 5 | FX 3: particle sprite sheets + flipbook, spin, multi-stop curves, forces (attract/vortex/turbulence/drag) + depth collision, sub-emission, mesh-surface emission, `EffectDesc` JSON + `createEffect` | ws/fx-3 | 🔧 dispatched from `dfdc9e1` (offset 640) |
 | 5 | Anim 4: 2D blend space, aim offset, foot placement IK, spring chains for cosmetics, pose matching on transitions, clip compression + quantisation | ws/anim-4 | 🔧 dispatched from `dfdc9e1` (offset 650) |
+| 5 | Render 4: `Camera.setJitter` + previous view matrices in `PostInputs.view`, roughness/metalness + velocity aux targets, index sub-range draws, lazy material pipelines + tangent prelude, per-slot uv/`uv1`/`occlusionStrength`/`Material.name`/`depthTest`, texture debts | ws/render-4 | 📝 brief written; dispatch after ws/post-3 and ws/gltf-materials land (offset 660) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
