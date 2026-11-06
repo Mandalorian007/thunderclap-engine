@@ -19,6 +19,7 @@ export {
   findKeyframe,
   sampleChannel,
   sampleClip,
+  sampleWeights,
 } from './clip';
 export type {
   AnimGraph,
@@ -37,6 +38,8 @@ export type { IkChain, IkChainDesc, LookAtOptions, TwoBoneIkOptions } from './ik
 export { createIkChain, lookAt, twoBoneIk } from './ik';
 export type { AnimationEventListener, AnimationMixerOptions, PlayOptions } from './mixer';
 export { AnimationAction, AnimationMixer } from './mixer';
+export type { MorphBlender, MorphLayout, MorphTarget } from './morph';
+export { createMorphBlender } from './morph';
 export type { Pose, Skeleton } from './pose';
 export {
   blendPose,
