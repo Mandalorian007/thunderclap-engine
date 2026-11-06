@@ -1,13 +1,13 @@
+import { type Ease, ease } from '../tween/ease';
 import type { PostSettings, PostSettingsPatch } from './settings';
 
-/** Maps linear progress 0..1 to eased progress. */
-export type Ease = (t: number) => number;
-
-export const easeLinear: Ease = (t) => t;
+// The easing functions live in `@thunderclap/engine/tween`; these names stay as aliases.
+export type { Ease };
+export const easeLinear: Ease = ease.linear;
 /** Smoothstep: gentle start and end. The default for `blendTo`. */
-export const easeInOut: Ease = (t) => t * t * (3 - 2 * t);
-export const easeOut: Ease = (t) => 1 - (1 - t) * (1 - t);
-export const easeIn: Ease = (t) => t * t;
+export const easeInOut: Ease = ease.smoothstep;
+export const easeOut: Ease = ease.quadOut;
+export const easeIn: Ease = ease.quadIn;
 
 type Section = keyof PostSettings;
 type Value = number | number[];
