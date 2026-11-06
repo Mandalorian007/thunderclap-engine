@@ -221,6 +221,33 @@ test('long-press fires after its time and never taps; a short press taps', async
   expect(Math.abs((lp?.x ?? 0) - 300)).toBeLessThanOrEqual(2);
 });
 
+test('a slow drag across a long frame pans and never long-presses', async ({ page }) => {
+  // Down at 0 ms, a 6 CSS px step, then the clock jumps 600 ms (a stalled frame) before the
+  // next 6 px step: the travel crosses the threshold before the timer counts, so it is a drag.
+  const { toPage } = await stageMapper();
+  const f = new Finger(page);
+  const a = toPage(400, 300);
+  await f.down(a);
+  await frames(1);
+  await f.move({ x: a.x + 6, y: a.y });
+  await frames(1);
+  await setClock(600);
+  await f.move({ x: a.x + 12, y: a.y });
+  await frames(1);
+  await f.move({ x: a.x + 18, y: a.y });
+  await frames(1);
+  await f.up();
+  await expect.poll(async () => (await read()).released.grab ?? 0).toBe(1);
+  await frames(2);
+  const s = await read();
+  expect(s.pressed.info ?? 0).toBe(0);
+  expect(s.pressed.select ?? 0).toBe(0);
+  expect(of(s.log, 'longPress')).toEqual([]);
+  const drags = of(s.log, 'drag');
+  expect(drags[0]?.phase).toBe('start');
+  expect(drags.at(-1)?.phase).toBe('end');
+});
+
 test('double tap presses zoom once, with a tap for each tap', async ({ page }) => {
   const { toPage } = await stageMapper();
   const f = new Finger(page);
