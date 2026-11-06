@@ -30,6 +30,12 @@ export interface AnimationChannel {
    * (in-tangent, value, out-tangent per key).
    */
   values: Float32Array;
+  /**
+   * Quantised rotation keys from `quantizeClip` (`compress.ts`): three `uint16` per key in
+   * smallest-three form (`unpackQuat`), read instead of `values` when present. Only on
+   * `rotation` channels with `STEP` or `LINEAR` interpolation.
+   */
+  packed?: Uint16Array;
 }
 
 /** A named time in a clip; the mixer reports each crossing through `onEvent`. */
@@ -133,7 +139,6 @@ export function sampleChannel(
   ci = 0,
 ): void {
   const times = channel.times;
-  const values = channel.values;
   const n = times.length;
   const comps = channelComponents(channel);
   if (n === 0 || comps === 0) return;
@@ -141,12 +146,22 @@ export function sampleChannel(
   const stride = cubic ? comps * 3 : comps;
   const k = findKeyframe(times, t, cursor ? cursor[ci]! : 0);
   if (cursor) cursor[ci] = k;
+  const packed = channel.packed;
+  let values = channel.values;
+  let base0 = k * stride + (cubic ? comps : 0);
+  let base1 = (k + 1) * stride + (cubic ? comps : 0);
+  if (packed && channel.path === 'rotation' && !cubic) {
+    // Packed keys: decode the two around `t` into scratch and sample from there.
+    unpackQuat(packed, k, unpacked, 0);
+    if (n > 1) unpackQuat(packed, k + 1, unpacked, 4);
+    values = unpacked;
+    base0 = 0;
+    base1 = 4;
+  }
   const t0 = times[k]!;
   const t1 = n > 1 ? times[k + 1]! : t0;
-  const base0 = k * stride + (cubic ? comps : 0);
   if (n > 1 && t >= t1) {
     // At or past the last key (k is clamped to n-2): hold the last value.
-    const base1 = (k + 1) * stride + (cubic ? comps : 0);
     for (let i = 0; i < comps; i++) out[o + i] = values[base1 + i]!;
     return;
   }
@@ -178,7 +193,6 @@ export function sampleChannel(
     if (channel.path === 'rotation') quatNormalize(out, o);
     return;
   }
-  const base1 = (k + 1) * comps;
   if (channel.path === 'rotation') {
     quatSlerp(out, o, values, base0, values, base1, u);
     return;
@@ -189,6 +203,38 @@ export function sampleChannel(
 
 const sample = new Float32Array(4);
 const delta = new Float32Array(4);
+const unpacked = new Float32Array(8);
+
+/** Scale of a 15-bit smallest-three component: the range is ±1/√2. */
+const PACK_SCALE = 32767 / Math.SQRT2;
+
+/**
+ * Decode key `key` of a smallest-three packed rotation (`AnimationChannel.packed`) into
+ * `out[o..o+4)`. Each key is three `uint16`: bits 0..14 hold the three smaller components as
+ * `round((c + 1/√2) × 32767/√2)`; bit 15 of words 0 and 1 hold the index of the largest
+ * component, which is rebuilt as `sqrt(1 − Σc²)` (the quaternion was flipped to make it
+ * positive). No allocation.
+ */
+export function unpackQuat(packed: Uint16Array, key: number, out: Float32Array, o: number): void {
+  const b = key * 3;
+  const w0 = packed[b]!;
+  const w1 = packed[b + 1]!;
+  const w2 = packed[b + 2]!;
+  const largest = ((w0 >> 15) << 1) | (w1 >> 15);
+  const a = (w0 & 0x7fff) / PACK_SCALE - Math.SQRT1_2;
+  const c = (w1 & 0x7fff) / PACK_SCALE - Math.SQRT1_2;
+  const d = (w2 & 0x7fff) / PACK_SCALE - Math.SQRT1_2;
+  const rest = 1 - a * a - c * c - d * d;
+  const big = rest > 0 ? Math.sqrt(rest) : 0;
+  // The three small components fill the slots other than `largest`, in order.
+  const s0 = largest === 0 ? 1 : 0;
+  const s1 = largest <= 1 ? 2 : 1;
+  const s2 = largest === 3 ? 2 : 3;
+  out[o + largest] = big;
+  out[o + s0] = a;
+  out[o + s1] = c;
+  out[o + s2] = d;
+}
 
 /**
  * Sample every channel of `clip` at `t` into `pose`.
