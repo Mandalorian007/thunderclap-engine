@@ -198,10 +198,24 @@ renderer.render(frame, eye);                              // or renderer.camera 
   survives the near and far planes (z = 0 is clip depth 0.5). x and y are the old 2D camera's.
 - `setView(m)` / `setViewMatrix(m)` take a world → view matrix as is (`setViewMatrix` is the
   name `XrSurface` uses for an `XRView`'s `transform.inverse.matrix`); `setProjection(m)` the
-  projection (an `XRView.projectionMatrix`). `viewIndex` is the `view_index` the camera block
-  carries (eye 0 / 1 in XR).
+  projection (an `XRView.projectionMatrix`), raw: no flag changes. `setPerspective(fovY,
+  aspect, near, far)` replaces the projection *and* turns `depthTest`, `depthWrite` and `cull`
+  on, exactly what `Camera.perspective` does (ws/camera-ergo), so `renderer.camera.setPerspective(…)`
+  on the default 2D camera renders like a fresh perspective one. `viewIndex` is the
+  `view_index` the camera block carries (eye 0 / 1 in XR).
 - `depthTest` and `depthWrite` (off for `ortho2d`, on for `perspective`) and the `layers` mask
   (u32, default all bits; `sees(mask)`) drive the render call's depth attachment and draw sort.
+- Per-frame helpers, none allocating (ws/camera-ergo): `viewZ(x, y, z)` is the view-space
+  depth of a world point, positive in front of the eye (the negated third row of `view`; for
+  `ortho2d`, which looks down +z, it is `-z` at rest). `invViewProj` is `viewProjection⁻¹`,
+  column-major, cached and recomputed lazily after any view or projection change (identity
+  if singular; `screenToWorld` reads it). `projectMany(points, out, count?, stride = 3)`
+  is `worldToScreen` over `count` points at `points[i * stride]`, writing screen x, screen y
+  and clip depth as 3 floats per point into `out`, and returns how many landed inside the
+  viewport (in front of the eye, within `screen`, depth 0..1); project every HUD label or
+  billboard in one call. `frustumCorners(out)` fills 24 floats with the eight world-space
+  corners from `invViewProj`: near plane then far, each bottom-left, bottom-right, top-right,
+  top-left in clip space (an infinite far plane yields directions, not points).
 - `cull` (off for `ortho2d`, on for `perspective`) turns frustum culling on for the render
   call. `frustum` is the six planes of `viewProjection` as one flat `Float32Array` of
   `FRUSTUM_FLOATS` (24): left, right, bottom, top, near, far, each `(a, b, c, d)` with a unit
