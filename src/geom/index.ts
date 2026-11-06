@@ -28,8 +28,8 @@ export {
   heightAt,
   heightfieldGeometry,
   normalAt,
-  rayHeightfield,
   raycastHeightfield,
+  rayHeightfield,
 } from './heightfield';
 export type { ProjectUvOptions, UvProjection } from './ops';
 export { fitBounds, flatShade, flipWinding, projectUv, recenter, weld } from './ops';

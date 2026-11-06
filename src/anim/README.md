@@ -112,7 +112,7 @@ function frame(dt) {
 
 ## Quaternions (`quat.ts`)
 
-All on `(x, y, z, w)` at an offset, allocation-free: `quatIdentity(out, o)`, `quatNormalize(q, o)`, `quatDot(a, ao, b, bo)`, `quatMultiply(out, oo, a, ao, b, bo)` (`a · b`: apply `b`, then `a`; may alias), `quatSlerp(out, oo, a, ao, b, bo, t)` (shorter arc, nlerp fallback when nearly parallel; may alias), `quatNlerp(...)`, `quatFromAxisAngle(out, o, ax, ay, az, radians)`, `quatFromEuler(out, o, x, y, z)` (about X, then Y, then Z: `qz · qy · qx`).
+All on `(x, y, z, w)` at an offset, allocation-free: `quatIdentity(out, o)`, `quatNormalize(q, o)`, `quatDot(a, ao, b, bo)`, `quatMultiply(out, oo, a, ao, b, bo)` (`a · b`: apply `b`, then `a`; may alias), `quatSlerp(out, oo, a, ao, b, bo, t)` (shorter arc, nlerp fallback when nearly parallel; may alias), `quatNlerp(...)`, `quatFromAxisAngle(out, o, ax, ay, az, radians)`, `quatFromEuler(out, o, x, y, z)` (about X, then Y, then Z: `qz · qy · qx`), `quatFromMat3(m, out, o = 0, mo = 0, stride = 3)` (ws/ergo-3d: the rotation of a row-major 3×3 read at `m[mo..]`, rows `stride` apart, so `stride` 4 reads the 3×3 part of a 3×4 affine such as `Transform.world` or a pose's node matrix; a uniform scale drops out; Shepperd's largest-diagonal branch, result normalised). `SKIN_PARAM` in `render` names the `InstanceParams.params` slot (3, `params.w`) a skinned draw puts its palette slot in.
 
 ## IK and root motion (`ik.ts`, `root-motion.ts`)
 

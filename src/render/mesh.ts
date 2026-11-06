@@ -261,7 +261,8 @@ export interface MeshUpdate {
  * The shape a meshing Worker posts back (`harness/stream.ts`): one `ArrayBuffer` holding
  * `vertexCount` vertices of the mesh's layout from byte 0 and, when `indexCount` is given, that
  * many indices of the mesh's index format at `indexOffset` (default: right after the vertices,
- * rounded up to 4 bytes). `Mesh.update` takes it as-is, so the page never builds views over the
+ * rounded up to 4 bytes); an indexed mesh given no `indexCount` draws nothing until the next
+ * reply. `Mesh.update` takes it as-is, so the page never builds views over the
  * transferred buffer. Extra fields (a chunk id) are ignored.
  */
 export interface MeshReply {
@@ -364,14 +365,15 @@ export class Mesh {
     let indices: ArrayBufferView | undefined;
     if (r.indexCount !== undefined) {
       const bpi = this.indexFormat === 'uint32' ? 4 : 2;
-      const at = r.indexOffset ?? ((vBytes + 3) & ~3);
+      const at = r.indexOffset ?? (vBytes + 3) & ~3;
       indices = new Uint8Array(r.buffer, at, r.indexCount * bpi);
     }
     return this.updateViews({
       vertices,
       indices,
       vertexCount: r.vertexCount,
-      indexCount: r.indexCount,
+      // A reply without indices on an indexed mesh draws nothing until the next one.
+      indexCount: r.indexCount ?? (this.indexBuffer ? 0 : undefined),
       bounds: r.bounds,
     });
   }
