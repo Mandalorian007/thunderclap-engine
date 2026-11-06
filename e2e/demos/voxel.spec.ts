@@ -1,0 +1,235 @@
+/**
+ * Voxel demo (`demos/voxel`) on every matrix row: the voxel path end to end with the mesher in
+ * the game.
+ *
+ * - boots to a steady state with all 256 chunks meshed in the Worker and no console errors, and
+ *   the spawn view draws well under one call per chunk;
+ * - a click (touch rows: a tap on the right half, real touch events through CDP) breaks the
+ *   block under the reticle: `lookingAt` changes and, on desktop, the re-mesh round trip is
+ *   under 50 ms;
+ * - a right click (touch rows: the place key) puts the hotbar block on the looked-at face;
+ * - walking forward for a second moves `playerPos`;
+ * - `?still&time=0.25` parks the day cycle at noon;
+ * - desktop rows run above 20 fps once settled.
+ *
+ * Server: the harness Vite server serves the demo at `/demos/voxel/` (the `serveDemos` plugin in
+ * vite.harness.config.ts). The itch row embeds that route in the wrapper page (`?page=`).
+ */
+import type { CDPSession, Frame, Page } from '@playwright/test';
+import { CHUNK_COUNT, type VoxelDemoApi, type VoxelDemoState } from '../../demos/voxel/world';
+import { expect, test } from '../fixtures';
+import { HARNESS_URL, WRAPPER_URL } from '../ports';
+
+const demoUrl = `${HARNESS_URL}demos/voxel/`;
+let frame: Frame;
+let touch = false;
+let cdp: CDPSession | null = null;
+const errors: string[] = [];
+
+async function open(page: Page, wrapper: string, query = ''): Promise<void> {
+  const url = demoUrl + query;
+  if (wrapper === 'top') {
+    await page.goto(url);
+    frame = page.mainFrame();
+  } else {
+    await page.goto(`${WRAPPER_URL}?page=${encodeURIComponent(url)}`);
+    await expect.poll(() => page.frames().some((f) => f.url().startsWith(demoUrl))).toBe(true);
+    const f = page.frames().find((f) => f.url().startsWith(demoUrl));
+    if (!f) throw new Error('voxel demo iframe not found');
+    frame = f;
+  }
+  // The world generates and meshes in the Worker; wait for every chunk and a few frames.
+  await expect
+    .poll(
+      async () => {
+        const s = await read().catch(() => null);
+        if (s?.ready && s.gpu !== 'ok') throw new Error(`voxel demo: ${s.gpu}`);
+        return s?.ready && s.frame >= 3 ? s.chunks : -1;
+      },
+      { timeout: 25_000 },
+    )
+    .toBe(CHUNK_COUNT);
+  // Mouse rows: park the pointer at the reticle once. A later move under a granted pointer lock
+  // would turn the view, so every click lands where the pointer already is.
+  if (!touch) {
+    const c = await centre();
+    await page.mouse.move(c.x, c.y);
+  }
+}
+
+test.beforeEach(async ({ page }) => {
+  touch = test.info().project.use.hasTouch === true;
+  cdp = null;
+  errors.length = 0;
+  page.on('pageerror', (e) => errors.push(e.message));
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+});
+
+function read(): Promise<VoxelDemoState> {
+  return frame.evaluate(() => {
+    const d = (window as unknown as { __demo?: VoxelDemoApi }).__demo;
+    if (!d) throw new Error('window.__demo missing');
+    return JSON.parse(JSON.stringify(d)) as VoxelDemoState;
+  });
+}
+
+async function frames(n: number): Promise<void> {
+  const start = (await read()).frame;
+  await expect.poll(async () => (await read()).frame).toBeGreaterThanOrEqual(start + n);
+}
+
+async function centre(): Promise<{ x: number; y: number }> {
+  const box = await frame.locator('canvas').first().boundingBox();
+  if (!box) throw new Error('no canvas');
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+}
+
+function aim(yaw: number, pitch: number): Promise<void> {
+  return frame.evaluate(
+    ([y, p]) => {
+      (window as unknown as { __demo: VoxelDemoApi }).__demo.aim(y, p);
+    },
+    [yaw, pitch] as const,
+  );
+}
+
+function blockAt(cell: [number, number, number]): Promise<number> {
+  return frame.evaluate(
+    ([x, y, z]) => (window as unknown as { __demo: VoxelDemoApi }).__demo.blockAtWorld(x, y, z),
+    cell,
+  );
+}
+
+/** A break: a tap on the right half (touch rows, CDP) or a click where the mouse rests. */
+async function tapBreak(page: Page): Promise<void> {
+  if (touch) {
+    const box = await frame.locator('canvas').first().boundingBox();
+    if (!box) throw new Error('no canvas');
+    const x = box.x + box.width * 0.75;
+    const y = box.y + box.height / 2;
+    cdp ??= await page.context().newCDPSession(page);
+    await cdp.send('Input.dispatchTouchEvent', {
+      type: 'touchStart',
+      touchPoints: [{ x, y, id: 1 }],
+    });
+    await frames(1);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  } else {
+    await page.mouse.down();
+    await page.mouse.up();
+  }
+}
+
+/** A place: the right button (mouse rows) or the place key (touch rows, no long-press timing). */
+async function place(page: Page): Promise<void> {
+  if (touch) {
+    await page.keyboard.down('KeyE');
+    await frames(1);
+    await page.keyboard.up('KeyE');
+  } else {
+    await page.mouse.down({ button: 'right' });
+    await page.mouse.up({ button: 'right' });
+  }
+}
+
+/** Errors the page threw, minus the browser's own note when it refuses the pointer lock. */
+const pageErrors = () => errors.filter((e) => !/pointer ?lock/i.test(e));
+
+test('boots with every chunk meshed and draws under 200 calls', async ({ page, wrapper }) => {
+  await open(page, wrapper);
+  await frames(2);
+  const s = await read();
+  expect(s.chunks).toBe(CHUNK_COUNT);
+  expect(s.chunksSolid).toBeGreaterThan(64);
+  expect(s.chunksDrawn).toBeGreaterThan(0);
+  expect(s.triangles).toBeGreaterThan(1000);
+  expect(s.drawCalls).toBeLessThan(200);
+  expect(s.drawCalls).toBeLessThan(s.chunksSolid);
+  expect(s.edits).toBe(0);
+  expect(s.gpuErrors).toBe(0);
+  // Spawned on land: the feet stand on a block above the sea.
+  expect(s.playerPos[1]).toBeGreaterThan(20);
+  expect(pageErrors()).toEqual([]);
+});
+
+test('a click breaks the looked-at block and re-meshes fast', async ({ page, wrapper }) => {
+  await open(page, wrapper);
+  // Look steeply down at the ground just ahead.
+  await aim(0, -1.2);
+  await frames(2);
+  const before = await read();
+  expect(before.lookingAt).not.toBeNull();
+  const target = before.lookingAt as [number, number, number];
+  expect(await blockAt(target)).not.toBe(0);
+  await tapBreak(page);
+  await expect.poll(async () => (await read()).edits).toBe(1);
+  expect(await blockAt(target)).toBe(0);
+  await expect
+    .poll(async () => JSON.stringify((await read()).lookingAt))
+    .not.toBe(JSON.stringify(target));
+  await expect.poll(async () => (await read()).remeshMs).toBeGreaterThanOrEqual(0);
+  const after = await read();
+  if (/^desktop-/.test(test.info().project.name)) expect(after.remeshMs).toBeLessThan(50);
+  expect(after.gpuErrors).toBe(0);
+  expect(pageErrors()).toEqual([]);
+});
+
+test('a right click places the hotbar block on the looked-at face', async ({ page, wrapper }) => {
+  await open(page, wrapper);
+  // Look at the ground a couple of blocks ahead, so the placed block is clear of the player.
+  await aim(0, -0.6);
+  await frames(2);
+  const before = await read();
+  expect(before.lookingAt).not.toBeNull();
+  const hit = before.lookingAt as [number, number, number];
+  await place(page);
+  await expect.poll(async () => (await read()).edits).toBe(1);
+  // The new block is the selected one, on one of the hit block's six faces.
+  const faces: [number, number, number][] = [
+    [hit[0] + 1, hit[1], hit[2]],
+    [hit[0] - 1, hit[1], hit[2]],
+    [hit[0], hit[1] + 1, hit[2]],
+    [hit[0], hit[1] - 1, hit[2]],
+    [hit[0], hit[1], hit[2] + 1],
+    [hit[0], hit[1], hit[2] - 1],
+  ];
+  const placed = await Promise.all(faces.map((f) => blockAt(f)));
+  expect(placed).toContain(before.selectedBlock);
+  expect(pageErrors()).toEqual([]);
+});
+
+test('walking forward for a second moves the player', async ({ page, wrapper }) => {
+  await open(page, wrapper);
+  const before = await read();
+  await page.keyboard.down('KeyW');
+  await page.waitForTimeout(1000);
+  await page.keyboard.up('KeyW');
+  const after = await read();
+  const moved = Math.hypot(
+    after.playerPos[0] - before.playerPos[0],
+    after.playerPos[2] - before.playerPos[2],
+  );
+  expect(moved).toBeGreaterThan(0.5);
+  expect(pageErrors()).toEqual([]);
+});
+
+test('?still&time=0.25 parks the day at noon', async ({ page, wrapper }) => {
+  await open(page, wrapper, '?still&time=0.25');
+  const a = await read();
+  expect(a.still).toBe(true);
+  expect(a.timeOfDay).toBeCloseTo(0.25, 6);
+  await frames(10);
+  const b = await read();
+  expect(b.timeOfDay).toBeCloseTo(0.25, 6);
+  expect(pageErrors()).toEqual([]);
+});
+
+test('desktop: runs above 20 fps', async ({ page, wrapper }) => {
+  test.skip(!/^desktop-/.test(test.info().project.name), 'desktop rows only');
+  await open(page, wrapper);
+  await frames(40);
+  await expect.poll(async () => (await read()).fps).toBeGreaterThan(20);
+  expect(pageErrors()).toEqual([]);
+});
