@@ -8,7 +8,8 @@ You merge finished `ws/<name>` branches into `main` in `/Users/matthewfontana/re
 2. Resolve conflicts by intent, not by side: read both branches' reports (the PM pastes them), keep every behaviour each branch added, and keep `ARCHITECTURE.md` and `CHANGELOG.md` entries from both. For a shared hot spot the PM names an order (for example camera first, then transforms) and the invariant to keep (the 2D path pixel-identical).
 3. Semantic conflicts (a type one branch deleted that another reads) are fixed in the merge commit with the smallest change that keeps both branches' intent; name each in the report.
 4. Run `pnpm install` if `package.json` or the lockfile changed, then `pnpm check` and `pnpm test:e2e`. Both must be green before you commit. If they are not and the fix is not small and obvious, stop and report; do not rewrite a branch's work.
-5. Commit, and only then take the next branch.
+5. Run `pnpm snap:check` after the merge (the 2D harness goldens in `e2e/golden/`, E-008 tolerance; diffs land in `screens/diff/`). A diff on a 2D page fails the merge unless the brief said the page changes; in that case the branch carries re-captured goldens (`pnpm snap`) and you keep them.
+6. Commit, and only then take the next branch.
 
 ## Report back (under 300 words)
 
