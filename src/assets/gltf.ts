@@ -5,13 +5,16 @@
  *
  * Handles the GLB container, `.gltf` JSON (as text bytes or a parsed object), `data:` URIs in
  * buffers and images, and every accessor component type (float, normalised and unnormalised
- * integers, interleaved strides). Static geometry only: `triangles` primitives, base colour
+ * integers, interleaved strides). Static geometry only: `triangles` primitives, metallic-roughness
  * materials, node hierarchies, plus skins (joints, inverse bind matrices, `JOINTS_0`/`WEIGHTS_0`)
  * and animations (every sampler interpolation, cubic-spline tangents kept) and morph targets
  * (`POSITION` and `NORMAL` deltas per target, sparse or dense, plus the mesh's default
  * `weights`). Sparse accessors outside morph targets, other primitive modes and required
- * extensions throw a `GltfError`; `extensionsUsed` is listed in `warnings`. `gltf-skin.ts` turns skins into the animation module's `Skeleton` shape and
- * skinned primitives into the skinned vertex layout.
+ * extensions throw a `GltfError`; `extensionsUsed` entries the parser does not read are listed
+ * in `warnings`. Materials carry every metallic-roughness slot (`TextureRef` per map, with
+ * `KHR_texture_transform` and `KHR_materials_emissive_strength` applied) and textures their
+ * sampler; primitives also read `TANGENT` and `TEXCOORD_1`. `gltf-skin.ts` turns skins into the
+ * animation module's `Skeleton` shape and skinned primitives into the skinned vertex layout.
  *
  * Matrices follow the engine's `Transform` convention: 3×4 row-major, `local = T · R · S`,
  * `world = parent.world · local`.
@@ -83,15 +86,40 @@ export interface GltfJsonNode {
   scale?: number[];
 }
 
+/** `KHR_texture_transform` on a texture reference (`extensions.KHR_texture_transform`). */
+export interface GltfJsonTextureTransform {
+  offset?: number[];
+  rotation?: number;
+  scale?: number[];
+  texCoord?: number;
+}
+
+/** A glTF `textureInfo` (`normalTextureInfo` adds `scale`, `occlusionTextureInfo` `strength`). */
+export interface GltfJsonTextureInfo {
+  index: number;
+  texCoord?: number;
+  scale?: number;
+  strength?: number;
+  extensions?: { KHR_texture_transform?: GltfJsonTextureTransform };
+}
+
 export interface GltfJsonMaterial {
   name?: string;
   pbrMetallicRoughness?: {
     baseColorFactor?: number[];
-    baseColorTexture?: { index: number; texCoord?: number };
+    baseColorTexture?: GltfJsonTextureInfo;
+    metallicFactor?: number;
+    roughnessFactor?: number;
+    metallicRoughnessTexture?: GltfJsonTextureInfo;
   };
+  normalTexture?: GltfJsonTextureInfo;
+  occlusionTexture?: GltfJsonTextureInfo;
+  emissiveTexture?: GltfJsonTextureInfo;
+  emissiveFactor?: number[];
   doubleSided?: boolean;
   alphaMode?: 'OPAQUE' | 'MASK' | 'BLEND';
   alphaCutoff?: number;
+  extensions?: { KHR_materials_emissive_strength?: { emissiveStrength?: number } };
 }
 
 export interface GltfJsonSkin {
@@ -166,6 +194,13 @@ export interface GltfPrimitive {
   normal: Float32Array;
   /** uv per vertex (`TEXCOORD_0`); zeros when missing. */
   uv0: Float32Array;
+  /** `TEXCOORD_1`, uv per vertex, or null when missing (the loader binds `uv0` only). */
+  uv1: Float32Array | null;
+  /**
+   * `TANGENT`, xyzw per vertex (xyz the unit tangent along +u, w ±1 the handedness: the
+   * bitangent is `w · cross(normal, tangent)`), or null. Follows the unwelding.
+   */
+  tangent: Float32Array | null;
   /** rgba per vertex (`COLOR_0`, a vec3 gets alpha 1); ones when missing. */
   color0: Float32Array;
   /** Triangle list; generated `0..n-1` when the file has none. */
@@ -232,18 +267,77 @@ export interface GltfNode {
 
 export type GltfAlphaMode = 'OPAQUE' | 'MASK' | 'BLEND';
 
+/**
+ * `KHR_texture_transform`: `uv' = offset + R(rotation) · (scale ⊙ uv)`, the spec's
+ * `T · R · S` with `R` rotating by `rotation` radians counter-clockwise in uv space
+ * (`u' = cos·su − sin·sv`, `v' = sin·su + cos·sv`). `transformUv` applies one.
+ */
+export interface GltfTextureTransform {
+  offset: [number, number];
+  rotation: number;
+  scale: [number, number];
+}
+
+/** A material's reference to one of `GltfDocument.textures`. */
+export interface TextureRef {
+  /** Index into `GltfDocument.textures`. */
+  index: number;
+  /** Which `TEXCOORD_n` the slot reads (0 or 1; the loader binds `TEXCOORD_0` only). */
+  texCoord: number;
+  /** The slot's `KHR_texture_transform`, or null for identity. */
+  transform: GltfTextureTransform | null;
+}
+
+/**
+ * A glTF material, every slot of the metallic-roughness model. Factors default as the spec
+ * says (base colour 1, metallic 1, roughness 1, normal scale 1, occlusion strength 1, emissive
+ * 0); `emissiveFactor` already includes `KHR_materials_emissive_strength`. Texture conventions
+ * are glTF's: base colour and emissive are sRGB, metallic-roughness has roughness in G and
+ * metallic in B, occlusion is in R, the normal map is +Y up.
+ */
 export interface GltfMaterial {
   name: string | null;
   /** Linear RGBA multiplier (default 1, 1, 1, 1). */
   baseColorFactor: Vec4;
-  /** Index into `GltfDocument.textures`, or null. */
-  baseColorTexture: number | null;
-  /** Which `TEXCOORD_n` the base colour texture reads (only 0 is loaded). */
-  texCoord: number;
+  baseColor: TextureRef | null;
+  /** Default 1. */
+  metallicFactor: number;
+  /** Default 1. */
+  roughnessFactor: number;
+  metallicRoughness: TextureRef | null;
+  normal: TextureRef | null;
+  /** `normalTexture.scale`, default 1. */
+  normalScale: number;
+  occlusion: TextureRef | null;
+  /** `occlusionTexture.strength`, default 1. */
+  occlusionStrength: number;
+  emissive: TextureRef | null;
+  /** Linear RGB × `KHR_materials_emissive_strength` (default 0, 0, 0). */
+  emissiveFactor: Vec3;
   doubleSided: boolean;
   alphaMode: GltfAlphaMode;
   /** For `MASK` (default 0.5). */
   alphaCutoff: number;
+  /** @deprecated `baseColor?.index ?? null`; removed next release. */
+  baseColorTexture: number | null;
+  /** @deprecated `baseColor?.texCoord ?? 0`; removed next release. */
+  texCoord: number;
+}
+
+export type GltfFilter = 'nearest' | 'linear';
+export type GltfWrap = 'repeat' | 'clamp-to-edge' | 'mirror-repeat';
+
+/** A texture's sampler in GPU terms (`GPUSamplerDescriptor` names), defaults filled. */
+export interface GltfSampler {
+  /** Default `'linear'`. */
+  magFilter: GltfFilter;
+  /** Default `'linear'`. */
+  minFilter: GltfFilter;
+  /** Between mip levels; null when `minFilter` names no mipmap mode (then no mips). */
+  mipmapFilter: GltfFilter | null;
+  /** Default `'repeat'`. */
+  wrapS: GltfWrap;
+  wrapT: GltfWrap;
 }
 
 export interface GltfTexture {
@@ -255,6 +349,8 @@ export interface GltfTexture {
   wrapT: number;
   /** 9728 nearest or 9729 linear, when the sampler gave one. */
   magFilter: number | null;
+  /** The same sampler in GPU terms, defaults filled. */
+  sampler: GltfSampler;
 }
 
 export interface GltfImage {
@@ -325,7 +421,10 @@ export interface GltfDocument {
   animations: GltfAnimation[];
   /** External (non-`data:`) URIs the game must fetch: images here, buffers at parse time. */
   externalUris: string[];
-  /** `extensionsUsed` entries (ignored), and anything else the parser skipped. */
+  /**
+   * `extensionsUsed` entries the parser does not handle (`KHR_texture_transform` and
+   * `KHR_materials_emissive_strength` are read), and anything else it skipped.
+   */
   warnings: string[];
   /** World-space bounds of the default scene's meshes; radius 0 at the origin when empty. */
   bounds: GltfBounds;
@@ -422,14 +521,115 @@ interface Ctx {
   buffers: ArrayBuffer[];
 }
 
+/** Extensions the parser reads, so neither `extensionsRequired` nor `warnings` mention them. */
+const HANDLED_EXTENSIONS = new Set(['KHR_texture_transform', 'KHR_materials_emissive_strength']);
+
+/** `minFilter` values whose base filter is nearest (9728, 9984 nearest-mipmap-nearest, 9986 nearest-mipmap-linear). */
+const MIN_NEAREST = new Set([9728, 9984, 9986]);
+
+function mipmapFilterOf(minFilter: number | undefined): GltfFilter | null {
+  switch (minFilter) {
+    case 9984: // NEAREST_MIPMAP_NEAREST
+    case 9985: // LINEAR_MIPMAP_NEAREST
+      return 'nearest';
+    case 9986: // NEAREST_MIPMAP_LINEAR
+    case 9987: // LINEAR_MIPMAP_LINEAR
+    case undefined: // the spec leaves it to the implementation: trilinear is the engine default
+      return 'linear';
+    default:
+      return null;
+  }
+}
+
+function wrapOf(wrap: number | undefined): GltfWrap {
+  if (wrap === 33071) return 'clamp-to-edge';
+  if (wrap === 33648) return 'mirror-repeat';
+  return 'repeat';
+}
+
+function textureRef(
+  info: GltfJsonTextureInfo | undefined,
+  textureCount: number,
+  where: string,
+): TextureRef | null {
+  if (!info) return null;
+  if (!Number.isInteger(info.index) || info.index < 0 || info.index >= textureCount) {
+    throw new GltfError(`${where}: texture ${info.index} does not exist`);
+  }
+  const x = info.extensions?.KHR_texture_transform;
+  let transform: GltfTextureTransform | null = null;
+  if (x) {
+    transform = {
+      offset: [x.offset?.[0] ?? 0, x.offset?.[1] ?? 0],
+      rotation: x.rotation ?? 0,
+      scale: [x.scale?.[0] ?? 1, x.scale?.[1] ?? 1],
+    };
+  }
+  return { index: info.index, texCoord: x?.texCoord ?? info.texCoord ?? 0, transform };
+}
+
+function parseMaterial(m: GltfJsonMaterial, i: number, textureCount: number): GltfMaterial {
+  const where = `material ${i}`;
+  const pbr = m.pbrMetallicRoughness;
+  const f = pbr?.baseColorFactor;
+  const e = m.emissiveFactor;
+  const strength = m.extensions?.KHR_materials_emissive_strength?.emissiveStrength ?? 1;
+  const baseColor = textureRef(pbr?.baseColorTexture, textureCount, `${where} baseColorTexture`);
+  return {
+    name: m.name ?? null,
+    baseColorFactor: f ? [f[0] ?? 1, f[1] ?? 1, f[2] ?? 1, f[3] ?? 1] : [1, 1, 1, 1],
+    baseColor,
+    metallicFactor: pbr?.metallicFactor ?? 1,
+    roughnessFactor: pbr?.roughnessFactor ?? 1,
+    metallicRoughness: textureRef(
+      pbr?.metallicRoughnessTexture,
+      textureCount,
+      `${where} metallicRoughnessTexture`,
+    ),
+    normal: textureRef(m.normalTexture, textureCount, `${where} normalTexture`),
+    normalScale: m.normalTexture?.scale ?? 1,
+    occlusion: textureRef(m.occlusionTexture, textureCount, `${where} occlusionTexture`),
+    occlusionStrength: m.occlusionTexture?.strength ?? 1,
+    emissive: textureRef(m.emissiveTexture, textureCount, `${where} emissiveTexture`),
+    emissiveFactor: [(e?.[0] ?? 0) * strength, (e?.[1] ?? 0) * strength, (e?.[2] ?? 0) * strength],
+    doubleSided: m.doubleSided ?? false,
+    alphaMode: m.alphaMode ?? 'OPAQUE',
+    alphaCutoff: m.alphaCutoff ?? 0.5,
+    baseColorTexture: baseColor?.index ?? null,
+    texCoord: baseColor?.texCoord ?? 0,
+  };
+}
+
+/**
+ * Apply a `KHR_texture_transform` to one uv (`T · R · S · uv`): `out[0], out[1]` ← the
+ * transformed `u, v`. Returns `out`.
+ */
+export function transformUv(
+  t: GltfTextureTransform,
+  u: number,
+  v: number,
+  out: [number, number] = [0, 0],
+): [number, number] {
+  const c = Math.cos(t.rotation);
+  const s = Math.sin(t.rotation);
+  const su = u * t.scale[0];
+  const sv = v * t.scale[1];
+  out[0] = c * su - s * sv + t.offset[0];
+  out[1] = s * su + c * sv + t.offset[1];
+  return out;
+}
+
 function parseJson(json: GltfJson, given: ArrayBuffer[]): GltfDocument {
   const version = json.asset?.version ?? '';
   if (!version.startsWith('2.')) throw new GltfError(`asset.version "${version}", expected 2.x`);
-  if (json.extensionsRequired && json.extensionsRequired.length > 0) {
-    throw new GltfError(`required extensions not supported: ${json.extensionsRequired.join(', ')}`);
+  const required = (json.extensionsRequired ?? []).filter((e) => !HANDLED_EXTENSIONS.has(e));
+  if (required.length > 0) {
+    throw new GltfError(`required extensions not supported: ${required.join(', ')}`);
   }
   const warnings: string[] = [];
-  for (const ext of json.extensionsUsed ?? []) warnings.push(`extension ignored: ${ext}`);
+  for (const ext of json.extensionsUsed ?? []) {
+    if (!HANDLED_EXTENSIONS.has(ext)) warnings.push(`extension ignored: ${ext}`);
+  }
   const externalUris: string[] = [];
 
   const buffers = (json.buffers ?? []).map((b, i) => {
@@ -470,22 +670,19 @@ function parseJson(json: GltfJson, given: ArrayBuffer[]): GltfDocument {
       wrapS: s?.wrapS ?? 10497,
       wrapT: s?.wrapT ?? 10497,
       magFilter: s?.magFilter ?? null,
+      sampler: {
+        magFilter: s?.magFilter === 9728 ? 'nearest' : 'linear',
+        minFilter: MIN_NEAREST.has(s?.minFilter ?? 0) ? 'nearest' : 'linear',
+        mipmapFilter: mipmapFilterOf(s?.minFilter),
+        wrapS: wrapOf(s?.wrapS),
+        wrapT: wrapOf(s?.wrapT),
+      },
     };
   });
 
-  const materials: GltfMaterial[] = (json.materials ?? []).map((m) => {
-    const pbr = m.pbrMetallicRoughness;
-    const f = pbr?.baseColorFactor;
-    return {
-      name: m.name ?? null,
-      baseColorFactor: f ? [f[0] ?? 1, f[1] ?? 1, f[2] ?? 1, f[3] ?? 1] : [1, 1, 1, 1],
-      baseColorTexture: pbr?.baseColorTexture?.index ?? null,
-      texCoord: pbr?.baseColorTexture?.texCoord ?? 0,
-      doubleSided: m.doubleSided ?? false,
-      alphaMode: m.alphaMode ?? 'OPAQUE',
-      alphaCutoff: m.alphaCutoff ?? 0.5,
-    };
-  });
+  const materials: GltfMaterial[] = (json.materials ?? []).map((m, i) =>
+    parseMaterial(m, i, textures.length),
+  );
 
   const meshes: GltfMesh[] = (json.meshes ?? []).map((m, mi) => parseMesh(ctx, m, mi));
 
@@ -944,9 +1141,11 @@ function parsePrimitive(ctx: Ctx, p: GltfJsonPrimitive, where: string): GltfPrim
   }
 
   let uv0 = optionalFloats(ctx, p.attributes.TEXCOORD_0, vertexCount, 2, `${where} TEXCOORD_0`);
+  let uv1 = optionalFloats(ctx, p.attributes.TEXCOORD_1, vertexCount, 2, `${where} TEXCOORD_1`);
   let color0 = optionalFloats(ctx, p.attributes.COLOR_0, vertexCount, 4, `${where} COLOR_0`, 1);
   if (!uv0) uv0 = new Float32Array(vertexCount * 2);
   if (!color0) color0 = new Float32Array(vertexCount * 4).fill(1);
+  let tangent = readTangents(ctx, p.attributes.TANGENT, vertexCount, `${where} TANGENT`);
 
   let joints = readJoints(ctx, p.attributes.JOINTS_0, vertexCount, `${where} JOINTS_0`);
   let weights = optionalFloats(ctx, p.attributes.WEIGHTS_0, vertexCount, 4, `${where} WEIGHTS_0`);
@@ -971,6 +1170,8 @@ function parsePrimitive(ctx: Ctx, p: GltfJsonPrimitive, where: string): GltfPrim
         : new Uint16Array(n * 4)
       : null;
     const wgt = weights ? new Float32Array(n * 4) : null;
+    const uvb = uv1 ? new Float32Array(n * 2) : null;
+    const tan = tangent ? new Float32Array(n * 4) : null;
     normal = new Float32Array(n * 3);
     for (let i = 0; i < n; i++) {
       const src = indices[i]!;
@@ -979,9 +1180,13 @@ function parsePrimitive(ctx: Ctx, p: GltfJsonPrimitive, where: string): GltfPrim
       col.set(color0.subarray(src * 4, src * 4 + 4), i * 4);
       if (jnt && joints) jnt.set(joints.subarray(src * 4, src * 4 + 4), i * 4);
       if (wgt && weights) wgt.set(weights.subarray(src * 4, src * 4 + 4), i * 4);
+      if (uvb && uv1) uvb.set(uv1.subarray(src * 2, src * 2 + 2), i * 2);
+      if (tan && tangent) tan.set(tangent.subarray(src * 4, src * 4 + 4), i * 4);
     }
     joints = jnt;
     weights = wgt;
+    uv1 = uvb;
+    tangent = tan;
     targets = targets.map((t) => ({
       position: t.position ? unweld3(t.position, indices) : null,
       normal: t.normal ? unweld3(t.normal, indices) : null,
@@ -1048,6 +1253,8 @@ function parsePrimitive(ctx: Ctx, p: GltfJsonPrimitive, where: string): GltfPrim
     position,
     normal,
     uv0,
+    uv1,
+    tangent,
     color0,
     indices,
     material: p.material ?? null,
@@ -1058,6 +1265,24 @@ function parsePrimitive(ctx: Ctx, p: GltfJsonPrimitive, where: string): GltfPrim
     targets,
     ignoredTargetAttributes,
   };
+}
+
+/** `TANGENT`: VEC4 floats, w the handedness (anything but -1 reads as +1). */
+function readTangents(
+  ctx: Ctx,
+  index: number | undefined,
+  vertexCount: number,
+  where: string,
+): Float32Array | null {
+  if (index === undefined) return null;
+  const acc = accessor(ctx, index, where);
+  if (acc.type !== 'VEC4') throw new GltfError(`${where}: ${acc.type}, expected VEC4`);
+  if (acc.count !== vertexCount) {
+    throw new GltfError(`${where}: ${acc.count} values for ${vertexCount} vertices`);
+  }
+  const t = readFloats(ctx, acc, 4, where);
+  for (let i = 3; i < t.length; i += 4) t[i] = t[i]! < 0 ? -1 : 1;
+  return t;
 }
 
 /** One vec3 per index, in index order (the unwelding that flat normals need). */

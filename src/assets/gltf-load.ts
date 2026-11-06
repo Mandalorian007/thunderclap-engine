@@ -1,7 +1,10 @@
 /**
- * `loadGltf`: a parsed `GltfDocument` → engine meshes (`VERTEX_LAYOUT_3D`), one `Transform` per
- * node, one `Texture` per image a base colour texture reads, one lit `Material` per glTF
- * material, and a `GltfScene` whose `draw(frame)` pushes one instance per (node, primitive)
+ * `loadGltf`: a parsed `GltfDocument` → engine meshes (`VERTEX_LAYOUT_3D`, the tangent layout
+ * for primitives with `TANGENT`, the skinned layout for skinned ones when a palette is given),
+ * one `Transform` per node, one `Texture` per (image, colour space) a material reads, one
+ * standard PBR `Material` per glTF material (every map, factor, sampler, alpha mode and
+ * `KHR_texture_transform` carried over; `opts.lit: 'lit'` keeps the older base-colour-only
+ * material), and a `GltfScene` whose `draw(frame)` pushes one instance per (node, primitive)
  * with no allocation. Images decode through `createImageBitmap` (or `opts.decodeImage`);
  * external URIs come from `opts.resources`, fetched by the game. The engine fetches nothing.
  *
@@ -17,12 +20,16 @@ import {
   Mesh,
   type MeshUpdate,
   VERTEX_LAYOUT_3D,
+  VERTEX_LAYOUT_3D_TANGENT,
+  VERTEX_LAYOUT_SKINNED,
   VERTEX3D_FLOATS,
   type VertexLayout,
 } from '../render/mesh';
 import { generateMipmaps } from '../render/mipmap';
 import type { Renderer } from '../render/renderer';
-import type { Texture } from '../render/texture';
+import type { SkinPalette } from '../render/skin';
+import { createStandardMaterial, type StandardMaterialDesc } from '../render/standard';
+import type { SamplerKind, Texture } from '../render/texture';
 import { Transform } from '../render/transform';
 import {
   type GltfAnimation,
@@ -31,17 +38,18 @@ import {
   type GltfImage,
   type GltfMaterial,
   type GltfPrimitive,
+  type GltfSampler,
   type GltfSkin,
+  type GltfTextureTransform,
+  type TextureRef,
 } from './gltf';
 import { interleaveSkinned } from './gltf-skin';
 
-/**
- * The vertex layout for skinned primitives. `null` until `src/render/mesh.ts` exports
- * `VERTEX_LAYOUT_SKINNED` (ws/skinning): skinned primitives are then built in the 3D layout and
- * their joints and weights stay on the document (`primitive.joints`, `node.skin`). Integrator:
- * import `VERTEX_LAYOUT_SKINNED` from `'../render/mesh'` and set this constant to it.
- */
-const SKINNED_LAYOUT: VertexLayout | null = null;
+/** Floats per vertex of `VERTEX_LAYOUT_3D_TANGENT`. */
+const TANGENT_FLOATS = VERTEX_LAYOUT_3D_TANGENT.floats;
+
+/** Which material the loader builds per glTF material. */
+export type GltfLitMode = 'standard' | 'lit';
 
 /** A decoded image the loader can upload: an `ImageBitmap` or anything `copyExternalImageToTexture` takes. */
 export type GltfImageSource = ImageBitmap | HTMLCanvasElement | OffscreenCanvas;
@@ -53,10 +61,27 @@ export interface LoadGltfOptions {
    */
   resources?: Record<string, ArrayBuffer | GltfImageSource>;
   /**
-   * Draw every primitive with this material instead of the built-in lit one. The scene's
-   * textures are still created (`scene.textures`) for the game to bind as it likes.
+   * Draw every primitive with this material instead of the built-in ones. The scene's
+   * textures are still created (`scene.textures`) for the game to bind as it likes; `lit`
+   * and `palette` only pick the mesh layouts.
    */
   material?: Material;
+  /**
+   * `'standard'` (default): one `createStandardMaterial` per glTF material with every map,
+   * factor, sampler, alpha mode and texture transform the file gives (`scene.materials[i]`
+   * for `doc.materials[i]`, `scene.materialNames[i]` its name). `'lit'`: the older
+   * base-colour-only `GLTF_LIT_WGSL` material (base colour factor as `tint`, mask cutoff as
+   * `params.x`).
+   */
+  lit?: GltfLitMode;
+  /**
+   * Skinned primitives (`JOINTS_0`) become `VERTEX_LAYOUT_SKINNED` meshes bound to this
+   * palette: the standard materials are created with `skin: palette`, and a skinned draw's
+   * `params.params[3]` picks its palette slot (`SKIN_PARAM`). Without one, skinned primitives
+   * are built in the 3D layout at their bind pose (their joints and weights stay on the
+   * document); a material cannot take a palette later, so give it here.
+   */
+  palette?: SkinPalette;
   /** Label prefix for GPU objects (default `'gltf'`). */
   label?: string;
   /** Build mip chains for the textures (default true; `generateMipmaps` on the GPU). */
@@ -75,7 +100,11 @@ export interface GltfSceneNode {
   transform: Transform;
   mesh: Mesh;
   material: Material;
-  /** Base colour factor as `tint`, alpha cutoff as `params.x`; mutate to recolour the draw. */
+  /**
+   * Mutate to recolour the draw. `lit: 'standard'`: `tint` white, `params` zero (the factors
+   * live in the material); a skinned draw sets `params[3]` to its palette slot. `lit: 'lit'`:
+   * base colour factor as `tint`, alpha cutoff as `params.x`.
+   */
   params: InstanceParams;
   /** The node's skin (index into `GltfScene.skins`), or null for a static draw. */
   skin: number | null;
@@ -131,10 +160,17 @@ export const GLTF_LIT_WGSL = /* wgsl */ `
 export class GltfScene {
   /** One per primitive, in document order (mesh 0's primitives, then mesh 1's, …). */
   readonly meshes: Mesh[] = [];
-  /** One per distinct image a glTF texture reads, in first-use order. */
+  /**
+   * One per (image, colour space) a material reads, in first-use order: base colour and
+   * emissive maps are sRGB, the rest linear, so an image used both ways is uploaded twice.
+   */
   readonly textures: Texture[] = [];
   /** One per glTF material, built by the loader (empty when `opts.material` was given). */
   readonly materials: Material[] = [];
+  /** The file's `material.name` per glTF material (null when unnamed). */
+  readonly materialNames: (string | null)[] = [];
+  /** The palette skinned meshes are bound to (`opts.palette`), or null. */
+  readonly palette: SkinPalette | null;
   /** One per document node, parented like the file (`doc.nodes[i]` → `transforms[i]`). */
   readonly transforms: Transform[] = [];
   /** Every draw: one per (node in the default scene, primitive of its mesh). */
@@ -153,12 +189,14 @@ export class GltfScene {
   private readonly morphEntries: MorphEntry[] = [];
   private readonly doc: GltfDocument;
 
-  constructor(doc: GltfDocument, ownsMaterials: boolean) {
+  constructor(doc: GltfDocument, ownsMaterials: boolean, palette: SkinPalette | null = null) {
     this.doc = doc;
     this.bounds = { center: [...doc.bounds.center], radius: doc.bounds.radius };
     this.skins = doc.skins;
     this.animations = doc.animations;
     this.ownsMaterials = ownsMaterials;
+    this.palette = palette;
+    for (const m of doc.materials) this.materialNames.push(m.name);
   }
 
   /**
@@ -215,41 +253,80 @@ export async function loadGltf(
 ): Promise<GltfScene> {
   const label = opts.label ?? 'gltf';
   const mips = opts.mips ?? true;
-  const scene = new GltfScene(doc, !opts.material);
+  const lit = opts.lit ?? 'standard';
+  const standard = lit === 'standard' && !opts.material;
+  const palette = opts.palette ?? null;
+  const scene = new GltfScene(doc, !opts.material, palette);
 
-  // Textures: decode every image a texture reads, in parallel, then upload.
-  const imageSources = await Promise.all(doc.images.map((img, i) => decodeImage(img, i, opts)));
-  const uploaded = new Map<number, Texture>();
-  for (let ti = 0; ti < doc.textures.length; ti++) {
-    const t = doc.textures[ti]!;
-    if (t.source === null) continue;
-    let tex = uploaded.get(t.source);
-    if (!tex) {
-      const src = imageSources[t.source]!;
-      tex = renderer.createTexture({
+  // Textures: decode every image a material reads, in parallel, then upload one texture per
+  // (image, colour space): base colour and emissive maps are sRGB, the rest linear. The older
+  // lit material reads base colour only.
+  const srgbSlots: (keyof GltfMaterial)[] = ['baseColor', 'emissive'];
+  const linearSlots: (keyof GltfMaterial)[] = standard
+    ? ['metallicRoughness', 'normal', 'occlusion']
+    : [];
+  const wanted = new Set<string>();
+  const imageOf = (ref: TextureRef | null): number | null =>
+    ref ? (doc.textures[ref.index]?.source ?? null) : null;
+  for (const gm of doc.materials) {
+    for (const slot of srgbSlots) {
+      const img = imageOf(gm[slot] as TextureRef | null);
+      if (img !== null) wanted.add(`${img}:srgb`);
+    }
+    for (const slot of linearSlots) {
+      const img = imageOf(gm[slot] as TextureRef | null);
+      if (img !== null) wanted.add(`${img}:linear`);
+    }
+  }
+  const needed = new Set<number>();
+  for (const key of wanted) needed.add(Number(key.split(':')[0]));
+  const imageSources = await Promise.all(
+    doc.images.map((img, i) => (needed.has(i) ? decodeImage(img, i, opts) : null)),
+  );
+  const uploaded = new Map<string, Texture>();
+  for (let img = 0; img < doc.images.length; img++) {
+    const src = imageSources[img];
+    if (!src) continue;
+    for (const srgb of [true, false]) {
+      const key = `${img}:${srgb ? 'srgb' : 'linear'}`;
+      if (!wanted.has(key)) continue;
+      const tex = renderer.createTexture({
         width: src.width,
         height: src.height,
         mips,
-        format: 'rgba8unorm-srgb',
-        label: `${label}:image${t.source}`,
+        format: srgb ? 'rgba8unorm-srgb' : 'rgba8unorm',
+        label: srgb ? `${label}:image${img}` : `${label}:image${img}:linear`,
       });
       renderer.device.queue.copyExternalImageToTexture({ source: src }, { texture: tex.texture }, [
         src.width,
         src.height,
       ]);
       if (tex.mipLevels > 1) generateMipmaps(renderer.device, tex);
-      uploaded.set(t.source, tex);
+      uploaded.set(key, tex);
       scene.textures.push(tex);
     }
   }
-  for (const src of imageSources) if ('close' in src) src.close();
+  for (const src of imageSources) if (src && 'close' in src) src.close();
+  const textureFor = (ref: TextureRef | null, srgb: boolean): Texture | undefined => {
+    const img = imageOf(ref);
+    return img === null ? undefined : uploaded.get(`${img}:${srgb ? 'srgb' : 'linear'}`);
+  };
 
   // Materials: one engine material per glTF material (textures are bound per material).
   const materialFor = new Map<number | null, Material>();
   const defaultMaterial = (): Material => {
     let m = materialFor.get(null);
     if (!m) {
-      m = opts.material ?? createLitMaterial(renderer, `${label}:default`, 'opaque', mips);
+      m =
+        opts.material ??
+        (standard
+          ? createStandardMaterial(renderer, {
+              label: `${label}:default`,
+              metallic: 1,
+              roughness: 1,
+              ...(palette ? { skin: palette } : {}),
+            })
+          : createLitMaterial(renderer, `${label}:default`, 'opaque', mips));
       materialFor.set(null, m);
       if (!opts.material) scene.materials.push(m);
     }
@@ -257,15 +334,19 @@ export async function loadGltf(
   };
   if (!opts.material) {
     doc.materials.forEach((gm, i) => {
-      const m = createLitMaterial(
-        renderer,
-        `${label}:material${i}`,
-        gm.alphaMode === 'BLEND' ? 'alpha' : 'opaque',
-        mips,
-      );
-      const tex = gm.baseColorTexture !== null ? doc.textures[gm.baseColorTexture] : undefined;
-      if (tex && tex.source !== null) {
-        const t = uploaded.get(tex.source);
+      let m: Material;
+      if (standard) {
+        const d = standardDesc(doc, gm, `${label}:material${i}`, textureFor, mips);
+        if (palette) d.skin = palette;
+        m = createStandardMaterial(renderer, d);
+      } else {
+        m = createLitMaterial(
+          renderer,
+          `${label}:material${i}`,
+          gm.alphaMode === 'BLEND' ? 'alpha' : 'opaque',
+          mips,
+        );
+        const t = textureFor(gm.baseColor, true);
         if (t) m.setTexture(0, t);
       }
       materialFor.set(i, m);
@@ -273,16 +354,26 @@ export async function loadGltf(
     });
   }
 
-  // Meshes: one per primitive, interleaved into VERTEX_LAYOUT_3D (or the skinned layout when a
-  // skinned primitive meets a renderer that has one).
+  // Meshes: one per primitive, interleaved into VERTEX_LAYOUT_3D, the tangent layout (TANGENT)
+  // or the skinned layout (JOINTS_0 and a palette; it has no tangent slot).
   const meshIndex: Mesh[][] = doc.meshes.map((gm, mi) => {
     const targetCount = gm.primitives[0]?.targets.length ?? 0;
     const weights = gm.weights ? new Float32Array(gm.weights) : new Float32Array(targetCount);
     const entries: MorphEntry[] = [];
     const meshes = gm.primitives.map((p, pi) => {
-      const skinned = p.joints !== null && p.joints instanceof Uint8Array && SKINNED_LAYOUT;
-      const layout = skinned || VERTEX_LAYOUT_3D;
-      const vertices = skinned ? new Float32Array(interleaveSkinned(p).vertices) : interleave3d(p);
+      const skinned = palette !== null && p.joints instanceof Uint8Array;
+      const tangent = p.tangent !== null;
+      let layout: VertexLayout = VERTEX_LAYOUT_3D;
+      let vertices: Float32Array;
+      if (skinned) {
+        layout = VERTEX_LAYOUT_SKINNED;
+        vertices = new Float32Array(interleaveSkinned(p).vertices);
+      } else if (tangent) {
+        layout = VERTEX_LAYOUT_3D_TANGENT;
+        vertices = interleave3dTangent(p);
+      } else {
+        vertices = interleave3d(p);
+      }
       const mesh = new Mesh(renderer.device, {
         label: `${label}:mesh${mi}.${pi}`,
         layout,
@@ -361,7 +452,7 @@ export async function loadGltf(
         transform: scene.transforms[ni]!,
         mesh: meshIndex[mi]![pi]!,
         material,
-        params: paramsFor(gm),
+        params: standard ? paramsStandard() : paramsFor(gm),
         skin: n.skin,
       });
     });
@@ -382,6 +473,82 @@ function createLitMaterial(
     blend,
     sampler: mips ? 'linear-mip-repeat' : 'linear-repeat',
   });
+}
+
+/**
+ * A `StandardMaterialDesc` for one glTF material: maps through `textureFor` (sRGB for base
+ * colour and emissive, linear otherwise), factors, alpha mode, double-sidedness, the sampler
+ * of the base colour texture (else the first slot with one; `gltfSamplerKind`) and the
+ * `KHR_texture_transform` of the base colour slot (else the first slot with one): the
+ * standard material has one sampler and one uv transform for every map, and reads
+ * `TEXCOORD_0` only.
+ */
+function standardDesc(
+  doc: GltfDocument,
+  gm: GltfMaterial,
+  label: string,
+  textureFor: (ref: TextureRef | null, srgb: boolean) => Texture | undefined,
+  mips: boolean,
+): StandardMaterialDesc {
+  const d: StandardMaterialDesc = {
+    label,
+    baseColorFactor: gm.baseColorFactor,
+    metallic: gm.metallicFactor,
+    roughness: gm.roughnessFactor,
+    normalScale: gm.normalScale,
+    emissiveFactor: gm.emissiveFactor,
+    alphaMode: gm.alphaMode === 'BLEND' ? 'blend' : gm.alphaMode === 'MASK' ? 'mask' : 'opaque',
+    alphaCutoff: gm.alphaCutoff,
+    doubleSided: gm.doubleSided,
+  };
+  const base = textureFor(gm.baseColor, true);
+  const mr = textureFor(gm.metallicRoughness, false);
+  const normal = textureFor(gm.normal, false);
+  const occlusion = textureFor(gm.occlusion, false);
+  const emissive = textureFor(gm.emissive, true);
+  if (base) d.baseColor = base;
+  if (mr) d.metallicRoughness = mr;
+  if (normal) d.normal = normal;
+  if (occlusion) d.occlusion = occlusion;
+  if (emissive) d.emissive = emissive;
+  const slots = [gm.baseColor, gm.metallicRoughness, gm.normal, gm.occlusion, gm.emissive];
+  let sampler: GltfSampler | undefined;
+  let transform: GltfTextureTransform | null = null;
+  for (const ref of slots) {
+    if (!ref) continue;
+    if (!sampler) sampler = doc.textures[ref.index]?.sampler;
+    if (!transform) transform = ref.transform;
+  }
+  if (sampler) d.sampler = gltfSamplerKind(sampler, mips);
+  if (transform) {
+    d.uvTransform = [
+      transform.scale[0],
+      transform.scale[1],
+      transform.offset[0],
+      transform.offset[1],
+      transform.rotation,
+    ];
+  }
+  return d;
+}
+
+/**
+ * The engine sampler nearest a glTF one: nearest magnification → `nearest-mip-clamp` (or
+ * `nearest-clamp` without mips; the engine has no nearest-repeat), linear → `linear-clamp`
+ * when both wraps clamp, else `linear-mip-repeat` (`linear-repeat` without mips; mirrored
+ * repeat is treated as repeat). `mips` false, or a glTF `minFilter` without a mipmap mode,
+ * picks the level-0 sampler.
+ */
+export function gltfSamplerKind(sampler: GltfSampler, mips: boolean): SamplerKind {
+  const mip = mips && sampler.mipmapFilter !== null;
+  if (sampler.magFilter === 'nearest') return mip ? 'nearest-mip-clamp' : 'nearest-clamp';
+  const clamp = sampler.wrapS === 'clamp-to-edge' && sampler.wrapT === 'clamp-to-edge';
+  if (clamp) return 'linear-clamp';
+  return mip ? 'linear-mip-repeat' : 'linear-repeat';
+}
+
+function paramsStandard(): InstanceParams {
+  return { tint: new Float32Array([1, 1, 1, 1]), params: new Float32Array(4) };
 }
 
 function paramsFor(gm: GltfMaterial | undefined): InstanceParams {
@@ -408,6 +575,41 @@ export function interleave3d(p: GltfPrimitive): Float32Array {
     out[o + 9] = p.color0[i * 4 + 1]!;
     out[o + 10] = p.color0[i * 4 + 2]!;
     out[o + 11] = p.color0[i * 4 + 3]!;
+  }
+  return out;
+}
+
+/**
+ * `VERTEX_LAYOUT_3D_TANGENT`: the 12 floats of `interleave3d` then `tangent.xyzw` per vertex.
+ * A primitive without `TANGENT` gets `(1, 0, 0, 1)`.
+ */
+export function interleave3dTangent(p: GltfPrimitive): Float32Array {
+  const n = p.vertexCount;
+  const out = new Float32Array(n * TANGENT_FLOATS);
+  const t = p.tangent;
+  for (let i = 0; i < n; i++) {
+    const o = i * TANGENT_FLOATS;
+    out[o] = p.position[i * 3]!;
+    out[o + 1] = p.position[i * 3 + 1]!;
+    out[o + 2] = p.position[i * 3 + 2]!;
+    out[o + 3] = p.normal[i * 3]!;
+    out[o + 4] = p.normal[i * 3 + 1]!;
+    out[o + 5] = p.normal[i * 3 + 2]!;
+    out[o + 6] = p.uv0[i * 2]!;
+    out[o + 7] = p.uv0[i * 2 + 1]!;
+    out[o + 8] = p.color0[i * 4]!;
+    out[o + 9] = p.color0[i * 4 + 1]!;
+    out[o + 10] = p.color0[i * 4 + 2]!;
+    out[o + 11] = p.color0[i * 4 + 3]!;
+    if (t) {
+      out[o + 12] = t[i * 4]!;
+      out[o + 13] = t[i * 4 + 1]!;
+      out[o + 14] = t[i * 4 + 2]!;
+      out[o + 15] = t[i * 4 + 3]!;
+    } else {
+      out[o + 12] = 1;
+      out[o + 15] = 1;
+    }
   }
   return out;
 }

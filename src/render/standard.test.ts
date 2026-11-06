@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createFakeDevice, type FakeBuffer, type FakeDevice, fakeRendererGpu } from './fake-gpu';
-import { VERTEX_LAYOUT_3D } from './mesh';
+import { VERTEX_LAYOUT_3D, VERTEX_LAYOUT_3D_TANGENT } from './mesh';
 import { WGSL_PBR } from './pbr-wgsl';
 import { Renderer } from './renderer';
 import { SkinPalette } from './skin';
@@ -89,7 +89,7 @@ describe('WGSL_PBR', () => {
 });
 
 describe('createStandardMaterial', () => {
-  it('binds five maps, a 48-byte block and the repeat sampler, opaque by default', () => {
+  it('binds five maps, an 80-byte block and the repeat sampler, opaque by default', () => {
     const { fake, r } = setup();
     const m = createStandardMaterial(r, {});
     expect(m.label).toBe('standard');
@@ -161,8 +161,18 @@ describe('createStandardMaterial', () => {
 });
 
 describe('packStandardUniforms', () => {
-  it('fills the defaults', () => {
-    expect([...packStandardUniforms({})]).toEqual([1, 1, 1, 1, 0, 0.5, 1, 0.5, 0, 0, 0, 0]);
+  it('fills the defaults, the uv transform identity included', () => {
+    expect([...packStandardUniforms({})]).toEqual([
+      1, 1, 1, 1, 0, 0.5, 1, 0.5, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0,
+    ]);
+  });
+
+  it("packs uvTransform as scale, offset and the rotation's cos and sin", () => {
+    const out = packStandardUniforms({ uvTransform: [2, 3, 0.5, 0.25, Math.PI / 2] });
+    expect([...out.slice(12, 16)]).toEqual([2, 3, 0.5, 0.25]);
+    expect(out[16]).toBeCloseTo(0, 6);
+    expect(out[17]).toBeCloseTo(1, 6);
+    expect([...out.slice(18)]).toEqual([0, 0]);
   });
 
   it('packs factors and flags', () => {
@@ -176,7 +186,7 @@ describe('packStandardUniforms', () => {
       alphaMode: 'mask',
       doubleSided: true,
     });
-    expect([...out].map((x) => Math.round(x * 1e6) / 1e6)).toEqual([
+    expect([...out.slice(0, 12)].map((x) => Math.round(x * 1e6) / 1e6)).toEqual([
       0.1, 0.2, 0.3, 0.4, 0.6, 0.7, 2, 0.3, 1, 2, 3, 3,
     ]);
     expect(packStandardUniforms({ alphaMode: 'blend', doubleSided: true })[11]).toBe(5);
@@ -193,6 +203,39 @@ describe('packStandardUniforms', () => {
     expect(packStandardUniforms({ metallic: 1 }, out)).toBe(out);
     expect(out[4]).toBe(1);
     expect(() => packStandardUniforms({}, new Float32Array(4))).toThrow();
+  });
+});
+
+describe('standard material variants (ws/gltf-materials)', () => {
+  it('applies the uv transform to every map in the shader', () => {
+    expect(STANDARD_WGSL).toContain('fn standard_uv(uv: vec2f) -> vec2f');
+    expect(STANDARD_WGSL).toContain('uv_scale_offset: vec4f');
+    expect(STANDARD_WGSL).toContain('uv_rot: vec4f');
+    // Five samples, all through the transformed `uv`, none through `in.uv` directly.
+    expect(STANDARD_WGSL.match(/standard_sampler, uv\)/g)).toHaveLength(5);
+    expect(STANDARD_WGSL).not.toContain('standard_sampler, in.uv');
+    expect(STANDARD_WGSL).toContain('engine_perturb_normal(n, in.worldPos, uv, nmap');
+  });
+
+  it('draws tangent-layout meshes through the derivative path (no tangent vertex entry)', () => {
+    const { fake, r } = setup();
+    const m = createStandardMaterial(r, { label: 'tan' });
+    const pipeline = m.pipelineFor(VERTEX_LAYOUT_3D_TANGENT, 2) as unknown as FakePipeline;
+    expect(pipeline.desc.vertex.entryPoint).toBe('vs_main');
+    const module = pipeline.desc.vertex.module as unknown as { code: string };
+    expect(module.code).toContain('@location(13) tangent: vec4f');
+    expect(module.code).toContain('engine_perturb_normal(n, in.worldPos, uv, nmap');
+    const pp = m.pipelineFor(VERTEX_LAYOUT_3D, 2) as unknown as FakePipeline;
+    expect(pp.desc.vertex.entryPoint).toBe('vs_main');
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('takes a sampler', () => {
+    const { r } = setup();
+    const m = createStandardMaterial(r, { label: 's', sampler: 'nearest-clamp' });
+    const group = m.bindings!.bindGroup as unknown as FakeGroup;
+    const res = group.entries.find((e) => e.binding === 1)!.resource as { label?: string };
+    expect(res.label).toContain('nearest-clamp');
   });
 });
 

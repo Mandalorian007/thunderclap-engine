@@ -1,8 +1,9 @@
 /**
  * A tiny GLB writer for the glTF demo page (harness/gltf.html): builds the sample scene in the
- * browser so the page needs no asset files. Not engine code; the engine only parses. The scene
- * is the one `src/assets/gltf.test.ts` builds: a textured cube placed by a `matrix` node and an
- * untextured plane (no normals, no uv, no indices) placed by a TRS node.
+ * browser so the page needs no asset files. Not engine code; the engine only parses. The default
+ * scene is the one `src/assets/gltf.test.ts` builds: a textured cube placed by a `matrix` node
+ * and an untextured plane (no normals, no uv, no indices) placed by a TRS node. `buildPbrGlb`
+ * is the `?pbr` scene: every material slot, tangents, a texture transform and a skinned mesh.
  */
 
 // ---------------------------------------------------------------- PNG (stored deflate)
@@ -105,12 +106,20 @@ class GlbWriter {
 
   view(bytes: Uint8Array): number {
     this.parts.push(bytes);
-    this.json.bufferViews.push({ buffer: 0, byteOffset: 0, byteLength: bytes.byteLength });
+    this.json.bufferViews.push({
+      buffer: 0,
+      byteOffset: 0,
+      byteLength: bytes.byteLength,
+    });
     return this.json.bufferViews.length - 1;
   }
 
-  floats(data: number[], type: 'VEC2' | 'VEC3', minMax = true): number {
-    const n = type === 'VEC2' ? 2 : 3;
+  floats(
+    data: number[],
+    type: 'SCALAR' | 'VEC2' | 'VEC3' | 'VEC4' | 'MAT4',
+    minMax = true,
+  ): number {
+    const n = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT4: 16 }[type];
     const f = new Float32Array(data);
     const bv = this.view(new Uint8Array(f.buffer));
     const count = data.length / n;
@@ -128,6 +137,18 @@ class GlbWriter {
       count,
       type,
       ...(minMax ? { min, max } : {}),
+    });
+    return this.json.accessors.length - 1;
+  }
+
+  /** `JOINTS_0`: four joint bytes per vertex. */
+  joints8(data: number[]): number {
+    const bv = this.view(new Uint8Array(data));
+    this.json.accessors.push({
+      bufferView: bv,
+      componentType: 5121,
+      count: data.length / 4,
+      type: 'VEC4',
     });
     return this.json.accessors.length - 1;
   }
@@ -252,6 +273,412 @@ function checker(): Uint8Array {
   return rgba;
 }
 
+// ---------------------------------------------------------------- PBR scene (?pbr)
+
+/** The metallic-roughness grid: 3 columns of roughness × 3 rows of metallic. */
+export const PBR_ROUGHNESS = [0.1, 0.5, 1] as const;
+export const PBR_METALLIC = [0, 0.5, 1] as const;
+export const PBR_SPHERE_RADIUS = 0.42;
+/** Sphere (column c, row r) centre. */
+export function pbrSphereCenter(c: number, r: number): [number, number, number] {
+  return [-5.5 + c, 0.5 + r, 0];
+}
+export const PBR_TILE_CENTER = [-1.3, 1.5, 0] as const;
+export const PBR_GLOW_CENTER = [1.6, 3.2, 0] as const;
+/** Empty space just below the glowing strip (between it and the transformed quad). */
+export const PBR_GLOW_SURROUND = [1.6, 2.6, 0] as const;
+export const PBR_SHIFTED_CENTER = [1.6, 1.2, 0] as const;
+export const PBR_CYLINDER_X = 4.5;
+export const PBR_CYLINDER_BASE_Y = 0.3;
+export const PBR_CYLINDER_HEIGHT = 2;
+/** The metallic-roughness map: R unused, G roughness by column, B metallic by row. */
+function metalRoughMap(): Uint8Array {
+  const rgba = new Uint8Array(9 * 4);
+  for (let r = 0; r < 3; r++) {
+    for (let c = 0; c < 3; c++) {
+      const o = (r * 3 + c) * 4;
+      rgba[o] = 255;
+      rgba[o + 1] = Math.round(PBR_ROUGHNESS[c]! * 255);
+      rgba[o + 2] = Math.round(PBR_METALLIC[r]! * 255);
+      rgba[o + 3] = 255;
+    }
+  }
+  return rgba;
+}
+
+/** A 32×32 tangent-space normal map: a dome bump in the middle, flat elsewhere (+Y up). */
+function bumpNormalMap(): Uint8Array {
+  const n = 32;
+  const rgba = new Uint8Array(n * n * 4);
+  for (let y = 0; y < n; y++) {
+    for (let x = 0; x < n; x++) {
+      // Image y runs down, so "up" in the image is -y here.
+      const dx = (x + 0.5) / n - 0.5;
+      const dy = 0.5 - (y + 0.5) / n;
+      const d2 = (dx * dx + dy * dy) / (0.4 * 0.4);
+      let nx = 0;
+      let ny = 0;
+      let nz = 1;
+      if (d2 < 1) {
+        const k = Math.sqrt(d2);
+        const slope = Math.sin(k * Math.PI) * 0.85;
+        nx = k > 0 ? (dx / k) * slope : 0;
+        ny = k > 0 ? (dy / k) * slope : 0;
+        nz = Math.sqrt(Math.max(0, 1 - nx * nx - ny * ny));
+      }
+      const o = (y * n + x) * 4;
+      rgba[o] = Math.round((nx * 0.5 + 0.5) * 255);
+      rgba[o + 1] = Math.round((ny * 0.5 + 0.5) * 255);
+      rgba[o + 2] = Math.round((nz * 0.5 + 0.5) * 255);
+      rgba[o + 3] = 255;
+    }
+  }
+  return rgba;
+}
+
+/** The emissive strip's map: an even orange. */
+export const PBR_GLOW_RGB = [255, 160, 40] as const;
+function glowMap(): Uint8Array {
+  const rgba = new Uint8Array(4 * 4 * 4);
+  for (let i = 0; i < 16; i++) rgba.set([...PBR_GLOW_RGB, 255], i * 4);
+  return rgba;
+}
+
+/** Horizontal stripes for the cylinder's base colour (sRGB) and its occlusion (R only). */
+function stripes(a: readonly number[], b: readonly number[]): Uint8Array {
+  const n = 8;
+  const rgba = new Uint8Array(n * n * 4);
+  for (let y = 0; y < n; y++) {
+    for (let x = 0; x < n; x++) rgba.set(y & 1 ? a : b, (y * n + x) * 4);
+  }
+  return rgba;
+}
+
+/** A UV sphere whose every vertex carries the same uv (so one texel colours it). */
+function sphere(
+  cx: number,
+  cy: number,
+  cz: number,
+  radius: number,
+  u: number,
+  v: number,
+  base: number,
+  out: { pos: number[]; nrm: number[]; uv: number[]; idx: number[] },
+): void {
+  const rings = 12;
+  const segs = 18;
+  for (let r = 0; r <= rings; r++) {
+    const phi = (r / rings) * Math.PI;
+    const y = Math.cos(phi);
+    const s = Math.sin(phi);
+    for (let g = 0; g <= segs; g++) {
+      const th = (g / segs) * Math.PI * 2;
+      const x = Math.cos(th) * s;
+      const z = Math.sin(th) * s;
+      out.pos.push(cx + x * radius, cy + y * radius, cz + z * radius);
+      out.nrm.push(x, y, z);
+      out.uv.push(u, v);
+    }
+  }
+  for (let r = 0; r < rings; r++) {
+    for (let g = 0; g < segs; g++) {
+      const a = base + r * (segs + 1) + g;
+      const b = a + segs + 1;
+      out.idx.push(a, b, a + 1, a + 1, b, b + 1);
+    }
+  }
+}
+
+/** A quad facing +z: u along +x, v down (image rows), tangent +x with w = +1 (bitangent = image up). */
+function quad(
+  cx: number,
+  cy: number,
+  cz: number,
+  w: number,
+  h: number,
+): {
+  pos: number[];
+  nrm: number[];
+  uv: number[];
+  tan: number[];
+  idx: number[];
+} {
+  const hw = w / 2;
+  const hh = h / 2;
+  return {
+    pos: [cx - hw, cy - hh, cz, cx + hw, cy - hh, cz, cx + hw, cy + hh, cz, cx - hw, cy + hh, cz],
+    nrm: [0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1],
+    uv: [0, 1, 1, 1, 1, 0, 0, 0],
+    tan: [1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1],
+    idx: [0, 1, 2, 0, 2, 3],
+  };
+}
+
+/** A vertical cylinder in world space, weighted between joint 0 (base) and joint 1 (half way up). */
+function cylinder(): {
+  pos: number[];
+  nrm: number[];
+  uv: number[];
+  joints: number[];
+  weights: number[];
+  idx: number[];
+} {
+  const segs = 16;
+  const rings = 8;
+  const radius = 0.3;
+  const pos: number[] = [];
+  const nrm: number[] = [];
+  const uv: number[] = [];
+  const joints: number[] = [];
+  const weights: number[] = [];
+  const idx: number[] = [];
+  for (let r = 0; r <= rings; r++) {
+    const t = r / rings;
+    const y = PBR_CYLINDER_BASE_Y + t * PBR_CYLINDER_HEIGHT;
+    // The tip joint sits half way up; the weight ramps over the middle third.
+    const w1 = Math.min(1, Math.max(0, (t - 0.33) / 0.34));
+    for (let g = 0; g <= segs; g++) {
+      const th = (g / segs) * Math.PI * 2;
+      const x = Math.cos(th);
+      const z = Math.sin(th);
+      pos.push(PBR_CYLINDER_X + x * radius, y, z * radius);
+      nrm.push(x, 0, z);
+      uv.push(g / segs, 1 - t);
+      joints.push(0, 1, 0, 0);
+      weights.push(1 - w1, w1, 0, 0);
+    }
+  }
+  for (let r = 0; r < rings; r++) {
+    for (let g = 0; g < segs; g++) {
+      const a = r * (segs + 1) + g;
+      const b = a + segs + 1;
+      idx.push(a, a + 1, b, a + 1, b + 1, b);
+    }
+  }
+  return { pos, nrm, uv, joints, weights, idx };
+}
+
+/** Column-major translation matrix (glTF `MAT4`). */
+function translation(x: number, y: number, z: number): number[] {
+  return [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1];
+}
+
+/**
+ * The `?pbr` scene: five materials over six images. A 3×3 sphere grid reads metallic and
+ * roughness from one map (material `spheres`); a tile with a base colour and a normal map
+ * carries `TANGENT` and `TEXCOORD_1` (`tile`); a black strip glows through an emissive map ×
+ * `KHR_materials_emissive_strength` 2 (`glow`); a quad reuses the checker with a
+ * `KHR_texture_transform` (`shifted`); a two-bone cylinder with stripes and an occlusion map is
+ * skinned and animated (`skinned`, skin `arm`, clip `wave`).
+ */
+export function buildPbrGlb(): ArrayBuffer {
+  const w = new GlbWriter();
+  const grid = {
+    pos: [] as number[],
+    nrm: [] as number[],
+    uv: [] as number[],
+    idx: [] as number[],
+  };
+  for (let r = 0; r < 3; r++) {
+    for (let c = 0; c < 3; c++) {
+      const [x, y, z] = pbrSphereCenter(c, r);
+      sphere(x, y, z, PBR_SPHERE_RADIUS, (c + 0.5) / 3, (r + 0.5) / 3, grid.pos.length / 3, grid);
+    }
+  }
+  const spheres = {
+    attributes: {
+      POSITION: w.floats(grid.pos, 'VEC3'),
+      NORMAL: w.floats(grid.nrm, 'VEC3', false),
+      TEXCOORD_0: w.floats(grid.uv, 'VEC2', false),
+    },
+    indices: w.indices16(grid.idx),
+    material: 0,
+  };
+  const t = quad(PBR_TILE_CENTER[0], PBR_TILE_CENTER[1], PBR_TILE_CENTER[2], 2, 2);
+  const tile = {
+    attributes: {
+      POSITION: w.floats(t.pos, 'VEC3'),
+      NORMAL: w.floats(t.nrm, 'VEC3', false),
+      TEXCOORD_0: w.floats(t.uv, 'VEC2', false),
+      TEXCOORD_1: w.floats(
+        t.uv.map((x) => x * 2),
+        'VEC2',
+        false,
+      ),
+      TANGENT: w.floats(t.tan, 'VEC4', false),
+    },
+    indices: w.indices16(t.idx),
+    material: 1,
+  };
+  const g = quad(PBR_GLOW_CENTER[0], PBR_GLOW_CENTER[1], PBR_GLOW_CENTER[2], 2, 0.3);
+  const glow = {
+    attributes: {
+      POSITION: w.floats(g.pos, 'VEC3'),
+      NORMAL: w.floats(g.nrm, 'VEC3', false),
+      TEXCOORD_0: w.floats(g.uv, 'VEC2', false),
+    },
+    indices: w.indices16(g.idx),
+    material: 2,
+  };
+  const sh = quad(PBR_SHIFTED_CENTER[0], PBR_SHIFTED_CENTER[1], PBR_SHIFTED_CENTER[2], 1.5, 1.5);
+  const shifted = {
+    attributes: {
+      POSITION: w.floats(sh.pos, 'VEC3'),
+      NORMAL: w.floats(sh.nrm, 'VEC3', false),
+      TEXCOORD_0: w.floats(sh.uv, 'VEC2', false),
+    },
+    indices: w.indices16(sh.idx),
+    material: 3,
+  };
+  const cy = cylinder();
+  const skinned = {
+    attributes: {
+      POSITION: w.floats(cy.pos, 'VEC3'),
+      NORMAL: w.floats(cy.nrm, 'VEC3', false),
+      TEXCOORD_0: w.floats(cy.uv, 'VEC2', false),
+      JOINTS_0: w.joints8(cy.joints),
+      WEIGHTS_0: w.floats(cy.weights, 'VEC4', false),
+    },
+    indices: w.indices16(cy.idx),
+    material: 4,
+  };
+  const tipY = PBR_CYLINDER_BASE_Y + PBR_CYLINDER_HEIGHT / 2;
+  const inverseBind = w.floats(
+    [
+      ...translation(-PBR_CYLINDER_X, -PBR_CYLINDER_BASE_Y, 0),
+      ...translation(-PBR_CYLINDER_X, -tipY, 0),
+    ],
+    'MAT4',
+    false,
+  );
+  const swing = 0.6;
+  const q = (a: number) => [0, 0, Math.sin(a / 2), Math.cos(a / 2)];
+  const times = w.floats([0, 1, 2], 'SCALAR');
+  const rotations = w.floats([...q(-swing), ...q(swing), ...q(-swing)], 'VEC4', false);
+  const image = (name: string, size: number, rgba: Uint8Array) => ({
+    name,
+    bufferView: w.view(encodePng(size, size, rgba)),
+    mimeType: 'image/png',
+  });
+  Object.assign(w.json, {
+    extensionsUsed: ['KHR_texture_transform', 'KHR_materials_emissive_strength'],
+    meshes: [
+      { name: 'spheres', primitives: [spheres] },
+      { name: 'tile', primitives: [tile] },
+      { name: 'glow', primitives: [glow] },
+      { name: 'shifted', primitives: [shifted] },
+      { name: 'cylinder', primitives: [skinned] },
+    ],
+    images: [
+      image('checker', CHECKER_SIZE, checker()),
+      image('metalRough', 3, metalRoughMap()),
+      image('bump', 32, bumpNormalMap()),
+      image('glow', 4, glowMap()),
+      image('stripes', 8, stripes([230, 225, 210, 255], [40, 90, 200, 255])),
+      image('occlusion', 8, stripes([255, 255, 255, 255], [60, 60, 60, 255])),
+    ],
+    samplers: [{ magFilter: 9728, minFilter: 9728, wrapS: 10497, wrapT: 10497 }],
+    textures: [
+      { source: 0, sampler: 0 },
+      { source: 1 },
+      { source: 2 },
+      { source: 3 },
+      { source: 4, sampler: 0 },
+      { source: 5 },
+    ],
+    materials: [
+      {
+        name: 'spheres',
+        pbrMetallicRoughness: {
+          baseColorFactor: [1, 0.76, 0.3, 1],
+          metallicFactor: 1,
+          roughnessFactor: 1,
+          metallicRoughnessTexture: { index: 1 },
+        },
+      },
+      {
+        name: 'tile',
+        pbrMetallicRoughness: {
+          baseColorTexture: { index: 0 },
+          metallicFactor: 0,
+          roughnessFactor: 0.6,
+        },
+        normalTexture: { index: 2, scale: 1 },
+      },
+      {
+        name: 'glow',
+        pbrMetallicRoughness: {
+          baseColorFactor: [0, 0, 0, 1],
+          metallicFactor: 0,
+        },
+        emissiveTexture: { index: 3 },
+        emissiveFactor: [1, 1, 1],
+        extensions: {
+          KHR_materials_emissive_strength: { emissiveStrength: 2 },
+        },
+      },
+      {
+        name: 'shifted',
+        pbrMetallicRoughness: {
+          baseColorTexture: {
+            index: 0,
+            extensions: {
+              KHR_texture_transform: {
+                offset: [0.25, 0.1],
+                rotation: Math.PI / 6,
+                scale: [2, 2],
+              },
+            },
+          },
+          metallicFactor: 0,
+          roughnessFactor: 0.9,
+        },
+        doubleSided: true,
+      },
+      {
+        name: 'skinned',
+        pbrMetallicRoughness: {
+          baseColorTexture: { index: 4 },
+          metallicFactor: 0,
+          roughnessFactor: 0.7,
+        },
+        occlusionTexture: { index: 5 },
+      },
+    ],
+    skins: [
+      {
+        name: 'arm',
+        joints: [5, 6],
+        skeleton: 5,
+        inverseBindMatrices: inverseBind,
+      },
+    ],
+    animations: [
+      {
+        name: 'wave',
+        samplers: [{ input: times, output: rotations, interpolation: 'LINEAR' }],
+        channels: [{ sampler: 0, target: { node: 6, path: 'rotation' } }],
+      },
+    ],
+    nodes: [
+      { name: 'spheres', mesh: 0 },
+      { name: 'tile', mesh: 1 },
+      { name: 'glow', mesh: 2 },
+      { name: 'shifted', mesh: 3 },
+      { name: 'cylinder', mesh: 4, skin: 0 },
+      {
+        name: 'root',
+        translation: [PBR_CYLINDER_X, PBR_CYLINDER_BASE_Y, 0],
+        children: [6],
+      },
+      { name: 'tip', translation: [0, PBR_CYLINDER_HEIGHT / 2, 0] },
+    ],
+    scenes: [{ nodes: [0, 1, 2, 3, 4, 5] }],
+    scene: 0,
+  });
+  return w.finish();
+}
+
 /** Where the sample scene puts the cube (its centre) and how big the plane is. */
 export const SAMPLE_CUBE_CENTER = [0, 0.75, 0] as const;
 export const SAMPLE_CUBE_SCALE = 1.5;
@@ -276,7 +703,10 @@ export function buildSampleGlb(): ArrayBuffer {
   const planePos = [
     -0.5, 0, 0.5, 0.5, 0, 0.5, 0.5, 0, -0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, -0.5, 0, -0.5,
   ];
-  const planePrim = { attributes: { POSITION: w.floats(planePos, 'VEC3', false) }, material: 1 };
+  const planePrim = {
+    attributes: { POSITION: w.floats(planePos, 'VEC3', false) },
+    material: 1,
+  };
   const s = SAMPLE_CUBE_SCALE;
   const [cx, cy, cz] = SAMPLE_CUBE_CENTER;
   Object.assign(w.json, {
@@ -294,15 +724,29 @@ export function buildSampleGlb(): ArrayBuffer {
     samplers: [{ magFilter: 9728, minFilter: 9728, wrapS: 10497, wrapT: 10497 }],
     textures: [{ source: 0, sampler: 0 }],
     materials: [
-      { name: 'checkered', pbrMetallicRoughness: { baseColorTexture: { index: 0 } } },
+      {
+        name: 'checkered',
+        pbrMetallicRoughness: {
+          baseColorTexture: { index: 0 },
+          metallicFactor: 0,
+          roughnessFactor: 0.8,
+        },
+      },
       {
         name: 'moss',
-        pbrMetallicRoughness: { baseColorFactor: [0.2, 0.6, 0.3, 1] },
+        pbrMetallicRoughness: {
+          baseColorFactor: [0.2, 0.6, 0.3, 1],
+          metallicFactor: 0,
+        },
         doubleSided: true,
       },
     ],
     nodes: [
-      { name: 'cube', mesh: 0, matrix: [s, 0, 0, 0, 0, s, 0, 0, 0, 0, s, 0, cx, cy, cz, 1] },
+      {
+        name: 'cube',
+        mesh: 0,
+        matrix: [s, 0, 0, 0, 0, s, 0, 0, 0, 0, s, 0, cx, cy, cz, 1],
+      },
       {
         name: 'plane',
         mesh: 1,
