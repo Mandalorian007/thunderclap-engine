@@ -10,6 +10,7 @@ export {
   type DragGesture,
   type GestureAttachOptions,
   type GestureDevice,
+  type GestureListener,
   type GestureOptions,
   type GesturePhase,
   type GesturePoint,

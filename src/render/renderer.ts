@@ -6,10 +6,14 @@ import {
   type DrawParams,
   Frame,
   type FrameSink,
+  INSTANCE_PARAM_FLOATS,
+  type InstanceBatch,
   type InstanceParams,
+  writeInstanceParams,
 } from './frame';
 import { FullscreenPass, type FullscreenPassDesc } from './fullscreen';
 import { type GpuPassTimes, GpuTimer, supportsTimestamps } from './gpu-timer';
+import { InstanceList } from './instance-list';
 import { LIGHTS_BLOCK_FLOATS, packInstanceFlags, type ShadowUniforms } from './lights';
 import {
   DEPTH_FORMAT,
@@ -39,13 +43,31 @@ import {
   type TextureLike,
   type TextureSource,
 } from './texture';
-import { type Transform, writeMatrix2d } from './transform';
+import { MATRIX3X4_FLOATS, type Transform, writeMatrix2d } from './transform';
+
+/** `InstanceParams` of a batch without `params`: the defaults. */
+const NO_PARAMS: InstanceParams = Object.freeze({});
 
 export interface PostInputs {
   color: TextureLike;
   emissive: TextureLike;
   time: number;
   dt: number;
+  /**
+   * The target's depth buffer when a depth camera rendered into it this frame (ws/post-depth),
+   * else `null` (the 2D path). Same size as `color`; `depth24plus`, bind it as `texture_depth_2d`.
+   */
+  depth: TextureLike | null;
+  /** The last depth camera's projection, with `depth`; `null` without it. */
+  projection: PostProjection | null;
+}
+
+/** A frame's projection for depth-reading post passes: clip planes and the column-major matrix. */
+export interface PostProjection {
+  near: number;
+  /** `Infinity` for an infinite far plane. */
+  far: number;
+  proj: Float32Array;
 }
 
 /**
@@ -79,8 +101,11 @@ export interface RendererGpu {
 
 export interface RenderStats {
   drawCalls: number;
+  /** Instances the scene passes drew (`frame.mesh` / `sprite` draws and batch instances), summed over views. */
   instances: number;
   drawables: number;
+  /** Batches (`frame.meshes`) and lists (`frame.list`) the scene passes drew, summed over views. */
+  batches: number;
   /** Mesh draws skipped by frustum culling (`camera.cull`), summed over the frame's views. */
   culled: number;
   /**
@@ -169,6 +194,8 @@ interface DrawCmd {
   offset: number;
   /** The instances cast the sun's shadow (see `DrawParams.castShadow`). */
   castShadow: boolean;
+  /** Instance buffer of a retained list (`frame.list`); null: the shared buffer at this view's base. */
+  buffer: GPUBuffer | null;
 }
 
 /** What `resolve`'s built-in present clears to when it covers the whole output. */
@@ -213,6 +240,12 @@ interface DrawRec {
   /** Shadow sort keys (`Renderer.keyOf` of the mesh and the material), set by `buildShadowDraws`. */
   mk: number;
   tk: number;
+  /** A `frame.meshes` batch or `frame.list` list; null for single instances and drawables. */
+  batch: InstanceBatch | null;
+  /** The list, when `batch` is one (drawn from its own buffer). */
+  list: InstanceList | null;
+  /** Mesh-space sphere a batch without `bounds` is culled by per instance; null: never. */
+  mb: MeshBounds | null;
 }
 
 /**
@@ -263,6 +296,7 @@ export class Renderer implements FrameSink {
     drawCalls: 0,
     instances: 0,
     drawables: 0,
+    batches: 0,
     culled: 0,
     shadowDraws: 0,
   };
@@ -309,6 +343,9 @@ export class Renderer implements FrameSink {
   /** Targets rendered into so far this frame, and whether their depth was cleared. */
   private readonly usedTargets: SceneTarget[] = [];
   private readonly usedDepth: boolean[] = [];
+  /** The last depth camera into each used target (ws/post-depth: `PostInputs.projection`). */
+  private readonly usedCamera: Camera[] = [];
+  private readonly postProjection: PostProjection = { near: 0, far: 0, proj: new Float32Array(16) };
   private usedCount = 0;
   private instanceData: Float32Array;
   private instanceBuffer: GPUBuffer;
@@ -317,6 +354,15 @@ export class Renderer implements FrameSink {
   /** Instance buffers outgrown this frame, destroyed after submit (passes still reference them). */
   private readonly retired: GPUBuffer[] = [];
   private instanceCount = 0;
+  /** Instances in this frame's batches (`pushBatch`), excluding lists; they take the sort path. */
+  private batchInstances = 0;
+  /** Batch records this frame (lists included). */
+  private batchRecs = 0;
+  /** Batch or list draws of the current view's scene pass, and instances `copyBatch` dropped. */
+  private sceneBatches = 0;
+  private batchCulled = 0;
+  /** Instances of the lists the current view's scene pass draws (not in the upload). */
+  private sceneListInstances = 0;
   /** This view's scene commands (`buildDraws`). */
   private readonly scene: CmdList = { cmds: [], count: 0 };
   /** This view's shadow-pass commands (`buildShadowDraws`): opaque casters inside the sun box. */
@@ -474,6 +520,8 @@ export class Renderer implements FrameSink {
       emissive: this.target.emissive,
       time: 0,
       dt: 0,
+      depth: null,
+      projection: null,
     };
     this.resolveInputs = { ...this.postInputs };
     this.resize(1, 1);
@@ -746,6 +794,8 @@ export class Renderer implements FrameSink {
     this.inFrame = true;
     if (this.timingEvery > 0) this.frameStart = performance.now();
     this.instanceCount = 0;
+    this.batchInstances = 0;
+    this.batchRecs = 0;
     this.scene.count = 0;
     this.shadowCmds.count = 0;
     this.recCount = 0;
@@ -758,6 +808,7 @@ export class Renderer implements FrameSink {
     this.stats.drawCalls = 0;
     this.stats.instances = 0;
     this.stats.drawables = 0;
+    this.stats.batches = 0;
     this.stats.culled = 0;
     this.stats.shadowDraws = 0;
     const f = this.frame;
@@ -876,6 +927,7 @@ export class Renderer implements FrameSink {
       const att = target.depthAttachment();
       att.depthLoadOp = this.usedDepth[used] ? 'load' : 'clear';
       this.usedDepth[used] = true;
+      this.usedCamera[used] = camera;
       desc.depthStencilAttachment = att;
     } else {
       desc.depthStencilAttachment = undefined;
@@ -896,6 +948,7 @@ export class Renderer implements FrameSink {
     let curMaterial: Material | null = null;
     let curOffset = -1;
     let curMesh: Mesh | null = null;
+    let curBuffer: GPUBuffer | null = null;
     let drawCalls = 0;
     let drawables = 0;
     for (let i = 0; i < scene.count; i++) {
@@ -907,6 +960,7 @@ export class Renderer implements FrameSink {
         curMaterial = null;
         curOffset = -1;
         curMesh = null;
+        curBuffer = null;
         pass.setBindGroup(0, slot.group);
         continue;
       }
@@ -926,11 +980,13 @@ export class Renderer implements FrameSink {
         curMaterial = m;
         curOffset = c.offset;
       }
-      if (mesh !== curMesh) {
+      if (mesh !== curMesh || c.buffer !== curBuffer) {
         pass.setVertexBuffer(0, mesh.vertexBuffer);
-        pass.setVertexBuffer(1, this.instanceBuffer, base);
+        if (c.buffer) pass.setVertexBuffer(1, c.buffer, 0);
+        else pass.setVertexBuffer(1, this.instanceBuffer, base);
         if (mesh.indexBuffer) pass.setIndexBuffer(mesh.indexBuffer, mesh.indexFormat);
         curMesh = mesh;
+        curBuffer = c.buffer;
       }
       if (mesh.indexBuffer) {
         // An indexed mesh with no indices (e.g. a streamed chunk that is empty) draws nothing.
@@ -943,8 +999,9 @@ export class Renderer implements FrameSink {
     }
     pass.end();
     this.stats.drawCalls += drawCalls;
-    this.stats.instances += this.sceneCount;
+    this.stats.instances += this.sceneCount + this.sceneListInstances;
     this.stats.drawables += drawables;
+    this.stats.batches += this.sceneBatches;
   }
 
   /**
@@ -966,6 +1023,7 @@ export class Renderer implements FrameSink {
       inputs.emissive = target.emissive;
       inputs.time = this.frame.time;
       inputs.dt = this.frame.dt;
+      this.fillDepthInputs(inputs, target);
       this.post.encode(enc, inputs, out, viewport);
     } else {
       if (
@@ -989,8 +1047,39 @@ export class Renderer implements FrameSink {
         const last = --this.usedCount;
         this.usedTargets[i] = this.usedTargets[last]!;
         this.usedDepth[i] = this.usedDepth[last]!;
+        this.usedCamera[i] = this.usedCamera[last]!;
         break;
       }
+    }
+  }
+
+  /**
+   * `PostInputs.depth` / `projection` (ws/post-depth): the target's depth and the last depth
+   * camera's projection when one rendered into it this frame, else `null`. No allocation.
+   */
+  private fillDepthInputs(inputs: PostInputs, target: SceneTarget): void {
+    inputs.depth = null;
+    inputs.projection = null;
+    for (let i = 0; i < this.usedCount; i++) {
+      if (this.usedTargets[i] !== target || !this.usedDepth[i]) continue;
+      const depth = target.depth;
+      if (!depth) return;
+      const p = this.postProjection;
+      p.proj.set(this.usedCamera[i]!.projection);
+      // near = p14 / p10 for both kinds; far = p14 / (p10 + 1) for perspective (∞ when
+      // p10 = -1), (p14 - 1) / p10 for an orthographic matrix (p11 = 0).
+      const p10 = p.proj[10]!;
+      const p14 = p.proj[14]!;
+      p.near = p14 / p10;
+      if (p.proj[11] === 0) {
+        p.far = (p14 - 1) / p10;
+      } else {
+        const k = p10 + 1;
+        p.far = Math.abs(k) < 1e-7 ? Number.POSITIVE_INFINITY : p14 / k;
+      }
+      inputs.depth = depth;
+      inputs.projection = p;
+      return;
     }
   }
 
@@ -1020,6 +1109,7 @@ export class Renderer implements FrameSink {
         const inputs = this.postInputs;
         inputs.time = this.frame.time;
         inputs.dt = this.frame.dt;
+        this.fillDepthInputs(inputs, this.target);
         this.post.encode(enc, inputs, out);
       } else {
         this.present.encode(enc, out, {
@@ -1167,6 +1257,52 @@ export class Renderer implements FrameSink {
     r.castShadow = p.castShadow ?? mesh.layout !== VERTEX_LAYOUT_2D;
   }
 
+  pushBatch(
+    material: Material,
+    mesh: Mesh,
+    batch: InstanceBatch,
+    bounds: MeshBounds | null,
+    list: InstanceList | null,
+  ): void {
+    if (material.bindings?.perDraw) {
+      throw new Error(`material ${material.label}: a batch cannot use perDrawUniforms`);
+    }
+    if (list) list.flush(this.device.queue);
+    else this.batchInstances += batch.count;
+    this.batchRecs++;
+    const r = this.nextRec(batch.order ?? 0, batch.layerBits ?? 1);
+    r.material = material;
+    r.mesh = mesh;
+    r.drawable = null;
+    r.offset = -1;
+    r.inst = -1;
+    r.batch = batch;
+    r.list = list;
+    const bb = batch.bounds;
+    if (bb) {
+      r.bx = bb.center[0];
+      r.by = bb.center[1];
+      r.bz = bb.center[2];
+      r.br = bb.radius;
+      r.mb = null;
+    } else {
+      r.br = -1;
+      r.mb = bounds && bounds.radius !== Number.POSITIVE_INFINITY ? bounds : null;
+    }
+    r.castShadow = batch.castShadow ?? mesh.layout !== VERTEX_LAYOUT_2D;
+  }
+
+  /**
+   * A retained `InstanceList` of up to `capacity` instances of `mesh` with `material`, drawn
+   * with `frame.list(list)`. Owns a GPU buffer; `list.destroy()` releases it.
+   */
+  createInstanceList(mesh: Mesh, material: Material, capacity: number): InstanceList {
+    if (material.bindings?.perDraw) {
+      throw new Error(`material ${material.label}: an InstanceList cannot use perDrawUniforms`);
+    }
+    return new InstanceList(this.device, mesh, material, capacity);
+  }
+
   pushDrawable(d: Drawable, order: number, layers: number): void {
     const r = this.nextRec(order, layers);
     r.material = null;
@@ -1205,9 +1341,15 @@ export class Renderer implements FrameSink {
         castShadow: false,
         mk: 0,
         tk: 0,
+        batch: null,
+        list: null,
+        mb: null,
       });
     }
     const r = this.recs[this.recCount++]!;
+    r.batch = null;
+    r.list = null;
+    r.mb = null;
     r.order = order;
     r.layers = layers;
     return r;
@@ -1242,7 +1384,9 @@ export class Renderer implements FrameSink {
       visible = 0;
       for (let i = 0; i < n; i++) if ((recs[i]!.layers & camLayers) !== 0) visible++;
     }
-    if (!depth && !cull && this.ordered && visible === n && !shadowCfg) {
+    this.sceneBatches = 0;
+    this.sceneListInstances = 0;
+    if (!depth && !cull && this.ordered && visible === n && !shadowCfg && this.batchRecs === 0) {
       for (let i = 0; i < n; i++) {
         const r = recs[i]!;
         this.batch(this.scene, r, r.drawable ? null : this.scenePipeline(r, 0), r.inst);
@@ -1269,7 +1413,8 @@ export class Renderer implements FrameSink {
       const r = recs[i]!;
       if ((r.layers & camLayers) === 0) continue;
       if (planes && r.br >= 0 && outside(planes, r.bx, r.by, r.bz, r.br)) {
-        culled++;
+        // A batch with bounds is culled as one: all its instances count.
+        culled += r.batch ? r.batch.count : 1;
         continue;
       }
       idx[k++] = i;
@@ -1281,10 +1426,27 @@ export class Renderer implements FrameSink {
         continue;
       }
       r.group = r.material!.blend === 'opaque' ? 0 : 1;
-      const o = r.inst * INSTANCE_FLOATS;
-      const x = src[o + 3]!;
-      const y = src[o + 7]!;
-      const z = src[o + 11]!;
+      let x: number;
+      let y: number;
+      let z: number;
+      if (r.batch) {
+        // A batch sorts by its sphere's centre, or its first instance's origin.
+        if (r.br >= 0) {
+          x = r.bx;
+          y = r.by;
+          z = r.bz;
+        } else {
+          const m = r.batch.matrices;
+          x = m[3]!;
+          y = m[7]!;
+          z = m[11]!;
+        }
+      } else {
+        const o = r.inst * INSTANCE_FLOATS;
+        x = src[o + 3]!;
+        y = src[o + 7]!;
+        z = src[o + 11]!;
+      }
       r.dist = v![2]! * x + v![6]! * y + v![10]! * z + v![14]!;
     }
     this.culledCount = culled;
@@ -1293,27 +1455,107 @@ export class Renderer implements FrameSink {
     if (depth || !this.ordered) this.sortDraws(this.sortIdx, this.sortTmp, k);
 
     // The shadow list's instances follow the scene's in the same upload: room for both.
-    const need = shadowCfg ? src.length * 2 : src.length;
-    if (this.sortedData.length < need) this.sortedData = new Float32Array(need);
+    const total = (this.instanceCount + this.batchInstances) * INSTANCE_FLOATS;
+    const need = shadowCfg ? total * 2 : total;
+    if (this.sortedData.length < need) {
+      this.sortedData = new Float32Array(Math.max(need, this.sortedData.length * 2));
+    }
     const dst = this.sortedData;
     let inst = 0;
+    let batches = 0;
+    let listInst = 0;
     for (let j = 0; j < k; j++) {
       const r = recs[idx[j]!]!;
       if (r.drawable) {
         this.batch(this.scene, r, null, 0);
         continue;
       }
+      const mode: DepthMode = !depth ? 0 : r.group === 0 && depthWrite ? 2 : 1;
+      if (r.batch) {
+        const list = r.list;
+        if (list) {
+          batches++;
+          listInst += list.count;
+          this.batch(this.scene, r, this.scenePipeline(r, mode), 0, list.count, list.buffer);
+          continue;
+        }
+        const written = this.copyBatch(r, dst, inst, planes);
+        culled += this.batchCulled;
+        if (written === 0) continue;
+        batches++;
+        this.batch(this.scene, r, this.scenePipeline(r, mode), inst, written);
+        inst += written;
+        continue;
+      }
       const from = r.inst * INSTANCE_FLOATS;
       const to = inst * INSTANCE_FLOATS;
       for (let f = 0; f < INSTANCE_FLOATS; f++) dst[to + f] = src[from + f]!;
-      const mode: DepthMode = !depth ? 0 : r.group === 0 && depthWrite ? 2 : 1;
       this.batch(this.scene, r, this.scenePipeline(r, mode), inst);
       inst++;
     }
+    this.culledCount = culled;
+    this.sceneBatches = batches;
+    this.sceneListInstances = listInst;
     this.uploadData = dst;
     this.sceneCount = inst;
     this.uploadCount = shadowCfg ? this.buildShadowDraws(camLayers, dst, inst) : inst;
     return depth;
+  }
+
+  /**
+   * Copy the instances of batch record `r` into `dst` from instance `inst` on, in the instance
+   * format (matrices, then `params` or the defaults with the matrix columns' lengths as size).
+   * With `planes` and a batch without bounds (`r.mb` set), each instance is tested the way
+   * `pushInstance` places a mesh sphere and the ones outside are skipped, counted in
+   * `batchCulled`. Returns the instances written. No allocation.
+   */
+  private copyBatch(
+    r: DrawRec,
+    dst: Float32Array,
+    inst: number,
+    planes: Float32Array | null,
+  ): number {
+    const b = r.batch!;
+    const n = b.count;
+    const m = b.matrices;
+    const p = b.params ?? null;
+    const mb = planes ? r.mb : null;
+    const cx = mb ? mb.center[0] : 0;
+    const cy = mb ? mb.center[1] : 0;
+    const cz = mb ? mb.center[2] : 0;
+    const cr = mb ? mb.radius : 0;
+    let written = 0;
+    let culled = 0;
+    for (let i = 0; i < n; i++) {
+      const mo = i * MATRIX3X4_FLOATS;
+      if (mb) {
+        const x = m[mo]! * cx + m[mo + 1]! * cy + m[mo + 2]! * cz + m[mo + 3]!;
+        const y = m[mo + 4]! * cx + m[mo + 5]! * cy + m[mo + 6]! * cz + m[mo + 7]!;
+        const z = m[mo + 8]! * cx + m[mo + 9]! * cy + m[mo + 10]! * cz + m[mo + 11]!;
+        const s0 = m[mo]! * m[mo]! + m[mo + 4]! * m[mo + 4]! + m[mo + 8]! * m[mo + 8]!;
+        const s1 = m[mo + 1]! * m[mo + 1]! + m[mo + 5]! * m[mo + 5]! + m[mo + 9]! * m[mo + 9]!;
+        const s2 = m[mo + 2]! * m[mo + 2]! + m[mo + 6]! * m[mo + 6]! + m[mo + 10]! * m[mo + 10]!;
+        if (outside(planes!, x, y, z, cr * Math.sqrt(Math.max(s0, s1, s2)))) {
+          culled++;
+          continue;
+        }
+      }
+      const to = (inst + written) * INSTANCE_FLOATS;
+      for (let f = 0; f < MATRIX3X4_FLOATS; f++) dst[to + f] = m[mo + f]!;
+      if (p) {
+        const po = i * INSTANCE_PARAM_FLOATS;
+        for (let f = 0; f < INSTANCE_PARAM_FLOATS; f++) {
+          dst[to + MATRIX3X4_FLOATS + f] = p[po + f]!;
+        }
+      } else {
+        const sx = Math.hypot(m[mo]!, m[mo + 4]!, m[mo + 8]!);
+        const sy = Math.hypot(m[mo + 1]!, m[mo + 5]!, m[mo + 9]!);
+        writeInstanceParams(dst, to + MATRIX3X4_FLOATS, NO_PARAMS, sx, sy);
+      }
+      written++;
+    }
+    this.batchCulled = culled;
+    return written;
   }
 
   /**
@@ -1351,12 +1593,26 @@ export class Renderer implements FrameSink {
     const shadow = this.shadow;
     for (let j = 0; j < k; j++) {
       const r = recs[idx[j]!]!;
+      const layout = r.mesh!.layout;
+      const bindings = layout.skinned ? r.material!.bindings?.layout : undefined;
+      const pipeline = shadow.pipelineFor(layout, bindings);
+      if (r.batch) {
+        const list = r.list;
+        if (list) {
+          this.batch(this.shadowCmds, r, pipeline, 0, list.count, list.buffer);
+          continue;
+        }
+        // Per-instance casters are tested against the sun box, not the view.
+        const written = this.copyBatch(r, dst, inst, planes);
+        if (written === 0) continue;
+        this.batch(this.shadowCmds, r, pipeline, inst, written);
+        inst += written;
+        continue;
+      }
       const from = r.inst * INSTANCE_FLOATS;
       const to = inst * INSTANCE_FLOATS;
       for (let f = 0; f < INSTANCE_FLOATS; f++) dst[to + f] = src[from + f]!;
-      const layout = r.mesh!.layout;
-      const bindings = layout.skinned ? r.material!.bindings?.layout : undefined;
-      this.batch(this.shadowCmds, r, shadow.pipelineFor(layout, bindings), inst);
+      this.batch(this.shadowCmds, r, pipeline, inst);
       inst++;
     }
     return inst;
@@ -1387,6 +1643,8 @@ export class Renderer implements FrameSink {
     r: DrawRec,
     pipeline: GPURenderPipeline | null,
     first: number,
+    count = 1,
+    buffer: GPUBuffer | null = null,
   ): void {
     if (r.drawable) {
       const c = this.nextCmd(list);
@@ -1398,6 +1656,7 @@ export class Renderer implements FrameSink {
       c.count = 0;
       c.offset = -1;
       c.castShadow = false;
+      c.buffer = null;
       return;
     }
     const material = r.material!;
@@ -1411,9 +1670,11 @@ export class Renderer implements FrameSink {
       last.mesh === mesh &&
       last.offset === r.offset &&
       last.castShadow === r.castShadow &&
+      last.buffer === null &&
+      buffer === null &&
       last.first + last.count === first
     ) {
-      last.count++;
+      last.count += count;
       return;
     }
     const c = this.nextCmd(list);
@@ -1422,9 +1683,10 @@ export class Renderer implements FrameSink {
     c.drawable = null;
     c.pipeline = pipeline;
     c.first = first;
-    c.count = 1;
+    c.count = count;
     c.offset = r.offset;
     c.castShadow = r.castShadow;
+    c.buffer = buffer;
   }
 
   /**
@@ -1487,6 +1749,7 @@ export class Renderer implements FrameSink {
         count: 0,
         offset: -1,
         castShadow: false,
+        buffer: null,
       });
     }
     return list.cmds[list.count++]!;
@@ -1612,6 +1875,7 @@ export class Renderer implements FrameSink {
     pass.setBindGroup(0, slot.group);
     let curPipeline: GPURenderPipeline | null = null;
     let curMesh: Mesh | null = null;
+    let curBuffer: GPUBuffer | null = null;
     let curMaterial: Material | null = null;
     let curOffset = -1;
     let drawn = 0;
@@ -1635,11 +1899,13 @@ export class Renderer implements FrameSink {
         curMaterial = m;
         curOffset = c.offset;
       }
-      if (mesh !== curMesh) {
+      if (mesh !== curMesh || c.buffer !== curBuffer) {
         pass.setVertexBuffer(0, mesh.vertexBuffer);
-        pass.setVertexBuffer(1, this.instanceBuffer, base);
+        if (c.buffer) pass.setVertexBuffer(1, c.buffer, 0);
+        else pass.setVertexBuffer(1, this.instanceBuffer, base);
         if (mesh.indexBuffer) pass.setIndexBuffer(mesh.indexBuffer, mesh.indexFormat);
         curMesh = mesh;
+        curBuffer = c.buffer;
       }
       if (mesh.indexBuffer) {
         if (mesh.indexCount === 0) continue;
