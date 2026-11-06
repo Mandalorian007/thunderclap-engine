@@ -9,6 +9,8 @@ export type {
   AtlasTextureOptions,
 } from './atlas';
 export { createAtlasTexture, extrudePixels, packAtlas } from './atlas';
+export type { BakeKind, BakeManifest, BakeManifestEntry } from './baked';
+export { BAKE_MANIFEST_VERSION, readBakeManifest } from './baked';
 export type {
   AssetReader,
   AudioDecoder,
@@ -20,6 +22,9 @@ export type {
   ReadResult,
 } from './bundle';
 export { createBundle } from './bundle';
+export type { AssetCache, AssetCacheOptions, AssetCacheStats } from './cache';
+export { createAssetCache } from './cache';
+// ws/assets-3: glTF extensions, meshopt, KTX2, the asset cache.
 export type {
   GltfAccessorType,
   GltfAlphaMode,
@@ -27,20 +32,26 @@ export type {
   GltfAnimationChannel,
   GltfAnimationPath,
   GltfBounds,
+  GltfCamera,
+  GltfClearcoat,
   GltfComponentType,
   GltfDocument,
   GltfFilter,
   GltfImage,
   GltfInterpolation,
+  GltfIor,
   GltfJson,
   GltfJsonAccessor,
   GltfJsonAnimation,
   GltfJsonAnimationChannel,
   GltfJsonAnimationSampler,
   GltfJsonBufferView,
+  GltfJsonCamera,
   GltfJsonInterpolation,
+  GltfJsonLight,
   GltfJsonMaterial,
   GltfJsonMesh,
+  GltfJsonMeshoptView,
   GltfJsonNode,
   GltfJsonPrimitive,
   GltfJsonSkin,
@@ -48,15 +59,23 @@ export type {
   GltfJsonSparse,
   GltfJsonTextureInfo,
   GltfJsonTextureTransform,
+  GltfJsonVariantMapping,
+  GltfLight,
   GltfMaterial,
+  GltfMaterialExtensions,
   GltfMesh,
   GltfMorphTarget,
   GltfNode,
   GltfPrimitive,
   GltfSampler,
+  GltfSheen,
   GltfSkin,
+  GltfSpecular,
   GltfTexture,
   GltfTextureTransform,
+  GltfTransmission,
+  GltfVariantMapping,
+  GltfVolume,
   GltfWrap,
   TextureRef,
   Vec3,
@@ -67,10 +86,12 @@ export type {
   GltfImageSource,
   GltfLitMode,
   GltfMorph,
+  GltfSceneLights,
   GltfSceneNode,
   LoadGltfOptions,
 } from './gltf-load';
 export {
+  applyGltfCamera,
   GLTF_LIT_WGSL,
   GltfScene,
   gltfSamplerKind,
@@ -86,6 +107,13 @@ export {
   SKINNED_WEIGHTS_OFFSET,
   skeletonFromSkin,
 } from './gltf-skin';
+export type {
+  Ktx2DataFormat,
+  Ktx2Level,
+  Ktx2Supercompression,
+  Ktx2Texture,
+} from './ktx2';
+export { isKtx2, Ktx2Error, ktx2ToWebGpuFormat, parseKtx2 } from './ktx2';
 export type {
   AssetKind,
   AssetOf,
@@ -103,3 +131,5 @@ export type {
   TextureEntry,
 } from './manifest';
 export { defineManifest } from './manifest';
+export type { MeshoptFilter, MeshoptMode } from './meshopt';
+export { decodeMeshopt, MeshoptError } from './meshopt';

@@ -7,6 +7,8 @@
  * Pure arithmetic: no GPU, no DOM; `render/` supplies only the layouts and their types.
  */
 
+// ws/geom-3: clone, simplification and LODs, hulls and collision proxies, split and slice, the
+// 2D tile slide, and the positions-only collider source.
 export type {
   Aabb,
   Box2,
@@ -16,10 +18,12 @@ export type {
   ColliderSource,
   ColliderTransform,
   Contact,
+  GeometryMeshSource,
   GeometrySource,
   GridSource,
   HeightfieldSource,
   Hit,
+  PositionsSource,
   Shape,
   Shape2,
   SlideOptions,
@@ -29,7 +33,13 @@ export type {
   Sphere,
   StaticColliderOptions,
   SweepHit,
+  TileBox,
   TileGridSource,
+  TileKind,
+  TileMover,
+  TileQuery,
+  TileSlideOptions,
+  TileSlideResult,
   Vec3Out,
   WireframeMode,
 } from './collide';
@@ -39,6 +49,7 @@ export {
   aabbTriangle,
   applyTransform,
   capsuleTriangle,
+  carryBy,
   closestPointTriangle,
   closestSegmentSegment,
   closestSegmentTriangle,
@@ -50,6 +61,7 @@ export {
   createSlideResult,
   createStaticCollider,
   createSweepHit,
+  createTileSlideResult,
   exportCollider,
   gridSolid,
   gridTriangles,
@@ -61,6 +73,7 @@ export {
   overlap2,
   raycast,
   raycast2,
+  raycastReg,
   SOURCE_GEOMETRY,
   SOURCE_GRID,
   SOURCE_HEIGHTFIELD,
@@ -69,13 +82,18 @@ export {
   shapeTriangle,
   slide,
   slide2,
+  slideTiles,
   sphereTriangle,
   sweep as sweepShape,
   sweep2,
+  TILE_EMPTY,
+  TILE_ONE_WAY,
+  TILE_SOLID,
   triangleNormal,
 } from './collide';
 export type { Geometry, GeometryOptions, Rgba } from './geometry';
 export {
+  cloneGeometry,
   computeBounds,
   createIndices,
   GEOMETRY_FLOATS,
@@ -99,8 +117,12 @@ export {
   raycastHeightfield,
   rayHeightfield,
 } from './heightfield';
+export type { CollisionProxyOptions } from './hull';
+export { collisionProxy, convexHull } from './hull';
 export type { Iso, IsoHeightAt, IsoOptions, IsoPoint } from './iso';
 export { createIso, ISO_ELEV_DEPTH, isoHiddenBy, isoInverseProbe } from './iso';
+export type { LodChain } from './lod';
+export { projectedSizePx, selectLod } from './lod';
 export type { ProjectUvOptions, UvProjection } from './ops';
 export { fitBounds, flatShade, flipWinding, projectUv, recenter, weld } from './ops';
 export type {
@@ -115,6 +137,10 @@ export type {
 export { box, capsule, cylinder, icosphere, plane, sphere, torus } from './primitives';
 export type { ArchOptions, StairsOptions } from './shapes';
 export { arch, stairs } from './shapes';
+export type { SimplifyOptions, SimplifyResult } from './simplify';
+export { createLodChain, simplifyGeometry } from './simplify';
+export type { SliceOptions, SlicePlane, SliceResult } from './split';
+export { sliceGeometry, splitGeometry } from './split';
 export type {
   ExtrudeOptions,
   LatheOptions,

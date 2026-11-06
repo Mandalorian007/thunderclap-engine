@@ -1,16 +1,22 @@
 /**
  * Navmesh bytes: bake at build time, ship the buffer, `importNavMesh` at load. Little-endian,
- * self-describing header; off-mesh links travel with the mesh (their `userData` does not).
+ * self-describing header; areas and off-mesh links travel with the mesh (their `userData` does
+ * not). Format 2 (ws/nav-4) adds the area bytes; format 1 buffers load with every area 0.
  */
 import { addOffMeshLink } from './links';
 import { NavMesh } from './navmesh';
 
 const MAGIC = 0x4e41564d; // 'NAVM'
-const FORMAT = 1;
+/** Format 2 appends the area byte per polygon (padded to 4 bytes); format 1 bytes still load with every area 0. */
+const FORMAT = 2;
 const HEADER_U32 = 7;
 const LINK_F32 = 10;
 
-/** Serialises the mesh (polygons, adjacency, links) into a fresh buffer. */
+function areaBytes(polyCount: number): number {
+  return (polyCount + 3) & ~3;
+}
+
+/** Serialises the mesh (polygons, adjacency, areas, links) into a fresh buffer. */
 export function exportNavMesh(mesh: NavMesh): ArrayBuffer {
   const nvp = mesh.maxVertsPerPoly;
   const links = mesh.links.filter((l) => l !== null);
@@ -20,6 +26,7 @@ export function exportNavMesh(mesh: NavMesh): ArrayBuffer {
     6 * 4 +
     mesh.vertCount * 3 * 4 +
     mesh.polyCount * nvp * 4 * 2 +
+    areaBytes(mesh.polyCount) +
     links.length * LINK_F32 * 4;
   const buffer = new ArrayBuffer(bytes);
   const view = new DataView(buffer);
@@ -54,6 +61,8 @@ export function exportNavMesh(mesh: NavMesh): ArrayBuffer {
   for (let i = 0; i < mesh.vertCount * 3; i++) f32(mesh.verts[i]!);
   for (let i = 0; i < mesh.polyCount * nvp; i++) i32(mesh.polys[i]!);
   for (let i = 0; i < mesh.polyCount * nvp; i++) i32(mesh.adjacency[i]!);
+  new Uint8Array(buffer, o, mesh.polyCount).set(mesh.area.subarray(0, mesh.polyCount));
+  o += areaBytes(mesh.polyCount);
   for (const l of links) {
     f32(l.from.x);
     f32(l.from.y);
@@ -89,7 +98,8 @@ export function importNavMesh(buffer: ArrayBuffer | ArrayBufferView): NavMesh {
   if (view.byteLength < HEADER_U32 * 4 || u32() !== MAGIC)
     throw new Error('importNavMesh: not a navmesh buffer');
   const format = u32();
-  if (format !== FORMAT) throw new Error(`importNavMesh: unsupported format ${format}`);
+  if (format !== 1 && format !== FORMAT)
+    throw new Error(`importNavMesh: unsupported format ${format}`);
   const nvp = u32();
   const vertCount = u32();
   const polyCount = u32();
@@ -110,7 +120,12 @@ export function importNavMesh(buffer: ArrayBuffer | ArrayBufferView): NavMesh {
     adjacency[i] = view.getInt32(o, true);
     o += 4;
   }
-  const mesh = new NavMesh(verts, vertCount, polys, polyCount, nvp, cs, ch, adjacency);
+  const area = new Uint8Array(Math.max(1, polyCount));
+  if (format >= 2) {
+    area.set(new Uint8Array(view.buffer, view.byteOffset + o, polyCount));
+    o += areaBytes(polyCount);
+  }
+  const mesh = new NavMesh(verts, vertCount, polys, polyCount, nvp, cs, ch, adjacency, area);
   for (let i = 0; i < linkCount; i++) {
     const from = { x: f32(), y: f32(), z: f32() };
     const to = { x: f32(), y: f32(), z: f32() };

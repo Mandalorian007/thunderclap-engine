@@ -280,7 +280,7 @@ export interface EngineCtx<
   /** Drives modal panels from the pad (d-pad moves focus, A activates, B closes). */
   readonly padNav: PadNav;
   readonly audio: AudioEngine;
-  /** The DOM overlay, CSS px, with its layout (`ui.layout`). */
+  /** The DOM overlay, CSS px, with its layout (`ui.layout`); `ui.padOwner` says who has the pad. */
   readonly ui: Overlay;
   /** The page the game runs in: frames, links, copying, fullscreen and save storage. */
   readonly host: Host;
@@ -537,8 +537,10 @@ export async function createGame<
   // from its shell): background stops frames and flushes the save, active resumes. On the web
   // host the page events above have usually done both already (the loop is then stopped, so the
   // flush is not repeated); a shell's state change without a page event does them here. Audio
-  // follows the document's visibility in `audio.attach`, so it is not driven again.
+  // follows the document's visibility in `audio.attach`; a shell's background state also reaches
+  // it through `audio.background` (ws/audio-4), the same flag, so it is not suspended twice.
   host.lifecycle?.watch((state) => {
+    audio.background(state === 'background');
     if (state === 'background') {
       if (loop.isRunning) {
         loop.stop();

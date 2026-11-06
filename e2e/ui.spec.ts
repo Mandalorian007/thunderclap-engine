@@ -9,7 +9,10 @@
  * - the rotate card on upright phones;
  * - `menuNav` from a gamepad and the arrows;
  * - panel focus (trap, restore to the opener, home for `NO_RESTORE_FOCUS_ATTR`) and Escape as a
- *   button key from a focused button.
+ *   button key from a focused button;
+ * - (ws/ui-3, query modes) tooltips on hover, focus and a world point with an edge flip; the
+ *   world cursor by arrows and polled pad presses in grid and targets modes; the loading screen's
+ *   `done` and `aria-busy`; a notification's action by Enter.
  *
  * The itch-iframe row is skipped here: the wrapper embeds the WebGPU harness page, and the UI
  * layer does not depend on the frame.
@@ -153,12 +156,20 @@ test('rotate card: shown on an upright phone, gone when it turns back', async ({
 });
 
 async function padPress(page: Page, button: number): Promise<void> {
-  const before = (await read(page)).ticks;
-  await page.evaluate((b) => window.__harnessUi?.pad(b, true), button);
-  await expect.poll(async () => (await read(page)).ticks).toBeGreaterThan(before + 2);
-  const held = (await read(page)).ticks;
-  await page.evaluate((b) => window.__harnessUi?.pad(b, false), button);
-  await expect.poll(async () => (await read(page)).ticks).toBeGreaterThan(held + 2);
+  // Set the button and read the tick in one evaluate: read in a separate round trip, the ticks
+  // that pass between the two under load would count as held ticks the pad never saw.
+  const set = (pressed: boolean) =>
+    page.evaluate(
+      ([b, p]) => {
+        window.__harnessUi?.pad(b, p);
+        return window.__harnessUi?.state.ticks ?? 0;
+      },
+      [button, pressed] as [number, boolean],
+    );
+  const pressedAt = await set(true);
+  await expect.poll(async () => (await read(page)).ticks).toBeGreaterThan(pressedAt + 2);
+  const releasedAt = await set(false);
+  await expect.poll(async () => (await read(page)).ticks).toBeGreaterThan(releasedAt + 2);
 }
 
 test('menuNav: the d-pad walks the menu and A clicks; arrows move, Enter clicks once', async ({
@@ -217,4 +228,117 @@ test('Escape from a focused button still reaches the game as a button key', asyn
   await expect.poll(async () => (await read(page)).backs).toBe(1);
   expect(await focusedLabel(page)).toBe('open-panel');
   await expect(page.getByRole('dialog', { name: 'Panel' })).toHaveCount(0);
+});
+
+test('tooltip: hover shows it after the delay and leave hides it; focus shows it, flipped at the edge', async ({
+  page,
+}) => {
+  await page.goto(`${HARNESS_URL}ui.html?tooltip`);
+  await expect.poll(() => read(page).then((s) => s.ready && s.ticks > 2)).toBe(true);
+  const tip = page.locator('.tc-tooltip');
+  // The world point's tooltip is up from the start, to the right of its anchor.
+  await expect(tip).toBeVisible();
+  await expect(tip).toHaveText('A world point');
+  await expect.poll(async () => (await read(page)).tooltipPlacement).toBe('right');
+
+  if (!test.info().project.use.hasTouch) {
+    await page.locator('#tip-top').hover();
+    await expect(tip).toHaveText('Above the button');
+    await expect.poll(async () => (await read(page)).tooltipVisible).toBe(true);
+    await expect.poll(async () => (await read(page)).tooltipPlacement).toBe('top');
+    await expect(tip).toHaveAttribute('role', 'tooltip');
+    await expect(page.locator('#tip-top')).toHaveAttribute(
+      'aria-describedby',
+      (await tip.getAttribute('id')) ?? '',
+    );
+    await page.mouse.move(4, 4);
+    await expect(tip).toBeHidden();
+    await expect.poll(async () => (await read(page)).tooltipVisible).toBe(false);
+    await expect(page.locator('#tip-top')).not.toHaveAttribute('aria-describedby');
+  }
+
+  // Keyboard focus shows it at once on every row; the top-edge button flips below.
+  await page.locator('#tip-edge').focus();
+  await expect(tip).toBeVisible();
+  await expect(tip).toHaveText('Flipped below the edge');
+  await expect.poll(async () => (await read(page)).tooltipPlacement).toBe('bottom');
+  await page.locator('#tip-bottom').focus();
+  await expect(tip).toHaveText('Below the button');
+  await expect.poll(async () => (await read(page)).tooltipPlacement).toBe('bottom');
+  await page.keyboard.press('Escape');
+  await expect(tip).toBeHidden();
+});
+
+test('cursor: grid mode steps by arrows and by polled pad presses, one step per press', async ({
+  page,
+}) => {
+  await page.goto(`${HARNESS_URL}ui.html?cursor`);
+  await expect.poll(() => read(page).then((s) => s.ready && s.ticks > 2)).toBe(true);
+  await expect(page.locator('.tc-cursor')).toBeVisible();
+  await page.keyboard.press('ArrowRight');
+  await expect.poll(async () => (await read(page)).cursorCell).toEqual([1, 0]);
+  await page.keyboard.press('ArrowDown');
+  await expect.poll(async () => (await read(page)).cursorCell).toEqual([1, 1]);
+  // The pad is polled with the same latch as menuNav: held over several ticks, one step.
+  await padPress(page, 15);
+  await expect.poll(async () => (await read(page)).cursorCell).toEqual([2, 1]);
+  await padPress(page, 12);
+  await expect.poll(async () => (await read(page)).cursorCell).toEqual([2, 0]);
+  await padPress(page, 12);
+  await expect.poll(async () => (await read(page)).cursorCell).toEqual([2, 0]); // clamped by the game
+  await page.waitForTimeout(100);
+  expect((await read(page)).cursorCell).toEqual([2, 0]);
+});
+
+test('cursor: targets mode picks the neighbour in the pressed direction', async ({ page }) => {
+  await page.goto(`${HARNESS_URL}ui.html?cursor&mode=targets`);
+  await expect.poll(() => read(page).then((s) => s.ready && s.ticks > 2)).toBe(true);
+  await expect.poll(async () => (await read(page)).cursorTarget).toBe('0,0');
+  await page.keyboard.press('ArrowRight');
+  await expect.poll(async () => (await read(page)).cursorTarget).toBe('1,0');
+  await padPress(page, 13);
+  await expect.poll(async () => (await read(page)).cursorTarget).toBe('1,1');
+  await padPress(page, 14);
+  await expect.poll(async () => (await read(page)).cursorTarget).toBe('0,1');
+  await padPress(page, 14);
+  await expect.poll(async () => (await read(page)).cursorTarget).toBe('0,1'); // nothing further left
+});
+
+test('loading: the bar reports progress, done removes the panel and clears aria-busy', async ({
+  page,
+}) => {
+  await page.goto(`${HARNESS_URL}ui.html?loading&stall`);
+  await expect.poll(() => read(page).then((s) => s.ready && s.ticks > 2)).toBe(true);
+  const panel = page.locator('.tc-loading');
+  const root = page.locator('.tc-overlay');
+  await expect(panel).toBeVisible();
+  await expect(root).toHaveAttribute('aria-busy', 'true');
+  await expect.poll(async () => (await read(page)).loadingProgress).toBe(0.4);
+  await expect(panel.getByRole('progressbar')).toHaveAttribute('aria-valuetext', '40%');
+  await expect(panel.locator('.tc-loading-tip')).toHaveText(/Tip (one|two)/);
+  // Keys are swallowed while it shows: the menu behind it does not move.
+  await page.keyboard.press('ArrowDown');
+  await page.waitForTimeout(100);
+  expect((await read(page)).menu).toEqual([]);
+  await page.evaluate(() => window.__harnessUi?.finishLoading());
+  await expect.poll(async () => (await read(page)).loadingProgress).toBe(-1);
+  await expect(panel).toHaveCount(0);
+  await expect(root).not.toHaveAttribute('aria-busy');
+});
+
+test('notify: a notification stacks in a live region and its action fires by Enter', async ({
+  page,
+}) => {
+  await page.goto(`${HARNESS_URL}ui.html?notify`);
+  await expect.poll(() => read(page).then((s) => s.ready && s.ticks > 2)).toBe(true);
+  const card = page.locator('.tc-notification');
+  await expect(card).toBeVisible();
+  await expect(card).toContainText('A notification');
+  await expect(page.locator('.tc-notify')).toHaveAttribute('aria-live', 'polite');
+  await expect.poll(async () => (await read(page)).notifications).toBe(1);
+  await card.locator('.tc-notification-action').focus();
+  await page.keyboard.press('Enter');
+  await expect.poll(async () => (await read(page)).notifyActions).toEqual(['Act']);
+  await expect(card).toHaveCount(0);
+  await expect.poll(async () => (await read(page)).notifications).toBe(0);
 });

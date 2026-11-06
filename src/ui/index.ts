@@ -1,3 +1,5 @@
+// ws/ui-4: anchors frame, pad owner, float numbers, ring and compass, minimap.
+export type { AnchorFrame } from './anchor';
 export {
   type AnchorCamera,
   type AnchorHandle,
@@ -18,7 +20,28 @@ export {
   revealDelayMs,
   type SayOptions,
 } from './caption';
+export {
+  CURSOR_CSS,
+  type CursorHost,
+  type CursorOptions,
+  type CursorRepeat,
+  createCursor,
+  ensureCursorStyles,
+  pickTarget,
+  type WorldCursor,
+  type WorldTarget,
+} from './cursor';
 export { append, type Child, focusableWithin, h } from './dom';
+export {
+  createFloatNumbers,
+  ensureFloatStyles,
+  FLOAT_CSS,
+  type FloatKind,
+  type FloatNumbers,
+  type FloatNumbersHost,
+  type FloatNumbersOptions,
+  type FloatSpawnOptions,
+} from './float-numbers';
 export {
   createHeading,
   createMeter,
@@ -127,6 +150,14 @@ export {
   type ExternalLinkOptions,
   externalLink,
 } from './link';
+export {
+  createLoading,
+  ensureLoadingStyles,
+  LOADING_CSS,
+  type LoadingHost,
+  type LoadingOptions,
+  type LoadingScreen,
+} from './loading';
 export { Loupe, type LoupeOptions, type LoupeView, loupeLeader } from './loupe';
 export {
   type MenuNavActions,
@@ -134,8 +165,37 @@ export {
   type MenuNavResult,
   menuNav,
 } from './menu-nav';
+export {
+  createMinimap,
+  ensureMinimapStyles,
+  MINIMAP_CSS,
+  type Minimap,
+  type MinimapHost,
+  type MinimapMarkerKind,
+  type MinimapMarkerOptions,
+  type MinimapMarkerPlace,
+  type MinimapOptions,
+} from './minimap';
+export {
+  createNotifier,
+  ensureNotifyStyles,
+  NOTIFY_CSS,
+  type Notification,
+  type Notifier,
+  type NotifyAction,
+  type NotifyOptions,
+  type NotifyTone,
+} from './notify';
 export { createOverlay, type Overlay, type OverlayOptions, type Rect } from './overlay';
-export { type PadLike, PadNav, type PadNavOptions } from './padnav';
+export {
+  defaultPads,
+  type PadControl,
+  type PadDir,
+  type PadLike,
+  PadNav,
+  type PadNavOptions,
+  readPad,
+} from './padnav';
 export {
   createPerfMonitor,
   createPerfOverlay,
@@ -155,7 +215,7 @@ export {
   type RotateCardColors,
   type RotateCardOptions,
 } from './rotate-card';
-export type { ArrowNav } from './stack';
+export type { ArrowNav, PadOwner } from './stack';
 export {
   type CloseReason,
   NO_RESTORE_FOCUS_ATTR,
@@ -189,6 +249,20 @@ export {
   tokenVar,
 } from './theme';
 export { Toaster, type ToastHandle, type ToastOptions, type ToastTone } from './toast';
+export {
+  createTooltips,
+  ensureTooltipStyles,
+  placeTooltip,
+  TOOLTIP_CSS,
+  type Tooltip,
+  type TooltipHost,
+  type TooltipOptions,
+  type TooltipPlace,
+  type TooltipPlacement,
+  type TooltipSide,
+  type Tooltips,
+  type TooltipTarget,
+} from './tooltip';
 export { type ButtonOptions, button, type SliderOptions, slider, toggle } from './widgets';
 export {
   type Bar,
@@ -215,6 +289,20 @@ export {
   type WidgetReticleOptions,
   type WidgetTone,
 } from './widgets-2';
+export {
+  bearingOffset,
+  type Compass,
+  type CompassMarker,
+  type CompassOptions,
+  createCompass,
+  createRing,
+  ensureWidgets3Styles,
+  type Ring,
+  type RingOptions,
+  WIDGETS3_CSS,
+  type Widgets3Host,
+} from './widgets-3';
+export type { WorldPanelInput } from './world-panel';
 export {
   createWorldPanel,
   type FlowItem,

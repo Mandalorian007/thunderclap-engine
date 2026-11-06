@@ -4,5 +4,13 @@ export type { FixedStepperOptions, GameLoopOptions, LoopCallbacks, Time } from '
 export { FixedStepper, GameLoop } from './loop';
 export type { Mat4 } from './math';
 export { mat4 } from './math';
-export type { Scene } from './scene';
+export type { FbmOptions, Noise, NoiseFn } from './noise';
+export { createNoise } from './noise';
+export type { Pool, PoolOptions } from './pool';
+export { createPool } from './pool';
+export type { NumberSink, Random, Seed } from './random';
+export { createRandom } from './random';
+export type { Scene, TransitionListener, TransitionPhase } from './scene';
 export { SceneStack } from './scene';
+export type { Cooldown, EveryOptions, Scheduler, TimerHandle } from './timer';
+export { createScheduler } from './timer';

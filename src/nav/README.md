@@ -101,9 +101,12 @@ mode when a page toggles between them.
   `heuristicWeight` (default 1; above 1 trades optimality for fewer expansions, 0 is Dijkstra),
   and `cutCorners: false`, which is the only value: a diagonal step needs both orthogonal
   neighbours walkable.
-- `smoothPath(grid, path): NavPath` – string pulling in place: drops every waypoint the previous
-  kept one can see (`hasLineOfWalkable`), so a staircase becomes its two ends and a bend around a
-  wall stays.
+- `smoothPath(grid, path, opts?: LineOfWalkableOptions): NavPath` – string pulling in place:
+  drops every waypoint the previous kept one can see (`hasLineOfWalkable(grid, ax, az, bx, bz,
+  opts?)`), so a staircase becomes its two ends and a bend around a wall stays. Both honour the
+  grid's `edgeCost` hook per cell pair the line crosses (ws/nav-4): a pair the hook blocks breaks
+  the line, so a one-way ledge is never cut across; `LineOfWalkableOptions.edgeCost` swaps the
+  hook or, as `null`, opts out (walkability only).
 - `NavPath { points: Float32Array; length; cursor; version }` – `points` holds `x, z` pairs
   (`length` of them); `cursor` is the waypoint `followPath` heads for. `createNavPath(capacity?)`
   (default 64 points), `reservePath(path, count)` (grows 1.5×, keeps the data), `clearPath(path)`,
@@ -122,6 +125,10 @@ mode when a page toggles between them.
   goal or an unreachable cell). `direction(cx, cy, out)`, `directionAt(worldX, worldZ, out)` and
   `distance(cx, cy)` read it; `version` is the grid version it was built at (-1 before the first
   build). One build serves any number of agents.
+- `FlowField.stepCosts` (ws/nav-4) – per cell, what `findPath` charges for the step `directions`
+  points along (`(1 | √2) × cost(dest)` plus the edge cost; 0 at a goal, `Infinity` off the
+  field); summed along a walk it equals `distances`. `direction` and `directionAt` fill a
+  `FlowDirection` (`{ x, z, cost }`) when given one, so an agent can budget its move.
 
 ## Incremental edits
 
@@ -271,17 +278,122 @@ is linear in the agent count. Nothing is allocated per `update` after the first.
   read `height` for its `y`. Agents converging on one point should slow as they near it
   (`steer.arrive`); agents pushing into a jam at full speed may touch.
 
+## Area types
+
+Every polygon carries one byte, `mesh.area` (0 by default), that a query multiplies its step
+cost by or filters on. Price mud, exclude water, keep a door open for one faction: the mesh is
+baked once and the costs live with the query.
+
+- `NavBakeAreaOptions { areas?: AreaStamp[] }` – `bakeNavMesh` takes stamps beside its
+  `NavBakeOptions`; `AreaStamp { shape: AreaShape; area }` with `AreaShape` an `AreaBox`
+  (`minX, minZ, maxX, maxZ`, an optional `minY`/`maxY` band) or an `AreaPolygon` (convex
+  `points` as `x, z` pairs, the same band). `areaShapeContains(shape, x, y, z)` is the test.
+- `markArea(mesh, shape, area): number` – stamps the polygons whose centre the shape holds at
+  edit time (allocation-free, through `polysInBox`), bumps `mesh.version` when any changed and
+  returns the count. The stamp is per polygon, so its edge is the polygon's edge: bake with the
+  stamps for a sharp boundary, or mark a mesh baked with that boundary in mind.
+- `AreaQueryOptions { areaCost?: Float32Array; areaMask?: Uint8Array }` – on `findMeshPath`
+  (`FindMeshPathOptions` extends it), `createFlowField3` and a queued request. `areaCost` is 256
+  multipliers (`createAreaCosts(fill = 1)`); a leg is priced by the area of the polygon it
+  crosses (the current one, Recast's convention). `areaMask` is 256 bytes
+  (`createAreaMask(allow = 1)`); 0 excludes an area, as does an `Infinity` cost.
+  `areaAllowed(area, cost?, mask?)` is the rule, and `OBSTACLE_AREA` (255) is never allowed:
+  a goal in it fails, a start in it is walked out of.
+- `MeshSearch` – the resumable A* behind `findMeshPath` (`begin(from, to, opts?)`,
+  `step(maxPops)`, `finish(out)`; `state: MeshSearchState` of `'idle' | 'running' | 'found' |
+  'failed'`, `startPoly`, `endPoly`, `version`), one per mesh for the synchronous call and one
+  per `PathQueue`. `NavPath3.polys` / `polyCount` (ws/nav-4) hold the polygon corridor a search
+  crossed (`reservePolys3(path, count)` grows it); `pullString(mesh, polys, offset, count, from,
+  to, out)` funnels any polygon list.
+
+## Dynamic obstacles
+
+`createObstacleSet(target: NavMesh | NavGrid, opts: ObstacleSetOptions): ObstacleSet` keeps
+discs and boxes that move at runtime and stamps them onto the mesh or the grid in one `apply()`.
+
+- `ObstacleSetOptions { maxObstacles, layer? }` – fixed capacity. `add(shape: ObstacleShape)`
+  returns an id (or -1 when full), `move(id, x, z, yaw?)`, `remove(id)`, `get(id)` (an
+  `Obstacle` with `active`, `kind`, `x`, `z`, `radius`, `w`, `d`, `yaw`); `ObstacleDisc { x, z,
+  radius }`, `ObstacleBox { x, z, w, d, yaw }`. `obstacles`, `count`, `version`.
+- `apply(): number` – stamps only what moved since the last apply and returns the polygons or
+  cells it flipped. On a mesh every polygon the footprint overlaps (`polysInBox`, then a disc or
+  SAT test) becomes `OBSTACLE_AREA`; a polygon under two obstacles stays blocked until both
+  leave; the area it had is restored. The footprint is per polygon, so a small obstacle on a
+  large polygon blocks the whole polygon; bake with a tile or a stamp where that matters.
+  `mesh.version` moves only when a polygon changed. On a grid the set writes a cost `layer`
+  (`grid.size` floats, `Infinity` under an obstacle) and calls `grid.touch()`; give the grid an
+  `edgeCost` hook that reads `layer[to]`, or pass your own `layer`.
+- Every corridor over a polygon the set stamps becomes invalid and replans
+  (*Corridors and crowd on the mesh*); a `FlowField3` turns `stale`.
+
+## Path queue
+
+`createPathQueue(target: NavMesh | NavGrid, opts: PathQueueOptions): PathQueue` spreads searches
+over frames: a request is a ticket, `update()` spends a fixed budget of A* pops and writes a
+path only when it is finished, so sixty agents asking at once cost the same per frame as one.
+
+- `PathQueueOptions { maxQueries, iterationsPerUpdate? (256) }` – fixed capacity, a fixed
+  budget. `request(from, to, out, opts?: PathRequestOptions)` (points on a mesh, cells on a
+  grid; `FindMeshPathOptions` and `FindPathOptions` apply, plus `smooth` for a grid) returns a
+  ticket, or -1 when the queue is full. `status(ticket): PathStatus` is `'pending'`, `'done'`,
+  `'failed'` or `'none'`; `cancel(ticket)` drops it and never writes `out`. `pending`,
+  `finished`, `onDone(ticket, ok, out)` fire as tickets complete.
+- `update(): number` – first in, first out with resumption: the search in flight continues, the
+  budget left over flows to the next ticket, and a ticket whose target changed version under it
+  (an obstacle applied, a cell toggled) restarts. Returns the pops spent. One search's scratch
+  is shared by every ticket; nothing is allocated after creation.
+
+## Corridors and crowd on the mesh
+
+- `createCorridor(mesh, maxWaypoints = 64): Corridor` – the polygon list a path crossed, kept
+  beside a moving agent. `set(path)` takes a `NavPath3` (its `polys` and last point as
+  `target`); `advance(x, z, out)` drops the polygons the agent has left (looking a few ahead)
+  and string-pulls the rest, writing the next corner to steer to: one funnel per frame, never a
+  new search. `current()`, `polys`, `offset`, `count`, `path` (the pulled string), `version`.
+  `valid(mesh)` is false once the mesh version moved or a remaining polygon after the agent's
+  own is an obstacle: time to replan.
+- `Crowd.attach(mesh, opts?: CrowdAttachOptions)` – every agent gets a corridor;
+  `setTarget(index, x, y, z)` plans (through `opts.queue` when given, so the agent waits for its
+  ticket, else synchronously), each `update` steers along the corridor (`steer.arrive` on the
+  last leg inside `slowRadius`, default 1) and clamps the agent onto the mesh, reading `y` and
+  `poly`. `arriveRadius` (default the agent's radius) sets `targetReached`; `maxWaypoints`
+  sizes the corridors. A corridor that becomes invalid replans from where the agent stands;
+  `replans` counts them. `obstacles(set)` adds the set's discs and boxes as static ORCA lines
+  so agents also skirt the obstacle itself, not only its polygons.
+
+## Mesh flow field
+
+`createFlowField3(mesh, goals: NavPoint3[], opts?: FlowField3Options): FlowField3` runs one
+Dijkstra from the goal polygons over the mesh (centre to portal midpoint to centre, priced by
+area through `AreaQueryOptions`; `snapRadius` bounds the goal snap) so any number of agents read
+a direction in O(1) with no search of their own.
+
+- `direction3(x, y, z, out): number` – the unit direction toward the exit portal of the polygon
+  under the point (toward the nearest goal inside a goal polygon; zero at a goal, off the mesh
+  or where no goal is reachable), returning the polygon or -1. A point on a portal answers for
+  the polygon downstream, so a walker standing on one is never sent back.
+  `distanceAt(x, y, z)` is the cost-weighted distance along the field; `distances`, `next` and
+  `portal` are the per-polygon tables, `reached` the polygons a goal reached.
+- `stale` is true once `mesh.version` moved; `update(force?)` rebuilds in place (allocation-free)
+  and returns whether it did. A walker's direction is a straight line inside a convex polygon,
+  so a field follower needs no corridor; it is the cheap choice for a horde.
+
 ## Serialisation
 
 Bake at build time, ship the bytes: a bake takes tens to hundreds of milliseconds and the result
-is a few kilobytes per hundred polygons.
+is a few kilobytes per hundred polygons. `pnpm bake <config>` (`scripts/bake.mjs`, see the root
+README's *Baking*) does it from the command line: a `bake.config.json` names the glTF or geometry
+JSON sources and the `NavBakeOptions` per entry, and the script writes `<name>.navm` next to a
+manifest that `--check` verifies in CI.
 
 - `exportNavMesh(mesh): ArrayBuffer` – a little-endian, self-describing buffer (magic `NAVM`,
-  format 1): the vertices, polygons, adjacency and every off-mesh link (`from`, `to`, `radius`,
-  `bidirectional`, `cost`, `id`; `userData` is not written).
+  format 2): the vertices, polygons, adjacency, the area byte per polygon (padded to four) and
+  every off-mesh link (`from`, `to`, `radius`, `bidirectional`, `cost`, `id`; `userData` is not
+  written).
 - `importNavMesh(buffer: ArrayBuffer | ArrayBufferView): NavMesh` – rebuilds the mesh and its
   links with their ids (`version` starts at 0); throws on a buffer that is not a navmesh or has
-  another format number. `exportNavMesh(importNavMesh(bytes))` is byte-equal to `bytes`.
+  another format number. Format 1 (before ws/nav-4, no areas) still imports with every area 0.
+  `exportNavMesh(importNavMesh(bytes))` is byte-equal to `bytes`.
 
 ## Harness and tests
 
@@ -313,3 +425,21 @@ never overlaps. Unit tests cover the hole a wall leaves, the slope filter, radiu
 funnel beating portal midpoints, a link taken when cheaper, the raycast stopping at an edge, two
 crowd agents passing head-on, a byte-equal round trip, 64 agents stepping without allocation and
 the 64×64 m bake under 500 ms.
+
+`harness/nav4.html` (ws/nav-4, no WebGPU) bakes a 20×20 floor with two pillars on the page and
+draws it top-down on a canvas. `?crowd` (the default): 48 agents attached to the mesh walk the
+floor on corridors; `&carve` drops a disc obstacle between the pillars at 2 s of sim time, which
+invalidates every corridor through the gap and replans it around a pillar (`state.onMesh`,
+`reached`, `replans`, `carved`, `meshVersion`). `?queue`: a 64×64 grid with scattered walls
+takes 200 requests a second through a `PathQueue` (`requested`, `dropped`, `pending`,
+`doneTotal`, `failedTotal`, `maxUpdateMs`). `?areas`: the floor between the pillars is baked as
+mud and the probe path priced at 3× detours around a pillar while the plain one runs straight
+(`lengthMud`, `lengthPlain`, `mudPolys`). `?flow3`: 48 walkers on a mesh flow field toward one
+goal (`arrived`, `fieldReached`). `?still` parks the loop; `window.__harnessNav4.advance(steps)`
+runs fixed 1/60 s steps, so `e2e/nav4.spec.ts` measures sim time and polls every moving value.
+Unit tests cover areas priced and excluded on a bake and a stamp, the format-2 round trip and a
+format-1 import, obstacles blocking and reopening a doorway (version only on change, footprints
+bounded, a grid layer), 200 queued requests matching `findPath`, budget, cancel and restart, a
+corridor advancing and invalidating, 48 corridor agents crossing a pillar floor, a queued
+replan after an obstacle, and a mesh field monotone to its goal, within 10 % of `findMeshPath`,
+walked by 48 starters through every portal, and rebuilt after an obstacle.

@@ -97,6 +97,8 @@ export class Transform {
   /** Bumps whenever `world` is recomputed; children compare it to their cached value. */
   private worldVersion = 0;
   private parentVersion = -1;
+  /** Setter calls on this transform (ws/audio-4); `changed` adds the ancestors'. */
+  private _changed = 0;
 
   constructor(opts?: {
     x?: number;
@@ -119,6 +121,14 @@ export class Transform {
   get position(): ReadonlyVec3 {
     return this._position;
   }
+  /**
+   * A monotonic counter bumped by every setter on this transform or an ancestor (ws/audio-4),
+   * so a reader can skip `world` when nothing moved (`Voice.follow` does). It does not say
+   * whether `world` is stale; the dirty flags still do that.
+   */
+  get changed(): number {
+    return this._changed + (this._parent ? this._parent.changed : 0);
+  }
   get quaternion(): ReadonlyQuat {
     return this._rotation;
   }
@@ -131,6 +141,7 @@ export class Transform {
     p.x = x;
     p.y = y;
     p.z = z;
+    this._changed++;
     this.localDirty = true;
     return this;
   }
@@ -140,6 +151,7 @@ export class Transform {
     s.x = x;
     s.y = y;
     s.z = z;
+    this._changed++;
     this.localDirty = true;
     return this;
   }
@@ -161,6 +173,7 @@ export class Transform {
     q.y = 0;
     q.z = Math.sin(radians / 2);
     q.w = Math.cos(radians / 2);
+    this._changed++;
     this.localDirty = true;
   }
 
@@ -173,6 +186,7 @@ export class Transform {
     q.z = z / len;
     q.w = w / len;
     this.angleZ = Number.NaN;
+    this._changed++;
     this.localDirty = true;
     return this;
   }
@@ -255,6 +269,7 @@ export class Transform {
       q.w = (r10 - r01) * k;
     }
     this.angleZ = Number.NaN;
+    this._changed++;
     this.localDirty = false;
     this.worldDirty = true;
     return this;
@@ -269,6 +284,7 @@ export class Transform {
     }
     this._parent = p;
     this.parentVersion = -1;
+    this._changed++;
     this.worldDirty = true;
   }
 

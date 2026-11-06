@@ -1,14 +1,15 @@
 /**
- * The voxel world of the voxel demo: constants, block ids, the noise, the generator, the grid
- * helpers and the DDA ray. Shared by the page (`main.ts`), the mesher Worker
- * (`mesher.worker.ts`) and the spec (`e2e/demos/voxel.spec.ts`). Nothing here is engine code:
- * the grid, the noise and the ray are what a voxel game writes (VISION rule 5: the mesher is the
- * game's, the renderer is the engine's).
+ * The voxel world of the voxel demo: the constants, the block ids and their texture layers, the
+ * noise and the generator that pours a world into an engine `VoxelGrid`, and the block rules
+ * (what lies beyond the grid, where the player spawns). Shared by the page (`main.ts`), the
+ * mesher Worker (`mesher.worker.ts`, for `blockLayer` and `outsideBlock`) and the spec
+ * (`e2e/demos/voxel.spec.ts`). The grid, the mesher, the chunk meshes and the picking ray are
+ * the engine's (`@thunderclap/engine/voxel`); the blocks are the game's (VISION rule 5).
  *
- * Coordinates: a voxel `(vx, vy, vz)` with `0 <= vx < WORLD_X` etc. occupies the world cube
- * `[vx + WORLD_ORIGIN, vx + WORLD_ORIGIN + 1)` on x and z and `[vy, vy + 1)` on y, so the world
- * is centred on the origin and the engine's `Water` plane (centred on the origin) covers it.
+ * Coordinates: the grid's corner is the world origin, so a voxel `(x, y, z)` occupies the world
+ * cube `[x, x + 1) × [y, y + 1) × [z, z + 1)` and grid coordinates are world coordinates.
  */
+import type { VoxelFace, VoxelGrid } from '@thunderclap/engine/voxel';
 
 export const CHUNK = 16;
 export const WORLD_CHUNKS_X = 8;
@@ -18,14 +19,10 @@ export const CHUNK_COUNT = WORLD_CHUNKS_X * WORLD_CHUNKS_Y * WORLD_CHUNKS_Z;
 export const WORLD_X = WORLD_CHUNKS_X * CHUNK;
 export const WORLD_Y = WORLD_CHUNKS_Y * CHUNK;
 export const WORLD_Z = WORLD_CHUNKS_Z * CHUNK;
-/** World x and z of voxel column 0. */
-export const WORLD_ORIGIN = -WORLD_X / 2;
 /** The water plane sits at this height (a little above the top of the sea-level block row). */
 export const SEA_LEVEL = 26;
 export const WATER_HEIGHT = SEA_LEVEL + 0.85;
 export const SEED = 1337;
-/** Half the diagonal of a chunk: the radius of its bounding sphere. */
-export const CHUNK_RADIUS = Math.sqrt(3) * (CHUNK / 2);
 /** How far the player can reach a block. */
 export const REACH = 6;
 
@@ -75,11 +72,8 @@ export const BLOCK_NAMES: readonly string[] = [
   'glowstone',
 ];
 
-/** Face index: +x, -x, +y, -y, +z, -z (the order the mesher walks). */
-export type Face = 0 | 1 | 2 | 3 | 4 | 5;
-
-/** The texture layer of `block`'s face `face`. */
-export function blockLayer(block: number, face: Face): number {
+/** The texture layer of `block`'s face `face` (the engine's `layerOf`; faces +x -x +y -y +z -z). */
+export function blockLayer(block: number, face: VoxelFace): number {
   if (block === Block.Grass) {
     if (face === 2) return Layer.GrassTop;
     if (face === 3) return Layer.Dirt;
@@ -89,70 +83,15 @@ export function blockLayer(block: number, face: Face): number {
   return block;
 }
 
-// ─── grid ────────────────────────────────────────────────────────────────────
-
-export function voxelIndex(x: number, y: number, z: number): number {
-  return y + WORLD_Y * (x + WORLD_X * z);
-}
-
-export function inWorld(x: number, y: number, z: number): boolean {
-  return x >= 0 && y >= 0 && z >= 0 && x < WORLD_X && y < WORLD_Y && z < WORLD_Z;
-}
-
-/** The block at a voxel, air outside the world (and solid stone below it: no bottom faces). */
-export function blockAt(grid: Uint8Array, x: number, y: number, z: number): number {
-  if (y < 0) return Block.Stone;
-  if (!inWorld(x, y, z)) return Block.Air;
-  return grid[voxelIndex(x, y, z)]!;
-}
-
-export function chunkIndex(cx: number, cy: number, cz: number): number {
-  return cx + WORLD_CHUNKS_X * (cy + WORLD_CHUNKS_Y * cz);
-}
-
-/** The chunk coordinates of chunk `index`, written into `out`. */
-export function chunkCoords(index: number, out: [number, number, number]): void {
-  out[0] = index % WORLD_CHUNKS_X;
-  out[1] = Math.floor(index / WORLD_CHUNKS_X) % WORLD_CHUNKS_Y;
-  out[2] = Math.floor(index / (WORLD_CHUNKS_X * WORLD_CHUNKS_Y));
-}
-
-/** The chunk a voxel lives in. */
-export function chunkOf(x: number, y: number, z: number): number {
-  return chunkIndex(Math.floor(x / CHUNK), Math.floor(y / CHUNK), Math.floor(z / CHUNK));
-}
-
-/**
- * The chunk of voxel `(x, y, z)` and every neighbouring chunk that shares a face with it (a
- * block on a chunk border changes the neighbour's faces and AO too). Pushed into `out`, unique.
- */
-export function chunksTouching(x: number, y: number, z: number, out: number[]): void {
-  out.length = 0;
-  const push = (cx: number, cy: number, cz: number) => {
-    if (cx < 0 || cy < 0 || cz < 0) return;
-    if (cx >= WORLD_CHUNKS_X || cy >= WORLD_CHUNKS_Y || cz >= WORLD_CHUNKS_Z) return;
-    const c = chunkIndex(cx, cy, cz);
-    if (!out.includes(c)) out.push(c);
-  };
-  const cx = Math.floor(x / CHUNK);
-  const cy = Math.floor(y / CHUNK);
-  const cz = Math.floor(z / CHUNK);
-  push(cx, cy, cz);
-  const lx = x - cx * CHUNK;
-  const ly = y - cy * CHUNK;
-  const lz = z - cz * CHUNK;
-  if (lx === 0) push(cx - 1, cy, cz);
-  if (lx === CHUNK - 1) push(cx + 1, cy, cz);
-  if (ly === 0) push(cx, cy - 1, cz);
-  if (ly === CHUNK - 1) push(cx, cy + 1, cz);
-  if (lz === 0) push(cx, cy, cz - 1);
-  if (lz === CHUNK - 1) push(cx, cy, cz + 1);
+/** What lies beyond the grid (the engine's `outside`): stone below it (no underside), air elsewhere. */
+export function outsideBlock(_x: number, y: number, _z: number): number {
+  return y < 0 ? Block.Stone : Block.Air;
 }
 
 /** The highest non-air voxel of column `(x, z)`, or -1 for none. */
-export function surfaceHeight(grid: Uint8Array, x: number, z: number): number {
+export function surfaceHeight(grid: VoxelGrid, x: number, z: number): number {
   for (let y = WORLD_Y - 1; y >= 0; y--) {
-    if (grid[voxelIndex(x, y, z)] !== Block.Air) return y;
+    if (grid.get(x, y, z) !== Block.Air) return y;
   }
   return -1;
 }
@@ -235,73 +174,67 @@ export function terrainHeight(x: number, z: number, seed: number): number {
   return Math.max(4, Math.min(WORLD_Y - 6, Math.round(h)));
 }
 
-/** The whole world from the seed: hills, beaches, caves, trees and glowstone. */
-export function generateWorld(seed: number): Uint8Array {
-  const grid = new Uint8Array(WORLD_X * WORLD_Y * WORLD_Z);
+/** A cave cell: a 3D noise band carved out of the rock, never through the surface skin. */
+function carved(x: number, y: number, z: number, h: number, seed: number): boolean {
+  return y > 3 && y < h - 3 && valueNoise3(x / 13, y / 9, z / 13, seed + 99) > 0.66;
+}
+
+/**
+ * The whole world from the seed into `grid` (every chunk dirty afterwards): hills, beaches,
+ * caves with glowstone on a few floors, trees on the grass above the sea.
+ */
+export function generateWorld(grid: VoxelGrid, seed: number): void {
   const heights = new Int16Array(WORLD_X * WORLD_Z);
   for (let z = 0; z < WORLD_Z; z++) {
-    for (let x = 0; x < WORLD_X; x++) {
-      const h = terrainHeight(x, z, seed);
-      heights[x + WORLD_X * z] = h;
-      const beach = h <= SEA_LEVEL + 1;
-      for (let y = 0; y <= h; y++) {
-        let b: number;
-        if (y === h) b = beach ? Block.Sand : Block.Grass;
-        else if (y > h - 4) b = beach ? Block.Sand : Block.Dirt;
-        else b = Block.Stone;
-        // Caves: a 3D noise band carved out of the rock, never through the surface skin.
-        if (y > 3 && y < h - 3) {
-          const n = valueNoise3(x / 13, y / 9, z / 13, seed + 99);
-          if (n > 0.66) {
-            b = Block.Air;
-            // Glowstone on a few cave floors.
-            if (hash3(x, y, z, seed + 5) < 0.04 && blockAtRaw(grid, x, y - 1, z) !== Block.Air) {
-              b = Block.Glowstone;
-            }
-          }
-        }
-        grid[voxelIndex(x, y, z)] = b;
-      }
-    }
+    for (let x = 0; x < WORLD_X; x++) heights[x + WORLD_X * z] = terrainHeight(x, z, seed);
   }
+  grid.fill((x, y, z) => {
+    const h = heights[x + WORLD_X * z]!;
+    if (y > h) return Block.Air;
+    const beach = h <= SEA_LEVEL + 1;
+    if (carved(x, y, z, h, seed)) {
+      // Glowstone on a cave floor: the cell below is rock that was not carved.
+      const floor = !carved(x, y - 1, z, h, seed);
+      return floor && hash3(x, y, z, seed + 5) < 0.04 ? Block.Glowstone : Block.Air;
+    }
+    if (y === h) return beach ? Block.Sand : Block.Grass;
+    if (y > h - 4) return beach ? Block.Sand : Block.Dirt;
+    return Block.Stone;
+  });
   // Trees on grass above the sea, kept inside the world; a glowstone lantern on some.
   for (let z = 3; z < WORLD_Z - 3; z++) {
     for (let x = 3; x < WORLD_X - 3; x++) {
       const h = heights[x + WORLD_X * z]!;
       if (h <= SEA_LEVEL + 2 || h > WORLD_Y - 10) continue;
-      if (grid[voxelIndex(x, h, z)] !== Block.Grass) continue;
+      if (grid.get(x, h, z) !== Block.Grass) continue;
       const r = hash2(x, z, seed + 31);
       if (r < 0.012) {
         const trunk = 4 + Math.floor(hash2(x, z, seed + 32) * 2);
-        for (let y = 1; y <= trunk; y++) grid[voxelIndex(x, h + y, z)] = Block.Wood;
+        for (let y = 1; y <= trunk; y++) grid.set(x, h + y, z, Block.Wood);
         const top = h + trunk;
         for (let dz = -2; dz <= 2; dz++) {
           for (let dy = -1; dy <= 2; dy++) {
             for (let dx = -2; dx <= 2; dx++) {
               const d = Math.abs(dx) + Math.abs(dy) + Math.abs(dz);
               if (d > 3 || (dy === 2 && d > 1)) continue;
-              const i = voxelIndex(x + dx, top + dy, z + dz);
-              if (grid[i] === Block.Air) grid[i] = Block.Leaves;
+              if (grid.get(x + dx, top + dy, z + dz) === Block.Air) {
+                grid.set(x + dx, top + dy, z + dz, Block.Leaves);
+              }
             }
           }
         }
       } else if (r > 0.9975) {
-        grid[voxelIndex(x, h + 1, z)] = Block.Glowstone;
+        grid.set(x, h + 1, z, Block.Glowstone);
       }
     }
   }
-  return grid;
-}
-
-function blockAtRaw(grid: Uint8Array, x: number, y: number, z: number): number {
-  return inWorld(x, y, z) ? grid[voxelIndex(x, y, z)]! : Block.Air;
 }
 
 /**
  * Where the player spawns: the land column nearest the world centre that stands above the sea,
  * as voxel coordinates `[x, surface + 1, z]`.
  */
-export function spawnColumn(grid: Uint8Array, out: [number, number, number]): void {
+export function spawnColumn(grid: VoxelGrid, out: [number, number, number]): void {
   const cx = WORLD_X / 2;
   const cz = WORLD_Z / 2;
   for (let r = 0; r < WORLD_X / 2; r++) {
@@ -310,9 +243,9 @@ export function spawnColumn(grid: Uint8Array, out: [number, number, number]): vo
         if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
         const x = cx + dx;
         const z = cz + dz;
-        if (!inWorld(x, 0, z)) continue;
+        if (!grid.inBounds(x, 0, z)) continue;
         const h = surfaceHeight(grid, x, z);
-        if (h > SEA_LEVEL + 1 && grid[voxelIndex(x, h, z)] === Block.Grass) {
+        if (h > SEA_LEVEL + 1 && grid.get(x, h, z) === Block.Grass) {
           out[0] = x;
           out[1] = h + 1;
           out[2] = z;
@@ -325,120 +258,6 @@ export function spawnColumn(grid: Uint8Array, out: [number, number, number]): vo
   out[1] = surfaceHeight(grid, cx, cz) + 1;
   out[2] = cz;
 }
-
-// ─── the ray ─────────────────────────────────────────────────────────────────
-
-/** What `raycastVoxels` fills: the hit voxel, the face normal it entered through, the distance. */
-export interface VoxelHit {
-  x: number;
-  y: number;
-  z: number;
-  nx: number;
-  ny: number;
-  nz: number;
-  distance: number;
-}
-
-/**
- * DDA traversal (Amanatides & Woo) through the grid from a world point along a unit direction,
- * up to `maxDistance`. Returns true and fills `out` on the first non-air voxel.
- */
-export function raycastVoxels(
-  grid: Uint8Array,
-  ox: number,
-  oy: number,
-  oz: number,
-  dx: number,
-  dy: number,
-  dz: number,
-  maxDistance: number,
-  out: VoxelHit,
-): boolean {
-  // Into voxel space.
-  const px = ox - WORLD_ORIGIN;
-  const py = oy;
-  const pz = oz - WORLD_ORIGIN;
-  let x = Math.floor(px);
-  let y = Math.floor(py);
-  let z = Math.floor(pz);
-  const stepX = dx > 0 ? 1 : dx < 0 ? -1 : 0;
-  const stepY = dy > 0 ? 1 : dy < 0 ? -1 : 0;
-  const stepZ = dz > 0 ? 1 : dz < 0 ? -1 : 0;
-  const tDeltaX = stepX === 0 ? Infinity : Math.abs(1 / dx);
-  const tDeltaY = stepY === 0 ? Infinity : Math.abs(1 / dy);
-  const tDeltaZ = stepZ === 0 ? Infinity : Math.abs(1 / dz);
-  let tMaxX = stepX === 0 ? Infinity : (stepX > 0 ? x + 1 - px : px - x) * tDeltaX;
-  let tMaxY = stepY === 0 ? Infinity : (stepY > 0 ? y + 1 - py : py - y) * tDeltaY;
-  let tMaxZ = stepZ === 0 ? Infinity : (stepZ > 0 ? z + 1 - pz : pz - z) * tDeltaZ;
-  let nx = 0;
-  let ny = 0;
-  let nz = 0;
-  let t = 0;
-  for (let i = 0; i < 4 * maxDistance + 8; i++) {
-    if (inWorld(x, y, z) && grid[voxelIndex(x, y, z)] !== Block.Air) {
-      out.x = x;
-      out.y = y;
-      out.z = z;
-      out.nx = nx;
-      out.ny = ny;
-      out.nz = nz;
-      out.distance = t;
-      return true;
-    }
-    if (tMaxX < tMaxY && tMaxX < tMaxZ) {
-      t = tMaxX;
-      x += stepX;
-      tMaxX += tDeltaX;
-      nx = -stepX;
-      ny = 0;
-      nz = 0;
-    } else if (tMaxY < tMaxZ) {
-      t = tMaxY;
-      y += stepY;
-      tMaxY += tDeltaY;
-      nx = 0;
-      ny = -stepY;
-      nz = 0;
-    } else {
-      t = tMaxZ;
-      z += stepZ;
-      tMaxZ += tDeltaZ;
-      nx = 0;
-      ny = 0;
-      nz = -stepZ;
-    }
-    if (t > maxDistance) return false;
-  }
-  return false;
-}
-
-// ─── Worker messages ─────────────────────────────────────────────────────────
-
-/** Page → Worker. */
-export type MesherRequest =
-  | { type: 'init'; seed: number }
-  | { type: 'set'; x: number; y: number; z: number; block: number }
-  | { type: 'mesh'; chunks: number[]; token: number };
-
-/**
- * Worker → page. `world` carries a copy of the generated grid once; each `mesh` reply carries one
- * chunk's vertices (`VERTEX_LAYOUT_3D`: xyz, normal, uv, rgb = ambient occlusion, a = texture
- * layer) and uint32 indices, both transferred, plus the request token it answers.
- */
-export type MesherReply =
-  | { type: 'world'; grid: Uint8Array }
-  | {
-      type: 'mesh';
-      chunk: number;
-      token: number;
-      vertices: Float32Array;
-      indices: Uint32Array;
-      vertexCount: number;
-      indexCount: number;
-    };
-
-/** Floats per vertex in `VERTEX_LAYOUT_3D`. */
-export const VERTEX_FLOATS = 12;
 
 // ─── what the page publishes ─────────────────────────────────────────────────
 
@@ -453,7 +272,7 @@ export interface VoxelDemoState {
   fps: number;
   /** `renderer.stats` of the last frame, copied. */
   stats: { drawCalls: number; instances: number; culled: number; shadowDraws: number };
-  /** Chunks meshed at least once (256 when the world is complete). */
+  /** Chunks meshed at least once (256 when the world is complete; saturates there). */
   chunks: number;
   /** Chunks drawn last frame (after the frustum test), and chunks skipped by it. */
   chunksDrawn: number;
@@ -464,8 +283,10 @@ export interface VoxelDemoState {
   drawCalls: number;
   /** Triangles drawn last frame (chunk meshes only). */
   triangles: number;
-  /** Last block-edit round trip: edit sent → every touched chunk uploaded, ms. -1 before any. */
+  /** Last block-edit round trip: edit → every touched chunk uploaded, ms. -1 before any. */
   remeshMs: number;
+  /** Remeshes the engine applied so far (`VoxelChunks.stats.remeshes`). */
+  remeshes: number;
   /** Block edits so far. */
   edits: number;
   /** `mesh.growths` summed over the chunks. */

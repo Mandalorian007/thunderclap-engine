@@ -8,6 +8,13 @@ import {
   type PadLayout,
 } from './glyphs';
 import type { Look } from './look';
+import {
+  createPointerDispatcher,
+  POINTER_PRIORITY,
+  type PointerConsumer,
+  type PointerDispatcher,
+  type PointerRecord,
+} from './pointer-dispatch';
 import type { PointerActions, PointerRouter } from './pointer-router';
 import type { InputPlayback, InputRecorder } from './record';
 import type {
@@ -70,6 +77,125 @@ export interface InputEvents {
   device: InputDevice;
   /** `rumble` was issued (whether or not a pad could play it). */
   rumble: RumbleOptions;
+  /** `attach` built its pointer dispatcher (touch zones and other consumers join here). */
+  attach: PointerDispatcher;
+  /** `detach` is about to destroy the dispatcher. */
+  detach: PointerDispatcher;
+  /** The top action context changed (`pushContext`, `popContext`): its name, `null` for none. */
+  context: string | null;
+}
+
+/**
+ * What a pushed action context lets through for the actions it does not bind (ws/input-5):
+ * `'unbound'` falls through to the context below, `'none'` silences them, `'all'` falls through
+ * and also adds the context below's bindings to the ones it does bind.
+ */
+export type ContextPass = 'none' | 'unbound' | 'all';
+
+/** `Input.pushContext` options. */
+export interface ContextOptions<A extends string> {
+  /** The context's own bindings; the actions must exist in the base map. Default none. */
+  bindings?: Partial<Bindings<A>>;
+  /** What happens to the actions it does not bind. Default `'unbound'`. */
+  pass?: ContextPass;
+}
+
+/** How `shapeStick` and `Input.stick` treat the deadzone (ws/input-5). */
+export type StickShape = 'radial' | 'axial' | 'scaledRadial';
+
+/** `shapeStick` / `Input.stick` options. */
+export interface StickOptions {
+  /** Below this length (each axis for `'axial'`) the stick reads 0. 0..1, default 0.15. */
+  deadzone?: number;
+  /**
+   * `'scaledRadial'` (default): a radial deadzone, the rest rescaled so its edge is 0 and full
+   * deflection 1 (continuous). `'radial'`: a radial deadzone, the rest passed through as is.
+   * `'axial'`: each axis has its own deadzone, passed through (cardinal snapping).
+   */
+  shape?: StickShape;
+  /** Exponent on the shaped length (each axis for `'axial'`): 2 is finer near the centre. Default 1. */
+  curve?: number;
+  /** Clamp the length to 1 (diagonal keys read 1, not √2). Default true. */
+  clamp?: boolean;
+}
+
+/** The phase of a pointer the feed saw (`InputFeedHook.pointer`, the recording's `ptr` lane). */
+export type InputPointerPhase = 'down' | 'move' | 'up' | 'cancel' | 'leave';
+
+const EMPTY_BINDINGS: readonly Binding[] = [];
+
+/**
+ * Shape a stick (x, y) through a deadzone into `out` and return it (ws/input-5). Pure and
+ * allocation-free; `Input.stick` reads four actions through it and `Look` reads the pad sticks
+ * and the touch stick through it. See `StickOptions` for the shapes.
+ */
+export function shapeStick(
+  x: number,
+  y: number,
+  out: [number, number],
+  opts?: StickOptions,
+): [number, number] {
+  const dz = opts?.deadzone ?? 0.15;
+  const shape = opts?.shape ?? 'scaledRadial';
+  const curve = opts?.curve ?? 1;
+  const clamp = opts?.clamp ?? true;
+  if (shape === 'axial') {
+    let ax = Math.abs(x) <= dz ? 0 : x;
+    let ay = Math.abs(y) <= dz ? 0 : y;
+    if (curve !== 1) {
+      ax = Math.sign(ax) * Math.abs(ax) ** curve;
+      ay = Math.sign(ay) * Math.abs(ay) ** curve;
+    }
+    const m = Math.hypot(ax, ay);
+    if (clamp && m > 1) {
+      ax /= m;
+      ay /= m;
+    }
+    out[0] = ax;
+    out[1] = ay;
+    return out;
+  }
+  const m = Math.hypot(x, y);
+  if (m <= dz || m === 0) {
+    out[0] = 0;
+    out[1] = 0;
+    return out;
+  }
+  const mag = clamp ? Math.min(1, m) : m;
+  let len: number;
+  if (shape === 'radial') len = mag;
+  else len = dz >= 1 ? 0 : (mag - dz) / (1 - dz);
+  if (curve !== 1) len **= curve;
+  const k = len / m;
+  out[0] = x * k;
+  out[1] = y * k;
+  return out;
+}
+
+/** Per-context bookkeeping. */
+interface ContextEntry<A extends string> {
+  name: string;
+  bindings: Partial<Record<A, readonly Binding[]>>;
+  pass: ContextPass;
+}
+
+/** The latest `pressed` per action for `buffered` / `consume`. */
+interface PressBuffer {
+  /** Tick of the latest press, -1 when none. */
+  tick: number;
+  used: boolean;
+}
+
+/**
+ * Something that feeds action values from outside the bindings (ws/input-4): touch zones. The
+ * input calls `update()` every tick before evaluating actions, then `value(action)` per action
+ * (0..1, folded in like a `press` binding) and `fresh(action)` for a new press while already
+ * active (a repeated button tap).
+ */
+export interface ActionSource {
+  update?(): void;
+  value(action: string): number;
+  fresh?(action: string): boolean;
 }
 
 /** `Input.rumble` parameters: magnitudes 0..1, duration in ms. */
@@ -112,6 +238,17 @@ export interface InputFeedHook {
   gamepads(pads: readonly (GamepadLike | null)[]): readonly (GamepadLike | null)[];
   /** Sees every `rumble` call (ws/input-3), after defaults are applied. */
   rumble?(strong: number, weak: number, ms: number, pad: number | undefined): void;
+  /**
+   * Sees every pointer the attached dispatcher delivers, claimed or not, primary or not
+   * (ws/input-5): the recorder's `ptr` lane. The record is reused; copy what you keep.
+   */
+  pointer?(phase: InputPointerPhase, p: Readonly<PointerRecord>): void;
+  /** The dispatcher dropped every pointer (window blur, hidden tab). */
+  cancelPointers?(): void;
+  /** `pushContext` (`pushed` true) or a context's removal (false). */
+  context?(name: string, pushed: boolean): void;
+  /** `consume(action)` was called. */
+  consume?(action: string): void;
 }
 
 export interface AttachOptions {
@@ -121,6 +258,12 @@ export interface AttachOptions {
   keyTarget?: Window | HTMLElement;
   /** Set `touch-action: none` on the pointer target so touch drags don't scroll/zoom. Default true. */
   disableTouchScroll?: boolean;
+  /**
+   * Let a pointer claimed through the dispatcher (an orbit drag, a touch-zone thumb) still hover
+   * the linked router (`hit`/`hitEnd`, no select). Default false: a claimed pointer is hidden
+   * from the router until it is released.
+   */
+  hoverWhileClaimed?: boolean;
 }
 
 const DEFAULT_AXIS_THRESHOLD = 0.5;
@@ -276,7 +419,16 @@ export class Input<A extends string> {
   /** Feed hooks in install order (`onFeed`). Read-only for callers. */
   private readonly feedHooks: InputFeedHook[] = [];
 
+  /** The base bindings (below every context). */
   private map: Bindings<A>;
+  /** The bindings in force: `map` with the context stack resolved over it (`map` when empty). */
+  private active: Bindings<A>;
+  /** Pushed contexts, bottom first. */
+  private readonly contexts: ContextEntry<A>[] = [];
+  /** The latest press per action (`buffered`, `consume`). */
+  private readonly presses = new Map<A, PressBuffer>();
+  /** True while `replayPointer` dispatches: the feed consumer then leaves the raw state alone. */
+  private injecting = false;
   private readonly states = new Map<A, ActionState>();
   private readonly triggers = new Map<A, TriggerState[]>();
   private readonly events = new Emitter<InputEvents>();
@@ -319,6 +471,9 @@ export class Input<A extends string> {
   private pointers: PointerRouter<unknown> | null = null;
   private look: Look | null = null;
   private attached: AttachOptions | null = null;
+  private dispatcherValue: PointerDispatcher | null = null;
+  private readonly updatedFns: (() => void)[] = [];
+  private readonly actionSources: ActionSource[] = [];
   private readonly actionReader: PointerActions = {
     bound: (action) => this.states.has(action as A),
     pressed: (action) => this.states.get(action as A)?.pressed ?? false,
@@ -326,6 +481,7 @@ export class Input<A extends string> {
 
   constructor(bindings: Bindings<A>, opts: InputOptions = {}) {
     this.map = bindings;
+    this.active = bindings;
     this.getGamepads = opts.getGamepads ?? defaultGamepads;
     this.blocked = opts.blocked ?? (() => false);
     this.queueTaps = opts.queueTaps ?? true;
@@ -400,7 +556,8 @@ export class Input<A extends string> {
     router.blocked = () => this.blocked();
     router.setPointerTransform(this.transform);
     router.setGestures(this.gestures);
-    if (this.attached) router.attach(this.attached.pointerTarget);
+    if (this.attached)
+      router.attach(this.attached.pointerTarget, this.dispatcherValue ?? undefined);
   }
 
   getPointers(): PointerRouter<unknown> | null {
@@ -418,6 +575,7 @@ export class Input<A extends string> {
       if (this.attached) this.look.detach();
       this.look.keyHeld = null;
       this.look.orbitFromInput = false;
+      this.look.pointerTransform = null;
     }
     this.look = look;
     this.wireClaim();
@@ -426,7 +584,43 @@ export class Input<A extends string> {
     look.keyHeld = (code) => this.keysDown.has(code);
     // Orbit drags come through this input's own pointer feed, so recordings capture them.
     look.orbitFromInput = true;
-    if (this.attached) look.attach(this.attached.pointerTarget);
+    look.pointerTransform = this.transform;
+    if (this.attached) look.attach(this.attached.pointerTarget, this.dispatcherValue ?? undefined);
+  }
+
+  /**
+   * The pointer dispatcher `attach` built (one DOM listener set shared by the feed, gestures,
+   * look, router and touch zones), or `null` while detached.
+   */
+  get dispatcher(): PointerDispatcher | null {
+    return this.dispatcherValue;
+  }
+
+  /**
+   * Run `fn` at the end of every `update()`, after gestures, look, router and triggers have
+   * advanced (same tick, registration order): the place to poll a world panel or read
+   * `pressed()` for the frame. Returns the remover.
+   */
+  onUpdated(fn: () => void): () => void {
+    this.updatedFns.push(fn);
+    return () => {
+      const i = this.updatedFns.indexOf(fn);
+      if (i >= 0) this.updatedFns.splice(i, 1);
+    };
+  }
+
+  /** Add an `ActionSource` (touch zones). Returns the remover. */
+  addActionSource(src: ActionSource): () => void {
+    this.actionSources.push(src);
+    return () => {
+      const i = this.actionSources.indexOf(src);
+      if (i >= 0) this.actionSources.splice(i, 1);
+    };
+  }
+
+  /** `value(positive) - value(negative)`, -1..1: a move axis from two actions. */
+  axis(negative: A, positive: A): number {
+    return this.value(positive) - this.value(negative);
   }
 
   /**
@@ -445,11 +639,15 @@ export class Input<A extends string> {
     return this.look;
   }
 
-  /** Replace all bindings. Action states reset (use `rebind` to change one action and keep the rest). */
+  /**
+   * Replace the base bindings (below every pushed context). Action states and the input buffer
+   * reset (use `rebind` to change one action and keep the rest).
+   */
   setBindings(bindings: Bindings<A>): void {
     this.map = bindings;
     this.states.clear();
     this.triggers.clear();
+    this.presses.clear();
     this.keyRepeats.clear();
     this.buttonRepeats.clear();
     for (const action of Object.keys(bindings) as A[]) {
@@ -461,7 +659,12 @@ export class Input<A extends string> {
         heldTicks: 0,
         holdProgress: 0,
       });
-      this.triggers.set(action, bindings[action].map(newTriggerState));
+      this.presses.set(action, { tick: -1, used: false });
+    }
+    for (const c of this.contexts) this.checkContextActions(c.bindings);
+    this.active = this.resolveContexts();
+    for (const action of this.states.keys()) {
+      this.triggers.set(action, this.active[action].map(newTriggerState));
     }
     this.rebuildBound();
   }
@@ -470,29 +673,223 @@ export class Input<A extends string> {
    * Replace one action's bindings, keeping every other action's state (ws/input-3). Rebinding
    * while an input is held is safe: the old action sees `released` next tick, and a new binding
    * whose input is already down reads inactive until it lifts and goes down again.
+   *
+   * With contexts pushed (ws/input-5) it writes into the top context (the action becomes one that
+   * context binds); `context` names another pushed context instead, `null` the base map.
    */
-  rebind(action: A, list: readonly Binding[]): void {
+  rebind(action: A, list: readonly Binding[], context?: string | null): void {
     if (!this.states.has(action)) throw new Error(`unknown action "${action}"`);
-    this.map = { ...this.map, [action]: list };
-    const ts = list.map(newTriggerState);
-    for (let i = 0; i < list.length; i++) {
-      if (this.rawValue(list[i]!) > 0) ts[i]!.latched = true;
+    const entry = this.contextEntry(context);
+    if (entry) entry.bindings = { ...entry.bindings, [action]: list };
+    else this.map = { ...this.map, [action]: list };
+    // The action's trigger state is always rebuilt (latched), as before contexts.
+    this.applyActive(action);
+  }
+
+  /**
+   * The bindings in force (what `serializeBindings` saves): the base map with the pushed
+   * contexts resolved over it. `context` reads one context's own bindings over the ones below
+   * it as if it were on top (`null`: the base map).
+   */
+  bindings(context?: string | null): Bindings<A> {
+    if (context === undefined) return this.active;
+    if (context === null) return this.map;
+    const i = this.contextIndex(context);
+    if (i < 0) throw new Error(`no context "${context}"`);
+    return this.resolveContexts(i);
+  }
+
+  // ---------------------------------------------------------------- contexts
+
+  /**
+   * Push an action context (ws/input-5): a menu, gameplay, a vehicle, each with its own bindings.
+   * The top context's bindings win; `pass` says what happens to the actions it does not bind
+   * (default `'unbound'`: they fall through). Pushing a name already on the stack moves it to the
+   * top with the new options. Every action whose bindings in force change resets its hold
+   * progress, tap counts and buffered press, and a binding whose input is already down reads
+   * inactive until it lifts, so a held key never fires across the change. Returns the remover
+   * (it removes this push only).
+   */
+  pushContext(name: string, opts: ContextOptions<A> = {}): () => void {
+    const bindings = (opts.bindings ?? {}) as Partial<Record<A, readonly Binding[]>>;
+    this.checkContextActions(bindings);
+    const old = this.contextIndex(name);
+    if (old >= 0) this.contexts.splice(old, 1);
+    const entry: ContextEntry<A> = { name, bindings, pass: opts.pass ?? 'unbound' };
+    this.contexts.push(entry);
+    const hooks = this.feedHooks;
+    for (let i = 0; i < hooks.length; i++) hooks[i]!.context?.(name, true);
+    this.applyActive(null);
+    this.events.emit('context', name);
+    return () => {
+      const i = this.contexts.indexOf(entry);
+      if (i >= 0) this.removeContextAt(i);
+    };
+  }
+
+  /** Remove the topmost context named `name`. Returns false when none is pushed. */
+  popContext(name: string): boolean {
+    const i = this.contextIndex(name);
+    if (i < 0) return false;
+    this.removeContextAt(i);
+    return true;
+  }
+
+  /** The top context's name, `null` with none pushed. */
+  get context(): string | null {
+    return this.contexts[this.contexts.length - 1]?.name ?? null;
+  }
+
+  /** The pushed context names, bottom first. */
+  contextStack(): string[] {
+    return this.contexts.map((c) => c.name);
+  }
+
+  /** Shorthand for `on('context', fn)`: the top context changed. Returns the remover. */
+  onContextChange(fn: (name: string | null) => void): () => void {
+    return this.events.on('context', fn);
+  }
+
+  private removeContextAt(i: number): void {
+    const before = this.context;
+    const [entry] = this.contexts.splice(i, 1);
+    const hooks = this.feedHooks;
+    for (let h = 0; h < hooks.length; h++) hooks[h]!.context?.(entry!.name, false);
+    this.applyActive(null);
+    const now = this.context;
+    if (now !== before) this.events.emit('context', now);
+  }
+
+  private contextIndex(name: string): number {
+    for (let i = this.contexts.length - 1; i >= 0; i--) {
+      if (this.contexts[i]!.name === name) return i;
     }
-    this.triggers.set(action, ts);
+    return -1;
+  }
+
+  /** The context `rebind` writes to: `undefined` the top one (or none), `null` none, else by name. */
+  private contextEntry(context: string | null | undefined): ContextEntry<A> | null {
+    if (context === null) return null;
+    if (context === undefined) return this.contexts[this.contexts.length - 1] ?? null;
+    const i = this.contextIndex(context);
+    if (i < 0) throw new Error(`no context "${context}"`);
+    return this.contexts[i]!;
+  }
+
+  private checkContextActions(bindings: Partial<Record<A, readonly Binding[]>>): void {
+    for (const action of Object.keys(bindings)) {
+      if (!this.states.has(action as A)) throw new Error(`unknown action "${action}"`);
+    }
+  }
+
+  /** The bindings in force with contexts `0..top` on the stack (all of them by default). */
+  private resolveContexts(top = this.contexts.length - 1): Bindings<A> {
+    if (top < 0) return this.map;
+    const out = {} as Record<A, readonly Binding[]>;
+    for (const action of this.states.keys()) out[action] = this.resolveAction(action, top);
+    return out;
+  }
+
+  private resolveAction(action: A, i: number): readonly Binding[] {
+    if (i < 0) return this.map[action] ?? EMPTY_BINDINGS;
+    const c = this.contexts[i]!;
+    const own = c.bindings[action];
+    if (own) return c.pass === 'all' ? [...own, ...this.resolveAction(action, i - 1)] : own;
+    return c.pass === 'none' ? EMPTY_BINDINGS : this.resolveAction(action, i - 1);
+  }
+
+  /**
+   * Recompute the bindings in force; every action whose list changed (element by element), and
+   * `force` too, gets fresh trigger state, latched where its input is down, and loses its
+   * buffered press.
+   */
+  private applyActive(force: A | null): void {
+    const prev = this.active;
+    const next = this.resolveContexts();
+    this.active = next;
+    for (const action of this.states.keys()) {
+      const list = next[action];
+      if (action !== force && sameList(prev[action], list)) continue;
+      const ts = list.map(newTriggerState);
+      for (let i = 0; i < list.length; i++) {
+        if (this.rawValue(list[i]!) > 0) ts[i]!.latched = true;
+      }
+      this.triggers.set(action, ts);
+      if (action !== force) {
+        const b = this.presses.get(action);
+        if (b) b.tick = -1;
+      }
+    }
     this.rebuildBound();
   }
 
-  /** The current bindings map (what `serializeBindings` saves). */
-  bindings(): Bindings<A> {
-    return this.map;
+  // ---------------------------------------------------------------- buffer
+
+  /**
+   * True if `action` went `pressed` within the last `windowMs` (counted in ticks:
+   * `ceil(windowMs / tickMs)`, this tick included) and that press was not `consume`d
+   * (ws/input-5). A press a few frames early still lands: `if (input.buffered('jump', 100) &&
+   * grounded) { input.consume('jump'); jump(); }`. Deterministic under replay.
+   */
+  buffered(action: A, windowMs: number): boolean {
+    const b = this.presses.get(action);
+    if (!b || b.tick < 0 || b.used) return false;
+    return this.tick - b.tick <= Math.ceil(windowMs / this.tickMs);
+  }
+
+  /**
+   * Mark `action`'s latest press used: `buffered` no longer returns it and `pressed` reads false
+   * for the rest of this tick. Returns whether there was an unused press. Feed hooks see it, so a
+   * recording carries it.
+   */
+  consume(action: A): boolean {
+    const b = this.presses.get(action);
+    if (!b) return false;
+    const hooks = this.feedHooks;
+    for (let i = 0; i < hooks.length; i++) hooks[i]!.consume?.(action);
+    const st = this.states.get(action)!;
+    st.pressed = false;
+    if (b.tick < 0 || b.used) return false;
+    b.used = true;
+    return true;
+  }
+
+  // ---------------------------------------------------------------- sticks
+
+  /**
+   * Read four actions as a stick into `out` (`[x, y]`, the caller's; returned) through
+   * `shapeStick` (ws/input-5): x is `value(posX) - value(negX)`, y `value(posY) - value(negY)`.
+   * Keys, pad axes (bind them with `threshold: 0` for an analog read) and touch-zone sticks all
+   * go through it; diagonal keys read length 1. Allocation-free.
+   */
+  stick(
+    negX: A,
+    posX: A,
+    negY: A,
+    posY: A,
+    out: [number, number],
+    opts?: StickOptions,
+  ): [number, number] {
+    const x = this.value(posX) - this.value(negX);
+    const y = this.value(posY) - this.value(negY);
+    return shapeStick(x, y, out, opts);
+  }
+
+  /**
+   * The aim angle of a stick read (`Math.atan2(y, x)`, radians), `null` when it is at rest
+   * (inside the deadzone). Pass the array `stick` filled.
+   */
+  stickAngle(out: readonly [number, number]): number | null {
+    if (out[0] === 0 && out[1] === 0) return null;
+    return Math.atan2(out[1], out[0]);
   }
 
   private rebuildBound(): void {
     this.boundKeys = new Set();
     this.boundMouse = new Set();
     this.boundWheel = false;
-    for (const action of Object.keys(this.map) as A[]) {
-      for (const b of this.map[action]) this.noteBound(b);
+    for (const action of this.states.keys()) {
+      for (const b of this.active[action]) this.noteBound(b);
     }
   }
 
@@ -549,17 +946,19 @@ export class Input<A extends string> {
     this.buttonKeys = new Set(codes);
   }
 
+  /** The bindings in force (same as `bindings()`). */
   getBindings(): Bindings<A> {
-    return this.map;
+    return this.active;
   }
 
   /**
    * The prompt glyph for `action` on `device` (default `lastDevice`): the first binding that
    * device produces, else the action's first binding; `null` for an unbound action. Pad labels
-   * follow `padLayout`, guessed from the first connected pad's `id` when unset.
+   * follow `padLayout`, guessed from the first connected pad's `id` when unset. Reads the
+   * bindings in force, so the top context's (ws/input-5).
    */
   glyphFor(action: A, device: InputDevice = this.deviceValue): Glyph | null {
-    const list = this.map[action];
+    const list = this.active[action];
     if (!list || list.length === 0) return null;
     const b = list.find((x) => bindingMatchesDevice(x, device)) ?? list[0]!;
     return glyphForBinding(b, this.padLayout ?? guessPadLayout(this.firstPad()?.id));
@@ -635,6 +1034,8 @@ export class Input<A extends string> {
     this.transform = fn;
     this.gestures?.setPointerTransform(fn);
     this.pointers?.setPointerTransform(fn);
+    this.dispatcherValue?.setTransform(fn);
+    if (this.look) this.look.pointerTransform = fn;
   }
 
   // ---------------------------------------------------------------- queries
@@ -681,9 +1082,11 @@ export class Input<A extends string> {
     this.tick++;
     let padActive = false;
     if (this.listening) this.pollListen();
+    const sources = this.actionSources;
+    for (let i = 0; i < sources.length; i++) sources[i]!.update?.();
 
     for (const [action, st] of this.states) {
-      const v = this.evaluate(this.map[action], this.triggers.get(action)!);
+      const v = this.evaluate(action, this.active[action], this.triggers.get(action)!);
       if (v.pad) padActive = true;
       const active = v.value > 0;
       if (blocked) {
@@ -704,6 +1107,11 @@ export class Input<A extends string> {
       st.value = v.value;
       st.holdProgress = v.hold;
       st.heldTicks = active ? st.heldTicks + 1 : 0;
+      if (st.pressed) {
+        const b = this.presses.get(action)!;
+        b.tick = this.tick;
+        b.used = false;
+      }
     }
 
     if (padActive) this.lastDevice = 'gamepad';
@@ -731,6 +1139,8 @@ export class Input<A extends string> {
     this.prevX = this.pointer.x;
     this.prevY = this.pointer.y;
     this.pointers?.resolve(this.actionReader);
+    const fns = this.updatedFns;
+    for (let i = 0; i < fns.length; i++) fns[i]!();
   }
 
   /** A pending `listen`: pad buttons newly down, XR presses, the timeout. Keys and mouse come via the feed. */
@@ -771,12 +1181,19 @@ export class Input<A extends string> {
    * second down edge within `doubleTapMs`). `fresh` marks a new press while already active,
    * `hold` the furthest hold progress, `pad` that a pad produced the value.
    */
-  private evaluate(list: readonly Binding[], ts: TriggerState[]): EvalOut {
+  private evaluate(action: A, list: readonly Binding[], ts: TriggerState[]): EvalOut {
     const out = this.evalOut;
     out.value = 0;
     out.pad = false;
     out.fresh = false;
     out.hold = 0;
+    const sources = this.actionSources;
+    for (let i = 0; i < sources.length; i++) {
+      const src = sources[i]!;
+      const v = src.value(action);
+      if (v > out.value) out.value = v;
+      if (v > 0 && src.fresh?.(action)) out.fresh = true;
+    }
     for (let i = 0; i < list.length; i++) {
       const b = list[i]!;
       const t = ts[i]!;
@@ -1010,12 +1427,6 @@ export class Input<A extends string> {
     const prevTouchAction = target.style.touchAction;
     if (opts.disableTouchScroll !== false) target.style.touchAction = 'none';
 
-    const clientToLocal = (e: PointerEvent | WheelEvent) => {
-      if (this.transform) return [e.clientX, e.clientY] as const;
-      const r = target.getBoundingClientRect();
-      return [e.clientX - r.left, e.clientY - r.top] as const;
-    };
-
     const onKeyDown = (ev: Event) => {
       const e = ev as KeyboardEvent;
       if (isInteractiveTarget(e.target)) {
@@ -1042,36 +1453,52 @@ export class Input<A extends string> {
     const onKeyUp = (ev: Event) => {
       this.keyUp((ev as KeyboardEvent).code);
     };
-    const pointerType = (e: PointerEvent): PointerState['type'] =>
-      e.pointerType === 'touch' || e.pointerType === 'pen' ? e.pointerType : 'mouse';
-    const onPointerDown = (e: PointerEvent) => {
-      if (!e.isPrimary && e.pointerType === 'touch') return;
-      const [x, y] = clientToLocal(e);
-      this.pointerAt(x, y, pointerType(e));
-      this.buttonDown(Math.max(e.button, 0));
-      try {
-        target.setPointerCapture(e.pointerId);
-      } catch {
-        // Synthetic events have no active pointer.
-      }
-      // Clicking the canvas should give the iframe keyboard focus.
-      if (!doc.hasFocus()) win.focus();
+    const dispatcher = createPointerDispatcher(target, {
+      transform: this.transform,
+      hoverWhileClaimed: opts.hoverWhileClaimed,
+    });
+    this.dispatcherValue = dispatcher;
+    // The feed sees every pointer, claimed or not, so recordings stay complete and identical.
+    // Hooks see every record (the recording's `ptr` lane); while `replayPointer` dispatches, the
+    // raw state is left alone (the playback feeds it from the `p` and `b` lanes).
+    const hooks = this.feedHooks;
+    const notePointer = (phase: InputPointerPhase, p: PointerRecord): boolean => {
+      for (let i = 0; i < hooks.length; i++) hooks[i]!.pointer?.(phase, p);
+      return this.injecting;
     };
-    const onPointerMove = (e: PointerEvent) => {
-      if (!e.isPrimary) return;
-      const [x, y] = clientToLocal(e);
-      this.pointerAt(x, y, pointerType(e));
+    const consumer: PointerConsumer = {
+      pointerDown: (p: PointerRecord) => {
+        if (notePointer('down', p)) return;
+        if (!p.primary && p.device === 'touch') return;
+        this.pointerAt(p.x, p.y, p.device);
+        this.buttonDown(p.button);
+        // Clicking the canvas should give the iframe keyboard focus.
+        if (!doc.hasFocus()) win.focus();
+      },
+      pointerMove: (p: PointerRecord) => {
+        if (notePointer('move', p)) return;
+        if (!p.primary) return;
+        this.pointerAt(p.x, p.y, p.device);
+      },
+      pointerUp: (p: PointerRecord) => {
+        if (notePointer('up', p)) return;
+        if (!p.primary && p.device === 'touch') return;
+        this.buttonUp(p.button);
+      },
+      pointerCancel: (p: PointerRecord) => {
+        if (notePointer('cancel', p)) return;
+        if (p.primary) this.buttonUp(0);
+      },
+      pointerLeave: (p: PointerRecord) => {
+        if (notePointer('leave', p)) return;
+        if (p.device === 'mouse') this.pointer.inside = false;
+      },
+      cancelAll: () => {
+        for (let i = 0; i < hooks.length; i++) hooks[i]!.cancelPointers?.();
+        if (!this.injecting) this.releaseAll();
+      },
     };
-    const onPointerUp = (e: PointerEvent) => {
-      if (!e.isPrimary && e.pointerType === 'touch') return;
-      this.buttonUp(Math.max(e.button, 0));
-    };
-    const onPointerCancel = (e: PointerEvent) => {
-      if (e.isPrimary) this.buttonUp(0);
-    };
-    const onPointerLeave = (e: PointerEvent) => {
-      if (e.pointerType === 'mouse') this.pointer.inside = false;
-    };
+    const removeConsumer = dispatcher.add(consumer, POINTER_PRIORITY.feed, true);
     const onWheel = (e: WheelEvent) => {
       // deltaMode 1 = lines, 2 = pages; normalise roughly to pixels.
       const k = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
@@ -1081,46 +1508,82 @@ export class Input<A extends string> {
     const onContextMenu = (e: Event) => {
       if (this.boundMouse.has(2) && !this.blocked()) e.preventDefault();
     };
-    const onBlur = () => this.releaseAll();
-    const onVisibility = () => {
-      if (doc.visibilityState === 'hidden') this.releaseAll();
-    };
 
     keyTarget.addEventListener('keydown', onKeyDown);
     keyTarget.addEventListener('keyup', onKeyUp);
-    target.addEventListener('pointerdown', onPointerDown);
-    target.addEventListener('pointermove', onPointerMove);
-    target.addEventListener('pointerup', onPointerUp);
-    target.addEventListener('pointercancel', onPointerCancel);
-    target.addEventListener('pointerleave', onPointerLeave);
     target.addEventListener('wheel', onWheel, { passive: false });
     target.addEventListener('contextmenu', onContextMenu);
-    win.addEventListener('blur', onBlur);
-    doc.addEventListener('visibilitychange', onVisibility);
 
     this.attached = opts;
-    this.gestures?.attach({ pointerTarget: target, disableTouchScroll: opts.disableTouchScroll });
-    this.pointers?.attach(target);
-    this.look?.attach(target);
+    this.gestures?.attach({
+      pointerTarget: target,
+      disableTouchScroll: opts.disableTouchScroll,
+      dispatcher,
+    });
+    this.pointers?.attach(target, dispatcher);
+    this.look?.attach(target, dispatcher);
+    this.events.emit('attach', dispatcher);
 
     this.detachFn = () => {
+      this.events.emit('detach', dispatcher);
       this.gestures?.detach();
       this.pointers?.detach();
       this.look?.detach();
       this.attached = null;
       keyTarget.removeEventListener('keydown', onKeyDown);
       keyTarget.removeEventListener('keyup', onKeyUp);
-      target.removeEventListener('pointerdown', onPointerDown);
-      target.removeEventListener('pointermove', onPointerMove);
-      target.removeEventListener('pointerup', onPointerUp);
-      target.removeEventListener('pointercancel', onPointerCancel);
-      target.removeEventListener('pointerleave', onPointerLeave);
       target.removeEventListener('wheel', onWheel);
       target.removeEventListener('contextmenu', onContextMenu);
-      win.removeEventListener('blur', onBlur);
-      doc.removeEventListener('visibilitychange', onVisibility);
+      removeConsumer();
+      dispatcher.destroy();
+      this.dispatcherValue = null;
       target.style.touchAction = prevTouchAction;
     };
+  }
+
+  /**
+   * Dispatch a recorded pointer event on the attached pointer target (ws/input-5), so every
+   * dispatcher consumer (gestures, look, touch zones, the router) sees it as it saw the original;
+   * the feed's own key/button/pointer state is left to the playback's `b` and `p` lanes.
+   * `createInputPlayback` calls it for the recording's `ptr` lane. Returns false (and does
+   * nothing) while detached or without `PointerEvent`.
+   */
+  replayPointer(
+    phase: InputPointerPhase,
+    id: number,
+    device: 'mouse' | 'touch' | 'pen',
+    clientX: number,
+    clientY: number,
+    button: number,
+    primary: boolean,
+  ): boolean {
+    const d = this.dispatcherValue;
+    if (!d || typeof PointerEvent !== 'function') return false;
+    const type =
+      phase === 'down'
+        ? 'pointerdown'
+        : phase === 'move'
+          ? 'pointermove'
+          : phase === 'up'
+            ? 'pointerup'
+            : phase === 'cancel'
+              ? 'pointercancel'
+              : 'pointerleave';
+    const e = new PointerEvent(type, {
+      pointerId: id,
+      pointerType: device,
+      isPrimary: primary,
+      button,
+      clientX,
+      clientY,
+    });
+    this.injecting = true;
+    try {
+      d.target.dispatchEvent(e);
+    } finally {
+      this.injecting = false;
+    }
+    return true;
   }
 
   detach(): void {
@@ -1128,6 +1591,14 @@ export class Input<A extends string> {
     this.detachFn = null;
     this.releaseAll();
   }
+}
+
+/** Same length and the same binding objects in order. */
+function sameList(a: readonly Binding[] | undefined, b: readonly Binding[]): boolean {
+  if (a === b) return true;
+  if (!a || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
 }
 
 function clamp01(v: number): number {

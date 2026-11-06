@@ -146,9 +146,10 @@ await ui.caption.say('Something old is listening.', {
   - `cooldown({ size })` returns `{ element, set(fraction), ready }`: a `conic-gradient` sweep on
     `--tc-ui-sweep`, `data-ready` at 1, `aria-hidden`.
   `reticle` is a plain element; use `createReticle` from the HUD (or `ui.reticle`) for one that hides under modals.
-- `h(tag, props, ...children)` is hyperscript. It handles `class`, `style` (including `--custom`
-  properties), `dataset` and `on: { click }`. Any other prop becomes an attribute: `true` sets an
-  empty attribute and `false`/null omits it.
+- `h(tag, props, ...children)` is hyperscript. It handles `class`, `style` (an object including
+  `--custom` properties, or a `cssText` string: `h('div', { style: 'color: red' })`), `dataset`
+  and `on: { click }`. Any other prop becomes an attribute: `true` sets an empty attribute and
+  `false`/null omits it.
 - `focusableWithin(el)` lists the focusable descendants of an element, skipping `inert` and `hidden`
   subtrees.
 
@@ -423,6 +424,17 @@ tag.set(npc.position); // each tick it moves; createGame calls update() after ev
 - `hidden` loses to a stylesheet that sets `display` on the element; add `[hidden] { display:
   none }` for such a class. One camera per `Anchors`: a stereo UI is not this step.
 
+### Anchors frame
+
+`anchors.frame` (an `AnchorFrame`: `width`, `height`, the logical size the camera's `screen` is
+in, and `rect`, the CSS rect it fills relative to the overlay's parent) is the one place a
+world-anchored widget learns where it projects into. It is read live from the surface (one reused
+object), so a resize is seen by the next `place`. `anchors.project(x, y, z, out)` projects one
+world point into frame CSS px (the hud layer's coordinates) the way `update()` places an anchor
+before its offset and clamp, writes `out.x`/`out.y` and returns whether the point is in view; it
+allocates nothing. The tooltip's world-point targets, the world cursor, the float numbers and
+`update()` itself all go through it, so they agree to the pixel.
+
 ## World panels: `createWorldPanel`
 
 A panel that lives in the world rather than on the screen (ws/ui-world-panel, `src/ui/world-panel/`): one blended quad whose face is a canvas the engine paints with the same theme tokens as the overlay, holding a small widget set, hit by any pointer ray. Use the overlay for a screen (menus, HUD, anything that must be crisp DOM); use a world panel where there is no screen (a headset) or where the UI *is* a thing in the scene (a terminal, a sign, a wrist menu). No DOM is involved: it works without `document` (a Worker's `OffscreenCanvas` is out of scope for now: the panel makes its canvas with `makePanelCanvas`, `OffscreenCanvas` then `<canvas>`, and only the main thread uploads it).
@@ -434,8 +446,7 @@ panel.add(worldLabel({ text: 'Settings', size: 'l' }));
 const sound = panel.add(worldToggle({ text: 'Sound', value: true, onChange: (v) => audio.mute(!v) }));
 panel.add(worldSlider({ min: 0, max: 100, value: 80, step: 5, onChange: (v) => audio.volume(v / 100) }));
 panel.add(worldButton({ text: 'Back', onPress: () => stack.pop() }));
-ctx.pointers.addTester(worldPanelTarget(panel));                            // mouse, touch, pad cursor, XR rays
-ctx.hooks.beforeRender = () => panel.poll(ctx.pointers.pointers);           // hover, press, release
+panel.attach(ctx.input);                                                    // once: rays, hover, press, release
 scene.render = (frame) => frame.drawable(panel.drawable, 10);               // after the opaque meshes
 sound.set({ value: false });                                                // writes only on change
 panel.focusNext(); panel.activate();                                        // a pad with no ray
@@ -447,7 +458,18 @@ panel.dispose();
 - **Widgets** (`WorldWidget` subclasses, built by `worldLabel`, `worldButton`, `worldToggle`, `worldSlider`, `worldList`, `worldProgress`): `WorldLabel` (`WorldLabelOptions` `text`, `size` `WorldWidgetSize` `'s' | 'm' | 'l'`, `align` `WorldWidgetAlign`, `tone` `WorldWidgetTone`), `WorldButton` (`WorldButtonOptions` `text`, `onPress`, `disabled`; fires on the release over it, not the press), `WorldToggle` (`WorldToggleOptions` `text`, `value`, `onChange`), `WorldSlider` (`WorldSliderOptions` `min`, `max`, `value`, `step`, `onChange`; drag anywhere on the track, arrows step), `WorldList` (`WorldListOptions` `items`, `selected`, `onSelect`, `visibleRows`; scrolls by drag and wheel, clamped, arrows move the selection and keep it visible), `WorldProgress` (`WorldProgressOptions` `value` 0..1, `tone`). Every option set takes `rect?: PanelRect` to place the widget by hand; otherwise `flowLayout` stacks them top to bottom with the theme's `space3` padding and `space2` gap (`FlowItem`, `FlowOptions`). `widget.set(patch)` writes only the fields that changed and marks the widget's rect dirty (a layout field relayouts); `options`, `layoutRect`, `hover`, `pressed`, `focused`, `disabled`, `focusable`. Hover tints, a pressed shade, a `colorFocus` ring and 45 % alpha when disabled; `WorldWidgetHost` is what a widget sees of its panel.
 - **Painting**: Canvas2D through `Painter` (`fillRoundRect`, `strokeRoundRect`, `focusRing`, `text` with a per-font measure cache, `clearMeasures`) over a `PanelContext2D` (the subset a `CanvasRenderingContext2D` satisfies) from a `PanelCanvas`; `resolvePanelTheme(overrides)` reads the tokens once by value. Repaints cover the union of the dirty rects only; the frame's `prepare` then uploads that rect with one `copyExternalImageToTexture` (premultiplied), so `uploads` stays flat while nothing changes. `WORLD_PANEL_WGSL` is the quad's shader (six corners from `vertex_index`, `camera.view_proj`, the texture sampled with the linear-clamp sampler).
 - **Pointers**: `worldPanelTarget(panel)` is a router `HitTester` whose hit carries the panel as `target`, the world point, a normal facing the ray and the distance, so `router.hit`, `{ pointer: 'select' }` bindings and the nearest-hit rule work as for meshes. `panel.poll(router.pointers)` once per tick (after `input.update()`, so in `hooks.beforeRender` or `hooks.update`) turns the routed pointers into hover, press and release: a press that leaves the quad keeps dragging on the panel's plane and releases where the ray meets it, a vanished pointer releases where it was. Without a ray, `focusNext`/`focusPrev`/`activate` and `key` drive it from a pad or keyboard.
-- Harness `harness/world-panel.html` (`?pad` adds a pad cursor); spec `e2e/world-panel.spec.ts`; tests `src/ui/world-panel/panel.test.ts` with a Canvas2D stub and the fake GPU.
+
+### World panels on the input tick
+
+Call `attach(ctx.input)` once. `panel.attach(input)` (a `WorldPanelInput`: `getPointers()` and
+`onUpdated(fn)`, which `Input` fits) adds the panel's tester to the input's pointer router and,
+through `input.onUpdated`, calls `poll(router.pointers)` after every `input.update()` and then
+`update(router.camera)` (the camera the rays go through, `renderer.camera` in `createGame`), so
+the page never calls `poll` or `update`. It throws when the input has no router. `detach()`
+undoes it (so does `dispose()`); the manual `addTester(worldPanelTarget(panel))` +
+`poll`/`update` path stays for an input without a router.
+
+- Harness `harness/world-panel.html` (`?pad` adds a pad cursor; the panels use `attach`); spec `e2e/world-panel.spec.ts`; tests `src/ui/world-panel/panel.test.ts` with a Canvas2D stub and the fake GPU.
 
 ## Text scale and units
 
@@ -505,6 +527,157 @@ declarations, and `applyTheme(el, tokens)` sets them on an element. `ensureStyle
   (`element`, `visible`, `update()`, `destroy()`): the "turn it sideways" card for a landscape
   game on an upright phone. It reads `platform/device-mode.ts`; both stay until the layout's
   portrait forms replace them (E-010).
+
+## Tooltip: `ui.tooltip`
+
+`ui.tooltip(target, content, { delay, placement, arrow, interactive, gap })` attaches a tooltip to
+an element or a world point and returns a `Tooltip` (`element`, `target`, `visible`, `placement`
+(the side it landed on), `set(content)`, `show()`, `hide()`, `dispose()`). Every overlay has one
+shared `role="tooltip"` element (`ui.tooltips.element`, on the `toasts` layer, so it reads over a
+modal panel too); the latest `show` owns it and `ui.tooltips.active` is the tooltip showing now.
+
+- An **element** target shows after `delay` ms (default 400) of hover and at once on focus; pointer
+  leave, blur and Escape hide it. While shown the element carries `aria-describedby` pointing at
+  the tooltip. `interactive: true` keeps it up while the pointer is over the tooltip itself.
+- An **`AnchorHandle`** or a **world point** `[x, y, z]` target rides `ui.anchors(camera)` (build
+  it first, or the call throws), shows at once and hides while the point is behind the camera;
+  `ui.updateAnchors()` (which `createGame` calls each frame) re-places it.
+- `placement` is `top`, `bottom`, `left`, `right` or `auto` (default; the first of top, bottom,
+  right, left that fits). A side that would leave the layer flips to its opposite, then the box is
+  clamped in; `data-placement` on the element and `--tc-tooltip-arrow` place the arrow. The pure
+  `placeTooltip(anchor, size, frame, placement, gap)` does the sums and is exported for tests.
+- `TOOLTIP_CSS` is injected once on first use (`ensureTooltipStyles`); the plain overlay page is
+  unchanged until then. `createTooltips(host)` builds a set outside an overlay.
+- Types: `TooltipOptions`, `TooltipTarget`, `TooltipSide`, `TooltipPlacement` (a side or `auto`),
+  `TooltipPlace` (what `placeTooltip` returns), `TooltipHost` (the layers, `rect`, `units` and
+  `anchors()` an overlay provides). The frame comes from `anchors().frame.rect` (ws/ui-4).
+- Deprecated: `TooltipHost.frame` is still accepted, and read only before a camera built the
+  anchors; once they exist `anchors.frame` wins.
+
+## World cursor: `ui.cursor`
+
+`ui.cursor({ mode, step, at, targets, onSelect, onMove, repeat, weight, getGamepads, keys, enabled })`
+is a pad- and keyboard-driven selection cursor over the world (tactics grids, tile pickers). Call
+`cursor.update(now?)` once per frame; it reads the pads through `readPad` (the same latch as
+`PadNav`: a control is fresh when it is held this frame and was not last frame) plus the arrow
+keys and Enter (skipped when the focused control uses the arrows itself; `keys: false` turns them
+off), and `cursor.press(dir)` feeds a press from the game's own input.
+
+- `mode: 'grid'`: each fresh direction calls `step(dx, dy)` (y down); holding repeats after
+  `repeat.delay` (400 ms) every `repeat.interval` (80 ms). `at()` returns the cursor's world point
+  (or null) so the `.tc-cursor` element rides `ui.anchors()` on the `hud` layer.
+- `mode: 'targets'`: `targets()` lists `WorldTarget`s (`{ id, x, y, world }`); a press snaps to the
+  nearest in that direction by `pickTarget(from, targets, dir, weight)`: among targets with a
+  positive component along the direction, the least `along + weight × perpendicular` (default
+  weight 2) wins, so a neighbour in line beats a nearer one to the side. `cursor.target`,
+  `cursor.position`, `cursor.setTarget(t)`; `onMove(target)` on every move.
+- A or Enter calls `onSelect(target)`. While the stack owns the pad (`stack.padOwner`, followed
+  through `onPadOwnerChange`, see *Pad owner*) the cursor reads nothing; its latch resets on each
+  transition, and it resumes after the panel closes without taking a press that outlived it.
+  `cursor.latched` is true while a control is held or repeating. `enable()` / `disable()` /
+  `dispose()`.
+- Deprecated: a `CursorHost` whose `stack` has no `onPadOwnerChange` is still accepted and polled
+  through `stack.hasModal` each frame.
+- `CURSOR_CSS` is injected once on first use (`ensureCursorStyles`); `createCursor(host, opts)`
+  builds one outside an overlay. `defaultPads()` is the guarded `navigator.getGamepads()`.
+- Types: `CursorOptions`, `CursorRepeat`, `WorldCursor`, `CursorHost` (`layers.hud`, `stack.hasModal`
+  and `stack.onPadOwnerChange`, `anchors()`), and from `padnav.ts` `PadDir` (`up | down | left | right`) and `PadControl`
+  (a `PadDir`, `activate` or `back`), the set `readPad` fills.
+
+## Pad owner: `ui.padOwner`
+
+One latch for who has the gamepad, kept by the stack (ws/ui-4). `stack.padOwner` (a `PadOwner`,
+`'stack' | 'game'`) is `'stack'` while any modal panel is open; `stack.onPadOwnerChange(fn)` calls
+`fn(owner)` once per transition (a second modal over the first changes nothing) and returns the
+remover. `PadNav` and `ui.cursor` subscribe to it instead of polling `hasModal` each frame: both
+reset their latch on the transition, so the A that opened a menu never activates its first
+control and a direction held through the panel is not a fresh press for the cursor afterwards.
+`ui.padOwner` (the overlay's `stack.padOwner`, so `ctx.ui.padOwner` in `createGame`) is what a
+game's own bindings gate on:
+
+```ts
+if (ctx.ui.padOwner === 'game' && ctx.input.pressed('jump')) jump();
+```
+
+`PadNav.dispose()` stops it following the stack.
+
+## Float numbers: `ui.floats`
+
+```ts
+ui.floats.spawn(x, y + 2, z, '-12', { kind: 'damage' }); // over a hit
+ui.floats.update(dt);                                     // once per update
+```
+
+`createFloatNumbers(host, opts)` (`FloatNumbersHost`: `layers.hud` and `anchors()`) is a fixed pool
+of DOM nodes on the hud layer. `FloatNumbersOptions`: `max` (default 64), `duration` (s, default
+1), `rise` (design px over the life, default 48), `style` (an extra class). `FloatNumbers`:
+`spawn(x, y, z, text, opts?)` (`FloatSpawnOptions` `kind`: a `FloatKind`, `'damage' | 'heal' |
+'crit' | 'info'`, mapped to the theme's danger, success, warn and text colours; crit is larger),
+`update(dt)`, `clear()`, `dispose()`, `live`, `pooled`, `max`. A spawn past `max` recycles the
+oldest; `update` projects each live number through `anchors.project` and writes `transform` only
+(Typed OM where it exists), the fade is a CSS animation on opacity. `ui.floats` is the overlay's
+pool with the defaults, made on first use (it needs `ui.anchors(camera)`). `FLOAT_CSS` is
+injected once (`ensureFloatStyles`).
+
+## Ring and compass: `ui.ring`, `ui.compass`
+
+- `ui.ring(opts)` / `createRing(host, opts)` (`Widgets3Host`: `layers.hud`, `layout`):
+  `RingOptions` `radius`, `thickness` (design px, 48 and 8), `value` (0..1), `label`, `color`,
+  `region` (default `bottom`), `order`. A conic-gradient ring with the label in the middle,
+  `role="progressbar"`; `Ring`: `el`, `value`, `set(value)` (clamped; `aria-valuenow` follows),
+  `setLabel(label)`, `remove()`.
+- `ui.compass(opts)` / `createCompass(host, opts)`: `CompassOptions` `width` (design px, 480),
+  `fov` (degrees each side of the heading, default 180: the strip spans the whole circle),
+  `headingDeg`, `markers` (`CompassMarker { name, bearingDeg, icon? }`), `labels`, `region`
+  (default `top`), `order`. The strip scrolls under a centre mark with `setHeading(deg)`; each
+  marker sits `bearingOffset(bearing, heading) × width / (2 × fov)` px from the centre, wrapping,
+  and hides past the edge. `Compass`: `el`, `heading`, `setHeading`, `setMarkers`, `offsetOf(name)`,
+  `remove()`. `bearingOffset(bearingDeg, headingDeg)` is the signed difference wrapped to
+  −180..180.
+- `WIDGETS3_CSS` is injected once (`ensureWidgets3Styles`).
+
+## Minimap: `ui.minimap`
+
+`ui.minimap(opts)` / `createMinimap(host, opts)` (`MinimapHost`: `layers.hud`, `layout`):
+`MinimapOptions` `size` (design px, 200), `worldRadius` (world units to the rim, 50), `rotate`
+(heading up instead of north up), `background` (an image or a canvas the game paints: the engine
+never knows the map), `region` (default `right`), `order`. `Minimap`: `el`, `size`,
+`worldRadius`, `setCenter(x, z, headingDeg?)`, `setMarker(id, x, z, opts?)`
+(`MinimapMarkerOptions` `kind`, a `MinimapMarkerKind` `'self' | 'ally' | 'enemy' | 'objective' |
+'info'`, and `icon`), `removeMarker(id)`, `clear()`, `markerAt(id)` (a `MinimapMarkerPlace`
+`{ x, y, outside }` in design px from the centre), `remove()`. Markers are pooled DOM nodes moved
+by `transform`; one past `worldRadius` is held on the rim with the `tc-minimap-outside` class.
+`MINIMAP_CSS` is injected once (`ensureMinimapStyles`).
+
+## Loading screen: `ui.loading`
+
+`ui.loading({ title, tip, tipInterval, progress, label, reducedMotion })` pushes a full-frame,
+non-dismissible modal panel (`.tc-loading`, `chrome: 'none'`) on the `panels` layer with a title,
+a `bar` and a tip line (`role="status"`, polite; an array of tips rotates every `tipInterval` ms,
+default 4000). While it shows the overlay root carries `aria-busy="true"`, the lower layers are
+inert, the game's `Input` is blocked through `ui.stack.hasModal`, and every key but Tab is
+swallowed at the document's capture phase. `set(progress, label?)` moves the bar (the label
+replaces the percent text), `tip(text)` shows one tip and stops rotating, `progress` and
+`visible` read back, and `done()` fades it out and resolves after the transition (at once under
+reduced motion or `reducedMotion: true`; a 400 ms fallback when no `transitionend` arrives), then
+closes the panel and clears `aria-busy`. `LOADING_CSS` is injected once (`ensureLoadingStyles`);
+`createLoading(host, opts)` builds one outside an overlay. Types: `LoadingOptions`, `LoadingScreen`,
+`LoadingHost` (`root` and `stack`).
+
+## Notifications: `ui.notify`
+
+`ui.notify({ title, body, icon, tone, actions, timeout })` stacks a card top-right on the `toasts`
+layer, in `ui.notifications.element` (`role="status"`, `aria-live="polite"`; made on first use).
+Toasts stay the one-line, top-centre notice; a notification has a title, a body, an icon, a tone
+(`info`, `success`, `warn`, `danger`: the left edge), action buttons (`{ label, onClick, keep }`:
+an action dismisses the card unless `keep`) and a close button. It disappears after `timeout` ms
+(default 6000; `0` keeps it until dismissed), paused while hovered or focused; Escape inside it
+dismisses it. The handle is `{ element, open, dismiss() }`. `ui.notifications.count`,
+`dismissAll()` and `focus()` (the newest card's first button, for pad users) manage the stack; a
+game drives the actions with its pad through `menuNav(input, ui.notifications.element)`. At most
+4 are shown; the oldest goes first. `NOTIFY_CSS` is injected once (`ensureNotifyStyles`);
+`createNotifier(container, max)` builds one outside an overlay. Types: `NotifyOptions`, `NotifyTone`,
+`NotifyAction`, `Notification` (the handle), `Notifier` (the stack).
 
 ## Perf: `createPerfMonitor`, `createPerfOverlay`
 
@@ -569,6 +742,14 @@ hud.update();
   lists are `role="menu"` of `menuitem`s, close on Escape and give the focus back to the opener.
 - Drag and drop always has a keyboard and pad path: hold Enter or Space (pad `select`) to pick up,
   arrows to the target (across grids at the edge), Enter (`select`) to drop, Escape (`back`) to cancel.
+- Tooltips are one `role="tooltip"` element per overlay; an element target names it through
+  `aria-describedby` while it shows, focus shows it without a delay and Escape hides it.
+- The world cursor answers the arrow keys and Enter as well as the pad, never steals them from a
+  focused text field, slider or select, and yields to a modal panel.
+- The loading screen is a non-dismissible modal: the root is `aria-busy`, the lower layers inert,
+  the tip line a polite live region, and Tab still moves focus while every other key is swallowed.
+- Notifications are a polite live region of cards with real buttons: pad users reach the actions
+  through `menuNav`, Escape dismisses the focused card and focus moves to the next card, not the body.
 
 ## Tests
 
@@ -576,5 +757,19 @@ hud.update();
 client→design mapping, the modal focus trap, Esc, focus restore, inert stacking, non-modal panels,
 backdrop clicks, toast caps and timers, caption typing / hold / skip / queue / reduced motion / suspend / onPlace, and
 the slider's aria-valuetext. `perf.test.ts` covers the monitor's ring, p95, dynamic counter keys
-and GPU records against a fake `RenderStats`, and the overlay's DOM under happy-dom. Layout and
+and GPU records against a fake `RenderStats`, and the overlay's DOM under happy-dom.
+`tooltip.test.ts` covers `placeTooltip` (sides, the flip, clamping, the arrow inset), the shared
+element's delay, leave, focus, Escape and hand-over, and a world point riding the anchors;
+`cursor.test.ts` covers `pickTarget`, the latch and repeat, the keys, the modal rule and the
+anchored element in targets mode; `loading.test.ts` the bar, tips, `aria-busy`, key swallowing
+and `done`; `notify.test.ts` the stack, timeouts, actions, `menuNav` and Escape; `dom.test.ts`
+the `h` string style; `styles.test.ts` the select zoom rule. `e2e/ui.spec.ts` runs the four
+harness modes (`harness/ui.html?tooltip`, `?cursor&mode=`, `?loading&stall`, `?notify`) on the matrix.
+ws/ui-4: `anchor.test.ts` covers `frame` and `project` against a placed anchor across a resize,
+`tooltip.test.ts` a world-target tooltip landing on the anchored point, `pad-owner.test.ts` the
+owner transitions, the cursor latch reset and two cursors on one transition, `float-numbers.test.ts`
+the pool cap and lifetime, `widgets-3.test.ts` the ring's aria and compass offsets, `minimap.test.ts`
+the rim clamp and rotation, `world-panel/panel.test.ts` a press on the input tick.
+`e2e/ui4.spec.ts` runs `harness/ui4.html` (`?floats`, `?ring`, `?compass`, `?minimap`, `?modal`,
+`?still`) on the matrix. Layout and
 focus were also checked once in Chromium via Playwright (not part of CI).

@@ -51,6 +51,9 @@ function fakeVoice(
     setDirection() {},
     follow() {},
     sendTo() {},
+    filter() {},
+    sendCount: 0,
+    occlusion: 0,
     bus,
   };
   return v;

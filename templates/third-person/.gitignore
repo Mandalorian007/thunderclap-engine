@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.vite/
+coverage/
+.env
+.env.*
+.DS_Store
+# Written by `pnpm bake`; the game builds the same collider at runtime when it is missing.
+public/baked/

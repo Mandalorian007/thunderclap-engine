@@ -85,6 +85,133 @@ describe('SceneStack', () => {
   });
 });
 
+/** A promise the test settles by hand. */
+function deferred() {
+  let resolve!: () => void;
+  let reject!: (e: unknown) => void;
+  const promise = new Promise<void>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+const flushMicrotasks = () => new Promise<void>((r) => setTimeout(r, 0));
+
+describe('SceneStack preload and transitions', () => {
+  it('a slow preload keeps the old scene updating; the promise resolves after enter', async () => {
+    const log: string[] = [];
+    const st = new SceneStack<string, string[], string>('c');
+    const phases: string[] = [];
+    st.onTransition((from, to, phase) => phases.push(`${phase}:${from?.name}>${to?.name}`));
+    st.push(rec('old', log));
+    const gate = deferred();
+    const next = rec('next', log, {
+      preload: (ctx) => {
+        log.push(`next.preload(${ctx})`);
+        return gate.promise;
+      },
+    });
+    let entered = false;
+    const p = st.push(next).then(() => {
+      entered = true;
+      log.push(`resolved top=${st.top?.name}`);
+    });
+    expect(st.transitioning).toBe(true);
+    expect(st.top?.name).toBe('old');
+    for (let i = 0; i < 5; i++) st.update(1 / 60);
+    const frame: string[] = [];
+    st.render(frame, 'cam');
+    expect(frame).toEqual(['old@cam']);
+    expect(log.filter((l) => l === 'old.update').length).toBe(5);
+    // A pop queued during the preload waits behind it.
+    st.pop();
+    expect(st.size).toBe(1);
+    await flushMicrotasks();
+    expect(entered).toBe(false);
+    gate.resolve();
+    await p;
+    expect(entered).toBe(true);
+    expect(st.transitioning).toBe(false);
+    // The push entered, then the queued pop removed it again.
+    expect(log.slice(-5)).toEqual([
+      'old.pause',
+      'next.enter(c)',
+      'next.exit',
+      'old.resume',
+      'resolved top=old',
+    ]);
+    expect(phases).toEqual([
+      'enter:undefined>old',
+      'preload:old>next',
+      'enter:old>next',
+      'exit:next>old',
+    ]);
+  });
+
+  it('a rejected preload rejects and leaves the stack as it was', async () => {
+    const log: string[] = [];
+    const st = new SceneStack<string, string[], string>('c');
+    const a = rec('a', log);
+    st.push(a);
+    const boom = new Error('boom');
+    const bad = rec('bad', log, { preload: () => Promise.reject(boom) });
+    await expect(st.replace(bad)).rejects.toBe(boom);
+    expect(st.list()).toEqual([a]);
+    expect(st.transitioning).toBe(false);
+    expect(log).toEqual(['a.enter(c)']);
+    // A preload that throws synchronously behaves the same, and the queue keeps going.
+    const thrower = rec('t', log, {
+      preload: () => {
+        throw boom;
+      },
+    });
+    const after = st.push(rec('b', log));
+    await expect(st.push(thrower)).rejects.toBe(boom);
+    await after;
+    expect(st.list().map((s) => s.name)).toEqual(['a', 'b']);
+  });
+
+  it('sync scenes resolve; replace reports exit then enter', async () => {
+    const log: string[] = [];
+    const st = new SceneStack<string, string[], string>('c');
+    const phases: string[] = [];
+    const off = st.onTransition((from, to, phase) =>
+      phases.push(`${phase}:${from?.name}>${to?.name}`),
+    );
+    await st.push(rec('a', log));
+    expect(st.top?.name).toBe('a');
+    await st.replace(rec('b', log));
+    st.clear();
+    off();
+    await st.push(rec('c', log));
+    expect(phases).toEqual(['enter:undefined>a', 'exit:a>b', 'enter:a>b', 'exit:b>undefined']);
+  });
+
+  it('a preloading replace issued during update waits for both update and preload', async () => {
+    const log: string[] = [];
+    const st = new SceneStack<string, string[], string>('c');
+    const gate = deferred();
+    const next = rec('next', log, { preload: () => gate.promise });
+    let p: Promise<void> | null = null;
+    st.push(
+      rec('a', log, {
+        update: () => {
+          if (!p) p = st.replace(next);
+          log.push('a.update');
+        },
+      }),
+    );
+    st.update(0);
+    st.update(0);
+    expect(st.transitioning).toBe(true);
+    gate.resolve();
+    await p;
+    expect(st.top).toBe(next);
+    expect(log).toEqual(['a.enter(c)', 'a.update', 'a.update', 'a.exit', 'next.enter(c)']);
+  });
+});
+
 describe('Emitter', () => {
   it('emits typed payloads and unsubscribes', () => {
     const e = new Emitter<{ hit: number; done: undefined }>();

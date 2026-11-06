@@ -4,7 +4,7 @@ This folder is a complete, copyable 2D puzzle game on `@thunderclap/engine`. To 
 
 ## Commands
 
-- `pnpm dev`: Vite dev server at `http://127.0.0.1:5173` (from the repo root: `pnpm template:puzzle`).
+- `pnpm dev`: Vite dev server at `http://127.0.0.1:5173` (from the repo root: `pnpm template:puzzle`). The repo's `pnpm test:e2e` boots the page once per device row (`e2e/templates.spec.ts`) and reads `window.__template` (`{ scene, frames, ... }`, set in `main.ts`).
 - `pnpm typecheck`, `pnpm lint`, `pnpm test`: `tsc`, Biome (the repo's `biome.json`), Vitest. `pnpm check` runs all three; the repo root's `pnpm check` runs it too (`check:template-puzzle`).
 - Tests are product tests only (`src/**/*.test.ts`): the rules and the save schema. The engine verifies the platform (WebGPU, input, layout) itself.
 

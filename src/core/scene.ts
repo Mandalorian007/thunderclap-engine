@@ -11,12 +11,26 @@ import type { Camera } from '../render/camera';
  * - push/pop/replace called during `update` or `render` are deferred until that call returns,
  *   so a scene can safely replace itself mid-update.
  * - Covered scenes get `pause()` and `resume()` when they lose and regain the top.
+ * - Preload (ws/core-2): a pushed or replacing scene with `preload(ctx)` is awaited before it
+ *   enters; until then the stack is unchanged, so the old top keeps updating and rendering, and
+ *   `transitioning` is true. Later stack ops wait behind it, in order. `push` and `replace`
+ *   return a promise that resolves once the scene has entered (a scene without `preload` enters
+ *   at once, or when the current `update`/`render` returns, and its promise resolves on the next
+ *   microtask). A rejected `preload` rejects that promise and leaves the stack as it was.
+ * - `onTransition(fn)` reports `'preload'` (before `preload` starts), `'exit'` (after a scene's
+ *   `exit`, with the scene it gives way to) and `'enter'` (after a scene's `enter`, with the scene
+ *   it covered or replaced), so a game drives a loading screen or a fade from one hook.
  */
 export interface Scene<Ctx = unknown, Frame = unknown, Cam = Camera> {
   /** Debug name. */
   readonly name?: string;
   /** If true, the scene below keeps rendering underneath this one. */
   readonly transparent?: boolean;
+  /**
+   * Load what the scene needs before it enters; awaited by `push`/`replace` while the previous
+   * top keeps running. A rejection cancels the push and leaves the stack unchanged.
+   */
+  preload?(ctx: Ctx): Promise<void>;
   enter?(ctx: Ctx): void;
   exit?(): void;
   /** Another scene was pushed on top of this one. */
@@ -28,12 +42,34 @@ export interface Scene<Ctx = unknown, Frame = unknown, Cam = Camera> {
   render?(frame: Frame, camera: Cam, alpha: number): void;
 }
 
-type Op<C, F, K> = { kind: 'push' | 'replace'; scene: Scene<C, F, K> } | { kind: 'pop' | 'clear' };
+export type TransitionPhase = 'preload' | 'enter' | 'exit';
+
+/** `from` is the scene leaving or being covered, `to` the one arriving or revealed (or undefined). */
+export type TransitionListener<Ctx = unknown, Frame = unknown, Cam = Camera> = (
+  from: Scene<Ctx, Frame, Cam> | undefined,
+  to: Scene<Ctx, Frame, Cam> | undefined,
+  phase: TransitionPhase,
+) => void;
+
+interface Op<C, F, K> {
+  kind: 'push' | 'replace' | 'pop' | 'clear';
+  scene: Scene<C, F, K> | null;
+  /** The preload finished; apply without loading again. */
+  loaded: boolean;
+  promise: Promise<void> | null;
+  resolve: (() => void) | null;
+  reject: ((err: unknown) => void) | null;
+}
+
+const noop = () => {};
 
 export class SceneStack<Ctx = unknown, Frame = unknown, Cam = Camera> {
   private readonly scenes: Scene<Ctx, Frame, Cam>[] = [];
   private readonly pending: Op<Ctx, Frame, Cam>[] = [];
   private busy = 0;
+  /** The op whose scene is preloading; the queue waits behind it. */
+  private loading: Op<Ctx, Frame, Cam> | null = null;
+  private listeners: TransitionListener<Ctx, Frame, Cam>[] = [];
 
   constructor(private readonly ctx: Ctx) {}
 
@@ -45,26 +81,41 @@ export class SceneStack<Ctx = unknown, Frame = unknown, Cam = Camera> {
     return this.scenes[this.scenes.length - 1];
   }
 
+  /** True while a pushed or replacing scene's `preload` is pending. */
+  get transitioning(): boolean {
+    return this.loading !== null;
+  }
+
   /** Snapshot of the stack, bottom first (debugging/tests). */
   list(): readonly Scene<Ctx, Frame, Cam>[] {
     return this.scenes.slice();
   }
 
-  push(scene: Scene<Ctx, Frame, Cam>): void {
-    this.queue({ kind: 'push', scene });
+  /** Push `scene` (after its `preload`, if any); resolves once it has entered. */
+  push(scene: Scene<Ctx, Frame, Cam>): Promise<void> {
+    return this.queueScene('push', scene);
   }
 
   pop(): void {
-    this.queue({ kind: 'pop' });
+    this.queue(bare('pop'));
   }
 
-  replace(scene: Scene<Ctx, Frame, Cam>): void {
-    this.queue({ kind: 'replace', scene });
+  /** Replace the top with `scene` (after its `preload`, if any); resolves once it has entered. */
+  replace(scene: Scene<Ctx, Frame, Cam>): Promise<void> {
+    return this.queueScene('replace', scene);
   }
 
   /** Exit every scene, top first. */
   clear(): void {
-    this.queue({ kind: 'clear' });
+    this.queue(bare('clear'));
+  }
+
+  /** Observe transitions; returns the unsubscribe function. Listeners are copy-on-write. */
+  onTransition(fn: TransitionListener<Ctx, Frame, Cam>): () => void {
+    this.listeners = [...this.listeners, fn];
+    return () => {
+      this.listeners = this.listeners.filter((l) => l !== fn);
+    };
   }
 
   update(dt: number): void {
@@ -94,44 +145,125 @@ export class SceneStack<Ctx = unknown, Frame = unknown, Cam = Camera> {
     }
   }
 
+  private queueScene(kind: 'push' | 'replace', scene: Scene<Ctx, Frame, Cam>): Promise<void> {
+    const op: Op<Ctx, Frame, Cam> = {
+      kind,
+      scene,
+      loaded: false,
+      promise: null,
+      resolve: null,
+      reject: null,
+    };
+    op.promise = new Promise<void>((resolve, reject) => {
+      op.resolve = resolve;
+      op.reject = reject;
+    });
+    // Outside the executor, so a throwing `enter` still throws out of `push`, as before.
+    this.queue(op);
+    return op.promise;
+  }
+
   private queue(op: Op<Ctx, Frame, Cam>): void {
     this.pending.push(op);
     if (this.busy === 0) this.flush();
   }
 
   private flush(): void {
-    if (this.busy > 0) return;
-    while (this.pending.length) {
+    while (this.busy === 0 && this.loading === null && this.pending.length > 0) {
       const op = this.pending.shift()!;
-      this.apply(op);
+      const scene = op.scene;
+      if (!op.loaded && scene?.preload) {
+        this.startPreload(op, scene);
+        continue;
+      }
+      try {
+        this.apply(op);
+      } catch (err) {
+        // The error throws out of the call that applied the op; the promise rejects too, marked
+        // handled so a caller that ignored it is not told twice.
+        op.promise?.catch(noop);
+        op.reject?.(err);
+        throw err;
+      }
+      op.resolve?.();
     }
+  }
+
+  private startPreload(op: Op<Ctx, Frame, Cam>, scene: Scene<Ctx, Frame, Cam>): void {
+    this.loading = op;
+    this.emit(this.top, scene, 'preload');
+    let p: Promise<void>;
+    try {
+      p = Promise.resolve(scene.preload!(this.ctx));
+    } catch (err) {
+      p = Promise.reject(err);
+    }
+    p.then(
+      () => {
+        this.loading = null;
+        op.loaded = true;
+        this.pending.unshift(op);
+        if (this.busy === 0) this.flush();
+      },
+      (err: unknown) => {
+        this.loading = null;
+        op.reject?.(err);
+        if (this.busy === 0) this.flush();
+      },
+    );
+  }
+
+  private emit(
+    from: Scene<Ctx, Frame, Cam> | undefined,
+    to: Scene<Ctx, Frame, Cam> | undefined,
+    phase: TransitionPhase,
+  ): void {
+    const ls = this.listeners;
+    for (let i = 0; i < ls.length; i++) ls[i]!(from, to, phase);
   }
 
   private apply(op: Op<Ctx, Frame, Cam>): void {
     switch (op.kind) {
       case 'push': {
-        this.top?.pause?.();
-        this.scenes.push(op.scene);
-        op.scene.enter?.(this.ctx);
+        const scene = op.scene!;
+        const below = this.top;
+        below?.pause?.();
+        this.scenes.push(scene);
+        scene.enter?.(this.ctx);
+        this.emit(below, scene, 'enter');
         break;
       }
       case 'pop': {
         const s = this.scenes.pop();
         s?.exit?.();
-        if (s) this.top?.resume?.();
+        if (s) {
+          this.top?.resume?.();
+          this.emit(s, this.top, 'exit');
+        }
         break;
       }
       case 'replace': {
+        const scene = op.scene!;
         const s = this.scenes.pop();
         s?.exit?.();
-        this.scenes.push(op.scene);
-        op.scene.enter?.(this.ctx);
+        if (s) this.emit(s, scene, 'exit');
+        this.scenes.push(scene);
+        scene.enter?.(this.ctx);
+        this.emit(s, scene, 'enter');
         break;
       }
       case 'clear': {
-        while (this.scenes.length) this.scenes.pop()!.exit?.();
+        while (this.scenes.length) {
+          const s = this.scenes.pop()!;
+          s.exit?.();
+          this.emit(s, this.top, 'exit');
+        }
         break;
       }
     }
   }
+}
+
+function bare<C, F, K>(kind: 'pop' | 'clear'): Op<C, F, K> {
+  return { kind, scene: null, loaded: false, promise: null, resolve: null, reject: null };
 }

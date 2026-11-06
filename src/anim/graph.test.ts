@@ -433,4 +433,220 @@ describe('allocation', () => {
     expect(constructed).toBe(0);
     expect(graph.state).toBeDefined();
   });
+
+  it('a 2D blend space and pose-matched transitions allocate nothing over 500 frames', () => {
+    const pts: [number, number][] = [];
+    for (let y = -1; y <= 1; y++) for (let x = -1; x <= 1; x++) pts.push([x, y]);
+    const mixer = new AnimationMixer(skeleton(2), { maxActions: 16 });
+    const graph = createAnimGraph(mixer, {
+      params: { px: 0, py: 0, go: false },
+      states: {
+        m: {
+          blend: {
+            params: ['px', 'py'],
+            points: pts.map((at, i) => ({ at, clip: constant(`p${i}`, i, 1) })),
+          },
+        },
+        j: { clip: jump, loop: false },
+      },
+      transitions: [
+        { from: 'm', to: 'j', when: (p) => p.go === true, fade: 0.1, matchPose: true },
+        { from: 'j', to: 'm', when: () => true, fade: 0.1, exitTime: 1, matchPose: true },
+      ],
+      initial: 'm',
+      match: { joints: [1] },
+    });
+    graph.update(0.016);
+    let constructed = 0;
+    for (const n of names) {
+      g[n] = new Proxy(saved[names.indexOf(n)] as object, {
+        construct(target, args, newTarget) {
+          constructed++;
+          return Reflect.construct(target as new (...a: unknown[]) => object, args, newTarget);
+        },
+      });
+    }
+    for (let i = 0; i < 500; i++) {
+      graph.set('px', Math.sin(i * 0.1) * 1.5);
+      graph.set('py', Math.cos(i * 0.07) * 1.5);
+      graph.set('go', i % 90 === 0);
+      graph.update(0.016);
+    }
+    expect(constructed).toBe(0);
+  });
+});
+
+describe('2D blend spaces', () => {
+  const S = Math.sqrt(3) / 2;
+  const grid: [number, number][] = [];
+  for (let y = -1; y <= 1; y++) for (let x = -1; x <= 1; x++) grid.push([x, y]);
+  function strafe(points: [number, number][]) {
+    const mixer = new AnimationMixer(skeleton(), { maxActions: 16 });
+    const g = createAnimGraph(mixer, {
+      params: { px: 0, py: 0 },
+      states: {
+        m: {
+          blend: {
+            params: ['px', 'py'],
+            points: points.map((at, i) => ({ at, clip: constant(`p${i}`, i, 1) })),
+          },
+        },
+      },
+      transitions: [],
+      initial: 'm',
+    });
+    return { mixer, g };
+  }
+  function at(g: AnimGraph, px: number, py: number): number[] {
+    g.set('px', px);
+    g.set('py', py);
+    g.update(0);
+    return weights(g, 'm');
+  }
+
+  it('a query on a sample returns that clip at 1 (3×3 grid)', () => {
+    const { g } = strafe(grid);
+    for (let i = 0; i < grid.length; i++) {
+      const w = at(g, grid[i]![0], grid[i]![1]);
+      expect(w[i]).toBeCloseTo(1, 6);
+      expect(sum(w)).toBeCloseTo(1, 6);
+      for (let j = 0; j < w.length; j++) if (j !== i) expect(w[j]).toBeCloseTo(0, 6);
+    }
+  });
+
+  it('the centre of three equilateral samples returns a third each', () => {
+    const { g } = strafe([
+      [0, 1],
+      [-S, -0.5],
+      [S, -0.5],
+    ]);
+    const w = at(g, 0, 0);
+    expect(w[0]).toBeCloseTo(1 / 3, 6);
+    expect(w[1]).toBeCloseTo(1 / 3, 6);
+    expect(w[2]).toBeCloseTo(1 / 3, 6);
+  });
+
+  it('weights sum to 1 and stay non-negative off the grid', () => {
+    const { g } = strafe(grid);
+    for (let k = 0; k < 50; k++) {
+      const w = at(g, Math.sin(k * 7.1) * 1.3, Math.cos(k * 3.3) * 1.3);
+      expect(sum(w)).toBeCloseTo(1, 5);
+      for (const v of w) expect(v).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it('a query outside the hull clamps to the hull', () => {
+    const { g } = strafe(grid);
+    // Far right: the same as the right edge midpoint, the (1, 0) sample alone.
+    expect(at(g, 10, 0)).toEqual(at(g, 1, 0));
+    expect(at(g, 1, 0)[5]).toBeCloseTo(1, 6);
+    // Far corner: the corner sample alone.
+    expect(at(g, 10, 10)[8]).toBeCloseTo(1, 6);
+    // Off the top edge between two samples: only those two share the weight.
+    const w = at(g, 0.5, 5);
+    expect(w[7]).toBeCloseTo(0.5, 6);
+    expect(w[8]).toBeCloseTo(0.5, 6);
+  });
+
+  it('degenerate layouts: one point, and points on a line', () => {
+    expect(at(strafe([[2, 3]]).g, -5, 9)).toEqual([1]);
+    const { g } = strafe([
+      [0, 0],
+      [1, 0],
+      [2, 0],
+    ]);
+    const w = at(g, 0.5, 7);
+    expect(w[0]).toBeCloseTo(0.5, 6);
+    expect(w[1]).toBeCloseTo(0.5, 6);
+    expect(w[2]).toBeCloseTo(0, 6);
+  });
+
+  it('rejects an unknown parameter', () => {
+    const mixer = new AnimationMixer(skeleton());
+    expect(() =>
+      createAnimGraph(mixer, {
+        params: { px: 0 },
+        states: { m: { blend: { params: ['px', 'py'], points: [{ at: [0, 0], clip: idle }] } } },
+        transitions: [],
+        initial: 'm',
+      }),
+    ).toThrow(/unknown param 'py'/);
+  });
+});
+
+describe('matchPose transitions', () => {
+  /** Node 1 x ramps 0 → 1 over 1 s, so each frame of the clip has a distinct pose. */
+  function travel(name: string): AnimationClip {
+    return {
+      name,
+      duration: 1,
+      channels: [
+        {
+          node: 1,
+          path: 'translation',
+          interpolation: 'LINEAR',
+          times: f32([0, 1]),
+          values: f32([0, 0, 0, 1, 0, 0]),
+        },
+      ],
+    };
+  }
+
+  it('starts the target at the frame nearest the pose left, within one sample', () => {
+    const mixer = new AnimationMixer(skeleton(2));
+    const g = createAnimGraph(mixer, {
+      params: { go: false },
+      states: { a: { clip: travel('a') }, b: { clip: travel('b') } },
+      transitions: [{ from: 'a', to: 'b', when: (p) => p.go === true, fade: 0.1, matchPose: true }],
+      initial: 'a',
+      match: { joints: [1], sampleRate: 30 },
+    });
+    for (let i = 0; i < 24; i++) g.update(1 / 60); // t = 0.4
+    g.set('go', true);
+    g.update(1 / 60);
+    const t = g.actions('b')[0]!.time;
+    // Matched at 0.4 (± one sample at 30 Hz) then advanced by one update.
+    expect(Math.abs(t - (0.4 + 1 / 60))).toBeLessThanOrEqual(1 / 30 + 1e-6);
+  });
+
+  it('without match features the target starts at 0', () => {
+    const mixer = new AnimationMixer(skeleton(2));
+    const g = createAnimGraph(mixer, {
+      params: { go: false },
+      states: { a: { clip: travel('a') }, b: { clip: travel('b') } },
+      transitions: [{ from: 'a', to: 'b', when: (p) => p.go === true, fade: 0, matchPose: true }],
+      initial: 'a',
+    });
+    for (let i = 0; i < 24; i++) g.update(1 / 60);
+    g.set('go', true);
+    g.update(1 / 60);
+    expect(g.actions('b')[0]!.time).toBeCloseTo(1 / 60, 6);
+  });
+
+  it('go() with matchPose matches too, and a blend target sets its phase', () => {
+    const mixer = new AnimationMixer(skeleton(2));
+    const g = createAnimGraph(mixer, {
+      params: { s: 0 },
+      states: {
+        a: { clip: travel('a') },
+        m: {
+          blend: {
+            param: 's',
+            points: [
+              { at: 0, clip: travel('m0') },
+              { at: 1, clip: travel('m1') },
+            ],
+          },
+        },
+      },
+      transitions: [],
+      initial: 'a',
+      match: { joints: [1] },
+    });
+    for (let i = 0; i < 36; i++) g.update(1 / 60); // t = 0.6
+    g.go('m', 0, { matchPose: true });
+    expect(Math.abs(g.phase('m') - 0.6)).toBeLessThanOrEqual(1 / 30 + 1e-6);
+    g.go('a', 0);
+    expect(g.actions('a')[0]!.time).toBe(0);
+  });
 });

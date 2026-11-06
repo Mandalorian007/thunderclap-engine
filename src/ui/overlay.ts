@@ -1,6 +1,8 @@
 import { type AnchorCamera, Anchors } from './anchor';
 import { CaptionCard, type CaptionOptions } from './caption';
+import { type CursorOptions, createCursor, type WorldCursor } from './cursor';
 import { h } from './dom';
+import { createFloatNumbers, type FloatNumbers } from './float-numbers';
 import {
   createHeading,
   createMeter,
@@ -27,7 +29,10 @@ import { createDragContext, type DragContext } from './inventory-drag';
 import { grid as createGrid, type Grid, type GridOptions } from './inventory-grid';
 import { radial as createRadial, type Radial, type RadialOptions } from './inventory-radial';
 import { createLayout, type Layout, type LayoutSpec, type Units } from './layout';
-import { PanelStack } from './stack';
+import { createLoading, type LoadingOptions, type LoadingScreen } from './loading';
+import { createMinimap, type Minimap, type MinimapOptions } from './minimap';
+import { createNotifier, type Notification, type Notifier, type NotifyOptions } from './notify';
+import { type PadOwner, PanelStack } from './stack';
 import { ensureStyles } from './styles';
 import {
   CSS_FONT_PX,
@@ -38,7 +43,22 @@ import {
 } from './text-scale';
 import { cssPxTheme, defaultTheme, type ThemeOverrides, tokenVar } from './theme';
 import { Toaster } from './toast';
+import {
+  createTooltips,
+  type Tooltip,
+  type TooltipOptions,
+  type Tooltips,
+  type TooltipTarget,
+} from './tooltip';
 import { ensureWidgets2Styles } from './widgets-2';
+import {
+  type Compass,
+  type CompassOptions,
+  createCompass,
+  createRing,
+  type Ring,
+  type RingOptions,
+} from './widgets-3';
 
 /** A rectangle in CSS pixels relative to the overlay's parent (what platform's letterbox gives). */
 export interface Rect {
@@ -145,6 +165,36 @@ export interface Overlay {
   contextList(items: ContextItem[], opts: ContextListOptions): ContextList;
   /** The drag context grids and `slotsTarget`s register with; made on first use (`ui/inventory-drag.ts`). */
   readonly drag: DragContext;
+  /**
+   * A tooltip on an element (hover after `delay`, focus; leave, blur, Escape hide) or a world
+   * point (rides `anchors()`), in the overlay's one shared `role="tooltip"` element on the
+   * `toasts` layer (`ui/tooltip.ts`).
+   */
+  tooltip(target: TooltipTarget, content: string | Node, opts?: TooltipOptions): Tooltip;
+  /** The shared tooltip element and the tooltip showing now; made on first use. */
+  readonly tooltips: Tooltips;
+  /** A pad/keyboard world cursor on the `hud` layer, yielding to modal panels (`ui/cursor.ts`). */
+  cursor(opts: CursorOptions): WorldCursor;
+  /** `stack.padOwner`: `'stack'` while a modal panel has the gamepad, else `'game'` (ws/ui-4). */
+  readonly padOwner: PadOwner;
+  /**
+   * The overlay's float-number pool on the `hud` layer, made on first use with the defaults
+   * (64 nodes, 1 s); `createFloatNumbers(ui, opts)` for other settings (`ui/float-numbers.ts`).
+   * Needs `anchors()`; call `floats.update(dt)` in the update.
+   */
+  readonly floats: FloatNumbers;
+  /** A radial progress ring in a layout region (`ui/widgets-3.ts`). */
+  ring(opts?: RingOptions): Ring;
+  /** A compass strip with bearing markers in a layout region (`ui/widgets-3.ts`). */
+  compass(opts?: CompassOptions): Compass;
+  /** A round minimap with pooled markers in a layout region (`ui/minimap.ts`). */
+  minimap(opts?: MinimapOptions): Minimap;
+  /** A loading screen on the `panels` layer; root `aria-busy` while shown (`ui/loading.ts`). */
+  loading(opts?: LoadingOptions): LoadingScreen;
+  /** A notification card stacked top-right on the `toasts` layer (`ui/notify.ts`). */
+  notify(opts: NotifyOptions): Notification;
+  /** The notification stack (`dismissAll`, the `menuNav` root); made on first use. */
+  readonly notifications: Notifier;
   destroy(): void;
 }
 
@@ -264,6 +314,9 @@ export function createOverlay(opts: OverlayOptions): Overlay {
 
   let anchors: Anchors | null = null;
   let drag: DragContext | null = null;
+  let tooltips: Tooltips | null = null;
+  let notifications: Notifier | null = null;
+  let floats: FloatNumbers | null = null;
 
   const overlay: Overlay = {
     root,
@@ -330,6 +383,7 @@ export function createOverlay(opts: OverlayOptions): Overlay {
     },
     updateAnchors() {
       anchors?.update();
+      tooltips?.update();
     },
     reticle(o) {
       return createReticle(overlay, o);
@@ -361,9 +415,51 @@ export function createOverlay(opts: OverlayOptions): Overlay {
       drag ??= createDragContext(overlay);
       return drag;
     },
+    get tooltips() {
+      tooltips ??= createTooltips(overlay);
+      return tooltips;
+    },
+    tooltip(target, content, o) {
+      return overlay.tooltips.tooltip(target, content, o);
+    },
+    cursor(o) {
+      return createCursor(overlay, o);
+    },
+    get padOwner() {
+      return stack.padOwner;
+    },
+    get floats() {
+      floats ??= createFloatNumbers(overlay);
+      return floats;
+    },
+    ring(o) {
+      return createRing(overlay, o);
+    },
+    compass(o) {
+      return createCompass(overlay, o);
+    },
+    minimap(o) {
+      return createMinimap(overlay, o);
+    },
+    loading(o) {
+      return createLoading(overlay, o);
+    },
+    get notifications() {
+      notifications ??= createNotifier(layers.toasts);
+      return notifications;
+    },
+    notify(o) {
+      return overlay.notifications.notify(o);
+    },
     destroy() {
       drag?.destroy();
       drag = null;
+      tooltips?.dispose();
+      tooltips = null;
+      floats?.dispose();
+      floats = null;
+      notifications?.dispose();
+      notifications = null;
       anchors?.clear();
       anchors = null;
       unwatch();

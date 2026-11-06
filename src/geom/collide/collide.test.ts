@@ -525,3 +525,41 @@ describe('collide bench', () => {
     expect(hits).toBe(10000);
   });
 });
+
+describe('positions-only source (ws/geom-3)', () => {
+  /** A box's xyz positions alone, three floats a vertex, with its indices. */
+  const positionsOf = (g = box()) => {
+    const F = g.layout.floats;
+    const n = g.vertices.length / F;
+    const positions = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) positions.set(g.vertices.subarray(i * F, i * F + 3), i * 3);
+    return { positions, indices: g.indices };
+  };
+
+  it('hits exactly where the geometry source does', () => {
+    const full = createStaticCollider([
+      { geometry: box(), transform: [1, 0, 0, 2, 0, 1, 0, 0, 0, 0, 1, 0] },
+    ]);
+    const bare = createStaticCollider([
+      { ...positionsOf(), transform: [1, 0, 0, 2, 0, 1, 0, 0, 0, 0, 1, 0] },
+    ]);
+    expect(bare.triangleCount).toBe(full.triangleCount);
+    const a = createHit();
+    const b = createHit();
+    for (const [ox, oy, oz] of [
+      [2, 5, 0],
+      [2.2, 5, -0.3],
+      [-3, 0.1, 0.2],
+    ] as const) {
+      const dir = ox < 0 ? [1, 0, 0] : [0, -1, 0];
+      expect(raycast(bare, [ox, oy, oz], dir, 20, b)).toBe(raycast(full, [ox, oy, oz], dir, 20, a));
+      expect(b.t).toBeCloseTo(a.t, 6);
+      expect([b.nx, b.ny, b.nz]).toEqual([a.nx, a.ny, a.nz]);
+    }
+  });
+
+  it('rejects an index count that is not whole triangles', () => {
+    const { positions } = positionsOf();
+    expect(() => createStaticCollider([{ positions, indices: new Uint16Array([0, 1]) }])).toThrow();
+  });
+});

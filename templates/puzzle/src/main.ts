@@ -19,6 +19,12 @@ const ROWS = 4;
 /** The `level` prop of the analytics events: this template has one board size. */
 const LEVEL = `${COLS}x${ROWS}`;
 
+declare global {
+  interface Window {
+    __template?: { scene: string; frames: number; cursor: number };
+  }
+}
+
 const engine = await createGame<Action, ProgressStore, GameCtx>({
   root: document.getElementById('app')!,
   title: 'Pairs',
@@ -69,6 +75,16 @@ if (engine) {
       duration: 4000,
     });
   }
+
+  // `window.__template`: the top scene's name, the frame count and the cursor, for the repo's
+  // smoke e2e (`e2e/templates.spec.ts`). Updated after every rendered frame.
+  const probe = { scene: '', frames: 0, cursor: 0 };
+  window.__template = probe;
+  engine.hooks.afterRender = () => {
+    probe.scene = ctx.stack.top?.name ?? '';
+    probe.frames++;
+    probe.cursor = game.cursor;
+  };
 
   analytics?.emit('level_start', { level: LEVEL });
   ctx.stack.push(createBoardScene(ctx));

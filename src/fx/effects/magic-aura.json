@@ -1,0 +1,47 @@
+{
+  "loop": true,
+  "duration": 1,
+  "systems": [
+    {
+      "name": "motes",
+      "options": { "space": "world", "blend": "additive", "stretch": 0.01, "softness": 0.15 },
+      "emitters": [
+        {
+          "rate": 24,
+          "params": {
+            "x": 0,
+            "y": 0,
+            "z": 0,
+            "shape": { "kind": "sphere", "radius": 0.35 },
+            "angle": 1.5707963,
+            "spread": 1.0,
+            "speed": [0.4, 0.9],
+            "life": [1.0, 1.6],
+            "sizeCurve": [0.02, 0.08, 0.06, 0.0],
+            "colorCurve": [[0.4, 0.6, 2.4, 1], [1.2, 0.5, 2.8, 1], [0.2, 0.9, 2.0, 0]],
+            "gravity": [0, 0.6, 0],
+            "drag": 0.8,
+            "emissive": 2.5,
+            "inherit": 0.5,
+            "onLife": {
+              "rate": 18,
+              "params": {
+                "x": 0,
+                "y": 0,
+                "z": 0,
+                "speed": [0.02, 0.08],
+                "life": [0.3, 0.5],
+                "size": [0.03, 0.0],
+                "colorStart": [0.6, 0.4, 2.0, 0.8],
+                "gravity": [0, 0, 0],
+                "drag": 2,
+                "emissive": 1.5
+              }
+            },
+            "colorStart": [0.4, 0.6, 2.4, 1]
+          }
+        }
+      ]
+    }
+  ]
+}

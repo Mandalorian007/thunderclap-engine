@@ -198,3 +198,36 @@ describe('overlay.anchors', () => {
     parent.remove();
   });
 });
+
+describe('Anchors.frame and project (ws/ui-4)', () => {
+  it('frame is the surface; project lands where an anchored element is placed, and follows a resize', () => {
+    const parent = document.createElement('div');
+    document.body.append(parent);
+    const ov = createOverlay({ parent });
+    ov.setFrame({ x: 40, y: 0, width: 960, height: 540 });
+    const cam = Camera.ortho2d(1920, 1080);
+    const a = ov.anchors(() => cam);
+    expect(a.frame.width).toBe(1920);
+    expect(a.frame.height).toBe(1080);
+    expect(a.frame.rect).toEqual({ x: 40, y: 0, width: 960, height: 540 });
+    expect(a.frame).toBe(a.frame); // one reused object
+    const el = document.createElement('span');
+    const h = a.add(el, [1600, 540, 0]);
+    ov.updateAnchors();
+    const pt = { x: 0, y: 0 };
+    expect(a.project(1600, 540, 0, pt)).toBe(true);
+    expect(pt.x).toBeCloseTo(h.x, 6);
+    expect(pt.y).toBeCloseTo(h.y, 6);
+    expect(pt.x).toBeCloseTo(800, 3);
+    expect(a.project(5000, 0, 0, pt)).toBe(false);
+    ov.setFrame({ x: 0, y: 0, width: 1920, height: 1080 });
+    expect(a.frame.rect.width).toBe(1920);
+    ov.updateAnchors();
+    expect(h.x).toBeCloseTo(1600, 3);
+    expect(a.project(1600, 540, 0, pt)).toBe(true);
+    expect(pt.x).toBeCloseTo(h.x, 6);
+    expect(pt.y).toBeCloseTo(h.y, 6);
+    ov.destroy();
+    parent.remove();
+  });
+});

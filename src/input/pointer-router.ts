@@ -6,6 +6,7 @@
  */
 import { Emitter } from '../core/events';
 import type { Gestures } from './gestures';
+import type { PointerDispatcher } from './pointer-dispatch';
 import {
   type PointerDevice,
   type PointerSample,
@@ -49,6 +50,13 @@ export interface PointerRouterEvents<T = unknown> {
   select: PointerHitEvent<T>;
   /** Secondary on a pointer (see `PointerRouterOptions.secondaryAction`). */
   secondary: PointerHitEvent<T>;
+  /**
+   * A pointer moved this tick (position or ray changed), at most once per pointer per tick,
+   * after its `hit`/`hitEnd` (ws/input-4). `hit` is the target under it now, or `null`.
+   */
+  moved: PointerHitEvent<T>;
+  /** A pointer's select or secondary button went up this tick (`hit` is what it is over now). */
+  released: PointerHitEvent<T>;
 }
 
 export interface PointerRouterOptions<T = unknown> {
@@ -138,6 +146,8 @@ export class PointerRouter<T = unknown> {
   private readonly evHit: PointerHitEvent<T> = { pointer: null as never, hit: null };
   private readonly evEnd: PointerHitEvent<T> = { pointer: null as never, hit: null };
   private readonly evSelect: PointerHitEvent<T> = { pointer: null as never, hit: null };
+  private readonly evMoved: PointerHitEvent<T> = { pointer: null as never, hit: null };
+  private readonly evReleased: PointerHitEvent<T> = { pointer: null as never, hit: null };
 
   constructor(opts: PointerRouterOptions<T> = {}) {
     this.cameraOpt = opts.camera ?? null;
@@ -206,10 +216,10 @@ export class PointerRouter<T = unknown> {
   }
 
   /** Listen on `target` (every source with an `attach`). `Input.attach` does this when linked. */
-  attach(target: HTMLElement): void {
+  attach(target: HTMLElement, dispatcher?: PointerDispatcher): void {
     this.detach();
     this.target = target;
-    for (const s of this.sources) s.attach?.(target);
+    for (const s of this.sources) s.attach?.(target, dispatcher);
   }
 
   detach(): void {
@@ -400,6 +410,18 @@ export class PointerRouter<T = unknown> {
       return;
     }
     this.test(t);
+    if (moved) {
+      const ev = this.evMoved;
+      ev.pointer = t;
+      ev.hit = t.hit;
+      this.events.emit('moved', ev);
+    }
+    if ((t.prevSelect && !s.select) || (t.prevSecondary && !s.secondary)) {
+      const ev = this.evReleased;
+      ev.pointer = t;
+      ev.hit = t.hit;
+      this.events.emit('released', ev);
+    }
   }
 
   /** Nearest hit for `t`'s ray; report `hitEnd`/`hit` when the target changes. */

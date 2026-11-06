@@ -15,14 +15,18 @@ export interface PadNavOptions {
   axisThreshold?: number;
 }
 
-type Dir = 'up' | 'down' | 'left' | 'right';
+/** A d-pad direction. */
+export type PadDir = 'up' | 'down' | 'left' | 'right';
+type Dir = PadDir;
 
 // Standard mapping: 0 = A/south, 1 = B/east, 12–15 = d-pad up, down, left, right.
 const BTN_ACTIVATE = 0;
 const BTN_BACK = 1;
 const DPAD: Record<Dir, number> = { up: 12, down: 13, left: 14, right: 15 };
+const DIRS: readonly Dir[] = ['up', 'down', 'left', 'right'];
 
-function defaultPads(): readonly (PadLike | null)[] {
+/** `navigator.getGamepads()`, guarded; empty where there is no navigator. */
+export function defaultPads(): readonly (PadLike | null)[] {
   try {
     return typeof navigator !== 'undefined' && navigator.getGamepads ? navigator.getGamepads() : [];
   } catch {
@@ -35,12 +39,17 @@ function defaultPads(): readonly (PadLike | null)[] {
  * keyboard: the d-pad (or left stick) moves focus through the panel's controls, A activates
  * the focused one, B dismisses the panel. On a focused range slider left/right step its value,
  * and on a `select` they pick the previous/next option. Call `update()` once per frame. It does
- * nothing while no modal is open, so the game's own input map keeps the pad.
+ * nothing (and reads no pad) while the stack does not own the pad (`stack.padOwner`), so the
+ * game's own input map keeps it; the latch resets on each owner transition.
  */
 export class PadNav {
   private readonly getGamepads: () => readonly (PadLike | null)[];
   private readonly threshold: number;
-  private prev = new Set<string>();
+  private prev = new Set<PadControl>();
+  private next = new Set<PadControl>();
+  /** True while the stack owns the pad (a modal is open); kept by `onPadOwnerChange`. */
+  private owning: boolean;
+  private readonly unwatch: () => void;
 
   constructor(
     private readonly stack: PanelStack,
@@ -48,12 +57,29 @@ export class PadNav {
   ) {
     this.getGamepads = opts.getGamepads ?? defaultPads;
     this.threshold = opts.axisThreshold ?? 0.6;
+    this.owning = stack.padOwner === 'stack';
+    // The latch resets on each transition: what is held when the panel opens is not a fresh
+    // press on it (the A that opened a menu never activates its first control), and nothing is
+    // read while the game owns the pad.
+    this.unwatch = stack.onPadOwnerChange((owner) => {
+      this.owning = owner === 'stack';
+      this.prev.clear();
+      if (this.owning) readPad(this.getGamepads(), this.threshold, this.prev);
+    });
+  }
+
+  /** Stop following the stack; `update()` does nothing after. */
+  dispose(): void {
+    this.unwatch();
+    this.owning = false;
   }
 
   update(): void {
-    const now = this.read();
+    if (!this.owning) return;
+    const now = readPad(this.getGamepads(), this.threshold, this.next);
     const before = this.prev;
-    const fresh = (k: string) => now.has(k) && !before.has(k);
+    const fresh = (k: PadControl) => now.has(k) && !before.has(k);
+    this.next = before;
     this.prev = now;
     const panel = this.stack.topModalElement;
     if (!panel) return;
@@ -103,21 +129,34 @@ export class PadNav {
     el.dispatchEvent(new Event('change', { bubbles: true }));
     return true;
   }
+}
 
-  private read(): Set<string> {
-    const out = new Set<string>();
-    for (const p of this.getGamepads()) {
-      if (!p) continue;
-      const b = (i: number) => p.buttons[i]?.pressed === true;
-      if (b(BTN_ACTIVATE)) out.add('activate');
-      if (b(BTN_BACK)) out.add('back');
-      for (const [dir, i] of Object.entries(DPAD)) if (b(i)) out.add(dir);
-      const [x = 0, y = 0] = p.axes ?? [];
-      if (x <= -this.threshold) out.add('left');
-      if (x >= this.threshold) out.add('right');
-      if (y <= -this.threshold) out.add('up');
-      if (y >= this.threshold) out.add('down');
-    }
-    return out;
+/** A pad control `readPad` reports: the d-pad (or stick) directions, A and B. */
+export type PadControl = Dir | 'activate' | 'back';
+
+/**
+ * The controls held on any of `pads` right now (standard mapping: 0 = A, 1 = B, 12–15 = d-pad;
+ * the left stick past `threshold` counts as the d-pad). `out` is cleared and filled when given,
+ * so a per-frame reader allocates nothing. `PadNav` and the world cursor (`ui/cursor.ts`) latch
+ * on this set: a control is fresh when it is in this frame's set and not the last one's.
+ */
+export function readPad(
+  pads: readonly (PadLike | null)[],
+  threshold = 0.6,
+  out: Set<PadControl> = new Set(),
+): Set<PadControl> {
+  out.clear();
+  for (const p of pads) {
+    if (!p) continue;
+    const b = (i: number) => p.buttons[i]?.pressed === true;
+    if (b(BTN_ACTIVATE)) out.add('activate');
+    if (b(BTN_BACK)) out.add('back');
+    for (const dir of DIRS) if (b(DPAD[dir])) out.add(dir);
+    const [x = 0, y = 0] = p.axes ?? [];
+    if (x <= -threshold) out.add('left');
+    if (x >= threshold) out.add('right');
+    if (y <= -threshold) out.add('up');
+    if (y >= threshold) out.add('down');
   }
+  return out;
 }
