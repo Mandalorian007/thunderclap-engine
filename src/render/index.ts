@@ -74,7 +74,9 @@ export { SCENE_FORMAT, SceneTarget, type SceneTargetDesc } from './scene-target'
 export { DEFAULT_SHADOW_SIZE, SHADOW_FORMAT, ShadowMap } from './shadow';
 export { type SnapshotOptions, SnapshotRenderer } from './snapshot';
 export type {
+  DefaultTextures,
   LoadTextureArrayOptions,
+  LoadTextureOptions,
   PixelData,
   PixelSource,
   SamplerKind,
@@ -87,6 +89,8 @@ export type {
 export {
   bytesPerTexel,
   createTextureArray,
+  defaultTextures,
+  loadTexture,
   loadTextureArray,
   mipLevelCount,
   Texture,
