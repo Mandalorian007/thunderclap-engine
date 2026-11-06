@@ -7,9 +7,13 @@
  * - `createVariations`: three thuds, never the same twice in a row, with pitch and gain jitter.
  * - `createSend`: a reverb send on `sfx` driven by a slider.
  * - `createDucker`: a chime on `ui` ("dialogue") lowers `music`.
+ * - The mixer's books (ws/audio-3): per-bus voice counts from `forEachVoice` (stems included),
+ *   a looping probe voice on `sfx` with `sendTo(reverb)`, and `pause` / `unpause` (`?pause`).
  */
 import {
   AudioEngine,
+  BUS_NAMES,
+  busGain,
   createDucker,
   createMusic,
   createSend,
@@ -18,6 +22,7 @@ import {
   pluck,
   recipes,
   type SoundSpec,
+  type Voice,
 } from '@thunderclap/engine/audio';
 import type { HarnessMusicApi, HarnessMusicState } from './music-state';
 
@@ -72,7 +77,15 @@ const state: HarnessMusicState = {
   duckGain: 1,
   reverb: reverb.amount,
   frames: 0,
+  voices: { master: 0, music: 0, sfx: 0, ui: 0 },
+  sends: 0,
+  paused: false,
+  pausedBuses: [],
+  pausedRate: false,
+  busGains: { master: 1, music: 1, sfx: 1, ui: 1 },
+  busTargets: { master: 1, music: 1, sfx: 1, ui: 1 },
 };
+const PAUSE_ON_RUN = new URLSearchParams(location.search).has('pause');
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const readout = $('readout');
@@ -81,6 +94,8 @@ const intensitySlider = $<HTMLInputElement>('intensity');
 const reverbSlider = $<HTMLInputElement>('reverb');
 
 let footsteps = createVariations(audio, [], {});
+/** Looping probe voices on `sfx`; the last one is the send probe. */
+const probes: Voice[] = [];
 let blink = 0;
 music.onBeat(() => {
   state.beats++;
@@ -104,6 +119,22 @@ const api: HarnessMusicApi = {
     reverb.amount = amount;
     reverbSlider.value = String(reverb.amount);
   },
+  playSfx() {
+    probes.push(audio.loop('pad', { bus: 'sfx', gain: 0.3 }));
+  },
+  stopSfx() {
+    for (const v of probes) v.stop(0.05);
+    probes.length = 0;
+  },
+  sendProbe(amount) {
+    probes.at(-1)?.sendTo(reverb, amount);
+  },
+  pause() {
+    audio.pause();
+  },
+  unpause() {
+    audio.unpause();
+  },
 };
 window.__harnessMusic = api;
 
@@ -111,9 +142,19 @@ intensitySlider.addEventListener('input', () => api.setIntensity(Number(intensit
 reverbSlider.addEventListener('input', () => api.setReverb(Number(reverbSlider.value)));
 $('step').addEventListener('click', () => api.step());
 $('speak').addEventListener('click', () => api.speak());
+$('probe').addEventListener('click', () => api.playSfx());
+$('pause').addEventListener('click', () => (audio.paused ? api.unpause() : api.pause()));
 audio.onStateChange(() => {
-  if (audio.state === 'running') $('hint').textContent = 'Audio running.';
+  if (audio.state !== 'running') return;
+  $('hint').textContent = 'Audio running.';
+  if (PAUSE_ON_RUN && !audio.paused) api.pause();
 });
+
+/** Zero-allocation voice tally: `forEachVoice` over the live set, counted into `state.voices`. */
+const tally = (_v: Voice, bus: string) => {
+  state.voices[bus] = (state.voices[bus] ?? 0) + 1;
+  state.voices.master = (state.voices.master ?? 0) + 1;
+};
 
 let last = performance.now();
 function frame(now: number): void {
@@ -132,12 +173,26 @@ function frame(now: number): void {
   state.ducked = ducker.active;
   state.duckGain = ducker.gain;
   state.reverb = reverb.amount;
+  for (const name of BUS_NAMES) {
+    state.voices[name] = 0;
+    state.busGains[name] = audio.busNode(name)?.gain.value ?? 1;
+    state.busTargets[name] = busGain(audio.settings[name]);
+  }
+  audio.forEachVoice(undefined, tally);
+  const probe = probes.at(-1) as { sendCount?: number } | undefined;
+  state.sends = probe?.sendCount ?? 0;
+  state.paused = audio.paused;
+  state.pausedRate = audio.pausedRate;
+  if (state.pausedBuses.join() !== audio.pausedBuses.join()) {
+    state.pausedBuses = [...audio.pausedBuses];
+  }
   state.frames++;
   readout.textContent =
     `audio ${state.audioState}\n` +
     `bar ${state.bar} beat ${state.beat} (${state.totalBeats} beats, ${state.beats} fired)\n` +
     `intensity ${state.intensity.toFixed(2)}  pad ${state.layerGains.pad!.toFixed(2)}  low ${state.layerGains['pulse-low']!.toFixed(2)}  high ${state.layerGains['pulse-high']!.toFixed(2)}\n` +
-    `footstep ${state.lastVariation}  ducked ${state.ducked} (${state.duckGain.toFixed(2)})  reverb ${state.reverb.toFixed(2)}`;
+    `footstep ${state.lastVariation}  ducked ${state.ducked} (${state.duckGain.toFixed(2)})  reverb ${state.reverb.toFixed(2)}\n` +
+    `voices music ${state.voices.music} sfx ${state.voices.sfx} ui ${state.voices.ui}  sends ${state.sends}  paused ${state.paused}${state.paused ? ` [${state.pausedBuses.join(' ')}]` : ''}`;
   requestAnimationFrame(frame);
 }
 
