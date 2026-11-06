@@ -17,16 +17,28 @@ import {
   type PostSettingsPatch,
   packPostUniforms,
 } from './settings';
-import { COMPOSITE_WGSL, DOWN_WGSL, PREFILTER_WGSL, RAYS_WGSL, UP_WGSL } from './shaders';
+import {
+  COMPOSITE_WGSL,
+  DOWN_WGSL,
+  FXAA_WGSL,
+  OUTLINE_WGSL,
+  PREFILTER_WGSL,
+  RAYS_WGSL,
+  UP_WGSL,
+} from './shaders';
 
 const HDR: GPUTextureFormat = 'rgba16float';
 const AO: GPUTextureFormat = 'r8unorm';
 const COMPOSITE_CLEAR: GPUColorDict = { r: 0, g: 0, b: 0, a: 1 };
+/** The composite's texture slots: colour, emissive, bloom, rays, AO, DoF, outline, LUT (3D). */
+const COMPOSITE_DIMS: GPUTextureViewDimension[] = ['2d', '2d', '2d', '2d', '2d', '2d', '2d', '3d'];
 
 /**
  * The painterly post stack: bloom (mip chain), floor mist, god rays, ACES tonemap, colour
  * grade, vignette, dither, plus ambient occlusion and depth of field over the scene depth when
- * the frame has one (ws/post-depth; off by default). Plug it into a renderer with
+ * the frame has one (ws/post-depth; off by default), and the finishing passes (ws/post-2, all
+ * off by default): a depth/normal outline, chromatic aberration, sharpen, a 3D LUT, film grain
+ * in the composite, and FXAA as one extra pass after it. Plug it into a renderer with
  * `renderer.post = new PostStack(r)`.
  *
  * Settings are plain objects you can mutate at runtime (`post.settings.bloom.intensity = 2`)
@@ -54,6 +66,9 @@ export class PostStack implements PostProcessor {
   private readonly ao: DepthPass;
   private readonly aoBlur: DepthPass;
   private readonly dof: DepthPass;
+  /** Finishing passes (ws/post-2): FXAA after the composite, the outline mask before it. */
+  private readonly fxaa: FullscreenPass;
+  private readonly outline: DepthPass;
 
   private bloomTex: GPUTexture | null = null;
   private mipViews: GPUTextureView[] = [];
@@ -77,6 +92,24 @@ export class PostStack implements PostProcessor {
   private aoGroup: GPUBindGroup | null = null;
   private aoBlurGroup: GPUBindGroup | null = null;
   private dofGroup: GPUBindGroup | null = null;
+  /** Scene-size outline mask, made on the first frame that needs it; freed on resize. */
+  private outlineTex: GPUTexture | null = null;
+  private outlineView: GPUTextureView | null = null;
+  private outlineGroup: GPUBindGroup | null = null;
+  private warnedOutline = false;
+  /** Output-size FXAA input (the composite's result), made on the first frame that needs it. */
+  private fxaaTex: GPUTexture | null = null;
+  private fxaaView: GPUTextureView | null = null;
+  private fxaaGroup: GPUBindGroup | null = null;
+  private fxaaWidth = 0;
+  private fxaaHeight = 0;
+  /** The 1×1×1 LUT bound while `lut.texture` is null, and the view of the bound LUT. */
+  private readonly lutPlaceholder: GPUTexture;
+  private readonly lutPlaceholderView: GPUTextureView;
+  private boundLut: GPUTexture | null = null;
+  private lutView: GPUTextureView;
+  /** Seconds of frame time while `grain.animated`: the grain's seed. */
+  private grainSeed = 0;
   private readonly depthInfo: PostDepthInfo = {
     near: 0,
     far: 0,
@@ -139,8 +172,31 @@ export class PostStack implements PostProcessor {
       wgsl: COMPOSITE_WGSL,
       targets: [renderer.format],
       uniformBytes: bytes,
-      textures: 6,
+      textures: COMPOSITE_DIMS.length,
+      viewDimension: COMPOSITE_DIMS,
     });
+    this.fxaa = renderer.createFullscreenPass({
+      label: 'post-fxaa',
+      wgsl: FXAA_WGSL,
+      targets: [renderer.format],
+      uniformBytes: bytes,
+      textures: 1,
+    });
+    this.outline = new DepthPass(renderer, {
+      label: 'post-outline',
+      wgsl: OUTLINE_WGSL,
+      format: AO,
+      textures: 0,
+    });
+    this.lutPlaceholder = renderer.device.createTexture({
+      label: 'post-lut-none',
+      size: [1, 1, 1],
+      dimension: '3d',
+      format: 'rgba8unorm',
+      usage: GPUTextureUsage.TEXTURE_BINDING,
+    });
+    this.lutPlaceholderView = this.lutPlaceholder.createView({ dimension: '3d' });
+    this.lutView = this.lutPlaceholderView;
     this.ao = new DepthPass(renderer, { label: 'post-ao', wgsl: AO_WGSL, format: AO, textures: 0 });
     this.aoBlur = new DepthPass(renderer, {
       label: 'post-ao-blur',
@@ -260,8 +316,9 @@ export class PostStack implements PostProcessor {
     }
     this.raysGroup = this.rays.createBindGroup([this.mipViews[0]!]);
     this.freeLdr();
-    // Depth targets come back on the next frame that needs them, at the new size.
+    // Depth targets and the FXAA input come back on the next frame that needs them, at the new size.
     this.freeDepthTargets();
+    this.freeFxaa();
     this.boundColor = null;
     this.boundEmissive = null;
     this.boundDepth = null;
@@ -297,9 +354,21 @@ export class PostStack implements PostProcessor {
     const depth = proj && inputs.depth ? inputs.depth : null;
     const wantAo = depth !== null && s.ao.enabled;
     const wantDof = depth !== null && s.dof.enabled;
+    const wantOutline = depth !== null && s.outline.enabled && this.quality.outline;
+    if (s.outline.enabled && depth === null && !this.warnedOutline) {
+      this.warnedOutline = true;
+      console.warn('[post] outline needs the scene depth; this frame has none, so it is off');
+    }
+    const wantFxaa = s.fxaa.enabled && this.quality.fxaa;
     if (wantAo && !this.aoTex) this.allocAo();
     if (wantDof && !this.dofTex) this.allocDof();
+    if (wantOutline && !this.outlineTex) this.allocOutline();
+    if (wantFxaa && (outW !== this.fxaaWidth || outH !== this.fxaaHeight))
+      this.allocFxaa(outW, outH);
+    this.bindLut(s.lut.texture);
     this.bindInputs(inputs.color.view, inputs.emissive.view, depth ? depth.view : null);
+    if (s.grain.animated && s.grain.intensity > 0)
+      this.grainSeed += Math.min(0.1, Math.max(0, inputs.dt));
     let depthInfo: PostDepthInfo | null = null;
     if (depth && proj) {
       depthInfo = this.depthInfo;
@@ -321,12 +390,17 @@ export class PostStack implements PostProcessor {
       r.logicalHeight,
       this.quality,
       depthInfo,
+      this.grainSeed,
     );
     const needBloomChain = s.bloom.enabled || (s.godRays.enabled && s.godRays.bloomSource > 0);
     this.composite.setUniforms(this.uniforms);
     // GPU timing labels (undefined unless this frame is sampled; see Renderer.gpuTimer).
     const timer = r.gpuTimer;
 
+    if (wantOutline && depthInfo) {
+      this.outline.setUniforms(this.uniforms);
+      this.outline.encode(encoder, this.outlineView!, this.outlineGroup!, timer?.pass('outline'));
+    }
     if (wantAo && depthInfo) {
       this.ao.setUniforms(this.uniforms);
       this.aoBlur.setUniforms(this.uniforms);
@@ -373,6 +447,11 @@ export class PostStack implements PostProcessor {
       });
     }
 
+    // With FXAA the composite (or its upscale) lands in an output-size texture the FXAA pass
+    // then resolves into the real output; without it, nothing changes.
+    const final = wantFxaa ? this.fxaaView! : output;
+    const finalClear = wantFxaa ? COMPOSITE_CLEAR : clear;
+    const finalViewport = wantFxaa ? undefined : viewport;
     if (this.quality.compositeAtScene && (this.width < outW || this.height < outH)) {
       if (!this.ldrView) this.allocLdr();
       this.composite.encode(encoder, this.ldrView!, {
@@ -380,20 +459,73 @@ export class PostStack implements PostProcessor {
         clear: COMPOSITE_CLEAR,
         timestampWrites: timer?.pass('composite'),
       });
-      this.upscale.encode(encoder, output, {
+      this.upscale.encode(encoder, final, {
         bindGroup: this.upscaleGroup!,
-        clear,
-        viewport,
+        clear: finalClear,
+        viewport: finalViewport,
         timestampWrites: timer?.pass('upscale'),
       });
-      return;
+    } else {
+      this.composite.encode(encoder, final, {
+        bindGroup: this.compositeGroup!,
+        clear: finalClear,
+        viewport: finalViewport,
+        timestampWrites: timer?.pass('composite'),
+      });
     }
-    this.composite.encode(encoder, output, {
-      bindGroup: this.compositeGroup!,
-      clear,
-      viewport,
-      timestampWrites: timer?.pass('composite'),
+    if (wantFxaa) {
+      this.fxaa.setUniforms(this.uniforms);
+      this.fxaa.encode(encoder, output, {
+        bindGroup: this.fxaaGroup!,
+        clear,
+        viewport,
+        timestampWrites: timer?.pass('fxaa'),
+      });
+    }
+  }
+
+  /** Scene-size outline mask. Forces the bind groups to be rebuilt. */
+  private allocOutline(): void {
+    this.outlineTex = this.renderer.device.createTexture({
+      label: 'post-outline',
+      size: [this.width, this.height],
+      format: AO,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
     });
+    this.outlineView = this.outlineTex.createView();
+    this.boundColor = null;
+  }
+
+  /** Output-size FXAA input, remade when the output size changes (a resize, or an XR eye). */
+  private allocFxaa(width: number, height: number): void {
+    this.fxaaTex?.destroy();
+    this.fxaaWidth = width;
+    this.fxaaHeight = height;
+    this.fxaaTex = this.renderer.device.createTexture({
+      label: 'post-fxaa',
+      size: [width, height],
+      format: this.renderer.format,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+    });
+    this.fxaaView = this.fxaaTex.createView();
+    this.fxaaGroup = this.fxaa.createBindGroup([this.fxaaView]);
+  }
+
+  private freeFxaa(): void {
+    this.fxaaTex?.destroy();
+    this.fxaaTex = null;
+    this.fxaaView = null;
+    this.fxaaGroup = null;
+    this.fxaaWidth = 0;
+    this.fxaaHeight = 0;
+  }
+
+  /** Point the composite at `lut.texture` (or the placeholder); a change rebuilds the group. */
+  private bindLut(texture: GPUTexture | null): void {
+    if (texture === this.boundLut) return;
+    this.boundLut = texture;
+    this.lutView = texture ? texture.createView({ dimension: '3d' }) : this.lutPlaceholderView;
+    this.boundColor = null;
   }
 
   /** Scene-size composite target, made on first use (a resize or tier change frees it). */
@@ -441,9 +573,10 @@ export class PostStack implements PostProcessor {
     this.aoTex?.destroy();
     this.aoBlurTex?.destroy();
     this.dofTex?.destroy();
-    this.aoTex = this.aoBlurTex = this.dofTex = null;
-    this.aoView = this.aoBlurView = this.dofView = null;
-    this.aoGroup = this.aoBlurGroup = this.dofGroup = null;
+    this.outlineTex?.destroy();
+    this.aoTex = this.aoBlurTex = this.dofTex = this.outlineTex = null;
+    this.aoView = this.aoBlurView = this.dofView = this.outlineView = null;
+    this.aoGroup = this.aoBlurGroup = this.dofGroup = this.outlineGroup = null;
   }
 
   private bindInputs(
@@ -466,13 +599,16 @@ export class PostStack implements PostProcessor {
       this.raysView!,
       this.aoBlurView ?? mip0,
       this.dofView ?? mip0,
+      this.outlineView ?? mip0,
+      this.lutView,
     ]);
     if (depth) {
       this.aoGroup = this.aoView ? this.ao.createBindGroup(depth, []) : null;
       this.aoBlurGroup = this.aoView ? this.aoBlur.createBindGroup(depth, [this.aoView]) : null;
       this.dofGroup = this.dofView ? this.dof.createBindGroup(depth, [color]) : null;
+      this.outlineGroup = this.outlineView ? this.outline.createBindGroup(depth, []) : null;
     } else {
-      this.aoGroup = this.aoBlurGroup = this.dofGroup = null;
+      this.aoGroup = this.aoBlurGroup = this.dofGroup = this.outlineGroup = null;
     }
   }
 
@@ -480,9 +616,13 @@ export class PostStack implements PostProcessor {
     this.bloomTex?.destroy();
     this.raysTex?.destroy();
     this.freeDepthTargets();
+    this.freeFxaa();
+    this.lutPlaceholder.destroy();
     this.ao.destroy();
     this.aoBlur.destroy();
     this.dof.destroy();
+    this.outline.destroy();
+    this.fxaa.destroy();
     this.prefilter.destroy();
     this.rays.destroy();
     this.composite.destroy();

@@ -45,7 +45,7 @@
     "lint": "biome check .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "pnpm typecheck && pnpm lint && pnpm check:boundaries && pnpm check:docs && pnpm test && pnpm check:host-electron && pnpm check:template-puzzle && pnpm check:template-first-person && pnpm check:create-game",
+    "check": "pnpm typecheck && pnpm lint && pnpm check:boundaries && pnpm check:docs && pnpm test && pnpm check:host-electron && pnpm check:template-puzzle && pnpm check:template-first-person && pnpm check:template-third-person && pnpm check:create-game",
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "check:docs": "node scripts/check-docs.mjs",
     "check:create-game": "node --test scripts/create-game.test.mjs",
@@ -65,7 +65,9 @@
     "template:first-person": "pnpm --filter @thunderclap/template-first-person dev",
     "desktop:dev": "pnpm --filter @thunderclap/host-electron dev",
     "desktop:build": "pnpm --filter @thunderclap/host-electron dist",
-    "test:e2e:desktop": "pnpm --filter @thunderclap/host-electron test:e2e"
+    "test:e2e:desktop": "pnpm --filter @thunderclap/host-electron test:e2e",
+    "check:template-third-person": "pnpm --filter @thunderclap/template-third-person check",
+    "template:third-person": "pnpm --filter @thunderclap/template-third-person dev"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.4",
