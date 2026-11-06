@@ -138,10 +138,10 @@ const axis = new Float32Array(3);
 const fwd = new Float32Array(3);
 const upw = new Float32Array(3);
 const savedRot = new Float32Array(4);
-const IDENTITY = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0]);
+export const IDENTITY = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0]);
 
 /** `out = m[mo..] · p` (point, with translation). */
-function transformPoint(
+export function transformPoint(
   out: Float32Array,
   m: ArrayLike<number>,
   mo: number,
@@ -156,7 +156,7 @@ function transformPoint(
 }
 
 /** `out = upper3x3(m[mo..]) · d` (direction, no translation); `out` may alias `d`. */
-function transformDir(
+export function transformDir(
   out: Float32Array,
   m: ArrayLike<number>,
   mo: number,
@@ -171,7 +171,11 @@ function transformDir(
 }
 
 /** A world-space point into skeleton space through the inverse of `instanceWorld`. */
-function toSkeleton(out: Float32Array, p: ArrayLike<number>, instanceWorld: Float32Array | null) {
+export function toSkeleton(
+  out: Float32Array,
+  p: ArrayLike<number>,
+  instanceWorld: Float32Array | null,
+) {
   if (!instanceWorld) {
     out[0] = p[0]!;
     out[1] = p[1]!;
@@ -182,7 +186,7 @@ function toSkeleton(out: Float32Array, p: ArrayLike<number>, instanceWorld: Floa
   transformPoint(out, inv, 0, p);
 }
 
-function normalize(a: Float32Array): number {
+export function normalize(a: Float32Array): number {
   const len = Math.hypot(a[0]!, a[1]!, a[2]!);
   if (len > EPS) {
     const s = 1 / len;
@@ -194,7 +198,7 @@ function normalize(a: Float32Array): number {
 }
 
 /** Any unit vector perpendicular to the unit vector `u`, into `out`. */
-function anyPerpendicular(out: Float32Array, u: Float32Array): void {
+export function anyPerpendicular(out: Float32Array, u: Float32Array): void {
   const ax = Math.abs(u[0]!);
   const ay = Math.abs(u[1]!);
   const az = Math.abs(u[2]!);
@@ -216,7 +220,7 @@ function anyPerpendicular(out: Float32Array, u: Float32Array): void {
 }
 
 /** The shortest rotation taking unit `a` onto unit `b`, as (unit axis, angle) in `out`. */
-function rotationBetween(out: Float32Array, a: Float32Array, b: Float32Array): void {
+export function rotationBetween(out: Float32Array, a: Float32Array, b: Float32Array): void {
   const cx = a[1]! * b[2]! - a[2]! * b[1]!;
   const cy = a[2]! * b[0]! - a[0]! * b[2]!;
   const cz = a[0]! * b[1]! - a[1]! * b[0]!;
@@ -240,8 +244,26 @@ function rotationBetween(out: Float32Array, a: Float32Array, b: Float32Array): v
   out[3] = Math.atan2(sin, cos);
 }
 
+/** Rotate `v` in place by the unit quaternion at `q[qo..]`. */
+export function rotateByQuat(v: Float32Array, q: ArrayLike<number>, qo: number): void {
+  const qx = q[qo]!;
+  const qy = q[qo + 1]!;
+  const qz = q[qo + 2]!;
+  const qw = q[qo + 3]!;
+  const x = v[0]!;
+  const y = v[1]!;
+  const z = v[2]!;
+  // t = 2 q × v; v' = v + w t + q × t
+  const tx = 2 * (qy * z - qz * y);
+  const ty = 2 * (qz * x - qx * z);
+  const tz = 2 * (qx * y - qy * x);
+  v[0] = x + qw * tx + (qy * tz - qz * ty);
+  v[1] = y + qw * ty + (qz * tx - qx * tz);
+  v[2] = z + qw * tz + (qx * ty - qy * tx);
+}
+
 /** Rotate `p` in place by the (unit axis, angle) delta `d` (Rodrigues). */
-function rotateBy(p: Float32Array, d: Float32Array, angle = d[3]!): void {
+export function rotateBy(p: Float32Array, d: Float32Array, angle = d[3]!): void {
   const kx = d[0]!;
   const ky = d[1]!;
   const kz = d[2]!;
@@ -262,7 +284,7 @@ function rotateBy(p: Float32Array, d: Float32Array, angle = d[3]!): void {
  * skeleton root), after an optional extra rotation `pre` of the axis (used when the parent itself
  * has just been rotated by `pre` and `parent` still holds its old matrix).
  */
-function applyDelta(
+export function applyDelta(
   pose: Pose,
   node: number,
   d: Float32Array,
