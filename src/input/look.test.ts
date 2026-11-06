@@ -221,3 +221,109 @@ describe('Look: blocked', () => {
     expect(look.move.y).toBeCloseTo(0);
   });
 });
+
+describe('Look: orbit mode (ws/input-3)', () => {
+  it('a drag turns the view at the mouse sensitivity; nothing without a drag', () => {
+    const { look, tick } = setup({ mode: 'orbit', sensitivity: 0.01 });
+    expect(look.mode).toBe('orbit');
+    look.orbitMove(50, 50);
+    tick();
+    expect(look.look).toEqual({ dx: 0, dy: 0 });
+    look.orbitDown(100, 100);
+    look.orbitMove(110, 96);
+    look.orbitMove(115, 96);
+    tick();
+    expect(look.orbiting).toBe(true);
+    expect(look.look.dx).toBeCloseTo(0.15);
+    expect(look.look.dy).toBeCloseTo(0.04);
+    look.orbitUp();
+    look.orbitMove(200, 200);
+    tick();
+    expect(look.orbiting).toBe(false);
+    expect(look.look).toEqual({ dx: 0, dy: 0 });
+  });
+
+  it('honours sensitivity and invertY like the locked mouse', () => {
+    const { look, tick } = setup({ mode: 'orbit', sensitivity: 0.02, invertY: true });
+    look.orbitDown(0, 0);
+    look.orbitMove(10, -4);
+    tick();
+    expect(look.look.dx).toBeCloseTo(0.2);
+    expect(look.look.dy).toBeCloseTo(-0.08);
+  });
+
+  it('orbit feeds are ignored in locked mode; setMode mid-drag ends the drag', () => {
+    const { look, tick } = setup({ sensitivity: 0.01 });
+    look.orbitDown(0, 0);
+    look.orbitMove(10, 0);
+    tick();
+    expect(look.orbiting).toBe(false);
+    expect(look.look.dx).toBe(0);
+    look.setMode('orbit');
+    look.orbitDown(0, 0);
+    look.orbitMove(10, 0);
+    look.setMode('locked');
+    look.orbitMove(20, 0);
+    tick();
+    expect(look.orbiting).toBe(false);
+    // The movement before the switch still counts; the one after does not.
+    expect(look.look.dx).toBeCloseTo(0.1);
+    look.setMode('orbit');
+    expect(look.mode).toBe('orbit');
+  });
+
+  it('blocked zeroes an orbit drag and ignores its movement', () => {
+    let blocked = false;
+    const { look, tick } = setup({ mode: 'orbit', sensitivity: 0.01, blocked: () => blocked });
+    look.orbitDown(0, 0);
+    look.orbitMove(10, 0);
+    blocked = true;
+    look.orbitMove(20, 0);
+    tick();
+    expect(look.look).toEqual({ dx: 0, dy: 0 });
+    blocked = false;
+    look.orbitMove(30, 0);
+    tick();
+    expect(look.look.dx).toBeCloseTo(0.1);
+    expect(look.claimsPointer('mouse')).toBe(true);
+    expect(look.claimsPointer('pen')).toBe(true);
+    expect(look.claimsPointer('touch')).toBe(false);
+  });
+
+  it('wheel zoom and touch look still work in orbit mode', () => {
+    const { look, tick } = setup({ mode: 'orbit', touch: { sensitivity: 0.01 } });
+    look.wheel(2);
+    look.touchDown(1, 600, 200, false);
+    look.touchMove(1, 630, 200);
+    tick();
+    expect(look.zoom).toBe(2);
+    expect(look.look.dx).toBeCloseTo(0.3);
+  });
+});
+
+describe('Input drives the orbit drag (ws/input-3)', () => {
+  it('a mouse press, moves and release on the linked input turn the view', () => {
+    const look = new Look({ mode: 'orbit', sensitivity: 0.01, getGamepads: () => [] });
+    const input = new Input({}, { look, getGamepads: () => [] });
+    input.pointerAt(100, 100, 'mouse');
+    input.pointerAt(120, 100, 'mouse');
+    input.update();
+    expect(look.look.dx).toBe(0);
+    input.buttonDown(0);
+    input.pointerAt(130, 90, 'mouse');
+    input.update();
+    expect(look.look.dx).toBeCloseTo(0.1);
+    expect(look.look.dy).toBeCloseTo(0.1);
+    input.buttonUp(0);
+    input.pointerAt(200, 90, 'mouse');
+    input.update();
+    expect(look.look.dx).toBe(0);
+    // A touch contact never orbits (the touch look zone handles it).
+    input.pointerAt(100, 100, 'touch');
+    input.buttonDown(0);
+    input.pointerAt(150, 100, 'touch');
+    input.update();
+    expect(look.orbiting).toBe(false);
+    expect(look.look.dx).toBe(0);
+  });
+});

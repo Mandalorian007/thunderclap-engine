@@ -1,8 +1,24 @@
 /**
- * A physical input that can drive an action. The engine ships no default bindings;
- * the game supplies them.
+ * How a binding turns its raw input into an action (ws/input-3). `'press'` (the default) is
+ * active while the input is down. `'hold'` becomes active once the input has stayed down for
+ * `holdMs` (400) and stays active until it lifts; `ActionState.holdProgress` runs 0..1 meanwhile.
+ * `'doubleTap'` is active for one tick when the input goes down a second time within
+ * `doubleTapMs` (300) of the previous down. Times are measured in ticks of `Input.update()`
+ * (`InputOptions.tickMs`, default 1000/60), so a recording replays identically.
  */
-export type Binding =
+export type Trigger = 'press' | 'hold' | 'doubleTap';
+
+/** The trigger fields every `Binding` may carry. */
+export interface TriggerOptions {
+  trigger?: Trigger;
+  /** Ms down before a `'hold'` fires. Default 400. */
+  holdMs?: number;
+  /** Most ms between the two downs of a `'doubleTap'`. Default 300. */
+  doubleTapMs?: number;
+}
+
+/** The input half of a `Binding`, without its trigger fields. */
+export type BindingSource =
   /** `KeyboardEvent.code` (layout-independent), e.g. `'KeyZ'`, `'Space'`, `'ArrowLeft'`, `'Escape'`. */
   | { key: string }
   /** `PointerEvent.button`: 0 primary (also touch/pen contact), 1 middle, 2 secondary. */
@@ -30,7 +46,19 @@ export type Binding =
    * An XR controller or hand button from an XR `PointerSource` (`hand` omitted = either hand).
    * No XR source ships yet, so this reads inactive until one is added to the router.
    */
-  | { xr: XrButton; hand?: Hand };
+  | { xr: XrButton; hand?: Hand }
+  /**
+   * A chord (ws/input-3): active while every member binding is down, in any order; `pressed`
+   * fires once when the last one lands. Members are plain bindings (their own triggers are
+   * ignored); the members may also drive actions of their own.
+   */
+  | { chord: readonly Binding[] };
+
+/**
+ * A physical input that can drive an action, with optional trigger fields (`trigger`, `holdMs`,
+ * `doubleTapMs`). The engine ships no default bindings; the game supplies them.
+ */
+export type Binding = BindingSource & TriggerOptions;
 
 /** Pointer buttons a `{ pointer }` binding can name. */
 export type PointerButton = 'select' | 'secondary';
@@ -46,13 +74,32 @@ export type GestureKind = 'tap' | 'doubleTap' | 'longPress' | 'pan' | 'drag' | '
 
 export type Bindings<A extends string> = { readonly [K in A]: readonly Binding[] };
 
-export type InputDevice = 'keyboard' | 'mouse' | 'touch' | 'pen' | 'gamepad';
+/** The device that last produced input (`Input.lastDevice`); `'xr'` once an XR button fires. */
+export type InputDevice = 'keyboard' | 'mouse' | 'touch' | 'pen' | 'gamepad' | 'xr';
+
+/** The `Gamepad.vibrationActuator` shape `Input.rumble` drives. */
+export interface GamepadActuatorLike {
+  readonly type?: string;
+  playEffect(
+    type: string,
+    params: {
+      duration: number;
+      startDelay?: number;
+      strongMagnitude?: number;
+      weakMagnitude?: number;
+    },
+  ): Promise<unknown> | unknown;
+}
 
 /** Minimal shape of a `Gamepad` (lets tests feed plain objects). */
 export interface GamepadLike {
   readonly connected?: boolean;
   readonly buttons: readonly { readonly pressed: boolean; readonly value: number }[];
   readonly axes: readonly number[];
+  /** `Gamepad.id`, used to guess the button layout for prompt glyphs. */
+  readonly id?: string;
+  /** `Gamepad.vibrationActuator`, when the pad can rumble. */
+  readonly vibrationActuator?: GamepadActuatorLike | null;
 }
 
 /** Maps a client-space point (CSS px, `clientX/Y`) into game space, or `null` if outside it. */
@@ -90,4 +137,9 @@ export interface ActionState {
   value: number;
   /** Consecutive ticks held (0 when not held). */
   heldTicks: number;
+  /**
+   * For `'hold'` bindings: how far the longest press in progress is towards `holdMs`, 0..1 (1
+   * once the hold fired, 0 while nothing is down or the action has no hold binding).
+   */
+  holdProgress: number;
 }

@@ -81,3 +81,10 @@ without one leaves it `undefined` and the engine does nothing for it.
 Tests: `web.test.ts`, `web-links.test.ts`, `xr.test.ts`, and `e2e/host.spec.ts` on every row of
 the engine matrix (the facets through `harness/host.html`: `?safe=44,0,34,0` pads the layout, a
 hidden document stops frames within 200 ms).
+
+The installable web shell is a package, not a host kind: `createPwaHost()` in `@thunderclap/host-pwa`
+(packages/host-pwa) wraps `createWebHost()`, keeps `kind: 'web'`, and adds `host.pwa` (the deferred
+install prompt, `updateReady` / `applyUpdate()` for a waiting service worker, `offline`,
+`standalone`, `cacheStatus()`, `clearCache()`), every method a no-op where the browser lacks the
+feature. The manifest and service worker come from the package's vite plugin at build time; `storage`
+is the web host's, so saves never enter the cache. The engine never imports it.

@@ -31,14 +31,14 @@ const { x, y, inside, down, dx, dy, wheelY } = input.pointer;   // game space
 Types a game names when it wraps or configures `Input`:
 
 - `Bindings<A>`: the map from each action name to its `Binding` list, passed to `new Input` and `setBindings`.
-- `InputOptions`: `getGamepads`, `blocked`, `globalKeys`, `buttonKeys`, `queueTaps`, and the `gestures`, `pointers` and `look` to link.
+- `InputOptions`: `getGamepads`, `blocked`, `globalKeys`, `buttonKeys`, `queueTaps`, `tickMs`, `padLayout`, and the `gestures`, `pointers` and `look` to link.
 - `Input.recorder` and `Input.playback`: the `InputRecorder` / `InputPlayback` installed on this input, or null (see *Recording and replay*).
 - `AttachOptions`: `pointerTarget`, `keyTarget` (default the target's window), `disableTouchScroll` (default true).
-- `ActionState`: one action's `pressed`, `held`, `released`, `value` (0..1) and `heldTicks`.
+- `ActionState`: one action's `pressed`, `held`, `released`, `value` (0..1), `heldTicks` and `holdProgress` (see *Triggers and chords*).
 - `PointerState`: `input.pointer`: `x`, `y`, `dx`, `dy`, `inside`, `down`, `wheelX`, `wheelY` and `type` (`mouse | touch | pen`).
 - `PointerTransform`: `(clientX, clientY) => { x, y } | null`, client CSS px to game space; `null` means outside the game rect.
-- `InputDevice`: the `lastDevice` union, `keyboard | mouse | touch | pen | gamepad`.
-- `GamepadLike`: the slice of `Gamepad` the engine reads (`connected`, `buttons`, `axes`), for a fake `getGamepads` in tests.
+- `InputDevice`: the `lastDevice` union, `keyboard | mouse | touch | pen | gamepad | xr`.
+- `GamepadLike`: the slice of `Gamepad` the engine reads (`connected`, `buttons`, `axes`, and optionally `id` and `vibrationActuator`), for a fake `getGamepads` in tests.
 - `PointerButton` (`select | secondary`), `XrButton` (`trigger | squeeze | pinch`) and `GestureKind` (`tap | doubleTap | longPress | pan | drag | pinch`): what `{ pointer }`, `{ xr }` and `{ gesture }` bindings can name.
 
 ## Semantics
@@ -50,6 +50,70 @@ Types a game names when it wraps or configures `Input`:
 - `lastDevice` (`keyboard | mouse | touch | pen | gamepad`) for showing the right prompts.
 - Pointer position is game space via the transform. Without a transform it's CSS px relative to the pointer target. `inside` is false when the transform returns `null` (in the letterbox bars) or the mouse leaves.
 - Call `update()` once per **simulation tick**. If you run several fixed steps in one frame, `pressed` fires on the first only, which is what you want.
+
+## Triggers and chords
+
+Every `Binding` is a `BindingSource` (the input it reads) plus `TriggerOptions`: `trigger?: Trigger` (`'press'`, the default, `'hold'` or `'doubleTap'`), `holdMs` and `doubleTapMs`. Timing is counted in ticks of `InputOptions.tickMs` (default 1000/60), so the result is the same on every machine and in a replay.
+
+```ts
+const input = new Input({
+  jump:   [{ key: 'Space' }],
+  charge: [{ key: 'Space', trigger: 'hold', holdMs: 600 }],        // the same key, fired late
+  dash:   [{ key: 'KeyD', trigger: 'doubleTap', doubleTapMs: 250 }],
+  combo:  [{ chord: [{ key: 'ShiftLeft' }, { key: 'KeyK' }] }],
+}, { tickMs: 1000 / 60 });
+
+const bar = input.state('charge').holdProgress;   // 0..1 while Space is down, 1 once it fired
+```
+
+- **`hold`**: the action goes `pressed` and `held` on the tick the source has been down for `holdMs` (`DEFAULT_HOLD_MS` 400; `ceil(holdMs / tickMs)` ticks), stays `held` until the source lifts, then `released`. Letting go early fires nothing. `ActionState.holdProgress` is the fraction of the hold elapsed (0 when idle, 1 from the fire on), the largest over the action's hold bindings; other triggers report 0.
+- **`doubleTap`**: the second press of the source within `doubleTapMs` (`DEFAULT_DOUBLE_TAP_MS` 300) of the first fires `pressed` and `held` for one tick and `released` on the next; a third press right after starts a new count rather than chaining.
+- **Chords** (`{ chord: Binding[] }` as a source): active while every member reads non-zero, `pressed` once when the last one lands, in any order, `released` when any lifts. Members can be any source (keys, pad buttons, a pointer button); a chord takes a trigger too (`{ chord: [...], trigger: 'hold' }`). A member that is also a plain binding of another action still drives that action.
+- `blocked()` zeroes hold progress and the tap count; a source held through the block does not fire when it ends.
+
+## Rebinding
+
+A game rebinds one action at a time and keeps the rest; the action states of untouched actions survive.
+
+```ts
+import { findConflicts, parseBindings, serializeBindings } from '@thunderclap/engine/input';
+
+const b = await input.listen('jump');            // the next key, mouse or pad button; null if cancelled
+if (b) input.rebind('jump', [b]);
+for (const c of findConflicts(input.bindings())) warn(c.binding, c.actions);   // [{ binding, actions }]
+
+localStorage.setItem('bindings', serializeBindings(input.bindings()));
+input.setBindings(parseBindings(localStorage.getItem('bindings'), DEFAULTS));
+```
+
+- `input.rebind(action, bindings)` replaces that action's list (`bindings()` returns the live map; it throws on an unknown action). A source that is down when it is rebound keeps reading 0 until it lifts, so the old action gets its `released` and the new one is not `pressed` by a key the player was already holding.
+- `input.listen(action, opts?: ListenOptions)` resolves with the next key (`{ key }`), mouse or pen button (`{ mouse }`), pad button that was up when the listen began (`{ padButton }`) or XR button (`{ xr }`), swallowing it (no action sees it). Escape resolves `null`, as does `timeoutMs` (ticks of `tickMs`) or a newer `listen`. Keys typed into text fields never reach `Input`, so they are not captured. `listeningFor()` names the pending action.
+- `serializeBindings(map)` is JSON; `parseBindings(text | object, defaults)` returns a map with the shape of `defaults`: actions it does not know are dropped and bindings that fail `isBinding` are dropped, each with one `console.warn`; unreadable text returns `defaults`. A rebind of a chord member or a trigger survives the round trip.
+- `findConflicts(map)` returns one `BindingConflict { binding, actions }` per binding two or more actions share, comparing the whole binding: a `hold` and a `press` on one key are different bindings and do not conflict; chords conflict only with identical chords.
+
+## Rumble
+
+```ts
+input.rumble({ strong: 0.8, weak: 0.3, ms: 120 });   // true when a pad played it
+if (input.rumbleSupported()) showRumbleToggle();
+```
+
+`input.rumble(opts?: RumbleOptions)` plays a `dual-rumble` effect (`strong`, `weak` 0..1, default 1; `ms`, default 100) on `pad`, or the first connected pad with a `vibrationActuator` (`GamepadLike.vibrationActuator`, a `GamepadActuatorLike`; `GamepadLike.id` is read for layouts too). It returns false, and nothing throws, without a pad, an actuator or when the browser refuses. `rumbleSupported(pad?)` says whether one could. Every call reaches the feed hooks (`InputFeedHook.rumble`) and `input.on('rumble', fn)` (`InputEvents`), so a recording lists the rumbles per tick and a test counts them with a fake actuator; playback feeds inputs, not rumbles, so the replayed game issues its own.
+
+## Prompt glyphs
+
+```ts
+import { glyphForBinding, keyLabel, padButtonLabel } from '@thunderclap/engine/input';
+
+input.on('device', (d) => redrawPrompts());          // lastDevice changed (InputEvents)
+const g = input.glyphFor('jump');                    // for lastDevice: { kind: 'key', label: 'Space' } | null
+prompt.textContent = g?.label ?? '';
+```
+
+- `input.lastDevice` (`InputDevice`: `keyboard | mouse | touch | pen | gamepad | xr`) follows the last source that produced input; `'xr'` when a linked `PointerSource` fires a trigger, squeeze or pinch. `input.on('device', fn)` fires on each change.
+- `input.glyphFor(action, device = lastDevice)` picks the action's first binding for that device (`bindingMatchesDevice(binding, device)`; mouse and pen share, touch takes gestures and pointer buttons, a chord matches when a member does), falling back to the first binding, and labels it with `glyphForBinding(binding, layout)`: a `Glyph { kind: GlyphKind, label }` where `kind` is `key`, `mouse`, `wheel`, `pad`, `gesture`, `pointer`, `xr` or `chord` (members joined with ` + `), and `hold` or `doubleTap` triggers prefix `Hold ` / `Double-tap `.
+- Keys: `keyLabel(code)` names a `KeyboardEvent.code` (`Space`, `Esc`, `Enter`, arrows as `←`, `KeyA` as `A`, `Digit1` as `1`, numpad and F keys, any other code split on its words). Pads: `padButtonLabel(index, layout)` and `padAxisLabel(axis, dir)` (`LS →`, `RS ↑`) name standard-mapping controls in a `PadLayout` (`'xbox'`, `'playstation'`, `'nintendo'` or `'generic'`); `guessPadLayout(gamepad.id)` reads the layout off the id string (vendor ids and names) and `InputOptions.padLayout` (or `input.padLayout`) overrides the guess. Gestures read `Tap`, `Double tap`, `Hold`, `Drag`, `Pinch`; pointer buttons `Select`, `Secondary`; XR `Trigger`, `Squeeze`, `Pinch`.
+- The labels are plain strings; a game maps them to its own icon set (`src/ui` has no glyph widget).
 
 ## Embedding (itch.io iframe)
 - Only **bound** keys are `preventDefault`ed, and only when no Ctrl/Meta/Alt is held, the event target isn't a text field/button/link, input isn't blocked, and the document has focus. Browser shortcuts and the parent page keep working.
@@ -216,7 +280,20 @@ distance -= look.zoom * step;                    // > 0 is closer (Follow does t
 - `lockOnFirstClick` (ws/ergo-3d, default false): a mouse or pen `pointerdown` on the attached element while the lock is not held calls `request()`, so the first click into the game locks the pointer and, after Escape, the next click locks it again; touches never lock and a `blocked()` session requests nothing. Without it the game wires `request()` to its own click handler as above.
 - `blocked()` (shared with the linked `Input`): `look` and `move` read zero, the lock is released, and fingers already down are ignored until they lift. Window blur and a hidden tab drop the touches too.
 - Feed methods for tests and replays: `mouseMove(dx, dy)`, `wheel(units)`, `touchDown(id, x, y, inMoveZone)`, `touchMove`, `touchUp`, `cancelAll`. `attach(el)`/`detach()` are called by `Input.attach`/`detach`.
-- Types: `LookOptions`, `LookTouchOptions` (`moveZone`, `deadzone`, `radius`, `sensitivity`), `LookZoomOptions` (`wheel`, `pinch`, `pad`, `stepPx`), `LookZoomPad`, `MoveZone`, `LookKeys`, `LookStick`, `LookEvents`; constant `PAD_ZOOM_PER_S`. No allocation per tick.
+- Types: `LookOptions`, `LookMode`, `LookTouchOptions` (`moveZone`, `deadzone`, `radius`, `sensitivity`), `LookZoomOptions` (`wheel`, `pinch`, `pad`, `stepPx`), `LookZoomPad`, `MoveZone`, `LookKeys`, `LookStick`, `LookEvents`; constant `PAD_ZOOM_PER_S`. No allocation per tick.
+
+## Orbit look
+
+`LookOptions.mode: LookMode` (`'locked'`, the default, or `'orbit'`) picks how the mouse looks. In orbit mode a mouse or pen drag on the attached element turns the view at the same `sensitivity`, with no pointer lock: a level editor, a model viewer or a strategy camera. `look.setMode(mode)` switches at run time (to orbit releases the lock; to locked ends a drag in progress); `look.mode` reads it.
+
+```ts
+const look = new Look({ mode: 'orbit', sensitivity: 0.005 });
+ctx.input.setLook(look);                        // a left-button drag now feeds look.look
+```
+
+- `request()` resolves false without asking and `lockOnFirstClick` is ignored (one `console.warn`). The touch zones, the wheel, the pinch and the pad are unchanged, so a touch drag turns the view in both modes.
+- A drag is claimed before the linked `Gestures` see it (`gestures.claim`, the hook `Input` installs from `look.claimsPointer(device)`), so it never pans or taps; touches are not claimed, and in locked mode nothing is. Hover rays through the pointer router are unaffected.
+- Through an `Input` the drag comes from its feed (`buttonDown(0)`, `pointerAt`, `buttonUp(0)` with a non-touch pointer), so a recording replays an orbit; a `Look` attached on its own listens to the element's pointer events. Feed methods for tests: `orbitDown(x, y)`, `orbitMove(x, y)`, `orbitUp()`; `orbiting` is true while a drag is live. `blocked()` zeroes it like the locked mouse.
 
 ## Follow
 

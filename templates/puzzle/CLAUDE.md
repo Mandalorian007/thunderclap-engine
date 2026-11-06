@@ -47,6 +47,10 @@ src/ui/hud.ts       DOM widgets registered against layout regions
 - **Analytics** (`@thunderclap/engine/analytics`): `createAnalytics<Events>({ sink, onError })`, `analytics.attach(engine)` (emits `game_start`, `session_end` on hide), `analytics.emit('level_start', { level })`. The sink is the game's: `createBeaconSink(url)` in `src/analytics.ts`. `ctx.analytics` is `null` when `COLLECT_URL` is unset, so call it as `ctx.analytics?.emit(...)`.
 - **Host** (`@thunderclap/engine/host`): the page the game runs in (`web` top-level or iframe, Electron through `@thunderclap/host-electron`): `openExternal`, `copyText`, `fullscreen`, `storage`. The game never touches `window.open`, the clipboard or `localStorage` directly.
 
+## Installable
+
+The build can ship as an installable, offline-capable web app through `@thunderclap/host-pwa` (the engine stays network-free; the worker and manifest are the package's and yours). Three lines turn it on: add the package (`pnpm add -D @thunderclap/host-pwa`, or `"workspace:*"` inside the engine repo), uncomment the `pwaPlugin({ manifest: { name, theme_color, background_color, svg } })` line and its import in `vite.config.ts` (the `svg` is one icon string the plugin rasterises at 192 and 512 px when it can), and pass `host: createPwaHost()` (from `@thunderclap/host-pwa`) to `createGame`. The built page then registers `sw.js`: hashed assets are cached on first visit, `index.html` is fetched network-first with the cache as fallback, and the game loads offline on the next visit. `ctx.host.pwa` exposes `installable`/`install()`, `updateReady`/`applyUpdate()`, `offline` and `cacheStatus()` for an install button, an update toast and an offline hint; saves are untouched (they live in the host's storage, never in the cache). `pnpm dev` is unaffected: the plugin only runs on `vite build`.
+
 ## Extending it
 
 - A new mechanic: a pure function in `rules/` with a test, an action in `ctx.ts` if it needs input, a few lines in the scene's `update`.

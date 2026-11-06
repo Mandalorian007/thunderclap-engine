@@ -88,6 +88,19 @@ export interface GestureOptions {
    * each tick reports `aim`, and below `below` CSS px of pitch a loupe shows the aim point.
    */
   magnify?: MagnifyOptions;
+  /**
+   * `'prefer'` (ws/input-3): a pointer whose cumulative travel passes a quarter of `panThreshold`
+   * is a pan candidate and can no longer long-press, however long the next frame takes; if it
+   * lifts before crossing the threshold it is a tap (within `longPressMs`) or nothing. Default:
+   * a still-enough pointer long-presses when its time is up, even after a little travel.
+   */
+  pan?: 'prefer';
+  /**
+   * Called once per press, synchronously, when its pointer's travel passes a quarter of
+   * `panThreshold` (in either `pan` mode), with the pointer id and the travel so far. An
+   * observer for games that want to cancel their own long-press affordance early.
+   */
+  onPanCandidate?: (pointer: number, travel: number) => void;
 }
 
 export interface GestureAttachOptions {
@@ -115,6 +128,8 @@ interface Contact {
   origin: GesturePoint;
   /** Cumulative travel since the down point (CSS px, summed over every move). */
   travel: number;
+  /** Travel passed a quarter of the pan threshold (see `GestureOptions.pan`). */
+  candidate: boolean;
 }
 
 /** One press: from the first pointer down until every pointer is up. */
@@ -148,6 +163,9 @@ const DEFAULTS = {
 
 /** Most taps (of one kind) queued for later ticks. */
 const MAX_QUEUED = 8;
+
+/** Fraction of `panThreshold` past which a pointer is a pan candidate. */
+const CANDIDATE_FRACTION = 0.25;
 
 const CONTINUOUS = ['pan', 'drag', 'pinch'] as const;
 type ContinuousKind = (typeof CONTINUOUS)[number];
@@ -205,8 +223,18 @@ export class Gestures {
   readonly longPressMs: number;
   readonly doubleTapMs: number;
   readonly doubleTapDistance: number;
+  /** `GestureOptions.pan`: `'prefer'` keeps a pan candidate from long-pressing. */
+  readonly panMode: 'prefer' | null;
+  /**
+   * The pointer-claim hook (ws/input-3): called on every `pointerDown` with the pointer id and
+   * device; when it returns true the pointer is not a gesture (its moves and lift are ignored
+   * too). `Input.setLook` installs one so an orbit look drag never pans; a game may install its
+   * own when nothing is linked.
+   */
+  claim: ((id: number, device: GestureDevice) => boolean) | null = null;
 
   private readonly now: () => number;
+  private readonly onPanCandidate: ((pointer: number, travel: number) => void) | null;
   private transform: PointerTransform | null = null;
   private session: Session | null = null;
   /** Last tap, for double taps: client position and end time. */
@@ -239,6 +267,8 @@ export class Gestures {
     this.blocked = opts.blocked ?? (() => false);
     this.now = opts.now ?? defaultNow;
     this.magnify = opts.magnify ?? null;
+    this.panMode = opts.pan ?? null;
+    this.onPanCandidate = opts.onPanCandidate ?? null;
   }
 
   /** Turn magnify on (or off with `null`) after construction. */
@@ -470,6 +500,7 @@ export class Gestures {
     device: GestureDevice = 'touch',
     time = this.now(),
   ): void {
+    if (this.claim?.(id, device)) return;
     if (!this.session) {
       if (this.blocked()) return;
       this.session = {
@@ -498,6 +529,7 @@ export class Gestures {
       lastY: clientY,
       origin: this.map(clientX, clientY),
       travel: 0,
+      candidate: false,
     };
     s.contacts.set(id, contact);
     if (s.void || s.contacts.size !== 2) {
@@ -524,6 +556,10 @@ export class Gestures {
     c.travel += dist(c.lastX, c.lastY, clientX, clientY);
     c.lastX = clientX;
     c.lastY = clientY;
+    if (!c.candidate && c.travel > this.panThreshold * CANDIDATE_FRACTION) {
+      c.candidate = true;
+      this.onPanCandidate?.(id, c.travel);
+    }
     if (s.void) return;
     if (s.multi) {
       this.moveTwo(s);
@@ -567,7 +603,8 @@ export class Gestures {
       } else if (!s.longPressed) {
         if (time - c.downAt >= this.longPressMs) {
           // Held long enough but no tick saw it (a stalled frame): still a long-press, not a tap.
-          this.longPressOf(s, c);
+          // A pan candidate under `pan: 'prefer'` was on its way to a pan: nothing.
+          if (!this.preferPan(c)) this.longPressOf(s, c);
         } else {
           this.emitTap(c, time);
         }
@@ -608,8 +645,13 @@ export class Gestures {
     const s = this.session;
     if (!s || s.void || s.multi || s.moving || s.longPressed) return;
     const c = s.contacts.values().next().value as Contact | undefined;
-    if (!c || t - c.downAt < this.longPressMs) return;
+    if (!c || t - c.downAt < this.longPressMs || this.preferPan(c)) return;
     this.longPressOf(s, c);
+  }
+
+  /** True when `c` may no longer long-press: a pan candidate under `pan: 'prefer'`. */
+  private preferPan(c: Contact): boolean {
+    return this.panMode === 'prefer' && c.candidate;
   }
 
   private longPressOf(s: Session, c: Contact): void {

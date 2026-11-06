@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>ThunderClap engine input demo</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+      #root { position: fixed; inset: 0; }
+      #panel {
+        position: fixed; top: 8px; left: 8px; width: 300px; padding: 8px;
+        font: 12px/1.5 monospace; color: #dde; background: rgba(10, 14, 24, 0.8);
+        pointer-events: none;
+      }
+      #panel button { pointer-events: auto; font: inherit; margin-bottom: 4px; }
+      #panel .bar { height: 6px; background: #223; margin: 2px 0 6px; }
+      #panel .bar > div { height: 100%; width: 0; background: #7c6; }
+    </style>
+  </head>
+  <body>
+    <main id="root"></main>
+    <aside id="panel"></aside>
+    <script type="module" src="./input.ts"></script>
+  </body>
+</html>
