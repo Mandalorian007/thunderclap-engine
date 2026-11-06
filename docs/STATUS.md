@@ -102,11 +102,12 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | glTF materials: full PBR map set + factors, KHR_texture_transform, samplers, TANGENT → tangent layout, skinned primitives through the standard material (SKINNED_LAYOUT flip), joint names | ws/gltf-materials | 🔧 engineer dispatched (offset 520; branched from b16bbd4+) |
 | 5 | Input 3: `Look` orbit mode, rebinding + listen + serialise, hold/doubleTap/chord triggers, pan observer (long-press ordering fix), rumble, prompt glyphs | ws/input-3 | ✅ green `8e13fa4` (check 1481/115, e2e 1443/151/0, snap 0) queued chain 2 |
 | 5 | Post 3: TAA with history + jitter, SSR, auto-exposure histogram, white balance, camera motion blur, lens dirt, quality tiers | ws/post-3 | 🔧 engineer dispatched (offset 540) |
-| 5 | Host PWA: `packages/host-pwa` installable shell (manifest + service worker vite plugin, install/update/offline through the Host seam) | ws/host-pwa | ✅ green `192f943` (check 1453/114 + host-pwa 37 + package e2e 4/4, snap 0; engine matrix not run by engineer: integrator runs it at offset 550) queued chain 1 |
+| 5 | Host PWA: `packages/host-pwa` installable shell (manifest + service worker vite plugin, install/update/offline through the Host seam) | ws/host-pwa | ✅ merged `26e8223` (chain 1; full gate: check 1517/118 + host-pwa 37, e2e 1537/145/0, snap 0; package.json check chain keep-both) |
 | 5 | Nav 3: edge costs, 4-neighbour, `reachable` with parents, incremental grid edits, multi-goal flow fields, path caps | ws/nav-3 | 🔧 engineer dispatched (offset 560) |
 | 5 | Ergo 2D 2: iso projection/inverse with elevation probe, tile-layer painter order + diamond + elevation, parallax helper, 2D camera follow | ws/ergo-2d-2 | 🔧 engineer dispatched (offset 570) |
 | 5 | Voxel render: `@thunderclap/engine/voxel` grid, greedy mesher + AO, worker bridge, culled chunk Drawable with slack, DDA pick, WGSL prelude, `nearest-mip-repeat` sampler, water origin, sky ambient floor | ws/voxel-render | 🔧 engineer dispatched (offset 580) |
 | 5 | Demo polish 2: arena/dungeon/range/showroom adopt `timing.ready()`, skinned standard, decals, `PanelStack`, widgets `bar`, tween hinge | ws/demo-polish-2 | 🔧 engineer dispatched (offset 590) |
+| 5 | UI 3: tooltip (element or world target), pad/keyboard world cursor, loading screen, notifications, `h` string style, select zoom fix | ws/ui-3 | 📝 brief written; dispatch after ws/ui-world-panel lands (offset 600) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates

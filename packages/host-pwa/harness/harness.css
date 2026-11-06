@@ -1,0 +1,15 @@
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: #0b0d14;
+  color: #ddd;
+  font:
+    14px system-ui,
+    sans-serif;
+}
+#root {
+  position: fixed;
+  inset: 0;
+  padding: 16px;
+}
