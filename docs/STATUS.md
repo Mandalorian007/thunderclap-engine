@@ -79,6 +79,8 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Input recording and replay (`createInputRecorder`, `createInputPlayback`, `createGame({ input: { replay } })`) | ws/input-replay | ✅ green at `adda342` (888 tests; e2e 747/95/0); queued chain 6 after ergo-2d |
 | 5 | Geometry kit 2: extrude/lathe/sweep/tube/polygon, stairs/arch, tangents + `VERTEX_LAYOUT_3D_TANGENT`, weld/flatShade/projectUv/fitBounds | ws/geom-2 | 🔧 engineer running (offset 300) |
 | 5 | Camera helpers: `viewZ`, `invViewProj`, `projectMany`, `frustumCorners`, `setPerspective` parity | ws/camera-ergo | 🔧 engineer running (offset 310) |
+| 5 | UI widgets 2: reticle, bar, segmented, select, keyPrompt, stepper, cooldown | ws/ui-widgets | 🔧 engineer running (offset 320) |
+| 5 | Audio 2: beat-grid music layers, variations, reverb/lowpass sends, ducking | ws/audio-2 | 🔧 engineer running (offset 330) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
