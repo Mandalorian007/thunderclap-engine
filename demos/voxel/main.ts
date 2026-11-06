@@ -1,24 +1,26 @@
 /**
- * Voxel demo: a small Forgewilds-class world, the voxel path end to end with the mesher in the
- * game.
+ * Voxel demo: a small Forgewilds-class world, the reference for "a voxel game on the engine".
  *
  * - 8×8 columns of 16³ chunks, 64 high (256 chunks), generated from 2D value noise with caves
- *   and trees in the mesher Worker (`mesher.worker.ts`), which greedy-meshes every chunk into
- *   `VERTEX_LAYOUT_3D` with baked per-vertex ambient occlusion and transfers the buffers back.
- *   The page hands them to `Mesh.update` and draws each chunk under its own `Transform`.
+ *   and trees into an engine `VoxelGrid` (`world.ts`). `createVoxelChunks` owns one `Mesh` per
+ *   non-empty chunk, remeshes dirty chunks through `createVoxelMesher` in the Worker
+ *   (`mesher.worker.ts`: the engine's three-line recipe), rewrites each mesh in place and
+ *   frustum-culls the chunks on draw.
  * - One material over a texture array of eight canvas-painted block textures, sampled by the
- *   per-vertex layer (the vertex colour's alpha; the AO rides in its rgb), lit by `engine_lambert`
- *   with the sun's shadow on the near chunks, fogged by `engine_fog`. Glowstone is emissive and
- *   flickers (`flicker`) into the bloom.
- * - A day cycle drives the sun and `Sky`; `Water` sits at sea level in a second view of the
- *   same camera so its shoreline reads this frame's depth.
+ *   per-vertex layer through the `VOXEL_WGSL` prelude with the `nearest-mip-repeat` sampler
+ *   (the uv is in block units, so a merged quad tiles), lit by `engine_lambert` with the sun's
+ *   shadow on the near chunks, fogged by `engine_fog`. Glowstone is emissive and flickers
+ *   (`flicker`) into the bloom.
+ * - A day cycle drives the sun and `Sky` (with an `ambientFloor` for the night); `Water` sits
+ *   at sea level with its `origin` at the world's centre, in a second view of the same camera so
+ *   its shoreline reads this frame's depth.
  * - First person: WASD + mouse look under the pointer lock, Bedrock-style touch (left half is
  *   the move stick, the right half looks, tap breaks, long-press places), pad sticks and
- *   triggers. A DDA voxel ray from the eye picks the block under the reticle; break and place
- *   re-mesh the touched chunk and its boundary neighbours.
+ *   triggers. `raycastVoxels` from the eye picks the block under the reticle; break and place
+ *   are one `grid.set` each, the engine remeshes the touched chunk and its border neighbours.
  *
- * Nothing here is engine code: the grid, noise, mesher, ray and chunk bookkeeping are what a
- * voxel game writes (VISION rule 5). `?still` parks the day cycle, `?time=0.25` sets it.
+ * The game keeps its blocks, its noise, its textures and its controls (VISION rule 5); the
+ * geometry is the engine's. `?still` parks the day cycle, `?time=0.25` sets it.
  */
 import { GameLoop } from '@thunderclap/engine/core';
 import { flicker, Sky, Water } from '@thunderclap/engine/fx';
@@ -31,38 +33,34 @@ import {
   installGpuErrorLogging,
   Lights,
   loadTextureArray,
-  type Mesh,
-  type MeshBounds,
   Renderer,
-  Transform,
-  VERTEX_LAYOUT_3D,
 } from '@thunderclap/engine/render';
 import { createOverlay } from '@thunderclap/engine/ui';
+import {
+  createVoxelChunks,
+  createVoxelGrid,
+  createVoxelHit,
+  createVoxelMesher,
+  raycastVoxels,
+  VOXEL_WGSL,
+} from '@thunderclap/engine/voxel';
 import { blockIcon, paintBlockTextures } from './textures';
 import {
   Block,
-  blockAt,
   blockLayer,
   CHUNK,
   CHUNK_COUNT,
-  CHUNK_RADIUS,
-  chunkCoords,
-  chunksTouching,
+  generateWorld,
   HOTBAR,
-  inWorld,
-  type MesherReply,
-  type MesherRequest,
+  outsideBlock,
   REACH,
-  raycastVoxels,
   SEED,
   spawnColumn,
   type VoxelDemoApi,
   type VoxelDemoState,
-  type VoxelHit,
-  voxelIndex,
   WATER_HEIGHT,
-  WORLD_ORIGIN,
   WORLD_X,
+  WORLD_Y,
   WORLD_Z,
 } from './world';
 
@@ -88,11 +86,8 @@ const SKIN = 1e-3;
 const SHADOW = { extent: 40, size: 2048 as const, bias: 0.002 };
 const FOG_NEAR = 44;
 const FOG_FAR = 128;
-/** Bounding sphere of every chunk mesh, in chunk space. */
-const CHUNK_BOUNDS: MeshBounds = {
-  center: [CHUNK / 2, CHUNK / 2, CHUNK / 2],
-  radius: CHUNK_RADIUS,
-};
+/** How dark the sky dome goes at night, as a fraction of its day colour. */
+const NIGHT_FLOOR = 0.12;
 
 const state: VoxelDemoState = {
   ready: false,
@@ -107,9 +102,10 @@ const state: VoxelDemoState = {
   drawCalls: 0,
   triangles: 0,
   remeshMs: -1,
+  remeshes: 0,
   edits: 0,
   growths: 0,
-  playerPos: [0, 48, 0],
+  playerPos: [WORLD_X / 2, 48, WORLD_Z / 2],
   yaw: 0,
   pitch: 0,
   selectedBlock: HOTBAR[0]!,
@@ -122,24 +118,21 @@ const state: VoxelDemoState = {
 };
 
 /**
- * The block material. The layer is a whole number in the vertex colour's alpha (the engine's
- * texture-array convention), the baked AO in its rgb. The sampler kinds offer no nearest +
- * mips + repeat, so the uv (block units, so textures tile across a merged quad) is wrapped by
- * hand and the mip level comes from the unwrapped uv's derivatives.
+ * The block material over the engine's vertex convention: `VOXEL_WGSL` reads the texture layer
+ * and the baked AO from the vertex colour; the `nearest-mip-repeat` sampler tiles the
+ * block-unit uv across a merged quad with proper mips.
  */
 const BLOCKS_WGSL = /* wgsl */ `
 struct VoxelParams { glow: vec4f };
 @group(1) @binding(0) var<uniform> u: VoxelParams;
 @group(1) @binding(1) var blockSampler: sampler;
 @group(1) @binding(2) var blocks: texture_2d_array<f32>;
-
+${VOXEL_WGSL}
 @fragment fn fs_main(in: VSOut) -> FragOut {
-  let layer = u32(round(in.color.a));
-  let wrapped = fract(in.uv);
-  let albedo = textureSampleGrad(blocks, blockSampler, wrapped, layer, dpdx(in.uv), dpdy(in.uv)).rgb;
-  let ao = in.color.r;
+  let layer = voxel_layer(in.color);
+  let albedo = textureSample(blocks, blockSampler, in.uv, layer).rgb;
   let n = normalize(in.normal);
-  let lit = engine_lambert(n, in.worldPos) * ao;
+  let lit = engine_lambert(n, in.worldPos) * voxel_ao(in.color);
   var color = albedo * lit;
   var emissive = vec3f(0.0);
   if (layer == 7u) {
@@ -152,17 +145,6 @@ struct VoxelParams { glow: vec4f };
   o.emissive = vec4f(emissive, 0.0);
   return o;
 }`;
-
-/** One chunk: its mesh (made on the first reply), its placement and what its mesh holds. */
-interface ChunkRecord {
-  mesh: Mesh | null;
-  transform: Transform;
-  indexCount: number;
-  /** World centre of the chunk, for the frustum test. */
-  cx: number;
-  cy: number;
-  cz: number;
-}
 
 const smooth01 = (t: number) => {
   const x = Math.max(0, Math.min(1, t));
@@ -244,16 +226,18 @@ async function main(): Promise<void> {
     wgsl: BLOCKS_WGSL,
     textures: 1,
     viewDimension: '2d-array',
-    sampler: 'nearest-mip-clamp',
+    sampler: 'nearest-mip-repeat',
     uniformBytes: 16,
   });
   material.setTexture(0, blockArray);
   const glow = new Float32Array(4);
 
-  const sky = new Sky(renderer, { stars: true });
+  const sky = new Sky(renderer, { stars: true, ambientFloor: NIGHT_FLOOR });
+  // The grid's corner is the world origin, so the water's centre is the world's centre.
   const water = new Water(renderer, {
     size: WORLD_X,
     segments: 32,
+    origin: [WORLD_X / 2, 0, WORLD_Z / 2],
     level: WATER_HEIGHT,
     displace: 0.06,
     roughness: 0.14,
@@ -302,98 +286,31 @@ async function main(): Promise<void> {
     lights.sun.shadow = elevation > 0.03 ? SHADOW : null;
   }
 
-  // The chunks: a record each, the mesh made on the first reply (sized to its first contents,
-  // `Mesh.update` grows it 1.5× if an edit needs more).
-  const chunks: ChunkRecord[] = [];
-  const cc: [number, number, number] = [0, 0, 0];
-  for (let c = 0; c < CHUNK_COUNT; c++) {
-    chunkCoords(c, cc);
-    const x = cc[0] * CHUNK + WORLD_ORIGIN;
-    const y = cc[1] * CHUNK;
-    const z = cc[2] * CHUNK + WORLD_ORIGIN;
-    chunks.push({
-      mesh: null,
-      transform: new Transform({ x, y, z }),
-      indexCount: 0,
-      cx: x + CHUNK / 2,
-      cy: y + CHUNK / 2,
-      cz: z + CHUNK / 2,
-    });
-  }
-  const meshed = new Uint8Array(CHUNK_COUNT);
-
-  // The Worker owns the authoritative grid; the page keeps a copy for collision, picking and
-  // the edits it applies ahead of the Worker's re-mesh.
-  let grid: Uint8Array | null = null;
+  // The world: the game generates the blocks into the engine's grid; the engine meshes every
+  // dirty chunk in the Worker, keeps one mesh per non-empty chunk and culls them on draw.
+  const grid = createVoxelGrid({ sizeX: WORLD_X, sizeY: WORLD_Y, sizeZ: WORLD_Z, chunk: CHUNK });
+  generateWorld(grid, SEED);
   const worker = new Worker(new URL('./mesher.worker.ts', import.meta.url), { type: 'module' });
-  const send = (req: MesherRequest) => worker.postMessage(req);
-  let token = 0;
-  let editStart = 0;
-  const pendingChunks = new Set<number>();
-  const touched: number[] = [];
-
-  worker.addEventListener('message', (e: MessageEvent<MesherReply>) => {
-    const reply = e.data;
-    if (reply.type === 'world') {
-      grid = reply.grid;
-      spawn();
-      return;
-    }
-    const rec = chunks[reply.chunk]!;
-    // The first reply makes the mesh at exactly its size; later ones write in place and grow
-    // only when an edit exposes more faces than the chunk ever had.
-    if (!rec.mesh) {
-      rec.mesh = renderer.createMesh({
-        label: `chunk-${reply.chunk}`,
-        layout: VERTEX_LAYOUT_3D,
-        capacity: {
-          vertices: Math.max(4, reply.vertexCount),
-          indices: Math.max(6, reply.indexCount),
-        },
-        indexFormat: 'uint32',
-        bounds: CHUNK_BOUNDS,
-        autoBounds: false,
-      });
-    }
-    rec.mesh.update({
-      vertices: reply.vertices,
-      indices: reply.indices,
-      vertexCount: reply.vertexCount,
-      indexCount: reply.indexCount,
-      bounds: CHUNK_BOUNDS,
-    });
-    rec.indexCount = reply.indexCount;
-    if (!meshed[reply.chunk]) {
-      meshed[reply.chunk] = 1;
-      state.chunks++;
-    }
-    let growths = 0;
-    let solid = 0;
-    for (const c of chunks) {
-      if (c.mesh) growths += c.mesh.growths;
-      if (c.indexCount > 0) solid++;
-    }
-    state.growths = growths;
-    state.chunksSolid = solid;
-    if (reply.token === token && pendingChunks.delete(reply.chunk) && pendingChunks.size === 0) {
-      state.remeshMs = performance.now() - editStart;
-    }
-  });
-  send({ type: 'init', seed: SEED });
+  const blockRules = { layerOf: blockLayer, outside: outsideBlock };
+  const mesher = createVoxelMesher(grid, { worker, ...blockRules });
+  const chunks = createVoxelChunks(renderer, grid, { material, mesher, slack: 1.5, ...blockRules });
+  /** An edit's round trip: set when a block changes, cleared when its remeshes are uploaded. */
+  let editStart = -1;
 
   // ─── the player ───────────────────────────────────────────────────────────
   const pos = state.playerPos;
   const vel = [0, 0, 0];
   let onGround = false;
   let inWater = false;
-  let spawned = false;
   const aimDir = [0, 0, -1];
   const eye = new Float32Array(3);
   const lookTarget = new Float32Array(3);
+  const cc: [number, number, number] = [0, 0, 0];
 
+  /** The block at a world point: stone below the world (a floor), air beyond its other sides. */
   function blockAtWorld(x: number, y: number, z: number): number {
-    if (!grid) return Block.Air;
-    return blockAt(grid, Math.floor(x) - WORLD_ORIGIN, Math.floor(y), Math.floor(z) - WORLD_ORIGIN);
+    if (y < 0) return Block.Stone;
+    return grid.get(Math.floor(x), Math.floor(y), Math.floor(z));
   }
   const solidAt = (x: number, y: number, z: number) => blockAtWorld(x, y, z) !== Block.Air;
 
@@ -415,15 +332,10 @@ async function main(): Promise<void> {
     return false;
   }
 
-  function spawn(): void {
-    if (!grid) return;
-    spawnColumn(grid, cc);
-    pos[0] = cc[0] + 0.5 + WORLD_ORIGIN;
-    pos[1] = cc[1];
-    pos[2] = cc[2] + 0.5 + WORLD_ORIGIN;
-    vel[0] = vel[1] = vel[2] = 0;
-    spawned = true;
-  }
+  spawnColumn(grid, cc);
+  pos[0] = cc[0] + 0.5;
+  pos[1] = cc[1];
+  pos[2] = cc[2] + 0.5;
 
   function placeCamera(): void {
     const cp = Math.cos(state.pitch);
@@ -448,7 +360,6 @@ async function main(): Promise<void> {
 
   /** Move the player one step: gravity, the move input, axis-separated voxel collision. */
   function step(dt: number, moveX: number, moveY: number, jump: boolean, autoJump: boolean): void {
-    if (!spawned) return;
     // Standing in the sea: the feet are below the surface in an open cell.
     inWater = pos[1] + 0.4 < WATER_HEIGHT && !solidAt(pos[0], pos[1] + 0.4, pos[2]);
     const speed = inWater ? SWIM_SPEED : WALK_SPEED;
@@ -504,50 +415,41 @@ async function main(): Promise<void> {
     // A step: walking into a one-block ledge hops it (Bedrock's auto-jump; on every device).
     if (blocked && onGround && autoJump && len > 0) vel[1] = JUMP_SPEED;
     // The world's edge is a wall.
-    pos[0] = Math.max(WORLD_ORIGIN + HALF, Math.min(WORLD_ORIGIN + WORLD_X - HALF, pos[0]));
-    pos[2] = Math.max(WORLD_ORIGIN + HALF, Math.min(WORLD_ORIGIN + WORLD_Z - HALF, pos[2]));
+    pos[0] = Math.max(HALF, Math.min(WORLD_X - HALF, pos[0]));
+    pos[2] = Math.max(HALF, Math.min(WORLD_Z - HALF, pos[2]));
   }
 
   // ─── picking and editing ──────────────────────────────────────────────────
-  const hit: VoxelHit = { x: 0, y: 0, z: 0, nx: 0, ny: 0, nz: 0, distance: 0 };
+  const hit = createVoxelHit();
   const lookingAt: [number, number, number] = [0, 0, 0];
   let hasHit = false;
 
   function pick(): void {
-    hasHit =
-      grid !== null &&
-      raycastVoxels(
-        grid,
-        eye[0]!,
-        eye[1]!,
-        eye[2]!,
-        aimDir[0]!,
-        aimDir[1]!,
-        aimDir[2]!,
-        REACH,
-        hit,
-      );
+    hasHit = raycastVoxels(
+      grid,
+      eye[0]!,
+      eye[1]!,
+      eye[2]!,
+      aimDir[0]!,
+      aimDir[1]!,
+      aimDir[2]!,
+      REACH,
+      hit,
+    );
     if (hasHit) {
-      lookingAt[0] = hit.x + WORLD_ORIGIN;
+      lookingAt[0] = hit.x;
       lookingAt[1] = hit.y;
-      lookingAt[2] = hit.z + WORLD_ORIGIN;
+      lookingAt[2] = hit.z;
       state.lookingAt = lookingAt;
     } else {
       state.lookingAt = null;
     }
   }
 
-  /** Set a voxel on both copies and re-mesh the chunks whose faces it changes. */
+  /** Set a voxel: the grid flags the touched chunks, the engine remeshes them. */
   function setBlock(x: number, y: number, z: number, block: number): void {
-    if (!grid || !inWorld(x, y, z)) return;
-    grid[voxelIndex(x, y, z)] = block;
-    send({ type: 'set', x, y, z, block });
-    chunksTouching(x, y, z, touched);
-    token++;
+    if (!grid.set(x, y, z, block)) return;
     editStart = performance.now();
-    pendingChunks.clear();
-    for (const c of touched) pendingChunks.add(c);
-    send({ type: 'mesh', chunks: touched.slice(), token });
     state.edits++;
   }
 
@@ -559,16 +461,13 @@ async function main(): Promise<void> {
   }
 
   function placeBlock(): void {
-    if (!hasHit || !grid) return;
-    const x = hit.x + hit.nx;
-    const y = hit.y + hit.ny;
-    const z = hit.z + hit.nz;
-    if (!inWorld(x, y, z) || grid[voxelIndex(x, y, z)] !== Block.Air) return;
+    // The eye inside a block (a zero normal) places nowhere.
+    if (!hasHit || (hit.nx === 0 && hit.ny === 0 && hit.nz === 0)) return;
+    const { px: x, py: y, pz: z } = hit;
+    if (!grid.inBounds(x, y, z) || grid.get(x, y, z) !== Block.Air) return;
     // Not into the player.
-    const wx = x + WORLD_ORIGIN;
-    const wz = z + WORLD_ORIGIN;
-    const overlapsX = wx + 1 > pos[0] - HALF && wx < pos[0] + HALF;
-    const overlapsZ = wz + 1 > pos[2] - HALF && wz < pos[2] + HALF;
+    const overlapsX = x + 1 > pos[0] - HALF && x < pos[0] + HALF;
+    const overlapsZ = z + 1 > pos[2] - HALF && z < pos[2] + HALF;
     const overlapsY = y + 1 > pos[1] && y < pos[1] + HEIGHT;
     if (overlapsX && overlapsZ && overlapsY) return;
     setBlock(x, y, z, state.selectedBlock);
@@ -659,6 +558,19 @@ async function main(): Promise<void> {
       for (let i = 0; i < SLOT_ACTIONS.length; i++) {
         if (input.pressed(SLOT_ACTIONS[i]!)) selectSlot(i);
       }
+
+      // Finished remeshes in, dirty chunks (this tick's edit) out. An edit's round trip ends
+      // when its last chunk is uploaded and nothing is still in flight.
+      const applied = chunks.update();
+      const s = chunks.stats;
+      if (editStart >= 0 && applied > 0 && s.pending === 0) {
+        state.remeshMs = performance.now() - editStart;
+        editStart = -1;
+      }
+      state.chunks = Math.min(CHUNK_COUNT, s.remeshes);
+      state.chunksSolid = s.chunks;
+      state.remeshes = s.remeshes;
+      state.growths = s.growths;
     },
     render(_alpha, time) {
       glow[0] = flicker(time.realTime, { seed: 3, speed: 5, amount: 0.35, base: 1.6 });
@@ -668,21 +580,7 @@ async function main(): Promise<void> {
       frame.clear(0, 0, 0);
       frame.lights = lights;
       frame.drawable(sky, -1);
-      // The chunks: only those the frustum sees are recorded (the engine culls by the mesh
-      // bounds too; this keeps the record loop and the stats honest).
-      let drawn = 0;
-      let culled = 0;
-      let triangles = 0;
-      for (const c of chunks) {
-        if (!c.mesh || c.indexCount === 0) continue;
-        if (!camera.seesSphere(c.cx, c.cy, c.cz, CHUNK_RADIUS)) {
-          culled++;
-          continue;
-        }
-        frame.mesh(c.mesh, material, c.transform);
-        drawn++;
-        triangles += c.indexCount / 3;
-      }
+      const drawStats = chunks.draw(frame, camera);
       // The water in a second view of the same camera, so its depth copy holds this frame's
       // terrain (shoreline, depth tint).
       frame.drawable(water, 1, 2);
@@ -697,9 +595,9 @@ async function main(): Promise<void> {
         const fps = 1 / time.frameDt;
         state.fps = state.fps === 0 ? fps : state.fps + (fps - state.fps) * 0.1;
       }
-      state.chunksDrawn = drawn;
-      state.chunksCulled = culled;
-      state.triangles = triangles;
+      state.chunksDrawn = drawStats.drawn;
+      state.chunksCulled = drawStats.culled;
+      state.triangles = drawStats.triangles;
       state.drawCalls = renderer.stats.drawCalls;
       state.stats.drawCalls = renderer.stats.drawCalls;
       state.stats.instances = renderer.stats.instances;
@@ -710,6 +608,8 @@ async function main(): Promise<void> {
   });
   res.onDeviceLost(() => {
     loop.stop();
+    chunks.dispose();
+    mesher.dispose();
     worker.terminate();
   });
   loop.start();

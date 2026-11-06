@@ -230,7 +230,7 @@ against `scripts/fixtures/`.
 ## Testing
 
 ```sh
-pnpm check       # typecheck + Biome lint + import boundaries + README coverage (check:docs) + Vitest unit tests (1799 tests in 151 files) + the host-electron, host-capacitor, host-pwa, template and create-game checks
+pnpm check       # typecheck + Biome lint + import boundaries + README coverage (check:docs) + Vitest unit tests (1833 tests in 156 files) + the host-electron, host-capacitor, host-pwa, template and create-game checks
 pnpm test:e2e    # Playwright e2e against the harness pages, on a device matrix
 pnpm harness     # serve the harness pages yourself
 ```
