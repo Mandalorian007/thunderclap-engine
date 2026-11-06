@@ -745,6 +745,8 @@ renderer.resolutionScale;                          // scene width / output width
   custom `PostProcessor` calls for its own passes (the class is exported for that type). Its
   `onResult` listeners get a `GpuTimerResult` (`totalMs`, `passes`, `samples`). Without the
   feature `gpuTimer` is null and timing falls back to the queue.
+  `pnpm bench` (`harness/bench.html`, `scripts/bench.mjs`) uses these to record what a frame
+  affords on one machine, per scene rung, in `docs/BENCH.md`.
 - `DynamicResolution` turns GPU-time samples into a scale. It drops after 1 s over budget
   (smoothed), raises only after 3 s with the predicted cost under 85% of budget, waits
   1.5 s after any change, and blocks a level for 20 s when raising to it was followed by a

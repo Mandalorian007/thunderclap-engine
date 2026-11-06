@@ -46,6 +46,7 @@
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "check:docs": "node scripts/check-docs.mjs",
     "release": "node scripts/release.mjs",
+    "bench": "node scripts/bench.mjs",
     "test:e2e": "playwright test",
     "snap": "node scripts/snap.mjs --update",
     "snap:check": "node scripts/snap.mjs",
