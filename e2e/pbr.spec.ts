@@ -6,7 +6,10 @@
  * - GGX: the sun's highlight on a metal sphere is brighter than the centre of the rough
  *   dielectric sphere (pixels sampled from a screenshot, no golden image);
  * - normal mapping: two points on the flat tile, equal in everything but the bump's slope under
- *   them, differ in luminance.
+ *   them, differ in luminance;
+ * - the shared light loop (ws/pbr-lights): the spot light's cone shows on the PBR floor (inside
+ *   vs outside), and a lamp masked to one layer lights the sphere on that layer but not its
+ *   twin on another.
  */
 import type { Frame, Page } from '@playwright/test';
 import type { HarnessPbrState, PbrProbe } from '../harness/pbr-state';
@@ -108,12 +111,12 @@ test('boots the sphere grid under the lights, and a metal highlight beats a roug
   const s = await read();
   expect(s.grid).toEqual({ cols: 5, rows: 5 });
   expect(s.materials).toBe(3);
-  // 25 spheres, the tile and the ground.
-  expect(s.stats.instances).toBe(27);
+  // 25 spheres, the tile, the ground and the masked pair.
+  expect(s.stats.instances).toBe(29);
   // The spheres share one material and one mesh: the grid is a few instanced draws at most.
   expect(s.stats.drawCalls).toBeLessThanOrEqual(12);
   expect(s.gpuErrors).toBe(0);
-  expect(s.lights).toEqual({ sun: true, points: 1, shadow: true, fog: true });
+  expect(s.lights).toEqual({ sun: true, points: 2, spots: 1, shadow: true, fog: true });
 
   const [rough, highlight] = await sample(page, [
     await toPage(s.probes.rough),
@@ -140,6 +143,40 @@ test('the normal map lights the two slopes of a bump differently on a flat tile'
   ]);
   // Same quad, same normal, same tint, a hand's width apart: only the normal map differs.
   expect(sum(lit!), `lit ${lit} dark ${dark}`).toBeGreaterThan(sum(dark!) + 30);
+  expect(s.gpuErrors).toBe(0);
+  expect(errors).toEqual([]);
+});
+
+test('the spot light cones onto the PBR floor: inside the cone beats the floor outside it', async ({
+  page,
+  wrapper,
+}) => {
+  await open(page, wrapper);
+  const s = await read();
+  const [inside, outside] = await sample(page, [
+    await toPage(s.probes.spotIn),
+    await toPage(s.probes.spotOut),
+  ]);
+  // Same floor, same sun, same depth, no other lamp in reach: only the spot's cone differs.
+  expect(sum(inside!), `in ${inside} out ${outside}`).toBeGreaterThan(sum(outside!) + 60);
+  expect(s.gpuErrors).toBe(0);
+  expect(errors).toEqual([]);
+});
+
+test('a lamp masked to one layer lights the sphere on that layer, not its twin', async ({
+  page,
+  wrapper,
+}) => {
+  await open(page, wrapper);
+  const s = await read();
+  const [lit, masked] = await sample(page, [
+    await toPage(s.probes.litSphere),
+    await toPage(s.probes.maskedSphere),
+  ]);
+  // Same material, tint, size and distance from the lamp: only the layer mask differs.
+  expect(sum(lit!), `lit ${lit} masked ${masked}`).toBeGreaterThan(sum(masked!) + 40);
+  // The masked sphere still sees the sun and ambient: it is lit, not black.
+  expect(sum(masked!), `masked ${masked}`).toBeGreaterThan(150);
   expect(s.gpuErrors).toBe(0);
   expect(errors).toEqual([]);
 });

@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>ThunderClap engine music harness</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #000; color: #fff; overflow: hidden; font: 16px system-ui, sans-serif; }
+      #root { position: fixed; inset: 0; padding: 16px; box-sizing: border-box; }
+      .row { display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; align-items: center; }
+      button { font: inherit; padding: 4px 12px; }
+      input[type=range] { width: 200px; }
+      #readout { font-family: ui-monospace, monospace; white-space: pre; opacity: 0.85; }
+      #beat { display: inline-block; width: 1em; height: 1em; border-radius: 50%; background: #444; vertical-align: middle; }
+      #beat.on { background: #fff; }
+    </style>
+  </head>
+  <body>
+    <main id="root">
+      <h1>Music <span id="beat"></span></h1>
+      <p id="hint">Click or tap anywhere to unlock audio.</p>
+      <div class="row">
+        <label>Intensity <input id="intensity" type="range" min="0" max="1" step="0.01" value="0" /></label>
+        <label>Reverb <input id="reverb" type="range" min="0" max="1" step="0.01" value="0.3" /></label>
+      </div>
+      <div class="row">
+        <button id="step" type="button">Footstep</button>
+        <button id="speak" type="button">Speak</button>
+      </div>
+      <div id="readout"></div>
+    </main>
+    <script type="module" src="./music.ts"></script>
+  </body>
+</html>

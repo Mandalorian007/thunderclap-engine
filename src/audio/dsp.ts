@@ -166,3 +166,42 @@ export function reverbImpulse(
   }
   return out;
 }
+
+/** The part of a `BaseAudioContext` that `impulseResponse` needs (a fake will do in tests). */
+export interface BufferFactory {
+  readonly sampleRate: number;
+  createBuffer(channels: number, length: number, sampleRate: number): AudioBuffer;
+}
+
+export interface ImpulseResponseOptions {
+  /** Impulse length in seconds. Default 2. */
+  seconds?: number;
+  /** Tail shape: `(1 - t)^decay`. Higher = shorter, drier. Default 3. */
+  decay?: number;
+  /** Noise seed. Default 1. */
+  seed?: number;
+  /** Default 2 (stereo width from independent channels). */
+  channels?: number;
+}
+
+/**
+ * A procedural reverb impulse as an `AudioBuffer` on `ctx` (a `ConvolverNode.buffer`), built from
+ * `reverbImpulse`: no asset to load. Same options, same samples.
+ */
+export function impulseResponse(
+  ctx: BufferFactory,
+  opts: ImpulseResponseOptions = {},
+): AudioBuffer {
+  const ir = reverbImpulse(
+    ctx.sampleRate,
+    opts.seconds ?? 2,
+    opts.decay ?? 3,
+    opts.seed ?? 1,
+    opts.channels ?? 2,
+  );
+  const buffer = ctx.createBuffer(ir.length, ir[0]!.length, ctx.sampleRate);
+  ir.forEach((ch, i) => {
+    buffer.copyToChannel(ch, i);
+  });
+  return buffer;
+}

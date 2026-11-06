@@ -1,3 +1,6 @@
+export type { DebugColor, DebugDrawOptions, DebugQuat, DebugVec3 } from './debug-draw';
+export { createDebugDraw, DEBUG_VERTEX_FLOATS, DebugDraw } from './debug-draw';
+export { DEBUG_DRAW_WGSL } from './debug-wgsl';
 export type { FlickerOptions, PulseOptions } from './flicker';
 export { flicker, pulse, valueNoise1 } from './flicker';
 export type { EmitParams, EmitShape, ParticleSystemOptions } from './particles';
