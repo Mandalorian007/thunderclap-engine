@@ -49,7 +49,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Pick | ws/pick | `sphereTester`, `obbTester`, `meshTester` (bounds reject + Möller–Trumbore), `transformRayInto`; harness `pick.html` | rays, cull | ✅ merged `527f0eb` (chain 3; e2e 596/92/2 E-017) |
 | 5 | Look zoom | ws/look-zoom | `Look.zoom` axis (wheel, pinch, pad opt-in); `Follow` reads it; harness follow drops its wheel binding | follow | ✅ green at `d5bb746` (640 tests; e2e 526/57/3 fog flake); queued in chain 2 after template-first-person |
 | 5 | e2e flake under load | ws/flake-input | mesh.spec fog/drag and ui.spec menuNav poll the state they assert; `?still` lamp flag; common brief rule | flake-client | ✅ green at `22839fa` (632 tests; two parallel matrices 529/57/0 each); queued in chain 3 after bench |
-| 5 | Sky | ws/sky | `Sky` drawable: gradient dome, sun disc/glow from `Lights.sun`, horizon to `fog.color`, stars; harness `sky.html` | lights | ✅ green at `edab70e` (641 tests; e2e 552/57/1 fog flake); queued in chain 2 after sockets |
+| 5 | Sky | ws/sky | `Sky` drawable: gradient dome, sun disc/glow from `Lights.sun`, horizon to `fog.color`, stars; harness `sky.html` | lights | ✅ merged `bf87092` (chain 3; 825 tests; e2e 710/92/0 at load 20; snap 5/5) |
 | 5 | Bench | ws/bench | `harness/bench.html` scene ladder, `pnpm bench` → `docs/BENCH.md`; e2e one rung | gpu-timer | ✅ green at `d32c978` (709 tests; e2e 525/64/5 E-017 flakes); queued in chain 3 after sky |
 | 5 | Sockets | ws/sockets | `createSocket`, `socketWorld`, `attachTransform`, `Skeleton.names`; harness `sockets.html` | anim | ✅ merged `9e0af9a` (chain 3; e2e 626/92/4 E-017) |
 | 5 | Texture registry | ws/texture-registry | `loadTexture` with mips, `defaultTextures` (white, black, flatNormal, metalRough, checker), unset slots bind white | pbr (wish) | ✅ merged `853f444` (chain 1; e2e 662/92/8 all E-017/E-020) |
@@ -69,12 +69,13 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Demo: arena | ws/demo-arena | `demos/arena` third-person skinned character, sockets+trail, follow cam, PBR+shadows, particles; owns `pnpm demo` infra | skinning, anim, sockets, pbr | ✅ green at `4f7a6ce` (e2e 689/92/5 E-017; arena rows 24/24; snap 0 px); queued chain 6 first |
 | 5 | Demo: dungeon | ws/demo-dungeon | `demos/dungeon` 2D tile crawl: atlas, 60 sprites, flicker, menu, save, synth audio | — | ✅ green at `802bbd2` (768 tests; e2e 680/96/18 load timeouts, dungeon.spec 28/4 alone; snap 5/5); land after demo-arena (shared infra) |
 | 5 | Demo: showroom | ws/demo-showroom | `demos/showroom` PBR sphere grid, moving lights, post looks via `blendTo`, GPU readout | pbr | ✅ green at `71c29d4` (768 tests; e2e 684/92/2 E-017; showroom.spec 16/16; snap 0 px); land after demo-arena |
-| 5 | Demo: range | ws/demo-range | `demos/range` first-person target range: Look, meshTester picks, sparks, trails, spatial audio | pick | 🔧 in progress |
-| 5 | Shared light loop | ws/pbr-lights | PBR sees spots, masks, layers via one generated light loop; default textures unified | spot-lights, texture-registry | 🔧 in progress |
-| 5 | Batch submit | ws/batch-submit | `frame.meshes(batch)` + retained `InstanceList`; 50k instances in a few ms CPU; BENCH numbers | bench | 🔧 in progress |
+| 5 | Demo: range | ws/demo-range | `demos/range` first-person target range: Look, meshTester picks, sparks, trails, spatial audio | pick | ✅ green at `38ce3d1` (768 tests; range.spec 31/9/0; full matrix unusable at load 52, E-023); queued chain 6 last |
+| 5 | Shared light loop | ws/pbr-lights | PBR sees spots, masks, layers via one generated light loop; default textures unified | spot-lights, texture-registry | ✅ green at `bb6f799` (784 tests; e2e 686/92/0; snap 0 px; pbr probes identical); queued chain 1 after nav |
+| 5 | Batch submit | ws/batch-submit | `frame.meshes(batch)` + retained `InstanceList`; 50k instances in a few ms CPU; BENCH numbers | bench | ✅ green at `246e1be` (786 tests; e2e 672/106/0; snap 0; BENCH 10k mesh 4.1 ms / batch 0.7 / list 0.2); queued chain 3 after bench (supersedes bench files) |
 | 5 | Debug draw | ws/debug-draw | `createDebugDraw`: lines, wire shapes, axes, paths in one draw (fx) | — | 🔧 in progress |
 | 5 | Billboards | ws/billboards | name plates, health bars, damage numbers: camera-facing quads + canvas text atlas (fx) | — | 🔧 in progress |
 | 5 | Perf overlay | ws/perf-overlay | `createPerfMonitor`/`createPerfOverlay`: frame/GPU/draw stats + sparkline; `?perf` on harness pages | — | 🔧 in progress |
+| 5 | 2D ergonomics: `input.getGamepads`, PanelStack arrows, tile layer + flipbook | ws/ergo-2d | 🔧 engineer running (offset 280) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
@@ -126,6 +127,9 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - ws/demo-dungeon wishes: `createGame` accepting `input.getGamepads` (or an injectable `PadNav`) so specs drive `ctx.padNav`; `PanelStack` walking focus with ArrowUp/Down itself; a tilemap/flipbook helper in `render` to replace per-tile DrawParams bookkeeping. → ws/ergo-2d brief.
 - ws/demo-showroom wishes: `Renderer.timing` 'first sample ready' promise; a retained `worldToScreen` projection; geom builders replacing the copied harness helpers (geom now on main). → ws/ergo-3d.
 - ws/demo-arena wishes: `RenderStats.triangles`; `createStandardMaterial({ buffers })` or a `skinned` option so a skinned PBR needs no custom WGSL; `tsconfig.json` `include` adds `demos` (chain 6 integrator may add it as a semantic fix if typecheck stays green). → ws/ergo-3d.
+- Brief pbr-lights said `WGSL_PBR` lives in `standard.ts`; it is `src/render/pbr-wgsl.ts`. Fix in the next brief that names it (gltf-materials).
+- ws/batch-submit wish: fake GPU records `writeBuffer` data so tests need no queue monkey-patch. → ws/comment-sweep.
+- ws/demo-range wishes: ui reticle widget; hinge/tween helper (tween lands soon); geom cube helper (geom on main). → ws/ergo-3d.
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
