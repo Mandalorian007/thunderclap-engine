@@ -25,8 +25,10 @@ export interface HarnessAnimGraphState {
   jumpWeight: number;
   /** `graph.phase('move')`: the shared normalised phase of the blend space. */
   phase: number;
-  /** Times `jump` was entered (`onEnter`). */
+  /** Times `jump` was entered (`onEnter('jump')`). */
   jumps: number;
+  /** Times `move` was entered (`onEnter('move')`): the exit-time transition back from `jump`. */
+  returns: number;
   /** Whether the page drives `speed` and pulses `jump` itself (E-017: parked by the spec). */
   auto: boolean;
   /** `renderer.stats.instances` of the last frame. */

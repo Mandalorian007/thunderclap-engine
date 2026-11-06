@@ -44,6 +44,7 @@ const state: HarnessAnimGraphState = {
   jumpWeight: 0,
   phase: 0,
   jumps: 0,
+  returns: 0,
   auto: true,
   instances: 0,
   gpuErrors: 0,
@@ -276,6 +277,9 @@ async function main(): Promise<void> {
   graph.onEnter('jump', () => {
     state.jumps++;
     graph.set('jump', false);
+  });
+  graph.onEnter('move', () => {
+    state.returns++;
   });
 
   const lights = new Lights();

@@ -74,13 +74,16 @@ test('the graph enters jump on the parameter and comes back to move at the exit 
   await open(page, wrapper);
   await setAuto(false);
   await expect.poll(async () => (await read()).state).toBe('move');
-  const before = (await read()).jumps;
+  const before = await read();
   await jump();
-  await expect.poll(async () => (await read()).state).toBe('jump');
-  await expect.poll(async () => (await read()).jumps).toBe(before + 1);
+  // The jump lasts well under a second; a loaded machine can miss it between two reads, so the
+  // visit is proven by the enter counters (E-017), not by catching `state === 'jump'`.
+  await expect.poll(async () => (await read()).jumps).toBe(before.jumps + 1);
+  await expect.poll(async () => (await read()).returns).toBe(before.returns + 1);
   await expect.poll(async () => (await read()).state).toBe('move');
   // The fade back finishes: move takes the whole pose again.
   await expect.poll(async () => (await read()).jumpWeight).toBe(0);
+  expect((await read()).jumps).toBe(before.jumps + 1);
   expect(errors).toEqual([]);
 });
 
