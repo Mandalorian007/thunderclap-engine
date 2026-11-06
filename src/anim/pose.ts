@@ -34,6 +34,8 @@ export interface Skeleton {
   inverseBind?: Float32Array;
   /** Node index per joint. Absent: joint `j` is node `j`. */
   joints?: Uint16Array;
+  /** Node name per node (glTF `node.name`), so `createSocket` can take a joint by name. */
+  names?: string[];
 }
 
 /** Local transforms per node, `POSE_NODE_FLOATS` floats each. */
@@ -74,6 +76,11 @@ export function validateSkeleton(skeleton: Skeleton): void {
       const node = skeleton.joints[j]!;
       if (node >= n) throw new Error(`Skeleton: joints[${j}] = ${node} is not a node (${n} nodes)`);
     }
+  }
+  if (skeleton.names && skeleton.names.length !== n) {
+    throw new Error(
+      `Skeleton: names has ${skeleton.names.length} entries, expected ${n} (one per node)`,
+    );
   }
   const ib = skeleton.inverseBind;
   if (ib && ib.length !== joints * 12 && ib.length !== joints * 16) {

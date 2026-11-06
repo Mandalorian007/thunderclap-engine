@@ -1,6 +1,6 @@
 # engine/anim
 
-Keyframe animation with no GPU in it: clips with glTF sampler semantics sampled into poses, a mixer that layers, weights and cross-fades them, and two resolutions a renderer consumes: node world matrices and skin joint matrices. Flat `Float32Array`s throughout; after setup nothing allocates per frame. No dependency on `render/`; `render/skin.ts` (ws/skinning) uploads what `skinMatrices` writes.
+Keyframe animation with no GPU in it: clips with glTF sampler semantics sampled into poses, a mixer that layers, weights and cross-fades them, and two resolutions a renderer consumes: node world matrices and skin joint matrices. Flat `Float32Array`s throughout; after setup nothing allocates per frame. No runtime dependency on `render/` (sockets import the `Transform` type only); `render/skin.ts` (ws/skinning) uploads what `skinMatrices` writes.
 
 ## Quick start
 
@@ -57,6 +57,28 @@ mixer.crossFade(walk, runClip, 0.3);       // weights sum to 1 throughout
 ## Pose (`pose.ts`)
 
 `createPose(skeleton)` (a copy of `rest`), `copyPose(src, dst)`, `blendPose(a, b, t, out)` (lerp translation and scale, slerp rotation; `out` may alias), `poseToWorld(skeleton, pose, out3x4)`, `skinMatrices(skeleton, world3x4, out)` (copies world matrices when there is no `inverseBind`), `inverseBindFromRest(skeleton)` (12-float inverse bind matrices so the rest pose skins to the identity; allocates, call once). Matrix helpers on the 3×4 layout: `writeNodeMatrix(out, o, pose, po)` (`T · R · S` of one node), `multiplyAffine(out, oo, a, ao, b, bo)`, `invertAffine(out, oo, m, mo)`.
+
+## Sockets (`socket.ts`)
+
+A socket is a joint plus a fixed offset in that joint's space: a sword in a hand, a hat on a head, an emitter at a staff tip. Each frame it yields the world 3×4 of whatever rides it, so a second mesh follows the animated skeleton with no code in the game beyond "attach here".
+
+```ts
+const hand = createSocket(skeleton, 'hand.R', { position: [0, 0.08, 0], rotation: grip, scale: 1 });
+const sword = new Transform();
+function frame(dt) {
+  mixer.update(dt);
+  poseToWorld(skeleton, mixer.pose, world);
+  attachTransform(hand, world, character.world, sword);   // sword.world = character · world[joint] · offset
+  frame.mesh(swordMesh, steel, sword);
+}
+```
+
+- **`Socket`** `{ joint: number; offset: Float32Array /* 12, 3×4 */ }`. `joint` indexes the world array `poseToWorld` writes (a node index).
+- **`createSocket(skeleton, joint: number | string, local?: SocketLocal): Socket`** builds `offset` as `T · R · S` of **`SocketLocal`** `{ position?: [x, y, z]; rotation?: [x, y, z, w] (normalised); scale?: [x, y, z] | number }`, each part defaulting to the identity. A string joint resolves through **`Skeleton.names?: string[]`** (one name per node, glTF `node.name`; `validateSkeleton` checks its length); it throws when the skeleton has no `names`, when no node has that name, or when an index is out of range. Allocates (setup).
+- **`socketWorld(socket, worldPose, instanceWorld | null, out): out`** writes `instanceWorld · worldPose[joint] · offset` (12 floats at `out[0..12)`). `instanceWorld` is the skeleton instance's own 3×4 (a `Transform.world`), or `null` when the pose is already in world space or the attached transform is parented to the instance. `out` may not alias `worldPose`. No allocation.
+- **`attachTransform(socket, worldPose, instanceWorld | null, transform: Transform)`** writes that matrix into a `render/` `Transform` (`Transform.setMatrix`), so the attached mesh draws through `frame.mesh(mesh, material, transform)` like everything else; `transform.position` / `quaternion` / `scale` read the decomposition. Give the transform no parent, or the instance's transform as parent with `instanceWorld` `null`. No allocation.
+
+`Transform` is this module's only tie to `render/`, imported as a type. `harness/sockets.html` shows a three-joint arm with two cubes attached, one by index and one by name.
 
 ## Quaternions (`quat.ts`)
 
