@@ -21,6 +21,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./analytics": "./src/analytics/index.ts",
+    "./anim": "./src/anim/index.ts",
     "./assets": "./src/assets/index.ts",
     "./audio": "./src/audio/index.ts",
     "./core": "./src/core/index.ts",
