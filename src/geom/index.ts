@@ -31,6 +31,8 @@ export {
   raycastHeightfield,
   rayHeightfield,
 } from './heightfield';
+export type { Iso, IsoHeightAt, IsoOptions, IsoPoint } from './iso';
+export { createIso, ISO_ELEV_DEPTH, isoHiddenBy, isoInverseProbe } from './iso';
 export type { ProjectUvOptions, UvProjection } from './ops';
 export { fitBounds, flatShade, flipWinding, projectUv, recenter, weld } from './ops';
 export type {
