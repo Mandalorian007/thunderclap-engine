@@ -94,6 +94,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Inventory UI: slot grids with drag-and-drop (mouse, touch, pad), item cards as tooltips, radial pad menu, context list | ws/ui-inventory | `ui.grid`, `ui.drag`, `ui.card`, `ui.radial`, `ui.contextList`; harness `inventory.html` | ui-widgets, ui-hud | 🔧 engineer dispatched (offset 440) |
 | 5 | Same-frame after-opaque depth hook, `inv_view_proj` in the camera block, `'multiply'` blend; water/soft particles/decals consume it | ws/render-hooks | 🔧 engineer dispatched (offset 450) |
 | 5 | Audio: `mixer.voices(bus)`, `Voice.sendTo`, `mixer.register` (music stems as voices), `pause`/`unpause`, `stopAll({ except })` | ws/audio-3 | 🔧 engineer dispatched (offset 460) |
+| 5 | Collision queries: BVH static collider over `geom`/heightfield/tile grid, sphere/capsule/AABB/2D sweeps, move-and-slide with step and slope, export/import | ws/collide | 🔧 engineer dispatched (offset 470) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
