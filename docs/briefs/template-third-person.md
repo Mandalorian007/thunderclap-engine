@@ -1,0 +1,26 @@
+# Brief: ws/template-third-person
+
+Read `docs/briefs/common.md` first, then `docs/VISION.md` (a template game boots from zero in under a day), DECISIONS E-013, E-014, E-015 (first- and third-person characters with cosmetics are the target; Diablo Immortal is the reference for the camera and the cosmetic layering); `templates/first-person/**` (the shape to copy: package, `CLAUDE.md`, `rules/`, scripts, how it keeps game nouns out of the engine), `src/anim/README.md` whole (`createAnimGraph`, `Mixer`, `twoBoneIk`, `lookAt`, root motion, `createSocket`/`attachTransform`, `retargetClip`), `src/render/README.md` *Skinning*, *Standard material*, *PBR*, *Shadows*, `src/assets/README.md` (`loadGltf`, skins, clips), `src/input/README.md` *Look* (yaw/pitch, `zoom` axis, Follow with zoom; look-zoom is on main), `src/geom/README.md` (primitives, heightfield), `src/ui/README.md` *Anchors*, *HUD*, `harness/anim-graph.ts`, `harness/skin.ts`, `harness/sockets.ts`, `harness/follow.ts`, `harness/gltf-writer.ts` (how a skinned glTF with clips is built in memory, so the template needs no binary asset).
+
+## Goal
+
+A copyable third-person action game: a skinned character driven by an animation graph (idle, walk, run with a 1D blend space on speed, attack, hit), an over-the-shoulder follow camera with orbit and zoom, cosmetics attached to sockets (helmet, back item, weapon in the hand; swappable at runtime), foot IK on uneven ground, root-motion for the attack lunge, PBR materials with sun shadows, a hit particle burst, name plates and health bars over enemies, pad and touch and mouse from one `Look`. An agent can extend it without reading the engine.
+
+STATUS row, *done when*: `templates/third-person`: `createGame` fixed-step; a procedurally built skinned character (a `gltf-writer`-style generator in the template producing a glb at startup: a 10–14 joint biped with four clips: idle, walk, run, attack; **no binary asset is committed**), `loadGltf` → skinned `Mesh` + `Skeleton` + clips; `createAnimGraph` with states idle/locomotion(blend space on speed)/attack/hit and conditional transitions; `Follow` camera with orbit (right stick, pointer drag, touch zone) and `zoom` axis; three socket slots (head, back, hand-right) with two cosmetic options each cycled by a HUD button or key, each a `geom`-built mesh attached through `attachTransform`; `twoBoneIk` on both legs against a `geom` heightfield (feet plant on slopes); `extractRootMotion` on the attack clip moving the character forward; `lookAt` turns the head toward the nearest enemy; four roaming enemies (capsule meshes with name plates and health bars through `ui.anchors` or `fx` billboards if landed) that take hits in the attack arc with a world-space `ParticleSystem` burst; PBR materials (`createPbrMaterial`) on character and ground, `Lights.sun.shadow` on, fog on; a `CLAUDE.md` naming the concepts; `check:template-third-person` in `pnpm check`; `pnpm create-game --template third-person` works if ws/scaffold has landed (else note it); timed.
+
+## Scope
+
+- `templates/third-person/` as a private workspace package `@thunderclap/template-third-person` depending on `@thunderclap/engine` via `workspace:*`.
+- `src/character/`: the glb generator (pure, unit-tested: joint count, clip durations, skin weights sum to 1), the animation graph setup, the controller (move on the heightfield with a tiny capsule collision in the template, not the engine), socket slots and cosmetics table, IK and root-motion wiring.
+- `src/world/`: heightfield from `geom` with a few boxes; `sampleHeight` written in the template if the engine lacks one (ws/ergo-3d adds it later; note the wish).
+- `src/enemies/`: roam, take hits, die (shrink and fade), respawn.
+- Scene, HUD (health, cosmetic buttons, a "drag to orbit, wheel to zoom" hint hidden after first use), input mapping (`Look` yaw/pitch/zoom, move axes, attack, cycle cosmetics).
+- `CLAUDE.md`: engine concepts by name, the rules of the house, the commands; a *Cosmetics* section explaining the socket convention so an agent adds a fourth slot without reading the engine.
+- Unit tests on the generator, the cosmetic table and the controller's heightfield walk; scripts `dev`, `typecheck`, `test`; root `check:template-third-person` chained into `check` after `check:template-first-person`; root `template:third-person` dev script.
+- Timing: record minutes from empty directory to green and what you would cut.
+
+## Files owned
+
+`templates/third-person/**`, root `package.json` scripts (two lines), root `README.md` (one templates row), `CHANGELOG.md` (one line), `templates/README.md` if it exists (one row). Nothing under `src/`. If `src/cli` (ws/scaffold) has landed and lists templates by name, add `third-person` to that list and say so; otherwise skip. Engine wishes go in report item 5 (expect several: they feed ws/ergo-3d).
+
+Branch from `main` (7c95022 or later). Running alongside: ws/scaffold landing on chain 2 (root `package.json` scripts: keep your two lines at the end of the scripts block), ws/morph (`src/assets`), ws/ergo-3d (`src/anim`, `src/render`, `templates/first-person` terrain only). Use `E2E_PORT_OFFSET=390`; the template has no e2e of its own, but run the full matrix once on your final head to prove nothing regressed.

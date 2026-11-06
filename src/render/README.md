@@ -212,7 +212,7 @@ counts the batches and lists drawn; `stats.instances` counts their instances too
 | 12..15 | `uvRect` (@6) | u0, v0, u1, v1 |
 | 16..19 | `tint` (@7) | linear RGBA |
 | 20..23 | `params` (@8) | free vec4 |
-| 24..27 | `misc` (@9) | emissive, flags (bit 0 = does not receive shadow; the rest reserved), size.x, size.y |
+| 24..27 | `misc` (@9) | emissive, flags (bit 0 = does not receive shadow, bits 1..23 = the instance's layer mask, packed by `packInstanceFlags`; the rest reserved), size.x, size.y |
 
 `INSTANCE_OFFSET` names these offsets. A custom vertex entry that wraps `engine_vertex(v)`
 needs no change; one that read the old 20-float fields (`v.xform`, the old `v.misc`, or the
@@ -316,7 +316,8 @@ frame.lights = lights;                            // once; the Frame persists
 In WGSL the block is `lights.ambient`, `lights.point_count` (u32), `lights.sun_dir`
 (normalised), `lights.sun_color` and `lights.points[i].position / radius / color`.
 `engine_point_lights(n, p)` sums the point lights' Lambert diffuse with a `(1 - d/radius)²`
-falloff; `engine_lambert(n, p)` adds the ambient and the sun. Toon, rim or wrapped lighting
+falloff; `engine_lambert(n, p)` adds the ambient and the sun (and the spot lights: it is the
+shared `wgslLightLoop` under "Spot lights and layer masks"). Toon, rim or wrapped lighting
 reads the same fields and ignores the helpers. `Lights.writeBlock(f32, u32, offset, shadow?)`
 is the CPU layout (`LIGHTS_BLOCK_FLOATS` = 316 floats; `POINT_LIGHTS_OFFSET_FLOATS`,
 `POINT_LIGHT_FLOATS`, `SUN_VIEW_PROJ_OFFSET_FLOATS`, `SHADOW_PARAMS_OFFSET_FLOATS`,
@@ -380,7 +381,19 @@ invisible to lights.
 
 - `engine_light_accum(world_pos, normal, layer_mask) -> vec3f`: the sun (× `engine_shadow`),
   point and spot Lambert terms of every light whose mask shares a bit with `layer_mask`; no
-  ambient. Custom WGSL (toon, PBR) builds on it.
+  ambient. Custom WGSL (toon) builds on it.
+- The loop is generated, not hand-written, and shared: `wgslLightLoop(name, brdf, params?)`
+  returns the WGSL of `fn name(world_pos, normal, layer_mask[, params]) -> vec3f` that walks
+  the sun (× shadow), the points (`(1 - d/radius)²`) and the spots (× cone), skipping lights
+  whose mask misses `layer_mask`, and multiplies each light's colour by the expression `brdf`,
+  which may use `normal`, `l` (the unit vector to the light), the function's own parameters and
+  anything in scope, and must evaluate to a `vec3f` (WGSL has no function pointers, so the
+  BRDF is inlined once per light kind). `engine_light_accum` is
+  `wgslLightLoop('engine_light_accum', WGSL_LAMBERT_BRDF)` with `WGSL_LAMBERT_BRDF` =
+  `'vec3f(max(dot(normal, l), 0.0))'`; the standard material's `engine_pbr_accum` is the same
+  generator over `engine_brdf`, so a light the Lambert path sees, the PBR path sees. A custom
+  BRDF prepends its own instance (`wgslLightLoop('my_accum', 'my_brdf(normal, l, v)', ', v: vec3f')`)
+  under a name the prelude does not use.
 - `engine_lambert_layers(normal, world_pos, layer_mask)`: ambient + `engine_light_accum`.
 - `engine_lambert(normal, world_pos)`: the same over every layer (`0xffffffffu`), so a material
   that ignores masks keeps its two-argument call; `engine_point_lights` likewise sums every
@@ -468,8 +481,9 @@ frame.mesh(mesh, mat, transform, { params: [0, 0, 0, 0] });
 
 A metallic-roughness PBR material a game uses without writing WGSL, the glTF 2.0 model: GGX
 distribution, height-correlated Smith visibility, Schlick Fresnel, Lambert diffuse, lit by the
-frame's `Lights` (ambient, sun with its shadow map, point lights, fog) in the same units as
-`engine_lambert`.
+frame's `Lights` (ambient, sun with its shadow map, point lights, spot lights, per-light layer
+masks, fog) in the same units as `engine_lambert`: the lights run through the same generated
+loop (`wgslLightLoop`) as the prelude's Lambert helpers, with the GGX BRDF in place of N·L.
 
 ```ts
 import { createStandardMaterial } from '@thunderclap/engine/render';
@@ -494,8 +508,13 @@ frame.mesh(mesh, skin, transform, { tint: [1, 0.9, 0.8, 1] });
 - Per-instance: `tint` multiplies the base colour (and vertex colour), `uv` picks the sub-rect
   of every map, `emissive` adds `base × emissive` to the emissive target, `receiveShadow` and
   `castShadow` as for any material.
-- Maps are sampled with `'linear-mip-repeat'` (trilinear when the map has mips). Missing maps bind four 1×1 defaults (white, sRGB
-  white, flat normal `[128,128,255]`, black) created once per renderer.
+- Maps are sampled with `'linear-mip-repeat'` (trilinear when the map has mips). Missing maps
+  bind the device's `defaultTextures`: `white` for base colour, metallic-roughness and
+  occlusion (sRGB 255 reads 1.0, so the factors pass through), `flatNormal` and `black` for
+  emissive; nothing is created per material or per renderer.
+- Lights reach an instance by its `InstanceParams.layers` (`engine_instance_layers(in.flags)`),
+  as for `engine_lambert_layers`: a lamp with `layers: 0b10` lights only the instances on
+  layer 2.
 - `alphaMode: 'mask'` discards below `alphaCutoff` (the shadow pass has no fragment stage, so
   a masked object still casts its whole silhouette); `'blend'` uses `blend: 'alpha'`, so it
   draws after the opaque draws, writes no depth and casts no shadow. `doubleSided` flips the
@@ -510,12 +529,16 @@ frame.mesh(mesh, skin, transform, { tint: [1, 0.9, 0.8, 1] });
   factor later.
 - `WGSL_PBR` is the helper text a custom material can prepend to its own WGSL:
   `engine_pbr(base, metallic, roughness, n, v, world_pos, ao, emissive) -> vec3f` (lit, fogged
-  colour), `engine_brdf`, `engine_d_ggx`, `engine_v_smith_ggx`, `engine_f_schlick` and
+  colour, every layer), `engine_pbr_layers(..., layer_mask)` (the same, lit only by the lights
+  sharing a bit with the mask), `engine_pbr_accum(world_pos, n, layer_mask, v, diffuse_color,
+  f0, a2, n_dot_v)` (the generated light loop over `engine_brdf`, no ambient), `engine_brdf`,
+  `engine_d_ggx`, `engine_v_smith_ggx`, `engine_f_schlick` and
   `engine_perturb_normal(n, world_pos, uv, map_texel, scale)`.
 
-`harness/pbr.html` draws a 5×5 metallic × roughness sphere grid through one material and a
-normal-mapped tile from a procedural height map; `e2e/pbr.spec.ts` checks the highlight and
-the bump on every matrix row.
+`harness/pbr.html` draws a 5×5 metallic × roughness sphere grid through one material, a
+normal-mapped tile from a procedural height map, a spot light on the floor and a pair of
+spheres on different layers beside a lamp masked to one of them; `e2e/pbr.spec.ts` checks the
+highlight, the bump, the spot's cone and the mask on every matrix row.
 
 ## Custom materials
 
