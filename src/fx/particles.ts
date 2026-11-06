@@ -235,9 +235,9 @@ export interface ParticleSystemOptions {
   forces?: ParticleForce[];
   /**
    * World space with `readsDepth`: collide with this frame's opaque depth. Particles found
-   * behind the scene (within `thickness` units along the view ray, default 1) are pushed back
-   * onto the surface and bounce: `bounce` scales the normal velocity, `friction` (0..1) damps
-   * the tangential.
+   * behind the scene (within `thickness` units along the view ray, default 1, or deeper when
+   * they were in front of it one step back) are pushed back onto the surface and bounce:
+   * `bounce` scales the normal velocity, `friction` (0..1) damps the tangential.
    */
   collide?: { bounce: number; friction: number; thickness?: number };
   /** Distinct `onDeath`/`onLife` descriptors the system can hold at once. Default 16. */
@@ -1417,7 +1417,8 @@ export class ParticleSystem implements Drawable {
       d[36] = params.bounce;
       d[37] = params.friction;
       d[38] = params.thickness ?? 1;
-      d[39] = 0;
+      // The last advance's dt: the swept test steps back along the velocity by it.
+      d[39] = this.simData[0]!;
       this.device.queue.writeBuffer(col.uniform, 0, d);
       const pass = encoder.beginComputePass({ label: 'particles-collide' });
       pass.setPipeline(col.pipeline);

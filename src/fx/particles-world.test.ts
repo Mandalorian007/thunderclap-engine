@@ -612,7 +612,7 @@ describe('ParticleSystem extended kernel', () => {
     expect(PARTICLE_COLLIDE_WGSL).toContain('thickness');
     expect(hash(PARTICLE_WORLD_COMPUTE_WGSL)).toMatchInlineSnapshot(`"bcf1b4c9"`);
     expect(hash(PARTICLE_EXT_COMPUTE_WGSL)).toMatchInlineSnapshot(`"b4a624ec"`);
-    expect(hash(PARTICLE_COLLIDE_WGSL)).toMatchInlineSnapshot(`"b550bbe6"`);
+    expect(hash(PARTICLE_COLLIDE_WGSL)).toMatchInlineSnapshot(`"7df355d7"`);
   });
 
   it('sub-emission: interns onDeath/onLife descriptors one level deep and dispatches subspawn', () => {
@@ -695,7 +695,16 @@ describe('ParticleSystem extended kernel', () => {
     const uniform = fake.buffers.find((b) => b.label === 'particles-collide-params')!;
     expect(uniform.size).toBe(160);
     const data = (ps as unknown as { collider: { data: Float32Array } }).collider.data;
-    expect(Array.from(data.subarray(32, 40))).toEqual([0, 0, 64, 32, 0.5, Math.fround(0.2), 1, 0]);
+    expect(Array.from(data.subarray(32, 40))).toEqual([
+      0,
+      0,
+      64,
+      32,
+      0.5,
+      Math.fround(0.2),
+      1,
+      Math.fround(1 / 60),
+    ]); // the last step dt rides in w for the swept test
     // Collision is independent of the soft fade.
     ps.softness = 0;
     const passes = fake.passes.length;

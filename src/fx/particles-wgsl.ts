@@ -698,7 +698,9 @@ export const PARTICLE_WORLD_RENDER_WGSL = fxRenderWgsl(true);
  * frame's opaque depth. A live particle whose projected depth lies behind the scene by less
  * than \`thickness\` (view-ray units) is pushed back along the view ray onto the surface and its
  * velocity is reflected about the surface normal (from the depth's neighbours), scaled by
- * \`bounce\` normally and by \`1 - friction\` tangentially.
+ * \`bounce\` normally and by \`1 - friction\` tangentially. A particle deeper than that is
+ * swept: if its position one step back (\`pos - vel * dt\`) was in front of the scene it
+ * crossed the surface this frame and is put back there, so a slow frame does not tunnel.
  */
 export const PARTICLE_COLLIDE_WGSL = /* wgsl */ `
 ${fxCommon(true)}
@@ -706,7 +708,7 @@ struct Collide {
   view_proj: mat4x4f,
   inv_view_proj: mat4x4f,
   viewport: vec4f,   // x, y, width, height (target px)
-  params: vec4f,     // bounce, friction, thickness, unused
+  params: vec4f,     // bounce, friction, thickness, last step dt
 };
 @group(0) @binding(0) var<storage, read_write> particles: array<Particle>;
 @group(0) @binding(1) var<uniform> col: Collide;
@@ -738,9 +740,19 @@ fn scene_at(px: vec2i, dims: vec2i) -> vec3f {
   if (d >= 1.0 || ndc.z <= d) { return; }
   let near = unproject(ndc.xy, 0.0);
   let hit = unproject(ndc.xy, d);
-  let pen = length(p.pos.xyz - hit);
-  if (pen > col.params.z) { return; }
   let ray = normalize(hit - near);
+  var put = hit - ray * 1e-3;
+  if (length(p.pos.xyz - hit) > col.params.z) {
+    // Deeper than thickness: a hit only if one step back it was in front of the scene.
+    let prev = p.pos.xyz - p.vel.xyz * col.params.w;
+    let pc = col.view_proj * vec4f(prev, 1.0);
+    if (pc.w <= 1e-5) { return; }
+    let pn = pc.xyz / pc.w;
+    if (any(abs(pn.xy) > vec2f(1.0)) || pn.z < 0.0 || pn.z > 1.0) { return; }
+    let ppx = vec2i(col.viewport.xy + (pn.xy * vec2f(0.5, -0.5) + 0.5) * col.viewport.zw);
+    if (pn.z > textureLoad(scene_depth, clamp(ppx, vec2i(0), dims - 1), 0)) { return; }
+    put = prev;
+  }
   let sx = scene_at(px + vec2i(1, 0), dims) - hit;
   let sy = scene_at(px + vec2i(0, 1), dims) - hit;
   var n = cross(sx, sy);
@@ -752,7 +764,7 @@ fn scene_at(px: vec2i, dims: vec2i) -> vec3f {
   if (vn < 0.0) {
     nv = (v - n * vn) * (1.0 - col.params.y) - n * vn * col.params.x;
   }
-  p.pos = vec4f(hit - ray * 1e-3, p.pos.w);
+  p.pos = vec4f(put, p.pos.w);
   p.vel = vec4f(nv, p.vel.w);
   particles[i] = p;
 }

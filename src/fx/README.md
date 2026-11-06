@@ -138,7 +138,9 @@ const rain = new ParticleSystem(renderer, { space: 'world', readsDepth: true, co
 - `collide: { bounce, friction, thickness? }` (world space with `readsDepth`): after the opaque
   pass each particle found behind this frame's scene depth, within `thickness` (1) units along
   its view ray, is put back on the surface; the normal velocity is scaled by `bounce`, the
-  tangential by `1 - friction`. The normal comes from the depth neighbours. Independent of
+  tangential by `1 - friction`. Deeper than `thickness`, the test is swept: a particle that was
+  in front of the scene one step back (`pos - vel * dt`) crossed it this frame and goes back to
+  that point, so a slow frame or a grazing view does not tunnel. The normal comes from the depth neighbours. Independent of
   `softness`; `ParticleSystem.collide` can be changed or set to null at any time.
 - `countBelowY` (with `countAlive`): live particles below that y are also counted, into
   `below`.

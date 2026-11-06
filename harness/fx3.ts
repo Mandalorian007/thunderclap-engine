@@ -212,6 +212,8 @@ async function main(): Promise<void> {
   const shadowVel: Float32Array[] = [];
   let spriteBorn = 0;
   let lastBurst = -Infinity;
+  let shadowPending = 0;
+  let shadowTime = 0;
   let emitShell: (() => void) | null = null;
   const effectPoint = new Float32Array([0, 4.5, 0]);
   let parent: EmitParams | null = null;
@@ -299,7 +301,7 @@ async function main(): Promise<void> {
     };
     const shell = new ParticleEmitter(main, shellParams, 0);
     emitters.push(shell);
-    // 64 shadow particles on the same shell, stepped by `applyForces` each update.
+    // 64 shadow particles on the same shell, stepped by `applyForces` once per frame.
     for (let i = 0; i < 64; i++) {
       const a = (i / 64) * Math.PI * 2;
       const b = ((i % 8) / 8 - 0.5) * Math.PI;
@@ -450,33 +452,7 @@ async function main(): Promise<void> {
         const frames = TILE_TO - TILE_FROM + 1;
         state.tileSeen = TILE_FROM + (Math.floor((time - spriteBorn) * TILE_RATE) % frames);
       }
-      if (mode === 'forces' && main) {
-        let sum = 0;
-        for (let i = 0; i < shadowPos.length; i++) {
-          const p = shadowPos[i]!;
-          const v = shadowVel[i]!;
-          applyForces(main.forces, p, v, dt);
-          p[0]! += v[0]! * dt;
-          p[1]! += v[1]! * dt;
-          p[2]! += v[2]! * dt;
-          sum += Math.hypot(p[0]! - ATTRACTOR[0], p[1]! - ATTRACTOR[1], p[2]! - ATTRACTOR[2]);
-        }
-        state.meanRadius = sum / shadowPos.length;
-        if (time - lastBurst >= 6 && emitShell) {
-          lastBurst = time;
-          emitShell();
-          for (let i = 0; i < shadowPos.length; i++) {
-            const a = (i / 64) * Math.PI * 2;
-            const b = ((i % 8) / 8 - 0.5) * Math.PI;
-            shadowPos[i]!.set([
-              ATTRACTOR[0] + SHELL * Math.cos(a) * Math.cos(b),
-              ATTRACTOR[1] + SHELL * Math.sin(b),
-              ATTRACTOR[2] + SHELL * Math.sin(a) * Math.cos(b),
-            ]);
-            shadowVel[i]!.fill(0);
-          }
-        }
-      }
+      if (mode === 'forces') shadowPending += dt;
       if (mode === 'sub' && main && parent) {
         if (time - lastBurst >= BURST_PERIOD) {
           lastBurst = time;
@@ -491,6 +467,38 @@ async function main(): Promise<void> {
       if (effect) effect.update(dt);
     },
     render(_alpha, t) {
+      // The shadow steps once per frame with the kernel's own clamp (the system advances by
+      // min(accumulated dt, 0.1) in prepare), so it tracks the GPU particles on a slow frame.
+      if (mode === 'forces' && main) {
+        const sdt = Math.min(shadowPending, 0.1);
+        shadowPending = 0;
+        shadowTime += sdt;
+        let sum = 0;
+        for (let i = 0; i < shadowPos.length; i++) {
+          const p = shadowPos[i]!;
+          const v = shadowVel[i]!;
+          applyForces(main.forces, p, v, sdt);
+          p[0]! += v[0]! * sdt;
+          p[1]! += v[1]! * sdt;
+          p[2]! += v[2]! * sdt;
+          sum += Math.hypot(p[0]! - ATTRACTOR[0], p[1]! - ATTRACTOR[1], p[2]! - ATTRACTOR[2]);
+        }
+        state.meanRadius = sum / shadowPos.length;
+        if (shadowTime - lastBurst >= 6 && emitShell) {
+          lastBurst = shadowTime;
+          emitShell();
+          for (let i = 0; i < shadowPos.length; i++) {
+            const a = (i / 64) * Math.PI * 2;
+            const b = ((i % 8) / 8 - 0.5) * Math.PI;
+            shadowPos[i]!.set([
+              ATTRACTOR[0] + SHELL * Math.cos(a) * Math.cos(b),
+              ATTRACTOR[1] + SHELL * Math.sin(b),
+              ATTRACTOR[2] + SHELL * Math.sin(a) * Math.cos(b),
+            ]);
+            shadowVel[i]!.fill(0);
+          }
+        }
+      }
       const frame = renderer.beginFrame(t.realTime, t.frameDt);
       frame.clear(SKY[0], SKY[1], SKY[2]);
       frame.lights = lights;
