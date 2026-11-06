@@ -27,6 +27,7 @@
     "./core": "./src/core/index.ts",
     "./fx": "./src/fx/index.ts",
     "./host": "./src/host/index.ts",
+    "./i18n": "./src/i18n/index.ts",
     "./input": "./src/input/index.ts",
     "./platform": "./src/platform/index.ts",
     "./post": "./src/post/index.ts",
