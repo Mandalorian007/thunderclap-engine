@@ -50,7 +50,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Look zoom | ws/look-zoom | `Look.zoom` axis (wheel, pinch, pad opt-in); `Follow` reads it; harness follow drops its wheel binding | follow | ✅ green at `d5bb746` (640 tests; e2e 526/57/3 fog flake); queued in chain 2 after template-first-person |
 | 5 | e2e flake under load | ws/flake-input | mesh.spec fog/drag and ui.spec menuNav poll the state they assert; `?still` lamp flag; common brief rule | flake-client | ✅ merged `9c6a921` (chain 3; 825 tests; e2e 710/92/0 at load 27; snap 5/5) |
 | 5 | Sky | ws/sky | `Sky` drawable: gradient dome, sun disc/glow from `Lights.sun`, horizon to `fog.color`, stars; harness `sky.html` | lights | ✅ merged `bf87092` (chain 3; 825 tests; e2e 710/92/0 at load 20; snap 5/5) |
-| 5 | Bench | ws/bench | `harness/bench.html` scene ladder, `pnpm bench` → `docs/BENCH.md`; e2e one rung | gpu-timer | ✅ green at `d32c978` (709 tests; e2e 525/64/5 E-017 flakes); queued in chain 3 after sky |
+| 5 | Bench | ws/bench | `harness/bench.html` scene ladder, `pnpm bench` → `docs/BENCH.md`; e2e one rung | gpu-timer | ✅ merged `1b45157` (chain 3; 902 tests; e2e 748/102/0; snap 5/5) |
 | 5 | Sockets | ws/sockets | `createSocket`, `socketWorld`, `attachTransform`, `Skeleton.names`; harness `sockets.html` | anim | ✅ merged `9e0af9a` (chain 3; e2e 626/92/4 E-017) |
 | 5 | Texture registry | ws/texture-registry | `loadTexture` with mips, `defaultTextures` (white, black, flatNormal, metalRough, checker), unset slots bind white | pbr (wish) | ✅ merged `853f444` (chain 1; e2e 662/92/8 all E-017/E-020) |
 | 5 | Geometry | ws/geom | `@thunderclap/engine/geom`: box/plane/sphere/icosphere/capsule/cylinder/torus, `Heightfield` with `heightAt`/`raycastHeightfield`, merge/transform; harness `geom.html` | — | ✅ merged `a775df4` (chain 4; 840 tests; e2e 679/92/7 E-017) |
@@ -78,6 +78,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | 2D ergonomics: `input.getGamepads`, PanelStack arrows, tile layer + flipbook | ws/ergo-2d | ✅ green at `f5aa8c1` (845 tests; e2e 734/92/0); queued chain 6 after demo-range |
 | 5 | Input recording and replay (`createInputRecorder`, `createInputPlayback`, `createGame({ input: { replay } })`) | ws/input-replay | 🔧 engineer running (offset 290) |
 | 5 | Geometry kit 2: extrude/lathe/sweep/tube/polygon, stairs/arch, tangents + `VERTEX_LAYOUT_3D_TANGENT`, weld/flatShade/projectUv/fitBounds | ws/geom-2 | 🔧 engineer running (offset 300) |
+| 5 | Camera helpers: `viewZ`, `invViewProj`, `projectMany`, `frustumCorners`, `setPerspective` parity | ws/camera-ergo | 🔧 engineer running (offset 310) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
