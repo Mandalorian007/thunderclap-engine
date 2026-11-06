@@ -1,4 +1,6 @@
 /** Post-stack settings. All colours are linear RGB. Mutate in place at runtime; read each frame. */
+import { mat4 } from '../core/math';
+import { whiteBalanceMatrix } from './white-balance';
 
 export type RGB = [number, number, number];
 
@@ -16,6 +18,20 @@ export interface BloomSettings {
   scatter: number;
   /** Mip levels (2..8). Changing it takes effect on next resize. */
   levels: number;
+  /**
+   * Lens dirt (ws/post-3): a texture multiplied into the bloom term at the composite
+   * (`bloom × (1 + dirt × intensity)`), so glow shows the smudges. `createLensDirtTexture`
+   * paints a procedural one; `texture: null` (or no `dirt`) is off and costs nothing.
+   */
+  dirt?: LensDirtSettings;
+}
+
+/** The lens-dirt texture and its strength (ws/post-3). See `BloomSettings.dirt`. */
+export interface LensDirtSettings {
+  /** An `rgba8unorm` 2D texture sampled over the whole screen, or `null` for none. */
+  texture: GPUTexture | null;
+  /** How much the dirt brightens the bloom where it is white (0 = none). */
+  intensity: number;
 }
 
 export interface FogSettings {
@@ -180,6 +196,98 @@ export interface OutlineSettings {
   intensity: number;
 }
 
+/**
+ * Temporal anti-aliasing (ws/post-3): the stack keeps a history colour texture at scene res,
+ * reprojects it by the previous frame's view-projection against the current depth, clamps it to
+ * the current pixel's 3×3 neighbourhood and blends it in by `feedback`. Needs the scene depth
+ * and a frame with a view (3D path); when on, FXAA is skipped. Resize and the first frame
+ * reset the history. `PostStack.taa.jitter(frame)` gives the frame's sub-pixel offset.
+ */
+export interface TaaSettings {
+  enabled: boolean;
+  /** Weight of the (clamped) history in the blend, 0..0.98 (0.9 = ~10 frames of memory). */
+  feedback: number;
+  /** Unsharp amount on the resolved colour, undoing the blend's softness (0 = none). */
+  sharpen: number;
+  /** `'aabb'`: clamp the history to the neighbourhood min/max; `'variance'`: to mean ± 1 σ. */
+  clampMode: 'aabb' | 'variance';
+}
+
+/**
+ * Screen-space reflections (ws/post-3): a half-res view-space ray march over the scene depth
+ * from normals derived from it (the AO pass's helper), sampling the scene colour where the ray
+ * meets the depth, faded at the screen edges and composited into the scene before bloom.
+ * Needs the scene depth. Roughness: the standard material writes no roughness target yet, so
+ * `roughnessCutoff` is read as one global value (see the README's wish list).
+ */
+export interface SsrSettings {
+  enabled: boolean;
+  /** Ray-march steps (8..64); `maxDistance / maxSteps` is the step length. */
+  maxSteps: number;
+  /** Depth thickness (view units) a ray point may sit behind the surface and still hit. */
+  thickness: number;
+  /** Longest reflected ray in view units. */
+  maxDistance: number;
+  /** Roughness at and above which no reflection shows (0..1); below it the term fades in. */
+  roughnessCutoff: number;
+  /** Strength of the reflection added to the scene. */
+  intensity: number;
+  /** Width of the screen-edge fade in uv (0 = hard cut at the border). */
+  fadeEdges: number;
+}
+
+/**
+ * Exposure (ws/post-3). `'manual'`: `grade.exposure` is the multiplier, as before. `'auto'`:
+ * a compute pass builds a 64-bin log-luminance histogram of the scene colour, a second averages
+ * the bins between the percentile bounds, and the EV eases toward `log2(keyValue / average)`
+ * clamped to `minEv..maxEv` at `speedUp` / `speedDown` per second (`PostInputs.dt`).
+ * `PostStack.exposure` reads the current EV (the multiplier is `2^EV`).
+ */
+export interface ExposureSettings {
+  mode: 'manual' | 'auto';
+  /** Lowest EV auto mode may settle at (a negative EV darkens). */
+  minEv: number;
+  /** Highest EV auto mode may settle at. */
+  maxEv: number;
+  /** Rate (1/s) at which the EV rises toward a brighter target (a dark scene brightening). */
+  speedUp: number;
+  /** Rate (1/s) at which the EV falls toward a darker target. */
+  speedDown: number;
+  /** Middle-grey the metered average is mapped to (0.18 = photographic 18 %). */
+  keyValue: number;
+  /** Lower percentile (0..1) of the histogram the average ignores (dark outliers). */
+  histogramLow: number;
+  /** Upper percentile (0..1) of the histogram the average ignores (highlights). */
+  histogramHigh: number;
+}
+
+/**
+ * White balance (ws/post-3): a 3×3 colour matrix before the exposure and grade that tints the
+ * image toward the colour of a black body at `temperature` (lower = warmer, 6500 K = none),
+ * shifted by `tint` (positive toward magenta, negative toward green). Bradford chromatic
+ * adaptation from the 6500 K white to the target white, in linear sRGB; see `white-balance.ts`.
+ */
+export interface WhiteBalanceSettings {
+  /** Colour temperature in kelvin (1667..25000); 6500 is the identity. */
+  temperature: number;
+  /** Green–magenta shift (-1..1); 0 is the identity. */
+  tint: number;
+}
+
+/**
+ * Camera motion blur (ws/post-3): per-pixel velocity from the current depth reprojected by the
+ * previous frame's view-projection (the matrix TAA keeps), the scene colour sampled along it
+ * before bloom. Needs the scene depth. Objects moving on their own do not blur (no velocity
+ * target yet; see the README's wish list).
+ */
+export interface MotionBlurSettings {
+  enabled: boolean;
+  /** Scale on the frame-to-frame velocity (1 = the full frame's movement). */
+  intensity: number;
+  /** Taps along the velocity (2..16). */
+  maxSamples: number;
+}
+
 export interface PostSettings {
   bloom: BloomSettings;
   fog: FogSettings;
@@ -194,6 +302,11 @@ export interface PostSettings {
   aberration: AberrationSettings;
   sharpen: SharpenSettings;
   outline: OutlineSettings;
+  taa: TaaSettings;
+  ssr: SsrSettings;
+  exposure: ExposureSettings;
+  whiteBalance: WhiteBalanceSettings;
+  motionBlur: MotionBlurSettings;
 }
 
 export function defaultPostSettings(): PostSettings {
@@ -258,6 +371,28 @@ export function defaultPostSettings(): PostSettings {
       normalThreshold: 0.4,
       intensity: 1,
     },
+    taa: { enabled: false, feedback: 0.9, sharpen: 0.2, clampMode: 'aabb' },
+    ssr: {
+      enabled: false,
+      maxSteps: 32,
+      thickness: 0.5,
+      maxDistance: 20,
+      roughnessCutoff: 0.6,
+      intensity: 1,
+      fadeEdges: 0.15,
+    },
+    exposure: {
+      mode: 'manual',
+      minEv: -4,
+      maxEv: 4,
+      speedUp: 3,
+      speedDown: 1,
+      keyValue: 0.18,
+      histogramLow: 0.4,
+      histogramHigh: 0.95,
+    },
+    whiteBalance: { temperature: 6500, tint: 0 },
+    motionBlur: { enabled: false, intensity: 1, maxSamples: 8 },
   };
 }
 
@@ -299,6 +434,14 @@ export interface PostQuality {
   fxaa: boolean;
   /** Allow the outline pass; `false` (the low tier) keeps it off. */
   outline: boolean;
+  /** Allow TAA (ws/post-3); `false` (the XR tier) keeps `taa.enabled` from adding the pass. */
+  taa: boolean;
+  /** Allow SSR; `false` (the low and XR tiers) keeps it off. */
+  ssr: boolean;
+  /** Allow the auto-exposure compute passes; `false` leaves `exposure.mode` reading as manual. */
+  autoExposure: boolean;
+  /** Allow camera motion blur; `false` (the low and XR tiers) keeps it off. */
+  motionBlur: boolean;
 }
 
 export function defaultPostQuality(): PostQuality {
@@ -311,10 +454,17 @@ export function defaultPostQuality(): PostQuality {
     dofTaps: 24,
     fxaa: true,
     outline: true,
+    taa: true,
+    ssr: true,
+    autoExposure: true,
+    motionBlur: true,
   };
 }
 
-/** The low tier's caps: fewer bloom levels, samples and octaves; no FXAA or outline pass. */
+/**
+ * The low tier's caps: fewer bloom levels, samples and octaves; no FXAA, outline, SSR or
+ * motion-blur pass. TAA and auto-exposure stay (cheap, and TAA replaces FXAA).
+ */
 export function lowPostQuality(): PostQuality {
   return {
     maxBloomLevels: 4,
@@ -325,7 +475,41 @@ export function lowPostQuality(): PostQuality {
     dofTaps: 12,
     fxaa: false,
     outline: false,
+    taa: true,
+    ssr: false,
+    autoExposure: true,
+    motionBlur: false,
   };
+}
+
+/** A device class for `postQualityFor` (ws/post-3). */
+export type PostQualityTier = 'phone' | 'tablet' | 'desktop' | 'xr';
+
+/**
+ * The cost caps for a device class (ws/post-3): `'phone'` is `lowPostQuality()`; `'tablet'`
+ * trims the samples and skips SSR; `'desktop'` is everything; `'xr'` is full quality with
+ * TAA, SSR and motion blur off: the XR path composites one eye at a time through the same
+ * stack, so a TAA history or reprojection would mix the two eyes, and SSR costs a march per
+ * eye; motion blur in a headset reads as lag.
+ */
+export function postQualityFor(tier: PostQualityTier): PostQuality {
+  switch (tier) {
+    case 'phone':
+      return lowPostQuality();
+    case 'tablet':
+      return {
+        ...defaultPostQuality(),
+        maxBloomLevels: 6,
+        raySamples: 48,
+        aoSamples: 8,
+        dofTaps: 16,
+        ssr: false,
+      };
+    case 'xr':
+      return { ...defaultPostQuality(), taa: false, ssr: false, motionBlur: false };
+    default:
+      return defaultPostQuality();
+  }
 }
 
 /**
@@ -344,8 +528,24 @@ export interface PostDepthInfo {
   outputWidth: number;
 }
 
-/** Uniform layout shared by all post shaders: 22 × vec4f + mat4x4f + 7 × vec4f. */
-export const POST_UNIFORM_FLOATS = 132;
+/**
+ * Per-frame state the temporal passes need (ws/post-3), kept by `PostStack`: the sub-pixel
+ * jitter in uv, whether this frame resets the history, the matrix from this frame's clip space
+ * to the previous frame's (`prevViewProj × invViewProj`) and the auto-exposure multiplier.
+ */
+export interface PostFrameState {
+  jitterX: number;
+  jitterY: number;
+  /** 1 on a frame whose history is invalid (first frame, resize): TAA copies the current colour. */
+  reset: number;
+  /** Current clip → previous clip, column-major. */
+  reproj: ArrayLike<number>;
+  /** Linear exposure multiplier used while `exposure.mode` is `'auto'` (`2^EV`). */
+  autoExposure: number;
+}
+
+/** Uniform layout shared by all post shaders: 22 × vec4f + mat4x4f + 17 × vec4f + mat4x4f. */
+export const POST_UNIFORM_FLOATS = 188;
 
 export const WGSL_POST_UNIFORMS = /* wgsl */ `
 struct PostUniforms {
@@ -379,6 +579,18 @@ struct PostUniforms {
   sharpen: vec4f,    // amount, -, -, -
   outline: vec4f,    // enabled (0 without depth), thickness (scene px), depthThreshold, normalThreshold
   outlineColor: vec4f, // rgb, intensity
+  // Post 3 (ws/post-3).
+  taa: vec4f,        // enabled (0 without depth), feedback, sharpen, clampMode (0 aabb, 1 variance)
+  taa2: vec4f,       // jitter x (uv), jitter y (uv), reset (1 = copy the current frame), -
+  ssr: vec4f,        // enabled (0 without depth), maxSteps, thickness, maxDistance
+  ssr2: vec4f,       // roughnessCutoff, intensity, fadeEdges (uv), -
+  exposure: vec4f,   // auto (1), histogramLow, histogramHigh, keyValue
+  wb0: vec4f,        // white-balance matrix row 0 (rgb weights), enabled
+  wb1: vec4f,        // row 1
+  wb2: vec4f,        // row 2
+  motionBlur: vec4f, // enabled (0 without depth), intensity, samples, -
+  dirt: vec4f,       // enabled, intensity, -, -
+  reproj: mat4x4f,   // current clip -> previous frame's clip (identity on a reset)
 };
 @group(0) @binding(0) var<uniform> P: PostUniforms;
 `;
@@ -397,16 +609,25 @@ export function packPostUniforms(
   quality: PostQuality = DEFAULT_QUALITY,
   depth: PostDepthInfo | null = null,
   grainSeed = 0,
+  frame: PostFrameState | null = null,
 ): void {
   const b = s.bloom;
   const f = s.fog;
   const r = s.godRays;
   const v = s.vignette;
   const g = s.grade;
+  const auto = s.exposure.mode === 'auto' && quality.autoExposure && frame !== null;
   let o = 0;
   o = put(out, o, time, width / height, 1 / width, 1 / height);
   o = put(out, o, +b.enabled, +f.enabled, +r.enabled, +v.enabled);
-  o = put(out, o, +g.enabled, g.enabled ? TONEMAP_ID[g.tonemap] : 1, +g.dither, g.exposure);
+  o = put(
+    out,
+    o,
+    +g.enabled,
+    g.enabled ? TONEMAP_ID[g.tonemap] : 1,
+    +g.dither,
+    auto ? frame.autoExposure : g.exposure,
+  );
   o = put(out, o, b.intensity, b.threshold, b.knee, b.emissiveWeight);
   o = put(out, o, b.scatter, 0, 0, 0);
   o = put(out, o, f.color[0], f.color[1], f.color[2], f.density);
@@ -481,10 +702,60 @@ export function packPostUniforms(
   // `thickness` is in output px; the outline pass runs at the scene size.
   const thick = depth ? (ol.thickness * width) / Math.max(1, depth.outputWidth) : ol.thickness;
   o = put(out, o, outline, thick, ol.depthThreshold, ol.normalThreshold);
-  put(out, o, ol.color[0], ol.color[1], ol.color[2], ol.intensity);
+  o = put(out, o, ol.color[0], ol.color[1], ol.color[2], ol.intensity);
+  // Post 3 (ws/post-3). The temporal passes need depth and a frame state (a view matrix).
+  const temporal = depth !== null && frame !== null;
+  const t = s.taa;
+  const taa = temporal && t.enabled && quality.taa ? 1 : 0;
+  o = put(
+    out,
+    o,
+    taa,
+    Math.min(0.98, Math.max(0, t.feedback)),
+    Math.max(0, t.sharpen),
+    t.clampMode === 'variance' ? 1 : 0,
+  );
+  o = put(out, o, frame?.jitterX ?? 0, frame?.jitterY ?? 0, frame?.reset ?? 1, 0);
+  const sr = s.ssr;
+  const ssr = depth !== null && sr.enabled && quality.ssr ? 1 : 0;
+  o = put(
+    out,
+    o,
+    ssr,
+    Math.round(Math.min(64, Math.max(8, sr.maxSteps))),
+    Math.max(1e-3, sr.thickness),
+    Math.max(1e-3, sr.maxDistance),
+  );
+  o = put(out, o, sr.roughnessCutoff, sr.intensity, Math.max(0, sr.fadeEdges), 0);
+  const ex = s.exposure;
+  o = put(out, o, auto ? 1 : 0, ex.histogramLow, ex.histogramHigh, ex.keyValue);
+  const wb = s.whiteBalance;
+  const wbOn = wb.temperature !== 6500 || wb.tint !== 0;
+  if (wbOn) {
+    whiteBalanceMatrix(WB, wb.temperature, wb.tint);
+    o = put(out, o, WB[0]!, WB[1]!, WB[2]!, 1);
+    o = put(out, o, WB[3]!, WB[4]!, WB[5]!, 0);
+    o = put(out, o, WB[6]!, WB[7]!, WB[8]!, 0);
+  } else {
+    o = put(out, o, 1, 0, 0, 0);
+    o = put(out, o, 0, 1, 0, 0);
+    o = put(out, o, 0, 0, 1, 0);
+  }
+  const mb = s.motionBlur;
+  const mblur = temporal && mb.enabled && quality.motionBlur ? 1 : 0;
+  o = put(out, o, mblur, mb.intensity, Math.round(Math.min(16, Math.max(2, mb.maxSamples))), 0);
+  const dirt = b.dirt;
+  o = put(out, o, dirt && dirt.texture !== null ? 1 : 0, dirt?.intensity ?? 0, 0, 0);
+  if (frame) {
+    for (let i = 0; i < 16; i++) out[o + i] = frame.reproj[i]!;
+  } else {
+    for (let i = 0; i < 16; i++) out[o + i] = IDENTITY[i]!;
+  }
 }
 
 const DEFAULT_QUALITY = defaultPostQuality();
+const WB = new Float32Array(9);
+const IDENTITY = mat4.create();
 
 function put(out: Float32Array, o: number, x: number, y: number, z: number, w: number): number {
   out[o] = x;

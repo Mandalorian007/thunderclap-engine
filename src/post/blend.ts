@@ -24,8 +24,8 @@ interface Track {
   ease: Ease;
 }
 
-/** Fields that only make sense as whole values (changing them mid-blend would resize). */
-const SNAP_KEYS = new Set(['levels']);
+/** Fields that only make sense as whole values (`levels` would resize mid-blend; `texture` is a handle). */
+const SNAP_KEYS = new Set(['levels', 'texture']);
 
 /**
  * Interpolates post settings over time. Numbers and RGB triples ease from their value when

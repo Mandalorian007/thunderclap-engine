@@ -6,12 +6,15 @@ import { AO_BLUR_WGSL, AO_WGSL } from './ao';
 import { type Ease, easeInOut, PostBlender } from './blend';
 import { DepthPass } from './depth-pass';
 import { DOF_WGSL } from './dof';
+import { adaptExposure, ExposurePasses, exposureTarget } from './exposure';
+import { MOTION_BLUR_WGSL } from './motion-blur';
 import {
   applyPostPatch,
   defaultPostQuality,
   defaultPostSettings,
   POST_UNIFORM_FLOATS,
   type PostDepthInfo,
+  type PostFrameState,
   type PostQuality,
   type PostSettings,
   type PostSettingsPatch,
@@ -26,20 +29,48 @@ import {
   RAYS_WGSL,
   UP_WGSL,
 } from './shaders';
+import { SSR_WGSL } from './ssr';
+import { TAA_WGSL, Taa, taaReprojection } from './taa';
 
 const HDR: GPUTextureFormat = 'rgba16float';
 const AO: GPUTextureFormat = 'r8unorm';
 const COMPOSITE_CLEAR: GPUColorDict = { r: 0, g: 0, b: 0, a: 1 };
-/** The composite's texture slots: colour, emissive, bloom, rays, AO, DoF, outline, LUT (3D). */
-const COMPOSITE_DIMS: GPUTextureViewDimension[] = ['2d', '2d', '2d', '2d', '2d', '2d', '2d', '3d'];
+/** The composite's texture slots: colour, emissive, bloom, rays, AO, DoF, outline, LUT (3D), SSR, dirt. */
+const COMPOSITE_DIMS: GPUTextureViewDimension[] = [
+  '2d',
+  '2d',
+  '2d',
+  '2d',
+  '2d',
+  '2d',
+  '2d',
+  '3d',
+  '2d',
+  '2d',
+];
+
+/**
+ * The bind groups that read one scene-colour view (the raw colour, a TAA history or the
+ * motion-blur result), built on demand and dropped together when any other input changes.
+ */
+interface InputGroups {
+  prefilter: GPUBindGroup | null;
+  composite: GPUBindGroup | null;
+  dof: GPUBindGroup | null;
+  ssr: GPUBindGroup | null;
+  motionBlur: GPUBindGroup | null;
+  /** TAA resolve reading history 0 / history 1 (only on the raw colour's groups). */
+  taa: [GPUBindGroup | null, GPUBindGroup | null];
+}
 
 /**
  * The painterly post stack: bloom (mip chain), floor mist, god rays, ACES tonemap, colour
  * grade, vignette, dither, plus ambient occlusion and depth of field over the scene depth when
- * the frame has one (ws/post-depth; off by default), and the finishing passes (ws/post-2, all
+ * the frame has one (ws/post-depth; off by default), the finishing passes (ws/post-2, all
  * off by default): a depth/normal outline, chromatic aberration, sharpen, a 3D LUT, film grain
- * in the composite, and FXAA as one extra pass after it. Plug it into a renderer with
- * `renderer.post = new PostStack(r)`.
+ * in the composite, and FXAA as one extra pass after it, and the third pass (ws/post-3, all
+ * off by default): TAA, screen-space reflections, auto-exposure, white balance, camera motion
+ * blur and lens dirt. Plug it into a renderer with `renderer.post = new PostStack(r)`.
  *
  * Settings are plain objects you can mutate at runtime (`post.settings.bloom.intensity = 2`)
  * or patch with `post.set({ fog: { density: 0.4 } })`. Disabled passes are skipped entirely.
@@ -52,6 +83,10 @@ export class PostStack implements PostProcessor {
    * presets and blends keep working under a lower quality tier. Change with `setQuality`.
    */
   readonly quality: PostQuality = defaultPostQuality();
+  /** The TAA jitter sequence (ws/post-3): `post.taa.jitter(frame)` is this frame's offset. */
+  readonly taa = new Taa(8);
+  /** How many times the TAA history was reset (first frame, resize, re-enable). */
+  historyResets = 0;
 
   private readonly renderer: Renderer;
   private readonly uniforms = new Float32Array(POST_UNIFORM_FLOATS);
@@ -69,6 +104,12 @@ export class PostStack implements PostProcessor {
   /** Finishing passes (ws/post-2): FXAA after the composite, the outline mask before it. */
   private readonly fxaa: FullscreenPass;
   private readonly outline: DepthPass;
+  /** Post 3 (ws/post-3): the TAA resolve, the half-res SSR march and the motion-blur gather. */
+  private readonly taaPass: DepthPass;
+  private readonly ssrPass: DepthPass;
+  private readonly motionBlurPass: DepthPass;
+  /** The auto-exposure compute passes, made on the first frame in `'auto'` mode. */
+  private exposurePasses: ExposurePasses | null = null;
 
   private bloomTex: GPUTexture | null = null;
   private mipViews: GPUTextureView[] = [];
@@ -79,9 +120,10 @@ export class PostStack implements PostProcessor {
   private requestedLevels = 0;
   private width = 0;
   private height = 0;
-  private boundColor: GPUTextureView | null = null;
   private boundEmissive: GPUTextureView | null = null;
   private boundDepth: GPUTextureView | null = null;
+  /** Bind groups per scene-colour view; cleared whenever any other input or target changes. */
+  private readonly groups = new Map<GPUTextureView, InputGroups>();
   /** Half-res AO (raw and blurred) and DoF targets, made on the first frame that needs them. */
   private aoTex: GPUTexture | null = null;
   private aoView: GPUTextureView | null = null;
@@ -91,7 +133,6 @@ export class PostStack implements PostProcessor {
   private dofView: GPUTextureView | null = null;
   private aoGroup: GPUBindGroup | null = null;
   private aoBlurGroup: GPUBindGroup | null = null;
-  private dofGroup: GPUBindGroup | null = null;
   /** Scene-size outline mask, made on the first frame that needs it; freed on resize. */
   private outlineTex: GPUTexture | null = null;
   private outlineView: GPUTextureView | null = null;
@@ -108,8 +149,39 @@ export class PostStack implements PostProcessor {
   private readonly lutPlaceholderView: GPUTextureView;
   private boundLut: GPUTexture | null = null;
   private lutView: GPUTextureView;
+  /** The bound lens-dirt texture and its view (`null` → bloom mip 0 as a placeholder). */
+  private boundDirt: GPUTexture | null = null;
+  private dirtView: GPUTextureView | null = null;
   /** Seconds of frame time while `grain.animated`: the grain's seed. */
   private grainSeed = 0;
+  /** Scene-size TAA history pair (ws/post-3), made on the first TAA frame; `histIndex` was last written. */
+  private histTex: [GPUTexture, GPUTexture] | null = null;
+  private histViews: [GPUTextureView, GPUTextureView] | null = null;
+  private histIndex = 0;
+  private historyValid = false;
+  /** Half-res SSR term and scene-size motion-blur result, made on the first frame that needs them. */
+  private ssrTex: GPUTexture | null = null;
+  private ssrView: GPUTextureView | null = null;
+  private motionBlurTex: GPUTexture | null = null;
+  private motionBlurView: GPUTextureView | null = null;
+  /** The frame's and the previous frame's view-projection, and the clip → previous clip matrix. */
+  private readonly viewProj = mat4.create();
+  private readonly prevViewProj = mat4.create();
+  private readonly invViewProj = mat4.create();
+  private prevValid = false;
+  private frameIndex = 0;
+  private readonly frameState: PostFrameState = {
+    jitterX: 0,
+    jitterY: 0,
+    reset: 1,
+    reproj: mat4.create(),
+    autoExposure: 1,
+  };
+  /** The current EV (`exposure`), eased in auto mode, `log2(grade.exposure)` in manual. */
+  private ev = 0;
+  private taaOn = false;
+  private ssrOn = false;
+  private motionBlurOn = false;
   private readonly depthInfo: PostDepthInfo = {
     near: 0,
     far: 0,
@@ -119,11 +191,9 @@ export class PostStack implements PostProcessor {
     outputWidth: 1,
   };
 
-  private prefilterGroup: GPUBindGroup | null = null;
+  private raysGroup: GPUBindGroup | null = null;
   private downGroups: GPUBindGroup[] = [];
   private upGroups: GPUBindGroup[] = [];
-  private raysGroup: GPUBindGroup | null = null;
-  private compositeGroup: GPUBindGroup | null = null;
   /** Scene-size composite target (display-encoded, swapchain format) and its upscale group. */
   private ldrTex: GPUTexture | null = null;
   private ldrView: GPUTextureView | null = null;
@@ -210,6 +280,24 @@ export class PostStack implements PostProcessor {
       format: HDR,
       textures: 1,
     });
+    this.taaPass = new DepthPass(renderer, {
+      label: 'post-taa',
+      wgsl: TAA_WGSL,
+      format: HDR,
+      textures: 2,
+    });
+    this.ssrPass = new DepthPass(renderer, {
+      label: 'post-ssr',
+      wgsl: SSR_WGSL,
+      format: HDR,
+      textures: 1,
+    });
+    this.motionBlurPass = new DepthPass(renderer, {
+      label: 'post-motion-blur',
+      wgsl: MOTION_BLUR_WGSL,
+      format: HDR,
+      textures: 1,
+    });
     this.upscale = renderer.createFullscreenPass({
       label: 'post-upscale',
       targets: [renderer.format],
@@ -267,6 +355,29 @@ export class PostStack implements PostProcessor {
   }
 
   /**
+   * The current exposure in EV (ws/post-3): the eased auto-exposure value while
+   * `exposure.mode` is `'auto'`, else `log2(grade.exposure)`. The multiplier is `2^EV`.
+   */
+  get exposure(): number {
+    return this.ev;
+  }
+
+  /** True when the last `encode` ran the TAA resolve (depth present, enabled, allowed). */
+  get taaActive(): boolean {
+    return this.taaOn;
+  }
+
+  /** True when the last `encode` ran the SSR march. */
+  get ssrActive(): boolean {
+    return this.ssrOn;
+  }
+
+  /** True when the last `encode` ran the motion-blur gather. */
+  get motionBlurActive(): boolean {
+    return this.motionBlurOn;
+  }
+
+  /**
    * Advance running blends to frame time `time` (seconds). `encode` calls this; call it
    * yourself only when driving the stack without rendering. Steps are capped at 0.1 s, so
    * a hidden tab or long hitch slows a blend rather than skipping it.
@@ -316,12 +427,12 @@ export class PostStack implements PostProcessor {
     }
     this.raysGroup = this.rays.createBindGroup([this.mipViews[0]!]);
     this.freeLdr();
-    // Depth targets and the FXAA input come back on the next frame that needs them, at the new size.
+    // Depth targets, the FXAA input and the temporal targets come back on the next frame that
+    // needs them, at the new size. The TAA history is gone with them.
     this.freeDepthTargets();
     this.freeFxaa();
-    this.boundColor = null;
-    this.boundEmissive = null;
-    this.boundDepth = null;
+    this.freeTemporal();
+    this.invalidateGroups();
   }
 
   /**
@@ -339,6 +450,7 @@ export class PostStack implements PostProcessor {
   ): void {
     this.advanceBlend(inputs.time);
     const s = this.settings;
+    const q = this.quality;
     const r = this.renderer;
     const iw = inputs.color.width;
     const ih = inputs.color.height;
@@ -348,27 +460,37 @@ export class PostStack implements PostProcessor {
     const outW = viewport ? viewport.width : r.outputWidth;
     const outH = viewport ? viewport.height : r.outputHeight;
     const clear = viewport ? this.noClear : COMPOSITE_CLEAR;
+    const dt = Math.min(0.1, Math.max(0, inputs.dt));
 
     // Depth passes only on a frame that rendered depth (never the 2D path).
     const proj = inputs.projection;
     const depth = proj && inputs.depth ? inputs.depth : null;
     const wantAo = depth !== null && s.ao.enabled;
     const wantDof = depth !== null && s.dof.enabled;
-    const wantOutline = depth !== null && s.outline.enabled && this.quality.outline;
+    const wantOutline = depth !== null && s.outline.enabled && q.outline;
     if (s.outline.enabled && depth === null && !this.warnedOutline) {
       this.warnedOutline = true;
       console.warn('[post] outline needs the scene depth; this frame has none, so it is off');
     }
-    const wantFxaa = s.fxaa.enabled && this.quality.fxaa;
+    // Post 3: the temporal passes need the depth and the camera's view (the renderer's camera).
+    const wantTaa = depth !== null && s.taa.enabled && q.taa;
+    const wantMotionBlur = depth !== null && s.motionBlur.enabled && q.motionBlur;
+    const wantSsr = depth !== null && s.ssr.enabled && q.ssr;
+    const wantAuto = s.exposure.mode === 'auto' && q.autoExposure;
+    const wantFxaa = s.fxaa.enabled && q.fxaa && !wantTaa;
     if (wantAo && !this.aoTex) this.allocAo();
     if (wantDof && !this.dofTex) this.allocDof();
     if (wantOutline && !this.outlineTex) this.allocOutline();
     if (wantFxaa && (outW !== this.fxaaWidth || outH !== this.fxaaHeight))
       this.allocFxaa(outW, outH);
+    if (wantTaa && !this.histTex) this.allocHistory();
+    if (wantSsr && !this.ssrTex) this.allocSsr();
+    if (wantMotionBlur && !this.motionBlurTex) this.allocMotionBlur();
+    if (wantAuto && !this.exposurePasses) this.exposurePasses = new ExposurePasses(r);
     this.bindLut(s.lut.texture);
-    this.bindInputs(inputs.color.view, inputs.emissive.view, depth ? depth.view : null);
-    if (s.grain.animated && s.grain.intensity > 0)
-      this.grainSeed += Math.min(0.1, Math.max(0, inputs.dt));
+    this.bindDirt(s.bloom.dirt?.texture ?? null);
+    this.bindInputs(inputs.emissive.view, depth ? depth.view : null);
+    if (s.grain.animated && s.grain.intensity > 0) this.grainSeed += dt;
     let depthInfo: PostDepthInfo | null = null;
     if (depth && proj) {
       depthInfo = this.depthInfo;
@@ -380,6 +502,31 @@ export class PostStack implements PostProcessor {
       if (!mat4.invert(depthInfo.invProj as Float32Array, proj.proj)) depthInfo = null;
     }
 
+    // Post 3 frame state: this frame's clip → the previous frame's clip, the jitter, the EV.
+    const fs = this.frameState;
+    if (!wantTaa) this.historyValid = false;
+    if (depthInfo && proj) {
+      mat4.multiply(this.viewProj, proj.proj, r.camera.view);
+      const inv = mat4.invert(this.invViewProj, this.viewProj);
+      if (this.prevValid && inv) {
+        taaReprojection(fs.reproj as Float32Array, this.prevViewProj, this.invViewProj);
+      } else {
+        mat4.identity(fs.reproj as Float32Array);
+      }
+      mat4.copy(this.prevViewProj, this.viewProj);
+      this.prevValid = true;
+    } else {
+      mat4.identity(fs.reproj as Float32Array);
+      this.prevValid = false;
+    }
+    const reset = wantTaa && !this.historyValid;
+    if (reset) this.historyResets++;
+    fs.reset = reset ? 1 : 0;
+    const jitter = this.taa.jitter(this.frameIndex++);
+    fs.jitterX = wantTaa ? jitter[0] / this.width : 0;
+    fs.jitterY = wantTaa ? jitter[1] / this.height : 0;
+    this.updateExposure(wantAuto, dt);
+
     packPostUniforms(
       this.uniforms,
       s,
@@ -388,9 +535,10 @@ export class PostStack implements PostProcessor {
       this.height,
       r.logicalWidth,
       r.logicalHeight,
-      this.quality,
+      q,
       depthInfo,
       this.grainSeed,
+      fs,
     );
     const needBloomChain = s.bloom.enabled || (s.godRays.enabled && s.godRays.bloomSource > 0);
     this.composite.setUniforms(this.uniforms);
@@ -407,15 +555,66 @@ export class PostStack implements PostProcessor {
       this.ao.encode(encoder, this.aoView!, this.aoGroup!, timer?.pass('ao'));
       this.aoBlur.encode(encoder, this.aoBlurView!, this.aoBlurGroup!, timer?.pass('ao'));
     }
-    if (wantDof && depthInfo) {
+
+    // The scene colour the rest of the stack reads: the raw colour, the TAA resolve, or the
+    // motion-blur gather over either.
+    const raw = inputs.color.view;
+    let scene = raw;
+    const depthView = depth ? depth.view : null;
+    this.taaOn = wantTaa && depthInfo !== null;
+    if (this.taaOn && depthView) {
+      const read = this.histIndex;
+      const write = 1 - read;
+      const group = this.taaGroup(raw, depthView, read);
+      this.taaPass.setUniforms(this.uniforms);
+      this.taaPass.encode(encoder, this.histViews![write]!, group, timer?.pass('taa'));
+      this.histIndex = write;
+      this.historyValid = true;
+      scene = this.histViews![write]!;
+    }
+    this.motionBlurOn = wantMotionBlur && depthInfo !== null;
+    if (this.motionBlurOn && depthView) {
+      const group = this.motionBlurGroup(scene, depthView);
+      this.motionBlurPass.setUniforms(this.uniforms);
+      this.motionBlurPass.encode(encoder, this.motionBlurView!, group, timer?.pass('motion-blur'));
+      scene = this.motionBlurView!;
+    }
+    const groups = this.groupsFor(scene);
+
+    if (wantDof && depthInfo && depthView) {
       this.dof.setUniforms(this.uniforms);
-      this.dof.encode(encoder, this.dofView!, this.dofGroup!, timer?.pass('dof'));
+      this.dof.encode(
+        encoder,
+        this.dofView!,
+        this.dofGroup(groups, scene, depthView),
+        timer?.pass('dof'),
+      );
+    }
+    this.ssrOn = wantSsr && depthInfo !== null;
+    if (this.ssrOn && depthView) {
+      this.ssrPass.setUniforms(this.uniforms);
+      this.ssrPass.encode(
+        encoder,
+        this.ssrView!,
+        this.ssrGroup(groups, scene, depthView),
+        timer?.pass('ssr'),
+      );
+    }
+    if (wantAuto && this.exposurePasses) {
+      this.exposurePasses.encode(
+        encoder,
+        scene,
+        this.width,
+        this.height,
+        s.exposure.histogramLow,
+        s.exposure.histogramHigh,
+      );
     }
 
     if (needBloomChain) {
       this.prefilter.setUniforms(this.uniforms);
       this.prefilter.encode(encoder, this.mipViews[0]!, {
-        bindGroup: this.prefilterGroup!,
+        bindGroup: this.prefilterGroup(groups, scene),
         timestampWrites: timer?.pass('bloom'),
       });
       for (let i = 1; i < this.levels; i++) {
@@ -452,10 +651,11 @@ export class PostStack implements PostProcessor {
     const final = wantFxaa ? this.fxaaView! : output;
     const finalClear = wantFxaa ? COMPOSITE_CLEAR : clear;
     const finalViewport = wantFxaa ? undefined : viewport;
+    const compositeGroup = this.compositeGroup(groups, scene);
     if (this.quality.compositeAtScene && (this.width < outW || this.height < outH)) {
       if (!this.ldrView) this.allocLdr();
       this.composite.encode(encoder, this.ldrView!, {
-        bindGroup: this.compositeGroup!,
+        bindGroup: compositeGroup,
         clear: COMPOSITE_CLEAR,
         timestampWrites: timer?.pass('composite'),
       });
@@ -467,7 +667,7 @@ export class PostStack implements PostProcessor {
       });
     } else {
       this.composite.encode(encoder, final, {
-        bindGroup: this.compositeGroup!,
+        bindGroup: compositeGroup,
         clear: finalClear,
         viewport: finalViewport,
         timestampWrites: timer?.pass('composite'),
@@ -484,6 +684,24 @@ export class PostStack implements PostProcessor {
     }
   }
 
+  /** Ease the EV toward the metered target in auto mode; mirror the manual value otherwise. */
+  private updateExposure(auto: boolean, dt: number): void {
+    const ex = this.settings.exposure;
+    if (!auto || !this.exposurePasses) {
+      this.ev = Math.log2(Math.max(1e-6, this.settings.grade.exposure));
+      this.frameState.autoExposure = 2 ** this.ev;
+      return;
+    }
+    const passes = this.exposurePasses;
+    passes.poll();
+    // Hold until the first histogram has been read back, then ease toward the metered target.
+    if (passes.readbacks > 0) {
+      const target = exposureTarget(passes.averageLog, ex.keyValue, ex.minEv, ex.maxEv);
+      this.ev = adaptExposure(this.ev, target, dt, ex.speedUp, ex.speedDown);
+    }
+    this.frameState.autoExposure = 2 ** this.ev;
+  }
+
   /** Scene-size outline mask. Forces the bind groups to be rebuilt. */
   private allocOutline(): void {
     this.outlineTex = this.renderer.device.createTexture({
@@ -493,7 +711,7 @@ export class PostStack implements PostProcessor {
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
     });
     this.outlineView = this.outlineTex.createView();
-    this.boundColor = null;
+    this.invalidateGroups();
   }
 
   /** Output-size FXAA input, remade when the output size changes (a resize, or an XR eye). */
@@ -520,12 +738,75 @@ export class PostStack implements PostProcessor {
     this.fxaaHeight = 0;
   }
 
+  /** The two scene-size TAA history textures (ws/post-3). */
+  private allocHistory(): void {
+    const device = this.renderer.device;
+    const usage = GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING;
+    const size = [this.width, this.height];
+    const a = device.createTexture({ label: 'post-taa-history-0', size, format: HDR, usage });
+    const b = device.createTexture({ label: 'post-taa-history-1', size, format: HDR, usage });
+    this.histTex = [a, b];
+    this.histViews = [a.createView(), b.createView()];
+    this.histIndex = 0;
+    this.historyValid = false;
+    this.invalidateGroups();
+  }
+
+  /** Half-res SSR term (premultiplied colour, fade in alpha). */
+  private allocSsr(): void {
+    this.ssrTex = this.renderer.device.createTexture({
+      label: 'post-ssr',
+      size: [Math.max(1, this.width >> 1), Math.max(1, this.height >> 1)],
+      format: HDR,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+    });
+    this.ssrView = this.ssrTex.createView();
+    this.invalidateGroups();
+  }
+
+  /** Scene-size motion-blur result. */
+  private allocMotionBlur(): void {
+    this.motionBlurTex = this.renderer.device.createTexture({
+      label: 'post-motion-blur',
+      size: [this.width, this.height],
+      format: HDR,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+    });
+    this.motionBlurView = this.motionBlurTex.createView();
+    this.invalidateGroups();
+  }
+
+  private freeTemporal(): void {
+    if (this.histTex) {
+      this.histTex[0].destroy();
+      this.histTex[1].destroy();
+    }
+    this.histTex = null;
+    this.histViews = null;
+    this.historyValid = false;
+    this.ssrTex?.destroy();
+    this.ssrTex = null;
+    this.ssrView = null;
+    this.motionBlurTex?.destroy();
+    this.motionBlurTex = null;
+    this.motionBlurView = null;
+    this.exposurePasses?.invalidate();
+  }
+
   /** Point the composite at `lut.texture` (or the placeholder); a change rebuilds the group. */
   private bindLut(texture: GPUTexture | null): void {
     if (texture === this.boundLut) return;
     this.boundLut = texture;
     this.lutView = texture ? texture.createView({ dimension: '3d' }) : this.lutPlaceholderView;
-    this.boundColor = null;
+    this.invalidateGroups();
+  }
+
+  /** Point the composite at the lens-dirt texture (or bloom mip 0 as a placeholder). */
+  private bindDirt(texture: GPUTexture | null): void {
+    if (texture === this.boundDirt) return;
+    this.boundDirt = texture;
+    this.dirtView = texture ? texture.createView() : null;
+    this.invalidateGroups();
   }
 
   /** Scene-size composite target, made on first use (a resize or tier change frees it). */
@@ -556,7 +837,7 @@ export class PostStack implements PostProcessor {
     this.aoView = this.aoTex.createView();
     this.aoBlurTex = device.createTexture({ label: 'post-ao-blur', size, format: AO, usage });
     this.aoBlurView = this.aoBlurTex.createView();
-    this.boundColor = null;
+    this.invalidateGroups();
   }
 
   /** Half-res DoF target: blurred colour, CoC in alpha. Forces the bind groups to be rebuilt. */
@@ -566,7 +847,7 @@ export class PostStack implements PostProcessor {
     const usage = GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING;
     this.dofTex = device.createTexture({ label: 'post-dof', size, format: HDR, usage });
     this.dofView = this.dofTex.createView();
-    this.boundColor = null;
+    this.invalidateGroups();
   }
 
   private freeDepthTargets(): void {
@@ -576,40 +857,98 @@ export class PostStack implements PostProcessor {
     this.outlineTex?.destroy();
     this.aoTex = this.aoBlurTex = this.dofTex = this.outlineTex = null;
     this.aoView = this.aoBlurView = this.dofView = this.outlineView = null;
-    this.aoGroup = this.aoBlurGroup = this.dofGroup = this.outlineGroup = null;
+    this.aoGroup = this.aoBlurGroup = this.outlineGroup = null;
   }
 
-  private bindInputs(
-    color: GPUTextureView,
-    emissive: GPUTextureView,
-    depth: GPUTextureView | null,
-  ): void {
-    if (color === this.boundColor && emissive === this.boundEmissive && depth === this.boundDepth) {
-      return;
-    }
-    this.boundColor = color;
+  /** Drop every cached bind group: the next frame rebuilds the ones it uses. */
+  private invalidateGroups(): void {
+    this.groups.clear();
+    this.boundEmissive = null;
+    this.boundDepth = null;
+    this.exposurePasses?.invalidate();
+  }
+
+  /** Track the emissive and depth views; a change drops the cached groups and rebuilds the depth-only ones. */
+  private bindInputs(emissive: GPUTextureView, depth: GPUTextureView | null): void {
+    if (emissive === this.boundEmissive && depth === this.boundDepth) return;
+    this.groups.clear();
     this.boundEmissive = emissive;
     this.boundDepth = depth;
-    this.prefilterGroup = this.prefilter.createBindGroup([color, emissive]);
-    const mip0 = this.mipViews[0]!;
-    this.compositeGroup = this.composite.createBindGroup([
-      color,
-      emissive,
-      mip0,
-      this.raysView!,
-      this.aoBlurView ?? mip0,
-      this.dofView ?? mip0,
-      this.outlineView ?? mip0,
-      this.lutView,
-    ]);
     if (depth) {
       this.aoGroup = this.aoView ? this.ao.createBindGroup(depth, []) : null;
       this.aoBlurGroup = this.aoView ? this.aoBlur.createBindGroup(depth, [this.aoView]) : null;
-      this.dofGroup = this.dofView ? this.dof.createBindGroup(depth, [color]) : null;
       this.outlineGroup = this.outlineView ? this.outline.createBindGroup(depth, []) : null;
     } else {
-      this.aoGroup = this.aoBlurGroup = this.dofGroup = this.outlineGroup = null;
+      this.aoGroup = this.aoBlurGroup = this.outlineGroup = null;
     }
+  }
+
+  /** The cached groups for a scene-colour view (an empty set on first use). */
+  private groupsFor(scene: GPUTextureView): InputGroups {
+    let g = this.groups.get(scene);
+    if (!g) {
+      g = {
+        prefilter: null,
+        composite: null,
+        dof: null,
+        ssr: null,
+        motionBlur: null,
+        taa: [null, null],
+      };
+      this.groups.set(scene, g);
+    }
+    return g;
+  }
+
+  private prefilterGroup(g: InputGroups, scene: GPUTextureView): GPUBindGroup {
+    if (!g.prefilter) g.prefilter = this.prefilter.createBindGroup([scene, this.boundEmissive!]);
+    return g.prefilter;
+  }
+
+  private compositeGroup(g: InputGroups, scene: GPUTextureView): GPUBindGroup {
+    if (!g.composite) {
+      const mip0 = this.mipViews[0]!;
+      g.composite = this.composite.createBindGroup([
+        scene,
+        this.boundEmissive!,
+        mip0,
+        this.raysView!,
+        this.aoBlurView ?? mip0,
+        this.dofView ?? mip0,
+        this.outlineView ?? mip0,
+        this.lutView,
+        this.ssrView ?? mip0,
+        this.dirtView ?? mip0,
+      ]);
+    }
+    return g.composite;
+  }
+
+  private dofGroup(g: InputGroups, scene: GPUTextureView, depth: GPUTextureView): GPUBindGroup {
+    if (!g.dof) g.dof = this.dof.createBindGroup(depth, [scene]);
+    return g.dof;
+  }
+
+  private ssrGroup(g: InputGroups, scene: GPUTextureView, depth: GPUTextureView): GPUBindGroup {
+    if (!g.ssr) g.ssr = this.ssrPass.createBindGroup(depth, [scene]);
+    return g.ssr;
+  }
+
+  private motionBlurGroup(scene: GPUTextureView, depth: GPUTextureView): GPUBindGroup {
+    const g = this.groupsFor(scene);
+    if (!g.motionBlur) g.motionBlur = this.motionBlurPass.createBindGroup(depth, [scene]);
+    return g.motionBlur;
+  }
+
+  /** The TAA resolve group reading the raw colour and history `read`. */
+  private taaGroup(raw: GPUTextureView, depth: GPUTextureView, read: number): GPUBindGroup {
+    const g = this.groupsFor(raw);
+    let group = g.taa[read];
+    if (!group) {
+      group = this.taaPass.createBindGroup(depth, [raw, this.histViews![read]!]);
+      g.taa[read] = group;
+    }
+    return group;
   }
 
   destroy(): void {
@@ -617,11 +956,16 @@ export class PostStack implements PostProcessor {
     this.raysTex?.destroy();
     this.freeDepthTargets();
     this.freeFxaa();
+    this.freeTemporal();
+    this.exposurePasses?.destroy();
     this.lutPlaceholder.destroy();
     this.ao.destroy();
     this.aoBlur.destroy();
     this.dof.destroy();
     this.outline.destroy();
+    this.taaPass.destroy();
+    this.ssrPass.destroy();
+    this.motionBlurPass.destroy();
     this.fxaa.destroy();
     this.prefilter.destroy();
     this.rays.destroy();
