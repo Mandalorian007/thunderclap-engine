@@ -75,6 +75,48 @@ frame.drawable(rain);        // under a depth camera (Camera.perspective)
 - `ParticleEmitter(system, params, rate = 0)`: continuous emission at `rate` per second while
   `active`, plus `burst(count, overrides?)`.
 
+## Trails
+
+Ribbon trails: a ring buffer of pushed points becomes a strip two vertices wide, rebuilt on
+the CPU into one preallocated `Float32Array` each frame and uploaded with a single
+`Mesh.update` (static index buffer; no allocation after construction). Drawn through
+`frame.mesh` with an unlit material (`TRAIL_WGSL`, or `TRAIL_TEXTURED_WGSL` with a texture)
+that fades toward the two long edges, so depth test and blending come from the renderer.
+
+```ts
+const trail = new Trail(renderer, {
+  space: 'world',            // '2d' (default, logical px) or 'world'
+  maxPoints: 64,             // ring buffer; the oldest drops when full
+  width: 0.2,                // or widthCurve: [0.4, 0.1] (newest → oldest)
+  color: [1, 0.6, 0.2, 1],   // or colorCurve: RGBA stops, newest → oldest
+  lifetime: 0.5,             // seconds a point lives
+  minDistance: 0.02,         // closer pushes only move the tip
+  facing: 'camera',          // 'up' or a fixed [x, y, z] axis
+  blend: 'additive',         // or 'alpha'
+  uvMode: 'stretch',         // or 'tile' (one repeat per `width`), texture?: Texture
+});
+trail.push(x, y, z);         // once per update, wherever the thing is
+trail.update(dt, camera);    // ages points, rebuilds the strip (camera for 'camera' facing)
+trail.draw(frame);           // frame.mesh(trail.mesh, trail.material, trail.transform, trail.instance)
+trail.clear();
+```
+
+- `Trail` (`TrailOptions`, `TrailFacing`, `TrailBlend`): `push(x, y, z = 0): boolean` (true
+  when a point was stored), `update(dt, camera?)`, `draw(frame)`, `clear()`, `count`,
+  `pointAt(i, out)` (0 = newest), `maxPoints`, `softness` (share of the half width that fades,
+  default 0.5), `fade` (alpha over age, default `[1, 0]`, `null` for none), and the public
+  `mesh`, `material`, `transform` and `instance` for a custom draw. `width`, `lifetime`,
+  `facing` and `color` are live fields. `destroy()` frees the mesh (and a textured material).
+- The newest push is always the ribbon's tip (age 0); a push closer than `minDistance` to the
+  newest stored point moves the tip without storing, so a slow mover still gets a smooth end.
+- Facing: `'camera'` turns each point's face toward `camera.position` in world space, or to the
+  view axis in 2D (flat in the XY plane with no camera); `'up'` lies flat (+y); an axis is fixed.
+- Untextured trails share one material per renderer and blend (`trail-additive`,
+  `trail-alpha`); a textured trail owns its own (`linear-repeat` sampler for `'tile'`).
+- `TrailBatch(renderer, size, opts)`: `size` ribbons in one mesh and one draw, with the same
+  options and `push(i, …)`, `count(i)`, `pointAt(i, j, out)`, `clear(i?)`; it packs the ribbons
+  contiguously and rewrites its index buffer each frame.
+
 ## Light helpers
 
 Pure functions of time; feed the result into a tint, emissive or light intensity.
@@ -85,5 +127,5 @@ Pure functions of time; feed the result into a tint, emissive or light intensity
   `period` seconds (2), offset by `phase` (0..1).
 - `valueNoise1(x, seed = 0)`: smooth 1D value noise in [0, 1].
 
-Tests: `particles.test.ts`, `particles-world.test.ts` (fake GPU), `flicker.test.ts`. Demo:
-`harness/weather.html`.
+Tests: `particles.test.ts`, `particles-world.test.ts` (fake GPU), `trail.test.ts`,
+`flicker.test.ts`. Demos: `harness/weather.html`, `harness/trails.html`.
