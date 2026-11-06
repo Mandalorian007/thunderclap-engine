@@ -4,17 +4,20 @@
  * - A courtyard with 12 plates on posts. Mouse look under the pointer lock (click to take it),
  *   touch drags look (no move stick), the pad's right stick looks.
  * - A shot (click, tap, right trigger) fires a ray from the eye along the view direction, the
- *   reticle at the screen centre, through one `meshTester` per plate over the cube it draws.
+ *   `ui.reticle` dot at the screen centre, through one `meshTester` per plate over the `geom`
+ *   cube it draws.
  * - A hit knocks the plate over (the hinge rotation tweened by hand), bursts sparks
  *   (`ParticleSystem`, world space), draws a tracer (`Trail`), plays a positioned synthesised
  *   chime at the plate and adds to the score shown in a `ui` anchor over the range. A plate
  *   rises again `RESET_SECONDS` after it fell.
  *
  * Nothing here is engine code: the camera, the tween and the target rules are what a game writes.
+ * The range has no motion without input, so it needs no `?still`: a fresh page is a steady frame.
  */
 import { AudioEngine, recipes } from '@thunderclap/engine/audio';
 import { GameLoop } from '@thunderclap/engine/core';
 import { ParticleSystem, Trail } from '@thunderclap/engine/fx';
+import { box } from '@thunderclap/engine/geom';
 import {
   createRay,
   Gestures,
@@ -33,10 +36,8 @@ import {
   Lights,
   Renderer,
   Transform,
-  VERTEX_LAYOUT_3D,
 } from '@thunderclap/engine/render';
 import { createOverlay } from '@thunderclap/engine/ui';
-import { cubeGeometry } from './geometry';
 import { type RangeDemoApi, type RangeDemoState, RESET_SECONDS, TARGET_COUNT } from './state';
 
 const root = document.getElementById('root') as HTMLElement;
@@ -187,6 +188,9 @@ async function main(): Promise<void> {
     renderer.resize(backbuffer.width, backbuffer.height);
     ui.setFrame(rect);
   });
+  // The reticle: a `ui.reticle` dot on the hud layer, where the shot ray goes; it pulses on a hit.
+  const reticle = ui.reticle({ style: 'dot', size: 6, color: '#fff' });
+  reticle.el.id = 'reticle';
   const scoreEl = document.createElement('div');
   scoreEl.className = 'score';
   scoreEl.dataset.role = 'score';
@@ -197,8 +201,10 @@ async function main(): Promise<void> {
   showScore();
 
   const lit = renderer.createMaterial({ label: 'lit', blend: 'opaque', wgsl: LIT_WGSL });
-  const geometry = cubeGeometry();
-  const cube = renderer.createMesh({ ...geometry, layout: VERTEX_LAYOUT_3D, label: 'cube' });
+  // One `geom` unit cube (a `Geometry` is a `MeshDesc`) draws every post, plate, wall and the
+  // ground under a `Transform`; the same arrays feed the `meshTester`s, so a plate is picked as drawn.
+  const geometry = box();
+  const cube = renderer.createMesh({ ...geometry, label: 'cube' });
 
   // The courtyard: a checkered slab and four low walls.
   const ground = new Transform({ y: -0.5, scaleX: 44, scaleY: 1, scaleZ: 44 });
@@ -310,6 +316,7 @@ async function main(): Promise<void> {
     t.t = 0;
     t.flash[1] = 1;
     state.score++;
+    reticle.pulse();
     sparks.emit(
       {
         x: at.point[0],

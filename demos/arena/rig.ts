@@ -17,6 +17,14 @@ import {
   type Skeleton,
   WORLD_NODE_FLOATS,
 } from '@thunderclap/engine/anim';
+import {
+  box,
+  type Geometry,
+  mergeGeometry,
+  type Rgba,
+  transformGeometry,
+} from '@thunderclap/engine/geom';
+import { Transform } from '@thunderclap/engine/render';
 import { MeshBuilder, type MeshData, type Rgb } from './geom';
 
 export const NODES = {
@@ -139,18 +147,23 @@ export function createBodyMesh(skeleton: Skeleton): MeshData {
 
 export const SWORD_LENGTH = 0.95;
 
-/** A sword with the grip at the origin and the blade down -y (how a hanging hand holds it). */
-export function createSwordMesh(): MeshData {
-  const b = new MeshBuilder(false);
-  const steel: Rgb = [0.85, 0.87, 0.9];
-  const brass: Rgb = [0.78, 0.6, 0.25];
-  const grip: Rgb = [0.25, 0.14, 0.08];
-  b.box(0, 0.12, 0, 0.02, 0.1, 0.02, grip);
-  b.box(0, 0.23, 0, 0.03, 0.02, 0.03, brass);
-  b.box(0, -0.02, 0, 0.12, 0.018, 0.025, brass);
-  b.box(0, -0.42, 0, 0.035, 0.4, 0.008, steel);
-  b.box(0, -0.86, 0, 0.022, 0.07, 0.006, steel);
-  return b.build();
+/**
+ * A sword with the grip at the origin and the blade down -y (how a hanging hand holds it): five
+ * `geom` boxes (grip, pommel, cross-guard, blade, tip), each lifted into place and merged.
+ */
+export function createSwordMesh(): Geometry {
+  const steel: Rgba = [0.85, 0.87, 0.9, 1];
+  const brass: Rgba = [0.78, 0.6, 0.25, 1];
+  const grip: Rgba = [0.25, 0.14, 0.08, 1];
+  const part = (y: number, hx: number, hy: number, hz: number, color: Rgba) =>
+    transformGeometry(box({ size: [hx * 2, hy * 2, hz * 2], color }), new Transform({ y }).world);
+  return mergeGeometry(
+    part(0.12, 0.02, 0.1, 0.02, grip),
+    part(0.23, 0.03, 0.02, 0.03, brass),
+    part(-0.02, 0.12, 0.018, 0.025, brass),
+    part(-0.42, 0.035, 0.4, 0.008, steel),
+    part(-0.86, 0.022, 0.07, 0.006, steel),
+  );
 }
 
 // ------------------------------------------------------------------ clips

@@ -2,10 +2,12 @@
  * ThunderClap demo: dungeon. A 2D top-down crawl at game scale: a 40×30 tile map from a
  * canvas-drawn atlas, 60 flipbook bats, a player square moved by keys, pad or touch drag with
  * wall collision, flickering emissive torches feeding bloom, a fog-of-war layer, a pause menu
- * walked with the d-pad, a coin counter kept in `save`, and synthesised pickup/hit sounds on the
- * `sfx` bus. Everything the room draws is one material and one draw call.
+ * walked with the d-pad, a coin counter kept in `save`, a health meter (`ui.meter`) the bats
+ * chip at, and synthesised pickup/hit sounds on the `sfx` bus. Everything the room draws is one
+ * material and one draw call.
  *
- * `window.__demo` publishes the numbers e2e/demos/dungeon.spec.ts asserts on.
+ * `window.__demo` publishes the numbers e2e/demos/dungeon.spec.ts asserts on. `?still` parks the
+ * bats and the torch flicker from the first frame (the same as `__demo.park(true)`).
  */
 import { createGame } from '@thunderclap/engine';
 import { recipes } from '@thunderclap/engine/audio';
@@ -25,6 +27,8 @@ const PLAYER_SPEED = 180; // px/s
 const FOG_LAYER = 2;
 const FOG_NEAR = 4.5; // tiles fully lit
 const FOG_FAR = 8; // tiles fully dark
+const HEALTH_MAX = 10;
+const STILL = new URLSearchParams(location.search).has('still');
 
 export interface DemoState {
   frame: number;
@@ -40,6 +44,8 @@ export interface DemoState {
   coinsOnFloor: number;
   /** Bat hits taken. */
   hits: number;
+  /** Health left, 0..`HEALTH_MAX`; a bat hit costs one, a coin gives one back. */
+  health: number;
   paused: boolean;
   fog: boolean;
   /** Label of the focused pause-menu control, or null. */
@@ -53,7 +59,11 @@ export interface DemoApi {
   state: DemoState;
   /** Is tile (tx, ty) a wall? */
   isSolid(tx: number, ty: number): boolean;
-  /** Press or release a button on the demo's fake gamepad (standard mapping). */
+  /**
+   * Press or release a button on the demo's fake gamepad (standard mapping). A press is latched
+   * until the menu's `PadNav` has seen it in an update, so a release that lands in the same frame
+   * (or a frame the loop skipped under load) is not lost.
+   */
   pad(index: number, pressed: boolean): void;
   /** Freeze bats and torch flicker. */
   park(on: boolean): void;
@@ -74,15 +84,19 @@ const state: DemoState = {
   playerPos: { x: 0, y: 0 },
   coinsOnFloor: 0,
   hits: 0,
+  health: HEALTH_MAX,
   paused: false,
   fog: true,
   focused: null,
-  parked: false,
+  parked: STILL,
   gpu: 'unsupported',
 };
 
 const padButtons = Array.from({ length: 17 }, () => ({ pressed: false }));
 const fakePad: PadLike = { buttons: padButtons, axes: [0, 0, 0, 0] };
+/** Per button: has a `PadNav.update()` observed the current press? And is a release waiting on it? */
+const padSeen = padButtons.map(() => false);
+const padReleasePending = padButtons.map(() => false);
 
 const ctx = await createGame({
   root: document.getElementById('app')!,
@@ -220,7 +234,7 @@ if (ctx) {
   // --- Save -------------------------------------------------------------------------------
   state.coins = save.get().coins;
 
-  // --- HUD --------------------------------------------------------------------------------
+  // --- HUD: a coin line and a `ui.meter` health bar (ui-hud) in the top region ---------------
   const hud = h('div', {
     id: 'dungeon-coins',
     style: {
@@ -234,6 +248,21 @@ if (ctx) {
   };
   refreshHud();
   ui.layout.add(hud, { place: { default: 'top' }, order: 0 });
+  const health = ui.meter({
+    label: 'Health',
+    max: HEALTH_MAX,
+    region: 'top',
+    order: 1,
+    tone: 'success',
+    width: 200,
+    format: (v, max) => `${v}/${max}`,
+  });
+  health.el.id = 'dungeon-health';
+  const setHealth = (v: number) => {
+    state.health = Math.max(0, Math.min(HEALTH_MAX, v));
+    health.set(state.health);
+    health.setTone(state.health <= 3 ? 'danger' : state.health <= 6 ? 'warn' : 'success');
+  };
 
   // --- Pause menu -------------------------------------------------------------------------
   // The engine's `ctx.padNav` reads the real gamepads; this one also sees the demo's fake pad,
@@ -321,6 +350,7 @@ if (ctx) {
         hitCooldown = 0.8;
         hitFlash = 1;
         state.hits++;
+        setHealth(state.health - 1);
         audio.play('hit', { bus: 'sfx' });
       }
     }
@@ -367,6 +397,7 @@ if (ctx) {
         save.update((d) => ({ coins: d.coins + 1 }));
         save.flush();
         refreshHud();
+        setHealth(state.health + 1);
         audio.play('pickup', { bus: 'sfx' });
       }
     }
@@ -434,6 +465,19 @@ if (ctx) {
   // --- Hooks and the __demo surface ----------------------------------------------------------
   ctx.hooks.update = () => {
     padNav.update();
+    // The fake pad's presses are latched: a button stays down until this update has run with it
+    // pressed (so `PadNav` saw the edge), then a pending release is applied.
+    for (let i = 0; i < padButtons.length; i++) {
+      if (!padButtons[i]!.pressed) continue;
+      if (!padSeen[i]) {
+        padSeen[i] = true;
+        continue;
+      }
+      if (padReleasePending[i]) {
+        padButtons[i]!.pressed = false;
+        padReleasePending[i] = false;
+      }
+    }
   };
   ctx.hooks.afterRender = (time) => {
     state.frame = time.frame;
@@ -453,7 +497,16 @@ if (ctx) {
     isSolid: (tx, ty) => isSolid(map, tx, ty),
     pad(index, pressed) {
       const b = padButtons[index];
-      if (b) b.pressed = pressed;
+      if (!b) return;
+      if (pressed) {
+        b.pressed = true;
+        padSeen[index] = false;
+        padReleasePending[index] = false;
+      } else if (padSeen[index]) {
+        b.pressed = false;
+      } else {
+        padReleasePending[index] = true;
+      }
     },
     park(on) {
       state.parked = on;

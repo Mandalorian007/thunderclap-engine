@@ -63,3 +63,33 @@ export function focusableWithin(root: Element): HTMLElement[] {
     (el) => !el.closest('[hidden], [inert]') && el.getAttribute('aria-hidden') !== 'true',
   );
 }
+
+/** Input types whose own arrow handling is only horizontal (the caret). */
+const TEXT_INPUTS = new Set(['text', 'search', 'url', 'email', 'password', 'tel']);
+/** Input types that never use the arrow keys. */
+const ARROWLESS_INPUTS = new Set([
+  'button',
+  'submit',
+  'reset',
+  'checkbox',
+  'image',
+  'file',
+  'color',
+]);
+
+/**
+ * Whether a focused `el` uses the arrow keys of an axis itself, so focus navigation (the panel
+ * stack's arrows, `PadNav`'s d-pad) must leave them to it: a text field consumes left/right, a
+ * textarea, select, slider (`type=range` or `role=slider`), radio, number, date or other value
+ * input and a contenteditable consume both axes; buttons and checkboxes consume none.
+ */
+export function consumesArrows(el: Element, horizontal: boolean): boolean {
+  if (el.getAttribute('role') === 'slider' || (el as HTMLElement).isContentEditable) return true;
+  const tag = el.tagName;
+  if (tag === 'TEXTAREA' || tag === 'SELECT') return true;
+  if (tag !== 'INPUT') return false;
+  const type = (el as HTMLInputElement).type;
+  if (ARROWLESS_INPUTS.has(type)) return false;
+  if (TEXT_INPUTS.has(type)) return horizontal;
+  return true;
+}

@@ -7,7 +7,9 @@
  *
  * Controls: WASD / left stick / left-half touch stick moves (relative to the camera); mouse
  * (click for the pointer lock) / right stick / right-half drag looks; click, tap, Space or the
- * pad's A button swings; the wheel zooms.
+ * pad's A button swings; the wheel, a pinch or the shoulder buttons zoom (`Look.zoom` → `Follow`).
+ *
+ * `?still` parks the idle bob and the dust so probes read a steady frame.
  */
 
 import { createGame } from '@thunderclap/engine';
@@ -21,6 +23,7 @@ import {
 } from '@thunderclap/engine/anim';
 import type { Scene } from '@thunderclap/engine/core';
 import { Trail } from '@thunderclap/engine/fx';
+import { box, cylinder, mergeGeometry, plane, transformGeometry } from '@thunderclap/engine/geom';
 import { Follow, Look } from '@thunderclap/engine/input';
 import {
   type Camera,
@@ -37,7 +40,7 @@ import {
   VERTEX_LAYOUT_SKINNED,
   WGSL_PBR,
 } from '@thunderclap/engine/render';
-import { MeshBuilder, tilePixels } from './geom';
+import { tilePixels } from './geom';
 import {
   createBodyMesh,
   createIdleClip,
@@ -68,11 +71,15 @@ const state: ArenaDemoState = {
   triangles: 0,
   stats: { drawCalls: 0, instances: 0, drawables: 0, culled: 0, shadowDraws: 0 },
   trailPoints: 0,
+  trailPeak: 0,
+  still: new URLSearchParams(location.search).has('still'),
   gpuErrors: 0,
 };
 window.__demo = state;
 
 const RUN_SPEED = 5.5;
+/** Mixer sub-steps per fixed step while the sword swings: the blade tip is sampled along its arc. */
+const SWING_SUBSTEPS = 4;
 const ACCEL = 28;
 const TURN_RATE = 12;
 const ARENA_RADIUS = 11;
@@ -92,7 +99,7 @@ const SKINNED_PBR_WGSL = /* wgsl */ `${WGSL_PBR}
   return o;
 }`;
 
-type Action = 'swing' | 'zoomIn' | 'zoomOut';
+type Action = 'swing';
 
 const look = new Look({
   keys: {
@@ -101,6 +108,9 @@ const look = new Look({
     left: ['KeyA', 'ArrowLeft'],
     right: ['KeyD', 'ArrowRight'],
   },
+  // The zoom axis: wheel and pinch by default, plus the pad's shoulder buttons. `Follow` reads
+  // it from the linked look, so the demo binds no zoom actions of its own.
+  zoom: { pad: 'shoulders' },
 });
 
 async function main(): Promise<void> {
@@ -120,8 +130,6 @@ async function main(): Promise<void> {
     input: {
       bindings: {
         swing: [{ gesture: 'tap' }, { key: 'Space' }, { padButton: 0 }],
-        zoomIn: [{ wheel: -1 }],
-        zoomOut: [{ wheel: 1 }],
       },
     },
   });
@@ -199,7 +207,7 @@ async function main(): Promise<void> {
   });
 
   const mesh = (
-    data: { vertices: Float32Array; indices: Uint16Array },
+    data: { vertices: Float32Array; indices: Uint16Array | Uint32Array },
     label: string,
     skinned = false,
   ): Mesh =>
@@ -209,22 +217,28 @@ async function main(): Promise<void> {
       label,
     });
 
-  const groundMesh = mesh(
-    new MeshBuilder().ground(ARENA_RADIUS * 2 + 8, 15, [1, 1, 1]).build(),
-    'ground',
-  );
-  const pillarMesh = mesh(
-    new MeshBuilder()
-      .box(0, 0.2, 0, 0.55, 0.2, 0.55, [1, 1, 1])
-      .cylinder(0, 0.4, 0, 0.36, 3.2, 14, [1, 1, 1])
-      .box(0, 3.75, 0, 0.5, 0.15, 0.5, [1, 1, 1])
-      .build(),
-    'pillar',
-  );
-  const orbMesh = mesh(
-    new MeshBuilder().cylinder(0, -0.12, 0, 0.14, 0.24, 10, [1, 1, 1]).build(),
-    'orb',
-  );
+  // The arena's static meshes come from `geom` (a `Geometry` is a `MeshDesc`): a plane for the
+  // ground, a plinth + shaft + capital merged into one pillar, a squat cylinder for each orb.
+  const lift = (y: number) => new Transform({ y }).world;
+  const groundMesh = renderer.createMesh({
+    ...plane({ size: ARENA_RADIUS * 2 + 8, uvScale: 15 }),
+    label: 'ground',
+  });
+  const pillarMesh = renderer.createMesh({
+    ...mergeGeometry(
+      transformGeometry(box({ size: [1.1, 0.4, 1.1] }), lift(0.2)),
+      transformGeometry(
+        cylinder({ radius: 0.36, height: 3.2, segments: [14, 1], uvScale: [4, 3] }),
+        lift(2.0),
+      ),
+      transformGeometry(box({ size: [1.0, 0.3, 1.0] }), lift(3.75)),
+    ),
+    label: 'pillar',
+  });
+  const orbMesh = renderer.createMesh({
+    ...cylinder({ radius: 0.14, height: 0.24, segments: [10, 1] }),
+    label: 'orb',
+  });
   const groundT = new Transform({});
   const groundP: InstanceParams = { receiveShadow: true, castShadow: false };
   const pillars: Transform[] = [];
@@ -267,6 +281,8 @@ async function main(): Promise<void> {
   const mixer = new AnimationMixer(skeleton);
   const idle = mixer.play(createIdleClip(), { layer: 0, weight: 1 });
   const run = mixer.play(createRunClip(), { layer: 0, weight: 0 });
+  // `?still`: the idle bob stops, so a probe reads the same pose every frame.
+  if (state.still) idle.speed = 0;
   const swingClip = createSwingClip();
   let swing: ReturnType<typeof mixer.play> | null = null;
   const body = new Transform({});
@@ -313,6 +329,7 @@ async function main(): Promise<void> {
     if (swing && !swing.finished) return;
     swing = mixer.play(swingClip, { layer: 1, loop: false, fadeIn: 0.04 });
     state.swings++;
+    state.trailPeak = 0;
     trail.clear();
     ui.toasts.show(`Swing ${state.swings}`, { tone: 'info', duration: 900 });
   };
@@ -320,8 +337,6 @@ async function main(): Promise<void> {
   hooks.update = (dt) => {
     state.simTime += dt;
     if (input.pressed('swing')) startSwing();
-    if (input.pressed('zoomIn')) follow.zoom(-1);
-    if (input.pressed('zoomOut')) follow.zoom(1);
 
     // Move relative to the camera's yaw; the character turns toward its velocity.
     const mv = look.move;
@@ -356,23 +371,32 @@ async function main(): Promise<void> {
     idle.weight = 1 - t;
     run.weight = t;
     run.speed = 0.6 + 0.4 * t;
-    mixer.update(dt);
-    poseToWorld(skeleton, mixer.pose, world);
-    skinMatrices(skeleton, world, jointMats);
-    attachTransform(handSocket, world, body.world, sword);
+    // While the sword swings the mixer runs in sub-steps and the blade tip is pushed into the
+    // trail after each one, so one fixed step (or a clamped burst of them after a stalled frame)
+    // samples the whole arc instead of one point. `trailPeak` is the most points the trail held
+    // during the current swing, read here before the trail ages them.
     const swinging = swing !== null && !swing.finished;
-    if (swinging) {
-      const m = sword.world;
-      const y = -SWORD_LENGTH;
-      tip[0] = m[1]! * y + m[3]!;
-      tip[1] = m[5]! * y + m[7]!;
-      tip[2] = m[9]! * y + m[11]!;
-      trail.push(tip[0]!, tip[1]!, tip[2]!);
+    const steps = swinging ? SWING_SUBSTEPS : 1;
+    const sub = dt / steps;
+    for (let i = 0; i < steps; i++) {
+      mixer.update(sub);
+      poseToWorld(skeleton, mixer.pose, world);
+      attachTransform(handSocket, world, body.world, sword);
+      if (swinging) {
+        const m = sword.world;
+        const y = -SWORD_LENGTH;
+        tip[0] = m[1]! * y + m[3]!;
+        tip[1] = m[5]! * y + m[7]!;
+        tip[2] = m[9]! * y + m[11]!;
+        trail.push(tip[0]!, tip[1]!, tip[2]!);
+      }
     }
+    skinMatrices(skeleton, world, jointMats);
+    if (trail.count > state.trailPeak) state.trailPeak = trail.count;
     trail.update(dt, camera);
 
     // Dust kicked up at the feet while running.
-    dustCarry += DUST_RATE * t * dt;
+    if (!state.still) dustCarry += DUST_RATE * t * dt;
     const n = Math.floor(dustCarry);
     if (n > 0) {
       dustCarry -= n;

@@ -139,3 +139,6 @@ Refines E-025. When main moved only by commits that touch `docs/**`, `README.md`
 
 `e2e/demos/dungeon.spec.ts:116` ("the pause menu opens on Escape and walks with the arrow keys and the d-pad") has now missed three times on unrelated branches (desktop-1920 on ws/scaffold; desktop-1280 and ipad on the ws/assets-2 gate), always with the same shape as ui.spec menuNav: a pad press lands while the panel is still settling and focus never moves. It is the spec's fixed-wait assertion, not the merges. The chain 1 integrator lands ws/assets-2 with those two failures tolerated. ws/demo-polish (dispatched) makes the spec poll; when it lands the test leaves the list, as mesh.spec did under E-024.
 
+## E-028: the dungeon pad walk leaves the E-017 list (2026-11-06, PM)
+
+ws/demo-polish landed at a3be7c2: the spec holds the fake pad button until focus reaches the expected item and the demo latches a press until `PadNav.update()` has seen it, so the walk is deterministic by construction. On the landing gate the test passed on all seven rows that run demos (itch-iframe skips every demo spec by design). A miss of this test is now a real failure again, as mesh.spec became under E-024.
