@@ -49,6 +49,11 @@ p.close();
   `preventDefault` and `stopPropagation` from a `document` listener, so a key listener on `window`,
   which is where `Input.attach` listens, does not see that Escape. Clicking the backdrop also
   closes the panel when `closeOnBackdrop` (default: the panel's `dismissible`) is true.
+- **Arrows.** ArrowUp/ArrowDown move focus through the top panel's focusable elements and wrap;
+  `arrowNav: 'both'` adds ArrowLeft/ArrowRight, `'none'` turns it off (`ArrowNav`, default
+  `'vertical'`). A focused text field keeps left/right, and a select, textarea, range or
+  `role=slider` keeps both axes, so the arrows never steal from a control that uses them. A
+  non-modal panel moves focus only while focus is inside it; a modal panel also from itself.
 - On open, focus moves to `initialFocus`, otherwise to the first focusable element, otherwise to the
   panel itself. On close, focus goes back to whatever had it before.
 - **Focus home.** `createOverlay({ focusHome: () => canvas })` names where focus goes when a

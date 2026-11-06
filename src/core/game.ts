@@ -35,6 +35,7 @@ import { createWebHost, createXrHost, type Host, type XrHost } from '../host';
 import {
   type Bindings,
   createPointerRouter,
+  type GamepadLike,
   Gestures,
   Input,
   type MagnifyOptions,
@@ -142,6 +143,12 @@ export interface CreateGameOptions<A extends string, S extends FlushableSave | n
     buttonKeys?: Iterable<string>;
     /** Extra block on top of "a modal panel is open". */
     blocked?: () => boolean;
+    /**
+     * Gamepad source for both the action map (`InputOptions.getGamepads`) and the pad
+     * navigation of modal panels (`PadNavOptions.getGamepads`). Default: `navigator.getGamepads()`,
+     * guarded. A test passes a fake pad here and drives `ctx.padNav` with it.
+     */
+    getGamepads?: () => readonly (GamepadLike | null)[];
     /**
      * Loupe and snap for small touch targets, passed to the `Gestures` `createGame` builds
      * (`GestureOptions.magnify`); see `input/magnify.ts`. Omit for no magnify.
@@ -310,7 +317,7 @@ export async function createGame<
     focusHome: () => surface.canvas,
   });
   // Input is blocked while a modal panel is up, so the pad drives panels through this.
-  const padNav = new PadNav(ui.stack);
+  const padNav = new PadNav(ui.stack, { getGamepads: opts.input.getGamepads });
   surface.onResize(({ rect, backbuffer }) => {
     renderer.resize(backbuffer.width, backbuffer.height);
     ui.setFrame(rect);
@@ -332,6 +339,7 @@ export async function createGame<
     blocked: extraBlock ? () => ui.stack.hasModal || extraBlock() : () => ui.stack.hasModal,
     globalKeys: opts.input.globalKeys,
     buttonKeys: opts.input.buttonKeys,
+    getGamepads: opts.input.getGamepads,
     gestures,
     pointers,
   });

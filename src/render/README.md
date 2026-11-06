@@ -130,6 +130,38 @@ renderer.endFrame();
 `uv` (u0, v0, u1, v1), `params` (a free vec4 passed to your shader), `emissive`, `uniforms`,
 `layers` and `order`.
 
+### Tile layers and flipbooks
+
+```ts
+const atlas = renderer.createSpriteMaterial(atlasTex, 'tiles', { sampler: 'nearest-clamp' });
+const layer = createTileLayer(renderer, {
+  material: atlas, tileW: 32, tileH: 32, columns: 60, rows: 34, atlas: { cols: 8, rows: 8 },
+});
+layer.fill(mapData);           // Int16Array | number[], row-major; -1 = empty
+layer.set(col, row, 17);       // one atlas cell; -1 collapses the quad
+layer.origin.x = -camX; layer.scale = 2;
+layer.draw(frame, { order: -1 }); // one frame.mesh draw
+
+const walk = createFlipbook({ frames: atlasFrames({ cols: 8, rows: 8 }, [0, 1, 2, 3]), fps: 10 });
+walk.update(dt); dp.uv = walk.uv; frame.sprite(atlas, dp);
+```
+
+`createTileLayer(renderer, TileLayerOptions)` builds a `TileLayer`: one `Mesh` of
+`columns × rows` quads authored in logical px (tile `(col, row)` spans `col × tileW ..`), whose
+UVs select a cell of the atlas grid (indices row-major). `set(col, row, tileIndex | -1)`, `get`,
+`fill(tiles)` rewrite tiles in a preallocated vertex array; `draw(frame, params?)` uploads only
+the dirty tile range (one `writeBuffer`) and records one `frame.mesh` draw at `origin` (top-left
+corner, mutate in place) and `scale`, carrying `params` (tint, order, layers, emissive, params,
+uniforms, shadow flags) on the layer's own `DrawParams`. `count` is the non-empty tiles; `mesh`
+and `destroy()` are there. Nothing is allocated per frame, and `frame.draw` itself is unchanged.
+
+`createFlipbook(FlipbookOptions)` builds a `Flipbook`: pure timing over `frames: readonly UvRect[]`
+(`UvRect` is `[u0, v0, u1, v1]`, what `DrawParams.uv` takes) at `fps` (default 12), `loop`
+(default true). `update(dt)` advances; `uv` and `frame` are the current frame; a non-looping book
+holds its last frame and sets `done`; `reset()` and `play(frames?)` start over. `fps` and `loop`
+are live. `atlasFrames({ cols, rows }, indices?)` lists a grid atlas's cells as `UvRect`s (every
+cell row-major, or those indices in order); it allocates, so call it at load time.
+
 ### Transforms
 
 ```ts
