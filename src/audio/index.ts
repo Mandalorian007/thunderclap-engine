@@ -12,6 +12,7 @@ export {
   DEFAULT_LIMITER,
   DEFAULT_MIXER,
   DEFAULT_REVERB_SENDS,
+  type FollowTarget,
   type LimiterOptions,
   type MixerSettings,
   type OutputBus,
@@ -94,3 +95,11 @@ export {
   type Variations,
   type VariationsOptions,
 } from './variations';
+export {
+  type AudioZone,
+  type AudioZoneDesc,
+  type AudioZoneHost,
+  AudioZones,
+  type ZoneShape,
+  zoneWeight,
+} from './zones';

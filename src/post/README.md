@@ -45,19 +45,26 @@ post.finishBlend(); // jump to the end values
   at most 0.1 s, so a hitch or a hidden tab slows a blend rather than skipping it. Without
   rendering, call `post.advanceBlend(time)` yourself.
 - `PostBlender` is the same logic as a pure class (no GPU) for custom processors.
+- Finishing passes (ws/post-2): `lut.intensity`, `grain.intensity`, `grain.size`,
+  `grain.luminanceResponse`, `aberration.intensity`, `sharpen.amount`, `outline.thickness`,
+  `outline.intensity`, `outline.color` and the two thresholds ease; `fxaa.enabled`,
+  `outline.enabled`, `lut.texture`, `lut.size`, `grain.animated` and `aberration.radialOnly`
+  switch (`lut.texture` and the booleans at the end of the blend, like any non-number).
 - Nothing allocates per frame.
 
 ## Passes, in order
 
 | Pass | Where | Key settings |
 |---|---|---|
+| Outline (ws/post-2) | scene res, over the scene depth | `outline.thickness` (px), `depthThreshold`, `normalThreshold`. A Roberts cross over linear depth and normals-from-depth written as an edge mask the composite mixes toward `outline.color` × `intensity` before fog. Off by default; off with a one-time warning when the frame has no depth. |
 | AO (ws/post-depth) | half res, over the scene depth | `ao.radius` (world units), `intensity`, `bias`, `power`. Normals from depth derivatives; 12 (`aoSamples`) spiral samples rotated per pixel by interleaved-gradient noise. Off by default. |
 | AO blur | half res | 4×4 depth-aware blur of the AO term. |
 | DoF (ws/post-depth) | half res, over the scene depth and colour | `dof.focusDistance`, `focusRange` (world units), `maxBlur` (px at output res), `nearBlur`. Circle of confusion from linear depth; 24 (`dofTaps`) golden-angle disc taps weighted by each tap's own CoC. Off by default. |
 | Bloom prefilter | half res | `threshold`, `knee` (soft knee on scene colour), `emissiveWeight` (the emissive target always blooms). Karis average to stop fireflies. |
 | Bloom down/up | half-res mip chain, `levels` deep | 13-tap downsample, 9-tap tent upsample blended by `scatter` |
 | God rays | half res | `x, y` light point, `intensity`, `decay`, `density`, `weight`, `color`. Marches 64 samples radially over a light disc (`sourceRadius`, `sourceIntensity`) plus `bloomSource` × bloom, so bright things in the scene also cast shafts. |
-| Composite | full res → swapchain | colour × AO, blended toward the DoF result by CoC, + emissive + `bloom.intensity` × bloom + rays, then fog, exposure, tonemap, grade, vignette, dither |
+| Composite | full res → swapchain | colour × AO, blended toward the DoF result by CoC, + emissive (sampled three times along the radius for `aberration`, then `sharpen`ed), outline, + `bloom.intensity` × bloom + rays, then fog, exposure, tonemap, grade, LUT, grain, vignette, dither |
+| FXAA (ws/post-2) | one extra full-res pass over the composite's output | `fxaa.subpixel`, `edgeThreshold`. FXAA 3.11 console preset on the display-encoded output. Only recorded (and its target only allocated) while `fxaa.enabled`. |
 
 - **Fog** is a screen-space floor mist: a height band from `top` to `bottom` (0..1 of the
   screen, measured down) shaped by `falloff`. Animated fbm sets `noiseScale` and `speed`.
@@ -75,6 +82,41 @@ post.finishBlend(); // jump to the end values
   AO multiplies the scene colour only (not the emissive target). Both blend through `blendTo`
   (`enabled` and `nearBlur` switch when the blend ends).
 
+### Finishing (ws/post-2)
+
+Six sections, all off by default and free while off: with every one off the composite's
+output is unchanged and no extra pass or texture exists.
+
+- **FXAA** (`FxaaSettings`: `enabled`, `subpixel` 0.75, `edgeThreshold` 0.125) is one full-res
+  pass after the composite (after the upscale under `compositeAtScene`), reading the
+  display-encoded output. `subpixel` scales the blend, `edgeThreshold` the relative luma
+  contrast below which a pixel is left alone. `PostQuality.fxaa` caps it off.
+- **LUT** (`LutSettings`: `texture` null, `size` 32, `intensity` 1) looks the graded colour up
+  in a `size`³ `rgba8unorm` 3D texture (red along x, green y, blue z, trilinear at texel
+  centres) and lerps toward the result by `intensity`, after the grade and before the vignette.
+  `createLutTexture(device, size, fn)` builds one from `(r, g, b) => [r, g, b]` on 0..1,
+  `identityLut(device, size)` the neutral one, `lutTexels(size, fn)` the bytes alone (red
+  fastest) for CPU-side checks. `size` is `LutSize` (16 or 32) and must match the texture; the
+  stack binds a 1×1×1 placeholder while `texture` is null and destroys none of them.
+- **Grain** (`GrainSettings`: `intensity` 0, `size` 1 px, `luminanceResponse` 0.5, `animated`
+  true) adds hash noise per `size`-px cell to the graded colour, scaled by `1 − luminanceResponse
+  × luma` so highlights stay clean; `animated` reseeds it with the frame time (`PostInputs.dt`),
+  off it is a fixed pattern.
+- **Aberration** (`AberrationSettings`: `intensity` 0 px, `radialOnly` true) samples the scene
+  term's red and blue `intensity` scene px either side of green along the radius from the
+  centre, scaled by radius² when `radialOnly` (the centre stays clean) or constant otherwise.
+  It, and sharpen, work on the scene term (colour × AO, DoF, emissive) before bloom and fog so
+  the bloom and the mist are not fringed; the LUT and grain come after the grade.
+- **Sharpen** (`SharpenSettings`: `amount` 0) is a 5-tap unsharp mask on the scene term,
+  clamped at zero.
+- **Outline** (`OutlineSettings`: `enabled`, `color` black, `thickness` 1.5 px, `depthThreshold`
+  0.03, `normalThreshold` 0.4, `intensity` 1) needs the scene depth like AO: a scene-res
+  `r8unorm` mask from a Roberts cross `thickness` px out over linear depth (relative to the
+  nearest tap, so far edges count less; the sky is very far) and over normals from depth (1 −
+  cos between the diagonal taps). The composite mixes the scene toward `color` by mask ×
+  `intensity` before fog, so the mist softens outlines with distance. Enabled on a frame without
+  depth it stays off and warns once. `PostQuality.outline` caps it off.
+
 When bloom is disabled the bloom chain is skipped. It still runs if god rays need it
 (`bloomSource > 0`).
 
@@ -85,9 +127,11 @@ When bloom is disabled the bloom chain is skipped. It still runs if god rays nee
 - Output is encoded to sRGB in the shader because the swapchain is `bgra8unorm`.
 - All intermediate textures are reallocated only on resize (or a bloom level cap change).
 - **Quality caps** (`PostQuality`, `post.quality`, `defaultPostQuality()`) are separate from
-  the look: `post.setQuality({ maxBloomLevels, raySamples, fogOctaves, compositeAtScene, aoSamples, dofTaps })`
-  (defaults 8, 64, 5, false, 12, 24; `compositeAtScene` composites at the scene's resolution and
-  upscales when the scene is smaller than the output). Fewer ray samples rescale decay and weight
+  the look: `post.setQuality({ maxBloomLevels, raySamples, fogOctaves, compositeAtScene, aoSamples, dofTaps, fxaa, outline })`
+  (defaults 8, 64, 5, false, 12, 24, true, true; `compositeAtScene` composites at the scene's
+  resolution and upscales when the scene is smaller than the output; `fxaa` and `outline` false
+  cap those passes off whatever the settings say). `lowPostQuality()` is the low tier (4, 24, 3,
+  true, 6, 12, false, false). Fewer ray samples rescale decay and weight
   per step so the shafts keep their reach; fewer fog octaves add back the dropped octaves'
   mean so the mist keeps its density. Bloom, rays, AO and DoF run at half the scene resolution;
   the composite runs at output resolution and samples the scene by UV. `aoSamples` is clamped
@@ -120,7 +164,10 @@ texture; `renderer.endFrame({ present: false })` then only submits. Inside `enco
 
 - `PostSettings` has one section per pass: `bloom: BloomSettings`, `fog: FogSettings`,
   `godRays: GodRaySettings`, `vignette: VignetteSettings`, `grade: GradeSettings` (which holds
-  `tonemap: Tonemap`), `ao: AoSettings`, `dof: DofSettings`. `RGB` is `[r, g, b]`.
+  `tonemap: Tonemap`), `ao: AoSettings`, `dof: DofSettings`, and the finishing sections
+  `fxaa: FxaaSettings`, `lut: LutSettings`, `grain: GrainSettings`, `aberration:
+  AberrationSettings`, `sharpen: SharpenSettings`, `outline: OutlineSettings`. `RGB` is
+  `[r, g, b]`. `LutSize` is `16 | 32`; `LutFn` is `(r, g, b) => readonly [r, g, b]`.
 - `PostSettingsPatch` is a per-section partial of `PostSettings`, the argument of `new
   PostStack(renderer, patch?)`, `set` and `blendTo`. `applyPostPatch(target, patch)` merges one
   into a settings object in place (shallow per section); `defaultPostSettings()` returns a
