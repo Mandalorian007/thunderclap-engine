@@ -104,8 +104,11 @@ res.surface.onResize(({ backbuffer }) => renderer.resize(backbuffer.width, backb
   format }` (what `boot` returns as `res.gpu`); `RendererOptions` has `logicalWidth` and
   `logicalHeight` (1920×1080) and `initialInstances` (4096, doubles when full).
 - `renderer.post` takes any `PostProcessor`: `resize(width, height)` and `encode(encoder, inputs,
-  output)`, where `PostInputs` is `{ color, emissive, time, dt }`. `PostStack` is the engine's;
-  a game writes its own only to replace the whole final stage.
+  output)`, where `PostInputs` is `{ color, emissive, time, dt, depth, projection }`: `depth` is
+  the target's depth texture and `projection` a `PostProjection` (`{ near, far, proj }`, `far`
+  `Infinity` for an infinite far plane) when a depth camera rendered into it this frame, both
+  `null` otherwise (the 2D path). `PostStack` is the engine's; a game writes its own only to
+  replace the whole final stage.
 
 ## Drawing
 

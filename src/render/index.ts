@@ -89,6 +89,7 @@ export type {
   FrameTiming,
   PostInputs,
   PostProcessor,
+  PostProjection,
   RendererGpu,
   RendererOptions,
   RenderStats,

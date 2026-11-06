@@ -53,6 +53,21 @@ export interface PostInputs {
   emissive: TextureLike;
   time: number;
   dt: number;
+  /**
+   * The target's depth buffer when a depth camera rendered into it this frame (ws/post-depth),
+   * else `null` (the 2D path). Same size as `color`; `depth24plus`, bind it as `texture_depth_2d`.
+   */
+  depth: TextureLike | null;
+  /** The last depth camera's projection, with `depth`; `null` without it. */
+  projection: PostProjection | null;
+}
+
+/** A frame's projection for depth-reading post passes: clip planes and the column-major matrix. */
+export interface PostProjection {
+  near: number;
+  /** `Infinity` for an infinite far plane. */
+  far: number;
+  proj: Float32Array;
 }
 
 /**
@@ -328,6 +343,9 @@ export class Renderer implements FrameSink {
   /** Targets rendered into so far this frame, and whether their depth was cleared. */
   private readonly usedTargets: SceneTarget[] = [];
   private readonly usedDepth: boolean[] = [];
+  /** The last depth camera into each used target (ws/post-depth: `PostInputs.projection`). */
+  private readonly usedCamera: Camera[] = [];
+  private readonly postProjection: PostProjection = { near: 0, far: 0, proj: new Float32Array(16) };
   private usedCount = 0;
   private instanceData: Float32Array;
   private instanceBuffer: GPUBuffer;
@@ -502,6 +520,8 @@ export class Renderer implements FrameSink {
       emissive: this.target.emissive,
       time: 0,
       dt: 0,
+      depth: null,
+      projection: null,
     };
     this.resolveInputs = { ...this.postInputs };
     this.resize(1, 1);
@@ -907,6 +927,7 @@ export class Renderer implements FrameSink {
       const att = target.depthAttachment();
       att.depthLoadOp = this.usedDepth[used] ? 'load' : 'clear';
       this.usedDepth[used] = true;
+      this.usedCamera[used] = camera;
       desc.depthStencilAttachment = att;
     } else {
       desc.depthStencilAttachment = undefined;
@@ -1002,6 +1023,7 @@ export class Renderer implements FrameSink {
       inputs.emissive = target.emissive;
       inputs.time = this.frame.time;
       inputs.dt = this.frame.dt;
+      this.fillDepthInputs(inputs, target);
       this.post.encode(enc, inputs, out, viewport);
     } else {
       if (
@@ -1025,8 +1047,39 @@ export class Renderer implements FrameSink {
         const last = --this.usedCount;
         this.usedTargets[i] = this.usedTargets[last]!;
         this.usedDepth[i] = this.usedDepth[last]!;
+        this.usedCamera[i] = this.usedCamera[last]!;
         break;
       }
+    }
+  }
+
+  /**
+   * `PostInputs.depth` / `projection` (ws/post-depth): the target's depth and the last depth
+   * camera's projection when one rendered into it this frame, else `null`. No allocation.
+   */
+  private fillDepthInputs(inputs: PostInputs, target: SceneTarget): void {
+    inputs.depth = null;
+    inputs.projection = null;
+    for (let i = 0; i < this.usedCount; i++) {
+      if (this.usedTargets[i] !== target || !this.usedDepth[i]) continue;
+      const depth = target.depth;
+      if (!depth) return;
+      const p = this.postProjection;
+      p.proj.set(this.usedCamera[i]!.projection);
+      // near = p14 / p10 for both kinds; far = p14 / (p10 + 1) for perspective (∞ when
+      // p10 = -1), (p14 - 1) / p10 for an orthographic matrix (p11 = 0).
+      const p10 = p.proj[10]!;
+      const p14 = p.proj[14]!;
+      p.near = p14 / p10;
+      if (p.proj[11] === 0) {
+        p.far = (p14 - 1) / p10;
+      } else {
+        const k = p10 + 1;
+        p.far = Math.abs(k) < 1e-7 ? Number.POSITIVE_INFINITY : p14 / k;
+      }
+      inputs.depth = depth;
+      inputs.projection = p;
+      return;
     }
   }
 
@@ -1056,6 +1109,7 @@ export class Renderer implements FrameSink {
         const inputs = this.postInputs;
         inputs.time = this.frame.time;
         inputs.dt = this.frame.dt;
+        this.fillDepthInputs(inputs, this.target);
         this.post.encode(enc, inputs, out);
       } else {
         this.present.encode(enc, out, {
