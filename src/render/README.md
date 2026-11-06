@@ -211,13 +211,59 @@ In WGSL the block is `lights.ambient`, `lights.point_count` (u32), `lights.sun_d
 (normalised), `lights.sun_color` and `lights.points[i].position / radius / color`.
 `engine_point_lights(n, p)` sums the point lights' Lambert diffuse with a `(1 - d/radius)²`
 falloff; `engine_lambert(n, p)` adds the ambient and the sun. Toon, rim or wrapped lighting
-reads the same fields and ignores the helpers. `Lights.writeBlock(f32, u32, offset)` is the CPU
-layout (`LIGHTS_BLOCK_FLOATS` = 140 floats; `POINT_LIGHTS_OFFSET_FLOATS`, `POINT_LIGHT_FLOATS`),
-and allocates nothing; `lights.reset()` returns to the unlit default. Drawables that want the
-block add `WGSL_LIGHTS` to their shader; `renderer.globalsLayout` already has binding 2.
-Shadows are not part of the block yet.
-`lights.sun` is a `DirectionalLight`: `dir` (the direction the light travels, any length) and
-`color` (linear RGB; all zero means no sun).
+reads the same fields and ignores the helpers. `Lights.writeBlock(f32, u32, offset, shadow?)`
+is the CPU layout (`LIGHTS_BLOCK_FLOATS` = 168 floats; `POINT_LIGHTS_OFFSET_FLOATS`,
+`POINT_LIGHT_FLOATS`, `SUN_VIEW_PROJ_OFFSET_FLOATS`, `SHADOW_PARAMS_OFFSET_FLOATS`,
+`FOG_OFFSET_FLOATS`), and allocates nothing; `lights.reset()` returns to the unlit default.
+Drawables that want the block add `WGSL_LIGHTS` to their shader (it also declares bindings 3
+and 4 below); `renderer.globalsLayout` already has bindings 2 to 4.
+`lights.sun` is a `DirectionalLight`: `dir` (the direction the light travels, any length),
+`color` (linear RGB; all zero means no sun) and `shadow`.
+
+### Shadows
+
+`lights.sun.shadow` (a `SunShadow`, default `null`) turns on one shadow map for the sun:
+`extent` (half-width of the orthographic box, world units, centred on the camera's position),
+optional `size` (1024, 2048 or 4096 texels; `DEFAULT_SHADOW_SIZE` = 2048), `near`/`far` (depth
+along the light from the camera position; default `-extent..extent`) and `bias` (NDC depth;
+`DEFAULT_SHADOW_BIAS` = 0.0015). With it set, every `render` whose frame has an opaque caster
+encodes a depth-only pass (`'shadow'`, before the `'scene'` pass) over the view's draws through
+the same `engine_vertex` as the scene, then binds the map as `engine_shadow_map`
+(`texture_depth_2d`, `@group(0) @binding(3)`) with the comparison sampler
+`engine_shadow_sampler` (`@binding(4)`). Without a shadow a 1×1 depth placeholder is bound, so
+one bind group layout serves both. The block gains `lights.sun_view_proj` (`mat4x4f`) and
+`lights.shadow_params` (bias, texel size, enabled, -).
+
+- `engine_shadow(world_pos) -> f32`: 0 in shadow, 1 lit, 3×3 PCF; 1 outside the box or when no
+  shadow was rendered. `engine_lambert` multiplies the sun term by it, so a material that uses
+  `engine_lambert` is shadowed with no change.
+- `InstanceParams.castShadow`: default true for meshes in a 3D vertex layout and false for
+  `VERTEX_LAYOUT_2D` sprites and quads, so a 2D scene never renders a shadow pass; blended
+  materials never cast. `InstanceParams.receiveShadow: false` sets instance flag bit 0, read as
+  `in.flags & 1u` in the fragment shader (`VSOut.flags`); the engine helpers do not read it.
+- `ShadowMap` (`SHADOW_FORMAT` = `depth32float`) is the renderer's piece: the texture, the
+  sampler, the placeholder, `sunCamera`, `place(center, sunDir, shadow, size)`,
+  `pipelineFor(layout)` and `ShadowUniforms` (`viewProj`, `bias`, `texelSize`), what
+  `writeBlock` takes as its fourth argument. Games set `lights.sun.shadow`; drawables that
+  render their own passes may use it directly.
+
+### Fog
+
+`lights.fog` is a `Fog`: `color` (linear RGB), `density` (0, the default, is no fog), `near`
+and `far` (distance from the camera position). With `far > near` the fog is linear from `near`
+to `far` scaled by `density` (≤ 1); otherwise it is exponential, `1 - exp(-density × (d -
+near))`. In WGSL the block has `lights.fog` (rgb, density) and `lights.fog_range` (near, far),
+and `engine_fog(color, world_pos) -> vec3f` mixes `color` towards the fog colour; it is the
+identity at density 0, and materials call it on their final colour (the engine does not).
+
+```ts
+lights.sun.shadow = { extent: 20, size: 2048 };
+lights.fog = { color: [0.6, 0.65, 0.75], density: 1, near: 6, far: 24 };
+```
+
+```wgsl
+o.color = vec4f(engine_fog(albedo * engine_lambert(n, in.worldPos), in.worldPos), 1.0);
+```
 
 ## Custom materials
 
@@ -227,14 +273,18 @@ engine prepends a prelude that provides:
 - `globals`: `logicalSize`, `targetSize`, `time`, `dt` at `@group(0) @binding(0)`
 - `camera`: `view`, `proj`, `view_proj` (world → clip), `camera_pos`, `viewport` (scene target
   px) and `view_index` (from `camera.viewIndex`) at `@group(0) @binding(1)`
-- `lights`: `ambient`, `point_count`, `sun_dir`, `sun_color` and `points[16]` (`position`,
-  `radius`, `color`) at `@group(0) @binding(2)`, with `engine_lambert(normal, world_pos)` and
-  `engine_point_lights(normal, world_pos)`. See "Lighting" above.
+- `lights`: `ambient`, `point_count`, `sun_dir`, `sun_color`, `points[16]` (`position`,
+  `radius`, `color`), `sun_view_proj`, `shadow_params`, `fog` and `fog_range` at
+  `@group(0) @binding(2)`, the sun's shadow map `engine_shadow_map` and comparison sampler
+  `engine_shadow_sampler` at bindings 3 and 4, with `engine_lambert(normal, world_pos)`,
+  `engine_point_lights(normal, world_pos)`, `engine_shadow(world_pos)` and
+  `engine_fog(color, world_pos)`. See "Lighting" above.
 - noise helpers: `engine_hash21`, `engine_hash22`, `engine_noise`, `engine_fbm(p, octaves)`,
   `engine_luma`
-- `VSOut { clip, uv, local, color, params, world, emissive, size, normal, worldPos }`, where
-  `local` is 0..1 across the quad, `world` is the logical position (xy), `normal` is the
-  world-space normal (`(0, 0, -1)` for 2D meshes) and `worldPos` the world xyz
+- `VSOut { clip, uv, local, color, params, world, emissive, size, normal, worldPos, flags }`,
+  where `local` is 0..1 across the quad, `world` is the logical position (xy), `normal` is the
+  world-space normal (`(0, 0, -1)` for 2D meshes), `worldPos` the world xyz and `flags` the
+  instance flag bits (bit 0: `receiveShadow: false`)
 - `engine_local_position(v)`, `engine_local_normal(v)`, `engine_world_position(v)` and
   `engine_vertex(v)`, the same for every vertex layout
 - `FragOut { color: @location(0), emissive: @location(1) }`

@@ -56,13 +56,22 @@ struct EngineCamera {
 
 /**
  * The lighting block, `@group(0) @binding(2)` (see `Lights` / `lights.ts`), in every material
- * prelude. `lights.ambient`, `lights.point_count`, `lights.sun_dir` (normalised, the direction
- * the light travels), `lights.sun_color` and `lights.points[i]` (`position`, `radius`, `color`).
+ * and drawable prelude: `lights.ambient`, `lights.point_count`, `lights.sun_dir` (the way
+ * the light travels), `lights.sun_color`, `lights.points[i]` (`position`, `radius`, `color`),
+ * `lights.sun_view_proj` (world → sun clip), `lights.shadow_params` (bias, map texel size,
+ * enabled, pad), `lights.fog` (rgb, density) and `lights.fog_range` (near, far, pad, pad).
+ * The sun's shadow map (`texture_depth_2d`) and its comparison sampler sit at `@binding(3)`
+ * and `@binding(4)`; with no shadow pass a 1×1 depth texture is bound there.
  *
  * Helpers a game may call or ignore: `engine_point_lights(normal, world_pos)` sums the point
  * lights' diffuse (Lambert × a smooth falloff that reaches zero at `radius`);
- * `engine_lambert(normal, world_pos)` is ambient + sun Lambert + the point lights, so with the
- * default block it returns `vec3f(1.0)` and `albedo * engine_lambert(...)` is unlit.
+ * `engine_shadow(world_pos)` is the sun's visibility, 0..1 (3×3 PCF over the shadow map; 1
+ * outside the map or when there is no shadow pass); `engine_fog(color, world_pos)` blends
+ * `color` toward the fog colour by the distance to the camera (linear over `fog_range` when
+ * `far > near`, else exponential past `near`; identity when density is 0);
+ * `engine_lambert(normal, world_pos)` is ambient + sun Lambert × `engine_shadow` + the point
+ * lights, so with the default block it returns `vec3f(1.0)` and `albedo * engine_lambert(...)`
+ * is unlit.
  */
 export const WGSL_LIGHTS = /* wgsl */ `
 struct EnginePointLight {
@@ -79,8 +88,14 @@ struct EngineLights {
   sun_color: vec3f,
   _pad1: f32,
   points: array<EnginePointLight, 16>,
+  sun_view_proj: mat4x4f,
+  shadow_params: vec4f,
+  fog: vec4f,
+  fog_range: vec4f,
 };
 @group(0) @binding(2) var<uniform> lights: EngineLights;
+@group(0) @binding(3) var engine_shadow_map: texture_depth_2d;
+@group(0) @binding(4) var engine_shadow_sampler: sampler_comparison;
 fn engine_point_lights(normal: vec3f, world_pos: vec3f) -> vec3f {
   var sum = vec3f(0.0);
   for (var i = 0u; i < lights.point_count; i++) {
@@ -93,8 +108,36 @@ fn engine_point_lights(normal: vec3f, world_pos: vec3f) -> vec3f {
   }
   return sum;
 }
+fn engine_shadow(world_pos: vec3f) -> f32 {
+  if (lights.shadow_params.z == 0.0) { return 1.0; }
+  let clip = lights.sun_view_proj * vec4f(world_pos, 1.0);
+  let ndc = clip.xyz / clip.w;
+  if (any(abs(ndc.xy) > vec2f(1.0)) || ndc.z < 0.0 || ndc.z > 1.0) { return 1.0; }
+  let uv = vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+  let depth = ndc.z - lights.shadow_params.x;
+  let texel = lights.shadow_params.y;
+  var lit = 0.0;
+  for (var y = -1; y <= 1; y++) {
+    for (var x = -1; x <= 1; x++) {
+      let o = vec2f(f32(x), f32(y)) * texel;
+      lit += textureSampleCompareLevel(engine_shadow_map, engine_shadow_sampler, uv + o, depth);
+    }
+  }
+  return lit / 9.0;
+}
+fn engine_fog(color: vec3f, world_pos: vec3f) -> vec3f {
+  let density = lights.fog.w;
+  if (density == 0.0) { return color; }
+  let d = distance(world_pos, camera.camera_pos.xyz);
+  let near = lights.fog_range.x;
+  let far = lights.fog_range.y;
+  let linear = saturate((d - near) / max(far - near, 1e-4)) * saturate(density);
+  let expo = 1.0 - exp(-density * max(d - near, 0.0));
+  let f = select(expo, linear, far > near);
+  return mix(color, lights.fog.rgb, f);
+}
 fn engine_lambert(normal: vec3f, world_pos: vec3f) -> vec3f {
-  let sun = lights.sun_color * max(dot(normal, -lights.sun_dir), 0.0);
+  let sun = lights.sun_color * max(dot(normal, -lights.sun_dir), 0.0) * engine_shadow(world_pos);
   return lights.ambient + sun + engine_point_lights(normal, world_pos);
 }
 `;
@@ -141,7 +184,8 @@ fn engine_luma(c: vec3f) -> f32 {
  * Prelude prepended to every material, generated per vertex layout. Declares `VertexIn` (the
  * layout's vertex fields plus the 28-float instance: 3×4 world matrix rows `m0..m2`,
  * `uvRect`, `tint`, `params`, `misc` = emissive, flags, size.xy), the default vertex entry
- * `vs_main`, the `VSOut` varyings and the `FragOut` MRT struct.
+ * `vs_main`, the `VSOut` varyings (`flags` is the instance's flag bits: bit 0 set means
+ * `receiveShadow: false`) and the `FragOut` MRT struct.
  *
  * Helpers: `engine_local_position(v)` / `engine_local_normal(v)` (object space, `vec3f` for
  * every layout), `engine_world_position(v)` and `engine_vertex(v)`; the lighting block and
@@ -174,6 +218,7 @@ struct VSOut {
   @location(6) size: vec2f,
   @location(7) normal: vec3f,
   @location(8) worldPos: vec3f,
+  @location(9) @interpolate(flat) flags: u32,
 };
 
 struct FragOut {
@@ -209,6 +254,7 @@ fn engine_vertex(v: VertexIn) -> VSOut {
   o.size = v.misc.zw;
   o.normal = normalize(vec3f(dot(v.m0.xyz, n), dot(v.m1.xyz, n), dot(v.m2.xyz, n)));
   o.worldPos = world3;
+  o.flags = u32(v.misc.y);
   return o;
 }
 

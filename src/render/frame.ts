@@ -17,6 +17,18 @@ export interface InstanceParams {
   /** Emissive strength (`in.emissive`); the built-in sprite writes colour × this to bloom. */
   emissive?: number;
   /**
+   * Draw this instance into the sun's shadow map when `frame.lights.sun.shadow` is set and the
+   * material is opaque. Default: true for meshes in a 3D vertex layout, false for 2D sprites
+   * and quads (`VERTEX_LAYOUT_2D`), so a 2D scene never renders a shadow pass.
+   */
+  castShadow?: boolean;
+  /**
+   * Set false to mark the instance as not receiving the sun's shadow: instance flag bit 0
+   * (`in.flags & 1u`) is set and a material may skip `engine_shadow` for it. The engine's
+   * `engine_lambert` does not read the flag. Default true (flag bit clear).
+   */
+  receiveShadow?: boolean;
+  /**
    * This draw's own uniform block (f32s, copied at call time) for a material created with
    * `perDrawUniforms`. Lets many instances share one material, each with its own uniforms.
    */
