@@ -36,6 +36,7 @@ import {
   Transform,
   VERTEX_LAYOUT_3D,
 } from '@thunderclap/engine/render';
+import { createPerfMonitor, createPerfOverlay } from '@thunderclap/engine/ui';
 import type { HarnessPbrApi, HarnessPbrState } from './pbr-state';
 
 const root = document.getElementById('root') as HTMLElement;
@@ -63,6 +64,7 @@ const state: HarnessPbrState = {
   },
   stats: { drawCalls: 0, instances: 0 },
   gpuErrors: 0,
+  perf: null,
   lights: { sun: false, points: 0, spots: 0, shadow: false, fog: false },
   materials: 0,
 };
@@ -441,6 +443,12 @@ async function main(): Promise<void> {
     TILE_CENTRE[2],
   ] as const;
 
+  // ws/perf-overlay: the frame-cost readout, shown with `?perf` (the monitor always samples).
+  const perf = createPerfMonitor();
+  const perfHud = new URLSearchParams(location.search).has('perf')
+    ? createPerfOverlay(perf, { parent: root })
+    : null;
+
   const loop = new GameLoop({
     update() {
       input.update();
@@ -472,6 +480,8 @@ async function main(): Promise<void> {
       state.stats.drawCalls = renderer.stats.drawCalls;
       state.stats.instances = renderer.stats.instances;
       state.gpuErrors = gpuDiagnostics.errorCount;
+      state.perf = perf.sample(renderer);
+      perfHud?.update();
       const ls = state.lights;
       ls.sun = frame.lights.sun.color[0]! > 0;
       ls.points = frame.lights.points.length;
