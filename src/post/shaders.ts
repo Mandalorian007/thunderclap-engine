@@ -136,6 +136,9 @@ ${WGSL_POST_UNIFORMS}
 @group(0) @binding(3) var emissiveTex: texture_2d<f32>;
 @group(0) @binding(4) var bloomTex: texture_2d<f32>;
 @group(0) @binding(5) var raysTex: texture_2d<f32>;
+// Depth passes (ws/post-depth); bound to a placeholder and ignored while P.ao.x / P.dof.x are 0.
+@group(0) @binding(6) var aoTex: texture_2d<f32>;
+@group(0) @binding(7) var dofTex: texture_2d<f32>;
 
 fn aces(x: vec3f) -> vec3f {
   let a = 2.51;
@@ -156,7 +159,17 @@ fn to_srgb(c: vec3f) -> vec3f {
   let uv = in.uv;
   let aspect = P.frame.y;
   let time = P.frame.x;
-  var c = textureSampleLevel(colorTex, samp, uv, 0.0).rgb + textureSampleLevel(emissiveTex, samp, uv, 0.0).rgb;
+  var scene = textureSampleLevel(colorTex, samp, uv, 0.0).rgb;
+  if (P.ao.x > 0.5) {
+    scene *= textureSampleLevel(aoTex, samp, uv, 0.0).r;
+  }
+  if (P.dof.x > 0.5) {
+    // Alpha holds the signed CoC in uv of the width; blend in the blur from half a scene px up.
+    let blur = textureSampleLevel(dofTex, samp, uv, 0.0);
+    let px = abs(blur.a) / P.frame.z;
+    scene = mix(scene, blur.rgb, smoothstep(0.5, 2.0, px));
+  }
+  var c = scene + textureSampleLevel(emissiveTex, samp, uv, 0.0).rgb;
 
   var bloom = vec3f(0.0);
   if (P.enables.x > 0.5) {
