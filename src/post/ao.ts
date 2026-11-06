@@ -5,9 +5,26 @@
  * Positions come back from depth through `P.invProj`; normals from the smaller of the two depth
  * differences on each axis (so creases keep their edge). 12 (`PostQuality.aoSamples`) spiral
  * samples per pixel, rotated per pixel by interleaved-gradient noise, weighted by the cosine
- * to the normal and a smooth falloff inside `ao.radius`.
+ * to the normal and a smooth falloff inside `ao.radius`. The radius projects to the screen
+ * through the projection's x/y scale, over the view depth for a perspective camera and without
+ * it for an orthographic one (`aoProjectedRadius`, ws/post-4).
  */
 import { WGSL_POST_UNIFORMS } from './settings';
+
+/**
+ * The AO sample radius in uv (0..1 of the screen) for a world `radius` at view depth `z`
+ * through a projection of x scale `projScale`: `projScale × radius / z / 2` under a
+ * perspective camera, `projScale × radius / 2` under an orthographic one (where depth does not
+ * shrink anything). The shader's `ruv` does the same.
+ */
+export function aoProjectedRadius(
+  radius: number,
+  projScale: number,
+  z: number,
+  ortho: boolean,
+): number {
+  return (projScale * radius * 0.5) / (ortho ? 1 : Math.max(z, 1e-3));
+}
 
 /** Shared by both AO passes and DoF: depth → view-space position. */
 export const WGSL_DEPTH_VIEW = /* wgsl */ `
@@ -66,8 +83,10 @@ fn ign(px: vec2f) -> f32 {
 
   let radius = P.ao.y;
   let z = -p.z;
-  // World radius projected to uv: proj scale / depth, halved for the -1..1 → 0..1 range.
-  let ruv = vec2f(P.ao2.z, P.ao2.w) * radius / max(z, 1e-3) * 0.5;
+  // World radius projected to uv: proj scale (over the depth under a perspective camera, not
+  // under an ortho one: P.quality.z), halved for the -1..1 → 0..1 range.
+  let zs = select(max(z, 1e-3), 1.0, P.quality.z > 0.5);
+  let ruv = vec2f(P.ao2.z, P.ao2.w) * radius / zs * 0.5;
   let count = i32(P.ao2.y);
   let rot = ign(in.pos.xy) * 6.2831853;
   var occ = 0.0;

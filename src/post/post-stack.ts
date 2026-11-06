@@ -1,4 +1,5 @@
 import { mat4 } from '../core/math';
+import type { Camera } from '../render/camera';
 import type { FullscreenPass } from '../render/fullscreen';
 import type { PostInputs, PostProcessor, Renderer } from '../render/renderer';
 import type { SceneTargetViewport } from '../render/scene-target';
@@ -72,6 +73,11 @@ interface InputGroups {
  * off by default): TAA, screen-space reflections, auto-exposure, white balance, camera motion
  * blur and lens dirt. Plug it into a renderer with `renderer.post = new PostStack(r)`.
  *
+ * Every pass reads the frame from `PostInputs` alone (ws/post-4): the view matrices and the
+ * jitter from `view`, the projection from `projection`, per-surface roughness and metalness
+ * from `roughMetal`, per-pixel motion from `velocity`. While TAA runs the stack declares
+ * `wantsJitter` and drives the Halton jitter of the cameras given to `addJitterCamera`.
+ *
  * Settings are plain objects you can mutate at runtime (`post.settings.bloom.intensity = 2`)
  * or patch with `post.set({ fog: { density: 0.4 } })`. Disabled passes are skipped entirely.
  * `post.blendTo(patch, seconds, ease?)` eases numeric settings over time instead.
@@ -83,7 +89,10 @@ export class PostStack implements PostProcessor {
    * presets and blends keep working under a lower quality tier. Change with `setQuality`.
    */
   readonly quality: PostQuality = defaultPostQuality();
-  /** The TAA jitter sequence (ws/post-3): `post.taa.jitter(frame)` is this frame's offset. */
+  /**
+   * The TAA jitter sequence (ws/post-3): `post.taa.jitter(i)` is the `i`-th offset. While TAA
+   * runs the stack hands it to the `addJitterCamera` cameras through `Camera.setJitter`.
+   */
   readonly taa = new Taa(8);
   /** How many times the TAA history was reset (first frame, resize, re-enable). */
   historyResets = 0;
@@ -164,11 +173,7 @@ export class PostStack implements PostProcessor {
   private ssrView: GPUTextureView | null = null;
   private motionBlurTex: GPUTexture | null = null;
   private motionBlurView: GPUTextureView | null = null;
-  /** The frame's and the previous frame's view-projection, and the clip → previous clip matrix. */
-  private readonly viewProj = mat4.create();
-  private readonly prevViewProj = mat4.create();
-  private readonly invViewProj = mat4.create();
-  private prevValid = false;
+  /** TAA frames run: the index of the next jitter in the sequence. */
   private frameIndex = 0;
   private readonly frameState: PostFrameState = {
     jitterX: 0,
@@ -176,6 +181,8 @@ export class PostStack implements PostProcessor {
     reset: 1,
     reproj: mat4.create(),
     autoExposure: 1,
+    roughMetal: 0,
+    objectVelocity: 0,
   };
   /** The current EV (`exposure`), eased in auto mode, `log2(grade.exposure)` in manual. */
   private ev = 0;
@@ -189,6 +196,7 @@ export class PostStack implements PostProcessor {
     projX: 1,
     projY: 1,
     outputWidth: 1,
+    ortho: false,
   };
 
   private raysGroup: GPUBindGroup | null = null;
@@ -202,6 +210,12 @@ export class PostStack implements PostProcessor {
   private readonly noClear = null;
   private readonly blender = new PostBlender();
   private lastTime: number | null = null;
+  /** The cameras whose projection the stack jitters while TAA runs (`addJitterCamera`). */
+  private readonly jitterCameras: Camera[] = [];
+  /** True while the jitter cameras hold a jitter the stack set (cleared once TAA stops). */
+  private jittering = false;
+  private boundRoughMetal: GPUTextureView | null = null;
+  private boundVelocity: GPUTextureView | null = null;
 
   constructor(renderer: Renderer, patch: PostSettingsPatch = {}) {
     this.renderer = renderer;
@@ -290,13 +304,13 @@ export class PostStack implements PostProcessor {
       label: 'post-ssr',
       wgsl: SSR_WGSL,
       format: HDR,
-      textures: 1,
+      textures: 2,
     });
     this.motionBlurPass = new DepthPass(renderer, {
       label: 'post-motion-blur',
       wgsl: MOTION_BLUR_WGSL,
       format: HDR,
-      textures: 1,
+      textures: 2,
     });
     this.upscale = renderer.createFullscreenPass({
       label: 'post-upscale',
@@ -360,6 +374,35 @@ export class PostStack implements PostProcessor {
    */
   get exposure(): number {
     return this.ev;
+  }
+
+  /**
+   * The renderer reads this before each view (`PostProcessor.wantsJitter`): true while TAA is
+   * enabled and allowed by `quality.taa`, so the cameras' `setJitter` reaches their projection.
+   */
+  get wantsJitter(): boolean {
+    return this.settings.taa.enabled && this.quality.taa;
+  }
+
+  /**
+   * Jitter `camera`'s projection while TAA runs (ws/post-4): after each TAA frame the stack
+   * sets the next Halton (2, 3) offset with `camera.setJitter`, and clears it once TAA stops.
+   * Add the camera that renders into the target the stack resolves, usually the one passed to `render`.
+   * Without one TAA still runs on an unjittered frame, where it only smooths over motion.
+   */
+  addJitterCamera(camera: Camera): this {
+    if (!this.jitterCameras.includes(camera)) this.jitterCameras.push(camera);
+    return this;
+  }
+
+  /** Stop jittering `camera` (its jitter is cleared). */
+  removeJitterCamera(camera: Camera): this {
+    const i = this.jitterCameras.indexOf(camera);
+    if (i >= 0) {
+      this.jitterCameras.splice(i, 1);
+      camera.clearJitter();
+    }
+    return this;
   }
 
   /** True when the last `encode` ran the TAA resolve (depth present, enabled, allowed). */
@@ -472,7 +515,9 @@ export class PostStack implements PostProcessor {
       this.warnedOutline = true;
       console.warn('[post] outline needs the scene depth; this frame has none, so it is off');
     }
-    // Post 3: the temporal passes need the depth and the camera's view (the renderer's camera).
+    // Post 3: the temporal passes need the depth; they reproject through `inputs.view` (an
+    // unknown view reprojects to itself).
+    const view = inputs.view;
     const wantTaa = depth !== null && s.taa.enabled && q.taa;
     const wantMotionBlur = depth !== null && s.motionBlur.enabled && q.motionBlur;
     const wantSsr = depth !== null && s.ssr.enabled && q.ssr;
@@ -489,7 +534,13 @@ export class PostStack implements PostProcessor {
     if (wantAuto && !this.exposurePasses) this.exposurePasses = new ExposurePasses(r);
     this.bindLut(s.lut.texture);
     this.bindDirt(s.bloom.dirt?.texture ?? null);
-    this.bindInputs(inputs.emissive.view, depth ? depth.view : null);
+    // Per-surface inputs (ws/post-4): bound only while a pass that reads them runs.
+    const roughMetal = wantSsr && inputs.roughMetal ? inputs.roughMetal.view : null;
+    const objectVelocity =
+      wantMotionBlur && s.motionBlur.mode === 'object' && inputs.velocity
+        ? inputs.velocity.view
+        : null;
+    this.bindInputs(inputs.emissive.view, depth ? depth.view : null, roughMetal, objectVelocity);
     if (s.grain.animated && s.grain.intensity > 0) this.grainSeed += dt;
     let depthInfo: PostDepthInfo | null = null;
     if (depth && proj) {
@@ -499,32 +550,26 @@ export class PostStack implements PostProcessor {
       depthInfo.projX = proj.proj[0]!;
       depthInfo.projY = proj.proj[5]!;
       depthInfo.outputWidth = outW;
+      depthInfo.ortho = proj.proj[11] === 0;
       if (!mat4.invert(depthInfo.invProj as Float32Array, proj.proj)) depthInfo = null;
     }
 
-    // Post 3 frame state: this frame's clip → the previous frame's clip, the jitter, the EV.
+    // Post 3 frame state, from the view (ws/post-4): this frame's (jittered) clip → the previous
+    // frame's clip, the jitter the camera drew with, the EV, the per-surface input flags.
     const fs = this.frameState;
     if (!wantTaa) this.historyValid = false;
-    if (depthInfo && proj) {
-      mat4.multiply(this.viewProj, proj.proj, r.camera.view);
-      const inv = mat4.invert(this.invViewProj, this.viewProj);
-      if (this.prevValid && inv) {
-        taaReprojection(fs.reproj as Float32Array, this.prevViewProj, this.invViewProj);
-      } else {
-        mat4.identity(fs.reproj as Float32Array);
-      }
-      mat4.copy(this.prevViewProj, this.viewProj);
-      this.prevValid = true;
+    if (depthInfo && view) {
+      taaReprojection(fs.reproj as Float32Array, view.previousViewProj, view.invViewProj);
     } else {
       mat4.identity(fs.reproj as Float32Array);
-      this.prevValid = false;
     }
     const reset = wantTaa && !this.historyValid;
     if (reset) this.historyResets++;
     fs.reset = reset ? 1 : 0;
-    const jitter = this.taa.jitter(this.frameIndex++);
-    fs.jitterX = wantTaa ? jitter[0] / this.width : 0;
-    fs.jitterY = wantTaa ? jitter[1] / this.height : 0;
+    fs.jitterX = wantTaa && view ? view.jitter[0] / iw : 0;
+    fs.jitterY = wantTaa && view ? view.jitter[1] / ih : 0;
+    fs.roughMetal = roughMetal ? 1 : 0;
+    fs.objectVelocity = objectVelocity ? 1 : 0;
     this.updateExposure(wantAuto, dt);
 
     packPostUniforms(
@@ -572,6 +617,7 @@ export class PostStack implements PostProcessor {
       this.historyValid = true;
       scene = this.histViews![write]!;
     }
+    this.stepJitter(this.taaOn);
     this.motionBlurOn = wantMotionBlur && depthInfo !== null;
     if (this.motionBlurOn && depthView) {
       const group = this.motionBlurGroup(scene, depthView);
@@ -681,6 +727,23 @@ export class PostStack implements PostProcessor {
         viewport,
         timestampWrites: timer?.pass('fxaa'),
       });
+    }
+  }
+
+  /**
+   * After a TAA frame, give the jitter cameras the next offset of the sequence (the renderer
+   * applies it to the next frame's projection); once TAA stops, clear it, once.
+   */
+  private stepJitter(taa: boolean): void {
+    const cams = this.jitterCameras;
+    if (taa) {
+      const j = this.taa.jitter(this.frameIndex++);
+      for (let i = 0; i < cams.length; i++) cams[i]!.setJitter(j[0], j[1]);
+      this.jittering = cams.length > 0;
+    } else if (this.jittering) {
+      for (let i = 0; i < cams.length; i++) cams[i]!.clearJitter();
+      this.jittering = false;
+      this.frameIndex = 0;
     }
   }
 
@@ -865,15 +928,31 @@ export class PostStack implements PostProcessor {
     this.groups.clear();
     this.boundEmissive = null;
     this.boundDepth = null;
+    this.boundRoughMetal = null;
+    this.boundVelocity = null;
     this.exposurePasses?.invalidate();
   }
 
   /** Track the emissive and depth views; a change drops the cached groups and rebuilds the depth-only ones. */
-  private bindInputs(emissive: GPUTextureView, depth: GPUTextureView | null): void {
-    if (emissive === this.boundEmissive && depth === this.boundDepth) return;
+  private bindInputs(
+    emissive: GPUTextureView,
+    depth: GPUTextureView | null,
+    roughMetal: GPUTextureView | null,
+    velocity: GPUTextureView | null,
+  ): void {
+    if (
+      emissive === this.boundEmissive &&
+      depth === this.boundDepth &&
+      roughMetal === this.boundRoughMetal &&
+      velocity === this.boundVelocity
+    ) {
+      return;
+    }
     this.groups.clear();
     this.boundEmissive = emissive;
     this.boundDepth = depth;
+    this.boundRoughMetal = roughMetal;
+    this.boundVelocity = velocity;
     if (depth) {
       this.aoGroup = this.aoView ? this.ao.createBindGroup(depth, []) : null;
       this.aoBlurGroup = this.aoView ? this.aoBlur.createBindGroup(depth, [this.aoView]) : null;
@@ -930,13 +1009,20 @@ export class PostStack implements PostProcessor {
   }
 
   private ssrGroup(g: InputGroups, scene: GPUTextureView, depth: GPUTextureView): GPUBindGroup {
-    if (!g.ssr) g.ssr = this.ssrPass.createBindGroup(depth, [scene]);
+    // Without the rough-metal target the scene colour stands in (the shader does not read it).
+    if (!g.ssr) g.ssr = this.ssrPass.createBindGroup(depth, [scene, this.boundRoughMetal ?? scene]);
     return g.ssr;
   }
 
   private motionBlurGroup(scene: GPUTextureView, depth: GPUTextureView): GPUBindGroup {
     const g = this.groupsFor(scene);
-    if (!g.motionBlur) g.motionBlur = this.motionBlurPass.createBindGroup(depth, [scene]);
+    // Without object velocity the scene colour stands in (the shader does not read it).
+    if (!g.motionBlur) {
+      g.motionBlur = this.motionBlurPass.createBindGroup(depth, [
+        scene,
+        this.boundVelocity ?? scene,
+      ]);
+    }
     return g.motionBlur;
   }
 

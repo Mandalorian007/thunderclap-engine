@@ -1,3 +1,4 @@
+export { aoProjectedRadius } from './ao';
 export { type Ease, easeIn, easeInOut, easeLinear, easeOut, PostBlender } from './blend';
 export {
   adaptExposure,
@@ -27,6 +28,7 @@ export type {
   GrainSettings,
   LensDirtSettings,
   LutSettings,
+  MotionBlurMode,
   MotionBlurSettings,
   OutlineSettings,
   PostFrameState,
@@ -44,11 +46,12 @@ export type {
 } from './settings';
 export {
   applyPostPatch,
+  clonePostSettings,
   defaultPostQuality,
   defaultPostSettings,
   lowPostQuality,
   postQualityFor,
 } from './settings';
-export { ssrEdgeFade, ssrRoughnessFade, ssrStep } from './ssr';
+export { ssrEdgeFade, ssrRoughnessFade, ssrStep, ssrSurfaceWeight } from './ssr';
 export { halton, TAA_MAX_FEEDBACK, Taa, taaBlendWeight, taaReprojection } from './taa';
 export { planckianXy, whiteBalanceMatrix } from './white-balance';

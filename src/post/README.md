@@ -57,12 +57,12 @@ post.finishBlend(); // jump to the end values
 | Pass | Where | Key settings |
 |---|---|---|
 | Outline (ws/post-2) | scene res, over the scene depth | `outline.thickness` (px), `depthThreshold`, `normalThreshold`. A Roberts cross over linear depth and normals-from-depth written as an edge mask the composite mixes toward `outline.color` × `intensity` before fog. Off by default; off with a one-time warning when the frame has no depth. |
-| AO (ws/post-depth) | half res, over the scene depth | `ao.radius` (world units), `intensity`, `bias`, `power`. Normals from depth derivatives; 12 (`aoSamples`) spiral samples rotated per pixel by interleaved-gradient noise. Off by default. |
+| AO (ws/post-depth) | half res, over the scene depth | `ao.radius` (world units), `intensity`, `bias`, `power`. Normals from depth derivatives; 12 (`aoSamples`) spiral samples rotated per pixel by interleaved-gradient noise. Under an ortho projection the screen radius drops the depth divide (`aoProjectedRadius`, ws/post-4), so it holds across zoom and distance. Off by default. |
 | AO blur | half res | 4×4 depth-aware blur of the AO term. |
-| TAA (ws/post-3) | scene res, over the scene depth, into an `rgba16float` history pair | `taa.feedback` 0.9, `sharpen` 0.2, `clampMode` `aabb` \| `variance`. Reprojects last frame's resolve by the previous view-projection against the current depth, clamps it to the 3×3 neighbourhood, blends; the raw colour is read at the frame's Halton (2, 3) jitter. The resolve replaces the scene colour downstream. Off by default; needs depth. |
-| Motion blur (ws/post-3) | scene res, over the scene depth | `motionBlur.intensity`, `maxSamples` 8. Per-pixel velocity from the depth reprojected by the previous view-projection (camera motion only), the colour gathered along it. Off by default; needs depth. |
+| TAA (ws/post-3) | scene res, over the scene depth, into an `rgba16float` history pair | `taa.feedback` 0.9, `sharpen` 0.2, `clampMode` `aabb` \| `variance`. Reprojects last frame's resolve by the previous view-projection against the current depth, clamps it to the 3×3 neighbourhood, blends. Since ws/post-4 the camera's projection carries the frame's Halton (2, 3) jitter (`wantsJitter`) and the reprojection comes from `PostInputs.view`; the resolve un-jitters by `view.jitter`. The resolve replaces the scene colour downstream. Off by default; needs depth. |
+| Motion blur (ws/post-3) | scene res, over the scene depth | `motionBlur.mode` `'object'` \| `'camera'`, `intensity`, `maxSamples` 8. Per-pixel velocity from the velocity target in `'object'` mode (ws/post-4: moving instances blur under a still camera), else, and where nothing wrote one, the depth reprojected by the previous view-projection; the colour gathered along it. Off by default; needs depth. |
 | DoF (ws/post-depth) | half res, over the scene depth and colour | `dof.focusDistance`, `focusRange` (world units), `maxBlur` (px at output res), `nearBlur`. Circle of confusion from linear depth; 24 (`dofTaps`) golden-angle disc taps weighted by each tap's own CoC. Off by default. |
-| SSR (ws/post-3) | half res, over the scene depth and colour | `ssr.maxSteps` 32, `thickness`, `maxDistance`, `roughnessCutoff` 0.6, `intensity`, `fadeEdges`. A view-space ray march from normals-from-depth (the AO helper), faded by roughness and at the screen edges, added to the scene before bloom. Off by default; needs depth. |
+| SSR (ws/post-3) | half res, over the scene depth and colour | `ssr.maxSteps` 32, `thickness`, `maxDistance`, `roughnessCutoff` 0.6, `intensity`, `fadeEdges`. A view-space ray march from normals-from-depth (the AO helper), faded by roughness (per surface from the rough-metal target since ws/post-4, else a mirror) and at the screen edges, weighted by metalness over Schlick Fresnel, added to the scene before bloom. Off by default; needs depth. |
 | Exposure histogram, exposure average (ws/post-3) | two compute passes over the scene colour | `exposure.histogramLow` 0.4, `histogramHigh` 0.95, `keyValue` 0.18, `minEv`, `maxEv`, `speedUp`, `speedDown`. A 64-bin log-luminance histogram, then the mean log luminance between the percentiles, read back the next frame; the EV eases toward the target. Only while `exposure.mode` is `'auto'`. |
 | Bloom prefilter | half res | `threshold`, `knee` (soft knee on scene colour), `emissiveWeight` (the emissive target always blooms). Karis average to stop fireflies. |
 | Bloom down/up | half-res mip chain, `levels` deep | 13-tap downsample, 9-tap tent upsample blended by `scatter` |
@@ -186,22 +186,51 @@ and the 2D goldens are unchanged. TAA, SSR and motion blur need a frame with dep
   test asserts the packed size equals the WGSL struct's for every field. `PostFrameState` is
   the per-frame part the stack fills (jitter, reset flag, reprojection, auto exposure).
 
-The renderer now provides what these passes asked for (ws/render-4; see *Camera jitter and
-history* and *Aux targets* in `src/render/README.md`): `Camera.setJitter(x, y)` offsets the
-projection, applied only while the post processor declares `wantsJitter`; `PostInputs.view`
-(`PostView`: `viewProj`, `invViewProj`, `previousViewProj`, `previousView`, `jitter`) carries
-the matrices of the view that rendered the target; `SceneTargetDesc.aux` adds an `rg8unorm`
-roughness/metalness target (`PostInputs.roughMetal`) that the standard material writes and an
-`rg16float` velocity target (`PostInputs.velocity`) that moving `InstanceList`s and skinned
-palettes with `history` write. This stack does not read any of them yet: TAA still resamples
-the raw colour at its own jitter and reprojects by the camera it reads itself, SSR still fades
-by `roughnessCutoff`, and motion blur still blurs along the camera's reprojection only.
-Switching them over (`wantsJitter: true`, the `view` inputs, per-pixel roughness, object
-velocity) is ws/post-4.
+The renderer provides what these passes asked for (ws/render-4; see *Camera jitter and
+history* and *Aux targets* in `src/render/README.md`), and since ws/post-4 the stack reads it
+all from `PostInputs`; see *Post 4*.
 
 The harness page `harness/post3.html` (a lit scene with a mirror floor, a grey block and a
 bright sky patch over a dark backdrop; `?taa ?ssr ?autoexp ?wb=3200 ?mblur ?dirt ?still`)
 publishes the passes, the EV and the probes `e2e/post3.spec.ts` reads.
+
+### Post 4 (ws/post-4)
+
+The stack reads the frame from `PostInputs` only: nothing in src/post reads `renderer.camera`
+(a test greps for it).
+
+- **TAA on camera jitter.** `PostStack.wantsJitter` is true while `taa.enabled` and
+  `quality.taa`, so the renderer applies the camera's jitter to the projection. The stack
+  cannot see the camera, so `addJitterCamera(camera): this` registers the cameras it steps:
+  each TAA frame it calls `camera.setJitter(...taa.jitter(i))` through the Halton (2, 3)
+  cycle, and when TAA stops it calls `clearJitter()` once and restarts the cycle.
+  `removeJitterCamera(camera): this` unregisters a camera and clears its jitter. The
+  reprojection is `taaReprojection(out, view.previousViewProj, view.invViewProj)`, and the
+  resolve samples the colour, the neighbourhood and the depth at `uv + view.jitter / size`,
+  so the history holds the unjittered image. The old sample-UV jitter is gone. With no
+  `view` (a flat frame) the reprojection is the identity.
+- **SSR per surface.** When the target has a rough-metal attachment (`aux.roughMetal`),
+  SSR reads each pixel's roughness for `ssrRoughnessFade(roughness, roughnessCutoff)` and
+  weights the reflection by `ssrSurfaceWeight(metalness, cosView)`: Schlick Fresnel with F0
+  0.04, mixed to 1 by metalness. Without the attachment every surface is a mirror, as before.
+  The march also handles ortho projections.
+- **Object motion blur.** `MotionBlurSettings.mode: MotionBlurMode` (`'object'` by default,
+  or `'camera'`). In `'object'` mode, when the target has a velocity attachment, each pixel
+  blurs along its own velocity, so a moving `InstanceList` blurs under a still camera. A pixel
+  with zero velocity (nothing wrote one) falls back to the camera reprojection. `'camera'` is
+  the post-3 behaviour. `mode` snaps at the end of a blend.
+- **AO under ortho.** `PostDepthInfo.ortho` (from `proj[11] === 0`) drops the depth divide
+  from the screen radius (`aoProjectedRadius(radius, projScale, z, ortho)`), so the term
+  holds across zoom and distance.
+- **Settings.** `clonePostSettings(s)` deep-copies a settings object (arrays and sections)
+  and shares the GPU handles (`lut.texture`, `bloom.dirt.texture`). The blender's snap keys
+  are qualified by section (`bloom.levels`, `lut.size`, `lut.texture`, `motionBlur.mode`).
+- New uniform fields: `quality.z` (ortho), `taa2.xy` (jitter in uv), `ssr2.w` (rough-metal
+  bound), `motionBlur.w` (object velocity bound). `POST_UNIFORM_FLOATS` is unchanged (188).
+
+The harness page `harness/post4.html` (`?taa ?ssr ?blur ?ortho ?still`) measures each
+feature against a reference stack with the feature off, read back from the GPU, for
+`e2e/post4.spec.ts`.
 
 ## Notes
 
@@ -255,12 +284,13 @@ texture; `renderer.endFrame({ present: false })` then only submits. Inside `enco
   `fxaa: FxaaSettings`, `lut: LutSettings`, `grain: GrainSettings`, `aberration:
   AberrationSettings`, `sharpen: SharpenSettings`, `outline: OutlineSettings`, and the post-3
   sections `taa: TaaSettings`, `ssr: SsrSettings`, `exposure: ExposureSettings`,
-  `whiteBalance: WhiteBalanceSettings`, `motionBlur: MotionBlurSettings`. `RGB` is
+  `whiteBalance: WhiteBalanceSettings`, `motionBlur: MotionBlurSettings` (its `mode` a
+  `MotionBlurMode`, `'camera' | 'object'`, ws/post-4). `RGB` is
   `[r, g, b]`. `LutSize` is `16 | 32`; `LutFn` is `(r, g, b) => readonly [r, g, b]`.
 - `PostSettingsPatch` is a per-section partial of `PostSettings`, the argument of `new
   PostStack(renderer, patch?)`, `set` and `blendTo`. `applyPostPatch(target, patch)` merges one
   into a settings object in place (shallow per section); `defaultPostSettings()` returns a
-  fresh default.
+  fresh default; `clonePostSettings(s)` a deep copy sharing GPU handles.
 - `Ease` is `(t: number) => number` on 0..1.
   The easing functions (`easeLinear`, `easeIn`, `easeOut`, `easeInOut`) are aliases of the
   table in `@thunderclap/engine/tween` (`ease.linear`, `ease.quadIn`, `ease.quadOut`,

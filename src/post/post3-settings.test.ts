@@ -84,7 +84,7 @@ describe('post 3 settings', () => {
       histogramHigh: 0.95,
     });
     expect(s.whiteBalance).toEqual({ temperature: 6500, tint: 0 });
-    expect(s.motionBlur).toEqual({ enabled: false, intensity: 1, maxSamples: 8 });
+    expect(s.motionBlur).toEqual({ enabled: false, mode: 'object', intensity: 1, maxSamples: 8 });
     expect(s.bloom.dirt).toBeUndefined();
   });
 

@@ -1,10 +1,15 @@
 /**
- * Camera motion blur (ws/post-3): a scene-size `DepthPass` that reprojects each pixel's depth
- * through `P.reproj` (current clip → previous clip, the matrix TAA keeps), takes the screen
- * delta as the velocity, and averages `P.motionBlur.z` taps of the scene colour along it,
- * scaled by `P.motionBlur.y`. The composite reads the result as its scene colour, so the blur
- * sits before bloom. Only the camera moves it: objects moving on their own would need a
- * velocity target from the renderer (README wish).
+ * Motion blur (ws/post-3, object velocity since ws/post-4): a scene-size `DepthPass` that
+ * averages `P.motionBlur.z` taps of the scene colour along each pixel's velocity, scaled by
+ * `P.motionBlur.y`. The composite reads the result as its scene colour, so the blur sits
+ * before bloom.
+ *
+ * The velocity: in `'object'` mode with a velocity target (`P.motionBlur.w`, `@binding(5)`,
+ * `PostInputs.velocity`, uv motion since last frame) the pixel's own value, so a moving or
+ * skinned object smears under a still camera; a pixel the target holds no motion for (zero:
+ * nothing that writes velocity drew there) falls back to the camera: its depth reprojected
+ * through `P.reproj` (current clip → previous clip, the matrix TAA keeps). Without the target,
+ * and in `'camera'` mode, every pixel takes the camera's.
  */
 import { mat4 } from '../core/math';
 import { WGSL_POST_UNIFORMS } from './settings';
@@ -42,6 +47,7 @@ ${WGSL_POST_UNIFORMS}
 @group(0) @binding(2) var linSamp: sampler;
 @group(0) @binding(3) var depthTex: texture_depth_2d;
 @group(0) @binding(4) var colorTex: texture_2d<f32>;
+@group(0) @binding(5) var velocityTex: texture_2d<f32>;
 
 fn velocity(uv: vec2f, d: f32) -> vec2f {
   let prev = P.reproj * vec4f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, d, 1.0);
@@ -55,7 +61,16 @@ fn velocity(uv: vec2f, d: f32) -> vec2f {
 @fragment fn fs_main(in: FullscreenIn) -> @location(0) vec4f {
   let uv = in.uv;
   let d = textureSampleLevel(depthTex, nearest, uv, 0u);
-  var vel = velocity(uv, d) * P.motionBlur.y;
+  var v = vec2f(0.0);
+  if (P.motionBlur.w > 0.5) {
+    // The target holds where the pixel is minus where it was; the gather is symmetric, but keep
+    // the camera path's sign (where it was minus where it is).
+    v = -textureSampleLevel(velocityTex, nearest, uv, 0.0).xy;
+  }
+  if (dot(v, v) < 1e-12) {
+    v = velocity(uv, d);
+  }
+  var vel = v * P.motionBlur.y;
   // Cap the smear at a tenth of the screen so a teleport does not wipe the frame.
   let len = length(vel);
   if (len > 0.1) {
