@@ -38,12 +38,13 @@
 | Standard PBR material (glTF metallic-roughness) over the lights block, shadows and fog; its BRDF and normal mapping exposed to custom WGSL | `createStandardMaterial`, `WGSL_PBR` | pbr |
 | Attachment sockets: a transform that follows a skeleton joint (by index or name) with a local offset | `createSocket`, `socketWorld`, `attachTransform` in `@thunderclap/engine/anim`; `Transform.setMatrix(m)` | sockets |
 | GPU skinning in the scene and shadow passes: a skinned vertex layout and a joint-matrix palette; skinned casters shadow in their pose | `VERTEX_LAYOUT_SKINNED`, `SkinPalette` | skinning |
+| Spot lights (up to 8, inner and outer cone) and per-light layer masks over the lights block | `SpotLight`, `Lights.spots`, `layers` on lights | spot-lights |
 
 ## In flight (wave 5, `docs/STATUS.md`)
 
 No stream from this table is open; `docs/STATUS.md` lists the current branches.
 
-After wave 5 (candidates, unscheduled): spot lights and per-light layer masks, a third-person showcase template, GPU picking, publishing `engine-v1.0.0`.
+After wave 5 (candidates, unscheduled): a third-person showcase template, GPU picking, publishing `engine-v1.0.0`.
 
 ## How to ask for more
 
