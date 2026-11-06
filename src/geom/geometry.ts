@@ -6,7 +6,12 @@
  * constant. Builders size their arrays up front, so nothing grows while writing; indices are
  * `Uint16Array` while every vertex index fits (vertex count ≤ 65535) and `Uint32Array` past that.
  */
-import { type MeshBounds, VERTEX_LAYOUT_3D, type VertexLayout } from '../render/mesh';
+import {
+  type MeshBounds,
+  VERTEX_LAYOUT_3D,
+  VERTEX_LAYOUT_3D_TANGENT,
+  type VertexLayout,
+} from '../render/mesh';
 
 /** `[r, g, b, a]`, 0..1. */
 export type Rgba = [number, number, number, number];
@@ -36,6 +41,11 @@ export const UINT16_MAX_VERTICES = 0xffff;
 
 /** Floats per vertex in every builder's output (`VERTEX_LAYOUT_3D.floats`). */
 export const GEOMETRY_FLOATS = VERTEX_LAYOUT_3D.floats;
+
+/** Layouts whose vertices start with xyz, normal xyz: the 3D layout and its tangent extension. */
+function hasPositions(layout: VertexLayout): boolean {
+  return layout === VERTEX_LAYOUT_3D || layout === VERTEX_LAYOUT_3D_TANGENT;
+}
 
 /** The index array type for `vertexCount` vertices. */
 export function createIndices(vertexCount: number, indexCount: number): Uint16Array | Uint32Array {
@@ -191,9 +201,10 @@ export function computeBounds(
 
 /**
  * One geometry from several: vertices concatenated, indices offset by the vertices before them,
- * promoted to `Uint32Array` when the total passes 65535 vertices, bounds recomputed. Every input
- * must share one layout (the first's); the inputs are left untouched. No inputs give an empty
- * geometry in `VERTEX_LAYOUT_3D`.
+ * promoted to `Uint32Array` when the total passes 65535 vertices, bounds recomputed (for the 3D
+ * and tangent layouts; any other is left unbounded). Every input must share one layout (the
+ * first's); the inputs are left untouched. No inputs give an empty geometry in
+ * `VERTEX_LAYOUT_3D`.
  */
 export function mergeGeometry(...parts: Geometry[]): Geometry {
   const layout = parts[0]?.layout ?? VERTEX_LAYOUT_3D;
@@ -220,11 +231,10 @@ export function mergeGeometry(...parts: Geometry[]): Geometry {
     io += src.length;
     base += p.vertices.length / floats;
   }
-  // Only the 3D layout has xyz positions to bound; any other is left unbounded (never culled).
-  const bounds: MeshBounds =
-    layout === VERTEX_LAYOUT_3D
-      ? computeBounds(vertices)
-      : { center: [0, 0, 0], radius: Number.POSITIVE_INFINITY };
+  // Only the 3D layouts have xyz positions to bound; any other is left unbounded (never culled).
+  const bounds: MeshBounds = hasPositions(layout)
+    ? computeBounds(vertices, floats)
+    : { center: [0, 0, 0], radius: Number.POSITIVE_INFINITY };
   return { vertices, indices, bounds, layout };
 }
 
@@ -233,12 +243,18 @@ export function mergeGeometry(...parts: Geometry[]): Geometry {
  * `MATRIX3X4_FLOATS`): positions by the full matrix, normals by the inverse transpose of its
  * 3×3 part (so non-uniform scale keeps them perpendicular), renormalised. The bounds are
  * recomputed. Returns `g`. A singular 3×3 (a zero scale) leaves the normals as they were. The
- * geometry must be in `VERTEX_LAYOUT_3D`.
+ * geometry must be in `VERTEX_LAYOUT_3D` or `VERTEX_LAYOUT_3D_TANGENT`; a tangent's xyz is
+ * rotated by the 3×3 part (renormalised) and its w (handedness) is kept, flipped when the
+ * matrix mirrors (negative determinant) so the bitangent stays `w · cross(n, t)`.
  */
 export function transformGeometry(g: Geometry, world: ArrayLike<number>): Geometry {
-  if (g.layout !== VERTEX_LAYOUT_3D) {
-    throw new Error(`geom: transformGeometry needs VERTEX_LAYOUT_3D, got '${g.layout.name}'`);
+  if (!hasPositions(g.layout)) {
+    throw new Error(
+      `geom: transformGeometry needs VERTEX_LAYOUT_3D or VERTEX_LAYOUT_3D_TANGENT, got '${g.layout.name}'`,
+    );
   }
+  const floats = g.layout.floats;
+  const tangents = g.layout === VERTEX_LAYOUT_3D_TANGENT;
   const m00 = world[0]!;
   const m01 = world[1]!;
   const m02 = world[2]!;
@@ -264,13 +280,28 @@ export function transformGeometry(g: Geometry, world: ArrayLike<number>): Geomet
   const det = m00 * c00 + m01 * c01 + m02 * c02;
   const singular = Math.abs(det) < 1e-20;
   const v = g.vertices;
-  for (let o = 0; o < v.length; o += GEOMETRY_FLOATS) {
+  for (let o = 0; o < v.length; o += floats) {
     const x = v[o]!;
     const y = v[o + 1]!;
     const z = v[o + 2]!;
     v[o] = m00 * x + m01 * y + m02 * z + tx;
     v[o + 1] = m10 * x + m11 * y + m12 * z + ty;
     v[o + 2] = m20 * x + m21 * y + m22 * z + tz;
+    if (tangents) {
+      const ux = v[o + 12]!;
+      const uy = v[o + 13]!;
+      const uz = v[o + 14]!;
+      const wx = m00 * ux + m01 * uy + m02 * uz;
+      const wy = m10 * ux + m11 * uy + m12 * uz;
+      const wz = m20 * ux + m21 * uy + m22 * uz;
+      const tl = Math.hypot(wx, wy, wz);
+      if (tl > 0) {
+        v[o + 12] = wx / tl;
+        v[o + 13] = wy / tl;
+        v[o + 14] = wz / tl;
+      }
+      if (det < 0) v[o + 15] = -v[o + 15]!;
+    }
     if (singular) continue;
     const nx = v[o + 3]!;
     const ny = v[o + 4]!;
@@ -291,6 +322,6 @@ export function transformGeometry(g: Geometry, world: ArrayLike<number>): Geomet
       v[o + 5] = rz / len;
     }
   }
-  computeBounds(v, GEOMETRY_FLOATS, g.bounds);
+  computeBounds(v, floats, g.bounds);
   return g;
 }

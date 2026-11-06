@@ -130,6 +130,11 @@ test('the reticle sits on the frame centre and opens with the spread', async ({ 
       return open && closed ? open.x - closed.x : 0;
     })
     .toBeGreaterThan(2);
-  await page.evaluate(() => window.__harnessWidgets?.hit());
-  expect(await r.evaluate((el) => el.hasAttribute('data-hit'))).toBe(true);
+  // `hit()` sets `data-hit` synchronously and `animationend` clears it, so read it in the same
+  // evaluate: a second round trip can land after the animation on a slow row.
+  const hit = await r.evaluate((el) => {
+    window.__harnessWidgets?.hit();
+    return el.hasAttribute('data-hit');
+  });
+  expect(hit).toBe(true);
 });

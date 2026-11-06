@@ -1,6 +1,7 @@
 import type { Material } from './material';
 import { WGSL_PBR } from './pbr-wgsl';
 import type { Renderer } from './renderer';
+import type { SkinPalette } from './skin';
 import { defaultTextures, type TextureLike } from './texture';
 
 /**
@@ -52,6 +53,14 @@ export interface StandardMaterialDesc {
    * culls, so single-sided here means nothing is hidden, only that the normal is not flipped).
    */
   doubleSided?: boolean;
+  /**
+   * Skinned: bind this palette (or its storage buffer) as `buffers[0]` (`@binding(16)`), so the
+   * material draws `VERTEX_LAYOUT_SKINNED` meshes with the prelude's `engine_skin`: no custom
+   * WGSL. The same material still draws unskinned 3D meshes; a skinned mesh picks its palette
+   * slot with `InstanceParams.params[SKIN_PARAM]` (`params.w`). Swap the buffer later with
+   * `material.bindings.setBuffer(0, buffer)`.
+   */
+  skin?: SkinPalette | GPUBuffer;
 }
 
 /** Texture slots of a standard material (`material.setTexture(slot, tex)` swaps a map). */
@@ -163,9 +172,14 @@ struct StandardParams {
  * `base × emissive` to the glow like the sprite material. Call `setTexture(slot, tex)` with a
  * `STANDARD_TEXTURE_SLOTS` entry to swap a map, or `setUniforms(packStandardUniforms(next))`
  * to change factors. The sampler is `linear-mip-repeat` (trilinear on maps with mips; level 0 otherwise).
+ * With `skin` (a `SkinPalette` or its buffer) the palette is bound as `buffers[0]` and the
+ * material skins `VERTEX_LAYOUT_SKINNED` meshes.
  */
 export function createStandardMaterial(renderer: Renderer, desc: StandardMaterialDesc): Material {
   const d = defaultTextures(renderer.device);
+  const skin = desc.skin;
+  // A palette carries its `buffer`; a bare `GPUBuffer` has no such field (no `instanceof`: tests run without the global).
+  const buffers = skin ? ['buffer' in skin ? skin.buffer : skin] : undefined;
   const m = renderer.createMaterial({
     label: desc.label ?? 'standard',
     wgsl: `${WGSL_PBR}\n${STANDARD_WGSL}`,
@@ -173,6 +187,7 @@ export function createStandardMaterial(renderer: Renderer, desc: StandardMateria
     uniformBytes: STANDARD_UNIFORM_FLOATS * 4,
     textures: 5,
     sampler: 'linear-mip-repeat',
+    buffers,
   });
   m.setUniforms(packStandardUniforms(desc));
   m.setTexture(STANDARD_TEXTURE_SLOTS.baseColor, desc.baseColor ?? d.white);

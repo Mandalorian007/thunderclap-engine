@@ -77,12 +77,22 @@ export function writeInstanceParams(
  * Per-draw instance fields other than placement. A draw placed by a `Transform` takes these;
  * `DrawParams` adds the 2D placement (x, y, w, h, rotation). Reuse the object across frames.
  */
+/**
+ * Index into `InstanceParams.params` of the skin palette slot (`params.w`): the convention
+ * `engine_skin` reads and the skin harness and glTF skins write. A constant, not a layout change.
+ */
+export const SKIN_PARAM = 3;
+
 export interface InstanceParams {
   /** Linear RGBA multiplier (HDR allowed). Default white. */
   tint?: ArrayLike<number>;
   /** Sub-rectangle of the texture: u0, v0, u1, v1. Default 0,0,1,1. */
   uv?: ArrayLike<number>;
-  /** Free per-instance vec4 for custom materials (`in.params`). */
+  /**
+   * Free per-instance vec4 for custom materials (`in.params`). Convention: a skinned draw names
+   * its `SkinPalette` slot in `params[SKIN_PARAM]` (`params.w`, read as `u32` by `engine_skin`);
+   * the other three stay the material's.
+   */
   params?: ArrayLike<number>;
   /** Emissive strength (`in.emissive`); the built-in sprite writes colour × this to bloom. */
   emissive?: number;

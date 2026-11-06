@@ -4,6 +4,61 @@ import { Texture } from './texture';
 /** HDR scene targets: [0] colour, [1] emissive (feeds bloom). */
 export const SCENE_FORMAT: GPUTextureFormat = 'rgba16float';
 
+/**
+ * The emissive attachment external targets share (ws/ergo-3d, xr-post wish): every material's
+ * pipeline writes two colour targets, so a scene pass over an adopted XR texture still needs an
+ * emissive attachment of the same size, but nothing reads it (the post stack runs from the
+ * renderer's own target). One texture per device and size serves every external target at that
+ * size, refcounted, with `storeOp: 'discard'` so tile GPUs never write it back. Two eyes share
+ * one; a target released on `destroy` or a size change frees it when the count reaches zero.
+ */
+interface SharedEmissive {
+  tex: Texture;
+  refs: number;
+}
+const sharedEmissive = new WeakMap<GPUDevice, Map<string, SharedEmissive>>();
+
+function acquireSharedEmissive(device: GPUDevice, w: number, h: number, label: string): Texture {
+  let bySize = sharedEmissive.get(device);
+  if (!bySize) {
+    bySize = new Map();
+    sharedEmissive.set(device, bySize);
+  }
+  const key = `${w}x${h}`;
+  let e = bySize.get(key);
+  if (!e) {
+    e = {
+      tex: new Texture(device, {
+        width: w,
+        height: h,
+        format: SCENE_FORMAT,
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+        label: `${label}-emissive`,
+      }),
+      refs: 0,
+    };
+    bySize.set(key, e);
+  }
+  e.refs++;
+  return e.tex;
+}
+
+function releaseSharedEmissive(device: GPUDevice, tex: Texture): void {
+  const bySize = sharedEmissive.get(device);
+  if (!bySize) return;
+  const key = `${tex.width}x${tex.height}`;
+  const e = bySize.get(key);
+  if (!e || e.tex !== tex) return;
+  if (--e.refs > 0) return;
+  bySize.delete(key);
+  tex.destroy();
+}
+
+/** Shared external emissive textures alive on `device` (tests). */
+export function sharedEmissiveCount(device: GPUDevice): number {
+  return sharedEmissive.get(device)?.size ?? 0;
+}
+
 export interface SceneTargetDesc {
   width: number;
   height: number;
@@ -69,9 +124,10 @@ class AdoptedTexture {
  * whose `color` and `emissive` are sampleable like any `Texture`.
  *
  * `SceneTarget.external(desc)` adopts a colour (and depth) texture owned by someone else, an
- * XR layer's eye textures; `adopt(desc)` re-points it at the next frame's. It still allocates
- * its own emissive target at that size (the post stack does not run on an external target; its
- * emissive is written and dropped).
+ * XR layer's eye textures; `adopt(desc)` re-points it at the next frame's. Its emissive
+ * attachment (every pipeline writes two targets) is one texture per device and size shared by
+ * all external targets, stored with `'discard'`: the post stack does not run on an external
+ * target, so its emissive is written and dropped, and two eyes allocate one, not two.
  */
 export class SceneTarget {
   color!: Texture;
@@ -121,7 +177,8 @@ export class SceneTarget {
       clearValue: { r: 0, g: 0, b: 0, a: 0 },
     };
     this.passDesc = { label: 'scene', colorAttachments: [this.colorAtt, this.emissiveAtt] };
-    if (!external) this.resize(desc.width, desc.height);
+    if (external) this.emissiveAtt.storeOp = 'discard';
+    else this.resize(desc.width, desc.height);
   }
 
   /** A target over textures owned by someone else (an XR layer's); see `SceneTargetExternal`. */
@@ -156,7 +213,8 @@ export class SceneTarget {
   /**
    * Point an external target at this frame's textures (an XR layer rotates them). A no-op
    * when `color`, `depth` and the view's array layer are the ones already adopted; otherwise
-   * new views are made and, if the size changed, the emissive and own depth textures too.
+   * new views are made and, if the size changed, the shared emissive is swapped for one of the
+   * new size and the own depth texture dropped.
    */
   adopt(desc: Omit<SceneTargetExternal, 'device' | 'label'>): void {
     const depth = desc.depth ?? null;
@@ -175,14 +233,8 @@ export class SceneTarget {
     if (w !== this.width || h !== this.height) {
       this.width = w;
       this.height = h;
-      this.emissive?.destroy();
-      this.emissive = new Texture(this.device, {
-        width: w,
-        height: h,
-        format: SCENE_FORMAT,
-        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-        label: `${this.label}-emissive`,
-      });
+      if (this.emissive) releaseSharedEmissive(this.device, this.emissive);
+      this.emissive = acquireSharedEmissive(this.device, w, h, this.label);
       this.emissiveAtt.view = this.emissive.view;
       this.depthTex?.destroy();
       this.depthTex = null;
@@ -252,7 +304,9 @@ export class SceneTarget {
 
   destroy(): void {
     this.color?.destroy();
-    this.emissive?.destroy();
+    if (this.externalColor) {
+      if (this.emissive) releaseSharedEmissive(this.device, this.emissive);
+    } else this.emissive?.destroy();
     this.depthTex?.destroy();
     this.depthTex = null;
   }

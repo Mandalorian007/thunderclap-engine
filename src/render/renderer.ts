@@ -37,6 +37,7 @@ import {
   bytesPerTexel,
   createSamplers,
   defaultTextures,
+  loadTexture,
   type PixelData,
   type SamplerKind,
   Texture,
@@ -102,6 +103,12 @@ export interface RendererGpu {
 
 export interface RenderStats {
   drawCalls: number;
+  /**
+   * Triangles the scene passes asked the GPU for, summed over views: each draw's indices (or
+   * vertices, non-indexed) / 3 × its instance count. Drawables and the shadow pass are not
+   * counted (a drawable issues its own draws).
+   */
+  triangles: number;
   /** Instances the scene passes drew (`frame.mesh` / `sprite` draws and batch instances), summed over views. */
   instances: number;
   drawables: number;
@@ -114,6 +121,16 @@ export interface RenderStats {
    * casters inside the sun's box, whether or not the view's frustum sees them.
    */
   shadowDraws: number;
+}
+
+/** Options of `Renderer.textureFromSource`. */
+export interface TextureFromSourceOptions {
+  /** Store the bytes as `rgba8unorm` (no sRGB decode) for data maps. Default false (sRGB colour). */
+  linear?: boolean;
+  /** Allocate and fill the full mip chain. Default false (one level). */
+  mips?: boolean;
+  /** Texture label when the options object replaces the label argument. Default `'image'`. */
+  label?: string;
 }
 
 /** A batched command list (`DrawCmd`s reused frame to frame) with its live length. */
@@ -157,6 +174,14 @@ export interface FrameTiming {
   cpuMs: number;
   /** GPU samples taken so far. */
   samples: number;
+  /**
+   * Resolves once the first GPU sample has landed (`samples` > 0; immediately when one already
+   * has), so a bench or demo can wait for a real `gpuMs` instead of polling. Set `timingEvery`
+   * before (or right after) calling it: with timing off, no sample is ever taken. Resolves at
+   * once when GPU timing is unsupported (a device with neither `timestamp-query` nor
+   * `queue.onSubmittedWorkDone`) or the renderer is destroyed before a sample arrives.
+   */
+  ready(): Promise<void>;
 }
 
 /** Smallest scale `setResolution` accepts (a quarter of the output in each direction). */
@@ -297,6 +322,7 @@ export class Renderer implements FrameSink {
   readonly defaultSprite: Material;
   readonly stats: RenderStats = {
     drawCalls: 0,
+    triangles: 0,
     instances: 0,
     drawables: 0,
     batches: 0,
@@ -304,7 +330,16 @@ export class Renderer implements FrameSink {
     shadowDraws: 0,
   };
   /** See `FrameTiming`. Only updated while `timingEvery > 0`. */
-  readonly timing: FrameTiming = { gpuMs: 0, source: 'queue', passes: {}, cpuMs: 0, samples: 0 };
+  readonly timing: FrameTiming = {
+    gpuMs: 0,
+    source: 'queue',
+    passes: {},
+    cpuMs: 0,
+    samples: 0,
+    ready: () => this.timingReady(),
+  };
+  /** Resolvers of `timing.ready()` promises waiting on the first GPU sample. */
+  private readonly readyWaiters: (() => void)[] = [];
   /**
    * Pass timer when the device has `timestamp-query`, else null. Passes encoded during
    * `endFrame` (the post processor's included) label themselves with `gpuTimer.pass(label)`;
@@ -665,32 +700,25 @@ export class Renderer implements FrameSink {
   /**
    * Upload an image/canvas/ImageData. By default it is an sRGB colour texture (sampled as
    * linear). Pass `{ linear: true }` for data (masks, normals, lookup tables): the bytes are
-   * stored as `rgba8unorm` and sampled exactly as written, with no sRGB decode.
+   * stored as `rgba8unorm` and sampled exactly as written, with no sRGB decode. `{ mips: true }`
+   * allocates the full mip chain and fills it on the GPU (`generateMipmaps`), the same as
+   * `loadTexture`; the default is one level. The options object may replace the label
+   * (`textureFromSource(src, { mips: true })`), or follow it.
    */
   textureFromSource(
     source: TextureSource,
-    label = 'image',
-    opts: { linear?: boolean } = {},
+    label: string | TextureFromSourceOptions = 'image',
+    opts: TextureFromSourceOptions = {},
   ): Texture {
-    const width = source.width;
-    const height = source.height;
-    const format: GPUTextureFormat = opts.linear ? 'rgba8unorm' : 'rgba8unorm-srgb';
-    const tex = this.createTexture({ width, height, label, format });
-    if (typeof ImageData !== 'undefined' && source instanceof ImageData) {
-      this.device.queue.writeTexture(
-        { texture: tex.texture },
-        source.data,
-        { bytesPerRow: width * 4 },
-        [width, height],
-      );
-    } else {
-      this.device.queue.copyExternalImageToTexture(
-        { source: source as Exclude<TextureSource, ImageData> },
-        { texture: tex.texture },
-        [width, height],
-      );
+    if (typeof label !== 'string') {
+      opts = label;
+      label = opts.label ?? 'image';
     }
-    return tex;
+    return loadTexture(this.device, source, {
+      label,
+      format: opts.linear ? 'rgba8unorm' : 'rgba8unorm-srgb',
+      mips: opts.mips ?? false,
+    });
   }
 
   /**
@@ -802,6 +830,7 @@ export class Renderer implements FrameSink {
     for (const b of this.drawUniformSets) b.discardDrawUniforms();
     this.drawUniformSets.length = 0;
     this.stats.drawCalls = 0;
+    this.stats.triangles = 0;
     this.stats.instances = 0;
     this.stats.drawables = 0;
     this.stats.batches = 0;
@@ -946,6 +975,7 @@ export class Renderer implements FrameSink {
     let curMesh: Mesh | null = null;
     let curBuffer: GPUBuffer | null = null;
     let drawCalls = 0;
+    let triangles = 0;
     let drawables = 0;
     for (let i = 0; i < scene.count; i++) {
       const c = scene.cmds[i]!;
@@ -988,13 +1018,16 @@ export class Renderer implements FrameSink {
         // An indexed mesh with no indices (e.g. a streamed chunk that is empty) draws nothing.
         if (mesh.indexCount === 0) continue;
         pass.drawIndexed(mesh.indexCount, c.count, 0, 0, c.first);
+        triangles += ((mesh.indexCount / 3) | 0) * c.count;
       } else {
         pass.draw(mesh.vertexCount, c.count, 0, c.first);
+        triangles += ((mesh.vertexCount / 3) | 0) * c.count;
       }
       drawCalls++;
     }
     pass.end();
     this.stats.drawCalls += drawCalls;
+    this.stats.triangles += triangles;
     this.stats.instances += this.sceneCount + this.sceneListInstances;
     this.stats.drawables += drawables;
     this.stats.batches += this.sceneBatches;
@@ -1149,10 +1182,29 @@ export class Renderer implements FrameSink {
     this.timing.gpuMs = ms;
     this.timing.samples++;
     for (const fn of this.timingListeners) fn(ms);
+    this.resolveReady();
+  }
+
+  /** `timing.ready()`: a settled promise once a sample exists, else one kept until the first. */
+  private timingReady(): Promise<void> {
+    // Unsupported: no timer and no `onSubmittedWorkDone` (a stub device); nothing ever samples.
+    const unsupported =
+      !this.gpuTimer && typeof this.device.queue.onSubmittedWorkDone !== 'function';
+    if (this.timing.samples > 0 || this.destroyed || unsupported) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      this.readyWaiters.push(resolve);
+    });
+  }
+
+  private resolveReady(): void {
+    if (this.readyWaiters.length === 0) return;
+    for (const fn of this.readyWaiters) fn();
+    this.readyWaiters.length = 0;
   }
 
   destroy(): void {
     this.destroyed = true;
+    this.resolveReady();
     this.gpuTimer?.destroy();
     this.target.destroy();
     this.instanceBuffer.destroy();
