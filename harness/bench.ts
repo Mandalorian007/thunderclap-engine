@@ -15,7 +15,9 @@
  * - Per frame nothing is allocated: transforms, draw params and sample arrays are built once.
  *
  * Query: `?rung=all|tiny|<id>,<id>` (see `benchRungsFor`), `?frames=N` overrides every rung's
- * frame count.
+ * frame count, `?mode=mesh|batch|list` the submission path of every 3D rung, `?cull=0|1` their
+ * `camera.cull`; `?still` keeps presenting the last rung's scene after `done`, so a spec can
+ * screenshot it.
  */
 import { GameLoop } from '@thunderclap/engine/core';
 import { ParticleSystem } from '@thunderclap/engine/fx';
@@ -24,6 +26,9 @@ import {
   Camera,
   type DrawParams,
   gpuDiagnostics,
+  INSTANCE_PARAM_FLOATS,
+  type InstanceBatch,
+  type InstanceList,
   type InstanceParams,
   installGpuErrorLogging,
   Lights,
@@ -32,12 +37,15 @@ import {
   supportsTimestamps,
   Transform,
   VERTEX_LAYOUT_3D,
+  writeInstanceParams,
 } from '@thunderclap/engine/render';
 import {
   BENCH_LADDER,
   BENCH_WARMUP,
+  type BenchMode,
   type BenchRungDef,
   type BenchRungResult,
+  benchModeFor,
   benchRungsFor,
   type HarnessBenchApi,
   type HarnessBenchState,
@@ -51,9 +59,16 @@ const BENCH_DT = 1 / 60;
 
 const params = new URLSearchParams(location.search);
 const framesOverride = Number(params.get('frames')) || 0;
-const rungs = benchRungsFor(params.get('rung')).map((r) =>
-  framesOverride > 0 ? { ...r, frames: framesOverride } : r,
-);
+const modeOverride = benchModeFor(params.get('mode'));
+const cullParam = params.get('cull');
+const cullOverride = cullParam === null ? null : cullParam !== '0' && cullParam !== 'false';
+const still = params.has('still');
+const rungs = benchRungsFor(params.get('rung')).map((r) => ({
+  ...r,
+  frames: framesOverride > 0 ? framesOverride : r.frames,
+  mode: modeOverride ?? r.mode,
+  cull: cullOverride ?? r.cull,
+}));
 
 const state: HarnessBenchState = {
   ready: false,
@@ -68,6 +83,8 @@ const state: HarnessBenchState = {
   results: [],
   gpuErrors: 0,
   error: null,
+  logical: { ...LOGICAL },
+  probe: null,
 };
 const api: HarnessBenchApi = { state, rungs: BENCH_LADDER };
 window.__harnessBench = api;
@@ -237,6 +254,47 @@ async function main(): Promise<void> {
     );
   }
   const cubeP: InstanceParams = { tint: [0.75, 0.8, 0.9, 1] };
+  // The same cubes as one batch (`frame.meshes`): matrices and params laid out once; a rung sets
+  // `count`. And as one retained list (`frame.list`), filled when a list rung starts.
+  const matrices = new Float32Array(MAX_INSTANCES * 12);
+  const batchParams = new Float32Array(MAX_INSTANCES * INSTANCE_PARAM_FLOATS);
+  for (let i = 0; i < MAX_INSTANCES; i++) {
+    matrices.set(transforms[i]!.world, i * 12);
+    writeInstanceParams(batchParams, i * INSTANCE_PARAM_FLOATS, cubeP, CUBE_SCALE, CUBE_SCALE);
+  }
+  const batch: InstanceBatch = { count: 0, matrices, params: batchParams };
+  let list: InstanceList | null = null;
+  const listFor = (count: number): InstanceList => {
+    list ??= renderer.createInstanceList(cube, lit, MAX_INSTANCES);
+    list.clear();
+    for (let i = 0; i < count; i++) list.set(i, transforms[i]!, cubeP);
+    return list;
+  };
+
+  /**
+   * The probe: among the first `count` cubes, the nearest whose centre projects into the middle
+   * 60% of the view (the hud sits bottom-left, outside it). Null when none does.
+   */
+  const probePoint = { x: 0, y: 0, z: 0 };
+  function probeFor(count: number): { x: number; y: number } | null {
+    let best = -1;
+    let bestZ = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < count; i++) {
+      const p = transforms[i]!.position;
+      camera3d.worldToScreen(p.x, p.y, p.z, probePoint);
+      if (probePoint.z <= 0 || probePoint.z >= 1) continue;
+      if (Math.abs(probePoint.x / LOGICAL.width - 0.5) > 0.3) continue;
+      if (Math.abs(probePoint.y / LOGICAL.height - 0.5) > 0.3) continue;
+      if (probePoint.z < bestZ) {
+        bestZ = probePoint.z;
+        best = i;
+      }
+    }
+    if (best < 0) return null;
+    const p = transforms[best]!.position;
+    camera3d.worldToScreen(p.x, p.y, p.z, probePoint);
+    return { x: probePoint.x, y: probePoint.y };
+  }
 
   // The sprites, placed once over the logical space.
   const sprites: DrawParams[] = [];
@@ -304,6 +362,9 @@ async function main(): Promise<void> {
   let rung: BenchRungDef | null = null;
   let rungFrame = 0;
   let system: ParticleSystem | null = null;
+  let mode: BenchMode = 'mesh';
+  /** After `done` with `?still`: the last rung keeps presenting, unmeasured. */
+  let holding = false;
 
   function start(r: BenchRungDef): void {
     rung = r;
@@ -320,10 +381,16 @@ async function main(): Promise<void> {
     for (let i = 0; i < r.points; i++) lights.points.push(lamps[i]!);
     lights.sun.shadow = r.shadow ? SHADOW : null;
     system = null;
+    mode = r.mode;
+    state.probe = null;
     if (r.kind === 'particles') {
       system = particles.get(r.count) ?? null;
       if (!system) throw new Error(`bench: no particle system for ${r.count}`);
       system.emit(emitParams, r.count);
+    } else if (is3d) {
+      if (mode === 'batch') batch.count = r.count;
+      if (mode === 'list') listFor(r.count);
+      state.probe = probeFor(r.count);
     }
   }
 
@@ -332,6 +399,7 @@ async function main(): Promise<void> {
     const result: BenchRungResult = {
       id: r.id,
       kind: r.kind,
+      mode: r.mode,
       count: r.count,
       frames: cpuCount,
       cpuMs: median(cpuSamples, cpuCount),
@@ -350,10 +418,14 @@ async function main(): Promise<void> {
     index++;
     const r = rungs[index];
     if (!r) {
-      rung = null;
       state.current = null;
       state.remaining = 0;
       state.done = true;
+      if (still && rung) {
+        holding = true;
+        return true;
+      }
+      rung = null;
       return false;
     }
     start(r);
@@ -393,12 +465,17 @@ async function main(): Promise<void> {
     } else if (r.kind === 'particles') {
       system!.update(BENCH_DT);
       frame.drawable(system!);
+    } else if (mode === 'batch') {
+      frame.meshes(cube, lit, batch);
+    } else if (mode === 'list') {
+      frame.list(list!);
     } else {
       for (let i = 0; i < r.count; i++) frame.mesh(cube, lit, transforms[i]!, cubeP);
     }
     renderer.endFrame();
     const cpu = performance.now() - t0;
     state.frames++;
+    if (holding) return;
     state.gpuErrors = gpuDiagnostics.errorCount;
     rungFrame++;
     if (rungFrame > BENCH_WARMUP) {

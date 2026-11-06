@@ -1,7 +1,77 @@
-import { Lights } from './lights';
+import type { InstanceList } from './instance-list';
+import { Lights, packInstanceFlags } from './lights';
 import type { Material } from './material';
 import type { Mesh, MeshBounds } from './mesh';
 import { Transform } from './transform';
+
+/**
+ * Floats per instance in `InstanceBatch.params`: the instance format after its 3×4 matrix
+ * (`INSTANCE_FLOATS` − 12): `uvRect` (4), `tint` (4), `params` (4), `emissive`, `flags`,
+ * `size.x`, `size.y`. `writeInstanceParams` fills one from an `InstanceParams`.
+ */
+export const INSTANCE_PARAM_FLOATS = 16;
+
+/**
+ * Many instances of one mesh and material submitted at once (`frame.meshes`): `count` 3×4
+ * row-major world matrices in `matrices` (12 floats each, `Transform.world`'s layout) and,
+ * optionally, their `INSTANCE_PARAM_FLOATS` of params each in `params` (null or absent: the
+ * defaults, white tint, full uv, the mesh's shadow flags, size from the matrix columns). The
+ * renderer copies both straight into its instance upload. `bounds`, when given, is one
+ * world-space sphere for the whole batch: the camera culls the batch with one test and never
+ * per instance; without it each instance is culled by `mesh.bounds` through its matrix. The
+ * batch is one sort key (its `order`, then its first instance's depth) and one draw. An
+ * `InstanceList` is one.
+ */
+export interface InstanceBatch {
+  /** Instances to draw (the first `count` of `matrices` / `params`). */
+  count: number;
+  /** `count` × 12 floats (at least). */
+  matrices: Float32Array;
+  /** `count` × `INSTANCE_PARAM_FLOATS` floats, or null for the defaults. */
+  params?: Float32Array | null;
+  /** One world-space sphere for the batch, or null to cull per instance. */
+  bounds?: MeshBounds | null;
+  /** Layer mask of every instance, matched against `camera.layers`. Default 1. */
+  layerBits?: number;
+  /** Sort key, as `InstanceParams.order`. Default 0. */
+  order?: number;
+  /** Draw into the sun's shadow map; default: the mesh is not in `VERTEX_LAYOUT_2D`. */
+  castShadow?: boolean;
+}
+
+/**
+ * Write the `INSTANCE_PARAM_FLOATS` of one instance (its fields after the matrix) at float
+ * `o` of `dst` from `p`, with `sizeX`, `sizeY` as its `size` (`VSOut.size`: a transform's
+ * scale.xy). Same defaults as `frame.mesh`: uv 0,0,1,1, white tint, zero params and emissive,
+ * `packInstanceFlags(receiveShadow, layers)`.
+ */
+export function writeInstanceParams(
+  dst: Float32Array,
+  o: number,
+  p: InstanceParams,
+  sizeX = 1,
+  sizeY = 1,
+): void {
+  const uv = p.uv;
+  dst[o++] = uv ? uv[0]! : 0;
+  dst[o++] = uv ? uv[1]! : 0;
+  dst[o++] = uv ? uv[2]! : 1;
+  dst[o++] = uv ? uv[3]! : 1;
+  const t = p.tint;
+  dst[o++] = t ? t[0]! : 1;
+  dst[o++] = t ? t[1]! : 1;
+  dst[o++] = t ? t[2]! : 1;
+  dst[o++] = t ? (t[3] ?? 1) : 1;
+  const q = p.params;
+  dst[o++] = q ? q[0]! : 0;
+  dst[o++] = q ? (q[1] ?? 0) : 0;
+  dst[o++] = q ? (q[2] ?? 0) : 0;
+  dst[o++] = q ? (q[3] ?? 0) : 0;
+  dst[o++] = p.emissive ?? 0;
+  dst[o++] = packInstanceFlags(p.receiveShadow !== false, p.layers ?? 1);
+  dst[o++] = sizeX;
+  dst[o] = sizeY;
+}
 
 /**
  * Per-draw instance fields other than placement. A draw placed by a `Transform` takes these;
@@ -84,6 +154,18 @@ export interface FrameSink {
     p: DrawParams | InstanceParams,
     bounds: MeshBounds | null,
   ): void;
+  /**
+   * A batch of `mesh` with `material` (`frame.meshes` / `frame.list`); `bounds` is the mesh's
+   * sphere for per-instance culling when the batch gives none. `list` is the retained list
+   * the batch is, if any (its instances live in its own buffer).
+   */
+  pushBatch(
+    material: Material,
+    mesh: Mesh,
+    batch: InstanceBatch,
+    bounds: MeshBounds | null,
+    list: InstanceList | null,
+  ): void;
   pushDrawable(d: Drawable, order: number, layers: number): void;
   pushPrePass(fn: (encoder: GPUCommandEncoder) => void): void;
   readonly defaultSprite: Material;
@@ -95,7 +177,8 @@ const NO_PARAMS: InstanceParams = Object.freeze({});
 /**
  * Per-frame draw recorder. Obtained from `renderer.beginFrame()`; the same object is reused
  * every frame. Draws render sorted by `order` (default 0), then call order; consecutive draws
- * with the same material, mesh and uniforms merge into one instanced draw call.
+ * with the same material, mesh and uniforms merge into one instanced draw call. `meshes` draws
+ * a typed-array batch and `list` a retained `InstanceList`, each as one unit.
  */
 export class Frame {
   /** Seconds since renderer start (or whatever the caller passed to beginFrame). */
@@ -156,6 +239,37 @@ export class Frame {
     const bounds = mesh.bounds;
     if (a instanceof Transform) this.sink.pushInstance(material, mesh, a, b ?? NO_PARAMS, bounds);
     else this.sink.pushInstance(material, mesh, null, a, bounds);
+  }
+
+  /**
+   * Draw `batch.count` instances of `mesh` with `material` from typed arrays (`InstanceBatch`):
+   * the bulk path for many things that change every frame. One sort key and one draw call;
+   * culled as one sphere when `batch.bounds` is given, else per instance by `mesh.bounds`.
+   * Throws when `matrices` or `params` are too short for `count`.
+   */
+  meshes(mesh: Mesh, material: Material, batch: InstanceBatch): void {
+    if (batch.count <= 0) return;
+    if (batch.matrices.length < batch.count * 12) {
+      throw new Error(
+        `frame.meshes: matrices holds ${batch.matrices.length} floats for ${batch.count} instances`,
+      );
+    }
+    if (batch.params && batch.params.length < batch.count * INSTANCE_PARAM_FLOATS) {
+      throw new Error(
+        `frame.meshes: params holds ${batch.params.length} floats for ${batch.count} instances`,
+      );
+    }
+    this.sink.pushBatch(material, mesh, batch, mesh.bounds, null);
+  }
+
+  /**
+   * Draw a retained `InstanceList` (`renderer.createInstanceList`): its instances live in their
+   * own GPU buffer, uploaded only where `set` / `remove` changed them since the last frame.
+   * Culled as one sphere (`list.bounds`), one draw call.
+   */
+  list(list: InstanceList): void {
+    if (list.count <= 0) return;
+    this.sink.pushBatch(list.material, list.mesh, list, null, list);
   }
 
   /**

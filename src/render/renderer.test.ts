@@ -8,7 +8,7 @@ import {
   fakeRendererGpu,
   type PassCommand,
 } from './fake-gpu';
-import type { Frame } from './frame';
+import { type Frame, INSTANCE_PARAM_FLOATS } from './frame';
 import {
   DEFAULT_SHADOW_BIAS,
   LAYERS_OFFSET_FLOATS,
@@ -1478,5 +1478,338 @@ describe('shadow pass', () => {
         .filter((x) => (x.label ?? '').startsWith('engine-shadow-globals'))
         .every((x) => x.destroyed),
     ).toBe(true);
+  });
+});
+
+describe('batch submit (ws/batch-submit)', () => {
+  const OPAQUE = { label: 'o', wgsl: WGSL, uniformBytes: 16, blend: 'opaque' as const };
+
+  /** A perspective camera at the origin looking down -z, 90° fov: |x| beyond |z| is out. */
+  function batchSetup() {
+    const { fake, r } = setup();
+    r.camera = Camera.perspective(Math.PI / 2, 1, 0.1, 1000);
+    r.camera.depthTest = false;
+    const m = r.createMaterial(OPAQUE);
+    const sphere = r.createMesh({ ...quadGeometry(), bounds: { center: [0, 0, 0], radius: 1 } });
+    return { fake, r, m, sphere };
+  }
+
+  function cube3d(r: Renderer) {
+    return r.createMesh({
+      vertices: new Float32Array(VERTEX3D_FLOATS * 3),
+      layout: VERTEX_LAYOUT_3D,
+      bounds: { center: [0, 0, 0], radius: 1 },
+    });
+  }
+
+  /** Matrices of `n` unit instances in a row along x at depth `z` (x = (i - n/2) * spacing). */
+  function row(n: number, z: number, spacing = 1): Float32Array {
+    const m = new Float32Array(n * 12);
+    for (let i = 0; i < n; i++) m.set(new Transform({ x: (i - n / 2) * spacing, z }).world, i * 12);
+    return m;
+  }
+
+  /** Every write to the buffer with `label`, in order, as floats. */
+  function captureWrites(fake: FakeDevice, label: string) {
+    const seen: { offset: number; data: Float32Array }[] = [];
+    const q = fake.device.queue as unknown as {
+      writeBuffer: (
+        b: { label?: string },
+        o: number,
+        d: ArrayBuffer,
+        off?: number,
+        n?: number,
+      ) => void;
+    };
+    const orig = q.writeBuffer.bind(q);
+    q.writeBuffer = (b, o, d, off = 0, n) => {
+      if (b.label === label) {
+        seen.push({ offset: o, data: new Float32Array(d.slice(off, off + (n ?? d.byteLength))) });
+      }
+      orig(b, o, d, off, n);
+    };
+    return seen;
+  }
+
+  const firsts = (cmds: PassCommand[]) => draws(cmds).map((d) => [d.firstInstance, d.instances]);
+
+  it('frame.meshes draws a batch as one call from one upload, defaults when params is null', () => {
+    const { fake, r, m, sphere } = batchSetup();
+    const writes = captureWrites(fake, 'instances');
+    const matrices = row(4, -10);
+    r.camera.cull = false;
+    const f = r.beginFrame(0, 0);
+    f.meshes(sphere, m, { count: 4, matrices });
+    r.endFrame();
+    expect(fake.errors).toEqual([]);
+    expect(firsts(sceneCommands(fake))).toEqual([[0, 4]]);
+    expect(r.stats.instances).toBe(4);
+    expect(r.stats.batches).toBe(1);
+    expect(r.stats.drawCalls).toBe(1);
+    expect(writes).toHaveLength(1);
+    const d = writes[0]!.data;
+    expect(d.length).toBe(4 * INSTANCE_FLOATS);
+    for (let i = 0; i < 4; i++) {
+      const o = i * INSTANCE_FLOATS;
+      expect([...d.subarray(o, o + 12)]).toEqual([...matrices.subarray(i * 12, i * 12 + 12)]);
+      const at = (k: number, n: number) => [...d.subarray(o + k, o + k + n)];
+      expect(at(INSTANCE_OFFSET.uvRect, 4)).toEqual([0, 0, 1, 1]);
+      expect(at(INSTANCE_OFFSET.tint, 4)).toEqual([1, 1, 1, 1]);
+      expect(d[o + INSTANCE_OFFSET.flags]).toBe(2);
+      expect(at(INSTANCE_OFFSET.size, 2)).toEqual([1, 1]);
+    }
+    // Explicit params are copied verbatim after each matrix.
+    const params = new Float32Array(4 * INSTANCE_PARAM_FLOATS);
+    for (let i = 0; i < params.length; i++) params[i] = i + 0.5;
+    const g = r.beginFrame(1, 0);
+    g.meshes(sphere, m, { count: 4, matrices, params });
+    r.endFrame();
+    const d2 = writes[1]!.data;
+    expect([...d2.subarray(12, 28)]).toEqual([...params.subarray(0, 16)]);
+    expect([...d2.subarray(3 * 28 + 12, 4 * 28)]).toEqual([...params.subarray(48, 64)]);
+    // Short arrays throw before anything is recorded; an empty batch is a no-op.
+    const h = r.beginFrame(2, 0);
+    expect(() => h.meshes(sphere, m, { count: 5, matrices })).toThrow(/matrices/);
+    expect(() => h.meshes(sphere, m, { count: 4, matrices, params: new Float32Array(3) })).toThrow(
+      /params/,
+    );
+    h.meshes(sphere, m, { count: 0, matrices });
+    r.endFrame();
+    expect(r.stats.instances).toBe(0);
+    expect(r.stats.batches).toBe(0);
+  });
+
+  it('culls per instance over the typed array without batch bounds, as one unit with them', () => {
+    const { fake, r, m, sphere } = batchSetup();
+    // 20 spheres at z = -10, 4 apart (x = -40..36): the 90° cone sees |x| < 11 → 5 of them.
+    const matrices = row(20, -10, 4);
+    const frame = (bounds: { center: [number, number, number]; radius: number } | null) => {
+      const f = r.beginFrame(0, 0);
+      f.meshes(sphere, m, { count: 20, matrices, bounds });
+      r.endFrame();
+      return firsts(sceneCommands(fake));
+    };
+    expect(frame(null)).toEqual([[0, 5]]);
+    expect(r.stats.culled).toBe(15);
+    expect(r.stats.instances).toBe(5);
+    expect(r.stats.batches).toBe(1);
+    // Batch bounds in view: no per-instance test, every instance draws.
+    expect(frame({ center: [0, 0, -10], radius: 50 })).toEqual([[0, 20]]);
+    expect(r.stats.culled).toBe(0);
+    expect(r.stats.instances).toBe(20);
+    // Batch bounds out of view: the whole batch goes, counted by its instances.
+    expect(frame({ center: [500, 0, -10], radius: 1 })).toEqual([]);
+    expect(r.stats.culled).toBe(20);
+    expect(r.stats.instances).toBe(0);
+    expect(r.stats.batches).toBe(0);
+    // Cull off: everything, in submission order; same state merges with the singles around it.
+    r.camera.cull = false;
+    const f = r.beginFrame(0, 0);
+    f.mesh(sphere, m, new Transform({ z: -5 }));
+    f.meshes(sphere, m, { count: 20, matrices });
+    f.mesh(sphere, m, new Transform({ z: -6 }));
+    r.endFrame();
+    expect(firsts(sceneCommands(fake))).toEqual([[0, 22]]);
+    expect(r.stats.instances).toBe(22);
+    expect(r.stats.batches).toBe(1);
+    // Steady state allocates no GPU objects.
+    r.camera.cull = true;
+    const counts = () => [fake.buffers.length, fake.textures.length, fake.bindGroups.length];
+    const before = counts();
+    for (let i = 0; i < 3; i++) frame(null);
+    expect(counts()).toEqual(before);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('a batch is one sort key: the depth sort keeps it whole, placed by its first instance', () => {
+    const { fake, r, m, sphere } = batchSetup();
+    const b = r.createMaterial({ ...OPAQUE, label: 'b' });
+    r.camera.depthTest = true;
+    r.camera.cull = false;
+    const f = r.beginFrame(0, 0);
+    f.meshes(sphere, m, { count: 3, matrices: row(3, -30) });
+    f.mesh(sphere, b, new Transform({ z: -10 }));
+    f.meshes(sphere, m, { count: 3, matrices: row(3, -2) });
+    r.endFrame();
+    // Opaque front to back: the near batch, the single at -10, the far batch.
+    expect(firsts(sceneCommands(fake))).toEqual([
+      [0, 3],
+      [3, 1],
+      [4, 3],
+    ]);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('the shadow pass draws the batch, culled per instance against the sun box', () => {
+    const { fake, r, m } = batchSetup();
+    const cube = cube3d(r);
+    // Two in the 20-unit sun box (one behind the camera), one far outside it.
+    const matrices = new Float32Array(3 * 12);
+    matrices.set(new Transform({ z: -10 }).world, 0);
+    matrices.set(new Transform({ z: 10 }).world, 12);
+    matrices.set(new Transform({ x: 100, z: -10 }).world, 24);
+    const f = r.beginFrame(0, 0);
+    f.lights.sun.dir = [-0.4, -1, -0.3];
+    f.lights.sun.color = [1, 1, 1];
+    f.lights.sun.shadow = { extent: 20 };
+    f.meshes(cube, m, { count: 3, matrices });
+    r.endFrame();
+    expect(r.stats.instances).toBe(1);
+    expect(r.stats.culled).toBe(2);
+    const sp = fake.passes.filter((p) => p.label === 'shadow')[0]!;
+    expect(firsts(sp.commands)).toEqual([[1, 2]]);
+    expect(r.stats.shadowDraws).toBe(2);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('InstanceList: set appends, remove swap-removes and returns the moved index', () => {
+    const { r, m, sphere } = batchSetup();
+    const list = r.createInstanceList(sphere, m, 8);
+    expect(list.count).toBe(0);
+    for (let i = 0; i < 5; i++)
+      list.set(i, new Transform({ x: i, z: -10 }), { tint: [i, 0, 0, 1] });
+    expect(list.count).toBe(5);
+    expect(() => list.set(7, new Transform())).toThrow(/index 7/);
+    expect(list.remove(1)).toBe(4); // the last moved into slot 1
+    expect(list.count).toBe(4);
+    expect(list.matrices[1 * 12 + 3]).toBe(4); // its x
+    expect(list.params[1 * INSTANCE_PARAM_FLOATS + 4]).toBe(4); // its tint.r
+    expect(list.remove(3)).toBe(-1); // removing the last moves nothing
+    expect(list.count).toBe(3);
+    // A raw matrix: size is the columns' lengths; a Transform gives its scale.
+    list.set(3, new Transform({ scaleX: 2, scaleY: 3 }).world);
+    expect(list.params[3 * INSTANCE_PARAM_FLOATS + 14]).toBeCloseTo(2);
+    expect(list.params[3 * INSTANCE_PARAM_FLOATS + 15]).toBeCloseTo(3);
+    expect(list.params[3 * INSTANCE_PARAM_FLOATS + 13]).toBe(2); // default flags
+    list.set(0, new Transform({ scaleX: 5, scaleY: 6 }));
+    expect(list.params[14]).toBe(5);
+    expect(list.params[15]).toBe(6);
+    // Capacity is hard.
+    for (let i = list.count; i < 8; i++) list.set(i, new Transform());
+    expect(() => list.set(8, new Transform())).toThrow(/full/);
+    list.clear();
+    expect(list.count).toBe(0);
+    expect(list.dirty).toBe(false);
+  });
+
+  it('InstanceList uploads only what changed, draws from its own buffer, culled by its bounds', () => {
+    const { fake, r, m, sphere } = batchSetup();
+    const list = r.createInstanceList(sphere, m, 16);
+    const writes = captureWrites(fake, 'instance-list');
+    for (let i = 0; i < 6; i++) list.set(i, new Transform({ x: i - 3, z: -10 }));
+    expect(list.dirty).toBe(true);
+    const frame = () => {
+      const f = r.beginFrame(0, 0);
+      f.list(list);
+      r.endFrame();
+    };
+    frame();
+    expect(fake.errors).toEqual([]);
+    expect(list.dirty).toBe(false);
+    const ranges = () => writes.map((w) => [w.offset / 112, w.data.length / INSTANCE_FLOATS]);
+    expect(ranges()).toEqual([[0, 6]]);
+    expect([...writes[0]!.data.subarray(2 * 28, 2 * 28 + 12)]).toEqual([
+      ...list.matrices.subarray(24, 36),
+    ]);
+    expect(firsts(sceneCommands(fake))).toEqual([[0, 6]]);
+    expect(r.stats.instances).toBe(6);
+    expect(r.stats.batches).toBe(1);
+    expect(r.stats.drawCalls).toBe(1);
+    // Unchanged: no upload at all, to the list or the shared instance buffer.
+    const shared = () => fake.writes.filter((w) => w.buffer.label === 'instances').length;
+    const sharedBefore = shared();
+    frame();
+    expect(ranges()).toEqual([[0, 6]]);
+    expect(shared()).toBe(sharedBefore);
+    expect(r.stats.instances).toBe(6);
+    // One instance changed: one write of one instance at its offset.
+    list.set(4, new Transform({ x: 1, z: -12 }));
+    frame();
+    expect(ranges()).toEqual([
+      [0, 6],
+      [4, 1],
+    ]);
+    // Swap-remove of slot 1 rewrites slot 1 only; the draw shrinks.
+    expect(list.remove(1)).toBe(5);
+    frame();
+    expect(ranges().at(-1)).toEqual([1, 1]);
+    expect(firsts(sceneCommands(fake))).toEqual([[0, 5]]);
+    // The automatic sphere holds every instance; all behind the camera drops the whole list.
+    const b = list.bounds!;
+    expect(b.center[2]).toBeCloseTo(-11); // z from -12 to -10
+    expect(b.radius).toBeGreaterThan(3);
+    expect(r.stats.culled).toBe(0);
+    for (let i = 0; i < list.count; i++) list.set(i, new Transform({ x: i, z: 10 }));
+    frame();
+    expect(r.stats.culled).toBe(5);
+    expect(r.stats.instances).toBe(0);
+    expect(r.stats.batches).toBe(0);
+    // A fixed sphere overrides the automatic one; null returns to it.
+    list.setBounds({ center: [0, 0, -10], radius: 1 });
+    frame();
+    expect(r.stats.culled).toBe(0);
+    expect(r.stats.instances).toBe(5);
+    list.setBounds(null);
+    frame();
+    expect(r.stats.culled).toBe(5);
+    // Steady state allocates nothing; destroy releases the buffer.
+    const counts = () => [fake.buffers.length, fake.textures.length, fake.bindGroups.length];
+    const before = counts();
+    for (let i = 0; i < 3; i++) frame();
+    expect(counts()).toEqual(before);
+    list.destroy();
+    expect(fake.buffers.find((x) => x.label === 'instance-list')!.destroyed).toBe(true);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('a list between singles: its own vertex buffer, no merge, drawn in the shadow pass too', () => {
+    const { fake, r, m } = batchSetup();
+    const cube = cube3d(r);
+    r.camera.cull = false;
+    const list = r.createInstanceList(cube, m, 4);
+    list.set(0, new Transform({ z: -10 })).set(1, new Transform({ x: 1, z: -10 }));
+    const f = r.beginFrame(0, 0);
+    f.lights.sun.dir = [-0.4, -1, -0.3];
+    f.lights.sun.color = [1, 1, 1];
+    f.lights.sun.shadow = { extent: 20 };
+    f.mesh(cube, m, new Transform({ z: -5 }));
+    f.list(list);
+    f.mesh(cube, m, new Transform({ z: -6 }));
+    r.endFrame();
+    const cmds = sceneCommands(fake);
+    expect(firsts(cmds)).toEqual([
+      [0, 1],
+      [0, 2],
+      [1, 1],
+    ]);
+    // Three draws of one mesh, each rebinding both vertex buffers (the list's, then back).
+    expect(cmds.filter((c) => c.op === 'other' && c.name === 'setVertexBuffer')).toHaveLength(6);
+    expect(r.stats.instances).toBe(4);
+    expect(r.stats.batches).toBe(1);
+    expect(r.stats.drawCalls).toBe(3);
+    const sp = fake.passes.filter((p) => p.label === 'shadow')[0]!;
+    expect(
+      draws(sp.commands)
+        .map((d) => d.instances)
+        .sort(),
+    ).toEqual([1, 1, 2]);
+    expect(r.stats.shadowDraws).toBe(4);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('a batch or list cannot use a per-draw material', () => {
+    const { r, sphere } = batchSetup();
+    const pd = r.createMaterial({
+      label: 'pd',
+      wgsl: WGSL,
+      uniformBytes: 16,
+      perDrawUniforms: true,
+    });
+    expect(() => r.createInstanceList(sphere, pd, 4)).toThrow(/perDrawUniforms/);
+    const f = r.beginFrame(0, 0);
+    expect(() => f.meshes(sphere, pd, { count: 1, matrices: new Float32Array(12) })).toThrow(
+      /perDrawUniforms/,
+    );
+    r.endFrame();
   });
 });
