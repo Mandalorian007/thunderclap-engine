@@ -4,6 +4,8 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 
 ## Next (unreleased)
 
+- `templates/third-person` (`@thunderclap/template-third-person`, ws/template-third-person): a copyable third-person action game: a procedurally generated skinned glb parsed at startup, `createAnimGraph`, `Follow` with zoom, two-bone foot IK on a `geom` heightfield, root motion, `lookAt`, three cosmetic sockets via `attachTransform`, anchored enemy plates, PBR with shadows and fog. New root scripts `template:third-person` and `check:template-third-person`; `pnpm check` runs the latter.
+
 ### Repository
 - The engine has its own repo, `Mandalorian007/thunderclap-engine`, with the `packages/engine` history from The Last Rune. It adds a standalone pnpm setup, CI (`pnpm check`), a README and a runnable example (`examples/hello`, `pnpm example`). The Last Rune keeps its in-repo copy for now.
 

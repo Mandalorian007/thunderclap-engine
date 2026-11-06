@@ -1,0 +1,24 @@
+{
+  "name": "@thunderclap/template-third-person",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A copyable third-person action game on @thunderclap/engine: a procedurally generated skinned biped (a glb built at startup, no binary asset) driven by an animation graph, a Follow camera with orbit and zoom, socket cosmetics, foot IK on a heightfield, root-motion attacks, PBR with sun shadows and fog, enemies with name plates and health bars. Copy the folder, rename the package, replace character/ and enemies/.",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "test": "vitest run",
+    "check": "pnpm typecheck && pnpm lint && pnpm test"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.6.4",
+    "@thunderclap/engine": "workspace:*",
+    "@types/node": "^26.6.6",
+    "@webgpu/types": "^0.1.74",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  }
+}
