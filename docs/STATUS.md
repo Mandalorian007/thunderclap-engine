@@ -44,6 +44,8 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Skinning | ws/skinning | `VERTEX_LAYOUT_SKINNED`, `SkinPalette`, skinning in `materialPrelude` and the shadow pass; harness `skin.html` | shadows, anim (layout) | 🔧 in progress (on ws/shadows) |
 | 5 | Standard PBR material | ws/pbr | `createStandardMaterial` (base, metal-rough, normal, occlusion, emissive; GGX) over the lights block, shadows and fog; `WGSL_PBR`; harness `pbr.html` | shadows | 🔧 in progress (on ws/shadows) |
 | 5 | Doc sweep 3 | ws/doc-sweep-3 | `check:docs` clean; ARCHITECTURE *Planned* lines current after wave 4 (XR lines all *Today*); root README page list and roadmap current; contradictions fixed and listed | wave 4 | 🔧 in progress |
+| 5 | Spot lights + masks | ws/spot-lights | `SpotLight`, `Lights.spots`, per-light `layers` masks, `engine_light_accum`; harness `lights.html` | shadows | 🔧 in progress |
+| 5 | Snapshot gate | ws/snap-gate | `pnpm snap` / `snap:check`: golden PNGs for 2D harness pages on `desktop-1280`, E-008 tolerance, in `test:e2e`; integrate brief step | — | 🔧 in progress |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
@@ -57,7 +59,6 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 ## Wave 5 candidates (after wave 4 merges)
 
 - Rule from ws/cull: perspective cameras cull by default, so a 3D harness asserting `stats.instances` counts `culled` too.
-- Spot lights and per-light layer masks (after ws/shadows).
 - Character pipeline, stage 2 (E-015): glTF skins + animations into `anim`/`skinning`; attachment sockets for cosmetics; a `templates/third-person` showcase; GPU picking.
 
 ## Backlog (from engineer reports, unscheduled)
