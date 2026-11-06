@@ -144,7 +144,8 @@ async function main(): Promise<void> {
         SAMPLE_CUBE_CENTER[2],
         state.probes.cube,
       );
-      probe(camera, SAMPLE_PLANE_SCALE * 0.3, 0, SAMPLE_PLANE_SCALE * 0.3, state.probes.ground);
+      // Beside the cube (perpendicular to the default view), so it stays on screen on every row.
+      probe(camera, SAMPLE_PLANE_SCALE * 0.25, 0, SAMPLE_PLANE_SCALE * -0.2, state.probes.ground);
     },
   });
   res.onDeviceLost(() => loop.stop());

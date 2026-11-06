@@ -97,6 +97,12 @@ test('loads a generated GLB: counts match and the textured cube renders', async 
   expect(s.bounds.radius).toBeLessThan(6);
   expect(s.bounds.center[1]).toBeCloseTo(0.75, 3);
 
+  for (const p of [s.probes.cube, s.probes.ground]) {
+    expect(p.x).toBeGreaterThan(2);
+    expect(p.x).toBeLessThan(s.logical.width - 2);
+    expect(p.y).toBeGreaterThan(2);
+    expect(p.y).toBeLessThan(s.logical.height - 2);
+  }
   const [cube, ground] = await sample(page, [
     await toPage(s.probes.cube),
     await toPage(s.probes.ground),
