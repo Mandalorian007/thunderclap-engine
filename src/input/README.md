@@ -128,7 +128,7 @@ router.on('select', (e) => e.hit && toggle(e.hit.target));
 ```
 
 - `screenRay(camera, sx, sy, out)` unprojects screen units at depth 0 and 1 (0.5 with an infinite far plane). For `Camera.ortho2d` the ray starts on the near plane (z = -`ORTHO2D_HALF_DEPTH`) and points along +z, into the screen, so flat quads at z = 0 are hit one half-depth away.
-- `HitTester<T> = (ray) => Hit<T> | null`. Return the tester's own reused `Hit`; the router copies the nearest. `planeTester(z, target?)` and `aabbTester(boxes)` ship; write your own for grids, meshes or spheres.
+- `HitTester<T> = (ray) => Hit<T> | null`. Return the tester's own reused `Hit`; the router copies the nearest. `planeTester(z, target?)`, `aabbTester(boxes)` and the transformed testers below ship; write your own for grids or voxels.
 - Hover: mouse and pen are pointers while over the target. A touch is a pointer only while down, plus one tail tick after it lifts, so a `{ gesture: 'tap' }` select still sees its hit. A single touch aims with the magnify `aim` (the snapped target, else the lifted aim point).
 - Select: if the input binds the router's `selectAction` (default `'select'`), any press of that action selects the **primary** pointer's hit (the one with the latest activity), so a key, a tap gesture or a pad button all select what is hovered. Otherwise each pointer's button down-edge selects. The same goes for `secondary`. The event's `hit` may be `null`.
 - `{ pointer: 'select' | 'secondary' }` binds any pointer's button; `{ xr: 'trigger' | 'squeeze' | 'pinch', hand? }` binds an XR source's button.
@@ -140,7 +140,23 @@ router.on('select', (e) => e.hit && toggle(e.hit.target));
 - `PointerHitEvent`: every event's payload (`pointer`, `hit`), reused between emits: read it in the listener or copy it. `RoutedPointer`: one live pointer's sample (`source`, `key`, `device`, `hand`, `x`, `y`, `ray`, buttons, `xr`) plus its nearest `hit`.
 - `PointerActions`: the slice of `Input` the router reads (`bound`, `pressed`); a game that drives the router without an `Input` calls `router.poll()` then `router.resolve(actions)` with its own (`update()` is `poll()` then `resolve(null)`).
 - `PadCursorOptions`: `getGamepads`, `pad`, `axes` ([0, 1], the left stick), `deadzone` (0.2), `speed` (0.012 of the short side per tick), `selectButton` (0), `secondaryButton` (2).
-- Ray helpers for writing a `HitTester`: `Vec3` (a mutable `[x, y, z]`), `Aabb` (`min`, `max`, `target`, for `aabbTester`), `createRay()`, `createHit(target)` (allocate once and reuse) and `rayAt(ray, t, out)` (the point at distance `t`).
+- Ray helpers for writing a `HitTester`: `Vec3` (a mutable `[x, y, z]`), `Aabb` (`min`, `max`, `target`, for `aabbTester`), `createRay()`, `createHit(target)` (allocate once and reuse), `rayAt(ray, t, out)` (the point at distance `t`), `transformRayInto(ray, worldMatrix3x4, outRay)` (the ray in an object's space; returns world units per object unit, 0 when singular) and `rayTriangle(ray, a, b, c, cullBack, outNormal | null)` (Möller–Trumbore: distance or -1).
+
+### Picking 3D things (ws/pick)
+
+Three testers pick against a `Transform` (any `RayTransform`, `Pick<Transform, 'world'>`: the 3×4 world matrix). Each reads the transform on every call, so a moving or spinning object is picked as drawn without re-registering, and each inverts the 3×3 itself, so rotation and non-uniform scale are fine. Every hit carries the world-space `point`, a unit `normal` facing the ray and `distance` in world units; a ray that starts inside a sphere or box hits at distance 0 with `normal: null` (as `aabbTester`). Zero allocations per call: each tester keeps its own scratch.
+
+```ts
+const thing = { transform: new Transform({ x: 3 }), vertices, indices };   // what the game drew
+router.addTester(meshTester(thing.transform, thing.vertices, thing.indices, thing));
+router.addTester(sphereTester(other.transform, mesh.bounds, other));       // cheap proxy
+router.addTester(obbTester(door.transform, [0.5, 1, 0.05], door));         // half extents
+```
+
+- `sphereTester(transform, bounds: RayBounds, target?)`: the object-space sphere (`render`'s `MeshBounds`: `center`, `radius`; read each call) placed by the transform. Under non-uniform scale it is an ellipsoid and the normal follows it.
+- `obbTester(transform, halfExtents, target?)`: the object-space box `[-h, h]` placed by the transform; the normal is the entering face's.
+- `meshTester(transform, positions, indices | null, target?, opts?)`: the triangles of a mesh whose positions the game keeps on the CPU. `positions` is the interleaved `Float32Array` it uploaded (`MeshDesc.vertices`); `MeshTesterOptions.stride` and `offset` (floats; default 12 and 0, `VERTEX_LAYOUT_3D`) say where x, y, z sit, so pass `layout.floats` for another layout. `indices` is the index buffer (`Uint16Array` or `Uint32Array`) or `null` for a plain triangle list. The ray is rejected on `opts.bounds` first (an object-space sphere, read each call; default computed once from the positions; `radius` Infinity skips it), then every triangle is tested with Möller–Trumbore and the nearest wins; `opts.cullBack` skips triangles whose back faces the ray (counter-clockwise front). Cost: one 3×3 inverse plus O(triangles) per call after the sphere, so for large meshes a chunk pipeline registers one tester per chunk (its bounds reject most rays) or a `sphereTester` proxy first.
+- Normals: `sphereTester` and `obbTester` return outward normals of what was entered; `meshTester` returns the triangle's geometric normal turned to face the ray, so a back face (without `cullBack`) reports a normal towards the ray too.
 
 ### The `PointerSource` seam (XR)
 
