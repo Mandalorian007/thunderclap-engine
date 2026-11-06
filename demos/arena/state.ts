@@ -42,6 +42,13 @@ export interface ArenaDemoState {
   };
   /** Points alive in the sword trail. */
   trailPoints: number;
+  /**
+   * The most points the trail held during the current (or last) swing, read in the sim step
+   * before the trail ages them, so a spec asserts the arc was sampled whatever the frame pacing.
+   */
+  trailPeak: number;
+  /** `?still`: the idle bob and the dust are parked. */
+  still: boolean;
   /** `gpuDiagnostics.errorCount`. */
   gpuErrors: number;
 }

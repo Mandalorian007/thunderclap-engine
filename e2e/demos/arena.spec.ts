@@ -17,7 +17,14 @@ const DRAW_CALLS_MIN = 4;
 const DRAW_CALLS_MAX = 40;
 const MIN_FPS_DESKTOP = 20;
 
-const readState = (page: Page) => page.evaluate(() => JSON.stringify(window.__demo));
+/** Read the state after a `requestAnimationFrame` settle, so the probe sees a whole frame's values. */
+const readState = (page: Page) =>
+  page.evaluate(
+    () =>
+      new Promise<string>((resolve) =>
+        requestAnimationFrame(() => resolve(JSON.stringify(window.__demo))),
+      ),
+  );
 const parse = (s: string) => JSON.parse(s) as ArenaDemoState;
 
 async function boot(page: Page): Promise<{ errors: string[]; state: ArenaDemoState }> {
@@ -85,8 +92,10 @@ test.describe('demo: arena', () => {
     await expect
       .poll(async () => parse(await readState(page)).swings, { timeout: 10_000 })
       .toBeGreaterThan(before.swings);
+    // `trailPeak` is the most points the trail held during this swing, read in the sim step
+    // before the trail ages them: a stalled frame cannot lower it (E-017, STATUS backlog).
     await expect
-      .poll(async () => parse(await readState(page)).trailPoints, { timeout: 10_000 })
+      .poll(async () => parse(await readState(page)).trailPeak, { timeout: 10_000 })
       .toBeGreaterThan(1);
     await expect
       .poll(async () => parse(await readState(page)).swinging, { timeout: 10_000 })
