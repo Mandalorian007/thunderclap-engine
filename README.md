@@ -108,7 +108,7 @@ if (ctx) {
 
 A pure client of a server-authoritative game leaves out `save` (then `ctx.save` is `null` and the engine never touches storage) and passes `sim: false`, so the loop runs once per rendered frame and calls `ctx.hooks.frame(dt)`, where it applies the latest server state.
 
-VR: `createGame({ xr: XrOptions })` (`{ referenceSpace?, onEnter?, onExit? }`) gives `ctx.xr: XrControl` (`supported()`, `enter()`, `exit()`, `active`, `session`, `surface`). `enter()` requests an `immersive-vr` session with the WebGPU binding, moves the loop onto the session's frames, records the scenes once through the head camera, renders each eye into the session's layer and adds the controllers and hands to `ctx.pointers` as rays; `exit()` (or the headset ending the session) restores the page. Nothing changes for a game that never calls it.
+VR: `createGame({ xr: XrOptions })` (`{ referenceSpace?, onEnter?, onExit? }`) gives `ctx.xr: XrControl` (`supported()`, `enter()`, `exit()`, `active`, `session`, `surface`). `enter()` requests an `immersive-vr` session with the WebGPU binding, moves the loop onto the session's frames, records the scenes once through the head camera, renders each eye through the post stack into the session's layer (the headset sees what the screen would) and adds the controllers and hands to `ctx.pointers` as rays; `exit()` (or the headset ending the session) restores the page. Nothing changes for a game that never calls it.
 
 The world is a 1920×1080 logical space by default (origin top-left, y down). The surface scales it to fit any screen. A game typically widens `ctx` with its own nouns (`Object.assign(ctx, { ... })`), so every scene gets one typed ctx.
 
@@ -167,7 +167,8 @@ renderer.endFrame()
   2. pre-passes and drawable.prepare() (compute, uploads), on the first render() of the frame
   3. per render(frame, camera, target): frustum cull, sort, a sun shadow pass when lights.sun.shadow is set,
      then the scene pass → HDR colour + emissive targets (+ depth)
-  4. post stack (bloom, god rays, fog, vignette, grade) → swapchain (skipped by endFrame({ present: false }) in XR)
+  4. post stack (bloom, god rays, fog, vignette, grade) → swapchain (in VR: per eye, into the
+     session's layer, via renderer.resolve)
   5. submit
 ```
 
@@ -210,12 +211,11 @@ The engine was built inside The Last Rune and extracted into this repo with its 
 
 Landed through wave 4 (Gate D, `65800b7`): the lighting block with sun shadows and fog, streamed meshes with frustum culling and texture arrays, two views per frame and WebXR on top of them, first-person `Look`, world-anchored DOM, world-space particles, spatial audio and glTF static geometry. [docs/OFFERING.md](docs/OFFERING.md) lists each with its entry point.
 
-Landed in wave 5 so far: the pure animation module (`@thunderclap/engine/anim`: clips, `Pose`, `Skeleton`, mixer), glTF skins and animations, a `Follow` third-person controller on `Look`, `Trail` ribbons in 2D or world space, and shadow casters outside the view frustum (`stats.shadowDraws`).
+Landed in wave 5 so far: the pure animation module (`@thunderclap/engine/anim`: clips, `Pose`, `Skeleton`, mixer), glTF skins and animations, a `Follow` third-person controller on `Look`, `Trail` ribbons in 2D or world space, shadow casters outside the view frustum (`stats.shadowDraws`), and the post stack per eye in VR (`renderer.resolve`).
 
 In flight (wave 5, see [docs/STATUS.md](docs/STATUS.md)):
 
 - **Characters** (E-015): GPU skinning in the scene and shadow passes, a standard PBR material over the lights block.
-- **XR post per eye**: the post stack into the projection layer.
 - **`templates/first-person`**: a copyable 3D walk.
 
 After that: spot lights and per-light layer masks, attachment sockets, a third-person showcase template, GPU picking, and publishing `engine-v1.0.0`.

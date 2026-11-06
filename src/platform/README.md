@@ -91,9 +91,15 @@ view's projection and inverse pose, `screen` the viewport as a fraction of the t
 layer's textures settle. `head` is a camera between the eyes (eye 0's projection, the viewer
 pose) for a single `Scene.render` record. `XrSurface.supported()` says whether `XRGPUBinding`
 exists; the constructor throws without it. `destroy()` frees the eye targets and the layer.
-`createGame({ xr })` builds one on `ctx.xr.enter()` and renders every eye with
-`renderer.render(frame, eye.camera, eye.target)` then `renderer.endFrame({ present: false })`;
-the post stack does not run in XR. The ambient WebXR and WebXR/WebGPU-binding declarations are
+With `scene: true` (ws/xr-post) the eyes go through the post stack: the surface keeps `scene`, one
+HDR `SceneTarget` the size of an eye (made on the first frame with a pose, resized when the eye
+size changes, freed by `destroy`), every eye camera's `screen` is the whole unit square, the layer
+takes `colorFormat` (pass `renderer.format`, what the post stack writes) and no depth unless
+`depthStencilFormat` says so, and the caller renders each eye into `scene` and resolves it into
+`eye.target` at `eye.viewport`. `createGame({ xr })` builds one that way on `ctx.xr.enter()` and
+renders every eye with `renderer.render(frame, eye.camera, surface.scene)` then
+`renderer.resolve(surface.scene, eye.target.color.view, eye.viewport)`, and ends the frame with
+`renderer.endFrame({ present: false })`. The ambient WebXR and WebXR/WebGPU-binding declarations are
 `xr-types.d.ts` (`navigator.xr` and `XRGPUBinding` optional, so nothing here assumes they exist);
 `xr-fake.ts` is the in-repo fake (`installFakeXr`) the unit tests drive, not an export.
 

@@ -24,6 +24,7 @@
 | GPU particles in 2D or world space (camera-facing, soft, lit), weather-class FX | `new ParticleSystem({ space: 'world', lit, fade, softness })`, `EmitParams` with `z`, `vz`, `wind`, 3D `gravity` | particles-3d |
 | Spatial audio: a listener and positioned voices | `audio.listener.fromCamera(camera)`, `PlayOptions.at`, `voice.setPosition` | spatial-audio |
 | WebXR: enter and leave an immersive session, an eye per render, controllers and hands as rays | `createGame({ xr })`, `ctx.xr.enter()` / `exit()` / `supported()`; `XrSurface`, `createXrHost`, `XrPointerSource` | xr |
+| The post stack (bloom, tone map, grade) per eye in VR | `renderer.resolve(target, out, viewport?)`; `XrSurface.scene` (`createGame` passes `scene: true`) | xr-post |
 | Hosts: top-level page, cross-origin iframe, Electron | `Host`, `createWebHost`, `createElectronHost` (`@thunderclap/host-electron`) | host, host-electron |
 | Typed analytics events to a game-supplied sink | `createAnalytics({ sink }).attach(ctx)`; the template's `createBeaconSink(url)` | analytics |
 | Versioned saves with migrations, quota- and blocked-storage-safe | `createSaveStore({ ..., host })`, `s` schemas | save |
@@ -34,15 +35,12 @@
 | Ribbon trails in 2D or world space | `Trail` in `@thunderclap/engine/fx` | trails |
 | Shadow casters outside the view frustum still cast (the shadow list is culled against the sun box) | `renderer.stats.shadowDraws` | shadow-cull |
 
-Not XR yet: the post stack per eye (an XR frame skips post; see below).
-
 ## In flight (wave 5, `docs/STATUS.md`)
 
 Branches exist; nothing here is on `main`. Names are the briefs' and may change at merge.
 
 | Stream | What it adds | Entry point (planned) |
 | --- | --- | --- |
-| ws/xr-post | post stack per eye into the projection layer | `ctx.xr.enter()` runs `ctx.post` per eye |
 | ws/skinning | GPU skinning in the scene and shadow passes | `VERTEX_LAYOUT_SKINNED`, `SkinPalette` |
 | ws/pbr | standard PBR material over the lights block, shadows and fog | `createStandardMaterial`, `WGSL_PBR` |
 | ws/template-first-person | copyable 3D walk: `Look`, Worker chunks, texture array, shadow, fog, weather, anchors | `templates/first-person` |

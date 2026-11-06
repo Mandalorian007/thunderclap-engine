@@ -22,6 +22,9 @@ loop.maxFps = 30;    // steady 30 fps on a 60 Hz display; null = every display f
   old source is cancelled and the next comes from the new one; called from inside a frame, the
   running frame finishes and reschedules through the new source; `createGame` uses it to move
   onto an XR session's host and back), `isRunning`, `halted`, `paused`, `maxFps`, `time`.
+  In VR `createGame`'s render step draws each eye into the XR surface's HDR `scene` target and
+  resolves it through the post stack into the eye's part of the layer (`renderer.resolve`,
+  ws/xr-post), then `endFrame({ present: false })`.
 - `LoopCallbacks`: `update(dt, time)` runs in fixed steps of `time.step`; `render(alpha, time)`
   once per rendered frame, `alpha` interpolating between sim states (0 while paused).
 - `GameLoopOptions` extends `FixedStepperOptions` with `fixed` (default true; false runs update

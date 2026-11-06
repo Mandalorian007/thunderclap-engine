@@ -1041,6 +1041,72 @@ describe('render call', () => {
     expect(bufs[1]!.size).toBeGreaterThanOrEqual(6 * INSTANCE_FLOATS * 4);
   });
 
+  it('resolve presents a target into a view at a viewport, loading the rest, and frees the target', () => {
+    const { fake, r } = setup();
+    r.resize(800, 450);
+    const eye = r.createSceneTarget({ width: 64, height: 32, label: 'eye' });
+    const layer = fake.device.createTexture({
+      label: 'layer',
+      size: [128, 32],
+      format: 'bgra8unorm',
+      usage: GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    const out = layer.createView();
+    const cam = Camera.perspective(1, 2, 0.1, 10);
+    const f = r.beginFrame(0, 0);
+    expect(() => r.resolve(eye, out)).toThrow(/before any render/);
+    f.sprite(null, { x: 1, y: 1 });
+    r.render(f, cam, eye);
+    r.resolve(eye, out, { x: 0, y: 0, width: 64, height: 32 });
+    const loadOps = [eye.colorAtt.loadOp, eye.depthAtt.depthLoadOp];
+    r.render(f, cam, eye);
+    loadOps.push(eye.colorAtt.loadOp, eye.depthAtt.depthLoadOp);
+    r.resolve(eye, out, { x: 64, y: 0, width: 64, height: 32 });
+    r.endFrame({ present: false });
+    expect(fake.errors).toEqual([]);
+    // The target was consumed by the first resolve, so the second eye clears again.
+    expect(loadOps).toEqual(['clear', 'clear', 'clear', 'clear']);
+    const present = fake.passes.filter((p) => p.label === 'pass:present-basic');
+    expect(present.length).toBe(2);
+    const rects = present.map(
+      (p) => p.commands.find((c) => c.op === 'other' && c.name === 'setViewport')!,
+    );
+    expect(rects.map((c) => (c as { args?: number[] }).args)).toEqual([
+      [0, 0, 64, 32, 0, 1],
+      [64, 0, 64, 32, 0, 1],
+    ]);
+    for (const p of present) {
+      const d = p.desc as GPURenderPassDescriptor;
+      const ca = (d.colorAttachments as GPURenderPassColorAttachment[])[0]!;
+      expect(ca.loadOp).toBe('load');
+      expect((ca.view as unknown as { texture: { label: string } }).texture.label).toBe('layer');
+    }
+    // The order on the encoder: scene, present, scene, present.
+    expect(fake.passes.slice(-4).map((p) => p.label)).toEqual([
+      'scene',
+      'pass:present-basic',
+      'scene',
+      'pass:present-basic',
+    ]);
+    // Steady state allocates nothing.
+    const frame = () => {
+      const g = r.beginFrame(0, 0);
+      g.sprite(null, { x: 1, y: 1 });
+      r.render(g, cam, eye);
+      r.resolve(eye, out, { x: 0, y: 0, width: 64, height: 32 });
+      r.render(g, cam, eye);
+      r.resolve(eye, out, { x: 64, y: 0, width: 64, height: 32 });
+      r.endFrame({ present: false });
+    };
+    frame();
+    const counts = () => [fake.buffers.length, fake.textures.length, fake.bindGroups.length];
+    const before = counts();
+    frame();
+    frame();
+    expect(counts()).toEqual(before);
+    expect(() => r.resolve(eye, out)).toThrow(/outside/);
+  });
+
   it('rejects render outside a frame or with a foreign frame', () => {
     const { r } = setup();
     expect(() => r.render(r.beginFrame(0, 0), r.camera)).not.toThrow();

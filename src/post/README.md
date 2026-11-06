@@ -82,7 +82,28 @@ When bloom is disabled the bloom chain is skipped. It still runs if god rays nee
   mean so the mist keeps its density. Bloom and rays run at half the scene resolution; the
   composite runs at output resolution and samples the scene by UV.
 - Write your own processor by implementing `PostProcessor { resize(w, h); encode(encoder,
-  inputs, outputView) }` and assigning it to `renderer.post`.
+  inputs, outputView, viewport?) }` and assigning it to `renderer.post`. `viewport` (texture px)
+  asks for the result in that part of the output only, loading the rest; the inputs may differ
+  in size from the last `resize`, so size yourself to them (see XR).
+
+## XR (ws/xr-post)
+
+The stack runs per eye, so a headset sees the same bloom, tone map and grade as the screen.
+`createGame`'s XR render step renders each eye into the surface's eye-sized HDR `scene` target
+and calls `renderer.resolve(scene, eye.target.color.view, eye.viewport)`, which runs
+`renderer.post` (this stack) from that target into the eye's part of the session's layer
+texture; `renderer.endFrame({ present: false })` then only submits. Inside `encode`:
+
+- Inputs of another size than the last `resize` (the eye, not the canvas) resize the stack
+  first, once; leaving VR resizes it back on the first page frame. Steady state allocates nothing.
+- With a `viewport` the composite (or the `compositeAtScene` upscale) sets viewport and scissor
+  to it and loads the rest of the output instead of clearing, so the second eye keeps the first;
+  `compositeAtScene` compares the scene size with the viewport, not the canvas.
+- Both eyes share the bloom chain and ray textures (the passes run one eye after the other on
+  one encoder), so VR costs no extra HDR allocation. Settings and blends apply to both eyes;
+  `godRays.x/y` stay in logical px of the design space.
+- Output is encoded to sRGB as on screen, so the layer is made in the swap-chain format
+  (`XrSurfaceOptions.colorFormat = renderer.format`).
 
 ## Types
 
