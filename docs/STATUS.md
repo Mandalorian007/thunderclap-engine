@@ -53,7 +53,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Bench | ws/bench | `harness/bench.html` scene ladder, `pnpm bench` → `docs/BENCH.md`; e2e one rung | gpu-timer | ✅ green at `d32c978` (709 tests; e2e 525/64/5 E-017 flakes); queued in chain 3 after sky |
 | 5 | Sockets | ws/sockets | `createSocket`, `socketWorld`, `attachTransform`, `Skeleton.names`; harness `sockets.html` | anim | ✅ green at `08085b6` (625 tests; e2e 510/52/0); queued in chain 2 after pick |
 | 5 | Texture registry | ws/texture-registry | `loadTexture` with mips, `defaultTextures` (white, black, flatNormal, metalRough, checker), unset slots bind white | pbr (wish) | ✅ green at `69a0d32` (705 tests; e2e 524/57/5 E-017 flakes); queued in chain 1 after spot-lights |
-| 5 | Geometry | ws/geom | `@thunderclap/engine/geom`: box/plane/sphere/icosphere/capsule/cylinder/torus, `Heightfield` with `heightAt`/`raycastHeightfield`, merge/transform; harness `geom.html` | — | 🔧 in progress |
+| 5 | Geometry | ws/geom | `@thunderclap/engine/geom`: box/plane/sphere/icosphere/capsule/cylinder/torus, `Heightfield` with `heightAt`/`raycastHeightfield`, merge/transform; harness `geom.html` | — | ✅ green at `ec57488` (747 tests; e2e 569/57/0); queued chain 4 |
 | 5 | IK + root motion | ws/ik | `twoBoneIk`, `lookAt`, `extractRootMotion`, `applyRootMotionDelta`; harness `ik.html` | anim | 🔧 in progress (on ws/anim) |
 | 5 | Anim graph | ws/anim-graph | `createAnimGraph`: states, 1D blend spaces with phase sync, conditional transitions, enter/exit hooks; harness `anim-graph.html` | anim | 🔧 in progress |
 | 5 | HUD widgets | ws/ui-hud | `ui.reticle`, `ui.meter`, `ui.slots`, `ui.heading` on the overlay; harness `hud.html` | ui | 🔧 in progress |
@@ -92,6 +92,8 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - `e2e/mesh.spec.ts:195` fog assertion uses a fixed `0.7` factor that sits within noise under load (ws/sky observation; ws/flake-input owns the fix).
 - First bench (`docs/BENCH.md`, shared machine): 10k culled cubes 3.6 ms CPU / 0.35 ms GPU; 50k cubes 29–38 ms CPU with the GPU idle: the per-call `frame.mesh` push path is the ceiling, not the GPU. → ws/batch-submit: a `frame.meshes(mesh, material, transforms[], params[])` bulk path or a retained instance list. Also wished: `RenderStats.shadowDraws` exposed (shadow-cull added it; bench should read it once merged) and `renderer.adapterInfo`.
 - `Gestures.pointerMove` runs `checkLongPress` before the pan threshold is crossed, so a slow drag under a long frame becomes a long-press and later moves are ignored (ws/flake-input root cause of the drag flake). A `Gestures` option or hook to observe pan events was wished for. → ws/gesture-longpress.
+- Replace the hand-built cube/ground/tube/icosphere geometry in `harness/mesh.ts`, `pick.ts`, `skin.ts` and the first-person template terrain with `geom` builders (ws/geom wish). → ws/comment-sweep.
+- Tangents in a vertex layout, for a normal-mapped material (ws/geom wish). → ws/gltf-materials.
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
