@@ -18,6 +18,9 @@ export {
 export type { DebugColor, DebugDrawOptions, DebugQuat, DebugVec3 } from './debug-draw';
 export { createDebugDraw, DEBUG_VERTEX_FLOATS, DebugDraw } from './debug-draw';
 export { DEBUG_DRAW_WGSL } from './debug-wgsl';
+export type { DecalBlend, DecalDesc, DecalMode, DecalsOptions } from './decals';
+export { DECAL_INSTANCE_FLOATS, DECAL_PARAMS_FLOATS, Decals } from './decals';
+export { WGSL_DECAL_BOX, WGSL_DECAL_DEPTH_COPY, WGSL_DECAL_QUAD } from './decals-wgsl';
 export type { FlickerOptions, PulseOptions } from './flicker';
 export { flicker, pulse, valueNoise1 } from './flicker';
 export type { EmitParams, EmitShape, ParticleSystemOptions } from './particles';
