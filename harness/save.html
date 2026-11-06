@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>ThunderClap engine save harness</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #000; color: #fff; overflow: hidden; font: 16px system-ui, sans-serif; }
+      #root { position: fixed; inset: 0; padding: 16px; box-sizing: border-box; display: flex; gap: 16px; }
+      .col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+      .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+      button { font: inherit; padding: 4px 12px; }
+      canvas { image-rendering: pixelated; width: 256px; height: 256px; background: #111; }
+      ul { margin: 0; padding: 0 0 0 16px; font-size: 14px; }
+      label { display: flex; gap: 8px; align-items: center; }
+    </style>
+  </head>
+  <body>
+    <main id="root"></main>
+    <script type="module" src="./save.ts"></script>
+  </body>
+</html>
