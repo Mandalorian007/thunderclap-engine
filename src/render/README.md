@@ -255,6 +255,9 @@ along the light from the camera position; default `-extent..extent`) and `bias` 
 `DEFAULT_SHADOW_BIAS` = 0.0015). With it set, every `render` whose frame has an opaque caster
 encodes a depth-only pass (`'shadow'`, before the `'scene'` pass) over the view's draws through
 the same `engine_vertex` as the scene, then binds the map as `engine_shadow_map`
+(the shadow list is culled against the sun's box, not the view frustum, so an off-screen caster
+on the camera's layers still shadows what the view sees; it is sorted by mesh then material,
+its instances are uploaded after the scene's, and `renderer.stats.shadowDraws` counts them)
 (`texture_depth_2d`, `@group(0) @binding(3)`) with the comparison sampler
 `engine_shadow_sampler` (`@binding(4)`). Without a shadow a 1×1 depth placeholder is bound, so
 one bind group layout serves both. The block gains `lights.sun_view_proj` (`mat4x4f`) and
