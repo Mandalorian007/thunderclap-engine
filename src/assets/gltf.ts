@@ -7,9 +7,10 @@
  * buffers and images, and every accessor component type (float, normalised and unnormalised
  * integers, interleaved strides). Static geometry only: `triangles` primitives, base colour
  * materials, node hierarchies, plus skins (joints, inverse bind matrices, `JOINTS_0`/`WEIGHTS_0`)
- * and animations (every sampler interpolation, cubic-spline tangents kept). Sparse accessors,
- * other primitive modes and required extensions throw a `GltfError`; `extensionsUsed` is listed
- * in `warnings`. `gltf-skin.ts` turns skins into the animation module's `Skeleton` shape and
+ * and animations (every sampler interpolation, cubic-spline tangents kept) and morph targets
+ * (`POSITION` and `NORMAL` deltas per target, sparse or dense, plus the mesh's default
+ * `weights`). Sparse accessors outside morph targets, other primitive modes and required
+ * extensions throw a `GltfError`; `extensionsUsed` is listed in `warnings`. `gltf-skin.ts` turns skins into the animation module's `Skeleton` shape and
  * skinned primitives into the skinned vertex layout.
  *
  * Matrices follow the engine's `Transform` convention: 3×4 row-major, `local = T · R · S`,
@@ -37,7 +38,15 @@ export interface GltfJsonAccessor {
   type: GltfAccessorType;
   min?: number[];
   max?: number[];
-  sparse?: unknown;
+  /** Sparse storage: `count` overrides at `indices` over the dense data (or zeros). */
+  sparse?: GltfJsonSparse;
+}
+
+/** A sparse accessor's indices and values (glTF `accessor.sparse`). */
+export interface GltfJsonSparse {
+  count: number;
+  indices: { bufferView: number; byteOffset?: number; componentType: 5121 | 5123 | 5125 };
+  values: { bufferView: number; byteOffset?: number };
 }
 
 export interface GltfJsonBufferView {
@@ -52,6 +61,15 @@ export interface GltfJsonPrimitive {
   indices?: number;
   material?: number;
   mode?: number;
+  /** Morph targets: one attribute map per target (`POSITION`, `NORMAL`, `TANGENT`, …). */
+  targets?: Record<string, number>[];
+}
+
+export interface GltfJsonMesh {
+  name?: string;
+  primitives: GltfJsonPrimitive[];
+  /** Default morph weight per target. */
+  weights?: number[];
 }
 
 export interface GltfJsonNode {
@@ -114,7 +132,7 @@ export interface GltfJson {
   scene?: number;
   scenes?: { name?: string; nodes?: number[] }[];
   nodes?: GltfJsonNode[];
-  meshes?: { name?: string; primitives: GltfJsonPrimitive[] }[];
+  meshes?: GltfJsonMesh[];
   accessors?: GltfJsonAccessor[];
   bufferViews?: GltfJsonBufferView[];
   buffers?: { uri?: string; byteLength: number }[];
@@ -166,11 +184,33 @@ export interface GltfPrimitive {
   joints: Uint8Array | Uint16Array | null;
   /** `WEIGHTS_0`, 4 floats per vertex (normalised integers already divided), or null. */
   weights: Float32Array | null;
+  /**
+   * Morph targets, in file order (empty when the primitive has none). Each holds per-vertex
+   * deltas (`vertexCount × 3`) that `anim`'s `createMorphBlender` adds to the base at the
+   * target's weight; both follow the unwelding when flat normals are generated.
+   */
+  targets: GltfMorphTarget[];
+  /** Target attributes the parser read past (`TANGENT`, `TEXCOORD_0`, …), once each. */
+  ignoredTargetAttributes: string[];
+}
+
+/**
+ * One morph target: position and normal deltas, 3 floats per vertex, or null when the target
+ * does not displace that attribute. The shape `anim/morph.ts` (`MorphTarget`) consumes.
+ */
+export interface GltfMorphTarget {
+  position: Float32Array | null;
+  normal: Float32Array | null;
 }
 
 export interface GltfMesh {
   name: string | null;
   primitives: GltfPrimitive[];
+  /**
+   * Default morph weights, one per target (`mesh.weights`), or null when the file gives none
+   * (every target then starts at 0). The `weights` animation path writes the same layout.
+   */
+  weights: Float32Array | null;
 }
 
 export interface GltfNode {
@@ -447,10 +487,7 @@ function parseJson(json: GltfJson, given: ArrayBuffer[]): GltfDocument {
     };
   });
 
-  const meshes: GltfMesh[] = (json.meshes ?? []).map((m, mi) => ({
-    name: m.name ?? null,
-    primitives: m.primitives.map((p, pi) => parsePrimitive(ctx, p, `mesh ${mi} primitive ${pi}`)),
-  }));
+  const meshes: GltfMesh[] = (json.meshes ?? []).map((m, mi) => parseMesh(ctx, m, mi));
 
   const nodes = parseNodes(json.nodes ?? [], meshes.length, (json.skins ?? []).length);
   const skins = (json.skins ?? []).map((s, i) => parseSkin(ctx, s, i, nodes.length));
@@ -805,6 +842,75 @@ function boundsOf(min: Vec3, max: Vec3): GltfBounds {
 
 // ---------------------------------------------------------------- primitives and accessors
 
+function parseMesh(ctx: Ctx, m: GltfJsonMesh, mi: number): GltfMesh {
+  const where = `mesh ${mi}`;
+  const primitives = m.primitives.map((p, pi) =>
+    parsePrimitive(ctx, p, `${where} primitive ${pi}`),
+  );
+  const targetCount = primitives[0]?.targets.length ?? 0;
+  for (let pi = 1; pi < primitives.length; pi++) {
+    const n = primitives[pi]!.targets.length;
+    if (n !== targetCount) {
+      throw new GltfError(
+        `${where}: primitive ${pi} has ${n} morph targets, primitive 0 has ${targetCount}`,
+      );
+    }
+  }
+  let weights: Float32Array | null = null;
+  if (m.weights !== undefined) {
+    if (m.weights.length !== targetCount) {
+      throw new GltfError(
+        `${where}: ${m.weights.length} default weights for ${targetCount} morph targets`,
+      );
+    }
+    weights = new Float32Array(m.weights);
+  }
+  return { name: m.name ?? null, primitives, weights };
+}
+
+/** The target attributes this parser reads; others are listed in `ignoredTargetAttributes`. */
+const MORPH_ATTRIBUTES = new Set(['POSITION', 'NORMAL']);
+
+/**
+ * `primitive.targets`: `POSITION` and `NORMAL` deltas per target, each `vertexCount` vec3s.
+ * Target accessors may be sparse (the usual encoding for deltas): the dense data (or zeros,
+ * without a bufferView) is overlaid with `sparse.count` values at `sparse.indices`.
+ */
+function readTargets(
+  ctx: Ctx,
+  targets: Record<string, number>[] | undefined,
+  vertexCount: number,
+  where: string,
+  ignored: string[],
+): GltfMorphTarget[] {
+  if (!targets) return [];
+  return targets.map((t, ti) => {
+    const here = `${where} target ${ti}`;
+    for (const name of Object.keys(t)) {
+      if (!MORPH_ATTRIBUTES.has(name) && !ignored.includes(name)) ignored.push(name);
+    }
+    return {
+      position: readTargetDeltas(ctx, t.POSITION, vertexCount, `${here} POSITION`),
+      normal: readTargetDeltas(ctx, t.NORMAL, vertexCount, `${here} NORMAL`),
+    };
+  });
+}
+
+function readTargetDeltas(
+  ctx: Ctx,
+  index: number | undefined,
+  vertexCount: number,
+  where: string,
+): Float32Array | null {
+  if (index === undefined) return null;
+  const acc = accessor(ctx, index, where, true);
+  if (acc.type !== 'VEC3') throw new GltfError(`${where}: ${acc.type}, expected VEC3`);
+  if (acc.count !== vertexCount) {
+    throw new GltfError(`${where}: ${acc.count} values for ${vertexCount} vertices`);
+  }
+  return readFloats(ctx, acc, 3, where);
+}
+
 function parsePrimitive(ctx: Ctx, p: GltfJsonPrimitive, where: string): GltfPrimitive {
   const mode = p.mode ?? MODE_TRIANGLES;
   if (mode !== MODE_TRIANGLES) {
@@ -847,6 +953,9 @@ function parsePrimitive(ctx: Ctx, p: GltfJsonPrimitive, where: string): GltfPrim
   if (joints && !weights) throw new GltfError(`${where}: JOINTS_0 without WEIGHTS_0`);
   if (weights && !joints) throw new GltfError(`${where}: WEIGHTS_0 without JOINTS_0`);
 
+  const ignoredTargetAttributes: string[] = [];
+  let targets = readTargets(ctx, p.targets, vertexCount, where, ignoredTargetAttributes);
+
   let normal = optionalFloats(ctx, p.attributes.NORMAL, vertexCount, 3, `${where} NORMAL`);
   const hadNormals = normal !== null;
   let count = vertexCount;
@@ -873,6 +982,10 @@ function parsePrimitive(ctx: Ctx, p: GltfJsonPrimitive, where: string): GltfPrim
     }
     joints = jnt;
     weights = wgt;
+    targets = targets.map((t) => ({
+      position: t.position ? unweld3(t.position, indices) : null,
+      normal: t.normal ? unweld3(t.normal, indices) : null,
+    }));
     for (let t = 0; t < n; t += 3) {
       const ax = pos[t * 3]!;
       const ay = pos[t * 3 + 1]!;
@@ -942,7 +1055,21 @@ function parsePrimitive(ctx: Ctx, p: GltfJsonPrimitive, where: string): GltfPrim
     hadNormals,
     joints,
     weights,
+    targets,
+    ignoredTargetAttributes,
   };
+}
+
+/** One vec3 per index, in index order (the unwelding that flat normals need). */
+function unweld3(src: Float32Array, indices: Uint16Array | Uint32Array): Float32Array {
+  const out = new Float32Array(indices.length * 3);
+  for (let i = 0; i < indices.length; i++) {
+    const s = indices[i]! * 3;
+    out[i * 3] = src[s]!;
+    out[i * 3 + 1] = src[s + 1]!;
+    out[i * 3 + 2] = src[s + 2]!;
+  }
+  return out;
 }
 
 /** `JOINTS_0`: any unsigned integer type, 4 per vertex → bytes when every index fits, else shorts. */
@@ -980,10 +1107,18 @@ function readJoints(
   return max <= 0xff ? Uint8Array.from(wide) : Uint16Array.from(wide);
 }
 
-function accessor(ctx: Ctx, index: number, where: string): GltfJsonAccessor {
+/**
+ * The accessor at `index`, checked. Sparse accessors are honoured only where `allowSparse` says
+ * so (morph target attributes, read through `readFloats`); elsewhere they throw.
+ */
+function accessor(ctx: Ctx, index: number, where: string, allowSparse = false): GltfJsonAccessor {
   const acc = ctx.json.accessors?.[index];
   if (!acc) throw new GltfError(`${where}: accessor ${index} does not exist`);
-  if (acc.sparse) throw new GltfError(`${where}: accessor ${index} is sparse (not supported)`);
+  if (acc.sparse && !allowSparse) {
+    throw new GltfError(
+      `${where}: accessor ${index} is sparse (supported for morph target attributes only)`,
+    );
+  }
   if (!(acc.componentType in COMPONENT_BYTES)) {
     throw new GltfError(`${where}: accessor ${index} componentType ${acc.componentType} unknown`);
   }
@@ -1088,16 +1223,73 @@ function readFloats(
 ): Float32Array {
   const out = new Float32Array(acc.count * components);
   const r = readerFor(ctx, acc, where);
-  if (!r) return out;
   const cb = COMPONENT_BYTES[acc.componentType];
   const normalized = acc.normalized ?? false;
-  for (let i = 0; i < acc.count; i++) {
-    const at = r.base + i * r.stride;
-    for (let k = 0; k < components; k++) {
-      out[i * components + k] = readComponent(r.view, at + k * cb, acc.componentType, normalized);
+  if (r) {
+    for (let i = 0; i < acc.count; i++) {
+      const at = r.base + i * r.stride;
+      for (let k = 0; k < components; k++) {
+        out[i * components + k] = readComponent(r.view, at + k * cb, acc.componentType, normalized);
+      }
     }
   }
+  if (acc.sparse) applySparse(ctx, acc, acc.sparse, components, out, where);
   return out;
+}
+
+/** Overlay a sparse accessor's `count` values at its `indices` onto `out` (dense data or zeros). */
+function applySparse(
+  ctx: Ctx,
+  acc: GltfJsonAccessor,
+  sp: GltfJsonSparse,
+  components: number,
+  out: Float32Array,
+  where: string,
+): void {
+  if (!Number.isInteger(sp.count) || sp.count < 0 || sp.count > acc.count) {
+    throw new GltfError(`${where}: sparse count ${sp.count} for ${acc.count} elements`);
+  }
+  if (!sp.indices || !sp.values) throw new GltfError(`${where}: sparse without indices/values`);
+  const it = sp.indices.componentType;
+  if (it !== 5121 && it !== 5123 && it !== 5125) {
+    throw new GltfError(`${where}: sparse index componentType ${it} must be unsigned`);
+  }
+  const ib = COMPONENT_BYTES[it];
+  const idx = sparseView(ctx, sp.indices.bufferView, sp.indices.byteOffset, sp.count * ib, where);
+  const cb = COMPONENT_BYTES[acc.componentType];
+  const bytes = sp.count * components * cb;
+  const vals = sparseView(ctx, sp.values.bufferView, sp.values.byteOffset, bytes, where);
+  const normalized = acc.normalized ?? false;
+  for (let i = 0; i < sp.count; i++) {
+    const e = readComponent(idx.view, idx.base + i * ib, it, false);
+    if (e >= acc.count) throw new GltfError(`${where}: sparse index ${e} out of range`);
+    for (let k = 0; k < components; k++) {
+      const at = vals.base + (i * components + k) * cb;
+      out[e * components + k] = readComponent(vals.view, at, acc.componentType, normalized);
+    }
+  }
+}
+
+/** A tightly packed sparse `indices` or `values` block: its view and base byte offset. */
+function sparseView(
+  ctx: Ctx,
+  bufferView: number,
+  byteOffset: number | undefined,
+  bytes: number,
+  where: string,
+): { view: DataView; base: number } {
+  const bv = ctx.json.bufferViews?.[bufferView];
+  if (!bv) throw new GltfError(`${where}: bufferView ${bufferView} does not exist`);
+  const buffer = ctx.buffers[bv.buffer];
+  if (!buffer) throw new GltfError(`${where}: buffer ${bv.buffer} does not exist`);
+  const off = byteOffset ?? 0;
+  if (off + bytes > bv.byteLength) {
+    throw new GltfError(`${where}: sparse data runs past its bufferView`);
+  }
+  if ((bv.byteOffset ?? 0) + bv.byteLength > buffer.byteLength) {
+    throw new GltfError(`${where}: bufferView ${bufferView} runs past buffer ${bv.buffer}`);
+  }
+  return { view: new DataView(buffer), base: (bv.byteOffset ?? 0) + off };
 }
 
 function readIndices(ctx: Ctx, acc: GltfJsonAccessor, where: string): Uint16Array | Uint32Array {

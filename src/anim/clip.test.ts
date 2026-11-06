@@ -9,6 +9,7 @@ import {
   type Interpolation,
   sampleChannel,
   sampleClip,
+  sampleWeights,
 } from './clip';
 import { POSE_NODE_FLOATS } from './pose';
 import { quatFromAxisAngle } from './quat';
@@ -236,5 +237,62 @@ describe('sampleClip', () => {
     sampleClip(clip, 0.2, pose, 1, 'override', cursor);
     sampleClip(clip, 0.7, pose, 1, 'override', cursor);
     close(pose.subarray(0, 3), [1.4, 2.8, 4.2]);
+  });
+});
+
+describe('sampleWeights', () => {
+  const weightsClip = (interpolation: Interpolation, values: number[]): AnimationClip => ({
+    name: 'w',
+    duration: 2,
+    channels: [
+      channel('translation', 'LINEAR', [0, 2], [0, 0, 0, 1, 1, 1], 0),
+      channel('weights', interpolation, [0, 1, 2], values, 3),
+    ],
+  });
+
+  it("samples the node's weights channel: STEP, LINEAR, CUBICSPLINE, hold outside", () => {
+    const out = new Float32Array(2);
+    const step = weightsClip('STEP', [0, 1, 1, 0, 0.5, 0.5]);
+    expect(sampleWeights(step, 3, 0.9, out)).toBe(true);
+    close(out, [0, 1]);
+    sampleWeights(step, 3, 1, out);
+    close(out, [1, 0]);
+    const linear = weightsClip('LINEAR', [0, 1, 1, 0, 0.5, 0.5]);
+    sampleWeights(linear, 3, 0.25, out);
+    close(out, [0.25, 0.75]);
+    sampleWeights(linear, 3, 1.5, out);
+    close(out, [0.75, 0.25]);
+    sampleWeights(linear, 3, -1, out);
+    close(out, [0, 1]);
+    sampleWeights(linear, 3, 9, out);
+    close(out, [0.5, 0.5]);
+    // Cubic: zero tangents give a smoothstep between keys; the key values hold exactly.
+    const cubic = weightsClip(
+      'CUBICSPLINE',
+      [0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0.5, 0, 0],
+    );
+    sampleWeights(cubic, 3, 0.5, out);
+    close(out, [0.5, 0.5]);
+    sampleWeights(cubic, 3, 0.25, out);
+    const s = 3 * 0.25 ** 2 - 2 * 0.25 ** 3;
+    close(out, [s, 1 - s]);
+    sampleWeights(cubic, 3, 2, out);
+    close(out, [0, 0.5]);
+  });
+
+  it('writes only the channel width, reports a missing channel, refuses a short buffer', () => {
+    const clip = weightsClip('LINEAR', [0, 1, 1, 0, 0.5, 0.5]);
+    const out = new Float32Array([9, 9, 9]);
+    expect(sampleWeights(clip, 3, 0, out)).toBe(true);
+    close(out, [0, 1, 9]);
+    expect(sampleWeights(clip, 0, 0.5, out)).toBe(false);
+    close(out, [0, 1, 9]);
+    expect(() => sampleWeights(clip, 3, 0, new Float32Array(1))).toThrow(RangeError);
+    // An explicit cursor works like the shared one.
+    const cursor = createClipCursor(clip);
+    sampleWeights(clip, 3, 0.5, out, cursor);
+    sampleWeights(clip, 3, 1.5, out, cursor);
+    close(out.subarray(0, 2), [0.75, 0.25]);
+    expect(cursor[1]).toBe(1);
   });
 });

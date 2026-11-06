@@ -15,6 +15,17 @@ import {
   type Slots,
   type SlotsOptions,
 } from './hud';
+import { ensureInventoryStyles } from './inventory';
+import { type Card, type CardOptions, card as createCard } from './inventory-card';
+import {
+  type ContextItem,
+  type ContextList,
+  type ContextListOptions,
+  contextList as createContextList,
+} from './inventory-context';
+import { createDragContext, type DragContext } from './inventory-drag';
+import { grid as createGrid, type Grid, type GridOptions } from './inventory-grid';
+import { radial as createRadial, type Radial, type RadialOptions } from './inventory-radial';
 import { createLayout, type Layout, type LayoutSpec, type Units } from './layout';
 import { PanelStack } from './stack';
 import { ensureStyles } from './styles';
@@ -124,6 +135,16 @@ export interface Overlay {
   slots(opts: SlotsOptions): Slots;
   /** A sliding cardinal strip driven by `setYaw`, in a layout region. */
   heading(opts?: HeadingOptions): Heading;
+  /** An item grid (`ui/inventory-grid.ts`), registered with `drag`; the game appends `element`. */
+  grid(opts: GridOptions): Grid;
+  /** An item card (tooltip) on the `hud` layer (`ui/inventory-card.ts`). */
+  card(opts: CardOptions): Card;
+  /** A radial menu on the `hud` layer, hidden under a modal (`ui/inventory-radial.ts`). */
+  radial(opts: RadialOptions): Radial;
+  /** A context list on the `toasts` layer, open until picked or cancelled (`ui/inventory-context.ts`). */
+  contextList(items: ContextItem[], opts: ContextListOptions): ContextList;
+  /** The drag context grids and `slotsTarget`s register with; made on first use (`ui/inventory-drag.ts`). */
+  readonly drag: DragContext;
   destroy(): void;
 }
 
@@ -140,6 +161,7 @@ export function createOverlay(opts: OverlayOptions): Overlay {
   const doc = opts.parent.ownerDocument;
   ensureStyles(doc);
   ensureWidgets2Styles(doc);
+  ensureInventoryStyles(doc);
   const dw = opts.designWidth ?? 1920;
   const dh = opts.designHeight ?? 1080;
 
@@ -241,6 +263,7 @@ export function createOverlay(opts: OverlayOptions): Overlay {
   });
 
   let anchors: Anchors | null = null;
+  let drag: DragContext | null = null;
 
   const overlay: Overlay = {
     root,
@@ -320,7 +343,27 @@ export function createOverlay(opts: OverlayOptions): Overlay {
     heading(o) {
       return createHeading(overlay, o);
     },
+    grid(o) {
+      const g = createGrid(o);
+      overlay.drag.register(g);
+      return g;
+    },
+    card(o) {
+      return createCard(overlay, o);
+    },
+    radial(o) {
+      return createRadial(overlay, o);
+    },
+    contextList(items, o) {
+      return createContextList(overlay, items, o);
+    },
+    get drag() {
+      drag ??= createDragContext(overlay);
+      return drag;
+    },
     destroy() {
+      drag?.destroy();
+      drag = null;
       anchors?.clear();
       anchors = null;
       unwatch();
