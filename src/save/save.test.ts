@@ -333,3 +333,53 @@ describe('save store', () => {
     expect(st.set('x' as unknown as number)).toBe(false);
   });
 });
+
+describe('meta sidecar', () => {
+  it('is written in the same flush when `meta` is set, and removed by clear', () => {
+    const mem = new MemoryStorage();
+    const st = createSaveStore<Data>(
+      opts(mem, { meta: (d) => ({ label: d.name, playMs: d.score }) }),
+    );
+    expect(mem.getItem(`${st.key}:meta`)).toBeNull();
+    st.update((d) => {
+      d.name = 'Ada';
+      d.score = 3;
+    });
+    expect(JSON.parse(mem.getItem(`${st.key}:meta`)!)).toEqual({
+      v: 1,
+      t: 1000,
+      size: mem.getItem(st.key)!.length,
+      label: 'Ada',
+      playMs: 3,
+    });
+    expect(listSlots('test-game', mem)).toEqual(['main']);
+    st.clear();
+    expect(mem.getItem(`${st.key}:meta`)).toBeNull();
+    // Without `meta`, no sidecar.
+    const plain = createSaveStore<Data>(opts(mem));
+    plain.update((d) => {
+      d.score = 1;
+    });
+    expect(mem.getItem(`${plain.key}:meta`)).toBeNull();
+  });
+
+  it('a failed meta write is not an error for the data', () => {
+    class MetaFails extends MemoryStorage {
+      override setItem(k: string, v: string): void {
+        if (k.endsWith(':meta')) throw new DOMException('full', 'QuotaExceededError');
+        super.setItem(k, v);
+      }
+    }
+    const mem = new MetaFails();
+    const st = createSaveStore<Data>(opts(mem, { meta: () => ({ label: 'x' }) }));
+    expect(
+      st.update((d) => {
+        d.score = 2;
+      }),
+    ).toBe(true);
+    expect(st.persistent).toBe(true);
+    expect(st.status.error).toBeNull();
+    expect(JSON.parse(mem.getItem(st.key)!).d.score).toBe(2);
+    expect(mem.getItem(`${st.key}:meta`)).toBeNull();
+  });
+});

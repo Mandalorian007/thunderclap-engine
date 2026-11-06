@@ -9,6 +9,8 @@
  * ```
  */
 
+import { TYPED_CTORS, type TypedArrayOf, type TypedKind } from './codec';
+
 export interface Schema<T> {
   /** Returns `null` if `value` matches, else a message naming the first failing path. */
   validate(value: unknown, path?: string): string | null;
@@ -30,6 +32,7 @@ function make<T>(validate: (value: unknown, path: string) => string | null): Sch
 function typeName(v: unknown): string {
   if (v === null) return 'null';
   if (Array.isArray(v)) return 'array';
+  if (ArrayBuffer.isView(v)) return v.constructor.name;
   return typeof v;
 }
 
@@ -143,6 +146,28 @@ export const s = {
 
   nullable<T>(inner: Schema<T>): Schema<T | null> {
     return make((v, p) => (v === null ? null : inner.validate(v, p)));
+  },
+
+  /** A `Uint8Array` (stored as base64url, not a number array). */
+  bytes(opts: { maxLength?: number } = {}): Schema<Uint8Array> {
+    return make((v, p) => {
+      if (!(v instanceof Uint8Array)) return `${p}: expected Uint8Array, got ${typeName(v)}`;
+      if (opts.maxLength !== undefined && v.length > opts.maxLength)
+        return `${p}: bytes longer than ${opts.maxLength}`;
+      return null;
+    });
+  },
+
+  /** One of the eight typed arrays by kind, e.g. `s.typed('f32')` for a `Float32Array`. */
+  typed<K extends TypedKind>(kind: K, opts: { maxLength?: number } = {}): Schema<TypedArrayOf<K>> {
+    const Ctor = TYPED_CTORS[kind];
+    return make((v, p) => {
+      if (!(v instanceof Ctor)) return `${p}: expected ${Ctor.name}, got ${typeName(v)}`;
+      const len = (v as ArrayBufferView).byteLength / Ctor.BYTES_PER_ELEMENT;
+      if (opts.maxLength !== undefined && len > opts.maxLength)
+        return `${p}: typed array longer than ${opts.maxLength}`;
+      return null;
+    });
   },
 
   union<T extends Schema<unknown>[]>(...options: T): Schema<Infer<T[number]>> {
