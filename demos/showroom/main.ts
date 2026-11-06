@@ -1,7 +1,7 @@
 /**
  * Showroom (E-021, ws/demo-showroom): materials, lights and post looks in one view, as quality
- * validation for the renderer. Nothing here is engine code: the geometry, the textures, the
- * orbit and the looks are what a game would write.
+ * validation for the renderer. Nothing here is engine code: the textures, the orbit and the
+ * looks are what a game would write; the meshes are `geom` builders.
  *
  * - A 7×7 grid of spheres, metallic 0..1 across and roughness 0..1 down, through one standard
  *   material: a 7×7 metallic-roughness texture (G roughness, B metallic) sampled per sphere
@@ -11,11 +11,13 @@
  * - The engine's sun with a shadow map, distance fog and three point lights circling the grid.
  * - `PostStack` with five looks switched by keys 1–5 through `post.blendTo`: neutral, warm
  *   bloom, god rays, high contrast, off.
- * - Orbit camera: drag (one-pointer pan), pinch, wheel. A DOM readout (`ui`) of draw calls and
- *   GPU ms. `?still` parks the lights, the strip and the blends for stable measurements.
+ * - Orbit camera: drag (one-pointer pan) orbits; the wheel and a pinch zoom through a `Look`'s
+ *   `zoom` axis. A DOM readout (`ui`) of draw calls and GPU ms. `?still` parks the lights, the
+ *   strip and the blends for stable measurements.
  */
 import { GameLoop } from '@thunderclap/engine/core';
-import { Gestures, Input } from '@thunderclap/engine/input';
+import { box, plane, sphere } from '@thunderclap/engine/geom';
+import { Gestures, Input, Look } from '@thunderclap/engine/input';
 import { boot } from '@thunderclap/engine/platform';
 import { type PostSettingsPatch, PostStack } from '@thunderclap/engine/post';
 import {
@@ -29,7 +31,6 @@ import {
   type PointLight,
   Renderer,
   Transform,
-  VERTEX_LAYOUT_3D,
 } from '@thunderclap/engine/render';
 import { createOverlay, h } from '@thunderclap/engine/ui';
 import { LOOK_NAMES, type LookName, type ShowroomState } from './state';
@@ -64,117 +65,6 @@ const state: ShowroomState = {
   gpuErrors: 0,
 };
 (window as unknown as { __demo: ShowroomState }).__demo = state;
-
-// ------------------------------------------------------------------ geometry (12 floats/vertex)
-
-/** A unit-radius UV sphere: normals are positions, u around, v from the top, white. */
-function sphereGeometry(rings: number, segments: number) {
-  const vertices = new Float32Array((rings + 1) * (segments + 1) * 12);
-  const indices = new Uint16Array(rings * segments * 6);
-  let v = 0;
-  for (let r = 0; r <= rings; r++) {
-    const theta = (r / rings) * Math.PI;
-    const y = Math.cos(theta);
-    const s = Math.sin(theta);
-    for (let c = 0; c <= segments; c++) {
-      const phi = (c / segments) * Math.PI * 2;
-      const x = s * Math.sin(phi);
-      const z = s * Math.cos(phi);
-      vertices[v++] = x;
-      vertices[v++] = y;
-      vertices[v++] = z;
-      vertices[v++] = x;
-      vertices[v++] = y;
-      vertices[v++] = z;
-      vertices[v++] = c / segments;
-      vertices[v++] = r / rings;
-      vertices[v++] = vertices[v++] = vertices[v++] = vertices[v++] = 1;
-    }
-  }
-  let i = 0;
-  for (let r = 0; r < rings; r++) {
-    for (let c = 0; c < segments; c++) {
-      const a = r * (segments + 1) + c;
-      const b = a + segments + 1;
-      indices.set([a, b, a + 1, a + 1, b, b + 1], i);
-      i += 6;
-    }
-  }
-  return { vertices, indices };
-}
-
-/** A unit quad in the XZ plane (y = 0) facing +y; uv tiles `repeat` times, white. */
-function groundGeometry(repeat: number) {
-  const vertices = new Float32Array([
-    ...[-0.5, 0, 0.5, 0, 1, 0, 0, repeat, 1, 1, 1, 1],
-    ...[0.5, 0, 0.5, 0, 1, 0, repeat, repeat, 1, 1, 1, 1],
-    ...[0.5, 0, -0.5, 0, 1, 0, repeat, 0, 1, 1, 1, 1],
-    ...[-0.5, 0, -0.5, 0, 1, 0, 0, 0, 1, 1, 1, 1],
-  ]);
-  return { vertices, indices: new Uint16Array([0, 1, 2, 0, 2, 3]) };
-}
-
-/** A unit cube centred on the origin, flat normals, white. */
-function boxGeometry() {
-  const faces: [number[], number[], number[]][] = [
-    // normal, u axis, v axis
-    [
-      [0, 0, 1],
-      [1, 0, 0],
-      [0, 1, 0],
-    ],
-    [
-      [0, 0, -1],
-      [-1, 0, 0],
-      [0, 1, 0],
-    ],
-    [
-      [1, 0, 0],
-      [0, 0, -1],
-      [0, 1, 0],
-    ],
-    [
-      [-1, 0, 0],
-      [0, 0, 1],
-      [0, 1, 0],
-    ],
-    [
-      [0, 1, 0],
-      [1, 0, 0],
-      [0, 0, -1],
-    ],
-    [
-      [0, -1, 0],
-      [1, 0, 0],
-      [0, 0, 1],
-    ],
-  ];
-  const vertices = new Float32Array(6 * 4 * 12);
-  const indices = new Uint16Array(6 * 6);
-  let v = 0;
-  let i = 0;
-  faces.forEach(([n, u, w], f) => {
-    const corners = [
-      [-1, -1],
-      [1, -1],
-      [1, 1],
-      [-1, 1],
-    ];
-    for (const [cu, cv] of corners) {
-      for (let k = 0; k < 3; k++) vertices[v++] = 0.5 * (n[k]! + cu! * u[k]! + cv! * w[k]!);
-      vertices[v++] = n[0]!;
-      vertices[v++] = n[1]!;
-      vertices[v++] = n[2]!;
-      vertices[v++] = (cu! + 1) / 2;
-      vertices[v++] = (1 - cv!) / 2;
-      vertices[v++] = vertices[v++] = vertices[v++] = vertices[v++] = 1;
-    }
-    const b = f * 4;
-    indices.set([b, b + 1, b + 2, b, b + 2, b + 3], i);
-    i += 6;
-  });
-  return { vertices, indices };
-}
 
 // ------------------------------------------------------------------ procedural textures (canvas)
 
@@ -231,7 +121,8 @@ const LIGHT_ORBIT_CENTRE_Z = 2.0;
 const TARGET = [GRID_CENTRE[0], GRID_CENTRE[1], GRID_CENTRE[2]] as const;
 const orbit = { yaw: 0.25, pitch: 0.12, distance: 14 };
 const ORBIT_PER_PX = 0.005;
-const ZOOM_PER_TICK = 0.03;
+/** Distance factor per `Look.zoom` unit (a wheel notch, or a pinch of `stepPx`): e^-0.15 is 14% closer. */
+const ZOOM_PER_UNIT = 0.15;
 const PITCH_MIN = -0.3;
 const PITCH_MAX = 1.35;
 const DISTANCE_MIN = 4;
@@ -341,10 +232,8 @@ const eye = new Float32Array(3);
 const scratch = new Float32Array(3);
 const probePoint: CameraPoint = { x: 0, y: 0, z: 0 };
 
-type Action = 'zoomIn' | 'zoomOut' | 'look1' | 'look2' | 'look3' | 'look4' | 'look5';
+type Action = 'look1' | 'look2' | 'look3' | 'look4' | 'look5';
 const bindings = {
-  zoomIn: [{ wheel: -1 }],
-  zoomOut: [{ wheel: 1 }],
   look1: [{ key: 'Digit1' }, { key: 'Numpad1' }],
   look2: [{ key: 'Digit2' }, { key: 'Numpad2' }],
   look3: [{ key: 'Digit3' }, { key: 'Numpad3' }],
@@ -447,17 +336,14 @@ async function main(): Promise<void> {
     roughness: 0.6,
   });
 
-  const sphere = renderer.createMesh({
-    ...sphereGeometry(28, 42),
-    layout: VERTEX_LAYOUT_3D,
+  // `geom` builders (a `Geometry` is a `MeshDesc`): a unit-radius UV sphere scaled per instance,
+  // a unit plane the floor transform stretches with its uv tiled `FLOOR_REPEAT` times, a unit cube.
+  const sphereMesh = renderer.createMesh({
+    ...sphere({ radius: 1, segments: [42, 28] }),
     label: 'sphere',
   });
-  const floor = renderer.createMesh({
-    ...groundGeometry(FLOOR_REPEAT),
-    layout: VERTEX_LAYOUT_3D,
-    label: 'floor',
-  });
-  const box = renderer.createMesh({ ...boxGeometry(), layout: VERTEX_LAYOUT_3D, label: 'box' });
+  const floor = renderer.createMesh({ ...plane({ uvScale: FLOOR_REPEAT }), label: 'floor' });
+  const cube = renderer.createMesh({ ...box(), label: 'box' });
 
   // Instances: one transform and one params object each, reused every frame. `order` groups the
   // draws (floor, then the grid, then the strip) so the grid stays one instanced draw.
@@ -537,8 +423,11 @@ async function main(): Promise<void> {
     sunPoint[2] = TARGET[2] - (SUN_DIR[2] / len) * far;
   }
 
+  // The `Look` supplies only its zoom axis (wheel notches, two-finger pinch); the one-pointer pan
+  // from `Gestures` orbits. No pointer lock is taken, so `look.look` stays zero for the mouse.
   const gestures = new Gestures();
-  const input = new Input<Action>(bindings, { gestures });
+  const look = new Look({ touch: { moveZone: 'none' } });
+  const input = new Input<Action>(bindings, { gestures, look });
   input.attach({ pointerTarget: surface.canvas });
   input.setPointerTransform((x, y) => surface.clientToLogical(x, y));
 
@@ -575,11 +464,7 @@ async function main(): Promise<void> {
         orbit.yaw -= pan.dx * ORBIT_PER_PX;
         orbit.pitch += pan.dy * ORBIT_PER_PX;
       }
-      const pinch = gestures.pinch;
-      if (pinch && (pinch.phase === 'start' || pinch.phase === 'move') && pinch.delta > 0) {
-        orbit.distance /= pinch.delta;
-      }
-      orbit.distance *= 1 + (input.value('zoomOut') - input.value('zoomIn')) * ZOOM_PER_TICK;
+      if (look.zoom !== 0) orbit.distance *= Math.exp(-look.zoom * ZOOM_PER_UNIT);
       placeCamera(camera);
       for (let i = 0; i < LOOK_ACTIONS.length; i++) {
         if (input.pressed(LOOK_ACTIONS[i]!)) setLook(LOOK_NAMES[i]!);
@@ -600,9 +485,9 @@ async function main(): Promise<void> {
       frame.lights = lights;
       frame.mesh(floor, floorMat, floorT, floorP);
       for (let i = 0; i < sphereT.length; i++) {
-        frame.mesh(sphere, spheresMat, sphereT[i]!, sphereP[i]!);
+        frame.mesh(sphereMesh, spheresMat, sphereT[i]!, sphereP[i]!);
       }
-      frame.mesh(box, stripMat, stripT, stripP);
+      frame.mesh(cube, stripMat, stripT, stripP);
       renderer.endFrame();
 
       state.frame++;

@@ -1,8 +1,20 @@
 # Showroom
 
-A material and lighting showroom: a 7×7 grid of spheres sweeping metalness (left to right) × roughness (top to bottom) under a shadowing sun, three orbiting point lights (warm, cool, magenta), an emissive pulsing strip, and a floor with a canvas-drawn checker albedo and roughness map. Drag to orbit, wheel or pinch to zoom, keys `1`–`5` blend between post looks through `post.blendTo`. A readout (`ui`) shows draw calls, GPU ms and fps. `?still` parks the lights and the strip and finishes look blends at once.
+A material and lighting showroom: a 7×7 grid of spheres sweeping metalness (left to right) × roughness (top to bottom) under a shadowing sun, three orbiting point lights (warm, cool, magenta), an emissive pulsing strip, and a floor with a canvas-drawn checker albedo and roughness map. Drag to orbit, wheel or pinch to zoom (a `Look`'s `zoom` axis), keys `1`–`5` blend between post looks through `post.blendTo`. A readout (`ui`) shows draw calls, GPU ms and fps. `?still` parks the lights and the strip and finishes look blends at once.
 
-Run: `pnpm demo showroom` (or `pnpm exec vite demos/showroom --host 127.0.0.1`).
+Run: `pnpm demo showroom` (or `pnpm exec vite demos/showroom --host 127.0.0.1`). To start a 3D game of your own from this shape, `pnpm create-game` scaffolds a project on the same public API.
+
+## What to look at
+
+- The grid is one instanced draw: a 7×7 metallic-roughness texture (G roughness, B metallic) sampled per sphere through a collapsed instance `uv` rect, so 49 spheres cost one draw call.
+- The floor's roughness map: rough light tiles blur the sun's reflection, glossy dark tiles sharpen it; both maps are painted on a canvas and uploaded with `textureFromSource`.
+- The sun's shadow map across the grid and three coloured point lights circling it; the strip's `emissive` feeds bloom in every look but `off`.
+- The five looks (keys 1–5) blending over 1.2 s through `post.blendTo`: bloom, fog, god rays from the sun's screen point, grade and vignette are each one patch.
+- Every mesh is a `geom` builder (`sphere`, `plane` with `uvScale`, `box`); the demo writes no vertex arrays of its own.
+
+## Known limits
+
+GPU timing is read by polling `renderer.timing.samples` (`timing.ready()` is not on main); the orbit keeps a one-pointer pan for the drag, since a `Look` turns a mouse only under the pointer lock.
 
 ## Looks
 
@@ -16,8 +28,8 @@ Run: `pnpm demo showroom` (or `pnpm exec vite demos/showroom --host 127.0.0.1`).
 
 ## Engine modules
 
-`platform` (`boot`), `render` (`Renderer`, `Camera`, `Lights` with sun shadow, point lights and fog, `createStandardMaterial`, `textureFromSource`, instance `order`/`emissive`/`uv`, `stats`, `timing`), `post` (`PostStack`, `blendTo`, god rays), `input` (`Input`, `Gestures`, wheel and key bindings), `ui` (`createOverlay`, `h`), `core` (`GameLoop`).
+`platform` (`boot`), `geom` (`sphere`, `plane`, `box`), `render` (`Renderer`, `Camera`, `Lights` with sun shadow, point lights and fog, `createStandardMaterial`, `textureFromSource`, instance `order`/`emissive`/`uv`, `stats`, `timing`), `post` (`PostStack`, `blendTo`, god rays), `input` (`Input`, `Gestures` pan, `Look` zoom axis, key bindings), `ui` (`createOverlay`, `h`), `core` (`GameLoop`).
 
 ## What the spec checks
 
-`e2e/demos/showroom.spec.ts` loads the page with `?still` through the harness vite server's `/demos/showroom/` route on every matrix row and asserts: `drawCalls` is 3 (floor, spheres, strip) with 51 instances and shadow draws; `gpuMs` arrives; the three `lightPositions` do not move; the middle sphere's centre pixel is lit (not black, not blown out); keys `2`,`3`,`4`,`5`,`1` change `look`, the frame keeps rendering and the sphere stays lit under each look; no console errors; `fps` above 20 on the desktop rows.
+`e2e/demos/showroom.spec.ts` loads the page with `?still` through the harness vite server's `/demos/showroom/` route on every matrix row and asserts: `drawCalls` is 3 (floor, spheres, strip) with 51 instances and shadow draws; `gpuMs` arrives; the three `lightPositions` do not move; the middle sphere's centre pixel is lit (not black, not blown out), sampled from a screenshot taken after a `requestAnimationFrame` settle; keys `2`,`3`,`4`,`5`,`1` change `look`, the frame keeps rendering and the sphere stays lit under each look; no console errors; `fps` above 20 on the desktop rows.

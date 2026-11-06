@@ -27,12 +27,18 @@ const PAGE_URL = `${HARNESS_URL}demos/showroom/?still`;
 
 const errors: string[] = [];
 
+/** Read the state after a `requestAnimationFrame` settle, so the probe sees a whole frame's values. */
 function read(page: Page): Promise<ShowroomState> {
-  return page.evaluate(() => {
-    const s = (window as unknown as { __demo?: ShowroomState }).__demo;
-    if (!s) throw new Error('window.__demo missing');
-    return JSON.parse(JSON.stringify(s)) as ShowroomState;
-  });
+  return page.evaluate(
+    () =>
+      new Promise<ShowroomState>((resolve, reject) =>
+        requestAnimationFrame(() => {
+          const s = (window as unknown as { __demo?: ShowroomState }).__demo;
+          if (!s) return reject(new Error('window.__demo missing'));
+          resolve(JSON.parse(JSON.stringify(s)) as ShowroomState);
+        }),
+      ),
+  );
 }
 
 async function open(page: Page): Promise<ShowroomState> {
@@ -52,7 +58,10 @@ async function open(page: Page): Promise<ShowroomState> {
   return read(page);
 }
 
-/** Average colour of the 3×3 CSS px around a logical canvas point, from a page screenshot. */
+/**
+ * Average colour of the 3×3 CSS px around a logical canvas point, from a page screenshot taken
+ * after a `requestAnimationFrame` settle (`read` awaits one), so the frame on screen is whole.
+ */
 async function sample(page: Page, probe: ShowroomProbe): Promise<Rgb> {
   const box = await page.locator('canvas').first().boundingBox();
   if (!box) throw new Error('no canvas');
