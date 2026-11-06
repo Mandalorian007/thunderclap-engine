@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>ThunderClap demo: range</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+      #root { position: fixed; inset: 0; }
+      /* The reticle: a CSS dot at the screen centre, where the shot ray goes. */
+      #reticle {
+        position: fixed; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px;
+        border-radius: 50%; background: #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6), 0 0 6px #fff;
+        pointer-events: none; z-index: 10;
+      }
+      .score {
+        font: 600 28px/1 system-ui, sans-serif; color: #fff; white-space: nowrap;
+        text-shadow: 0 0 8px rgba(0, 0, 0, 0.8), 0 1px 2px #000;
+        padding: 6px 14px; border-radius: 8px; background: rgba(10, 14, 24, 0.55);
+      }
+    </style>
+  </head>
+  <body>
+    <main id="root"></main>
+    <div id="reticle"></div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
