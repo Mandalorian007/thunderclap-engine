@@ -109,7 +109,9 @@ export {
   STANDARD_WGSL,
 } from './standard';
 export type {
+  DefaultTextures,
   LoadTextureArrayOptions,
+  LoadTextureOptions,
   PixelData,
   PixelSource,
   SamplerKind,
@@ -122,6 +124,8 @@ export type {
 export {
   bytesPerTexel,
   createTextureArray,
+  defaultTextures,
+  loadTexture,
   loadTextureArray,
   mipLevelCount,
   Texture,
