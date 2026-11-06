@@ -48,7 +48,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Snapshot gate | ws/snap-gate | `pnpm snap` / `snap:check`: golden PNGs for 2D harness pages on `desktop-1280`, E-008 tolerance, in `test:e2e`; integrate brief step | — | ✅ merged (landed on main; counts pending integrator report) |
 | 5 | Pick | ws/pick | `sphereTester`, `obbTester`, `meshTester` (bounds reject + Möller–Trumbore), `transformRayInto`; harness `pick.html` | rays, cull | ✅ merged `527f0eb` (chain 3; e2e 596/92/2 E-017) |
 | 5 | Look zoom | ws/look-zoom | `Look.zoom` axis (wheel, pinch, pad opt-in); `Follow` reads it; harness follow drops its wheel binding | follow | ✅ green at `d5bb746` (640 tests; e2e 526/57/3 fog flake); queued in chain 2 after template-first-person |
-| 5 | e2e flake under load | ws/flake-input | mesh.spec fog/drag and ui.spec menuNav poll the state they assert; `?still` lamp flag; common brief rule | flake-client | ✅ green at `22839fa` (632 tests; two parallel matrices 529/57/0 each); queued in chain 3 after bench |
+| 5 | e2e flake under load | ws/flake-input | mesh.spec fog/drag and ui.spec menuNav poll the state they assert; `?still` lamp flag; common brief rule | flake-client | ✅ merged `9c6a921` (chain 3; 825 tests; e2e 710/92/0 at load 27; snap 5/5) |
 | 5 | Sky | ws/sky | `Sky` drawable: gradient dome, sun disc/glow from `Lights.sun`, horizon to `fog.color`, stars; harness `sky.html` | lights | ✅ merged `bf87092` (chain 3; 825 tests; e2e 710/92/0 at load 20; snap 5/5) |
 | 5 | Bench | ws/bench | `harness/bench.html` scene ladder, `pnpm bench` → `docs/BENCH.md`; e2e one rung | gpu-timer | ✅ green at `d32c978` (709 tests; e2e 525/64/5 E-017 flakes); queued in chain 3 after sky |
 | 5 | Sockets | ws/sockets | `createSocket`, `socketWorld`, `attachTransform`, `Skeleton.names`; harness `sockets.html` | anim | ✅ merged `9e0af9a` (chain 3; e2e 626/92/4 E-017) |
@@ -63,7 +63,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Morph targets | ws/morph | glTF targets + default weights parse; `MorphBlender` CPU blend into `Mesh.update`; `sampleWeights`; `scene.morph(node)`; harness `morph.html` | assets, anim | ✅ green at `6c20bf8` (752 tests; e2e 601/92/5 E-017); queued chain 5 after audio-zones |
 | 5 | AO + depth of field | ws/post-depth | `PostInputs.depth/projection`; `post.ao` (depth-reconstructed SSAO), `post.dof` (CoC gather); off by default, 2D goldens delta 0; harness `depth-post.html` | post, xr-post | ✅ green at `894446f` (748 tests; e2e 628/92/2 E-017; snap delta 0); queued chain 1 after i18n |
 | 5 | Scaffolder | ws/scaffold | `pnpm create-game <dir> --template puzzle|first-person` copies a template to a standalone project on the published engine | templates | ✅ green at `706e47f` (752+8 tests; e2e 629/92/1 E-017 fog); queued chain 2 after look-zoom |
-| 5 | Localisation | ws/i18n | `@thunderclap/engine/i18n`: ICU-style messages, plurals via Intl, fallback chain, runtime locale switch, `negotiateLocale` | — | ✅ green at `9aec457` (805 tests; e2e 648/95/3 E-017); queued chain 1 |
+| 5 | Localisation | ws/i18n | `@thunderclap/engine/i18n`: ICU-style messages, plurals via Intl, fallback chain, runtime locale switch, `negotiateLocale` | — | ✅ merged `96018ef` (chain 1; 878 tests; e2e 731/95/0 at load 18; snap 0 px) |
 | 5 | Navigation | ws/nav | `@thunderclap/engine/nav`: grid field, A*, flow field, string pulling, path follower, local steering | — | ✅ green at `1c61629` (801 tests; e2e 671/92/7 E-017; nav.spec 32/32); queued chain 1 after post-depth |
 | 5 | Tweens | ws/tween | `@thunderclap/engine/tween`: easing table, property/value tweens, sequences, loops/yoyo, springs, `Tweens.update(dt)` | post easing | ✅ green at `23d6644` (924 tests, 162 tween; e2e 659/92/11 load; tween.spec all rows); queued chain 2 after scaffold |
 | 5 | Demo: arena | ws/demo-arena | `demos/arena` third-person skinned character, sockets+trail, follow cam, PBR+shadows, particles; owns `pnpm demo` infra | skinning, anim, sockets, pbr | ✅ green at `4f7a6ce` (e2e 689/92/5 E-017; arena rows 24/24; snap 0 px); queued chain 6 first |
@@ -72,10 +72,11 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Demo: range | ws/demo-range | `demos/range` first-person target range: Look, meshTester picks, sparks, trails, spatial audio | pick | ✅ green at `38ce3d1` (768 tests; range.spec 31/9/0; full matrix unusable at load 52, E-023); queued chain 6 last |
 | 5 | Shared light loop | ws/pbr-lights | PBR sees spots, masks, layers via one generated light loop; default textures unified | spot-lights, texture-registry | ✅ green at `bb6f799` (784 tests; e2e 686/92/0; snap 0 px; pbr probes identical); queued chain 1 after nav |
 | 5 | Batch submit | ws/batch-submit | `frame.meshes(batch)` + retained `InstanceList`; 50k instances in a few ms CPU; BENCH numbers | bench | ✅ green at `246e1be` (786 tests; e2e 672/106/0; snap 0; BENCH 10k mesh 4.1 ms / batch 0.7 / list 0.2); queued chain 3 after bench (supersedes bench files) |
-| 5 | Debug draw | ws/debug-draw | `createDebugDraw`: lines, wire shapes, axes, paths in one draw (fx) | — | 🔧 in progress |
+| 5 | Debug draw | ws/debug-draw | `createDebugDraw`: lines, wire shapes, axes, paths in one draw (fx) | — | ✅ green at `8d30969` (827 tests; e2e 707/92/3 mesh fog, pre-flake-input base; snap 0 px); queued chain 4 after retarget |
 | 5 | Billboards | ws/billboards | name plates, health bars, damage numbers: camera-facing quads + canvas text atlas (fx) | — | 🔧 in progress |
 | 5 | Perf overlay | ws/perf-overlay | `createPerfMonitor`/`createPerfOverlay`: frame/GPU/draw stats + sparkline; `?perf` on harness pages | — | 🔧 in progress |
 | 5 | 2D ergonomics: `input.getGamepads`, PanelStack arrows, tile layer + flipbook | ws/ergo-2d | 🔧 engineer running (offset 280) |
+| 5 | Input recording and replay (`createInputRecorder`, `createInputPlayback`, `createGame({ input: { replay } })`) | ws/input-replay | 🔧 engineer running (offset 290) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
@@ -130,6 +131,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - Brief pbr-lights said `WGSL_PBR` lives in `standard.ts`; it is `src/render/pbr-wgsl.ts`. Fix in the next brief that names it (gltf-materials).
 - ws/batch-submit wish: fake GPU records `writeBuffer` data so tests need no queue monkey-patch. → ws/comment-sweep.
 - ws/demo-range wishes: ui reticle widget; hinge/tween helper (tween lands soon); geom cube helper (geom on main). → ws/ergo-3d.
+- ws/debug-draw wish: `Camera` exposes an inverse view-projection publicly (harness could then demo `frustum`). → ws/ergo-3d.
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
