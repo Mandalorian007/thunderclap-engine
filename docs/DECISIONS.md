@@ -151,3 +151,14 @@ Chain 3 (host-mobile) asked after a second full matrix forced by main moving und
 
 With eight engineers and an integrator gating at once the 1-min load sat at 40–61 for over half an hour: ws/nav-4 and ws/ui-4 both came back with failures outside their code, and the nav-4 integrator could not find a 25 window in 30 minutes. Under E-023 none of those runs is a gate result, so parallel gates were buying nothing. Ruling: a full `pnpm test:e2e` takes one of two `mkdir` slots in `/tmp` (recipe in `docs/briefs/common.md`), released on exit, stale after 45 minutes. Engineers keep building in parallel; only the matrix queues. Load above 40 while holding a slot still means wait.
 
+## E-031: one integration train, one matrix at a time (2026-11-06, PM)
+
+E-030's two slots did not bring the load down: with seven engineers and five integrators building, the 1-min load stayed at 44–49 for the next hour. Every full matrix came back with the same 8–12 failures, none of them in the code under test: audio4 `?sprites`, post2 on ipad, demos/voxel on ipad, music `?pause` and the ui cursor. No branch landed. Running five matrices to land five branches costs five quiet windows, and there were none. Ruling:
+- **Engineers no longer run the full e2e.** An engineer's gate is `pnpm check`, `pnpm snap:check` at 0 px, and single-spec runs of the specs the branch owns or touches. Full matrices belong to integrators.
+- **One slot.** The full matrix takes `/tmp/thunderclap-e2e-slot1` only. Slot 2 is retired.
+- **Quiet while it runs.** While slot 1 exists, nobody else runs an e2e spec, `pnpm check` or `pnpm snap:check`. Engineers keep editing and running targeted `vitest` files.
+- **Load before start.** The train starts its matrix when the 1-min load is under 30.
+- **One train.** One integrator merges every queued branch in the order the PM gives, running `pnpm check` and `snap:check` after each merge. It then runs one matrix on the result.
+  - A failure inside a member's area is that member's: the integrator reverts that member's merge from the train and reruns the specs that failed.
+  - A failure outside every member's area, in a run that started under 30, is a real failure. The integrator reports it, and the PM decides.
+
