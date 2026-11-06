@@ -12,10 +12,7 @@ import { Look } from '@thunderclap/engine/input';
 import { type Action, bindings, type GameCtx, type Player, type World } from './ctx';
 import { createWorldScene } from './scenes/world';
 import { createHud } from './ui/hud';
-import { createTerrain, findLandmarks } from './world/terrain';
-
-/** The world's seed: the page and the mesher Worker both generate from it. */
-const SEED = 2026;
+import { createTerrain, findLandmarks, SEED } from './world/terrain';
 
 declare global {
   interface Window {

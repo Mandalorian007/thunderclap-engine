@@ -24,7 +24,7 @@
  */
 import { GameLoop } from '@thunderclap/engine/core';
 import { flicker, Sky, Water } from '@thunderclap/engine/fx';
-import { Gestures, Input, Look } from '@thunderclap/engine/input';
+import { Gestures, Input, Look, shapeStick } from '@thunderclap/engine/input';
 import { boot } from '@thunderclap/engine/platform';
 import { PostStack } from '@thunderclap/engine/post';
 import {
@@ -62,6 +62,7 @@ import {
   WORLD_X,
   WORLD_Y,
   WORLD_Z,
+  worldProblem,
 } from './world';
 
 const root = document.getElementById('root') as HTMLElement;
@@ -333,6 +334,8 @@ async function main(): Promise<void> {
   }
 
   spawnColumn(grid, cc);
+  const broken = worldProblem(grid, SEED, cc);
+  if (broken) console.error(`voxel world: ${broken}`);
   pos[0] = cc[0] + 0.5;
   pos[1] = cc[1];
   pos[2] = cc[2] + 0.5;
@@ -358,6 +361,7 @@ async function main(): Promise<void> {
     placeCamera();
   }
 
+  const moveOut: [number, number] = [0, 0];
   /** Move the player one step: gravity, the move input, axis-separated voxel collision. */
   function step(dt: number, moveX: number, moveY: number, jump: boolean, autoJump: boolean): void {
     // Standing in the sea: the feet are below the surface in an open cell.
@@ -365,10 +369,10 @@ async function main(): Promise<void> {
     const speed = inWater ? SWIM_SPEED : WALK_SPEED;
     const fx = Math.sin(state.yaw);
     const fz = -Math.cos(state.yaw);
-    const len = Math.hypot(moveX, moveY);
-    const k = len > 1 ? 1 / len : 1;
-    const wx = (fx * moveY + -fz * moveX) * k;
-    const wz = (fz * moveY + fx * moveX) * k;
+    // The move input's length clamped to 1 (it is `Look.move`, already through the deadzone).
+    shapeStick(moveX, moveY, moveOut, { deadzone: 0, shape: 'radial' });
+    const wx = fx * moveOut[1] - fz * moveOut[0];
+    const wz = fz * moveOut[1] + fx * moveOut[0];
     vel[0] = wx * speed;
     vel[2] = wz * speed;
     if (inWater) {
@@ -413,7 +417,8 @@ async function main(): Promise<void> {
       vel[1] = 0;
     }
     // A step: walking into a one-block ledge hops it (Bedrock's auto-jump; on every device).
-    if (blocked && onGround && autoJump && len > 0) vel[1] = JUMP_SPEED;
+    if (blocked && onGround && autoJump && (moveOut[0] !== 0 || moveOut[1] !== 0))
+      vel[1] = JUMP_SPEED;
     // The world's edge is a wall.
     pos[0] = Math.max(HALF, Math.min(WORLD_X - HALF, pos[0]));
     pos[2] = Math.max(HALF, Math.min(WORLD_Z - HALF, pos[2]));

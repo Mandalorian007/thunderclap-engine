@@ -11,13 +11,13 @@
  */
 import { createGame } from '@thunderclap/engine';
 import { recipes } from '@thunderclap/engine/audio';
-import type { Scene } from '@thunderclap/engine/core';
+import { createRandom, createScheduler, type Scene } from '@thunderclap/engine/core';
 import { flicker } from '@thunderclap/engine/fx';
 import type { DrawParams, Frame, RenderStats } from '@thunderclap/engine/render';
 import { createSaveStore, s } from '@thunderclap/engine/save';
 import { button, h, type PadLike, PadNav } from '@thunderclap/engine/ui';
 import { buildAtlas, CELL, cellUv, TILE } from './atlas';
-import { buildMap, FIRST_COIN_TILE, isSolid, MAP_H, MAP_W, moveBox, rng, SPAWN_TILE } from './map';
+import { buildMap, FIRST_COIN_TILE, isSolid, MAP_H, MAP_W, moveBox, SPAWN_TILE } from './map';
 
 const WORLD_W = MAP_W * TILE; // 1280
 const WORLD_H = MAP_H * TILE; // 960
@@ -178,17 +178,17 @@ if (ctx) {
   state.coinsOnFloor = coins.length;
 
   // --- Bats -------------------------------------------------------------------------------
-  const random = rng(11);
+  const random = createRandom(11);
   const batVel = new Float32Array(BAT_COUNT * 2);
   const batPhase = new Float32Array(BAT_COUNT);
   const bats: DrawParams[] = [];
   for (let i = 0; i < BAT_COUNT; i++) {
-    const t = map.openTiles[Math.floor(random() * map.openTiles.length)]!;
-    const a = random() * Math.PI * 2;
-    const speed = 40 + random() * 50;
+    const t = random.pick(map.openTiles);
+    const a = random.float(0, Math.PI * 2);
+    const speed = random.float(40, 90);
     batVel[i * 2] = Math.cos(a) * speed;
     batVel[i * 2 + 1] = Math.sin(a) * speed;
-    batPhase[i] = random() * 4;
+    batPhase[i] = random.float(0, 4);
     bats.push({
       x: t.x * TILE + TILE / 2,
       y: t.y * TILE + TILE / 2,
@@ -213,7 +213,9 @@ if (ctx) {
   };
   const moved = { x: 0, y: 0 };
   let hitFlash = 0;
-  let hitCooldown = 0;
+  /** The sim's clock for timed rules: a bat's touch blocks the next one for 0.8 s. */
+  const timers = createScheduler();
+  const hitCooldown = timers.cooldown('hit', 0.8);
 
   // --- Fog: one dark quad per tile on its own layer, alpha by distance from the player -------
   const fogTint = tiles.map(() => [0, 0, 0, 0]);
@@ -336,8 +338,7 @@ if (ctx) {
       b.uv = UV.bat[Math.floor(simTime * 10 + batPhase[i]!) & 3];
       const dx = nx - px;
       const dy = ny - py;
-      if (hitCooldown <= 0 && dx * dx + dy * dy < 18 * 18) {
-        hitCooldown = 0.8;
+      if (dx * dx + dy * dy < 18 * 18 && hitCooldown.use()) {
         hitFlash = 1;
         state.hits++;
         setHealth(state.health - 1);
@@ -346,9 +347,12 @@ if (ctx) {
     }
   }
 
+  // Keys and the pad as one stick, its length clamped to 1 (diagonals are not faster).
+  const stickOut: [number, number] = [0, 0];
   function updatePlayer(dt: number): void {
-    let mx = input.value('right') - input.value('left');
-    let my = input.value('down') - input.value('up');
+    input.stick('left', 'right', 'up', 'down', stickOut, { deadzone: 0, shape: 'radial' });
+    let mx = stickOut[0];
+    let my = stickOut[1];
     const drag = gestures.drag;
     if (drag && (drag.phase === 'start' || drag.phase === 'move')) {
       const dx = drag.x - drag.origin.x;
@@ -359,12 +363,7 @@ if (ctx) {
         my = dy / len;
       }
     }
-    const len = Math.hypot(mx, my);
-    if (len > 1) {
-      mx /= len;
-      my /= len;
-    }
-    if (len > 0) {
+    if (mx !== 0 || my !== 0) {
       moveBox(
         map,
         player.x,
@@ -421,7 +420,7 @@ if (ctx) {
         simTime += dt;
         updateBats(dt);
       }
-      hitCooldown = Math.max(0, hitCooldown - dt);
+      timers.update(dt);
       hitFlash = Math.max(0, hitFlash - dt * 3);
       updateFog();
       state.playerPos.x = player.x;

@@ -1,9 +1,11 @@
 /**
  * Pairs: the rules. Pure functions over an immutable `Board`; every move returns a new board.
- * Nothing here knows about the engine, the DOM, time or input. The scene turns taps into
- * `reveal(board, index)` and draws what comes back; the tests drive the same functions.
+ * Nothing here knows about the DOM, time or input; the one engine call is `createRandom`, the
+ * seeded generator, so a seed reproduces a board exactly (a bug report or a save can name it).
+ * The scene turns taps into `reveal(board, index)` and draws what comes back; the tests drive
+ * the same functions.
  */
-import { rng, shuffle } from './random';
+import { createRandom } from '@thunderclap/engine/core';
 
 /** What the board is waiting for. */
 export type Phase =
@@ -42,7 +44,7 @@ export function createBoard(cols: number, rows: number, seed: number): Board {
   return {
     cols,
     rows,
-    faces: shuffle(deck, rng(seed)),
+    faces: createRandom(seed).shuffle(deck),
     matched: new Array<boolean>(cells).fill(false),
     up: [],
     moves: 0,

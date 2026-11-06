@@ -15,7 +15,7 @@ index.html          the page: a positioned #app the engine mounts into
 src/main.ts         createGame(...) → engine ctx; widened with the game's nouns; one scene pushed
 src/ctx.ts          Action names, their bindings, GameCtx (= EngineCtx + game nouns)
 src/analytics.ts    the game's events (level_start, level_complete) and createBeaconSink(url); off until COLLECT_URL is set
-src/rules/          pure TypeScript: Board, createBoard, reveal, settle, phase. No engine, no DOM
+src/rules/          pure TypeScript: Board, createBoard, reveal, settle, phase. No DOM; only createRandom from the engine
 src/scenes/board.ts the scene: input → rules, rules → sprites; camera fitted to the free rect
 src/save/schema.ts  the save: schema, version, migrations, createProgressStore(host)
 src/layout/spec.ts  LayoutSpec: HUD regions per form factor
@@ -24,7 +24,7 @@ src/ui/hud.ts       DOM widgets registered against layout regions
 
 ## Rules of the house
 
-1. **Rules are pure.** `rules/` imports nothing from the engine or the DOM and never reads time or `Math.random` (use `rules/random.ts` with a seed). A move is a function `(Board, input) => Board` that returns a new board; the input board is never mutated. Every rule has a unit test.
+1. **Rules are pure.** `rules/` imports nothing from the DOM and nothing from the engine but `createRandom` (`@thunderclap/engine/core`, seeded, the same sequence everywhere), and never reads time or `Math.random`: `createRandom(seed)` deals the board. A move is a function `(Board, input) => Board` that returns a new board; the input board is never mutated. Every rule has a unit test.
 2. **Rendering, not mechanics.** The scene draws what the rules say and turns actions into rule calls. Game state lives in `ctx.game`, not in the scene's closure (the scene keeps only animation state).
 3. **No network without a decision.** The engine makes no network call. The template's one network path is analytics: `createBeaconSink(url)` in `src/analytics.ts`, built only when `COLLECT_URL` is set (it is `null` here); set it only with an endpoint you own and the consent your product needs. Saves go through the host's storage.
 4. **Zero allocations per frame.** `render` mutates pre-built `Transform`s and `DrawParams`; nothing is created inside `render` or `update` in steady state.

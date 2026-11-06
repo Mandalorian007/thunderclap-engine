@@ -1,9 +1,12 @@
 /**
- * The player controller: run, jump (coyote time, jump buffering, variable height), dash. Pure; the
- * scene feeds it an `Intent` per fixed step and reads the `Body` and the `state` for animation.
+ * The player controller: run, jump (coyote time, variable height), dash. Pure (no DOM, no time of
+ * its own); the scene feeds it an `Intent` per fixed step and reads the `Body` and the `state` for
+ * animation. The jump buffer is the engine input's (`input.buffered('jump', JUMP_BUFFER * 1000)`,
+ * see `scenes/level.ts`); the dash cooldown is an engine `Scheduler` cooldown stepped here.
  *
  * The three constants an agent tunes are at the top: `GRAVITY`, `JUMP_SPEED`, `RUN_SPEED`.
  */
+import { type Cooldown, createScheduler, type Scheduler } from '@thunderclap/engine/core';
 import type { Level } from '../levels/format';
 import { type Body, createBody, type MoverBox, moveBody } from './body';
 
@@ -27,7 +30,7 @@ export const MAX_FALL = 1500;
 export const SHORT_HOP_GRAVITY = 2.6;
 /** Seconds after leaving an edge during which a jump still counts. */
 export const COYOTE_TIME = 0.1;
-/** Seconds a jump press is remembered before landing. */
+/** Seconds a jump press is remembered before landing (the scene's `input.buffered` window). */
 export const JUMP_BUFFER = 0.12;
 /** Dash: speed, duration, cooldown. */
 export const DASH_SPEED = 1150;
@@ -45,7 +48,10 @@ export type PlayerState = 'idle' | 'run' | 'jump' | 'fall' | 'land' | 'dash';
 export interface Intent {
   /** -1 .. 1 */
   move: number;
-  /** Jump was pressed this step. */
+  /**
+   * A jump press is live: pressed within `JUMP_BUFFER` and not yet used. The scene reads
+   * `input.buffered('jump', JUMP_BUFFER * 1000)` and calls `input.consume('jump')` once `jumped`.
+   */
   jumpPressed: boolean;
   /** Jump is held. */
   jumpHeld: boolean;
@@ -61,9 +67,11 @@ export interface Player {
   /** Seconds in the current state. */
   stateTime: number;
   coyote: number;
-  jumpBuffer: number;
   dashLeft: number;
-  dashCooldown: number;
+  /** The player's own clock, stepped by `stepPlayer`. */
+  readonly timers: Scheduler;
+  /** `DASH_COOLDOWN` between dashes; `remaining` feeds the HUD meter. */
+  readonly dash: Cooldown;
   /** Events the scene turns into sound and particles; cleared each step before input. */
   jumped: boolean;
   landed: boolean;
@@ -71,15 +79,16 @@ export interface Player {
 }
 
 export function createPlayer(x: number, y: number): Player {
+  const timers = createScheduler();
   return {
     body: createBody(x, y, PLAYER_W, PLAYER_H),
     facing: 1,
     state: 'idle',
     stateTime: 0,
     coyote: 0,
-    jumpBuffer: 0,
     dashLeft: 0,
-    dashCooldown: 0,
+    timers,
+    dash: timers.cooldown('dash', DASH_COOLDOWN),
     jumped: false,
     landed: false,
     dashed: false,
@@ -95,7 +104,6 @@ export function placePlayer(p: Player, x: number, y: number): void {
   p.body.riding = -1;
   p.body.grounded = false;
   p.coyote = 0;
-  p.jumpBuffer = 0;
   p.dashLeft = 0;
   setState(p, 'fall');
 }
@@ -114,18 +122,16 @@ export function stepPlayer(
   p.dashed = false;
   const wasGrounded = b.grounded;
 
-  // Timers.
+  // Timers. Coyote time stays a field: it remembers ground, not a press or a cooldown.
   p.coyote = wasGrounded ? COYOTE_TIME : Math.max(0, p.coyote - dt);
-  p.jumpBuffer = intent.jumpPressed ? JUMP_BUFFER : Math.max(0, p.jumpBuffer - dt);
-  p.dashCooldown = Math.max(0, p.dashCooldown - dt);
+  p.timers.update(dt);
 
   if (intent.move > 0.01) p.facing = 1;
   else if (intent.move < -0.01) p.facing = -1;
 
   // Dash.
-  if (intent.dashPressed && p.dashCooldown === 0 && p.dashLeft === 0) {
+  if (intent.dashPressed && p.dashLeft === 0 && p.dash.use()) {
     p.dashLeft = DASH_TIME;
-    p.dashCooldown = DASH_COOLDOWN;
     p.dashed = true;
     setState(p, 'dash');
   }
@@ -151,11 +157,10 @@ export function stepPlayer(
     : AIR_ACCEL;
   b.vx = approach(b.vx, target, accel * dt);
 
-  // Jump: a press within the buffer while grounded or within coyote time.
-  if (p.jumpBuffer > 0 && p.coyote > 0) {
+  // Jump: a live (buffered) press while grounded or within coyote time.
+  if (intent.jumpPressed && p.coyote > 0) {
     b.vy = -JUMP_SPEED;
     p.coyote = 0;
-    p.jumpBuffer = 0;
     b.grounded = false;
     b.riding = -1;
     p.jumped = true;

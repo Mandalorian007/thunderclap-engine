@@ -6,7 +6,7 @@
  * Draw order and count: three parallax layers + the map (one draw each), then every sprite
  * (movers, flags, door, coins, player: same material, so one batch), then the particles: six.
  */
-import type { Scene } from '@thunderclap/engine/core';
+import { createScheduler, type Scene } from '@thunderclap/engine/core';
 import type { EmitParams } from '@thunderclap/engine/fx';
 import {
   createFlipbook,
@@ -24,6 +24,7 @@ import { type MoverBox, touchesKind, touchesTile } from '../physics/body';
 import {
   createPlayer,
   type Intent,
+  JUMP_BUFFER,
   PLAYER_H,
   PLAYER_W,
   type Player,
@@ -72,7 +73,9 @@ export function createLevelScene(ctx: GameCtx, level: Level): Scene<GameCtx, Fra
   let simTime = 0;
   let coinsGot = 0;
   let hurtLeft = 0;
-  let dustTimer = 0;
+  // The scene's clock: the running-dust cadence (the player's dash cooldown is its own).
+  const timers = createScheduler();
+  const dustCadence = timers.cooldown('dust', DUST_EVERY);
   let finished = false;
   let bookState: PlayerState | '' = '';
 
@@ -285,6 +288,7 @@ export function createLevelScene(ctx: GameCtx, level: Level): Scene<GameCtx, Fra
       world = buildWorld(ctx.renderer, ctx.atlas, level, design.width, design.height);
       hud = createHud(ctx);
       player = createPlayer(0, 0);
+      timers.clear();
       checkpoint = -1;
       timeMs = 0;
       simTime = 0;
@@ -314,10 +318,11 @@ export function createLevelScene(ctx: GameCtx, level: Level): Scene<GameCtx, Fra
       simTime += dt;
       timeMs += dt * 1000;
       hurtLeft = Math.max(0, hurtLeft - dt);
+      timers.update(dt);
 
       // Intent: keyboard, pad and the touch zones all arrive through the same actions.
       intent.move = input.axis('left', 'right');
-      intent.jumpPressed = input.pressed('jump');
+      intent.jumpPressed = input.buffered('jump', JUMP_BUFFER * 1000);
       intent.jumpHeld = input.held('jump');
       intent.dashPressed = input.pressed('dash');
 
@@ -325,21 +330,20 @@ export function createLevelScene(ctx: GameCtx, level: Level): Scene<GameCtx, Fra
       stepPlayer(player, intent, level, moverBoxes, dt);
       const b = player.body;
 
-      if (player.jumped) ctx.audio.play('jump', { bus: 'sfx' });
+      if (player.jumped) {
+        input.consume('jump');
+        ctx.audio.play('jump', { bus: 'sfx' });
+      }
       if (player.dashed) ctx.audio.play('jump', { bus: 'sfx', rate: 0.6 });
       if (player.landed || player.dashed) {
         dust.x = b.x + PLAYER_W / 2;
         dust.y = b.y + PLAYER_H;
         ctx.particles.emit(dust, player.dashed ? 10 : 6);
       }
-      if (player.state === 'run' && b.grounded) {
-        dustTimer -= dt;
-        if (dustTimer <= 0) {
-          dustTimer = DUST_EVERY;
-          dust.x = b.x + PLAYER_W / 2 - player.facing * 12;
-          dust.y = b.y + PLAYER_H;
-          ctx.particles.emit(dust, 2);
-        }
+      if (player.state === 'run' && b.grounded && dustCadence.use()) {
+        dust.x = b.x + PLAYER_W / 2 - player.facing * 12;
+        dust.y = b.y + PLAYER_H;
+        ctx.particles.emit(dust, 2);
       }
 
       // Hazards and the pit.
@@ -378,7 +382,7 @@ export function createLevelScene(ctx: GameCtx, level: Level): Scene<GameCtx, Fra
       coinBook.update(dt);
 
       hud?.setTime(timeMs);
-      hud?.setDash(player.dashCooldown);
+      hud?.setDash(player.dash.remaining);
     },
     render(frame) {
       if (!world) return;
