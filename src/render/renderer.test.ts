@@ -11,6 +11,7 @@ import {
 import type { Frame } from './frame';
 import {
   DEFAULT_SHADOW_BIAS,
+  LAYERS_OFFSET_FLOATS,
   LIGHTS_BLOCK_FLOATS,
   Lights,
   SHADOW_PARAMS_OFFSET_FLOATS,
@@ -330,7 +331,11 @@ describe('camera block', () => {
     expect([...unlit.subarray(0, 3)]).toEqual([1, 1, 1]);
     expect(new Uint32Array(unlit.buffer, unlit.byteOffset)[3]).toBe(0);
     expect([...unlit.subarray(4, 12)]).toEqual([0, -1, 0, 0, 0, 0, 0, 0]);
-    expect(unlit.subarray(12).every((v) => v === 0)).toBe(true);
+    expect(unlit.subarray(12, LAYERS_OFFSET_FLOATS).every((v) => v === 0)).toBe(true);
+    // Then spot_count 0, the sun's all-layers mask, and zeros.
+    expect(new Uint32Array(unlit.buffer, unlit.byteOffset)[LAYERS_OFFSET_FLOATS + 1]).toBe(
+      0xffffffff,
+    );
 
     f.lights.ambient.set([0.2, 0.3, 0.4]);
     f.lights.sun.color = [1, 0.9, 0.8];
@@ -447,7 +452,7 @@ describe('28-float instances', () => {
     writeMatrix2d(m, 0, 10, 20, 30, -40, 0.25);
     expect([...d.slice(0, 12)]).toEqual([...m]);
     expect([...d.slice(12)]).toEqual([
-      ...new Float32Array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 1, 1, 2, 0, 0, 3, 0, 30, -40]),
+      ...new Float32Array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 1, 1, 2, 0, 0, 3, 2, 30, -40]),
     ]);
   });
 
@@ -460,7 +465,7 @@ describe('28-float instances', () => {
     // biome-ignore format: instance table
     expect([...cap.last()]).toEqual([
       1, -0, 0, 1,  0, 1, 0, 2,  0, 0, 1, 0,
-      0, 0, 1, 1,  1, 1, 1, 1,  0, 0, 0, 0,  0, 0, 1, 1,
+      0, 0, 1, 1,  1, 1, 1, 1,  0, 0, 0, 0,  0, 2, 1, 1,
     ]);
   });
 
@@ -1187,15 +1192,18 @@ describe('shadow pass', () => {
     expect(fake.errors).toEqual([]);
   });
 
-  it('receiveShadow: false sets instance flag bit 0; the default leaves it 0', () => {
+  it('receiveShadow: false sets instance flag bit 0; the layers mask fills bits 1..23', () => {
     const { fake, r } = setup();
     const cap = captureInstances(fake);
     const f = r.beginFrame(0, 0);
     f.sprite(null, { x: 0, y: 0 });
     f.sprite(null, { x: 1, y: 0, receiveShadow: false });
     f.sprite(null, { x: 2, y: 0, receiveShadow: true });
+    f.sprite(null, { x: 3, y: 0, layers: 0b110 });
+    f.sprite(null, { x: 4, y: 0, layers: 0xffffffff, receiveShadow: false });
     r.endFrame();
-    expect(column(cap.last(), INSTANCE_OFFSET.flags)).toEqual([0, 1, 0]);
+    // Default layers 1 → bit 1; the mask keeps its low 23 bits above the shadow bit.
+    expect(column(cap.last(), INSTANCE_OFFSET.flags)).toEqual([2, 3, 2, 0b1100, 0xffffff]);
   });
 
   it('a 2D frame with sun.shadow set but only sprites is untouched: no pass, no map', () => {

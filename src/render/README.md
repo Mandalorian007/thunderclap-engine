@@ -208,7 +208,8 @@ renderer.render(frame, eye);                              // or renderer.camera 
 
 The engine supplies the lights; the style is your WGSL. `frame.lights` is a `Lights` (ambient
 rgb, one `sun { dir, color }`, `points: PointLight[]` with `position`, `color`, `radius`, the
-first `MAX_POINT_LIGHTS` = 16 uploaded) that the renderer writes as `EngineLights` at
+first `MAX_POINT_LIGHTS` = 16 uploaded, `spots: SpotLight[]`, the first `MAX_SPOT_LIGHTS` = 8
+uploaded, each light with an optional `layers` mask) that the renderer writes as `EngineLights` at
 `@group(0) @binding(2)` with every view, in the same upload as the globals and the camera. The
 default is unlit (ambient 1, no sun, no points), so a material that never reads the block, or
 one that multiplies by `engine_lambert`, draws exactly as before until the game sets lights.
@@ -238,9 +239,11 @@ In WGSL the block is `lights.ambient`, `lights.point_count` (u32), `lights.sun_d
 `engine_point_lights(n, p)` sums the point lights' Lambert diffuse with a `(1 - d/radius)²`
 falloff; `engine_lambert(n, p)` adds the ambient and the sun. Toon, rim or wrapped lighting
 reads the same fields and ignores the helpers. `Lights.writeBlock(f32, u32, offset, shadow?)`
-is the CPU layout (`LIGHTS_BLOCK_FLOATS` = 168 floats; `POINT_LIGHTS_OFFSET_FLOATS`,
+is the CPU layout (`LIGHTS_BLOCK_FLOATS` = 316 floats; `POINT_LIGHTS_OFFSET_FLOATS`,
 `POINT_LIGHT_FLOATS`, `SUN_VIEW_PROJ_OFFSET_FLOATS`, `SHADOW_PARAMS_OFFSET_FLOATS`,
-`FOG_OFFSET_FLOATS`), and allocates nothing; `lights.reset()` returns to the unlit default.
+`FOG_OFFSET_FLOATS`, `LAYERS_OFFSET_FLOATS`, `POINT_LAYERS_OFFSET_FLOATS`,
+`SPOT_LIGHTS_OFFSET_FLOATS`, `SPOT_LIGHT_FLOATS`), and allocates nothing; `lights.reset()`
+returns to the unlit default.
 Drawables that want the block add `WGSL_LIGHTS` to their shader (it also declares bindings 3
 and 4 below); `renderer.globalsLayout` already has bindings 2 to 4.
 `lights.sun` is a `DirectionalLight`: `dir` (the direction the light travels, any length),
@@ -272,6 +275,48 @@ one bind group layout serves both. The block gains `lights.sun_view_proj` (`mat4
   `pipelineFor(layout)` and `ShadowUniforms` (`viewProj`, `bias`, `texelSize`), what
   `writeBlock` takes as its fourth argument. Games set `lights.sun.shadow`; drawables that
   render their own passes may use it directly.
+
+### Spot lights and layer masks
+
+`lights.spots` holds `SpotLight`s: `position`, `direction` (the way the light travels, any
+length; normalised on upload), `color`, `radius` (distance falloff, as for points),
+`innerAngle` and `outerAngle` (radians from the axis: full inside the inner, gone outside the
+outer, a smooth Hermite step between; `spotCone(cosTheta, cosOuter, cosInner)` is the CPU twin
+of `engine_spot_cone`). The first `MAX_SPOT_LIGHTS` = 8 reach the shader as `lights.spots[i]`
+(`position`, `radius`, `direction`, `cos_outer`, `color`, `cos_inner`, `layers`) with
+`lights.spot_count`.
+
+Every light takes an optional `layers` mask (u32; default `ALL_LIGHT_LAYERS` = all bits):
+`DirectionalLight.layers` (`lights.sun_layers`), `PointLight.layers` (`lights.point_layers`,
+an `array<vec4u, 4>`: the mask of point `i` is `point_layers[i >> 2u][i & 3u]`) and
+`SpotLight.layers`. A light reaches an instance when the two masks share a bit, against the
+instance's `InstanceParams.layers` (the same mask the camera culls by). The instance's low
+`INSTANCE_LAYER_BITS` = 23 layer bits travel in the instance flags float above the shadow bit
+(`packInstanceFlags(receiveShadow, layers)`, `INSTANCE_LAYER_SHIFT` = 1), so a fragment shader
+reads them as `engine_instance_layers(in.flags)`; layers above bit 22 still cull but are
+invisible to lights.
+
+- `engine_light_accum(world_pos, normal, layer_mask) -> vec3f`: the sun (× `engine_shadow`),
+  point and spot Lambert terms of every light whose mask shares a bit with `layer_mask`; no
+  ambient. Custom WGSL (toon, PBR) builds on it.
+- `engine_lambert_layers(normal, world_pos, layer_mask)`: ambient + `engine_light_accum`.
+- `engine_lambert(normal, world_pos)`: the same over every layer (`0xffffffffu`), so a material
+  that ignores masks keeps its two-argument call; `engine_point_lights` likewise sums every
+  point light.
+
+```ts
+lights.spots.push({ position: [0, 5, 3], direction: [0, -1, 0], color: [3, 2.6, 1.8],
+  radius: 12, innerAngle: 0.18, outerAngle: 0.3 });              // a torch cone
+lights.points.push({ position: [0, 3, -1], color: [2.4, 2, 1.5], radius: 7, layers: 0b10 });
+frame.mesh(cube, lit, t, { layers: 0b10 });                      // only this cube sees the lamp
+```
+
+```wgsl
+let light = engine_lambert_layers(n, in.worldPos, engine_instance_layers(in.flags));
+```
+
+`harness/lights.html` sweeps a spot over the ground beside two cubes on different layers with a
+point light masked to one of them; `e2e/lights.spec.ts` samples both effects on the matrix.
 
 ### Fog
 
