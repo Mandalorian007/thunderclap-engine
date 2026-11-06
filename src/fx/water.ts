@@ -36,8 +36,14 @@ export interface WaterOptions {
   size?: number | [number, number];
   /** Grid subdivisions; `displace` needs more than 1 to show. Default 1. Fixed at construction. */
   segments?: number | [number, number];
-  /** Surface height (y). Default 0. */
+  /** Surface height (y), relative to `origin`. Default 0. */
   level?: number;
+  /**
+   * World position of the plane's centre: x and z are baked into the mesh, y is added to
+   * `level` (a world whose corner is the origin puts its water at `[sizeX / 2, 0, sizeZ / 2]`).
+   * Default `[0, 0, 0]`. Fixed at construction.
+   */
+  origin?: ArrayLike<number>;
   /** Linear RGB where the water is shallow. */
   shallowColor?: ArrayLike<number>;
   /** Linear RGB at full depth. */
@@ -103,8 +109,10 @@ const PREMULTIPLIED: GPUBlendState = {
  * deep everywhere, foam off, and the pipeline has no depth state.
  */
 export class Water implements Drawable {
-  /** Surface height (y). Live. */
+  /** Surface height (y) above `origin`. Live. */
   level: number;
+  /** World position of the plane's centre (`WaterOptions.origin`). Fixed. */
+  readonly origin = new Float32Array(3);
   /** Linear RGB where the water is shallow. Live. */
   readonly shallowColor = new Float32Array(3);
   /** Linear RGB at full depth. Live. */
@@ -180,10 +188,21 @@ export class Water implements Drawable {
     this.depthTarget = opts.depthTarget ?? null;
     this.readsDepth = opts.readsDepth ?? false;
 
-    this.mesh = renderer.createMesh({
-      ...plane({ size: opts.size ?? 100, segments: opts.segments ?? 1 }),
-      label: 'water',
-    });
+    if (opts.origin) set3(this.origin, opts.origin);
+    const geometry = plane({ size: opts.size ?? 100, segments: opts.segments ?? 1 });
+    const ox = this.origin[0]!;
+    const oz = this.origin[2]!;
+    if (ox !== 0 || oz !== 0) {
+      const v = geometry.vertices;
+      const stride = geometry.layout.floats;
+      for (let i = 0; i < v.length; i += stride) {
+        v[i] = v[i]! + ox;
+        v[i + 2] = v[i + 2]! + oz;
+      }
+      geometry.bounds.center[0] += ox;
+      geometry.bounds.center[2] += oz;
+    }
+    this.mesh = renderer.createMesh({ ...geometry, label: 'water' });
 
     this.params = new Float32Array(WATER_PARAMS_FLOATS);
     this.paramsBuffer = device.createBuffer({
@@ -288,7 +307,7 @@ export class Water implements Drawable {
     p[16] = this.time;
     p[17] = count;
     p[18] = this.depthOn ? 1 : 0;
-    p[19] = 0;
+    p[19] = this.origin[1]!;
     for (let i = 0; i < WATER_MAX_WAVES; i++) {
       const o = 20 + i * 4;
       const w = i < count ? this.waves[i]! : null;
@@ -414,9 +433,9 @@ function wave(px: number, py: number, out: Float32Array | number[]): void {
 const waveOut = [0, 0, 0];
 
 /**
- * The surface height at world (`x`, `z`) at time `t` (default `water.time`): `level` plus
- * `displace` times the summed wave layers, the formula the vertex shader runs. Pure; no
- * allocation. With `displace` 0 it is `level`.
+ * The surface height at world (`x`, `z`) at time `t` (default `water.time`): the origin's y
+ * plus `level` plus `displace` times the summed wave layers, the formula the vertex shader
+ * runs. Pure; no allocation. With `displace` 0 it is `origin[1] + level`.
  */
 export function waterHeight(water: Water, x: number, z: number, t = water.time): number {
   let h = 0;
@@ -429,7 +448,7 @@ export function waterHeight(water: Water, x: number, z: number, t = water.time):
     wave(x * w.scale + dx * t * w.speed, z * w.scale + dz * t * w.speed, waveOut);
     h += w.amplitude * waveOut[0]!;
   }
-  return water.level + water.displace * h;
+  return water.origin[1]! + water.level + water.displace * h;
 }
 
 function set3(out: Float32Array, v: ArrayLike<number>): void {

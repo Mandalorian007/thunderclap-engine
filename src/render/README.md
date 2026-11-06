@@ -725,7 +725,7 @@ inside it to keep the standard transform.
   `label`, `wgsl`, `blend` (`BlendMode`: `alpha`, `premultiplied`, `additive`, `multiply`
   (`dst × rgb`, destination alpha kept), `opaque`; `blendState(mode)` is the `GPUBlendState`),
   `uniformBytes`, `textures`, `sampler` (`SamplerKind`: `linear-clamp`, `linear-repeat`, `linear-mip-repeat`, `nearest-mip-clamp`,
-  `nearest-clamp`), `perDrawUniforms`, `vertexEntry` and `fragmentEntry`.
+  `nearest-mip-repeat`, `nearest-clamp`), `perDrawUniforms`, `vertexEntry` and `fragmentEntry`.
 - `material.pipelineFor(layout, depth)` returns the pipeline for a `VertexLayout` and a
   `DepthMode` (0 = no depth attachment, the 2D path; 1 = test without writes, for blended draws;
   2 = test and write, for opaque draws). Depth pipelines use `DEPTH_FORMAT` (`depth24plus`).
@@ -810,8 +810,9 @@ textures every frame, as ping-pong does, builds no new bind groups after the fir
   roughness, whatever the factors say).
 - `renderer.createSpriteMaterial(texture, label, { blend, sampler })`
 - `SamplerKind` is `'linear-clamp'`, `'linear-repeat'`, `'nearest-clamp'`, `'linear-mip-repeat'`
-  or `'nearest-mip-clamp'`. The two `-mip` kinds blend between mip levels: linear for tiling
-  surfaces, nearest for pixel-art faces that stay crisp up close and calm far away.
+  `'nearest-mip-clamp'` or `'nearest-mip-repeat'`. The `-mip` kinds blend between mip levels:
+  linear for tiling surfaces, nearest for pixel-art faces that stay crisp up close and calm far
+  away (`-repeat` when the face tiles its texture, as a block material's quads do).
 
 ### Texture arrays and mipmaps
 
