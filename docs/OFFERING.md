@@ -29,6 +29,7 @@
 | Typed analytics events to a game-supplied sink | `createAnalytics({ sink }).attach(ctx)`; the template's `createBeaconSink(url)` | analytics |
 | Versioned saves with migrations, quota- and blocked-storage-safe | `createSaveStore({ ..., host })`, `s` schemas | save |
 | Copyable 2D puzzle template | `templates/puzzle` (`pnpm template:puzzle`) | template-puzzle |
+| Copyable first-person 3D template: `Look`, Worker chunks, texture array, shadow, fog, weather, anchors | `templates/first-person` (`pnpm template:first-person`) | template-first-person |
 | glTF skins and animations, in `anim`'s clip and skeleton shapes | `GltfDocument.skins` / `animations`, `skeletonFromSkin`, `interleaveSkinned` | gltf-anim |
 | Pure animation: keyframe clips, `Pose`, `Skeleton`, a mixer with layers, weights, crossfade and events, skin matrices | `@thunderclap/engine/anim` (`AnimationMixer`, `sampleClip`, `poseToWorld`, `skinMatrices`) | anim |
 | Third-person follow camera on `Look` | `Follow` (`mode: 'first' \| 'third'`) | follow |
@@ -37,16 +38,13 @@
 | Standard PBR material (glTF metallic-roughness) over the lights block, shadows and fog; its BRDF and normal mapping exposed to custom WGSL | `createStandardMaterial`, `WGSL_PBR` | pbr |
 | Attachment sockets: a transform that follows a skeleton joint (by index or name) with a local offset | `createSocket`, `socketWorld`, `attachTransform` in `@thunderclap/engine/anim`; `Transform.setMatrix(m)` | sockets |
 | GPU skinning in the scene and shadow passes: a skinned vertex layout and a joint-matrix palette; skinned casters shadow in their pose | `VERTEX_LAYOUT_SKINNED`, `SkinPalette` | skinning |
+| Spot lights (up to 8, inner and outer cone) and per-light layer masks over the lights block | `SpotLight`, `Lights.spots`, `layers` on lights | spot-lights |
 
 ## In flight (wave 5, `docs/STATUS.md`)
 
-Branches exist; nothing here is on `main`. Names are the briefs' and may change at merge.
+No stream from this table is open; `docs/STATUS.md` lists the current branches.
 
-| Stream | What it adds | Entry point (planned) |
-| --- | --- | --- |
-| ws/template-first-person | copyable 3D walk: `Look`, Worker chunks, texture array, shadow, fog, weather, anchors | `templates/first-person` |
-
-After wave 5 (candidates, unscheduled): spot lights and per-light layer masks, a third-person showcase template, GPU picking, publishing `engine-v1.0.0`.
+After wave 5 (candidates, unscheduled): a third-person showcase template, GPU picking, publishing `engine-v1.0.0`.
 
 ## How to ask for more
 

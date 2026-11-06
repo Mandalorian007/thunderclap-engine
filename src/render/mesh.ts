@@ -5,6 +5,8 @@
  *   (`VERTEX_FLOATS`), 32 bytes per vertex.
  * - `VERTEX_LAYOUT_3D`: `pos: vec3f, normal: vec3f, uv: vec2f, color: vec4f`, 12 floats
  *   (`VERTEX3D_FLOATS`), 48 bytes per vertex.
+ * - `VERTEX_LAYOUT_3D_TANGENT`: the 3D layout plus `tangent: vec4f` (xyz, handedness w),
+ *   16 floats, 64 bytes per vertex.
  *
  * Positions are in the mesh's local space; each draw's 3×4 instance matrix (built from
  * `DrawParams` x, y, w, h, rotation, or taken from a `Transform`) maps local → world space.
@@ -89,6 +91,37 @@ export const VERTEX_LAYOUT_3D: VertexLayout = {
   @location(10) normal: vec3f,
   @location(1) uv: vec2f,
   @location(2) color: vec4f,`,
+  wgslPosition: 'v.pos',
+  wgslNormal: 'v.normal',
+};
+
+/**
+ * Tangent layout (ws/geom-2): the 3D layout's 12 floats followed by a tangent `vec4f` at
+ * `@location(13)` (3..9 are the instance buffer, 11 and 12 skinning): xyz the unit tangent
+ * along +u, w the handedness ±1, so the bitangent is `w · cross(normal, tangent)`. 16 floats,
+ * 64 bytes. `geom`'s `computeTangents` writes it; the prelude reads it like the 3D layout, so a
+ * material that ignores `v.tangent` draws unchanged.
+ */
+export const VERTEX_LAYOUT_3D_TANGENT: VertexLayout = {
+  name: '3d-tangent',
+  floats: 16,
+  stride: 64,
+  buffer: {
+    arrayStride: 64,
+    stepMode: 'vertex',
+    attributes: [
+      { shaderLocation: 0, offset: 0, format: 'float32x3' },
+      { shaderLocation: 10, offset: 12, format: 'float32x3' },
+      { shaderLocation: 1, offset: 24, format: 'float32x2' },
+      { shaderLocation: 2, offset: 32, format: 'float32x4' },
+      { shaderLocation: 13, offset: 48, format: 'float32x4' },
+    ],
+  },
+  wgslFields: `  @location(0) pos: vec3f,
+  @location(10) normal: vec3f,
+  @location(1) uv: vec2f,
+  @location(2) color: vec4f,
+  @location(13) tangent: vec4f,`,
   wgslPosition: 'v.pos',
   wgslNormal: 'v.normal',
 };
