@@ -93,6 +93,11 @@ export interface FakeDevice {
     data: ArrayBufferView | ArrayBuffer;
   }[];
   readonly passes: FakePass[];
+  /**
+   * `copyTextureToTexture` calls (ws/render-hooks): source, destination and how many passes
+   * had been begun when the copy was encoded, so a test can place it between two passes.
+   */
+  readonly textureCopies: { src: FakeTexture; dst: FakeTexture; afterPasses: number }[];
   /** Validation errors that a real device would raise. */
   readonly errors: string[];
 }
@@ -106,6 +111,7 @@ export function createFakeDevice(limits: Partial<Record<string, number>> = {}): 
   const writes: FakeDevice['writes'] = [];
   const textureWrites: FakeDevice['textureWrites'] = [];
   const passes: FakePass[] = [];
+  const textureCopies: FakeDevice['textureCopies'] = [];
   const errors: string[] = [];
 
   const makePass = (kind: FakePass['kind'], desc: { label?: string } | undefined) => {
@@ -190,7 +196,20 @@ export function createFakeDevice(limits: Partial<Record<string, number>> = {}): 
       label: desc?.label,
       beginRenderPass: (d: GPURenderPassDescriptor) => makePass('render', d),
       beginComputePass: (d?: GPUComputePassDescriptor) => makePass('compute', d),
-      copyTextureToTexture() {},
+      copyTextureToTexture(src: { texture: FakeTexture }, dst: { texture: FakeTexture }) {
+        if (!(src.texture.usage & TEXTURE_USAGE.COPY_SRC)) {
+          errors.push(`copyTextureToTexture: ${src.texture.label} lacks COPY_SRC`);
+        }
+        if (!(dst.texture.usage & TEXTURE_USAGE.COPY_DST)) {
+          errors.push(`copyTextureToTexture: ${dst.texture.label} lacks COPY_DST`);
+        }
+        if (src.texture.format !== dst.texture.format) {
+          errors.push(
+            `copyTextureToTexture: ${src.texture.label} → ${dst.texture.label} formats differ`,
+          );
+        }
+        textureCopies.push({ src: src.texture, dst: dst.texture, afterPasses: passes.length });
+      },
       copyBufferToBuffer() {},
       clearBuffer(buffer: FakeBuffer) {
         if (!(buffer.usage & BUFFER_USAGE.COPY_DST)) {
@@ -247,6 +266,7 @@ export function createFakeDevice(limits: Partial<Record<string, number>> = {}): 
     writes,
     textureWrites,
     passes,
+    textureCopies,
     errors,
   };
 }
