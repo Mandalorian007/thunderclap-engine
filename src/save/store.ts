@@ -1,11 +1,36 @@
 import { defaultHost } from '../host/default';
 import type { Host } from '../host/types';
-import { decodeExport, type Envelope, encodeExport, isEnvelope } from './codec';
+import {
+  decodeExport,
+  type Envelope,
+  encodeExport,
+  isEnvelope,
+  saveReplacer,
+  saveReviver,
+} from './codec';
 import { assertMigrationChain, type Migrations, runMigrations } from './migrate';
 import type { Schema } from './schema';
 import { isQuotaError, type StorageLike } from './storage';
 
 const NAME_RE = /^[a-z0-9][a-z0-9_-]*$/i;
+
+/** What a slot menu shows without loading the slot; filled by `SaveStoreOptions.meta`. */
+export interface SlotMeta {
+  /** Shown in the slot list. Default `Slot <n>` in a slot manager. */
+  label?: string;
+  /** Play time in ms. */
+  playMs?: number;
+  /** A small image for the menu (a data URL or a game-defined id). Keep it short: it is stored. */
+  thumbnail?: string;
+}
+
+/** The sidecar at `<key>:meta`, written in the same flush as the data. */
+export interface StoredMeta extends SlotMeta {
+  v: number;
+  t: number;
+  /** Length of the stored JSON text (UTF-16 code units, what web storage quotas count). */
+  size: number;
+}
 
 /** `thunderclap:<game>:<slot>` */
 export function saveKey(game: string, slot: string): string {
@@ -25,7 +50,8 @@ export function listSlots(
   try {
     for (let i = 0; i < storage.length; i++) {
       const k = storage.key(i);
-      if (k?.startsWith(prefix) && !k.endsWith(':backup')) out.push(k.slice(prefix.length));
+      if (k?.startsWith(prefix) && !k.endsWith(':backup') && !k.endsWith(':meta'))
+        out.push(k.slice(prefix.length));
     }
   } catch {
     return [];
@@ -82,6 +108,12 @@ export interface SaveStoreOptions<T> {
   autoFlush?: boolean;
   /** Clock for `savedAt`. Default `Date.now`. */
   now?: () => number;
+  /**
+   * When set, every flush also writes `<key>:meta` (`StoredMeta`: version, time, size and what
+   * this returns) so a slot menu can list slots without loading them. A failed meta write is
+   * not an error for the data. Slot managers set it; plain stores leave it out.
+   */
+  meta?: (data: T) => SlotMeta;
 }
 
 export type ImportResult = { ok: true; migrated: boolean } | { ok: false; error: string };
@@ -118,6 +150,7 @@ export interface SaveStore<T> {
 export function createSaveStore<T>(opts: SaveStoreOptions<T>): SaveStore<T> {
   const key = saveKey(opts.game, opts.slot ?? 'main');
   const backupKey = `${key}:backup`;
+  const metaKey = `${key}:meta`;
   const version = opts.version;
   if (!Number.isInteger(version) || version < 1)
     throw new Error('save version must be an integer ≥ 1');
@@ -180,7 +213,7 @@ export function createSaveStore<T>(opts: SaveStoreOptions<T>): SaveStore<T> {
   data = opts.defaults();
   if (raw !== null) {
     try {
-      const parsed: unknown = JSON.parse(raw);
+      const parsed: unknown = JSON.parse(raw, saveReviver);
       if (!isEnvelope(parsed)) throw new Error('stored value has no version envelope');
       const { value, migrated } = adopt(parsed);
       data = value;
@@ -210,9 +243,11 @@ export function createSaveStore<T>(opts: SaveStoreOptions<T>): SaveStore<T> {
     }
     if (storage) {
       try {
-        storage.setItem(key, JSON.stringify(env));
+        const text = JSON.stringify(env, saveReplacer);
+        storage.setItem(key, text);
         status.persistent = true;
         status.error = null;
+        if (opts.meta) writeMeta(storage, text.length);
       } catch (err) {
         status.persistent = false;
         status.error = isQuotaError(err)
@@ -225,6 +260,15 @@ export function createSaveStore<T>(opts: SaveStoreOptions<T>): SaveStore<T> {
     status.dirty = false;
     notify();
     return status.persistent;
+  };
+
+  const writeMeta = (target: StorageLike, size: number) => {
+    try {
+      const m: StoredMeta = { ...opts.meta!(data), v: version, t: savedAt, size };
+      target.setItem(metaKey, JSON.stringify(m));
+    } catch {
+      // Best effort: the data is saved; the menu falls back to reading it.
+    }
   };
 
   const schedule = () => {
@@ -293,6 +337,7 @@ export function createSaveStore<T>(opts: SaveStoreOptions<T>): SaveStore<T> {
       try {
         storage?.removeItem(key);
         storage?.removeItem(backupKey);
+        storage?.removeItem(metaKey);
       } catch {
         // ignore
       }
