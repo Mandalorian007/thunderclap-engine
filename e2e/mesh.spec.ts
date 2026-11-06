@@ -189,11 +189,11 @@ test('the sun casts a shadow and distance fades the ground into the fog', async 
   const sum = (c: Rgb) => c[0] + c[1] + c[2];
   // Same checker tile, same albedo: the patch under the near block's shadow lost the sun.
   expect(sum(shadow!), `shadow ${shadow} lit ${lit}`).toBeLessThan(sum(lit!) - 60);
-  // The far patch has moved towards the fog colour; the near one has not.
+  // The far patch has moved towards the fog colour; the near one (inside `near`) has not.
   const fogRgb = s.fog.color.map((c) => c * 255) as Rgb;
   const dist = (c: Rgb) => Math.hypot(c[0] - fogRgb[0], c[1] - fogRgb[1], c[2] - fogRgb[2]);
   expect(dist(fog!), `fog ${fog} ground ${ground} target ${fogRgb}`).toBeLessThan(
-    dist(ground!) - 40,
+    dist(ground!) * 0.7,
   );
   expect(s.gpuErrors).toBe(0);
   expect(errors).toEqual([]);
