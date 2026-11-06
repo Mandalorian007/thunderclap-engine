@@ -80,7 +80,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Geometry kit 2: extrude/lathe/sweep/tube/polygon, stairs/arch, tangents + `VERTEX_LAYOUT_3D_TANGENT`, weld/flatShade/projectUv/fitBounds | ws/geom-2 | ✅ check green at `c307337` (934 tests); e2e not run by engineer (load 45), integrator runs it; queued chain 3 (moved from chain 1) |
 | 5 | Camera helpers: `viewZ`, `invViewProj`, `projectMany`, `frustumCorners`, `setPerspective` parity | ws/camera-ergo | ✅ merged `8f32ab9` (chain 3; check 931; e2e 781/109/0; snap 5/5; E-025 applied for docs-only main move) |
 | 5 | UI widgets 2: reticle, bar, segmented, select, keyPrompt, stepper, cooldown | ws/ui-widgets | ✅ check green at `73267a5` (922 tests; widgets.spec 15/15); full e2e not run by engineer (load 40+), integrator runs it; queued chain 3 after geom-2 (moved from chain 5) |
-| 5 | Audio 2: beat-grid music layers, variations, reverb/lowpass sends, ducking | ws/audio-2 | 🔧 engineer running (offset 330) |
+| 5 | Audio 2: beat-grid music layers, variations, reverb/lowpass sends, ducking | ws/audio-2 | ✅ green at `8c5db70` (933 tests; e2e 776/106/0); queued chain 3 after ui-widgets |
 | 5 | Save 2: slot manager with meta sidecar, settings store + bind, undo journal, typed-array codec | ws/save-2 | 🔧 engineer running (offset 340) |
 | 5 | Post 2: FXAA, 3D LUT, grain, aberration, sharpen, depth/normal outline | ws/post-2 | 🔧 engineer running (offset 350) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
@@ -141,6 +141,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - ws/billboards wish: `Camera.viewZ(x, y, z)` helper (view-space depth of a point). → ws/ergo-3d.
 - ws/geom-2 wishes: `mergeGeometry`/`transformGeometry` accept the tangent layout (today 3D only); tangent attribute sits at `@location(13)` (3..9 instance, 11/12 skinning), document the location map in render README. → ws/ergo-3d.
 - ws/ui-widgets wish: `styles.ts` select/range zoom rule renders native selects on frame layers at `--tc-dpx²` (token already scaled, then zoomed again), so selects look small on the HUD layer. → ws/comment-sweep.
+- ws/audio-2 wishes for `audio.ts`: expose live voices per bus; `Voice.sendTo(node, amount)` or a bus insert chain for true occlusion; a hook so music stems register as voices (today `stopAll`/`voiceCount` do not see stems). → ws/ergo-3d or an audio-3 brief.
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
