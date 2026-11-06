@@ -115,9 +115,19 @@ async function sample(page: Page, points: Pt[]): Promise<Rgb[]> {
   );
 }
 
-/** Drag the primary pointer from `from` by (dx, dy) in CSS px: mouse, or a touch through CDP. */
+/** `Gestures.panThreshold` (CSS px): a press that stays inside it for `longPressMs` is a long-press. */
+const PAN_THRESHOLD = 10;
+
+/**
+ * Drag the primary pointer from `from` by (dx, dy) in CSS px: mouse, or a touch through CDP.
+ *
+ * Touch steps are at least `PAN_THRESHOLD` + 2 px and the first one goes out right behind the
+ * start, with no frame in between: a slow frame under load before the threshold is crossed would
+ * make the press a long-press, after which `Gestures` ignores every move (E-017). The later
+ * steps each wait a frame so their deltas land on separate ticks.
+ */
 async function drag(page: Page, from: Pt, dx: number, dy: number): Promise<void> {
-  const steps = 8;
+  const steps = Math.max(1, Math.min(8, Math.floor(Math.hypot(dx, dy) / (PAN_THRESHOLD + 2))));
   if (touch) {
     const cdp = await page.context().newCDPSession(page);
     const at = (k: number) => ({
@@ -128,8 +138,9 @@ async function drag(page: Page, from: Pt, dx: number, dy: number): Promise<void>
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [at(0)] });
     for (let k = 1; k <= steps; k++) {
       await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [at(k)] });
-      await frames(1);
+      if (k < steps) await frames(1);
     }
+    await frames(1);
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     await cdp.detach();
     return;
