@@ -2,7 +2,8 @@
  * `@thunderclap/engine/nav`: grid navigation on the XZ plane. A `NavGrid` of walkable cells with
  * costs (and an edge-cost hook, 4 or 8 neighbours), A* (`findPath`) and string pulling
  * (`smoothPath`) into a reusable `NavPath`, a flow field one build serves every agent with,
- * budget-bounded reachability with parents (`reachable`), a path follower and local steering.
+ * budget-bounded reachability with parents (`reachable`, on a grid or a `NavMesh`, with
+ * `reachableOutline` for a mesh range's boundary), a path follower and local steering.
  * Pure CPU, no imports from other engine modules, no allocation per query after warm-up.
  */
 export type { FindPathOptions } from './astar';
@@ -51,9 +52,17 @@ export {
   reservePath3,
   reservePolys3,
 } from './mesh/mesh-path';
+export {
+  createMeshReach,
+  createReachOutline,
+  type MeshReach,
+  type MeshReachOptions,
+  type ReachOutline,
+  reachableOutline,
+} from './mesh/mesh-reach';
 export type { NavBakeAreaOptions, NavBounds, NavPoint3 } from './mesh/navmesh';
 export { bakeNavMesh, NavMesh } from './mesh/navmesh';
-export { exportNavMesh, importNavMesh } from './mesh/serialize';
+export { exportNavMesh, importNavMesh, loadNavMesh } from './mesh/serialize';
 export type { NavBakeOptions, NavBakeSource } from './mesh/voxelize';
 export {
   createObstacleSet,
