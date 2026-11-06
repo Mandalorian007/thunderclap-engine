@@ -164,7 +164,7 @@ Import only from the public entry points listed under [Modules](#modules). Anyth
 
 **Demos.** Playable showcases under `demos/` (E-021), each a page on the public API with no network assets, exposing `window.__demo` for its spec under `e2e/demos/`. `pnpm demo <name>` serves one (`pnpm demo` lists them); the harness server also serves them at `/demos/<name>/`, so the matrix runs them. [demos/README.md](demos/README.md) has the table.
 
-**Packages.** `packages/host-electron` (`@thunderclap/host-electron`) is the Electron desktop host: a sandboxed shell, a preload bridge and `createElectronHost()`. It lives in this repo as a pnpm workspace package and the engine never imports it. Run `pnpm desktop:dev`, `pnpm desktop:build` or `pnpm test:e2e:desktop` ([README](packages/host-electron/README.md)).
+**Packages.** `packages/host-electron` (`@thunderclap/host-electron`) is the Electron desktop host: a sandboxed shell, a preload bridge and `createElectronHost()`. It lives in this repo as a pnpm workspace package and the engine never imports it. Run `pnpm desktop:dev`, `pnpm desktop:build` or `pnpm test:e2e:desktop` ([README](packages/host-electron/README.md)). `packages/host-capacitor` (`@thunderclap/host-capacitor`) is the Capacitor mobile host: `createCapacitorHost()` fills `Host` from the Capacitor plugins an iOS or Android app hands in (links, clipboard, orientation lock, Preferences-backed saves, app lifecycle, haptics, the Android back button); it imports none of them, so it checks and tests in this repo without Capacitor installed (`check:host-capacitor`, [README](packages/host-capacitor/README.md)).
 
 [ARCHITECTURE.md](ARCHITECTURE.md) has the contracts for each one: what exists today and what is planned.
 
@@ -191,7 +191,7 @@ renderer.endFrame()
 ## Testing
 
 ```sh
-pnpm check       # typecheck + Biome lint + import boundaries + README coverage (check:docs) + Vitest unit tests (1109 tests in 94 files) + the host-electron, template and create-game checks
+pnpm check       # typecheck + Biome lint + import boundaries + README coverage (check:docs) + Vitest unit tests (1139 tests in 96 files) + the host-electron, host-capacitor, template and create-game checks
 pnpm test:e2e    # Playwright e2e against the harness pages, on a device matrix
 pnpm harness     # serve the harness pages yourself
 ```
