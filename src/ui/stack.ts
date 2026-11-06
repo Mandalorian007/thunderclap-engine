@@ -1,6 +1,12 @@
-import { focusableWithin, h } from './dom';
+import { consumesArrows, focusableWithin, h } from './dom';
 
 export type CloseReason = 'escape' | 'backdrop' | 'programmatic' | 'replaced';
+
+/**
+ * Which arrow keys walk focus through a panel's controls (`PanelOptions.arrowNav`):
+ * `vertical` (ArrowUp/ArrowDown, the default), `both` (ArrowLeft/ArrowRight too) or `none`.
+ */
+export type ArrowNav = 'vertical' | 'both' | 'none';
 
 export interface PanelOptions {
   /** Panel body. */
@@ -23,6 +29,12 @@ export interface PanelOptions {
   initialFocus?: HTMLElement | string;
   /** `dialog` (default) or `alertdialog`. */
   role?: 'dialog' | 'alertdialog';
+  /**
+   * Arrow keys move focus among the panel's focusable elements, wrapping, while this panel is on
+   * top: `vertical` (ArrowUp/ArrowDown; the default), `both` (ArrowLeft/ArrowRight too) or
+   * `none`. A focused text field, textarea, select or slider keeps the arrows it uses itself.
+   */
+  arrowNav?: ArrowNav;
   onClose?: (reason: CloseReason) => void;
 }
 
@@ -61,10 +73,23 @@ export interface PanelStackFocusOptions {
   home?: () => HTMLElement | null;
 }
 
+/** `ArrowNav` per key: the step through the focusable list, or 0 when the key is not an arrow. */
+function arrowStep(key: string, nav: ArrowNav): number {
+  if (nav === 'none') return 0;
+  if (key === 'ArrowDown') return 1;
+  if (key === 'ArrowUp') return -1;
+  if (nav === 'both') {
+    if (key === 'ArrowRight') return 1;
+    if (key === 'ArrowLeft') return -1;
+  }
+  return 0;
+}
+
 /**
  * A stack of panels inside one container. The top panel gets keyboard focus; Esc closes it
- * (if dismissible); Tab cycles inside the top modal; lower panels and `inertWhenModal`
- * elements are made `inert` while a modal is on top.
+ * (if dismissible); Tab cycles inside the top modal; the arrow keys walk its controls
+ * (`arrowNav`); lower panels and `inertWhenModal` elements are made `inert` while a modal is
+ * on top.
  */
 export class PanelStack {
   private readonly entries: Entry[] = [];
@@ -289,7 +314,33 @@ export class PanelStack {
         e.preventDefault();
         first.focus();
       }
+      return;
     }
+    this.handleArrow(e, top);
+  }
+
+  /**
+   * ArrowUp/ArrowDown (and ArrowLeft/ArrowRight with `arrowNav: 'both'`) move focus through the
+   * top panel's focusable elements, wrapping, when focus is inside it (always, for a modal). A
+   * focused control that uses the arrow itself (a text field's caret, a select, a slider) keeps
+   * it; a consumed arrow is `preventDefault`ed and stopped, like Escape.
+   */
+  private handleArrow(e: KeyboardEvent, top: Entry) {
+    const step = arrowStep(e.key, top.opts.arrowNav ?? 'vertical');
+    if (step === 0 || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    const active = this.doc.activeElement as HTMLElement | null;
+    const inside = active !== null && top.panel.contains(active);
+    if (!inside && top.opts.modal === false) return;
+    const horizontal = e.key === 'ArrowLeft' || e.key === 'ArrowRight';
+    if (inside && active !== top.panel && consumesArrows(active, horizontal)) return;
+    const items = focusableWithin(top.panel);
+    if (items.length === 0) return;
+    const i = inside ? items.indexOf(active) : -1;
+    const next =
+      i < 0 ? (step > 0 ? 0 : items.length - 1) : (i + step + items.length) % items.length;
+    e.preventDefault();
+    e.stopPropagation();
+    items[next]?.focus();
   }
 
   private emit() {
