@@ -1,11 +1,13 @@
+import type { Random } from '../core/random';
 import { blendState } from '../render/blend';
 import type { Camera } from '../render/camera';
-import type { Drawable, Frame } from '../render/frame';
+import type { Drawable, Frame, ViewInfo } from '../render/frame';
 import { Mesh, VERTEX_LAYOUT_3D, VERTEX3D_FLOATS, VERTEX3D_STRIDE } from '../render/mesh';
 import type { Renderer } from '../render/renderer';
 import type { TextureLike } from '../render/texture';
 import { createShaderModule } from '../render/wgsl';
 import { WGSL_DECAL_BOX, WGSL_DECAL_DEPTH_COPY, WGSL_DECAL_QUAD } from './decals-wgsl';
+import { defaultFxRandom } from './random';
 
 /**
  * Floats per decal instance (6 × vec4f = 96 bytes):
@@ -23,7 +25,7 @@ export const DECAL_PARAMS_FLOATS = 24;
 
 /** How decals mix with what is under them. */
 export type DecalBlend = 'alpha' | 'multiply' | 'additive';
-/** `box` projects through the depth copy, `quad` lies on the surface, `auto` picks by camera. */
+/** `box` projects through the scene depth, `quad` lies on the surface, `auto` picks by camera. */
 export type DecalMode = 'auto' | 'box' | 'quad';
 
 export interface DecalsOptions {
@@ -47,6 +49,20 @@ export interface DecalsOptions {
   normalBias?: number;
   /** Box mode: fade over this share of the box's half depth at each end. Default 0.2. */
   fadeEdge?: number;
+  /**
+   * Box mode: read this frame's opaque depth from the renderer's depth hook
+   * (`Drawable.readsDepth`, ws/fx-4). Default true (false for `mode: 'quad'`, which reads no
+   * depth). `false` is the fallback: `prepare` copies the
+   * scene depth before the scene pass, so the box samples the **previous frame's** depth (a
+   * moving surface trails by a frame). The fallback is also taken automatically when the
+   * renderer cannot copy its depth (an adopted XR depth without `COPY_SRC`).
+   */
+  readsDepth?: boolean;
+  /**
+   * The stream `rotation: 'random'` and `tile: 'random'` draw from (ws/fx-4). Default: a fork
+   * of the fx module default (`FX_DEFAULT_SEED`), named by creation order.
+   */
+  random?: Random;
 }
 
 /** One decal to place (`Decals.add`). */
@@ -60,10 +76,10 @@ export interface DecalDesc {
   nz: number;
   /** Width and height (and box depth), world units. */
   size: number;
-  /** Spin about the normal, radians. Default 0. */
-  rotation?: number;
-  /** Atlas tile, row-major. Default 0. */
-  tile?: number;
+  /** Spin about the normal, radians, or `'random'` (drawn from `Decals.random`). Default 0. */
+  rotation?: number | 'random';
+  /** Atlas tile, row-major, or `'random'` (any tile of the atlas, from `Decals.random`). Default 0. */
+  tile?: number | 'random';
   /** Linear RGBA multiplier. Default white. */
   color?: ArrayLike<number>;
   /** Seconds, overriding the system default. */
@@ -80,9 +96,11 @@ const F = DECAL_INSTANCE_FLOATS;
  * Two implementations behind one API. **Box** (under a depth camera): each decal is a unit box
  * in its own frame; the fragment shader reconstructs the world position under the pixel from a
  * copy of the scene depth, rejects what is outside the box and samples the atlas by the local
- * xy, so the decal wraps whatever it covers (depth test and write off). The copy is taken in
- * `prepare`, before this frame's scene pass, so it holds the **previous frame's** depth: a decal
- * placed this frame appears next frame, and a camera cut shows one frame of mismatch. **Quad**
+ * xy, so the decal wraps whatever it covers (depth test and write off). The depth is this
+ * frame's opaque depth, from the renderer's depth hook (`readsDepth`, `afterOpaque`), so a decal
+ * on a moving surface stays on it. With `readsDepth: false` (or a target whose depth cannot be
+ * copied) the fallback copy is taken in `prepare`, before the scene pass, and holds the
+ * **previous frame's** depth: a decal placed this frame appears next frame. **Quad**
  * (no depth, or `mode: 'quad'`): a camera-independent quad lifted along the normal by `offset`
  * (depth test on, write off).
  *
@@ -105,6 +123,10 @@ export class Decals implements Drawable {
   fadeEdge: number;
   /** Alpha at age 0 and at the lifetime. Live. */
   readonly fade: [number, number];
+  /** Box: take this frame's depth from the renderer's hook (see `DecalsOptions`). Live. */
+  readsDepth: boolean;
+  /** The stream `'random'` rotations and tiles draw from. Live. */
+  random: Random;
 
   private readonly renderer: Renderer;
   private readonly device: GPUDevice;
@@ -148,6 +170,12 @@ export class Decals implements Drawable {
   private copySrcGroup: GPUBindGroup | null = null;
   /** The box draw has a depth copy to read this frame. */
   private depthReady = false;
+  /** The bind group over the fallback copy (`copyTex`). */
+  private copyGroup: GPUBindGroup | null = null;
+  /** The renderer's `depthCopy` view the hook group was made for. */
+  private hookView: GPUTextureView | null = null;
+  private hookGroup: GPUBindGroup | null = null;
+  private readonly noDepthGroup: GPUBindGroup;
 
   constructor(renderer: Renderer, opts: DecalsOptions) {
     const device = renderer.device;
@@ -160,6 +188,8 @@ export class Decals implements Drawable {
     this.normalBias = opts.normalBias ?? 0.3;
     this.fadeEdge = opts.fadeEdge ?? 0.2;
     this.fade = [opts.fade?.[0] ?? 1, opts.fade?.[1] ?? 0];
+    this.readsDepth = opts.readsDepth ?? this.mode !== 'quad';
+    this.random = opts.random ?? defaultFxRandom('decals');
     this.columns = Math.max(1, opts.atlas?.columns ?? 1);
     this.rows = Math.max(1, opts.atlas?.rows ?? 1);
     const blend = opts.blend ?? 'alpha';
@@ -214,7 +244,8 @@ export class Decals implements Drawable {
         { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'depth' } },
       ],
     });
-    this.group = this.makeGroup(this.dummyDepth.createView());
+    this.noDepthGroup = this.makeGroup(this.dummyDepth.createView());
+    this.group = this.noDepthGroup;
     this.pipelineLayout = device.createPipelineLayout({
       bindGroupLayouts: [renderer.globalsLayout, this.layout],
     });
@@ -327,15 +358,33 @@ export class Decals implements Drawable {
   }
 
   /**
-   * Resolve the mode for this frame, take the depth copy (box mode), upload the params block and
-   * the live instances. Called by the renderer once per frame. No allocation.
+   * Whether the box draw is waiting on the renderer's depth hook this frame: `readsDepth` on and
+   * the target's depth copyable. Otherwise `prepare` takes the fallback copy.
+   */
+  private get hooked(): boolean {
+    return this.readsDepth && (this.renderer.target?.canCopyDepth ?? false);
+  }
+
+  /**
+   * Resolve the mode for this frame, upload the params block and the live instances. Box mode
+   * waits for the depth hook (`afterOpaque`), or takes the fallback copy of last frame's depth.
+   * Called by the renderer once per frame. No allocation.
    */
   prepare(encoder: GPUCommandEncoder, frame?: Frame): void {
     if (this.dirty) this.compact();
     const depth = frame?.depthFormat ?? null;
     const mode = this.mode === 'auto' ? (depth ? 'box' : 'quad') : this.mode;
     this.activeMode = mode === 'box' && !depth ? 'quad' : mode;
-    this.depthReady = this.activeMode === 'box' && this.copyDepth(encoder);
+    if (this.activeMode !== 'box') {
+      this.depthReady = false;
+    } else if (this.hooked) {
+      // `afterOpaque` binds this frame's depth; until it runs the box draws nothing.
+      this.depthReady = false;
+      this.group = this.noDepthGroup;
+    } else {
+      this.depthReady = this.copyDepth(encoder);
+      this.group = this.depthReady ? this.copyGroup! : this.noDepthGroup;
+    }
 
     const p = this.params;
     const camera = this.renderer.camera as Camera | undefined;
@@ -353,6 +402,20 @@ export class Decals implements Drawable {
     if (this.live > 0) {
       this.device.queue.writeBuffer(this.instanceBuffer, 0, this.data.buffer, 0, this.live * F * 4);
     }
+  }
+
+  /**
+   * The renderer's depth hook (`readsDepth`): bind this frame's opaque depth copy. The bind
+   * group is rebuilt only when the renderer's copy changes (a resize).
+   */
+  afterOpaque(_encoder: GPUCommandEncoder, view: ViewInfo): void {
+    if (this.activeMode !== 'box' || !this.readsDepth) return;
+    if (view.depthView !== this.hookView) {
+      this.hookView = view.depthView;
+      this.hookGroup = this.makeGroup(view.depthView);
+    }
+    this.group = this.hookGroup!;
+    this.depthReady = true;
   }
 
   /** Draw every live decal in one instanced draw (nothing in box mode until depth exists). */
@@ -405,8 +468,9 @@ export class Decals implements Drawable {
     const bx = ny * tz - nz * ty;
     const by = nz * tx - nx * tz;
     const bz = nx * ty - ny * tx;
-    const c = Math.cos(d.rotation ?? 0);
-    const s = Math.sin(d.rotation ?? 0);
+    const rot = d.rotation === 'random' ? this.random.float(0, Math.PI * 2) : (d.rotation ?? 0);
+    const c = Math.cos(rot);
+    const s = Math.sin(rot);
     const ax = tx * c + bx * s;
     const ay = ty * c + by * s;
     const az = tz * c + bz * s;
@@ -427,7 +491,10 @@ export class Decals implements Drawable {
     data[o + 9] = ny * inv;
     data[o + 10] = nz * inv;
     data[o + 11] = -(nx * d.x + ny * d.y + nz * d.z) * inv;
-    const tile = Math.max(0, Math.floor(d.tile ?? 0));
+    const tile =
+      d.tile === 'random'
+        ? this.random.int(0, this.columns * this.rows - 1)
+        : Math.max(0, Math.floor(d.tile ?? 0));
     const col = tile % this.columns;
     const row = Math.floor(tile / this.columns) % this.rows;
     data[o + 12] = col / this.columns;
@@ -494,7 +561,7 @@ export class Decals implements Drawable {
       });
       const view = this.copyTex.createView();
       this.copyAtt.view = view;
-      this.group = this.makeGroup(view);
+      this.copyGroup = this.makeGroup(view);
     }
     if (this.copySrc !== src) {
       this.copySrc = src;
