@@ -50,6 +50,7 @@
     "snap:check": "node scripts/snap.mjs",
     "harness": "vite --config vite.harness.config.ts --host 127.0.0.1",
     "example": "vite examples/hello --host 127.0.0.1",
+    "demo": "node scripts/demo.mjs",
     "check:host-electron": "pnpm --filter @thunderclap/host-electron check",
     "check:template-puzzle": "pnpm --filter @thunderclap/template-puzzle check",
     "template:puzzle": "pnpm --filter @thunderclap/template-puzzle dev",
