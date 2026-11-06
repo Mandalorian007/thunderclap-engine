@@ -9,3 +9,4 @@ harness Vite server also serves them at `/demos/<name>/`, which is how the e2e m
 | Demo | Shows | Spec |
 | --- | --- | --- |
 | [arena](arena/README.md) | Third-person skinned humanoid (anim mixer, hand socket, sword trail), Follow camera on Look, PBR ground and pillars, sun shadow, two coloured point lights, dust particles, fog, toasts | `e2e/demos/arena.spec.ts` |
+| [dungeon](dungeon/README.md) | 2D top-down crawl at game scale: 40×30 tile map from a canvas atlas, 60 flipbook bats, wall collision, flickering emissive torches with bloom, fog-of-war layer, pad-navigated pause menu, coins in `save`, synthesised sounds; one draw call | `e2e/demos/dungeon.spec.ts` |
