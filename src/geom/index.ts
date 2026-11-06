@@ -61,6 +61,7 @@ export {
   overlap2,
   raycast,
   raycast2,
+  raycastReg,
   SOURCE_GEOMETRY,
   SOURCE_GRID,
   SOURCE_HEIGHTFIELD,

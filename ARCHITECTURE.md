@@ -21,6 +21,8 @@ thunderclap-engine/
   e2e/                # engine e2e specs, fixtures, ports, itch-style iframe wrapper
   templates/          # copyable games (puzzle, first-person); `pnpm create-game <dir> --template <name>`
                       # (scripts/create-game.mjs) copies one out as a standalone project on the engine
+  scripts/            # tooling, no runtime: bake.mjs (`pnpm bake <config>`) runs the nav and collider
+                      # bakes from the command line and writes a manifest `--check` verifies in CI
   playwright.config.ts  # the viewport/device/wrapper matrix every engine spec runs on
   ARCHITECTURE.md     # this file
   CHANGELOG.md

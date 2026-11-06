@@ -179,14 +179,41 @@ export function raycast(
   out: Hit,
   layerMask = ALL_LAYERS,
 ): boolean {
-  const len = Math.sqrt(dir[0]! * dir[0]! + dir[1]! * dir[1]! + dir[2]! * dir[2]!);
+  return raycastReg(
+    c,
+    origin[0]!,
+    origin[1]!,
+    origin[2]!,
+    dir[0]!,
+    dir[1]!,
+    dir[2]!,
+    maxDist,
+    out,
+    layerMask,
+  );
+}
+
+/**
+ * `raycast` in register form: the origin and direction as six numbers, so a caller with the
+ * ray in locals (`slide`'s line probe, a game's per-frame checks) needs no scratch arrays.
+ */
+export function raycastReg(
+  c: StaticCollider,
+  ox: number,
+  oy: number,
+  oz: number,
+  dx: number,
+  dy: number,
+  dz: number,
+  maxDist: number,
+  out: Hit,
+  layerMask = ALL_LAYERS,
+): boolean {
+  const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
   if (!(len > 0)) return false;
-  const ox = origin[0]!;
-  const oy = origin[1]!;
-  const oz = origin[2]!;
-  const dx = dir[0]! / len;
-  const dy = dir[1]! / len;
-  const dz = dir[2]! / len;
+  dx /= len;
+  dy /= len;
+  dz /= len;
   ray.origin[0] = ox;
   ray.origin[1] = oy;
   ray.origin[2] = oz;
@@ -651,9 +678,6 @@ export function liftShape(c: StaticCollider, s: Shape2): void {
   SH[5] = s.r;
 }
 
-const origin2 = new Float64Array(3);
-const dir2 = new Float64Array(3);
-
 /** `raycast` in the xz plane at the collider's mid height; `t` is the distance in xz. */
 export function raycast2(
   c: StaticCollider,
@@ -665,13 +689,8 @@ export function raycast2(
   out: Hit,
   layerMask = ALL_LAYERS,
 ): boolean {
-  origin2[0] = ox;
-  origin2[1] = (c.bounds.min[1] + c.bounds.max[1]) / 2;
-  origin2[2] = oz;
-  dir2[0] = dx;
-  dir2[1] = 0;
-  dir2[2] = dz;
-  return raycast(c, origin2, dir2, maxDist, out, layerMask);
+  const oy = (c.bounds.min[1] + c.bounds.max[1]) / 2;
+  return raycastReg(c, ox, oy, oz, dx, 0, dz, maxDist, out, layerMask);
 }
 
 /** `overlap` for a circle or 2D box; contact normals lie in xz. */

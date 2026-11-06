@@ -289,6 +289,22 @@ cancelled keys in `total` so `fraction` stays below 1 until a later `load` resum
 cancel, release all and drop listeners. Failed assets count toward `fraction` so a bar still
 reaches 1; a failed key loads again on the next `load`.
 
+## Baked bytes
+
+A navmesh or collider baked at build time (`pnpm bake <config>`, `scripts/bake.mjs`, see the
+root README's *Baking*) ships as a file the game fetches like any other: a `bytes` manifest entry
+(`{ kind: 'bytes', uri: 'baked/level.navm' }`) loads it as an `ArrayBuffer` through the bundle,
+or a bare `fetch(url).then((r) => r.arrayBuffer())` does; then `importNavMesh` (`nav`) or
+`importCollider` (`geom`) rebuilds it. Nothing in this module parses those formats.
+
+- `readBakeManifest(json: string | unknown): BakeManifest` parses the script's
+  `bake-manifest.json` (a string or already-parsed JSON) and throws on another `version`
+  (`BAKE_MANIFEST_VERSION`, 1), a missing `entries` array or an entry without a `name` or with an
+  unknown `kind`. `BakeManifest { version; bakedAt; entries: BakeManifestEntry[] }`,
+  `BakeManifestEntry { name; kind: BakeKind; sources; sha256; bytes; ms }`, `BakeKind` is
+  `'nav' | 'collider'`. A game that wants to know what was baked, or to key a cache on `sha256`,
+  reads it; the baked files themselves need no manifest.
+
 ## Atlas
 
 `packAtlas(images, options?)` packs named images into one sheet with shelf packing and returns an

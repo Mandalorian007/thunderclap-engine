@@ -274,7 +274,10 @@ is linear in the agent count. Nothing is allocated per `update` after the first.
 ## Serialisation
 
 Bake at build time, ship the bytes: a bake takes tens to hundreds of milliseconds and the result
-is a few kilobytes per hundred polygons.
+is a few kilobytes per hundred polygons. `pnpm bake <config>` (`scripts/bake.mjs`, see the root
+README's *Baking*) does it from the command line: a `bake.config.json` names the glTF or geometry
+JSON sources and the `NavBakeOptions` per entry, and the script writes `<name>.navm` next to a
+manifest that `--check` verifies in CI.
 
 - `exportNavMesh(mesh): ArrayBuffer` – a little-endian, self-describing buffer (magic `NAVM`,
   format 1): the vertices, polygons, adjacency and every off-mesh link (`from`, `to`, `radius`,

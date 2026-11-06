@@ -33,9 +33,10 @@ const y = heightAt(ground, player.x, player.z);
 - `mergeGeometry(...parts)` concatenates geometries of one layout, offsetting indices and
   promoting to 32-bit indices when the total passes 65535 vertices. Inputs are untouched. The
   3D and `VERTEX_LAYOUT_3D_TANGENT` layouts get bounds; any other layout is left unbounded.
-- `transformGeometry(g, world)` applies a 3×4 row-major matrix (`Transform.world`) to positions
-  and its inverse transpose to normals (renormalised, flipped under a mirroring matrix) in place,
-  recomputes `bounds` and returns `g`. It takes `VERTEX_LAYOUT_3D` or `VERTEX_LAYOUT_3D_TANGENT`
+- `transformGeometry(g, world)` **mutates `g` in place** (see *Operations* for the copy-first
+  recipe): it applies a 3×4 row-major matrix (`Transform.world`) to positions and its inverse
+  transpose to normals (renormalised, flipped under a mirroring matrix), recomputes `bounds` and
+  returns the same `g`. It takes `VERTEX_LAYOUT_3D` or `VERTEX_LAYOUT_3D_TANGENT`
   (ws/ergo-3d): a tangent's xyz is rotated by the 3×3 part and renormalised, its w kept, negated
   under a mirror so the bitangent still follows `w · cross(n, t)`.
 
@@ -114,6 +115,19 @@ gives a right-handed frame (`w = +1`) on every vertex it makes.
 ## Operations
 
 All operations accept `VERTEX_LAYOUT_3D` or `VERTEX_LAYOUT_3D_TANGENT` geometry.
+
+> **In place.** `transformGeometry`, `flipWinding`, `projectUv`, `fitBounds` and `recenter`
+> write into the geometry they are given and return that same object; `flatShade`, `weld` and
+> `mergeGeometry` return a new one and leave their inputs alone. A builder's result placed twice
+> (`transformGeometry(b, here)` then `transformGeometry(b, there)`) is moved twice, not copied,
+> and a geometry that also backs a mesh or a collider moves under them. Copy first when the
+> source is reused:
+>
+> ```ts
+> const copy = { ...g, vertices: g.vertices.slice(), indices: g.indices.slice() };
+> transformGeometry(copy, world); // g is untouched
+> // or build one per placement: transformGeometry(box({ size }), world)
+> ```
 
 - `flatShade(g)` returns a new geometry with one vertex per triangle corner (`indices.length`
   vertices, sequential indices) carrying its face normal; a degenerate triangle keeps the source
@@ -198,8 +212,10 @@ work in typed-array registers, never in doubles passed between calls).
 - `raycast(c, origin, dir, maxDist, out: Hit, layerMask?)`: the nearest triangle along the ray
   (`dir` any length; `t` in world units); back faces hit too, with the normal turned to face the
   ray. `Hit { t; x, y, z; nx, ny, nz; triangle; source; userData }`, from `createHit()`.
-  `raycast2(c, ox, oz, dx, dz, maxDist, out, layerMask?)` casts in xz at the collider's mid
-  height.
+  `raycastReg(c, ox, oy, oz, dx, dy, dz, maxDist, out, layerMask?)` is the same query in
+  register form (eight numbers, nothing to allocate for the origin and direction; `raycast` and
+  `slide`'s ground probe call it). `raycast2(c, ox, oz, dx, dz, maxDist, out, layerMask?)` casts
+  in xz at the collider's mid height.
 - `overlap(c, shape, out: Contact[], maxContacts?, layerMask?)`: every triangle the shape
   penetrates as contacts into `out` (from `createContact()`; `Contact { depth; nx, ny, nz; px,
   py, pz; triangle; source }`, the normal pointing from the triangle into the shape, `depth` how
@@ -233,7 +249,10 @@ work in typed-array registers, never in doubles passed between calls).
   c…, out)`.
 - `exportCollider(c): ArrayBuffer` and `importCollider(buf, userData?)` bake a built collider
   (little-endian, versioned, the typed arrays whole; `userData` is not serialised and is
-  reattached by source index); exporting an import gives identical bytes.
+  reattached by source index); exporting an import gives identical bytes. `pnpm bake
+  <config>` (`scripts/bake.mjs`, see the root README's *Baking*) runs this at build time from
+  glTF or geometry JSON into `<name>.coll`; the game fetches the bytes and calls
+  `importCollider`.
 - `colliderWireframe(c, out?, mode?: WireframeMode)` writes line segments (six floats each) for
   every live triangle (`'triangles'`) or every BVH leaf box (`'leaves'`) for `createDebugDraw`;
   `colliderWireframeLength(c, mode?)` is the float count.
