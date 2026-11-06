@@ -116,3 +116,116 @@ describe('createFlowField', () => {
     expect(f.distance(0, 0)).toBe(Infinity);
   });
 });
+
+describe('FlowField neighbourhood, edge costs, staleness and goals', () => {
+  it('on a 4-neighbour grid every direction is orthogonal and distances are Manhattan', () => {
+    const g = createNavGrid({ width: 5, height: 5, cellSize: 1, neighbours: 4 });
+    const f = createFlowField(g);
+    f.build([{ x: 4, y: 4 }]);
+    expect(f.distance(0, 0)).toBe(8);
+    for (let y = 0; y < 5; y++) {
+      for (let x = 0; x < 5; x++) {
+        f.direction(x, y, out);
+        expect(Math.abs(out.x) + Math.abs(out.z)).toBeLessThanOrEqual(1);
+        expect(out.x === 0 || out.z === 0).toBe(true);
+      }
+    }
+    const eight = createFlowField(createNavGrid({ width: 5, height: 5, cellSize: 1 }));
+    eight.build([{ x: 4, y: 4 }]);
+    expect(eight.distance(0, 0)).toBeCloseTo(4 * Math.SQRT2, 5);
+  });
+
+  it('honours the edge-cost hook, and never points over a one-way ledge', () => {
+    // Row 0 to row 1 is a drop (free down, impossible up) across the whole width.
+    const g = createNavGrid({
+      width: 3,
+      height: 2,
+      cellSize: 1,
+      neighbours: 4,
+      edgeCost: (from, to) => (from >= 3 && to < 3 ? Infinity : 0),
+    });
+    const f = createFlowField(g, { goals: [0] });
+    expect(f.version).toBe(0);
+    expect(f.distance(2, 0)).toBe(2);
+    expect(f.distance(0, 1)).toBe(Infinity);
+    expect(f.direction(0, 1, out)).toEqual({ x: 0, z: 0 });
+    // Goal on the lower row: the upper row drops down, the lower walks along.
+    f.setGoals([3]);
+    expect(f.goalCount).toBe(1);
+    expect(f.distance(0, 0)).toBe(1);
+    expect(f.distance(2, 0)).toBe(3);
+    f.direction(0, 0, out);
+    expect(out).toEqual({ x: 0, z: 1 });
+    f.direction(2, 1, out);
+    expect(out).toEqual({ x: -1, z: 0 });
+    // A climb penalty: the field walks around a ridge that costs more than the detour.
+    const ridge = createNavGrid({
+      width: 3,
+      height: 3,
+      cellSize: 1,
+      neighbours: 4,
+      edgeCost: (_from, to) => (to === 4 ? 10 : 0),
+    });
+    const r = createFlowField(ridge, { goals: [5] });
+    expect(r.distance(0, 1)).toBe(4);
+    r.direction(1, 1, out);
+    expect(out).toEqual({ x: 1, z: 0 });
+    r.direction(0, 1, out);
+    expect(out.x).toBe(0);
+    expect(Math.abs(out.z)).toBe(1);
+  });
+
+  it('is stale after a grid edit and update() recomputes in place from the kept goals', () => {
+    const g = createNavGrid({ width: 4, height: 1, cellSize: 1 });
+    const f = createFlowField(g);
+    expect(f.stale).toBe(true);
+    f.build([{ x: 3, y: 0 }]);
+    expect(f.stale).toBe(false);
+    const dist = f.distances;
+    const dirs = f.directions;
+    expect(f.distance(0, 0)).toBe(3);
+    g.setCost(1, 0, 5);
+    expect(f.stale).toBe(true);
+    expect(f.distance(0, 0)).toBe(3);
+    f.update();
+    expect(f.stale).toBe(false);
+    expect(f.version).toBe(g.version);
+    expect(f.distance(0, 0)).toBe(7);
+    expect(f.distances).toBe(dist);
+    expect(f.directions).toBe(dirs);
+    g.touch();
+    expect(f.stale).toBe(true);
+    f.update();
+    expect(f.stale).toBe(false);
+    // A goal made unwalkable is skipped by the next update; walkable again, it is back.
+    g.setWalkable(3, 0, false);
+    f.update();
+    expect(f.distance(0, 0)).toBe(Infinity);
+    expect(f.goalCount).toBe(1);
+    g.setWalkable(3, 0, true);
+    f.update();
+    expect(f.distance(0, 0)).toBe(7);
+  });
+
+  it('seeds from every goal at once: the nearest goal wins per cell', () => {
+    const g = createNavGrid({ width: 12, height: 1, cellSize: 1, neighbours: 4 });
+    const f = createFlowField(g, { goals: [1, 10] });
+    expect(f.goalCount).toBe(2);
+    expect(Array.from(f.goals.subarray(0, 2))).toEqual([1, 10]);
+    for (let x = 0; x < 12; x++) {
+      expect(f.distance(x, 0)).toBe(Math.min(Math.abs(x - 1), Math.abs(x - 10)));
+    }
+    f.direction(4, 0, out);
+    expect(out).toEqual({ x: -1, z: 0 });
+    f.direction(7, 0, out);
+    expect(out).toEqual({ x: 1, z: 0 });
+    // The cell midway between them points one way or the other, never nowhere.
+    f.direction(5, 0, out);
+    expect(Math.abs(out.x)).toBe(1);
+    f.setGoals([-1, 100, 6]);
+    expect(f.goalCount).toBe(1);
+    expect(f.distance(0, 0)).toBe(6);
+    f.direction(4, 0, out);
+    expect(out).toEqual({ x: 1, z: 0 });
+  });
+});

@@ -147,7 +147,7 @@ Import only from the public entry points listed under [Modules](#modules). Anyth
 | `@thunderclap/engine/anim` | Keyframe clips (glTF sampler semantics), `Pose`, `Skeleton`, `AnimationMixer` (layers, weights, crossfade, events), `poseToWorld`, `skinMatrices`, `twoBoneIk`, `lookAt`, root motion; pure, no GPU ([README](src/anim/README.md)) |
 | `@thunderclap/engine/tween` | `createTweens()`: easing table (`ease.*`, `steps`, `cubicBezier`, `spring`), property and value tweens, sequences and parallel groups, loops, yoyo, delays, `Tweens.update(dt)`; pure, no GPU ([README](src/tween/README.md)) |
 | `@thunderclap/engine/input` | `Input` action map, `Gestures`, pointer router and rays (`XrPointerSource` for controllers and hands), `Look` (pointer lock, touch zones, sticks), magnify/loupe, `snapToGrid` ([README](src/input/README.md)) |
-| `@thunderclap/engine/nav` | `createNavGrid`, `findPath` (A*) and `smoothPath`, `createFlowField`, `followPath`, `steer`: grid navigation over XZ, pure CPU ([README](src/nav/README.md)) |
+| `@thunderclap/engine/nav` | `createNavGrid` (edge costs, 4 or 8 neighbours), `findPath` (A*) and `smoothPath`, `createFlowField` (multi-goal, in-place update), `reachable`, `followPath`, `steer`: grid navigation over XZ, pure CPU ([README](src/nav/README.md)) |
 | `@thunderclap/engine/ui` | Overlay, panels and widgets, toasts, captions, pad navigation, layout regions (`ui.layout`), world anchors (`ui.anchors`) ([README](src/ui/README.md)) |
 | `@thunderclap/engine/audio` | WebAudio buses, synth, sound recipes, mixer persistence, spatial voices (`audio.listener`, `PlayOptions.at`) ([README](src/audio/README.md)) |
 | `@thunderclap/engine/save` | `createSaveStore`, schemas (`s`, with typed arrays), migrations, `createSlotManager`, `createSettingsStore` with `bind`, `createJournal` ([README](src/save/README.md)) |
@@ -193,7 +193,7 @@ renderer.endFrame()
 ## Testing
 
 ```sh
-pnpm check       # typecheck + Biome lint + import boundaries + README coverage (check:docs) + Vitest unit tests (1503 tests in 117 files) + the host-electron, host-capacitor, template and create-game checks
+pnpm check       # typecheck + Biome lint + import boundaries + README coverage (check:docs) + Vitest unit tests (1522 tests in 118 files) + the host-electron, host-capacitor, template and create-game checks
 pnpm test:e2e    # Playwright e2e against the harness pages, on a device matrix
 pnpm harness     # serve the harness pages yourself
 ```

@@ -4,6 +4,8 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 
 ## Next (unreleased)
 
+- nav (ws/nav-3): the grid grows for turn-based and tactical games. `createNavGrid({ edgeCost })` takes an `EdgeCost` hook `(from, to, grid) => number` added to each step (`Infinity` blocks the edge one way: a cliff), and `neighbours: 4 | 8` (default 8) fixes the neighbourhood that `findPath`, `smoothPath`, `createFlowField` and `reachable` follow. New `reachable(grid, start, budget, out?)` / `createReach(grid)` is a budget-bounded Dijkstra into a reusable `Reach` (`count`, `cells`, `distances`, `parents`, `has`, `pathTo`, `forEach`, `stale`; zero allocation after the first call). `grid.setCost(index, cost)` / `setWalkable(index, walkable)` / `touch()` edit by index; `FlowField.stale` and `update()` recompute in place; `createFlowField(grid, { goals })` and `setGoals` seed from several goals (`goals`, `goalCount`). `findPath` gains `maxCost` and `heuristicWeight`. `harness/nav.html?reach` and `?multi` with `e2e/nav.spec.ts` rows; existing numbers are unchanged.
+
 - `templates/third-person` (`@thunderclap/template-third-person`, ws/template-third-person): a copyable third-person action game: a procedurally generated skinned glb parsed at startup, `createAnimGraph`, `Follow` with zoom, two-bone foot IK on a `geom` heightfield, root motion, `lookAt`, three cosmetic sockets via `attachTransform`, anchored enemy plates, PBR with shadows and fog. New root scripts `template:third-person` and `check:template-third-person`; `pnpm check` runs the latter.
 
 ### Repository
