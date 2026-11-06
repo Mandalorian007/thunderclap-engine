@@ -94,3 +94,7 @@ Parallelism note: during wave 4 only three engineers were running when the user 
 ## E-016: shadows merged; shadow pass runs after view culling (2026-11-05)
 
 `9e577f9` merges ws/shadows onto a main that already culls. `encodeShadow` consumes the post-cull command list, so a caster outside the view frustum casts no shadow (an off-screen tree does not shadow visible ground). Three shadow tests needed `camera.cull = false` because their zero-size cube sat on the near plane. Fix scheduled as ws/shadow-cull: a second cull against the sun box into its own command list, `stats.shadowDraws`. ws/skinning, ws/pbr and ws/template-first-person stack on `ws/shadows` (2696952) and merge after it; the worktree stays until they report.
+
+## E-017 — e2e assertions on moving values poll; load is the test (2026-11-05)
+
+Four wave-5 branches reported single e2e failures on pages they never touched (mesh.spec fog and drag, ui.spec menuNav), every time while eight or more matrices ran on one machine. The engine was not at fault: the fog probe sits under a lamp that orbits on real time, the drag and pad assertions read state once after an input burst. Rule: an e2e assertion on a value that moves over time polls (`expect.poll` or `waitForFunction`) and never reads once; pages used by such specs expose a flag that parks time-driven motion. The no-retry rule stays: a red gate is reported as red and the spec gets fixed (ws/flake-input), not re-run. Integrators treat a failure in a spec on this list as the spec's, merge if everything else is green, and say so in the report.
