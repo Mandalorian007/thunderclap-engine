@@ -1122,8 +1122,9 @@ describe('shadow pass', () => {
     const map = fake.textures.find((t) => t.label === 'engine-shadow-map')!;
     expect([map.width, map.height, map.format]).toEqual([2048, 2048, 'depth32float']);
     // Only the two opaque cubes (one instanced call); the sprite and the blended mesh stay out.
-    // Depth sort puts the opaque cubes first; the sprite (alpha) follows them.
-    expect(draws(sp.commands).map((d) => [d.firstInstance, d.instances])).toEqual([[0, 2]]);
+    // The shadow list's instances are uploaded after the scene's four.
+    expect(draws(sp.commands).map((d) => [d.firstInstance, d.instances])).toEqual([[4, 2]]);
+    expect(r.stats.shadowDraws).toBe(2);
     const pipe = sp.commands.find((c) => c.op === 'setPipeline') as {
       pipeline: { label: string; desc: GPURenderPipelineDescriptor };
     };
@@ -1164,7 +1165,6 @@ describe('shadow pass', () => {
     const m = r.createMaterial(OPAQUE);
     const cube = r.createMesh({ vertices: CUBE, layout: VERTEX_LAYOUT_3D });
     r.camera = Camera.perspective(1, 1, 0.1, 100);
-    r.camera.cull = false; // the cube sits at the camera; keep it out of the frustum test
     const seen = captureGlobals(fake);
     let f = r.beginFrame(0, 0);
     sunShadowOn(f);
@@ -1172,6 +1172,8 @@ describe('shadow pass', () => {
     f.sprite(m, { x: 0, y: 0, castShadow: true });
     r.endFrame();
     const sp = shadowPasses(fake)[0]!;
+    // The cube at the eye is view-culled (and casts nothing); the sprite's shadow copy follows it.
+    expect(r.stats.culled).toBe(1);
     expect(draws(sp.commands).map((d) => [d.firstInstance, d.instances])).toEqual([[1, 1]]);
     expect(
       (sp.commands.find((c) => c.op === 'setPipeline') as { pipeline: { label: string } }).pipeline
@@ -1249,8 +1251,7 @@ describe('shadow pass', () => {
     const { fake, r } = setup();
     const m = r.createMaterial(OPAQUE);
     const cube = r.createMesh({ vertices: CUBE, layout: VERTEX_LAYOUT_3D });
-    r.camera = Camera.perspective(1, 1, 0.1, 100);
-    r.camera.cull = false; // the cube sits at the camera; keep it out of the frustum test
+    r.camera = Camera.perspective(1, 1, 0.1, 100); // the cube at the eye is view-culled, still casts
     const frame = (size: 1024 | 2048) => {
       const f = r.beginFrame(0, 0);
       sunShadowOn(f);
@@ -1279,7 +1280,6 @@ describe('shadow pass', () => {
     const a = Camera.perspective(1, 1, 0.1, 100);
     const b = Camera.perspective(1, 1, 0.1, 100);
     b.screen.width = 0.5;
-    a.cull = b.cull = false; // the cube sits at the cameras; keep it out of the frustum test
     const f = r.beginFrame(0, 0);
     sunShadowOn(f);
     f.mesh(cube, m, new Transform());
@@ -1295,6 +1295,94 @@ describe('shadow pass', () => {
     expect(
       fake.buffers.filter((x) => (x.label ?? '').startsWith('engine-shadow-globals')).length,
     ).toBe(2);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('a caster behind the camera still shadows (ws/shadow-cull); one outside the sun box does not', () => {
+    const { fake, r } = setup();
+    const m = r.createMaterial(OPAQUE);
+    const cube = r.createMesh({
+      vertices: CUBE,
+      layout: VERTEX_LAYOUT_3D,
+      bounds: { center: [0, 0, 0], radius: 1 },
+    });
+    // At the origin looking down -z: z = +10 is behind the camera, z = -10 in front.
+    r.camera = Camera.perspective(Math.PI / 2, 1, 0.1, 1000);
+    const receiver = new Transform({ z: -10 });
+    const behind = new Transform({ z: 10 });
+    const farOut = new Transform({ x: 100, z: -10 }); // outside the view and the 20-unit sun box
+    const frame = () => {
+      const f = r.beginFrame(0, 0);
+      sunShadowOn(f);
+      f.mesh(cube, m, receiver);
+      f.mesh(cube, m, behind);
+      f.mesh(cube, m, farOut);
+      r.endFrame();
+    };
+    frame();
+    // The scene pass is view-culled as before: one of three drawn, two culled.
+    expect(r.stats.culled).toBe(2);
+    expect(r.stats.instances).toBe(1);
+    expect(draws(sceneCommands(fake))).toHaveLength(1);
+    // The shadow pass draws the receiver and the caster behind the camera, not the far one.
+    const sp = shadowPasses(fake)[0]!;
+    expect(draws(sp.commands).map((d) => [d.firstInstance, d.instances])).toEqual([[1, 2]]);
+    expect(r.stats.shadowDraws).toBe(2);
+    const bind = sp.commands.find((c) => c.op === 'setBindGroup') as { group: FakeBindGroup };
+    expect(bind.group.label).toBe('engine-shadow-globals-group-0');
+    // Steady state: frames with culled casters allocate no GPU objects.
+    const counts = () => [fake.buffers.length, fake.textures.length, fake.bindGroups.length];
+    const before = counts();
+    for (let i = 0; i < 3; i++) frame();
+    expect(counts()).toEqual(before);
+    expect(r.stats.shadowDraws).toBe(2);
+    // Turning the camera round swaps which caster the scene sees; the shadow pass is unchanged.
+    r.camera.lookAt([0, 0, 0], [0, 0, 1]);
+    frame();
+    expect(r.stats.culled).toBe(2);
+    expect(draws(shadowPasses(fake).at(-1)!.commands).map((d) => d.instances)).toEqual([2]);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('batches shadow draws by mesh then material whatever the scene order; shadowDraws sums over views', () => {
+    const { fake, r } = setup();
+    const a = r.createMaterial(OPAQUE);
+    const b = r.createMaterial({ ...OPAQUE, label: 'b' });
+    const cube = r.createMesh({ vertices: CUBE, layout: VERTEX_LAYOUT_3D });
+    const slab = r.createMesh({ vertices: CUBE, layout: VERTEX_LAYOUT_3D });
+    r.camera = Camera.perspective(1, 1, 0.1, 100).lookAt([0, 5, 10], [0, 0, 0]);
+    const f = r.beginFrame(0, 0);
+    sunShadowOn(f);
+    // Interleaved meshes and materials at different depths: the depth sort scatters them.
+    f.mesh(cube, a, new Transform({ x: 1, z: 3 }));
+    f.mesh(slab, b, new Transform({ x: 2, z: -2 }));
+    f.mesh(cube, b, new Transform({ x: 3, z: 1 }));
+    f.mesh(slab, a, new Transform({ x: 4, z: -1 }));
+    f.mesh(cube, a, new Transform({ x: 5, z: 2 }));
+    r.endFrame();
+    expect(r.stats.instances).toBe(5);
+    const sp = shadowPasses(fake)[0]!;
+    // Five scene instances first, then (cube: a, a, b), (slab: a, b): four draws, two meshes.
+    expect(draws(sp.commands).map((d) => [d.firstInstance, d.instances])).toEqual([
+      [5, 2],
+      [7, 1],
+      [8, 1],
+      [9, 1],
+    ]);
+    // Two mesh switches, each binding the vertex and the instance buffer.
+    expect(
+      sp.commands.filter((c) => c.op === 'other' && c.name === 'setVertexBuffer'),
+    ).toHaveLength(4);
+    expect(r.stats.shadowDraws).toBe(5);
+
+    const other = Camera.perspective(1, 1, 0.1, 100).lookAt([10, 5, 0], [0, 0, 0]);
+    const g = r.beginFrame(1, 0);
+    sunShadowOn(g);
+    g.mesh(cube, a, new Transform({ x: 1 }));
+    r.render(g, r.camera);
+    r.render(g, other);
+    r.endFrame();
+    expect(r.stats.shadowDraws).toBe(2);
     expect(fake.errors).toEqual([]);
   });
 

@@ -68,6 +68,17 @@ export interface RenderStats {
   drawables: number;
   /** Mesh draws skipped by frustum culling (`camera.cull`), summed over the frame's views. */
   culled: number;
+  /**
+   * Instances drawn into the sun's shadow map, summed over the frame's views: the opaque
+   * casters inside the sun's box, whether or not the view's frustum sees them.
+   */
+  shadowDraws: number;
+}
+
+/** A batched command list (`DrawCmd`s reused frame to frame) with its live length. */
+interface CmdList {
+  cmds: DrawCmd[];
+  count: number;
 }
 
 /**
@@ -182,6 +193,9 @@ interface DrawRec {
   br: number;
   /** Drawn into the sun's shadow map (`DrawParams.castShadow`; default: not a 2D-layout mesh). */
   castShadow: boolean;
+  /** Shadow sort keys (`Renderer.keyOf` of the mesh and the material), set by `buildShadowDraws`. */
+  mk: number;
+  tk: number;
 }
 
 /**
@@ -228,7 +242,13 @@ export class Renderer implements FrameSink {
   readonly white: Texture;
   /** Built-in sprite material bound to `white` (solid colour quads via tint). */
   readonly defaultSprite: Material;
-  readonly stats: RenderStats = { drawCalls: 0, instances: 0, drawables: 0, culled: 0 };
+  readonly stats: RenderStats = {
+    drawCalls: 0,
+    instances: 0,
+    drawables: 0,
+    culled: 0,
+    shadowDraws: 0,
+  };
   /** See `FrameTiming`. Only updated while `timingEvery > 0`. */
   readonly timing: FrameTiming = { gpuMs: 0, source: 'queue', passes: {}, cpuMs: 0, samples: 0 };
   /**
@@ -280,8 +300,10 @@ export class Renderer implements FrameSink {
   /** Instance buffers outgrown this frame, destroyed after submit (passes still reference them). */
   private readonly retired: GPUBuffer[] = [];
   private instanceCount = 0;
-  private readonly cmds: DrawCmd[] = [];
-  private cmdCount = 0;
+  /** This view's scene commands (`buildDraws`). */
+  private readonly scene: CmdList = { cmds: [], count: 0 };
+  /** This view's shadow-pass commands (`buildShadowDraws`): opaque casters inside the sun box. */
+  private readonly shadowCmds: CmdList = { cmds: [], count: 0 };
   private readonly recs: DrawRec[] = [];
   private recCount = 0;
   /** True while every draw this frame had `order` >= the previous draw's. */
@@ -290,12 +312,22 @@ export class Renderer implements FrameSink {
   private sortIdx = new Uint32Array(256);
   private sortTmp = new Uint32Array(256);
   private sortDepth = false;
+  /** Record indices of the shadow list, sorted by mesh then material (`sortShadow`). */
+  private shadowIdx = new Uint32Array(256);
+  private shadowTmp = new Uint32Array(256);
+  /** True while `sortDraws` orders the shadow list (mesh, material, index) instead of the scene. */
+  private sortShadow = false;
+  /** Stable numeric keys for meshes and materials, for the shadow sort; grows per new object. */
+  private readonly keys = new WeakMap<object, number>();
+  private nextKey = 0;
   /** Instance data in draw order, used when sorting or layer culling reorders draws. */
   private sortedData = new Float32Array(0);
   /** The array `endFrame` uploads: `instanceData` (submission order) or `sortedData`. */
   private uploadData: Float32Array;
-  /** Instances `endFrame` uploads (layer-culled draws excluded). */
+  /** Instances `render` uploads for this view: the scene's, then the shadow list's copies. */
   private uploadCount = 0;
+  /** Instances the scene pass draws this view (layer- and frustum-culled draws excluded). */
+  private sceneCount = 0;
   /** Draws the last `buildDraws` dropped by the frustum test. */
   private culledCount = 0;
   private readonly prePasses: ((encoder: GPUCommandEncoder) => void)[] = [];
@@ -691,7 +723,8 @@ export class Renderer implements FrameSink {
     this.inFrame = true;
     if (this.timingEvery > 0) this.frameStart = performance.now();
     this.instanceCount = 0;
-    this.cmdCount = 0;
+    this.scene.count = 0;
+    this.shadowCmds.count = 0;
     this.recCount = 0;
     this.ordered = true;
     this.lastOrder = Number.NEGATIVE_INFINITY;
@@ -703,6 +736,7 @@ export class Renderer implements FrameSink {
     this.stats.instances = 0;
     this.stats.drawables = 0;
     this.stats.culled = 0;
+    this.stats.shadowDraws = 0;
     const f = this.frame;
     f.time = time;
     f.dt = dt;
@@ -739,10 +773,17 @@ export class Renderer implements FrameSink {
       this.drawUniformSets.length = 0;
     }
 
+    // The sun box is placed before the draw lists are built: the shadow list culls against it.
+    const shadowCfg = frame.lights.sun.shadow;
+    if (shadowCfg) {
+      const size = shadowCfg.size ?? DEFAULT_SHADOW_SIZE;
+      this.shadow.place(camera.position, frame.lights.sun.dir, shadowCfg, size);
+    }
     const depth = this.buildDraws(camera);
     this.stats.culled += this.culledCount;
-    for (let i = 0; i < this.cmdCount; i++) {
-      const d = this.cmds[i]!.drawable;
+    const scene = this.scene;
+    for (let i = 0; i < scene.count; i++) {
+      const d = scene.cmds[i]!.drawable;
       if (d?.prepare && !this.prepared.has(d)) {
         this.prepared.add(d);
         d.prepare(enc, frame);
@@ -834,8 +875,8 @@ export class Renderer implements FrameSink {
     let curMesh: Mesh | null = null;
     let drawCalls = 0;
     let drawables = 0;
-    for (let i = 0; i < this.cmdCount; i++) {
-      const c = this.cmds[i]!;
+    for (let i = 0; i < scene.count; i++) {
+      const c = scene.cmds[i]!;
       if (c.drawable) {
         c.drawable.draw(pass, frame);
         drawables++;
@@ -879,7 +920,7 @@ export class Renderer implements FrameSink {
     }
     pass.end();
     this.stats.drawCalls += drawCalls;
-    this.stats.instances += uploadCount;
+    this.stats.instances += this.sceneCount;
     this.stats.drawables += drawables;
   }
 
@@ -1087,6 +1128,8 @@ export class Renderer implements FrameSink {
         bz: 0,
         br: -1,
         castShadow: false,
+        mk: 0,
+        tk: 0,
       });
     }
     const r = this.recs[this.recCount++]!;
@@ -1103,17 +1146,20 @@ export class Renderer implements FrameSink {
    * already non-decreasing (the default) nothing moves and the instance data uploads as
    * recorded. With `camera.depthTest`, the keys are `order`, then opaque before blended, then
    * depth (opaque front-to-back, blended back-to-front), then submission index. Sets
-   * `uploadData` / `uploadCount`; returns whether depth is on.
+   * `uploadData` / `uploadCount`; returns whether depth is on. With `frame.lights.sun.shadow`
+   * set, `buildShadowDraws` then appends the shadow list's instances to the same upload.
    */
   private buildDraws(cam: Camera): boolean {
     const camLayers = cam.layers >>> 0;
     const depth = cam.depthTest;
     const depthWrite = cam.depthWrite;
     const cull = cam.cull;
+    const shadowCfg = this.frame.lights.sun.shadow;
     this.frame.depthFormat = depth ? DEPTH_FORMAT : null;
     const recs = this.recs;
     const n = this.recCount;
-    this.cmdCount = 0;
+    this.scene.count = 0;
+    this.shadowCmds.count = 0;
     this.culledCount = 0;
 
     let visible = n;
@@ -1121,13 +1167,13 @@ export class Renderer implements FrameSink {
       visible = 0;
       for (let i = 0; i < n; i++) if ((recs[i]!.layers & camLayers) !== 0) visible++;
     }
-    if (!depth && !cull && this.ordered && visible === n) {
+    if (!depth && !cull && this.ordered && visible === n && !shadowCfg) {
       for (let i = 0; i < n; i++) {
         const r = recs[i]!;
-        this.batch(r, r.inst, 0);
+        this.batch(this.scene, r, r.drawable ? null : this.scenePipeline(r, 0), r.inst);
       }
       this.uploadData = this.instanceData;
-      this.uploadCount = this.instanceCount;
+      this.uploadCount = this.sceneCount = this.instanceCount;
       return false;
     }
 
@@ -1168,33 +1214,105 @@ export class Renderer implements FrameSink {
     }
     this.culledCount = culled;
     this.sortDepth = depth;
-    if (depth || !this.ordered) this.sortDraws(k);
+    this.sortShadow = false;
+    if (depth || !this.ordered) this.sortDraws(this.sortIdx, this.sortTmp, k);
 
-    if (this.sortedData.length < src.length) this.sortedData = new Float32Array(src.length);
+    // The shadow list's instances follow the scene's in the same upload: room for both.
+    const need = shadowCfg ? src.length * 2 : src.length;
+    if (this.sortedData.length < need) this.sortedData = new Float32Array(need);
     const dst = this.sortedData;
     let inst = 0;
     for (let j = 0; j < k; j++) {
       const r = recs[idx[j]!]!;
       if (r.drawable) {
-        this.batch(r, 0, 0);
+        this.batch(this.scene, r, null, 0);
         continue;
       }
       const from = r.inst * INSTANCE_FLOATS;
       const to = inst * INSTANCE_FLOATS;
       for (let f = 0; f < INSTANCE_FLOATS; f++) dst[to + f] = src[from + f]!;
       const mode: DepthMode = !depth ? 0 : r.group === 0 && depthWrite ? 2 : 1;
-      this.batch(r, inst, mode);
+      this.batch(this.scene, r, this.scenePipeline(r, mode), inst);
       inst++;
     }
     this.uploadData = dst;
-    this.uploadCount = inst;
+    this.sceneCount = inst;
+    this.uploadCount = shadowCfg ? this.buildShadowDraws(camLayers, dst, inst) : inst;
     return depth;
   }
 
-  /** Append a record as a command, merging into the previous one when it continues it. */
-  private batch(r: DrawRec, first: number, depth: DepthMode): void {
+  /**
+   * Build this view's shadow-pass commands: every opaque mesh draw with `castShadow` on the
+   * camera's layers whose bounding sphere touches the sun's box (`ShadowMap.sunCamera.frustum`,
+   * placed by `render` before the lists are built), whether or not the view's own frustum sees
+   * it. The casters are sorted by mesh, then material, then submission index, their instance
+   * data copied into `dst` from `inst` on (after the scene's), and batched into `shadowCmds`
+   * with the scene's keys, so one `(mesh, material)` is one instanced draw. Returns the new
+   * instance count of the upload. No allocation in steady state.
+   */
+  private buildShadowDraws(camLayers: number, dst: Float32Array, inst: number): number {
+    const recs = this.recs;
+    const n = this.recCount;
+    if (this.shadowIdx.length < n) {
+      this.shadowIdx = new Uint32Array(n * 2);
+      this.shadowTmp = new Uint32Array(n * 2);
+    }
+    const idx = this.shadowIdx;
+    const planes = this.shadow.sunCamera.frustum;
+    let k = 0;
+    for (let i = 0; i < n; i++) {
+      const r = recs[i]!;
+      if (!r.castShadow || r.drawable || r.material!.blend !== 'opaque') continue;
+      if ((r.layers & camLayers) === 0) continue;
+      if (r.br >= 0 && outside(planes, r.bx, r.by, r.bz, r.br)) continue;
+      r.mk = this.keyOf(r.mesh!);
+      r.tk = this.keyOf(r.material!);
+      idx[k++] = i;
+    }
+    if (k === 0) return inst;
+    this.sortShadow = true;
+    this.sortDraws(idx, this.shadowTmp, k);
+    const src = this.instanceData;
+    const shadow = this.shadow;
+    for (let j = 0; j < k; j++) {
+      const r = recs[idx[j]!]!;
+      const from = r.inst * INSTANCE_FLOATS;
+      const to = inst * INSTANCE_FLOATS;
+      for (let f = 0; f < INSTANCE_FLOATS; f++) dst[to + f] = src[from + f]!;
+      this.batch(this.shadowCmds, r, shadow.pipelineFor(r.mesh!.layout), inst);
+      inst++;
+    }
+    return inst;
+  }
+
+  /** A stable small integer for a mesh or material (assigned on first sight). */
+  private keyOf(o: object): number {
+    let k = this.keys.get(o);
+    if (k === undefined) {
+      k = this.nextKey++;
+      this.keys.set(o, k);
+    }
+    return k;
+  }
+
+  /** The scene pipeline of a mesh record for `depth`. */
+  private scenePipeline(r: DrawRec, depth: DepthMode): GPURenderPipeline {
+    return r.material!.pipelineFor(r.mesh!.layout, depth);
+  }
+
+  /**
+   * Append a record to `list` as a command drawn with `pipeline`, merging into the previous
+   * one when it continues it (same pipeline, material, mesh, offset and shadow flag, and its
+   * instances follow on). Drawables pass `pipeline` null.
+   */
+  private batch(
+    list: CmdList,
+    r: DrawRec,
+    pipeline: GPURenderPipeline | null,
+    first: number,
+  ): void {
     if (r.drawable) {
-      const c = this.nextCmd();
+      const c = this.nextCmd(list);
       c.material = null;
       c.mesh = null;
       c.drawable = r.drawable;
@@ -1207,8 +1325,7 @@ export class Renderer implements FrameSink {
     }
     const material = r.material!;
     const mesh = r.mesh!;
-    const pipeline = material.pipelineFor(mesh.layout, depth);
-    const last = this.cmdCount > 0 ? this.cmds[this.cmdCount - 1]! : null;
+    const last = list.count > 0 ? list.cmds[list.count - 1]! : null;
     if (
       last &&
       !last.drawable &&
@@ -1222,7 +1339,7 @@ export class Renderer implements FrameSink {
       last.count++;
       return;
     }
-    const c = this.nextCmd();
+    const c = this.nextCmd(list);
     c.material = material;
     c.mesh = mesh;
     c.drawable = null;
@@ -1233,10 +1350,19 @@ export class Renderer implements FrameSink {
     c.castShadow = r.castShadow;
   }
 
-  /** True when record `a` draws before record `b` (a total order: ties go by index). */
+  /**
+   * True when record `a` draws before record `b` (a total order: ties go by index). For the
+   * scene list: `order`, then (with depth) group and depth; for the shadow list
+   * (`sortShadow`): mesh key, then material key.
+   */
   private drawsBefore(a: number, b: number): boolean {
     const ra = this.recs[a]!;
     const rb = this.recs[b]!;
+    if (this.sortShadow) {
+      if (ra.mk !== rb.mk) return ra.mk < rb.mk;
+      if (ra.tk !== rb.tk) return ra.tk < rb.tk;
+      return a < b;
+    }
     if (ra.order !== rb.order) return ra.order < rb.order;
     if (this.sortDepth) {
       if (ra.group !== rb.group) return ra.group < rb.group;
@@ -1245,10 +1371,10 @@ export class Renderer implements FrameSink {
     return a < b;
   }
 
-  /** Bottom-up merge sort of `sortIdx[0..n)` with `drawsBefore`; no allocation. */
-  private sortDraws(n: number): void {
-    let src = this.sortIdx;
-    let dst = this.sortTmp;
+  /** Bottom-up merge sort of `idx[0..n)` with `drawsBefore`, `tmp` as scratch; no allocation. */
+  private sortDraws(idx: Uint32Array, tmp: Uint32Array, n: number): void {
+    let src = idx;
+    let dst = tmp;
     for (let width = 1; width < n; width *= 2) {
       for (let lo = 0; lo < n; lo += 2 * width) {
         const mid = Math.min(lo + width, n);
@@ -1266,16 +1392,16 @@ export class Renderer implements FrameSink {
       src = dst;
       dst = t;
     }
-    if (src !== this.sortIdx) {
-      for (let i = 0; i < n; i++) this.sortIdx[i] = src[i]!;
+    if (src !== idx) {
+      for (let i = 0; i < n; i++) idx[i] = src[i]!;
     }
   }
 
   // ---------------------------------------------------------------- internals
 
-  private nextCmd(): DrawCmd {
-    if (this.cmdCount === this.cmds.length) {
-      this.cmds.push({
+  private nextCmd(list: CmdList): DrawCmd {
+    if (list.count === list.cmds.length) {
+      list.cmds.push({
         material: null,
         mesh: null,
         drawable: null,
@@ -1286,7 +1412,7 @@ export class Renderer implements FrameSink {
         castShadow: false,
       });
     }
-    return this.cmds[this.cmdCount++]!;
+    return list.cmds[list.count++]!;
   }
 
   private growInstances(): void {
@@ -1360,10 +1486,12 @@ export class Renderer implements FrameSink {
   }
 
   /**
-   * When `frame.lights.sun.shadow` is set and this view has opaque shadow casters, encode one
-   * depth-only pass into the sun's shadow map (through `ShadowMap.sunCamera`, an ortho box
-   * centred on `camera.position`) over this view's casting commands, before its scene pass.
-   * Returns what `writeView` puts in the lights block, or null when no shadow was rendered.
+   * When `frame.lights.sun.shadow` is set and this view has opaque shadow casters inside the
+   * sun's box, encode one depth-only pass into the sun's shadow map (through
+   * `ShadowMap.sunCamera`, an ortho box centred on `camera.position`, placed by `render`) over
+   * `shadowCmds` (built by `buildShadowDraws`: casters the view frustum culled included), before
+   * its scene pass. Returns what `writeView` puts in the lights block, or null when no shadow
+   * was rendered.
    */
   private encodeShadow(
     enc: GPUCommandEncoder,
@@ -1373,14 +1501,9 @@ export class Renderer implements FrameSink {
   ): ShadowUniforms | null {
     const cfg = frame.lights.sun.shadow;
     if (!cfg) return null;
-    const cmds = this.cmds;
-    const n = this.cmdCount;
-    let casters = 0;
-    for (let i = 0; i < n; i++) {
-      const c = cmds[i]!;
-      if (c.castShadow && c.material!.blend === 'opaque') casters++;
-    }
-    if (casters === 0) return null;
+    const cmds = this.shadowCmds.cmds;
+    const n = this.shadowCmds.count;
+    if (n === 0) return null;
     const shadow = this.shadow;
     const size = cfg.size ?? DEFAULT_SHADOW_SIZE;
     if (shadow.ensure(size)) {
@@ -1391,7 +1514,6 @@ export class Renderer implements FrameSink {
       }
       this.globalsBindGroup = this.views[0]!.group;
     }
-    shadow.place(camera.position, frame.lights.sun.dir, cfg, size);
     const slot = this.shadowSlot(this.shadowCount++);
     const g = this.globalsData;
     g[0] = this.logicalWidth;
@@ -1413,11 +1535,11 @@ export class Renderer implements FrameSink {
     pass.setBindGroup(0, slot.group);
     let curPipeline: GPURenderPipeline | null = null;
     let curMesh: Mesh | null = null;
+    let drawn = 0;
     for (let i = 0; i < n; i++) {
       const c = cmds[i]!;
-      if (!c.castShadow || c.material!.blend !== 'opaque') continue;
       const mesh = c.mesh!;
-      const pipeline = shadow.pipelineFor(mesh.layout);
+      const pipeline = c.pipeline!;
       if (pipeline !== curPipeline) {
         pass.setPipeline(pipeline);
         curPipeline = pipeline;
@@ -1434,8 +1556,10 @@ export class Renderer implements FrameSink {
       } else {
         pass.draw(mesh.vertexCount, c.count, 0, c.first);
       }
+      drawn += c.count;
     }
     pass.end();
+    this.stats.shadowDraws += drawn;
     return shadow.uniforms;
   }
 
