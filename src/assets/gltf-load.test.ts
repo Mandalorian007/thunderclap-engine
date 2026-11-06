@@ -1,9 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { createFakeDevice, fakeRendererGpu } from '../render/fake-gpu';
-import { VERTEX_LAYOUT_3D } from '../render/mesh';
+import { VERTEX_LAYOUT_3D, VERTEX_LAYOUT_3D_TANGENT, VERTEX_LAYOUT_SKINNED } from '../render/mesh';
 import { Renderer } from '../render/renderer';
+import { SkinPalette } from '../render/skin';
+import { STANDARD_TEXTURE_SLOTS } from '../render/standard';
 import { type GltfJson, parseGltf } from './gltf';
-import { type GltfImageSource, interleave3d, loadGltf } from './gltf-load';
+import {
+  type GltfImageSource,
+  gltfSamplerKind,
+  interleave3d,
+  interleave3dTangent,
+  loadGltf,
+} from './gltf-load';
 import { interleaveSkinned, skeletonFromSkin } from './gltf-skin';
 
 /** A 4×4 "decoded image" for the fake GPU (`copyExternalImageToTexture` is a no-op there). */
@@ -52,7 +60,11 @@ function sampleDoc(imageUri?: string) {
     meshes: [
       {
         primitives: [
-          { attributes: { POSITION: 0, NORMAL: 1, TEXCOORD_0: 2 }, indices: 3, material: 0 },
+          {
+            attributes: { POSITION: 0, NORMAL: 1, TEXCOORD_0: 2 },
+            indices: 3,
+            material: 0,
+          },
         ],
       },
       { primitives: [{ attributes: { POSITION: 0 }, material: 1 }] },
@@ -102,19 +114,32 @@ describe('loadGltf on the fake GPU', () => {
     const tri = scene.transforms[1]!;
     expect(tri.parent).toBe(scene.transforms[0]);
     expect([...tri.world]).toEqual([1, 0, 0, 2, 0, 1, 0, 1, 0, 0, 1, 0]);
-    // Draw entries: node index, material, base colour factor as tint, cutoff as params.x.
+    // Draw entries: node index, material; the factors live in the standard material, so the
+    // instance is white with zero params.
     expect(scene.nodes.map((n) => n.node)).toEqual([1, 2]);
     expect(scene.nodes[0]!.material).toBe(scene.materials[0]);
     expect(scene.nodes[1]!.material).toBe(scene.materials[1]);
-    expect([...(scene.nodes[1]!.params.tint as Float32Array)]).toEqual(
-      [0.2, 0.4, 0.6, 1].map(Math.fround),
-    );
-    expect(scene.nodes[1]!.params.params![0]).toBe(0.25);
-    expect(scene.nodes[0]!.params.params![0]).toBe(0);
+    expect([...(scene.nodes[1]!.params.tint as Float32Array)]).toEqual([1, 1, 1, 1]);
+    expect([...(scene.nodes[1]!.params.params as Float32Array)]).toEqual([0, 0, 0, 0]);
+    expect(scene.materialNames).toEqual([null, null]);
+    // Standard materials: the base colour map on material 0, the factor and mask on 1.
+    const g0 = scene.materials[0]!.bindings!.bindGroup as unknown as FakeGroup;
+    expect(
+      g0.entries.find((e) => e.binding === 2 + STANDARD_TEXTURE_SLOTS.baseColor)!.resource.texture
+        ?.label,
+    ).toBe('test:image0');
+    const block1 = fake.writes.find(
+      (w) => (w.buffer as unknown) === scene.materials[1]!.bindings!.uniformBuffer,
+    )!;
+    expect(block1.bytes).toBe(80);
+    expect(scene.materials[0]!.blend).toBe('opaque');
     expect(scene.bounds.center[1]).toBeCloseTo(doc.bounds.center[1], 6);
     // Each mesh carries its primitive's bounding sphere, so `camera.cull` can skip it.
     const pb = doc.meshes[0]!.primitives[0]!.bounds;
-    expect(scene.meshes[0]!.bounds).toEqual({ center: [...pb.center], radius: pb.radius });
+    expect(scene.meshes[0]!.bounds).toEqual({
+      center: [...pb.center],
+      radius: pb.radius,
+    });
     expect(fake.errors).toEqual([]);
   });
 
@@ -150,6 +175,21 @@ describe('loadGltf on the fake GPU', () => {
     expect(fake.errors).toEqual([]);
   });
 
+  it("lit: 'lit' keeps the base-colour material, tint and cutoff per draw", async () => {
+    const fake = createFakeDevice();
+    const r = new Renderer(fakeRendererGpu(fake));
+    const scene = await loadGltf(r, sampleDoc(), { decodeImage, lit: 'lit' });
+    expect(scene.textures).toHaveLength(1);
+    expect(scene.materials).toHaveLength(2);
+    expect([...(scene.nodes[1]!.params.tint as Float32Array)]).toEqual(
+      [0.2, 0.4, 0.6, 1].map(Math.fround),
+    );
+    expect(scene.nodes[1]!.params.params![0]).toBe(0.25);
+    expect(scene.nodes[0]!.params.params![0]).toBe(0);
+    expect(scene.materials[0]!.bindings!.blockBytes).toBe(0);
+    expect(fake.errors).toEqual([]);
+  });
+
   it('uses the given material for every draw and still decodes the textures', async () => {
     const fake = createFakeDevice();
     const r = new Renderer(fakeRendererGpu(fake));
@@ -157,7 +197,10 @@ describe('loadGltf on the fake GPU', () => {
       label: 'own',
       wgsl: '@fragment fn fs_main(in: VSOut) -> FragOut { var o: FragOut; o.color = in.color; o.emissive = vec4f(0.0); return o; }',
     });
-    const scene = await loadGltf(r, sampleDoc(), { decodeImage, material: own });
+    const scene = await loadGltf(r, sampleDoc(), {
+      decodeImage,
+      material: own,
+    });
     expect(scene.materials).toEqual([]);
     expect(scene.nodes.every((n) => n.material === own)).toBe(true);
     expect(scene.textures).toHaveLength(1);
@@ -199,7 +242,11 @@ describe('loadGltf on the fake GPU', () => {
       ],
       meshes: [
         {
-          primitives: [{ attributes: { POSITION: 0, NORMAL: 1, JOINTS_0: 2, WEIGHTS_0: 3 } }],
+          primitives: [
+            {
+              attributes: { POSITION: 0, NORMAL: 1, JOINTS_0: 2, WEIGHTS_0: 3 },
+            },
+          ],
         },
       ],
       skins: [{ joints: [0, 1] }],
@@ -222,12 +269,27 @@ describe('loadGltf on the fake GPU', () => {
     expect(scene.animations[0]!.duration).toBe(2);
     expect(scene.nodes).toHaveLength(1);
     expect(scene.nodes[0]!.skin).toBe(0);
-    // Until VERTEX_LAYOUT_SKINNED lands, the skinned primitive is built in the 3D layout.
+    // Without a palette the skinned primitive is built in the 3D layout at its bind pose.
     expect(scene.meshes[0]!.layout).toBe(VERTEX_LAYOUT_3D);
     expect(scene.meshes[0]!.vertexCount).toBe(3);
+    expect(scene.palette).toBeNull();
     const sk = skeletonFromSkin(doc, 0);
     expect([...sk.parents]).toEqual([-1, 0, -1]);
+    expect(sk.names).toEqual(['node0', 'node1', 'node2']);
     expect(interleaveSkinned(doc.meshes[0]!.primitives[0]!).vertices.byteLength).toBe(3 * 56);
+    expect(fake.errors).toEqual([]);
+
+    // With a palette: the skinned layout, and every material bound to it at binding 16.
+    const palette = new SkinPalette(fake.device, { joints: 2, label: 'pal' });
+    const skinned = await loadGltf(r, doc, { decodeImage, palette });
+    expect(skinned.palette).toBe(palette);
+    expect(skinned.meshes[0]!.layout).toBe(VERTEX_LAYOUT_SKINNED);
+    expect(fake.buffers.filter((b) => b.label === 'gltf:mesh0.0-vb').at(-1)!.size).toBe(3 * 56);
+    const g = skinned.nodes[0]!.material.bindings!.bindGroup as unknown as FakeGroup;
+    const res = g.entries.find((e) => e.binding === 16)!.resource as {
+      buffer?: { label?: string };
+    };
+    expect(res.buffer?.label).toBe('pal-buffer');
     expect(fake.errors).toEqual([]);
   });
 
@@ -239,8 +301,15 @@ describe('loadGltf on the fake GPU', () => {
     await expect(loadGltf(r, doc, { decodeImage })).rejects.toThrow(
       /image 0: missing external resource "img\/checker.png"/,
     );
-    const bitmap = { width: 8, height: 2, close() {} } as unknown as ImageBitmap;
-    const scene = await loadGltf(r, doc, { resources: { 'img/checker.png': bitmap }, mips: false });
+    const bitmap = {
+      width: 8,
+      height: 2,
+      close() {},
+    } as unknown as ImageBitmap;
+    const scene = await loadGltf(r, doc, {
+      resources: { 'img/checker.png': bitmap },
+      mips: false,
+    });
     expect(scene.textures[0]!.width).toBe(8);
     expect(scene.textures[0]!.height).toBe(2);
     expect(scene.textures[0]!.mipLevels).toBe(1);
@@ -254,6 +323,240 @@ describe('loadGltf on the fake GPU', () => {
     });
     expect([...decoded!]).toEqual([7, 8, 9]);
     expect(scene2.textures).toHaveLength(1);
+  });
+});
+
+interface FakeGroup {
+  entries: {
+    binding: number;
+    resource: { texture?: { label?: string }; label?: string };
+  }[];
+}
+
+/**
+ * One quad with TANGENT under a material using every slot (image 0 as base colour, normal and
+ * emissive; image 1 as metallic-roughness and occlusion), a `KHR_texture_transform` on the base
+ * colour slot, a nearest clamped sampler on the base colour texture; plus a tangent-less
+ * triangle under a second material whose base colour is image 1.
+ */
+function pbrDoc() {
+  const pos = new Float32Array([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0]);
+  const nrm = new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]);
+  const uv = new Float32Array([0, 1, 1, 1, 1, 0, 0, 0]);
+  const tan = new Float32Array([1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, -1, 1, 0, 0, 1]);
+  const idx = new Uint16Array([0, 1, 2, 0, 2, 3]);
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 0]);
+  const parts = [pos, nrm, uv, tan, idx, png].map(
+    (p) => new Uint8Array(p.buffer, p.byteOffset, p.byteLength),
+  );
+  const total = parts.reduce((n, p) => n + p.byteLength, 0);
+  const bin = new Uint8Array(total);
+  const views: GltfJson['bufferViews'] = [];
+  let off = 0;
+  for (const p of parts) {
+    bin.set(p, off);
+    views.push({ buffer: 0, byteOffset: off, byteLength: p.byteLength });
+    off += p.byteLength;
+  }
+  const json: GltfJson = {
+    asset: { version: '2.0' },
+    buffers: [{ byteLength: total }],
+    bufferViews: views,
+    accessors: [
+      {
+        bufferView: 0,
+        componentType: 5126,
+        count: 4,
+        type: 'VEC3',
+        min: [0, 0, 0],
+        max: [1, 1, 0],
+      },
+      { bufferView: 1, componentType: 5126, count: 4, type: 'VEC3' },
+      { bufferView: 2, componentType: 5126, count: 4, type: 'VEC2' },
+      { bufferView: 3, componentType: 5126, count: 4, type: 'VEC4' },
+      { bufferView: 4, componentType: 5123, count: 6, type: 'SCALAR' },
+      {
+        bufferView: 0,
+        componentType: 5126,
+        count: 3,
+        type: 'VEC3',
+        min: [0, 0, 0],
+        max: [1, 1, 0],
+      },
+      { bufferView: 1, componentType: 5126, count: 3, type: 'VEC3' },
+    ],
+    meshes: [
+      {
+        primitives: [
+          {
+            attributes: { POSITION: 0, NORMAL: 1, TEXCOORD_0: 2, TANGENT: 3 },
+            indices: 4,
+            material: 0,
+          },
+        ],
+      },
+      { primitives: [{ attributes: { POSITION: 5, NORMAL: 6 }, material: 1 }] },
+    ],
+    images: [
+      { bufferView: 5, mimeType: 'image/png' },
+      { bufferView: 5, mimeType: 'image/png' },
+    ],
+    samplers: [{ magFilter: 9728, minFilter: 9728, wrapS: 33071, wrapT: 33071 }],
+    textures: [{ source: 0, sampler: 0 }, { source: 1 }, { source: 0 }],
+    materials: [
+      {
+        name: 'full',
+        pbrMetallicRoughness: {
+          baseColorFactor: [0.5, 0.5, 0.5, 1],
+          baseColorTexture: {
+            index: 0,
+            extensions: {
+              KHR_texture_transform: {
+                offset: [0.5, 0],
+                rotation: 1,
+                scale: [2, 2],
+              },
+            },
+          },
+          metallicFactor: 0.25,
+          roughnessFactor: 0.75,
+          metallicRoughnessTexture: { index: 1 },
+        },
+        normalTexture: { index: 2, scale: 0.5 },
+        occlusionTexture: { index: 1 },
+        emissiveTexture: { index: 2 },
+        emissiveFactor: [1, 1, 1],
+        extensions: {
+          KHR_materials_emissive_strength: { emissiveStrength: 2 },
+        },
+        alphaMode: 'BLEND',
+        doubleSided: true,
+      },
+      {
+        name: 'plain',
+        pbrMetallicRoughness: { baseColorTexture: { index: 1 } },
+      },
+    ],
+    nodes: [{ mesh: 0 }, { mesh: 1 }],
+    scenes: [{ nodes: [0, 1] }],
+  };
+  return parseGltf({ json, buffers: [bin.buffer] });
+}
+
+describe('loadGltf standard materials on the fake GPU', () => {
+  it('uploads one texture per (image, colour space) and binds every map', async () => {
+    const fake = createFakeDevice();
+    const r = new Renderer(fakeRendererGpu(fake));
+    // The fake queue records byte counts only: capture each material's block as it is written.
+    const blocks = new Map<string, Float32Array>();
+    const create = r.createMaterial.bind(r);
+    r.createMaterial = (desc) => {
+      const m = create(desc);
+      const set = m.setUniforms.bind(m);
+      m.setUniforms = (data, off) => {
+        blocks.set(m.label, new Float32Array(data as Float32Array));
+        set(data, off);
+      };
+      return m;
+    };
+    const scene = await loadGltf(r, pbrDoc(), { decodeImage, label: 't' });
+    // Image 0: sRGB (base colour, emissive) and linear (normal). Image 1: sRGB (material 1's
+    // base colour) and linear (metallic-roughness, occlusion).
+    expect(scene.textures.map((t) => [t.texture.label, t.format])).toEqual([
+      ['t:image0', 'rgba8unorm-srgb'],
+      ['t:image0:linear', 'rgba8unorm'],
+      ['t:image1', 'rgba8unorm-srgb'],
+      ['t:image1:linear', 'rgba8unorm'],
+    ]);
+    expect(scene.materialNames).toEqual(['full', 'plain']);
+    const g = scene.materials[0]!.bindings!.bindGroup as unknown as FakeGroup;
+    const label = (slot: number) =>
+      g.entries.find((e) => e.binding === 2 + slot)!.resource.texture?.label;
+    expect(label(STANDARD_TEXTURE_SLOTS.baseColor)).toBe('t:image0');
+    expect(label(STANDARD_TEXTURE_SLOTS.metallicRoughness)).toBe('t:image1:linear');
+    expect(label(STANDARD_TEXTURE_SLOTS.normal)).toBe('t:image0:linear');
+    expect(label(STANDARD_TEXTURE_SLOTS.occlusion)).toBe('t:image1:linear');
+    expect(label(STANDARD_TEXTURE_SLOTS.emissive)).toBe('t:image0');
+    // The base colour texture's sampler: nearest, clamped, and level 0 only (its minFilter
+    // 9728 names no mipmap mode).
+    const sampler = g.entries.find((e) => e.binding === 1)!.resource as {
+      label?: string;
+    };
+    expect(sampler.label).toBe('nearest-clamp');
+    // Factors, flags (double-sided | blend) and the base colour slot's transform in the block.
+    const block = blocks.get('t:material0')!;
+    expect([...block.slice(0, 12)].map((x) => Math.round(x * 1e6) / 1e6)).toEqual([
+      0.5, 0.5, 0.5, 1, 0.25, 0.75, 0.5, 0.5, 2, 2, 2, 5,
+    ]);
+    expect([...block.slice(12, 16)]).toEqual([2, 2, 0.5, 0]);
+    expect(block[16]).toBeCloseTo(Math.cos(1), 6);
+    expect(block[17]).toBeCloseTo(Math.sin(1), 6);
+    expect(scene.materials[0]!.blend).toBe('alpha');
+    // Material 1: linear-mip-repeat default sampler, identity transform.
+    const g1 = scene.materials[1]!.bindings!.bindGroup as unknown as FakeGroup;
+    expect(
+      (g1.entries.find((e) => e.binding === 1)!.resource as { label?: string }).label,
+    ).toContain('linear-mip-repeat');
+    expect([...blocks.get('t:material1')!.slice(12, 18)]).toEqual([1, 1, 0, 0, 1, 0]);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('builds tangent-layout meshes for primitives with TANGENT', async () => {
+    const fake = createFakeDevice();
+    const r = new Renderer(fakeRendererGpu(fake));
+    const doc = pbrDoc();
+    const scene = await loadGltf(r, doc, { decodeImage });
+    expect(scene.meshes[0]!.layout).toBe(VERTEX_LAYOUT_3D_TANGENT);
+    expect(scene.meshes[1]!.layout).toBe(VERTEX_LAYOUT_3D);
+    expect(fake.buffers.find((b) => b.label === 'gltf:mesh0.0-vb')!.size).toBe(4 * 64);
+    const v = interleave3dTangent(doc.meshes[0]!.primitives[0]!);
+    expect([...v.slice(32, 48)]).toEqual([1, 1, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 1, 0, 0, -1]);
+    // A primitive without tangents gets the +x tangent.
+    const plain = interleave3dTangent(doc.meshes[1]!.primitives[0]!);
+    expect([...plain.slice(12, 16)]).toEqual([1, 0, 0, 1]);
+    const f = r.beginFrame(0, 0);
+    scene.draw(f);
+    r.endFrame();
+    const pass = [...fake.passes].reverse().find((p) => p.label === 'scene')!;
+    const pipes = pass.commands
+      .filter((c) => c.op === 'setPipeline')
+      .map((c) => (c as { pipeline: { label: string } }).pipeline.label);
+    // No depth on this camera: both at d0, in draw order.
+    expect(pipes).toEqual([
+      'material:gltf:material0:3d-tangent:d0',
+      'material:gltf:material1:3d:d0',
+    ]);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('gltfSamplerKind maps glTF samplers to the engine set', () => {
+    const base = {
+      minFilter: 'linear',
+      mipmapFilter: 'linear',
+      wrapS: 'repeat',
+      wrapT: 'repeat',
+    } as const;
+    expect(gltfSamplerKind({ ...base, magFilter: 'linear' }, true)).toBe('linear-mip-repeat');
+    expect(gltfSamplerKind({ ...base, magFilter: 'linear' }, false)).toBe('linear-repeat');
+    expect(gltfSamplerKind({ ...base, magFilter: 'linear', mipmapFilter: null }, true)).toBe(
+      'linear-repeat',
+    );
+    expect(gltfSamplerKind({ ...base, magFilter: 'nearest' }, true)).toBe('nearest-mip-clamp');
+    expect(gltfSamplerKind({ ...base, magFilter: 'nearest' }, false)).toBe('nearest-clamp');
+    expect(
+      gltfSamplerKind(
+        {
+          ...base,
+          magFilter: 'linear',
+          wrapS: 'clamp-to-edge',
+          wrapT: 'clamp-to-edge',
+        },
+        true,
+      ),
+    ).toBe('linear-clamp');
+    expect(gltfSamplerKind({ ...base, magFilter: 'linear', wrapS: 'mirror-repeat' }, true)).toBe(
+      'linear-mip-repeat',
+    );
   });
 });
 

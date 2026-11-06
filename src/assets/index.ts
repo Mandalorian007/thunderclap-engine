@@ -29,6 +29,7 @@ export type {
   GltfBounds,
   GltfComponentType,
   GltfDocument,
+  GltfFilter,
   GltfImage,
   GltfInterpolation,
   GltfJson,
@@ -45,24 +46,38 @@ export type {
   GltfJsonSkin,
   GltfJsonSource,
   GltfJsonSparse,
+  GltfJsonTextureInfo,
+  GltfJsonTextureTransform,
   GltfMaterial,
   GltfMesh,
   GltfMorphTarget,
   GltfNode,
   GltfPrimitive,
+  GltfSampler,
   GltfSkin,
   GltfTexture,
+  GltfTextureTransform,
+  GltfWrap,
+  TextureRef,
   Vec3,
   Vec4,
 } from './gltf';
-export { composeTrs, decodeDataUri, GltfError, parseGltf } from './gltf';
+export { composeTrs, decodeDataUri, GltfError, parseGltf, transformUv } from './gltf';
 export type {
   GltfImageSource,
+  GltfLitMode,
   GltfMorph,
   GltfSceneNode,
   LoadGltfOptions,
 } from './gltf-load';
-export { GLTF_LIT_WGSL, GltfScene, interleave3d, loadGltf } from './gltf-load';
+export {
+  GLTF_LIT_WGSL,
+  GltfScene,
+  gltfSamplerKind,
+  interleave3d,
+  interleave3dTangent,
+  loadGltf,
+} from './gltf-load';
 export type { GltfSkeleton, SkinnedVertices } from './gltf-skin';
 export {
   interleaveSkinned,

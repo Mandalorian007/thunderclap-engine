@@ -2,7 +2,9 @@
  * The glTF demo (harness/gltf.html) on every matrix row: a GLB built in the page is parsed and
  * loaded through `@thunderclap/engine/assets`, the counts match the file (two draws, two meshes,
  * one texture, two materials), the textured cube renders at its probe (not the clear colour,
- * and the checker's warm tones show), and the plane renders mossy green.
+ * and the checker's warm tones show), and the plane renders mossy green. `?pbr` loads the PBR
+ * scene: five standard materials over six maps, a tangent mesh, a skinned mesh, no warnings; the
+ * emissive strip reads brighter than the space beside it and a metal sphere differs from a matte one.
  */
 import type { Frame, Page } from '@playwright/test';
 import type { HarnessGltfState } from '../harness/gltf-state';
@@ -14,17 +16,17 @@ type Rgb = [number, number, number];
 let frame: Frame;
 const errors: string[] = [];
 
-async function open(page: Page, wrapper: string): Promise<void> {
+async function open(page: Page, wrapper: string, query = ''): Promise<void> {
   errors.length = 0;
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => {
     if (m.type() === 'error') errors.push(m.text());
   });
   if (wrapper === 'top') {
-    await page.goto(`${HARNESS_URL}gltf.html`);
+    await page.goto(`${HARNESS_URL}gltf.html${query}`);
     frame = page.mainFrame();
   } else {
-    await page.goto(`${WRAPPER_URL}?page=${encodeURIComponent('gltf.html')}`);
+    await page.goto(`${WRAPPER_URL}?page=${encodeURIComponent(`gltf.html${query}`)}`);
     frame = await harnessFrame(page);
   }
   await expect
@@ -87,7 +89,13 @@ test('loads a generated GLB: counts match and the textured cube renders', async 
 }) => {
   await open(page, wrapper);
   const s = await read();
-  expect(s.counts).toEqual({ nodes: 2, meshes: 2, textures: 1, materials: 2, transforms: 2 });
+  expect(s.counts).toEqual({
+    nodes: 2,
+    meshes: 2,
+    textures: 1,
+    materials: 2,
+    transforms: 2,
+  });
   expect(s.warnings).toEqual([]);
   expect(s.externalUris).toEqual([]);
   expect(s.stats.instances).toBe(2);
@@ -115,5 +123,48 @@ test('loads a generated GLB: counts match and the textured cube renders', async 
   expect(ground![1], `ground ${ground}`).toBeGreaterThan(ground![0]);
   expect(ground![1], `ground ${ground}`).toBeGreaterThan(ground![2]);
   expect(ground![0] + ground![1] + ground![2]).toBeGreaterThan(100);
+  expect(errors).toEqual([]);
+});
+
+test('?pbr: every material slot loads through the standard material and renders', async ({
+  page,
+  wrapper,
+}) => {
+  await open(page, wrapper, '?pbr');
+  const s = await read();
+  expect(s.materials).toBe(5);
+  expect(s.maps).toBeGreaterThanOrEqual(6);
+  expect(s.skinned).toBe(true);
+  expect(s.tangentMeshes).toBeGreaterThanOrEqual(1);
+  expect(s.warnings).toEqual([]);
+  expect(s.jointNames).toEqual(['root', 'tip']);
+  expect(errors).toEqual([]);
+  expect(s.gpuErrors).toBe(0);
+  const probes = [
+    s.probes.emissive,
+    s.probes.emissiveSurround,
+    s.probes.metalSphere,
+    s.probes.matteSphere,
+  ];
+  for (const p of probes) {
+    expect(p.x).toBeGreaterThan(2);
+    expect(p.x).toBeLessThan(s.logical.width - 2);
+    expect(p.y).toBeGreaterThan(2);
+    expect(p.y).toBeLessThan(s.logical.height - 2);
+  }
+  const [glow, around, metal, matte] = await sample(
+    page,
+    await Promise.all(probes.map((p) => toPage(p))),
+  );
+  const sum = (c: Rgb) => c[0] + c[1] + c[2];
+  // The strip's base colour is black; only its emissive map (orange × 2) lights it.
+  expect(sum(glow!), `glow ${glow} around ${around}`).toBeGreaterThan(sum(around!) + 120);
+  expect(glow![0], `glow ${glow}`).toBeGreaterThan(glow![2] + 40);
+  // Full metal and dielectric at the same roughness and base colour shade differently.
+  const diff =
+    Math.abs(metal![0] - matte![0]) +
+    Math.abs(metal![1] - matte![1]) +
+    Math.abs(metal![2] - matte![2]);
+  expect(diff, `metal ${metal} matte ${matte}`).toBeGreaterThan(30);
   expect(errors).toEqual([]);
 });

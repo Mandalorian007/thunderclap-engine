@@ -26,29 +26,38 @@ helper, returning `{ bytes, mimeType }`). Anything still external is listed in
 that is external is left for the loader.
 
 `loadGltf(renderer: Renderer, doc: GltfDocument, opts?: LoadGltfOptions): Promise<GltfScene>` builds
-one `Mesh` per primitive in `VERTEX_LAYOUT_3D` (`interleave3d(primitive)` makes the float
-buffer: `x y z nx ny nz u v r g b a`), one `Transform` per node (parented like the file), one
-`Texture` per image a texture uses (`rgba8unorm-srgb`, full mip chain through `generateMipmaps`
-unless `mips: false`), and one lit `Material` per glTF material (`GLTF_LIT_WGSL`: base colour
-texture × vertex colour × base colour factor as the instance tint, `engine_lambert` plus a touch of
-sky, `MASK` cutoff in `params.x`, `BLEND` as alpha blend). Options:
+one `Mesh` per primitive (`VERTEX_LAYOUT_3D` through `interleave3d(primitive)`: `x y z nx ny nz u
+v r g b a`; `VERTEX_LAYOUT_3D_TANGENT` through `interleave3dTangent` when the primitive has
+`TANGENT`; `VERTEX_LAYOUT_SKINNED` through `interleaveSkinned` when it is skinned and a `palette`
+is given), one `Transform` per node (parented like the file), one `Texture` per (image, colour
+space) a material reads (full mip chain through `generateMipmaps` unless `mips: false`), and one
+standard PBR `Material` per glTF material (`createStandardMaterial` with every map, factor,
+sampler, alpha mode and texture transform the file gives: see *Materials*). `lit: 'lit'` keeps
+the older base-colour-only material instead (`GLTF_LIT_WGSL`: base colour texture × vertex
+colour × base colour factor as the instance tint, `engine_lambert` plus a touch of sky, `MASK`
+cutoff in `params.x`, `BLEND` as alpha blend). Options:
 
 | `LoadGltfOptions` | |
 | --- | --- |
 | `resources` | `Record<uri, ArrayBuffer | GltfImageSource>` for `doc.externalUris`; a missing image uri throws `image i: missing external resource "uri"` |
-| `material` | one `Material` for every draw; `scene.materials` stays empty and the file's materials are only read for tint and cutoff |
+| `material` | one `Material` for every draw; `scene.materials` stays empty, no textures are made, and the file's materials are only read for tint and cutoff |
+| `lit` | `GltfLitMode`: `'standard'` (default, `createStandardMaterial`) or `'lit'` (`GLTF_LIT_WGSL`) |
+| `palette` | a `SkinPalette`: skinned primitives are built in `VERTEX_LAYOUT_SKINNED` and every material binds it (`skin`); without one they are built in `VERTEX_LAYOUT_3D` with the joints and weights left on the document |
 | `label` | prefix for GPU labels (default `gltf`) |
 | `mips` | mip chains on (default true) |
 | `decodeImage` | `(bytes, mimeType) => Promise<GltfImageSource>`; default `createImageBitmap` on a `Blob`, so Workers and tests can supply their own |
 
 `GltfImageSource` is `ImageBitmap | HTMLCanvasElement | OffscreenCanvas`.
 
-`GltfScene` owns what it made: `meshes`, `textures`, `materials`, `transforms` (one per node,
-file order), `nodes: GltfSceneNode[]` (the draw list: `{ node, transform, mesh, material, params,
-skin }` with `params` an `InstanceParams` built once and `skin` the node's skin index or null),
-`skins` and `animations` (the document's, passed through), `bounds: { center, radius }` in world
-space, `morphs` and `morph(nodeIndex)` (below), `draw(frame)` and `destroy()` (meshes, textures,
-its own materials; not `opts.material`).
+`GltfScene` owns what it made: `meshes`, `textures`, `materials` (file order; `materialNames`
+holds each one's `GltfMaterial.name`, and a trailing default material for primitives without one
+is named `null`), `palette` (the one passed, or null), `transforms` (one per node, file order),
+`nodes: GltfSceneNode[]` (the draw list: `{ node, transform, mesh, material, params, skin }` with
+`params` an `InstanceParams` built once, `params[3]` the palette slot 0 on skinned draws, and
+`skin` the node's skin index or null), `skins` and `animations` (the document's, passed through),
+`bounds: { center, radius }` in world space, `morphs` and `morph(nodeIndex)` (below),
+`draw(frame)` and `destroy()` (meshes, textures, its own materials; not `opts.material` or the
+palette).
 
 ## The document
 
@@ -63,16 +72,20 @@ its own materials; not `opts.material`).
 - `meshes: GltfMesh[]`: `name`, `primitives: GltfPrimitive[]` with `vertexCount`, `position`,
   `normal` (flat normals computed when the file has none: `hadNormals` false, the primitive
   unwelded), `uv0` (zeros when missing), `color0` (ones when missing, `VEC3` padded), `indices`
-  (`Uint16Array` or `Uint32Array`, generated when missing), `material`, `bounds`, for skinned
-  primitives `joints` and `weights` (below), and `targets` and `ignoredTargetAttributes` for
-  morph targets (below). `GltfMesh.weights` holds the file's default morph weights or null.
-  Triangles only.
+  (`Uint16Array` or `Uint32Array`, generated when missing), `material`, `bounds`, `uv1`
+  (`TEXCOORD_1`, or null), `tangent` (`TANGENT` as 4 floats per vertex, w snapped to ±1, or
+  null), for skinned primitives `joints` and `weights` (below), and `targets` and
+  `ignoredTargetAttributes` for morph targets (below). `GltfMesh.weights` holds the file's
+  default morph weights or null. Triangles only.
 - `skins: GltfSkin[]` and `animations: GltfAnimation[]`: see *Skins and animations*.
-- `materials: GltfMaterial[]`: `name`, `baseColorFactor`, `baseColorTexture` (texture index),
-  `texCoord`, `doubleSided`, `alphaMode: GltfAlphaMode` (`'OPAQUE' | 'MASK' | 'BLEND'`),
-  `alphaCutoff`. The engine's 3D pipelines cull nothing, so `doubleSided` is informational.
-- `textures: GltfTexture[]`: `name`, `source` (image index), `wrapS`, `wrapT`, `magFilter`;
-  `images: GltfImage[]`: `name`, `bytes` (embedded or `data:`), `mimeType`, `uri` (external).
+- `materials: GltfMaterial[]`: see *Materials*. The engine's 3D pipelines cull nothing, so
+  `doubleSided` only flips the normal on back faces.
+- `textures: GltfTexture[]`: `name`, `source` (image index), `sampler: GltfSampler`
+  (`magFilter` / `minFilter: GltfFilter` `'nearest' | 'linear'`, `mipmapFilter` the same or null
+  when the file's `minFilter` has no mip mode, `wrapS` / `wrapT: GltfWrap` `'repeat' |
+  'mirror' | 'clamp'`; glTF defaults: linear, linear mips, repeat), and the older `wrapS`,
+  `wrapT`, `magFilter` numbers; `images: GltfImage[]`: `name`, `bytes` (embedded or `data:`),
+  `mimeType`, `uri` (external).
 
 Accessors: every `GltfComponentType` (5120–5126), every `GltfAccessorType`, `byteStride`,
 `normalized` integers. Sparse accessors (`GltfJsonSparse`) are read for morph target attributes
@@ -82,9 +95,63 @@ parser cannot honour throw `GltfError` (message prefixed `gltf: `).
 
 The JSON shapes the parser reads are exported for writers and tests: `GltfJson`,
 `GltfJsonAccessor`, `GltfJsonSparse`, `GltfJsonBufferView`, `GltfJsonMesh`, `GltfJsonPrimitive`,
-`GltfJsonNode`, `GltfJsonMaterial`, `GltfJsonSkin`, `GltfJsonAnimation`,
+`GltfJsonNode`, `GltfJsonMaterial`, `GltfJsonTextureInfo`, `GltfJsonTextureTransform`, `GltfJsonSkin`, `GltfJsonAnimation`,
 `GltfJsonAnimationChannel`, `GltfJsonAnimationSampler`, `GltfJsonInterpolation`,
 `GltfJsonSource`.
+
+## Materials
+
+Each glTF material loads as one `createStandardMaterial` (`render/standard.ts`); the loader
+reads the whole metallic-roughness model and the two extensions below and hands it over as a
+`StandardMaterialDesc`. Nothing in the file is reinterpreted: factors multiply maps as the
+specification says, and the engine's material has the same slots.
+
+| `GltfMaterial` | glTF | `StandardMaterialDesc` |
+| --- | --- | --- |
+| `name` | `name` | the material's `label` is `<label>:material<i>`; the name is on `scene.materialNames[i]` |
+| `baseColorFactor: Vec4`, `baseColor: TextureRef \| null` | `pbrMetallicRoughness.baseColorFactor`, `baseColorTexture` | `baseColorFactor`, `baseColor` (sRGB) |
+| `metallicFactor`, `roughnessFactor`, `metallicRoughness` | `metallicFactor`, `roughnessFactor`, `metallicRoughnessTexture` | `metallic`, `roughness`, `metallicRoughness` (linear; G roughness, B metallic) |
+| `normal`, `normalScale` | `normalTexture`, `.scale` | `normal` (linear), `normalScale` |
+| `occlusion`, `occlusionStrength` | `occlusionTexture`, `.strength` | `occlusion` (linear, R); `occlusionStrength` is parsed but not yet applied (the material reads the map at full strength) |
+| `emissive`, `emissiveFactor: Vec3` | `emissiveTexture`, `emissiveFactor` × `KHR_materials_emissive_strength.emissiveStrength` | `emissive` (sRGB), `emissiveFactor` |
+| `alphaMode: GltfAlphaMode` (`'OPAQUE' \| 'MASK' \| 'BLEND'`), `alphaCutoff`, `doubleSided` | the same | `alphaMode` (`'opaque' \| 'mask' \| 'blend'`), `alphaCutoff`, `doubleSided` |
+| every `TextureRef.transform` | `KHR_texture_transform` (`offset`, `rotation`, `scale`, `texCoord`) | `uvTransform: [sx, sy, ox, oy, rot]` |
+| the texture's `sampler` | `samplers[i]` | `sampler` through `gltfSamplerKind(sampler, mips)` |
+
+- `TextureRef` is `{ index, texCoord, transform }` on every slot: `index` into `doc.textures`,
+  `texCoord` the `TEXCOORD_n` set (the extension's `texCoord` wins), `transform` a
+  `GltfTextureTransform` (`offset`, `rotation` in radians, `scale`) or null. `transformUv(t, u,
+  v, out?)` applies one on the CPU the way the shader does: `uv' = offset + R(rot) · (scale ⊙
+  uv)`. The older `baseColorTexture` (index or null) and `texCoord` stay on `GltfMaterial` for
+  one release.
+- A texture referenced by any slot does not exist → `GltfError` naming the slot. A material
+  the file leaves out gets a default standard material (white, metallic 1, roughness 1, i.e. the
+  glTF defaults with no maps).
+- **sRGB and linear.** One engine `Texture` per (image, colour space): base colour and emissive
+  maps upload as `rgba8unorm-srgb`, metallic-roughness, normal and occlusion maps as
+  `rgba8unorm` (labelled `<label>:image<i>:linear`). An image used both ways is uploaded
+  twice; `scene.textures` lists them in image order, sRGB before linear. `lit: 'lit'` uploads
+  base colour maps only.
+- **Samplers.** The standard material has one sampler for its five maps, so the loader takes
+  the base colour texture's (else the first slot with a texture) and maps it to the engine's set:
+  nearest → `'nearest-mip-clamp'` / `'nearest-clamp'`, both wraps clamp → `'linear-clamp'`,
+  else `'linear-mip-repeat'` / `'linear-repeat'` (the mip variants when the file's `minFilter`
+  has a mip mode and `mips` is on). Mirror wraps repeat.
+- **Transforms.** One `KHR_texture_transform` per material, likewise from the base colour slot
+  first: the standard material applies one `uvTransform` to every map. A second slot with a
+  different transform, and `texCoord: 1` on any slot (the material samples `uv0`), are not yet
+  honoured; `TEXCOORD_1` is parsed into `GltfPrimitive.uv1` for a custom material.
+- **Tangents.** A primitive with `TANGENT` is built in `VERTEX_LAYOUT_3D_TANGENT`
+  (`interleave3dTangent`: the 12 floats of `interleave3d` then `tangent.xyzw`, `(1, 0, 0, 1)`
+  for a primitive without), so the file's frame reaches the GPU; the standard material shades
+  through `engine_perturb_normal` (screen-space derivatives) on every 3D layout, so the attribute
+  waits for a tangent-frame variant of the material (see `render/README.md`).
+- **Skinned.** With `opts.palette`, a skinned primitive is built in `VERTEX_LAYOUT_SKINNED` and
+  its material takes `skin: palette`: see *Skins and animations*. A skinned primitive's
+  `TANGENT` is dropped (the skinned layout has no tangent slot).
+- `extensionsUsed` is tolerated: the two extensions above are handled, every other one is listed
+  in `doc.warnings` as `extension ignored: X`; `extensionsRequired` throws for anything but
+  those two.
 
 ## Morph targets
 
@@ -143,12 +210,17 @@ the types below restate `AnimationClip`, `AnimationChannel` and `Skeleton` struc
 - `skeletonFromSkin(doc, skinIndex): GltfSkeleton` spans every node of the document, so a
   channel's `node` indexes the pose directly: `parents: Int16Array` (-1 for a root), `rest`
   (10 floats per node from its TRS: `tx ty tz qx qy qz qw sx sy sz`), `inverseBind` (the skin's
-  array, shared) and `joints: Uint16Array` (node per joint).
+  array, shared), `joints: Uint16Array` (node per joint) and `names` (one per node, the file's
+  `node.name` or `node<i>`, so `createSocket(skeleton, 'hand_r')` resolves by name).
 
 `loadGltf` passes `skins` and `animations` through on the `GltfScene` and sets `skin` on each
-draw. A skinned primitive is built in the skinned layout once `VERTEX_LAYOUT_SKINNED` exists in
-`render/mesh.ts`; until then it is built in `VERTEX_LAYOUT_3D` and the joints and weights stay on
-the document.
+draw. With `opts.palette` (a `SkinPalette` the game sized for the skin's joints) a skinned
+primitive is built in `VERTEX_LAYOUT_SKINNED` and every material of the scene binds the palette,
+so the game's frame is `sampleClip` → `poseToWorld` → `skinMatrices` → `palette.set(0, m)` →
+`palette.flush()` → `scene.draw(frame)` (the draw's `params[3]` is slot 0; set it for another
+instance). Without a palette the primitive is built in `VERTEX_LAYOUT_3D` and the joints and
+weights stay on the document; a material cannot take a palette later (`setBuffer` needs a slot
+declared at creation), so pass it to `loadGltf`.
 
 ## Bundles
 
@@ -238,16 +310,24 @@ manifest entry does all of this from the uris; draw a sprite from it with
 
 ## Not yet
 
-Cameras, lights, `KHR_*` extensions (`KHR_texture_transform`, `KHR_materials_*`, Draco,
-meshopt), morph targets on the GPU (the blend is CPU-side; a mesh with many targets and many
-vertices pays for it every frame its weights change), `TANGENT` and texture-coordinate morph
-deltas. `extensionsUsed` is tolerated and warned about; `extensionsRequired` throws.
+Cameras, lights, `KHR_*` extensions beyond `KHR_texture_transform` and
+`KHR_materials_emissive_strength` (the rest of `KHR_materials_*`, Draco, meshopt), `occlusionStrength`,
+a second texture coordinate set or transform per material, morph targets on the GPU (the blend is
+CPU-side; a mesh with many targets and many vertices pays for it every frame its weights change),
+`TANGENT` and texture-coordinate morph deltas. `extensionsUsed` is tolerated and warned about;
+`extensionsRequired` throws.
 
 ## Demo
 
 `harness/gltf.html` builds a GLB in the page (`harness/gltf-writer.ts`: a textured cube placed by
 a `matrix` node, an unlit-looking mossy plane with no normals placed by TRS) and draws it through
 the two calls above; `e2e/gltf.spec.ts` checks the counts and the rendered pixels on the matrix.
+`harness/gltf.html?pbr` builds the PBR scene instead (`buildPbrGlb`: a 3×3 metallic × roughness
+sphere grid from one map, a normal-mapped tile with `TANGENT` and `TEXCOORD_1`, an emissive strip
+with `KHR_materials_emissive_strength`, a `KHR_texture_transform` quad, a two-bone skinned
+cylinder with stripes and an occlusion map animated through `skeletonFromSkin` and a
+`SkinPalette`); the spec checks five materials over six maps, the skinned and tangent layouts,
+no warnings, the strip glowing and a metal sphere shading unlike a matte one.
 `harness/assets.html` loads a 12-entry manifest of every kind from an in-memory map through
 `createBundle` (`?slow` delays reads, `?fail=one` fails one, `?cancel` cancels after the first
 asset) and draws the packed atlas as sprites; `e2e/assets.spec.ts` checks progress, the error

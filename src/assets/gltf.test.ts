@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { composeTrs, decodeDataUri, GltfError, type GltfJson, parseGltf } from './gltf';
+import {
+  composeTrs,
+  decodeDataUri,
+  GltfError,
+  type GltfJson,
+  parseGltf,
+  transformUv,
+} from './gltf';
 import {
   interleaveSkinned,
   SKINNED_JOINTS_OFFSET,
@@ -583,10 +590,23 @@ describe('parseGltf (GLB)', () => {
   });
 
   it('reads materials, textures and the embedded image', () => {
+    const defaults = {
+      metallicFactor: 1,
+      roughnessFactor: 1,
+      metallicRoughness: null,
+      normal: null,
+      normalScale: 1,
+      occlusion: null,
+      occlusionStrength: 1,
+      emissive: null,
+      emissiveFactor: [0, 0, 0],
+    };
     expect(doc.materials).toEqual([
       {
+        ...defaults,
         name: 'checkered',
         baseColorFactor: [1, 0.5, 0.25, 1],
+        baseColor: { index: 0, texCoord: 0, transform: null },
         baseColorTexture: 0,
         texCoord: 0,
         doubleSided: false,
@@ -594,8 +614,10 @@ describe('parseGltf (GLB)', () => {
         alphaCutoff: 0.5,
       },
       {
+        ...defaults,
         name: 'moss',
         baseColorFactor: [0.2, 0.6, 0.3, 1],
+        baseColor: null,
         baseColorTexture: null,
         texCoord: 0,
         doubleSided: true,
@@ -604,7 +626,20 @@ describe('parseGltf (GLB)', () => {
       },
     ]);
     expect(doc.textures).toEqual([
-      { name: null, source: 0, wrapS: 33071, wrapT: 10497, magFilter: 9728 },
+      {
+        name: null,
+        source: 0,
+        wrapS: 33071,
+        wrapT: 10497,
+        magFilter: 9728,
+        sampler: {
+          magFilter: 'nearest',
+          minFilter: 'linear',
+          mipmapFilter: 'linear',
+          wrapS: 'clamp-to-edge',
+          wrapT: 'repeat',
+        },
+      },
     ]);
     const img = doc.images[0]!;
     expect(img.name).toBe('checker');
@@ -638,7 +673,7 @@ describe('parseGltf (.gltf JSON)', () => {
       textures: [{ source: 0 }, { source: 1 }],
       images: [{ uri: 'textures/wood.jpg' }, { uri: 'data:image/png;base64,AAEC' }],
       nodes: [{ mesh: 0 }],
-      extensionsUsed: ['KHR_materials_emissive_strength'],
+      extensionsUsed: ['KHR_materials_emissive_strength', 'KHR_lights_punctual'],
     };
     const doc = parseGltf({ json });
     expect([...doc.meshes[0]!.primitives[0]!.position]).toEqual([...pos]);
@@ -652,7 +687,7 @@ describe('parseGltf (.gltf JSON)', () => {
     });
     expect([...doc.images[1]!.bytes!]).toEqual([0, 1, 2]);
     expect(doc.images[1]!.mimeType).toBe('image/png');
-    expect(doc.warnings).toEqual(['extension ignored: KHR_materials_emissive_strength']);
+    expect(doc.warnings).toEqual(['extension ignored: KHR_lights_punctual']);
     // The same JSON as UTF-8 bytes parses too.
     const text = new TextEncoder().encode(JSON.stringify(json));
     const buf = text.buffer.slice(text.byteOffset, text.byteOffset + text.byteLength);
@@ -958,5 +993,211 @@ describe('parseGltf (morph targets)', () => {
       // Sparse on a base attribute stays unsupported.
       w.json.accessors![0]!.sparse = w.json.accessors![5]!.sparse;
     }, /primitive 0: accessor 0 is sparse \(supported for morph target attributes only\)/);
+  });
+});
+
+// ---------------------------------------------------------------- materials, every slot
+
+/** A quad with every material slot, two samplers, TANGENT and TEXCOORD_1. */
+function pbrGlb(opts: { normals?: boolean } = {}): GlbWriter {
+  const w = new GlbWriter();
+  const pos = w.floats([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0], 'VEC3');
+  const nrm = w.floats([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1], 'VEC3', false);
+  const uv0 = w.floats([0, 1, 1, 1, 1, 0, 0, 0], 'VEC2', false);
+  const uv1 = w.floats([0, 0, 2, 0, 2, 2, 0, 2], 'VEC2', false);
+  const tan = w.floats([1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, -1, 1, 0, 0, 1], 'VEC4', false);
+  const idx = w.indices16([0, 1, 2, 0, 2, 3]);
+  const png = w.view(FAKE_PNG);
+  w.json.images = [{ bufferView: png, mimeType: 'image/png' }];
+  w.json.samplers = [
+    { magFilter: 9728, minFilter: 9984, wrapS: 33071, wrapT: 33648 },
+    { magFilter: 9729, minFilter: 9729 },
+  ];
+  w.json.textures = [{ source: 0, sampler: 0 }, { source: 0, sampler: 1 }, { source: 0 }];
+  w.json.extensionsUsed = ['KHR_texture_transform', 'KHR_materials_emissive_strength'];
+  w.json.extensionsRequired = ['KHR_texture_transform'];
+  w.json.materials = [
+    {
+      name: 'full',
+      pbrMetallicRoughness: {
+        baseColorFactor: [0.5, 0.25, 1, 0.75],
+        baseColorTexture: {
+          index: 0,
+          extensions: {
+            KHR_texture_transform: { offset: [0.5, 0.25], rotation: 1.5, scale: [2, 3] },
+          },
+        },
+        metallicFactor: 0.25,
+        roughnessFactor: 0.75,
+        metallicRoughnessTexture: { index: 1, texCoord: 1 },
+      },
+      normalTexture: { index: 2, scale: 0.5 },
+      occlusionTexture: { index: 2, strength: 0.6 },
+      emissiveTexture: {
+        index: 1,
+        texCoord: 0,
+        extensions: { KHR_texture_transform: { scale: [4, 4], texCoord: 1 } },
+      },
+      emissiveFactor: [1, 0.5, 0],
+      extensions: { KHR_materials_emissive_strength: { emissiveStrength: 3 } },
+      alphaMode: 'BLEND',
+      doubleSided: true,
+    },
+    { name: 'bare' },
+  ];
+  w.json.meshes = [
+    {
+      primitives: [
+        {
+          attributes: {
+            POSITION: pos,
+            ...(opts.normals === false ? {} : { NORMAL: nrm }),
+            TEXCOORD_0: uv0,
+            TEXCOORD_1: uv1,
+            TANGENT: tan,
+          },
+          indices: idx,
+          material: 0,
+        },
+      ],
+    },
+  ];
+  w.json.nodes = [{ mesh: 0 }];
+  w.json.scenes = [{ nodes: [0] }];
+  w.json.scene = 0;
+  return w;
+}
+
+describe('parseGltf (materials)', () => {
+  it('reads every slot, factor, texCoord and extension of a material', () => {
+    const doc = parseGltf(pbrGlb().finish());
+    const m = doc.materials[0]!;
+    expect(m.name).toBe('full');
+    expect(m.baseColorFactor).toEqual([0.5, 0.25, 1, 0.75]);
+    expect(m.baseColor).toEqual({
+      index: 0,
+      texCoord: 0,
+      transform: { offset: [0.5, 0.25], rotation: 1.5, scale: [2, 3] },
+    });
+    expect(m.metallicFactor).toBe(0.25);
+    expect(m.roughnessFactor).toBe(0.75);
+    expect(m.metallicRoughness).toEqual({ index: 1, texCoord: 1, transform: null });
+    expect(m.normal).toEqual({ index: 2, texCoord: 0, transform: null });
+    expect(m.normalScale).toBe(0.5);
+    expect(m.occlusion).toEqual({ index: 2, texCoord: 0, transform: null });
+    expect(m.occlusionStrength).toBe(0.6);
+    // The transform's own texCoord wins; missing offset/rotation default.
+    expect(m.emissive).toEqual({
+      index: 1,
+      texCoord: 1,
+      transform: { offset: [0, 0], rotation: 0, scale: [4, 4] },
+    });
+    // emissiveFactor × KHR_materials_emissive_strength.
+    expect(m.emissiveFactor).toEqual([3, 1.5, 0]);
+    expect(m.alphaMode).toBe('BLEND');
+    expect(m.doubleSided).toBe(true);
+    // Deprecated mirrors.
+    expect(m.baseColorTexture).toBe(0);
+    expect(m.texCoord).toBe(0);
+    // Both extensions are handled: no warning, and `extensionsRequired` is accepted.
+    expect(doc.warnings).toEqual([]);
+  });
+
+  it('fills the spec defaults for a bare material', () => {
+    const m = parseGltf(pbrGlb().finish()).materials[1]!;
+    expect(m).toEqual({
+      name: 'bare',
+      baseColorFactor: [1, 1, 1, 1],
+      baseColor: null,
+      metallicFactor: 1,
+      roughnessFactor: 1,
+      metallicRoughness: null,
+      normal: null,
+      normalScale: 1,
+      occlusion: null,
+      occlusionStrength: 1,
+      emissive: null,
+      emissiveFactor: [0, 0, 0],
+      doubleSided: false,
+      alphaMode: 'OPAQUE',
+      alphaCutoff: 0.5,
+      baseColorTexture: null,
+      texCoord: 0,
+    });
+  });
+
+  it('maps samplers to GPU terms, with defaults', () => {
+    const t = parseGltf(pbrGlb().finish()).textures;
+    expect(t[0]!.sampler).toEqual({
+      magFilter: 'nearest',
+      minFilter: 'nearest',
+      mipmapFilter: 'nearest',
+      wrapS: 'clamp-to-edge',
+      wrapT: 'mirror-repeat',
+    });
+    // 9729 LINEAR minFilter: no mipmap mode.
+    expect(t[1]!.sampler).toEqual({
+      magFilter: 'linear',
+      minFilter: 'linear',
+      mipmapFilter: null,
+      wrapS: 'repeat',
+      wrapT: 'repeat',
+    });
+    // No sampler: linear, trilinear, repeat.
+    expect(t[2]!.sampler).toEqual({
+      magFilter: 'linear',
+      minFilter: 'linear',
+      mipmapFilter: 'linear',
+      wrapS: 'repeat',
+      wrapT: 'repeat',
+    });
+  });
+
+  it('transformUv applies T · R · S', () => {
+    const t = {
+      offset: [0.5, 0.25] as [number, number],
+      rotation: Math.PI / 2,
+      scale: [2, 3] as [number, number],
+    };
+    const [u, v] = transformUv(t, 1, 1);
+    // scale → (2, 3); rotate 90° ccw → (-3, 2); offset → (-2.5, 2.25).
+    expect(u).toBeCloseTo(-2.5, 6);
+    expect(v).toBeCloseTo(2.25, 6);
+    const out: [number, number] = [0, 0];
+    expect(transformUv({ offset: [0, 0], rotation: 0, scale: [1, 1] }, 0.3, 0.7, out)).toBe(out);
+    expect(out).toEqual([0.3, 0.7]);
+  });
+
+  it('reads TANGENT and TEXCOORD_1, and unwelds them with flat normals', () => {
+    const p = parseGltf(pbrGlb().finish()).meshes[0]!.primitives[0]!;
+    expect([...p.tangent!]).toEqual([1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, -1, 1, 0, 0, 1]);
+    expect([...p.uv1!]).toEqual([0, 0, 2, 0, 2, 2, 0, 2]);
+    const flat = parseGltf(pbrGlb({ normals: false }).finish()).meshes[0]!.primitives[0]!;
+    expect(flat.vertexCount).toBe(6);
+    // Index order 0 1 2 0 2 3: vertex 2's tangent (w = -1) lands at slots 2 and 4.
+    expect([...flat.tangent!.subarray(8, 12)]).toEqual([1, 0, 0, -1]);
+    expect([...flat.tangent!.subarray(16, 20)]).toEqual([1, 0, 0, -1]);
+    expect([...flat.uv1!.subarray(10, 12)]).toEqual([0, 2]);
+    const plain = parseGltf(sampleGlb().glb).meshes[0]!.primitives[0]!;
+    expect(plain.tangent).toBeNull();
+    expect(plain.uv1).toBeNull();
+  });
+
+  it('names a bad TANGENT and a missing texture as GltfError', () => {
+    const w = pbrGlb();
+    w.json.meshes![0]!.primitives[0]!.attributes.TANGENT =
+      w.json.meshes![0]!.primitives[0]!.attributes.NORMAL;
+    expect(() => parseGltf(w.finish())).toThrow(/TANGENT: VEC3, expected VEC4/);
+    const w2 = pbrGlb();
+    w2.json.materials![0]!.normalTexture = { index: 7 };
+    expect(() => parseGltf(w2.finish())).toThrow(
+      /material 0 normalTexture: texture 7 does not exist/,
+    );
+    // A required extension the parser does not read still throws.
+    const w3 = pbrGlb();
+    w3.json.extensionsRequired = ['KHR_texture_transform', 'KHR_draco_mesh_compression'];
+    expect(() => parseGltf(w3.finish())).toThrow(
+      /required extensions not supported: KHR_draco_mesh_compression/,
+    );
   });
 });

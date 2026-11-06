@@ -565,11 +565,20 @@ frame.mesh(mesh, skin, transform, { tint: [1, 0.9, 0.8, 1] });
   normal on back faces; materials never cull, so single-sided only changes the lighting.
 - Tangents come from screen-space derivatives (`dpdx` / `dpdy` of world position and uv), so
   `VERTEX_LAYOUT_3D` (which has no tangent slot) and any mesh without tangents normal-map as is.
+- `uvTransform: [sx, sy, ox, oy, rot]` (ws/gltf-materials) applies glTF's `KHR_texture_transform`
+  to every map before sampling: `uv' = offset + R(rot) · (scale ⊙ uv)`, the rotation's cosine
+  and sine packed on the CPU (`standard_uv` in the shader; two multiply-adds per map, transform
+  or not). `sampler: SamplerKind` picks the one sampler the five maps share (default
+  `'linear-mip-repeat'`). A mesh in `VERTEX_LAYOUT_3D_TANGENT` draws through the same
+  derivative path: the material compiles against every layout (its 2D pipeline is built at
+  creation), and the prelude has no per-layout tangent hook yet, so a vertex entry reading
+  `v.tangent` cannot exist until `materialPrelude` offers `engine_local_tangent(v)`; the
+  attribute is carried for that day.
 - `STANDARD_WGSL` is the fragment shader (entry `fs_main`); `STANDARD_TEXTURE_SLOTS` names the
   five texture slots (`baseColor` 0 … `emissive` 4, at `@group(1) @binding(2 + slot)`);
-  `packStandardUniforms(desc, out?)` fills the `STANDARD_UNIFORM_FLOATS` (12) block the shader
+  `packStandardUniforms(desc, out?)` fills the `STANDARD_UNIFORM_FLOATS` (20) block the shader
   reads: base rgba, metallic, roughness, normal scale, alpha cutoff, emissive rgb, flags
-  (1 double-sided, 2 mask, 4 blend). Pass the packed block to `material.setUniforms` to change a
+  (1 double-sided, 2 mask, 4 blend), uv scale and offset, the uv rotation's cos and sin. Pass the packed block to `material.setUniforms` to change a
   factor later.
 - `WGSL_PBR` is the helper text a custom material can prepend to its own WGSL:
   `engine_pbr(base, metallic, roughness, n, v, world_pos, ao, emissive) -> vec3f` (lit, fogged

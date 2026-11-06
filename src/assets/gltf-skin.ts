@@ -100,9 +100,14 @@ export interface GltfSkeleton {
   inverseBind: Float32Array;
   /** Node index per joint. */
   joints: Uint16Array;
+  /**
+   * One name per node (the file's `node.name`, `node<i>` when unnamed), so `anim`'s
+   * `createSocket(skeleton, 'hand_r')` resolves joints by name.
+   */
+  names: string[];
 }
 
-/** Build a skeleton for `doc.skins[skinIndex]` over every node of the document. */
+/** Build a skeleton for `doc.skins[skinIndex]` over every node of the document, named after them. */
 export function skeletonFromSkin(doc: GltfDocument, skinIndex: number): GltfSkeleton {
   const skin = doc.skins[skinIndex];
   if (!skin) throw new GltfError(`skin ${skinIndex} does not exist`);
@@ -110,9 +115,11 @@ export function skeletonFromSkin(doc: GltfDocument, skinIndex: number): GltfSkel
   if (n > 0x7fff) throw new GltfError(`${n} nodes exceed the Int16 parent table`);
   const parents = new Int16Array(n);
   const rest = new Float32Array(n * 10);
+  const names: string[] = new Array<string>(n);
   for (let i = 0; i < n; i++) {
     const node = doc.nodes[i]!;
     parents[i] = node.parent ?? -1;
+    names[i] = node.name ?? `node${i}`;
     const o = i * 10;
     rest[o] = node.translation[0];
     rest[o + 1] = node.translation[1];
@@ -130,5 +137,6 @@ export function skeletonFromSkin(doc: GltfDocument, skinIndex: number): GltfSkel
     rest,
     inverseBind: skin.inverseBind,
     joints: Uint16Array.from(skin.joints),
+    names,
   };
 }
