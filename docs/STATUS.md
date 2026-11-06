@@ -43,7 +43,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Animation | ws/anim | `@thunderclap/engine/anim`: clips (glTF sampler semantics), `Pose`, `Skeleton`, mixer with layers and crossfade, `poseToWorld`, `skinMatrices`; pure, tested | — | ✅ green at `01af0cf` (614 tests; e2e 477/52/1: `[phone-iphone] ui.spec menuNav` failed once, page untouched by the branch; integrator gate decides); queued |
 | 5 | Skinning | ws/skinning | `VERTEX_LAYOUT_SKINNED`, `SkinPalette`, skinning in `materialPrelude` and the shadow pass; harness `skin.html` | shadows, anim (layout) | 🔧 in progress (on ws/shadows) |
 | 5 | Standard PBR material | ws/pbr | `createStandardMaterial` (base, metal-rough, normal, occlusion, emissive; GGX) over the lights block, shadows and fog; `WGSL_PBR`; harness `pbr.html` | shadows | ✅ green at `ac073b7` (502 tests; e2e 424/36/6: all in `mesh.spec` fog/drag under load, pass alone → ws/flake-input); queued after xr-post |
-| 5 | Doc sweep 3 | ws/doc-sweep-3 | `check:docs` clean; ARCHITECTURE *Planned* lines current after wave 4 (XR lines all *Today*); root README page list and roadmap current; contradictions fixed and listed | wave 4 | 🔧 in progress |
+| 5 | Doc sweep 3 | ws/doc-sweep-3 | `check:docs` clean; ARCHITECTURE *Planned* lines current after wave 4 (XR lines all *Today*); root README page list and roadmap current; contradictions fixed and listed | wave 4 | ✅ green at `79c6e7d` (docs only; e2e 498/52/4 all fog flake); queued last (docs merge over everything) |
 | 5 | Spot lights + masks | ws/spot-lights | `SpotLight`, `Lights.spots`, per-light `layers` masks, `engine_light_accum`; harness `lights.html` | shadows | 🔧 in progress |
 | 5 | Snapshot gate | ws/snap-gate | `pnpm snap` / `snap:check`: golden PNGs for 2D harness pages on `desktop-1280`, E-008 tolerance, in `test:e2e`; integrate brief step | — | 🔧 in progress |
 | 5 | Pick | ws/pick | `sphereTester`, `obbTester`, `meshTester` (bounds reject + Möller–Trumbore), `transformRayInto`; harness `pick.html` | rays, cull | 🔧 in progress |
@@ -74,6 +74,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - Root motion extraction and IK when a game names them; attachment sockets reading `poseToWorld` output (ws/anim wish; sockets brief after skinning lands).
 - `SceneTarget.external` allocates an unused layer-sized emissive in XR scene mode (ws/xr-post wish for `scene-target.ts`).
 - A shared default-texture registry and a mip sampler (`'linear-mip-repeat'`) for materials (ws/pbr wish); a vertex layout without normals (8 floats) for trails (ws/trails wish).
+- Stale code comments listed in the ws/doc-sweep-3 report (host/types.ts, core/game.ts, assets/gltf-load.ts, platform/README 'No dependencies', post/README bgra8unorm, input types/pointer-sources/pointer-router/xr-source, ui styles/overlay, render material/lights/wgsl/scene-target/shadow/renderer/frame): a ws/comment-sweep brief after wave 5 merges.
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
