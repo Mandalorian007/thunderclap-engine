@@ -329,8 +329,8 @@ describe('Lights block', () => {
       const label = (buffer as { label?: string }).label ?? '';
       if (label.startsWith('engine-globals')) {
         const f32 = new Float32Array(data as Float32Array);
-        // The lights block follows the 8-float globals and the 64-float camera at byte 512.
-        const o = 128;
+        // The lights block follows the 8-float globals and the 128-float camera at byte 768.
+        const o = 192;
         expect(f32.length).toBe(o + LIGHTS_BLOCK_FLOATS);
         blocks.push({ f32: f32.subarray(o), u32: new Uint32Array(f32.buffer).subarray(o) });
       } else if (label.startsWith('instances')) {

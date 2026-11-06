@@ -70,7 +70,10 @@ frame.drawable(rain);        // under a depth camera (Camera.perspective)
   depth (`depthTarget ?? renderer.target`, its `SceneTarget.depth`) into the system's own
   `depth32float` texture and the fragment fades near it. The copy is the previous frame's
   depth; draw the system on its own layer in a second view of the same camera for same-frame
-  depth. Without a depth camera or before the first depth frame it is skipped.
+  depth. Without a depth camera or before the first depth frame it is skipped. With
+  `readsDepth: true` (ws/render-hooks) the system makes no copy of its own: the renderer splits
+  the view's scene pass and hands it this frame's opaque depth through `afterOpaque` (see the
+  render README, "Depth hooks"); in a view that does not split the fade is off.
 
 - `ParticleEmitter(system, params, rate = 0)`: continuous emission at `rate` per second while
   `active`, plus `burst(count, overrides?)`.
@@ -389,6 +392,10 @@ const y = waterHeight(water, boat.x, boat.z); // the surface under something flo
   second view of the same camera after the opaque one (`camera.layers` switched, water on its
   own layer, see `harness/water.ts`): its copy then holds this frame's opaque depth. Without a
   depth texture or under a camera without depth the surface is deep everywhere and foam is off.
+  With `readsDepth: true` (ws/render-hooks, `harness/water.html?hook=1`) the water makes no
+  copy: the renderer splits the view's scene pass at the water and hands it this frame's opaque
+  depth through `afterOpaque`, so one view gives a true shoreline; in a view that does not split
+  the surface is deep everywhere. Decals will use the same hook when they land (ws/decals).
 - Uploads: one params block (`WATER_PARAMS_FLOATS` floats) per frame in `prepare`, plus the
   depth copy pass. No allocation per frame. `destroy()` releases the mesh, buffer and copy.
 - `WATER_WGSL` (the surface, `WGSL_GLOBALS` + `WGSL_LIGHTS` + `WGSL_NOISE` + `WGSL_PBR`, group 1

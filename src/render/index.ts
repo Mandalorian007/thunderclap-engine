@@ -3,6 +3,7 @@ export type { BlendMode } from './blend';
 export type { CameraPoint, CameraRect } from './camera';
 export {
   ALL_LAYERS,
+  CAMERA_INV_VIEW_PROJ_OFFSET,
   Camera,
   FRUSTUM_FLOATS,
   ORTHO2D_HALF_DEPTH,
@@ -16,7 +17,7 @@ export {
 } from './dynamic-resolution';
 export type { Flipbook, FlipbookOptions, UvRect } from './flipbook';
 export { atlasFrames, createFlipbook } from './flipbook';
-export type { Drawable, DrawParams, InstanceBatch, InstanceParams } from './frame';
+export type { Drawable, DrawParams, InstanceBatch, InstanceParams, ViewInfo } from './frame';
 export { Frame, INSTANCE_PARAM_FLOATS, SKIN_PARAM, writeInstanceParams } from './frame';
 export type { FullscreenEncodeOptions, FullscreenPassDesc } from './fullscreen';
 export { FullscreenPass } from './fullscreen';
