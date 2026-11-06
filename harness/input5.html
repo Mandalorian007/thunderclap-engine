@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>ThunderClap engine input-5 demo</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #0b0e16; overflow: hidden; }
+      #root { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+      canvas { width: min(100vw, 177.78vh); aspect-ratio: 16 / 9; background: #141a28; display: block; touch-action: none; }
+      #panel {
+        position: fixed; top: 8px; left: 8px; padding: 6px 8px; pointer-events: none;
+        font: 12px/1.5 monospace; color: #dde; background: rgba(10, 14, 24, 0.8); white-space: pre;
+      }
+      #pad { position: fixed; left: 0; top: 0; width: 800px; height: 400px; opacity: 0; pointer-events: none; }
+    </style>
+  </head>
+  <body>
+    <main id="root"><canvas width="960" height="540"></canvas></main>
+    <aside id="panel"></aside>
+    <div id="pad"></div>
+    <script type="module" src="./input5.ts"></script>
+  </body>
+</html>

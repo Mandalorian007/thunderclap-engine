@@ -156,12 +156,20 @@ test('rotate card: shown on an upright phone, gone when it turns back', async ({
 });
 
 async function padPress(page: Page, button: number): Promise<void> {
-  const before = (await read(page)).ticks;
-  await page.evaluate((b) => window.__harnessUi?.pad(b, true), button);
-  await expect.poll(async () => (await read(page)).ticks).toBeGreaterThan(before + 2);
-  const held = (await read(page)).ticks;
-  await page.evaluate((b) => window.__harnessUi?.pad(b, false), button);
-  await expect.poll(async () => (await read(page)).ticks).toBeGreaterThan(held + 2);
+  // Set the button and read the tick in one evaluate: read in a separate round trip, the ticks
+  // that pass between the two under load would count as held ticks the pad never saw.
+  const set = (pressed: boolean) =>
+    page.evaluate(
+      ([b, p]) => {
+        window.__harnessUi?.pad(b, p);
+        return window.__harnessUi?.state.ticks ?? 0;
+      },
+      [button, pressed] as [number, boolean],
+    );
+  const pressedAt = await set(true);
+  await expect.poll(async () => (await read(page)).ticks).toBeGreaterThan(pressedAt + 2);
+  const releasedAt = await set(false);
+  await expect.poll(async () => (await read(page)).ticks).toBeGreaterThan(releasedAt + 2);
 }
 
 test('menuNav: the d-pad walks the menu and A clicks; arrows move, Enter clicks once', async ({

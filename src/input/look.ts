@@ -1,4 +1,6 @@
 import { Emitter } from '../core/events';
+import type { GyroSource } from './gyro';
+import { type StickOptions, shapeStick } from './input';
 import {
   createPointerDispatcher,
   POINTER_PRIORITY,
@@ -6,7 +8,7 @@ import {
   type PointerDispatcher,
   type PointerRecord,
 } from './pointer-dispatch';
-import type { GamepadLike } from './types';
+import type { GamepadLike, PointerTransform } from './types';
 
 /** Where the move stick lives on a touch screen. */
 export type MoveZone = 'left' | 'right' | 'none';
@@ -100,7 +102,22 @@ export interface LookOptions {
    * at runtime.
    */
   mode?: LookMode;
+  /** Gyro aim (ws/input-5): its delta is added to the look every tick. See `createGyroSource`. */
+  gyro?: GyroSource;
+  /** The tap `onTap` reports (ws/input-5). */
+  tap?: LookTapOptions;
 }
+
+/** `Look.onTap` thresholds (ws/input-5). */
+export interface LookTapOptions {
+  /** Most CSS px a pointer may travel (summed) and still tap. Default 10, the gestures' pan threshold. */
+  maxMove?: number;
+  /** Longest press, ms on the look's clock, that still taps. Default 450, the gestures' long press. */
+  maxMs?: number;
+}
+
+/** A `Look.onTap` listener: (x, y) in the router's units (through the pointer transform). */
+export type LookTapListener = (x: number, y: number, device: 'mouse' | 'touch' | 'pen') => void;
 
 /** `Look` events. */
 export interface LookEvents {
@@ -181,7 +198,28 @@ export class Look {
   zoomPinch: boolean;
   zoomPad: LookZoomPad;
   zoomStepPx: number;
+  /** Gyro aim added to the look each tick (`LookOptions.gyro`), or null. */
+  gyro: GyroSource | null;
+  /** `onTap` thresholds. */
+  tapMaxMove: number;
+  tapMaxMs: number;
+  /**
+   * Client → game-space mapping for `onTap` coordinates; `Input.setLook` and
+   * `Input.setPointerTransform` keep it in step with the input's. `null`: the dispatcher's units.
+   */
+  pointerTransform: PointerTransform | null = null;
 
+  private readonly tapFns: LookTapListener[] = [];
+  /** The pointer that may still tap, or null. */
+  private tapId: number | null = null;
+  private tapDevice: 'mouse' | 'touch' | 'pen' = 'mouse';
+  private tapAt = 0;
+  private tapLastX = 0;
+  private tapLastY = 0;
+  private tapTravel = 0;
+  private readonly gyroOut = { dx: 0, dy: 0 };
+  private readonly stickOut: [number, number] = [0, 0];
+  private readonly stickOpts: StickOptions = { deadzone: 0, shape: 'scaledRadial' };
   private readonly pad: number | undefined;
   private readonly getGamepads: () => readonly (GamepadLike | null)[];
   private readonly now: () => number;
@@ -235,6 +273,24 @@ export class Look {
     this.now = opts.now ?? defaultNow;
     this.lockOnFirstClick = opts.lockOnFirstClick ?? false;
     this.modeValue = opts.mode ?? 'locked';
+    this.gyro = opts.gyro ?? null;
+    this.tapMaxMove = opts.tap?.maxMove ?? 10;
+    this.tapMaxMs = opts.tap?.maxMs ?? 450;
+  }
+
+  /**
+   * Call `fn` on a tap (ws/input-5): a primary-button press and release that travels at most
+   * `tap.maxMove` px within `tap.maxMs`, on a pointer the look took (an orbit-mode mouse or pen,
+   * a look-drag touch) or, in locked mode, on any pointer over the attached element except the
+   * move-stick touch. A second finger landing cancels it. (x, y) are in the router's units (the
+   * pointer transform's game space). Returns the remover.
+   */
+  onTap(fn: LookTapListener): () => void {
+    this.tapFns.push(fn);
+    return () => {
+      const i = this.tapFns.indexOf(fn);
+      if (i >= 0) this.tapFns.splice(i, 1);
+    };
   }
 
   /** The look mode (`LookOptions.mode`); change it with `setMode`. */
@@ -288,6 +344,9 @@ export class Look {
     if (this.blocked()) {
       look.dx = look.dy = move.x = move.y = this.zoom = 0;
       this.mouseX = this.mouseY = this.touchX = this.touchY = this.zoomAcc = 0;
+      // The gyro's turn while blocked is dropped, not saved up.
+      this.gyro?.take(this.gyroOut);
+      this.tapId = null;
       this.voidTouches();
       this.release();
       return;
@@ -302,14 +361,26 @@ export class Look {
     let zoom = this.zoomAcc;
     this.zoomAcc = 0;
 
+    const g = this.gyro;
+    if (g) {
+      const o = g.take(this.gyroOut);
+      dx += o.dx;
+      dy += o.dy;
+    }
+
     let mx = 0;
     let my = 0;
     const s = this.stick;
+    // Sticks go through `shapeStick` (scaled radial, the same numbers as before ws/input-5).
+    const so = this.stickOut;
+    const opts = this.stickOpts;
     if (s.active && this.radius > 0) {
       const ox = (s.x - s.originX) / this.radius;
       const oy = (s.originY - s.y) / this.radius;
-      mx = deadzoneScale(ox, oy, this.deadzone, 0);
-      my = deadzoneScale(ox, oy, this.deadzone, 1);
+      opts.deadzone = this.deadzone;
+      shapeStick(ox, oy, so, opts);
+      mx = so[0];
+      my = so[1];
     }
 
     const p = this.padState();
@@ -317,19 +388,22 @@ export class Look {
       const a = p.axes;
       const lx = a[0] ?? 0;
       const ly = -(a[1] ?? 0);
-      mx += deadzoneScale(lx, ly, this.padDeadzone, 0);
-      my += deadzoneScale(lx, ly, this.padDeadzone, 1);
+      opts.deadzone = this.padDeadzone;
+      shapeStick(lx, ly, so, opts);
+      mx += so[0];
+      my += so[1];
       const rx = a[2] ?? 0;
       const ry = -(a[3] ?? 0);
       const k = this.padSensitivity * dt;
-      dx += deadzoneScale(rx, ry, this.padDeadzone, 0) * k;
+      shapeStick(rx, ry, so, opts);
+      dx += so[0] * k;
       const zp = this.zoomPad;
       if (zp === 'rightStickY') {
         // The stick's vertical axis is the zoom, so the look pitches only from other devices.
-        zoom += deadzoneScale(rx, ry, this.padDeadzone, 1) * PAD_ZOOM_PER_S * dt;
+        zoom += so[1] * PAD_ZOOM_PER_S * dt;
       } else {
         // Stick up looks up (dy > 0) unless inverted.
-        dy += deadzoneScale(rx, ry, this.padDeadzone, 1) * k * (this.invertY ? -1 : 1);
+        dy += so[1] * k * (this.invertY ? -1 : 1);
       }
       if (zp === 'shoulders') {
         const b = p.buttons;
@@ -493,6 +567,7 @@ export class Look {
   /** Drop every touch (blur, hidden tab, blocked). Fingers still down are ignored until lifted. */
   cancelAll(): void {
     this.voidTouches();
+    this.tapId = null;
     this.orbitUp();
     this.mouseX = this.mouseY = this.touchX = this.touchY = this.zoomAcc = 0;
   }
@@ -619,6 +694,7 @@ export class Look {
    */
   private readonly consumer: PointerConsumer = {
     pointerDown: (p: PointerRecord) => {
+      this.tapDown(p);
       if (p.device !== 'touch') {
         if (this.modeValue === 'orbit') {
           if (this.lockOnFirstClick && !this.warnedLockOnFirstClick) {
@@ -639,21 +715,67 @@ export class Look {
         inZone = this.moveZone === 'left' ? left : !left;
       }
       this.touchDown(p.id, p.clientX, p.clientY, inZone);
+      // The move stick never taps.
+      if (p.id === this.moveId && p.id === this.tapId) this.tapId = null;
     },
     pointerMove: (p: PointerRecord) => {
+      if (p.id === this.tapId) this.tapMove(p);
       if (p.device === 'touch') this.touchMove(p.id, p.clientX, p.clientY);
       else if (!this.orbitFromInput && p.primary) this.orbitMove(p.clientX, p.clientY);
     },
     pointerUp: (p: PointerRecord) => {
+      if (p.id === this.tapId) this.tapUp(p);
       if (p.device === 'touch') this.touchUp(p.id);
       else if (!this.orbitFromInput && p.button <= 0) this.orbitUp();
     },
     pointerCancel: (p: PointerRecord) => {
+      if (p.id === this.tapId) this.tapId = null;
       if (p.device === 'touch') this.touchUp(p.id);
       else if (!this.orbitFromInput) this.orbitUp();
     },
     cancelAll: () => this.cancelAll(),
   };
+
+  /** A pointer went down: it may tap if it is the only one and the look takes it (see `onTap`). */
+  private tapDown(p: PointerRecord): void {
+    if (this.tapId !== null) {
+      // A second pointer: neither taps.
+      this.tapId = null;
+      return;
+    }
+    if (!p.primary || p.button !== 0 || this.tapFns.length === 0 || this.blocked()) return;
+    this.tapId = p.id;
+    this.tapDevice = p.device;
+    this.tapAt = this.now();
+    this.tapLastX = p.x;
+    this.tapLastY = p.y;
+    this.tapTravel = 0;
+  }
+
+  private tapMove(p: PointerRecord): void {
+    this.tapTravel += Math.hypot(p.x - this.tapLastX, p.y - this.tapLastY);
+    this.tapLastX = p.x;
+    this.tapLastY = p.y;
+    if (this.tapTravel > this.tapMaxMove) this.tapId = null;
+  }
+
+  private tapUp(p: PointerRecord): void {
+    this.tapMove(p);
+    const id = this.tapId;
+    this.tapId = null;
+    if (id === null || this.now() - this.tapAt > this.tapMaxMs || this.blocked()) return;
+    let x = p.x;
+    let y = p.y;
+    const t = this.pointerTransform;
+    if (t) {
+      const m = t(p.x, p.y);
+      if (!m) return;
+      x = m.x;
+      y = m.y;
+    }
+    const fns = this.tapFns;
+    for (let i = 0; i < fns.length; i++) fns[i]!(x, y, this.tapDevice);
+  }
 
   /** Stop listening, release the lock and drop every touch. */
   detach(): void {
@@ -674,16 +796,4 @@ function anyHeld(held: (code: string) => boolean, codes: readonly string[] | und
   if (!codes) return 0;
   for (let i = 0; i < codes.length; i++) if (held(codes[i]!)) return 1;
   return 0;
-}
-
-/**
- * A stick (x, y) through a radial deadzone, rescaled so the edge of the deadzone is 0 and full
- * deflection 1; returns component `axis` (0 = x, 1 = y). Allocation-free.
- */
-function deadzoneScale(x: number, y: number, dz: number, axis: 0 | 1): number {
-  const m = Math.hypot(x, y);
-  if (m <= dz || m === 0) return 0;
-  const clamped = Math.min(1, m);
-  const k = (dz >= 1 ? 0 : (clamped - dz) / (1 - dz)) / m;
-  return (axis === 0 ? x : y) * k;
 }

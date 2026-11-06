@@ -12,9 +12,18 @@
  * blends them through `anim`'s `createMorphBlender` into a second buffer `draw` uploads with
  * `Mesh.update` when `scene.morph(node).apply()` reported a change. Meshes without targets keep
  * nothing on the CPU.
+ *
+ * Lights and cameras: `scene.lights` holds the file's `KHR_lights_punctual` lights as the
+ * render module's `DirectionalLight` / `PointLight` / `SpotLight` records (push them into
+ * `renderer.lights`); `scene.cameras` the file's cameras, which `applyGltfCamera` sets on a
+ * `Camera`. Material variants (`KHR_materials_variants`): every material is created at load;
+ * `scene.setVariant(name)` swaps the material of each mapped draw in place.
  */
 import { createMorphBlender, type MorphBlender } from '../anim/morph';
+import { mat4 } from '../core/math';
+import type { Camera } from '../render/camera';
 import type { Frame, InstanceParams } from '../render/frame';
+import type { DirectionalLight, PointLight, SpotLight } from '../render/lights';
 import type { Material } from '../render/material';
 import {
   Mesh,
@@ -33,6 +42,7 @@ import type { SamplerKind, Texture } from '../render/texture';
 import { Transform } from '../render/transform';
 import {
   type GltfAnimation,
+  type GltfCamera,
   type GltfDocument,
   GltfError,
   type GltfImage,
@@ -41,6 +51,7 @@ import {
   type GltfSampler,
   type GltfSkin,
   type GltfTextureTransform,
+  type GltfVariantMapping,
   type TextureRef,
 } from './gltf';
 import { interleaveSkinned } from './gltf-skin';
@@ -91,6 +102,25 @@ export interface LoadGltfOptions {
    * and Workers without image decoding pass their own.
    */
   decodeImage?: (bytes: Uint8Array, mimeType: string | null) => Promise<GltfImageSource>;
+  /**
+   * Multiplies glTF light intensity on its way into `scene.lights` (default 1). The engine's
+   * light colours are unitless linear RGB; a file's candela (point, spot) and lux
+   * (directional) usually want a scale well below 1.
+   */
+  lightScale?: number;
+}
+
+/**
+ * The file's `KHR_lights_punctual` lights as the render module's records, in scene order
+ * (`GltfDocument.lights` keeps glTF's units). `color` is glTF `color × intensity × lightScale`;
+ * `radius` is `range`, or `16·√(intensity × lightScale)` without one (where an inverse-square
+ * light has fallen to 1/256); spot `innerAngle` / `outerAngle` are the cone half-angles.
+ * Push them into `renderer.lights.points` / `.spots`, or copy one into `renderer.lights.sun`.
+ */
+export interface GltfSceneLights {
+  directional: DirectionalLight[];
+  points: PointLight[];
+  spots: SpotLight[];
 }
 
 /** One draw of the scene: a primitive's mesh placed by its node's transform. */
@@ -108,6 +138,19 @@ export interface GltfSceneNode {
   params: InstanceParams;
   /** The node's skin (index into `GltfScene.skins`), or null for a static draw. */
   skin: number | null;
+  /**
+   * The glTF material the draw uses (index into `GltfDocument.materials` and
+   * `GltfScene.materials`), or null for the default; `setVariant` changes it.
+   */
+  materialIndex: number | null;
+}
+
+/** One draw whose primitive has `KHR_materials_variants` mappings. */
+interface VariantDraw {
+  draw: GltfSceneNode;
+  /** The primitive's own material (no variant, or a variant no mapping names). */
+  base: number | null;
+  mappings: readonly GltfVariantMapping[];
 }
 
 /**
@@ -183,11 +226,21 @@ export class GltfScene {
   readonly animations: readonly GltfAnimation[];
   /** One per mesh that carries morph targets, in mesh order. */
   readonly morphs: readonly GltfMorph[] = [];
+  /** The file's lights as render records (`GltfSceneLights`; empty lists when it has none). */
+  readonly lights: GltfSceneLights = { directional: [], points: [], spots: [] };
+  /** The file's cameras placed by their nodes (`applyGltfCamera` sets one on a `Camera`). */
+  readonly cameras: readonly GltfCamera[];
+  /** The file's `KHR_materials_variants` names (`setVariant` takes one). */
+  readonly variants: readonly string[];
   /** Whether the default material or textures were created here (and so destroyed here). */
   private readonly ownsMaterials: boolean;
   private readonly morphByMesh = new Map<number, GltfMorph>();
   private readonly morphEntries: MorphEntry[] = [];
   private readonly doc: GltfDocument;
+  private readonly variantDraws: VariantDraw[] = [];
+  private resolveMaterial: ((index: number | null) => Material) | null = null;
+  private litParams = false;
+  private activeVariant: string | null = null;
 
   constructor(doc: GltfDocument, ownsMaterials: boolean, palette: SkinPalette | null = null) {
     this.doc = doc;
@@ -197,6 +250,58 @@ export class GltfScene {
     this.ownsMaterials = ownsMaterials;
     this.palette = palette;
     for (const m of doc.materials) this.materialNames.push(m.name);
+    this.cameras = doc.cameras;
+    this.variants = doc.variants;
+  }
+
+  /** The active material variant, or null for each primitive's own material. */
+  get variant(): string | null {
+    return this.activeVariant;
+  }
+
+  /**
+   * Switch every draw with `KHR_materials_variants` mappings to the material `name` binds (a
+   * draw no mapping of `name` covers goes back to its own material); null restores every
+   * draw's own material. Swaps `material` (and `materialIndex`) in place: no material is
+   * created. Throws `GltfError` listing the file's variants for an unknown name.
+   */
+  setVariant(name: string | null): this {
+    let v = -1;
+    if (name !== null) {
+      v = this.variants.indexOf(name);
+      if (v < 0) {
+        const known = this.variants.length > 0 ? this.variants.join(', ') : 'none';
+        throw new GltfError(`variant "${name}" unknown (variants: ${known})`);
+      }
+    }
+    for (const vd of this.variantDraws) {
+      let mi = vd.base;
+      if (v >= 0) {
+        for (const m of vd.mappings) {
+          if (m.variants.includes(v)) {
+            mi = m.material;
+            break;
+          }
+        }
+      }
+      vd.draw.materialIndex = mi;
+      if (this.resolveMaterial) vd.draw.material = this.resolveMaterial(mi);
+      if (this.litParams)
+        writeLitParams(vd.draw.params, mi === null ? undefined : this.doc.materials[mi]);
+    }
+    this.activeVariant = name;
+    return this;
+  }
+
+  /** @internal The loader: how `setVariant` finds a material, and which draws it touches. */
+  bindVariants(
+    resolve: ((index: number | null) => Material) | null,
+    litParams: boolean,
+    draws: VariantDraw[],
+  ): void {
+    this.resolveMaterial = resolve;
+    this.litParams = litParams;
+    for (const d of draws) this.variantDraws.push(d);
   }
 
   /**
@@ -437,6 +542,7 @@ export async function loadGltf(
   });
 
   // Draws: every node in the default scene with a mesh, one per primitive.
+  const variantDraws: VariantDraw[] = [];
   for (const ni of doc.sceneNodes) {
     const n = doc.nodes[ni]!;
     if (n.mesh === null) continue;
@@ -447,17 +553,73 @@ export async function loadGltf(
         opts.material ??
         (p.material !== null ? materialFor.get(p.material) : undefined) ??
         defaultMaterial();
-      scene.nodes.push({
+      const draw: GltfSceneNode = {
         node: ni,
         transform: scene.transforms[ni]!,
         mesh: meshIndex[mi]![pi]!,
         material,
         params: standard ? paramsStandard() : paramsFor(gm),
         skin: n.skin,
-      });
+        materialIndex: p.material,
+      };
+      scene.nodes.push(draw);
+      if (p.variants.length > 0) {
+        variantDraws.push({ draw, base: p.material, mappings: p.variants });
+      }
     });
   }
+  scene.bindVariants(
+    opts.material
+      ? null
+      : (i) => (i !== null ? materialFor.get(i) : undefined) ?? defaultMaterial(),
+    !standard && !opts.material,
+    variantDraws,
+  );
+
+  // Lights: glTF units → the render module's records.
+  const scale = opts.lightScale ?? 1;
+  for (const l of doc.lights) {
+    const k = l.intensity * scale;
+    const color = new Float32Array([l.color[0] * k, l.color[1] * k, l.color[2] * k]);
+    const radius = l.range ?? 16 * Math.sqrt(Math.max(k, 0));
+    if (l.type === 'directional') {
+      scene.lights.directional.push({ dir: new Float32Array(l.direction), color });
+    } else if (l.type === 'point') {
+      scene.lights.points.push({ position: new Float32Array(l.position), color, radius });
+    } else {
+      scene.lights.spots.push({
+        position: new Float32Array(l.position),
+        direction: new Float32Array(l.direction),
+        color,
+        radius,
+        innerAngle: l.innerConeAngle ?? 0,
+        outerAngle: l.outerConeAngle ?? Math.PI / 4,
+      });
+    }
+  }
   return scene;
+}
+
+const orthoScratch = new Float32Array(16);
+
+/**
+ * Set `camera` to a glTF camera: its projection (perspective `yfov`, the file's `aspectRatio`
+ * or `aspect`, `znear`, `zfar` or an infinite far plane; orthographic `xmag` / `ymag` half
+ * extents and its depth range) and its node's view (`GltfCamera.view`). Turns depth test,
+ * depth write and culling on. Allocation-free; returns `camera`.
+ */
+export function applyGltfCamera(camera: Camera, c: GltfCamera, aspect: number): Camera {
+  if (c.type === 'perspective') {
+    camera.setPerspective(c.yfov, c.aspectRatio ?? aspect, c.znear, c.zfar ?? Infinity);
+  } else {
+    const far = c.zfar ?? c.znear + 1;
+    camera.setProjection(mat4.ortho(orthoScratch, -c.xmag, c.xmag, -c.ymag, c.ymag, c.znear, far));
+    camera.depthTest = true;
+    camera.depthWrite = true;
+    camera.cull = true;
+  }
+  camera.setView(c.view);
+  return camera;
 }
 
 function createLitMaterial(
@@ -520,16 +682,28 @@ function standardDesc(
     if (!transform) transform = ref.transform;
   }
   if (sampler) d.sampler = gltfSamplerKind(sampler, mips);
-  if (transform) {
-    d.uvTransform = [
-      transform.scale[0],
-      transform.scale[1],
-      transform.offset[0],
-      transform.offset[1],
-      transform.rotation,
-    ];
+  if (transform) d.uvTransform = uvTransformOf(transform);
+  // Per-map texCoord and transform, and the occlusion strength (ws/render-4).
+  if (gm.name) d.name = gm.name;
+  if (gm.occlusionStrength !== 1) d.occlusionStrength = gm.occlusionStrength;
+  const names = ['baseColor', 'metallicRoughness', 'normal', 'occlusion', 'emissive'] as const;
+  for (let k = 0; k < slots.length; k++) {
+    const ref = slots[k];
+    if (!ref) continue;
+    const texCoord = ref.texCoord === 1 ? 1 : 0;
+    const own = ref.transform && ref.transform !== transform;
+    if (texCoord === 0 && !own) continue;
+    d.maps ??= {};
+    d.maps[names[k]!] = {
+      texCoord,
+      ...(own ? { uvTransform: uvTransformOf(ref.transform!) } : {}),
+    };
   }
   return d;
+}
+
+function uvTransformOf(t: GltfTextureTransform): number[] {
+  return [t.scale[0], t.scale[1], t.offset[0], t.offset[1], t.rotation];
 }
 
 /**
@@ -552,9 +726,17 @@ function paramsStandard(): InstanceParams {
 }
 
 function paramsFor(gm: GltfMaterial | undefined): InstanceParams {
+  const p = { tint: new Float32Array(4), params: new Float32Array(4) };
+  writeLitParams(p, gm);
+  return p;
+}
+
+/** The lit material's per-draw values for `gm`: base colour factor as tint, cutoff as `x`. */
+function writeLitParams(p: InstanceParams, gm: GltfMaterial | undefined): void {
+  // The loader made both arrays (`paramsFor`); a game that replaced them keeps its own.
   const tint = gm ? gm.baseColorFactor : [1, 1, 1, 1];
-  const cutoff = gm?.alphaMode === 'MASK' ? gm.alphaCutoff : 0;
-  return { tint: new Float32Array(tint), params: new Float32Array([cutoff, 0, 0, 0]) };
+  if (p.tint instanceof Float32Array) p.tint.set(tint);
+  if (p.params instanceof Float32Array) p.params[0] = gm?.alphaMode === 'MASK' ? gm.alphaCutoff : 0;
 }
 
 /** `x, y, z, nx, ny, nz, u, v, r, g, b, a` per vertex (the `VERTEX_LAYOUT_3D` float order). */

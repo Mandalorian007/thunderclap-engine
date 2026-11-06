@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { findPath } from './astar';
 import { createFlowField } from './flow';
 import { createNavGrid, type NavPoint } from './grid';
+import { createNavPath } from './path';
 
 const out: NavPoint = { x: 0, z: 0 };
 
@@ -227,5 +229,37 @@ describe('FlowField neighbourhood, edge costs, staleness and goals', () => {
     expect(f.distance(0, 0)).toBe(6);
     f.direction(4, 0, out);
     expect(out).toEqual({ x: 1, z: 0 });
+  });
+});
+
+describe('FlowField step cost (ws/nav-4)', () => {
+  it('writes the step cost next to the direction, Infinity off the field', () => {
+    const g = createNavGrid({
+      width: 3,
+      height: 1,
+      cellSize: 1,
+      neighbours: 4,
+      cost: (x) => (x === 1 ? 3 : 1),
+      edgeCost: (_from, to) => (to === 1 ? 2 : 0),
+    });
+    const f = createFlowField(g, { goals: [0] });
+    const d = { x: 0, z: 0, cost: -1 };
+    // From cell 2 into cell 1: length 1 × cost 3 + hook 2.
+    f.direction(2, 0, d);
+    expect(d.x).toBe(-1);
+    expect(d.cost).toBe(5);
+    expect(f.stepCosts[2]).toBe(5);
+    f.direction(1, 0, d);
+    expect(d.cost).toBe(1);
+    f.direction(0, 0, d);
+    expect(d.cost).toBe(0);
+    f.directionAt(-5, 0, d);
+    expect(d.cost).toBe(Infinity);
+    // The cost matches findPath: sum of steps along the field equals the path's cost.
+    const path = createNavPath();
+    expect(findPath(g, { x: 2, y: 0 }, { x: 0, y: 0 }, path)).toBe(true);
+    expect(path.length).toBe(3);
+    expect(f.stepCosts[2]! + f.stepCosts[1]!).toBe(6);
+    expect(f.distance(2, 0)).toBe(6);
   });
 });

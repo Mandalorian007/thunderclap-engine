@@ -1,6 +1,7 @@
 # engine/core
 
-The game loop, the scene stack, a typed event emitter and 4×4 matrix helpers. `createGame`
+The game loop, the scene stack (with async preload), a typed event emitter, 4×4 matrix helpers and
+the deterministic game utilities: seeded random, noise, a scheduler and pools. `createGame`
 (root `@thunderclap/engine`) wires these together; a game reaches for this subpath when it needs
 one of them on its own (a tool, a test, a second loop).
 
@@ -65,6 +66,65 @@ done the input holds its last state. Both options keep the rest of the pipeline 
   deferred until that call returns. `createGame` exposes one as `ctx.stack` and renders it with
   `ctx.camera` (or with `ctx.xr.surface.head` while an XR session runs).
 
+## Scenes: preload and transitions
+
+- `Scene.preload?(ctx)`: an optional async hook. `push(scene)` and `replace(scene)` call it before
+  touching the stack and return a `Promise<void>` that resolves once the scene has entered (at
+  once for a scene without `preload`). While it is pending, `stack.transitioning` is true, the old
+  top keeps updating and rendering, and later `push`/`pop`/`replace`/`clear` calls queue behind it
+  in order. A rejected (or throwing) preload rejects the promise and leaves the stack unchanged; the
+  queue carries on. Ops issued inside `update` are still deferred to the end of that call.
+- `stack.onTransition(fn)` returns an unsubscribe. `TransitionListener(from, to, phase)` gets
+  `TransitionPhase` `'preload'` (a preload started), `'enter'` (a push or replace entered `to`)
+  or `'exit'` (a pop, replace or clear removed `from`; `to` is the new top). Hang a loading screen
+  on it: open `ctx.ui.loading()` on `'preload'`, `done()` on `'enter'` (harness/core2.html
+  `?preload`). Existing callers that ignore the returned promise behave as before.
+
+## Random
+
+- `createRandom(seed)`: a `Random` on xoshiro128** (state expanded from the seed by splitmix32).
+  `Seed` is a number or a string (hashed with FNV-1a over UTF-8), so `createRandom('level-3')` is
+  the same sequence in every browser and on the server. `next()` in [0, 1), `int(min, max)`
+  inclusive and unbiased, `float(min, max)`, `bool(p)`, `pick(list)`, `weighted(weights)` (the
+  index, -1 when the sum is not positive), `shuffle(list)` in place, `gaussian(mean, sd)`,
+  `unitVec2(out)` / `unitVec3(out)` (`NumberSink`: any writable numeric array, `Float32Array`
+  included). None of them allocate.
+- `fork(name)`: an independent child stream keyed by the parent's seed and `name` (not by how far
+  the parent has been drawn), so `world.fork('loot')` stays the same when another system draws
+  more. `key` is the stream's 32-bit seed key; `state` reads and writes the four state words (a
+  copy) for saves and replays.
+
+## Noise
+
+- `createNoise(seed)`: a `Noise` with `perlin2`, `perlin3` (improved Perlin), `simplex2`,
+  `simplex3` and `value2`, `value3`, each a `NoiseFn` `(x, y, z) => number` in [-1, 1] (2D ones
+  ignore `z`) from one seeded permutation table. Same seed, same field.
+- `fbm(fn, x, y, z?, opts?)`: fractal sum of `fn` over `FbmOptions` `{ octaves = 4,
+  lacunarity = 2, gain = 0.5 }`, divided by the summed amplitude so the result stays in [-1, 1]
+  and one octave equals `fn` exactly. A voxel heightmap is `fbm(noise.perlin2, x / 64, z / 64)`.
+
+## Scheduler
+
+- `createScheduler()`: a `Scheduler` the game drives with `update(dt)` (from `hooks.update` or a
+  scene). `after(seconds, fn)` and `every(seconds, fn, { count })` (`EveryOptions`) return a
+  `TimerHandle` (a number; stale handles are ignored after the slot is reused). `cancel(h)`,
+  `remaining(h)` (-1 when not live), `active`, `time`, `pause()` / `resume()` / `paused`,
+  `clear()`. Timers fire in due order, ties in scheduling order; an `every` behind by several
+  periods catches up within one `update`; a timer scheduled from a callback fires on a later
+  `update`. Entries live in a binary heap over reused slots, so steady-state scheduling does not
+  allocate.
+- `cooldown(name, seconds)`: a named `Cooldown` on the scheduler's clock (the same object for the
+  same name): `use()` returns true and starts it when ready, else false; `ready`, `remaining`,
+  `progress` (0..1, for a bar), `reset()`. Pausing the scheduler holds cooldowns too.
+
+## Pool
+
+- `createPool<T>(PoolOptions)`: `{ create, reset?, initial?, max? }`. A `Pool<T>` hands out
+  `acquire()` (the most recently released item first, a new one from `create` while under `max`,
+  else `undefined`), takes back `release(item)` (calls `reset`; false for an item not live),
+  `forEach(fn)` over live items (releasing the current item inside it is safe), `drain()`, `size`
+  and `live`. For particles, projectiles and damage numbers without per-frame allocation.
+
 ## Events
 
 - `Emitter<M extends EventMap>`: a typed event emitter. `on(type, fn)` returns an unsubscribe
@@ -80,4 +140,5 @@ done the input holds its last state. Both options keep the rest of the pipeline 
   input), so a caller that keeps its matrices allocates nothing per frame. Right-handed view space
   looking down -z; clip depth 0..1.
 
-Tests: `loop.test.ts`, `scene.test.ts`, `math.test.ts`, `game.test.ts`.
+Tests: `loop.test.ts`, `scene.test.ts`, `math.test.ts`, `game.test.ts`, `random.test.ts`,
+`noise.test.ts`, `timer.test.ts`, `pool.test.ts`; e2e/core2.spec.ts drives harness/core2.html.

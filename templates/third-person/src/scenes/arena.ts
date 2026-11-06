@@ -159,9 +159,6 @@ export function createArenaScene(ctx: GameCtx): Scene<GameCtx, Frame> {
 
     enter() {
       camera.setPerspective(FOV, ctx.design.width / ctx.design.height, NEAR, FAR);
-      camera.depthTest = true;
-      camera.depthWrite = true;
-      camera.cull = true;
 
       ground = createGround();
       groundMesh = renderer.createMesh({

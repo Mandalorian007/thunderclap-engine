@@ -4,6 +4,9 @@ export type { CameraPoint, CameraRect } from './camera';
 export {
   ALL_LAYERS,
   CAMERA_INV_VIEW_PROJ_OFFSET,
+  CAMERA_JITTER_OFFSET,
+  CAMERA_PREV_VIEW_OFFSET,
+  CAMERA_PREV_VIEW_PROJ_OFFSET,
   Camera,
   FRUSTUM_FLOATS,
   ORTHO2D_HALF_DEPTH,
@@ -25,7 +28,7 @@ export type { FullscreenEncodeOptions, FullscreenPassDesc } from './fullscreen';
 export { FullscreenPass } from './fullscreen';
 export type { GpuPassTimes, GpuTimerResult } from './gpu-timer';
 export { GpuTimer, supportsTimestamps } from './gpu-timer';
-export { InstanceList } from './instance-list';
+export { InstanceList, type InstanceListOptions } from './instance-list';
 export type {
   DirectionalLight,
   Fog,
@@ -69,6 +72,7 @@ export type {
   MeshBounds,
   MeshCapacity,
   MeshDesc,
+  MeshRange,
   MeshReply,
   MeshUpdate,
   VertexLayout,
@@ -84,6 +88,7 @@ export {
   VERTEX_LAYOUT_2D,
   VERTEX_LAYOUT_3D,
   VERTEX_LAYOUT_3D_TANGENT,
+  VERTEX_LAYOUT_3D_UV2,
   VERTEX_LAYOUT_SKINNED,
   VERTEX_SKINNED_BUFFER_LAYOUT,
   VERTEX_SKINNED_FLOATS,
@@ -92,6 +97,8 @@ export {
   VERTEX3D_BUFFER_LAYOUT,
   VERTEX3D_FLOATS,
   VERTEX3D_STRIDE,
+  VERTEX3D_UV2_FLOATS,
+  VERTEX3D_UV2_STRIDE,
 } from './mesh';
 export type { GenerateMipmapsOptions, MipFilter } from './mipmap';
 export { generateMipmaps } from './mipmap';
@@ -105,6 +112,7 @@ export type {
   PostInputs,
   PostProcessor,
   PostProjection,
+  PostView,
   RendererGpu,
   RendererOptions,
   RenderStats,
@@ -112,13 +120,19 @@ export type {
   TextureFromSourceOptions,
 } from './renderer';
 export { MIN_RESOLUTION_SCALE, Renderer, sceneSize } from './renderer';
-export type { SceneTargetExternal, SceneTargetViewport } from './scene-target';
-export { SCENE_FORMAT, SceneTarget, type SceneTargetDesc } from './scene-target';
+export type { SceneTargetAux, SceneTargetExternal, SceneTargetViewport } from './scene-target';
+export {
+  ROUGH_METAL_FORMAT,
+  SCENE_FORMAT,
+  SceneTarget,
+  type SceneTargetDesc,
+  VELOCITY_FORMAT,
+} from './scene-target';
 export { DEFAULT_SHADOW_SIZE, SHADOW_FORMAT, ShadowMap } from './shadow';
 export type { SkinPaletteDesc } from './skin';
 export { JOINT_FLOATS, SKIN_PALETTE_HEADER_FLOATS, SkinPalette, setVertexSkin } from './skin';
 export { type SnapshotOptions, SnapshotRenderer } from './snapshot';
-export type { StandardMaterialDesc } from './standard';
+export type { StandardMapDesc, StandardMapSlot, StandardMaterialDesc } from './standard';
 export {
   createStandardMaterial,
   packStandardUniforms,
@@ -152,9 +166,13 @@ export type { TileLayer, TileLayerOptions, TileLayerOrder } from './tile-layer';
 export { createTileLayer } from './tile-layer';
 export type { ReadonlyQuat, ReadonlyVec3 } from './transform';
 export { Transform } from './transform';
+export type { PreludeVariant } from './wgsl';
 export {
   createShaderModule,
   materialPrelude,
+  PLAIN_VARIANT,
+  prevLaneBufferLayout,
+  prevLaneLocations,
   SKIN_PALETTE_BINDING,
   WGSL_FULLSCREEN_PRELUDE,
   WGSL_GLOBALS,

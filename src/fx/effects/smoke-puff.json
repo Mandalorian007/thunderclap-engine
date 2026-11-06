@@ -1,0 +1,34 @@
+{
+  "duration": 2.5,
+  "systems": [
+    {
+      "name": "smoke",
+      "options": { "space": "2d", "blend": "alpha", "stretch": 0 },
+      "emitters": [
+        {
+          "burst": 12,
+          "rate": 30,
+          "duration": 0.3,
+          "params": {
+            "x": 0,
+            "y": 0,
+            "shape": { "kind": "circle", "radius": 8 },
+            "angle": -1.5707963,
+            "spread": 1.2,
+            "speed": [30, 90],
+            "life": [1.2, 2.2],
+            "sizeCurve": [12, 40, 56, 64],
+            "colorCurve": [[0.6, 0.6, 0.6, 0.7], [0.45, 0.45, 0.47, 0.5], [0.35, 0.35, 0.38, 0]],
+            "gravity": [0, -40],
+            "drag": 1.5,
+            "emissive": 0,
+            "rotation": [-3.14, 3.14],
+            "spin": [-1.2, 1.2],
+            "alignToVelocity": false,
+            "colorStart": [0.6, 0.6, 0.6, 0.7]
+          }
+        }
+      ]
+    }
+  ]
+}

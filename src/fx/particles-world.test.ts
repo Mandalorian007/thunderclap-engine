@@ -3,11 +3,27 @@ import { createFakeDevice, type FakeDevice, type FakeTexture } from '../render/f
 import type { Frame, ViewInfo } from '../render/frame';
 import type { Renderer } from '../render/renderer';
 import { WGSL_GLOBALS, WGSL_LIGHTS } from '../render/wgsl';
-import { ParticleSystem, type ParticleSystemOptions } from './particles';
+import { buildEmitSurface } from './emit-surface';
 import {
+  applyForces,
+  type EmitParams,
+  evaluateCurve,
+  ParticleSystem,
+  type ParticleSystemOptions,
+} from './particles';
+import {
+  FX_PARTICLE_FLOATS,
+  FX_SIM_FLOATS,
+  FX_SPAWN_FLOATS,
+  PARTICLE_COLLIDE_WGSL,
   PARTICLE_COMPUTE_WGSL,
+  PARTICLE_EXT_COMPUTE_WGSL,
+  PARTICLE_EXT_RENDER_WGSL,
   PARTICLE_RENDER_WGSL,
+  PARTICLE_WORLD_COMPUTE_WGSL,
   PARTICLE_WORLD_RENDER_WGSL,
+  SIZE_CURVE_FLOATS,
+  SURFACE_TRI_FLOATS,
 } from './particles-wgsl';
 
 interface FakeTarget {
@@ -140,10 +156,12 @@ describe('ParticleSystem 2D (E-008: pixel-identical)', () => {
 });
 
 describe('ParticleSystem world space', () => {
-  it('uses the world shaders, the lighting block and a 112-byte particle', () => {
+  it('uses the world shaders, the lighting block and a 160-byte particle', () => {
     const { fake, ps } = makeSystem({ space: 'world' });
     expect(ps.space).toBe('world');
-    expect(fake.buffers.find((b) => b.label === 'particles')!.size).toBe(256 * 112);
+    expect(fake.buffers.find((b) => b.label === 'particles')!.size).toBe(
+      256 * FX_PARTICLE_FLOATS * 4,
+    );
     expect(PARTICLE_WORLD_RENDER_WGSL).toContain(WGSL_LIGHTS);
     ps.draw(scenePass(fake), FLAT_FRAME);
     const p = lastPipeline(fake);
@@ -194,7 +212,7 @@ describe('ParticleSystem world space', () => {
     expect([d[32], d[33]]).toEqual([0, 16]);
     // Defaults: y-up gravity, sphere spread, up, world-sized.
     ps.emit({ x: 0, y: 0, shape: { kind: 'sphere', radius: 2 }, colorStart: [1, 1, 1] }, 1);
-    const o = 36;
+    const o = FX_SPAWN_FLOATS;
     expect(d[o + 3]).toBe(5);
     expect(d[o + 4]).toBe(2);
     expect(d[o + 8]).toBe(Math.fround(Math.PI / 2));
@@ -204,11 +222,11 @@ describe('ParticleSystem world space', () => {
     expect([d[o + 28], d[o + 29], d[o + 30]]).toEqual([0, 0, 0]);
     // A 2D gravity pair has z 0.
     ps.emit({ x: 0, y: 0, colorStart: [1, 1, 1], gravity: [0, -2] }, 1);
-    expect(d[72 + 26]).toBe(0);
+    expect(d[2 * FX_SPAWN_FLOATS + 26]).toBe(0);
     const enc = fake.device.createCommandEncoder();
     ps.prepare(enc);
     const spawn = fake.writes.find((w) => w.buffer.label === 'particle-spawns')!;
-    expect(spawn.bytes).toBe(3 * 36 * 4);
+    expect(spawn.bytes).toBe(3 * FX_SPAWN_FLOATS * 4);
     expect(fake.errors).toEqual([]);
   });
 
@@ -221,7 +239,7 @@ describe('ParticleSystem world space', () => {
     });
     ps.prepare(fake.device.createCommandEncoder(), FLAT_FRAME);
     const s = simFloats(ps);
-    expect(s).toHaveLength(16);
+    expect(s).toHaveLength(FX_SIM_FLOATS);
     expect([s[8], s[9], s[10], s[11], s[12]]).toEqual([10, 30, 0.5, 0, 1]);
     ps.lit = false;
     ps.fade = null;
@@ -369,7 +387,7 @@ describe('ParticleSystem.alive', () => {
       maps++;
       return Promise.resolve();
     };
-    read.getMappedRange = () => new Uint32Array([42]).buffer;
+    read.getMappedRange = () => new Uint32Array([42, 7]).buffer;
     read.unmap = () => {
       unmaps++;
     };
@@ -382,8 +400,8 @@ describe('ParticleSystem.alive', () => {
     };
     ps.update(1 / 60);
     ps.prepare(enc());
-    // Frame 1: count + copy recorded, nothing mapped yet.
-    expect(fake.passes.at(-1)!.commands.filter((c) => c.op === 'dispatch')).toHaveLength(2);
+    // Frame 1: advance + update + count dispatched, the copy recorded, nothing mapped yet.
+    expect(fake.passes.at(-1)!.commands.filter((c) => c.op === 'dispatch')).toHaveLength(3);
     expect(copies).toEqual(['particles-alive']);
     expect(maps).toBe(0);
     // Frame 2: map last frame's copy; record no new copy.
@@ -394,6 +412,7 @@ describe('ParticleSystem.alive', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(ps.alive).toBe(42);
+    expect(ps.below).toBe(7);
     expect(unmaps).toBe(1);
     // Frame 3: counting again.
     ps.prepare(enc());
@@ -404,5 +423,298 @@ describe('ParticleSystem.alive', () => {
   it('is off by default', () => {
     const { fake } = makeSystem();
     expect(fake.buffers.some((b) => b.label === 'particles-alive')).toBe(false);
+  });
+});
+
+// ------------------------------------------------------------------ extended kernel (ws/fx-3)
+
+function fxTables(ps: ParticleSystem) {
+  return (
+    ps as unknown as {
+      fx: { curveData: Float32Array; subData: Float32Array; surfaceData: Float32Array };
+    }
+  ).fx;
+}
+
+function dispatches(fake: FakeDevice): number {
+  return fake.passes.at(-1)!.commands.filter((c) => c.op === 'dispatch').length;
+}
+
+const BASE: EmitParams = { x: 10, y: 20, colorStart: [1, 1, 1, 1] };
+
+describe('ParticleSystem extended kernel', () => {
+  it('a plain 2D system keeps the legacy 80-byte particle; `extended` switches to 160 bytes', () => {
+    const plain = makeSystem();
+    expect(plain.fake.buffers.find((b) => b.label === 'particles')!.size).toBe(256 * 80);
+    expect(plain.ps.extended).toBe(false);
+    const ext = makeSystem({ extended: true });
+    expect(ext.fake.buffers.find((b) => b.label === 'particles')!.size).toBe(
+      256 * FX_PARTICLE_FLOATS * 4,
+    );
+    expect(ext.ps.extended).toBe(true);
+    expect(ext.fake.errors).toEqual([]);
+  });
+
+  it('writes tile, tile rate, rotation, spin and the align flag into the 52-float record', () => {
+    const { fake, ps } = makeSystem({ extended: true });
+    ps.emit(
+      {
+        ...BASE,
+        tile: [5, 15],
+        tileRate: 2,
+        rotation: [0.1, 0.2],
+        spin: [-1, 1],
+        alignToVelocity: false,
+      },
+      3,
+    );
+    const d = spawnFloats(ps);
+    expect(Array.from(d.subarray(36, 44))).toEqual([5, 15, 2, 0, 0.1, 0.2, -1, 1].map(Math.fround));
+    expect(Array.from(d.subarray(44, 48))).toEqual([-1, -1, -1, -1]);
+    expect(d[33]).toBe(3);
+    ps.emit({ ...BASE, tile: 7 }, 1);
+    const o = FX_SPAWN_FLOATS;
+    expect(Array.from(d.subarray(o + 36, o + 40))).toEqual([7, 7, 0, 1]);
+    ps.update(1 / 60);
+    ps.prepare(fake.device.createCommandEncoder(), FLAT_FRAME);
+    // Untextured: a 1×1 white sheet is bound and the textured flag is 0.
+    const s = simFloats(ps);
+    expect(s[13]).toBe(0);
+    expect(fake.textures.some((t) => t.label === 'particles-sheet-none')).toBe(true);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('a sprite sheet sets the textured flag and the atlas grid, and binds the sheet', () => {
+    const fake0 = createFakeDevice();
+    const sheetTex = fake0.device.createTexture({
+      label: 'sheet',
+      size: [64, 64],
+      format: 'rgba8unorm',
+      usage: GPUTextureUsage.TEXTURE_BINDING,
+    });
+    const { fake, ps } = makeSystem({
+      texture: { view: sheetTex.createView(), width: 64, height: 64 },
+      atlas: { columns: 4, rows: 4 },
+    });
+    expect(ps.extended).toBe(true);
+    ps.update(1 / 60);
+    ps.prepare(fake.device.createCommandEncoder(), FLAT_FRAME);
+    const s = simFloats(ps);
+    expect([s[13], s[14], s[15]]).toEqual([1, 4, 4]);
+    ps.draw(scenePass(fake), FLAT_FRAME);
+    const group = lastBindGroup(fake, 1);
+    expect(group.entries.some((e) => e.binding === 4)).toBe(true);
+    expect(group.entries.some((e) => e.binding === 5)).toBe(true);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('interns size and colour curves into the table and the record; the CPU reference agrees', () => {
+    const { fake, ps } = makeSystem({ extended: true, maxCurves: 4 });
+    const sizeCurve = [1, 2, 3];
+    const colorCurve = [
+      [1, 0, 0, 1],
+      [0, 1, 0, 0.5],
+    ];
+    ps.emit({ ...BASE, sizeCurve, colorCurve }, 1);
+    const d = spawnFloats(ps);
+    expect(d[44]).toBe(0);
+    expect(d[45]).toBe(0);
+    const t = fxTables(ps).curveData;
+    expect(Array.from(t.subarray(0, 4))).toEqual([3, 1, 2, 3]);
+    const colorBase = 4 * SIZE_CURVE_FLOATS;
+    expect(simFloats(ps)[17]).toBe(colorBase);
+    expect(t[colorBase]).toBe(2);
+    expect(Array.from(t.subarray(colorBase + 4, colorBase + 12))).toEqual([
+      1, 0, 0, 1, 0, 1, 0, 0.5,
+    ]);
+    // Same array identity: same slot; a new array: the next slot.
+    ps.emit({ ...BASE, sizeCurve }, 1);
+    expect(d[FX_SPAWN_FLOATS + 44]).toBe(0);
+    ps.emit({ ...BASE, sizeCurve: [4, 5] }, 1);
+    expect(d[2 * FX_SPAWN_FLOATS + 44]).toBe(1);
+    ps.update(1 / 60);
+    ps.prepare(fake.device.createCommandEncoder(), FLAT_FRAME);
+    expect(fake.writes.some((w) => w.buffer.label === 'particles-curves')).toBe(true);
+    expect(() => ps.emit({ ...BASE, sizeCurve: [1] }, 1)).toThrow(/2\.\.8 stops/);
+    expect(() => ps.emit({ ...BASE, sizeCurve: [1, 2, 3, 4, 5, 6, 7, 8, 9] }, 1)).toThrow(
+      /2\.\.8 stops/,
+    );
+
+    const out = new Float32Array(4);
+    expect(evaluateCurve(sizeCurve, 1, 0, out)[0]).toBe(1);
+    expect(evaluateCurve(sizeCurve, 1, 0.5, out)[0]).toBe(2);
+    expect(evaluateCurve(sizeCurve, 1, 1, out)[0]).toBe(3);
+    expect(evaluateCurve([10, 0], 1, 0.5, out)[0]).toBe(5);
+    const flat = [1, 0, 0, 1, 0, 1, 0, 0.5];
+    expect(Array.from(evaluateCurve(flat, 4, 0, out))).toEqual([1, 0, 0, 1]);
+    expect(Array.from(evaluateCurve(flat, 4, 0.5, out))).toEqual([0.5, 0.5, 0, 0.75]);
+    expect(Array.from(evaluateCurve(flat, 4, 1, out))).toEqual([0, 1, 0, 0.5]);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('uploads the live forces array into the sim block (max 8)', () => {
+    const { fake, ps } = makeSystem({
+      space: 'world',
+      forces: [{ kind: 'attract', x: 1, y: 2, z: 3, strength: 4, radius: 5 }],
+    });
+    ps.forces.push({ kind: 'vortex', axis: [0, 1, 0], x: 0, y: 0, strength: 2 });
+    ps.forces.push({ kind: 'turbulence', frequency: 0.5, strength: 3, seed: 9 });
+    ps.forces.push({ kind: 'drag', amount: 0.7 });
+    ps.update(1 / 60);
+    ps.prepare(fake.device.createCommandEncoder(), FLAT_FRAME);
+    const s = simFloats(ps);
+    expect(s[16]).toBe(4);
+    expect(Array.from(s.subarray(20, 26))).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(Array.from(s.subarray(32, 44))).toEqual([1, 0, 0, 0, 2, 0, 0, 0, 0, 1, 0, 0]);
+    expect(Array.from(s.subarray(44, 52))).toEqual([2, 0, 0, 0, 3, 0, 0.5, 9]);
+    expect(s[56]).toBe(3);
+    expect(s[67]).toBeCloseTo(0.7);
+    for (let i = 0; i < 10; i++) ps.forces.push({ kind: 'drag', amount: 1 });
+    ps.update(1 / 60);
+    ps.prepare(fake.device.createCommandEncoder(), FLAT_FRAME);
+    expect(s[16]).toBe(8);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('applyForces: an attractor pulls a parked particle toward its point', () => {
+    const pos = [10, 0, 0];
+    const vel = new Float32Array(3);
+    const forces = [{ kind: 'attract', x: 0, y: 0, z: 0, strength: 10 }] as const;
+    applyForces(forces, pos, vel, 0.1);
+    expect(vel[0]).toBeCloseTo(-1);
+    expect(vel[1]).toBeCloseTo(0);
+    for (let i = 0; i < 10; i++) {
+      applyForces(forces, pos, vel, 0.1);
+      pos[0]! += vel[0]! * 0.1;
+    }
+    expect(pos[0]).toBeLessThan(9);
+    const spun = new Float32Array([0, 0, 0]);
+    applyForces(
+      [{ kind: 'vortex', axis: [0, 1, 0], x: 0, y: 0, z: 0, strength: 1 }],
+      [1, 0, 0],
+      spun,
+      1,
+    );
+    expect(spun[1]).toBeCloseTo(0);
+    expect(Math.abs(spun[2]!)).toBeCloseTo(1);
+    const dragged = new Float32Array([2, 0, 0]);
+    applyForces([{ kind: 'drag', amount: Math.LN2 }], [0, 0, 0], dragged, 1);
+    expect(dragged[0]).toBeCloseTo(1);
+  });
+
+  it('pins the extended kernels: the world kernel carries the force step, the 2D legacy one does not', () => {
+    for (const name of ['attract', 'vortex', 'curl', 'surface_tri', 'subspawn', 'advance']) {
+      expect(PARTICLE_WORLD_COMPUTE_WGSL).toContain(name);
+      expect(PARTICLE_EXT_COMPUTE_WGSL).toContain(name);
+      expect(PARTICLE_COMPUTE_WGSL).not.toContain(name);
+    }
+    expect(PARTICLE_EXT_RENDER_WGSL).toContain('sheet');
+    expect(PARTICLE_COLLIDE_WGSL).toContain('thickness');
+    expect(hash(PARTICLE_WORLD_COMPUTE_WGSL)).toMatchInlineSnapshot(`"bcf1b4c9"`);
+    expect(hash(PARTICLE_EXT_COMPUTE_WGSL)).toMatchInlineSnapshot(`"b4a624ec"`);
+    expect(hash(PARTICLE_COLLIDE_WGSL)).toMatchInlineSnapshot(`"7df355d7"`);
+  });
+
+  it('sub-emission: interns onDeath/onLife descriptors one level deep and dispatches subspawn', () => {
+    const { fake, ps } = makeSystem({ extended: true, maxSubEmitters: 2 });
+    const child: EmitParams = { x: 0, y: 0, colorStart: [0, 1, 0, 1], size: [2, 1] };
+    const onDeath = { params: { ...child, onDeath: { params: child, count: 9 } }, count: 4 };
+    const onLife = { params: child, rate: 30 };
+    ps.emit({ ...BASE, onDeath, onLife, inherit: 0.5 }, 2);
+    const d = spawnFloats(ps);
+    expect(Array.from(d.subarray(46, 52))).toEqual([0, 1, 4, 30, 0, 0]);
+    expect(d[35]).toBe(0.5);
+    const subs = fxTables(ps).subData;
+    expect(subs[14]).toBe(2); // the child's size0 in slot 0
+    expect(subs[35]).toBe(0.5); // inherit
+    expect(subs[46]).toBe(-1); // the grandchild is not interned: one level only
+    expect(subs[FX_SPAWN_FLOATS + 35]).toBe(0.5);
+    ps.update(1 / 60);
+    ps.prepare(fake.device.createCommandEncoder(), FLAT_FRAME);
+    // spawn + advance + update + subspawn
+    expect(dispatches(fake)).toBe(4);
+    expect(fake.writes.some((w) => w.buffer.label === 'particles-subs')).toBe(true);
+    const plain = makeSystem({ extended: true });
+    plain.ps.update(1 / 60);
+    plain.ps.prepare(plain.fake.device.createCommandEncoder(), FLAT_FRAME);
+    expect(dispatches(plain.fake)).toBe(2); // advance + update, no subspawn
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('mesh emission: appends the surface table and records the triangle range', () => {
+    const { fake, ps } = makeSystem({ space: 'world' });
+    const positions = [0, 0, 0, 1, 0, 0, 0, 1, 0, 2, 0, 0, 3, 0, 0, 2, 1, 0];
+    const surface = buildEmitSurface({ positions }, { alongNormal: true });
+    ps.emit({ ...BASE, shape: surface }, 1);
+    const d = spawnFloats(ps);
+    expect(d[3]).toBe(6);
+    expect(d[39]).toBe(3); // align | alongNormal
+    expect(d[50]).toBe(0);
+    expect(d[51]).toBe(2);
+    ps.emit({ ...BASE, shape: { kind: 'mesh', positions: positions.slice(0, 9) } }, 1);
+    expect(d[FX_SPAWN_FLOATS + 50]).toBe((2 * SURFACE_TRI_FLOATS) / 4);
+    expect(d[FX_SPAWN_FLOATS + 51]).toBe(1);
+    ps.update(1 / 60);
+    ps.prepare(fake.device.createCommandEncoder(), DEPTH_FRAME);
+    const buf = fake.buffers.filter((b) => b.label === 'particles-surface').at(-1)!;
+    expect(buf.size).toBeGreaterThanOrEqual(3 * SURFACE_TRI_FLOATS * 4);
+    expect(fake.writes.some((w) => w.buffer === buf)).toBe(true);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('collide: a depth-collision pass runs in afterOpaque against the renderer copy', () => {
+    const { fake, ps, target } = makeSystem({
+      space: 'world',
+      readsDepth: true,
+      collide: { bounce: 0.5, friction: 0.2 },
+    });
+    target.depth = depthTexture(fake, 64, 32);
+    ps.update(1 / 60);
+    ps.prepare(fake.device.createCommandEncoder(), DEPTH_FRAME);
+    const copyTex = fake.device.createTexture({
+      label: 'scene-depth-copy',
+      size: [64, 32],
+      format: 'depth24plus',
+      usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
+    });
+    const camera = {
+      viewProjection: new Float32Array(16).fill(1),
+      invViewProj: new Float32Array(16).fill(2),
+    };
+    const view: ViewInfo = {
+      camera: camera as never,
+      target: target as never,
+      depthCopy: copyTex,
+      depthView: copyTex.createView(),
+      viewport: { x: 0, y: 0, width: 64, height: 32 },
+    };
+    ps.afterOpaque(fake.device.createCommandEncoder(), view);
+    const pass = fake.passes.at(-1)!;
+    expect(pass.label).toBe('particles-collide');
+    expect(pass.commands.filter((c) => c.op === 'dispatch')).toHaveLength(1);
+    const uniform = fake.buffers.find((b) => b.label === 'particles-collide-params')!;
+    expect(uniform.size).toBe(160);
+    const data = (ps as unknown as { collider: { data: Float32Array } }).collider.data;
+    expect(Array.from(data.subarray(32, 40))).toEqual([
+      0,
+      0,
+      64,
+      32,
+      0.5,
+      Math.fround(0.2),
+      1,
+      Math.fround(1 / 60),
+    ]); // the last step dt rides in w for the swept test
+    // Collision is independent of the soft fade.
+    ps.softness = 0;
+    const passes = fake.passes.length;
+    ps.prepare(fake.device.createCommandEncoder(), DEPTH_FRAME);
+    ps.afterOpaque(fake.device.createCommandEncoder(), view);
+    expect(fake.passes.slice(passes).some((p) => p.label === 'particles-collide')).toBe(true);
+    ps.collide = null;
+    const count = fake.passes.length;
+    ps.afterOpaque(fake.device.createCommandEncoder(), view);
+    expect(fake.passes.length).toBe(count);
+    expect(fake.errors).toEqual([]);
   });
 });

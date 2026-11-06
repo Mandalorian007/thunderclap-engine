@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { VERTEX_LAYOUT_2D, VERTEX_LAYOUT_3D, VERTEX_LAYOUT_3D_TANGENT } from '../render/mesh';
+import {
+  VERTEX_LAYOUT_2D,
+  VERTEX_LAYOUT_3D,
+  VERTEX_LAYOUT_3D_TANGENT,
+  type VertexLayout,
+} from '../render/mesh';
 import { Transform } from '../render/transform';
 import {
+  cloneGeometry,
   computeBounds,
   createIndices,
   GEOMETRY_FLOATS,
@@ -173,5 +179,91 @@ describe('tangent layout (ws/ergo-3d)', () => {
     for (let o = 0; o < mirrored.vertices.length; o += T) {
       expect(mirrored.vertices[o + 15]).toBe(-before.vertices[o + 15]!);
     }
+  });
+});
+
+describe('cloneGeometry (ws/geom-3)', () => {
+  it('copies every array and the bounds, sharing the layout', () => {
+    const g = computeTangents(box());
+    const c = cloneGeometry(g);
+    expect(c.layout).toBe(g.layout);
+    expect(c.vertices).toEqual(g.vertices);
+    expect(c.vertices).not.toBe(g.vertices);
+    expect(c.indices).toEqual(g.indices);
+    expect(c.indices).not.toBe(g.indices);
+    expect(c.indices.constructor).toBe(g.indices.constructor);
+    expect(c.bounds).toEqual(g.bounds);
+    expect(c.bounds.center).not.toBe(g.bounds.center);
+    transformGeometry(c, new Transform({ x: 4 }).world);
+    expect(g.bounds.center[0]).toBe(0);
+    expect(g.vertices[0]).toBe(box().vertices[0]);
+  });
+});
+
+describe('a custom layout with a tangent lane (ws/geom-3)', () => {
+  // Position, tangent, normal, uv: the lanes in an order no built-in layout uses, found by their
+  // shader locations.
+  const CUSTOM: VertexLayout = {
+    ...VERTEX_LAYOUT_3D_TANGENT,
+    name: 'custom-tangent',
+    buffer: {
+      arrayStride: 64,
+      stepMode: 'vertex',
+      attributes: [
+        { shaderLocation: 0, offset: 0, format: 'float32x3' },
+        { shaderLocation: 13, offset: 12, format: 'float32x4' },
+        { shaderLocation: 10, offset: 28, format: 'float32x3' },
+        { shaderLocation: 1, offset: 40, format: 'float32x2' },
+      ],
+    },
+  };
+  /** One triangle in the xz plane: normal +y, tangent +x (w = 1). */
+  const tri = (): Geometry => {
+    const v = new Float32Array(3 * 16);
+    const corners = [0, 0, 0, 1, 0, 0, 0, 0, 1];
+    for (let i = 0; i < 3; i++) {
+      v.set(corners.slice(i * 3, i * 3 + 3), i * 16);
+      v.set([1, 0, 0, 1], i * 16 + 3); // tangent
+      v.set([0, 1, 0], i * 16 + 7); // normal
+      v.set([0.5, 0.25], i * 16 + 10); // uv
+      v[i * 16 + 15] = 9; // an unused lane, left alone
+    }
+    return {
+      vertices: v,
+      indices: new Uint16Array([0, 2, 1]),
+      bounds: computeBounds(v, 16),
+      layout: CUSTOM,
+    };
+  };
+  const round = (xs: (number | undefined)[]) => xs.map((x) => Math.round(x! * 1e6) / 1e6 + 0);
+
+  it('transformGeometry rotates the tangent and normal lanes where the layout puts them', () => {
+    const t = new Transform();
+    t.setAxisAngle(0, 0, 1, Math.PI / 2); // +x to +y, +y to -x
+    const g = transformGeometry(tri(), t.world);
+    for (let o = 0; o < g.vertices.length; o += 16) {
+      const v = g.vertices;
+      expect(round([v[o + 3], v[o + 4], v[o + 5], v[o + 6]])).toEqual([0, 1, 0, 1]);
+      expect(round([v[o + 7], v[o + 8], v[o + 9]])).toEqual([-1, 0, 0]);
+      expect([v[o + 10], v[o + 11], v[o + 15]]).toEqual([0.5, 0.25, 9]);
+    }
+    const mirrored = transformGeometry(tri(), new Transform({ scaleZ: -1 }).world);
+    expect(mirrored.vertices[6]).toBe(-1);
+  });
+
+  it('mergeGeometry keeps the layout and bounds it', () => {
+    const b = transformGeometry(tri(), new Transform({ x: 10 }).world);
+    const m = mergeGeometry(tri(), b);
+    expect(m.layout).toBe(CUSTOM);
+    expect(m.vertices.length).toBe(6 * 16);
+    expect(Array.from(m.indices)).toEqual([0, 2, 1, 3, 5, 4]);
+    expect(m.bounds.radius).toBeGreaterThan(5);
+    expect(Number.isFinite(m.bounds.radius)).toBe(true);
+  });
+
+  it('a layout without a position at float 0 is refused by transform and unbounded by merge', () => {
+    const g = { ...tri(), layout: VERTEX_LAYOUT_2D };
+    expect(() => transformGeometry(g, new Transform().world)).toThrow(/xyz position at float 0/);
+    expect(mergeGeometry(g).bounds.radius).toBe(Number.POSITIVE_INFINITY);
   });
 });

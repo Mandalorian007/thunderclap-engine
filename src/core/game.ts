@@ -280,7 +280,7 @@ export interface EngineCtx<
   /** Drives modal panels from the pad (d-pad moves focus, A activates, B closes). */
   readonly padNav: PadNav;
   readonly audio: AudioEngine;
-  /** The DOM overlay, CSS px, with its layout (`ui.layout`). */
+  /** The DOM overlay, CSS px, with its layout (`ui.layout`); `ui.padOwner` says who has the pad. */
   readonly ui: Overlay;
   /** The page the game runs in: frames, links, copying, fullscreen and save storage. */
   readonly host: Host;

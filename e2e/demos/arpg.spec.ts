@@ -1,0 +1,149 @@
+/**
+ * The ARPG demo (demos/arpg) on the device matrix: the courtyard boots clean inside the
+ * draw-call band, a ground click (a tap on touch rows) paths the hero over the navmesh to the
+ * spot, a gear key and a gear button swap the set's materials without rebuilding the rig, three
+ * strikes on an adjacent ghoul kill it, and the desktop rows hold a playable frame rate.
+ *
+ * `?still&seed=3` parks the enemy AI and fixes the spawns so the interaction rows are
+ * deterministic; every wait is a poll on `window.__demo`, never a sleep.
+ */
+import { type CDPSession, expect, type Page, test } from '@playwright/test';
+import type { ArpgDemoApi, ArpgDemoState } from '../../demos/arpg/state';
+import { HARNESS_URL } from '../ports';
+
+const URL = `${HARNESS_URL}demos/arpg/`;
+
+/** Scene lists (~12), hero, four gear pieces, ghouls, trail and particles, plus shadow and post passes. */
+const DRAW_CALLS_MIN = 10;
+const DRAW_CALLS_MAX = 80;
+const MIN_FPS_DESKTOP = 20;
+
+type Win = { __demo?: ArpgDemoState; __arpgApi?: ArpgDemoApi };
+
+const readState = (page: Page) =>
+  page.evaluate(
+    () =>
+      new Promise<string>((resolve) =>
+        requestAnimationFrame(() => resolve(JSON.stringify((window as unknown as Win).__demo))),
+      ),
+  );
+const parse = (s: string) => JSON.parse(s) as ArpgDemoState;
+const read = async (page: Page) => parse(await readState(page));
+
+async function boot(page: Page, query = ''): Promise<{ errors: string[]; state: ArpgDemoState }> {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(`console.error: ${m.text()}`);
+  });
+  await page.goto(`${URL}${query}`);
+  await expect.poll(async () => (await read(page)).ready, { timeout: 30_000 }).toBe(true);
+  expect((await read(page)).gpu, 'WebGPU came up').toBe('ok');
+  await expect.poll(async () => (await read(page)).frame, { timeout: 15_000 }).toBeGreaterThan(5);
+  return { errors, state: await read(page) };
+}
+
+/** A world point in client px (for clicks and taps). */
+const screenOf = (page: Page, x: number, y: number, z: number) =>
+  page.evaluate(
+    ([a, b, c]) => (window as unknown as Win).__arpgApi!.screenOf(a!, b!, c!),
+    [x, y, z],
+  );
+
+let cdp: CDPSession | undefined;
+async function tap(page: Page, x: number, y: number): Promise<void> {
+  cdp ??= await page.context().newCDPSession(page);
+  await cdp.send('Input.dispatchTouchEvent', {
+    type: 'touchStart',
+    touchPoints: [{ x, y, id: 1 }],
+  });
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+}
+
+test.describe('demo: arpg', () => {
+  test.afterEach(() => {
+    cdp = undefined;
+  });
+
+  test('boots the courtyard within the draw-call band, no console errors', async ({
+    page,
+  }, info) => {
+    const { errors } = await boot(page);
+    await expect
+      .poll(async () => (await read(page)).frame, { timeout: 15_000 })
+      .toBeGreaterThan(40);
+    const s = await read(page);
+    expect(s.drawCalls).toBeGreaterThanOrEqual(DRAW_CALLS_MIN);
+    expect(s.drawCalls).toBeLessThanOrEqual(DRAW_CALLS_MAX);
+    expect(s.triangles).toBeGreaterThan(10_000);
+    expect(s.navPolys).toBeGreaterThan(0);
+    expect(s.enemiesAlive).toBe(12);
+    expect(s.cameraPitch).toBe(50);
+    expect(s.gpuErrors).toBe(0);
+    if (info.project.name.startsWith('desktop')) {
+      await expect
+        .poll(async () => (await read(page)).fps, { timeout: 15_000 })
+        .toBeGreaterThan(MIN_FPS_DESKTOP);
+    }
+    expect(errors).toEqual([]);
+  });
+
+  test('a ground click (a tap on touch) paths the hero to the spot', async ({ page, hasTouch }) => {
+    const { errors, state: before } = await boot(page, '?still&seed=3');
+    const [hx, hy, hz] = before.heroPos;
+    const c = await screenOf(page, hx + 4, hy, hz - 2.5);
+    if (hasTouch) await tap(page, c.x, c.y);
+    else await page.mouse.click(c.x, c.y);
+    await expect
+      .poll(async () => (await read(page)).pathLength, { timeout: 10_000 })
+      .toBeGreaterThan(0);
+    const target = (await read(page)).moveTarget;
+    expect(target).not.toBeNull();
+    await expect
+      .poll(
+        async () => {
+          const p = (await read(page)).heroPos;
+          return Math.hypot(p[0] - target![0], p[2] - target![2]);
+        },
+        { timeout: 20_000 },
+      )
+      .toBeLessThan(0.5);
+    const moved = (await read(page)).heroPos;
+    expect(Math.hypot(moved[0] - hx, moved[2] - hz), 'the hero moved').toBeGreaterThan(2);
+    expect(errors).toEqual([]);
+  });
+
+  test('a gear key and a gear button swap the set without rebuilding the rig', async ({ page }) => {
+    const { errors, state: before } = await boot(page, '?still&seed=3');
+    expect(before.gearSet).toBe('iron');
+    await page.keyboard.press('Digit2');
+    await expect.poll(async () => (await read(page)).gearSet, { timeout: 10_000 }).toBe('gilded');
+    const gilded = await read(page);
+    expect(gilded.gearMaterialIds).not.toEqual(before.gearMaterialIds);
+    await page.locator('[data-gear="2"]').click();
+    await expect.poll(async () => (await read(page)).gearSet, { timeout: 10_000 }).toBe('bone');
+    const bone = await read(page);
+    expect(bone.gearMaterialIds).not.toEqual(gilded.gearMaterialIds);
+    expect(bone.gearSwaps).toBe(2);
+    expect(bone.rigBuilds).toBe(1);
+    expect(errors).toEqual([]);
+  });
+
+  test('three strikes on an adjacent ghoul kill it', async ({ page }) => {
+    const { errors, state: before } = await boot(page, '?still&seed=3');
+    expect(before.kills).toBe(0);
+    const idx = await page.evaluate(() => (window as unknown as Win).__arpgApi!.summon());
+    expect(idx).toBeGreaterThanOrEqual(0);
+    for (let i = 1; i <= 3; i++) {
+      await expect.poll(async () => (await read(page)).heroState, { timeout: 10_000 }).toBe('move');
+      await page.keyboard.press('Space');
+      await expect
+        .poll(async () => (await read(page)).hits, { timeout: 10_000 })
+        .toBeGreaterThanOrEqual(before.hits + i);
+    }
+    await expect
+      .poll(async () => (await read(page)).kills, { timeout: 10_000 })
+      .toBeGreaterThanOrEqual(1);
+    expect(errors).toEqual([]);
+  });
+});

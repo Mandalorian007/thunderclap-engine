@@ -5,10 +5,10 @@
  * - A small `geom` room (a box turned inside out). Panel `a` hangs on the back wall, panel `b` on
  *   the left wall, turned to face +x; `hud` is head-locked 2 units in front of the camera, bottom
  *   right, drawn without a depth test. Each holds every widget.
- * - Every panel is a router target (`worldPanelTarget`), so the mouse and touch rays through the
- *   camera press the same buttons; `?pad` adds a `PadCursor` over a fake gamepad the spec sets.
- *   `panel.poll(ctx.pointers.pointers)` each frame turns the routed pointers into hover, press
- *   and release; `hud.update(camera)` keeps the head-locked panel in front of the eye.
+ * - Every panel is a router target, so the mouse and touch rays through the camera press the
+ *   same buttons; `?pad` adds a `PadCursor` over a fake gamepad the spec sets. `attach(ctx.input)`
+ *   (ws/ui-4) polls the routed pointers after every `input.update()` (hover, press, release) and
+ *   keeps the head-locked panel in front of the eye; the page never calls `poll` or `update`.
  * - Keys go to panel `a` (`Tab`, `Enter`, arrows), so a keyboard drives it without a ray.
  *
  * e2e/world-panel.spec.ts reads `window.__harnessWorldPanel.state()`.
@@ -24,7 +24,6 @@ import {
   worldButton,
   worldLabel,
   worldList,
-  worldPanelTarget,
   worldProgress,
   worldSlider,
   worldToggle,
@@ -232,7 +231,8 @@ async function main(): Promise<void> {
   fill(a, 'a', 'Back wall');
   fill(b, 'b', 'Left wall');
   fill(hud, 'hud', 'Head-locked');
-  for (const p of panels) pointers.addTester(worldPanelTarget(p));
+  // On the input tick (ws/ui-4): each panel joins the router and polls after `input.update()`.
+  for (const p of panels) p.attach(ctx.input);
   if (withPad) pointers.addSource(cursor);
   window.addEventListener('keydown', (e) => {
     if (a.key(e)) e.preventDefault();
@@ -246,10 +246,6 @@ async function main(): Promise<void> {
       for (const p of panels) frame.drawable(p.drawable, 10);
     },
   });
-  ctx.hooks.beforeRender = () => {
-    hud.update(camera);
-    for (const p of panels) p.poll(pointers.pointers);
-  };
   ctx.hooks.afterRender = () => {
     state.frames++;
   };

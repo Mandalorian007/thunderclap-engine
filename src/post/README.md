@@ -186,17 +186,18 @@ and the 2D goldens are unchanged. TAA, SSR and motion blur need a frame with dep
   test asserts the packed size equals the WGSL struct's for every field. `PostFrameState` is
   the per-frame part the stack fills (jitter, reset flag, reprojection, auto exposure).
 
-Renderer needs, as wishes (nothing in `src/render` changed):
-
-- `Camera.setJitter(x, y)` (px) to offset the projection, so TAA samples the scene itself at
-  the jitter instead of resampling the raw colour; `PostStack.taa.jitter(frame)` is ready to
-  feed it.
-- `PostInputs.view` (and the previous frame's), so the stack need not read
-  `renderer.camera.view` for the reprojection.
-- A roughness (or roughness + metalness) target from the standard material, so SSR can fade
-  per surface instead of by the one `roughnessCutoff`.
-- A velocity target written by moving instances and skinned meshes, so motion blur covers
-  object motion too.
+The renderer now provides what these passes asked for (ws/render-4; see *Camera jitter and
+history* and *Aux targets* in `src/render/README.md`): `Camera.setJitter(x, y)` offsets the
+projection, applied only while the post processor declares `wantsJitter`; `PostInputs.view`
+(`PostView`: `viewProj`, `invViewProj`, `previousViewProj`, `previousView`, `jitter`) carries
+the matrices of the view that rendered the target; `SceneTargetDesc.aux` adds an `rg8unorm`
+roughness/metalness target (`PostInputs.roughMetal`) that the standard material writes and an
+`rg16float` velocity target (`PostInputs.velocity`) that moving `InstanceList`s and skinned
+palettes with `history` write. This stack does not read any of them yet: TAA still resamples
+the raw colour at its own jitter and reprojects by the camera it reads itself, SSR still fades
+by `roughnessCutoff`, and motion blur still blurs along the camera's reprojection only.
+Switching them over (`wantsJitter: true`, the `view` inputs, per-pixel roughness, object
+velocity) is ws/post-4.
 
 The harness page `harness/post3.html` (a lit scene with a mirror floor, a grey block and a
 bright sky patch over a dark backdrop; `?taa ?ssr ?autoexp ?wb=3200 ?mblur ?dirt ?still`)

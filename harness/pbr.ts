@@ -15,11 +15,15 @@
  * - A spot light straight down onto the floor left of the grid (ws/pbr-lights: the standard
  *   material runs the shared light loop, so it sees spots and masks), and under the tile a pair of
  *   grey spheres on layers 2 and 4 with a lamp masked to layer 2 between them.
+ * - `?tangents` (ws/render-4): a floor tile with file tangents (`computeTangents` over a
+ *   `plane`) in front of the grid, drawn through the normal-mapped tile material, so the
+ *   material's `engine_local_tangent` path compiles against `VERTEX_LAYOUT_3D_TANGENT`.
  * - Probes for e2e/pbr.spec.ts: the rough dielectric sphere's centre, the specular highlight
  *   on a metal sphere, the lit and unlit slopes of a bump on the tile, the floor inside and
  *   outside the spot's cone, and the camera-facing point of each sphere of the masked pair.
  */
 import { GameLoop } from '@thunderclap/engine/core';
+import { computeTangents, plane } from '@thunderclap/engine/geom';
 import { Gestures, Input } from '@thunderclap/engine/input';
 import { boot } from '@thunderclap/engine/platform';
 import {
@@ -67,6 +71,7 @@ const state: HarnessPbrState = {
   perf: null,
   lights: { sun: false, points: 0, spots: 0, shadow: false, fog: false },
   materials: 0,
+  tangentMeshes: 0,
 };
 
 const api: HarnessPbrApi = { state };
@@ -385,6 +390,12 @@ async function main(): Promise<void> {
   const tileP: InstanceParams = { tint: [0.62, 0.6, 0.58, 1] };
   const groundT = new Transform({ scaleX: 60, scaleY: 1, scaleZ: 60 });
   const groundP: InstanceParams = { tint: [0.34, 0.37, 0.3, 1] };
+  // ws/render-4: a tangent-layout tile on the floor under the same normal-mapped material.
+  const flags = new URLSearchParams(location.search);
+  const tangentTile = flags.has('tangents')
+    ? renderer.createMesh({ ...computeTangents(plane({ size: TILE_SIZE })), label: 'tangent-tile' })
+    : null;
+  const tangentT = new Transform({ x: 1.0, y: 0.01, z: 3.2 });
   // The masked pair: the grid's material at its rough dielectric texel (col 0, last row).
   const pairUv = [0.5 / COLS, (ROWS - 0.5) / ROWS, 0.5 / COLS, (ROWS - 0.5) / ROWS] as const;
   const pairScale = { scaleX: SPHERE_RADIUS, scaleY: SPHERE_RADIUS, scaleZ: SPHERE_RADIUS };
@@ -445,9 +456,7 @@ async function main(): Promise<void> {
 
   // ws/perf-overlay: the frame-cost readout, shown with `?perf` (the monitor always samples).
   const perf = createPerfMonitor();
-  const perfHud = new URLSearchParams(location.search).has('perf')
-    ? createPerfOverlay(perf, { parent: root })
-    : null;
+  const perfHud = flags.has('perf') ? createPerfOverlay(perf, { parent: root }) : null;
 
   const loop = new GameLoop({
     update() {
@@ -475,6 +484,8 @@ async function main(): Promise<void> {
       frame.mesh(wall, tileMat, tileT, tileP);
       frame.mesh(sphere, spheresMat, litT, litP);
       frame.mesh(sphere, spheresMat, maskedT, maskedP);
+      if (tangentTile) frame.mesh(tangentTile, tileMat, tangentT, tileP);
+      state.tangentMeshes = tangentTile ? 1 : 0;
       renderer.endFrame();
       state.frames++;
       state.stats.drawCalls = renderer.stats.drawCalls;

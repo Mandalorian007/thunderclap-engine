@@ -5,10 +5,13 @@
  * `update()` and hands it the recorded pads, so an identical game sees identical `pressed`,
  * `held`, `released` and `value` per tick. Neither changes how `Input` evaluates bindings.
  *
- * The recording is plain JSON: `{ version: 1, ticks: [...] }`, deltas only. A tick with events
- * is `{ t, k?, b?, p?, w?, r?, d?, g? }`; a run of ticks with none is `{ t, n }`.
+ * The recording is plain JSON: `{ version: 2, ticks: [...] }`, deltas only. A tick with events
+ * is `{ t, k?, b?, p?, w?, r?, d?, g?, ptr?, cx?, cs? }`; a run of ticks with none is `{ t, n }`.
+ * Version 2 (ws/input-5) adds the `ptr` lane (every pointer the dispatcher saw, so touch zones,
+ * gestures and a second thumb replay) and the observational `cx` and `cs`; version 1 recordings
+ * still parse and play.
  */
-import type { Input, InputFeedHook } from './input';
+import type { Input, InputFeedHook, InputPointerPhase } from './input';
 import type { GamepadLike, PointerState } from './types';
 
 /** One gamepad as recorded: button values (1 when `pressed`) and axes. `null` for an empty slot. */
@@ -41,7 +44,37 @@ export interface InputTickEvents {
    * so a replay can assert the game rumbled when it should.
    */
   rumble?: [number, number, number, number?][];
+  /**
+   * Every pointer event the attached dispatcher delivered this tick, in order (version 2): see
+   * `InputPointerEntry`. Consecutive moves of one pointer keep only the last. Playback dispatches
+   * them on the attached pointer target after the other lanes; without one they are skipped.
+   */
+  ptr?: InputPointerEntry[];
+  /**
+   * Context pushes (`[name, 1]`) and removals (`[name, 0]`) this tick, in order (version 2).
+   * Observational, like `rumble`: the game pushes them again from the same inputs.
+   */
+  cx?: [string, 0 | 1][];
+  /** Actions `consume`d this tick, in order (version 2). Observational. */
+  cs?: string[];
 }
+
+/**
+ * One recorded pointer event: `[phase, id, device, clientX, clientY, button, primary]`, phase 0
+ * down, 1 move, 2 up, 3 cancel, 4 leave; `primary` 1 or 0. A window blur is recorded as a
+ * cancel of every pointer still down.
+ */
+export type InputPointerEntry = [
+  0 | 1 | 2 | 3 | 4,
+  number,
+  'mouse' | 'touch' | 'pen',
+  number,
+  number,
+  number,
+  0 | 1,
+];
+
+const PHASES: readonly InputPointerPhase[] = ['down', 'move', 'up', 'cancel', 'leave'];
 
 /** A run of `n` ticks starting at `t` on which nothing was fed. */
 export interface InputTickRun {
@@ -53,7 +86,8 @@ export type InputTick = InputTickEvents | InputTickRun;
 
 /** What `createInputRecorder` builds and `createInputPlayback` reads. Plain JSON. */
 export interface InputRecording {
-  version: 1;
+  /** 2 from ws/input-5 (the `ptr`, `cx` and `cs` lanes); 1 still reads. */
+  version: 1 | 2;
   ticks: InputTick[];
 }
 
@@ -133,7 +167,9 @@ export function createInputRecorder<A extends string>(
   opts: InputRecorderOptions = {},
 ): InputRecorder {
   const capturePads = opts.pads !== false;
-  const recording: InputRecording = { version: 1, ticks: [] };
+  const recording: InputRecording = { version: 2, ticks: [] };
+  /** Pointers down (by id), for turning a blur into cancels. */
+  const live = new Map<number, InputPointerEntry>();
   let t = 0;
   /** The tick being built, or null while nothing happened on it. */
   let cur: InputTickEvents | null = null;
@@ -184,6 +220,44 @@ export function createInputRecorder<A extends string>(
         pad === undefined ? [strong, weak, ms] : [strong, weak, ms, pad];
       if (c.rumble) c.rumble.push(e);
       else c.rumble = [e];
+    },
+    pointer: (phase, p) => {
+      const c = open();
+      const ph = PHASES.indexOf(phase) as InputPointerEntry[0];
+      const e: InputPointerEntry = [
+        ph,
+        p.id,
+        p.device,
+        p.clientX,
+        p.clientY,
+        p.button,
+        p.primary ? 1 : 0,
+      ];
+      if (!c.ptr) c.ptr = [];
+      const lane = c.ptr;
+      const last = lane[lane.length - 1];
+      if (ph === 1 && last && last[0] === 1 && last[1] === p.id) lane[lane.length - 1] = e;
+      else lane.push(e);
+      if (ph === 0 || (ph === 1 && live.has(p.id))) live.set(p.id, e);
+      else if (ph === 2 || ph === 3) live.delete(p.id);
+    },
+    cancelPointers: () => {
+      if (live.size === 0) return;
+      const c = open();
+      if (!c.ptr) c.ptr = [];
+      const lane = c.ptr;
+      for (const e of live.values()) lane.push([3, e[1], e[2], e[3], e[4], e[5], e[6]]);
+      live.clear();
+    },
+    context: (name, pushed) => {
+      const c = open();
+      if (!c.cx) c.cx = [];
+      c.cx.push([name, pushed ? 1 : 0]);
+    },
+    consume: (action) => {
+      const c = open();
+      if (!c.cs) c.cs = [];
+      c.cs.push(action);
     },
     gamepads: (pads) => {
       if (capturePads && !samePads(lastPads, pads, padsWritten)) {
@@ -291,6 +365,14 @@ export function createInputPlayback<A extends string>(
   let index = 0;
   let pads: GamepadLike[] = [];
   let speed = Math.max(1, Math.floor(opts.speed ?? 1));
+  /** Replayed pointers still down, cancelled on `seek`. */
+  const live = new Map<number, InputPointerEntry>();
+
+  const replayPointer = (e: InputPointerEntry): void => {
+    input.replayPointer(PHASES[e[0]]!, e[1], e[2], e[3], e[4], e[5], e[6] === 1);
+    if (e[0] === 0 || (e[0] === 1 && live.has(e[1]))) live.set(e[1], e);
+    else if (e[0] === 2 || e[0] === 3) live.delete(e[1]);
+  };
 
   const feedTick = (): void => {
     // Advance the entry cursor to the one covering this tick.
@@ -320,6 +402,7 @@ export function createInputPlayback<A extends string>(
     }
     if (e.p && !e.d) input.pointerAt(e.p[0], e.p[1], e.p[2] ?? 'mouse');
     if (e.w) input.wheel(e.w[0], e.w[1]);
+    if (e.ptr) for (const p of e.ptr) replayPointer(p);
     if (e.g) pads = e.g.map(padFromSnapshot);
   };
 
@@ -354,6 +437,7 @@ export function createInputPlayback<A extends string>(
       return length;
     },
     seek(to) {
+      for (const e of [...live.values()]) replayPointer([3, e[1], e[2], e[3], e[4], e[5], e[6]]);
       input.releaseAll();
       tick = Math.max(0, Math.min(length, Math.floor(to)));
       index = 0;
@@ -416,7 +500,8 @@ export function parseRecording(source: string | unknown): InputRecording {
     }
   } else v = source;
   if (!isObject(v)) throw new InputRecordingError('recording is not an object');
-  if (v.version !== 1) throw new InputRecordingError(`unsupported version ${String(v.version)}`);
+  if (v.version !== 1 && v.version !== 2)
+    throw new InputRecordingError(`unsupported version ${String(v.version)}`);
   if (!Array.isArray(v.ticks)) throw new InputRecordingError('ticks is not an array');
   let next = 0;
   v.ticks.forEach((e, i) => {
@@ -440,6 +525,14 @@ export function parseRecording(source: string | unknown): InputRecording {
     if (e.g !== undefined && !(Array.isArray(e.g) && e.g.every(isPadSnapshot))) throw bad(i, 'g');
     if (e.rumble !== undefined && !(Array.isArray(e.rumble) && e.rumble.every(isRumble))) {
       throw bad(i, 'rumble');
+    }
+    if (v.version === 1) return;
+    if (e.ptr !== undefined && !(Array.isArray(e.ptr) && e.ptr.every(isPointerEntry))) {
+      throw bad(i, 'ptr');
+    }
+    if (e.cx !== undefined && !isPairs(e.cx, 'string')) throw bad(i, 'cx');
+    if (e.cs !== undefined && !(Array.isArray(e.cs) && e.cs.every((a) => typeof a === 'string'))) {
+      throw bad(i, 'cs');
     }
   });
   return v as unknown as InputRecording;
@@ -475,6 +568,19 @@ function isPointer(v: unknown): boolean {
   if (!Array.isArray(v) || v.length < 2 || v.length > 3) return false;
   if (!isNumbers(v.slice(0, 2))) return false;
   return v.length === 2 || v[2] === 'mouse' || v[2] === 'touch' || v[2] === 'pen';
+}
+
+function isPointerEntry(v: unknown): boolean {
+  return (
+    Array.isArray(v) &&
+    v.length === 7 &&
+    Number.isInteger(v[0]) &&
+    v[0] >= 0 &&
+    v[0] <= 4 &&
+    (v[2] === 'mouse' || v[2] === 'touch' || v[2] === 'pen') &&
+    isNumbers([v[1], v[3], v[4], v[5]]) &&
+    (v[6] === 0 || v[6] === 1)
+  );
 }
 
 function isRumble(v: unknown): boolean {

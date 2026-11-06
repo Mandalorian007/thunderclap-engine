@@ -137,4 +137,27 @@ describe('tooltips', () => {
   it('needs the anchors for a world point', () => {
     expect(() => ov.tooltip([0, 0, 0], 'x')).toThrow();
   });
+
+  it('a world target lands where an anchored element is placed, and a resize moves both (ws/ui-4)', () => {
+    ov.setFrame({ x: 40, y: 0, width: 960, height: 540 });
+    const cam = Camera.ortho2d(1920, 1080);
+    const a = ov.anchors(() => cam);
+    const mark = a.add(h('span'), [1600, 540, 0]);
+    const t = ov.tooltip([1600, 540, 0], 'Here', { placement: 'bottom' });
+    const el = ov.tooltips.element;
+    const at = () => {
+      const m = /translate\(([-\d.]+)px, ([-\d.]+)px\)/.exec(el.style.transform)!;
+      return [Number(m[1]), Number(m[2])] as const;
+    };
+    ov.updateAnchors();
+    // happy-dom lays out nothing: a 0×0 tooltip sits at the anchor, the gap below it.
+    expect(at()[0]).toBeCloseTo(mark.x, 3);
+    expect(at()[1]).toBeCloseTo(mark.y + 8, 3);
+    ov.setFrame({ x: 0, y: 100, width: 1920, height: 1080 });
+    ov.updateAnchors();
+    expect(mark.x).toBeCloseTo(1600, 3);
+    expect(at()[0]).toBeCloseTo(mark.x, 3);
+    expect(at()[1]).toBeCloseTo(mark.y + 8, 3);
+    expect(t.visible).toBe(true);
+  });
 });

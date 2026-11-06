@@ -17,6 +17,12 @@ import { createTerrain, findLandmarks } from './world/terrain';
 /** The world's seed: the page and the mesher Worker both generate from it. */
 const SEED = 2026;
 
+declare global {
+  interface Window {
+    __template?: { scene: string; frames: number; x: number; z: number };
+  }
+}
+
 const engine = await createGame<Action, null, GameCtx>({
   root: document.getElementById('app')!,
   title: 'Highland',
@@ -28,8 +34,10 @@ const engine = await createGame<Action, null, GameCtx>({
 if (engine) {
   // The two lines a first-person game adds: a Look, linked to the input so it shares its block,
   // its attach and its pointer transform. Mouse (pointer lock), two touch zones, pad sticks and
-  // the move keys all land in `look.look` and `look.move`.
+  // the move keys all land in `look.look` and `look.move`. `lockOnFirstClick`: the first mouse
+  // click into the game takes the pointer lock, and the next click after Escape takes it again.
   const look = new Look({
+    lockOnFirstClick: true,
     keys: {
       forward: ['KeyW', 'ArrowUp'],
       back: ['KeyS', 'ArrowDown'],
@@ -39,10 +47,6 @@ if (engine) {
     touch: { moveZone: 'left' },
   });
   engine.input.setLook(look);
-  // Browsers grant the pointer lock only inside a gesture: ask on a mouse click.
-  engine.surface.canvas.addEventListener('pointerdown', (e) => {
-    if (e.pointerType === 'mouse' && !look.locked) void look.request();
-  });
 
   const terrain = createTerrain(SEED);
   const world: World = { seed: SEED, terrain, landmarks: findLandmarks(terrain) };
@@ -66,6 +70,17 @@ if (engine) {
     },
   });
   Object.assign(ctx, { hud: createHud(ctx, look) });
+
+  // `window.__template`: the top scene's name, the frame count and the player's x/z, for the
+  // repo's smoke e2e (`e2e/templates.spec.ts`). Updated after every rendered frame.
+  const probe = { scene: '', frames: 0, x: 0, z: 0 };
+  window.__template = probe;
+  engine.hooks.afterRender = () => {
+    probe.scene = ctx.stack.top?.name ?? '';
+    probe.frames++;
+    probe.x = player.position[0]!;
+    probe.z = player.position[2]!;
+  };
 
   ctx.respawn();
   ctx.stack.push(createWorldScene(ctx));

@@ -23,15 +23,10 @@ Your worktree may start from an old commit. First `git reset --hard main` (or th
 ## Done when
 
 - `pnpm check` is green (typecheck, Biome, boundaries, Vitest, host-electron).
-- `pnpm test:e2e` is green on the harness matrix, run once on your final head (Playwright Chromium is installed locally; do not download browsers). Refactors leave the 2D harness pages pixel-identical. An e2e assertion on a value that moves over time polls (`expect.poll`); a single read is a flake waiting to happen.
-- **Full e2e takes a slot (E-030).** At most two full `pnpm test:e2e` runs at once on this machine. Take a slot, run, give it back:
-
-  ```sh
-  S=; until [ -n "$S" ]; do for s in 1 2; do mkdir /tmp/thunderclap-e2e-slot$s 2>/dev/null && { S=$s; break; }; done; [ -n "$S" ] || sleep 60; done
-  E2E_PORT_OFFSET=<n> pnpm test:e2e; rmdir /tmp/thunderclap-e2e-slot$S
-  ```
-
-  A slot directory older than 45 minutes (`find /tmp -maxdepth 1 -name 'thunderclap-e2e-slot*' -mmin +45`) is stale: remove it. Holding a slot, still check `uptime` and wait while the 1-min load is above 40. Single-spec runs (`pnpm test:e2e e2e/x.spec.ts`) need no slot. Report the 1-min load at the start and end of the run.
+- **E2E (E-031).** Engineers do not run the full `pnpm test:e2e`; the integration train does. Your gate is `pnpm check` green, `pnpm snap:check` at 0 px, and every spec your branch owns or touches green on its own (`E2E_PORT_OFFSET=<n> pnpm test:e2e e2e/x.spec.ts`), run on your final head. Refactors leave the 2D harness pages pixel-identical. An e2e assertion on a value that moves over time polls (`expect.poll`); a single read is a flake waiting to happen.
+  Set state and read the frame counter in the same `page.evaluate`: two round trips let several rAF ticks pass under load (the ws/ui-4 lost pad press).
+  While `/tmp/thunderclap-e2e-slot1` exists, a train matrix is running. Do not start an e2e spec, `pnpm check` or `pnpm snap:check` until it is gone; poll with `while [ -d /tmp/thunderclap-e2e-slot1 ]; do sleep 60; done`. Editing and targeted `pnpm vitest run <file>` are fine.
+  Write logs inside your own worktree (for example `.e2e-<branch>.log`, deleted before commit), never under a shared scratchpad name. Report the 1-min load (`uptime`) with each e2e result.
 - Unit tests cover what you added; the fake GPU (`src/render/fake-gpu.ts`) covers renderer changes.
 - `ARCHITECTURE.md` *Today* text, the module README and `CHANGELOG.md` ("Next (unreleased)") describe the change, in the same branch.
 - Public API is exported only from the module's `index.ts`; new subpaths go in `package.json` `exports` and the root README table.
@@ -40,7 +35,7 @@ Your worktree may start from an old commit. First `git reset --hard main` (or th
 
 1. Branch, worktree path, commit hashes.
 2. What shipped: public API added, changed or removed, exact names and signatures.
-3. Gate: `pnpm check` test count; e2e passed/skipped/failed.
+3. Gate: `pnpm check` test count; `snap:check`; each spec you ran with passed/failed.
 4. Changes to shared files (function names and line ranges) for the integrator.
 5. Decisions you made that the brief left open, and anything you wished another module offered.
 6. Deviations from the brief, and anything you did not finish.
