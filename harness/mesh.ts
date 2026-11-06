@@ -36,9 +36,15 @@ import type { HarnessMeshApi, HarnessMeshState } from './mesh-state';
 
 const root = document.getElementById('root') as HTMLElement;
 const LOGICAL = { width: 1920, height: 1080 };
+/**
+ * `?still` parks time-driven motion (E-017): the lamp stays at one angle and the side blocks do
+ * not spin, so e2e pixel probes read the same scene every frame. Off by default.
+ */
+const STILL = new URLSearchParams(location.search).has('still');
 
 const state: HarnessMeshState = {
   ready: false,
+  still: STILL,
   gpu: 'pending',
   frames: 0,
   logical: LOGICAL,
@@ -186,6 +192,13 @@ const LAMP_RADIUS = 5;
 const LAMP_ORBIT = 3.2;
 const LAMP_HEIGHT = 1.6;
 const LAMP_RAD_PER_S = 0.9;
+/**
+ * Where `?still` parks the lamp: behind the far block at (2.3, 1.6, -2.3), more than its radius
+ * from every ground patch e2e/mesh.spec.ts samples (`ground`, `shadowLit`, `fog`; `shadow` sits
+ * at the edge of its falloff). On its orbit it passes within 2.3 units of `ground` and pulls that
+ * patch towards the fog colour, which is what failed the fog test under load.
+ */
+const STILL_LAMP_ANGLE = -Math.PI / 4;
 /** The sun's shadow map: a 2048² box 20 units either side of the eye. */
 const SHADOW_EXTENT = 20;
 const SHADOW_SIZE = 2048;
@@ -282,7 +295,7 @@ async function main(): Promise<void> {
   const farP: InstanceParams = { tint: [0.08, 0.28, 1.0, 1] };
   const leftP: InstanceParams = { tint: [0.3, 0.85, 0.35, 1] };
   const rightP: InstanceParams = { tint: [0.95, 0.8, 0.2, 1] };
-  let spin = 0;
+  let spin = STILL ? STILL_LAMP_ANGLE / LAMP_RAD_PER_S : 0;
 
   // The lights: set once, mutated per frame (the lamp's position), uploaded by the renderer.
   const lights = new Lights();
@@ -328,7 +341,7 @@ async function main(): Promise<void> {
       if (zo > 0) state.zoom.out++;
       orbit.distance *= 1 + (zo - zi) * ZOOM_PER_TICK;
       placeCamera(camera);
-      spin += dt;
+      if (!STILL) spin += dt;
     },
     render(_alpha, time) {
       const frame = renderer.beginFrame(time.realTime, time.frameDt);
