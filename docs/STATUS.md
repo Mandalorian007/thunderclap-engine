@@ -55,7 +55,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Texture registry | ws/texture-registry | `loadTexture` with mips, `defaultTextures` (white, black, flatNormal, metalRough, checker), unset slots bind white | pbr (wish) | ✅ merged `853f444` (chain 1; e2e 662/92/8 all E-017/E-020) |
 | 5 | Geometry | ws/geom | `@thunderclap/engine/geom`: box/plane/sphere/icosphere/capsule/cylinder/torus, `Heightfield` with `heightAt`/`raycastHeightfield`, merge/transform; harness `geom.html` | — | ✅ merged `a775df4` (chain 4; 840 tests; e2e 679/92/7 E-017) |
 | 5 | IK + root motion | ws/ik | `twoBoneIk`, `lookAt`, `extractRootMotion`, `applyRootMotionDelta`; harness `ik.html` | anim | ✅ merged `10475ed` (chain 4; 902 tests; e2e 747/95/0; snap 5/5) |
-| 5 | Anim graph | ws/anim-graph | `createAnimGraph`: states, 1D blend spaces with phase sync, conditional transitions, enter/exit hooks; harness `anim-graph.html` | anim | ✅ green at `cea21ae` (727 tests; e2e 578/92/4, all mesh.spec fog E-017); queued chain 4 after ui-hud |
+| 5 | Anim graph | ws/anim-graph | `createAnimGraph`: states, 1D blend spaces with phase sync, conditional transitions, enter/exit hooks; harness `anim-graph.html` | anim | ✅ merged `089bf49` (chain 4; e2e 772/102/0; snap 5/5; check 944 after E-025 disjoint merges) |
 | 5 | HUD widgets | ws/ui-hud | `ui.reticle`, `ui.meter`, `ui.slots`, `ui.heading` on the overlay; harness `hud.html` | ui | ✅ green at `97e0af3` (723 tests; e2e 587/92/3, all E-017 list); queued chain 4 after ik |
 | 5 | Gesture long-press | ws/gesture-longpress | pan threshold before long-press, cumulative travel, `Gestures.onGesture` observer | gestures | ✅ merged `06048c2` (chain 3; 911 tests; e2e 748/102/0; snap 5/5) |
 | 5 | Audio zones | ws/audio-zones | `audio.zones` (ambient loops, reverb sends by listener position), `Voice.follow`, `audio.update(dt)`; harness `zones.html` | audio | ✅ green at `2816026` (735 tests; e2e 596/92/2 E-017 fog); queued chain 1 after texture-registry |
@@ -66,7 +66,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Localisation | ws/i18n | `@thunderclap/engine/i18n`: ICU-style messages, plurals via Intl, fallback chain, runtime locale switch, `negotiateLocale` | — | ✅ merged `96018ef` (chain 1; 878 tests; e2e 731/95/0 at load 18; snap 0 px) |
 | 5 | Navigation | ws/nav | `@thunderclap/engine/nav`: grid field, A*, flow field, string pulling, path follower, local steering | — | ✅ green at `1c61629` (801 tests; e2e 671/92/7 E-017; nav.spec 32/32); queued chain 1 after post-depth |
 | 5 | Tweens | ws/tween | `@thunderclap/engine/tween`: easing table, property/value tweens, sequences, loops/yoyo, springs, `Tweens.update(dt)` | post easing | ✅ green at `23d6644` (924 tests, 162 tween; e2e 659/92/11 load; tween.spec all rows); queued chain 2 after scaffold |
-| 5 | Demo: arena | ws/demo-arena | `demos/arena` third-person skinned character, sockets+trail, follow cam, PBR+shadows, particles; owns `pnpm demo` infra | skinning, anim, sockets, pbr | ✅ green at `4f7a6ce` (e2e 689/92/5 E-017; arena rows 24/24; snap 0 px); queued chain 6 first |
+| 5 | Demo: arena | ws/demo-arena | `demos/arena` third-person skinned character, sockets+trail, follow cam, PBR+shadows, particles; owns `pnpm demo` infra | skinning, anim, sockets, pbr | ✅ merged `d314a55` (chain 6; e2e 802/102/2 E-017 menuNav; snap 5/5; check 931 after E-025 disjoint merges; tsconfig `include` gains demos) |
 | 5 | Demo: dungeon | ws/demo-dungeon | `demos/dungeon` 2D tile crawl: atlas, 60 sprites, flicker, menu, save, synth audio | — | ✅ green at `802bbd2` (768 tests; e2e 680/96/18 load timeouts, dungeon.spec 28/4 alone; snap 5/5); land after demo-arena (shared infra) |
 | 5 | Demo: showroom | ws/demo-showroom | `demos/showroom` PBR sphere grid, moving lights, post looks via `blendTo`, GPU readout | pbr | ✅ green at `71c29d4` (768 tests; e2e 684/92/2 E-017; showroom.spec 16/16; snap 0 px); land after demo-arena |
 | 5 | Demo: range | ws/demo-range | `demos/range` first-person target range: Look, meshTester picks, sparks, trails, spatial audio | pick | ✅ green at `38ce3d1` (768 tests; range.spec 31/9/0; full matrix unusable at load 52, E-023); queued chain 6 last |
@@ -80,9 +80,11 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Geometry kit 2: extrude/lathe/sweep/tube/polygon, stairs/arch, tangents + `VERTEX_LAYOUT_3D_TANGENT`, weld/flatShade/projectUv/fitBounds | ws/geom-2 | ✅ check green at `c307337` (934 tests); e2e not run by engineer (load 45), integrator runs it; queued chain 3 (moved from chain 1) |
 | 5 | Camera helpers: `viewZ`, `invViewProj`, `projectMany`, `frustumCorners`, `setPerspective` parity | ws/camera-ergo | ✅ merged `8f32ab9` (chain 3; check 931; e2e 781/109/0; snap 5/5; E-025 applied for docs-only main move) |
 | 5 | UI widgets 2: reticle, bar, segmented, select, keyPrompt, stepper, cooldown | ws/ui-widgets | ✅ check green at `73267a5` (922 tests; widgets.spec 15/15); full e2e not run by engineer (load 40+), integrator runs it; queued chain 3 after geom-2 (moved from chain 5) |
-| 5 | Audio 2: beat-grid music layers, variations, reverb/lowpass sends, ducking | ws/audio-2 | 🔧 engineer running (offset 330) |
+| 5 | Audio 2: beat-grid music layers, variations, reverb/lowpass sends, ducking | ws/audio-2 | ✅ green at `8c5db70` (933 tests; e2e 776/106/0); queued chain 3 after ui-widgets |
 | 5 | Save 2: slot manager with meta sidecar, settings store + bind, undo journal, typed-array codec | ws/save-2 | 🔧 engineer running (offset 340) |
 | 5 | Post 2: FXAA, 3D LUT, grain, aberration, sharpen, depth/normal outline | ws/post-2 | 🔧 engineer running (offset 350) |
+| 5 | Water surface: scrolling normals, Fresnel, sun specular, depth fade, foam, `waterHeight` | ws/water | `src/fx/water.ts` Drawable; harness `water.html` | sky, post-depth, camera-ergo | 🔧 engineer running (offset 360) |
+| 5 | Decals: depth-projected box decals + quad fallback, atlas, lifetime, one instanced draw | ws/decals | `src/fx/decals.ts` Drawable; harness `decals.html` | post-depth, camera-ergo | 🔧 engineer running (offset 370) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
@@ -133,7 +135,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - ws/tween diagnostic: `mesh.spec.ts:174` fog probe read 49 vs <42 on all three desktop rows in a targeted rerun at load 50–80 (base 36c5266); chain 1 saw 0 failures at 40cb5cd. If the desktop rows keep failing at low load, it is a regression, not a flake: ws/flake-input checks main.
 - ws/demo-dungeon wishes: `createGame` accepting `input.getGamepads` (or an injectable `PadNav`) so specs drive `ctx.padNav`; `PanelStack` walking focus with ArrowUp/Down itself; a tilemap/flipbook helper in `render` to replace per-tile DrawParams bookkeeping. → ws/ergo-2d brief.
 - ws/demo-showroom wishes: `Renderer.timing` 'first sample ready' promise; a retained `worldToScreen` projection; geom builders replacing the copied harness helpers (geom now on main). → ws/ergo-3d.
-- ws/demo-arena wishes: `RenderStats.triangles`; `createStandardMaterial({ buffers })` or a `skinned` option so a skinned PBR needs no custom WGSL; `tsconfig.json` `include` adds `demos` (chain 6 integrator may add it as a semantic fix if typecheck stays green). → ws/ergo-3d.
+- ws/demo-arena wishes: `RenderStats.triangles`; `createStandardMaterial({ buffers })` or a `skinned` option so a skinned PBR needs no custom WGSL; → ws/ergo-3d. (`tsconfig.json` `include` now has `demos`, done at d314a55.)
 - Brief pbr-lights said `WGSL_PBR` lives in `standard.ts`; it is `src/render/pbr-wgsl.ts`. Fix in the next brief that names it (gltf-materials).
 - ws/batch-submit wish: fake GPU records `writeBuffer` data so tests need no queue monkey-patch. → ws/comment-sweep.
 - ws/demo-range wishes: ui reticle widget; hinge/tween helper (tween lands soon); geom cube helper (geom on main). → ws/ergo-3d.
@@ -141,6 +143,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - ws/billboards wish: `Camera.viewZ(x, y, z)` helper (view-space depth of a point). → ws/ergo-3d.
 - ws/geom-2 wishes: `mergeGeometry`/`transformGeometry` accept the tangent layout (today 3D only); tangent attribute sits at `@location(13)` (3..9 instance, 11/12 skinning), document the location map in render README. → ws/ergo-3d.
 - ws/ui-widgets wish: `styles.ts` select/range zoom rule renders native selects on frame layers at `--tc-dpx²` (token already scaled, then zoomed again), so selects look small on the HUD layer. → ws/comment-sweep.
+- ws/audio-2 wishes for `audio.ts`: expose live voices per bus; `Voice.sendTo(node, amount)` or a bus insert chain for true occlusion; a hook so music stems register as voices (today `stopAll`/`voiceCount` do not see stems). → ws/ergo-3d or an audio-3 brief.
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
