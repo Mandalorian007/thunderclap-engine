@@ -159,3 +159,142 @@ Harness: `harness/geom.html` draws every builder, turning and lit, over a height
 sine bump map: the primitives in front, an extruded star, a lathed vase, a tube along a helix,
 stairs and an arch behind; `e2e/geom.spec.ts` checks the shape count, lit probe pixels, that
 `computeTangents` over the star is right-handed throughout and `heightAt`.
+
+## Collision
+
+A world of static triangles under a BVH, queried by shapes: the engine finds what a moving
+thing touches and where it may go; what the game does about it stays the game's. Every query
+is allocation-free after warm-up (the results go into objects the caller owns; the internals
+work in typed-array registers, never in doubles passed between calls).
+
+- `createStaticCollider(sources: ColliderSource[], opts?: StaticColliderOptions)` builds a
+  `StaticCollider` from `GeometrySource { geometry; transform?; layer?; userData? }` (any
+  `Geometry` whose first three floats per vertex are the position, optionally placed by a 3×4
+  `Transform.world` or a 4×4 column-major matrix: `ColliderTransform`), `HeightfieldSource
+  { heightfield; layer?; userData? }` (two triangles per cell) and `TileGridSource { grid; layer?;
+  userData? }`. `leafSize` (default 4) is the most triangles per leaf. `layer` is a bit index
+  0..31; every query takes a `layerMask` (default `ALL_LAYERS`). Each source gets its own subtree
+  under a top level, so `c.refit(sourceIndex, transform)` moves a geometry source without
+  rebuilding (leaves and inner nodes refitted bottom-up; the tree only gets looser) and
+  `c.remove(sourceIndex)` drops one. `c.triangleCount`, `c.sourceCount`, `c.bounds:
+  ColliderBounds { min; max }`, `c.userData(source)`, `c.sources: SourceRecord[]` (`kind:
+  SourceKind` is `SOURCE_GEOMETRY` 0, `SOURCE_HEIGHTFIELD` 1 or `SOURCE_GRID` 2) and the flat
+  arrays `c.tris` (nine floats per triangle; `colliderTriangle(c, index, out, offset?)` copies
+  one out) and `c.triSource`. `applyTransform(m, x, y, z, out, o)` is the point transform the
+  builder uses.
+- `GridSource { width; height; cellSize; origin: [x, z]; solid; y?; wallHeight? }` is the 2D
+  tile case: `solid` is a predicate over cell coordinates or a `width × height` `Uint8Array`
+  (`solid[z * width + x]`; `gridSolid(grid, x, z)` reads either, open outside). Each solid cell
+  is a box from `y` (default 0) to `y + wallHeight` (default `cellSize`); faces shared by two
+  solid cells are left out, so a run of tiles is one flat wall and a circle sliding along it
+  meets no interior edges. `gridTriangles(grid)` is that mesh, nine floats per triangle.
+- Shapes: `Sphere { x, y, z, r }`, `Capsule { x, y, z, halfHeight, r }` (along y; `halfHeight`
+  is centre to hemisphere centre, total height `2 × (halfHeight + r)`), `Aabb { min, max }`;
+  `Shape` is any of them, `isCapsule(s)` and `isAabb(s)` tell them apart, `shapeBounds(s, min,
+  max)` is the world AABB. The 2D shapes `Circle { x, z, r }` and `Box2 { x, z, hw, hh }` (`Shape2`,
+  `isBox2(s)`) are lifted to the collider's full height by the `*2` queries, so a 2D game builds
+  its collider from a `GridSource` or any geometry and never thinks about y. `Vec3Out` is
+  `[x, y, z]`, `Float32Array` or `Float64Array`.
+- `raycast(c, origin, dir, maxDist, out: Hit, layerMask?)`: the nearest triangle along the ray
+  (`dir` any length; `t` in world units); back faces hit too, with the normal turned to face the
+  ray. `Hit { t; x, y, z; nx, ny, nz; triangle; source; userData }`, from `createHit()`.
+  `raycast2(c, ox, oz, dx, dz, maxDist, out, layerMask?)` casts in xz at the collider's mid
+  height.
+- `overlap(c, shape, out: Contact[], maxContacts?, layerMask?)`: every triangle the shape
+  penetrates as contacts into `out` (from `createContact()`; `Contact { depth; nx, ny, nz; px,
+  py, pz; triangle; source }`, the normal pointing from the triangle into the shape, `depth` how
+  far along it to separate), returns the count; touching is not a contact. `overlap2` for a
+  `Shape2`, normals in xz.
+- `sweepShape(c, shape, dx, dy, dz, out: SweepHit, layerMask?)` moves the shape by a
+  displacement and finds the first triangle it touches: `SweepHit` (a `Hit` plus `depth`, from
+  `createSweepHit()`) with `t` in 0..1 along the displacement; a shape already overlapping reports
+  `t` 0 and its `depth`; false when the whole move is free. (`sweep` is the profile sweep above;
+  the shape sweep is `sweepShape` at this index.) `sweep2(c, shape, dx, dz, out, layerMask?)`.
+- `slide(c, shape, dx, dy, dz, opts?: SlideOptions, out?: SlideResult)` is the move-and-slide
+  loop a character controller would otherwise write: sweep, stop `skin` short, project the rest
+  of the displacement onto the hit plane, repeat up to `maxIterations`. A hit within `maxSlope`
+  degrees of up is ground (the downward part of the move is dropped there, the rest follows the
+  surface); anything steeper is a wall the shape slides along horizontally, and a wall that blocks
+  horizontal motion from the ground, or catches the shape no higher than `stepHeight` above its
+  bottom, is tried again `stepHeight` higher and dropped back onto walkable ground (stairs; a
+  rounded bottom landing on a step's lip counts when the ground under the centre is walkable).
+  After the move a probe `2 × skin` below decides `grounded`; a shape that was grounded
+  (`wasGrounded`, the previous result's `grounded`, default true) and moved down or flat looks
+  `snapDown` below for ground to stay on. Defaults: `skin` 0.005, `maxSlope` 50, `stepHeight`
+  0.35, `snapDown` 0.2, `maxIterations` 4, `layerMask` all. `SlideResult { x, y, z; grounded;
+  groundNormal; hitWall; hits; remaining }` from `createSlideResult()`; the shape itself is not
+  moved. `slide2(c, shape, dx, dz, opts?, out?)` is the flat case: every hit a wall, `y` 0,
+  `grounded` false.
+- The shape-vs-triangle tests the queries are built on, on nine triangle coordinates:
+  `sphereTriangle`, `capsuleTriangle`, `aabbTriangle` and `shapeTriangle(s, ax, …, cz, out:
+  Contact)` (true and `out` filled when they overlap), `closestPointTriangle(px, py, pz, ax, …,
+  cz, out)`, `closestSegmentSegment(p0…, p1…, q0…, q1…, outP, outQ)` and
+  `closestSegmentTriangle(p0…, p1…, a…, c…, outS, outT)` (squared distance), `triangleNormal(a…,
+  c…, out)`.
+- `exportCollider(c): ArrayBuffer` and `importCollider(buf, userData?)` bake a built collider
+  (little-endian, versioned, the typed arrays whole; `userData` is not serialised and is
+  reattached by source index); exporting an import gives identical bytes.
+- `colliderWireframe(c, out?, mode?: WireframeMode)` writes line segments (six floats each) for
+  every live triangle (`'triangles'`) or every BVH leaf box (`'leaves'`) for `createDebugDraw`;
+  `colliderWireframeLength(c, mode?)` is the float count.
+
+A controller is ten lines:
+
+```ts
+const collider = createStaticCollider([{ geometry: level }, { heightfield: ground }]);
+const body: Capsule = { x: 0, y: 1, z: 0, halfHeight: 0.5, r: 0.3 };
+const out = createSlideResult();
+let vy = 0;
+let grounded = false;
+function step(dt: number, moveX: number, moveZ: number): void {
+  vy = grounded ? 0 : vy - 9.8 * dt;
+  slide(collider, body, moveX * dt, grounded ? -0.001 : vy * dt, moveZ * dt, { wasGrounded: grounded }, out);
+  body.x = out.x; body.y = out.y; body.z = out.z;
+  grounded = out.grounded;
+}
+```
+
+Not here: response forces, physics integration and triggers belong to the game (gravity is the
+`dy` it passes; a trigger is an `overlap` it asks for).
+
+Harness: `harness/collide.html` is a level built from the builders (a floor, stairs onto a
+platform, an arch, a tilted ramp, a wall and a heightfield patch) with a capsule walked by WASD
+or the stick through `slide`, the collider's triangles or BVH leaves drawn through
+`createDebugDraw`; `?grid` is a 2D corridor with a circle on `slide2`; `?still` steps only
+through the page's `advance`. `e2e/collide.spec.ts` checks the wall stops the capsule, the stairs
+lift it by rise × steps, the ramp grounds it with a tilted normal and the circle rounds the
+corridor's bend.
+## Iso
+
+The 2:1 diamond projection and its inverse (ws/ergo-2d-2), pure arithmetic in whatever 2D
+space the caller works in (a tile layer's px, a camera's world px):
+
+```ts
+const iso = createIso({ tileW: 64, tileH: 32, elevH: 16, originX: 960, originY: 200 });
+iso.toScreen(tx, ty, elev, pt);           // diamond centre of a tile (fractions allowed)
+iso.toTile(sx, sy, elev, pt);             // fractional tile under a point, ground at elev
+dp.order = base + iso.depth(tx, ty, elev); // painter's key: tx + ty, then elevation
+if (isoInverseProbe(iso, px, py, heightAt, maxElev, pt)) hover(pt.x, pt.y);
+```
+
+- `createIso(opts: IsoOptions)` → `Iso`: `x = originX + (tx - ty) × tileW / 2`,
+  `y = originY + (tx + ty) × tileH / 2 - elev × elevH` (`elevH` default `tileH / 2`; `originX`,
+  `originY` are tile `(0, 0)`'s centre at elevation 0 and are live). `toScreen` / `toTile` fill
+  an `IsoPoint` (`{ x, y }`: any `Vec2`, `CameraPoint`, `DrawParams`) and return it; no
+  allocation. `depth(tx, ty, elev)` = `tx + ty + elev × ISO_ELEV_DEPTH` (`1 / 256`): monotone
+  along the diagonals, elevation a tie-break inside one, equal for the tiles of one diagonal
+  (they never overlap on screen).
+- `isoInverseProbe(iso, sx, sy, heightAt: IsoHeightAt, maxElev, out)` is the pointer-to-tile
+  rule of a map with elevation: it tries `maxElev` down to 0 and keeps the first tile whose
+  `heightAt(tx, ty)` is that elevation, so a pointer over a raised tile's top lands on it and
+  not on the flat tile the same pixel would cover at ground level. Returns true with the tile in
+  `out`, or false with `(-1, -1)` (off the map, where `heightAt` returns a negative number, or
+  over a riser between levels).
+- `isoHiddenBy(iso, tx, ty, heightAt)` is true when the tile's whole top is covered by taller
+  front neighbours: a column whose top is at least `tileH` above it (`tileH / elevH` steps; two
+  with the defaults) covers its half of the diamond, so `(tx + 1, ty + 1)` hides it alone and
+  `(tx + 1, ty)` with `(tx, ty + 1)` hide it together.
+
+Harness: `harness/tiles.html?iso` lays a 12 × 12 map with a two-level ramp through a painter
+`TileLayer` (`render/README.md`), walks a sprite between the tiles and resolves the hovered tile
+with `isoInverseProbe`; `e2e/tiles.spec.ts` hovers every row of the ramp.

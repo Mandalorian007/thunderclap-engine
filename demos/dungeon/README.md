@@ -18,13 +18,15 @@ shape, `pnpm create-game` scaffolds a project on the same public API.
 - Torches whose tint follows `flicker`, with `emissive` so bloom glows them, under a fog-of-war
   layer (one dark quad per tile on layer 2, alpha by distance from the player and the torches);
   the pause menu's "Fog" button masks the layer off through `camera.layers`.
-- The pause menu (Escape, P or Start) on `ui.stack`, walked with the arrow keys and a `PadNav`
-  that also reads the demo's fake pad; a fake press is latched until the `PadNav` has seen it.
+- The pause menu (Escape, P or Start) on `ui.stack`: the `PanelStack`'s own arrow walking
+  (`arrowNav: 'vertical'`, the default) moves focus on ArrowUp/ArrowDown and wraps, and a `PadNav`
+  drives the same stack from the pad and the demo's fake pad; a fake press is latched until the
+  `PadNav` has seen it. The demo handles no menu keys itself.
 
 ## Known limits
 
-Menu arrow-walking is the demo's own keydown handler (PanelStack focus walking is not on main);
-the health bar is `ui.meter`, since the `bar` widget (ws/ui-widgets) is not on main either.
+The health bar stays `ui.meter`: it is the HUD primitive (`role="meter"`, region-aware, tones),
+where the widgets `bar` is a panel progress row (`role="progressbar"`). The spec asserts the meter.
 
 ## What it shows
 
@@ -33,7 +35,7 @@ the health bar is `ui.meter`, since the `bar` widget (ws/ui-widgets) is not on m
 - A player square moved by arrows/WASD, a gamepad (d-pad or left stick) or a touch drag, with axis-separated box collision so it stops flush against walls (`map.ts`, `moveBox`).
 - Torches whose tint follows `flicker`, with `emissive` so bloom glows them.
 - A fog-of-war layer: one dark quad per tile on layer 2, alpha by distance from the player and the torches; the pause menu's "Fog" button masks the layer off through `camera.layers`.
-- A pause menu (Escape, P or Start) on `ui.stack`, walked with the arrow keys and a `PadNav` that also reads the demo's fake pad. A fake press (`__demo.pad(i, true)`) stays down until the `PadNav` has observed it in an update, so a release in the same frame, or a frame the loop skipped under load, cannot lose the step.
+- A pause menu (Escape, P or Start) on `ui.stack`, walked by the stack's arrow keys and a `PadNav` that also reads the demo's fake pad. A fake press (`__demo.pad(i, true)`) stays down until the `PadNav` has observed it in an update, so a release in the same frame, or a frame the loop skipped under load, cannot lose the step.
 - A coin counter kept in `save` (`thunderclap:demo-dungeon:main`) that survives reloads, with a HUD line in the top layout region.
 - Pickup and hit sounds from `recipes.chime` / `recipes.thud` on the `sfx` bus.
 

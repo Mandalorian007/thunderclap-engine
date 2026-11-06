@@ -1,9 +1,10 @@
 /**
  * Arena demo (E-021): a third-person skinned humanoid runs around a lit arena. Idle and run
  * clips blend by speed in an `AnimationMixer`; a sword rides a hand socket and leaves a `Trail`
- * when swung; a `Follow` camera is driven by `Look`; PBR ground and pillars under a shadowing
- * sun and two coloured point lights; dust at the feet from the engine's world-space particles;
- * fog; a toast on each swing.
+ * when swung and stamps a `Decals` scorch where the blade meets a pillar or an orb; a `Follow`
+ * camera is driven by `Look`; PBR ground, pillars and the skinned body through
+ * `createStandardMaterial` under a shadowing sun and two coloured point lights; dust at the feet
+ * from the engine's world-space particles; fog; a toast on each swing; a stamina `bar` in the HUD.
  *
  * Controls: WASD / left stick / left-half touch stick moves (relative to the camera); mouse
  * (click for the pointer lock) / right stick / right-half drag looks; click, tap, Space or the
@@ -22,7 +23,7 @@ import {
   WORLD_NODE_FLOATS,
 } from '@thunderclap/engine/anim';
 import type { Scene } from '@thunderclap/engine/core';
-import { Trail } from '@thunderclap/engine/fx';
+import { Decals, Trail } from '@thunderclap/engine/fx';
 import { box, cylinder, mergeGeometry, plane, transformGeometry } from '@thunderclap/engine/geom';
 import { Follow, Look } from '@thunderclap/engine/input';
 import {
@@ -38,9 +39,9 @@ import {
   Transform,
   VERTEX_LAYOUT_3D,
   VERTEX_LAYOUT_SKINNED,
-  WGSL_PBR,
 } from '@thunderclap/engine/render';
-import { tilePixels } from './geom';
+import { bar } from '@thunderclap/engine/ui';
+import { scorchPixels, tilePixels } from './geom';
 import {
   createBodyMesh,
   createIdleClip,
@@ -72,6 +73,9 @@ const state: ArenaDemoState = {
   stats: { drawCalls: 0, instances: 0, drawables: 0, culled: 0, shadowDraws: 0 },
   trailPoints: 0,
   trailPeak: 0,
+  hits: 0,
+  decals: 0,
+  stamina: 100,
   still: new URLSearchParams(location.search).has('still'),
   gpuErrors: 0,
 };
@@ -86,18 +90,15 @@ const ARENA_RADIUS = 11;
 const PILLAR_RING = 8.5;
 const PILLAR_COUNT = 8;
 const FOV = (55 * Math.PI) / 180;
-
-/** Skinned PBR: vertex colours as albedo, rough dielectric; the palette slot rides in params.w. */
-const SKINNED_PBR_WGSL = /* wgsl */ `${WGSL_PBR}
-@fragment fn fs_main(in: VSOut) -> FragOut {
-  let n = normalize(in.normal);
-  let v = normalize(camera.camera_pos.xyz - in.worldPos);
-  let lit = engine_pbr(in.color.rgb, 0.0, 0.72, n, v, in.worldPos, 1.0, vec3f(0.0));
-  var o: FragOut;
-  o.color = vec4f(lit, 1.0);
-  o.emissive = vec4f(0.0);
-  return o;
-}`;
+/** The blade tip within this of a pillar's axis (shaft radius 0.36) or an orb's centre is a hit. */
+const PILLAR_HIT = 0.6;
+const PILLAR_SURFACE = 0.37;
+const ORB_HIT = 0.35;
+const ORB_SURFACE = 0.14;
+/** A swing costs a quarter of the stamina bar; it refills at this rate. */
+const STAMINA_MAX = 100;
+const SWING_COST = 25;
+const STAMINA_REGEN = 20;
 
 type Action = 'swing';
 
@@ -199,11 +200,25 @@ async function main(): Promise<void> {
     instances: 1,
     label: 'arena-skin',
   });
-  const skinMat = renderer.createMaterial({
+  // The skinned body through the standard material: vertex colours multiply the (white) base
+  // colour, the palette is bound by `skin`, and the slot rides in `params[SKIN_PARAM]` (0 here).
+  const skinMat = createStandardMaterial(renderer, {
     label: 'arena-skinned',
-    wgsl: SKINNED_PBR_WGSL,
-    blend: 'opaque',
-    buffers: [palette.buffer],
+    skin: palette,
+    metallic: 0,
+    roughness: 0.72,
+  });
+  // Hit decals: one scorch tile, box-projected onto the pillar or orb the blade struck.
+  const decals = new Decals(renderer, {
+    texture: renderer.textureFromPixels({
+      width: 32,
+      height: 32,
+      data: scorchPixels(32, 7),
+      label: 'arena-scorch',
+    }),
+    capacity: 64,
+    lifetime: 12,
+    fade: [0.9, 0],
   });
 
   const mesh = (
@@ -325,13 +340,78 @@ async function main(): Promise<void> {
   let dustCarry = 0;
   const DUST_RATE = 60;
 
+  // ── HUD: a stamina bar (ui widgets `bar`) in the bottom region ──────────
+  const stamina = bar('Stamina', STAMINA_MAX, { min: 0, max: STAMINA_MAX, segments: 4 });
+  stamina.element.id = 'arena-stamina';
+  ui.layout.add(stamina.element, { place: { default: 'bottom' } });
+
+  /** Targets the blade already marked this swing: bit i is pillar i, bit PILLAR_COUNT + i orb i. */
+  let hitMask = 0;
   const startSwing = () => {
     if (swing && !swing.finished) return;
     swing = mixer.play(swingClip, { layer: 1, loop: false, fadeIn: 0.04 });
     state.swings++;
     state.trailPeak = 0;
+    state.stamina = Math.max(0, state.stamina - SWING_COST);
+    hitMask = 0;
     trail.clear();
     ui.toasts.show(`Swing ${state.swings}`, { tone: 'info', duration: 900 });
+  };
+
+  const stamp = (
+    x: number,
+    y: number,
+    z: number,
+    nx: number,
+    ny: number,
+    nz: number,
+    size: number,
+  ) => {
+    decals.add({
+      x,
+      y,
+      z,
+      nx,
+      ny,
+      nz,
+      size,
+      rotation: state.hits * 1.7,
+      color: [0.3, 0.24, 0.2, 1],
+    });
+    state.hits++;
+  };
+  /** The blade tip against every pillar shaft and orb; the first touch per target stamps a decal. */
+  const stampHits = () => {
+    for (let i = 0; i < PILLAR_COUNT; i++) {
+      if (hitMask & (1 << i)) continue;
+      const p = pillars[i]!.position;
+      const dx = tip[0]! - p.x;
+      const dz = tip[2]! - p.z;
+      const d = Math.hypot(dx, dz);
+      if (d > PILLAR_HIT || tip[1]! < 0.1 || tip[1]! > 3.9) continue;
+      hitMask |= 1 << i;
+      stamp(
+        p.x + (dx / d) * PILLAR_SURFACE,
+        tip[1]!,
+        p.z + (dz / d) * PILLAR_SURFACE,
+        dx,
+        0,
+        dz,
+        0.5,
+      );
+    }
+    for (let i = 0; i < orbs.length; i++) {
+      if (hitMask & (1 << (PILLAR_COUNT + i))) continue;
+      const p = orbs[i]!.t.position;
+      const dx = tip[0]! - p.x;
+      const dy = tip[1]! - p.y;
+      const dz = tip[2]! - p.z;
+      const d = Math.hypot(dx, dy, dz);
+      if (d > ORB_HIT) continue;
+      hitMask |= 1 << (PILLAR_COUNT + i);
+      const k = ORB_SURFACE / d;
+      stamp(p.x + dx * k, p.y + dy * k, p.z + dz * k, dx, dy, dz, 0.3);
+    }
   };
 
   hooks.update = (dt) => {
@@ -389,11 +469,16 @@ async function main(): Promise<void> {
         tip[1] = m[5]! * y + m[7]!;
         tip[2] = m[9]! * y + m[11]!;
         trail.push(tip[0]!, tip[1]!, tip[2]!);
+        stampHits();
       }
     }
     skinMatrices(skeleton, world, jointMats);
     if (trail.count > state.trailPeak) state.trailPeak = trail.count;
     trail.update(dt, camera);
+    decals.update(dt);
+    state.stamina = Math.min(STAMINA_MAX, state.stamina + STAMINA_REGEN * dt);
+    stamina.set(Math.round(state.stamina));
+    stamina.tone(state.stamina < SWING_COST ? 'warn' : 'accent');
 
     // Dust kicked up at the feet while running.
     if (!state.still) dustCarry += DUST_RATE * t * dt;
@@ -454,6 +539,7 @@ async function main(): Promise<void> {
       for (const o of orbs) draw(frame, orbMesh, orbMat, o.t, o.p);
       draw(frame, bodyMesh, skinMat, body, bodyP);
       draw(frame, swordMesh, pillarMat, sword, swordP);
+      frame.drawable(decals, 1);
       trail.draw(frame);
       frame.drawable(particles);
     },
@@ -475,6 +561,7 @@ async function main(): Promise<void> {
     state.shadowDraws = s.shadowDraws;
     state.triangles = triangles;
     state.trailPoints = trail.count;
+    state.decals = decals.count;
     state.gpuErrors = gpuDiagnostics.errorCount;
   };
 

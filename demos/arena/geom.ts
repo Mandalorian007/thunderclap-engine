@@ -256,3 +256,20 @@ export function tilePixels(o: TilePixelsOptions): Uint8Array<ArrayBuffer> {
   }
   return out;
 }
+
+/** Linear RGBA8 texels of a scorch mark for the hit decals: a dark disc, soft edge, hashed grain. */
+export function scorchPixels(size: number, seed: number): Uint8Array<ArrayBuffer> {
+  const out = new Uint8Array(new ArrayBuffer(size * size * 4));
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const r = Math.hypot((x + 0.5) / size - 0.5, (y + 0.5) / size - 0.5) * 2;
+      const a = Math.max(0, 1 - r * r) * (0.6 + 0.4 * hash(x, y, seed));
+      const o = (y * size + x) * 4;
+      out[o] = 28;
+      out[o + 1] = 22;
+      out[o + 2] = 18;
+      out[o + 3] = Math.round(a * 255);
+    }
+  }
+  return out;
+}

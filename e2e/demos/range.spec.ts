@@ -6,6 +6,7 @@
  *   events through CDP) knocks it over: `lastHit` is that index, `score` and `shots` are 1, and
  *   `RESET_SECONDS` of sim later the target stands again;
  * - a shot at the sky misses: `shots` grows, `score` and `targetsUp` do not;
+ * - a shot into the backstop misses and leaves one decal (`decals` 1);
  * - desktop rows run above 20 fps once settled.
  *
  * Server: the harness Vite server serves the demo at `/demos/range/` (the `serveDemos` plugin in
@@ -146,6 +147,21 @@ test('a shot at the sky misses', async ({ page }) => {
   expect(s.lastHit).toBeNull();
   expect(s.score).toBe(0);
   expect(s.targetsUp).toBe(TARGET_COUNT);
+  expect(pageErrors()).toEqual([]);
+});
+
+test('a shot into the backstop stamps a bullet hole', async ({ page }) => {
+  // Straight ahead and a touch down: between the posts (none stands at x = 0), onto the far
+  // wall's face at about y = 0.5. A miss, so nothing scores; the tracer ends in a decal.
+  await aim(0, -0.05);
+  await shoot(page);
+  await expect.poll(async () => (await read()).shots).toBe(1);
+  await expect.poll(async () => (await read()).decals).toBe(1);
+  const s = await read();
+  expect(s.lastHit).toBeNull();
+  expect(s.score).toBe(0);
+  expect(s.targetsUp).toBe(TARGET_COUNT);
+  expect(s.gpuErrors).toBe(0);
   expect(pageErrors()).toEqual([]);
 });
 

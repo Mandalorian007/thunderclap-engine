@@ -129,7 +129,7 @@ fn source(uv: vec2f) -> vec3f {
 }
 `;
 
-/** Final pass: combine, mist, bloom, rays, exposure, tonemap, grade, vignette, dither, sRGB. */
+/** Final pass: combine, SSR, mist, bloom (× dirt), rays, white balance, exposure, tonemap, grade, vignette, dither, sRGB. */
 export const COMPOSITE_WGSL = /* wgsl */ `
 ${WGSL_POST_UNIFORMS}
 @group(0) @binding(1) var samp: sampler;
@@ -144,6 +144,10 @@ ${WGSL_POST_UNIFORMS}
 // (a 1×1×1 placeholder while P.lut.x is 0).
 @group(0) @binding(8) var outlineTex: texture_2d<f32>;
 @group(0) @binding(9) var lutTex: texture_3d<f32>;
+// Post 3 (ws/post-3): the half-res SSR term (placeholder while P.ssr.x is 0) and the lens-dirt
+// map (placeholder while P.dirt.x is 0). TAA and motion blur replace colorTex with their result.
+@group(0) @binding(10) var ssrTex: texture_2d<f32>;
+@group(0) @binding(11) var dirtTex: texture_2d<f32>;
 
 /** The scene term: colour × AO, blended toward the DoF result by CoC, plus emissive. */
 fn scene_at(uv: vec2f) -> vec3f {
@@ -156,6 +160,10 @@ fn scene_at(uv: vec2f) -> vec3f {
     let blur = textureSampleLevel(dofTex, samp, uv, 0.0);
     let px = abs(blur.a) / P.frame.z;
     scene = mix(scene, blur.rgb, smoothstep(0.5, 2.0, px));
+  }
+  if (P.ssr.x > 0.5) {
+    // Premultiplied by its fade and intensity in the SSR pass.
+    scene += textureSampleLevel(ssrTex, samp, uv, 0.0).rgb;
   }
   return scene + textureSampleLevel(emissiveTex, samp, uv, 0.0).rgb;
 }
@@ -206,6 +214,9 @@ fn to_srgb(c: vec3f) -> vec3f {
   var bloom = vec3f(0.0);
   if (P.enables.x > 0.5) {
     bloom = textureSampleLevel(bloomTex, samp, uv, 0.0).rgb;
+    if (P.dirt.x > 0.5) {
+      bloom *= 1.0 + textureSampleLevel(dirtTex, samp, uv, 0.0).rgb * P.dirt.y;
+    }
   }
 
   // Floor mist: height mask × two drifting fbm layers, lit by nearby glow.
@@ -235,6 +246,10 @@ fn to_srgb(c: vec3f) -> vec3f {
     c += textureSampleLevel(raysTex, samp, uv, 0.0).rgb;
   }
 
+  if (P.wb0.w > 0.5) {
+    // White balance: a 3×3 matrix on the linear colour (ws/post-3).
+    c = max(vec3f(dot(P.wb0.rgb, c), dot(P.wb1.rgb, c), dot(P.wb2.rgb, c)), vec3f(0.0));
+  }
   c *= P.enables2.w;
   let tm = P.enables2.y;
   if (tm > 0.5 && tm < 1.5) {
