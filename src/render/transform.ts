@@ -184,6 +184,82 @@ export class Transform {
     return this.setQuaternion(ax * s, ay * s, az * s, Math.cos(radians / 2));
   }
 
+  /**
+   * Set the local matrix from a 3×4 row-major matrix at `m[o..o+12)` (an animation socket, a
+   * node world matrix). The 12 floats are copied as they are, so `world` is exact; `position`,
+   * `quaternion` and `scale` are decomposed from it (translation column, column lengths, the
+   * rotation of the normalised columns; a mirrored matrix carries the sign on `scale.z`), so a
+   * later setter rebuilds the nearest `T · R · S`. No allocation.
+   */
+  setMatrix(m: ArrayLike<number>, o = 0): this {
+    const l = this.local;
+    for (let i = 0; i < MATRIX3X4_FLOATS; i++) l[i] = m[o + i]!;
+    const p = this._position;
+    p.x = l[3]!;
+    p.y = l[7]!;
+    p.z = l[11]!;
+    const s = this._scale;
+    let sx = Math.hypot(l[0]!, l[4]!, l[8]!);
+    let sy = Math.hypot(l[1]!, l[5]!, l[9]!);
+    let sz = Math.hypot(l[2]!, l[6]!, l[10]!);
+    const det =
+      l[0]! * (l[5]! * l[10]! - l[6]! * l[9]!) -
+      l[1]! * (l[4]! * l[10]! - l[6]! * l[8]!) +
+      l[2]! * (l[4]! * l[9]! - l[5]! * l[8]!);
+    if (det < 0) sz = -sz;
+    s.x = sx;
+    s.y = sy;
+    s.z = sz;
+    sx = sx || 1;
+    sy = sy || 1;
+    sz = sz || 1;
+    // Rotation matrix columns (unit), row-major: r[row][col].
+    const r00 = l[0]! / sx;
+    const r01 = l[1]! / sy;
+    const r02 = l[2]! / sz;
+    const r10 = l[4]! / sx;
+    const r11 = l[5]! / sy;
+    const r12 = l[6]! / sz;
+    const r20 = l[8]! / sx;
+    const r21 = l[9]! / sy;
+    const r22 = l[10]! / sz;
+    const q = this._rotation;
+    const trace = r00 + r11 + r22;
+    if (trace > 0) {
+      const w = Math.sqrt(trace + 1) * 0.5;
+      const k = 0.25 / w;
+      q.x = (r21 - r12) * k;
+      q.y = (r02 - r20) * k;
+      q.z = (r10 - r01) * k;
+      q.w = w;
+    } else if (r00 > r11 && r00 > r22) {
+      const x = Math.sqrt(1 + r00 - r11 - r22) * 0.5;
+      const k = 0.25 / x;
+      q.x = x;
+      q.y = (r01 + r10) * k;
+      q.z = (r02 + r20) * k;
+      q.w = (r21 - r12) * k;
+    } else if (r11 > r22) {
+      const y = Math.sqrt(1 + r11 - r00 - r22) * 0.5;
+      const k = 0.25 / y;
+      q.x = (r01 + r10) * k;
+      q.y = y;
+      q.z = (r12 + r21) * k;
+      q.w = (r02 - r20) * k;
+    } else {
+      const z = Math.sqrt(1 + r22 - r00 - r11) * 0.5;
+      const k = 0.25 / z;
+      q.x = (r02 + r20) * k;
+      q.y = (r12 + r21) * k;
+      q.z = z;
+      q.w = (r10 - r01) * k;
+    }
+    this.angleZ = Number.NaN;
+    this.localDirty = false;
+    this.worldDirty = true;
+    return this;
+  }
+
   get parent(): Transform | null {
     return this._parent;
   }
