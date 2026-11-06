@@ -9,8 +9,9 @@ lights, and materials that take custom WGSL. It has no runtime dependencies.
 beginFrame(time, dt) → Frame
   frame.sprite / frame.mesh / frame.drawable   (record only; nothing hits the GPU yet)
 render(frame, camera, target = renderer.target)   once per camera
-  1. first call of the frame: pre-passes, then drawable.prepare() (compute, uploads)
-  2. write this view's globals + camera + lighting blocks (one 1072 B buffer per view) and its instances
+  1. first call of the frame: pre-passes and the per-draw uniform upload; every call: drawable.prepare()
+     for each drawable in this view not yet prepared this frame (compute, uploads)
+  2. write this view's globals + camera + lighting blocks (one 1184 B buffer per view) and its instances
      (appended to the shared instance buffer)
   3. scene pass into the target: colour (@location 0) and emissive (@location 1), both
      rgba16float, plus depth24plus when camera.depthTest; the first view into a target
@@ -42,13 +43,13 @@ renderer.endFrame();
 - **Targets.** `renderer.target` is the `SceneTarget` the post stack reads;
   `renderer.createSceneTarget({ width, height, label? })` makes an offscreen one (a portal, a
   minimap) whose `color` and `emissive` are sampleable `Texture`s. `target.depth` exists once
-  a depth camera has rendered into it.
+  a depth camera has rendered into it (or as soon as an external target adopts a depth texture).
   `SceneTargetDesc` is `{ width, height, label? }`; both colour targets use `SCENE_FORMAT`
   (`rgba16float`).
 - **External targets (XR).** `SceneTarget.external({ device, color, depth?, view?, viewport?,
   label? })` (`SceneTargetExternal`) wraps a colour texture someone else owns (a WebXR projection
   layer's `getViewSubImage` colour, one array layer through `view`) and optionally its depth,
-  allocating only the emissive target; `isExternal`, `adoptedColor`, `viewport`
+  allocating only the emissive target (and its own depth, if none was adopted, on first depth use); `isExternal`, `adoptedColor`, `viewport`
   (`SceneTargetViewport`, the sub-image rect in px) and `adopt(desc)` (re-point at the next
   frame's textures; a no-op when they are the same) are its extras; `resize` throws, `destroy`
   never destroys what it adopted. `XrSurface` in `@thunderclap/engine/platform` builds one per
@@ -147,7 +148,7 @@ never culled.
 | 12..15 | `uvRect` (@6) | u0, v0, u1, v1 |
 | 16..19 | `tint` (@7) | linear RGBA |
 | 20..23 | `params` (@8) | free vec4 |
-| 24..27 | `misc` (@9) | emissive, flags (reserved, 0), size.x, size.y |
+| 24..27 | `misc` (@9) | emissive, flags (bit 0 = does not receive shadow; the rest reserved), size.x, size.y |
 
 `INSTANCE_OFFSET` names these offsets. A custom vertex entry that wraps `engine_vertex(v)`
 needs no change; one that read the old 20-float fields (`v.xform`, the old `v.misc`, or the
@@ -259,7 +260,7 @@ the same `engine_vertex` as the scene, then binds the map as `engine_shadow_map`
 on the camera's layers still shadows what the view sees; it is sorted by mesh then material,
 its instances are uploaded after the scene's, and `renderer.stats.shadowDraws` counts them)
 (`texture_depth_2d`, `@group(0) @binding(3)`) with the comparison sampler
-`engine_shadow_sampler` (`@binding(4)`). Without a shadow a 1×1 depth placeholder is bound, so
+`engine_shadow_sampler` (`@binding(4)`). Until the first shadow pass a 1×1 depth placeholder is bound (afterwards the last map stays bound and `shadow_params.z` = 0 makes `engine_shadow` return 1), so
 one bind group layout serves both. The block gains `lights.sun_view_proj` (`mat4x4f`) and
 `lights.shadow_params` (bias, texel size, enabled, -).
 
@@ -270,11 +271,11 @@ one bind group layout serves both. The block gains `lights.sun_view_proj` (`mat4
   `VERTEX_LAYOUT_2D` sprites and quads, so a 2D scene never renders a shadow pass; blended
   materials never cast. `InstanceParams.receiveShadow: false` sets instance flag bit 0, read as
   `in.flags & 1u` in the fragment shader (`VSOut.flags`); the engine helpers do not read it.
-- `ShadowMap` (`SHADOW_FORMAT` = `depth32float`) is the renderer's piece: the texture, the
-  sampler, the placeholder, `sunCamera`, `place(center, sunDir, shadow, size)`,
+- `ShadowMap` (`SHADOW_FORMAT` = `depth32float`) is the renderer's piece: `view` (the map's
+  view, or the placeholder before a pass has rendered), the sampler, `sunCamera`, `place(center, sunDir, shadow, size)`,
   `pipelineFor(layout)` and `ShadowUniforms` (`viewProj`, `bias`, `texelSize`), what
-  `writeBlock` takes as its fourth argument. Games set `lights.sun.shadow`; drawables that
-  render their own passes may use it directly.
+  `writeBlock` takes as its fourth argument. Games set `lights.sun.shadow`; the renderer's
+  instance is private, so a drawable that renders its own shadow pass builds its own `ShadowMap`.
 
 ### Fog
 
@@ -350,7 +351,7 @@ inside it to keep the standard transform.
 
 - `renderer.createMaterial(desc: MaterialDesc)` returns a `Material`. `MaterialDesc` takes
   `label`, `wgsl`, `blend` (`BlendMode`: `alpha`, `premultiplied`, `additive`, `opaque`),
-  `uniformBytes`, `textures`, `sampler` (`SamplerKind`: `linear-clamp`, `linear-repeat`,
+  `uniformBytes`, `textures`, `sampler` (`SamplerKind`: `linear-clamp`, `linear-repeat`, `linear-mip-repeat`, `nearest-mip-clamp`,
   `nearest-clamp`), `perDrawUniforms`, `vertexEntry` and `fragmentEntry`.
 - `material.pipelineFor(layout, depth)` returns the pipeline for a `VertexLayout` and a
   `DepthMode` (0 = no depth attachment, the 2D path; 1 = test without writes, for blended draws;
@@ -376,7 +377,8 @@ glow.setUniforms(shared);                            // used by draws without `u
 frame.sprite(glow, { x, y, w, h, uniforms: obj.u });  // own block, bound at a dynamic offset
 ```
 
-- Blocks are staged on the CPU and uploaded in one `writeBuffer` per material in `endFrame`.
+- Blocks are staged on the CPU and uploaded in one `writeBuffer` per material in the frame's first
+  `render()` call (or in the `render` that `endFrame` runs itself when nothing rendered).
   The buffer doubles when it runs out of room, so a steady scene allocates nothing.
 - Draws only batch together when they share a block. Draws without `uniforms` use the shared
   block (`setUniforms`) and still merge with each other.

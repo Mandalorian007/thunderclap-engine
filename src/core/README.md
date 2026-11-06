@@ -45,7 +45,7 @@ loop.maxFps = 30;    // steady 30 fps on a 60 Hz display; null = every display f
   scene updates; rendering starts at the highest scene that is not `transparent` and goes up, so a
   pause menu draws over the level beneath it. Stack changes made inside `update` or `render` are
   deferred until that call returns. `createGame` exposes one as `ctx.stack` and renders it with
-  `ctx.camera`.
+  `ctx.camera` (or with `ctx.xr.surface.head` while an XR session runs).
 
 ## Events
 
