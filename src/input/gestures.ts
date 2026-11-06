@@ -59,6 +59,14 @@ export interface PinchGesture extends GesturePoint {
   delta: number;
 }
 
+/**
+ * An `onGesture` listener: called once, synchronously, each time the recogniser decides something,
+ * before any tick reports it. `g` is the report that the tick fields will carry (a `TapGesture`,
+ * `PanGesture`, `DragGesture` or `PinchGesture`, narrowed by `kind`). Discrete kinds (`tap`,
+ * `doubleTap`, `longPress`) come with phase `'end'`.
+ */
+export type GestureListener = (kind: GestureKind, phase: GesturePhase, g: GesturePoint) => void;
+
 export interface GestureOptions {
   /**
    * CSS px a pointer may move and still be a tap or long-press. Past it the press is a pan and a
@@ -105,6 +113,8 @@ interface Contact {
   lastY: number;
   /** Game space at the down point. */
   origin: GesturePoint;
+  /** Cumulative travel since the down point (CSS px, summed over every move). */
+  travel: number;
 }
 
 /** One press: from the first pointer down until every pointer is up. */
@@ -167,6 +177,9 @@ function defaultNow(): number {
  *   double tap also reports a tap for each of its two taps.
  * - A long-press fires once, after `longPressMs` within the threshold; no tap follows it.
  * - Moving past the threshold starts a pan and a drag (one pointer) for the rest of the press.
+ *   Travel is cumulative from the down point, so a slow drag crosses it too, and the threshold
+ *   is checked before the long-press timer on every move: a pointer whose travel crosses it
+ *   never long-presses, however long the frame took. A long-press that already fired stays.
  * - A second pointer cancels the pan and drag (and any tap or long-press) and starts a pinch;
  *   while two or more pointers are down, pan and drag report nothing (pinch wins). Lifting
  *   either pointer ends the pinch; nothing more is reported until every pointer is up.
@@ -215,6 +228,8 @@ export class Gestures {
   private loupe: Loupe | null = null;
   /** The aim at the moment the finger lifted, reported (with `ended`) on the next tick. */
   private endedAim: Aim | null = null;
+  /** `onGesture` listeners, called at recognition time. */
+  private readonly listeners: GestureListener[] = [];
 
   constructor(opts: GestureOptions = {}) {
     this.panThreshold = opts.panThreshold ?? DEFAULTS.panThreshold;
@@ -242,6 +257,28 @@ export class Gestures {
   /** Install the client → game-space mapping. `null` = identity (relative to the target when attached). */
   setPointerTransform(fn: PointerTransform | null): void {
     this.transform = fn;
+  }
+
+  // ---------------------------------------------------------------- observer
+
+  /**
+   * Observe the gesture stream: `listener` is called synchronously each time a gesture is
+   * recognised (a tap on lift, a long-press when its time is up, a pan's `start`, every `move`,
+   * `end` or `cancel`), not once per tick. It is an observer for tests, replays and logging; the
+   * per-tick fields (`tap`, `drag`, ...) and action bindings stay the way a game reads gestures.
+   * Returns the unsubscribe function.
+   */
+  onGesture(listener: GestureListener): () => void {
+    this.listeners.push(listener);
+    return () => {
+      const i = this.listeners.indexOf(listener);
+      if (i >= 0) this.listeners.splice(i, 1);
+    };
+  }
+
+  private emit(kind: GestureKind, phase: GesturePhase, g: GesturePoint): void {
+    const ls = this.listeners;
+    for (let i = 0; i < ls.length; i++) ls[i]?.(kind, phase, g);
   }
 
   // ---------------------------------------------------------------- queries
@@ -292,6 +329,9 @@ export class Gestures {
       this.pan = this.cancelled('pan');
       this.drag = this.cancelled('drag');
       this.pinch = this.cancelled('pinch');
+      if (this.pan) this.emit('pan', 'cancel', this.pan);
+      if (this.drag) this.emit('drag', 'cancel', this.drag);
+      if (this.pinch) this.emit('pinch', 'cancel', this.pinch);
       this.running.clear();
       this.updateAim();
       return;
@@ -457,6 +497,7 @@ export class Gestures {
       lastX: clientX,
       lastY: clientY,
       origin: this.map(clientX, clientY),
+      travel: 0,
     };
     s.contacts.set(id, contact);
     if (s.void || s.contacts.size !== 2) {
@@ -473,13 +514,14 @@ export class Gestures {
     const centre = this.map((a.lastX + b.lastX) / 2, (a.lastY + b.lastY) / 2);
     s.centreLast = centre;
     s.pinching = true;
-    push(this.pinches, { phase: 'start', ...centre, scale: 1, delta: 1 });
+    this.pushPinch({ phase: 'start', ...centre, scale: 1, delta: 1 });
   }
 
   pointerMove(id: number, clientX: number, clientY: number, time = this.now()): void {
     const s = this.session;
     const c = s?.contacts.get(id);
     if (!s || !c || (clientX === c.lastX && clientY === c.lastY)) return;
+    c.travel += dist(c.lastX, c.lastY, clientX, clientY);
     c.lastX = clientX;
     c.lastY = clientY;
     if (s.void) return;
@@ -487,10 +529,14 @@ export class Gestures {
       this.moveTwo(s);
       return;
     }
+    if (s.longPressed) return;
     if (!s.moving) {
-      this.checkLongPress(time);
-      if (s.longPressed) return;
-      if (dist(c.startX, c.startY, clientX, clientY) <= this.panThreshold) return;
+      // The threshold first: travel that crosses it is a pan, however late this move arrives
+      // (a long frame), and the pending long-press is dropped. Only a still pointer may long-press.
+      if (c.travel <= this.panThreshold) {
+        this.checkLongPress(time);
+        return;
+      }
       s.moving = true;
       s.last = c.origin;
       const p = this.map(clientX, clientY);
@@ -521,8 +567,7 @@ export class Gestures {
       } else if (!s.longPressed) {
         if (time - c.downAt >= this.longPressMs) {
           // Held long enough but no tick saw it (a stalled frame): still a long-press, not a tap.
-          s.longPressed = true;
-          push(this.longPresses, { ...c.origin, device: c.device });
+          this.longPressOf(s, c);
         } else {
           this.emitTap(c, time);
         }
@@ -564,8 +609,14 @@ export class Gestures {
     if (!s || s.void || s.multi || s.moving || s.longPressed) return;
     const c = s.contacts.values().next().value as Contact | undefined;
     if (!c || t - c.downAt < this.longPressMs) return;
+    this.longPressOf(s, c);
+  }
+
+  private longPressOf(s: Session, c: Contact): void {
     s.longPressed = true;
-    push(this.longPresses, { ...c.origin, device: c.device });
+    const g: TapGesture = { ...c.origin, device: c.device };
+    push(this.longPresses, g);
+    this.emit('longPress', 'end', g);
   }
 
   private emitTap(c: Contact, time: number): void {
@@ -574,8 +625,11 @@ export class Gestures {
       prev !== null &&
       c.downAt - prev.at <= this.doubleTapMs &&
       dist(prev.x, prev.y, c.startX, c.startY) <= this.doubleTapDistance;
-    push(this.taps, { tap: { ...c.origin, device: c.device }, double });
+    const tap: TapGesture = { ...c.origin, device: c.device };
+    push(this.taps, { tap, double });
     this.lastTap = double ? null : { x: c.startX, y: c.startY, at: time };
+    this.emit('tap', 'end', tap);
+    if (double) this.emit('doubleTap', 'end', tap);
   }
 
   private pushMove(s: Session, c: Contact, p: GesturePoint, phase: 'start' | 'move'): void {
@@ -585,17 +639,29 @@ export class Gestures {
     const at = p.inside ? p : { ...last, inside: false };
     s.last = p.inside ? p : last;
     s.at = at;
-    this.pans.push({ phase, ...at, dx, dy, pointers: 1, device: c.device });
-    this.drags.push({ phase, ...at, origin: c.origin, dx, dy, device: c.device });
+    this.pushPan(c, phase, at, dx, dy);
+  }
+
+  /** Queues one pan and one drag report and tells the listeners. */
+  private pushPan(c: Contact, phase: GesturePhase, at: GesturePoint, dx: number, dy: number): void {
+    const pan: PanEvent = { phase, ...at, dx, dy, pointers: 1, device: c.device };
+    const drag: DragEvent = { phase, ...at, origin: c.origin, dx, dy, device: c.device };
+    this.pans.push(pan);
+    this.drags.push(drag);
+    this.emit('pan', phase, pan);
+    this.emit('drag', phase, drag);
+  }
+
+  private pushPinch(e: PinchEvent): void {
+    push(this.pinches, e);
+    this.emit('pinch', e.phase, e);
   }
 
   /** Ends (or cancels) a one-pointer pan and drag, if one is running in `s`. */
   private endOnePointer(s: Session, c: Contact, phase: 'end' | 'cancel'): void {
     if (!s.moving) return;
     s.moving = false;
-    const at = s.at ?? c.origin;
-    this.pans.push({ phase, ...at, dx: 0, dy: 0, pointers: 1, device: c.device });
-    this.drags.push({ phase, ...at, origin: c.origin, dx: 0, dy: 0, device: c.device });
+    this.pushPan(c, phase, s.at ?? c.origin, 0, 0);
   }
 
   /** Two pointers: only the pinch moves. Their centre moving is not a pan (pinch wins). */
@@ -608,18 +674,20 @@ export class Gestures {
     const delta = d / s.pinchLastDist;
     s.pinchLastDist = d;
     const at = centre.inside ? centre : { ...(s.centreLast ?? centre), inside: false };
-    push(this.pinches, { phase: 'move', ...at, scale: d / s.pinchStartDist, delta });
+    this.pushPinch({ phase: 'move', ...at, scale: d / s.pinchStartDist, delta });
   }
 
   private endTwo(s: Session, phase: 'end' | 'cancel'): void {
     if (!s.pinching) return;
     s.pinching = false;
-    this.pinches.push({
+    const e: PinchEvent = {
       phase,
       ...(s.centreLast ?? this.lastInside),
       scale: s.pinchLastDist / s.pinchStartDist,
       delta: 1,
-    });
+    };
+    this.pinches.push(e);
+    this.emit('pinch', phase, e);
   }
 
   private map(clientX: number, clientY: number): GesturePoint {

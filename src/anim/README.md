@@ -84,6 +84,25 @@ function frame(dt) {
 
 All on `(x, y, z, w)` at an offset, allocation-free: `quatIdentity(out, o)`, `quatNormalize(q, o)`, `quatDot(a, ao, b, bo)`, `quatMultiply(out, oo, a, ao, b, bo)` (`a · b`: apply `b`, then `a`; may alias), `quatSlerp(out, oo, a, ao, b, bo, t)` (shorter arc, nlerp fallback when nearly parallel; may alias), `quatNlerp(...)`, `quatFromAxisAngle(out, o, ax, ay, az, radians)`, `quatFromEuler(out, o, x, y, z)` (about X, then Y, then Z: `qz · qy · qx`).
 
+## IK and root motion (`ik.ts`, `root-motion.ts`)
+
+Pose arithmetic that runs after sampling and before the final `poseToWorld`. Both solvers read the world matrices of the pose *as sampled* (`worldPose`: run `poseToWorld` once, hand it in, run it again after), so they never walk the skeleton themselves, and they write only local rotations into `pose`. Targets are points in the space `instanceWorld` (3×4 row-major, `render/transform.ts`) maps the skeleton into, or skeleton space when `instanceWorld` is `null`.
+
+```ts
+const chain = createIkChain(skeleton, { root: upperArm, mid: foreArm, tip: hand });  // once
+mixer.update(dt);
+poseToWorld(skeleton, mixer.pose, world);
+twoBoneIk(mixer.pose, skeleton, world, chain, handTarget, elbowPole, instance, { weight: 0.8 });
+lookAt(mixer.pose, skeleton, world, head, lookTarget, instance, { forward: [0, 0, 1], up: [0, 1, 0], maxAngle: 1.2 });
+poseToWorld(skeleton, mixer.pose, world);                                               // final
+```
+
+- `twoBoneIk(pose, skeleton, worldPose, chain, targetWorld, poleWorld, instanceWorld, opts?: TwoBoneIkOptions)`: analytic law-of-cosines solve for `chain.root` and `chain.mid`. The mid joint moves towards `poleWorld` (the bend side); `null` keeps the current bend plane. An unreachable target straightens the chain towards it (no stretching); a target closer than `|a − b|` folds it. `weight` (default 1) slerps the two solved rotations against the input pose; `maxIterations` (default 1, exact for rigid bones) re-solves from the refreshed chain matrices, which helps only under non-uniform scale. Intermediate nodes between root, mid and tip (twist bones) are allowed and untouched.
+- `createIkChain(skeleton, { root, mid, tip }: IkChainDesc): IkChain` validates the chain and allocates its scratch (path, world matrices, saved rotations). `twoBoneIk` also accepts a plain `IkChainDesc`, building and caching a chain per object (so keep the object; a fresh literal per call allocates).
+- `lookAt(pose, skeleton, worldPose, joint, targetWorld, instanceWorld, opts?: LookAtOptions)`: rotates one joint so its local `forward` (default `[0, 0, 1]`) points at the target, turning at most `maxAngle` radians (default π) from the input forward, blended by `weight`. With an `up` hint (skeleton space) the joint also rolls about its new forward so what was up for it stays up, instead of tilting as it turns sideways.
+- `extractRootMotion(clip, rootNode, opts?: RootMotionOptions): RootMotionSplit` → `{ clip, motion }`, two clips sharing keyframe times, channels copied not aliased. `clip` plays in place: the root keeps its first-frame translation (and yaw). `motion` holds the root's translation relative to the first key and, unless `planar`, its yaw about +Y relative to the first key (a swing-twist split: `motion · clip == original` for rotations, `motion + clip == original` for translations, at every key). `planar: true` moves only the horizontal (x, z) translation and leaves height and rotation in the clip. `CUBICSPLINE` translation keeps its tangents; a cubic rotation on the root comes back `LINEAR` over its key values. Allocates; call at load.
+- `applyRootMotionDelta(motionClip, t0, t1, outDelta: RootMotionDelta): RootMotionDelta` writes `[dx, dy, dz, yaw]`: the position delta in the root's heading frame at `t0` (the motion clip's own yaw there) and the yaw delta (radians about +Y). The game rotates the position delta by its own heading, adds it, then adds the yaw: `heading += d[3]`. `t1 < t0` is a loop wrap: `t0 → duration` then `0 → t1`, the second part turned by the first's yaw. No allocation.
+
 ## Not here
 
-IK, retargeting, root motion extraction, morph-target application (sample `'weights'` channels yourself), any GPU upload (`render/skin.ts`), glTF parsing (`assets/`).
+Full-body IK and retargeting, morph-target application (sample `'weights'` channels yourself), any GPU upload (`render/skin.ts`), glTF parsing (`assets/`).

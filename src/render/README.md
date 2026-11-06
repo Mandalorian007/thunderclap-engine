@@ -104,8 +104,11 @@ res.surface.onResize(({ backbuffer }) => renderer.resize(backbuffer.width, backb
   format }` (what `boot` returns as `res.gpu`); `RendererOptions` has `logicalWidth` and
   `logicalHeight` (1920×1080) and `initialInstances` (4096, doubles when full).
 - `renderer.post` takes any `PostProcessor`: `resize(width, height)` and `encode(encoder, inputs,
-  output)`, where `PostInputs` is `{ color, emissive, time, dt }`. `PostStack` is the engine's;
-  a game writes its own only to replace the whole final stage.
+  output)`, where `PostInputs` is `{ color, emissive, time, dt, depth, projection }`: `depth` is
+  the target's depth texture and `projection` a `PostProjection` (`{ near, far, proj }`, `far`
+  `Infinity` for an infinite far plane) when a depth camera rendered into it this frame, both
+  `null` otherwise (the 2D path). `PostStack` is the engine's; a game writes its own only to
+  replace the whole final stage.
 
 ## Drawing
 
@@ -745,6 +748,8 @@ renderer.resolutionScale;                          // scene width / output width
   custom `PostProcessor` calls for its own passes (the class is exported for that type). Its
   `onResult` listeners get a `GpuTimerResult` (`totalMs`, `passes`, `samples`). Without the
   feature `gpuTimer` is null and timing falls back to the queue.
+  `pnpm bench` (`harness/bench.html`, `scripts/bench.mjs`) uses these to record what a frame
+  affords on one machine, per scene rung, in `docs/BENCH.md`.
 - `DynamicResolution` turns GPU-time samples into a scale. It drops after 1 s over budget
   (smoothed), raises only after 3 s with the predicted cost under 85% of budget, waits
   1.5 s after any change, and blocks a level for 20 s when raising to it was followed by a
