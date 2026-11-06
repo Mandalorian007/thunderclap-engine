@@ -57,6 +57,7 @@ export {
 } from './mesh';
 export type { GenerateMipmapsOptions, MipFilter } from './mipmap';
 export { generateMipmaps } from './mipmap';
+export { WGSL_PBR } from './pbr-wgsl';
 export type { PingPongStepOptions } from './ping-pong';
 export { PingPong } from './ping-pong';
 export type {
@@ -73,6 +74,14 @@ export type { SceneTargetExternal, SceneTargetViewport } from './scene-target';
 export { SCENE_FORMAT, SceneTarget, type SceneTargetDesc } from './scene-target';
 export { DEFAULT_SHADOW_SIZE, SHADOW_FORMAT, ShadowMap } from './shadow';
 export { type SnapshotOptions, SnapshotRenderer } from './snapshot';
+export type { StandardMaterialDesc } from './standard';
+export {
+  createStandardMaterial,
+  packStandardUniforms,
+  STANDARD_TEXTURE_SLOTS,
+  STANDARD_UNIFORM_FLOATS,
+  STANDARD_WGSL,
+} from './standard';
 export type {
   LoadTextureArrayOptions,
   PixelData,
