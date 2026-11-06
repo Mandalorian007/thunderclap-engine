@@ -29,9 +29,10 @@ frame.drawable(particles);   // order and layers optional, like any draw
   emissive, so they bloom). With a depth camera (`frame.depthFormat` set) `draw` uses a pipeline
   that tests depth without writing it, built once per depth format.
 - `EmitParams`: `x`, `y`, `shape` (`EmitShape`: `point`, `circle { radius }`, `rect { width,
-  height }`, `line { dx, dy }`), `angle`, `spread`, `speed`, `life`, `size`, `colorStart`,
-  `colorEnd`, `gravity`, `drag`, `emissive`. Colours are linear RGBA (HDR allowed); units are
-  logical px and seconds.
+  height }`, `line { dx, dy }`, and `mesh`, see *Mesh emission*), `angle`, `spread`, `speed`,
+  `life`, `size`, `colorStart`, `colorEnd`, `gravity`, `drag`, `emissive`. Colours are linear
+  RGBA (HDR allowed); units are logical px and seconds. The fields from `tile` on need the
+  extended kernel (*The extended kernel*).
 - `blend: 'additive' | 'alpha'` (default additive; alpha is premultiplied, for smoke and dust).
   `countAlive: true` counts live particles on the GPU each frame and reads the count back into
   `alive` (a few frames late; -1 before the first readback).
@@ -77,6 +78,129 @@ frame.drawable(rain);        // under a depth camera (Camera.perspective)
 
 - `ParticleEmitter(system, params, rate = 0)`: continuous emission at `rate` per second while
   `active`, plus `burst(count, overrides?)`.
+
+### The extended kernel (ws/fx-3)
+
+World space, and a 2D system with `extended: true` (implied by `texture`, `forces` or
+`collide`), run the extended kernel: a 160-byte particle (`FX_PARTICLE_FLOATS`), a 52-float
+spawn record (`FX_SPAWN_FLOATS`), a sim block of `FX_SIM_FLOATS` (`MAX_FORCES` × 12 of them the
+forces), a request ring of `FX_REQUEST_FLOATS` per sub-emission request, and four compute
+entry points (`spawn`, `advance`, `update`, `subspawn`; the ring head lives on the GPU). A plain
+2D system keeps the original kernel byte for byte (`PARTICLE_COMPUTE_WGSL`,
+`PARTICLE_RENDER_WGSL`, E-008) and ignores the fields below with one warning. The sources are
+exported for reuse: `PARTICLE_EXT_COMPUTE_WGSL` / `PARTICLE_EXT_RENDER_WGSL` (2D),
+`PARTICLE_WORLD_COMPUTE_WGSL` / `PARTICLE_WORLD_RENDER_WGSL`, `PARTICLE_COLLIDE_WGSL`,
+`PARTICLE_COUNT_WGSL`. `Range` is the `[min, max]` pair type the ranged fields take.
+
+#### Sprite sheets
+
+```ts
+const sprites = new ParticleSystem(renderer, {
+  space: 'world', blend: 'alpha', texture: sheet, atlas: { columns: 4, rows: 4 },
+});
+sprites.emit({ ...p, tile: [0, 15], tileRate: 12, rotation: [0, Math.PI * 2], spin: [-2, 2], alignToVelocity: false }, 8);
+```
+
+- `texture` (any `TextureLike`) replaces the radial falloff: the tile's alpha and colour
+  multiply the particle's, in both blend modes. `atlas` is the grid, row-major from the top
+  left (default 1 × 1). Untextured systems bind a 1 × 1 white texel and draw exactly as before.
+- `EmitParams.tile`: one tile index, or `[from, to]` played once over the particle's life, or
+  looped at `tileRate` frames per second. `rotation` (initial, radians about the view axis) and
+  `spin` (rad/s) are `[min, max]` pairs; `alignToVelocity` (default true, the streaks) set to
+  false keeps the quad upright plus its rotation, for sprites.
+
+#### Curves
+
+- `sizeCurve`: 2..`MAX_CURVE_STOPS` (8) evenly spaced sizes over life, replacing `size` (the
+  per-particle jitter still applies). `colorCurve`: 2..8 RGBA stops replacing
+  `colorStart`/`colorEnd`. Both are cached by array identity and rewritten on every emit, so
+  mutate the array to animate; a system holds `maxCurves` (32) distinct arrays of each and
+  reuses slots beyond that with a warning. The GPU table is `SIZE_CURVE_FLOATS` (12) per size
+  curve and `COLOR_CURVE_FLOATS` (36) per colour curve.
+- `evaluateCurve(stops, stride, t, out)` is the CPU reference (`stride` 1 for sizes, 4 for
+  colours), the same piecewise-linear lookup the kernel does.
+
+#### Forces and collision
+
+```ts
+const motes = new ParticleSystem(renderer, { space: 'world', forces: [] });
+motes.forces.push({ kind: 'attract', x: 0, y: 2, z: 0, strength: 3, radius: 8 });
+motes.forces.push({ kind: 'vortex', axis: [0, 1, 0], x: 0, y: 2, z: 0, strength: 1 });
+motes.forces.push({ kind: 'turbulence', frequency: 0.5, strength: 2, seed: 7 });
+motes.forces.push({ kind: 'drag', amount: 0.5 });
+const rain = new ParticleSystem(renderer, { space: 'world', readsDepth: true, collide: { bounce: 0.2, friction: 0.6 } });
+```
+
+- `ParticleSystem.forces` is a live array of `ParticleForce` (`attract`, `vortex`,
+  `turbulence`: the curl of value noise, divergence-free gusts; `drag`), uploaded each frame,
+  at most `MAX_FORCES` (8). `applyForces(forces, pos, vel, dt)` is the CPU reference of the
+  kernel's force step, for shadow simulations and tests.
+- `collide: { bounce, friction, thickness? }` (world space with `readsDepth`): after the opaque
+  pass each particle found behind this frame's scene depth, within `thickness` (1) units along
+  its view ray, is put back on the surface; the normal velocity is scaled by `bounce`, the
+  tangential by `1 - friction`. The normal comes from the depth neighbours. Independent of
+  `softness`; `ParticleSystem.collide` can be changed or set to null at any time.
+- `countBelowY` (with `countAlive`): live particles below that y are also counted, into
+  `below`.
+
+#### Sub-emission
+
+- `onDeath: { params, count }` emits `count` particles of `params` where a particle dies;
+  `onLife: { params, rate }` emits `rate` per second along its path. `inherit` is the fraction
+  of the parent's velocity the children start with. One level deep: a child's own
+  `onDeath`/`onLife` is ignored. Requests are budgeted by `maxSpawnsPerFrame` per frame; a
+  system holds `maxSubEmitters` (16) distinct descriptors (cached by object identity, rewritten
+  on every emit).
+
+#### Mesh emission
+
+```ts
+import { buildEmitSurface } from '@thunderclap/engine/fx';
+const surface = buildEmitSurface(sphere({ radius: 1 }), { alongNormal: true });
+glow.emit({ x, y, z, shape: surface, speed: [0.1, 0.3] }, 50);
+```
+
+- `EmitShape` `{ kind: 'mesh', positions, normals?, indices?, alongNormal? }` (a
+  `MeshShapeSource`) births particles uniformly over a triangle mesh's area, offset by (x, y, z);
+  `alongNormal` launches along the surface normal instead of `angle`/`spread`.
+- `buildEmitSurface(geometry | source, { alongNormal? })` builds the cumulative-area table once
+  (`EmitSurface`: `table`, `triangles`, `area`; `SURFACE_TRI_FLOATS` per triangle) and is itself
+  a mesh shape; raw arrays passed as a shape are built and cached by identity on first use.
+  `sampleEmitSurface(surface, u, v, w, out)` is the CPU mirror of the kernel's sampling.
+
+#### Effects
+
+```ts
+import { createEffect, HIT_SPARK_EFFECT, MAGIC_AURA_EFFECT } from '@thunderclap/engine/fx';
+const sparks = createEffect(renderer, HIT_SPARK_EFFECT);
+sparks.play({ x: 640, y: 360 });              // one instance; play again for another
+const aura = createEffect(renderer, MAGIC_AURA_EFFECT, { textures: {} });
+const inst = aura.attach((out) => out.set(wandTip));
+inst.stop();                                  // the particles already born die on their own
+// each frame
+sparks.update(dt); aura.update(dt);
+sparks.draw(frame); aura.draw(frame, 2);
+```
+
+- `EffectDesc` is plain JSON: `systems` (`EffectSystemDesc`: `name`, `options`:
+  `EffectSystemOptions`, the system options with `texture` as a name; `emitters`:
+  `EffectEmitterDesc`: `params`, `rate`, `duration`, `delay`, `burst`), `duration`, `loop`.
+  `validateEffectDesc(json, { textures? })` returns the problems (stop counts, unknown texture
+  names, missing colours, negative numbers, a second level of sub-emission) as strings;
+  `createEffect(renderer, desc, { textures? })` throws them as one readable `Error` and resolves
+  texture names through the map.
+- `Effect`: `systems`, `instances` (pooled `EffectInstance`s: `position`, `time`, `done`,
+  `attach(fn)`, `stop()`), `duration`, `loop`, `play(at?: EffectPoint)`, `attach(fn:
+  EffectFollow)`, `stop()`, `update(dt)` (drives the emitters and the systems; no allocation
+  after the first play), `draw(frame, order?)`, `destroy()`.
+- Bundled descriptors (`src/fx/effects/*.json`): `HIT_SPARK_EFFECT` (2D, a burst of streaked
+  sparks on curves plus a flash), `SMOKE_PUFF_EFFECT` (2D alpha, growing spinning puffs),
+  `MAGIC_AURA_EFFECT` (world, looping motes that trail through `onLife`). A game's own go
+  through `createBundle` as `{ kind: 'json', uri }` and `validateEffectDesc`.
+
+Harness: `fx3.html` (`?sheet`, `?forces`, `?collide`, `?sub`, `?effect`, `?still`) with
+`e2e/fx3.spec.ts`. Tests: `particles-world.test.ts` (the extended kernel on the fake GPU),
+`emit-surface.test.ts`, `effect.test.ts`.
 
 ## Trails
 

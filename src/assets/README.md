@@ -192,6 +192,11 @@ const sprites = bundle.get('sprites'); // AtlasAsset<'coin' | 'gem'>
 *Atlas*). `AssetKind` is the union of their `kind`s and `Manifest` the map type. A texture entry's
 `options` are `LoadTextureOptions`; a gltf entry's are `LoadGltfOptions`.
 
+A particle effect descriptor (`EffectDesc`, `@thunderclap/engine/fx`) is JSON, so it loads as
+`{ kind: 'json', uri: 'hit.json' }`: run `bundle.get('hit')` through `validateEffectDesc` and
+hand it to `createEffect(renderer, desc, { textures })`, resolving the descriptor's texture names
+from the bundle's texture entries.
+
 **The `read` contract.** `AssetReader = (uri: string) => Promise<ReadResult>`, where `ReadResult`
 is an `ArrayBuffer`, a `Blob`, an `ImageBitmap` (for the image kinds), or `{ data, total? }` with
 `total` the size in bytes, so `progress.bytes` and `bytesTotal` can be reported. A thrown or
