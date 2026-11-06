@@ -253,3 +253,95 @@ test('keyboard: lastDevice follows keyboard, mouse, keyboard; jump reads Space',
   expect((await read()).glyph).toBe('Space');
   expect(errors).toEqual([]);
 });
+
+test('zones (touch): two thumbs in two zones read independently and never pinch', async ({
+  page,
+  wrapper,
+}) => {
+  test.skip(!touchRow(), 'touch rows only');
+  await open(page, wrapper, '?zones');
+  const box = await canvasBox();
+  const stick = { x: box.x + box.width * 0.25, y: box.y + box.height * 0.75 };
+  const jump = { x: box.x + box.width - 80, y: box.y + box.height - 80 };
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Input.dispatchTouchEvent', {
+    type: 'touchStart',
+    touchPoints: [{ ...stick, id: 1 }],
+  });
+  await cdp.send('Input.dispatchTouchEvent', {
+    type: 'touchStart',
+    touchPoints: [
+      { ...stick, id: 1 },
+      { ...jump, id: 2 },
+    ],
+  });
+  for (let k = 1; k <= 4; k++) {
+    await cdp.send('Input.dispatchTouchEvent', {
+      type: 'touchMove',
+      touchPoints: [
+        { x: stick.x + 20 * k, y: stick.y, id: 1 },
+        { ...jump, id: 2 },
+      ],
+    });
+    await frames(1);
+  }
+  await expect.poll(async () => (await read()).zoneMove[0]).toBeGreaterThan(0.5);
+  const s = await read();
+  expect(Math.abs(s.zoneMove[1])).toBeLessThan(0.2);
+  expect(s.zoneJump).toBe(1);
+  expect(s.pinchSeen).toBe(false);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await frames(2);
+  const after = await read();
+  expect(after.zoneMove).toEqual([0, 0]);
+  expect(after.pinchSeen).toBe(false);
+  expect(after.zoneJump).toBe(1);
+  await cdp.detach();
+  expect(errors).toEqual([]);
+});
+
+test('claim: an orbit drag yields no hover hits; hovering hits again after', async ({
+  page,
+  wrapper,
+}) => {
+  test.skip(touchRow(), 'orbit drags are mouse and pen');
+  await open(page, wrapper, '?claim');
+  const from = await centre();
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.move(from.x + 5, from.y);
+  await expect.poll(async () => (await read()).hoverHits).toBeGreaterThanOrEqual(1);
+  const before = await read();
+  await page.mouse.down();
+  for (let k = 1; k <= 6; k++) {
+    await page.mouse.move(from.x + 5 + 20 * k, from.y);
+    await frames(1);
+  }
+  await expect.poll(async () => (await read()).yaw).toBeGreaterThan(before.yaw + 0.05);
+  const during = await read();
+  expect(during.hoverHitsDuringDrag).toBe(0);
+  expect(during.hoverHits).toBe(before.hoverHits);
+  await page.mouse.up();
+  await page.mouse.move(from.x + 140, from.y + 10);
+  await expect.poll(async () => (await read()).hoverHits).toBe(before.hoverHits + 1);
+  expect((await read()).hoverHitsDuringDrag).toBe(0);
+  expect(errors).toEqual([]);
+});
+
+test('onUpdated sees the same pressed(jump) as the tick after update()', async ({
+  page,
+  wrapper,
+}) => {
+  await open(page, wrapper);
+  if (touchRow()) {
+    const from = await centre();
+    const drag = await press(page, from);
+    await drag.up();
+  } else {
+    await page.keyboard.press('Space');
+  }
+  await expect.poll(async () => (await read()).jumps).toBe(1);
+  await frames(2);
+  const s = await read();
+  expect(s.hookSawJump).toBe(s.jumps);
+  expect(errors).toEqual([]);
+});

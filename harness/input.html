@@ -15,11 +15,16 @@
       #panel button { pointer-events: auto; font: inherit; margin-bottom: 4px; }
       #panel .bar { height: 6px; background: #223; margin: 2px 0 6px; }
       #panel .bar > div { height: 100%; width: 0; background: #7c6; }
+      #zones { position: fixed; inset: 0; pointer-events: none; }
+      #zones .stick { width: 128px; height: 128px; }
+      #zones .jump { width: 120px; height: 120px; }
+      #zones .stick, #zones .jump { position: absolute; left: 0; top: 0; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.6); }
     </style>
   </head>
   <body>
     <main id="root"></main>
     <aside id="panel"></aside>
+    <div id="zones" hidden><div class="stick"></div><div class="jump"></div></div>
     <script type="module" src="./input.ts"></script>
   </body>
 </html>

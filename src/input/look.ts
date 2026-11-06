@@ -1,4 +1,11 @@
 import { Emitter } from '../core/events';
+import {
+  createPointerDispatcher,
+  POINTER_PRIORITY,
+  type PointerConsumer,
+  type PointerDispatcher,
+  type PointerRecord,
+} from './pointer-dispatch';
 import type { GamepadLike } from './types';
 
 /** Where the move stick lives on a touch screen. */
@@ -560,39 +567,15 @@ export class Look {
    * mouse movement and the lock's change and error events. `Input.setLook` calls this from
    * `Input.attach`.
    */
-  attach(target: HTMLElement): void {
+  attach(target: HTMLElement, dispatcher?: PointerDispatcher): void {
     this.detach();
     this.target = target;
     const doc = target.ownerDocument;
-    const win = doc.defaultView ?? window;
+    const shared = dispatcher ?? null;
+    const d = shared ?? createPointerDispatcher(target);
+    this.dispatcher = d;
+    const removeConsumer = d.add(this.consumer, POINTER_PRIORITY.look);
 
-    const onDown = (e: PointerEvent) => {
-      if (e.pointerType !== 'touch') {
-        if (this.modeValue === 'orbit') {
-          if (this.lockOnFirstClick && !this.warnedLockOnFirstClick) {
-            this.warnedLockOnFirstClick = true;
-            console.warn('[look] lockOnFirstClick is ignored in orbit mode');
-          }
-          if (!this.orbitFromInput && e.button === 0) this.orbitDown(e.clientX, e.clientY);
-        } else if (this.lockOnFirstClick && !this.locked) void this.request();
-        return;
-      }
-      let inZone = false;
-      if (this.moveZone !== 'none') {
-        const r = target.getBoundingClientRect();
-        const left = e.clientX < r.left + r.width / 2;
-        inZone = this.moveZone === 'left' ? left : !left;
-      }
-      this.touchDown(e.pointerId, e.clientX, e.clientY, inZone);
-    };
-    const onMove = (e: PointerEvent) => {
-      if (e.pointerType === 'touch') this.touchMove(e.pointerId, e.clientX, e.clientY);
-      else if (!this.orbitFromInput && e.isPrimary) this.orbitMove(e.clientX, e.clientY);
-    };
-    const onUp = (e: PointerEvent) => {
-      if (e.pointerType === 'touch') this.touchUp(e.pointerId);
-      else if (!this.orbitFromInput && e.button <= 0) this.orbitUp();
-    };
     const onMouse = (e: MouseEvent) => {
       if (doc.pointerLockElement === target) this.mouseMove(e.movementX, e.movementY);
     };
@@ -608,36 +591,69 @@ export class Look {
       this.wheel(0 - units);
     };
     const onLock = () => this.syncLock();
-    const onBlur = () => this.cancelAll();
-    const onVisibility = () => {
-      if (doc.visibilityState === 'hidden') this.cancelAll();
-    };
 
-    target.addEventListener('pointerdown', onDown);
-    target.addEventListener('pointermove', onMove);
-    target.addEventListener('pointerup', onUp);
-    target.addEventListener('pointercancel', onUp);
     target.addEventListener('wheel', onWheel, { passive: true });
     doc.addEventListener('mousemove', onMouse);
     doc.addEventListener('pointerlockchange', onLock);
     doc.addEventListener('pointerlockerror', onLock);
-    win.addEventListener('blur', onBlur);
-    doc.addEventListener('visibilitychange', onVisibility);
     this.syncLock();
 
     this.detachFn = () => {
-      target.removeEventListener('pointerdown', onDown);
-      target.removeEventListener('pointermove', onMove);
-      target.removeEventListener('pointerup', onUp);
-      target.removeEventListener('pointercancel', onUp);
+      removeConsumer();
+      if (!shared) d.destroy();
+      this.dispatcher = null;
       target.removeEventListener('wheel', onWheel);
       doc.removeEventListener('mousemove', onMouse);
       doc.removeEventListener('pointerlockchange', onLock);
       doc.removeEventListener('pointerlockerror', onLock);
-      win.removeEventListener('blur', onBlur);
-      doc.removeEventListener('visibilitychange', onVisibility);
     };
   }
+
+  /** The dispatcher the look consumes from while attached (shared or private). */
+  private dispatcher: PointerDispatcher | null = null;
+
+  /**
+   * The dispatcher consumer: touch pointers feed the zones and pinch; in orbit mode a mouse or
+   * pen primary button claims its pointer (so gestures and the router leave it alone) and, unless
+   * a linked `Input` feeds the drag, drives the orbit.
+   */
+  private readonly consumer: PointerConsumer = {
+    pointerDown: (p: PointerRecord) => {
+      if (p.device !== 'touch') {
+        if (this.modeValue === 'orbit') {
+          if (this.lockOnFirstClick && !this.warnedLockOnFirstClick) {
+            this.warnedLockOnFirstClick = true;
+            console.warn('[look] lockOnFirstClick is ignored in orbit mode');
+          }
+          if (p.button === 0) {
+            this.dispatcher?.claim(p.id, this.consumer);
+            if (!this.orbitFromInput) this.orbitDown(p.clientX, p.clientY);
+          }
+        } else if (this.lockOnFirstClick && !this.locked) void this.request();
+        return;
+      }
+      let inZone = false;
+      if (this.moveZone !== 'none' && this.target) {
+        const r = this.target.getBoundingClientRect();
+        const left = p.clientX < r.left + r.width / 2;
+        inZone = this.moveZone === 'left' ? left : !left;
+      }
+      this.touchDown(p.id, p.clientX, p.clientY, inZone);
+    },
+    pointerMove: (p: PointerRecord) => {
+      if (p.device === 'touch') this.touchMove(p.id, p.clientX, p.clientY);
+      else if (!this.orbitFromInput && p.primary) this.orbitMove(p.clientX, p.clientY);
+    },
+    pointerUp: (p: PointerRecord) => {
+      if (p.device === 'touch') this.touchUp(p.id);
+      else if (!this.orbitFromInput && p.button <= 0) this.orbitUp();
+    },
+    pointerCancel: (p: PointerRecord) => {
+      if (p.device === 'touch') this.touchUp(p.id);
+      else if (!this.orbitFromInput) this.orbitUp();
+    },
+    cancelAll: () => this.cancelAll(),
+  };
 
   /** Stop listening, release the lock and drop every touch. */
   detach(): void {

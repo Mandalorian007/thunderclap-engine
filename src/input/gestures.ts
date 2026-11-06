@@ -7,6 +7,13 @@ import {
   type MagnifyOptions,
   magnifySize,
 } from './magnify';
+import {
+  createPointerDispatcher,
+  POINTER_PRIORITY,
+  type PointerConsumer,
+  type PointerDispatcher,
+  type PointerRecord,
+} from './pointer-dispatch';
 import type { GestureKind, PointerTransform } from './types';
 
 /** Device of the pointer that made a gesture. */
@@ -108,6 +115,11 @@ export interface GestureAttachOptions {
   pointerTarget: HTMLElement;
   /** Set `touch-action: none` on the target so touch drags don't scroll or zoom. Default true. */
   disableTouchScroll?: boolean;
+  /**
+   * The pointer dispatcher to consume from (ws/input-4) instead of listening on the target
+   * directly. `Input.attach` passes its own; without one the gestures build a private dispatcher.
+   */
+  dispatcher?: PointerDispatcher;
 }
 
 /** What the queues hold for continuous gestures. */
@@ -287,6 +299,7 @@ export class Gestures {
   /** Install the client → game-space mapping. `null` = identity (relative to the target when attached). */
   setPointerTransform(fn: PointerTransform | null): void {
     this.transform = fn;
+    this.ownDispatcher?.setTransform(fn);
   }
 
   // ---------------------------------------------------------------- observer
@@ -752,60 +765,37 @@ export class Gestures {
   attach(opts: GestureAttachOptions): void {
     this.detach();
     const target = opts.pointerTarget;
-    const doc = target.ownerDocument;
-    const win = doc.defaultView ?? window;
     const prevTouchAction = target.style.touchAction;
     if (opts.disableTouchScroll !== false) target.style.touchAction = 'none';
-
-    const local = (e: PointerEvent): [number, number] => {
-      if (this.transform) return [e.clientX, e.clientY];
-      const r = target.getBoundingClientRect();
-      return [e.clientX - r.left, e.clientY - r.top];
-    };
-    const device = (e: PointerEvent): GestureDevice =>
-      e.pointerType === 'touch' || e.pointerType === 'pen' ? e.pointerType : 'mouse';
-
-    const onDown = (e: PointerEvent) => {
-      if (e.pointerType === 'mouse' && e.button !== 0) return;
-      const [x, y] = local(e);
-      this.pointerDown(e.pointerId, x, y, device(e));
-      try {
-        target.setPointerCapture(e.pointerId);
-      } catch {
-        // Synthetic events have no active pointer.
-      }
-    };
-    const onMove = (e: PointerEvent) => {
-      const [x, y] = local(e);
-      this.pointerMove(e.pointerId, x, y);
-    };
-    const onUp = (e: PointerEvent) => {
-      if (e.pointerType === 'mouse' && e.button !== 0) return;
-      const [x, y] = local(e);
-      this.pointerUp(e.pointerId, x, y);
-    };
-    const onCancel = (e: PointerEvent) => this.pointerCancel(e.pointerId);
-    const onBlur = () => this.cancelAll();
-    const onVisibility = () => {
-      if (doc.visibilityState === 'hidden') this.cancelAll();
-    };
-
-    target.addEventListener('pointerdown', onDown);
-    target.addEventListener('pointermove', onMove);
-    target.addEventListener('pointerup', onUp);
-    target.addEventListener('pointercancel', onCancel);
-    win.addEventListener('blur', onBlur);
-    doc.addEventListener('visibilitychange', onVisibility);
+    const shared = opts.dispatcher ?? null;
+    const dispatcher = shared ?? createPointerDispatcher(target, { transform: this.transform });
+    if (!shared) this.ownDispatcher = dispatcher;
+    const remove = dispatcher.add(this.consumer, POINTER_PRIORITY.gestures);
     this.detachFn = () => {
-      target.removeEventListener('pointerdown', onDown);
-      target.removeEventListener('pointermove', onMove);
-      target.removeEventListener('pointerup', onUp);
-      target.removeEventListener('pointercancel', onCancel);
-      win.removeEventListener('blur', onBlur);
-      doc.removeEventListener('visibilitychange', onVisibility);
+      remove();
+      if (!shared) dispatcher.destroy();
+      this.ownDispatcher = null;
       target.style.touchAction = prevTouchAction;
     };
   }
+
+  /** The private dispatcher a standalone `attach` built, or `null` (shared or detached). */
+  private ownDispatcher: PointerDispatcher | null = null;
+
+  /** The dispatcher consumer: mouse primary button only; every touch and pen contact. */
+  private readonly consumer: PointerConsumer = {
+    pointerDown: (p: PointerRecord) => {
+      if (p.device === 'mouse' && p.button !== 0) return;
+      this.pointerDown(p.id, p.x, p.y, p.device);
+    },
+    pointerMove: (p: PointerRecord) => this.pointerMove(p.id, p.x, p.y),
+    pointerUp: (p: PointerRecord) => {
+      if (p.device === 'mouse' && p.button !== 0) return;
+      this.pointerUp(p.id, p.x, p.y);
+    },
+    pointerCancel: (p: PointerRecord) => this.pointerCancel(p.id),
+    cancelAll: () => this.cancelAll(),
+  };
 
   detach(): void {
     this.detachFn?.();
