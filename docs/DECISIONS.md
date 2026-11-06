@@ -73,3 +73,12 @@ Decisions made in this repo. Numbers are `E-0xx`; `D-0xx` refers to [The Last Ru
 - Nine parallel workstreams with disjoint ownership: prune, shadows (sun shadow map + distance fog in the lighting block), cull (bounds + frustum), look (pointer lock, touch zones, sticks), anchors (world-anchored DOM), particles-3d (world-space billboards, weather), texture-array (arrays + GPU mips), spatial-audio (listener + panner), xr. Briefs in `docs/briefs/`.
 - Shared hot spots and their order at merge: `render/index.ts` and `input/index.ts` (prune removes first; others append), `renderer.ts` (shadows owns the shadow pass and bind layout; cull owns record/sort/cull; xr only `endFrame`'s present flag), `camera.ts` (cull appends `frustum`/`cull`; xr appends `setProjection`/`setViewMatrix`), `core/game.ts` (anchors one line; xr the `xr` option), `scene-target.ts` (xr owns; particles-3d may append a depth getter), `harness/stream.*` (cull and texture-array by function). Merge order: prune, spatial-audio, texture-array, shadows, cull, look, anchors, particles-3d, xr.
 - Gate D is defined in STATUS. Invariant unchanged: 2D harness pixel-identical (E-008).
+
+## E-014: wave 4 integration notes (2026-11-05)
+
+- Merged in three batches: `b983019` flake-client, `394e07c` prune, `6c96af8` spatial-audio, `26cc2f8` look; `b95e43c` anchors, `e96a9e8` texture-array; `767228f` particles-3d, `ed4a628` cull. Shadows and xr follow. Main at `ed4a628`: 551 engine tests, e2e 478/52/0.
+- `BindingDesc` is internal since prune, so `viewDimension` is documented on `MaterialDesc`/`FullscreenPassDesc`. The texture-array CHANGELOG line still says `BindingDesc`; doc-sweep-3 fixes it.
+- Perspective cameras cull by default (`Camera.perspective` sets `cull = true`). The look harness lost two cubes to culling; its spec now asserts `instances + culled`. Any 3D harness that counts instances does the same.
+- Soft particles read the previous frame's depth (a copy of `SceneTarget.depth`). Same-frame depth needs a renderer hook after the opaque pass; backlog.
+- Process: worktrees start without `node_modules` (`pnpm install --frozen-lockfile --offline`); the hashed e2e port can collide with other services (`E2E_PORT_OFFSET`). Integrators merge in brief order and keep every CHANGELOG/README/ARCHITECTURE entry from both sides.
+- Wave 5 starts before wave 4 closes where it can: ws/gltf (new `src/assets`, no render files) branched from `767228f`. template-first-person and doc-sweep-3 wait for shadows and xr.
