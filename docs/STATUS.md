@@ -44,7 +44,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Skinning | ws/skinning | `VERTEX_LAYOUT_SKINNED`, `SkinPalette`, skinning in `materialPrelude` and the shadow pass; harness `skin.html` | shadows, anim (layout) | ✅ merged `2a797e3` (chain 1; skin.spec joints-sway load flake, E-020) |
 | 5 | Standard PBR material | ws/pbr | `createStandardMaterial` (base, metal-rough, normal, occlusion, emissive; GGX) over the lights block, shadows and fog; `WGSL_PBR`; harness `pbr.html` | shadows | ✅ merged `0a54281` |
 | 5 | Doc sweep 3 | ws/doc-sweep-3 | `check:docs` clean; ARCHITECTURE *Planned* lines current after wave 4 (XR lines all *Today*); root README page list and roadmap current; contradictions fixed and listed | wave 4 | ✅ green at `79c6e7d` (docs only; e2e 498/52/4 all fog flake); queued last (docs merge over everything) |
-| 5 | Spot lights + masks | ws/spot-lights | `SpotLight`, `Lights.spots`, per-light `layers` masks, `engine_light_accum`; harness `lights.html` | shadows | ✅ green at `1caea5c` (617 tests; e2e 525/52/1 fog flake); queued in chain 1 after skinning |
+| 5 | Spot lights + masks | ws/spot-lights | `SpotLight`, `Lights.spots`, per-light `layers` masks, `engine_light_accum`; harness `lights.html` | shadows | ✅ merged `40cb5cd` (chain 1; e2e 670/92/0) |
 | 5 | Snapshot gate | ws/snap-gate | `pnpm snap` / `snap:check`: golden PNGs for 2D harness pages on `desktop-1280`, E-008 tolerance, in `test:e2e`; integrate brief step | — | ✅ merged (landed on main; counts pending integrator report) |
 | 5 | Pick | ws/pick | `sphereTester`, `obbTester`, `meshTester` (bounds reject + Möller–Trumbore), `transformRayInto`; harness `pick.html` | rays, cull | ✅ merged `527f0eb` (chain 3; e2e 596/92/2 E-017) |
 | 5 | Look zoom | ws/look-zoom | `Look.zoom` axis (wheel, pinch, pad opt-in); `Follow` reads it; harness follow drops its wheel binding | follow | ✅ green at `d5bb746` (640 tests; e2e 526/57/3 fog flake); queued in chain 2 after template-first-person |
@@ -52,7 +52,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Sky | ws/sky | `Sky` drawable: gradient dome, sun disc/glow from `Lights.sun`, horizon to `fog.color`, stars; harness `sky.html` | lights | ✅ green at `edab70e` (641 tests; e2e 552/57/1 fog flake); queued in chain 2 after sockets |
 | 5 | Bench | ws/bench | `harness/bench.html` scene ladder, `pnpm bench` → `docs/BENCH.md`; e2e one rung | gpu-timer | ✅ green at `d32c978` (709 tests; e2e 525/64/5 E-017 flakes); queued in chain 3 after sky |
 | 5 | Sockets | ws/sockets | `createSocket`, `socketWorld`, `attachTransform`, `Skeleton.names`; harness `sockets.html` | anim | ✅ merged `9e0af9a` (chain 3; e2e 626/92/4 E-017) |
-| 5 | Texture registry | ws/texture-registry | `loadTexture` with mips, `defaultTextures` (white, black, flatNormal, metalRough, checker), unset slots bind white | pbr (wish) | ✅ green at `69a0d32` (705 tests; e2e 524/57/5 E-017 flakes); queued in chain 1 after spot-lights |
+| 5 | Texture registry | ws/texture-registry | `loadTexture` with mips, `defaultTextures` (white, black, flatNormal, metalRough, checker), unset slots bind white | pbr (wish) | ✅ merged `853f444` (chain 1; e2e 662/92/8 all E-017/E-020) |
 | 5 | Geometry | ws/geom | `@thunderclap/engine/geom`: box/plane/sphere/icosphere/capsule/cylinder/torus, `Heightfield` with `heightAt`/`raycastHeightfield`, merge/transform; harness `geom.html` | — | ✅ green at `ec57488` (747 tests; e2e 569/57/0); queued chain 4 |
 | 5 | IK + root motion | ws/ik | `twoBoneIk`, `lookAt`, `extractRootMotion`, `applyRootMotionDelta`; harness `ik.html` | anim | ✅ green at `4885580` (638 tests; e2e 491/52/3, all mesh.spec drag under load, E-017); queued chain 4 after geom |
 | 5 | Anim graph | ws/anim-graph | `createAnimGraph`: states, 1D blend spaces with phase sync, conditional transitions, enter/exit hooks; harness `anim-graph.html` | anim | ✅ green at `cea21ae` (727 tests; e2e 578/92/4, all mesh.spec fog E-017); queued chain 4 after ui-hud |
@@ -70,6 +70,8 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Demo: dungeon | ws/demo-dungeon | `demos/dungeon` 2D tile crawl: atlas, 60 sprites, flicker, menu, save, synth audio | — | 🔧 in progress |
 | 5 | Demo: showroom | ws/demo-showroom | `demos/showroom` PBR sphere grid, moving lights, post looks via `blendTo`, GPU readout | pbr | 🔧 in progress |
 | 5 | Demo: range | ws/demo-range | `demos/range` first-person target range: Look, meshTester picks, sparks, trails, spatial audio | pick | 🔧 in progress |
+| 5 | Shared light loop | ws/pbr-lights | PBR sees spots, masks, layers via one generated light loop; default textures unified | spot-lights, texture-registry | 🔧 in progress |
+| 5 | Batch submit | ws/batch-submit | `frame.meshes(batch)` + retained `InstanceList`; 50k instances in a few ms CPU; BENCH numbers | bench | 🔧 in progress |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
@@ -114,6 +116,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - A `Transform`-level "position changed" flag so audio followers skip unchanged matrices (ws/audio-zones wish).
 - Template `package.json` descriptions still say "Copy the folder..."; `create-game` keeps them verbatim (ws/scaffold note). → ws/comment-sweep.
 - GPU morph targets (storage-buffer deltas) for big meshes; TANGENT deltas (ws/morph wishes).
+- `standard.ts` `defaultsFor(renderer)` and `Renderer.white` duplicate `defaultTextures` (texture-registry integrator). → ws/pbr-lights.
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
