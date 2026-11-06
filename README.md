@@ -152,6 +152,8 @@ Import only from the public entry points listed under [Modules](#modules). Anyth
 - `templates/puzzle` (`@thunderclap/template-puzzle`): a 2D puzzle game: `createGame`, one scene, pure `rules/` with tests, a versioned save with a migration and a layout spec placing a HUD on every form factor. Run `pnpm template:puzzle` (`check:template-puzzle`).
 - `templates/first-person` (ws/template-first-person, in progress): a 3D walk on `Look`, Worker chunks with bounds and a texture array, sun shadow and fog, weather and anchors.
 
+**Demos.** Playable showcases under `demos/` (E-021), each a page on the public API with no network assets, exposing `window.__demo` for its spec under `e2e/demos/`. `pnpm demo <name>` serves one (`pnpm demo` lists them); the harness server also serves them at `/demos/<name>/`, so the matrix runs them. [demos/README.md](demos/README.md) has the table.
+
 **Packages.** `packages/host-electron` (`@thunderclap/host-electron`) is the Electron desktop host: a sandboxed shell, a preload bridge and `createElectronHost()`. It lives in this repo as a pnpm workspace package and the engine never imports it. Run `pnpm desktop:dev`, `pnpm desktop:build` or `pnpm test:e2e:desktop` ([README](packages/host-electron/README.md)).
 
 [ARCHITECTURE.md](ARCHITECTURE.md) has the contracts for each one: what exists today and what is planned.
