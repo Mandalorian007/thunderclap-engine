@@ -99,6 +99,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Demo: voxel world (mesher in a Worker in the demo, texture-array material, AO, sky/fog/water/shadows, block break/place, frustum culling) | ws/demo-voxel | 🔧 engineer dispatched (offset 490) |
 | 5 | Demo: isometric tactics skirmish (diamond tiles with elevation, nav grid pathing, tween moves, pad cursor, pinch zoom) | ws/demo-tactics | 🔧 engineer dispatched (offset 500) |
 | 5 | World panels: canvas-painted themed widgets on a quad in the world or head-locked, hit by every pointer ray incl. XR | ws/ui-world-panel | 🔧 engineer dispatched (offset 510) |
+| 5 | glTF materials: full PBR map set + factors, KHR_texture_transform, samplers, TANGENT → tangent layout, skinned primitives through the standard material (SKINNED_LAYOUT flip), joint names | ws/gltf-materials | 📝 brief written; dispatch after ws/morph lands (offset 520) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
@@ -171,6 +172,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - ws/nav-2 wishes: a build-time navmesh bake script under `scripts/` now that bytes ship (→ ws/comment-sweep or a tools brief); voxel-column grids stay Planned. Surface heights quantise to one `cellHeight` (Recast behaviour); `maxEdgeLength: 0` is not unlimited.
 - Chain 4 process notes: load flakes seen in `src/core/game.test.ts` (geom) and mesh.spec drag (retarget, load 46), both green on rerun after E-023; ik's 26-min run under load 46 to 80 was discarded, not used as a gate.
 - `e2e/widgets.spec.ts:114` reticle `data-hit` race fixed in the spec by chain 1 (4ff7c6b, landed with ergo-3d): `hit()` and the attribute read happen in one `evaluate`; `widgets-2.ts` untouched. Same shape as ui.spec menuNav; a polled fix for menuNav would let it leave E-017 (→ ws/comment-sweep).
+- `e2e/post2.spec.ts` sharpen/grain probes time out at 30 s under load (seen on three chains in one window at load 28-38; 21/21 at load 23): load-sensitive, not flaky logic. Cheaper probes or a per-test budget (→ ws/comment-sweep).
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
