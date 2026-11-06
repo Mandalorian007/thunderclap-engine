@@ -135,3 +135,7 @@ With six integrator chains the full matrix takes 4–6 minutes and main lands co
 
 Refines E-025. When main moved only by commits that touch `docs/**`, `README.md`, `CHANGELOG.md` or `ARCHITECTURE.md` since the last green `pnpm check`, the integrator merges main and runs `pnpm check:docs` and `pnpm lint` instead of the whole `pnpm check` before landing; a move that touches anything else (including `package.json`) still gets `pnpm check`, and the E-025 overlap rule still decides whether e2e reruns. Chain 6 did this landing demo-showroom while PM docs commits arrived faster than a full check completes; nothing a docs commit changes is exercised by the unit tests or typecheck.
 
+## E-027: the dungeon demo's pause-menu pad walk joins the E-017 list until ws/demo-polish lands (2026-11-06, PM)
+
+`e2e/demos/dungeon.spec.ts:116` ("the pause menu opens on Escape and walks with the arrow keys and the d-pad") has now missed three times on unrelated branches (desktop-1920 on ws/scaffold; desktop-1280 and ipad on the ws/assets-2 gate), always with the same shape as ui.spec menuNav: a pad press lands while the panel is still settling and focus never moves. It is the spec's fixed-wait assertion, not the merges. The chain 1 integrator lands ws/assets-2 with those two failures tolerated. ws/demo-polish (dispatched) makes the spec poll; when it lands the test leaves the list, as mesh.spec did under E-024.
+
