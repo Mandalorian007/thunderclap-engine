@@ -18,15 +18,32 @@ import { type GridSource, gridTriangles } from './grid';
 /** A 3×4 row-major matrix (`Transform.world`, 12 floats) or a 4×4 column-major one (16 floats). */
 export type ColliderTransform = ArrayLike<number>;
 
-/** A `Geometry` (any layout whose first three floats per vertex are the position), optionally placed. */
-export interface GeometrySource {
-  geometry: Geometry;
+/** What every triangle-set source shares: its placement, layer and user data. */
+interface TriangleSourceBase {
   transform?: ColliderTransform;
   /** Collision layer, a bit index 0..31 (`layerMask` tests `1 << layer`). Default 0. */
   layer?: number;
   /** Handed back on every hit of this source; not serialised. */
   userData?: unknown;
 }
+
+/** A `Geometry` (any layout whose first three floats per vertex are the position), placed. */
+export interface GeometryMeshSource extends TriangleSourceBase {
+  geometry: Geometry;
+}
+
+/**
+ * Bare triangles (ws/geom-3): `positions` is x, y, z per vertex (3 floats, no other lanes) and
+ * `indices` three per triangle, as a bake input or a hand-built proxy holds them. Builds and
+ * refits exactly as a `{ geometry }` source does.
+ */
+export interface PositionsSource extends TriangleSourceBase {
+  positions: Float32Array;
+  indices: Uint16Array | Uint32Array;
+}
+
+/** A triangle set: a `Geometry` or positions-only triangles, optionally placed. */
+export type GeometrySource = GeometryMeshSource | PositionsSource;
 
 /** A heightfield, one quad (two triangles) per cell, in its own world placement. */
 export interface HeightfieldSource {
@@ -284,12 +301,19 @@ export function applyTransform(
 
 // ------------------------------------------------------------------ building
 
-/** The nine floats per triangle of a geometry, in its own space. */
-function geometryTriangles(g: Geometry): Float32Array {
-  const floats = g.layout.floats;
-  const idx = g.indices;
+/**
+ * The nine floats per triangle of a vertex array (`floats` per vertex, xyz first) and its
+ * indices, in its own space: the one position accessor both triangle-set source forms go through.
+ */
+function indexedTriangles(
+  v: Float32Array,
+  floats: number,
+  idx: Uint16Array | Uint32Array,
+): Float32Array {
+  if (idx.length % 3 !== 0) {
+    throw new Error(`collide: a source's index count must be a multiple of 3, got ${idx.length}`);
+  }
   const out = new Float32Array(idx.length * 3);
-  const v = g.vertices;
   for (let i = 0; i < idx.length; i++) {
     const o = idx[i]! * floats;
     out[i * 3] = v[o]!;
@@ -423,8 +447,11 @@ function prepareSource(src: ColliderSource): SourceBuild {
   if (!(layer >= 0 && layer < 32 && Number.isInteger(layer))) {
     throw new Error(`collide: layer must be an integer 0..31, got ${layer}`);
   }
-  if ('geometry' in src) {
-    const local = geometryTriangles(src.geometry);
+  if ('geometry' in src || 'positions' in src) {
+    const local =
+      'geometry' in src
+        ? indexedTriangles(src.geometry.vertices, src.geometry.layout.floats, src.geometry.indices)
+        : indexedTriangles(src.positions, 3, src.indices);
     let world = local;
     if (src.transform) {
       world = new Float32Array(local.length);
@@ -454,7 +481,9 @@ function prepareSource(src: ColliderSource): SourceBuild {
       userData: src.userData,
     };
   }
-  throw new Error('collide: a source is { geometry }, { heightfield } or { grid }');
+  throw new Error(
+    'collide: a source is { geometry }, { positions, indices }, { heightfield } or { grid }',
+  );
 }
 
 /**
