@@ -160,3 +160,77 @@ export function quatFromEuler(out: Float32Array, o: number, x: number, y: number
   out[o + 2] = cx * cy * sz - sx * sy * cz;
   out[o + 3] = cx * cy * cz + sx * sy * sz;
 }
+
+/**
+ * The rotation of a 3×3 matrix (or the 3×3 part of a 3×4 affine, with `stride` 4) read
+ * row-major at `m[mo..]` (rows `r0 r1 r2`, `stride` floats apart; default 3 for a packed
+ * mat3), written as a unit quaternion at `out[o..o+4)`. Shepperd's method: the largest
+ * diagonal term picks the stable branch. A scaled matrix is normalised first (uniform scale
+ * drops out; non-uniform scale gives the nearest rotation only approximately). Allocation-free.
+ */
+export function quatFromMat3(
+  m: ArrayLike<number>,
+  out: Float32Array,
+  o = 0,
+  mo = 0,
+  stride = 3,
+): void {
+  // Normalise each row so a scaled matrix yields a unit quaternion.
+  let m00 = m[mo]!;
+  let m01 = m[mo + 1]!;
+  let m02 = m[mo + 2]!;
+  let m10 = m[mo + stride]!;
+  let m11 = m[mo + stride + 1]!;
+  let m12 = m[mo + stride + 2]!;
+  let m20 = m[mo + 2 * stride]!;
+  let m21 = m[mo + 2 * stride + 1]!;
+  let m22 = m[mo + 2 * stride + 2]!;
+  // Columns are the rotated basis vectors; their lengths are the scale.
+  const sx = Math.hypot(m00, m10, m20) || 1;
+  const sy = Math.hypot(m01, m11, m21) || 1;
+  const sz = Math.hypot(m02, m12, m22) || 1;
+  m00 /= sx;
+  m10 /= sx;
+  m20 /= sx;
+  m01 /= sy;
+  m11 /= sy;
+  m21 /= sy;
+  m02 /= sz;
+  m12 /= sz;
+  m22 /= sz;
+  const trace = m00 + m11 + m22;
+  let x: number;
+  let y: number;
+  let z: number;
+  let w: number;
+  if (trace > 0) {
+    const s = Math.sqrt(trace + 1) * 2;
+    w = s / 4;
+    x = (m21 - m12) / s;
+    y = (m02 - m20) / s;
+    z = (m10 - m01) / s;
+  } else if (m00 > m11 && m00 > m22) {
+    const s = Math.sqrt(1 + m00 - m11 - m22) * 2;
+    w = (m21 - m12) / s;
+    x = s / 4;
+    y = (m01 + m10) / s;
+    z = (m02 + m20) / s;
+  } else if (m11 > m22) {
+    const s = Math.sqrt(1 + m11 - m00 - m22) * 2;
+    w = (m02 - m20) / s;
+    x = (m01 + m10) / s;
+    y = s / 4;
+    z = (m12 + m21) / s;
+  } else {
+    const s = Math.sqrt(1 + m22 - m00 - m11) * 2;
+    w = (m10 - m01) / s;
+    x = (m02 + m20) / s;
+    y = (m12 + m21) / s;
+    z = s / 4;
+  }
+  out[o] = x;
+  out[o + 1] = y;
+  out[o + 2] = z;
+  out[o + 3] = w;
+  quatNormalize(out, o);
+}

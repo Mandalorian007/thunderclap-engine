@@ -207,6 +207,78 @@ describe('textures', () => {
     expect(srgb.format).toBe('rgba8unorm-srgb');
     expect(lin.format).toBe('rgba8unorm');
   });
+
+  it('textureFromSource takes an options object with mips and a label', () => {
+    const { fake, r } = setup();
+    const img = { width: 8, height: 4, data: new Uint8ClampedArray(128) } as unknown as ImageData;
+    (globalThis as Record<string, unknown>).ImageData ??= class {};
+    const t = r.textureFromSource(img, { mips: true, label: 'mipped' });
+    expect(t.format).toBe('rgba8unorm-srgb');
+    expect(fake.textures.find((x) => x.label === 'mipped')!.mipLevelCount).toBe(4);
+    // The positional label still works; no mips by default.
+    const flat = r.textureFromSource(img, 'flat', { linear: true });
+    expect(flat.format).toBe('rgba8unorm');
+    expect(fake.textures.find((x) => x.label === 'flat')!.mipLevelCount).toBe(1);
+  });
+});
+
+describe('RenderStats.triangles (ws/ergo-3d)', () => {
+  it('counts indexed and non-indexed scene triangles × instances, reset each frame', () => {
+    const { r } = setup();
+    const mat = r.createMaterial({ label: 't', wgsl: WGSL, uniformBytes: 16 });
+    const indexed = r.createMesh({
+      layout: VERTEX_LAYOUT_3D,
+      capacity: { vertices: 8, indices: 36 },
+    });
+    indexed.update({
+      vertices: new Float32Array(8 * VERTEX3D_FLOATS),
+      indices: new Uint16Array(36),
+    });
+    const soup = r.createMesh({ layout: VERTEX_LAYOUT_3D, capacity: { vertices: 9 } });
+    soup.update({ vertices: new Float32Array(9 * VERTEX3D_FLOATS) });
+    let f = r.beginFrame(0, 0);
+    f.mesh(indexed, mat, { x: 0, y: 0 });
+    f.mesh(indexed, mat, { x: 1, y: 0 }); // batches: two instances of 12 triangles
+    f.mesh(soup, mat, { x: 0, y: 0 }); // 3 triangles
+    r.endFrame();
+    expect(r.stats.triangles).toBe(12 * 2 + 3);
+    f = r.beginFrame(1 / 60, 1 / 60);
+    expect(r.stats.triangles).toBe(0);
+    f.sprite(null, { x: 0, y: 0 });
+    r.endFrame();
+    expect(r.stats.triangles).toBe(2);
+  });
+});
+
+describe('timing.ready (ws/ergo-3d)', () => {
+  it('resolves once the first sample lands, then immediately', async () => {
+    const { r } = setup();
+    r.resize(8, 8);
+    r.timingEvery = 1;
+    let done = false;
+    const p = r.timing.ready().then(() => {
+      done = true;
+    });
+    await Promise.resolve();
+    expect(done).toBe(false);
+    r.beginFrame(0, 0);
+    r.endFrame();
+    await p;
+    expect(r.timing.samples).toBe(1);
+    // Already sampled: resolves without another frame.
+    await r.timing.ready();
+  });
+
+  it('resolves on destroy and at once when the device cannot time', async () => {
+    const { r } = setup();
+    const p = r.timing.ready();
+    r.destroy();
+    await p;
+    const fake = createFakeDevice();
+    (fake.device.queue as { onSubmittedWorkDone?: unknown }).onSubmittedWorkDone = undefined;
+    const r2 = new Renderer(fakeRendererGpu(fake));
+    await r2.timing.ready();
+  });
 });
 
 describe('PingPong', () => {

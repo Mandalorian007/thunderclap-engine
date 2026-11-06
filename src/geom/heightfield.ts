@@ -217,6 +217,28 @@ export function raycastHeightfield(
   return -1;
 }
 
+/** Scratch ray for `rayHeightfield` (no allocation per call). */
+const scratchRay: { origin: ArrayLike<number>; dir: ArrayLike<number> } = {
+  origin: [0, 0, 0],
+  dir: [0, 0, 1],
+};
+
+/**
+ * `raycastHeightfield` taking the ray as two arrays: `origin` and `dir` (a `Ray` from `input`,
+ * a camera's eye and look direction, or plain `[x, y, z]`s), so a game casts without building a
+ * `HeightfieldRay`. Returns the distance along `dir` or -1; `out` receives the hit point.
+ */
+export function rayHeightfield(
+  hf: Heightfield,
+  origin: ArrayLike<number>,
+  dir: ArrayLike<number>,
+  out?: HeightfieldVec3,
+): number {
+  scratchRay.origin = origin;
+  scratchRay.dir = dir;
+  return raycastHeightfield(hf, scratchRay, out);
+}
+
 /** Smallest root of `a t² + b t + c = 0` within `[lo, hi]`, or -1. */
 function smallestRoot(a: number, b: number, c: number, lo: number, hi: number): number {
   const tol = 1e-7 * Math.max(1, Math.abs(lo));

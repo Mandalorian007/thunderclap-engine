@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { VERTEX_LAYOUT_2D, VERTEX_LAYOUT_3D } from '../render/mesh';
+import { VERTEX_LAYOUT_2D, VERTEX_LAYOUT_3D, VERTEX_LAYOUT_3D_TANGENT } from '../render/mesh';
 import { Transform } from '../render/transform';
 import {
   computeBounds,
@@ -12,6 +12,7 @@ import {
   UINT16_MAX_VERTICES,
 } from './geometry';
 import { box, sphere } from './primitives';
+import { computeTangents, TANGENT_FLOATS } from './tangents';
 
 const F = GEOMETRY_FLOATS;
 
@@ -135,5 +136,42 @@ describe('transformGeometry', () => {
     const g = box();
     expect(transformGeometry(g, new Transform({ y: 5 }).world)).toBe(g);
     expect(g.bounds.center[1]).toBe(5);
+  });
+});
+
+describe('tangent layout (ws/ergo-3d)', () => {
+  it('mergeGeometry keeps VERTEX_LAYOUT_3D_TANGENT and bounds it', () => {
+    const a = computeTangents(box());
+    const b = computeTangents(box());
+    const m = mergeGeometry(a, b);
+    expect(m.layout).toBe(VERTEX_LAYOUT_3D_TANGENT);
+    expect(m.vertices.length).toBe(a.vertices.length + b.vertices.length);
+    expect(m.indices.length).toBe(a.indices.length + b.indices.length);
+    expect(m.bounds.radius).toBeCloseTo(a.bounds.radius, 6);
+    expect(Number.isFinite(m.bounds.radius)).toBe(true);
+  });
+
+  it('transformGeometry rotates tangents, keeps them unit and perpendicular, flips w on a mirror', () => {
+    const t = new Transform({ x: 3, scaleX: 2, scaleY: 1, scaleZ: 0.5 });
+    t.setAxisAngle(0, 0, 1, Math.PI / 3);
+    const g = transformGeometry(computeTangents(box()), t.world);
+    expect(g.layout).toBe(VERTEX_LAYOUT_3D_TANGENT);
+    expect(g.bounds.center[0]).toBeCloseTo(3, 5);
+    const v = g.vertices;
+    const T = TANGENT_FLOATS;
+    expect(v.length % T).toBe(0);
+    for (let o = 0; o < v.length; o += T) {
+      expect(Math.hypot(v[o + 12]!, v[o + 13]!, v[o + 14]!)).toBeCloseTo(1, 5);
+      expect(Math.abs(v[o + 15]!)).toBe(1);
+      // A box tangent lies in its face, so it stays perpendicular to the normal under an
+      // axis-aligned scale followed by a rotation.
+      const dot = v[o + 12]! * v[o + 3]! + v[o + 13]! * v[o + 4]! + v[o + 14]! * v[o + 5]!;
+      expect(dot).toBeCloseTo(0, 5);
+    }
+    const before = computeTangents(box());
+    const mirrored = transformGeometry(computeTangents(box()), new Transform({ scaleX: -1 }).world);
+    for (let o = 0; o < mirrored.vertices.length; o += T) {
+      expect(mirrored.vertices[o + 15]).toBe(-before.vertices[o + 15]!);
+    }
   });
 });

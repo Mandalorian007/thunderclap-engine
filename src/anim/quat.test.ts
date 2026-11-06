@@ -3,6 +3,7 @@ import {
   quatDot,
   quatFromAxisAngle,
   quatFromEuler,
+  quatFromMat3,
   quatIdentity,
   quatMultiply,
   quatNlerp,
@@ -147,5 +148,66 @@ describe('slerp', () => {
     quatSlerp(buf, 4, buf, 4, b, 0, 0.5);
     close(buf.subarray(4, 8), [...axisAngle(1, 0, 0, 0.5)]);
     expect([...buf.subarray(0, 4)]).toEqual([0, 0, 0, 0]);
+  });
+});
+
+describe('quatFromMat3 (ws/ergo-3d)', () => {
+  /** Row-major 3×3 of a unit quaternion (the convention of `writeNodeMatrix`). */
+  const mat3 = (q: Float32Array, scale = 1): Float32Array => {
+    const [x, y, z, w] = [q[0]!, q[1]!, q[2]!, q[3]!];
+    const xx = x * x;
+    const yy = y * y;
+    const zz = z * z;
+    const xy = x * y;
+    const xz = x * z;
+    const yz = y * z;
+    const wx = w * x;
+    const wy = w * y;
+    const wz = w * z;
+    // biome-ignore format: matrix rows
+    return new Float32Array([
+      (1 - 2 * (yy + zz)) * scale, 2 * (xy - wz) * scale, 2 * (xz + wy) * scale,
+      2 * (xy + wz) * scale, (1 - 2 * (xx + zz)) * scale, 2 * (yz - wx) * scale,
+      2 * (xz - wy) * scale, 2 * (yz + wx) * scale, (1 - 2 * (xx + yy)) * scale,
+    ]);
+  };
+  const same = (a: Float32Array, b: Float32Array) => {
+    // q and -q are one rotation.
+    const sign = quatDot(a, 0, b, 0) < 0 ? -1 : 1;
+    for (let i = 0; i < 4; i++) expect(a[i]).toBeCloseTo(sign * b[i]!, 5);
+  };
+
+  it('inverts the quaternion-to-matrix map on every Shepperd branch', () => {
+    const cases = [
+      q(0, 0, 0, 1),
+      axisAngle(0, 1, 0, Math.PI / 2),
+      axisAngle(1, 0, 0, Math.PI * 0.9), // m00 largest
+      axisAngle(0, 1, 0, Math.PI * 0.95), // m11 largest
+      axisAngle(0, 0, 1, Math.PI * 0.99), // m22 largest
+      axisAngle(1, 1, 1, 2.1),
+    ];
+    for (const src of cases) {
+      const out = new Float32Array(4);
+      quatFromMat3(mat3(src), out);
+      same(out, src);
+      expect(Math.hypot(out[0]!, out[1]!, out[2]!, out[3]!)).toBeCloseTo(1, 6);
+    }
+  });
+
+  it('drops a uniform scale, writes at an offset and reads a 3×4 affine with stride 4', () => {
+    const src = axisAngle(0.3, 1, -0.2, 1.2);
+    const out = new Float32Array(8);
+    quatFromMat3(mat3(src, 2.5), out, 4);
+    same(out.subarray(4), src);
+    const m = mat3(src);
+    // biome-ignore format: 3×4 rows with a translation column
+    const affine = new Float32Array([
+      m[0]!, m[1]!, m[2]!, 7,
+      m[3]!, m[4]!, m[5]!, 8,
+      m[6]!, m[7]!, m[8]!, 9,
+    ]);
+    const o2 = new Float32Array(4);
+    quatFromMat3(affine, o2, 0, 0, 4);
+    same(o2, src);
   });
 });

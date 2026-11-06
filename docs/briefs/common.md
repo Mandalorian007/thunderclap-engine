@@ -4,7 +4,7 @@ You are an engineer on one workstream of the ThunderClap engine (`/Users/matthew
 
 ## Branch
 
-Your worktree may start from an old commit. First `git reset --hard main` (or the branch your brief says you stack on), then `git checkout -b ws/<name>` (rename the throwaway worktree branch if there is one). Commit on that branch only. Never push. Never merge. Never touch `main`. Never check out branches in another repo you are told to read.
+Your worktree may start from an old commit. First `git reset --hard main` (or the branch your brief says you stack on), then `git checkout -b ws/<name>` (rename the throwaway worktree branch if there is one). Then `pnpm install --frozen-lockfile --offline` in the worktree (the templates and packages have their own importers; `pnpm check` fails without it). Commit on that branch only. Never push. Never merge. Never touch `main`. Never check out branches in another repo you are told to read.
 
 ## Read first
 

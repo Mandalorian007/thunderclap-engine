@@ -288,6 +288,62 @@ sky.sunSize = 0.04; // every field is live
 Tests: `sky.test.ts` (fake GPU, `skyRay` against `Camera.screenToWorld`). Demo:
 `harness/sky.html` (`?still` parks the sun at noon).
 
+## Decals
+
+`Decals(renderer, opts: DecalsOptions)` is a `Drawable`: an atlas stamped onto scenery, every
+live decal in one instanced draw. `frame.drawable(decals, order)` draws them after the geometry
+they sit on; `decals.update(dt)` ages them.
+
+```ts
+import { Decals } from '@thunderclap/engine/fx';
+
+const decals = new Decals(renderer, {
+  texture: atlas, // any TextureLike
+  atlas: { columns: 2, rows: 2 },
+  capacity: 256,
+  blend: 'alpha', // | 'multiply' | 'additive'
+  fade: [1, 0], // alpha at age 0 and at the lifetime
+  lifetime: 8, // seconds, default Infinity
+});
+const h = decals.add({ x, y, z, nx, ny, nz, size: 1.5, rotation: 0.3, tile: 2, color: [1, 0.2, 0.2, 1] });
+// each frame
+decals.update(dt);
+frame.drawable(decals, 1);
+decals.remove(h);
+```
+
+- `add(desc: DecalDesc): number` returns a handle (ids increase; `has(handle)`, `ageOf(handle)`).
+  The decal is a `size`-wide square facing along the normal, spun by `rotation` about it, sampling
+  atlas `tile` (row-major) times `color`. When `capacity` is full the oldest live decal is
+  overwritten. `remove(handle)` marks it dead; `update(dt)` (or the next `prepare`) compacts the
+  live decals to the front and keeps the handle → slot map, so nothing allocates per frame when
+  nothing died. `clear()` empties it; `count` is the live number.
+- Two implementations behind one API, `mode: 'auto' | 'box' | 'quad'` (`DecalMode`, default
+  `auto`: `box` under a depth camera, else `quad`; `activeMode` is the one the last frame used).
+  - **Box**: each decal is a unit box in its own frame. The fragment reconstructs the world
+    position under the pixel from a copy of the scene depth (`inv_view_proj × (ndc, depth)`),
+    maps it into the box, rejects what is outside, samples the atlas by the local xy and fades
+    over the outer `fadeEdge` share of the box's half depth (default 0.2) and by `normalBias`
+    (default 0.3): a surface whose normal, from `dpdx`/`dpdy` of the reconstructed position,
+    makes a cosine below it with the decal's is skipped. Depth test and write off, so the decal
+    wraps corners and steps. The copy (an own `depth32float` texture, as the particles' soft
+    depth) is taken in `prepare`, before this frame's scene pass, so it holds the **previous
+    frame's** depth: a decal placed this frame appears next frame, and a camera cut shows one
+    frame of mismatch. Nothing is drawn until the scene has rendered depth once.
+  - **Quad**: a camera-independent quad lifted along the normal by `offset` (default 0.01),
+    depth test on, write off. The fallback without depth, or by `mode: 'quad'`.
+- Blend `DecalBlend`: `alpha` (default), `additive`, or `multiply` (the shader lerps its colour
+  towards white by alpha and the blend multiplies the destination). `fade: [a0, a1]` is the alpha
+  over normalised age; decals that live forever keep `a0`.
+- Instances: `DECAL_INSTANCE_FLOATS` (24) floats each in a preallocated `Float32Array`, uploaded
+  once per frame: the world → local 3×4 matrix (rows at `@location(3..5)`), the atlas rect, the
+  colour and age / lifetime. The params block (`DECAL_PARAMS_FLOATS`: the camera's
+  `invViewProj`, the shape values, the fade) is 96 bytes. `WGSL_DECAL_BOX`, `WGSL_DECAL_QUAD`
+  and `WGSL_DECAL_DEPTH_COPY` are exported.
+
+Tests: `decals.test.ts` (fake GPU: ring buffer order, compaction, mode by `frame.depthFormat`,
+instance layout, expiry). Demo: `harness/decals.html` (click to stamp; `?mode=box|quad`).
+
 ## Water
 
 `Water(renderer, opts?: WaterOptions)` is a `Drawable`: a flat plane of `geom.plane` in the 3D

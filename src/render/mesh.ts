@@ -62,6 +62,12 @@ export interface VertexLayout {
   /** WGSL expression over `v: VertexIn` for the object-space normal (`vec3f`). */
   readonly wgslNormal: string;
   /**
+   * Float offset of x, y, z inside a vertex (0 in every shipped layout), so a layout goes
+   * straight to `meshTester(..., { stride: layout.floats, offset: layout.positionOffset })`.
+   * Optional for a layout written by hand; read it as `layout.positionOffset ?? 0`.
+   */
+  readonly positionOffset?: number;
+  /**
    * The layout carries joints and weights: `materialPrelude` emits `WGSL_SKIN` (the palette
    * binding and `engine_skin`) so `wgslPosition` / `wgslNormal` may call it. See `skin.ts`.
    */
@@ -71,6 +77,7 @@ export interface VertexLayout {
 /** 2D layout: `v.pos` is a `vec2f` (z = 0); the normal faces the viewer, `(0, 0, -1)`. */
 export const VERTEX_LAYOUT_2D: VertexLayout = {
   name: '2d',
+  positionOffset: 0,
   floats: VERTEX_FLOATS,
   stride: VERTEX_STRIDE,
   buffer: VERTEX_BUFFER_LAYOUT,
@@ -84,6 +91,7 @@ export const VERTEX_LAYOUT_2D: VertexLayout = {
 /** 3D layout: `v.pos` and `v.normal` are `vec3f`. */
 export const VERTEX_LAYOUT_3D: VertexLayout = {
   name: '3d',
+  positionOffset: 0,
   floats: VERTEX3D_FLOATS,
   stride: VERTEX3D_STRIDE,
   buffer: VERTEX3D_BUFFER_LAYOUT,
@@ -104,6 +112,7 @@ export const VERTEX_LAYOUT_3D: VertexLayout = {
  */
 export const VERTEX_LAYOUT_3D_TANGENT: VertexLayout = {
   name: '3d-tangent',
+  positionOffset: 0,
   floats: 16,
   stride: 64,
   buffer: {
@@ -163,6 +172,7 @@ export const VERTEX_SKINNED_BUFFER_LAYOUT: GPUVertexBufferLayout = {
  */
 export const VERTEX_LAYOUT_SKINNED: VertexLayout = {
   name: 'skinned',
+  positionOffset: 0,
   floats: VERTEX_SKINNED_FLOATS,
   stride: VERTEX_SKINNED_STRIDE,
   buffer: VERTEX_SKINNED_BUFFER_LAYOUT,
@@ -247,6 +257,23 @@ export interface MeshUpdate {
   bounds?: MeshBounds;
 }
 
+/**
+ * The shape a meshing Worker posts back (`harness/stream.ts`): one `ArrayBuffer` holding
+ * `vertexCount` vertices of the mesh's layout from byte 0 and, when `indexCount` is given, that
+ * many indices of the mesh's index format at `indexOffset` (default: right after the vertices,
+ * rounded up to 4 bytes); an indexed mesh given no `indexCount` draws nothing until the next
+ * reply. `Mesh.update` takes it as-is, so the page never builds views over the
+ * transferred buffer. Extra fields (a chunk id) are ignored.
+ */
+export interface MeshReply {
+  buffer: ArrayBuffer;
+  vertexCount: number;
+  indexCount?: number;
+  /** Byte offset of the indices in `buffer`. Default: the vertices' byte length, 4-aligned. */
+  indexOffset?: number;
+  bounds?: MeshBounds;
+}
+
 /** 1.5× growth, like a vector: amortised reallocations when a streamed mesh keeps growing. */
 const GROWTH = 1.5;
 
@@ -261,7 +288,8 @@ export class Mesh {
   vertexCount = 0;
   /**
    * Indices drawn (`drawIndexed`) when > 0. With an index buffer and `indexCount` 0 the renderer
-   * skips the draw (no non-indexed fallback), so `update({ indexCount: 0 })` empties the mesh.
+   * skips the draw entirely (no non-indexed fallback, no draw call, nothing in
+   * `RenderStats`), so `update({ indexCount: 0 })` empties the mesh.
    */
   indexCount = 0;
   /**
@@ -321,8 +349,36 @@ export class Mesh {
    * reallocated (`growths` counts them). `bounds` are copied when given, else recomputed from
    * the uploaded positions when `autoBounds` is on (a `Float32Array` view is read in place;
    * any other view type gets one over the same buffer). Allocation-free otherwise.
+   *
+   * A `MeshReply` (`{ buffer, vertexCount, indexCount?, bounds? }`, a Worker's message) is the
+   * same upload read straight out of the one transferred buffer; it allocates the two views.
    */
-  update(u: MeshUpdate): boolean {
+  update(u: MeshUpdate | MeshReply): boolean {
+    if ('buffer' in u && u.buffer instanceof ArrayBuffer) return this.updateFromReply(u);
+    return this.updateViews(u as MeshUpdate);
+  }
+
+  private updateFromReply(r: MeshReply): boolean {
+    const { stride } = this.layout;
+    const vBytes = r.vertexCount * stride;
+    const vertices = new Uint8Array(r.buffer, 0, vBytes);
+    let indices: ArrayBufferView | undefined;
+    if (r.indexCount !== undefined) {
+      const bpi = this.indexFormat === 'uint32' ? 4 : 2;
+      const at = r.indexOffset ?? (vBytes + 3) & ~3;
+      indices = new Uint8Array(r.buffer, at, r.indexCount * bpi);
+    }
+    return this.updateViews({
+      vertices,
+      indices,
+      vertexCount: r.vertexCount,
+      // A reply without indices on an indexed mesh draws nothing until the next one.
+      indexCount: r.indexCount ?? (this.indexBuffer ? 0 : undefined),
+      bounds: r.bounds,
+    });
+  }
+
+  private updateViews(u: MeshUpdate): boolean {
     let grew = false;
     const { stride } = this.layout;
     if (u.vertices) {

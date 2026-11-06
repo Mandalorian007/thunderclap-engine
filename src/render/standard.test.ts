@@ -3,6 +3,7 @@ import { createFakeDevice, type FakeBuffer, type FakeDevice, fakeRendererGpu } f
 import { VERTEX_LAYOUT_3D } from './mesh';
 import { WGSL_PBR } from './pbr-wgsl';
 import { Renderer } from './renderer';
+import { SkinPalette } from './skin';
 import {
   createStandardMaterial,
   packStandardUniforms,
@@ -192,5 +193,26 @@ describe('packStandardUniforms', () => {
     expect(packStandardUniforms({ metallic: 1 }, out)).toBe(out);
     expect(out[4]).toBe(1);
     expect(() => packStandardUniforms({}, new Float32Array(4))).toThrow();
+  });
+});
+
+describe('skinned standard material (ws/ergo-3d)', () => {
+  it('binds a palette (or its buffer) as buffers[0] at binding 16', () => {
+    const { fake, r } = setup();
+    const palette = new SkinPalette(fake.device, { joints: 2, label: 'pal' });
+    const m = createStandardMaterial(r, { label: 'skinned', skin: palette });
+    const group = m.bindings!.bindGroup as unknown as FakeGroup;
+    const res = group.entries.find((e) => e.binding === 16)!.resource as {
+      buffer?: { label?: string };
+    };
+    expect(res.buffer?.label).toBe('pal-buffer');
+    const m2 = createStandardMaterial(r, { label: 'skinned-buf', skin: palette.buffer });
+    const g2 = m2.bindings!.bindGroup as unknown as FakeGroup;
+    expect(g2.entries.some((e) => e.binding === 16)).toBe(true);
+    // Unskinned materials bind no buffer.
+    const plain = createStandardMaterial(r, { label: 'plain' });
+    const g3 = plain.bindings!.bindGroup as unknown as FakeGroup;
+    expect(g3.entries.some((e) => e.binding === 16)).toBe(false);
+    expect(fake.errors).toEqual([]);
   });
 });
