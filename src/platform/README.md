@@ -77,6 +77,29 @@ copying are `Host.openExternal` and `Host.copyText`.
 `platformFamily()` (`PlatformFamily`: `ios`, `android`, `desktop`) first.
 `showDeviceLostScreen(root, { title?, detail?, onReload? })` offers a reload.
 
+## XR (WebXR with the WebGPU binding)
+
+`XrSurface` (ws/xr) is the per-eye counterpart of `Surface`: `new XrSurface(session, device,
+opts: XrSurfaceOptions)` makes an `XRGPUBinding` and one projection layer in the scene format
+(`colorFormat` `SCENE_FORMAT`, `depthStencilFormat` `depth24plus` or `null` for none, `textureType`
+`'texture'` (one texture, eyes side by side) or `'texture-array'` (one layer per eye)) and installs
+it with `session.updateRenderState({ layers, depthNear, depthFar })`. `XrSurfaceOptions` needs the
+`referenceSpace`; `depthNear` (0.1) and `depthFar` (1000) are optional. Per frame `views(frame)`
+returns the `XrEyeView[]` for `frame.getViewerPose(referenceSpace)` (empty while tracking is
+lost): `index` (= `camera.viewIndex`, 0 left, 1 right), `eye`, `camera` (a depth-on `Camera` with the
+view's projection and inverse pose, `screen` the viewport as a fraction of the target) and
+`target`, a `SceneTarget.external` over the layer's `getViewSubImage` colour and depth textures
+(eyes on one texture share one target, so the first eye clears and the second loads), plus the
+`viewport` in px. The array and the views are reused; nothing is allocated per frame once the
+layer's textures settle. `head` is a camera between the eyes (eye 0's projection, the viewer
+pose) for a single `Scene.render` record. `XrSurface.supported()` says whether `XRGPUBinding`
+exists; the constructor throws without it. `destroy()` frees the eye targets and the layer.
+`createGame({ xr })` builds one on `ctx.xr.enter()` and renders every eye with
+`renderer.render(frame, eye.camera, eye.target)` then `renderer.endFrame({ present: false })`;
+the post stack does not run in XR. The ambient WebXR and WebXR/WebGPU-binding declarations are
+`xr-types.d.ts` (`navigator.xr` and `XRGPUBinding` optional, so nothing here assumes they exist);
+`xr-fake.ts` is the in-repo fake (`installFakeXr`) the unit tests drive, not an export.
+
 ## Device mode (interim)
 
 `createDeviceMode(root, opts?: DeviceModeOptions): DeviceModeController` sets `data-phone`,
@@ -86,5 +109,5 @@ adds `setScale(scale, barCss?, crop?: CropInfo)` and `destroy()`. `PHONE_SCALE` 
 default `phoneScale`. Interim API: `ui/rotate-card.ts` and the harness still use it (E-010); the
 layout's form factors replace it.
 
-Tests: `letterbox.test.ts`, `surface.test.ts`, `device-mode.test.ts`, `links.test.ts`, and the
-harness specs in `e2e/`.
+Tests: `letterbox.test.ts`, `surface.test.ts`, `device-mode.test.ts`, `links.test.ts`,
+`xr-surface.test.ts`, and the harness specs in `e2e/`.

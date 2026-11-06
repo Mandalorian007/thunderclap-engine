@@ -15,9 +15,10 @@ render(frame, camera, target = renderer.target)   once per camera
   3. scene pass into the target: colour (@location 0) and emissive (@location 1), both
      rgba16float, plus depth24plus when camera.depthTest; the first view into a target
      clears it, later views load
-endFrame()
+endFrame(opts?)
   4. render(frame, renderer.camera) if nothing was rendered (the single-camera path)
   5. renderer.post (e.g. PostStack) or the built-in present pass: renderer.target → swapchain
+     (skipped with { present: false }: an XR frame draws into the session's layer, not the canvas)
   6. submit
 ```
 
@@ -40,6 +41,15 @@ renderer.endFrame();
   a depth camera has rendered into it.
   `SceneTargetDesc` is `{ width, height, label? }`; both colour targets use `SCENE_FORMAT`
   (`rgba16float`).
+- **External targets (XR).** `SceneTarget.external({ device, color, depth?, view?, viewport?,
+  label? })` (`SceneTargetExternal`) wraps a colour texture someone else owns (a WebXR projection
+  layer's `getViewSubImage` colour, one array layer through `view`) and optionally its depth,
+  allocating only the emissive target; `isExternal`, `adoptedColor`, `viewport`
+  (`SceneTargetViewport`, the sub-image rect in px) and `adopt(desc)` (re-point at the next
+  frame's textures; a no-op when they are the same) are its extras; `resize` throws, `destroy`
+  never destroys what it adopted. `XrSurface` in `@thunderclap/engine/platform` builds one per
+  eye. `endFrame({ present: false })` skips the swapchain (post and present) for such a frame;
+  the post stack is not applied per eye (the XR path renders the scene pass only).
 
 - **Logical space** is 1920×1080 by default, with the origin at top-left and y pointing down.
   `renderer.camera` is a matrix `Camera` (`Camera.ortho2d(1920, 1080)` by default); its
@@ -159,6 +169,7 @@ const p = surface.clientToLogical(e.clientX, e.clientY);
 const world = cam.screenToWorld(p.x, p.y, 0, hit);        // touch aiming; pass `out` per frame
 
 const eye = Camera.perspective(Math.PI / 3, 16 / 9, 0.1, 500).lookAt([0, 4, 10], [0, 0, 0]);
+eye.setViewMatrix(xrView.transform.inverse.matrix); // or: a view matrix from elsewhere (XR)
 eye.screen.width = 1920; eye.screen.height = 1080;      // screen units for worldToScreen
 renderer.render(frame, eye);                              // or renderer.camera = eye
 ```
@@ -168,6 +179,10 @@ renderer.render(frame, eye);                              // or renderer.camera 
   give a pick ray.
 - `ortho2d` looks down +z: larger z is farther, and world z in ±`ORTHO2D_HALF_DEPTH` (1024)
   survives the near and far planes (z = 0 is clip depth 0.5). x and y are the old 2D camera's.
+- `setView(m)` / `setViewMatrix(m)` take a world → view matrix as is (`setViewMatrix` is the
+  name `XrSurface` uses for an `XRView`'s `transform.inverse.matrix`); `setProjection(m)` the
+  projection (an `XRView.projectionMatrix`). `viewIndex` is the `view_index` the camera block
+  carries (eye 0 / 1 in XR).
 - `depthTest` and `depthWrite` (off for `ortho2d`, on for `perspective`) and the `layers` mask
   (u32, default all bits; `sees(mask)`) drive the render call's depth attachment and draw sort.
 - A 2D game frames the space the UI leaves (`ui.layout.freeRect`, CSS px) with

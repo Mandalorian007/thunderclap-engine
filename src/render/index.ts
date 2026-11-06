@@ -60,6 +60,7 @@ export type {
   ResolutionOptions,
 } from './renderer';
 export { MIN_RESOLUTION_SCALE, Renderer, sceneSize } from './renderer';
+export type { SceneTargetExternal, SceneTargetViewport } from './scene-target';
 export { SCENE_FORMAT, SceneTarget, type SceneTargetDesc } from './scene-target';
 export { type SnapshotOptions, SnapshotRenderer } from './snapshot';
 export type { PixelData, SamplerKind, TextureDesc, TextureLike, TextureSource } from './texture';

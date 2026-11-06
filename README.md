@@ -104,6 +104,8 @@ if (ctx) {
 
 A pure client of a server-authoritative game leaves out `save` (then `ctx.save` is `null` and the engine never touches storage) and passes `sim: false`, so the loop runs once per rendered frame and calls `ctx.hooks.frame(dt)`, where it applies the latest server state.
 
+VR: `createGame({ xr: XrOptions })` (`{ referenceSpace?, onEnter?, onExit? }`) gives `ctx.xr: XrControl` (`supported()`, `enter()`, `exit()`, `active`, `session`, `surface`). `enter()` requests an `immersive-vr` session with the WebGPU binding, moves the loop onto the session's frames, renders the scenes once per eye into its layer and adds the controllers and hands to `ctx.pointers` as rays; `exit()` (or the headset ending the session) restores the page. Nothing changes for a game that never calls it.
+
 The world is a 1920×1080 logical space by default (origin top-left, y down). The surface scales it to fit any screen. A game typically widens `ctx` with its own nouns (`Object.assign(ctx, { ... })`), so every scene gets one typed ctx.
 
 ### Using it in a game
@@ -176,7 +178,7 @@ The e2e specs run against small harness pages that don't contain any game (`harn
 - four landscape phones with touch and safe-area insets;
 - the harness inside a cross-origin iframe.
 
-The layout spec also runs on upright phone and tablet rows. The pages: `index.html` (2D renderer), `game.html` (`createGame`), `ui.html` (the overlay, text scale, menus and panels, no WebGPU), `layout.html` (layout regions and safe areas on every form factor, no WebGPU), `gestures.html` (gestures and the magnify loupe, no WebGPU), `rays.html` (pointer router and rays) `mesh.html` (perspective camera, depth and a lit mesh orbiting under pointer and pad input) and `stream.html` (chunk meshes rebuilt in a Worker and uploaded without a copy). The engine tests what the platform can do; a game built on it tests only its own product.
+The layout spec also runs on upright phone and tablet rows. The pages: `index.html` (2D renderer), `game.html` (`createGame`), `ui.html` (the overlay, text scale, menus and panels, no WebGPU), `layout.html` (layout regions and safe areas on every form factor, no WebGPU), `gestures.html` (gestures and the magnify loupe, no WebGPU), `rays.html` (pointer router and rays) `mesh.html` (perspective camera, depth and a lit mesh orbiting under pointer and pad input), `stream.html` (chunk meshes rebuilt in a Worker and uploaded without a copy) and `xr.html` (`createGame({ xr })` with an "Enter VR" button; on the matrix it proves the page path with `supported() === false`, on a headset it enters an immersive session). The engine tests what the platform can do; a game built on it tests only its own product.
 
 Headless Chromium gets a WebGPU adapter with `--enable-unsafe-webgpu`. On macOS that's Metal; on Linux it's SwiftShader. `playwright.config.ts` sets the flags.
 

@@ -76,3 +76,4 @@ export type {
   PointerTransform,
   XrButton,
 } from './types';
+export { XrPointerSource, type XrPointerSourceOptions } from './xr-source';

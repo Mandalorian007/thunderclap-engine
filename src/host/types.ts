@@ -9,7 +9,7 @@ import type { CopyResult, EmbedContext, LinkActivation, OpenResult } from '../pl
 import type { StorageLike } from '../save/storage';
 
 /** Which implementation this is. */
-export type HostKind = 'web' | 'electron';
+export type HostKind = 'web' | 'electron' | 'xr';
 
 /**
  * Where saves are kept. `open()` returns a working backend right now, or null when there is

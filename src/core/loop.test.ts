@@ -239,3 +239,88 @@ describe('GameLoop.maxFps', () => {
     expect(h.renders()).toBe(10);
   });
 });
+
+describe('GameLoop.setFrames', () => {
+  function source(log: string[], name: string) {
+    let pending: ((t: number) => void) | null = null;
+    return {
+      src: {
+        requestFrame: (cb: (t: number) => void) => {
+          log.push(`${name}.request`);
+          pending = cb;
+          return name === 'a' ? 1 : 2;
+        },
+        cancelFrame: (h: number) => {
+          log.push(`${name}.cancel ${h}`);
+          pending = null;
+        },
+      },
+      fire: (t: number) => {
+        const cb = pending;
+        pending = null;
+        cb?.(t);
+      },
+      get pending() {
+        return pending !== null;
+      },
+    };
+  }
+
+  it('while running, cancels the pending frame on the old source and requests from the new', () => {
+    const log: string[] = [];
+    const a = source(log, 'a');
+    const b = source(log, 'b');
+    let renders = 0;
+    const loop = new GameLoop(
+      { update: () => {}, render: () => renders++ },
+      { now: () => 0, frames: a.src },
+    );
+    loop.start();
+    loop.setFrames(b.src);
+    loop.setFrames(b.src);
+    expect(log).toEqual(['a.request', 'a.cancel 1', 'b.request']);
+    expect(a.pending).toBe(false);
+    b.fire(16);
+    expect(renders).toBe(1);
+    expect(log.at(-1)).toBe('b.request');
+    loop.stop();
+    expect(log.at(-1)).toBe('b.cancel 2');
+  });
+
+  it('from inside a frame, the running frame finishes and reschedules through the new source', () => {
+    const log: string[] = [];
+    const a = source(log, 'a');
+    const b = source(log, 'b');
+    let loop: GameLoop | null = null;
+    const l = new GameLoop(
+      {
+        update: () => {},
+        render: () => {
+          loop?.setFrames(b.src);
+        },
+      },
+      { now: () => 0, frames: a.src },
+    );
+    loop = l;
+    l.start();
+    a.fire(16);
+    expect(log).toEqual(['a.request', 'b.request']);
+    l.stop();
+    expect(log.at(-1)).toBe('b.cancel 2');
+  });
+
+  it('before start, only the source changes; start then schedules through it', () => {
+    const log: string[] = [];
+    const a = source(log, 'a');
+    const b = source(log, 'b');
+    const loop = new GameLoop(
+      { update: () => {}, render: () => {} },
+      { now: () => 0, frames: a.src },
+    );
+    loop.setFrames(b.src);
+    expect(log).toEqual([]);
+    loop.start();
+    expect(log).toEqual(['b.request']);
+    loop.stop();
+  });
+});

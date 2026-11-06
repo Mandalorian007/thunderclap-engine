@@ -11,5 +11,7 @@ export type {
   HideReason,
   ShowReason,
   SimOption,
+  XrControl,
+  XrOptions,
 } from './core/game';
 export { createGame } from './core/game';
