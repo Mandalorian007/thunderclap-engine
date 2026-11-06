@@ -44,6 +44,16 @@ loop.maxFps = 30;    // steady 30 fps on a 60 Hz display; null = every display f
   `maxSteps` (8 per frame, the spiral-of-death guard). Use it directly to step a simulation
   outside the render loop (a server, a replay).
 
+## createGame: input recording and replay
+
+`createGame({ input: { ..., record: true } })` records everything `ctx.input` is fed from the first
+tick: `ctx.input.recorder` is the `InputRecorder`, `stop()` it for the `InputRecording` (plain
+JSON; `serializeRecording` in `@thunderclap/engine/input`). `createGame({ input: { ..., replay } })`
+runs from a recording instead: the input is not attached to the canvas or the window, and before
+each fixed step `ctx.input.playback.step()` feeds that tick's keys, buttons, pointer, wheel and
+pads, so an identical game sees identical `pressed`/`held`/`value` per tick. Once the recording is
+done the input holds its last state. Both options keep the rest of the pipeline untouched.
+
 ## Scenes
 
 - `Scene<Ctx, Frame, Cam>`: an interface with optional `name`, `transparent`, `enter(ctx)`,
