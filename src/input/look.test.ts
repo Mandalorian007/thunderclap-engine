@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Input } from './input';
-import { Look, type LookOptions } from './look';
+import { Look, type LookOptions, PAD_ZOOM_PER_S } from './look';
 import type { GamepadLike } from './types';
 
 function pad(axes: number[]): GamepadLike {
@@ -123,6 +123,52 @@ describe('Look: pad and keys', () => {
     expect(look.look.dx).toBeCloseTo(3 * 0.05);
   });
 
+  it("zoom.pad 'rightStickY' turns the right stick's vertical into zoom and out of look.dy", () => {
+    const { look, tick, setPads } = setup({ padDeadzone: 0, zoom: { pad: 'rightStickY' } });
+    tick();
+    setPads([pad([0, 0, 0, -1])]); // stick up
+    tick(100);
+    expect(look.zoom).toBeCloseTo(PAD_ZOOM_PER_S * 0.1);
+    expect(look.look.dy).toBe(0);
+    setPads([pad([0, 0, 0.5, 0.5])]);
+    tick(100);
+    expect(look.zoom).toBeCloseTo(-0.5 * PAD_ZOOM_PER_S * 0.1);
+    expect(look.look.dx).toBeCloseTo(0.5 * 3 * 0.1);
+  });
+
+  it("zoom.pad 'shoulders' reads buttons 4 and 5 as -1 and +1 per tick; 'none' reads nothing", () => {
+    const { look, tick, setPads } = setup({ zoom: { pad: 'shoulders' } });
+    const buttons = [0, 0, 0, 0, 0, 0].map(() => ({ pressed: false, value: 0 }));
+    setPads([{ axes: [0, 0, 0, -1], buttons }]);
+    tick();
+    expect(look.zoom).toBe(0);
+    // The stick still looks in this mode.
+    tick(100);
+    expect(look.look.dy).toBeCloseTo(0.3);
+    buttons[5]!.pressed = true;
+    tick();
+    expect(look.zoom).toBe(1);
+    buttons[4]!.pressed = true;
+    tick();
+    expect(look.zoom).toBe(0);
+    buttons[5]!.pressed = false;
+    tick();
+    expect(look.zoom).toBe(-1);
+    look.zoomPad = 'none';
+    tick();
+    expect(look.zoom).toBe(0);
+  });
+
+  it('wheel() feeds notches; sources sum and reset each tick', () => {
+    const { look, tick } = setup();
+    look.wheel(2);
+    look.wheel(-0.5);
+    tick();
+    expect(look.zoom).toBe(1.5);
+    tick();
+    expect(look.zoom).toBe(0);
+  });
+
   it('reads move keys through the linked input and normalises diagonals', () => {
     const look = new Look({
       keys: { forward: ['KeyW'], back: ['KeyS'], left: ['KeyA'], right: ['KeyD'] },
@@ -155,11 +201,14 @@ describe('Look: blocked', () => {
     look.touchDown(1, 0, 0, true);
     look.touchDown(2, 500, 0, false);
     look.touchMove(2, 510, 0);
+    look.wheel(3);
     blocked = true;
     input.update();
     expect(look.look).toEqual({ dx: 0, dy: 0 });
+    expect(look.zoom).toBe(0);
     expect(look.move).toEqual({ x: 0, y: 0 });
     look.mouseMove(50, 0);
+    look.wheel(3);
     look.touchDown(3, 0, 0, true);
     blocked = false;
     // The old fingers no longer count; the pad still does.
@@ -168,6 +217,7 @@ describe('Look: blocked', () => {
     input.update();
     expect(look.stick.active).toBe(false);
     expect(look.move.x).toBeCloseTo(1);
+    expect(look.zoom).toBe(0);
     expect(look.move.y).toBeCloseTo(0);
   });
 });
