@@ -129,3 +129,40 @@ Pure functions of time; feed the result into a tint, emissive or light intensity
 
 Tests: `particles.test.ts`, `particles-world.test.ts` (fake GPU), `trail.test.ts`,
 `flicker.test.ts`. Demos: `harness/weather.html`, `harness/trails.html`.
+
+## Sky
+
+`Sky(renderer, opts?: SkyOptions)` is a `Drawable`: a procedural dome drawn as one fullscreen
+triangle (`pass.draw(3)`), no asset, no instance. `frame.drawable(sky)` draws it.
+
+```ts
+import { Sky } from '@thunderclap/engine/fx';
+
+const sky = new Sky(renderer, { stars: true });
+// each frame
+frame.lights = lights; // the sun and fog the sky follows
+frame.drawable(sky);
+sky.sunSize = 0.04; // every field is live
+```
+
+- Gradient `zenith` → `horizon` → `ground` by the ray's elevation; a band around the horizon
+  mixes towards `lights.fog.color` (scaled by its density) so fogged geometry meets the sky.
+- The sun disc (`sunSize`, angular radius in radians, default 0.03) and glow (`sunGlow`, default
+  1) sit at `lights.sun`, tinted by its colour. Below the horizon the dome darkens and the stars
+  come out; with no sun (colour zero) the dome is as set.
+- `stars`: `true` for the defaults or `{ density, seed }` (`SkyStars`; default density 24, seed
+  0); `null` for none. `exposure` multiplies the whole dome.
+- Emissive: the sun disc and the stars are also written to the emissive target, so bloom picks
+  them up.
+- Depth: under a depth camera the triangle sits at the far plane with depth test on and depth
+  write off, so geometry wins wherever it wrote depth whatever the order; `Camera.cull` is
+  unaffected (nothing to cull). Without depth it paints the whole view: give it the lowest
+  `order`.
+- Uploads: the sun and fog come from the lights block; the sky's own upload is one 64-byte
+  params block (`SKY_PARAMS_FLOATS` floats) per frame in `prepare`. No allocation per frame.
+- `skyRay(camera, nx, ny, out)`: the world-space view direction through an NDC point, the same
+  math the shader (`SKY_WGSL`) runs per pixel from `camera.proj` and `camera.view` (an analytic
+  perspective inverse, off-centre terms included; an orthographic view gives its forward).
+
+Tests: `sky.test.ts` (fake GPU, `skyRay` against `Camera.screenToWorld`). Demo:
+`harness/sky.html` (`?still` parks the sun at noon).
