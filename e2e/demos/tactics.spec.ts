@@ -229,11 +229,11 @@ test.describe('demo: tactics', () => {
     await openDemo(page, errors);
     const before = await units(page);
     await page.keyboard.press('KeyE');
+    // The phase reads 'player' before the key lands as well: wait on the turn and the phase.
     await expect
-      .poll(() => readState(page).then((s) => s.phase), { timeout: 20_000 })
-      .toBe('player');
+      .poll(() => readState(page).then((s) => `${s.turn} ${s.phase}`), { timeout: 20_000 })
+      .toBe('2 player');
     const s = await readState(page);
-    expect(s.turn).toBe(2);
     expect(s.busy).toBe(false);
     const after = await units(page);
     // Every raider closed on the squad.
