@@ -20,6 +20,18 @@ export {
   sampleChannel,
   sampleClip,
 } from './clip';
+export type {
+  AnimGraph,
+  AnimGraphBlendPoint,
+  AnimGraphBlendState,
+  AnimGraphClipState,
+  AnimGraphDesc,
+  AnimGraphListener,
+  AnimGraphParams,
+  AnimGraphStateDesc,
+  AnimGraphTransition,
+} from './graph';
+export { createAnimGraph } from './graph';
 // IK and root motion (ik.ts, root-motion.ts): pose arithmetic after sampling, before poseToWorld.
 export type { IkChain, IkChainDesc, LookAtOptions, TwoBoneIkOptions } from './ik';
 export { createIkChain, lookAt, twoBoneIk } from './ik';
