@@ -3,6 +3,8 @@
  * e2e/tiles.spec.ts. Shared by the page (harness/tiles.ts) and the spec.
  */
 
+export type HarnessTilesMode = 'grid' | 'iso' | 'parallax';
+
 export interface HarnessTilesState {
   /** True once boot resolved (whether or not WebGPU came up). */
   ready: boolean;
@@ -11,6 +13,8 @@ export interface HarnessTilesState {
   /** Frames presented. */
   frames: number;
   logical: { width: number; height: number };
+  /** The page's mode from the query (`?iso`, `?parallax`; default `grid`). */
+  mode: HarnessTilesMode;
   /** The layer's grid and tile size (logical px), and `TileLayer.count`. */
   grid: { columns: number; rows: number; tileW: number; tileH: number };
   tiles: number;
@@ -23,6 +27,20 @@ export interface HarnessTilesState {
   drawCalls: number;
   /** `gpuDiagnostics.errorCount` (WGSL compile errors, uncaptured errors). */
   gpuErrors: number;
+  /** The layer's `order` (`'grid'` or `'painter'`). */
+  order: string;
+  /** `?iso`: the lattice (logical px), the tile under the pointer (`[-1, -1]` none), the walker. */
+  iso: { tileW: number; tileH: number; elevH: number; originX: number; originY: number };
+  hoverTile: [number, number];
+  walker: [number, number];
+  /** `?parallax`: the camera's `x`, `y`, each layer's `[offsetX, offsetY]`, factor and period. */
+  cameraX: number;
+  cameraY: number;
+  layerOffsets: [number, number][];
+  layerFactors: number[];
+  layerWraps: number[];
+  dot: [number, number];
+  deadZone: { w: number; h: number };
 }
 
 export interface HarnessTilesApi {
@@ -31,6 +49,10 @@ export interface HarnessTilesApi {
   set(col: number, row: number, tileIndex: number): void;
   /** Draw (true) or skip (false) the flipbook sprite. */
   setSprite(visible: boolean): void;
+  /** `?iso`: park the walker on tile `(tx, ty)` (stops the walk). */
+  setWalker(tx: number, ty: number): void;
+  /** `?parallax`: move the dot by `(dx, dy)` world px. */
+  moveDot(dx: number, dy: number): void;
 }
 
 declare global {

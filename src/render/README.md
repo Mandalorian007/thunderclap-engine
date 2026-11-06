@@ -163,6 +163,86 @@ corner, mutate in place) and `scale`, carrying `params` (tint, order, layers, em
 uniforms, shadow flags) on the layer's own `DrawParams`. `count` is the non-empty tiles; `mesh`
 and `destroy()` are there. Nothing is allocated per frame, and `frame.draw` itself is unchanged.
 
+**Painter mode, diamonds, elevation, depth keys** (ws/ergo-2d-2). `order: 'painter'`
+(`TileLayerOrder`; `'grid'` is the default above and untouched) builds one mesh per diagonal
+`col + row` (`meshes`, `columns + rows - 1` of them; `mesh` is the first) and `draw` records the
+non-empty bands back to front at `order = (params.order ?? 0) + col + row`, so the layer occupies
+`base .. base + columns + rows - 2` in the frame's order. `elevation: (col, row) => steps` is
+read when a tile is set or filled and lifts its quad `elevH × steps` px (`elevH` defaults to
+`iso.elevH` with `diamond`, else `tileH / 2`); `elevationAt(col, row)` reads it back and
+`refresh(col?, row?)` re-reads one tile or all of them when the map's heights change (only the
+quads that moved upload). `diamond: true` with `iso: Iso` (from `./geom`'s `createIso`) lays
+each `tileW × tileH` quad on the lattice with the diamond centre `iso.toScreen(col, row, elev)`
+at `(tileW / 2, iso.tileH / 2)` from its top-left, so a cell taller than `iso.tileH` hangs a wall
+under its top. A tile's painter's key is `depthOf(tx, ty, elev?)` = `tx + ty + elev ×
+ISO_ELEV_DEPTH`, the same number as `Iso.depth`; the tiles of one diagonal never overlap, so a
+sprite between tiles is one `frame.sprite` after `layer.draw`:
+
+```ts
+const iso = createIso({ tileW: 64, tileH: 32, elevH: 16, originX: 960, originY: 200 });
+const map = createTileLayer(renderer, {
+  material, tileW: 64, tileH: 64, columns: 12, rows: 12, atlas: { cols: 2, rows: 2 },
+  order: 'painter', diamond: true, iso, elevation: (tx, ty) => heights[ty * 12 + tx],
+});
+map.draw(frame, { order: 100 });
+iso.toScreen(tx, ty, elev, dp);                       // the sprite's feet
+dp.order = 100 + map.depthOf(tx, ty, elev);           // over its tile, under the next band
+frame.sprite(material, dp);
+```
+
+Fractional `tx`, `ty` work (a walker between two tiles sorts between their bands); an integer key
+ties with its band and wins by submission order.
+
+### Parallax
+
+```ts
+const sky = createParallax(renderer, [
+  { layer: far, factorX: 0.2, factorY: 0.2, wrapW: 8 * 60 },
+  { layer: hills, factorX: 0.5, factorY: 0.5, wrapW: 6 * 60, params: { tint } },
+  { layer: trees, factorX: 0.8, factorY: 0.8, wrapW: 5 * 60 },
+]);
+sky.update(camera.x, camera.y); // once per frame, after the camera moved
+sky.draw(frame);                // far to near, one layer.draw each
+```
+
+`createParallax(renderer, ParallaxLayerOptions[])` builds a `Parallax` over tile layers
+(ws/ergo-2d-2). `update(cameraX, cameraY)` (the ortho2d camera's `x`, `y`: the view's top-left)
+sets each layer's `origin` to its base (the origin it had when the parallax was made) plus
+`parallaxOffset(camera, factor, wrap?)`: `camera × (1 - factor)` (0 pins the layer to the view,
+1 moves it with the world), or with a `wrapW` / `wrapH` pattern period `camera - (camera × factor
+mod wrap)`, which stays within one period behind the camera so a strip a little wider than the
+view plus one period covers any scroll. `layers` lists the `ParallaxLayer`s (the options plus
+`baseX`, `baseY`, `offsetX`, `offsetY`); `draw(frame)` draws them in order with their `params`;
+`destroy()` destroys the layers. No allocation per frame.
+
+### 2D camera follow
+
+```ts
+const camera = Camera.ortho2d(1920, 1080);
+renderer.camera = camera;
+const follow = createFollow2D(camera, {
+  deadZone: { w: 400, h: 200 }, lookAhead: { x: 160, y: 0 }, lookAheadSmoothing: 0.3,
+  smoothing: 0.15, bounds: { minX: 0, minY: 0, maxX: level.w, maxY: level.h },
+});
+follow.update(dt, hero.x, hero.y, hero.vx, hero.vy); // each fixed step
+follow.teleport(spawn.x, spawn.y);                     // a respawn: no easing
+```
+
+`createFollow2D(camera: Follow2DCamera, Follow2DOptions)` builds a `Follow2D` (ws/ergo-2d-2),
+the platformer camera: it writes `camera.x` and `camera.y` only (an ortho2d `Camera`'s pan
+setters: the view's top-left in design px) and reads `camera.screen` and `camera.zoom` for the
+view size. Each `update(dt, targetX, targetY, velX?, velY?)` moves the anchor just enough to keep
+the target inside `deadZone` (`{ w, h }` world px around it; a target inside it moves nothing),
+eases the look-ahead toward `sign(vel) × lookAhead` with time constant `lookAheadSmoothing`
+(default 0.25 s; 0 is instant), eases the view centre toward `anchor + lookAhead` with
+`smoothing` (default 0: instant), clamps the view rect inside `bounds` (`Follow2DBounds`; a
+view wider than the bounds is centred; `follow.bounds` is live) and writes the camera. Every
+easing is `1 - exp(-dt / tau)`, so two half steps equal one whole one. `snapOnStart` (default
+true) makes the first `update` a `teleport(x, y)`, which puts the anchor and the view at a point
+with no easing and no look-ahead. `x`, `y` are the view centre, `anchorX`, `anchorY` the dead
+zone's centre, `lookX`, `lookY` the current look-ahead; `deadZone`, `lookAhead`,
+`lookAheadSmoothing` and `smoothing` are live.
+
 `createFlipbook(FlipbookOptions)` builds a `Flipbook`: pure timing over `frames: readonly UvRect[]`
 (`UvRect` is `[u0, v0, u1, v1]`, what `DrawParams.uv` takes) at `fps` (default 12), `loop`
 (default true). `update(dt)` advances; `uv` and `frame` are the current frame; a non-looping book

@@ -17,17 +17,17 @@ type Rgb = [number, number, number];
 let frame: Frame;
 const errors: string[] = [];
 
-async function open(page: Page, wrapper: string): Promise<void> {
+async function open(page: Page, wrapper: string, query = ''): Promise<void> {
   errors.length = 0;
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => {
     if (m.type() === 'error') errors.push(m.text());
   });
   if (wrapper === 'top') {
-    await page.goto(`${HARNESS_URL}tiles.html`);
+    await page.goto(`${HARNESS_URL}tiles.html${query}`);
     frame = page.mainFrame();
   } else {
-    await page.goto(`${WRAPPER_URL}?page=${encodeURIComponent('tiles.html')}`);
+    await page.goto(`${WRAPPER_URL}?page=${encodeURIComponent(`tiles.html${query}`)}`);
     frame = await harnessFrame(page);
   }
   await expect
@@ -59,18 +59,34 @@ async function frames(n: number): Promise<void> {
   await expect.poll(async () => (await read()).frames).toBeGreaterThanOrEqual(start + n);
 }
 
-/** Page CSS px of the centre of tile `(col, row)`. */
-async function tileCentre(col: number, row: number): Promise<{ x: number; y: number }> {
+/** Page CSS px of a logical point. */
+async function toPage(x: number, y: number): Promise<{ x: number; y: number }> {
   const box = await frame.locator('canvas').first().boundingBox();
   if (!box) throw new Error('no canvas');
-  const { logical, grid } = await read();
-  const x = (col + 0.5) * grid.tileW;
-  const y = (row + 0.5) * grid.tileH;
+  const { logical } = await read();
   return {
     x: box.x + (x / logical.width) * box.width,
     y: box.y + (y / logical.height) * box.height,
   };
 }
+
+/** Page CSS px of the centre of tile `(col, row)`. */
+async function tileCentre(col: number, row: number): Promise<{ x: number; y: number }> {
+  const { grid } = await read();
+  return toPage((col + 0.5) * grid.tileW, (row + 0.5) * grid.tileH);
+}
+
+/** Logical px of iso tile `(tx, ty)`'s diamond centre at `elev` (the page's `Iso.toScreen`). */
+async function isoCentre(tx: number, ty: number, elev: number): Promise<{ x: number; y: number }> {
+  const { iso } = await read();
+  return {
+    x: iso.originX + ((tx - ty) * iso.tileW) / 2,
+    y: iso.originY + ((tx + ty) * iso.tileH) / 2 - elev * iso.elevH,
+  };
+}
+
+/** harness/tiles.ts `rampHeight`: flat below tx 4, one step to 7, two steps from 8. */
+const ramp = (tx: number) => (tx >= 8 ? 2 : tx >= 4 ? 1 : 0);
 
 /** Average colour of the 5×5 CSS px around a page point, from a screenshot of the page. */
 async function sample(page: Page, p: { x: number; y: number }): Promise<Rgb> {
@@ -159,5 +175,95 @@ test('set() changes the pixel at a tile’s centre', async ({ page, wrapper }) =
   await expect
     .poll(async () => diff(await sample(page, at), [0, 0, 0]), { message: 'tile (5, 5) emptied' })
     .toBeLessThanOrEqual(4);
+  expect(errors).toEqual([]);
+});
+
+test('?iso: hovering a lifted tile’s top resolves that tile on every row', async ({
+  page,
+  wrapper,
+}) => {
+  await open(page, wrapper, '?iso');
+  const s = await read();
+  expect(s.order).toBe('painter');
+  expect(s.tiles).toBe(s.grid.columns * s.grid.rows);
+  for (const tx of [9, 5, 2]) {
+    for (let ty = 0; ty < s.grid.rows; ty++) {
+      const c = await isoCentre(tx, ty, ramp(tx));
+      const p = await toPage(c.x, c.y);
+      await page.mouse.move(p.x, p.y);
+      await expect
+        .poll(async () => (await read()).hoverTile, { message: `hover (${tx}, ${ty})` })
+        .toEqual([tx, ty]);
+    }
+  }
+  // Off the map: nothing.
+  const off = await toPage(100, 100);
+  await page.mouse.move(off.x, off.y);
+  await expect.poll(async () => (await read()).hoverTile).toEqual([-1, -1]);
+  expect((await read()).gpuErrors).toBe(0);
+  expect(errors).toEqual([]);
+});
+
+test('?iso: the walker draws over the lower tile and under the higher one', async ({
+  page,
+  wrapper,
+}) => {
+  await open(page, wrapper, '?iso');
+  // Park the walker on (3, 6): flat, with the one-step tile (4, 6) in front of it to the right.
+  await frame.evaluate(() => window.__harnessTiles?.setWalker(3, 6));
+  await frames(3);
+  const s = await read();
+  // 23 diagonal bands plus the walker.
+  expect(s.drawCalls).toBe(s.grid.columns + s.grid.rows - 1 + 1);
+  const c = await isoCentre(3, 6, 0);
+  // Inside the walker and over (3, 6)'s diamond: the walker's colour (same as its body).
+  const body = await sample(page, await toPage(c.x, c.y - 28));
+  const over = await sample(page, await toPage(c.x - 12, c.y - 6));
+  // The centre of (4, 6)'s top: inside the walker's quad, but the tile is drawn after it.
+  const under = await sample(page, await toPage(c.x + 32, c.y));
+  const far = await isoCentre(4, 8, 1);
+  const tan = await sample(page, await toPage(far.x, far.y));
+  expect(diff(over, body), 'walker over the lower tile').toBeLessThanOrEqual(8);
+  expect(diff(under, body), 'walker under the higher tile').toBeGreaterThan(40);
+  expect(diff(under, tan), 'the higher tile’s top shows').toBeLessThanOrEqual(8);
+  expect((await read()).gpuErrors).toBe(0);
+  expect(errors).toEqual([]);
+});
+
+test('?parallax: the camera holds inside the dead zone, moves after, and the layers scroll by factor', async ({
+  page,
+  wrapper,
+}) => {
+  await open(page, wrapper, '?parallax');
+  await frames(3);
+  const s0 = await read();
+  expect(s0.layerFactors.length).toBe(3);
+  // Three layers, then the dead-zone box (four lines) and the dot as one sprite batch.
+  expect(s0.drawCalls).toBe(4);
+  const move = (dx: number, dy: number) =>
+    frame.evaluate((d) => window.__harnessTiles?.moveDot(d[0], d[1]), [dx, dy] as const);
+  // 150 px right: still inside the 400 px dead zone.
+  await move(150, 0);
+  await frames(3);
+  const s1 = await read();
+  expect(s1.cameraX).toBe(s0.cameraX);
+  expect(s1.cameraY).toBe(s0.cameraY);
+  expect(s1.dot[0]).toBe(s0.dot[0] + 150);
+  // 300 px more: out of the zone, the camera follows.
+  await move(300, 0);
+  await expect.poll(async () => (await read()).cameraX).toBeGreaterThan(s0.cameraX + 100);
+  const s2 = await read();
+  expect(s2.cameraY).toBe(s0.cameraY);
+  // Each layer's x offset is the camera minus its scroll modulo its period: distinct per factor.
+  for (let i = 0; i < 3; i++) {
+    const f = s2.layerFactors[i]!;
+    const wrap = s2.layerWraps[i]!;
+    const scroll = s2.cameraX * f;
+    const want = s2.cameraX - (((scroll % wrap) + wrap) % wrap);
+    expect(s2.layerOffsets[i]![0], `layer ${i} offset`).toBeCloseTo(want, 6);
+    expect(s2.layerOffsets[i]![1]).toBeCloseTo(s2.cameraY * (1 - f), 6);
+  }
+  expect(new Set(s2.layerOffsets.map((o) => o[0] - s2.cameraX)).size).toBe(3);
+  expect((await read()).gpuErrors).toBe(0);
   expect(errors).toEqual([]);
 });

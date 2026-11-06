@@ -264,3 +264,37 @@ or the stick through `slide`, the collider's triangles or BVH leaves drawn throu
 through the page's `advance`. `e2e/collide.spec.ts` checks the wall stops the capsule, the stairs
 lift it by rise × steps, the ramp grounds it with a tilted normal and the circle rounds the
 corridor's bend.
+## Iso
+
+The 2:1 diamond projection and its inverse (ws/ergo-2d-2), pure arithmetic in whatever 2D
+space the caller works in (a tile layer's px, a camera's world px):
+
+```ts
+const iso = createIso({ tileW: 64, tileH: 32, elevH: 16, originX: 960, originY: 200 });
+iso.toScreen(tx, ty, elev, pt);           // diamond centre of a tile (fractions allowed)
+iso.toTile(sx, sy, elev, pt);             // fractional tile under a point, ground at elev
+dp.order = base + iso.depth(tx, ty, elev); // painter's key: tx + ty, then elevation
+if (isoInverseProbe(iso, px, py, heightAt, maxElev, pt)) hover(pt.x, pt.y);
+```
+
+- `createIso(opts: IsoOptions)` → `Iso`: `x = originX + (tx - ty) × tileW / 2`,
+  `y = originY + (tx + ty) × tileH / 2 - elev × elevH` (`elevH` default `tileH / 2`; `originX`,
+  `originY` are tile `(0, 0)`'s centre at elevation 0 and are live). `toScreen` / `toTile` fill
+  an `IsoPoint` (`{ x, y }`: any `Vec2`, `CameraPoint`, `DrawParams`) and return it; no
+  allocation. `depth(tx, ty, elev)` = `tx + ty + elev × ISO_ELEV_DEPTH` (`1 / 256`): monotone
+  along the diagonals, elevation a tie-break inside one, equal for the tiles of one diagonal
+  (they never overlap on screen).
+- `isoInverseProbe(iso, sx, sy, heightAt: IsoHeightAt, maxElev, out)` is the pointer-to-tile
+  rule of a map with elevation: it tries `maxElev` down to 0 and keeps the first tile whose
+  `heightAt(tx, ty)` is that elevation, so a pointer over a raised tile's top lands on it and
+  not on the flat tile the same pixel would cover at ground level. Returns true with the tile in
+  `out`, or false with `(-1, -1)` (off the map, where `heightAt` returns a negative number, or
+  over a riser between levels).
+- `isoHiddenBy(iso, tx, ty, heightAt)` is true when the tile's whole top is covered by taller
+  front neighbours: a column whose top is at least `tileH` above it (`tileH / elevH` steps; two
+  with the defaults) covers its half of the diamond, so `(tx + 1, ty + 1)` hides it alone and
+  `(tx + 1, ty)` with `(tx, ty + 1)` hide it together.
+
+Harness: `harness/tiles.html?iso` lays a 12 × 12 map with a two-level ramp through a painter
+`TileLayer` (`render/README.md`), walks a sprite between the tiles and resolves the hovered tile
+with `isoInverseProbe`; `e2e/tiles.spec.ts` hovers every row of the ramp.
