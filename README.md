@@ -129,6 +129,7 @@ Import only from the public entry points listed under [Modules](#modules). Anyth
 | `@thunderclap/engine/render` | `Renderer`, `Frame`, `Camera` (`ortho2d`, `perspective`), `render(frame, camera, target)`, materials and custom WGSL, meshes, transforms, textures, colour helpers ([README](src/render/README.md)) |
 | `@thunderclap/engine/post` | `PostStack`: bloom, god rays, fog, vignette, grade, quality tiers ([README](src/post/README.md)) |
 | `@thunderclap/engine/fx` | GPU particles, flicker and pulse ([README](src/fx/README.md)) |
+| `@thunderclap/engine/anim` | Keyframe clips (glTF sampler semantics), `Pose`, `Skeleton`, `AnimationMixer` (layers, weights, crossfade, events), `poseToWorld`, `skinMatrices`; pure, no GPU ([README](src/anim/README.md)) |
 | `@thunderclap/engine/input` | `Input` action map, `Gestures`, pointer router and rays, magnify/loupe, `snapToGrid` ([README](src/input/README.md)) |
 | `@thunderclap/engine/ui` | Overlay, panels and widgets, toasts, captions, pad navigation, layout regions (`ui.layout`) ([README](src/ui/README.md)) |
 | `@thunderclap/engine/audio` | WebAudio buses, synth, sound recipes, mixer persistence ([README](src/audio/README.md)) |
