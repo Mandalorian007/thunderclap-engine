@@ -24,6 +24,18 @@ export const STREAM_INDEX_OFFSET = STREAM_MAX_VERTICES * STREAM_VERTEX_FLOATS * 
 export const STREAM_BUFFER_BYTES =
   STREAM_INDEX_OFFSET + Math.ceil((STREAM_MAX_INDICES * 2) / 4) * 4;
 
+/** Layers of the page's block texture array (harness/stream.ts `blockLayers`). */
+export const STREAM_LAYERS = 4;
+
+/**
+ * Texture-array layer of every face of `chunk`. The Worker writes it into each vertex colour's
+ * alpha (the 3D layout has no spare uv channel) and the page's material samples that layer.
+ * Neighbouring chunks differ: x parity + 2 × z parity of the chunk's grid cell.
+ */
+export function streamChunkLayer(chunk: number): number {
+  return ((chunk % STREAM_GRID) % 2) + 2 * (Math.floor(chunk / STREAM_GRID) % 2);
+}
+
 /** Page → Worker: re-mesh `chunk` for `phase`, into `buffer` (transferred). */
 export interface StreamRequest {
   chunk: number;
@@ -64,6 +76,11 @@ export interface HarnessStreamState {
    * covered by a floor or a column), and `sky`, well above and behind the grid.
    */
   probes: { ground: StreamProbe; sky: StreamProbe };
+  /**
+   * Screen positions (logical px) of the floor centres of two neighbouring chunks, with the
+   * texture-array layer each one's faces sample (ws/texture-array).
+   */
+  layerProbes: { at: StreamProbe; layer: number }[];
   /** `renderer.stats` of the last frame. */
   stats: { drawCalls: number; instances: number };
   /** `gpuDiagnostics.errorCount` (WGSL compile errors, uncaptured errors). */

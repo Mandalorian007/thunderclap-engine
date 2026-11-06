@@ -5,7 +5,8 @@
  *   transferred buffers; updates keep coming, one chunk per frame;
  * - vertex counts change between re-meshes while the buffers stay (no growth: the capacity is
  *   a full chunk), and no GPU error is logged;
- * - a pixel sampled at the grid centre shows lit geometry and one above the grid shows sky.
+ * - a pixel sampled at the grid centre shows lit geometry and one above the grid shows sky;
+ * - two neighbouring chunks show two layers of the texture array (ws/texture-array).
  */
 import type { Frame, Page } from '@playwright/test';
 import type { HarnessStreamState, StreamProbe } from '../harness/stream-state';
@@ -121,5 +122,21 @@ test('the streamed geometry is on screen', async ({ page, wrapper }) => {
   expect(ground![1], `ground ${ground}`).toBeGreaterThan(ground![2] + 10);
   expect(sky![2], `sky ${sky}`).toBeGreaterThan(sky![0] + 15);
   expect(sum(ground!)).toBeGreaterThan(sum(sky!) + 100);
+  expect(errors).toEqual([]);
+});
+
+test('two chunks sample two layers of the texture array', async ({ page, wrapper }) => {
+  await open(page, wrapper);
+  await expect.poll(async () => (await read()).updates).toBeGreaterThanOrEqual(16);
+  const s = await read();
+  const [a, b] = s.layerProbes;
+  expect(a!.layer).not.toBe(b!.layer);
+  const [ca, cb] = await sample(page, [await toPage(a!.at), await toPage(b!.at)]);
+  // Same lighting, different layers: the hues (chromaticity) differ, whatever the brightness.
+  const chroma = (c: Rgb) => c.map((v) => v / (c[0] + c[1] + c[2] || 1));
+  const [na, nb] = [chroma(ca!), chroma(cb!)];
+  const apart = Math.max(...na.map((v, i) => Math.abs(v - nb[i]!)));
+  expect(apart, `layer ${a!.layer} ${ca}, layer ${b!.layer} ${cb}`).toBeGreaterThan(0.08);
+  expect(s.gpuErrors).toBe(0);
   expect(errors).toEqual([]);
 });

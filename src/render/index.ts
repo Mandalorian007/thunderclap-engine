@@ -45,6 +45,8 @@ export {
   VERTEX3D_FLOATS,
   VERTEX3D_STRIDE,
 } from './mesh';
+export type { GenerateMipmapsOptions, MipFilter } from './mipmap';
+export { generateMipmaps } from './mipmap';
 export type { PingPongStepOptions } from './ping-pong';
 export { PingPong } from './ping-pong';
 export type {
@@ -59,8 +61,24 @@ export type {
 export { MIN_RESOLUTION_SCALE, Renderer, sceneSize } from './renderer';
 export { SCENE_FORMAT, SceneTarget, type SceneTargetDesc } from './scene-target';
 export { type SnapshotOptions, SnapshotRenderer } from './snapshot';
-export type { PixelData, SamplerKind, TextureDesc, TextureLike, TextureSource } from './texture';
-export { bytesPerTexel, Texture } from './texture';
+export type {
+  LoadTextureArrayOptions,
+  PixelData,
+  PixelSource,
+  SamplerKind,
+  TextureArrayDesc,
+  TextureDesc,
+  TextureLayerSource,
+  TextureLike,
+  TextureSource,
+} from './texture';
+export {
+  bytesPerTexel,
+  createTextureArray,
+  loadTextureArray,
+  mipLevelCount,
+  Texture,
+} from './texture';
 export type { ReadonlyQuat, ReadonlyVec3 } from './transform';
 export { Transform } from './transform';
 export {
