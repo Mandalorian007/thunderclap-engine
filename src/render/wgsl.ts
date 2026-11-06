@@ -60,19 +60,27 @@ struct EngineCamera {
  * and drawable prelude: `lights.ambient`, `lights.point_count`, `lights.sun_dir` (the way
  * the light travels), `lights.sun_color`, `lights.points[i]` (`position`, `radius`, `color`),
  * `lights.sun_view_proj` (world → sun clip), `lights.shadow_params` (bias, map texel size,
- * enabled, pad), `lights.fog` (rgb, density) and `lights.fog_range` (near, far, pad, pad).
- * The sun's shadow map (`texture_depth_2d`) and its comparison sampler sit at `@binding(3)`
- * and `@binding(4)`; with no shadow pass a 1×1 depth texture is bound there.
+ * enabled, pad), `lights.fog` (rgb, density), `lights.fog_range` (near, far, pad, pad),
+ * `lights.spot_count`, `lights.sun_layers` (the sun's layer mask), `lights.point_layers`
+ * (`array<vec4u, 4>`: the mask of point `i` is `point_layers[i >> 2u][i & 3u]`) and
+ * `lights.spots[i]` (`position`, `radius`, `direction`, `cos_outer`, `color`, `cos_inner`,
+ * `layers`). The sun's shadow map (`texture_depth_2d`) and its comparison sampler sit at
+ * `@binding(3)` and `@binding(4)`; with no shadow pass a 1×1 depth texture is bound there.
  *
  * Helpers a game may call or ignore: `engine_point_lights(normal, world_pos)` sums the point
- * lights' diffuse (Lambert × a smooth falloff that reaches zero at `radius`);
+ * lights' diffuse (Lambert × a smooth falloff that reaches zero at `radius`), all layers;
+ * `engine_spot_cone(cos_theta, cos_outer, cos_inner)` is a spot's cone factor;
+ * `engine_instance_layers(flags)` is the instance's layer bits from `VSOut.flags`;
+ * `engine_light_accum(world_pos, normal, layer_mask)` sums the sun (× `engine_shadow`), point
+ * and spot Lambert terms of every light whose `layers` share a bit with `layer_mask`;
  * `engine_shadow(world_pos)` is the sun's visibility, 0..1 (3×3 PCF over the shadow map; 1
  * outside the map or when there is no shadow pass); `engine_fog(color, world_pos)` blends
  * `color` toward the fog colour by the distance to the camera (linear over `fog_range` when
  * `far > near`, else exponential past `near`; identity when density is 0);
- * `engine_lambert(normal, world_pos)` is ambient + sun Lambert × `engine_shadow` + the point
- * lights, so with the default block it returns `vec3f(1.0)` and `albedo * engine_lambert(...)`
- * is unlit.
+ * `engine_lambert(normal, world_pos)` is ambient + `engine_light_accum` over every layer, so
+ * with the default block it returns `vec3f(1.0)` and `albedo * engine_lambert(...)` is unlit;
+ * `engine_lambert_layers(normal, world_pos, layer_mask)` is the same against the instance's
+ * layers (`engine_instance_layers(in.flags)`), so masked lights skip it.
  */
 export const WGSL_LIGHTS = /* wgsl */ `
 struct EnginePointLight {
@@ -80,6 +88,18 @@ struct EnginePointLight {
   radius: f32,
   color: vec3f,
   _pad: f32,
+};
+struct EngineSpotLight {
+  position: vec3f,
+  radius: f32,
+  direction: vec3f,
+  cos_outer: f32,
+  color: vec3f,
+  cos_inner: f32,
+  layers: u32,
+  _pad0: u32,
+  _pad1: u32,
+  _pad2: u32,
 };
 struct EngineLights {
   ambient: vec3f,
@@ -93,6 +113,11 @@ struct EngineLights {
   shadow_params: vec4f,
   fog: vec4f,
   fog_range: vec4f,
+  spot_count: u32,
+  sun_layers: u32,
+  _pad2: vec2u,
+  point_layers: array<vec4u, 4>,
+  spots: array<EngineSpotLight, 8>,
 };
 @group(0) @binding(2) var<uniform> lights: EngineLights;
 @group(0) @binding(3) var engine_shadow_map: texture_depth_2d;
@@ -137,9 +162,45 @@ fn engine_fog(color: vec3f, world_pos: vec3f) -> vec3f {
   let f = select(expo, linear, far > near);
   return mix(color, lights.fog.rgb, f);
 }
+fn engine_spot_cone(cos_theta: f32, cos_outer: f32, cos_inner: f32) -> f32 {
+  let t = saturate((cos_theta - cos_outer) / max(cos_inner - cos_outer, 1e-4));
+  return t * t * (3.0 - 2.0 * t);
+}
+fn engine_instance_layers(flags: u32) -> u32 {
+  return flags >> 1u;
+}
+fn engine_light_accum(world_pos: vec3f, normal: vec3f, layer_mask: u32) -> vec3f {
+  var sum = vec3f(0.0);
+  if ((lights.sun_layers & layer_mask) != 0u) {
+    sum += lights.sun_color * max(dot(normal, -lights.sun_dir), 0.0) * engine_shadow(world_pos);
+  }
+  for (var i = 0u; i < lights.point_count; i++) {
+    if ((lights.point_layers[i >> 2u][i & 3u] & layer_mask) == 0u) { continue; }
+    let l = lights.points[i];
+    let to = l.position - world_pos;
+    let d = length(to);
+    let falloff = saturate(1.0 - d / max(l.radius, 1e-4));
+    let diffuse = max(dot(normal, to / max(d, 1e-4)), 0.0);
+    sum += l.color * (falloff * falloff * diffuse);
+  }
+  for (var i = 0u; i < lights.spot_count; i++) {
+    let l = lights.spots[i];
+    if ((l.layers & layer_mask) == 0u) { continue; }
+    let to = l.position - world_pos;
+    let d = length(to);
+    let ld = to / max(d, 1e-4);
+    let falloff = saturate(1.0 - d / max(l.radius, 1e-4));
+    let cone = engine_spot_cone(dot(-ld, l.direction), l.cos_outer, l.cos_inner);
+    let diffuse = max(dot(normal, ld), 0.0);
+    sum += l.color * (falloff * falloff * cone * diffuse);
+  }
+  return sum;
+}
+fn engine_lambert_layers(normal: vec3f, world_pos: vec3f, layer_mask: u32) -> vec3f {
+  return lights.ambient + engine_light_accum(world_pos, normal, layer_mask);
+}
 fn engine_lambert(normal: vec3f, world_pos: vec3f) -> vec3f {
-  let sun = lights.sun_color * max(dot(normal, -lights.sun_dir), 0.0) * engine_shadow(world_pos);
-  return lights.ambient + sun + engine_point_lights(normal, world_pos);
+  return engine_lambert_layers(normal, world_pos, 0xffffffffu);
 }
 `;
 
