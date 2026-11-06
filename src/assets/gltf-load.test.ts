@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { Camera } from '../render/camera';
 import { createFakeDevice, fakeRendererGpu } from '../render/fake-gpu';
 import { VERTEX_LAYOUT_3D, VERTEX_LAYOUT_3D_TANGENT, VERTEX_LAYOUT_SKINNED } from '../render/mesh';
 import { Renderer } from '../render/renderer';
@@ -6,6 +7,7 @@ import { SkinPalette } from '../render/skin';
 import { STANDARD_TEXTURE_SLOTS } from '../render/standard';
 import { type GltfJson, parseGltf } from './gltf';
 import {
+  applyGltfCamera,
   type GltfImageSource,
   gltfSamplerKind,
   interleave3d,
@@ -672,5 +674,166 @@ describe('loadGltf morph targets on the fake GPU', () => {
     // The untargeted mesh never re-uploads.
     expect(fake.writes.filter((w) => w.buffer.label === 'gltf:mesh1.0-vb')).toHaveLength(1);
     expect(fake.errors).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------- extensions (ws/assets-3)
+
+/** One triangle, base material 0, variants a → 1, b → 2, c unmapped. */
+function variantDoc(): GltfJson {
+  return {
+    asset: { version: '2.0' },
+    extensionsUsed: ['KHR_materials_variants', 'KHR_lights_punctual'],
+    extensions: {
+      KHR_materials_variants: { variants: [{ name: 'a' }, { name: 'b' }, { name: 'c' }] },
+      KHR_lights_punctual: {
+        lights: [
+          { type: 'point', color: [1, 0.5, 0], intensity: 4, range: 9 },
+          { type: 'spot', intensity: 0.25, spot: { innerConeAngle: 0.1, outerConeAngle: 0.5 } },
+          { type: 'directional', intensity: 2 },
+        ],
+      },
+    },
+    buffers: [{ byteLength: 36 }],
+    bufferViews: [{ buffer: 0, byteLength: 36 }],
+    accessors: [
+      {
+        bufferView: 0,
+        componentType: 5126,
+        count: 3,
+        type: 'VEC3',
+        min: [0, 0, 0],
+        max: [1, 1, 0],
+      },
+    ],
+    materials: [
+      { name: 'base', pbrMetallicRoughness: { baseColorFactor: [1, 1, 1, 1] } },
+      { name: 'red', pbrMetallicRoughness: { baseColorFactor: [1, 0, 0, 1] } },
+      { name: 'blue', pbrMetallicRoughness: { baseColorFactor: [0, 0, 1, 1] } },
+    ],
+    meshes: [
+      {
+        primitives: [
+          {
+            attributes: { POSITION: 0 },
+            material: 0,
+            extensions: {
+              KHR_materials_variants: {
+                mappings: [
+                  { material: 1, variants: [0] },
+                  { material: 2, variants: [1] },
+                ],
+              },
+            },
+          },
+        ],
+      },
+    ],
+    cameras: [{ type: 'orthographic', orthographic: { xmag: 2, ymag: 1, znear: 1, zfar: 11 } }],
+    nodes: [
+      { mesh: 0 },
+      { extensions: { KHR_lights_punctual: { light: 0 } }, translation: [1, 2, 3] },
+      { extensions: { KHR_lights_punctual: { light: 1 } }, translation: [0, 5, 0] },
+      { extensions: { KHR_lights_punctual: { light: 2 } } },
+      { camera: 0, translation: [0, 0, 4] },
+    ],
+    scenes: [{ nodes: [0, 1, 2, 3, 4] }],
+  };
+}
+
+const variantBin = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]).buffer;
+
+describe('loadGltf material variants on the fake GPU', () => {
+  it('setVariant swaps the material in place and back, creating none', async () => {
+    const fake = createFakeDevice();
+    const r = new Renderer(fakeRendererGpu(fake));
+    const doc = parseGltf({ json: variantDoc(), buffers: [variantBin] });
+    const scene = await loadGltf(r, doc, { decodeImage });
+    expect(scene.variants).toEqual(['a', 'b', 'c']);
+    expect(scene.materials).toHaveLength(3);
+    const draw = scene.nodes[0]!;
+    expect(draw.materialIndex).toBe(0);
+    expect(scene.variant).toBeNull();
+    scene.setVariant('a');
+    expect(scene.variant).toBe('a');
+    expect(draw.materialIndex).toBe(1);
+    expect(draw.material).toBe(scene.materials[1]);
+    scene.setVariant('b');
+    expect(draw.material).toBe(scene.materials[2]);
+    // A variant no mapping names falls back to the primitive's own material.
+    scene.setVariant('c');
+    expect(draw.materialIndex).toBe(0);
+    scene.setVariant('a').setVariant(null);
+    expect(draw.materialIndex).toBe(0);
+    expect(draw.material).toBe(scene.materials[0]);
+    expect(scene.materials).toHaveLength(3);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it("lit: 'lit' rewrites the draw's tint in place", async () => {
+    const r = new Renderer(fakeRendererGpu(createFakeDevice()));
+    const doc = parseGltf({ json: variantDoc(), buffers: [variantBin] });
+    const scene = await loadGltf(r, doc, { decodeImage, lit: 'lit' });
+    const tint = scene.nodes[0]!.params.tint as Float32Array;
+    scene.setVariant('b');
+    expect(scene.nodes[0]!.params.tint).toBe(tint);
+    expect([...tint]).toEqual([0, 0, 1, 1]);
+  });
+
+  it('throws for an unknown variant, listing the names', async () => {
+    const r = new Renderer(fakeRendererGpu(createFakeDevice()));
+    const doc = parseGltf({ json: variantDoc(), buffers: [variantBin] });
+    const scene = await loadGltf(r, doc, { decodeImage });
+    expect(() => scene.setVariant('gold')).toThrow('variant "gold" unknown (variants: a, b, c)');
+    expect(scene.variant).toBeNull();
+  });
+});
+
+describe('loadGltf lights and cameras on the fake GPU', () => {
+  it('turns glTF lights into render records', async () => {
+    const r = new Renderer(fakeRendererGpu(createFakeDevice()));
+    const doc = parseGltf({ json: variantDoc(), buffers: [variantBin] });
+    const scene = await loadGltf(r, doc, { decodeImage, lightScale: 0.5 });
+    const [point] = scene.lights.points;
+    expect(Array.from(point!.position)).toEqual([1, 2, 3]);
+    expect(Array.from(point!.color)).toEqual([2, 1, 0]);
+    expect(point!.radius).toBe(9);
+    const [spot] = scene.lights.spots;
+    expect(spot!.innerAngle).toBeCloseTo(0.1, 6);
+    expect(spot!.outerAngle).toBeCloseTo(0.5, 6);
+    expect(Array.from(spot!.direction)).toEqual([0, 0, -1]);
+    // No range: 16·√(0.25 × 0.5).
+    expect(spot!.radius).toBeCloseTo(16 * Math.sqrt(0.125), 6);
+    const [sun] = scene.lights.directional;
+    expect(Array.from(sun!.color)).toEqual([1, 1, 1]);
+    expect(Array.from(sun!.dir)).toEqual([0, 0, -1]);
+  });
+
+  it('applyGltfCamera sets an orthographic projection and the node view', async () => {
+    const r = new Renderer(fakeRendererGpu(createFakeDevice()));
+    const doc = parseGltf({ json: variantDoc(), buffers: [variantBin] });
+    const scene = await loadGltf(r, doc, { decodeImage });
+    const cam = applyGltfCamera(new Camera(), scene.cameras[0]!, 16 / 9);
+    expect(cam.projection[0]).toBeCloseTo(0.5, 6);
+    expect(cam.projection[5]).toBeCloseTo(1, 6);
+    // View depth -near → 0, -far → 1.
+    expect(cam.projection[10]! * -1 + cam.projection[14]!).toBeCloseTo(0, 6);
+    expect(cam.projection[10]! * -11 + cam.projection[14]!).toBeCloseTo(1, 6);
+    expect(cam.view[14]).toBeCloseTo(-4, 6);
+    expect(cam.depthTest).toBe(true);
+  });
+
+  it('applyGltfCamera takes the viewport aspect when the file gives none', () => {
+    const doc = parseGltf({
+      json: {
+        asset: { version: '2.0' },
+        cameras: [{ type: 'perspective', perspective: { yfov: 1, znear: 0.1 } }],
+        nodes: [{ camera: 0 }],
+      },
+    });
+    const cam = applyGltfCamera(new Camera(), doc.cameras[0]!, 2);
+    const f = 1 / Math.tan(0.5);
+    expect(cam.projection[5]).toBeCloseTo(f, 5);
+    expect(cam.projection[0]).toBeCloseTo(f / 2, 5);
   });
 });

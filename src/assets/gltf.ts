@@ -20,6 +20,8 @@
  * `world = parent.world · local`.
  */
 
+import { decodeMeshopt } from './meshopt';
+
 export class GltfError extends Error {
   constructor(message: string) {
     super(`gltf: ${message}`);
@@ -57,6 +59,43 @@ export interface GltfJsonBufferView {
   byteOffset?: number;
   byteLength: number;
   byteStride?: number;
+  extensions?: { EXT_meshopt_compression?: GltfJsonMeshoptView };
+}
+
+/** `EXT_meshopt_compression` on a buffer view: where the compressed stream is and how to decode it. */
+export interface GltfJsonMeshoptView {
+  buffer: number;
+  byteOffset?: number;
+  byteLength: number;
+  byteStride: number;
+  count: number;
+  mode: 'ATTRIBUTES' | 'TRIANGLES' | 'INDICES';
+  filter?: 'NONE' | 'OCTAHEDRAL' | 'QUATERNION' | 'EXPONENTIAL';
+}
+
+/** One `KHR_lights_punctual` light definition (`extensions.KHR_lights_punctual.lights[i]`). */
+export interface GltfJsonLight {
+  name?: string;
+  type: 'directional' | 'point' | 'spot';
+  color?: number[];
+  intensity?: number;
+  range?: number;
+  spot?: { innerConeAngle?: number; outerConeAngle?: number };
+}
+
+/** One glTF `camera`. */
+export interface GltfJsonCamera {
+  name?: string;
+  type: 'perspective' | 'orthographic';
+  perspective?: { aspectRatio?: number; yfov: number; zfar?: number; znear: number };
+  orthographic?: { xmag: number; ymag: number; zfar: number; znear: number };
+}
+
+/** `KHR_materials_variants` on a primitive: which material each set of variants binds. */
+export interface GltfJsonVariantMapping {
+  material: number;
+  variants: number[];
+  name?: string;
 }
 
 export interface GltfJsonPrimitive {
@@ -66,6 +105,7 @@ export interface GltfJsonPrimitive {
   mode?: number;
   /** Morph targets: one attribute map per target (`POSITION`, `NORMAL`, `TANGENT`, …). */
   targets?: Record<string, number>[];
+  extensions?: { KHR_materials_variants?: { mappings?: GltfJsonVariantMapping[] } };
 }
 
 export interface GltfJsonMesh {
@@ -84,6 +124,9 @@ export interface GltfJsonNode {
   translation?: number[];
   rotation?: number[];
   scale?: number[];
+  /** Index into `GltfJson.cameras`. */
+  camera?: number;
+  extensions?: { KHR_lights_punctual?: { light: number } };
 }
 
 /** `KHR_texture_transform` on a texture reference (`extensions.KHR_texture_transform`). */
@@ -119,7 +162,39 @@ export interface GltfJsonMaterial {
   doubleSided?: boolean;
   alphaMode?: 'OPAQUE' | 'MASK' | 'BLEND';
   alphaCutoff?: number;
-  extensions?: { KHR_materials_emissive_strength?: { emissiveStrength?: number } };
+  extensions?: {
+    KHR_materials_emissive_strength?: { emissiveStrength?: number };
+    KHR_materials_clearcoat?: {
+      clearcoatFactor?: number;
+      clearcoatTexture?: GltfJsonTextureInfo;
+      clearcoatRoughnessFactor?: number;
+      clearcoatRoughnessTexture?: GltfJsonTextureInfo;
+      clearcoatNormalTexture?: GltfJsonTextureInfo;
+    };
+    KHR_materials_sheen?: {
+      sheenColorFactor?: number[];
+      sheenColorTexture?: GltfJsonTextureInfo;
+      sheenRoughnessFactor?: number;
+      sheenRoughnessTexture?: GltfJsonTextureInfo;
+    };
+    KHR_materials_transmission?: {
+      transmissionFactor?: number;
+      transmissionTexture?: GltfJsonTextureInfo;
+    };
+    KHR_materials_volume?: {
+      thicknessFactor?: number;
+      thicknessTexture?: GltfJsonTextureInfo;
+      attenuationDistance?: number;
+      attenuationColor?: number[];
+    };
+    KHR_materials_ior?: { ior?: number };
+    KHR_materials_specular?: {
+      specularFactor?: number;
+      specularTexture?: GltfJsonTextureInfo;
+      specularColorFactor?: number[];
+      specularColorTexture?: GltfJsonTextureInfo;
+    };
+  };
 }
 
 export interface GltfJsonSkin {
@@ -163,13 +238,28 @@ export interface GltfJson {
   meshes?: GltfJsonMesh[];
   accessors?: GltfJsonAccessor[];
   bufferViews?: GltfJsonBufferView[];
-  buffers?: { uri?: string; byteLength: number }[];
+  buffers?: {
+    uri?: string;
+    byteLength: number;
+    /** `fallback: true` marks a buffer only `EXT_meshopt_compression` views point at (may have no data). */
+    extensions?: { EXT_meshopt_compression?: { fallback?: boolean } };
+  }[];
   materials?: GltfJsonMaterial[];
-  textures?: { name?: string; source?: number; sampler?: number }[];
+  textures?: {
+    name?: string;
+    source?: number;
+    sampler?: number;
+    extensions?: { KHR_texture_basisu?: { source: number } };
+  }[];
   images?: { name?: string; uri?: string; mimeType?: string; bufferView?: number }[];
   samplers?: { magFilter?: number; minFilter?: number; wrapS?: number; wrapT?: number }[];
   skins?: GltfJsonSkin[];
   animations?: GltfJsonAnimation[];
+  cameras?: GltfJsonCamera[];
+  extensions?: {
+    KHR_lights_punctual?: { lights?: GltfJsonLight[] };
+    KHR_materials_variants?: { variants?: { name?: string }[] };
+  };
 }
 
 // ---------------------------------------------------------------- the document
@@ -227,6 +317,20 @@ export interface GltfPrimitive {
   targets: GltfMorphTarget[];
   /** Target attributes the parser read past (`TANGENT`, `TEXCOORD_0`, …), once each. */
   ignoredTargetAttributes: string[];
+  /**
+   * `KHR_materials_variants` mappings: each binds `material` when one of `variants` (indices
+   * into `GltfDocument.variants`) is active; empty when the primitive has none. A variant no
+   * mapping names leaves the primitive on `material`.
+   */
+  variants: GltfVariantMapping[];
+}
+
+/** One `KHR_materials_variants` mapping of a primitive. */
+export interface GltfVariantMapping {
+  /** Index into `GltfDocument.materials`. */
+  material: number;
+  /** Indices into `GltfDocument.variants`. */
+  variants: number[];
 }
 
 /**
@@ -255,6 +359,10 @@ export interface GltfNode {
   mesh: number | null;
   /** Index into `GltfDocument.skins`, or null. */
   skin: number | null;
+  /** Index into the file's `cameras` the node carries, or null (`GltfDocument.cameras` places it). */
+  camera: number | null;
+  /** Index into the file's `KHR_lights_punctual` lights, or null (`GltfDocument.lights`). */
+  light: number | null;
   /** TRS, decomposed from `matrix` when the node gave one. */
   translation: Vec3;
   rotation: Vec4;
@@ -318,10 +426,125 @@ export interface GltfMaterial {
   alphaMode: GltfAlphaMode;
   /** For `MASK` (default 0.5). */
   alphaCutoff: number;
+  /**
+   * The `KHR_materials_*` extensions the parser reads but the standard material does not
+   * render yet (clearcoat, sheen, transmission, volume, ior, specular), defaults filled; null
+   * when the material does not carry one. `GltfDocument.unsupportedExtensions` lists them.
+   */
+  extensions: GltfMaterialExtensions;
   /** @deprecated `baseColor?.index ?? null`; removed next release. */
   baseColorTexture: number | null;
   /** @deprecated `baseColor?.texCoord ?? 0`; removed next release. */
   texCoord: number;
+}
+
+/** `KHR_materials_clearcoat`, spec defaults (factors 0). */
+export interface GltfClearcoat {
+  clearcoatFactor: number;
+  clearcoatTexture: TextureRef | null;
+  clearcoatRoughnessFactor: number;
+  clearcoatRoughnessTexture: TextureRef | null;
+  clearcoatNormalTexture: TextureRef | null;
+}
+
+/** `KHR_materials_sheen`, spec defaults (colour 0, roughness 0). */
+export interface GltfSheen {
+  sheenColorFactor: Vec3;
+  sheenColorTexture: TextureRef | null;
+  sheenRoughnessFactor: number;
+  sheenRoughnessTexture: TextureRef | null;
+}
+
+/** `KHR_materials_transmission` (factor default 0). */
+export interface GltfTransmission {
+  transmissionFactor: number;
+  transmissionTexture: TextureRef | null;
+}
+
+/** `KHR_materials_volume` (thickness 0, attenuation distance Infinity, colour white). */
+export interface GltfVolume {
+  thicknessFactor: number;
+  thicknessTexture: TextureRef | null;
+  attenuationDistance: number;
+  attenuationColor: Vec3;
+}
+
+/** `KHR_materials_ior` (default 1.5). */
+export interface GltfIor {
+  ior: number;
+}
+
+/** `KHR_materials_specular` (factor 1, colour white). */
+export interface GltfSpecular {
+  specularFactor: number;
+  specularTexture: TextureRef | null;
+  specularColorFactor: Vec3;
+  specularColorTexture: TextureRef | null;
+}
+
+/** The parsed-but-not-rendered `KHR_materials_*` records of one material. */
+export interface GltfMaterialExtensions {
+  clearcoat: GltfClearcoat | null;
+  sheen: GltfSheen | null;
+  transmission: GltfTransmission | null;
+  volume: GltfVolume | null;
+  ior: GltfIor | null;
+  specular: GltfSpecular | null;
+}
+
+/**
+ * One `KHR_lights_punctual` light placed by a node of the default scene. Units are glTF's:
+ * world units are metres, angles radians, `intensity` candela (point, spot) or lux
+ * (directional); `loadGltf` turns it into the engine's light records (`GltfScene.lights`).
+ */
+export interface GltfLight {
+  name: string | null;
+  /** The node carrying the light (index into `GltfDocument.nodes`). */
+  node: number;
+  /** Index into the file's `KHR_lights_punctual.lights`. */
+  light: number;
+  type: 'directional' | 'point' | 'spot';
+  /** Linear RGB (default white). */
+  color: Vec3;
+  /** Default 1. */
+  intensity: number;
+  /** Distance where the light reaches zero; absent for "infinite" (and for directional lights). */
+  range?: number;
+  /** Spot only: full intensity inside this half-angle (default 0). */
+  innerConeAngle?: number;
+  /** Spot only: zero outside this half-angle (default π/4). */
+  outerConeAngle?: number;
+  /** World position of the node. */
+  position: Vec3;
+  /** Unit world direction the light travels: the node's local -Z. */
+  direction: Vec3;
+  /** The node's world matrix (3×4 row-major, shared with the node). */
+  world: Float32Array;
+}
+
+/**
+ * One glTF camera placed by a node of the default scene. Perspective: `yfov` radians,
+ * `aspectRatio` (null: the viewport's), `znear`, `zfar` (null: infinite). Orthographic:
+ * `xmag`, `ymag` (half extents), `znear`, `zfar`. The camera looks down its node's local -Z.
+ */
+export interface GltfCamera {
+  name: string | null;
+  /** The node carrying the camera. */
+  node: number;
+  /** Index into the file's `cameras`. */
+  camera: number;
+  type: 'perspective' | 'orthographic';
+  yfov: number;
+  aspectRatio: number | null;
+  znear: number;
+  zfar: number | null;
+  xmag: number;
+  ymag: number;
+  position: Vec3;
+  /** The node's world matrix (3×4 row-major, shared with the node). */
+  world: Float32Array;
+  /** The view matrix: the inverse of the node's world with scale removed, column-major 4×4. */
+  view: Float32Array;
 }
 
 export type GltfFilter = 'nearest' | 'linear';
@@ -344,6 +567,12 @@ export interface GltfTexture {
   name: string | null;
   /** Index into `GltfDocument.images`, or null (an extension-only texture). */
   source: number | null;
+  /**
+   * `KHR_texture_basisu`: the KTX2 image (index into `GltfDocument.images`), or null. The
+   * loader does not upload it yet (`parseKtx2` reads the container); `source`, when given, is
+   * the file's PNG/JPEG fallback and is what `loadGltf` binds.
+   */
+  basisuSource: number | null;
   /** `wrapS`/`wrapT` are 10497 repeat (default), 33071 clamp, 33648 mirror. */
   wrapS: number;
   wrapT: number;
@@ -422,10 +651,25 @@ export interface GltfDocument {
   /** External (non-`data:`) URIs the game must fetch: images here, buffers at parse time. */
   externalUris: string[];
   /**
-   * `extensionsUsed` entries the parser does not handle (`KHR_texture_transform` and
-   * `KHR_materials_emissive_strength` are read), and anything else it skipped.
+   * `extensionsUsed` entries the parser does not read, and anything else it skipped. Read
+   * (never warned): `KHR_texture_transform`, `KHR_materials_emissive_strength`,
+   * `KHR_mesh_quantization`, `EXT_meshopt_compression`, `KHR_lights_punctual`,
+   * `KHR_materials_variants`, plus those in `unsupportedExtensions`.
    */
   warnings: string[];
+  /**
+   * `extensionsUsed` entries the parser reads into the document but the renderer does not
+   * draw yet, once each: `KHR_materials_clearcoat`, `_sheen`, `_transmission`, `_volume`,
+   * `_ior`, `_specular` (`GltfMaterial.extensions`) and `KHR_texture_basisu`
+   * (`GltfTexture.basisuSource`).
+   */
+  unsupportedExtensions: string[];
+  /** `KHR_lights_punctual` lights of the default scene, one per carrying node, in scene order. */
+  lights: GltfLight[];
+  /** Cameras of the default scene, one per carrying node, in scene order. */
+  cameras: GltfCamera[];
+  /** `KHR_materials_variants` names, in file order (`GltfScene.setVariant` takes one). */
+  variants: string[];
   /** World-space bounds of the default scene's meshes; radius 0 at the origin when empty. */
   bounds: GltfBounds;
 }
@@ -522,7 +766,25 @@ interface Ctx {
 }
 
 /** Extensions the parser reads, so neither `extensionsRequired` nor `warnings` mention them. */
-const HANDLED_EXTENSIONS = new Set(['KHR_texture_transform', 'KHR_materials_emissive_strength']);
+const HANDLED_EXTENSIONS = new Set([
+  'KHR_texture_transform',
+  'KHR_materials_emissive_strength',
+  'KHR_mesh_quantization',
+  'EXT_meshopt_compression',
+  'KHR_lights_punctual',
+  'KHR_materials_variants',
+]);
+
+/** Extensions parsed into the document but not rendered: listed in `unsupportedExtensions`. */
+const PARSED_EXTENSIONS = new Set([
+  'KHR_materials_clearcoat',
+  'KHR_materials_sheen',
+  'KHR_materials_transmission',
+  'KHR_materials_volume',
+  'KHR_materials_ior',
+  'KHR_materials_specular',
+  'KHR_texture_basisu',
+]);
 
 /** `minFilter` values whose base filter is nearest (9728, 9984 nearest-mipmap-nearest, 9986 nearest-mipmap-linear). */
 const MIN_NEAREST = new Set([9728, 9984, 9986]);
@@ -595,8 +857,71 @@ function parseMaterial(m: GltfJsonMaterial, i: number, textureCount: number): Gl
     doubleSided: m.doubleSided ?? false,
     alphaMode: m.alphaMode ?? 'OPAQUE',
     alphaCutoff: m.alphaCutoff ?? 0.5,
+    extensions: parseMaterialExtensions(m, where, textureCount),
     baseColorTexture: baseColor?.index ?? null,
     texCoord: baseColor?.texCoord ?? 0,
+  };
+}
+
+function vec3Of(v: number[] | undefined, fallback: number): Vec3 {
+  return [v?.[0] ?? fallback, v?.[1] ?? fallback, v?.[2] ?? fallback];
+}
+
+function parseMaterialExtensions(
+  m: GltfJsonMaterial,
+  where: string,
+  textureCount: number,
+): GltfMaterialExtensions {
+  const x = m.extensions;
+  const ref = (info: GltfJsonTextureInfo | undefined, slot: string) =>
+    textureRef(info, textureCount, `${where} ${slot}`);
+  const cc = x?.KHR_materials_clearcoat;
+  const sh = x?.KHR_materials_sheen;
+  const tr = x?.KHR_materials_transmission;
+  const vo = x?.KHR_materials_volume;
+  const io = x?.KHR_materials_ior;
+  const sp = x?.KHR_materials_specular;
+  return {
+    clearcoat: cc
+      ? {
+          clearcoatFactor: cc.clearcoatFactor ?? 0,
+          clearcoatTexture: ref(cc.clearcoatTexture, 'clearcoatTexture'),
+          clearcoatRoughnessFactor: cc.clearcoatRoughnessFactor ?? 0,
+          clearcoatRoughnessTexture: ref(cc.clearcoatRoughnessTexture, 'clearcoatRoughnessTexture'),
+          clearcoatNormalTexture: ref(cc.clearcoatNormalTexture, 'clearcoatNormalTexture'),
+        }
+      : null,
+    sheen: sh
+      ? {
+          sheenColorFactor: vec3Of(sh.sheenColorFactor, 0),
+          sheenColorTexture: ref(sh.sheenColorTexture, 'sheenColorTexture'),
+          sheenRoughnessFactor: sh.sheenRoughnessFactor ?? 0,
+          sheenRoughnessTexture: ref(sh.sheenRoughnessTexture, 'sheenRoughnessTexture'),
+        }
+      : null,
+    transmission: tr
+      ? {
+          transmissionFactor: tr.transmissionFactor ?? 0,
+          transmissionTexture: ref(tr.transmissionTexture, 'transmissionTexture'),
+        }
+      : null,
+    volume: vo
+      ? {
+          thicknessFactor: vo.thicknessFactor ?? 0,
+          thicknessTexture: ref(vo.thicknessTexture, 'thicknessTexture'),
+          attenuationDistance: vo.attenuationDistance ?? Infinity,
+          attenuationColor: vec3Of(vo.attenuationColor, 1),
+        }
+      : null,
+    ior: io ? { ior: io.ior ?? 1.5 } : null,
+    specular: sp
+      ? {
+          specularFactor: sp.specularFactor ?? 1,
+          specularTexture: ref(sp.specularTexture, 'specularTexture'),
+          specularColorFactor: vec3Of(sp.specularColorFactor, 1),
+          specularColorTexture: ref(sp.specularColorTexture, 'specularColorTexture'),
+        }
+      : null,
   };
 }
 
@@ -619,22 +944,73 @@ export function transformUv(
   return out;
 }
 
+/**
+ * `EXT_meshopt_compression`: decode every compressed buffer view into its own buffer (appended
+ * to `buffers`) and return a shallow copy of `json` whose views point at the decoded bytes. A
+ * view without the extension, or a file without any, is read as written (`json` returned as is).
+ */
+function decodeMeshoptViews(json: GltfJson, buffers: ArrayBuffer[]): GltfJson {
+  const views = json.bufferViews ?? [];
+  if (!views.some((v) => v.extensions?.EXT_meshopt_compression)) return json;
+  const out = views.map((bv, i): GltfJsonBufferView => {
+    const x = bv.extensions?.EXT_meshopt_compression;
+    if (!x) return bv;
+    const where = `bufferView ${i} (EXT_meshopt_compression)`;
+    const src = buffers[x.buffer];
+    if (!src) throw new GltfError(`${where}: buffer ${x.buffer} does not exist`);
+    const off = x.byteOffset ?? 0;
+    if (off + x.byteLength > src.byteLength) {
+      throw new GltfError(`${where}: stream runs past buffer ${x.buffer}`);
+    }
+    const target = new Uint8Array(x.count * x.byteStride);
+    try {
+      decodeMeshopt(
+        target,
+        x.count,
+        x.byteStride,
+        new Uint8Array(src, off, x.byteLength),
+        x.mode,
+        x.filter ?? 'NONE',
+      );
+    } catch (e) {
+      throw new GltfError(`${where}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    buffers.push(target.buffer);
+    const view: GltfJsonBufferView = {
+      buffer: buffers.length - 1,
+      byteOffset: 0,
+      byteLength: Math.min(bv.byteLength, target.byteLength),
+    };
+    if (bv.byteStride !== undefined) view.byteStride = bv.byteStride;
+    return view;
+  });
+  return { ...json, bufferViews: out };
+}
+
 function parseJson(json: GltfJson, given: ArrayBuffer[]): GltfDocument {
   const version = json.asset?.version ?? '';
   if (!version.startsWith('2.')) throw new GltfError(`asset.version "${version}", expected 2.x`);
-  const required = (json.extensionsRequired ?? []).filter((e) => !HANDLED_EXTENSIONS.has(e));
+  const required = (json.extensionsRequired ?? []).filter(
+    (e) => !HANDLED_EXTENSIONS.has(e) && !PARSED_EXTENSIONS.has(e),
+  );
   if (required.length > 0) {
     throw new GltfError(`required extensions not supported: ${required.join(', ')}`);
   }
   const warnings: string[] = [];
-  for (const ext of json.extensionsUsed ?? []) {
-    if (!HANDLED_EXTENSIONS.has(ext)) warnings.push(`extension ignored: ${ext}`);
+  const unsupportedExtensions: string[] = [];
+  for (const ext of new Set([...(json.extensionsUsed ?? []), ...(json.extensionsRequired ?? [])])) {
+    if (PARSED_EXTENSIONS.has(ext)) unsupportedExtensions.push(ext);
+    else if (!HANDLED_EXTENSIONS.has(ext)) warnings.push(`extension ignored: ${ext}`);
   }
   const externalUris: string[] = [];
 
   const buffers = (json.buffers ?? []).map((b, i) => {
     if (b.uri !== undefined && isDataUri(b.uri)) return decodeDataUri(b.uri).bytes.buffer;
     const bytes = given[i];
+    if (!bytes && b.extensions?.EXT_meshopt_compression?.fallback) {
+      // A meshopt fallback buffer with no data: only compressed views point at it.
+      return new ArrayBuffer(0);
+    }
     if (!bytes) {
       throw new GltfError(
         b.uri === undefined
@@ -645,7 +1021,7 @@ function parseJson(json: GltfJson, given: ArrayBuffer[]): GltfDocument {
     if (b.uri !== undefined) externalUris.push(b.uri);
     return bytes;
   });
-  const ctx: Ctx = { json, buffers };
+  const ctx: Ctx = { json: decodeMeshoptViews(json, buffers), buffers };
 
   const images: GltfImage[] = (json.images ?? []).map((img, i) => {
     const name = img.name ?? null;
@@ -667,6 +1043,7 @@ function parseJson(json: GltfJson, given: ArrayBuffer[]): GltfDocument {
     return {
       name: t.name ?? null,
       source: t.source ?? null,
+      basisuSource: t.extensions?.KHR_texture_basisu?.source ?? null,
       wrapS: s?.wrapS ?? 10497,
       wrapT: s?.wrapT ?? 10497,
       magFilter: s?.magFilter ?? null,
@@ -686,7 +1063,14 @@ function parseJson(json: GltfJson, given: ArrayBuffer[]): GltfDocument {
 
   const meshes: GltfMesh[] = (json.meshes ?? []).map((m, mi) => parseMesh(ctx, m, mi));
 
-  const nodes = parseNodes(json.nodes ?? [], meshes.length, (json.skins ?? []).length);
+  const lightDefs = json.extensions?.KHR_lights_punctual?.lights ?? [];
+  const nodes = parseNodes(
+    json.nodes ?? [],
+    meshes.length,
+    (json.skins ?? []).length,
+    (json.cameras ?? []).length,
+    lightDefs.length,
+  );
   const skins = (json.skins ?? []).map((s, i) => parseSkin(ctx, s, i, nodes.length));
   const animations = (json.animations ?? []).map((a, i) =>
     parseAnimation(ctx, a, i, nodes.length, warnings),
@@ -698,6 +1082,21 @@ function parseJson(json: GltfJson, given: ArrayBuffer[]): GltfDocument {
     for (const c of nodes[i]!.children) visit(c);
   };
   for (const r of roots) visit(r);
+
+  const variants = (json.extensions?.KHR_materials_variants?.variants ?? []).map(
+    (v, i) => v.name ?? `variant${i}`,
+  );
+  meshes.forEach((m, mi) => {
+    m.primitives.forEach((p, pi) => {
+      for (const map of p.variants) {
+        for (const v of map.variants) {
+          if (!Number.isInteger(v) || v < 0 || v >= variants.length) {
+            throw new GltfError(`mesh ${mi} primitive ${pi}: variant ${v} does not exist`);
+          }
+        }
+      }
+    });
+  });
 
   return {
     version,
@@ -712,8 +1111,126 @@ function parseJson(json: GltfJson, given: ArrayBuffer[]): GltfDocument {
     animations,
     externalUris,
     warnings,
+    unsupportedExtensions,
+    lights: placeLights(lightDefs, nodes, sceneNodes),
+    cameras: placeCameras(json.cameras ?? [], nodes, sceneNodes),
+    variants,
     bounds: sceneBounds(nodes, meshes, sceneNodes),
   };
+}
+
+/** The node's world -Z, normalised (the direction glTF lights shine and cameras look). */
+function forwardOf(w: Float32Array): Vec3 {
+  const x = -w[2]!;
+  const y = -w[6]!;
+  const z = -w[10]!;
+  const l = Math.hypot(x, y, z) || 1;
+  // `+ 0` turns the -0 of an axis-aligned node into 0.
+  return [x / l + 0, y / l + 0, z / l + 0];
+}
+
+function placeLights(defs: GltfJsonLight[], nodes: GltfNode[], sceneNodes: number[]): GltfLight[] {
+  const out: GltfLight[] = [];
+  for (const ni of sceneNodes) {
+    const n = nodes[ni]!;
+    if (n.light === null) continue;
+    const d = defs[n.light]!;
+    const where = `light ${n.light}`;
+    if (d.type !== 'directional' && d.type !== 'point' && d.type !== 'spot') {
+      throw new GltfError(`${where}: type "${String(d.type)}" unknown`);
+    }
+    const light: GltfLight = {
+      name: d.name ?? null,
+      node: ni,
+      light: n.light,
+      type: d.type,
+      color: vec3Of(d.color, 1),
+      intensity: d.intensity ?? 1,
+      position: [n.world[3]!, n.world[7]!, n.world[11]!],
+      direction: forwardOf(n.world),
+      world: n.world,
+    };
+    if (d.type !== 'directional' && d.range !== undefined) {
+      if (!(d.range > 0)) throw new GltfError(`${where}: range ${d.range} must be > 0`);
+      light.range = d.range;
+    }
+    if (d.type === 'spot') {
+      const inner = d.spot?.innerConeAngle ?? 0;
+      const outer = d.spot?.outerConeAngle ?? Math.PI / 4;
+      if (!(inner >= 0 && inner < outer && outer <= Math.PI / 2)) {
+        throw new GltfError(
+          `${where}: cone angles ${inner}, ${outer} need 0 <= inner < outer <= π/2`,
+        );
+      }
+      light.innerConeAngle = inner;
+      light.outerConeAngle = outer;
+    }
+    out.push(light);
+  }
+  return out;
+}
+
+function placeCameras(
+  defs: GltfJsonCamera[],
+  nodes: GltfNode[],
+  sceneNodes: number[],
+): GltfCamera[] {
+  const out: GltfCamera[] = [];
+  for (const ni of sceneNodes) {
+    const n = nodes[ni]!;
+    if (n.camera === null) continue;
+    const d = defs[n.camera]!;
+    const where = `camera ${n.camera}`;
+    const c: GltfCamera = {
+      name: d.name ?? null,
+      node: ni,
+      camera: n.camera,
+      type: d.type,
+      yfov: 0,
+      aspectRatio: null,
+      znear: 0,
+      zfar: null,
+      xmag: 0,
+      ymag: 0,
+      position: [n.world[3]!, n.world[7]!, n.world[11]!],
+      world: n.world,
+      view: viewOf(n.world),
+    };
+    if (d.type === 'perspective') {
+      const p = d.perspective;
+      if (!p) throw new GltfError(`${where}: perspective camera without "perspective"`);
+      c.yfov = p.yfov;
+      c.aspectRatio = p.aspectRatio ?? null;
+      c.znear = p.znear;
+      c.zfar = p.zfar ?? null;
+    } else if (d.type === 'orthographic') {
+      const o = d.orthographic;
+      if (!o) throw new GltfError(`${where}: orthographic camera without "orthographic"`);
+      c.xmag = o.xmag;
+      c.ymag = o.ymag;
+      c.znear = o.znear;
+      c.zfar = o.zfar;
+    } else {
+      throw new GltfError(`${where}: type "${String(d.type)}" unknown`);
+    }
+    out.push(c);
+  }
+  return out;
+}
+
+/** The inverse of a 3×4 row-major world matrix with its scale removed, as a column-major 4×4. */
+function viewOf(w: Float32Array): Float32Array {
+  const v = new Float32Array(16);
+  // Column j of the world rotation is the node's local axis j; its length is that axis' scale.
+  const len = [0, 1, 2].map((j) => Math.hypot(w[j]!, w[4 + j]!, w[8 + j]!) || 1);
+  const t = [w[3]!, w[7]!, w[11]!];
+  for (let r = 0; r < 3; r++) {
+    // View rotation row r = world rotation column r, normalised; column-major index c * 4 + r.
+    for (let c = 0; c < 3; c++) v[c * 4 + r] = w[c * 4 + r]! / len[r]!;
+    v[12 + r] = -(v[r]! * t[0]! + v[4 + r]! * t[1]! + v[8 + r]! * t[2]!);
+  }
+  v[15] = 1;
+  return v;
 }
 
 function sceneRoots(json: GltfJson, nodes: GltfNode[]): number[] {
@@ -732,8 +1249,21 @@ function sceneRoots(json: GltfJson, nodes: GltfNode[]): number[] {
 
 // ---------------------------------------------------------------- nodes and matrices
 
-function parseNodes(src: GltfJsonNode[], meshCount: number, skinCount: number): GltfNode[] {
+function parseNodes(
+  src: GltfJsonNode[],
+  meshCount: number,
+  skinCount: number,
+  cameraCount: number,
+  lightCount: number,
+): GltfNode[] {
   const nodes: GltfNode[] = src.map((n, i) => {
+    if (n.camera !== undefined && !(n.camera >= 0 && n.camera < cameraCount)) {
+      throw new GltfError(`node ${i} names camera ${n.camera}, which does not exist`);
+    }
+    const light = n.extensions?.KHR_lights_punctual?.light;
+    if (light !== undefined && !(light >= 0 && light < lightCount)) {
+      throw new GltfError(`node ${i} names light ${light}, which does not exist`);
+    }
     if (n.mesh !== undefined && (n.mesh < 0 || n.mesh >= meshCount)) {
       throw new GltfError(`node ${i} names mesh ${n.mesh}, which does not exist`);
     }
@@ -746,6 +1276,8 @@ function parseNodes(src: GltfJsonNode[], meshCount: number, skinCount: number): 
       children: [...(n.children ?? [])],
       mesh: n.mesh ?? null,
       skin: n.skin ?? null,
+      camera: n.camera ?? null,
+      light: light ?? null,
       translation: [0, 0, 0],
       rotation: [0, 0, 0, 1],
       scale: [1, 1, 1],
@@ -1156,6 +1688,10 @@ function parsePrimitive(ctx: Ctx, p: GltfJsonPrimitive, where: string): GltfPrim
   let targets = readTargets(ctx, p.targets, vertexCount, where, ignoredTargetAttributes);
 
   let normal = optionalFloats(ctx, p.attributes.NORMAL, vertexCount, 3, `${where} NORMAL`);
+  // KHR_mesh_quantization: a normalised byte or short normal is only near unit length.
+  if (normal && ctx.json.accessors?.[p.attributes.NORMAL!]?.componentType !== 5126) {
+    renormalize(normal, 3);
+  }
   const hadNormals = normal !== null;
   let count = vertexCount;
   if (!normal) {
@@ -1227,7 +1763,14 @@ function parsePrimitive(ctx: Ctx, p: GltfJsonPrimitive, where: string): GltfPrim
   }
 
   let bounds: GltfBounds;
-  if (posAcc.min && posAcc.max && posAcc.min.length >= 3 && posAcc.max.length >= 3) {
+  // A normalized (KHR_mesh_quantization) accessor's min / max are raw integers: measure instead.
+  if (
+    !posAcc.normalized &&
+    posAcc.min &&
+    posAcc.max &&
+    posAcc.min.length >= 3 &&
+    posAcc.max.length >= 3
+  ) {
     bounds = boundsOf(
       [posAcc.min[0]!, posAcc.min[1]!, posAcc.min[2]!],
       [posAcc.max[0]!, posAcc.max[1]!, posAcc.max[2]!],
@@ -1248,6 +1791,15 @@ function parsePrimitive(ctx: Ctx, p: GltfJsonPrimitive, where: string): GltfPrim
   if (p.material !== undefined && !(ctx.json.materials ?? [])[p.material]) {
     throw new GltfError(`${where}: material ${p.material} does not exist`);
   }
+  const variants: GltfVariantMapping[] = [];
+  for (const m of p.extensions?.KHR_materials_variants?.mappings ?? []) {
+    if (!(ctx.json.materials ?? [])[m.material]) {
+      throw new GltfError(
+        `${where}: variant mapping names material ${m.material}, which does not exist`,
+      );
+    }
+    variants.push({ material: m.material, variants: [...(m.variants ?? [])] });
+  }
   return {
     vertexCount: count,
     position,
@@ -1264,6 +1816,7 @@ function parsePrimitive(ctx: Ctx, p: GltfJsonPrimitive, where: string): GltfPrim
     weights,
     targets,
     ignoredTargetAttributes,
+    variants,
   };
 }
 
@@ -1282,7 +1835,20 @@ function readTangents(
   }
   const t = readFloats(ctx, acc, 4, where);
   for (let i = 3; i < t.length; i += 4) t[i] = t[i]! < 0 ? -1 : 1;
+  if (acc.componentType !== 5126) renormalize(t, 4);
   return t;
+}
+
+/** Scale the xyz of each `stride`-float element to unit length (quantized normals, tangents). */
+function renormalize(v: Float32Array, stride: number): void {
+  for (let i = 0; i + 2 < v.length; i += stride) {
+    const l = Math.hypot(v[i]!, v[i + 1]!, v[i + 2]!);
+    if (l > 0) {
+      v[i] = v[i]! / l;
+      v[i + 1] = v[i + 1]! / l;
+      v[i + 2] = v[i + 2]! / l;
+    }
+  }
 }
 
 /** One vec3 per index, in index order (the unwelding that flat normals need). */
