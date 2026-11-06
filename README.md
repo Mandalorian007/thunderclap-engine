@@ -57,6 +57,15 @@ pnpm install
 pnpm example     # http://127.0.0.1:5173: a glowing square; click or press Space to flare it
 ```
 
+To start a game of your own, scaffold one from a template into its own folder and run it:
+
+```sh
+pnpm create-game ../my-game --template puzzle   # or first-person; `pnpm create-game --list` shows them
+cd ../my-game && pnpm install && pnpm dev
+```
+
+The new project is standalone: `@thunderclap/engine` is a dependency (`^<this version>`, or `--engine <spec>` for a `github:`, `link:` or `file:` spec, or a directory holding the engine for local work), `package.json` is renamed (`--name`, default the folder's name), a `README.md`, `.gitignore` and `biome.json` are written, and the template's `CLAUDE.md` names the engine concepts it uses. `--dry-run` prints the plan; a non-empty folder needs `--force`.
+
 This is the whole example (`examples/hello/main.ts`):
 
 ```ts
@@ -148,7 +157,7 @@ Import only from the public entry points listed under [Modules](#modules). Anyth
 | `@thunderclap/engine/testing` | A recording fake `GPUDevice` for unit tests (`src/render/fake-gpu.ts`) |
 | `@thunderclap/engine/geom` | Procedural geometry: `box`, `plane`, `sphere`, `icosphere`, `capsule`, `cylinder`, `torus`, heightfields (`heightAt`, `normalAt`, `raycastHeightfield`, `heightfieldGeometry`), `mergeGeometry`, `transformGeometry`; pure, a `Geometry` is a `MeshDesc` ([README](src/geom/README.md)) |
 
-**Templates.** Copyable games under `templates/`, each with a `CLAUDE.md` that names the engine concepts for an agent extending it; `pnpm check` runs each one's typecheck and tests.
+**Templates.** Copyable games under `templates/`, each with a `CLAUDE.md` that names the engine concepts for an agent extending it; `pnpm check` runs each one's typecheck and tests. `pnpm create-game <dir> --template <name>` (`scripts/create-game.mjs`) copies a template out of the repo into a standalone project on the published engine (see [Quick start](#quick-start)); `pnpm check` scaffolds one into a temp dir and typechecks it (`check:create-game`).
 
 - `templates/puzzle` (`@thunderclap/template-puzzle`): a 2D puzzle game: `createGame`, one scene, pure `rules/` with tests, a versioned save with a migration and a layout spec placing a HUD on every form factor. Run `pnpm template:puzzle` (`check:template-puzzle`).
 - `templates/first-person` (`@thunderclap/template-first-person`): a first-person 3D game in client mode (`sim: false`, no save): `Look` for mouse, touch zones, sticks and keys, Worker-meshed chunks with bounds and a texture array, a sun with a shadow map and fog, world-space snow, world-anchored landmark labels, pointer hits and a pure `world/` with tests. Run `pnpm template:first-person` (`check:template-first-person`).
@@ -182,7 +191,7 @@ renderer.endFrame()
 ## Testing
 
 ```sh
-pnpm check       # typecheck + Biome lint + import boundaries + README coverage (check:docs) + Vitest unit tests (1109 tests in 94 files) + the host-electron and template checks
+pnpm check       # typecheck + Biome lint + import boundaries + README coverage (check:docs) + Vitest unit tests (1056 tests in 85 files) + the host-electron, template and create-game checks
 pnpm test:e2e    # Playwright e2e against the harness pages, on a device matrix
 pnpm harness     # serve the harness pages yourself
 ```
