@@ -256,3 +256,118 @@ describe('loadGltf on the fake GPU', () => {
     expect(scene2.textures).toHaveLength(1);
   });
 });
+
+/**
+ * Two meshes: mesh 0 is a triangle with two morph targets (0: lift z by 1 with a normal tilt;
+ * 1: stretch vertex 1 by 2 in x, positions only) and default weights `[0, 0.5]`; mesh 1 is the
+ * same triangle without targets. Two nodes draw mesh 0, one draws mesh 1.
+ */
+function morphDoc() {
+  const tri = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+  const nrm = new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]);
+  const t0p = new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]);
+  const t0n = new Float32Array([1, 0, 0, 1, 0, 0, 1, 0, 0]);
+  const t1p = new Float32Array([0, 0, 0, 2, 0, 0, 0, 0, 0]);
+  const parts = [tri, nrm, t0p, t0n, t1p];
+  const bin = new Uint8Array(parts.length * 36);
+  const views: GltfJson['bufferViews'] = [];
+  parts.forEach((p, i) => {
+    bin.set(new Uint8Array(p.buffer), i * 36);
+    views.push({ buffer: 0, byteOffset: i * 36, byteLength: 36 });
+  });
+  const vec3 = (bufferView: number) => ({
+    bufferView,
+    componentType: 5126 as const,
+    count: 3,
+    type: 'VEC3' as const,
+  });
+  const json: GltfJson = {
+    asset: { version: '2.0' },
+    buffers: [{ byteLength: bin.byteLength }],
+    bufferViews: views,
+    accessors: [vec3(0), vec3(1), vec3(2), vec3(3), vec3(4)],
+    meshes: [
+      {
+        primitives: [
+          {
+            attributes: { POSITION: 0, NORMAL: 1 },
+            targets: [{ POSITION: 2, NORMAL: 3 }, { POSITION: 4 }],
+          },
+        ],
+        weights: [0, 0.5],
+      },
+      { primitives: [{ attributes: { POSITION: 0, NORMAL: 1 } }] },
+    ],
+    nodes: [{ mesh: 0 }, { mesh: 0, translation: [3, 0, 0] }, { mesh: 1 }],
+    scenes: [{ nodes: [0, 1, 2] }],
+  };
+  return parseGltf({ json, buffers: [bin.buffer] });
+}
+
+describe('loadGltf morph targets on the fake GPU', () => {
+  it('builds one morph per mesh with targets, shared by its nodes, at the file weights', async () => {
+    const fake = createFakeDevice();
+    const r = new Renderer(fakeRendererGpu(fake));
+    const scene = await loadGltf(r, morphDoc(), { decodeImage });
+    expect(scene.morphs).toHaveLength(1);
+    const m = scene.morph(0)!;
+    expect(m).not.toBeNull();
+    expect(scene.morph(1)).toBe(m);
+    expect(scene.morph(2)).toBeNull();
+    expect(scene.morph(7)).toBeNull();
+    expect(m.mesh).toBe(0);
+    expect(m.targetCount).toBe(2);
+    expect([...m.weights]).toEqual([0, 0.5]);
+    // One blender per primitive of the mesh, all over the shared weights; none elsewhere.
+    expect(m.blenders).toHaveLength(1);
+    expect(m.blenders[0]!.weights).toBe(m.weights);
+    expect(m.blenders[0]!.vertexCount).toBe(3);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('apply blends into a second buffer that draw uploads once, recomputing bounds', async () => {
+    const fake = createFakeDevice();
+    const r = new Renderer(fakeRendererGpu(fake));
+    const scene = await loadGltf(r, morphDoc(), { decodeImage });
+    const m = scene.morph(0)!;
+    const mesh = scene.meshes[0]!;
+    const writes = () => fake.writes.filter((w) => w.buffer.label === 'gltf:mesh0.0-vb');
+    expect(writes()).toHaveLength(1); // the base upload
+    const baseRadius = mesh.bounds.radius;
+
+    // No apply: draw uploads nothing new.
+    let f = r.beginFrame(0, 0);
+    scene.draw(f);
+    r.endFrame();
+    expect(writes()).toHaveLength(1);
+    expect(r.stats.instances).toBe(3);
+
+    // The first apply writes (the file's weights: target 1 at 0.5 moves vertex 1 to x = 2).
+    expect(m.apply()).toBe(true);
+    expect(m.apply()).toBe(false);
+    f = r.beginFrame(1, 0);
+    scene.draw(f);
+    r.endFrame();
+    expect(writes()).toHaveLength(2);
+    expect(writes()[1]!.bytes).toBe(3 * 48);
+    // Bounds followed the upload: the triangle now reaches x = 2.
+    expect(mesh.bounds.radius).toBeGreaterThan(baseRadius);
+    expect(mesh.bounds.center[0]).toBeCloseTo(1, 6);
+
+    // Drawing again without a change uploads nothing; a changed weight uploads once more.
+    f = r.beginFrame(2, 0);
+    scene.draw(f);
+    r.endFrame();
+    expect(writes()).toHaveLength(2);
+    m.weights[0] = 1;
+    expect(m.apply()).toBe(true);
+    f = r.beginFrame(3, 0);
+    scene.draw(f);
+    r.endFrame();
+    expect(writes()).toHaveLength(3);
+    expect(mesh.bounds.center[2]).toBeCloseTo(1, 6);
+    // The untargeted mesh never re-uploads.
+    expect(fake.writes.filter((w) => w.buffer.label === 'gltf:mesh1.0-vb')).toHaveLength(1);
+    expect(fake.errors).toEqual([]);
+  });
+});

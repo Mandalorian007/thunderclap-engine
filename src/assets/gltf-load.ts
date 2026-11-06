@@ -4,10 +4,22 @@
  * material, and a `GltfScene` whose `draw(frame)` pushes one instance per (node, primitive)
  * with no allocation. Images decode through `createImageBitmap` (or `opts.decodeImage`);
  * external URIs come from `opts.resources`, fetched by the game. The engine fetches nothing.
+ *
+ * Morph targets: a mesh with targets keeps its primitives' base vertex buffers on the CPU and
+ * blends them through `anim`'s `createMorphBlender` into a second buffer `draw` uploads with
+ * `Mesh.update` when `scene.morph(node).apply()` reported a change. Meshes without targets keep
+ * nothing on the CPU.
  */
+import { createMorphBlender, type MorphBlender } from '../anim/morph';
 import type { Frame, InstanceParams } from '../render/frame';
 import type { Material } from '../render/material';
-import { Mesh, VERTEX_LAYOUT_3D, VERTEX3D_FLOATS, type VertexLayout } from '../render/mesh';
+import {
+  Mesh,
+  type MeshUpdate,
+  VERTEX_LAYOUT_3D,
+  VERTEX3D_FLOATS,
+  type VertexLayout,
+} from '../render/mesh';
 import { generateMipmaps } from '../render/mipmap';
 import type { Renderer } from '../render/renderer';
 import type { Texture } from '../render/texture';
@@ -70,6 +82,32 @@ export interface GltfSceneNode {
 }
 
 /**
+ * The morph state of one glTF mesh (shared by every node drawing it): one `weights` array for
+ * all its primitives, blended by one `MorphBlender` per primitive. Write `weights` (by hand or
+ * with `anim`'s `sampleWeights`), call `apply()`; the scene uploads changed primitives on its
+ * next `draw`.
+ */
+export interface GltfMorph {
+  /** Index into `GltfDocument.meshes`. */
+  readonly mesh: number;
+  /** One weight per target, starting at the file's `mesh.weights` (or zeros). */
+  readonly weights: Float32Array;
+  readonly targetCount: number;
+  /** One per primitive of the mesh, all reading `weights`. */
+  readonly blenders: readonly MorphBlender[];
+  /** Blend every primitive; true when any vertex buffer changed (and so will be uploaded). */
+  apply(): boolean;
+}
+
+/** One morphed primitive: its blender, the buffer it writes and the mesh that uploads it. */
+interface MorphEntry {
+  blender: MorphBlender;
+  mesh: Mesh;
+  update: MeshUpdate;
+  dirty: boolean;
+}
+
+/**
  * Built-in material: base colour texture × factor × vertex colour, lit by the engine's lighting
  * block (`engine_lambert`) plus a faint sky term from above. `params.x` > 0 is a `MASK` cutoff.
  */
@@ -107,18 +145,51 @@ export class GltfScene {
   readonly skins: readonly GltfSkin[];
   /** The document's clips, in the animation module's `AnimationClip` shape. */
   readonly animations: readonly GltfAnimation[];
+  /** One per mesh that carries morph targets, in mesh order. */
+  readonly morphs: readonly GltfMorph[] = [];
   /** Whether the default material or textures were created here (and so destroyed here). */
   private readonly ownsMaterials: boolean;
+  private readonly morphByMesh = new Map<number, GltfMorph>();
+  private readonly morphEntries: MorphEntry[] = [];
+  private readonly doc: GltfDocument;
 
   constructor(doc: GltfDocument, ownsMaterials: boolean) {
+    this.doc = doc;
     this.bounds = { center: [...doc.bounds.center], radius: doc.bounds.radius };
     this.skins = doc.skins;
     this.animations = doc.animations;
     this.ownsMaterials = ownsMaterials;
   }
 
-  /** Record every draw into `frame`. Allocation-free. */
+  /**
+   * The morph state of the mesh `nodeIndex` (into `GltfDocument.nodes`) draws, or null when the
+   * node has no mesh or the mesh no targets. Nodes sharing a mesh share the object.
+   */
+  morph(nodeIndex: number): GltfMorph | null {
+    const mi = this.doc.nodes[nodeIndex]?.mesh;
+    if (mi === null || mi === undefined) return null;
+    return this.morphByMesh.get(mi) ?? null;
+  }
+
+  /** @internal Register a mesh's morph state (the loader). */
+  addMorph(morph: GltfMorph, entries: MorphEntry[]): void {
+    (this.morphs as GltfMorph[]).push(morph);
+    this.morphByMesh.set(morph.mesh, morph);
+    for (const e of entries) this.morphEntries.push(e);
+  }
+
+  /**
+   * Upload every morphed primitive whose `apply()` changed it, then record every draw into
+   * `frame`. Allocation-free.
+   */
   draw(frame: Frame): void {
+    const entries = this.morphEntries;
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i]!;
+      if (!e.dirty) continue;
+      e.dirty = false;
+      e.mesh.update(e.update);
+    }
     const nodes = this.nodes;
     for (let i = 0; i < nodes.length; i++) {
       const n = nodes[i]!;
@@ -204,20 +275,63 @@ export async function loadGltf(
 
   // Meshes: one per primitive, interleaved into VERTEX_LAYOUT_3D (or the skinned layout when a
   // skinned primitive meets a renderer that has one).
-  const meshIndex: Mesh[][] = doc.meshes.map((gm, mi) =>
-    gm.primitives.map((p, pi) => {
+  const meshIndex: Mesh[][] = doc.meshes.map((gm, mi) => {
+    const targetCount = gm.primitives[0]?.targets.length ?? 0;
+    const weights = gm.weights ? new Float32Array(gm.weights) : new Float32Array(targetCount);
+    const entries: MorphEntry[] = [];
+    const meshes = gm.primitives.map((p, pi) => {
       const skinned = p.joints !== null && p.joints instanceof Uint8Array && SKINNED_LAYOUT;
+      const layout = skinned || VERTEX_LAYOUT_3D;
+      const vertices = skinned ? new Float32Array(interleaveSkinned(p).vertices) : interleave3d(p);
       const mesh = new Mesh(renderer.device, {
         label: `${label}:mesh${mi}.${pi}`,
-        layout: skinned || VERTEX_LAYOUT_3D,
-        vertices: skinned ? new Float32Array(interleaveSkinned(p).vertices) : interleave3d(p),
+        layout,
+        vertices,
         indices: p.indices,
         bounds: { center: [...p.bounds.center], radius: p.bounds.radius },
       });
       scene.meshes.push(mesh);
+      if (targetCount > 0) {
+        // Keep the base on the CPU only here; the blender writes into a second buffer.
+        const blender = createMorphBlender(
+          vertices,
+          p.targets,
+          { floats: layout.stride / 4 },
+          weights,
+        );
+        entries.push({
+          blender,
+          mesh,
+          update: { vertices: new Float32Array(vertices.length) },
+          dirty: false,
+        });
+      }
       return mesh;
-    }),
-  );
+    });
+    if (targetCount > 0) {
+      scene.addMorph(
+        {
+          mesh: mi,
+          weights,
+          targetCount,
+          blenders: entries.map((e) => e.blender),
+          apply(): boolean {
+            let any = false;
+            for (let i = 0; i < entries.length; i++) {
+              const e = entries[i]!;
+              if (e.blender.apply(e.update.vertices as Float32Array)) {
+                e.dirty = true;
+                any = true;
+              }
+            }
+            return any;
+          },
+        },
+        entries,
+      );
+    }
+    return meshes;
+  });
 
   // Transforms: one per node, parented like the file.
   for (const n of doc.nodes) {
