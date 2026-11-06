@@ -38,20 +38,35 @@ export {
   padButtonLabel,
 } from './glyphs';
 export {
+  createGyroSource,
+  type GyroEnv,
+  type GyroMotionEvent,
+  type GyroPermission,
+  type GyroSource,
+  type GyroSourceOptions,
+} from './gyro';
+export {
   type ActionSource,
   type AttachOptions,
+  type ContextOptions,
+  type ContextPass,
   DEFAULT_DOUBLE_TAP_MS,
   DEFAULT_HOLD_MS,
   Input,
   type InputEvents,
   type InputFeedHook,
   type InputOptions,
+  type InputPointerPhase,
   isButtonTarget,
   isInteractiveTarget,
   isTextEntryTarget,
   type ListenOptions,
   type RumbleOptions,
+  type StickOptions,
+  type StickShape,
+  shapeStick,
 } from './input';
+export type { LookTapListener, LookTapOptions } from './look';
 export {
   Look,
   type LookEvents,
@@ -124,6 +139,7 @@ export {
   transformRayInto,
   type Vec3,
 } from './rays';
+export type { InputPointerEntry } from './record';
 export {
   createInputPlayback,
   createInputRecorder,
