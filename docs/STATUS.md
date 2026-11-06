@@ -65,6 +65,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Scaffolder | ws/scaffold | `pnpm create-game <dir> --template puzzle|first-person` copies a template to a standalone project on the published engine | templates | ✅ green at `706e47f` (752+8 tests; e2e 629/92/1 E-017 fog); queued chain 2 after look-zoom |
 | 5 | Localisation | ws/i18n | `@thunderclap/engine/i18n`: ICU-style messages, plurals via Intl, fallback chain, runtime locale switch, `negotiateLocale` | — | 🔧 in progress |
 | 5 | Navigation | ws/nav | `@thunderclap/engine/nav`: grid field, A*, flow field, string pulling, path follower, local steering | — | 🔧 in progress |
+| 5 | Tweens | ws/tween | `@thunderclap/engine/tween`: easing table, property/value tweens, sequences, loops/yoyo, springs, `Tweens.update(dt)` | post easing | 🔧 in progress |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
