@@ -40,12 +40,14 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Shadow casters vs cull | ws/shadow-cull | shadow pass draws casters inside the sun box regardless of the view frustum; `stats.shadowDraws` | shadows, cull | ✅ green at `541d0d2` (565 tests; e2e 486/52); queued behind gltf-anim |
 | 5 | First-person template | ws/template-first-person | `templates/first-person`: `Look`, Worker chunks with bounds and a texture array, sun shadow + fog, weather, anchors, `CLAUDE.md`; `check:template-first-person`; timed | shadows, cull, look, anchors, particles-3d, texture-array | 🔧 in progress (on ws/shadows) |
 | 5 | Follow camera | ws/follow | `Follow` third-person controller on `Look` input: orbit, distance, shoulder, obstacle callback, `mode: 'first' \| 'third'`; harness `follow.html` | look | ✅ merged `a161eca` (624 tests; e2e 529/57; `Follow`, `FollowOptions`, `mode`) |
-| 5 | Animation | ws/anim | `@thunderclap/engine/anim`: clips (glTF sampler semantics), `Pose`, `Skeleton`, mixer with layers and crossfade, `poseToWorld`, `skinMatrices`; pure, tested | — | 🔧 in progress |
+| 5 | Animation | ws/anim | `@thunderclap/engine/anim`: clips (glTF sampler semantics), `Pose`, `Skeleton`, mixer with layers and crossfade, `poseToWorld`, `skinMatrices`; pure, tested | — | ✅ green at `01af0cf` (614 tests; e2e 477/52/1: `[phone-iphone] ui.spec menuNav` failed once, page untouched by the branch; integrator gate decides); queued |
 | 5 | Skinning | ws/skinning | `VERTEX_LAYOUT_SKINNED`, `SkinPalette`, skinning in `materialPrelude` and the shadow pass; harness `skin.html` | shadows, anim (layout) | 🔧 in progress (on ws/shadows) |
 | 5 | Standard PBR material | ws/pbr | `createStandardMaterial` (base, metal-rough, normal, occlusion, emissive; GGX) over the lights block, shadows and fog; `WGSL_PBR`; harness `pbr.html` | shadows | 🔧 in progress (on ws/shadows) |
 | 5 | Doc sweep 3 | ws/doc-sweep-3 | `check:docs` clean; ARCHITECTURE *Planned* lines current after wave 4 (XR lines all *Today*); root README page list and roadmap current; contradictions fixed and listed | wave 4 | 🔧 in progress |
 | 5 | Spot lights + masks | ws/spot-lights | `SpotLight`, `Lights.spots`, per-light `layers` masks, `engine_light_accum`; harness `lights.html` | shadows | 🔧 in progress |
 | 5 | Snapshot gate | ws/snap-gate | `pnpm snap` / `snap:check`: golden PNGs for 2D harness pages on `desktop-1280`, E-008 tolerance, in `test:e2e`; integrate brief step | — | 🔧 in progress |
+| 5 | Pick | ws/pick | `sphereTester`, `obbTester`, `meshTester` (bounds reject + Möller–Trumbore), `transformRayInto`; harness `pick.html` | rays, cull | 🔧 in progress |
+| 5 | Look zoom | ws/look-zoom | `Look.zoom` axis (wheel, pinch, pad opt-in); `Follow` reads it; harness follow drops its wheel binding | follow | 🔧 in progress |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
@@ -67,7 +69,8 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - Soft particles read last frame's depth (ws/particles-3d copies `SceneTarget.depth` before the particle pass). A renderer hook after the opaque pass would give same-frame depth.
 - `ARCHITECTURE.md` harness tree does not list `weather.html`; texture-array's CHANGELOG line says `BindingDesc.viewDimension` though `BindingDesc` is internal since prune (doc-sweep-3).
 - `anim` should export `Skeleton` with `inverseBind`/`joints` required so `GltfSkeleton` becomes a type alias (ws/gltf-anim wish); `gltf-load.ts` `SKINNED_LAYOUT` flips to `VERTEX_LAYOUT_SKINNED` (stride 56, 14 floats) once ws/skinning lands.
+- `[phone-iphone] e2e/ui.spec.ts menuNav: d-pad walks the menu` failed once on ws/anim (expected focus Second, got First): flake candidate for a ws/flake-ui brief if it recurs.
+- Root motion extraction and IK when a game names them; attachment sockets reading `poseToWorld` output (ws/anim wish; sockets brief after skinning lands).
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
-- `Look.zoom` axis (wheel, right-stick vertical) so `Follow` reads zoom directly (ws/follow wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
