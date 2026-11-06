@@ -6,7 +6,7 @@ Work in your own worktree, never in the main checkout (E-018: the PM commits doc
 
 ## Steps, per branch in the order the PM gives
 
-1. `git merge --no-ff --no-commit ws/<name>`, so the gates run before the commit even when nothing conflicts; commit with a message that names the workstream and ends with the attribution line the PM gives you.
+1. `git merge --no-ff --no-commit ws/<name>`, so the gates run before the commit even when nothing conflicts; commit with a message that names the workstream and ends with the project's attribution line: `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` (the user set this convention for the repo; it applies whatever model runs the session).
 2. Resolve conflicts by intent, not by side: read both branches' reports (the PM pastes them), keep every behaviour each branch added, and keep `ARCHITECTURE.md` and `CHANGELOG.md` entries from both. For a shared hot spot the PM names an order (for example camera first, then transforms) and the invariant to keep (the 2D path pixel-identical).
 3. Semantic conflicts (a type one branch deleted that another reads) are fixed in the merge commit with the smallest change that keeps both branches' intent; name each in the report.
 4. Run `pnpm install` if `package.json` or the lockfile changed, then `pnpm check` and `pnpm test:e2e`. Both must be green before you commit. If they are not and the fix is not small and obvious, stop and report; do not rewrite a branch's work.
