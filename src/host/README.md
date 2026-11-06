@@ -47,3 +47,10 @@ from it, `XrPointerSource` the controllers). `createGame({ xr })` swaps the loop
 `loop.setFrames(xrHost)` on `ctx.xr.enter()` and back on exit. `createSaveStore`, `listSlots`, `persistMixer` and `externalLink` take `host` and
 default to `defaultHost()`. Tests: `web.test.ts`, `web-links.test.ts`, `xr.test.ts`, and `e2e/host.spec.ts` on every row of
 the engine matrix.
+
+The installable web shell is a package, not a host kind: `createPwaHost()` in `@thunderclap/host-pwa`
+(packages/host-pwa) wraps `createWebHost()`, keeps `kind: 'web'`, and adds `host.pwa` (the deferred
+install prompt, `updateReady` / `applyUpdate()` for a waiting service worker, `offline`,
+`standalone`, `cacheStatus()`, `clearCache()`), every method a no-op where the browser lacks the
+feature. The manifest and service worker come from the package's vite plugin at build time; `storage`
+is the web host's, so saves never enter the cache. The engine never imports it.

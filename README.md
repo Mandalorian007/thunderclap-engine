@@ -166,7 +166,7 @@ Import only from the public entry points listed under [Modules](#modules). Anyth
 
 **Demos.** Playable showcases under `demos/` (E-021), each a page on the public API with no network assets, exposing `window.__demo` for its spec under `e2e/demos/`. `pnpm demo <name>` serves one (`pnpm demo` lists them); the harness server also serves them at `/demos/<name>/`, so the matrix runs them. [demos/README.md](demos/README.md) has the table.
 
-**Packages.** `packages/host-electron` (`@thunderclap/host-electron`) is the Electron desktop host: a sandboxed shell, a preload bridge and `createElectronHost()`. It lives in this repo as a pnpm workspace package and the engine never imports it. Run `pnpm desktop:dev`, `pnpm desktop:build` or `pnpm test:e2e:desktop` ([README](packages/host-electron/README.md)).
+**Packages.** `packages/host-electron` (`@thunderclap/host-electron`) is the Electron desktop host: a sandboxed shell, a preload bridge and `createElectronHost()`. It lives in this repo as a pnpm workspace package and the engine never imports it. Run `pnpm desktop:dev`, `pnpm desktop:build` or `pnpm test:e2e:desktop` ([README](packages/host-electron/README.md)). `packages/host-pwa` (`@thunderclap/host-pwa`) is the installable web shell: `createPwaHost()` adds install, update and offline state to the web host, and `pwaPlugin` (`@thunderclap/host-pwa/vite`) emits the manifest and service worker at build time, with no dependencies. Run `pnpm pwa:dev` or `pnpm pwa:build` ([README](packages/host-pwa/README.md)).
 
 [ARCHITECTURE.md](ARCHITECTURE.md) has the contracts for each one: what exists today and what is planned.
 
@@ -193,7 +193,7 @@ renderer.endFrame()
 ## Testing
 
 ```sh
-pnpm check       # typecheck + Biome lint + import boundaries + README coverage (check:docs) + Vitest unit tests (1453 tests in 114 files) + the host-electron, template and create-game checks
+pnpm check       # typecheck + Biome lint + import boundaries + README coverage (check:docs) + Vitest unit tests (1453 tests in 114 files) + the host-electron, host-pwa, template and create-game checks
 pnpm test:e2e    # Playwright e2e against the harness pages, on a device matrix
 pnpm harness     # serve the harness pages yourself
 ```
