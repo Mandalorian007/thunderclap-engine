@@ -1,0 +1,18 @@
+{
+  "out": "baked",
+  "nav": [
+    {
+      "name": "level",
+      "sources": ["level.json"],
+      "options": {
+        "cellSize": 0.3,
+        "cellHeight": 0.2,
+        "agentHeight": 1.8,
+        "agentRadius": 0.4,
+        "agentMaxClimb": 0.4,
+        "agentMaxSlope": 45
+      }
+    }
+  ],
+  "colliders": [{ "name": "level", "sources": ["level.json"], "options": { "leafSize": 4 } }]
+}

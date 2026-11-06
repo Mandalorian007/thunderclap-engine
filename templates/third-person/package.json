@@ -7,6 +7,7 @@
   "license": "MIT",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
+    "bake": "node node_modules/@thunderclap/engine/scripts/bake.mjs bake.config.json",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "test": "vitest run",

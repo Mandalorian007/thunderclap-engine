@@ -19,7 +19,7 @@ import {
   ALL_LAYERS,
   createHit,
   createSweepHit,
-  raycast,
+  raycastReg,
   SW,
   type SweepHit,
   sweepMove,
@@ -101,8 +101,6 @@ const P_DY = 16;
 const P_HALF = 17;
 const hit: SweepHit = createSweepHit();
 const lineHit = createHit();
-const lineOrigin = new Float64Array(3);
-const DOWN = new Float64Array([0, -1, 0]);
 
 /** Loads `shape` into `SH` and its centre into `P[3..5]`. */
 function copyShape(shape: Shape): void {
@@ -285,10 +283,10 @@ function tryStep(c: StaticCollider, mask: number, out: SlideResult): boolean {
  * steep slope (the slope itself below).
  */
 function lineGround(c: StaticCollider, mask: number, below: number): boolean {
-  lineOrigin[0] = P[3];
-  lineOrigin[1] = P[4];
-  lineOrigin[2] = P[5];
-  return raycast(c, lineOrigin, DOWN, P[P_HALF] + below, lineHit, mask) && lineHit.ny >= P[P_COS];
+  return (
+    raycastReg(c, P[3]!, P[4]!, P[5]!, 0, -1, 0, P[P_HALF]! + below, lineHit, mask) &&
+    lineHit.ny >= P[P_COS]!
+  );
 }
 
 /** Puts the working shape back where `tryStep` started; always false. */

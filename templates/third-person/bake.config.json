@@ -1,0 +1,6 @@
+{
+  "out": "public/baked",
+  "colliders": [
+    { "name": "stones", "sources": ["assets/stones.json"], "options": { "leafSize": 4 } }
+  ]
+}

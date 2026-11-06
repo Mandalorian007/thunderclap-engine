@@ -191,10 +191,45 @@ renderer.endFrame()
 
 `renderer.render(frame, camera, target)` runs the recorded draw lists through a camera into a target, any number of times per frame; `endFrame` calls it with `renderer.camera` when nothing did. With the default `ortho2d` camera draw order is submission order (then `order`) and there is no depth attachment; a camera with depth sorts by view-space depth and tests depth. Consecutive draws with the same material and mesh batch into one instanced call.
 
+## Baking
+
+A navmesh or a static collider is a pure function of its level geometry, so bake it once at build
+time and ship the bytes instead of rebuilding it on every boot:
+
+```sh
+pnpm bake bake.config.json             # writes <out>/<name>.navm, <out>/<name>.coll and bake-manifest.json
+pnpm bake bake.config.json --check     # exit 1 when any input changed since the last bake (CI)
+pnpm bake bake.config.json --watch     # rebake on change; --verbose prints sizes and times
+```
+
+`bake.config.json` (paths relative to the file; `out` defaults to `public/baked`):
+
+```json
+{
+  "out": "public/baked",
+  "nav": [{ "name": "level", "sources": ["assets/level.glb"], "options": { "cellSize": 0.3, "agentRadius": 0.4 } }],
+  "colliders": [{ "name": "level", "sources": ["assets/level.glb", "assets/props.json"], "options": { "leafSize": 4 } }]
+}
+```
+
+A source is a `.glb`, a `.gltf` (external buffers read from beside it) or a geometry JSON
+(`{ "positions": [x, y, z, …], "indices": [...], "transform"?: [12 floats, 3×4 row-major] }` or an
+array of those); every mesh of every scene node is placed by its world matrix. `options` are the
+`NavBakeOptions` (`nav`) or `StaticColliderOptions` (`geom`) the runtime takes. The manifest
+lists each entry's `sha256` over its sources' bytes and options, so `--check` in CI (`pnpm bake
+bake.config.json --check` after `pnpm install`) fails the build when someone edits a level without
+rebaking. A game loads the bytes with `fetch` or a `bytes` bundle entry and calls `importNavMesh`
+or `importCollider`; from a game's folder the script is
+`node node_modules/@thunderclap/engine/scripts/bake.mjs bake.config.json` (the third-person
+template's `pnpm bake`). The script runs the engine's TypeScript sources straight from
+`node_modules` through Node's own type stripping (`module.registerHooks`), so it needs no build
+step and no dependency; the output is byte-identical between runs. `pnpm check:bake` tests it
+against `scripts/fixtures/`.
+
 ## Testing
 
 ```sh
-pnpm check       # typecheck + Biome lint + import boundaries + README coverage (check:docs) + Vitest unit tests (1649 tests in 126 files) + the host-electron, host-capacitor, host-pwa, template and create-game checks
+pnpm check       # typecheck + Biome lint + import boundaries + README coverage (check:docs) + Vitest unit tests (1651 tests in 127 files) + the host-electron, host-capacitor, host-pwa, template and create-game checks
 pnpm test:e2e    # Playwright e2e against the harness pages, on a device matrix
 pnpm harness     # serve the harness pages yourself
 ```

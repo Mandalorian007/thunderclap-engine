@@ -14,10 +14,10 @@
 import type { Scene } from '@thunderclap/engine/core';
 import { type EmitParams, ParticleSystem } from '@thunderclap/engine/fx';
 import {
-  box,
+  createHit,
   heightfieldGeometry,
-  mergeGeometry,
-  transformGeometry,
+  raycastReg,
+  type StaticCollider,
 } from '@thunderclap/engine/geom';
 import {
   createStandardMaterial,
@@ -39,6 +39,7 @@ import type { GameCtx } from '../ctx';
 import { createEnemies, type Enemies, type Enemy } from '../enemies/enemies';
 import { createHud } from '../ui/hud';
 import { createGround, type Ground } from '../world/ground';
+import { createStoneCollider, loadStoneCollider, stoneGeometry } from '../world/stones';
 
 const FOV = (60 * Math.PI) / 180;
 const NEAR = 0.1;
@@ -69,6 +70,8 @@ export function createArenaScene(ctx: GameCtx): Scene<GameCtx, Frame> {
   let groundMat: Material;
   let stoneMesh: Mesh;
   let stoneMat: Material;
+  let stones: StaticCollider;
+  const sight = createHit();
   const identity = new Transform();
   let character: Character;
   let enemies: Enemies;
@@ -134,6 +137,11 @@ export function createArenaScene(ctx: GameCtx): Scene<GameCtx, Frame> {
       const d = Math.hypot(dx, dz);
       if (d > ATTACK_REACH) continue;
       if (Math.abs(angleDelta(c.yaw, Math.atan2(dx, -dz))) > ATTACK_HALF_ANGLE) continue;
+      // A stone between the two blocks the swing (the baked collider, or its runtime twin).
+      const x = c.position[0]!;
+      const y = c.position[1]! + 1;
+      const z = c.position[2]!;
+      if (raycastReg(stones, x, y, z, dx / d, 0, dz / d, d, sight)) continue;
       burst.x = e.position[0]!;
       burst.y = e.position[1]! + 1.0;
       burst.z = e.position[2]!;
@@ -166,22 +174,11 @@ export function createArenaScene(ctx: GameCtx): Scene<GameCtx, Frame> {
         metallic: 0,
         roughness: 0.95,
       });
-      stoneMesh = renderer.createMesh({
-        ...mergeGeometry(
-          ...ground.blocks.map((b) => {
-            const sx = b.max[0] - b.min[0];
-            const sy = b.max[1] - b.min[1];
-            const sz = b.max[2] - b.min[2];
-            const cx = (b.min[0] + b.max[0]) / 2;
-            const cz = (b.min[2] + b.max[2]) / 2;
-            const cy = b.min[1] + sy / 2;
-            return transformGeometry(
-              box({ size: [sx, sy, sz], color: [0.5, 0.49, 0.47, 1] }),
-              new Float32Array([1, 0, 0, cx, 0, 1, 0, cy, 0, 0, 1, cz]),
-            );
-          }),
-        ),
-        label: 'stones',
+      stoneMesh = renderer.createMesh({ ...stoneGeometry(ground), label: 'stones' });
+      // The runtime collider first, so the scene never waits; the baked one replaces it on arrival.
+      stones = createStoneCollider(ground);
+      loadStoneCollider(ground, 'baked/stones.coll').then((c) => {
+        stones = c;
       });
       stoneMat = createStandardMaterial(renderer, {
         label: 'stones',

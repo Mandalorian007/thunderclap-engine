@@ -27,6 +27,7 @@ export {
   overlap2,
   raycast,
   raycast2,
+  raycastReg,
   type SweepHit,
   sweep,
   sweep2,

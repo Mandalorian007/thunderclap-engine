@@ -9,6 +9,8 @@ export type {
   AtlasTextureOptions,
 } from './atlas';
 export { createAtlasTexture, extrudePixels, packAtlas } from './atlas';
+export type { BakeKind, BakeManifest, BakeManifestEntry } from './baked';
+export { BAKE_MANIFEST_VERSION, readBakeManifest } from './baked';
 export type {
   AssetReader,
   AudioDecoder,

@@ -16,6 +16,7 @@ a real model, replace the `buildCharacterGlb()` call in `character/character.ts`
 ## Commands
 
 - `pnpm dev`: Vite dev server at `http://127.0.0.1:5173` (from the repo root: `pnpm template:third-person`). WASD moves in the camera frame, Shift runs, Space or F attacks, a mouse drag orbits, the wheel zooms, 1 / 2 / 3 cycle the head, back and hand cosmetics (or the HUD buttons), R respawns. On a phone the left half is a move stick, the right half orbits, a pinch zooms and a tap attacks; on a pad the sticks move and orbit, A attacks, L3 runs, the shoulders zoom, X / Y / B cycle cosmetics.
+- `pnpm bake`: bakes `assets/stones.json` into `public/baked/stones.coll` through the engine's `scripts/bake.mjs` (`bake.config.json`; `pnpm bake --check` exits 1 when the input changed since the last bake). The folder is gitignored and optional: the scene builds the same collider at runtime when the file is missing. When the blocks in `world/ground.ts` change, regenerate the JSON from `stoneGeometryJson(createGround())` (`stones.test.ts` fails until the file matches) and bake again.
 - `pnpm typecheck`, `pnpm lint`, `pnpm test`: `tsc`, Biome (the repo's `biome.json`), Vitest. `pnpm check` runs all three; the repo root's `pnpm check` runs it too (`check:template-third-person`).
 - Tests are product tests only (`src/**/*.test.ts`): the rig generator (joint count, clip durations, weights that sum to 1), the cosmetics table, the controller over the heightfield and the enemy roaming rule. The engine verifies the platform (WebGPU, skinning, IK, input, layout) itself.
 
@@ -32,6 +33,8 @@ src/character/cosmetics.ts  pure: the cosmetics table: three slots × two geom-b
 src/character/character.ts  the runtime character: parse → skinned Mesh + Skeleton + clips, mixer, graph, root motion, IK, lookAt, sockets, palette
 src/enemies/enemies.ts      four capsules: a pure stepEnemy rule, meshes, name plates and health bars on ui.anchors
 src/world/ground.ts         pure: the heightfield (geom), the stones, groundHeight and resolveXZ
+src/world/stones.ts         the stones as geometry and as a static collider: stoneGeometry, stoneGeometryJson (the bake input), createStoneCollider, loadStoneCollider (baked file, else runtime)
+assets/stones.json          the bake input `pnpm bake` reads (bake.config.json → public/baked/stones.coll)
 src/scenes/arena.ts         the scene: lights, ground and stone meshes, the character, the enemies, the hit burst, the HUD
 src/ui/hud.ts               health meter, kill count, cosmetic buttons and the prompt (ui.layout)
 ```
@@ -85,5 +88,5 @@ A slot with more than two options: widen `options` from a pair to `readonly Cosm
 - **A real model**: fetch a glb into `createCharacter` instead of `buildCharacterGlb()`; keep the clip names, set `skeleton.names` from the file and map `J` to its joint indices by name (`doc.nodes[i].name`) rather than constants.
 - **Weapons that hit**: the attack arc is `ATTACK_REACH` / `ATTACK_HALF_ANGLE` in `character.ts` and `swing()` in the scene; a per-option reach is one field on `CosmeticOption`.
 - **Smarter enemies**: `stepEnemy` is the whole rule; `@thunderclap/engine/nav` gives a flow field or an A* path to replace the straight-line chase.
-- **Walls that block the camera**: pass `obstacle` to the `Follow` (a ray against `ground.blocks`) and the orbit pulls in instead of clipping.
+- **Walls that block the camera**: pass `obstacle` to the `Follow` (a `raycastReg` against the stone collider, as `swing()` does for line of sight) and the orbit pulls in instead of clipping.
 - **A server**: apply its state in `ctx.hooks.frame(dt)` or the scene's `update`, send `controller.position` / `yaw` and the graph state from there.
