@@ -1,3 +1,4 @@
+import { WGSL_DEPTH_VIEW } from './ao';
 import { WGSL_POST_UNIFORMS } from './settings';
 
 /** Bright-pass + 2× downsample into bloom mip 0. Karis-weighted to tame fireflies. */
@@ -139,6 +140,25 @@ ${WGSL_POST_UNIFORMS}
 // Depth passes (ws/post-depth); bound to a placeholder and ignored while P.ao.x / P.dof.x are 0.
 @group(0) @binding(6) var aoTex: texture_2d<f32>;
 @group(0) @binding(7) var dofTex: texture_2d<f32>;
+// Finishing (ws/post-2): the outline mask (placeholder while P.outline.x is 0) and the 3D LUT
+// (a 1×1×1 placeholder while P.lut.x is 0).
+@group(0) @binding(8) var outlineTex: texture_2d<f32>;
+@group(0) @binding(9) var lutTex: texture_3d<f32>;
+
+/** The scene term: colour × AO, blended toward the DoF result by CoC, plus emissive. */
+fn scene_at(uv: vec2f) -> vec3f {
+  var scene = textureSampleLevel(colorTex, samp, uv, 0.0).rgb;
+  if (P.ao.x > 0.5) {
+    scene *= textureSampleLevel(aoTex, samp, uv, 0.0).r;
+  }
+  if (P.dof.x > 0.5) {
+    // Alpha holds the signed CoC in uv of the width; blend in the blur from half a scene px up.
+    let blur = textureSampleLevel(dofTex, samp, uv, 0.0);
+    let px = abs(blur.a) / P.frame.z;
+    scene = mix(scene, blur.rgb, smoothstep(0.5, 2.0, px));
+  }
+  return scene + textureSampleLevel(emissiveTex, samp, uv, 0.0).rgb;
+}
 
 fn aces(x: vec3f) -> vec3f {
   let a = 2.51;
@@ -159,17 +179,29 @@ fn to_srgb(c: vec3f) -> vec3f {
   let uv = in.uv;
   let aspect = P.frame.y;
   let time = P.frame.x;
-  var scene = textureSampleLevel(colorTex, samp, uv, 0.0).rgb;
-  if (P.ao.x > 0.5) {
-    scene *= textureSampleLevel(aoTex, samp, uv, 0.0).r;
+  let texel = vec2f(P.frame.z, P.frame.w);
+  var c: vec3f;
+  if (P.aberration.x > 0.0) {
+    // Red and blue sampled either side of green along the radius, in scene px.
+    let d = (uv - 0.5) * vec2f(aspect, 1.0);
+    let r = length(d) / length(vec2f(aspect, 1.0) * 0.5);
+    let dir = d / max(length(d), 1e-4);
+    let amount = P.aberration.x * select(1.0, r * r, P.aberration.y > 0.5);
+    let o = dir * amount * texel;
+    c = vec3f(scene_at(uv + o).r, scene_at(uv).g, scene_at(uv - o).b);
+  } else {
+    c = scene_at(uv);
   }
-  if (P.dof.x > 0.5) {
-    // Alpha holds the signed CoC in uv of the width; blend in the blur from half a scene px up.
-    let blur = textureSampleLevel(dofTex, samp, uv, 0.0);
-    let px = abs(blur.a) / P.frame.z;
-    scene = mix(scene, blur.rgb, smoothstep(0.5, 2.0, px));
+  if (P.sharpen.x > 0.0) {
+    // Unsharp mask: the pixel minus its 4-neighbour mean, clamped so dark rims never go negative.
+    let blur = (scene_at(uv + vec2f(texel.x, 0.0)) + scene_at(uv - vec2f(texel.x, 0.0))
+      + scene_at(uv + vec2f(0.0, texel.y)) + scene_at(uv - vec2f(0.0, texel.y))) * 0.25;
+    c = max(c + (c - blur) * P.sharpen.x, vec3f(0.0));
   }
-  var c = scene + textureSampleLevel(emissiveTex, samp, uv, 0.0).rgb;
+  if (P.outline.x > 0.5) {
+    let edge = textureSampleLevel(outlineTex, samp, uv, 0.0).r;
+    c = mix(c, P.outlineColor.rgb, clamp(edge * P.outlineColor.w, 0.0, 1.0));
+  }
 
   var bloom = vec3f(0.0);
   if (P.enables.x > 0.5) {
@@ -221,6 +253,18 @@ fn to_srgb(c: vec3f) -> vec3f {
     c = clamp(c, vec3f(0.0), vec3f(1.0));
   }
 
+  if (P.lut.x > 0.5) {
+    // Texel centres: the LUT's first and last texels sit half a texel in from 0 and 1.
+    let looked = textureSampleLevel(lutTex, samp, c * P.lut.y + P.lut.w, 0.0).rgb;
+    c = clamp(mix(c, looked, P.lut.z), vec3f(0.0), vec3f(1.0));
+  }
+  if (P.grain.x > 0.0) {
+    let cell = floor(in.pos.xy / P.grain.y);
+    let n = engine_hash21(cell + vec2f(P.grain.w * 61.0, P.grain.w * 29.0)) - 0.5;
+    let response = 1.0 - P.grain.z * engine_luma(c);
+    c = clamp(c + n * P.grain.x * response, vec3f(0.0), vec3f(1.0));
+  }
+
   if (P.enables.w > 0.5) {
     let d = length((uv - 0.5) * vec2f(aspect, 1.0)) / length(vec2f(aspect, 1.0) * 0.5);
     let v = smoothstep(P.vignette.y, P.vignette.y + P.vignette.z, d) * P.vignette.x;
@@ -232,5 +276,127 @@ fn to_srgb(c: vec3f) -> vec3f {
     outc += (engine_hash21(in.pos.xy) - 0.5) / 255.0;
   }
   return vec4f(outc, 1.0);
+}
+`;
+
+/**
+ * FXAA 3.11, console preset (ws/post-2): one full-res pass over the composite's display-encoded
+ * output. Luma from the four texel-corner taps and the centre; the blend direction from their
+ * gradient, two taps half a px out and two more up to two px out along it, the longer pair
+ * dropped when its luma leaves the local range. `P.fxaa.y` (subpixel) scales the blend;
+ * `P.fxaa.z` (edgeThreshold) is the relative contrast below which the pixel is left alone.
+ */
+export const FXAA_WGSL = /* wgsl */ `
+${WGSL_POST_UNIFORMS}
+@group(0) @binding(1) var samp: sampler;
+@group(0) @binding(2) var src: texture_2d<f32>;
+
+const EDGE_SHARPNESS: f32 = 8.0;
+const EDGE_THRESHOLD_MIN: f32 = 0.05;
+
+fn tap(uv: vec2f) -> vec3f { return textureSampleLevel(src, samp, uv, 0.0).rgb; }
+
+@fragment fn fs_main(in: FullscreenIn) -> @location(0) vec4f {
+  let t = 1.0 / vec2f(textureDimensions(src));
+  let uv = in.uv;
+  let rgbM = tap(uv);
+  let lumaM = engine_luma(rgbM);
+  let lumaNw = engine_luma(tap(uv + vec2f(-0.5, -0.5) * t)) + 1.0 / 384.0;
+  let lumaNe = engine_luma(tap(uv + vec2f(0.5, -0.5) * t));
+  let lumaSw = engine_luma(tap(uv + vec2f(-0.5, 0.5) * t));
+  let lumaSe = engine_luma(tap(uv + vec2f(0.5, 0.5) * t));
+  let lumaMax = max(max(lumaNw, lumaNe), max(lumaSw, lumaSe));
+  let lumaMin = min(min(lumaNw, lumaNe), min(lumaSw, lumaSe));
+  let range = max(lumaMax, lumaM) - min(lumaMin, lumaM);
+  if (range < max(EDGE_THRESHOLD_MIN, lumaMax * P.fxaa.z)) {
+    return vec4f(rgbM, 1.0);
+  }
+  var dir = vec2f(-((lumaNw + lumaNe) - (lumaSw + lumaSe)), (lumaNw + lumaSw) - (lumaNe + lumaSe));
+  let dir1 = dir / max(length(dir), 1e-5);
+  let rgbN1 = tap(uv - dir1 * 0.5 * t);
+  let rgbP1 = tap(uv + dir1 * 0.5 * t);
+  let dirAbsMinTimesC = min(abs(dir1.x), abs(dir1.y)) * EDGE_SHARPNESS;
+  let dir2 = clamp(dir1 / max(dirAbsMinTimesC, 1e-5), vec2f(-2.0), vec2f(2.0));
+  let rgbN2 = tap(uv - dir2 * 2.0 * t);
+  let rgbP2 = tap(uv + dir2 * 2.0 * t);
+  let rgbA = (rgbN1 + rgbP1) * 0.5;
+  let rgbB = (rgbN2 + rgbP2) * 0.25 + rgbA * 0.5;
+  let lumaB = engine_luma(rgbB);
+  let outside = lumaB < lumaMin || lumaB > lumaMax;
+  let aa = select(rgbB, rgbA, outside);
+  return vec4f(mix(rgbM, aa, clamp(P.fxaa.y, 0.0, 1.0)), 1.0);
+}
+`;
+
+/**
+ * Outline mask (ws/post-2): a Roberts cross over the linear depth and the normals from depth,
+ * at the scene size, written as an edge strength 0..1 (r8unorm) the composite mixes toward
+ * `outline.color` before fog. The cross is sampled `P.outline.y` scene px from the pixel.
+ * Sky (depth 1) counts as very far, so silhouettes against it are edges.
+ */
+export const OUTLINE_WGSL = /* wgsl */ `
+${WGSL_POST_UNIFORMS}
+@group(0) @binding(1) var nearest: sampler;
+@group(0) @binding(2) var linSamp: sampler;
+@group(0) @binding(3) var depthTex: texture_depth_2d;
+${WGSL_DEPTH_VIEW}
+
+const SKY_Z: f32 = 1.0e6;
+
+/** View position of the texel under \`uv\` (w = raw depth). */
+fn fetch(uv: vec2f, dim: vec2f) -> vec4f {
+  let tuv = texel_uv(uv, dim);
+  let d = textureSampleLevel(depthTex, nearest, tuv, 0u);
+  return vec4f(view_pos(tuv, d), d);
+}
+
+fn zof(s: vec4f) -> f32 {
+  return select(-s.z, SKY_Z, s.w >= 1.0);
+}
+
+/** Normal at the texel under \`uv\` from its +x and +y neighbours (a zero vector in the sky). */
+fn normal_at(uv: vec2f, dim: vec2f, t: vec2f) -> vec3f {
+  let p = fetch(uv, dim);
+  let px = fetch(uv + vec2f(t.x, 0.0), dim);
+  let py = fetch(uv + vec2f(0.0, t.y), dim);
+  if (p.w >= 1.0 || px.w >= 1.0 || py.w >= 1.0) {
+    return vec3f(0.0);
+  }
+  return normalize(cross(px.xyz - p.xyz, py.xyz - p.xyz));
+}
+
+@fragment fn fs_main(in: FullscreenIn) -> @location(0) vec4f {
+  let dim = vec2f(textureDimensions(depthTex));
+  let uv = texel_uv(in.uv, dim);
+  let t = vec2f(max(P.outline.y, 0.5)) / dim;
+  let a = fetch(uv - t, dim);
+  let b = fetch(uv + t, dim);
+  let c = fetch(uv + vec2f(t.x, -t.y), dim);
+  let d = fetch(uv + vec2f(-t.x, t.y), dim);
+  let za = zof(a);
+  let zb = zof(b);
+  let zc = zof(c);
+  let zd = zof(d);
+  let zmin = min(min(za, zb), min(zc, zd));
+  if (zmin >= SKY_Z) {
+    return vec4f(0.0, 0.0, 0.0, 1.0);
+  }
+  // Depth: the cross's two differences relative to the nearest tap (so far edges count less).
+  let dz = length(vec2f(za - zb, zc - zd)) / max(zmin, 1e-3);
+  let th = max(P.outline.z, 1e-4);
+  let edgeDepth = smoothstep(th, th * 2.0, dz);
+  // Normals: the cross over the four taps' normals, in 1 - cos.
+  let one = 1.0 / dim;
+  let na = normal_at(uv - t, dim, one);
+  let nb = normal_at(uv + t, dim, one);
+  let nc = normal_at(uv + vec2f(t.x, -t.y), dim, one);
+  let nd = normal_at(uv + vec2f(-t.x, t.y), dim, one);
+  var dn = 0.0;
+  if (dot(na, na) > 0.5 && dot(nb, nb) > 0.5) { dn = max(dn, 1.0 - dot(na, nb)); }
+  if (dot(nc, nc) > 0.5 && dot(nd, nd) > 0.5) { dn = max(dn, 1.0 - dot(nc, nd)); }
+  let tn = max(P.outline.w, 1e-4);
+  let edgeNormal = smoothstep(tn, tn * 1.5, dn);
+  let edge = max(edgeDepth, edgeNormal);
+  return vec4f(edge, edge, edge, 1.0);
 }
 `;
