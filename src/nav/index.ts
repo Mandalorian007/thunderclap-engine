@@ -1,16 +1,17 @@
 /**
  * `@thunderclap/engine/nav`: grid navigation on the XZ plane. A `NavGrid` of walkable cells with
- * costs, A* (`findPath`) and string pulling (`smoothPath`) into a reusable `NavPath`, a flow
- * field one build serves every agent with, a path follower and local steering. Pure CPU, no
- * imports from other engine modules, no allocation per query after warm-up.
+ * costs (and an edge-cost hook, 4 or 8 neighbours), A* (`findPath`) and string pulling
+ * (`smoothPath`) into a reusable `NavPath`, a flow field one build serves every agent with,
+ * budget-bounded reachability with parents (`reachable`), a path follower and local steering.
+ * Pure CPU, no imports from other engine modules, no allocation per query after warm-up.
  */
 export type { FindPathOptions } from './astar';
 export { findPath, smoothPath } from './astar';
 export type { Crowd, CrowdAgent, CrowdAgentOptions, CrowdOptions } from './crowd';
 export { createCrowd } from './crowd';
-export type { FlowField } from './flow';
+export type { FlowField, FlowFieldOptions } from './flow';
 export { createFlowField } from './flow';
-export type { Cell, NavGrid, NavGridOptions, NavPoint } from './grid';
+export type { Cell, EdgeCost, NavGrid, NavGridOptions, NavPoint } from './grid';
 export { createNavGrid, hasLineOfWalkable } from './grid';
 export type { OffMeshLink, OffMeshLinkOptions } from './mesh/links';
 export { addOffMeshLink, getOffMeshLink, removeOffMeshLink } from './mesh/links';
@@ -37,5 +38,7 @@ export {
   pathPoint,
   reservePath,
 } from './path';
+export type { Reach } from './reach';
+export { createReach, reachable } from './reach';
 export type { Disc } from './steer';
 export { arrive, avoidDisc, separate, steer } from './steer';
