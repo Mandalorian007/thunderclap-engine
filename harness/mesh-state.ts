@@ -12,6 +12,12 @@ export interface MeshProbe {
 export interface HarnessMeshState {
   /** True once boot resolved (whether or not WebGPU came up). */
   ready: boolean;
+  /**
+   * True when the page was opened with `?still`: time-driven motion (the circling lamp, the
+   * spinning side blocks) is parked, with the lamp fixed behind the far block, away from the
+   * sampled ground (E-017). Off by default; the visible page is unchanged without the flag.
+   */
+  still: boolean;
   /** 'ok', a `GpuFailureReason` or an error message. */
   gpu: string;
   /** Frames presented. */

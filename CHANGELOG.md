@@ -10,6 +10,9 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 - `packages/host-electron` (`@thunderclap/host-electron`) joins this repo, and the repo becomes a pnpm workspace (`pnpm-workspace.yaml`, `packages/*`) with the engine at the root. New root scripts: `desktop:dev`, `desktop:build`, `test:e2e:desktop`, `check:host-electron`; `pnpm check` runs the last one.
 - e2e (ws/flake-client): `e2e/client.spec.ts` "the full mode reads storage through the host" polls `updates > 0` instead of reading it once, since in fixed-step mode frames can render before the first update.
 
+### Fixed
+- e2e under load (ws/flake-input, E-017): `mesh.spec` samples the fog with the page opened on `?still` (`harness/mesh.html` parks the circling lamp behind the far block, away from the sampled ground, and stops the side blocks spinning; `HarnessMeshState.still`), the drag and `look.spec` touch-drag assertions poll yaw and pitch with floors that hold when slow frames coalesce pointer events, and `ui.spec` menuNav polls each focus step; no engine change.
+
 ### Docs
 - Doc sweep (ws/doc-sweep): `src/fx/README.md` and `src/platform/README.md` are new; the analytics, audio, host, post, save and ui READMEs name every export of their module; the root README's module table, harness page list, frame description and roadmap match the code; ARCHITECTURE *Surface*, *Host*, *Layout*, *Analytics* and the module paragraph drop landed *Planned* lines. New script `pnpm check:docs` (`scripts/check-docs.mjs`, not part of `pnpm check`) lists exported names a module README does not mention.
 - Doc sweep 2 (ws/doc-sweep-2): `src/core/README.md` is new and the core, input, render and testing exports are all named in their READMEs; ARCHITECTURE principle 4 now scopes out only XR, and landed *Planned* lines (fitFreeRect, beacon sink, frame-loop inputs) are *Today*. `pnpm check` now runs `check:docs` after `check:boundaries`.

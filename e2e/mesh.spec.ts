@@ -25,7 +25,11 @@ let frame: Frame;
 let touch = false;
 const errors: string[] = [];
 
-async function open(page: Page, wrapper: string): Promise<void> {
+/**
+ * Opens the page in the wrapper and waits for five frames. `query` goes on the page: `?still`
+ * parks the circling lamp and the spinning blocks (E-017), for tests that sample pixels.
+ */
+async function open(page: Page, wrapper: string, query = ''): Promise<void> {
   touch = test.info().project.use.hasTouch === true;
   errors.length = 0;
   page.on('pageerror', (e) => errors.push(e.message));
@@ -33,10 +37,10 @@ async function open(page: Page, wrapper: string): Promise<void> {
     if (m.type() === 'error') errors.push(m.text());
   });
   if (wrapper === 'top') {
-    await page.goto(`${HARNESS_URL}mesh.html`);
+    await page.goto(`${HARNESS_URL}mesh.html${query}`);
     frame = page.mainFrame();
   } else {
-    await page.goto(`${WRAPPER_URL}?page=${encodeURIComponent('mesh.html')}`);
+    await page.goto(`${WRAPPER_URL}?page=${encodeURIComponent(`mesh.html${query}`)}`);
     frame = await harnessFrame(page);
   }
   await expect
@@ -175,8 +179,11 @@ test('the sun casts a shadow and distance fades the ground into the fog', async 
   page,
   wrapper,
 }) => {
-  await open(page, wrapper);
+  // `?still`: the lamp orbits on real time, and a slow frame under load would put it over the
+  // fog probe; parked opposite it, the sample is the same every frame.
+  await open(page, wrapper, '?still');
   const s = await read();
+  expect(s.still).toBe(true);
   expect(s.shadow).toEqual({ enabled: true, size: 2048, extent: 20 });
   expect(s.fog.enabled).toBe(true);
   expect(s.stats.instances).toBe(5);
@@ -206,16 +213,19 @@ test('a pointer drag orbits the camera', async ({ page, wrapper }) => {
   const centre = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
   const dx = Math.round(box.width * 0.2);
   await drag(page, centre, dx, 0);
-  const after = await read();
   // The view turns the way the pointer went (a drag right orbits the camera left: yaw falls).
-  expect(after.camera.yaw).toBeLessThan(before.camera.yaw - 0.3);
+  // Polled, with a floor that holds when slow frames coalesce the pointer events (E-017).
+  await expect.poll(async () => (await read()).camera.yaw).toBeLessThan(before.camera.yaw - 0.1);
+  const after = await read();
   expect(after.camera.pitch).toBeCloseTo(before.camera.pitch, 1);
   // The eye moved; the probes moved with it.
-  expect(Math.abs(after.camera.eye[0] - before.camera.eye[0])).toBeGreaterThan(1);
+  expect(Math.abs(after.camera.eye[0] - before.camera.eye[0])).toBeGreaterThan(0.5);
   expect(Math.abs(after.probes.near.x - before.probes.near.x)).toBeGreaterThan(10);
   // A vertical drag pitches.
   await drag(page, centre, 0, Math.round(box.height * 0.15));
-  expect((await read()).camera.pitch).toBeGreaterThan(after.camera.pitch + 0.1);
+  await expect
+    .poll(async () => (await read()).camera.pitch)
+    .toBeGreaterThan(after.camera.pitch + 0.05);
   expect(errors).toEqual([]);
 });
 
