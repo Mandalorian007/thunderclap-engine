@@ -32,6 +32,7 @@ Types a game names when it wraps or configures `Input`:
 
 - `Bindings<A>`: the map from each action name to its `Binding` list, passed to `new Input` and `setBindings`.
 - `InputOptions`: `getGamepads`, `blocked`, `globalKeys`, `buttonKeys`, `queueTaps`, and the `gestures`, `pointers` and `look` to link.
+- `Input.recorder` and `Input.playback`: the `InputRecorder` / `InputPlayback` installed on this input, or null (see *Recording and replay*).
 - `AttachOptions`: `pointerTarget`, `keyTarget` (default the target's window), `disableTouchScroll` (default true).
 - `ActionState`: one action's `pressed`, `held`, `released`, `value` (0..1) and `heldTicks`.
 - `PointerState`: `input.pointer`: `x`, `y`, `dx`, `dy`, `inside`, `down`, `wheelX`, `wheelY` and `type` (`mouse | touch | pen`).
@@ -236,4 +237,32 @@ if (input.pressed('zoomOut')) follow.zoom(1);   // Look has no zoom input: bind 
 - Types: `FollowOptions` (`distance`, `minDistance`, `maxDistance`, `shoulder`, `pitchMin`, `pitchMax`, `smoothing`, `eyeHeight`, `zoomStep`, `obstacle`, `margin`, `realign`, `yaw`, `pitch`, `mode`), `FollowTarget`, `FollowCamera`, `FollowMode`, `FollowObstacle`. `harness/follow.html` shows it: a capsule between walls, `V` toggles the mode.
 
 ## Testing / automation
-The low-level feed methods (`keyDown`, `keyUp`, `buttonDown`, `buttonUp`, `wheel`, `pointerAt`, `releaseAll`) are public, so tests, replays and the automated playtest can drive input without a DOM. Pass `getGamepads` to inject pads.
+The low-level feed methods (`keyDown`, `keyUp`, `buttonDown`, `buttonUp`, `wheel`, `pointerAt`, `releaseAll`) are public, so tests, replays and the automated playtest can drive input without a DOM. Pass `getGamepads` to inject pads. `input.onFeed(hook)` installs an `InputFeedHook` that sees every one of those calls (DOM or direct) plus the pads each `update()` reads, and may substitute the pads; it returns the uninstaller. The recorder and playback below are its two implementations; a hook never changes how bindings are evaluated.
+
+## Recording and replay
+
+A game records everything its `Input` was fed, tick by tick, and plays it back later with the same results: bug reports, automated playtests, and e2e specs that want a scripted session instead of synthetic DOM events.
+
+```ts
+import { createInputPlayback, createInputRecorder, parseRecording, serializeRecording } from '@thunderclap/engine/input';
+
+const rec = createInputRecorder(input);            // input.recorder === rec; one tick per input.update()
+// ... play ...
+const recording = rec.stop();                      // { version: 1, ticks: [...] }
+localStorage.setItem('bug-42', serializeRecording(recording));
+
+// Later, on an identical game (same bindings, same layout, same fixed step):
+const pb = createInputPlayback(input2, parseRecording(json));   // input2.playback === pb
+// each tick, before input2.update():
+if (!pb.step()) finished();
+// createGame does this for you: createGame({ input: { bindings, replay: recording } }) attaches no DOM
+// listener and calls ctx.input.playback.step() before each fixed step; { record: true } gives ctx.input.recorder.
+```
+
+- `createInputRecorder(input, opts?)` → `InputRecorder { tick(), stop(): InputRecording, recording, ticks }`. It closes a tick on every `input.update()` (the hook's pad read), so `tick()` is only for driving it by hand. `InputRecorderOptions.pads` (default true) captures the pads `update()` read. `stop()` uninstalls it and returns the same object `recording` points at.
+- `createInputPlayback(input, recording, opts?)` → `InputPlayback { step(): boolean, done, tick, length, seek(tick), speed, detach() }`. `step()` feeds the next tick's events and returns false once the recording is finished (the input then holds its last state; call `releaseAll()` yourself if you want it cleared). While installed, `update()` reads the recorded pad snapshot instead of `getGamepads`. `speed` (`InputPlaybackOptions.speed`, ticks per `step()`, default 1) fast-forwards in tests: the extra ticks are fed and `update()`d inside the call, so only the last one is seen by the caller. `seek(tick)` calls `releaseAll()` first, restores the pad snapshot in force at that tick and feeds nothing that was skipped; `seek(0)` restarts. `detach()` uninstalls the hook.
+- **Format** (`InputRecording`, plain JSON, deltas only): `{ version: 1, ticks: InputTick[] }`. A tick with events is an `InputTickEvents` `{ t, k?, b?, p?, w?, r?, g? }`: `k` keys in call order as `[code, 1 | 0]` (down, up), `b` mouse buttons the same way, `p` the last pointer position fed that tick as `[clientX, clientY]` plus `'touch' | 'pen'` when not a mouse, `w` the wheel delta summed over the tick, `r: 1` for `releaseAll`, `d: 1` when a key went down after the tick's last pointer position (so the keyboard, not the pointer, is `lastDevice`), `g` the pads when they changed: `PadSnapshot[]`, each `{ buttons: number[], axes: number[] }` (a `pressed` button records as 1) or `null` for an empty or disconnected slot (the implied starting state is no pads, so a page whose `navigator.getGamepads()` is four empty slots records nothing). Ticks on which nothing was fed collapse into an `InputTickRun` `{ t, n }`. `recordingLength(rec)` is the tick count. **Size:** a tick with one key edge is about 20 bytes; a pointer move 25; idle stretches of any length are one run. A minute of busy play is tens of kilobytes.
+- `serializeRecording(rec)` is `JSON.stringify`; `parseRecording(json | value)` validates the version, the tick order and every field and throws `InputRecordingError` otherwise.
+- **Replay order** within a tick: `r`, then `k`, `b`, `p`, `w` (`p` before `k` when `d` is set). A `releaseAll` that arrived after other events on the same tick (a blur mid-burst) is replayed before them; keys are in call order among themselves, buttons likewise, and `Input` does not otherwise care about the order of the groups.
+- **Not captured:** gesture timing (`Gestures` reads DOM pointer events and a clock, not the feed methods), `Look`'s pointer lock and raw `movementX/Y`, `PointerRouter` sources, `blocked()` (replay with the same UI state), the pointer transform (positions are client CSS px, so replay on the same layout), and the state before the recording started: `releaseAll()` clears keys and buttons but not the pointer position, so a session that reads `pointer` should begin by placing it. The recording holds what reached `Input`; the game's own randomness and timing are the game's to pin.
+- Zero allocations per tick while nothing happens: the recorder bumps the current run's count. `harness/replay.html` records a scripted 3 s session, replays it and compares every tick (`e2e/replay.spec.ts`).

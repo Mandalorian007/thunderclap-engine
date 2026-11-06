@@ -21,6 +21,7 @@ export {
 export {
   type AttachOptions,
   Input,
+  type InputFeedHook,
   type InputOptions,
   isButtonTarget,
   isInteractiveTarget,
@@ -85,6 +86,23 @@ export {
   transformRayInto,
   type Vec3,
 } from './rays';
+export {
+  createInputPlayback,
+  createInputRecorder,
+  type InputPlayback,
+  type InputPlaybackOptions,
+  type InputRecorder,
+  type InputRecorderOptions,
+  type InputRecording,
+  InputRecordingError,
+  type InputTick,
+  type InputTickEvents,
+  type InputTickRun,
+  type PadSnapshot,
+  parseRecording,
+  recordingLength,
+  serializeRecording,
+} from './record';
 export type {
   ActionState,
   Binding,
