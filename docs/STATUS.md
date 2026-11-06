@@ -46,7 +46,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Doc sweep 3 | ws/doc-sweep-3 | `check:docs` clean; ARCHITECTURE *Planned* lines current after wave 4 (XR lines all *Today*); root README page list and roadmap current; contradictions fixed and listed | wave 4 | ✅ green at `79c6e7d` (docs only; e2e 498/52/4 all fog flake); queued last (docs merge over everything) |
 | 5 | Spot lights + masks | ws/spot-lights | `SpotLight`, `Lights.spots`, per-light `layers` masks, `engine_light_accum`; harness `lights.html` | shadows | ✅ green at `1caea5c` (617 tests; e2e 525/52/1 fog flake); queued in chain 1 after skinning |
 | 5 | Snapshot gate | ws/snap-gate | `pnpm snap` / `snap:check`: golden PNGs for 2D harness pages on `desktop-1280`, E-008 tolerance, in `test:e2e`; integrate brief step | — | ✅ green at `0b00570` (611 tests; e2e 507/87/0; goldens smoke/game/ui/layout/gestures); queued in chain 2 |
-| 5 | Pick | ws/pick | `sphereTester`, `obbTester`, `meshTester` (bounds reject + Möller–Trumbore), `transformRayInto`; harness `pick.html` | rays, cull | 🔧 in progress |
+| 5 | Pick | ws/pick | `sphereTester`, `obbTester`, `meshTester` (bounds reject + Möller–Trumbore), `transformRayInto`; harness `pick.html` | rays, cull | ✅ green at `0a0bec1` (650 tests; e2e 548/57/5 mesh.spec flakes); queued in chain 2 after look-zoom |
 | 5 | Look zoom | ws/look-zoom | `Look.zoom` axis (wheel, pinch, pad opt-in); `Follow` reads it; harness follow drops its wheel binding | follow | ✅ green at `d5bb746` (640 tests; e2e 526/57/3 fog flake); queued in chain 2 after template-first-person |
 | 5 | e2e flake under load | ws/flake-input | mesh.spec fog/drag and ui.spec menuNav poll the state they assert; `?still` lamp flag; common brief rule | flake-client | 🔧 in progress |
 | 5 | Sky | ws/sky | `Sky` drawable: gradient dome, sun disc/glow from `Lights.sun`, horizon to `fog.color`, stars; harness `sky.html` | lights | 🔧 in progress |
@@ -82,6 +82,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - ws/template-first-person wishes (→ ws/ergo-3d after look-zoom and skinning land): `camera.setPerspective` sets depth/cull like `Camera.perspective`; a `Look` 'lock on first click' option; `Mesh.update` taking a `{ buffer, vertexCount, indexCount, bounds }` worker reply; a ray-vs-heightfield / sampled height helper.
 - ws/skinning follow-ups (→ ws/skin-shadow if the integrator skips them): `ShadowMap.pipelineFor` takes the bindings layout for skinned casters and `encodeShadow` binds group 1, so skinned meshes can `castShadow`; a dedicated `InstanceParams.skin` slot instead of `params.w`.
 - ws/spot-lights follow-up: `material.ts` / render README "Instance format" table still says the flags float is reserved beyond bit 0; layers now ride bits 1..23 (`INSTANCE_LAYER_SHIFT`, `INSTANCE_LAYER_BITS`). Fold into ws/comment-sweep.
+- `VertexLayout.positionOffset` in render so a game passes the layout straight to `meshTester` (ws/pick wish).
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
