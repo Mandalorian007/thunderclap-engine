@@ -92,11 +92,15 @@ async function pointAt(page: Page, touch: boolean, p: { x: number; y: number }):
     return;
   }
   const cdp = await page.context().newCDPSession(page);
-  await cdp.send('Input.dispatchTouchEvent', {
-    type: 'touchStart',
-    touchPoints: [{ x: p.x, y: p.y, id: 1 }],
-  });
-  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  // Back to back, no runner round trip between: a starved runner must not stretch the tap past
+  // the 450 ms long-press.
+  await Promise.all([
+    cdp.send('Input.dispatchTouchEvent', {
+      type: 'touchStart',
+      touchPoints: [{ x: p.x, y: p.y, id: 1 }],
+    }),
+    cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }),
+  ]);
   await cdp.detach();
 }
 
@@ -156,7 +160,8 @@ test.describe('demo: tactics', () => {
     // The whole map, overlays and units are one material; the particle drawable is the other call.
     expect(s.drawCalls).toBeLessThanOrEqual(2);
     expect(s.stats?.instances).toBeGreaterThan(MAP * MAP);
-    expect(s.fps).toBeGreaterThan(20);
+    // fps is a moving average: polled (E-017).
+    await expect.poll(() => readState(page).then((s) => s.fps)).toBeGreaterThan(20);
     expect(errors).toEqual([]);
   });
 

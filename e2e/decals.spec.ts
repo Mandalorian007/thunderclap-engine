@@ -52,20 +52,21 @@ function read(): Promise<HarnessDecalsState> {
   });
 }
 
-/** Logical canvas px to page CSS px. */
-async function toPage(p: DecalProbe): Promise<{ x: number; y: number }> {
-  const box = await frame.locator('canvas').first().boundingBox();
-  if (!box) throw new Error('no canvas');
-  const { logical } = await read();
-  return {
-    x: box.x + (p.x / logical.width) * box.width,
-    y: box.y + (p.y / logical.height) * box.height,
-  };
-}
-
-/** Average colour of the 3×3 CSS px around each page point, from one screenshot of the page. */
+/**
+ * Average colour of the 3×3 CSS px around each page point, from one screenshot clipped to the
+ * points (a full-page capture costs hundreds of ms on a loaded machine; the decal fades meanwhile).
+ */
 async function sample(page: Page, points: { x: number; y: number }[]): Promise<Rgb[]> {
-  const png = await page.screenshot({ scale: 'css', animations: 'disabled' });
+  const xs = points.map((p) => Math.round(p.x));
+  const ys = points.map((p) => Math.round(p.y));
+  const clip = {
+    x: Math.min(...xs) - 2,
+    y: Math.min(...ys) - 2,
+    width: Math.max(...xs) - Math.min(...xs) + 5,
+    height: Math.max(...ys) - Math.min(...ys) + 5,
+  };
+  const png = await page.screenshot({ clip, scale: 'css', animations: 'disabled' });
+  const local = points.map((_, i) => ({ x: xs[i]! - clip.x, y: ys[i]! - clip.y }));
   return page.evaluate(
     async ([b64, pts]) => {
       const blob = await (await fetch(`data:image/png;base64,${b64}`)).blob();
@@ -75,7 +76,7 @@ async function sample(page: Page, points: { x: number; y: number }[]): Promise<R
       if (!g) throw new Error('no 2d context');
       g.drawImage(bmp, 0, 0);
       return pts.map((p) => {
-        const d = g.getImageData(Math.round(p.x) - 1, Math.round(p.y) - 1, 3, 3).data;
+        const d = g.getImageData(p.x - 1, p.y - 1, 3, 3).data;
         const out: [number, number, number] = [0, 0, 0];
         for (let i = 0; i < d.length; i += 4) {
           out[0] += d[i]! / 9;
@@ -85,7 +86,7 @@ async function sample(page: Page, points: { x: number; y: number }[]): Promise<R
         return out;
       });
     },
-    [png.toString('base64'), points] as const,
+    [png.toString('base64'), local] as const,
   );
 }
 
@@ -95,11 +96,14 @@ function diff(a: Rgb, b: Rgb): number {
 
 /** How far the decal probe is from the bare floor probe, in the same screenshot. */
 async function contrast(page: Page): Promise<number> {
-  const s = await read();
-  const [decal, floor] = await sample(page, [
-    await toPage(s.decalPixel),
-    await toPage(s.floorPixel),
-  ]);
+  const [s, box] = await Promise.all([read(), frame.locator('canvas').first().boundingBox()]);
+  if (!box) throw new Error('no canvas');
+  // Logical canvas px to page CSS px.
+  const toPage = (p: DecalProbe) => ({
+    x: box.x + (p.x / s.logical.width) * box.width,
+    y: box.y + (p.y / s.logical.height) * box.height,
+  });
+  const [decal, floor] = await sample(page, [toPage(s.decalPixel), toPage(s.floorPixel)]);
   return diff(decal!, floor!);
 }
 
@@ -141,14 +145,18 @@ for (const mode of ['box', 'quad'] as Mode[]) {
 }
 
 test('a short-lived decal ages, expires and leaves the floor bare', async ({ page, wrapper }) => {
+  // The 10 s life and its 14 s budget take 24 s of the default 30; probes cost 1.3 s at load 50.
+  test.setTimeout(45_000);
   await open(page, wrapper, '');
-  // Four seconds: visible (fading) long enough to sample, gone well inside the poll timeout.
-  const handle = await add(SPOT.x, SPOT.z, 4);
+  // Ten seconds, fading linearly: contrast stays above 40 for about 6 s. At load 50 a contrast
+  // probe took 1.3 s (measured worst case) and a 4 s life read 26 on the first one.
+  const handle = await add(SPOT.x, SPOT.z, 10);
   await expect.poll(() => contrast(page)).toBeGreaterThan(40);
   const age = (await read()).ages[0] ?? -1;
   expect(age).toBeGreaterThan(0);
   await expect.poll(async () => (await read()).ages[0] ?? -1).toBeGreaterThan(age);
-  await expect.poll(async () => (await read()).count).toBe(0);
+  // What is left of the 10 s life, plus the 1.3 s probe and slow frames under load 50.
+  await expect.poll(async () => (await read()).count, { timeout: 14_000 }).toBe(0);
   expect(await has(handle)).toBe(false);
   await expect.poll(() => contrast(page)).toBeLessThan(12);
   expect(errors).toEqual([]);

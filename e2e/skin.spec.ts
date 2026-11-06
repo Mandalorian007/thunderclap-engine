@@ -69,12 +69,27 @@ async function toPage(p: SkinProbe): Promise<Pt> {
 }
 
 /**
- * A screenshot of the page (what the swapchain presented) and the state of the frame right
- * after it, so probes and pixels are at most a frame or two apart.
+ * A screenshot of the page (what the swapchain presented) bracketed by two reads: kept once the
+ * tip probe moved under 4 logical px across it, so the pixels and the second read's probes
+ * belong to the same pose. A starved runner's screenshot can take 500 ms, a sixth of a radian
+ * of sway; up to eight tries, else the tightest bracket.
  */
 async function snapshot(page: Page): Promise<{ png: string; s: HarnessSkinState }> {
-  const png = (await page.screenshot({ scale: 'css', animations: 'disabled' })).toString('base64');
-  return { png, s: await read() };
+  let best: { png: string; s: HarnessSkinState; drift: number } | null = null;
+  for (let i = 0; i < 8; i++) {
+    const before = await read();
+    const png = (await page.screenshot({ scale: 'css', animations: 'disabled' })).toString(
+      'base64',
+    );
+    const s = await read();
+    const drift = Math.hypot(
+      s.probes.tip.x - before.probes.tip.x,
+      s.probes.tip.y - before.probes.tip.y,
+    );
+    if (!best || drift < best.drift) best = { png, s, drift };
+    if (drift < 4) break;
+  }
+  return { png: best!.png, s: best!.s };
 }
 
 /** Average colour of the 3×3 CSS px around each page point of a `snapshot`'s screenshot. */
