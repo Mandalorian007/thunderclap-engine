@@ -263,15 +263,17 @@ async function main(): Promise<void> {
     emitters.push(stream);
   } else if (mode === 'forces') {
     probeAt = ATTRACTOR;
+    // Steady orbit radius is (vortex / drag)^2 / attract = (0.35 / 0.4)^2 / 4 ≈ 0.2: the motes
+    // settle into a blob on the probe, not a ring around it.
     const forces: ParticleForce[] = [
-      { kind: 'attract', x: ATTRACTOR[0], y: ATTRACTOR[1], z: ATTRACTOR[2], strength: 3 },
+      { kind: 'attract', x: ATTRACTOR[0], y: ATTRACTOR[1], z: ATTRACTOR[2], strength: 4 },
       {
         kind: 'vortex',
         axis: [0, 1, 0],
         x: ATTRACTOR[0],
         y: ATTRACTOR[1],
         z: ATTRACTOR[2],
-        strength: 0.8,
+        strength: 0.35,
         radius: 6,
       },
       { kind: 'drag', amount: 0.4 },

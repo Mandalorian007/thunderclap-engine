@@ -136,11 +136,11 @@ test('sheet: the sprite sheet is sampled and its tile advances', async ({ page, 
 test('forces: the attractor pulls the shell in', async ({ page, wrapper }) => {
   await open(page, wrapper, 'forces', true);
   await expect.poll(async () => (await read()).alive).toBeGreaterThan(0);
-  const start = (await read()).meanRadius;
-  expect(start).toBeGreaterThan(2);
+  // The shadow is born on the shell at radius 3 (and reset there each burst): half that proves
+  // the pull. `meanRadius` moves every frame, so it is only ever polled.
   await expect
     .poll(async () => (await read()).meanRadius, { message: 'mean radius shrinks' })
-    .toBeLessThan(start * 0.7);
+    .toBeLessThan(1.5);
   // The GPU particles converge on the same point: its pixel fills in.
   const at = await toPage((await read()).probe);
   await setParticles(false);
