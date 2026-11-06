@@ -36,6 +36,8 @@ export interface RangeDemoState {
   pitch: number;
   /** `look.locked`: the pointer lock is held. */
   locked: boolean;
+  /** Bullet holes alive on the backstop (`Decals.count`); a miss into the far wall adds one. */
+  decals: number;
   /** `gpuDiagnostics.errorCount`. */
   gpuErrors: number;
 }

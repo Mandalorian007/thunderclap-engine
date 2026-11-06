@@ -6,17 +6,18 @@
  * - A shot (click, tap, right trigger) fires a ray from the eye along the view direction, the
  *   `ui.reticle` dot at the screen centre, through one `meshTester` per plate over the `geom`
  *   cube it draws.
- * - A hit knocks the plate over (the hinge rotation tweened by hand), bursts sparks
- *   (`ParticleSystem`, world space), draws a tracer (`Trail`), plays a positioned synthesised
- *   chime at the plate and adds to the score shown in a `ui` anchor over the range. A plate
- *   rises again `RESET_SECONDS` after it fell.
+ * - A hit knocks the plate over (the hinge angle is a `tween` sequence: fall, wait, rise),
+ *   bursts sparks (`ParticleSystem`, world space), draws a tracer (`Trail`), plays a positioned
+ *   synthesised chime at the plate and adds to the score on a billboard name plate over the
+ *   range. A plate rises again `RESET_SECONDS` after it fell. A miss into the backstop stamps a
+ *   `Decals` bullet hole where the tracer ends.
  *
- * Nothing here is engine code: the camera, the tween and the target rules are what a game writes.
- * The range has no motion without input, so it needs no `?still`: a fresh page is a steady frame.
+ * Nothing here is engine code: the camera and the target rules are what a game writes. The range
+ * has no motion without input, so it needs no `?still`: a fresh page is a steady frame.
  */
 import { AudioEngine, recipes } from '@thunderclap/engine/audio';
 import { GameLoop } from '@thunderclap/engine/core';
-import { ParticleSystem, Trail } from '@thunderclap/engine/fx';
+import { createBillboards, Decals, ParticleSystem, Trail } from '@thunderclap/engine/fx';
 import { box } from '@thunderclap/engine/geom';
 import {
   createRay,
@@ -37,6 +38,7 @@ import {
   Renderer,
   Transform,
 } from '@thunderclap/engine/render';
+import { createTweens, ease } from '@thunderclap/engine/tween';
 import { createOverlay } from '@thunderclap/engine/ui';
 import { type RangeDemoApi, type RangeDemoState, RESET_SECONDS, TARGET_COUNT } from './state';
 
@@ -55,6 +57,11 @@ const RISE_S = 0.45;
 /** How far a miss travels before the tracer ends. */
 const MISS_RANGE = 60;
 const TRACER_POINTS = 24;
+/** The backstop: the far wall's near face (z = -16 less half its 0.6 depth), half width, height. */
+const BACKSTOP_Z = -15.7;
+const BACKSTOP_HALF_W = 12;
+const BACKSTOP_H = 1.5;
+const LYING = -Math.PI / 2;
 
 const state: RangeDemoState = {
   ready: false,
@@ -70,8 +77,26 @@ const state: RangeDemoState = {
   yaw: 0,
   pitch: 0,
   locked: false,
+  decals: 0,
   gpuErrors: 0,
 };
+
+/** Linear RGBA8 texels of a bullet hole: a dark disc with a soft, grainy edge. */
+function holePixels(size: number): Uint8Array<ArrayBuffer> {
+  const out = new Uint8Array(new ArrayBuffer(size * size * 4));
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const r = Math.hypot((x + 0.5) / size - 0.5, (y + 0.5) / size - 0.5) * 2;
+      const grain = 0.7 + 0.3 * Math.abs(Math.sin(x * 12.9898 + y * 78.233));
+      const o = (y * size + x) * 4;
+      out[o] = 20;
+      out[o + 1] = 16;
+      out[o + 2] = 14;
+      out[o + 3] = Math.round(Math.max(0, 1 - r * r) * grain * 255);
+    }
+  }
+  return out;
+}
 
 const LIT_WGSL = /* wgsl */ `
 @fragment fn fs_main(in: VSOut) -> FragOut {
@@ -90,8 +115,6 @@ const LIT_WGSL = /* wgsl */ `
   return o;
 }`;
 
-type Phase = 'up' | 'falling' | 'down' | 'rising';
-
 /** One target: a post, a hinge on top and the plate hanging off the hinge. */
 interface Target {
   index: number;
@@ -100,11 +123,12 @@ interface Target {
   plate: Transform;
   postParams: InstanceParams;
   plateParams: InstanceParams;
-  /** `plateParams.params`: y is the flash. */
+  /** `plateParams.params`: y is the flash (tweened 1 → 0 as the plate falls). */
   flash: [number, number, number, number];
-  phase: Phase;
-  /** Seconds into the current phase. */
-  t: number;
+  /** The hinge angle about +x the tweens drive: 0 standing, `LYING` away from the shooter. */
+  swing: { angle: number };
+  /** Standing and shootable; false from the hit until the rise tween completes. */
+  up: boolean;
 }
 
 /**
@@ -142,27 +166,10 @@ function makeTargets(): Target[] {
       postParams: { tint: [0.35, 0.3, 0.26, 1] },
       plateParams: { tint: [0.9, 0.35 + 0.5 * hue, 0.25, 1], params: flash },
       flash,
-      phase: 'up',
-      t: 0,
+      swing: { angle: 0 },
+      up: true,
     };
   });
-}
-
-const easeOutCubic = (t: number) => 1 - (1 - t) ** 3;
-const easeInOutQuad = (t: number) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
-
-/** The hinge angle (about +x) for a phase: 0 standing, -π/2 lying away from the shooter. */
-function hingeAngle(target: Target): number {
-  switch (target.phase) {
-    case 'up':
-      return 0;
-    case 'falling':
-      return (-Math.PI / 2) * easeOutCubic(Math.min(1, target.t / FALL_S));
-    case 'down':
-      return -Math.PI / 2;
-    case 'rising':
-      return (-Math.PI / 2) * (1 - easeInOutQuad(Math.min(1, target.t / RISE_S)));
-  }
 }
 
 async function main(): Promise<void> {
@@ -181,7 +188,7 @@ async function main(): Promise<void> {
   Object.assign(camera.screen, { x: 0, y: 0, ...LOGICAL });
   renderer.camera = camera;
 
-  // The overlay: the score rides a world anchor over the far row; a toast says how to play.
+  // The overlay: the reticle and a toast that says how to play.
   const ui = createOverlay({ parent: root });
   ui.setFrame(surface.rect);
   surface.onResize(({ backbuffer, rect }) => {
@@ -191,14 +198,18 @@ async function main(): Promise<void> {
   // The reticle: a `ui.reticle` dot on the hud layer, where the shot ray goes; it pulses on a hit.
   const reticle = ui.reticle({ style: 'dot', size: 6, color: '#fff' });
   reticle.el.id = 'reticle';
-  const scoreEl = document.createElement('div');
-  scoreEl.className = 'score';
-  scoreEl.dataset.role = 'score';
-  ui.anchors(() => camera).add(scoreEl, [0, POST_H + 2.4, -11], { align: [0.5, 1] });
+  // The score: a camera-facing name plate over the far row, the same px size at any distance.
+  const plates = createBillboards(renderer, { capacity: 4, atlas: { size: 512 } });
+  const scoreStyle = { size: 40, color: '#fff', stroke: '#000', strokeWidth: 6 };
+  const scorePlate = plates.add({
+    position: [0, POST_H + 2.4, -11],
+    size: { px: [220, 56] },
+    region: plates.text('0 / 0', scoreStyle),
+    depth: 'always',
+  });
   const showScore = () => {
-    scoreEl.textContent = `${state.score} / ${state.shots}`;
+    scorePlate.region = plates.text(`${state.score} / ${state.shots}`, scoreStyle);
   };
-  showScore();
 
   const lit = renderer.createMaterial({ label: 'lit', blend: 'opaque', wgsl: LIT_WGSL });
   // One `geom` unit cube (a `Geometry` is a `MeshDesc`) draws every post, plate, wall and the
@@ -242,6 +253,20 @@ async function main(): Promise<void> {
     blend: 'additive',
     label: 'tracer',
   });
+  // Bullet holes on the backstop: box decals projected onto the wall's near face.
+  const holes = new Decals(renderer, {
+    texture: renderer.textureFromPixels({
+      width: 32,
+      height: 32,
+      data: holePixels(32),
+      label: 'hole',
+    }),
+    capacity: 64,
+    lifetime: 20,
+    fade: [1, 0],
+  });
+  // The hinge tweens: a hit runs fall → wait → rise on the target's `swing.angle` and `flash`.
+  const tweens = createTweens();
 
   // Synthesised sounds; the chime plays at the plate, the listener follows the camera.
   const audio = new AudioEngine();
@@ -312,9 +337,20 @@ async function main(): Promise<void> {
   }
 
   function knockOver(t: Target, at: Hit<number>): void {
-    t.phase = 'falling';
-    t.t = 0;
+    t.up = false;
     t.flash[1] = 1;
+    tweens
+      .sequence(
+        tweens.parallel(
+          tweens.to(t.swing, { angle: LYING }, FALL_S, { ease: ease.cubicOut }),
+          tweens.to(t.flash, { '1': 0 }, FALL_S),
+        ),
+        tweens.delay(RESET_SECONDS - FALL_S),
+        tweens.to(t.swing, { angle: 0 }, RISE_S, { ease: ease.quadInOut }),
+      )
+      .then(() => {
+        t.up = true;
+      });
     state.score++;
     reticle.pulse();
     sparks.emit(
@@ -350,10 +386,33 @@ async function main(): Promise<void> {
       const h = test(ray);
       if (h && (!best || h.distance < best.distance)) best = h;
     }
-    // A plate that is not standing is not a target: the shot passes as a miss.
+    // A plate that is not standing is not a target: the shot passes as a miss, into the backstop
+    // when the ray meets its face (a bullet hole where the tracer ends), else out of the range.
     const target = best ? targets[best.target] : undefined;
-    const standing = target?.phase === 'up';
-    const reach = best && standing ? best.distance : MISS_RANGE;
+    const standing = target?.up === true;
+    let reach = best && standing ? best.distance : MISS_RANGE;
+    const toWall = (BACKSTOP_Z - ray.origin[2]) / ray.dir[2];
+    const wx = ray.origin[0] + ray.dir[0] * toWall;
+    const wy = ray.origin[1] + ray.dir[1] * toWall;
+    if (
+      toWall > 0 &&
+      toWall < reach &&
+      Math.abs(wx) <= BACKSTOP_HALF_W &&
+      wy >= 0 &&
+      wy <= BACKSTOP_H
+    ) {
+      reach = toWall;
+      holes.add({
+        x: wx,
+        y: wy,
+        z: BACKSTOP_Z,
+        nx: 0,
+        ny: 0,
+        nz: 1,
+        size: 0.18,
+        rotation: state.shots,
+      });
+    }
     hitPoint[0] = ray.origin[0] + ray.dir[0] * reach;
     hitPoint[1] = ray.origin[1] + ray.dir[1] * reach;
     hitPoint[2] = ray.origin[2] + ray.dir[2] * reach;
@@ -401,29 +460,18 @@ async function main(): Promise<void> {
       state.locked = look.locked;
       if (input.pressed('fire')) fire();
 
+      tweens.update(dt);
       let up = 0;
       for (const t of targets) {
-        t.t += dt;
-        if (t.phase === 'falling' && t.t >= FALL_S) {
-          t.phase = 'down';
-          t.t -= FALL_S;
-        }
-        if (t.phase === 'down' && t.t >= RESET_SECONDS - FALL_S) {
-          t.phase = 'rising';
-          t.t = 0;
-        }
-        if (t.phase === 'rising' && t.t >= RISE_S) {
-          t.phase = 'up';
-          t.t = 0;
-        }
-        t.flash[1] = t.phase === 'falling' ? 1 - t.t / FALL_S : 0;
-        t.hinge.setAxisAngle(1, 0, 0, hingeAngle(t));
-        if (t.phase === 'up') up++;
+        t.hinge.setAxisAngle(1, 0, 0, t.swing.angle);
+        if (t.up) up++;
       }
       state.targetsUp = up;
 
       sparks.update(dt);
       tracer.update(dt, camera);
+      holes.update(dt);
+      plates.update(dt, camera);
       audio.listener.fromCamera(camera);
     },
     render(_alpha, time) {
@@ -436,10 +484,11 @@ async function main(): Promise<void> {
         frame.mesh(cube, lit, t.post, t.postParams);
         frame.mesh(cube, lit, t.plate, t.plateParams);
       }
+      frame.drawable(holes, 1);
       tracer.draw(frame);
       frame.drawable(sparks);
+      frame.drawable(plates, 10);
       renderer.endFrame();
-      ui.updateAnchors();
 
       state.frame++;
       if (time.frameDt > 0) {
@@ -449,6 +498,7 @@ async function main(): Promise<void> {
       state.stats.drawCalls = renderer.stats.drawCalls;
       state.stats.instances = renderer.stats.instances;
       state.stats.culled = renderer.stats.culled;
+      state.decals = holes.count;
       state.gpuErrors = gpuDiagnostics.errorCount;
     },
   });
