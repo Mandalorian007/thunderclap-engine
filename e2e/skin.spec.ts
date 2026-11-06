@@ -69,12 +69,32 @@ async function toPage(p: SkinProbe): Promise<Pt> {
 }
 
 /**
- * A screenshot of the page (what the swapchain presented) and the state of the frame right
- * after it, so probes and pixels are at most a frame or two apart.
+ * A screenshot of the page (what the swapchain presented) bracketed by two reads, kept once the
+ * tip probe moved under 8 logical px across it (so the pixels and the second read's probes are
+ * one pose) and `ok` holds for both reads. A starved runner's screenshot can take 500 ms, a
+ * sixth of a radian of sway. Retries for up to 12 s, then fails.
  */
-async function snapshot(page: Page): Promise<{ png: string; s: HarnessSkinState }> {
-  const png = (await page.screenshot({ scale: 'css', animations: 'disabled' })).toString('base64');
-  return { png, s: await read() };
+async function snapshot(
+  page: Page,
+  ok: (s: HarnessSkinState) => boolean = () => true,
+): Promise<{ png: string; s: HarnessSkinState }> {
+  const deadline = Date.now() + 12_000;
+  let last = '';
+  while (Date.now() < deadline) {
+    const before = await read();
+    if (!ok(before)) continue;
+    const png = (await page.screenshot({ scale: 'css', animations: 'disabled' })).toString(
+      'base64',
+    );
+    const s = await read();
+    const drift = Math.hypot(
+      s.probes.tip.x - before.probes.tip.x,
+      s.probes.tip.y - before.probes.tip.y,
+    );
+    if (drift < 8 && ok(s)) return { png, s };
+    last = `drift ${drift.toFixed(1)} px, sway ${before.sway.toFixed(2)} -> ${s.sway.toFixed(2)}`;
+  }
+  throw new Error(`no settled screenshot in 12 s (last: ${last})`);
 }
 
 /** Average colour of the 3×3 CSS px around each page point of a `snapshot`'s screenshot. */
@@ -113,7 +133,7 @@ test('boots two skinned tubes from one palette in a lit, shadowed scene', async 
   await expect
     .poll(async () => Math.abs((await read()).sway), { intervals: [60], timeout: 12_000 })
     .toBeGreaterThan(0.7);
-  const { png, s } = await snapshot(page);
+  const { png, s } = await snapshot(page, (s) => Math.abs(s.sway) > 0.7);
   expect(s.gpuErrors).toBe(0);
   // Ground, a shadow-casting block and two tubes (one skinned material, one palette).
   expect(s.stats.instances).toBe(4);
@@ -145,7 +165,7 @@ test('the joints sway the tube: the tip probe moves and its old pixel changes co
   await expect
     .poll(async () => Math.abs((await read()).sway), { intervals: [60], timeout: 12_000 })
     .toBeLessThan(0.3);
-  const { png: pngA, s: a } = await snapshot(page);
+  const { png: pngA, s: a } = await snapshot(page, (s) => Math.abs(s.sway) < 0.3);
   const tipA = await toPage(a.probes.tip);
   const [colourA] = await pixels(page, pngA, [tipA]);
   // One second of animation time, measured by the page's own clock.

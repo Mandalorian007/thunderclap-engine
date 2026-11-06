@@ -71,16 +71,25 @@ test('?doppler: an emitter passing at 20 m/s raises the rate on approach and low
 });
 
 test('?sprites: a clip plays as one sfx voice and ends on its own', async ({ page }) => {
-  expect((await read(page)).voices).toBe(0);
-  await playClip(page, 'two');
-  await expect.poll(() => read(page).then((s) => s.lastClip)).toBe('two');
-  await expect.poll(() => read(page).then((s) => s.voices)).toBe(1);
-  // A 0.4 s clip: gone well inside the poll timeout.
   await expect.poll(() => read(page).then((s) => s.voices)).toBe(0);
-  await playClip(page, 'one');
-  await playClip(page, 'three');
-  await expect.poll(() => read(page).then((s) => s.voices)).toBe(2);
-  expect((await read(page)).lastClip).toBe('three');
+  // Clip `two` is a 200 ms thud: a loaded runner's reads can straddle it whole, so the live
+  // count is taken inside `playClip` (`voicesAtPlay`) and the end is the `clipsEnded` tally.
+  await playClip(page, 'two');
+  let s = await read(page);
+  expect(s.lastClip).toBe('two');
+  expect(s.voicesAtPlay).toBe(1);
+  await expect.poll(() => read(page).then((s) => s.clipsEnded)).toBe(1);
+  await expect.poll(() => read(page).then((s) => s.voices)).toBe(0);
+  // Two clips in one task: both live at once, whatever the runner's latency.
+  await page.evaluate(() => {
+    window.__harnessAudio4?.playClip('one');
+    window.__harnessAudio4?.playClip('three');
+  });
+  s = await read(page);
+  expect(s.voicesAtPlay).toBe(2);
+  expect(s.clipsPlayed).toBe(3);
+  expect(s.lastClip).toBe('three');
+  await expect.poll(() => read(page).then((s) => s.clipsEnded)).toBe(3);
 });
 
 test('?stream: the track streams through a media element and the grid advances from its clock', async ({

@@ -92,7 +92,20 @@ async function shoot(page: Page, s: HarnessPost2State): Promise<Shot> {
   const x1 = Math.ceil(Math.max(top.x, bottom.x, face.x + half) + EDGE_HALF + 2);
   const y0 = Math.floor(Math.min(top.y, bottom.y, face.y - half) - 2);
   const y1 = Math.ceil(Math.max(top.y, bottom.y, face.y + half) + 2);
-  const png = await page.screenshot({ scale: 'device', animations: 'disabled' });
+  // Only the window, not the full page: a full device-px capture and its decode cost seconds on
+  // the DPR 2 rows of a loaded machine. The clip is whole CSS px, so its origin is whole device px.
+  const whole = Number.isInteger(dpr);
+  const clip = whole
+    ? {
+        x: Math.floor(x0 / dpr),
+        y: Math.floor(y0 / dpr),
+        width: Math.ceil(x1 / dpr) - Math.floor(x0 / dpr),
+        height: Math.ceil(y1 / dpr) - Math.floor(y0 / dpr),
+      }
+    : undefined;
+  const png = await page.screenshot({ clip, scale: 'device', animations: 'disabled' });
+  const ox = clip ? clip.x * dpr : 0;
+  const oy = clip ? clip.y * dpr : 0;
   const grab = await page.evaluate(
     async ([b64, rx, ry, rw, rh]) => {
       const blob = await (await fetch(`data:image/png;base64,${b64}`)).blob();
@@ -106,7 +119,7 @@ async function shoot(page: Page, s: HarnessPost2State): Promise<Shot> {
       for (let i = 0; i < d.length; i += 4) out.push(d[i]!, d[i + 1]!, d[i + 2]!);
       return out;
     },
-    [png.toString('base64'), x0, y0, x1 - x0, y1 - y0] as const,
+    [png.toString('base64'), x0 - ox, y0 - oy, x1 - x0, y1 - y0] as const,
   );
   return { x: x0, y: y0, w: x1 - x0, h: y1 - y0, data: grab, map, scale };
 }

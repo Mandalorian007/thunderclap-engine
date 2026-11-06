@@ -75,11 +75,11 @@ async function tapBreak(page: Page): Promise<void> {
     const x = box.x + box.width * 0.75;
     const y = box.y + box.height * 0.5;
     const cdp = await page.context().newCDPSession(page);
-    await cdp.send('Input.dispatchTouchEvent', {
-      type: 'touchStart',
-      touchPoints: [{ x, y, id: 1 }],
-    });
-    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    // Back to back, no runner round trip between: the page's tap must lift inside 250 ms.
+    await Promise.all([
+      cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y, id: 1 }] }),
+      cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }),
+    ]);
     await cdp.detach();
     return;
   }
@@ -133,9 +133,8 @@ test('a click at the centre breaks the picked block, changing the triangles', as
   await tapBreak(page);
   await expect.poll(async () => (await read()).broken).toBe(1);
   await expect.poll(async () => (await read()).triangles).not.toBe(before.triangles);
-  const after = await read();
-  expect(after.hit).not.toEqual(before.hit);
-  expect(after.remeshes).toBeGreaterThan(before.remeshes);
+  await expect.poll(async () => (await read()).hit).not.toEqual(before.hit);
+  expect((await read()).remeshes).toBeGreaterThan(before.remeshes);
   expect(pageErrors()).toEqual([]);
 });
 
@@ -146,14 +145,13 @@ test('place then break rewrites the chunk in place: growths stays 0', async ({ p
   await tapPlace(page);
   await expect.poll(async () => (await read()).placed).toBe(1);
   await expect.poll(async () => (await read()).triangles).not.toBe(before.triangles);
-  const placed = await read();
   // The new block is now what the centre ray hits; breaking it restores the view.
-  expect(placed.hit).not.toEqual(before.hit);
+  await expect.poll(async () => (await read()).hit).not.toEqual(before.hit);
   await tapBreak(page);
   await expect.poll(async () => (await read()).broken).toBe(1);
   await expect.poll(async () => (await read()).triangles).toBe(before.triangles);
+  await expect.poll(async () => (await read()).hit).toEqual(before.hit);
   const after = await read();
-  expect(after.hit).toEqual(before.hit);
   expect(after.growths).toBe(0);
   expect(after.remeshes).toBeGreaterThanOrEqual(before.remeshes + 2);
   expect(after.gpuErrors).toBe(0);
