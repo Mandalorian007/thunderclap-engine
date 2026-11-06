@@ -77,9 +77,9 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Perf overlay | ws/perf-overlay | `createPerfMonitor`/`createPerfOverlay`: frame/GPU/draw stats + sparkline; `?perf` on harness pages | — | ✅ green at `032ae68` (830 tests; e2e 694/92/8, all pre-flake-input flakes, perf.spec 16/16); queued chain 5 after morph |
 | 5 | 2D ergonomics: `input.getGamepads`, PanelStack arrows, tile layer + flipbook | ws/ergo-2d | ✅ green at `f5aa8c1` (845 tests; e2e 734/92/0); queued chain 6 after demo-range |
 | 5 | Input recording and replay (`createInputRecorder`, `createInputPlayback`, `createGame({ input: { replay } })`) | ws/input-replay | ✅ green at `adda342` (888 tests; e2e 747/95/0); queued chain 6 after ergo-2d |
-| 5 | Geometry kit 2: extrude/lathe/sweep/tube/polygon, stairs/arch, tangents + `VERTEX_LAYOUT_3D_TANGENT`, weld/flatShade/projectUv/fitBounds | ws/geom-2 | 🔧 engineer running (offset 300) |
+| 5 | Geometry kit 2: extrude/lathe/sweep/tube/polygon, stairs/arch, tangents + `VERTEX_LAYOUT_3D_TANGENT`, weld/flatShade/projectUv/fitBounds | ws/geom-2 | ✅ check green at `c307337` (934 tests); e2e not run by engineer (load 45), integrator runs it; queued chain 1 after pbr-lights |
 | 5 | Camera helpers: `viewZ`, `invViewProj`, `projectMany`, `frustumCorners`, `setPerspective` parity | ws/camera-ergo | ✅ green at `10b60b5` (907 tests; e2e 747/95/0; snap 5/5); queued chain 3 after batch-submit |
-| 5 | UI widgets 2: reticle, bar, segmented, select, keyPrompt, stepper, cooldown | ws/ui-widgets | 🔧 engineer running (offset 320) |
+| 5 | UI widgets 2: reticle, bar, segmented, select, keyPrompt, stepper, cooldown | ws/ui-widgets | ✅ check green at `73267a5` (922 tests; widgets.spec 15/15); full e2e not run by engineer (load 40+), integrator runs it; queued chain 5 after perf-overlay |
 | 5 | Audio 2: beat-grid music layers, variations, reverb/lowpass sends, ducking | ws/audio-2 | 🔧 engineer running (offset 330) |
 | 5 | Save 2: slot manager with meta sidecar, settings store + bind, undo journal, typed-array codec | ws/save-2 | 🔧 engineer running (offset 340) |
 | 5 | Post 2: FXAA, 3D LUT, grain, aberration, sharpen, depth/normal outline | ws/post-2 | 🔧 engineer running (offset 350) |
@@ -139,6 +139,8 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - ws/demo-range wishes: ui reticle widget; hinge/tween helper (tween lands soon); geom cube helper (geom on main). → ws/ergo-3d.
 - ws/debug-draw wish: `Camera` exposes an inverse view-projection publicly (harness could then demo `frustum`). → ws/ergo-3d.
 - ws/billboards wish: `Camera.viewZ(x, y, z)` helper (view-space depth of a point). → ws/ergo-3d.
+- ws/geom-2 wishes: `mergeGeometry`/`transformGeometry` accept the tangent layout (today 3D only); tangent attribute sits at `@location(13)` (3..9 instance, 11/12 skinning), document the location map in render README. → ws/ergo-3d.
+- ws/ui-widgets wish: `styles.ts` select/range zoom rule renders native selects on frame layers at `--tc-dpx²` (token already scaled, then zoomed again), so selects look small on the HUD layer. → ws/comment-sweep.
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.

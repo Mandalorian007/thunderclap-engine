@@ -280,6 +280,151 @@ describe('Camera.frustum (ws/cull)', () => {
   });
 });
 
+describe('Camera helpers (ws/camera-ergo)', () => {
+  /**
+   * `cam.invViewProj × cam.viewProjection` is the identity within 1e-5, scaled by the largest
+   * inverse entry (the inverse is stored as f32: a design-px ortho2d inverse carries ~1e3).
+   */
+  function expectInverse(cam: Camera): void {
+    const inv = cam.invViewProj;
+    let scale = 1;
+    for (let i = 0; i < 16; i++) scale = Math.max(scale, Math.abs(inv[i]!));
+    const prod = mat4.multiply(mat4.create(), inv, cam.viewProjection);
+    const id = mat4.create();
+    for (let i = 0; i < 16; i++) expect(Math.abs(prod[i]! - id[i]!)).toBeLessThan(1e-5 * scale);
+  }
+
+  it('invViewProj is cached and recomputed after every view or projection setter', () => {
+    const c = Camera.ortho2d(1920, 1080);
+    const inv = c.invViewProj;
+    expect(c.invViewProj).toBe(inv);
+    expectInverse(c);
+    c.x = 40;
+    c.zoom = 1.3;
+    c.rotation = 0.2;
+    expectInverse(c);
+    c.fitRect({ x: 10, y: 10, width: 300, height: 100 });
+    expectInverse(c);
+    c.fitFreeRect(
+      { x: 0, y: 0, width: 100, height: 50 },
+      { x: 100, y: 0, width: 400, height: 300 },
+      { rect: { x: 0, y: 0, width: 960, height: 540 } },
+    );
+    expectInverse(c);
+    c.setView(mat4.lookAt(mat4.create(), [1, 2, 3], [0, 0, 0], [0, 1, 0]));
+    expectInverse(c);
+    c.setViewMatrix(mat4.lookAt(mat4.create(), [3, 2, 1], [0, 1, 0], [0, 1, 0]));
+    expectInverse(c);
+    c.setPerspective(1, 1.5, 0.2, 80);
+    expectInverse(c);
+    c.lookAt([5, 5, 5], [0, 0, 0]);
+    expectInverse(c);
+    c.setProjection(mat4.perspective(mat4.create(), 0.8, 1, 0.5, 20));
+    expectInverse(c);
+    c.setOrtho2d(640, 360);
+    expectInverse(c);
+    expect(c.invViewProj).toBe(inv); // same array throughout
+  });
+
+  it('viewZ of a point on the view axis is its distance, positive in front', () => {
+    const c = Camera.perspective(1, 1, 0.1, 100).lookAt([0, 0, 10], [0, 0, 0]);
+    expect(c.viewZ(0, 0, 3)).toBeCloseTo(7, 5);
+    expect(c.viewZ(0, 0, -5)).toBeCloseTo(15, 5);
+    expect(c.viewZ(0, 0, 12)).toBeCloseTo(-2, 5); // behind the eye
+    c.lookAt([4, 3, 8], [0, 0, 0]);
+    expect(c.viewZ(0, 0, 0)).toBeCloseTo(Math.hypot(4, 3, 8), 5);
+    expect(c.viewZ(4, 3, 8)).toBeCloseTo(0, 5);
+    // ortho2d looks down +z: larger world z is farther from the eye.
+    const o = Camera.ortho2d(100, 100);
+    expect(o.viewZ(50, 50, 7)).toBeCloseTo(-7, 6);
+  });
+
+  it('projectMany matches worldToScreen for 100 random points and counts those inside', () => {
+    const c = Camera.perspective(Math.PI / 3, 16 / 9, 0.1, 100).lookAt([4, 3, 8], [0, 0, 0]);
+    c.screen.width = 1600;
+    c.screen.height = 900;
+    let seed = 12345;
+    const rnd = () => {
+      seed = (seed * 1103515245 + 12345) >>> 0;
+      return seed / 0xffffffff;
+    };
+    const N = 100;
+    const pts = new Float32Array(N * 3);
+    for (let i = 0; i < N * 3; i++) pts[i] = (rnd() - 0.5) * 60;
+    const out = new Float32Array(N * 3);
+    const n = c.projectMany(pts, out);
+    let expected = 0;
+    const p = { x: 0, y: 0, z: 0 };
+    for (let i = 0; i < N; i++) {
+      c.worldToScreen(pts[i * 3]!, pts[i * 3 + 1]!, pts[i * 3 + 2]!, p);
+      expect(out[i * 3]).toBe(Math.fround(p.x));
+      expect(out[i * 3 + 1]).toBe(Math.fround(p.y));
+      expect(out[i * 3 + 2]).toBe(Math.fround(p.z));
+      const front = c.viewZ(pts[i * 3]!, pts[i * 3 + 1]!, pts[i * 3 + 2]!) > 0;
+      if (front && p.x >= 0 && p.x <= 1600 && p.y >= 0 && p.y <= 900 && p.z >= 0 && p.z <= 1)
+        expected++;
+    }
+    expect(n).toBe(expected);
+    expect(n).toBeGreaterThan(0);
+    expect(n).toBeLessThan(N);
+    // A point behind the eye never counts, even when its mirrored projection lands on screen.
+    expect(c.projectMany([8, 6, 16], new Float32Array(3))).toBe(0);
+    // Stride and count: the fourth float of each point is skipped; `out` sized for `count`.
+    const strided = new Float32Array([0, 0, 0, 99, 1, 0, 0, 99, 0, 0, 50, 99]);
+    const so = new Float32Array(6);
+    expect(c.projectMany(strided, so, 2, 4)).toBe(2);
+    c.worldToScreen(1, 0, 0, p);
+    expect(so[3]).toBe(Math.fround(p.x));
+  });
+
+  it('frustumCorners puts the near corners at near and the far at far along the view axis', () => {
+    const c = Camera.perspective(Math.PI / 2, 16 / 9, 0.5, 60).lookAt([2, 1, 5], [0, 0, 0]);
+    const out = new Float32Array(24);
+    expect(c.frustumCorners(out)).toBe(out);
+    for (let k = 0; k < 4; k++) {
+      expect(c.viewZ(out[k * 3]!, out[k * 3 + 1]!, out[k * 3 + 2]!)).toBeCloseTo(0.5, 4);
+      const f = 12 + k * 3;
+      expect(c.viewZ(out[f]!, out[f + 1]!, out[f + 2]!)).toBeCloseTo(60, 2);
+    }
+    // Each corner projects back to its clip corner.
+    const p = { x: 0, y: 0, z: 0 };
+    c.worldToScreen(out[0]!, out[1]!, out[2]!, p); // near bottom-left → screen (0, 1)
+    expect(p.x).toBeCloseTo(0, 3);
+    expect(p.y).toBeCloseTo(1, 3);
+    expect(p.z).toBeCloseTo(0, 4);
+    c.worldToScreen(out[18]!, out[19]!, out[20]!, p); // far top-right → screen (1, 0)
+    expect(p.x).toBeCloseTo(1, 3);
+    expect(p.y).toBeCloseTo(0, 3);
+    expect(p.z).toBeCloseTo(1, 4);
+    // ortho2d: the near corners sit at world z = -ORTHO2D_HALF_DEPTH over the design rect.
+    const o = Camera.ortho2d(1920, 1080).frustumCorners(out);
+    expect(o[0]).toBeCloseTo(0, 2);
+    expect(o[1]).toBeCloseTo(1080, 2);
+    expect(o[2]).toBeCloseTo(-ORTHO2D_HALF_DEPTH, 2);
+    expect(o[18]).toBeCloseTo(1920, 2);
+    expect(o[19]).toBeCloseTo(0, 2);
+    expect(o[20]).toBeCloseTo(ORTHO2D_HALF_DEPTH, 2);
+  });
+
+  it('setPerspective configures a default camera like Camera.perspective', () => {
+    const a = Camera.perspective(1.1, 1.6, 0.3, 300);
+    const b = new Camera().setPerspective(1.1, 1.6, 0.3, 300);
+    expect(b.depthTest).toBe(a.depthTest);
+    expect(b.depthWrite).toBe(a.depthWrite);
+    expect(b.cull).toBe(a.cull);
+    expect(b.layers).toBe(a.layers);
+    expect([...b.projection]).toEqual([...a.projection]);
+    expect([...b.view].map((v) => v + 0)).toEqual([...a.view].map((v) => v + 0));
+    expect([...b.viewProjection].map((v) => v + 0)).toEqual(
+      [...a.viewProjection].map((v) => v + 0),
+    );
+    expect(b.screen).toEqual(a.screen);
+    // setProjection stays raw: the flags are left alone.
+    const raw = Camera.ortho2d(10, 10).setProjection(a.projection);
+    expect([raw.depthTest, raw.depthWrite, raw.cull]).toEqual([false, false, false]);
+  });
+});
+
 describe('Camera layers and block', () => {
   it('sees draws whose mask overlaps', () => {
     const c = Camera.ortho2d(1, 1);
