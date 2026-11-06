@@ -5,6 +5,8 @@ import { Renderer } from './renderer';
 import {
   createSamplers,
   createTextureArray,
+  defaultTextures,
+  loadTexture,
   loadTextureArray,
   mipLevelCount,
   Texture,
@@ -123,6 +125,111 @@ describe('texture arrays', () => {
     );
     const short = { width: 4, height: 4, data: new Uint8Array(8) };
     expect(() => loadTextureArray(fake.device, [short])).toThrow(/too few bytes/);
+  });
+});
+
+describe('loadTexture', () => {
+  it('creates a plain 2D texture with the full chain, writes level 0 and generates mips', () => {
+    const { fake, created, views } = recording();
+    const t = loadTexture(fake.device, pixels(8, 4, 5), { label: 'tile' });
+    expect(fake.errors).toEqual([]);
+    expect([t.width, t.height, t.layers, t.mipLevels, t.viewDimension]).toEqual([8, 4, 1, 4, '2d']);
+    expect(created[0]).toMatchObject({
+      size: [8, 4],
+      mipLevelCount: 4,
+      format: 'rgba8unorm-srgb',
+      label: 'tile',
+    });
+    expect(views[0]).toEqual({ label: 'tile' });
+    const w = fake.textureWrites.filter((x) => x.texture.label === 'tile');
+    expect(w.map((x) => [x.bytesPerRow, x.size])).toEqual([[32, [8, 4, 1]]]);
+    // Three levels below level 0.
+    expect(fake.passes.filter((p) => p.label?.startsWith('mipmap:'))).toHaveLength(3);
+  });
+
+  it('gives a non-power-of-two source mipLevelCount levels', () => {
+    const { fake } = recording();
+    const t = loadTexture(fake.device, pixels(5, 3, 1));
+    expect(t.mipLevels).toBe(mipLevelCount(5, 3));
+    expect(t.mipLevels).toBe(3);
+    expect(fake.passes.filter((p) => p.label?.startsWith('mipmap:'))).toHaveLength(2);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('honours mips: false, format and filter', () => {
+    const { fake, created } = recording();
+    const t = loadTexture(fake.device, pixels(4, 4, 1), { mips: false, format: 'rgba8unorm' });
+    expect(t.mipLevels).toBe(1);
+    expect(created[0]!.mipLevelCount).toBeUndefined();
+    expect(created[0]!.format).toBe('rgba8unorm');
+    expect(fake.passes).toHaveLength(0);
+    loadTexture(fake.device, pixels(4, 4, 1), { filter: 'nearest' });
+    const nearest = fake.passes.filter((p) => p.label?.startsWith('mipmap:'));
+    expect(nearest).toHaveLength(2);
+    const pipeline = nearest[0]!.commands.find((c) => c.op === 'setPipeline') as {
+      pipeline: { desc: { fragment: { entryPoint: string } } };
+    };
+    expect(pipeline.pipeline.desc.fragment.entryPoint).toBe('fs_nearest');
+  });
+
+  it('copies an image source on the GPU', () => {
+    const { fake, copies } = recording();
+    const bmp = { width: 16, height: 16 } as unknown as ImageBitmap;
+    const t = loadTexture(fake.device, bmp);
+    expect(t.mipLevels).toBe(5);
+    expect(copies).toEqual([{ origin: [0, 0, 0], size: [16, 16, 1] }]);
+  });
+
+  it('rejects short pixel data', () => {
+    const { fake } = recording();
+    const short = { width: 4, height: 4, data: new Uint8Array(8) };
+    expect(() => loadTexture(fake.device, short)).toThrow(/loadTexture: layer 0 has too few bytes/);
+  });
+});
+
+describe('defaultTextures', () => {
+  const bytes = (fake: FakeDevice, label: string) => {
+    const w = fake.textureWrites.find((x) => x.texture.label === label)!;
+    return Array.from(new Uint8Array(w.data as Uint8Array));
+  };
+
+  it('has the documented bytes, formats and sizes', () => {
+    const fake = createFakeDevice();
+    const d = defaultTextures(fake.device);
+    expect(fake.errors).toEqual([]);
+    expect(bytes(fake, 'default-white')).toEqual([255, 255, 255, 255]);
+    expect(bytes(fake, 'default-black')).toEqual([0, 0, 0, 255]);
+    expect(bytes(fake, 'default-flat-normal')).toEqual([128, 128, 255, 255]);
+    expect(bytes(fake, 'default-metal-rough')).toEqual([255, 255, 0, 255]);
+    expect([d.white.format, d.black.format, d.flatNormal.format, d.metalRough.format]).toEqual([
+      'rgba8unorm-srgb',
+      'rgba8unorm-srgb',
+      'rgba8unorm',
+      'rgba8unorm',
+    ]);
+    for (const t of [d.white, d.black, d.flatNormal, d.metalRough]) {
+      expect([t.width, t.height, t.mipLevels, t.viewDimension]).toEqual([1, 1, 1, '2d']);
+    }
+    expect([d.checker.width, d.checker.height, d.checker.mipLevels]).toEqual([8, 8, 4]);
+    const c = bytes(fake, 'default-checker');
+    expect(c).toHaveLength(8 * 8 * 4);
+    const texel = (x: number, y: number) => c.slice((y * 8 + x) * 4, (y * 8 + x) * 4 + 4);
+    expect(texel(0, 0)).toEqual([255, 0, 255, 255]);
+    expect(texel(1, 1)).toEqual([255, 0, 255, 255]);
+    expect(texel(2, 0)).toEqual([0, 0, 0, 255]);
+    expect(texel(0, 2)).toEqual([0, 0, 0, 255]);
+    expect(texel(2, 2)).toEqual([255, 0, 255, 255]);
+  });
+
+  it('is cached per device', () => {
+    const a = createFakeDevice();
+    const b = createFakeDevice();
+    const first = defaultTextures(a.device);
+    expect(defaultTextures(a.device)).toBe(first);
+    expect(first.white).toBe(defaultTextures(a.device).white);
+    expect(a.textures.filter((t) => t.label === 'default-white')).toHaveLength(1);
+    expect(defaultTextures(b.device)).not.toBe(first);
+    expect(b.textures.filter((t) => t.label === 'default-white')).toHaveLength(1);
   });
 });
 

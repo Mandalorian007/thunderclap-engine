@@ -11,7 +11,7 @@ beginFrame(time, dt) → Frame
 render(frame, camera, target = renderer.target)   once per camera
   1. first call of the frame: pre-passes and the per-draw uniform upload; every call: drawable.prepare()
      for each drawable in this view not yet prepared this frame (compute, uploads)
-  2. write this view's globals + camera + lighting blocks (one 1184 B buffer per view) and its instances
+  2. write this view's globals + camera + lighting blocks (one 1776 B buffer per view) and its instances
      (appended to the shared instance buffer)
   3. scene pass into the target: colour (@location 0) and emissive (@location 1), both
      rgba16float, plus depth24plus when camera.depthTest; the first view into a target
@@ -568,6 +568,25 @@ textures every frame, as ping-pong does, builds no new bind groups after the fir
 - `renderer.textureFromShader({ width, height, wgsl, uniforms? })` runs a WGSL
   `fn shade(uv: vec2f) -> vec4f` once into a texture. Use it for procedural stone, noise,
   and glyphs. The default format is `rgba8unorm-srgb`, and `shade` returns linear colour.
+- `loadTexture(device, source: TextureLayerSource, opts?: LoadTextureOptions)` is the one-call
+  path for a single 2D texture from an image (`TextureSource`, copied on the GPU) or pixels
+  (`PixelSource`, `writeTexture`): it creates the texture, writes level 0 and, with `mips`
+  (default true), allocates `mipLevelCount(width, height)` levels (odd sizes included) and
+  fills them with `generateMipmaps`. Options: `mips`, `filter` (`MipFilter`, default
+  `'linear'`), `format` (default `rgba8unorm-srgb`; use `rgba8unorm` for data such as normal
+  maps), `label`. Pair it with a `-mip` sampler. `Texture.destroy()` frees it.
+- `defaultTextures(device): DefaultTextures` are the textures a material slot reads when the
+  game sets nothing, built on first call and cached per device (`WeakMap`): `white` (1×1
+  `255,255,255,255`, sRGB), `black` (1×1 `0,0,0,255`, sRGB), `flatNormal` (1×1 `128,128,255`,
+  linear: a normal map that leaves the mesh normal alone), `metalRough` (1×1 `255,255,0`,
+  linear, glTF channels G roughness and B metallic: a dielectric, fully rough surface) and
+  `checker` (8×8 magenta/black squares of 2×2 texels, mipmapped, for "texture missing"). Every
+  unset 2D texture slot of a material or fullscreen pass is bound to a white texture, so a
+  material with four or five slots draws with none of them set; a slot set later rebuilds the
+  bind group as before. For a metallic-roughness material: base colour, occlusion and emissive
+  take `white` (emissive `black` when it should not glow), the normal slot `flatNormal`, the
+  metal-rough slot `white` (glTF's default: metallic × factor) or `metalRough` (no metal, full
+  roughness, whatever the factors say).
 - `renderer.createSpriteMaterial(texture, label, { blend, sampler })`
 - `SamplerKind` is `'linear-clamp'`, `'linear-repeat'`, `'nearest-clamp'`, `'linear-mip-repeat'`
   or `'nearest-mip-clamp'`. The two `-mip` kinds blend between mip levels: linear for tiling
