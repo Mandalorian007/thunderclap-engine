@@ -102,3 +102,7 @@ Four wave-5 branches reported single e2e failures on pages they never touched (m
 ## E-018 — integrators work in their own worktree; main moves by fast-forward (2026-11-05)
 
 The ws/gltf-anim integrator had its merge staged in the main checkout when the PM committed a STATUS update there. The PM's `git commit` swallowed the staged merge, so `3813f8c` is the gltf-anim merge under a docs message, committed before its gates ran (they passed afterwards: 632 tests, e2e 528/57/1 with the E-017 fog flake). History stays as it is. Rule: integrators merge in a detached worktree and land by fast-forward into `main`; the main checkout belongs to the PM, who commits docs whenever it likes. `docs/briefs/integrate.md` carries the steps.
+
+## E-019: e2e flakes had causes (2026-11-05)
+
+ws/flake-input found that the E-017 "load flakes" were not only timing: the mesh page's orbiting lamp passed 2.3 units from the `ground` probe and pulled it towards the fog colour, and the spec's touch `drag()` helper took 6–7 px steps that `Gestures` read as a long-press under a slow frame. Fixes: `harness/mesh.html?still` parks time-driven motion for the spec; moving-value assertions poll; touch drags step ≥12 px. Rules kept: no retries; a test that reads a moving value polls (common.md). New rule: parallel matrices use `E2E_PORT_OFFSET`s that differ by at least 10 (harness 4177+o, wrapper 4178+o, bench 4179+o), and a second run from one checkout passes `--output` outside the repo so the runs do not delete each other's traces.

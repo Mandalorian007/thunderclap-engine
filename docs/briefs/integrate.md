@@ -2,7 +2,7 @@
 
 You merge finished `ws/<name>` branches into `main` of `/Users/matthewfontana/repos/thunderclap-engine`. Never push.
 
-Work in your own worktree, never in the main checkout (E-018: the PM commits docs there while you work, and a `git commit` of theirs would swallow your staged merge). Setup: `git -C /Users/matthewfontana/repos/thunderclap-engine worktree add --detach <scratchpad>/integrate-<name> main`, then `pnpm install --frozen-lockfile --offline` there. Your e2e run needs its own port: `E2E_PORT_OFFSET=<a number no other agent uses>`.
+Work in your own worktree, never in the main checkout (E-018: the PM commits docs there while you work, and a `git commit` of theirs would swallow your staged merge). Setup: `git -C /Users/matthewfontana/repos/thunderclap-engine worktree add --detach <scratchpad>/integrate-<name> main`, then `pnpm install --frozen-lockfile --offline` there. Your e2e run needs its own port: `E2E_PORT_OFFSET=<a multiple of 10 no other agent uses>` (the harness takes 4177+offset, its wrapper 4178+offset, bench 4179+offset, so neighbouring offsets collide).
 
 ## Steps, per branch in the order the PM gives
 
