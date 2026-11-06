@@ -35,6 +35,12 @@ export interface InputTickEvents {
   d?: 1;
   /** The pads `update()` read, when they differ from the previous snapshot. */
   g?: PadSnapshot[];
+  /**
+   * `Input.rumble` calls this tick, in call order: `[strong, weak, ms]` or `[strong, weak, ms,
+   * pad]`. Playback does not re-issue them (the game does, from the same inputs); they are kept
+   * so a replay can assert the game rumbled when it should.
+   */
+  rumble?: [number, number, number, number?][];
 }
 
 /** A run of `n` ticks starting at `t` on which nothing was fed. */
@@ -171,6 +177,13 @@ export function createInputRecorder<A extends string>(
     },
     releaseAll: () => {
       open().r = 1;
+    },
+    rumble: (strong, weak, ms, pad) => {
+      const c = open();
+      const e: [number, number, number, number?] =
+        pad === undefined ? [strong, weak, ms] : [strong, weak, ms, pad];
+      if (c.rumble) c.rumble.push(e);
+      else c.rumble = [e];
     },
     gamepads: (pads) => {
       if (capturePads && !samePads(lastPads, pads, padsWritten)) {
@@ -425,6 +438,9 @@ export function parseRecording(source: string | unknown): InputRecording {
     if (e.r !== undefined && e.r !== 1) throw bad(i, 'r');
     if (e.d !== undefined && e.d !== 1) throw bad(i, 'd');
     if (e.g !== undefined && !(Array.isArray(e.g) && e.g.every(isPadSnapshot))) throw bad(i, 'g');
+    if (e.rumble !== undefined && !(Array.isArray(e.rumble) && e.rumble.every(isRumble))) {
+      throw bad(i, 'rumble');
+    }
   });
   return v as unknown as InputRecording;
 }
@@ -459,6 +475,10 @@ function isPointer(v: unknown): boolean {
   if (!Array.isArray(v) || v.length < 2 || v.length > 3) return false;
   if (!isNumbers(v.slice(0, 2))) return false;
   return v.length === 2 || v[2] === 'mouse' || v[2] === 'touch' || v[2] === 'pen';
+}
+
+function isRumble(v: unknown): boolean {
+  return Array.isArray(v) && (v.length === 3 || v.length === 4) && isNumbers(v);
 }
 
 function isPadSnapshot(v: unknown): boolean {

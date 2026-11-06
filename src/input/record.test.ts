@@ -348,3 +348,107 @@ describe('input recording and replay', () => {
     expect(rec.stop().ticks).toEqual([{ t: 0, n: 1 }]);
   });
 });
+
+describe('recording triggers, chords and rumble (ws/input-3)', () => {
+  const TRIG = {
+    charge: [{ key: 'KeyC', trigger: 'hold' as const, holdMs: 300 }],
+    combo: [{ chord: [{ key: 'ShiftLeft' }, { key: 'KeyK' }] }],
+    dash: [{ key: 'KeyD', trigger: 'doubleTap' as const }],
+  };
+  type T = keyof typeof TRIG;
+
+  function snap(input: Input<T>) {
+    const out: Record<string, unknown> = {};
+    for (const a of Object.keys(TRIG) as T[]) {
+      const s = input.state(a);
+      out[a] = [s.pressed, s.held, s.released, s.holdProgress];
+    }
+    return out;
+  }
+
+  it('a hold, a chord and a double tap replay identically tick for tick', () => {
+    const input = new Input(TRIG, { getGamepads: () => [], tickMs: 100 });
+    const rec = createInputRecorder(input);
+    const states: unknown[] = [];
+    const steps: ((i: Input<T>) => void)[] = [
+      (i) => i.keyDown('KeyC'),
+      () => {},
+      (i) => i.keyDown('KeyK'),
+      (i) => i.keyDown('ShiftLeft'),
+      () => {},
+      (i) => {
+        i.keyUp('KeyC');
+        i.keyUp('KeyK');
+      },
+      (i) => i.keyDown('KeyD'),
+      (i) => i.keyUp('KeyD'),
+      (i) => i.keyDown('KeyD'),
+      () => {},
+      (i) => i.releaseAll(),
+    ];
+    for (const step of steps) {
+      step(input);
+      input.update();
+      states.push(snap(input));
+    }
+    const recording = rec.stop();
+    expect(states.some((s) => (s as Record<string, boolean[]>).charge![1])).toBe(true);
+    expect(states.filter((s) => (s as Record<string, boolean[]>).combo![0]).length).toBe(1);
+    expect(states.filter((s) => (s as Record<string, boolean[]>).dash![0]).length).toBe(1);
+
+    const other = new Input(TRIG, { getGamepads: () => [], tickMs: 100 });
+    const pb = createInputPlayback(other, parseRecording(serializeRecording(recording)));
+    const replayed: unknown[] = [];
+    while (pb.step()) {
+      other.update();
+      replayed.push(snap(other));
+    }
+    expect(replayed).toEqual(states);
+  });
+
+  it('records rumbles per tick; playback does not re-issue them; parse validates them', () => {
+    const effects: unknown[] = [];
+    const rumblePad: GamepadLike = {
+      connected: true,
+      buttons: [],
+      axes: [],
+      vibrationActuator: {
+        playEffect(_type, params) {
+          effects.push(params);
+        },
+      },
+    };
+    const input = new Input(BINDINGS, { getGamepads: () => [rumblePad] });
+    const rec = createInputRecorder(input, { pads: false });
+    input.update();
+    input.update();
+    expect(input.rumble({ strong: 0.5, weak: 0.25, ms: 80 })).toBe(true);
+    expect(input.rumble({ ms: 50, pad: 0 })).toBe(true);
+    input.update();
+    input.update();
+    const recording = rec.stop();
+    expect(recording.ticks).toEqual([
+      { t: 0, n: 2 },
+      {
+        t: 2,
+        rumble: [
+          [0.5, 0.25, 80],
+          [1, 1, 50, 0],
+        ],
+      },
+      { t: 3, n: 1 },
+    ]);
+    expect(effects).toHaveLength(2);
+
+    const other = new Input(BINDINGS, { getGamepads: () => [rumblePad] });
+    const pb = createInputPlayback(other, parseRecording(serializeRecording(recording)));
+    while (pb.step()) other.update();
+    expect(effects).toHaveLength(2);
+    expect(() => parseRecording({ version: 1, ticks: [{ t: 0, rumble: [[1, 1]] }] })).toThrow(
+      /bad rumble/,
+    );
+    expect(() => parseRecording({ version: 1, ticks: [{ t: 0, rumble: [[1, 'x', 5]] }] })).toThrow(
+      /bad rumble/,
+    );
+  });
+});

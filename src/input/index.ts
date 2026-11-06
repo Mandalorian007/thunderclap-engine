@@ -1,4 +1,11 @@
 export {
+  type BindingConflict,
+  findConflicts,
+  isBinding,
+  parseBindings,
+  serializeBindings,
+} from './bindings';
+export {
   Follow,
   type FollowCamera,
   type FollowMode,
@@ -20,18 +27,35 @@ export {
   type TapGesture,
 } from './gestures';
 export {
+  bindingMatchesDevice,
+  type Glyph,
+  type GlyphKind,
+  glyphForBinding,
+  guessPadLayout,
+  keyLabel,
+  type PadLayout,
+  padAxisLabel,
+  padButtonLabel,
+} from './glyphs';
+export {
   type AttachOptions,
+  DEFAULT_DOUBLE_TAP_MS,
+  DEFAULT_HOLD_MS,
   Input,
+  type InputEvents,
   type InputFeedHook,
   type InputOptions,
   isButtonTarget,
   isInteractiveTarget,
   isTextEntryTarget,
+  type ListenOptions,
+  type RumbleOptions,
 } from './input';
 export {
   Look,
   type LookEvents,
   type LookKeys,
+  type LookMode,
   type LookOptions,
   type LookStick,
   type LookTouchOptions,
@@ -110,7 +134,9 @@ export {
 export type {
   ActionState,
   Binding,
+  BindingSource,
   Bindings,
+  GamepadActuatorLike,
   GamepadLike,
   GestureKind,
   Hand,
@@ -118,6 +144,8 @@ export type {
   PointerButton,
   PointerState,
   PointerTransform,
+  Trigger,
+  TriggerOptions,
   XrButton,
 } from './types';
 export { XrPointerSource, type XrPointerSourceOptions } from './xr-source';
