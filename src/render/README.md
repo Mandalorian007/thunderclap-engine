@@ -18,7 +18,8 @@ render(frame, camera, target = renderer.target)   once per camera
 endFrame(opts?)
   4. render(frame, renderer.camera) if nothing was rendered (the single-camera path)
   5. renderer.post (e.g. PostStack) or the built-in present pass: renderer.target → swapchain
-     (skipped with { present: false }: an XR frame draws into the session's layer, not the canvas)
+     (skipped with { present: false }: an XR frame resolved each eye into the session's layer
+     with renderer.resolve(target, outView, viewport?) during step 3, not the canvas)
   6. submit
 ```
 
@@ -48,8 +49,16 @@ renderer.endFrame();
   (`SceneTargetViewport`, the sub-image rect in px) and `adopt(desc)` (re-point at the next
   frame's textures; a no-op when they are the same) are its extras; `resize` throws, `destroy`
   never destroys what it adopted. `XrSurface` in `@thunderclap/engine/platform` builds one per
-  eye. `endFrame({ present: false })` skips the swapchain (post and present) for such a frame;
-  the post stack is not applied per eye (the XR path renders the scene pass only).
+  eye. `endFrame({ present: false })` skips the swapchain (post and present) for such a frame.
+- **Resolve (XR post, ws/xr-post).** `renderer.resolve(target, out: GPUTextureView, viewport?:
+  SceneTargetViewport)` runs `renderer.post` (or the built-in present) from any `SceneTarget`
+  into any view now, inside the frame, after at least one `render`: what `endFrame` does from
+  `renderer.target` to the swapchain. `viewport` confines the result to that rect of `out`
+  (texture px) and loads the rest. The target is consumed: its next `render` this frame clears
+  again, so one eye-sized HDR target serves both eyes in turn (`render(eye0) → resolve →
+  render(eye1) → resolve`, all on the frame's one encoder). `PostProcessor.encode` gains the
+  optional `viewport` and must size itself to the inputs it is given. The present group for a
+  resolved target is cached, so steady state allocates nothing.
 
 - **Logical space** is 1920×1080 by default, with the origin at top-left and y pointing down.
   `renderer.camera` is a matrix `Camera` (`Camera.ortho2d(1920, 1080)` by default); its

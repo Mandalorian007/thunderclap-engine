@@ -404,7 +404,8 @@ describe('createGame: xr', () => {
     expect(ctx.host).toBe(host);
 
     // One XR frame: the scenes record once through the head, each eye is a scene pass into
-    // the shared layer target, and nothing goes to the swapchain.
+    // the surface's HDR target resolved by the post stack into its half of the layer, and
+    // nothing goes to the swapchain.
     const before = fake.passes.length;
     const right = new FakeXrInputSource('right');
     right.buttons[0]!.pressed = true;
@@ -429,13 +430,43 @@ describe('createGame: xr', () => {
     const passes = fake.passes.slice(before);
     const scene = passes.filter((p) => p.label === 'scene');
     expect(scene.length).toBe(2);
-    expect(passes.some((p) => p.label?.includes('present') || p.label?.includes('post'))).toBe(
-      false,
+    expect(passes.some((p) => p.label?.includes('present'))).toBe(false);
+    const composites = passes.filter((p) => p.label === 'pass:post-composite');
+    expect(composites.length).toBe(2);
+    const viewports = composites.map(
+      (p) =>
+        (
+          p.commands.find((c) => c.op === 'other' && c.name === 'setViewport') as {
+            args?: number[];
+          }
+        ).args,
     );
+    expect(viewports).toEqual([
+      [0, 0, 64, 32, 0, 1],
+      [64, 0, 64, 32, 0, 1],
+    ]);
+    for (const p of composites) {
+      const ca = (
+        (p.desc as GPURenderPassDescriptor).colorAttachments as GPURenderPassColorAttachment[]
+      )[0]!;
+      expect(ca.loadOp).toBe('load');
+      expect((ca.view as unknown as { texture: { label: string } }).texture.label).toBe(
+        'xr-layer-color',
+      );
+    }
     expect(cameras).toEqual([{ viewIndex: 0, screenX: 0 }]);
     const eyes = ctx.xr.surface!.views(xr.step(0));
     expect(eyes.map((e) => e.camera.viewIndex)).toEqual([0, 1]);
-    expect(eyes.map((e) => e.camera.screen.x)).toEqual([0, 0.5]);
+    expect(eyes.map((e) => e.camera.screen.width)).toEqual([1, 1]);
+    expect(eyes.map((e) => e.viewport.x)).toEqual([0, 64]);
+    expect(ctx.xr.surface!.scene).not.toBeNull();
+    // Steady state: no allocations per XR frame once warm.
+    later(80, () => xr!.step(80));
+    const counts = () => [fake.buffers.length, fake.textures.length, fake.bindGroups.length];
+    const warm = counts();
+    later(120, () => xr!.step(120));
+    later(160, () => xr!.step(160));
+    expect(counts()).toEqual(warm);
     expect(xrPointers).toBe(1);
     expect(session.pendingFrames).toBe(1);
     expect(fake.errors).toEqual([]);
@@ -454,7 +485,7 @@ describe('createGame: xr', () => {
     // The next page frame renders the ordinary way (one camera, presented to the swapchain).
     cameras.length = 0;
     const b2 = fake.passes.length;
-    later(40, () => frames.pending!(40));
+    later(200, () => frames.pending!(200));
     const after = fake.passes.slice(b2);
     expect(after.filter((p) => p.label === 'scene').length).toBe(1);
     expect(after.some((p) => p.label?.includes('present') || p.label?.includes('post'))).toBe(true);

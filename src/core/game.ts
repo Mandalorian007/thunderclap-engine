@@ -25,7 +25,8 @@
  *
  * VR is one call (`ctx.xr.enter()`, ws/xr): frames then come from the session through an XR
  * host, the scenes record once through the surface's head camera and the renderer draws each
- * eye into the session's layer; controllers and hands join `ctx.pointers`. Leaving (`exit()` or
+ * eye into the surface's HDR scene target and resolves it through the post stack into the
+ * session's layer (ws/xr-post); controllers and hands join `ctx.pointers`. Leaving (`exit()` or
  * the session ending) puts everything back; a game that never enters runs the same code as before.
  */
 import { AudioEngine, persistMixer } from '../audio';
@@ -362,13 +363,17 @@ export async function createGame<
         hooks.beforeRender?.(time);
         const frame = renderer.beginFrame(time.realTime, time.frameDt);
         if (xrSurface && xrHost) {
-          // The scenes record once, through the head; each eye draws the record into the layer.
+          // The scenes record once, through the head; each eye draws the record into the
+          // surface's HDR scene target and the post stack resolves it into the eye's part of
+          // the layer (ws/xr-post), so the headset sees what the screen would.
           const xrFrame = xrHost.frame;
           const eyes = xrFrame ? xrSurface.views(xrFrame) : NO_EYES;
           stack.render(frame, xrSurface.head, alpha);
           for (let i = 0; i < eyes.length; i++) {
             const eye = eyes[i]!;
-            renderer.render(frame, eye.camera, eye.target);
+            const scene = xrSurface.scene!;
+            renderer.render(frame, eye.camera, scene);
+            renderer.resolve(scene, eye.target.color.view, eye.viewport);
           }
           renderer.endFrame({ present: false });
         } else {
@@ -426,7 +431,11 @@ export async function createGame<
           await session.end().catch(() => {});
           throw err;
         }
-        const surface = new XrSurface(session, gpu.device, { referenceSpace });
+        const surface = new XrSurface(session, gpu.device, {
+          referenceSpace,
+          scene: true,
+          colorFormat: renderer.format,
+        });
         const sessionHost = createXrHost(session, host);
         const source = new XrPointerSource(session, referenceSpace, () => sessionHost.frame);
         const removeSource = pointers.addSource(source);

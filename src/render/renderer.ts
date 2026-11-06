@@ -22,7 +22,12 @@ import {
 } from './material';
 import { Mesh, type MeshDesc, quadGeometry } from './mesh';
 import { PingPong } from './ping-pong';
-import { SCENE_FORMAT, SceneTarget, type SceneTargetDesc } from './scene-target';
+import {
+  SCENE_FORMAT,
+  SceneTarget,
+  type SceneTargetDesc,
+  type SceneTargetViewport,
+} from './scene-target';
 import {
   bytesPerTexel,
   createSamplers,
@@ -42,10 +47,20 @@ export interface PostInputs {
   dt: number;
 }
 
-/** The final stage: turns the HDR scene into swapchain pixels. See `@thunderclap/engine/post`. */
+/**
+ * The final stage: turns the HDR scene into swapchain pixels. See `@thunderclap/engine/post`.
+ * `viewport` (ws/xr-post) asks for the result in that part of `output` only (texture px, so an
+ * eye of a shared XR layer), loading the rest; without it the whole output is written. The
+ * inputs may be smaller or larger than the last `resize`: a processor sizes itself to them.
+ */
 export interface PostProcessor {
   resize(width: number, height: number): void;
-  encode(encoder: GPUCommandEncoder, inputs: PostInputs, output: GPUTextureView): void;
+  encode(
+    encoder: GPUCommandEncoder,
+    inputs: PostInputs,
+    output: GPUTextureView,
+    viewport?: SceneTargetViewport,
+  ): void;
 }
 
 export interface RendererOptions {
@@ -140,6 +155,8 @@ interface DrawCmd {
   offset: number;
 }
 
+/** What `resolve`'s built-in present clears to when it covers the whole output. */
+const PRESENT_CLEAR: GPUColorDict = { r: 0, g: 0, b: 0, a: 1 };
 /** Globals block (binding 0) floats: logicalSize, targetSize, time, dt, pad. */
 const GLOBALS_FLOATS = 8;
 /** The camera block (binding 1) starts at this float offset (256 bytes: uniform alignment). */
@@ -284,6 +301,11 @@ export class Renderer implements FrameSink {
   private readonly present: FullscreenPass;
   private presentGroup: GPUBindGroup | null = null;
   private readonly postInputs: PostInputs;
+  /** `resolve` (ws/xr-post): inputs for an explicit target and the present group cached for it. */
+  private readonly resolveInputs: PostInputs;
+  private resolveTarget: SceneTarget | null = null;
+  private resolveColor: GPUTextureView | null = null;
+  private resolveGroup: GPUBindGroup | null = null;
   /** The frame's command encoder, opened by the first `render`, submitted by `endFrame`. */
   private encoder: GPUCommandEncoder | null = null;
   private sampled = false;
@@ -387,6 +409,7 @@ export class Renderer implements FrameSink {
       time: 0,
       dt: 0,
     };
+    this.resolveInputs = { ...this.postInputs };
     this.resize(1, 1);
   }
 
@@ -847,10 +870,58 @@ export class Renderer implements FrameSink {
   }
 
   /**
+   * Run the post stack (or the built-in present) from `target` into `out` now, inside the frame
+   * (ws/xr-post): what `endFrame` does from `renderer.target` to the swapchain, for any target
+   * and any output. `viewport` confines the result to that part of `out` (texture px) and loads
+   * the rest, so two eyes resolve into one XR layer texture one after the other. The target is
+   * consumed: the next `render` into it this frame clears it again, so one HDR target serves
+   * every eye in turn. Needs a `render` before it this frame (the encoder is open then).
+   */
+  resolve(target: SceneTarget, out: GPUTextureView, viewport?: SceneTargetViewport): void {
+    if (!this.inFrame) throw new Error('resolve outside beginFrame/endFrame');
+    if (this.destroyed) return;
+    const enc = this.encoder;
+    if (!enc) throw new Error('resolve before any render this frame');
+    if (this.post) {
+      const inputs = this.resolveInputs;
+      inputs.color = target.color;
+      inputs.emissive = target.emissive;
+      inputs.time = this.frame.time;
+      inputs.dt = this.frame.dt;
+      this.post.encode(enc, inputs, out, viewport);
+    } else {
+      if (
+        !this.resolveGroup ||
+        this.resolveTarget !== target ||
+        this.resolveColor !== target.color.view
+      ) {
+        this.resolveTarget = target;
+        this.resolveColor = target.color.view;
+        this.resolveGroup = this.present.createBindGroup([target.color.view, target.emissive.view]);
+      }
+      this.present.encode(enc, out, {
+        bindGroup: this.resolveGroup,
+        clear: viewport ? null : PRESENT_CLEAR,
+        viewport,
+      });
+    }
+    // Consumed: forget the target so its next view this frame clears colour and depth.
+    for (let i = 0; i < this.usedCount; i++) {
+      if (this.usedTargets[i] === target) {
+        const last = --this.usedCount;
+        this.usedTargets[i] = this.usedTargets[last]!;
+        this.usedDepth[i] = this.usedDepth[last]!;
+        break;
+      }
+    }
+  }
+
+  /**
    * Finish the frame: `render(frame, renderer.camera)` when nothing rendered yet, then the
    * post stack (or the built-in present) from `renderer.target` to the swapchain, and submit.
    * `{ present: false }` skips the post stack and the swapchain (no `getCurrentTexture`): the
-   * frame's views went to their own targets, as an XR session's eyes do (ws/xr).
+   * frame's views went to their own targets, as an XR session's eyes do (ws/xr), resolved into
+   * the layer with `resolve` (ws/xr-post).
    */
   endFrame(opts?: { present?: boolean }): void {
     if (!this.inFrame) throw new Error('endFrame without beginFrame');
