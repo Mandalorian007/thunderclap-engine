@@ -133,6 +133,44 @@ describe('createGame', () => {
     expect(log).toEqual(['hide freeze running=false', 'flush']);
   });
 
+  it('hooks.lifecycle follows host.lifecycle: background after the stop and flush, active after the restart', async () => {
+    const log: string[] = [];
+    const ctx = await createGame(options(log));
+    if (!ctx) throw new Error('no ctx');
+    ctx.hooks.lifecycle = (s) => log.push(`lifecycle ${s} running=${ctx.loop.isRunning}`);
+    ctx.loop.start();
+    setHidden(true);
+    // The page events stop and flush first; the lifecycle facet does not flush a second time.
+    expect(log).toEqual(['flush', 'lifecycle background running=false']);
+    setHidden(false);
+    expect(log.at(-1)).toBe('lifecycle active running=true');
+  });
+
+  it('a host whose lifecycle changes without a page event still stops, flushes and resumes', async () => {
+    const log: string[] = [];
+    const { createWebHost } = await import('../host');
+    let fire: ((s: 'active' | 'background') => void) | null = null;
+    const host = {
+      ...createWebHost(),
+      lifecycle: {
+        state: () => 'active' as const,
+        watch: (fn: (s: 'active' | 'background') => void) => {
+          fire = fn;
+          return () => {};
+        },
+      },
+    };
+    const ctx = await createGame({ ...options(log), host });
+    if (!ctx) throw new Error('no ctx');
+    ctx.hooks.lifecycle = (s) => log.push(`lifecycle ${s} running=${ctx.loop.isRunning}`);
+    ctx.loop.start();
+    fire!('background');
+    expect(log).toEqual(['flush', 'lifecycle background running=false']);
+    fire!('active');
+    expect(ctx.loop.isRunning).toBe(true);
+    expect(log.at(-1)).toBe('lifecycle active running=true');
+  });
+
   it('a lost device halts the loop, audio and captions for good and flushes the save', async () => {
     const log: string[] = [];
     const ctx = await createGame(options(log));

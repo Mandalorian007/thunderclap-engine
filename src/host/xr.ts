@@ -64,5 +64,14 @@ export function createXrHost(session: XRSession, base: Host): XrHost {
     get window() {
       return base.window;
     },
+    get lifecycle() {
+      return base.lifecycle;
+    },
+    get haptics() {
+      return base.haptics;
+    },
+    get safeArea() {
+      return base.safeArea;
+    },
   };
 }

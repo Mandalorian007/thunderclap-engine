@@ -31,7 +31,13 @@
  */
 import { AudioEngine, persistMixer } from '../audio';
 import { ParticleSystem, type ParticleSystemOptions } from '../fx';
-import { createWebHost, createXrHost, type Host, type XrHost } from '../host';
+import {
+  createWebHost,
+  createXrHost,
+  type Host,
+  type HostLifecycleState,
+  type XrHost,
+} from '../host';
 import {
   type Bindings,
   createInputPlayback,
@@ -57,7 +63,7 @@ import {
 } from '../platform';
 import { type PostSettingsPatch, PostStack } from '../post';
 import { type Camera, type Frame, installGpuErrorLogging, Renderer } from '../render';
-import { createOverlay, type LayoutSpec, type Overlay, PadNav } from '../ui';
+import { createOverlay, followSafeArea, type LayoutSpec, type Overlay, PadNav } from '../ui';
 import type { Time } from './loop';
 import { GameLoop } from './loop';
 import { SceneStack } from './scene';
@@ -103,6 +109,12 @@ export interface GameHooks {
   hide?(reason: HideReason): void;
   /** The page is back and visible: after the loop restarts (not after a device loss). */
   show?(reason: ShowReason): void;
+  /**
+   * The host's lifecycle changed (`host.lifecycle`, ws/host-mobile): `background` after the loop
+   * stops and the save flushes (autosave here), `active` after it restarts. On the web host this
+   * follows the same page events as `hide`/`show`; in a store app it follows the shell.
+   */
+  lifecycle?(state: HostLifecycleState): void;
   /** The GPU device was lost: after the loop halts, before audio halts and the save flushes. */
   deviceLost?(info: GPUDeviceLostInfo): void;
 }
@@ -333,6 +345,8 @@ export async function createGame<
   });
   // Input is blocked while a modal panel is up, so the pad drives panels through this.
   const padNav = new PadNav(ui.stack, { getGamepads: opts.input.getGamepads });
+  // A host that knows the notch and home indicator pads the layout's regions by them.
+  if (host.safeArea) followSafeArea(ui.layout, host.safeArea);
   surface.onResize(({ rect, backbuffer }) => {
     renderer.resize(backbuffer.width, backbuffer.height);
     ui.setFrame(rect);
@@ -516,6 +530,24 @@ export async function createGame<
       loop.start();
       hooks.show?.(reason);
     },
+  });
+
+  // ── Host lifecycle (ws/host-mobile) ────────────────────────────────────
+  // A host that knows the app's state (the web host from the page's visibility, a store app's
+  // from its shell): background stops frames and flushes the save, active resumes. On the web
+  // host the page events above have usually done both already (the loop is then stopped, so the
+  // flush is not repeated); a shell's state change without a page event does them here. Audio
+  // follows the document's visibility in `audio.attach`, so it is not driven again.
+  host.lifecycle?.watch((state) => {
+    if (state === 'background') {
+      if (loop.isRunning) {
+        loop.stop();
+        save?.flush();
+      }
+    } else if (!loop.halted) {
+      loop.start();
+    }
+    hooks.lifecycle?.(state);
   });
 
   // Device lost: boot has shown the reload screen; stop all work behind it for good.

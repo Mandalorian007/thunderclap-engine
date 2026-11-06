@@ -461,6 +461,31 @@ export function placementFor(place: WidgetOptions['place'], ff: FormFactor): Pla
   return place[ff] ?? place.default ?? 'hidden';
 }
 
+/** What `followSafeArea` reads: `Host.safeArea` (`HostSafeArea`), or anything with its shape. */
+export interface SafeAreaSource {
+  insets(): Readonly<Insets>;
+  watch(fn: (insets: Readonly<Insets>) => void): () => void;
+}
+
+/**
+ * Pads the layout's regions by a host's safe-area insets (ws/host-mobile): sets
+ * `layout.setSafeArea(source.insets())` now and again whenever `source` reports a change, so the
+ * `top` region starts below the notch and the `bottom` region ends above the home indicator.
+ * `createGame` calls it with `host.safeArea` when the host has one; without it the layout reads
+ * `env(safe-area-inset-*)` itself. Returns unsubscribe, which also hands the page's own insets
+ * back to the layout.
+ */
+export function followSafeArea(layout: Pick<Layout, 'setSafeArea'>, source: SafeAreaSource) {
+  const apply = (i: Readonly<Insets>) =>
+    layout.setSafeArea({ top: i.top, right: i.right, bottom: i.bottom, left: i.left });
+  apply(source.insets());
+  const off = source.watch(apply);
+  return () => {
+    off();
+    layout.setSafeArea(null);
+  };
+}
+
 /** CSS px safe-area insets of `doc`'s viewport (`env(safe-area-inset-*)`, or the `--tc-safe-*` overrides). */
 export function readSafeArea(doc: Document = document): Insets {
   const probe = doc.createElement('div');

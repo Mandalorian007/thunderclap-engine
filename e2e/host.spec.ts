@@ -6,6 +6,7 @@
  * link-copy and smoke specs (docs/engine/test-split.md, P1 host), which now test product only.
  */
 import type { BrowserContext, Frame, Locator, Page } from '@playwright/test';
+import type { HarnessHostState } from '../harness/host-state';
 import type { HarnessHostInfo } from '../harness/state';
 import {
   expect,
@@ -279,6 +280,101 @@ test('fullscreen from a click, and back', async ({ context, page, wrapper }) => 
       (await info(frame)).fullscreen.filter((on, i, all) => i === 0 || on !== all[i - 1]),
     )
     .toEqual([true, false]);
+});
+
+// ── Host facets (ws/host-mobile): harness/host.html ──
+
+/** Opens harness/host.html for `wrapper` with `query` and waits until it has drawn 3 frames. */
+async function openFacets(
+  page: Page,
+  wrapper: HarnessOptions['wrapper'],
+  query = '',
+): Promise<Frame> {
+  let frame: Frame;
+  if (wrapper === 'top') {
+    await page.goto(`${HARNESS_URL}host.html${query}`);
+    frame = page.mainFrame();
+  } else {
+    await page.goto(`${WRAPPER_URL}?page=${encodeURIComponent(`host.html${query}`)}`);
+    frame = await harnessFrame(page);
+  }
+  await expect
+    .poll(async () => {
+      const s = await facets(frame).catch(() => null);
+      if (s?.ready && s.gpu !== 'ok') throw new Error(`createGame: ${s.gpu}`);
+      return s?.ready ? s.frames : -1;
+    })
+    .toBeGreaterThanOrEqual(3);
+  return frame;
+}
+
+function facets(frame: Frame): Promise<HarnessHostState> {
+  return frame.evaluate(() => {
+    const g = window.__harnessHost;
+    if (!g) throw new Error('window.__harnessHost missing');
+    return JSON.parse(JSON.stringify(g.state())) as HarnessHostState;
+  });
+}
+
+test('the host safe area pads the layout: the top region moves down, the bottom region up', async ({
+  page,
+  wrapper,
+}) => {
+  const plain = await facets(await openFacets(page, wrapper));
+  expect(plain.regionsTop).not.toBeNull();
+  expect(plain.regionsBottom).not.toBeNull();
+
+  const frame = await openFacets(page, wrapper, '?safe=44,0,34,0');
+  const s = await facets(frame);
+  expect(s.safeArea).toEqual({ top: 44, right: 0, bottom: 34, left: 0 });
+  // The layout keeps only the part of each inset the overlay reaches into (a letterbox bar or
+  // the wrapper's chrome already clears the rest), so the expectation is relative to that.
+  const top = Math.max(0, 44 - s.overlay.y);
+  const bottom = Math.max(0, 34 - (s.viewport.height - (s.overlay.y + s.overlay.height)));
+  expect(s.layoutSafeArea).toEqual({ top, right: 0, bottom, left: 0 });
+  const t = s.regionsTop;
+  const b = s.regionsBottom;
+  if (!t || !b) throw new Error('top or bottom region collapsed');
+  expect(t.y).toBeCloseTo(plain.regionsTop!.y + top, 0);
+  expect(s.overlay.height - (b.y + b.height)).toBeCloseTo(
+    plain.overlay.height - (plain.regionsBottom!.y + plain.regionsBottom!.height) + bottom,
+    0,
+  );
+});
+
+test('a hidden document stops frames within 200 ms through host.lifecycle; visible resumes them', async ({
+  page,
+  wrapper,
+}) => {
+  const frame = await openFacets(page, wrapper);
+  const setHidden = (hidden: boolean) =>
+    frame.evaluate((hidden) => {
+      Object.defineProperty(document, 'visibilityState', {
+        configurable: true,
+        get: () => (hidden ? 'hidden' : 'visible'),
+      });
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden });
+      document.dispatchEvent(new Event('visibilitychange'));
+    }, hidden);
+  expect((await facets(frame)).lifecycle).toBe('active');
+
+  await setHidden(true);
+  await page.waitForTimeout(200);
+  const stopped = await facets(frame);
+  expect(stopped.lifecycle).toBe('background');
+  expect(stopped.loopRunning).toBe(false);
+  expect(stopped.lifecycleEvents).toEqual(['background']);
+  await page.waitForTimeout(400);
+  expect((await facets(frame)).frames).toBe(stopped.frames);
+
+  await setHidden(false);
+  await expect.poll(() => facets(frame).then((s) => s.frames)).toBeGreaterThan(stopped.frames + 3);
+  const resumed = await facets(frame);
+  expect(resumed.lifecycle).toBe('active');
+  expect(resumed.loopRunning).toBe(true);
+  expect(resumed.lifecycleEvents).toEqual(['background', 'active']);
+  // The web host answers haptics only where navigator.vibrate exists; either way it is wired.
+  expect(typeof resumed.hapticsAvailable).toBe('boolean');
 });
 
 test("itch's click-to-launch starts the harness at 960x540", async ({ page, wrapper }) => {
