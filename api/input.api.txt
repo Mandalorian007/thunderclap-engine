@@ -387,7 +387,7 @@ class Input<A extends string> {
     readonly tickMs: number;
     recorder: InputRecorder | null;
     playback: InputPlayback | null;
-    constructor(bindings: Bindings<A>, opts?: InputOptions);
+    constructor(bindings: Partial<Bindings<A>>, opts?: InputOptions);
     get lastDevice(): InputDevice;
     set lastDevice(device: InputDevice);
     on<K extends keyof InputEvents>(type: K, fn: (payload: InputEvents[K]) => void): () => void;
@@ -401,7 +401,7 @@ class Input<A extends string> {
     addActionSource(src: ActionSource): () => void;
     axis(negative: A, positive: A): number;
     get look(): Look | null;
-    setBindings(bindings: Bindings<A>): void;
+    setBindings(bindings: Partial<Bindings<A>>): void;
     rebind(action: A, list: readonly Binding[], context?: string | null): void;
     bindings(context?: string | null): Bindings<A>;
     pushContext(name: string, opts?: ContextOptions<A>): () => void;
@@ -437,6 +437,8 @@ class Input<A extends string> {
     wheel(dx: number, dy: number): void;
     pointerAt(clientX: number, clientY: number, type?: PointerState['type']): void;
     releaseAll(): void;
+    control(id: string): void;
+    replayControl(id: string): void;
     attach(opts: AttachOptions): void;
     replayPointer(phase: InputPointerPhase, id: number, device: 'mouse' | 'touch' | 'pen', clientX: number, clientY: number, button: number, primary: boolean, age?: number): boolean;
     detach(): void;
@@ -457,6 +459,7 @@ interface InputEvents {
     attach: PointerDispatcher;
     detach: PointerDispatcher;
     context: string | null;
+    control: string;
 }
 
 ## InputFeedHook  (type-only)
@@ -475,6 +478,7 @@ interface InputFeedHook {
     cancelPointers?(): void;
     context?(name: string, pushed: boolean): void;
     consume?(action: string): void;
+    control?(id: string): void;
 }
 
 ## InputOptions  (type-only)
@@ -570,6 +574,7 @@ interface InputTickEvents {
     ptr?: InputPointerEntry[];
     cx?: [string, 0 | 1][];
     cs?: string[];
+    ui?: string[];
 }
 
 ## InputTickRun  (type-only)

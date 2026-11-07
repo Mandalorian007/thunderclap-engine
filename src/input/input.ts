@@ -83,6 +83,12 @@ export interface InputEvents {
   detach: PointerDispatcher;
   /** The top action context changed (`pushContext`, `popContext`): its name, `null` for none. */
   context: string | null;
+  /**
+   * A playback replayed an overlay control's activation (`replayControl`, the recording's `ui`
+   * lane; ws/input-12): its stable id. `createGame` activates the overlay control with that id
+   * (`Overlay.activate`). A live `control(id)` does not emit it: the control's handler ran.
+   */
+  control: string;
 }
 
 /**
@@ -259,6 +265,8 @@ export interface InputFeedHook {
   context?(name: string, pushed: boolean): void;
   /** `consume(action)` was called. */
   consume?(action: string): void;
+  /** `control(id)` was called: an overlay control with that stable id fired (ws/input-12). */
+  control?(id: string): void;
 }
 
 export interface AttachOptions {
@@ -410,6 +418,11 @@ export function isInteractiveTarget(target: EventTarget | null): boolean {
  * input.update();
  * if (input.pressed('confirm')) …
  * ```
+ *
+ * `A` is the full action union. The base map may leave some out (ws/input-12): an action only a
+ * pushed context binds (`new Input<'jump' | 'back'>({ jump }, …)`, then
+ * `pushContext('menu', { bindings: { back } })`) is typed everywhere and reads inactive until a
+ * context binds it. `bindings()` lists the actions bound so far.
  */
 export class Input<A extends string> {
   readonly pointer: PointerState = {
@@ -501,9 +514,9 @@ export class Input<A extends string> {
     pressed: (action) => this.states.get(action as A)?.pressed ?? false,
   };
 
-  constructor(bindings: Bindings<A>, opts: InputOptions = {}) {
-    this.map = bindings;
-    this.active = bindings;
+  constructor(bindings: Partial<Bindings<A>>, opts: InputOptions = {}) {
+    this.map = bindings as Bindings<A>;
+    this.active = bindings as Bindings<A>;
     this.getGamepads = opts.getGamepads ?? defaultGamepads;
     this.blocked = opts.blocked ?? (() => false);
     this.queueTaps = opts.queueTaps ?? true;
@@ -669,10 +682,11 @@ export class Input<A extends string> {
 
   /**
    * Replace the base bindings (below every pushed context). Action states and the input buffer
-   * reset (use `rebind` to change one action and keep the rest).
+   * reset (use `rebind` to change one action and keep the rest). The map may leave out actions
+   * of `A` (ws/input-12): a pushed context binds those.
    */
-  setBindings(bindings: Bindings<A>): void {
-    this.map = bindings;
+  setBindings(bindings: Partial<Bindings<A>>): void {
+    this.map = bindings as Bindings<A>;
     this.states.clear();
     this.triggers.clear();
     this.presses.clear();
@@ -1453,6 +1467,25 @@ export class Input<A extends string> {
     this.buttonRepeats.clear();
     this.pointer.down = false;
     this.linkedLook?.orbitUp();
+  }
+  /**
+   * An overlay control fired (ws/input-12): a button the player clicked, tapped or activated
+   * with Enter or the pad, named by its stable id (`controlId` in ui). Feed hooks see it, so a
+   * recording carries it in its `ui` lane on the tick it happened; nothing else changes. The
+   * control's own handler has already run. `createGame` calls it for every overlay control.
+   */
+  control(id: string): void {
+    const hooks = this.feedHooks;
+    for (let i = 0; i < hooks.length; i++) hooks[i]!.control?.(id);
+  }
+  /**
+   * Replay an overlay control's activation (ws/input-12): emits `'control'` with `id`, whose
+   * listener (`createGame`: `Overlay.activate`) fires the control. `createInputPlayback` calls it
+   * for the recording's `ui` lane, before that tick's `update()`, so the handler runs on the
+   * tick it ran live. Feed hooks do not see it.
+   */
+  replayControl(id: string): void {
+    this.events.emit('control', id);
   }
 
   // ---------------------------------------------------------------- DOM

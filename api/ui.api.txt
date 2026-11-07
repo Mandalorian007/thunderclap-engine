@@ -112,7 +112,14 @@ interface ButtonOptions {
     disabled?: boolean;
     ariaLabel?: string;
     className?: string;
+    id?: string;
 }
+
+## CONTROL_ID_ATTR
+const CONTROL_ID_ATTR = "data-tc-id";
+
+## CONTROL_PAGE_ATTR
+const CONTROL_PAGE_ATTR = "data-tc-page";
 
 ## CSS_FONT_PX
 const CSS_FONT_PX: {
@@ -1025,6 +1032,8 @@ interface Overlay {
     loading(opts?: LoadingOptions): LoadingScreen;
     notify(opts: NotifyOptions): Notification;
     readonly notifications: Notifier;
+    onControl(fn: (id: string, el: HTMLElement) => void): () => void;
+    activate(id: string): boolean;
     destroy(): void;
 }
 
@@ -1992,6 +2001,9 @@ function classifyFormFactor(i: ClassifyInput): FormFactor;
 
 ## contextList
 function contextList(host: InventoryHost, items: ContextItem[], opts: ContextListOptions): ContextList;
+
+## controlId
+function controlId(el: Element, root?: ParentNode): string | null;
 
 ## cooldown
 function cooldown(opts?: WidgetCooldownOptions): WidgetCooldown;

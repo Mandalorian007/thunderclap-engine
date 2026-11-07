@@ -97,6 +97,10 @@ pads, so an identical game sees identical `pressed`/`held`/`value` per tick. Onc
 done the input holds its last state. A replay attaches the input to an element outside the page
 (keys are read from it too), so the recorded pointers (the recording's `ptr` lane) reach
 `ctx.gestures` and `ctx.pointers` while no real pointer or key can (ws/core-4). Both options keep the rest of the pipeline untouched.
+Overlay button clicks are recorded too (ws/input-12): `ctx.ui.onControl` feeds each click's
+stable id to `ctx.input.control`, the recording's `ui` lane, and a replay (`input.replay` or
+`ctx.replay`) clicks the button with that id through `ctx.ui.activate` before the tick's update,
+so the handler fires on the frame it fired live, on a page rebuilt from scratch.
 
 ## createGame: the tick clock
 
@@ -163,8 +167,14 @@ The replay sink (`ctx.replay`, `input.replay`) is a detached element, so it meas
   needs no argument.
 - `EngineCtx<A, S, C, P>`: `S` defaults to `FlushableSave | null`, so a helper typed
   `EngineCtx<A>` takes a ctx with or without a save (name the save, `EngineCtx<A, MySave>`, to
-  read it). `P` is the pointer hits' target type (`createGame<A, S, C, P>` types
-  `ctx.pointers`); it defaults to `any` on `EngineCtx`, so `EngineCtx<A>` takes any of them.
+  read it). `P` is the pointer hits' target type: `createGame({ pointers: { testers } })`
+  infers it from the first hit testers (ws/input-12), or name it with `createGame<A, S, C, P>`.
+  It defaults to `unknown` on `EngineCtx` (was `any` before ws/input-12): the router is
+  covariant in its target, so `EngineCtx<A>` still takes a ctx of any `P` and reads its hits'
+  targets as `unknown`.
+- `input.bindings` is a `Partial<Bindings<A>>` (ws/input-12): `A` is the full action union, so
+  `createGame<'jump' | 'back'>({ input: { bindings: { jump } } })` leaves `back` to a context
+  (`ctx.input.pushContext('menu', { bindings: { back } })`).
 - The save is flushed on hide, on `host.lifecycle` going to `background` and on device loss.
 
 ## Scenes

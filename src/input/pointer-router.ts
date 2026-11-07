@@ -144,7 +144,12 @@ export class PointerRouter<T = unknown> {
   selectAction: string;
   secondaryAction: string;
 
-  private readonly events = new Emitter<PointerRouterEvents<T>>();
+  /**
+   * Typed over `unknown` targets, so the router is covariant in `T` (ws/input-12): a
+   * `PointerRouter<Target>` is a `PointerRouter<unknown>`, and `EngineCtx<A, S, C, unknown>`
+   * takes any typed ctx. `on` narrows the listeners back to `T`.
+   */
+  private readonly events = new Emitter<PointerRouterEvents>();
   private cameraOpt: RayCamera | (() => RayCamera | null) | null;
   private readonly testers: HitTester<T>[] = [];
   private readonly sources: PointerSource[] = [];
@@ -197,7 +202,7 @@ export class PointerRouter<T = unknown> {
     type: K,
     fn: (e: PointerRouterEvents<T>[K]) => void,
   ): () => void {
-    return this.events.on(type, fn);
+    return this.events.on(type, fn as (e: PointerRouterEvents[K]) => void);
   }
 
   /**

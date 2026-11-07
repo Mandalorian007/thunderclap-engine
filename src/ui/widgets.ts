@@ -6,6 +6,13 @@ export interface ButtonOptions {
   /** Accessible name when the label is an icon. */
   ariaLabel?: string;
   className?: string;
+  /**
+   * The button's stable id (ws/input-12; `data-tc-id`, `CONTROL_ID_ATTR`): what a recording
+   * stores when it fires and what `Overlay.activate` finds it by on replay. Omitted, the id is
+   * derived from its page and label (`controlId`); give one when the label is translated or
+   * not unique on its page.
+   */
+  id?: string;
 }
 
 export function button(
@@ -21,6 +28,7 @@ export function button(
       dataset: { variant: opts.variant ?? 'default' },
       disabled: opts.disabled ?? false,
       'aria-label': opts.ariaLabel,
+      'data-tc-id': opts.id,
       on: { click: onClick },
     },
     label,
