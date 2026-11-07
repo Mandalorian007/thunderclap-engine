@@ -56,6 +56,7 @@ import {
   REACH,
   SEED,
   spawnColumn,
+  terrainHeight,
   type VoxelDemoApi,
   type VoxelDemoState,
   WATER_HEIGHT,
@@ -116,6 +117,8 @@ const state: VoxelDemoState = {
   still: STILL,
   locked: false,
   gpuErrors: 0,
+  terrainTops: [-1, -1],
+  spawn: [-1, -1, -1],
 };
 
 /**
@@ -336,6 +339,18 @@ async function main(): Promise<void> {
   spawnColumn(grid, cc);
   const broken = worldProblem(grid, SEED, cc);
   if (broken) console.error(`voxel world: ${broken}`);
+  // The same promises as numbers, for the spec to assert on directly.
+  let topMin = Infinity;
+  let topMax = -Infinity;
+  for (let z = 0; z < WORLD_Z; z++) {
+    for (let x = 0; x < WORLD_X; x++) {
+      const h = terrainHeight(x, z, SEED);
+      if (h < topMin) topMin = h;
+      if (h > topMax) topMax = h;
+    }
+  }
+  state.terrainTops = [topMin, topMax];
+  state.spawn = [cc[0], cc[1], cc[2]];
   pos[0] = cc[0] + 0.5;
   pos[1] = cc[1];
   pos[2] = cc[2] + 0.5;

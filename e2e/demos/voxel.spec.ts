@@ -5,6 +5,9 @@
  *
  * - boots to a steady state with all 256 chunks meshed in the Worker and no console errors, and
  *   the spawn view draws well under one call per chunk;
+ * - the world keeps the generator's promises as numbers, not only as a boot console error:
+ *   every terrain top in 16..44 (`terrainTops`) and the spawn cell open over solid land above
+ *   the sea (`spawn`);
  * - a click (touch rows: a tap on the right half, real touch events through CDP) breaks the
  *   block under the reticle: `lookingAt` changes and, on desktop, the re-mesh round trip is
  *   under 50 ms, with no mesh growth;
@@ -18,7 +21,13 @@
  * vite.harness.config.ts). The itch row embeds that route in the wrapper page (`?page=`).
  */
 import type { CDPSession, Frame, Page } from '@playwright/test';
-import { CHUNK_COUNT, type VoxelDemoApi, type VoxelDemoState } from '../../demos/voxel/world';
+import {
+  Block,
+  CHUNK_COUNT,
+  SEA_LEVEL,
+  type VoxelDemoApi,
+  type VoxelDemoState,
+} from '../../demos/voxel/world';
 import { expect, test } from '../fixtures';
 import { HARNESS_URL, WRAPPER_URL } from '../ports';
 
@@ -164,6 +173,32 @@ test('boots with every chunk meshed and draws under 200 calls', async ({ page, w
   expect(s.gpuErrors).toBe(0);
   // Spawned on land: the feet stand on a block above the sea.
   expect(s.playerPos[1]).toBeGreaterThan(20);
+  expect(pageErrors()).toEqual([]);
+});
+
+test('the world keeps its promises: terrain tops in 16..44, spawn on solid land', async ({
+  page,
+  wrapper,
+}) => {
+  await open(page, wrapper);
+  const s = await read();
+  // Every column's generated top, trees and caves aside (the page measures it once at boot).
+  const [lo, hi] = s.terrainTops;
+  expect(lo).toBeGreaterThanOrEqual(16);
+  expect(hi).toBeLessThanOrEqual(44);
+  expect(lo).toBeLessThanOrEqual(hi);
+  // The spawn cell is open, with land under it (not air or sand) above the sea.
+  const [x, y, z] = s.spawn;
+  const [at, under] = await frame.evaluate(
+    ([x, y, z]) => {
+      const d = (window as unknown as { __demo: VoxelDemoApi }).__demo;
+      return [d.blockAtWorld(x, y, z), d.blockAtWorld(x, y - 1, z)];
+    },
+    [x, y, z] as const,
+  );
+  expect(at).toBe(Block.Air);
+  expect([Block.Air, Block.Sand]).not.toContain(under);
+  expect(y - 1).toBeGreaterThan(SEA_LEVEL);
   expect(pageErrors()).toEqual([]);
 });
 

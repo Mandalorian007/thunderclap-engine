@@ -31,6 +31,7 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 
 ### Tests
 - e2e under load (ws/e2e-harden): `audio4` `?sprites` counts the clip's voice inside `playClip` (`voicesAtPlay`, `clipsPlayed`, `clipsEnded` on `__harnessAudio4.state`) instead of racing a 200 ms clip; `demos/voxel` sends a tap's or click's press and release back to back over CDP so a starved runner cannot turn it into a long-press (as do `voxel` and `demos/tactics` taps); `decals`, `post2` take clipped screenshots, `skin` keeps a screenshot only when reads either side of it agree, the decal expiry test runs a 10 s life; single reads of moving values poll and fixed sleeps poll page state.
+- e2e under load (ws/e2e-harden-2): `fx3` `?forces` samples a clipped 5×5 window every 50 ms, because the motes swing through the attractor (lit about 0.3 s of each pass) rather than settle on it; `?collide` allows 12% of `alive` past the slab (measured worst 6.2%, no collision about 75%); `ui4` `?minimap` records each distinct rim count on the frame it happens (`onRimSeen`) and reads the state and the DOM in one evaluate; `demos/voxel` publishes `terrainTops` and `spawn` and asserts tops in 16..44 and the spawn open over solid land above the sea.
 
 ### Templates and demos (ws/adopt-sweep)
 

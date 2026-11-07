@@ -108,22 +108,20 @@ test('the minimap clamps far markers to the rim as the centre moves', async ({ p
   const map = frame.locator('#minimap');
   await expect(map).toBeVisible();
   await expect(map.locator('.tc-minimap-marker')).toHaveCount(4);
-  const seen = new Set<number>();
+  // A rim count of 3 lasts about 0.37 s of every 2.6 s of page time: the page records each
+  // distinct count on the frame it happens (`onRimSeen`) rather than the spec sampling for it.
+  await expect.poll(async () => (await read()).onRimSeen.length).toBeGreaterThanOrEqual(2);
+  // The state and the DOM in one evaluate, so no frame passes between the two reads.
   await expect
-    .poll(async () => {
-      const s = await read();
-      seen.add(s.onRim);
-      return seen.size;
-    })
-    .toBeGreaterThanOrEqual(2);
-  await expect
-    .poll(async () => {
-      const [s, outside] = await Promise.all([
-        read(),
-        map.locator('.tc-minimap-marker.tc-minimap-outside').count(),
-      ]);
-      return s.onRim === outside;
-    })
+    .poll(() =>
+      frame.evaluate(() => {
+        const s = window.__harnessUi4?.state;
+        const outside = document.querySelectorAll(
+          '#minimap .tc-minimap-marker.tc-minimap-outside',
+        ).length;
+        return s?.onRim === outside;
+      }),
+    )
     .toBe(true);
   expect(errors).toEqual([]);
 });
