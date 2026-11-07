@@ -19,7 +19,9 @@ const UP_Z = new Float32Array([0, 0, 1]);
  * depth texture (what every view binds at `@group(0) @binding(3)` until a shadow pass has
  * rendered) and a depth-only pipeline per vertex layout. The renderer owns one and, for each
  * `render` whose `frame.lights.sun.shadow` is set, encodes a shadow pass through `sunCamera`
- * (an orthographic `Camera` placed by `place`) over the view's opaque shadow-casting draws.
+ * (an orthographic `Camera` placed by `place`) over the view's opaque shadow-casting draws. A
+ * caster whose material has a `shadowFragmentEntry` (alpha mask, dissolve) draws through that
+ * material's `shadowPipelineFor` instead, so its holes show in the shadow.
  * Engine-internal; games set `Lights.sun.shadow`.
  */
 export class ShadowMap {

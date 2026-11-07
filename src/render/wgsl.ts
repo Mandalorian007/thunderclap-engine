@@ -32,8 +32,10 @@ export function createShaderModule(
  * - `@binding(0) globals`: `logicalSize`, `targetSize` (scene target px), `time`, `dt`.
  * - `@binding(1) camera` (the camera block): `view`, `proj`, `view_proj` (world → clip),
  *   `camera_pos` (world eye position, w = 1), `viewport` (target px: x, y, w, h),
- *   `view_index` (0 today; 0/1 per eye later) and `inv_view_proj` (clip → world, the inverse
- *   of `view_proj`; `camera.invViewProj` on the CPU side).
+ *   `view_index` (`camera.viewIndex`: 0, or the eye index of an XR view), `inv_view_proj`
+ *   (clip → world, the inverse of `view_proj`; `camera.invViewProj` on the CPU side),
+ *   `prev_view_proj` and `prev_view` (last frame's unjittered `view_proj` and `view`) and
+ *   `jitter` (clip-space dx, dy; the pixel offset x, y).
  */
 export const WGSL_GLOBALS = /* wgsl */ `
 struct EngineGlobals {
@@ -285,7 +287,7 @@ export const SKIN_PALETTE_BINDING = BUFFER_BINDING_BASE;
  * GPU skinning, emitted by `materialPrelude` for a layout with `skinned: true` (after
  * `VertexIn`, which it reads). The palette is the material's storage buffer slot 0
  * (`SkinPalette.buffer` passed as `buffers: [palette.buffer]`): a header (`joints` per
- * instance, `instances`) and `rows`, three `vec4f` rows per joint (row-major 3×4, the layout
+ * instance, `instances`, `history`) and `rows`, three `vec4f` rows per joint (row-major 3×4, the layout
  * `anim`'s `skinMatrices` writes), instance after instance. `engine_skin(v, position, normal)`
  * sums the four weighted joint matrices of the vertex (`v.joints`, `v.weights`) for the
  * instance's palette slot `u32(v.params.w)` and applies them to an object-space position and
@@ -391,8 +393,9 @@ const laneLayouts = new WeakMap<VertexLayout, GPUVertexBufferLayout>();
  * Declares `VertexIn` (the layout's vertex fields plus the 28-float instance: 3×4 world matrix
  * rows `m0..m2`, `uvRect`, `tint`, `params`, `misc` = emissive, flags, size.xy), the default
  * vertex entry `vs_main`, the `VSOut` varyings (`flags` is the instance's flag bits: bit 0 set
- * means `receiveShadow: false`; `tangent` the world-space file tangent, w = 0 without one;
- * `uv1` the second uv set, `uv` without one) and the `FragOut` MRT struct.
+ * means `receiveShadow: false`, bits 1..23 are its layers; `tangent` the world-space file
+ * tangent, w = 0 without one; `uv1` the second uv set, `uv` without one) and the `FragOut` MRT
+ * struct.
  *
  * Helpers: `engine_local_position(v)` / `engine_local_normal(v)` / `engine_local_tangent(v)`
  * (object space; skinned for a `skinned` layout), `engine_world_position(v)`,

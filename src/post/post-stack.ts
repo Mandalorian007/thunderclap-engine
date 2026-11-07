@@ -73,8 +73,8 @@ const NO_JITTER: readonly [number, number] = [0, 0];
  * the frame has one (ws/post-depth; off by default), the finishing passes (ws/post-2, all
  * off by default): a depth/normal outline, chromatic aberration, sharpen, a 3D LUT, film grain
  * in the composite, and FXAA as one extra pass after it, and the third pass (ws/post-3, all
- * off by default): TAA, screen-space reflections, auto-exposure, white balance, camera motion
- * blur and lens dirt. Plug it into a renderer with `renderer.post = new PostStack(r)`.
+ * off by default): TAA, screen-space reflections, auto-exposure, white balance, motion blur
+ * (camera, or per object from a velocity target since ws/post-4) and lens dirt. Plug it into a renderer with `renderer.post = new PostStack(r)`.
  *
  * Every pass reads the frame from `PostInputs` alone (ws/post-4): the view matrices and the
  * jitter from `view`, the projection from `projection`, per-surface roughness and metalness

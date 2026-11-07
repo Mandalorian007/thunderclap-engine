@@ -15,11 +15,12 @@ import { WGSL_GLOBALS, WGSL_LIGHTS, WGSL_NOISE } from '../render/wgsl';
  *
  * Colour, all in linear space: zenith → horizon → ground by the ray's elevation; a band around
  * the horizon mixes towards `lights.fog` (scaled by its density) so fogged geometry meets the
- * sky; the sun disc (`sun_size` radians of angular radius) and two glow lobes (`sun_glow`) tinted
- * by `lights.sun_color` at `-lights.sun_dir`; when the sun is below the horizon the dome darkens
- * and the stars (a hash of the direction on a grid of `density` cells per unit) appear. Without
- * a sun (colour all zero) the dome is as set and the stars, if on, are full. The sun disc and the
- * stars also go to the emissive target so bloom picks them up.
+ * sky; the sun disc (`sunSize` radians of angular radius, `sky.horizon.w`) and two glow lobes
+ * (`sunGlow`, `sky.ground.w`) tinted by `lights.sun_color` at `-lights.sun_dir`; when the sun
+ * is below the horizon the dome darkens and the stars (a hash of the direction on a grid of
+ * `density` cells per unit) appear. Without a sun (colour all zero) the dome is as set and the
+ * stars, if on, are full. The sun disc and the stars also go to the emissive target so bloom
+ * picks them up.
  */
 export const SKY_WGSL = /* wgsl */ `
 ${WGSL_GLOBALS}
