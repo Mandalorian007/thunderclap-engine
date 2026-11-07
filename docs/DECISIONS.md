@@ -187,3 +187,5 @@ Ruling: land ea53645. The test joins the tolerated list (as E-017) until ws/e2e-
 After the adoption-4 merge, the train 9 `pnpm check` had 1 failure at load 13.8: `src/input/record-timing.dom.test.ts:149` "ptr entries carry their time since the recorder started" (`expected 6.41 to be greater than 10`). The recorded up time came out 13.6 ms early. adoption-4 touches no `src/`. The src tree is identical to the two green check runs before it (core-4 400e2ae, post-7 376acb3). The test reads real DOM event timestamps, so it depends on wall-clock time.
 
 Ruling: no rerun. Commit adoption-4 and run the matrix. The test is tolerated in trains 9 and 10 only. ws/input-10, which owns `src/input`, makes the assertion honest about time (an injected clock or synthetic `timeStamp`s) and shows it 20× green under load. Any other check failure is still real.
+
+**Closed 2026-11-06:** ws/input-10 (c2de796, train 11) found the cause in the test, not the recorder. It now mocks `performance.now()` to the rig clock and uses fixed event `timeStamp`s, so the assertion is exact. It passed 20/20 at load 33. From train 11 on, the test is no longer tolerated.
