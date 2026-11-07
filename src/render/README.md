@@ -1263,8 +1263,8 @@ the pieces. `Water` and `ParticleSystem` take `readsDepth` and then skip their o
   Buffers hold bytes (ws/render-9). A `FakeBuffer`'s `data` is its contents: `writeBuffer`
   stores into it (a typed array's `dataOffset` and `dataSize` count elements, and `writes`
   records bytes), and `copyBufferToBuffer`, `clearBuffer` and `resolveQuerySet` apply when their
-  command buffer is submitted (`submits` counts them, `bufferCopies` lists the copies as
-  encoded, `querySets` holds `FakeQuerySet`s whose `values` a test fills). A `MAP_READ` buffer
+  command buffer is submitted (`submits` counts them, `bufferCopies` lists each encoded copy as a
+  `FakeBufferCopy`, `querySets` holds `FakeQuerySet`s whose `values` a test fills). A `MAP_READ` buffer
   maps for real: `mapAsync` resolves a microtask later with `mapState` `'pending'` then
   `'mapped'`, `getMappedRange` returns a copy of the bytes the submitted copy brought, and
   `unmap` detaches every range it handed out. A missing usage flag throws
