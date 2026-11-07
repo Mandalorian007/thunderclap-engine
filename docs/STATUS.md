@@ -164,7 +164,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Render 9: LOD lists skip the undrawn main upload; fake GPU checks usage flags and maps staging buffers; readback tests off stubs | ws/render-9 | brief `docs/briefs/render-9.md`; branched from ws/render-8 b3dc3b6 | render-8, fx-6/7 wishes | ✅ merged in E-031 train 12 (`26a7f87`; main 7d5f6af) |
 | 5 | Core 5: `createGame` test of a playback installed mid-session (clock already advanced), speed 1 and 4 | ws/core-5 | brief `docs/briefs/core-5.md`; branched from ws/input-10 c2de796 | core-4, input-10 | ✅ merged in E-031 train 11 (`00a773d`; main 336ed25) |
 | 5 | Core 6: `EngineCtx.clock` typed as the tick clock; `ctx.replay(rec, opts)` detaches real input and reattaches it at the end | ws/core-6 | brief `docs/briefs/core-6.md`; branched from ws/core-5 fdc822e | core-5 | ✅ merged in E-031 train 12 (`ad6ea9c`; main 7d5f6af) |
-| 5 | UI 11: meter `setPlace` (or a per-form place map), the minimap holds its size in content rails, `meter.size` getter | ws/ui-11 | brief `docs/briefs/ui-11.md` | ui-10 | 🔵 dispatched |
+| 5 | UI 11: meter `setPlace` (or a per-form place map), the minimap holds its size in content rails, `meter.size` getter | ws/ui-11 | brief `docs/briefs/ui-11.md` | ui-10 | 🟣 done at `a861416` (check green, snap 0, ui5 112, ui4 48, ui 77). Train 13 or 14 |
 | 5 | Core 7: `ctx.replay` `onEnd`; `createGame` velocity-target option | ws/core-7 | brief `docs/briefs/core-7.md`; branched from ws/core-6 ad6ea9c | core-6 | 🟣 done at `f935af7` (check 2283, snap 0, replay 16, core2 40, lifecycle 32). Train 12 or 13 |
 | 5 | Input 11: pointer-source mute (XR included) for replays | ws/input-11 | brief `docs/briefs/input-11.md` | core-6 | 🟣 done at `6b48bfd` (check 2284, snap 0, replay 16, xr 8, input 52, input5 48). Train 13 |
 | 5 | Docs guide: root README rewritten for a first-time user; `docs/guide/` (9 task guides); a snippet typecheck in `pnpm check`; OFFERING refreshed | ws/docs-guide | brief `docs/briefs/docs-guide.md` | — | 🟡 `5b22ffd` done (check 2276, snap 0); merging main for `ctx.replay`, then train 13 |
@@ -390,6 +390,11 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
   - → ws/core-8: in `ctx.replay`, call `pointers.mute()` after `attachSink()` and `pointers.unmute()` in `stop` before `attachHome()`.
   - Wish: `mute()` returns a remover, so a game mute and a replay mute don't clear each other (→ input-12 or core-8).
 - ws/harden-api audit is ruled in E-036. ws/harden-api-2 is briefed after harden-api lands (it touches every `index.ts`). The ws/docs-guide ergonomics wishes become ws/ergonomics-1 after the same landing.
+- ws/ui-11 notes:
+  - `MeterOptions.place` takes a region or a per-form map, plus `meter.setPlace`, `meter.region`, `meter.size` and `WidgetOptions.onMove`.
+  - A minimap holds its size in rails, and `overflows()` reports when it can't.
+  - Bug fixed: every re-layout re-appended every widget, which killed CSS animations and focus.
+  - → ws/adoption-6: drop the arpg minimap `min-width` workaround and the orb rebuild, and use `place` maps.
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
