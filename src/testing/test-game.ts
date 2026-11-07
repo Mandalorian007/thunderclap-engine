@@ -3,8 +3,10 @@
  * and the fixed clock. `step(n)` runs the game's own loop for `n` frames of one fixed step
  * each, so a test presses an action, steps and asserts state with the engine's real frame
  * order. Needs a DOM for the overlay (`// @vitest-environment happy-dom`), unless
- * `overlay: false` (ws/testing-2), which runs in plain Node on an inert stand-in DOM.
+ * `overlay: false`, which is `createGame`'s no-DOM mode (ws/core-9) and runs in plain Node.
  */
+
+import type { DetachedSurface } from '../core/detached-surface';
 import type { CreateGameOptions, EngineCtx, FlushableSave } from '../core/game';
 import { createGame } from '../core/game';
 import type { Input } from '../input';
@@ -17,7 +19,6 @@ import {
 } from '../render/fake-gpu';
 import { createFakeHost, type FakeHost } from './fake-host';
 import { createFixedClock, type FixedClock } from './fixed-clock';
-import { installNullDom } from './null-dom';
 
 /**
  * `createTestGame` options: `createGame`'s, without `gpu`, `host` and `clock` (the kit makes
@@ -42,14 +43,12 @@ export interface TestGameOptions<
    */
   viewport?: { width: number; height: number };
   /**
-   * `false` (ws/testing-2): the test needs no DOM. In an environment without one (plain Node,
-   * Vitest's default `node` environment) the kit installs an inert stand-in on `globalThis`
-   * (`document`, `window`, `getComputedStyle`, `ResizeObserver` and the `Node`/`HTMLElement`
-   * classes, only those missing, for the rest of the file), so `createGame` mounts its canvas,
-   * overlay and input into elements that never lay out, paint or receive events. `ctx.ui`
-   * exists but shows nothing; drive the game through `input`. With a real DOM it is used as
-   * usual, and the default root is a detached `<div>` instead of one in `document.body`.
-   * Default true: the overlay needs a DOM (`// @vitest-environment happy-dom`).
+   * `false`: the test needs no DOM (ws/testing-2). The game runs in `createGame`'s no-DOM mode
+   * (`CreateGameOptions.overlay`, ws/core-9), in plain Node (Vitest's default `node`
+   * environment) or under happy-dom alike, and nothing touches `document` or `window`: no
+   * overlay (reading `ctx.ui` throws), no canvas (`ctx.surface` letterboxes a virtual
+   * container of `viewport`), no DOM listeners. `root` is not used. Drive the game through
+   * `input`. Default true: the overlay needs a DOM (`// @vitest-environment happy-dom`).
    */
   overlay?: boolean;
 }
@@ -102,8 +101,8 @@ export async function createTestGame<
   const design = { width: opts.design?.width ?? 1920, height: opts.design?.height ?? 1080 };
   const view = opts.viewport ?? design;
   const headless = opts.overlay === false;
-  const doc = headless ? installNullDom(view) : globalThis.document;
-  if (!doc) {
+  const doc = globalThis.document;
+  if (!headless && !doc) {
     throw new Error(
       'createTestGame needs a DOM: add `// @vitest-environment happy-dom`, or pass `overlay: false`',
     );
@@ -114,23 +113,29 @@ export async function createTestGame<
   const step = opts.sim ? (opts.sim.step ?? 1 / 60) : 1 / 60;
   // `step × 1000` is what the loop advances the clock by, so each fixed update is one tick.
   const clock = createFixedClock(step * 1000);
-  const root =
-    opts.root ??
-    (headless ? doc.createElement('div') : doc.body.appendChild(doc.createElement('div')));
-  sizeElement(root, () => ({ left: 0, top: 0, width: view.width, height: view.height }));
   const gpu: GpuContext = {
     ...fakeRendererGpu(device),
     adapter: {} as GPUAdapter,
     timestamps: false,
   };
+  let root: HTMLElement | undefined;
+  if (!headless) {
+    root = opts.root ?? doc.body.appendChild(doc.createElement('div'));
+    sizeElement(root, () => ({ left: 0, top: 0, width: view.width, height: view.height }));
+  }
   const ctx = await createGame<A, S, C, P>({ ...opts, root, gpu, host, clock });
   if (!ctx) throw new Error('createTestGame: createGame returned null');
-  // The canvas reports the box the surface gave it, so a touch zone measures as on a page.
   const surface = ctx.surface;
-  sizeElement(surface.canvas, () => {
-    const r = surface.rect;
-    return { left: r.x, top: r.y, width: r.width, height: r.height };
-  });
+  if (headless) {
+    // The virtual container is the viewport, so pointers letterbox as on a page of that size.
+    (surface as unknown as DetachedSurface).resizeContainer(view.width, view.height);
+  } else {
+    // The canvas reports the box the surface gave it, so a touch zone measures as on a page.
+    sizeElement(surface.canvas, () => {
+      const r = surface.rect;
+      return { left: r.x, top: r.y, width: r.width, height: r.height };
+    });
+  }
   return {
     ctx,
     input: ctx.input,

@@ -2,7 +2,7 @@
 
 `@thunderclap/engine/testing` holds what a game's unit tests need to run in Vitest or plain Node, with no browser and no GPU: a fake host, a fixed-step clock, the recording fake GPU device and `createTestGame`, a whole headless game on them. The engine itself never imports it.
 
-The entry is `src/testing/index.ts`. It re-exports the fake GPU from `src/render/fake-gpu.ts` and adds `fake-host.ts`, `fixed-clock.ts` and `test-game.ts`. `null-dom.ts` (internal) is the inert DOM behind `createTestGame({ overlay: false })`.
+The entry is `src/testing/index.ts`. It re-exports the fake GPU from `src/render/fake-gpu.ts` and adds `fake-host.ts`, `fixed-clock.ts` and `test-game.ts`. `createTestGame({ overlay: false })` runs on `createGame`'s no-DOM mode (ws/core-9).
 
 How a game uses these is in [Testing your game](../../docs/guide/testing-your-game.md).
 
@@ -50,7 +50,7 @@ expect(g.clock.now()).toBe(10 * (1000 / 60));
 
 `createGame` always builds the DOM overlay, mounts the canvas in `root`, attaches input listeners to the canvas and audio's page-lifecycle listeners to `document` and `window`, and the surface reads `getComputedStyle` and a `ResizeObserver`. So by default `createTestGame` needs a DOM: happy-dom (`// @vitest-environment happy-dom` at the top of the file), which lays nothing out, so the kit sizes the root to `viewport` itself.
 
-`overlay: false` drops that need: the test runs in Vitest's default `node` environment with no DOM library (ws/testing-2). When `globalThis.document` is missing, the kit installs an inert stand-in (`null-dom.ts`): `document`, `window`, `getComputedStyle`, `ResizeObserver`, and `Node`, `Element`, `HTMLElement`, `HTMLInputElement` and `HTMLSelectElement` for the engine's `instanceof` checks, each only if missing. Its elements keep children, attributes, classes, inline styles and listeners (on Node's `EventTarget`); nothing lays out, paints or fires by itself, queries find nothing and media queries never match. The globals stay for the rest of the test file. `ctx.ui` exists and its calls work, but nothing is shown and no DOM event reaches it, so drive the game through `input` (`keyDown`, `setPointer` and the rest) and assert on game state, the clock and the `FakeDevice`. With a real DOM present (happy-dom), `overlay: false` uses it, and the default root is a detached `<div>` rather than one in `document.body`. Tests that click overlay buttons or read the overlay's DOM keep happy-dom.
+`overlay: false` drops that need: the test runs in Vitest's default `node` environment with no DOM library (ws/testing-2). It is `createGame({ overlay: false })`, core's no-DOM mode (ws/core-9): nothing touches `document` or `window`, and no DOM global is installed, so the file stays plain Node. There is no overlay (reading `ctx.ui` throws), no canvas (`ctx.surface.canvas` and `root` throw) and no DOM listener. `ctx.surface` letterboxes a virtual container of `viewport` (default the design size), so `input.pointerAt(x, y)` maps as on a page of that size. Drive the game through `input` (`keyDown`, `pointerAt` and the rest) or a recording, and assert on game state, the clock and the `FakeDevice`. `root` is not used. The same holds under happy-dom. Tests that click overlay buttons or read the overlay's DOM keep happy-dom and the default `overlay`.
 
 ```ts
 // game.test.ts: no `@vitest-environment` line

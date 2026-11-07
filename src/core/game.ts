@@ -92,8 +92,10 @@ import {
   type LayoutSpec,
   type Overlay,
   PadNav,
+  type PanelStack,
   type ThemeOverrides,
 } from '../ui';
+import { DetachedSurface, NO_DOM } from './detached-surface';
 import type { Time } from './loop';
 import { GameLoop } from './loop';
 import { SceneStack } from './scene';
@@ -171,6 +173,19 @@ export interface CreateGameOptions<
    * fake GPU (`@thunderclap/engine/testing`); `createTestGame` does.
    */
   gpu?: GpuContext;
+  /**
+   * `false` (ws/core-9): no overlay and no DOM at all, for a game run in plain Node (a test, a
+   * server-side sim). Needs `gpu` and `host`. Nothing touches `document` or `window`: no
+   * overlay, panels, captions or `styles`, no canvas or root (`root` is not used, and
+   * `ctx.surface` letterboxes a virtual container of the design size at a pixel ratio of 1, so
+   * client px are design px; its `root` and `canvas` throw), no zoom block, no page lifecycle
+   * or audio unlock listeners, and the input is attached to nothing (feed it with `keyDown`,
+   * `pointerAt` and the rest, or a replay's key, button, pointer and pad lanes; recorded
+   * pointer events and overlay clicks have nothing to reach). Reading `ctx.ui` throws.
+   * `ctx.padNav` exists and never owns the pad. The host's own lifecycle (`host.lifecycle`) and
+   * device loss work as usual. Default true.
+   */
+  overlay?: boolean;
   /**
    * The game's tick clock (`ctx.clock`, ws/core-8). Default `createTickClock()`. The loop
    * advances it by the fixed step (`clock.advance(step × 1000)`) before each fixed update; a
@@ -462,25 +477,38 @@ export async function createGame<
   P = unknown,
 >(opts: CreateGameOptions<A, S, P>): Promise<EngineCtx<A, NoInfer<S>, C, P> | null> {
   const design = { width: opts.design?.width ?? 1920, height: opts.design?.height ?? 1080 };
-  const root = opts.root ?? (opts.gpu ? globalThis.document?.createElement('div') : undefined);
-  if (!root) {
-    throw new Error('createGame: `root` is required (a headless game passes `gpu` and a DOM)');
-  }
-  // Before boot, so it holds from the first frame (and on the fatal screens too).
-  if (opts.blockBrowserZoom !== false) blockBrowserZoom(root.ownerDocument);
   const surfaceOpts = {
     ...opts.surface,
     logicalWidth: design.width,
     logicalHeight: design.height,
   };
-  const res = opts.gpu
-    ? headlessBoot(root, opts.gpu, surfaceOpts)
-    : await boot(root, {
-        ...surfaceOpts,
-        title: opts.title,
-        forceUnsupported: opts.forceUnsupported,
-      });
-  if (!res.ok) return null;
+  // `overlay: false` (ws/core-9): no DOM is touched from here on.
+  const dom = opts.overlay !== false;
+  let res: Extract<BootResult, { ok: true }>;
+  if (!dom) {
+    if (!opts.gpu || !opts.host) {
+      throw new Error('createGame: `overlay: false` needs `gpu` and `host` (it touches no DOM)');
+    }
+    res = gpuBoot(new DetachedSurface(surfaceOpts).asSurface(), opts.gpu);
+  } else {
+    const root = opts.root ?? (opts.gpu ? globalThis.document?.createElement('div') : undefined);
+    if (!root) {
+      throw new Error(
+        'createGame: `root` is required (a headless game passes `gpu` and a DOM, or `overlay: false`)',
+      );
+    }
+    // Before boot, so it holds from the first frame (and on the fatal screens too).
+    if (opts.blockBrowserZoom !== false) blockBrowserZoom(root.ownerDocument);
+    const booted = opts.gpu
+      ? gpuBoot(mountSurface(root, surfaceOpts), opts.gpu)
+      : await boot(root, {
+          ...surfaceOpts,
+          title: opts.title,
+          forceUnsupported: opts.forceUnsupported,
+        });
+    if (!booted.ok) return null;
+    res = booted;
+  }
   const { surface, gpu } = res;
   opts.onGpuReady?.(gpu);
   installGpuErrorLogging(gpu.device);
@@ -499,35 +527,41 @@ export async function createGame<
   const host = opts.host ?? createWebHost();
   // No save, no storage access: a pure client keeps nothing on the device.
   const save = (opts.save ? opts.save(host) : null) as S;
-  opts.styles?.(surface.root.ownerDocument);
-  // When a panel closes and its opener can't take focus back, focus returns to the canvas so
-  // keys keep reaching the game.
-  const ui = createOverlay({
-    parent: surface.root,
-    designWidth: design.width,
-    designHeight: design.height,
-    layout: opts.layout,
-    focusHome: () => surface.canvas,
-    theme: opts.theme,
-    // `ui.anchors()` and `ui.floats()` without a camera follow the game's (ws/api-core).
-    camera: () => renderer.camera,
-  });
-  if (opts.textScale !== undefined && opts.textScale !== 1) {
-    applyTextScale(ui.root, opts.textScale, (t) => ui.setTheme(t));
+  let ui: Overlay | null = null;
+  if (dom) {
+    opts.styles?.(surface.root.ownerDocument);
+    // When a panel closes and its opener can't take focus back, focus returns to the canvas so
+    // keys keep reaching the game.
+    const overlay = createOverlay({
+      parent: surface.root,
+      designWidth: design.width,
+      designHeight: design.height,
+      layout: opts.layout,
+      focusHome: () => surface.canvas,
+      theme: opts.theme,
+      // `ui.anchors()` and `ui.floats()` without a camera follow the game's (ws/api-core).
+      camera: () => renderer.camera,
+    });
+    if (opts.textScale !== undefined && opts.textScale !== 1) {
+      applyTextScale(overlay.root, opts.textScale, (t) => overlay.setTheme(t));
+    }
+    // A host that knows the notch and home indicator pads the layout's regions by them.
+    if (host.safeArea) followSafeArea(overlay.layout, host.safeArea);
+    ui = overlay;
   }
-  // Input is blocked while a modal panel is up, so the pad drives panels through this.
-  const padNav = new PadNav(ui.stack, { getGamepads: opts.input.getGamepads });
-  // A host that knows the notch and home indicator pads the layout's regions by them.
-  if (host.safeArea) followSafeArea(ui.layout, host.safeArea);
+  // Input is blocked while a modal panel is up, so the pad drives panels through this. With no
+  // overlay there are no panels: the pad stays the game's.
+  const padNav = new PadNav(ui ? ui.stack : NO_PANELS, { getGamepads: opts.input.getGamepads });
   surface.onResize(({ rect, backbuffer }) => {
     renderer.resize(backbuffer.width, backbuffer.height);
-    ui.setFrame(rect);
+    ui?.setFrame(rect);
   });
 
   // ── Audio ──────────────────────────────────────────────────────────────
   // Unlocks on the first gesture and pauses itself while the page is hidden (see attach).
+  // Without a DOM nothing unlocks it: it stays locked and silent.
   const audio = new AudioEngine();
-  audio.attach();
+  if (dom) audio.attach();
   if (opts.mixerKey) persistMixer(audio, { game: opts.mixerKey, host });
 
   // ── Input (blocked under modal panels) ─────────────────────────────────
@@ -546,8 +580,10 @@ export async function createGame<
     camera: () => xrSurface?.head ?? renderer.camera,
     testers: opts.pointers?.testers,
   });
+  const panels = ui?.stack;
+  const modal = panels ? () => panels.hasModal : () => false;
   const input = new Input<A>(opts.input.bindings, {
-    blocked: extraBlock ? () => ui.stack.hasModal || extraBlock() : () => ui.stack.hasModal,
+    blocked: extraBlock ? () => modal() || extraBlock() : modal,
     globalKeys: opts.input.globalKeys,
     buttonKeys: opts.input.buttonKeys,
     getGamepads: opts.input.getGamepads,
@@ -566,20 +602,26 @@ export async function createGame<
   // see them on their recorded ticks and never a real pointer or key.
   // Its box is the canvas's (ws/core-8), so a touch stick or touch zone, which measures the
   // pointer against the box, replays where it was recorded.
-  const sink = surface.root.ownerDocument.createElement('div');
-  const attachSink = () =>
-    input.attach({ pointerTarget: sink, keyTarget: sink, bounds: surface.canvas });
+  // With `overlay: false` there is nothing to attach to: `detach()` only releases what is held.
+  const sink = dom ? surface.root.ownerDocument.createElement('div') : null;
+  const attachSink = sink
+    ? () => input.attach({ pointerTarget: sink, keyTarget: sink, bounds: surface.canvas })
+    : () => input.detach();
   // Where the input lives outside a `ctx.replay`: the canvas, or the sink in replay mode.
-  const attachHome = playback ? attachSink : () => input.attach({ pointerTarget: surface.canvas });
+  const attachHome =
+    playback || !sink ? attachSink : () => input.attach({ pointerTarget: surface.canvas });
   attachHome();
   input.setPointerTransform((x, y) => surface.clientToLogical(x, y));
   // Overlay controls (ws/input-12): every button click reaches the input by its stable id, so a
   // recording carries it; a replay's `ui` lane comes back as `'control'` and clicks the button
   // with that id before the tick's update, on the tick it was clicked live.
-  ui.onControl((id) => input.control(id));
-  input.on('control', (id) => {
-    ui.activate(id);
-  });
+  if (ui) {
+    const overlay = ui;
+    overlay.onControl((id) => input.control(id));
+    input.on('control', (id) => {
+      overlay.activate(id);
+    });
+  }
   /** The playback `ctx.replay` installed, until it ends or is stopped. */
   let replaying: GameReplay | null = null;
   /** Its `onEnd`, cleared by `stop()` so a stopped or replaced replay never reports an end. */
@@ -673,7 +715,7 @@ export async function createGame<
           renderer.endFrame();
         }
         hooks.afterRender?.(time);
-        ui.updateAnchors();
+        ui?.updateAnchors();
       },
     },
     { step: opts.sim ? opts.sim.step : undefined, fixed, frames: host },
@@ -769,18 +811,20 @@ export async function createGame<
 
   // Hidden, pagehide (iOS app switch) or freeze (Android): stop drawing and persist now; a
   // phone may kill a background tab without another word.
-  watchLifecycle({
-    onHide: (reason) => {
-      loop.stop();
-      hooks.hide?.(reason);
-      save?.flush();
-    },
-    onShow: (reason) => {
-      if (loop.halted) return;
-      loop.start();
-      hooks.show?.(reason);
-    },
-  });
+  if (dom) {
+    watchLifecycle({
+      onHide: (reason) => {
+        loop.stop();
+        hooks.hide?.(reason);
+        save?.flush();
+      },
+      onShow: (reason) => {
+        if (loop.halted) return;
+        loop.start();
+        hooks.show?.(reason);
+      },
+    });
+  }
 
   // ── Host lifecycle (ws/host-mobile) ────────────────────────────────────
   // A host that knows the app's state (the web host from the page's visibility, a store app's
@@ -807,7 +851,7 @@ export async function createGame<
     loop.halt();
     hooks.deviceLost?.(info);
     void audio.halt();
-    ui.caption.suspend(true);
+    ui?.caption.suspend(true);
     save?.flush();
   });
 
@@ -829,7 +873,6 @@ export async function createGame<
     pointers,
     padNav,
     audio,
-    ui,
     host,
     save,
     stack,
@@ -837,7 +880,18 @@ export async function createGame<
     hooks,
     onDeviceLost: res.onDeviceLost,
     xr,
-  } satisfies EngineCtx<A, S, C, P>);
+  } satisfies Omit<EngineCtx<A, S, C, P>, 'ui'>);
+  // `overlay: false`: `ctx.ui` throws instead of handing out an overlay that does not exist.
+  const liveUi = ui;
+  Object.defineProperty(ctx, 'ui', {
+    get: liveUi
+      ? () => liveUi
+      : () => {
+          throw new Error(NO_DOM('ctx.ui'));
+        },
+    enumerable: liveUi !== null,
+    configurable: true,
+  });
   // `camera` follows `setCamera` (`Object.assign` copied a value).
   Object.defineProperty(ctx, 'camera', {
     get: () => renderer.camera,
@@ -848,16 +902,12 @@ export async function createGame<
 }
 
 /**
- * `boot` for a headless game (`CreateGameOptions.gpu`): the surface is mounted as usual, the
- * GPU is the one given, and device loss comes from `gpu.device.lost` when the device has one
- * (a reason of `destroyed` is an explicit `destroy()`, not a loss).
+ * `boot` for a headless game (`CreateGameOptions.gpu`): the surface is the one given (mounted
+ * as usual, or detached with `overlay: false`), the GPU is the one given, and device loss comes
+ * from `gpu.device.lost` when the device has one (a reason of `destroyed` is an explicit
+ * `destroy()`, not a loss).
  */
-function headlessBoot(
-  root: HTMLElement,
-  gpu: GpuContext,
-  opts: SurfaceOptions,
-): Extract<BootResult, { ok: true }> {
-  const surface = mountSurface(root, opts);
+function gpuBoot(surface: Surface, gpu: GpuContext): Extract<BootResult, { ok: true }> {
   const listeners = new Set<(info: GPUDeviceLostInfo) => void>();
   const lost = (gpu.device as { lost?: Promise<GPUDeviceLostInfo> }).lost;
   if (lost && typeof lost.then === 'function') {
@@ -882,6 +932,15 @@ function headlessBoot(
     },
   };
 }
+
+/**
+ * `PadNav`'s stack with `overlay: false`: no panels, so the pad never leaves the game. PadNav
+ * reads only `padOwner` and `onPadOwnerChange`.
+ */
+const NO_PANELS = {
+  padOwner: 'game',
+  onPadOwnerChange: () => () => {},
+} as unknown as PanelStack;
 
 /** What the XR render step iterates when the frame has no viewer pose. */
 const NO_EYES: readonly XrEyeView[] = [];

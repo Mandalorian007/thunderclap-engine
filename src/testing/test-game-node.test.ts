@@ -1,9 +1,17 @@
 /**
  * ws/testing-2: `createTestGame` in plain Node (Vitest's default `node` environment, no
  * happy-dom), with `overlay: false`, and device loss through `FakeDevice.loseDevice`.
+ * ws/core-9: `createGame({ overlay: false })` itself on the headless `{ gpu, clock, host }`
+ * path, touching no DOM.
  */
 import { describe, expect, it } from 'vitest';
 import type { EngineCtx } from '../core/game';
+import { createGame } from '../core/game';
+import { createInputRecorder } from '../input';
+import type { GpuContext } from '../platform';
+import { createFakeDevice, fakeRendererGpu, installGpuGlobals } from '../render/fake-gpu';
+import { createFakeHost } from './fake-host';
+import { createFixedClock } from './fixed-clock';
 import { createTestGame } from './test-game';
 
 type Action = 'go';
@@ -56,8 +64,8 @@ describe('createTestGame with no DOM (ws/testing-2)', () => {
     expect(g.clock.now()).toBe(15 * (1000 / 60));
     expect(g.device.submits).toBeGreaterThan(0);
     expect(g.device.errors).toEqual([]);
-    // The overlay is built but inert: it exists and nothing breaks when the game uses it.
-    expect(g.ctx.ui.root).toBeTruthy();
+    // No overlay at all: `ctx.ui` says why it is missing.
+    expect(() => g.ctx.ui).toThrow(/ctx\.ui.*overlay: false/);
     // The loop runs on the fake host's frames; going to the background stops it and flushes.
     g.ctx.loop.start();
     expect(g.host.runFrame()).toBe(1);
@@ -154,5 +162,133 @@ describe('device loss (ws/testing-2)', () => {
     expect(lost).toBe(0);
     expect(g.ctx.loop.halted).toBe(false);
     expect(g.clock.ticks).toBe(2);
+  });
+});
+
+const g0 = globalThis as Record<string, unknown>;
+const noDom = () =>
+  ['document', 'window', 'HTMLElement', 'ResizeObserver', 'getComputedStyle'].filter(
+    (k) => g0[k] !== undefined,
+  );
+
+function headlessGpu(): { gpu: GpuContext; device: ReturnType<typeof createFakeDevice> } {
+  installGpuGlobals();
+  const device = createFakeDevice();
+  return {
+    device,
+    gpu: { ...fakeRendererGpu(device), adapter: {} as GPUAdapter, timestamps: false },
+  };
+}
+
+describe('createGame({ overlay: false }) (ws/core-9)', () => {
+  it('runs on { gpu, clock, host } and leaves no DOM global behind', async () => {
+    const { gpu, device } = headlessGpu();
+    const host = createFakeHost();
+    const clock = createFixedClock(1000 / 60);
+    const ctx = await createGame<Action>({ overlay: false, gpu, host, clock, input: { bindings } });
+    expect(ctx).not.toBeNull();
+    const c = ctx!;
+    const state = addMover(c);
+    c.input.keyDown('Space');
+    for (let i = 0; i < 4; i++) c.loop.tickOnce(1 / 60);
+    expect(state.x).toBe(4);
+    expect(clock.ticks).toBe(4);
+    expect(device.submits).toBeGreaterThan(0);
+    expect(device.errors).toEqual([]);
+    expect(noDom()).toEqual([]);
+    // The pad belongs to the game; padNav runs and reads nothing.
+    expect(() => c.padNav.update()).not.toThrow();
+  });
+
+  it('ctx.ui, surface.root and surface.canvas throw a clear error; the surface still maps', async () => {
+    const { gpu } = headlessGpu();
+    const ctx = (await createGame<Action>({
+      overlay: false,
+      gpu,
+      host: createFakeHost(),
+      design: { width: 640, height: 360 },
+      input: { bindings },
+    }))!;
+    expect(() => ctx.ui).toThrow(
+      'ctx.ui: this game was created with `overlay: false`, which has no overlay and no DOM',
+    );
+    expect(() => ctx.surface.root).toThrow(/surface\.root.*overlay: false/);
+    expect(() => ctx.surface.canvas).toThrow(/surface\.canvas.*overlay: false/);
+    // A spread of the ctx does not trip over the missing overlay.
+    expect(Object.keys({ ...ctx })).not.toContain('ui');
+    // The virtual container is the design size at ratio 1: client px are design px.
+    expect(ctx.surface.rect).toEqual({ x: 0, y: 0, width: 640, height: 360, scale: 1 });
+    expect(ctx.surface.backbuffer).toMatchObject({ width: 640, height: 360 });
+    ctx.input.pointerAt(100, 50);
+    expect(ctx.input.pointer).toMatchObject({ x: 100, y: 50, inside: true });
+  });
+
+  it('needs gpu and host, since it boots nothing and has no page', async () => {
+    const { gpu } = headlessGpu();
+    await expect(createGame<Action>({ overlay: false, gpu, input: { bindings } })).rejects.toThrow(
+      /overlay: false.*gpu.*host/,
+    );
+    await expect(
+      createGame<Action>({ overlay: false, host: createFakeHost(), input: { bindings } }),
+    ).rejects.toThrow(/overlay: false.*gpu.*host/);
+  });
+
+  it('host lifecycle and device loss still reach the game', async () => {
+    const { gpu, device } = headlessGpu();
+    const host = createFakeHost();
+    let flushes = 0;
+    const ctx = (await createGame<Action, { flush(): void }>({
+      overlay: false,
+      gpu,
+      host,
+      input: { bindings },
+      save: () => ({ flush: () => void flushes++ }),
+    }))!;
+    const seen: string[] = [];
+    ctx.hooks.lifecycle = (s) => seen.push(s);
+    ctx.loop.start();
+    host.setState('background');
+    expect(ctx.loop.isRunning).toBe(false);
+    host.setState('active');
+    expect(ctx.loop.isRunning).toBe(true);
+    expect(seen).toEqual(['background', 'active']);
+    expect(flushes).toBe(1);
+    device.loseDevice('unknown', 'gone');
+    await device.lost;
+    expect(ctx.loop.halted).toBe(true);
+    expect(flushes).toBe(2);
+  });
+
+  it('a recording replays through ctx.replay with no DOM: same keys, same state', async () => {
+    const live = await createTestGame<Action>({ overlay: false, input: { bindings } });
+    const liveState = addMover(live.ctx);
+    const rec = createInputRecorder(live.input);
+    for (let i = 0; i < 12; i++) {
+      if (i === 2) live.input.keyDown('Space');
+      if (i === 8) live.input.keyUp('Space');
+      live.step();
+    }
+    const recording = rec.stop();
+    expect(liveState.x).toBe(6);
+
+    const again = await createTestGame<Action>({ overlay: false, input: { bindings } });
+    const state = addMover(again.ctx);
+    let ended = 0;
+    again.ctx.replay(recording, { onEnd: () => ended++ });
+    again.step(14);
+    expect(state.x).toBe(6);
+    expect(ended).toBe(1);
+  });
+
+  it('createTestGame viewport letterboxes the virtual container', async () => {
+    const g = await createTestGame<Action>({
+      overlay: false,
+      design: { width: 200, height: 100 },
+      viewport: { width: 400, height: 400 },
+      input: { bindings },
+    });
+    expect(g.ctx.surface.rect).toEqual({ x: 0, y: 100, width: 400, height: 200, scale: 2 });
+    g.input.pointerAt(200, 200);
+    expect(g.input.pointer).toMatchObject({ x: 100, y: 50 });
   });
 });
