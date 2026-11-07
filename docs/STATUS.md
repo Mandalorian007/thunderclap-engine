@@ -148,7 +148,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Input 8: shared `InputClock` + `createTickClock`; gestures and look replay identically at any tick spacing | ws/input-8 | brief `docs/briefs/input-8.md` | input-7 | 🟣 in E-031 train 7 at `36fae44` (check 2205, snap 0, gestures 66/6, input 52/28, input5 48, look 24/16, replay 16 at load 18–37) |
 | 5 | Adoption 3: arpg instanced `MeshLod`, floor seam fix (`centreSeam`), minimap ghoul headings | ws/adoption-3 | brief `docs/briefs/adoption-3.md` | render-6, ui-7, demo-arpg-2 | 🔵 dispatched (Opus, offset 1010) |
 | 5 | FX 6: opt-in `debugReadback()`; fx3 asserts drift and settle radius directly | ws/fx-6 | brief `docs/briefs/fx-6.md` | fx-5 | 🔵 dispatched (Opus, offset 1020) |
-| 5 | UI 8: content-sized `top`/`bottom` bars; ui5 harness free of overflow warnings | ws/ui-8 | brief `docs/briefs/ui-8.md` | ui-7 | 🔵 dispatched (Opus, offset 1030) |
+| 5 | UI 8: content-sized `top`/`bottom` bars; ui5 harness free of overflow warnings | ws/ui-8 | brief `docs/briefs/ui-8.md` | ui-7 | 🟣 in E-031 train 7 at `b6eb711` (check 2200, snap 0, ui5 80, ui 77/11, ui4 48, layout 40/10 at load 15–29; overflow warnings 16/run → 0) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
@@ -296,6 +296,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - E-031 train 5 (2026-11-06): nav-6, post-5, audio-6, input-7, render-6 merged at `26bd8e1`; matrix 2606/195/1 at load 7.7, the failure `demos/tactics.spec.ts:247` d-pad waived (E-033, ws/e2e-harden-3). README 2190 tests in 196 files. `mesh-reach-bench` green in every check from nav-6 on.
 - E-031 train 6 (2026-11-06): fx-5, demo-arpg-2, ui-7 merged at `9fbc59d`; matrix 2631/195/0, no reverts; README 2196 tests in 196 files. `[layout] overflows` warns 120× in the matrix log (ui5?orb, → ui-8); no spec fails on it.
 - ws/input-8 notes: `InputClock`, `createTickClock`, `wallClock`; `createGestures`/`createLook` factories added; all four gestures and look replay identically at 10/20/40 ms spacing on a tick clock. Fixed `feedTick` order (pointer before buttons; replayed orbit drag no longer jumps). Wishes: `createGame` builds and advances a tick clock (→ core-4); `Look` pad reads bypass recorded pads; `InputPlayback.speed > 1` doesn't advance a tick clock (→ input-9).
+- ws/ui-8 notes: `BarSize { size: 'fixed'|'content', max? }` via `LayoutSpec.bars`/`FormSpec.bars`; content bar = tallest widget + pad, clamped to form track..max; `resolveLayout` 7th arg `content`. `ui5?orb` uses a content bottom bar (max 160), since 56 px phone rails can't hold orbs. Wishes: content-sized `left`/`right` rails (→ ui-9); arpg HUD onto `bars` (→ adoption sweep 4).
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
