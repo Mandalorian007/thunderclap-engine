@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { addOffMeshLink, getOffMeshLink, removeOffMeshLink } from './links';
 import { createNavPath3, findMeshPath, followPath3, pathDistance3 } from './mesh-path';
 import { bakeNavMesh, type NavMesh, type NavPoint3 } from './navmesh';
@@ -48,14 +48,14 @@ function box(
   for (const t of faces) idx.push(b + t[0]!, b + t[1]!, b + t[2]!);
 }
 
-const OPTS: NavBakeOptions = {
+const OPTS = {
   cellSize: 0.3,
   cellHeight: 0.2,
   agentHeight: 2,
   agentRadius: 0.5,
   agentMaxClimb: 0.4,
   agentMaxSlope: 45,
-};
+} satisfies NavBakeOptions;
 
 /** A 20 × 20 floor (top at y = 0) with a 2 × 2 pillar at the origin. */
 function floorWithPillar(opts: Partial<NavBakeOptions> = {}): NavMesh {
@@ -112,10 +112,14 @@ describe('bakeNavMesh', () => {
       { positions: pos, indices: idx },
       { ...slopeOpts, agentMaxSlope: 45 },
     );
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const steep = bakeNavMesh(
       { positions: pos, indices: idx },
       { ...slopeOpts, agentMaxSlope: 20 },
     );
+    // Triangles in, no polygon out: one warning (ws/nav-6).
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
     expect(gentle.polyCount).toBeGreaterThan(0);
     expect(steep.polyCount).toBe(0);
     expect(gentle.height(2, 2)).toBeGreaterThan(rise / 2 - OPTS.cellHeight * 2);

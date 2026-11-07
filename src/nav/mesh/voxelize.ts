@@ -15,28 +15,32 @@ export interface NavBakeSource {
   offset?: number;
 }
 
+/**
+ * How to bake. Only `cellSize` is required; every other field has a default derived from it
+ * (`resolveNavBakeOptions`), and a non-finite or out-of-range value throws a `NavBakeError`.
+ */
 export interface NavBakeOptions {
-  /** World units per heightfield cell across (XZ). The level's smallest feature should span a few. */
+  /** World units per heightfield cell across (XZ), > 0. The level's smallest feature should span a few. */
   cellSize: number;
-  /** World units per heightfield cell up (Y). */
-  cellHeight: number;
-  /** The agent's height: a ceiling closer than this to the floor is not walkable. */
-  agentHeight: number;
-  /** The agent's radius: the walkable area is eroded by it, so the centre never leaves the floor. */
-  agentRadius: number;
-  /** The largest step the agent climbs (a kerb); a taller drop is a ledge. */
-  agentMaxClimb: number;
-  /** The steepest walkable slope, in degrees from flat. */
-  agentMaxSlope: number;
-  /** Regions (connected walkable islands) smaller than this many cells are dropped. Default 8. */
+  /** World units per heightfield cell up (Y), > 0. Default `cellSize / 2`. */
+  cellHeight?: number;
+  /** The agent's height, > 0: a ceiling closer than this to the floor is not walkable. Default 2. */
+  agentHeight?: number;
+  /** The agent's radius, >= 0: the walkable area is eroded by it, so the centre never leaves the floor. Default `cellSize * 2`. */
+  agentRadius?: number;
+  /** The largest step the agent climbs (a kerb), >= 0; a taller drop is a ledge. Default `cellHeight * 2`. */
+  agentMaxClimb?: number;
+  /** The steepest walkable slope, in degrees from flat, 0..90. Default 45. */
+  agentMaxSlope?: number;
+  /** Regions (connected walkable islands) smaller than this many cells are dropped, >= 0. Default 8. */
   minRegionArea?: number;
-  /** Regions smaller than this many cells merge into a neighbour where that keeps it hole-free. Default 20. */
+  /** Regions smaller than this many cells merge into a neighbour where that keeps it hole-free, >= 0. Default 20. */
   mergeRegionArea?: number;
-  /** Boundary edges longer than this (world units) are split. Default 12 × `cellSize`; 0 never splits. */
+  /** Boundary edges longer than this (world units, >= 0) are split. Default 12 × `cellSize`; 0 never splits. */
   maxEdgeLength?: number;
-  /** How far (world units) a simplified contour may stray from the rasterised one. Default 1.3 × `cellSize`. */
+  /** How far (world units, >= 0) a simplified contour may stray from the rasterised one. Default 1.3 × `cellSize`. */
   maxSimplification?: number;
-  /** Vertices per polygon at most, 3..6. Default 6. */
+  /** Vertices per polygon at most, an integer 3..6. Default 6. */
   maxVertsPerPoly?: number;
 }
 
