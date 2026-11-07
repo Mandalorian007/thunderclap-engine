@@ -139,6 +139,8 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Post 5: TAA reprojects by the velocity target with history rejection; drop the duplicate camera-layout test | ws/post-5 | brief `docs/briefs/post-5.md` | post-4 wish, render-5 note | 🔵 dispatched (Opus, offset 900) |
 | 5 | Render 6: LOD for `frame.meshes`/`InstanceList` with per-view level memory; alpha-masked shadows; `renderer.setJitter` hook; `initGpu` requests compression features | ws/render-6 | brief `docs/briefs/render-6.md` | render-5 deviations, post-4 wish | 🔵 dispatched (Opus, offset 910) |
 | 5 | FX 5: prove/fix collide creep (leak <0.5%), `attract.falloff` + radius | ws/fx-5 | brief `docs/briefs/fx-5.md` | e2e-harden-2 findings | 🔵 dispatched (Opus, offset 920) |
+| 5 | Input 7: recordings carry pointer `time`; replay classifies gestures identically to live | ws/input-7 | brief `docs/briefs/input-7.md` | input-6 wish | 🔵 dispatched (Opus, offset 930) |
+| 5 | Audio 6: keyed bus scales (product), one key per ducker | ws/audio-6 | brief `docs/briefs/audio-6.md` | audio-5 note | 🔵 dispatched (Opus, offset 940) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
