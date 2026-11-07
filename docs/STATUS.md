@@ -191,7 +191,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | XR scene-mode per-eye aux | ws/render-12 | brief `docs/briefs/render-12.md` | train 20 | ✅ merged at `1e3177b` (post reads per-eye aux in XR scene mode; fixed eyes reading the last eye's uniforms with a staged ring; no API change). merged at `225890f`, E-031 train 20 landed at `78550a0` |
 | 5 | Per-eye TAA history in XR | ws/xr-taa | brief `docs/briefs/xr-taa.md` | train 21 | 🔵 running |
 | 5 | Public `Surface` interface; no cast in the detached surface | ws/platform-surface | brief `docs/briefs/platform-surface.md` | train 21 | 🔵 running |
-| 5 | Script resolves wrapped receivers; snippet checker exempts getter rows | ws/testing-4 | brief `docs/briefs/testing-4.md` | train 21 | 🔵 running |
+| 5 | Script resolves wrapped receivers; snippet checker exempts getter rows | ws/testing-4 | brief `docs/briefs/testing-4.md` | train 21 | 🟣 done at `00afa9c` (wrapped receivers are typed from the syntax node: 8 of 8 reported vs 3 before; getter rows exempt, backticks restored). Train 21 |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
@@ -514,6 +514,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
   - Ruling: `postQualityFor('xr')` keeps motion blur off by default, since VR frame budget and comfort come first and changing a default is a behaviour change. Games can opt in, as the README documents. A candidate for a later XR quality pass.
   - Wish: per-eye TAA histories, which are what keep TAA off in XR.
 - E-031 train 20 (testing-3, core-9, render-12) landed at `78550a0`. The browser test matrix ran 2817 passed, 209 skipped and 0 failed. 2449 unit tests in 226 files. `api/` changes since 1.0.0 are additions only.
+- ws/testing-4 note: TS7 `getTypeAtPosition` returns nothing at a `)` or a type name, so use the node with `getTypeAtLocation`.
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
