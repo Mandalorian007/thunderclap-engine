@@ -7,6 +7,10 @@
 #
 # A package whose exact version is already on npm is skipped, so a tag that bumps only the engine
 # still succeeds; bump a host's own package.json version to publish it.
+#
+# After publishing, the job waits for the versions to reach the registry, installs them from npm
+# into a fresh project and typechecks and builds it (`check:pack --from-npm`), then creates or
+# updates the GitHub Release for the tag with that version's CHANGELOG section.
 name: Publish
 
 on:
@@ -15,7 +19,8 @@ on:
 
 permissions:
   id-token: write
-  contents: read
+  # `gh release` creates the tag's GitHub Release.
+  contents: write
 
 concurrency:
   group: publish
@@ -44,6 +49,13 @@ jobs:
             exit 1
           fi
 
+      # Before anything is published, so an undated CHANGELOG fails the run with nothing on npm.
+      - name: Release notes
+        run: |
+          node scripts/publish-notes.mjs "${GITHUB_REF_NAME#v}" \
+            --link-base "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME" \
+            > "$RUNNER_TEMP/notes.md"
+
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: pnpm build
@@ -67,3 +79,28 @@ jobs:
             npm publish "$tarball" --access public --provenance
             echo "published $name@$version"
           done
+
+      # Polls every 10 s for up to 10 minutes (registry propagation is usually under a minute),
+      # then installs all four packages at their package.json versions from npm, typechecks and
+      # Vite-builds a consumer that imports every entry.
+      - name: Install from npm
+        run: node scripts/pack-smoke.mjs --from-npm --wait 600
+
+      # Updates the release when it exists (a re-run), so a tag never gets two.
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          notes="$RUNNER_TEMP/notes.md"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" --title "$tag" --notes-file "$notes"
+            echo "updated release $tag"
+          else
+            pre=()
+            case "$tag" in *-*) pre=(--prerelease) ;; esac
+            gh release create "$tag" --verify-tag --title "$tag" --notes-file "$notes" "${pre[@]}"
+            echo "created release $tag"
+          fi

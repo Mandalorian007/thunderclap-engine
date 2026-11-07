@@ -61,6 +61,7 @@
     "lint": "biome check .",
     "test": "vitest run",
     "check": "pnpm typecheck && pnpm lint && pnpm test",
+    "prepublishOnly": "node ../../scripts/refuse-publish.mjs",
     "build": "node scripts/build.mjs",
     "dev": "node scripts/dev.mjs",
     "dist": "node scripts/dist.mjs",

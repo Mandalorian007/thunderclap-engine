@@ -64,6 +64,7 @@
     "lint": "biome check .",
     "test": "vitest run",
     "check": "pnpm typecheck && pnpm lint && pnpm test",
+    "prepublishOnly": "node ../../scripts/refuse-publish.mjs",
     "build": "vite build harness",
     "dev": "vite harness --host 127.0.0.1 --port 5198",
     "preview": "vite preview harness --host 127.0.0.1 --port 4551 --strictPort",
