@@ -144,6 +144,8 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | UI 7: `layout.add` overflow warning + `layout.overflows()`; `MinimapMarker.heading` with arrow kinds | ws/ui-7 | brief `docs/briefs/ui-7.md` | ui-6 wishes | 🟣 in E-031 train 6 at `f8de005` (check 2144, snap 0, ui5 56, ui 77/11, ui4 48, layout 40/10 at load 6–22) |
 | 5 | Demo arpg 2: dissolve deaths, `MeshLod` on props/enemies, core hash; Known limits refreshed | ws/demo-arpg-2 | brief `docs/briefs/demo-arpg-2.md` | render-5, core-3, ui-6 | 🟣 in E-031 train 6 at `03ff4c2` (check 2142, snap 0, demos/arpg 56/0 at load 11–20; 60 fps, 14–20 draws, lodCounts 3 levels at zoom 64) |
 | 5 | E2E harden 3: tactics d-pad same-frame press (E-033), sweep press/release-in-one-evaluate specs | ws/e2e-harden-3 | brief `docs/briefs/e2e-harden-3.md` | train 5 | 🔵 dispatched (Opus, offset 970) |
+| 5 | Post 6: TAA jitter via `renderer.setJitter`; Catmull-Rom history filter measured on sub-pixel motion | ws/post-6 | brief `docs/briefs/post-6.md` | post-5, render-6 | 🔵 dispatched (Opus, offset 980) |
+| 5 | Input 8: shared `InputClock` + `createTickClock`; gestures and look replay identically at any tick spacing | ws/input-8 | brief `docs/briefs/input-8.md` | input-7 | 🔵 dispatched (Opus, offset 1000) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
