@@ -478,7 +478,7 @@ export async function createGame<
         // this step's update, so its last tick was updated with the replayed state (ws/core-6).
         const pb = input.playback;
         const fed = pb ? pb.step() : false;
-        if (!fed && pb !== null && pb === replaying) pb.stop();
+        if (!fed && replaying !== null && pb === replaying) replaying.stop();
         if (!fed || pb?.clock !== clock) clock.advance(dt * 1000);
         input.update();
         padNav.update();
