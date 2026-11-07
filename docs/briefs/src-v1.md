@@ -18,6 +18,7 @@ STATUS row, *done when*:
   - Wire the check into `pnpm check`, so a new internal use fails the gate.
 - **Mechanical.** Each change is a rename to the v1 name in the migration guide. Behaviour and rendered pixels do not change.
 - **Stale comments.** Fix comments that the renames make wrong, including the `src/fx/render10.test.ts` note and the CHANGELOG note saying WorldPanel is right for `renderer.target` only. core-8 fixed WorldPanel.
+- **One checker.** Merge `scripts/check-deprecated.mjs` (templates-v1) and `findDeprecatedUses` in `scripts/check-snippets.mjs` (docs-v1) into one module that covers snippets, templates, demos and src. Keep the `pnpm check:*` names working.
 - **Alias removal plan.** Do not remove the aliases. Add `docs/guide/migrating-to-v1.md` § *Removal*: one line saying they go in the v1.0.0 release, plus the command a game runs to find its own uses.
 - **Gate:**
   - `pnpm check` and `snap:check` at 0 px.
