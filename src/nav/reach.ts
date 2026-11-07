@@ -6,6 +6,8 @@
 import type { NavGrid } from './grid';
 import { NEIGHBOUR_X, NEIGHBOUR_Y, stepCost } from './grid';
 import { CellHeap } from './heap';
+import { type MeshReach, type MeshReachOptions, reachableMesh } from './mesh/mesh-reach';
+import { NavMesh, type NavPoint3 } from './mesh/navmesh';
 import { type NavPath, reservePath } from './path';
 
 export interface Reach {
@@ -122,13 +124,54 @@ function seed(r: ReachImpl, gi: number): void {
 }
 
 /**
- * Dijkstra from `start` (a row-major index, or several) over the grid's neighbourhood with its
+ * Grid form: Dijkstra from `start` (a row-major index, or several) over the grid's neighbourhood with its
  * edge costs, stopping at `budget` (inclusive: a cell whose cost equals the budget is reached).
  * Writes into `out`, or into one `Reach` kept per grid when omitted, and returns it; nothing
  * allocates after the first query on a grid. Unwalkable or out-of-grid starts are skipped. The
  * cells in `out.cells` come nearest first, so the heap order doubles as a frontier order.
  */
 export function reachable(
+  grid: NavGrid,
+  start: number | ArrayLike<number>,
+  budget: number,
+  out?: Reach,
+): Reach;
+/**
+ * Mesh form (ws/nav-5): the polygons whose centre is within path cost `opts.budget` of `from`
+ * (snapped onto the mesh), with their cost to reach, priced as `findMeshPath` prices a route
+ * (areas, links) and stopping at the budget or `opts.maxPolys`. Writes into `out`
+ * (`createMeshReach`) or one `MeshReach` kept per mesh; allocation-free after the first query.
+ * `reachableOutline` draws its boundary.
+ */
+export function reachable(
+  mesh: NavMesh,
+  from: Readonly<NavPoint3>,
+  opts: MeshReachOptions,
+  out?: MeshReach,
+): MeshReach;
+export function reachable(
+  target: NavGrid | NavMesh,
+  start: number | ArrayLike<number> | Readonly<NavPoint3>,
+  budget: number | MeshReachOptions,
+  out?: Reach | MeshReach,
+): Reach | MeshReach {
+  if (target instanceof NavMesh) {
+    return reachableMesh(
+      target,
+      start as Readonly<NavPoint3>,
+      budget as MeshReachOptions,
+      out as MeshReach | undefined,
+    );
+  }
+  return reachableGrid(
+    target,
+    start as number | ArrayLike<number>,
+    budget as number,
+    out as Reach | undefined,
+  );
+}
+
+function reachableGrid(
   grid: NavGrid,
   start: number | ArrayLike<number>,
   budget: number,

@@ -4,7 +4,7 @@ An isometric turn-based skirmish: four player units against six raiders on a 24Ã
 with two elevation steps. Run it with `pnpm demo tactics` and open the URL Vite prints. Tap a
 unit, then a blue tile to move or a red one to attack; `E` (or the HUD button, or pad Y) ends the
 turn; drag pans, wheel or pinch zooms; the arrow keys or d-pad step a tile cursor and `Enter` / A
-confirms. `?still&seed=1` fixes the map and the AI's rolls (the toast is skipped too). To start
+confirms. `?still&seed=1` fixes the map and the AI's rolls (`createRandom`, the AI on its own `fork`; the toast is skipped too). To start
 a 2D game of your own from this shape, `pnpm create-game` scaffolds a project on the same API.
 
 ## What to look at

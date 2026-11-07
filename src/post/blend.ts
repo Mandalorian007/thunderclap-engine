@@ -24,8 +24,12 @@ interface Track {
   ease: Ease;
 }
 
-/** Fields that only make sense as whole values (`levels` would resize mid-blend; `texture` is a handle). */
-const SNAP_KEYS = new Set(['levels', 'texture']);
+/**
+ * Fields that only make sense as whole values, by `section.key`: `bloom.levels` would resize
+ * mid-blend, `lut.texture` is a handle and `lut.size` must match it, `motionBlur.mode` is a
+ * choice. They switch when the blend ends (any other non-number does too).
+ */
+const SNAP_KEYS = new Set(['bloom.levels', 'lut.texture', 'lut.size', 'motionBlur.mode']);
 
 /**
  * Interpolates post settings over time. Numbers and RGB triples ease from their value when
@@ -53,7 +57,7 @@ export class PostBlender {
         this.drop(section, key);
         const from = cur[key];
         const numeric =
-          !SNAP_KEYS.has(key) &&
+          !SNAP_KEYS.has(`${section}.${key}`) &&
           ((typeof to === 'number' && typeof from === 'number') ||
             (Array.isArray(to) && Array.isArray(from) && to.length === from.length));
         if (!numeric) {

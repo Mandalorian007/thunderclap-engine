@@ -146,3 +146,53 @@ export function importNavMesh(buffer: ArrayBuffer | ArrayBufferView): NavMesh {
   mesh.version = 0;
   return mesh;
 }
+
+/**
+ * Loads a navmesh shipped as bytes (a `pnpm bake:nav` or `pnpm bake` output, read with `fetch`
+ * or a `bytes` bundle entry): `importNavMesh`, then checks what a corrupt or truncated file would
+ * break later, so a bad asset fails at load with a reason instead of inside a query. Throws when
+ * the buffer is not a navmesh, is shorter than its header says, or holds a vertex index, an
+ * adjacency entry or a coordinate out of range.
+ */
+export function loadNavMesh(bytes: ArrayBuffer | ArrayBufferView): NavMesh {
+  const length = bytes.byteLength;
+  let mesh: NavMesh;
+  try {
+    mesh = importNavMesh(bytes);
+  } catch (e) {
+    throw new Error(`loadNavMesh: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  const nvp = mesh.maxVertsPerPoly;
+  const links = mesh.links.reduce((n, l) => (l ? n + 1 : n), 0);
+  const expected =
+    HEADER_U32 * 4 +
+    8 * 4 +
+    mesh.vertCount * 12 +
+    mesh.polyCount * nvp * 8 +
+    areaBytes(mesh.polyCount) +
+    links * LINK_F32 * 4;
+  // Format 1 has no area block.
+  if (length !== expected && length !== expected - areaBytes(mesh.polyCount)) {
+    throw new Error(`loadNavMesh: ${length} bytes, the header describes ${expected}`);
+  }
+  if (nvp < 3 || nvp > 6) throw new Error(`loadNavMesh: ${nvp} vertices per polygon`);
+  for (let i = 0; i < mesh.vertCount * 3; i++) {
+    if (!Number.isFinite(mesh.verts[i]!))
+      throw new Error(`loadNavMesh: vertex ${(i / 3) | 0} is not finite`);
+  }
+  for (let p = 0; p < mesh.polyCount; p++) {
+    const n = mesh.polyVertexCount(p);
+    if (n < 3) throw new Error(`loadNavMesh: polygon ${p} has ${n} vertices`);
+    for (let k = 0; k < nvp; k++) {
+      const v = mesh.polys[p * nvp + k]!;
+      const adj = mesh.adjacency[p * nvp + k]!;
+      if (k < n && !(v >= 0 && v < mesh.vertCount)) {
+        throw new Error(`loadNavMesh: polygon ${p} names vertex ${v}`);
+      }
+      if (adj < -1 || adj >= mesh.polyCount || (k >= n && adj !== -1)) {
+        throw new Error(`loadNavMesh: polygon ${p} edge ${k} names neighbour ${adj}`);
+      }
+    }
+  }
+  return mesh;
+}

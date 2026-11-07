@@ -104,23 +104,34 @@ function blockAt(cell: [number, number, number]): Promise<number> {
   );
 }
 
-/** A break: a tap on the right half (touch rows, CDP) or a click where the mouse rests. */
+/**
+ * A break: a tap on the right half (touch rows) or a click where the mouse rests, both as raw
+ * CDP input. The press and the release go out back to back: the browser runs them in order
+ * without a round trip to the runner in between, so a starved runner cannot stretch the press
+ * past the demo's 420 ms long-press (a touch then places a block; a click is no tap).
+ */
 async function tapBreak(page: Page): Promise<void> {
+  cdp ??= await page.context().newCDPSession(page);
+  const session = cdp;
   if (touch) {
     const box = await frame.locator('canvas').first().boundingBox();
     if (!box) throw new Error('no canvas');
     const x = box.x + box.width * 0.75;
     const y = box.y + box.height / 2;
-    cdp ??= await page.context().newCDPSession(page);
-    await cdp.send('Input.dispatchTouchEvent', {
-      type: 'touchStart',
-      touchPoints: [{ x, y, id: 1 }],
-    });
-    await frames(1);
-    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await Promise.all([
+      session.send('Input.dispatchTouchEvent', {
+        type: 'touchStart',
+        touchPoints: [{ x, y, id: 1 }],
+      }),
+      session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }),
+    ]);
   } else {
-    await page.mouse.down();
-    await page.mouse.up();
+    const { x, y } = await centre();
+    const click = { x, y, button: 'left', clickCount: 1 } as const;
+    await Promise.all([
+      session.send('Input.dispatchMouseEvent', { type: 'mousePressed', buttons: 1, ...click }),
+      session.send('Input.dispatchMouseEvent', { type: 'mouseReleased', buttons: 0, ...click }),
+    ]);
   }
 }
 
@@ -212,15 +223,12 @@ test('a right click places the hotbar block on the looked-at face', async ({ pag
 test('walking forward for a second moves the player', async ({ page, wrapper }) => {
   await open(page, wrapper);
   const before = await read();
+  const moved = (s: VoxelDemoState) =>
+    Math.hypot(s.playerPos[0] - before.playerPos[0], s.playerPos[2] - before.playerPos[2]);
+  // Held until the player has covered the distance, however slowly the frames come.
   await page.keyboard.down('KeyW');
-  await page.waitForTimeout(1000);
+  await expect.poll(async () => moved(await read())).toBeGreaterThan(0.5);
   await page.keyboard.up('KeyW');
-  const after = await read();
-  const moved = Math.hypot(
-    after.playerPos[0] - before.playerPos[0],
-    after.playerPos[2] - before.playerPos[2],
-  );
-  expect(moved).toBeGreaterThan(0.5);
   expect(pageErrors()).toEqual([]);
 });
 

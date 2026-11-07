@@ -43,6 +43,15 @@ export {
   type FloatSpawnOptions,
 } from './float-numbers';
 export {
+  createFloats,
+  ensureFloatsStyles,
+  FLOATS_CSS,
+  type Floats,
+  type FloatsHost,
+  type FloatsOptions,
+  type FloatTextOptions,
+} from './floats';
+export {
   createHeading,
   createMeter,
   createReticle,
@@ -55,7 +64,10 @@ export {
   headingOffset,
   type Meter,
   type MeterOptions,
+  type MeterReadout,
+  type MeterShape,
   type MeterTone,
+  type MeterTrailOptions,
   type Reticle,
   type ReticleOptions,
   type ReticleStyle,
@@ -177,6 +189,21 @@ export {
   type MinimapOptions,
 } from './minimap';
 export {
+  CANVAS_MINIMAP_CSS,
+  type CanvasMinimap,
+  type CanvasMinimapHost,
+  type CanvasMinimapOptions,
+  createCanvasMinimap,
+  ensureCanvasMinimapStyles,
+  type MinimapBackground,
+  type MinimapKindStyle,
+  type MinimapMarker,
+  type MinimapMarkerShape,
+  type MinimapRotate,
+  type MinimapShape,
+  type MinimapWorld,
+} from './minimap-canvas';
+export {
   createNotifier,
   ensureNotifyStyles,
   NOTIFY_CSS,
@@ -186,6 +213,7 @@ export {
   type NotifyOptions,
   type NotifyTone,
 } from './notify';
+export { createOrbMeter, ensureOrbStyles, ORB_CSS } from './orb';
 export { createOverlay, type Overlay, type OverlayOptions, type Rect } from './overlay';
 export {
   defaultPads,

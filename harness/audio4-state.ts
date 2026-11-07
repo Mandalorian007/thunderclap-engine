@@ -24,6 +24,14 @@ export interface HarnessAudio4State {
   /** `?sprites`: the last clip played and the live `sfx` voices. */
   lastClip: string;
   voices: number;
+  /**
+   * `?sprites`, for specs on a loaded machine (a 200 ms clip can start and end between two
+   * reads): the live `sfx` voices counted inside `playClip`, right after the play, and how many
+   * `playClip` voices have played and stopped playing since boot.
+   */
+  voicesAtPlay: number;
+  clipsPlayed: number;
+  clipsEnded: number;
   /** `?stream`: `music.bar`, `music.beat`, `music.totalBeats`; `streaming` while the element plays. */
   grid: { bar: number; beat: number; totalBeats: number };
   streaming: boolean;

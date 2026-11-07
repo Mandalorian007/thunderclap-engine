@@ -32,9 +32,9 @@ import {
   updateSpringChain,
   WORLD_NODE_FLOATS,
 } from '@thunderclap/engine/anim';
-import type { Scene } from '@thunderclap/engine/core';
+import { createRandom, type Scene } from '@thunderclap/engine/core';
 import { type EmitParams, ParticleSystem, Trail } from '@thunderclap/engine/fx';
-import { createRay, createTouchZones, screenRay } from '@thunderclap/engine/input';
+import { createRay, createTouchZones, screenRay, shapeStick } from '@thunderclap/engine/input';
 import {
   bakeNavMesh,
   createCrowd,
@@ -62,7 +62,7 @@ import {
 } from '@thunderclap/engine/render';
 import { buildCourtyard, HALF } from './courtyard';
 import { createGearSets, GEAR_NAMES } from './gear';
-import { runePixels, seededRandom, tilePixels, whitePixels } from './geom';
+import { runePixels, tilePixels, whitePixels } from './geom';
 import {
   ability,
   DamageNumbers,
@@ -625,7 +625,9 @@ async function main(): Promise<void> {
   const tip = new Float32Array(3);
 
   // ── Enemies ─────────────────────────────────────────────────────────────
-  const rng = seededRandom(SEED);
+  // `?seed=N` fixes the enemy spawns (the engine's seeded random; `findRandomPoint` takes a thunk).
+  const random = createRandom(SEED);
+  const rng = () => random.next();
   const anchors = ui.anchors(() => camera);
   const numbers = new DamageNumbers(anchors, 16);
   const crowd = createCrowd({ maxAgents: ENEMY_COUNT + 1, maxNeighbors: 8, neighborDist: 3 });
@@ -958,6 +960,7 @@ async function main(): Promise<void> {
   };
   let heroSpeed = 0;
   const heading = { x: 0, z: 0 };
+  const drive: [number, number] = [0, 0];
   const enemyPt: NavPoint3 = { x: 0, y: 0, z: 0 };
   const camEye = new Float32Array(3);
   const camAt = new Float32Array(3);
@@ -966,16 +969,17 @@ async function main(): Promise<void> {
 
   const updateHero = (dt: number) => {
     // Direct movement (keys, pad, touch stick) overrides a click path.
-    let ax = input.axis('left', 'right') + stick.x;
-    let az = input.axis('up', 'down') + stick.y;
-    const mag = Math.hypot(ax, az);
+    // Keys and the touch stick summed, through a radial deadzone, the length clamped to 1.
+    shapeStick(input.axis('left', 'right') + stick.x, input.axis('up', 'down') + stick.y, drive, {
+      deadzone: 0.15,
+      shape: 'radial',
+    });
+    const mag = Math.hypot(drive[0], drive[1]);
     let want = 0;
-    if (mag > 0.15) {
-      ax /= mag;
-      az /= mag;
-      heading.x = ax;
-      heading.z = az;
-      want = RUN_SPEED * Math.min(1, mag);
+    if (mag > 0) {
+      heading.x = drive[0] / mag;
+      heading.z = drive[1] / mag;
+      want = RUN_SPEED * mag;
       pathing = false;
       chase = -1;
     } else if (chase >= 0) {
