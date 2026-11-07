@@ -64,31 +64,32 @@ builds all of them against one palette instead. The steps below are the same.
 ## Pose it every frame
 
 The `AnimationMixer` plays clips and writes a pose (each joint's local position, rotation and
-scale). Turning that pose into pixels takes three calls each frame:
+scale). `skinPose` turns that pose into the joint matrices the vertex shader reads, in one call
+per frame. `skinPose(skeleton, mixer, palette, 0, dt)` does four things in order:
 
-1. `poseToWorld` turns local joint poses into world matrices.
-2. `skinMatrices` multiplies each by its inverse bind matrix, giving 12 floats per joint.
-   `palette.write(0)` is slot 0's joint matrices in the palette itself, so they go straight in.
-3. `palette.flush()` uploads them.
+1. `mixer.update(dt)` advances the clips and samples them into `mixer.pose`.
+2. `poseToWorld` turns the local joint poses into world matrices.
+3. `skinMatrices` multiplies each by its inverse bind matrix, giving 12 floats per joint.
+4. It writes those floats straight into `palette.write(0)`, slot 0's joint matrices in the
+   palette itself.
 
-Then draw the mesh with `palette.params(0)`, the draw parameters that name slot 0 (the slot
-goes in the w of `params`). Slot 0 is the first character.
+Slot 0 is the first character. `skinPose` returns the world matrices, which you need for
+sockets. Once every character is posed, call `palette.flush()` to upload the matrices. Then
+draw the mesh with `palette.params(0)`, the draw parameters that name slot 0 (the slot goes in
+the w of `params`).
 
 ```ts
-import { AnimationMixer, poseToWorld, type Skeleton, skinMatrices, WORLD_NODE_FLOATS } from '@thunderclap/engine/anim';
+import { AnimationMixer, type Skeleton, skinPose } from '@thunderclap/engine/anim';
 import type { Frame, Material, Mesh, SkinPalette } from '@thunderclap/engine/render';
 import { Transform } from '@thunderclap/engine/render';
 
 export function createHeroRig(skeleton: Skeleton) {
   const mixer = new AnimationMixer(skeleton, { maxActions: 8 });
-  // Allocate once. Nothing below allocates per frame.
-  const world = new Float32Array(skeleton.parents.length * WORLD_NODE_FLOATS);
   const body = new Transform();
 
-  function update(dt: number, palette: SkinPalette) {
-    mixer.update(dt);
-    poseToWorld(skeleton, mixer.pose, world);
-    skinMatrices(skeleton, world, palette.write(0));
+  // Returns the world matrices for sockets. Nothing here allocates per frame.
+  function update(dt: number, palette: SkinPalette): Float32Array {
+    return skinPose(skeleton, mixer, palette, 0, dt);
   }
 
   function render(frame: Frame, mesh: Mesh, material: Material, palette: SkinPalette) {
@@ -96,11 +97,23 @@ export function createHeroRig(skeleton: Skeleton) {
     frame.mesh(mesh, material, body, palette.params(0));
   }
 
-  return { mixer, world, body, update, render };
+  return { mixer, body, update, render };
 }
 ```
 
 `body` places the whole character. Move and turn it like any other `Transform`.
+
+If you drive the mixer some other way, leave out `dt`. `skinPose` then poses whatever
+`mixer.pose` holds and does not advance it. You need that in two cases. A state graph (below)
+updates the mixer itself, so call `graph.update(dt)` and then `skinPose(skeleton, mixer,
+palette, 0)`. Foot IK or a look-at edits the pose after sampling, so call `mixer.update(dt)`,
+then the IK, then `skinPose` with no `dt`. You can also pass a bare `Pose` in place of the
+mixer.
+
+The world array `skinPose` returns is one array per skeleton, and the next call for that
+skeleton overwrites it. With two characters on one rig, read the first one's sockets before
+you pose the second. Or pass each character its own array as the last argument:
+`skinPose(skeleton, mixer, palette, slot, dt, world)`.
 
 ## Play and blend clips
 
@@ -193,7 +206,7 @@ export function swordSocket(skeleton: Skeleton) {
   const socket = createSocket(skeleton, 'hand.R', { position: [0, 0.1, 0] });
   const sword = new Transform();
 
-  // Call after poseToWorld, with the same world array and the body's world matrix.
+  // Call after skinPose, with the world array it returned and the body's world matrix.
   function place(world: Float32Array, body: Transform) {
     attachTransform(socket, world, body.world, sword);
   }

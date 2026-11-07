@@ -284,8 +284,9 @@ the types below restate `AnimationClip`, `AnimationChannel` and `Skeleton` struc
 `loadGltf` passes `skins` and `animations` through on the `GltfScene` and sets `skin` on each
 draw. With `opts.palette` (a `SkinPalette` the game sized for the skin's joints) a skinned
 primitive is built in `VERTEX_LAYOUT_SKINNED` and every material of the scene binds the palette,
-so the game's frame is `sampleClip` → `poseToWorld` → `skinMatrices` → `palette.set(0, m)` →
-`palette.flush()` → `scene.draw(frame)` (the draw's `params[3]` is slot 0; set it for another
+so the game's frame is `skinPose(skeleton, mixer, palette, 0, dt)` (anim: the mixer update,
+`poseToWorld`, `skinMatrices` and `palette.write(0)` in one call) → `palette.flush()` →
+`scene.draw(frame)` (the draw's `params[3]` is slot 0; set it for another
 instance). Without a palette the primitive is built in `VERTEX_LAYOUT_3D` and the joints and
 weights stay on the document; a material cannot take a palette later (`setBuffer` needs a slot
 declared at creation), so pass it to `loadGltf`.
@@ -322,13 +323,26 @@ scene, in glTF units (`type`, `color`, `intensity`, `range`, cone angles, world 
 `direction`, the node's -Z). `loadGltf` converts them to the render module's records on
 `scene.lights: GltfSceneLights` (`directional`, `points`, `spots`): `color` is `color ×
 intensity × lightScale` (`LoadGltfOptions.lightScale`, default 1), `radius` is `range` or
-`16·√(intensity × lightScale)`. The game decides what to light with:
+`16·√(intensity × lightScale)`. Each directional light is a render `SunLight` (ws/assets-4):
+`direction` is its node's world -Z, normalised, the way the light travels, which is the
+engine's convention for `Lights.sun.direction` and `SpotLight.direction`; the deprecated `dir`
+reads and replaces the same array. The game decides what to light with:
 
+<!-- snippet:check -->
 ```ts
+import type { GltfScene } from '@thunderclap/engine/assets';
+import type { Lights } from '@thunderclap/engine/render';
+
+declare const scene: GltfScene;
+declare const lights: Lights; // the game's
+
 lights.points.push(...scene.lights.points);
 lights.spots.push(...scene.lights.spots);
 const sun = scene.lights.directional[0];
-if (sun) { lights.sun.dir = sun.dir; lights.sun.color = sun.color; } // lights: the game's Lights
+if (sun) {
+  lights.sun.direction = sun.direction;
+  lights.sun.color = sun.color;
+}
 ```
 
 `doc.cameras: GltfCamera[]` (perspective `yfov` / `aspectRatio` / `znear` / `zfar`, orthographic

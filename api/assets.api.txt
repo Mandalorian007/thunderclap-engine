@@ -786,7 +786,7 @@ class GltfScene {
 
 ## GltfSceneLights  (type-only)
 interface GltfSceneLights {
-    directional: DirectionalLight[];
+    directional: SunLight[];
     points: PointLight[];
     spots: SpotLight[];
 }

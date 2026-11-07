@@ -274,7 +274,8 @@ export function skinMatrices(skeleton: Skeleton, world3x4: Float32Array, out: Fl
     const wo = node * WORLD_NODE_FLOATS;
     const oo = j * WORLD_NODE_FLOATS;
     if (!ib) {
-      out.set(world3x4.subarray(wo, wo + WORLD_NODE_FLOATS), oo);
+      // A plain copy, not `set(subarray(...))`: no view allocated per joint.
+      for (let k = 0; k < WORLD_NODE_FLOATS; k++) out[oo + k] = world3x4[wo + k]!;
       continue;
     }
     if (stride === 16) {

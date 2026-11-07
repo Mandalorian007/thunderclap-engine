@@ -94,6 +94,9 @@ export type { RetargetClipOptions, RetargetMap, RetargetOptions } from './retarg
 export { createRetargetMap, normalizeJointName, retargetClip, retargetPose } from './retarget';
 export type { RootMotionDelta, RootMotionOptions, RootMotionSplit } from './root-motion';
 export { applyRootMotionDelta, extractRootMotion } from './root-motion';
+// ws/assets-4: one call per frame from a pose to a skin palette slot.
+export type { SkinPoseSource, SkinPoseTarget } from './skin-pose';
+export { skinPose } from './skin-pose';
 export type { Socket, SocketLocal } from './socket';
 export { attachTransform, createSocket, socketWorld } from './socket';
 export type {
