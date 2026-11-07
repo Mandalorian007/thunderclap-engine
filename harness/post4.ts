@@ -11,7 +11,7 @@
  *   `sharpen: 0` and the camera jittered by the stack: after 16 frames `convergedDelta` is the
  *   flat-pixel difference to the reference. Then a bright bar slides across a dark band and
  *   `ghost` is the brightest trail behind it. Then (ws/post-5) a striped cube slides through an
- *   `InstanceList` with velocity under the still camera, first with `taa.reprojection`
+ *   `InstanceList` with velocity under the still, unjittered camera, first with `taa.reprojection`
  *   `'camera'`, then `'velocity'`: `ghostObjectCamera` / `ghostObject` are how far the TAA frame
  *   strays from the same inputs with TAA off around the cube. `?still` skips the bar and cube.
  * - `?ssr`: a floor split into a rough (0.9) and a smooth (0.05) metal half, a bright pillar on
@@ -338,13 +338,15 @@ const BAR_W = 0.5;
 const BAR_SPEED = 0.03;
 const BAR_X0 = -2.2;
 /**
- * `?taa` (ws/post-5): the striped cube (`OBJ_STRIPES` slabs across x), its slide (world units
- * per frame, about 5 px at 1280 × 720) and the frames each reprojection runs before it is read.
+ * `?taa` (ws/post-5): the striped cube (`OBJ_STRIPES` slabs across x), its slide (whole output
+ * px per frame at its front face, so the history it is reprojected into is never resampled
+ * between texels and the TAA frame can match the TAA-off one) and the frames each reprojection
+ * runs before it is read.
  */
 const OBJ_Y = 1.3;
 const OBJ_Z = 1.2;
 const OBJ_STRIPES = 4;
-const OBJ_SPEED = 0.04;
+const OBJ_PX = 6;
 const OBJ_X0 = -2.4;
 const OBJ_WARM = 20;
 const OBJ_READS = 6;
@@ -563,6 +565,9 @@ async function main(): Promise<void> {
           state.phase = 'objectCamera';
           phaseFrame = 0;
           objX = OBJ_X0;
+          // No jitter from here: the still background then resolves to the reference exactly and
+          // the difference around the cube is its trail alone.
+          measured.removeJitterCamera(camera);
           measured.set({ taa: { reprojection: 'camera' } });
         }
       } else if (
@@ -663,7 +668,8 @@ async function main(): Promise<void> {
           }
         }
         if ((state.phase === 'objectCamera' || state.phase === 'objectVelocity') && objList) {
-          objX += OBJ_SPEED;
+          const perPx = 1 / (toOut(1, OBJ_Y, OBJ_Z + 0.5)[0] - toOut(0, OBJ_Y, OBJ_Z + 0.5)[0]);
+          objX += OBJ_PX * perPx;
           if (objX > -OBJ_X0) {
             objX = OBJ_X0;
             phaseFrame = 0;
