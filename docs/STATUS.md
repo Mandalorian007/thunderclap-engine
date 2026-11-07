@@ -137,6 +137,8 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Core 3: `hash2/hash3(f)` positional hashing in core; demos/templates swap hand-rolled hashes | ws/core-3 | brief `docs/briefs/core-3.md` | adopt-sweep wish | 🔵 committed `3fba1dc`; check 2093, snap 0, demos voxel/dungeon/tactics green; arena, range, templates specs pending (slot) |
 | 5 | Nav 6: `bakeNavMesh` defaults and `NavBakeError` (no silent 0 polys); bake-nav script defaults + node test | ws/nav-6 | brief `docs/briefs/nav-6.md` | nav-5 finding | 🔵 dispatched (Opus, offset 890) |
 | 5 | Post 5: TAA reprojects by the velocity target with history rejection; drop the duplicate camera-layout test | ws/post-5 | brief `docs/briefs/post-5.md` | post-4 wish, render-5 note | 🔵 dispatched (Opus, offset 900) |
+| 5 | Render 6: LOD for `frame.meshes`/`InstanceList` with per-view level memory; alpha-masked shadows; `renderer.setJitter` hook; `initGpu` requests compression features | ws/render-6 | brief `docs/briefs/render-6.md` | render-5 deviations, post-4 wish | 🔵 dispatched (Opus, offset 910) |
+| 5 | FX 5: prove/fix collide creep (leak <0.5%), `attract.falloff` + radius | ws/fx-5 | brief `docs/briefs/fx-5.md` | e2e-harden-2 findings | 🔵 dispatched (Opus, offset 920) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
