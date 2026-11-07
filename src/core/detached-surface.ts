@@ -2,8 +2,9 @@
  * The surface behind `createGame({ overlay: false })` (ws/core-9): the letterbox maths of
  * `Surface` on a virtual container, with no canvas, no root element and no DOM listener. The
  * container is the design size until `resizeContainer` changes it, at a pixel ratio of 1, so
- * client px are design px by default. Internal: `ctx.surface` is typed `Surface`; reading its
- * `root` or `canvas` throws.
+ * client px are design px by default. Internal: it implements the `Surface` interface with no
+ * cast (ws/platform-surface), and `ctx.surface` is typed `Surface`; reading its `root` or
+ * `canvas` throws.
  */
 import {
   type BackbufferSize,
@@ -20,7 +21,7 @@ import {
 
 type Rect = { x: number; y: number; width: number; height: number };
 
-export class DetachedSurface {
+export class DetachedSurface implements Surface {
   readonly logicalWidth: number;
   readonly logicalHeight: number;
   rect: Letterbox = { x: 0, y: 0, width: 0, height: 0, scale: 0 };
@@ -124,11 +125,6 @@ export class DetachedSurface {
 
   destroy(): void {
     this.listeners.clear();
-  }
-
-  /** As the `Surface` the ctx is typed with: the same members, minus the DOM. */
-  asSurface(): Surface {
-    return this as unknown as Surface;
   }
 }
 

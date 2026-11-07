@@ -6,7 +6,7 @@
  * `overlay: false`, which is `createGame`'s no-DOM mode (ws/core-9) and runs in plain Node.
  */
 
-import type { DetachedSurface } from '../core/detached-surface';
+import { DetachedSurface } from '../core/detached-surface';
 import type { CreateGameOptions, EngineCtx, FlushableSave } from '../core/game';
 import { createGame } from '../core/game';
 import type { Input } from '../input';
@@ -126,9 +126,9 @@ export async function createTestGame<
   const ctx = await createGame<A, S, C, P>({ ...opts, root, gpu, host, clock });
   if (!ctx) throw new Error('createTestGame: createGame returned null');
   const surface = ctx.surface;
-  if (headless) {
+  if (surface instanceof DetachedSurface) {
     // The virtual container is the viewport, so pointers letterbox as on a page of that size.
-    (surface as unknown as DetachedSurface).resizeContainer(view.width, view.height);
+    surface.resizeContainer(view.width, view.height);
   } else {
     // The canvas reports the box the surface gave it, so a touch zone measures as on a page.
     sizeElement(surface.canvas, () => {

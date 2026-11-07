@@ -489,7 +489,7 @@ export async function createGame<
     if (!opts.gpu || !opts.host) {
       throw new Error('createGame: `overlay: false` needs `gpu` and `host` (it touches no DOM)');
     }
-    res = gpuBoot(new DetachedSurface(surfaceOpts).asSurface(), opts.gpu);
+    res = gpuBoot(new DetachedSurface(surfaceOpts), opts.gpu);
   } else {
     const root = opts.root ?? (opts.gpu ? globalThis.document?.createElement('div') : undefined);
     if (!root) {

@@ -74,6 +74,13 @@ const p = surface.clientToLogical(e.offsetX, e.offsetY); // design px
   with a `SurfaceSize` `{ rect, backbuffer }`), `clientToLogical` / `logicalToClient`,
   `containsLogical`, `setFrame(rect | null)` (letterbox inside part of the container, e.g. the
   layout's `freeRect`), `layout()` and `destroy()`.
+- `Surface` is also an interface (ws/platform-surface): those members, with no private state.
+  `EngineCtx.surface`, `BootResult.surface` and `mountSurface` are typed with it, and
+  `new Surface(root, opts)` is the DOM canvas that implements it. Anything with the same members
+  is a `Surface` with no cast, such as core's no-DOM surface under `createGame({ overlay: false })`
+  or a game's own (`class FixedSurface implements Surface { ... }`). A surface with no DOM
+  throws from `root` and `canvas`. The DOM class can still be extended and tested with
+  `instanceof Surface`.
 - Pure math (no DOM, tested in Node): `computeLetterbox(containerW, containerH, logicalW,
   logicalH): Letterbox`, `computeBackbuffer(cssW, cssH, dpr, maxDpr?,
   maxPixels?)`, and `clientToLogical(box, logicalW, logicalH, cx, cy, out?)` /

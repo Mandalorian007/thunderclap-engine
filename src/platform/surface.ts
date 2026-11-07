@@ -29,12 +29,53 @@ export interface SurfaceSize {
 }
 
 /**
+ * What a surface is to the engine (ws/platform-surface): a letterboxed logical design space, the
+ * drawing-buffer size, and the resize events and coordinate maps over them. `EngineCtx.surface`,
+ * `BootResult.surface` and `mountSurface` are typed with it.
+ *
+ * `new Surface(root, opts)` (the DOM canvas below) implements it, and so can anything else with
+ * these members, with no cast: core's no-DOM surface (`createGame({ overlay: false })`) and a
+ * game's own surface. A surface with no DOM throws from `root` and `canvas`.
+ */
+export interface Surface {
+  /** The container the canvas letterboxes in. */
+  readonly root: HTMLElement;
+  /** The canvas the renderer draws to. */
+  readonly canvas: HTMLCanvasElement;
+  /** Logical design width. */
+  readonly logicalWidth: number;
+  /** Logical design height. */
+  readonly logicalHeight: number;
+  /** Letterboxed rect, CSS px, relative to `root`. Updated in place on resize. */
+  rect: Letterbox;
+  /** The plain contain fit for the whole container (what `rect` is unless a frame is set). */
+  fitRect: Letterbox;
+  /** Drawing-buffer size in device px, and the pixel ratio used. */
+  backbuffer: BackbufferSize;
+  /** Subscribe to size changes. Called immediately with the current size. Returns unsubscribe. */
+  onResize(fn: (size: SurfaceSize) => void): () => void;
+  /** Viewport coordinates (e.g. `PointerEvent.clientX/Y`) to logical design space. */
+  clientToLogical(clientX: number, clientY: number, out?: Vec2): Vec2;
+  /** Logical coordinates to viewport coordinates (CSS px, same space as clientX/Y). */
+  logicalToClient(x: number, y: number, out?: Vec2): Vec2;
+  /** True if a logical point is inside the design space. */
+  containsLogical(p: Vec2): boolean;
+  /** Letterbox inside a part of the container (CSS px, relative to `root`); `null` is all of it. */
+  setFrame(frame: { x: number; y: number; width: number; height: number } | null): void;
+  /** Force a re-layout (e.g. after fullscreen toggles). */
+  layout(): void;
+  /** Stop listening and release what the surface owns. */
+  destroy(): void;
+}
+
+/**
  * A canvas mounted in a container, letterboxed to a fixed logical aspect, DPR-aware.
  * Owns the canvas element and keeps its CSS box + drawing buffer in sync with the container.
  *
  * Other systems (input, DOM overlay) hook in via `rect`, `onResize` and `clientToLogical`.
+ * Exported as the value `Surface`; its private state stays off the `Surface` type.
  */
-export class Surface {
+class DomSurface implements Surface {
   readonly root: HTMLElement;
   readonly canvas: HTMLCanvasElement;
   readonly logicalWidth: number;
@@ -199,6 +240,15 @@ export class Surface {
     this.dprQuery.addEventListener('change', this.onDprChange);
   }
 }
+
+/**
+ * The DOM surface's constructor: `new Surface(root, opts)` mounts a letterboxed canvas in
+ * `root`. A class may extend it.
+ */
+export const Surface: {
+  new (root: HTMLElement, opts?: SurfaceOptions): Surface;
+  readonly prototype: Surface;
+} = DomSurface;
 
 export function mountSurface(root: HTMLElement, opts?: SurfaceOptions): Surface {
   return new Surface(root, opts);
