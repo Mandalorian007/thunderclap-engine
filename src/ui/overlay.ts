@@ -2,7 +2,7 @@ import { type AnchorCamera, Anchors } from './anchor';
 import { CaptionCard, type CaptionOptions } from './caption';
 import { type CursorOptions, createCursor, type WorldCursor } from './cursor';
 import { h } from './dom';
-import { createFloatNumbers, type FloatNumbers } from './float-numbers';
+import { createFloats, type Floats, type FloatsOptions } from './floats';
 import {
   createHeading,
   createMeter,
@@ -30,7 +30,11 @@ import { grid as createGrid, type Grid, type GridOptions } from './inventory-gri
 import { radial as createRadial, type Radial, type RadialOptions } from './inventory-radial';
 import { createLayout, type Layout, type LayoutSpec, type Units } from './layout';
 import { createLoading, type LoadingOptions, type LoadingScreen } from './loading';
-import { createMinimap, type Minimap, type MinimapOptions } from './minimap';
+import {
+  type CanvasMinimap,
+  type CanvasMinimapOptions,
+  createCanvasMinimap,
+} from './minimap-canvas';
 import { createNotifier, type Notification, type Notifier, type NotifyOptions } from './notify';
 import { type PadOwner, PanelStack } from './stack';
 import { ensureStyles } from './styles';
@@ -178,17 +182,21 @@ export interface Overlay {
   /** `stack.padOwner`: `'stack'` while a modal panel has the gamepad, else `'game'` (ws/ui-4). */
   readonly padOwner: PadOwner;
   /**
-   * The overlay's float-number pool on the `hud` layer, made on first use with the defaults
-   * (64 nodes, 1 s); `createFloatNumbers(ui, opts)` for other settings (`ui/float-numbers.ts`).
-   * Needs `anchors()`; call `floats.update(dt)` in the update.
+   * The overlay's floating text on the `hud` layer (`ui/floats.ts`), made by the first call:
+   * `camera` goes to `anchors(camera)` and `opts` set the pool. Later calls return the same
+   * `Floats` (their arguments are ignored); `createFloats(ui, camera, opts)` makes another.
+   * Call `floats.update(dt)` once per update (ws/ui-6).
    */
-  readonly floats: FloatNumbers;
+  floats(camera?: () => AnchorCamera, opts?: FloatsOptions): Floats;
   /** A radial progress ring in a layout region (`ui/widgets-3.ts`). */
   ring(opts?: RingOptions): Ring;
   /** A compass strip with bearing markers in a layout region (`ui/widgets-3.ts`). */
   compass(opts?: CompassOptions): Compass;
-  /** A round minimap with pooled markers in a layout region (`ui/minimap.ts`). */
-  minimap(opts?: MinimapOptions): Minimap;
+  /**
+   * A canvas minimap of a bounded world in a layout region: markers by kind, the player's arrow,
+   * north- or player-up, tap to pick (`ui/minimap-canvas.ts`, ws/ui-6).
+   */
+  minimap(opts: CanvasMinimapOptions): CanvasMinimap;
   /** A loading screen on the `panels` layer; root `aria-busy` while shown (`ui/loading.ts`). */
   loading(opts?: LoadingOptions): LoadingScreen;
   /** A notification card stacked top-right on the `toasts` layer (`ui/notify.ts`). */
@@ -316,7 +324,7 @@ export function createOverlay(opts: OverlayOptions): Overlay {
   let drag: DragContext | null = null;
   let tooltips: Tooltips | null = null;
   let notifications: Notifier | null = null;
-  let floats: FloatNumbers | null = null;
+  let floats: Floats | null = null;
 
   const overlay: Overlay = {
     root,
@@ -428,8 +436,8 @@ export function createOverlay(opts: OverlayOptions): Overlay {
     get padOwner() {
       return stack.padOwner;
     },
-    get floats() {
-      floats ??= createFloatNumbers(overlay);
+    floats(camera, o) {
+      floats ??= createFloats(overlay, camera, o);
       return floats;
     },
     ring(o) {
@@ -439,7 +447,7 @@ export function createOverlay(opts: OverlayOptions): Overlay {
       return createCompass(overlay, o);
     },
     minimap(o) {
-      return createMinimap(overlay, o);
+      return createCanvasMinimap(overlay, o);
     },
     loading(o) {
       return createLoading(overlay, o);

@@ -1,4 +1,4 @@
-// ws/ui-4: anchors frame, pad owner, float numbers, ring and compass, minimap.
+// ws/ui-4: anchors frame, pad owner, ring and compass. ws/ui-6: `ui.floats(camera?)`, `ui.minimap(opts)`.
 export type { AnchorFrame } from './anchor';
 export {
   type AnchorCamera,
@@ -32,16 +32,6 @@ export {
   type WorldTarget,
 } from './cursor';
 export { append, type Child, focusableWithin, h } from './dom';
-export {
-  createFloatNumbers,
-  ensureFloatStyles,
-  FLOAT_CSS,
-  type FloatKind,
-  type FloatNumbers,
-  type FloatNumbersHost,
-  type FloatNumbersOptions,
-  type FloatSpawnOptions,
-} from './float-numbers';
 export {
   createFloats,
   ensureFloatsStyles,
@@ -178,17 +168,6 @@ export {
   menuNav,
 } from './menu-nav';
 export {
-  createMinimap,
-  ensureMinimapStyles,
-  MINIMAP_CSS,
-  type Minimap,
-  type MinimapHost,
-  type MinimapMarkerKind,
-  type MinimapMarkerOptions,
-  type MinimapMarkerPlace,
-  type MinimapOptions,
-} from './minimap';
-export {
   CANVAS_MINIMAP_CSS,
   type CanvasMinimap,
   type CanvasMinimapHost,
@@ -198,6 +177,7 @@ export {
   type MinimapBackground,
   type MinimapKindStyle,
   type MinimapMarker,
+  type MinimapMarkerPlace,
   type MinimapMarkerShape,
   type MinimapRotate,
   type MinimapShape,

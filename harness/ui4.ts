@@ -2,13 +2,14 @@
  * UI 4 demo page (ws/ui-4): a lit ground with four blocks under the overlay, one mode per query.
  * Noun-free; the scene is what a game would write, the widgets are the engine's.
  *
- * - `?floats`: a float number spawns over a block every 100 ms, and a click spawns a crit
- *   (`ui.floats`); `live`, `pooled`.
+ * - `?floats`: a floating number spawns over a block every 100 ms, and a click spawns a crit
+ *   (`ui.floats(camera)`, ws/ui-6); `live`, `pooled`.
  * - `?ring`: a radial progress ring fills over 3 s and wraps (`ui.ring`); `value`.
  * - `?compass`: the camera orbits and a compass strip follows its heading with two markers
  *   (`ui.compass`); `heading`, `markers`.
- * - `?minimap`: a minimap with four markers around a centre that circles the scene
- *   (`ui.minimap`, `rotate`); `onRim`.
+ * - `?minimap`: a canvas minimap with four markers around a centre that circles the scene
+ *   (`ui.minimap`, player-up, `worldRadius`, ws/ui-6); `onRim` (from `markerAt`), `rimDrawn`
+ *   (the map's own count as drawn) and `mapMarkers`.
  * - `?modal`: a world cursor and `PadNav` on a fake pad; the page holds the d-pad down so the
  *   cursor latches, then opens a modal panel at t = 1 s; `padOwner`, `cursorLatched`,
  *   `padOwnerChanges`.
@@ -30,6 +31,8 @@ import {
 import {
   button,
   createOverlay,
+  type MinimapMarker,
+  type MinimapMarkerPlace,
   type PadLike,
   PadNav,
   type PanelHandle,
@@ -55,6 +58,8 @@ const state: HarnessUi4State = {
   heading: 0,
   markers: {},
   onRim: 0,
+  rimDrawn: 0,
+  mapMarkers: 0,
   padOwner: 'game',
   cursorLatched: false,
   latchedBeforeModal: false,
@@ -235,27 +240,34 @@ async function main(): Promise<void> {
   // ---- the mode's widgets
   let perFrame: (dt: number) => void = () => {};
   if (mode === 'floats') {
+    const floats = ui.floats(() => camera);
+    const at = new Float32Array(3);
     let clock = 0;
     let n = 0;
     // A click (or tap) spawns a crit over the first block, on top of the steady stream.
     root.addEventListener('pointerdown', () => {
       const [x, y, z] = BLOCKS[0]!;
-      ui.floats.spawn(x, y + 1, z, 'CRIT', { kind: 'crit' });
+      at.set([x, y + 1, z]);
+      floats.spawn('CRIT', at, { crit: true, color: 'var(--tc-color-warn)' });
     });
+    // Damage, heal, a crit and plain text in turn, as the theme colours them.
+    const COLORS = ['var(--tc-color-danger)', 'var(--tc-color-success)', 'var(--tc-color-warn)'];
     perFrame = (dt) => {
       clock += dt;
       while (clock >= FLOAT_EVERY_S) {
         clock -= FLOAT_EVERY_S;
         const [x, y, z] = BLOCKS[n % BLOCKS.length]!;
-        const kind = (['damage', 'heal', 'crit', 'info'] as const)[n % 4]!;
-        ui.floats.spawn(x, y + 0.6, z, kind === 'heal' ? `+${(n % 9) + 1}` : String(n % 97), {
-          kind,
+        const k = n % 4;
+        at.set([x, y + 0.6, z]);
+        floats.spawn(k === 1 ? `+${(n % 9) + 1}` : String(n % 97), at, {
+          color: COLORS[k],
+          crit: k === 2,
         });
         n++;
       }
-      ui.floats.update(dt);
-      state.live = ui.floats.live;
-      state.pooled = ui.floats.pooled;
+      floats.update(dt);
+      state.live = floats.live;
+      state.pooled = floats.pooled;
     };
   } else if (mode === 'ring') {
     const ring = ui.ring({ radius: 48, thickness: 8, value: 0, label: 'Cast', region: 'bottom' });
@@ -284,23 +296,37 @@ async function main(): Promise<void> {
       state.markers.north = compass.offsetOf('north');
     };
   } else if (mode === 'minimap') {
-    const map = ui.minimap({ size: 180, worldRadius: 4, rotate: true, region: 'right' });
+    const map = ui.minimap({
+      size: 180,
+      world: { minX: -10, minZ: -10, maxX: 10, maxZ: 10 },
+      worldRadius: 4,
+      rotate: 'player',
+      region: 'right',
+    });
     map.el.id = 'minimap';
     const kinds = ['ally', 'enemy', 'objective', 'info'] as const;
+    const markers: MinimapMarker[] = BLOCKS.map(([x, , z], i) => ({
+      id: `block-${i}`,
+      x,
+      z,
+      kind: kinds[i]!,
+      icon: i === 2 ? '!' : undefined,
+    }));
+    const place: MinimapMarkerPlace = { x: 0, y: 0, outside: false };
     perFrame = () => {
       // The centre circles the scene; blocks further than the radius sit on the rim.
       const a = state.t * 0.6;
       const cx = Math.cos(a) * MAP_RADIUS * 0.5;
       const cz = Math.sin(a) * MAP_RADIUS * 0.5;
-      map.setCenter(cx, cz, headingDeg());
+      map.setPlayer(cx, cz, (headingDeg() * Math.PI) / 180);
+      map.setMarkers(markers);
+      // Draw now, so the drawn rim count and `markerAt` read the same frame.
+      map.flush();
       let onRim = 0;
-      for (let i = 0; i < BLOCKS.length; i++) {
-        const [x, , z] = BLOCKS[i]!;
-        const id = `block-${i}`;
-        map.setMarker(id, x, z, { kind: kinds[i]!, icon: i === 2 ? '!' : undefined });
-        if (map.markerAt(id)?.outside) onRim++;
-      }
+      for (const m of markers) if (map.markerAt(m.id, place)?.outside) onRim++;
       state.onRim = onRim;
+      state.rimDrawn = map.rim;
+      state.mapMarkers = map.markers;
     };
   } else {
     // ?modal: a grid cursor over the blocks and PadNav, both on the fake pad.

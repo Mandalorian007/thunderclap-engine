@@ -17,7 +17,7 @@ export interface HarnessUi4State {
   parked: boolean;
   /** Seconds of unparked time. */
   t: number;
-  /** `?floats`: `ui.floats.live` and `ui.floats.pooled`. */
+  /** `?floats`: the overlay floats' `live` and `pooled`. */
   live: number;
   pooled: number;
   /** `?ring`: the ring's value (fills over 3 s, then wraps). */
@@ -25,8 +25,11 @@ export interface HarnessUi4State {
   /** `?compass`: the compass heading (degrees) and each marker's offset from the centre, design px. */
   heading: number;
   markers: Record<string, number | null>;
-  /** `?minimap`: markers held on the rim. */
+  /** `?minimap`: markers held on the rim, by `markerAt`. */
   onRim: number;
+  /** `?minimap`: the map's own rim count as drawn (`rim`), and the markers it holds. */
+  rimDrawn: number;
+  mapMarkers: number;
   /** `?modal`: `ui.padOwner`, the cursor's latch and how many owner transitions fired. */
   padOwner: 'stack' | 'game';
   cursorLatched: boolean;

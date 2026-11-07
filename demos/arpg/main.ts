@@ -13,8 +13,11 @@
  * - Enemies: twelve ghouls on the same skeleton (one `InstanceList`, one `SkinPalette`), each
  *   with its own mixer and graph, replanning a `NavPath3` toward the hero and stepping through
  *   `createCrowd`. Three hits kill; a death shrinks, bursts and respawns at the edge after 3 s.
- * - HUD: health and mana orbs, a four-slot ability row with cooldown sweeps, gear buttons,
- *   anchored health bars and floating damage numbers.
+ * - HUD: health and mana orbs (`ui.meter({ shape: 'orb', trail: true })`), a four-slot ability
+ *   row with cooldown sweeps, gear buttons, anchored health bars, floating damage numbers
+ *   (`ui.floats(camera)`, the third hit on a ghoul a crit) and a north-up minimap of the whole
+ *   courtyard (`ui.minimap`) with ghouls and braziers as marker kinds: a tap on it walks the
+ *   hero there over the same navmesh path as a ground click.
  *
  * `?still` parks the idle bob, the flame flicker and the enemy AI; `?seed=N` fixes the spawns.
  */
@@ -60,18 +63,11 @@ import {
   Transform,
   VERTEX_LAYOUT_SKINNED,
 } from '@thunderclap/engine/render';
-import { buildCourtyard, HALF } from './courtyard';
+import type { MinimapMarker } from '@thunderclap/engine/ui';
+import { buildCourtyard, DAIS, HALF } from './courtyard';
 import { createGearSets, GEAR_NAMES } from './gear';
 import { runePixels, tilePixels, whitePixels } from './geom';
-import {
-  ability,
-  DamageNumbers,
-  gearButtons,
-  type HealthBar,
-  healthBar,
-  injectCss,
-  orb,
-} from './hud';
+import { ability, gearButtons, type HealthBar, healthBar, injectCss, paintCourtyard } from './hud';
 import {
   createAttackClip,
   createBodyMesh,
@@ -108,6 +104,9 @@ const state: ArpgDemoState = {
   enemiesAlive: 0,
   kills: 0,
   hits: 0,
+  crits: 0,
+  mapMarkers: 0,
+  mapPicks: 0,
   attacks: 0,
   gearSet: GEAR_NAMES[0]!,
   gearMaterialIds: ['', '', ''],
@@ -629,7 +628,8 @@ async function main(): Promise<void> {
   const random = createRandom(SEED);
   const rng = () => random.next();
   const anchors = ui.anchors(() => camera);
-  const numbers = new DamageNumbers(anchors, 16);
+  const floats = ui.floats(() => camera, { max: 24 });
+  const floatAt = new Float32Array(3);
   const crowd = createCrowd({ maxAgents: ENEMY_COUNT + 1, maxNeighbors: 8, neighborDist: 3 });
   const heroAgent = crowd.add({ x: hero.x, z: hero.z, radius: 0.45, maxSpeed: RUN_SPEED });
   const enemyList = renderer.createInstanceList(ghoulMesh, ghoulMat, ENEMY_COUNT);
@@ -683,10 +683,28 @@ async function main(): Promise<void> {
   enemyList.castShadow = true;
 
   // ── HUD ─────────────────────────────────────────────────────────────────
-  const healthOrb = orb('health', 'Health');
-  const manaOrb = orb('mana', 'Mana');
-  ui.layout.add(healthOrb.el, { place: { default: 'bottom' }, order: -1, id: 'arpg-health' });
-  ui.layout.add(manaOrb.el, { place: { default: 'bottom' }, order: 1, id: 'arpg-mana' });
+  const healthOrb = ui.meter({
+    shape: 'orb',
+    trail: true,
+    label: 'Health',
+    max: HERO_MAX,
+    tone: 'danger',
+    size: 112,
+    region: 'bottom',
+    order: -1,
+  });
+  const manaOrb = ui.meter({
+    shape: 'orb',
+    trail: true,
+    label: 'Mana',
+    max: MANA_MAX,
+    tone: 'info',
+    size: 112,
+    region: 'bottom',
+    order: 1,
+  });
+  healthOrb.el.id = 'arpg-health';
+  manaOrb.el.id = 'arpg-mana';
   const slots = ui.slots({
     count: ABILITIES.length,
     region: 'bottom',
@@ -817,10 +835,11 @@ async function main(): Promise<void> {
       return;
     }
     if (!pickGround()) return;
+    walkHeroTo(groundPt.x, groundPt.y, groundPt.z);
+  };
+  /** Path the hero to a snapped ground point (a ground click or a minimap tap). */
+  const walkHeroTo = (gx: number, gy: number, gz: number) => {
     chase = -1;
-    const gx = groundPt.x;
-    const gy = groundPt.y;
-    const gz = groundPt.z;
     if (planTo(gx, gy, gz)) {
       state.pathLength = pathDistance3(path);
       if (!state.moveTarget) state.moveTarget = [0, 0, 0];
@@ -828,6 +847,68 @@ async function main(): Promise<void> {
       state.moveTarget[1] = gy;
       state.moveTarget[2] = gz;
     } else state.pathLength = 0;
+  };
+
+  // ── Minimap: the whole courtyard north-up; a tap walks the hero there ──
+  const mapPick = { pending: false, x: 0, z: 0 };
+  const map = ui.minimap({
+    size: 200,
+    world: { minX: -HALF, minZ: -HALF, maxX: HALF, maxZ: HALF },
+    center: 'world',
+    shape: 'round',
+    background: paintCourtyard(document, HALF, DAIS, yard.braziers),
+    kinds: {
+      ghoul: { shape: 'dot', color: 'var(--tc-color-danger)', size: 7 },
+      brazier: { shape: 'diamond', color: '#ffb14a', size: 9 },
+    },
+    // The phone rails are 56 px: there the map takes the card lane beside or under the world.
+    place: { default: 'right', 'phone-landscape': 'cardLane', 'phone-portrait': 'cardLane' },
+    label: 'Courtyard map',
+    // Taken on the next update, like a ground click.
+    onPick: (x, z) => {
+      mapPick.pending = true;
+      mapPick.x = x;
+      mapPick.z = z;
+    },
+  });
+  map.el.id = 'arpg-map';
+  const ghoulMarkers: MinimapMarker[] = enemies.map((_, i) => ({
+    id: `ghoul-${i}`,
+    x: 0,
+    z: 0,
+    kind: 'ghoul',
+  }));
+  const brazierMarkers: MinimapMarker[] = yard.braziers.map((b, i) => ({
+    id: `brazier-${i}`,
+    x: b.x,
+    z: b.z,
+    kind: 'brazier',
+  }));
+  /** The live markers: braziers then the live ghouls, rebuilt in place each update. */
+  const mapMarkers: MinimapMarker[] = [];
+  const updateMap = () => {
+    mapMarkers.length = 0;
+    for (const m of brazierMarkers) mapMarkers.push(m);
+    for (let i = 0; i < enemies.length; i++) {
+      const e = enemies[i]!;
+      if (!e.alive) continue;
+      const m = ghoulMarkers[i]!;
+      m.x = e.x;
+      m.z = e.z;
+      mapMarkers.push(m);
+    }
+    map.setMarkers(mapMarkers);
+    map.setPlayer(hero.x, hero.z, hero.yaw);
+    state.mapMarkers = map.markers;
+  };
+  /** A pending minimap tap: snap it to the navmesh and walk there. */
+  const takeMapPick = () => {
+    if (!mapPick.pending) return;
+    mapPick.pending = false;
+    const h = nav.height(mapPick.x, mapPick.z);
+    if (nav.findNearestPoly(mapPick.x, Number.isNaN(h) ? 0 : h, mapPick.z, groundPt, 3) < 0) return;
+    state.mapPicks++;
+    walkHeroTo(groundPt.x, groundPt.y, groundPt.z);
   };
 
   // ── Combat ──────────────────────────────────────────────────────────────
@@ -880,7 +961,16 @@ async function main(): Promise<void> {
     sparkEmit.y = e.y + 1.1;
     sparkEmit.z = e.z;
     fire.emit(sparkEmit, 18);
-    numbers.spawn(String(n * 37 + ((state.hits * 7) % 11)), e.x, e.y + 2.0, e.z);
+    floatAt[0] = e.x;
+    floatAt[1] = e.y + 2.0;
+    floatAt[2] = e.z;
+    // The third blow on a ghoul (the killing one) lands as a crit.
+    const crit = ENEMY_HP - e.hp === 3;
+    floats.spawn(String(n * 37 + ((state.hits * 7) % 11) + (crit ? 60 : 0)), floatAt, {
+      crit,
+      color: crit ? '#ffe27a' : '#ffd35a',
+    });
+    if (crit) state.crits++;
     e.bar.set(Math.max(0, e.hp) / ENEMY_HP);
     if (e.hp <= 0) {
       e.alive = false;
@@ -1195,6 +1285,7 @@ async function main(): Promise<void> {
     if (input.pressed('dash')) tryAbility(2);
     if (input.pressed('nova')) tryAbility(3);
 
+    takeMapPick();
     if (pointer.pending) {
       pointer.pending = false;
       pick(true);
@@ -1210,7 +1301,7 @@ async function main(): Promise<void> {
     animateHero(dt);
     updateEnemies(dt);
     trail.update(dt, camera);
-    numbers.update(dt);
+    floats.update(dt);
 
     for (let i = 0; i < cooldowns.length; i++) {
       cooldowns[i] = Math.max(0, cooldowns[i]! - dt);
@@ -1222,8 +1313,10 @@ async function main(): Promise<void> {
     }
     mana = Math.min(MANA_MAX, mana + MANA_REGEN * dt);
     health = Math.min(HERO_MAX, health + 1.5 * dt);
-    healthOrb.set(health, HERO_MAX);
-    manaOrb.set(mana, MANA_MAX);
+    // Whole points only: the orbs write nothing while the rounded value holds.
+    healthOrb.set(Math.round(health));
+    manaOrb.set(Math.round(mana));
+    updateMap();
 
     // Braziers: flicker the light and the flame core, feed the flames.
     const t = state.simTime;
@@ -1312,7 +1405,16 @@ async function main(): Promise<void> {
 
   // ── Test hooks ──────────────────────────────────────────────────────────
   const screenPt = { x: 0, y: 0, z: 0 };
+  const mapPt = { x: 0, y: 0 };
   demoWindow.__arpgApi = {
+    mapPointOf(x, z) {
+      map.toMap(x, z, mapPt);
+      const r = map.canvas.getBoundingClientRect();
+      return {
+        x: r.left + (mapPt.x / map.size) * r.width,
+        y: r.top + (mapPt.y / map.size) * r.height,
+      };
+    },
     screenOf(x, y, z) {
       camera.worldToScreen(x, y, z, screenPt);
       const c = surface.logicalToClient(screenPt.x, screenPt.y);
