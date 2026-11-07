@@ -182,6 +182,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | v1 templates and demos: no deprecated names (lint), third-person on `skinPose`, template READMEs and tests | ws/templates-v1 | brief `docs/briefs/templates-v1.md` | after train 15 | ✅ merged in E-031 train 16 (`01705a7`; main df400c4) |
 | 5 | Headless `createGame` (`gpu`, `clock`, `host`); touch replay sink; `HostLifecycle.state` getter; WorldPanel keyed on aux | ws/core-8 | brief `docs/briefs/core-8.md` | train 16 | ✅ merged in E-031 train 16 (`327aacc`; main df400c4) |
 | 5 | v1 internal migration: no deprecated names in `src`, harness, e2e or packages; check wired into `pnpm check` | ws/src-v1 | brief `docs/briefs/src-v1.md` | after train 16 | 🟣 done at `5b11204` (internal deprecated uses 229 → 0 outside the marked exemptions; one two-pass checker; full e2e 2801/0). Train 17, alone |
+| 5 | **engine-v1.0.0 cut**: remove every deprecated alias, freeze `api/` (diff needs a CHANGELOG line), version 1.0.0; tag left to the user | ws/v1-cut | brief `docs/briefs/v1-cut.md` | after train 17 | ⏳ queued |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
