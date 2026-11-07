@@ -177,7 +177,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | arpg demo on `place` maps, `ctx.replay` and object blur | ws/adoption-6 | brief `docs/briefs/adoption-6.md` | after train 13 | ✅ merged in E-031 train 14 (`ded218b`; main a147d20) |
 | 5 | Testing kit: fake host, fixed clock, headless `createTestGame` in `./testing` | ws/testing-kit | brief `docs/briefs/testing-kit.md` | train 14 | ✅ merged in E-031 train 14 (`7089b86`; main a147d20) |
 | 5 | Aux-aware scene pipelines: velocity on stops breaking particles, sky, decals and water | ws/render-10 | brief `docs/briefs/render-10.md` | train 15 | 🟣 done at `2cf8e4b` (`renderer.sceneTargets`; pipelines keyed per depth × aux; gpuErrors 0; 7 specs green). Train 15 |
-| 5 | glTF sun `direction`; anim `skinPose` one-call skinning | ws/assets-4 | brief `docs/briefs/assets-4.md` | train 15 | 🔵 running |
+| 5 | glTF sun `direction`; anim `skinPose` one-call skinning | ws/assets-4 | brief `docs/briefs/assets-4.md` | train 15 | 🟣 done at `a700f83` (`skinPose`; gltf `SunLight.direction`; allocation-free `skinMatrices`; gltf, gltf3 and skin green). Train 15 |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
@@ -461,6 +461,9 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
   - WorldPanel keys its pipelines on `frame.auxKey`. Today it breaks in an XR eye when `renderer.target` has aux. → next ui stream.
   - Billboards and particles write real velocity; today it is masked off.
   - XR eye targets get aux (`XrSurface` → `SceneTarget.external({ aux })`). → next xr/render stream.
+- ws/assets-4 wishes:
+  - Move `templates/third-person` `character.ts` onto `skinPose`. → next template or adoption stream.
+  - Add a public `SkinPalette.jointCount` getter so `skinPose` can check palette size. → render.
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
