@@ -600,9 +600,9 @@ export type PostQualityTier = 'phone' | 'tablet' | 'desktop' | 'xr';
 /**
  * The cost caps for a device class (ws/post-3): `'phone'` is `lowPostQuality()`; `'tablet'`
  * trims the samples and skips SSR; `'desktop'` is everything; `'xr'` is full quality with
- * TAA, SSR and motion blur off: the XR path composites one eye at a time through the same
- * stack, so a TAA history or reprojection would mix the two eyes, and SSR costs a march per
- * eye; motion blur in a headset reads as lag.
+ * TAA, SSR and motion blur off: frame budget and comfort first (SSR costs a march per eye;
+ * motion blur in a headset reads as lag). TAA keeps one history per eye since ws/xr-taa, so a
+ * game may opt in with `{ ...postQualityFor('xr'), taa: true }` and `taa.enabled`.
  */
 export function postQualityFor(tier: PostQualityTier): PostQuality {
   switch (tier) {

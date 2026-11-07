@@ -1087,7 +1087,9 @@ rough-metal, bit 1 velocity) keys the pipeline variants.
   encoder), so each eye's resolve hands post that eye's own aux: `PostInputs.velocity` holds what
   the eye's scene pass just wrote, and the stack's uniform block (reprojection, jitter, ray
   source) is that eye's too (ws/render-12: staged per eye and copied on the encoder; see the
-  post README *XR*). Object motion blur in XR therefore smears each eye by its own velocity. The
+  post README *XR*). Object motion blur in XR therefore smears each eye by its own velocity, and
+  TAA (opt-in in XR) blends each eye with its own history (ws/xr-taa: one history pair per eye
+  viewport). The
   eye layer targets the post output lands in stay without aux: no pass writes them in scene
   mode, so attachments there would cost two eye-sized sets nothing fills. In direct mode each
   eye's `SceneTarget.external` gets the aux textures at the eye's size (half the layer, or one

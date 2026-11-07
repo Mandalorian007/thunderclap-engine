@@ -395,13 +395,26 @@ texture; `renderer.endFrame({ present: false })` then only submits. Inside `enco
   `godRays.x/y` stay in logical px of the design space.
 - Output is encoded to sRGB as on screen, so the layer is made in the swap-chain format
   (`XrSurfaceOptions.colorFormat = renderer.format`).
-- `postQualityFor('xr')` keeps TAA, SSR and motion blur off (ws/post-3): the stack composites
-  one eye at a time through a single history pair and one previous view-projection, so a TAA
-  resolve or a velocity would mix the left eye's last frame into the right eye; per-eye
-  histories are the step that lifts the TAA cap. Motion blur keeps no history, and since
-  ws/render-12 each eye's pass reads its own velocity and reprojection, so a game may turn it on
-  in XR (`post.setQuality({ ...postQualityFor('xr'), motionBlur: true })`); the tier default is
-  unchanged. Auto exposure runs per eye on the same readback.
+- TAA keeps one history per eye (ws/xr-taa). The stack keys its TAA history by the encode's
+  `viewport`: the screen (no viewport) has one pair, and each eye's rect of the layer has its
+  own history pair, aux pair and reset state, made on that eye's first TAA frame (at most five
+  views: the screen and four eyes; a sixth reuses the least recently used one). So each eye
+  reprojects its own last frame through its own `previousViewProj` and jitter, which it reads
+  from its own uniform block (ws/render-12). The Halton index advances once per frame and every
+  eye draws with that frame's offset, so each eye's history sees the whole cycle.
+  `historyResets` counts one reset per eye. The screen path is unchanged: the same two
+  textures (`post-taa-history-0/1`, `post-taa-aux-0/1`), and a second view's are tagged
+  `-v<n>`. `src/platform/xr-taa.test.ts` checks that each eye's pass reads the history that eye
+  wrote last frame and that eye's uniform block at submit, and that steady state makes nothing.
+- `postQualityFor('xr')` still keeps TAA, SSR and motion blur off (ws/post-3): the defaults
+  are a frame-budget and comfort choice, and changing them would change behaviour. To use TAA
+  in XR, opt in to both the cap and the pass:
+  `post.setQuality({ ...postQualityFor('xr'), taa: true })` and `post.set({ taa: { enabled:
+  true } })` (or `createGame({ post: { taa: { enabled: true } } })`). TAA replaces FXAA while it
+  runs. Motion blur keeps no history, and since ws/render-12 each eye's pass reads its own
+  velocity and reprojection, so a game may turn it on in XR the same way
+  (`post.setQuality({ ...postQualityFor('xr'), motionBlur: true })`). Auto exposure runs per eye
+  on the same readback.
 
 ## Types
 

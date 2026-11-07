@@ -276,7 +276,7 @@ A source is a `.glb`, a `.gltf` or a geometry JSON (`{ "positions": [...], "indi
 ## Testing
 
 ```sh
-pnpm check       # typecheck + Biome lint + import boundaries + README coverage (check:docs) + snippet and deprecation check (check:snippets) + API snapshots and the v1 freeze rule (check:api) + Vitest unit tests (2449 tests in 226 files) + the host-electron, host-capacitor, host-pwa, template, create-game and bake checks
+pnpm check       # typecheck + Biome lint + import boundaries + README coverage (check:docs) + snippet and deprecation check (check:snippets) + API snapshots and the v1 freeze rule (check:api) + Vitest unit tests (2452 tests in 227 files) + the host-electron, host-capacitor, host-pwa, template, create-game and bake checks
 pnpm test:e2e    # Playwright e2e against the harness pages, on a device matrix
 pnpm harness     # serve the harness pages yourself
 ```

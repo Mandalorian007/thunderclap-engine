@@ -60,8 +60,11 @@ interface InputGroups {
   dof: GPUBindGroup | null;
   ssr: GPUBindGroup | null;
   motionBlur: GPUBindGroup | null;
-  /** TAA resolve reading history 0 / history 1 (only on the raw colour's groups). */
-  taa: [GPUBindGroup | null, GPUBindGroup | null];
+  /**
+   * TAA resolve groups (only on the raw colour's groups): `taa[slot * 2 + read]` reads history
+   * `read` of TAA history slot `slot` (ws/xr-taa: one slot per eye).
+   */
+  taa: (GPUBindGroup | null)[];
 }
 
 /** The jitter a detached stack's hook returns on the frame it clears itself (ws/post-7). */
@@ -71,6 +74,36 @@ const NO_JITTER: readonly [number, number] = [0, 0];
  * submit, each reading its own. Four covers a headset's two eyes and a quad-view layout.
  */
 const EYE_UNIFORM_SLOTS = 4;
+/**
+ * TAA history slots (ws/xr-taa): the screen's plus one per eye viewport, so each XR eye
+ * reprojects against its own previous frame. Past this many views the least recently used
+ * slot is reset and reused.
+ */
+const TAA_HISTORY_SLOTS = EYE_UNIFORM_SLOTS + 1;
+
+/**
+ * One TAA history (ws/xr-taa): the scene-size resolve pair, the aux pair beside it (ws/post-5)
+ * and which of the pair was last written. Keyed by the encode's viewport: the screen (no
+ * viewport) has one, each XR eye (its rect of the shared layer) its own.
+ */
+interface TaaHistory {
+  /** False for the screen's slot (an encode without a viewport). */
+  hasViewport: boolean;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  tex: [GPUTexture, GPUTexture] | null;
+  views: [GPUTextureView, GPUTextureView] | null;
+  auxTex: [GPUTexture, GPUTexture] | null;
+  auxViews: [GPUTextureView, GPUTextureView] | null;
+  /** The pair entry last written. */
+  index: number;
+  /** False until the slot's first resolve (and after a resize or a frame without TAA). */
+  valid: boolean;
+  /** `PostStack.taaUse` when the slot last resolved: the least recent is reused. */
+  used: number;
+}
 
 /**
  * The painterly post stack: bloom (mip chain), floor mist, god rays, ACES tonemap, colour
@@ -103,7 +136,10 @@ export class PostStack implements PostProcessor {
    * runs the stack hands it to `renderer.setJitter` (ws/post-6).
    */
   readonly taa = new Taa(8);
-  /** How many times the TAA history was reset (first frame, resize, re-enable). */
+  /**
+   * How many times a TAA history was reset (first frame, resize, re-enable). In XR each eye
+   * keeps its own history (ws/xr-taa), so each eye's reset counts.
+   */
   historyResets = 0;
 
   private readonly renderer: Renderer;
@@ -182,16 +218,16 @@ export class PostStack implements PostProcessor {
   private dirtView: GPUTextureView | null = null;
   /** Seconds of frame time while `grain.animated`: the grain's seed. */
   private grainSeed = 0;
-  /** Scene-size TAA history pair (ws/post-3), made on the first TAA frame; `histIndex` was last written. */
-  private histTex: [GPUTexture, GPUTexture] | null = null;
-  private histViews: [GPUTextureView, GPUTextureView] | null = null;
-  /** The aux pair written beside each history (ws/post-5): velocity, linear depth. */
-  private histAuxTex: [GPUTexture, GPUTexture] | null = null;
-  private histAuxViews: [GPUTextureView, GPUTextureView] | null = null;
+  /**
+   * TAA history slots (ws/post-3; per view since ws/xr-taa): the screen's, and one per XR eye
+   * viewport, each with its scene-size history pair and aux pair (ws/post-5), made on the
+   * view's first TAA frame. At most `TAA_HISTORY_SLOTS`; no allocation once every view has one.
+   */
+  private readonly histories: TaaHistory[] = [];
+  /** Counts TAA resolves: `TaaHistory.used`. */
+  private taaUse = 0;
   /** `encode`'s extra target, reused (no allocation per frame). */
   private readonly taaExtra: GPUTextureView[] = [];
-  private histIndex = 0;
-  private historyValid = false;
   /** Half-res SSR term and scene-size motion-blur result, made on the first frame that needs them. */
   private ssrTex: GPUTexture | null = null;
   private ssrView: GPUTextureView | null = null;
@@ -570,7 +606,8 @@ export class PostStack implements PostProcessor {
     if (wantOutline && !this.outlineTex) this.allocOutline();
     if (wantFxaa && (outW !== this.fxaaWidth || outH !== this.fxaaHeight))
       this.allocFxaa(outW, outH);
-    if (wantTaa && !this.histTex) this.allocHistory();
+    const hist = wantTaa ? this.historyFor(viewport) : null;
+    if (hist && !hist.tex) this.allocHistory(hist);
     if (wantSsr && !this.ssrTex) this.allocSsr();
     if (wantMotionBlur && !this.motionBlurTex) this.allocMotionBlur();
     if (wantAuto && !this.exposurePasses) this.exposurePasses = new ExposurePasses(r);
@@ -607,13 +644,13 @@ export class PostStack implements PostProcessor {
     // Post 3 frame state, from the view (ws/post-4): this frame's (jittered) clip → the previous
     // frame's clip, the jitter the camera drew with, the EV, the per-surface input flags.
     const fs = this.frameState;
-    if (!wantTaa) this.historyValid = false;
+    if (!wantTaa) this.invalidateHistories();
     if (depthInfo && view) {
       taaReprojection(fs.reproj as Float32Array, view.previousViewProj, view.invViewProj);
     } else {
       mat4.identity(fs.reproj as Float32Array);
     }
-    const reset = wantTaa && !this.historyValid;
+    const reset = hist !== null && !hist.valid;
     if (reset) this.historyResets++;
     fs.reset = reset ? 1 : 0;
     fs.jitterX = wantTaa && view ? view.jitter[0] / iw : 0;
@@ -660,22 +697,18 @@ export class PostStack implements PostProcessor {
     let scene = raw;
     const depthView = depth ? depth.view : null;
     this.taaOn = wantTaa && depthInfo !== null;
-    if (this.taaOn && depthView) {
-      const read = this.histIndex;
+    if (this.taaOn && depthView && hist) {
+      // This view's own history (ws/xr-taa): each eye reads and writes its slot's pair only.
+      const read = hist.index;
       const write = 1 - read;
-      const group = this.taaGroup(raw, depthView, read);
+      const group = this.taaGroup(raw, depthView, hist, read);
       this.upload(encoder, this.taaPass.uniformBuffer, this.taaPass);
-      this.taaExtra[0] = this.histAuxViews![write]!;
-      this.taaPass.encode(
-        encoder,
-        this.histViews![write]!,
-        group,
-        timer?.pass('taa'),
-        this.taaExtra,
-      );
-      this.histIndex = write;
-      this.historyValid = true;
-      scene = this.histViews![write]!;
+      this.taaExtra[0] = hist.auxViews![write]!;
+      this.taaPass.encode(encoder, hist.views![write]!, group, timer?.pass('taa'), this.taaExtra);
+      hist.index = write;
+      hist.valid = true;
+      hist.used = ++this.taaUse;
+      scene = hist.views![write]!;
     }
     this.taaVelocityOn = this.taaOn && taaVelocity !== null;
     this.syncJitter(this.taaOn);
@@ -919,32 +952,86 @@ export class PostStack implements PostProcessor {
     this.fxaaHeight = 0;
   }
 
-  /** The two scene-size TAA history textures (ws/post-3). */
-  private allocHistory(): void {
+  /**
+   * The TAA history slot of the view `viewport` names (ws/xr-taa): the screen's without one,
+   * else the eye whose rect it is. A new view takes a free slot, or past `TAA_HISTORY_SLOTS`
+   * the least recently used one (reset). No allocation once every view has a slot.
+   */
+  private historyFor(viewport: SceneTargetViewport | undefined): TaaHistory {
+    const list = this.histories;
+    const has = viewport !== undefined;
+    for (let i = 0; i < list.length; i++) {
+      const h = list[i]!;
+      if (h.hasViewport !== has) continue;
+      if (
+        !viewport ||
+        (h.x === viewport.x &&
+          h.y === viewport.y &&
+          h.width === viewport.width &&
+          h.height === viewport.height)
+      ) {
+        return h;
+      }
+    }
+    let h: TaaHistory;
+    if (list.length < TAA_HISTORY_SLOTS) {
+      h = {
+        hasViewport: has,
+        x: 0,
+        y: 0,
+        width: 0,
+        height: 0,
+        tex: null,
+        views: null,
+        auxTex: null,
+        auxViews: null,
+        index: 0,
+        valid: false,
+        used: 0,
+      };
+      list.push(h);
+    } else {
+      h = list[0]!;
+      for (let i = 1; i < list.length; i++) if (list[i]!.used < h.used) h = list[i]!;
+      h.index = 0;
+      h.valid = false;
+    }
+    h.hasViewport = has;
+    h.x = viewport ? viewport.x : 0;
+    h.y = viewport ? viewport.y : 0;
+    h.width = viewport ? viewport.width : 0;
+    h.height = viewport ? viewport.height : 0;
+    return h;
+  }
+
+  /**
+   * The two scene-size TAA history textures of `h` (ws/post-3) and their aux pair. The first
+   * slot keeps the ws/post-3 labels (`post-taa-history-0/1`); slot `n` appends `-v<n>`.
+   */
+  private allocHistory(h: TaaHistory): void {
     const device = this.renderer.device;
     const usage = GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING;
     const size = [this.width, this.height];
-    const a = device.createTexture({ label: 'post-taa-history-0', size, format: HDR, usage });
-    const b = device.createTexture({ label: 'post-taa-history-1', size, format: HDR, usage });
-    this.histTex = [a, b];
-    this.histViews = [a.createView(), b.createView()];
-    const auxA = device.createTexture({
-      label: 'post-taa-aux-0',
-      size,
-      format: TAA_AUX_FORMAT,
-      usage,
-    });
-    const auxB = device.createTexture({
-      label: 'post-taa-aux-1',
-      size,
-      format: TAA_AUX_FORMAT,
-      usage,
-    });
-    this.histAuxTex = [auxA, auxB];
-    this.histAuxViews = [auxA.createView(), auxB.createView()];
-    this.histIndex = 0;
-    this.historyValid = false;
+    const n = this.histories.indexOf(h);
+    const tag = n > 0 ? `-v${n}` : '';
+    const tex = (label: string, format: GPUTextureFormat): GPUTexture =>
+      device.createTexture({ label: label + tag, size, format, usage });
+    const a = tex('post-taa-history-0', HDR);
+    const b = tex('post-taa-history-1', HDR);
+    h.tex = [a, b];
+    h.views = [a.createView(), b.createView()];
+    const auxA = tex('post-taa-aux-0', TAA_AUX_FORMAT);
+    const auxB = tex('post-taa-aux-1', TAA_AUX_FORMAT);
+    h.auxTex = [auxA, auxB];
+    h.auxViews = [auxA.createView(), auxB.createView()];
+    h.index = 0;
+    h.valid = false;
     this.invalidateGroups();
+  }
+
+  /** Mark every TAA history invalid: the next resolve of each view copies its frame. */
+  private invalidateHistories(): void {
+    for (let i = 0; i < this.histories.length; i++) this.histories[i]!.valid = false;
   }
 
   /** Half-res SSR term (premultiplied colour, fade in alpha). */
@@ -972,19 +1059,18 @@ export class PostStack implements PostProcessor {
   }
 
   private freeTemporal(): void {
-    if (this.histTex) {
-      this.histTex[0].destroy();
-      this.histTex[1].destroy();
+    for (let i = 0; i < this.histories.length; i++) {
+      const h = this.histories[i]!;
+      h.tex?.[0].destroy();
+      h.tex?.[1].destroy();
+      h.auxTex?.[0].destroy();
+      h.auxTex?.[1].destroy();
+      h.tex = null;
+      h.views = null;
+      h.auxTex = null;
+      h.auxViews = null;
+      h.valid = false;
     }
-    this.histTex = null;
-    this.histViews = null;
-    if (this.histAuxTex) {
-      this.histAuxTex[0].destroy();
-      this.histAuxTex[1].destroy();
-    }
-    this.histAuxTex = null;
-    this.histAuxViews = null;
-    this.historyValid = false;
     this.ssrTex?.destroy();
     this.ssrTex = null;
     this.ssrView = null;
@@ -1114,7 +1200,7 @@ export class PostStack implements PostProcessor {
         dof: null,
         ssr: null,
         motionBlur: null,
-        taa: [null, null],
+        taa: new Array<GPUBindGroup | null>(TAA_HISTORY_SLOTS * 2).fill(null),
       };
       this.groups.set(scene, g);
     }
@@ -1168,19 +1254,25 @@ export class PostStack implements PostProcessor {
     return g.motionBlur;
   }
 
-  /** The TAA resolve group reading the raw colour, history `read` and its aux. */
-  private taaGroup(raw: GPUTextureView, depth: GPUTextureView, read: number): GPUBindGroup {
+  /** The TAA resolve group reading the raw colour, history `read` of `h` and its aux. */
+  private taaGroup(
+    raw: GPUTextureView,
+    depth: GPUTextureView,
+    h: TaaHistory,
+    read: number,
+  ): GPUBindGroup {
     const g = this.groupsFor(raw);
-    let group = g.taa[read];
+    const key = this.histories.indexOf(h) * 2 + read;
+    let group = g.taa[key];
     if (!group) {
       // Without a velocity target the raw colour stands in (the shader does not read it).
       group = this.taaPass.createBindGroup(depth, [
         raw,
-        this.histViews![read]!,
+        h.views![read]!,
         this.boundTaaVelocity ?? raw,
-        this.histAuxViews![read]!,
+        h.auxViews![read]!,
       ]);
-      g.taa[read] = group;
+      g.taa[key] = group;
     }
     return group;
   }
