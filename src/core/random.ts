@@ -9,7 +9,8 @@
  *
  * `fork(name)` derives a child key from the stream's own key and the name (FNV-1a of the name
  * started from the parent key), never from the parent's current state, so how often one stream is
- * used never changes another. Every draw allocates nothing; `fork` and the `state` getter do.
+ * used never changes another. Every draw, and `seedKey` itself, allocates nothing; `fork` and the
+ * `state` getter do.
  */
 
 export type Seed = number | string;
@@ -55,9 +56,6 @@ const INV_2_32 = 1 / 4294967296;
 /** 32-bit FNV-1a over the UTF-8 bytes of `s`, starting from `basis`. No allocation. */
 function fnv1a(s: string, basis: number = FNV_OFFSET): number {
   let h = basis >>> 0;
-  const byte = (b: number) => {
-    h = Math.imul(h ^ b, FNV_PRIME);
-  };
   for (let i = 0; i < s.length; i++) {
     let c = s.charCodeAt(i);
     if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) {
@@ -67,19 +65,19 @@ function fnv1a(s: string, basis: number = FNV_OFFSET): number {
         i++;
       }
     }
-    if (c < 0x80) byte(c);
+    if (c < 0x80) h = Math.imul(h ^ c, FNV_PRIME);
     else if (c < 0x800) {
-      byte(0xc0 | (c >> 6));
-      byte(0x80 | (c & 63));
+      h = Math.imul(h ^ (0xc0 | (c >> 6)), FNV_PRIME);
+      h = Math.imul(h ^ (0x80 | (c & 63)), FNV_PRIME);
     } else if (c < 0x10000) {
-      byte(0xe0 | (c >> 12));
-      byte(0x80 | ((c >> 6) & 63));
-      byte(0x80 | (c & 63));
+      h = Math.imul(h ^ (0xe0 | (c >> 12)), FNV_PRIME);
+      h = Math.imul(h ^ (0x80 | ((c >> 6) & 63)), FNV_PRIME);
+      h = Math.imul(h ^ (0x80 | (c & 63)), FNV_PRIME);
     } else {
-      byte(0xf0 | (c >> 18));
-      byte(0x80 | ((c >> 12) & 63));
-      byte(0x80 | ((c >> 6) & 63));
-      byte(0x80 | (c & 63));
+      h = Math.imul(h ^ (0xf0 | (c >> 18)), FNV_PRIME);
+      h = Math.imul(h ^ (0x80 | ((c >> 12) & 63)), FNV_PRIME);
+      h = Math.imul(h ^ (0x80 | ((c >> 6) & 63)), FNV_PRIME);
+      h = Math.imul(h ^ (0x80 | (c & 63)), FNV_PRIME);
     }
   }
   return h >>> 0;

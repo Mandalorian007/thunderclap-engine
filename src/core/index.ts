@@ -14,3 +14,4 @@ export type { Scene, TransitionListener, TransitionPhase } from './scene';
 export { SceneStack } from './scene';
 export type { Cooldown, EveryOptions, Scheduler, TimerHandle } from './timer';
 export { createScheduler } from './timer';
+export { hash2, hash2f, hash3, hash3f } from './hash';
