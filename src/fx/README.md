@@ -145,6 +145,8 @@ sprites.emit({ ...p, tile: [0, 15], tileRate: 12, rotation: [0, Math.PI * 2], sp
 ```ts
 const motes = new ParticleSystem(renderer, { space: 'world', forces: [] });
 motes.forces.push({ kind: 'attract', x: 0, y: 2, z: 0, strength: 3, radius: 8 });
+// A spring pull (strength × distance): with enough drag the motes gather on the point.
+motes.forces.push({ kind: 'attract', x: 0, y: 2, z: 0, strength: 4, falloff: 'linear' });
 motes.forces.push({ kind: 'vortex', axis: [0, 1, 0], x: 0, y: 2, z: 0, strength: 1 });
 motes.forces.push({ kind: 'turbulence', frequency: 0.5, strength: 2, seed: 7 });
 motes.forces.push({ kind: 'drag', amount: 0.5 });
@@ -155,9 +157,18 @@ const rain = new ParticleSystem(renderer, { space: 'world', readsDepth: true, co
   `turbulence`: the curl of value noise, divergence-free gusts; `drag`), uploaded each frame,
   at most `MAX_FORCES` (8). `applyForces(forces, pos, vel, dt)` is the CPU reference of the
   kernel's force step, for shadow simulations and tests.
+- `attract` scales with the distance r by `falloff` (`AttractFalloff`): `'constant'` (default,
+  the original) pulls at `strength` everywhere, so under light drag particles overshoot and
+  orbit through the point (measured on the fx3 shell at drag 0.4: within 0.3 units only 9% of
+  the time); `'linear'` pulls at `strength × r`, a spring that gathers them into a blob once
+  drag is near critical (`2 × sqrt(strength)`; at strength 4 and drag 3, 100%);
+  `'inverse-square'` pulls at `strength / r²`. Nothing pulls inside `deadZone` (default 0)
+  units, which also keeps inverse-square finite. `radius` still fades any falloff to 0.
 - `collide: { bounce, friction, thickness? }` (world space with `readsDepth`): after the opaque
   pass each particle found behind this frame's scene depth, within `thickness` (1) units along
-  its view ray, is put back on the surface; the normal velocity is scaled by `bounce`, the
+  its view ray, is pushed out along the surface normal onto the surface (not back along the view
+  ray: that moved a resting particle toward the camera every frame, and rain crept off the
+  front edge of the fx3 slab, 2.2% of the live drops; ws/fx-5); the normal velocity is scaled by `bounce`, the
   tangential by `1 - friction`. Deeper than `thickness`, the test is swept: a particle that was
   in front of the scene one step back (`pos - vel * dt`) crossed it this frame and goes back to
   that point, so a slow frame or a grazing view does not tunnel. The normal comes from the depth neighbours. Independent of

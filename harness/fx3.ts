@@ -6,8 +6,9 @@
  * - `?sheet` (default): a procedural 4 × 4 sprite sheet (`texture` + `atlas`); a parked sprite
  *   plays tiles 5..15 at 2 fps (`tile`, `tileRate`), spinning, beside a stream of upright
  *   sprites. `state.tileSeen` mirrors the tile the kernel shows.
- * - `?forces`: motes born on a shell around an attractor with a vortex (`system.forces`); 64 of
- *   them are shadowed on the CPU with `applyForces`, and `state.meanRadius` shrinks.
+ * - `?forces`: motes born on a shell gather into a blob on a spring attractor (`falloff: 'linear'`)
+ *   with a vortex and drag (`system.forces`); 64 of them are shadowed on the CPU with
+ *   `applyForces`, and `state.meanRadius` shrinks.
  * - `?collide`: rain over a floating slab with `readsDepth` and `collide`; `countBelowY` counts
  *   what gets under the slab into `state.belowSlab`.
  * - `?sub`: bursts of rising parents whose `onDeath` sub-emitters scatter long-lived children;
@@ -263,10 +264,20 @@ async function main(): Promise<void> {
     emitters.push(stream);
   } else if (mode === 'forces') {
     probeAt = ATTRACTOR;
-    // Steady orbit radius is (vortex / drag)^2 / attract = (0.35 / 0.4)^2 / 4 ≈ 0.2: the motes
-    // settle into a blob on the probe, not a ring around it.
+    // A spring pull (`falloff: 'linear'`, 4 × r) under drag 3 is damped near critical (ζ ≈ 0.75):
+    // the shell gathers into a blob on the probe and stays there. Measured on the CPU shadow
+    // (ws/fx-5): mean radius 0.92 at 1 s and 0.08 at 2 s; within 0.3 of the point 100% of the
+    // time after 2 s. The old constant pull at drag 0.4 swung through it (mean radius 1.63 ->
+    // 0.63 -> 1.13 over 2..4 s, within 0.3 only 9% of the time).
     const forces: ParticleForce[] = [
-      { kind: 'attract', x: ATTRACTOR[0], y: ATTRACTOR[1], z: ATTRACTOR[2], strength: 4 },
+      {
+        kind: 'attract',
+        x: ATTRACTOR[0],
+        y: ATTRACTOR[1],
+        z: ATTRACTOR[2],
+        strength: 4,
+        falloff: 'linear',
+      },
       {
         kind: 'vortex',
         axis: [0, 1, 0],
@@ -276,7 +287,7 @@ async function main(): Promise<void> {
         strength: 0.35,
         radius: 6,
       },
-      { kind: 'drag', amount: 0.4 },
+      { kind: 'drag', amount: 3 },
     ];
     main = new ParticleSystem(renderer, {
       space: 'world',
