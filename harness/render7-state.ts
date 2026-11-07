@@ -40,7 +40,7 @@ export interface HarnessRender7State {
   velocityStaticPeak: number;
   /** `?instanced-velocity`: probe readbacks since the last `reset()`. */
   readbacks: number;
-  /** The rocks' screen rect in logical px (the screenshot clip), and the logical size. */
+  /** The rocks' screen rect in logical px, and the logical size. */
   window: { x: number; y: number; width: number; height: number };
   logical: { width: number; height: number };
   /** `gpuDiagnostics.errorCount` (WGSL compile errors, uncaptured errors). */
