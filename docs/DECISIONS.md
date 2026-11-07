@@ -189,3 +189,8 @@ After the adoption-4 merge, the train 9 `pnpm check` had 1 failure at load 13.8:
 Ruling: no rerun. Commit adoption-4 and run the matrix. The test is tolerated in trains 9 and 10 only. ws/input-10, which owns `src/input`, makes the assertion honest about time (an injected clock or synthetic `timeStamp`s) and shows it 20× green under load. Any other check failure is still real.
 
 **Closed 2026-11-06:** ws/input-10 (c2de796, train 11) found the cause in the test, not the recorder. It now mocks `performance.now()` to the rig clock and uses fixed event `timeStamp`s, so the assertion is exact. It passed 20/20 at load 33. From train 11 on, the test is no longer tolerated.
+
+## E-035: post4 TAA jitter reads tolerated; render-8 re-judged (2026-11-06, PM)
+Train 10 failed `[phone-iphone] e2e/post4.spec.ts:81` and `[ipad] :119`. Both assert `Math.hypot(jitter) > 0` and read 0. render-8 was dropped for it, because post4 is in its area. Train 11 (00a773d: ui-10, input-10, core-5, none of which touch render or post) then failed `:81` the same way without render-8. So the cause is not render-8. The spec polls until `convergedDelta >= 0` and then reads `state.jitter` once. The page rewrites that every frame and moves on to its ghost phase, which sets `NO_JITTER`.
+
+Ruling: land train 11. `post4.spec.ts:81` and `:119` are tolerated, and no other post4 test, until the spec fix lands. ws/render-8's engineer owns the fix: they confirm the cause, make the read honest about time (a latched field or a poll inside the converge phase), and bring render-8 back in train 12.
