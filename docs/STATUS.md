@@ -172,10 +172,10 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Harden API: `api/*.api.txt` surface snapshot plus `check:api`; audit of leaked internals and naming; safe fixes with aliases | ws/harden-api | brief `docs/briefs/harden-api.md` | — | ✅ merged in E-031 train 13 (`700f3e4`; main 36144e0) |
 | 5 | Comment sweep: stale code comments from the backlog plus a rename sweep; comments only | ws/comment-sweep | brief `docs/briefs/comment-sweep.md` | train 12 | ✅ merged in E-031 train 13 (`c6d511f`; main 36144e0) |
 | 5 | v1 API: E-036 plus ergonomics in core, ui and input; replay mutes pointers | ws/api-core | brief `docs/briefs/api-core.md` | after train 13 | 🟡 `d698e90` done (check green, snap 0, 9 specs green); renaming input `RayHit` → `PickHit` (collides with geom), then train 15 |
-| 5 | v1 API: E-036 plus ergonomics in render, post and fx | ws/api-render | brief `docs/briefs/api-render.md` | after train 13 | 🟣 done at `60c5980` (E-036 plus ergonomics in render, post and fx; snap 0, 11 specs green). Train 14 |
-| 5 | v1 API: E-036 in the other 12 modules; templates build; create-game installable | ws/api-rest | brief `docs/briefs/api-rest.md` | after train 13 | 🟣 done at `c02996e` (check 2322, snap 0, templates build offline; all area specs green). Train 14 |
-| 5 | arpg demo on `place` maps, `ctx.replay` and object blur | ws/adoption-6 | brief `docs/briefs/adoption-6.md` | after train 13 | 🟣 done at `ded218b` (arpg on `place` maps and `ctx.replay`; object blur blocked → render-10; arpg 82, snap 0). Train 14 or 15 |
-| 5 | Testing kit: fake host, fixed clock, headless `createTestGame` in `./testing` | ws/testing-kit | brief `docs/briefs/testing-kit.md` | train 14 | 🟣 done at `7089b86` (fake host and fixed clock; `createTestGame` blocked, see notes; check 2335, snap 0). Train 14 |
+| 5 | v1 API: E-036 plus ergonomics in render, post and fx | ws/api-render | brief `docs/briefs/api-render.md` | after train 13 | ✅ merged in E-031 train 14 (`60c5980`; main a147d20) |
+| 5 | v1 API: E-036 in the other 12 modules; templates build; create-game installable | ws/api-rest | brief `docs/briefs/api-rest.md` | after train 13 | ✅ merged in E-031 train 14 (`c02996e`; main a147d20) |
+| 5 | arpg demo on `place` maps, `ctx.replay` and object blur | ws/adoption-6 | brief `docs/briefs/adoption-6.md` | after train 13 | ✅ merged in E-031 train 14 (`ded218b`; main a147d20) |
+| 5 | Testing kit: fake host, fixed clock, headless `createTestGame` in `./testing` | ws/testing-kit | brief `docs/briefs/testing-kit.md` | train 14 | ✅ merged in E-031 train 14 (`7089b86`; main a147d20) |
 | 5 | Aux-aware scene pipelines: velocity on stops breaking particles, sky, decals and water | ws/render-10 | brief `docs/briefs/render-10.md` | train 15 | 🔵 running |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
@@ -455,6 +455,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
   - Replay mutes pointers, and `mute()` returns a remover.
   - Wishes: widen `Bindings<A>` to Partial for typed context actions; tighten `EngineCtx` `P = any`.
   - Lesson: parallel rename streams must publish their picks before committing. → common.md note.
+- E-031 train 14 landed at a147d20: api-rest, testing-kit, api-render and adoption-6. The matrix ran 2777 passed, 209 skipped, 0 failed. README count: 2363 tests in 215 files. E-036 now covers render, post, fx and the other 12 modules; core, ui and input follow in ws/api-core (train 15).
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
