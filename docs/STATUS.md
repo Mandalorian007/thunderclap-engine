@@ -155,6 +155,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Render 7: stable LOD keys on `InstanceList`; per-instance velocity for instanced draws | ws/render-7 | brief `docs/briefs/render-7.md` | render-6, adoption-3 | 🟣 in E-031 train 8 at `8ba7c15` (check 2206, snap 0, render4 32, render5 48, render7 40, post4 48, pbr 40, views 24) |
 | 5 | Post 7: stack clears its jitter hook when detached; post3 off deprecated jitter-camera calls | ws/post-7 | brief `docs/briefs/post-7.md` | post-6 | 🔵 dispatched (Opus, offset 1080) |
 | 5 | Adoption 4: arpg orbs in a content bottom bar; floor grout off centre; geom on `hash2f` | ws/adoption-4 | brief `docs/briefs/adoption-4.md` | ui-8, adoption-3, core-3 | 🔵 dispatched (Opus, offset 1090) |
+| 5 | Render 8: per-object velocity for single draws; drop unbound `prevBuffer` upload; `renderer.jitter` getter | ws/render-8 | brief `docs/briefs/render-8.md` | render-7 | 🔵 dispatched (Opus, offset 1100) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
