@@ -365,3 +365,55 @@ describe('Look orbit mode in the DOM (ws/input-3)', () => {
     input.detach();
   });
 });
+
+describe('Look.onTap times by timeStamp (ws/input-6)', () => {
+  let canvas: HTMLElement;
+  let wall: number;
+
+  beforeEach(() => {
+    canvas = document.createElement('div');
+    document.body.appendChild(canvas);
+    vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 800, 400));
+    wall = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => wall);
+  });
+
+  afterEach(() => {
+    canvas.remove();
+    vi.restoreAllMocks();
+  });
+
+  /** A mouse event that happened at `ms` on the `performance.now()` clock. */
+  const mouse = (type: string, ms: number) => {
+    const e = new PointerEvent(type, {
+      pointerId: 1,
+      clientX: 600,
+      clientY: 100,
+      pointerType: 'mouse',
+      isPrimary: true,
+      button: 0,
+      bubbles: true,
+    });
+    Object.defineProperty(e, 'timeStamp', { value: ms });
+    return e;
+  };
+
+  it('a quick press handled 900 ms late still taps; a real hold does not', () => {
+    const look = new Look({ mode: 'orbit', getGamepads: () => [] });
+    const taps: number[] = [];
+    look.onTap((x) => taps.push(x));
+    const input = new Input({}, { look, getGamepads: () => [] });
+    input.attach({ pointerTarget: canvas });
+    canvas.dispatchEvent(mouse('pointerdown', 0));
+    // The thread stalls: the up happened at 120 but is handled at 900.
+    wall = 900;
+    canvas.dispatchEvent(mouse('pointerup', 120));
+    expect(taps).toEqual([600]);
+    wall = 2000;
+    canvas.dispatchEvent(mouse('pointerdown', 1000));
+    canvas.dispatchEvent(mouse('pointerup', 1500));
+    expect(taps).toEqual([600]);
+    input.detach();
+    look.detach();
+  });
+});

@@ -9,6 +9,7 @@ import {
 } from './magnify';
 import {
   createPointerDispatcher,
+  eventTime,
   POINTER_PRIORITY,
   type PointerConsumer,
   type PointerDispatcher,
@@ -88,7 +89,11 @@ export interface GestureOptions {
   doubleTapDistance?: number;
   /** While true no gesture is reported (see `Gestures`). An `Input` that links this replaces it with its own. */
   blocked?: () => boolean;
-  /** Clock in ms. Default `performance.now()`. Tests pass a fake one. */
+  /**
+   * Clock in ms. Default `performance.now()`. Tests pass a fake one. Attached DOM events are
+   * timed by their `timeStamp`, moved onto this clock by their age (`eventTime`); the long-press
+   * timer in `update()` reads this clock.
+   */
   now?: () => number;
   /**
    * Loupe and snap for small touch targets (see `magnify.ts`): while one touch pointer is down
@@ -782,16 +787,21 @@ export class Gestures {
   /** The private dispatcher a standalone `attach` built, or `null` (shared or detached). */
   private ownDispatcher: PointerDispatcher | null = null;
 
-  /** The dispatcher consumer: mouse primary button only; every touch and pen contact. */
+  /**
+   * The dispatcher consumer: mouse primary button only; every touch and pen contact. Each event
+   * is timed by its `timeStamp` (`eventTime`), not by when it was handled, so a tap delivered
+   * after a stalled frame is still a tap.
+   */
   private readonly consumer: PointerConsumer = {
     pointerDown: (p: PointerRecord) => {
       if (p.device === 'mouse' && p.button !== 0) return;
-      this.pointerDown(p.id, p.x, p.y, p.device);
+      this.pointerDown(p.id, p.x, p.y, p.device, eventTime(p.time, this.now));
     },
-    pointerMove: (p: PointerRecord) => this.pointerMove(p.id, p.x, p.y),
+    pointerMove: (p: PointerRecord) =>
+      this.pointerMove(p.id, p.x, p.y, eventTime(p.time, this.now)),
     pointerUp: (p: PointerRecord) => {
       if (p.device === 'mouse' && p.button !== 0) return;
-      this.pointerUp(p.id, p.x, p.y);
+      this.pointerUp(p.id, p.x, p.y, eventTime(p.time, this.now));
     },
     pointerCancel: (p: PointerRecord) => this.pointerCancel(p.id),
     cancelAll: () => this.cancelAll(),
