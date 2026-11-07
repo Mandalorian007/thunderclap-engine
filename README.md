@@ -17,8 +17,10 @@ A WebGPU game engine for the browser, written in TypeScript. It renders 2D and 3
 - [Features](#features)
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
+- [Guides](#guides)
 - [Modules](#modules)
 - [How a frame runs](#how-a-frame-runs)
+- [Baking](#baking)
 - [Testing](#testing)
 - [Design rules](#design-rules)
 - [Status and roadmap](#status-and-roadmap)
@@ -27,21 +29,63 @@ A WebGPU game engine for the browser, written in TypeScript. It renders 2D and 3
 
 ## Features
 
-- **Raw WebGPU renderer, 2D and 3D on one path.** HDR colour and emissive targets, instanced quads and meshes merged by material, one 3×4 instance matrix and a vertex layout per mesh, materials with your own WGSL. A matrix `Camera` (`ortho2d` by default, `perspective` with depth, `screen` for split views, `viewIndex` for stereo) is an input to `renderer.render(frame, camera, target)`. In steady state it allocates nothing per frame.
-- **Lighting block, shadows and fog.** Ambient, a sun and up to 16 point lights in a uniform block every material reads; a sun shadow map (`engine_shadow`), distance fog (`engine_fog`) and `engine_lambert` for the game's WGSL to call or ignore.
-- **Meshes that stream and cull.** `Mesh.update` uploads a Worker's buffer without a main-thread copy; `mesh.bounds` plus the camera's frustum skip off-screen draws (`stats.culled`). Texture arrays with GPU-generated mips for block faces.
-- **glTF 2.0.** `parseGltf` and `loadGltf` turn a `.glb`/`.gltf` into meshes, transforms, textures and a lit material.
-- **Post stack.** Bloom fed by the emissive target, god rays, fog, vignette and colour grade, plus quality tiers for weaker devices.
-- **GPU particles and flicker FX,** in 2D or in world space (camera-facing, depth-tested, soft against the scene, optionally lit), with sprite sheets, curves, forces, depth collision, sub-emission, mesh emission and JSON effect descriptors, for weather and emissive effects.
-- **One `createGame()` call.** It boots WebGPU, sets up a letterboxed surface, and wires the renderer, post stack, particles, input, UI overlay, audio, save and a fixed-step 60 Hz loop into one ctx. Browsers without WebGPU get a styled "unsupported" screen instead.
-- **Input.** An action map over keyboard, mouse, touch, pen and gamepad. Gestures cover tap, double tap, long-press, pan, drag and pinch. A magnifying loupe with snap-to-grid helps with small touch targets. Every pointer is a ray through the camera (`ctx.pointers`), and `Look` gives first-person look and move from pointer lock, touch zones and sticks.
-- **WebXR.** `createGame({ xr })` and `ctx.xr.enter()` move the loop onto an immersive session, render each eye into the headset's layer and add controllers and hands as pointer rays.
-- **Layout regions for every form factor.** Phone landscape and portrait, tablet and desktop. Widgets are placed in CSS px, with safe areas (notch, home bar), 44 px touch targets and text scaling.
-- **DOM UI overlay.** Panels, buttons, toggles, sliders, toasts, captions, a modal stack with gamepad navigation, external links that still work when pop-ups are blocked, and DOM anchored to world points (`ui.anchors`).
-- **Procedural audio.** WebAudio buses, a synth and sound recipes. The mixer settings persist. Spatial voices through a listener and `PlayOptions.at`.
-- **Saves.** Versioned, schema-checked save slots with migrations. They survive a full or blocked `localStorage`.
-- **Page lifecycle.** Hiding, `pagehide` and freeze stop the loop and flush the save. GPU device loss shows a reload screen instead of a frozen frame. Browser zoom gestures are blocked by default.
-- **Hosts.** The page the game runs in is an interface (`Host`), so the same game runs in a top-level tab, a cross-origin iframe (as on itch.io), or an Electron desktop shell.
+Each line names where to start. [docs/OFFERING.md](docs/OFFERING.md) has the longer list.
+
+**Start and run**
+
+- **One boot call.** Canvas, renderer, post, particles, input, overlay, audio, save, host and a fixed 60 Hz loop in one ctx: `createGame(opts)`.
+- **Client mode** for a server-authoritative game: no save, the loop runs once per rendered frame: `createGame({ sim: false })`, `ctx.hooks.frame`.
+- **Every page it runs in.** A top-level tab, a cross-origin iframe (itch.io), Electron, Capacitor and an installable PWA: `Host`, `createWebHost`, `@thunderclap/host-electron`, `@thunderclap/host-capacitor`, `@thunderclap/host-pwa`.
+- **Page lifecycle.** Hiding stops the loop and flushes the save; device loss shows a reload screen: `ctx.hooks.hide`, `ctx.hooks.deviceLost`.
+
+**Render**
+
+- **2D and 3D on one renderer.** HDR colour and emissive targets, instanced sprites and meshes, one instance format: `frame.sprite`, `frame.mesh`, `Transform`.
+- **Cameras.** `Camera.ortho2d` by default, `Camera.perspective` with depth, split views and stereo: `renderer.render(frame, camera, target)`.
+- **Materials in your own WGSL.** A prelude gives you the lights, shadow and fog: `renderer.createMaterial({ label, wgsl })`, `materialPrelude`.
+- **Lights, shadows and fog.** Ambient, a sun with a shadow map, 16 point and 8 spot lights, layer masks: `frame.lights`.
+- **PBR.** The glTF metallic-roughness material, with normal maps and skinning: `createStandardMaterial`.
+- **Skinning.** GPU skinning in the scene and shadow passes: `VERTEX_LAYOUT_SKINNED`, `SkinPalette`.
+- **LOD and culling.** Per-mesh bounds, frustum culling and level selection by screen size: `mesh.bounds`, `MeshLod`, `selectLod`, `InstanceList`.
+- **2D kit.** Tile layers, flipbooks, parallax and a follow camera: `createTileLayer`, `Flipbook`, `createParallax`, `createFollow2D`.
+- **Textures.** Images, texture arrays with GPU mips, KTX2: `loadTexture`, `loadTextureArray`, `uploadKtx2`.
+
+**Post and FX**
+
+- **Post stack.** Bloom, tone map, grade, vignette, god rays, fog, AO, depth of field, TAA, SSR, motion blur, auto exposure and finishing passes, with quality tiers: `ctx.post` (`PostStack`), `postQualityFor`.
+- **GPU particles.** 2D or world space, soft, lit, with sprite sheets, forces, collision and effect files: `ParticleSystem`, `createEffect`.
+- **World FX.** Sky, water, trails, decals, billboards and debug lines: `Sky`, `Water`, `Trail`, `Decals`, `createBillboards`, `createDebugDraw`.
+
+**Content**
+
+- **glTF 2.0.** Meshes, materials, skins, animations, morph targets and common extensions: `parseGltf`, `loadGltf`.
+- **Typed asset loading.** A manifest, a progress bar and a cache: `defineManifest`, `createBundle`, `createAssetCache`, `packAtlas`.
+- **Procedural geometry.** Boxes, spheres, capsules, heightfields and more: `box`, `sphere`, `createHeightfield` in `@thunderclap/engine/geom`.
+- **Collision.** A static collider and capsule or circle sliding: `createStaticCollider`, `slide`, `slide2`.
+- **Voxel worlds.** Greedy-meshed chunks with baked AO from a Worker, culled per chunk, with a block-picking ray: `createVoxelGrid`, `createVoxelChunks`, `raycastVoxels`.
+- **Navigation.** Grids, navmeshes, A*, flow fields and crowds: `createNavGrid`, `findPath`, `bakeNavMesh`, `createCrowd`.
+- **Animation.** Clips, a mixer, an animation graph, IK, retargeting and springs: `AnimationMixer`, `createAnimGraph`, `twoBoneIk`, `retargetPose`.
+- **Sockets.** A transform that follows a joint, for hats and swords: `attachTransform`.
+- **Tweens.** Easing, sequences and springs: `createTweens`.
+
+**Input**
+
+- **One action map** over keyboard, mouse, touch, pen and gamepad: `createGame({ input: { bindings } })`, `ctx.input.pressed`.
+- **Gestures.** Tap, double tap, long press, pan, drag and pinch, and a loupe for small targets: `ctx.gestures`, `input.magnify`.
+- **Picking.** Every pointer is a ray; test it against planes, boxes or meshes: `ctx.pointers`, `meshTester`.
+- **First and third person.** Pointer lock, touch zones, sticks and a follow camera: `createLook`, `Follow`, `createTouchZones`.
+- **Record and replay.** Record a session and run it back tick for tick: `createGame({ input: { record, replay } })`, `createInputPlayback`.
+- **WebXR.** Enter VR, render each eye through the post stack, controllers and hands as rays: `createGame({ xr })`, `ctx.xr.enter()`.
+
+**UI, audio and plumbing**
+
+- **DOM overlay in layout regions** for phone, tablet and desktop, with safe areas and text scale: `ctx.ui`, `ctx.ui.layout`, `LayoutSpec`.
+- **HUD widgets.** Meters, orbs, rings, a compass, a minimap, a reticle, slots and floating numbers: `ui.meter`, `createOrbMeter`, `ui.minimap`, `ui.floats`.
+- **World UI.** DOM anchored to world points and panels in 3D or VR: `ui.anchors(() => camera)`, `createWorldPanel`.
+- **Audio.** Buses, a synth, sound recipes, music stems, spatial voices and zones: `ctx.audio`, `createMusic`.
+- **Saves.** Versioned, schema-checked slots with migrations: `createSaveStore`, `s`, `createSlotManager`.
+- **Analytics.** Typed, batched events to a sink you supply: `createAnalytics`.
+- **i18n.** String tables, plurals through `Intl`, a runtime locale swap: `createI18n`.
 
 ## Requirements
 
@@ -57,14 +101,22 @@ pnpm install
 pnpm example     # http://127.0.0.1:5173: a glowing square; click or press Space to flare it
 ```
 
-To start a game of your own, scaffold one from a template into its own folder and run it:
+To start a game of your own, pick a template and scaffold it into its own folder:
 
 ```sh
-pnpm create-game ../my-game --template puzzle   # or first-person; `pnpm create-game --list` shows them
+pnpm create-game --list                              # the four templates
+pnpm create-game ../my-game --template platformer
 cd ../my-game && pnpm install && pnpm dev
 ```
 
-The new project is standalone: `@thunderclap/engine` is a dependency (`^<this version>`, or `--engine <spec>` for a `github:`, `link:` or `file:` spec, or a directory holding the engine for local work), `package.json` is renamed (`--name`, default the folder's name), a `README.md`, `.gitignore` and `biome.json` are written, and the template's `CLAUDE.md` names the engine concepts it uses. `--dry-run` prints the plan; a non-empty folder needs `--force`.
+| Template | Start here if you want |
+| --- | --- |
+| `puzzle` | a 2D board game: one scene, pure rules with tests, a versioned save, a HUD laid out on every screen |
+| `platformer` | a 2D action game: tile maps, a flipbook player, parallax, a follow camera, touch zones, a pause menu, sounds |
+| `first-person` | a 3D world you walk through: `Look`, Worker-built chunks, a sun with shadows, fog, weather, world labels |
+| `third-person` | a 3D character game: a skinned, animated hero, a follow camera, sockets, foot IK, PBR, enemies with health bars |
+
+The new folder is a standalone project with `@thunderclap/engine` as a dependency. Each template ships a `CLAUDE.md` that names the engine concepts it uses. `--engine <spec>` points it at a local or git copy of the engine, `--dry-run` prints the plan, and a non-empty folder needs `--force`. [Getting started](docs/guide/getting-started.md) walks through the rest.
 
 This is the whole example (`examples/hello/main.ts`):
 
@@ -115,15 +167,11 @@ if (ctx) {
 }
 ```
 
-A pure client of a server-authoritative game leaves out `save` (then `ctx.save` is `null` and the engine never touches storage) and passes `sim: false`, so the loop runs once per rendered frame and calls `ctx.hooks.frame(dt)`, where it applies the latest server state.
-
-VR: `createGame({ xr: XrOptions })` (`{ referenceSpace?, onEnter?, onExit? }`) gives `ctx.xr: XrControl` (`supported()`, `enter()`, `exit()`, `active`, `session`, `surface`). `enter()` requests an `immersive-vr` session with the WebGPU binding, moves the loop onto the session's frames, records the scenes once through the head camera, renders each eye through the post stack into the session's layer (the headset sees what the screen would) and adds the controllers and hands to `ctx.pointers` as rays; `exit()` (or the headset ending the session) restores the page. Nothing changes for a game that never calls it.
-
-The world is a 1920×1080 logical space by default (origin top-left, y down). The surface scales it to fit any screen. A game typically widens `ctx` with its own nouns (`Object.assign(ctx, { ... })`), so every scene gets one typed ctx.
+The world is a 1920×1080 logical space by default (origin top-left, y down), scaled to fit any screen. `createGame` returns `null` when the browser has no WebGPU. A game usually widens `ctx` with its own nouns (`Object.assign(ctx, { ... })`) so every scene gets one typed ctx.
 
 ### Using it in a game
 
-The package isn't on npm yet. It ships TypeScript source, which your bundler compiles (Vite is what it's built and tested with). Until it's published, add it as a workspace package or a git dependency:
+The package isn't on npm yet. It ships TypeScript source, which your bundler compiles (Vite is what it's built and tested with). `pnpm create-game` sets the dependency for you; by hand, use a workspace package or a git dependency:
 
 ```jsonc
 // package.json
@@ -133,6 +181,22 @@ The package isn't on npm yet. It ships TypeScript source, which your bundler com
 ```
 
 Import only from the public entry points listed under [Modules](#modules). Anything not re-exported from a module's `index.ts` is internal.
+
+## Guides
+
+Short, task-shaped walkthroughs. Every TypeScript block in them is typechecked against the engine by `pnpm check`.
+
+1. [Getting started](docs/guide/getting-started.md): scaffold, run, the shape of a game, and shipping to itch.io, Electron or a PWA.
+2. [A 2D game](docs/guide/2d-game.md): sprites, the camera, your own WGSL, particles and layout regions.
+3. [A 3D game](docs/guide/3d-game.md): perspective, meshes, glTF, lights, shadows, PBR, LOD and culling.
+4. [Characters](docs/guide/characters.md): a skinned glTF, the animation mixer, sockets and the follow camera.
+5. [Input](docs/guide/input.md): actions, gestures, pointer rays, `Look`, pads, touch zones, record and replay.
+6. [UI and HUD](docs/guide/ui-and-hud.md): the overlay, regions, widgets, world anchors and panels, theme and text scale.
+7. [Style and post](docs/guide/style-and-post.md): the post stack, quality tiers, FX, sky, water and weather.
+8. [VR](docs/guide/xr.md): entering VR, controllers and hands, per-eye post, panels.
+9. [Testing your game](docs/guide/testing-your-game.md): replay tests, the harness pattern and `expect.poll`.
+
+The module READMEs under `src/<module>/` are the full reference.
 
 ## Modules
 
@@ -159,12 +223,7 @@ Import only from the public entry points listed under [Modules](#modules). Anyth
 | `@thunderclap/engine/testing` | A recording fake `GPUDevice` for unit tests (`src/render/fake-gpu.ts`) |
 | `@thunderclap/engine/geom` | Procedural geometry: `box`, `plane`, `sphere`, `icosphere`, `capsule`, `cylinder`, `torus`, heightfields (`heightAt`, `normalAt`, `raycastHeightfield`, `heightfieldGeometry`), `mergeGeometry`, `transformGeometry`; pure, a `Geometry` is a `MeshDesc` ([README](src/geom/README.md)) |
 
-**Templates.** Copyable games under `templates/`, each with a `CLAUDE.md` that names the engine concepts for an agent extending it; `pnpm check` runs each one's typecheck and tests. `pnpm create-game <dir> --template <name>` (`scripts/create-game.mjs`) copies a template out of the repo into a standalone project on the published engine (see [Quick start](#quick-start)); `pnpm check` scaffolds one into a temp dir and typechecks it (`check:create-game`). `pnpm test:e2e` boots each template on its own Vite dev server across the device matrix (`e2e/templates.spec.ts`: a clean console for three seconds, frames rendered, one key press answered through `window.__template`).
-
-- `templates/puzzle` (`@thunderclap/template-puzzle`): a 2D puzzle game: `createGame`, one scene, pure `rules/` with tests, a versioned save with a migration and a layout spec placing a HUD on every form factor; engine modules `core`, `render`, `input`, `ui`, `save`, `analytics`. Run `pnpm template:puzzle` (`check:template-puzzle`).
-- `templates/first-person` (`@thunderclap/template-first-person`): a first-person 3D game in client mode (`sim: false`, no save): `Look` (`lockOnFirstClick`) for mouse, touch zones, sticks and keys, Worker-meshed chunks with bounds and a texture array, a sun with a shadow map and fog, world-space snow, world-anchored landmark labels, pointer hits and a pure `world/` with tests; engine modules `core`, `render`, `input`, `ui`, `fx`. Run `pnpm template:first-person` (`check:template-first-person`).
-- `templates/third-person` (`@thunderclap/template-third-person`): a third-person action game in client mode: a skinned biped generated as a glb at startup (no asset) and parsed through `assets`, drawn by `createStandardMaterial({ skin })`, `createAnimGraph` over idle/locomotion/attack/hit, `Look` in orbit mode with `Follow` and zoom, foot IK on a `geom` heightfield, root motion on the attack, a head `lookAt`, three cosmetic sockets through `attachTransform`, four roaming enemies with anchored name plates and health bars, PBR, shadows and fog, a `pnpm bake` for the stones' collider; engine modules `core`, `render`, `input`, `ui`, `fx`, `anim`, `assets`, `geom`. Run `pnpm template:third-person` (`check:template-third-person`).
-- `templates/platformer` (`@thunderclap/template-platformer`): a 2D side-scrolling platformer: `createTileLayer` maps from a string level format, a flipbook player with coyote time and jump buffering, one-way and moving platforms with carry, three-layer `createParallax`, a `createFollow2D` camera, two-thumb `createTouchZones`, a HUD with a `ui.meter`, a pad-walkable pause menu, synthesised sounds and a versioned save with a migration; engine modules `core`, `render`, `input`, `ui`, `save`, `audio`, `tween`, `fx`. Run `pnpm template:platformer` (`check:template-platformer`).
+**Templates.** Copyable games under `templates/`, each with a `CLAUDE.md` that names the engine concepts for an agent extending it: `puzzle`, `platformer`, `first-person` and `third-person` (see [Quick start](#quick-start)). `pnpm template:<name>` runs one inside this repo. `pnpm check` runs each one's typecheck and tests and scaffolds one into a temp dir (`check:create-game`); `pnpm test:e2e` boots each on the device matrix (`e2e/templates.spec.ts`).
 
 **Demos.** Playable showcases under `demos/` (E-021), each a page on the public API with no network assets, exposing `window.__demo` for its spec under `e2e/demos/`. `pnpm demo <name>` serves one (`pnpm demo` lists them); the harness server also serves them at `/demos/<name>/`, so the matrix runs them. [demos/README.md](demos/README.md) has the table.
 
@@ -194,8 +253,7 @@ renderer.endFrame()
 
 ## Baking
 
-A navmesh or a static collider is a pure function of its level geometry, so bake it once at build
-time and ship the bytes instead of rebuilding it on every boot:
+A navmesh or a static collider is a pure function of its level geometry, so bake it once at build time and ship the bytes:
 
 ```sh
 pnpm bake bake.config.json             # writes <out>/<name>.navm, <out>/<name>.coll and bake-manifest.json
@@ -214,26 +272,7 @@ pnpm bake:nav level.glb level.navm --options nav.json   # one source to one navm
 }
 ```
 
-A source is a `.glb`, a `.gltf` (external buffers read from beside it) or a geometry JSON
-(`{ "positions": [x, y, z, …], "indices": [...], "transform"?: [12 floats, 3×4 row-major] }` or an
-array of those); every mesh of every scene node is placed by its world matrix. `options` are the
-`NavBakeOptions` (`nav`) or `StaticColliderOptions` (`geom`) the runtime takes. A navmesh entry
-needs only `cellSize`: the rest default from it (`cellHeight` = `cellSize / 2`, `agentHeight` 2,
-`agentRadius` = `cellSize * 2`, `agentMaxClimb` = `cellHeight * 2`, `agentMaxSlope` 45; the
-table is in the nav README's *Baking*), and a bad value fails the bake with a `NavBakeError`
-naming the option. The manifest
-lists each entry's `sha256` over its sources' bytes and options, so `--check` in CI (`pnpm bake
-bake.config.json --check` after `pnpm install`) fails the build when someone edits a level without
-rebaking. A game loads the bytes with `fetch` or a `bytes` bundle entry and calls `importNavMesh`
-or `importCollider`; from a game's folder the script is
-`node node_modules/@thunderclap/engine/scripts/bake.mjs bake.config.json` (the third-person
-template's `pnpm bake`). The script runs the engine's TypeScript sources straight from
-`node_modules` through Node's own type stripping (`module.registerHooks`), so it needs no build
-step and no dependency; the output is byte-identical between runs. `pnpm check:bake` tests it
-and `bake:nav` against `scripts/fixtures/`. `pnpm bake:nav <input> <output> [--options nav.json]`
-(`scripts/bake-nav.mjs`) bakes one navmesh from one source read the same way, with the
-`NavBakeOptions` in `nav.json` (`cellSize` defaults to 0.3, the rest to the engine defaults
-above; a bad value exits 1 naming the option), and writes format 2; a game loads it with `loadNavMesh(bytes)`, which validates the bytes.
+A source is a `.glb`, a `.gltf` or a geometry JSON (`{ "positions": [...], "indices": [...] }`). `options` are the `NavBakeOptions` (`nav`) or `StaticColliderOptions` (`geom`) the runtime takes; a navmesh needs only `cellSize` and a bad value fails with a `NavBakeError` naming the option. The game loads the bytes with `fetch` or a `bytes` bundle entry and calls `importNavMesh` or `importCollider` (`loadNavMesh` for a `bake:nav` file). From a game's folder the script is `node node_modules/@thunderclap/engine/scripts/bake.mjs bake.config.json` (the third-person template's `pnpm bake`); it runs the engine's TypeScript through Node's type stripping, needs no build step, and its output is byte-identical between runs. The [nav reference](src/nav/README.md) has the option table.
 
 ## Testing
 
@@ -268,17 +307,10 @@ Headless Chromium gets a WebGPU adapter with `--enable-unsafe-webgpu`. On macOS 
 
 ## Status and roadmap
 
-Version **0.2.0-alpha.1**. The API is still settling: see [CHANGELOG.md](CHANGELOG.md). Current work is in [docs/STATUS.md](docs/STATUS.md), and the decisions behind the engine are in [docs/DECISIONS.md](docs/DECISIONS.md).
-
-The engine was built inside The Last Rune and extracted into this repo with its git history. That's why commit messages, decision numbers (`D-0xx`) and `docs/` paths in comments point at [that repo](https://github.com/Mandalorian007/last-rune), where the design notes live.
-
-Landed through wave 4 (Gate D, `65800b7`): the lighting block with sun shadows and fog, streamed meshes with frustum culling and texture arrays, two views per frame and WebXR on top of them, first-person `Look`, world-anchored DOM, world-space particles, spatial audio and glTF static geometry. [docs/OFFERING.md](docs/OFFERING.md) lists each with its entry point.
-
-Landed in wave 5 so far: the pure animation module (`@thunderclap/engine/anim`: clips, `Pose`, `Skeleton`, mixer), glTF skins and animations, a `Follow` third-person controller on `Look`, `Trail` ribbons in 2D or world space, shadow casters outside the view frustum (`stats.shadowDraws`), the post stack per eye in VR (`renderer.resolve`), a standard PBR material over the lights block (`createStandardMaterial`), attachment sockets on a skeleton (`attachTransform`), GPU skinning in the scene and shadow passes (`VERTEX_LAYOUT_SKINNED`, `SkinPalette`), spot lights and per-light layer masks (`SpotLight`, `Lights.spots`), and `templates/first-person`, a copyable 3D walk.
-
-In flight: see [docs/STATUS.md](docs/STATUS.md).
-
-After that: GPU picking and publishing `engine-v1.0.0`. The third-person showcase template (`templates/third-person`) has landed.
+Version **0.2.0-alpha.1**. Everything under [Features](#features) is on `main` and tested on the device matrix; the API is still settling, so read [CHANGELOG.md](CHANGELOG.md) before you upgrade.
+Two games set the range it must cover: The Last Rune (2D) and Forgewilds (3D voxel), and each new capability arrives with a game that needs it ([VISION](docs/VISION.md)).
+Next: publishing `engine-v1.0.0` to npm and hardening the public API. Current branches are on [docs/STATUS.md](docs/STATUS.md), the decisions behind the engine in [docs/DECISIONS.md](docs/DECISIONS.md).
+The engine was extracted from [The Last Rune](https://github.com/Mandalorian007/last-rune) with its history, so `D-0xx` numbers and some `docs/` paths in comments point at that repo.
 
 ## Built with ThunderClap
 
