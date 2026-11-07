@@ -14,7 +14,8 @@ import { POST_UNIFORM_FLOATS } from './settings';
  * `format` may list several targets (ws/post-5: the TAA resolve also writes its history aux);
  * `encode` then takes the targets after the first in `extraTargets`.
  *
- * One uniform buffer per pass, written with `setUniforms`. Bind groups come from
+ * One uniform buffer per pass, written with `setUniforms` (or copied into on the encoder,
+ * `uniformBuffer`, when several XR eyes share one submit). Bind groups come from
  * `createBindGroup` and are cached by the caller, as with `FullscreenPass`.
  */
 export class DepthPass {
@@ -84,6 +85,11 @@ export class DepthPass {
       clearValue: { r: 1, g: 1, b: 1, a: 1 },
     }));
     this.passDesc = { label: `pass:${desc.label}`, colorAttachments: this.colorAttachments };
+  }
+
+  /** The pass's uniform buffer, for an encoder-ordered copy (ws/render-12: one per XR eye). */
+  get uniformBuffer(): GPUBuffer {
+    return this.uniforms;
   }
 
   setUniforms(data: Float32Array): void {
