@@ -161,6 +161,7 @@
     "bake": "node scripts/bake.mjs",
     "bake:nav": "node scripts/bake-nav.mjs",
     "release": "node scripts/release.mjs",
+    "prepublishOnly": "node scripts/refuse-publish.mjs",
     "build": "node scripts/build.mjs",
     "check:pack": "node scripts/pack-smoke.mjs",
     "bench": "node scripts/bench.mjs",

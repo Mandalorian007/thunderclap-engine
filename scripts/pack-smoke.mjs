@@ -6,15 +6,24 @@
 //   2. Inspects every tarball: each file must fall under the manifest's `files` (plus the
 //      package.json npm always adds), nothing from src/, no tests, no TypeScript source, every
 //      `exports` target present, no `workspace:` range, no `private`.
-//   3. Installs the tarballs with npm into a fresh project in the OS temp folder, outside the
+//   3. Proves the publish guard (ws/publish-2): `npm publish --dry-run` in each package folder
+//      fails with the message from scripts/refuse-publish.mjs, and `npm publish --dry-run` of
+//      each tarball succeeds. Both point npm at a dead local registry, so nothing leaves the
+//      machine. Also checks CHANGELOG.md has a section for the root version, which publish.yml
+//      turns into the GitHub Release (scripts/publish-notes.mjs).
+//   4. Installs the tarballs with npm into a fresh project in the OS temp folder, outside the
 //      workspace, then typechecks (Bundler and NodeNext resolution, skipLibCheck off) and
 //      Vite-builds a page that imports the root, /render, /input, /ui, /voxel and each host's
 //      create function. Node also loads `@thunderclap/host-pwa/vite` natively, as a vite.config does.
 //
 // The tooling (typescript, vite, @webgpu/types) is linked in from this repo's node_modules, so
 // the check needs no network.
-//   --keep   leave the temp folder for inspection
-import { execFileSync } from 'node:child_process';
+//   --keep            leave the temp folder for inspection
+//   --from-npm        skip steps 1-3 and install each package at its package.json version from
+//                     the npm registry instead of from tarballs (publish.yml, after publishing)
+//   --wait <seconds>  with --from-npm, first poll the registry until every version is listed,
+//                     failing after that long (default 0: no polling)
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -30,7 +39,17 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const keep = process.argv.includes('--keep');
+const argv = process.argv.slice(2);
+const keep = argv.includes('--keep');
+const fromNpm = argv.includes('--from-npm');
+const waitAt = argv.indexOf('--wait');
+const waitSeconds = waitAt === -1 ? 0 : Number(argv[waitAt + 1]);
+if (!Number.isFinite(waitSeconds) || waitSeconds < 0) {
+  console.error('check:pack: --wait takes a number of seconds');
+  process.exit(1);
+}
+// Nothing listens here, so a dry-run publish cannot reach a real registry.
+const DEAD_REGISTRY = 'http://127.0.0.1:9';
 const packages = [
   { dir: '.', name: '@thunderclap/engine' },
   { dir: 'packages/host-capacitor', name: '@thunderclap/host-capacitor' },
@@ -95,29 +114,54 @@ mkdirSync(tarballs);
 mkdirSync(app);
 
 try {
-  step('building');
-  execFileSync('node', [join(root, 'scripts/build.mjs')], { cwd: root, stdio: 'inherit' });
+  if (fromNpm) {
+    for (const p of packages) {
+      const { version } = JSON.parse(readFileSync(join(root, p.dir, 'package.json'), 'utf8'));
+      p.version = version;
+      p.spec = `${p.name}@${version}`;
+    }
+    if (waitSeconds > 0) await waitForRegistry(waitSeconds);
+  } else {
+    step('building');
+    execFileSync('node', [join(root, 'scripts/build.mjs')], { cwd: root, stdio: 'inherit' });
 
-  // 1-2. Pack and inspect.
-  for (const p of packages) {
-    const before = new Set(readdirSync(tarballs));
-    run('pnpm', ['pack', '--pack-destination', tarballs], join(root, p.dir));
-    const file = readdirSync(tarballs).find((f) => f.endsWith('.tgz') && !before.has(f));
-    if (!file) throw new Error(`${p.name}: pnpm pack wrote no tarball`);
-    p.tarball = join(tarballs, file);
-    inspect(p);
+    // 1-2. Pack and inspect.
+    for (const p of packages) {
+      const before = new Set(readdirSync(tarballs));
+      run('pnpm', ['pack', '--pack-destination', tarballs], join(root, p.dir));
+      const file = readdirSync(tarballs).find((f) => f.endsWith('.tgz') && !before.has(f));
+      if (!file) throw new Error(`${p.name}: pnpm pack wrote no tarball`);
+      p.spec = join(tarballs, file);
+      inspect(p);
+    }
+    if (problems.length) throw new Error(`tarball problems:\n  ${problems.join('\n  ')}`);
+
+    // 3. The publish guard, and the release notes publish.yml will need.
+    for (const p of packages) checkPublishGuard(p);
+    if (problems.length) throw new Error(`publish guard problems:\n  ${problems.join('\n  ')}`);
+    const { version } = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+    run('node', [join(root, 'scripts/publish-notes.mjs'), version], root);
+    step(`CHANGELOG.md has a ${version} section`);
   }
-  if (problems.length) throw new Error(`tarball problems:\n  ${problems.join('\n  ')}`);
 
-  // 3. A fresh consumer.
-  step(`installing the tarballs into ${app}`);
+  // 4. A fresh consumer.
+  step(
+    `installing ${fromNpm ? packages.map((p) => p.spec).join(' ') : 'the tarballs'} into ${app}`,
+  );
   writeFileSync(
     join(app, 'package.json'),
     `${JSON.stringify({ name: 'pack-smoke', private: true, type: 'module' }, null, 2)}\n`,
   );
   run(
     'npm',
-    ['install', '--no-audit', '--no-fund', '--ignore-scripts', ...packages.map((p) => p.tarball)],
+    [
+      'install',
+      '--no-audit',
+      '--no-fund',
+      '--ignore-scripts',
+      ...(fromNpm ? ['--prefer-online'] : []),
+      ...packages.map((p) => p.spec),
+    ],
     app,
   );
   for (const dep of ['typescript', 'vite']) {
@@ -170,13 +214,58 @@ try {
   else rmSync(tmp, { recursive: true, force: true });
 }
 
+/** Runs `npm publish --dry-run` against the dead registry; returns its status and all output. */
+function dryPublish(args, cwd) {
+  const r = spawnSync(
+    'npm',
+    ['publish', '--dry-run', '--ignore-scripts=false', '--registry', DEAD_REGISTRY, ...args],
+    { cwd, env, encoding: 'utf8' },
+  );
+  return { status: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+}
+
+/** A folder publish must be refused with a pointer at docs/releasing.md; the tarball's must not. */
+function checkPublishGuard(p) {
+  const before = problems.length;
+  const folder = dryPublish([], join(root, p.dir));
+  if (folder.status === 0) problems.push(`${p.name}: npm publish in ${p.dir} was not refused`);
+  else if (!folder.out.includes('docs/releasing.md')) {
+    problems.push(`${p.name}: npm publish in ${p.dir} failed without the refusal:\n${folder.out}`);
+  }
+  const tarball = dryPublish([p.spec], tmp);
+  if (tarball.status !== 0) {
+    problems.push(`${p.name}: npm publish of the packed tarball failed:\n${tarball.out}`);
+  }
+  if (problems.length === before) step(`${p.name}: folder publish refused, tarball accepted`);
+}
+
+/** Polls `npm view` until every package's version is on the registry; throws after `seconds`. */
+async function waitForRegistry(seconds) {
+  const deadline = Date.now() + seconds * 1000;
+  let missing = packages;
+  for (;;) {
+    missing = missing.filter((p) => {
+      const r = spawnSync('npm', ['view', p.spec, 'version', '--prefer-online'], {
+        env,
+        encoding: 'utf8',
+      });
+      return r.status !== 0 || r.stdout.trim() !== p.version;
+    });
+    if (!missing.length) return step('every version is on the registry');
+    const names = missing.map((p) => p.spec).join(' ');
+    if (Date.now() >= deadline) throw new Error(`not on the registry after ${seconds}s: ${names}`);
+    step(`waiting for ${names}`);
+    await new Promise((r) => setTimeout(r, 10_000));
+  }
+}
+
 /** Lists a tarball and checks it against its own packed manifest. */
 function inspect(p) {
-  const list = run('tar', ['-tzf', p.tarball])
+  const list = run('tar', ['-tzf', p.spec])
     .split('\n')
     .filter(Boolean)
     .map((f) => f.replace(/^package\//, ''));
-  const manifest = JSON.parse(run('tar', ['-xzOf', p.tarball, 'package/package.json']));
+  const manifest = JSON.parse(run('tar', ['-xzOf', p.spec, 'package/package.json']));
   const files = manifest.files ?? [];
   const allowed = (f) =>
     f === 'package.json' || files.some((e) => f === e || f.startsWith(`${e.replace(/\/$/, '')}/`));
@@ -206,6 +295,6 @@ function inspect(p) {
   ) {
     fail('@thunderclap/engine must be a ^1.0.0 peer');
   }
-  const kb = (readFileSync(p.tarball).length / 1024).toFixed(1);
+  const kb = (readFileSync(p.spec).length / 1024).toFixed(1);
   step(`${p.name}@${manifest.version}: ${list.length} files, ${kb} kB packed`);
 }

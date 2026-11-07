@@ -16,7 +16,9 @@ Every release after the first is published by `.github/workflows/publish.yml` wh
 - `pnpm build` compiles each package with `tsc` to `dist/` (ESM JavaScript and `.d.ts`). host-electron also builds its shell into `out/`.
 - In the workspace, every `exports` entry points at `./src/*.ts`, so the harness, templates and tests use the source. `publishConfig` holds the published `exports` (pointing at `dist/`). `pnpm pack` swaps them in and turns `workspace:` ranges into versions.
 - So publish a **tarball made by `pnpm pack`**. Never run `npm publish` in a package folder: npm ignores pnpm's `publishConfig` overrides, and that package would point at `src/` files it does not contain.
-- `pnpm check:pack` packs all four packages, checks every tarball holds only its `files`, installs them into a fresh project outside the workspace, typechecks it and builds it with Vite. CI runs it on every push.
+- The manifests enforce that. Each package's `prepublishOnly` script (`scripts/refuse-publish.mjs`) fails with a pointer to this page. npm runs `prepublishOnly` when it publishes a folder but never when it publishes a tarball, so `npm publish <file>.tgz` is unaffected. `pnpm publish` in a folder is refused too. `--ignore-scripts` skips the guard, so don't pass it.
+- `pnpm check:pack` packs all four packages, checks every tarball holds only its `files`, proves the guard (`npm publish --dry-run` is refused in each folder and accepted for each tarball, against a dead local registry), checks `CHANGELOG.md` has a section for the root version, installs the tarballs into a fresh project outside the workspace, typechecks it and builds it with Vite. CI runs it on every push.
+- `node scripts/pack-smoke.mjs --from-npm [--wait <seconds>]` runs the same consumer check against the registry: it installs each package at its `package.json` version from npm, after polling until every version is listed when `--wait` is given.
 
 ## One-time setup (the user)
 
@@ -60,10 +62,15 @@ git push origin main v1.1.0         # the command release prints
 Pushing the tag runs `publish.yml`. It:
 
 1. fails unless the tag is `v` plus the root `package.json` version;
-2. runs `pnpm install --frozen-lockfile`, `pnpm check`, `pnpm build` and `pnpm check:pack`;
-3. packs each of the four packages and publishes it with provenance, skipping any whose exact version is already on npm.
+2. takes that version's `CHANGELOG.md` section as the release notes (`scripts/publish-notes.mjs`, with repo-relative links made absolute at the tag), failing before anything is published if the section is missing or empty;
+3. runs `pnpm install --frozen-lockfile`, `pnpm check`, `pnpm build` and `pnpm check:pack`;
+4. packs each of the four packages and publishes it with provenance, skipping any whose exact version is already on npm;
+5. installs from npm: polls the registry every 10 seconds, for up to 10 minutes, until all four `package.json` versions are listed, then installs them into a fresh project, typechecks it, builds it with Vite and loads every entry (`pack-smoke.mjs --from-npm --wait 600`). A broken publish fails the run here, not for a user;
+6. creates the GitHub Release for the tag, titled with the tag, with the notes from step 2 (a tag with a `-` suffix is marked a pre-release). If the release already exists, as on a re-run, it is updated instead. This step needs the workflow's `contents: write` permission.
 
-So a release that changes only the engine publishes only the engine. Watch the run under *Actions*; the packages appear on npm a minute later.
+So a release that changes only the engine publishes only the engine. Watch the run under *Actions*; the packages appear on npm a minute later, and the release under *Releases*.
+
+If a run fails after step 4, re-run the failed job: the publish loop skips versions already on npm, and the install check and release steps run again.
 
 ## Bumping a host package
 
