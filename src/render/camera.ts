@@ -48,7 +48,7 @@ const freeScratch: CameraRect = { x: 0, y: 0, width: 0, height: 0 };
 
 /**
  * A view-projection camera. Matrices are column-major `Float32Array(16)` (see `mat4` in
- * `@thunderclap/engine/core`), computed on read and cached until something changes.
+ * `@thunderclap-engine/engine/core`), computed on read and cached until something changes.
  *
  * Two presets:
  *

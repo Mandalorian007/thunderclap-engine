@@ -4,7 +4,7 @@
 
 In this guide you test a game the way the templates do: pure rules and the save schema in Vitest, input sessions recorded and replayed tick by tick, game logic stepped on a fixed clock against a fake host, the renderer on a fake GPU, and the running page in Playwright through a small state probe.
 
-Everything a unit test needs comes from `@thunderclap/engine/testing`: `createFakeHost`, `createFixedClock` and the fake GPU device. These run in Vitest or plain Node with no browser and no GPU.
+Everything a unit test needs comes from `@thunderclap-engine/engine/testing`: `createFakeHost`, `createFixedClock` and the fake GPU device. These run in Vitest or plain Node with no browser and no GPU.
 
 The engine tests the platform itself (WebGPU, input devices, layout on every form factor) on its own device matrix. Your tests cover only your product: your rules, your save, your scenes.
 
@@ -35,7 +35,7 @@ The templates' first house rule is that rules are pure. A move is a function tha
 Here is a small rules file in that style, `src/rules/dice.ts`:
 
 ```ts
-import { createRandom } from '@thunderclap/engine/core';
+import { createRandom } from '@thunderclap-engine/engine/core';
 
 export interface Table {
   readonly dice: readonly number[];
@@ -94,7 +94,7 @@ Three habits from `templates/puzzle/src/rules/board.test.ts` worth copying:
 A save has a schema, a version number and one migration per old version. Test it against `MemoryStorage` instead of `localStorage`. Pass `debounceMs: 0` so writes happen at once, `autoFlush: false` so nothing listens for page events, and a fixed `now`:
 
 ```ts
-import { createSaveStore, MemoryStorage, type Migrations, s, saveKey } from '@thunderclap/engine/save';
+import { createSaveStore, MemoryStorage, type Migrations, s, saveKey } from '@thunderclap-engine/engine/save';
 import { describe, expect, it } from 'vitest';
 
 const Schema = s.object({
@@ -165,7 +165,7 @@ import {
   createInputRecorder,
   Input,
   type InputRecording,
-} from '@thunderclap/engine/input';
+} from '@thunderclap-engine/engine/input';
 import { expect, it } from 'vitest';
 
 type Action = 'left' | 'right' | 'jump';
@@ -222,8 +222,8 @@ A recording is plain JSON. `serializeRecording(rec)` writes it and `parseRecordi
 `createGame` wires the same thing into the loop. `input: { record: true }` records from the first tick into `ctx.input.recorder`. The recorder lives on `ctx.input`; to replay mid-session, call `ctx.replay(rec)` (see the [input guide](input.md#record-and-replay-a-session)). A debug key that copies the session so a tester can paste it into a bug report:
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import { serializeRecording } from '@thunderclap/engine/input';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import { serializeRecording } from '@thunderclap-engine/engine/input';
 
 export async function copySession(ctx: EngineCtx<string, null>): Promise<void> {
   const rec = ctx.input.recorder;
@@ -237,8 +237,8 @@ export async function copySession(ctx: EngineCtx<string, null>): Promise<void> {
 To play it back, boot the same game with `input: { replay }`. The input then ignores the real keyboard, mouse and pads, and the loop feeds one recorded tick before each fixed step:
 
 ```ts
-import { createGame } from '@thunderclap/engine';
-import { parseRecording } from '@thunderclap/engine/input';
+import { createGame } from '@thunderclap-engine/engine';
+import { parseRecording } from '@thunderclap-engine/engine/input';
 
 const json = new URLSearchParams(location.search).get('replay');
 const ctx = await createGame({
@@ -258,8 +258,8 @@ A replay gives the same result only on the same game: the same bindings, the sam
 `createFixedClock(stepMs?)` is a `TickClock`, the same type as `ctx.clock`. It moves only when the test calls `step(n)` (whole fixed steps) or `advance(ms)`, and N steps read exactly N × `stepMs`. Give it to the gestures (or a `Look`, or a playback) and run each tick in the order `createGame`'s loop does: step the clock, then `input.update()`, then your update. Timers such as long-press then run on game time:
 
 ```ts
-import { type Bindings, createGestures, Input } from '@thunderclap/engine/input';
-import { createFixedClock } from '@thunderclap/engine/testing';
+import { type Bindings, createGestures, Input } from '@thunderclap-engine/engine/input';
+import { createFixedClock } from '@thunderclap-engine/engine/testing';
 import { expect, it } from 'vitest';
 
 type Action = 'right' | 'info';
@@ -298,8 +298,8 @@ The same tick function, fed by `createInputPlayback(input, recording)` instead o
 `createFakeHost(opts?)` returns a full `Host`: storage in memory, a lifecycle you move with `setState`, haptics, links and copies written down, a safe area you set, fullscreen and wake-lock stubs that record their calls, and frames that run only when you call `runFrame()`. Use it to test the code that reacts to the platform, such as autosaving when the app goes to the background:
 
 ```ts
-import { createSaveStore, s } from '@thunderclap/engine/save';
-import { createFakeHost } from '@thunderclap/engine/testing';
+import { createSaveStore, s } from '@thunderclap-engine/engine/save';
+import { createFakeHost } from '@thunderclap-engine/engine/testing';
 import { expect, it } from 'vitest';
 
 it('saves when the app is backgrounded and buzzes once', () => {
@@ -340,7 +340,7 @@ it('saves when the app is backgrounded and buzzes once', () => {
 A real GPU can be lost at any time, for example by a driver reset or a tab sent to the background on mobile. `g.loseDevice(reason?, message?)` does that to the fake one and resolves once the engine has handled it, so a test can check that the game reacts the way it does on a page. The loop halts for good, `hooks.deviceLost(info)` runs, audio halts, the save flushes, and then each `ctx.onDeviceLost` listener runs. A loss with reason `'destroyed'` (the game destroyed the device itself) is ignored, as on a page.
 
 ```ts
-import { createTestGame } from '@thunderclap/engine/testing';
+import { createTestGame } from '@thunderclap-engine/engine/testing';
 import { expect, it } from 'vitest';
 
 it('stops and reports when the GPU is lost', async () => {
@@ -359,11 +359,11 @@ it('stops and reports when the GPU is lost', async () => {
 
 ## Test rendering on the fake GPU
 
-Most games never need this. If you build your own draw code (a batch of props, a custom material, a mesh builder), `@thunderclap/engine/testing` gives you a fake WebGPU device that runs in Node. It records every buffer, texture, pass and draw, and flags mistakes a real device would reject, such as writing to a buffer without `COPY_DST`.
+Most games never need this. If you build your own draw code (a batch of props, a custom material, a mesh builder), `@thunderclap-engine/engine/testing` gives you a fake WebGPU device that runs in Node. It records every buffer, texture, pass and draw, and flags mistakes a real device would reject, such as writing to a buffer without `COPY_DST`.
 
 ```ts
-import { Renderer } from '@thunderclap/engine/render';
-import { createFakeDevice, fakeRendererGpu } from '@thunderclap/engine/testing';
+import { Renderer } from '@thunderclap-engine/engine/render';
+import { createFakeDevice, fakeRendererGpu } from '@thunderclap-engine/engine/testing';
 import { expect, it } from 'vitest';
 
 /** The game's code under test: one row of crates. */
@@ -391,7 +391,7 @@ The fake does not compile WGSL or produce pixels. For "does it look right", use 
 To test the running game in a real browser, the page publishes a small probe object on `window`, and a Playwright spec reads it. The templates do this in `main.ts` with `window.__template`, updated after every rendered frame:
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
+import type { EngineCtx } from '@thunderclap-engine/engine';
 
 interface Probe {
   scene: string;

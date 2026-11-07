@@ -20,8 +20,8 @@ import {
   type NavPoint3,
   reachable,
   reachableOutline,
-} from '@thunderclap/engine/nav';
-import { computeLetterbox } from '@thunderclap/engine/platform';
+} from '@thunderclap-engine/engine/nav';
+import { computeLetterbox } from '@thunderclap-engine/engine/platform';
 import type { HarnessNav5Api, HarnessNav5State } from './nav5-state';
 
 const params = new URLSearchParams(location.search);

@@ -5,8 +5,8 @@
  * movement rule is pure (`stepEnemy`) so it can be tested; the DOM and GPU glue live in
  * `createEnemies`. Nothing is allocated per frame.
  */
-import { createRandom } from '@thunderclap/engine/core';
-import { capsule } from '@thunderclap/engine/geom';
+import { createRandom } from '@thunderclap-engine/engine/core';
+import { capsule } from '@thunderclap-engine/engine/geom';
 import {
   createStandardMaterial,
   type Frame,
@@ -14,8 +14,8 @@ import {
   type Mesh,
   type Renderer,
   Transform,
-} from '@thunderclap/engine/render';
-import { type AnchorHandle, type Anchors, h } from '@thunderclap/engine/ui';
+} from '@thunderclap-engine/engine/render';
+import { type AnchorHandle, type Anchors, h } from '@thunderclap-engine/engine/ui';
 import { type Ground, groundHeight, HALF, resolveXZ } from '../world/ground';
 
 export const ENEMY_COUNT = 4;

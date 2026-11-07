@@ -7,8 +7,8 @@
     "rootDir": "src",
     "types": ["@webgpu/types"],
     "paths": {
-      "@thunderclap/engine": ["../../dist/index.d.ts"],
-      "@thunderclap/engine/*": ["../../dist/*/index.d.ts"]
+      "@thunderclap-engine/engine": ["../../dist/index.d.ts"],
+      "@thunderclap-engine/engine/*": ["../../dist/*/index.d.ts"]
     }
   },
   "include": ["src/index.ts", "src/bridge.ts", "src/renderer.ts"],

@@ -9,7 +9,7 @@
  *   immersive session: the same scene renders once per eye into the session's layer, and the
  *   controllers are `ctx.pointers` rays; leaving restores the page.
  */
-import { createGame, type EngineCtx } from '@thunderclap/engine';
+import { createGame, type EngineCtx } from '@thunderclap-engine/engine';
 import {
   Camera,
   type Frame,
@@ -17,7 +17,7 @@ import {
   Lights,
   Transform,
   VERTEX_LAYOUT_3D,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { HarnessXrState } from './xr-state';
 
 const root = document.getElementById('root') as HTMLElement;

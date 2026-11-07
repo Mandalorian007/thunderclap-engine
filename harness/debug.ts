@@ -10,9 +10,9 @@
  *   once); a `circle` under the sphere.
  * - `?still` parks the motion for specs that read pixels (E-017).
  */
-import { GameLoop } from '@thunderclap/engine/core';
-import { createDebugDraw } from '@thunderclap/engine/fx';
-import { boot } from '@thunderclap/engine/platform';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { createDebugDraw } from '@thunderclap-engine/engine/fx';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   type CameraPoint,
@@ -20,7 +20,7 @@ import {
   installGpuErrorLogging,
   Renderer,
   Transform,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { HarnessDebugApi, HarnessDebugState } from './debug-state';
 
 const root = document.getElementById('root') as HTMLElement;

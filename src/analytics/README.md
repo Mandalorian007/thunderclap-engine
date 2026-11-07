@@ -6,7 +6,7 @@ Typed, batched game events handed to a **sink the game supplies**. The engine ha
 
 <!-- snippet:check -->
 ```ts
-import { createAnalytics } from '@thunderclap/engine/analytics';
+import { createAnalytics } from '@thunderclap-engine/engine/analytics';
 
 type MyEvents = { level_start: { level: string }; level_complete: { level: string; ms: number } };
 
@@ -31,7 +31,7 @@ analytics.emit('level_start', { level: 'intro' }); // props are type-checked
 ## Usage
 
 ```ts
-import { createAnalytics } from '@thunderclap/engine/analytics';
+import { createAnalytics } from '@thunderclap-engine/engine/analytics';
 
 type MyEvents = {
   level_start: { level: string };

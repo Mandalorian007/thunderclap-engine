@@ -9,7 +9,7 @@
  *   space the HUD leaves (`ctx.ui.layout.freeRect`, through `camera.fitFreeRect`), on enter and
  *   on every re-layout. A win emits `level_complete` through `ctx.analytics`.
  */
-import { createScheduler, type Scene, type TimerHandle } from '@thunderclap/engine/core';
+import { createScheduler, type Scene, type TimerHandle } from '@thunderclap-engine/engine/core';
 import {
   type CameraPoint,
   type CameraRect,
@@ -18,7 +18,7 @@ import {
   type InstanceParams,
   type RGBA,
   Transform,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { GameCtx } from '../ctx';
 import { type Board, isFaceUp, phase, reveal, settle } from '../rules/board';
 import { recordWin } from '../save/schema';

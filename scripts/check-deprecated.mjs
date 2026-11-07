@@ -404,8 +404,8 @@ function checkProject(p, dts, cache) {
     extends: base,
     compilerOptions: {
       paths: {
-        '@thunderclap/engine': [join(dts, 'index.d.ts')],
-        '@thunderclap/engine/*': [join(dts, '*', 'index.d.ts')],
+        '@thunderclap-engine/engine': [join(dts, 'index.d.ts')],
+        '@thunderclap-engine/engine/*': [join(dts, '*', 'index.d.ts')],
       },
       // `types` resolve from the project, whose node_modules this config cannot see from the
       // cache directory.

@@ -2,7 +2,7 @@
 // Find a game's uses of old engine names (ws/testing-2): the migration guide's find-your-uses
 // command, run from the game's folder against its installed engine.
 //
-//   node node_modules/@thunderclap/engine/scripts/check-deprecated-game.mjs [tsconfig.json ...]
+//   node node_modules/@thunderclap-engine/engine/scripts/check-deprecated-game.mjs [tsconfig.json ...]
 //
 // Two passes over the root files of each tsconfig (default `tsconfig.json` in the working
 // directory). The output lists engine names only: a deprecated platform name such as the DOM's
@@ -131,7 +131,7 @@ const identifierAt = (text, pos) => /^[A-Za-z_$][\w$]*/.exec(text.slice(pos))?.[
 export function removedRowsFor(d, text, rows, engineSpecifier, engineTypesAt) {
   const quoted = [...d.text.matchAll(/'((?:[^'\\]|\\.)*)'/g)].map((m) => m[1]);
   if (EXPORT_CODES.has(d.code)) {
-    // Module '"@thunderclap/engine/anim"' has no exported member 'BlendMode'.
+    // Module '"@thunderclap-engine/engine/anim"' has no exported member 'BlendMode'.
     const spec = /^"(.*)"$/.exec(quoted[0] ?? '')?.[1];
     const m = spec === undefined ? null : engineSpecifier.exec(spec);
     if (!m) return [];
@@ -201,14 +201,14 @@ function engineTypesAtFor(checker, file, sf, isEngine) {
  *
  * Options: `engine` (the engine's root; default the one this script is in), `guide` (the
  * migration guide's path; default the engine's), `engineSpecifier` (a RegExp matching an import
- * of the engine and capturing its module; default `@thunderclap/engine[/<module>]`).
+ * of the engine and capturing its module; default `@thunderclap-engine/engine[/<module>]`).
  */
 export function findGameDeprecations(
   tsconfig,
   {
     engine = engineRoot,
     guide = join(engine, 'docs/guide/migrating-to-v1.md'),
-    engineSpecifier = /^@thunderclap\/engine(?:\/([\w-]+))?$/,
+    engineSpecifier = /^@thunderclap-engine\/engine(?:\/([\w-]+))?$/,
   } = {},
 ) {
   const configs = (Array.isArray(tsconfig) ? tsconfig : [tsconfig]).map((c) => resolve(c));

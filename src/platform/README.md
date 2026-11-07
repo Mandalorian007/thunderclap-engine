@@ -6,7 +6,7 @@ The page the game runs in: the letterboxed canvas, WebGPU bring-up, DPR, page li
 
 <!-- snippet:check -->
 ```ts
-import { boot } from '@thunderclap/engine/platform';
+import { boot } from '@thunderclap-engine/engine/platform';
 
 const res = await boot(document.getElementById('app')!, { title: 'My Game' });
 if (res.ok) {
@@ -39,7 +39,7 @@ it boots by hand or needs one helper. It imports only `render` (formats, `Camera
 for XR and the compression feature list); no runtime dependencies.
 
 ```ts
-import { boot } from '@thunderclap/engine/platform';
+import { boot } from '@thunderclap-engine/engine/platform';
 
 const res = await boot(document.getElementById('app')!, { title: 'My Game', logicalWidth: 1920, logicalHeight: 1080 });
 if (!res.ok) return; // the unsupported screen is already shown (res.reason says why)

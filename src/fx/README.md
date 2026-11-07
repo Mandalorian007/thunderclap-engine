@@ -6,8 +6,8 @@ GPU particles and effects, trails, billboards, decals, a sky, water, debug lines
 
 <!-- snippet:check -->
 ```ts
-import { ParticleEmitter, ParticleSystem } from '@thunderclap/engine/fx';
-import type { Frame, Renderer } from '@thunderclap/engine/render';
+import { ParticleEmitter, ParticleSystem } from '@thunderclap-engine/engine/fx';
+import type { Frame, Renderer } from '@thunderclap-engine/engine/render';
 
 declare const renderer: Renderer;
 declare const frame: Frame;
@@ -53,7 +53,7 @@ GPU particles and allocation-free light helpers. No dependencies.
 ## Particles
 
 ```ts
-import { ParticleEmitter, ParticleSystem } from '@thunderclap/engine/fx';
+import { ParticleEmitter, ParticleSystem } from '@thunderclap-engine/engine/fx';
 
 const particles = new ParticleSystem(renderer, { capacity: 32768, floorY: 1000 });
 // createGame builds one as ctx.particles (options: CreateGameOptions.particles) and updates it.
@@ -90,7 +90,7 @@ frame.drawable(particles);   // order and layers optional, like any draw
 ### Seeded randomness (ws/fx-4)
 
 Nothing in `src/fx` calls `Math.random` (a test greps for it). Every draw goes through a core
-`Random` (`createRandom(seed)` from `@thunderclap/engine/core`):
+`Random` (`createRandom(seed)` from `@thunderclap-engine/engine/core`):
 
 - `ParticleSystemOptions.random?: Random` seeds the per-particle spawn seeds (the GPU kernel's
   only randomness); `system.random` is live. `emit(params, count, random?)` takes a stream for
@@ -279,7 +279,7 @@ const { position, velocity, age, life, radius } = await rain.readbackFields();
 #### Mesh emission
 
 ```ts
-import { buildEmitSurface } from '@thunderclap/engine/fx';
+import { buildEmitSurface } from '@thunderclap-engine/engine/fx';
 const surface = buildEmitSurface(sphere({ radius: 1 }), { alongNormal: true });
 glow.emit({ x, y, z, shape: surface, speed: [0.1, 0.3] }, 50);
 ```
@@ -295,7 +295,7 @@ glow.emit({ x, y, z, shape: surface, speed: [0.1, 0.3] }, 50);
 #### Effects
 
 ```ts
-import { createEffect, HIT_SPARK_EFFECT, MAGIC_AURA_EFFECT } from '@thunderclap/engine/fx';
+import { createEffect, HIT_SPARK_EFFECT, MAGIC_AURA_EFFECT } from '@thunderclap-engine/engine/fx';
 const sparks = createEffect(renderer, HIT_SPARK_EFFECT);
 sparks.play({ x: 640, y: 360 });              // one instance; play again for another
 const aura = createEffect(renderer, MAGIC_AURA_EFFECT, { textures: {} });
@@ -429,7 +429,7 @@ anchor (a `<label>-prev` buffer, 16 bytes per slot; a new or reused slot reads z
 first frame), blended by alpha; see *Aux targets* in `src/render/README.md`.
 
 ```ts
-import { createBillboards } from '@thunderclap/engine/fx';
+import { createBillboards } from '@thunderclap-engine/engine/fx';
 
 const bb = createBillboards(renderer, { capacity: 256, atlas: { size: 1024, font: 'sans-serif' } });
 const plate = bb.add({
@@ -526,7 +526,7 @@ Tests: `particles.test.ts`, `particles-world.test.ts` (fake GPU), `trail.test.ts
 triangle (`pass.draw(3)`), no asset, no instance. `frame.drawable(sky)` draws it.
 
 ```ts
-import { Sky } from '@thunderclap/engine/fx';
+import { Sky } from '@thunderclap-engine/engine/fx';
 
 const sky = new Sky(renderer, { stars: true });
 // each frame
@@ -565,7 +565,7 @@ live decal in one instanced draw. `frame.drawable(decals, order)` draws them aft
 they sit on; `decals.update(dt)` ages them.
 
 ```ts
-import { Decals } from '@thunderclap/engine/fx';
+import { Decals } from '@thunderclap-engine/engine/fx';
 
 const decals = new Decals(renderer, {
   texture: atlas, // any TextureLike
@@ -641,7 +641,7 @@ vertex layout, shaded as a water surface, no asset, no instance. `frame.drawable
 layers)` draws it; `water.update(dt)` advances its waves.
 
 ```ts
-import { Water, waterHeight } from '@thunderclap/engine/fx';
+import { Water, waterHeight } from '@thunderclap-engine/engine/fx';
 
 const water = new Water(renderer, { size: 60, segments: 64, displace: 0.1, level: 0 });
 // each frame

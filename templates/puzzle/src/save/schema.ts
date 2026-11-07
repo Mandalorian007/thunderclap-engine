@@ -2,7 +2,7 @@
  * The save: what survives a reload. One schema, one version number, and a migration for each
  * version that ever shipped. Bump `SAVE_VERSION` and add a `migrations[old]` entry whenever the
  * shape changes; the engine runs the chain, validates the result and backs up anything it cannot
- * read (see `@thunderclap/engine/save`).
+ * read (see `@thunderclap-engine/engine/save`).
  */
 import {
   createSaveStore,
@@ -11,7 +11,7 @@ import {
   type SaveStore,
   type SaveStoreOptions,
   s,
-} from '@thunderclap/engine/save';
+} from '@thunderclap-engine/engine/save';
 
 export const SAVE_GAME = 'template-puzzle';
 export const SAVE_VERSION = 2;

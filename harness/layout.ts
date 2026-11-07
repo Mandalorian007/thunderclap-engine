@@ -12,7 +12,14 @@
  * - `fill`: nothing; a dashed outline below the overlay shows `freeRect` (the world's space).
  * - `free`: one badge, the escape hatch, pinned to the top-right corner of `freeRect`.
  */
-import { applyTextScale, button, createOverlay, h, slider, toggle } from '@thunderclap/engine/ui';
+import {
+  applyTextScale,
+  button,
+  createOverlay,
+  h,
+  slider,
+  toggle,
+} from '@thunderclap-engine/engine/ui';
 import type { HarnessLayoutApi, HarnessLayoutState } from './layout-state';
 
 const root = document.getElementById('root') as HTMLElement;

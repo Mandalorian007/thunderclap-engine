@@ -1,5 +1,5 @@
 /**
- * Localisation (`@thunderclap/engine/i18n`) on every top-level matrix row, against
+ * Localisation (`@thunderclap-engine/engine/i18n`) on every top-level matrix row, against
  * harness/i18n.html (no WebGPU): the negotiated locale, plural forms in `en`, `ru` and `ar`
  * through the browser's `Intl.PluralRules`, a lazily loaded table, RTL direction reaching the
  * DOM, and `subscribe` driving the re-render.

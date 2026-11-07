@@ -24,9 +24,9 @@ import {
   type Socket,
   socketWorld,
   WORLD_NODE_FLOATS,
-} from '@thunderclap/engine/anim';
-import { GameLoop } from '@thunderclap/engine/core';
-import { boot } from '@thunderclap/engine/platform';
+} from '@thunderclap-engine/engine/anim';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   gpuDiagnostics,
@@ -36,7 +36,7 @@ import {
   Renderer,
   Transform,
   VERTEX_LAYOUT_3D,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { HarnessSocketsApi, HarnessSocketsState, Vec3 } from './sockets-state';
 
 const root = document.getElementById('root') as HTMLElement;

@@ -1,5 +1,5 @@
 /**
- * Anim-4 harness page: the ws/anim-4 pieces of `@thunderclap/engine/anim` on one procedural
+ * Anim-4 harness page: the ws/anim-4 pieces of `@thunderclap-engine/engine/anim` on one procedural
  * stick figure (no assets, no WebGPU), drawn with a 2D canvas through a perspective `Camera`, so
  * e2e/anim4.spec.ts can watch each on every matrix row. One mode per page load:
  *
@@ -33,9 +33,9 @@ import {
   type Skeleton,
   updateSpringChain,
   WORLD_NODE_FLOATS,
-} from '@thunderclap/engine/anim';
-import { computeLetterbox } from '@thunderclap/engine/platform';
-import { Camera } from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/anim';
+import { computeLetterbox } from '@thunderclap-engine/engine/platform';
+import { Camera } from '@thunderclap-engine/engine/render';
 import type { HarnessAnim4Api, HarnessAnim4Mode, HarnessAnim4State } from './anim4-state';
 
 const LOGICAL = { width: 800, height: 600 };

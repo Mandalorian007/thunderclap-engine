@@ -2,10 +2,10 @@
  * The smallest ThunderClap game: one scene, one glowing square that spins, and a click (or tap)
  * that makes it flare. Run it with `pnpm example`.
  */
-import { createGame } from '@thunderclap/engine';
-import type { Scene } from '@thunderclap/engine/core';
-import { type DrawParams, type Frame, hex } from '@thunderclap/engine/render';
-import { createSaveStore, s } from '@thunderclap/engine/save';
+import { createGame } from '@thunderclap-engine/engine';
+import type { Scene } from '@thunderclap-engine/engine/core';
+import { type DrawParams, type Frame, hex } from '@thunderclap-engine/engine/render';
+import { createSaveStore, s } from '@thunderclap-engine/engine/save';
 
 const ctx = await createGame({
   root: document.getElementById('app')!,

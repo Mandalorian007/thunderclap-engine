@@ -7,7 +7,7 @@ import type {
   GestureKind,
   GesturePhase,
   GesturePoint,
-} from '@thunderclap/engine/input';
+} from '@thunderclap-engine/engine/input';
 
 /** One gesture report from one tick. Idle `move` reports (nothing changed) are not logged. */
 export interface GestureLogEntry {

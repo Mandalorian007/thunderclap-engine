@@ -28,14 +28,14 @@ matrices the vertex shader reads, and `createStandardMaterial({ skin })` makes a
 that uses it.
 
 ```ts
-import type { AnimationClip } from '@thunderclap/engine/anim';
-import { interleaveSkinned, parseGltf, skeletonFromSkin } from '@thunderclap/engine/assets';
+import type { AnimationClip } from '@thunderclap-engine/engine/anim';
+import { interleaveSkinned, parseGltf, skeletonFromSkin } from '@thunderclap-engine/engine/assets';
 import {
   createStandardMaterial,
   type Renderer,
   SkinPalette,
   VERTEX_LAYOUT_SKINNED,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 
 export async function loadHero(renderer: Renderer, url: string) {
   const doc = parseGltf(await (await fetch(url)).arrayBuffer());
@@ -81,9 +81,9 @@ draw the mesh with `palette.params(0)`, the draw parameters that name slot 0 (th
 the w of `params`).
 
 ```ts
-import { AnimationMixer, type Skeleton, skinPose } from '@thunderclap/engine/anim';
-import type { Frame, Material, Mesh, SkinPalette } from '@thunderclap/engine/render';
-import { Transform } from '@thunderclap/engine/render';
+import { AnimationMixer, type Skeleton, skinPose } from '@thunderclap-engine/engine/anim';
+import type { Frame, Material, Mesh, SkinPalette } from '@thunderclap-engine/engine/render';
+import { Transform } from '@thunderclap-engine/engine/render';
 
 export function createHeroRig(skeleton: Skeleton) {
   const mixer = new AnimationMixer(skeleton, { maxActions: 8 });
@@ -123,7 +123,7 @@ you pose the second. Or pass each character its own array as the last argument:
 out while another fades in, so a walk turns into a run with no pop.
 
 ```ts
-import type { AnimationClip, AnimationMixer } from '@thunderclap/engine/anim';
+import type { AnimationClip, AnimationMixer } from '@thunderclap-engine/engine/anim';
 
 export function blendDemo(mixer: AnimationMixer, clips: Map<string, AnimationClip>) {
   const idle = mixer.play(clips.get('idle')!);
@@ -151,7 +151,7 @@ state machine over the mixer. You set parameters, and the graph picks the state 
 the fades.
 
 ```ts
-import { type AnimationClip, type AnimationMixer, createAnimGraph } from '@thunderclap/engine/anim';
+import { type AnimationClip, type AnimationMixer, createAnimGraph } from '@thunderclap-engine/engine/anim';
 
 type Clips = Record<'idle' | 'walk' | 'run' | 'attack', AnimationClip>;
 
@@ -179,7 +179,7 @@ Each frame, set the parameters and update the graph instead of the mixer. The gr
 the mixer for you.
 
 ```ts
-import type { AnimGraph } from '@thunderclap/engine/anim';
+import type { AnimGraph } from '@thunderclap-engine/engine/anim';
 
 export function tickGraph(graph: AnimGraph, dt: number, speed01: number, attackPressed: boolean) {
   graph.set('speed', speed01);
@@ -201,8 +201,8 @@ A socket is a point fixed to one joint, with an offset. `createSocket` names the
 skeleton. Then draw the prop with that transform.
 
 ```ts
-import { attachTransform, createSocket, type Skeleton } from '@thunderclap/engine/anim';
-import { type Frame, type Material, type Mesh, Transform } from '@thunderclap/engine/render';
+import { attachTransform, createSocket, type Skeleton } from '@thunderclap-engine/engine/anim';
+import { type Frame, type Material, type Mesh, Transform } from '@thunderclap-engine/engine/render';
 
 export function swordSocket(skeleton: Skeleton) {
   const socket = createSocket(skeleton, 'hand.R', { position: [0, 0.1, 0] });
@@ -228,8 +228,8 @@ per slot.
 turns it into an orbit camera behind a target. Create both once at startup.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import { Follow, Look } from '@thunderclap/engine/input';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import { Follow, Look } from '@thunderclap-engine/engine/input';
 
 export function setupCamera(ctx: EngineCtx) {
   const look = new Look({
@@ -262,7 +262,7 @@ Move relative to the camera. `look.move.y > 0` is forward and `follow.yaw` is th
 heading, where 0 faces -z and positive turns right.
 
 ```ts
-import type { Follow, Look } from '@thunderclap/engine/input';
+import type { Follow, Look } from '@thunderclap-engine/engine/input';
 
 const hero = { position: new Float32Array(3), yaw: 0 };
 

@@ -1,5 +1,5 @@
 /**
- * `@thunderclap/engine/voxel`: block grids into chunk meshes and onto the screen. A
+ * `@thunderclap-engine/engine/voxel`: block grids into chunk meshes and onto the screen. A
  * `VoxelGrid` of block ids with per-chunk dirty flags, a greedy mesher with baked ambient
  * occlusion (`meshChunk`, pure, Worker-ready) and its Worker bridge (`createVoxelMesher`,
  * `installVoxelMesherWorker`), a chunk renderer that owns one mesh per non-empty chunk and

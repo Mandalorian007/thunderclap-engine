@@ -114,7 +114,7 @@ export default defineConfig<HarnessOptions>({
     // One Vite dev server per template for e2e/templates.spec.ts (the template's own `pnpm dev`
     // on a fixed port): cheaper than a build and the same code path a developer runs.
     ...(Object.keys(TEMPLATE_PORTS) as TemplateName[]).map((name) => ({
-      command: `pnpm --filter @thunderclap/template-${name} exec vite --port ${TEMPLATE_PORTS[name]} --strictPort --host 127.0.0.1`,
+      command: `pnpm --filter @thunderclap-engine/template-${name} exec vite --port ${TEMPLATE_PORTS[name]} --strictPort --host 127.0.0.1`,
       url: templateUrl(name),
       reuseExistingServer: !isCI,
       timeout: 60_000,

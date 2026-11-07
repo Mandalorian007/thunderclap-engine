@@ -24,8 +24,8 @@ import {
   skinPose,
   twoBoneIk,
   WORLD_NODE_FLOATS,
-} from '@thunderclap/engine/anim';
-import { interleaveSkinned, parseGltf, skeletonFromSkin } from '@thunderclap/engine/assets';
+} from '@thunderclap-engine/engine/anim';
+import { interleaveSkinned, parseGltf, skeletonFromSkin } from '@thunderclap-engine/engine/assets';
 import {
   createStandardMaterial,
   type Frame,
@@ -36,7 +36,7 @@ import {
   SkinPalette,
   Transform,
   VERTEX_LAYOUT_SKINNED,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { Ground } from '../world/ground';
 import { groundHeight } from '../world/ground';
 import { type Controller, createController, moveController, RUN_SPEED } from './controller';

@@ -1,5 +1,5 @@
 /**
- * Geometry page: every builder in `@thunderclap/engine/geom` in two rows (primitives in front,
+ * Geometry page: every builder in `@thunderclap-engine/engine/geom` in two rows (primitives in front,
  * sweeps and shapes behind), lit by the engine's lighting block and slowly turning, over a
  * heightfield ground built from a sine bump map (`heightfieldGeometry`). Nothing here is engine
  * code beyond the imports: a game would write the same page. e2e/geom.spec.ts checks the shape
@@ -7,7 +7,7 @@
  * right-handed throughout, and that the height the page reads under the camera matches the map it
  * was built from.
  */
-import { GameLoop } from '@thunderclap/engine/core';
+import { GameLoop } from '@thunderclap-engine/engine/core';
 import {
   arch,
   box,
@@ -28,8 +28,8 @@ import {
   torus,
   transformGeometry,
   tube,
-} from '@thunderclap/engine/geom';
-import { boot } from '@thunderclap/engine/platform';
+} from '@thunderclap-engine/engine/geom';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   type CameraPoint,
@@ -39,7 +39,7 @@ import {
   type Mesh,
   Renderer,
   Transform,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import {
   ALL_SHAPE_NAMES,
   bumpHeight,

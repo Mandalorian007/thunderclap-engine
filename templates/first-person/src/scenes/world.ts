@@ -14,15 +14,15 @@
  * - Landmarks carry a DOM label through `ui.anchors` and a hit box on `ctx.pointers`, so a tap or
  *   a click without the pointer lock inspects them too.
  */
-import type { Scene } from '@thunderclap/engine/core';
-import { ParticleEmitter, ParticleSystem } from '@thunderclap/engine/fx';
+import type { Scene } from '@thunderclap-engine/engine/core';
+import { ParticleEmitter, ParticleSystem } from '@thunderclap-engine/engine/fx';
 import {
   aabbTester,
   createRay,
   type HitTester,
   type RayBox,
   screenRay,
-} from '@thunderclap/engine/input';
+} from '@thunderclap-engine/engine/input';
 import {
   type Frame,
   type InstanceParams,
@@ -32,8 +32,8 @@ import {
   type Mesh,
   Transform,
   VERTEX_LAYOUT_3D,
-} from '@thunderclap/engine/render';
-import { h } from '@thunderclap/engine/ui';
+} from '@thunderclap-engine/engine/render';
+import { h } from '@thunderclap-engine/engine/ui';
 import { blockLayers } from '../art/blocks';
 import type { GameCtx } from '../ctx';
 import {

@@ -26,7 +26,7 @@
 // Engine code is imported from the TypeScript sources through Node's own type stripping
 // (`module.stripTypeScriptTypes` in transform mode, Node >= 22.13) plus a resolve hook for the
 // engine's extensionless relative imports: no build step, no dependency, the same modules the
-// browser runs. In this repo `@thunderclap/engine/*` self-references the package; in a game it is
+// browser runs. In this repo `@thunderclap-engine/engine/*` self-references the package; in a game it is
 // the installed package. Exit 1 on misuse with the usage text, 2 when a bake fails.
 import { createHash } from 'node:crypto';
 import {
@@ -118,9 +118,9 @@ export async function loadEngine() {
     },
   });
   const [nav, geom, assets] = await Promise.all([
-    import('@thunderclap/engine/nav'),
-    import('@thunderclap/engine/geom'),
-    import('@thunderclap/engine/assets'),
+    import('@thunderclap-engine/engine/nav'),
+    import('@thunderclap-engine/engine/geom'),
+    import('@thunderclap-engine/engine/assets'),
   ]);
   engine = { nav, geom, assets };
   return engine;
@@ -416,7 +416,7 @@ async function main(argv) {
   return 0;
 }
 
-// Executed directly (`pnpm bake`, or a game's `node node_modules/@thunderclap/engine/scripts/bake.mjs`,
+// Executed directly (`pnpm bake`, or a game's `node node_modules/@thunderclap-engine/engine/scripts/bake.mjs`,
 // where argv[1] goes through the package symlink), not imported by the tests.
 const self = fileURLToPath(import.meta.url);
 const argv1 = process.argv[1] ? resolve(process.argv[1]) : '';

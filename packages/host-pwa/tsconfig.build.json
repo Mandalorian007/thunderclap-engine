@@ -9,8 +9,8 @@
     "rootDir": "src",
     "types": ["@webgpu/types"],
     "paths": {
-      "@thunderclap/engine": ["../../dist/index.d.ts"],
-      "@thunderclap/engine/*": ["../../dist/*/index.d.ts"]
+      "@thunderclap-engine/engine": ["../../dist/index.d.ts"],
+      "@thunderclap-engine/engine/*": ["../../dist/*/index.d.ts"]
     }
   },
   "include": ["src"],

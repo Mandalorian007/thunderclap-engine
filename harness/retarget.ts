@@ -1,5 +1,5 @@
 /**
- * Retarget harness page: `createRetargetMap` and `retargetPose` from `@thunderclap/engine/anim`
+ * Retarget harness page: `createRetargetMap` and `retargetPose` from `@thunderclap-engine/engine/anim`
  * on two procedural stick figures (no assets, no WebGPU), drawn with a 2D canvas, so
  * e2e/retarget.spec.ts can watch a clip cross rigs on every matrix row. Noun-free.
  *
@@ -21,8 +21,8 @@ import {
   retargetPose,
   type Skeleton,
   WORLD_NODE_FLOATS,
-} from '@thunderclap/engine/anim';
-import { computeLetterbox } from '@thunderclap/engine/platform';
+} from '@thunderclap-engine/engine/anim';
+import { computeLetterbox } from '@thunderclap-engine/engine/platform';
 import type { HarnessRetargetApi, HarnessRetargetState, Vec3 } from './retarget-state';
 
 const LOGICAL = { width: 800, height: 600 };

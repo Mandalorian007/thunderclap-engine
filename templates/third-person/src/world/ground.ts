@@ -4,7 +4,7 @@
  * `heightfieldGeometry` and the controller walks it with `heightAt`. Everything derives from the
  * sine table below, so the Worker-free test and the page agree.
  */
-import { createHeightfield, type Heightfield, heightAt } from '@thunderclap/engine/geom';
+import { createHeightfield, type Heightfield, heightAt } from '@thunderclap-engine/engine/geom';
 
 /** Half the arena's side, world units; the controller keeps everyone inside. */
 export const HALF = 23;

@@ -1,4 +1,4 @@
-# `@thunderclap/engine/voxel`
+# `@thunderclap-engine/engine/voxel`
 
 Block grids into chunk meshes and onto the screen: a `VoxelGrid` with per-chunk dirty flags, a greedy mesher with baked AO that runs in a Worker, a chunk renderer that culls and remeshes in place, a picking ray and the WGSL prelude for block materials. The game ships the blocks: what each id is, which texture layer each face shows and what a click does. No allocation per frame after the first remeshes.
 
@@ -6,8 +6,8 @@ Block grids into chunk meshes and onto the screen: a `VoxelGrid` with per-chunk 
 
 <!-- snippet:check -->
 ```ts
-import { createVoxelChunks, createVoxelGrid, createVoxelHit, raycastVoxels } from '@thunderclap/engine/voxel';
-import type { Camera, Frame, Material, Renderer } from '@thunderclap/engine/render';
+import { createVoxelChunks, createVoxelGrid, createVoxelHit, raycastVoxels } from '@thunderclap-engine/engine/voxel';
+import type { Camera, Frame, Material, Renderer } from '@thunderclap-engine/engine/render';
 
 declare const renderer: Renderer;
 declare const material: Material; // a block material built on VOXEL_WGSL (Quick start below)
@@ -71,7 +71,7 @@ write into state they own.
 ```ts
 import {
   createVoxelChunks, createVoxelGrid, createVoxelHit, raycastVoxels, VOXEL_WGSL,
-} from '@thunderclap/engine/voxel';
+} from '@thunderclap-engine/engine/voxel';
 
 const grid = createVoxelGrid({ sizeX: 64, sizeY: 32, sizeZ: 64, chunk: 16 });
 grid.fill((x, y, z) => (y < heightAt(x, z) ? STONE : 0)); // block ids are the game's
@@ -160,7 +160,7 @@ alpha reaches the fragment shader intact.
 `VOXEL_WGSL` is the prelude a block material prepends to its own WGSL: `voxel_layer(color)`
 (the layer, `u32`), `voxel_ao(color)` (the brightness) and `voxel_uv_wrap(uv)` (`fract`, for
 atlases that cannot use a `repeat` sampler). It declares no bindings or entry points. The
-`'nearest-mip-repeat'` sampler (`@thunderclap/engine/render`) is the one block faces want:
+`'nearest-mip-repeat'` sampler (`@thunderclap-engine/engine/render`) is the one block faces want:
 nearest texels, linear mips, wrapping.
 
 `meshChunk(grid, cx, cy, cz, opts, out)` (`MeshChunkOptions`: `ao`, `aoCurve`, `layerOf`,
@@ -177,7 +177,7 @@ in sync through the grid's own `subscribe`. In the Worker script:
 
 ```ts
 // blocks-worker.ts
-import { installVoxelMesherWorker } from '@thunderclap/engine/voxel';
+import { installVoxelMesherWorker } from '@thunderclap-engine/engine/voxel';
 installVoxelMesherWorker({ layerOf: (block) => block - 1 });
 ```
 

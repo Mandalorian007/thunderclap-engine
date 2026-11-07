@@ -16,15 +16,15 @@ import {
   quatMultiply,
   type Skeleton,
   WORLD_NODE_FLOATS,
-} from '@thunderclap/engine/anim';
+} from '@thunderclap-engine/engine/anim';
 import {
   box,
   type Geometry,
   mergeGeometry,
   type Rgba,
   transformGeometry,
-} from '@thunderclap/engine/geom';
-import { Transform } from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/geom';
+import { Transform } from '@thunderclap-engine/engine/render';
 import { MeshBuilder, type MeshData, type Rgb } from './geom';
 
 export const NODES = {

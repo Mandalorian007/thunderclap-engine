@@ -1,5 +1,5 @@
 import { join, resolve } from 'node:path';
-import { safeExternalUrl } from '@thunderclap/engine/platform';
+import { safeExternalUrl } from '@thunderclap-engine/engine/platform';
 import { describe, expect, it } from 'vitest';
 import {
   APP_ORIGIN,

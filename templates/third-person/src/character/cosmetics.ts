@@ -7,7 +7,7 @@
  * Socket space is the joint's: at rest the joint axes are the world axes, the character faces -Z,
  * +Y is up, so "behind the back" is +Z and "down the hand" is -Y.
  */
-import type { SocketLocal } from '@thunderclap/engine/anim';
+import type { SocketLocal } from '@thunderclap-engine/engine/anim';
 import {
   box,
   cylinder,
@@ -17,7 +17,7 @@ import {
   sphere,
   torus,
   transformGeometry,
-} from '@thunderclap/engine/geom';
+} from '@thunderclap-engine/engine/geom';
 import { J } from './rig';
 
 export type SlotName = 'head' | 'back' | 'hand-right';

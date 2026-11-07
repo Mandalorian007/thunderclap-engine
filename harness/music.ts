@@ -23,7 +23,7 @@ import {
   recipes,
   type SoundSpec,
   type Voice,
-} from '@thunderclap/engine/audio';
+} from '@thunderclap-engine/engine/audio';
 import type { HarnessMusicApi, HarnessMusicState } from './music-state';
 
 const BPM = 120;

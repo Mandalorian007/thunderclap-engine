@@ -4,8 +4,8 @@
  * have something to blend. `loadTextureArray` uploads them as one `texture_2d_array`; the
  * mesher writes each face's layer into the vertex colour's alpha.
  */
-import { hash2f } from '@thunderclap/engine/core';
-import type { PixelSource } from '@thunderclap/engine/render';
+import { hash2f } from '@thunderclap-engine/engine/core';
+import type { PixelSource } from '@thunderclap-engine/engine/render';
 import { LAYER_COUNT } from '../world/terrain';
 
 export const BLOCK_TEXELS = 16;

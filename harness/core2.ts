@@ -1,5 +1,5 @@
 /**
- * Core-2 page (ws/core-2): the deterministic utilities in `@thunderclap/engine/core`, one mode per
+ * Core-2 page (ws/core-2): the deterministic utilities in `@thunderclap-engine/engine/core`, one mode per
  * query flag.
  *
  * - `?random` (default): 2000 points scattered by two streams forked from one seed, the left half
@@ -15,7 +15,7 @@
  *
  * Nothing here is engine code beyond the core module, the 2D renderer and `createGame`.
  */
-import { createGame, type EngineCtx } from '@thunderclap/engine';
+import { createGame, type EngineCtx } from '@thunderclap-engine/engine';
 import {
   createNoise,
   createRandom,
@@ -23,8 +23,8 @@ import {
   GameLoop,
   type Random,
   type Scene,
-} from '@thunderclap/engine/core';
-import { boot } from '@thunderclap/engine/platform';
+} from '@thunderclap-engine/engine/core';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   type Camera,
   type DrawParams,
@@ -32,7 +32,7 @@ import {
   gpuDiagnostics,
   installGpuErrorLogging,
   Renderer,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { Core2Mode, HarnessCore2Api, HarnessCore2State } from './core2-state';
 
 const root = document.getElementById('root') as HTMLElement;

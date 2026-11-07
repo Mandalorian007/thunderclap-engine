@@ -1,5 +1,5 @@
 /**
- * `@thunderclap/engine/tween`: numbers over time. An easing table, property and value tweens,
+ * `@thunderclap-engine/engine/tween`: numbers over time. An easing table, property and value tweens,
  * sequences and parallel groups, loops, yoyo, delays and springs, ticked by `Tweens.update(dt)`
  * with no allocation after setup. See README.md.
  */

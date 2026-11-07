@@ -3,7 +3,7 @@
  * hills. `?seed=N` fixes it. Every non-water tile is reachable from the player spawn (the
  * generator floods from there and drowns what it cannot reach), so a unit is never boxed in.
  */
-import { createRandom } from '@thunderclap/engine/core';
+import { createRandom } from '@thunderclap-engine/engine/core';
 import { MAP } from './iso';
 
 export type Terrain = 0 | 1 | 2;

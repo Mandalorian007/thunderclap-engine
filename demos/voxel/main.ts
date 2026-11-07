@@ -22,11 +22,11 @@
  * The game keeps its blocks, its noise, its textures and its controls (VISION rule 5); the
  * geometry is the engine's. `?still` parks the day cycle, `?time=0.25` sets it.
  */
-import { GameLoop } from '@thunderclap/engine/core';
-import { flicker, Sky, Water } from '@thunderclap/engine/fx';
-import { Gestures, Input, Look, shapeStick } from '@thunderclap/engine/input';
-import { boot } from '@thunderclap/engine/platform';
-import { PostStack } from '@thunderclap/engine/post';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { flicker, Sky, Water } from '@thunderclap-engine/engine/fx';
+import { Gestures, Input, Look, shapeStick } from '@thunderclap-engine/engine/input';
+import { boot } from '@thunderclap-engine/engine/platform';
+import { PostStack } from '@thunderclap-engine/engine/post';
 import {
   Camera,
   gpuDiagnostics,
@@ -34,8 +34,8 @@ import {
   Lights,
   loadTextureArray,
   Renderer,
-} from '@thunderclap/engine/render';
-import { createOverlay } from '@thunderclap/engine/ui';
+} from '@thunderclap-engine/engine/render';
+import { createOverlay } from '@thunderclap-engine/engine/ui';
 import {
   createVoxelChunks,
   createVoxelGrid,
@@ -43,7 +43,7 @@ import {
   createVoxelMesher,
   raycastVoxels,
   VOXEL_WGSL,
-} from '@thunderclap/engine/voxel';
+} from '@thunderclap-engine/engine/voxel';
 import { blockIcon, paintBlockTextures } from './textures';
 import {
   Block,

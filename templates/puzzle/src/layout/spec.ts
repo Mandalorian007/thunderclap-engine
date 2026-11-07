@@ -6,7 +6,7 @@
  *
  * Tracks are CSS px, `'fill'`, or a fraction of the safe area clamped to `[min, max]`.
  */
-import type { LayoutSpec } from '@thunderclap/engine/ui';
+import type { LayoutSpec } from '@thunderclap-engine/engine/ui';
 
 export const layoutSpec: LayoutSpec = {
   forms: {

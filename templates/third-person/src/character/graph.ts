@@ -9,7 +9,7 @@ import {
   type AnimGraph,
   type AnimGraphDesc,
   createAnimGraph,
-} from '@thunderclap/engine/anim';
+} from '@thunderclap-engine/engine/anim';
 import { RUN_SPEED, WALK_SPEED } from './controller';
 
 export type Clips = Record<'idle' | 'walk' | 'run' | 'attack' | 'hit', AnimationClip>;

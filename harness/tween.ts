@@ -8,15 +8,15 @@
  * Every run is one tween per ease, no loops, so `active` returns to 0 when all have landed and
  * `samples[name]` is exactly 1 for each; `restart()` runs it again (e2e/tween.spec.ts).
  */
-import { GameLoop } from '@thunderclap/engine/core';
-import { boot } from '@thunderclap/engine/platform';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   type DrawParams,
   gpuDiagnostics,
   installGpuErrorLogging,
   Renderer,
-} from '@thunderclap/engine/render';
-import { createTweens, type Ease, ease, type SpringEase } from '@thunderclap/engine/tween';
+} from '@thunderclap-engine/engine/render';
+import { createTweens, type Ease, ease, type SpringEase } from '@thunderclap-engine/engine/tween';
 import type { HarnessTweenApi, HarnessTweenState } from './tween-state';
 
 const root = document.getElementById('root') as HTMLElement;

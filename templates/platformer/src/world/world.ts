@@ -10,7 +10,7 @@ import {
   type Renderer,
   type TileLayer,
   type UvRect,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import { HAZARD, type Level, ONE_WAY, SOLID, TILE } from '../levels/format';
 import { ATLAS_COLS, ATLAS_ROWS, CELL, cellUv } from './atlas';
 import { createParallax, type Parallax } from './parallax';

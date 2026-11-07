@@ -7,10 +7,10 @@
  * It is also what `pnpm desktop:dev` and `pnpm desktop:build` show until a game supplies its
  * own renderer (ws/last-rune-desktop).
  */
-import { GameLoop } from '@thunderclap/engine/core';
-import { createWebHost, type Host, setDefaultHost } from '@thunderclap/engine/host';
-import { boot } from '@thunderclap/engine/platform';
-import { createSaveStore, s } from '@thunderclap/engine/save';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { createWebHost, type Host, setDefaultHost } from '@thunderclap-engine/engine/host';
+import { boot } from '@thunderclap-engine/engine/platform';
+import { createSaveStore, s } from '@thunderclap-engine/engine/save';
 import { createElectronHost, electronBridge } from '../src';
 import type { DesktopProbe, DesktopSaveResult, DesktopState } from './state';
 

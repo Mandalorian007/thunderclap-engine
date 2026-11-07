@@ -3,7 +3,7 @@
  * engine's fake host instead of a browser: a finished run survives a reload, and a host whose
  * storage is blocked keeps the game playable in memory (the title shows a "not saved" toast).
  */
-import { createFakeHost, createFixedClock } from '@thunderclap/engine/testing';
+import { createFakeHost, createFixedClock } from '@thunderclap-engine/engine/testing';
 import { describe, expect, it } from 'vitest';
 import { createProgressStore, recordRun, START_LIVES } from './schema';
 

@@ -3,7 +3,7 @@
  * e2e/host.spec.ts: the web host's lifecycle, haptics and safe area as `createGame` wires them.
  * Shared by the page and the spec.
  */
-import type { Rect } from '@thunderclap/engine/ui';
+import type { Rect } from '@thunderclap-engine/engine/ui';
 
 export interface HarnessHostState {
   /** True once `createGame` resolved (whether or not WebGPU came up). */

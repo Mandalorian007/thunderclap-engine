@@ -6,7 +6,7 @@
 //
 // Copies templates/<name> (default: puzzle) to <dir> as a standalone project on the engine:
 // node_modules, dist, .turbo and lockfiles stay behind; package.json is rewritten in place (name
-// from --name or the directory's basename, private, @thunderclap/engine from "workspace:*" to
+// from --name or the directory's basename, private, @thunderclap-engine/engine from "workspace:*" to
 // --engine or the default below, monorepo-only scripts dropped); the repo's biome.json, a
 // .gitignore and a README.md are written (the template's own README under a generated title and
 // intro, when it has one); the template's CLAUDE.md stays, minus its references to
@@ -32,7 +32,7 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const ENGINE = '@thunderclap/engine';
+export const ENGINE = '@thunderclap-engine/engine';
 export const ENGINE_REPO = 'https://github.com/Mandalorian007/thunderclap-engine';
 /**
  * Whether the engine is on the npm registry. While false, the default engine spec links the clone

@@ -10,7 +10,7 @@ STATUS row, *done when*: `templates/first-person`: `createGame({ sim: false })` 
 
 ## Scope
 
-- `templates/first-person/` as a private workspace package `@thunderclap/template-first-person` depending on `@thunderclap/engine` via `workspace:*`. `templates/*` is already in the workspace.
+- `templates/first-person/` as a private workspace package `@thunderclap-engine/template-first-person` depending on `@thunderclap-engine/engine` via `workspace:*`. `templates/*` is already in the workspace.
 - A small but real world: a `world/` folder with a pure, engine-free height-field or box-stack generator and a mesher that runs in a Worker and posts `MeshUpdate`-shaped buffers with bounds and a per-face layer index in vertex colour alpha (the convention `harness/stream-worker.ts` uses). Unit tests on the generator and mesher. No game nouns reach the engine; "chunk", "block", "voxel" are the template's words, fine inside `templates/`.
 - Scene: `Look` for yaw/pitch/move with pointer lock requested on click, touch zones on phones, sticks on pad; walking on the height field (a tiny collision in the template, not the engine); sun with `shadow`, fog on; rain or snow through a world-space `ParticleSystem`; three anchored labels on landmarks; a HUD through `ctx.ui.layout` with a crosshair and a "click to look" prompt that hides when locked.
 - `CLAUDE.md`: the engine concepts by name (`createGame`, `EngineCtx`, `Camera.perspective`, `Look`, `Mesh.update`/`bounds`, `loadTextureArray`, `Lights.sun.shadow`, `engine_fog`, `ParticleSystem space: 'world'`, `ui.anchors`, `ctx.pointers` hits), the rules of the house, the commands.

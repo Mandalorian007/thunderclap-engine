@@ -17,8 +17,8 @@
  *   renderer frustum-culls the chunks (`state.stats.culled`); `api.look('edge')` aims the
  *   camera at one corner of the grid so about half of them leave the frustum.
  */
-import { GameLoop } from '@thunderclap/engine/core';
-import { boot } from '@thunderclap/engine/platform';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   type CameraPoint,
@@ -31,7 +31,7 @@ import {
   Renderer,
   Transform,
   VERTEX_LAYOUT_3D,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import {
   type HarnessStreamApi,
   type HarnessStreamState,

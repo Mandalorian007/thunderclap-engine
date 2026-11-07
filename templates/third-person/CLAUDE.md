@@ -1,6 +1,6 @@
 # Ember Reach: a ThunderClap third-person template
 
-This folder is a complete, copyable third-person action game on `@thunderclap/engine`: a skinned
+This folder is a complete, copyable third-person action game on `@thunderclap-engine/engine`: a skinned
 biped on a rolling heightfield with an orbit camera, an attack with root motion, foot IK, a head
 that watches the nearest enemy, three cosmetic sockets and four roaming enemies with name plates.
 To start a new game: copy it, rename the package in `package.json`, replace the rig or the arena,
@@ -9,7 +9,7 @@ read the engine.
 
 The character is **generated, not loaded**: `character/rig.ts` writes a glb (`buildCharacterGlb`)
 with a 14-joint skeleton, a boxy skinned mesh and five clips, and the scene parses it through
-`@thunderclap/engine/assets` exactly as it would parse a file. No binary asset is committed. To use
+`@thunderclap-engine/engine/assets` exactly as it would parse a file. No binary asset is committed. To use
 a real model, replace the `buildCharacterGlb()` call in `character/character.ts` with
 `await fetch(url).then(r => r.arrayBuffer())` and keep the joint and clip names (`rig.ts`).
 
@@ -18,7 +18,7 @@ a real model, replace the `buildCharacterGlb()` call in `character/character.ts`
 - `pnpm dev`: Vite dev server at `http://127.0.0.1:5173` (from the repo root: `pnpm template:third-person`). WASD moves in the camera frame, Shift runs, Space or F attacks, a mouse drag orbits, the wheel zooms, 1 / 2 / 3 cycle the head, back and hand cosmetics (or the HUD buttons), R respawns. On a phone the left half is a move stick, the right half orbits, a pinch zooms and a tap attacks; on a pad the sticks move and orbit, A attacks, L3 runs, the shoulders zoom, X / Y / B cycle cosmetics. The repo's `pnpm test:e2e` boots the page once per device row (`e2e/templates.spec.ts`) and reads `window.__template` (`{ scene, frames, ... }`, set in `main.ts`).
 - `pnpm bake`: bakes `assets/stones.json` into `public/baked/stones.coll` through the engine's `scripts/bake.mjs` (`bake.config.json`; `pnpm bake --check` exits 1 when the input changed since the last bake). The folder is gitignored and optional: the scene builds the same collider at runtime when the file is missing. When the blocks in `world/ground.ts` change, regenerate the JSON from `stoneGeometryJson(createGround())` (`stones.test.ts` fails until the file matches) and bake again.
 - `pnpm typecheck`, `pnpm lint`, `pnpm test`: `tsc`, Biome (the repo's `biome.json`), Vitest. `pnpm check` runs all three; the repo root's `pnpm check` runs it too (`check:template-third-person`).
-- Tests are product tests only (`src/**/*.test.ts`): the rig generator (joint count, clip durations, weights that sum to 1), the cosmetics table, the controller over the heightfield and the enemy roaming rule, plus `character/character.test.ts`, which runs the character on the engine's fake GPU and a fixed clock (`createFakeDevice`, `fakeRendererGpu`, `createFixedClock` from `@thunderclap/engine/testing`): the pose updates, an attack locks, connects once and lunges by root motion, and the draws raise no device errors. The engine verifies the platform (WebGPU, skinning, IK, input, layout) itself.
+- Tests are product tests only (`src/**/*.test.ts`): the rig generator (joint count, clip durations, weights that sum to 1), the cosmetics table, the controller over the heightfield and the enemy roaming rule, plus `character/character.test.ts`, which runs the character on the engine's fake GPU and a fixed clock (`createFakeDevice`, `fakeRendererGpu`, `createFixedClock` from `@thunderclap-engine/engine/testing`): the pose updates, an attack locks, connects once and lunges by root motion, and the draws raise no device errors. The engine verifies the platform (WebGPU, skinning, IK, input, layout) itself.
 
 ## Shape
 
@@ -46,11 +46,11 @@ src/ui/hud.ts               health meter, kill count, cosmetic buttons and the p
 3. **A client keeps nothing.** `sim: false` and no `save`: the loop runs at render rate (`update(dt)` gets the real frame delta) and the engine never touches storage.
 4. **Zero allocations per frame.** `update` and `render` mutate pre-built `Transform`s, `Float32Array`s and emit params; the pose, world and palette buffers are allocated once in `createCharacter`.
 5. **Devices never leak past `ctx.ts` and `Look`.** Scenes read `look.move`, `look.look`, `look.zoom` and actions (`input.pressed('attack')`), never keys, buttons, touches or `movementX`. The orbit drag is the `Look`'s (`mode: 'orbit'`), not the page's.
-6. **Import only the public map.** `@thunderclap/engine` and `@thunderclap/engine/<module>` (`core`, `render`, `input`, `ui`, `fx`, `anim`, `assets`, `geom`, ...). Never a path into the engine's `src/`.
+6. **Import only the public map.** `@thunderclap-engine/engine` and `@thunderclap-engine/engine/<module>` (`core`, `render`, `input`, `ui`, `fx`, `anim`, `assets`, `geom`, ...). Never a path into the engine's `src/`.
 
 ## The engine's nouns
 
-- **`createGame(opts)`** (`@thunderclap/engine`): boots WebGPU on a letterboxed canvas and returns the **`EngineCtx`** (or `null` when WebGPU is missing). Used here: `root`, `title`, `design` (1920×1080), `sim: false`, `input: { bindings, buttonKeys }`. `main.ts` widens it with `look`, `follow`, `player`, `hud` (`GameCtx`).
+- **`createGame(opts)`** (`@thunderclap-engine/engine`): boots WebGPU on a letterboxed canvas and returns the **`EngineCtx`** (or `null` when WebGPU is missing). Used here: `root`, `title`, `design` (1920×1080), `sim: false`, `input: { bindings, buttonKeys }`. `main.ts` widens it with `look`, `follow`, `player`, `hud` (`GameCtx`).
 - **`Look`** (`input`): `new Look({ mode: 'orbit', keys, touch: { moveZone: 'left' }, zoom: { wheel, pinch, pad: 'shoulders' } })`, linked with `ctx.input.setLook(look)`. `mode: 'orbit'`: a primary-button mouse or pen drag on the canvas turns the view at `sensitivity` with no pointer lock (the linked input feeds it and keeps the drag from the gestures). Each tick `look.move.x/y` is the walk vector, `look.look.dx/dy` the orbit deltas (the drag, a touch drag in the look zone, the right stick) and **`look.zoom`** the zoom axis (wheel notches, pinch, shoulders; positive is closer).
 - **`Follow`** (`input`): `new Follow(ctx.camera, { distance, minDistance, maxDistance, shoulder: [right, up], eyeHeight, smoothing, pitch, pitchMin, pitchMax, zoomStep })`; `follow.target = { position, yaw? }` (the controller is one), `follow.setLook(look)`, `follow.update(dt)` each tick aims the camera: it orbits from `look.look`, steps `distance` from `look.zoom`, eases the pivot. `follow.yaw` is the orbit yaw the controller walks relative to; `follow.snap()` jumps to the target. `obstacle` takes a line-of-sight test when walls should swing it in.
 - **The rig** (`anim`, `assets`): `parseGltf(buffer)` → a `GltfDocument`; `skeletonFromSkin(doc, 0)` → a **`Skeleton`** (`parents`, `rest`, `inverseBind`, `joints`; this game sets `names` from the node names so sockets can be made by name); `interleaveSkinned(prim)` → `VERTEX_LAYOUT_SKINNED` vertices (position, normal, uv, colour, 4 joint indices, 4 weights); `doc.animations[i]` is an **`AnimationClip`**.
@@ -87,6 +87,6 @@ A slot with more than two options: widen `options` from a pair to `readonly Cosm
 - **A new clip** (a dodge, a second attack): add its name and duration to `CLIP_NAMES` / `CLIP_DURATIONS` and a `keys` function in `rig.ts` (or ship it in a real glb), a state and transitions in `graph.ts`, a param set from an action in the scene. The `rig.test.ts` clip test checks the duration.
 - **A real model**: fetch a glb into `createCharacter` instead of `buildCharacterGlb()`; keep the clip names, set `skeleton.names` from the file and map `J` to its joint indices by name (`doc.nodes[i].name`) rather than constants.
 - **Weapons that hit**: the attack arc is `ATTACK_REACH` / `ATTACK_HALF_ANGLE` in `character.ts` and `swing()` in the scene; a per-option reach is one field on `CosmeticOption`.
-- **Smarter enemies**: `stepEnemy` is the whole rule; `@thunderclap/engine/nav` gives a flow field or an A* path to replace the straight-line chase.
+- **Smarter enemies**: `stepEnemy` is the whole rule; `@thunderclap-engine/engine/nav` gives a flow field or an A* path to replace the straight-line chase.
 - **Walls that block the camera**: pass `obstacle` to the `Follow` (a `raycastReg` against the stone collider, as `swing()` does for line of sight) and the orbit pulls in instead of clipping.
 - **A server**: apply its state in `ctx.hooks.frame(dt)` or the scene's `update`, send `controller.position` / `yaw` and the graph state from there.

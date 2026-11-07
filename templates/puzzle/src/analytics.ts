@@ -6,11 +6,11 @@
  * through `navigator.sendBeacon` (it survives the page unloading, which is when the last batch
  * is flushed).
  *
- * Events, following the engine's convention (`@thunderclap/engine/analytics` README):
+ * Events, following the engine's convention (`@thunderclap-engine/engine/analytics` README):
  * - `level_start`: a board was dealt (`level` names it; here the board size).
  * - `level_complete`: every pair was matched (`ms` since the deal, `moves` taken).
  */
-import type { AnalyticsEvent, AnalyticsSink } from '@thunderclap/engine/analytics';
+import type { AnalyticsEvent, AnalyticsSink } from '@thunderclap-engine/engine/analytics';
 
 /** Where batches are posted; `null` means no analytics (the events are never queued). */
 export const COLLECT_URL: string | null = null;

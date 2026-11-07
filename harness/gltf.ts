@@ -17,16 +17,16 @@ import {
   sampleClip,
   skinMatrices,
   WORLD_NODE_FLOATS,
-} from '@thunderclap/engine/anim';
+} from '@thunderclap-engine/engine/anim';
 import {
   type GltfSkeleton,
   loadGltf,
   parseGltf,
   skeletonFromSkin,
-} from '@thunderclap/engine/assets';
-import { GameLoop } from '@thunderclap/engine/core';
-import { Gestures } from '@thunderclap/engine/input';
-import { boot } from '@thunderclap/engine/platform';
+} from '@thunderclap-engine/engine/assets';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { Gestures } from '@thunderclap-engine/engine/input';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   type CameraPoint,
@@ -38,7 +38,7 @@ import {
   SkinPalette,
   VERTEX_LAYOUT_3D_TANGENT,
   VERTEX_LAYOUT_SKINNED,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { HarnessGltfState } from './gltf-state';
 import {
   buildPbrGlb,

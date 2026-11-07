@@ -15,10 +15,10 @@
  * Nothing here is engine code: the camera and the target rules are what a game writes. The range
  * has no motion without input, so it needs no `?still`: a fresh page is a steady frame.
  */
-import { AudioEngine, recipes } from '@thunderclap/engine/audio';
-import { GameLoop, hash2f } from '@thunderclap/engine/core';
-import { createBillboards, Decals, ParticleSystem, Trail } from '@thunderclap/engine/fx';
-import { box } from '@thunderclap/engine/geom';
+import { AudioEngine, recipes } from '@thunderclap-engine/engine/audio';
+import { GameLoop, hash2f } from '@thunderclap-engine/engine/core';
+import { createBillboards, Decals, ParticleSystem, Trail } from '@thunderclap-engine/engine/fx';
+import { box } from '@thunderclap-engine/engine/geom';
 import {
   createRay,
   Gestures,
@@ -27,8 +27,8 @@ import {
   Look,
   meshTester,
   type PickHit,
-} from '@thunderclap/engine/input';
-import { boot } from '@thunderclap/engine/platform';
+} from '@thunderclap-engine/engine/input';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   gpuDiagnostics,
@@ -37,9 +37,9 @@ import {
   Lights,
   Renderer,
   Transform,
-} from '@thunderclap/engine/render';
-import { createTweens, ease } from '@thunderclap/engine/tween';
-import { createOverlay } from '@thunderclap/engine/ui';
+} from '@thunderclap-engine/engine/render';
+import { createTweens, ease } from '@thunderclap-engine/engine/tween';
+import { createOverlay } from '@thunderclap-engine/engine/ui';
 import { type RangeDemoApi, type RangeDemoState, RESET_SECONDS, TARGET_COUNT } from './state';
 
 const root = document.getElementById('root') as HTMLElement;

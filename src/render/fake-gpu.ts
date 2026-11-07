@@ -3,8 +3,8 @@
  * and applies the validation rules the engine has tripped over before (e.g. `writeBuffer`
  * into a buffer without `COPY_DST`). Buffers hold their bytes: `writeBuffer` stores them,
  * `copyBufferToBuffer`, `clearBuffer` and `resolveQuerySet` apply at `queue.submit`, and a
- * `MAP_READ` buffer maps them back (ws/render-9). Not exported from `@thunderclap/engine/render`;
- * tests import it from `@thunderclap/engine/testing`.
+ * `MAP_READ` buffer maps them back (ws/render-9). Not exported from `@thunderclap-engine/engine/render`;
+ * tests import it from `@thunderclap-engine/engine/testing`.
  */
 
 import { sceneColorTargets } from './material';

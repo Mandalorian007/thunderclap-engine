@@ -1,5 +1,5 @@
 /**
- * Save slots, settings and the undo journal (`@thunderclap/engine/save`) on every matrix row,
+ * Save slots, settings and the undo journal (`@thunderclap-engine/engine/save`) on every matrix row,
  * against harness/save.html (no WebGPU; `MemoryStorage`, so rows share nothing): `list()` from
  * the meta sidecars after two saves, undo and redo restoring the tilemap checksum, and a slider
  * bound through `bind` reaching the settings store. On the itch-iframe row the page runs inside

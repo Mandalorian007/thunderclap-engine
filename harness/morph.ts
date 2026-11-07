@@ -6,10 +6,10 @@
  * blended vertices when they changed. Fixed camera, engine lighting.
  */
 
-import { sampleWeights } from '@thunderclap/engine/anim';
-import { type GltfJson, loadGltf, parseGltf } from '@thunderclap/engine/assets';
-import { GameLoop } from '@thunderclap/engine/core';
-import { boot } from '@thunderclap/engine/platform';
+import { sampleWeights } from '@thunderclap-engine/engine/anim';
+import { type GltfJson, loadGltf, parseGltf } from '@thunderclap-engine/engine/assets';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   type CameraPoint,
@@ -17,7 +17,7 @@ import {
   installGpuErrorLogging,
   Lights,
   Renderer,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { HarnessMorphState } from './morph-state';
 
 const root = document.getElementById('root') as HTMLElement;

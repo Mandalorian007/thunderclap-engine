@@ -1,10 +1,10 @@
 /**
  * Procedural helpers for the ARPG (copied from demos/arena): the skinned box builder the bodies
- * use (`@thunderclap/engine/geom` writes the 3D layout only) and the textures, whose per-texel
+ * use (`@thunderclap-engine/engine/geom` writes the 3D layout only) and the textures, whose per-texel
  * rolls are core's positional `hash2f`. Setup-time code: it allocates freely and runs once.
  */
-import { hash2f } from '@thunderclap/engine/core';
-import { setVertexSkin } from '@thunderclap/engine/render';
+import { hash2f } from '@thunderclap-engine/engine/core';
+import { setVertexSkin } from '@thunderclap-engine/engine/render';
 
 export interface MeshData {
   vertices: Float32Array;

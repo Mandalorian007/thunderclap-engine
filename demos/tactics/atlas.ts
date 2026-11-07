@@ -5,7 +5,7 @@
  * the unit's eight flipbook frames (four facings × two steps). Everything the map, overlays and
  * units draw is this one material, so the whole skirmish is one draw call.
  */
-import { hash2f } from '@thunderclap/engine/core';
+import { hash2f } from '@thunderclap-engine/engine/core';
 import { EH, TH, TW } from './iso';
 
 export const CELL_SIZE = 64;

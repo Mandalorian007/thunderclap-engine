@@ -2,7 +2,7 @@
  * AABB vs tile-grid collision. Pure: no DOM, no time, no allocation after construction.
  *
  * A body is a top-left box with a velocity. `moveBody` hands the motion to the engine's
- * `slideTiles` (`@thunderclap/engine/geom`): sub-stepped (never more than half a tile per step),
+ * `slideTiles` (`@thunderclap-engine/engine/geom`): sub-stepped (never more than half a tile per step),
  * X then Y against solid tiles, one-way tiles (only when falling onto them from above) and moving
  * platforms (solid boxes that also carry what stands on them). This file maps the level onto the
  * engine's tile kinds and keeps the velocity in step with what was hit.
@@ -17,7 +17,7 @@ import {
   type TileQuery,
   type TileSlideOptions,
   type TileSlideResult,
-} from '@thunderclap/engine/geom';
+} from '@thunderclap-engine/engine/geom';
 import { kindAt, type Level, ONE_WAY, SOLID, TILE } from '../levels/format';
 
 export interface Body {

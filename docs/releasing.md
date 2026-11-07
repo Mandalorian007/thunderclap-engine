@@ -4,10 +4,10 @@ This repo publishes four packages to the public npm registry (E-037):
 
 | Package | Version line | Folder |
 | --- | --- | --- |
-| `@thunderclap/engine` | `1.x` | the repo root |
-| `@thunderclap/host-electron` | `0.x` | `packages/host-electron` |
-| `@thunderclap/host-capacitor` | `0.x` | `packages/host-capacitor` |
-| `@thunderclap/host-pwa` | `0.x` | `packages/host-pwa` |
+| `@thunderclap-engine/engine` | `1.x` | the repo root |
+| `@thunderclap-engine/host-electron` | `0.x` | `packages/host-electron` |
+| `@thunderclap-engine/host-capacitor` | `0.x` | `packages/host-capacitor` |
+| `@thunderclap-engine/host-pwa` | `0.x` | `packages/host-pwa` |
 
 Every release after the first is published by `.github/workflows/publish.yml` when a `v*` tag is pushed. It uses npm trusted publishing: npm trusts that workflow file through GitHub's OIDC token, so no npm token is stored anywhere, and every version carries a provenance statement.
 
@@ -24,7 +24,7 @@ Every release after the first is published by `.github/workflows/publish.yml` wh
 
 npm attaches a trusted publisher only to a package that already exists, so the first version of each package is published by hand.
 
-1. Log in: `npm login`, as an owner of the `thunderclap` org.
+1. Log in: `npm login`, as an owner of the `thunderclap-engine` org.
 2. From a clean, up-to-date `main`, build, check and pack:
 
    ```sh
@@ -77,5 +77,5 @@ If a run fails after step 4, re-run the failed job: the publish loop skips versi
 Hosts version on their own `0.x` line, independent of the engine.
 
 1. In the same branch as the host change, set `version` in `packages/host-<name>/package.json` (for example `0.1.0` to `0.2.0`), and describe the change in the root `CHANGELOG.md` under `## Unreleased`.
-2. If the host needs a newer engine, raise its `peerDependencies["@thunderclap/engine"]` range too.
+2. If the host needs a newer engine, raise its `peerDependencies["@thunderclap-engine/engine"]` range too.
 3. Cut a normal release (`pnpm release <next engine version> --tag`) and push the tag. The workflow publishes the host at its new version and skips every package whose version did not change. The tag always follows the engine's version, so a host-only change still needs an engine patch release.

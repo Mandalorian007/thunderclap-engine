@@ -1,9 +1,9 @@
 {
-  "name": "@thunderclap/template-first-person",
+  "name": "@thunderclap-engine/template-first-person",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "A first-person 3D game on @thunderclap/engine: createGame in client mode, Look, Worker-built chunk meshes with bounds and a texture array, sun shadow and fog, weather, world-anchored labels. The game-specific code is world/.",
+  "description": "A first-person 3D game on @thunderclap-engine/engine: createGame in client mode, Look, Worker-built chunk meshes with bounds and a texture array, sun shadow and fog, weather, world-anchored labels. The game-specific code is world/.",
   "license": "MIT",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
@@ -16,7 +16,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.4",
-    "@thunderclap/engine": "workspace:*",
+    "@thunderclap-engine/engine": "workspace:*",
     "@types/node": "^26.6.6",
     "@webgpu/types": "^0.1.74",
     "typescript": "^7.0.2",

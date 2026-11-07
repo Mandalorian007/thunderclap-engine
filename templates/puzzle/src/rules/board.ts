@@ -5,7 +5,7 @@
  * The scene turns taps into `reveal(board, index)` and draws what comes back; the tests drive
  * the same functions.
  */
-import { createRandom } from '@thunderclap/engine/core';
+import { createRandom } from '@thunderclap-engine/engine/core';
 
 /** What the board is waiting for. */
 export type Phase =

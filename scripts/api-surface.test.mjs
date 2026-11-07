@@ -145,12 +145,12 @@ test('unreleasedSection reads `## Unreleased` (or the older `(unreleased)` headi
 
 test('an entry announces a module when it names it and says *Breaking* or *Added*', () => {
   assert.equal(announces('- render (ws/x). *Added:* `foo()`.', 'render'), true);
-  assert.equal(announces('- *Breaking:* `@thunderclap/engine/ui` drops `x`.', 'ui'), true);
+  assert.equal(announces('- *Breaking:* `@thunderclap-engine/engine/ui` drops `x`.', 'ui'), true);
   assert.equal(announces('- render (ws/x). *Fixed:* a leak.', 'render'), false);
   assert.equal(announces('- *Added:* `renderer.x` in render-graph.', 'render'), false);
   assert.equal(announces('- *Added:* nav things.', 'render'), false);
-  assert.equal(announces('- *Added:* `@thunderclap/engine` re-exports `x`.', '.'), true);
-  assert.equal(announces('- *Added:* `@thunderclap/engine/ui` only.', '.'), false);
+  assert.equal(announces('- *Added:* `@thunderclap-engine/engine` re-exports `x`.', '.'), true);
+  assert.equal(announces('- *Added:* `@thunderclap-engine/engine/ui` only.', '.'), false);
   assert.deepEqual(unannounced(['render', 'ui'], LOG('- render. *Added:* x.\n')), ['ui']);
   // The released section never counts: only `## Unreleased` does.
   assert.deepEqual(unannounced(['foo'], LOG('')), ['foo']);

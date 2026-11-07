@@ -1,6 +1,6 @@
 /**
  * The core-2 page (harness/core2.html) on every matrix row: the deterministic utilities in
- * `@thunderclap/engine/core`.
+ * `@thunderclap-engine/engine/core`.
  *
  * - `?random`: the first 100 draws of `createRandom('core2')` hash to the golden pinned in
  *   random.test.ts (the same sequence in every browser), and 2000 points are drawn;

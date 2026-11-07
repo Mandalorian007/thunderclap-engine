@@ -10,8 +10,8 @@
  * `park(true)` stops the orbit, the drain and the cycling (E-017), so a spec can read a steady
  * value; `openModal()` pushes a modal panel through `ui.stack`.
  */
-import { GameLoop } from '@thunderclap/engine/core';
-import { boot } from '@thunderclap/engine/platform';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   gpuDiagnostics,
@@ -21,8 +21,8 @@ import {
   Renderer,
   Transform,
   VERTEX_LAYOUT_3D,
-} from '@thunderclap/engine/render';
-import { button, createOverlay, type PanelHandle } from '@thunderclap/engine/ui';
+} from '@thunderclap-engine/engine/render';
+import { button, createOverlay, type PanelHandle } from '@thunderclap-engine/engine/ui';
 import type { HarnessHudApi, HarnessHudState } from './hud-state';
 
 const root = document.getElementById('root') as HTMLElement;

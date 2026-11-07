@@ -4,15 +4,15 @@ Read `docs/briefs/common.md` first, then E-037 and E-036 in `docs/DECISIONS.md`,
 
 ## Goal
 
-Make `@thunderclap/engine` and the three host packages installable from the public npm registry. Publishing happens from a GitHub Action on a version tag, using npm trusted publishing (OIDC, no stored token). The user does the first publish by hand; this branch makes that a one-command job and makes every later release automatic.
+Make `@thunderclap-engine/engine` and the three host packages installable from the public npm registry. Publishing happens from a GitHub Action on a version tag, using npm trusted publishing (OIDC, no stored token). The user does the first publish by hand; this branch makes that a one-command job and makes every later release automatic.
 
 STATUS row, *done when*:
 
 - **Build.** `pnpm build` emits ESM JavaScript and `.d.ts` files to `dist/` for every subpath in `exports`. Use `tsc` with a `tsconfig.build.json`; no bundler is needed, because the engine has zero runtime dependencies. The output must run without Vite. Check for `?raw`/`?url` imports, `import.meta.env`, `.ts`-extension imports and anything else that only works under Vite or vitest. If any is found, fix it in the smallest way and list each fix in your report.
 - **Published manifest.** The workspace keeps its `./src/*.ts` exports, so the harness, templates and tests don't change. The published package points at `dist/` through pnpm's `publishConfig` overrides (`exports`, and `types` and `main` if needed), with `types` before `import` in each condition. Set `files` to `dist`, `README.md`, `LICENSE` and `CHANGELOG.md`. Remove `"private": true`. Set `publishConfig.access: "public"` and `provenance: true`. Set `sideEffects` only to what is true; check for module-level side effects first and report what you find. Add `homepage`, `bugs` and `keywords`.
 - **WebGPU types.** If the emitted `.d.ts` files reference `GPU*` types, a consumer needs `@webgpu/types`. Choose between an optional peer dependency and a documented install step, and say why in your report.
-- **Host packages.** `@thunderclap/host-electron`, `host-capacitor` and `host-pwa` get the same treatment at version `0.1.0`:
-  - `@thunderclap/engine` is a peer dependency (`^1.0.0`), not `workspace:*`, in the published manifest. Check how pnpm rewrites `workspace:` ranges at pack time.
+- **Host packages.** `@thunderclap-engine/host-electron`, `host-capacitor` and `host-pwa` get the same treatment at version `0.1.0`:
+  - `@thunderclap-engine/engine` is a peer dependency (`^1.0.0`), not `workspace:*`, in the published manifest. Check how pnpm rewrites `workspace:` ranges at pack time.
   - Capacitor and Electron are peers, optional where a host works without them.
   - host-electron's `out/` shell bundle is included if consumers need it.
 - **Pack smoke.** Add `scripts/pack-smoke.mjs` and `pnpm check:pack`. The script must:
@@ -35,7 +35,7 @@ STATUS row, *done when*:
   - the routine: `pnpm release <version> --tag`, then push the tag;
   - how to bump a host package.
 
-  Update the README and `docs/guide/getting-started.md` install sections to `pnpm add @thunderclap/engine`. `scripts/release.mjs` changes only if the docs need it, for example to print the tag push command.
+  Update the README and `docs/guide/getting-started.md` install sections to `pnpm add @thunderclap-engine/engine`. `scripts/release.mjs` changes only if the docs need it, for example to print the tag push command.
 - **Changelog.** Add a CHANGELOG `## Unreleased` *Added* line covering the build, the npm packages and `check:pack`.
 
 ## Files owned

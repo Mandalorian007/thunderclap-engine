@@ -2,7 +2,7 @@
  * What the mesh demo page (harness/mesh.html) publishes on `window.__harnessMesh` for
  * e2e/mesh.spec.ts. Shared by the page (harness/mesh.ts) and the spec.
  */
-import type { PerfSample } from '@thunderclap/engine/ui';
+import type { PerfSample } from '@thunderclap-engine/engine/ui';
 
 /** A point on the canvas, logical px (the camera's `screen`, 1920×1080). */
 export interface MeshProbe {

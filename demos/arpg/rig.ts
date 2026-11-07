@@ -18,7 +18,7 @@ import {
   quatMultiply,
   type Skeleton,
   WORLD_NODE_FLOATS,
-} from '@thunderclap/engine/anim';
+} from '@thunderclap-engine/engine/anim';
 import { MeshBuilder, type MeshData, type Rgb } from './geom';
 
 export const NODES = {

@@ -13,7 +13,7 @@
  * `?still` parks the idle bob and the dust so probes read a steady frame.
  */
 
-import { createGame } from '@thunderclap/engine';
+import { createGame } from '@thunderclap-engine/engine';
 import {
   AnimationMixer,
   attachTransform,
@@ -21,11 +21,17 @@ import {
   poseToWorld,
   skinMatrices,
   WORLD_NODE_FLOATS,
-} from '@thunderclap/engine/anim';
-import type { Scene } from '@thunderclap/engine/core';
-import { Decals, Trail } from '@thunderclap/engine/fx';
-import { box, cylinder, mergeGeometry, plane, transformGeometry } from '@thunderclap/engine/geom';
-import { Follow, Look } from '@thunderclap/engine/input';
+} from '@thunderclap-engine/engine/anim';
+import type { Scene } from '@thunderclap-engine/engine/core';
+import { Decals, Trail } from '@thunderclap-engine/engine/fx';
+import {
+  box,
+  cylinder,
+  mergeGeometry,
+  plane,
+  transformGeometry,
+} from '@thunderclap-engine/engine/geom';
+import { Follow, Look } from '@thunderclap-engine/engine/input';
 import {
   type Camera,
   createStandardMaterial,
@@ -39,8 +45,8 @@ import {
   Transform,
   VERTEX_LAYOUT_3D,
   VERTEX_LAYOUT_SKINNED,
-} from '@thunderclap/engine/render';
-import { bar } from '@thunderclap/engine/ui';
+} from '@thunderclap-engine/engine/render';
+import { bar } from '@thunderclap-engine/engine/ui';
 import { scorchPixels, tilePixels } from './geom';
 import {
   createBodyMesh,

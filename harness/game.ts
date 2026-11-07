@@ -15,9 +15,9 @@ import {
   type EngineCtx,
   type FlushableSave,
   type GameHooks,
-} from '@thunderclap/engine';
-import { createWebHost, type Host } from '@thunderclap/engine/host';
-import { createSaveStore, s } from '@thunderclap/engine/save';
+} from '@thunderclap-engine/engine';
+import { createWebHost, type Host } from '@thunderclap-engine/engine/host';
+import { createSaveStore, s } from '@thunderclap-engine/engine/save';
 import type { HarnessGameApi, HarnessGameState } from './game-state';
 
 const root = document.getElementById('root') as HTMLElement;

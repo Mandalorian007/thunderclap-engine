@@ -4,8 +4,8 @@
  * This game is a client (`sim: false`, no save): `EngineCtx<Action, null, GameCtx>` types
  * `ctx.save` as `null`.
  */
-import type { EngineCtx } from '@thunderclap/engine';
-import type { Bindings, Follow, Look } from '@thunderclap/engine/input';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import type { Bindings, Follow, Look } from '@thunderclap-engine/engine/input';
 import type { Hud } from './ui/hud';
 
 /**

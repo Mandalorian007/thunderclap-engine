@@ -21,7 +21,7 @@ import {
   recipes,
   type SoundSpec,
   type Voice,
-} from '@thunderclap/engine/audio';
+} from '@thunderclap-engine/engine/audio';
 import type { HarnessAudio4Api, HarnessAudio4State } from './audio4-state';
 
 const params = new URLSearchParams(location.search);

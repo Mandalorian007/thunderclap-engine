@@ -6,7 +6,7 @@ Read `docs/briefs/common.md` first, then `docs/VISION.md` (pillar 4: "glTF is se
 
 A game loads a glTF 2.0 scene into engine meshes, transforms, textures and a lit material in one call, from bytes it fetched itself. Static geometry only in this step. No dependency, no network call from the engine.
 
-STATUS row, *done when*: `parseGltf(bytes | { json, buffers })` gives an engine-free `GltfDocument` (.glb and .gltf); `loadGltf(renderer, doc, opts?)` gives `Mesh`es in `VERTEX_LAYOUT_3D`, a `Transform` per node, `Texture`s for base colour, and a `GltfScene.draw(frame)`; `@thunderclap/engine/assets` subpath; unit tests parse a generated .glb; harness `gltf.html` renders a generated scene on the matrix; documented.
+STATUS row, *done when*: `parseGltf(bytes | { json, buffers })` gives an engine-free `GltfDocument` (.glb and .gltf); `loadGltf(renderer, doc, opts?)` gives `Mesh`es in `VERTEX_LAYOUT_3D`, a `Transform` per node, `Texture`s for base colour, and a `GltfScene.draw(frame)`; `@thunderclap-engine/engine/assets` subpath; unit tests parse a generated .glb; harness `gltf.html` renders a generated scene on the matrix; documented.
 
 ## Scope
 

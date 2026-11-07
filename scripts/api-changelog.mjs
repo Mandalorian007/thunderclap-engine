@@ -2,8 +2,8 @@
 // mode (`pnpm check:api`). The committed `api/*.api.txt` is the frozen surface of the last
 // release; a branch may change it only together with the CHANGELOG line that announces the
 // change: every `api/` file that differs from the release must have a `*Breaking*` or `*Added*`
-// entry under `## Unreleased` that names its module (`render`, or `@thunderclap/engine/render`;
-// the root entry is `@thunderclap/engine` or `root`).
+// entry under `## Unreleased` that names its module (`render`, or `@thunderclap-engine/engine/render`;
+// the root entry is `@thunderclap-engine/engine` or `root`).
 //
 // The release is the tag `v<version>` (what `pnpm release --tag` makes) or `engine-v<version>`,
 // else the commit that set `package.json` to the current version. With no git or no such commit
@@ -51,9 +51,11 @@ const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 /** True when `entry` names `module` (see the header) and says `*Breaking*` or `*Added*`. */
 export function announces(entry, module) {
   if (!/\*(?:Breaking|Added)\b[^*]*\*/.test(entry)) return false;
-  if (module === '.') return /@thunderclap\/engine(?![\w/-])|\broot\b/.test(entry);
+  if (module === '.') return /@thunderclap-engine\/engine(?![\w/-])|\broot\b/.test(entry);
   const m = escapeRe(module);
-  return new RegExp(`@thunderclap/engine/${m}(?![\\w-])|(?<![\\w/-])${m}(?![\\w-])`).test(entry);
+  return new RegExp(`@thunderclap-engine/engine/${m}(?![\\w-])|(?<![\\w/-])${m}(?![\\w-])`).test(
+    entry,
+  );
 }
 
 /** The modules among `modules` that the changelog's `## Unreleased` does not announce. */
@@ -89,9 +91,13 @@ export function freezeBase(root) {
   return sha ? { ref: sha, label: `the ${version} version commit ${sha.slice(0, 7)}` } : null;
 }
 
-/** The `api/*.api.txt` files that differ from `ref` in the working tree, untracked ones included. */
+/**
+ * The `api/*.api.txt` files that differ from `ref` in the working tree, untracked ones included.
+ * The generated `// ` header lines are ignored (`-I`), so a header-only change (such as the npm
+ * scope rename to `@thunderclap-engine`) is not a surface change.
+ */
 export function changedApiFiles(root, ref) {
-  const changed = git(root, 'diff', '--name-only', ref, '--', 'api/') ?? '';
+  const changed = git(root, 'diff', '--name-only', '-I', '^// ', ref, '--', 'api/') ?? '';
   const added = git(root, 'ls-files', '--others', '--exclude-standard', '--', 'api/') ?? '';
   return [...new Set(`${changed}\n${added}`.split('\n'))]
     .filter((f) => f.endsWith('.api.txt'))

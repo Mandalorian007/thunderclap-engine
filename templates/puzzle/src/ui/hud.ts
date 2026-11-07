@@ -4,7 +4,7 @@
  * sizes them with the theme tokens and keeps them out of the board's way. Nothing here draws on
  * the canvas; nothing here changes game state except through `ctx.newGame()`.
  */
-import { button, h } from '@thunderclap/engine/ui';
+import { button, h } from '@thunderclap-engine/engine/ui';
 import type { GameCtx } from '../ctx';
 import { pairsLeft, phase } from '../rules/board';
 

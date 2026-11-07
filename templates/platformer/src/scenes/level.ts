@@ -6,8 +6,8 @@
  * Draw order and count: three parallax layers + the map (one draw each), then every sprite
  * (movers, flags, door, coins, player: same material, so one batch), then the particles: six.
  */
-import { createScheduler, type Scene } from '@thunderclap/engine/core';
-import type { EmitParams } from '@thunderclap/engine/fx';
+import { createScheduler, type Scene } from '@thunderclap-engine/engine/core';
+import type { EmitParams } from '@thunderclap-engine/engine/fx';
 import {
   createFlipbook,
   createFollow2D,
@@ -15,8 +15,8 @@ import {
   type Flipbook,
   type Frame,
   hex,
-} from '@thunderclap/engine/render';
-import { ease } from '@thunderclap/engine/tween';
+} from '@thunderclap-engine/engine/render';
+import { ease } from '@thunderclap-engine/engine/tween';
 import type { GameCtx } from '../ctx';
 import { LEVELS } from '../levels';
 import { HAZARD, type Level, MOVER_H, MOVER_W, moverAt, TILE } from '../levels/format';

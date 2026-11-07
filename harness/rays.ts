@@ -20,9 +20,9 @@ import {
   PadCursor,
   planeTester,
   type RayBox,
-} from '@thunderclap/engine/input';
-import { computeLetterbox } from '@thunderclap/engine/platform';
-import { Camera } from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/input';
+import { computeLetterbox } from '@thunderclap-engine/engine/platform';
+import { Camera } from '@thunderclap-engine/engine/render';
 import type { HarnessRaysApi, HarnessRaysState } from './rays-state';
 
 const LOGICAL = { width: 800, height: 600 };

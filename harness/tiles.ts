@@ -12,9 +12,9 @@
  * e2e/tiles.spec.ts counts draw calls, watches the flipbook frame advance, samples the pixel
  * at a tile's centre before and after `set`, hovers the iso ramp and moves the dot.
  */
-import { GameLoop } from '@thunderclap/engine/core';
-import { createIso, isoInverseProbe } from '@thunderclap/engine/geom';
-import { boot, type Surface } from '@thunderclap/engine/platform';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { createIso, isoInverseProbe } from '@thunderclap-engine/engine/geom';
+import { boot, type Surface } from '@thunderclap-engine/engine/platform';
 import {
   atlasFrames,
   Camera,
@@ -27,7 +27,7 @@ import {
   installGpuErrorLogging,
   type Material,
   Renderer,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { HarnessTilesApi, HarnessTilesMode, HarnessTilesState } from './tiles-state';
 
 const root = document.getElementById('root') as HTMLElement;

@@ -14,7 +14,7 @@
 //   4. Installs the tarballs with npm into a fresh project in the OS temp folder, outside the
 //      workspace, then typechecks (Bundler and NodeNext resolution, skipLibCheck off) and
 //      Vite-builds a page that imports the root, /render, /input, /ui, /voxel and each host's
-//      create function. Node also loads `@thunderclap/host-pwa/vite` natively, as a vite.config does.
+//      create function. Node also loads `@thunderclap-engine/host-pwa/vite` natively, as a vite.config does.
 //
 // The tooling (typescript, vite, @webgpu/types) is linked in from this repo's node_modules, so
 // the check needs no network.
@@ -51,27 +51,27 @@ if (!Number.isFinite(waitSeconds) || waitSeconds < 0) {
 // Nothing listens here, so a dry-run publish cannot reach a real registry.
 const DEAD_REGISTRY = 'http://127.0.0.1:9';
 const packages = [
-  { dir: '.', name: '@thunderclap/engine' },
-  { dir: 'packages/host-capacitor', name: '@thunderclap/host-capacitor' },
-  { dir: 'packages/host-electron', name: '@thunderclap/host-electron' },
-  { dir: 'packages/host-pwa', name: '@thunderclap/host-pwa' },
+  { dir: '.', name: '@thunderclap-engine/engine' },
+  { dir: 'packages/host-capacitor', name: '@thunderclap-engine/host-capacitor' },
+  { dir: 'packages/host-electron', name: '@thunderclap-engine/host-electron' },
+  { dir: 'packages/host-pwa', name: '@thunderclap-engine/host-pwa' },
 ];
 
-const NODE_CHECK = `import { pwaPlugin } from '@thunderclap/host-pwa/vite'; console.log(typeof pwaPlugin);`;
+const NODE_CHECK = `import { pwaPlugin } from '@thunderclap-engine/host-pwa/vite'; console.log(typeof pwaPlugin);`;
 
 const INDEX_HTML = `<!doctype html>
 <html><head><meta charset="utf-8" /><title>pack smoke</title></head>
 <body><canvas id="c"></canvas><script type="module" src="./main.ts"></script></body></html>
 `;
 
-const MAIN_TS = `import { createGame } from '@thunderclap/engine';
-import { Camera } from '@thunderclap/engine/render';
-import { Input } from '@thunderclap/engine/input';
-import { createMeter } from '@thunderclap/engine/ui';
-import { createVoxelGrid } from '@thunderclap/engine/voxel';
-import { createCapacitorHost } from '@thunderclap/host-capacitor';
-import { createElectronHost } from '@thunderclap/host-electron';
-import { createPwaHost } from '@thunderclap/host-pwa';
+const MAIN_TS = `import { createGame } from '@thunderclap-engine/engine';
+import { Camera } from '@thunderclap-engine/engine/render';
+import { Input } from '@thunderclap-engine/engine/input';
+import { createMeter } from '@thunderclap-engine/engine/ui';
+import { createVoxelGrid } from '@thunderclap-engine/engine/voxel';
+import { createCapacitorHost } from '@thunderclap-engine/host-capacitor';
+import { createElectronHost } from '@thunderclap-engine/host-electron';
+import { createPwaHost } from '@thunderclap-engine/host-pwa';
 
 const used: unknown[] = [
   createGame,
@@ -201,7 +201,7 @@ try {
     throw new Error('vite build wrote no script');
   }
 
-  step('node loads @thunderclap/host-pwa/vite');
+  step('node loads @thunderclap-engine/host-pwa/vite');
   const out = run('node', ['--input-type=module', '-e', NODE_CHECK], app).trim();
   if (out !== 'function') throw new Error(`pwaPlugin is ${out}, not a function`);
 
@@ -290,10 +290,10 @@ function inspect(p) {
     if (!list.includes(t.replace(/^\.\//, ''))) fail(`exports target ${t} is not in the tarball`);
   }
   if (
-    p.name !== '@thunderclap/engine' &&
-    manifest.peerDependencies?.['@thunderclap/engine'] !== '^1.0.0'
+    p.name !== '@thunderclap-engine/engine' &&
+    manifest.peerDependencies?.['@thunderclap-engine/engine'] !== '^1.0.0'
   ) {
-    fail('@thunderclap/engine must be a ^1.0.0 peer');
+    fail('@thunderclap-engine/engine must be a ^1.0.0 peer');
   }
   const kb = (readFileSync(p.spec).length / 1024).toFixed(1);
   step(`${p.name}@${manifest.version}: ${list.length} files, ${kb} kB packed`);

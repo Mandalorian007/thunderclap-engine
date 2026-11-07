@@ -5,9 +5,9 @@
  * updates while it is on top (only the top scene gets `update`, and actions are blocked while a
  * modal is open).
  */
-import type { Scene } from '@thunderclap/engine/core';
-import type { Frame } from '@thunderclap/engine/render';
-import { button, h } from '@thunderclap/engine/ui';
+import type { Scene } from '@thunderclap-engine/engine/core';
+import type { Frame } from '@thunderclap-engine/engine/render';
+import { button, h } from '@thunderclap-engine/engine/ui';
 import type { GameCtx } from '../ctx';
 import type { Level } from '../levels/format';
 

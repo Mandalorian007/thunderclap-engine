@@ -16,7 +16,7 @@ on screen through a chain of passes. Set it up front through `createGame`, or ch
 any time.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
+import type { EngineCtx } from '@thunderclap-engine/engine';
 
 export function tunePost(ctx: EngineCtx) {
   // A patch merges per section. Fields you leave out keep their value.
@@ -39,8 +39,8 @@ dark, start from `neutralPostSettings()` instead, which turns the extras off and
 the tone map, and add back what you want:
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import { neutralPostSettings } from '@thunderclap/engine/post';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import { neutralPostSettings } from '@thunderclap-engine/engine/post';
 
 export function plainPost(ctx: EngineCtx) {
   ctx.post.set(neutralPostSettings());
@@ -70,7 +70,7 @@ export function plainPost(ctx: EngineCtx) {
 These read the depth buffer. They are off by default. Turn them on when your scene is 3D.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
+import type { EngineCtx } from '@thunderclap-engine/engine';
 
 export function cinematic(ctx: EngineCtx) {
   ctx.post.set({
@@ -106,7 +106,7 @@ These run last and give a game its texture:
 night, entering a cave or taking damage.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
+import type { EngineCtx } from '@thunderclap-engine/engine';
 
 export function enterCave(ctx: EngineCtx) {
   ctx.post.blendTo({ grade: { exposure: 0.6, saturation: 0.7 }, vignette: { intensity: 0.5 } }, 2);
@@ -120,8 +120,8 @@ sizes for `'phone'`, `'tablet'`, `'desktop'` or `'xr'`. Map the layout's form fa
 tier when the game starts.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import { postQualityFor } from '@thunderclap/engine/post';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import { postQualityFor } from '@thunderclap-engine/engine/post';
 
 export function applyQuality(ctx: EngineCtx) {
   const ff = ctx.ui.layout.formFactor;
@@ -140,8 +140,8 @@ it up. `sharpen` helps the result look crisp.
 or glowing pickups. They are pure functions, so the same `t` always gives the same value.
 
 ```ts
-import { flicker, pulse } from '@thunderclap/engine/fx';
-import { Lights } from '@thunderclap/engine/render';
+import { flicker, pulse } from '@thunderclap-engine/engine/fx';
+import { Lights } from '@thunderclap-engine/engine/render';
 
 const lights = new Lights();
 const torch = { position: [2, 1.5, 0], color: [1, 0.6, 0.3], radius: 6 };
@@ -161,9 +161,9 @@ export function tickLights(t: number) {
 A `Trail` draws a ribbon behind a moving point: a sword swing, a missile, a fast car.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import type { Camera, Frame } from '@thunderclap/engine/render';
-import { Trail } from '@thunderclap/engine/fx';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import type { Camera, Frame } from '@thunderclap-engine/engine/render';
+import { Trail } from '@thunderclap-engine/engine/fx';
 
 export function createSwordTrail(ctx: EngineCtx) {
   const trail = new Trail(ctx.renderer, {
@@ -191,9 +191,9 @@ a position, the surface normal, a size and a tile in the atlas. They fade out af
 `lifetime` seconds.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import { Decals } from '@thunderclap/engine/fx';
-import type { TextureLike } from '@thunderclap/engine/render';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import { Decals } from '@thunderclap-engine/engine/fx';
+import type { TextureLike } from '@thunderclap-engine/engine/render';
 
 export function createScorch(ctx: EngineCtx, texture: TextureLike) {
   const decals = new Decals(ctx.renderer, { texture, atlas: { columns: 2, rows: 2 }, capacity: 64, lifetime: 20 });
@@ -206,8 +206,8 @@ Billboards are flat sprites or text that always face the camera, such as name ta
 characters. `bb.text` makes a text region in the billboard atlas.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import { createBillboards } from '@thunderclap/engine/fx';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import { createBillboards } from '@thunderclap-engine/engine/fx';
 
 export function nameTag(ctx: EngineCtx) {
   const bb = createBillboards(ctx.renderer, { capacity: 32 });
@@ -229,10 +229,10 @@ Draw it first.
 height at a point, so a boat can bob on it.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import type { Scene } from '@thunderclap/engine/core';
-import { Sky, Water, waterHeight } from '@thunderclap/engine/fx';
-import { type Frame, Lights, Transform } from '@thunderclap/engine/render';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import type { Scene } from '@thunderclap-engine/engine/core';
+import { Sky, Water, waterHeight } from '@thunderclap-engine/engine/fx';
+import { type Frame, Lights, Transform } from '@thunderclap-engine/engine/render';
 
 export function coast(): Scene<EngineCtx, Frame> {
   const lights = new Lights();
@@ -273,9 +273,9 @@ Rain and snow are world-space particles. Build a `ParticleSystem` in world space
 player so the weather is always around them.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import { ParticleEmitter, ParticleSystem } from '@thunderclap/engine/fx';
-import type { Frame } from '@thunderclap/engine/render';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import { ParticleEmitter, ParticleSystem } from '@thunderclap-engine/engine/fx';
+import type { Frame } from '@thunderclap-engine/engine/render';
 
 export function createSnow(ctx: EngineCtx) {
   const snow = new ParticleSystem(ctx.renderer, {

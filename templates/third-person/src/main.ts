@@ -9,8 +9,8 @@
  * zones, sticks, wheel and pinch for the zoom) and one `Follow` (the orbit camera) and pushes one
  * scene.
  */
-import { createGame } from '@thunderclap/engine';
-import { Follow, Look } from '@thunderclap/engine/input';
+import { createGame } from '@thunderclap-engine/engine';
+import { Follow, Look } from '@thunderclap-engine/engine/input';
 import { type Action, bindings, type GameCtx, type Player } from './ctx';
 import { createArenaScene } from './scenes/arena';
 

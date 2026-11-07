@@ -1,7 +1,7 @@
 /**
  * The geometry page (harness/geom.html) on every matrix row (ws/geom):
  *
- * - the page boots WebGPU, draws every builder of `@thunderclap/engine/geom` (primitives in
+ * - the page boots WebGPU, draws every builder of `@thunderclap-engine/engine/geom` (primitives in
  *   front, the sweep kit behind: ws/geom-2) over a heightfield ground and logs no error;
  * - a probe pixel on each shape is lit: it differs from the clear colour behind the ground;
  * - `computeTangents` over the extruded star is right-handed on every vertex (the handedness

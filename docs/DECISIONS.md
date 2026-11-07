@@ -10,7 +10,7 @@ Decisions made in this repo. Numbers are `E-0xx`; `D-0xx` refers to [The Last Ru
 - **Agents.** Up to 10 top-level agents; the PM stages waves by dependency and runs each wave in parallel.
 
 ## E-002: Analytics is an engine subpath with a pluggable sink; the engine still makes no network call (2026-11-05, PM)
-- The architecture doc proposed a sibling package. A second package would make this repo a workspace before `host-electron` forces that shape, so analytics ships as `@thunderclap/engine/analytics` instead.
+- The architecture doc proposed a sibling package. A second package would make this repo a workspace before `host-electron` forces that shape, so analytics ships as `@thunderclap-engine/engine/analytics` instead.
 - `createAnalytics({ sink, ... })` emits typed events (`game_start`, `session_end` with duration, form factor and preset, plus game events) to a sink the **game** supplies. The engine ships no network sink; a `sendBeacon`/`fetch` sink is a template concern. Flush rides the page lifecycle the save store already uses.
 - It attaches to an existing ctx (`analytics.attach(ctx)`) through `ctx.hooks` and `ctx.host`, so it needs no change to `createGame`.
 
@@ -218,8 +218,8 @@ ws/harden-api added `api/*.api.txt` and `check:api`, and audited the surface. Ru
 
 ## E-037: open source on public npm (2026-11-07, user + PM)
 
-- The engine is shared through the public npm registry, not GitHub Packages, because GitHub Packages makes every installer log in to GitHub, even for a public package. The user created the `thunderclap` npm org on 2026-11-07.
-- This repo publishes: `@thunderclap/engine` from 1.x, and `@thunderclap/host-electron`, `host-capacitor` and `host-pwa` from 0.1.0. That makes this repo the source of truth for the published engine. Whether Last Rune moves off its in-repo copy (D-051 in last-rune: the user said Last Rune stays on the original engine) is the user's call and is not part of this decision.
+- The engine is shared through the public npm registry, not GitHub Packages, because GitHub Packages makes every installer log in to GitHub, even for a public package. The user created the `thunderclap-engine` npm org on 2026-11-07 (`@thunderclap` was taken by someone else).
+- This repo publishes: `@thunderclap-engine/engine` from 1.x, and `@thunderclap-engine/host-electron`, `host-capacitor` and `host-pwa` from 0.1.0. That makes this repo the source of truth for the published engine. Whether Last Rune moves off its in-repo copy (D-051 in last-rune: the user said Last Rune stays on the original engine) is the user's call and is not part of this decision.
 - Releases publish from a GitHub Action on a `v*` tag using npm trusted publishing (OIDC, provenance, no stored token). The first publish of each package is manual by the user, because npm attaches a trusted publisher only to a package that already exists. Brief: `docs/briefs/publish.md` (ws/publish).
 - Once a version is published, the 1.0 API rules (E-036, common.md *Post-1.0 API changes*) are a public promise. A breaking change means 2.0.
 - Follow-up, same day (user): the first published engine version is `1.1.0`. The PM runs the whole bootstrap: the first publish from the user's npm session, the trusted publishers on npmjs.com through Chrome, and a test tag. After that, releases are a PM-cut tag and CI publishes. The user turns on 2FA once CI publishing is proven.

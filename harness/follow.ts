@@ -8,9 +8,9 @@
  * - Touch: left-half finger moves, right-half drag orbits, a second finger pinches to zoom. Pad:
  *   left stick moves, right looks.
  */
-import { GameLoop } from '@thunderclap/engine/core';
-import { Follow, Input, Look, type Vec3 } from '@thunderclap/engine/input';
-import { boot } from '@thunderclap/engine/platform';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { Follow, Input, Look, type Vec3 } from '@thunderclap-engine/engine/input';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   gpuDiagnostics,
@@ -20,7 +20,7 @@ import {
   Renderer,
   Transform,
   VERTEX_LAYOUT_3D,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { HarnessFollowApi, HarnessFollowState } from './follow-state';
 
 const root = document.getElementById('root') as HTMLElement;

@@ -5,7 +5,7 @@
  * replays the recording through `createInputPlayback`, comparing every tick's action states and
  * the final position. After that the DOM is attached and the page is a live demo.
  */
-import { GameLoop } from '@thunderclap/engine/core';
+import { GameLoop } from '@thunderclap-engine/engine/core';
 import {
   createInputPlayback,
   createInputRecorder,
@@ -14,9 +14,13 @@ import {
   type InputPlayback,
   parseRecording,
   serializeRecording,
-} from '@thunderclap/engine/input';
-import { boot } from '@thunderclap/engine/platform';
-import { gpuDiagnostics, installGpuErrorLogging, Renderer } from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/input';
+import { boot } from '@thunderclap-engine/engine/platform';
+import {
+  gpuDiagnostics,
+  installGpuErrorLogging,
+  Renderer,
+} from '@thunderclap-engine/engine/render';
 import type { HarnessReplayApi, HarnessReplayState } from './replay-state';
 
 const root = document.getElementById('root') as HTMLElement;

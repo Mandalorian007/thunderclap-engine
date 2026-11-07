@@ -3,7 +3,7 @@
  * grass top, grass side, dirt, stone, sand, wood, leaves, glowstone, in `Layer` order. The same
  * canvases double as the hotbar icons.
  */
-import { hash2f } from '@thunderclap/engine/core';
+import { hash2f } from '@thunderclap-engine/engine/core';
 import { LAYER_COUNT, Layer } from './world';
 
 export const TEXTURE_SIZE = 32;

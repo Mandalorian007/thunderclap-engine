@@ -6,7 +6,13 @@
  * (ws/ui-6).
  * Updates write the DOM only when a rounded value changes, so a steady frame allocates nothing.
  */
-import { type AnchorHandle, type Anchors, button, cooldown, h } from '@thunderclap/engine/ui';
+import {
+  type AnchorHandle,
+  type Anchors,
+  button,
+  cooldown,
+  h,
+} from '@thunderclap-engine/engine/ui';
 
 const CSS = `
 .arpg-ability { position: relative; width: 100%; height: 100%; display: grid; place-items: center; }

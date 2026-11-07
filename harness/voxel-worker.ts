@@ -3,6 +3,6 @@
  * The engine's `installVoxelMesherWorker` keeps a mirror of the grid here and answers each
  * `mesh` request with a transferred vertex + index buffer.
  */
-import { installVoxelMesherWorker } from '@thunderclap/engine/voxel';
+import { installVoxelMesherWorker } from '@thunderclap-engine/engine/voxel';
 
 installVoxelMesherWorker();

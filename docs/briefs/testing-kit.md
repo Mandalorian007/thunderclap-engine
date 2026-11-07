@@ -8,7 +8,7 @@ Read `docs/briefs/common.md` first. Then read:
 
 ## Goal
 
-A game author can unit-test game logic in Vitest or Node with no browser and no GPU, using only `@thunderclap/engine/testing`.
+A game author can unit-test game logic in Vitest or Node with no browser and no GPU, using only `@thunderclap-engine/engine/testing`.
 
 STATUS row, *done when*:
 

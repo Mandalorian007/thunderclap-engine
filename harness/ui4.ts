@@ -16,8 +16,8 @@
  *
  * `?still` (or `park(true)`) stops the clock (E-017).
  */
-import { GameLoop } from '@thunderclap/engine/core';
-import { boot } from '@thunderclap/engine/platform';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   gpuDiagnostics,
@@ -27,7 +27,7 @@ import {
   Renderer,
   Transform,
   VERTEX_LAYOUT_3D,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import {
   button,
   createOverlay,
@@ -36,7 +36,7 @@ import {
   type PadLike,
   PadNav,
   type PanelHandle,
-} from '@thunderclap/engine/ui';
+} from '@thunderclap-engine/engine/ui';
 import type { HarnessUi4Api, HarnessUi4Mode, HarnessUi4State } from './ui4-state';
 
 const root = document.getElementById('root') as HTMLElement;

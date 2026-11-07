@@ -3,7 +3,7 @@
  * for the dash cooldown. The engine moves them between regions when the form factor changes.
  * Nothing here draws on the canvas or changes game state.
  */
-import { h } from '@thunderclap/engine/ui';
+import { h } from '@thunderclap-engine/engine/ui';
 import type { GameCtx } from '../ctx';
 import { DASH_COOLDOWN } from '../physics/player';
 

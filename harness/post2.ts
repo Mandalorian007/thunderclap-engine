@@ -7,9 +7,13 @@
  * The page publishes which post passes ran (it wraps the command encoder the stack records
  * into) and where to measure: the cube's right silhouette and the centre of its brighter face.
  */
-import { GameLoop } from '@thunderclap/engine/core';
-import { boot } from '@thunderclap/engine/platform';
-import { createLutTexture, type PostSettingsPatch, PostStack } from '@thunderclap/engine/post';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { boot } from '@thunderclap-engine/engine/platform';
+import {
+  createLutTexture,
+  type PostSettingsPatch,
+  PostStack,
+} from '@thunderclap-engine/engine/post';
 import {
   Camera,
   type CameraPoint,
@@ -22,7 +26,7 @@ import {
   type SceneTargetViewport,
   Transform,
   VERTEX_LAYOUT_3D,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { HarnessPost2Api, HarnessPost2State, Post2Pass } from './post2-state';
 
 const root = document.getElementById('root') as HTMLElement;

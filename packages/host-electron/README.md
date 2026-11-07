@@ -1,7 +1,7 @@
-# @thunderclap/host-electron
+# @thunderclap-engine/host-electron
 
 The ThunderClap desktop shell. A game's web build runs unchanged inside Electron, and the `Host`
-interface (`@thunderclap/engine/host`) is the only seam between them (D-041, Phase 4). The package
+interface (`@thunderclap-engine/engine/host`) is the only seam between them (D-041, Phase 4). The package
 contains no game nouns. The engine never imports it, and it reaches the engine only through the
 engine's exports map (`pnpm check:boundaries` enforces both).
 
@@ -23,8 +23,8 @@ engine's exports map (`pnpm check:boundaries` enforces both).
 ## Using it from a game
 
 ```ts
-import { createWebHost, setDefaultHost } from '@thunderclap/engine/host';
-import { createElectronHost, inElectronShell } from '@thunderclap/host-electron';
+import { createWebHost, setDefaultHost } from '@thunderclap-engine/engine/host';
+import { createElectronHost, inElectronShell } from '@thunderclap-engine/host-electron';
 
 const host = inElectronShell() ? createElectronHost() : createWebHost();
 setDefaultHost(host); // or pass it to createGame / the game's ctx

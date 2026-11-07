@@ -12,4 +12,4 @@ STATUS row, *done when*: `pnpm demo arena` runs; `__demo` exposes `fps`, `speed`
 
 `demos/arena/**`, `demos/README.md`, `e2e/demos/arena.spec.ts`, `scripts/demo.mjs`, root `package.json` (one `demo` script line), root `README.md` (*Demos* paragraph after *Templates*), `scripts/check-boundaries.mjs` (one glob), `vite.harness.config.ts` and/or `playwright.config.ts` (serving `demos/`), `CHANGELOG.md` (*Demos* heading + one line). Nothing under `src/`.
 
-Running alongside: ws/demo-dungeon, ws/demo-showroom, ws/demo-range (each adds a `demos/README.md` row and a CHANGELOG line, nothing else shared), and the engine streams in STATUS. If `@thunderclap/engine/geom`, sky, or anim-graph land on main while you work, you may rebase onto main and use them; not required.
+Running alongside: ws/demo-dungeon, ws/demo-showroom, ws/demo-range (each adds a `demos/README.md` row and a CHANGELOG line, nothing else shared), and the engine streams in STATUS. If `@thunderclap-engine/engine/geom`, sky, or anim-graph land on main while you work, you may rebase onto main and use them; not required.

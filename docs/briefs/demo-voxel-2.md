@@ -4,7 +4,7 @@ Read `docs/briefs/common.md`, then `docs/briefs/demos-common.md`, then `docs/VIS
 
 ## Goal
 
-`demos/voxel` becomes the reference for "a voxel game on the engine": the game keeps its blocks, its noise, its textures and its controls; the mesher, the grid, the worker bridge, the chunk drawable with culling, the DDA pick and the uv wrap come from `@thunderclap/engine/voxel`. The demo shrinks (target: `mesher.worker.ts` and the chunk bookkeeping gone, `world.ts` holding generation and block rules only), the frame cost and the draw-call count do not rise, and the open "+z riser draws as a triangle" item is either fixed by the move or pinned to a specific engine line and reported as a wish.
+`demos/voxel` becomes the reference for "a voxel game on the engine": the game keeps its blocks, its noise, its textures and its controls; the mesher, the grid, the worker bridge, the chunk drawable with culling, the DDA pick and the uv wrap come from `@thunderclap-engine/engine/voxel`. The demo shrinks (target: `mesher.worker.ts` and the chunk bookkeeping gone, `world.ts` holding generation and block rules only), the frame cost and the draw-call count do not rise, and the open "+z riser draws as a triangle" item is either fixed by the move or pinned to a specific engine line and reported as a wish.
 
 STATUS row, *done when*:
 

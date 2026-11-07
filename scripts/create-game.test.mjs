@@ -78,7 +78,7 @@ test('engineSpec: specs kept, directories become link:', () => {
 test('rewriteManifest: name, private, engine spec, monorepo scripts dropped, key order kept', () => {
   const next = rewriteManifest(
     {
-      name: '@thunderclap/template-x',
+      name: '@thunderclap-engine/template-x',
       version: '0.1.0',
       type: 'module',
       scripts: { dev: 'vite', check: 'pnpm typecheck && pnpm test', root: 'pnpm --filter a check' },

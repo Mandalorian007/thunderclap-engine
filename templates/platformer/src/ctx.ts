@@ -3,10 +3,14 @@
  * engine part; `main.ts` widens the same object with `Object.assign`, so every scene sees one ctx.
  * Devices never leak past the bindings and touch zones below.
  */
-import type { EngineCtx } from '@thunderclap/engine';
-import type { Bindings, TouchZoneOptions, TouchZonesOptions } from '@thunderclap/engine/input';
-import type { Material } from '@thunderclap/engine/render';
-import type { Tweens } from '@thunderclap/engine/tween';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import type {
+  Bindings,
+  TouchZoneOptions,
+  TouchZonesOptions,
+} from '@thunderclap-engine/engine/input';
+import type { Material } from '@thunderclap-engine/engine/render';
+import type { Tweens } from '@thunderclap-engine/engine/tween';
 import type { Level } from './levels/format';
 import type { ProgressStore } from './save/schema';
 import type { Frames } from './world/world';

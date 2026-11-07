@@ -10,11 +10,11 @@ import {
   type Parallax,
   type ParallaxLayerOptions,
   type Renderer,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import { TILE } from '../levels/format';
 import { ATLAS_COLS, ATLAS_ROWS, CELL } from './atlas';
 
-export type { Parallax } from '@thunderclap/engine/render';
+export type { Parallax } from '@thunderclap-engine/engine/render';
 
 interface LayerSpec {
   /** 0 = pinned to the sky, 1 = moves with the world. */

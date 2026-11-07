@@ -1,12 +1,12 @@
 # engine/core
 
-The game loop, the scene stack, a typed event emitter, matrix helpers and the deterministic utilities: seeded random, hashing, noise, a scheduler and pools. `createGame` (root `@thunderclap/engine`) wires these together for you; a game reaches for this subpath when it needs one of them on its own, and keeps its own state and rules.
+The game loop, the scene stack, a typed event emitter, matrix helpers and the deterministic utilities: seeded random, hashing, noise, a scheduler and pools. `createGame` (root `@thunderclap-engine/engine`) wires these together for you; a game reaches for this subpath when it needs one of them on its own, and keeps its own state and rules.
 
 ## Quick use
 
 <!-- snippet:check -->
 ```ts
-import { createRandom, GameLoop } from '@thunderclap/engine/core';
+import { createRandom, GameLoop } from '@thunderclap-engine/engine/core';
 
 const rng = createRandom(42); // the same seed gives the same run
 let x = 0;
@@ -36,7 +36,7 @@ loop.paused = true; // update stops, render keeps running
 
 The game loop, the scene stack (with async preload), a typed event emitter, 4×4 matrix helpers and
 the deterministic game utilities: seeded random, positional hashing, noise, a scheduler and pools. `createGame`
-(root `@thunderclap/engine`) wires these together; a game reaches for this subpath when it needs
+(root `@thunderclap-engine/engine`) wires these together; a game reaches for this subpath when it needs
 one of them on its own (a tool, a test, a second loop).
 
 `createGame({ aux })` (ws/core-7) passes `aux` (`SceneTargetAux`: `{ roughMetal?, velocity? }`)
@@ -54,7 +54,7 @@ has no aux attachments.
 ## Loop
 
 ```ts
-import { GameLoop } from '@thunderclap/engine/core';
+import { GameLoop } from '@thunderclap-engine/engine/core';
 
 const loop = new GameLoop({ update: (dt, time) => sim(dt), render: (alpha) => draw(alpha) }, { step: 1 / 60 });
 loop.start();
@@ -90,7 +90,7 @@ loop.maxFps = 30;    // steady 30 fps on a 60 Hz display; null = every display f
 
 `createGame({ input: { ..., record: true } })` records everything `ctx.input` is fed from the first
 tick: `ctx.input.recorder` is the `InputRecorder`, `stop()` it for the `InputRecording` (plain
-JSON; `serializeRecording` in `@thunderclap/engine/input`). `createGame({ input: { ..., replay } })`
+JSON; `serializeRecording` in `@thunderclap-engine/engine/input`). `createGame({ input: { ..., replay } })`
 runs from a recording instead: the input is not attached to the canvas or the window, and before
 each fixed step `ctx.input.playback.step()` feeds that tick's keys, buttons, pointer, wheel and
 pads, so an identical game sees identical `pressed`/`held`/`value` per tick. Once the recording is
@@ -104,7 +104,7 @@ so the handler fires on the frame it fired live, on a page rebuilt from scratch.
 
 ## createGame: the tick clock
 
-`ctx.clock` (a `TickClock` from `@thunderclap/engine/input`, ms, starting at 0; only the loop or a playback advances it) is the game's
+`ctx.clock` (a `TickClock` from `@thunderclap-engine/engine/input`, ms, starting at 0; only the loop or a playback advances it) is the game's
 tick clock (ws/core-4). The loop advances it by the fixed step in each fixed update (after the
 replay feed, before `input.update()`; with `sim: false`, by the frame delta once per frame), so
 N fixed steps move `ctx.clock.now()` by exactly N × step, and a paused (`loop.paused`), stopped
@@ -149,7 +149,7 @@ a `TickClock`), but the input then stays attached to the canvas and the player c
 
 ## createGame: headless
 
-`createGame` runs without WebGPU when it is handed a GPU (ws/core-8): `gpu` (a `GpuContext`: `device`, `context`, `format`, `adapter`, `timestamps`) skips the WebGPU boot and the canvas context, so a fake device (`fakeRendererGpu` in `@thunderclap/engine/testing`) runs the whole game in Vitest. With `gpu`, `root` is optional (default a detached `<div>`); a DOM is still needed for the overlay (happy-dom). `clock` sets `ctx.clock` (default `createTickClock()`; a `FixedClock` makes N steps read exactly N × step) and `host` the host, as before. A `gpu.device.lost` promise, when the device has one, halts the loop as on a page. `createTestGame` (`@thunderclap/engine/testing`) is this call with the testing kit's fakes and a `step(n)` driver.
+`createGame` runs without WebGPU when it is handed a GPU (ws/core-8): `gpu` (a `GpuContext`: `device`, `context`, `format`, `adapter`, `timestamps`) skips the WebGPU boot and the canvas context, so a fake device (`fakeRendererGpu` in `@thunderclap-engine/engine/testing`) runs the whole game in Vitest. With `gpu`, `root` is optional (default a detached `<div>`); a DOM is still needed for the overlay (happy-dom). `clock` sets `ctx.clock` (default `createTickClock()`; a `FixedClock` makes N steps read exactly N × step) and `host` the host, as before. A `gpu.device.lost` promise, when the device has one, halts the loop as on a page. `createTestGame` (`@thunderclap-engine/engine/testing`) is this call with the testing kit's fakes and a `step(n)` driver.
 
 `createGame({ overlay: false, gpu, host })` (ws/core-9) is the no-DOM mode, for plain Node (a unit test, a server-side sim): nothing touches `document` or `window`. There is no overlay (reading `ctx.ui` throws an error naming `overlay: false`), no `styles` call, no zoom block, no canvas or root (`root` is not used), no page lifecycle listeners, no audio unlock (audio stays locked and silent), and the input is attached to nothing. `ctx.surface` letterboxes a virtual container of the design size at a pixel ratio of 1, so client px are design px and `input.pointerAt(x, y)` lands on design `(x, y)`; its `root` and `canvas` throw. `ctx.padNav` runs and never owns the pad. The loop, scenes, renderer, clock, gestures, pointer router, `host.lifecycle`, the save and device loss work as with a DOM. Feed input with `keyDown`, `pointerAt` and the rest; `ctx.replay` and `input.replay` feed keys, buttons, the pointer and pads, but recorded pointer events and overlay clicks have nothing to reach. `gpu` and `host` are required (no WebGPU boot, no web host); without them it throws. `createTestGame({ overlay: false })` is this mode with the testing kit's fakes.
 

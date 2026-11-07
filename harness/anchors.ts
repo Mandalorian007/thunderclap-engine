@@ -11,9 +11,13 @@
  *
  * e2e/anchors.spec.ts reads `window.__harnessAnchors.state()`.
  */
-import { createGame } from '@thunderclap/engine';
-import { type InstanceParams, Transform, VERTEX_LAYOUT_3D } from '@thunderclap/engine/render';
-import type { AnchorHandle } from '@thunderclap/engine/ui';
+import { createGame } from '@thunderclap-engine/engine';
+import {
+  type InstanceParams,
+  Transform,
+  VERTEX_LAYOUT_3D,
+} from '@thunderclap-engine/engine/render';
+import type { AnchorHandle } from '@thunderclap-engine/engine/ui';
 import type { AnchorsBox, HarnessAnchorsApi, HarnessAnchorsState } from './anchors-state';
 
 const root = document.getElementById('root') as HTMLElement;

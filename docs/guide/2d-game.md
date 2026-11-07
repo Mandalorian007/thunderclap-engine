@@ -15,9 +15,9 @@ Your game draws in a fixed design space of 1920 by 1080 units. The origin is the
 A scene draws in `render(frame)`. The simplest draw is `frame.sprite(material, params)`. Pass `null` as the material for a flat coloured quad.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import type { Scene } from '@thunderclap/engine/core';
-import { type DrawParams, type Frame, hex } from '@thunderclap/engine/render';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import type { Scene } from '@thunderclap-engine/engine/core';
+import { type DrawParams, type Frame, hex } from '@thunderclap-engine/engine/render';
 
 export function createSquareScene(ctx: EngineCtx): Scene<EngineCtx, Frame> {
   // Build draw params once. Mutate them each frame; never create them inside render.
@@ -53,7 +53,7 @@ Draws that share a material in a row are merged into one GPU call. Group your dr
 If you want parent and child objects, or a cached matrix, use a `Transform` instead of `x, y, w, h`. The engine's quad spans -0.5 to 0.5, so the transform's scale is the sprite's size in design pixels.
 
 ```ts
-import { type Frame, hex, Transform } from '@thunderclap/engine/render';
+import { type Frame, hex, Transform } from '@thunderclap-engine/engine/render';
 
 const ship = new Transform({ x: 960, y: 540, scaleX: 128, scaleY: 64 });
 // A child is local to its parent: 0.5 is the ship's right edge, before scaling.
@@ -79,7 +79,7 @@ The renderer writes two images each frame: colour and emissive. The post stack b
 Bloom is on by default. Tune it through `ctx.post`:
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
+import type { EngineCtx } from '@thunderclap-engine/engine';
 
 export function setupGlow(ctx: EngineCtx) {
   ctx.post.set({ bloom: { intensity: 1.2 } }); // merges into the current settings
@@ -93,8 +93,8 @@ You can also pass the same patch as `post` to `createGame`.
 Upload an image with `renderer.textureFromSource`, then wrap it in a sprite material. It accepts an `ImageBitmap`, `ImageData`, a canvas or an `HTMLImageElement`.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import type { DrawParams } from '@thunderclap/engine/render';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import type { DrawParams } from '@thunderclap-engine/engine/render';
 
 export async function loadHero(ctx: EngineCtx, url: string) {
   const blob = await (await fetch(url)).blob();
@@ -110,12 +110,12 @@ export async function loadHero(ctx: EngineCtx, url: string) {
 Put many sprites in one texture (an atlas) so they share one material and batch into one call. Two ways to get UVs out of an atlas:
 
 - **A grid.** If every cell is the same size, `atlasFrames({ cols, rows }, indices)` returns the UV rect of each listed cell (row-major). Add `inset: 0.5, width, height` (the texture size in texels) to pull every rect in by half a texel, so a neighbour cell never bleeds in. It allocates, so call it at load time.
-- **Packed images.** `packAtlas` from `@thunderclap/engine/assets` packs named images of any size into one sheet. `createAtlasTexture` uploads it. Each rect has `u0`, `v0`, `u1`, `v1`.
+- **Packed images.** `packAtlas` from `@thunderclap-engine/engine/assets` packs named images of any size into one sheet. `createAtlasTexture` uploads it. Each rect has `u0`, `v0`, `u1`, `v1`.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import { createAtlasTexture, packAtlas } from '@thunderclap/engine/assets';
-import type { DrawParams } from '@thunderclap/engine/render';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import { createAtlasTexture, packAtlas } from '@thunderclap-engine/engine/assets';
+import type { DrawParams } from '@thunderclap-engine/engine/render';
 
 export function buildSheet(ctx: EngineCtx, coin: ImageBitmap, gem: ImageBitmap) {
   const images = { coin, gem };
@@ -143,8 +143,8 @@ A material is a WGSL fragment shader. The engine prepends a prelude, so you only
 Your own bindings go in `@group(1)`: binding 0 is the uniform block, binding 1 the sampler, binding 2 onward the textures.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import { type DrawParams, type Frame, hex } from '@thunderclap/engine/render';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import { type DrawParams, type Frame, hex } from '@thunderclap-engine/engine/render';
 
 export function createPulseOrb(ctx: EngineCtx) {
   const orb = ctx.renderer.createMaterial({
@@ -181,7 +181,7 @@ Use `params` for a value that differs per sprite. For values shared by every dra
 A flipbook steps through a list of UV rects over time. It is pure timing: you copy its `uv` into your draw params.
 
 ```ts
-import { atlasFrames, createFlipbook, type DrawParams, type Frame, type Material } from '@thunderclap/engine/render';
+import { atlasFrames, createFlipbook, type DrawParams, type Frame, type Material } from '@thunderclap-engine/engine/render';
 
 const grid = { cols: 8, rows: 8, inset: 0.5, width: 512, height: 512 }; // 64 px cells
 const idle = atlasFrames(grid, [16, 17]);
@@ -209,8 +209,8 @@ Set `loop: false` for a one-shot clip. It holds its last frame and sets `done`. 
 `createTileLayer` draws a whole grid of atlas cells as one mesh in one draw call. Fill it from your level data, then draw it each frame.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import { createTileLayer, type Material } from '@thunderclap/engine/render';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import { createTileLayer, type Material } from '@thunderclap-engine/engine/render';
 
 export function buildMap(ctx: EngineCtx, atlas: Material, level: string[]) {
   const map = createTileLayer(ctx.renderer, {
@@ -243,8 +243,8 @@ The platformer's level format (`templates/platformer/src/levels/format.ts`) turn
 `createParallax` slides tile layers at a fraction of the camera's movement. A factor of 0 pins a layer to the screen; 1 moves it with the world. `wrapW` is the width of the repeating pattern, so a strip one view plus one period wide covers any scroll.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import { createParallax, type Frame, type TileLayer } from '@thunderclap/engine/render';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import { createParallax, type Frame, type TileLayer } from '@thunderclap-engine/engine/render';
 
 export function buildSky(ctx: EngineCtx, mountains: TileLayer, hills: TileLayer) {
   const sky = createParallax(ctx.renderer, [
@@ -265,8 +265,8 @@ Set each layer's `origin` before you call `createParallax`: that position is the
 `camera.x` and `camera.y` pan the view (the view's top-left, in design px); `camera.zoom` zooms it. `createFollow2D` writes them for you, with a dead zone, look-ahead, smoothing and level bounds.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import { createFollow2D } from '@thunderclap/engine/render';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import { createFollow2D } from '@thunderclap-engine/engine/render';
 
 export function createCameraRig(ctx: EngineCtx, worldW: number, worldH: number) {
   const follow = createFollow2D(ctx.camera, {
@@ -291,8 +291,8 @@ When you leave a level, zero the camera (`ctx.camera.x = 0; ctx.camera.y = 0`) s
 The DOM HUD takes bars and side columns, and their size changes with the device. `ctx.ui.layout.freeRect` is the rectangle left for your world, in CSS pixels. `camera.fitFreeRect` frames a world rectangle inside it, converting units for you. Call it on enter and whenever the layout or the canvas changes.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import type { CameraPoint, CameraRect } from '@thunderclap/engine/render';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import type { CameraPoint, CameraRect } from '@thunderclap-engine/engine/render';
 
 export function frameBoard(ctx: EngineCtx, board: CameraRect) {
   const fit = () => ctx.camera.fitFreeRect(board, ctx.ui.layout.freeRect, ctx.surface);
@@ -318,9 +318,9 @@ Once the camera has moved or zoomed, screen and world coordinates differ. Always
 `ctx.particles` is a shared GPU `ParticleSystem`. The engine steps it each fixed step; you emit into it and draw it.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import type { EmitParams } from '@thunderclap/engine/fx';
-import { type Frame, hex } from '@thunderclap/engine/render';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import type { EmitParams } from '@thunderclap-engine/engine/fx';
+import { type Frame, hex } from '@thunderclap-engine/engine/render';
 
 const sparkle: EmitParams = {
   x: 0,
@@ -347,7 +347,7 @@ export function drawParticles(ctx: EngineCtx, frame: Frame) {
 
 - Shapes: `shape: { kind: 'circle', radius }`, `rect`, `line` or the default point.
 - `blend: 'alpha'` on the params gives soft smoke and dust instead of additive light.
-- `ParticleEmitter` (from `@thunderclap/engine/fx`) emits at a steady rate per second for fires and embers.
+- `ParticleEmitter` (from `@thunderclap-engine/engine/fx`) emits at a steady rate per second for fires and embers.
 - `createGame({ particles: { capacity: 2048 } })` sizes the pool. When it is full, the oldest particles are reused.
 
 Reuse one `EmitParams` object per effect and move it before each `emit`, as above.

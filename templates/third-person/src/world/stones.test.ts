@@ -1,4 +1,4 @@
-import { createHit, exportCollider, raycastReg } from '@thunderclap/engine/geom';
+import { createHit, exportCollider, raycastReg } from '@thunderclap-engine/engine/geom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import stonesJson from '../../assets/stones.json';
 import { createGround } from './ground';

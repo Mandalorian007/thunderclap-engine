@@ -2,9 +2,9 @@
  * The host: what the page or shell the game runs in can do for it (D-041, ARCHITECTURE.md
  * "Host"). The engine reaches the outside world only through this: frame scheduling, opening a
  * link, copying text, fullscreen, and where saves are kept. `createWebHost()` (host/web.ts) is the browser,
- * at top level or in a frame such as itch.io's; `createElectronHost()` (`@thunderclap/host-electron`)
+ * at top level or in a frame such as itch.io's; `createElectronHost()` (`@thunderclap-engine/host-electron`)
  * satisfies the same interface through a preload bridge and adds `window`;
- * `createCapacitorHost()` (`@thunderclap/host-capacitor`) fills it from Capacitor's plugins for a
+ * `createCapacitorHost()` (`@thunderclap-engine/host-capacitor`) fills it from Capacitor's plugins for a
  * store app; `createXrHost()` (host/xr.ts) takes frames from an XR session and delegates the
  * rest to the host it wraps. The optional facets `lifecycle`, `haptics` and `safeArea` (ws/host-mobile) are what
  * a mobile shell adds and the web host can also answer.

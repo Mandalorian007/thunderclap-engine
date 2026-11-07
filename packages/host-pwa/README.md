@@ -1,4 +1,4 @@
-# @thunderclap/host-pwa
+# @thunderclap-engine/host-pwa
 
 The installable web shell for a ThunderClap game: a vite plugin that turns a build into an
 installable, offline-capable app (manifest, icons, service worker), and a `Host` that surfaces the
@@ -12,7 +12,7 @@ manifest are this package's and the game's.
 | --- | --- |
 | `src/index.ts` | Exports: `createPwaHost`, `inStandalone`, `pwaPlugin` and the types |
 | `src/host.ts` | `createPwaHost(opts)`: `createWebHost()` plus `host.pwa`; `inStandalone()` |
-| `src/vite.ts` | `pwaPlugin(opts)`: the build-only vite plugin (`@thunderclap/host-pwa/vite`, so a vite config never loads the host) |
+| `src/vite.ts` | `pwaPlugin(opts)`: the build-only vite plugin (`@thunderclap-engine/host-pwa/vite`, so a vite config never loads the host) |
 | `src/manifest.ts` | The manifest, the icon file names, the tags injected into the page, the precache list and the version stamp |
 | `src/worker.ts` | The `sw.js` body with the per-build placeholders, and `workerSource(cfg)` that fills them |
 | `src/sw-logic.ts` | The worker's decisions as pure functions (`routeFor`, `trimPlan`, `staleCacheNames`, `isNewVersion`) |
@@ -23,7 +23,7 @@ manifest are this package's and the game's.
 
 ```ts
 // vite.config.ts
-import { pwaPlugin } from '@thunderclap/host-pwa/vite';
+import { pwaPlugin } from '@thunderclap-engine/host-pwa/vite';
 
 export default defineConfig({
   plugins: [
@@ -38,7 +38,7 @@ export default defineConfig({
 
 ```ts
 // main.ts
-import { createPwaHost } from '@thunderclap/host-pwa';
+import { createPwaHost } from '@thunderclap-engine/host-pwa';
 
 const host = createPwaHost(); // a web Host (kind 'web') with host.pwa
 const ctx = await createGame({ host, ... });

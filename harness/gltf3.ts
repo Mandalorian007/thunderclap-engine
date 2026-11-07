@@ -21,9 +21,9 @@ import {
   type GltfScene,
   loadGltf,
   parseGltf,
-} from '@thunderclap/engine/assets';
-import { GameLoop } from '@thunderclap/engine/core';
-import { boot } from '@thunderclap/engine/platform';
+} from '@thunderclap-engine/engine/assets';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   type CameraPoint,
@@ -31,7 +31,7 @@ import {
   installGpuErrorLogging,
   Lights,
   Renderer,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import {
   buildCacheGlb,
   buildLightsGlb,

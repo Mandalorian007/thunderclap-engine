@@ -6,8 +6,8 @@ A raw WebGPU renderer for 2D and 3D: HDR scene targets, instanced sprites and me
 
 <!-- snippet:check -->
 ```ts
-import { boot } from '@thunderclap/engine/platform';
-import { hex, Renderer } from '@thunderclap/engine/render';
+import { boot } from '@thunderclap-engine/engine/platform';
+import { hex, Renderer } from '@thunderclap-engine/engine/render';
 
 const res = await boot(document.getElementById('app')!, { title: 'My Game' });
 if (res.ok) {
@@ -110,7 +110,7 @@ renderer.endFrame();
   (`sharedEmissiveCount(device)` reads the pool size; two XR eyes allocate one, ws/ergo-3d); `isExternal`, `adoptedColor`, `viewport`
   (`SceneTargetViewport`, the sub-image rect in px) and `adopt(desc)` (re-point at the next
   frame's textures; a no-op when they are the same) are its extras; `resize` throws, `destroy`
-  never destroys what it adopted. `XrSurface` in `@thunderclap/engine/platform` builds one per
+  never destroys what it adopted. `XrSurface` in `@thunderclap-engine/engine/platform` builds one per
   eye. `endFrame({ present: false })` skips the swapchain (post and present) for such a frame.
 - **Resolve (XR post, ws/xr-post).** `renderer.resolve(target, out: GPUTextureView, viewport?:
   SceneTargetViewport)` runs `renderer.post` (or the built-in present) from any `SceneTarget`
@@ -151,9 +151,9 @@ renderer.endFrame();
 ## Setup
 
 ```ts
-import { boot } from '@thunderclap/engine/platform';
-import { Renderer, installGpuErrorLogging } from '@thunderclap/engine/render';
-import { PostStack } from '@thunderclap/engine/post';
+import { boot } from '@thunderclap-engine/engine/platform';
+import { Renderer, installGpuErrorLogging } from '@thunderclap-engine/engine/render';
+import { PostStack } from '@thunderclap-engine/engine/post';
 
 const res = await boot(document.getElementById('app')!, { title: 'My Game' });
 if (!res.ok) return; // unsupported screen already shown
@@ -504,11 +504,11 @@ so one shader serves every layout. `materialPrelude(layout, variant?)` takes a
 ## Camera
 
 `Camera` holds `view`, `projection` and `viewProjection` (column-major `Float32Array(16)`,
-built with `mat4` from `@thunderclap/engine/core`), cached until something changes. The renderer
+built with `mat4` from `@thunderclap-engine/engine/core`), cached until something changes. The renderer
 uploads `renderer.camera` to the camera block every frame.
 
 ```ts
-import { Camera } from '@thunderclap/engine/render';
+import { Camera } from '@thunderclap-engine/engine/render';
 
 const cam = renderer.camera;               // Camera.ortho2d(1920, 1080): 1 unit = 1 design px
 cam.x = 120; cam.zoom = 1.5;               // the 2D controls, as before
@@ -819,7 +819,7 @@ masks, fog) in the same units as `engine_lambert`: the lights run through the sa
 loop (`wgslLightLoop`) as the prelude's Lambert helpers, with the GGX BRDF in place of N·L.
 
 ```ts
-import { createStandardMaterial } from '@thunderclap/engine/render';
+import { createStandardMaterial } from '@thunderclap-engine/engine/render';
 
 const skin = createStandardMaterial(renderer, {
   baseColor: albedoTex,         // sRGB; default 1×1 white
@@ -1059,7 +1059,7 @@ rough-metal, bit 1 velocity) keys the pipeline variants.
   frame.auxKey)`. Nothing is rebuilt: a target's aux set is fixed when it is made, so a new set
   is a new key. Every shipped drawable does this: `Sky`, `ParticleSystem` (2D and world),
   `Decals`, `Water`, `Billboards`, `DebugDraw` and, through `Material.targetsFor`, every
-  material. `WorldPanel` (`@thunderclap/engine/ui`) builds its pipelines from the helper for
+  material. `WorldPanel` (`@thunderclap-engine/engine/ui`) builds its pipelines from the helper for
   `renderer.target` only; in a view whose target has a different aux set (an XR eye beside an
   aux `renderer.target`) it is still wrong. `src/fx/render10.test.ts` checks, on the fake GPU,
   that every pipeline bound in a `scene` or `scene-blend` pass declares as many targets as the
@@ -1246,7 +1246,7 @@ its Worker-meshed chunks this way.
 ### Compressed textures
 
 `uploadKtx2(renderer, ktx2, { srgb?, label? })` (ws/render-5) puts a KTX2 file parsed by
-`parseKtx2` (`@thunderclap/engine/assets`) on the GPU in its own block format and returns a
+`parseKtx2` (`@thunderclap-engine/engine/assets`) on the GPU in its own block format and returns a
 `Texture` that binds wherever a texture does (a standard material's `baseColor`). Every mip the
 file carries is written with `queue.writeTexture` at its block-aligned row pitch
 (`ktx2LevelLayout(width, height, level, blockInfo(format))`: `ceil(w / blockW) × blockBytes`
@@ -1369,7 +1369,7 @@ the pieces. `Water` and `ParticleSystem` take `readsDepth` and then skip their o
 - `ParticleSystem.clear()` (in `engine/fx`) drops every live particle and any emits queued
   this frame. The particle buffer is zeroed on the GPU in the next `prepare`, so nothing
   allocates. Particles emitted after `clear()` in the same frame survive.
-- Tests: `engine/render/fake-gpu.ts` (imported as `@thunderclap/engine/testing`) provides a recording fake `GPUDevice`, created with
+- Tests: `engine/render/fake-gpu.ts` (imported as `@thunderclap-engine/engine/testing`) provides a recording fake `GPUDevice`, created with
   `createFakeDevice()` and wrapped with `fakeRendererGpu()`. It checks buffer and texture
   usage flags such as COPY_DST, catches writes past the end of a buffer, and records pass
   commands such as `setBindGroup` offsets and draws. That means `new Renderer(...)` and the

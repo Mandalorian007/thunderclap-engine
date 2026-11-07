@@ -3,7 +3,7 @@
 //
 //   1. Nothing under src/ imports from outside src/ (no ../harness, ../e2e, a game, a host package).
 //   2. harness/, e2e/, examples/, demos/ and templates/ (if present) reach the engine only through the
-//      public exports map: `@thunderclap/engine` or `@thunderclap/engine/<subpath>` for a key of
+//      public exports map: `@thunderclap-engine/engine` or `@thunderclap-engine/engine/<subpath>` for a key of
 //      package.json "exports". Never a relative path into src/, never a subpath outside the map.
 //   3. Files in src/<module>/ import other modules by relative path, never through the package
 //      name (no self-import).
@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const srcDir = join(root, 'src');
-const PKG = '@thunderclap/engine';
+const PKG = '@thunderclap-engine/engine';
 
 const exportsMap = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).exports ?? {};
 const allowed = new Set(
@@ -92,7 +92,7 @@ for (const file of srcFiles) {
       report(file, line, spec, 'src/ imports other modules by relative path, not by package name');
       continue;
     }
-    if (bare.startsWith('@thunderclap/')) {
+    if (bare.startsWith('@thunderclap-engine/')) {
       report(file, line, spec, 'the engine must never import a host or another package');
       continue;
     }

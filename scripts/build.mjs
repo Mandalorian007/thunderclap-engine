@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// `pnpm build`: the published form of @thunderclap/engine and its three host packages (E-037).
+// `pnpm build`: the published form of @thunderclap-engine/engine and its three host packages (E-037).
 //
 //   dist/                         the engine: ESM JavaScript and .d.ts for every subpath in `exports`
 //   packages/host-*/dist/         each host the same way
@@ -46,7 +46,7 @@ for (const dir of builds) {
     copyFileSync(f, to);
   }
   const n = fixSpecifiers(abs);
-  console.log(`build: ${dir === '.' ? '@thunderclap/engine' : dir} -> dist/ (${n} files)`);
+  console.log(`build: ${dir === '.' ? '@thunderclap-engine/engine' : dir} -> dist/ (${n} files)`);
 }
 run('node', [join(root, 'packages/host-electron/scripts/build.mjs'), '--no-renderer']);
 

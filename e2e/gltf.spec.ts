@@ -1,6 +1,6 @@
 /**
  * The glTF demo (harness/gltf.html) on every matrix row: a GLB built in the page is parsed and
- * loaded through `@thunderclap/engine/assets`, the counts match the file (two draws, two meshes,
+ * loaded through `@thunderclap-engine/engine/assets`, the counts match the file (two draws, two meshes,
  * one texture, two materials), the textured cube renders at its probe (not the clear colour,
  * and the checker's warm tones show), and the plane renders mossy green. `?pbr` loads the PBR
  * scene: five standard materials over six maps, a tangent mesh, a skinned mesh, no warnings; the

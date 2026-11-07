@@ -10,7 +10,7 @@ STATUS row, *done when*: `templates/third-person`: `createGame` fixed-step; a pr
 
 ## Scope
 
-- `templates/third-person/` as a private workspace package `@thunderclap/template-third-person` depending on `@thunderclap/engine` via `workspace:*`.
+- `templates/third-person/` as a private workspace package `@thunderclap-engine/template-third-person` depending on `@thunderclap-engine/engine` via `workspace:*`.
 - `src/character/`: the glb generator (pure, unit-tested: joint count, clip durations, skin weights sum to 1), the animation graph setup, the controller (move on the heightfield with a tiny capsule collision in the template, not the engine), socket slots and cosmetics table, IK and root-motion wiring.
 - `src/world/`: heightfield from `geom` with a few boxes; `sampleHeight` written in the template if the engine lacks one (ws/ergo-3d adds it later; note the wish).
 - `src/enemies/`: roam, take hits, die (shrink and fade), respawn.

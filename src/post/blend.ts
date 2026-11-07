@@ -1,7 +1,7 @@
 import { type Ease, ease } from '../tween/ease';
 import type { PostSettings, PostSettingsPatch } from './settings';
 
-// The easing functions live in `@thunderclap/engine/tween`; these names stay as aliases.
+// The easing functions live in `@thunderclap-engine/engine/tween`; these names stay as aliases.
 export type { Ease };
 export const easeLinear: Ease = ease.linear;
 /** Smoothstep: gentle start and end. The default for `blendTo`. */

@@ -8,16 +8,16 @@
  * - Orbit: a point circling the arm's pivot while bobbing, pushed into a flat (`facing: 'up'`)
  *   alpha-blended trail with a colour curve that cools toward the tail.
  */
-import { GameLoop } from '@thunderclap/engine/core';
-import { Trail } from '@thunderclap/engine/fx';
-import { boot } from '@thunderclap/engine/platform';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { Trail } from '@thunderclap-engine/engine/fx';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   type CameraPoint,
   gpuDiagnostics,
   installGpuErrorLogging,
   Renderer,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { HarnessTrailsApi, HarnessTrailsState } from './trails-state';
 
 const root = document.getElementById('root') as HTMLElement;

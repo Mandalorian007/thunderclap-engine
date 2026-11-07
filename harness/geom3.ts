@@ -1,5 +1,5 @@
 /**
- * Geometry-pipeline page (ws/geom-3): the build-time tools of `@thunderclap/engine/geom` on screen.
+ * Geometry-pipeline page (ws/geom-3): the build-time tools of `@thunderclap-engine/engine/geom` on screen.
  *
  * - `?lod` (default): a lumpy rock, `createLodChain` to four levels, drawn at four distances,
  *   each at the level `selectLod` picks for its projected size.
@@ -12,7 +12,7 @@
  *
  * Nothing here is engine code beyond the imports. e2e/geom3.spec.ts reads the state.
  */
-import { GameLoop } from '@thunderclap/engine/core';
+import { GameLoop } from '@thunderclap-engine/engine/core';
 import {
   box,
   carryBy,
@@ -32,8 +32,8 @@ import {
   type TileQuery,
   torus,
   transformGeometry,
-} from '@thunderclap/engine/geom';
-import { boot } from '@thunderclap/engine/platform';
+} from '@thunderclap-engine/engine/geom';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   gpuDiagnostics,
@@ -42,7 +42,7 @@ import {
   type Mesh,
   Renderer,
   Transform,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import {
   type Geom3Mode,
   type HarnessGeom3State,

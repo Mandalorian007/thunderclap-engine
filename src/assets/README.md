@@ -6,8 +6,8 @@ Turns asset bytes into engine objects: glTF 2.0 (meshes, skins, animations, ligh
 
 <!-- snippet:check -->
 ```ts
-import { loadGltf, parseGltf } from '@thunderclap/engine/assets';
-import type { Frame, Renderer } from '@thunderclap/engine/render';
+import { loadGltf, parseGltf } from '@thunderclap-engine/engine/assets';
+import type { Frame, Renderer } from '@thunderclap-engine/engine/render';
 
 declare const renderer: Renderer;
 declare const frame: Frame;
@@ -59,7 +59,7 @@ uploads them.
 ## glTF in one call
 
 ```ts
-import { loadGltf, parseGltf } from '@thunderclap/engine/assets';
+import { loadGltf, parseGltf } from '@thunderclap-engine/engine/assets';
 
 const bytes = await (await fetch('scene.glb')).arrayBuffer(); // the game's fetch, not ours
 const doc = parseGltf(bytes);                                  // engine-free document
@@ -231,7 +231,7 @@ target; a wrong count, a non-`VEC3` target or a target whose count differs from 
 vertex count throw `GltfError`. When flat normals are generated the targets are unwelded with
 the vertices, so they always line up with `position`.
 
-The blend is CPU arithmetic in `@thunderclap/engine/anim` (`createMorphBlender`, `sampleWeights`);
+The blend is CPU arithmetic in `@thunderclap-engine/engine/anim` (`createMorphBlender`, `sampleWeights`);
 the loader wires it: for a mesh with targets `loadGltf` keeps each primitive's interleaved base
 buffer, builds one `MorphBlender` per primitive over one shared weights array (starting at the
 file's `mesh.weights`, else zeros) and exposes them as `GltfMorph` on `scene.morphs` and
@@ -246,7 +246,7 @@ parser (`gltf.ts`) still imports nothing from `anim`; the loader (`gltf-load.ts`
 
 ## Skins and animations
 
-A rigged character from a DCC tool parses straight into the shapes `@thunderclap/engine/anim`
+A rigged character from a DCC tool parses straight into the shapes `@thunderclap-engine/engine/anim`
 samples and `VERTEX_LAYOUT_SKINNED` draws, with no converter. The parser does not import `anim`:
 the types below restate `AnimationClip`, `AnimationChannel` and `Skeleton` structurally, so a
 `GltfAnimation` is an `AnimationClip` and a `GltfSkeleton` is a `Skeleton`.
@@ -326,8 +326,8 @@ to light with:
 
 <!-- snippet:check -->
 ```ts
-import type { GltfScene } from '@thunderclap/engine/assets';
-import type { Lights } from '@thunderclap/engine/render';
+import type { GltfScene } from '@thunderclap-engine/engine/assets';
+import type { Lights } from '@thunderclap-engine/engine/render';
 
 declare const scene: GltfScene;
 declare const lights: Lights; // the game's
@@ -399,7 +399,7 @@ The engine never fetches: the only I/O is the game's `read(uri)` (VISION rule 4)
 the same over `fetch`, a zip in memory, IndexedDB, or an Electron file read.
 
 ```ts
-import { createBundle, defineManifest } from '@thunderclap/engine/assets';
+import { createBundle, defineManifest } from '@thunderclap-engine/engine/assets';
 
 const manifest = defineManifest({
   hero: { kind: 'texture', uri: 'hero.png', options: { mips: false } },
@@ -434,7 +434,7 @@ const sprites = bundle.get('sprites'); // AtlasAsset<'coin' | 'gem'>
 *Atlas*). `AssetKind` is the union of their `kind`s and `Manifest` the map type. A texture entry's
 `options` are `LoadTextureOptions`; a gltf entry's are `LoadGltfOptions`.
 
-A particle effect descriptor (`EffectDesc`, `@thunderclap/engine/fx`) is JSON, so it loads as
+A particle effect descriptor (`EffectDesc`, `@thunderclap-engine/engine/fx`) is JSON, so it loads as
 `{ kind: 'json', uri: 'hit.json' }`: run `bundle.get('hit')` through `validateEffectDesc` and
 hand it to `createEffect(renderer, desc, { textures })`, resolving the descriptor's texture names
 from the bundle's texture entries.
@@ -464,7 +464,7 @@ cancelled keys in `total` so `fraction` stays below 1 until a later `load` resum
 cancel, release all and drop listeners. Failed assets count toward `fraction` so a bar still
 reaches 1; a failed key loads again on the next `load`.
 
-**Audio sprite sidecars.** A sprite packer's JSON (`{ src, sprites, loopPoints? }`, the audio module's `SpriteSidecar`) needs no loader kind of its own: load it as a `json` entry and its `src` as an `audio` entry, then `spriteSheetFrom(sidecar, buffer)` from `@thunderclap/engine/audio` builds the sheet for `audio.defineSprites`.
+**Audio sprite sidecars.** A sprite packer's JSON (`{ src, sprites, loopPoints? }`, the audio module's `SpriteSidecar`) needs no loader kind of its own: load it as a `json` entry and its `src` as an `audio` entry, then `spriteSheetFrom(sidecar, buffer)` from `@thunderclap-engine/engine/audio` builds the sheet for `audio.defineSprites`.
 
 ## Baked bytes
 

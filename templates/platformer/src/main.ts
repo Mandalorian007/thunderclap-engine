@@ -4,10 +4,10 @@
  * fixed-step sim and hands back the engine ctx; the game paints its atlas, defines its sounds,
  * widens the ctx with its own nouns and pushes the title.
  */
-import { createGame } from '@thunderclap/engine';
-import { recipes } from '@thunderclap/engine/audio';
-import { createTouchZones } from '@thunderclap/engine/input';
-import { createTweens } from '@thunderclap/engine/tween';
+import { createGame } from '@thunderclap-engine/engine';
+import { recipes } from '@thunderclap-engine/engine/audio';
+import { createTouchZones } from '@thunderclap-engine/engine/input';
+import { createTweens } from '@thunderclap-engine/engine/tween';
 import { type Action, bindings, buttonKeys, type GameCtx, type Run, touchZones } from './ctx';
 import { createProgressStore, type ProgressStore, START_LIVES } from './save/schema';
 import { createLevelScene } from './scenes/level';

@@ -22,10 +22,10 @@
  *   on a metal sphere, the lit and unlit slopes of a bump on the tile, the floor inside and
  *   outside the spot's cone, and the camera-facing point of each sphere of the masked pair.
  */
-import { GameLoop } from '@thunderclap/engine/core';
-import { computeTangents, plane } from '@thunderclap/engine/geom';
-import { Gestures, Input } from '@thunderclap/engine/input';
-import { boot } from '@thunderclap/engine/platform';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { computeTangents, plane } from '@thunderclap-engine/engine/geom';
+import { Gestures, Input } from '@thunderclap-engine/engine/input';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   type CameraPoint,
@@ -39,8 +39,8 @@ import {
   type SpotLight,
   Transform,
   VERTEX_LAYOUT_3D,
-} from '@thunderclap/engine/render';
-import { createPerfMonitor, createPerfOverlay } from '@thunderclap/engine/ui';
+} from '@thunderclap-engine/engine/render';
+import { createPerfMonitor, createPerfOverlay } from '@thunderclap-engine/engine/ui';
 import type { HarnessPbrApi, HarnessPbrState } from './pbr-state';
 
 const root = document.getElementById('root') as HTMLElement;

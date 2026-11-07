@@ -6,7 +6,7 @@ Versioned save slots in the host's storage (`host.storage`; `localStorage` on th
 
 <!-- snippet:check -->
 ```ts
-import { createSaveStore, type Infer, s } from '@thunderclap/engine/save';
+import { createSaveStore, type Infer, s } from '@thunderclap-engine/engine/save';
 
 const Progress = s.object({ solved: s.array(s.string()), playMs: s.number({ min: 0 }) });
 type Progress = Infer<typeof Progress>;
@@ -35,7 +35,7 @@ save.update((d) => { d.solved.push('intro'); }); // validated, debounced write
 ## Usage
 
 ```ts
-import { createSaveStore, s, type Infer } from '@thunderclap/engine/save';
+import { createSaveStore, s, type Infer } from '@thunderclap-engine/engine/save';
 
 const Progress = s.object({
   solved: s.array(s.string()),
@@ -90,7 +90,7 @@ Stored format: `{"v": <version>, "t": <savedAt ms>, "d": <data>}`, where typed a
 A load/save menu needs several slots and their metadata without loading each one. `createSlotManager` numbers them `1..slots` (keys `thunderclap:<game>:slot<n>`) and writes a sidecar `<key>:meta` in the same flush as the data, so `list()` parses sidecars only.
 
 ```ts
-import { createSlotManager } from '@thunderclap/engine/save';
+import { createSlotManager } from '@thunderclap-engine/engine/save';
 
 const slots = createSlotManager<Progress>({
   game: 'my-game', version: 2, migrations, defaults, schema: Progress,
@@ -150,7 +150,7 @@ Partitioned storage note: in some browsers, itch's iframe gets storage keyed to 
 - `encodeExport / decodeExport / fnv1a` (low level); `saveReplacer / saveReviver` (the `JSON.stringify` / `JSON.parse` hooks for typed arrays), `TypedKind`, `TypedArrayOf<K>`, `typedKindOf(value)`.
 
 ## Storage
-The store gets its storage from the host: `createSaveStore({ ..., host })`, default `defaultHost()` (`@thunderclap/engine/host`). On the web that is `localStorage`; an Electron host can supply a file-backed `StorageLike`. `storage:` overrides the host.
+The store gets its storage from the host: `createSaveStore({ ..., host })`, default `defaultHost()` (`@thunderclap-engine/engine/host`). On the web that is `localStorage`; an Electron host can supply a file-backed `StorageLike`. `storage:` overrides the host.
 
 ## Testing
 Pass `storage: new MemoryStorage()` (or a throwing stub), `debounceMs: 0`, `autoFlush: false`, and a fixed `now`. See `save.test.ts`, `slots.test.ts`, `settings.test.ts`, `journal.test.ts` and `codec.test.ts`. The harness page `harness/save.html` (e2e/save.spec.ts) runs three slots, a bound volume slider, a 64×64 `Uint8Array` tilemap and undo/redo on every matrix row without WebGPU.

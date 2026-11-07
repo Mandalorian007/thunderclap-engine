@@ -6,7 +6,7 @@ Read `docs/briefs/common.md` first, then DECISIONS E-015 (first/third-person cha
 
 Cosmetics: a sword in a hand, a hat on a head, a particle emitter at a staff tip. A socket is a joint plus a local offset; each frame it yields a world 3×4 for whatever is attached, so a second mesh (or a `Transform`) rides the animated skeleton with no code in the game beyond "attach here".
 
-STATUS row, *done when*: in `@thunderclap/engine/anim`: `Socket { joint: number; offset: Float32Array /* 3×4 */ }`, `createSocket(skeleton, joint: number | string, local?: { position?; rotation? (quat); scale? }): Socket` (string joints resolve through `Skeleton.names?: string[]`, a new optional field; throw if absent), `socketWorld(socket, worldPose: Float32Array, instanceWorld: Float32Array | null, out: Float32Array): Float32Array` (joint world × offset × instance, zero allocations), `attachTransform(socket, worldPose, instanceWorld, transform: Transform)` writing the result into a `Transform` so the attached mesh draws through the normal path; tests; a harness page; documented.
+STATUS row, *done when*: in `@thunderclap-engine/engine/anim`: `Socket { joint: number; offset: Float32Array /* 3×4 */ }`, `createSocket(skeleton, joint: number | string, local?: { position?; rotation? (quat); scale? }): Socket` (string joints resolve through `Skeleton.names?: string[]`, a new optional field; throw if absent), `socketWorld(socket, worldPose: Float32Array, instanceWorld: Float32Array | null, out: Float32Array): Float32Array` (joint world × offset × instance, zero allocations), `attachTransform(socket, worldPose, instanceWorld, transform: Transform)` writing the result into a `Transform` so the attached mesh draws through the normal path; tests; a harness page; documented.
 
 ## Scope
 

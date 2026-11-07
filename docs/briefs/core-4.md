@@ -8,7 +8,7 @@ A game started with `createGame` gets deterministic input timing for free, and g
 
 STATUS row, *done when*:
 
-- **`seedKey` exported.** It is exported from `@thunderclap/engine/core` with a doc comment, and its value is unchanged (the existing FNV tests pin it). Add it to the core README types list.
+- **`seedKey` exported.** It is exported from `@thunderclap-engine/engine/core` with a doc comment, and its value is unchanged (the existing FNV tests pin it). Add it to the core README types list.
 - **Game tick clock.**
   - `createGame` builds one `createTickClock()` and advances it by the fixed step before each fixed update. It is exposed as `game.clock` (an `InputClock`).
   - If the game builds gestures or look through the engine's input wiring, they receive that clock. If they are user-built, the README says to pass `{ clock: game.clock }`.

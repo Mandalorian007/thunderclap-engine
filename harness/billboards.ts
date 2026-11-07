@@ -6,10 +6,10 @@
  * pixel over capsule 0, steps time by hand to see a damage number drift upward, and watches it
  * remove itself after `DAMAGE_LIFE`.
  */
-import { GameLoop } from '@thunderclap/engine/core';
-import { type BillboardHandle, createBillboards } from '@thunderclap/engine/fx';
-import { capsule, plane } from '@thunderclap/engine/geom';
-import { boot } from '@thunderclap/engine/platform';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { type BillboardHandle, createBillboards } from '@thunderclap-engine/engine/fx';
+import { capsule, plane } from '@thunderclap-engine/engine/geom';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   type CameraPoint,
@@ -18,7 +18,7 @@ import {
   Lights,
   Renderer,
   Transform,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import {
   DAMAGE_LIFE,
   DAMAGE_RISE,

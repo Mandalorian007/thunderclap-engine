@@ -6,7 +6,7 @@ Pointer (mouse/touch/pen), keyboard and gamepad mapped to named **actions**. The
 
 <!-- snippet:check -->
 ```ts
-import { Input } from '@thunderclap/engine/input';
+import { Input } from '@thunderclap-engine/engine/input';
 
 declare const canvas: HTMLCanvasElement;
 
@@ -64,7 +64,7 @@ if (input.held('left')) x -= 4 * input.value('left');
 ## Usage
 
 ```ts
-import { Input } from '@thunderclap/engine/input';
+import { Input } from '@thunderclap-engine/engine/input';
 
 const input = new Input({
   confirm: [{ key: 'Enter' }, { key: 'Space' }, { padButton: 0 }],
@@ -148,7 +148,7 @@ const bar = input.state('charge').holdProgress;   // 0..1 while Space is down, 1
 A game rebinds one action at a time and keeps the rest; the action states of untouched actions survive.
 
 ```ts
-import { findConflicts, parseBindings, serializeBindings } from '@thunderclap/engine/input';
+import { findConflicts, parseBindings, serializeBindings } from '@thunderclap-engine/engine/input';
 
 const b = await input.listen('jump');            // the next key, mouse or pad button; null if cancelled
 if (b) input.rebind('jump', [b]);
@@ -209,7 +209,7 @@ if (input.rumbleSupported()) showRumbleToggle();
 ## Prompt glyphs
 
 ```ts
-import { glyphForBinding, keyLabel, padButtonLabel } from '@thunderclap/engine/input';
+import { glyphForBinding, keyLabel, padButtonLabel } from '@thunderclap-engine/engine/input';
 
 input.on('device', (d) => redrawPrompts());          // lastDevice changed (InputEvents)
 const g = input.glyphFor('jump');                    // for lastDevice: { kind: 'key', label: 'Space' } | null
@@ -237,7 +237,7 @@ prompt.textContent = g?.label ?? '';
 Gestures and look read one clock (`InputClock`, `{ now(): number }` in ms; `input/clock.ts`, ws/input-8). By default it is `performance.now()` (`wallClock`), unchanged from before. A game with a fixed step makes one `createTickClock()` (a `TickClock`: `now()` and `advance(ms)`, starting at 0 or `start`), passes it to both, and advances it by the step before each `input.update()`:
 
 ```ts
-import { createGestures, createLook, createTickClock, Input } from '@thunderclap/engine/input';
+import { createGestures, createLook, createTickClock, Input } from '@thunderclap-engine/engine/input';
 
 const clock = createTickClock();
 const gestures = createGestures({ clock });      // GestureOptions.clock (new Gestures({ clock }) is the same)
@@ -262,7 +262,7 @@ input.update();
 `Gestures` recognises touch and pointer gestures and reports them in the same tick model.
 
 ```ts
-import { Gestures, Input } from '@thunderclap/engine/input';
+import { Gestures, Input } from '@thunderclap-engine/engine/input';
 
 // In a game, `createGame` builds the Gestures (`CreateGameOptions.input.magnify` → `GestureOptions.magnify`)
 // and links them: read them as `ctx.gestures`. By hand:
@@ -311,7 +311,7 @@ A finger covers about 44 CSS px. With `GestureOptions.magnify` (or `gestures.set
 Every pointer (mouse, pen, touch, the pad cursor, XR controllers and hands through `XrPointerSource`) becomes a ray through the camera, tested against the game's hit testers. 2D and 3D pick the same way.
 
 ```ts
-import { aabbTester, createPointerRouter, Input, PadCursor, planeTester } from '@thunderclap/engine/input';
+import { aabbTester, createPointerRouter, Input, PadCursor, planeTester } from '@thunderclap-engine/engine/input';
 
 const boxes = [{ min: [100, 100, 0], max: [250, 250, 0], target: card }];   // live array: edit freely
 const router = createPointerRouter({
@@ -389,7 +389,7 @@ A world panel (`ui/world-panel`, ws/ui-world-panel) is routed like a mesh: `rout
 `Look` turns pointer-locked mouse, a two-zone touch layout, the pad's sticks and the move keys into three per-tick numbers a first- or third-person game reads: `look` (yaw and pitch deltas, radians), `move` (x, y in -1..1) and `zoom` (wheel notches, pinch or stick units; positive is closer). The game never sees which device moved.
 
 ```ts
-import { Input, Look } from '@thunderclap/engine/input';
+import { Input, Look } from '@thunderclap-engine/engine/input';
 
 // The two lines a 3D game adds (createGame builds no Look, so a 2D game pays nothing):
 const look = new Look({ keys: { forward: ['KeyW'], back: ['KeyS'], left: ['KeyA'], right: ['KeyD'] } });
@@ -455,7 +455,7 @@ button.onclick = async () => {
 `Follow` is a third-person camera that follows a target, orbits from the same `look` deltas `Look` reports, swings in on obstacles the game reports, and becomes a first-person camera with one assignment. It drives any `FollowCamera` (`Pick<Camera, 'lookAt'>`; the renderer's `Camera`) through `lookAt` each `update(dt)`, so the orientation maths stays here and nothing allocates per frame.
 
 ```ts
-import { Follow, Input, Look } from '@thunderclap/engine/input';
+import { Follow, Input, Look } from '@thunderclap-engine/engine/input';
 
 const follow = new Follow(camera, { distance: 5, shoulder: [0.6, 0], obstacle: world.lineOfSight });
 follow.target = player;                 // { position: [x, y, z] | Float32Array; yaw?: number }
@@ -483,7 +483,7 @@ The low-level feed methods (`keyDown`, `keyUp`, `buttonDown`, `buttonUp`, `wheel
 A game records everything its `Input` was fed, tick by tick, and plays it back later with the same results: bug reports, automated playtests, and e2e specs that want a scripted session instead of synthetic DOM events.
 
 ```ts
-import { createInputPlayback, createInputRecorder, parseRecording, serializeRecording } from '@thunderclap/engine/input';
+import { createInputPlayback, createInputRecorder, parseRecording, serializeRecording } from '@thunderclap-engine/engine/input';
 
 const rec = createInputRecorder(input);            // input.recorder === rec; one tick per input.update()
 // ... play ...

@@ -5,7 +5,7 @@
  * and one draw call.
  */
 
-import { hash2f } from '@thunderclap/engine/core';
+import { hash2f } from '@thunderclap-engine/engine/core';
 
 export const TILE = 32;
 const COLS = 4;

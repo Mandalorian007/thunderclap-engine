@@ -9,7 +9,7 @@ import {
   type SaveStore,
   type SaveStoreOptions,
   s,
-} from '@thunderclap/engine/save';
+} from '@thunderclap-engine/engine/save';
 
 export const SAVE_GAME = 'platformer';
 export const SAVE_VERSION = 2;

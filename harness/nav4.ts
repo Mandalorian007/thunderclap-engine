@@ -1,5 +1,5 @@
 /**
- * Nav-4 harness page: the ws/nav-4 additions to `@thunderclap/engine/nav` on a canvas-2D stage,
+ * Nav-4 harness page: the ws/nav-4 additions to `@thunderclap-engine/engine/nav` on a canvas-2D stage,
  * no WebGPU, so e2e/nav4.spec.ts can prove them on every matrix row. Noun-free: a floor, two
  * pillars, agents, a goal.
  *
@@ -41,8 +41,8 @@ import {
   type NavPoint3,
   OBSTACLE_AREA,
   pathDistance3,
-} from '@thunderclap/engine/nav';
-import { computeLetterbox } from '@thunderclap/engine/platform';
+} from '@thunderclap-engine/engine/nav';
+import { computeLetterbox } from '@thunderclap-engine/engine/platform';
 import type { HarnessNav4Api, HarnessNav4State, Nav4Mode } from './nav4-state';
 
 const params = new URLSearchParams(location.search);

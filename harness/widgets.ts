@@ -9,7 +9,7 @@
  * - The cooldown sweeps from the frame counter until the spec sets it.
  * - `window.__harnessWidgets` publishes the values and a `set` per widget.
  */
-import { computeLetterbox } from '@thunderclap/engine/platform';
+import { computeLetterbox } from '@thunderclap-engine/engine/platform';
 import {
   bar,
   cooldown,
@@ -21,7 +21,7 @@ import {
   select,
   stepper,
   toFrameUnits,
-} from '@thunderclap/engine/ui';
+} from '@thunderclap-engine/engine/ui';
 import type { HarnessWidgetsApi, HarnessWidgetsState } from './widgets-state';
 
 const DESIGN = { width: 1920, height: 1080 };

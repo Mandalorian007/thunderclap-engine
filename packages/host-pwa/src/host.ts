@@ -1,5 +1,5 @@
 /**
- * `createPwaHost()`: the web host (`createWebHost`, `@thunderclap/engine/host`) with a `pwa`
+ * `createPwaHost()`: the web host (`createWebHost`, `@thunderclap-engine/engine/host`) with a `pwa`
  * facet: install prompt, update prompt, offline state, standalone detection and the caches the
  * plugin's worker fills. `Host` itself gains nothing: `kind` stays `'web'` (the engine's type is
  * not this package's), and `pwa.standalone` says the rest.
@@ -8,7 +8,7 @@
  * never ran the plugin (no `window.__tcPwa`, no `swUrl`), the host boots and every method
  * resolves `'unavailable'` or does nothing.
  */
-import { createWebHost, type Host, type WebHostOptions } from '@thunderclap/engine/host';
+import { createWebHost, type Host, type WebHostOptions } from '@thunderclap-engine/engine/host';
 import { PAGE_GLOBAL } from './manifest';
 import { CACHE_PREFIX, PRECACHE_PREFIX, RUNTIME_CACHE } from './sw-logic';
 import { SKIP_WAITING } from './worker';

@@ -6,9 +6,9 @@
  * - The testers read each `Transform` every call, so the spinning meshes are picked as drawn.
  * - Mesh `f` culls back faces; mesh `b` and `d` are icospheres without an index buffer.
  */
-import { GameLoop } from '@thunderclap/engine/core';
-import { createPointerRouter, Input, meshTester } from '@thunderclap/engine/input';
-import { boot } from '@thunderclap/engine/platform';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { createPointerRouter, Input, meshTester } from '@thunderclap-engine/engine/input';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   type CameraPoint,
@@ -19,7 +19,7 @@ import {
   Renderer,
   Transform,
   VERTEX_LAYOUT_3D,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { HarnessPickApi, HarnessPickState } from './pick-state';
 
 const root = document.getElementById('root') as HTMLElement;

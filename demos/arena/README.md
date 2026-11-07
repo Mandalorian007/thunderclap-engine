@@ -42,7 +42,7 @@ The stamina bar never blocks a swing. The demo has no warm-up of its own to repl
 
 ## Engine modules
 
-- `@thunderclap/engine` `createGame`: loop, input, world-space particles, toasts, fixed-step sim.
+- `@thunderclap-engine/engine` `createGame`: loop, input, world-space particles, toasts, fixed-step sim.
 - `anim`: `Skeleton` with `inverseBindFromRest`, `AnimationMixer` blending the idle and run clips
   by speed on layer 0 with the swing on layer 1, `poseToWorld` + `skinMatrices` into a
   `SkinPalette`, `createSocket` + `attachTransform` for the sword.

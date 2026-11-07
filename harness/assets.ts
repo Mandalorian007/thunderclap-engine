@@ -11,16 +11,16 @@ import {
   createBundle,
   defineManifest,
   type ReadResult,
-} from '@thunderclap/engine/assets';
-import { GameLoop } from '@thunderclap/engine/core';
-import { boot } from '@thunderclap/engine/platform';
+} from '@thunderclap-engine/engine/assets';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   type DrawParams,
   gpuDiagnostics,
   installGpuErrorLogging,
   type Material,
   Renderer,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { HarnessAssetsState } from './assets-state';
 import { buildSampleGlb, encodePng } from './gltf-writer';
 

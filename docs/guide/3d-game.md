@@ -16,7 +16,7 @@ Every scene draws through `ctx.camera`. It starts as a 2D orthographic camera. T
 3D camera when your scene enters, then aim it with `lookAt`.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
+import type { EngineCtx } from '@thunderclap-engine/engine';
 
 export function aimCamera(ctx: EngineCtx) {
   const fovY = Math.PI / 3; // 60 degrees, vertical
@@ -35,7 +35,7 @@ separate camera. Use it for a second view, such as a minimap you render yourself
 `renderer.render(frame, camera)`.
 
 ```ts
-import { Camera } from '@thunderclap/engine/render';
+import { Camera } from '@thunderclap-engine/engine/render';
 
 const minimap = Camera.perspective(Math.PI / 4, 1, 0.5, 400);
 minimap.lookAt([0, 120, 0.01], [0, 0, 0]);
@@ -47,8 +47,8 @@ A mesh is a vertex buffer on the GPU. The `geom` module builds the vertices for 
 shapes. Each builder returns a description you pass to `renderer.createMesh`.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import { box, sphere } from '@thunderclap/engine/geom';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import { box, sphere } from '@thunderclap-engine/engine/geom';
 
 export function buildMeshes(ctx: EngineCtx) {
   const crate = ctx.renderer.createMesh({ ...box({ size: 1 }), label: 'crate' });
@@ -68,8 +68,8 @@ know it or the mesh is larger.
 
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import { VERTEX_LAYOUT_3D } from '@thunderclap/engine/render';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import { VERTEX_LAYOUT_3D } from '@thunderclap-engine/engine/render';
 
 export function triangle(ctx: EngineCtx) {
   // x y z   nx ny nz   u v   r g b a
@@ -95,7 +95,7 @@ starts, then change it each frame. Rotation is a quaternion. `setAxisAngle` is t
 to set it.
 
 ```ts
-import { Transform } from '@thunderclap/engine/render';
+import { Transform } from '@thunderclap-engine/engine/render';
 
 const t = new Transform();
 t.setPosition(0, 0.5, 0);
@@ -115,10 +115,10 @@ Put it together in a scene. `frame.mesh(mesh, material, transform)` draws one in
 Until you add lights the scene is unlit, so you see flat colour.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import type { Scene } from '@thunderclap/engine/core';
-import { box } from '@thunderclap/engine/geom';
-import { createStandardMaterial, type Frame, type Mesh, type Material, Transform } from '@thunderclap/engine/render';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import type { Scene } from '@thunderclap-engine/engine/core';
+import { box } from '@thunderclap-engine/engine/geom';
+import { createStandardMaterial, type Frame, type Mesh, type Material, Transform } from '@thunderclap-engine/engine/render';
 
 export function spinningCrate(): Scene<EngineCtx, Frame> {
   let crate: Mesh;
@@ -154,9 +154,9 @@ per-instance options: `tint`, `emissive` (feeds bloom), `castShadow`, `receiveSh
 returns a `GltfScene` with one `Transform` per node. `draw(frame)` draws every node.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import { loadGltf, parseGltf } from '@thunderclap/engine/assets';
-import { Transform } from '@thunderclap/engine/render';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import { loadGltf, parseGltf } from '@thunderclap-engine/engine/assets';
+import { Transform } from '@thunderclap-engine/engine/render';
 
 export async function loadTree(ctx: EngineCtx) {
   const bytes = await (await fetch('/models/tree.glb')).arrayBuffer();
@@ -182,7 +182,7 @@ Assign a `Lights` object to `frame.lights` each frame. It has an ambient colour,
 up to 16 point lights and up to 8 spot lights.
 
 ```ts
-import { Lights } from '@thunderclap/engine/render';
+import { Lights } from '@thunderclap-engine/engine/render';
 
 const lights = new Lights();
 lights.ambient.set([0.15, 0.17, 0.22]);
@@ -212,7 +212,7 @@ Give the sun a shadow box. `extent` is the half-size of the box around the camer
 units. A larger box covers more ground but each shadow gets blurrier.
 
 ```ts
-import { Lights } from '@thunderclap/engine/render';
+import { Lights } from '@thunderclap-engine/engine/render';
 
 const lights = new Lights();
 lights.sun.shadow = { extent: 24, size: 2048 };
@@ -227,7 +227,7 @@ large ground plane: `frame.mesh(ground, mat, t, { castShadow: false })`. Set
 `lights.fog` fades distant surfaces towards a colour. Change its fields; do not replace it.
 
 ```ts
-import { Lights } from '@thunderclap/engine/render';
+import { Lights } from '@thunderclap-engine/engine/render';
 
 const lights = new Lights();
 lights.fog.color = [0.6, 0.7, 0.8];
@@ -249,8 +249,8 @@ top of the finished image. It does not replace `lights.fog`; the two stack. The
 shadow and the fog. You can use plain numbers or textures.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import { createStandardMaterial } from '@thunderclap/engine/render';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import { createStandardMaterial } from '@thunderclap-engine/engine/render';
 
 export function materials(ctx: EngineCtx) {
   const metal = createStandardMaterial(ctx.renderer, {
@@ -285,9 +285,9 @@ A level-of-detail chain swaps a mesh for simpler versions as it gets small on sc
 Pass the result to `frame.mesh` in place of the mesh. The renderer picks the level.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import { createLodChain, sphere } from '@thunderclap/engine/geom';
-import type { MeshLod } from '@thunderclap/engine/render';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import { createLodChain, sphere } from '@thunderclap-engine/engine/geom';
+import type { MeshLod } from '@thunderclap-engine/engine/render';
 
 export function rockLod(ctx: EngineCtx): MeshLod {
   // Level 0 is the sphere itself; each ratio adds one coarser level: three levels here.
@@ -313,7 +313,7 @@ terrain chunks.
 Check how much was skipped:
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
+import type { EngineCtx } from '@thunderclap-engine/engine';
 
 export function logStats(ctx: EngineCtx) {
   const s = ctx.renderer.stats;
@@ -326,7 +326,7 @@ AI that is off screen.
 
 ## Voxel worlds
 
-For block worlds, `@thunderclap/engine/voxel` stores a voxel grid, meshes it in chunks
+For block worlds, `@thunderclap-engine/engine/voxel` stores a voxel grid, meshes it in chunks
 (optionally in a Worker), culls and draws the chunks, and raycasts for picking and editing.
 See the [voxel reference](../../src/voxel/README.md). The first-person template shows chunked
 meshes built in a Worker.

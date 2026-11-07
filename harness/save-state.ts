@@ -2,7 +2,7 @@
  * What the save harness page (harness/save.html) publishes on `window.__harnessSave` for
  * e2e/save.spec.ts. Shared by the page (harness/save.ts) and the spec.
  */
-import type { SlotInfo } from '@thunderclap/engine/save';
+import type { SlotInfo } from '@thunderclap-engine/engine/save';
 
 export interface HarnessSaveState {
   /** True once the stores are open and the page rendered. */

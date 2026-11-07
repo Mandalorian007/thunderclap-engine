@@ -10,7 +10,7 @@ STATUS row, *done when*: `templates/platformer`: `createGame` fixed-step; two le
 
 ## Scope
 
-- `templates/platformer/` as a private workspace package `@thunderclap/template-platformer` depending on `@thunderclap/engine` via `workspace:*`.
+- `templates/platformer/` as a private workspace package `@thunderclap-engine/template-platformer` depending on `@thunderclap-engine/engine` via `workspace:*`.
 - `src/levels/`: the string format (one char per tile: solid, one-way, hazard, coin, checkpoint, spawn, moving-platform path markers), the parser, the two levels.
 - `src/physics/`: AABB vs tile grid resolve with sub-stepping, coyote time, jump buffering, variable jump height, one-way platforms, moving platforms (the player rides them), all pure and tested.
 - `src/world/`: tile layers, parallax, the procedural atlas (canvas-painted, no asset committed), flipbook frames for the player and a coin, particles for dust and coin pop.

@@ -7,8 +7,8 @@
  * frame delta) and there is no `save`, so the engine never touches storage. The game widens the
  * ctx with its own nouns, links one `Look` for the camera controls and pushes one scene.
  */
-import { createGame } from '@thunderclap/engine';
-import { Look } from '@thunderclap/engine/input';
+import { createGame } from '@thunderclap-engine/engine';
+import { Look } from '@thunderclap-engine/engine/input';
 import { type Action, bindings, type GameCtx, type Player, type World } from './ctx';
 import { createWorldScene } from './scenes/world';
 import { createHud } from './ui/hud';

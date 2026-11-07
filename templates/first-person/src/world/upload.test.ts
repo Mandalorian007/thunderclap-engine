@@ -5,8 +5,8 @@
  * mismatch (vertex size, index offset, capacity) shows up here as a device error, not as a
  * blank screen.
  */
-import { Renderer, Transform, VERTEX_LAYOUT_3D } from '@thunderclap/engine/render';
-import { createFakeDevice, fakeRendererGpu } from '@thunderclap/engine/testing';
+import { Renderer, Transform, VERTEX_LAYOUT_3D } from '@thunderclap-engine/engine/render';
+import { createFakeDevice, fakeRendererGpu } from '@thunderclap-engine/engine/testing';
 import { describe, expect, it } from 'vitest';
 import {
   CHUNK,

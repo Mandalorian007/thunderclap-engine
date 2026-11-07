@@ -16,8 +16,8 @@ A game that never enters VR runs the same code as before. The same build works o
 Pass an `xr` option. It names the reference space and gives you two callbacks.
 
 ```ts
-import { createGame } from '@thunderclap/engine';
-import { Camera } from '@thunderclap/engine/render';
+import { createGame } from '@thunderclap-engine/engine';
+import { Camera } from '@thunderclap-engine/engine/render';
 
 const ctx = await createGame<'select', null>({
   root: document.getElementById('app')!,
@@ -54,7 +54,7 @@ With `'local-floor'`, a head at y = 1.6 is a person standing. Build your page ca
 The browser only starts a session from a user gesture, such as a click. So `enter()` must run inside a click handler, not at load time. Check `supported()` first and disable the button when it is false.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
+import type { EngineCtx } from '@thunderclap-engine/engine';
 
 export async function vrButton(ctx: EngineCtx<'select', null>, button: HTMLButtonElement) {
   button.disabled = !(await ctx.xr.supported());
@@ -88,8 +88,8 @@ When the session ends, everything goes back: the page's frames, `ctx.camera` and
 Because of step 2, always place head-relative things from the `camera` argument of `render`, never from `ctx.camera`. This marker sits 0.6 m in front of whatever head is drawing, on the page or in VR:
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import { type Camera, type Frame, type Material, type Mesh, Transform } from '@thunderclap/engine/render';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import { type Camera, type Frame, type Material, type Mesh, Transform } from '@thunderclap-engine/engine/render';
 
 export function addMarker(ctx: EngineCtx<'select', null>, cube: Mesh, lit: Material) {
   const marker = new Transform({ scaleX: 0.1, scaleY: 0.1, scaleZ: 0.1 });
@@ -129,7 +129,7 @@ The source reads three buttons:
 Bind them like any other source. Add `hand` to listen to one side only:
 
 ```ts
-import type { Bindings } from '@thunderclap/engine/input';
+import type { Bindings } from '@thunderclap-engine/engine/input';
 
 type Action = 'select' | 'grab' | 'menu';
 
@@ -146,9 +146,9 @@ export const bindings: Bindings<Action> = {
 Pick a thing with a controller exactly as with a mouse:
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import { obbTester } from '@thunderclap/engine/input';
-import { Transform } from '@thunderclap/engine/render';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import { obbTester } from '@thunderclap-engine/engine/input';
+import { Transform } from '@thunderclap-engine/engine/render';
 
 export function addDoor(ctx: EngineCtx<'select', null>) {
   const door = { name: 'door', transform: new Transform({ y: 1, z: -3 }) };
@@ -182,16 +182,16 @@ for (const eye of eyes) {
 renderer.endFrame({ present: false });                  // the session presents, not the canvas
 ```
 
-The parts are `XrSurface` (from `@thunderclap/engine/platform`, built with `scene: true` and `colorFormat: renderer.format`), and `createXrHost(session, pageHost)` (from `@thunderclap/engine/host`), whose `frame` is the current `XRFrame` while a frame callback runs. Post effects cost twice in VR, once per eye, so keep them light on standalone headsets.
+The parts are `XrSurface` (from `@thunderclap-engine/engine/platform`, built with `scene: true` and `colorFormat: renderer.format`), and `createXrHost(session, pageHost)` (from `@thunderclap-engine/engine/host`), whose `frame` is the current `XRFrame` while a frame callback runs. Post effects cost twice in VR, once per eye, so keep them light on standalone headsets.
 
 ## Menus in the world
 
 The overlay is DOM, and the headset cannot show DOM. A **world panel** is a flat quad in the scene with a canvas face, holding buttons, toggles, sliders and lists. Any pointer ray can hit it: the mouse on the page, a controller in VR.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import { type Camera, type Frame } from '@thunderclap/engine/render';
-import { createWorldPanel, worldButton, worldLabel, worldSlider } from '@thunderclap/engine/ui';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import { type Camera, type Frame } from '@thunderclap-engine/engine/render';
+import { createWorldPanel, worldButton, worldLabel, worldSlider } from '@thunderclap-engine/engine/ui';
 
 export function addSettings(ctx: EngineCtx<'select', null>) {
   const panel = createWorldPanel(ctx.renderer, { width: 1.2, height: 0.8 });  // metres
@@ -224,9 +224,9 @@ A head-locked panel stays in front of the eyes, like a HUD: pass `headLocked: { 
 Move it from the head camera each frame. `attach` moves it from `renderer.camera`, which in VR is the page's camera, not the head. So call `update` with the camera `render` hands you, before you draw:
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import { type Camera, type Frame } from '@thunderclap/engine/render';
-import { createWorldPanel, worldProgress } from '@thunderclap/engine/ui';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import { type Camera, type Frame } from '@thunderclap-engine/engine/render';
+import { createWorldPanel, worldProgress } from '@thunderclap-engine/engine/ui';
 
 export function addHud(ctx: EngineCtx<'select', null>) {
   const hud = createWorldPanel(ctx.renderer, {

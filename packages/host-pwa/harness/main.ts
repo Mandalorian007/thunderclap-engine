@@ -4,7 +4,7 @@
  * (e2e/pwa.spec.ts) can read the host the way a game would. No WebGPU: the shell is what is
  * under test, and the engine's own matrix covers rendering.
  */
-import { setDefaultHost } from '@thunderclap/engine/host';
+import { setDefaultHost } from '@thunderclap-engine/engine/host';
 import { createPwaHost } from '../src';
 import type { PwaProbe } from './state';
 

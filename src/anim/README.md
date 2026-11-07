@@ -8,7 +8,7 @@ Keyframe animation on the CPU: clips sampled into poses, a mixer that layers and
 ```ts
 import {
   AnimationMixer, type AnimationClip, poseToWorld, type Skeleton, WORLD_NODE_FLOATS,
-} from '@thunderclap/engine/anim';
+} from '@thunderclap-engine/engine/anim';
 
 declare const skeleton: Skeleton; // skeletonFromSkin (assets), or built by hand
 declare const walk: AnimationClip;
@@ -50,7 +50,7 @@ Keyframe animation with no GPU in it: clips with glTF sampler semantics sampled 
 import {
   AnimationMixer, type AnimationClip, type Skeleton,
   POSE_NODE_FLOATS, WORLD_NODE_FLOATS, poseToWorld, skinMatrices, inverseBindFromRest,
-} from '@thunderclap/engine/anim';
+} from '@thunderclap-engine/engine/anim';
 
 const skeleton: Skeleton = { parents: new Int16Array([-1, 0, 1]), rest };   // 10 floats per node
 skeleton.inverseBind = inverseBindFromRest(skeleton);                        // procedural rig; glTF supplies its own
@@ -136,8 +136,8 @@ function frame(dt: number) {
 
 <!-- snippet:check -->
 ```ts
-import { AnimationMixer, type AnimationClip, type Skeleton, skinPose } from '@thunderclap/engine/anim';
-import type { SkinPalette } from '@thunderclap/engine/render';
+import { AnimationMixer, type AnimationClip, type Skeleton, skinPose } from '@thunderclap-engine/engine/anim';
+import type { SkinPalette } from '@thunderclap-engine/engine/render';
 
 declare const skeleton: Skeleton;
 declare const walk: AnimationClip;

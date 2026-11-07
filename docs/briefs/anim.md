@@ -6,7 +6,7 @@ Read `docs/briefs/common.md` first, then DECISIONS E-013, E-015; `ARCHITECTURE.m
 
 A pure animation module: keyframe clips sampled into poses, blended and cross-faded, resolved into node world matrices and skin joint matrices, with no GPU and no allocations per frame. Cosmetic "floating" idles, weapon swings and character locomotion all run on it (E-015). glTF animation data maps onto it one-to-one.
 
-STATUS row, *done when*: `@thunderclap/engine/anim` with `AnimationClip`, `sampleClip`, `Pose`, `Skeleton`, `AnimationMixer` (layers, weights, crossfade, loop/once, time scale, events at keyframes), `poseToWorld`, `skinMatrices`; unit tests incl. a step/linear/cubic-spline sampling table and a slerp sanity test; documented.
+STATUS row, *done when*: `@thunderclap-engine/engine/anim` with `AnimationClip`, `sampleClip`, `Pose`, `Skeleton`, `AnimationMixer` (layers, weights, crossfade, loop/once, time scale, events at keyframes), `poseToWorld`, `skinMatrices`; unit tests incl. a step/linear/cubic-spline sampling table and a slerp sanity test; documented.
 
 ## Scope
 

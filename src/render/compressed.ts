@@ -1,7 +1,7 @@
 /**
  * Block-compressed textures (ws/render-5): which compression families the device has
  * (`RendererCaps`), the features to ask an adapter for, and `uploadKtx2`, which puts a parsed
- * KTX2 file (`@thunderclap/engine/assets` `parseKtx2`) on the GPU in its own format, every mip
+ * KTX2 file (`@thunderclap-engine/engine/assets` `parseKtx2`) on the GPU in its own format, every mip
  * level written with its block-aligned row pitch. No transcoder: a Basis Universal (BasisLZ /
  * UASTC) or supercompressed payload, or a format the device lacks, throws
  * `CompressedTextureError`.

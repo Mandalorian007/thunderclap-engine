@@ -1,6 +1,6 @@
 /**
  * Decals demo page (STATUS "Decals", ws/decals): a floor and two blocks under a perspective
- * camera, stamped with `Decals` from `@thunderclap/engine/fx`. Noun-free, and nothing here is
+ * camera, stamped with `Decals` from `@thunderclap-engine/engine/fx`. Noun-free, and nothing here is
  * engine code.
  *
  * - The atlas is a 2×2 canvas drawn at boot (`renderer.textureFromSource`): ring, splat, cross,
@@ -12,9 +12,9 @@
  * - State on `window.__harnessDecals` (harness/decals-state.ts): the live count, the mode and
  *   the two probe points e2e/decals.spec.ts samples.
  */
-import { GameLoop } from '@thunderclap/engine/core';
-import { type DecalMode, Decals } from '@thunderclap/engine/fx';
-import { boot } from '@thunderclap/engine/platform';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { type DecalMode, Decals } from '@thunderclap-engine/engine/fx';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   type CameraPoint,
@@ -25,7 +25,7 @@ import {
   Renderer,
   Transform,
   VERTEX_LAYOUT_3D,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { DecalProbe, HarnessDecalsApi, HarnessDecalsState } from './decals-state';
 
 const root = document.getElementById('root') as HTMLElement;

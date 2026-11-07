@@ -18,7 +18,7 @@
  * - `?effect`: the bundled `MAGIC_AURA_EFFECT` attached to a point moving on a circle.
  * - `?still` parks the moving point and the lamp.
  */
-import { GameLoop } from '@thunderclap/engine/core';
+import { GameLoop } from '@thunderclap-engine/engine/core';
 import {
   applyForces,
   createEffect,
@@ -31,9 +31,9 @@ import {
   type ParticleForce,
   type ParticleReadback,
   ParticleSystem,
-} from '@thunderclap/engine/fx';
-import { box, plane } from '@thunderclap/engine/geom';
-import { boot } from '@thunderclap/engine/platform';
+} from '@thunderclap-engine/engine/fx';
+import { box, plane } from '@thunderclap-engine/engine/geom';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   type CameraPoint,
@@ -44,7 +44,7 @@ import {
   type PointLight,
   Renderer,
   Transform,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { Fx3Mode, HarnessFx3Api, HarnessFx3State } from './fx3-state';
 
 const root = document.getElementById('root') as HTMLElement;

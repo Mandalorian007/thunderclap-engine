@@ -2,7 +2,7 @@
  * A meshopt encoder for the harness (harness/gltf3.ts `?meshopt`): `encodeVertexBuffer`
  * (`ATTRIBUTES`, v0) and `encodeIndexBuffer` (`TRIANGLES`, v0/v1), a copy of the reference port
  * in src/assets/meshopt.test.ts. The decoder ships in the engine; encoders stay with the pages
- * and tests that build files (the harness imports only `@thunderclap/engine/<subpath>`).
+ * and tests that build files (the harness imports only `@thunderclap-engine/engine/<subpath>`).
  */
 
 function zigzag8(v: number): number {

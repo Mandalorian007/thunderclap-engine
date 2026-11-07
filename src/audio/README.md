@@ -6,7 +6,7 @@ WebAudio buses, one-shots and loops, spatial voices, music stems and a procedura
 
 <!-- snippet:check -->
 ```ts
-import { AudioEngine, recipes } from '@thunderclap/engine/audio';
+import { AudioEngine, recipes } from '@thunderclap-engine/engine/audio';
 
 const audio = new AudioEngine();
 audio.attach(); // unlock on the first gesture; pause while the tab is hidden
@@ -58,7 +58,7 @@ WebAudio buses, one-shots and loops, plus a **procedural synth toolkit**: we shi
 ## Quick start
 
 ```ts
-import { AudioEngine, persistMixer, recipes } from '@thunderclap/engine/audio';
+import { AudioEngine, persistMixer, recipes } from '@thunderclap-engine/engine/audio';
 
 const audio = new AudioEngine();
 audio.attach();                                  // unlock on first gesture; pause while tab hidden
@@ -215,7 +215,7 @@ audio.play('fx#hit', { gain: 0.8, pan: -0.3 });
 A beat grid over the mixer's `music` bus: looping stems that start sample-accurately on the next beat or bar from the context clock, grouped in layers and crossfaded by `fadeBeats` or by an intensity level. Stems are `AudioBuffer`s (synth-rendered, so still no files) whose length is a whole number of bars.
 
 ```ts
-import { createMusic } from '@thunderclap/engine/audio';
+import { createMusic } from '@thunderclap-engine/engine/audio';
 
 const music = createMusic(audio, { bpm: 120, beatsPerBar: 4 });        // a 2 s bar
 music.add({ name: 'pad', buffer: audio.buffer('pad')!, layer: 'pad' });
@@ -246,7 +246,7 @@ A long track need not be decoded into memory: `music.play(name, { stream: true }
 Footsteps, impacts, hits: one of several buffers at random, never the one just played, with a little jitter so repeats do not sound stamped.
 
 ```ts
-import { createVariations } from '@thunderclap/engine/audio';
+import { createVariations } from '@thunderclap-engine/engine/audio';
 
 const steps = createVariations(audio, [bufA, bufB, bufC], { pitchJitter: 2, gainJitter: 3 });
 steps.play({ at: [x, y, z] });   // any AudioPlayOptions; rate and gain are multiplied by the jitter
@@ -260,7 +260,7 @@ steps.last;                       // index just played, -1 before the first
 An effect send is a parallel path from one bus through an effect and back into `master`, next to the dry path: a reverb (`ConvolverNode` on a procedural impulse) or a lowpass (`BiquadFilterNode`). A zone drives its `amount` and `cutoff` as the listener moves; the engine's own shared reverb (`setReverb`) is one room for every bus, a send is an extra one you place.
 
 ```ts
-import { createSend, impulseResponse } from '@thunderclap/engine/audio';
+import { createSend, impulseResponse } from '@thunderclap-engine/engine/audio';
 
 const cave = createSend(audio, { kind: 'reverb', bus: 'sfx', seconds: 3, decay: 2 });
 cave.amount = 0.6;                                    // 0..1, ramped
@@ -277,7 +277,7 @@ const ir = impulseResponse(ctx, { seconds: 2, decay: 3, seed: 1 });   // the con
 Dialogue lowers music: while anything plays on a trigger bus, the target bus drops by `amount`, with an attack and a release.
 
 ```ts
-import { createDucker } from '@thunderclap/engine/audio';
+import { createDucker } from '@thunderclap-engine/engine/audio';
 
 const duck = createDucker(audio, { trigger: 'ui', target: 'music', amount: 0.7, attack: 0.05, release: 0.4 });
 duck.watch(audio.play('line', { bus: 'ui' }));   // counts as activity while it plays

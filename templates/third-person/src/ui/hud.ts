@@ -4,7 +4,7 @@
  * device. The enemy name plates live in `enemies/` (`ui.anchors`), not here. Nothing here changes
  * game state: the buttons call back into the scene.
  */
-import { button, createMeter, h, type Meter } from '@thunderclap/engine/ui';
+import { button, createMeter, h, type Meter } from '@thunderclap-engine/engine/ui';
 import { COSMETICS, type SlotName } from '../character/cosmetics';
 import type { GameCtx } from '../ctx';
 

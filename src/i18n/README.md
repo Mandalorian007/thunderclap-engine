@@ -9,7 +9,7 @@ table is whatever promise the game hands over (usually `import('./ru.json')`). N
 
 <!-- snippet:check -->
 ```ts
-import { createI18n, negotiateLocale } from '@thunderclap/engine/i18n';
+import { createI18n, negotiateLocale } from '@thunderclap-engine/engine/i18n';
 
 const i18n = createI18n({
   locale: negotiateLocale(['en', 'de']),
@@ -36,7 +36,7 @@ i18n.t('items', { count: 3 }); // "3 items"
 ## Usage
 
 ```ts
-import { createI18n, negotiateLocale } from '@thunderclap/engine/i18n';
+import { createI18n, negotiateLocale } from '@thunderclap-engine/engine/i18n';
 
 const i18n = createI18n({
   locale: negotiateLocale(['en', 'ru', 'ar']),      // navigator.languages → best table

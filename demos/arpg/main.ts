@@ -32,7 +32,7 @@
  * `?blur` turns object motion blur on (camera motion only for now: see the README).
  */
 
-import { createGame } from '@thunderclap/engine';
+import { createGame } from '@thunderclap-engine/engine';
 import {
   AnimationMixer,
   type AnimGraph,
@@ -44,9 +44,9 @@ import {
   skinMatrices,
   updateSpringChain,
   WORLD_NODE_FLOATS,
-} from '@thunderclap/engine/anim';
-import { createRandom, type Scene } from '@thunderclap/engine/core';
-import { type EmitParams, ParticleSystem, Trail } from '@thunderclap/engine/fx';
+} from '@thunderclap-engine/engine/anim';
+import { createRandom, type Scene } from '@thunderclap-engine/engine/core';
+import { type EmitParams, ParticleSystem, Trail } from '@thunderclap-engine/engine/fx';
 import {
   createInputRecorder,
   createRay,
@@ -59,7 +59,7 @@ import {
   recordingLength,
   screenRay,
   shapeStick,
-} from '@thunderclap/engine/input';
+} from '@thunderclap-engine/engine/input';
 import {
   bakeNavMesh,
   createCrowd,
@@ -69,7 +69,7 @@ import {
   type NavPath3,
   type NavPoint3,
   pathDistance3,
-} from '@thunderclap/engine/nav';
+} from '@thunderclap-engine/engine/nav';
 import {
   type Camera,
   createStandardMaterial,
@@ -86,8 +86,8 @@ import {
   STANDARD_DISSOLVE_OFFSET,
   Transform,
   VERTEX_LAYOUT_SKINNED,
-} from '@thunderclap/engine/render';
-import type { Meter, MinimapMarker } from '@thunderclap/engine/ui';
+} from '@thunderclap-engine/engine/render';
+import type { Meter, MinimapMarker } from '@thunderclap-engine/engine/ui';
 import { buildCourtyard, DAIS, HALF } from './courtyard';
 import { createGearSets, GEAR_NAMES } from './gear';
 import { runePixels, tilePixels, whitePixels } from './geom';

@@ -43,7 +43,7 @@ import {
 import { WORLD_PANEL_UNIFORM_BYTES, WORLD_PANEL_UNIFORM_FLOATS, WORLD_PANEL_WGSL } from './wgsl';
 import type { PanelKeyEvent, WorldWidget, WorldWidgetHost } from './widgets';
 
-/** What `attach` needs from the input (`Input` from `@thunderclap/engine/input` fits). */
+/** What `attach` needs from the input (`Input` from `@thunderclap-engine/engine/input` fits). */
 export interface WorldPanelInput {
   /** The input's pointer router, or null when it has none (`Input.pointers`, ws/api-core). */
   readonly pointers?: PointerRouter<unknown> | null;

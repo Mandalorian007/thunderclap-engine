@@ -11,14 +11,14 @@
  * - `render(frame)` sets the lights (sun with a shadow map, fog), draws the ground, the stones,
  *   the character with its cosmetics, the enemies and the particles. Nothing is allocated per frame.
  */
-import type { Scene } from '@thunderclap/engine/core';
-import { type EmitParams, ParticleSystem } from '@thunderclap/engine/fx';
+import type { Scene } from '@thunderclap-engine/engine/core';
+import { type EmitParams, ParticleSystem } from '@thunderclap-engine/engine/fx';
 import {
   createHit,
   heightfieldGeometry,
   raycastReg,
   type StaticCollider,
-} from '@thunderclap/engine/geom';
+} from '@thunderclap-engine/engine/geom';
 import {
   createStandardMaterial,
   type Frame,
@@ -26,7 +26,7 @@ import {
   type Material,
   type Mesh,
   Transform,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import {
   ATTACK_HALF_ANGLE,
   ATTACK_REACH,

@@ -2,9 +2,9 @@
  * The game's ctx: the engine's `EngineCtx` plus this game's nouns. `createGame` returns the
  * engine part; `main.ts` widens the same object with `Object.assign`, so every scene sees one ctx.
  */
-import type { EngineCtx } from '@thunderclap/engine';
-import type { Analytics } from '@thunderclap/engine/analytics';
-import type { Bindings } from '@thunderclap/engine/input';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import type { Analytics } from '@thunderclap-engine/engine/analytics';
+import type { Bindings } from '@thunderclap-engine/engine/input';
 import type { Events } from './analytics';
 import type { Board } from './rules/board';
 import type { ProgressStore } from './save/schema';

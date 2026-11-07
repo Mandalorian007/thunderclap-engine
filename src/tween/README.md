@@ -1,12 +1,12 @@
 # engine/tween
 
-Numbers over time: a menu slides in, a camera eases to a target, a hit flash fades. `@thunderclap/engine/tween` is a dependency-free tween engine: a full easing table, object-property and callback tweens, sequences and parallel groups, loops, yoyo, delays and springs, ticked by one manager that takes `dt` and allocates nothing after setup. It is not a clock: a game calls `tweens.update(dt)` from its frame or update hook (`hooks.frame` / `hooks.update` in `createGame`, or its own `GameLoop`).
+Numbers over time: a menu slides in, a camera eases to a target, a hit flash fades. `@thunderclap-engine/engine/tween` is a dependency-free tween engine: a full easing table, object-property and callback tweens, sequences and parallel groups, loops, yoyo, delays and springs, ticked by one manager that takes `dt` and allocates nothing after setup. It is not a clock: a game calls `tweens.update(dt)` from its frame or update hook (`hooks.frame` / `hooks.update` in `createGame`, or its own `GameLoop`).
 
 ## Quick use
 
 <!-- snippet:check -->
 ```ts
-import { createTweens, ease } from '@thunderclap/engine/tween';
+import { createTweens, ease } from '@thunderclap-engine/engine/tween';
 
 const menu = { x: -400, opacity: 0 };
 const tweens = createTweens();
@@ -28,7 +28,7 @@ tweens.update(1 / 60); // from hooks.frame or your own loop
 ## Quick start
 
 ```ts
-import { createTweens, ease } from '@thunderclap/engine/tween';
+import { createTweens, ease } from '@thunderclap-engine/engine/tween';
 
 const tweens = createTweens();
 ctx.hooks.frame = (dt) => tweens.update(dt);
@@ -95,7 +95,7 @@ Loops apply the end value at every boundary before starting the next iteration, 
 - `cubicBezier(x1, y1, x2, y2)`: the CSS timing function (Newton with a bisection fallback; control points outside 0..1 overshoot);
 - `spring(stiffness = 170, damping = 22): SpringEase`: not a function of `t` but a description `{ kind: 'spring', stiffness, damping }` of a unit-mass spring, `a = stiffness · (1 − x) − damping · v`. A tween given one ignores its `seconds`, `loops` and `yoyo`, integrates the spring (semi-implicit Euler in substeps of at most 1/240 s, so stiff springs survive a hitch) and completes when position and velocity are within 1e-3 of rest, snapping to the end value. Critical damping is `2·√stiffness`; the default overshoots slightly and settles in about half a second.
 
-`@thunderclap/engine/post` re-exports `easeLinear`, `easeIn`, `easeOut` and `easeInOut` as aliases of `ease.linear`, `ease.quadIn`, `ease.quadOut` and `ease.smoothstep`.
+`@thunderclap-engine/engine/post` re-exports `easeLinear`, `easeIn`, `easeOut` and `easeInOut` as aliases of `ease.linear`, `ease.quadIn`, `ease.quadOut` and `ease.smoothstep`.
 
 ## Types
 

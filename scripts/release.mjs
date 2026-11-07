@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Cut a @thunderclap/engine release.
+// Cut a @thunderclap-engine/engine release.
 //
 //   pnpm release <version>          bump package.json, date the CHANGELOG, commit (no tag)
 //   pnpm release <version> --tag    also create the annotated tag v<version>
@@ -67,7 +67,7 @@ writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
 writeFileSync(logPath, nextLog);
 git('add', pkgPath, logPath);
 git('commit', '-q', '-m', `release: ${version}`);
-if (tag) git('tag', '-a', tagName, '-m', `@thunderclap/engine ${version}`);
+if (tag) git('tag', '-a', tagName, '-m', `@thunderclap-engine/engine ${version}`);
 
 console.log(`release: committed${tag ? ` and tagged ${tagName}` : ''}. Push with:`);
 console.log(`  git push origin main${tag ? ` ${tagName}` : ''}`);

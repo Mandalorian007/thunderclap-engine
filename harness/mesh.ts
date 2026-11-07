@@ -17,9 +17,9 @@
  *   (`lights.fog`, applied by `engine_fog`). e2e/mesh.spec.ts samples a shadowed patch of
  *   ground against a lit one and a far patch against a near one.
  */
-import { GameLoop } from '@thunderclap/engine/core';
-import { type GamepadLike, Gestures, Input } from '@thunderclap/engine/input';
-import { boot } from '@thunderclap/engine/platform';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { type GamepadLike, Gestures, Input } from '@thunderclap-engine/engine/input';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   type CameraPoint,
@@ -31,8 +31,8 @@ import {
   Renderer,
   Transform,
   VERTEX_LAYOUT_3D,
-} from '@thunderclap/engine/render';
-import { createPerfMonitor, createPerfOverlay } from '@thunderclap/engine/ui';
+} from '@thunderclap-engine/engine/render';
+import { createPerfMonitor, createPerfOverlay } from '@thunderclap-engine/engine/ui';
 import type { HarnessMeshApi, HarnessMeshState } from './mesh-state';
 
 const root = document.getElementById('root') as HTMLElement;

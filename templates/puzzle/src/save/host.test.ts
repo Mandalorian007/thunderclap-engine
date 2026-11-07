@@ -4,7 +4,7 @@
  * browser: a fixed clock stamps the writes, the win is folded in with `recordWin`, and a fresh
  * store opened on the same host reads it back as a reload would.
  */
-import { createFakeHost, createFixedClock } from '@thunderclap/engine/testing';
+import { createFakeHost, createFixedClock } from '@thunderclap-engine/engine/testing';
 import { describe, expect, it } from 'vitest';
 import { createBoard, phase, reveal } from '../rules/board';
 import { createProgressStore, recordWin } from './schema';

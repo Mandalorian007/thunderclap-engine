@@ -11,9 +11,9 @@
  * - Lit by the engine lighting block; the sun casts a shadow from a static block onto the
  *   ground (the tubes pass `castShadow: false`, so the probes see only the block's shadow).
  */
-import { multiplyAffine } from '@thunderclap/engine/anim';
-import { GameLoop } from '@thunderclap/engine/core';
-import { boot } from '@thunderclap/engine/platform';
+import { multiplyAffine } from '@thunderclap-engine/engine/anim';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   type CameraPoint,
@@ -29,7 +29,7 @@ import {
   VERTEX_LAYOUT_3D,
   VERTEX_LAYOUT_SKINNED,
   VERTEX_SKINNED_FLOATS,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { HarnessSkinApi, HarnessSkinState } from './skin-state';
 
 const root = document.getElementById('root') as HTMLElement;

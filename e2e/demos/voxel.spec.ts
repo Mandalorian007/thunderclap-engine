@@ -1,5 +1,5 @@
 /**
- * Voxel demo (`demos/voxel`) on every matrix row: a voxel game on `@thunderclap/engine/voxel`
+ * Voxel demo (`demos/voxel`) on every matrix row: a voxel game on `@thunderclap-engine/engine/voxel`
  * end to end (the grid, the mesher Worker, the culled chunk meshes and the picking ray are the
  * engine's; the blocks are the demo's).
  *

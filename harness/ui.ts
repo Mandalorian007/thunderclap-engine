@@ -17,9 +17,9 @@
  * - `?loading` (`&stall` holds the bar at 0.4): a loading screen driven by a timer.
  * - `?notify`: a notification with an action.
  */
-import { Input } from '@thunderclap/engine/input';
-import { computeLetterbox, createDeviceMode } from '@thunderclap/engine/platform';
-import { Camera } from '@thunderclap/engine/render';
+import { Input } from '@thunderclap-engine/engine/input';
+import { computeLetterbox, createDeviceMode } from '@thunderclap-engine/engine/platform';
+import { Camera } from '@thunderclap-engine/engine/render';
 import {
   applyTextScale,
   button,
@@ -33,7 +33,7 @@ import {
   toFrameUnits,
   type WorldCursor,
   type WorldTarget,
-} from '@thunderclap/engine/ui';
+} from '@thunderclap-engine/engine/ui';
 import type { HarnessUiApi, HarnessUiState } from './ui-state';
 
 const DESIGN = { width: 1920, height: 1080 };

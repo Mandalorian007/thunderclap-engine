@@ -4,8 +4,8 @@
  * camera, input with its gestures, overlay with its layout, save, scene stack, loop). The game
  * widens that object with its own nouns and pushes one scene.
  */
-import { createGame } from '@thunderclap/engine';
-import { createAnalytics } from '@thunderclap/engine/analytics';
+import { createGame } from '@thunderclap-engine/engine';
+import { createAnalytics } from '@thunderclap-engine/engine/analytics';
 import { COLLECT_URL, createBeaconSink, type Events } from './analytics';
 import { type Action, bindings, type Game, type GameCtx } from './ctx';
 import { layoutSpec } from './layout/spec';

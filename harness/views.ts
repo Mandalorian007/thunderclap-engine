@@ -10,8 +10,8 @@
  * A small head-locked block 0.6 m in front of the eyes (`marker`) makes the parallax large enough
  * to sample: it lands at different places in the two halves, while the scene behind it agrees.
  */
-import { GameLoop } from '@thunderclap/engine/core';
-import { boot } from '@thunderclap/engine/platform';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   type CameraPoint,
@@ -21,7 +21,7 @@ import {
   Renderer,
   Transform,
   VERTEX_LAYOUT_3D,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { HarnessViewsState, ViewsEye, ViewsProbe } from './views-state';
 
 const root = document.getElementById('root') as HTMLElement;

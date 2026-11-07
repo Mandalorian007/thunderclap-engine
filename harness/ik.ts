@@ -1,5 +1,5 @@
 /**
- * IK harness page: `twoBoneIk` and `lookAt` from `@thunderclap/engine/anim` on a procedural rig
+ * IK harness page: `twoBoneIk` and `lookAt` from `@thunderclap-engine/engine/anim` on a procedural rig
  * (`createPose`, no assets, no WebGPU), drawn with a 2D canvas through a perspective `Camera`, so
  * e2e/ik.spec.ts can watch the solve on every matrix row. Noun-free.
  *
@@ -20,9 +20,9 @@ import {
   type Skeleton,
   twoBoneIk,
   WORLD_NODE_FLOATS,
-} from '@thunderclap/engine/anim';
-import { computeLetterbox } from '@thunderclap/engine/platform';
-import { Camera } from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/anim';
+import { computeLetterbox } from '@thunderclap-engine/engine/platform';
+import { Camera } from '@thunderclap-engine/engine/render';
 import type { HarnessIkApi, HarnessIkState } from './ik-state';
 
 const LOGICAL = { width: 800, height: 600 };

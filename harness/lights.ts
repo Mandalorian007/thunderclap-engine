@@ -12,8 +12,8 @@
  * - e2e/lights.spec.ts samples the ground under the spot against ground outside the cone, and
  *   the lit cube against the masked one; `setSweep(false)` holds the spot still for the sample.
  */
-import { GameLoop } from '@thunderclap/engine/core';
-import { boot } from '@thunderclap/engine/platform';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   type CameraPoint,
@@ -26,8 +26,8 @@ import {
   type SpotLight,
   Transform,
   VERTEX_LAYOUT_3D,
-} from '@thunderclap/engine/render';
-import { createPerfMonitor, createPerfOverlay } from '@thunderclap/engine/ui';
+} from '@thunderclap-engine/engine/render';
+import { createPerfMonitor, createPerfOverlay } from '@thunderclap-engine/engine/ui';
 import type { HarnessLightsApi, HarnessLightsState } from './lights-state';
 
 const root = document.getElementById('root') as HTMLElement;

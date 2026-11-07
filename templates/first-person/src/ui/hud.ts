@@ -4,8 +4,8 @@
  * focus line in the top region naming the landmark under the crosshair. The world-anchored
  * landmark labels live in the scene (`ui.anchors`), not here. Nothing here changes game state.
  */
-import type { Look } from '@thunderclap/engine/input';
-import { h } from '@thunderclap/engine/ui';
+import type { Look } from '@thunderclap-engine/engine/input';
+import { h } from '@thunderclap-engine/engine/ui';
 import type { GameCtx } from '../ctx';
 import type { Landmark } from '../world/terrain';
 

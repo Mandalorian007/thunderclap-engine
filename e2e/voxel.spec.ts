@@ -1,6 +1,6 @@
 /**
  * Voxel page (ws/voxel-render) on every matrix row, against harness/voxel.html: a 4×2×4-chunk
- * block world through `@thunderclap/engine/voxel`, meshed in a Worker, frustum-culled, picked
+ * block world through `@thunderclap-engine/engine/voxel`, meshed in a Worker, frustum-culled, picked
  * by the centre ray and edited in place.
  *
  * - boot: every non-empty chunk is drawn or culled, the centre ray hits ground, no errors;

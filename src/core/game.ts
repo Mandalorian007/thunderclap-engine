@@ -28,7 +28,7 @@
  * Headless (ws/core-8): given `gpu` (a fake device in a test) `createGame` skips the WebGPU
  * boot and its fatal screens and mounts the surface without a GPU canvas context; with `clock`
  * the game runs on that tick clock and with `host` on that host's frames. `root` may then be
- * left out. The overlay still needs a DOM (happy-dom in Vitest). `@thunderclap/engine/testing`
+ * left out. The overlay still needs a DOM (happy-dom in Vitest). `@thunderclap-engine/engine/testing`
  * `createTestGame` wires the fakes in.
  *
  * VR is one call (`ctx.xr.enter()`, ws/xr): frames then come from the session through an XR
@@ -170,7 +170,7 @@ export interface CreateGameOptions<
    * is asked of `navigator.gpu`, the unsupported and device-lost screens are never shown, and the
    * canvas gets no context; device loss is read from `gpu.device.lost` where the device has it
    * (a lost device reaches `hooks.deviceLost` and `ctx.onDeviceLost` as usual). A test passes the
-   * fake GPU (`@thunderclap/engine/testing`); `createTestGame` does.
+   * fake GPU (`@thunderclap-engine/engine/testing`); `createTestGame` does.
    */
   gpu?: GpuContext;
   /**

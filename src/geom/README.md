@@ -1,4 +1,4 @@
-# `@thunderclap/engine/geom`
+# `@thunderclap-engine/engine/geom`
 
 Procedural geometry on the CPU: primitives, sweeps, heightfields, tangents, operations, LODs, hulls and static collision with slide queries. Every builder returns a `Geometry` that `renderer.createMesh` takes as it is; where it goes in the world and what collides with what are the game's. No GPU, no DOM.
 
@@ -6,8 +6,8 @@ Procedural geometry on the CPU: primitives, sweeps, heightfields, tangents, oper
 
 <!-- snippet:check -->
 ```ts
-import { box, createHeightfield, heightAt, heightfieldGeometry } from '@thunderclap/engine/geom';
-import type { Renderer } from '@thunderclap/engine/render';
+import { box, createHeightfield, heightAt, heightfieldGeometry } from '@thunderclap-engine/engine/geom';
+import type { Renderer } from '@thunderclap-engine/engine/render';
 
 declare const renderer: Renderer;
 
@@ -60,7 +60,7 @@ GPU; the only `render/` imports are types and layout constants (`MeshBounds`, `V
 tangent layout.
 
 ```ts
-import { box, heightfieldGeometry, createHeightfield, heightAt } from '@thunderclap/engine/geom';
+import { box, heightfieldGeometry, createHeightfield, heightAt } from '@thunderclap-engine/engine/geom';
 
 const crate = renderer.createMesh(box({ size: [1, 1, 2], color: [0.8, 0.5, 0.2, 1] }));
 const ground = createHeightfield(65, 65, { scale: [0.5, 1, 0.5], origin: [-16, 0, -16] });

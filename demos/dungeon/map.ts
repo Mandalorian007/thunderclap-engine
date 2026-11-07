@@ -2,7 +2,7 @@
  * The 40×30 tile map: rooms joined by corridors, carved deterministically from a seed so the
  * spec can rely on the spawn room. Pure data and arithmetic, no engine.
  */
-import { createRandom } from '@thunderclap/engine/core';
+import { createRandom } from '@thunderclap-engine/engine/core';
 import { TILE } from './atlas';
 
 export const MAP_W = 40;

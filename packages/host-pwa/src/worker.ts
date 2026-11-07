@@ -128,5 +128,5 @@ export function workerSource(cfg: WorkerConfig): string {
     .replace('__PRECACHE__', JSON.stringify(cfg.precache))
     .replace('__RUNTIME_PREFIXES__', JSON.stringify(cfg.runtimePrefixes))
     .replace('__MAX_RUNTIME__', String(Math.max(0, Math.floor(cfg.maxRuntimeEntries))));
-  return `/* @thunderclap/host-pwa service worker, build ${cfg.version} */\n'use strict';\n${fns.join('\n')}\n${body}`;
+  return `/* @thunderclap-engine/host-pwa service worker, build ${cfg.version} */\n'use strict';\n${fns.join('\n')}\n${body}`;
 }

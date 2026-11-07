@@ -24,10 +24,10 @@
  *   reads zero.
  */
 
-import { GameLoop } from '@thunderclap/engine/core';
-import { createLodChain, icosphere } from '@thunderclap/engine/geom';
-import { boot } from '@thunderclap/engine/platform';
-import { PostStack } from '@thunderclap/engine/post';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { createLodChain, icosphere } from '@thunderclap-engine/engine/geom';
+import { boot } from '@thunderclap-engine/engine/platform';
+import { PostStack } from '@thunderclap-engine/engine/post';
 import {
   Camera,
   type CameraPoint,
@@ -46,7 +46,7 @@ import {
   type SceneTargetViewport,
   type Texture,
   Transform,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { HarnessRender7Api, HarnessRender7State, Render7Mode } from './render7-state';
 
 const root = document.getElementById('root') as HTMLElement;

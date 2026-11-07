@@ -5,7 +5,7 @@
  *
  * Replace this with a loaded image (`renderer.textureFromSource(img)`) and keep `CELL` in step.
  */
-import { hash2f } from '@thunderclap/engine/core';
+import { hash2f } from '@thunderclap-engine/engine/core';
 import { TILE } from '../levels/format';
 
 export const ATLAS_COLS = 8;

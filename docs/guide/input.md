@@ -11,8 +11,8 @@ The rule of the house: your scenes read **actions** (`jump`, `select`), never ke
 `createGame` takes the bindings map and builds `ctx.input` from it. The engine has no default bindings: an action fires only from what you list.
 
 ```ts
-import { createGame } from '@thunderclap/engine';
-import type { Bindings } from '@thunderclap/engine/input';
+import { createGame } from '@thunderclap-engine/engine';
+import type { Bindings } from '@thunderclap-engine/engine/input';
 
 type Action = 'jump' | 'left' | 'right' | 'select' | 'zoomIn';
 
@@ -53,7 +53,7 @@ Any binding can also take a trigger: `trigger: 'hold'` (with `holdMs`) fires onl
 The engine calls `ctx.input.update()` once per fixed step, before your `hooks.update` and your scenes. You only read.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
+import type { EngineCtx } from '@thunderclap-engine/engine';
 
 type Action = 'jump' | 'left' | 'right' | 'select';
 
@@ -81,7 +81,7 @@ The type parameter matters. `EngineCtx<Action, null>` is a ctx whose actions are
 `input.lastDevice` is the device that last produced input: `keyboard`, `mouse`, `touch`, `pen`, `gamepad` or `xr`. `input.glyphFor(action)` gives a label for that device's binding, such as `Space` or `A`.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
+import type { EngineCtx } from '@thunderclap-engine/engine';
 
 export function prompts(ctx: EngineCtx<'jump', null>, label: HTMLElement) {
   const redraw = () => {
@@ -97,7 +97,7 @@ export function prompts(ctx: EngineCtx<'jump', null>, label: HTMLElement) {
 A platformer wants a jump pressed just before landing to count. `buffered(action, ms)` is true when the action was pressed within the last `ms` and nobody used it yet. `consume(action)` marks it used.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
+import type { EngineCtx } from '@thunderclap-engine/engine';
 
 export function setup(ctx: EngineCtx<'jump', null>, grounded: () => boolean, jump: () => void) {
   ctx.hooks.update = () => {
@@ -116,7 +116,7 @@ The window is counted in ticks, so a replay gives the same answer.
 A menu, the gameplay and a vehicle can each own their bindings. Push a context when the menu opens and pop it when it closes.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
+import type { EngineCtx } from '@thunderclap-engine/engine';
 
 type Action = 'jump' | 'confirm' | 'back';
 
@@ -138,7 +138,7 @@ Every action name in a context must be in your `Action` type. With a typed `Acti
 `createGame` builds a gesture recogniser and links it to the input. You read it as `ctx.gestures`. A `{ gesture }` binding fires the action; the gesture object tells you where.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
+import type { EngineCtx } from '@thunderclap-engine/engine';
 
 export function setup(ctx: EngineCtx<'select' | 'info', null>) {
   ctx.hooks.update = () => {
@@ -159,8 +159,8 @@ A finger covers about 44 CSS px. When your cells are smaller, turn on the magnif
 `snapToGrid` finds the nearest cell of a square grid. It returns the cell's column and row, so you turn that into a `MagnifyTarget` (a centre and a radius) yourself.
 
 ```ts
-import { createGame } from '@thunderclap/engine';
-import { type MagnifyTarget, type SnapGrid, snapToGrid } from '@thunderclap/engine/input';
+import { createGame } from '@thunderclap-engine/engine';
+import { type MagnifyTarget, type SnapGrid, snapToGrid } from '@thunderclap-engine/engine/input';
 
 const grid: SnapGrid = { left: 360, top: 140, pitch: 40, cols: 20, rows: 20 };
 
@@ -203,9 +203,9 @@ Every pointer becomes a ray through the camera: the mouse, a pen, a touch, the p
 Each tester returns a remover. Bind `{ pointer: 'select' }` and any press of that action selects what the primary pointer is over, whether it came from a click, a tap or a pad button.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import { aabbTester, meshTester, type RayBox } from '@thunderclap/engine/input';
-import { Transform } from '@thunderclap/engine/render';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import { aabbTester, meshTester, type RayBox } from '@thunderclap-engine/engine/input';
+import { Transform } from '@thunderclap-engine/engine/render';
 
 interface Card { name: string }
 
@@ -235,8 +235,8 @@ Under a pointer lock the mouse does not move, so a first-person crosshair casts 
 `Look` turns the pointer-locked mouse, two touch zones, the pad sticks and the move keys into three numbers per tick: `look` (yaw and pitch deltas in radians), `move` (x and y in -1..1) and `zoom`. Your camera code never sees which device moved. `createGame` builds no `Look`, so you add one.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import { Look } from '@thunderclap/engine/input';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import { Look } from '@thunderclap-engine/engine/input';
 
 export function addLook(ctx: EngineCtx<string, null>) {
   const look = new Look({
@@ -270,7 +270,7 @@ export function addLook(ctx: EngineCtx<string, null>) {
 `input.stick` reads four actions as one 2D stick, with a dead zone and a diagonal of length 1 from keys.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
+import type { EngineCtx } from '@thunderclap-engine/engine';
 
 type Action = 'left' | 'right' | 'up' | 'down';
 
@@ -289,8 +289,8 @@ Bind the pad axes with `threshold: 0` (for example `{ padAxis: 0, dir: 1, thresh
 On a phone, `createTouchZones` turns screen regions into a stick, buttons or swipes that feed your actions. Your scenes keep reading `input.pressed('jump')` and `input.axis('left', 'right')`.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import { createTouchZones } from '@thunderclap/engine/input';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import { createTouchZones } from '@thunderclap-engine/engine/input';
 
 type Action = 'left' | 'right' | 'jump';
 
@@ -326,8 +326,8 @@ A recording holds everything the input was fed, tick by tick: keys, buttons, poi
 Ask `createGame` to record, then stop the recorder when you want the data:
 
 ```ts
-import { createGame } from '@thunderclap/engine';
-import { serializeRecording } from '@thunderclap/engine/input';
+import { createGame } from '@thunderclap-engine/engine';
+import { serializeRecording } from '@thunderclap-engine/engine/input';
 
 const ctx = await createGame<'jump'>({
   root: document.getElementById('app')!,
@@ -343,8 +343,8 @@ export function saveBugReport() {
 To play it back, pass the recording as `replay`. The input then attaches no DOM listeners, so a real key never leaks in, and the loop steps the playback before each fixed step.
 
 ```ts
-import { createGame } from '@thunderclap/engine';
-import { parseRecording } from '@thunderclap/engine/input';
+import { createGame } from '@thunderclap-engine/engine';
+import { parseRecording } from '@thunderclap-engine/engine/input';
 
 const recording = parseRecording(localStorage.getItem('bug-42') ?? '');
 
@@ -359,8 +359,8 @@ const ctx = await createGame<'jump'>({
 To start a replay from a menu in a running game, call `ctx.replay(rec)`. It detaches the input from the canvas and the window while the recording runs, and mutes `ctx.pointers` (VR controllers too), so the player cannot disturb it. A mute you set yourself (`ctx.pointers.mute(...)`) is still on after the replay. The loop steps it from the next fixed step. When the recording ends, or you call `stop()`, the player gets the input back:
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import type { InputRecording } from '@thunderclap/engine/input';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import type { InputRecording } from '@thunderclap-engine/engine/input';
 
 export function watchReplay(ctx: EngineCtx<'jump', null>, rec: InputRecording) {
   const run = ctx.replay(rec, { speed: 2 }); // two recorded ticks per step
@@ -373,8 +373,8 @@ A second `ctx.replay` call stops the first. The returned object is the playback 
 The manual form installs a playback on `ctx.input` yourself. The loop finds it on `ctx.input.playback` and steps it, but you do the detaching and cleanup:
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import { createInputPlayback, type InputRecording } from '@thunderclap/engine/input';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import { createInputPlayback, type InputRecording } from '@thunderclap-engine/engine/input';
 
 export function replayByHand(ctx: EngineCtx<'jump', null>, rec: InputRecording) {
   ctx.input.releaseAll();

@@ -1,6 +1,6 @@
 /**
- * `@thunderclap/host-pwa`: what a game imports. The page side (`createPwaHost`, `inStandalone`)
- * and the build side (`pwaPlugin`, also at `@thunderclap/host-pwa/vite`, which a `vite.config.ts`
+ * `@thunderclap-engine/host-pwa`: what a game imports. The page side (`createPwaHost`, `inStandalone`)
+ * and the build side (`pwaPlugin`, also at `@thunderclap-engine/host-pwa/vite`, which a `vite.config.ts`
  * should prefer so Node never loads the host).
  */
 export {

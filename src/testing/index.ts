@@ -1,4 +1,4 @@
-// @thunderclap/engine/testing: helpers for a game's unit tests. Never imported by the engine.
+// @thunderclap-engine/engine/testing: helpers for a game's unit tests. Never imported by the engine.
 
 export {
   createFakeDevice,

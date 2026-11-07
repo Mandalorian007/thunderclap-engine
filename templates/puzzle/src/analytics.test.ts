@@ -1,4 +1,4 @@
-import type { AnalyticsEvent } from '@thunderclap/engine/analytics';
+import type { AnalyticsEvent } from '@thunderclap-engine/engine/analytics';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createBeaconSink } from './analytics';
 

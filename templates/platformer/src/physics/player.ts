@@ -6,7 +6,7 @@
  *
  * The three constants an agent tunes are at the top: `GRAVITY`, `JUMP_SPEED`, `RUN_SPEED`.
  */
-import { type Cooldown, createScheduler, type Scheduler } from '@thunderclap/engine/core';
+import { type Cooldown, createScheduler, type Scheduler } from '@thunderclap-engine/engine/core';
 import type { Level } from '../levels/format';
 import { type Body, createBody, type MoverBox, moveBody } from './body';
 

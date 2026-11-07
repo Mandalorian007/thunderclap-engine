@@ -15,17 +15,17 @@
  *   `zoom` axis. A DOM readout (`ui`) of draw calls and GPU ms. `?still` parks the lights, the
  *   strip and the blends for stable measurements.
  */
-import { GameLoop } from '@thunderclap/engine/core';
-import { box, plane, sphere } from '@thunderclap/engine/geom';
-import { Gestures, Input, Look } from '@thunderclap/engine/input';
-import { boot } from '@thunderclap/engine/platform';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { box, plane, sphere } from '@thunderclap-engine/engine/geom';
+import { Gestures, Input, Look } from '@thunderclap-engine/engine/input';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   applyPostPatch,
   cinematicPostSettings,
   type PostSettings,
   type PostSettingsPatch,
   PostStack,
-} from '@thunderclap/engine/post';
+} from '@thunderclap-engine/engine/post';
 import {
   Camera,
   type CameraPoint,
@@ -37,8 +37,8 @@ import {
   type PointLight,
   Renderer,
   Transform,
-} from '@thunderclap/engine/render';
-import { createOverlay, h } from '@thunderclap/engine/ui';
+} from '@thunderclap-engine/engine/render';
+import { createOverlay, h } from '@thunderclap-engine/engine/ui';
 import { LOOK_NAMES, type LookName, type ShowroomState } from './state';
 
 const root = document.getElementById('root') as HTMLElement;

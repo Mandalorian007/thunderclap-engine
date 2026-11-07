@@ -1,5 +1,5 @@
 /**
- * Save harness page: `@thunderclap/engine/save` with no WebGPU, so e2e/save.spec.ts can verify
+ * Save harness page: `@thunderclap-engine/engine/save` with no WebGPU, so e2e/save.spec.ts can verify
  * it on every matrix row. Noun-free.
  *
  * - A slot manager with three slots; `save(n)` copies the working tilemap into slot `n` with a
@@ -17,7 +17,7 @@ import {
   type Infer,
   MemoryStorage,
   s,
-} from '@thunderclap/engine/save';
+} from '@thunderclap-engine/engine/save';
 import type { HarnessSaveApi, HarnessSaveState } from './save-state';
 
 const SIZE = 64;

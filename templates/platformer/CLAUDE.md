@@ -1,12 +1,12 @@
 # Skyline: a ThunderClap platformer template
 
-This folder is a complete, copyable 2D side-scrolling platformer on `@thunderclap/engine`. To start a new game: copy it, rename the package in `package.json`, replace `levels/`, keep the shape. Everything an agent needs to extend it is in this file; it should not have to read the engine.
+This folder is a complete, copyable 2D side-scrolling platformer on `@thunderclap-engine/engine`. To start a new game: copy it, rename the package in `package.json`, replace `levels/`, keep the shape. Everything an agent needs to extend it is in this file; it should not have to read the engine.
 
 ## Commands
 
 - `pnpm dev`: Vite dev server at `http://127.0.0.1:5173` (from the repo root: `pnpm template:platformer`). The repo's `pnpm test:e2e` boots the page once (`e2e/templates.spec.ts`) and reads `window.__template` (`{ scene, frames }`, set in `main.ts`).
 - `pnpm typecheck`, `pnpm lint`, `pnpm test`: `tsc`, Biome (the repo's `biome.json`), Vitest. `pnpm check` runs all three; the repo root's `pnpm check` runs it too (`check:template-platformer`).
-- Tests are product tests only (`src/**/*.test.ts`): the level parser, the collision and player step (coyote time, jump buffering, one-way platforms, mover carry) and the save migration, plus `save/host.test.ts`, which records a run and reloads it on the engine's fake host (`createFakeHost`, `createFixedClock` from `@thunderclap/engine/testing`). The engine verifies the platform itself (the camera follow, the touch zones and the parallax are its).
+- Tests are product tests only (`src/**/*.test.ts`): the level parser, the collision and player step (coyote time, jump buffering, one-way platforms, mover carry) and the save migration, plus `save/host.test.ts`, which records a run and reloads it on the engine's fake host (`createFakeHost`, `createFixedClock` from `@thunderclap-engine/engine/testing`). The engine verifies the platform itself (the camera follow, the touch zones and the parallax are its).
 
 ## Shape
 
@@ -62,11 +62,11 @@ Alongside them: `COYOTE_TIME` (a jump still fires this long after leaving an edg
 2. **Rendering, not mechanics.** The scene turns input into an `Intent`, calls `stepPlayer`, and draws what the player and level say. Game state lives in `ctx.run` and the save, not in the scene's closure.
 3. **Zero allocations per frame.** `render` mutates pre-built `DrawParams` and `EmitParams`; nothing is created inside `render` or `update` in steady state. One atlas, so the whole world is a handful of draw calls (three parallax layers, the map, one sprite batch, particles).
 4. **Devices never leak past `ctx.ts`.** Scenes read actions (`input.pressed('jump')`, `input.axis('left', 'right')`), never keys, buttons or pointers; the touch zones feed the same actions.
-5. **Import only the public map.** `@thunderclap/engine` and `@thunderclap/engine/<module>` (`core`, `geom`, `render`, `input`, `ui`, `save`, `audio`, `tween`, `fx`). Never a path into the engine's `src/`.
+5. **Import only the public map.** `@thunderclap-engine/engine` and `@thunderclap-engine/engine/<module>` (`core`, `geom`, `render`, `input`, `ui`, `save`, `audio`, `tween`, `fx`). Never a path into the engine's `src/`.
 
 ## The engine's nouns
 
-- **`createGame(opts)`** (`@thunderclap/engine`): boots WebGPU on a letterboxed canvas and returns the **`EngineCtx`** (or `null` when WebGPU is missing). Options used here: `root`, `title`, `design` (1920×1080), `save(host)`, `input: { bindings, buttonKeys }`, `particles: { capacity }`. The game widens it with `Object.assign(engine, {...})` (`GameCtx` in `ctx.ts`).
+- **`createGame(opts)`** (`@thunderclap-engine/engine`): boots WebGPU on a letterboxed canvas and returns the **`EngineCtx`** (or `null` when WebGPU is missing). Options used here: `root`, `title`, `design` (1920×1080), `save(host)`, `input: { bindings, buttonKeys }`, `particles: { capacity }`. The game widens it with `Object.assign(engine, {...})` (`GameCtx` in `ctx.ts`).
 - **`Scene<GameCtx, Frame>`** (`core`): `enter`, `exit`, `pause`, `resume`, `update(dt)` (fixed steps), `render(frame, camera, alpha)`. `ctx.stack.push/pop/replace`; a `transparent` scene draws over the one beneath (the pause menu).
 - **`createTileLayer(renderer, { material, tileW, tileH, columns, rows, atlas })`** (`render`): a grid of atlas indices drawn in one call; `set(col, row, index)`, `fill(Int16Array)`, a mutable `origin`, `draw(frame, params)`. The map and the parallax layers are tile layers over the one atlas.
 - **`createParallax(renderer, [{ layer, factorX, factorY, wrapW, params }])`** (`render`): `update(cameraX, cameraY)` moves each layer's `origin` by `camera × (1 - factor)` from where it was built, wrapping every `wrapW` px; `draw(frame)` draws them in order; `destroy()`. `world/parallax.ts` builds the three patterned layers (factors 0.15, 0.4, 0.7; the pattern width is the period) and sets each origin's y so the pattern's bottom row rests on the ground line.

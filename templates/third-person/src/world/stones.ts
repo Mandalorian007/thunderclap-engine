@@ -14,7 +14,7 @@ import {
   mergeGeometry,
   type StaticCollider,
   transformGeometry,
-} from '@thunderclap/engine/geom';
+} from '@thunderclap-engine/engine/geom';
 import type { Ground } from './ground';
 
 /** Every block as one merged `Geometry` (world space; `box` is built in place with a 3×4 translation). */

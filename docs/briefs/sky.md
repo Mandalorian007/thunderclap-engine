@@ -6,7 +6,7 @@ Read `docs/briefs/common.md` first, then `docs/VISION.md` (style comes from shad
 
 A sky that makes a 3D scene look finished with no asset: a procedural gradient dome with a sun disc and glow that follows `Lights.sun`, horizon haze that matches `Lights.fog.color`, an optional night mode with stars. One object, drawn first, depth write off.
 
-STATUS row, *done when*: `Sky(renderer, opts?: SkyOptions)` in `@thunderclap/engine/fx` is a `Drawable` with `draw(frame)`; `SkyOptions { zenith?, horizon?, ground?, sunSize?, sunGlow?, stars?: boolean | { density; seed }, exposure? }` with live fields; reads the frame's `Lights` (sun direction and colour, fog colour) through the lights block, no per-frame uniform upload of its own beyond one small params buffer; depth-tested against nothing and writes no depth (`DepthMode` 0 or whatever means test-only-never-write: pick and document); harness `sky.html` on the matrix; documented.
+STATUS row, *done when*: `Sky(renderer, opts?: SkyOptions)` in `@thunderclap-engine/engine/fx` is a `Drawable` with `draw(frame)`; `SkyOptions { zenith?, horizon?, ground?, sunSize?, sunGlow?, stars?: boolean | { density; seed }, exposure? }` with live fields; reads the frame's `Lights` (sun direction and colour, fog colour) through the lights block, no per-frame uniform upload of its own beyond one small params buffer; depth-tested against nothing and writes no depth (`DepthMode` 0 or whatever means test-only-never-write: pick and document); harness `sky.html` on the matrix; documented.
 
 ## Scope
 

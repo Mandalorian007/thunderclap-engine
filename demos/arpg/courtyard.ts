@@ -8,7 +8,7 @@
  * (its `hash2f` seed is not `?seed`).
  */
 
-import { hash2f } from '@thunderclap/engine/core';
+import { hash2f } from '@thunderclap-engine/engine/core';
 import {
   arch,
   box,
@@ -18,8 +18,8 @@ import {
   mergeGeometry,
   stairs,
   transformGeometry,
-} from '@thunderclap/engine/geom';
-import type { NavBakeSource } from '@thunderclap/engine/nav';
+} from '@thunderclap-engine/engine/geom';
+import type { NavBakeSource } from '@thunderclap-engine/engine/nav';
 import {
   type InstanceList,
   type InstanceParams,
@@ -27,7 +27,7 @@ import {
   type MeshLod,
   type Renderer,
   Transform,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 
 /** `hash2f` under the courtyard's fixed seed plus `k` (the old `hash(x, y, SEED + k)` call sites). */
 const roll = (x: number, y: number, k = 0) => hash2f(SEED + k, x, y);

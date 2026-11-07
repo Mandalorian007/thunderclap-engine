@@ -6,7 +6,7 @@ What the engine needs from the place it runs: frames, links, the clipboard, full
 
 <!-- snippet:check -->
 ```ts
-import { createWebHost } from '@thunderclap/engine/host';
+import { createWebHost } from '@thunderclap-engine/engine/host';
 
 const host = createWebHost();
 const store = host.storage.open(); // null when storage is blocked (an itch.io iframe can do that)
@@ -31,10 +31,10 @@ host.openExternal('https://example.com', { activation: 'pointer' });
 
 What the engine needs from the place it runs: frames, open a link, copy text, fullscreen, save
 storage, where it is embedded, and (optionally) the app's lifecycle, haptics and the safe area.
-The web host is here; the Electron host, `createElectronHost()` in `@thunderclap/host-electron`
+The web host is here; the Electron host, `createElectronHost()` in `@thunderclap-engine/host-electron`
 (packages/host-electron), fills the same interface from a preload bridge and adds `window`
 (close, minimize, toggleMaximize, setTitle); the Capacitor host, `createCapacitorHost()` in
-`@thunderclap/host-capacitor` (packages/host-capacitor), fills it from Capacitor's plugins for an
+`@thunderclap-engine/host-capacitor` (packages/host-capacitor), fills it from Capacitor's plugins for an
 iOS or Android store app. Nothing else in the engine touches `window.open`, `navigator.clipboard`,
 `navigator.vibrate` or `localStorage`.
 
@@ -60,7 +60,7 @@ iOS or Android store app. Nothing else in the engine touches `window.open`, `nav
 | `XrHost` | What it returns: `Host` with `kind: 'xr'`, `session`, `base` and `frame` (the current `XRFrame` for the length of a frame callback, else `null`) |
 
 ```ts
-import { createWebHost, defaultHost, setDefaultHost } from '@thunderclap/engine/host';
+import { createWebHost, defaultHost, setDefaultHost } from '@thunderclap-engine/engine/host';
 
 const host = createWebHost(); // or defaultHost(); setDefaultHost(electronHost) to replace it
 host.kind; // 'web' | 'electron' | 'xr' | 'capacitor'
@@ -111,7 +111,7 @@ Tests: `web.test.ts`, `web-links.test.ts`, `xr.test.ts`, and `e2e/host.spec.ts` 
 the engine matrix (the facets through `harness/host.html`: `?safe=44,0,34,0` pads the layout, a
 hidden document stops frames within 200 ms).
 
-The installable web shell is a package, not a host kind: `createPwaHost()` in `@thunderclap/host-pwa`
+The installable web shell is a package, not a host kind: `createPwaHost()` in `@thunderclap-engine/host-pwa`
 (packages/host-pwa) wraps `createWebHost()`, keeps `kind: 'web'`, and adds `host.pwa` (the deferred
 install prompt, `updateReady` / `applyUpdate()` for a waiting service worker, `offline`,
 `standalone`, `cacheStatus()`, `clearCache()`), every method a no-op where the browser lacks the

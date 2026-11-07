@@ -6,8 +6,8 @@
 
 <!-- snippet:check -->
 ```ts
-import { PostStack } from '@thunderclap/engine/post';
-import type { Renderer } from '@thunderclap/engine/render';
+import { PostStack } from '@thunderclap-engine/engine/post';
+import type { Renderer } from '@thunderclap-engine/engine/render';
 
 declare const renderer: Renderer;
 
@@ -44,7 +44,7 @@ post.blendTo({ vignette: { intensity: 0.6 } }, 2); // ease to a new look over 2 
 image. Every pass can be toggled, and every parameter can change at runtime.
 
 ```ts
-import { PostStack } from '@thunderclap/engine/post';
+import { PostStack } from '@thunderclap-engine/engine/post';
 
 const post = new PostStack(renderer, {
   godRays: { x: 960, y: -60 },   // light point in logical px (may be off-screen)
@@ -71,7 +71,7 @@ pipelines or bind groups.
 at once, so a mood change needs no covering wash.
 
 ```ts
-import { easeOut } from '@thunderclap/engine/post';
+import { easeOut } from '@thunderclap-engine/engine/post';
 
 post.blendTo({ grade: { exposure: 0.6, gain: [1.1, 0.9, 0.8] }, mist: { density: 0.9 } }, 3);
 post.set({ godRays: { intensity: 0 } }).blendTo({ godRays: { enabled: true, intensity: 0.5 } }, 2, easeOut);
@@ -436,5 +436,5 @@ texture; `renderer.endFrame({ present: false })` then only submits. Inside `enco
   `clonePostSettings(s)` a deep copy sharing GPU handles.
 - `Ease` is `(t: number) => number` on 0..1.
   The easing functions (`easeLinear`, `easeIn`, `easeOut`, `easeInOut`) are aliases of the
-  table in `@thunderclap/engine/tween` (`ease.linear`, `ease.quadIn`, `ease.quadOut`,
+  table in `@thunderclap-engine/engine/tween` (`ease.linear`, `ease.quadIn`, `ease.quadOut`,
   `ease.smoothstep`), which also has the full set.

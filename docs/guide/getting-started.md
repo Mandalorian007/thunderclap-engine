@@ -14,10 +14,10 @@ In this guide you clone the engine, run the example, scaffold a game from a temp
 To add the engine to a project you already have, install it from npm:
 
 ```sh
-pnpm add @thunderclap/engine
+pnpm add @thunderclap-engine/engine
 ```
 
-The package is compiled ESM with `.d.ts` types and no runtime dependencies. Import from its entry points (`@thunderclap/engine`, `@thunderclap/engine/render` and so on). The hosts for the desktop, the stores and installable web apps are `@thunderclap/host-electron`, `@thunderclap/host-capacitor` and `@thunderclap/host-pwa`. If TypeScript reports `Cannot find name 'GPUDevice'`, your TypeScript's DOM lib has no WebGPU types: run `pnpm add -D @webgpu/types` and add `"@webgpu/types"` to `compilerOptions.types`.
+The package is compiled ESM with `.d.ts` types and no runtime dependencies. Import from its entry points (`@thunderclap-engine/engine`, `@thunderclap-engine/engine/render` and so on). The hosts for the desktop, the stores and installable web apps are `@thunderclap-engine/host-electron`, `@thunderclap-engine/host-capacitor` and `@thunderclap-engine/host-pwa`. If TypeScript reports `Cannot find name 'GPUDevice'`, your TypeScript's DOM lib has no WebGPU types: run `pnpm add -D @webgpu/types` and add `"@webgpu/types"` to `compilerOptions.types`.
 
 The rest of this guide works from a clone of the engine, which holds the example and the templates.
 
@@ -58,7 +58,7 @@ pnpm install
 pnpm dev
 ```
 
-The new game's `@thunderclap/engine` dependency is a `link:` to your clone; keep the clone where it is. To move the game onto the npm package instead, replace the link with a version range (`pnpm add @thunderclap/engine` in the game folder). `--engine <spec>` picks the dependency yourself: a version range, `github:Mandalorian007/thunderclap-engine`, or a directory. Other useful flags: `--name <pkg>` sets the package name, `--dry-run` prints the files it would write, and `--force` writes into a folder that is not empty.
+The new game's `@thunderclap-engine/engine` dependency is a `link:` to your clone; keep the clone where it is. To move the game onto the npm package instead, replace the link with a version range (`pnpm add @thunderclap-engine/engine` in the game folder). `--engine <spec>` picks the dependency yourself: a version range, `github:Mandalorian007/thunderclap-engine`, or a directory. Other useful flags: `--name <pkg>` sets the package name, `--dry-run` prints the files it would write, and `--force` writes into a folder that is not empty.
 
 `pnpm dev` starts Vite at `http://127.0.0.1:5173`. `pnpm check` runs the type checker, the linter and the game's tests. `pnpm build` writes the static game to `dist/`, and `pnpm preview` serves it.
 
@@ -69,9 +69,9 @@ Each template has a `CLAUDE.md` that lists its files, its house rules and every 
 Every game starts with one call to `createGame`. It boots WebGPU on a letterboxed canvas and returns the engine ctx, or `null` when the browser has no WebGPU (the engine has already shown the unsupported screen, so you just stop).
 
 ```ts
-import { createGame } from '@thunderclap/engine';
-import type { Scene } from '@thunderclap/engine/core';
-import { type DrawParams, type Frame, hex } from '@thunderclap/engine/render';
+import { createGame } from '@thunderclap-engine/engine';
+import type { Scene } from '@thunderclap-engine/engine/core';
+import { type DrawParams, type Frame, hex } from '@thunderclap-engine/engine/render';
 
 type Action = 'flare';
 
@@ -139,9 +139,9 @@ A scene is one screen: a title, a level, a pause menu. It is a plain object with
 `ctx.stack` holds them. `push(scene)` puts a scene on top, `pop()` removes it, `replace(scene)` swaps the top. Only the top scene updates. A scene with `transparent: true` draws over the one beneath it, so a pause menu shows the level behind it.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import type { Scene } from '@thunderclap/engine/core';
-import type { Frame } from '@thunderclap/engine/render';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import type { Scene } from '@thunderclap-engine/engine/core';
+import type { Frame } from '@thunderclap-engine/engine/render';
 
 export function pauseMenu(ctx: EngineCtx<'back'>): Scene<EngineCtx<'back'>, Frame> {
   return {
@@ -183,7 +183,7 @@ The engine also stops the loop when the page is hidden and flushes the save, the
 Some games do not own their simulation: a client that shows a server's state, or an explorer with nothing to keep in step. `sim: false` runs the loop at render rate. Each frame, `hooks.frame(dt)` and the top scene's `update(dt)` run once with the real frame delta. The `first-person` and `third-person` templates use it, and leave `save` out, so the engine never touches storage.
 
 ```ts
-import { createGame } from '@thunderclap/engine';
+import { createGame } from '@thunderclap-engine/engine';
 
 const ctx = await createGame({
   root: document.getElementById('app')!,
@@ -204,8 +204,8 @@ if (ctx) {
 The engine ctx knows nothing about your game. You add your own fields to the same object with `Object.assign`. The stack hands scenes that same object, so a scene typed against your ctx sees your fields. The templates keep this in `src/ctx.ts`:
 
 ```ts
-import { createGame, type EngineCtx } from '@thunderclap/engine';
-import { createSaveStore, type SaveStore, s } from '@thunderclap/engine/save';
+import { createGame, type EngineCtx } from '@thunderclap-engine/engine';
+import { createSaveStore, type SaveStore, s } from '@thunderclap-engine/engine/save';
 
 type Action = 'jump';
 type Progress = { coins: number };
@@ -277,20 +277,20 @@ On itch, create a project, set "Kind of project" to HTML, upload the zip and tic
 `packages/host-electron` is a desktop shell: your web build runs unchanged inside Electron. In the game, pick the host at boot. Electron gets `createElectronHost()`, the browser keeps the web host:
 
 ```ts
-import { createGame } from '@thunderclap/engine';
-import { createWebHost } from '@thunderclap/engine/host';
+import { createGame } from '@thunderclap-engine/engine';
+import { createWebHost } from '@thunderclap-engine/engine/host';
 
 // The shell's preload puts its bridge on window.thunderclap; a browser has none.
 const host =
   'thunderclap' in window
-    ? (await import('@thunderclap/host-electron')).createElectronHost()
+    ? (await import('@thunderclap-engine/host-electron')).createElectronHost()
     : createWebHost();
 
 const ctx = await createGame({ root: document.getElementById('app')!, host, input: { bindings: {} } });
 ctx?.host.window?.close(); // a Quit button; host.window exists only on the desktop
 ```
 
-`@thunderclap/host-electron` is a workspace package your game adds itself (`"@thunderclap/host-electron": "link:<engine>/packages/host-electron"`). The dynamic import behind the check keeps the package out of the browser's download. Inside the package, `inElectronShell()` makes the same check.
+`@thunderclap-engine/host-electron` is a workspace package your game adds itself (`"@thunderclap-engine/host-electron": "link:<engine>/packages/host-electron"`). The dynamic import behind the check keeps the package out of the browser's download. Inside the package, `inElectronShell()` makes the same check.
 
 From the engine checkout, develop and package against your game:
 
@@ -308,7 +308,7 @@ The packages land in `dist/desktop/` in the engine repo. They are unsigned, so m
 
 ```ts
 // vite.config.ts
-import { pwaPlugin } from '@thunderclap/host-pwa/vite';
+import { pwaPlugin } from '@thunderclap-engine/host-pwa/vite';
 import { defineConfig } from 'vite';
 
 // One square SVG; the plugin rasterises it to the 192 and 512 px icons.
@@ -321,8 +321,8 @@ export default defineConfig({
 
 ```ts
 // main.ts
-import { createGame } from '@thunderclap/engine';
-import { createPwaHost } from '@thunderclap/host-pwa';
+import { createGame } from '@thunderclap-engine/engine';
+import { createPwaHost } from '@thunderclap-engine/host-pwa';
 
 const host = createPwaHost();
 const ctx = await createGame({ root: document.getElementById('app')!, host, input: { bindings: {} } });

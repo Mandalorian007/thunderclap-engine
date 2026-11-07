@@ -1,9 +1,9 @@
 {
-  "name": "@thunderclap/template-puzzle",
+  "name": "@thunderclap-engine/template-puzzle",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "A 2D puzzle game on @thunderclap/engine: createGame, one scene, pure rules, a versioned save and a layout spec. The game-specific code is rules/.",
+  "description": "A 2D puzzle game on @thunderclap-engine/engine: createGame, one scene, pure rules, a versioned save and a layout spec. The game-specific code is rules/.",
   "license": "MIT",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
@@ -16,7 +16,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.4",
-    "@thunderclap/engine": "workspace:*",
+    "@thunderclap-engine/engine": "workspace:*",
     "@types/node": "^26.6.6",
     "@webgpu/types": "^0.1.74",
     "typescript": "^7.0.2",

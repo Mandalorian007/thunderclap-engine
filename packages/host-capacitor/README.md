@@ -1,8 +1,8 @@
-# @thunderclap/host-capacitor
+# @thunderclap-engine/host-capacitor
 
 The ThunderClap mobile host. A game's web build runs unchanged inside a Capacitor WebView on
 iOS or Android, and `createCapacitorHost()` fills the engine's `Host` interface
-(`@thunderclap/engine/host`, D-041) from the Capacitor plugins the app installs. The package
+(`@thunderclap-engine/engine/host`, D-041) from the Capacitor plugins the app installs. The package
 contains no game nouns, the engine never imports it, and it reaches the engine only through the
 engine's exports map (`pnpm check:boundaries`).
 
@@ -30,8 +30,8 @@ import { Clipboard } from '@capacitor/clipboard';
 import { Haptics } from '@capacitor/haptics';
 import { Preferences } from '@capacitor/preferences';
 import { ScreenOrientation } from '@capacitor/screen-orientation';
-import { createWebHost, setDefaultHost } from '@thunderclap/engine/host';
-import { createCapacitorHost } from '@thunderclap/host-capacitor';
+import { createWebHost, setDefaultHost } from '@thunderclap-engine/engine/host';
+import { createCapacitorHost } from '@thunderclap-engine/host-capacitor';
 
 const host = Capacitor.isNativePlatform()
   ? createCapacitorHost({ plugins: { App, Browser, Clipboard, Haptics, Preferences, ScreenOrientation } })

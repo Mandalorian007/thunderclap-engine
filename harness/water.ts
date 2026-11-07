@@ -16,10 +16,10 @@
  * - State on `window.__harnessWater` (harness/water-state.ts): the wave clock, the height at a
  *   fixed point and four probe pixels e2e/water.spec.ts samples.
  */
-import { GameLoop } from '@thunderclap/engine/core';
-import { Sky, Water, waterHeight } from '@thunderclap/engine/fx';
-import { box } from '@thunderclap/engine/geom';
-import { boot } from '@thunderclap/engine/platform';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { Sky, Water, waterHeight } from '@thunderclap-engine/engine/fx';
+import { box } from '@thunderclap-engine/engine/geom';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   type CameraPoint,
@@ -29,7 +29,7 @@ import {
   Lights,
   Renderer,
   Transform,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import { type HarnessWaterApi, type HarnessWaterState, HEIGHT_X, HEIGHT_Z } from './water-state';
 
 const root = document.getElementById('root') as HTMLElement;

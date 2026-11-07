@@ -21,7 +21,7 @@
  * Vitest only includes `src/**`; to run it, copy it under `src/voxel/` with the `world` import
  * pointed at `../../demos/voxel/world` and `it.skip` made `it` (it passes, 1 test).
  */
-import { createChunkMeshOut, createVoxelGrid, meshChunk } from '@thunderclap/engine/voxel';
+import { createChunkMeshOut, createVoxelGrid, meshChunk } from '@thunderclap-engine/engine/voxel';
 import { describe, expect, it } from 'vitest';
 import { blockLayer, outsideBlock } from './world';
 

@@ -1,6 +1,6 @@
 # testing
 
-`@thunderclap/engine/testing` holds what a game's unit tests need to run in Vitest or plain Node, with no browser and no GPU: a fake host, a fixed-step clock, the recording fake GPU device and `createTestGame`, a whole headless game on them. The engine itself never imports it.
+`@thunderclap-engine/engine/testing` holds what a game's unit tests need to run in Vitest or plain Node, with no browser and no GPU: a fake host, a fixed-step clock, the recording fake GPU device and `createTestGame`, a whole headless game on them. The engine itself never imports it.
 
 The entry is `src/testing/index.ts`. It re-exports the fake GPU from `src/render/fake-gpu.ts` and adds `fake-host.ts`, `fixed-clock.ts` and `test-game.ts`. `createTestGame({ overlay: false })` runs on `createGame`'s no-DOM mode (ws/core-9).
 
@@ -8,7 +8,7 @@ How a game uses these is in [Testing your game](../../docs/guide/testing-your-ga
 
 ## Fake host
 
-`createFakeHost(opts?: FakeHostOptions): FakeHost` returns a full `Host` (`@thunderclap/engine/host`). Every optional facet (`lifecycle`, `haptics`, `safeArea`) is present, and nothing touches the DOM.
+`createFakeHost(opts?: FakeHostOptions): FakeHost` returns a full `Host` (`@thunderclap-engine/engine/host`). Every optional facet (`lifecycle`, `haptics`, `safeArea`) is present, and nothing touches the DOM.
 
 - **Storage.** `storage.open()` returns the same `MemoryStorage` on every call, and `memory` is that object. A game's save store can open it and round-trip through it. `{ storage: null }` makes a host with no working storage, where `open()` returns null. `{ storage }` hands in a backend the test built.
 - **Lifecycle.** `setState('background' | 'active')` moves `lifecycle.state` (a getter). The `lifecycle.watch` listeners run only when the state changes. `{ state }` sets the starting state.
@@ -21,7 +21,7 @@ How a game uses these is in [Testing your game](../../docs/guide/testing-your-ga
 
 ## Fixed clock
 
-`createFixedClock(stepMs = 1000 / 60, start = 0): FixedClock` returns a `TickClock` (`@thunderclap/engine/input`), so it goes wherever `ctx.clock` goes: `createGestures({ clock })`, `createLook({ clock })`, `createInputPlayback(input, rec, { clock })`, or `GameLoop`'s `now` as `() => clock.now()`.
+`createFixedClock(stepMs = 1000 / 60, start = 0): FixedClock` returns a `TickClock` (`@thunderclap-engine/engine/input`), so it goes wherever `ctx.clock` goes: `createGestures({ clock })`, `createLook({ clock })`, `createInputPlayback(input, rec, { clock })`, or `GameLoop`'s `now` as `() => clock.now()`.
 
 - `step(n = 1)` moves it by `n` whole steps. A negative, fractional or non-finite `n` is ignored. `ticks` counts the steps taken.
 - `advance(ms)` moves it by a loose amount, the same as `createTickClock`. A negative or non-finite value is ignored. An advance of exactly `stepMs` counts as a step (ws/core-8), so a game loop that advances its clock by the fixed step reads exactly N × `stepMs` after N updates; other loose time is not counted in `ticks`.

@@ -33,10 +33,10 @@
  * - `?ortho`: a box on a floor under an orthographic camera at two zooms and distances, AO on:
  *   `aoTerms` is the AO term at a world point near the crease in each, `aoDelta` their gap.
  */
-import { GameLoop, mat4 } from '@thunderclap/engine/core';
-import { box } from '@thunderclap/engine/geom';
-import { boot } from '@thunderclap/engine/platform';
-import { type PostSettingsPatch, PostStack } from '@thunderclap/engine/post';
+import { GameLoop, mat4 } from '@thunderclap-engine/engine/core';
+import { box } from '@thunderclap-engine/engine/geom';
+import { boot } from '@thunderclap-engine/engine/platform';
+import { type PostSettingsPatch, PostStack } from '@thunderclap-engine/engine/post';
 import {
   Camera,
   type CameraPoint,
@@ -54,7 +54,7 @@ import {
   type SceneTargetViewport,
   type Texture,
   Transform,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { HarnessPost4Api, HarnessPost4State, Post4Mode } from './post4-state';
 
 const root = document.getElementById('root') as HTMLElement;

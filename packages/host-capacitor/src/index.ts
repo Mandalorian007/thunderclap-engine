@@ -1,5 +1,5 @@
 /**
- * `@thunderclap/host-capacitor`: the engine's `Host` for a Capacitor (iOS / Android) app.
+ * `@thunderclap-engine/host-capacitor`: the engine's `Host` for a Capacitor (iOS / Android) app.
  * See README.md for the capacitor.config.ts recipe and the back-button guidance.
  */
 export {

@@ -1,4 +1,4 @@
-import { parseGltf } from '@thunderclap/engine/assets';
+import { parseGltf } from '@thunderclap-engine/engine/assets';
 import { describe, expect, it } from 'vitest';
 import {
   ATTACK_LUNGE,

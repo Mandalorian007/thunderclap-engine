@@ -21,11 +21,11 @@
  * - `?still`: freeze motion (the cube's turn, the dissolve's cycle at 0.5) for screenshots.
  */
 
-import { parseKtx2 } from '@thunderclap/engine/assets';
-import { GameLoop } from '@thunderclap/engine/core';
-import { box, createLodChain, icosphere, plane } from '@thunderclap/engine/geom';
-import { boot } from '@thunderclap/engine/platform';
-import { PostStack } from '@thunderclap/engine/post';
+import { parseKtx2 } from '@thunderclap-engine/engine/assets';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { box, createLodChain, icosphere, plane } from '@thunderclap-engine/engine/geom';
+import { boot } from '@thunderclap-engine/engine/platform';
+import { PostStack } from '@thunderclap-engine/engine/post';
 import {
   Camera,
   type CameraPoint,
@@ -48,7 +48,7 @@ import {
   type Texture,
   Transform,
   uploadKtx2,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { HarnessRender5Api, HarnessRender5State, Render5Mode } from './render5-state';
 
 const root = document.getElementById('root') as HTMLElement;

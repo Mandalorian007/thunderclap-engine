@@ -1,7 +1,7 @@
 /**
  * `pwaPlugin(opts)`: the Vite plugin that turns a game's build into an installable app. It
  * imports nothing from the engine or the browser side of this package, so a `vite.config.ts` can
- * load it from `@thunderclap/host-pwa/vite` in Node without pulling the host in.
+ * load it from `@thunderclap-engine/host-pwa/vite` in Node without pulling the host in.
  *
  * Build only (`apply: 'build'`). Hooks, in the order Vite runs them:
  *

@@ -2,7 +2,7 @@
  * What the layout harness page (harness/layout.html) publishes on `window.__harnessLayout` for
  * e2e/layout.spec.ts. Shared by the page (harness/layout.ts) and the spec.
  */
-import type { FormFactor, Insets, Rect, RegionName } from '@thunderclap/engine/ui';
+import type { FormFactor, Insets, Rect, RegionName } from '@thunderclap-engine/engine/ui';
 
 export interface HarnessLayoutState {
   ready: boolean;

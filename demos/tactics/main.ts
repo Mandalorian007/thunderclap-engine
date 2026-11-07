@@ -15,20 +15,20 @@
  * AI are the demo's; the engine supplies the renderer, nav flow field, tweens, input and
  * gestures, UI layout, anchors and panels, particles and synthesised audio.
  */
-import { createGame } from '@thunderclap/engine';
-import { recipes } from '@thunderclap/engine/audio';
-import { createRandom, type Scene } from '@thunderclap/engine/core';
-import type { GamepadLike } from '@thunderclap/engine/input';
-import { createFlowField, createNavGrid } from '@thunderclap/engine/nav';
+import { createGame } from '@thunderclap-engine/engine';
+import { recipes } from '@thunderclap-engine/engine/audio';
+import { createRandom, type Scene } from '@thunderclap-engine/engine/core';
+import type { GamepadLike } from '@thunderclap-engine/engine/input';
+import { createFlowField, createNavGrid } from '@thunderclap-engine/engine/nav';
 import {
   type DrawParams,
   type Frame,
   hex,
   type RenderStats,
   type RGBA,
-} from '@thunderclap/engine/render';
-import { createTweens, ease } from '@thunderclap/engine/tween';
-import { button, h } from '@thunderclap/engine/ui';
+} from '@thunderclap-engine/engine/render';
+import { createTweens, ease } from '@thunderclap-engine/engine/tween';
+import { button, h } from '@thunderclap-engine/engine/ui';
 import { buildAtlas, CELL, CELL_SIZE, cellUv } from './atlas';
 import { DESIGN_H, DESIGN_W, MAP, tileToWorld, worldToTile } from './iso';
 import { buildMap, inBounds, index, MAX_ELEVATION, TERRAIN_COST, TERRAIN_NAME, WATER } from './map';

@@ -2,7 +2,7 @@
  * What the input page (harness/input.html, ws/input-3) publishes on `window.__harnessInput` for
  * e2e/input.spec.ts. Shared by the page (harness/input.ts) and the spec.
  */
-import type { Binding, InputDevice, LookMode } from '@thunderclap/engine/input';
+import type { Binding, InputDevice, LookMode } from '@thunderclap-engine/engine/input';
 
 export interface HarnessInputState {
   /** True once boot resolved (whether or not WebGPU came up). */

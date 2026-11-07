@@ -10,7 +10,7 @@
  *   context list on the secondary button.
  * - `window.__harnessInventory` publishes the state, `pad(action)` and the radial's controls.
  */
-import { computeLetterbox } from '@thunderclap/engine/platform';
+import { computeLetterbox } from '@thunderclap-engine/engine/platform';
 import {
   type CellItem,
   createOverlay,
@@ -20,7 +20,7 @@ import {
   type PadAction,
   slotsTarget,
   toFrameUnits,
-} from '@thunderclap/engine/ui';
+} from '@thunderclap-engine/engine/ui';
 import type {
   HarnessGridName,
   HarnessInventoryApi,

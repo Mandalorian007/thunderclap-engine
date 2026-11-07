@@ -13,8 +13,8 @@ import {
   type Rgba,
   sphere,
   transformGeometry,
-} from '@thunderclap/engine/geom';
-import { Transform } from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/geom';
+import { Transform } from '@thunderclap-engine/engine/render';
 
 export type GearName = 'iron' | 'gilded' | 'bone';
 export const GEAR_NAMES: readonly GearName[] = ['iron', 'gilded', 'bone'];

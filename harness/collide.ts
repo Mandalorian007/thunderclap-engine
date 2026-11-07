@@ -1,5 +1,5 @@
 /**
- * Collision page (ws/collide): a level built from `@thunderclap/engine/geom` builders (a box
+ * Collision page (ws/collide): a level built from `@thunderclap-engine/engine/geom` builders (a box
  * floor, stairs onto a platform, an arch, a tilted ramp, a wall and a heightfield patch) merged
  * into one `StaticCollider`, and a capsule walked through it with `slide` under gravity. WASD or
  * the arrows (through `Look`'s move keys), the touch stick or the pad's left stick move it; the
@@ -12,8 +12,8 @@
  * - `?still` (E-017): the sim steps only through `advance`, never on a frame, so a spec's reads
  *   are a function of what it asked for.
  */
-import { GameLoop } from '@thunderclap/engine/core';
-import { createDebugDraw } from '@thunderclap/engine/fx';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { createDebugDraw } from '@thunderclap-engine/engine/fx';
 import {
   arch,
   box,
@@ -39,9 +39,9 @@ import {
   sweepShape,
   transformGeometry,
   type WireframeMode,
-} from '@thunderclap/engine/geom';
-import { Input, Look } from '@thunderclap/engine/input';
-import { boot } from '@thunderclap/engine/platform';
+} from '@thunderclap-engine/engine/geom';
+import { Input, Look } from '@thunderclap-engine/engine/input';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   gpuDiagnostics,
@@ -50,7 +50,7 @@ import {
   type Mesh,
   Renderer,
   Transform,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import {
   CAPSULE_HALF_HEIGHT,
   CAPSULE_RADIUS,

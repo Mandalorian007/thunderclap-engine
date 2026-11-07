@@ -20,7 +20,7 @@
  * - `jumps` and `hookSawJump` compare `pressed('jump')` after `update()` with what an
  *   `onUpdated` hook saw.
  */
-import { GameLoop } from '@thunderclap/engine/core';
+import { GameLoop } from '@thunderclap-engine/engine/core';
 import {
   aabbTester,
   type Binding,
@@ -33,8 +33,8 @@ import {
   Look,
   type LookMode,
   serializeBindings,
-} from '@thunderclap/engine/input';
-import { boot } from '@thunderclap/engine/platform';
+} from '@thunderclap-engine/engine/input';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   gpuDiagnostics,
@@ -43,7 +43,7 @@ import {
   Renderer,
   Transform,
   VERTEX_LAYOUT_3D,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { HarnessInputApi, HarnessInputState } from './input-state';
 
 const root = document.getElementById('root') as HTMLElement;

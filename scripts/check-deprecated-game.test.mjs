@@ -1,6 +1,6 @@
 // Tests for the game-side old-name finder (ws/testing-2). Fixtures in
 // scripts/fixtures/deprecated-game: each game is copied to a temp folder whose
-// `node_modules/@thunderclap/engine` links to an engine, as an installed game has it.
+// `node_modules/@thunderclap-engine/engine` links to an engine, as an installed game has it.
 //   game-1x: a game still on 0.x names, against this engine (1.0.0, aliases removed); its
 //   src/reads.ts holds the errors that do not print the engine type (ws/testing-3), and
 //   src/wrapped.ts the same on receivers wrapped in parentheses or assertions (ws/testing-4).
@@ -24,13 +24,13 @@ import {
 const repoRoot = join(fileURLToPath(new URL('.', import.meta.url)), '..');
 const fixtures = join(repoRoot, 'scripts/fixtures/deprecated-game');
 
-/** Copy `game` to a temp folder with `node_modules/@thunderclap/engine` → `engine`. */
+/** Copy `game` to a temp folder with `node_modules/@thunderclap-engine/engine` → `engine`. */
 function install(game, engine, t) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'check-deprecated-game-')));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   cpSync(join(fixtures, game), dir, { recursive: true });
-  mkdirSync(join(dir, 'node_modules/@thunderclap'), { recursive: true });
-  symlinkSync(engine, join(dir, 'node_modules/@thunderclap/engine'), 'dir');
+  mkdirSync(join(dir, 'node_modules/@thunderclap-engine'), { recursive: true });
+  symlinkSync(engine, join(dir, 'node_modules/@thunderclap-engine/engine'), 'dir');
   mkdirSync(join(dir, 'node_modules/@webgpu'), { recursive: true });
   symlinkSync(
     join(repoRoot, 'node_modules/@webgpu/types'),
@@ -163,7 +163,7 @@ test('removedRowsFor maps TS2349 and a wrapped TS2339 only through engineTypesAt
     pos: at('list'),
     text: "Property 'list' does not exist on type 'Stack'.",
   };
-  const spec = /^@thunderclap\/engine(?:\/([\w-]+))?$/;
+  const spec = /^@thunderclap-engine\/engine(?:\/([\w-]+))?$/;
   const names = (r) => r.map((x) => x.name);
   // Without a checker neither error prints an engine type.
   assert.deepEqual(removedRowsFor(notCallable, text, rows, spec), []);
@@ -199,7 +199,10 @@ test('a game on a 0.x engine: the engine alias, not the DOM or the game deprecat
 
 test('the CLI runs from the game folder through node_modules and exits 1 on a use', (t) => {
   const game = install('game-1x', repoRoot, t);
-  const script = join(game, 'node_modules/@thunderclap/engine/scripts/check-deprecated-game.mjs');
+  const script = join(
+    game,
+    'node_modules/@thunderclap-engine/engine/scripts/check-deprecated-game.mjs',
+  );
   const r = spawnSync(process.execPath, [script], { cwd: game, encoding: 'utf8' });
   assert.equal(r.status, 1, r.stderr);
   assert.match(r.stdout, /src\/game\.ts:5:15 {2}TS2305: .*'BlendMode'/);

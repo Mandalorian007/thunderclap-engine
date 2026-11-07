@@ -3,9 +3,9 @@
  * saved best time and coins. The panel is the engine's (arrows, Tab, pad through `ctx.padNav`,
  * touch on the buttons); it is not dismissible, so the game always has something on top.
  */
-import type { Scene } from '@thunderclap/engine/core';
-import type { Frame } from '@thunderclap/engine/render';
-import { button, h } from '@thunderclap/engine/ui';
+import type { Scene } from '@thunderclap-engine/engine/core';
+import type { Frame } from '@thunderclap-engine/engine/render';
+import { button, h } from '@thunderclap-engine/engine/ui';
 import type { GameCtx } from '../ctx';
 import { LEVELS } from '../levels';
 import { TILE } from '../levels/format';

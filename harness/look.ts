@@ -7,9 +7,9 @@
  * - Touch: a finger on the left half is a move stick, a finger on the right half drags the view.
  * - Pad: left stick moves, right stick looks.
  */
-import { GameLoop } from '@thunderclap/engine/core';
-import { Input, Look } from '@thunderclap/engine/input';
-import { boot } from '@thunderclap/engine/platform';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { Input, Look } from '@thunderclap-engine/engine/input';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   gpuDiagnostics,
@@ -19,7 +19,7 @@ import {
   Renderer,
   Transform,
   VERTEX_LAYOUT_3D,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { HarnessLookApi, HarnessLookState } from './look-state';
 
 const root = document.getElementById('root') as HTMLElement;

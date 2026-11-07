@@ -14,9 +14,13 @@
  * The page publishes the stack's pass labels (render and compute, through a proxy over the
  * command encoder), the current EV and the probes e2e/post3.spec.ts samples.
  */
-import { GameLoop } from '@thunderclap/engine/core';
-import { boot } from '@thunderclap/engine/platform';
-import { createLensDirtTexture, type PostSettingsPatch, PostStack } from '@thunderclap/engine/post';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { boot } from '@thunderclap-engine/engine/platform';
+import {
+  createLensDirtTexture,
+  type PostSettingsPatch,
+  PostStack,
+} from '@thunderclap-engine/engine/post';
 import {
   Camera,
   type CameraPoint,
@@ -30,7 +34,7 @@ import {
   type SceneTargetViewport,
   Transform,
   VERTEX_LAYOUT_3D,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { HarnessPost3Api, HarnessPost3State, Post3Flags } from './post3-state';
 
 const root = document.getElementById('root') as HTMLElement;

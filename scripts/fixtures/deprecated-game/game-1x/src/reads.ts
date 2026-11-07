@@ -2,9 +2,9 @@
 // scripts/check-deprecated-game.test.mjs): reads that became getters, called as methods
 // (TS2349), and a removed member on a type the game wraps (TS2339). The game's own
 // not-callable value and a missing member with no row are not reported.
-import type { AssetCache } from '@thunderclap/engine/assets';
-import type { SceneStack } from '@thunderclap/engine/core';
-import type { Host } from '@thunderclap/engine/host';
+import type { AssetCache } from '@thunderclap-engine/engine/assets';
+import type { SceneStack } from '@thunderclap-engine/engine/core';
+import type { Host } from '@thunderclap-engine/engine/host';
 
 type Stack = SceneStack & { extra: number };
 interface Cache extends AssetCache {

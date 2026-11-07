@@ -17,10 +17,10 @@
  *   cube: the debug blit reads the colour at the panel's centre and `state.panelVisible` says
  *   it is the panel's.
  */
-import { GameLoop } from '@thunderclap/engine/core';
-import { box } from '@thunderclap/engine/geom';
-import { boot } from '@thunderclap/engine/platform';
-import { PostStack } from '@thunderclap/engine/post';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { box } from '@thunderclap-engine/engine/geom';
+import { boot } from '@thunderclap-engine/engine/platform';
+import { PostStack } from '@thunderclap-engine/engine/post';
 import {
   Camera,
   type CameraPoint,
@@ -40,7 +40,7 @@ import {
   type Texture,
   Transform,
   VERTEX_LAYOUT_3D,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { HarnessRender4Api, HarnessRender4State, Render4Mode } from './render4-state';
 
 const root = document.getElementById('root') as HTMLElement;

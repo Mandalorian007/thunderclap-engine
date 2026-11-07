@@ -1,5 +1,5 @@
 /**
- * `@thunderclap/engine/nav`: grid navigation on the XZ plane. A `NavGrid` of walkable cells with
+ * `@thunderclap-engine/engine/nav`: grid navigation on the XZ plane. A `NavGrid` of walkable cells with
  * costs (and an edge-cost hook, 4 or 8 neighbours), A* (`findPath`) and string pulling
  * (`smoothPath`) into a reusable `NavPath`, a flow field one build serves every agent with,
  * budget-bounded reachability with parents (`reachable`, on a grid or a `NavMesh`, with

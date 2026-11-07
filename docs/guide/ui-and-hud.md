@@ -14,15 +14,15 @@ A few rules to know up front:
 - Empty space lets clicks through to the canvas. Only buttons, panels and other interactive elements take the pointer.
 - While a modal panel is open, game input is blocked for you. Your scene's `input.pressed(...)` calls return false until it closes.
 
-`h(tag, props, ...children)` builds elements. `button`, `toggle` and `slider` build the common controls. All of them come from `@thunderclap/engine/ui`.
+`h(tag, props, ...children)` builds elements. `button`, `toggle` and `slider` build the common controls. All of them come from `@thunderclap-engine/engine/ui`.
 
 ## Place a widget in a region
 
 The screen is split into named regions: `top`, `bottom`, `left`, `right`, `cardLane`, `captionLane`, `modal` and `fill`. `fill` is where your world shows. `ui.layout.add(element, { place, order })` puts an element in a region.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import { button, h } from '@thunderclap/engine/ui';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import { button, h } from '@thunderclap-engine/engine/ui';
 
 export function createScoreHud(ctx: EngineCtx, onRestart: () => void) {
   const score = h('div', {
@@ -76,7 +76,7 @@ On desktop and tablet the UI is sized in design pixels of the canvas, so it scal
 The default grid has a top bar, side rails, a card lane, a caption lane and a bottom bar. To change it, pass a `LayoutSpec` to `createGame({ layout })`. You only list what you change; the rest keeps the defaults.
 
 ```ts
-import type { LayoutSpec } from '@thunderclap/engine/ui';
+import type { LayoutSpec } from '@thunderclap-engine/engine/ui';
 
 export const layoutSpec: LayoutSpec = {
   forms: {
@@ -110,8 +110,8 @@ export const layoutSpec: LayoutSpec = {
 `ui.stack.push({ title, content, onClose })` opens a panel. Panels are modal by default: they dim the game, trap Tab focus and block game input. Esc, the gamepad's B button or a click on the backdrop closes the top one.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import { button, h, slider, toggle } from '@thunderclap/engine/ui';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import { button, h, slider, toggle } from '@thunderclap-engine/engine/ui';
 
 export function openPause(ctx: EngineCtx, onQuit: () => void) {
   let panel: { close(): void } | null = null;
@@ -160,7 +160,7 @@ For a menu that is not a modal (a title screen in a region), `menuNav(ctx.input,
 A toast is a short message in a corner. It goes into a live region, so screen readers read it.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
+import type { EngineCtx } from '@thunderclap-engine/engine';
 
 export async function tellPlayer(ctx: EngineCtx) {
   ctx.ui.toasts.show('Saved', { tone: 'success', duration: 2000 }); // duration 0 stays up
@@ -176,7 +176,7 @@ Tones are `info`, `success`, `warn` and `danger`. Captions queue: each `say` wai
 The overlay has ready-made widgets for common HUD needs. Each one places itself in a region and has a `set` method that writes the DOM only when the value changes.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
+import type { EngineCtx } from '@thunderclap-engine/engine';
 
 export function createActionHud(ctx: EngineCtx) {
   const { ui } = ctx;
@@ -226,8 +226,8 @@ Every widget has `remove()`. Call it when the scene exits.
 `ui.anchors()` makes DOM elements follow points in the world: a name over a character, a hint over a tile, an arrow at the screen edge pointing to a goal. Under `createGame` it projects through `ctx.camera`; pass a function that returns another camera to override it. The engine updates every anchor after each frame, so you only move the points.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import { h } from '@thunderclap/engine/ui';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import { h } from '@thunderclap-engine/engine/ui';
 
 export function labelNpc(ctx: EngineCtx, name: string) {
   const anchors = ctx.ui.anchors();
@@ -258,9 +258,9 @@ export function labelNpc(ctx: EngineCtx, name: string) {
 In VR there is no screen to put DOM on, and sometimes the UI is a thing in the scene, like a terminal or a sign. `createWorldPanel` draws a small widget set onto a quad in the world, styled with the same theme, and any pointer ray can press it.
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import type { Frame } from '@thunderclap/engine/render';
-import { createWorldPanel, worldButton, worldLabel, worldToggle } from '@thunderclap/engine/ui';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import type { Frame } from '@thunderclap-engine/engine/render';
+import { createWorldPanel, worldButton, worldLabel, worldToggle } from '@thunderclap-engine/engine/ui';
 
 export function createSign(ctx: EngineCtx, onBack: () => void) {
   const panel = createWorldPanel(ctx.renderer, { width: 2, height: 1.2 }); // world units
@@ -283,8 +283,8 @@ In VR the input's rays go through the headset, so a `billboard` or `headLocked` 
 Every colour, font, size and timing is a theme token, exposed as a CSS custom property. `colorAccent` becomes `--tc-color-accent`, `fontSizeL` becomes `--tc-font-size-l`, `space3` becomes `--tc-space-3`. Use them in your own styles with `var(...)`, as the HUD example above does. Change them at runtime with `ui.setTheme`:
 
 ```ts
-import type { EngineCtx } from '@thunderclap/engine';
-import { applyTextScale, cssVar } from '@thunderclap/engine/ui';
+import type { EngineCtx } from '@thunderclap-engine/engine';
+import { applyTextScale, cssVar } from '@thunderclap-engine/engine/ui';
 
 export function restyle(ctx: EngineCtx) {
   ctx.ui.setTheme({

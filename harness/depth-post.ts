@@ -8,9 +8,9 @@
  * into) and the probes the spec samples: a ground crease at the foot of the far block, a pair
  * of far-ground patches across a checker edge, and the mesh page's near and far blocks.
  */
-import { GameLoop } from '@thunderclap/engine/core';
-import { boot } from '@thunderclap/engine/platform';
-import { PostStack } from '@thunderclap/engine/post';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { boot } from '@thunderclap-engine/engine/platform';
+import { PostStack } from '@thunderclap-engine/engine/post';
 import {
   Camera,
   type CameraPoint,
@@ -24,7 +24,7 @@ import {
   type SceneTargetViewport,
   Transform,
   VERTEX_LAYOUT_3D,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { HarnessDepthPostApi, HarnessDepthPostState } from './depth-post-state';
 
 const root = document.getElementById('root') as HTMLElement;

@@ -6,7 +6,7 @@ The DOM overlay over the WebGPU canvas: panels with focus and pad navigation, to
 
 <!-- snippet:check -->
 ```ts
-import { createOverlay } from '@thunderclap/engine/ui';
+import { createOverlay } from '@thunderclap-engine/engine/ui';
 
 declare const stageEl: HTMLElement;
 
@@ -71,7 +71,7 @@ widgets and theme tokens. It has no dependencies and no game nouns.
 ## Overlay
 
 ```ts
-import { createOverlay } from '@thunderclap/engine/ui';
+import { createOverlay } from '@thunderclap-engine/engine/ui';
 
 const ui = createOverlay({ parent: stageEl, theme: { colorAccent: '#7fd' } });
 surface.onResize(({ rect }) => ui.setFrame(rect)); // letterboxed canvas rect, CSS px relative to parent
@@ -394,7 +394,7 @@ caller; the look comes from theme tokens (override `.tc-link`, `.tc-link-row`, `
 `.tc-link-fallback`, `.tc-link-message`, `.tc-link-field`, `.tc-link-close`).
 
 ```ts
-import { activateLink, externalLink } from '@thunderclap/engine/ui';
+import { activateLink, externalLink } from '@thunderclap-engine/engine/ui';
 
 const link = externalLink({
   url: SHOP_URL, // not https, or blank → returns null: render nothing
@@ -429,14 +429,14 @@ activateLink(focusedElement, 'gamepad');
   through `activateLink`.
 - Nothing opens or copies until the player acts. No network calls.
 
-Opening and copying go through the host (`@thunderclap/engine/host`): pass `host` to
+Opening and copying go through the host (`@thunderclap-engine/engine/host`): pass `host` to
 `externalLink`, or it uses `defaultHost()`. Usable without the widget:
 
 - `host.openExternal(url, { activation })`: `'opened' | 'blocked' | 'invalid'`. On the web,
   `pointer` and `keyboard` click a temporary `<a>`; `gamepad` and `script` call `window.open` and
   report `null` as `blocked` (the opened tab's `opener` is cleared).
 - `host.copyText(text)`: `Promise<'copied' | 'manual'>`; `host.clipboardWriteAllowed()`.
-- `safeExternalUrl(url)` and `embedContext(win?)` stay in `@thunderclap/engine/platform`.
+- `safeExternalUrl(url)` and `embedContext(win?)` stay in `@thunderclap-engine/engine/platform`.
 
 ## Theme
 
@@ -887,7 +887,7 @@ and as a small DOM box with a sparkline. No key binding is included; a game bind
 `toggle()`.
 
 ```ts
-import { createPerfMonitor, createPerfOverlay } from '@thunderclap/engine/ui';
+import { createPerfMonitor, createPerfOverlay } from '@thunderclap-engine/engine/ui';
 
 const perf = createPerfMonitor({ window: 120 });                 // frames kept (default 120)
 const hud = createPerfOverlay(perf, { parent: stageEl, corner: 'tr' });

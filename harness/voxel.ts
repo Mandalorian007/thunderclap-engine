@@ -1,6 +1,6 @@
 /**
  * Voxel page (ws/voxel-render): a 4×2×4-chunk procedural block world through
- * `@thunderclap/engine/voxel`, meshed in a Worker and drawn one chunk mesh at a time after a
+ * `@thunderclap-engine/engine/voxel`, meshed in a Worker and drawn one chunk mesh at a time after a
  * frustum test; a first-person walk on `Look`.
  *
  * - The centre ray (`raycastVoxels` from the eye, 8 units) picks a block every frame.
@@ -13,9 +13,9 @@
  * Block faces are textured from a 3-layer `texture_2d_array` of generated pixels (grass, dirt,
  * stone), the layer read from the vertex colour's alpha through the `VOXEL_WGSL` prelude.
  */
-import { GameLoop } from '@thunderclap/engine/core';
-import { Input, Look } from '@thunderclap/engine/input';
-import { boot } from '@thunderclap/engine/platform';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { Input, Look } from '@thunderclap-engine/engine/input';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   gpuDiagnostics,
@@ -25,7 +25,7 @@ import {
   type Material,
   type PixelSource,
   Renderer,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import {
   createVoxelChunks,
   createVoxelGrid,
@@ -33,7 +33,7 @@ import {
   createVoxelMesher,
   raycastVoxels,
   VOXEL_WGSL,
-} from '@thunderclap/engine/voxel';
+} from '@thunderclap-engine/engine/voxel';
 import type { HarnessVoxelApi, HarnessVoxelState } from './voxel-state';
 
 const root = document.getElementById('root') as HTMLElement;

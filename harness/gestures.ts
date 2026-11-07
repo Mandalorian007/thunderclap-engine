@@ -14,8 +14,8 @@
  * - The gesture clock can be pinned (`setClock`), so the spec decides how long a press lasts
  *   instead of the wall clock under load.
  */
-import { Gestures, Input, snapToGrid } from '@thunderclap/engine/input';
-import { computeLetterbox } from '@thunderclap/engine/platform';
+import { Gestures, Input, snapToGrid } from '@thunderclap-engine/engine/input';
+import { computeLetterbox } from '@thunderclap-engine/engine/platform';
 import type { GestureLogEntry, HarnessGesturesApi, HarnessGesturesState } from './gestures-state';
 
 const LOGICAL = { width: 800, height: 600 };

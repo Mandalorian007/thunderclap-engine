@@ -6,9 +6,9 @@
  * voice following its `Transform` (`Voice.follow`). Audio stays locked in a headless run, so
  * e2e/zones.spec.ts asserts the bookkeeping on `window.__harnessZones`, not sound.
  */
-import { AudioEngine, recipes } from '@thunderclap/engine/audio';
-import { GameLoop } from '@thunderclap/engine/core';
-import { boot } from '@thunderclap/engine/platform';
+import { AudioEngine, recipes } from '@thunderclap-engine/engine/audio';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   gpuDiagnostics,
@@ -18,7 +18,7 @@ import {
   Renderer,
   Transform,
   VERTEX_LAYOUT_3D,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { HarnessZonesState, ZoneSnapshot } from './zones-state';
 
 const root = document.getElementById('root') as HTMLElement;

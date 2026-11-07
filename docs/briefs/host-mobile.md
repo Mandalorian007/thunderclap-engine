@@ -4,7 +4,7 @@ Read `docs/briefs/common.md` first, then `docs/VISION.md` (every platform; no ru
 
 ## Goal
 
-A game built on the engine ships to iOS and Android as a store app with no engine change: a `@thunderclap/host-capacitor` package fills the `Host` interface from Capacitor's plugins the way `@thunderclap/host-electron` fills it from a preload bridge, and the engine gains the three host facets every mobile shell needs and the web host can also answer: lifecycle (pause/resume), haptics, and safe-area insets. All additive; the web host keeps working unchanged.
+A game built on the engine ships to iOS and Android as a store app with no engine change: a `@thunderclap-engine/host-capacitor` package fills the `Host` interface from Capacitor's plugins the way `@thunderclap-engine/host-electron` fills it from a preload bridge, and the engine gains the three host facets every mobile shell needs and the web host can also answer: lifecycle (pause/resume), haptics, and safe-area insets. All additive; the web host keeps working unchanged.
 
 STATUS row, *done when*:
 

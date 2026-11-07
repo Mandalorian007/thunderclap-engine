@@ -1,17 +1,17 @@
 // A game still on 0.x names, type-checked against engine 1.0.0 (scripts/check-deprecated-game.test.mjs).
 // Each 0.x name is now a type error; the platform's deprecated `execCommand` and the game's own
 // mistakes are not engine names and must not be reported.
-import { Hit } from '@thunderclap/engine';
-import type { BlendMode } from '@thunderclap/engine/anim';
-import type { SceneStack } from '@thunderclap/engine/core';
-import type { Input } from '@thunderclap/engine/input';
-import { defaultPostSettings, type PostStack } from '@thunderclap/engine/post';
+import { Hit } from '@thunderclap-engine/engine';
+import type { BlendMode } from '@thunderclap-engine/engine/anim';
+import type { SceneStack } from '@thunderclap-engine/engine/core';
+import type { Input } from '@thunderclap-engine/engine/input';
+import { defaultPostSettings, type PostStack } from '@thunderclap-engine/engine/post';
 import type {
   LoadTextureArrayOptions,
   Renderer,
   SunLight,
   Texture,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 
 interface Own {
   frame: number;

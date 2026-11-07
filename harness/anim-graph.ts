@@ -15,9 +15,9 @@ import {
   quatFromAxisAngle,
   quatIdentity,
   type Skeleton,
-} from '@thunderclap/engine/anim';
-import { GameLoop } from '@thunderclap/engine/core';
-import { boot } from '@thunderclap/engine/platform';
+} from '@thunderclap-engine/engine/anim';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   gpuDiagnostics,
@@ -27,7 +27,7 @@ import {
   Renderer,
   Transform,
   VERTEX_LAYOUT_3D,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { HarnessAnimGraphApi, HarnessAnimGraphState } from './anim-graph-state';
 
 const root = document.getElementById('root') as HTMLElement;

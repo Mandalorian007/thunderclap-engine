@@ -4,13 +4,19 @@
  * (what lies beyond the grid, where the player spawns). Shared by the page (`main.ts`), the
  * mesher Worker (`mesher.worker.ts`, for `blockLayer` and `outsideBlock`) and the spec
  * (`e2e/demos/voxel.spec.ts`). The grid, the mesher, the chunk meshes and the picking ray are
- * the engine's (`@thunderclap/engine/voxel`); the blocks are the game's (VISION rule 5).
+ * the engine's (`@thunderclap-engine/engine/voxel`); the blocks are the game's (VISION rule 5).
  *
  * Coordinates: the grid's corner is the world origin, so a voxel `(x, y, z)` occupies the world
  * cube `[x, x + 1) × [y, y + 1) × [z, z + 1)` and grid coordinates are world coordinates.
  */
-import { createNoise, type FbmOptions, hash2f, hash3f, type Noise } from '@thunderclap/engine/core';
-import type { VoxelFace, VoxelGrid } from '@thunderclap/engine/voxel';
+import {
+  createNoise,
+  type FbmOptions,
+  hash2f,
+  hash3f,
+  type Noise,
+} from '@thunderclap-engine/engine/core';
+import type { VoxelFace, VoxelGrid } from '@thunderclap-engine/engine/voxel';
 
 export const CHUNK = 16;
 export const WORLD_CHUNKS_X = 8;

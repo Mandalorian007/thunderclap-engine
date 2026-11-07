@@ -19,9 +19,9 @@
  * `camera.cull`; `?still` keeps presenting the last rung's scene after `done`, so a spec can
  * screenshot it.
  */
-import { GameLoop } from '@thunderclap/engine/core';
-import { ParticleSystem } from '@thunderclap/engine/fx';
-import { boot } from '@thunderclap/engine/platform';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { ParticleSystem } from '@thunderclap-engine/engine/fx';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   type DrawParams,
@@ -38,7 +38,7 @@ import {
   Transform,
   VERTEX_LAYOUT_3D,
   writeInstanceParams,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import {
   BENCH_LADDER,
   BENCH_WARMUP,

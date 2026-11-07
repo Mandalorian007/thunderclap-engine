@@ -69,7 +69,7 @@ test('a broken snippet fails at its Markdown line; the fixed one passes', () => 
   const md = join(dir, 'guide.md');
   const cache = join(dir, 'cache');
   const head =
-    "import { Camera } from '@thunderclap/engine/render';\nconst camera = Camera.ortho2d(1920, 1080);";
+    "import { Camera } from '@thunderclap-engine/engine/render';\nconst camera = Camera.ortho2d(1920, 1080);";
   writeFileSync(md, doc(`${head}\ncamera.notAMethod();`));
   const broken = checkSnippets([[md, true]], cache);
   assert.equal(broken.count, 1);
@@ -89,7 +89,7 @@ test('a snippet that uses a deprecated name fails with TS6385/TS6387; the v1 nam
     md,
     doc(
       [
-        "import type { AudioPlayOptions } from '@thunderclap/engine/audio';",
+        "import type { AudioPlayOptions } from '@thunderclap-engine/engine/audio';",
         '/** @deprecated use `AudioPlayOptions` */',
         'type PlayOptions = AudioPlayOptions;',
         '/** @deprecated use the getter */',
@@ -117,8 +117,8 @@ test('a snippet that uses a deprecated name fails with TS6385/TS6387; the v1 nam
     md,
     doc(
       [
-        "import type { AudioPlayOptions } from '@thunderclap/engine/audio';",
-        "import type { Input } from '@thunderclap/engine/input';",
+        "import type { AudioPlayOptions } from '@thunderclap-engine/engine/audio';",
+        "import type { Input } from '@thunderclap-engine/engine/input';",
         'declare const input: Input<string>;',
         'export const opts: AudioPlayOptions = {};',
         'void input.gestures;',

@@ -1,9 +1,9 @@
 {
-  "name": "@thunderclap/host-electron",
+  "name": "@thunderclap-engine/host-electron",
   "productName": "ThunderClap",
   "version": "0.1.0",
   "type": "module",
-  "description": "ThunderClap's Electron host: a desktop shell (main process and preload bridge) and createElectronHost() for the renderer. It knows nothing about any game. Games depend on @thunderclap/engine themselves; everything the shell runs is bundled into out/, so it has no runtime dependencies.",
+  "description": "ThunderClap's Electron host: a desktop shell (main process and preload bridge) and createElectronHost() for the renderer. It knows nothing about any game. Games depend on @thunderclap-engine/engine themselves; everything the shell runs is bundled into out/, so it has no runtime dependencies.",
   "license": "MIT",
   "author": "ThunderClap",
   "homepage": "https://github.com/Mandalorian007/thunderclap-engine/tree/main/packages/host-electron#readme",
@@ -48,7 +48,7 @@
     }
   },
   "peerDependencies": {
-    "@thunderclap/engine": "^1.0.0",
+    "@thunderclap-engine/engine": "^1.0.0",
     "electron": ">=45.0.0"
   },
   "peerDependenciesMeta": {
@@ -70,7 +70,7 @@
   "devDependencies": {
     "@biomejs/biome": "^2.6.4",
     "@playwright/test": "^1.64.1",
-    "@thunderclap/engine": "workspace:*",
+    "@thunderclap-engine/engine": "workspace:*",
     "@types/node": "^26.6.6",
     "@webgpu/types": "^0.1.74",
     "electron": "^45.2.2",

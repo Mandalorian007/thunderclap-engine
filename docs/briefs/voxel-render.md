@@ -4,7 +4,7 @@ Read `docs/briefs/common.md` first, then `docs/VISION.md` pillar 2 (voxel games 
 
 ## Goal
 
-`@thunderclap/engine/voxel`: a new noun-free module that turns a block grid into chunk meshes on a worker or the main thread, culls and draws them, picks blocks with a ray, and ships the vertex convention and WGSL prelude a block material needs. The voxel demo would shrink by three files once it adopts it (a later brief does that; this one does not touch `demos/`).
+`@thunderclap-engine/engine/voxel`: a new noun-free module that turns a block grid into chunk meshes on a worker or the main thread, culls and draws them, picks blocks with a ray, and ships the vertex convention and WGSL prelude a block material needs. The voxel demo would shrink by three files once it adopts it (a later brief does that; this one does not touch `demos/`).
 
 STATUS row, *done when*:
 

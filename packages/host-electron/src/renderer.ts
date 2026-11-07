@@ -8,9 +8,9 @@
  * (`app://bundle`), so saves stay put across launches and updates. A file backend in `userData`
  * is an open question; see README.md.
  */
-import type { Host, HostFullscreen } from '@thunderclap/engine/host';
-import { embedContext, safeExternalUrl } from '@thunderclap/engine/platform';
-import { probeStorage } from '@thunderclap/engine/save';
+import type { Host, HostFullscreen } from '@thunderclap-engine/engine/host';
+import { embedContext, safeExternalUrl } from '@thunderclap-engine/engine/platform';
+import { probeStorage } from '@thunderclap-engine/engine/save';
 import { BRIDGE_GLOBAL, type ThunderclapBridge } from './bridge';
 
 export interface ElectronHostOptions {

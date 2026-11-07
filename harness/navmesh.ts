@@ -1,5 +1,5 @@
 /**
- * Navmesh demo page: a level built from `@thunderclap/engine/geom` boxes and a ramp (a floor,
+ * Navmesh demo page: a level built from `@thunderclap-engine/engine/geom` boxes and a ramp (a floor,
  * four pillars, a raised platform reached by the ramp), baked into a `NavMesh` on the page and
  * drawn with `createDebugDraw` over the lit level. Nothing here is engine code: a game would
  * write the same page.
@@ -16,9 +16,9 @@
  * e2e/navmesh.spec.ts reads the bake, probes a pillar, checks the path climbs the ramp or takes
  * the link when it is cheaper, and watches the crowd overlaps stay at 0.
  */
-import { GameLoop } from '@thunderclap/engine/core';
-import { createDebugDraw } from '@thunderclap/engine/fx';
-import { box, extrude, type Geometry, transformGeometry } from '@thunderclap/engine/geom';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { createDebugDraw } from '@thunderclap-engine/engine/fx';
+import { box, extrude, type Geometry, transformGeometry } from '@thunderclap-engine/engine/geom';
 import {
   addOffMeshLink,
   bakeNavMesh,
@@ -31,8 +31,8 @@ import {
   type NavPoint3,
   pathDistance3,
   removeOffMeshLink,
-} from '@thunderclap/engine/nav';
-import { boot } from '@thunderclap/engine/platform';
+} from '@thunderclap-engine/engine/nav';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   type CameraPoint,
@@ -42,7 +42,7 @@ import {
   type Mesh,
   Renderer,
   Transform,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { HarnessNavmeshApi, HarnessNavmeshState } from './navmesh-state';
 
 const root = document.getElementById('root') as HTMLElement;

@@ -1,4 +1,4 @@
-# `@thunderclap/engine/nav`
+# `@thunderclap-engine/engine/nav`
 
 Navigation on the CPU: grids with A*, flow fields, reachability and steering, and navmeshes baked from triangles with off-mesh links, an ORCA crowd and a byte format. It answers where an agent can go and how; what agents are, and how they move along a path, are the game's. No GPU, no imports from other engine modules, and no allocation per query after warm-up.
 
@@ -6,7 +6,7 @@ Navigation on the CPU: grids with A*, flow fields, reachability and steering, an
 
 <!-- snippet:check -->
 ```ts
-import { createNavGrid, createNavPath, findPath, followPath, smoothPath } from '@thunderclap/engine/nav';
+import { createNavGrid, createNavPath, findPath, followPath, smoothPath } from '@thunderclap-engine/engine/nav';
 
 const grid = createNavGrid({ width: 64, height: 64, cellSize: 1, walkable: (x, y) => !(x === 10 && y < 40) });
 const path = createNavPath();
@@ -80,7 +80,7 @@ its own heights: its paths are 3D and `height(x, z)` reads the walkable surface.
 ```ts
 import {
   createFlowField, createNavGrid, createNavPath, findPath, followPath, smoothPath, steer,
-} from '@thunderclap/engine/nav';
+} from '@thunderclap-engine/engine/nav';
 
 const grid = createNavGrid({
   width: 64, height: 64, cellSize: 1,

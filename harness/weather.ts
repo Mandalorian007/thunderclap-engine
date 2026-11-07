@@ -11,9 +11,9 @@
  *   Both fade with distance (`fade`) and soften where they meet the ground (`softness`).
  * - Both count their live particles on the GPU (`countAlive`) into `state.alive`.
  */
-import { GameLoop } from '@thunderclap/engine/core';
-import { ParticleEmitter, ParticleSystem } from '@thunderclap/engine/fx';
-import { boot } from '@thunderclap/engine/platform';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { ParticleEmitter, ParticleSystem } from '@thunderclap-engine/engine/fx';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   type CameraPoint,
@@ -25,7 +25,7 @@ import {
   Renderer,
   Transform,
   VERTEX_LAYOUT_3D,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { HarnessWeatherApi, HarnessWeatherState } from './weather-state';
 
 const root = document.getElementById('root') as HTMLElement;

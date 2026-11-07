@@ -6,7 +6,7 @@
  * World coordinates: x and z in `0..size` (one column per unit), y up, column `(cx, cz)` covers
  * `cx..cx+1` × `cz..cz+1` and its top face is at `y = height`. Outside the field the height is 0.
  */
-import { createNoise, type Noise } from '@thunderclap/engine/core';
+import { createNoise, type Noise } from '@thunderclap-engine/engine/core';
 
 /** The world's seed: the page and the mesher Worker both generate from it. */
 export const SEED = 2026;

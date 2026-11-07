@@ -4,8 +4,12 @@
  * rules that live in `character.ts` (the attack locks the character, connects once, and its root
  * motion carries the body forward) and that each update poses the skin (one `skinPose` call).
  */
-import { Renderer } from '@thunderclap/engine/render';
-import { createFakeDevice, createFixedClock, fakeRendererGpu } from '@thunderclap/engine/testing';
+import { Renderer } from '@thunderclap-engine/engine/render';
+import {
+  createFakeDevice,
+  createFixedClock,
+  fakeRendererGpu,
+} from '@thunderclap-engine/engine/testing';
 import { describe, expect, it } from 'vitest';
 import { createGround } from '../world/ground';
 import { createCharacter } from './character';

@@ -104,7 +104,7 @@ export interface PostProjection {
 }
 
 /**
- * The final stage: turns the HDR scene into swapchain pixels. See `@thunderclap/engine/post`.
+ * The final stage: turns the HDR scene into swapchain pixels. See `@thunderclap-engine/engine/post`.
  * `viewport` (ws/xr-post) asks for the result in that part of `output` only (texture px, so an
  * eye of a shared XR layer), loading the rest; without it the whole output is written. The
  * inputs may be smaller or larger than the last `resize`: a processor sizes itself to them.

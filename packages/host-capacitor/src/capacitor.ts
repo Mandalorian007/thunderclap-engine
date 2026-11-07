@@ -17,9 +17,9 @@ import {
   type HostLifecycle,
   type HostLifecycleState,
   type HostStorage,
-} from '@thunderclap/engine/host';
-import { safeExternalUrl } from '@thunderclap/engine/platform';
-import type { StorageLike } from '@thunderclap/engine/save';
+} from '@thunderclap-engine/engine/host';
+import { safeExternalUrl } from '@thunderclap-engine/engine/platform';
+import type { StorageLike } from '@thunderclap-engine/engine/save';
 import type {
   AppPlugin,
   BackButtonEvent,

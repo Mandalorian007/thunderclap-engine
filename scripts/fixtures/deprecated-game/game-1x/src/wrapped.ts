@@ -2,9 +2,9 @@
 // scripts/check-deprecated-game.test.mjs). A removed member on the game's wrapped `Stack`
 // (TS2339) resolves only through the receiver's type, which the checker takes from `T` in
 // `(x as T)` and `(<T>x)` and from `x` in `x!`. The game's own wrapped value is not reported.
-import type { AssetCache } from '@thunderclap/engine/assets';
-import type { SceneStack } from '@thunderclap/engine/core';
-import type { Host } from '@thunderclap/engine/host';
+import type { AssetCache } from '@thunderclap-engine/engine/assets';
+import type { SceneStack } from '@thunderclap-engine/engine/core';
+import type { Host } from '@thunderclap-engine/engine/host';
 
 type Stack = SceneStack & { extra: number };
 

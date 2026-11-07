@@ -1,5 +1,5 @@
 /**
- * `@thunderclap/engine/anim`: keyframe clips (glTF sampler semantics) sampled into poses,
+ * `@thunderclap-engine/engine/anim`: keyframe clips (glTF sampler semantics) sampled into poses,
  * blended and cross-faded by a mixer, resolved into node world matrices and skin joint matrices.
  * Pure arithmetic, no GPU, no allocations per frame.
  */

@@ -9,7 +9,7 @@ export interface AnchorRect {
 }
 
 /**
- * What anchors read from a camera: `Camera` from `@thunderclap/engine/render` fits. `screen` is
+ * What anchors read from a camera: `Camera` from `@thunderclap-engine/engine/render` fits. `screen` is
  * in logical px, or a fraction of the canvas when it lies inside the unit square (the renderer's
  * viewport rule).
  */

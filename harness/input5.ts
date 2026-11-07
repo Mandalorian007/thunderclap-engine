@@ -27,7 +27,7 @@ import {
   type InputRecording,
   Look,
   type StickShape,
-} from '@thunderclap/engine/input';
+} from '@thunderclap-engine/engine/input';
 import type { HarnessInput5Api, HarnessInput5State, Input5Mode } from './input5-state';
 
 const params = new URLSearchParams(location.search);

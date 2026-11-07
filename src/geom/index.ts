@@ -1,5 +1,5 @@
 /**
- * `@thunderclap/engine/geom`: primitive geometry (box, plane, sphere, icosphere, capsule,
+ * `@thunderclap-engine/engine/geom`: primitive geometry (box, plane, sphere, icosphere, capsule,
  * cylinder, torus) in the engine's 3D vertex layout with bounds, merge and transform helpers,
  * heightfields with bilinear sampling, normals, an exact ray test and a mesh builder, shapes
  * swept from 2D profiles (extrude, lathe, sweep, tube, polygon, stairs, arch), tangent frames

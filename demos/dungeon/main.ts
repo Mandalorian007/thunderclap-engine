@@ -9,13 +9,13 @@
  * `window.__demo` publishes the numbers e2e/demos/dungeon.spec.ts asserts on. `?still` parks the
  * bats and the torch flicker from the first frame (the same as `__demo.park(true)`).
  */
-import { createGame } from '@thunderclap/engine';
-import { recipes } from '@thunderclap/engine/audio';
-import { createRandom, createScheduler, type Scene } from '@thunderclap/engine/core';
-import { flicker } from '@thunderclap/engine/fx';
-import type { DrawParams, Frame, RenderStats } from '@thunderclap/engine/render';
-import { createSaveStore, s } from '@thunderclap/engine/save';
-import { button, h, type PadLike, PadNav } from '@thunderclap/engine/ui';
+import { createGame } from '@thunderclap-engine/engine';
+import { recipes } from '@thunderclap-engine/engine/audio';
+import { createRandom, createScheduler, type Scene } from '@thunderclap-engine/engine/core';
+import { flicker } from '@thunderclap-engine/engine/fx';
+import type { DrawParams, Frame, RenderStats } from '@thunderclap-engine/engine/render';
+import { createSaveStore, s } from '@thunderclap-engine/engine/save';
+import { button, h, type PadLike, PadNav } from '@thunderclap-engine/engine/ui';
 import { buildAtlas, CELL, cellUv, TILE } from './atlas';
 import { buildMap, FIRST_COIN_TILE, isSolid, MAP_H, MAP_W, moveBox, SPAWN_TILE } from './map';
 

@@ -17,7 +17,7 @@ The engine ships a script that lists every old engine name your game uses. Run i
 game's folder, with the engine installed in `node_modules`:
 
 ```sh
-node node_modules/@thunderclap/engine/scripts/check-deprecated-game.mjs
+node node_modules/@thunderclap-engine/engine/scripts/check-deprecated-game.mjs
 ```
 
 It reads `tsconfig.json` (or each tsconfig you name), prints one line per use and exits 1 if
@@ -34,7 +34,7 @@ side of the bump:
   table below and prints the replacement:
 
 ```text
-src/game.ts:5:15  TS2305: Module '"@thunderclap/engine/anim"' has no exported member 'BlendMode'.
+src/game.ts:5:15  TS2305: Module '"@thunderclap-engine/engine/anim"' has no exported member 'BlendMode'.
     anim BlendMode → `AnimBlendMode`
 ```
 
@@ -55,7 +55,7 @@ README and the guides, so the docs never show a deprecated name.
 
 ## Renamed and retired names
 
-The *Module* column is the entry point (`@thunderclap/engine/<module>`). Every name in the
+The *Module* column is the entry point (`@thunderclap-engine/engine/<module>`). Every name in the
 *0.x name* column is gone from `engine-v1.0.0`. A test in `scripts/check-snippets.test.mjs`
 fails when a row names something `api/*.api.txt` still exports, or when a later `@deprecated`
 export is missing from this table.
@@ -157,8 +157,8 @@ pass, exempts the rows under this heading.
 Before (0.x):
 
 ```ts no-check
-import type { PlayOptions } from '@thunderclap/engine/audio';
-import { defaultPostSettings } from '@thunderclap/engine/post';
+import type { PlayOptions } from '@thunderclap-engine/engine/audio';
+import { defaultPostSettings } from '@thunderclap-engine/engine/post';
 
 const opts: PlayOptions = { at: [0, 1, 0] };
 const look = defaultPostSettings();
@@ -169,9 +169,9 @@ const sprite = renderer.createSpriteMaterial(tex, 'hero');
 After (checked against today's engine):
 
 ```ts
-import type { AudioPlayOptions } from '@thunderclap/engine/audio';
-import { cinematicPostSettings } from '@thunderclap/engine/post';
-import type { Renderer, Texture } from '@thunderclap/engine/render';
+import type { AudioPlayOptions } from '@thunderclap-engine/engine/audio';
+import { cinematicPostSettings } from '@thunderclap-engine/engine/post';
+import type { Renderer, Texture } from '@thunderclap-engine/engine/render';
 
 declare const renderer: Renderer;
 declare const tex: Texture;
@@ -189,7 +189,7 @@ from [Find what you use](#find-what-you-use) in your game's folder, before the b
 it. When it prints no engine name, the game is on v1 names:
 
 ```sh
-node node_modules/@thunderclap/engine/scripts/check-deprecated-game.mjs
+node node_modules/@thunderclap-engine/engine/scripts/check-deprecated-game.mjs
 ```
 
 From 1.0.0 the public surface is frozen: `api/*.api.txt` records it, and a change to it ships

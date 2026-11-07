@@ -1,6 +1,6 @@
 /**
  * Sky demo page (STATUS "Sky", ws/sky): the mesh page's ground and two blocks under a `Sky`
- * drawable from `@thunderclap/engine/fx`. Noun-free, and nothing here is engine code.
+ * drawable from `@thunderclap-engine/engine/fx`. Noun-free, and nothing here is engine code.
  *
  * - `Sky` draws one fullscreen triangle at the far plane with depth test on and depth write
  *   off, so it fills wherever the ground and blocks did not write depth, whatever the order.
@@ -12,9 +12,9 @@
  * - State on `window.__harnessSky` (harness/sky-state.ts): the sun's elevation and four probe
  *   points e2e/sky.spec.ts samples.
  */
-import { GameLoop } from '@thunderclap/engine/core';
-import { Sky } from '@thunderclap/engine/fx';
-import { boot } from '@thunderclap/engine/platform';
+import { GameLoop } from '@thunderclap-engine/engine/core';
+import { Sky } from '@thunderclap-engine/engine/fx';
+import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   type CameraPoint,
@@ -25,7 +25,7 @@ import {
   Renderer,
   Transform,
   VERTEX_LAYOUT_3D,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { HarnessSkyApi, HarnessSkyState } from './sky-state';
 
 const root = document.getElementById('root') as HTMLElement;

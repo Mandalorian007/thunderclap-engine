@@ -13,10 +13,10 @@
  *   probe row: 0 on the depth hook (`readsDepth`, the default); `&copy` takes the
  *   `readsDepth: false` fallback (last frame's depth) and the decal trails the cube.
  */
-import { createRandom, GameLoop } from '@thunderclap/engine/core';
-import { createEffect, Decals, type EffectDesc } from '@thunderclap/engine/fx';
-import { boot } from '@thunderclap/engine/platform';
-import { PostStack } from '@thunderclap/engine/post';
+import { createRandom, GameLoop } from '@thunderclap-engine/engine/core';
+import { createEffect, Decals, type EffectDesc } from '@thunderclap-engine/engine/fx';
+import { boot } from '@thunderclap-engine/engine/platform';
+import { PostStack } from '@thunderclap-engine/engine/post';
 import {
   Camera,
   type CameraPoint,
@@ -31,7 +31,7 @@ import {
   type Texture,
   Transform,
   VERTEX_LAYOUT_3D,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { Fx4Mode, HarnessFx4Api, HarnessFx4State } from './fx4-state';
 
 const root = document.getElementById('root') as HTMLElement;

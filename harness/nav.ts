@@ -1,5 +1,5 @@
 /**
- * Nav harness page: `@thunderclap/engine/nav` on a canvas-2D stage, no WebGPU, so
+ * Nav harness page: `@thunderclap-engine/engine/nav` on a canvas-2D stage, no WebGPU, so
  * e2e/nav.spec.ts can prove the grid, A*, string pulling, the flow field and steering on every
  * matrix row. Noun-free: cells, walls, agents, a goal.
  *
@@ -33,8 +33,8 @@ import {
   reachable,
   smoothPath,
   steer,
-} from '@thunderclap/engine/nav';
-import { computeLetterbox } from '@thunderclap/engine/platform';
+} from '@thunderclap-engine/engine/nav';
+import { computeLetterbox } from '@thunderclap-engine/engine/platform';
 import type { HarnessNavApi, HarnessNavState, NavAgentInfo, NavHarnessMode } from './nav-state';
 
 const params = new URLSearchParams(location.search);

@@ -1,5 +1,5 @@
 /**
- * Localisation harness page: `@thunderclap/engine/i18n` with no WebGPU, so e2e/i18n.spec.ts can
+ * Localisation harness page: `@thunderclap-engine/engine/i18n` with no WebGPU, so e2e/i18n.spec.ts can
  * verify it on every matrix row. Noun-free.
  *
  * - Three tables: `en` and `ru` inline, `ar` loaded on demand (a loader that resolves next tick).
@@ -7,7 +7,7 @@
  *   follows `i18n.direction`.
  * - Every re-render runs from `subscribe`, the way a game's menu would.
  */
-import { createI18n, negotiateLocale, type Table } from '@thunderclap/engine/i18n';
+import { createI18n, negotiateLocale, type Table } from '@thunderclap-engine/engine/i18n';
 import type { HarnessI18nApi, HarnessI18nState } from './i18n-state';
 
 const root = document.getElementById('root') as HTMLElement;

@@ -1,4 +1,4 @@
-import { MemoryStorage, saveKey } from '@thunderclap/engine/save';
+import { MemoryStorage, saveKey } from '@thunderclap-engine/engine/save';
 import { describe, expect, it } from 'vitest';
 import {
   createProgressStore,

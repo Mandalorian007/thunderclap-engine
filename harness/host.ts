@@ -6,9 +6,9 @@
  * `?safe=top,right,bottom,left` replaces the host's `safeArea` with fixed CSS-px insets (a
  * notch and a home indicator, simulated); without it the page's `env()` values are used.
  */
-import { createGame } from '@thunderclap/engine';
-import { createWebHost, type Host, type HostInsets } from '@thunderclap/engine/host';
-import { h } from '@thunderclap/engine/ui';
+import { createGame } from '@thunderclap-engine/engine';
+import { createWebHost, type Host, type HostInsets } from '@thunderclap-engine/engine/host';
+import { h } from '@thunderclap-engine/engine/ui';
 import type { HarnessHostState } from './host-state';
 
 const root = document.getElementById('root') as HTMLElement;

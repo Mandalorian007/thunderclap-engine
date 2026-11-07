@@ -13,10 +13,10 @@
  *
  * e2e/world-panel.spec.ts reads `window.__harnessWorldPanel.state()`.
  */
-import { createGame } from '@thunderclap/engine';
-import { box, flipWinding } from '@thunderclap/engine/geom';
-import { type GamepadLike, PadCursor } from '@thunderclap/engine/input';
-import { gpuDiagnostics, type InstanceParams, Transform } from '@thunderclap/engine/render';
+import { createGame } from '@thunderclap-engine/engine';
+import { box, flipWinding } from '@thunderclap-engine/engine/geom';
+import { type GamepadLike, PadCursor } from '@thunderclap-engine/engine/input';
+import { gpuDiagnostics, type InstanceParams, Transform } from '@thunderclap-engine/engine/render';
 import {
   createWorldPanel,
   type WorldPanel,
@@ -27,7 +27,7 @@ import {
   worldProgress,
   worldSlider,
   worldToggle,
-} from '@thunderclap/engine/ui';
+} from '@thunderclap-engine/engine/ui';
 import type {
   HarnessWorldPanelApi,
   HarnessWorldPanelState,

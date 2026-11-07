@@ -17,7 +17,7 @@
  *   `billboardBlurPx` over the slider, `backgroundBlurPx` everywhere else (still camera, so 0).
  * - State on `window.__harnessRender10` (harness/render10-state.ts).
  */
-import { createGame } from '@thunderclap/engine';
+import { createGame } from '@thunderclap-engine/engine';
 import {
   createBillboards,
   createDebugDraw,
@@ -25,9 +25,9 @@ import {
   ParticleSystem,
   Sky,
   Water,
-} from '@thunderclap/engine/fx';
-import { box } from '@thunderclap/engine/geom';
-import type { PostStack } from '@thunderclap/engine/post';
+} from '@thunderclap-engine/engine/fx';
+import { box } from '@thunderclap-engine/engine/geom';
+import type { PostStack } from '@thunderclap-engine/engine/post';
 import {
   type Camera,
   type FullscreenPass,
@@ -41,7 +41,7 @@ import {
   type SceneTargetViewport,
   type Texture,
   Transform,
-} from '@thunderclap/engine/render';
+} from '@thunderclap-engine/engine/render';
 import type { HarnessRender10State, Render10Aux } from './render10-state';
 
 const root = document.getElementById('root') as HTMLElement;

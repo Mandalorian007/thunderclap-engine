@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import type { Host } from '@thunderclap/engine/host';
+import type { Host } from '@thunderclap-engine/engine/host';
 import { describe, expect, it, vi } from 'vitest';
 import { createCapacitorHost, createPreferencesStorage } from './capacitor';
 import type { AppState, BackButtonEvent, CapacitorPlugins, PreferencesPlugin } from './plugins';

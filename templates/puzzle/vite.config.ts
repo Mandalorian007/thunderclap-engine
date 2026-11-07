@@ -1,5 +1,5 @@
 import { defineConfig } from 'vite';
-// import { pwaPlugin } from '@thunderclap/host-pwa/vite';
+// import { pwaPlugin } from '@thunderclap-engine/host-pwa/vite';
 
 // Vite's defaults are the game's build. To ship it as an installable, offline-capable app, see
 // "Installable" in CLAUDE.md: it is the plugin line below, one import and one host.

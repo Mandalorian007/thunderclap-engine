@@ -1,9 +1,13 @@
 /**
  * Procedural geometry for the arena, in the renderer's 3D and skinned vertex layouts. Setup-time
- * code: it allocates freely and runs once. (`@thunderclap/engine/geom` would replace most of it.)
+ * code: it allocates freely and runs once. (`@thunderclap-engine/engine/geom` would replace most of it.)
  */
-import { hash2f } from '@thunderclap/engine/core';
-import { setVertexSkin, VERTEX_SKINNED_FLOATS, VERTEX3D_FLOATS } from '@thunderclap/engine/render';
+import { hash2f } from '@thunderclap-engine/engine/core';
+import {
+  setVertexSkin,
+  VERTEX_SKINNED_FLOATS,
+  VERTEX3D_FLOATS,
+} from '@thunderclap-engine/engine/render';
 
 export interface MeshData {
   vertices: Float32Array;
