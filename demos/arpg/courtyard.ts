@@ -212,9 +212,9 @@ export function buildCourtyard(renderer: Renderer, mats: CourtyardMaterials): Co
   list('floor-tile', box({ size: [TILE - 0.06, 0.3, TILE - 0.06] }), mats.floor, tiles, {
     castShadow: false,
   });
-  // The near strip: half-width tiles (half the texture across) centred a tile and a half
-  // before the first, along x and, turned a quarter, along z; each runs from under the wall to
-  // the usual gap. Their 0.5 × 0.5 m corner inside the walls shows the grout bed.
+  // The near strip: half-width tiles (half the texture across) centred three quarters of a
+  // tile before the first, along x and, turned a quarter, along z; each runs from under the
+  // wall to the usual gap. Their 0.5 × 0.5 m corner inside the walls shows the grout bed.
   const edge: Put[] = [];
   const near = at(0) - TILE * 0.75;
   for (let i = 0; i < n; i++) {
