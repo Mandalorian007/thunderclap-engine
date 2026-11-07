@@ -3,8 +3,11 @@
  * e2e/render7.spec.ts. Shared by the page (harness/render7.ts) and the spec.
  */
 
-/** The page's modes, one per flag (`?lod-keys`, the default, or `?instanced-velocity`). */
-export type Render7Mode = 'lod-keys' | 'instanced-velocity';
+/**
+ * The page's modes, one per flag (`?lod-keys`, the default, `?instanced-velocity`, or
+ * `?single-velocity`, ws/render-8).
+ */
+export type Render7Mode = 'lod-keys' | 'instanced-velocity' | 'single-velocity';
 
 export interface HarnessRender7State {
   /** True once boot resolved (whether or not WebGPU came up). */
@@ -14,7 +17,10 @@ export interface HarnessRender7State {
   /** Frames presented. */
   frames: number;
   mode: Render7Mode;
-  /** `?still`: `?instanced-velocity`'s moving rocks are parked (the churn goes on). */
+  /**
+   * `?still`: `?instanced-velocity`'s moving rocks are parked (the churn goes on), or
+   * `?single-velocity`'s rock.
+   */
   still: boolean;
   /** False with `&unkeyed`: the list carries no keys (the control: memory goes by index). */
   keyed: boolean;
@@ -33,12 +39,13 @@ export interface HarnessRender7State {
   /**
    * `?instanced-velocity`: the mean |velocity| (uv per frame) at the moving rocks' centres and
    * at the static rocks' centres, over the readbacks since the last `reset()`, and the largest
-   * single static sample since then.
+   * single static sample since then. `?single-velocity`: the same at points on the one
+   * sliding rock and at background points.
    */
   velocityMoving: number;
   velocityStatic: number;
   velocityStaticPeak: number;
-  /** `?instanced-velocity`: probe readbacks since the last `reset()`. */
+  /** The velocity modes: probe readbacks since the last `reset()`. */
   readbacks: number;
   /** The rocks' screen rect in logical px, and the logical size. */
   window: { x: number; y: number; width: number; height: number };

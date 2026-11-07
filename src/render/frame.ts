@@ -296,6 +296,10 @@ export class Frame {
    * `camera.lodBias`, with `renderer.lodHysteresis` keyed on the `Transform` (or the
    * `DrawParams` object), so pass a stable one; instances of a level sort together and draw
    * as one instanced call per (level, material). `renderer.stats.lodCounts[i]` counts them.
+   *
+   * Placed by a `Transform` with an `aux` material into a velocity target (ws/render-8), the
+   * draw writes the object's own motion: the renderer keeps the transform's world matrix per
+   * view and passes last view's as the previous one (zero motion on its first view).
    */
   mesh(mesh: Mesh | MeshLod, material: Material, p: DrawParams): void;
   mesh(mesh: Mesh | MeshLod, material: Material, t: Transform, p?: InstanceParams): void;

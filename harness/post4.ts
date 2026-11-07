@@ -80,6 +80,8 @@ const state: HarnessPost4State = {
   readbacks: 0,
   wantsJitter: false,
   jitter: [0, 0],
+  jitterConverge: [0, 0],
+  jitterSubpixel: [0, 0],
   active: false,
   convergedDelta: null,
   ghost: null,
@@ -830,6 +832,16 @@ async function main(): Promise<void> {
       state.wantsJitter = measured.wantsJitter;
       state.jitter[0] = post.jitter[0];
       state.jitter[1] = post.jitter[1];
+      const latch =
+        state.phase === 'converge'
+          ? state.jitterConverge
+          : state.phase === 'subpixel'
+            ? state.jitterSubpixel
+            : null;
+      if (latch) {
+        latch[0] = Math.max(latch[0], Math.abs(post.jitter[0]));
+        latch[1] = Math.max(latch[1], Math.abs(post.jitter[1]));
+      }
       state.active =
         mode === 'taa'
           ? measured.taaActive

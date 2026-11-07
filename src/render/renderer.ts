@@ -319,6 +319,28 @@ interface LodSlots {
   flush: number;
 }
 
+/**
+ * One view's object-motion memory for `frame.mesh` draws (ws/render-8): per `Transform`, the
+ * world matrix it held at this camera's last view and the one before. `view` counts the
+ * camera's views that drew with a velocity lane; a slot updated at `view - 1` is continuous.
+ */
+interface MotionMemory {
+  view: number;
+  slots: WeakMap<Transform, MotionSlot>;
+}
+
+/**
+ * `prev`/`cur`: the transform's 3×4 world matrix at the view before `view` and at `view`.
+ * `shared`: the transform was drawn with two different matrices in one view (a scratch
+ * transform), so its draws report camera motion only.
+ */
+interface MotionSlot {
+  prev: Float32Array;
+  cur: Float32Array;
+  view: number;
+  shared: boolean;
+}
+
 /** The per-frame jitter hook of `Renderer.setJitter`: pixels `[x, y]` for frame `frame`. */
 export type JitterFn = (frame: number) => readonly [number, number];
 
@@ -377,6 +399,11 @@ interface DrawRec {
   prev: Float32Array | null;
   /** This view draws the batch with the shared previous-matrix lane (`buildDraws`). */
   lane: boolean;
+  /**
+   * A `frame.mesh` / `frame.sprite` draw's `Transform`, else null: its world matrix at the
+   * view's previous frame feeds the lane (ws/render-8).
+   */
+  xf: Transform | null;
 }
 
 /**
@@ -539,6 +566,8 @@ export class Renderer implements FrameSink {
   private lodCam: Camera | null = null;
   /** The LOD level memory of each camera (view) that drew a LOD record. */
   private readonly lodMemory = new WeakMap<Camera, LodMemory>();
+  /** Per camera: each single draw's Transform history for the velocity lane (ws/render-8). */
+  private readonly motionMemory = new WeakMap<Camera, MotionMemory>();
   /** Per-instance level scratch of `copyBatchLod` (-1: culled). */
   private lodScratch = new Int8Array(256);
   /** `copyBatchLod`'s buckets: first instance, count and write cursor per level. */
@@ -1009,6 +1038,16 @@ export class Renderer implements FrameSink {
     if (fn) return;
     for (const c of this.jitterCams) c.clearJitter();
     this.jitterCams.length = 0;
+  }
+
+  /**
+   * The jitter hook installed by `setJitter`, or null when none is (ws/render-8). Read-only:
+   * compare it by identity, so a post stack can check whether the renderer still holds the
+   * hook it installed (`renderer.jitter === myHook`) before clearing it, and leave another
+   * owner's hook alone.
+   */
+  get jitter(): JitterFn | null {
+    return this.jitterFn;
   }
 
   /**
@@ -1599,6 +1638,11 @@ export class Renderer implements FrameSink {
     r.drawable = null;
     r.offset = offset;
     r.inst = idx;
+    if (tr) {
+      r.xf = tr;
+      // Only an aux material can write object motion: the lane is built for those alone.
+      if (material.aux) this.laneRecs++;
+    }
     if (bounds && bounds.radius !== Number.POSITIVE_INFINITY) {
       // The sphere through the 3×4 instance matrix: centre by the matrix, radius by the largest
       // axis scale (column length), which bounds any rotation and non-uniform scale.
@@ -1755,11 +1799,13 @@ export class Renderer implements FrameSink {
         lt: -1,
         prev: null,
         lane: false,
+        xf: null,
       });
     }
     const r = this.recs[this.recCount++]!;
     r.prev = null;
     r.lane = false;
+    r.xf = null;
     r.lod = null;
     r.lodKey = null;
     r.lodLevel = -1;
@@ -1818,7 +1864,8 @@ export class Renderer implements FrameSink {
       this.ordered &&
       visible === n &&
       !shadowCfg &&
-      this.batchRecs === 0
+      this.batchRecs === 0 &&
+      this.laneRecs === 0
     ) {
       for (let i = 0; i < n; i++) {
         const r = recs[i]!;
@@ -1908,6 +1955,10 @@ export class Renderer implements FrameSink {
         this.laneData = new Float32Array(Math.max(laneNeed, this.laneData.length * 2));
       }
     }
+    // Every view of a camera advances its motion memory once single draws could use it, so a
+    // view into a target without velocity breaks the history like a skipped frame.
+    const motionMem = this.laneRecs > 0 ? this.motionView(cam) : null;
+    const motion = laneOn ? motionMem : null;
     let inst = 0;
     let batches = 0;
     let listInst = 0;
@@ -1961,6 +2012,12 @@ export class Renderer implements FrameSink {
       const from = r.inst * INSTANCE_FLOATS;
       const to = inst * INSTANCE_FLOATS;
       for (let f = 0; f < INSTANCE_FLOATS; f++) dst[to + f] = src[from + f]!;
+      // A single draw's previous matrix: its Transform's, kept per view (ws/render-8).
+      r.lane = motion !== null && r.xf !== null && r.material!.aux;
+      if (r.lane) {
+        this.writeMotion(motion!, r.xf!, src, from, inst);
+        this.laneUsed = true;
+      }
       this.batch(this.scene, r, this.scenePipeline(r, mode), inst);
       inst++;
     }
@@ -1972,6 +2029,70 @@ export class Renderer implements FrameSink {
     this.sceneCount = inst;
     this.uploadCount = shadowCfg ? this.buildShadowDraws(camLayers, dst, inst) : inst;
     return depth;
+  }
+
+  /** `cam`'s motion memory, advanced to a new view (one per `render` with lane records). */
+  private motionView(cam: Camera): MotionMemory {
+    let m = this.motionMemory.get(cam);
+    if (!m) {
+      m = { view: 0, slots: new WeakMap() };
+      this.motionMemory.set(cam, m);
+    }
+    m.view++;
+    return m;
+  }
+
+  /**
+   * Write the previous world matrix of a single draw's `tr` into lane slot `slot`: the matrix
+   * `tr` held at this view's last frame, or the current one (zero motion) when the view did
+   * not draw it then (first seen, or culled or skipped last frame). The current matrix is
+   * `src[from..from+12]`, as recorded. A transform drawn twice with different matrices in one
+   * view is a scratch transform: it reports no motion of its own from then on. Allocates only
+   * on a transform's first draw in a view.
+   */
+  private writeMotion(
+    memory: MotionMemory,
+    tr: Transform,
+    src: Float32Array,
+    from: number,
+    slot: number,
+  ): void {
+    const now = memory.view;
+    let s = memory.slots.get(tr);
+    if (!s) {
+      s = {
+        prev: new Float32Array(MATRIX3X4_FLOATS),
+        cur: new Float32Array(MATRIX3X4_FLOATS),
+        view: -1,
+        shared: false,
+      };
+      memory.slots.set(tr, s);
+    }
+    const prev = s.prev;
+    const cur = s.cur;
+    if (s.view === now) {
+      // Drawn again in this view: the same matrix keeps its history; a different one is a
+      // scratch transform.
+      if (!s.shared) {
+        for (let f = 0; f < MATRIX3X4_FLOATS; f++) {
+          if (cur[f] !== src[from + f]) {
+            s.shared = true;
+            break;
+          }
+        }
+      }
+    } else {
+      const continuous = s.view === now - 1;
+      if (continuous) prev.set(cur);
+      for (let f = 0; f < MATRIX3X4_FLOATS; f++) cur[f] = src[from + f]!;
+      if (!continuous) prev.set(cur);
+      s.view = now;
+    }
+    const lane = this.laneData;
+    const lo = slot * MATRIX3X4_FLOATS;
+    const hist = s.shared ? src : prev;
+    const ho = s.shared ? from : 0;
+    for (let f = 0; f < MATRIX3X4_FLOATS; f++) lane[lo + f] = hist[ho + f]!;
   }
 
   /**

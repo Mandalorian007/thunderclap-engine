@@ -16,7 +16,8 @@ export interface InstanceListOptions {
   /**
    * Keep each instance's previous-frame matrix in a second vertex buffer (`prevBuffer`), so a
    * material writing a velocity attachment (`SceneTargetDesc.aux.velocity`) sees the
-   * instance's own motion rather than the camera's alone. Default false.
+   * instance's own motion rather than the camera's alone. A LOD list keeps the matrices but
+   * no buffer: they travel with its per-frame copy. Default false.
    */
   velocity?: boolean;
 }
@@ -51,6 +52,8 @@ export class InstanceList implements InstanceBatch {
    * the vertex buffer (48 bytes per instance, slot 2) a material writing a velocity attachment
    * reads them from; null otherwise. A slot `set` this frame keeps what it held before as
    * previous; one left alone settles to its current matrix at the next flush (no motion).
+   * A LOD list (`lod`) keeps `prevMatrices` but has no `prevBuffer` and uploads none
+   * (ws/render-8): the renderer copies its previous matrices into its shared lane.
    */
   readonly prevMatrices: Float32Array | null;
   readonly prevBuffer: GPUBuffer | null;
@@ -94,7 +97,7 @@ export class InstanceList implements InstanceBatch {
    * The LOD chain the list was made with (ws/render-6), else null. Each instance then picks a
    * level per view, and `frame.list` copies the instances into the frame's upload bucketed by
    * level rather than drawing from `buffer`; with `velocity` its `prevMatrices` travel with
-   * the copy into the renderer's shared lane (ws/render-7), so `prevBuffer` is not bound.
+   * the copy into the renderer's shared lane (ws/render-7), so it has no `prevBuffer`.
    */
   readonly lod: MeshLod | null;
 
@@ -126,11 +129,14 @@ export class InstanceList implements InstanceBatch {
     this.velocity = opts.velocity === true;
     if (this.velocity) {
       this.prevMatrices = new Float32Array(capacity * MATRIX3X4_FLOATS);
-      this.prevBuffer = device.createBuffer({
-        label: 'instance-list-prev',
-        size: capacity * MATRIX3X4_FLOATS * 4,
-        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-      });
+      // A LOD list's previous matrices travel with its per-frame copy (ws/render-8): no buffer.
+      this.prevBuffer = this.lod
+        ? null
+        : device.createBuffer({
+            label: 'instance-list-prev',
+            size: capacity * MATRIX3X4_FLOATS * 4,
+            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+          });
       this.stamp = new Uint32Array(capacity);
     } else {
       this.prevMatrices = null;
@@ -418,7 +424,7 @@ export class InstanceList implements InstanceBatch {
       uLo = 0;
       uHi = n;
     }
-    if (uLo >= uHi) return;
+    if (uLo >= uHi || !this.prevBuffer) return;
     const bytes = MATRIX3X4_FLOATS * 4;
     queue.writeBuffer(this.prevBuffer!, uLo * bytes, prev.buffer, uLo * bytes, (uHi - uLo) * bytes);
   }
