@@ -6,6 +6,7 @@
 interface CreateGameOptions<A extends string, S extends FlushableSave | null = null, P = any> {
     root?: HTMLElement;
     gpu?: GpuContext;
+    overlay?: boolean;
     clock?: TickClock;
     title?: string;
     design?: {
