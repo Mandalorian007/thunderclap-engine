@@ -108,6 +108,10 @@ interface Track<T> {
   seen: boolean;
   prevSelect: boolean;
   prevSecondary: boolean;
+  /** Held through a mute (see `route`): reads up until the source lets it go. */
+  maskSelect: boolean;
+  maskSecondary: boolean;
+  readonly xrMask: XrButtons;
   /** Pressed this tick (button went down). */
   pressSelect: boolean;
   pressSecondary: boolean;
@@ -140,6 +144,12 @@ export class PointerRouter<T = unknown> {
   private readonly pool: Track<T>[] = [];
   private tick = 0;
   private isBlocked = false;
+  /** `mute()` with no argument: every source, including ones added later. */
+  private muteAll = false;
+  private readonly muted: PointerSource[] = [];
+  /** Sources `unmute()` just woke: their pointers held through the mute are not new presses. */
+  private wakeAll = false;
+  private readonly waking: PointerSource[] = [];
   private target: HTMLElement | null = null;
   private readonly best: Hit<T> = createHit<T>(undefined as T);
   private readonly bestNormal: [number, number, number] = [0, 0, 0];
@@ -203,6 +213,40 @@ export class PointerRouter<T = unknown> {
       this.sources.splice(i, 1);
       s.detach?.();
     };
+  }
+
+  /**
+   * Mute pointer sources (ws/input-11): a muted source is still polled, but its pointers are
+   * dropped before routing, so they hit nothing and fire nothing. With no argument every source
+   * is muted, the screen source and sources added later included. Samples marked `synthetic`
+   * (the pointers `Input.replayPointer` dispatches) are never muted, so a replay keeps its own
+   * pointers while the real ones are silenced. A pointer that holds select or secondary when
+   * its source is muted is released on the next tick: `hitEnd`, then `released` with `hit:
+   * null` (it let go over nothing, as a cancel), and `held` reads false. Calls add up until
+   * `unmute()`.
+   */
+  mute(sources?: readonly PointerSource[]): void {
+    if (!sources) {
+      this.muteAll = true;
+      return;
+    }
+    for (const s of sources) if (!this.muted.includes(s)) this.muted.push(s);
+  }
+
+  /**
+   * Lift every mute. A button a woken pointer still holds reads up (not held, not pressed) until
+   * it is let go, so a press held through the mute never lands as a new one; its next press does.
+   */
+  unmute(): void {
+    if (this.muteAll) this.wakeAll = true;
+    for (const s of this.muted) if (!this.waking.includes(s)) this.waking.push(s);
+    this.muteAll = false;
+    this.muted.length = 0;
+  }
+
+  /** True while `source` is muted (by `mute()` or `mute([source])`). */
+  isMuted(source: PointerSource): boolean {
+    return this.muteAll || this.muted.includes(source);
   }
 
   /** Client → camera screen units for the screen source (`Input.setPointers` shares the input's). */
@@ -290,14 +334,24 @@ export class PointerRouter<T = unknown> {
 
     for (const src of this.sources) {
       const samples = src.poll(camera);
-      for (let i = 0; i < samples.length; i++) this.route(src, samples[i]!, blocked);
+      const muted = this.isMuted(src);
+      const woken = this.wakeAll || this.waking.includes(src);
+      for (let i = 0; i < samples.length; i++) {
+        const s = samples[i]!;
+        if (muted && !s.synthetic) continue;
+        this.route(src, s, blocked, woken);
+      }
     }
+    this.wakeAll = false;
+    this.waking.length = 0;
 
     // Pointers that were not reported have ended.
     for (let i = 0; i < this.tracks.length; i++) {
       const t = this.tracks[i]!;
       if (t.seen) continue;
       this.endHit(t);
+      // A muted pointer holding a button lets go over nothing, never a stuck press.
+      if ((t.select || t.secondary) && this.isMuted(t.source)) this.release(t, blocked);
       if (this.primary === t) this.primary = null;
       this.tracks.splice(i--, 1);
       this.pool.push(t);
@@ -347,7 +401,28 @@ export class PointerRouter<T = unknown> {
     }
   }
 
-  private route(src: PointerSource, s: PointerSample, blocked: boolean): void {
+  /** End `t`'s held buttons and report `released` (over nothing) unless blocked. */
+  private release(t: Track<T>, blocked: boolean): void {
+    t.prevSelect = t.select;
+    t.prevSecondary = t.secondary;
+    t.select = false;
+    t.secondary = false;
+    t.pressSelect = false;
+    t.pressSecondary = false;
+    if (t.xr) for (const b of XR_BUTTONS) t.xrPrev[b] = t.xr[b] = false;
+    if (blocked) return;
+    const ev = this.evReleased;
+    ev.pointer = t;
+    ev.hit = null;
+    this.events.emit('released', ev);
+  }
+
+  /**
+   * `quiet`: the source was just unmuted, so a button a new track already holds was held through
+   * the mute: it reads up (not held, never a press) until it is let go, as a key held through a
+   * detach does.
+   */
+  private route(src: PointerSource, s: PointerSample, blocked: boolean, quiet: boolean): void {
     let t: Track<T> | null = null;
     for (const c of this.tracks) {
       if (c.source === src && c.key === s.key) {
@@ -360,8 +435,9 @@ export class PointerRouter<T = unknown> {
       t = this.pool.pop() ?? this.newTrack();
       t.source = src;
       t.key = s.key;
-      t.prevSelect = s.select && blocked;
-      t.prevSecondary = s.secondary && blocked;
+      t.maskSelect = quiet && s.select;
+      t.maskSecondary = quiet && s.secondary;
+      for (const b of XR_BUTTONS) t.xrMask[b] = quiet && s.xr?.[b] === true;
       t.hit = null;
       this.tracks.push(t);
     } else {
@@ -369,6 +445,14 @@ export class PointerRouter<T = unknown> {
       t.prevSecondary = t.secondary;
     }
     t.seen = true;
+    if (!s.select) t.maskSelect = false;
+    if (!s.secondary) t.maskSecondary = false;
+    const select = s.select && !t.maskSelect;
+    const secondary = s.secondary && !t.maskSecondary;
+    if (isNew) {
+      t.prevSelect = select && blocked;
+      t.prevSecondary = secondary && blocked;
+    }
     const ray = t.ray;
     const moved =
       isNew ||
@@ -391,8 +475,10 @@ export class PointerRouter<T = unknown> {
     if (s.xr) {
       const prev = t.xr ? t.xrStore : null;
       for (const b of XR_BUTTONS) {
-        t.xrPrev[b] = prev ? prev[b] : blocked && s.xr[b];
-        t.xrStore[b] = s.xr[b];
+        if (!s.xr[b]) t.xrMask[b] = false;
+        const v = s.xr[b] && !t.xrMask[b];
+        t.xrPrev[b] = prev ? prev[b] : blocked && v;
+        t.xrStore[b] = v;
       }
       t.xr = t.xrStore;
     } else {
@@ -400,10 +486,10 @@ export class PointerRouter<T = unknown> {
     }
     // While blocked buttons track (so a press held through the block is not a new press), but
     // nothing is pressed and nothing is hit.
-    t.select = s.select;
-    t.secondary = s.secondary;
-    t.pressSelect = !blocked && s.select && !t.prevSelect;
-    t.pressSecondary = !blocked && s.secondary && !t.prevSecondary;
+    t.select = select;
+    t.secondary = secondary;
+    t.pressSelect = !blocked && select && !t.prevSelect;
+    t.pressSecondary = !blocked && secondary && !t.prevSecondary;
     if (moved || t.pressSelect || t.pressSecondary) t.active = this.tick;
     if (blocked) {
       this.endHit(t);
@@ -416,7 +502,7 @@ export class PointerRouter<T = unknown> {
       ev.hit = t.hit;
       this.events.emit('moved', ev);
     }
-    if ((t.prevSelect && !s.select) || (t.prevSecondary && !s.secondary)) {
+    if ((t.prevSelect && !select) || (t.prevSecondary && !secondary)) {
       const ev = this.evReleased;
       ev.pointer = t;
       ev.hit = t.hit;
@@ -483,6 +569,9 @@ export class PointerRouter<T = unknown> {
       seen: false,
       prevSelect: false,
       prevSecondary: false,
+      maskSelect: false,
+      maskSecondary: false,
+      xrMask: { trigger: false, squeeze: false, pinch: false },
       pressSelect: false,
       pressSecondary: false,
       active: 0,
