@@ -18,7 +18,8 @@ Q whirls, E dashes, R casts a nova; keys 1–3 or the top buttons swap gear.
   `stats.lodCounts`. Per-texel and per-tile rolls are core `hash2f`. Each 2 m floor tile carries
   2 × 2 textured slabs, so a seam runs every metre (the gap at its edge, a grout line through its
   middle); the tiling is offset a quarter tile on x and z (a strip of half-width tiles fills the
-  near walls), so the hero's spawn column at x = 0 sits half a metre from both. `?still`
+  near walls, and one quarter tile their corner), so the hero's spawn column at x = 0 sits half a
+  metre from both. `?still`
   publishes `__demo.centreSeam` (the canvas's centre column less its neighbours 4 px out, read
   back once; about −0.03 on desktop-1280).
 - Six braziers: an emissive core, additive flame particles and a flickering point light each, under a
@@ -32,7 +33,12 @@ Q whirls, E dashes, R casts a nova; keys 1–3 or the top buttons swap gear.
   hand-swap is what `loaded.setVariant` (ws/assets-3) replaces for glTF heroes.
 - Twelve ghouls on the same skeleton and `SkinPalette`, each with its own graph, replanning a
   `NavPath3` every 0.5 s and separated by `createCrowd`; anchored health bars. The live bodies are
-  one `InstanceList` on a two-level `MeshLod` (far: no hands, feet or hair), refilled each frame. A death burns away over 0.8 s on one of four
+  one `InstanceList` on a two-level `MeshLod` (far: no hands, feet or hair), refilled each frame
+  and keyed by ghoul index (`setKey`, ws/render-7): a death moves the later ghouls up a slot, but
+  their LOD memory (and, with `velocity: true`, their motion history) follows the key, so no
+  other ghoul pops a level. `__demo.ghoulLevels` is `renderer.lodLevelOf` per ghoul, and
+  `deathLodShifts` counts level changes on the flush after a death (0). `?blur` turns object
+  motion blur on, and only then does the list keep previous matrices (`ghoulVelocity`). A death burns away over 0.8 s on one of four
   pooled `createStandardMaterial({ skin, dissolve })` copies with an ember edge, its shadow
   dissolving with it (`__demo.dissolving`).
 - The HUD from engine calls (ws/ui-6): health and mana orbs are `ui.meter({ shape: 'orb', trail:
@@ -41,22 +47,31 @@ Q whirls, E dashes, R casts a nova; keys 1–3 or the top buttons swap gear.
   once (`paintCourtyard`), braziers and live ghouls as marker kinds (ghouls as 12 px arrows on
   their `heading`, ws/ui-7) and the hero as the arrow. A tap on
   the map goes through `onPick`, snaps to the navmesh and takes the same `findMeshPath` walk as a
-  ground click. On phones the map sits in the card lane (the side rails are 56 px).
+  ground click.
 - The HUD on content bars (ws/ui-8, `LayoutSpec.bars`): the two orbs at the ends of the `bottom`
   bar and the ability slots between them size it (max 160 CSS px; 120 on phone-portrait, so the
   world keeps at least 70% of the height between the bars), and the gear row sizes the `top`
   bar (max 96). No widget overflows its region on any row; `__demo` publishes `formFactor`,
-  `overflows` (`layout.overflows()` ids), `bottomBar` and `worldView` after each re-layout.
+  `overflows` (`layout.overflows()` ids), `bottomBar`, `worldView` and `worldArea` after each
+  re-layout.
+- Phone-landscape side rails (ws/adoption-5, ws/ui-9's corner rule): the map and the mana orb
+  share a content-sized `right` rail (map at the top, orb at the foot) and the health orb sits at
+  the foot of the `left` rail, so the bottom bar holds only the ability row (64 → 52 px) and the
+  world band grows 64–70% → 68–73% of the height (`__demo.orbRegions`). A meter has no
+  per-form-factor region, so the demo remakes the two orbs at their current values when the form
+  factor crosses into or out of phone-landscape. Desktop, tablet and phone-portrait keep the
+  bottom bar and the `right` / card-lane map.
 
 ## Known limits
 
-The ghoul LOD drops boxes rather than segments: the body is boxes, with nothing to lower. The
-ghoul list keeps LOD level memory by index, so a death shifts the later ghouls' hysteresis once;
-LOD lists are copied into the frame upload each frame and carry no per-instance velocity
-(ws/render-6). Gear swapping stays by hand: the three sets are procedural `geom` meshes, not a
-glTF, and they differ in shape as well as colour, while `loaded.setVariant` swaps only the
-materials of a loaded glTF (`KHR_materials_variants`). The hero is a crowd agent with zero
-preferred velocity, so ghouls part around it but it does not push them. The orbs keep one size
-per form's units (a meter has no per-form-factor size), so on phone-landscape the bars take about
-a third of a 320 px-tall view; the map stays in the card lane there until content-sized side
-rails (ws/ui-9) land. The floor's 0.5 × 0.5 m corner inside the near walls shows the grout bed.
+The ghoul LOD drops boxes rather than segments: the body is boxes, with nothing to lower. LOD
+lists are copied into the frame upload each frame; with `?blur` the ghoul list keeps previous
+matrices (`velocity: true`), but `createGame` builds its renderer without a velocity target, so
+object motion blur still falls back to the camera's motion. Gear swapping stays by hand: the three
+sets are procedural `geom` meshes, not a glTF, and they differ in shape as well as colour, while
+`loaded.setVariant` swaps only the materials of a loaded glTF (`KHR_materials_variants`). The hero
+is a crowd agent with zero preferred velocity, so ghouls part around it but it does not push them.
+The orbs keep one size per form's units (56 CSS px on phones; a per-form-factor meter size is
+ws/ui-10), so on phone-landscape the two rails take 64 + 108 px of the width and the world band
+stays near 0.68 on a 320 px-tall phone. Phone-portrait keeps the map in the card lane: rails there
+would leave the world about 218 of 390 px of width.
