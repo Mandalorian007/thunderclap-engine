@@ -6,6 +6,7 @@
  * The real-browser checks are in e2e/lifecycle.spec.ts and e2e/surface.spec.ts.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createInputPlayback, type TickClock } from '../input';
 import type { BootResult } from '../platform';
 import { mountSurface } from '../platform/surface';
 import { type FakeXr, FakeXrInputSource, installFakeXr } from '../platform/xr-fake';
@@ -15,7 +16,6 @@ import {
   fakeRendererGpu,
   installGpuGlobals,
 } from '../render/fake-gpu';
-import { createInputPlayback } from '../input';
 import { type CreateGameOptions, createGame } from './game';
 
 const lost = new Set<(info: GPUDeviceLostInfo) => void>();
@@ -668,8 +668,10 @@ describe('createGame: tick clock (ws/core-4)', () => {
         for (let i = 0; i < 30; i++) tickOnce(ctx, 16);
         expect(ctx.clock.now()).toBe(30 * step);
 
-        // The menu starts the replay.
-        const playback = createInputPlayback(ctx.input, recording, { clock: ctx.clock, speed });
+        // The menu starts the replay. `ctx.clock` is typed `InputClock`; createGame builds a tick
+        // clock, which the playback needs to drive.
+        const clock = ctx.clock as TickClock;
+        const playback = createInputPlayback(ctx.input, recording, { clock, speed });
         expect(ctx.input.playback).toBe(playback);
         const again = watch(ctx);
 
@@ -682,8 +684,8 @@ describe('createGame: tick clock (ws/core-4)', () => {
           order.push('/step');
           return fed;
         };
-        const advance0 = ctx.clock.advance.bind(ctx.clock);
-        ctx.clock.advance = (ms: number) => {
+        const advance0 = clock.advance.bind(clock);
+        clock.advance = (ms: number) => {
           order.push(`advance:${ms}`);
           advance0(ms);
         };

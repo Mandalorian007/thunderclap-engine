@@ -82,7 +82,9 @@ clock a second time (`playback.clock === ctx.clock`). Once the recording is done
 moves the clock again. `seek` never moves it.
 
 A replay started mid-session (from a menu, after the game has run live) is the same call made by
-the game: `createInputPlayback(ctx.input, recording, { clock: ctx.clock, speed })`. The loop reads
+the game: `createInputPlayback(ctx.input, recording, { clock: ctx.clock as TickClock, speed })`
+(`EngineCtx.clock` is typed `InputClock`, while the playback wants the `TickClock` createGame
+built; the game must still never advance it itself). The loop reads
 `ctx.input.playback` each fixed step (ws/core-5), so from the next step it runs `playback.step()`,
 skips its own advance while that playback drives `ctx.clock`, and resumes it once the recording
 ends; the long-press lands on its recorded tick (counted from the install) at any speed. Before
