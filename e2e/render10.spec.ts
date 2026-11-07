@@ -74,3 +74,23 @@ for (const c of CASES) {
     expect(errors).toEqual([]);
   });
 }
+
+// ws/render-11: billboards and world particles write their own motion. Under object motion blur
+// the fountain and the sliding billboard read a real screen motion out of the velocity target,
+// and the rest of the (still-camera) scene reads none.
+for (const aux of ['velocity', 'all'] as const) {
+  test(`aux=${aux}&blur: moving particles and billboards write velocity, the background none`, async ({
+    page,
+    wrapper,
+  }) => {
+    const s0 = await open(page, wrapper, `aux=${aux}&blur`);
+    expect(s0.blur).toBe(true);
+    await expect.poll(async () => (await read()).readbacks).toBeGreaterThanOrEqual(10);
+    await expect.poll(async () => (await read()).particleBlurPx).toBeGreaterThan(0);
+    await expect.poll(async () => (await read()).billboardBlurPx).toBeGreaterThan(0);
+    const s = await read();
+    expect(s.backgroundBlurPx).toBe(0);
+    expect(s.gpuErrors).toBe(0);
+    expect(errors).toEqual([]);
+  });
+}

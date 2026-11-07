@@ -116,7 +116,11 @@ opts: XrSurfaceOptions)` makes an `XRGPUBinding` and one projection layer in the
 (`colorFormat` `SCENE_FORMAT`, `depthStencilFormat` `depth24plus` or `null` for none, `textureType`
 `'texture'` (one texture, eyes side by side) or `'texture-array'` (one layer per eye)) and installs
 it with `session.updateRenderState({ layers, depthNear, depthFar })`. `XrSurfaceOptions` needs the
-`referenceSpace`; `depthNear` (0.1) and `depthFar` (1000) are optional. Per frame `views(frame)`
+`referenceSpace`; `depthNear` (0.1) and `depthFar` (1000) are optional. `aux` (`SceneTargetAux`,
+ws/render-11) gives the eyes' scene pass the same aux attachments (rough-metal, velocity) as an
+aux `renderer.target`: on `scene` in scene mode, on each eye's external target (at the eye's size)
+in direct mode; `createGame({ aux, xr })` passes its own. Each eye camera keeps its own
+`previousViewProj`, so velocity is per eye. Per frame `views(frame)`
 returns the `XrEyeView[]` for `frame.getViewerPose(referenceSpace)` (empty while tracking is
 lost): `index` (= `camera.viewIndex`, 0 left, 1 right), `eye`, `camera` (a depth-on `Camera` with the
 view's projection and inverse pose, `screen` the viewport as a fraction of the target) and

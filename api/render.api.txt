@@ -1035,6 +1035,7 @@ class SkinPalette {
     readonly instanceFloats: number;
     readonly history: boolean;
     constructor(device: GPUDevice, desc: SkinPaletteDesc);
+    get jointCount(): number;
     offsetOf(instance: number): number;
     previousOffsetOf(instance: number): number;
     set(instance: number, matrices: ArrayLike<number>, offset?: number): void;

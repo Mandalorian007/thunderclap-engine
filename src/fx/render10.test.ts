@@ -205,9 +205,18 @@ describe('ws/render-10: scene-pass pipelines follow the target aux set', () => {
     ]) {
       expect([...labels], l).toContain(l);
     }
-    // Every pipeline bound in a scene pass is the helper's or a material's.
+    // Every pipeline bound in a scene pass is the helper's, a material's or (ws/render-11) a
+    // motion build: a helper list with only the velocity entry written.
     for (const b of bound) {
-      if (!handed.has(b.targets)) expect(b.pipeline.startsWith('material:')).toBe(true);
+      if (handed.has(b.targets) || b.pipeline.startsWith('material:')) continue;
+      expect(b.pipeline.endsWith(':motion'), b.pipeline).toBe(true);
+      const like = [...handed].find(
+        (t) =>
+          t.length === b.targets.length &&
+          t.every((x, i) => i === b.targets.length - 1 || x === b.targets[i]),
+      );
+      expect(like, b.pipeline).toBeDefined();
+      expect(b.targets.at(-1)!.writeMask).toBeUndefined();
     }
   });
 

@@ -778,7 +778,10 @@ uploads the dirty slot range in one `writeBuffer`, once per frame, allocating no
 `palette.write(slot)` (ws/api-render) is that slot's staging block as a `Float32Array` to fill
 in place, `skinMatrices(skeleton, world, palette.write(0))`, marked for the next flush; and
 `palette.params(slot)` is the cached `InstanceParams` naming the slot, for `frame.mesh`
-(`isDirty` says whether it would; `destroy()` frees the buffer). Bind it to the material as a
+(`isDirty` says whether it would; `destroy()` frees the buffer). `palette.jointCount`
+(ws/render-11) is the joints per slot it was made with; `anim`'s `skinPose` refuses a skeleton
+with more joints than that, with an error naming both counts, instead of writing past the
+slot. Bind it to the material as a
 storage buffer: `createMaterial({ ..., buffers: [palette.buffer] })` (`BindingDesc.buffers`:
 read-only storage buffers at `@group(1) @binding(16 + i)`, in the same group as the material's uniform and textures; `BindingSet.setBuffer(slot,
 buffer)` swaps one later). The palette is slot 0, `SKIN_PALETTE_BINDING` = 16; a material has one
@@ -1061,9 +1064,30 @@ rough-metal, bit 1 velocity) keys the pipeline variants.
   aux `renderer.target`) it is still wrong. `src/fx/render10.test.ts` checks, on the fake GPU,
   that every pipeline bound in a `scene` or `scene-blend` pass declares as many targets as the
   pass has attachments, with aux on and off.
-- XR eye targets (`XrSurface`) are made without aux: VR draws camera-only, with no velocity or
-  rough-metal input to post. `SceneTarget.external` takes `aux`, but the platform does not ask
-  for it yet.
+- **Billboards and world particles write their own motion** (ws/render-11). Into a target with
+  velocity they bind a motion build (pipeline label `…:motion`): the same colour and emissive
+  targets and blend, the velocity entry written (rough-metal stays masked) and blended by the
+  fragment's alpha (`src-alpha`, `one-minus-src-alpha` on colour, the target's alpha kept), so
+  a soft edge mixes its motion with what is behind it. The shader is the plain one plus
+  `VSOut.prev_clip` and a velocity output at the attachment's location (2, or 3 beside
+  rough-metal). Billboards keep each slot's last drawn anchor in
+  a `<label>-prev` storage buffer (16 bytes per slot, written in draw order by `prepare` only
+  when the view has velocity); a quad seen for the first time, or a slot reused after
+  `remove`, reads zero motion, and the corner is rebuilt with `prev_view_proj` (px billboards)
+  or last frame's view rows (world billboards), so camera motion counts too. World particles
+  step back by the frame's own advance: `prev_view_proj × (world − vel × sim.dt)`. 2D particles
+  (no camera history) and every other drawable keep velocity masked: sky, water and decals
+  read zero motion. Without a velocity target nothing is kept or written and the shaders are
+  the exported `BILLBOARD_WGSL` / `PARTICLE_WORLD_RENDER_WGSL` byte for byte.
+- XR eye targets (`XrSurface`) take the aux set from `XrSurfaceOptions.aux` (ws/render-11);
+  `createGame({ aux, xr })` passes its own, so each eye's scene pass has the same attachments
+  as `renderer.target` and every pipeline above matches it. In scene mode (`scene: true`, what
+  `createGame` uses) the aux attachments sit on the surface's HDR `scene` target and post reads
+  them; the eye layer targets the post output lands in stay without aux. In direct mode each
+  eye's `SceneTarget.external` gets the aux textures at the eye's size (half the layer, or one
+  per array layer). Each eye camera keeps its own `previousViewProj` (history is recorded per
+  `renderer.render`), so the motion of a fragment is measured against that eye's last frame,
+  not the other eye's.
 
 Mode `?aux` of `harness/render4.html` renders into a target with both attachments: a quad
 with a roughness gradient and a cube sliding through a velocity list, both read back through a
@@ -1075,7 +1099,10 @@ the controls); `?single-velocity` slides one rock drawn by `frame.mesh` under a 
 (`velocityMoving` above zero on the rock, `velocityStatic` 0 on the background; `&still` the
 control); `e2e/render7.spec.ts` checks them. `harness/render10.html` draws sky, water, box decals, world
 and 2D particles, billboards and debug lines through `createGame({ aux })`, `?aux=velocity`
-(default), `all` or `none`; `e2e/render10.spec.ts` checks it reports `gpuErrors: 0`. Switching
+(default), `all` or `none`; `e2e/render10.spec.ts` checks it reports `gpuErrors: 0`. `&blur` (with velocity) turns on object
+motion blur, slides a billboard and reduces the velocity target to a 32 × 18 grid of per-block
+maxima read back each frame: `particleBlurPx` (the fountain) and `billboardBlurPx` (the slider)
+above zero, `backgroundBlurPx` 0 under the still camera. Switching
 TAA, SSR and motion blur over to these inputs is ws/post-4 (see `src/post/README.md`).
 
 ### Per-draw uniforms

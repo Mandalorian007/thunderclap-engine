@@ -115,6 +115,14 @@ export class SkinPalette {
     );
   }
 
+  /**
+   * Joints per instance (ws/render-11): `joints`, the count each slot's block holds and the
+   * most a skeleton posed into it (`skinPose`, `skinMatrices`) may have.
+   */
+  get jointCount(): number {
+    return this.joints;
+  }
+
   /** Float offset of `instance`'s first joint row inside the buffer (tests, custom writers). */
   offsetOf(instance: number): number {
     return SKIN_PALETTE_HEADER_FLOATS + instance * this.instanceFloats;

@@ -1,7 +1,13 @@
 import type { Camera } from '../render/camera';
 import type { Drawable, Frame } from '../render/frame';
 import type { Renderer } from '../render/renderer';
-import { auxSuffix, ScenePipelineCache, sceneVariant } from '../render/scene-pipelines';
+import {
+  auxSuffix,
+  motionVariant,
+  ScenePipelineCache,
+  sceneVariant,
+  velocityLocation,
+} from '../render/scene-pipelines';
 import type { Texture } from '../render/texture';
 import { createShaderModule } from '../render/wgsl';
 import {
@@ -12,6 +18,7 @@ import {
   BILLBOARD_BYTES,
   BILLBOARD_FLOATS,
   BILLBOARD_WGSL,
+  billboardWgsl,
 } from './billboard-wgsl';
 import { type AtlasRegion, TextAtlas, type TextAtlasOptions, type TextStyle } from './text-atlas';
 
@@ -196,6 +203,18 @@ export class Billboards implements Drawable {
   private order: Uint32Array;
   private keys: Float32Array;
   private upload: Float32Array<ArrayBuffer>;
+  /**
+   * Motion (ws/render-11): per slot the anchor its quad was last drawn at (`xyz`, `w` = 1 once
+   * drawn), and the previous anchors in sorted order for `prevBuffer` (binding 3), which the
+   * velocity build of the shader reads. Kept only once a view with a velocity attachment drew
+   * the batch (`motion`); until then the buffer holds zeros, read as "unknown" (no motion).
+   */
+  private drawn: Float32Array;
+  private prevUpload: Float32Array<ArrayBuffer>;
+  private prevBuffer: GPUBuffer;
+  private motion = false;
+  /** The velocity builds of the shader, by fragment location (2 or 3), made on first use. */
+  private readonly motionModules: (GPUShaderModule | undefined)[] = [];
   private testCount = 0;
   private alwaysCount = 0;
   private uploadDirty = false;
@@ -232,6 +251,9 @@ export class Billboards implements Drawable {
     this.order = new Uint32Array(cap);
     this.keys = new Float32Array(cap);
     this.upload = new Float32Array(cap * F);
+    this.drawn = new Float32Array(cap * 4);
+    this.prevUpload = new Float32Array(cap * 4);
+    this.motion = (renderer.target.auxKey & 2) !== 0;
 
     this.atlas = new TextAtlas(opts.atlas);
     this.atlasTexture = renderer.createTexture({
@@ -247,9 +269,11 @@ export class Billboards implements Drawable {
         { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
         { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
         { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+        { binding: 3, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
       ],
     });
     this.buffer = this.makeBuffer(cap);
+    this.prevBuffer = this.makePrevBuffer(cap);
     this.group = this.makeGroup();
     const mod = createShaderModule(device, BILLBOARD_WGSL, this.label);
     this.pipelineDesc = {
@@ -265,11 +289,7 @@ export class Billboards implements Drawable {
       },
       primitive: { topology: 'triangle-list' },
     };
-    this.testPipelines.set(
-      null,
-      renderer.target.auxKey,
-      device.createRenderPipeline(this.pipelineDesc),
-    );
+    this.pipelineFor(null, renderer.target.auxKey, false);
   }
 
   /** Live billboards. */
@@ -290,6 +310,14 @@ export class Billboards implements Drawable {
     });
   }
 
+  private makePrevBuffer(cap: number): GPUBuffer {
+    return this.device.createBuffer({
+      label: `${this.label}-prev`,
+      size: cap * 16,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
+  }
+
   private makeGroup(): GPUBindGroup {
     return this.device.createBindGroup({
       label: this.label,
@@ -298,6 +326,7 @@ export class Billboards implements Drawable {
         { binding: 0, resource: { buffer: this.buffer } },
         { binding: 1, resource: this.renderer.samplers['linear-clamp'] },
         { binding: 2, resource: this.atlasTexture.view },
+        { binding: 3, resource: { buffer: this.prevBuffer } },
       ],
     });
   }
@@ -320,6 +349,8 @@ export class Billboards implements Drawable {
     this.order = copy(this.order, 1);
     this.keys = copy(this.keys, 1);
     this.upload = new Float32Array(cap * F);
+    this.drawn = copy(this.drawn, 4);
+    this.prevUpload = new Float32Array(cap * 4);
     this.tracked.length = cap;
     this.regions.length = cap;
     this.plates.length = cap;
@@ -332,6 +363,8 @@ export class Billboards implements Drawable {
     this.capacity = cap;
     this.buffer.destroy();
     this.buffer = this.makeBuffer(cap);
+    this.prevBuffer.destroy();
+    this.prevBuffer = this.makePrevBuffer(cap);
     this.group = this.makeGroup();
   }
 
@@ -350,6 +383,7 @@ export class Billboards implements Drawable {
     this.velocity[i * 3 + 2] = v[2];
     this.life[i * 2] = 0;
     this.life[i * 2 + 1] = desc.life ?? 0;
+    this.drawn[i * 4 + 3] = 0;
     this.mode[i] = desc.depth === 'always' ? 1 : 0;
     const o = i * F;
     const inst = this.inst;
@@ -413,7 +447,9 @@ export class Billboards implements Drawable {
       this.life.copyWithin(i * 2, last * 2, last * 2 + 2);
       this.rgba.copyWithin(i * 4, last * 4, last * 4 + 4);
       this.inst.copyWithin(i * F, last * F, last * F + F);
+      this.drawn.copyWithin(i * 4, last * 4, last * 4 + 4);
     }
+    this.drawn[last * 4 + 3] = 0;
     this.tracked[last] = null;
     this.regions[last] = null;
     this.plates[last] = null;
@@ -640,8 +676,13 @@ export class Billboards implements Drawable {
     this.uploadDirty = true;
   }
 
-  /** Upload the instance data and, when the atlas changed, its canvas. Runs before the pass. */
+  /**
+   * Upload the instance data, last frame's drawn anchors when the view has velocity and, when
+   * the atlas changed, its canvas. Runs before the pass.
+   */
   prepare(_encoder: GPUCommandEncoder, _frame?: Frame): void {
+    if (_frame && (_frame.auxKey & 2) !== 0) this.motion = true;
+    if (this.motion) this.writePrevious();
     if (this.uploadDirty) {
       this.uploadDirty = false;
       if (this.n > 0) {
@@ -665,12 +706,46 @@ export class Billboards implements Drawable {
     }
   }
 
+  /**
+   * Once per frame with `motion` on: each drawn quad's previous anchor (where it was drawn last
+   * frame, or its current one the first time) into `prevBuffer` in draw order, then remember
+   * the current anchors. Without an `update` since, current equals previous (no motion).
+   */
+  private writePrevious(): void {
+    const n = this.n;
+    if (n === 0) return;
+    const order = this.order;
+    const upload = this.upload;
+    const drawn = this.drawn;
+    const prev = this.prevUpload;
+    for (let i = 0; i < n; i++) {
+      const s = order[i]!;
+      const u = i * F;
+      const p = i * 4;
+      const d = s * 4;
+      const known = s < n && drawn[d + 3] === 1;
+      prev[p] = known ? drawn[d]! : upload[u]!;
+      prev[p + 1] = known ? drawn[d + 1]! : upload[u + 1]!;
+      prev[p + 2] = known ? drawn[d + 2]! : upload[u + 2]!;
+      prev[p + 3] = 1;
+      if (s < n) {
+        drawn[d] = upload[u]!;
+        drawn[d + 1] = upload[u + 1]!;
+        drawn[d + 2] = upload[u + 2]!;
+        drawn[d + 3] = 1;
+      }
+    }
+    this.device.queue.writeBuffer(this.prevBuffer, 0, prev.buffer, 0, n * 16);
+  }
+
   /** Draw inside the scene pass: the `'test'` quads, then the `'always'` ones. */
   draw(pass: GPURenderPassEncoder, frame?: Frame): void {
     this.draws = 0;
     if (this.n === 0) return;
     const fmt = frame?.depthFormat ?? null;
     const aux = frame ? frame.auxKey : this.renderer.target.auxKey;
+    // A first velocity view: its prev buffer is still zeros (no motion) until the next prepare.
+    if ((aux & 2) !== 0) this.motion = true;
     pass.setBindGroup(1, this.group);
     if (!fmt) {
       pass.setPipeline(this.pipelineFor(null, aux, false));
@@ -699,29 +774,39 @@ export class Billboards implements Drawable {
     const p = cache.get(format, aux);
     if (p) return p;
     const label = `${this.label}${format ? `:${format}` : ''}${always ? ':always' : ''}`;
-    return cache.set(
-      format,
-      aux,
-      this.device.createRenderPipeline(
-        sceneVariant(
-          this.pipelineDesc,
-          this.renderer.sceneTargets(ALPHA_BLEND, aux),
-          `${label}${auxSuffix(aux)}`,
-          format
-            ? {
-                format,
-                depthWriteEnabled: false,
-                depthCompare: always ? 'always' : 'less-equal',
-              }
-            : undefined,
-        ),
-      ),
-    );
+    const depth: GPUDepthStencilState | undefined = format
+      ? { format, depthWriteEnabled: false, depthCompare: always ? 'always' : 'less-equal' }
+      : undefined;
+    const targets = this.renderer.sceneTargets(ALPHA_BLEND, aux);
+    const at = velocityLocation(aux);
+    // With a velocity attachment the quads write their own motion (ws/render-11).
+    const desc =
+      at === 0
+        ? sceneVariant(this.pipelineDesc, targets, `${label}${auxSuffix(aux)}`, depth)
+        : motionVariant(
+            this.pipelineDesc,
+            this.motionModule(at),
+            targets,
+            aux,
+            `${label}${auxSuffix(aux)}:motion`,
+            depth,
+          );
+    return cache.set(format, aux, this.device.createRenderPipeline(desc));
+  }
+
+  private motionModule(at: number): GPUShaderModule {
+    let m = this.motionModules[at];
+    if (!m) {
+      m = createShaderModule(this.device, billboardWgsl(at), `${this.label}-motion`);
+      this.motionModules[at] = m;
+    }
+    return m;
   }
 
   destroy(): void {
     this.clear();
     this.buffer.destroy();
+    this.prevBuffer.destroy();
     this.atlasTexture.destroy();
   }
 }

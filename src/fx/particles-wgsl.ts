@@ -1,3 +1,4 @@
+import { WGSL_MOTION } from '../render/scene-pipelines';
 import { WGSL_GLOBALS, WGSL_LIGHTS } from '../render/wgsl';
 
 const COMMON = /* wgsl */ `
@@ -528,9 +529,17 @@ fn request(pos: vec3f, vel: vec3f, slot: f32, count: f32) {
  * the system has one (both blend modes; premultiplied on output), with the world-space fades
  * and lighting of before.
  */
-function fxRenderWgsl(world: boolean): string {
+/**
+ * The extended render shader; with `velocity` (the velocity attachment's fragment location, 2
+ * or 3; world space only) the build that writes its own motion (ws/render-11): each corner's
+ * previous position is `world - vel * sim.dt` (this frame's step back), projected through
+ * `camera.prev_view_proj`, and the fragment writes `vec4f(engine_motion(..), 0, alpha)`.
+ * `velocity` 0 is the exported strings exactly.
+ */
+export function fxRenderWgsl(world: boolean, velocity = 0): string {
+  const v = world && velocity > 0;
   return /* wgsl */ `
-${WGSL_GLOBALS}
+${WGSL_GLOBALS}${v ? WGSL_MOTION : ''}
 ${world ? WGSL_LIGHTS : ''}
 ${fxCommon(world)}
 @group(1) @binding(0) var<storage, read> particles: array<Particle>;
@@ -548,11 +557,11 @@ struct PVOut {
   @location(3) world: vec3f,
   @location(4) view_z: f32,
   @location(5) side: vec3f,
-  @location(6) uv: vec2f,
+  @location(6) uv: vec2f,${v ? '\n  @location(7) prev_clip: vec4f,' : ''}
 };
 struct FragOut {
   @location(0) color: vec4f,
-  @location(1) emissive: vec4f,
+  @location(1) emissive: vec4f,${v ? `\n  @location(${velocity}) velocity: vec4f,` : ''}
 };
 
 fn view_row(r: u32) -> vec3f {
@@ -615,7 +624,9 @@ fn color_at(slot: f32, t: f32, c0: vec4f, c1: vec4f) -> vec4f {
   let axis = right * dir.x + up * dir.y;
   let perp = up * dir.x - right * dir.y;
   let world = p.pos.xyz + axis * (q.x * len * 0.5) + perp * (q.y * size * 0.5);
-  o.clip = camera.view_proj * vec4f(world, 1.0);
+  o.clip = camera.view_proj * vec4f(world, 1.0);${
+    v ? '\n  o.prev_clip = camera.prev_view_proj * vec4f(world - vel * sim.dt, 1.0);' : ''
+  }
   o.q = q;
   var color = color_at(p.curve.y, t, p.c0, p.c1);
   if (WORLD_SPACE && sim.fadeFar > sim.fadeNear) {
@@ -681,7 +692,9 @@ ${
   let c = rgb * a;
   var o: FragOut;
   o.color = vec4f(c, a);
-  o.emissive = vec4f(c * in.emissive, a);
+  o.emissive = vec4f(c * in.emissive, a);${
+    v ? '\n  o.velocity = vec4f(engine_motion(in.clip, in.prev_clip), 0.0, a);' : ''
+  }
   return o;
 }
 `;

@@ -230,6 +230,7 @@ interface XrSurfaceOptions {
     textureType?: 'texture' | 'texture-array';
     depthNear?: number;
     depthFar?: number;
+    aux?: SceneTargetAux;
 }
 
 ## blockBrowserZoom

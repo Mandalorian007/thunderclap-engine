@@ -26,7 +26,12 @@
  */
 import { Camera } from '../render/camera';
 import { DEPTH_FORMAT } from '../render/material';
-import { SCENE_FORMAT, SceneTarget, type SceneTargetViewport } from '../render/scene-target';
+import {
+  SCENE_FORMAT,
+  SceneTarget,
+  type SceneTargetAux,
+  type SceneTargetViewport,
+} from '../render/scene-target';
 
 export interface XrSurfaceOptions {
   /** The space poses are expressed in (the game's `local-floor`, `local` or `viewer` space). */
@@ -52,6 +57,15 @@ export interface XrSurfaceOptions {
   /** The session's near and far planes, metres. Defaults 0.1 and 1000. */
   depthNear?: number;
   depthFar?: number;
+  /**
+   * Aux attachments the eyes render with (ws/render-11; `createGame({ aux })` passes its own):
+   * velocity, rough-metal, as `SceneTargetDesc.aux`. Direct, each eye target adopting the layer
+   * makes them (`SceneTarget.external({ aux })`) at the eye's size; with `scene`, the scene
+   * target every eye renders into has them and the layer targets, only resolved into, do not.
+   * Each eye's camera keeps its own previous view-projection, so an eye's velocity is its own
+   * motion. Default none.
+   */
+  aux?: SceneTargetAux;
 }
 
 /** One eye of one frame: where it looks and what it draws into. */
@@ -87,6 +101,7 @@ class EyeView implements XrEyeView {
     readonly index: number,
     device: GPUDevice,
     first: XRGPUSubImage,
+    aux: SceneTargetAux | undefined,
   ) {
     this.camera = new Camera();
     this.camera.depthTest = true;
@@ -98,6 +113,7 @@ class EyeView implements XrEyeView {
       depth: first.depthStencilTexture,
       view: first.getViewDescriptor(),
       label: `xr-eye-${index}`,
+      aux,
     });
     this.target = this.own;
   }
@@ -121,6 +137,8 @@ export class XrSurface {
   private readonly eyes: EyeView[] = [];
   private readonly out: EyeView[] = [];
   private readonly viaScene: boolean;
+  /** `opts.aux`: on the scene target with `scene`, else on each eye target. */
+  private readonly aux: SceneTargetAux | undefined;
   private destroyed = false;
 
   /**
@@ -136,6 +154,7 @@ export class XrSurface {
     if (!Binding) throw new Error('XrSurface: this browser has no WebXR/WebGPU binding');
     this.referenceSpace = opts.referenceSpace;
     this.viaScene = opts.scene === true;
+    this.aux = opts.aux;
     this.binding = new Binding(session, device);
     const depth =
       opts.depthStencilFormat === undefined
@@ -179,7 +198,7 @@ export class XrSurface {
       const sub = this.binding.getViewSubImage(this.layer, v);
       let eye = this.eyes[i];
       if (!eye) {
-        eye = new EyeView(i, this.device, sub);
+        eye = new EyeView(i, this.device, sub, this.viaScene ? undefined : this.aux);
         this.eyes[i] = eye;
       }
       eye.eye = v.eye;
@@ -238,7 +257,12 @@ export class XrSurface {
   }
 
   private makeScene(): SceneTarget {
-    this.scene = new SceneTarget(this.device, { width: 1, height: 1, label: 'xr-scene' });
+    this.scene = new SceneTarget(this.device, {
+      width: 1,
+      height: 1,
+      label: 'xr-scene',
+      aux: this.aux,
+    });
     return this.scene;
   }
 
