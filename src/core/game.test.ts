@@ -6,6 +6,7 @@
  * The real-browser checks are in e2e/lifecycle.spec.ts and e2e/surface.spec.ts.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createInputPlayback, type TickClock } from '../input';
 import type { BootResult } from '../platform';
 import { mountSurface } from '../platform/surface';
 import { type FakeXr, FakeXrInputSource, installFakeXr } from '../platform/xr-fake';
@@ -592,6 +593,133 @@ describe('createGame: tick clock (ws/core-4)', () => {
         // After the recording ends the loop's own step moves the clock again.
         tick(50, ctx);
         expect(ctx.clock.now()).toBe(recordedMs + 15.625);
+      }
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('a playback installed mid-session drives ctx.clock: the long-press fires on its recorded tick at 1× and 4×', async () => {
+    // The path a game takes when it starts a replay from a menu: the session has run live for
+    // a while (the clock is far from 0) and the game builds the playback itself on ctx.input
+    // with { clock: ctx.clock }. A 1/64 s step keeps the clock's sums exact.
+    const step = 15.625;
+    let wall = 1000;
+    vi.spyOn(performance, 'now').mockImplementation(() => wall);
+    try {
+      type Ctx = NonNullable<Awaited<ReturnType<typeof createGame>>>;
+      /** Each gesture with the input updates since `watch` and the clock since then. */
+      const watch = (ctx: Ctx) => {
+        let tick = 0;
+        const t0 = ctx.clock.now();
+        const fired: string[] = [];
+        ctx.gestures.onGesture((kind, phase) =>
+          fired.push(`${kind}:${phase}@${tick}/${ctx.clock.now() - t0}`),
+        );
+        ctx.input.onUpdated(() => tick++);
+        return fired;
+      };
+      const tickOnce = (ctx: Ctx, spacing: number) => {
+        wall += spacing;
+        ctx.loop.tickOnce(1 / 64);
+      };
+
+      // Record a long-press on a fresh game.
+      const recorded = await createGame({
+        ...options([]),
+        sim: { step: 1 / 64 },
+        input: { ...options([]).input, record: true },
+      });
+      if (!recorded) throw new Error('no ctx');
+      const live = watch(recorded);
+      const press = (ctx: Ctx, type: string, buttons: number) => {
+        const e = new PointerEvent(type, {
+          pointerId: 3,
+          pointerType: 'touch',
+          clientX: 200,
+          clientY: 150,
+          isPrimary: true,
+          button: 0,
+          buttons,
+          bubbles: true,
+        });
+        Object.defineProperty(e, 'timeStamp', { value: wall - 2 });
+        ctx.surface.canvas.dispatchEvent(e);
+      };
+      tickOnce(recorded, 16);
+      press(recorded, 'pointerdown', 1);
+      for (let i = 0; i < 40; i++) tickOnce(recorded, 16);
+      press(recorded, 'pointerup', 0);
+      tickOnce(recorded, 16);
+      tickOnce(recorded, 16);
+      const recording = recorded.input.recorder?.stop();
+      if (!recording) throw new Error('no recording');
+      expect(live.filter((g) => g.startsWith('longPress')).length).toBe(1);
+      const recordedTicks = recording.ticks.reduce((n, e) => n + ('n' in e ? e.n : 1), 0);
+      expect(recordedTicks).toBe(43);
+
+      for (const speed of [1, 4]) {
+        document.body.innerHTML = '<main id="root"></main>';
+        wall = 50_000;
+        const ctx = await createGame({ ...options([]), sim: { step: 1 / 64 } });
+        if (!ctx) throw new Error('no ctx');
+        expect(ctx.input.playback).toBeNull();
+        // Live for 30 ticks: the clock has advanced by the loop's own steps.
+        for (let i = 0; i < 30; i++) tickOnce(ctx, 16);
+        expect(ctx.clock.now()).toBe(30 * step);
+
+        // The menu starts the replay. `ctx.clock` is typed `InputClock`; createGame builds a tick
+        // clock, which the playback needs to drive.
+        const clock = ctx.clock as TickClock;
+        const playback = createInputPlayback(ctx.input, recording, { clock, speed });
+        expect(ctx.input.playback).toBe(playback);
+        const again = watch(ctx);
+
+        // Fixed-update order, logged on each loop tick.
+        const order: string[] = [];
+        const step0 = playback.step.bind(playback);
+        playback.step = () => {
+          order.push('step');
+          const fed = step0();
+          order.push('/step');
+          return fed;
+        };
+        const advance0 = clock.advance.bind(clock);
+        clock.advance = (ms: number) => {
+          order.push(`advance:${ms}`);
+          advance0(ms);
+        };
+        ctx.hooks.update = () => order.push('update');
+        const updates = (): number => order.filter((o) => o === 'update').length;
+
+        let loopTicks = 0;
+        while (!playback.done && loopTicks < 60) {
+          const before = ctx.clock.now();
+          order.length = 0;
+          tickOnce(ctx, 50);
+          loopTicks++;
+          const fed = Math.min(speed, recordedTicks - (loopTicks - 1) * speed);
+          // The playback alone moves the clock, by its tickMs per fed tick; the loop skips its own.
+          expect(ctx.clock.now() - before).toBe(fed * step);
+          expect(order.filter((o) => o.startsWith('advance'))).toEqual(
+            Array.from({ length: fed }, () => `advance:${step}`),
+          );
+          // playback.step() first (its advances inside it), then the game's update.
+          expect(order[0]).toBe('step');
+          expect(order.indexOf('/step')).toBeLessThan(order.indexOf('update'));
+          expect(updates()).toBe(1);
+        }
+        expect(loopTicks).toBe(Math.ceil(recordedTicks / speed));
+        // The long-press fires on its recorded tick index and game time since the start.
+        expect(again).toEqual(live);
+        expect(ctx.clock.now()).toBe(30 * step + recordedTicks * step);
+
+        // Once the recording ends the loop's own advance resumes, after step() and before update().
+        order.length = 0;
+        tickOnce(ctx, 50);
+        expect(ctx.clock.now()).toBe((31 + recordedTicks) * step);
+        expect(order).toEqual(['step', '/step', `advance:${step}`, 'update']);
+        playback.detach();
       }
     } finally {
       vi.restoreAllMocks();
