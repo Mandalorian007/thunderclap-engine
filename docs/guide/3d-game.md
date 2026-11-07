@@ -1,5 +1,7 @@
 # Make a 3D game
 
+## What you'll build
+
 This guide walks you through a lit 3D scene. You set up a perspective camera, draw boxes and
 spheres, load a glTF model, add lights, shadows and fog, switch to physically based materials,
 and keep the frame cheap with LOD and frustum culling.

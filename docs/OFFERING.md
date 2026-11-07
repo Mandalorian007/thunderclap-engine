@@ -23,7 +23,7 @@
 | Matrix camera: 2D by default, perspective with depth, split views and stereo | `Camera.ortho2d`, `Camera.perspective`, `camera.screen`, `camera.viewIndex`; `renderer.render(frame, camera, target)` |
 | Materials in the game's WGSL, with a prelude for lights, shadow and fog | `renderer.createMaterial({ label, wgsl })`, `materialPrelude` |
 | Lighting block: ambient, sun, 16 point lights, 8 spot lights, layer masks | `frame.lights: Lights`, `SpotLight`, `layers` on lights |
-| Sun shadow map and distance fog | `lights.sun.shadow: SunShadow`, `lights.fog: Fog`; `engine_shadow`, `engine_fog` in WGSL |
+| Sun shadow map and distance fog | `lights.sun.shadow: SunShadow`, `lights.fog: DistanceFog`; `engine_shadow`, `engine_fog` in WGSL |
 | Standard PBR material (glTF metallic-roughness), normal maps, dissolve | `createStandardMaterial`, `WGSL_PBR` |
 | GPU skinning in the scene and shadow passes | `VERTEX_LAYOUT_SKINNED`, `SkinPalette` |
 | Meshes streamed from a Worker without a main-thread copy | `renderer.createMesh({ capacity })`, `mesh.update(...)` |
@@ -92,7 +92,7 @@
 | Panels in the 3D world or head-locked in VR | `createWorldPanel` |
 | Loading screen and notifications | `createLoading`, `createNotifier` |
 | Audio: buses, synth, recipes, mixer persistence | `ctx.audio` (`AudioEngine`) in `@thunderclap/engine/audio` |
-| Spatial audio, zones, occlusion, Doppler | `audio.listener`, `PlayOptions.at`, `AudioZones` |
+| Spatial audio, zones, occlusion, Doppler | `audio.listener`, `AudioPlayOptions.at`, `AudioZones` |
 | Music stems, variations, ducking, sends | `createMusic`, `createVariations`, `createDucker`, `createSend` |
 | Versioned saves with migrations, slots, settings, undo journal | `createSaveStore`, `s`, `createSlotManager`, `createSettingsStore`, `createJournal` in `@thunderclap/engine/save` |
 | Typed analytics events to a game-supplied sink | `createAnalytics({ sink }).attach(ctx)` in `@thunderclap/engine/analytics` |

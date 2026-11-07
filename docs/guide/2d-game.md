@@ -1,5 +1,7 @@
 # Make a 2D game
 
+## What you'll build
+
 This guide walks through the pieces a 2D game uses: sprites, the 2D camera, textures and atlases, your own shaders, flipbooks, tile maps, parallax, a following camera and particles. The `templates/puzzle` and `templates/platformer` folders use every one of them, so open them next to this page.
 
 ## The design space

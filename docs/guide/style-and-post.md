@@ -1,5 +1,7 @@
 # Style your game: post effects, sky, water and weather
 
+## What you'll build
+
 This guide changes how your game looks without changing what it draws. You tune the post
 stack (bloom, tone mapping, colour grade and the rest), pick a quality tier per device, and
 add effects: flickering lights, trails, decals, labels, a sky, water and falling snow.

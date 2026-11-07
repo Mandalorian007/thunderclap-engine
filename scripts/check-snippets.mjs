@@ -15,11 +15,18 @@
 // are written to node_modules/.cache/check-snippets/ and checked in one `tsc` run with the repo's
 // compiler options (strict), minus the unused-name rules, which docs break on purpose. Errors are
 // printed against the Markdown file and line. Exit 1 on any error, 0 (silent) when all pass.
-// Node built-ins plus the repo's own tsc.
+//
+// Deprecations (ws/docs-v1): a snippet that uses an `@deprecated` name (an export, a member, an
+// overload) fails too. tsc reports those only as suggestions (TS6385, TS6387), which the CLI never
+// prints, so a second pass asks the type checker for them through TypeScript's own API
+// (`typescript/unstable/sync`, the bundled tsgo) on the same generated project.
+// `findDeprecatedUses(tsconfig, files?)` is exported for other checks to reuse.
+// Node built-ins plus the repo's own TypeScript.
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { API } from 'typescript/unstable/sync';
 
 export const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 export const MARKER = '<!-- snippet:check -->';
@@ -99,10 +106,100 @@ function enginePaths() {
   return paths;
 }
 
-/** Check `files` ([path, all] pairs). Returns { count, errors: string[] }. */
+/** TypeScript's "is deprecated" suggestion codes: a name (6385) and a signature (6387). */
+export const DEPRECATED_CODES = new Set([6385, 6387]);
+
+/**
+ * Every use of an `@deprecated` declaration in the root files of the project at `tsconfig` (or
+ * only in `files`, absolute paths among them), from the type checker's suggestion diagnostics.
+ * Returns [{ file, line, col, code, text }], 1-based line and column, sorted by file and position.
+ */
+export function findDeprecatedUses(tsconfig, files) {
+  const api = new API({ cwd: root });
+  try {
+    const snapshot = api.updateSnapshot({ openProjects: [resolve(tsconfig)] });
+    const project = snapshot.getProjects()[0];
+    if (!project) throw new Error(`findDeprecatedUses: no project for ${tsconfig}`);
+    const out = [];
+    for (const file of files ?? project.rootFiles) {
+      const text = readFileSync(file, 'utf8');
+      for (const d of project.program.getSuggestionDiagnostics(file)) {
+        if (!DEPRECATED_CODES.has(d.code)) continue;
+        const before = text.slice(0, d.pos).split('\n');
+        out.push({
+          file,
+          line: before.length,
+          col: before[before.length - 1].length + 1,
+          code: d.code,
+          text: d.text,
+        });
+      }
+    }
+    return out.sort((a, b) =>
+      a.file === b.file ? a.line - b.line || a.col - b.col : a.file < b.file ? -1 : 1,
+    );
+  } finally {
+    api.close();
+  }
+}
+
+/**
+ * Every `@deprecated` entry of the API snapshots in `apiDir` (default `api/`), as
+ * [{ module, name }]: `module` is the entry (`render`, or `.` for the root), `name` the export
+ * (`Fog`) or, for a member, `Owner.member` (`Renderer.white`). Sorted, no duplicates (an overload
+ * pair is one name).
+ */
+export function deprecatedApiNames(apiDir = join(root, 'api')) {
+  const seen = new Map();
+  for (const f of readdirSync(apiDir).sort()) {
+    if (!f.endsWith('.api.txt')) continue;
+    const module = f === 'index.api.txt' ? '.' : f.slice(0, -'.api.txt'.length);
+    const lines = readFileSync(join(apiDir, f), 'utf8').split('\n');
+    let section = '';
+    for (let i = 0; i < lines.length; i++) {
+      const head = /^## (\S+)/.exec(lines[i]);
+      if (head) section = head[1];
+      if (lines[i].trim() !== '@deprecated') continue;
+      let name = section;
+      if (/^\s/.test(lines[i])) {
+        const member = /^\s+(?:readonly\s+|static\s+|get\s+|set\s+)*([A-Za-z_$][\w$]*)/.exec(
+          lines[i + 1] ?? '',
+        );
+        if (member) name = `${section}.${member[1]}`;
+      }
+      seen.set(`${module} ${name}`, { module, name });
+    }
+  }
+  return [...seen.values()].sort((a, b) =>
+    a.module === b.module ? (a.name < b.name ? -1 : 1) : a.module < b.module ? -1 : 1,
+  );
+}
+
+/**
+ * The rows of the migration guide's table (a Markdown table whose first two columns are the
+ * module and the deprecated name), as [{ module, name }] with the backticks and any call
+ * arguments stripped: `` `SceneStack.list()` `` reads as `SceneStack.list`.
+ */
+export function migrationRows(text) {
+  const rows = [];
+  for (const line of text.split('\n')) {
+    const cells = line.split('|').map((c) => c.trim());
+    if (cells.length < 4 || cells[0] !== '') continue;
+    const mod = /^`([^`]+)`$/.exec(cells[1]);
+    const old = /^`([^`(]+)/.exec(cells[2]);
+    if (mod && old) rows.push({ module: mod[1], name: old[1].trim() });
+  }
+  return rows;
+}
+
+/**
+ * Check `files` ([path, all] pairs). Returns { count, errors: string[] }. A use of a deprecated
+ * name is an error unless `deprecations` is false.
+ */
 export function checkSnippets(
   files,
   cacheDir = join(root, 'node_modules', '.cache', 'check-snippets'),
+  { deprecations = true } = {},
 ) {
   rmSync(cacheDir, { recursive: true, force: true });
   mkdirSync(cacheDir, { recursive: true });
@@ -149,6 +246,14 @@ export function checkSnippets(
     }
   }
   if (run.status !== 0 && errors.length === 0) errors.push(`tsc exited ${run.status}`);
+  if (deprecations) {
+    for (const d of findDeprecatedUses(join(cacheDir, 'tsconfig.json'))) {
+      const at = origin.get(d.file.split(/[\\/]/).pop());
+      if (!at) continue;
+      const where = at.md.startsWith(root) ? relative(root, at.md) : at.md;
+      errors.push(`${where}:${at.line + d.line - 1}:${d.col}  error TS${d.code}: ${d.text}`);
+    }
+  }
   return { count: origin.size, errors };
 }
 

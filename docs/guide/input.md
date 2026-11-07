@@ -1,5 +1,7 @@
 # Input
 
+## What you'll build
+
 This guide shows you how a ThunderClap game reads the player. You will name your actions, bind keys, buttons, pads, touch and gestures to them, pick things in the world with pointer rays, add mouse look and touch sticks, and record a session so you can replay it.
 
 The rule of the house: your scenes read **actions** (`jump`, `select`), never keys or touches. Devices stay in one bindings map.
