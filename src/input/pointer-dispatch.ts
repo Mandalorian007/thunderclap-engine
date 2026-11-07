@@ -47,6 +47,11 @@ export interface PointerRecord {
   age: number;
   /** False when the transform maps the point outside the game (true without a transform). */
   inside: boolean;
+  /**
+   * True for an event `Input.replayPointer` dispatched (ws/input-11): a replay's pointer, which
+   * `PointerRouter.mute` never drops. False for real DOM events.
+   */
+  synthetic: boolean;
 }
 
 /** Something the dispatcher delivers to. Every method is optional. */
@@ -170,6 +175,7 @@ export function createPointerDispatcher(
     time: 0,
     age: 0,
     inside: true,
+    synthetic: false,
   };
   let replayAge: number | null = null;
 
@@ -184,6 +190,7 @@ export function createPointerDispatcher(
     r.clientY = e.clientY;
     r.time = e.timeStamp;
     r.age = replayAge ?? stampAge(e.timeStamp);
+    r.synthetic = replayAge !== null;
     if (transform) {
       r.x = e.clientX;
       r.y = e.clientY;

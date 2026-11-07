@@ -44,6 +44,11 @@ export interface PointerSample {
   secondary: boolean;
   /** XR button state; `null` for pointers that are not XR. */
   xr: XrButtons | null;
+  /**
+   * A replay made this pointer (`Input.replayPointer`; ws/input-11): `PointerRouter.mute` never
+   * drops it. Absent or false for real pointers.
+   */
+  synthetic?: boolean;
 }
 
 /**
@@ -74,6 +79,7 @@ export function createSample(key: number, device: PointerDevice): PointerSample 
     select: false,
     secondary: false,
     xr: null,
+    synthetic: false,
   };
 }
 
@@ -93,6 +99,8 @@ interface Contact {
   gone: boolean;
   /** Ended by a cancel or a hover leaving: dropped without the last report. */
   cancelled: boolean;
+  /** Made by a replay (`PointerRecord.synthetic`); see `PointerSample.synthetic`. */
+  synthetic: boolean;
   sample: PointerSample;
 }
 
@@ -104,7 +112,8 @@ interface Contact {
  * gesture's aim (the snapped target's centre, else the lifted aim point) instead of the finger.
  *
  * Feed methods (`pointerDown`, `pointerMove`, `pointerUp`, `pointerLeave`, `pointerCancel`,
- * `cancelAll`) take client coordinates and are public for tests and replays.
+ * `cancelAll`) take client coordinates and are public for tests and replays. `synthetic` on
+ * `pointerDown`/`pointerMove` marks a replayed pointer (see `PointerSample.synthetic`).
  */
 export class ScreenPointers implements PointerSource {
   private transform: PointerTransform | null = null;
@@ -136,8 +145,9 @@ export class ScreenPointers implements PointerSource {
     y: number,
     device: Contact['device'] = 'mouse',
     button = 0,
+    synthetic = false,
   ): void {
-    const c = this.contact(id, device, true);
+    const c = this.contact(id, device, true, synthetic);
     if (!c) return;
     c.cx = x;
     c.cy = y;
@@ -148,9 +158,15 @@ export class ScreenPointers implements PointerSource {
     }
   }
 
-  pointerMove(id: number, x: number, y: number, device: Contact['device'] = 'mouse'): void {
+  pointerMove(
+    id: number,
+    x: number,
+    y: number,
+    device: Contact['device'] = 'mouse',
+    synthetic = false,
+  ): void {
     // Touch is a pointer only while down; mouse and pen hover.
-    const c = this.contact(id, device, device !== 'touch');
+    const c = this.contact(id, device, device !== 'touch', synthetic);
     if (!c) return;
     c.cx = x;
     c.cy = y;
@@ -213,6 +229,7 @@ export class ScreenPointers implements PointerSource {
       }
       s.select = c.select || c.tapped;
       s.secondary = c.secondary;
+      s.synthetic = c.synthetic;
       c.tapped = false;
       if (c.gone) this.contacts.splice(i--, 1);
       if (this.claim?.(c.id)) continue;
@@ -249,8 +266,9 @@ export class ScreenPointers implements PointerSource {
   private ownDispatcher: PointerDispatcher | null = null;
 
   private readonly consumer: PointerConsumer = {
-    pointerDown: (p: PointerRecord) => this.pointerDown(p.id, p.x, p.y, p.device, p.button),
-    pointerMove: (p: PointerRecord) => this.pointerMove(p.id, p.x, p.y, p.device),
+    pointerDown: (p: PointerRecord) =>
+      this.pointerDown(p.id, p.x, p.y, p.device, p.button, p.synthetic),
+    pointerMove: (p: PointerRecord) => this.pointerMove(p.id, p.x, p.y, p.device, p.synthetic),
     pointerUp: (p: PointerRecord) => this.pointerUp(p.id, p.x, p.y, p.button),
     pointerLeave: (p: PointerRecord) => this.pointerLeave(p.id),
     pointerCancel: (p: PointerRecord) => this.pointerCancel(p.id),
@@ -268,8 +286,14 @@ export class ScreenPointers implements PointerSource {
     return null;
   }
 
-  private contact(id: number, device: Contact['device'], create: boolean): Contact | null {
+  private contact(
+    id: number,
+    device: Contact['device'],
+    create: boolean,
+    synthetic: boolean,
+  ): Contact | null {
     const found = this.find(id);
+    if (found) found.synthetic = synthetic;
     if (found || !create) return found;
     const c: Contact = {
       id,
@@ -281,6 +305,7 @@ export class ScreenPointers implements PointerSource {
       tapped: false,
       gone: false,
       cancelled: false,
+      synthetic,
       sample: createSample(id, device),
     };
     this.contacts.push(c);
