@@ -193,7 +193,15 @@ export {
   type NotifyTone,
 } from './notify';
 export { createOrbMeter, ensureOrbStyles } from './orb';
-export { createOverlay, type Overlay, type OverlayOptions, type Rect } from './overlay';
+export {
+  CONTROL_ID_ATTR,
+  CONTROL_PAGE_ATTR,
+  controlId,
+  createOverlay,
+  type Overlay,
+  type OverlayOptions,
+  type Rect,
+} from './overlay';
 export {
   defaultPads,
   type PadControl,

@@ -64,6 +64,78 @@ import {
   type RingOptions,
 } from './widgets-3';
 
+/**
+ * The attribute holding an overlay control's stable id (ws/input-12). `ButtonOptions.id` sets
+ * it; any `<button>` may carry it. It wins over the derived id (`controlId`).
+ */
+export const CONTROL_ID_ATTR = 'data-tc-id';
+
+/**
+ * The attribute naming the page a derived control id starts with (ws/input-12): put it on a
+ * screen's container (`data-tc-page="settings"`). Without one, a panel's accessible name (its
+ * `title` or `label`) is the page.
+ */
+export const CONTROL_PAGE_ATTR = 'data-tc-page';
+
+/** The page of a control: the nearest `CONTROL_PAGE_ATTR`, else its panel's accessible name. */
+function controlPage(el: Element): string {
+  const marked = el.closest(`[${CONTROL_PAGE_ATTR}]`);
+  if (marked) return marked.getAttribute(CONTROL_PAGE_ATTR) ?? '';
+  const panel = el.closest('[role="dialog"],[role="alertdialog"]');
+  if (!panel) return '';
+  const label = panel.getAttribute('aria-label');
+  if (label) return label;
+  const by = panel.getAttribute('aria-labelledby');
+  const title = by ? panel.ownerDocument.getElementById(by) : null;
+  return title?.textContent?.trim() ?? '';
+}
+
+/** A control's id before the duplicate suffix: `page/key`, `key` off any page; null with no key. */
+function baseControlId(el: Element): string | null {
+  const own = el.getAttribute(CONTROL_ID_ATTR);
+  if (own) return own;
+  const key = el.getAttribute('aria-label') || el.textContent?.trim() || '';
+  if (!key) return null;
+  const page = controlPage(el);
+  return page ? `${page}/${key}` : key;
+}
+
+/**
+ * The stable id of an overlay control (ws/input-12): what a recording stores when it fires, so
+ * a replay finds the same control by id, never by DOM node. It is the button's
+ * `CONTROL_ID_ATTR` (`ButtonOptions.id`) when set; otherwise `page/key`, where the page is the
+ * nearest `CONTROL_PAGE_ATTR` or the panel's accessible name (omitted outside both) and the key
+ * the button's `aria-label` or text. A derived id shared by earlier buttons in `root` gets
+ * `#2`, `#3`, … in document order. Null for an element with no id and no label (it cannot be
+ * recorded).
+ */
+export function controlId(el: Element, root: ParentNode = el.ownerDocument): string | null {
+  const base = baseControlId(el);
+  if (base === null || el.hasAttribute(CONTROL_ID_ATTR)) return base;
+  let n = 1;
+  for (const other of root.querySelectorAll('button')) {
+    if (other === el) break;
+    if (!other.hasAttribute(CONTROL_ID_ATTR) && baseControlId(other) === base) n++;
+  }
+  return n > 1 ? `${base}#${n}` : base;
+}
+
+/** The first enabled `<button>` in `root` whose `controlId` is `id`, or null. */
+function findControl(root: HTMLElement, id: string): HTMLButtonElement | null {
+  const seen = new Map<string, number>();
+  for (const el of root.querySelectorAll('button')) {
+    let cid = baseControlId(el);
+    if (cid === null) continue;
+    if (!el.hasAttribute(CONTROL_ID_ATTR)) {
+      const n = (seen.get(cid) ?? 0) + 1;
+      seen.set(cid, n);
+      if (n > 1) cid = `${cid}#${n}`;
+    }
+    if (cid === id && !el.disabled) return el;
+  }
+  return null;
+}
+
 /** A rectangle in CSS pixels relative to the overlay's parent (what platform's letterbox gives). */
 export interface Rect {
   x: number;
@@ -211,6 +283,19 @@ export interface Overlay {
   notify(opts: NotifyOptions): Notification;
   /** The notification stack (`dismissAll`, the `menuNav` root); made on first use. */
   readonly notifications: Notifier;
+  /**
+   * Called when a `<button>` in the overlay is clicked (a pointer, Enter or Space, a pad's A
+   * through `PadNav`, or `activate`), before its own handlers, with its stable id (`controlId`;
+   * ws/input-12). Buttons with no id are skipped. `createGame` feeds it to `ctx.input.control`,
+   * so a recording carries it. Returns unsubscribe.
+   */
+  onControl(fn: (id: string, el: HTMLElement) => void): () => void;
+  /**
+   * Click the enabled overlay button whose `controlId` is `id` (ws/input-12): what a replay does
+   * for a recorded control. Its handlers run now, and `onControl` sees it. False when no such
+   * button is in the overlay.
+   */
+  activate(id: string): boolean;
   destroy(): void;
 }
 
@@ -333,6 +418,19 @@ export function createOverlay(opts: OverlayOptions): Overlay {
   let tooltips: Tooltips | null = null;
   let notifications: Notifier | null = null;
   let floats: Floats | null = null;
+
+  // Overlay controls (ws/input-12): one capture listener names every button click by id.
+  const controlSubs = new Set<(id: string, el: HTMLElement) => void>();
+  const onClick = (e: Event): void => {
+    if (controlSubs.size === 0) return;
+    const t = e.target as Element | null;
+    const el = t?.closest?.('button');
+    if (!el || !root.contains(el)) return;
+    const id = controlId(el, root);
+    if (id === null) return;
+    for (const fn of controlSubs) fn(id, el);
+  };
+  root.addEventListener('click', onClick, true);
 
   const overlay: Overlay = {
     root,
@@ -468,7 +566,19 @@ export function createOverlay(opts: OverlayOptions): Overlay {
     notify(o) {
       return overlay.notifications.notify(o);
     },
+    onControl(fn) {
+      controlSubs.add(fn);
+      return () => controlSubs.delete(fn);
+    },
+    activate(id) {
+      const el = findControl(root, id);
+      if (!el) return false;
+      el.click();
+      return true;
+    },
     destroy() {
+      root.removeEventListener('click', onClick, true);
+      controlSubs.clear();
       drag?.destroy();
       drag = null;
       tooltips?.dispose();

@@ -3,7 +3,7 @@
 // engine-v1.0.0 frozen surface: a change here needs a *Breaking* or *Added* line naming this module under CHANGELOG.md `## Unreleased`.
 
 ## CreateGameOptions  (type-only)
-interface CreateGameOptions<A extends string, S extends FlushableSave | null = null> {
+interface CreateGameOptions<A extends string, S extends FlushableSave | null = null, P = any> {
     root?: HTMLElement;
     gpu?: GpuContext;
     clock?: TickClock;
@@ -21,7 +21,7 @@ interface CreateGameOptions<A extends string, S extends FlushableSave | null = n
     sim?: SimOption;
     mixerKey?: string;
     input: {
-        bindings: Bindings<A>;
+        bindings: Partial<Bindings<A>>;
         globalKeys?: Iterable<string>;
         buttonKeys?: Iterable<string>;
         blocked?: () => boolean;
@@ -38,6 +38,9 @@ interface CreateGameOptions<A extends string, S extends FlushableSave | null = n
     blockBrowserZoom?: boolean;
     forceUnsupported?: boolean;
     xr?: XrOptions;
+    pointers?: {
+        testers?: readonly HitTester<P>[];
+    };
 }
 
 ## EngineCtx  (type-only)
@@ -126,4 +129,4 @@ interface XrOptions {
 }
 
 ## createGame
-function createGame<A extends string, S extends FlushableSave | null = null, C = unknown, P = unknown>(opts: CreateGameOptions<A, S>): Promise<EngineCtx<A, NoInfer<S>, C, P> | null>;
+function createGame<A extends string, S extends FlushableSave | null = null, C = unknown, P = unknown>(opts: CreateGameOptions<A, S, P>): Promise<EngineCtx<A, NoInfer<S>, C, P> | null>;

@@ -100,6 +100,16 @@ input.blocked = () => ui.stack.hasModal;       // the game ignores input while a
 - `ui.clientToDesign(clientX, clientY)` maps viewport coordinates to design space, or returns null
   outside the overlay. Platform owns the canonical transform, so prefer that one.
 - The `parent` must be a positioned element (`position: relative`, `fixed` or `absolute`).
+- **Control ids** (ws/input-12). Every overlay button has a stable id, `controlId(el, root?)`: the
+  game's own `ButtonOptions.id` (the `CONTROL_ID_ATTR`, `data-tc-id`, on any `<button>`) when set,
+  else `page/key`. The page is the nearest `CONTROL_PAGE_ATTR` (`data-tc-page`) or the panel's
+  accessible name (a `ui.stack` panel's title), omitted outside both; the key is the button's
+  `aria-label` or text. A derived id shared by earlier buttons gets `#2`, `#3`, … in document
+  order; a button with no id and no label has none (null). `ui.onControl((id, el) => …)` hears
+  every button click in the overlay (mouse, keyboard, pad, `activate`) before its handlers, and
+  `ui.activate(id)` clicks the enabled button with that id (false when there is none).
+  `createGame` wires both to the input, so recordings carry page-button presses by id and a replay
+  presses them on the same frame (the `ui` lane, [input](../input/README.md#recording-and-replay)).
 
 ## Panels: `ui.stack`
 
@@ -182,7 +192,8 @@ await ui.caption.say('Something old is listening.', {
 
 ## Widgets and helpers
 
-- `button(label, onClick, { variant: 'default' | 'primary' | 'ghost', disabled, ariaLabel })`
+- `button(label, onClick, { variant: 'default' | 'primary' | 'ghost', disabled, ariaLabel, id })`;
+  `id` is the stable control id a recording stores (`data-tc-id`, ws/input-12; see *Overlay*).
 - `slider(label, value, onInput, { min, max, step, format })` returns `{ element, input, set }`.
   `format` fills in `aria-valuetext`.
 - `toggle(label, checked, onChange)` returns `{ element, input, set }`.
@@ -946,7 +957,7 @@ hud.update();
 `inventory.test.ts` covers the grid (shape, aria, clamping, hold to pick up, drop, cancel, `canDrop`, context hooks, the card on focus), the drag context (pad walk across grids, both-end `onMove`, pointer thresholds, the long press, `slotsTarget`), `placeCard`, the card, the radial and the context list. `hud.test.ts` covers the HUD widgets (DOM shape, aria, clamping, wrapping, heading offsets, the modal rule, pulse). `ui.test.ts` runs under happy-dom and covers theme var names, overlay mount and scaling,
 client→design mapping, the modal focus trap, Esc, focus restore, inert stacking, non-modal panels,
 backdrop clicks, toast caps and timers, caption typing / hold / skip / queue / reduced motion / suspend / onPlace, and
-the slider's aria-valuetext. `perf.test.ts` covers the monitor's ring, p95, dynamic counter keys
+the slider's aria-valuetext. `overlay-controls.test.ts` covers control ids (derived, `#n`, the game's `id`), `onControl` and `activate` on a rebuilt page (ws/input-12). `perf.test.ts` covers the monitor's ring, p95, dynamic counter keys
 and GPU records against a fake `RenderStats`, and the overlay's DOM under happy-dom.
 `tooltip.test.ts` covers `placeTooltip` (sides, the flip, clamping, the arrow inset), the shared
 element's delay, leave, focus, Escape and hand-over, and a world point riding the anchors;

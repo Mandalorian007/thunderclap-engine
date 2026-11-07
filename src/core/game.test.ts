@@ -5,11 +5,12 @@
  * and the modal input block.
  * The real-browser checks are in e2e/lifecycle.spec.ts and e2e/surface.spec.ts.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import {
   createInputPlayback,
   createSample,
   type InputRecording,
+  type PickHit,
   type PointerSource,
   planeTester,
   screenRay,
@@ -24,6 +25,7 @@ import {
   fakeRendererGpu,
   installGpuGlobals,
 } from '../render/fake-gpu';
+import { button } from '../ui/widgets';
 import { type CreateGameOptions, createGame, type EngineCtx } from './game';
 
 const lost = new Set<(info: GPUDeviceLostInfo) => void>();
@@ -1323,5 +1325,99 @@ describe('createGame: xr', () => {
     expect(ctx.loop.isRunning).toBe(true);
     await ctx.xr.exit();
     expect(exits).toEqual([1]);
+  });
+});
+
+describe('createGame: overlay controls and typed input (ws/input-12)', () => {
+  /** A menu page whose Start button logs the update count it fired before. */
+  function menu(ctx: EngineCtx<'go'>, fired: number[], updates: () => number): void {
+    ctx.ui.stack.push({
+      title: 'Main menu',
+      content: button('Start', () => fired.push(updates())),
+    });
+  }
+
+  it('a page-button press is recorded by id and replays on the same frame', async () => {
+    const recorded = await createGame({
+      ...options([]),
+      input: { ...options([]).input, record: true },
+    });
+    if (!recorded) throw new Error('no ctx');
+    let updates = 0;
+    recorded.hooks.update = () => updates++;
+    const live: number[] = [];
+    menu(recorded, live, () => updates);
+    recorded.loop.tickOnce(1 / 60);
+    recorded.loop.tickOnce(1 / 60);
+    // A DOM click between frames 2 and 3.
+    (recorded.ui.root.querySelector('button') as HTMLButtonElement).click();
+    recorded.loop.tickOnce(1 / 60);
+    recorded.loop.tickOnce(1 / 60);
+    const recording = recorded.input.recorder?.stop();
+    if (!recording) throw new Error('no recording');
+    expect(live).toEqual([2]);
+    // The recording holds the id, not the node.
+    expect(JSON.stringify(recording)).toContain('"ui":["Main menu/Start"]');
+
+    // Replay on a fresh game with a rebuilt page: the handler fires before the same update.
+    document.body.innerHTML = '<main id="root"></main>';
+    const ctx = await createGame({
+      ...options([]),
+      input: { ...options([]).input, replay: recording },
+    });
+    if (!ctx) throw new Error('no ctx');
+    let n = 0;
+    ctx.hooks.update = () => n++;
+    const replayed: number[] = [];
+    menu(ctx, replayed, () => n);
+    for (let i = 0; i < 6; i++) ctx.loop.tickOnce(1 / 60);
+    expect(replayed).toEqual(live);
+
+    // `ctx.replay` started mid-session lands it on the same frame too.
+    document.body.innerHTML = '<main id="root"></main>';
+    const third = await createGame(options([]));
+    if (!third) throw new Error('no ctx');
+    let m = 0;
+    third.hooks.update = () => m++;
+    const again: number[] = [];
+    menu(third, again, () => m);
+    third.replay(recording);
+    for (let i = 0; i < 6; i++) third.loop.tickOnce(1 / 60);
+    expect(again).toEqual(live);
+  });
+
+  it('types: context bindings range over the full action union', async () => {
+    const ctx = await createGame<'go' | 'back'>({
+      root: document.getElementById('root') as HTMLElement,
+      input: { bindings: { go: [{ key: 'Space' }] } },
+    });
+    if (!ctx) throw new Error('no ctx');
+    ctx.input.pushContext('menu', { bindings: { back: [{ key: 'Escape' }] } });
+    // @ts-expect-error `nope` is not an action
+    ctx.input.pushContext('other', { bindings: { nope: [] } });
+    ctx.input.keyDown('Escape');
+    ctx.loop.tickOnce(1 / 60);
+    expect(ctx.input.pressed('back')).toBe(true);
+  });
+
+  it('types: P is inferred from pointers.testers; EngineCtx<A> still takes the ctx', async () => {
+    const ctx = await createGame({
+      root: document.getElementById('root') as HTMLElement,
+      input: { bindings: { go: [{ key: 'Space' }] } },
+      pointers: { testers: [planeTester(0, { id: 7 })] },
+    });
+    if (!ctx) throw new Error('no ctx');
+    expectTypeOf(ctx.pointers.hit).toEqualTypeOf<PickHit<{ id: number }> | null>();
+    // @ts-expect-error the inferred router's targets are `{ id: number }`
+    ctx.pointers.addTester(planeTester(0, 'not an id'));
+    const takes = (c: EngineCtx<'go'>) => c.pointers;
+    expect(takes(ctx)).toBe(ctx.pointers);
+    // The default P stays `any` (1.x freeze): a bare EngineCtx reads its targets untyped.
+    expectTypeOf<NonNullable<EngineCtx<'go'>['pointers']['hit']>['target']>().toBeAny();
+    const bare = await createGame({
+      root: document.getElementById('root') as HTMLElement,
+      input: { bindings: { go: [] } },
+    });
+    expectTypeOf(bare?.pointers.hit).toEqualTypeOf<PickHit<unknown> | null | undefined>();
   });
 });

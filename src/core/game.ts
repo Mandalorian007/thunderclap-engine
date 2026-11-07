@@ -55,6 +55,7 @@ import {
   createTickClock,
   type GamepadLike,
   type Gestures,
+  type HitTester,
   Input,
   type InputPlayback,
   type InputPlaybackOptions,
@@ -151,7 +152,12 @@ export interface GameHooks {
   deviceLost?(info: GPUDeviceLostInfo): void;
 }
 
-export interface CreateGameOptions<A extends string, S extends FlushableSave | null = null> {
+export interface CreateGameOptions<
+  A extends string,
+  S extends FlushableSave | null = null,
+  // biome-ignore lint/suspicious/noExplicitAny: a bare `CreateGameOptions<A, S>` takes testers of any target (ws/input-12)
+  P = any,
+> {
   /**
    * Element the canvas and overlay mount into. Required unless `gpu` is given; a headless game
    * without it mounts into a new detached `<div>` of `document`.
@@ -210,7 +216,12 @@ export interface CreateGameOptions<A extends string, S extends FlushableSave | n
    */
   mixerKey?: string;
   input: {
-    bindings: Bindings<A>;
+    /**
+     * The base action map. `A` is the full action union: the map may leave out actions a pushed
+     * context binds (ws/input-12; `createGame<'jump' | 'back'>({ input: { bindings: { jump } } })`,
+     * then `ctx.input.pushContext('menu', { bindings: { back } })`).
+     */
+    bindings: Partial<Bindings<A>>;
     /** See `InputOptions.globalKeys`. */
     globalKeys?: Iterable<string>;
     /** See `InputOptions.buttonKeys`. */
@@ -269,6 +280,12 @@ export interface CreateGameOptions<A extends string, S extends FlushableSave | n
   forceUnsupported?: boolean;
   /** VR (ws/xr): the reference space and session callbacks `ctx.xr.enter()` uses. */
   xr?: XrOptions;
+  /**
+   * The pointer router's first hit testers (ws/input-12; `PointerRouterOptions.testers`). Their
+   * target type is `P`, so `createGame` infers the router's type from them: `ctx.pointers` is a
+   * `PointerRouter<P>` and its hits' `target`s are typed without naming `P`.
+   */
+  pointers?: { testers?: readonly HitTester<P>[] };
 }
 
 /** `CreateGameOptions.xr`: how `ctx.xr.enter()` sets the session up. */
@@ -337,8 +354,11 @@ export interface GameReplay extends InputPlayback {
 /**
  * Everything noun-free a scene may use. `A` is the game's action names, `S` its save, `C` the
  * ctx the scene stack hands to scenes (the game's own ctx type, which extends this one) and `P`
- * what the pointer router's hits carry (`ctx.pointers`' testers' `target`s; default `any`, so
- * `EngineCtx<A>` takes a ctx whatever its `P`; `createGame` returns `unknown` unless given one).
+ * what the pointer router's hits carry (`ctx.pointers`' testers' `target`s). `createGame` infers
+ * `P` from `pointers.testers` (else `unknown`, or name it: `createGame<A, S, C, P>`). The default
+ * is `any`, so `EngineCtx<A>` takes a ctx whatever its `P` (the router is covariant in its target
+ * since ws/input-12, so `unknown` would too; it stays `any` under the 1.x freeze and may tighten
+ * to `unknown` in 2.0).
  * A game created without `save` gets `S = null`: `ctx.save` is then typed `null`, so a client
  * cannot reach for one. The default `S` is `FlushableSave | null` (ws/api-core), so code written
  * against `EngineCtx<A>` takes a ctx with a save or without one; name the save type
@@ -348,7 +368,7 @@ export interface EngineCtx<
   A extends string = string,
   S extends FlushableSave | null = FlushableSave | null,
   C = unknown,
-  // biome-ignore lint/suspicious/noExplicitAny: `EngineCtx<A>` takes a ctx of any hit target type
+  // biome-ignore lint/suspicious/noExplicitAny: `EngineCtx<A>` takes any `P`; may tighten to `unknown` in 2.0
   P = any,
 > {
   readonly design: { readonly width: number; readonly height: number };
@@ -440,7 +460,7 @@ export async function createGame<
   S extends FlushableSave | null = null,
   C = unknown,
   P = unknown,
->(opts: CreateGameOptions<A, S>): Promise<EngineCtx<A, NoInfer<S>, C, P> | null> {
+>(opts: CreateGameOptions<A, S, P>): Promise<EngineCtx<A, NoInfer<S>, C, P> | null> {
   const design = { width: opts.design?.width ?? 1920, height: opts.design?.height ?? 1080 };
   const root = opts.root ?? (opts.gpu ? globalThis.document?.createElement('div') : undefined);
   if (!root) {
@@ -522,7 +542,10 @@ export async function createGame<
   // While a session runs: its host (frames and the current `XRFrame`) and its surface (eyes).
   let xrHost: XrHost | null = null;
   let xrSurface: XrSurface | null = null;
-  const pointers = createPointerRouter<P>({ camera: () => xrSurface?.head ?? renderer.camera });
+  const pointers = createPointerRouter<P>({
+    camera: () => xrSurface?.head ?? renderer.camera,
+    testers: opts.pointers?.testers,
+  });
   const input = new Input<A>(opts.input.bindings, {
     blocked: extraBlock ? () => ui.stack.hasModal || extraBlock() : () => ui.stack.hasModal,
     globalKeys: opts.input.globalKeys,
@@ -550,6 +573,13 @@ export async function createGame<
   const attachHome = playback ? attachSink : () => input.attach({ pointerTarget: surface.canvas });
   attachHome();
   input.setPointerTransform((x, y) => surface.clientToLogical(x, y));
+  // Overlay controls (ws/input-12): every button click reaches the input by its stable id, so a
+  // recording carries it; a replay's `ui` lane comes back as `'control'` and clicks the button
+  // with that id before the tick's update, on the tick it was clicked live.
+  ui.onControl((id) => input.control(id));
+  input.on('control', (id) => {
+    ui.activate(id);
+  });
   /** The playback `ctx.replay` installed, until it ends or is stopped. */
   let replaying: GameReplay | null = null;
   /** Its `onEnd`, cleared by `stop()` so a stopped or replaced replay never reports an end. */

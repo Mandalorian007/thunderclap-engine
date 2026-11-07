@@ -6,13 +6,16 @@
  * `held`, `released` and `value` per tick. Neither changes how `Input` evaluates bindings.
  *
  * The recording is plain JSON: `{ version: 3, ticks: [...] }`, deltas only. A tick with events
- * is `{ t, k?, b?, p?, w?, r?, d?, g?, ptr?, cx?, cs? }`; a run of ticks with none is `{ t, n }`.
+ * is `{ t, k?, b?, p?, w?, r?, d?, g?, ptr?, cx?, cs?, ui? }`; a run of ticks with none is
+ * `{ t, n }`.
  * Version 2 (ws/input-5) adds the `ptr` lane (every pointer the dispatcher saw, so touch zones,
  * gestures and a second thumb replay) and the observational `cx` and `cs`. Version 3
  * (ws/input-7) stamps each `ptr` entry with its time, so a replayed tap, long-press or
  * double-tap classifies as it did live. Versions 1 and 2 still parse and play. A recording may
  * carry `tickMs`, its tick spacing (ws/input-9), which a playback given a tick `clock` advances
- * it by per fed tick, so a replay at any `speed` keeps game time.
+ * it by per fed tick, so a replay at any `speed` keeps game time. The `ui` lane (ws/input-12)
+ * holds the overlay controls that fired on a tick, by stable id (`Input.control`); a playback
+ * replays them through `Input.replayControl` and an older reader skips them.
  */
 import { type TickClock, wallClock } from './clock';
 import type { Input, InputFeedHook, InputPointerPhase } from './input';
@@ -78,6 +81,12 @@ export interface InputTickEvents {
   cx?: [string, 0 | 1][];
   /** Actions `consume`d this tick, in order (version 2). Observational. */
   cs?: string[];
+  /**
+   * Overlay controls that fired this tick, by stable id, in order (`Input.control`, ws/input-12).
+   * Playback replays them after the other lanes, before the tick's `update()`
+   * (`Input.replayControl`), so a control's handler runs on its recorded tick.
+   */
+  ui?: string[];
 }
 
 /**
@@ -331,6 +340,11 @@ export function createInputRecorder<A extends string>(
       if (!c.cs) c.cs = [];
       c.cs.push(action);
     },
+    control: (id) => {
+      const c = open();
+      if (!c.ui) c.ui = [];
+      c.ui.push(id);
+    },
     gamepads: (pads) => {
       if (capturePads && !samePads(lastPads, pads, padsWritten)) {
         lastPads = snapshotPads(pads);
@@ -514,6 +528,7 @@ export function createInputPlayback<A extends string>(
     }
     if (e.w) input.wheel(e.w[0], e.w[1]);
     if (e.ptr) for (const p of e.ptr) replayPointer(p);
+    if (e.ui) for (const id of e.ui) input.replayControl(id);
     if (e.g) pads = e.g.map(padFromSnapshot);
   };
 
@@ -663,6 +678,9 @@ export function parseRecording(source: string | unknown): InputRecording {
     if (e.g !== undefined && !(Array.isArray(e.g) && e.g.every(isPadSnapshot))) throw bad(i, 'g');
     if (e.rumble !== undefined && !(Array.isArray(e.rumble) && e.rumble.every(isRumble))) {
       throw bad(i, 'rumble');
+    }
+    if (e.ui !== undefined && !(Array.isArray(e.ui) && e.ui.every((u) => typeof u === 'string'))) {
+      throw bad(i, 'ui');
     }
     if (version === 1) return;
     const timed = version === 3;
