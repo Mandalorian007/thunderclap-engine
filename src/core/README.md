@@ -1,5 +1,39 @@
 # engine/core
 
+The game loop, the scene stack, a typed event emitter, matrix helpers and the deterministic utilities: seeded random, hashing, noise, a scheduler and pools. `createGame` (root `@thunderclap/engine`) wires these together for you; a game reaches for this subpath when it needs one of them on its own, and keeps its own state and rules.
+
+## Quick use
+
+<!-- snippet:check -->
+```ts
+import { createRandom, GameLoop } from '@thunderclap/engine/core';
+
+const rng = createRandom(42); // the same seed gives the same run
+let x = 0;
+const loop = new GameLoop(
+  { update: (dt) => { x += dt * rng.float(1, 2); }, render: (alpha) => console.log(x, alpha) },
+  { step: 1 / 60 },
+);
+loop.start();
+loop.paused = true; // update stops, render keeps running
+```
+
+## Entry points
+
+| Name | What it is for |
+| --- | --- |
+| `GameLoop` | fixed-step update plus variable-rate render on the host's frames |
+| `SceneStack` | push, pop and replace scenes, with async preload and transitions |
+| `createRandom(seed)` | a seeded, forkable random stream |
+| `hash2 / hash3` | positional hashes for per-cell randomness |
+| `createNoise(seed)` | value and fbm noise |
+| `createScheduler()` | timers, cooldowns and `every` on game time |
+| `createPool(opts)` | reuse objects instead of allocating per frame |
+| `Emitter` | a typed event emitter |
+| `mat4` | 4×4 column-major matrix helpers |
+
+## Overview
+
 The game loop, the scene stack (with async preload), a typed event emitter, 4×4 matrix helpers and
 the deterministic game utilities: seeded random, positional hashing, noise, a scheduler and pools. `createGame`
 (root `@thunderclap/engine`) wires these together; a game reaches for this subpath when it needs

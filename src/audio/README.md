@@ -1,5 +1,58 @@
 # engine/audio
 
+WebAudio buses, one-shots and loops, spatial voices, music stems and a procedural synth that renders small declarative specs into buffers, so a game can ship no audio files at all. The engine owns the graph, unlocking and pausing; which sounds exist and when they play is the game's. No dependencies.
+
+## Quick use
+
+<!-- snippet:check -->
+```ts
+import { AudioEngine, recipes } from '@thunderclap/engine/audio';
+
+const audio = new AudioEngine();
+audio.attach(); // unlock on the first gesture; pause while the tab is hidden
+audio.define('zap', recipes.zap({ pitch: 1600 }));
+await audio.prepare(); // render every defined sound up front
+audio.play('zap', { pan: -0.3 }); // sfx bus by default
+audio.setVolume('music', 0.5);
+```
+
+## Entry points
+
+| Name | What it is for |
+| --- | --- |
+| `AudioEngine` | buses, voices, unlock and pause; `createGame` gives you `ctx.audio` |
+| `audio.define(name, source)` | register a sound: a synth spec, a recipe or a buffer |
+| `audio.play / audio.loop` | start a one-shot or a loop, returning a `Voice` |
+| `recipes` | ready-made synth specs (`zap`, `click`, `dronePad`, ...) |
+| `persistMixer(audio, opts)` | save volumes and mutes across sessions |
+| `SpatialListener` | positional voices relative to a camera |
+| `createMusic(audio, opts)` | stems with intensity layers |
+| `renderSound(spec)` | render a `SoundSpec` to an `AudioBuffer` yourself |
+
+## Contents
+
+- [Overview](#overview)
+- [Quick start](#quick-start)
+- [Unlock and the iframe](#unlock-and-the-iframe)
+- [Buses](#buses)
+- [Voices](#voices)
+- [Spatial audio](#spatial-audio)
+- [Occlusion](#occlusion)
+- [Doppler](#doppler)
+- [Voice filters](#voice-filters)
+- [Sprites](#sprites)
+- [Music](#music)
+- [Variations](#variations)
+- [Sends](#sends)
+- [Ducking](#ducking)
+- [Background and pause](#background-and-pause)
+- [Zones](#zones)
+- [Synth toolkit](#synth-toolkit)
+- [Testing](#testing)
+- [Types and constants](#types-and-constants)
+
+## Overview
+
 WebAudio buses, one-shots and loops, plus a **procedural synth toolkit**: we ship no audio files, so every sound is a small declarative spec rendered once into an `AudioBuffer` with an `OfflineAudioContext`. No dependencies.
 
 ## Quick start

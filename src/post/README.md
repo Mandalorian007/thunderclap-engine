@@ -1,5 +1,45 @@
 # engine/post
 
+`PostStack` turns the renderer's HDR colour and emissive targets into the final image: bloom, fog, god rays, AO, SSR, TAA, motion blur, depth of field, grading, LUTs and more. Every pass toggles and every parameter changes at runtime without rebuilding pipelines; the look is the game's choice.
+
+## Quick use
+
+<!-- snippet:check -->
+```ts
+import { PostStack } from '@thunderclap/engine/post';
+import type { Renderer } from '@thunderclap/engine/render';
+
+declare const renderer: Renderer;
+
+const post = new PostStack(renderer, { fog: { density: 0.7 } });
+renderer.post = post; // createGame builds ctx.post for you
+post.set({ bloom: { intensity: 1.2 }, grade: { saturation: 1.2 } }); // merges per section
+post.blendTo({ vignette: { intensity: 0.6 } }, 2); // ease to a new look over 2 s
+```
+
+## Entry points
+
+| Name | What it is for |
+| --- | --- |
+| `PostStack` | the pass chain; `renderer.post = stack` |
+| `post.set(patch)` | merge settings per section |
+| `post.blendTo(patch, seconds, ease?)` | move settings over time |
+| `post.settings` | the live `PostSettings`, mutable in place |
+| `postQualityFor(...) / lowPostQuality` | quality tiers for weaker devices |
+| `defaultPostSettings()` | every pass's defaults |
+| `createLutTexture(...)` | a colour-grading LUT |
+
+## Contents
+
+- [Overview](#overview)
+- [Easing between looks](#easing-between-looks)
+- [Passes, in order](#passes-in-order)
+- [Notes](#notes)
+- [XR (ws/xr-post)](#xr-wsxr-post)
+- [Types](#types)
+
+## Overview
+
 `PostStack` turns the renderer's HDR colour and emissive targets into the final swapchain
 image. Every pass can be toggled, and every parameter can change at runtime.
 
@@ -143,16 +183,16 @@ and the 2D goldens are unchanged. TAA, SSR and motion blur need a frame with dep
   (`PostStack.historyResets` counts them). Jitter: `PostStack.taa` is a `Taa(samples)`
   (8 or 16) whose `jitter(frame)` returns the frame's `[x, y]` offset in px from the Halton
   (2, 3) sequence (`halton(index, base)`), zero-mean over a cycle and within ±0.5; the stack
-  samples the raw colour at that sub-pixel UV offset, which is the hand-off until the camera
-  can jitter its projection (see the wishes).
+  jitters each camera's projection by that offset through `renderer.setJitter` (*TAA on camera
+  jitter*, below; the first version sampled the colour at a sub-pixel UV offset instead).
 - **SSR** (`SsrSettings`: `enabled`, `maxSteps` 32, `thickness`, `maxDistance`,
   `roughnessCutoff` 0.6, `intensity`, `fadeEdges`) marches a reflected view-space ray from
   normals-from-depth at half res, `ssrStep(maxDistance, maxSteps)` per step, accepting a hit
   within `thickness` of the depth, and writes the scene colour there faded by
   `ssrEdgeFade(u, v, fadeEdges)` and `ssrRoughnessFade(roughness, cutoff)` and scaled by
-  `intensity`; the composite adds it before bloom. Roughness is one global value (0) for now:
-  every surface the depth covers is a mirror, so the standard material's roughness has no say
-  until a target carries it (see the wishes). `PostStack.ssrActive` reads whether it ran.
+  `intensity`; the composite adds it before bloom. Roughness is per pixel when the target has a
+  rough-metal attachment (*SSR per surface*, below); without one it is a global 0 and every
+  surface the depth covers is a mirror. `PostStack.ssrActive` reads whether it ran.
 - **Auto exposure** (`ExposureSettings`: `mode` `'manual' | 'auto'`, `minEv` -4, `maxEv` 4,
   `speedUp` 3, `speedDown` 1, `keyValue` 0.18, `histogramLow` 0.4, `histogramHigh` 0.95). In
   manual mode `grade.exposure` is the multiplier as before. In auto mode two compute passes
@@ -170,10 +210,12 @@ and the 2D goldens are unchanged. TAA, SSR and motion blur need a frame with dep
   black body at `temperature` (its chromaticity from `planckianXy(out, kelvin)`, Kim et al.
   2002, 1667..25000 K) shifted by `tint`, in linear sRGB. 6500 / 0 is the identity; a lower
   temperature warms the image.
-- **Motion blur** (`MotionBlurSettings`: `enabled`, `intensity` 1, `maxSamples` 8) gathers the
-  scene colour along each pixel's velocity, `motionVelocity(out, reproj, u, v, depth)`: the
-  depth reprojected by the previous view-projection (the matrix TAA keeps), so only the
-  camera's movement blurs (`PostStack.motionBlurActive`).
+- **Motion blur** (`MotionBlurSettings`: `enabled`, `mode`, `intensity` 1, `maxSamples` 8)
+  gathers the scene colour along each pixel's velocity. In `mode: 'camera'` that is
+  `motionVelocity(out, reproj, u, v, depth)`: the depth reprojected by the previous
+  view-projection (the matrix TAA keeps), so only the camera's movement blurs. The default
+  `'object'` reads the target's velocity attachment when it has one, so moving objects blur
+  too (`PostStack.motionBlurActive`).
 - **Lens dirt** (`BloomSettings.dirt?: LensDirtSettings` `{ texture, intensity }`) multiplies
   the bloom term by `1 + dirt × intensity`. `createLensDirtTexture(device, size = 256, seed)`
   paints a procedural `rgba8unorm` map of soft discs and streaks, `lensDirtTexels(size,

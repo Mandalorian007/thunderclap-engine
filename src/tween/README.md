@@ -2,6 +2,29 @@
 
 Numbers over time: a menu slides in, a camera eases to a target, a hit flash fades. `@thunderclap/engine/tween` is a dependency-free tween engine: a full easing table, object-property and callback tweens, sequences and parallel groups, loops, yoyo, delays and springs, ticked by one manager that takes `dt` and allocates nothing after setup. It is not a clock: a game calls `tweens.update(dt)` from its frame or update hook (`hooks.frame` / `hooks.update` in `createGame`, or its own `GameLoop`).
 
+## Quick use
+
+<!-- snippet:check -->
+```ts
+import { createTweens, ease } from '@thunderclap/engine/tween';
+
+const menu = { x: -400, opacity: 0 };
+const tweens = createTweens();
+tweens.to(menu, { x: 0, opacity: 1 }, 0.4, { ease: ease.backOut }).then(() => console.log('in'));
+tweens.update(1 / 60); // from hooks.frame or your own loop
+```
+
+## Entry points
+
+| Name | What it is for |
+| --- | --- |
+| `createTweens()` | the manager; tick it with `update(dt)` |
+| `tweens.to(target, props, seconds, opts?)` | tween object properties |
+| `tweens.value(from, to, seconds, fn)` | tween a number into a callback |
+| `tweens.sequence / parallel / delay` | compose tweens |
+| `tweens.kill(target)` | stop every tween on an object |
+| `ease` | the easing table, plus `ease.spring` |
+
 ## Quick start
 
 ```ts
@@ -30,7 +53,7 @@ tweens.active;       // how many root tweens are still running
 
 `Tweens`:
 
-- `update(dt)`: advance every root tween by `dt` seconds (negative or NaN counts as 0). A tween that completes or is killed during the update, even from a callback, is dropped at the end of it; tweens created during an update start on the next one. Re-entry throws.
+- `update(dt)`: advance every root tween by `dt` seconds (negative counts as 0). A tween that completes or is killed during the update, even from a callback, is dropped at the end of it; tweens created during an update start on the next one. Re-entry throws.
 - `to(target, props, seconds, opts?): Tween`: animate number fields of `target` to the values in `props`. Keys are dotted paths into the object: `'x'`, `'position.0'` (a `Float32Array` or array index), `'style.opacity'`. Every path must exist and hold a number when the tween is created (it throws otherwise). Start values are read when the tween starts, after its delay.
 - `value(from, to, seconds, onUpdate, opts?): Tween`: animate one number, calling `onUpdate(value, tween)` on every step; the last call is exactly `to`.
 - `delay(seconds, opts?): Tween`: nothing for `seconds`. A gap in a sequence, or a timer: `tweens.delay(2).then(fn)`.

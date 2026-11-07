@@ -2,6 +2,32 @@
 
 Typed, batched game events handed to a **sink the game supplies**. The engine has no network sink: no `fetch`, no `sendBeacon` (VISION rule 4: the engine makes no network calls; the game decides where data goes, or whether it goes at all). No dependencies.
 
+## Quick use
+
+<!-- snippet:check -->
+```ts
+import { createAnalytics } from '@thunderclap/engine/analytics';
+
+type MyEvents = { level_start: { level: string }; level_complete: { level: string; ms: number } };
+
+const analytics = createAnalytics<MyEvents>({
+  sink: (events) => console.log(events), // the game decides where events go
+  context: { build: '0.4.1' },
+});
+analytics.emit('level_start', { level: 'intro' }); // props are type-checked
+```
+
+## Entry points
+
+| Name | What it is for |
+| --- | --- |
+| `createAnalytics<E>(opts)` | the batched event client; `sink` is the game's |
+| `analytics.emit(name, props)` | queue one typed event |
+| `analytics.attach(ctx)` | `game_start` now, `session_end` and a flush when the page hides |
+| `analytics.flush()` | hand the queued batch to the sink now |
+| `AnalyticsSink` | `(events) => void | Promise<void>`: where the batch goes |
+| `EngineEvents` | the events the engine itself emits |
+
 ## Usage
 
 ```ts

@@ -1,5 +1,67 @@
 # `@thunderclap/engine/nav`
 
+Navigation on the CPU: grids with A*, flow fields, reachability and steering, and navmeshes baked from triangles with off-mesh links, an ORCA crowd and a byte format. It answers where an agent can go and how; what agents are, and how they move along a path, are the game's. No GPU, no imports from other engine modules, and no allocation per query after warm-up.
+
+## Quick use
+
+<!-- snippet:check -->
+```ts
+import { createNavGrid, createNavPath, findPath, followPath, smoothPath } from '@thunderclap/engine/nav';
+
+const grid = createNavGrid({ width: 64, height: 64, cellSize: 1, walkable: (x, y) => !(x === 10 && y < 40) });
+const path = createNavPath();
+if (findPath(grid, { x: 2, y: 3 }, { x: 40, y: 50 }, path)) smoothPath(grid, path);
+
+const agent = { x: 2.5, z: 3.5 };
+const vel = { x: 0, z: 0 };
+function step(dt: number) {
+  if (followPath(path, agent, 4, 0.3, vel) === 'moving') {
+    agent.x += vel.x * dt;
+    agent.z += vel.z * dt;
+  }
+}
+step(1 / 60);
+```
+
+## Entry points
+
+| Name | What it is for |
+| --- | --- |
+| `createNavGrid(opts)` | walkable cells with costs on the XZ plane |
+| `findPath / smoothPath` | A* into a `NavPath`, then string pulling |
+| `followPath(path, agent, speed, radius, out)` | steer one agent along a path |
+| `createFlowField(grid)` | one build, a direction for every agent |
+| `reachable(...)` | the cells or polygons in a move budget |
+| `steer` | local separation and avoidance |
+| `NavMesh / findMeshPath` | a baked navmesh and polygon A* with a funnel |
+| `createCrowd(...)` | ORCA agents on a navmesh |
+
+## Contents
+
+- [Overview](#overview)
+- [Quick start](#quick-start)
+- [Grid](#grid)
+- [Edge costs](#edge-costs)
+- [Neighbourhood](#neighbourhood)
+- [Paths](#paths)
+- [Flow field](#flow-field)
+- [Incremental edits](#incremental-edits)
+- [Multi-goal fields](#multi-goal-fields)
+- [Reachability](#reachability)
+- [Steering](#steering)
+- [Navmesh](#navmesh)
+- [Off-mesh links](#off-mesh-links)
+- [Crowd](#crowd)
+- [Area types](#area-types)
+- [Dynamic obstacles](#dynamic-obstacles)
+- [Path queue](#path-queue)
+- [Corridors and crowd on the mesh](#corridors-and-crowd-on-the-mesh)
+- [Mesh flow field](#mesh-flow-field)
+- [Serialisation](#serialisation)
+- [Harness and tests](#harness-and-tests)
+
+## Overview
+
 Grid navigation on the XZ plane: a `NavGrid` of walkable cells with costs, A* with string
 pulling into a reusable `NavPath`, a flow field that one build serves every agent with, a path
 follower and local steering. For non-grid worlds, a `NavMesh` baked from triangle geometry

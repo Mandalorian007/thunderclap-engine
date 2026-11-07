@@ -1,5 +1,46 @@
 # engine/anim
 
+Keyframe animation on the CPU: clips sampled into poses, a mixer that layers and cross-fades them, a state graph, IK, retargeting and morph weights, resolved into node and joint matrices. It owns the arithmetic and writes flat `Float32Array`s; uploading them (`render/skin.ts`), choosing clips and wiring gameplay to them are the game's. No GPU and no allocation per frame after setup.
+
+## Quick use
+
+<!-- snippet:check -->
+```ts
+import {
+  AnimationMixer, type AnimationClip, poseToWorld, type Skeleton, WORLD_NODE_FLOATS,
+} from '@thunderclap/engine/anim';
+
+declare const skeleton: Skeleton; // skeletonFromSkin (assets), or built by hand
+declare const walk: AnimationClip;
+declare const run: AnimationClip;
+
+const mixer = new AnimationMixer(skeleton);
+const walking = mixer.play(walk); // loops
+const world = new Float32Array(skeleton.parents.length * WORLD_NODE_FLOATS);
+
+function frame(dt: number, fast: boolean) {
+  if (fast) mixer.crossFade(walking, run, 0.25);
+  mixer.update(dt); // writes mixer.pose
+  poseToWorld(skeleton, mixer.pose, world);
+}
+frame(1 / 60, false);
+```
+
+## Entry points
+
+| Name | What it is for |
+| --- | --- |
+| `AnimationMixer` | plays, layers, weights and cross-fades clips into `mixer.pose` |
+| `AnimationClip / Skeleton` | the data: channels over time, and parents plus rest pose |
+| `createAnimGraph(desc)` | states, blend spaces and conditional transitions over a mixer |
+| `poseToWorld(skeleton, pose, out)` | node world matrices (3×4 each) |
+| `skinMatrices(...)` | joint matrices for a skinned mesh |
+| `twoBoneIk / lookAt` | IK on a resolved pose |
+| `retargetClip(map, clip)` | play one rig's clip on another |
+| `createMorphBlender(...)` | morph-target weights from clips |
+
+## Overview
+
 Keyframe animation with no GPU in it: clips with glTF sampler semantics sampled into poses, a mixer that layers, weights and cross-fades them, a state graph over the mixer (states, 1D blend spaces, conditional transitions), and two resolutions a renderer consumes: node world matrices and skin joint matrices. Flat `Float32Array`s throughout; after setup nothing allocates per frame. No runtime dependency on `render/` (sockets import the `Transform` type only); `render/skin.ts` (ws/skinning) uploads what `skinMatrices` writes.
 
 ## Quick start

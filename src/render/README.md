@@ -1,5 +1,58 @@
 # engine/render
 
+A raw WebGPU renderer for 2D and 3D: HDR scene targets, instanced sprites and meshes, cameras, lights and shadows, a standard PBR material and materials in your own WGSL. A frame records draws and renders them once per camera; what to draw, and when, is the game's. No runtime dependencies.
+
+## Quick use
+
+<!-- snippet:check -->
+```ts
+import { boot } from '@thunderclap/engine/platform';
+import { hex, Renderer } from '@thunderclap/engine/render';
+
+const res = await boot(document.getElementById('app')!, { title: 'My Game' });
+if (res.ok) {
+  const renderer = new Renderer(res.gpu); // 1920×1080 logical px; createGame gives you ctx.renderer
+  res.surface.onResize(({ backbuffer }) => renderer.resize(backbuffer.width, backbuffer.height));
+
+  const frame = renderer.beginFrame(0, 1 / 60);
+  frame.clear(0, 0, 0);
+  frame.sprite(null, { x: 960, y: 540, w: 200, h: 200, tint: hex('#3fe0ff', 2) }); // centre, size, HDR tint
+  renderer.endFrame();
+}
+```
+
+## Entry points
+
+| Name | What it is for |
+| --- | --- |
+| `Renderer` | the device, targets and draw recording |
+| `renderer.beginFrame / endFrame` | open a `Frame`, then submit and present it |
+| `frame.sprite / frame.mesh / frame.drawable` | record a draw |
+| `Camera` | `ortho2d` and `perspective` cameras, picking rays |
+| `renderer.createMaterial(desc)` | a material from your own WGSL |
+| `createStandardMaterial(renderer, desc)` | the PBR material |
+| `Lights` | the lights block: ambient, directional, point and spot |
+| `loadTexture(device, source)` | an image into a GPU texture |
+| `createTileLayer(renderer, opts)` | a tile map as one mesh |
+| `hex(value, intensity?)` | a colour, optionally HDR |
+
+## Contents
+
+- [Overview](#overview)
+- [Frame model](#frame-model)
+- [Setup](#setup)
+- [Drawing](#drawing)
+- [Camera](#camera)
+- [Lighting](#lighting)
+- [Standard material](#standard-material)
+- [Custom materials](#custom-materials)
+- [Textures](#textures)
+- [Lower-level pieces](#lower-level-pieces)
+- [Diagnostics](#diagnostics)
+- [Resolution and timing](#resolution-and-timing)
+
+## Overview
+
 A raw WebGPU renderer for 2D and 3D: HDR scene targets, instanced quads and meshes, depth,
 lights, and materials that take custom WGSL. It has no runtime dependencies.
 
@@ -521,13 +574,12 @@ renderer.render(frame, eye);                              // or renderer.camera 
   `camera.setJitter` works as above. `renderer.jitter` (ws/render-8, read-only) returns the
   installed hook or null, so an owner such as the post stack can check by identity that the
   renderer still holds its hook before clearing it.
-- *Migration (post):* `PostStack` jitters today through `addJitterCamera(camera)` and its own
-  `stepJitter` (`taa.jitter(frameIndex++)` onto each registered camera), which misses cameras it
-  was not told about (a second XR eye, an offscreen view). The post workstream moves it to
-  `renderer.setJitter((i) => taa.jitter(i))` when TAA turns on and `renderer.setJitter(null)`
-  when it turns off, drops `addJitterCamera` (kept as a no-op for a release) and `stepJitter`,
-  and keeps `wantsJitter` only for the target sizing. Until then both paths work: with no hook
-  set the renderer behaves exactly as before.
+- *Migration (post, done in ws/post-6):* `PostStack` used to jitter through
+  `addJitterCamera(camera)` and its own `stepJitter`, which missed cameras it was not told about
+  (a second XR eye, an offscreen view). It now calls `renderer.setJitter(...)` while TAA runs and
+  `renderer.setJitter(null)` when it stops; `addJitterCamera` is a deprecated no-op kept for a
+  release, `stepJitter` is gone, and `wantsJitter` is kept only for the target sizing. With no
+  hook set the renderer behaves exactly as before.
 - `camera.previousViewProj` and `camera.previousView` (`Float32Array` 16 each, column-major)
   hold the unjittered matrices of the last frame this camera rendered: the renderer calls
   `camera.recordHistory()` at the start of each view, before the camera is read, so a camera
@@ -769,7 +821,7 @@ frame.mesh(mesh, skin, transform, { tint: [1, 0.9, 0.8, 1] });
 
 - `createStandardMaterial(renderer, desc: StandardMaterialDesc): Material` returns an ordinary
   `Material` (`setUniforms`, `setTexture`, `perDrawUniforms` off). Every field of the desc is
-  optional; `label` defaults to `'standard'`. Defaults: `baseColorFactor` [1,1,1,1], `metallic`
+  optional; `label` defaults to `name`, else `'standard'`. Defaults: `baseColorFactor` [1,1,1,1], `metallic`
   0, `roughness` 0.5, `normalScale` 1, `alphaCutoff` 0.5, `emissiveFactor` [1,1,1] when an
   `emissive` map is given and [0,0,0] otherwise, `alphaMode` `'opaque'`, `doubleSided` false.
 - Per-instance: `tint` multiplies the base colour (and vertex colour), `uv` picks the sub-rect
@@ -1195,7 +1247,7 @@ that device, or reports the typed error.
   | 12 | `weights: vec4f` (`unorm8x4`) | vertex | skinned |
   | 13 | `tangent: vec4f` (xyz along +u, w handedness) | vertex | tangent |
 
-  Locations 14 and 15 are free for a custom layout.
+  Location 14 is `uv1` in `VERTEX_LAYOUT_3D_UV2`; location 15 is free for a custom layout.
 - Dynamic meshes: `capacity: { vertices, indices }` reserves room (a mesh may start empty, with
   just a capacity); `mesh.capacity` (a `MeshCapacity`) reads it. `mesh.update(u: MeshUpdate)`
   (`{ vertices?, indices?, vertexCount?, indexCount? }`) takes any `ArrayBufferView`s and writes them with `queue.writeBuffer` straight

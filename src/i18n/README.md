@@ -5,6 +5,34 @@ placeholders, plurals and select, numbers, dates, durations and lists through `I
 chain, lazy table loading and a runtime locale swap the UI subscribes to. No network: a lazy
 table is whatever promise the game hands over (usually `import('./ru.json')`). No game nouns.
 
+## Quick use
+
+<!-- snippet:check -->
+```ts
+import { createI18n, negotiateLocale } from '@thunderclap/engine/i18n';
+
+const i18n = createI18n({
+  locale: negotiateLocale(['en', 'de']),
+  fallback: 'en',
+  tables: {
+    en: { start: 'Start', items: '{count, plural, one {# item} other {# items}}' },
+    de: { start: 'Los', items: '{count, plural, one {# Gegenstand} other {# Gegenstände}}' },
+  },
+});
+i18n.t('items', { count: 3 }); // "3 items"
+```
+
+## Entry points
+
+| Name | What it is for |
+| --- | --- |
+| `createI18n(desc)` | tables, fallback chain and the current locale |
+| `i18n.t(key, args?)` | a formatted message |
+| `negotiateLocale(available)` | the best table for `navigator.languages` |
+| `formatMessage / parseMessage` | ICU-style messages outside an `I18n` |
+| `directionOf(locale)` | `ltr` or `rtl` |
+| `compileTable(table)` | parse a table up front |
+
 ## Usage
 
 ```ts

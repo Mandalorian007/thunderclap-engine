@@ -1,5 +1,45 @@
 # `@thunderclap/engine/voxel`
 
+Block grids into chunk meshes and onto the screen: a `VoxelGrid` with per-chunk dirty flags, a greedy mesher with baked AO that runs in a Worker, a chunk renderer that culls and remeshes in place, a picking ray and the WGSL prelude for block materials. The game ships the blocks: what each id is, which texture layer each face shows and what a click does. No allocation per frame after the first remeshes.
+
+## Quick use
+
+<!-- snippet:check -->
+```ts
+import { createVoxelChunks, createVoxelGrid, createVoxelHit, raycastVoxels } from '@thunderclap/engine/voxel';
+import type { Camera, Frame, Material, Renderer } from '@thunderclap/engine/render';
+
+declare const renderer: Renderer;
+declare const material: Material; // a block material built on VOXEL_WGSL (Quick start below)
+declare const frame: Frame;
+declare const camera: Camera;
+
+const STONE = 1;
+const grid = createVoxelGrid({ sizeX: 64, sizeY: 32, sizeZ: 64, chunk: 16 });
+grid.fill((_x, y) => (y < 8 ? STONE : 0)); // block ids are the game's
+const chunks = createVoxelChunks(renderer, grid, { material, layerOf: (block) => block - 1 });
+
+chunks.update(); // each tick: remesh dirty chunks
+chunks.draw(frame, camera); // each view: cull and draw
+
+const hit = createVoxelHit();
+if (raycastVoxels(grid, 32, 20, 32, 0, -1, 0, 8, hit)) grid.set(hit.x, hit.y, hit.z, 0);
+```
+
+## Entry points
+
+| Name | What it is for |
+| --- | --- |
+| `createVoxelGrid(opts)` | block ids in chunks with dirty flags |
+| `createVoxelChunks(renderer, grid, opts)` | one mesh per non-empty chunk; `update` and `draw` |
+| `raycastVoxels(grid, origin, dir, max, hit)` | the block under a ray, and the cell before it |
+| `meshChunk(...)` | the greedy mesher, pure |
+| `createVoxelMesher / installVoxelMesherWorker` | the two ends of the Worker bridge |
+| `VOXEL_WGSL` | the WGSL prelude a block material reads |
+| `deserializeVoxelGrid(bytes)` | a grid back from `grid.serialize()` |
+
+## Overview
+
 Block grids into chunk meshes and onto the screen. A `VoxelGrid` of block ids with a dirty flag
 per chunk, a greedy mesher with baked ambient occlusion (`meshChunk`: pure arithmetic, so it
 runs in a Worker), the Worker bridge around it (`createVoxelMesher` on the page,
@@ -76,7 +116,7 @@ Without a `mesher` option the chunks mesh on the main thread (a microtask per ch
 ## Grid
 
 `createVoxelGrid({ sizeX, sizeY, sizeZ, chunk = 16 })` (`VoxelGridOptions`) holds one byte per
-cell (`data`, x fastest, then z, then y: `index(x, y, z)`), block 0 being air. The sizes need
+cell (`data`, x fastest, then y, then z: `index(x, y, z)`), block 0 being air. The sizes need
 not be multiples of `chunk`; the last chunk on an axis is ragged. `get(x, y, z, outside = 0)`
 returns `outside` beyond the grid; `set(x, y, z, block)` returns whether the cell changed and
 marks its chunk dirty, and a neighbouring chunk too when the cell lies on a border (the

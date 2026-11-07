@@ -1,5 +1,56 @@
 # engine/assets
 
+Turns asset bytes into engine objects: glTF 2.0 (meshes, skins, animations, lights, cameras, variants, quantized and meshopt data), KTX2, atlases, bundles and a reference-counted cache. The game fetches the bytes and decides what to load when; the engine parses and uploads them. No dependencies and no network.
+
+## Quick use
+
+<!-- snippet:check -->
+```ts
+import { loadGltf, parseGltf } from '@thunderclap/engine/assets';
+import type { Frame, Renderer } from '@thunderclap/engine/render';
+
+declare const renderer: Renderer;
+declare const frame: Frame;
+
+const bytes = await (await fetch('scene.glb')).arrayBuffer(); // the game's fetch, not ours
+const scene = await loadGltf(renderer, parseGltf(bytes));      // meshes, transforms, textures, materials
+scene.draw(frame);                                             // each frame, inside render
+```
+
+## Entry points
+
+| Name | What it is for |
+| --- | --- |
+| `parseGltf(bytes)` | `.glb` or `.gltf` into an engine-free `GltfDocument` |
+| `loadGltf(renderer, doc, opts?)` | upload a document into a drawable `GltfScene` |
+| `skeletonFromSkin(...)` | an `anim` skeleton from a glTF skin |
+| `parseKtx2(bytes)` | a KTX2 container and its levels |
+| `createAssetCache(opts?)` | reference-counted loads, shared between scenes |
+| `defineManifest / createBundle` | a typed list of assets, loaded with progress |
+| `packAtlas / createAtlasTexture` | pack images into one atlas texture |
+
+## Contents
+
+- [Overview](#overview)
+- [glTF in one call](#gltf-in-one-call)
+- [The document](#the-document)
+- [Materials](#materials)
+- [Morph targets](#morph-targets)
+- [Skins and animations](#skins-and-animations)
+- [Quantized meshes](#quantized-meshes)
+- [Meshopt](#meshopt)
+- [Lights and cameras](#lights-and-cameras)
+- [Material variants (cosmetics)](#material-variants-cosmetics)
+- [KTX2](#ktx2)
+- [Asset cache](#asset-cache)
+- [Bundles](#bundles)
+- [Baked bytes](#baked-bytes)
+- [Atlas](#atlas)
+- [Not yet](#not-yet)
+- [Demo](#demo)
+
+## Overview
+
 Asset formats the engine turns into its own objects. Today: glTF 2.0 geometry, skins,
 animations, lights, cameras and material variants (quantized and meshopt-compressed meshes
 included), KTX2 containers, and a reference-counted asset cache. No dependencies, no network: the game fetches the bytes, the engine parses and
@@ -41,7 +92,7 @@ cutoff in `params.x`, `BLEND` as alpha blend). Options:
 | `LoadGltfOptions` | |
 | --- | --- |
 | `resources` | `Record<uri, ArrayBuffer | GltfImageSource>` for `doc.externalUris`; a missing image uri throws `image i: missing external resource "uri"` |
-| `material` | one `Material` for every draw; `scene.materials` stays empty, no textures are made, and the file's materials are only read for tint and cutoff |
+| `material` | one `Material` for every draw; `scene.materials` stays empty, the textures are still made (`scene.textures`) for the game to bind, and the file's materials are only read for tint and cutoff |
 | `lit` | `GltfLitMode`: `'standard'` (default, `createStandardMaterial`) or `'lit'` (`GLTF_LIT_WGSL`) |
 | `palette` | a `SkinPalette`: skinned primitives are built in `VERTEX_LAYOUT_SKINNED` and every material binds it (`skin`); without one they are built in `VERTEX_LAYOUT_3D` with the joints and weights left on the document |
 | `label` | prefix for GPU labels (default `gltf`) |
@@ -87,7 +138,7 @@ palette).
 - `textures: GltfTexture[]`: `name`, `source` (image index), `sampler: GltfSampler`
   (`magFilter` / `minFilter: GltfFilter` `'nearest' | 'linear'`, `mipmapFilter` the same or null
   when the file's `minFilter` has no mip mode, `wrapS` / `wrapT: GltfWrap` `'repeat' |
-  'mirror' | 'clamp'`; glTF defaults: linear, linear mips, repeat), and the older `wrapS`,
+  'clamp-to-edge' | 'mirror-repeat'`; glTF defaults: linear, linear mips, repeat), and the older `wrapS`,
   `wrapT`, `magFilter` numbers; `images: GltfImage[]`: `name`, `bytes` (embedded or `data:`),
   `mimeType`, `uri` (external).
 
@@ -136,7 +187,7 @@ specification says, and the engine's material has the same slots.
   maps upload as `rgba8unorm-srgb`, metallic-roughness, normal and occlusion maps as
   `rgba8unorm` (labelled `<label>:image<i>:linear`). An image used both ways is uploaded
   twice; `scene.textures` lists them in image order, sRGB before linear. `lit: 'lit'` uploads
-  base colour maps only.
+  base colour and emissive maps only.
 - **Samplers.** The standard material has one sampler for its five maps, so the loader takes
   the base colour texture's (else the first slot with a texture) and maps it to the engine's set:
   nearest → `'nearest-mip-clamp'` / `'nearest-clamp'`, both wraps clamp → `'linear-clamp'`,

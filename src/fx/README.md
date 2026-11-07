@@ -1,5 +1,53 @@
 # engine/fx
 
+GPU particles and effects, trails, billboards, decals, a sky, water, debug lines and allocation-free light flicker. Each is a drawable the game places, emits and tunes; what an effect means is the game's. No dependencies.
+
+## Quick use
+
+<!-- snippet:check -->
+```ts
+import { ParticleEmitter, ParticleSystem } from '@thunderclap/engine/fx';
+import type { Frame, Renderer } from '@thunderclap/engine/render';
+
+declare const renderer: Renderer;
+declare const frame: Frame;
+
+const particles = new ParticleSystem(renderer, { capacity: 32768 }); // createGame builds ctx.particles
+particles.emit({ x: 960, y: 540, shape: { kind: 'circle', radius: 20 }, colorStart: [4, 2, 0.5, 1] }, 64);
+const embers = new ParticleEmitter(particles, { x: 400, y: 900, colorStart: [3, 1, 0.2, 1] }, 30);
+embers.update(1 / 60); // 30 particles per second
+frame.drawable(particles); // each frame, inside render
+```
+
+## Entry points
+
+| Name | What it is for |
+| --- | --- |
+| `ParticleSystem` | the GPU particle pool; `emit(params, count)` |
+| `ParticleEmitter` | a steady rate or bursts into a system |
+| `createEffect(...)` | a declarative multi-emitter effect (`HIT_SPARK_EFFECT`, ...) |
+| `Trail / TrailBatch` | ribbons behind moving points |
+| `createBillboards(...)` | camera-facing quads and bars in world space |
+| `Decals` | projected decals on the depth buffer |
+| `Sky` | a procedural sky and stars |
+| `createDebugDraw(...)` | lines, boxes and axes for debugging |
+| `flicker / pulse` | light intensity over time, no allocation |
+
+## Contents
+
+- [Overview](#overview)
+- [Particles](#particles)
+- [Trails](#trails)
+- [Debug draw](#debug-draw)
+- [Billboards](#billboards)
+- [Light helpers](#light-helpers)
+- [Sky](#sky)
+- [Decals](#decals)
+- [fx-4 demo](#fx-4-demo)
+- [Water](#water)
+
+## Overview
+
 GPU particles and allocation-free light helpers. No dependencies.
 
 ## Particles
@@ -629,7 +677,7 @@ const y = waterHeight(water, boat.x, boat.z); // the surface under something flo
   With `readsDepth: true` (ws/render-hooks, `harness/water.html?hook=1`) the water makes no
   copy: the renderer splits the view's scene pass at the water and hands it this frame's opaque
   depth through `afterOpaque`, so one view gives a true shoreline; in a view that does not split
-  the surface is deep everywhere. Decals will use the same hook when they land (ws/decals).
+  the surface is deep everywhere. `Decals` use the same hook (`readsDepth` defaults to true for `box` and `auto`).
 - Uploads: one params block (`WATER_PARAMS_FLOATS` floats) per frame in `prepare`, plus the
   depth copy pass. No allocation per frame. `destroy()` releases the mesh, buffer and copy.
 - `WATER_WGSL` (the surface, `WGSL_GLOBALS` + `WGSL_LIGHTS` + `WGSL_NOISE` + `WGSL_PBR`, group 1
