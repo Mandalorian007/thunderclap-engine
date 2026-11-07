@@ -34,6 +34,8 @@ const roll = (x: number, y: number, k = 0) => hash2f(SEED + k, x, y);
 
 export const HALF = 30;
 const TILE = 2;
+/** The floor tiling's offset on x and z: a quarter tile, so no seam runs along an axis. */
+const TILE_SHIFT = TILE / 4;
 const WALL_LEN = 4;
 const WALL_H = 3.6;
 const WALL_T = 1;
@@ -182,20 +184,27 @@ export function buildCourtyard(renderer: Renderer, mats: CourtyardMaterials): Co
   };
 
   // ── Floor: 29 × 29 tiles, each its own shade; a few cracked dark ones ───
-  // Tiles centre on even coordinates (-28..28), so the courtyard's axes (the hero's spawn at
-  // x = 0) run through tile middles, not a grout gap; the outer 1 m under the walls is the bed.
+  // The stone texture is 2 × 2 slabs per tile, so a grout line runs through each tile's middle
+  // as well as the gap at its edge: every metre of the floor carries a seam. The tiling is
+  // offset a quarter tile (TILE_SHIFT) on both axes, so the courtyard's axes (the hero's spawn
+  // at x = 0) fall half a metre from the nearest gap and the nearest grout line. The last
+  // row and column slide under the far walls; a strip of half-width tiles fills the near side.
   const tiles: Put[] = [];
   const n = (HALF * 2) / TILE - 1;
+  const at = (i: number) => -HALF + TILE + TILE_SHIFT + i * TILE;
+  const tint = (i: number, j: number, k: number): readonly [number, number, number] => {
+    const shade = 0.78 + 0.26 * roll(i, j, k + 1);
+    const dark = roll(i, j, k) < 0.1 ? 0.55 : 1;
+    return [shade * dark * 1.02, shade * dark * 0.96, shade * dark * 1.04];
+  };
   for (let j = 0; j < n; j++) {
     for (let i = 0; i < n; i++) {
       const h = roll(i, j);
-      const shade = 0.78 + 0.26 * roll(i, j, 1);
-      const k = h < 0.1 ? 0.55 : 1;
       tiles.push({
-        x: -HALF + TILE + i * TILE,
+        x: at(i),
         y: -0.15,
-        z: -HALF + TILE + j * TILE,
-        tint: [shade * k * 1.02, shade * k * 0.96, shade * k * 1.04],
+        z: at(j),
+        tint: tint(i, j, 0),
         yaw: (Math.floor(h * 4) * Math.PI) / 2,
       });
     }
@@ -203,6 +212,22 @@ export function buildCourtyard(renderer: Renderer, mats: CourtyardMaterials): Co
   list('floor-tile', box({ size: [TILE - 0.06, 0.3, TILE - 0.06] }), mats.floor, tiles, {
     castShadow: false,
   });
+  // The near strip: half-width tiles (half the texture across) centred a tile and a half
+  // before the first, along x and, turned a quarter, along z; each runs from under the wall to
+  // the usual gap. Their 0.5 × 0.5 m corner inside the walls shows the grout bed.
+  const edge: Put[] = [];
+  const near = at(0) - TILE * 0.75;
+  for (let i = 0; i < n; i++) {
+    edge.push({ x: near, y: -0.15, z: at(i), tint: tint(-1, i, 6) });
+    edge.push({ x: at(i), y: -0.15, z: near, yaw: Math.PI / 2, tint: tint(i, -1, 6) });
+  }
+  list(
+    'floor-edge',
+    box({ size: [TILE / 2 - 0.06, 0.3, TILE - 0.06], uvScale: [0.5, 1] }),
+    mats.floor,
+    edge,
+    { castShadow: false },
+  );
   // The grout bed under the tiles (the gaps show it, not the clear colour).
   list(
     'grout-bed',
