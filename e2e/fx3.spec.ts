@@ -6,9 +6,11 @@
  *
  * - `?sheet`: the sheet is sampled (the parked sprite's pixel differs from the sky) and the tile
  *   advances (the sampled colour changes while `tileSeen` walks 5..15);
- * - `?forces`: `meanRadius` (the CPU shadow of the same forces) shrinks, and the attractor's
- *   pixel lights as the GPU particles gather on it (sampled every 50 ms);
- * - `?collide`: rain over a slab stays on it (`belowSlab` stays under 0.5% of `alive`);
+ * - `?forces`: the GPU particles, read back every 500 ms (`debugReadback`), gather within 0.3
+ *   of the attractor within 3 s (`radiusSettledAt`); `shadowRadius` (the CPU shadow of the same
+ *   forces) shrinks, and the attractor's pixel lights (sampled every 50 ms);
+ * - `?collide`: rain over a slab stays on it (`belowSlab` stays under 0.5% of `alive`), and the
+ *   drops resting on it do not creep (`meanDriftPerSec`, from the readbacks, under 0.05);
  * - `?sub`: particles are alive after every parent has died;
  * - `?effect`: the attached effect has one instance and live particles;
  * - every mode boots with no GPU error.
@@ -142,8 +144,17 @@ test('forces: the attractor pulls the shell in', async ({ page, wrapper }) => {
   // The shadow is born on the shell at radius 3 (and reset there each burst): half that proves
   // the pull. `meanRadius` moves every frame, so it is only ever polled.
   await expect
-    .poll(async () => (await read()).meanRadius, { message: 'mean radius shrinks' })
+    .poll(async () => (await read()).shadowRadius, { message: 'shadow radius shrinks' })
     .toBeLessThan(1.5);
+  // Measured on the GPU (ws/fx-6): the page reads the particles back every 500 ms and records
+  // the first shell's age at the first readback with a mean radius under 0.3 (page state, so a
+  // slow poll cannot miss it). Measured: settled at 1.57 s (0.19), then 0.06..0.11 to 6 s; the
+  // CPU shadow predicts 0.92 at 1 s and 0.08 at 2 s.
+  await expect
+    .poll(async () => (await read()).radiusSettledAt, { message: 'shell settles' })
+    .toBeGreaterThan(0);
+  const settled = await read();
+  expect(settled.radiusSettledAt).toBeLessThanOrEqual(3);
   // The GPU particles gather into a blob on the same point (a linear pull under drag 3, ws/fx-5):
   // after the first second the 5×5 centre was lit in every 50 ms sample over 6 s on all eight
   // rows (1423 of 1423, meanRadius 0.07..0.15). Before, a constant pull swung them through it
@@ -180,6 +191,16 @@ test('collide: rain over the slab stays on it', async ({ page, wrapper }) => {
   // 3750..4141 alive. 0.5% (about 20 drops) leaves room for a stray at a silhouette edge and
   // still fails the old creep, let alone a broken collide (near 75%).
   expect(s.belowSlab).toBeLessThan(s.alive * 0.005);
+  // Measured on the GPU (ws/fx-6): drops within 0.1 of the slab top in two readbacks 500 ms
+  // apart, matched slot by slot, moved hypot(dx, dz) over the simulated time between. Measured
+  // 0.13 units/s (+x 0.075) before the collide normal came from pixel centres, 0.0008..0.0009
+  // after, over about 2000 resting drops per sample.
+  await expect
+    .poll(async () => (await read()).restingDrops, { message: 'resting drops measured' })
+    .toBeGreaterThan(100);
+  const rest = await read();
+  expect(rest.meanDriftPerSec).toBeGreaterThanOrEqual(0);
+  expect(rest.meanDriftPerSec).toBeLessThan(0.05);
   expect(s.gpuErrors).toBe(0);
   expect(errors).toEqual([]);
 });

@@ -743,8 +743,18 @@ fn scene_at(px: vec2i, dims: vec2i) -> vec3f {
   let near = unproject(ndc.xy, 0.0);
   let hit = unproject(ndc.xy, d);
   let ray = normalize(hit - near);
-  let sx = scene_at(px + vec2i(1, 0), dims) - hit;
-  let sy = scene_at(px + vec2i(0, 1), dims) - hit;
+  // The normal from pixel centres only: \`hit\` sits at the particle's sub-pixel position with the
+  // centre's depth, off the surface by that offset times the depth slope, so a difference taken
+  // from it tilts the normal by a fixed amount for a resting particle and the push slid it
+  // sideways every frame (0.13 units/s on the fx3 slab, read back by ws/fx-6). Per axis the
+  // shorter one-sided difference, so a silhouette neighbour does not bend it.
+  let c = scene_at(px, dims);
+  let rx = scene_at(px + vec2i(1, 0), dims) - c;
+  let lx = c - scene_at(px - vec2i(1, 0), dims);
+  let ry = scene_at(px + vec2i(0, 1), dims) - c;
+  let ly = c - scene_at(px - vec2i(0, 1), dims);
+  let sx = select(lx, rx, dot(rx, rx) < dot(lx, lx));
+  let sy = select(ly, ry, dot(ry, ry) < dot(ly, ly));
   var n = cross(sx, sy);
   if (dot(n, n) < 1e-12) { n = -ray; } else { n = normalize(n); }
   if (dot(n, ray) > 0.0) { n = -n; }
