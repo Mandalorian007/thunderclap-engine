@@ -84,8 +84,13 @@ export interface ArpgDemoState {
   worldView: number;
   /** The `fill` region's share of the layout's area (the world's rect), 0..1. */
   worldArea: number;
-  /** The health and mana orbs' regions: `['left', 'right']` on phone-landscape, else bottom. */
+  /**
+   * The health and mana orbs' regions (`meter.region`): `['left', 'right']` on phone-landscape,
+   * else bottom. The layout moves the live meters (`MeterOptions.place`, ws/ui-11).
+   */
   orbRegions: [string, string];
+  /** The health orb's drawn diameter, CSS px, as of the last re-layout (a `FormSize`, ws/ui-10). */
+  orbPx: number;
   /**
    * The LOD level each ghoul (by index, its `setKey` key) drew at last frame
    * (`renderer.lodLevelOf` on the ghoul list), -1 when it did not draw.
@@ -100,6 +105,22 @@ export interface ArpgDemoState {
   deathLodShifts: number;
   /** The ghoul list keeps per-instance previous matrices (`velocity: true`, `?blur` only). */
   ghoulVelocity: boolean;
+  /** True while "watch replay" plays the take back (`ctx.replay`). */
+  replaying: boolean;
+  /** Replays started since load. */
+  replays: number;
+  /** Replays that ran to their end (`ReplayOptions.onEnd`). */
+  replayEnds: number;
+  /** Live fixed steps since boot (what "watch replay" would play), counted as they run. */
+  takeTicks: number;
+  /** Ticks in the recording the last replay played (`recordingLength`): `takeTicks` then. */
+  replayLength: number;
+  /**
+   * The hero's feet when the last replay was started and when it ended (null before): a
+   * faithful replay ends where the player stood when they pressed it.
+   */
+  replayFrom: [number, number, number] | null;
+  replayTo: [number, number, number] | null;
 }
 
 /** Test helpers (functions, so they live beside `__demo` rather than in it). */

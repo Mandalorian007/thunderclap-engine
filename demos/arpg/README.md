@@ -57,21 +57,37 @@ Q whirls, E dashes, R casts a nova; keys 1–3 or the top buttons swap gear.
 - Phone-landscape side rails (ws/adoption-5, ws/ui-9's corner rule): the map and the mana orb
   share a content-sized `right` rail (map at the top, orb at the foot) and the health orb sits at
   the foot of the `left` rail, so the bottom bar holds only the ability row (64 → 52 px) and the
-  world band grows 64–70% → 68–73% of the height (`__demo.orbRegions`). A meter has no
-  per-form-factor region, so the demo remakes the two orbs at their current values when the form
-  factor crosses into or out of phone-landscape. Desktop, tablet and phone-portrait keep the
-  bottom bar and the `right` / card-lane map.
+  world band grows 64–70% → 68–73% of the height (`__demo.orbRegions`). Since ws/adoption-6 the
+  orbs are built once with `MeterOptions.place` maps (`{ 'phone-landscape': 'left' | 'right',
+  default: 'bottom' }`) and the layout moves them; their `size` is a `FormSize` (112 theme px,
+  96 on phone-landscape: 48 CSS px there, so the left rail drops to the form's 56 px track and
+  the world gains about 1% of the area on every phone). The minimap holds its own size in a
+  content rail (ws/ui-11), so the demo no longer pins a `min-width` on it. `__demo.orbPx` is the
+  drawn diameter. Desktop, tablet and phone-portrait keep the bottom bar and the `right` /
+  card-lane map, their world rects unchanged.
+- Watch replay (P, or the top bar's button): everything since boot replays from a rewound start
+  (`ctx.replay(recording, { onEnd })`, ws/core-6) and ends on the spot the player stood on, tick
+  for tick; then play resumes and a new take is recorded after it, so a second replay plays
+  both. The input records from boot (`input: { record: true }`); ground clicks reach the demo
+  through a `PointerConsumer` on `input.dispatcher` and the wheel through `input.pointer.wheelY`,
+  so both replay. The gear buttons and minimap taps are overlay DOM, not input: the demo logs
+  them per tick in a side lane and re-applies them on the same ticks. The rewind resets the rng
+  (`Random.state`), the hero, the ghouls, the crowd, cooldowns and gear. `__demo.replays`,
+  `replayEnds`, `replayLength`, `replayFrom` and `replayTo` publish it.
 
 ## Known limits
 
 The ghoul LOD drops boxes rather than segments: the body is boxes, with nothing to lower. LOD
 lists are copied into the frame upload each frame; with `?blur` the ghoul list keeps previous
-matrices (`velocity: true`), but `createGame` builds its renderer without a velocity target, so
-object motion blur still falls back to the camera's motion. Gear swapping stays by hand: the three
-sets are procedural `geom` meshes, not a glTF, and they differ in shape as well as colour, while
-`loaded.setVariant` swaps only the materials of a loaded glTF (`KHR_materials_variants`). The hero
-is a crowd agent with zero preferred velocity, so ghouls part around it but it does not push them.
-The orbs keep one size per form's units (56 CSS px on phones; a per-form-factor meter size is
-ws/ui-10), so on phone-landscape the two rails take 64 + 108 px of the width and the world band
-stays near 0.68 on a 320 px-tall phone. Phone-portrait keeps the map in the card lane: rails there
-would leave the world about 218 of 390 px of width.
+matrices (`velocity: true`), but the demo still builds its renderer without a velocity target, so
+object motion blur falls back to the camera's motion: with `createGame({ aux: { velocity: true }
+})` the scene pass has three colour targets while the flame particles' pipeline (built on
+`renderer.sceneFormats`) has two, a validation error every frame. Gear swapping stays by hand:
+the three sets are procedural `geom` meshes, not a glTF, and they differ in shape as well as
+colour, while `loaded.setVariant` swaps only the materials of a loaded glTF
+(`KHR_materials_variants`). The hero is a crowd agent with zero preferred velocity, so ghouls part
+around it but it does not push them. Phone-portrait keeps the map in the card lane: rails there
+would leave the world about 218 of 390 px of width. The replay covers mouse, keys and wheel; the
+touch stick does not replay (`ctx.replay` feeds a 0 × 0 sink, so a replayed touch lands outside
+the zone rect), and the overlay buttons go through the demo's side lane rather than the
+recording.
