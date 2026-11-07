@@ -10,7 +10,7 @@ export { createNoise } from './noise';
 export type { Pool, PoolOptions } from './pool';
 export { createPool } from './pool';
 export type { NumberSink, Random, Seed } from './random';
-export { createRandom } from './random';
+export { createRandom, seedKey } from './random';
 export type { Scene, TransitionListener, TransitionPhase } from './scene';
 export { SceneStack } from './scene';
 export type { Cooldown, EveryOptions, Scheduler, TimerHandle } from './timer';
