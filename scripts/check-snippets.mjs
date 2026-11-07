@@ -5,7 +5,8 @@
 //   node scripts/check-snippets.mjs a.md b.md  # only these files, every ts block in them
 //
 // Every fenced `ts` block in docs/guide/**/*.md and the root README.md is typechecked against the
-// engine's public entry points (package.json "exports", mapped onto src/ through tsconfig paths).
+// engine's public entry points (package.json "exports", mapped onto src/ through tsconfig paths)
+// and the workspace host packages' (packages/*/package.json "exports").
 // In a module README (src/<module>/README.md) only a block whose previous non-blank line is
 // `<!-- snippet:check -->` is checked. A block opts out with the info string `ts no-check`; the
 // prose next to it says why (it is a fragment).
@@ -77,13 +78,23 @@ export function defaultFiles() {
   return files;
 }
 
-/** tsconfig paths for every "exports" entry that points at a .ts file. */
+/**
+ * tsconfig paths for every "exports" entry that points at a .ts file: the engine's, and those of
+ * the workspace packages under packages/ (the hosts a game adds).
+ */
 function enginePaths() {
-  const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+  const dirs = [root];
+  const pkgs = join(root, 'packages');
+  if (existsSync(pkgs)) for (const d of readdirSync(pkgs).sort()) dirs.push(join(pkgs, d));
   const paths = {};
-  for (const [key, target] of Object.entries(pkg.exports ?? {})) {
-    if (typeof target !== 'string' || !target.endsWith('.ts')) continue;
-    paths[key === '.' ? pkg.name : `${pkg.name}/${key.slice(2)}`] = [join(root, target)];
+  for (const dir of dirs) {
+    const file = join(dir, 'package.json');
+    if (!existsSync(file)) continue;
+    const pkg = JSON.parse(readFileSync(file, 'utf8'));
+    for (const [key, target] of Object.entries(pkg.exports ?? {})) {
+      if (typeof target !== 'string' || !target.endsWith('.ts')) continue;
+      paths[key === '.' ? pkg.name : `${pkg.name}/${key.slice(2)}`] = [join(dir, target)];
+    }
   }
   return paths;
 }
@@ -111,6 +122,7 @@ export function checkSnippets(
       ...base,
       noUnusedLocals: false,
       noUnusedParameters: false,
+      allowImportingTsExtensions: true,
       typeRoots: [join(root, 'node_modules', '@types'), join(root, 'node_modules')],
       paths: enginePaths(),
     },
