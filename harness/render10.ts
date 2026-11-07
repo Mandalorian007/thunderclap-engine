@@ -11,6 +11,10 @@
  *   `DebugDraw` grid.
  * - `?aux=velocity` (default) the velocity target, `?aux=all` rough-metal and velocity,
  *   `?aux=none` neither (the control).
+ * - `&blur` (ws/render-11, with a velocity set): object motion blur on, a billboard sliding
+ *   on x, and a probe after the post stack reducing the velocity target to a 32 × 18 grid of
+ *   per-block maxima (target px), read back each frame: `particleBlurPx` over the fountain,
+ *   `billboardBlurPx` over the slider, `backgroundBlurPx` everywhere else (still camera, so 0).
  * - State on `window.__harnessRender10` (harness/render10-state.ts).
  */
 import { createGame } from '@thunderclap/engine';
@@ -23,11 +27,19 @@ import {
   Water,
 } from '@thunderclap/engine/fx';
 import { box } from '@thunderclap/engine/geom';
+import type { PostStack } from '@thunderclap/engine/post';
 import {
+  type Camera,
+  type FullscreenPass,
   gpuDiagnostics,
   type InstanceParams,
   Lights,
+  type PostInputs,
+  type PostProcessor,
+  type Renderer,
   type SceneTargetAux,
+  type SceneTargetViewport,
+  type Texture,
   Transform,
 } from '@thunderclap/engine/render';
 import type { HarnessRender10State, Render10Aux } from './render10-state';
@@ -43,6 +55,7 @@ const AUX_SET: Record<Render10Aux, SceneTargetAux> = {
   all: { roughMetal: true, velocity: true },
   none: {},
 };
+const BLUR = query.has('blur') && AUX !== 'none';
 const LOGICAL = { width: 1280, height: 720 };
 const EYE: [number, number, number] = [0, 5, 13];
 const TARGET: [number, number, number] = [0, 0, 0];
@@ -58,6 +71,11 @@ const state: HarnessRender10State = {
   drawables: 0,
   particles: 0,
   gpuErrors: 0,
+  blur: BLUR,
+  readbacks: 0,
+  particleBlurPx: 0,
+  billboardBlurPx: 0,
+  backgroundBlurPx: 0,
 };
 window.__harnessRender10 = { state };
 
@@ -69,6 +87,175 @@ const LIT_WGSL = /* wgsl */ `
   o.emissive = vec4f(0.0);
   return o;
 }`;
+
+// ------------------------------------------------------------------ the velocity probe (`&blur`)
+
+/** The probe grid: one texel per block of the velocity target, its max |velocity| in px. */
+const GX = 32;
+const GY = 18;
+const ROW_BYTES = 256; // GX × rgba16float
+const PROBE_WGSL = /* wgsl */ `
+struct Grid { cells: vec4f };
+@group(0) @binding(0) var<uniform> grid: Grid;
+@group(0) @binding(1) var probe_sampler: sampler;
+@group(0) @binding(2) var velocity_tex: texture_2d<f32>;
+@fragment fn fs_main(in: FullscreenIn) -> @location(0) vec4f {
+  let dims = vec2u(textureDimensions(velocity_tex));
+  let cell = vec2u(in.pos.xy);
+  let block = (dims + vec2u(u32(grid.cells.x) - 1u, u32(grid.cells.y) - 1u)) /
+    vec2u(u32(grid.cells.x), u32(grid.cells.y));
+  let lo = cell * block;
+  let hi = min(lo + block, dims);
+  var m = 0.0;
+  for (var y = lo.y; y < hi.y; y++) {
+    for (var x = lo.x; x < hi.x; x++) {
+      let v = textureLoad(velocity_tex, vec2u(x, y), 0).xy * vec2f(dims);
+      m = max(m, length(v));
+    }
+  }
+  return vec4f(m, 0.0, 0.0, 1.0);
+}`;
+
+/** IEEE half → number. */
+function halfToFloat(h: number): number {
+  const s = h & 0x8000 ? -1 : 1;
+  const e = (h >> 10) & 0x1f;
+  const m = h & 0x3ff;
+  if (e === 0) return s * 2 ** -14 * (m / 1024);
+  if (e === 31) return m ? Number.NaN : s * Number.POSITIVE_INFINITY;
+  return s * 2 ** (e - 15) * (1 + m / 1024);
+}
+
+/**
+ * Wraps the game's post stack: after it runs, reduce `inputs.velocity` to the grid and copy it
+ * into a mappable buffer; `read()` maps it after the submit and fills `cells` (px per frame).
+ */
+class BlurProbe implements PostProcessor {
+  readonly cells = new Float32Array(GX * GY);
+  private readonly pass: FullscreenPass;
+  private readonly target: Texture;
+  private readonly buffer: GPUBuffer;
+  private readonly raw = new Uint16Array((ROW_BYTES / 2) * GY);
+  private mapping = false;
+  private copied = false;
+
+  constructor(
+    renderer: Renderer,
+    private readonly inner: PostStack,
+  ) {
+    this.pass = renderer.createFullscreenPass({
+      label: 'render10-probe',
+      wgsl: PROBE_WGSL,
+      targets: ['rgba16float'],
+      uniformBytes: 16,
+      textures: 1,
+      sampler: 'nearest-clamp',
+    });
+    this.pass.setUniforms(new Float32Array([GX, GY, 0, 0]));
+    this.target = renderer.createRenderTarget({
+      width: GX,
+      height: GY,
+      format: 'rgba16float',
+      label: 'render10-probe',
+    });
+    this.buffer = renderer.device.createBuffer({
+      label: 'render10-probe-readback',
+      size: ROW_BYTES * GY,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    });
+  }
+
+  get wantsJitter(): boolean | undefined {
+    return this.inner.wantsJitter;
+  }
+
+  resize(width: number, height: number): void {
+    this.inner.resize(width, height);
+  }
+
+  encode(
+    encoder: GPUCommandEncoder,
+    inputs: PostInputs,
+    output: GPUTextureView,
+    viewport?: SceneTargetViewport,
+  ): void {
+    this.inner.encode(encoder, inputs, output, viewport);
+    if (this.mapping || !inputs.velocity) return;
+    this.pass.setTexture(0, inputs.velocity);
+    this.pass.encode(encoder, this.target.view);
+    encoder.copyTextureToBuffer(
+      { texture: this.target.texture },
+      { buffer: this.buffer, bytesPerRow: ROW_BYTES },
+      { width: GX, height: GY },
+    );
+    this.copied = true;
+  }
+
+  read(done: () => void): void {
+    if (!this.copied || this.mapping) return;
+    this.copied = false;
+    this.mapping = true;
+    this.buffer.mapAsync(GPUMapMode.READ).then(
+      () => {
+        this.raw.set(new Uint16Array(this.buffer.getMappedRange()));
+        this.buffer.unmap();
+        for (let y = 0; y < GY; y++) {
+          for (let x = 0; x < GX; x++) {
+            this.cells[y * GX + x] = halfToFloat(this.raw[(y * ROW_BYTES) / 2 + x * 4]!);
+          }
+        }
+        this.mapping = false;
+        done();
+      },
+      () => {
+        this.mapping = false;
+      },
+    );
+  }
+}
+
+/** A world point's probe cell under `camera` (column-major view-projection). */
+function cellOf(camera: Camera, p: readonly [number, number, number]): [number, number] {
+  const m = camera.viewProjection;
+  const x = m[0]! * p[0] + m[4]! * p[1] + m[8]! * p[2] + m[12]!;
+  const y = m[1]! * p[0] + m[5]! * p[1] + m[9]! * p[2] + m[13]!;
+  const w = m[3]! * p[0] + m[7]! * p[1] + m[11]! * p[2] + m[15]!;
+  return [((x / w) * 0.5 + 0.5) * GX, (0.5 - (y / w) * 0.5) * GY];
+}
+
+/**
+ * `&blur` regions (world boxes, projected to probe cells with a 1-cell margin): the fountain's
+ * reach (spread 0.8 rad, up to 2.5 u/s for 2 s under gravity) and the slider's path.
+ */
+const FOUNTAIN_BOX: Box = [-4.5, -1, 0, 4.5, 5, 8];
+const SLIDER_X = -8;
+const SLIDER_Y = 5;
+const SLIDER_Z = -1;
+const SLIDER_BOX: Box = [
+  SLIDER_X - 1.8,
+  SLIDER_Y - 0.8,
+  SLIDER_Z,
+  SLIDER_X + 1.8,
+  SLIDER_Y + 0.8,
+  SLIDER_Z,
+];
+type Box = [number, number, number, number, number, number];
+
+/** A world box's probe-cell bounds [x0, y0, x1, y1], grown by one cell. */
+function cellsOf(camera: Camera, b: Box): [number, number, number, number] {
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (let i = 0; i < 8; i++) {
+    const [cx, cy] = cellOf(camera, [b[i & 1 ? 3 : 0], b[i & 2 ? 4 : 1], b[i & 4 ? 5 : 2]]);
+    x0 = Math.min(x0, cx);
+    y0 = Math.min(y0, cy);
+    x1 = Math.max(x1, cx);
+    y1 = Math.max(y1, cy);
+  }
+  return [x0 - 1, y0 - 1, x1 + 1, y1 + 1];
+}
 
 async function main(): Promise<void> {
   const ctx = await createGame({
@@ -122,6 +309,15 @@ async function main(): Promise<void> {
   const billboards = createBillboards(renderer, { capacity: 4 });
   billboards.add({ position: [-4, 1.2, -1], size: [1.2, 0.3], color: [0.2, 1, 0.4, 1] });
   billboards.add({ position: [4, 1.2, -1], size: [1.2, 0.3], depth: 'always' });
+  // `&blur`: a quad sliding on x (a tracked anchor) above the left block, drawn over everything.
+  const slider = new Float32Array([SLIDER_X, SLIDER_Y, SLIDER_Z]);
+  let sliderT = 0;
+  if (BLUR) {
+    billboards.add({ position: slider, size: [1, 1], color: [1, 1, 1, 1], depth: 'always' });
+    ctx.post.set({ motionBlur: { enabled: true, mode: 'object', intensity: 1, maxSamples: 16 } });
+  }
+  const probe = BLUR ? new BlurProbe(renderer, ctx.post) : null;
+  if (probe) renderer.post = probe;
   const debug = createDebugDraw(renderer, { retain: true });
   for (let i = -5; i <= 5; i++) {
     debug.line([i * 2, -0.99, -10], [i * 2, -0.99, 10], [0.2, 0.2, 0.2, 1]);
@@ -162,6 +358,8 @@ async function main(): Promise<void> {
       flat.update(dt);
       water.update(dt);
       decals.update(dt);
+      sliderT += dt;
+      slider[0] = SLIDER_X + Math.sin(sliderT * 3);
       billboards.update(dt, camera);
     },
     render(frame) {
@@ -184,12 +382,40 @@ async function main(): Promise<void> {
     state.drawables = renderer.stats.drawables;
     state.particles = world.alive;
     state.gpuErrors = gpuDiagnostics.errorCount;
+    probe?.read(() => {
+      state.readbacks++;
+      measure(probe.cells, camera);
+    });
   };
   state.auxKey = renderer.target.auxKey;
   state.sceneTargets = renderer.sceneTargets().length;
   ctx.loop.start();
   state.gpu = 'ok';
   state.ready = true;
+}
+
+/** Split the probe grid into the fountain, the slider's path and the rest (`&blur`). */
+function measure(cells: Float32Array, camera: Camera): void {
+  const f = cellsOf(camera, FOUNTAIN_BOX);
+  const b = cellsOf(camera, SLIDER_BOX);
+  const inside = (r: number[], x: number, y: number) =>
+    x + 1 > r[0]! && x < r[2]! && y + 1 > r[1]! && y < r[3]!;
+  let particle = 0;
+  let slide = 0;
+  let rest = 0;
+  for (let y = 0; y < GY; y++) {
+    for (let x = 0; x < GX; x++) {
+      const v = cells[y * GX + x]!;
+      // The slider's cells first: the fountain's near side projects over its path.
+      if (inside(b, x, y)) slide = Math.max(slide, v);
+      else if (inside(f, x, y)) particle = Math.max(particle, v);
+      else rest = Math.max(rest, v);
+    }
+  }
+  const r = (n: number) => Math.round(n * 100) / 100;
+  state.particleBlurPx = r(particle);
+  state.billboardBlurPx = r(slide);
+  state.backgroundBlurPx = r(rest);
 }
 
 /** A 64 px ring for the decals. */

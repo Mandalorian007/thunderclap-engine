@@ -131,6 +131,37 @@ describe('skinPose', () => {
     expect(Array.from(own)).toEqual(Array.from(w1));
   });
 
+  it('SkinPalette.jointCount is the joints per slot (ws/render-11)', () => {
+    const p = palette();
+    expect(p.jointCount).toBe(3);
+    expect(p.jointCount).toBe(p.joints);
+    expect(Object.getOwnPropertyDescriptor(Object.getPrototypeOf(p), 'jointCount')?.get).toBeTypeOf(
+      'function',
+    );
+  });
+
+  it('refuses a palette smaller than the skeleton, before advancing the source', () => {
+    const sk = rig();
+    const small = new SkinPalette(createFakeDevice().device, { joints: 2, instances: 1 });
+    small.flush();
+    const mixer = new AnimationMixer(sk);
+    mixer.play(swing);
+    const t0 = new Float32Array(mixer.pose);
+    expect(() => skinPose(sk, mixer, small, 0, 0.25)).toThrow(
+      'skinPose: the skeleton has 3 joints but the palette holds 2 per slot (slot 0); make the SkinPalette with joints: 3 or more',
+    );
+    expect(mixer.pose).toEqual(t0);
+    expect(small.isDirty).toBe(false);
+    // A bigger palette is fine (the extra joints keep identity).
+    const big = new SkinPalette(createFakeDevice().device, { joints: 5, instances: 1 });
+    expect(() => skinPose(sk, mixer, big, 0)).not.toThrow();
+    // A plain target without jointCount is checked by its block's length.
+    const block = new Float32Array(2 * 12);
+    expect(() => skinPose(sk, mixer.pose, { write: () => block })).toThrow(
+      /3 joints but the palette holds 2 per slot/,
+    );
+  });
+
   it('allocates nothing in steady state', () => {
     for (const withBind of [true, false]) {
       const sk = rig(withBind);

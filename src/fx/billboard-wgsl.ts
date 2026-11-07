@@ -1,3 +1,4 @@
+import { WGSL_MOTION } from '../render/scene-pipelines';
 import { WGSL_GLOBALS } from '../render/wgsl';
 
 /** Floats per billboard instance in the storage buffer (`BILLBOARD_BYTES` / 4). */
@@ -107,3 +108,78 @@ fn view_row(r: u32) -> vec3f {
   return o;
 }
 `;
+
+/** Insert `add` after the one occurrence of `at` in `src` (throws unless there is exactly one). */
+function after(src: string, at: string, add: string): string {
+  const i = src.indexOf(at);
+  if (i < 0 || src.indexOf(at, i + 1) >= 0) throw new Error(`billboardWgsl: anchor ${at}`);
+  return src.slice(0, i + at.length) + add + src.slice(i + at.length);
+}
+
+/**
+ * `BILLBOARD_WGSL`, or with `velocity` (the velocity attachment's fragment location, 2 or 3)
+ * the build that writes its own motion (ws/render-11): binding 3 holds each sorted instance's
+ * previous anchor (`xyz`, `w` = 1 when known), the vertex stage projects the same corner of
+ * last frame's quad through `camera.prev_view_proj` / `prev_view`, and the fragment writes
+ * `vec4f(engine_motion(..), 0, alpha)` there. Internal; `0` is the exported string itself.
+ */
+export function billboardWgsl(velocity: number): string {
+  if (velocity <= 0) return BILLBOARD_WGSL;
+  let s = after(BILLBOARD_WGSL, WGSL_GLOBALS, WGSL_MOTION);
+  s = after(
+    s,
+    '@group(1) @binding(2) var atlas: texture_2d<f32>;',
+    '\n@group(1) @binding(3) var<storage, read> billboard_prev: array<vec4f>;',
+  );
+  s = after(s, '  @location(5) fraction: f32,', '\n  @location(6) prev_clip: vec4f,');
+  s = after(s, '  @location(1) emissive: vec4f,', `\n  @location(${velocity}) velocity: vec4f,`);
+  s = after(
+    s,
+    `fn view_row(r: u32) -> vec3f {
+  return vec3f(camera.view[0][r], camera.view[1][r], camera.view[2][r]);
+}
+`,
+    `
+fn prev_view_row(r: u32) -> vec3f {
+  return vec3f(camera.prev_view[0][r], camera.prev_view[1][r], camera.prev_view[2][r]);
+}
+fn yaw_right(r: vec3f) -> vec3f {
+  let flat = vec3f(r.x, 0.0, r.z);
+  let len = length(flat);
+  return select(vec3f(1.0, 0.0, 0.0), flat / max(len, 1e-6), len > 1e-6);
+}
+`,
+  );
+  s = after(
+    s,
+    '  let half = b.size.xy * 0.5;',
+    `
+  let pv = billboard_prev[ii];
+  let pa = select(b.pos.xyz, pv.xyz, pv.w > 0.5);`,
+  );
+  s = after(
+    s,
+    '    o.clip = clip;',
+    `
+    let pc = camera.prev_view_proj * vec4f(pa, 1.0);
+    o.prev_clip = vec4f(pc.xy + ndc * pc.w, pc.zw);`,
+  );
+  s = after(
+    s,
+    '    o.clip = camera.view_proj * vec4f(world, 1.0);',
+    `
+    var pr = prev_view_row(0u);
+    var pu = prev_view_row(1u);
+    if ((flags & ${BB_FLAG_YAW}u) != 0u) {
+      pr = yaw_right(pr);
+      pu = vec3f(0.0, 1.0, 0.0);
+    }
+    let prev_world = pa + pr * (q.x * half.x) + pu * (q.y * half.y);
+    o.prev_clip = camera.prev_view_proj * vec4f(prev_world, 1.0);`,
+  );
+  return after(
+    s,
+    '  o.emissive = vec4f(0.0, 0.0, 0.0, c.a);',
+    '\n  o.velocity = vec4f(engine_motion(in.clip, in.prev_clip), 0.0, c.a);',
+  );
+}

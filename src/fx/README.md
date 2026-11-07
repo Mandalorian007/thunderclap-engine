@@ -124,7 +124,11 @@ frame.drawable(rain);        // under a depth camera (Camera.perspective)
 
 - `space: 'world'`: positions in world units, y up. The same compute kernels run with three
   components; quads face the camera (built from the `camera.view` rows) and stretch along the
-  velocity projected on screen. Depth test on, depth write off.
+  velocity projected on screen. Depth test on, depth write off. Into a target with a velocity
+  attachment (`createGame({ aux: { velocity: true } })`) world particles write their own motion
+  (ws/render-11): each quad's previous clip position is `prev_view_proj × (world − vel ×
+  sim.dt)`, blended by its alpha, so object motion blur and TAA see them move. 2D particles keep
+  velocity masked. See *Aux targets* in `src/render/README.md`.
 - `EmitParams` in world space: `z`, `vz` (added to the sampled velocity), `gravity` as
   `[x, y, z]` (a pair means z 0), `wind` (`[x, y, z]`, the velocity `drag` pulls towards),
   `drag`. `angle` is in the xy plane and `spread` opens a cone around it. Defaults are
@@ -420,6 +424,9 @@ Each shows a region of the batch's text atlas or a solid colour, is sized in wor
 screen px, optionally fades out over `life` and drifts by `velocity`. The batch is alpha blended,
 depth tested without writing (`depth: 'test'`) or drawn over everything (`'always'`), sorted back
 to front each `update`, and drawn in one or two calls through `frame.drawable(billboards)`.
+Into a velocity target (ws/render-11) the batch writes each quad's motion since its last drawn
+anchor (a `<label>-prev` buffer, 16 bytes per slot; a new or reused slot reads zero motion on its
+first frame), blended by alpha; see *Aux targets* in `src/render/README.md`.
 
 ```ts
 import { createBillboards } from '@thunderclap/engine/fx';

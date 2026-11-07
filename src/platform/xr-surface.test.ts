@@ -218,6 +218,88 @@ describe('XrSurface', () => {
     expect(fake.textures.find((t) => t.label === 'xr-scene-color')?.destroyed).toBe(true);
   });
 
+  describe('aux attachments (ws/render-11)', () => {
+    const attachments = (p: { desc: unknown }) =>
+      ((p.desc as GPURenderPassDescriptor).colorAttachments as GPURenderPassColorAttachment[])
+        .length;
+    const auxCases = [
+      ['velocity', { velocity: true }, 3],
+      ['rough-metal + velocity', { roughMetal: true, velocity: true }, 4],
+    ] as const;
+
+    for (const textureType of ['texture', 'texture-array'] as const) {
+      for (const [name, aux, n] of auxCases) {
+        it(`direct, ${textureType}, ${name}: every eye pass has ${n} attachments`, async () => {
+          const { fake, surface, xr } = await setup({ aux, textureType });
+          const r = new Renderer(fakeRendererGpu(fake), { aux });
+          for (let f = 0; f < 2; f++) {
+            const frame = r.beginFrame(f / 72, 1 / 72);
+            for (const eye of surface.views(xr.step())) r.render(frame, eye.camera, eye.target);
+            r.endFrame({ present: false });
+          }
+          const scene = fake.passes.filter((p) => p.label === 'scene');
+          expect(scene).toHaveLength(4);
+          for (const p of scene) expect(attachments(p)).toBe(n);
+          const [l, rt] = surface.views(xr.step());
+          expect(l!.target.auxKey).toBe(n === 4 ? 3 : 2);
+          expect(l!.target.velocity).not.toBeNull();
+          if (textureType === 'texture-array') expect(rt!.target).not.toBe(l!.target);
+          expect(rt!.target.auxKey).toBe(l!.target.auxKey);
+          // Aux textures are the eye's size (the layer's half, or its array layer).
+          const vel = fake.textures.find((t) => t.label === 'xr-eye-0-velocity')!;
+          expect([vel.width, vel.height]).toEqual(textureType === 'texture' ? [128, 32] : [64, 32]);
+          expect(fake.errors).toEqual([]);
+        });
+      }
+    }
+
+    it('scene mode: the scene target has the aux attachments, the layer targets none', async () => {
+      const aux = { roughMetal: true, velocity: true };
+      const { fake, surface, xr } = await setup({ scene: true, colorFormat: 'bgra8unorm', aux });
+      const renderer = new Renderer(fakeRendererGpu(fake), { aux });
+      for (let f = 0; f < 2; f++) {
+        const fr = renderer.beginFrame(f / 72, 1 / 72);
+        for (const eye of surface.views(xr.step())) {
+          renderer.render(fr, eye.camera, surface.scene!);
+          renderer.resolve(surface.scene!, eye.target.color.view, eye.viewport);
+        }
+        renderer.endFrame({ present: false });
+      }
+      expect(surface.scene!.auxKey).toBe(3);
+      const scene = fake.passes.filter((p) => p.label === 'scene');
+      expect(scene).toHaveLength(4);
+      for (const p of scene) expect(attachments(p)).toBe(4);
+      const [l] = surface.views(xr.step());
+      expect(l!.target.auxKey).toBe(0);
+      expect(fake.textures.some((t) => t.label === 'xr-scene-velocity')).toBe(true);
+      expect(fake.textures.some((t) => t.label?.startsWith('xr-eye-0-velocity'))).toBe(false);
+      expect(fake.errors).toEqual([]);
+    });
+
+    it("each eye's velocity reads that eye's own previous view-projection", async () => {
+      const { fake, session, surface, xr } = await setup({ aux: { velocity: true } });
+      const r = new Renderer(fakeRendererGpu(fake), { aux: { velocity: true } });
+      const seen: Float32Array[][] = [];
+      for (let f = 0; f < 2; f++) {
+        session.headPosition = [f * 0.5, 1.6, 0];
+        const frame = r.beginFrame(f / 72, 1 / 72);
+        const vps: Float32Array[] = [];
+        for (const eye of surface.views(xr.step())) {
+          vps.push(new Float32Array(eye.camera.viewProjection));
+          r.render(frame, eye.camera, eye.target);
+        }
+        seen.push(vps);
+        r.endFrame({ present: false });
+      }
+      const [l, rt] = surface.views(xr.step());
+      // Frame 2 drew each eye with its own frame-1 matrix as "previous", not the other eye's.
+      expect(seen[0]![0]).not.toEqual(seen[0]![1]);
+      expect([...l!.camera.previousViewProj]).toEqual([...seen[0]![0]!]);
+      expect([...rt!.camera.previousViewProj]).toEqual([...seen[0]![1]!]);
+      expect(fake.errors).toEqual([]);
+    });
+  });
+
   it('destroy frees the eye targets and the layer, and views() is then empty', async () => {
     const { fake, surface, xr } = await setup();
     surface.views(xr.step());

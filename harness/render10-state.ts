@@ -25,6 +25,18 @@ export interface HarnessRender10State {
   particles: number;
   /** `gpuDiagnostics.errorCount`: GPU validation errors since load. */
   gpuErrors: number;
+  /** `&blur` (ws/render-11): object motion blur on, the velocity probe reading back. */
+  blur: boolean;
+  /** Velocity-probe readbacks so far (`&blur`). */
+  readbacks: number;
+  /**
+   * The largest screen motion (target px per frame, what object blur smears by) in the last
+   * readback over the particle fountain, the sliding billboard and everywhere else. With the
+   * camera still, only the particles and the slider move: the rest reads 0.
+   */
+  particleBlurPx: number;
+  billboardBlurPx: number;
+  backgroundBlurPx: number;
 }
 
 declare global {

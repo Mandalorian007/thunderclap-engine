@@ -1,7 +1,13 @@
 import type { Random } from '../core/random';
 import type { Drawable, Frame, ViewInfo } from '../render/frame';
 import type { Renderer } from '../render/renderer';
-import { auxSuffix, ScenePipelineCache, sceneVariant } from '../render/scene-pipelines';
+import {
+  auxSuffix,
+  motionVariant,
+  ScenePipelineCache,
+  sceneVariant,
+  velocityLocation,
+} from '../render/scene-pipelines';
 import type { SceneTarget } from '../render/scene-target';
 import type { Texture, TextureLike } from '../render/texture';
 import { createShaderModule } from '../render/wgsl';
@@ -12,6 +18,7 @@ import {
   FX_REQUEST_FLOATS,
   FX_SIM_FLOATS,
   FX_SPAWN_FLOATS,
+  fxRenderWgsl,
   MAX_FORCES,
   PARTICLE_COLLIDE_WGSL,
   PARTICLE_COMPUTE_WGSL,
@@ -526,6 +533,8 @@ export class ParticleSystem implements Drawable {
   private readonly pipelines = new ScenePipelineCache();
   private readonly renderDesc: GPURenderPipelineDescriptor;
   private readonly blend: GPUBlendState;
+  /** World space: the velocity builds of the render shader by fragment location (ws/render-11). */
+  private readonly motionModules: (GPUShaderModule | undefined)[] = [];
   private computeGroup: GPUBindGroup;
   private readonly renderGroup: GPUBindGroup;
   private readonly soft: SoftDepth | null = null;
@@ -699,7 +708,7 @@ export class ParticleSystem implements Drawable {
       primitive: { topology: 'triangle-list' },
     };
     this.blend = blend;
-    this.pipelines.set(null, renderer.target.auxKey, device.createRenderPipeline(this.renderDesc));
+    this.pipelineFor(null, renderer.target.auxKey);
 
     if (world) this.soft = this.makeSoftDepth(renderLayout);
     this.renderGroup = this.makeRenderGroup(
@@ -1573,18 +1582,32 @@ export class ParticleSystem implements Drawable {
     const p = this.pipelines.get(format, aux);
     if (p) return p;
     const desc = this.renderDesc;
+    const targets = this.renderer.sceneTargets(this.blend, aux);
+    const label = `${desc.label}${format ? `:${format}` : ''}${auxSuffix(aux)}`;
+    const depth: GPUDepthStencilState | undefined = format
+      ? { format, depthWriteEnabled: false, depthCompare: 'less-equal' }
+      : undefined;
+    // World particles write their own motion into a velocity attachment (ws/render-11); 2D
+    // ones (screen space, no camera history) keep it masked.
+    const at = this.space === 'world' ? velocityLocation(aux) : 0;
     return this.pipelines.set(
       format,
       aux,
       this.device.createRenderPipeline(
-        sceneVariant(
-          desc,
-          this.renderer.sceneTargets(this.blend, aux),
-          `${desc.label}${format ? `:${format}` : ''}${auxSuffix(aux)}`,
-          format ? { format, depthWriteEnabled: false, depthCompare: 'less-equal' } : undefined,
-        ),
+        at === 0
+          ? sceneVariant(desc, targets, label, depth)
+          : motionVariant(desc, this.motionModule(at), targets, aux, `${label}:motion`, depth),
       ),
     );
+  }
+
+  private motionModule(at: number): GPUShaderModule {
+    let m = this.motionModules[at];
+    if (!m) {
+      m = createShaderModule(this.device, fxRenderWgsl(true, at), 'particles-world-render-motion');
+      this.motionModules[at] = m;
+    }
+    return m;
   }
 
   /**

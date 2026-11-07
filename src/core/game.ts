@@ -727,6 +727,7 @@ export async function createGame<
           referenceSpace,
           scene: true,
           colorFormat: renderer.format,
+          aux: opts.aux,
         });
         const sessionHost = createXrHost(session, host);
         const source = new XrPointerSource(session, referenceSpace, () => sessionHost.frame);
