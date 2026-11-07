@@ -19,7 +19,7 @@ export interface HarnessPost4State {
   still: boolean;
   /**
    * The page's step: 'warm', 'reference', 'converge', 'ghost', 'objectCamera',
-   * 'objectVelocity', 'done' (`?taa`), else 'run'.
+   * 'objectVelocity', 'subpixel', 'done' (`?taa`), else 'run'.
    */
   phase: string;
   /** Readbacks completed. */
@@ -50,6 +50,19 @@ export interface HarnessPost4State {
    */
   ghostObject: number | null;
   ghostObjectCamera: number | null;
+  /**
+   * `?taa` (ws/post-6): the striped cube creeps 0.37 output px a frame with the camera jittered
+   * and velocity reprojection on. `blurSubpixel*`: the share of the horizontal gradient energy
+   * (sum of squared luma steps) over the cube that the TAA frame lost against the same inputs
+   * with TAA off (0 = as sharp, can go negative); `ghostSubpixel*`: the mean absolute
+   * difference (0..1 per channel) to the TAA-off frame in the bands 3..14 px beside the cube on
+   * both sides. Summed over 12 reads; `taa.historyFilter` `'catmull-rom'` (no suffix: the
+   * measured stack) and `'bilinear'` (a twin stack resolving the same frames).
+   */
+  ghostSubpixel: number | null;
+  blurSubpixel: number | null;
+  ghostSubpixelBilinear: number | null;
+  blurSubpixelBilinear: number | null;
   /** `?taa`: `PostStack.taaVelocityActive` in the last frame. */
   velocityActive: boolean;
   /**

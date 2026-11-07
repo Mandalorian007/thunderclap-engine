@@ -1,7 +1,7 @@
 import { mat4 } from '../core/math';
 import type { Camera } from '../render/camera';
 import type { FullscreenPass } from '../render/fullscreen';
-import type { PostInputs, PostProcessor, Renderer } from '../render/renderer';
+import type { JitterFn, PostInputs, PostProcessor, Renderer } from '../render/renderer';
 import type { SceneTargetViewport } from '../render/scene-target';
 import { AO_BLUR_WGSL, AO_WGSL } from './ao';
 import { type Ease, easeInOut, PostBlender } from './blend';
@@ -76,7 +76,8 @@ interface InputGroups {
  * Every pass reads the frame from `PostInputs` alone (ws/post-4): the view matrices and the
  * jitter from `view`, the projection from `projection`, per-surface roughness and metalness
  * from `roughMetal`, per-pixel motion from `velocity`. While TAA runs the stack declares
- * `wantsJitter` and drives the Halton jitter of the cameras given to `addJitterCamera`.
+ * `wantsJitter` and drives the Halton jitter through `renderer.setJitter` (ws/post-6), so every
+ * camera the renderer draws is jittered, XR eyes and offscreen views included.
  *
  * Settings are plain objects you can mutate at runtime (`post.settings.bloom.intensity = 2`)
  * or patch with `post.set({ fog: { density: 0.4 } })`. Disabled passes are skipped entirely.
@@ -91,7 +92,7 @@ export class PostStack implements PostProcessor {
   readonly quality: PostQuality = defaultPostQuality();
   /**
    * The TAA jitter sequence (ws/post-3): `post.taa.jitter(i)` is the `i`-th offset. While TAA
-   * runs the stack hands it to the `addJitterCamera` cameras through `Camera.setJitter`.
+   * runs the stack hands it to `renderer.setJitter` (ws/post-6).
    */
   readonly taa = new Taa(8);
   /** How many times the TAA history was reset (first frame, resize, re-enable). */
@@ -178,8 +179,6 @@ export class PostStack implements PostProcessor {
   private ssrView: GPUTextureView | null = null;
   private motionBlurTex: GPUTexture | null = null;
   private motionBlurView: GPUTextureView | null = null;
-  /** TAA frames run: the index of the next jitter in the sequence. */
-  private frameIndex = 0;
   private readonly frameState: PostFrameState = {
     jitterX: 0,
     jitterY: 0,
@@ -217,10 +216,10 @@ export class PostStack implements PostProcessor {
   private readonly noClear = null;
   private readonly blender = new PostBlender();
   private lastTime: number | null = null;
-  /** The cameras whose projection the stack jitters while TAA runs (`addJitterCamera`). */
-  private readonly jitterCameras: Camera[] = [];
-  /** True while the jitter cameras hold a jitter the stack set (cleared once TAA stops). */
-  private jittering = false;
+  /** The hook the stack gives `renderer.setJitter` while TAA runs (made once: no per-frame closure). */
+  private readonly jitterFn: JitterFn = (i) => this.taa.jitter(i);
+  /** True while the stack has set `renderer.setJitter` (cleared once TAA stops or on `dispose`). */
+  private jitterHooked = false;
   private boundRoughMetal: GPUTextureView | null = null;
   private boundVelocity: GPUTextureView | null = null;
   private boundTaaVelocity: GPUTextureView | null = null;
@@ -393,23 +392,15 @@ export class PostStack implements PostProcessor {
   }
 
   /**
-   * Jitter `camera`'s projection while TAA runs (ws/post-4): after each TAA frame the stack
-   * sets the next Halton (2, 3) offset with `camera.setJitter`, and clears it once TAA stops.
-   * Add the camera that renders into the target the stack resolves, usually the one passed to `render`.
-   * Without one TAA still runs on an unjittered frame, where it only smooths over motion.
+   * @deprecated Since ws/post-6 the stack jitters every camera through `renderer.setJitter`
+   * while TAA runs; registering a camera does nothing. Kept for one release.
    */
-  addJitterCamera(camera: Camera): this {
-    if (!this.jitterCameras.includes(camera)) this.jitterCameras.push(camera);
+  addJitterCamera(_camera: Camera): this {
     return this;
   }
 
-  /** Stop jittering `camera` (its jitter is cleared). */
-  removeJitterCamera(camera: Camera): this {
-    const i = this.jitterCameras.indexOf(camera);
-    if (i >= 0) {
-      this.jitterCameras.splice(i, 1);
-      camera.clearJitter();
-    }
+  /** @deprecated See `addJitterCamera`: does nothing since ws/post-6. Kept for one release. */
+  removeJitterCamera(_camera: Camera): this {
     return this;
   }
 
@@ -650,7 +641,7 @@ export class PostStack implements PostProcessor {
       scene = this.histViews![write]!;
     }
     this.taaVelocityOn = this.taaOn && taaVelocity !== null;
-    this.stepJitter(this.taaOn);
+    this.syncJitter(this.taaOn);
     this.motionBlurOn = wantMotionBlur && depthInfo !== null;
     if (this.motionBlurOn && depthView) {
       const group = this.motionBlurGroup(scene, depthView);
@@ -764,20 +755,15 @@ export class PostStack implements PostProcessor {
   }
 
   /**
-   * After a TAA frame, give the jitter cameras the next offset of the sequence (the renderer
-   * applies it to the next frame's projection); once TAA stops, clear it, once.
+   * After the first TAA frame, hand the Halton sequence to `renderer.setJitter` (the renderer
+   * runs it from frame 0 at the next `beginFrame`, so the sequence restarts each time TAA
+   * starts); once TAA stops, clear the hook with `null`, once. Only on those edges: a hook set
+   * by someone else in between is left alone until TAA stops.
    */
-  private stepJitter(taa: boolean): void {
-    const cams = this.jitterCameras;
-    if (taa) {
-      const j = this.taa.jitter(this.frameIndex++);
-      for (let i = 0; i < cams.length; i++) cams[i]!.setJitter(j[0], j[1]);
-      this.jittering = cams.length > 0;
-    } else if (this.jittering) {
-      for (let i = 0; i < cams.length; i++) cams[i]!.clearJitter();
-      this.jittering = false;
-      this.frameIndex = 0;
-    }
+  private syncJitter(taa: boolean): void {
+    if (taa === this.jitterHooked) return;
+    this.jitterHooked = taa;
+    this.renderer.setJitter(taa ? this.jitterFn : null);
   }
 
   /** Ease the EV toward the metered target in auto mode; mirror the manual value otherwise. */
@@ -1100,7 +1086,12 @@ export class PostStack implements PostProcessor {
     return group;
   }
 
+  /**
+   * Free the stack's GPU resources and clear the `renderer.setJitter` hook if TAA had set it
+   * (ws/post-6). The stack is not usable afterwards.
+   */
   destroy(): void {
+    this.syncJitter(false);
     this.bloomTex?.destroy();
     this.raysTex?.destroy();
     this.freeDepthTargets();

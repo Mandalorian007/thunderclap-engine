@@ -238,7 +238,7 @@ above; a bad value exits 1 naming the option), and writes format 2; a game loads
 ## Testing
 
 ```sh
-pnpm check       # typecheck + Biome lint + import boundaries + README coverage (check:docs) + Vitest unit tests (2222 tests in 199 files) + the host-electron, host-capacitor, host-pwa, template and create-game checks
+pnpm check       # typecheck + Biome lint + import boundaries + README coverage (check:docs) + Vitest unit tests (2228 tests in 200 files) + the host-electron, host-capacitor, host-pwa, template and create-game checks
 pnpm test:e2e    # Playwright e2e against the harness pages, on a device matrix
 pnpm harness     # serve the harness pages yourself
 ```
