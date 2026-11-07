@@ -1,6 +1,7 @@
 import type { Camera } from '../render/camera';
 import type { Drawable, Frame } from '../render/frame';
 import type { Renderer } from '../render/renderer';
+import { auxSuffix, ScenePipelineCache, sceneVariant } from '../render/scene-pipelines';
 import type { Texture } from '../render/texture';
 import { createShaderModule } from '../render/wgsl';
 import {
@@ -202,12 +203,13 @@ export class Billboards implements Drawable {
   private group: GPUBindGroup;
   private readonly groupLayout: GPUBindGroupLayout;
   private readonly pipelineDesc: GPURenderPipelineDescriptor;
-  private readonly flatPipeline: GPURenderPipeline;
-  /** Per depth format: [test, always] pipelines, made on first use. */
-  private readonly depthPipelines = new Map<
-    GPUTextureFormat,
-    [GPURenderPipeline, GPURenderPipeline]
-  >();
+  /**
+   * Pipelines per depth format (null: none) × the view target's aux key, made on first use
+   * from `renderer.sceneTargets` (ws/render-10): `testPipelines` depth-test (and hold the
+   * depthless one), `alwaysPipelines` ignore depth.
+   */
+  private readonly testPipelines = new ScenePipelineCache();
+  private readonly alwaysPipelines = new ScenePipelineCache();
 
   constructor(renderer: Renderer, opts: BillboardsOptions = {}) {
     const device = renderer.device;
@@ -259,11 +261,15 @@ export class Billboards implements Drawable {
       fragment: {
         module: mod,
         entryPoint: 'fs',
-        targets: renderer.sceneFormats.map((format) => ({ format, blend: ALPHA_BLEND })),
+        targets: renderer.sceneTargets(ALPHA_BLEND),
       },
       primitive: { topology: 'triangle-list' },
     };
-    this.flatPipeline = device.createRenderPipeline(this.pipelineDesc);
+    this.testPipelines.set(
+      null,
+      renderer.target.auxKey,
+      device.createRenderPipeline(this.pipelineDesc),
+    );
   }
 
   /** Live billboards. */
@@ -664,45 +670,53 @@ export class Billboards implements Drawable {
     this.draws = 0;
     if (this.n === 0) return;
     const fmt = frame?.depthFormat ?? null;
+    const aux = frame ? frame.auxKey : this.renderer.target.auxKey;
     pass.setBindGroup(1, this.group);
     if (!fmt) {
-      pass.setPipeline(this.flatPipeline);
+      pass.setPipeline(this.pipelineFor(null, aux, false));
       pass.draw(6, this.n);
       this.draws = 1;
       return;
     }
-    const [test, always] = this.depthPipeline(fmt);
     if (this.testCount > 0) {
-      pass.setPipeline(test);
+      pass.setPipeline(this.pipelineFor(fmt, aux, false));
       pass.draw(6, this.testCount, 0, 0);
       this.draws++;
     }
     if (this.alwaysCount > 0) {
-      pass.setPipeline(always);
+      pass.setPipeline(this.pipelineFor(fmt, aux, true));
       pass.draw(6, this.alwaysCount, 0, this.testCount);
       this.draws++;
     }
   }
 
-  private depthPipeline(format: GPUTextureFormat): [GPURenderPipeline, GPURenderPipeline] {
-    let p = this.depthPipelines.get(format);
-    if (!p) {
-      const d = this.pipelineDesc;
-      p = [
-        this.device.createRenderPipeline({
-          ...d,
-          label: `${this.label}:${format}`,
-          depthStencil: { format, depthWriteEnabled: false, depthCompare: 'less-equal' },
-        }),
-        this.device.createRenderPipeline({
-          ...d,
-          label: `${this.label}:${format}:always`,
-          depthStencil: { format, depthWriteEnabled: false, depthCompare: 'always' },
-        }),
-      ];
-      this.depthPipelines.set(format, p);
-    }
-    return p;
+  private pipelineFor(
+    format: GPUTextureFormat | null,
+    aux: number,
+    always: boolean,
+  ): GPURenderPipeline {
+    const cache = always ? this.alwaysPipelines : this.testPipelines;
+    const p = cache.get(format, aux);
+    if (p) return p;
+    const label = `${this.label}${format ? `:${format}` : ''}${always ? ':always' : ''}`;
+    return cache.set(
+      format,
+      aux,
+      this.device.createRenderPipeline(
+        sceneVariant(
+          this.pipelineDesc,
+          this.renderer.sceneTargets(ALPHA_BLEND, aux),
+          `${label}${auxSuffix(aux)}`,
+          format
+            ? {
+                format,
+                depthWriteEnabled: false,
+                depthCompare: always ? 'always' : 'less-equal',
+              }
+            : undefined,
+        ),
+      ),
+    );
   }
 
   destroy(): void {

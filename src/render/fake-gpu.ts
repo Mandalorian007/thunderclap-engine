@@ -7,6 +7,8 @@
  * tests import it from `@thunderclap/engine/testing`.
  */
 
+import { sceneColorTargets } from './material';
+
 const BUFFER_USAGE = {
   MAP_READ: 0x0001,
   MAP_WRITE: 0x0002,
@@ -598,4 +600,12 @@ export function fakeCanvasContext(fake: FakeDevice): GPUCanvasContext {
     usage: TEXTURE_USAGE.RENDER_ATTACHMENT,
   });
   return { getCurrentTexture: () => tex } as unknown as GPUCanvasContext;
+}
+
+/**
+ * `renderer.sceneTargets` for a stub renderer in a drawable's unit test (ws/render-10): the
+ * same lists a real renderer hands out, without one.
+ */
+export function fakeSceneTargets(blend?: GPUBlendState, aux = 0): GPUColorTargetState[] {
+  return sceneColorTargets(['rgba16float', 'rgba16float'], aux, blend, false);
 }

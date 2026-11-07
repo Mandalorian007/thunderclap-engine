@@ -314,6 +314,7 @@ class Frame {
     dt: number;
     readonly clearColor: GPUColorDict;
     depthFormat: GPUTextureFormat | null;
+    auxKey: number;
     lights: Lights;
     constructor(sink: FrameSink, logicalWidth: number, logicalHeight: number);
     clear(r: number, g: number, b: number, a?: number): void;
@@ -877,6 +878,7 @@ class Renderer implements FrameSink {
     get resolutionScale(): number;
     onGpuTime(fn: (gpuMs: number) => void): () => void;
     onResize(fn: (width: number, height: number) => void): () => void;
+    sceneTargets(blend?: GPUBlendState, aux?: number): GPUColorTargetState[];
     createMaterial(desc: MaterialDesc): Material;
     createSpriteMaterial(opts: SpriteMaterialOptions): Material;
     @deprecated

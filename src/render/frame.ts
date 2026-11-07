@@ -158,8 +158,9 @@ export interface DrawParams extends InstanceParams {
 /**
  * Something that draws itself inside the scene pass (particles, custom pipelines).
  * `prepare` runs once per frame before the scene pass (compute work, uploads);
- * `draw` runs in draw order inside the scene pass, which has two colour targets
- * (HDR colour, HDR emissive) in `renderer.sceneFormats` and `@group(0)` = engine globals.
+ * `draw` runs in draw order inside the scene pass, which has the colour targets of
+ * `renderer.sceneTargets(blend, frame.auxKey)` (HDR colour, HDR emissive, then the target's aux
+ * attachments) and `@group(0)` = engine globals.
  * When the camera asks for depth the pass also has a depth attachment
  * (`frame.depthFormat`), and the drawable's pipeline must declare a matching `depthStencil`.
  *
@@ -251,6 +252,13 @@ export class Frame {
    * (the 2D path). Set by the renderer before `prepare`/`draw` run.
    */
   depthFormat: GPUTextureFormat | null = null;
+  /**
+   * Aux key (`SceneTarget.auxKey`: bit 0 rough-metal, bit 1 velocity) of the target this view's
+   * scene pass draws into; 0 for a plain target. Set by the renderer with `depthFormat`. A
+   * drawable keys its pipelines on it and builds them with `renderer.sceneTargets(blend,
+   * frame.auxKey)` (ws/render-10).
+   */
+  auxKey = 0;
   /**
    * The frame's lights, uploaded as `EngineLights` (`@group(0) @binding(2)`) with every view.
    * Defaults to an unlit block (ambient 1, no sun, no points), so materials that read it draw

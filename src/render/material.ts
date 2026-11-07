@@ -30,6 +30,26 @@ import {
 export const INSTANCE_FLOATS = 28;
 export const INSTANCE_STRIDE = INSTANCE_FLOATS * 4;
 
+/**
+ * Colour target states of a pipeline drawing into the scene pass of a target with aux key
+ * `aux` (`SceneTarget.auxKey`, ws/render-10): `formats` (colour, emissive) with `blend`, then
+ * the aux attachments in pass order (rough-metal, velocity), unblended and masked off
+ * (`writeMask: 0`) unless `writesAux`. The one place the list is built: materials and
+ * `renderer.sceneTargets` both call it, so a pipeline's count always matches the pass's.
+ */
+export function sceneColorTargets(
+  formats: readonly GPUTextureFormat[],
+  aux: number,
+  blend: GPUBlendState | undefined,
+  writesAux: boolean,
+): GPUColorTargetState[] {
+  const targets: GPUColorTargetState[] = formats.map((format) => ({ format, blend }));
+  const writeMask = writesAux ? 0xf : 0;
+  if (aux & 1) targets.push({ format: 'rg8unorm', writeMask });
+  if (aux & 2) targets.push({ format: 'rg16float', writeMask });
+  return targets;
+}
+
 /** Float offsets of each field inside one instance (see `INSTANCE_FLOATS`). */
 export const INSTANCE_OFFSET = {
   matrix: 0,
@@ -322,11 +342,12 @@ export class Material {
   private targetsFor(aux: number): GPUColorTargetState[] {
     const hit = this.targetsByAux[aux];
     if (hit) return hit;
-    const blend = this.blendState;
-    const targets: GPUColorTargetState[] = this.targetFormats.map((format) => ({ format, blend }));
-    const writes = this.desc.aux === true;
-    if (aux & 1) targets.push({ format: 'rg8unorm', writeMask: writes ? 0xf : 0 });
-    if (aux & 2) targets.push({ format: 'rg16float', writeMask: writes ? 0xf : 0 });
+    const targets = sceneColorTargets(
+      this.targetFormats,
+      aux,
+      this.blendState,
+      this.desc.aux === true,
+    );
     this.targetsByAux[aux] = targets;
     return targets;
   }

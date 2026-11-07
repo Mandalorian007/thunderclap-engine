@@ -50,7 +50,7 @@ function drawFrame(
   bb: Billboards,
   depth: GPUTextureFormat | null = 'depth24plus',
 ) {
-  const frame = { depthFormat: depth } as Frame;
+  const frame = { depthFormat: depth, auxKey: 0 } as Frame;
   const enc = fake.device.createCommandEncoder();
   bb.prepare(enc, frame);
   const pass = enc.beginRenderPass({ colorAttachments: [] });

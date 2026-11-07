@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createRandom } from '../core/random';
-import { createFakeDevice } from '../render/fake-gpu';
+import { createFakeDevice, fakeSceneTargets } from '../render/fake-gpu';
 import type { Renderer } from '../render/renderer';
 import { createEffect, type EffectDesc } from './effect';
 import { HIT_SPARK_EFFECT, MAGIC_AURA_EFFECT } from './effects';
@@ -45,7 +45,8 @@ function recorder() {
     device: fake.device,
     globalsLayout: fake.device.createBindGroupLayout({ entries: [] }),
     sceneFormats: ['rgba16float', 'rgba16float'],
-    target: { depth: null },
+    sceneTargets: fakeSceneTargets,
+    target: { depth: null, auxKey: 0 },
   } as unknown as Renderer;
   return { fake, renderer, log };
 }

@@ -4,6 +4,7 @@ import type { Camera } from '../render/camera';
 import type { Drawable, Frame, ViewInfo } from '../render/frame';
 import { Mesh, VERTEX_LAYOUT_3D, VERTEX3D_FLOATS, VERTEX3D_STRIDE } from '../render/mesh';
 import type { Renderer } from '../render/renderer';
+import { auxSuffix, ScenePipelineCache } from '../render/scene-pipelines';
 import type { TextureLike } from '../render/texture';
 import { createShaderModule } from '../render/wgsl';
 import { WGSL_DECAL_BOX, WGSL_DECAL_DEPTH_COPY, WGSL_DECAL_QUAD } from './decals-wgsl';
@@ -158,8 +159,13 @@ export class Decals implements Drawable {
   private readonly boxModule: GPUShaderModule;
   private readonly quadModule: GPUShaderModule;
   private readonly pipelineLayout: GPUPipelineLayout;
-  private readonly targets: GPUColorTargetState[];
-  private readonly pipelines = new Map<string, GPURenderPipeline>();
+  private readonly blend: GPUBlendState | undefined;
+  /**
+   * Pipelines per mode: depth format (null: none) × the view target's aux key, built on first
+   * use from `renderer.sceneTargets` (ws/render-10).
+   */
+  private readonly boxPipelines = new ScenePipelineCache();
+  private readonly quadPipelines = new ScenePipelineCache();
   // Depth copy (box mode).
   private readonly copyLayout: GPUBindGroupLayout;
   private readonly copyPipeline: GPURenderPipeline;
@@ -249,8 +255,7 @@ export class Decals implements Drawable {
     this.pipelineLayout = device.createPipelineLayout({
       bindGroupLayouts: [renderer.globalsLayout, this.layout],
     });
-    const blendSt = blend === 'multiply' ? MULTIPLY_BLEND : blendState(blend);
-    this.targets = renderer.sceneFormats.map((format) => ({ format, blend: blendSt }));
+    this.blend = blend === 'multiply' ? MULTIPLY_BLEND : blendState(blend);
     this.boxModule = createShaderModule(device, WGSL_DECAL_BOX, 'decals-box');
     this.quadModule = createShaderModule(device, WGSL_DECAL_QUAD, 'decals-quad');
 
@@ -424,7 +429,9 @@ export class Decals implements Drawable {
     const mode = this.activeMode ?? 'quad';
     if (mode === 'box' && !this.depthReady) return;
     const depth = frame?.depthFormat ?? null;
-    pass.setPipeline(this.pipelineFor(mode, depth));
+    pass.setPipeline(
+      this.pipelineFor(mode, depth, frame ? frame.auxKey : (this.renderer.target?.auxKey ?? 0)),
+    );
     pass.setBindGroup(1, this.group);
     const mesh = mode === 'box' ? this.box : this.quad;
     pass.setVertexBuffer(0, mesh.vertexBuffer);
@@ -592,17 +599,21 @@ export class Decals implements Drawable {
     });
   }
 
-  private pipelineFor(mode: 'box' | 'quad', depth: GPUTextureFormat | null): GPURenderPipeline {
-    const key = `${mode}:${depth ?? 'none'}`;
-    let p = this.pipelines.get(key);
-    if (p) return p;
+  private pipelineFor(
+    mode: 'box' | 'quad',
+    depth: GPUTextureFormat | null,
+    aux: number,
+  ): GPURenderPipeline {
     const box = mode === 'box';
+    const cache = box ? this.boxPipelines : this.quadPipelines;
+    const hit = cache.get(depth, aux);
+    if (hit) return hit;
     const module = box ? this.boxModule : this.quadModule;
-    p = this.device.createRenderPipeline({
-      label: `decals:${key}`,
+    const p = this.device.createRenderPipeline({
+      label: `decals:${mode}:${depth ?? 'none'}${auxSuffix(aux)}`,
       layout: this.pipelineLayout,
       vertex: { module, entryPoint: 'vs', buffers: [POSITION_LAYOUT, INSTANCE_LAYOUT] },
-      fragment: { module, entryPoint: 'fs', targets: this.targets },
+      fragment: { module, entryPoint: 'fs', targets: this.renderer.sceneTargets(this.blend, aux) },
       primitive: { topology: 'triangle-list', cullMode: box ? 'front' : 'none' },
       ...(depth
         ? {
@@ -614,8 +625,7 @@ export class Decals implements Drawable {
           }
         : {}),
     });
-    this.pipelines.set(key, p);
-    return p;
+    return cache.set(depth, aux, p);
   }
 }
 

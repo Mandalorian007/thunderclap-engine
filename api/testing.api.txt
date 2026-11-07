@@ -160,5 +160,8 @@ function fakeRendererGpu(fake: FakeDevice): {
     format: GPUTextureFormat;
 };
 
+## fakeSceneTargets
+function fakeSceneTargets(blend?: GPUBlendState, aux?: number): GPUColorTargetState[];
+
 ## installGpuGlobals
 function installGpuGlobals(): void;
