@@ -68,7 +68,7 @@ import {
   Transform,
   VERTEX_LAYOUT_SKINNED,
 } from '@thunderclap/engine/render';
-import type { MinimapMarker } from '@thunderclap/engine/ui';
+import type { Meter, MinimapMarker, RegionName } from '@thunderclap/engine/ui';
 import { buildCourtyard, DAIS, HALF } from './courtyard';
 import { createGearSets, GEAR_NAMES } from './gear';
 import { runePixels, tilePixels, whitePixels } from './geom';
@@ -89,6 +89,8 @@ import { type ArpgDemoState, demoWindow } from './state';
 const params = new URLSearchParams(location.search);
 const SEED = Number.parseInt(params.get('seed') ?? '1', 10) || 1;
 const STILL = params.has('still');
+/** `?blur`: object motion blur on, so the ghoul list keeps per-instance velocity history. */
+const BLUR = params.has('blur');
 
 const state: ArpgDemoState = {
   ready: false,
@@ -131,6 +133,12 @@ const state: ArpgDemoState = {
   overflows: [],
   bottomBar: 0,
   worldView: 1,
+  worldArea: 1,
+  orbRegions: ['bottom', 'bottom'],
+  ghoulLevels: [],
+  deathFlushes: 0,
+  deathLodShifts: 0,
+  ghoulVelocity: false,
 };
 demoWindow.__demo = state;
 
@@ -148,6 +156,18 @@ const BAR_MAX = 160;
 const BAR_MAX_PORTRAIT = 120;
 /** The content `top` bar's ceiling, CSS px: the gear buttons plus pad. */
 const TOP_MAX = 96;
+/**
+ * Phone-landscape's content side rails' ceiling, CSS px (ws/ui-9): the 100 px map plus pad
+ * on the right, a 56 px orb plus pad on the left.
+ */
+const RAIL_MAX = 128;
+/**
+ * Where the health and mana orbs sit per form factor: phone-landscape's height is scarce, so
+ * they go to the side rails (the health orb at the foot of the left one, the mana orb under
+ * the map on the right); elsewhere at the two ends of the bottom bar.
+ */
+const orbRegions = (ff: string): ['left' | 'bottom', 'right' | 'bottom'] =>
+  ff === 'phone-landscape' ? ['left', 'right'] : ['bottom', 'bottom'];
 const RUN_SPEED = 6;
 const ACCEL = 14;
 /** Radians per second the hero turns toward its desired heading. */
@@ -254,11 +274,20 @@ async function main(): Promise<void> {
       },
       forms: {
         'phone-portrait': { bars: { bottom: { size: 'content', max: BAR_MAX_PORTRAIT } } },
+        // ws/ui-9: the map and orbs widen content rails; the corner rule gives each corner
+        // to the side that needs the larger track, so the rails run the full height.
+        'phone-landscape': {
+          bars: {
+            left: { size: 'content', max: RAIL_MAX },
+            right: { size: 'content', max: RAIL_MAX },
+          },
+        },
       },
     },
     post: {
       bloom: { enabled: true, intensity: 0.85, threshold: 1.0, knee: 0.5, scatter: 0.72 },
       fog: { enabled: false, density: 0 },
+      motionBlur: { enabled: BLUR, mode: 'object', intensity: 0.6 },
       godRays: { enabled: false, intensity: 0 },
       ao: { enabled: true, radius: 0.9, intensity: 1.1, bias: 0.04, power: 1.4 },
       vignette: {
@@ -585,8 +614,16 @@ async function main(): Promise<void> {
     ],
     thresholdsPx: GHOUL_LOD_PX,
   };
-  /** The live ghouls as one LOD `InstanceList` (ws/render-6), refilled each frame. */
-  const ghouls = renderer.createInstanceList(ghoulLod, ghoulMat, ENEMY_COUNT);
+  /**
+   * The live ghouls as one LOD `InstanceList` (ws/render-6), refilled each frame and keyed by
+   * ghoul index (ws/render-7), so LOD memory and velocity history follow the ghoul, not the
+   * slot. Previous matrices are kept only while the post stack blurs motion.
+   */
+  const ghoulVelocity = ctx.post.settings.motionBlur.enabled;
+  const ghouls = renderer.createInstanceList(ghoulLod, ghoulMat, ENEMY_COUNT, {
+    velocity: ghoulVelocity,
+  });
+  state.ghoulVelocity = ghoulVelocity;
   const idleClip = createIdleClip();
   const runClip = createRunClip();
   const attackClip = createAttackClip();
@@ -751,28 +788,39 @@ async function main(): Promise<void> {
   }
 
   // ── HUD ─────────────────────────────────────────────────────────────────
-  const healthOrb = ui.meter({
-    shape: 'orb',
-    trail: true,
-    label: 'Health',
-    max: HERO_MAX,
-    tone: 'danger',
-    size: 112,
-    region: 'bottom',
-    order: -1,
-  });
-  const manaOrb = ui.meter({
-    shape: 'orb',
-    trail: true,
-    label: 'Mana',
-    max: MANA_MAX,
-    tone: 'info',
-    size: 112,
-    region: 'bottom',
-    order: 1,
-  });
-  healthOrb.el.id = 'arpg-health';
-  manaOrb.el.id = 'arpg-mana';
+  // A meter's region is fixed when it is made (`MeterOptions.region`, no per-form-factor
+  // `place`), so a form-factor change that moves the orbs remakes them at their value.
+  const makeOrb = (health: boolean, region: RegionName, value: number): Meter => {
+    const orb = ui.meter({
+      shape: 'orb',
+      trail: true,
+      label: health ? 'Health' : 'Mana',
+      max: health ? HERO_MAX : MANA_MAX,
+      value,
+      tone: health ? 'danger' : 'info',
+      size: 112,
+      region,
+      // Bottom bar: the health orb before the slots, the mana orb after. Right rail: under the map.
+      order: health ? -1 : 1,
+    });
+    orb.el.id = health ? 'arpg-health' : 'arpg-mana';
+    return orb;
+  };
+  let orbsAt = orbRegions(ui.layout.formFactor);
+  let healthOrb = makeOrb(true, orbsAt[0], HERO_MAX);
+  let manaOrb = makeOrb(false, orbsAt[1], MANA_MAX);
+  /** Move the orbs when the form factor wants them elsewhere (after a re-layout). */
+  const placeOrbs = () => {
+    const want = orbRegions(ui.layout.formFactor);
+    if (want[0] === orbsAt[0] && want[1] === orbsAt[1]) return;
+    orbsAt = want;
+    const hv = healthOrb.value;
+    const mv = manaOrb.value;
+    healthOrb.remove();
+    manaOrb.remove();
+    healthOrb = makeOrb(true, want[0], hv);
+    manaOrb = makeOrb(false, want[1], mv);
+  };
   const slots = ui.slots({
     count: ABILITIES.length,
     region: 'bottom',
@@ -930,8 +978,9 @@ async function main(): Promise<void> {
       ghoul: { shape: 'arrow', color: 'var(--tc-color-danger)', size: 12 },
       brazier: { shape: 'diamond', color: '#ffb14a', size: 9 },
     },
-    // The phone rails are 56 px: there the map takes the card lane beside or under the world.
-    place: { default: 'right', 'phone-landscape': 'cardLane', 'phone-portrait': 'cardLane' },
+    // Phone-landscape: the content right rail widens to hold it (ws/ui-9). Phone-portrait's
+    // rails would take the width the world needs, so there it keeps the card lane under it.
+    place: { default: 'right', 'phone-portrait': 'cardLane' },
     label: 'Courtyard map',
     // Taken on the next update, like a ground click.
     onPick: (x, z) => {
@@ -941,8 +990,17 @@ async function main(): Promise<void> {
     },
   });
   map.el.id = 'arpg-map';
+  // A content rail measures a widget's box, and the map's `max-width: 100%` would let it shrink
+  // to the 56 px rail it is measured in: hold it at its own size, so the rail grows to it.
+  map.el.style.minWidth = 'var(--tc-cminimap-size)';
   // The orbs at the bar's two ends, the ability slots between them (as `ui5?orb`).
   ui.layout.region('bottom').style.justifyContent = 'space-between';
+  // Phone-landscape's rails: the map at the top of the right one and the mana orb at its foot,
+  // the health orb at the foot of the left one. (On the wide forms the right rail holds the
+  // map alone, where `space-between` is the default start.)
+  ui.layout.region('right').style.justifyContent = 'space-between';
+  ui.layout.region('left').style.justifyContent = 'flex-end';
+  let orbsQueued = false;
   /** Publish the form factor, overflow ids and the bars' share after every re-layout. */
   const publishLayout = () => {
     const l = ui.layout;
@@ -952,6 +1010,18 @@ async function main(): Promise<void> {
     state.bottomBar = l.state.regions.bottom?.height ?? 0;
     const h = l.state.height;
     state.worldView = h > 0 ? 1 - (top + state.bottomBar) / h : 1;
+    const fill = l.state.regions.fill;
+    state.worldArea = fill && h > 0 ? (fill.width * fill.height) / (l.state.width * h) : 1;
+    state.orbRegions[0] = orbsAt[0];
+    state.orbRegions[1] = orbsAt[1];
+    // Remade outside the layout's own pass: `ui.meter` re-lays out (and calls back here).
+    if (!orbsQueued && orbRegions(l.formFactor)[0] !== orbsAt[0]) {
+      orbsQueued = true;
+      queueMicrotask(() => {
+        orbsQueued = false;
+        placeOrbs();
+      });
+    }
   };
   ui.layout.onChange(publishLayout);
   ui.layout.refresh();
@@ -1491,13 +1561,17 @@ async function main(): Promise<void> {
       for (const l of yard.lists) frame.list(l);
       frame.list(yard.flames);
       for (const l of yard.lods) frame.list(l);
-      // Live ghouls: one LOD list, refilled in place (its level memory is per index, so a
-      // death shifts the later ghouls' hysteresis once). A burning one is alone on its pooled
-      // dissolve material.
+      // Live ghouls: one LOD list, refilled in place and keyed by ghoul index, so a death
+      // (the later ghouls each move up a slot) keeps every other ghoul's LOD level and motion
+      // history. A burning one is alone on its pooled dissolve material.
       ghouls.clear();
-      for (const e of enemies) {
-        if (e.alive) ghouls.set(ghouls.count, e.t, e.params);
-        else if (e.burn >= 0) frame.mesh(ghoulLod, burns[e.burn]!.mat, e.t, e.params);
+      for (let i = 0; i < enemies.length; i++) {
+        const e = enemies[i]!;
+        if (e.alive) {
+          const slot = ghouls.count;
+          ghouls.set(slot, e.t, e.params);
+          ghouls.setKey(slot, i);
+        } else if (e.burn >= 0) frame.mesh(ghoulLod, burns[e.burn]!.mat, e.t, e.params);
       }
       frame.list(ghouls);
       frame.mesh(heroMesh, heroMat, hero.t, heroP);
@@ -1579,6 +1653,35 @@ async function main(): Promise<void> {
     state.centreSeam = col(4) - (col(0) + col(8)) / 2;
   };
 
+  /**
+   * Each ghoul's LOD level as drawn this frame (`renderer.lodLevelOf` by slot, mapped to the
+   * ghoul through the slot's key). On a flush with fewer slots than the last, count the ghouls
+   * drawn both frames whose level changed. Setup-time arrays: nothing allocates per frame.
+   */
+  const levelsNow = new Int8Array(ENEMY_COUNT).fill(-1);
+  const levelsLast = new Int8Array(ENEMY_COUNT).fill(-1);
+  state.ghoulLevels = Array.from(levelsNow);
+  let slotsLast = 0;
+  const readGhoulLevels = () => {
+    levelsNow.fill(-1);
+    for (let s = 0; s < ghouls.count; s++) {
+      const k = ghouls.keyOf(s);
+      if (k !== null) levelsNow[k] = renderer.lodLevelOf(ghouls, s);
+    }
+    if (ghouls.count < slotsLast) {
+      state.deathFlushes++;
+      for (let i = 0; i < ENEMY_COUNT; i++) {
+        if (levelsNow[i]! >= 0 && levelsLast[i]! >= 0 && levelsNow[i] !== levelsLast[i])
+          state.deathLodShifts++;
+      }
+    }
+    slotsLast = ghouls.count;
+    for (let i = 0; i < ENEMY_COUNT; i++) {
+      levelsLast[i] = levelsNow[i]!;
+      state.ghoulLevels[i] = levelsNow[i]!;
+    }
+  };
+
   let fps = 0;
   hooks.afterRender = (time) => {
     state.frame++;
@@ -1595,6 +1698,7 @@ async function main(): Promise<void> {
     state.lodCounts.length = lc.length;
     for (let i = 0; i < lc.length; i++) state.lodCounts[i] = lc[i]!;
     state.gpuErrors = gpuDiagnostics.errorCount;
+    readGhoulLevels();
   };
 
   ui.toasts.show('Click / tap to move · Space strike · Q E R abilities · 1–3 gear', {
