@@ -363,6 +363,34 @@ never reads it). Indexed meshes only; `frame.meshes` batches and `InstanceList`s
 `range`. Mode `?ranges` of `harness/render4.html` draws one mesh of three quads through three
 ranges in three tints and publishes `drawCalls` = 3.
 
+### Level of detail
+
+`frame.mesh` takes a `MeshLod` in place of a `Mesh` (ws/render-5): `{ meshes, thresholdsPx }`,
+`meshes[0]` the full mesh and each later one coarser, `thresholdsPx[i]` the smallest on-screen
+height (target px) at which level `i` still draws (descending). It is geom's `LodChain` with its
+`meshes` filled, so `createLodChain` plus one `renderer.createMesh` per geometry builds one:
+
+```ts
+const geos = createLodChain(rock, [0.25, 0.06]);
+const lod: MeshLod = { meshes: geos.map((g) => renderer.createMesh(g)), thresholdsPx: [160, 50] };
+for (const t of rocks) frame.mesh(lod, material, t);
+```
+
+Per instance and per view, the renderer projects the instance's bounding sphere
+(`meshes[0].bounds` through its matrix) with `lodSizePx(radius, distance, projection,
+viewportHeight)` (geom's `projectedSizePx` for a perspective camera; an orthographic one ignores
+distance), scales it by `camera.lodBias` (default 1; below 1 drops detail sooner) and picks a
+level with `pickLodLevel(sizePx, thresholds, count, previous, hysteresis)`: `selectLod`'s rule
+held at last frame's level while the size stays within `renderer.lodHysteresis` (a fraction,
+`DEFAULT_LOD_HYSTERESIS` = 0.1) of the boundary, so an instance parked on a threshold does not
+flicker. The level is remembered per `Transform` (or per params object when there is none) and
+shared across views. Opaque draws sort by mesh then material inside their order and layer, so
+200 instances over three levels are three draw calls; `renderer.stats.lodCounts[i]` counts the
+scene instances drawn at level `i` (empty on a frame without a `MeshLod`). The shadow pass draws
+the level the scene picked. `frame.meshes` batches and `InstanceList`s take a single `Mesh`
+only. `isMeshLod(m)` tells the two apart. Mode `?lod` of `harness/render5.html` draws 200
+instances of one chain.
+
 ### Lazy pipelines
 
 A `Material` builds a pipeline the first time a draw needs it, per (vertex layout, depth mode,
@@ -698,8 +726,8 @@ frame.mesh(mesh, skin, transform, { tint: [1, 0.9, 0.8, 1] });
 - Lights reach an instance by its `InstanceParams.layers` (`engine_instance_layers(in.flags)`),
   as for `engine_lambert_layers`: a lamp with `layers: 0b10` lights only the instances on
   layer 2.
-- `alphaMode: 'mask'` discards below `alphaCutoff` (the shadow pass has no fragment stage, so
-  a masked object still casts its whole silhouette); `'blend'` uses `blend: 'alpha'`, so it
+- `alphaMode: 'mask'` discards below `alphaCutoff` (the plain shadow pass has no fragment
+  stage, so a masked object still casts its whole silhouette); `'blend'` uses `blend: 'alpha'`, so it
   draws after the opaque draws, writes no depth and casts no shadow. `doubleSided` flips the
   normal on back faces; materials never cull, so single-sided only changes the lighting.
 - Tangents come from the mesh when its layout has them (`VERTEX_LAYOUT_3D_TANGENT`, through
@@ -724,16 +752,27 @@ frame.mesh(mesh, skin, transform, { tint: [1, 0.9, 0.8, 1] });
   panel inside a room: mode `?depth-test-off` of `harness/render4.html`). `gltf-load` wires
   all four from a file's `KHR_texture_transform`, `texCoord`, `occlusionTexture.strength` and
   material names.
+- `dissolve: StandardDissolve` (ws/render-5: `{ amount, edgeColor?, edgeWidth?, noise? }`)
+  burns the surface away: a texel whose value-noise (`engine_fbm` of the mesh uv × `noise`,
+  default 6) is below `amount` (0..1; 1 removes everything) is discarded, and the band
+  `edgeWidth` (default 0.05) above the threshold glows `edgeColor` (linear, default
+  `[1, 0.5, 0.1]`, through the emissive output, so bloom picks it up). The shadow drops the same
+  texels: a material created with `dissolve` draws its shadow through its own `fs_shadow` entry
+  (`MaterialDesc.shadowFragmentEntry`) on the same uniforms. Animate it without re-packing:
+  `material.setUniforms(new Float32Array([amount]), STANDARD_DISSOLVE_OFFSET * 4)`. A material
+  created without `dissolve` keeps the depth-only shadow pipeline and never discards. Mode
+  `?dissolve` of `harness/render5.html` cycles one over a shadowed ground.
 - The material writes the aux attachments of a target that has them (`MaterialDesc.aux`,
   *Aux targets*): roughness and metalness after the factors and maps, and the instance's
   screen-space velocity.
 - `STANDARD_WGSL` is the fragment shader (entry `fs_main`); `STANDARD_TEXTURE_SLOTS` names the
   five texture slots (`baseColor` 0 … `emissive` 4, at `@group(1) @binding(2 + slot)`);
-  `packStandardUniforms(desc, out?)` fills the `STANDARD_UNIFORM_FLOATS` (60) block the shader
-  reads: base rgba, metallic, roughness, normal scale, alpha cutoff, emissive rgb, flags
-  (1 double-sided, 2 mask, 4 blend), uv scale and offset, the uv rotation's cos and sin,
-  the occlusion strength, a pad, then five 8-float map slots (scale and offset, cos, sin,
-  texCoord, pad). Pass the packed block to `material.setUniforms` to change a factor later.
+  `packStandardUniforms(desc, out?)` fills the `STANDARD_UNIFORM_FLOATS` (68, 272 bytes) block
+  the shader reads: base rgba, metallic, roughness, normal scale, alpha cutoff, emissive rgb,
+  flags (1 double-sided, 2 mask, 4 blend, 8 dissolve), uv scale and offset, the uv rotation's
+  cos and sin, the occlusion strength, a pad, five 8-float map slots (scale and offset, cos,
+  sin, texCoord, pad), then the dissolve at `STANDARD_DISSOLVE_OFFSET` (60: amount, edge width,
+  noise scale, pad, edge rgb, pad). Pass the packed block to `material.setUniforms` to change a factor later.
 - `WGSL_PBR` is the helper text a custom material can prepend to its own WGSL:
   `engine_pbr(base, metallic, roughness, n, v, world_pos, ao, emissive) -> vec3f` (lit, fogged
   colour, every layer), `engine_pbr_layers(..., layer_mask)` (the same, lit only by the lights
@@ -756,8 +795,10 @@ engine prepends a prelude that provides:
 - `camera`: `view`, `proj`, `view_proj` (world → clip), `camera_pos`, `viewport` (scene target
   px), `view_index` (from `camera.viewIndex`) and `inv_view_proj` (clip → world, the inverse
   of `view_proj`: `camera.invViewProj`, at float `CAMERA_INV_VIEW_PROJ_OFFSET` = 60 of the
-  `CAMERA_BLOCK_FLOATS` block, for reconstructing world positions from depth) at
-  `@group(0) @binding(1)`
+  `CAMERA_BLOCK_FLOATS` block, for reconstructing world positions from depth; after
+  `view_index` come three `u32` pads, not a `vec3u`, which would align to 16 bytes and shift
+  every later field: `src/render/camera-layout.test.ts` checks the WGSL offsets against the
+  `CAMERA_*_OFFSET` constants) at `@group(0) @binding(1)`
 - `lights`: `ambient`, `point_count`, `sun_dir`, `sun_color`, `points[16]` (`position`,
   `radius`, `color`), `sun_view_proj`, `shadow_params`, `fog` and `fog_range` at
   `@group(0) @binding(2)`, the sun's shadow map `engine_shadow_map` and comparison sampler
@@ -810,8 +851,12 @@ inside it to keep the standard transform.
   `uniformBytes`, `textures`, `sampler` (`SamplerKind`: `linear-clamp`, `linear-repeat`, `linear-mip-repeat`, `nearest-mip-clamp`,
   `nearest-mip-repeat`, `nearest-clamp`), `perDrawUniforms`, `vertexEntry`, `fragmentEntry`,
   `name` (`Material.name`, default the label), `depthTest` (default true; false draws over the
-  scene on its layer, writing no depth) and `aux` (the shader writes the aux attachments through
-  `engine_write_aux`; see *Aux targets*).
+  scene on its layer, writing no depth), `aux` (the shader writes the aux attachments through
+  `engine_write_aux`; see *Aux targets*) and `shadowFragmentEntry` (ws/render-5: a
+  `@fragment fn name(in: VSOut)` with no outputs that the material's shadow casters run, so a
+  `discard` there cuts the shadow too; the material's group 1 is bound. Without it the shadow
+  pass is depth-only). `material.shadowFragment` says whether it has one and
+  `material.shadowPipelineFor(layout, format)` builds that pipeline.
 - `material.pipelineFor(layout, depth)` returns the pipeline for a `VertexLayout` and a
   `DepthMode` (0 = no depth attachment, the 2D path; 1 = test without writes, for blended draws;
   2 = test and write, for opaque draws), built on first use (*Lazy pipelines*). Depth pipelines
@@ -994,6 +1039,37 @@ such meshes with tint alpha 1 (the default); the rgb stays free. `harness/stream
 its Worker-meshed chunks this way.
 - Colour helpers: `hex('#rrggbb', intensity)` returns linear RGBA; also `rgba`, `scaleRgb`,
   `srgbToLinear`, `linearToSrgb`.
+
+### Compressed textures
+
+`uploadKtx2(renderer, ktx2, { srgb?, label? })` (ws/render-5) puts a KTX2 file parsed by
+`parseKtx2` (`@thunderclap/engine/assets`) on the GPU in its own block format and returns a
+`Texture` that binds wherever a texture does (a standard material's `baseColor`). Every mip the
+file carries is written with `queue.writeTexture` at its block-aligned row pitch
+(`ktx2LevelLayout(width, height, level, blockInfo(format))`: `ceil(w / blockW) × blockBytes`
+per row, returned as a `Ktx2LevelLayout`; a 2×2 mip is copied as one whole 4×4 block); the texture has exactly those mips, no
+generated ones. `srgb: true` / `false` picks the format's sRGB or linear twin where one exists
+(a colour map stored as `bc7-rgba-unorm` reads as `bc7-rgba-unorm-srgb`). A layered or cube file
+uploads as a 2D array. `blockInfo(format)` gives a format's `BlockInfo` (`{ width, height, bytes,
+family }`; 1×1 for the uncompressed formats, which upload without a feature).
+
+A device only has the block formats it was created with: `compressionFeatures(adapter)` lists
+the ones the adapter offers (`COMPRESSION_FEATURES`: `texture-compression-bc`, `-etc2`,
+`-astc`) for `requestDevice({ requiredFeatures })`, and `renderer.caps.compressed` (`RendererCaps`,
+`{ bc, etc2, astc }`, from `rendererCaps(device)`) says what the renderer's device got. Desktop
+GPUs have BC, phones ETC2 and ASTC, Apple silicon all three. `uploadKtx2` throws a
+`CompressedTextureError` (`format`, `family: CompressionFamily | null`, `caps`; the message names
+the format, the missing feature and the caps) when the device lacks the family, when WebGPU has
+no format for the file's `VkFormat`, and for a Basis Universal (BasisLZ / UASTC, `vkFormat` 0) or
+Zstd / ZLIB supercompressed payload: **no transcoder is bundled**, so ship one KTX2 per family
+(or a PNG fallback) and pick by `renderer.caps`. `CompressedUploadTarget` is the part of a
+renderer it needs (`device`, `caps`); `UploadKtx2Options` its options.
+
+Mode `?ktx2` of `harness/render5.html` builds a 64×64 BC1 file with seven mips in the page,
+creates its device with `compressionFeatures(adapter)` and uploads it, or reports the typed error.
+
+*Not yet:* a bundled Basis/UASTC transcoder, 3D (volume) KTX2 files, and requesting the
+compression features in `initGpu` itself (a page that wants them creates its device as above).
 
 ## Lower-level pieces
 

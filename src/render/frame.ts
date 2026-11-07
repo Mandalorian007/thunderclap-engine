@@ -1,6 +1,7 @@
 import type { Camera } from './camera';
 import type { InstanceList } from './instance-list';
 import { Lights, packInstanceFlags } from './lights';
+import { isMeshLod, type MeshLod } from './lod';
 import type { Material } from './material';
 import type { Mesh, MeshBounds, MeshRange } from './mesh';
 import type { SceneTarget } from './scene-target';
@@ -190,7 +191,8 @@ export interface FrameSink {
   /**
    * `t` places the draw when given; otherwise `p` is a `DrawParams`. `bounds` is the mesh-space
    * sphere the draw is frustum-culled by (through its instance matrix), or null for a draw that
-   * is never culled (sprites).
+   * is never culled (sprites). `lod` is the chain the renderer picks `mesh` from per view
+   * (`frame.mesh` with a `MeshLod`; `mesh` is then its first level).
    */
   pushInstance(
     material: Material,
@@ -198,6 +200,7 @@ export interface FrameSink {
     t: Transform | null,
     p: DrawParams | InstanceParams,
     bounds: MeshBounds | null,
+    lod?: MeshLod | null,
   ): void;
   /**
    * A batch of `mesh` with `material` (`frame.meshes` / `frame.list`); `bounds` is the mesh's
@@ -277,13 +280,34 @@ export class Frame {
    * Draw `mesh` with `material`, placed by `DrawParams` (x, y, w, h, rotation) or a `Transform`.
    * The draw carries `mesh.bounds` through its instance matrix, so a camera with `cull` on
    * skips it when the sphere is outside the frustum (sprites are never culled).
+   *
+   * Given a `MeshLod` (ws/render-5), each view picks one of its `meshes` for the instance from
+   * the projected height of its sphere (`meshes[0].bounds`) against `thresholdsPx`, times
+   * `camera.lodBias`, with `renderer.lodHysteresis` keyed on the `Transform` (or the
+   * `DrawParams` object), so pass a stable one; instances of a level sort together and draw
+   * as one instanced call per (level, material). `renderer.stats.lodCounts[i]` counts them.
    */
-  mesh(mesh: Mesh, material: Material, p: DrawParams): void;
-  mesh(mesh: Mesh, material: Material, t: Transform, p?: InstanceParams): void;
-  mesh(mesh: Mesh, material: Material, a: DrawParams | Transform, b?: InstanceParams): void {
-    const bounds = mesh.bounds;
-    if (a instanceof Transform) this.sink.pushInstance(material, mesh, a, b ?? NO_PARAMS, bounds);
-    else this.sink.pushInstance(material, mesh, null, a, bounds);
+  mesh(mesh: Mesh | MeshLod, material: Material, p: DrawParams): void;
+  mesh(mesh: Mesh | MeshLod, material: Material, t: Transform, p?: InstanceParams): void;
+  mesh(
+    mesh: Mesh | MeshLod,
+    material: Material,
+    a: DrawParams | Transform,
+    b?: InstanceParams,
+  ): void {
+    let lod: MeshLod | null = null;
+    let m: Mesh;
+    if (isMeshLod(mesh)) {
+      lod = mesh;
+      const first = mesh.meshes[0];
+      if (!first) throw new Error('frame.mesh: MeshLod has no meshes');
+      m = first;
+    } else {
+      m = mesh;
+    }
+    const bounds = m.bounds;
+    if (a instanceof Transform) this.sink.pushInstance(material, m, a, b ?? NO_PARAMS, bounds, lod);
+    else this.sink.pushInstance(material, m, null, a, bounds, lod);
   }
 
   /**

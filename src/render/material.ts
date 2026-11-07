@@ -91,6 +91,14 @@ export interface MaterialDesc extends BindingDesc {
   blend?: BlendMode;
   vertexEntry?: string;
   fragmentEntry?: string;
+  /**
+   * A fragment entry for the sun's shadow pass (ws/render-5): `@fragment fn name(in: VSOut)`,
+   * no outputs, that `discard`s what the material's own fragment discards (a dissolve, an
+   * alpha cutout), so the shadow has the same holes. The shadow pipeline is then built from
+   * this material's module with its group 1 bound. Default: none (the shadow pass is
+   * depth-only, every caster casts a full shadow).
+   */
+  shadowFragmentEntry?: string;
   sampler?: SamplerKind;
   /**
    * Allow a separate uniform block per draw: pass `DrawParams.uniforms` to `frame.sprite` /
@@ -117,6 +125,8 @@ export class Material {
   readonly depthTest: boolean;
   readonly blend: BlendMode;
   readonly bindings: BindingSet | null;
+  /** True when the material has a `shadowFragmentEntry` (its own shadow pipelines). */
+  readonly shadowFragment: boolean;
   private readonly device: GPUDevice;
   private readonly desc: MaterialDesc;
   private readonly pipelineLayout: GPUPipelineLayout;
@@ -133,6 +143,8 @@ export class Material {
   private readonly modules = new Map<VertexLayout, (GPUShaderModule | undefined)[]>();
   /** Pipelines per vertex layout, indexed by variant (see `VARIANTS`). */
   private readonly pipelines = new Map<VertexLayout, (GPURenderPipeline | undefined)[]>();
+  /** Shadow pipelines per vertex layout (`shadowFragmentEntry`). */
+  private readonly shadowPipelines = new Map<VertexLayout, GPURenderPipeline>();
   private readonly scratchVariant: { roughMetal: boolean; velocity: boolean; prevLane: boolean } = {
     roughMetal: false,
     velocity: false,
@@ -153,6 +165,7 @@ export class Material {
     this.name = desc.name ?? this.label;
     this.depthTest = desc.depthTest !== false;
     this.blend = desc.blend ?? 'alpha';
+    this.shadowFragment = desc.shadowFragmentEntry !== undefined;
     this.bindings = hasBindings(desc)
       ? new BindingSet(device, desc, sampler, defaultView, `material:${this.label}`, {
           perDraw: desc.perDrawUniforms,
@@ -199,30 +212,7 @@ export class Material {
       this.pipelines.set(layout, byKey);
     }
     const desc = this.desc;
-    // A material that does not write aux outputs compiles the plain module for every target.
-    const moduleKey = desc.aux ? aux + 4 * (lane ? 1 : 0) : 0;
-    let modules = this.modules.get(layout);
-    if (!modules) {
-      modules = new Array<GPUShaderModule | undefined>(8).fill(undefined);
-      this.modules.set(layout, modules);
-    }
-    let module = modules[moduleKey];
-    if (!module) {
-      let variant: PreludeVariant = PLAIN_VARIANT;
-      if (moduleKey !== 0) {
-        const v = this.scratchVariant;
-        v.roughMetal = (aux & 1) !== 0;
-        v.velocity = (aux & 2) !== 0;
-        v.prevLane = lane;
-        variant = v;
-      }
-      const code = `${materialPrelude(layout, variant)}\n// ---- material: ${this.label} ----\n${desc.wgsl}`;
-      const suffix =
-        (layout === VERTEX_LAYOUT_2D ? '' : `:${layout.name}`) +
-        (moduleKey === 0 ? '' : `:aux${aux}${lane ? 'p' : ''}`);
-      module = createShaderModule(this.device, code, `material:${this.label}${suffix}`);
-      modules[moduleKey] = module;
-    }
+    const module = this.moduleFor(layout, aux, lane);
     const is2d = layout === VERTEX_LAYOUT_2D && depth === 0 && aux === 0;
     const buffers: GPUVertexBufferLayout[] = lane
       ? [layout.buffer, INSTANCE_BUFFER_LAYOUT, prevLaneBufferLayout(layout)]
@@ -254,6 +244,70 @@ export class Material {
           }),
     });
     byKey[key] = pipeline;
+    return pipeline;
+  }
+
+  /**
+   * The shader module for `layout` and a target with aux key `aux` (`lane`: the previous-matrix
+   * lane), built on first use: a material that does not write aux outputs compiles the plain
+   * module for every target.
+   */
+  private moduleFor(layout: VertexLayout, aux: number, lane: boolean): GPUShaderModule {
+    const desc = this.desc;
+    const moduleKey = desc.aux ? aux + 4 * (lane ? 1 : 0) : 0;
+    let modules = this.modules.get(layout);
+    if (!modules) {
+      modules = new Array<GPUShaderModule | undefined>(8).fill(undefined);
+      this.modules.set(layout, modules);
+    }
+    let module = modules[moduleKey];
+    if (!module) {
+      let variant: PreludeVariant = PLAIN_VARIANT;
+      if (moduleKey !== 0) {
+        const v = this.scratchVariant;
+        v.roughMetal = (aux & 1) !== 0;
+        v.velocity = (aux & 2) !== 0;
+        v.prevLane = lane;
+        variant = v;
+      }
+      const code = `${materialPrelude(layout, variant)}\n// ---- material: ${this.label} ----\n${desc.wgsl}`;
+      const suffix =
+        (layout === VERTEX_LAYOUT_2D ? '' : `:${layout.name}`) +
+        (moduleKey === 0 ? '' : `:aux${aux}${lane ? 'p' : ''}`);
+      module = createShaderModule(this.device, code, `material:${this.label}${suffix}`);
+      modules[moduleKey] = module;
+    }
+    return module;
+  }
+
+  /**
+   * The sun's shadow pipeline for meshes in `layout` (`shadowFragmentEntry` set; throws
+   * otherwise): the plain module's vertex entry and the shadow fragment entry, no colour
+   * targets, depth write into `format` (the renderer's shadow map) with `less`, this material's
+   * pipeline layout (group 1 bound by the shadow pass). Built on first use and cached.
+   */
+  shadowPipelineFor(layout: VertexLayout, format: GPUTextureFormat): GPURenderPipeline {
+    const hit = this.shadowPipelines.get(layout);
+    if (hit) return hit;
+    const desc = this.desc;
+    const entry = desc.shadowFragmentEntry;
+    if (entry === undefined) {
+      throw new Error(`material ${this.label}: no shadowFragmentEntry`);
+    }
+    const module = this.moduleFor(layout, 0, false);
+    const pipeline = this.device.createRenderPipeline({
+      label: `material-shadow:${this.label}:${layout.name}`,
+      layout: this.pipelineLayout,
+      vertex: {
+        module,
+        entryPoint: desc.vertexEntry ?? 'vs_main',
+        buffers: [layout.buffer, INSTANCE_BUFFER_LAYOUT],
+      },
+      fragment: { module, entryPoint: entry, targets: [] },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      depthStencil: { format, depthWriteEnabled: true, depthCompare: 'less' },
+    });
+    this.shadowPipelines.set(layout, pipeline);
     return pipeline;
   }
 

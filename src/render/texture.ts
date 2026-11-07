@@ -20,6 +20,8 @@ export interface TextureDesc {
    * write; `generateMipmaps(device, texture)` fills the rest.
    */
   mips?: boolean;
+  /** Allocate exactly this many mip levels (overrides `mips`): a file's own chain (KTX2). */
+  mipLevelCount?: number;
   format?: GPUTextureFormat;
   usage?: GPUTextureUsageFlags;
   label?: string;
@@ -50,7 +52,12 @@ export class Texture implements TextureLike {
     this.format = desc.format ?? 'rgba8unorm-srgb';
     const array = desc.layers !== undefined;
     this.layers = array ? Math.max(1, Math.floor(desc.layers ?? 1)) : 1;
-    this.mipLevels = desc.mips ? mipLevelCount(this.width, this.height) : 1;
+    this.mipLevels =
+      desc.mipLevelCount !== undefined
+        ? Math.max(1, Math.floor(desc.mipLevelCount))
+        : desc.mips
+          ? mipLevelCount(this.width, this.height)
+          : 1;
     this.viewDimension = array ? '2d-array' : '2d';
     this.texture = device.createTexture({
       label: desc.label,

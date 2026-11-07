@@ -51,7 +51,7 @@ struct EngineCamera {
   camera_pos: vec4f,
   viewport: vec4f,
   view_index: u32,
-  _pad: vec3u,
+  _pad0: u32, _pad1: u32, _pad2: u32,
   inv_view_proj: mat4x4f,
   prev_view_proj: mat4x4f,
   prev_view: mat4x4f,

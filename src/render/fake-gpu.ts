@@ -96,6 +96,10 @@ export interface FakeDevice {
   readonly textureWrites: {
     texture: FakeTexture;
     bytesPerRow: number;
+    /** `rowsPerImage` of the layout (0 when not given). */
+    rowsPerImage: number;
+    /** The destination mip level (0 when not given). */
+    mipLevel: number;
     size: number[];
     data: ArrayBufferView | ArrayBuffer;
   }[];
@@ -109,8 +113,14 @@ export interface FakeDevice {
   readonly errors: string[];
 }
 
-/** Create a fake device. `limits` overrides defaults (e.g. `minUniformBufferOffsetAlignment`). */
-export function createFakeDevice(limits: Partial<Record<string, number>> = {}): FakeDevice {
+/**
+ * Create a fake device. `limits` overrides defaults (e.g. `minUniformBufferOffsetAlignment`);
+ * `features` is its feature set (`device.features`, empty by default).
+ */
+export function createFakeDevice(
+  limits: Partial<Record<string, number>> = {},
+  features: Iterable<string> = [],
+): FakeDevice {
   installGpuGlobals();
   const buffers: FakeBuffer[] = [];
   const textures: FakeTexture[] = [];
@@ -150,6 +160,7 @@ export function createFakeDevice(limits: Partial<Record<string, number>> = {}): 
 
   const device = {
     limits: { minUniformBufferOffsetAlignment: 256, maxUniformBufferBindingSize: 65536, ...limits },
+    features: new Set<string>(features),
     addEventListener() {},
     createBuffer(desc: GPUBufferDescriptor) {
       const b: FakeBuffer = {
@@ -249,7 +260,7 @@ export function createFakeDevice(limits: Partial<Record<string, number>> = {}): 
         writes.push({ buffer, offset, bytes: size });
       },
       writeTexture(
-        dst: { texture: FakeTexture },
+        dst: { texture: FakeTexture; mipLevel?: number },
         data: ArrayBufferView | ArrayBuffer,
         layout: GPUTexelCopyBufferLayout,
         size: number[],
@@ -260,6 +271,8 @@ export function createFakeDevice(limits: Partial<Record<string, number>> = {}): 
         textureWrites.push({
           texture: dst.texture,
           bytesPerRow: layout.bytesPerRow ?? 0,
+          rowsPerImage: layout.rowsPerImage ?? 0,
+          mipLevel: dst.mipLevel ?? 0,
           size,
           data,
         });
