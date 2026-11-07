@@ -181,6 +181,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | v1 docs: README front door, guide pass, migration guide, deprecated-name check on snippets | ws/docs-v1 | brief `docs/briefs/docs-v1.md` | after train 15 | 🟣 done at `1d82121` (README front door; 77-row migration guide with drift test; `check:snippets` fails on deprecated; 3 stale uses fixed). Train 16 |
 | 5 | v1 templates and demos: no deprecated names (lint), third-person on `skinPose`, template READMEs and tests | ws/templates-v1 | brief `docs/briefs/templates-v1.md` | after train 15 | 🔵 running |
 | 5 | Headless `createGame` (`gpu`, `clock`, `host`); touch replay sink; `HostLifecycle.state` getter; WorldPanel keyed on aux | ws/core-8 | brief `docs/briefs/core-8.md` | train 16 | 🟣 done at `327aacc` (headless `createGame({ gpu, clock })`; `createTestGame` wraps it; touch replay bounds; `HostLifecycle.state` getter; WorldPanel keyed on aux; 8 specs green). Train 16 |
+| 5 | v1 internal migration: no deprecated names in `src`, harness, e2e or packages; check wired into `pnpm check` | ws/src-v1 | brief `docs/briefs/src-v1.md` | after train 16 | ⏳ queued |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
