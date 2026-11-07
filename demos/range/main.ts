@@ -22,11 +22,11 @@ import { box } from '@thunderclap/engine/geom';
 import {
   createRay,
   Gestures,
-  type Hit,
   type HitTester,
   Input,
   Look,
   meshTester,
+  type PickHit,
 } from '@thunderclap/engine/input';
 import { boot } from '@thunderclap/engine/platform';
 import {
@@ -231,7 +231,7 @@ async function main(): Promise<void> {
 
   const lights = new Lights();
   lights.ambient.set([0.22, 0.22, 0.26]);
-  lights.sun.dir = [-0.4, -1.0, -0.55];
+  lights.sun.direction = [-0.4, -1.0, -0.55];
   lights.sun.color = [0.85, 0.82, 0.76];
 
   // Sparks on a hit, a tracer along every shot.
@@ -336,7 +336,7 @@ async function main(): Promise<void> {
     aim(Math.atan2(dx, -dz), Math.atan2(dy, Math.hypot(dx, dz)));
   }
 
-  function knockOver(t: Target, at: Hit<number>): void {
+  function knockOver(t: Target, at: PickHit<number>): void {
     t.up = false;
     t.flash[1] = 1;
     tweens
@@ -381,7 +381,7 @@ async function main(): Promise<void> {
     ray.dir[0] = state.aimDir[0];
     ray.dir[1] = state.aimDir[1];
     ray.dir[2] = state.aimDir[2];
-    let best: Hit<number> | null = null;
+    let best: PickHit<number> | null = null;
     for (const test of testers) {
       const h = test(ray);
       if (h && (!best || h.distance < best.distance)) best = h;

@@ -8,7 +8,8 @@
 // node_modules, dist, .turbo and lockfiles stay behind; package.json is rewritten in place (name
 // from --name or the directory's basename, private, @thunderclap/engine from "workspace:*" to
 // --engine or the default below, monorepo-only scripts dropped); the repo's biome.json, a
-// .gitignore and a README.md are written; the template's CLAUDE.md stays, minus its references to
+// .gitignore and a README.md are written (the template's own README under a generated title and
+// intro, when it has one); the template's CLAUDE.md stays, minus its references to
 // this repo. --engine takes any dependency spec ("^0.3.0", "github:...", "link:../engine",
 // "file:../engine.tgz") or a directory, which becomes "link:<path relative to <dir>>".
 //
@@ -185,6 +186,35 @@ export function gitignoreText() {
   );
 }
 
+/** The template README's line that only applies inside the engine repo. */
+const REPO_ONLY_README = /^In the engine repo: .*\n\n?/m;
+
+/**
+ * The README of a template that ships one: the generated title and intro, then the template's
+ * text (its H1 and the engine-repo-only line dropped), then how the engine is depended on.
+ */
+export function mergedReadme({ name, template, engine }, body) {
+  const text = body.replace(/^# .*\n+/, '').replace(REPO_ONLY_README, '');
+  return `# ${name}
+
+A game on [\`${ENGINE}\`](${ENGINE_REPO}), started from its \`${template}\` template
+(\`pnpm create-game\`). The engine is a dependency (\`${engine}\`); this project owns the rules, content,
+scenes and art.
+
+${text.trimEnd()}
+${linkNote(engine)}`;
+}
+
+function linkNote(engine) {
+  return engine.startsWith('link:')
+    ? `
+The engine is linked from a local clone (\`${engine}\`) because ${ENGINE} is not on npm yet. Keep
+the clone where it is, or point the dependency at \`github:Mandalorian007/thunderclap-engine\`. Once
+the package is published, replace the link with a version range (\`^x.y.z\`).
+`
+    : '';
+}
+
 export function readmeText({ name, template, engine }) {
   return `# ${name}
 
@@ -200,15 +230,7 @@ pnpm dev        # Vite at http://127.0.0.1:5173 (a WebGPU browser: Chrome, Edge 
 pnpm check      # tsc, Biome, Vitest
 pnpm build      # the static game in dist/ (pnpm preview serves it)
 \`\`\`
-${
-  engine.startsWith('link:')
-    ? `
-The engine is linked from a local clone (\`${engine}\`) because ${ENGINE} is not on npm yet. Keep
-the clone where it is, or point the dependency at \`github:Mandalorian007/thunderclap-engine\`. Once
-the package is published, replace the link with a version range (\`^x.y.z\`).
-`
-    : ''
-}
+${linkNote(engine)}
 ## Where things are
 
 - \`CLAUDE.md\`: the shape of this project and the engine concepts it uses. Read it first.
@@ -258,8 +280,13 @@ export function plan(opts) {
   if (!copies.includes('biome.json'))
     writes.set('biome.json', readFileSync(join(root, 'biome.json'), 'utf8'));
   if (!copies.includes('.gitignore')) writes.set('.gitignore', gitignoreText());
-  if (!copies.includes('README.md'))
-    writes.set('README.md', readmeText({ name, template: opts.template, engine }));
+  const info = { name, template: opts.template, engine };
+  writes.set(
+    'README.md',
+    copies.includes('README.md')
+      ? mergedReadme(info, readFileSync(join(src, 'README.md'), 'utf8'))
+      : readmeText(info),
+  );
 
   return {
     dest,

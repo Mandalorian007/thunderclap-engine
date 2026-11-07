@@ -21,6 +21,7 @@ import {
 } from '@thunderclap/engine/render';
 import type { GameCtx } from '../ctx';
 import { type Board, isFaceUp, phase, reveal, settle } from '../rules/board';
+import { recordWin } from '../save/schema';
 
 /** Cell pitch and tile size in world units (design px; the camera does the fitting). */
 const PITCH = 200;
@@ -129,11 +130,7 @@ export function createBoardScene(ctx: GameCtx): Scene<GameCtx, Frame> {
     timers.cancel(settling);
     settling = phase(next) === 'mismatch' ? timers.after(MISMATCH_S, settleNow) : 0;
     if (!wasWon && phase(next) === 'won') {
-      ctx.save.update((d) => ({
-        ...d,
-        wins: d.wins + 1,
-        bestMoves: d.bestMoves === null ? next.moves : Math.min(d.bestMoves, next.moves),
-      }));
+      ctx.save.update((d) => recordWin(d, next.moves));
       ctx.ui.toasts.show(`Solved in ${next.moves} moves`, { tone: 'success', duration: 3000 });
       ctx.analytics?.emit('level_complete', {
         level: `${next.cols}x${next.rows}`,

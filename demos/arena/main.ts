@@ -266,7 +266,7 @@ async function main(): Promise<void> {
   // ── Lights: a low sun with a shadow map, two coloured points on orbs, fog ─
   const lights = new Lights();
   lights.ambient.set([0.16, 0.17, 0.2]);
-  lights.sun.dir = [-0.55, -1.0, 0.35];
+  lights.sun.direction = [-0.55, -1.0, 0.35];
   lights.sun.color = [1.05, 0.98, 0.88];
   lights.sun.shadow = { extent: 18, size: 2048 };
   const POINTS = [

@@ -57,7 +57,7 @@ export function createArenaScene(ctx: GameCtx): Scene<GameCtx, Frame> {
   const { renderer, camera, follow, look, player } = ctx;
   const lights = new Lights();
   lights.ambient.set([0.24, 0.26, 0.32]);
-  lights.sun.dir = [-0.45, -1.0, -0.3];
+  lights.sun.direction = [-0.45, -1.0, -0.3];
   lights.sun.color = [1.0, 0.94, 0.82];
   lights.sun.shadow = { extent: SHADOW_EXTENT, size: 2048 };
   lights.fog.color = SKY;

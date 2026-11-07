@@ -32,7 +32,9 @@ const engine = await createGame<Action, ProgressStore, GameCtx>({
 
 if (engine) {
   const atlasTex = engine.renderer.textureFromSource(buildAtlas(), 'atlas');
-  const atlas = engine.renderer.createSpriteMaterial(atlasTex, 'atlas', {
+  const atlas = engine.renderer.createSpriteMaterial({
+    texture: atlasTex,
+    label: 'atlas',
     sampler: 'nearest-clamp',
   });
   const tweens = createTweens();

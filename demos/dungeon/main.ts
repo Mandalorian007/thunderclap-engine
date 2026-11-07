@@ -102,7 +102,7 @@ const ctx = await createGame({
   root: document.getElementById('app')!,
   title: 'ThunderClap demo: dungeon',
   design: { width: WORLD_W, height: WORLD_H },
-  post: { fog: { enabled: false }, bloom: { enabled: true, threshold: 1.0, intensity: 0.8 } },
+  post: { mist: { enabled: false }, bloom: { enabled: true, threshold: 1.0, intensity: 0.8 } },
   save: (host) =>
     createSaveStore({
       game: 'demo-dungeon',
@@ -130,7 +130,11 @@ if (ctx) {
 
   // --- Atlas and material -----------------------------------------------------------------
   const atlas = renderer.textureFromSource(buildAtlas(), 'dungeon-atlas');
-  const material = renderer.createSpriteMaterial(atlas, 'dungeon', { sampler: 'nearest-clamp' });
+  const material = renderer.createSpriteMaterial({
+    texture: atlas,
+    label: 'dungeon',
+    sampler: 'nearest-clamp',
+  });
   const UV = {
     floorA: cellUv(CELL.floorA),
     floorB: cellUv(CELL.floorB),

@@ -6,7 +6,7 @@ This folder is a complete, copyable 2D puzzle game on `@thunderclap/engine`. To 
 
 - `pnpm dev`: Vite dev server at `http://127.0.0.1:5173` (from the repo root: `pnpm template:puzzle`). The repo's `pnpm test:e2e` boots the page once per device row (`e2e/templates.spec.ts`) and reads `window.__template` (`{ scene, frames, ... }`, set in `main.ts`).
 - `pnpm typecheck`, `pnpm lint`, `pnpm test`: `tsc`, Biome (the repo's `biome.json`), Vitest. `pnpm check` runs all three; the repo root's `pnpm check` runs it too (`check:template-puzzle`).
-- Tests are product tests only (`src/**/*.test.ts`): the rules and the save schema. The engine verifies the platform (WebGPU, input, layout) itself.
+- Tests are product tests only (`src/**/*.test.ts`): the rules and the save schema, plus `save/host.test.ts`, which plays a board to a win and reloads the save on the engine's fake host (`createFakeHost`, `createFixedClock` from `@thunderclap/engine/testing`). The engine verifies the platform (WebGPU, input, layout) itself.
 
 ## Shape
 
@@ -17,7 +17,7 @@ src/ctx.ts          Action names, their bindings, GameCtx (= EngineCtx + game no
 src/analytics.ts    the game's events (level_start, level_complete) and createBeaconSink(url); off until COLLECT_URL is set
 src/rules/          pure TypeScript: Board, createBoard, reveal, settle, phase. No DOM; only createRandom from the engine
 src/scenes/board.ts the scene: input → rules, rules → sprites; camera fitted to the free rect
-src/save/schema.ts  the save: schema, version, migrations, createProgressStore(host)
+src/save/schema.ts  the save: schema, version, migrations, createProgressStore(host), recordWin
 src/layout/spec.ts  LayoutSpec: HUD regions per form factor
 src/ui/hud.ts       DOM widgets registered against layout regions
 ```

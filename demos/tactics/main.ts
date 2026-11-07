@@ -146,7 +146,7 @@ const ctx = await createGame({
   root: document.getElementById('app')!,
   title: 'ThunderClap demo: tactics',
   design: { width: DESIGN_W, height: DESIGN_H },
-  post: { fog: { enabled: false }, bloom: { enabled: false } },
+  post: { mist: { enabled: false }, bloom: { enabled: false } },
   input: {
     bindings: {
       select: [{ gesture: 'tap' }, { padButton: 0 }, { key: 'Enter' }, { key: 'Space' }],
@@ -176,7 +176,11 @@ if (ctx) {
 
   // --- Atlas, material and reusable draw params --------------------------------------------------
   const atlas = renderer.textureFromSource(buildAtlas(), 'tactics-atlas');
-  const material = renderer.createSpriteMaterial(atlas, 'tactics', { sampler: 'nearest-clamp' });
+  const material = renderer.createSpriteMaterial({
+    texture: atlas,
+    label: 'tactics',
+    sampler: 'nearest-clamp',
+  });
   const WHITE: RGBA = [1, 1, 1, 1];
   const TINT_MOVE = hex('#3b8cff', 0.6);
   const TINT_ATTACK = hex('#ff4a3a', 0.6);

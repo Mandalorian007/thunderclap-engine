@@ -1,8 +1,9 @@
 /**
  * The character at runtime: the generated glb parsed into a skinned mesh, a skeleton and clips;
  * a mixer and the animation graph; root motion split off the attack; two foot IK chains; a head
- * look-at; three cosmetic sockets. `update(dt)` composes one pose and writes the joint palette,
- * `render(frame)` draws the body and the chosen cosmetics. Nothing is allocated per frame.
+ * look-at; three cosmetic sockets. `update(dt)` composes one pose and hands it to one
+ * `skinPose` call, which writes the joint palette; `render(frame)` draws the body and the chosen
+ * cosmetics. Nothing is allocated per frame.
  */
 import {
   type AnimationClip,
@@ -20,7 +21,7 @@ import {
   poseToWorld,
   type Skeleton,
   type Socket,
-  skinMatrices,
+  skinPose,
   twoBoneIk,
   WORLD_NODE_FLOATS,
 } from '@thunderclap/engine/anim';
@@ -143,7 +144,6 @@ export function createCharacter(
   const graph = createCharacterGraph(mixer, clips);
   const pose: Pose = mixer.pose;
   const world = new Float32Array(skeleton.parents.length * WORLD_NODE_FLOATS);
-  const jointMats = new Float32Array(JOINT_COUNT * 12);
   const legL: IkChain = createIkChain(skeleton, { root: J.thighL, mid: J.shinL, tip: J.footL });
   const legR: IkChain = createIkChain(skeleton, { root: J.thighR, mid: J.shinR, tip: J.footR });
   const motionDelta = new Float32Array(4);
@@ -249,9 +249,9 @@ export function createCharacter(
         });
       }
 
-      poseToWorld(skeleton, pose, world);
-      skinMatrices(skeleton, world, jointMats);
-      palette.set(0, jointMats);
+      // One call from the finished pose to the palette: world matrices into `world` (the
+      // sockets read them next), joint matrices straight into slot 0.
+      skinPose(skeleton, pose, palette, 0, undefined, world);
       for (const c of cosmetics) attachTransform(c.socket, world, bodyWorld, c.transform);
     },
 

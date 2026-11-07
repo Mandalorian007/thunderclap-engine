@@ -6,7 +6,7 @@ This folder is a complete, copyable 2D side-scrolling platformer on `@thundercla
 
 - `pnpm dev`: Vite dev server at `http://127.0.0.1:5173` (from the repo root: `pnpm template:platformer`). The repo's `pnpm test:e2e` boots the page once (`e2e/templates.spec.ts`) and reads `window.__template` (`{ scene, frames }`, set in `main.ts`).
 - `pnpm typecheck`, `pnpm lint`, `pnpm test`: `tsc`, Biome (the repo's `biome.json`), Vitest. `pnpm check` runs all three; the repo root's `pnpm check` runs it too (`check:template-platformer`).
-- Tests are product tests only (`src/**/*.test.ts`): the level parser, the collision and player step (coyote time, jump buffering, one-way platforms, mover carry) and the save migration. The engine verifies the platform itself (the camera follow, the touch zones and the parallax are its).
+- Tests are product tests only (`src/**/*.test.ts`): the level parser, the collision and player step (coyote time, jump buffering, one-way platforms, mover carry) and the save migration, plus `save/host.test.ts`, which records a run and reloads it on the engine's fake host (`createFakeHost`, `createFixedClock` from `@thunderclap/engine/testing`). The engine verifies the platform itself (the camera follow, the touch zones and the parallax are its).
 
 ## Shape
 

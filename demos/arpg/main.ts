@@ -332,7 +332,7 @@ async function main(): Promise<void> {
     // validation against the three-target scene pass. See the README's known limits.
     post: {
       bloom: { enabled: true, intensity: 0.85, threshold: 1.0, knee: 0.5, scatter: 0.72 },
-      fog: { enabled: false, density: 0 },
+      mist: { enabled: false, density: 0 },
       motionBlur: { enabled: BLUR, mode: 'object', intensity: 0.6 },
       godRays: { enabled: false, intensity: 0 },
       ao: { enabled: true, radius: 0.9, intensity: 1.1, bias: 0.04, power: 1.4 },
@@ -554,7 +554,7 @@ async function main(): Promise<void> {
   // ── Lights ──────────────────────────────────────────────────────────────
   const lights = new Lights();
   lights.ambient.set([0.07, 0.06, 0.12]);
-  lights.sun.dir = [0.55, -0.62, 0.55];
+  lights.sun.direction = [0.55, -0.62, 0.55];
   lights.sun.color = [0.95, 0.5, 0.36];
   lights.sun.shadow = { extent: 30, size: 2048 };
   lights.fog.color = [0.16, 0.1, 0.2];

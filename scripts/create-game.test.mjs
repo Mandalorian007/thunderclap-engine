@@ -1,8 +1,8 @@
 // Tests for scripts/create-game.mjs. Run by `pnpm check:create-game` (node --test), which
 // `pnpm check` runs. Scaffolds into a temp dir, asserts the rewritten manifest and the file set, then
-// installs offline (`pnpm install --offline`), then runs `tsc --noEmit` and `pnpm build` against
-// this repo through `--engine link:<repo>`. When the offline install cannot be satisfied from the
-// pnpm store the tsc and build steps are skipped and said so; the manifest and file-set assertions
+// installs offline (`pnpm install --offline`), then runs the game's own `pnpm test`, `tsc --noEmit`
+// and `pnpm build` against this repo through `--engine link:<repo>`. When the offline install
+// cannot be satisfied from the pnpm store those steps are skipped and said so; the manifest and file-set assertions
 // always run.
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -181,7 +181,15 @@ for (const { name: template } of listTemplates()) {
     // CLAUDE.md no longer points at this repo's root scripts.
     const claude = readFileSync(join(dir, 'CLAUDE.md'), 'utf8');
     assert.doesNotMatch(claude, /from the repo root|check:template-|repo's `biome\.json`/);
-    assert.match(readFileSync(join(dir, 'README.md'), 'utf8'), /pnpm dev/);
+    const readme = readFileSync(join(dir, 'README.md'), 'utf8');
+    assert.match(readme, /^# my-game\n/);
+    assert.match(readme, /pnpm dev/);
+    assert.match(readme, /pnpm test/);
+    assert.doesNotMatch(readme, /In the engine repo|pnpm template:/);
+    if (existsSync(join(root, 'templates', template, 'README.md'))) {
+      assert.match(readme, /## Edit these first/);
+      assert.match(readme, /docs\/guide\/getting-started\.md/);
+    }
 
     // Typecheck against the linked engine. Offline install only; skip (and say so) when the store
     // cannot satisfy it.
@@ -201,6 +209,8 @@ for (const { name: template } of listTemplates()) {
       return;
     }
     assert.ok(existsSync(join(dir, 'node_modules', ENGINE, 'package.json')), 'engine not linked');
+    // The game's own tests pass out of the box, as a new project's first `pnpm test` would run.
+    execFileSync('pnpm', ['test'], { cwd: dir, stdio: 'inherit', timeout: 180_000 });
     execFileSync('pnpm', ['exec', 'tsc', '--noEmit'], {
       cwd: dir,
       stdio: 'inherit',

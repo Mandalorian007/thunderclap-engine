@@ -188,7 +188,7 @@ async function main(): Promise<void> {
   // the material (`engine_fog`), so the post fog and god rays stay off.
   const post = new PostStack(renderer, {
     bloom: { enabled: true, intensity: 0.55, threshold: 1.0, knee: 0.5, emissiveWeight: 1.4 },
-    fog: { enabled: false },
+    mist: { enabled: false },
     godRays: { enabled: false },
     vignette: { enabled: true, intensity: 0.22 },
     grade: { enabled: true, tonemap: 'aces', exposure: 1.0 },
@@ -253,7 +253,7 @@ async function main(): Promise<void> {
   const sunDir = new Float32Array(3);
   const sunColor = new Float32Array(3);
   const ambient = new Float32Array(3);
-  lights.sun.dir = sunDir;
+  lights.sun.direction = sunDir;
   lights.sun.color = sunColor;
   const fogColor = new Float32Array(3);
   lights.fog.color = fogColor;
