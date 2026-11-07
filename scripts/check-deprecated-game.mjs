@@ -20,13 +20,16 @@
 //    through the checker (ws/testing-3): a read that became a getter or a plain value, called
 //    as before (TS2349, `cache.stats()`), and a missing member (TS2339, TS2551) on a type the
 //    game wraps (`type Ctx = SceneStack & {…}`), by the engine types of the receiver and of
-//    the member's declaration.
+//    the member's declaration. The receiver is typed from its syntax node, so one wrapped in
+//    parentheses or an assertion (`(x as T).m()`, `(<T>x).m()`, `x!.m()`) resolves to the
+//    engine type too (ws/testing-4).
 //
 // Exit 1 when anything is found, 0 when the game uses no old engine name.
 // Node built-ins only, plus the engine's own `typescript`.
 import { readFileSync, realpathSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { getTouchingPropertyName, isPropertyAccessExpression } from 'typescript/unstable/ast';
 import { API } from 'typescript/unstable/sync';
 import { findDeprecatedUses } from './check-deprecated.mjs';
 
@@ -44,8 +47,7 @@ export function migrationTable(text) {
   for (const line of text.split('\n')) {
     const cells = line.split('|').map((c) => c.trim());
     if (cells.length < 5 || cells[0] !== '') continue;
-    // The module cell is `anim` or a bare anim: the getter table leaves out the backticks, so
-    // `check-snippets`' "no row is still exported" rule skips its rows (their names still are).
+    // The module cell is `anim`, or a bare anim as the getter table wrote it before ws/testing-4.
     const mod = /^`([\w-]+)`$|^([\w-]+)$/.exec(cells[1]);
     const old = /^`([^`(]+)(\(([^)]*)\))?/.exec(cells[2]);
     if (!mod || !old) continue;
@@ -163,12 +165,14 @@ const memberRows = (rows, member, types) =>
   rows.filter((r) => r.type !== null && r.member === member && types.has(r.type));
 
 /**
- * The `engineTypesAt(pos)` of `removedRowsFor` for `file`, on the project's checker: the
- * symbols of the receiver's type (before the `.` / `?.` / `!.` ahead of `pos`), its alias and
- * its union or intersection parts, plus the parent of the member's own symbol when it resolves,
- * each kept when `isEngine` holds for its declaration's file.
+ * The `engineTypesAt(pos)` of `removedRowsFor` for the source file `sf`, on the project's
+ * checker: the symbols of the receiver's type (the expression of the `a.m` / `a?.m` whose name
+ * is at `pos`), its alias and its union or intersection parts, plus the parent of the member's
+ * own symbol when it resolves, each kept when `isEngine` holds for its declaration's file. The
+ * receiver is typed from its node, so a wrapped one types as the checker sees it: `(x as T)` and
+ * `(<T>x)` as T, `x!` as x without `undefined` (ws/testing-4).
  */
-function engineTypesAtFor(checker, file, text, isEngine) {
+function engineTypesAtFor(checker, file, sf, isEngine) {
   const inEngineDecl = (sym) => sym?.declarations?.some((h) => isEngine(h.path)) ?? false;
   return (pos) => {
     const out = new Set();
@@ -176,9 +180,11 @@ function engineTypesAtFor(checker, file, text, isEngine) {
       if (sym && inEngineDecl(sym)) out.add(sym.name);
     };
     add(checker.getSymbolAtPosition(file, pos)?.getParent());
-    let i = pos - 1;
-    while (i >= 0 && /[\s.?!]/.test(text[i])) i--;
-    const type = i >= 0 ? checker.getTypeAtPosition(file, i) : undefined;
+    const access = getTouchingPropertyName(sf, pos)?.parent;
+    const type =
+      access && isPropertyAccessExpression(access)
+        ? checker.getTypeAtLocation(access.expression)
+        : undefined;
     for (const t of type ? [type, ...(type.getTypes?.() ?? [])] : []) {
       add(t.getSymbol());
       add(t.getAliasSymbol());
@@ -224,9 +230,10 @@ export function findGameDeprecations(
       const seen = new Set();
       for (const project of api.updateSnapshot({ openProjects: configs }).getProjects()) {
         for (const file of project.rootFiles) {
-          if (!project.program.getSourceFile(file)) continue;
+          const sf = project.program.getSourceFile(file);
+          if (!sf) continue;
           const text = readFileSync(file, 'utf8');
-          const typesAt = engineTypesAtFor(project.checker, file, text, isEngine);
+          const typesAt = engineTypesAtFor(project.checker, file, sf, isEngine);
           for (const d of project.program.getSemanticDiagnostics(file)) {
             const hit = removedRowsFor(d, text, rows, engineSpecifier, typesAt);
             if (hit.length === 0) continue;

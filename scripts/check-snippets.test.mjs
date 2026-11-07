@@ -159,6 +159,16 @@ test('findDeprecatedUses reports 1-based lines and columns past non-ASCII text',
   );
 });
 
+/** The table rows (`` | `mod` | `Type.member()` | … ``) under the guide's getter heading. */
+const getterLines = (lines) => {
+  const start = lines.findIndex((l) => /^## Reads that became getters\s*$/.test(l));
+  if (start < 0) return [];
+  const end = lines.findIndex((l, i) => i > start && /^## /.test(l));
+  return lines
+    .slice(start + 1, end < 0 ? undefined : end)
+    .filter((l) => /^\|\s*`[^`]+`\s*\|\s*`[^`(]+/.test(l));
+};
+
 test('the migration guide lists every @deprecated export in api/, and no row is still exported', () => {
   const key = (r) => `${r.module === '.' ? 'engine' : r.module} ${r.name}`;
   const api = deprecatedApiNames().map(key);
@@ -171,17 +181,20 @@ test('the migration guide lists every @deprecated export in api/, and no row is 
     'deprecated in api/*.api.txt but missing from docs/guide/migrating-to-v1.md',
   );
   // Every row is a 0.x name the 1.0.0 cut removed: none is still on its entry's surface. A row
-  // for a retired call signature (`createSpriteMaterial(texture, label?, opts?)`) keeps its name.
+  // for a retired call signature (`createSpriteMaterial(texture, label?, opts?)`) keeps its name,
+  // and so does a row of the *Reads that became getters* table (`AssetCache.stats()` is now the
+  // `stats` getter).
   const exported = apiNames();
+  const rowKey = (l) => /^\|\s*`([^`]+)`\s*\|\s*`([^`(]+)/.exec(l).slice(1).join(' ');
+  const lines = guide.split('\n');
   const overload = new Set(
-    guide
-      .split('\n')
-      .filter((l) => /^\|\s*`[^`]+`\s*\|\s*`[^`(]+\([^)`]+\)`/.test(l))
-      .map((l) => /^\|\s*`([^`]+)`\s*\|\s*`([^`(]+)/.exec(l).slice(1).join(' ')),
+    lines.filter((l) => /^\|\s*`[^`]+`\s*\|\s*`[^`(]+\([^)`]+\)`/.test(l)).map(rowKey),
   );
+  const getter = new Set(getterLines(lines).map(rowKey));
+  assert.ok(getter.size > 0, 'the getter table has no rows: is its heading still right?');
   assert.ok(rows.length > 0, 'the migration table has no rows: is the parser still right?');
   assert.deepEqual(
-    rows.map(key).filter((k) => exported.has(k) && !overload.has(k)),
+    rows.map(key).filter((k) => exported.has(k) && !overload.has(k) && !getter.has(k)),
     [],
     'a row of docs/guide/migrating-to-v1.md names something api/*.api.txt still exports',
   );

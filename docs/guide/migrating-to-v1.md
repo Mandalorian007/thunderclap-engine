@@ -143,14 +143,14 @@ other row, they are removed in `1.0.0`.
 
 These changed without an alias, so the compiler flags them as errors, not suggestions: a call
 of each is TS2349 (*This expression is not callable*). The members keep their names, so the
-*Module* cells here have no backticks: that keeps these rows out of the "no row is still
-exported" test in `scripts/check-snippets.test.mjs`, which the table above must pass.
+"no row is still exported" test in `scripts/check-snippets.test.mjs`, which the table above must
+pass, exempts the rows under this heading.
 
 | Module | 0.x call | v1 read |
 | --- | --- | --- |
-| assets | `AssetCache.stats()` | the `stats` getter: `cache.stats` |
-| host | `HostFullscreen.active()` | the `active` getter: `host.fullscreen.active`; a custom `Host` writes it as a getter or a plain boolean |
-| host | `HostLifecycle.state()` | the `state` getter: `host.lifecycle?.state`; a custom `Host` writes it as a getter or a value |
+| `assets` | `AssetCache.stats()` | the `stats` getter: `cache.stats` |
+| `host` | `HostFullscreen.active()` | the `active` getter: `host.fullscreen.active`; a custom `Host` writes it as a getter or a plain boolean |
+| `host` | `HostLifecycle.state()` | the `state` getter: `host.lifecycle?.state`; a custom `Host` writes it as a getter or a value |
 
 ## A worked rename
 
