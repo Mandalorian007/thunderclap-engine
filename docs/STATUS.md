@@ -156,6 +156,9 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Post 7: stack clears its jitter hook when detached; post3 off deprecated jitter-camera calls | ws/post-7 | brief `docs/briefs/post-7.md` | post-6 | 🟣 in E-031 train 9 at `00d0f54` (check 2233, snap 0, post2 56, post3 48, post4 56, depth-post 32, xr 8) |
 | 5 | Adoption 4: arpg orbs in a content bottom bar; floor grout off centre; geom on `hash2f` | ws/adoption-4 | brief `docs/briefs/adoption-4.md` | ui-8, adoption-3, core-3 | 🟣 in E-031 train 9 at `2fe774a` (check 2228, snap 0, arpg 58/14; `centreSeam` −21.5 → −0.03; overflow warnings 0 on every row) |
 | 5 | Render 8: per-object velocity for single draws; drop unbound `prevBuffer` upload; `renderer.jitter` getter | ws/render-8 | brief `docs/briefs/render-8.md` | render-7 | 🔵 dispatched (Opus, offset 1100) |
+| 5 | Input 10: playback anchors the first event's age at its first step; README *Clock* points at `ctx.clock` | ws/input-10 | brief `docs/briefs/input-10.md` | input-9, core-4 | 🔵 dispatched |
+| 5 | UI 10: intrinsic `max-content` rail measure; per-form-factor `ui.meter({ size })` and `setSize` | ws/ui-10 | brief `docs/briefs/ui-10.md` | ui-9, adoption-4 | 🔵 dispatched |
+| 5 | FX 7: unpacked per-field particle readback | ws/fx-7 | brief `docs/briefs/fx-7.md` | fx-6 | 🔵 dispatched |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
