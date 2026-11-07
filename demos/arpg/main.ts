@@ -21,8 +21,15 @@
  *   courtyard (`ui.minimap`) with ghouls (arrows on their `heading`) and braziers as marker
  *   kinds: a tap on it walks the hero there over the same navmesh path as a ground click.
  *   The orbs and slots size a content `bottom` bar, the gear row a content `top` bar (ws/ui-8).
+ *   The orbs move to the phone-landscape side rails through `MeterOptions.place` maps and size
+ *   per form factor through a `FormSize` (ws/ui-10, ws/ui-11): built once, never remade.
+ * - Watch replay (P or the top button): the run so far, recorded by `input: { record: true }`,
+ *   replays from a rewound boot state through `ctx.replay(rec, { onEnd })`; clicks reach the
+ *   demo through a `PointerConsumer` on the input's dispatcher, so the replay re-picks them, and
+ *   the gear buttons and minimap taps (overlay, not input) ride a side lane keyed by tick.
  *
- * `?still` parks the idle bob, the flame flicker and the enemy AI; `?seed=N` fixes the spawns.
+ * `?still` parks the idle bob, the flame flicker and the enemy AI; `?seed=N` fixes the spawns;
+ * `?blur` turns object motion blur on (camera motion only for now: see the README).
  */
 
 import { createGame } from '@thunderclap/engine';
@@ -40,7 +47,19 @@ import {
 } from '@thunderclap/engine/anim';
 import { createRandom, type Scene } from '@thunderclap/engine/core';
 import { type EmitParams, ParticleSystem, Trail } from '@thunderclap/engine/fx';
-import { createRay, createTouchZones, screenRay, shapeStick } from '@thunderclap/engine/input';
+import {
+  createInputRecorder,
+  createRay,
+  createTouchZones,
+  type InputRecording,
+  type InputTick,
+  type PointerConsumer,
+  type PointerRecord,
+  parseRecording,
+  recordingLength,
+  screenRay,
+  shapeStick,
+} from '@thunderclap/engine/input';
 import {
   bakeNavMesh,
   createCrowd,
@@ -68,11 +87,19 @@ import {
   Transform,
   VERTEX_LAYOUT_SKINNED,
 } from '@thunderclap/engine/render';
-import type { Meter, MinimapMarker, RegionName } from '@thunderclap/engine/ui';
+import type { Meter, MinimapMarker } from '@thunderclap/engine/ui';
 import { buildCourtyard, DAIS, HALF } from './courtyard';
 import { createGearSets, GEAR_NAMES } from './gear';
 import { runePixels, tilePixels, whitePixels } from './geom';
-import { ability, gearButtons, type HealthBar, healthBar, injectCss, paintCourtyard } from './hud';
+import {
+  ability,
+  gearButtons,
+  type HealthBar,
+  healthBar,
+  injectCss,
+  paintCourtyard,
+  replayButton,
+} from './hud';
 import {
   createAttackClip,
   createBodyMesh,
@@ -135,10 +162,18 @@ const state: ArpgDemoState = {
   worldView: 1,
   worldArea: 1,
   orbRegions: ['bottom', 'bottom'],
+  orbPx: 0,
   ghoulLevels: [],
   deathFlushes: 0,
   deathLodShifts: 0,
   ghoulVelocity: false,
+  replaying: false,
+  replays: 0,
+  replayEnds: 0,
+  takeTicks: 0,
+  replayLength: 0,
+  replayFrom: null,
+  replayTo: null,
 };
 demoWindow.__demo = state;
 
@@ -162,12 +197,19 @@ const TOP_MAX = 96;
  */
 const RAIL_MAX = 128;
 /**
- * Where the health and mana orbs sit per form factor: phone-landscape's height is scarce, so
- * they go to the side rails (the health orb at the foot of the left one, the mana orb under
- * the map on the right); elsewhere at the two ends of the bottom bar.
+ * Where the health and mana orbs sit per form factor (`MeterOptions.place`, ws/ui-11):
+ * phone-landscape's height is scarce, so they go to the side rails (the health orb at the foot
+ * of the left one, the mana orb under the map on the right); elsewhere at the two ends of the
+ * bottom bar.
  */
-const orbRegions = (ff: string): ['left' | 'bottom', 'right' | 'bottom'] =>
-  ff === 'phone-landscape' ? ['left', 'right'] : ['bottom', 'bottom'];
+const HEALTH_PLACE = { 'phone-landscape': 'left', default: 'bottom' } as const;
+const MANA_PLACE = { 'phone-landscape': 'right', default: 'bottom' } as const;
+/**
+ * The orbs' diameter, theme px (`MeterOptions.size` as a `FormSize`, ws/ui-10): 112 (75 CSS px
+ * on desktop-1280, 56 on a phone). Phone-landscape's left rail holds the health orb alone, so
+ * there it is 96 (48 CSS px), which lets that rail drop to the form's 56 px track.
+ */
+const ORB_SIZE = { 'phone-landscape': 96, default: 112 };
 const RUN_SPEED = 6;
 const ACCEL = 14;
 /** Radians per second the hero turns toward its desired heading. */
@@ -208,7 +250,8 @@ type Action =
   | 'nova'
   | 'gear1'
   | 'gear2'
-  | 'gear3';
+  | 'gear3'
+  | 'replay';
 
 interface AbilityDef {
   name: string;
@@ -284,6 +327,9 @@ async function main(): Promise<void> {
         },
       },
     },
+    // No `aux: { velocity: true }` yet, so `?blur` reads camera motion only: with a velocity
+    // attachment the particle pipelines (built on `renderer.sceneFormats`, two targets) fail
+    // validation against the three-target scene pass. See the README's known limits.
     post: {
       bloom: { enabled: true, intensity: 0.85, threshold: 1.0, knee: 0.5, scatter: 0.72 },
       fog: { enabled: false, density: 0 },
@@ -316,6 +362,8 @@ async function main(): Promise<void> {
       softness: 0.3,
     },
     input: {
+      // Every tick the input is fed, from boot (`ctx.input.recorder`): "watch replay" plays it.
+      record: true,
       bindings: {
         left: [{ key: 'KeyA' }, { key: 'ArrowLeft' }, { padAxis: 0, dir: -1, threshold: 0.2 }],
         right: [{ key: 'KeyD' }, { key: 'ArrowRight' }, { padAxis: 0, dir: 1, threshold: 0.2 }],
@@ -328,6 +376,7 @@ async function main(): Promise<void> {
         gear1: [{ key: 'Digit1' }],
         gear2: [{ key: 'Digit2' }],
         gear3: [{ key: 'Digit3' }],
+        replay: [{ key: 'KeyP' }],
       },
     },
   });
@@ -704,7 +753,14 @@ async function main(): Promise<void> {
   const shRT = new Transform({});
   const weaponT = new Transform({});
   const gearP: InstanceParams = { castShadow: true, receiveShadow: true };
-  const gearUi = gearButtons(GEAR_NAMES, (i) => wear(i));
+  /**
+   * A gear button's pick, taken on the next update (like a key) so the take's side lane can log
+   * it on its tick: an overlay click is not something the input records. Ignored mid-replay.
+   */
+  let gearPick = -1;
+  const gearUi = gearButtons(GEAR_NAMES, (i) => {
+    if (!state.replaying) gearPick = i;
+  });
   const wear = (i: number) => {
     if (i !== gear) state.gearSwaps++;
     gear = i;
@@ -788,39 +844,26 @@ async function main(): Promise<void> {
   }
 
   // ── HUD ─────────────────────────────────────────────────────────────────
-  // A meter's region is fixed when it is made (`MeterOptions.region`, no per-form-factor
-  // `place`), so a form-factor change that moves the orbs remakes them at their value.
-  const makeOrb = (health: boolean, region: RegionName, value: number): Meter => {
+  // Each orb's region and diameter are per-form-factor maps (ws/ui-11 `place`, ws/ui-10
+  // `size`): the layout moves and resizes the live meters in the re-layout that changes the
+  // form factor, so the value, tone and damage trail carry over and nothing is rebuilt.
+  const makeOrb = (health: boolean): Meter => {
     const orb = ui.meter({
       shape: 'orb',
       trail: true,
       label: health ? 'Health' : 'Mana',
       max: health ? HERO_MAX : MANA_MAX,
-      value,
       tone: health ? 'danger' : 'info',
-      size: 112,
-      region,
+      size: ORB_SIZE,
+      place: health ? HEALTH_PLACE : MANA_PLACE,
       // Bottom bar: the health orb before the slots, the mana orb after. Right rail: under the map.
       order: health ? -1 : 1,
     });
     orb.el.id = health ? 'arpg-health' : 'arpg-mana';
     return orb;
   };
-  let orbsAt = orbRegions(ui.layout.formFactor);
-  let healthOrb = makeOrb(true, orbsAt[0], HERO_MAX);
-  let manaOrb = makeOrb(false, orbsAt[1], MANA_MAX);
-  /** Move the orbs when the form factor wants them elsewhere (after a re-layout). */
-  const placeOrbs = () => {
-    const want = orbRegions(ui.layout.formFactor);
-    if (want[0] === orbsAt[0] && want[1] === orbsAt[1]) return;
-    orbsAt = want;
-    const hv = healthOrb.value;
-    const mv = manaOrb.value;
-    healthOrb.remove();
-    manaOrb.remove();
-    healthOrb = makeOrb(true, want[0], hv);
-    manaOrb = makeOrb(false, want[1], mv);
-  };
+  const healthOrb = makeOrb(true);
+  const manaOrb = makeOrb(false);
   const slots = ui.slots({
     count: ABILITIES.length,
     region: 'bottom',
@@ -851,32 +894,44 @@ async function main(): Promise<void> {
   const stick = touch.zones.stick;
   const pointer = { held: false, id: -1, cx: 0, cy: 0, pending: false, holdT: 0 };
   const canvas = surface.canvas;
-  const inStick = (e: PointerEvent) => {
-    if (e.pointerType !== 'touch') return false;
+  const inStick = (p: PointerRecord) => {
+    if (p.device !== 'touch') return false;
     const r = canvas.getBoundingClientRect();
-    const x = e.clientX - r.left;
-    const y = e.clientY - r.top;
+    const x = p.clientX - r.left;
+    const y = p.clientY - r.top;
     return x < r.width * 0.38 && y > r.height * 0.45;
   };
-  canvas.addEventListener('pointerdown', (e) => {
-    if (e.button !== 0 || inStick(e)) return;
-    pointer.held = true;
-    pointer.id = e.pointerId;
-    pointer.cx = e.clientX;
-    pointer.cy = e.clientY;
-    pointer.pending = true;
-    pointer.holdT = 0;
-  });
-  canvas.addEventListener('pointermove', (e) => {
-    if (!pointer.held || e.pointerId !== pointer.id) return;
-    pointer.cx = e.clientX;
-    pointer.cy = e.clientY;
-  });
-  const release = (e: PointerEvent) => {
-    if (e.pointerId === pointer.id) pointer.held = false;
+  // A consumer on the input's pointer dispatcher rather than canvas listeners, so the
+  // recording's pointer lane reaches it too and a replayed click picks what the live one did.
+  // The dispatcher is rebuilt on every attach (a replay detaches the input, then reattaches it).
+  const release = (p: PointerRecord) => {
+    if (p.id === pointer.id) pointer.held = false;
   };
-  canvas.addEventListener('pointerup', release);
-  canvas.addEventListener('pointercancel', release);
+  const clicks: PointerConsumer = {
+    pointerDown(p) {
+      if (p.button !== 0 || inStick(p)) return;
+      pointer.held = true;
+      pointer.id = p.id;
+      pointer.cx = p.clientX;
+      pointer.cy = p.clientY;
+      pointer.pending = true;
+      pointer.holdT = 0;
+    },
+    pointerMove(p) {
+      if (!pointer.held || p.id !== pointer.id) return;
+      pointer.cx = p.clientX;
+      pointer.cy = p.clientY;
+    },
+    pointerUp: release,
+    pointerCancel: release,
+    cancelAll() {
+      pointer.held = false;
+    },
+  };
+  /** After the engine's own consumers (feed 0 .. screen 40), seeing only unclaimed pointers. */
+  const CLICK_PRIORITY = 50;
+  input.dispatcher?.add(clicks, CLICK_PRIORITY);
+  input.on('attach', (d) => d.add(clicks, CLICK_PRIORITY));
 
   const ray = createRay();
   const logical = { x: 0, y: 0 };
@@ -982,17 +1037,16 @@ async function main(): Promise<void> {
     // rails would take the width the world needs, so there it keeps the card lane under it.
     place: { default: 'right', 'phone-portrait': 'cardLane' },
     label: 'Courtyard map',
-    // Taken on the next update, like a ground click.
+    // Taken on the next update, like a ground click (and logged on the take's side lane).
     onPick: (x, z) => {
+      if (state.replaying) return;
       mapPick.pending = true;
       mapPick.x = x;
       mapPick.z = z;
     },
   });
   map.el.id = 'arpg-map';
-  // A content rail measures a widget's box, and the map's `max-width: 100%` would let it shrink
-  // to the 56 px rail it is measured in: hold it at its own size, so the rail grows to it.
-  map.el.style.minWidth = 'var(--tc-cminimap-size)';
+  // In a content rail the map holds its own size and the rail grows to it (ws/ui-11).
   // The orbs at the bar's two ends, the ability slots between them (as `ui5?orb`).
   ui.layout.region('bottom').style.justifyContent = 'space-between';
   // Phone-landscape's rails: the map at the top of the right one and the mana orb at its foot,
@@ -1000,7 +1054,6 @@ async function main(): Promise<void> {
   // map alone, where `space-between` is the default start.)
   ui.layout.region('right').style.justifyContent = 'space-between';
   ui.layout.region('left').style.justifyContent = 'flex-end';
-  let orbsQueued = false;
   /** Publish the form factor, overflow ids and the bars' share after every re-layout. */
   const publishLayout = () => {
     const l = ui.layout;
@@ -1012,16 +1065,10 @@ async function main(): Promise<void> {
     state.worldView = h > 0 ? 1 - (top + state.bottomBar) / h : 1;
     const fill = l.state.regions.fill;
     state.worldArea = fill && h > 0 ? (fill.width * fill.height) / (l.state.width * h) : 1;
-    state.orbRegions[0] = orbsAt[0];
-    state.orbRegions[1] = orbsAt[1];
-    // Remade outside the layout's own pass: `ui.meter` re-lays out (and calls back here).
-    if (!orbsQueued && orbRegions(l.formFactor)[0] !== orbsAt[0]) {
-      orbsQueued = true;
-      queueMicrotask(() => {
-        orbsQueued = false;
-        placeOrbs();
-      });
-    }
+    // Where the layout put the live orbs (`meter.region`, ws/ui-11) and their diameters.
+    state.orbRegions[0] = healthOrb.region;
+    state.orbRegions[1] = manaOrb.region;
+    state.orbPx = healthOrb.el.getBoundingClientRect().width;
   };
   ui.layout.onChange(publishLayout);
   ui.layout.refresh();
@@ -1218,18 +1265,14 @@ async function main(): Promise<void> {
   const camGoal = new Float32Array(3);
   let camInit = false;
   let camDist = CAM_DIST;
-  // The wheel pulls the camera back (the far LOD levels show) or in.
-  canvas.addEventListener(
-    'wheel',
-    (e) => {
-      e.preventDefault();
-      camDist = Math.max(
-        CAM_DIST_MIN,
-        Math.min(CAM_DIST_MAX, camDist * Math.exp(e.deltaY * 0.001)),
-      );
-    },
-    { passive: false },
-  );
+  // The wheel pulls the camera back (the far LOD levels show) or in: read per tick from the
+  // input (`pointer.wheelY`, which a replay feeds), the listener only keeps the page still.
+  canvas.addEventListener('wheel', (e) => e.preventDefault(), { passive: false });
+  const zoomByWheel = () => {
+    const wy = input.pointer.wheelY;
+    if (wy !== 0)
+      camDist = Math.max(CAM_DIST_MIN, Math.min(CAM_DIST_MAX, camDist * Math.exp(wy * 0.001)));
+  };
 
   const updateHero = (dt: number) => {
     // Direct movement (keys, pad, touch stick) overrides a click path.
@@ -1454,12 +1497,190 @@ async function main(): Promise<void> {
     }
   };
 
+  // ── Watch replay: the run since boot, played back through `ctx.replay` ──
+  // The sim is a function of its fixed steps and their input, so a replay rewinds to the boot
+  // snapshot and feeds the recording back: the run plays again tick for tick and ends where the
+  // player stood. The input records from boot (`input: { record: true }`); overlay clicks (gear
+  // buttons, minimap taps) are not input, so they go on a side lane logged by tick. A replay
+  // ends in a fresh take whose ticks are appended to the history, so the next one is from boot too.
+  type SideEvent = { t: number; gear?: number; map?: [number, number] };
+  const history: InputRecording = { version: 3, ticks: [] };
+  const side: SideEvent[] = [];
+  /** Ticks in the history plus the current take (the next live tick's index). */
+  let histTicks = 0;
+  /** Where the current take starts in the history. */
+  let takeStart = 0;
+  /** The replay's tick (it counts as the recorder does) and its next side-lane event. */
+  let replayTick = 0;
+  let sideAt = 0;
+  let replayWanted = false;
+  const boot = {
+    rng: random.state,
+    hero: { x: hero.x, y: hero.y, z: hero.z, yaw: hero.yaw },
+    enemies: enemies.map((e) => ({
+      x: e.x,
+      y: e.y,
+      z: e.z,
+      yaw: e.yaw,
+      replan: e.replan,
+      attackCd: e.attackCd,
+    })),
+  };
+  const resetActor = (a: Actor, x: number, y: number, z: number, yaw: number) => {
+    a.x = x;
+    a.y = y;
+    a.z = z;
+    a.yaw = yaw;
+    a.lastPhase = 0;
+    a.graph.set('speed', 0);
+    a.graph.set('attack', false);
+    a.graph.go('move', 0);
+  };
+  /** Back to the boot snapshot: everything the fixed step reads (not counters or effects). */
+  const rewind = () => {
+    random.state = boot.rng;
+    const h0 = boot.hero;
+    resetActor(hero, h0.x, h0.y, h0.z, h0.yaw);
+    heroSpeed = 0;
+    heading.x = 0;
+    heading.z = 0;
+    dashT = 0;
+    queued = false;
+    swingKind = 0;
+    chase = -1;
+    chaseReplan = 0;
+    pathing = false;
+    path.length = 0;
+    health = HERO_MAX;
+    mana = MANA_MAX;
+    cooldowns.fill(0);
+    wear(0);
+    for (const b of burns) b.busy = false;
+    for (let i = 0; i < enemies.length; i++) {
+      const e = enemies[i]!;
+      const s = boot.enemies[i]!;
+      resetActor(e, s.x, s.y, s.z, s.yaw);
+      e.alive = true;
+      e.hp = ENEMY_HP;
+      e.dead = -1;
+      e.burn = -1;
+      e.flash = 0;
+      e.held = false;
+      e.path.length = 0;
+      e.replan = s.replan;
+      e.attackCd = s.attackCd;
+      e.bar.set(1);
+    }
+    for (const ag of crowd.agents) {
+      ag.vx = 0;
+      ag.vz = 0;
+      ag.prefX = 0;
+      ag.prefZ = 0;
+    }
+    crowd.setPosition(heroAgent, hero.x, hero.z);
+    for (const e of enemies) crowd.setPosition(e.agent, e.x, e.z);
+    pointer.held = false;
+    pointer.pending = false;
+    pointer.holdT = 0;
+    mapPick.pending = false;
+    gearPick = -1;
+    camInit = false;
+    camDist = CAM_DIST;
+    trail.clear();
+  };
+  /**
+   * Append a stopped take to the history: its ticks shifted to the take's start (pointer times
+   * by the same span of game time), less its last tick, the one "watch replay" was pressed on
+   * (that step ran no sim, so the replay must not either).
+   */
+  const appendTake = (take: InputRecording) => {
+    const ticks = take.ticks;
+    const last = ticks[ticks.length - 1];
+    if (last && 'n' in last && last.n > 1) last.n--;
+    else ticks.pop();
+    const tickMs = take.tickMs ?? history.tickMs ?? 1000 / 60;
+    history.tickMs ??= tickMs;
+    const ms = takeStart * tickMs;
+    for (const t of ticks) {
+      const out: InputTick = { ...t, t: t.t + takeStart };
+      if ('ptr' in out && out.ptr) {
+        out.ptr = out.ptr.map((p) => {
+          const q = [...p] as typeof p;
+          if (q[7] !== undefined) q[7] += ms;
+          return q;
+        });
+      }
+      history.ticks.push(out);
+    }
+  };
+  const watchReplay = () => {
+    const take = input.recorder?.stop();
+    if (take) appendTake(take);
+    // Validated as any saved recording would be; it covers every live tick since boot.
+    const rec = parseRecording(history);
+    state.replayLength = recordingLength(rec);
+    state.replaying = true;
+    state.replays++;
+    state.replayFrom = [hero.x, hero.y, hero.z];
+    replayUi.playing(true);
+    replayTick = 0;
+    sideAt = 0;
+    rewind();
+    ctx.replay(rec, {
+      onEnd: () => {
+        state.replaying = false;
+        state.replayEnds++;
+        state.replayTo = [hero.x, hero.y, hero.z];
+        replayUi.playing(false);
+        // A fresh take from this step, appended to the history at the next "watch replay".
+        takeStart = histTicks;
+        createInputRecorder(input);
+        ui.toasts.show('Replay over: back to you', { tone: 'info', duration: 1500 });
+      },
+    });
+    ui.toasts.show('Watching the replay from the start', { tone: 'info', duration: 1500 });
+  };
+  const replayUi = replayButton(() => {
+    replayWanted = true;
+  });
+  ui.layout.add(replayUi.el, { place: { default: 'top' }, id: 'arpg-replay', order: 1 });
+
   hooks.update = (dt) => {
+    // "Watch replay" (P or the button): this step runs no sim; the replay starts on the next.
+    if ((input.pressed('replay') || replayWanted) && !state.replaying) {
+      replayWanted = false;
+      watchReplay();
+      return;
+    }
+    replayWanted = false;
+    if (state.replaying) {
+      // The side lane: the overlay clicks of the run, on the ticks they were taken.
+      const tick = replayTick++;
+      for (; sideAt < side.length && side[sideAt]!.t === tick; sideAt++) {
+        const ev = side[sideAt]!;
+        if (ev.gear !== undefined) gearPick = ev.gear;
+        if (ev.map) {
+          mapPick.pending = true;
+          mapPick.x = ev.map[0];
+          mapPick.z = ev.map[1];
+        }
+      }
+    } else {
+      const tick = histTicks++;
+      state.takeTicks = histTicks;
+      if (gearPick >= 0) side.push({ t: tick, gear: gearPick });
+      if (mapPick.pending) side.push({ t: tick, map: [mapPick.x, mapPick.z] });
+    }
     state.simTime += dt;
     // Gear swaps: the skeleton, mixers and palette stay; only the drawn meshes change.
     if (input.pressed('gear1')) wear(0);
     if (input.pressed('gear2')) wear(1);
     if (input.pressed('gear3')) wear(2);
+    if (gearPick >= 0) {
+      wear(gearPick);
+      gearPick = -1;
+    }
+    zoomByWheel();
     if (input.pressed('attack')) tryAbility(0);
     if (input.pressed('whirl')) tryAbility(1);
     if (input.pressed('dash')) tryAbility(2);

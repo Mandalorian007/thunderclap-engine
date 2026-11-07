@@ -1,8 +1,9 @@
 /**
  * The HUD's hand-made pieces: the ability slot content with a cooldown sweep (`ui.slots` +
- * `cooldown`), the gear button row, an anchored health bar per enemy, and the painted
- * courtyard the minimap draws. The orbs (`ui.meter({ shape: 'orb' })`), the damage numbers
- * (`ui.floats`) and the minimap (`ui.minimap`) are engine calls in `main.ts` (ws/ui-6).
+ * `cooldown`), the gear button row, the "watch replay" button, an anchored health bar per
+ * enemy, and the painted courtyard the minimap draws. The orbs (`ui.meter({ shape: 'orb' })`),
+ * the damage numbers (`ui.floats`) and the minimap (`ui.minimap`) are engine calls in `main.ts`
+ * (ws/ui-6).
  * Updates write the DOM only when a rounded value changes, so a steady frame allocates nothing.
  */
 import { type AnchorHandle, type Anchors, button, cooldown, h } from '@thunderclap/engine/ui';
@@ -61,6 +62,18 @@ export function gearButtons(names: readonly string[], pick: (i: number) => void)
     el,
     select(i: number) {
       for (const [k, b] of buttons.entries()) b.setAttribute('aria-pressed', String(k === i));
+    },
+  };
+}
+
+/** The "watch replay" button (P): disabled while a replay plays. */
+export function replayButton(watch: () => void) {
+  const el = button('P Watch replay', watch, { ariaLabel: 'Watch replay' });
+  el.id = 'arpg-replay';
+  return {
+    el,
+    playing(on: boolean) {
+      el.disabled = on;
     },
   };
 }

@@ -150,7 +150,13 @@ test.describe('demo: arpg', () => {
       expect(mana!.y).toBeGreaterThan(map!.y + map!.height);
       const bars = WORLD_VIEW_BARS[info.project.name];
       if (bars !== undefined) expect(s.worldView).toBeGreaterThan(bars + 0.02);
-    } else expect(s.orbRegions).toEqual(['bottom', 'bottom']);
+      // The orbs' phone-landscape size (a `FormSize` map, ws/ui-10): 48 CSS px, inside the rail.
+      expect(s.orbPx).toBeLessThanOrEqual(56);
+    } else {
+      expect(s.orbRegions).toEqual(['bottom', 'bottom']);
+      expect(s.orbPx).toBeGreaterThan(56);
+    }
+    await expect(page.locator('#arpg-replay')).toBeVisible();
     expect(layoutWarnings).toEqual([]);
     expect(errors).toEqual([]);
   });
@@ -343,6 +349,64 @@ test.describe('demo: arpg', () => {
         { timeout: 20_000 },
       )
       .toBeLessThan(0.5);
+    expect(errors).toEqual([]);
+  });
+
+  test('watch replay plays the run from boot and ends where the player stood, twice', async ({
+    page,
+    hasTouch,
+  }) => {
+    test.setTimeout(60_000);
+    const { errors, state: start } = await boot(page, '?still&seed=3');
+    const [hx, hy, hz] = start.heroPos;
+    /** Walk to a spot (a click, or a tap) and wait until the hero stands there. */
+    const walk = async (x: number, z: number) => {
+      const c = await screenOf(page, x, hy, z);
+      if (hasTouch) await tap(page, c.x, c.y);
+      else await page.mouse.click(c.x, c.y);
+      await expect.poll(async () => (await read(page)).pathing, { timeout: 10_000 }).toBe(true);
+      await expect
+        .poll(
+          async () => {
+            const s = await read(page);
+            return !s.pathing && s.heroSpeed === 0;
+          },
+          { timeout: 20_000 },
+        )
+        .toBe(true);
+    };
+    /** Press "watch replay" and wait for the replay to run out; returns the state then. */
+    const watch = async (n: number) => {
+      await page.locator('#arpg-replay').click();
+      await expect.poll(async () => (await read(page)).replays, { timeout: 10_000 }).toBe(n);
+      await expect.poll(async () => (await read(page)).replayEnds, { timeout: 30_000 }).toBe(n);
+      return read(page);
+    };
+    await walk(hx + 4, hz - 2.5);
+    // An overlay click (not input): the side lane replays it on its tick.
+    await page.locator('[data-gear="1"]').click();
+    await expect.poll(async () => (await read(page)).gearSet, { timeout: 10_000 }).toBe('gilded');
+    const s1 = await watch(1);
+    expect(s1.replayLength).toBeGreaterThan(0);
+    expect(s1.replaying).toBe(false);
+    expect(Math.hypot(s1.replayFrom![0] - hx, s1.replayFrom![2] - hz)).toBeGreaterThan(2);
+    // Tick for tick: the replayed run ends on the spot the live one stood on.
+    expect(
+      Math.hypot(s1.replayTo![0] - s1.replayFrom![0], s1.replayTo![2] - s1.replayFrom![2]),
+    ).toBeLessThan(1e-3);
+    expect(s1.gearSet).toBe('gilded');
+    // Back to the player: a second walk, then a second replay plays both takes from boot. Up
+    // the screen, clear of the touch stick's zone (the lower left of the canvas).
+    await walk(hx + 1, hz - 6);
+    const s2 = await watch(2);
+    expect(s2.replayLength).toBeGreaterThan(s1.replayLength);
+    expect(
+      Math.hypot(s2.replayFrom![0] - s1.replayTo![0], s2.replayFrom![2] - s1.replayTo![2]),
+    ).toBeGreaterThan(2);
+    expect(
+      Math.hypot(s2.replayTo![0] - s2.replayFrom![0], s2.replayTo![2] - s2.replayFrom![2]),
+    ).toBeLessThan(1e-3);
+    expect(s2.gpuErrors).toBe(0);
     expect(errors).toEqual([]);
   });
 });
