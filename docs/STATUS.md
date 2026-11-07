@@ -189,6 +189,9 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Core no-overlay mode; testing uses it | ws/core-9 | brief `docs/briefs/core-9.md` | train 20 | ✅ merged at `876d584` (`createGame({ overlay: false })` runs with no DOM, `ctx.ui` throws; `createTestGame` uses it; `null-dom.ts` deleted). merged at `4eedc6f`, E-031 train 20 landed at `78550a0` |
 | 5 | Game-side script maps getter and read removals; `TestGameOptions` `P` | ws/testing-3 | brief `docs/briefs/testing-3.md` | train 20 | ✅ merged at `22d9f68` (script maps getter and read removals through the checker; `TestGameOptions` `P` inferred, default `any`). merged at `3285805`, E-031 train 20 landed at `78550a0` |
 | 5 | XR scene-mode per-eye aux | ws/render-12 | brief `docs/briefs/render-12.md` | train 20 | ✅ merged at `1e3177b` (post reads per-eye aux in XR scene mode; fixed eyes reading the last eye's uniforms with a staged ring; no API change). merged at `225890f`, E-031 train 20 landed at `78550a0` |
+| 5 | Per-eye TAA history in XR | ws/xr-taa | brief `docs/briefs/xr-taa.md` | train 21 | 🔵 running |
+| 5 | Public `Surface` interface; no cast in the detached surface | ws/platform-surface | brief `docs/briefs/platform-surface.md` | train 21 | 🔵 running |
+| 5 | Script resolves wrapped receivers; snippet checker exempts getter rows | ws/testing-4 | brief `docs/briefs/testing-4.md` | train 21 | 🔵 running |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
