@@ -86,12 +86,14 @@ test('taa: a static scene converges on camera jitter; a moving edge ghosts no mo
   expect(s0.mode).toBe('taa');
   await expect.poll(async () => (await read()).convergedDelta ?? -1).toBeGreaterThanOrEqual(0);
   const c = await read();
-  // The stack asked for the jitter and the renderer applied it.
+  // The stack asked for the jitter and the renderer applied it. Read from the converge phase's
+  // latch (E-035): by this read the page may already be in the object phases, which draw
+  // unjittered on purpose, so the last frame's `jitter` can be 0.
   expect(c.wantsJitter).toBe(true);
   expect(c.active).toBe(true);
-  expect(Math.hypot(c.jitter[0], c.jitter[1])).toBeGreaterThan(0);
-  expect(Math.abs(c.jitter[0])).toBeLessThanOrEqual(0.5);
-  expect(Math.abs(c.jitter[1])).toBeLessThanOrEqual(0.5);
+  expect(Math.hypot(c.jitterConverge[0], c.jitterConverge[1])).toBeGreaterThan(0);
+  expect(c.jitterConverge[0]).toBeLessThanOrEqual(0.5);
+  expect(c.jitterConverge[1]).toBeLessThanOrEqual(0.5);
   expect(c.convergedDelta!).toBeLessThan(1 / 255);
   await expect.poll(async () => (await read()).ghost ?? -1).toBeGreaterThanOrEqual(0);
   const g = await read();
@@ -127,7 +129,9 @@ test('taa: a sub-pixel creep on jitter stays sharper with catmull-rom than bilin
   // ws/post-6: blur 0.44 vs 0.46, ghost about 13% lower with Catmull-Rom.
   expect(s.wantsJitter).toBe(true);
   expect(s.velocityActive).toBe(true);
-  expect(Math.hypot(s.jitter[0], s.jitter[1])).toBeGreaterThan(0);
+  // The subpixel phase's latch (E-035): the frame after `done` can draw unjittered while the
+  // twin stack's hook hands the jitter back to the measured stack.
+  expect(Math.hypot(s.jitterSubpixel[0], s.jitterSubpixel[1])).toBeGreaterThan(0);
   expect(s.blurSubpixel!).toBeLessThan(s.blurSubpixelBilinear!);
   expect(s.ghostSubpixel!).toBeLessThanOrEqual(s.ghostSubpixelBilinear!);
   expect(s.gpuErrors).toBe(0);
