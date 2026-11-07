@@ -34,6 +34,12 @@ export interface ArpgDemoState {
   kills: number;
   /** Hits landed on enemies since load. */
   hits: number;
+  /** Damage numbers spawned as crits (the third blow on a ghoul, `ui.floats`). */
+  crits: number;
+  /** Markers on the minimap (braziers and live ghouls). */
+  mapMarkers: number;
+  /** Minimap taps that snapped to the navmesh and started a walk. */
+  mapPicks: number;
   /** Swings started since load. */
   attacks: number;
   /** `'iron'`, `'gilded'` or `'bone'`. */
@@ -59,6 +65,8 @@ export interface ArpgDemoState {
 export interface ArpgDemoApi {
   /** A world point in client (CSS) px, for synthetic clicks and taps. */
   screenOf(x: number, y: number, z: number): { x: number; y: number };
+  /** A world ground point (x, z) on the minimap, in client (CSS) px. */
+  mapPointOf(x: number, z: number): { x: number; y: number };
   /** Move the nearest live enemy just in front of the hero and hold it there; returns its index. */
   summon(): number;
 }

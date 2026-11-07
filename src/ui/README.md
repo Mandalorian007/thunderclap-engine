@@ -446,7 +446,7 @@ world-anchored widget learns where it projects into. It is read live from the su
 object), so a resize is seen by the next `place`. `anchors.project(x, y, z, out)` projects one
 world point into frame CSS px (the hud layer's coordinates) the way `update()` places an anchor
 before its offset and clamp, writes `out.x`/`out.y` and returns whether the point is in view; it
-allocates nothing. The tooltip's world-point targets, the world cursor, the float numbers and
+allocates nothing. The tooltip's world-point targets, the world cursor, the floating text and
 `update()` itself all go through it, so they agree to the pixel.
 
 ## World panels: `createWorldPanel`
@@ -528,8 +528,8 @@ declarations, and `applyTheme(el, tokens)` sets them on an element. `ensureStyle
 - **ws/ui-5 types.** `MeterShape`, `MeterReadout`, `MeterTrailOptions` (the meter, above);
   `Floats`, `FloatsHost`, `FloatsOptions`, `FloatTextOptions` (floating text); `CanvasMinimap`,
   `CanvasMinimapHost`, `CanvasMinimapOptions`, `MinimapWorld`, `MinimapRotate`, `MinimapShape`,
-  `MinimapMarker`, `MinimapMarkerShape`, `MinimapKindStyle`, `MinimapBackground` (the canvas
-  minimap).
+  `MinimapMarker`, `MinimapMarkerShape`, `MinimapKindStyle`, `MinimapBackground` and (ws/ui-6)
+  `MinimapMarkerPlace` (the minimap).
 - **External links.** `externalLink(opts: ExternalLinkOptions)` returns an `ExternalLink`
   (`element`, `anchor`, `copyButton`, …) or null; `ExternalLinkLabels` are the strings shown
   above.
@@ -620,34 +620,18 @@ if (ctx.ui.padOwner === 'game' && ctx.input.pressed('jump')) jump();
 
 `PadNav.dispose()` stops it following the stack.
 
-## Float numbers: `ui.floats`
+## Floating text: `ui.floats`
 
 ```ts
-ui.floats.spawn(x, y + 2, z, '-12', { kind: 'damage' }); // over a hit
-ui.floats.update(dt);                                     // once per update
-```
-
-`createFloatNumbers(host, opts)` (`FloatNumbersHost`: `layers.hud` and `anchors()`) is a fixed pool
-of DOM nodes on the hud layer. `FloatNumbersOptions`: `max` (default 64), `duration` (s, default
-1), `rise` (design px over the life, default 48), `style` (an extra class). `FloatNumbers`:
-`spawn(x, y, z, text, opts?)` (`FloatSpawnOptions` `kind`: a `FloatKind`, `'damage' | 'heal' |
-'crit' | 'info'`, mapped to the theme's danger, success, warn and text colours; crit is larger),
-`update(dt)`, `clear()`, `dispose()`, `live`, `pooled`, `max`. A spawn past `max` recycles the
-oldest; `update` projects each live number through `anchors.project` and writes `transform` only
-(Typed OM where it exists), the fade is a CSS animation on opacity. `ui.floats` is the overlay's
-pool with the defaults, made on first use (it needs `ui.anchors(camera)`). `FLOAT_CSS` is
-injected once (`ensureFloatStyles`).
-
-## Floating text: `createFloats`
-
-```ts
-const floats = createFloats(ui, () => camera);              // ws/ui-5
+const floats = ui.floats(() => camera);                      // the overlay's pool (ws/ui-6)
 floats.spawn('-12', hitPoint, { color: '#ff5a4a' });
 floats.spawn('84!', hitPoint, { crit: true, size: 1.4 });
 floats.update(dt);                                           // once per update
 ```
 
-`createFloats(host: FloatsHost, camera?, opts?: FloatsOptions)` returns `Floats`: floating text
+`ui.floats(camera?, opts?: FloatsOptions)` returns the overlay's `Floats`, made on the first call
+(later calls return the same pool and ignore their arguments; `ui.destroy()` disposes it). The
+pool underneath is `createFloats(host: FloatsHost, camera?, opts?: FloatsOptions)`: floating text
 from a world point through the overlay's anchors (`FloatsHost` is `layers.hud` and
 `anchors(camera?)`; `camera` is handed to `ui.anchors` once). `FloatsOptions`: `max` (pool, 64),
 `life` (s, 1), `rise` (design px, 56), `stackRadius` (world, 0.35), `stackStep` (design px, `[30,
@@ -659,8 +643,8 @@ true: spawns on a point with younger labels fan out right, left, each a step hig
 `max` the oldest is recycled) and hidden when the point is behind the camera or off screen;
 `update` writes `transform` (Typed OM where it exists) and `opacity` from precomputed strings, so a
 steady frame allocates nothing. Reduced motion keeps them still (fade only). `FLOATS_CSS`
-(`ensureFloatsStyles`, `#tc-ui-floats`). It sits beside ws/ui-4's `ui.floats` (below), whose API
-it does not change.
+(`ensureFloatsStyles`, `#tc-ui-floats`). ws/ui-6 retired ws/ui-4's `createFloatNumbers` (the
+earlier `ui.floats` getter, `spawn(x, y, z, text, { kind })`): pass `color` and `crit` instead.
 
 ## Ring and compass: `ui.ring`, `ui.compass`
 
@@ -681,21 +665,8 @@ it does not change.
 
 ## Minimap: `ui.minimap`
 
-`ui.minimap(opts)` / `createMinimap(host, opts)` (`MinimapHost`: `layers.hud`, `layout`):
-`MinimapOptions` `size` (design px, 200), `worldRadius` (world units to the rim, 50), `rotate`
-(heading up instead of north up), `background` (an image or a canvas the game paints: the engine
-never knows the map), `region` (default `right`), `order`. `Minimap`: `el`, `size`,
-`worldRadius`, `setCenter(x, z, headingDeg?)`, `setMarker(id, x, z, opts?)`
-(`MinimapMarkerOptions` `kind`, a `MinimapMarkerKind` `'self' | 'ally' | 'enemy' | 'objective' |
-'info'`, and `icon`), `removeMarker(id)`, `clear()`, `markerAt(id)` (a `MinimapMarkerPlace`
-`{ x, y, outside }` in design px from the centre), `remove()`. Markers are pooled DOM nodes moved
-by `transform`; one past `worldRadius` is held on the rim with the `tc-minimap-outside` class.
-`MINIMAP_CSS` is injected once (`ensureMinimapStyles`).
-
-### Canvas minimap: `createCanvasMinimap`
-
 ```ts
-const map = createCanvasMinimap(ui, {                         // ws/ui-5
+const map = ui.minimap({                                      // ws/ui-5, ws/ui-6
   size: 200, world: { minX: -64, minZ: -64, maxX: 64, maxZ: 64 }, rotate: 'player',
   background: painted, onPick: (x, z) => moveTo(x, z),
 });
@@ -703,22 +674,29 @@ map.setPlayer(p.x, p.z, yaw);                                 // radians, clockw
 map.setMarkers([{ id: 'a', x: 4, z: -9, kind: 'enemy' }]);
 ```
 
-`createCanvasMinimap(host: CanvasMinimapHost, opts: CanvasMinimapOptions)` draws the map on its
-own canvas in a layout region. `CanvasMinimapOptions`: `size` (design px, 200), `world:
+`ui.minimap(opts)` / `createCanvasMinimap(host: CanvasMinimapHost, opts: CanvasMinimapOptions)`
+draws the map on its own canvas in a layout region. `CanvasMinimapOptions`: `size` (design px, 200), `world:
 MinimapWorld` (`{ minX, minZ, maxX, maxZ }`, the rectangle the background covers), `rotate:
 MinimapRotate` (`'north' | 'player'`), `shape: MinimapShape` (`'round' | 'square'`), `center`
-(`'player'` or `'world'`), `zoom` (1: the world's longer side spans the map), `background`
+(`'player'` or `'world'`), `zoom` (1: the world's longer side spans the map), `worldRadius`
+(world units from the centre to the rim, inset 5 px; overrides `zoom`), `background`
 (`MinimapBackground`: a canvas, `ImageBitmap` or image the game paints), `kinds` (per marker
 kind, `MinimapKindStyle { shape: MinimapMarkerShape, color, size }`; the shapes are `dot`,
-`square`, `diamond`, `triangle`, `ring`; defaults for `ally`, `enemy`, `objective`, `info`),
-`onPick(worldX, worldZ)`, `region` (`right`), `order`, `label`. `CanvasMinimap`: `el`, `canvas`,
-`size`, `redraws`, `markers`, `zoom` (get and set), `setMarkers(list: MinimapMarker[])` (`{ id,
-x, z, kind, color? }`), `setPlayer(x, z, yaw)`, `setBackground(bg | null)`, `toMap(x, z, out)`,
+`square`, `diamond`, `triangle`, `ring`; defaults for `self`, `ally`, `enemy`, `objective`, `info`),
+`onPick(worldX, worldZ)`, `region` (`right`), `place` (per form factor as `layout.add` takes it,
+overriding `region`: a phone's 56 px rail is too narrow for a map, so put it in `cardLane` there),
+`order`, `label`. The map is square and shrinks to fit a smaller region; picks read the drawn rect. `CanvasMinimap`: `el`, `canvas`,
+`size`, `redraws`, `markers`, `rim` (markers held on the rim at the last draw), `zoom` (get and
+set), `setMarkers(list: MinimapMarker[])` (`{ id, x, z, kind, color?, icon? }`; `icon` is a glyph
+drawn in place of the shape), `markerAt(id, out?)` (a `MinimapMarkerPlace { x, y, outside }` in
+map px from the top-left after the rim clamp, or `null`), `setPlayer(x, z, yaw)`, `setBackground(bg | null)`, `toMap(x, z, out)`,
 `toWorld(u, v, out)` (exact inverses, map px from the top-left), `flush()`, `remove()`. It
 redraws only on change: each setter compares with what it holds and schedules one draw on the
 next animation frame. Markers past the edge sit on the rim, dimmed; colours may be `var(--tc-…)`
 tokens. A click or tap gives `onPick` through `toWorld` (ignored off a round map's disc).
-`CANVAS_MINIMAP_CSS` (`ensureCanvasMinimapStyles`, `#tc-ui-cminimap`).
+`CANVAS_MINIMAP_CSS` (`ensureCanvasMinimapStyles`, `#tc-ui-cminimap`). ws/ui-6 retired ws/ui-4's
+DOM `createMinimap` (pooled marker nodes, `setCenter`/`setMarker`): `rotate: 'player'` with
+`worldRadius` and `markerAt` cover what it did.
 
 ## Loading screen: `ui.loading`
 
@@ -838,15 +816,16 @@ the `h` string style; `styles.test.ts` the select zoom rule. `e2e/ui.spec.ts` ru
 harness modes (`harness/ui.html?tooltip`, `?cursor&mode=`, `?loading&stall`, `?notify`) on the matrix.
 ws/ui-4: `anchor.test.ts` covers `frame` and `project` against a placed anchor across a resize,
 `tooltip.test.ts` a world-target tooltip landing on the anchored point, `pad-owner.test.ts` the
-owner transitions, the cursor latch reset and two cursors on one transition, `float-numbers.test.ts`
-the pool cap and lifetime, `widgets-3.test.ts` the ring's aria and compass offsets, `minimap.test.ts`
-the rim clamp and rotation, `world-panel/panel.test.ts` a press on the input tick.
+owner transitions, the cursor latch reset and two cursors on one transition, `widgets-3.test.ts`
+the ring's aria and compass offsets, `world-panel/panel.test.ts` a press on the input tick.
 `e2e/ui4.spec.ts` runs `harness/ui4.html` (`?floats`, `?ring`, `?compass`, `?minimap`, `?modal`,
-`?still`) on the matrix.
+`?still`) on the matrix; since ws/ui-6 its floats and minimap modes use `ui.floats` and
+`ui.minimap`, and the rim clamp is read through `markerAt` and `rim` state fields.
 ws/ui-5: `orb.test.ts` covers the orb's fill and aria, the readouts, the colour override, the trail
 hold, drain and retarget on an injected clock, reduced motion and the bar's trail;
 `floats.test.ts` pool reuse and the `max` recycle, a spawn behind the camera hidden, life end,
-the stack fan, the rise and fade and the crit pop; `minimap-canvas.test.ts` the mapping in both
-`rotate` modes, `toWorld` inverting `toMap`, no redraw without a change and the pick.
+the stack fan, the rise and fade and the crit pop, and `ui.floats` memoised and disposed;
+`minimap-canvas.test.ts` the mapping in both `rotate` modes, `toWorld` inverting `toMap`, no redraw
+without a change, the pick, and `ui.minimap` with `worldRadius`, `markerAt` and `rim`.
 `e2e/ui5.spec.ts` runs `harness/ui5.html` (`?orb`, `?floats`, `?minimap`, `?still`). Layout and
 focus were also checked once in Chromium via Playwright (not part of CI).

@@ -152,4 +152,43 @@ describe('canvas minimap (ws/ui-5)', () => {
     const plain = createCanvasMinimap(ov, { world: WORLD });
     expect(plain.el.classList.contains('tc-interactive')).toBe(false);
   });
+
+  it('ui.minimap is this map; worldRadius puts the rim; markerAt and rim follow the centre (ws/ui-6)', () => {
+    const map = ov.minimap({ size: 180, world: WORLD, worldRadius: 4, region: 'left' });
+    expect(map.el.classList.contains('tc-cminimap')).toBe(true);
+    expect(map.el.closest('[data-region="left"]')).not.toBeNull();
+    map.setPlayer(0, 0, 0);
+    map.setMarkers([
+      { id: 'near', x: 3, z: 0, kind: 'ally' },
+      { id: 'far', x: 0, z: -9, kind: 'enemy', icon: '!' },
+      { id: 'self', x: 0, z: 0, kind: 'self' },
+    ]);
+    map.flush();
+    expect(map.rim).toBe(1);
+    const place = { x: 0, y: 0, outside: false };
+    expect(map.markerAt('near', place)).toBe(place);
+    expect(place.outside).toBe(false);
+    // 4 world units to the rim, 85 map px (90 less the inset): 3 units east is 63.75 px right.
+    expect(place.x).toBeCloseTo(90 + 63.75, 9);
+    const far = map.markerAt('far')!;
+    expect(far.outside).toBe(true);
+    expect(far.x).toBeCloseTo(90, 9);
+    expect(far.y).toBeCloseTo(5, 9); // straight up, held on the rim
+    expect(map.markerAt('nope')).toBeNull();
+    // Move the centre: the near one leaves the disc, the far one comes in.
+    map.setPlayer(0, -7, 0);
+    map.flush();
+    expect(map.markerAt('near')!.outside).toBe(true);
+    expect(map.markerAt('far')!.outside).toBe(false);
+    expect(map.rim).toBe(2); // near and self
+    // An icon change alone redraws.
+    const before = map.redraws;
+    map.setMarkers([
+      { id: 'near', x: 3, z: 0, kind: 'ally' },
+      { id: 'far', x: 0, z: -9, kind: 'enemy', icon: '?' },
+      { id: 'self', x: 0, z: 0, kind: 'self' },
+    ]);
+    map.flush();
+    expect(map.redraws).toBe(before + 1);
+  });
 });

@@ -16,7 +16,7 @@
  * has no motion without input, so it needs no `?still`: a fresh page is a steady frame.
  */
 import { AudioEngine, recipes } from '@thunderclap/engine/audio';
-import { GameLoop } from '@thunderclap/engine/core';
+import { GameLoop, hash2f } from '@thunderclap/engine/core';
 import { createBillboards, Decals, ParticleSystem, Trail } from '@thunderclap/engine/fx';
 import { box } from '@thunderclap/engine/geom';
 import {
@@ -87,7 +87,7 @@ function holePixels(size: number): Uint8Array<ArrayBuffer> {
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const r = Math.hypot((x + 0.5) / size - 0.5, (y + 0.5) / size - 0.5) * 2;
-      const grain = 0.7 + 0.3 * Math.abs(Math.sin(x * 12.9898 + y * 78.233));
+      const grain = 0.7 + 0.3 * hash2f(1, x, y);
       const o = (y * size + x) * 4;
       out[o] = 20;
       out[o + 1] = 16;

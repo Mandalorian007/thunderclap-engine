@@ -5,6 +5,7 @@
  * movement rule is pure (`stepEnemy`) so it can be tested; the DOM and GPU glue live in
  * `createEnemies`. Nothing is allocated per frame.
  */
+import { createRandom } from '@thunderclap/engine/core';
 import { capsule } from '@thunderclap/engine/geom';
 import {
   createStandardMaterial,
@@ -63,8 +64,11 @@ export interface Enemies {
   remove(): void;
 }
 
-/** Deterministic enough for tests, free of `Math.random` so a seed can replace it later. */
+/** A uniform draw in [0, 1); `createEnemies` defaults to a seeded `createRandom`. */
 export type Rng = () => number;
+
+/** The default enemy seed: the same patrol goals every run. */
+export const ENEMY_SEED = 7;
 
 export function pickGoal(rng: Rng, out: Float32Array): void {
   const r = HALF - 3;
@@ -135,11 +139,17 @@ const SPAWNS: readonly [number, number][] = [
   [13, 12],
 ];
 
+/** A thunk over the engine's seeded random (`createRandom`). */
+export function seeded(seed: number): Rng {
+  const random = createRandom(seed);
+  return () => random.next();
+}
+
 export function createEnemies(
   renderer: Renderer,
   ground: Ground,
   anchors: Anchors,
-  rng: Rng = Math.random,
+  rng: Rng = seeded(ENEMY_SEED),
 ): Enemies {
   const mesh: Mesh = renderer.createMesh({
     ...capsule({ radius: ENEMY_RADIUS, height: ENEMY_HEIGHT, color: [1, 1, 1, 1] }),

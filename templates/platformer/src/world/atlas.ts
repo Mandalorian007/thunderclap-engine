@@ -5,6 +5,7 @@
  *
  * Replace this with a loaded image (`renderer.textureFromSource(img)`) and keep `CELL` in step.
  */
+import { hash2f } from '@thunderclap/engine/core';
 import { TILE } from '../levels/format';
 
 export const ATLAS_COLS = 8;
@@ -65,17 +66,11 @@ function at(i: number): [number, number] {
   return [(i % ATLAS_COLS) * TILE, Math.floor(i / ATLAS_COLS) * TILE];
 }
 
-function hash(x: number, y: number, seed: number): number {
-  let h = (x * 374761393 + y * 668265263 + seed * 1442695041) | 0;
-  h = Math.imul(h ^ (h >>> 13), 1274126177);
-  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-}
-
 function speckle(g: G, i: number, base: [number, number, number], range: number, seed: number) {
   const [ox, oy] = at(i);
   for (let y = 0; y < TILE; y += 4) {
     for (let x = 0; x < TILE; x += 4) {
-      const n = hash(x, y, seed) * range;
+      const n = hash2f(seed, x, y) * range;
       g.fillStyle = `rgb(${(base[0] + n) | 0},${(base[1] + n) | 0},${(base[2] + n) | 0})`;
       g.fillRect(ox + x, oy + y, 4, 4);
     }
@@ -90,7 +85,7 @@ function groundTop(g: G, i: number) {
   g.fillStyle = '#8fe07a';
   g.fillRect(ox, oy, TILE, 4);
   g.fillStyle = '#3f8a44';
-  for (let x = 0; x < TILE; x += 8) g.fillRect(ox + x + ((hash(x, 0, 2) * 4) | 0), oy + 12, 4, 4);
+  for (let x = 0; x < TILE; x += 8) g.fillRect(ox + x + ((hash2f(2, x, 0) * 4) | 0), oy + 12, 4, 4);
 }
 
 function groundFill(g: G, i: number) {
@@ -98,7 +93,7 @@ function groundFill(g: G, i: number) {
   const [ox, oy] = at(i);
   g.fillStyle = 'rgba(0,0,0,0.18)';
   for (let k = 0; k < 6; k++) {
-    g.fillRect(ox + ((hash(k, 1, 4) * 56) | 0), oy + ((hash(k, 2, 4) * 56) | 0), 8, 4);
+    g.fillRect(ox + ((hash2f(4, k, 1) * 56) | 0), oy + ((hash2f(4, k, 2) * 56) | 0), 8, 4);
   }
 }
 

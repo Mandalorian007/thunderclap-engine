@@ -28,7 +28,7 @@ src/ui/hud.ts         crosshair (ui.layers.hud), prompt and focus line (ui.layou
 
 ## Rules of the house
 
-1. **`world/` is pure.** It imports nothing from the DOM and nothing from the engine but `createNoise` (`@thunderclap/engine/core`, seeded, no DOM), and never reads time or `Math.random`: the terrain is `createNoise(SEED)`'s value noise, the texture speckle a `hash2` of the pixel. The mesher writes a numeric layout, not engine types, so the same code runs in the Worker and in a test. Every generator and mesher rule has a unit test.
+1. **`world/` is pure.** It imports nothing from the DOM and nothing from the engine but `createNoise` (`@thunderclap/engine/core`, seeded, no DOM), and never reads time or `Math.random`: the terrain is `createNoise(SEED)`'s value noise (the texture speckle in `art/` is the engine's `hash2f` of the pixel). The mesher writes a numeric layout, not engine types, so the same code runs in the Worker and in a test. Every generator and mesher rule has a unit test.
 2. **Rendering, not mechanics.** The scene draws what `world/` says and turns `Look` and actions into movement and inspections. Collision is the game's (three lines against `surfaceY`), not the engine's.
 3. **A client keeps nothing.** `sim: false` and no `save`: the engine never touches storage and the loop runs at render rate (`update(dt)` gets the real frame delta). A server-driven game applies its state in `ctx.hooks.frame`. No network call anywhere in the engine; add your own transport.
 4. **Zero allocations per frame.** `update` and `render` mutate pre-built `Transform`s, `Float32Array`s and emitter params; the Worker's buffers are views, never copies. Nothing is created inside them in steady state.

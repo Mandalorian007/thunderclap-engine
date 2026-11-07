@@ -4,7 +4,7 @@ An isometric action-RPG slice: a hero in a ruined courtyard at dusk cuts down gh
 from the edges. `pnpm demo arpg`, or `/demos/arpg/` on the harness server. `?still` parks the idle
 bob, flame flicker, cape and enemy AI; `?seed=N` fixes the spawns (`createRandom`).
 
-Controls: click or tap the ground to walk there (hold to keep steering); click a ghoul to chase
+Controls: click or tap the ground or the minimap to walk there (hold to keep steering); click a ghoul to chase
 and strike it; WASD, the left stick or a bottom-left touch stick run directly. Space strikes,
 Q whirls, E dashes, R casts a nova; keys 1–3 or the top buttons swap gear.
 
@@ -23,12 +23,16 @@ Q whirls, E dashes, R casts a nova; keys 1–3 or the top buttons swap gear.
   hand-swap is what `loaded.setVariant` (ws/assets-3) replaces for glTF heroes.
 - Twelve ghouls on the same skeleton and `SkinPalette`, one `InstanceList`, each with its own graph,
   replanning a `NavPath3` every 0.5 s and separated by `createCrowd`; anchored health bars.
+- The HUD from engine calls (ws/ui-6): health and mana orbs are `ui.meter({ shape: 'orb', trail:
+  true })`, damage numbers `ui.floats(() => camera).spawn(text, point, { crit })` (the killing third
+  hit pops as a crit), and a north-up `ui.minimap` of the whole courtyard over a background painted
+  once (`paintCourtyard`), braziers and live ghouls as marker kinds and the hero as the arrow. A tap on
+  the map goes through `onPick`, snaps to the navmesh and takes the same `findMeshPath` walk as a
+  ground click. On phones the map sits in the card lane (the side rails are 56 px).
 
 ## Known limits
 
-No minimap (`ui.minimap({ world, markers })` is missing). The orbs are hand DOM (no
-`ui.meter({ shape: 'orb' })`); damage numbers are a pool of anchors risen by hand (no
-`ui.floats.spawn(text, world)`). Deaths shrink instead of dissolving (no
+Deaths shrink instead of dissolving (no
 `createStandardMaterial({ dissolve })`). Gear swapping stays by hand: the three sets are procedural `geom` meshes, not a
 glTF, and they differ in shape as well as colour, while `loaded.setVariant` swaps only the
 materials of a loaded glTF (`KHR_materials_variants`).

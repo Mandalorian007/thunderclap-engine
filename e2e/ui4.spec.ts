@@ -3,12 +3,13 @@
  * ring, the compass strip, the minimap and the pad owner, one mode per query. Every value that
  * moves over time is polled (E-017).
  *
- * - `?floats`: numbers stream over the blocks; the pool never passes 64 nodes, the layer holds
- *   exactly the pooled nodes, and a click spawns a crit;
+ * - `?floats`: numbers stream over the blocks (`ui.floats(camera)`, ws/ui-6); the pool never
+ *   passes 64 nodes, the layer holds exactly the pooled nodes, and a click spawns a crit;
  * - `?ring`: the ring's `aria-valuenow` follows the value as it fills;
  * - `?compass`: the heading follows the orbiting camera and each marker sits at its bearing
  *   difference × width / 360 (the default 180° field of view);
- * - `?minimap`: markers past the radius are on the rim with the `outside` class, and the count
+ * - `?minimap`: the canvas map (`ui.minimap`, ws/ui-6) holds the four markers; those past the
+ *   radius are on the rim (`markerAt` agrees with the map's drawn `rim` count), and the count
  *   changes as the centre moves;
  * - `?modal`: opening the modal hands the pad to the stack once and resets the cursor latch;
  *   closing it hands the pad back once;
@@ -53,7 +54,7 @@ function read(): Promise<HarnessUi4State> {
   });
 }
 
-test('float numbers stream from a bounded pool; a click spawns a crit', async ({
+test('floating numbers stream from a bounded pool; a click spawns a crit', async ({
   page,
   wrapper,
 }) => {
@@ -64,11 +65,11 @@ test('float numbers stream from a bounded pool; a click spawns a crit', async ({
   expect(s.live).toBeLessThanOrEqual(64);
   expect(s.pooled).toBeLessThanOrEqual(64);
   expect(s.pooled).toBeGreaterThanOrEqual(s.live);
-  const nodes = frame.locator('.tc-layer[data-layer="hud"] > .tc-float');
+  const nodes = frame.locator('.tc-layer[data-layer="hud"] > .tc-floats');
   await expect.poll(async () => (await nodes.count()) <= 64).toBe(true);
   await frame.locator('#root').click({ position: { x: 20, y: 20 } });
   await expect(
-    frame.locator('.tc-float[data-kind="crit"]').filter({ hasText: 'CRIT' }).first(),
+    frame.locator('.tc-floats[data-crit]').filter({ hasText: 'CRIT' }).first(),
   ).toBeVisible();
   expect(errors).toEqual([]);
 });
@@ -107,22 +108,17 @@ test('the minimap clamps far markers to the rim as the centre moves', async ({ p
   await open(page, wrapper, 'minimap');
   const map = frame.locator('#minimap');
   await expect(map).toBeVisible();
-  await expect(map.locator('.tc-minimap-marker')).toHaveCount(4);
-  const seen = new Set<number>();
+  await expect(frame.locator('.tc-region[data-region="right"] #minimap')).toHaveCount(1);
+  // A canvas: the markers are state, not nodes.
+  await expect.poll(async () => (await read()).mapMarkers).toBe(4);
+  // A rim count of 3 lasts about 0.37 s of every 2.6 s of page time: the page records each
+  // distinct count on the frame it happens (`onRimSeen`) rather than the spec sampling for it.
+  await expect.poll(async () => (await read()).onRimSeen.length).toBeGreaterThanOrEqual(2);
+  // `onRim` and the drawn `rimDrawn` are written on the same frame and come back in one read.
   await expect
     .poll(async () => {
       const s = await read();
-      seen.add(s.onRim);
-      return seen.size;
-    })
-    .toBeGreaterThanOrEqual(2);
-  await expect
-    .poll(async () => {
-      const [s, outside] = await Promise.all([
-        read(),
-        map.locator('.tc-minimap-marker.tc-minimap-outside').count(),
-      ]);
-      return s.onRim === outside;
+      return s.onRim === s.rimDrawn;
     })
     .toBe(true);
   expect(errors).toEqual([]);

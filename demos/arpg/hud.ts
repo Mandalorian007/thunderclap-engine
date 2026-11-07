@@ -1,24 +1,13 @@
 /**
- * The HUD: health and mana orbs either side of a four-slot ability row with cooldown sweeps
- * (`ui.slots` + `cooldown`), a gear button row at the top, and the per-enemy pieces (an
- * anchored health bar each, a pool of floating damage numbers). The orbs are hand-made DOM
- * (`ui.meter` has no orb shape) and the numbers rise by hand (there is no `ui.floats`).
+ * The HUD's hand-made pieces: the ability slot content with a cooldown sweep (`ui.slots` +
+ * `cooldown`), the gear button row, an anchored health bar per enemy, and the painted
+ * courtyard the minimap draws. The orbs (`ui.meter({ shape: 'orb' })`), the damage numbers
+ * (`ui.floats`) and the minimap (`ui.minimap`) are engine calls in `main.ts` (ws/ui-6).
  * Updates write the DOM only when a rounded value changes, so a steady frame allocates nothing.
  */
 import { type AnchorHandle, type Anchors, button, cooldown, h } from '@thunderclap/engine/ui';
 
 const CSS = `
-.arpg-orb { position: relative; width: 112px; height: 112px; border-radius: 50%; overflow: hidden;
-  border: 3px solid #3b2a1c; box-shadow: 0 0 0 2px #120a06, inset 0 0 18px #000c; background: #0d0a10;
-  pointer-events: none; }
-.arpg-orb-fill { position: absolute; left: 0; right: 0; bottom: 0; height: 100%; transform-origin: bottom;
-  transition: transform 120ms linear; }
-.arpg-orb[data-kind="health"] .arpg-orb-fill { background: radial-gradient(circle at 40% 30%, #ff6b5a, #9c1010 60%, #4a0505); }
-.arpg-orb[data-kind="mana"] .arpg-orb-fill { background: radial-gradient(circle at 40% 30%, #7fb4ff, #1b3fa8 60%, #0a1446); }
-.arpg-orb-gloss { position: absolute; inset: 8% 22% 55% 18%; border-radius: 50%;
-  background: linear-gradient(#ffffff55, #ffffff00); }
-.arpg-orb-text { position: absolute; inset: 0; display: grid; place-items: center; color: #fff;
-  font: 700 18px/1 system-ui, sans-serif; text-shadow: 0 1px 2px #000; }
 .arpg-ability { position: relative; width: 100%; height: 100%; display: grid; place-items: center; }
 .arpg-ability .tc-ui-cooldown { position: absolute; inset: 0; }
 .arpg-ability-name { position: relative; color: #f3e6cf; font: 600 12px/1.1 system-ui, sans-serif;
@@ -28,47 +17,12 @@ const CSS = `
 .arpg-bar { width: 54px; height: 6px; background: #000a; border: 1px solid #000; border-radius: 2px;
   overflow: hidden; pointer-events: none; }
 .arpg-bar > div { height: 100%; background: linear-gradient(#ff7a5c, #b3221a); transform-origin: left; }
-.arpg-dmg { color: #ffd35a; font: 800 22px/1 system-ui, sans-serif; text-shadow: 0 2px 3px #000, 0 0 6px #a40;
-  pointer-events: none; }
 `;
-
-/** Precomputed opacity strings, so fading a number allocates no string per frame. */
-const OPACITY: string[] = [];
-for (let i = 0; i <= 20; i++) OPACITY.push(String(i / 20));
-
-export interface Orb {
-  el: HTMLElement;
-  set(value: number, max: number): void;
-}
 
 export function injectCss(doc: Document): void {
   const style = doc.createElement('style');
   style.textContent = CSS;
   doc.head.append(style);
-}
-
-export function orb(kind: 'health' | 'mana', label: string): Orb {
-  const fill = h('div', { class: 'arpg-orb-fill' });
-  const text = h('div', { class: 'arpg-orb-text' });
-  const el = h(
-    'div',
-    { class: 'arpg-orb', 'data-kind': kind, role: 'meter', 'aria-label': label },
-    fill,
-    h('div', { class: 'arpg-orb-gloss' }),
-    text,
-  );
-  let shown = -1;
-  return {
-    el,
-    set(value, max) {
-      const v = Math.max(0, Math.round(value));
-      if (v === shown) return;
-      shown = v;
-      fill.style.transform = `scaleY(${v / max})`;
-      text.textContent = String(v);
-      el.setAttribute('aria-valuenow', String(v));
-    },
-  };
 }
 
 export interface Ability {
@@ -139,69 +93,48 @@ export function healthBar(anchors: Anchors, at: ArrayLike<number>): HealthBar {
   };
 }
 
-/** Floating damage numbers: a fixed pool of anchors, each rising and fading for `LIFE` seconds. */
-export class DamageNumbers {
-  private static readonly LIFE = 0.9;
-  private readonly items: {
-    handle: AnchorHandle;
-    el: HTMLElement;
-    age: number;
-    x: number;
-    y: number;
-    z: number;
-    shownOpacity: number;
-  }[] = [];
-  private readonly at = new Float32Array(3);
-  private next = 0;
-
-  constructor(anchors: Anchors, count: number) {
-    for (let i = 0; i < count; i++) {
-      const el = h('div', { class: 'arpg-dmg' });
-      el.style.display = 'none';
-      const handle = anchors.add(el, this.at, { align: [0.5, 1] });
-      this.items.push({ handle, el, age: -1, x: 0, y: 0, z: 0, shownOpacity: -1 });
-    }
+/**
+ * The courtyard as the minimap's background, painted once over the world square ±`half`: the
+ * flagstone floor, the wall band, the dais and a glow under each brazier.
+ */
+export function paintCourtyard(
+  doc: Document,
+  half: number,
+  dais: { x: number; z: number; w: number; d: number },
+  braziers: readonly { x: number; z: number }[],
+): HTMLCanvasElement {
+  const px = 4; // canvas px per world unit
+  const size = Math.round(half * 2 * px);
+  const c = doc.createElement('canvas');
+  c.width = size;
+  c.height = size;
+  const g = c.getContext('2d');
+  if (!g) return c;
+  const at = (v: number) => (v + half) * px;
+  g.fillStyle = '#3a3340';
+  g.fillRect(0, 0, size, size);
+  g.strokeStyle = '#2a2430';
+  g.lineWidth = 1;
+  for (let v = 0; v <= size; v += 2 * px * 2) {
+    g.beginPath();
+    g.moveTo(v, 0);
+    g.lineTo(v, size);
+    g.moveTo(0, v);
+    g.lineTo(size, v);
+    g.stroke();
   }
-
-  /** Live numbers (for the spec). */
-  get alive(): number {
-    let n = 0;
-    for (const it of this.items) if (it.age >= 0) n++;
-    return n;
+  g.strokeStyle = '#18121c';
+  g.lineWidth = 2 * px;
+  g.strokeRect(px, px, size - 2 * px, size - 2 * px);
+  g.fillStyle = '#5a4c5e';
+  g.fillRect(at(dais.x - dais.w / 2), at(dais.z - dais.d / 2), dais.w * px, dais.d * px);
+  for (const b of braziers) {
+    const r = 3 * px;
+    const glow = g.createRadialGradient(at(b.x), at(b.z), 0, at(b.x), at(b.z), r);
+    glow.addColorStop(0, '#ffb14acc');
+    glow.addColorStop(1, '#ffb14a00');
+    g.fillStyle = glow;
+    g.fillRect(at(b.x) - r, at(b.z) - r, r * 2, r * 2);
   }
-
-  spawn(text: string, x: number, y: number, z: number): void {
-    const it = this.items[this.next]!;
-    this.next = (this.next + 1) % this.items.length;
-    it.el.textContent = text;
-    it.el.style.display = '';
-    it.age = 0;
-    it.x = x + (Math.random() - 0.5) * 0.3;
-    it.y = y;
-    it.z = z;
-    it.shownOpacity = -1;
-  }
-
-  update(dt: number): void {
-    const life = DamageNumbers.LIFE;
-    for (const it of this.items) {
-      if (it.age < 0) continue;
-      it.age += dt;
-      if (it.age >= life) {
-        it.age = -1;
-        it.el.style.display = 'none';
-        continue;
-      }
-      const t = it.age / life;
-      this.at[0] = it.x;
-      this.at[1] = it.y + 1.4 * t;
-      this.at[2] = it.z;
-      it.handle.set(this.at);
-      const o = Math.round((1 - t * t) * 20);
-      if (o !== it.shownOpacity) {
-        it.shownOpacity = o;
-        it.el.style.opacity = OPACITY[o]!;
-      }
-    }
-  }
+  return c;
 }
