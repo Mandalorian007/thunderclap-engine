@@ -41,6 +41,7 @@ export type {
   EmitParams,
   EmitShape,
   ParticleForce,
+  ParticleReadback,
   ParticleSystemOptions,
   Range,
 } from './particles';

@@ -110,7 +110,8 @@ entry points (`spawn`, `advance`, `update`, `subspawn`; the ring head lives on t
 `PARTICLE_RENDER_WGSL`, E-008) and ignores the fields below with one warning. The sources are
 exported for reuse: `PARTICLE_EXT_COMPUTE_WGSL` / `PARTICLE_EXT_RENDER_WGSL` (2D),
 `PARTICLE_WORLD_COMPUTE_WGSL` / `PARTICLE_WORLD_RENDER_WGSL`, `PARTICLE_COLLIDE_WGSL`,
-`PARTICLE_COUNT_WGSL`. `Range` is the `[min, max]` pair type the ranged fields take.
+`PARTICLE_COUNT_WGSL`. `Range` is the `[min, max]` pair type the ranged fields take;
+`ParticleReadback` is what `debugReadback()` resolves to (*Debugging*).
 
 #### Sprite sheets
 
@@ -171,10 +172,35 @@ const rain = new ParticleSystem(renderer, { space: 'world', readsDepth: true, co
   front edge of the fx3 slab, 2.2% of the live drops; ws/fx-5); the normal velocity is scaled by `bounce`, the
   tangential by `1 - friction`. Deeper than `thickness`, the test is swept: a particle that was
   in front of the scene one step back (`pos - vel * dt`) crossed it this frame and goes back to
-  that point, so a slow frame or a grazing view does not tunnel. The normal comes from the depth neighbours. Independent of
+  that point, so a slow frame or a grazing view does not tunnel. The normal comes from the depth
+  at pixel centres around the hit (per axis the shorter one-sided difference, so a silhouette
+  neighbour does not bend it); taken from the particle's sub-pixel hit point it was tilted by a
+  fixed amount for a resting particle, which slid 0.13 units/s across the fx3 slab (0.0008 now,
+  ws/fx-6). Independent of
   `softness`; `ParticleSystem.collide` can be changed or set to null at any time.
 - `countBelowY` (with `countAlive`): live particles below that y are also counted, into
   `below`.
+
+#### Debugging
+
+```ts
+const rain = new ParticleSystem(renderer, { space: 'world', debug: true });
+// after renderer.endFrame(), now and then (never each frame):
+const { alive, positions, velocities, slots, time } = await rain.debugReadback();
+```
+
+- `debug: true` gives the particle buffer `COPY_SRC` and makes one `MAP_READ` staging buffer of
+  the same size (`capacity` × 80 or 160 bytes). Without it there is no staging buffer and
+  `debugReadback()` rejects; with it nothing runs until it is called.
+- `debugReadback(): Promise<ParticleReadback>` submits one copy of the whole particle buffer,
+  maps the staging buffer and returns the live particles (age < lifetime) in slot order:
+  `alive`, `positions` and `velocities` (xyz each, `alive × 3`; z 0 on the original 2D kernel),
+  `slots` (each particle's ring slot, stable until `capacity` more emits, so two readbacks match
+  particle by particle) and `time` (the system's simulated time at the copy). The arrays are
+  fresh each call. A call while one is in flight returns the same promise. Call it outside a
+  frame: the copy is submitted at once and holds every frame submitted before it.
+- The fx3 harness reads back every 500 ms: `?forces` measures the shell's mean radius on the
+  GPU, `?collide` how fast the drops resting on the slab drift (`meanDriftPerSec`).
 
 #### Sub-emission
 
@@ -233,6 +259,7 @@ sparks.draw(frame); aura.draw(frame, 2);
 
 Harness: `fx3.html` (`?sheet`, `?forces`, `?collide`, `?sub`, `?effect`, `?still`) with
 `e2e/fx3.spec.ts`. Tests: `particles-world.test.ts` (the extended kernel on the fake GPU),
+`particles-debug.test.ts` (`debugReadback` against the CPU shadow of the fx3 shell),
 `emit-surface.test.ts`, `effect.test.ts`.
 
 ## Trails

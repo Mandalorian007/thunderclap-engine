@@ -7,10 +7,12 @@
  *   plays tiles 5..15 at 2 fps (`tile`, `tileRate`), spinning, beside a stream of upright
  *   sprites. `state.tileSeen` mirrors the tile the kernel shows.
  * - `?forces`: motes born on a shell gather into a blob on a spring attractor (`falloff: 'linear'`)
- *   with a vortex and drag (`system.forces`); 64 of them are shadowed on the CPU with
- *   `applyForces`, and `state.meanRadius` shrinks.
+ *   with a vortex and drag (`system.forces`); a `debugReadback()` every 500 ms measures their
+ *   `state.meanRadius` (and `radiusSettledAt`); 64 of them are also shadowed on the CPU with
+ *   `applyForces` (`state.shadowRadius`).
  * - `?collide`: rain over a floating slab with `readsDepth` and `collide`; `countBelowY` counts
- *   what gets under the slab into `state.belowSlab`.
+ *   what gets under the slab into `state.belowSlab`, and a `debugReadback()` every 500 ms
+ *   measures how fast the resting drops drift (`state.meanDriftPerSec`).
  * - `?sub`: bursts of rising parents whose `onDeath` sub-emitters scatter long-lived children;
  *   `state.aliveAfterParents` is the live count once every parent has died.
  * - `?effect`: the bundled `MAGIC_AURA_EFFECT` attached to a point moving on a circle.
@@ -26,6 +28,7 @@ import {
   MAGIC_AURA_EFFECT,
   ParticleEmitter,
   type ParticleForce,
+  type ParticleReadback,
   ParticleSystem,
 } from '@thunderclap/engine/fx';
 import { box, plane } from '@thunderclap/engine/geom';
@@ -62,6 +65,11 @@ const state: HarnessFx3State = {
   gpuErrors: 0,
   tileSeen: -1,
   meanRadius: -1,
+  radiusSettledAt: -1,
+  shadowRadius: -1,
+  meanDriftPerSec: -1,
+  restingDrops: 0,
+  readbacks: 0,
   belowSlab: -1,
   aliveAfterParents: -1,
   effectInstances: 0,
@@ -109,6 +117,14 @@ const TILE_TO = 15;
 const TILE_RATE = 2;
 const PARENT_LIFE = [0.6, 0.8] as const;
 const BURST_PERIOD = 4;
+/** Seconds between particle readbacks (`forces`, `collide`). */
+const READBACK_PERIOD = 0.5;
+/** `forces`: the mean radius the shell counts as gathered under (`radiusSettledAt`). */
+const SETTLE_RADIUS = 0.3;
+/** `forces`: seconds between shells. */
+const SHELL_PERIOD = 6;
+/** `collide`: how far from the slab top (units) a drop counts as resting on it. */
+const REST_BAND = 0.1;
 
 const probePoint: CameraPoint = { x: 0, y: 0, z: 0 };
 
@@ -296,6 +312,7 @@ async function main(): Promise<void> {
       softness: 0,
       forces,
       countAlive: true,
+      debug: true,
     });
     // Born on a shell of radius SHELL, at rest: only the forces move them.
     const shellParams: EmitParams = {
@@ -353,6 +370,7 @@ async function main(): Promise<void> {
       collide: { bounce: 0.2, friction: 0.6, thickness: 1.5 },
       countAlive: true,
       countBelowY: SLAB.y - SLAB.hy - 0.2,
+      debug: true,
     });
     const rain = new ParticleEmitter(
       main,
@@ -428,6 +446,63 @@ async function main(): Promise<void> {
   }
   if (main) systems.push(main);
 
+  // ------------------------------------------------- particle readbacks (forces, collide)
+  const readSystem = mode === 'forces' || mode === 'collide' ? main : null;
+  // collide: each slot's x, z at the previous readback while resting on the slab (NaN if not).
+  const restX = new Float32Array(readSystem && mode === 'collide' ? readSystem.capacity : 0);
+  const restZ = new Float32Array(restX.length);
+  restX.fill(Number.NaN);
+  let restTime = -1;
+  let lastReadback = 0;
+  const onReadback = (r: ParticleReadback): void => {
+    state.readbacks++;
+    const p = r.positions;
+    if (mode === 'forces') {
+      if (r.alive === 0) return;
+      let sum = 0;
+      for (let i = 0; i < r.alive; i++) {
+        sum += Math.hypot(
+          p[i * 3]! - ATTRACTOR[0],
+          p[i * 3 + 1]! - ATTRACTOR[1],
+          p[i * 3 + 2]! - ATTRACTOR[2],
+        );
+      }
+      state.meanRadius = sum / r.alive;
+      // The first shell is born at simulated time 0, so its age is the readback's time.
+      if (state.radiusSettledAt < 0 && r.time < SHELL_PERIOD && state.meanRadius < SETTLE_RADIUS) {
+        state.radiusSettledAt = r.time;
+      }
+      return;
+    }
+    const top = SLAB.y + SLAB.hy;
+    const dt = r.time - restTime;
+    let sum = 0;
+    let n = 0;
+    const seen = new Uint8Array(restX.length);
+    for (let i = 0; i < r.alive; i++) {
+      const x = p[i * 3]!;
+      const y = p[i * 3 + 1]!;
+      const z = p[i * 3 + 2]!;
+      const slot = r.slots[i]!;
+      if (Math.abs(y - top) > REST_BAND || Math.abs(x - SLAB.x) > SLAB.hx) continue;
+      if (Math.abs(z - SLAB.z) > SLAB.hz) continue;
+      seen[slot] = 1;
+      const px = restX[slot]!;
+      if (!Number.isNaN(px) && dt > 0) {
+        sum += Math.hypot(x - px, z - restZ[slot]!) / dt;
+        n++;
+      }
+      restX[slot] = x;
+      restZ[slot] = z;
+    }
+    for (let i = 0; i < seen.length; i++) if (!seen[i]) restX[i] = Number.NaN;
+    restTime = r.time;
+    if (n > 0) {
+      state.meanDriftPerSec = sum / n;
+      state.restingDrops = n;
+    }
+  };
+
   let time = 0;
   const loop = new GameLoop({
     update(dt) {
@@ -496,8 +571,8 @@ async function main(): Promise<void> {
           p[2]! += v[2]! * sdt;
           sum += Math.hypot(p[0]! - ATTRACTOR[0], p[1]! - ATTRACTOR[1], p[2]! - ATTRACTOR[2]);
         }
-        state.meanRadius = sum / shadowPos.length;
-        if (shadowTime - lastBurst >= 6 && emitShell) {
+        state.shadowRadius = sum / shadowPos.length;
+        if (shadowTime - lastBurst >= SHELL_PERIOD && emitShell) {
           lastBurst = shadowTime;
           emitShell();
           for (let i = 0; i < shadowPos.length; i++) {
@@ -533,6 +608,11 @@ async function main(): Promise<void> {
         for (const s of effect.systems) sum += Math.max(s.alive, 0);
         state.effectAlive = sum;
         probeAt = [effectPoint[0]!, effectPoint[1]!, effectPoint[2]!];
+      }
+      // After `endFrame`, so the copy holds every frame submitted so far.
+      if (readSystem && time - lastReadback >= READBACK_PERIOD) {
+        lastReadback = time;
+        readSystem.debugReadback().then(onReadback, (err) => console.error('[readback]', err));
       }
       state.gpuErrors = gpuDiagnostics.errorCount;
       camera.worldToScreen(probeAt[0], probeAt[1], probeAt[2], probePoint);
