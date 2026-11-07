@@ -322,7 +322,7 @@ async function main(): Promise<void> {
 
   const lights = new Lights();
   lights.ambient.set([0.25, 0.27, 0.32]);
-  lights.sun.dir = [-0.4, -1, -0.35];
+  lights.sun.direction = [-0.4, -1, -0.35];
   lights.sun.color = [1.1, 1.05, 0.95];
 
   const draws: { mesh: Mesh | MeshLod; material: Material; t: Transform; p?: InstanceParams }[] =
@@ -379,7 +379,7 @@ async function main(): Promise<void> {
   } else if (mode === 'mask') {
     // Seen from straight above, so the ground's probe grid is a screen rect.
     camera.lookAt([0, 9, 0.001], [0, 0, 0]);
-    lights.sun.dir = MASK_SUN;
+    lights.sun.direction = MASK_SUN;
     lights.sun.color = [1.2, 1.15, 1.1];
     lights.ambient.set([0.12, 0.12, 0.14]);
     lights.sun.shadow = { extent: 8 };

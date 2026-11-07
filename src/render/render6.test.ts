@@ -150,7 +150,7 @@ describe('LOD batches and lists (ws/render-6)', () => {
   it('shadow casters draw the level the view picked, bucketed the same way', () => {
     const { fake, r, lod, a } = setup();
     const f = r.beginFrame(0, 0);
-    f.lights.sun.dir = [-0.4, -1, -0.3];
+    f.lights.sun.direction = [-0.4, -1, -0.3];
     f.lights.sun.color = [1, 1, 1];
     f.lights.sun.shadow = { extent: 400 };
     f.meshes(lod, a, { count: 4, matrices: rows([-2, -10, -3, -100]) });
@@ -196,7 +196,7 @@ describe('alpha-masked shadow casters (ws/render-6)', () => {
     r.camera.lookAt([0, 0, 5], [0, 0, 0]);
     const m = createStandardMaterial(r, desc);
     const f = r.beginFrame(0, 0);
-    f.lights.sun.dir = [-0.4, -1, -0.3];
+    f.lights.sun.direction = [-0.4, -1, -0.3];
     f.lights.sun.color = [1, 1, 1];
     f.lights.sun.shadow = { extent: 20 };
     f.mesh(mesh(r, 'quad'), m, new Transform());

@@ -101,7 +101,7 @@ describe('Lights block', () => {
   it('writes ambient, a normalised sun and each point light at its slot', () => {
     const l = new Lights();
     l.ambient.set([0.1, 0.2, 0.3]);
-    l.sun.dir = [0, 0, -2];
+    l.sun.direction = [0, 0, -2];
     l.sun.color = [1, 0.5, 0.25];
     l.points.push(
       { position: [1, 2, 3], color: [4, 5, 6], radius: 7 },
@@ -125,7 +125,7 @@ describe('Lights block', () => {
 
   it('a zero sun direction writes zeros instead of NaN', () => {
     const l = new Lights();
-    l.sun.dir = [0, 0, 0];
+    l.sun.direction = [0, 0, 0];
     const { f32 } = block(l);
     expect([...f32.subarray(4, 7)]).toEqual([0, 0, 0]);
   });

@@ -160,8 +160,8 @@ describe('SceneStack preload and transitions', () => {
     expect(st.scenes).toEqual([a]);
     // The getter is the live stack; the deprecated list() a copy (ws/api-core).
     expect(st.scenes).toBe(st.scenes);
-    expect(st.list()).toEqual([a]);
-    expect(st.list()).not.toBe(st.scenes);
+    expect(st.list()).toEqual([a]); // deprecated-alias test
+    expect(st.list()).not.toBe(st.scenes); // deprecated-alias test
     expect(st.transitioning).toBe(false);
     expect(log).toEqual(['a.enter(c)']);
     // A preload that throws synchronously behaves the same, and the queue keeps going.

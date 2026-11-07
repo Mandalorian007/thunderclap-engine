@@ -3,8 +3,8 @@ import { Renderer } from '../render';
 import { createFakeDevice, fakeRendererGpu } from '../render/fake-gpu';
 import { PostStack } from './post-stack';
 import {
+  cinematicPostSettings,
   defaultPostQuality,
-  defaultPostSettings,
   POST_UNIFORM_FLOATS,
   packPostUniforms,
 } from './settings';
@@ -29,7 +29,7 @@ describe('PostStack quality caps', () => {
     post.setQuality({ maxBloomLevels: 4 });
     frame(r);
     expect(mips().at(-1)).toBe(4);
-    expect(post.settings.bloom.levels).toBe(defaultPostSettings().bloom.levels);
+    expect(post.settings.bloom.levels).toBe(cinematicPostSettings().bloom.levels);
     const n = mips().length;
     frame(r);
     frame(r);
@@ -52,9 +52,9 @@ describe('PostStack quality caps', () => {
   it('packs ray samples and fog octaves into the quality slot', () => {
     const out = new Float32Array(POST_UNIFORM_FLOATS);
     const q = defaultPostQuality();
-    packPostUniforms(out, defaultPostSettings(), 0, 100, 100, 100, 100, q);
+    packPostUniforms(out, cinematicPostSettings(), 0, 100, 100, 100, 100, q);
     expect([out[68], out[69]]).toEqual([64, 5]);
-    packPostUniforms(out, defaultPostSettings(), 0, 100, 100, 100, 100, {
+    packPostUniforms(out, cinematicPostSettings(), 0, 100, 100, 100, 100, {
       ...q,
       raySamples: 3,
       fogOctaves: 9,

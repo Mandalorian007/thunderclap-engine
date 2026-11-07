@@ -240,7 +240,7 @@ async function main(): Promise<void> {
   // Everything but the depth passes off; the grade reproduces the built-in present.
   const post = new PostStack(renderer, {
     bloom: { enabled: false },
-    fog: { enabled: false },
+    mist: { enabled: false },
     godRays: { enabled: false },
     vignette: { enabled: false },
     grade: { tonemap: 'reinhard', saturation: 1, contrast: 1, dither: false },
@@ -280,7 +280,7 @@ async function main(): Promise<void> {
 
   const lights = new Lights();
   lights.ambient.set(AMBIENT);
-  lights.sun.dir = SUN_DIR;
+  lights.sun.direction = SUN_DIR;
   lights.sun.color = SUN_COLOR;
   // The lamp where mesh.ts starts it (spin 0), and left there.
   const lampPos = new Float32Array([TARGET[0] + LAMP_ORBIT, LAMP_HEIGHT, TARGET[2]]);

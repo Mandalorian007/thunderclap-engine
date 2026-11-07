@@ -488,9 +488,6 @@ export function cooldown(opts: WidgetCooldownOptions = {}): WidgetCooldown {
 /**
  * Stylesheet for these widgets in design px (`toFrameUnits`: every `px` here is one `--tc-unit`;
  * `--tc-ui-px` carries that unit into the `calc`s on the size custom properties).
- *
- * @deprecated (ws/api-core, E-036) Internal: its `ensure*Styles` injects it. Leaves the `ui` entry next
- * minor; tests import it from this file.
  */
 export const WIDGETS2_CSS = toFrameUnits(`
 .tc-ui-label { font-family: var(--tc-font-ui); font-size: var(--tc-font-size-s); color: var(--tc-color-text); }

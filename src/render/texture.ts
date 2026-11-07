@@ -238,7 +238,7 @@ export function loadTextureArray(
   sources.forEach((s, layer) => {
     uploadLayer(device, tex, s, layer, 'loadTextureArray');
   });
-  if (tex.mipLevels > 1) generateMipmaps(device, tex, { filter: opts.filter ?? opts.mipFilter });
+  if (tex.mipLevels > 1) generateMipmaps(device, tex, { filter: opts.filter ?? opts.mipFilter }); // deprecated-alias impl
   return tex;
 }
 

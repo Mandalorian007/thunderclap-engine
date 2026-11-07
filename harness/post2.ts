@@ -267,7 +267,7 @@ async function main(): Promise<void> {
   // Everything off but the one pass asked for; no tonemap so the flat colours stay flat.
   const post = new PostStack(renderer, {
     bloom: { enabled: false },
-    fog: { enabled: false },
+    mist: { enabled: false },
     godRays: { enabled: false },
     vignette: { enabled: false },
     grade: { tonemap: 'none', saturation: 1, contrast: 1, dither: false },

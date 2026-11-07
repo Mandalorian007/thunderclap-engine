@@ -252,7 +252,7 @@ describe('skinned draws through the renderer (fake GPU)', () => {
   it('the shadow pass pipeline for a skinned caster skins through the same prelude vs_main', () => {
     const { fake, r, palette, m, tube } = skinnedScene();
     const f = r.beginFrame(0, 0);
-    f.lights.sun.dir = [-0.4, -1, -0.3];
+    f.lights.sun.direction = [-0.4, -1, -0.3];
     f.lights.sun.shadow = { extent: 20 };
     f.mesh(tube, m, new Transform(), { castShadow: true });
     palette.flush();

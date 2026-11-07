@@ -669,7 +669,7 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
    */
   attach(input: WorldPanelInput, opts: { camera?: () => Camera | null } = {}): void {
     this.detach();
-    const router = input.pointers !== undefined ? input.pointers : (input.getPointers?.() ?? null);
+    const router = input.pointers !== undefined ? input.pointers : (input.getPointers?.() ?? null); // deprecated-alias impl
     if (!router) throw new Error('WorldPanel.attach: the input has no pointer router');
     const offTester = this.attachTo(router);
     const offTick = input.onUpdated(() => {

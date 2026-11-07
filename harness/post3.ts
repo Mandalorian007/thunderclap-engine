@@ -321,7 +321,7 @@ class RecordingPost implements PostProcessor {
 
 function patchFor(): PostSettingsPatch {
   const patch: PostSettingsPatch = {
-    fog: { enabled: false },
+    mist: { enabled: false },
     godRays: { enabled: false },
     vignette: { enabled: false },
     grade: { dither: false },
@@ -401,7 +401,7 @@ async function main(): Promise<void> {
 
   const lights = new Lights();
   lights.ambient.set(AMBIENT);
-  lights.sun.dir = SUN_DIR;
+  lights.sun.direction = SUN_DIR;
   lights.sun.color = SUN_COLOR;
   lights.fog.density = 0;
 

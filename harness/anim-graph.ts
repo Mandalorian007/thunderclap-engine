@@ -284,7 +284,7 @@ async function main(): Promise<void> {
 
   const lights = new Lights();
   lights.ambient.set([0.22, 0.22, 0.25]);
-  lights.sun.dir = [-0.5, -1.0, -0.6];
+  lights.sun.direction = [-0.5, -1.0, -0.6];
   lights.sun.color = [0.85, 0.82, 0.78];
 
   const api: HarnessAnimGraphApi = {

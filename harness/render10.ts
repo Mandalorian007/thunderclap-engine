@@ -101,7 +101,7 @@ async function main(): Promise<void> {
 
   const lights = new Lights();
   lights.ambient.set([0.25, 0.26, 0.3]);
-  lights.sun.dir = [-0.4, -1.0, -0.5];
+  lights.sun.direction = [-0.4, -1.0, -0.5];
   lights.sun.color = [0.9, 0.88, 0.8];
 
   const sky = new Sky(renderer);

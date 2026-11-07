@@ -222,7 +222,7 @@ async function main(): Promise<void> {
   const lit = renderer.createMaterial({ label: 'lit', blend: 'opaque', wgsl: LIT_WGSL });
   const lights = new Lights();
   lights.ambient.set([0.2, 0.2, 0.22]);
-  lights.sun.dir = [-0.4, -1.0, -0.6];
+  lights.sun.direction = [-0.4, -1.0, -0.6];
   lights.sun.color = [0.9, 0.88, 0.82];
 
   const draws: Draw[] = [];

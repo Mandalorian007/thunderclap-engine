@@ -186,7 +186,7 @@ async function main(): Promise<void> {
 
   const lights = new Lights();
   lights.ambient.set([0.22, 0.22, 0.25]);
-  lights.sun.dir = [-0.45, -1.0, -0.65];
+  lights.sun.direction = [-0.45, -1.0, -0.65];
   lights.sun.color = [0.9, 0.9, 0.85];
 
   const probePoint: CameraPoint = { x: 0, y: 0, z: 0 };

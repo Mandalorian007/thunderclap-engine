@@ -308,9 +308,6 @@ export function createFloats(
 
 /**
  * Stylesheet for the labels (design px, theme tokens).
- *
- * @deprecated (ws/api-core, E-036) Internal: its `ensure*Styles` injects it. Leaves the `ui` entry next
- * minor; tests import it from this file.
  */
 export const FLOATS_CSS = toFrameUnits(`
 .tc-floats { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform, opacity;

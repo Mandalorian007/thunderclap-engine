@@ -21,9 +21,9 @@ import { aoProjectedRadius } from './ao';
 import { easeLinear, PostBlender } from './blend';
 import { PostStack } from './post-stack';
 import {
+  cinematicPostSettings,
   clonePostSettings,
   defaultPostQuality,
-  defaultPostSettings,
   POST_UNIFORM_FLOATS,
   packPostUniforms,
 } from './settings';
@@ -84,7 +84,7 @@ describe('post 4: TAA on camera jitter (ws/post-4)', () => {
 
   it('packs the view jitter in uv and the reprojection from the view', () => {
     const out = new Float32Array(POST_UNIFORM_FLOATS);
-    const s = defaultPostSettings();
+    const s = cinematicPostSettings();
     s.taa.enabled = true;
     const reproj = new Float32Array(16).map((_, i) => i * 0.5);
     packPostUniforms(out, s, 0, 800, 450, 800, 450, defaultPostQuality(), null, 0, {
@@ -125,7 +125,7 @@ describe('post 4: per-surface inputs (ws/post-4)', () => {
 
   it('packs the rough-metal, object-velocity and ortho flags', () => {
     const out = new Float32Array(POST_UNIFORM_FLOATS);
-    const s = defaultPostSettings();
+    const s = cinematicPostSettings();
     s.ssr.enabled = true;
     s.motionBlur.enabled = true;
     const q = defaultPostQuality();
@@ -172,13 +172,13 @@ describe('post 4: per-surface inputs (ws/post-4)', () => {
 
 describe('post 4: settings debts (ws/post-4)', () => {
   it('clonePostSettings deep-copies sections and colours, sharing GPU handles', () => {
-    const s = defaultPostSettings();
+    const s = cinematicPostSettings();
     const tex = { label: 'lut' } as unknown as GPUTexture;
     s.lut.texture = tex;
     const c = clonePostSettings(s);
     expect(c).toEqual(s);
     expect(c.bloom).not.toBe(s.bloom);
-    expect(c.fog).not.toBe(s.fog);
+    expect(c.mist).not.toBe(s.mist);
     c.grade.lift[0] = 9;
     c.motionBlur.mode = 'camera';
     expect(s.grade.lift[0]).not.toBe(9);
@@ -187,7 +187,7 @@ describe('post 4: settings debts (ws/post-4)', () => {
   });
 
   it('snaps bloom.levels, lut.texture and motionBlur.mode at the end of a blend, by section', () => {
-    const s = defaultPostSettings();
+    const s = cinematicPostSettings();
     const b = new PostBlender();
     const tex = { label: 'lut' } as unknown as GPUTexture;
     b.blendTo(

@@ -156,6 +156,16 @@ look.mist.density = 0.4;
 const sprite = renderer.createSpriteMaterial({ texture: tex, label: 'hero' });
 ```
 
+## Removal
+
+The `engine-v1.0.0` release deletes every alias in the table above. Before you bump, run the
+script from [Find what you use](#find-what-you-use) in your game's folder; when it prints no
+engine name, the bump compiles:
+
+```sh
+node find-deprecated.mjs
+```
+
 ## Next
 
 - [CHANGELOG.md](../../CHANGELOG.md): the *Deprecated* entries, with the branch that made each change

@@ -185,7 +185,7 @@ async function main(): Promise<void> {
 
   const lights = new Lights();
   lights.ambient.set([0.2, 0.2, 0.22]);
-  lights.sun.dir = [-0.45, -1.0, -0.65];
+  lights.sun.direction = [-0.45, -1.0, -0.65];
   lights.sun.color = [0.8, 0.8, 0.78];
 
   // The two lines a first-person game adds: build a Look and link it.

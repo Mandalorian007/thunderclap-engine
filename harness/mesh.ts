@@ -302,7 +302,7 @@ async function main(): Promise<void> {
   // The lights: set once, mutated per frame (the lamp's position), uploaded by the renderer.
   const lights = new Lights();
   lights.ambient.set(AMBIENT);
-  lights.sun.dir = SUN_DIR;
+  lights.sun.direction = SUN_DIR;
   lights.sun.color = SUN_COLOR;
   const lampPos = new Float32Array(3);
   const lamp: PointLight = { position: lampPos, color: LAMP_COLOR, radius: LAMP_RADIUS };

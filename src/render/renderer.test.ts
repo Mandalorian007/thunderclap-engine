@@ -1259,7 +1259,7 @@ describe('shadow pass', () => {
   }
 
   function sunShadowOn(f: Frame, extent = 20) {
-    f.lights.sun.dir = [-0.4, -1, -0.3];
+    f.lights.sun.direction = [-0.4, -1, -0.3];
     f.lights.sun.color = [1, 1, 1];
     f.lights.sun.shadow = { extent };
   }
@@ -1405,7 +1405,7 @@ describe('shadow pass', () => {
     r.camera = Camera.perspective(1, 1, 0.1, 100).lookAt([3, 4, 5], [0, 0, 0]);
     const seen = captureGlobals(fake);
     const f = r.beginFrame(0, 0);
-    f.lights.sun.dir = [0, -1, 0];
+    f.lights.sun.direction = [0, -1, 0];
     f.lights.sun.shadow = { extent: 10, size: 1024, bias: 0.01 };
     f.mesh(cube, m, new Transform());
     r.endFrame();
@@ -1763,7 +1763,7 @@ describe('batch submit (ws/batch-submit)', () => {
     matrices.set(new Transform({ z: 10 }).world, 12);
     matrices.set(new Transform({ x: 100, z: -10 }).world, 24);
     const f = r.beginFrame(0, 0);
-    f.lights.sun.dir = [-0.4, -1, -0.3];
+    f.lights.sun.direction = [-0.4, -1, -0.3];
     f.lights.sun.color = [1, 1, 1];
     f.lights.sun.shadow = { extent: 20 };
     f.meshes(cube, m, { count: 3, matrices });
@@ -1883,7 +1883,7 @@ describe('batch submit (ws/batch-submit)', () => {
     const list = r.createInstanceList(cube, m, 4);
     list.set(0, new Transform({ z: -10 })).set(1, new Transform({ x: 1, z: -10 }));
     const f = r.beginFrame(0, 0);
-    f.lights.sun.dir = [-0.4, -1, -0.3];
+    f.lights.sun.direction = [-0.4, -1, -0.3];
     f.lights.sun.color = [1, 1, 1];
     f.lights.sun.shadow = { extent: 20 };
     f.mesh(cube, m, new Transform({ z: -5 }));
@@ -1932,9 +1932,9 @@ describe('Renderer.white (ws/pbr-lights)', () => {
   it('is the device registry white and survives destroy()', () => {
     const { fake, r } = setup();
     const d = defaultTextures(fake.device);
-    expect(r.white).toBe(d.white);
-    expect(r.white.format).toBe('rgba8unorm-srgb');
-    expect([r.white.width, r.white.height]).toEqual([1, 1]);
+    expect(r.white).toBe(d.white); // deprecated-alias test
+    expect(r.white.format).toBe('rgba8unorm-srgb'); // deprecated-alias test
+    expect([r.white.width, r.white.height]).toEqual([1, 1]); // deprecated-alias test
     const write = fake.textureWrites.find((w) => (w.texture as unknown) === d.white.texture);
     expect([...(write!.data as Uint8Array)]).toEqual([255, 255, 255, 255]);
     // No second white: the renderer makes none of its own.
@@ -1942,7 +1942,7 @@ describe('Renderer.white (ws/pbr-lights)', () => {
     r.destroy();
     expect((d.white.texture as unknown as { destroyed: boolean }).destroyed).toBeFalsy();
     const r2 = new Renderer(fakeRendererGpu(fake));
-    expect(r2.white).toBe(d.white);
+    expect(r2.white).toBe(d.white); // deprecated-alias test
   });
 });
 
@@ -2089,7 +2089,7 @@ describe('depth hooks (ws/render-hooks)', () => {
     b.layers = 2;
     const { d, calls } = hooked();
     const f = r.beginFrame(0, 0);
-    f.lights.sun.dir = [-0.4, -1, -0.3];
+    f.lights.sun.direction = [-0.4, -1, -0.3];
     f.lights.sun.shadow = { extent: 20 };
     f.mesh(cube, m, new Transform(), { layers: 3 });
     f.drawable(d, 0, 2); // layer 2: only view b sees it

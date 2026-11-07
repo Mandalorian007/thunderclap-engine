@@ -19,13 +19,13 @@
  * field stale and the next step updates it in place.
  */
 import {
-  type Cell,
   createFlowField,
   createNavGrid,
   createNavPath,
   createReach,
   type EdgeCost,
   findPath,
+  type NavCell,
   type NavGrid,
   type NavPoint,
   pathDistance,
@@ -47,8 +47,8 @@ const SPEED = 120;
 const SEPARATION = 14;
 const WALL_COL = 20;
 const GAP = [5, 6];
-const PATH_START: Cell = { x: 3, y: 12 };
-const MULTI_GOALS: Cell[] = [
+const PATH_START: NavCell = { x: 3, y: 12 };
+const MULTI_GOALS: NavCell[] = [
   { x: 5, y: 4 },
   { x: 34, y: 6 },
   { x: 18, y: 20 },
@@ -58,7 +58,7 @@ const MULTI_GOALS: Cell[] = [
 const REACH_SIZE = 32;
 const REACH_CELL = 15;
 const REACH_ORIGIN_X = (LOGICAL.width - REACH_SIZE * REACH_CELL) / 2;
-const REACH_START: Cell = { x: 4, y: 16 };
+const REACH_START: NavCell = { x: 4, y: 16 };
 const REACH_BUDGET = 8;
 /** Cost per level climbed; dropping is free. */
 const CLIMB = 3;
@@ -183,7 +183,7 @@ const state: HarnessNavState = {
 };
 
 const goalWorld: NavPoint = { x: 0, z: 0 };
-const goals: Cell[] = [{ x: 0, y: 0 }];
+const goals: NavCell[] = [{ x: 0, y: 0 }];
 const multiGoals: number[] = [];
 
 function countWalls(): number {
@@ -248,7 +248,7 @@ function rehover(): void {
 const dir: NavPoint = { x: 0, z: 0 };
 const sep: NavPoint = { x: 0, z: 0 };
 const vel: NavPoint = { x: 0, z: 0 };
-const cell: Cell = { x: 0, y: 0 };
+const cell: NavCell = { x: 0, y: 0 };
 
 function step(): void {
   if (MODE === 'multi' && field.stale) {

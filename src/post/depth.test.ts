@@ -10,8 +10,8 @@ import { Renderer } from '../render/renderer';
 import { easeLinear, PostBlender } from './blend';
 import { PostStack } from './post-stack';
 import {
+  cinematicPostSettings,
   defaultPostQuality,
-  defaultPostSettings,
   POST_UNIFORM_FLOATS,
   packPostUniforms,
 } from './settings';
@@ -47,7 +47,7 @@ function deep(r: Renderer, cam = Camera.perspective(1, 16 / 9, 0.1, 100)): void 
 
 describe('AO and DoF settings', () => {
   it('default to off with the brief values; quality gains the sample counts', () => {
-    const s = defaultPostSettings();
+    const s = cinematicPostSettings();
     expect(s.ao).toEqual({ enabled: false, radius: 0.5, intensity: 1, bias: 0.02, power: 1.5 });
     expect(s.dof).toEqual({
       enabled: false,
@@ -60,7 +60,7 @@ describe('AO and DoF settings', () => {
   });
 
   it('blend: numbers ease, enabled and nearBlur switch at the end', () => {
-    const s = defaultPostSettings();
+    const s = cinematicPostSettings();
     s.ao.enabled = true;
     s.dof.enabled = true;
     const b = new PostBlender();
@@ -88,7 +88,7 @@ describe('AO and DoF settings', () => {
 
   it('packs the passes off without depth even when enabled, on with it', () => {
     const out = new Float32Array(POST_UNIFORM_FLOATS);
-    const s = defaultPostSettings();
+    const s = cinematicPostSettings();
     s.ao.enabled = true;
     s.dof.enabled = true;
     const q = defaultPostQuality();

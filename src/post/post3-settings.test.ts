@@ -6,8 +6,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyPostPatch,
+  cinematicPostSettings,
   defaultPostQuality,
-  defaultPostSettings,
   lowPostQuality,
   POST_UNIFORM_FLOATS,
   type PostFrameState,
@@ -44,7 +44,7 @@ function frameState(): PostFrameState {
 }
 
 function pack(
-  s = defaultPostSettings(),
+  s = cinematicPostSettings(),
   quality = defaultPostQuality(),
   depth = false,
   frame: PostFrameState | null = null,
@@ -70,7 +70,7 @@ function wgslStructFloats(): { name: string; floats: number }[] {
 
 describe('post 3 settings', () => {
   it('default to off with the brief values', () => {
-    const s = defaultPostSettings();
+    const s = cinematicPostSettings();
     expect(s.taa).toEqual({
       enabled: false,
       feedback: 0.9,
@@ -134,7 +134,7 @@ describe('post 3 settings', () => {
     const reproj = Array.from(out.slice(REPROJ, REPROJ + 16));
     expect(reproj).toEqual([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
     // Everything before the post-3 block is untouched by the new sections.
-    const s = defaultPostSettings();
+    const s = cinematicPostSettings();
     applyPostPatch(s, {
       taa: { enabled: true },
       ssr: { enabled: true },
@@ -149,7 +149,7 @@ describe('post 3 settings', () => {
   });
 
   it('pack the temporal sections on only with depth and a frame state', () => {
-    const s = defaultPostSettings();
+    const s = cinematicPostSettings();
     applyPostPatch(s, {
       taa: { enabled: true, feedback: 2, clampMode: 'variance' },
       motionBlur: { enabled: true, maxSamples: 100 },
@@ -180,7 +180,7 @@ describe('post 3 settings', () => {
   });
 
   it('auto exposure replaces the grade exposure with the frame state multiplier', () => {
-    const s = defaultPostSettings();
+    const s = cinematicPostSettings();
     s.grade.exposure = 2;
     const fs = frameState();
     expect(pack(s, undefined, false, fs)[11]).toBe(2);
@@ -203,7 +203,7 @@ describe('post 3 settings', () => {
     expect(r).toBeGreaterThan(1);
     expect(b).toBeLessThan(1);
     expect(r).toBeGreaterThan(b);
-    const s = defaultPostSettings();
+    const s = cinematicPostSettings();
     s.whiteBalance.temperature = 3200;
     const out = pack(s);
     expect(out[WB0 + 3]).toBe(1);
@@ -211,7 +211,7 @@ describe('post 3 settings', () => {
   });
 
   it('lens dirt packs the flag only with a texture', () => {
-    const s = defaultPostSettings();
+    const s = cinematicPostSettings();
     s.bloom.dirt = { texture: null, intensity: 2 };
     expect(Array.from(pack(s).slice(DIRT, DIRT + 2))).toEqual([0, 2]);
     s.bloom.dirt.texture = {} as GPUTexture;

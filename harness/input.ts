@@ -395,7 +395,7 @@ function tick(): void {
   state.yaw += look.look.dx;
   state.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, state.pitch + look.look.dy));
   state.locked = look.locked;
-  state.listening = input.listeningFor();
+  state.listening = input.listening;
   const charge = input.state('charge');
   state.holdProgress = charge.holdProgress;
   if (charge.pressed) {
@@ -437,7 +437,7 @@ async function main(): Promise<void> {
 
   const lights = new Lights();
   lights.ambient.set([0.2, 0.2, 0.22]);
-  lights.sun.dir = [-0.45, -1.0, -0.65];
+  lights.sun.direction = [-0.45, -1.0, -0.65];
   lights.sun.color = [0.8, 0.8, 0.78];
 
   input.attach({ pointerTarget: surface.canvas });

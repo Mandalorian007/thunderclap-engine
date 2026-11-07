@@ -12,10 +12,10 @@
  */
 import { computeLetterbox } from '@thunderclap/engine/platform';
 import {
-  type Cell,
   type CellItem,
   createOverlay,
   type Grid,
+  type GridCell,
   h,
   type PadAction,
   slotsTarget,
@@ -99,7 +99,7 @@ function makeGrid(name: HarnessGridName, cols: number, rows: number, label: stri
       state.moves.push(`${name}:${item.id}:${from.col},${from.row}>${to.col},${to.row}`);
       sync();
     },
-    onFocus: (cell: Cell) => {
+    onFocus: (cell: GridCell) => {
       state.focused = { grid: name, col: cell.col, row: cell.row };
     },
     onActivate: (_cell, item) => {

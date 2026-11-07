@@ -233,7 +233,9 @@ async function main(): Promise<void> {
     const atlas = bundle.get('sprites');
     state.atlasSize = { width: atlas.layout.width, height: atlas.layout.height };
     state.rectCount = Object.keys(atlas.rects).length;
-    sprites.material = renderer.createSpriteMaterial(atlas.texture, 'atlas', {
+    sprites.material = renderer.createSpriteMaterial({
+      texture: atlas.texture,
+      label: 'atlas',
       sampler: 'nearest-clamp',
     });
     // A row of sprites across the middle, each scaled 4×, sampling its own uv rect.

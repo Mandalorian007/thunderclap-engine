@@ -201,7 +201,7 @@ async function main(): Promise<void> {
   const lights = new Lights();
   lights.ambient.set([0.22, 0.22, 0.25]);
   // The PBR quads face +z, so its sun leans towards -z.
-  lights.sun.dir = PBR ? [-0.35, -0.8, -0.7] : [-0.45, -1.0, -0.65];
+  lights.sun.direction = PBR ? [-0.35, -0.8, -0.7] : [-0.45, -1.0, -0.65];
   lights.sun.color = [0.9, 0.9, 0.85];
 
   const gestures = new Gestures();

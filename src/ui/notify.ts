@@ -158,9 +158,6 @@ export function createNotifier(container: HTMLElement, max = 4): Notifier {
 
 /**
  * Stylesheet for notifications (design px, theme tokens).
- *
- * @deprecated (ws/api-core, E-036) Internal: its `ensure*Styles` injects it. Leaves the `ui` entry next
- * minor; tests import it from this file.
  */
 export const NOTIFY_CSS = toFrameUnits(`
 .tc-notify { position: absolute; top: var(--tc-space-5); right: var(--tc-space-5); display: flex; flex-direction: column;

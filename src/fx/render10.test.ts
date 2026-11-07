@@ -119,8 +119,8 @@ function drawAll(aux: SceneTargetAux, depth: boolean) {
   });
   const drawables = [sky, ps2d, psWorld, decals, water, bb, dd];
 
-  // The world panel keys its pipelines on depth alone (ui owns it; one-line target swap here),
-  // so it is right in `renderer.target` only: it sits on layer 2, which the plain view skips.
+  // The world panel sits on layer 2, which the plain view skips. It keys its pipeline on the aux
+  // key too (ws/core-8); `src/ui/world-panel/panel-aux.test.ts` draws it into a plain target.
   const plain = new SceneTarget(r.device, { width: 32, height: 16, label: 'plain' });
   const plainCam = Camera.perspective(Math.PI / 2, 2, 0.1, 100);
   plainCam.lookAt([0, 2, 6], [0, 0, 0]);

@@ -258,7 +258,7 @@ async function main(): Promise<void> {
   const identity = new Transform();
   const lights = new Lights();
   lights.ambient.set(AMBIENT);
-  lights.sun.dir = SUN_DIR;
+  lights.sun.direction = SUN_DIR;
   lights.sun.color = SUN_COLOR;
 
   const t0 = performance.now();
