@@ -111,7 +111,8 @@ entry points (`spawn`, `advance`, `update`, `subspawn`; the ring head lives on t
 exported for reuse: `PARTICLE_EXT_COMPUTE_WGSL` / `PARTICLE_EXT_RENDER_WGSL` (2D),
 `PARTICLE_WORLD_COMPUTE_WGSL` / `PARTICLE_WORLD_RENDER_WGSL`, `PARTICLE_COLLIDE_WGSL`,
 `PARTICLE_COUNT_WGSL`. `Range` is the `[min, max]` pair type the ranged fields take;
-`ParticleReadback` is what `debugReadback()` resolves to (*Debugging*).
+`ParticleReadback` is what `debugReadback()` resolves to and `ParticleFields` what
+`readbackFields()` does (*Debugging*).
 
 #### Sprite sheets
 
@@ -187,11 +188,13 @@ const rain = new ParticleSystem(renderer, { space: 'world', readsDepth: true, co
 const rain = new ParticleSystem(renderer, { space: 'world', debug: true });
 // after renderer.endFrame(), now and then (never each frame):
 const { alive, positions, velocities, slots, time } = await rain.debugReadback();
+// or every field by name, no knowledge of the packing:
+const { position, velocity, age, life, radius } = await rain.readbackFields();
 ```
 
 - `debug: true` gives the particle buffer `COPY_SRC` and makes one `MAP_READ` staging buffer of
   the same size (`capacity` × 80 or 160 bytes). Without it there is no staging buffer and
-  `debugReadback()` rejects; with it nothing runs until it is called.
+  `debugReadback()` and `readbackFields()` reject; with it nothing runs until one is called.
 - `debugReadback(): Promise<ParticleReadback>` submits one copy of the whole particle buffer,
   maps the staging buffer and returns the live particles (age < lifetime) in slot order:
   `alive`, `positions` and `velocities` (xyz each, `alive × 3`; z 0 on the original 2D kernel),
@@ -199,8 +202,18 @@ const { alive, positions, velocities, slots, time } = await rain.debugReadback()
   particle by particle) and `time` (the system's simulated time at the copy). The arrays are
   fresh each call. A call while one is in flight returns the same promise. Call it outside a
   frame: the copy is submitted at once and holds every frame submitted before it.
-- The fx3 harness reads back every 500 ms: `?forces` measures the shell's mean radius on the
-  GPU, `?collide` how fast the drops resting on the slab drift (`meanDriftPerSec`).
+- `readbackFields(): Promise<ParticleFields>` (ws/fx-7) reads the same copy unpacked: one named
+  typed array per field, sized for `alive`, in slot order. `position`, `velocity`, `gravity`,
+  `wind`, `sub` are xyz (`alive × 3`); `color0`, `color1`, `tile` and `curveSlots` (`Int32Array`,
+  -1 none) are `alive × 4`; `age`, `life` (lifetime), `radius` (half the drawn size at this age,
+  through the size curve as the shader reads it), `sizeStart`, `sizeEnd`, `drag`, `emissive`,
+  `rotation` and `spin` one each; plus `alive`, `slots` and `time`. Fields the original 2D kernel
+  does not carry are 0 (`curveSlots` -1). Calls made while a copy is in flight share it with each
+  other and with `debugReadback()`, so both forms called back to back describe one copy. The
+  packed form is unchanged and stays the cheaper one.
+- The fx3 harness reads the fields back every 500 ms: `?forces` measures the shell's mean radius
+  on the GPU, `?collide` how fast the drops resting on the slab drift (`meanDriftPerSec`); both
+  check the packed form of one copy against the fields (`unpackedError`).
 
 #### Sub-emission
 
@@ -259,7 +272,8 @@ sparks.draw(frame); aura.draw(frame, 2);
 
 Harness: `fx3.html` (`?sheet`, `?forces`, `?collide`, `?sub`, `?effect`, `?still`) with
 `e2e/fx3.spec.ts`. Tests: `particles-world.test.ts` (the extended kernel on the fake GPU),
-`particles-debug.test.ts` (`debugReadback` against the CPU shadow of the fx3 shell),
+`particles-debug.test.ts` (`debugReadback` against the CPU shadow of the fx3 shell,
+`readbackFields` against known packed buffers in both layouts),
 `emit-surface.test.ts`, `effect.test.ts`.
 
 ## Trails

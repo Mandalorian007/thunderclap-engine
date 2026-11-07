@@ -38,7 +38,7 @@ export interface HarnessFx3State {
   tileSeen: number;
   /**
    * `forces`: the mean distance of the GPU particles from the attractor, from the last
-   * `debugReadback()` (every 500 ms; -1 before the first with live particles).
+   * `readbackFields()` (every 500 ms; -1 before the first with live particles).
    */
   meanRadius: number;
   /**
@@ -62,6 +62,12 @@ export interface HarnessFx3State {
   restingDrops: number;
   /** `forces` and `collide`: particle readbacks completed. */
   readbacks: number;
+  /**
+   * `forces` and `collide`: the largest difference between the packed `debugReadback()` and the
+   * unpacked `readbackFields()` of one shared copy (positions, velocities, slots), taken at the
+   * first readback with live particles; -1 until then. The measurements above read the unpacked fields (ws/fx-7).
+   */
+  unpackedError: number;
   /**
    * `collide`: live particles below the slab's underside (`ParticleSystem.below`); rain over
    * the slab with `collide` stays on top, so it stays near 0 while `alive` grows.
