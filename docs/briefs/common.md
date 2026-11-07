@@ -31,6 +31,13 @@ Your worktree may start from an old commit. First `git reset --hard main` (or th
 - Unit tests cover what you added; the fake GPU (`src/render/fake-gpu.ts`) covers renderer changes.
 - `ARCHITECTURE.md` *Today* text, the module README and `CHANGELOG.md` ("Next (unreleased)") describe the change, in the same branch.
 - Public API is exported only from the module's `index.ts`; new subpaths go in `package.json` `exports` and the root README table.
+- **Post-1.0 API changes:** these are additions and need an *Added* line in CHANGELOG `## Unreleased`:
+  - a new export
+  - a new optional parameter or field
+  - a widened parameter type
+  - a new type parameter with a default
+
+  These are breaking: removing something, narrowing a parameter, changing or narrowing a return type, or adding a required parameter or field. A breaking change needs a PM ruling before you write it.
 - Before you commit a new public name, grep `api/*.api.txt` on origin/main and the STATUS notes of streams running alongside you for that name. A name exported twice from the root barrel is a collision.
 - A branch that changes the public API commits the updated `api/*.api.txt` (`pnpm api:update`), and the diff follows E-036's conventions. `pnpm check:api` fails otherwise. The integrator resolves `api/` conflicts by re-running `api:update` on the merged head, never by hand.
 
