@@ -298,6 +298,7 @@ const batch: InstanceBatch = {
   matrices: new Float32Array(n * MATRIX3X4_FLOATS), // 3×4 row-major, 12 floats each
   params: new Float32Array(n * INSTANCE_PARAM_FLOATS), // uv, tint, params, emissive, flags, size
   bounds: null, // a world sphere: one cull test for the batch; null: per instance
+  prevMatrices: null, // last frame's matrices, index for index: per-instance velocity
 };
 writeInstanceParams(batch.params, i * INSTANCE_PARAM_FLOATS, { tint }, sizeX, sizeY);
 frame.meshes(cube, lit, batch);
@@ -306,6 +307,7 @@ frame.meshes(cube, lit, batch);
 const list = renderer.createInstanceList(cube, lit, 50_000);
 list.set(list.count, transform, { tint }); // appends; set(i, matrix | Transform, params?)
 const moved = list.remove(i); // swap-remove: the old last index now lives at i (or -1)
+list.setKey(i, id); // optional: a stable id that LOD memory and velocity history follow
 frame.list(list);
 ```
 
@@ -321,6 +323,9 @@ frame.list(list);
   `frame.mesh` makes) over the typed array, allocating nothing; with `bounds` the batch is
   culled as a whole and no instance is tested (`stats.culled` then adds `count`). `layerBits`
   and `castShadow` (default: 3D layouts yes) apply to the batch; the shadow pass draws it.
+  `prevMatrices` (optional, ws/render-7) holds last frame's matrices index for index; drawn
+  into a velocity target by an `aux` material, each instance writes its own motion (see *Aux
+  targets*). Shorter than `count` matrices throws.
 - `frame.list` when most instances stay the same from frame to frame (scenery, a crowd that
   moves a little): `InstanceList` keeps `matrices` and `params` on the CPU and the instance
   format in its own vertex buffer, tracks the dirty index range (`set`, `remove`, `touch(i)`
@@ -329,6 +334,15 @@ frame.list(list);
   culled as one unit by `bounds`: computed from the mesh sphere through every instance when
   they change (null for a mesh without bounds), or fixed by `setBounds(sphere | null)`.
   `clear()`, `capacity`, `layerBits`, `order`, `castShadow`, `destroy()`.
+- Keys (ws/render-7): `list.setKey(i, key)` gives instance `i` a stable finite number (an
+  entity id; `null` clears it, `keyOf(i)` reads it). A key stays with its slot through `set`,
+  moves with the instance on `remove`, and starts unset on an appended slot. With any key set
+  (`keyed`), each flush matches this frame's slots to last flush's by key
+  (`previousIndex[i]`: the slot instance `i` held, or -1 when it is new; a slot without a key
+  matches by index), so a LOD level and a velocity history follow the instance through a
+  swap-remove, a `clear()` and refill in another order, or a sort. Without keys a list works
+  as before: memory goes by index. A duplicate key matches its last slot. `flushCount` counts
+  the list's flushes.
 
 A batch or list cannot use a material with `perDrawUniforms` (both throw). `stats.batches`
 counts the batches and lists drawn; `stats.instances` counts their instances too.
@@ -395,14 +409,20 @@ a shadow caster never picks a level of its own. `isMeshLod(m)` tells a chain fro
 
 `frame.meshes(lod, material, batch)` and `renderer.createInstanceList(lod, material, capacity)`
 take a `MeshLod` too (ws/render-6): every instance picks its level the same way (its sphere from
-`meshes[0].bounds` through its matrix, its memory kept per view by instance index), and the
-batch is copied into the frame's upload bucketed by level, so each non-empty level is one
-instanced draw, in the scene and the shadow pass alike. A LOD list therefore costs a per-frame
-copy like a batch (its own vertex buffer is not drawn) and is culled per instance; its velocity
-history (`velocity: true`) is not read, so its instances write camera-only motion. `list.mesh`
-is `meshes[0]` and `list.lod` the chain (null for a plain list). Mode `?lod` of
+`meshes[0].bounds` through its matrix, its memory kept per view by instance index, or by key
+for a keyed list, ws/render-7), and the batch is copied into the frame's upload bucketed by
+level, so each non-empty level is one instanced draw, in the scene and the shadow pass alike.
+A LOD list therefore costs a per-frame copy like a batch (its own vertex buffer is not drawn)
+and is culled per instance; with `velocity: true` its previous matrices travel with the copy
+(ws/render-7), so each instance writes its own motion. Removing instance 0 of a keyed list
+moves no other instance's level; without keys the instance swapped into slot 0 takes slot
+0's memory, as before. `renderer.lodLevelOf(batch, i, camera?)` reads the level instance `i`
+drew at last frame for a view (-1: none), for probes and debug overlays. `list.mesh` is
+`meshes[0]` and `list.lod` the chain (null for a plain list). Mode `?lod` of
 `harness/render5.html` draws 200 instances of one chain; `?lod&instanced` draws them as one
-`InstanceList` and publishes `instancedDraws`.
+`InstanceList` and publishes `instancedDraws`. `harness/render7.html?lod-keys` churns a keyed
+LOD list every frame (a swap-remove and an append) with every rock parked inside a hysteresis
+band and counts level changes per rock (`levelChanges`, 0; `&unkeyed` is the control).
 
 ### Lazy pipelines
 
@@ -935,14 +955,26 @@ rough-metal, bit 1 velocity) keys the pipeline variants.
   11, 12, 14 with tangents, 13, 14, 15 when skinned. Skinned draws add the palette's previous
   frame when the `SkinPalette` keeps one (`SkinPaletteDesc.history`, `engine_skin_previous`;
   the buffer then holds `[header][current][previous]`, `palette.previousOffsetOf(slot)`), else
-  the current pose. `frame.mesh` and `frame.meshes` draws carry no lane: a per-frame instance
-  draw of a moving object reports camera motion only, so put what moves in a list.
+  the current pose.
+- Copied batches (ws/render-7): a LOD list with `velocity: true` and a `frame.meshes` batch
+  with `prevMatrices` write their previous matrices into the renderer's shared lane (one
+  `instance-lane` buffer, 48 bytes per instance, indexed like the frame's upload and bound at
+  slot 2 at the view's offset) as they are copied, bucketed by level alongside the instance.
+  Only a velocity target and an `aux` material read it; otherwise nothing is written and the
+  pipeline is the two-buffer one. A keyed list matches its history by key; a new instance (a
+  new key, or a slot past last flush's count) takes its current matrix as previous: zero
+  motion on its first frame. `frame.mesh` draws still carry no lane: a per-frame instance draw
+  of a moving object reports camera motion only, so put what moves in a list or a batch.
 - `camera.previousViewProj` (see *Camera jitter and history*) is the other half: the previous
   clip position is `prev_view_proj × previous world position`.
 
 Mode `?aux` of `harness/render4.html` renders into a target with both attachments: a quad
 with a roughness gradient and a cube sliding through a velocity list, both read back through a
-debug blit (`roughSample`, `velocitySample`); `e2e/render4.spec.ts` checks them. Switching
+debug blit (`roughSample`, `velocitySample`); `e2e/render4.spec.ts` checks them.
+`harness/render7.html?instanced-velocity` draws two rows of rocks in one keyed LOD list, one
+row sliding and one standing, through the same per-frame churn, and reads the velocity at every
+rock's centre (`velocityMoving` above zero, `velocityStatic` zero; `&unkeyed` and `&still` are
+the controls); `e2e/render7.spec.ts` checks them. Switching
 TAA, SSR and motion blur over to these inputs is ws/post-4 (see `src/post/README.md`).
 
 ### Per-draw uniforms

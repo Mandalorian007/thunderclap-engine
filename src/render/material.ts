@@ -127,6 +127,8 @@ export class Material {
   readonly bindings: BindingSet | null;
   /** True when the material has a `shadowFragmentEntry` (its own shadow pipelines). */
   readonly shadowFragment: boolean;
+  /** `MaterialDesc.aux`: the material writes a target's aux outputs (velocity among them). */
+  readonly aux: boolean;
   private readonly device: GPUDevice;
   private readonly desc: MaterialDesc;
   private readonly pipelineLayout: GPUPipelineLayout;
@@ -166,6 +168,7 @@ export class Material {
     this.depthTest = desc.depthTest !== false;
     this.blend = desc.blend ?? 'alpha';
     this.shadowFragment = desc.shadowFragmentEntry !== undefined;
+    this.aux = desc.aux === true;
     this.bindings = hasBindings(desc)
       ? new BindingSet(device, desc, sampler, defaultView, `material:${this.label}`, {
           perDraw: desc.perDrawUniforms,

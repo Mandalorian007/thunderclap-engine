@@ -77,7 +77,15 @@ export type PassCommand =
       firstIndex?: number;
     }
   | { op: 'dispatch'; x: number; y: number }
-  | { op: 'other'; name: string; args?: number[]; slot?: number; buffer?: unknown };
+  | {
+      op: 'other';
+      name: string;
+      args?: number[];
+      slot?: number;
+      buffer?: unknown;
+      /** `setVertexBuffer`'s byte offset, recorded when passed. */
+      offset?: number;
+    };
 
 export interface FakePass {
   kind: 'render' | 'compute';
@@ -93,6 +101,11 @@ export interface FakeDevice {
   readonly textures: FakeTexture[];
   readonly bindGroups: FakeBindGroup[];
   readonly writes: { buffer: FakeBuffer; offset: number; bytes: number }[];
+  /**
+   * The source of each `writes` entry, index for index: the caller's data (live, not a copy)
+   * and its `dataOffset` (bytes for an `ArrayBuffer`, elements for a typed array).
+   */
+  readonly writeData: { data: ArrayBuffer | ArrayBufferView; dataOffset: number }[];
   readonly textureWrites: {
     texture: FakeTexture;
     bytesPerRow: number;
@@ -126,6 +139,7 @@ export function createFakeDevice(
   const textures: FakeTexture[] = [];
   const bindGroups: FakeBindGroup[] = [];
   const writes: FakeDevice['writes'] = [];
+  const writeData: FakeDevice['writeData'] = [];
   const textureWrites: FakeDevice['textureWrites'] = [];
   const passes: FakePass[] = [];
   const textureCopies: FakeDevice['textureCopies'] = [];
@@ -148,8 +162,12 @@ export function createFakeDevice(
             : { op: 'drawIndexed', indices, instances, firstInstance, firstIndex },
         ),
       dispatchWorkgroups: (x: number, y = 1) => cmd({ op: 'dispatch', x, y }),
-      setVertexBuffer: (slot: number, buffer: unknown) =>
-        cmd({ op: 'other', name: 'setVertexBuffer', slot, buffer }),
+      setVertexBuffer: (slot: number, buffer: unknown, offset?: number) =>
+        cmd(
+          offset === undefined
+            ? { op: 'other', name: 'setVertexBuffer', slot, buffer }
+            : { op: 'other', name: 'setVertexBuffer', slot, buffer, offset },
+        ),
       setIndexBuffer: () => cmd({ op: 'other', name: 'setIndexBuffer' }),
       setBlendConstant: () => cmd({ op: 'other', name: 'setBlendConstant' }),
       setViewport: (...args: number[]) => cmd({ op: 'other', name: 'setViewport', args }),
@@ -258,6 +276,7 @@ export function createFakeDevice(
           errors.push(`writeBuffer: ${buffer.label} overflow (${offset}+${size}>${buffer.size})`);
         }
         writes.push({ buffer, offset, bytes: size });
+        writeData.push({ data, dataOffset: _dataOffset ?? 0 });
       },
       writeTexture(
         dst: { texture: FakeTexture; mipLevel?: number },
@@ -289,6 +308,7 @@ export function createFakeDevice(
     textures,
     bindGroups,
     writes,
+    writeData,
     textureWrites,
     passes,
     textureCopies,
