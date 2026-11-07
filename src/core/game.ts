@@ -356,8 +356,9 @@ export interface GameReplay extends InputPlayback {
  * ctx the scene stack hands to scenes (the game's own ctx type, which extends this one) and `P`
  * what the pointer router's hits carry (`ctx.pointers`' testers' `target`s). `createGame` infers
  * `P` from `pointers.testers` (else `unknown`, or name it: `createGame<A, S, C, P>`). The default
- * is `unknown` (ws/input-12, was `any`): the router is covariant in its target, so `EngineCtx<A>`
- * still takes a ctx whatever its `P`, and reads its targets as `unknown`.
+ * is `any`, so `EngineCtx<A>` takes a ctx whatever its `P` (the router is covariant in its target
+ * since ws/input-12, so `unknown` would too; it stays `any` under the 1.x freeze and may tighten
+ * to `unknown` in 2.0).
  * A game created without `save` gets `S = null`: `ctx.save` is then typed `null`, so a client
  * cannot reach for one. The default `S` is `FlushableSave | null` (ws/api-core), so code written
  * against `EngineCtx<A>` takes a ctx with a save or without one; name the save type
@@ -367,7 +368,8 @@ export interface EngineCtx<
   A extends string = string,
   S extends FlushableSave | null = FlushableSave | null,
   C = unknown,
-  P = unknown,
+  // biome-ignore lint/suspicious/noExplicitAny: `EngineCtx<A>` takes any `P`; may tighten to `unknown` in 2.0
+  P = any,
 > {
   readonly design: { readonly width: number; readonly height: number };
   readonly surface: Surface;

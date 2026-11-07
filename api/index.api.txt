@@ -44,7 +44,7 @@ interface CreateGameOptions<A extends string, S extends FlushableSave | null = n
 }
 
 ## EngineCtx  (type-only)
-interface EngineCtx<A extends string = string, S extends FlushableSave | null = FlushableSave | null, C = unknown, P = unknown> {
+interface EngineCtx<A extends string = string, S extends FlushableSave | null = FlushableSave | null, C = unknown, P = any> {
     readonly design: {
         readonly width: number;
         readonly height: number;

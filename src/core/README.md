@@ -169,9 +169,8 @@ The replay sink (`ctx.replay`, `input.replay`) is a detached element, so it meas
   `EngineCtx<A>` takes a ctx with or without a save (name the save, `EngineCtx<A, MySave>`, to
   read it). `P` is the pointer hits' target type: `createGame({ pointers: { testers } })`
   infers it from the first hit testers (ws/input-12), or name it with `createGame<A, S, C, P>`.
-  It defaults to `unknown` on `EngineCtx` (was `any` before ws/input-12): the router is
-  covariant in its target, so `EngineCtx<A>` still takes a ctx of any `P` and reads its hits'
-  targets as `unknown`.
+  It defaults to `any` on `EngineCtx`, so `EngineCtx<A>` takes a ctx of any `P`. The default may
+  tighten to `unknown` in 2.0 (the router is covariant in its target since ws/input-12).
 - `input.bindings` is a `Partial<Bindings<A>>` (ws/input-12): `A` is the full action union, so
   `createGame<'jump' | 'back'>({ input: { bindings: { jump } } })` leaves `back` to a context
   (`ctx.input.pushContext('menu', { bindings: { back } })`).

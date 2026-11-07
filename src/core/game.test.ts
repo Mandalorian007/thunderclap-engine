@@ -1412,8 +1412,8 @@ describe('createGame: overlay controls and typed input (ws/input-12)', () => {
     ctx.pointers.addTester(planeTester(0, 'not an id'));
     const takes = (c: EngineCtx<'go'>) => c.pointers;
     expect(takes(ctx)).toBe(ctx.pointers);
-    // The default P is `unknown` (was `any`): a bare EngineCtx reads its targets as unknown.
-    expectTypeOf<EngineCtx<'go'>['pointers']['hit']>().toEqualTypeOf<PickHit<unknown> | null>();
+    // The default P stays `any` (1.x freeze): a bare EngineCtx reads its targets untyped.
+    expectTypeOf<NonNullable<EngineCtx<'go'>['pointers']['hit']>['target']>().toBeAny();
     const bare = await createGame({
       root: document.getElementById('root') as HTMLElement,
       input: { bindings: { go: [] } },
