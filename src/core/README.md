@@ -60,8 +60,8 @@ done the input holds its last state. A replay attaches the input to an element o
 ## createGame: the tick clock
 
 `ctx.clock` (an `InputClock` from `@thunderclap/engine/input`, ms, starting at 0) is the game's
-tick clock (ws/core-4). The loop advances it by the fixed step before each fixed update (before
-the replay feed and `input.update()`; with `sim: false`, by the frame delta once per frame), so
+tick clock (ws/core-4). The loop advances it by the fixed step in each fixed update (after the
+replay feed, before `input.update()`; with `sim: false`, by the frame delta once per frame), so
 N fixed steps move `ctx.clock.now()` by exactly N × step, and a paused (`loop.paused`), stopped
 or halted loop does not move it. `ctx.gestures` runs on it, so long-press and double-tap
 windows are game time, and a recording made under `createGame` replays its long-presses on the
@@ -80,6 +80,16 @@ recording's `tickMs`, so `ctx.input.playback.speed = 2` replays two recorded tic
 with a long-press on the same recorded tick and game time, and the loop does not advance the
 clock a second time (`playback.clock === ctx.clock`). Once the recording is done the loop's step
 moves the clock again. `seek` never moves it.
+
+A replay started mid-session (from a menu, after the game has run live) is the same call made by
+the game: `createInputPlayback(ctx.input, recording, { clock: ctx.clock as TickClock, speed })`
+(`EngineCtx.clock` is typed `InputClock`, while the playback wants the `TickClock` createGame
+built; the game must still never advance it itself). The loop reads
+`ctx.input.playback` each fixed step (ws/core-5), so from the next step it runs `playback.step()`,
+skips its own advance while that playback drives `ctx.clock`, and resumes it once the recording
+ends; the long-press lands on its recorded tick (counted from the install) at any speed. Before
+ws/core-5 only a playback built from `input.replay` was stepped. Unlike `input.replay`, the input
+stays attached to the canvas, so real pointers and keys still reach it during such a replay.
 
 ## Scenes
 

@@ -421,9 +421,13 @@ export async function createGame<
         // A replay feeds this tick's events first: live, they arrived between the frames, while
         // the clock still read the last tick. Then the clock moves by the step, before the
         // input (and its gestures) update. A playback driving the clock has already moved it
-        // for each tick it fed; once the recording is done the step moves it again.
-        const fed = playback ? playback.step() : false;
-        if (!fed || playback?.clock !== clock) clock.advance(dt * 1000);
+        // for each tick it fed; once the recording is done the step moves it again. The playback
+        // is read from the input each step, so one the game installs mid-session (a replay
+        // started from a menu: `createInputPlayback(ctx.input, rec, { clock: ctx.clock })`) is
+        // stepped here too, in the same order (ws/core-5).
+        const pb = input.playback;
+        const fed = pb ? pb.step() : false;
+        if (!fed || pb?.clock !== clock) clock.advance(dt * 1000);
         input.update();
         padNav.update();
         audio.update(dt);

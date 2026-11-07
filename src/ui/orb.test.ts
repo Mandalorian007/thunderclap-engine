@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { h } from './dom';
 import { themePx } from './hud';
+import type { FormFactor } from './layout';
 import { ORB_CSS, TrailClock } from './orb';
 import { createOverlay, type Overlay } from './overlay';
 
@@ -148,5 +149,41 @@ describe('orb meter (ws/ui-5)', () => {
     expect(tc.at(300)).toBe(0);
     c = 1000;
     expect(tc.at()).toBe(0);
+  });
+
+  it('size per form factor: 56 on a phone, 96 on desktop, before the layout measures (ws/ui-10)', () => {
+    ui.destroy();
+    let ff: FormFactor = 'phone-landscape';
+    ui = createOverlay({
+      parent,
+      caption: { reducedMotion: true },
+      layout: { classify: () => ff },
+    });
+    const orb = ui.meter({ shape: 'orb', size: { phone: 56, default: 96 } });
+    const sizeOf = () => orb.el.style.getPropertyValue('--tc-orb-size');
+    expect(sizeOf()).toBe(themePx(56));
+    ff = 'desktop';
+    ui.layout.refresh();
+    expect(sizeOf()).toBe(themePx(96));
+    ff = 'phone-portrait';
+    ui.layout.refresh();
+    expect(sizeOf()).toBe(themePx(56));
+  });
+
+  it('setSize changes the diameter live and re-lays out once (ws/ui-10)', () => {
+    const orb = ui.meter({ shape: 'orb', size: 96 });
+    let relayouts = 0;
+    ui.layout.onChange(() => relayouts++);
+    orb.setSize({ default: 72 });
+    expect(orb.el.style.getPropertyValue('--tc-orb-size')).toBe(themePx(72));
+    expect(relayouts).toBe(1);
+    // The same diameter in this form factor: nothing to lay out.
+    orb.setSize(72);
+    expect(relayouts).toBe(1);
+    // A bar ignores it.
+    const bar = ui.meter({ label: 'HP' });
+    relayouts = 0;
+    bar.setSize(40);
+    expect(relayouts).toBe(0);
   });
 });

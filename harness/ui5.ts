@@ -9,6 +9,9 @@
  * - `?orb-rails`: the same orbs, one in a content-sized `left` rail and one in a content-sized
  *   `right` rail (ws/ui-9: `bars: { left/right: { size: 'content', max: 160 } }`), so a phone's
  *   56 px rails widen to hold them. `orbRegions`, `railWidths`.
+ * - `?orb-sized` (ws/ui-10): the `?orb-rails` page with each orb's `size` per form factor
+ *   (`ORB_SIZES`): smaller on a phone, so the rails take less of a small view. `orbWidths` (the
+ *   orbs' measured widths) and `orbWant` (the map's size in this form factor, in CSS px).
  * - `?floats`: floating text (`ui.floats(camera)`, ws/ui-6) from a ring of points, a crit every seventh, and
  *   a label behind the camera every half second; `active`, `pooled`, `spawned`, `culled`.
  * - `?minimap`: a round, player-up canvas minimap (`ui.minimap`, ws/ui-6) over a painted
@@ -32,6 +35,8 @@ import {
 } from '@thunderclap/engine/render';
 import {
   createOverlay,
+  type FormSizes,
+  formSize,
   type LayoutOverflow,
   type Meter,
   type MinimapMarker,
@@ -44,7 +49,14 @@ const query = new URLSearchParams(location.search);
 const MODES: HarnessUi5Mode[] = ['orb', 'floats', 'minimap'];
 const mode = MODES.find((m) => query.has(m)) ?? 'orb';
 /** `?orb-rails` (ws/ui-9): the orb mode with the orbs in content-sized side rails. */
-const rails = mode === 'orb' && query.has('orb-rails');
+/** `?orb-sized` (ws/ui-10): the `?orb-rails` page with a per-form-factor orb `size`. */
+const sizedOrbs = mode === 'orb' && query.has('orb-sized');
+const rails = mode === 'orb' && (query.has('orb-rails') || sizedOrbs);
+/** `?orb-sized`: each orb's diameter per form factor, theme px. */
+const ORB_SIZES: FormSizes[] = [
+  { phone: 96, tablet: 112, default: 128 },
+  { phone: 80, 'phone-portrait': 72, default: 104 },
+];
 
 const state: HarnessUi5State = {
   ready: false,
@@ -68,6 +80,8 @@ const state: HarnessUi5State = {
   overflows: [],
   orbRegions: [],
   railWidths: { left: 0, right: 0 },
+  orbWidths: [],
+  orbWant: [],
 };
 
 // ------------------------------------------------------------------ geometry (12 floats/vertex)
@@ -281,6 +295,7 @@ async function main(): Promise<void> {
         label: 'Health',
         max: 100,
         tone: 'danger',
+        ...(sizedOrbs ? { size: ORB_SIZES[0] } : {}),
         trail: true,
         reducedMotion: false,
         region: rails ? 'left' : 'bottom',
@@ -292,7 +307,7 @@ async function main(): Promise<void> {
         max: 100,
         readout: 'percent',
         color: '#3a7bff',
-        size: 104,
+        size: sizedOrbs ? ORB_SIZES[1] : 104,
         trail: { delay: 200, duration: 400 },
         reducedMotion: false,
         region: rails ? 'right' : 'bottom',
@@ -310,12 +325,30 @@ async function main(): Promise<void> {
           alignItems: 'center',
         });
       }
+      // `?orb-sized`: a hidden probe in each orb's rail, `n` theme px wide, turns the map's size
+      // into CSS px with the rail's own tokens (theme px follow the form's units).
+      const probes = sizedOrbs
+        ? orbs.map(() => {
+            const p = document.createElement('div');
+            Object.assign(p.style, { position: 'absolute', visibility: 'hidden', height: '0' });
+            return p;
+          })
+        : [];
       const note = () => {
         state.orbRegions = orbs.map((o) => o.el.parentElement?.dataset.region ?? '');
         state.railWidths = {
           left: ui.layout.state.regions.left?.width ?? 0,
           right: ui.layout.state.regions.right?.width ?? 0,
         };
+        if (!sizedOrbs) return;
+        orbs.forEach((o, i) => {
+          const probe = probes[i]!;
+          const n = formSize(ORB_SIZES[i]!, ui.layout.formFactor);
+          probe.style.width = `calc(${n} * var(--tc-space-1) / 4)`;
+          o.el.parentElement?.append(probe);
+          state.orbWant[i] = probe.getBoundingClientRect().width;
+          state.orbWidths[i] = o.el.getBoundingClientRect().width;
+        });
       };
       ui.layout.onChange(note);
       note();
