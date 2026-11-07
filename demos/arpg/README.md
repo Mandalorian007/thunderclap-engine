@@ -15,9 +15,12 @@ Q whirls, E dashes, R casts a nova; keys 1–3 or the top buttons swap gear.
   lists on `MeshLod` chains (ws/render-6; pillars at 16, 8 and 5 sides, walls lose their coping
   and chunks): each instance picks its level, each level in view is one draw. The wheel (or
   `__arpgApi.zoom`) pulls the camera back to show the far levels; `__demo.lodCounts` is
-  `stats.lodCounts`. Per-texel and per-tile rolls are core `hash2f`. The 2 m floor tiles centre
-  on even coordinates, so no grout gap runs under the hero's spawn at x = 0; `?still` publishes
-  `__demo.centreSeam` (the canvas's centre column less its neighbours 4 px out, read back once).
+  `stats.lodCounts`. Per-texel and per-tile rolls are core `hash2f`. Each 2 m floor tile carries
+  2 × 2 textured slabs, so a seam runs every metre (the gap at its edge, a grout line through its
+  middle); the tiling is offset a quarter tile on x and z (a strip of half-width tiles fills the
+  near walls), so the hero's spawn column at x = 0 sits half a metre from both. `?still`
+  publishes `__demo.centreSeam` (the canvas's centre column less its neighbours 4 px out, read
+  back once; about −0.03 on desktop-1280).
 - Six braziers: an emissive core, additive flame particles and a flickering point light each, under a
   low sun shadow, bloom, AO, vignette and an ACES grade.
 - The pick: `screenRay` onto the floor, refined by `NavMesh.height`, `findMeshPath` from a
@@ -39,6 +42,11 @@ Q whirls, E dashes, R casts a nova; keys 1–3 or the top buttons swap gear.
   their `heading`, ws/ui-7) and the hero as the arrow. A tap on
   the map goes through `onPick`, snaps to the navmesh and takes the same `findMeshPath` walk as a
   ground click. On phones the map sits in the card lane (the side rails are 56 px).
+- The HUD on content bars (ws/ui-8, `LayoutSpec.bars`): the two orbs at the ends of the `bottom`
+  bar and the ability slots between them size it (max 160 CSS px; 120 on phone-portrait, so the
+  world keeps at least 70% of the height between the bars), and the gear row sizes the `top`
+  bar (max 96). No widget overflows its region on any row; `__demo` publishes `formFactor`,
+  `overflows` (`layout.overflows()` ids), `bottomBar` and `worldView` after each re-layout.
 
 ## Known limits
 
@@ -48,4 +56,7 @@ LOD lists are copied into the frame upload each frame and carry no per-instance 
 (ws/render-6). Gear swapping stays by hand: the three sets are procedural `geom` meshes, not a
 glTF, and they differ in shape as well as colour, while `loaded.setVariant` swaps only the
 materials of a loaded glTF (`KHR_materials_variants`). The hero is a crowd agent with zero
-preferred velocity, so ghouls part around it but it does not push them.
+preferred velocity, so ghouls part around it but it does not push them. The orbs keep one size
+per form's units (a meter has no per-form-factor size), so on phone-landscape the bars take about
+a third of a 320 px-tall view; the map stays in the card lane there until content-sized side
+rails (ws/ui-9) land. The floor's 0.5 × 0.5 m corner inside the near walls shows the grout bed.
