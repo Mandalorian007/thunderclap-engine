@@ -187,7 +187,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | `Partial` context bindings; typed `EngineCtx` pointers; recordable overlay buttons | ws/input-12 | brief `docs/briefs/input-12.md` | train 19 | ✅ merged at `805be52` (`Partial` bindings; `P` inferred from testers, default stays `any`; overlay controls recordable by id). merged at `4650c37`, E-031 train 19 landed at `f3b14a9` |
 | 5 | `FakeDevice` loss; DOM-free headless option; game-side deprecation filter | ws/testing-2 | brief `docs/briefs/testing-2.md` | train 19 | ✅ merged at `08d34c2` (`FakeDevice.loseDevice`, `TestGame.loseDevice`; `overlay: false` runs in plain node; `check-deprecated-game.mjs`). merged at `1c136a6`, E-031 train 19 landed at `f3b14a9` |
 | 5 | Core no-overlay mode; testing uses it | ws/core-9 | brief `docs/briefs/core-9.md` | train 20 | 🔵 running |
-| 5 | Game-side script maps getter and read removals; `TestGameOptions` `P` | ws/testing-3 | brief `docs/briefs/testing-3.md` | train 20 | 🔵 running |
+| 5 | Game-side script maps getter and read removals; `TestGameOptions` `P` | ws/testing-3 | brief `docs/briefs/testing-3.md` | train 20 | 🟣 done at `22d9f68` (script maps getter and read removals through the checker; `TestGameOptions` `P` inferred, default `any`). Train 20 |
 | 5 | XR scene-mode per-eye aux | ws/render-12 | brief `docs/briefs/render-12.md` | train 20 | 🔵 running |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
@@ -500,6 +500,9 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
   - Wish: `TestGameOptions` gets a `P` parameter so `createTestGame` infers it from testers. → testing.
 - ws/render-11 wish: in XR scene mode the eye layer targets carry no aux; post reads aux from `surface.scene`.
 - E-031 train 19 (testing-2, input-12, render-11) landed at `f3b14a9`. The full browser test run had 2817 passed, 209 skipped and 0 failed. 2438 unit tests in 224 files. `api/` changes since 1.0.0 are additions only.
+- ws/testing-3 wishes:
+  - `check-snippets.test.mjs` exempts getter rows the way it exempts overload rows.
+  - The script misses a receiver wrapped in parentheses, such as `(x as T).m()`, which resolves to `any`.
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
