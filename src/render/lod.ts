@@ -6,7 +6,7 @@
  * Pure arithmetic, no allocation.
  */
 import type { LodChain } from '../geom/lod';
-import type { Mesh } from './mesh';
+import type { Mesh, MeshDesc } from './mesh';
 
 /**
  * A LOD chain the renderer draws: `meshes[0]` the full mesh, each later one coarser, and
@@ -16,6 +16,23 @@ import type { Mesh } from './mesh';
  */
 export type MeshLod = Pick<LodChain<Mesh>, 'thresholdsPx'> & {
   readonly meshes: readonly Mesh[];
+};
+
+/**
+ * What `renderer.createMeshLod` takes (ws/api-render): geom's `LodChain` as `createLodChain`
+ * builds it (`geometries` with level 0 the full one, `thresholdsPx` one fewer than the
+ * levels, or as many), plus a label prefix for the meshes (`<label>-lod<i>`).
+ */
+export interface MeshLodDesc {
+  geometries: readonly MeshDesc[];
+  thresholdsPx: readonly number[];
+  /** Mesh label prefix. Default `'lod'`. */
+  label?: string;
+}
+
+/** A `MeshLod` that keeps the geometries it was built from: a full geom `LodChain<Mesh>`. */
+export type MeshLodChain = MeshLod & {
+  readonly geometries: readonly MeshDesc[];
 };
 
 /** True when `m` is a `MeshLod` rather than a single `Mesh`. */

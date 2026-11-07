@@ -1,5 +1,5 @@
 import { type BindingDesc, BindingSet, hasBindings } from './bindings';
-import { type BlendMode, blendState } from './blend';
+import { blendState, type RenderBlendMode } from './blend';
 import { VERTEX_LAYOUT_2D, type VertexLayout } from './mesh';
 import type { SceneTarget } from './scene-target';
 import type { SamplerKind, TextureLike } from './texture';
@@ -88,7 +88,7 @@ export interface MaterialDesc extends BindingDesc {
    * its own vertex entry (set `vertexEntry`), typically wrapping `engine_vertex(v)`.
    */
   wgsl: string;
-  blend?: BlendMode;
+  blend?: RenderBlendMode;
   vertexEntry?: string;
   fragmentEntry?: string;
   /**
@@ -123,7 +123,7 @@ export class Material {
   readonly name: string;
   /** `MaterialDesc.depthTest`: false draws over the scene on its layer. */
   readonly depthTest: boolean;
-  readonly blend: BlendMode;
+  readonly blend: RenderBlendMode;
   readonly bindings: BindingSet | null;
   /** True when the material has a `shadowFragmentEntry` (its own shadow pipelines). */
   readonly shadowFragment: boolean;

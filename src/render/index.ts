@@ -1,12 +1,7 @@
-export { BUFFER_BINDING_BASE } from './bindings';
-export type { BlendMode } from './blend';
+export type { BlendMode, RenderBlendMode } from './blend';
 export type { CameraPoint, CameraRect } from './camera';
 export {
   ALL_LAYERS,
-  CAMERA_INV_VIEW_PROJ_OFFSET,
-  CAMERA_JITTER_OFFSET,
-  CAMERA_PREV_VIEW_OFFSET,
-  CAMERA_PREV_VIEW_PROJ_OFFSET,
   Camera,
   FRUSTUM_FLOATS,
   ORTHO2D_HALF_DEPTH,
@@ -32,12 +27,30 @@ export {
   rendererCaps,
   uploadKtx2,
 } from './compressed';
+export {
+  BUFFER_BINDING_BASE,
+  CAMERA_INV_VIEW_PROJ_OFFSET,
+  CAMERA_JITTER_OFFSET,
+  CAMERA_PREV_VIEW_OFFSET,
+  CAMERA_PREV_VIEW_PROJ_OFFSET,
+  FOG_OFFSET_FLOATS,
+  LAYERS_OFFSET_FLOATS,
+  LIGHTS_BLOCK_FLOATS,
+  POINT_LAYERS_OFFSET_FLOATS,
+  POINT_LIGHTS_OFFSET_FLOATS,
+  SHADOW_PARAMS_OFFSET_FLOATS,
+  SKIN_PALETTE_HEADER_FLOATS,
+  SPOT_LIGHTS_OFFSET_FLOATS,
+  SPRITE_WGSL,
+  STANDARD_WGSL,
+  SUN_VIEW_PROJ_OFFSET_FLOATS,
+} from './deprecated';
 export { gpuDiagnostics, installGpuErrorLogging, onGpuError, reportGpuError } from './diagnostics';
 export {
   DynamicResolution,
   type DynamicResolutionOptions,
 } from './dynamic-resolution';
-export type { Flipbook, FlipbookOptions, UvRect } from './flipbook';
+export type { AtlasGrid, Flipbook, FlipbookOptions, UvRect } from './flipbook';
 export { atlasFrames, createFlipbook } from './flipbook';
 export type { Drawable, DrawParams, InstanceBatch, InstanceParams, ViewInfo } from './frame';
 export { Frame, INSTANCE_PARAM_FLOATS, SKIN_PARAM, writeInstanceParams } from './frame';
@@ -48,34 +61,28 @@ export { GpuTimer, supportsTimestamps } from './gpu-timer';
 export { InstanceList, type InstanceListOptions } from './instance-list';
 export type {
   DirectionalLight,
+  DistanceFog,
   Fog,
   PointLight,
   ShadowUniforms,
   SpotLight,
+  SunLight,
   SunShadow,
 } from './lights';
 export {
   ALL_LIGHT_LAYERS,
   DEFAULT_SHADOW_BIAS,
-  FOG_OFFSET_FLOATS,
   INSTANCE_LAYER_BITS,
   INSTANCE_LAYER_SHIFT,
-  LAYERS_OFFSET_FLOATS,
-  LIGHTS_BLOCK_FLOATS,
   Lights,
   MAX_POINT_LIGHTS,
   MAX_SPOT_LIGHTS,
-  POINT_LAYERS_OFFSET_FLOATS,
   POINT_LIGHT_FLOATS,
-  POINT_LIGHTS_OFFSET_FLOATS,
   packInstanceFlags,
-  SHADOW_PARAMS_OFFSET_FLOATS,
   SPOT_LIGHT_FLOATS,
-  SPOT_LIGHTS_OFFSET_FLOATS,
-  SUN_VIEW_PROJ_OFFSET_FLOATS,
   spotCone,
 } from './lights';
-export type { MeshLod } from './lod';
+export type { MeshLod, MeshLodChain, MeshLodDesc } from './lod';
 export { DEFAULT_LOD_HYSTERESIS, isMeshLod, lodSizePx, pickLodLevel } from './lod';
 export type { DepthMode, MaterialDesc } from './material';
 export {
@@ -85,7 +92,6 @@ export {
   INSTANCE_OFFSET,
   INSTANCE_STRIDE,
   Material,
-  SPRITE_WGSL,
 } from './material';
 export type {
   MeshBounds,
@@ -137,6 +143,7 @@ export type {
   RendererOptions,
   RenderStats,
   ResolutionOptions,
+  SpriteMaterialOptions,
   TextureFromSourceOptions,
 } from './renderer';
 export { MIN_RESOLUTION_SCALE, Renderer, sceneSize } from './renderer';
@@ -150,7 +157,7 @@ export {
 } from './scene-target';
 export { DEFAULT_SHADOW_SIZE, SHADOW_FORMAT, ShadowMap } from './shadow';
 export type { SkinPaletteDesc } from './skin';
-export { JOINT_FLOATS, SKIN_PALETTE_HEADER_FLOATS, SkinPalette, setVertexSkin } from './skin';
+export { JOINT_FLOATS, SkinPalette, setVertexSkin } from './skin';
 export { type SnapshotOptions, SnapshotRenderer } from './snapshot';
 export type {
   StandardDissolve,
@@ -164,7 +171,6 @@ export {
   STANDARD_DISSOLVE_OFFSET,
   STANDARD_TEXTURE_SLOTS,
   STANDARD_UNIFORM_FLOATS,
-  STANDARD_WGSL,
 } from './standard';
 export type {
   DefaultTextures,

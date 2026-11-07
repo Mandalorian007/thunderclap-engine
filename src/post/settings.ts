@@ -34,7 +34,13 @@ export interface LensDirtSettings {
   intensity: number;
 }
 
-export interface FogSettings {
+/**
+ * The screen-space floor mist (ws/api-render: `PostSettings.mist`, formerly `fog`): a noisy
+ * haze rising from the bottom of the screen, composited after bloom. It is not distance fog;
+ * `Lights.fog` (render) fades 3D surfaces with their distance inside the materials. The two
+ * stack: the distance fog is already in the scene colour when the mist goes on top.
+ */
+export interface MistSettings {
   enabled: boolean;
   /** Mist colour (linear, HDR ok). */
   color: RGB;
@@ -54,11 +60,24 @@ export interface FogSettings {
   lightScatter: number;
 }
 
+/** @deprecated (ws/api-render) Use `MistSettings` (the same shape). Removed next minor. */
+export type FogSettings = MistSettings;
+
 export interface GodRaySettings {
   enabled: boolean;
-  /** Light position in logical coordinates (may be off-screen). */
+  /**
+   * Light position in logical coordinates (may be off-screen): the 2D placement, used unless
+   * `direction` is set and the frame has a 3D view.
+   */
   x: number;
   y: number;
+  /**
+   * World-space direction the light travels, like `Lights.sun.direction` (ws/api-render). When
+   * set and the frame has a 3D view (`PostInputs.view`), the rays come from where that
+   * direction's source sits on screen each frame (`godRaySource`) instead of `x`/`y`, and they
+   * go out while the sun is behind the camera. `null` or absent: `x`/`y`.
+   */
+  direction?: RGB | null;
   intensity: number;
   /** Per-sample falloff (0.9..0.99). */
   decay: number;
@@ -335,7 +354,14 @@ export interface MotionBlurSettings {
 
 export interface PostSettings {
   bloom: BloomSettings;
-  fog: FogSettings;
+  /** The screen-space floor mist (not `Lights.fog`, the distance fog). */
+  mist: MistSettings;
+  /**
+   * @deprecated (ws/api-render) Use `mist`: the same section under its old name, a forwarder
+   * on every settings object the module builds (`neutralPostSettings`, `cinematicPostSettings`,
+   * `clonePostSettings`), and read as `mist` in a patch. Removed next minor.
+   */
+  fog: MistSettings;
   godRays: GodRaySettings;
   vignette: VignetteSettings;
   grade: GradeSettings;
@@ -354,8 +380,13 @@ export interface PostSettings {
   motionBlur: MotionBlurSettings;
 }
 
-export function defaultPostSettings(): PostSettings {
-  return {
+/**
+ * The tuned look the engine shipped with (ws/api-render names it): bloom, a cool floor mist,
+ * god rays from the top centre of a 1920×1080 design, a vignette and a slight saturation and
+ * contrast lift. `PostStack` and `createGame` start from it. A new settings object each call.
+ */
+export function cinematicPostSettings(): PostSettings {
+  return withMistAlias({
     bloom: {
       enabled: true,
       intensity: 0.9,
@@ -365,7 +396,7 @@ export function defaultPostSettings(): PostSettings {
       scatter: 0.75,
       levels: 6,
     },
-    fog: {
+    mist: {
       enabled: true,
       color: [0.11, 0.13, 0.19],
       density: 0.65,
@@ -447,7 +478,52 @@ export function defaultPostSettings(): PostSettings {
     },
     whiteBalance: { temperature: 6500, tint: 0 },
     motionBlur: { enabled: false, mode: 'object', intensity: 1, maxSamples: 8 },
-  };
+  } as Omit<PostSettings, 'fog'>);
+}
+
+/**
+ * A neutral preset (ws/api-render): every pass off but the tone map (ACES, exposure 1, no
+ * lift, gamma, gain, saturation or contrast change, dithered), so the image is the scene and
+ * nothing else. Start here and turn on what the game wants. A new settings object each call.
+ */
+export function neutralPostSettings(): PostSettings {
+  const s = cinematicPostSettings();
+  s.bloom.enabled = false;
+  s.mist.enabled = false;
+  s.godRays.enabled = false;
+  s.vignette.enabled = false;
+  s.grade.saturation = 1;
+  s.grade.contrast = 1;
+  return s;
+}
+
+/**
+ * @deprecated (ws/api-render) The name does not say which look it is: it returns
+ * `cinematicPostSettings()`. Call that, or `neutralPostSettings()` for no look. Removed next
+ * minor.
+ */
+export function defaultPostSettings(): PostSettings {
+  return cinematicPostSettings();
+}
+
+/** Define the deprecated `fog` forwarder on `s` (not enumerable, so copies and blends skip it). */
+function withMistAlias(s: Omit<PostSettings, 'fog'>): PostSettings {
+  Object.defineProperty(s, 'fog', {
+    get(this: PostSettings) {
+      return this.mist;
+    },
+    set(this: PostSettings, v: MistSettings) {
+      this.mist = v;
+    },
+    enumerable: false,
+    configurable: true,
+  });
+  return s as PostSettings;
+}
+
+/** The section a patch key names: the deprecated `fog` is `mist`. */
+export function postSection(key: string): keyof PostSettings {
+  return (key === 'fog' ? 'mist' : key) as keyof PostSettings;
 }
 
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? Partial<T[K]> : T[K] };
@@ -461,7 +537,7 @@ export type PostSettingsPatch = DeepPartial<PostSettings>;
 export function clonePostSettings(s: PostSettings): PostSettings {
   const out = {} as Record<string, unknown>;
   for (const key of Object.keys(s) as (keyof PostSettings)[]) out[key] = cloneValue(s[key]);
-  return out as unknown as PostSettings;
+  return withMistAlias(out as unknown as Omit<PostSettings, 'fog'>);
 }
 
 function cloneValue(v: unknown): unknown {
@@ -477,7 +553,7 @@ function cloneValue(v: unknown): unknown {
 export function applyPostPatch(target: PostSettings, patch: PostSettingsPatch): PostSettings {
   for (const key of Object.keys(patch) as (keyof PostSettings)[]) {
     const section = patch[key];
-    if (section) Object.assign(target[key], section);
+    if (section) Object.assign(target[postSection(key)], section);
   }
   return target;
 }
@@ -687,6 +763,52 @@ struct PostUniforms {
 
 const TONEMAP_ID: Record<Tonemap, number> = { none: 0, aces: 1, reinhard: 2 };
 
+/**
+ * Where a directional light's source sits on screen (ws/api-render): the point at infinity
+ * opposite `direction` (the way the light travels) through `viewProj` (column-major), in
+ * logical px of a `width × height` view, written to `out` as x, y. Returns 1 when the source is
+ * in front of the camera and 0 when it is behind (or the projection is orthographic, which has
+ * no point at infinity); `out` is left alone then. No allocation.
+ */
+export function godRaySource(
+  viewProj: ArrayLike<number>,
+  direction: ArrayLike<number>,
+  width: number,
+  height: number,
+  out: { 0: number; 1: number } | number[] | Float32Array,
+): number {
+  const x = -(direction[0] ?? 0);
+  const y = -(direction[1] ?? 0);
+  const z = -(direction[2] ?? 0);
+  const m = viewProj;
+  const w = m[3]! * x + m[7]! * y + m[11]! * z;
+  if (!(w > 1e-6)) return 0;
+  const cx = (m[0]! * x + m[4]! * y + m[8]! * z) / w;
+  const cy = (m[1]! * x + m[5]! * y + m[9]! * z) / w;
+  out[0] = ((cx + 1) / 2) * width;
+  out[1] = ((1 - cy) / 2) * height;
+  return 1;
+}
+
+/**
+ * The god-ray source for this frame: `x`/`y`, or `godRaySource` of `direction` through `view`.
+ * Writes x, y and visibility into `out`.
+ */
+export function resolveGodRays(
+  r: GodRaySettings,
+  viewProj: ArrayLike<number> | null,
+  logicalWidth: number,
+  logicalHeight: number,
+  out: Float32Array,
+): void {
+  out[0] = r.x;
+  out[1] = r.y;
+  out[2] = 1;
+  if (r.direction && viewProj) {
+    out[2] = godRaySource(viewProj, r.direction, logicalWidth, logicalHeight, out);
+  }
+}
+
 /** Pack settings into the uniform array (no allocation). */
 export function packPostUniforms(
   out: Float32Array,
@@ -700,9 +822,10 @@ export function packPostUniforms(
   depth: PostDepthInfo | null = null,
   grainSeed = 0,
   frame: PostFrameState | null = null,
+  rays: Float32Array | null = null,
 ): void {
   const b = s.bloom;
-  const f = s.fog;
+  const f = s.mist;
   const r = s.godRays;
   const v = s.vignette;
   const g = s.grade;
@@ -723,8 +846,12 @@ export function packPostUniforms(
   o = put(out, o, f.color[0], f.color[1], f.color[2], f.density);
   o = put(out, o, f.top, f.bottom, f.noiseScale, f.speed);
   o = put(out, o, f.lightScatter, f.falloff, 0, 0);
-  o = put(out, o, r.x / logicalWidth, r.y / logicalHeight, r.intensity, r.decay);
-  o = put(out, o, r.density, r.weight, r.sourceRadius / logicalHeight, r.sourceIntensity);
+  // `rays` (x, y, visibility) is the resolved source when the stack placed it from `direction`.
+  const rx = rays ? rays[0]! : r.x;
+  const ry = rays ? rays[1]! : r.y;
+  const rv = rays ? rays[2]! : 1;
+  o = put(out, o, rx / logicalWidth, ry / logicalHeight, r.intensity * rv, r.decay);
+  o = put(out, o, r.density, r.weight, r.sourceRadius / logicalHeight, r.sourceIntensity * rv);
   o = put(out, o, r.color[0], r.color[1], r.color[2], r.bloomSource);
   o = put(out, o, v.intensity, v.radius, v.softness, 0);
   o = put(out, o, v.color[0], v.color[1], v.color[2], 0);

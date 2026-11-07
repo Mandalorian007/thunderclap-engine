@@ -518,20 +518,44 @@ export class Camera {
    * `ortho2d` is world z = -ORTHO2D_HALF_DEPTH; 0.5 is z = 0). Call it at depth 0 and 1 for
    * a pick ray. Pass `out` to avoid allocating.
    */
+  screenToWorld(sx: number, sy: number, depth?: number, out?: CameraPoint): CameraPoint;
+  /**
+   * Screen point (screen units) → the world point on the plane z = 0 under it (ws/api-render),
+   * the 2D pick: a tap on an `ortho2d` or tilted camera lands on the sprites' plane with no
+   * depth to choose. A ray parallel to the plane gives the near-plane point. Writes `out`.
+   */
+  screenToWorld(sx: number, sy: number, out: CameraPoint): CameraPoint;
   screenToWorld(
     sx: number,
     sy: number,
-    depth = 0,
+    depthOrOut: number | CameraPoint = 0,
     out: CameraPoint = { x: 0, y: 0, z: 0 },
   ): CameraPoint {
+    if (typeof depthOrOut === 'object') return this.screenToPlane(sx, sy, depthOrOut);
     const inv = this.invViewProj;
     const s = this.screen;
     const nx = ((sx - s.x) / s.width) * 2 - 1;
     const ny = 1 - ((sy - s.y) / s.height) * 2;
-    mat4.transformPoint(tmp, inv, nx, ny, depth);
+    mat4.transformPoint(tmp, inv, nx, ny, depthOrOut);
     out.x = tmp[0]!;
     out.y = tmp[1]!;
     out.z = tmp[2]!;
+    return out;
+  }
+
+  /** The pick ray through a screen point, met with the plane z = 0. No allocation. */
+  private screenToPlane(sx: number, sy: number, out: CameraPoint): CameraPoint {
+    this.screenToWorld(sx, sy, 1, out);
+    const fx = out.x;
+    const fy = out.y;
+    const fz = out.z;
+    this.screenToWorld(sx, sy, 0, out);
+    const dz = fz - out.z;
+    if (Math.abs(dz) < 1e-12) return out;
+    const t = -out.z / dz;
+    out.x += (fx - out.x) * t;
+    out.y += (fy - out.y) * t;
+    out.z = 0;
     return out;
   }
 

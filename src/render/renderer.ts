@@ -17,7 +17,14 @@ import { FullscreenPass, type FullscreenPassDesc } from './fullscreen';
 import { type GpuPassTimes, GpuTimer, supportsTimestamps } from './gpu-timer';
 import { InstanceList, type InstanceListOptions } from './instance-list';
 import { LIGHTS_BLOCK_FLOATS, packInstanceFlags, type ShadowUniforms } from './lights';
-import { DEFAULT_LOD_HYSTERESIS, lodSizePx, type MeshLod, pickLodLevel } from './lod';
+import {
+  DEFAULT_LOD_HYSTERESIS,
+  lodSizePx,
+  type MeshLod,
+  type MeshLodChain,
+  type MeshLodDesc,
+  pickLodLevel,
+} from './lod';
 import {
   DEPTH_FORMAT,
   type DepthMode,
@@ -115,6 +122,18 @@ export interface PostProcessor {
     output: GPUTextureView,
     viewport?: SceneTargetViewport,
   ): void;
+}
+
+/** Arguments to `Renderer.createSpriteMaterial`. */
+export interface SpriteMaterialOptions {
+  /** The sprite texture (an atlas, a `Texture`, `defaultTextures(device).white`). */
+  texture: TextureLike;
+  /** Debug label. Default `'sprite'`. */
+  label?: string;
+  /** Default `'alpha'`. */
+  blend?: MaterialDesc['blend'];
+  /** Default `'linear-clamp'`; pixel art wants `'nearest-clamp'`. */
+  sampler?: SamplerKind;
 }
 
 export interface RendererOptions {
@@ -453,11 +472,14 @@ export class Renderer implements FrameSink {
    */
   globalsBindGroup: GPUBindGroup;
   readonly quad: Mesh;
-  /** The device's `defaultTextures(device).white` (1×1 sRGB white, the unbound-slot default). */
+  /**
+   * @deprecated (E-036) Use `defaultTextures(renderer.device).white`, the same texture (1×1
+   * sRGB white, the unbound-slot default). Removed next minor.
+   */
   get white(): Texture {
     return defaultTextures(this.device).white;
   }
-  /** Built-in sprite material bound to `white` (solid colour quads via tint). */
+  /** Built-in sprite material bound to the default white texture (solid colour quads via tint). */
   readonly defaultSprite: Material;
   readonly stats: RenderStats = {
     drawCalls: 0,
@@ -729,7 +751,10 @@ export class Renderer implements FrameSink {
     this.instanceBuffer = this.makeInstanceBuffer(cap);
 
     this.quad = new Mesh(device, { label: 'quad', ...quadGeometry() });
-    this.defaultSprite = this.createSpriteMaterial(this.white, 'sprite-default');
+    this.defaultSprite = this.createSpriteMaterial({
+      texture: defaultTextures(device).white,
+      label: 'sprite-default',
+    });
 
     this.present = this.createFullscreenPass({
       label: 'present-basic',
@@ -844,29 +869,69 @@ export class Renderer implements FrameSink {
       this.globalsLayout,
       this.sceneFormats,
       this.samplers[desc.sampler ?? 'linear-clamp'],
-      this.white.view,
+      defaultTextures(this.device).white.view,
     );
   }
 
-  /** Built-in textured sprite material for `texture`. */
+  /**
+   * The built-in textured sprite material (`texture × vertex colour × tint`; emissive is the
+   * colour × `emissive`): `createSpriteMaterial({ texture, label, blend, sampler })`, the same
+   * option-object shape as `createMaterial`. `label` defaults to `'sprite'`, `blend` to
+   * `'alpha'` and `sampler` to `'linear-clamp'`.
+   */
+  createSpriteMaterial(opts: SpriteMaterialOptions): Material;
+  /**
+   * @deprecated (ws/api-render) Positional form; pass one `SpriteMaterialOptions` object
+   * (`{ texture, label, blend, sampler }`). Removed next minor.
+   */
   createSpriteMaterial(
     texture: TextureLike,
-    label = 'sprite',
+    label?: string,
+    opts?: { blend?: MaterialDesc['blend']; sampler?: SamplerKind },
+  ): Material;
+  createSpriteMaterial(
+    a: SpriteMaterialOptions | TextureLike,
+    label?: string,
     opts: { blend?: MaterialDesc['blend']; sampler?: SamplerKind } = {},
   ): Material {
+    // A texture always has a `view`; the options object never does.
+    const o: SpriteMaterialOptions =
+      'view' in a ? { texture: a, label, blend: opts.blend, sampler: opts.sampler } : a;
     const m = this.createMaterial({
-      label,
+      label: o.label ?? 'sprite',
       wgsl: SPRITE_WGSL,
       textures: 1,
-      blend: opts.blend,
-      sampler: opts.sampler,
+      blend: o.blend,
+      sampler: o.sampler,
     });
-    m.setTexture(0, texture);
+    m.setTexture(0, o.texture);
     return m;
   }
 
   createMesh(desc: MeshDesc): Mesh {
     return new Mesh(this.device, desc);
+  }
+
+  /**
+   * Upload a LOD chain (ws/api-render): one mesh per `geometries` entry, labelled
+   * `<label>-lod<i>`, returned with the thresholds and the geometries as a `MeshLod` that
+   * `frame.mesh` takes in place of a mesh. geom's `createLodChain(g, ratios)` builds the
+   * geometries (level 0 is `g`, so `ratios.length + 1` levels and `ratios.length` thresholds).
+   * Throws on an empty chain or more thresholds than levels.
+   */
+  createMeshLod(desc: MeshLodDesc): MeshLodChain {
+    const n = desc.geometries.length;
+    if (n === 0) throw new Error('createMeshLod: the chain has no geometries');
+    if (desc.thresholdsPx.length > n) {
+      throw new Error(
+        `createMeshLod: ${desc.thresholdsPx.length} thresholds for ${n} levels (at most one per level)`,
+      );
+    }
+    const label = desc.label ?? 'lod';
+    const meshes = desc.geometries.map((g, i) =>
+      this.createMesh({ ...g, label: `${label}-lod${i}` }),
+    );
+    return { meshes, thresholdsPx: [...desc.thresholdsPx], geometries: desc.geometries };
   }
 
   createTexture(desc: TextureDesc): Texture {
@@ -900,7 +965,7 @@ export class Renderer implements FrameSink {
       this.device,
       desc,
       this.samplers[desc.sampler ?? 'linear-clamp'],
-      this.white.view,
+      defaultTextures(this.device).white.view,
     );
   }
 
@@ -1167,7 +1232,7 @@ export class Renderer implements FrameSink {
     const shadowCfg = frame.lights.sun.shadow;
     if (shadowCfg) {
       const size = shadowCfg.size ?? DEFAULT_SHADOW_SIZE;
-      this.shadow.place(camera.position, frame.lights.sun.dir, shadowCfg, size);
+      this.shadow.place(camera.position, frame.lights.sun.direction, shadowCfg, size);
     }
     const depth = this.buildDraws(camera, target);
     this.stats.culled += this.culledCount;

@@ -1,5 +1,5 @@
 import { type Ease, ease } from '../tween/ease';
-import type { PostSettings, PostSettingsPatch } from './settings';
+import { type PostSettings, type PostSettingsPatch, postSection } from './settings';
 
 // The easing functions live in `@thunderclap/engine/tween`; these names stay as aliases.
 export type { Ease };
@@ -47,9 +47,10 @@ export class PostBlender {
 
   blendTo(target: PostSettings, patch: PostSettingsPatch, seconds: number, ease: Ease): void {
     const dur = Math.max(0, Number.isFinite(seconds) ? seconds : 0);
-    for (const section of Object.keys(patch) as Section[]) {
-      const src = patch[section] as Record<string, unknown> | undefined;
+    for (const name of Object.keys(patch) as Section[]) {
+      const src = patch[name] as Record<string, unknown> | undefined;
       if (!src) continue;
+      const section = postSection(name);
       const cur = target[section] as unknown as Record<string, unknown>;
       for (const key of Object.keys(src)) {
         const to = src[key];
@@ -90,10 +91,10 @@ export class PostBlender {
   /** Stop blending the given keys (e.g. after `set` overwrote them). */
   cancel(patch: PostSettingsPatch): void {
     if (!this.tracks.length) return;
-    for (const section of Object.keys(patch) as Section[]) {
-      const src = patch[section];
+    for (const name of Object.keys(patch) as Section[]) {
+      const src = patch[name];
       if (!src) continue;
-      for (const key of Object.keys(src)) this.drop(section, key);
+      for (const key of Object.keys(src)) this.drop(postSection(name), key);
     }
   }
 

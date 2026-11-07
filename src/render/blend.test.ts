@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { type BlendMode, blendState } from './blend';
+import { blendState, type RenderBlendMode } from './blend';
 
 describe('blendState', () => {
   it('opaque is no blend state', () => {
@@ -14,7 +14,7 @@ describe('blendState', () => {
   });
 
   it('every mode but opaque has a colour and an alpha blend', () => {
-    const modes: BlendMode[] = ['alpha', 'premultiplied', 'additive', 'multiply'];
+    const modes: RenderBlendMode[] = ['alpha', 'premultiplied', 'additive', 'multiply'];
     for (const m of modes) {
       const b = blendState(m)!;
       expect(b.color.operation).toBe('add');

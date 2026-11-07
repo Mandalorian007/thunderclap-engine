@@ -38,21 +38,44 @@ export interface Flipbook {
 }
 
 /**
- * The `UvRect`s of a grid atlas's cells, row-major from the top left (`cols × rows` cells); with
- * `indices`, only those cells in that order. Allocates: call it at load time.
+ * A grid atlas for `atlasFrames`: `cols × rows` equal cells. `inset` (ws/api-render) pulls each
+ * rectangle in by that many texels on every side so linear filtering never samples the next
+ * cell (half a texel, 0.5, is the usual fix for bleeding); it needs the texture's `width` and
+ * `height` in texels. Default 0.
  */
-export function atlasFrames(
-  atlas: { cols: number; rows: number },
-  indices?: readonly number[],
-): UvRect[] {
+export interface AtlasGrid {
+  cols: number;
+  rows: number;
+  inset?: number;
+  width?: number;
+  height?: number;
+}
+
+/**
+ * The `UvRect`s of a grid atlas's cells, row-major from the top left (`cols × rows` cells); with
+ * `indices`, only those cells in that order. Throws when `inset` is set without `width` and
+ * `height`. Allocates: call it at load time.
+ */
+export function atlasFrames(atlas: AtlasGrid, indices?: readonly number[]): UvRect[] {
   const { cols, rows } = atlas;
+  const inset = atlas.inset ?? 0;
+  let du = 0;
+  let dv = 0;
+  if (inset !== 0) {
+    const { width, height } = atlas;
+    if (!(width! > 0) || !(height! > 0)) {
+      throw new Error('atlasFrames: inset needs the atlas width and height in texels');
+    }
+    du = inset / width!;
+    dv = inset / height!;
+  }
   const n = indices ? indices.length : cols * rows;
   const out: UvRect[] = [];
   for (let k = 0; k < n; k++) {
     const i = indices ? indices[k]! : k;
     const c = i % cols;
     const r = Math.floor(i / cols);
-    out.push([c / cols, r / rows, (c + 1) / cols, (r + 1) / rows]);
+    out.push([c / cols + du, r / rows + dv, (c + 1) / cols - du, (r + 1) / rows - dv]);
   }
   return out;
 }

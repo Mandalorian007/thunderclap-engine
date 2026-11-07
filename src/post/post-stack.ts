@@ -1,7 +1,7 @@
 import { mat4 } from '../core/math';
 import type { Camera } from '../render/camera';
 import type { FullscreenPass } from '../render/fullscreen';
-import type { JitterFn, PostInputs, PostProcessor, Renderer } from '../render/renderer';
+import type { JitterFn, PostInputs, PostProcessor, PostView, Renderer } from '../render/renderer';
 import type { SceneTargetViewport } from '../render/scene-target';
 import { AO_BLUR_WGSL, AO_WGSL } from './ao';
 import { type Ease, easeInOut, PostBlender } from './blend';
@@ -11,8 +11,8 @@ import { adaptExposure, ExposurePasses, exposureTarget } from './exposure';
 import { MOTION_BLUR_WGSL } from './motion-blur';
 import {
   applyPostPatch,
+  cinematicPostSettings,
   defaultPostQuality,
-  defaultPostSettings,
   POST_UNIFORM_FLOATS,
   type PostDepthInfo,
   type PostFrameState,
@@ -20,6 +20,7 @@ import {
   type PostSettings,
   type PostSettingsPatch,
   packPostUniforms,
+  resolveGodRays,
 } from './settings';
 import {
   COMPOSITE_WGSL,
@@ -83,7 +84,7 @@ const NO_JITTER: readonly [number, number] = [0, 0];
  * camera the renderer draws is jittered, XR eyes and offscreen views included.
  *
  * Settings are plain objects you can mutate at runtime (`post.settings.bloom.intensity = 2`)
- * or patch with `post.set({ fog: { density: 0.4 } })`. Disabled passes are skipped entirely.
+ * or patch with `post.set({ mist: { density: 0.4 } })`. Disabled passes are skipped entirely.
  * `post.blendTo(patch, seconds, ease?)` eases numeric settings over time instead.
  */
 export class PostStack implements PostProcessor {
@@ -238,13 +239,28 @@ export class PostStack implements PostProcessor {
   private jitterHooked = false;
   /** A TAA resolve ran since the hook last ran (ws/post-7: the stack is still attached). */
   private jitterResolved = false;
+  /** The resolved god-ray source (x, y, visibility) when `godRays.direction` placed it. */
+  private readonly raySrc = new Float32Array(3);
   private boundRoughMetal: GPUTextureView | null = null;
   private boundVelocity: GPUTextureView | null = null;
   private boundTaaVelocity: GPUTextureView | null = null;
 
+  /** `godRays.direction` through the frame's view, or null when `x`/`y` place the rays. */
+  private raySource(
+    s: PostSettings,
+    view: PostView | null,
+    logicalWidth: number,
+    logicalHeight: number,
+  ): Float32Array | null {
+    const g = s.godRays;
+    if (!g.direction || !view) return null;
+    resolveGodRays(g, view.viewProj, logicalWidth, logicalHeight, this.raySrc);
+    return this.raySrc;
+  }
+
   constructor(renderer: Renderer, patch: PostSettingsPatch = {}) {
     this.renderer = renderer;
-    this.settings = applyPostPatch(defaultPostSettings(), patch);
+    this.settings = applyPostPatch(cinematicPostSettings(), patch);
     const bytes = POST_UNIFORM_FLOATS * 4;
     this.prefilter = renderer.createFullscreenPass({
       label: 'post-bloom-prefilter',
@@ -622,6 +638,7 @@ export class PostStack implements PostProcessor {
       depthInfo,
       this.grainSeed,
       fs,
+      this.raySource(s, view, r.logicalWidth, r.logicalHeight),
     );
     const needBloomChain = s.bloom.enabled || (s.godRays.enabled && s.godRays.bloomSource > 0);
     this.composite.setUniforms(this.uniforms);

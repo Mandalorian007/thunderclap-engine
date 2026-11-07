@@ -1,6 +1,6 @@
 # engine/post
 
-`PostStack` turns the renderer's HDR colour and emissive targets into the final image: bloom, fog, god rays, AO, SSR, TAA, motion blur, depth of field, grading, LUTs and more. Every pass toggles and every parameter changes at runtime without rebuilding pipelines; the look is the game's choice.
+`PostStack` turns the renderer's HDR colour and emissive targets into the final image: bloom, mist, god rays, AO, SSR, TAA, motion blur, depth of field, grading, LUTs and more. Every pass toggles and every parameter changes at runtime without rebuilding pipelines; the look is the game's choice.
 
 ## Quick use
 
@@ -11,7 +11,7 @@ import type { Renderer } from '@thunderclap/engine/render';
 
 declare const renderer: Renderer;
 
-const post = new PostStack(renderer, { fog: { density: 0.7 } });
+const post = new PostStack(renderer, { mist: { density: 0.7 } });
 renderer.post = post; // createGame builds ctx.post for you
 post.set({ bloom: { intensity: 1.2 }, grade: { saturation: 1.2 } }); // merges per section
 post.blendTo({ vignette: { intensity: 0.6 } }, 2); // ease to a new look over 2 s
@@ -26,7 +26,7 @@ post.blendTo({ vignette: { intensity: 0.6 } }, 2); // ease to a new look over 2 
 | `post.blendTo(patch, seconds, ease?)` | move settings over time |
 | `post.settings` | the live `PostSettings`, mutable in place |
 | `postQualityFor(...) / lowPostQuality` | quality tiers for weaker devices |
-| `defaultPostSettings()` | every pass's defaults |
+| `neutralPostSettings()` / `cinematicPostSettings()` | a look-free preset / the tuned look `PostStack` starts from |
 | `createLutTexture(...)` | a colour-grading LUT |
 
 ## Contents
@@ -48,13 +48,20 @@ import { PostStack } from '@thunderclap/engine/post';
 
 const post = new PostStack(renderer, {
   godRays: { x: 960, y: -60 },   // light point in logical px (may be off-screen)
-  fog: { density: 0.7 },
+  mist: { density: 0.7 },
 });
 renderer.post = post;
 
 post.set({ bloom: { intensity: 1.2 }, grade: { saturation: 1.2 } }); // merges per section
-post.settings.fog.enabled = false;                                   // or mutate directly
+post.settings.mist.enabled = false;                                  // or mutate directly
 ```
+
+`mist` is the section formerly called `fog` (ws/api-render): `fog` still works everywhere,
+deprecated, as the same object. A 3D game can place the rays from the sun instead of a screen
+point: `godRays: { direction: [-0.3, -0.6, -0.5] }` (world space, the way the light travels,
+like `lights.sun.direction`) projects the sun through the frame's view each frame and turns
+the rays off while it is behind the camera; `godRaySource(viewProj, direction, w, h, out)` is
+the same projection.
 
 Settings are packed into one uniform buffer each frame. Changing them never rebuilds
 pipelines or bind groups.
@@ -67,7 +74,7 @@ at once, so a mood change needs no covering wash.
 ```ts
 import { easeOut } from '@thunderclap/engine/post';
 
-post.blendTo({ grade: { exposure: 0.6, gain: [1.1, 0.9, 0.8] }, fog: { density: 0.9 } }, 3);
+post.blendTo({ grade: { exposure: 0.6, gain: [1.1, 0.9, 0.8] }, mist: { density: 0.9 } }, 3);
 post.set({ godRays: { intensity: 0 } }).blendTo({ godRays: { enabled: true, intensity: 0.5 } }, 2, easeOut);
 post.blending;      // true while anything is still moving
 post.finishBlend(); // jump to the end values
@@ -96,7 +103,7 @@ post.finishBlend(); // jump to the end values
 
 | Pass | Where | Key settings |
 |---|---|---|
-| Outline (ws/post-2) | scene res, over the scene depth | `outline.thickness` (px), `depthThreshold`, `normalThreshold`. A Roberts cross over linear depth and normals-from-depth written as an edge mask the composite mixes toward `outline.color` × `intensity` before fog. Off by default; off with a one-time warning when the frame has no depth. |
+| Outline (ws/post-2) | scene res, over the scene depth | `outline.thickness` (px), `depthThreshold`, `normalThreshold`. A Roberts cross over linear depth and normals-from-depth written as an edge mask the composite mixes toward `outline.color` × `intensity` before the mist. Off by default; off with a one-time warning when the frame has no depth. |
 | AO (ws/post-depth) | half res, over the scene depth | `ao.radius` (world units), `intensity`, `bias`, `power`. Normals from depth derivatives; 12 (`aoSamples`) spiral samples rotated per pixel by interleaved-gradient noise. Under an ortho projection the screen radius drops the depth divide (`aoProjectedRadius`, ws/post-4), so it holds across zoom and distance. Off by default. |
 | AO blur | half res | 4×4 depth-aware blur of the AO term. |
 | TAA (ws/post-3) | scene res, over the scene depth, into an `rgba16float` history pair | `taa.feedback` 0.9, `sharpen` 0.2, `clampMode` `aabb` \| `variance`. Reprojects last frame's resolve by the previous view-projection against the current depth, clamps it to the 3×3 neighbourhood, blends. Since ws/post-4 the camera's projection carries the frame's Halton (2, 3) jitter (`wantsJitter`) and the reprojection comes from `PostInputs.view`; the resolve un-jitters by `view.jitter`. Since ws/post-5, with a velocity target and `taa.reprojection` `'velocity'` (the default) each pixel finds its history at `uv - velocity` (the nearest depth's in its 3×3; the camera matrix where nothing wrote one) and drops it where last frame's depth or velocity there disagree (`depthReject` 0.1 of the depth, `velocityReject` 2 px), from an `rgba16float` aux pair the resolve writes beside its history; `'camera'`, or no target, is the ws/post-4 path. The resolve replaces the scene colour downstream. Off by default; needs depth. |
@@ -107,12 +114,14 @@ post.finishBlend(); // jump to the end values
 | Bloom prefilter | half res | `threshold`, `knee` (soft knee on scene colour), `emissiveWeight` (the emissive target always blooms). Karis average to stop fireflies. |
 | Bloom down/up | half-res mip chain, `levels` deep | 13-tap downsample, 9-tap tent upsample blended by `scatter` |
 | God rays | half res | `x, y` light point, `intensity`, `decay`, `density`, `weight`, `color`. Marches 64 samples radially over a light disc (`sourceRadius`, `sourceIntensity`) plus `bloomSource` × bloom, so bright things in the scene also cast shafts. |
-| Composite | full res → swapchain | colour × AO, blended toward the DoF result by CoC, + SSR, + emissive (sampled three times along the radius for `aberration`, then `sharpen`ed), outline, + `bloom.intensity` × bloom (× (1 + lens dirt)) + rays, then fog, white balance, exposure, tonemap, grade, LUT, grain, vignette, dither |
+| Composite | full res → swapchain | colour × AO, blended toward the DoF result by CoC, + SSR, + emissive (sampled three times along the radius for `aberration`, then `sharpen`ed), outline, + `bloom.intensity` × bloom (× (1 + lens dirt)) + rays, then mist, white balance, exposure, tonemap, grade, LUT, grain, vignette, dither |
 | FXAA (ws/post-2) | one extra full-res pass over the composite's output | `fxaa.subpixel`, `edgeThreshold`. FXAA 3.11 console preset on the display-encoded output. Only recorded (and its target only allocated) while `fxaa.enabled`, and skipped while TAA runs (ws/post-3). |
 
-- **Fog** is a screen-space floor mist: a height band from `top` to `bottom` (0..1 of the
-  screen, measured down) shaped by `falloff`. Animated fbm sets `noiseScale` and `speed`.
-  `lightScatter` tints the mist with nearby bloom so glowing objects light it up.
+- **Mist** (`mist`, formerly `fog`) is a screen-space floor mist, not distance fog: a height
+  band from `top` to `bottom` (0..1 of the screen, measured down) shaped by `falloff`. Animated fbm sets `noiseScale` and `speed`.
+  `lightScatter` tints the mist with nearby bloom so glowing objects light it up. Render's
+  `lights.fog` (`DistanceFog`) is the distance fog, applied inside the materials; the two
+  stack, the mist going on top of an already fogged scene.
 - **Tonemap** is `'aces'` (the default), `'reinhard'`, or `'none'`, applied after `exposure`.
 - **Grade** applies `lift`, `gamma`, and `gain` (RGB each), then `saturation` and `contrast`.
   It runs in display space after tonemapping.
@@ -149,7 +158,7 @@ output is unchanged and no extra pass or texture exists.
 - **Aberration** (`AberrationSettings`: `intensity` 0 px, `radialOnly` true) samples the scene
   term's red and blue `intensity` scene px either side of green along the radius from the
   centre, scaled by radius² when `radialOnly` (the centre stays clean) or constant otherwise.
-  It, and sharpen, work on the scene term (colour × AO, DoF, emissive) before bloom and fog so
+  It, and sharpen, work on the scene term (colour × AO, DoF, emissive) before bloom and mist so
   the bloom and the mist are not fringed; the LUT and grain come after the grade.
 - **Sharpen** (`SharpenSettings`: `amount` 0) is a 5-tap unsharp mask on the scene term,
   clamped at zero.
@@ -158,7 +167,7 @@ output is unchanged and no extra pass or texture exists.
   `r8unorm` mask from a Roberts cross `thickness` px out over linear depth (relative to the
   nearest tap, so far edges count less; the sky is very far) and over normals from depth (1 −
   cos between the diagonal taps). The composite mixes the scene toward `color` by mask ×
-  `intensity` before fog, so the mist softens outlines with distance. Enabled on a frame without
+  `intensity` before the mist, so it softens outlines with distance. Enabled on a frame without
   depth it stays off and warns once. `PostQuality.outline` caps it off.
 
 When bloom is disabled the bloom chain is skipped. It still runs if god rays need it
@@ -338,8 +347,12 @@ feature against a reference stack with the feature off, read back from the GPU, 
 
 ## Notes
 
-- `defaultPostSettings()` is tuned for a dark, jewel-toned scene: a strong emissive glow, a
-  cool mist on the floor, and pale storm rays from above.
+- Presets (ws/api-render): `cinematicPostSettings()` is tuned for a dark, jewel-toned scene: a
+  strong emissive glow, a cool mist on the floor, pale storm rays from above, a vignette and a
+  slight saturation and contrast lift. `PostStack` and `createGame` start from it.
+  `neutralPostSettings()` turns all of that off and leaves the ACES tone map with dithering, so
+  the image is the scene: `post.set(neutralPostSettings())` and add what the game wants.
+  `defaultPostSettings()` is the deprecated old name of `cinematicPostSettings()`.
 - Output is encoded to sRGB in the shader because the swapchain is a non-sRGB format
   (`navigator.gpu.getPreferredCanvasFormat()`: `bgra8unorm` or `rgba8unorm`).
 - All intermediate textures are reallocated only on resize (or a bloom level cap change).
@@ -383,7 +396,8 @@ texture; `renderer.endFrame({ present: false })` then only submits. Inside `enco
 
 ## Types
 
-- `PostSettings` has one section per pass: `bloom: BloomSettings`, `fog: FogSettings`,
+- `PostSettings` has one section per pass: `bloom: BloomSettings`, `mist: MistSettings` (also
+  readable as the deprecated `fog`; `FogSettings` is a deprecated alias of `MistSettings`),
   `godRays: GodRaySettings`, `vignette: VignetteSettings`, `grade: GradeSettings` (which holds
   `tonemap: Tonemap`), `ao: AoSettings`, `dof: DofSettings`, and the finishing sections
   `fxaa: FxaaSettings`, `lut: LutSettings`, `grain: GrainSettings`, `aberration:
@@ -396,8 +410,9 @@ texture; `renderer.endFrame({ present: false })` then only submits. Inside `enco
   `[r, g, b]`. `LutSize` is `16 | 32`; `LutFn` is `(r, g, b) => readonly [r, g, b]`.
 - `PostSettingsPatch` is a per-section partial of `PostSettings`, the argument of `new
   PostStack(renderer, patch?)`, `set` and `blendTo`. `applyPostPatch(target, patch)` merges one
-  into a settings object in place (shallow per section); `defaultPostSettings()` returns a
-  fresh default; `clonePostSettings(s)` a deep copy sharing GPU handles.
+  into a settings object in place (shallow per section; a `fog` key patches `mist`);
+  `neutralPostSettings()` and `cinematicPostSettings()` return fresh presets;
+  `clonePostSettings(s)` a deep copy sharing GPU handles.
 - `Ease` is `(t: number) => number` on 0..1.
   The easing functions (`easeLinear`, `easeIn`, `easeOut`, `easeInOut`) are aliases of the
   table in `@thunderclap/engine/tween` (`ease.linear`, `ease.quadIn`, `ease.quadOut`,

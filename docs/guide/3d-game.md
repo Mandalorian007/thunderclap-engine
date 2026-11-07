@@ -98,7 +98,7 @@ import { Transform } from '@thunderclap/engine/render';
 const t = new Transform();
 t.setPosition(0, 0.5, 0);
 t.setAxisAngle(0, 1, 0, Math.PI / 4); // 45 degrees about +y
-t.setScale(2, 2, 2); // pass all three: z defaults to 1, not to x
+t.setScale(2); // one number scales all three axes; setScale(x, y, z) sets each
 
 const wheel = new Transform({ parent: t }); // follows t
 wheel.setPosition(0.6, -0.3, 0);
@@ -184,7 +184,7 @@ import { Lights } from '@thunderclap/engine/render';
 
 const lights = new Lights();
 lights.ambient.set([0.15, 0.17, 0.22]);
-lights.sun.dir = [-0.4, -1, -0.3]; // the direction the light travels
+lights.sun.direction = [-0.4, -1, -0.3]; // the direction the light travels
 lights.sun.color = [1.2, 1.1, 0.95];
 
 lights.points.push({ position: [2, 1.5, 0], color: [1, 0.6, 0.3], radius: 6 });
@@ -237,7 +237,8 @@ lights.fog.far = 80;
 With `far > near` the fog is linear between them. Otherwise it is exponential and
 `density` sets how thick it is. Clear to the same colour as the fog so the horizon blends.
 
-The post stack has a separate screen-space "fog" (a low mist). The
+The post stack has a separate screen-space mist (`post.settings.mist`), a low haze drawn on
+top of the finished image. It does not replace `lights.fog`; the two stack. The
 [style and post guide](style-and-post.md) covers it.
 
 ## Use PBR materials
@@ -278,8 +279,8 @@ the mesh.
 ## Keep it fast with LOD
 
 A level-of-detail chain swaps a mesh for simpler versions as it gets small on screen.
-`createLodChain` makes the simpler geometry. Upload each level and pass a `MeshLod` to
-`frame.mesh` in place of the mesh. The renderer picks the level.
+`createLodChain` makes the simpler geometry, and `renderer.createMeshLod` uploads every level.
+Pass the result to `frame.mesh` in place of the mesh. The renderer picks the level.
 
 ```ts
 import type { EngineCtx } from '@thunderclap/engine';
@@ -287,11 +288,13 @@ import { createLodChain, sphere } from '@thunderclap/engine/geom';
 import type { MeshLod } from '@thunderclap/engine/render';
 
 export function rockLod(ctx: EngineCtx): MeshLod {
-  const levels = createLodChain(sphere({ radius: 1, segments: [48, 24] }), [1, 0.5, 0.2]);
-  return {
-    meshes: levels.map((g, i) => ctx.renderer.createMesh({ ...g, label: `rock-lod${i}` })),
+  // Level 0 is the sphere itself; each ratio adds one coarser level: three levels here.
+  const geometries = createLodChain(sphere({ radius: 1, segments: [48, 24] }), [0.5, 0.2]);
+  return ctx.renderer.createMeshLod({
+    geometries,
     thresholdsPx: [200, 60], // above 200 px tall: level 0; above 60: level 1; else level 2
-  };
+    label: 'rock',
+  });
 }
 ```
 
