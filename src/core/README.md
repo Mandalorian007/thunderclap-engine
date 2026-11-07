@@ -5,6 +5,13 @@ the deterministic game utilities: seeded random, positional hashing, noise, a sc
 (root `@thunderclap/engine`) wires these together; a game reaches for this subpath when it needs
 one of them on its own (a tool, a test, a second loop).
 
+`createGame({ aux })` (ws/core-7) passes `aux` (`SceneTargetAux`: `{ roughMetal?, velocity? }`)
+to the renderer as `RendererOptions.aux`, so `renderer.target` carries those attachments and the
+post stack sees them in `PostInputs.velocity` / `roughMetal`: `aux: { velocity: true }` gives
+`post.motionBlur` per-object motion (velocity lists and batches drawn with an `aux` material, such
+as the standard one) instead of camera motion only. Omitted, nothing changes. The XR scene target
+has no aux attachments.
+
 `createGame({ input: { getGamepads } })` names the gamepad source for both the action map
 (`InputOptions.getGamepads`) and the pad navigation of modal panels (`PadNav`); the default is
 `navigator.getGamepads()`, guarded. A test passes a fake `GamepadLike` here and drives
@@ -82,7 +89,7 @@ clock a second time (`playback.clock === ctx.clock`). Once the recording is done
 moves the clock again. `seek` never moves it.
 
 A replay started mid-session (from a menu, after the game has run live) is one call,
-`ctx.replay(recording, { speed?, tickMs? })` (ws/core-6), which returns the `GameReplay` (the
+`ctx.replay(recording, { speed?, tickMs?, onEnd? })` (ws/core-6), which returns the `GameReplay` (the
 `InputPlayback` it installs on `ctx.input`, driven by `ctx.clock`, plus `stop()`). For the
 replay's length the input is attached to the same detached element `input.replay` uses, so real
 pointers and keys never reach `ctx.input`, its gestures or its rays (whatever the player held is
@@ -91,7 +98,9 @@ step (ws/core-5), so from the next step it runs `playback.step()`, skips its own
 playback drives `ctx.clock`, and resumes it once the recording ends; the long-press lands on its
 recorded tick (counted from the call) at any speed. On the first step after the last recorded
 tick, or at once on `stop()` (`detach()` is the same call), the playback is uninstalled and the
-input reattached to the canvas, its recorded keys released. A second `ctx.replay` stops the
+input reattached to the canvas, its recorded keys released. When the recording ended (not on
+`stop()`), `onEnd()` then runs once (ws/core-7), on that step before its input update and
+`hooks.update`; a `ctx.replay` started from it is stepped from the next step. A second `ctx.replay` stops the
 first; one started over an `input.replay` playback replaces it and returns the input to the
 detached element. A game can still build the playback itself with
 `createInputPlayback(ctx.input, recording, { clock: ctx.clock, speed })` (no cast: `ctx.clock` is

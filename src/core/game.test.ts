@@ -920,6 +920,101 @@ describe('createGame: ctx.replay (ws/core-6)', () => {
       vi.restoreAllMocks();
     }
   });
+  it('onEnd fires once, on the step that gives the input back, at 1× and 4×', async () => {
+    const recording = await recordSpace();
+    const ticks = 10;
+    for (const speed of [1, 4]) {
+      document.body.innerHTML = '<main id="root"></main>';
+      const ctx = await createGame(options([]));
+      if (!ctx) throw new Error('no ctx');
+      const held: boolean[] = [];
+      ctx.hooks.update = () => held.push(ctx.input.held('go'));
+      const ends: { step: number; updates: number; playback: unknown }[] = [];
+      let step = 0;
+      const playback = ctx.replay(recording, {
+        speed,
+        onEnd: () => {
+          ends.push({ step, updates: held.length, playback: ctx.input.playback });
+          // The input is back on the canvas: a real key pressed here is seen by this step.
+          realKey('keydown');
+        },
+      });
+      const feeding = Math.ceil(ticks / speed);
+      for (step = 1; step <= feeding; step++) ctx.loop.tickOnce(1 / 60);
+      expect(playback.done).toBe(true);
+      expect(ends).toEqual([]);
+      for (; step <= feeding + 3; step++) ctx.loop.tickOnce(1 / 60);
+      // The step after the last fed tick, before its update; never again.
+      expect(ends).toEqual([{ step: feeding + 1, updates: feeding, playback: null }]);
+      expect(held[feeding - 1]).toBe(false);
+      expect(held[feeding]).toBe(true);
+      realKey('keyup');
+    }
+  });
+
+  it('onEnd does not fire on stop() or when a second replay replaces the first', async () => {
+    const recording = await recordSpace();
+    const ctx = await createGame(options([]));
+    if (!ctx) throw new Error('no ctx');
+    const ends: string[] = [];
+    const first = ctx.replay(recording, { onEnd: () => ends.push('first') });
+    ctx.loop.tickOnce(1 / 60);
+    const second = ctx.replay(recording, { onEnd: () => ends.push('second') });
+    for (let i = 0; i < 3; i++) ctx.loop.tickOnce(1 / 60);
+    second.stop();
+    for (let i = 0; i < 12; i++) ctx.loop.tickOnce(1 / 60);
+    expect(first.done).toBe(false);
+    expect(ends).toEqual([]);
+    // A replay chained from onEnd runs from the next step and reports its own end.
+    let chained = 0;
+    ctx.replay(recording, {
+      onEnd: () => {
+        ends.push('third');
+        if (chained++ === 0) ctx.replay(recording, { onEnd: () => ends.push('fourth') });
+      },
+    });
+    for (let i = 0; i < 30; i++) ctx.loop.tickOnce(1 / 60);
+    expect(ends).toEqual(['third', 'fourth']);
+    expect(ctx.input.playback).toBeNull();
+  });
+});
+
+describe('createGame: aux targets (ws/core-7)', () => {
+  /** The `PostInputs` the post stack is handed on one rendered frame. */
+  function postInputsOf(ctx: NonNullable<Awaited<ReturnType<typeof createGame>>>) {
+    const spy = vi.spyOn(ctx.post, 'encode');
+    try {
+      ctx.loop.tickOnce(1 / 60);
+      expect(spy).toHaveBeenCalled();
+      const inputs = spy.mock.calls.at(-1)![1];
+      return { velocity: inputs.velocity, roughMetal: inputs.roughMetal };
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  it('aux: { velocity: true } puts a velocity target in PostInputs', async () => {
+    const ctx = await createGame({ ...options([]), aux: { velocity: true } });
+    if (!ctx) throw new Error('no ctx');
+    expect(ctx.renderer.target.velocity).not.toBeNull();
+    const inputs = postInputsOf(ctx);
+    expect(inputs.velocity).toBe(ctx.renderer.target.velocity);
+    expect(inputs.velocity).not.toBeNull();
+    expect(inputs.roughMetal).toBeNull();
+    // A resize keeps it.
+    ctx.renderer.resize(320, 180);
+    expect(postInputsOf(ctx).velocity).toBe(ctx.renderer.target.velocity);
+    expect(ctx.renderer.target.velocity).not.toBeNull();
+  });
+
+  it('without aux the target and PostInputs have no aux attachments', async () => {
+    const ctx = await createGame(options([]));
+    if (!ctx) throw new Error('no ctx');
+    expect(ctx.renderer.target.velocity).toBeNull();
+    expect(ctx.renderer.target.roughMetal).toBeNull();
+    expect(ctx.renderer.target.auxKey).toBe(0);
+    expect(postInputsOf(ctx)).toEqual({ velocity: null, roughMetal: null });
+  });
 });
 
 describe('createGame: xr', () => {

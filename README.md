@@ -138,7 +138,7 @@ Import only from the public entry points listed under [Modules](#modules). Anyth
 
 | Import | What it holds |
 | --- | --- |
-| `@thunderclap/engine` | `createGame(opts: CreateGameOptions)`, `EngineCtx`, `GameHooks` (with `HideReason`, `ShowReason`), `SimOption`, `FlushableSave`, `GameReplay` and `ReplayOptions` (`ctx.replay`), `XrOptions` and `XrControl` (`ctx.xr`): the top layer a game touches |
+| `@thunderclap/engine` | `createGame(opts: CreateGameOptions)` (with `aux` for the renderer's aux targets), `EngineCtx`, `GameHooks` (with `HideReason`, `ShowReason`), `SimOption`, `FlushableSave`, `GameReplay` and `ReplayOptions` (`ctx.replay`, with `onEnd`), `XrOptions` and `XrControl` (`ctx.xr`): the top layer a game touches |
 | `@thunderclap/engine/core` | `GameLoop` (fixed step, fps cap, pause, `setFrames` to swap the frame source), `Scene` and `SceneStack`, `Emitter`, `mat4`, timing ([README](src/core/README.md)) |
 | `@thunderclap/engine/platform` | WebGPU boot, `Surface` (canvas, DPR, letterbox fit), `XrSurface` (a target and camera per eye), page lifecycle, device detection, the unsupported and reload screens ([README](src/platform/README.md)) |
 | `@thunderclap/engine/render` | `Renderer`, `Frame`, `Camera` (`ortho2d`, `perspective`, frustum culling), `render(frame, camera, target)`, `SceneTarget`, `Lights` (sun shadow map, fog), materials and custom WGSL, meshes with bounds and streaming updates, transforms, textures and texture arrays with GPU mips, colour helpers ([README](src/render/README.md)) |
