@@ -49,7 +49,7 @@ something is in reach); there is no undo and no camera follow on the enemy turn.
 
 `e2e/demos/tactics.spec.ts` (served through the harness Vite server's `/demos/tactics/` route)
 reads `window.__demo.state` (`frame`, `fps`, `stats`, `drawCalls`, `turn`, `phase`, `units`,
-`cursorTile`, `selected`, `pathLength`, `lastPathLength`, `mapHash`, `busy`) after a
+`cursorTile`, `selected`, `pathLength`, `lastPathLength`, `mapHash`, `busy`, `padPresses`, `padReleases`) after a
 `requestAnimationFrame` settle and asserts: a clean boot in the player phase, 4 vs 6, at most two
 draw calls, no console errors; a pointer over a flat tile, a raised tile and a spawn tile sets
 `cursorTile` to that tile (the spec projects the tile itself with the constants from `iso.ts`,
