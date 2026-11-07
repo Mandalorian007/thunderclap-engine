@@ -1,7 +1,8 @@
 /**
  * Ducking: while anything plays on a trigger bus (dialogue on `ui`), the target bus (music)
  * drops by `amount`, with an attack and a release. The level is a linear envelope advanced by
- * `update(dt)` and handed to the mixer as the target bus's scale (`setBusScale`), so the mixer
+ * `update(dt)` and handed to the mixer as the target bus's scale under the ducker's own key
+ * (`setBusScale`; keys on one bus multiply, so two duckers combine), so the mixer
  * owns the write: the bus keeps following `setVolume` and `setMuted`, stays silent while
  * `pause` holds it, and `unpause` lands on the ducked gain.
  */
@@ -37,11 +38,15 @@ export interface Ducker {
   readonly level: number;
   /** Multiplier applied to the target bus right now, `1 - amount × level`. */
   readonly gain: number;
-  /** Restore the target bus and stop. */
+  /** This ducker's own `setBusScale` key on the target bus (`'ducker:<n>'`). */
+  readonly key: string;
+  /** Clear this ducker's scale on the target bus (`clearBusScale`) and stop. */
   dispose(): void;
 }
 
 const ANALYSER_SIZE = 256;
+/** Source of each ducker's own `setBusScale` key, so duckers on one target multiply. */
+let nextDuckerId = 0;
 
 export function createDucker(mixer: AudioEngine, opts: DuckerOptions): Ducker {
   const amount = Math.min(1, Math.max(0, opts.amount ?? 0.6));
@@ -55,6 +60,7 @@ export function createDucker(mixer: AudioEngine, opts: DuckerOptions): Ducker {
   let analyserOn: AudioContext | null = null;
   const samples = new Float32Array(ANALYSER_SIZE);
   let disposed = false;
+  const key = `ducker:${nextDuckerId++}`;
 
   function ensureAnalyser(): void {
     const ctx = mixer.context;
@@ -90,7 +96,7 @@ export function createDucker(mixer: AudioEngine, opts: DuckerOptions): Ducker {
 
   function write(): void {
     // The mixer skips an unchanged scale and holds the write while paused or in the background.
-    mixer.setBusScale(opts.target, 1 - amount * level, 0.005);
+    mixer.setBusScale(opts.target, 1 - amount * level, 0.005, key);
   }
 
   return {
@@ -120,12 +126,14 @@ export function createDucker(mixer: AudioEngine, opts: DuckerOptions): Ducker {
     get gain() {
       return 1 - amount * level;
     },
+    key,
     dispose() {
       if (disposed) return;
       disposed = true;
       level = 0;
       active = false;
-      write();
+      // Drop this ducker's key: the target goes back to the product of the other keys.
+      mixer.clearBusScale(opts.target, key, 0.005);
       analyser?.disconnect();
       analyser = null;
       watched.length = 0;
