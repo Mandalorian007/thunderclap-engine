@@ -1,50 +1,103 @@
-# What the engine offers (after wave 4)
+# What the engine offers
 
-*2026-11-05, for the Last Rune and Forgewilds PMs. One line per capability with its entry point. Everything under "Landed" is on `main` at `65800b7` or later, tested on the harness matrix (611 unit tests, e2e 502 passed / 52 skipped). Contracts: `ARCHITECTURE.md`; module details: each `src/<module>/README.md`.*
+*2026-11-06. One line per capability with its entry point, as on `main` today. Everything here is tested on the harness matrix. Contracts: [ARCHITECTURE.md](../ARCHITECTURE.md). Walkthroughs: [docs/guide/](guide/). Full reference: each `src/<module>/README.md`.*
 
-## Landed
+## Start and run
 
-| Capability | Entry point | Workstream |
-| --- | --- | --- |
-| One boot call: surface, renderer, post, particles, input, overlay, audio, host, loop, lifecycle, device loss | `createGame(opts)` from `@thunderclap/engine`; `ctx: EngineCtx` | create-game |
-| Pure client of a server-authoritative game (no save, loop at render rate) | `createGame({ sim: false })` with no `save`; `hooks.frame(dt)` | client-mode |
-| Matrix camera, 2D by default, perspective with depth; split views and stereo pairs | `Camera.ortho2d`, `Camera.perspective`, `camera.screen`, `camera.viewIndex`; `renderer.render(frame, camera, target)` | camera, render-call, two-views |
-| One instance format for sprites and meshes, a vertex layout per mesh, hierarchical transforms | `Transform`, `frame.sprite`, `frame.mesh`, `VERTEX_LAYOUT_2D` / `VERTEX_LAYOUT_3D` | transforms |
-| Lighting block read by the game's WGSL: ambient, sun, 16 point lights | `frame.lights: Lights`; `engine_lambert`, `engine_point_lights` in `materialPrelude` | lights |
-| Sun shadow map and distance fog | `lights.sun.shadow: SunShadow`, `lights.fog: Fog`; `engine_shadow(world_pos)`, `engine_fog(color, world_pos)`; `InstanceParams.castShadow` / `receiveShadow` | shadows |
-| Meshes streamed from a Worker without a main-thread copy | `createMesh({ capacity })`, `mesh.update({ vertices, indices, vertexCount, indexCount })` | mesh-stream |
-| Frustum culling per draw | `mesh.bounds`, `camera.cull` (perspective default), `camera.frustum`, `renderer.stats.culled` | cull |
-| Texture arrays with GPU mip generation | `createTextureArray`, `loadTextureArray(device, sources, { mips })`, `generateMipmaps`, `viewDimension: '2d-array'` on `MaterialDesc`, mip sampler kinds | texture-array |
-| glTF 2.0 static geometry (engine-free parse, then meshes, transforms, textures, a lit material) | `parseGltf(bytes)`, `loadGltf(renderer, doc, opts?)` → `GltfScene.draw(frame)` from `@thunderclap/engine/assets` | gltf |
-| Pointers as rays, hit testing, select; pad cursor | `ctx.pointers` (`createPointerRouter`), `planeTester`, `aabbTester`, bindings `{ pointer }` / `{ xr }` | input-rays |
-| First-person look and move: pointer lock, touch zones, sticks, keys | `new Look(opts)`, `input.setLook(look)`; `look.look` / `look.move` per tick | look |
-| Gestures (tap, double tap, long-press, pan, drag, pinch) and the touch loupe with snap | `ctx.gestures`; `CreateGameOptions.input.magnify`, `snapToGrid` | gestures, port-altar, plumbing |
-| One DOM overlay in CSS px on every form factor, layout regions, free rect for the world | `ctx.ui`, `ctx.ui.layout`, `CreateGameOptions.layout`; `camera.fitFreeRect(worldRect, ui.layout.freeRect, surface)` | one-overlay, layout, plumbing |
-| DOM anchored to world points (labels over 3D objects), clamped and distance-scaled | `ctx.ui.anchors(camera).add(el, world, opts)`; updated by `createGame` each frame | anchors |
-| GPU particles in 2D or world space (camera-facing, soft, lit), weather-class FX | `new ParticleSystem({ space: 'world', lit, fade, softness })`, `EmitParams` with `z`, `vz`, `wind`, 3D `gravity` | particles-3d |
-| Spatial audio: a listener and positioned voices | `audio.listener.fromCamera(camera)`, `PlayOptions.at`, `voice.setPosition` | spatial-audio |
-| WebXR: enter and leave an immersive session, an eye per render, controllers and hands as rays | `createGame({ xr })`, `ctx.xr.enter()` / `exit()` / `supported()`; `XrSurface`, `createXrHost`, `XrPointerSource` | xr |
-| The post stack (bloom, tone map, grade) per eye in VR | `renderer.resolve(target, out, viewport?)`; `XrSurface.scene` (`createGame` passes `scene: true`) | xr-post |
-| Hosts: top-level page, cross-origin iframe, Electron | `Host`, `createWebHost`, `createElectronHost` (`@thunderclap/host-electron`) | host, host-electron |
-| Typed analytics events to a game-supplied sink | `createAnalytics({ sink }).attach(ctx)`; the template's `createBeaconSink(url)` | analytics |
-| Versioned saves with migrations, quota- and blocked-storage-safe | `createSaveStore({ ..., host })`, `s` schemas | save |
-| Copyable 2D puzzle template | `templates/puzzle` (`pnpm template:puzzle`) | template-puzzle |
-| Copyable first-person 3D template: `Look`, Worker chunks, texture array, shadow, fog, weather, anchors | `templates/first-person` (`pnpm template:first-person`) | template-first-person |
-| glTF skins and animations, in `anim`'s clip and skeleton shapes | `GltfDocument.skins` / `animations`, `skeletonFromSkin`, `interleaveSkinned` | gltf-anim |
-| Pure animation: keyframe clips, `Pose`, `Skeleton`, a mixer with layers, weights, crossfade and events, skin matrices | `@thunderclap/engine/anim` (`AnimationMixer`, `sampleClip`, `poseToWorld`, `skinMatrices`) | anim |
-| Third-person follow camera on `Look` | `Follow` (`mode: 'first' \| 'third'`) | follow |
-| Ribbon trails in 2D or world space | `Trail` in `@thunderclap/engine/fx` | trails |
-| Shadow casters outside the view frustum still cast (the shadow list is culled against the sun box) | `renderer.stats.shadowDraws` | shadow-cull |
-| Standard PBR material (glTF metallic-roughness) over the lights block, shadows and fog; its BRDF and normal mapping exposed to custom WGSL | `createStandardMaterial`, `WGSL_PBR` | pbr |
-| Attachment sockets: a transform that follows a skeleton joint (by index or name) with a local offset | `createSocket`, `socketWorld`, `attachTransform` in `@thunderclap/engine/anim`; `Transform.setMatrix(m)` | sockets |
-| GPU skinning in the scene and shadow passes: a skinned vertex layout and a joint-matrix palette; skinned casters shadow in their pose | `VERTEX_LAYOUT_SKINNED`, `SkinPalette` | skinning |
-| Spot lights (up to 8, inner and outer cone) and per-light layer masks over the lights block | `SpotLight`, `Lights.spots`, `layers` on lights | spot-lights |
+| Capability | Entry point |
+| --- | --- |
+| One boot call: surface, renderer, post, particles, input, overlay, audio, host, loop, lifecycle, device loss | `createGame(opts)` from `@thunderclap/engine`; `ctx: EngineCtx` |
+| Scenes on a stack, fixed 60 Hz update, variable-rate render | `Scene`, `ctx.stack`, `ctx.loop` (`GameLoop`) in `@thunderclap/engine/core` |
+| Pure client of a server-authoritative game (no save, loop at render rate) | `createGame({ sim: false })` with no `save`; `hooks.frame(dt)` |
+| Page lifecycle: hide, show, freeze, device loss | `GameHooks` (`hide`, `show`, `deviceLost`) |
+| Seeded random, noise, timers, pools | `createRandom`, `createNoise`, `createScheduler`, `createPool` in `core` |
+| Starting a game from a template | `pnpm create-game <dir> --template puzzle \| platformer \| first-person \| third-person` |
+| Hosts: top-level page, cross-origin iframe, XR session | `Host`, `createWebHost`, `createXrHost` in `@thunderclap/engine/host` |
+| Desktop, mobile and installable shells | `createElectronHost` (`@thunderclap/host-electron`), `createCapacitorHost` (`@thunderclap/host-capacitor`), `createPwaHost` and `pwaPlugin` (`@thunderclap/host-pwa`) |
 
-## In flight (wave 5, `docs/STATUS.md`)
+## Render
 
-No stream from this table is open; `docs/STATUS.md` lists the current branches.
+| Capability | Entry point |
+| --- | --- |
+| Draw recorder for sprites and meshes, one instance format | `Frame`: `frame.sprite`, `frame.mesh`, `frame.meshes`; `Transform` in `@thunderclap/engine/render` |
+| Matrix camera: 2D by default, perspective with depth, split views and stereo | `Camera.ortho2d`, `Camera.perspective`, `camera.screen`, `camera.viewIndex`; `renderer.render(frame, camera, target)` |
+| Materials in the game's WGSL, with a prelude for lights, shadow and fog | `renderer.createMaterial({ label, wgsl })`, `materialPrelude` |
+| Lighting block: ambient, sun, 16 point lights, 8 spot lights, layer masks | `frame.lights: Lights`, `SpotLight`, `layers` on lights |
+| Sun shadow map and distance fog | `lights.sun.shadow: SunShadow`, `lights.fog: Fog`; `engine_shadow`, `engine_fog` in WGSL |
+| Standard PBR material (glTF metallic-roughness), normal maps, dissolve | `createStandardMaterial`, `WGSL_PBR` |
+| GPU skinning in the scene and shadow passes | `VERTEX_LAYOUT_SKINNED`, `SkinPalette` |
+| Meshes streamed from a Worker without a main-thread copy | `renderer.createMesh({ capacity })`, `mesh.update(...)` |
+| Frustum culling and shadow-caster culling | `mesh.bounds`, `camera.cull`, `renderer.stats.culled`, `stats.shadowDraws` |
+| Level of detail by screen size, instance lists with stable keys | `MeshLod`, `selectLod` (`geom`), `InstanceList` |
+| Textures, texture arrays with GPU mips, KTX2 compressed textures | `loadTexture`, `loadTextureArray`, `createTextureArray`, `uploadKtx2` |
+| 2D kit: tile layers, flipbooks, parallax, a follow camera | `createTileLayer`, `Flipbook`, `createParallax`, `createFollow2D` |
+| Dynamic resolution | `DynamicResolution` |
 
-After wave 5 (candidates, unscheduled): a third-person showcase template, GPU picking, publishing `engine-v1.0.0`.
+## Post and FX
+
+| Capability | Entry point |
+| --- | --- |
+| Post stack: bloom, tone map, grade, vignette, god rays, fog | `ctx.post` (`PostStack`) in `@thunderclap/engine/post`; `CreateGameOptions.post` |
+| Depth passes: ambient occlusion, depth of field | `PostSettings.ao`, `PostSettings.dof` |
+| Temporal and screen-space passes: TAA, SSR, motion blur, auto exposure, white balance, lens dirt | `PostSettings.taa`, `ssr`, `motionBlur`, `autoExposure`; `Taa` |
+| Finishing passes: FXAA, LUT, grain, aberration, sharpen, outline | `PostSettings.fxaa`, `lut`, `grain`, `aberration`, `sharpen`, `outline` |
+| Quality tiers for weaker devices | `postQualityFor(tier)`, `lowPostQuality()`, `PostQuality` |
+| Post per eye in VR | `renderer.resolve(target, out, viewport?)` |
+| GPU particles in 2D or world space: soft, lit, sprite sheets, forces, depth collision, sub-emitters | `ParticleSystem`, `EmitParams` in `@thunderclap/engine/fx` |
+| Effect descriptors with seeds | `createEffect`, `EffectDesc` |
+| Sky, water, ribbon trails, projected decals | `Sky`, `Water`, `Trail`, `Decals` |
+| Billboards with a text atlas, debug lines | `createBillboards`, `createDebugDraw` |
+
+## Content
+
+| Capability | Entry point |
+| --- | --- |
+| glTF 2.0: meshes, materials, skins, animations, morph targets, lights, cameras, variants, quantized and meshopt data | `parseGltf(bytes)`, `loadGltf(renderer, doc, opts?)` in `@thunderclap/engine/assets` |
+| Typed asset loading with progress, an asset cache, atlas packing | `defineManifest`, `createBundle`, `createAssetCache`, `packAtlas` |
+| Procedural geometry and heightfields | `box`, `sphere`, `capsule`, `torus`, `createHeightfield`, `mergeGeometry` in `@thunderclap/engine/geom` |
+| Static colliders, capsule and circle sliding, moving tiles | `createStaticCollider`, `slide`, `slide2`, `slideTiles` |
+| Voxel grids, greedy chunk meshing with baked AO in a Worker, culled chunks, block picking | `createVoxelGrid`, `createVoxelMesher`, `createVoxelChunks`, `raycastVoxels` in `@thunderclap/engine/voxel` |
+| Grid navigation: A*, flow fields, reachability, steering | `createNavGrid`, `findPath`, `createFlowField`, `reachable` in `@thunderclap/engine/nav` |
+| Navmeshes, path queues, crowds, carved obstacles | `bakeNavMesh`, `createPathQueue`, `createCrowd`, `createObstacleSet` |
+| Build-time bakes of navmeshes and colliders | `pnpm bake bake.config.json`, `importNavMesh`, `importCollider` |
+| Animation: clips, a mixer with layers and crossfade, a state graph, blend spaces | `AnimationMixer`, `createAnimGraph` in `@thunderclap/engine/anim` |
+| IK, look-at, retargeting, spring chains, morph weights | `twoBoneIk`, `lookAt`, `retargetPose`, `createSpringChain`, `sampleWeights` |
+| Sockets: a transform that follows a joint | `createSocket`, `attachTransform` |
+| Tweens: easing, sequences, springs | `createTweens`, `ease` in `@thunderclap/engine/tween` |
+
+## Input
+
+| Capability | Entry point |
+| --- | --- |
+| One action map over keyboard, mouse, touch, pen and gamepad | `createGame({ input: { bindings } })`; `ctx.input.pressed`, `held`, `value` |
+| Action contexts, an input buffer, stick shapes, rumble | `Input` in `@thunderclap/engine/input` |
+| Gestures and the touch loupe with snap | `ctx.gestures`; `input.magnify`, `snapToGrid` |
+| Pointers as rays and hit tests against planes, boxes and meshes | `ctx.pointers`, `planeTester`, `aabbTester`, `meshTester` |
+| First-person look and move: pointer lock, touch zones, sticks, keys | `createLook(opts)`, `Look` |
+| Third-person follow camera | `Follow` |
+| Touch zones: sticks, buttons, swipes | `createTouchZones` |
+| Gyro aim | `createGyroSource` |
+| Record a session and replay it tick for tick | `createGame({ input: { record, replay } })`, `ctx.replay(rec)`, `createInputRecorder`, `createInputPlayback` |
+| WebXR: immersive session, an eye per render, controllers and hands as rays | `createGame({ xr })`, `ctx.xr.enter()`; `XrSurface`, `XrPointerSource` |
+
+## UI, audio and plumbing
+
+| Capability | Entry point |
+| --- | --- |
+| One DOM overlay in CSS px with layout regions per form factor and safe areas | `ctx.ui`, `ctx.ui.layout`, `LayoutSpec` in `@thunderclap/engine/ui` |
+| Panels, buttons, toggles, sliders, toasts, captions, a modal stack, pad navigation | `ui.stack`, `button`, `toggle`, `slider`, `ui.toasts`, `ctx.padNav` |
+| HUD widgets: meters, orbs, rings, compass, minimap, reticle, slots, heading, floating numbers | `ui.meter`, `createOrbMeter`, `ui.ring`, `ui.compass`, `ui.minimap`, `createReticle`, `createSlots`, `ui.floats` |
+| Inventory grids, drag and drop, cards, radial and context menus | `createDragContext`, `Grid`, `ContextList` |
+| DOM anchored to world points | `ctx.ui.anchors(() => camera).add(el, world, opts)` |
+| Panels in the 3D world or head-locked in VR | `createWorldPanel` |
+| Loading screen and notifications | `createLoading`, `createNotifier` |
+| Audio: buses, synth, recipes, mixer persistence | `ctx.audio` (`AudioEngine`) in `@thunderclap/engine/audio` |
+| Spatial audio, zones, occlusion, Doppler | `audio.listener`, `PlayOptions.at`, `AudioZones` |
+| Music stems, variations, ducking, sends | `createMusic`, `createVariations`, `createDucker`, `createSend` |
+| Versioned saves with migrations, slots, settings, undo journal | `createSaveStore`, `s`, `createSlotManager`, `createSettingsStore`, `createJournal` in `@thunderclap/engine/save` |
+| Typed analytics events to a game-supplied sink | `createAnalytics({ sink }).attach(ctx)` in `@thunderclap/engine/analytics` |
+| String tables, plurals, a runtime locale swap | `createI18n`, `negotiateLocale` in `@thunderclap/engine/i18n` |
+| A fake GPU for unit tests | `@thunderclap/engine/testing` |
 
 ## How to ask for more
 
