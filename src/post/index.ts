@@ -39,6 +39,7 @@ export type {
   RGB,
   SharpenSettings,
   SsrSettings,
+  TaaHistoryFilter,
   TaaReprojection,
   TaaSettings,
   Tonemap,
@@ -60,6 +61,7 @@ export {
   TAA_MAX_FEEDBACK,
   Taa,
   taaBlendWeight,
+  taaCatmullRomWeights,
   taaRejects,
   taaReprojection,
 } from './taa';

@@ -7,7 +7,8 @@
  *   flat pixels after 16 frames, and a bar sliding over a dark band leaves no more trail than
  *   the ws/post-3 resolve did; a striped cube moving under a still camera strays from the
  *   TAA-off frame at most half as far with velocity reprojection as with the camera matrix
- *   (ws/post-5);
+ *   (ws/post-5); creeping 0.37 px a frame on jitter, it keeps more of its detail with the
+ *   Catmull-Rom history filter than with bilinear, and trails no more (ws/post-6);
  * - ssr: with the rough-metal target the smooth half of the floor reflects and the rough half
  *   does not;
  * - blur: with the velocity target a cube moving under a still camera blurs and the static
@@ -107,10 +108,28 @@ test('taa: velocity reprojection halves the ghost of a cube moving under a still
   expect(s0.mode).toBe('taa');
   // Each phase reads six frames after the bar's; the poll waits for both (E-017).
   const s = await settle((x) => x.ghostObject !== null && x.ghostObjectCamera !== null);
-  expect(s.phase).toBe('done');
+  expect(['subpixel', 'done']).toContain(s.phase);
   expect(s.velocityActive).toBe(true);
   expect(s.ghostObjectCamera!).toBeGreaterThan(0);
   expect(s.ghostObject!).toBeLessThanOrEqual(s.ghostObjectCamera! * 0.5);
+  expect(s.gpuErrors).toBe(0);
+  expect(errors).toEqual([]);
+});
+
+test('taa: a sub-pixel creep on jitter stays sharper with catmull-rom than bilinear, no more ghost', async ({
+  page,
+  wrapper,
+}) => {
+  const s0 = await open(page, wrapper, 'taa');
+  expect(s0.mode).toBe('taa');
+  const s = await settle((x) => x.phase === 'done');
+  // Both filters resolve the same frames (a bilinear twin stack); measured on every row at
+  // ws/post-6: blur 0.44 vs 0.46, ghost about 13% lower with Catmull-Rom.
+  expect(s.wantsJitter).toBe(true);
+  expect(s.velocityActive).toBe(true);
+  expect(Math.hypot(s.jitter[0], s.jitter[1])).toBeGreaterThan(0);
+  expect(s.blurSubpixel!).toBeLessThan(s.blurSubpixelBilinear!);
+  expect(s.ghostSubpixel!).toBeLessThanOrEqual(s.ghostSubpixelBilinear!);
   expect(s.gpuErrors).toBe(0);
   expect(errors).toEqual([]);
 });

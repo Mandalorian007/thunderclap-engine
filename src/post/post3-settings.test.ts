@@ -79,6 +79,7 @@ describe('post 3 settings', () => {
       reprojection: 'velocity',
       depthReject: 0.1,
       velocityReject: 2,
+      historyFilter: 'catmull-rom',
     });
     expect(s.ssr).toMatchObject({
       enabled: false,
