@@ -381,7 +381,7 @@ describe('standard dissolve', () => {
   it('the WGSL discards above the threshold in the scene and the shadow entry', () => {
     expect(STANDARD_WGSL).toContain('fn standard_dissolved(');
     expect(STANDARD_WGSL).toMatch(/@fragment fn fs_shadow\(in: VSOut\)/);
-    expect(STANDARD_WGSL).toMatch(/if \(standard_dissolved\(in\)\) \{\s*discard;/);
+    expect(STANDARD_WGSL).toMatch(/if \(masked \|\| standard_dissolved\(in\)\) \{\s*discard;/);
   });
 
   function shadowSetup(dissolve: boolean) {

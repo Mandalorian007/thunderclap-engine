@@ -46,8 +46,9 @@ export interface StandardMaterialDesc {
   emissiveFactor?: ArrayLike<number>;
   /**
    * `opaque` (default): alpha is written as 1 and the draw is opaque (depth write, shadow
-   * caster). `mask`: opaque, and fragments with alpha below `alphaCutoff` are discarded (they
-   * still cast a full shadow: the shadow pass has no fragment stage). `blend`: the renderer's
+   * caster). `mask`: opaque, and fragments with alpha below `alphaCutoff` are discarded, in
+   * the shadow pass too (ws/render-6: the material's `fs_shadow` entry, so the shadow has the
+   * same holes; an opaque material keeps the depth-only shadow pipeline). `blend`: the renderer's
    * alpha-blended path (sorted back to front, no depth write, casts no shadow).
    */
   alphaMode?: 'opaque' | 'mask' | 'blend';
@@ -278,9 +279,14 @@ fn standard_dissolved(in: VSOut) -> bool {
   let a = standard.dissolve.x;
   return a >= 1.0 || standard_dissolve_noise(in) < a;
 }
-// The shadow pass fragment (shadowFragmentEntry): the same holes as the dissolve in fs_main.
+// The shadow pass fragment (shadowFragmentEntry): the same holes as fs_main's alpha mask
+// (flag bit 1, base alpha below the cutoff) and dissolve. The sample comes first, in uniform
+// control flow.
 @fragment fn fs_shadow(in: VSOut) {
-  if (standard_dissolved(in)) { discard; }
+  let a = textureSample(standard_base_color, standard_sampler, standard_uv_slot(in, 0u)).a
+    * standard.base_color.a * in.color.a;
+  let masked = (u32(standard.emissive.w) & 2u) != 0u && a < standard.factors.w;
+  if (masked || standard_dissolved(in)) { discard; }
 }
 
 @fragment fn fs_main(in: VSOut, @builtin(front_facing) front: bool) -> FragOut {
@@ -365,8 +371,9 @@ export function createStandardMaterial(renderer: Renderer, desc: StandardMateria
     textures: 5,
     sampler: desc.sampler ?? 'linear-mip-repeat',
     buffers,
-    // A dissolve's holes show in the shadow too: the material's own shadow pipeline.
-    shadowFragmentEntry: desc.dissolve ? 'fs_shadow' : undefined,
+    // A cutout's and a dissolve's holes show in the shadow too: the material's own shadow
+    // pipeline. Opaque and blended materials keep the depth-only one.
+    shadowFragmentEntry: desc.dissolve || desc.alphaMode === 'mask' ? 'fs_shadow' : undefined,
   });
   m.setUniforms(packStandardUniforms(desc));
   m.setTexture(STANDARD_TEXTURE_SLOTS.baseColor, desc.baseColor ?? d.white);

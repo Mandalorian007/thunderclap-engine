@@ -123,7 +123,8 @@ res.surface.onResize(({ backbuffer }) => renderer.resize(backbuffer.width, backb
   the last camera that rendered into the target this frame, `null` before any view (see
   *Camera jitter and history*); `roughMetal` and `velocity` are the target's aux attachments or
   `null` (see *Aux targets*). A processor with `wantsJitter: true` tells the renderer to apply
-  each camera's `setJitter` offset; without it no camera is ever jittered. `PostStack` is the
+  each camera's `setJitter` offset; without it (and without `renderer.setJitter`, see *Camera
+  jitter and history*) no camera is ever jittered. `PostStack` is the
   engine's; a game writes its own only to replace the whole final stage.
 
 ## Drawing
@@ -383,13 +384,25 @@ distance), scales it by `camera.lodBias` (default 1; below 1 drops detail sooner
 level with `pickLodLevel(sizePx, thresholds, count, previous, hysteresis)`: `selectLod`'s rule
 held at last frame's level while the size stays within `renderer.lodHysteresis` (a fraction,
 `DEFAULT_LOD_HYSTERESIS` = 0.1) of the boundary, so an instance parked on a threshold does not
-flicker. The level is remembered per `Transform` (or per params object when there is none) and
-shared across views. Opaque draws sort by mesh then material inside their order and layer, so
-200 instances over three levels are three draw calls; `renderer.stats.lodCounts[i]` counts the
-scene instances drawn at level `i` (empty on a frame without a `MeshLod`). The shadow pass draws
-the level the scene picked. `frame.meshes` batches and `InstanceList`s take a single `Mesh`
-only. `isMeshLod(m)` tells the two apart. Mode `?lod` of `harness/render5.html` draws 200
-instances of one chain.
+flicker. The level is remembered per view (ws/render-6): each camera keeps its own memory, per
+`Transform` (or per params object when there is none), so two XR eyes or two split-screen
+cameras each hold their own hysteresis. Opaque draws sort by mesh then material inside their
+order and layer, so 200 instances over three levels are three draw calls;
+`renderer.stats.lodCounts[i]` counts the scene instances drawn at level `i` (empty on a frame
+without a `MeshLod`; once a level has been seen the array keeps its length, zeroed per frame).
+The shadow pass draws the level the view picked: the sun's map is rendered inside each view, so
+a shadow caster never picks a level of its own. `isMeshLod(m)` tells a chain from a mesh.
+
+`frame.meshes(lod, material, batch)` and `renderer.createInstanceList(lod, material, capacity)`
+take a `MeshLod` too (ws/render-6): every instance picks its level the same way (its sphere from
+`meshes[0].bounds` through its matrix, its memory kept per view by instance index), and the
+batch is copied into the frame's upload bucketed by level, so each non-empty level is one
+instanced draw, in the scene and the shadow pass alike. A LOD list therefore costs a per-frame
+copy like a batch (its own vertex buffer is not drawn) and is culled per instance; its velocity
+history (`velocity: true`) is not read, so its instances write camera-only motion. `list.mesh`
+is `meshes[0]` and `list.lod` the chain (null for a plain list). Mode `?lod` of
+`harness/render5.html` draws 200 instances of one chain; `?lod&instanced` draws them as one
+`InstanceList` and publishes `instancedDraws`.
 
 ### Lazy pipelines
 
@@ -474,10 +487,25 @@ renderer.render(frame, eye);                              // or renderer.camera 
   into (a TAA sample sequence; +x right, +y down); `clearJitter()` is `setJitter(0, 0)`;
   `jitter` reads it back. The offset reaches `viewProjection`, `invViewProj` and
   `worldToScreen`, never `previousViewProj` or the frustum. The renderer applies it only while
-  `renderer.post.wantsJitter` is true (it then sets the target size per view through
-  `setJitterTarget`), and never through `ortho2d`: a page without a jittering post processor,
-  and every 2D camera, draws exactly as before. `getJitter(out)` fills the pixels actually
-  applied (`0, 0` when not).
+  `renderer.post.wantsJitter` is true or a jitter hook is set (it then sets the target size per
+  view through `setJitterTarget`), and never through `ortho2d`: a page without either, and
+  every 2D camera, draws exactly as before. `getJitter(out)` fills the pixels actually applied
+  (`0, 0` when not).
+- `renderer.setJitter(fn: JitterFn | null)` (ws/render-6) is the renderer's own hook:
+  `fn(frame)` (`JitterFn = (frame: number) => readonly [x, y]`, `frame` counting from 0 since the
+  hook was set) runs once per `beginFrame`, and its pixels go to every camera `render` draws
+  that frame, XR eyes and offscreen views included, through `camera.setJitter`. The renderer
+  records each camera's history before applying it, so `previousViewProj` / `previousView` stay
+  unjittered; `setJitter(null)` removes the hook and clears the jitter of every camera it
+  reached. Return a reused tuple to keep the frame allocation-free. Without a hook
+  `camera.setJitter` works as above.
+- *Migration (post):* `PostStack` jitters today through `addJitterCamera(camera)` and its own
+  `stepJitter` (`taa.jitter(frameIndex++)` onto each registered camera), which misses cameras it
+  was not told about (a second XR eye, an offscreen view). The post workstream moves it to
+  `renderer.setJitter((i) => taa.jitter(i))` when TAA turns on and `renderer.setJitter(null)`
+  when it turns off, drops `addJitterCamera` (kept as a no-op for a release) and `stepJitter`,
+  and keeps `wantsJitter` only for the target sizing. Until then both paths work: with no hook
+  set the renderer behaves exactly as before.
 - `camera.previousViewProj` and `camera.previousView` (`Float32Array` 16 each, column-major)
   hold the unjittered matrices of the last frame this camera rendered: the renderer calls
   `camera.recordHistory()` at the start of each view, before the camera is read, so a camera
@@ -562,6 +590,12 @@ one bind group layout serves both. The block gains `lights.sun_view_proj` (`mat4
   `VERTEX_LAYOUT_2D` sprites and quads, so a 2D scene never renders a shadow pass; blended
   materials never cast. `InstanceParams.receiveShadow: false` sets instance flag bit 0, read as
   `in.flags & 1u` in the fragment shader (`VSOut.flags`); the engine helpers do not read it.
+- Casters are depth-only (no fragment stage) unless their material names a
+  `shadowFragmentEntry`: then the shadow pipeline (cached per material and vertex layout) runs
+  that entry with the material's group 1 bound, so its discards cut the shadow. The standard
+  material does this for `alphaMode: 'mask'` (alpha below `alphaCutoff`) and for dissolve
+  (ws/render-5, ws/render-6); every other caster keeps the depth-only fast path. Mode `?mask` of
+  `harness/render5.html` probes the holes in a checkered quad's shadow (`shadowHolePx`).
 - `ShadowMap` (`SHADOW_FORMAT` = `depth32float`) is the renderer's piece: `view` (the map's
   view, or the placeholder before a pass has rendered), the sampler, `sunCamera`, `place(center, sunDir, shadow, size)`,
   `pipelineFor(layout)` and `ShadowUniforms` (`viewProj`, `bias`, `texelSize`), what
@@ -726,8 +760,9 @@ frame.mesh(mesh, skin, transform, { tint: [1, 0.9, 0.8, 1] });
 - Lights reach an instance by its `InstanceParams.layers` (`engine_instance_layers(in.flags)`),
   as for `engine_lambert_layers`: a lamp with `layers: 0b10` lights only the instances on
   layer 2.
-- `alphaMode: 'mask'` discards below `alphaCutoff` (the plain shadow pass has no fragment
-  stage, so a masked object still casts its whole silhouette); `'blend'` uses `blend: 'alpha'`, so it
+- `alphaMode: 'mask'` discards below `alphaCutoff`, in the scene and, through the material's
+  `fs_shadow` entry (ws/render-6), in the shadow pass, so a masked leaf or fence casts its holes;
+  `'blend'` uses `blend: 'alpha'`, so it
   draws after the opaque draws, writes no depth and casts no shadow. `doubleSided` flips the
   normal on back faces; materials never cull, so single-sided only changes the lighting.
 - Tangents come from the mesh when its layout has them (`VERTEX_LAYOUT_3D_TANGENT`, through
@@ -1065,11 +1100,13 @@ Zstd / ZLIB supercompressed payload: **no transcoder is bundled**, so ship one K
 (or a PNG fallback) and pick by `renderer.caps`. `CompressedUploadTarget` is the part of a
 renderer it needs (`device`, `caps`); `UploadKtx2Options` its options.
 
-Mode `?ktx2` of `harness/render5.html` builds a 64×64 BC1 file with seven mips in the page,
-creates its device with `compressionFeatures(adapter)` and uploads it, or reports the typed error.
+`initGpu` (and so `boot` and `createGame`) requests `compressionFeatures(adapter)` with its
+device (ws/render-6; `GpuInitOptions.compression: false` opts out, and a refused request retries
+without features), so `renderer.caps.compressed` is truthful on the shared device. Mode `?ktx2`
+of `harness/render5.html` builds a 64×64 BC1 file with seven mips in the page and uploads it on
+that device, or reports the typed error.
 
-*Not yet:* a bundled Basis/UASTC transcoder, 3D (volume) KTX2 files, and requesting the
-compression features in `initGpu` itself (a page that wants them creates its device as above).
+*Not yet:* a bundled Basis/UASTC transcoder and 3D (volume) KTX2 files.
 
 ## Lower-level pieces
 

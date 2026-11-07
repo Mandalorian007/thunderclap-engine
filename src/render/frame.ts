@@ -205,7 +205,8 @@ export interface FrameSink {
   /**
    * A batch of `mesh` with `material` (`frame.meshes` / `frame.list`); `bounds` is the mesh's
    * sphere for per-instance culling when the batch gives none. `list` is the retained list
-   * the batch is, if any (its instances live in its own buffer).
+   * the batch is, if any (its instances live in its own buffer). `lod` is the chain each
+   * instance picks its level from per view (ws/render-6; `mesh` is then its first level).
    */
   pushBatch(
     material: Material,
@@ -213,6 +214,7 @@ export interface FrameSink {
     batch: InstanceBatch,
     bounds: MeshBounds | null,
     list: InstanceList | null,
+    lod?: MeshLod | null,
   ): void;
   pushDrawable(d: Drawable, order: number, layers: number): void;
   pushPrePass(fn: (encoder: GPUCommandEncoder) => void): void;
@@ -315,9 +317,23 @@ export class Frame {
    * the bulk path for many things that change every frame. One sort key and one draw call;
    * culled as one sphere when `batch.bounds` is given, else per instance by `mesh.bounds`.
    * Throws when `matrices` or `params` are too short for `count`.
+   *
+   * Given a `MeshLod` (ws/render-6), each instance picks its level per view as `frame.mesh`
+   * does (the sphere of `meshes[0].bounds` through its matrix, the level memory kept per view
+   * and instance index) and the batch draws one instanced call per non-empty level.
    */
-  meshes(mesh: Mesh, material: Material, batch: InstanceBatch): void {
+  meshes(mesh: Mesh | MeshLod, material: Material, batch: InstanceBatch): void {
     if (batch.count <= 0) return;
+    let lod: MeshLod | null = null;
+    let m: Mesh;
+    if (isMeshLod(mesh)) {
+      lod = mesh;
+      const first = mesh.meshes[0];
+      if (!first) throw new Error('frame.meshes: MeshLod has no meshes');
+      m = first;
+    } else {
+      m = mesh;
+    }
     if (batch.matrices.length < batch.count * 12) {
       throw new Error(
         `frame.meshes: matrices holds ${batch.matrices.length} floats for ${batch.count} instances`,
@@ -328,17 +344,20 @@ export class Frame {
         `frame.meshes: params holds ${batch.params.length} floats for ${batch.count} instances`,
       );
     }
-    this.sink.pushBatch(material, mesh, batch, mesh.bounds, null);
+    this.sink.pushBatch(material, m, batch, m.bounds, null, lod);
   }
 
   /**
    * Draw a retained `InstanceList` (`renderer.createInstanceList`): its instances live in their
    * own GPU buffer, uploaded only where `set` / `remove` changed them since the last frame.
-   * Culled as one sphere (`list.bounds`), one draw call.
+   * Culled as one sphere (`list.bounds`), one draw call. A list made with a `MeshLod`
+   * (ws/render-6) picks a level per instance and view, and its instances are copied into the
+   * frame's upload bucketed by level (one draw per non-empty level) instead of drawn from its
+   * own buffer.
    */
   list(list: InstanceList): void {
     if (list.count <= 0) return;
-    this.sink.pushBatch(list.material, list.mesh, list, null, list);
+    this.sink.pushBatch(list.material, list.mesh, list, null, list, list.lod);
   }
 
   /**

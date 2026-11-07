@@ -4,14 +4,20 @@
  * lights and the probes are what a game would write.
  *
  * - `?ktx2`: the page builds a 64×64 BC1 KTX2 file in memory (seven mips, one solid colour per
- *   level), asks a fresh adapter for its compression features, and uploads the file with
- *   `uploadKtx2` onto a turning cube. Without BC the typed error is caught: `state.error` names
- *   the format and the caps.
+ *   level) and uploads it with `uploadKtx2` onto a turning cube, on the device `boot` made
+ *   (`initGpu` asks for every compression feature the adapter has, ws/render-6). Without BC the
+ *   typed error is caught: `state.error` names the format and the caps.
  * - `?lod`: 200 rocks (an icosphere chain from `createLodChain`) on a grid running away from the
  *   camera, drawn through one `MeshLod`: `state.lodCounts` and `state.drawCalls` (one draw per
- *   non-empty level).
+ *   non-empty level). `&instanced` (ws/render-6): the same rocks in one `InstanceList` built on
+ *   the `MeshLod`, bucketed per level: `state.instancedDraws` (one draw per non-empty level).
  * - `?dissolve`: a sphere over a ground plane under a shadowing sun, its dissolve amount
  *   cycling 0 → 1 (`state.amount`); the shadow loses the same pixels.
+ * - `?mask` (ws/render-6): a checkered `alphaMode: 'mask'` quad and a solid quad held over a
+ *   ground plane under a slanted sun, seen from above. A probe after the post stack samples a
+ *   32×32 grid inside the masked quad's shadow and one texel each of lit and solid-shadowed
+ *   ground: `state.shadowHolePx` counts the grid samples brighter than halfway between the two
+ *   (light through the mask's holes).
  * - `?still`: freeze motion (the cube's turn, the dissolve's cycle at 0.5) for screenshots.
  */
 
@@ -19,21 +25,27 @@ import { parseKtx2 } from '@thunderclap/engine/assets';
 import { GameLoop } from '@thunderclap/engine/core';
 import { box, createLodChain, icosphere, plane } from '@thunderclap/engine/geom';
 import { boot } from '@thunderclap/engine/platform';
+import { PostStack } from '@thunderclap/engine/post';
 import {
   Camera,
+  type CameraPoint,
   CompressedTextureError,
-  compressionFeatures,
   createStandardMaterial,
+  type FullscreenPass,
   gpuDiagnostics,
+  type InstanceList,
   type InstanceParams,
   installGpuErrorLogging,
   Lights,
   type Material,
   type Mesh,
   type MeshLod,
+  type PostInputs,
+  type PostProcessor,
   Renderer,
-  type RendererGpu,
+  type SceneTargetViewport,
   STANDARD_DISSOLVE_OFFSET,
+  type Texture,
   Transform,
   uploadKtx2,
 } from '@thunderclap/engine/render';
@@ -43,8 +55,15 @@ const root = document.getElementById('root') as HTMLElement;
 const LOGICAL = { width: 1920, height: 1080 };
 
 const query = new URLSearchParams(location.search);
-const mode: Render5Mode = query.has('ktx2') ? 'ktx2' : query.has('dissolve') ? 'dissolve' : 'lod';
+const mode: Render5Mode = query.has('ktx2')
+  ? 'ktx2'
+  : query.has('dissolve')
+    ? 'dissolve'
+    : query.has('mask')
+      ? 'mask'
+      : 'lod';
 const still = query.has('still');
+const instanced = mode === 'lod' && query.has('instanced');
 
 const state: HarnessRender5State = {
   ready: false,
@@ -52,6 +71,7 @@ const state: HarnessRender5State = {
   frames: 0,
   mode,
   still,
+  instanced,
   caps: { bc: false, etc2: false, astc: false },
   format: null,
   uploaded: false,
@@ -61,6 +81,13 @@ const state: HarnessRender5State = {
   drawCalls: 0,
   instances: 0,
   amount: 0,
+  instancedDraws: 0,
+  shadowHolePx: 0,
+  shadowDarkPx: 0,
+  shadowSamples: 0,
+  litRef: 0,
+  darkRef: 0,
+  readbacks: 0,
   gpuErrors: 0,
 };
 
@@ -120,16 +147,148 @@ function bc1Ktx2(size: number, colours: readonly number[]): Uint8Array {
 // RGB565: orange, teal, violet, then greys (the far mips).
 const LEVEL_COLOURS = [0xfc00, 0x0410 | 0x001f, 0x801f, 0x8410, 0x630c, 0x4208, 0x2104];
 
+// ------------------------------------------------------------------ ?mask: the shadow probe
+
+/** The probe grid's side, and the probe target: the grid, then one row of two references. */
+const GRID = 32;
+const PROBE_ROW_BYTES = GRID * 8;
+const PROBE_WGSL = /* wgsl */ `
+struct Probe { rect: vec4f, refs: vec4f };
+@group(0) @binding(0) var<uniform> probe: Probe;
+@group(0) @binding(1) var probe_sampler: sampler;
+@group(0) @binding(2) var color_tex: texture_2d<f32>;
+@fragment fn fs_main(in: FullscreenIn) -> @location(0) vec4f {
+  var uv = mix(probe.rect.xy, probe.rect.zw, in.pos.xy / ${GRID}.0);
+  if (u32(in.pos.y) >= ${GRID}u) { uv = select(probe.refs.xy, probe.refs.zw, u32(in.pos.x) == 1u); }
+  return textureSampleLevel(color_tex, probe_sampler, uv, 0.0);
+}`;
+
+/** IEEE half → number. */
+function halfToFloat(h: number): number {
+  const s = h & 0x8000 ? -1 : 1;
+  const e = (h >> 10) & 0x1f;
+  const m = h & 0x3ff;
+  if (e === 0) return s * 2 ** -14 * (m / 1024);
+  if (e === 31) return m ? Number.NaN : s * Number.POSITIVE_INFINITY;
+  return s * 2 ** (e - 15) * (1 + m / 1024);
+}
+
 /**
- * A device with every compression feature the adapter offers. An adapter hands out one device,
- * so the page asks for a second adapter instead of the one `boot` used.
+ * Wraps the post stack: after it runs, a fullscreen pass samples the scene colour on a grid
+ * over `rect` (uv, y down) and at the two reference uvs into a GRID × (GRID + 1)
+ * `rgba16float` target, copied into a mappable buffer that `read()` maps after the submit.
  */
-async function compressedGpu(base: RendererGpu): Promise<RendererGpu> {
-  const adapter = await navigator.gpu.requestAdapter();
-  if (!adapter) return base;
-  const device = await adapter.requestDevice({ requiredFeatures: compressionFeatures(adapter) });
-  base.context.configure({ device, format: base.format, alphaMode: 'opaque' });
-  return { device, context: base.context, format: base.format };
+class ShadowProbe implements PostProcessor {
+  readonly wantsJitter = false;
+  /** Grid rect (u0, v0, u1, v1), then the lit and the dark reference uvs. */
+  readonly uv = new Float32Array(8);
+  /** Luminance of the last readback, GRID × (GRID + 1) texels. */
+  readonly luma = new Float32Array(GRID * (GRID + 1));
+  private readonly pass: FullscreenPass;
+  private readonly target: Texture;
+  private readonly buffer: GPUBuffer;
+  private readonly raw = new Uint16Array(GRID * (GRID + 1) * 4);
+  private mapping = false;
+  private copied = false;
+
+  constructor(
+    renderer: Renderer,
+    private readonly inner: PostStack,
+  ) {
+    this.pass = renderer.createFullscreenPass({
+      label: 'render5-shadow-probe',
+      wgsl: PROBE_WGSL,
+      targets: ['rgba16float'],
+      uniformBytes: 32,
+      textures: 1,
+      sampler: 'nearest-clamp',
+    });
+    this.target = renderer.createRenderTarget({
+      width: GRID,
+      height: GRID + 1,
+      format: 'rgba16float',
+      label: 'render5-shadow-probe',
+    });
+    this.buffer = renderer.device.createBuffer({
+      label: 'render5-shadow-probe-readback',
+      size: PROBE_ROW_BYTES * (GRID + 1),
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    });
+  }
+
+  resize(width: number, height: number): void {
+    this.inner.resize(width, height);
+  }
+
+  encode(
+    encoder: GPUCommandEncoder,
+    inputs: PostInputs,
+    output: GPUTextureView,
+    viewport?: SceneTargetViewport,
+  ): void {
+    this.inner.encode(encoder, inputs, output, viewport);
+    if (this.mapping) return;
+    this.pass.setUniforms(this.uv);
+    this.pass.setTexture(0, inputs.color);
+    this.pass.encode(encoder, this.target.view);
+    encoder.copyTextureToBuffer(
+      { texture: this.target.texture },
+      { buffer: this.buffer, bytesPerRow: PROBE_ROW_BYTES },
+      { width: GRID, height: GRID + 1 },
+    );
+    this.copied = true;
+  }
+
+  /** After the frame's submit: map the readback when one was encoded; `done` on arrival. */
+  read(done: () => void): void {
+    if (!this.copied || this.mapping) return;
+    this.copied = false;
+    this.mapping = true;
+    this.buffer.mapAsync(GPUMapMode.READ).then(
+      () => {
+        this.raw.set(new Uint16Array(this.buffer.getMappedRange()));
+        this.buffer.unmap();
+        const raw = this.raw;
+        for (let i = 0; i < this.luma.length; i++) {
+          const o = i * 4;
+          this.luma[i] =
+            (halfToFloat(raw[o]!) + halfToFloat(raw[o + 1]!) + halfToFloat(raw[o + 2]!)) / 3;
+        }
+        this.mapping = false;
+        done();
+      },
+      () => {
+        this.mapping = false;
+      },
+    );
+  }
+}
+
+/** `?mask`: the quads' height, the slanted sun (+x by one per unit down) and the probe area. */
+const MASK_HEIGHT = 2.5;
+const MASK_SUN: [number, number, number] = [1, -1, 0];
+/** The masked quad's shadow lands centred on the origin, the solid quad's at z = 2.6. */
+const MASK_QUAD_X = -MASK_HEIGHT;
+const SOLID_Z = 2.6;
+/** Half the side of the grid probed inside the masked shadow (the quad's half-side is 1). */
+const PROBE_HALF = 0.8;
+const probePoint: CameraPoint = { x: 0, y: 0, z: 0 };
+
+/** A checkered alpha texture: 4 × 4 cells, alternate cells transparent. */
+function checkerAlpha(): Uint8Array<ArrayBuffer> {
+  const n = 64;
+  const data = new Uint8Array(new ArrayBuffer(n * n * 4));
+  for (let y = 0; y < n; y++) {
+    for (let x = 0; x < n; x++) {
+      const o = (y * n + x) * 4;
+      const on = ((x >> 4) + (y >> 4)) % 2 === 0;
+      data[o] = 230;
+      data[o + 1] = 120;
+      data[o + 2] = 60;
+      data[o + 3] = on ? 255 : 0;
+    }
+  }
+  return data;
 }
 
 // ------------------------------------------------------------------ main
@@ -141,8 +300,7 @@ async function main(): Promise<void> {
     state.ready = true;
     return;
   }
-  const { surface } = res;
-  const gpu = mode === 'ktx2' ? await compressedGpu(res.gpu) : res.gpu;
+  const { surface, gpu } = res;
   installGpuErrorLogging(gpu.device);
   const renderer = new Renderer(gpu);
   renderer.resize(surface.backbuffer.width, surface.backbuffer.height);
@@ -169,6 +327,8 @@ async function main(): Promise<void> {
 
   const draws: { mesh: Mesh | MeshLod; material: Material; t: Transform; p?: InstanceParams }[] =
     [];
+  let rocks: InstanceList | null = null;
+  let probe: ShadowProbe | null = null;
   let spin: Transform | null = null;
   let dissolve: Material | null = null;
   const amountBuf = new Float32Array(1);
@@ -205,17 +365,61 @@ async function main(): Promise<void> {
       thresholdsPx: lodThresholds,
     };
     const mat = createStandardMaterial(renderer, { label: 'rock', metallic: 0, roughness: 0.9 });
+    // `&instanced`: the rocks live in one list on the chain, each picking its own level.
+    if (instanced) rocks = renderer.createInstanceList(lod, mat, 200);
     // 200 rocks: 10 across, 20 deep, every 4 units away from the camera.
     for (let i = 0; i < 200; i++) {
       const x = ((i % 10) - 4.5) * 4;
       const z = -Math.floor(i / 10) * 8;
-      draws.push({
-        mesh: lod,
-        material: mat,
-        t: new Transform({ x, y: 0, z }).setAxisAngle(0, 1, 0, i * 0.7),
-        p: { tint: [0.55 + (i % 3) * 0.1, 0.5, 0.45, 1] },
-      });
+      const t = new Transform({ x, y: 0, z }).setAxisAngle(0, 1, 0, i * 0.7);
+      const p: InstanceParams = { tint: [0.55 + (i % 3) * 0.1, 0.5, 0.45, 1] };
+      if (rocks) rocks.set(i, t, p);
+      else draws.push({ mesh: lod, material: mat, t, p });
     }
+  } else if (mode === 'mask') {
+    // Seen from straight above, so the ground's probe grid is a screen rect.
+    camera.lookAt([0, 9, 0.001], [0, 0, 0]);
+    lights.sun.dir = MASK_SUN;
+    lights.sun.color = [1.2, 1.15, 1.1];
+    lights.ambient.set([0.12, 0.12, 0.14]);
+    lights.sun.shadow = { extent: 8 };
+    probe = new ShadowProbe(renderer, new PostStack(renderer, { bloom: { enabled: false } }));
+    renderer.post = probe;
+    const ground = renderer.createMesh({ ...plane({ size: 12 }), label: 'ground' });
+    const quad = renderer.createMesh({ ...plane({ size: 2 }), label: 'quad' });
+    const groundMat = createStandardMaterial(renderer, {
+      label: 'ground',
+      metallic: 0,
+      roughness: 1,
+    });
+    const checker = renderer.textureFromPixels({
+      width: 64,
+      height: 64,
+      data: checkerAlpha(),
+      label: 'checker-alpha',
+    });
+    const masked = createStandardMaterial(renderer, {
+      label: 'masked',
+      baseColor: checker,
+      sampler: 'nearest-mip-repeat',
+      alphaMode: 'mask',
+      alphaCutoff: 0.5,
+      metallic: 0,
+      roughness: 0.8,
+    });
+    const solid = createStandardMaterial(renderer, { label: 'solid', metallic: 0, roughness: 0.8 });
+    draws.push({ mesh: ground, material: groundMat, t: new Transform() });
+    draws.push({
+      mesh: quad,
+      material: masked,
+      t: new Transform({ x: MASK_QUAD_X, y: MASK_HEIGHT }),
+    });
+    draws.push({
+      mesh: quad,
+      material: solid,
+      t: new Transform({ x: MASK_QUAD_X, y: MASK_HEIGHT, z: SOLID_Z, scaleX: 0.5, scaleZ: 0.5 }),
+      p: { tint: [0.3, 0.5, 0.9, 1] },
+    });
   } else {
     camera.lookAt([0, 2.5, 5], [0, 0.6, 0]);
     lights.sun.shadow = { extent: 8 };
@@ -259,8 +463,43 @@ async function main(): Promise<void> {
       frame.clear(0.05, 0.07, 0.12);
       frame.lights = lights;
       for (const d of draws) frame.mesh(d.mesh, d.material, d.t, d.p);
+      if (rocks) frame.list(rocks);
+      if (probe) {
+        // Grid corners and the two references, as uvs of the camera's logical screen.
+        const uv = probe.uv;
+        const at = (x: number, z: number, i: number) => {
+          camera.worldToScreen(x, 0, z, probePoint);
+          uv[i] = probePoint.x / LOGICAL.width;
+          uv[i + 1] = probePoint.y / LOGICAL.height;
+        };
+        at(-PROBE_HALF, -PROBE_HALF, 0);
+        at(PROBE_HALF, PROBE_HALF, 2);
+        at(3.5, -3, 4); // lit ground, clear of both shadows
+        at(0, SOLID_Z, 6); // the solid quad's shadow
+      }
       renderer.endFrame();
+      if (probe) {
+        const p = probe;
+        p.read(() => {
+          const lit = p.luma[GRID * GRID]!;
+          const dark = p.luma[GRID * GRID + 1]!;
+          const mid = 0.5 * (lit + dark);
+          let holes = 0;
+          let shade = 0;
+          for (let i = 0; i < GRID * GRID; i++) {
+            if (p.luma[i]! > mid) holes++;
+            else shade++;
+          }
+          state.litRef = lit;
+          state.darkRef = dark;
+          state.shadowHolePx = holes;
+          state.shadowDarkPx = shade;
+          state.shadowSamples = GRID * GRID;
+          state.readbacks++;
+        });
+      }
       state.frames++;
+      state.instancedDraws = rocks ? renderer.stats.drawCalls : 0;
       state.drawCalls = renderer.stats.drawCalls;
       state.instances = renderer.stats.instances;
       const lc = renderer.stats.lodCounts;

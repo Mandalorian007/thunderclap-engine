@@ -8,7 +8,11 @@
  *   draw per non-empty level;
  * - dissolve: the amount set from the test is the amount drawn, with no GPU error (the
  *   material's shadow pipeline compiles and runs);
- * - still: the dissolve holds at 0.5.
+ * - still: the dissolve holds at 0.5;
+ * - lod&instanced (ws/render-6): the same rocks as one `InstanceList` on the `MeshLod`, bucketed
+ *   per level: one draw per non-empty level;
+ * - mask (ws/render-6): an `alphaMode: 'mask'` checker's shadow has holes: part of the probe
+ *   grid inside it is lit, part shadowed, against the lit and solid-shadow references.
  */
 import type { Frame, Page } from '@playwright/test';
 import type { HarnessRender5State } from '../harness/render5-state';
@@ -125,6 +129,46 @@ test('still: the dissolve holds at half', async ({ page, wrapper }) => {
   await expect.poll(async () => (await read()).frames).toBeGreaterThan(at + 3);
   const s = await read();
   expect(s.amount).toBe(0.5);
+  expect(s.gpuErrors).toBe(0);
+  expect(errors).toEqual([]);
+});
+
+test('lod&instanced: one InstanceList on the MeshLod, one draw per non-empty level', async ({
+  page,
+  wrapper,
+}) => {
+  const s0 = await open(page, wrapper, 'lod&instanced');
+  expect(s0.mode).toBe('lod');
+  expect(s0.instanced).toBe(true);
+  await expect.poll(async () => (await read()).lodCounts.length).toBe(3);
+  await expect
+    .poll(async () => {
+      const s = await read();
+      return s.instancedDraws > 0 && s.instancedDraws === s.lodCounts.filter((n) => n > 0).length;
+    })
+    .toBe(true);
+  const s = await read();
+  expect(s.lodCounts.reduce((a, b) => a + b, 0)).toBe(s.instances);
+  expect(s.instances).toBeGreaterThan(100);
+  expect(s.instances).toBeLessThanOrEqual(200);
+  for (const n of s.lodCounts) expect(n).toBeGreaterThan(0);
+  expect(s.instancedDraws).toBe(3);
+  expect(s.gpuErrors).toBe(0);
+  expect(errors).toEqual([]);
+});
+
+test("mask: an alphaMode 'mask' caster's shadow has holes", async ({ page, wrapper }) => {
+  const s0 = await open(page, wrapper, 'mask');
+  expect(s0.mode).toBe('mask');
+  await expect.poll(async () => (await read()).readbacks).toBeGreaterThanOrEqual(2);
+  const s = await read();
+  // The references differ: the sun lights the ground and the solid quad shadows it.
+  expect(s.litRef).toBeGreaterThan(s.darkRef * 1.5);
+  expect(s.shadowSamples).toBe(32 * 32);
+  // Half the checker's cells are holes: a solid shadow would light none, no shadow all.
+  expect(s.shadowHolePx).toBeGreaterThan(s.shadowSamples * 0.25);
+  expect(s.shadowHolePx).toBeLessThan(s.shadowSamples * 0.75);
+  expect(s.shadowDarkPx).toBe(s.shadowSamples - s.shadowHolePx);
   expect(s.gpuErrors).toBe(0);
   expect(errors).toEqual([]);
 });

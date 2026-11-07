@@ -4,6 +4,7 @@ import {
   type InstanceParams,
   writeInstanceParams,
 } from './frame';
+import { isMeshLod, type MeshLod } from './lod';
 import { INSTANCE_FLOATS, INSTANCE_STRIDE, type Material } from './material';
 import type { Mesh, MeshBounds } from './mesh';
 import { MATRIX3X4_FLOATS, Transform } from './transform';
@@ -72,14 +73,32 @@ export class InstanceList implements InstanceBatch {
   private settleLo = 0;
   private settleHi = 0;
 
+  /** The list's mesh: the one it was made with, or the first level of its `lod`. */
+  readonly mesh: Mesh;
+  /**
+   * The LOD chain the list was made with (ws/render-6), else null. Each instance then picks a
+   * level per view, and `frame.list` copies the instances into the frame's upload bucketed by
+   * level rather than drawing from `buffer` (so the previous-matrix lane is not read).
+   */
+  readonly lod: MeshLod | null;
+
   constructor(
     device: GPUDevice,
-    readonly mesh: Mesh,
+    mesh: Mesh | MeshLod,
     readonly material: Material,
     readonly capacity: number,
     opts: InstanceListOptions = {},
   ) {
     if (!(capacity >= 1)) throw new Error(`InstanceList: capacity ${capacity}`);
+    if (isMeshLod(mesh)) {
+      const first = mesh.meshes[0];
+      if (!first) throw new Error('InstanceList: MeshLod has no meshes');
+      this.lod = mesh;
+      this.mesh = first;
+    } else {
+      this.lod = null;
+      this.mesh = mesh;
+    }
     this.matrices = new Float32Array(capacity * MATRIX3X4_FLOATS);
     this.params = new Float32Array(capacity * INSTANCE_PARAM_FLOATS);
     this.data = new Float32Array(capacity * INSTANCE_FLOATS);
