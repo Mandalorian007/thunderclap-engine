@@ -155,6 +155,12 @@ test('forces: the attractor pulls the shell in', async ({ page, wrapper }) => {
     .toBeGreaterThan(0);
   const settled = await read();
   expect(settled.radiusSettledAt).toBeLessThanOrEqual(3);
+  // The measurements read the unpacked fields (ws/fx-7); the packed form of one shared copy
+  // agrees with them, so the values are unchanged.
+  await expect
+    .poll(async () => (await read()).unpackedError, { message: 'unpacked vs packed' })
+    .toBeGreaterThanOrEqual(0);
+  expect((await read()).unpackedError).toBeLessThanOrEqual(1e-6);
   // The GPU particles gather into a blob on the same point (a linear pull under drag 3, ws/fx-5):
   // after the first second the 5×5 centre was lit in every 50 ms sample over 6 s on all eight
   // rows (1423 of 1423, meanRadius 0.07..0.15). Before, a constant pull swung them through it
@@ -201,6 +207,12 @@ test('collide: rain over the slab stays on it', async ({ page, wrapper }) => {
   const rest = await read();
   expect(rest.meanDriftPerSec).toBeGreaterThanOrEqual(0);
   expect(rest.meanDriftPerSec).toBeLessThan(0.05);
+  // The measurements read the unpacked fields (ws/fx-7); the packed form of one shared copy
+  // agrees with them, so the values are unchanged.
+  await expect
+    .poll(async () => (await read()).unpackedError, { message: 'unpacked vs packed' })
+    .toBeGreaterThanOrEqual(0);
+  expect((await read()).unpackedError).toBeLessThanOrEqual(1e-6);
   expect(s.gpuErrors).toBe(0);
   expect(errors).toEqual([]);
 });
