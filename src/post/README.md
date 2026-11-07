@@ -298,7 +298,8 @@ feature against a reference stack with the feature off, read back from the GPU, 
 
 - `defaultPostSettings()` is tuned for a dark, jewel-toned scene: a strong emissive glow, a
   cool mist on the floor, and pale storm rays from above.
-- Output is encoded to sRGB in the shader because the swapchain is `bgra8unorm`.
+- Output is encoded to sRGB in the shader because the swapchain is a non-sRGB format
+  (`navigator.gpu.getPreferredCanvasFormat()`: `bgra8unorm` or `rgba8unorm`).
 - All intermediate textures are reallocated only on resize (or a bloom level cap change).
 - **Quality caps** (`PostQuality`, `post.quality`, `defaultPostQuality()`) are separate from
   the look: `post.setQuality({ maxBloomLevels, raySamples, fogOctaves, compositeAtScene, aoSamples, dofTaps, fxaa, outline })`

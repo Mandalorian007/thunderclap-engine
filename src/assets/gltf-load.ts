@@ -15,7 +15,7 @@
  *
  * Lights and cameras: `scene.lights` holds the file's `KHR_lights_punctual` lights as the
  * render module's `DirectionalLight` / `PointLight` / `SpotLight` records (push them into
- * `renderer.lights`); `scene.cameras` the file's cameras, which `applyGltfCamera` sets on a
+ * `frame.lights`); `scene.cameras` the file's cameras, which `applyGltfCamera` sets on a
  * `Camera`. Material variants (`KHR_materials_variants`): every material is created at load;
  * `scene.setVariant(name)` swaps the material of each mapped draw in place.
  */
@@ -115,7 +115,7 @@ export interface LoadGltfOptions {
  * (`GltfDocument.lights` keeps glTF's units). `color` is glTF `color × intensity × lightScale`;
  * `radius` is `range`, or `16·√(intensity × lightScale)` without one (where an inverse-square
  * light has fallen to 1/256); spot `innerAngle` / `outerAngle` are the cone half-angles.
- * Push them into `renderer.lights.points` / `.spots`, or copy one into `renderer.lights.sun`.
+ * Push them into `frame.lights.points` / `.spots`, or copy one into `frame.lights.sun`.
  */
 export interface GltfSceneLights {
   directional: DirectionalLight[];

@@ -5,7 +5,8 @@
  * at top level or in a frame such as itch.io's; `createElectronHost()` (`@thunderclap/host-electron`)
  * satisfies the same interface through a preload bridge and adds `window`;
  * `createCapacitorHost()` (`@thunderclap/host-capacitor`) fills it from Capacitor's plugins for a
- * store app. The optional facets `lifecycle`, `haptics` and `safeArea` (ws/host-mobile) are what
+ * store app; `createXrHost()` (host/xr.ts) takes frames from an XR session and delegates the
+ * rest to the host it wraps. The optional facets `lifecycle`, `haptics` and `safeArea` (ws/host-mobile) are what
  * a mobile shell adds and the web host can also answer.
  */
 import type { CopyResult, EmbedContext, LinkActivation, OpenResult } from '../platform/links';
@@ -107,7 +108,7 @@ export interface HostSafeArea {
 
 /**
  * Where frames come from: the display's refresh (`requestAnimationFrame` in a browser), a
- * test's manual stepping, later an XR session's `requestAnimationFrame`. `GameLoop` schedules
+ * test's manual stepping, or an XR session's `requestAnimationFrame` (`createXrHost`). `GameLoop` schedules
  * every frame through this, never through the globals.
  */
 export interface FrameSource {
@@ -138,7 +139,7 @@ export interface Host extends FrameSource {
   readonly storage: HostStorage;
   /** Desktop window controls, when the host has a window of its own. */
   readonly window?: HostWindow;
-  /** The app's foreground/background state, when the host can tell (web and capacitor do). */
+  /** The app's foreground/background state, when the host can tell (web and capacitor do; the XR host passes on its base host's). */
   readonly lifecycle?: HostLifecycle;
   /** Haptic feedback, when the host offers any (`available()` says whether the device does). */
   readonly haptics?: HostHaptics;

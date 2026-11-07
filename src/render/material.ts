@@ -21,7 +21,7 @@ import {
  * | 8..11 | `m2` @location(5) | world matrix row 2 |
  * | 12..15 | `uvRect` @location(6) | u0, v0, u1, v1 |
  * | 16..19 | `tint` @location(7) | linear RGBA |
- * | 20..23 | `params` @location(8) | free vec4 |
+ * | 20..23 | `params` @location(8) | free vec4 (`params.w` is the skin palette slot of a skinned draw, `SKIN_PARAM`) |
  * | 24..27 | `misc` @location(9) | emissive, flags (bit 0 = no shadow, bits 1..23 = layers), size.x, size.y |
  *
  * `size` is `w, h` for `DrawParams` draws and `scale.x, scale.y` for `Transform` draws
@@ -141,7 +141,7 @@ export class Material {
     undefined,
     undefined,
   ];
-  /** Shader modules per vertex layout and prelude variant (`variantKey`). */
+  /** Shader modules per vertex layout and prelude variant (`moduleFor`: aux key + 4 × lane). */
   private readonly modules = new Map<VertexLayout, (GPUShaderModule | undefined)[]>();
   /** Pipelines per vertex layout, indexed by variant (see `VARIANTS`). */
   private readonly pipelines = new Map<VertexLayout, (GPURenderPipeline | undefined)[]>();

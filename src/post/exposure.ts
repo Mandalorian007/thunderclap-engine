@@ -190,8 +190,8 @@ fn main() {
 
 /**
  * The two compute passes and their buffers. `encode` records both (clearing the histogram
- * first) and the copy into the readback buffer; `poll` maps it when free and hands the last
- * average to `onAverage`. On a device without `mapAsync` (the fake one) nothing is read back.
+ * first) and the copy into the readback buffer; `poll` maps it when free and stores the last
+ * average in `averageLog`. On a device without `mapAsync` (the fake one) nothing is read back.
  */
 export class ExposurePasses {
   private readonly device: GPUDevice;

@@ -3,7 +3,8 @@
 The page the game runs in: the letterboxed canvas, WebGPU bring-up, DPR, page lifecycle,
 fullscreen, device traits and the fatal screens. DOM only, no game nouns; every helper answers
 "no" where an API is missing. `createGame` uses all of this for you; a game reaches for it when
-it boots by hand or needs one helper. No dependencies.
+it boots by hand or needs one helper. It imports only `render` (formats, `Camera`, `SceneTarget`
+for XR and the compression feature list); no runtime dependencies.
 
 ```ts
 import { boot } from '@thunderclap/engine/platform';

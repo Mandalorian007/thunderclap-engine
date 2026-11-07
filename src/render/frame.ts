@@ -85,15 +85,15 @@ export function writeInstanceParams(
 }
 
 /**
- * Per-draw instance fields other than placement. A draw placed by a `Transform` takes these;
- * `DrawParams` adds the 2D placement (x, y, w, h, rotation). Reuse the object across frames.
- */
-/**
  * Index into `InstanceParams.params` of the skin palette slot (`params.w`): the convention
  * `engine_skin` reads and the skin harness and glTF skins write. A constant, not a layout change.
  */
 export const SKIN_PARAM = 3;
 
+/**
+ * Per-draw instance fields other than placement. A draw placed by a `Transform` takes these;
+ * `DrawParams` adds the 2D placement (x, y, w, h, rotation). Reuse the object across frames.
+ */
 export interface InstanceParams {
   /** Linear RGBA multiplier (HDR allowed). Default white. */
   tint?: ArrayLike<number>;
@@ -126,7 +126,8 @@ export interface InstanceParams {
   uniforms?: ArrayLike<number>;
   /**
    * Layer membership mask (u32). The draw is skipped when `layers & camera.layers` is 0.
-   * Default 1. A camera without `layers` sees every layer.
+   * Default 1. A camera without `layers` sees every layer. Its low `INSTANCE_LAYER_BITS` also
+   * ride the instance flags (bits 1..23), so a light whose `layers` share no bit skips it.
    */
   layers?: number;
   /**
