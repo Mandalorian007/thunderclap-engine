@@ -167,7 +167,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | UI 11: meter `setPlace` (or a per-form place map), the minimap holds its size in content rails, `meter.size` getter | ws/ui-11 | brief `docs/briefs/ui-11.md` | ui-10 | 🟣 done at `a861416` (check green, snap 0, ui5 112, ui4 48, ui 77). Train 13 or 14 |
 | 5 | Core 7: `ctx.replay` `onEnd`; `createGame` velocity-target option | ws/core-7 | brief `docs/briefs/core-7.md`; branched from ws/core-6 ad6ea9c | core-6 | 🟣 done at `f935af7` (check 2283, snap 0, replay 16, core2 40, lifecycle 32). Train 12 or 13 |
 | 5 | Input 11: pointer-source mute (XR included) for replays | ws/input-11 | brief `docs/briefs/input-11.md` | core-6 | 🟣 done at `6b48bfd` (check 2284, snap 0, replay 16, xr 8, input 52, input5 48). Train 13 |
-| 5 | Docs guide: root README rewritten for a first-time user; `docs/guide/` (9 task guides); a snippet typecheck in `pnpm check`; OFFERING refreshed | ws/docs-guide | brief `docs/briefs/docs-guide.md` | — | 🟡 `5b22ffd` done (check 2276, snap 0); merging main for `ctx.replay`, then train 13 |
+| 5 | Docs guide: root README rewritten for a first-time user; `docs/guide/` (9 task guides); a snippet typecheck in `pnpm check`; OFFERING refreshed | ws/docs-guide | brief `docs/briefs/docs-guide.md` | — | 🟣 done at `243a84e` (merged main; `ctx.replay` documented; check 2300, snap 0). Train 13 or 14 |
 | 5 | Docs modules: every module README opens with purpose, a checked *Quick use* and *Entry points*; contents lists; false statements fixed | ws/docs-modules | brief `docs/briefs/docs-modules.md` | — | 🟣 done at `98d0745` (18 READMEs, 11 false statements fixed; check green, snap 0). Train 13 |
 | 5 | Harden API: `api/*.api.txt` surface snapshot plus `check:api`; audit of leaked internals and naming; safe fixes with aliases | ws/harden-api | brief `docs/briefs/harden-api.md` | — | 🟣 done at `700f3e4` (api snapshot + check:api; 2 safe fixes; check green, snap 0, gltf/gltf3/skin/save green). Train 13 or 14 |
 | 5 | Comment sweep: stale code comments from the backlog plus a rename sweep; comments only | ws/comment-sweep | brief `docs/briefs/comment-sweep.md` | train 12 | 🔵 running |
@@ -383,7 +383,13 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
   - `createSpriteMaterial` is positional while `createMaterial` takes an object; device vs renderer arguments are mixed.
   - `createGame` has no theme option; text scale needs `applyTextScale(root, scale, setTheme)`.
   - `create-game` defaults to the unpublished `^0.2.0-alpha.1`; templates have no `build` script.
-  → candidates for ws/harden-api-2 / ergonomics wave after the harden-api audit lands.
+  - Added after the re-gate:
+    - `godRays` are placed in 2D px, Lights field shapes are mixed, and there is no automatic quality tier.
+    - `WorldPanel` uses the wrong camera in VR.
+    - `ctx.pointers` and touch-zone bindings are untyped, `planeTester` handles z-planes only, and `pushContext` can't add actions.
+    - The host packages are unpublished, the testing entry holds only the fake GPU, and the Playwright probe has a single hook slot.
+    - `atlasFrames` has no inset, `screenToWorld` needs depth in 2D, `fitFreeRect` resubscription is manual, and the parallax origin is fixed at layer creation.
+  → ws/ergonomics-1 (core, ui, input) and ws/ergonomics-2 (render, post, tooling) after harden-api-2.
 - ws/docs-modules wish: tween `update` clamps negative `dt` with `Math.max(dt, 0)` but lets NaN through (`src/tween/timeline.ts:175`); use `dt > 0 ? dt : 0`. → next tween/harden code stream.
 - ws/input-11 notes:
   - `PointerRouter.mute(sources?)` / `unmute()` / `isMuted(source)`. A muted source still polls, but its pointers drop before routing. A held pointer releases with `hit: null`. A button held across `unmute()` reads up until it is let go. Synthetic replay pointers are never muted.
