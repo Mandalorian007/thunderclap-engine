@@ -2,8 +2,9 @@
  * The ARPG demo (demos/arpg) on the device matrix: the courtyard boots clean inside the
  * draw-call band, a ground click (a tap on touch rows) paths the hero over the navmesh to the
  * spot, a gear key and a gear button swap the set's materials without rebuilding the rig, three
- * strikes on an adjacent ghoul kill it (the third number a crit), a tap on the minimap walks the
- * hero there, and the desktop rows hold a playable frame rate.
+ * strikes on an adjacent ghoul kill it (the third number a crit) and it burns away on a pooled
+ * dissolve material, a tap on the minimap walks the hero there, zooming out puts the walls,
+ * pillars and ghouls on more than one LOD level, and the desktop rows hold a playable frame rate.
  *
  * `?still&seed=3` parks the enemy AI and fixes the spawns so the interaction rows are
  * deterministic; every wait is a poll on `window.__demo`, never a sleep.
@@ -14,7 +15,10 @@ import { HARNESS_URL } from '../ports';
 
 const URL = `${HARNESS_URL}demos/arpg/`;
 
-/** Scene lists (~12), hero, four gear pieces, ghouls, trail and particles, plus shadow and post passes. */
+/**
+ * Scene lists (~10), LOD props (walls, pillars, drums, ghouls: one draw per level in view), hero,
+ * four gear pieces, trail and particles, plus shadow and post passes.
+ */
 const DRAW_CALLS_MIN = 10;
 const DRAW_CALLS_MAX = 80;
 const MIN_FPS_DESKTOP = 20;
@@ -30,6 +34,22 @@ const readState = (page: Page) =>
   );
 const parse = (s: string) => JSON.parse(s) as ArpgDemoState;
 const read = async (page: Page) => parse(await readState(page));
+
+/** Three strikes on a summoned ghoul; resolves once the kill registers. */
+async function killOne(page: Page, before: ArpgDemoState): Promise<void> {
+  const idx = await page.evaluate(() => (window as unknown as Win).__arpgApi!.summon());
+  expect(idx).toBeGreaterThanOrEqual(0);
+  for (let i = 1; i <= 3; i++) {
+    await expect.poll(async () => (await read(page)).heroState, { timeout: 10_000 }).toBe('move');
+    await page.keyboard.press('Space');
+    await expect
+      .poll(async () => (await read(page)).hits, { timeout: 10_000 })
+      .toBeGreaterThanOrEqual(before.hits + i);
+  }
+  await expect
+    .poll(async () => (await read(page)).kills, { timeout: 10_000 })
+    .toBeGreaterThanOrEqual(before.kills + 1);
+}
 
 async function boot(page: Page, query = ''): Promise<{ errors: string[]; state: ArpgDemoState }> {
   const errors: string[] = [];
@@ -137,19 +157,44 @@ test.describe('demo: arpg', () => {
   test('three strikes on an adjacent ghoul kill it', async ({ page }) => {
     const { errors, state: before } = await boot(page, '?still&seed=3');
     expect(before.kills).toBe(0);
-    const idx = await page.evaluate(() => (window as unknown as Win).__arpgApi!.summon());
-    expect(idx).toBeGreaterThanOrEqual(0);
-    for (let i = 1; i <= 3; i++) {
-      await expect.poll(async () => (await read(page)).heroState, { timeout: 10_000 }).toBe('move');
-      await page.keyboard.press('Space');
-      await expect
-        .poll(async () => (await read(page)).hits, { timeout: 10_000 })
-        .toBeGreaterThanOrEqual(before.hits + i);
-    }
-    await expect
-      .poll(async () => (await read(page)).kills, { timeout: 10_000 })
-      .toBeGreaterThanOrEqual(1);
+    await killOne(page, before);
     expect((await read(page)).crits).toBeGreaterThanOrEqual(1);
+    expect(errors).toEqual([]);
+  });
+
+  test('a killed ghoul dissolves, then the pool empties', async ({ page }) => {
+    const { errors, state: before } = await boot(page, '?still&seed=3');
+    expect(before.dissolving).toBe(0);
+    expect(before.dissolvePeak).toBe(0);
+    await killOne(page, before);
+    // The burn lasts 0.8 s of sim: the peak is counted in page state when it starts, so a slow
+    // poll cannot miss it; then the material goes back to the pool.
+    await expect
+      .poll(async () => (await read(page)).dissolvePeak, { timeout: 10_000 })
+      .toBeGreaterThan(0);
+    await expect.poll(async () => (await read(page)).dissolving, { timeout: 10_000 }).toBe(0);
+    const s = await read(page);
+    expect(s.enemiesAlive).toBe(11);
+    expect(s.gpuErrors).toBe(0);
+    expect(errors).toEqual([]);
+  });
+
+  test('zoomed out, the LOD props draw on more than one level', async ({ page }) => {
+    const { errors } = await boot(page, '?still&seed=3');
+    const applied = await page.evaluate(() => (window as unknown as Win).__arpgApi!.zoom(64));
+    expect(applied).toBe(64);
+    await expect
+      .poll(
+        async () => {
+          const s = await read(page);
+          return s.cameraDistance === 64 ? s.lodCounts.filter((n) => n > 0).length : 0;
+        },
+        { timeout: 10_000 },
+      )
+      .toBeGreaterThan(1);
+    const s = await read(page);
+    expect(s.drawCalls).toBeLessThanOrEqual(DRAW_CALLS_MAX);
+    expect(s.gpuErrors).toBe(0);
     expect(errors).toEqual([]);
   });
 

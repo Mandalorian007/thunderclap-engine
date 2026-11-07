@@ -3,7 +3,8 @@
  * courtyard at dusk clicks (or taps, or holds, or sticks) to move over a baked navmesh, cuts
  * down ghouls that path in with crowd separation, and swaps between three gear sets on sockets.
  *
- * - Scene: `courtyard.ts`, every prop kind one `InstanceList` of `geom` meshes on PBR stone,
+ * - Scene: `courtyard.ts`, prop kinds as `InstanceList`s of `geom` meshes on PBR stone (walls
+ *   and pillars as `MeshLod` chains drawn per instance),
  *   six braziers with emissive cores, additive flame particles and a flickering point light
  *   each, a low warm sun with a shadow map, bloom, AO, vignette and a saturated grade.
  * - Hero: the skinned rig on `createStandardMaterial({ skin })`, an anim graph (a 1D idle/run
@@ -12,7 +13,8 @@
  *   `followPath3`, steered with a turn rate; a held pointer re-picks every 0.2 s.
  * - Enemies: twelve ghouls on the same skeleton (one `InstanceList`, one `SkinPalette`), each
  *   with its own mixer and graph, replanning a `NavPath3` toward the hero and stepping through
- *   `createCrowd`. Three hits kill; a death shrinks, bursts and respawns at the edge after 3 s.
+ *   `createCrowd`, each body a two-level `MeshLod`. Three hits kill; a death burns away on a
+ *   pooled `dissolve` material (shadow included), bursts and respawns at the edge after 3 s.
  * - HUD: health and mana orbs (`ui.meter({ shape: 'orb', trail: true })`), a four-slot ability
  *   row with cooldown sweeps, gear buttons, anchored health bars, floating damage numbers
  *   (`ui.floats(camera)`, the third hit on a ghoul a crit) and a north-up minimap of the whole
@@ -58,8 +60,10 @@ import {
   Lights,
   type Material,
   type Mesh,
+  type MeshLod,
   type PointLight,
   SkinPalette,
+  STANDARD_DISSOLVE_OFFSET,
   Transform,
   VERTEX_LAYOUT_SKINNED,
 } from '@thunderclap/engine/render';
@@ -93,6 +97,10 @@ const state: ArpgDemoState = {
   simTime: 0,
   drawCalls: 0,
   triangles: 0,
+  lodCounts: [],
+  dissolving: 0,
+  dissolvePeak: 0,
+  cameraDistance: 24,
   heroPos: [0, 0, 0],
   heroState: 'move',
   heroSpeed: 0,
@@ -124,6 +132,9 @@ demoWindow.__demo = state;
 const FOV = (34 * Math.PI) / 180;
 const PITCH = (50 * Math.PI) / 180;
 const CAM_DIST = 24;
+/** The wheel and `__arpgApi.zoom` clamp the camera distance to this range, metres. */
+const CAM_DIST_MIN = 14;
+const CAM_DIST_MAX = 64;
 const CAM_SMOOTH = 6;
 const RUN_SPEED = 6;
 const ACCEL = 14;
@@ -146,7 +157,12 @@ const ENEMY_REACH = 1.35;
 const ENEMY_DAMAGE = 5;
 const ENEMY_REPLAN = 0.5;
 const RESPAWN_AFTER = 3;
-const SHRINK_TIME = 0.45;
+/** Seconds a death takes to burn away (`dissolve.amount` 0 → 1). */
+const DISSOLVE_TIME = 0.8;
+/** Dissolve materials shared by the dying (a whirl or nova rarely fells more at once). */
+const DISSOLVE_POOL = 4;
+/** On-screen sphere height (target px) at which a ghoul keeps its hands, feet and hair. */
+const GHOUL_LOD_PX = [80];
 const SPAWN_RING = 22;
 
 type Action =
@@ -205,7 +221,8 @@ interface Enemy extends Actor {
   flash: number;
   params: InstanceParams;
   bar: HealthBar;
-  scale: number;
+  /** The dissolve pool slot while burning away, else -1. */
+  burn: number;
 }
 
 async function main(): Promise<void> {
@@ -396,12 +413,28 @@ async function main(): Promise<void> {
     skin: palette,
     roughness: 0.68,
   });
-  const ghoulMat = createStandardMaterial(renderer, {
-    label: 'ghoul-skin',
+  const ghoulDesc = {
     skin: palette,
-    baseColorFactor: [0.5, 0.82, 0.48, 1],
+    baseColorFactor: [0.5, 0.82, 0.48, 1] as [number, number, number, number],
     roughness: 0.92,
-  });
+  };
+  const ghoulMat = createStandardMaterial(renderer, { label: 'ghoul-skin', ...ghoulDesc });
+  // Deaths burn away: a small pool of the ghoul material with a dissolve (its shadow pass
+  // discards the same texels), each animated by one float at STANDARD_DISSOLVE_OFFSET.
+  const burns = Array.from({ length: DISSOLVE_POOL }, (_, i) => ({
+    mat: createStandardMaterial(renderer, {
+      label: `ghoul-dissolve-${i}`,
+      ...ghoulDesc,
+      dissolve: { amount: 0, edgeColor: [3.2, 1.2, 0.3], edgeWidth: 0.08, noise: 5 },
+    }),
+    amount: new Float32Array(1),
+    busy: false,
+  }));
+  const setBurn = (slot: number, amount: number) => {
+    const b = burns[slot]!;
+    b.amount[0] = amount;
+    b.mat.setUniforms(b.amount, STANDARD_DISSOLVE_OFFSET * 4);
+  };
 
   // ── The courtyard and its navmesh ───────────────────────────────────────
   const yard = buildCourtyard(renderer, mats);
@@ -516,6 +549,17 @@ async function main(): Promise<void> {
     });
   const heroMesh = skinnedMesh('hero', HERO_LOOK);
   const ghoulMesh = skinnedMesh('ghoul', GHOUL_LOOK);
+  const ghoulLod: MeshLod = {
+    meshes: [
+      ghoulMesh,
+      renderer.createMesh({
+        ...createBodyMesh(skeleton, GHOUL_LOOK, true),
+        layout: VERTEX_LAYOUT_SKINNED,
+        label: 'ghoul-lod1',
+      }),
+    ],
+    thresholdsPx: GHOUL_LOD_PX,
+  };
   const idleClip = createIdleClip();
   const runClip = createRunClip();
   const attackClip = createAttackClip();
@@ -632,7 +676,6 @@ async function main(): Promise<void> {
   const floatAt = new Float32Array(3);
   const crowd = createCrowd({ maxAgents: ENEMY_COUNT + 1, maxNeighbors: 8, neighborDist: 3 });
   const heroAgent = crowd.add({ x: hero.x, z: hero.z, radius: 0.45, maxSpeed: RUN_SPEED });
-  const enemyList = renderer.createInstanceList(ghoulMesh, ghoulMat, ENEMY_COUNT);
   const TINT: [number, number, number, number] = [1, 1, 1, 1];
   const FLASH: [number, number, number, number] = [2.4, 2.2, 2, 1];
   const barAt = new Float32Array(3);
@@ -674,13 +717,11 @@ async function main(): Promise<void> {
       flash: 0,
       params: { params: [0, 0, 0, 1 + i], tint: TINT, castShadow: true, receiveShadow: true },
       bar: healthBar(anchors, barAt),
-      scale: 1,
+      burn: -1,
     };
     enemies.push(e);
     e.t.setPosition(e.x, e.y, e.z);
-    enemyList.set(i, e.t, e.params);
   }
-  enemyList.castShadow = true;
 
   // ── HUD ─────────────────────────────────────────────────────────────────
   const healthOrb = ui.meter({
@@ -976,6 +1017,13 @@ async function main(): Promise<void> {
       e.alive = false;
       e.dead = 0;
       e.held = false;
+      e.graph.set('speed', 0);
+      // Burn away on a free pool material; with none free the body just drops out.
+      e.burn = burns.findIndex((b) => !b.busy);
+      if (e.burn >= 0) {
+        burns[e.burn]!.busy = true;
+        setBurn(e.burn, 0);
+      }
       state.kills++;
       deathEmit.x = e.x;
       deathEmit.y = e.y + 0.8;
@@ -1056,6 +1104,19 @@ async function main(): Promise<void> {
   const camAt = new Float32Array(3);
   const camGoal = new Float32Array(3);
   let camInit = false;
+  let camDist = CAM_DIST;
+  // The wheel pulls the camera back (the far LOD levels show) or in.
+  canvas.addEventListener(
+    'wheel',
+    (e) => {
+      e.preventDefault();
+      camDist = Math.max(
+        CAM_DIST_MIN,
+        Math.min(CAM_DIST_MAX, camDist * Math.exp(e.deltaY * 0.001)),
+      );
+    },
+    { passive: false },
+  );
 
   const updateHero = (dt: number) => {
     // Direct movement (keys, pad, touch stick) overrides a click path.
@@ -1174,7 +1235,6 @@ async function main(): Promise<void> {
           e.alive = true;
           e.hp = ENEMY_HP;
           e.dead = -1;
-          e.scale = 1;
           e.bar.set(1);
           e.replan = 0;
           e.path.length = 0;
@@ -1182,7 +1242,12 @@ async function main(): Promise<void> {
         } else {
           crowd.setPrefVelocity(e.agent, 0, 0);
           crowd.setPosition(e.agent, 500 + i * 4, 500);
-          e.scale = Math.max(0, 1 - e.dead / SHRINK_TIME);
+          if (e.burn >= 0) {
+            if (e.dead >= DISSOLVE_TIME) {
+              burns[e.burn]!.busy = false;
+              e.burn = -1;
+            } else setBurn(e.burn, e.dead / DISSOLVE_TIME);
+          }
         }
         continue;
       }
@@ -1221,6 +1286,10 @@ async function main(): Promise<void> {
       }
     }
     state.enemiesAlive = alive;
+    let burning = 0;
+    for (const e of enemies) if (e.burn >= 0) burning++;
+    state.dissolving = burning;
+    if (burning > state.dissolvePeak) state.dissolvePeak = burning;
     crowd.setPosition(heroAgent, hero.x, hero.z);
     crowd.setPrefVelocity(heroAgent, 0, 0);
     crowd.update(dt);
@@ -1264,8 +1333,6 @@ async function main(): Promise<void> {
       e.params.tint = e.flash > 0 ? FLASH : TINT;
       e.t.setPosition(e.x, e.y, e.z);
       e.t.setAxisAngle(0, 1, 0, e.yaw);
-      const s = e.scale;
-      e.t.setScale(s, s, s);
       barAt[0] = e.x;
       barAt[1] = e.y + 2.15;
       barAt[2] = e.z;
@@ -1345,7 +1412,7 @@ async function main(): Promise<void> {
       }
     }
 
-    // Camera: pitched PITCH below the horizon, CAM_DIST back along +z, easing after the hero.
+    // Camera: pitched PITCH below the horizon, camDist back along +z, easing after the hero.
     camGoal[0] = hero.x;
     camGoal[1] = hero.y + 0.8;
     camGoal[2] = hero.z;
@@ -1353,8 +1420,9 @@ async function main(): Promise<void> {
     camInit = true;
     for (let i = 0; i < 3; i++) camAt[i] = camAt[i]! + (camGoal[i]! - camAt[i]!) * k;
     camEye[0] = camAt[0]!;
-    camEye[1] = camAt[1]! + Math.sin(PITCH) * CAM_DIST;
-    camEye[2] = camAt[2]! + Math.cos(PITCH) * CAM_DIST;
+    camEye[1] = camAt[1]! + Math.sin(PITCH) * camDist;
+    camEye[2] = camAt[2]! + Math.cos(PITCH) * camDist;
+    state.cameraDistance = camDist;
     camera.lookAt(camEye, camAt);
 
     state.heroPos[0] = hero.x;
@@ -1370,10 +1438,6 @@ async function main(): Promise<void> {
   const flameP: InstanceParams = { castShadow: false };
 
   // ── Render ──────────────────────────────────────────────────────────────
-  let staticTris = 0;
-  for (const l of yard.lists) staticTris += (l.mesh.indexCount / 3) * l.count;
-  staticTris += (yard.flames.mesh.indexCount / 3) * yard.flames.count;
-  let triangles = 0;
   const scene: Scene<unknown, Frame, Camera> = {
     render(frame) {
       frame.clear(0.16, 0.1, 0.2);
@@ -1383,19 +1447,19 @@ async function main(): Promise<void> {
       palette.flush();
       for (const l of yard.lists) frame.list(l);
       frame.list(yard.flames);
-      for (let i = 0; i < enemies.length; i++) enemyList.set(i, enemies[i]!.t, enemies[i]!.params);
-      frame.list(enemyList);
+      for (const p of yard.lods) {
+        for (const t of p.transforms) frame.mesh(p.lod, p.material, t, p.params);
+      }
+      for (const e of enemies) {
+        if (e.alive) frame.mesh(ghoulLod, ghoulMat, e.t, e.params);
+        else if (e.burn >= 0) frame.mesh(ghoulLod, burns[e.burn]!.mat, e.t, e.params);
+      }
       frame.mesh(heroMesh, heroMat, hero.t, heroP);
       const s = sets[gear]!;
       frame.mesh(s.helmet, s.armour, helmT, gearP);
       frame.mesh(s.shoulder, s.armour, shLT, gearP);
       frame.mesh(s.shoulder, s.armour, shRT, gearP);
       frame.mesh(s.weapon, s.blade, weaponT, gearP);
-      triangles =
-        staticTris +
-        (ghoulMesh.indexCount / 3) * ENEMY_COUNT +
-        heroMesh.indexCount / 3 +
-        (s.helmet.indexCount + s.shoulder.indexCount * 2 + s.weapon.indexCount) / 3;
       trail.draw(frame);
       frame.drawable(fire);
       frame.drawable(particles);
@@ -1419,6 +1483,10 @@ async function main(): Promise<void> {
       camera.worldToScreen(x, y, z, screenPt);
       const c = surface.logicalToClient(screenPt.x, screenPt.y);
       return { x: c.x, y: c.y };
+    },
+    zoom(distance) {
+      camDist = Math.max(CAM_DIST_MIN, Math.min(CAM_DIST_MAX, distance));
+      return camDist;
     },
     summon() {
       const i = nearestEnemy(Number.POSITIVE_INFINITY);
@@ -1446,7 +1514,10 @@ async function main(): Promise<void> {
     }
     state.fps = fps;
     state.drawCalls = renderer.stats.drawCalls;
-    state.triangles = triangles;
+    state.triangles = renderer.stats.triangles;
+    const lc = renderer.stats.lodCounts;
+    state.lodCounts.length = lc.length;
+    for (let i = 0; i < lc.length; i++) state.lodCounts[i] = lc[i]!;
     state.gpuErrors = gpuDiagnostics.errorCount;
   };
 
