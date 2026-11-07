@@ -1,10 +1,11 @@
 /**
  * Ducking: while anything plays on a trigger bus (dialogue on `ui`), the target bus (music)
  * drops by `amount`, with an attack and a release. The level is a linear envelope advanced by
- * `update(dt)`; the target bus's gain is rewritten from the mixer's settings so it keeps
- * following `setVolume` and `setMuted`.
+ * `update(dt)` and handed to the mixer as the target bus's scale (`setBusScale`), so the mixer
+ * owns the write: the bus keeps following `setVolume` and `setMuted`, stays silent while
+ * `pause` holds it, and `unpause` lands on the ducked gain.
  */
-import { type AudioEngine, busGain, type OutputBus, type Voice } from './audio';
+import type { AudioEngine, OutputBus, Voice } from './audio';
 
 export interface DuckerOptions {
   /** Bus whose activity ducks the target. */
@@ -54,13 +55,6 @@ export function createDucker(mixer: AudioEngine, opts: DuckerOptions): Ducker {
   let analyserOn: AudioContext | null = null;
   const samples = new Float32Array(ANALYSER_SIZE);
   let disposed = false;
-  let lastWritten = -1;
-
-  const unsubSettings = mixer.onSettingsChange(() => {
-    // The mixer just wrote the plain bus gain; put the duck back on top.
-    lastWritten = -1;
-    write();
-  });
 
   function ensureAnalyser(): void {
     const ctx = mixer.context;
@@ -95,13 +89,8 @@ export function createDucker(mixer: AudioEngine, opts: DuckerOptions): Ducker {
   }
 
   function write(): void {
-    const ctx = mixer.context;
-    const node = mixer.busNode(opts.target);
-    if (!ctx || !node) return;
-    const g = busGain(mixer.settings[opts.target]) * (1 - amount * level);
-    if (g === lastWritten) return;
-    lastWritten = g;
-    node.gain.setTargetAtTime(g, ctx.currentTime, 0.005);
+    // The mixer skips an unchanged scale and holds the write while paused or in the background.
+    mixer.setBusScale(opts.target, 1 - amount * level, 0.005);
   }
 
   return {
@@ -118,7 +107,7 @@ export function createDucker(mixer: AudioEngine, opts: DuckerOptions): Ducker {
       // Snap at the ends so float residue never leaves a bus a hair below its volume.
       if (next > 1 - 1e-6) next = 1;
       else if (next < 1e-6) next = 0;
-      if (next === level && lastWritten >= 0) return;
+      if (next === level) return;
       level = next;
       write();
     },
@@ -134,10 +123,8 @@ export function createDucker(mixer: AudioEngine, opts: DuckerOptions): Ducker {
     dispose() {
       if (disposed) return;
       disposed = true;
-      unsubSettings();
       level = 0;
       active = false;
-      lastWritten = -1;
       write();
       analyser?.disconnect();
       analyser = null;
