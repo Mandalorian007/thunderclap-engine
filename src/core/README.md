@@ -59,7 +59,7 @@ done the input holds its last state. A replay attaches the input to an element o
 
 ## createGame: the tick clock
 
-`ctx.clock` (an `InputClock` from `@thunderclap/engine/input`, ms, starting at 0) is the game's
+`ctx.clock` (a `TickClock` from `@thunderclap/engine/input`, ms, starting at 0; only the loop or a playback advances it) is the game's
 tick clock (ws/core-4). The loop advances it by the fixed step in each fixed update (after the
 replay feed, before `input.update()`; with `sim: false`, by the frame delta once per frame), so
 N fixed steps move `ctx.clock.now()` by exactly N × step, and a paused (`loop.paused`), stopped
@@ -81,15 +81,21 @@ with a long-press on the same recorded tick and game time, and the loop does not
 clock a second time (`playback.clock === ctx.clock`). Once the recording is done the loop's step
 moves the clock again. `seek` never moves it.
 
-A replay started mid-session (from a menu, after the game has run live) is the same call made by
-the game: `createInputPlayback(ctx.input, recording, { clock: ctx.clock as TickClock, speed })`
-(`EngineCtx.clock` is typed `InputClock`, while the playback wants the `TickClock` createGame
-built; the game must still never advance it itself). The loop reads
-`ctx.input.playback` each fixed step (ws/core-5), so from the next step it runs `playback.step()`,
-skips its own advance while that playback drives `ctx.clock`, and resumes it once the recording
-ends; the long-press lands on its recorded tick (counted from the install) at any speed. Before
-ws/core-5 only a playback built from `input.replay` was stepped. Unlike `input.replay`, the input
-stays attached to the canvas, so real pointers and keys still reach it during such a replay.
+A replay started mid-session (from a menu, after the game has run live) is one call,
+`ctx.replay(recording, { speed?, tickMs? })` (ws/core-6), which returns the `GameReplay` (the
+`InputPlayback` it installs on `ctx.input`, driven by `ctx.clock`, plus `stop()`). For the
+replay's length the input is attached to the same detached element `input.replay` uses, so real
+pointers and keys never reach `ctx.input`, its gestures or its rays (whatever the player held is
+released), while the recorded pointers still do. The loop reads `ctx.input.playback` each fixed
+step (ws/core-5), so from the next step it runs `playback.step()`, skips its own advance while the
+playback drives `ctx.clock`, and resumes it once the recording ends; the long-press lands on its
+recorded tick (counted from the call) at any speed. On the first step after the last recorded
+tick, or at once on `stop()` (`detach()` is the same call), the playback is uninstalled and the
+input reattached to the canvas, its recorded keys released. A second `ctx.replay` stops the
+first; one started over an `input.replay` playback replaces it and returns the input to the
+detached element. A game can still build the playback itself with
+`createInputPlayback(ctx.input, recording, { clock: ctx.clock, speed })` (no cast: `ctx.clock` is
+a `TickClock`), but the input then stays attached to the canvas and the player can disturb it.
 
 ## Scenes
 

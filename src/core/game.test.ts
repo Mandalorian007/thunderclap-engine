@@ -6,7 +6,7 @@
  * The real-browser checks are in e2e/lifecycle.spec.ts and e2e/surface.spec.ts.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createInputPlayback, type TickClock } from '../input';
+import { createInputPlayback, type InputRecording } from '../input';
 import type { BootResult } from '../platform';
 import { mountSurface } from '../platform/surface';
 import { type FakeXr, FakeXrInputSource, installFakeXr } from '../platform/xr-fake';
@@ -668,10 +668,9 @@ describe('createGame: tick clock (ws/core-4)', () => {
         for (let i = 0; i < 30; i++) tickOnce(ctx, 16);
         expect(ctx.clock.now()).toBe(30 * step);
 
-        // The menu starts the replay. `ctx.clock` is typed `InputClock`; createGame builds a tick
-        // clock, which the playback needs to drive.
-        const clock = ctx.clock as TickClock;
-        const playback = createInputPlayback(ctx.input, recording, { clock, speed });
+        // The menu starts the replay on the game's tick clock (typed `TickClock`, ws/core-6).
+        const clock = ctx.clock;
+        const playback = createInputPlayback(ctx.input, recording, { clock: ctx.clock, speed });
         expect(ctx.input.playback).toBe(playback);
         const again = watch(ctx);
 
@@ -720,6 +719,202 @@ describe('createGame: tick clock (ws/core-4)', () => {
         expect(ctx.clock.now()).toBe((31 + recordedTicks) * step);
         expect(order).toEqual(['step', '/step', `advance:${step}`, 'update']);
         playback.detach();
+      }
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+});
+
+describe('createGame: ctx.replay (ws/core-6)', () => {
+  type Ctx = NonNullable<Awaited<ReturnType<typeof createGame>>>;
+  const realKey = (type: 'keydown' | 'keyup') =>
+    window.dispatchEvent(new KeyboardEvent(type, { code: 'Space' }));
+  const realPointer = (ctx: Ctx, type: string, id = 9) =>
+    ctx.surface.canvas.dispatchEvent(
+      new PointerEvent(type, {
+        pointerId: id,
+        pointerType: 'mouse',
+        isPrimary: true,
+        button: 0,
+        buttons: type === 'pointerdown' ? 1 : 0,
+        clientX: 100,
+        clientY: 100,
+        bubbles: true,
+      }),
+    );
+
+  /** Ten ticks with Space held on ticks 3 to 5, recorded under createGame. */
+  async function recordSpace(): Promise<InputRecording> {
+    const recorded = await createGame({
+      ...options([]),
+      input: { ...options([]).input, record: true },
+    });
+    if (!recorded) throw new Error('no ctx');
+    for (let i = 0; i < 10; i++) {
+      if (i === 3) recorded.input.keyDown('Space');
+      if (i === 6) recorded.input.keyUp('Space');
+      recorded.loop.tickOnce(1 / 60);
+    }
+    const recording = recorded.input.recorder?.stop();
+    if (!recording) throw new Error('no recording');
+    document.body.innerHTML = '<main id="root"></main>';
+    return recording;
+  }
+
+  it('real keys and pointers never reach ctx.input during the replay, and do again once it ends', async () => {
+    const recording = await recordSpace();
+    const ctx = await createGame(options([]));
+    if (!ctx) throw new Error('no ctx');
+    const held: boolean[] = [];
+    ctx.hooks.update = () => held.push(ctx.input.held('go'));
+    // Live: the real key reaches the input.
+    realKey('keydown');
+    ctx.loop.tickOnce(1 / 60);
+    expect(held).toEqual([true]);
+    // Still held when the replay starts: the replay releases it, the player's key-up is not seen.
+    const playback = ctx.replay(recording);
+    expect(ctx.input.playback).toBe(playback);
+    expect(playback.clock).toBe(ctx.clock);
+    held.length = 0;
+    let downs = 0;
+    for (let i = 0; i < 10; i++) {
+      // The player mashes Space and clicks the canvas on every tick of the replay.
+      realKey(i % 2 ? 'keyup' : 'keydown');
+      realPointer(ctx, 'pointerdown');
+      if (ctx.input.pointer.down) downs++;
+      realPointer(ctx, 'pointerup');
+      ctx.loop.tickOnce(1 / 60);
+    }
+    // Exactly the recording: Space on ticks 3 to 5, never the player's.
+    expect(held).toEqual([false, false, false, true, true, true, false, false, false, false]);
+    expect(downs).toBe(0);
+    expect(playback.done).toBe(true);
+    expect(ctx.input.playback).toBe(playback);
+
+    // The first step after the last tick gives the input back, before that step's update.
+    held.length = 0;
+    ctx.loop.tickOnce(1 / 60);
+    expect(ctx.input.playback).toBeNull();
+    expect(held).toEqual([false]);
+    realKey('keydown');
+    realPointer(ctx, 'pointerdown');
+    expect(ctx.input.pointer.down).toBe(true);
+    ctx.loop.tickOnce(1 / 60);
+    expect(held).toEqual([false, true]);
+    realKey('keyup');
+    realPointer(ctx, 'pointerup');
+    ctx.loop.tickOnce(1 / 60);
+    expect(held).toEqual([false, true, false]);
+  });
+
+  it('stop() gives the input back at once; a second replay replaces the first', async () => {
+    const recording = await recordSpace();
+    const ctx = await createGame(options([]));
+    if (!ctx) throw new Error('no ctx');
+    const first = ctx.replay(recording);
+    for (let i = 0; i < 4; i++) ctx.loop.tickOnce(1 / 60);
+    expect(ctx.input.held('go')).toBe(true);
+    // A second replay stops the first and starts from tick 0 with nothing held (the action
+    // state is read at the next update).
+    const second = ctx.replay(recording);
+    expect(ctx.input.playback).toBe(second);
+    first.stop();
+    expect(ctx.input.playback).toBe(second);
+    realKey('keydown');
+    ctx.loop.tickOnce(1 / 60);
+    expect(ctx.input.held('go')).toBe(false);
+    second.stop();
+    expect(ctx.input.playback).toBeNull();
+    second.stop();
+    realKey('keydown');
+    ctx.loop.tickOnce(1 / 60);
+    expect(ctx.input.held('go')).toBe(true);
+    realKey('keyup');
+    // Live steps move the clock again.
+    const before = ctx.clock.now();
+    ctx.loop.tickOnce(1 / 60);
+    expect(ctx.clock.now()).toBeCloseTo(before + 1000 / 60, 9);
+  });
+
+  it('a long-press fires on its recorded tick at 1× and 4×, with a real tap ignored', async () => {
+    const step = 15.625;
+    let wall = 1000;
+    vi.spyOn(performance, 'now').mockImplementation(() => wall);
+    try {
+      const watch = (ctx: Ctx) => {
+        let tick = 0;
+        const t0 = ctx.clock.now();
+        const fired: string[] = [];
+        ctx.gestures.onGesture((kind, phase) =>
+          fired.push(`${kind}:${phase}@${tick}/${ctx.clock.now() - t0}`),
+        );
+        ctx.input.onUpdated(() => tick++);
+        return fired;
+      };
+      const tickOnce = (ctx: Ctx, spacing: number) => {
+        wall += spacing;
+        ctx.loop.tickOnce(1 / 64);
+      };
+      const press = (ctx: Ctx, type: string, buttons: number) => {
+        const e = new PointerEvent(type, {
+          pointerId: 3,
+          pointerType: 'touch',
+          clientX: 200,
+          clientY: 150,
+          isPrimary: true,
+          button: 0,
+          buttons,
+          bubbles: true,
+        });
+        Object.defineProperty(e, 'timeStamp', { value: wall - 2 });
+        ctx.surface.canvas.dispatchEvent(e);
+      };
+      const recorded = await createGame({
+        ...options([]),
+        sim: { step: 1 / 64 },
+        input: { ...options([]).input, record: true },
+      });
+      if (!recorded) throw new Error('no ctx');
+      const live = watch(recorded);
+      tickOnce(recorded, 16);
+      press(recorded, 'pointerdown', 1);
+      for (let i = 0; i < 40; i++) tickOnce(recorded, 16);
+      press(recorded, 'pointerup', 0);
+      tickOnce(recorded, 16);
+      tickOnce(recorded, 16);
+      const recording = recorded.input.recorder?.stop();
+      if (!recording) throw new Error('no recording');
+      expect(live.filter((g) => g.startsWith('longPress')).length).toBe(1);
+      expect(live.some((g) => g.startsWith('tap'))).toBe(false);
+      const recordedTicks = 43;
+
+      for (const speed of [1, 4]) {
+        document.body.innerHTML = '<main id="root"></main>';
+        wall = 50_000;
+        const ctx = await createGame({ ...options([]), sim: { step: 1 / 64 } });
+        if (!ctx) throw new Error('no ctx');
+        for (let i = 0; i < 30; i++) tickOnce(ctx, 16);
+        expect(ctx.clock.now()).toBe(30 * step);
+        const playback = ctx.replay(recording, { speed });
+        expect(playback.speed).toBe(speed);
+        const again = watch(ctx);
+        let loopTicks = 0;
+        while (!playback.done && loopTicks < 60) {
+          // A real tap on the canvas mid-replay would be a `tap` gesture if it got through.
+          if (loopTicks === 2) {
+            realPointer(ctx, 'pointerdown');
+            realPointer(ctx, 'pointerup');
+          }
+          tickOnce(ctx, 50);
+          loopTicks++;
+        }
+        expect(loopTicks).toBe(Math.ceil(recordedTicks / speed));
+        expect(again).toEqual(live);
+        expect(ctx.clock.now()).toBe((30 + recordedTicks) * step);
+        tickOnce(ctx, 50);
+        expect(ctx.input.playback).toBeNull();
+        expect(ctx.clock.now()).toBe((31 + recordedTicks) * step);
       }
     } finally {
       vi.restoreAllMocks();
