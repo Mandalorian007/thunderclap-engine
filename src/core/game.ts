@@ -67,7 +67,13 @@ import {
   XrSurface,
 } from '../platform';
 import { type PostSettingsPatch, PostStack } from '../post';
-import { type Camera, type Frame, installGpuErrorLogging, Renderer } from '../render';
+import {
+  type Camera,
+  type Frame,
+  installGpuErrorLogging,
+  Renderer,
+  type SceneTargetAux,
+} from '../render';
 import { createOverlay, followSafeArea, type LayoutSpec, type Overlay, PadNav } from '../ui';
 import type { Time } from './loop';
 import { GameLoop } from './loop';
@@ -135,6 +141,15 @@ export interface CreateGameOptions<A extends string, S extends FlushableSave | n
   surface?: Omit<SurfaceOptions, 'logicalWidth' | 'logicalHeight'>;
   /** Initial post settings (`PostStack` patch). */
   post?: PostSettingsPatch;
+  /**
+   * Aux attachments of the renderer's scene target (`RendererOptions.aux`, ws/core-7): `{
+   * velocity: true }` gives `post.motionBlur` per-object motion (lists and batches with
+   * `velocity`/`prevMatrices`, drawn with an `aux` material such as the standard one) instead
+   * of camera motion only; `{ roughMetal: true }` feeds SSR's per-surface fade. They reach the
+   * post stack as `PostInputs.velocity` / `roughMetal`. Default none: the target, pipelines and
+   * frames are what they were without the option. The XR scene target has none.
+   */
+  aux?: SceneTargetAux;
   particles?: ParticleSystemOptions;
   /** The page the game runs in. Default `createWebHost()`. */
   host?: Host;
@@ -245,8 +260,19 @@ export interface XrControl {
   readonly surface: XrSurface | null;
 }
 
-/** `ctx.replay(recording, opts)`: ticks per `step()` and ms per fed tick (`InputPlaybackOptions`). */
-export type ReplayOptions = Pick<InputPlaybackOptions, 'speed' | 'tickMs'>;
+/**
+ * `ctx.replay(recording, opts)`: ticks per `step()` and ms per fed tick (`InputPlaybackOptions`),
+ * and `onEnd`.
+ */
+export interface ReplayOptions extends Pick<InputPlaybackOptions, 'speed' | 'tickMs'> {
+  /**
+   * The recording ended (ws/core-7): called once, on the fixed step where the loop uninstalls
+   * the replay (the first step after its last tick), after the input is reattached and before
+   * that step's input update and `hooks.update`. Not called on `stop()`, nor when a second
+   * `ctx.replay` replaces this one. A `ctx.replay` started here is stepped from the next step.
+   */
+  onEnd?(): void;
+}
 
 /**
  * What `ctx.replay` returns: the `InputPlayback` installed on `ctx.input` (it is
@@ -362,7 +388,11 @@ export async function createGame<
   installGpuErrorLogging(gpu.device);
 
   // ── GPU ────────────────────────────────────────────────────────────────
-  const renderer = new Renderer(gpu, { logicalWidth: design.width, logicalHeight: design.height });
+  const renderer = new Renderer(gpu, {
+    logicalWidth: design.width,
+    logicalHeight: design.height,
+    aux: opts.aux,
+  });
   const post = new PostStack(renderer, opts.post);
   renderer.post = post;
   const particles = new ParticleSystem(renderer, opts.particles);
@@ -431,6 +461,8 @@ export async function createGame<
   input.setPointerTransform((x, y) => surface.clientToLogical(x, y));
   /** The playback `ctx.replay` installed, until it ends or is stopped. */
   let replaying: GameReplay | null = null;
+  /** Its `onEnd`, cleared by `stop()` so a stopped or replaced replay never reports an end. */
+  let replayEnd: (() => void) | undefined;
   const replay = (recording: InputRecording, ropts: ReplayOptions = {}): GameReplay => {
     replaying?.stop();
     input.playback?.detach();
@@ -446,10 +478,12 @@ export async function createGame<
       uninstall();
       if (replaying !== pb) return;
       replaying = null;
+      replayEnd = undefined;
       // Releases the recording's last held keys and buttons too.
       attachHome();
     };
     replaying = pb;
+    replayEnd = ropts.onEnd;
     return pb;
   };
 
@@ -478,7 +512,11 @@ export async function createGame<
         // this step's update, so its last tick was updated with the replayed state (ws/core-6).
         const pb = input.playback;
         const fed = pb ? pb.step() : false;
-        if (!fed && replaying !== null && pb === replaying) replaying.stop();
+        if (!fed && replaying !== null && pb === replaying) {
+          const onEnd = replayEnd;
+          replaying.stop();
+          onEnd?.();
+        }
         if (!fed || pb?.clock !== clock) clock.advance(dt * 1000);
         input.update();
         padNav.update();
