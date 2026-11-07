@@ -1,5 +1,6 @@
 import type { BindingSet } from './bindings';
 import { ALL_LAYERS, CAMERA_BLOCK_FLOATS, Camera, type CameraRect, FRUSTUM_FLOATS } from './camera';
+import { type RendererCaps, rendererCaps } from './compressed';
 import { installGpuErrorLogging } from './diagnostics';
 import {
   type Drawable,
@@ -16,6 +17,7 @@ import { FullscreenPass, type FullscreenPassDesc } from './fullscreen';
 import { type GpuPassTimes, GpuTimer, supportsTimestamps } from './gpu-timer';
 import { InstanceList, type InstanceListOptions } from './instance-list';
 import { LIGHTS_BLOCK_FLOATS, packInstanceFlags, type ShadowUniforms } from './lights';
+import { DEFAULT_LOD_HYSTERESIS, lodSizePx, type MeshLod, pickLodLevel } from './lod';
 import {
   DEPTH_FORMAT,
   type DepthMode,
@@ -34,7 +36,7 @@ import {
   type SceneTargetDesc,
   type SceneTargetViewport,
 } from './scene-target';
-import { DEFAULT_SHADOW_SIZE, ShadowMap } from './shadow';
+import { DEFAULT_SHADOW_SIZE, SHADOW_FORMAT, ShadowMap } from './shadow';
 import {
   bytesPerTexel,
   createSamplers,
@@ -156,6 +158,12 @@ export interface RenderStats {
    * passes are not counted.
    */
   passes: number;
+  /**
+   * Instances drawn per LOD level (`frame.mesh` with a `MeshLod`, ws/render-5), summed over the
+   * scene passes of the frame: `lodCounts[i]` drew level `i`. Grows to the longest chain drawn;
+   * zeroed by `beginFrame`.
+   */
+  lodCounts: number[];
 }
 
 /** Options of `Renderer.textureFromSource`. */
@@ -315,6 +323,15 @@ interface DrawRec {
   /** Index range of the draw (`InstanceParams.range`); `rangeCount` -1: the whole mesh. */
   rangeFirst: number;
   rangeCount: number;
+  /** The LOD chain `mesh` is picked from per view (`frame.mesh` with a `MeshLod`), else null. */
+  lod: MeshLod | null;
+  /** What the LOD hysteresis is keyed on: the draw's `Transform` or params object. */
+  lodKey: object | null;
+  /** The level picked for this view; -1 without a chain. */
+  lodLevel: number;
+  /** Scene sort keys grouping opaque LOD draws per (mesh, material); -1 for every other draw. */
+  lk: number;
+  lt: number;
 }
 
 /**
@@ -350,6 +367,13 @@ export class Renderer implements FrameSink {
    */
   camera: Camera;
   readonly samplers: Record<SamplerKind, GPUSampler>;
+  /**
+   * What the device can do beyond core WebGPU, read from its features at construction
+   * (ws/render-5): `caps.compressed.bc` / `.etc2` / `.astc` are the block-compression families
+   * `uploadKtx2` can upload. A device gets them only when created with them
+   * (`compressionFeatures(adapter)` in `requiredFeatures`).
+   */
+  readonly caps: RendererCaps;
   readonly globalsLayout: GPUBindGroupLayout;
   /**
    * The engine uniforms of the frame's first view (`@group(0)`: globals, camera and lights
@@ -372,7 +396,13 @@ export class Renderer implements FrameSink {
     culled: 0,
     shadowDraws: 0,
     passes: 0,
+    lodCounts: [],
   };
+  /**
+   * The band around each LOD threshold an instance must cross before it changes level, as a
+   * fraction of the threshold (default 0.1): see `pickLodLevel`. 0 turns it off.
+   */
+  lodHysteresis = DEFAULT_LOD_HYSTERESIS;
   /** See `FrameTiming`. Only updated while `timingEvery > 0`. */
   readonly timing: FrameTiming = {
     gpuMs: 0,
@@ -445,6 +475,10 @@ export class Renderer implements FrameSink {
   private batchInstances = 0;
   /** Batch records this frame (lists included). */
   private batchRecs = 0;
+  /** Records with a LOD chain this frame. */
+  private lodRecs = 0;
+  /** The level each LOD draw's key drew last (hysteresis). */
+  private readonly lodLevels = new WeakMap<object, number>();
   /** Batch or list draws of the current view's scene pass, and instances `copyBatch` dropped. */
   private sceneBatches = 0;
   private batchCulled = 0;
@@ -545,6 +579,7 @@ export class Renderer implements FrameSink {
     this.camera = Camera.ortho2d(this.logicalWidth, this.logicalHeight);
     const device = this.device;
     installGpuErrorLogging(device);
+    this.caps = rendererCaps(device);
     this.gpuTimer = supportsTimestamps(device) ? new GpuTimer(device) : null;
     if (this.gpuTimer) {
       this.timing.source = 'timestamp';
@@ -890,6 +925,7 @@ export class Renderer implements FrameSink {
     this.instanceCount = 0;
     this.batchInstances = 0;
     this.batchRecs = 0;
+    this.lodRecs = 0;
     this.scene.count = 0;
     this.shadowCmds.count = 0;
     this.recCount = 0;
@@ -907,6 +943,8 @@ export class Renderer implements FrameSink {
     this.stats.culled = 0;
     this.stats.shadowDraws = 0;
     this.stats.passes = 0;
+    const lc = this.stats.lodCounts;
+    for (let i = 0; i < lc.length; i++) lc[i] = 0;
     const f = this.frame;
     f.time = time;
     f.dt = dt;
@@ -1377,6 +1415,7 @@ export class Renderer implements FrameSink {
     tr: Transform | null,
     p: DrawParams | InstanceParams,
     bounds: MeshBounds | null,
+    lod: MeshLod | null = null,
   ): void {
     let offset = -1;
     const b = material.bindings;
@@ -1457,6 +1496,11 @@ export class Renderer implements FrameSink {
     if (range) {
       r.rangeFirst = range.first;
       r.rangeCount = range.count;
+    }
+    if (lod) {
+      r.lod = lod;
+      r.lodKey = tr ?? p;
+      this.lodRecs++;
     }
   }
 
@@ -1554,9 +1598,19 @@ export class Renderer implements FrameSink {
         mb: null,
         rangeFirst: 0,
         rangeCount: -1,
+        lod: null,
+        lodKey: null,
+        lodLevel: -1,
+        lk: -1,
+        lt: -1,
       });
     }
     const r = this.recs[this.recCount++]!;
+    r.lod = null;
+    r.lodKey = null;
+    r.lodLevel = -1;
+    r.lk = -1;
+    r.lt = -1;
     r.batch = null;
     r.list = null;
     r.mb = null;
@@ -1600,7 +1654,17 @@ export class Renderer implements FrameSink {
     }
     this.sceneBatches = 0;
     this.sceneListInstances = 0;
-    if (!depth && !cull && this.ordered && visible === n && !shadowCfg && this.batchRecs === 0) {
+    const lods = this.lodRecs > 0;
+    if (lods) this.pickLods(cam);
+    if (
+      !depth &&
+      !cull &&
+      !lods &&
+      this.ordered &&
+      visible === n &&
+      !shadowCfg &&
+      this.batchRecs === 0
+    ) {
       for (let i = 0; i < n; i++) {
         const r = recs[i]!;
         this.batch(this.scene, r, r.drawable ? null : this.scenePipeline(r, 0), r.inst);
@@ -1635,6 +1699,7 @@ export class Renderer implements FrameSink {
         continue;
       }
       idx[k++] = i;
+      if (r.lod) this.countLod(r.lodLevel);
       if (!depth) continue;
       if (r.drawable) {
         // No position: sorts as the nearest blended draw of its order (drawn after the rest).
@@ -1670,7 +1735,7 @@ export class Renderer implements FrameSink {
     this.culledCount = culled;
     this.sortDepth = depth;
     this.sortShadow = false;
-    if (depth || !this.ordered) this.sortDraws(this.sortIdx, this.sortTmp, k);
+    if (depth || !this.ordered || lods) this.sortDraws(this.sortIdx, this.sortTmp, k);
 
     // The shadow list's instances follow the scene's in the same upload: room for both.
     const total = (this.instanceCount + this.batchInstances) * INSTANCE_FLOATS;
@@ -1721,6 +1786,60 @@ export class Renderer implements FrameSink {
     this.sceneCount = inst;
     this.uploadCount = shadowCfg ? this.buildShadowDraws(camLayers, dst, inst) : inst;
     return depth;
+  }
+
+  /**
+   * Pick this view's level of every LOD record (`frame.mesh` with a `MeshLod`): the projected
+   * height of its world sphere through `cam` on the view's viewport (`lodSizePx`) times
+   * `cam.lodBias`, against the chain's thresholds with `lodHysteresis` around the level its key
+   * drew last (`pickLodLevel`). Sets the record's `mesh` (so the scene and shadow lists draw the
+   * level) and, for opaque materials, the sort keys that group a level's instances into one
+   * draw. No allocation.
+   */
+  private pickLods(cam: Camera): void {
+    const recs = this.recs;
+    const n = this.recCount;
+    const proj = cam.projection;
+    const eye = cam.position;
+    const ex = eye[0]!;
+    const ey = eye[1]!;
+    const ez = eye[2]!;
+    const vpH = this.viewRect.height;
+    const bias = cam.lodBias;
+    const h = this.lodHysteresis;
+    const levels = this.lodLevels;
+    for (let i = 0; i < n; i++) {
+      const r = recs[i]!;
+      const lod = r.lod;
+      if (!lod) continue;
+      const meshes = lod.meshes;
+      let level = 0;
+      if (meshes.length > 1) {
+        const dist = Math.hypot(r.bx - ex, r.by - ey, r.bz - ez);
+        const size = r.br >= 0 ? lodSizePx(r.br, dist, proj, vpH) * bias : Number.POSITIVE_INFINITY;
+        const key = r.lodKey!;
+        const prev = levels.get(key) ?? -1;
+        level = pickLodLevel(size, lod.thresholdsPx, meshes.length, prev, h);
+        if (level !== prev) levels.set(key, level);
+      }
+      const mesh = meshes[level]!;
+      r.mesh = mesh;
+      r.lodLevel = level;
+      if (r.material!.blend === 'opaque') {
+        r.lk = this.keyOf(mesh);
+        r.lt = this.keyOf(r.material!);
+      } else {
+        r.lk = -1;
+        r.lt = -1;
+      }
+    }
+  }
+
+  /** Count one scene instance of LOD level `level` in `stats.lodCounts`. */
+  private countLod(level: number): void {
+    const lc = this.stats.lodCounts;
+    while (lc.length <= level) lc.push(0);
+    lc[level]!++;
   }
 
   /**
@@ -1815,8 +1934,11 @@ export class Renderer implements FrameSink {
     for (let j = 0; j < k; j++) {
       const r = recs[idx[j]!]!;
       const layout = r.mesh!.layout;
-      const bindings = layout.skinned ? r.material!.bindings?.layout : undefined;
-      const pipeline = shadow.pipelineFor(layout, bindings);
+      const material = r.material!;
+      // A material with a shadow fragment (a dissolve) discards in the shadow pass too.
+      const pipeline = material.shadowFragment
+        ? material.shadowPipelineFor(layout, SHADOW_FORMAT)
+        : shadow.pipelineFor(layout, layout.skinned ? material.bindings?.layout : undefined);
       if (r.batch) {
         const list = r.list;
         if (list) {
@@ -1938,9 +2060,13 @@ export class Renderer implements FrameSink {
       return a < b;
     }
     if (ra.order !== rb.order) return ra.order < rb.order;
-    if (this.sortDepth) {
-      if (ra.group !== rb.group) return ra.group < rb.group;
-      if (ra.dist !== rb.dist) return ra.group === 0 ? ra.dist < rb.dist : ra.dist > rb.dist;
+    if (this.sortDepth && ra.group !== rb.group) return ra.group < rb.group;
+    // Opaque LOD draws group per (level mesh, material) so each level is one instanced call;
+    // every other draw has -1 here, so a frame without LOD sorts as before.
+    if (ra.lk !== rb.lk) return ra.lk < rb.lk;
+    if (ra.lt !== rb.lt) return ra.lt < rb.lt;
+    if (this.sortDepth && ra.dist !== rb.dist) {
+      return ra.group === 0 ? ra.dist < rb.dist : ra.dist > rb.dist;
     }
     return a < b;
   }
@@ -2125,9 +2251,14 @@ export class Renderer implements FrameSink {
         pass.setPipeline(pipeline);
         curPipeline = pipeline;
       }
-      // A skinned caster's pipeline has the material group (its joint palette) as group 1.
+      // A skinned caster's pipeline has the material group (its joint palette) as group 1, as
+      // does a material's own shadow pipeline (`shadowFragmentEntry`).
       const m = c.material!;
-      if (mesh.layout.skinned && m.bindings && (m !== curMaterial || c.offset !== curOffset)) {
+      if (
+        (mesh.layout.skinned || m.shadowFragment) &&
+        m.bindings &&
+        (m !== curMaterial || c.offset !== curOffset)
+      ) {
         if (c.offset >= 0) {
           this.dynamicOffsets[0] = c.offset;
           pass.setBindGroup(1, m.bindings.bindGroup, this.dynamicOffsets);

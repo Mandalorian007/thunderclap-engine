@@ -97,6 +97,11 @@ export class Camera {
    */
   cull = false;
   /**
+   * Scales the projected size the renderer picks `MeshLod` levels by (ws/render-5): above 1
+   * keeps finer levels farther out, below 1 drops to coarser ones sooner. Default 1.
+   */
+  lodBias = 1;
+  /**
    * Last frame's unjittered `viewProjection`, copied by the renderer at the start of each view
    * it draws this camera through (`recordHistory`), before the camera is read; identity until
    * the first frame. What a reprojecting post pass (TAA, motion blur) reads through
