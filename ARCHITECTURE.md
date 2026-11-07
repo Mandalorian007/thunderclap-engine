@@ -36,6 +36,8 @@ Games import only the exports map: `@thunderclap/engine` (the `"."` entry: `crea
 
 The package ships TypeScript source; the game's Vite build compiles it. There is no separate engine build until Phase 5 (extraction and publishing). A game starts in its own repo with `pnpm create-game <dir> --template <name>` (ws/scaffold): the template is copied out of `templates/`, its `package.json` renamed and pointed at the engine by version (or `--engine <spec>` for a `link:`, `file:` or `github:` spec), and its `CLAUDE.md` kept; `pnpm check` scaffolds and typechecks one (`check:create-game`).
 
+**API surface (ws/harden-api).** *Today:* `api/<entry>.api.txt` is the committed snapshot of the public surface, one file per `package.json` `exports` entry that points into `src/` (`api/index.api.txt` for `"."`, `api/testing.api.txt` for `./testing`). `scripts/api-surface.mjs` writes it from the repo's own `tsc` declaration emit (tests excluded): every exported name, sorted, each with its declared signature, tagged `alias of` or `type-only` where that applies, with comments, private members and inline `import("…")` qualifiers stripped and `@deprecated` kept, so a doc edit or a file move is not an API change but a deprecation is. `pnpm check:api` (inside `pnpm check`) fails on any difference from the committed files and prints the diff; `pnpm api:update` rewrites them (and deletes a file whose entry is gone). A branch that changes the public API commits the updated `api/*.api.txt`, so every surface change shows up in review as a diff of that file.
+
 ## Ground rules
 
 1. **Promotion rule.** Code enters the engine only if Last Rune uses it, the next game plausibly would, and its API has zero game nouns.

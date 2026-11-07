@@ -267,10 +267,14 @@ the types below restate `AnimationClip`, `AnimationChannel` and `Skeleton` struc
   `WEIGHTS_0` as 4 floats per vertex (normalised integers divided). Both or neither, else
   `GltfError`; both follow the unwelding when flat normals are generated.
 - `interleaveSkinned(primitive): SkinnedVertices` (`{ vertices: ArrayBuffer; layout: 'skinned' }`)
-  packs `SKINNED_VERTEX_STRIDE` (56) bytes per vertex: the 12 `VERTEX_LAYOUT_3D` floats, the four
-  joint bytes at `SKINNED_JOINTS_OFFSET` (48), the four weights as `unorm8` at
-  `SKINNED_WEIGHTS_OFFSET` (52), renormalised and rounded so they sum to exactly 255. Throws for
+  packs render's `VERTEX_SKINNED_STRIDE` (56) bytes per vertex: the 12 `VERTEX_LAYOUT_3D` floats,
+  the four joint bytes at `SKIN_JOINTS_BYTE_OFFSET` (48), the four weights as `unorm8` at
+  `SKIN_WEIGHTS_BYTE_OFFSET` (52), renormalised and rounded so they sum to exactly 255. Throws for
   an unskinned primitive or joint indices above 255.
+- Deprecated aliases (ws/harden-api, removed next minor): `SKINNED_VERTEX_STRIDE`,
+  `SKINNED_JOINTS_OFFSET` and `SKINNED_WEIGHTS_OFFSET` are the render constants above under
+  their old `assets` names; import `VERTEX_SKINNED_STRIDE`, `SKIN_JOINTS_BYTE_OFFSET` and
+  `SKIN_WEIGHTS_BYTE_OFFSET` from `@thunderclap/engine/render` instead.
 - `skeletonFromSkin(doc, skinIndex): GltfSkeleton` spans every node of the document, so a
   channel's `node` indexes the pose directly: `parents: Int16Array` (-1 for a root), `rest`
   (10 floats per node from its TRS: `tx ty tz qx qy qz qw sx sy sz`), `inverseBind` (the skin's

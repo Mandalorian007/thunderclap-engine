@@ -17,7 +17,7 @@ export {
   type Migrations,
   runMigrations,
 } from './migrate';
-export { type Infer, type Schema, s } from './schema';
+export { type Infer, type NumberOptions, type Schema, s } from './schema';
 export {
   type BindTarget,
   createSettingsStore,
