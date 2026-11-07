@@ -7,7 +7,7 @@
 | Role | Who | Owns |
 | --- | --- | --- |
 | User | the human | vision calls, the forks the PM brings (at most three per track, each with a recommendation), pushes and releases |
-| PM | the main session | `docs/VISION.md`, `docs/DECISIONS.md`, `docs/STATUS.md`, `docs/PM.md`, `docs/briefs/`; waves, briefs, dispatch, the tracker. **The PM never writes or merges code.** |
+| PM | the main session | `docs/VISION.md`, `docs/DECISIONS.md`, `docs/STATUS.md`, `docs/IDEAS.md`, `docs/PM.md`, `docs/briefs/`; waves, briefs, dispatch, the tracker. **The PM never writes or merges code.** |
 | Engineer | one agent per workstream, in its own worktree | one `ws/<name>` branch; the code, tests, module README, `ARCHITECTURE.md` *Today* text and `CHANGELOG.md` entry for that change |
 | Integrator | an agent the PM dispatches per merge | merging a green branch to `main`, resolving conflicts, re-running the gate on the merged tree, reporting what was resolved |
 | Reviewer | an agent, only when a branch needs one | an unanchored read of a diff; it fixes, it does not send lists back |
