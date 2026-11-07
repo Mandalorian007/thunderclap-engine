@@ -2,6 +2,65 @@
 
 Pointer (mouse/touch/pen), keyboard and gamepad mapped to named **actions**. The engine has no default bindings; the game supplies them. No dependencies.
 
+## Quick use
+
+<!-- snippet:check -->
+```ts
+import { Input } from '@thunderclap/engine/input';
+
+declare const canvas: HTMLCanvasElement;
+
+const input = new Input({
+  jump: [{ key: 'Space' }, { padButton: 0 }],
+  left: [{ key: 'ArrowLeft' }, { key: 'KeyA' }, { padAxis: 0, dir: -1 }],
+});
+input.attach({ pointerTarget: canvas });
+
+// once per fixed-step tick, before game logic:
+input.update();
+let x = 0;
+if (input.pressed('jump')) console.log('jump');
+if (input.held('left')) x -= 4 * input.value('left');
+```
+
+## Entry points
+
+| Name | What it is for |
+| --- | --- |
+| `Input` | actions over keys, mouse, touch and pads; `createGame` gives you `ctx.input` |
+| `input.pressed / held / released / value` | read an action each tick |
+| `parseBindings / serializeBindings` | rebinding that survives a save |
+| `createGestures(...)` | tap, drag, pan and pinch |
+| `createPointerRouter(...)` | pointers as world rays, routed to targets |
+| `createLook(...)` | mouse, stick and touch look for a camera |
+| `Follow` | a third-person follow camera |
+| `glyphForBinding(...)` | the key or button prompt to show |
+
+## Contents
+
+- [Usage](#usage)
+- [Pointer dispatcher](#pointer-dispatcher)
+- [Touch zones](#touch-zones)
+- [Semantics](#semantics)
+- [Triggers and chords](#triggers-and-chords)
+- [Rebinding](#rebinding)
+- [Contexts](#contexts)
+- [Input buffer](#input-buffer)
+- [Sticks](#sticks)
+- [Rumble](#rumble)
+- [Prompt glyphs](#prompt-glyphs)
+- [Embedding (itch.io iframe)](#embedding-itchio-iframe)
+- [Clock](#clock)
+- [Gestures](#gestures)
+- [Rays and the pointer router](#rays-and-the-pointer-router)
+- [Look](#look)
+- [Orbit look](#orbit-look)
+- [Gyro aim](#gyro-aim)
+- [Look tap](#look-tap)
+- [Follow](#follow)
+- [Testing / automation](#testing--automation)
+- [Recording and replay](#recording-and-replay)
+
 ## Usage
 
 ```ts

@@ -1,5 +1,56 @@
 # `@thunderclap/engine/geom`
 
+Procedural geometry on the CPU: primitives, sweeps, heightfields, tangents, operations, LODs, hulls and static collision with slide queries. Every builder returns a `Geometry` that `renderer.createMesh` takes as it is; where it goes in the world and what collides with what are the game's. No GPU, no DOM.
+
+## Quick use
+
+<!-- snippet:check -->
+```ts
+import { box, createHeightfield, heightAt, heightfieldGeometry } from '@thunderclap/engine/geom';
+import type { Renderer } from '@thunderclap/engine/render';
+
+declare const renderer: Renderer;
+
+const crate = renderer.createMesh(box({ size: [1, 1, 2], color: [0.8, 0.5, 0.2, 1] }));
+const ground = createHeightfield(65, 65, { scale: [0.5, 1, 0.5], origin: [-16, 0, -16] });
+const terrain = renderer.createMesh(heightfieldGeometry(ground));
+const y = heightAt(ground, 3, 4); // bilinear height under a point
+console.log(crate, terrain, y);
+```
+
+## Entry points
+
+| Name | What it is for |
+| --- | --- |
+| `box / sphere / capsule / cylinder / plane` | primitive builders |
+| `extrude / lathe / tube` | shapes swept from 2D profiles |
+| `createHeightfield / heightfieldGeometry / heightAt` | terrain grids, their mesh and height queries |
+| `computeTangents(geometry)` | the 16-float tangent layout for normal maps |
+| `mergeGeometry / transformGeometry` | combine and place geometry |
+| `createStaticCollider(...)` | triangle collision with `raycast`, `overlap` and `slide` |
+| `slideTiles(...)` | a mover against a 2D tile grid |
+| `createIso(opts)` | isometric projection helpers |
+
+## Contents
+
+- [Overview](#overview)
+- [Geometry](#geometry)
+- [Clone](#clone)
+- [Builders](#builders)
+- [Sweeps](#sweeps)
+- [Tangents](#tangents)
+- [Operations](#operations)
+- [Simplify and LODs](#simplify-and-lods)
+- [Hull and collision proxy](#hull-and-collision-proxy)
+- [Split and slice](#split-and-slice)
+- [Heightfields](#heightfields)
+- [Collision](#collision)
+- [Tile slide](#tile-slide)
+- [Geometry pipeline harness](#geometry-pipeline-harness)
+- [Iso](#iso)
+
+## Overview
+
 Procedural geometry: primitive builders, sweeps (extrude, lathe, sweep, tube, polygon, stairs,
 arch), heightfields, tangents and the operations to combine and reshape them. Pure arithmetic, no
 GPU; the only `render/` imports are types and layout constants (`MeshBounds`, `VertexLayout`,

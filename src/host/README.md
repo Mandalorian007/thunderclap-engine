@@ -1,5 +1,34 @@
 # host
 
+What the engine needs from the place it runs: frames, links, the clipboard, fullscreen, storage, embedding, and optionally lifecycle, haptics and the safe area. The web host is here; the Electron and Capacitor hosts fill the same `Host` interface from their own packages, and a game picks one. Nothing else in the engine touches `window.open`, `navigator.clipboard`, `navigator.vibrate` or `localStorage`.
+
+## Quick use
+
+<!-- snippet:check -->
+```ts
+import { createWebHost } from '@thunderclap/engine/host';
+
+const host = createWebHost();
+const store = host.storage.open(); // null when storage is blocked (an itch.io iframe can do that)
+store?.setItem('k', 'v');
+if (host.fullscreen.available()) await host.fullscreen.toggle();
+host.openExternal('https://example.com', { activation: 'pointer' });
+```
+
+## Entry points
+
+| Name | What it is for |
+| --- | --- |
+| `Host` | the interface every host fills |
+| `createWebHost(opts?)` | the browser host |
+| `createXrHost(...)` | frames from a WebXR session |
+| `defaultHost / setDefaultHost` | the host the engine uses when none is passed |
+| `HostStorage` | `open()` a `StorageLike`, probed on every call |
+| `HostFullscreen` | `available`, `active`, `toggle`, `watch` |
+| `HostLifecycle / HostHaptics / HostSafeArea` | the optional mobile facets |
+
+## Overview
+
 What the engine needs from the place it runs: frames, open a link, copy text, fullscreen, save
 storage, where it is embedded, and (optionally) the app's lifecycle, haptics and the safe area.
 The web host is here; the Electron host, `createElectronHost()` in `@thunderclap/host-electron`

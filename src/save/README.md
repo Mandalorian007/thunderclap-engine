@@ -2,6 +2,36 @@
 
 Versioned save slots in the host's storage (`host.storage`; `localStorage` on the web). Survives the itch.io iframe: storage that is missing, blocked, partitioned, full, or throws on every call. No dependencies.
 
+## Quick use
+
+<!-- snippet:check -->
+```ts
+import { createSaveStore, type Infer, s } from '@thunderclap/engine/save';
+
+const Progress = s.object({ solved: s.array(s.string()), playMs: s.number({ min: 0 }) });
+type Progress = Infer<typeof Progress>;
+
+const save = createSaveStore<Progress>({
+  game: 'my-game', // key: thunderclap:my-game:main
+  version: 1,
+  defaults: () => ({ solved: [], playMs: 0 }),
+  schema: Progress,
+});
+save.update((d) => { d.solved.push('intro'); }); // validated, debounced write
+```
+
+## Entry points
+
+| Name | What it is for |
+| --- | --- |
+| `createSaveStore(opts)` | one versioned, validated slot; `createGame` gives you `ctx.save` |
+| `s` | the schema builder (`s.object`, `s.array`, `s.number`, ...) |
+| `save.get / update / set / flush` | read, mutate a clone, replace, write now |
+| `save.exportString / importString` | a checksummed text export |
+| `createSlotManager(opts)` | several named slots |
+| `createSettingsStore(opts)` | settings kept apart from progress |
+| `MemoryStorage` | a `StorageLike` for tests |
+
 ## Usage
 
 ```ts

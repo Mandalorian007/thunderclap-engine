@@ -1,5 +1,70 @@
 # engine/ui
 
+The DOM overlay over the WebGPU canvas: panels with focus and pad navigation, toasts, captions, HUD and inventory widgets, world anchors and panels, layout regions per form factor and theme tokens. `createGame` gives you one as `ctx.ui`; what goes in it, its words and its look are the game's. No dependencies and no game nouns.
+
+## Quick use
+
+<!-- snippet:check -->
+```ts
+import { createOverlay } from '@thunderclap/engine/ui';
+
+declare const stageEl: HTMLElement;
+
+const ui = createOverlay({ parent: stageEl, theme: { colorAccent: '#7fd' } });
+const hp = ui.meter({ label: 'HP', max: 100 }); // a HUD bar in the bottom region
+hp.set(72);
+ui.toasts.show('Saved');
+const panel = ui.stack.push({ title: 'Paused', content: document.createElement('div') });
+panel.close();
+```
+
+## Entry points
+
+| Name | What it is for |
+| --- | --- |
+| `createOverlay(opts)` | the overlay root over the canvas |
+| `ui.stack.push(opts)` | open a panel; modal by default, with focus trapping |
+| `ui.toasts.show(message)` | a short notice |
+| `ui.caption` | a speech or caption card |
+| `ui.meter / ui.reticle / ui.slots` | HUD widgets |
+| `ui.layout` | regions per form factor |
+| `ui.anchors(camera)` | DOM elements pinned to world points |
+| `createWorldPanel(...)` | a panel drawn in the world (VR) |
+| `ui.floats / ui.minimap` | floating text and a minimap |
+| `applyTheme / defaultTheme` | theme tokens |
+
+## Contents
+
+- [Overview](#overview)
+- [Overlay](#overlay)
+- [Panels: `ui.stack`](#panels-uistack)
+- [Toasts: `ui.toasts`](#toasts-uitoasts)
+- [Caption card: `ui.caption`](#caption-card-uicaption)
+- [Widgets and helpers](#widgets-and-helpers)
+- [HUD widgets: `ui.reticle`, `ui.meter`, `ui.slots`, `ui.heading`](#hud-widgets-uireticle-uimeter-uislots-uiheading)
+- [Inventory: `ui.grid`, `ui.card`, `ui.radial`, `ui.contextList`](#inventory-uigrid-uicard-uiradial-uicontextlist)
+- [External links: `externalLink`](#external-links-externallink)
+- [Theme](#theme)
+- [Layout API: `ui.layout`](#layout-api-uilayout)
+- [Anchors: `ui.anchors(camera)`](#anchors-uianchorscamera)
+- [World panels: `createWorldPanel`](#world-panels-createworldpanel)
+- [Text scale and units](#text-scale-and-units)
+- [Theme functions](#theme-functions)
+- [More widgets and helpers](#more-widgets-and-helpers)
+- [Tooltip: `ui.tooltip`](#tooltip-uitooltip)
+- [World cursor: `ui.cursor`](#world-cursor-uicursor)
+- [Pad owner: `ui.padOwner`](#pad-owner-uipadowner)
+- [Floating text: `ui.floats`](#floating-text-uifloats)
+- [Ring and compass: `ui.ring`, `ui.compass`](#ring-and-compass-uiring-uicompass)
+- [Minimap: `ui.minimap`](#minimap-uiminimap)
+- [Loading screen: `ui.loading`](#loading-screen-uiloading)
+- [Notifications: `ui.notify`](#notifications-uinotify)
+- [Perf: `createPerfMonitor`, `createPerfOverlay`](#perf-createperfmonitor-createperfoverlay)
+- [Accessibility checklist](#accessibility-checklist)
+- [Tests](#tests)
+
+## Overview
+
 The DOM overlay that sits on top of the WebGPU canvas: panels, toasts, a speech/caption card, small
 widgets and theme tokens. It has no dependencies and no game nouns.
 

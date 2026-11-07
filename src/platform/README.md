@@ -1,5 +1,37 @@
 # engine/platform
 
+The page the game runs in: the letterboxed canvas, WebGPU bring-up, DPR, page lifecycle, fullscreen, device traits, WebXR surfaces and the fatal screens. `createGame` does all of this for you; a game reaches for it when it boots by hand or needs one helper. DOM only, no dependencies, and every helper answers "no" where an API is missing.
+
+## Quick use
+
+<!-- snippet:check -->
+```ts
+import { boot } from '@thunderclap/engine/platform';
+
+const res = await boot(document.getElementById('app')!, { title: 'My Game' });
+if (res.ok) {
+  const { surface, gpu } = res; // gpu goes to new Renderer(gpu)
+  surface.onResize(({ backbuffer }) => console.log(backbuffer.width, backbuffer.height));
+  res.onDeviceLost(() => console.log('lost')); // after the reload screen is shown
+  console.log(gpu.format);
+}
+```
+
+## Entry points
+
+| Name | What it is for |
+| --- | --- |
+| `boot(root, opts?)` | mount the surface and bring up WebGPU, or show why not |
+| `mountSurface / Surface` | the letterboxed canvas and its resize events |
+| `initGpu(canvas, opts?)` | WebGPU device and context on their own |
+| `clientToLogical / computeLetterbox` | letterbox math between CSS px and design px |
+| `deviceTraits()` | touch, handheld, reduced motion and friends |
+| `watchLifecycle(handlers)` | hide, show and freeze events |
+| `toggleFullscreen()` | fullscreen where the page allows it |
+| `XrSurface` | WebXR with the WebGPU binding |
+
+## Overview
+
 The page the game runs in: the letterboxed canvas, WebGPU bring-up, DPR, page lifecycle,
 fullscreen, device traits and the fatal screens. DOM only, no game nouns; every helper answers
 "no" where an API is missing. `createGame` uses all of this for you; a game reaches for it when
