@@ -163,7 +163,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Post 8: stack owns jitter by `renderer.jitter === hook`; WeakMap deleted | ws/post-8 | brief `docs/briefs/post-8.md`; branched from ws/render-8 b3dc3b6 | post-7, render-8 | 🟣 done at `5a51e3b` (check 2277, snap 0, post2 56, post3 48, post4 56, depth-post 32, xr 8). Train 12, after render-8, which it stacks on; it re-merges render-8 once render-8's post4 fix lands |
 | 5 | Render 9: LOD lists skip the undrawn main upload; fake GPU checks usage flags and maps staging buffers; readback tests off stubs | ws/render-9 | brief `docs/briefs/render-9.md`; branched from ws/render-8 b3dc3b6 | render-8, fx-6/7 wishes | 🔵 dispatched |
 | 5 | Core 5: `createGame` test of a playback installed mid-session (clock already advanced), speed 1 and 4 | ws/core-5 | brief `docs/briefs/core-5.md`; branched from ws/input-10 c2de796 | core-4, input-10 | ✅ merged in E-031 train 11 (`00a773d`; main 336ed25) |
-| 5 | Core 6: `EngineCtx.clock` typed as the tick clock; `ctx.replay(rec, opts)` detaches real input and reattaches it at the end | ws/core-6 | brief `docs/briefs/core-6.md`; branched from ws/core-5 fdc822e | core-5 | 🔵 dispatched |
+| 5 | Core 6: `EngineCtx.clock` typed as the tick clock; `ctx.replay(rec, opts)` detaches real input and reattaches it at the end | ws/core-6 | brief `docs/briefs/core-6.md`; branched from ws/core-5 fdc822e | core-5 | 🟣 done at `ad6ea9c` (check 2274, snap 0, replay 16, core2 40, lifecycle 32). Opens E-031 train 12 |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
@@ -336,6 +336,13 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - ws/post-8 notes:
   - The WeakMap is gone. `PostStack` owns the jitter hook only while `renderer.jitter === this.jitterFn`, so a page-installed hook is never cleared (`post8.test.ts`).
   - It found the E-035 mechanism: at `done` the twin stack stops resolving and its self-clearing hook leaves one frame with zero jitter. post4's single `settle` read can land on that frame. That is a spec/harness fix, and render-8's engineer has it.
+- ws/core-6 notes:
+  - `EngineCtx.clock` is now `TickClock`.
+  - `ctx.replay(rec, {speed, tickMs})` returns a `GameReplay` (the playback plus `stop()`). It detaches real input and reattaches it when the recording ends or `stop()` is called. A second replay replaces the first.
+  - The two type exports in `src/index.ts` and the root README row were edited outside the brief; accepted.
+  - Wishes:
+    - XR controller and hand pointers still reach a running replay (needs a pointer-source mute in input or XR; input backlog).
+    - `onEnd` callback on `ctx.replay` (core backlog).
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
