@@ -9,6 +9,7 @@ import {
   FORM_FACTORS,
   type FormFactor,
   followSafeArea,
+  formSize,
   formSpec,
   type Insets,
   type LayoutSpec,
@@ -398,6 +399,16 @@ describe('resolveLayout: region assignment per form factor', () => {
     expect(placementFor({ 'phone-portrait': 'bottom', default: 'left' }, 'desktop')).toBe('left');
     expect(placementFor({ desktop: 'top' }, 'tablet')).toBe('hidden');
   });
+
+  it('formSize: a number, the form, phone for both phone forms, then default (ws/ui-10)', () => {
+    expect(formSize(72, 'tablet')).toBe(72);
+    const m = { phone: 56, 'phone-portrait': 64, default: 96 };
+    expect(formSize(m, 'phone-landscape')).toBe(56);
+    expect(formSize(m, 'phone-portrait')).toBe(64);
+    expect(formSize(m, 'tablet')).toBe(96);
+    expect(formSize({ tablet: 80, default: 96 }, 'tablet')).toBe(80);
+    expect(formSize({ tablet: 80, default: 96 }, 'desktop')).toBe(96);
+  });
 });
 
 /** A parent of `size` CSS px (happy-dom has no layout, so its client size is stubbed). */
@@ -751,6 +762,74 @@ describe('overlay.layout (DOM)', () => {
     ov!.destroy();
     ov = null;
     warn.mockRestore();
+  });
+
+  it('content rails measure max-content: a stretch label grows and shrinks its rail (ws/ui-10)', () => {
+    const pad = defaultForms['phone-landscape'].pad;
+    const layout = make({ classify, bars: { left: { size: 'content', max: 200 } } });
+    // A stretch-width text widget: at max-content it is its label's width (8 px a character);
+    // stretched across the rail it is the rail's inner width.
+    const label = h('div');
+    label.textContent = 'HP';
+    label.getBoundingClientRect = () => {
+      const rail = label.parentElement!;
+      const intrinsic =
+        rail.style.width === 'max-content' && rail.style.alignItems === 'flex-start';
+      const w = intrinsic
+        ? (label.textContent?.length ?? 0) * 8
+        : layout.state.regions.left!.width - 2 * pad;
+      return { x: 0, y: 0, left: 0, top: 0, right: w, bottom: 20, width: w, height: 20 } as DOMRect;
+    };
+    const rail = layout.region('left');
+    rail.style.alignItems = 'center'; // a game's own inline value comes back after the measure
+    layout.add(label, { id: 'label', place: { default: 'left' } });
+    expect(layout.state.regions.left!.width).toBe(56); // 16 px wants less than the track
+    expect(rail.style.width).toBe('');
+    expect(rail.style.alignItems).toBe('center');
+    // The label grows: the rail widens on the next layout to the label plus pad.
+    label.textContent = 'Health 100 / 100'; // 16 characters, 128 px
+    layout.refresh();
+    expect(layout.state.regions.left!.width).toBe(128 + 2 * pad);
+    expect(layout.overflows()).toEqual([]);
+    // Measured again while stretched at 128 px, it still wants its own width, not the rail's.
+    label.textContent = 'Health 80'; // 72 px
+    layout.refresh();
+    expect(layout.state.regions.left!.width).toBe(72 + 2 * pad);
+    // Past max it clamps.
+    label.textContent = 'x'.repeat(40);
+    layout.refresh();
+    expect(layout.state.regions.left!.width).toBe(200);
+  });
+
+  it('onForm runs on every re-layout before the measure, with the form factor (ws/ui-10)', () => {
+    const layout = make({ classify, bars: { left: { size: 'content' } } });
+    const seen: FormFactor[] = [];
+    const el = h('div');
+    let want = 0;
+    el.getBoundingClientRect = () =>
+      ({
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        right: want,
+        bottom: want,
+        width: want,
+        height: want,
+      }) as DOMRect;
+    layout.add(el, {
+      place: { default: 'left' },
+      onForm: (f) => {
+        seen.push(f);
+        want = f === 'phone-landscape' ? 60 : 90;
+      },
+    });
+    const pad = defaultForms['phone-landscape'].pad;
+    expect(seen).toEqual(['phone-landscape']);
+    expect(layout.state.regions.left!.width).toBe(60 + 2 * pad);
+    ff = 'tablet';
+    layout.refresh();
+    expect(seen.at(-1)).toBe('tablet');
   });
 
   it('device mode leaves the density tokens to the layout', () => {
