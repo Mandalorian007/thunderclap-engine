@@ -125,7 +125,7 @@ for (const a of agents) {
   a `NavPath`, `FlowField` or `Reach` whose `version` differs is stale. `isWalkable`, `costAt`,
   `inBounds`, `index`, `toCell(worldX, worldZ, out)` (clamped into the grid) and
   `toWorld(cx, cy, out)` (cell centre).
-- `Cell { x, y }` is a grid cell; `NavPoint { x, z }` is a world point on the XZ plane.
+- `NavCell { x, y }` is a grid cell; `NavPoint { x, z }` is a world point on the XZ plane.
 - `hasLineOfWalkable(grid, x0, y0, x1, y1)` – true when the supercover line between two cells
   crosses only walkable cells and never squeezes between two diagonal walls; string pulling uses
   it, and it serves as a cheap line-of-sight test.
@@ -153,7 +153,7 @@ mode when a page toggles between them.
 
 ## Paths
 
-- `findPath(grid, from: Cell, to: Cell, out: NavPath, opts?: FindPathOptions): boolean` – A* with
+- `findPath(grid, from: NavCell, to: NavCell, out: NavPath, opts?: FindPathOptions): boolean` – A* with
   a binary heap and per-grid scratch arrays (allocated once per grid, in a `WeakMap`), octile
   heuristic (Manhattan on a 4-neighbour grid), step cost `(1 | √2) × cost(dest)` plus the edge
   cost. Writes cell centres in world XZ into `out`, resets `out.cursor`, stamps
@@ -181,7 +181,7 @@ mode when a page toggles between them.
 
 ## Flow field
 
-- `createFlowField(grid, opts?: FlowFieldOptions): FlowField` – `build(goals: Cell[])` runs
+- `createFlowField(grid, opts?: FlowFieldOptions): FlowField` – `build(goals: NavCell[])` runs
   Dijkstra from the goals (unwalkable and out-of-grid goals are skipped) over the grid's
   neighbour graph with the same corner rule as A*, filling `distances` (cost-weighted, `Infinity`
   unreachable) and `directions` (unit `x, z` per cell toward the cheapest neighbour; zero at a
@@ -208,7 +208,7 @@ has the same `stale` flag.
 indices, `ArrayLike<number>`), as does `field.setGoals(goals)` afterwards, so every cell runs to
 its nearest goal; `field.goals` (`Int32Array`, the first `goalCount` entries) are the goals it
 keeps, out-of-grid and unwalkable ones skipped at each `update()`. `build(cells)` is the same
-with `Cell`s.
+with `NavCell`s.
 
 ## Reachability
 
@@ -613,3 +613,7 @@ it, grows with the budget to the whole board, and recomputes every frame. Unit t
 costs equal to a Dijkstra `findMeshPath` (and never above the default A*) on a baked level, mud
 priced and masked, a link, `maxPolys`, reuse without allocation, `pathTo`, outlines with a hole,
 the `loadNavMesh` round trip against an in-memory bake and its errors, and the 10k-polygon bench.
+
+## Deprecated aliases
+
+Kept until the next minor (ws/api-rest, E-036), same shapes: `Cell` (use `NavCell`).

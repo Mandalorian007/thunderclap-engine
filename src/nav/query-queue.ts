@@ -7,7 +7,7 @@
  * changed version under it restarts. Every array is allocated at creation.
  */
 import type { FindPathOptions } from './astar';
-import { type Cell, type NavGrid, NEIGHBOUR_X, NEIGHBOUR_Y, stepCost } from './grid';
+import { type NavCell, type NavGrid, NEIGHBOUR_X, NEIGHBOUR_Y, stepCost } from './grid';
 import { CellHeap } from './heap';
 import { clearPath3, type FindMeshPathOptions, MeshSearch, type NavPath3 } from './mesh/mesh-path';
 import { NavMesh, type NavPoint3 } from './mesh/navmesh';
@@ -38,8 +38,8 @@ export interface PathQueue {
    * is written only when the ticket completes (`'done'`), and never after a cancel.
    */
   request(
-    from: Readonly<NavPoint3> | Readonly<Cell>,
-    to: Readonly<NavPoint3> | Readonly<Cell>,
+    from: Readonly<NavPoint3> | Readonly<NavCell>,
+    to: Readonly<NavPoint3> | Readonly<NavCell>,
     out: NavPath3 | NavPath,
     opts?: PathRequestOptions,
   ): number;
@@ -107,7 +107,7 @@ class GridSearch {
     this.heap = new CellHeap(n, this.f);
   }
 
-  begin(from: Readonly<Cell>, to: Readonly<Cell>, opts?: FindPathOptions): boolean {
+  begin(from: Readonly<NavCell>, to: Readonly<NavCell>, opts?: FindPathOptions): boolean {
     const grid = this.grid;
     this.version = grid.version;
     this.state = 'failed';
@@ -241,8 +241,8 @@ export function createPathQueue(target: NavMesh | NavGrid, opts: PathQueueOption
   let inFlight = 0;
   const from3: NavPoint3 = { x: 0, y: 0, z: 0 };
   const to3: NavPoint3 = { x: 0, y: 0, z: 0 };
-  const fromCell: Cell = { x: 0, y: 0 };
-  const toCell: Cell = { x: 0, y: 0 };
+  const fromCell: NavCell = { x: 0, y: 0 };
+  const toCell: NavCell = { x: 0, y: 0 };
 
   const find = (ticket: number): Ticket | undefined => {
     if (ticket <= 0) return undefined;

@@ -34,10 +34,8 @@ interface AreaStamp {
 }
 
 ## Cell  (type-only)
-interface Cell {
-    x: number;
-    y: number;
-}
+@deprecated
+type Cell = NavCell;
 
 ## Corridor  (type-only)
 interface Corridor {
@@ -155,7 +153,7 @@ interface FlowField {
     readonly distances: Float32Array;
     readonly directions: Float32Array;
     readonly stepCosts: Float32Array;
-    build(goals: ArrayLike<Readonly<Cell>>): void;
+    build(goals: ArrayLike<Readonly<NavCell>>): void;
     setGoals(goals: ArrayLike<number>): void;
     update(): void;
     direction<T extends NavPoint>(cx: number, cy: number, out: T): T;
@@ -288,6 +286,12 @@ interface NavBounds {
     max: NavPoint3;
 }
 
+## NavCell  (type-only)
+interface NavCell {
+    x: number;
+    y: number;
+}
+
 ## NavGrid  (type-only)
 interface NavGrid {
     readonly width: number;
@@ -308,7 +312,7 @@ interface NavGrid {
     costAt(x: number, y: number): number;
     inBounds(x: number, y: number): boolean;
     index(x: number, y: number): number;
-    toCell(worldX: number, worldZ: number, out: Cell): Cell;
+    toCell(worldX: number, worldZ: number, out: NavCell): NavCell;
     toWorld(cx: number, cy: number, out: NavPoint): NavPoint;
 }
 
@@ -479,7 +483,7 @@ interface OffMeshLinkOptions {
 interface PathQueue {
     readonly pending: number;
     readonly finished: number;
-    request(from: Readonly<NavPoint3> | Readonly<Cell>, to: Readonly<NavPoint3> | Readonly<Cell>, out: NavPath3 | NavPath, opts?: PathRequestOptions): number;
+    request(from: Readonly<NavPoint3> | Readonly<NavCell>, to: Readonly<NavPoint3> | Readonly<NavCell>, out: NavPath3 | NavPath, opts?: PathRequestOptions): number;
     update(): number;
     status(ticket: number): PathStatus;
     cancel(ticket: number): boolean;
@@ -599,7 +603,7 @@ function exportNavMesh(mesh: NavMesh): ArrayBuffer;
 function findMeshPath(mesh: NavMesh, from: Readonly<NavPoint3>, to: Readonly<NavPoint3>, out: NavPath3, opts?: FindMeshPathOptions): boolean;
 
 ## findPath
-function findPath(grid: NavGrid, from: Readonly<Cell>, to: Readonly<Cell>, out: NavPath, opts?: FindPathOptions): boolean;
+function findPath(grid: NavGrid, from: Readonly<NavCell>, to: Readonly<NavCell>, out: NavPath, opts?: FindPathOptions): boolean;
 
 ## followPath
 function followPath(path: NavPath, position: Readonly<NavPoint>, speed: number, arriveRadius: number, outVelocity: NavPoint): FollowResult;

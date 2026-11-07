@@ -9,7 +9,7 @@
  * ```
  */
 
-import { TYPED_CTORS, type TypedArrayOf, type TypedKind } from './codec';
+import { TYPED_KIND_CTORS, type TypedArrayOf, type TypedKind } from './codec';
 
 export interface Schema<T> {
   /** Returns `null` if `value` matches, else a message naming the first failing path. */
@@ -161,7 +161,7 @@ export const s = {
 
   /** One of the eight typed arrays by kind, e.g. `s.typed('f32')` for a `Float32Array`. */
   typed<K extends TypedKind>(kind: K, opts: { maxLength?: number } = {}): Schema<TypedArrayOf<K>> {
-    const Ctor = TYPED_CTORS[kind];
+    const Ctor = TYPED_KIND_CTORS[kind];
     return make((v, p) => {
       if (!(v instanceof Ctor)) return `${p}: expected ${Ctor.name}, got ${typeName(v)}`;
       const len = (v as ArrayBufferView).byteLength / Ctor.BYTES_PER_ELEMENT;

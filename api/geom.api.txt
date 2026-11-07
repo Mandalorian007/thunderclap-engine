@@ -5,10 +5,8 @@
 const ALL_LAYERS = 4294967295;
 
 ## Aabb  (type-only)
-interface Aabb {
-    min: [number, number, number];
-    max: [number, number, number];
-}
+@deprecated
+type Aabb = GeomAabb;
 
 ## ArchOptions  (type-only)
 interface ArchOptions extends GeometryOptions {
@@ -106,6 +104,12 @@ interface ExtrudeOptions extends GeometryOptions {
 ## GEOMETRY_FLOATS
 const GEOMETRY_FLOATS: number;
 
+## GeomAabb  (type-only)
+interface GeomAabb {
+    min: [number, number, number];
+    max: [number, number, number];
+}
+
 ## Geometry  (type-only)
 interface Geometry {
     vertices: Float32Array;
@@ -192,18 +196,8 @@ interface HeightfieldSource {
 type HeightfieldVec3 = [number, number, number] | Float32Array | Float64Array;
 
 ## Hit  (type-only)
-interface Hit {
-    t: number;
-    x: number;
-    y: number;
-    z: number;
-    nx: number;
-    ny: number;
-    nz: number;
-    triangle: number;
-    source: number;
-    userData: unknown;
-}
+@deprecated
+type Hit = RayHit;
 
 ## ISO_ELEV_DEPTH
 const ISO_ELEV_DEPTH: number;
@@ -284,6 +278,20 @@ interface ProjectUvOptions {
     axis?: 'x' | 'y' | 'z';
 }
 
+## RayHit  (type-only)
+interface RayHit {
+    t: number;
+    x: number;
+    y: number;
+    z: number;
+    nx: number;
+    ny: number;
+    nz: number;
+    triangle: number;
+    source: number;
+    userData: unknown;
+}
+
 ## Rgba  (type-only)
 type Rgba = [number, number, number, number];
 
@@ -297,7 +305,7 @@ const SOURCE_GRID = 2;
 const SOURCE_HEIGHTFIELD = 1;
 
 ## Shape  (type-only)
-type Shape = Sphere | Capsule | Aabb;
+type Shape = Sphere | Capsule | GeomAabb;
 
 ## Shape2  (type-only)
 type Shape2 = Circle | Box2;
@@ -439,7 +447,7 @@ interface StaticColliderOptions {
 }
 
 ## SweepHit  (type-only)
-interface SweepHit extends Hit {
+interface SweepHit extends RayHit {
     depth: number;
 }
 
@@ -541,7 +549,7 @@ type Vec3Out = [number, number, number] | Float32Array | Float64Array;
 type WireframeMode = 'triangles' | 'leaves';
 
 ## aabbTriangle
-function aabbTriangle(box: Aabb, ax: number, ay: number, az: number, bx: number, by: number, bz: number, cx: number, cy: number, cz: number, out: Contact): boolean;
+function aabbTriangle(box: GeomAabb, ax: number, ay: number, az: number, bx: number, by: number, bz: number, cx: number, cy: number, cz: number, out: Contact): boolean;
 
 ## applyTransform
 function applyTransform(m: ColliderTransform, x: number, y: number, z: number, out: Float32Array, o: number): void;
@@ -604,7 +612,7 @@ function createContact(): Contact;
 function createHeightfield(width: number, depth: number, opts?: HeightfieldOptions): Heightfield;
 
 ## createHit
-function createHit(): Hit;
+function createHit(): RayHit;
 
 ## createIndices
 function createIndices(vertexCount: number, indexCount: number): Uint16Array | Uint32Array;
@@ -664,7 +672,7 @@ function icosphere(opts?: IcosphereOptions): Geometry;
 function importCollider(buf: ArrayBuffer, userData?: unknown[]): StaticCollider;
 
 ## isAabb
-function isAabb(s: Shape): s is Aabb;
+function isAabb(s: Shape): s is GeomAabb;
 
 ## isBox2
 function isBox2(s: Shape2): s is Box2;
@@ -712,16 +720,16 @@ function projectedSizePx(boundsRadius: number, distance: number, fovY: number, v
 function rayHeightfield(hf: Heightfield, origin: ArrayLike<number>, dir: ArrayLike<number>, out?: HeightfieldVec3): number;
 
 ## raycast
-function raycast(c: StaticCollider, origin: ArrayLike<number>, dir: ArrayLike<number>, maxDist: number, out: Hit, layerMask?: number): boolean;
+function raycast(c: StaticCollider, origin: ArrayLike<number>, dir: ArrayLike<number>, maxDist: number, out: RayHit, layerMask?: number): boolean;
 
 ## raycast2
-function raycast2(c: StaticCollider, ox: number, oz: number, dx: number, dz: number, maxDist: number, out: Hit, layerMask?: number): boolean;
+function raycast2(c: StaticCollider, ox: number, oz: number, dx: number, dz: number, maxDist: number, out: RayHit, layerMask?: number): boolean;
 
 ## raycastHeightfield
 function raycastHeightfield(hf: Heightfield, ray: HeightfieldRay, out?: HeightfieldVec3): number;
 
 ## raycastReg
-function raycastReg(c: StaticCollider, ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxDist: number, out: Hit, layerMask?: number): boolean;
+function raycastReg(c: StaticCollider, ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxDist: number, out: RayHit, layerMask?: number): boolean;
 
 ## recenter
 function recenter(g: Geometry): Geometry;

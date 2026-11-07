@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { findPath, smoothPath } from './astar';
-import { type Cell, createNavGrid, type NavGrid } from './grid';
+import { createNavGrid, type NavCell, type NavGrid } from './grid';
 import { createNavPath, type NavPath, pathDistance } from './path';
 
 /** The cells a path visits, from world centres back to cells. */
 function cells(grid: NavGrid, path: NavPath): [number, number][] {
-  const c: Cell = { x: 0, y: 0 };
+  const c: NavCell = { x: 0, y: 0 };
   const out: [number, number][] = [];
   for (let i = 0; i < path.length; i++) {
     grid.toCell(path.points[i * 2]!, path.points[i * 2 + 1]!, c);
@@ -360,7 +360,7 @@ describe('findPath options maxCost and heuristicWeight', () => {
     expect(findPath(g, { x: 25, y: 25 }, far, p, { maxExpand: 60 })).toBe(false);
     expect(findPath(g, { x: 25, y: 25 }, { x: 27, y: 27 }, p, { maxCost: 4 })).toBe(true);
     expect(findPath(g, { x: 25, y: 25 }, { x: 27, y: 27 }, p, { maxCost: 3 })).toBe(false);
-    // Cell costs count towards the cap.
+    // NavCell costs count towards the cap.
     const mud = createNavGrid({ width: 4, height: 1, cellSize: 1, cost: () => 3 });
     expect(findPath(mud, { x: 0, y: 0 }, { x: 3, y: 0 }, p, { maxCost: 8 })).toBe(false);
     expect(findPath(mud, { x: 0, y: 0 }, { x: 3, y: 0 }, p, { maxCost: 9 })).toBe(true);

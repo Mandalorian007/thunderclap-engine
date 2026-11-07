@@ -29,6 +29,9 @@ interface AimOffsetOptions {
     weight?: number;
 }
 
+## AnimBlendMode  (type-only)
+type AnimBlendMode = 'override' | 'additive';
+
 ## AnimGraph  (type-only)
 interface AnimGraph {
     readonly params: AnimGraphParams;
@@ -121,6 +124,17 @@ interface AnimGraphTransition {
     matchPose?: boolean;
 }
 
+## AnimPlayOptions  (type-only)
+interface AnimPlayOptions {
+    layer?: number;
+    weight?: number;
+    loop?: boolean;
+    speed?: number;
+    fadeIn?: number;
+    blend?: AnimBlendMode;
+    startTime?: number;
+}
+
 ## AnimationAction
 class AnimationAction {
     clip: AnimationClip | null;
@@ -130,7 +144,7 @@ class AnimationAction {
     speed: number;
     time: number;
     paused: boolean;
-    blend: BlendMode;
+    blend: AnimBlendMode;
     finished: boolean;
     effectiveWeight: number;
     fadeFrom: number;
@@ -178,8 +192,8 @@ class AnimationMixer {
     readonly actions: readonly AnimationAction[];
     constructor(skeleton: Skeleton, opts?: AnimationMixerOptions);
     get playing(): number;
-    play(clip: AnimationClip, opts?: PlayOptions): AnimationAction;
-    crossFade(from: AnimationAction, to: AnimationClip | AnimationAction, seconds: number, opts?: PlayOptions): AnimationAction;
+    play(clip: AnimationClip, opts?: AnimPlayOptions): AnimationAction;
+    crossFade(from: AnimationAction, to: AnimationClip | AnimationAction, seconds: number, opts?: AnimPlayOptions): AnimationAction;
     stop(action: AnimationAction, seconds?: number): void;
     stopAll(): void;
     onEvent(cb: AnimationEventListener): () => void;
@@ -192,7 +206,8 @@ interface AnimationMixerOptions {
 }
 
 ## BlendMode  (type-only)
-type BlendMode = 'override' | 'additive';
+@deprecated
+type BlendMode = AnimBlendMode;
 
 ## ChannelPath  (type-only)
 type ChannelPath = 'translation' | 'rotation' | 'scale' | 'weights';
@@ -313,15 +328,8 @@ interface MorphTarget {
 const POSE_NODE_FLOATS = 10;
 
 ## PlayOptions  (type-only)
-interface PlayOptions {
-    layer?: number;
-    weight?: number;
-    loop?: boolean;
-    speed?: number;
-    fadeIn?: number;
-    blend?: BlendMode;
-    startTime?: number;
-}
+@deprecated
+type PlayOptions = AnimPlayOptions;
 
 ## Pose  (type-only)
 type Pose = Float32Array;
@@ -620,7 +628,7 @@ function rootSpacePositions(poseWorld: Float32Array, root: number, joints: Array
 function sampleChannel(channel: AnimationChannel, t: number, out: Float32Array, o: number, cursor?: Uint32Array, ci?: number): void;
 
 ## sampleClip
-function sampleClip(clip: AnimationClip, t: number, pose: Pose, weight?: number, blend?: BlendMode, cursor?: ClipCursor): void;
+function sampleClip(clip: AnimationClip, t: number, pose: Pose, weight?: number, blend?: AnimBlendMode, cursor?: ClipCursor): void;
 
 ## sampleWeights
 function sampleWeights(clip: AnimationClip, node: number, t: number, out: Float32Array, cursor?: ClipCursor): boolean;

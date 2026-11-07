@@ -50,7 +50,9 @@ export function createWebHost(opts: WebHostOptions = {}): Host {
     clipboardWriteAllowed: () => clipboardWriteAllowed(win.document),
     fullscreen: {
       available: () => fullscreenAvailable(win.document),
-      active: () => isFullscreen(win.document),
+      get active() {
+        return isFullscreen(win.document);
+      },
       toggle: (o) => toggleFullscreen(win.document.documentElement, o),
       watch: (fn) => watchFullscreen(fn, win.document),
     },

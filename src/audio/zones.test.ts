@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { Transform } from '../render/transform';
-import { AudioEngine, type OutputBus, type PlayOptions, type Voice } from './audio';
+import { AudioEngine, type AudioPlayOptions, type OutputBus, type Voice } from './audio';
 import { type AudioZoneDesc, type AudioZoneHost, AudioZones, zoneWeight } from './zones';
 
 // ---------------------------------------------------------------- pure weights
@@ -49,7 +49,7 @@ class FakeVoice implements Voice {
   readonly position = new Float64Array(3);
   constructor(
     readonly sound: string,
-    readonly opts: PlayOptions,
+    readonly opts: AudioPlayOptions,
   ) {}
   stop(fade = 0) {
     this.stopped = fade;
@@ -73,7 +73,7 @@ class Host implements AudioZoneHost {
   readonly listener = { position: new Float64Array(3) };
   voices: FakeVoice[] = [];
   sends: [OutputBus, number][] = [];
-  loop(sound: string, opts: PlayOptions = {}): Voice {
+  loop(sound: string, opts: AudioPlayOptions = {}): Voice {
     const v = new FakeVoice(sound, opts);
     this.voices.push(v);
     return v;

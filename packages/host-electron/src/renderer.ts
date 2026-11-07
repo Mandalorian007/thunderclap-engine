@@ -85,7 +85,7 @@ export function createElectronHost(opts: ElectronHostOptions = {}): Host {
 }
 
 /**
- * Fullscreen of the shell's window. `active()` is synchronous in `Host`, so the state is kept
+ * Fullscreen of the shell's window. `active` is a synchronous getter in `Host`, so the state is kept
  * here: read once at start, then updated by the main process's change events and by `toggle`.
  */
 function createFullscreen(bridge: ThunderclapBridge): HostFullscreen {
@@ -104,7 +104,9 @@ function createFullscreen(bridge: ThunderclapBridge): HostFullscreen {
 
   return {
     available: () => true,
-    active: () => on,
+    get active() {
+      return on;
+    },
     async toggle() {
       // `lockLandscape` has no meaning for a desktop window.
       try {

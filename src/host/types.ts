@@ -31,8 +31,8 @@ export interface HostStorage {
 export interface HostFullscreen {
   /** True when going fullscreen can work here (false on iPhone Safari, or in a frame without `allowfullscreen`). */
   available(): boolean;
-  /** True while fullscreen. */
-  active(): boolean;
+  /** True while fullscreen (a getter: read it each time). */
+  readonly active: boolean;
   /**
    * Enters or leaves fullscreen; call it inside a tap or click. `lockLandscape` also asks for
    * landscape where the platform allows it. Resolves to whether it is fullscreen afterwards;

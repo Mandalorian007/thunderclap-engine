@@ -88,7 +88,8 @@ type TypedCtor = {
   readonly BYTES_PER_ELEMENT: number;
 };
 
-export const TYPED_CTORS: Record<TypedKind, TypedCtor> = {
+/** Typed-array kind → constructor. Internal: `schema.ts` and the tests import it from here. */
+export const TYPED_KIND_CTORS: Record<TypedKind, TypedCtor> = {
   u8: Uint8Array,
   u16: Uint16Array,
   u32: Uint32Array,
@@ -99,8 +100,11 @@ export const TYPED_CTORS: Record<TypedKind, TypedCtor> = {
   f64: Float64Array,
 };
 
+/** @deprecated (ws/api-rest, E-036) An internal table; removed next minor. */
+export const TYPED_CTORS: Record<TypedKind, TypedCtor> = TYPED_KIND_CTORS;
+
 const KIND_OF = new Map<unknown, TypedKind>(
-  (Object.keys(TYPED_CTORS) as TypedKind[]).map((k) => [TYPED_CTORS[k], k]),
+  (Object.keys(TYPED_KIND_CTORS) as TypedKind[]).map((k) => [TYPED_KIND_CTORS[k], k]),
 );
 
 /** The tag kind for `value` if it is one of the eight supported typed arrays, else null. */
@@ -144,7 +148,7 @@ function isTag(v: Record<string, unknown>): v is { $b: string; $t?: TypedKind } 
   if (typeof v.$b !== 'string') return false;
   const keys = Object.keys(v);
   if (keys.length === 1) return true;
-  return keys.length === 2 && typeof v.$t === 'string' && v.$t in TYPED_CTORS;
+  return keys.length === 2 && typeof v.$t === 'string' && v.$t in TYPED_KIND_CTORS;
 }
 
 /** `JSON.parse` reviver undoing `saveReplacer`. Bad tags (damaged base64) are left as objects. */
@@ -158,7 +162,7 @@ export function saveReviver(_key: string, value: unknown): unknown {
       return value;
     }
     const kind = value.$t ?? 'u8';
-    const Ctor = TYPED_CTORS[kind];
+    const Ctor = TYPED_KIND_CTORS[kind];
     if (bytes.byteLength % Ctor.BYTES_PER_ELEMENT !== 0) return value;
     if (kind === 'u8') return bytes;
     return new Ctor(bytes.buffer as ArrayBuffer, 0, bytes.byteLength / Ctor.BYTES_PER_ELEMENT);

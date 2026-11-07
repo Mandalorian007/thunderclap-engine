@@ -33,7 +33,7 @@ interface Host extends FrameSource {
 ## HostFullscreen  (type-only)
 interface HostFullscreen {
     available(): boolean;
-    active(): boolean;
+    readonly active: boolean;
     toggle(opts?: {
         lockLandscape?: boolean;
     }): Promise<boolean>;

@@ -18,12 +18,12 @@ import {
 } from './queries';
 import { exportCollider, importCollider } from './serialize';
 import {
-  type Aabb,
   type Capsule,
   type Contact,
   capsuleTriangle,
   closestPointTriangle,
   createContact,
+  type GeomAabb,
   type Sphere,
   shapeTriangle,
   sphereTriangle,
@@ -238,7 +238,7 @@ describe('collide BVH queries', () => {
     expect(sweep(c2, s, 0, 0, 2, hit)).toBe(true);
     expect(hit.t).toBeCloseTo(0.825, 4);
     expect(hit.nz).toBeCloseTo(-1);
-    const b: Aabb = { min: [-0.25, 0.25, 0.75], max: [0.25, 0.75, 1.25] };
+    const b: GeomAabb = { min: [-0.25, 0.25, 0.75], max: [0.25, 0.75, 1.25] };
     expect(sweep(c2, b, 0, 0, 2, hit)).toBe(true);
     expect(hit.t).toBeCloseTo(0.825, 4);
     expect(hit.nz).toBeCloseTo(-1);

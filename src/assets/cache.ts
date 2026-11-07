@@ -52,7 +52,8 @@ export interface AssetCache<T = unknown> {
    * the key is unknown or still loading; throws when references are held.
    */
   dispose(key: string): boolean;
-  stats(): AssetCacheStats;
+  /** Running totals, read fresh on each access. */
+  readonly stats: AssetCacheStats;
 }
 
 interface Entry<T> {
@@ -180,7 +181,7 @@ export function createAssetCache<T = unknown>(opts: AssetCacheOptions<T>): Asset
       return true;
     },
 
-    stats(): AssetCacheStats {
+    get stats(): AssetCacheStats {
       return { bytes, entries: entries.size, hits, misses, evictions };
     },
   };

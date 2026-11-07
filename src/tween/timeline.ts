@@ -172,7 +172,9 @@ export class Tweens implements TweenOwner {
     this.updating = true;
     const list = this.list;
     const n = list.length;
-    const step = Math.max(dt, 0);
+    // NaN and negative dt both tick by 0.
+    // biome-ignore lint/complexity/useMathMinMax: Math.max(NaN, 0) is NaN.
+    const step = dt > 0 ? dt : 0;
     try {
       for (let i = 0; i < n; i++) {
         const t = list[i]!;

@@ -35,7 +35,7 @@ function stubHost(log: string[]): Host {
     clipboardWriteAllowed: () => true,
     fullscreen: {
       available: () => false,
-      active: () => false,
+      active: false,
       toggle: async () => false,
       watch: () => () => {},
     },

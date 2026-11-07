@@ -282,7 +282,7 @@ async function main(): Promise<void> {
       // Hold the newest three; older ones become evictable.
       if (i >= 3) cache.release(`asset-${i - 3}`);
     }
-    state.stats = cache.stats();
+    state.stats = cache.stats;
     for (const [key, scene] of loaded) {
       if (cache.has(key)) {
         state.resident.push(key);

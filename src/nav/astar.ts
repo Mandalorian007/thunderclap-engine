@@ -4,8 +4,8 @@
  * every query after it.
  */
 import {
-  type Cell,
   hasLineOfWalkable,
+  type NavCell,
   type NavGrid,
   NEIGHBOUR_X,
   NEIGHBOUR_Y,
@@ -91,8 +91,8 @@ function scratch(grid: NavGrid): Scratch {
  */
 export function findPath(
   grid: NavGrid,
-  from: Readonly<Cell>,
-  to: Readonly<Cell>,
+  from: Readonly<NavCell>,
+  to: Readonly<NavCell>,
   out: NavPath,
   opts: FindPathOptions = {},
 ): boolean {
@@ -173,8 +173,8 @@ export function findPath(
   return true;
 }
 
-const sa: Cell = { x: 0, y: 0 };
-const sb: Cell = { x: 0, y: 0 };
+const sa: NavCell = { x: 0, y: 0 };
+const sb: NavCell = { x: 0, y: 0 };
 
 /**
  * String pulling: drops every waypoint that a straight line of walkable cells can skip, in

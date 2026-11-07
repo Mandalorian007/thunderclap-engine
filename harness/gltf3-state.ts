@@ -34,7 +34,7 @@ export interface HarnessGltf3State {
   materialId: number | null;
   /** `?variants`: every variant the page has shown so far, in order of first appearance. */
   seen: string[];
-  /** `?cache`: `cache.stats()` after the loads, the keys still resident and those evicted. */
+  /** `?cache`: `cache.stats` after the loads, the keys still resident and those evicted. */
   stats: { bytes: number; entries: number; hits: number; misses: number; evictions: number };
   budget: number;
   resident: string[];

@@ -80,7 +80,7 @@ mixer.crossFade(walk, runClip, 0.3);       // weights sum to 1 throughout
 
 `AnimationClip { name; duration; channels: AnimationChannel[]; events?: AnimationEvent[] }`. `AnimationChannel { node; path: ChannelPath; interpolation: Interpolation; times: Float32Array; values: Float32Array }` is one glTF sampler + target: `ChannelPath` is `'translation' | 'rotation' | 'scale' | 'weights'`, `Interpolation` is `'STEP' | 'LINEAR' | 'CUBICSPLINE'`, `times` are seconds ascending, `values` are packed per key (3, 4, or N morph weights; `CUBICSPLINE` stores in-tangent, value, out-tangent per key, glTF order, tangents scaled by the segment length when evaluated). ws/gltf maps `animations[i].channels` onto this shape one to one; `clipDuration(channels)` gives the last key time. `AnimationEvent { time; name }`: the mixer reports crossings.
 
-- `sampleClip(clip, t, pose, weight = 1, blend: BlendMode = 'override', cursor?)` writes every channel at `t` into `pose`. Outside the key range the first or last value holds (looping is the mixer's). `'override'`: `lerp(pose, value, weight)`, slerp for rotations, a plain write at weight 1. `'additive'`: the clip holds deltas: translation adds `weight × v`, scale multiplies by `lerp(1, v, weight)`, rotation post-multiplies `slerp(identity, q, weight)`. `'weights'` channels are skipped (a pose has no morph slots); a channel whose node is outside the pose is skipped.
+- `sampleClip(clip, t, pose, weight = 1, blend: AnimBlendMode = 'override', cursor?)` writes every channel at `t` into `pose`. Outside the key range the first or last value holds (looping is the mixer's). `'override'`: `lerp(pose, value, weight)`, slerp for rotations, a plain write at weight 1. `'additive'`: the clip holds deltas: translation adds `weight × v`, scale multiplies by `lerp(1, v, weight)`, rotation post-multiplies `slerp(identity, q, weight)`. `'weights'` channels are skipped (a pose has no morph slots); a channel whose node is outside the pose is skipped.
 - Cursors: `ClipCursor` (`Uint32Array`, one slot per channel, `createClipCursor(clip)`) remembers the last keyframe per channel, so time moving forward costs O(1) amortised; a jump binary-searches (`findKeyframe(times, t, hint)`). `sampleClip` uses one cursor per clip when none is passed; the mixer keeps one per action so one clip can play at two times.
 - `sampleChannel(channel, t, out, offset, cursor?, index?)` samples one channel raw (morph weights, custom targets); `channelComponents(channel)` is its width.
 
@@ -88,7 +88,7 @@ mixer.crossFade(walk, runClip, 0.3);       // weights sum to 1 throughout
 
 `new AnimationMixer(skeleton, { maxActions = 8 }: AnimationMixerOptions)` owns `pose` (rewritten by `update`) and a fixed pool of `AnimationAction` slots (`actions`, `playing`).
 
-- `play(clip, opts: PlayOptions)` with `layer` (default 0), `weight` (1), `loop` (true; `false` holds the last frame and sets `action.finished`), `speed` (1; negative plays backwards, starting at the end), `fadeIn` seconds, `blend` (`'override' | 'additive'`), `startTime`. Throws when the pool is full.
+- `play(clip, opts: AnimPlayOptions)` with `layer` (default 0), `weight` (1), `loop` (true; `false` holds the last frame and sets `action.finished`), `speed` (1; negative plays backwards, starting at the end), `fadeIn` seconds, `blend` (`'override' | 'additive'`), `startTime`. Throws when the pool is full.
 - `AnimationAction`: `clip`, `layer`, `blend`, settable `weight`, `speed`, `loop`, `time`, `paused`; read `active`, `finished`, `fade`, `effectiveWeight` (`weight × fade`, what the last update used).
 - `crossFade(from, to, seconds, opts?)`: `from` fades to 0 and stops; `to` (a clip, started on `from`'s layer with its weight and blend, or an action already playing) fades to 1. The two effective weights sum to `from.weight` throughout, so the pose neither shrinks nor overshoots.
 - `stop(action, seconds = 0)` (fade-out or at once), `stopAll()`.
@@ -239,3 +239,7 @@ Exporters bake dense keys; most of them a linear fit reproduces. `compressClip(c
 ## Not here
 
 Full-body IK, any GPU upload (`render/skin.ts`, `assets/gltf-load.ts` for morphed vertex buffers), glTF parsing (`assets/`).
+
+## Deprecated aliases
+
+Kept until the next minor (ws/api-rest, E-036), same shapes: `BlendMode` (use `AnimBlendMode`) and `PlayOptions` (use `AnimPlayOptions`).

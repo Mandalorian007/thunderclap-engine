@@ -102,7 +102,7 @@ describe('createWebHost', () => {
     const req = vi.fn(async () => {});
     document.documentElement.requestFullscreen = req;
     expect(host.fullscreen.available()).toBe(true);
-    expect(host.fullscreen.active()).toBe(false);
+    expect(host.fullscreen.active).toBe(false);
     expect(await host.fullscreen.toggle()).toBe(false);
     expect(req).toHaveBeenCalledOnce();
     const seen: boolean[] = [];

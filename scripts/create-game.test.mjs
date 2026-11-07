@@ -1,18 +1,28 @@
 // Tests for scripts/create-game.mjs. Run by `pnpm check:create-game` (node --test), which
 // `pnpm check` runs. Scaffolds into a temp dir, asserts the rewritten manifest and the file set, then
-// installs offline (`pnpm install --offline`) and runs `tsc --noEmit` against this repo through
-// `--engine link:<repo>`. When the offline install cannot be satisfied from the pnpm store the tsc step
-// is skipped and said so; the manifest and file-set assertions always run.
+// installs offline (`pnpm install --offline`), then runs `tsc --noEmit` and `pnpm build` against
+// this repo through `--engine link:<repo>`. When the offline install cannot be satisfied from the
+// pnpm store the tsc and build steps are skipped and said so; the manifest and file-set assertions
+// always run.
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { after, test } from 'node:test';
 import {
   ENGINE,
   engineSpec,
   listTemplates,
+  PUBLISHED,
   parseArgs,
   rewriteManifest,
   root,
@@ -45,8 +55,18 @@ test('parseArgs: positional dir, valued options, flags, misuse', () => {
   assert.throws(() => parseArgs(['g', 'h']), UsageError);
 });
 
-test('engineSpec: default caret range, specs kept, directories become link:', () => {
-  assert.equal(engineSpec(null, tmp, '0.2.0-alpha.1'), '^0.2.0-alpha.1');
+/** The directory a `link:` spec written for a project in `dest` points at. */
+const linkTarget = (spec, dest) => resolve(dest, spec.slice('link:'.length));
+
+test('engineSpec: default links this clone until published, then a caret range', () => {
+  assert.equal(PUBLISHED, false);
+  const d = engineSpec(null, join(tmp, 'game'), '0.2.0-alpha.1');
+  assert.match(d, /^link:/);
+  assert.equal(linkTarget(d, join(tmp, 'game')), resolve(root));
+  assert.equal(engineSpec(null, tmp, '0.2.0-alpha.1', true), '^0.2.0-alpha.1');
+});
+
+test('engineSpec: specs kept, directories become link:', () => {
   for (const s of ['^0.3.0', '0.3.0', '*', 'github:a/b', 'link:../e', 'file:../e.tgz', 'npm:x@1']) {
     assert.equal(engineSpec(s, tmp, '0'), s);
   }
@@ -152,12 +172,11 @@ for (const { name: template } of listTemplates()) {
     }
     assert.ok(!Object.values(pkg.scripts).some((c) => /--filter/.test(c)));
 
-    // The default engine spec is the caret range of this repo's version.
+    // Every template builds; the default engine spec links this clone (not on npm yet).
+    assert.equal(pkg.scripts.build, 'vite build');
+    assert.doesNotMatch(pkg.description, /Copy the folder/);
     const d = run(join(tmp, `${template}-default`), '--template', template, '--dry-run');
-    assert.match(
-      d.stdout,
-      new RegExp(`"\\^${readJson(join(root, 'package.json')).version.replace(/\./g, '\\.')}"`),
-    );
+    assert.match(d.stdout, new RegExp(`${ENGINE.replace('/', '\\/')} "link:`));
 
     // CLAUDE.md no longer points at this repo's root scripts.
     const claude = readFileSync(join(dir, 'CLAUDE.md'), 'utf8');
@@ -187,5 +206,16 @@ for (const { name: template } of listTemplates()) {
       stdio: 'inherit',
       timeout: 180_000,
     });
+    // And the static bundle builds: dist/index.html and at least one script.
+    execFileSync('pnpm', ['run', 'build', '--logLevel', 'warn'], {
+      cwd: dir,
+      stdio: 'inherit',
+      timeout: 180_000,
+    });
+    assert.ok(existsSync(join(dir, 'dist', 'index.html')), 'no dist/index.html');
+    assert.ok(
+      readdirSync(join(dir, 'dist', 'assets')).some((f) => f.endsWith('.js')),
+      'no script in dist/assets',
+    );
   });
 }

@@ -147,7 +147,7 @@ Partitioned storage note: in some browsers, itch's iframe gets storage keyed to 
 - `s`: schema builders `boolean, string({maxLength}), number({min,max,int}: NumberOptions), literal(...), array, record, object(shape, {strict}), optional, nullable, union, unknown, bytes({maxLength}), typed(kind, {maxLength})`, each returning a `Schema<T>` (`validate(value, path?)` → `null` or a message, `is(value)`). `Infer<typeof schema>`.
 - `runMigrations(data, from, to, migrations)`, `assertMigrationChain(version, migrations)`, `MigrationError`. `Migration` is `(data) => unknown`; `Migrations` maps a version `n` to the migration from v`n` to v`n+1`.
 - `probeStorage(get)`, `MemoryStorage`, `isQuotaError`, `StorageLike` (the `localStorage` subset the store uses), `saveKey(game, slot)`, `listSlots(game, storage?)` (default storage: `defaultHost().storage.open()`).
-- `encodeExport / decodeExport / fnv1a` (low level); `saveReplacer / saveReviver` (the `JSON.stringify` / `JSON.parse` hooks for typed arrays), `TypedKind`, `TypedArrayOf<K>`, `TYPED_CTORS` (kind → constructor), `typedKindOf(value)`.
+- `encodeExport / decodeExport / fnv1a` (low level); `saveReplacer / saveReviver` (the `JSON.stringify` / `JSON.parse` hooks for typed arrays), `TypedKind`, `TypedArrayOf<K>`, `TYPED_CTORS` (deprecated, internal; removed next minor), `typedKindOf(value)`.
 
 ## Storage
 The store gets its storage from the host: `createSaveStore({ ..., host })`, default `defaultHost()` (`@thunderclap/engine/host`). On the web that is `localStorage`; an Electron host can supply a file-backed `StorageLike`. `storage:` overrides the host.

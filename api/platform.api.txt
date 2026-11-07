@@ -102,8 +102,16 @@ type GpuInitResult = {
 const HANDHELD_SHORT_SIDE = 600;
 
 ## Letterbox  (type-only)
-interface Letterbox extends Rect {
+interface Letterbox extends LetterboxRect {
     scale: number;
+}
+
+## LetterboxRect  (type-only)
+interface LetterboxRect {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
 }
 
 ## LifecycleHandlers  (type-only)
@@ -144,12 +152,8 @@ type PlatformFamily = 'ios' | 'android' | 'desktop';
 type PointerKind = 'touch' | 'mouse' | 'keyboard';
 
 ## Rect  (type-only)
-interface Rect {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-}
+@deprecated
+type Rect = LetterboxRect;
 
 ## Surface
 class Surface {
@@ -238,7 +242,7 @@ function blockBrowserZoom(doc?: Document): () => void;
 function boot(root: HTMLElement, opts?: BootOptions): Promise<BootResult>;
 
 ## clientToLogical
-function clientToLogical(box: Rect, logicalW: number, logicalH: number, cx: number, cy: number, out?: Vec2): Vec2;
+function clientToLogical(box: LetterboxRect, logicalW: number, logicalH: number, cx: number, cy: number, out?: Vec2): Vec2;
 
 ## computeBackbuffer
 function computeBackbuffer(cssW: number, cssH: number, devicePixelRatio: number, maxDpr?: number, maxPixels?: number): BackbufferSize;
@@ -267,11 +271,14 @@ function isFullscreen(doc?: Document): boolean;
 ## isPortrait
 function isPortrait(win?: Window): boolean;
 
+## isReducedMotion
+function isReducedMotion(win?: Window): boolean;
+
 ## isTouchOnly
 function isTouchOnly(): boolean;
 
 ## logicalToClient
-function logicalToClient(box: Rect, logicalW: number, logicalH: number, lx: number, ly: number, out?: Vec2): Vec2;
+function logicalToClient(box: LetterboxRect, logicalW: number, logicalH: number, lx: number, ly: number, out?: Vec2): Vec2;
 
 ## mountSurface
 function mountSurface(root: HTMLElement, opts?: SurfaceOptions): Surface;
@@ -280,7 +287,8 @@ function mountSurface(root: HTMLElement, opts?: SurfaceOptions): Surface;
 function platformFamily(ua?: string, touchPoints?: number): PlatformFamily;
 
 ## prefersReducedMotion
-function prefersReducedMotion(): boolean;
+@deprecated
+const prefersReducedMotion: () => boolean;
 
 ## safeExternalUrl
 function safeExternalUrl(url: string | null | undefined): string | null;

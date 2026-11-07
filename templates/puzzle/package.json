@@ -3,10 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "A copyable 2D puzzle game on @thunderclap/engine: createGame, one scene, pure rules, a versioned save and a layout spec. Copy the folder, rename the package, replace rules/.",
+  "description": "A 2D puzzle game on @thunderclap/engine: createGame, one scene, pure rules, a versioned save and a layout spec. The game-specific code is rules/.",
   "license": "MIT",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "test": "vitest run",

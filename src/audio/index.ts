@@ -3,6 +3,8 @@ export {
   type AttachAudioOptions,
   AudioEngine,
   type AudioEngineOptions,
+  type AudioFollowTarget,
+  type AudioPlayOptions,
   type AudioState,
   BUS_NAMES,
   type BusName,

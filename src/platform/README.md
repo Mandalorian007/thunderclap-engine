@@ -77,13 +77,13 @@ const p = surface.clientToLogical(e.offsetX, e.offsetY); // design px
 - Pure math (no DOM, tested in Node): `computeLetterbox(containerW, containerH, logicalW,
   logicalH): Letterbox`, `computeBackbuffer(cssW, cssH, dpr, maxDpr?,
   maxPixels?)`, and `clientToLogical(box, logicalW, logicalH, cx, cy, out?)` /
-  `logicalToClient(...)`. `Rect` is `{ x, y, width, height }`; `Letterbox` adds `scale` (CSS px per
+  `logicalToClient(...)`. `LetterboxRect` is `{ x, y, width, height }`; `Letterbox` adds `scale` (CSS px per
   logical unit); `Vec2` is `{ x, y }`.
 
 ## Page, device and fullscreen
 
 - `watchVisibility(fn)`, `watchLifecycle(h: LifecycleHandlers)` (`onHide('hidden' | 'pagehide' |
-  'freeze')`, `onShow('visible' | 'pageshow' | 'resume')`), `prefersReducedMotion()`,
+  'freeze')`, `onShow('visible' | 'pageshow' | 'resume')`), `isReducedMotion()`,
   `watchReducedMotion(fn)`, `blockBrowserZoom(doc?)` (double-tap, pinch, smart zoom and
   ctrl+wheel; keyboard zoom is left alone). Each `watch*` returns unsubscribe.
 - `deviceTraits(): DeviceTraits` (`coarsePointer`, `shortSide`, `handheld`: coarse pointer and a
@@ -149,3 +149,7 @@ layout's form factors replace it.
 
 Tests: `letterbox.test.ts`, `surface.test.ts`, `device-mode.test.ts`, `links.test.ts`,
 `xr-surface.test.ts`, and the harness specs in `e2e/`.
+
+## Deprecated aliases
+
+Kept until the next minor (ws/api-rest, E-036), same shapes: `Rect` (use `LetterboxRect`) and `prefersReducedMotion()` (use `isReducedMotion(win?)`).

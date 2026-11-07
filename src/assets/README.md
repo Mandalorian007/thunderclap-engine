@@ -379,8 +379,8 @@ cache.release('rock.glb'); // evictable once nothing holds it
 `acquire(key, load, size)` returns the cached value or runs `load` once, however many callers ask
 at the same time; every call holds a reference until `release(key)`. Held and `pin(key)`-ned
 entries are never evicted (`unpin` undoes it). `has`, `refs`, `dispose(key)` (free an
-unreferenced entry now) and `stats(): AssetCacheStats` (`bytes`, `entries`, `hits`, `misses`,
-`evictions`) complete it. `onEvict` is the free hook; a failed load leaves nothing behind.
+unreferenced entry now) and the `stats` getter (an `AssetCacheStats` of `bytes`, `entries`, `hits`,
+`misses`, `evictions`) complete it. `onEvict` is the free hook; a failed load leaves nothing behind.
 
 ## Bundles
 

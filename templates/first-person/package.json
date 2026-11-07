@@ -3,10 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "A copyable first-person 3D game on @thunderclap/engine: createGame in client mode, Look, Worker-built chunk meshes with bounds and a texture array, sun shadow and fog, weather, world-anchored labels. Copy the folder, rename the package, replace world/.",
+  "description": "A first-person 3D game on @thunderclap/engine: createGame in client mode, Look, Worker-built chunk meshes with bounds and a texture array, sun shadow and fog, weather, world-anchored labels. The game-specific code is world/.",
   "license": "MIT",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "test": "vitest run",

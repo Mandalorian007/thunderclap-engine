@@ -9,9 +9,14 @@ export function watchVisibility(fn: (visible: boolean) => void): () => void {
 
 const REDUCED = '(prefers-reduced-motion: reduce)';
 
-export function prefersReducedMotion(): boolean {
-  return typeof matchMedia === 'function' && matchMedia(REDUCED).matches;
+/** True when the player asked the OS for reduced motion. `win` defaults to the global window. */
+export function isReducedMotion(win?: Window): boolean {
+  const mm = win ? win.matchMedia : typeof matchMedia === 'function' ? matchMedia : undefined;
+  return typeof mm === 'function' && mm.call(win ?? globalThis, REDUCED).matches;
 }
+
+/** @deprecated (ws/api-rest, E-036) Use `isReducedMotion`. Removed next minor. */
+export const prefersReducedMotion = (): boolean => isReducedMotion();
 
 /** What the device looks like from the page: enough to pick sensible defaults, not to sniff. */
 export interface DeviceTraits {
