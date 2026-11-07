@@ -13,13 +13,13 @@
  * - The pad is a fake gamepad the spec sets (`setPad`); its left stick moves the pad cursor.
  */
 import {
-  type Aabb,
   aabbTester,
   createPointerRouter,
   type GamepadLike,
   Input,
   PadCursor,
   planeTester,
+  type RayBox,
 } from '@thunderclap/engine/input';
 import { computeLetterbox } from '@thunderclap/engine/platform';
 import { Camera } from '@thunderclap/engine/render';
@@ -38,10 +38,10 @@ stage.append(canvas);
 const g2 = canvas.getContext('2d');
 
 type V3 = [number, number, number];
-const box = (id: string, min: V3, max: V3): Aabb<string> => ({ min, max, target: id });
+const box = (id: string, min: V3, max: V3): RayBox<string> => ({ min, max, target: id });
 
 let camera: Camera;
-let boxes: Aabb<string>[];
+let boxes: RayBox<string>[];
 if (mode === 'ortho') {
   camera = Camera.ortho2d(LOGICAL.width, LOGICAL.height);
   boxes = [

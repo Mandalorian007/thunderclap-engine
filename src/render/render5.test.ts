@@ -391,7 +391,7 @@ describe('standard dissolve', () => {
     const mesh = lodMesh(r, 'cube');
     const m = createStandardMaterial(r, dissolve ? { dissolve: { amount: 0.5 } } : {});
     const f = r.beginFrame(0, 0);
-    f.lights.sun.dir = [-0.4, -1, -0.3];
+    f.lights.sun.direction = [-0.4, -1, -0.3];
     f.lights.sun.color = [1, 1, 1];
     f.lights.sun.shadow = { extent: 20 };
     f.mesh(mesh, m, new Transform());

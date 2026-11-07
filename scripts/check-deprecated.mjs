@@ -1,14 +1,28 @@
 #!/usr/bin/env node
-// Deprecated-name lint for the copyable code (ws/templates-v1, E-036). `pnpm check:deprecated`
-// runs it (part of `pnpm check`).
+// The deprecated-name check (E-036): one module for every place the repo writes engine code.
+// ws/templates-v1 wrote the strip pass, ws/docs-v1 the suggestion pass, and ws/src-v1 merged
+// them. `pnpm check:deprecated` runs both passes (part of `pnpm check`); `pnpm check:snippets`
+// runs the suggestion pass on the README and guide snippets through `findDeprecatedUses`.
 //
-// It emits the engine's declarations with the repo's `tsc` (as `api-surface.mjs` does), deletes
-// every declaration whose JSDoc says `@deprecated` (exports, interface and class members,
-// overloads, options fields, export specifiers, and the barrel re-exports of what was deleted),
-// then typechecks `demos/**` and each `templates/*` against that stripped engine. A use of a
-// deprecated engine name is then a type error: an import of a removed alias, a read of a removed
-// member, a call that only the deprecated overload accepted, an object literal that sets a
-// deprecated field. When v1 removes the aliases, nothing the check passes breaks.
+// 1. Suggestion pass (`findDeprecatedUses`). The type checker reports each use of an
+//    `@deprecated` declaration as a suggestion (TS6385 a name, TS6387 a signature), which the tsc
+//    CLI never prints, so the pass asks TypeScript's API (`typescript/unstable/sync`, the bundled
+//    tsgo) for them. Run over the root project (`src`, `harness`, `examples`, `demos`), the e2e
+//    project, every `packages/*` and `templates/*` tsconfig. Only engine declarations count: a
+//    deprecated DOM name (`document.execCommand`) is the platform's, not ours.
+// 2. Strip pass. It emits the engine's declarations with the repo's `tsc` (as `api-surface.mjs`
+//    does), deletes every declaration whose JSDoc says `@deprecated` (exports, interface and class
+//    members, overloads, options fields, export specifiers, and the barrel re-exports of what was
+//    deleted), then typechecks every project that imports the engine by package name (`demos`,
+//    `harness` and `e2e`, `packages/*`, `templates/*`) against that stripped engine. A use is then
+//    a type error, including what pass 1 cannot see: a key of a deprecated field in a mapped-type
+//    patch (`post.set({ fog: … })`). `src` imports itself by relative path, so only pass 1 covers
+//    it. When v1 removes the aliases, nothing the check passes breaks.
+//
+// A test that exists only to cover a deprecated alias keeps its use: the line ends with
+// `// deprecated-alias test` (or the comment sits alone on the line above). The alias's own
+// implementation, reading the deprecated field it still honours, says `// deprecated-alias impl`.
+// Both passes skip those lines.
 //
 //   node scripts/check-deprecated.mjs        exit 1 and print the errors on any use
 //   --keep                                   keep the stripped declarations (prints the path)
@@ -27,8 +41,96 @@ import {
 } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { API, SymbolFlags } from 'typescript/unstable/sync';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+// ---------------------------------------------------------------------------------------------
+// Exemptions
+
+/** The comment that keeps a deprecated use: an alias test, or the alias's own implementation. */
+export const EXEMPT = /\/\/\s*deprecated-alias (?:test|impl)\b/;
+
+/** True when 1-based `line` of `lines` carries the marker, or the line above is only the marker. */
+export function isExempt(lines, line) {
+  if (EXEMPT.test(lines[line - 1] ?? '')) return true;
+  const above = (lines[line - 2] ?? '').trim();
+  return above.startsWith('//') && EXEMPT.test(above);
+}
+
+const fileLines = new Map();
+function linesOf(file) {
+  if (!fileLines.has(file)) fileLines.set(file, readFileSync(file, 'utf8').split('\n'));
+  return fileLines.get(file);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Pass 1: the type checker's deprecation suggestions
+
+/** TypeScript's "is deprecated" suggestion codes: a name (6385) and a signature (6387). */
+export const DEPRECATED_CODES = new Set([6385, 6387]);
+
+/** A declaration in this repo's own source (not a lib, not a dependency). */
+export function inRepoSource(path) {
+  const p = path.toLowerCase();
+  return p.startsWith(`${repoRoot.toLowerCase()}/`) && !p.includes('/node_modules/');
+}
+
+/**
+ * Every use of an `@deprecated` declaration in the root files of the project at `tsconfig` (or
+ * of each project, given an array), or only in `files` (absolute paths among them), from the
+ * type checker's suggestion diagnostics. Returns [{ file, line, col, code, text }], 1-based line
+ * and column, sorted by file and position, one entry per position.
+ *
+ * `declaredIn(path)` keeps only uses whose deprecated symbol is declared in a file it accepts
+ * (`inRepoSource` keeps the engine's and drops the DOM's); `exempt` drops `deprecated-alias`
+ * lines. By default both are off and every deprecated name is listed.
+ */
+export function findDeprecatedUses(tsconfig, files, { declaredIn, exempt = false } = {}) {
+  const configs = (Array.isArray(tsconfig) ? tsconfig : [tsconfig]).map((c) => resolve(c));
+  const api = new API({ cwd: repoRoot });
+  try {
+    const snapshot = api.updateSnapshot({ openProjects: configs });
+    const projects = snapshot.getProjects();
+    if (projects.length === 0) throw new Error(`findDeprecatedUses: no project for ${configs}`);
+    const seen = new Set();
+    const out = [];
+    for (const project of projects) {
+      for (const file of files ?? project.rootFiles) {
+        if (!project.program.getSourceFile(file)) continue;
+        const text = readFileSync(file, 'utf8');
+        for (const d of project.program.getSuggestionDiagnostics(file)) {
+          if (!DEPRECATED_CODES.has(d.code)) continue;
+          const before = text.slice(0, d.pos).split('\n');
+          const use = {
+            file,
+            line: before.length,
+            col: before[before.length - 1].length + 1,
+            code: d.code,
+            text: d.text,
+          };
+          const key = `${file}:${use.line}:${use.col}:${d.code}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          if (exempt && isExempt(linesOf(file), use.line)) continue;
+          if (declaredIn) {
+            let sym = project.checker.getSymbolAtPosition(file, d.pos);
+            // An imported name is an alias declared in the importing file: judge its target.
+            if (sym && sym.flags & SymbolFlags.Alias) sym = project.checker.getAliasedSymbol(sym);
+            const paths = sym?.declarations.map((h) => h.path) ?? [];
+            if (paths.length > 0 && !paths.some(declaredIn)) continue;
+          }
+          out.push(use);
+        }
+      }
+    }
+    return out.sort((a, b) =>
+      a.file === b.file ? a.line - b.line || a.col - b.col : a.file < b.file ? -1 : 1,
+    );
+  } finally {
+    api.close();
+  }
+}
 
 // ---------------------------------------------------------------------------------------------
 // Stripping one .d.ts
@@ -267,14 +369,48 @@ function emitDeclarations(cache) {
   return out;
 }
 
-/** The projects that hold copyable code: demos (root tsconfig) and each template. */
+/** Each `packages/*` and `templates/*` directory holding `tsconfig*.json`, as [dir, file]. */
+function nested(parent) {
+  const out = [];
+  const pdir = join(repoRoot, parent);
+  for (const name of readdirSync(pdir).sort()) {
+    const dir = join(pdir, name);
+    if (!existsSync(dir) || !statSync(dir).isDirectory()) continue;
+    for (const file of readdirSync(dir).sort()) {
+      if (/^tsconfig(\.\w+)?\.json$/.test(file)) out.push([dir, file]);
+    }
+  }
+  return out;
+}
+
+/** The tsconfigs pass 1 reads: every project in the repo that holds engine code or uses it. */
+export function suggestionConfigs() {
+  return [
+    join(repoRoot, 'tsconfig.json'),
+    join(repoRoot, 'tsconfig.e2e.json'),
+    ...nested('packages').map(([d, f]) => join(d, f)),
+    ...nested('templates').map(([d, f]) => join(d, f)),
+  ];
+}
+
+/**
+ * The projects pass 2 typechecks against the stripped engine: everything that imports it by
+ * package name. `src` is not one (relative imports), so pass 1 alone covers it.
+ */
 function projects() {
-  const list = [{ name: 'demos', dir: repoRoot, tsconfig: 'tsconfig.json', include: ['demos'] }];
-  const tdir = join(repoRoot, 'templates');
-  for (const name of readdirSync(tdir).sort()) {
-    const dir = join(tdir, name);
-    if (existsSync(join(dir, 'tsconfig.json'))) {
-      list.push({ name: `templates/${name}`, dir, tsconfig: 'tsconfig.json', include: null });
+  const list = [
+    { name: 'demos', dir: repoRoot, tsconfig: 'tsconfig.json', include: ['demos'] },
+    {
+      name: 'harness+e2e',
+      dir: repoRoot,
+      tsconfig: 'tsconfig.e2e.json',
+      include: ['harness', 'e2e'],
+    },
+  ];
+  for (const parent of ['packages', 'templates']) {
+    for (const [dir, file] of nested(parent)) {
+      const name = `${relative(repoRoot, dir)}${file === 'tsconfig.json' ? '' : `/${file}`}`;
+      list.push({ name, dir, tsconfig: file, include: null });
     }
   }
   return list;
@@ -301,23 +437,52 @@ function checkProject(p, dts, cache) {
   const configPath = join(cache, `${p.name.replace(/\W/g, '-')}.tsconfig.json`);
   writeFileSync(configPath, JSON.stringify(config));
   const r = run(configPath);
-  const text = `${r.stdout}${r.stderr}`
-    .split('\n')
-    .filter((l) => l.trim())
-    .map((l) => (l.startsWith('/') ? relative(repoRoot, l) : l));
-  return { ok: r.status === 0, lines: text };
+  if (r.status === 0) return { ok: true, lines: [] };
+  // One error is a `file(line,col): error …` head and its indented continuation lines. Drop the
+  // errors on a `deprecated-alias` line; any other error (deprecated or not) fails the project.
+  const errors = [];
+  for (const l of `${r.stdout}${r.stderr}`.split('\n')) {
+    if (!l.trim()) continue;
+    if (/^\s/.test(l) && errors.length) errors[errors.length - 1].push(l);
+    else errors.push([l]);
+  }
+  const kept = errors.filter(([head]) => {
+    const m = /^(.+?)\((\d+),\d+\): error/.exec(head);
+    if (!m) return true;
+    const file = resolve(p.dir, m[1]);
+    return !(existsSync(file) && isExempt(linesOf(file), Number(m[2])));
+  });
+  const lines = kept.flat().map((l) => (l.startsWith('/') ? relative(repoRoot, l) : l));
+  return { ok: kept.length === 0, lines };
+}
+
+/** Pass 1 over every project: the engine's deprecated names used anywhere but on exempt lines. */
+export function suggestionPass() {
+  return findDeprecatedUses(suggestionConfigs(), undefined, {
+    declaredIn: inRepoSource,
+    exempt: true,
+  }).filter((u) => !u.file.includes('/node_modules/'));
 }
 
 function main() {
   const keep = process.argv.includes('--keep');
+  let failed = 0;
+  const uses = suggestionPass();
+  if (uses.length > 0) {
+    failed++;
+    console.error(`check-deprecated: ${uses.length} uses of deprecated engine names:`);
+    for (const u of uses) {
+      console.error(`  ${relative(repoRoot, u.file)}:${u.line}:${u.col} TS${u.code} ${u.text}`);
+    }
+  }
   const cacheRoot = join(repoRoot, 'node_modules', '.cache');
   mkdirSync(cacheRoot, { recursive: true });
   const cache = mkdtempSync(join(cacheRoot, 'check-deprecated-'));
-  let failed = 0;
+  const list = projects();
   try {
     const dts = emitDeclarations(cache);
     const count = stripTree(dts);
-    for (const p of projects()) {
+    for (const p of list) {
       const r = checkProject(p, dts, cache);
       if (r.ok) continue;
       failed++;
@@ -326,7 +491,7 @@ function main() {
     }
     if (failed === 0) {
       console.log(
-        `check-deprecated: demos and ${projects().length - 1} templates use none of the ${count} deprecated engine declarations`,
+        `check-deprecated: src, ${list.map((p) => p.name).join(', ')} use none of the ${count} deprecated engine declarations (exempt: \`// deprecated-alias test|impl\` lines)`,
       );
     }
   } finally {

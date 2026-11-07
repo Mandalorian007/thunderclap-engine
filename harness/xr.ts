@@ -166,7 +166,7 @@ function wire(ctx: EngineCtx<'select', null>): void {
   const markerP: InstanceParams = { tint: [1, 1, 0.2, 1] };
   const lights = new Lights();
   lights.ambient.set([0.22, 0.22, 0.28]);
-  lights.sun.dir = new Float32Array([0.4, -1, -0.3]);
+  lights.sun.direction = new Float32Array([0.4, -1, -0.3]);
   lights.sun.color = new Float32Array([0.9, 0.85, 0.8]);
 
   // On the page: a standing viewer 1.6 m up looking down -z, the frame a headset gives.
@@ -188,7 +188,7 @@ function wire(ctx: EngineCtx<'select', null>): void {
     render(frame: Frame, cam: Camera) {
       frame.clear(0.05, 0.06, 0.1);
       frame.lights.ambient.set(lights.ambient);
-      frame.lights.sun.dir = lights.sun.dir;
+      frame.lights.sun.direction = lights.sun.direction;
       frame.lights.sun.color = lights.sun.color;
       frame.mesh(cube, lit, ground, groundP);
       block.setAxisAngle(0, 1, 0, t * 0.5);

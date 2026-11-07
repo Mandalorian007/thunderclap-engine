@@ -20,13 +20,13 @@
 // overload) fails too. tsc reports those only as suggestions (TS6385, TS6387), which the CLI never
 // prints, so a second pass asks the type checker for them through TypeScript's own API
 // (`typescript/unstable/sync`, the bundled tsgo) on the same generated project.
-// `findDeprecatedUses(tsconfig, files?)` is exported for other checks to reuse.
+// `findDeprecatedUses` lives in `check-deprecated.mjs` (one checker, ws/src-v1); re-exported here.
 // Node built-ins plus the repo's own TypeScript.
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { API } from 'typescript/unstable/sync';
+import { DEPRECATED_CODES, findDeprecatedUses } from './check-deprecated.mjs';
 
 export const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 export const MARKER = '<!-- snippet:check -->';
@@ -106,42 +106,9 @@ function enginePaths() {
   return paths;
 }
 
-/** TypeScript's "is deprecated" suggestion codes: a name (6385) and a signature (6387). */
-export const DEPRECATED_CODES = new Set([6385, 6387]);
-
-/**
- * Every use of an `@deprecated` declaration in the root files of the project at `tsconfig` (or
- * only in `files`, absolute paths among them), from the type checker's suggestion diagnostics.
- * Returns [{ file, line, col, code, text }], 1-based line and column, sorted by file and position.
- */
-export function findDeprecatedUses(tsconfig, files) {
-  const api = new API({ cwd: root });
-  try {
-    const snapshot = api.updateSnapshot({ openProjects: [resolve(tsconfig)] });
-    const project = snapshot.getProjects()[0];
-    if (!project) throw new Error(`findDeprecatedUses: no project for ${tsconfig}`);
-    const out = [];
-    for (const file of files ?? project.rootFiles) {
-      const text = readFileSync(file, 'utf8');
-      for (const d of project.program.getSuggestionDiagnostics(file)) {
-        if (!DEPRECATED_CODES.has(d.code)) continue;
-        const before = text.slice(0, d.pos).split('\n');
-        out.push({
-          file,
-          line: before.length,
-          col: before[before.length - 1].length + 1,
-          code: d.code,
-          text: d.text,
-        });
-      }
-    }
-    return out.sort((a, b) =>
-      a.file === b.file ? a.line - b.line || a.col - b.col : a.file < b.file ? -1 : 1,
-    );
-  } finally {
-    api.close();
-  }
-}
+// The suggestion pass lives in `check-deprecated.mjs` (ws/src-v1); re-exported here so the
+// migration guide's import path and this file's callers keep working.
+export { DEPRECATED_CODES, findDeprecatedUses };
 
 /**
  * Every `@deprecated` entry of the API snapshots in `apiDir` (default `api/`), as

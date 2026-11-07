@@ -23,7 +23,6 @@
 import {
   type AreaStamp,
   bakeNavMesh,
-  type Cell,
   createAreaCosts,
   createCrowd,
   createFlowField3,
@@ -35,6 +34,7 @@ import {
   type FlowField3,
   findMeshPath,
   type NavBakeOptions,
+  type NavCell,
   type NavMesh,
   type NavPath,
   type NavPath3,
@@ -262,9 +262,9 @@ if (MODE === 'queue' && queue) {
   };
 }
 
-const from: Cell = { x: 0, y: 0 };
-const to: Cell = { x: 0, y: 0 };
-function randomWalkable(cell: Cell): void {
+const from: NavCell = { x: 0, y: 0 };
+const to: NavCell = { x: 0, y: 0 };
+function randomWalkable(cell: NavCell): void {
   do {
     cell.x = Math.floor(rand() * Q_SIZE);
     cell.y = Math.floor(rand() * Q_SIZE);

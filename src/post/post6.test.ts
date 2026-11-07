@@ -12,8 +12,8 @@ import { createFakeDevice, fakeRendererGpu } from '../render/fake-gpu';
 import { Renderer } from '../render/renderer';
 import { PostStack } from './post-stack';
 import {
+  cinematicPostSettings,
   defaultPostQuality,
-  defaultPostSettings,
   POST_UNIFORM_FLOATS,
   packPostUniforms,
 } from './settings';
@@ -95,7 +95,7 @@ describe('post 6: jitter through the renderer (ws/post-6)', () => {
     const j0 = post.taa.jitter(0);
     expect(camera.jitter).toEqual([j0[0], j0[1]]);
     // The deprecated registration is a no-op.
-    post.removeJitterCamera(camera).addJitterCamera(camera);
+    post.removeJitterCamera(camera).addJitterCamera(camera); // deprecated-alias test
     expect(camera.jitter).toEqual([j0[0], j0[1]]);
   });
 
@@ -155,9 +155,9 @@ describe('post 6: jitter through the renderer (ws/post-6)', () => {
 
 describe('post 6: Catmull-Rom history filter (ws/post-6)', () => {
   it("defaults to 'catmull-rom' and packs it in taa3.z", () => {
-    expect(defaultPostSettings().taa.historyFilter).toBe('catmull-rom');
+    expect(cinematicPostSettings().taa.historyFilter).toBe('catmull-rom');
     const out = new Float32Array(POST_UNIFORM_FLOATS);
-    const s = defaultPostSettings();
+    const s = cinematicPostSettings();
     s.taa.enabled = true;
     const pack = () =>
       packPostUniforms(out, s, 0, 800, 450, 800, 450, defaultPostQuality(), null, 0, {

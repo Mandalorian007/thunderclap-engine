@@ -259,7 +259,7 @@ async function main(): Promise<void> {
     const high = smooth(0, NOON_ELEVATION * 0.6, elevation);
     mix3(sunColor, SUN_LOW, SUN_NOON, high);
     mix3(ambient, AMBIENT_NIGHT, AMBIENT_DAY, smooth(-0.1, 0.1, elevation));
-    lights.sun.dir = sunDir;
+    lights.sun.direction = sunDir;
     lights.sun.color = sunColor;
     lights.ambient.set(ambient);
   }

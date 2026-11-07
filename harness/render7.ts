@@ -288,7 +288,7 @@ async function main(): Promise<void> {
 
   const lights = new Lights();
   lights.ambient.set([0.3, 0.31, 0.35]);
-  lights.sun.dir = [-0.4, -0.8, -0.5];
+  lights.sun.direction = [-0.4, -0.8, -0.5];
   lights.sun.color = [1.1, 1.05, 0.95];
 
   const chain = createLodChain(icosphere({ radius: 1, subdivisions: 3 }), [0.25, 0.06]);

@@ -15,8 +15,8 @@ import { Renderer } from '../render/renderer';
 import type { SceneTargetAux } from '../render/scene-target';
 import { PostStack } from './post-stack';
 import {
+  cinematicPostSettings,
   defaultPostQuality,
-  defaultPostSettings,
   POST_UNIFORM_FLOATS,
   packPostUniforms,
 } from './settings';
@@ -100,7 +100,7 @@ describe('post 5: TAA velocity reprojection (ws/post-5)', () => {
 
   it('packs the velocity flag in taa2.w and the thresholds in taa3, gated on TAA', () => {
     const out = new Float32Array(POST_UNIFORM_FLOATS);
-    const s = defaultPostSettings();
+    const s = cinematicPostSettings();
     s.taa.enabled = true;
     s.taa.depthReject = 0.25;
     s.taa.velocityReject = 3;

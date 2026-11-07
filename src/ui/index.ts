@@ -21,7 +21,6 @@ export {
   type SayOptions,
 } from './caption';
 export {
-  CURSOR_CSS,
   type CursorHost,
   type CursorOptions,
   type CursorRepeat,
@@ -31,11 +30,25 @@ export {
   type WorldCursor,
   type WorldTarget,
 } from './cursor';
+export {
+  BASE_CSS,
+  CANVAS_MINIMAP_CSS,
+  CURSOR_CSS,
+  FLOATS_CSS,
+  HUD_CSS,
+  INVENTORY_CSS,
+  LOADING_CSS,
+  NOTIFY_CSS,
+  ORB_CSS,
+  TOOLTIP_CSS,
+  WIDGETS2_CSS,
+  WIDGETS3_CSS,
+  WORLD_PANEL_WGSL,
+} from './deprecated';
 export { append, type Child, focusableWithin, h } from './dom';
 export {
   createFloats,
   ensureFloatsStyles,
-  FLOATS_CSS,
   type Floats,
   type FloatsHost,
   type FloatsOptions,
@@ -49,7 +62,6 @@ export {
   ensureHudStyles,
   type Heading,
   type HeadingOptions,
-  HUD_CSS,
   type HudHost,
   headingOffset,
   type Meter,
@@ -77,7 +89,6 @@ export {
   defaultInventoryLabels,
   ensureInventoryStyles,
   type GridCell,
-  INVENTORY_CSS,
   type InventoryHost,
   type InventoryLabels,
   iconNode,
@@ -162,7 +173,6 @@ export {
 export {
   createLoading,
   ensureLoadingStyles,
-  LOADING_CSS,
   type LoadingHost,
   type LoadingOptions,
   type LoadingScreen,
@@ -175,7 +185,6 @@ export {
   menuNav,
 } from './menu-nav';
 export {
-  CANVAS_MINIMAP_CSS,
   type CanvasMinimap,
   type CanvasMinimapHost,
   type CanvasMinimapOptions,
@@ -193,14 +202,13 @@ export {
 export {
   createNotifier,
   ensureNotifyStyles,
-  NOTIFY_CSS,
   type Notification,
   type Notifier,
   type NotifyAction,
   type NotifyOptions,
   type NotifyTone,
 } from './notify';
-export { createOrbMeter, ensureOrbStyles, ORB_CSS } from './orb';
+export { createOrbMeter, ensureOrbStyles } from './orb';
 export { createOverlay, type Overlay, type OverlayOptions, type Rect } from './overlay';
 export {
   defaultPads,
@@ -239,7 +247,7 @@ export {
   PanelStack,
   type PanelStackFocusOptions,
 } from './stack';
-export { BASE_CSS, ensureStyles, prefersReducedMotion, prefersReducedMotionIn } from './styles';
+export { ensureStyles, prefersReducedMotion, prefersReducedMotionIn } from './styles';
 export {
   applyTextScale,
   CSS_FONT_PX,
@@ -268,7 +276,6 @@ export {
   createTooltips,
   ensureTooltipStyles,
   placeTooltip,
-  TOOLTIP_CSS,
   type Tooltip,
   type TooltipHost,
   type TooltipOptions,
@@ -299,7 +306,6 @@ export {
   segmented,
   select,
   stepper,
-  WIDGETS2_CSS,
   type WidgetCooldown,
   type WidgetCooldownOptions,
   type WidgetReticle,
@@ -316,7 +322,6 @@ export {
   ensureWidgets3Styles,
   type Ring,
   type RingOptions,
-  WIDGETS3_CSS,
   type Widgets3Host,
 } from './widgets-3';
 export type { WorldPanelInput } from './world-panel';
@@ -333,7 +338,6 @@ export {
   type PanelRect,
   type PanelTheme,
   resolvePanelTheme,
-  WORLD_PANEL_WGSL,
   WorldButton,
   type WorldButtonOptions,
   WorldLabel,

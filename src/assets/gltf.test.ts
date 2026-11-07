@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  SKIN_JOINTS_BYTE_OFFSET,
+  SKIN_WEIGHTS_BYTE_OFFSET,
+  VERTEX_SKINNED_STRIDE,
+} from '../render/mesh';
+import {
   composeTrs,
   decodeDataUri,
   GltfError,
@@ -7,13 +12,7 @@ import {
   parseGltf,
   transformUv,
 } from './gltf';
-import {
-  interleaveSkinned,
-  SKINNED_JOINTS_OFFSET,
-  SKINNED_VERTEX_STRIDE,
-  SKINNED_WEIGHTS_OFFSET,
-  skeletonFromSkin,
-} from './gltf-skin';
+import { interleaveSkinned, skeletonFromSkin } from './gltf-skin';
 
 // ---------------------------------------------------------------- a tiny GLB writer
 
@@ -426,19 +425,19 @@ describe('parseGltf (skins and animations)', () => {
     const p = doc.meshes[0]!.primitives[0]!;
     const packed = interleaveSkinned(p);
     expect(packed.layout).toBe('skinned');
-    expect(SKINNED_VERTEX_STRIDE).toBe(56);
+    expect(VERTEX_SKINNED_STRIDE).toBe(56);
     expect(packed.vertices.byteLength).toBe(4 * 56);
     const f32 = new Float32Array(packed.vertices);
     const u8 = new Uint8Array(packed.vertices);
     // Vertex 2: position (0.5, 1, 0), normal +Z, uv 0, colour 1.
     expect([...f32.slice(2 * 14, 2 * 14 + 12)]).toEqual([0.5, 1, 0, 0, 0, 1, 0, 0, 1, 1, 1, 1]);
-    const j = 2 * 56 + SKINNED_JOINTS_OFFSET;
+    const j = 2 * 56 + SKIN_JOINTS_BYTE_OFFSET;
     expect([...u8.slice(j, j + 4)]).toEqual([0, 1, 0, 0]);
-    const wAt = 2 * 56 + SKINNED_WEIGHTS_OFFSET;
+    const wAt = 2 * 56 + SKIN_WEIGHTS_BYTE_OFFSET;
     expect([...u8.slice(wAt, wAt + 4)]).toEqual([64, 191, 0, 0]);
     // Every vertex's weights sum to exactly 255.
     for (let i = 0; i < 4; i++) {
-      const o = i * 56 + SKINNED_WEIGHTS_OFFSET;
+      const o = i * 56 + SKIN_WEIGHTS_BYTE_OFFSET;
       expect(u8[o]! + u8[o + 1]! + u8[o + 2]! + u8[o + 3]!).toBe(255);
     }
     const unskinned = parseGltf(sampleGlb().glb).meshes[0]!.primitives[0]!;
@@ -1106,8 +1105,8 @@ describe('parseGltf (materials)', () => {
     expect(m.alphaMode).toBe('BLEND');
     expect(m.doubleSided).toBe(true);
     // Deprecated mirrors.
-    expect(m.baseColorTexture).toBe(0);
-    expect(m.texCoord).toBe(0);
+    expect(m.baseColorTexture).toBe(0); // deprecated-alias test
+    expect(m.texCoord).toBe(0); // deprecated-alias test
     // Both extensions are handled: no warning, and `extensionsRequired` is accepted.
     expect(doc.warnings).toEqual([]);
   });

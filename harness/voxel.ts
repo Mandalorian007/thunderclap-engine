@@ -207,7 +207,7 @@ async function main(): Promise<void> {
 
   const lights = new Lights();
   lights.ambient.set([0.28, 0.3, 0.34]);
-  lights.sun.dir = [-0.45, -1.0, -0.55];
+  lights.sun.direction = [-0.45, -1.0, -0.55];
   lights.sun.color = [0.85, 0.82, 0.74];
 
   const hit = createVoxelHit();
@@ -309,7 +309,11 @@ async function main(): Promise<void> {
       }
       if (!STILL) {
         dayTime += dt * 0.05;
-        lights.sun.dir = [Math.sin(dayTime) * 0.6 - 0.45, -1.0, Math.cos(dayTime) * 0.6 - 0.55];
+        lights.sun.direction = [
+          Math.sin(dayTime) * 0.6 - 0.45,
+          -1.0,
+          Math.cos(dayTime) * 0.6 - 0.55,
+        ];
       }
       chunks.update();
     },

@@ -4,8 +4,8 @@
 
 You move a game from `0.2.0-alpha.1` names to the names `engine-v1.0.0` keeps. Every old name
 below still works today: it is a deprecated alias with the same shape, and your editor shows it
-struck through. The aliases are removed in the next minor, and `engine-v1.0.0` ships without
-them ([E-036](../DECISIONS.md)). Rename them now and the upgrade is a version bump.
+struck through. The aliases are removed in `engine-v1.0.0`, which ships without them
+([E-036](../DECISIONS.md), [Removal](#removal)). Rename them now and the upgrade is a version bump.
 
 Most renames exist because two modules exported the same name with different shapes. The game
 that imports `Hit` from `input` and `Hit` from `geom` now writes `PickHit` and `RayHit`.
@@ -154,6 +154,16 @@ const opts: AudioPlayOptions = { at: [0, 1, 0] };
 const look = cinematicPostSettings();
 look.mist.density = 0.4;
 const sprite = renderer.createSpriteMaterial({ texture: tex, label: 'hero' });
+```
+
+## Removal
+
+The `engine-v1.0.0` release deletes every alias in the table above. Before you bump, run the
+script from [Find what you use](#find-what-you-use) in your game's folder; when it prints no
+engine name, the bump compiles:
+
+```sh
+node find-deprecated.mjs
 ```
 
 ## Next

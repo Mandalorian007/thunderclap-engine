@@ -160,7 +160,7 @@ async function main(): Promise<void> {
   renderer.camera = camera;
   const lights = new Lights();
   lights.ambient.set([0.25, 0.25, 0.28]);
-  lights.sun.dir = [-0.4, -1.0, -0.6];
+  lights.sun.direction = [-0.4, -1.0, -0.6];
   lights.sun.color = [0.85, 0.85, 0.8];
 
   /** Scenes drawn each frame (`?cache`: the resident ones, filtered per frame). */
@@ -213,7 +213,7 @@ async function main(): Promise<void> {
     // The file's lights replace the page's: a faint ambient, its directional as the sun.
     lights.ambient.set([0.03, 0.03, 0.03]);
     const sun = l.directional[0];
-    lights.sun.dir = sun ? sun.dir : [0, -1, 0];
+    lights.sun.direction = sun ? sun.direction : [0, -1, 0];
     lights.sun.color = sun ? sun.color : [0, 0, 0];
     lights.points.push(...l.points);
     lights.spots.push(...l.spots);

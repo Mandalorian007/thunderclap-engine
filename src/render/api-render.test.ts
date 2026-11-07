@@ -4,12 +4,12 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import { box } from '../geom/primitives';
 import { createLodChain } from '../geom/simplify';
 import { BUFFER_BINDING_BASE } from './bindings';
-import type { BlendMode, RenderBlendMode } from './blend';
+import type { BlendMode, RenderBlendMode } from './blend'; // deprecated-alias test
 import { CAMERA_INV_VIEW_PROJ_OFFSET, CAMERA_JITTER_OFFSET, Camera } from './camera';
 import * as deprecated from './deprecated';
 import { createFakeDevice, fakeRendererGpu } from './fake-gpu';
 import { atlasFrames } from './flipbook';
-import type { DistanceFog, Fog } from './lights';
+import type { DistanceFog, Fog } from './lights'; // deprecated-alias test
 import { FOG_OFFSET_FLOATS, LIGHTS_BLOCK_FLOATS, Lights } from './lights';
 import { SPRITE_WGSL } from './material';
 import { Renderer } from './renderer';
@@ -25,24 +25,24 @@ function renderer() {
 
 describe('deprecated aliases (E-036)', () => {
   it('re-export the internals unchanged', () => {
-    expect(deprecated.CAMERA_INV_VIEW_PROJ_OFFSET).toBe(CAMERA_INV_VIEW_PROJ_OFFSET);
-    expect(deprecated.CAMERA_JITTER_OFFSET).toBe(CAMERA_JITTER_OFFSET);
-    expect(deprecated.FOG_OFFSET_FLOATS).toBe(FOG_OFFSET_FLOATS);
-    expect(deprecated.LIGHTS_BLOCK_FLOATS).toBe(LIGHTS_BLOCK_FLOATS);
-    expect(deprecated.SKIN_PALETTE_HEADER_FLOATS).toBe(SKIN_PALETTE_HEADER_FLOATS);
-    expect(deprecated.BUFFER_BINDING_BASE).toBe(BUFFER_BINDING_BASE);
-    expect(deprecated.STANDARD_WGSL).toBe(STANDARD_WGSL);
-    expect(deprecated.SPRITE_WGSL).toBe(SPRITE_WGSL);
+    expect(deprecated.CAMERA_INV_VIEW_PROJ_OFFSET).toBe(CAMERA_INV_VIEW_PROJ_OFFSET); // deprecated-alias test
+    expect(deprecated.CAMERA_JITTER_OFFSET).toBe(CAMERA_JITTER_OFFSET); // deprecated-alias test
+    expect(deprecated.FOG_OFFSET_FLOATS).toBe(FOG_OFFSET_FLOATS); // deprecated-alias test
+    expect(deprecated.LIGHTS_BLOCK_FLOATS).toBe(LIGHTS_BLOCK_FLOATS); // deprecated-alias test
+    expect(deprecated.SKIN_PALETTE_HEADER_FLOATS).toBe(SKIN_PALETTE_HEADER_FLOATS); // deprecated-alias test
+    expect(deprecated.BUFFER_BINDING_BASE).toBe(BUFFER_BINDING_BASE); // deprecated-alias test
+    expect(deprecated.STANDARD_WGSL).toBe(STANDARD_WGSL); // deprecated-alias test
+    expect(deprecated.SPRITE_WGSL).toBe(SPRITE_WGSL); // deprecated-alias test
   });
 
   it('BlendMode is RenderBlendMode and Fog is DistanceFog', () => {
-    expectTypeOf<BlendMode>().toEqualTypeOf<RenderBlendMode>();
-    expectTypeOf<Fog>().toEqualTypeOf<DistanceFog>();
+    expectTypeOf<BlendMode>().toEqualTypeOf<RenderBlendMode>(); // deprecated-alias test
+    expectTypeOf<Fog>().toEqualTypeOf<DistanceFog>(); // deprecated-alias test
   });
 
   it('renderer.white is defaultTextures(device).white', () => {
     const { r } = renderer();
-    expect(r.white).toBe(defaultTextures(r.device).white);
+    expect(r.white).toBe(defaultTextures(r.device).white); // deprecated-alias test
   });
 });
 
@@ -73,7 +73,7 @@ describe('createSpriteMaterial', () => {
   it('still takes the deprecated positional form', () => {
     const { r } = renderer();
     const texture = r.textureFromPixels({ width: 1, height: 1, data: new Uint8Array(4) });
-    const m = r.createSpriteMaterial(texture, 'old', { blend: 'premultiplied' });
+    const m = r.createSpriteMaterial(texture, 'old', { blend: 'premultiplied' }); // deprecated-alias test
     expect(m.label).toBe('old');
     expect(m.blend).toBe('premultiplied');
   });
@@ -83,11 +83,11 @@ describe('Lights.sun.direction', () => {
   it('is the same array as the deprecated dir, both ways', () => {
     const l = new Lights();
     expect(Array.from(l.sun.direction)).toEqual([0, -1, 0]);
-    expect(l.sun.dir).toBe(l.sun.direction);
-    l.sun.dir = [1, 0, 0];
+    expect(l.sun.dir).toBe(l.sun.direction); // deprecated-alias test
+    l.sun.dir = [1, 0, 0]; // deprecated-alias test
     expect(l.sun.direction).toEqual([1, 0, 0]);
     l.sun.direction = [0, 0, -2];
-    expect(l.sun.dir).toEqual([0, 0, -2]);
+    expect(l.sun.dir).toEqual([0, 0, -2]); // deprecated-alias test
   });
 
   it('writes the block from direction', () => {

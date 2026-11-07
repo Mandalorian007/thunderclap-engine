@@ -6,8 +6,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyPostPatch,
+  cinematicPostSettings,
   defaultPostQuality,
-  defaultPostSettings,
   lowPostQuality,
   POST_UNIFORM_FLOATS,
   packPostUniforms,
@@ -21,7 +21,12 @@ const SHARPEN = 120;
 const OUTLINE = 124;
 const OUTLINE_COLOR = 128;
 
-function pack(s = defaultPostSettings(), quality = defaultPostQuality(), depth = false, seed = 0) {
+function pack(
+  s = cinematicPostSettings(),
+  quality = defaultPostQuality(),
+  depth = false,
+  seed = 0,
+) {
   const out = new Float32Array(POST_UNIFORM_FLOATS);
   const info = depth
     ? { outputWidth: 1600, near: 0.1, far: 100, projX: 1, projY: 1, invProj: new Float32Array(16) }
@@ -32,7 +37,7 @@ function pack(s = defaultPostSettings(), quality = defaultPostQuality(), depth =
 
 describe('finishing settings', () => {
   it('default to off with the brief values', () => {
-    const s = defaultPostSettings();
+    const s = cinematicPostSettings();
     expect(s.fxaa).toEqual({ enabled: false, subpixel: 0.75, edgeThreshold: 0.125 });
     expect(s.lut).toEqual({ texture: null, size: 32, intensity: 1 });
     expect(s.grain).toEqual({ intensity: 0, size: 1, luminanceResponse: 0.5, animated: true });
@@ -49,7 +54,7 @@ describe('finishing settings', () => {
   });
 
   it('merge by section, keeping the other fields', () => {
-    const s = defaultPostSettings();
+    const s = cinematicPostSettings();
     applyPostPatch(s, {
       grain: { intensity: 0.2 },
       outline: { thickness: 3 },
@@ -70,7 +75,7 @@ describe('finishing settings', () => {
     const before = new Float32Array(POST_UNIFORM_FLOATS);
     packPostUniforms(
       before,
-      defaultPostSettings(),
+      cinematicPostSettings(),
       0,
       800,
       450,
@@ -90,7 +95,7 @@ describe('finishing settings', () => {
   });
 
   it('pack the sections on, with the LUT scale and the grain seed only when animated', () => {
-    const s = defaultPostSettings();
+    const s = cinematicPostSettings();
     const tex = {} as GPUTexture;
     applyPostPatch(s, {
       fxaa: { enabled: true, subpixel: 0.5, edgeThreshold: 0.2 },
@@ -116,7 +121,7 @@ describe('finishing settings', () => {
   });
 
   it('pack the outline on only with depth, scaled to scene px, and the caps turn FXAA and it off', () => {
-    const s = defaultPostSettings();
+    const s = cinematicPostSettings();
     applyPostPatch(s, {
       fxaa: { enabled: true },
       outline: { enabled: true, thickness: 2, color: [1, 0.5, 0], intensity: 0.75 },

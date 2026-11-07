@@ -7,7 +7,7 @@
  */
 import { h } from './dom';
 import type { PanelHandle, PanelStack } from './stack';
-import { prefersReducedMotion } from './styles';
+import { prefersReducedMotionIn } from './styles';
 import { toFrameUnits } from './text-scale';
 import { bar } from './widgets-2';
 
@@ -139,7 +139,7 @@ export function createLoading(host: LoadingHost, opts: LoadingOptions = {}): Loa
     },
     done() {
       if (closing) return closing;
-      const skipFade = opts.reducedMotion || prefersReducedMotion();
+      const skipFade = opts.reducedMotion || prefersReducedMotionIn();
       closing = new Promise<void>((resolve) => {
         if (skipFade) {
           release();
@@ -170,9 +170,6 @@ export function createLoading(host: LoadingHost, opts: LoadingOptions = {}): Loa
 
 /**
  * Stylesheet for the loading screen (design px, theme tokens).
- *
- * @deprecated (ws/api-core, E-036) Internal: its `ensure*Styles` injects it. Leaves the `ui` entry next
- * minor; tests import it from this file.
  */
 export const LOADING_CSS = toFrameUnits(`
 .tc-panel.tc-loading { position: absolute; inset: 0; display: grid; place-items: center; max-width: none; max-height: none;

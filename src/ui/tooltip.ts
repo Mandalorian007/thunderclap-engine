@@ -197,7 +197,7 @@ export function createTooltips(host: TooltipHost): Tooltips {
   // The overlay's anchors once a world point built them: their frame is the one source for
   // where the frame is (ws/ui-4); before that the host's own (deprecated) `frame`.
   let anchors: Anchors | null = null;
-  const frameOf = (): Readonly<Rect> => anchors?.frame.rect ?? host.frame ?? NO_FRAME;
+  const frameOf = (): Readonly<Rect> => anchors?.frame.rect ?? host.frame ?? NO_FRAME; // deprecated-alias impl
 
   function place(entry: Entry): void {
     const t = entry.target;
@@ -407,9 +407,6 @@ export function createTooltips(host: TooltipHost): Tooltips {
 
 /**
  * Stylesheet for the tooltip (design px, theme tokens).
- *
- * @deprecated (ws/api-core, E-036) Internal: its `ensure*Styles` injects it. Leaves the `ui` entry next
- * minor; tests import it from this file.
  */
 export const TOOLTIP_CSS = toFrameUnits(`
 .tc-tooltip { position: absolute; left: 0; top: 0; pointer-events: none; will-change: transform; box-sizing: border-box;

@@ -112,7 +112,11 @@ function gridMode({ renderer, api }: Ctx): GameLoop {
     format: 'rgba8unorm-srgb',
     label: 'tiles-atlas',
   });
-  const material = renderer.createSpriteMaterial(texture, 'tiles', { sampler: 'nearest-clamp' });
+  const material = renderer.createSpriteMaterial({
+    texture,
+    label: 'tiles',
+    sampler: 'nearest-clamp',
+  });
 
   const layer = createTileLayer(renderer, { material, ...GRID, atlas: ATLAS, label: 'tiles' });
   const checker = new Int16Array(GRID.columns * GRID.rows);
@@ -237,7 +241,9 @@ function isoMode({ renderer, surface, api }: Ctx): GameLoop {
     format: 'rgba8unorm-srgb',
     label: 'tiles-iso-atlas',
   });
-  const material = renderer.createSpriteMaterial(texture, 'tiles-iso', {
+  const material = renderer.createSpriteMaterial({
+    texture,
+    label: 'tiles-iso',
     sampler: 'nearest-clamp',
   });
   const iso = createIso(ISO);
@@ -331,7 +337,9 @@ function parallaxMode({ renderer, surface, api }: Ctx): GameLoop {
     format: 'rgba8unorm-srgb',
     label: 'tiles-atlas',
   });
-  const material: Material = renderer.createSpriteMaterial(texture, 'tiles', {
+  const material: Material = renderer.createSpriteMaterial({
+    texture,
+    label: 'tiles',
     sampler: 'nearest-clamp',
   });
   const camera = Camera.ortho2d(LOGICAL.width, LOGICAL.height);

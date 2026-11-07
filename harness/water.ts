@@ -216,7 +216,7 @@ async function main(): Promise<void> {
     // The sun drifts ±0.35 rad around the parked direction over a 20 s cycle.
     const azimuth = STILL ? 0 : 0.35 * Math.sin((2 * Math.PI * clock) / 20);
     sunFor(SPECULAR_POINT[0], SPECULAR_POINT[2], azimuth);
-    lights.sun.dir = sunDir;
+    lights.sun.direction = sunDir;
     // The mirror point on the surface for this sun: eye + (eye.y / toSun.y) * toSun.xz.
     const k = EYE[1] / toSun[1]!;
     specular.x = EYE[0] + toSun[0]! * k;

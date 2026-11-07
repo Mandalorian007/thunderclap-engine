@@ -367,7 +367,7 @@ async function main(): Promise<void> {
 
   const lights = new Lights();
   lights.ambient.set(AMBIENT);
-  lights.sun.dir = SUN_DIR;
+  lights.sun.direction = SUN_DIR;
   lights.sun.color = SUN_COLOR;
   lights.sun.shadow = { extent: SHADOW_EXTENT, size: SHADOW_SIZE };
 

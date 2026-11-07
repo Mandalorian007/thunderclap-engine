@@ -180,9 +180,6 @@ ${CSSU} .tc-link-fallback { min-width: 0; width: min(480px, 90vw); }
  * The overlay's base stylesheet: tokens, layers, panels, widgets and units. Injected once
  * per document by `ensureStyles`; the HUD, cursor, tooltip and other widget sheets add
  * their own `<style>` beside it. Everything is under `.tc-overlay`.
- *
- * @deprecated (ws/api-core, E-036) Internal: `ensureStyles` injects it. Leaves the `ui` entry next
- * minor; tests import it from this file.
  */
 export const BASE_CSS = ROOT_CSS + toFrameUnits(WIDGET_CSS) + CSS_UNITS_CSS;
 

@@ -4,7 +4,17 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { pruneExportLists, stripDeprecated, stripTree } from './check-deprecated.mjs';
+import { fileURLToPath } from 'node:url';
+import {
+  findDeprecatedUses,
+  inRepoSource,
+  isExempt,
+  pruneExportLists,
+  stripDeprecated,
+  stripTree,
+} from './check-deprecated.mjs';
+
+const repoRoot = join(fileURLToPath(new URL('.', import.meta.url)), '..');
 
 const squash = (s) => s.replace(/\s+/g, ' ').trim();
 
@@ -120,6 +130,77 @@ test('stripTree follows barrels of barrels, per source file', () => {
     assert.equal(
       root,
       "export { type SnapGrid } from './input'; export { type Grid } from './ui';",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('isExempt takes the marker on the line or alone on the line above, test or impl', () => {
+  const lines = [
+    'a.dir = 1; // deprecated-alias test',
+    '// deprecated-alias impl',
+    'b.dir = 2;',
+    'c.dir = 3; // deprecated alias',
+    'x(); // deprecated-alias test',
+    'd.dir = 4;',
+  ];
+  assert.equal(isExempt(lines, 1), true);
+  assert.equal(isExempt(lines, 3), true);
+  assert.equal(isExempt(lines, 4), false);
+  // A trailing marker on the line above covers that line only.
+  assert.equal(isExempt(lines, 6), false);
+});
+
+test('inRepoSource keeps repo files and drops libs and dependencies', () => {
+  assert.equal(inRepoSource(join(repoRoot, 'src/render/lights.ts')), true);
+  assert.equal(inRepoSource(join(repoRoot, 'src/render/lights.ts').toLowerCase()), true);
+  assert.equal(inRepoSource(join(repoRoot, 'node_modules/typescript/lib/lib.dom.d.ts')), false);
+  assert.equal(inRepoSource('/elsewhere/lib.d.ts'), false);
+});
+
+test('findDeprecatedUses keeps engine names only and skips exempt lines when asked', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'check-deprecated-find-'));
+  try {
+    const file = join(dir, 'a.ts');
+    writeFileSync(
+      file,
+      [
+        "import type { Rect } from '@thunderclap/engine/platform';",
+        'export type R = Rect;',
+        'export type S = Rect; // deprecated-alias test',
+        "document.execCommand('copy');",
+        '',
+      ].join('\n'),
+    );
+    writeFileSync(
+      join(dir, 'tsconfig.json'),
+      JSON.stringify({
+        compilerOptions: {
+          strict: true,
+          module: 'esnext',
+          moduleResolution: 'bundler',
+          target: 'es2022',
+          lib: ['es2022', 'dom'],
+          noEmit: true,
+          types: [],
+          paths: { '@thunderclap/engine/platform': [join(repoRoot, 'src/platform/index.ts')] },
+        },
+        files: [file],
+      }),
+    );
+    const config = join(dir, 'tsconfig.json');
+    assert.deepEqual(
+      findDeprecatedUses(config).map((u) => u.line),
+      [1, 2, 3, 4],
+    );
+    const engine = findDeprecatedUses(config, undefined, {
+      declaredIn: inRepoSource,
+      exempt: true,
+    });
+    assert.deepEqual(
+      engine.map((u) => u.line),
+      [1, 2],
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });

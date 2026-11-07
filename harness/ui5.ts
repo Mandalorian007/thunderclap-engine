@@ -525,7 +525,7 @@ async function main(): Promise<void> {
 
   const lights = new Lights();
   lights.ambient.set([0.18, 0.18, 0.2]);
-  lights.sun.dir = [-0.45, -1.0, -0.65];
+  lights.sun.direction = [-0.45, -1.0, -0.65];
   lights.sun.color = [0.8, 0.8, 0.78];
   lights.fog.color = [0.6, 0.65, 0.75];
   lights.fog.density = 1;

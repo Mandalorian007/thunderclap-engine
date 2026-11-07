@@ -215,7 +215,7 @@ async function main(): Promise<void> {
 
   const lights = new Lights();
   lights.ambient.set([0.12, 0.12, 0.15]);
-  lights.sun.dir = [-0.45, -1.0, -0.65];
+  lights.sun.direction = [-0.45, -1.0, -0.65];
   lights.sun.color = [0.45, 0.47, 0.52];
   const lampPos = new Float32Array([2, 1.6, 2]);
   const lamp: PointLight = { position: lampPos, color: LAMP_COLOR, radius: 5 };

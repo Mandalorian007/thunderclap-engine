@@ -406,7 +406,7 @@ async function main(): Promise<void> {
 
   const lights = new Lights();
   lights.ambient.set(AMBIENT);
-  lights.sun.dir = SUN_DIR;
+  lights.sun.direction = SUN_DIR;
   lights.sun.color = SUN_COLOR;
   const lamp: PointLight = { position: LAMP_POS, color: LAMP_COLOR, radius: LAMP_RADIUS };
   lights.points.push(lamp);

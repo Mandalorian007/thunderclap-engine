@@ -311,7 +311,7 @@ async function main(): Promise<void> {
   // The lights: a sun and up to MAX_POINT_LIGHTS lamps on a ring, pushed per rung.
   const lights = new Lights();
   lights.ambient.set(AMBIENT);
-  lights.sun.dir = SUN_DIR;
+  lights.sun.direction = SUN_DIR;
   lights.sun.color = SUN_COLOR;
   const lamps: PointLight[] = [];
   for (let i = 0; i < 16; i++) {
