@@ -12,7 +12,7 @@
  * so they follow the regions and the modal rule the layout already applies.
  */
 import { h } from './dom';
-import type { Layout, RegionName, WidgetHandle } from './layout';
+import type { FormSize, Layout, RegionName, WidgetHandle } from './layout';
 import {
   createOrbMeter,
   meterClock,
@@ -244,8 +244,11 @@ export interface MeterOptions {
   readout?: MeterReadout;
   /** A CSS colour for the fill, over the `tone` token. */
   color?: string;
-  /** An orb's diameter, theme px. Default 128. */
-  size?: number;
+  /**
+   * An orb's diameter, theme px. Default 128. A number, or one per form factor (ws/ui-10,
+   * `FormSizes`: `{ phone: 56, default: 96 }`), applied before the layout measures the orb.
+   */
+  size?: FormSize;
   /** Turn the trail and the fill's easing off. Default: `prefers-reduced-motion`. */
   reducedMotion?: boolean;
   /** The clock the trail is read on, ms. Default `performance.now`. */
@@ -278,6 +281,11 @@ export interface Meter {
   setTone(tone: MeterTone): void;
   /** A CSS colour for the fill over the tone, or null for the tone's token. */
   setColor(color: string | null): void;
+  /**
+   * Change an orb's `size` (a number or one per form factor, theme px) live (ws/ui-10); the
+   * layout re-lays out once when the diameter in the current form factor changes. A bar ignores it.
+   */
+  setSize(size: FormSize): void;
   remove(): void;
 }
 
@@ -373,6 +381,7 @@ export function createMeter(host: HudHost, opts: MeterOptions = {}): Meter {
       else el.style.removeProperty('--tc-meter-color');
       el.toggleAttribute('data-color', !!color);
     },
+    setSize() {},
     remove() {
       handle.remove();
       el.remove();

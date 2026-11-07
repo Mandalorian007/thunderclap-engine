@@ -189,7 +189,7 @@ reticle.pulse();              // a short flash on a hit
   `--tc-color-meter-trail` holds where the value was for `delay` ms, 400, then drains to it over
   `duration` ms, 600; off under `prefers-reduced-motion` or `reducedMotion: true`), `readout:
   MeterReadout` (`'value' | 'percent' | 'none'`), `color` (a CSS colour over the tone), `size`
-  (the orb's diameter, theme px, 128), `reducedMotion` and `now` (the trail's clock, ms). `Meter`
+  (the orb's diameter, theme px, 128; a `FormSize` since ws/ui-10, below), `reducedMotion` and `now` (the trail's clock, ms). `Meter`
   gains `shape`, `trail` (where the band is now, in `value` units, never under the value) and
   `setColor(color | null)`. A bar with none of these is unchanged.
 - **Orb** (`ui.meter({ shape: 'orb' })`, `createOrbMeter(host, opts)`): a round well whose fill
@@ -199,6 +199,13 @@ reticle.pulse();              // a short flash on a hit
   nothing per frame; the trail's `linear` transition with the delay is the same curve `trail`
   reports. `data-empty` drops the meniscus at 0. `ORB_CSS` is injected once (`ensureOrbStyles`,
   `#tc-ui-orb`).
+- **Sized meters** (ws/ui-10). An orb's `size` is a `FormSize`: a number, or `FormSizes`, one
+  per form factor, `{ phone?, 'phone-landscape'?, 'phone-portrait'?, tablet?, desktop?, default }`
+  (theme px; `phone` covers both phone forms, a form's own name wins). `ui.meter({ shape: 'orb',
+  size: { phone: 56, default: 96 } })` is 56 on a phone and 96 elsewhere: the orb writes
+  `--tc-orb-size` from `WidgetOptions.onForm` on every re-layout, before the layout measures, so
+  a content bar or rail sizes to the new diameter in the same pass. `meter.setSize(size)` changes
+  it live and re-lays out once when the current form's diameter changes (a bar ignores it).
 - **Slots** (`SlotsOptions`: `count`, `region` `bottom`, `order`, `hints` per slot, `label`
   `Slots`, `selected` 0, `size` 72). `Slots`: `el` (`role="listbox"`), `count`, `selected`,
   `select(i)` (**wraps**: `select(count)` is 0, `select(-1)` the last, so a wheel cycles),
@@ -378,7 +385,10 @@ lists the exported names; ARCHITECTURE.md *Layout* describes the model.
 - **Regions and widgets.** `RegionName` is one of `REGIONS` (`top`, `left`, `right`, `bottom`,
   `cardLane`, `captionLane`, `modal`, `fill`). `layout.add(el, opts: WidgetOptions)` (`place`
   per form factor plus `default`, `order`, `id`) returns a `WidgetHandle` (`element`, `region`,
-  `setPlace`, `remove`). A `Placement` is a region, `'hidden'` or a `FreePlacement` (`{ region:
+  `setPlace`, `remove`). `WidgetOptions.onForm(ff)` (ws/ui-10) runs on every re-layout before the
+  layout measures, for a widget sized per form factor. `FormSize` is a number or `FormSizes`
+  (`{ default } & Partial<Record<FormFactor | 'phone', number>>`); the pure `formSize(size, ff)`
+  resolves one (the form's own entry, then `phone` on either phone form, then `default`). A `Placement` is a region, `'hidden'` or a `FreePlacement` (`{ region:
   'free', rect, reason }`); `placementFor(place, ff)` resolves one.
 - **Content bars** (ws/ui-8). `bars` (on `LayoutSpec` for every form factor, or on a
   `FormSpec`, which wins bar by bar) maps a `BarName` (`top`, `bottom`) to a `BarSize`
@@ -392,10 +402,12 @@ lists the exported names; ARCHITECTURE.md *Layout* describes the model.
 - **Content rails** (ws/ui-9). `BarName` also names the side rails, `left` and `right`, so
   `{ bars: { left: { size: 'content', max: 160 } } }` grows the rail's outer column track to its
   widest widget plus `pad` each side, between the form's track and `max`, with the same re-flow
-  (`fill` and `freeRect` get narrower) and the same `overflows()` report past `max`. A rail
-  widget's width is its measured box: rails stretch their widgets across, so a widget with no
-  width of its own (or `min-width`) measures as the rail and never widens it. Fixed rails stay
-  the default. `{ bars: { left: …, right: … } }` holds an orb at each side of a phone.
+  (`fill` and `freeRect` get narrower) and the same `overflows()` report past `max`. Since
+  ws/ui-10 a rail widget's width is its `max-content` width: for the one measure per re-layout
+  the rail is laid out `width: max-content` with `align-items: flex-start` (its own inline values
+  come back after), so a stretch-width widget contributes what it wants rather than the rail's
+  current width, and a rail widens when a label grows and narrows when it shrinks, at the next
+  re-layout (`refresh`). Fixed rails stay the default. `{ bars: { left: …, right: … } }` holds an orb at each side of a phone.
 - **Corner rule** (ws/ui-9). Where a content bar and a content rail meet (the cell on the bar's
   outer row and the rail's outer column, held by either in `areas`: `phone-landscape`'s rails
   hold their corners, the wide forms' bars hold theirs), the cell goes to the one whose content

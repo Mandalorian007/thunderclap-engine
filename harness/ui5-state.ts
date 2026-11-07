@@ -47,6 +47,12 @@ export interface HarnessUi5State {
    */
   orbRegions: string[];
   railWidths: { left: number; right: number };
+  /**
+   * `?orb-sized` (ws/ui-10): per orb, its measured width and its `size` map's diameter in the
+   * current form factor, both CSS px, as of the last re-layout. Empty in the other modes.
+   */
+  orbWidths: number[];
+  orbWant: number[];
 }
 
 export interface HarnessUi5Api {

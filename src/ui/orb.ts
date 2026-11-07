@@ -15,7 +15,7 @@
  */
 import { h } from './dom';
 import type { HudHost, Meter, MeterOptions, MeterTrailOptions } from './hud';
-import type { WidgetHandle } from './layout';
+import { type FormFactor, formSize, type WidgetHandle } from './layout';
 import { prefersReducedMotion } from './styles';
 
 /** `n` theme px (the same `calc` as `themePx` in `hud.ts`, kept local to avoid an import cycle). */
@@ -169,7 +169,6 @@ export function createOrbMeter(host: HudHost, opts: MeterOptions = {}): Meter {
     h('div', { class: 'tc-orb-gloss' }),
   );
   const style: Record<string, string> = {};
-  if (opts.size !== undefined) style['--tc-orb-size'] = tpx(opts.size);
   if (opts.color) style['--tc-meter-color'] = opts.color;
   if (timings) {
     style['--tc-orb-trail-delay'] = `${timings.delay}ms`;
@@ -205,6 +204,19 @@ export function createOrbMeter(host: HudHost, opts: MeterOptions = {}): Meter {
       el.style.setProperty('--tc-orb-trail', String(f));
     }
   };
+  // The diameter in the current form factor (ws/ui-10): written now and on every re-layout,
+  // before the layout measures, so a content bar or rail sizes to it.
+  let size = opts.size;
+  let sized = '';
+  const writeSize = (ff: FormFactor): boolean => {
+    const v = size === undefined ? '' : tpx(formSize(size, ff));
+    if (v === sized) return false;
+    sized = v;
+    if (v) el.style.setProperty('--tc-orb-size', v);
+    else el.style.removeProperty('--tc-orb-size');
+    return true;
+  };
+  writeSize(host.layout.formFactor);
   clock?.reset(frac(value));
   if (trailEl) el.style.setProperty('--tc-orb-trail', String(frac(value)));
   write();
@@ -212,6 +224,7 @@ export function createOrbMeter(host: HudHost, opts: MeterOptions = {}): Meter {
   const handle: WidgetHandle = host.layout.add(el, {
     place: { default: opts.region ?? 'bottom' },
     order: opts.order,
+    onForm: writeSize,
   });
 
   return {
@@ -240,6 +253,10 @@ export function createOrbMeter(host: HudHost, opts: MeterOptions = {}): Meter {
     setColor(color) {
       if (color) el.style.setProperty('--tc-meter-color', color);
       else el.style.removeProperty('--tc-meter-color');
+    },
+    setSize(next) {
+      size = next;
+      if (writeSize(host.layout.formFactor)) host.layout.refresh();
     },
     remove() {
       handle.remove();
