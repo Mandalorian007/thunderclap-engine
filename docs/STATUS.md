@@ -134,6 +134,9 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Input 6: gestures classify by `event.timeStamp`, not handling time | ws/input-6 | brief `docs/briefs/input-6.md` | e2e-harden finding | 🟣 in E-031 train 3 at `772f84c` (check 2094, snap 0, gestures 66, input 52, input5 48, look 24/16 at load 14–22) |
 | 5 | E2E harden 2: fx3 forces/collide, ui4:118 minimap rim, voxel demo terrain-range asserts | ws/e2e-harden-2 | brief `docs/briefs/e2e-harden-2.md` | fx-4, ui-5, adopt-sweep findings | 🔵 dispatched (Opus, offset 860) |
 | 5 | UI 6: one `ui.floats(camera?)` and one `ui.minimap` (ui-5 implementations, ui-4's retired), arpg adopts orb meters, floats and a pickable minimap | ws/ui-6 | brief `docs/briefs/ui-6.md` | ui-5 notes, demo-arpg wishes | 🔵 dispatched (Opus, offset 870) |
+| 5 | Core 3: `hash2/hash3(f)` positional hashing in core; demos/templates swap hand-rolled hashes | ws/core-3 | brief `docs/briefs/core-3.md` | adopt-sweep wish | 🔵 dispatched (Opus, offset 880) |
+| 5 | Nav 6: `bakeNavMesh` defaults and `NavBakeError` (no silent 0 polys); bake-nav script defaults + node test | ws/nav-6 | brief `docs/briefs/nav-6.md` | nav-5 finding | 🔵 dispatched (Opus, offset 890) |
+| 5 | Post 5: TAA reprojects by the velocity target with history rejection; drop the duplicate camera-layout test | ws/post-5 | brief `docs/briefs/post-5.md` | post-4 wish, render-5 note | 🔵 dispatched (Opus, offset 900) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
