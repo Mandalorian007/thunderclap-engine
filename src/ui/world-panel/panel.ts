@@ -16,9 +16,9 @@ import type { PointerRouter, RoutedPointer } from '../../input/pointer-router';
 import {
   createHit,
   createRay,
-  type Hit,
   type HitTester,
   type Ray,
+  type RayHit,
   rayAt,
   transformRayInto,
   type Vec3,
@@ -44,8 +44,10 @@ import type { PanelKeyEvent, WorldWidget, WorldWidgetHost } from './widgets';
 
 /** What `attach` needs from the input (`Input` from `@thunderclap/engine/input` fits). */
 export interface WorldPanelInput {
-  /** The input's pointer router, or null when it has none. */
-  getPointers(): PointerRouter<unknown> | null;
+  /** The input's pointer router, or null when it has none (`Input.pointers`, ws/api-core). */
+  readonly pointers?: PointerRouter<unknown> | null;
+  /** @deprecated (ws/api-core, E-036) Give `pointers`; read when `pointers` is absent. */
+  getPointers?(): PointerRouter<unknown> | null;
   /** Called after every `update()`; returns the remover. */
   onUpdated(fn: () => void): () => void;
 }
@@ -156,7 +158,7 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
   private readonly depthPipelines = new Map<string, GPURenderPipeline>();
   private readonly localRay = createRay();
   private readonly hit: WorldPanelHit = { x: 0, y: 0, widget: null, distance: 0 };
-  private readonly routerHit: Hit<WorldPanel>;
+  private readonly routerHit: RayHit<WorldPanel>;
   private readonly routerNormal: Vec3 = [0, 0, 0];
   private readonly basis = new Float32Array(12);
   private detachFn: (() => void) | null = null;
@@ -657,19 +659,20 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
    * Drive the panel on the input tick (ws/ui-4): registers the panel's tester with the input's
    * pointer router and, through `input.onUpdated`, calls `poll(router.pointers)` after every
    * `input.update()` and `update(camera)` with the router's camera (the one the rays go through,
-   * `renderer.camera` in a game). Call once; `detach()` (and `dispose()`) undoes it. Manual
-   * `poll`/`update` still work for an input without a router.
+   * `renderer.camera` in a game, the head camera while `ctx.xr` is active). `opts.camera`
+   * (ws/api-core) names another camera to face, read each tick. Call once; `detach()` (and
+   * `dispose()`) undoes it. Manual `poll`/`update` still work for an input without a router.
    */
-  attach(input: WorldPanelInput): void {
+  attach(input: WorldPanelInput, opts: { camera?: () => Camera | null } = {}): void {
     this.detach();
-    const router = input.getPointers();
+    const router = input.pointers !== undefined ? input.pointers : (input.getPointers?.() ?? null);
     if (!router) throw new Error('WorldPanel.attach: the input has no pointer router');
     const offTester = this.attachTo(router);
     const offTick = input.onUpdated(() => {
       if (this.disposed) return;
       this.poll(router.pointers);
       // The router sees a `RayCamera`; a full `Camera` (a game's `renderer.camera`) has `view`.
-      const cam = router.camera;
+      const cam = opts.camera ? opts.camera() : router.camera;
       if (cam && 'view' in cam) this.update(cam as Camera);
     });
     this.detachFn = () => {

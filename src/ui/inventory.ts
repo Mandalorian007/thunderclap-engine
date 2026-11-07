@@ -24,13 +24,19 @@ export interface InventoryHost {
 }
 
 /** A cell address in a grid: column and row, 0-based. */
-export interface Cell {
+export interface GridCell {
   col: number;
   row: number;
 }
 
+/**
+ * @deprecated (ws/api-core, E-036) Use `GridCell`: `nav` exports an x/y `Cell`. Removed next
+ * minor.
+ */
+export type Cell = GridCell;
+
 /** A cell of a particular grid: what `canDrop` and `onMove` get for both ends of a move. */
-export interface CellRef extends Cell {
+export interface CellRef extends GridCell {
   grid: Grid;
 }
 
@@ -136,6 +142,9 @@ const STYLE_ID = 'tc-ui-inventory';
  * The inventory stylesheet, under `.tc-overlay`, in `--tc-*` tokens only; the few px literals are
  * design px (`toFrameUnits`). Sizes the game chooses (`cellSize`, `width`, `radius`) arrive as
  * theme px in custom properties on the element.
+ *
+ * @deprecated (ws/api-core, E-036) Internal: its `ensure*Styles` injects it. Leaves the `ui` entry next
+ * minor; tests import it from this file.
  */
 export const INVENTORY_CSS = toFrameUnits(`
 .tc-overlay .tc-grid { display: flex; flex-direction: column; gap: var(--tc-cell-gap); pointer-events: auto;

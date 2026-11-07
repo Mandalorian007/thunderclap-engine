@@ -16,7 +16,7 @@
  */
 import { type AnchorCamera, type Anchors, type TypedTransform, typedTransform } from './anchor';
 import { h } from './dom';
-import { prefersReducedMotion } from './styles';
+import { prefersReducedMotionIn } from './styles';
 import { toFrameUnits } from './text-scale';
 
 /** What floats need from their overlay (`Overlay` fits). */
@@ -116,7 +116,8 @@ const pt = { x: 0, y: 0 };
 
 /**
  * The floats (see the module comment). `camera` is handed to `host.anchors(camera)` once, so the
- * overlay's anchors project through it; without one the anchors must already exist.
+ * overlay's anchors project through it; without one the anchors must already exist or the
+ * overlay have a default (`OverlayOptions.camera`, which `createGame` sets).
  */
 export function createFloats(
   host: FloatsHost,
@@ -132,7 +133,7 @@ export function createFloats(
   const rise = opts.rise ?? 56;
   const r2 = (opts.stackRadius ?? 0.35) ** 2;
   const [stepX, stepY] = opts.stackStep ?? [30, 18];
-  const still = opts.reducedMotion ?? prefersReducedMotion(doc.defaultView ?? undefined);
+  const still = opts.reducedMotion ?? prefersReducedMotionIn(doc.defaultView ?? undefined);
   const nodes: Node[] = [];
   const free: Node[] = [];
   let live = 0;
@@ -305,7 +306,12 @@ export function createFloats(
   return floats;
 }
 
-/** Stylesheet for the labels (design px, theme tokens). */
+/**
+ * Stylesheet for the labels (design px, theme tokens).
+ *
+ * @deprecated (ws/api-core, E-036) Internal: its `ensure*Styles` injects it. Leaves the `ui` entry next
+ * minor; tests import it from this file.
+ */
 export const FLOATS_CSS = toFrameUnits(`
 .tc-floats { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform, opacity;
   pointer-events: none; white-space: nowrap; font-family: var(--tc-font-display); font-size: var(--tc-font-size-m);

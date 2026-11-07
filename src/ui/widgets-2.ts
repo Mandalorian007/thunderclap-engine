@@ -433,12 +433,12 @@ export function stepper(
 
 // ---------------------------------------------------------------- cooldown
 
-export interface CooldownOptions {
+export interface WidgetCooldownOptions {
   /** Diameter, design px. Default 64. */
   size?: number;
 }
 
-export interface Cooldown {
+export interface WidgetCooldown {
   element: HTMLDivElement;
   /** 0 is just used, 1 is ready; the sweep fills clockwise. */
   set(fraction: number): void;
@@ -447,10 +447,18 @@ export interface Cooldown {
 }
 
 /**
+ * @deprecated (ws/api-core, E-036) Use `WidgetCooldown`: `core` exports the scheduler's
+ * `Cooldown`. Removed next minor.
+ */
+export type Cooldown = WidgetCooldown;
+/** @deprecated (ws/api-core, E-036) Use `WidgetCooldownOptions`. Removed next minor. */
+export type CooldownOptions = WidgetCooldownOptions;
+
+/**
  * A radial cooldown: a disc whose `conic-gradient` sweep follows `--tc-ui-sweep`, lit when
  * ready (`data-ready`). Decorative (`aria-hidden`): the game announces readiness itself.
  */
-export function cooldown(opts: CooldownOptions = {}): Cooldown {
+export function cooldown(opts: WidgetCooldownOptions = {}): WidgetCooldown {
   const element = h('div', {
     class: 'tc-ui-cooldown',
     'aria-hidden': 'true',
@@ -480,6 +488,9 @@ export function cooldown(opts: CooldownOptions = {}): Cooldown {
 /**
  * Stylesheet for these widgets in design px (`toFrameUnits`: every `px` here is one `--tc-unit`;
  * `--tc-ui-px` carries that unit into the `calc`s on the size custom properties).
+ *
+ * @deprecated (ws/api-core, E-036) Internal: its `ensure*Styles` injects it. Leaves the `ui` entry next
+ * minor; tests import it from this file.
  */
 export const WIDGETS2_CSS = toFrameUnits(`
 .tc-ui-label { font-family: var(--tc-font-ui); font-size: var(--tc-font-size-s); color: var(--tc-color-text); }

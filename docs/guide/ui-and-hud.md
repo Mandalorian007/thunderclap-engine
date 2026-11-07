@@ -221,14 +221,14 @@ Every widget has `remove()`. Call it when the scene exits.
 
 ## Pin DOM to the world
 
-`ui.anchors(camera)` makes DOM elements follow points in the world: a name over a character, a hint over a tile, an arrow at the screen edge pointing to a goal. Pass a function that returns the camera. The engine updates every anchor after each frame, so you only move the points.
+`ui.anchors()` makes DOM elements follow points in the world: a name over a character, a hint over a tile, an arrow at the screen edge pointing to a goal. Under `createGame` it projects through `ctx.camera`; pass a function that returns another camera to override it. The engine updates every anchor after each frame, so you only move the points.
 
 ```ts
 import type { EngineCtx } from '@thunderclap/engine';
 import { h } from '@thunderclap/engine/ui';
 
 export function labelNpc(ctx: EngineCtx, name: string) {
-  const anchors = ctx.ui.anchors(() => ctx.camera);
+  const anchors = ctx.ui.anchors();
   const tag = h('div', { class: 'npc-tag' }, name);
   // align [0.5, 1]: the bottom centre of the label sits on the point.
   const handle = anchors.add(tag, [400, 300, 0], { align: [0.5, 1], offset: [0, -8] });
@@ -249,7 +249,7 @@ export function labelNpc(ctx: EngineCtx, name: string) {
 - `scale: 'distance'` shrinks labels with distance under a 3D camera.
 - Points behind the camera are hidden unless clamped.
 
-**Floating text.** `ui.floats(() => ctx.camera)` returns a pool of rising, fading labels for damage numbers and pickups. Call `floats.spawn('-12', [x, y, 0], { color: '#ff5a4a' })`, and `floats.update(dt)` once per update.
+**Floating text.** `ui.floats()` (through `ctx.camera`; pass another camera getter to override) returns a pool of rising, fading labels for damage numbers and pickups. Call `floats.spawn('-12', [x, y, 0], { color: '#ff5a4a' })`, and `floats.update(dt)` once per update.
 
 ## World panels
 
@@ -274,7 +274,7 @@ export function createSign(ctx: EngineCtx, onBack: () => void) {
 }
 ```
 
-A pad without a ray drives it with `panel.focusNext()` and `panel.activate()`. Use the DOM overlay for everything on a flat screen; it is sharper and accessible. The [XR guide](xr.md) covers headsets.
+In VR the input's rays go through the headset, so a `billboard` or `headLocked` panel faces the player; `panel.attach(ctx.input, { camera })` names another camera to face. A pad without a ray drives it with `panel.focusNext()` and `panel.activate()`. Use the DOM overlay for everything on a flat screen; it is sharper and accessible. The [XR guide](xr.md) covers headsets.
 
 ## Theme tokens
 
@@ -299,6 +299,8 @@ export function setTextScale(ctx: EngineCtx, scale: number) {
   applyTextScale(ctx.ui.root, scale, (tokens) => ctx.ui.setTheme(tokens));
 }
 ```
+
+To start with a theme or a text scale, pass them to `createGame`: `createGame({ ..., theme: { colorAccent: '#7fd8ff' }, textScale: 1.25 })`.
 
 Fonts come from system stacks; nothing is fetched. To use your own font, self-host it and put it first in the stack.
 

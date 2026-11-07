@@ -405,7 +405,12 @@ export function createTooltips(host: TooltipHost): Tooltips {
   };
 }
 
-/** Stylesheet for the tooltip (design px, theme tokens). */
+/**
+ * Stylesheet for the tooltip (design px, theme tokens).
+ *
+ * @deprecated (ws/api-core, E-036) Internal: its `ensure*Styles` injects it. Leaves the `ui` entry next
+ * minor; tests import it from this file.
+ */
 export const TOOLTIP_CSS = toFrameUnits(`
 .tc-tooltip { position: absolute; left: 0; top: 0; pointer-events: none; will-change: transform; box-sizing: border-box;
   max-width: 560px; padding: var(--tc-space-2) var(--tc-space-3); font-family: var(--tc-font-ui); font-size: var(--tc-font-size-s);

@@ -93,6 +93,11 @@ export interface OverlayOptions {
    * back (typically the canvas). See `PanelStackFocusOptions.home` and `NO_RESTORE_FOCUS_ATTR`.
    */
   focusHome?: () => HTMLElement | null;
+  /**
+   * The camera `anchors()` and `floats()` use when called without one (ws/api-core), read each
+   * frame. `createGame` passes `() => ctx.camera`. Without it the first `anchors` call needs one.
+   */
+  camera?: () => AnchorCamera;
 }
 
 export interface Overlay {
@@ -146,7 +151,9 @@ export interface Overlay {
   /**
    * The overlay's one `Anchors` (DOM that follows world points; see `ui/anchor.ts`), built on the
    * first call with `camera` and laid on the `hud` layer (other layers by name through
-   * `AnchorOptions.layer`). A later call with a camera switches it; the first call needs one.
+   * `AnchorOptions.layer`). A later call with a camera switches it. Without one the first call
+   * uses `OverlayOptions.camera` (the game's camera under `createGame`) and throws when that
+   * is unset too.
    */
   anchors(camera?: () => AnchorCamera): Anchors;
   /** `anchors().update()` if `anchors` was ever called, else nothing. `createGame` calls it after every frame. */
@@ -183,7 +190,8 @@ export interface Overlay {
   readonly padOwner: PadOwner;
   /**
    * The overlay's floating text on the `hud` layer (`ui/floats.ts`), made by the first call:
-   * `camera` goes to `anchors(camera)` and `opts` set the pool. Later calls return the same
+   * `camera` goes to `anchors(camera)` (omitted: `OverlayOptions.camera`, the game's camera
+   * under `createGame`) and `opts` set the pool. Later calls return the same
    * `Floats` (their arguments are ignored); `createFloats(ui, camera, opts)` makes another.
    * Call `floats.update(dt)` once per update (ws/ui-6).
    */
@@ -368,10 +376,11 @@ export function createOverlay(opts: OverlayOptions): Overlay {
         if (camera) anchors.setCamera(camera);
         return anchors;
       }
-      if (!camera) throw new Error('overlay.anchors: the first call needs a camera');
+      const cam = camera ?? opts.camera;
+      if (!cam) throw new Error('overlay.anchors: the first call needs a camera');
       anchors = new Anchors({
         root: layers.hud,
-        camera,
+        camera: cam,
         // The frame is the canvas rect; the design size is the logical size it shows.
         surface: {
           get rect() {

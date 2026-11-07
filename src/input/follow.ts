@@ -9,7 +9,7 @@ export type FollowCamera = Pick<Camera, 'lookAt'>;
 export type FollowMode = 'first' | 'third';
 
 /** What the camera follows. The game owns the object and moves it; `Follow` reads it each frame. */
-export interface FollowTarget {
+export interface FollowSubject {
   /** The target's feet (or centre), world units. `eyeHeight` is added for the pivot. */
   position: ArrayLike<number>;
   /**
@@ -18,6 +18,12 @@ export interface FollowTarget {
    */
   yaw?: number;
 }
+
+/**
+ * @deprecated (ws/api-core, E-036) Use `FollowSubject`: `audio` exports a different
+ * `FollowTarget`. Removed next minor.
+ */
+export type FollowTarget = FollowSubject;
 
 /**
  * The game's line-of-sight test (the engine has no world). `from` is the pivot, `to` the camera
@@ -90,7 +96,7 @@ const MAX_DT = 0.1;
  */
 export class Follow {
   /** What to follow. Until set, the pivot is at the origin. */
-  target: FollowTarget | null = null;
+  target: FollowSubject | null = null;
   /** Orbit yaw, radians (0 is -z, positive turns right). The `Look` adds to it. */
   yaw: number;
   /** View pitch, radians, clamped to `pitchMin..pitchMax` each update. */

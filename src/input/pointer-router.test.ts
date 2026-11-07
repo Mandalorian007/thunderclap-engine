@@ -4,13 +4,13 @@ import { Gestures } from './gestures';
 import { Input } from './input';
 import { createPointerRouter, type PointerHitEvent } from './pointer-router';
 import { createSample, PadCursor, type PointerSample, type PointerSource } from './pointer-sources';
-import { type Aabb, aabbTester, planeTester } from './rays';
+import { aabbTester, planeTester, type RayBox } from './rays';
 import type { GamepadLike } from './types';
 
 /** Two 2D quads (100 px squares) and the plane z = 0 behind them. */
 function setup() {
   const camera = Camera.ortho2d(800, 600);
-  const quads: Aabb<string>[] = [
+  const quads: RayBox<string>[] = [
     { min: [100, 100, 0], max: [200, 200, 0], target: 'a' },
     { min: [300, 100, 0], max: [400, 200, 0], target: 'b' },
   ];

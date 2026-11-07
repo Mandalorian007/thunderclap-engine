@@ -139,6 +139,9 @@ const STYLE_ID = 'tc-ui-orb';
 /**
  * The orb stylesheet, under `.tc-overlay` and in `--tc-*` tokens. `--tc-orb-color` is the fill
  * (the tone's token, or the per-call `color`); `--tc-color-meter-trail` the trail band.
+ *
+ * @deprecated (ws/api-core, E-036) Internal: its `ensure*Styles` injects it. Leaves the `ui` entry next
+ * minor; tests import it from this file.
  */
 export const ORB_CSS = `
 .tc-overlay .tc-orb { position: relative; width: var(--tc-orb-size, ${tpx(128)}); height: var(--tc-orb-size, ${tpx(128)});

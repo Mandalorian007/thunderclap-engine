@@ -16,7 +16,6 @@
 import { h } from './dom';
 import { themePx } from './hud';
 import {
-  type Cell,
   type CellItem,
   type CellRef,
   type DragPick,
@@ -24,6 +23,7 @@ import {
   type DropTarget,
   defaultInventoryLabels,
   ensureInventoryStyles,
+  type GridCell,
   type InventoryLabels,
   iconNode,
 } from './inventory';
@@ -48,17 +48,17 @@ export interface GridOptions {
   /** An item moved: `from` or `to` is in this grid (both, for a move within it). */
   onMove?: (from: CellRef, to: CellRef, item: CellItem) => void;
   /** Enter, Space or a click on an item. */
-  onActivate?: (cell: Cell, item: CellItem) => void;
+  onActivate?: (cell: GridCell, item: CellItem) => void;
   /** The focused cell changed. */
-  onFocus?: (cell: Cell) => void;
+  onFocus?: (cell: GridCell) => void;
   /**
    * The secondary button, Shift+F10, the ContextMenu key or the pad's `secondary` on a cell with
    * an item. `anchor` is the cell element: open a `ui.contextList(items, { at: anchor, ... })`.
    */
-  onContext?: (cell: Cell, item: CellItem, anchor: HTMLElement) => void;
+  onContext?: (cell: GridCell, item: CellItem, anchor: HTMLElement) => void;
   /** A card to show on focus, and on hover after `hoverMs`; `describe` fills it per item. */
   card?: Card;
-  describe?: (item: CellItem, cell: Cell) => CardOptions | null;
+  describe?: (item: CellItem, cell: GridCell) => CardOptions | null;
   /** Hover delay before the card shows, ms. Default 250. */
   hoverMs?: number;
   labels?: InventoryLabels;
@@ -75,18 +75,18 @@ export interface Grid extends DropTarget {
   readonly cols: number;
   readonly rows: number;
   /** Put `item` at `cell` (clearing what covered it), or clear the cell. False if the span does not fit. */
-  set(cell: Cell, item: CellItem | null): boolean;
+  set(cell: GridCell, item: CellItem | null): boolean;
   /** The item anchored at or covering `cell`. */
-  get(cell: Cell): CellItem | null;
+  get(cell: GridCell): CellItem | null;
   /** The anchor cell of `item` (by identity), or null. */
-  find(item: CellItem): Cell | null;
+  find(item: CellItem): GridCell | null;
   /** Move the item anchored at `from` to `to` if its span fits there. No `onMove`. */
-  move(from: Cell, to: Cell): boolean;
+  move(from: GridCell, to: GridCell): boolean;
   /** Every anchored item, reading order. A fresh array each call. */
   readonly items: GridEntry[];
   /** Move the roving tabindex and the focus to `cell`. */
-  focus(cell: Cell): void;
-  readonly focused: Readonly<Cell>;
+  focus(cell: GridCell): void;
+  readonly focused: Readonly<GridCell>;
   /** The item held by a keyboard or pad pick-up, or null. */
   readonly held: CellItem | null;
   /** A pad action (the game maps its input to these); the keyboard arrives as key events. */
@@ -230,7 +230,7 @@ export function grid(opts: GridOptions): Grid {
     return item;
   }
 
-  function set(cell: Cell, item: CellItem | null): boolean {
+  function set(cell: GridCell, item: CellItem | null): boolean {
     if (!inBounds(cell.col, cell.row)) return false;
     const i = idx(cell.col, cell.row);
     const covering = cover[i];
@@ -240,18 +240,18 @@ export function grid(opts: GridOptions): Grid {
     return true;
   }
 
-  function get(cell: Cell): CellItem | null {
+  function get(cell: GridCell): CellItem | null {
     if (!inBounds(cell.col, cell.row)) return null;
     const a = cover[idx(cell.col, cell.row)];
     return a === -1 ? null : anchors[a]!;
   }
 
-  function find(item: CellItem): Cell | null {
+  function find(item: CellItem): GridCell | null {
     const a = anchors.indexOf(item);
     return a < 0 ? null : { col: a % cols, row: Math.floor(a / cols) };
   }
 
-  function move(from: Cell, to: Cell): boolean {
+  function move(from: GridCell, to: GridCell): boolean {
     if (!inBounds(from.col, from.row)) return false;
     const a = cover[idx(from.col, from.row)];
     if (a === -1) return false;
@@ -264,7 +264,7 @@ export function grid(opts: GridOptions): Grid {
 
   // ---------------------------------------------------------------- focus
 
-  const focused: Cell = { col: 0, row: 0 };
+  const focused: GridCell = { col: 0, row: 0 };
   let focusIdx = 0;
 
   function setFocus(c: number, r: number, moveFocus: boolean): void {
@@ -416,7 +416,7 @@ export function grid(opts: GridOptions): Grid {
     return true;
   }
 
-  const cellOf = (i: number): Cell => ({ col: i % cols, row: Math.floor(i / cols) });
+  const cellOf = (i: number): GridCell => ({ col: i % cols, row: Math.floor(i / cols) });
 
   function activate(): void {
     const a = cover[focusIdx];

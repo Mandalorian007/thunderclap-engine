@@ -701,9 +701,9 @@ describe('Gestures as action bindings', () => {
     expect(input.held('select')).toBe(false);
     const g = new Gestures();
     input.setGestures(g);
-    expect(input.getGestures()).toBe(g);
+    expect(input.gestures).toBe(g);
     input.setGestures(null);
-    expect(input.getGestures()).toBeNull();
+    expect(input.gestures).toBeNull();
   });
 });
 

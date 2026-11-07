@@ -413,11 +413,11 @@ describe('Input rebinding (ws/input-3)', () => {
   it('listen resolves with the next key, swallowing it; Escape cancels; timeout cancels', async () => {
     const input = new Input(bindings, { getGamepads: () => [], tickMs: 100 });
     const p = input.listen('confirm');
-    expect(input.listeningFor()).toBe('confirm');
+    expect(input.listening).toBe('confirm');
     input.keyDown('KeyJ');
     input.update();
     await expect(p).resolves.toEqual({ key: 'KeyJ' });
-    expect(input.listeningFor()).toBeNull();
+    expect(input.listening).toBeNull();
     expect(input.anyPressed()).toBe(false);
     input.keyUp('KeyJ');
 
@@ -429,7 +429,7 @@ describe('Input rebinding (ws/input-3)', () => {
     input.update();
     input.update();
     input.update();
-    expect(input.listeningFor()).toBe('confirm');
+    expect(input.listening).toBe('confirm');
     input.update();
     await expect(late).resolves.toBeNull();
 
@@ -447,7 +447,7 @@ describe('Input rebinding (ws/input-3)', () => {
     const second = input.listen('left');
     await expect(first).resolves.toBeNull();
     input.update();
-    expect(input.listeningFor()).toBe('left');
+    expect(input.listening).toBe('left');
     pads = [pad([0, 3])];
     input.update();
     await expect(second).resolves.toEqual({ padButton: 3 });

@@ -64,7 +64,7 @@ interface Op<C, F, K> {
 const noop = () => {};
 
 export class SceneStack<Ctx = unknown, Frame = unknown, Cam = Camera> {
-  private readonly scenes: Scene<Ctx, Frame, Cam>[] = [];
+  private readonly items: Scene<Ctx, Frame, Cam>[] = [];
   private readonly pending: Op<Ctx, Frame, Cam>[] = [];
   private busy = 0;
   /** The op whose scene is preloading; the queue waits behind it. */
@@ -74,11 +74,11 @@ export class SceneStack<Ctx = unknown, Frame = unknown, Cam = Camera> {
   constructor(private readonly ctx: Ctx) {}
 
   get size(): number {
-    return this.scenes.length;
+    return this.items.length;
   }
 
   get top(): Scene<Ctx, Frame, Cam> | undefined {
-    return this.scenes[this.scenes.length - 1];
+    return this.items[this.items.length - 1];
   }
 
   /** True while a pushed or replacing scene's `preload` is pending. */
@@ -86,9 +86,14 @@ export class SceneStack<Ctx = unknown, Frame = unknown, Cam = Camera> {
     return this.loading !== null;
   }
 
-  /** Snapshot of the stack, bottom first (debugging/tests). */
+  /** The scenes on the stack, bottom first: the live array (read it, copy it to keep it). */
+  get scenes(): readonly Scene<Ctx, Frame, Cam>[] {
+    return this.items;
+  }
+
+  /** @deprecated (ws/api-core, E-036) Read `scenes` (this returns a copy). Removed next minor. */
   list(): readonly Scene<Ctx, Frame, Cam>[] {
-    return this.scenes.slice();
+    return this.items.slice();
   }
 
   /** Push `scene` (after its `preload`, if any); resolves once it has entered. */
@@ -132,13 +137,13 @@ export class SceneStack<Ctx = unknown, Frame = unknown, Cam = Camera> {
 
   /** Render every visible scene (highest opaque one upward) into `frame` through `camera`. */
   render(frame: Frame, camera: Cam, alpha = 0): void {
-    const n = this.scenes.length;
+    const n = this.items.length;
     if (n === 0) return;
     let start = n - 1;
-    while (start > 0 && this.scenes[start]!.transparent) start--;
+    while (start > 0 && this.items[start]!.transparent) start--;
     this.busy++;
     try {
-      for (let i = start; i < n; i++) this.scenes[i]!.render?.(frame, camera, alpha);
+      for (let i = start; i < n; i++) this.items[i]!.render?.(frame, camera, alpha);
     } finally {
       this.busy--;
       this.flush();
@@ -228,13 +233,13 @@ export class SceneStack<Ctx = unknown, Frame = unknown, Cam = Camera> {
         const scene = op.scene!;
         const below = this.top;
         below?.pause?.();
-        this.scenes.push(scene);
+        this.items.push(scene);
         scene.enter?.(this.ctx);
         this.emit(below, scene, 'enter');
         break;
       }
       case 'pop': {
-        const s = this.scenes.pop();
+        const s = this.items.pop();
         s?.exit?.();
         if (s) {
           this.top?.resume?.();
@@ -244,17 +249,17 @@ export class SceneStack<Ctx = unknown, Frame = unknown, Cam = Camera> {
       }
       case 'replace': {
         const scene = op.scene!;
-        const s = this.scenes.pop();
+        const s = this.items.pop();
         s?.exit?.();
         if (s) this.emit(s, scene, 'exit');
-        this.scenes.push(scene);
+        this.items.push(scene);
         scene.enter?.(this.ctx);
         this.emit(s, scene, 'enter');
         break;
       }
       case 'clear': {
-        while (this.scenes.length) {
-          const s = this.scenes.pop()!;
+        while (this.items.length) {
+          const s = this.items.pop()!;
           s.exit?.();
           this.emit(s, this.top, 'exit');
         }

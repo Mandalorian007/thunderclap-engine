@@ -1,7 +1,8 @@
 /**
  * Pointer sources for the router (`pointer-router.ts`): the `PointerSource` seam, the screen
  * source (mouse, pen, touch from DOM pointer events) and the pad cursor (a virtual pointer moved
- * by a gamepad stick). XR controllers and hands are a later `PointerSource` (see the README).
+ * by a gamepad stick). XR controllers and hands are `XrPointerSource` (`xr-source.ts`),
+ * which `createGame({ xr })` adds.
  */
 import type { Gestures } from './gestures';
 import {

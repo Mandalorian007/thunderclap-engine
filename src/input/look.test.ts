@@ -189,7 +189,7 @@ describe('Look: pad and keys', () => {
     expect(look.move).toEqual({ x: 0, y: -1 });
     input.setLook(null);
     expect(look.keyHeld).toBeNull();
-    expect(input.getLook()).toBeNull();
+    expect(input.look).toBeNull();
   });
 });
 

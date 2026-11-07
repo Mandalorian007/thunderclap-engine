@@ -29,6 +29,8 @@ interface CreateGameOptions<A extends string, S extends FlushableSave | null = n
     };
     styles?(doc: Document): void;
     layout?: LayoutSpec;
+    theme?: ThemeOverrides;
+    textScale?: number;
     onGpuReady?(gpu: GpuContext): void;
     blockBrowserZoom?: boolean;
     forceUnsupported?: boolean;
@@ -36,7 +38,7 @@ interface CreateGameOptions<A extends string, S extends FlushableSave | null = n
 }
 
 ## EngineCtx  (type-only)
-interface EngineCtx<A extends string = string, S extends FlushableSave | null = FlushableSave, C = unknown> {
+interface EngineCtx<A extends string = string, S extends FlushableSave | null = FlushableSave | null, C = unknown, P = any> {
     readonly design: {
         readonly width: number;
         readonly height: number;
@@ -45,13 +47,14 @@ interface EngineCtx<A extends string = string, S extends FlushableSave | null = 
     readonly gpu: GpuContext;
     readonly renderer: Renderer;
     readonly camera: Camera;
+    setCamera(camera: Camera): void;
     readonly post: PostStack;
     readonly particles: ParticleSystem;
     readonly input: Input<A>;
     readonly clock: TickClock;
     replay(recording: InputRecording, opts?: ReplayOptions): GameReplay;
     readonly gestures: Gestures;
-    readonly pointers: PointerRouter<unknown>;
+    readonly pointers: PointerRouter<P>;
     readonly padNav: PadNav;
     readonly audio: AudioEngine;
     readonly ui: Overlay;
@@ -120,4 +123,4 @@ interface XrOptions {
 }
 
 ## createGame
-function createGame<A extends string, S extends FlushableSave | null = null, C = unknown>(opts: CreateGameOptions<A, S>): Promise<EngineCtx<A, NoInfer<S>, C> | null>;
+function createGame<A extends string, S extends FlushableSave | null = null, C = unknown, P = unknown>(opts: CreateGameOptions<A, S>): Promise<EngineCtx<A, NoInfer<S>, C, P> | null>;

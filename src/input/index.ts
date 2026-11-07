@@ -17,6 +17,7 @@ export {
   type FollowMode,
   type FollowObstacle,
   type FollowOptions,
+  type FollowSubject,
   type FollowTarget,
 } from './follow';
 export {
@@ -90,11 +91,13 @@ export {
 } from './look';
 export {
   type Aim,
+  type Edges,
   type Grid,
   MAGNIFY_DEFAULTS,
   type MagnifyOptions,
   type MagnifyTarget,
   type Rect,
+  type SnapGrid,
   snapToGrid,
 } from './magnify';
 export {
@@ -138,7 +141,10 @@ export {
   planeTester,
   type Ray,
   type RayBounds,
+  type RayBox,
   type RayCamera,
+  type RayHit,
+  type RayPlane,
   type RayTransform,
   rayAt,
   rayTriangle,

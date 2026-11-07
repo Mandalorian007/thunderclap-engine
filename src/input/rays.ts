@@ -1,6 +1,6 @@
 /**
  * Rays and hit testing for the pointer router (`pointer-router.ts`). Plain math, no DOM, no
- * game nouns: a `HitTester` turns a world-space `Ray` into the nearest `Hit` it knows, and the
+ * game nouns: a `HitTester` turns a world-space `Ray` into the nearest `RayHit` it knows, and the
  * game decides what `target` means.
  */
 import type { Camera } from '../render/camera';
@@ -21,7 +21,7 @@ export interface Ray {
  * `normal` faces the ray (unit), or `null` when the tester has none (the ray started inside).
  * Hits the router hands out are reused: read them in the listener or copy them.
  */
-export interface Hit<T = unknown> {
+export interface RayHit<T = unknown> {
   readonly point: Vec3;
   normal: Vec3 | null;
   distance: number;
@@ -30,10 +30,16 @@ export interface Hit<T = unknown> {
 }
 
 /**
+ * @deprecated (ws/api-core, E-036) Use `RayHit`: `geom` exports a different `Hit`. Removed next
+ * minor.
+ */
+export type Hit<T = unknown> = RayHit<T>;
+
+/**
  * Returns the nearest hit of `ray` against what this tester knows, or `null`. It may return the
  * same object on every call (the router copies it before calling again).
  */
-export type HitTester<T = unknown> = (ray: Ray) => Hit<T> | null;
+export type HitTester<T = unknown> = (ray: Ray) => RayHit<T> | null;
 
 /** The camera slice the router needs: `screen` and the inverse projection (`render`'s `Camera`). */
 export type RayCamera = Pick<Camera, 'screen' | 'screenToWorld'>;
@@ -42,7 +48,7 @@ export function createRay(): Ray {
   return { origin: [0, 0, 0], dir: [0, 0, 1] };
 }
 
-export function createHit<T = unknown>(target: T): Hit<T> {
+export function createHit<T = unknown>(target: T): RayHit<T> {
   return { point: [0, 0, 0], normal: null, distance: 0, target };
 }
 
@@ -91,21 +97,62 @@ export function screenRay(camera: RayCamera, sx: number, sy: number, out: Ray): 
 const EPS = 1e-9;
 
 /**
- * Hits the plane z = `z` (a 2D game's world): the hit point is where the ray crosses it, so
- * through `Camera.ortho2d` it is the world point under the pointer. Rays parallel to the plane
- * or pointing away from it miss. `target` is what every hit carries (default `null`).
+ * Any plane for `planeTester` (ws/api-core): the points `p` with `dot(normal, p) = offset`.
+ * `normal` need not be unit length; it must not be zero. Read on every call, so the game may
+ * move the plane in place. `{ normal: [0, 0, 1], offset: z }` is the plane z = `z`.
  */
-export function planeTester<T = null>(z = 0, target: T = null as T): HitTester<T> {
+export interface RayPlane {
+  normal: readonly [number, number, number];
+  /** Default 0 (the plane through the origin). */
+  offset?: number;
+}
+
+/**
+ * Hits a plane: the plane z = `plane` when it is a number (a 2D game's world, default 0), or
+ * any `RayPlane` (a floor at y = 0 is `{ normal: [0, 1, 0] }`). The hit point is where the ray
+ * crosses it, so through `Camera.ortho2d` the z-plane hit is the world point under the pointer.
+ * Rays parallel to the plane or pointing away from it miss. The hit's normal is the plane's,
+ * unit length, turned to face the ray. `target` is what every hit carries (default `null`).
+ */
+export function planeTester<T = null>(
+  plane: number | RayPlane = 0,
+  target: T = null as T,
+): HitTester<T> {
   const hit = createHit(target);
   const normal: Vec3 = [0, 0, 0];
+  if (typeof plane === 'number') {
+    const z = plane;
+    return (ray) => {
+      const dz = ray.dir[2];
+      if (Math.abs(dz) < EPS) return null;
+      const t = (z - ray.origin[2]) / dz;
+      if (t < 0) return null;
+      rayAt(ray, t, hit.point);
+      hit.point[2] = z;
+      normal[2] = dz > 0 ? -1 : 1;
+      hit.normal = normal;
+      hit.distance = t;
+      hit.target = target;
+      return hit;
+    };
+  }
   return (ray) => {
-    const dz = ray.dir[2];
-    if (Math.abs(dz) < EPS) return null;
-    const t = (z - ray.origin[2]) / dz;
+    const n = plane.normal;
+    const len = Math.hypot(n[0], n[1], n[2]);
+    if (!(len > 0)) return null;
+    const nx = n[0] / len;
+    const ny = n[1] / len;
+    const nz = n[2] / len;
+    const d = (plane.offset ?? 0) / len;
+    const dn = ray.dir[0] * nx + ray.dir[1] * ny + ray.dir[2] * nz;
+    if (Math.abs(dn) < EPS) return null;
+    const t = (d - (ray.origin[0] * nx + ray.origin[1] * ny + ray.origin[2] * nz)) / dn;
     if (t < 0) return null;
     rayAt(ray, t, hit.point);
-    hit.point[2] = z;
-    normal[2] = dz > 0 ? -1 : 1;
+    const s = dn > 0 ? -1 : 1;
+    normal[0] = nx * s;
+    normal[1] = ny * s;
+    normal[2] = nz * s;
     hit.normal = normal;
     hit.distance = t;
     hit.target = target;
@@ -114,11 +161,17 @@ export function planeTester<T = null>(z = 0, target: T = null as T): HitTester<T
 }
 
 /** An axis-aligned box for `aabbTester`. `min` ≤ `max` per axis; a flat box (2D quad) is fine. */
-export interface Aabb<T = unknown> {
+export interface RayBox<T = unknown> {
   min: readonly [number, number, number];
   max: readonly [number, number, number];
   target: T;
 }
+
+/**
+ * @deprecated (ws/api-core, E-036) Use `RayBox`: `geom` exports a different `Aabb`. Removed next
+ * minor.
+ */
+export type Aabb<T = unknown> = RayBox<T>;
 
 /**
  * Hits the nearest of `boxes` (read on every call, so the game may edit the array and its
@@ -126,12 +179,12 @@ export interface Aabb<T = unknown> {
  * go to the earlier box. Flat boxes (`min[i] === max[i]`) work, so 2D quads at z = 0 can be
  * picked through `Camera.ortho2d`.
  */
-export function aabbTester<T = unknown>(boxes: readonly Aabb<T>[]): HitTester<T> {
+export function aabbTester<T = unknown>(boxes: readonly RayBox<T>[]): HitTester<T> {
   const hit = createHit<T>(undefined as T);
   const normal: Vec3 = [0, 0, 0];
   return (ray) => {
     let best = Infinity;
-    let bestBox: Aabb<T> | null = null;
+    let bestBox: RayBox<T> | null = null;
     let bestAxis = -1;
     let bestSign = 0;
     for (let b = 0; b < boxes.length; b++) {

@@ -81,6 +81,7 @@ interface AnchorsOptions {
 type ArrowNav = 'vertical' | 'both' | 'none';
 
 ## BASE_CSS
+@deprecated
 const BASE_CSS: string;
 
 ## Bar  (type-only)
@@ -117,6 +118,7 @@ interface ButtonOptions {
 }
 
 ## CANVAS_MINIMAP_CSS
+@deprecated
 const CANVAS_MINIMAP_CSS = "\n.tc-overlay .tc-cminimap { position: relative; width: var(--tc-cminimap-size); height: auto; aspect-ratio: 1;\n  max-width: 100%; max-height: 100%; flex: none;\n  box-sizing: border-box; border: var(--tc-border-width) solid var(--tc-color-border); box-shadow: var(--tc-shadow);\n  border-radius: var(--tc-radius-m); overflow: hidden; background: var(--tc-color-surface); touch-action: none; }\n.tc-overlay .tc-cminimap[data-shape=\"round\"] { border-radius: 50%; }\n.tc-overlay .tc-region[data-content] > .tc-cminimap { max-width: none; max-height: none; }\n.tc-overlay .tc-cminimap-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }\n";
 
 ## CSS_FONT_PX
@@ -129,6 +131,7 @@ const CSS_FONT_PX: {
 };
 
 ## CURSOR_CSS
+@deprecated
 const CURSOR_CSS: string;
 
 ## CanvasMinimap  (type-only)
@@ -253,10 +256,8 @@ interface CardRow {
 type CardSide = Exclude<CardPlacement, 'auto'>;
 
 ## Cell  (type-only)
-interface Cell {
-    col: number;
-    row: number;
-}
+@deprecated
+type Cell = GridCell;
 
 ## CellItem  (type-only)
 interface CellItem {
@@ -273,7 +274,7 @@ interface CellItem {
 }
 
 ## CellRef  (type-only)
-interface CellRef extends Cell {
+interface CellRef extends GridCell {
     grid: Grid;
 }
 
@@ -353,16 +354,12 @@ interface ContextListOptions {
 }
 
 ## Cooldown  (type-only)
-interface Cooldown {
-    element: HTMLDivElement;
-    set(fraction: number): void;
-    readonly ready: boolean;
-}
+@deprecated
+type Cooldown = WidgetCooldown;
 
 ## CooldownOptions  (type-only)
-interface CooldownOptions {
-    size?: number;
-}
+@deprecated
+type CooldownOptions = WidgetCooldownOptions;
 
 ## Corner  (type-only)
 type Corner = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left';
@@ -505,6 +502,7 @@ interface ExternalLinkOptions {
 }
 
 ## FLOATS_CSS
+@deprecated
 const FLOATS_CSS: string;
 
 ## FORM_FACTORS
@@ -600,17 +598,23 @@ interface Grid extends DropTarget {
     readonly element: HTMLElement;
     readonly cols: number;
     readonly rows: number;
-    set(cell: Cell, item: CellItem | null): boolean;
-    get(cell: Cell): CellItem | null;
-    find(item: CellItem): Cell | null;
-    move(from: Cell, to: Cell): boolean;
+    set(cell: GridCell, item: CellItem | null): boolean;
+    get(cell: GridCell): CellItem | null;
+    find(item: CellItem): GridCell | null;
+    move(from: GridCell, to: GridCell): boolean;
     readonly items: GridEntry[];
-    focus(cell: Cell): void;
-    readonly focused: Readonly<Cell>;
+    focus(cell: GridCell): void;
+    readonly focused: Readonly<GridCell>;
     readonly held: CellItem | null;
     act(action: PadAction): boolean;
     clear(): void;
     remove(): void;
+}
+
+## GridCell  (type-only)
+interface GridCell {
+    col: number;
+    row: number;
 }
 
 ## GridEntry  (type-only)
@@ -629,16 +633,17 @@ interface GridOptions {
     label?: string;
     canDrop?: (from: CellRef, to: CellRef, item: CellItem) => boolean;
     onMove?: (from: CellRef, to: CellRef, item: CellItem) => void;
-    onActivate?: (cell: Cell, item: CellItem) => void;
-    onFocus?: (cell: Cell) => void;
-    onContext?: (cell: Cell, item: CellItem, anchor: HTMLElement) => void;
+    onActivate?: (cell: GridCell, item: CellItem) => void;
+    onFocus?: (cell: GridCell) => void;
+    onContext?: (cell: GridCell, item: CellItem, anchor: HTMLElement) => void;
     card?: Card;
-    describe?: (item: CellItem, cell: Cell) => CardOptions | null;
+    describe?: (item: CellItem, cell: GridCell) => CardOptions | null;
     hoverMs?: number;
     labels?: InventoryLabels;
 }
 
 ## HUD_CSS
+@deprecated
 const HUD_CSS: string;
 
 ## Heading  (type-only)
@@ -671,6 +676,7 @@ interface HudHost {
 }
 
 ## INVENTORY_CSS
+@deprecated
 const INVENTORY_CSS: string;
 
 ## Insets  (type-only)
@@ -713,6 +719,7 @@ interface KeyPromptOptions {
 }
 
 ## LOADING_CSS
+@deprecated
 const LOADING_CSS: string;
 
 ## Layout  (type-only)
@@ -968,6 +975,7 @@ interface MinimapWorld {
 }
 
 ## NOTIFY_CSS
+@deprecated
 const NOTIFY_CSS: string;
 
 ## NO_INSETS
@@ -1014,6 +1022,7 @@ interface NotifyOptions {
 type NotifyTone = 'info' | 'success' | 'warn' | 'danger';
 
 ## ORB_CSS
+@deprecated
 const ORB_CSS: string;
 
 ## Overlay  (type-only)
@@ -1076,6 +1085,7 @@ interface OverlayOptions {
     caption?: CaptionOptions;
     maxToasts?: number;
     focusHome?: () => HTMLElement | null;
+    camera?: () => AnchorCamera;
 }
 
 ## PHONE_MAX_SHORT_SIDE
@@ -1553,6 +1563,7 @@ const TEXT_MIN_VAR = "--tc-text-min";
 const TEXT_SCALE_VAR = "--tc-text-scale";
 
 ## TOOLTIP_CSS
+@deprecated
 const TOOLTIP_CSS: string;
 
 ## ThemeOverrides  (type-only)
@@ -1661,13 +1672,28 @@ const UNIT_VAR = "--tc-unit";
 type Units = 'frame' | 'css';
 
 ## WIDGETS2_CSS
+@deprecated
 const WIDGETS2_CSS: string;
 
 ## WIDGETS3_CSS
+@deprecated
 const WIDGETS3_CSS: string;
 
 ## WORLD_PANEL_WGSL
+@deprecated
 const WORLD_PANEL_WGSL = "\n\nstruct EngineGlobals {\n  logicalSize: vec2f,\n  targetSize: vec2f,\n  time: f32,\n  dt: f32,\n  _pad: vec2f,\n};\n@group(0) @binding(0) var<uniform> globals: EngineGlobals;\nstruct EngineCamera {\n  view: mat4x4f,\n  proj: mat4x4f,\n  view_proj: mat4x4f,\n  camera_pos: vec4f,\n  viewport: vec4f,\n  view_index: u32,\n  _pad0: u32, _pad1: u32, _pad2: u32,\n  inv_view_proj: mat4x4f,\n  prev_view_proj: mat4x4f,\n  prev_view: mat4x4f,\n  jitter: vec4f,\n};\n@group(0) @binding(1) var<uniform> camera: EngineCamera;\n\nstruct WorldPanel {\n  m0: vec4f,\n  m1: vec4f,\n  m2: vec4f,\n  size: vec4f,\n};\n@group(1) @binding(0) var<uniform> panel: WorldPanel;\n@group(1) @binding(1) var panel_sampler: sampler;\n@group(1) @binding(2) var panel_tex: texture_2d<f32>;\n\nstruct VSOut {\n  @builtin(position) clip: vec4f,\n  @location(0) uv: vec2f,\n};\nstruct FragOut {\n  @location(0) color: vec4f,\n  @location(1) emissive: vec4f,\n};\n\n@vertex fn vs(@builtin(vertex_index) vi: u32) -> VSOut {\n  var corners = array<vec2f, 6>(\n    vec2f(-0.5, -0.5), vec2f(0.5, -0.5), vec2f(0.5, 0.5),\n    vec2f(-0.5, -0.5), vec2f(0.5, 0.5), vec2f(-0.5, 0.5)\n  );\n  let q = corners[vi];\n  let local = vec4f(q * panel.size.xy, 0.0, 1.0);\n  let world = vec3f(dot(panel.m0, local), dot(panel.m1, local), dot(panel.m2, local));\n  var o: VSOut;\n  o.clip = camera.view_proj * vec4f(world, 1.0);\n  o.uv = vec2f(q.x + 0.5, 0.5 - q.y);\n  return o;\n}\n\n@fragment fn fs(in: VSOut) -> FragOut {\n  var o: FragOut;\n  o.color = textureSample(panel_tex, panel_sampler, in.uv);\n  o.emissive = vec4f(0.0);\n  return o;\n}\n";
+
+## WidgetCooldown  (type-only)
+interface WidgetCooldown {
+    element: HTMLDivElement;
+    set(fraction: number): void;
+    readonly ready: boolean;
+}
+
+## WidgetCooldownOptions  (type-only)
+interface WidgetCooldownOptions {
+    size?: number;
+}
 
 ## WidgetHandle  (type-only)
 interface WidgetHandle {
@@ -1834,7 +1860,9 @@ class WorldPanel implements Drawable, WorldWidgetHost {
     wheel(x: number, y: number, dy: number): boolean;
     poll(pointers: readonly RoutedPointer[]): void;
     attachTo(router: PointerRouter<unknown>): () => void;
-    attach(input: WorldPanelInput): void;
+    attach(input: WorldPanelInput, opts?: {
+        camera?: () => Camera | null;
+    }): void;
     detach(): void;
     focus(widget: WorldWidget | null): void;
     focusNext(): WorldWidget | null;
@@ -1857,7 +1885,9 @@ interface WorldPanelHit {
 
 ## WorldPanelInput  (type-only)
 interface WorldPanelInput {
-    getPointers(): PointerRouter<unknown> | null;
+    readonly pointers?: PointerRouter<unknown> | null;
+    @deprecated
+    getPointers?(): PointerRouter<unknown> | null;
     onUpdated(fn: () => void): () => void;
 }
 
@@ -2031,7 +2061,7 @@ function classifyFormFactor(i: ClassifyInput): FormFactor;
 function contextList(host: InventoryHost, items: ContextItem[], opts: ContextListOptions): ContextList;
 
 ## cooldown
-function cooldown(opts?: CooldownOptions): Cooldown;
+function cooldown(opts?: WidgetCooldownOptions): WidgetCooldown;
 
 ## cornerOrder
 function cornerOrder(preferred: Corner): Corner[];
@@ -2280,7 +2310,11 @@ function placeTooltip(anchor: Rect, size: {
 function placementFor(place: WidgetOptions['place'], ff: FormFactor): Placement;
 
 ## prefersReducedMotion
-function prefersReducedMotion(win?: Window | undefined): boolean;
+@deprecated
+const prefersReducedMotion: (win?: Window) => boolean;
+
+## prefersReducedMotionIn
+function prefersReducedMotionIn(win?: Window | undefined): boolean;
 
 ## radial
 function radial(host: InventoryHost, opts: RadialOptions): Radial;

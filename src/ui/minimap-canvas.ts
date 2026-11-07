@@ -586,6 +586,12 @@ export function createCanvasMinimap(
   };
 }
 
+/**
+ * Stylesheet for the canvas minimap (theme tokens).
+ *
+ * @deprecated (ws/api-core, E-036) Internal: its `ensure*Styles` injects it. Leaves the `ui` entry next
+ * minor; tests import it from this file.
+ */
 export const CANVAS_MINIMAP_CSS = `
 .tc-overlay .tc-cminimap { position: relative; width: var(--tc-cminimap-size); height: auto; aspect-ratio: 1;
   max-width: 100%; max-height: 100%; flex: none;

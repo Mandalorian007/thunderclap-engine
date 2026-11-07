@@ -2,11 +2,8 @@
 // Do not edit by hand. After an intended API change run `pnpm api:update` and commit this file.
 
 ## Aabb  (type-only)
-interface Aabb<T = unknown> {
-    min: readonly [number, number, number];
-    max: readonly [number, number, number];
-    target: T;
-}
+@deprecated
+type Aabb<T = unknown> = RayBox<T>;
 
 ## ActionSource  (type-only)
 interface ActionSource {
@@ -146,9 +143,17 @@ interface DragGesture extends GesturePoint {
     device: GestureDevice;
 }
 
+## Edges  (type-only)
+interface Edges {
+    l: number;
+    t: number;
+    r: number;
+    b: number;
+}
+
 ## Follow
 class Follow {
-    target: FollowTarget | null;
+    target: FollowSubject | null;
     yaw: number;
     pitch: number;
     distance: number;
@@ -203,11 +208,15 @@ interface FollowOptions {
     mode?: FollowMode;
 }
 
-## FollowTarget  (type-only)
-interface FollowTarget {
+## FollowSubject  (type-only)
+interface FollowSubject {
     position: ArrayLike<number>;
     yaw?: number;
 }
+
+## FollowTarget  (type-only)
+@deprecated
+type FollowTarget = FollowSubject;
 
 ## GamepadActuatorLike  (type-only)
 interface GamepadActuatorLike {
@@ -318,13 +327,8 @@ interface Glyph {
 type GlyphKind = 'key' | 'button' | 'axis' | 'pointer' | 'gesture' | 'xr';
 
 ## Grid  (type-only)
-interface Grid {
-    left: number;
-    top: number;
-    pitch: number;
-    cols: number;
-    rows: number;
-}
+@deprecated
+type Grid = SnapGrid;
 
 ## GyroEnv  (type-only)
 interface GyroEnv {
@@ -383,15 +387,11 @@ interface GyroSourceOptions {
 type Hand = 'left' | 'right';
 
 ## Hit  (type-only)
-interface Hit<T = unknown> {
-    readonly point: Vec3;
-    normal: Vec3 | null;
-    distance: number;
-    target: T;
-}
+@deprecated
+type Hit<T = unknown> = RayHit<T>;
 
 ## HitTester  (type-only)
-type HitTester<T = unknown> = (ray: Ray) => Hit<T> | null;
+type HitTester<T = unknown> = (ray: Ray) => RayHit<T> | null;
 
 ## Input
 class Input<A extends string> {
@@ -406,14 +406,20 @@ class Input<A extends string> {
     set lastDevice(device: InputDevice);
     on<K extends keyof InputEvents>(type: K, fn: (payload: InputEvents[K]) => void): () => void;
     setGestures(gestures: Gestures | null): void;
+    get gestures(): Gestures | null;
+    @deprecated
     getGestures(): Gestures | null;
     setPointers<T>(router: PointerRouter<T> | null): void;
+    get pointers(): PointerRouter<unknown> | null;
+    @deprecated
     getPointers(): PointerRouter<unknown> | null;
     setLook(look: Look | null): void;
     get dispatcher(): PointerDispatcher | null;
     onUpdated(fn: () => void): () => void;
     addActionSource(src: ActionSource): () => void;
     axis(negative: A, positive: A): number;
+    get look(): Look | null;
+    @deprecated
     getLook(): Look | null;
     setBindings(bindings: Bindings<A>): void;
     rebind(action: A, list: readonly Binding[], context?: string | null): void;
@@ -421,6 +427,8 @@ class Input<A extends string> {
     pushContext(name: string, opts?: ContextOptions<A>): () => void;
     popContext(name: string): boolean;
     get context(): string | null;
+    get contexts(): readonly string[];
+    @deprecated
     contextStack(): string[];
     onContextChange(fn: (name: string | null) => void): () => void;
     buffered(action: A, windowMs: number): boolean;
@@ -428,9 +436,12 @@ class Input<A extends string> {
     stick(negX: A, posX: A, negY: A, posY: A, out: [number, number], opts?: StickOptions): [number, number];
     stickAngle(out: readonly [number, number]): number | null;
     listen(action: A, opts?: ListenOptions): Promise<Binding | null>;
+    get listening(): A | null;
+    @deprecated
     listeningFor(): A | null;
     setGlobalKeys(codes: Iterable<string>): void;
     setButtonKeys(codes: Iterable<string>): void;
+    @deprecated
     getBindings(): Bindings<A>;
     glyphFor(action: A, device?: InputDevice): Glyph | null;
     rumbleSupported(pad?: number): boolean;
@@ -759,9 +770,9 @@ interface MagnifyOptions {
         x: number;
         y: number;
     }) => {
-        keep: Rect[];
-        spare?: Rect[];
-        avoid?: Rect[];
+        keep: Edges[];
+        spare?: Edges[];
+        avoid?: Edges[];
     } | null;
     leader?: boolean;
 }
@@ -890,7 +901,7 @@ interface PointerDispatcherOptions {
 ## PointerHitEvent  (type-only)
 interface PointerHitEvent<T = unknown> {
     pointer: RoutedPointer<T>;
-    hit: Hit<T> | null;
+    hit: RayHit<T> | null;
 }
 
 ## PointerRecord  (type-only)
@@ -923,11 +934,11 @@ class PointerRouter<T = unknown> {
     constructor(opts?: PointerRouterOptions<T>);
     get camera(): RayCamera | null;
     set camera(c: RayCamera | (() => RayCamera | null) | null);
-    get hit(): Hit<T> | null;
+    get hit(): RayHit<T> | null;
     on<K extends keyof PointerRouterEvents<T>>(type: K, fn: (e: PointerRouterEvents<T>[K]) => void): () => void;
     addTester(t: HitTester<T>): () => void;
     addSource(s: PointerSource): () => void;
-    mute(sources?: readonly PointerSource[]): void;
+    mute(sources?: readonly PointerSource[]): () => void;
     unmute(): void;
     isMuted(source: PointerSource): boolean;
     setPointerTransform(fn: PointerTransform | null): void;
@@ -1012,19 +1023,36 @@ interface Ray {
 ## RayBounds  (type-only)
 type RayBounds = MeshBounds;
 
+## RayBox  (type-only)
+interface RayBox<T = unknown> {
+    min: readonly [number, number, number];
+    max: readonly [number, number, number];
+    target: T;
+}
+
 ## RayCamera  (type-only)
 type RayCamera = Pick<Camera, 'screen' | 'screenToWorld'>;
+
+## RayHit  (type-only)
+interface RayHit<T = unknown> {
+    readonly point: Vec3;
+    normal: Vec3 | null;
+    distance: number;
+    target: T;
+}
+
+## RayPlane  (type-only)
+interface RayPlane {
+    normal: readonly [number, number, number];
+    offset?: number;
+}
 
 ## RayTransform  (type-only)
 type RayTransform = Pick<Transform, 'world'>;
 
 ## Rect  (type-only)
-interface Rect {
-    l: number;
-    t: number;
-    r: number;
-    b: number;
-}
+@deprecated
+type Rect = Edges;
 
 ## RoutedPointer  (type-only)
 interface RoutedPointer<T = unknown> {
@@ -1038,7 +1066,7 @@ interface RoutedPointer<T = unknown> {
     readonly select: boolean;
     readonly secondary: boolean;
     readonly xr: Readonly<XrButtons> | null;
-    readonly hit: Hit<T> | null;
+    readonly hit: RayHit<T> | null;
 }
 
 ## RumbleOptions  (type-only)
@@ -1063,6 +1091,15 @@ class ScreenPointers implements PointerSource {
     poll(camera: RayCamera | null): readonly PointerSample[];
     attach(target: HTMLElement, dispatcher?: PointerDispatcher): void;
     detach(): void;
+}
+
+## SnapGrid  (type-only)
+interface SnapGrid {
+    left: number;
+    top: number;
+    pitch: number;
+    cols: number;
+    rows: number;
 }
 
 ## StickOptions  (type-only)
@@ -1124,18 +1161,18 @@ interface TickClock extends InputClock {
 }
 
 ## TouchZoneBinding  (type-only)
-type TouchZoneBinding =
+type TouchZoneBinding<Z extends string = string> =
 {
-    zone: string;
+    zone: Z;
     axis: 'x' | 'y';
     dir: 1 | -1;
 }
  | {
-    zone: string;
+    zone: Z;
     button: string;
 }
  | {
-    zone: string;
+    zone: Z;
     swipe: SwipeDirection;
 };
 
@@ -1161,9 +1198,9 @@ interface TouchZones<Z extends Record<string, TouchZoneOptions>> {
 }
 
 ## TouchZonesOptions  (type-only)
-interface TouchZonesOptions<Z extends Record<string, TouchZoneOptions>> {
+interface TouchZonesOptions<Z extends Record<string, TouchZoneOptions>, A extends string = string> {
     zones: Z;
-    bindings?: Record<string, TouchZoneBinding | readonly TouchZoneBinding[]>;
+    bindings?: Partial<Record<A, TouchZoneBinding<keyof Z & string> | readonly TouchZoneBinding<keyof Z & string>[]>>;
     devices?: readonly PointerRecordDevice[];
 }
 
@@ -1219,7 +1256,7 @@ interface ZoneRect {
 type ZoneRectFn = (w: number, h: number) => ZoneRect;
 
 ## aabbTester
-function aabbTester<T = unknown>(boxes: readonly Aabb<T>[]): HitTester<T>;
+function aabbTester<T = unknown>(boxes: readonly RayBox<T>[]): HitTester<T>;
 
 ## bindingMatchesDevice
 function bindingMatchesDevice(b: Binding, device: InputDevice): boolean;
@@ -1231,7 +1268,7 @@ function createGestures(opts?: GestureOptions): Gestures;
 function createGyroSource(opts?: GyroSourceOptions): GyroSource;
 
 ## createHit
-function createHit<T = unknown>(target: T): Hit<T>;
+function createHit<T = unknown>(target: T): RayHit<T>;
 
 ## createInputPlayback
 function createInputPlayback<A extends string>(input: Input<A>, recording: InputRecording, opts?: InputPlaybackOptions): InputPlayback;
@@ -1258,7 +1295,7 @@ function createSample(key: number, device: PointerDevice): PointerSample;
 function createTickClock(start?: number): TickClock;
 
 ## createTouchZones
-function createTouchZones<Z extends Record<string, TouchZoneOptions>>(input: Input<string>, opts: TouchZonesOptions<Z>): TouchZones<Z>;
+function createTouchZones<Z extends Record<string, TouchZoneOptions>, A extends string = string>(input: Input<A>, opts: TouchZonesOptions<Z, NoInfer<A>>): TouchZones<Z>;
 
 ## findConflicts
 function findConflicts<A extends string>(map: Bindings<A>): BindingConflict[];
@@ -1303,7 +1340,7 @@ function parseBindings<A extends string>(text: string | unknown, defaults: Bindi
 function parseRecording(source: string | unknown): InputRecording;
 
 ## planeTester
-function planeTester<T = null>(z?: number, target?: T): HitTester<T>;
+function planeTester<T = null>(plane?: number | RayPlane, target?: T): HitTester<T>;
 
 ## rayAt
 function rayAt(ray: Ray, t: number, out: Vec3): Vec3;
@@ -1327,7 +1364,7 @@ function serializeRecording(rec: InputRecording): string;
 function shapeStick(x: number, y: number, out: [number, number], opts?: StickOptions): [number, number];
 
 ## snapToGrid
-function snapToGrid(g: Grid, x: number, y: number, ok?: (i: number, j: number) => boolean): {
+function snapToGrid(g: SnapGrid, x: number, y: number, ok?: (i: number, j: number) => boolean): {
     x: number;
     y: number;
 } | null;

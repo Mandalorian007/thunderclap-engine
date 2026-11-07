@@ -9,6 +9,9 @@ export const WORLD_PANEL_UNIFORM_BYTES = WORLD_PANEL_UNIFORM_FLOATS * 4;
  * around the panel's origin in its xy plane (facing +z); its texture is the panel canvas, in
  * premultiplied alpha, so the fragment writes the sample straight out under premultiplied blend.
  * The canvas's row 0 is the panel's top, so v runs 0 at +y.
+ *
+ * @deprecated (ws/api-core, E-036) Internal: the panel builds its pipeline from it. Leaves the `ui` entry next
+ * minor; tests import it from this file.
  */
 export const WORLD_PANEL_WGSL = /* wgsl */ `
 ${WGSL_GLOBALS}

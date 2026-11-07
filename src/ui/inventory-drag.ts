@@ -28,7 +28,7 @@ import type {
 } from './inventory';
 import { ensureInventoryStyles } from './inventory';
 import type { Card, CardOptions } from './inventory-card';
-import { prefersReducedMotion } from './styles';
+import { prefersReducedMotionIn } from './styles';
 
 export interface DragContextOptions {
   /** Touch hold before a drag starts, ms. Default 160. */
@@ -283,7 +283,7 @@ export function createDragContext(host: InventoryHost, opts: DragContextOptions 
       active = false;
     }, 0);
     if (!g) return;
-    if (!snapBack || !pick || prefersReducedMotion(doc.defaultView ?? undefined)) {
+    if (!snapBack || !pick || prefersReducedMotionIn(doc.defaultView ?? undefined)) {
       g.remove();
       return;
     }

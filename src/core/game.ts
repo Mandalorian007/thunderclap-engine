@@ -5,9 +5,11 @@
  * It blocks browser zoom, boots WebGPU on a letterboxed surface and builds, in this order:
  * renderer, post stack, particles, host, the game's save (if any), overlay and pad navigation,
  * audio (mixer persisted through the host), the game's tick clock, input with its gestures (on
- * that clock) and pointer router, the scene stack and the frame loop (frames come from the host). It also wires the page lifecycle (hide, pagehide
- * and freeze stop frames and flush the save; show resumes) and device loss (the reload screen,
- * then loop, audio and captions halt for good).
+ * that clock) and pointer router, the scene stack and the frame loop (frames come from the
+ * host). It also wires the page lifecycle (hide, pagehide and freeze stop frames and flush the
+ * save; show resumes), the host's app lifecycle (`background` stops frames and flushes the save,
+ * `active` resumes) and device loss (the reload screen, then loop, audio and captions halt for
+ * good).
  *
  * The surface letterboxes the design space; what the overlay's layout leaves free of UI is
  * `ctx.ui.layout.freeRect`, and a 2D game frames its world into it with
@@ -74,12 +76,23 @@ import {
   Renderer,
   type SceneTargetAux,
 } from '../render';
-import { createOverlay, followSafeArea, type LayoutSpec, type Overlay, PadNav } from '../ui';
+import {
+  applyTextScale,
+  createOverlay,
+  followSafeArea,
+  type LayoutSpec,
+  type Overlay,
+  PadNav,
+  type ThemeOverrides,
+} from '../ui';
 import type { Time } from './loop';
 import { GameLoop } from './loop';
 import { SceneStack } from './scene';
 
-/** What `createGame` needs from a game's save: it is flushed on hide and on device loss. */
+/**
+ * What `createGame` needs from a game's save: it is flushed on hide (and `host.lifecycle`
+ * going to `background`) and on device loss.
+ */
 export interface FlushableSave {
   flush(): void;
 }
@@ -154,7 +167,8 @@ export interface CreateGameOptions<A extends string, S extends FlushableSave | n
   /** The page the game runs in. Default `createWebHost()`. */
   host?: Host;
   /**
-   * Builds the game's save from the host's storage; it is flushed on hide and on device loss.
+   * Builds the game's save from the host's storage; it is flushed on hide, on `host.lifecycle`
+   * going to `background` (a store app's shell) and on device loss.
    * Omit it (a client whose state lives on a server) and `ctx.save` is null, typed `null`, and
    * the engine never touches `host.storage` (leave `mixerKey` out too for that).
    */
@@ -212,6 +226,16 @@ export interface CreateGameOptions<A extends string, S extends FlushableSave | n
    * units (see `Layout`; read it as `ctx.ui.layout`).
    */
   layout?: LayoutSpec;
+  /**
+   * Token overrides on the overlay's `defaultTheme` (ws/api-core; `OverlayOptions.theme`, sizes
+   * in design px). Later changes: `ctx.ui.setTheme`.
+   */
+  theme?: ThemeOverrides;
+  /**
+   * The overlay's text scale, 1 = 100% (ws/api-core): `applyTextScale(ctx.ui.root, textScale,
+   * ctx.ui.setTheme)` at boot. Default 1 (nothing applied).
+   */
+  textScale?: number;
   /** Called once WebGPU is up, before anything else is built (load-timing marks). */
   onGpuReady?(gpu: GpuContext): void;
   /** Stop double-tap, pinch and ctrl+wheel from zooming the page (`blockBrowserZoom`). Default true. */
@@ -286,15 +310,21 @@ export interface GameReplay extends InputPlayback {
 }
 
 /**
- * Everything noun-free a scene may use. `A` is the game's action names, `S` its save and `C`
- * the ctx the scene stack hands to scenes (the game's own ctx type, which extends this one).
- * A game created without `save` gets `S = null`: `ctx.save` is then typed `null`, and that ctx
- * is not assignable to one with a save (`EngineCtx<A>`), so a client cannot reach for one.
+ * Everything noun-free a scene may use. `A` is the game's action names, `S` its save, `C` the
+ * ctx the scene stack hands to scenes (the game's own ctx type, which extends this one) and `P`
+ * what the pointer router's hits carry (`ctx.pointers`' testers' `target`s; default `any`, so
+ * `EngineCtx<A>` takes a ctx whatever its `P`; `createGame` returns `unknown` unless given one).
+ * A game created without `save` gets `S = null`: `ctx.save` is then typed `null`, so a client
+ * cannot reach for one. The default `S` is `FlushableSave | null` (ws/api-core), so code written
+ * against `EngineCtx<A>` takes a ctx with a save or without one; name the save type
+ * (`EngineCtx<A, MySave>`) to read it.
  */
 export interface EngineCtx<
   A extends string = string,
-  S extends FlushableSave | null = FlushableSave,
+  S extends FlushableSave | null = FlushableSave | null,
   C = unknown,
+  // biome-ignore lint/suspicious/noExplicitAny: `EngineCtx<A>` takes a ctx of any hit target type
+  P = any,
 > {
   readonly design: { readonly width: number; readonly height: number };
   readonly surface: Surface;
@@ -302,10 +332,17 @@ export interface EngineCtx<
   readonly renderer: Renderer;
   /**
    * The camera the scenes draw through (`renderer.camera`, `Camera.ortho2d(design)` by default):
-   * the loop passes it to `Scene.render(frame, camera, alpha)` and `renderer.render`. Re-aim it
-   * in place (`fitRect`, `setPerspective`, `lookAt`); its identity does not change.
+   * the loop passes it to `Scene.render(frame, camera, alpha)` and `renderer.render`, the
+   * pointer rays and `ui.anchors()` go through it. Re-aim it in place (`fitRect`,
+   * `setPerspective`, `lookAt`), or swap it with `setCamera`.
    */
   readonly camera: Camera;
+  /**
+   * Swap the camera (ws/api-core): `ctx.setCamera(Camera.perspective(fovY, aspect, near, far))`.
+   * `ctx.camera` and `renderer.camera` read it from now; the next frame, the next pointer
+   * update and the overlay's anchors use it.
+   */
+  setCamera(camera: Camera): void;
   readonly post: PostStack;
   /** Shared GPU particle pool; updated by the loop, drawn by views. */
   readonly particles: ParticleSystem;
@@ -336,17 +373,23 @@ export interface EngineCtx<
    */
   readonly gestures: Gestures;
   /**
-   * Pointer rays through `renderer.camera` (mouse, pen, touch; a `PadCursor` when added):
-   * register hit testers on it and listen for `hover`/`select`. Linked to `input`, which polls
-   * it each update and shares its block and pointer transform.
+   * Pointer rays through `ctx.camera` (mouse, pen, touch; a `PadCursor` when added; the XR
+   * controllers and hands, through the head camera, while `xr` is active): register hit testers
+   * on it and listen for `hover`/`select`. Linked to `input`, which polls it each update and
+   * shares its block and pointer transform. `P` types the hits' `target`s
+   * (`createGame<Action, Save, GameCtx, Target>`); the router itself does not check them.
    */
-  readonly pointers: PointerRouter<unknown>;
+  readonly pointers: PointerRouter<P>;
   /** Drives modal panels from the pad (d-pad moves focus, A activates, B closes). */
   readonly padNav: PadNav;
   readonly audio: AudioEngine;
   /** The DOM overlay, CSS px, with its layout (`ui.layout`); `ui.padOwner` says who has the pad. */
   readonly ui: Overlay;
-  /** The page the game runs in: frames, links, copying, fullscreen and save storage. */
+  /**
+   * The page the game runs in: frames, links, copying, fullscreen, save storage, and where the
+   * host has them the app lifecycle (`host.lifecycle`, `hooks.lifecycle`), haptics
+   * (`host.haptics`) and the safe area (`host.safeArea`, which pads `ui.layout`).
+   */
   readonly host: Host;
   /** The game's save, or null when `createGame` was given none (`S` is then `null`). */
   readonly save: S;
@@ -371,7 +414,8 @@ export async function createGame<
   A extends string,
   S extends FlushableSave | null = null,
   C = unknown,
->(opts: CreateGameOptions<A, S>): Promise<EngineCtx<A, NoInfer<S>, C> | null> {
+  P = unknown,
+>(opts: CreateGameOptions<A, S>): Promise<EngineCtx<A, NoInfer<S>, C, P> | null> {
   const design = { width: opts.design?.width ?? 1920, height: opts.design?.height ?? 1080 };
   // Before boot, so it holds from the first frame (and on the fatal screens too).
   if (opts.blockBrowserZoom !== false) blockBrowserZoom(opts.root.ownerDocument);
@@ -410,7 +454,13 @@ export async function createGame<
     designHeight: design.height,
     layout: opts.layout,
     focusHome: () => surface.canvas,
+    theme: opts.theme,
+    // `ui.anchors()` and `ui.floats()` without a camera follow the game's (ws/api-core).
+    camera: () => renderer.camera,
   });
+  if (opts.textScale !== undefined && opts.textScale !== 1) {
+    applyTextScale(ui.root, opts.textScale, (t) => ui.setTheme(t));
+  }
   // Input is blocked while a modal panel is up, so the pad drives panels through this.
   const padNav = new PadNav(ui.stack, { getGamepads: opts.input.getGamepads });
   // A host that knows the notch and home indicator pads the layout's regions by them.
@@ -429,12 +479,16 @@ export async function createGame<
   // ── Input (blocked under modal panels) ─────────────────────────────────
   const extraBlock = opts.input.blocked;
   // Gestures and pointer rays link to the input: same block, same transform, same attach,
-  // advanced in `input.update()`. The rays go through whatever camera the renderer draws with.
+  // advanced in `input.update()`. The rays go through whatever camera the renderer draws with:
+  // the head while a VR session runs (so a head-locked `WorldPanel` faces the headset).
   // The gestures run on the game's tick clock (advanced by the loop below), so their timers
   // are game time and a replay lands them on the same ticks.
   const clock = createTickClock();
   const gestures = createGestures({ magnify: opts.input.magnify, clock });
-  const pointers = createPointerRouter({ camera: () => renderer.camera });
+  // While a session runs: its host (frames and the current `XRFrame`) and its surface (eyes).
+  let xrHost: XrHost | null = null;
+  let xrSurface: XrSurface | null = null;
+  const pointers = createPointerRouter<P>({ camera: () => xrSurface?.head ?? renderer.camera });
   const input = new Input<A>(opts.input.bindings, {
     blocked: extraBlock ? () => ui.stack.hasModal || extraBlock() : () => ui.stack.hasModal,
     globalKeys: opts.input.globalKeys,
@@ -468,6 +522,10 @@ export async function createGame<
     input.playback?.detach();
     // `attach` releases every key and button first, so nothing the player held leaks in.
     attachSink();
+    // A live pointer source (the screen, an XR controller) is muted for the replay too: the
+    // sink stops the DOM ones, the mute the rest. Its remover lifts only this mute, so a mute
+    // the game set stays.
+    const unmute = pointers.mute();
     const pb = createInputPlayback(input, recording, {
       speed: ropts.speed,
       tickMs: ropts.tickMs,
@@ -476,6 +534,7 @@ export async function createGame<
     const uninstall = pb.detach;
     pb.stop = pb.detach = () => {
       uninstall();
+      unmute();
       if (replaying !== pb) return;
       replaying = null;
       replayEnd = undefined;
@@ -490,12 +549,8 @@ export async function createGame<
   // ── Scenes + loop ──────────────────────────────────────────────────────
   const hooks: GameHooks = {};
   // The stack hands scenes this object on enter; the game fills in its nouns before then.
-  const ctx = {} as EngineCtx<A, S, C>;
+  const ctx = {} as EngineCtx<A, S, C, P>;
   const stack = new SceneStack<C, Frame, Camera>(ctx as C);
-  const camera = renderer.camera;
-  // While a session runs: its host (frames and the current `XRFrame`) and its surface (eyes).
-  let xrHost: XrHost | null = null;
-  let xrSurface: XrSurface | null = null;
   // With `sim: false` the loop calls update once per rendered frame with the real delta.
   const fixed = opts.sim !== false;
   const loop = new GameLoop(
@@ -544,6 +599,8 @@ export async function createGame<
           }
           renderer.endFrame({ present: false });
         } else {
+          // Read each frame: `ctx.setCamera` swaps it.
+          const camera = renderer.camera;
           stack.render(frame, camera, alpha);
           renderer.render(frame, camera);
           renderer.endFrame();
@@ -691,7 +748,10 @@ export async function createGame<
     surface,
     gpu,
     renderer,
-    camera,
+    camera: renderer.camera,
+    setCamera: (cam: Camera) => {
+      renderer.camera = cam;
+    },
     post,
     particles,
     input,
@@ -709,7 +769,13 @@ export async function createGame<
     hooks,
     onDeviceLost: res.onDeviceLost,
     xr,
-  } satisfies EngineCtx<A, S, C>);
+  } satisfies EngineCtx<A, S, C, P>);
+  // `camera` follows `setCamera` (`Object.assign` copied a value).
+  Object.defineProperty(ctx, 'camera', {
+    get: () => renderer.camera,
+    enumerable: true,
+    configurable: true,
+  });
   return ctx;
 }
 

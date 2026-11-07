@@ -94,7 +94,10 @@ export type ContextPass = 'none' | 'unbound' | 'all';
 
 /** `Input.pushContext` options. */
 export interface ContextOptions<A extends string> {
-  /** The context's own bindings; the actions must exist in the base map. Default none. */
+  /**
+   * The context's own bindings. Default none. An action the base map lacks is added
+   * (ws/api-core): it reads inactive below this context and after it pops, never throws.
+   */
   bindings?: Partial<Bindings<A>>;
   /** What happens to the actions it does not bind. Default `'unbound'`. */
   pass?: ContextPass;
@@ -431,7 +434,11 @@ export class Input<A extends string> {
   /** The bindings in force: `map` with the context stack resolved over it (`map` when empty). */
   private active: Bindings<A>;
   /** Pushed contexts, bottom first. */
-  private readonly contexts: ContextEntry<A>[] = [];
+  private readonly stack: ContextEntry<A>[] = [];
+  /** Actions a context added that the base map lacks (`pushContext`); bound to nothing below it. */
+  private extraActions = false;
+  /** `stack`'s names, bottom first (the `contexts` getter). */
+  private contextNames: readonly string[] = [];
   /** The latest press per action (`buffered`, `consume`). */
   private readonly presses = new Map<A, PressBuffer>();
   /** True while `replayPointer` dispatches: the feed consumer then leaves the raw state alone. */
@@ -442,12 +449,12 @@ export class Input<A extends string> {
   private deviceValue: InputDevice = 'keyboard';
   /** Ticks since construction (the trigger clock). */
   private tick = 0;
-  private listening: Listening<A> | null = null;
+  private listenState: Listening<A> | null = null;
   /** Last client-space pointer position fed through `pointerAt` (the orbit drag's coordinates). */
   private clientX = 0;
   private clientY = 0;
   private readonly claimFn = (_id: number, device: GestureDevice) =>
-    this.look?.claimsPointer(device) ?? false;
+    this.linkedLook?.claimsPointer(device) ?? false;
   private readonly getGamepads: () => readonly (GamepadLike | null)[];
   private transform: PointerTransform | null = null;
 
@@ -476,9 +483,9 @@ export class Input<A extends string> {
   private readonly prevKeys = new Set<string>();
   private readonly prevButtons = new Set<number>();
   private detachFn: (() => void) | null = null;
-  private gestures: Gestures | null = null;
-  private pointers: PointerRouter<unknown> | null = null;
-  private look: Look | null = null;
+  private linkedGestures: Gestures | null = null;
+  private linkedPointers: PointerRouter<unknown> | null = null;
+  private linkedLook: Look | null = null;
   private attached: AttachOptions | null = null;
   private dispatcherValue: PointerDispatcher | null = null;
   private readonly updatedFns: (() => void)[] = [];
@@ -529,13 +536,13 @@ export class Input<A extends string> {
    * actions are read, so `{ gesture }` bindings work. Don't call `gestures.update()` yourself.
    */
   setGestures(gestures: Gestures | null): void {
-    if (this.gestures === gestures) return;
-    if (this.gestures && this.attached) this.gestures.detach();
-    this.gestures = gestures;
+    if (this.linkedGestures === gestures) return;
+    if (this.linkedGestures && this.attached) this.linkedGestures.detach();
+    this.linkedGestures = gestures;
     if (!gestures) return;
     gestures.blocked = () => this.blocked();
     gestures.setPointerTransform(this.transform);
-    this.pointers?.setGestures(gestures);
+    this.linkedPointers?.setGestures(gestures);
     this.wireClaim();
     if (this.attached) {
       gestures.attach({
@@ -545,8 +552,14 @@ export class Input<A extends string> {
     }
   }
 
+  /** The linked gestures (`setGestures`), or `null`. */
+  get gestures(): Gestures | null {
+    return this.linkedGestures;
+  }
+
+  /** @deprecated (ws/api-core, E-036) Read `gestures`. Removed next minor. */
   getGestures(): Gestures | null {
-    return this.gestures;
+    return this.linkedGestures;
   }
 
   /**
@@ -558,19 +571,25 @@ export class Input<A extends string> {
    * `router.update()` yourself.
    */
   setPointers<T>(router: PointerRouter<T> | null): void {
-    if (this.pointers === router) return;
-    if (this.pointers && this.attached) this.pointers.detach();
-    this.pointers = router as PointerRouter<unknown> | null;
+    if (this.linkedPointers === router) return;
+    if (this.linkedPointers && this.attached) this.linkedPointers.detach();
+    this.linkedPointers = router as PointerRouter<unknown> | null;
     if (!router) return;
     router.blocked = () => this.blocked();
     router.setPointerTransform(this.transform);
-    router.setGestures(this.gestures);
+    router.setGestures(this.linkedGestures);
     if (this.attached)
       router.attach(this.attached.pointerTarget, this.dispatcherValue ?? undefined);
   }
 
+  /** The linked pointer router (`setPointers`), or `null`. */
+  get pointers(): PointerRouter<unknown> | null {
+    return this.linkedPointers;
+  }
+
+  /** @deprecated (ws/api-core, E-036) Read `pointers`. Removed next minor. */
   getPointers(): PointerRouter<unknown> | null {
-    return this.pointers;
+    return this.linkedPointers;
   }
 
   /**
@@ -579,15 +598,15 @@ export class Input<A extends string> {
    * `update()`, so `look.look` and `look.move` are this tick's. Don't call `look.update()` yourself.
    */
   setLook(look: Look | null): void {
-    if (this.look === look) return;
-    if (this.look) {
-      if (this.attached) this.look.detach();
-      this.look.keyHeld = null;
-      this.look.orbitFromInput = false;
-      this.look.pointerTransform = null;
-      this.look.padsFromInput = null;
+    if (this.linkedLook === look) return;
+    if (this.linkedLook) {
+      if (this.attached) this.linkedLook.detach();
+      this.linkedLook.keyHeld = null;
+      this.linkedLook.orbitFromInput = false;
+      this.linkedLook.pointerTransform = null;
+      this.linkedLook.padsFromInput = null;
     }
-    this.look = look;
+    this.linkedLook = look;
     this.wireClaim();
     if (!look) return;
     look.blocked = () => this.blocked();
@@ -640,15 +659,21 @@ export class Input<A extends string> {
    * gestures have no claim of their own; takes it back when the look unlinks.
    */
   private wireClaim(): void {
-    const g = this.gestures;
+    const g = this.linkedGestures;
     if (!g) return;
-    if (this.look) {
+    if (this.linkedLook) {
       if (!g.claim || g.claim === this.claimFn) g.claim = this.claimFn;
     } else if (g.claim === this.claimFn) g.claim = null;
   }
 
+  /** The linked look controls (`setLook`), or `null`. */
+  get look(): Look | null {
+    return this.linkedLook;
+  }
+
+  /** @deprecated (ws/api-core, E-036) Read `look`. Removed next minor. */
   getLook(): Look | null {
-    return this.look;
+    return this.linkedLook;
   }
 
   /**
@@ -673,7 +698,8 @@ export class Input<A extends string> {
       });
       this.presses.set(action, { tick: -1, used: false });
     }
-    for (const c of this.contexts) this.checkContextActions(c.bindings);
+    this.extraActions = false;
+    for (const c of this.stack) this.addContextActions(c.bindings);
     this.active = this.resolveContexts();
     for (const action of this.states.keys()) {
       this.triggers.set(action, this.active[action].map(newTriggerState));
@@ -724,17 +750,18 @@ export class Input<A extends string> {
    */
   pushContext(name: string, opts: ContextOptions<A> = {}): () => void {
     const bindings = (opts.bindings ?? {}) as Partial<Record<A, readonly Binding[]>>;
-    this.checkContextActions(bindings);
+    this.addContextActions(bindings);
     const old = this.contextIndex(name);
-    if (old >= 0) this.contexts.splice(old, 1);
+    if (old >= 0) this.stack.splice(old, 1);
     const entry: ContextEntry<A> = { name, bindings, pass: opts.pass ?? 'unbound' };
-    this.contexts.push(entry);
+    this.stack.push(entry);
+    this.contextNames = this.stack.map((c) => c.name);
     const hooks = this.feedHooks;
     for (let i = 0; i < hooks.length; i++) hooks[i]!.context?.(name, true);
     this.applyActive(null);
     this.events.emit('context', name);
     return () => {
-      const i = this.contexts.indexOf(entry);
+      const i = this.stack.indexOf(entry);
       if (i >= 0) this.removeContextAt(i);
     };
   }
@@ -749,12 +776,17 @@ export class Input<A extends string> {
 
   /** The top context's name, `null` with none pushed. */
   get context(): string | null {
-    return this.contexts[this.contexts.length - 1]?.name ?? null;
+    return this.stack[this.stack.length - 1]?.name ?? null;
   }
 
-  /** The pushed context names, bottom first. */
+  /** The pushed context names, bottom first. One array, rebuilt when the stack changes. */
+  get contexts(): readonly string[] {
+    return this.contextNames;
+  }
+
+  /** @deprecated (ws/api-core, E-036) Read `contexts` (this returns a copy). Removed next minor. */
   contextStack(): string[] {
-    return this.contexts.map((c) => c.name);
+    return this.contextNames.slice();
   }
 
   /** Shorthand for `on('context', fn)`: the top context changed. Returns the remover. */
@@ -764,7 +796,8 @@ export class Input<A extends string> {
 
   private removeContextAt(i: number): void {
     const before = this.context;
-    const [entry] = this.contexts.splice(i, 1);
+    const [entry] = this.stack.splice(i, 1);
+    this.contextNames = this.stack.map((c) => c.name);
     const hooks = this.feedHooks;
     for (let h = 0; h < hooks.length; h++) hooks[h]!.context?.(entry!.name, false);
     this.applyActive(null);
@@ -773,8 +806,8 @@ export class Input<A extends string> {
   }
 
   private contextIndex(name: string): number {
-    for (let i = this.contexts.length - 1; i >= 0; i--) {
-      if (this.contexts[i]!.name === name) return i;
+    for (let i = this.stack.length - 1; i >= 0; i--) {
+      if (this.stack[i]!.name === name) return i;
     }
     return -1;
   }
@@ -782,21 +815,33 @@ export class Input<A extends string> {
   /** The context `rebind` writes to: `undefined` the top one (or none), `null` none, else by name. */
   private contextEntry(context: string | null | undefined): ContextEntry<A> | null {
     if (context === null) return null;
-    if (context === undefined) return this.contexts[this.contexts.length - 1] ?? null;
+    if (context === undefined) return this.stack[this.stack.length - 1] ?? null;
     const i = this.contextIndex(context);
     if (i < 0) throw new Error(`no context "${context}"`);
-    return this.contexts[i]!;
+    return this.stack[i]!;
   }
 
-  private checkContextActions(bindings: Partial<Record<A, readonly Binding[]>>): void {
-    for (const action of Object.keys(bindings)) {
-      if (!this.states.has(action as A)) throw new Error(`unknown action "${action}"`);
+  /** Give a context's actions the base map lacks a state (bound to nothing below the context). */
+  private addContextActions(bindings: Partial<Record<A, readonly Binding[]>>): void {
+    for (const action of Object.keys(bindings) as A[]) {
+      if (this.states.has(action)) continue;
+      this.states.set(action, {
+        pressed: false,
+        held: false,
+        released: false,
+        value: 0,
+        heldTicks: 0,
+        holdProgress: 0,
+      });
+      this.presses.set(action, { tick: -1, used: false });
+      this.triggers.set(action, []);
+      this.extraActions = true;
     }
   }
 
   /** The bindings in force with contexts `0..top` on the stack (all of them by default). */
-  private resolveContexts(top = this.contexts.length - 1): Bindings<A> {
-    if (top < 0) return this.map;
+  private resolveContexts(top = this.stack.length - 1): Bindings<A> {
+    if (top < 0 && !this.extraActions) return this.map;
     const out = {} as Record<A, readonly Binding[]>;
     for (const action of this.states.keys()) out[action] = this.resolveAction(action, top);
     return out;
@@ -804,7 +849,7 @@ export class Input<A extends string> {
 
   private resolveAction(action: A, i: number): readonly Binding[] {
     if (i < 0) return this.map[action] ?? EMPTY_BINDINGS;
-    const c = this.contexts[i]!;
+    const c = this.stack[i]!;
     const own = c.bindings[action];
     if (own) return c.pass === 'all' ? [...own, ...this.resolveAction(action, i - 1)] : own;
     return c.pass === 'none' ? EMPTY_BINDINGS : this.resolveAction(action, i - 1);
@@ -921,7 +966,7 @@ export class Input<A extends string> {
    * `const b = await input.listen('jump'); if (b) input.rebind('jump', [b]);`.
    */
   listen(action: A, opts: ListenOptions = {}): Promise<Binding | null> {
-    this.listening?.resolve(null);
+    this.listenState?.resolve(null);
     return new Promise((resolve) => {
       const baseline = new Set<number>();
       this.pads.forEach((p, pi) => {
@@ -932,19 +977,24 @@ export class Input<A extends string> {
       });
       const ticks =
         opts.timeoutMs === undefined ? Infinity : Math.ceil(opts.timeoutMs / this.tickMs);
-      this.listening = { action, resolve, deadline: this.tick + ticks, baseline };
+      this.listenState = { action, resolve, deadline: this.tick + ticks, baseline };
     });
   }
 
   /** The action a `listen` is waiting for, or `null`. */
+  get listening(): A | null {
+    return this.listenState?.action ?? null;
+  }
+
+  /** @deprecated (ws/api-core, E-036) Read `listening`. Removed next minor. */
   listeningFor(): A | null {
-    return this.listening?.action ?? null;
+    return this.listenState?.action ?? null;
   }
 
   private settleListen(b: Binding | null): void {
-    const l = this.listening;
+    const l = this.listenState;
     if (!l) return;
-    this.listening = null;
+    this.listenState = null;
     l.resolve(b);
   }
 
@@ -958,7 +1008,7 @@ export class Input<A extends string> {
     this.buttonKeys = new Set(codes);
   }
 
-  /** The bindings in force (same as `bindings()`). */
+  /** @deprecated (ws/api-core, E-036) Use `bindings()`, the same map. Removed next minor. */
   getBindings(): Bindings<A> {
     return this.active;
   }
@@ -1044,10 +1094,10 @@ export class Input<A extends string> {
   /** Install the client → game-space mapping (platform owns letterboxing). `null` = identity relative to the target. */
   setPointerTransform(fn: PointerTransform | null): void {
     this.transform = fn;
-    this.gestures?.setPointerTransform(fn);
-    this.pointers?.setPointerTransform(fn);
+    this.linkedGestures?.setPointerTransform(fn);
+    this.linkedPointers?.setPointerTransform(fn);
     this.dispatcherValue?.setTransform(fn);
-    if (this.look) this.look.pointerTransform = fn;
+    if (this.linkedLook) this.linkedLook.pointerTransform = fn;
   }
 
   // ---------------------------------------------------------------- queries
@@ -1092,15 +1142,15 @@ export class Input<A extends string> {
       if (src) pads = src(pads);
     }
     this.pads = pads;
-    this.gestures?.update();
-    this.look?.update();
-    this.pointers?.poll();
+    this.linkedGestures?.update();
+    this.linkedLook?.update();
+    this.linkedPointers?.poll();
     const blocked = this.blocked();
     for (let i = 0; i < hooks.length; i++) pads = hooks[i]!.gamepads(pads);
     this.pads = pads;
     this.tick++;
     let padActive = false;
-    if (this.listening) this.pollListen();
+    if (this.listenState) this.pollListen();
     const sources = this.actionSources;
     for (let i = 0; i < sources.length; i++) sources[i]!.update?.();
 
@@ -1134,7 +1184,7 @@ export class Input<A extends string> {
     }
 
     if (padActive) this.lastDevice = 'gamepad';
-    const r = this.pointers;
+    const r = this.linkedPointers;
     if (r && (r.xrFired('trigger') || r.xrFired('squeeze') || r.xrFired('pinch'))) {
       this.lastDevice = 'xr';
     }
@@ -1157,14 +1207,14 @@ export class Input<A extends string> {
     this.pointer.dy = this.pointer.y - this.prevY;
     this.prevX = this.pointer.x;
     this.prevY = this.pointer.y;
-    this.pointers?.resolve(this.actionReader);
+    this.linkedPointers?.resolve(this.actionReader);
     const fns = this.updatedFns;
     for (let i = 0; i < fns.length; i++) fns[i]!();
   }
 
   /** A pending `listen`: pad buttons newly down, XR presses, the timeout. Keys and mouse come via the feed. */
   private pollListen(): void {
-    const l = this.listening!;
+    const l = this.listenState!;
     if (this.tick > l.deadline) {
       this.settleListen(null);
       return;
@@ -1180,7 +1230,7 @@ export class Input<A extends string> {
         }
       }
     }
-    const r = this.pointers;
+    const r = this.linkedPointers;
     if (r) {
       for (const xr of XR_BUTTONS) {
         if (r.xrFired(xr)) {
@@ -1284,20 +1334,20 @@ export class Input<A extends string> {
       });
       if (v > 0) out.pad = true;
     } else if ('pointer' in b) {
-      const r = this.pointers;
+      const r = this.linkedPointers;
       // A press shorter than a tick still holds for one tick (the sources keep it).
       if (r?.held(b.pointer)) {
         v = 1;
         if (r.fired(b.pointer)) out.fresh = true;
       }
     } else if ('xr' in b) {
-      const r = this.pointers;
+      const r = this.linkedPointers;
       if (r?.xrHeld(b.xr, b.hand)) {
         v = 1;
         if (r.xrFired(b.xr, b.hand)) out.fresh = true;
       }
     } else if ('gesture' in b) {
-      const g = this.gestures;
+      const g = this.linkedGestures;
       if (g?.active(b.gesture)) {
         v = 1;
         // A tap on consecutive ticks is a new press each time.
@@ -1346,7 +1396,7 @@ export class Input<A extends string> {
     const hooks = this.feedHooks;
     for (let i = 0; i < hooks.length; i++) hooks[i]!.keyDown(code);
     this.lastDevice = 'keyboard';
-    if (this.listening) {
+    if (this.listenState) {
       this.settleListen(code === 'Escape' ? null : { key: code });
       return;
     }
@@ -1367,12 +1417,12 @@ export class Input<A extends string> {
   buttonDown(button: number): void {
     const hooks = this.feedHooks;
     for (let i = 0; i < hooks.length; i++) hooks[i]!.buttonDown(button);
-    if (this.listening) {
+    if (this.listenState) {
       this.settleListen({ mouse: button });
       return;
     }
     if (button === 0 && this.pointer.type !== 'touch') {
-      this.look?.orbitDown(this.clientX, this.clientY);
+      this.linkedLook?.orbitDown(this.clientX, this.clientY);
     }
     if (!this.buttonsDown.has(button)) {
       if (this.queueTaps && (this.buttonsTapped.has(button) || this.buttonRepeats.has(button))) {
@@ -1390,7 +1440,7 @@ export class Input<A extends string> {
     this.buttonsDown.delete(button);
     if (button === 0) {
       this.pointer.down = false;
-      this.look?.orbitUp();
+      this.linkedLook?.orbitUp();
     }
   }
   wheel(dx: number, dy: number): void {
@@ -1408,7 +1458,7 @@ export class Input<A extends string> {
     this.lastDevice = type;
     this.clientX = clientX;
     this.clientY = clientY;
-    if (type !== 'touch') this.look?.orbitMove(clientX, clientY);
+    if (type !== 'touch') this.linkedLook?.orbitMove(clientX, clientY);
     if (p) {
       this.pointer.x = p.x;
       this.pointer.y = p.y;
@@ -1426,7 +1476,7 @@ export class Input<A extends string> {
     this.keyRepeats.clear();
     this.buttonRepeats.clear();
     this.pointer.down = false;
-    this.look?.orbitUp();
+    this.linkedLook?.orbitUp();
   }
 
   // ---------------------------------------------------------------- DOM
@@ -1534,20 +1584,20 @@ export class Input<A extends string> {
     target.addEventListener('contextmenu', onContextMenu);
 
     this.attached = opts;
-    this.gestures?.attach({
+    this.linkedGestures?.attach({
       pointerTarget: target,
       disableTouchScroll: opts.disableTouchScroll,
       dispatcher,
     });
-    this.pointers?.attach(target, dispatcher);
-    this.look?.attach(target, dispatcher);
+    this.linkedPointers?.attach(target, dispatcher);
+    this.linkedLook?.attach(target, dispatcher);
     this.events.emit('attach', dispatcher);
 
     this.detachFn = () => {
       this.events.emit('detach', dispatcher);
-      this.gestures?.detach();
-      this.pointers?.detach();
-      this.look?.detach();
+      this.linkedGestures?.detach();
+      this.linkedPointers?.detach();
+      this.linkedLook?.detach();
       this.attached = null;
       keyTarget.removeEventListener('keydown', onKeyDown);
       keyTarget.removeEventListener('keyup', onKeyUp);
