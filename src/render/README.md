@@ -412,8 +412,8 @@ take a `MeshLod` too (ws/render-6): every instance picks its level the same way 
 `meshes[0].bounds` through its matrix, its memory kept per view by instance index, or by key
 for a keyed list, ws/render-7), and the batch is copied into the frame's upload bucketed by
 level, so each non-empty level is one instanced draw, in the scene and the shadow pass alike.
-A LOD list therefore costs a per-frame copy like a batch (its own vertex buffer is not drawn)
-and is culled per instance; with `velocity: true` its previous matrices travel with the copy
+A LOD list therefore costs a per-frame copy like a batch (its own vertex buffer is not drawn,
+and since ws/render-9 not written either: its flush uploads nothing) and is culled per instance; with `velocity: true` its previous matrices travel with the copy
 (ws/render-7), so each instance writes its own motion. Removing instance 0 of a keyed list
 moves no other instance's level; without keys the instance swapped into slot 0 takes slot
 0's memory, as before. `renderer.lodLevelOf(batch, i, camera?)` reads the level instance `i`
@@ -1252,13 +1252,31 @@ the pieces. `Water` and `ParticleSystem` take `readsDepth` and then skip their o
   usage flags such as COPY_DST, catches writes past the end of a buffer, and records pass
   commands such as `setBindGroup` offsets and draws. That means `new Renderer(...)` and the
   props run in Node. It is test-only and not exported from the index.
-  `installGpuGlobals()` defines `GPUBufferUsage`, `GPUTextureUsage` and `GPUShaderStage` in Node;
+  `installGpuGlobals()` defines `GPUBufferUsage`, `GPUTextureUsage`, `GPUShaderStage` and
+  `GPUMapMode` in Node;
   `fakeCanvasContext(fake)` is the context `fakeRendererGpu` uses. What a test inspects on a
   `FakeDevice`: `buffers` (`FakeBuffer`: `size`, `usage`, `destroyed`), `textures`
   (`FakeTexture`, whose views are `FakeView`s), `bindGroups` (`FakeBindGroup`: layout and
   entries), `writes`, `textureWrites`, `passes` (`FakePass`: `kind`, `label`, `commands`) and
   `errors`. A `PassCommand` is one recorded `setPipeline`, `setBindGroup`, `draw`, `drawIndexed`,
   `dispatch` or other call.
+  Buffers hold bytes (ws/render-9). A `FakeBuffer`'s `data` is its contents: `writeBuffer`
+  stores into it (a typed array's `dataOffset` and `dataSize` count elements, and `writes`
+  records bytes), and `copyBufferToBuffer`, `clearBuffer` and `resolveQuerySet` apply when their
+  command buffer is submitted (`submits` counts them, `bufferCopies` lists each encoded copy as a
+  `FakeBufferCopy`, `querySets` holds `FakeQuerySet`s whose `values` a test fills). A `MAP_READ` buffer
+  maps for real: `mapAsync` resolves a microtask later with `mapState` `'pending'` then
+  `'mapped'`, `getMappedRange` returns a copy of the bytes the submitted copy brought, and
+  `unmap` detaches every range it handed out. A missing usage flag throws
+  `FakeGpuValidationError` (named `GPUValidationError`, also pushed to `errors`):
+  `copyBufferToBuffer` without `COPY_SRC` on the source or `COPY_DST` on the destination,
+  `writeBuffer` without `COPY_DST`, `mapAsync` without `MAP_READ` (or `MAP_WRITE`), and
+  `resolveQuerySet` without `QUERY_RESOLVE`. A copy submitted while a buffer is pending a map or
+  mapped, or a second `mapAsync`, goes to `errors`. Nothing runs shaders; `fake.runPass` (null
+  by default) is called with each pass at submit, in order with the copies and clears, for a
+  test to write what a dispatch would into a buffer's `data`. Readback tests (`GpuTimer`,
+  particle `debugReadback` / `readbackFields`, `ParticleSystem.alive`) use these, with no
+  stubbed mapping.
 
 ## Diagnostics
 
