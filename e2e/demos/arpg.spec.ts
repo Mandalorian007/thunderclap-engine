@@ -2,7 +2,8 @@
  * The ARPG demo (demos/arpg) on the device matrix: the courtyard boots clean inside the
  * draw-call band, a ground click (a tap on touch rows) paths the hero over the navmesh to the
  * spot, a gear key and a gear button swap the set's materials without rebuilding the rig, three
- * strikes on an adjacent ghoul kill it, and the desktop rows hold a playable frame rate.
+ * strikes on an adjacent ghoul kill it (the third number a crit), a tap on the minimap walks the
+ * hero there, and the desktop rows hold a playable frame rate.
  *
  * `?still&seed=3` parks the enemy AI and fixes the spawns so the interaction rows are
  * deterministic; every wait is a poll on `window.__demo`, never a sleep.
@@ -78,6 +79,10 @@ test.describe('demo: arpg', () => {
     expect(s.triangles).toBeGreaterThan(10_000);
     expect(s.navPolys).toBeGreaterThan(0);
     expect(s.enemiesAlive).toBe(12);
+    // Six braziers and twelve ghouls on the map; the orbs are engine meters.
+    expect(s.mapMarkers).toBe(18);
+    await expect(page.locator('#arpg-health[role="meter"]')).toBeVisible();
+    await expect(page.locator('#arpg-map')).toBeVisible();
     expect(s.cameraPitch).toBe(50);
     expect(s.gpuErrors).toBe(0);
     if (info.project.name.startsWith('desktop')) {
@@ -144,6 +149,43 @@ test.describe('demo: arpg', () => {
     await expect
       .poll(async () => (await read(page)).kills, { timeout: 10_000 })
       .toBeGreaterThanOrEqual(1);
+    expect((await read(page)).crits).toBeGreaterThanOrEqual(1);
+    expect(errors).toEqual([]);
+  });
+
+  test('a tap on the minimap walks the hero there', async ({ page, hasTouch }) => {
+    const { errors, state: before } = await boot(page, '?still&seed=3');
+    const [hx, , hz] = before.heroPos;
+    const goal = { x: hx + 4, z: hz - 2.5 }; // the ground-click test's spot: open floor
+    const c = await page.evaluate(
+      ([x, z]) => (window as unknown as Win).__arpgApi!.mapPointOf(x!, z!),
+      [goal.x, goal.z],
+    );
+    if (hasTouch) {
+      // Both touch events in one go, so a runner stall cannot turn the tap into a hold.
+      cdp ??= await page.context().newCDPSession(page);
+      await Promise.all([
+        cdp.send('Input.dispatchTouchEvent', {
+          type: 'touchStart',
+          touchPoints: [{ x: c.x, y: c.y, id: 1 }],
+        }),
+        cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }),
+      ]);
+    } else await page.mouse.click(c.x, c.y);
+    await expect.poll(async () => (await read(page)).mapPicks, { timeout: 10_000 }).toBe(1);
+    const s = await read(page);
+    expect(s.pathLength).toBeGreaterThan(0);
+    // The map is 200 design px over 60 m: a pick lands within a few tenths of a metre.
+    expect(Math.hypot(s.moveTarget![0] - goal.x, s.moveTarget![2] - goal.z)).toBeLessThan(1);
+    await expect
+      .poll(
+        async () => {
+          const p = (await read(page)).heroPos;
+          return Math.hypot(p[0] - s.moveTarget![0], p[2] - s.moveTarget![2]);
+        },
+        { timeout: 20_000 },
+      )
+      .toBeLessThan(0.5);
     expect(errors).toEqual([]);
   });
 });

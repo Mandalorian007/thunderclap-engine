@@ -5,9 +5,9 @@
  * - `?orb`: two orb meters (`ui.meter({ shape: 'orb' })`), one with the default damage trail and
  *   a value readout, one with a quick trail, a percent readout and a colour override; they drain
  *   in steps and refill. `value`, `fill` and `trailDom` (measured from the DOM), `trail`.
- * - `?floats`: floating text (`createFloats`) from a ring of points, a crit every seventh, and
+ * - `?floats`: floating text (`ui.floats(camera)`, ws/ui-6) from a ring of points, a crit every seventh, and
  *   a label behind the camera every half second; `active`, `pooled`, `spawned`, `culled`.
- * - `?minimap`: a round, player-up canvas minimap (`createCanvasMinimap`) over a painted
+ * - `?minimap`: a round, player-up canvas minimap (`ui.minimap`, ws/ui-6) over a painted
  *   background, 20 markers and a player circling; a click picks the world point (`pick`).
  *   `redraws`, `player`.
  *
@@ -25,13 +25,7 @@ import {
   Transform,
   VERTEX_LAYOUT_3D,
 } from '@thunderclap/engine/render';
-import {
-  createCanvasMinimap,
-  createFloats,
-  createOverlay,
-  type Meter,
-  type MinimapMarker,
-} from '@thunderclap/engine/ui';
+import { createOverlay, type Meter, type MinimapMarker } from '@thunderclap/engine/ui';
 import type { HarnessUi5Api, HarnessUi5Mode, HarnessUi5State } from './ui5-state';
 
 const root = document.getElementById('root') as HTMLElement;
@@ -298,7 +292,7 @@ async function main(): Promise<void> {
       }
     };
   } else if (mode === 'floats') {
-    const floats = createFloats(ui, () => camera);
+    const floats = ui.floats(() => camera);
     let clock = 0;
     let behind = 0;
     let n = 0;
@@ -333,7 +327,7 @@ async function main(): Promise<void> {
       state.culled = floats.live - shown;
     };
   } else {
-    const map = createCanvasMinimap(ui, {
+    const map = ui.minimap({
       size: MAP_SIZE,
       world: WORLD,
       rotate: 'player',

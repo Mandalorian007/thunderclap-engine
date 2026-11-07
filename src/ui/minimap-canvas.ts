@@ -11,15 +11,19 @@
  *   'world'`). At `zoom` 1 the world's longer side spans the map; `zoom` 2 shows half that.
  *   `rotate: 'north'` keeps north (−z) up; `'player'` turns the map so the player's heading
  *   points up. `toMap(x, z, out)` and `toWorld(u, v, out)` are the pair (map px from the
- *   top-left corner, in the map's `size` units), exact inverses.
+ *   top-left corner, in the map's `size` units), exact inverses. `worldRadius` instead of `zoom`
+ *   puts the edge that many world units from the centre (a marker farther out is on the rim).
  * - **Pick.** With `onPick`, a click or a tap on the map gives `onPick(worldX, worldZ)` through
  *   `toWorld`: click-to-move from the map. Off a round map's disc it is ignored.
- * - Markers past the view's edge sit on the rim, dimmed. Colours may be CSS colours or
- *   `var(--tc-…)` theme tokens (resolved on each draw).
+ * - Markers past the view's edge sit on the rim, dimmed; `markerAt(id)` says where one is drawn
+ *   and whether it is on the rim, `rim` counts them. A marker may carry an `icon` (a glyph drawn
+ *   on it). Colours may be CSS colours or `var(--tc-…)` theme tokens (resolved on each draw).
+ *
+ * `ui.minimap(opts)` is this map on the overlay (ws/ui-6 retired ui-4's DOM minimap).
  */
 import { h } from './dom';
 import { themePx } from './hud';
-import type { Layout, RegionName, WidgetHandle } from './layout';
+import type { Layout, RegionName, WidgetHandle, WidgetOptions } from './layout';
 
 /** What the canvas minimap needs from its overlay (`Overlay` fits). */
 export interface CanvasMinimapHost {
@@ -56,6 +60,17 @@ export interface MinimapMarker {
   kind: string;
   /** Over the kind's colour. */
   color?: string;
+  /** A short glyph drawn on the marker (one or two characters), in the theme text colour. */
+  icon?: string;
+}
+
+/** Where a marker is drawn, as of now (`markerAt`). */
+export interface MinimapMarkerPlace {
+  /** Map px from the top-left (`size` units), after the rim clamp. */
+  x: number;
+  y: number;
+  /** True while held on the rim (past the view's edge). */
+  outside: boolean;
 }
 
 export type MinimapBackground = HTMLCanvasElement | ImageBitmap | HTMLImageElement;
@@ -72,13 +87,24 @@ export interface CanvasMinimapOptions {
   center?: 'player' | 'world';
   /** Default 1 (the world's longer side spans the map). */
   zoom?: number;
+  /**
+   * World units from the centre to the rim, over `zoom`: a marker farther than this from the
+   * centre is held on the rim. Sets `zoom` to match.
+   */
+  worldRadius?: number;
   background?: MinimapBackground | null;
-  /** Styles per marker kind, over the defaults (`ally`, `enemy`, `objective`, `info`). */
+  /** Styles per marker kind, over the defaults (`self`, `ally`, `enemy`, `objective`, `info`). */
   kinds?: Readonly<Record<string, MinimapKindStyle>>;
   /** Click or tap on the map, in world units. */
   onPick?: (x: number, z: number) => void;
   /** Layout region. Default `right`. */
   region?: RegionName;
+  /**
+   * Placement per form factor, as `layout.add` takes it; overrides `region`. A phone's side rail
+   * is 56 px, so a full-size map usually wants `{ default: 'right', 'phone-landscape': 'cardLane' }`.
+   * The map shrinks (square) to fit a smaller region; `toMap`/picks stay in `size` units.
+   */
+  place?: WidgetOptions['place'];
   order?: number;
   /** Accessible name. Default `'Map'`. */
   label?: string;
@@ -92,6 +118,8 @@ export interface CanvasMinimap {
   readonly redraws: number;
   /** Markers held. */
   readonly markers: number;
+  /** Markers held on the rim (past the view's edge) as of the last draw. */
+  readonly rim: number;
   /** View zoom; setting it redraws. */
   zoom: number;
   /** Replace the markers (copied; an unchanged list does not redraw). */
@@ -104,18 +132,26 @@ export interface CanvasMinimap {
   toMap(x: number, z: number, out: { x: number; y: number }): { x: number; y: number };
   /** Map px → world (`out.x`, `out.y` are world x and z). The inverse of `toMap`. */
   toWorld(u: number, v: number, out: { x: number; y: number }): { x: number; y: number };
+  /**
+   * Where the marker `id` is drawn now (map px from the top-left, rim-clamped) and whether it is
+   * on the rim; null for an unknown id. Writes `out` when given (no allocation).
+   */
+  markerAt(id: string, out?: MinimapMarkerPlace): MinimapMarkerPlace | null;
   /** Draw a pending change now (normally on the next animation frame). */
   flush(): void;
   remove(): void;
 }
 
 const DEFAULT_KINDS: Readonly<Record<string, MinimapKindStyle>> = {
+  self: { shape: 'dot', color: 'var(--tc-color-text)' },
   ally: { shape: 'dot', color: 'var(--tc-color-success)' },
   enemy: { shape: 'dot', color: 'var(--tc-color-danger)' },
   objective: { shape: 'diamond', color: 'var(--tc-color-accent)', size: 11 },
   info: { shape: 'square', color: 'var(--tc-color-info)' },
 };
 const FALLBACK: MinimapKindStyle = { shape: 'dot', color: 'var(--tc-color-info)' };
+/** Map px between a rim-held marker's centre and the edge. */
+const RIM_INSET = 5;
 
 /** The map (see the module comment). */
 export function createCanvasMinimap(
@@ -148,7 +184,13 @@ export function createCanvasMinimap(
     canvas,
   );
 
-  let zoom = Math.max(1e-3, opts.zoom ?? 1);
+  const rimPx = half - RIM_INSET;
+  let zoom = Math.max(
+    1e-3,
+    opts.worldRadius !== undefined
+      ? (rimPx * span) / (size * Math.max(1e-6, opts.worldRadius))
+      : (opts.zoom ?? 1),
+  );
   let k = (size * zoom) / span;
   let px = (world.minX + world.maxX) / 2;
   let pz = (world.minZ + world.maxZ) / 2;
@@ -162,7 +204,9 @@ export function createCanvasMinimap(
   const mz: number[] = [];
   const mkind: string[] = [];
   const mcolor: (string | undefined)[] = [];
+  const micon: (string | undefined)[] = [];
   let count = 0;
+  let rim = 0;
   let redraws = 0;
   let dirty = false;
   let raf = 0;
@@ -206,7 +250,29 @@ export function createCanvasMinimap(
     return out;
   };
 
+  /** Marker `i` on the map, rim-clamped, into `tmp`; true when held on the rim. */
+  const placeMarker = (i: number): boolean => {
+    toMap(mx[i]!, mz[i]!, tmp);
+    const x = tmp.x - half;
+    const y = tmp.y - half;
+    const d = round ? Math.hypot(x, y) : Math.max(Math.abs(x), Math.abs(y));
+    if (d <= rimPx) return false;
+    tmp.x = half + (x / d) * rimPx;
+    tmp.y = half + (y / d) * rimPx;
+    return true;
+  };
+
   // ---- drawing
+  const fonts = new Map<number, string>();
+  const iconFont = (markerSize: number): string => {
+    const px = Math.round(markerSize * 1.1);
+    let f = fonts.get(px);
+    if (f === undefined) {
+      f = `700 ${px}px sans-serif`;
+      fonts.set(px, f);
+    }
+    return f;
+  };
   const tokens = new Map<string, string>();
   let computed: CSSStyleDeclaration | null = null;
   const resolve = (color: string): string => {
@@ -279,7 +345,12 @@ export function createCanvasMinimap(
     if (canvas.width !== bw) canvas.width = bw;
     if (canvas.height !== bw) canvas.height = bw;
     const ctx = canvas.getContext?.('2d') ?? null;
-    if (!ctx) return;
+    if (!ctx) {
+      let onRim = 0;
+      for (let i = 0; i < count; i++) if (placeMarker(i)) onRim++;
+      rim = onRim;
+      return;
+    }
     const s = bw / size;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, bw, bw);
@@ -310,30 +381,24 @@ export function createCanvasMinimap(
     }
     ctx.restore();
     // Markers, held on the rim past the edge.
-    const rim = half - 5;
+    let onRim = 0;
     for (let i = 0; i < count; i++) {
-      toMap(mx[i]!, mz[i]!, tmp);
-      let x = tmp.x - half;
-      let y = tmp.y - half;
-      let dim = false;
-      if (round) {
-        const d = Math.hypot(x, y);
-        if (d > rim) {
-          x = (x / d) * rim;
-          y = (y / d) * rim;
-          dim = true;
-        }
-      } else {
-        const d = Math.max(Math.abs(x), Math.abs(y));
-        if (d > rim) {
-          x = (x / d) * rim;
-          y = (y / d) * rim;
-          dim = true;
-        }
-      }
+      const dim = placeMarker(i);
+      if (dim) onRim++;
       const style = kinds[mkind[i]!] ?? FALLBACK;
-      marker(ctx, half + x, half + y, style, resolve(mcolor[i] ?? style.color ?? '#fff'), dim);
+      marker(ctx, tmp.x, tmp.y, style, resolve(mcolor[i] ?? style.color ?? '#fff'), dim);
+      const icon = micon[i];
+      if (icon) {
+        ctx.globalAlpha = dim ? 0.55 : 1;
+        ctx.fillStyle = resolve('var(--tc-color-text)');
+        ctx.font = iconFont(style.size ?? 8);
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(icon, tmp.x, tmp.y);
+        ctx.globalAlpha = 1;
+      }
     }
+    rim = onRim;
     // The player's arrow.
     toMap(px, pz, tmp);
     const a = turn ? 0 : yaw;
@@ -389,7 +454,7 @@ export function createCanvasMinimap(
 
   setTurn();
   const handle: WidgetHandle = host.layout.add(el, {
-    place: { default: opts.region ?? 'right' },
+    place: opts.place ?? { default: opts.region ?? 'right' },
     order: opts.order,
   });
   schedule();
@@ -403,6 +468,9 @@ export function createCanvasMinimap(
     },
     get markers() {
       return count;
+    },
+    get rim() {
+      return rim;
     },
     get zoom() {
       return zoom;
@@ -424,7 +492,8 @@ export function createCanvasMinimap(
           mx[i] === m.x &&
           mz[i] === m.z &&
           mkind[i] === m.kind &&
-          mcolor[i] === m.color
+          mcolor[i] === m.color &&
+          micon[i] === m.icon
         ) {
           continue;
         }
@@ -434,6 +503,7 @@ export function createCanvasMinimap(
         mz[i] = m.z;
         mkind[i] = m.kind;
         mcolor[i] = m.color;
+        micon[i] = m.icon;
       }
       count = list.length;
       if (changed) schedule();
@@ -453,6 +523,18 @@ export function createCanvasMinimap(
     },
     toMap,
     toWorld,
+    markerAt(id, out) {
+      for (let i = 0; i < count; i++) {
+        if (ids[i] !== id) continue;
+        const outside = placeMarker(i);
+        const o = out ?? { x: 0, y: 0, outside: false };
+        o.x = tmp.x;
+        o.y = tmp.y;
+        o.outside = outside;
+        return o;
+      }
+      return null;
+    },
     flush() {
       if (dirty && !removed) draw();
     },
@@ -467,7 +549,8 @@ export function createCanvasMinimap(
 }
 
 export const CANVAS_MINIMAP_CSS = `
-.tc-overlay .tc-cminimap { position: relative; width: var(--tc-cminimap-size); height: var(--tc-cminimap-size); flex: none;
+.tc-overlay .tc-cminimap { position: relative; width: var(--tc-cminimap-size); height: auto; aspect-ratio: 1;
+  max-width: 100%; max-height: 100%; flex: none;
   box-sizing: border-box; border: var(--tc-border-width) solid var(--tc-color-border); box-shadow: var(--tc-shadow);
   border-radius: var(--tc-radius-m); overflow: hidden; background: var(--tc-color-surface); touch-action: none; }
 .tc-overlay .tc-cminimap[data-shape="round"] { border-radius: 50%; }

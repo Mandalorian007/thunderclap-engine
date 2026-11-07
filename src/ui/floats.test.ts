@@ -148,4 +148,17 @@ describe('floats (ws/ui-5)', () => {
     expect(critScale(0)).toBeCloseTo(0.6, 9);
     expect(critScale(1)).toBe(1.15);
   });
+
+  it("ui.floats(camera) is the overlay's one Floats; destroy takes its nodes (ws/ui-6)", () => {
+    const f = ov.floats(flat, { max: 8 });
+    expect(ov.floats()).toBe(f);
+    expect(f.max).toBe(8);
+    f.spawn('7', [960, 540, 0]);
+    f.update(0.1);
+    expect(f.live).toBe(1);
+    expect(els(ov).length).toBe(1);
+    ov.destroy();
+    expect(els(ov).length).toBe(0);
+    ov = createOverlay({ parent, caption: { reducedMotion: true } });
+  });
 });
