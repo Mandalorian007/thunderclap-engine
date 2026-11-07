@@ -185,7 +185,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | **engine-v1.0.0 cut**: remove every deprecated alias, freeze `api/` (diff needs a CHANGELOG line), version 1.0.0; tag left to the user | ws/v1-cut | brief `docs/briefs/v1-cut.md` | after train 17 | ✅ merged in E-031 train 18 (`75ffe99`; main 6418f5e). **engine 1.0.0 in tree; tag waits on the user** |
 | 5 | Billboard and particle velocity; XR eye aux targets; `SkinPalette.jointCount` | ws/render-11 | brief `docs/briefs/render-11.md` | train 19 | 🔵 running |
 | 5 | `Partial` context bindings; typed `EngineCtx` pointers; recordable overlay buttons | ws/input-12 | brief `docs/briefs/input-12.md` | train 19 | 🔵 running |
-| 5 | `FakeDevice` loss; DOM-free headless option; game-side deprecation filter | ws/testing-2 | brief `docs/briefs/testing-2.md` | train 19 | 🔵 running |
+| 5 | `FakeDevice` loss; DOM-free headless option; game-side deprecation filter | ws/testing-2 | brief `docs/briefs/testing-2.md` | train 19 | 🟣 done at `08d34c2` (`FakeDevice.loseDevice`, `TestGame.loseDevice`; `overlay: false` runs in plain node; `check-deprecated-game.mjs`). Train 19 |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
@@ -489,6 +489,9 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
   - **Freeze baseline.** It is the `v<version>` tag (release.mjs tags `v1.0.0`) or, failing that, the commit that set the version. **Waiting on the user** to tag.
   - **The Last Rune.** Its engine copy (D-051) still has the aliases. Port the removals at its next hand-sync, using `docs/guide/migrating-to-v1.md`.
 - E-031 train 18 landed at 6418f5e: v1-cut alone. The matrix ran 2801 passed, 209 skipped, 0 failed. `package.json` is 1.0.0, `api/` is frozen, and the freeze rule passes on the merge (baseline 75ffe99 until a tag exists). README count: 2399 tests in 219 files. **E-036 v1 gate met.**
+- ws/testing-2 wishes:
+  - core gets a real no-overlay mode, replacing the stand-in DOM.
+  - The game-side script maps removed names that fail with other errors, such as a method that became a getter (`cache.stats()`, `fullscreen.active()`).
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
