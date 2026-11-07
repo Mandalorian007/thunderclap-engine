@@ -167,7 +167,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | UI 11: meter `setPlace` (or a per-form place map), the minimap holds its size in content rails, `meter.size` getter | ws/ui-11 | brief `docs/briefs/ui-11.md` | ui-10 | 🔵 dispatched |
 | 5 | Core 7: `ctx.replay` `onEnd`; `createGame` velocity-target option | ws/core-7 | brief `docs/briefs/core-7.md`; branched from ws/core-6 ad6ea9c | core-6 | 🟣 done at `f935af7` (check 2283, snap 0, replay 16, core2 40, lifecycle 32). Train 12 or 13 |
 | 5 | Input 11: pointer-source mute (XR included) for replays | ws/input-11 | brief `docs/briefs/input-11.md` | core-6 | 🔵 dispatched |
-| 5 | Docs guide: root README rewritten for a first-time user; `docs/guide/` (9 task guides); a snippet typecheck in `pnpm check`; OFFERING refreshed | ws/docs-guide | brief `docs/briefs/docs-guide.md` | — | 🔵 running |
+| 5 | Docs guide: root README rewritten for a first-time user; `docs/guide/` (9 task guides); a snippet typecheck in `pnpm check`; OFFERING refreshed | ws/docs-guide | brief `docs/briefs/docs-guide.md` | — | 🟡 `5b22ffd` done (check 2276, snap 0); merging main for `ctx.replay`, then train 13 |
 | 5 | Docs modules: every module README opens with purpose, a checked *Quick use* and *Entry points*; contents lists; false statements fixed | ws/docs-modules | brief `docs/briefs/docs-modules.md` | — | 🔵 running |
 | 5 | Harden API: `api/*.api.txt` surface snapshot plus `check:api`; audit of leaked internals and naming; safe fixes with aliases | ws/harden-api | brief `docs/briefs/harden-api.md` | — | 🔵 running |
 | 5 | Comment sweep: stale code comments from the backlog plus a rename sweep; comments only | ws/comment-sweep | brief `docs/briefs/comment-sweep.md` | train 12 | 🔵 running |
@@ -373,6 +373,17 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
   - `createGame({ aux: { velocity: true } })` puts the velocity texture into `PostInputs.velocity`, so object motion blur works without touching the renderer.
   - Wish: the XR scene target can't take aux attachments, so motion blur in VR is camera-only (render/platform backlog).
 - E-031 train 12 landed at 7d5f6af: core-6, adoption-5, render-8, post-8 and render-9. Matrix 2753 passed / 209 skipped / 0 failed, with no tolerance; post4 is fully green, so E-035 is closed. README count: 2300 tests in 208 files. Train 13 (same integrator, integrate-7) opens with core-7.
+- ws/docs-guide wishes (API friction found while writing guides):
+  - `ctx.camera` can't be swapped for a `Camera.perspective`; `setScale(2)` flattens 3D (z defaults to 1).
+  - `ui.anchors`/`ui.floats` need a camera function and could default to `ctx.camera`.
+  - `lights.fog` vs post `fog` naming; `defaultPostSettings` is tuned for one game.
+  - Skinning takes about five steps; LOD types don't line up.
+  - `snapToGrid` output doesn't fit `MagnifyOptions.snap`.
+  - `EngineCtx` save type defaults to `FlushableSave`, which rejects save-less games.
+  - `createSpriteMaterial` is positional while `createMaterial` takes an object; device vs renderer arguments are mixed.
+  - `createGame` has no theme option; text scale needs `applyTextScale(root, scale, setTheme)`.
+  - `create-game` defaults to the unpublished `^0.2.0-alpha.1`; templates have no `build` script.
+  → candidates for ws/harden-api-2 / ergonomics wave after the harden-api audit lands.
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
