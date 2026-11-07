@@ -169,7 +169,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Input 11: pointer-source mute (XR included) for replays | ws/input-11 | brief `docs/briefs/input-11.md` | core-6 | 🟣 done at `6b48bfd` (check 2284, snap 0, replay 16, xr 8, input 52, input5 48). Train 13 |
 | 5 | Docs guide: root README rewritten for a first-time user; `docs/guide/` (9 task guides); a snippet typecheck in `pnpm check`; OFFERING refreshed | ws/docs-guide | brief `docs/briefs/docs-guide.md` | — | 🟡 `5b22ffd` done (check 2276, snap 0); merging main for `ctx.replay`, then train 13 |
 | 5 | Docs modules: every module README opens with purpose, a checked *Quick use* and *Entry points*; contents lists; false statements fixed | ws/docs-modules | brief `docs/briefs/docs-modules.md` | — | 🟣 done at `98d0745` (18 READMEs, 11 false statements fixed; check green, snap 0). Train 13 |
-| 5 | Harden API: `api/*.api.txt` surface snapshot plus `check:api`; audit of leaked internals and naming; safe fixes with aliases | ws/harden-api | brief `docs/briefs/harden-api.md` | — | 🔵 running |
+| 5 | Harden API: `api/*.api.txt` surface snapshot plus `check:api`; audit of leaked internals and naming; safe fixes with aliases | ws/harden-api | brief `docs/briefs/harden-api.md` | — | 🟣 done at `700f3e4` (api snapshot + check:api; 2 safe fixes; check green, snap 0, gltf/gltf3/skin/save green). Train 13 or 14 |
 | 5 | Comment sweep: stale code comments from the backlog plus a rename sweep; comments only | ws/comment-sweep | brief `docs/briefs/comment-sweep.md` | train 12 | 🔵 running |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
@@ -389,6 +389,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
   - `PointerRouter.mute(sources?)` / `unmute()` / `isMuted(source)`. A muted source still polls, but its pointers drop before routing. A held pointer releases with `hit: null`. A button held across `unmute()` reads up until it is let go. Synthetic replay pointers are never muted.
   - → ws/core-8: in `ctx.replay`, call `pointers.mute()` after `attachSink()` and `pointers.unmute()` in `stop` before `attachHome()`.
   - Wish: `mute()` returns a remover, so a game mute and a replay mute don't clear each other (→ input-12 or core-8).
+- ws/harden-api audit is ruled in E-036. ws/harden-api-2 is briefed after harden-api lands (it touches every `index.ts`). The ws/docs-guide ergonomics wishes become ws/ergonomics-1 after the same landing.
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
