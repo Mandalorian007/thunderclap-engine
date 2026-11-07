@@ -412,8 +412,8 @@ take a `MeshLod` too (ws/render-6): every instance picks its level the same way 
 `meshes[0].bounds` through its matrix, its memory kept per view by instance index, or by key
 for a keyed list, ws/render-7), and the batch is copied into the frame's upload bucketed by
 level, so each non-empty level is one instanced draw, in the scene and the shadow pass alike.
-A LOD list therefore costs a per-frame copy like a batch (its own vertex buffer is not drawn)
-and is culled per instance; with `velocity: true` its previous matrices travel with the copy
+A LOD list therefore costs a per-frame copy like a batch (its own vertex buffer is not drawn,
+and since ws/render-9 not written either: its flush uploads nothing) and is culled per instance; with `velocity: true` its previous matrices travel with the copy
 (ws/render-7), so each instance writes its own motion. Removing instance 0 of a keyed list
 moves no other instance's level; without keys the instance swapped into slot 0 takes slot
 0's memory, as before. `renderer.lodLevelOf(batch, i, camera?)` reads the level instance `i`
@@ -518,7 +518,9 @@ renderer.render(frame, eye);                              // or renderer.camera 
   records each camera's history before applying it, so `previousViewProj` / `previousView` stay
   unjittered; `setJitter(null)` removes the hook and clears the jitter of every camera it
   reached. Return a reused tuple to keep the frame allocation-free. Without a hook
-  `camera.setJitter` works as above.
+  `camera.setJitter` works as above. `renderer.jitter` (ws/render-8, read-only) returns the
+  installed hook or null, so an owner such as the post stack can check by identity that the
+  renderer still holds its hook before clearing it.
 - *Migration (post):* `PostStack` jitters today through `addJitterCamera(camera)` and its own
   `stepJitter` (`taa.jitter(frameIndex++)` onto each registered camera), which misses cameras it
   was not told about (a second XR eye, an offscreen view). The post workstream moves it to
@@ -963,8 +965,19 @@ rough-metal, bit 1 velocity) keys the pipeline variants.
   Only a velocity target and an `aux` material read it; otherwise nothing is written and the
   pipeline is the two-buffer one. A keyed list matches its history by key; a new instance (a
   new key, or a slot past last flush's count) takes its current matrix as previous: zero
-  motion on its first frame. `frame.mesh` draws still carry no lane: a per-frame instance draw
-  of a moving object reports camera motion only, so put what moves in a list or a batch.
+  motion on its first frame. A velocity LOD list keeps `prevMatrices` but has no `prevBuffer`
+  and uploads none (ws/render-8): only the copy is drawn.
+- Single draws (ws/render-8): `frame.mesh(mesh, material, transform)` (and `frame.sprite` with
+  a `Transform`) with an `aux` material into a velocity target writes the object's own motion
+  through the same lane. The renderer keeps each `Transform`'s world matrix per view (per
+  camera, like LOD level memory and `previousViewProj`): the previous matrix is the one the
+  transform held at that camera's last view. A transform seen for the first time in a view,
+  or not drawn in the view before (culled, or not submitted), writes zero motion; drawing one
+  transform several times in a view with the same matrix (two meshes of one object) gives
+  each draw its motion, while a scratch transform moved between draws in one view reports
+  camera motion only from then on. Draws placed by `DrawParams` carry no history (camera
+  motion only). Without a velocity target or an aux material nothing is kept, written or
+  bound, and the 2D path is untouched.
 - `camera.previousViewProj` (see *Camera jitter and history*) is the other half: the previous
   clip position is `prev_view_proj × previous world position`.
 
@@ -974,7 +987,9 @@ debug blit (`roughSample`, `velocitySample`); `e2e/render4.spec.ts` checks them.
 `harness/render7.html?instanced-velocity` draws two rows of rocks in one keyed LOD list, one
 row sliding and one standing, through the same per-frame churn, and reads the velocity at every
 rock's centre (`velocityMoving` above zero, `velocityStatic` zero; `&unkeyed` and `&still` are
-the controls); `e2e/render7.spec.ts` checks them. Switching
+the controls); `?single-velocity` slides one rock drawn by `frame.mesh` under a still camera
+(`velocityMoving` above zero on the rock, `velocityStatic` 0 on the background; `&still` the
+control); `e2e/render7.spec.ts` checks them. Switching
 TAA, SSR and motion blur over to these inputs is ws/post-4 (see `src/post/README.md`).
 
 ### Per-draw uniforms
@@ -1237,13 +1252,31 @@ the pieces. `Water` and `ParticleSystem` take `readsDepth` and then skip their o
   usage flags such as COPY_DST, catches writes past the end of a buffer, and records pass
   commands such as `setBindGroup` offsets and draws. That means `new Renderer(...)` and the
   props run in Node. It is test-only and not exported from the index.
-  `installGpuGlobals()` defines `GPUBufferUsage`, `GPUTextureUsage` and `GPUShaderStage` in Node;
+  `installGpuGlobals()` defines `GPUBufferUsage`, `GPUTextureUsage`, `GPUShaderStage` and
+  `GPUMapMode` in Node;
   `fakeCanvasContext(fake)` is the context `fakeRendererGpu` uses. What a test inspects on a
   `FakeDevice`: `buffers` (`FakeBuffer`: `size`, `usage`, `destroyed`), `textures`
   (`FakeTexture`, whose views are `FakeView`s), `bindGroups` (`FakeBindGroup`: layout and
   entries), `writes`, `textureWrites`, `passes` (`FakePass`: `kind`, `label`, `commands`) and
   `errors`. A `PassCommand` is one recorded `setPipeline`, `setBindGroup`, `draw`, `drawIndexed`,
   `dispatch` or other call.
+  Buffers hold bytes (ws/render-9). A `FakeBuffer`'s `data` is its contents: `writeBuffer`
+  stores into it (a typed array's `dataOffset` and `dataSize` count elements, and `writes`
+  records bytes), and `copyBufferToBuffer`, `clearBuffer` and `resolveQuerySet` apply when their
+  command buffer is submitted (`submits` counts them, `bufferCopies` lists each encoded copy as a
+  `FakeBufferCopy`, `querySets` holds `FakeQuerySet`s whose `values` a test fills). A `MAP_READ` buffer
+  maps for real: `mapAsync` resolves a microtask later with `mapState` `'pending'` then
+  `'mapped'`, `getMappedRange` returns a copy of the bytes the submitted copy brought, and
+  `unmap` detaches every range it handed out. A missing usage flag throws
+  `FakeGpuValidationError` (named `GPUValidationError`, also pushed to `errors`):
+  `copyBufferToBuffer` without `COPY_SRC` on the source or `COPY_DST` on the destination,
+  `writeBuffer` without `COPY_DST`, `mapAsync` without `MAP_READ` (or `MAP_WRITE`), and
+  `resolveQuerySet` without `QUERY_RESOLVE`. A copy submitted while a buffer is pending a map or
+  mapped, or a second `mapAsync`, goes to `errors`. Nothing runs shaders; `fake.runPass` (null
+  by default) is called with each pass at submit, in order with the copies and clears, for a
+  test to write what a dispatch would into a buffer's `data`. Readback tests (`GpuTimer`,
+  particle `debugReadback` / `readbackFields`, `ParticleSystem.alive`) use these, with no
+  stubbed mapping.
 
 ## Diagnostics
 

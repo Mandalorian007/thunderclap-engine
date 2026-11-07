@@ -82,6 +82,24 @@ export interface ArpgDemoState {
   bottomBar: number;
   /** The share of the layout's height between the top and bottom bars (the world's band), 0..1. */
   worldView: number;
+  /** The `fill` region's share of the layout's area (the world's rect), 0..1. */
+  worldArea: number;
+  /** The health and mana orbs' regions: `['left', 'right']` on phone-landscape, else bottom. */
+  orbRegions: [string, string];
+  /**
+   * The LOD level each ghoul (by index, its `setKey` key) drew at last frame
+   * (`renderer.lodLevelOf` on the ghoul list), -1 when it did not draw.
+   */
+  ghoulLevels: number[];
+  /** Ghoul list flushes that followed a death (the list lost a slot since the last frame). */
+  deathFlushes: number;
+  /**
+   * On those flushes, how many ghouls that drew both frames changed LOD level. Keyed by ghoul
+   * id (ws/render-7), a death moves no other ghoul's level: this stays 0.
+   */
+  deathLodShifts: number;
+  /** The ghoul list keeps per-instance previous matrices (`velocity: true`, `?blur` only). */
+  ghoulVelocity: boolean;
 }
 
 /** Test helpers (functions, so they live beside `__demo` rather than in it). */

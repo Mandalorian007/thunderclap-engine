@@ -16,7 +16,12 @@
  *   post stack reads the velocity at every rock's centre: `state.velocityMoving` and
  *   `state.velocityStatic`. With `&unkeyed` the churn hands static rocks a moved rock's
  *   history, and they write velocity.
- * - `?still`: park the sliding rocks (the churn goes on), so every rock writes zero.
+ * - `?single-velocity` (ws/render-8): one sliding rock drawn by `frame.mesh` with its own
+ *   `Transform` (no list, no churn) under a still camera, into the velocity target. Probes on
+ *   the rock (`state.velocityMoving`) and on the background (`state.velocityStatic`): the
+ *   rock writes its own motion from its Transform's previous world matrix, the background 0.
+ * - `?still`: park the sliding rocks (the churn goes on), or the single rock, so every probe
+ *   reads zero.
  */
 
 import { GameLoop } from '@thunderclap/engine/core';
@@ -48,7 +53,12 @@ const root = document.getElementById('root') as HTMLElement;
 const LOGICAL = { width: 1920, height: 1080 };
 
 const query = new URLSearchParams(location.search);
-const mode: Render7Mode = query.has('instanced-velocity') ? 'instanced-velocity' : 'lod-keys';
+const mode: Render7Mode = query.has('instanced-velocity')
+  ? 'instanced-velocity'
+  : query.has('single-velocity')
+    ? 'single-velocity'
+    : 'lod-keys';
+const single = mode === 'single-velocity';
 const still = query.has('still');
 const keyed = !query.has('unkeyed');
 
@@ -261,7 +271,7 @@ async function main(): Promise<void> {
   }
   const { surface, gpu } = res;
   installGpuErrorLogging(gpu.device);
-  const velocity = mode === 'instanced-velocity';
+  const velocity = mode !== 'lod-keys';
   const renderer = new Renderer(gpu, velocity ? { aux: { velocity: true } } : {});
   renderer.resize(surface.backbuffer.width, surface.backbuffer.height);
   surface.onResize(({ backbuffer }) => renderer.resize(backbuffer.width, backbuffer.height));
@@ -290,7 +300,7 @@ async function main(): Promise<void> {
   const radius = lod.meshes[0]!.bounds.radius;
   const mat = createStandardMaterial(renderer, { label: 'rock', metallic: 0, roughness: 0.85 });
 
-  const count = velocity ? PROBES : ARC_ROCKS;
+  const count = single ? 1 : velocity ? PROBES : ARC_ROCKS;
   const list: InstanceList = renderer.createInstanceList(lod, mat, count, { velocity });
   /** Each rock's transform and tint, by rock id; `slotRock[i]` is the rock in slot `i`. */
   const rocks: Transform[] = [];
@@ -311,6 +321,11 @@ async function main(): Promise<void> {
       const a = -ARC + (2 * ARC * id) / (ARC_ROCKS - 1);
       const d = frame === 0 ? (id % 2 === 0 ? PARK * 0.5 : PARK * 5) : PARK;
       t.setPosition(d * Math.sin(a), 0, -d * Math.cos(a));
+      return;
+    }
+    if (single) {
+      // One rock sliding across the screen centre at the near distance.
+      t.setPosition(still ? 0 : 2 * SLIDE * Math.sin(frame * SLIDE_RATE), 0, -NEAR);
       return;
     }
     const moving = id < ROW;
@@ -353,7 +368,7 @@ async function main(): Promise<void> {
       sizeThresholds();
       // The churn: one rock out of its slot and back in at the end. From frame 2 on in
       // `?lod-keys` (frame 0 sets the memory, frame 1 parks).
-      if (velocity || f >= 2) {
+      if (!single && (velocity || f >= 2)) {
         const j = churnAt % count;
         churnAt += 7;
         const id = slotRock[j]!;
@@ -365,14 +380,31 @@ async function main(): Promise<void> {
         slotRock[at] = id;
         state.churns++;
       }
-      if (velocity || f <= 1) {
+      if (single) {
+        place(0, f);
+      } else if (velocity || f <= 1) {
         for (let i = 0; i < count; i++) {
           const id = slotRock[i]!;
           place(id, f);
           list.set(i, rocks[id]!, params[id]!);
         }
       }
-      if (probe) {
+      if (probe && single) {
+        // The rock's centre and points 0.4 radius around it; the background near the edges.
+        const p = rocks[0]!.position;
+        for (let i = 0; i < ROW; i++) {
+          const a = (i * Math.PI * 2) / (ROW - 1);
+          const k = i === 0 ? 0 : 0.4 * radius;
+          camera.worldToScreen(p.x + k * Math.cos(a), p.y + k * Math.sin(a), p.z, probePoint);
+          probe.uv[i * 2] = probePoint.x / LOGICAL.width;
+          probe.uv[i * 2 + 1] = probePoint.y / LOGICAL.height;
+        }
+        for (let i = 0; i < ROW; i++) {
+          const o = (ROW + i) * 2;
+          probe.uv[o] = i < 4 ? 0.06 : 0.94;
+          probe.uv[o + 1] = 0.08 + 0.28 * (i % 4);
+        }
+      } else if (probe) {
         for (let i = 0; i < count; i++) {
           const p = rocks[i]!.position;
           camera.worldToScreen(p.x, p.y, p.z, probePoint);
@@ -384,7 +416,8 @@ async function main(): Promise<void> {
       const frame = renderer.beginFrame(time.realTime, time.frameDt);
       frame.clear(0.05, 0.07, 0.12);
       frame.lights = lights;
-      frame.list(list);
+      if (single) frame.mesh(lod.meshes[0]!, mat, rocks[0]!, params[0]!);
+      else frame.list(list);
       renderer.endFrame();
 
       if (!velocity && f >= 1) {

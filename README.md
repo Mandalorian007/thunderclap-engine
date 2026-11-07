@@ -202,7 +202,7 @@ The module READMEs under `src/<module>/` are the full reference.
 
 | Import | What it holds |
 | --- | --- |
-| `@thunderclap/engine` | `createGame(opts: CreateGameOptions)`, `EngineCtx`, `GameHooks` (with `HideReason`, `ShowReason`), `SimOption`, `FlushableSave`, `XrOptions` and `XrControl` (`ctx.xr`): the top layer a game touches |
+| `@thunderclap/engine` | `createGame(opts: CreateGameOptions)`, `EngineCtx`, `GameHooks` (with `HideReason`, `ShowReason`), `SimOption`, `FlushableSave`, `GameReplay` and `ReplayOptions` (`ctx.replay`), `XrOptions` and `XrControl` (`ctx.xr`): the top layer a game touches |
 | `@thunderclap/engine/core` | `GameLoop` (fixed step, fps cap, pause, `setFrames` to swap the frame source), `Scene` and `SceneStack`, `Emitter`, `mat4`, timing ([README](src/core/README.md)) |
 | `@thunderclap/engine/platform` | WebGPU boot, `Surface` (canvas, DPR, letterbox fit), `XrSurface` (a target and camera per eye), page lifecycle, device detection, the unsupported and reload screens ([README](src/platform/README.md)) |
 | `@thunderclap/engine/render` | `Renderer`, `Frame`, `Camera` (`ortho2d`, `perspective`, frustum culling), `render(frame, camera, target)`, `SceneTarget`, `Lights` (sun shadow map, fog), materials and custom WGSL, meshes with bounds and streaming updates, transforms, textures and texture arrays with GPU mips, colour helpers ([README](src/render/README.md)) |
@@ -277,7 +277,7 @@ A source is a `.glb`, a `.gltf` or a geometry JSON (`{ "positions": [...], "indi
 ## Testing
 
 ```sh
-pnpm check       # typecheck + Biome lint + import boundaries + README coverage (check:docs) + Vitest unit tests (2276 tests in 204 files) + the host-electron, host-capacitor, host-pwa, template and create-game checks
+pnpm check       # typecheck + Biome lint + import boundaries + README coverage (check:docs) + Vitest unit tests (2300 tests in 208 files) + the host-electron, host-capacitor, host-pwa, template and create-game checks
 pnpm test:e2e    # Playwright e2e against the harness pages, on a device matrix
 pnpm harness     # serve the harness pages yourself
 ```

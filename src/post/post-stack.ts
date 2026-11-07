@@ -68,13 +68,6 @@ interface InputGroups {
 const NO_JITTER: readonly [number, number] = [0, 0];
 
 /**
- * The stack whose hook each renderer's `setJitter` holds (ws/post-7): set when a stack sets its
- * hook, dropped when it clears it. A stack clears only its own, so swapping `renderer.post` from
- * one TAA stack to another and destroying the first leaves the second's hook installed.
- */
-const jitterOwners = new WeakMap<Renderer, PostStack>();
-
-/**
  * The painterly post stack: bloom (mip chain), floor mist, god rays, ACES tonemap, colour
  * grade, vignette, dither, plus ambient occlusion and depth of field over the scene depth when
  * the frame has one (ws/post-depth; off by default), the finishing passes (ws/post-2, all
@@ -787,16 +780,16 @@ export class PostStack implements PostProcessor {
    * After the first TAA frame, hand the Halton sequence to `renderer.setJitter` (the renderer
    * runs it from frame 0 at the next `beginFrame`, so the sequence restarts each time TAA
    * starts); once TAA stops, clear the hook with `null`, once. Only on those edges: a hook set
-   * by someone else in between is left alone until TAA stops. Another stack that sets its hook
-   * on the same renderer takes it over (ws/post-7, `jitterOwners`): this one then never clears
-   * it, and sets its own again once the other has let go.
+   * by someone else in between is left alone. Ownership is read from the renderer (ws/post-8):
+   * the hook is this stack's while `renderer.jitter === this.jitterFn`. Another stack (or the
+   * page) that sets its hook on the same renderer takes it over: this one then never clears
+   * it, and sets its own again once the renderer has none.
    */
   private syncJitter(taa: boolean): void {
     if (taa) {
       this.jitterResolved = true;
-      if (this.jitterHooked && jitterOwners.has(this.renderer)) return;
+      if (this.jitterHooked && this.renderer.jitter !== null) return;
       this.jitterHooked = true;
-      jitterOwners.set(this.renderer, this);
       this.renderer.setJitter(this.jitterFn);
     } else if (this.jitterHooked) {
       this.releaseJitter();
@@ -807,8 +800,7 @@ export class PostStack implements PostProcessor {
   private releaseJitter(): void {
     this.jitterHooked = false;
     this.jitterResolved = false;
-    if (jitterOwners.get(this.renderer) !== this) return;
-    jitterOwners.delete(this.renderer);
+    if (this.renderer.jitter !== this.jitterFn) return;
     this.renderer.setJitter(null);
   }
 

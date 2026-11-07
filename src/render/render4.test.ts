@@ -347,7 +347,8 @@ describe('velocity lane (ws/render-4)', () => {
     list.set(0, new Transform({ z: -5 }));
     const f = r.beginFrame(0, 0);
     f.list(list);
-    f.mesh(cube, m, new Transform({ x: 3, z: -5 }));
+    // DrawParams, not a Transform: a Transform draw carries its own lane (ws/render-8).
+    f.mesh(cube, m, { x: 3, y: 0 });
     list.flush(fake.device.queue);
     r.endFrame();
     for (const d of pipelineDescs(scenePass(fake).commands)) {

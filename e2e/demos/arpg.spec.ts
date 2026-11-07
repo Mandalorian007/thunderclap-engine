@@ -7,6 +7,9 @@
  * pillars and ghouls on more than one LOD level, no floor seam shows at screen centre at spawn
  * (desktop-1280), the desktop rows hold a playable frame rate, no HUD widget overflows its
  * content bar on any row, and on phone-portrait the bars leave the world 70% of the height.
+ * On phone-landscape the map and orbs sit on content side rails (ws/ui-9) and the world band
+ * beats adoption-4's bars by 2 points per row; killing a ghoul mid-pack (keyed list, ws/render-7)
+ * moves no other ghoul's LOD level, with and without `?blur`'s velocity history.
  *
  * `?still&seed=3` parks the enemy AI and fixes the spawns so the interaction rows are
  * deterministic; every wait is a poll on `window.__demo`, never a sleep.
@@ -24,6 +27,18 @@ const URL = `${HARNESS_URL}demos/arpg/`;
 const DRAW_CALLS_MIN = 10;
 const DRAW_CALLS_MAX = 80;
 const MIN_FPS_DESKTOP = 20;
+/**
+ * Phone-landscape's world band (`worldView`) with the orbs in the bottom bar and the map in the
+ * card lane (ws/adoption-4); on the content rails each row must beat it by 2 points.
+ */
+/** Camera distance for the keyed-ghoul kill, metres. */
+const KILL_ZOOM = 32;
+const WORLD_VIEW_BARS: Record<string, number> = {
+  'phone-se': 0.6375,
+  'phone-iphone': 0.659,
+  'phone-promax': 0.695,
+  'phone-android': 0.678,
+};
 
 type Win = { __demo?: ArpgDemoState; __arpgApi?: ArpgDemoApi };
 
@@ -37,8 +52,8 @@ const readState = (page: Page) =>
 const parse = (s: string) => JSON.parse(s) as ArpgDemoState;
 const read = async (page: Page) => parse(await readState(page));
 
-/** Three strikes on a summoned ghoul; resolves once the kill registers. */
-async function killOne(page: Page, before: ArpgDemoState): Promise<void> {
+/** Three strikes on a summoned ghoul; resolves with its index once the kill registers. */
+async function killOne(page: Page, before: ArpgDemoState): Promise<number> {
   const idx = await page.evaluate(() => (window as unknown as Win).__arpgApi!.summon());
   expect(idx).toBeGreaterThanOrEqual(0);
   for (let i = 1; i <= 3; i++) {
@@ -51,6 +66,7 @@ async function killOne(page: Page, before: ArpgDemoState): Promise<void> {
   await expect
     .poll(async () => (await read(page)).kills, { timeout: 10_000 })
     .toBeGreaterThanOrEqual(before.kills + 1);
+  return idx;
 }
 
 async function boot(
@@ -120,6 +136,21 @@ test.describe('demo: arpg', () => {
     }
     // Content bars (ws/ui-8): the orbs and slots fit the bottom bar, the gear row the top one.
     expect(s.overflows).toEqual([]);
+    if (s.formFactor === 'phone-landscape') {
+      // Content rails (ws/ui-9): the map and the mana orb on the right, the health orb on the
+      // left, so the card lane and the orbs' share of the bottom bar go back to the world.
+      expect(s.orbRegions).toEqual(['left', 'right']);
+      const [map, health, mana] = await Promise.all(
+        ['#arpg-map', '#arpg-health', '#arpg-mana'].map((id) => page.locator(id).boundingBox()),
+      );
+      const vw = page.viewportSize()!.width;
+      expect(health!.x + health!.width).toBeLessThan(vw / 4);
+      expect(map!.x).toBeGreaterThan((vw * 3) / 4);
+      expect(mana!.x).toBeGreaterThan((vw * 3) / 4);
+      expect(mana!.y).toBeGreaterThan(map!.y + map!.height);
+      const bars = WORLD_VIEW_BARS[info.project.name];
+      if (bars !== undefined) expect(s.worldView).toBeGreaterThan(bars + 0.02);
+    } else expect(s.orbRegions).toEqual(['bottom', 'bottom']);
     expect(layoutWarnings).toEqual([]);
     expect(errors).toEqual([]);
   });
@@ -212,6 +243,39 @@ test.describe('demo: arpg', () => {
     expect(s.gpuErrors).toBe(0);
     expect(errors).toEqual([]);
   });
+
+  for (const blur of [false, true]) {
+    const name = blur ? ', with velocity history (?blur)' : '';
+    test(`killing a ghoul mid-pack moves no other ghoul off its LOD level${name}`, async ({
+      page,
+    }) => {
+      const { errors } = await boot(page, `?still&seed=3${blur ? '&blur' : ''}`);
+      // At 32 m the parked pack straddles the ghouls' 80 px LOD threshold on desktop-1280 and
+      // the phones: with the keys removed, this kill moved 1–2 survivors' levels there.
+      await page.evaluate((d) => (window as unknown as Win).__arpgApi!.zoom(d), KILL_ZOOM);
+      const f0 = (await read(page)).frame;
+      await expect
+        .poll(async () => (await read(page)).frame, { timeout: 15_000 })
+        .toBeGreaterThan(f0 + 30);
+      const before = await read(page);
+      expect(before.cameraDistance).toBe(KILL_ZOOM);
+      expect(before.deathFlushes).toBe(0);
+      const idx = await killOne(page, before);
+      // Mid-pack: live ghouls after it in the list move up a slot on the next flush.
+      expect(idx).toBeLessThan(before.ghoulLevels.length - 1);
+      // The death flush is counted in page state on the frame it happens.
+      await expect
+        .poll(async () => (await read(page)).deathFlushes, { timeout: 10_000 })
+        .toBeGreaterThanOrEqual(1);
+      const s = await read(page);
+      // Keyed by ghoul id (ws/render-7), each survivor keeps its own level memory.
+      expect(s.deathLodShifts).toBe(0);
+      // `?blur` turns object motion blur on, and with it the list's previous matrices.
+      expect(s.ghoulVelocity).toBe(blur);
+      expect(s.gpuErrors).toBe(0);
+      expect(errors).toEqual([]);
+    });
+  }
 
   test('zoomed out, the LOD props draw on more than one level', async ({ page }) => {
     const { errors } = await boot(page, '?still&seed=3');

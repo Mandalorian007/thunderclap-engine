@@ -272,13 +272,16 @@ feature against a reference stack with the feature off, read back from the GPU, 
   processor that forwards `encode` (`harness/post3`, `harness/post4`). It was chosen over an
   `onDetach` the renderer calls because `renderer.post` is a plain field: a detach callback
   needs a setter and a stored previous processor in src/render, more than one additive line,
-  while the hook check needs no renderer change. A module `WeakMap` records which stack set
-  each renderer's hook: a stack clears the hook (TAA off, `destroy()`, detached) only while it
-  is still its own, so swapping `renderer.post` from stack A to stack B and destroying A leaves
-  B's hook installed. A stack that thinks it is hooked but finds no owner (another stack took
-  the hook and has let go) sets its own again, so A attached again after B jitters again. Two
-  stacks resolving every frame (the post4 bilinear twin) do not fight: the last to start keeps
-  the hook. A hook a page set by hand is not tracked and is still cleared when TAA stops.
+  while the hook check needs no renderer change. Which stack owns the hook is read from the
+  renderer (ws/post-8, the `renderer.jitter` getter of ws/render-8; the ws/post-7 module
+  `WeakMap` is gone): a stack clears the hook (TAA off, `destroy()`, detached) only while
+  `renderer.jitter === hook`, its own, so swapping `renderer.post` from stack A to stack B and
+  destroying A leaves B's hook installed. A stack that thinks it is hooked but finds
+  `renderer.jitter` null (another stack took the hook and has let go) sets its own again, so A
+  attached again after B jitters again. Two stacks resolving every frame (the post4 bilinear
+  twin) do not fight: the last to start keeps the hook. A hook the page set by hand
+  (`renderer.setJitter(fn)`) is never cleared by a stack; a stack that starts TAA while it is
+  installed still replaces it, as before.
 - **History filter.** `TaaSettings.historyFilter: TaaHistoryFilter` (`'catmull-rom'` default,
   or `'bilinear'`). `'catmull-rom'` samples the history with a 5-tap Catmull-Rom (the two
   middle taps per axis folded into one bilinear tap, the corners dropped, normalised by the
