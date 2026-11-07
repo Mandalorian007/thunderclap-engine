@@ -5,7 +5,8 @@
  * strikes on an adjacent ghoul kill it (the third number a crit) and it burns away on a pooled
  * dissolve material, a tap on the minimap walks the hero there, zooming out puts the walls,
  * pillars and ghouls on more than one LOD level, no floor seam shows at screen centre at spawn
- * (desktop-1280), and the desktop rows hold a playable frame rate.
+ * (desktop-1280), the desktop rows hold a playable frame rate, no HUD widget overflows its
+ * content bar on any row, and on phone-portrait the bars leave the world 70% of the height.
  *
  * `?still&seed=3` parks the enemy AI and fixes the spawns so the interaction rows are
  * deterministic; every wait is a poll on `window.__demo`, never a sleep.
@@ -52,17 +53,23 @@ async function killOne(page: Page, before: ArpgDemoState): Promise<void> {
     .toBeGreaterThanOrEqual(before.kills + 1);
 }
 
-async function boot(page: Page, query = ''): Promise<{ errors: string[]; state: ArpgDemoState }> {
+async function boot(
+  page: Page,
+  query = '',
+): Promise<{ errors: string[]; layoutWarnings: string[]; state: ArpgDemoState }> {
   const errors: string[] = [];
+  const layoutWarnings: string[] = [];
   page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
   page.on('console', (m) => {
     if (m.type() === 'error') errors.push(`console.error: ${m.text()}`);
+    // ws/ui-7's `[layout] <id> overflows …`, counted as it is logged.
+    if (m.type() === 'warning' && m.text().startsWith('[layout]')) layoutWarnings.push(m.text());
   });
   await page.goto(`${URL}${query}`);
   await expect.poll(async () => (await read(page)).ready, { timeout: 30_000 }).toBe(true);
   expect((await read(page)).gpu, 'WebGPU came up').toBe('ok');
   await expect.poll(async () => (await read(page)).frame, { timeout: 15_000 }).toBeGreaterThan(5);
-  return { errors, state: await read(page) };
+  return { errors, layoutWarnings, state: await read(page) };
 }
 
 /** A world point in client px (for clicks and taps). */
@@ -90,7 +97,7 @@ test.describe('demo: arpg', () => {
   test('boots the courtyard within the draw-call band, no console errors', async ({
     page,
   }, info) => {
-    const { errors } = await boot(page);
+    const { errors, layoutWarnings } = await boot(page);
     await expect
       .poll(async () => (await read(page)).frame, { timeout: 15_000 })
       .toBeGreaterThan(40);
@@ -111,7 +118,33 @@ test.describe('demo: arpg', () => {
         .poll(async () => (await read(page)).fps, { timeout: 15_000 })
         .toBeGreaterThan(MIN_FPS_DESKTOP);
     }
+    // Content bars (ws/ui-8): the orbs and slots fit the bottom bar, the gear row the top one.
+    expect(s.overflows).toEqual([]);
+    expect(layoutWarnings).toEqual([]);
     expect(errors).toEqual([]);
+  });
+
+  test.describe('phone-portrait', () => {
+    // Not a matrix row: phone-port runs layout.spec only, so this one viewport is set here.
+    test.use({
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true,
+      deviceScaleFactor: 2,
+    });
+    test('the bars leave the world at least 70% of the height, no overflows', async ({
+      page,
+    }, info) => {
+      test.skip(info.project.name !== 'desktop-1280', 'one portrait run, on the desktop-1280 row');
+      const { errors, layoutWarnings } = await boot(page, '?still&seed=3');
+      await expect.poll(async () => (await read(page)).formFactor).toBe('phone-portrait');
+      const s = await read(page);
+      expect(s.bottomBar).toBeGreaterThan(0);
+      expect(s.worldView).toBeGreaterThanOrEqual(0.7);
+      expect(s.overflows).toEqual([]);
+      expect(layoutWarnings).toEqual([]);
+      expect(errors).toEqual([]);
+    });
   });
 
   test('a ground click (a tap on touch) paths the hero to the spot', async ({ page, hasTouch }) => {
@@ -207,8 +240,9 @@ test.describe('demo: arpg', () => {
       .poll(async () => (await read(page)).centreSeam, { timeout: 15_000 })
       .not.toBeNull();
     const s = await read(page);
-    // Column 640 less the mean of 636 and 644: the old grout gap at x = 0 read about +69.
-    expect(s.centreSeam!).toBeLessThan(10);
+    // Column 640 less the mean of 636 and 644: the old grout gap at x = 0 read about +69, the
+    // texture's mid-tile grout line there about -22; a quarter-tile offset puts both 0.5 m off.
+    expect(Math.abs(s.centreSeam!)).toBeLessThan(10);
     expect(errors).toEqual([]);
   });
 

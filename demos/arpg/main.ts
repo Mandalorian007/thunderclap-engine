@@ -20,6 +20,7 @@
  *   (`ui.floats(camera)`, the third hit on a ghoul a crit) and a north-up minimap of the whole
  *   courtyard (`ui.minimap`) with ghouls (arrows on their `heading`) and braziers as marker
  *   kinds: a tap on it walks the hero there over the same navmesh path as a ground click.
+ *   The orbs and slots size a content `bottom` bar, the gear row a content `top` bar (ws/ui-8).
  *
  * `?still` parks the idle bob, the flame flicker and the enemy AI; `?seed=N` fixes the spawns.
  */
@@ -126,6 +127,10 @@ const state: ArpgDemoState = {
   still: STILL,
   gpuErrors: 0,
   centreSeam: null,
+  formFactor: '',
+  overflows: [],
+  bottomBar: 0,
+  worldView: 1,
 };
 demoWindow.__demo = state;
 
@@ -137,6 +142,12 @@ const CAM_DIST = 24;
 const CAM_DIST_MIN = 14;
 const CAM_DIST_MAX = 64;
 const CAM_SMOOTH = 6;
+/** The content `bottom` bar's ceiling, CSS px: a 112-design-px orb plus pad fits on every row. */
+const BAR_MAX = 160;
+/** Phone-portrait's ceiling: 21% of a 568 px-tall view (iPhone SE), so the world keeps 70%. */
+const BAR_MAX_PORTRAIT = 120;
+/** The content `top` bar's ceiling, CSS px: the gear buttons plus pad. */
+const TOP_MAX = 96;
 const RUN_SPEED = 6;
 const ACCEL = 14;
 /** Radians per second the hero turns toward its desired heading. */
@@ -232,6 +243,19 @@ async function main(): Promise<void> {
     root,
     title: 'ThunderClap demo: arpg',
     design: { width: 1920, height: 1080 },
+    // Content bars (ws/ui-8): the orbs and ability slots size the bottom bar, the gear buttons
+    // the top one. Each grows from the form's fixed track to its tallest widget plus pad, up to
+    // its max (phone-portrait's bottom bar: BAR_MAX_PORTRAIT, so the world keeps at least 70%
+    // of the height), and the grid re-flows around them.
+    layout: {
+      bars: {
+        top: { size: 'content', max: TOP_MAX },
+        bottom: { size: 'content', max: BAR_MAX },
+      },
+      forms: {
+        'phone-portrait': { bars: { bottom: { size: 'content', max: BAR_MAX_PORTRAIT } } },
+      },
+    },
     post: {
       bloom: { enabled: true, intensity: 0.85, threshold: 1.0, knee: 0.5, scatter: 0.72 },
       fog: { enabled: false, density: 0 },
@@ -917,6 +941,20 @@ async function main(): Promise<void> {
     },
   });
   map.el.id = 'arpg-map';
+  // The orbs at the bar's two ends, the ability slots between them (as `ui5?orb`).
+  ui.layout.region('bottom').style.justifyContent = 'space-between';
+  /** Publish the form factor, overflow ids and the bars' share after every re-layout. */
+  const publishLayout = () => {
+    const l = ui.layout;
+    state.formFactor = l.formFactor;
+    state.overflows = l.overflows().map((o) => o.id);
+    const top = l.state.regions.top?.height ?? 0;
+    state.bottomBar = l.state.regions.bottom?.height ?? 0;
+    const h = l.state.height;
+    state.worldView = h > 0 ? 1 - (top + state.bottomBar) / h : 1;
+  };
+  ui.layout.onChange(publishLayout);
+  ui.layout.refresh();
   const ghoulMarkers: MinimapMarker[] = enemies.map((_, i) => ({
     id: `ghoul-${i}`,
     x: 0,
