@@ -14,8 +14,16 @@ export interface ArpgDemoState {
   simTime: number;
   /** `renderer.stats.drawCalls` (scene, shadow and post passes) of the last frame. */
   drawCalls: number;
-  /** Scene triangles submitted in the last frame (shadow passes not counted). */
+  /** `renderer.stats.triangles`: scene triangles of the last frame (shadow passes not counted). */
   triangles: number;
+  /** `renderer.stats.lodCounts`: instances drawn per LOD level (walls, pillars, drums, ghouls). */
+  lodCounts: number[];
+  /** Ghouls burning away on a dissolve material right now. */
+  dissolving: number;
+  /** The most ghouls seen dissolving at once since load (counted when it happens). */
+  dissolvePeak: number;
+  /** Camera distance from its target, metres (24 by default; the wheel and `zoom` change it). */
+  cameraDistance: number;
   /** The hero's feet, world units. */
   heroPos: [number, number, number];
   /** The anim graph's state: `'move'` or `'attack'`. */
@@ -67,6 +75,8 @@ export interface ArpgDemoApi {
   screenOf(x: number, y: number, z: number): { x: number; y: number };
   /** A world ground point (x, z) on the minimap, in client (CSS) px. */
   mapPointOf(x: number, z: number): { x: number; y: number };
+  /** Set the camera distance (clamped to 14..64 m); returns the distance applied. */
+  zoom(distance: number): number;
   /** Move the nearest live enemy just in front of the hero and hold it there; returns its index. */
   summon(): number;
 }

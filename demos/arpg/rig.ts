@@ -125,9 +125,10 @@ export const GHOUL_LOOK: BodyLook = {
 /**
  * The body in bind pose, one rigid joint per box. Boxes are placed from each node's rest world
  * position, so the mesh matches `inverseBindFromRest`. The cape is three thin panels, one per
- * cape bone, so the spring chain bends it at the joints.
+ * cape bone, so the spring chain bends it at the joints. `coarse` is the far LOD level: the
+ * hands, feet and hair go (21 boxes to 15 for a ghoul), the silhouette stays.
  */
-export function createBodyMesh(skeleton: Skeleton, look: BodyLook): MeshData {
+export function createBodyMesh(skeleton: Skeleton, look: BodyLook, coarse = false): MeshData {
   const world = new Float32Array(NODE_COUNT * WORLD_NODE_FLOATS);
   poseToWorld(skeleton, skeleton.rest, world);
   const at = (node: number): [number, number, number] => {
@@ -154,14 +155,14 @@ export function createBodyMesh(skeleton: Skeleton, look: BodyLook): MeshData {
   part(N.spine, 0, 0.13, 0, 0.21, 0.14, 0.13, L.tunic);
   part(N.chest, 0, 0.12, 0, 0.24, 0.14, 0.14, L.tunic);
   part(N.head, 0, 0.14, 0, 0.12, 0.14, 0.13, L.skin);
-  part(N.head, 0, 0.27, 0.01, 0.13, 0.03, 0.14, L.hair);
+  if (!coarse) part(N.head, 0, 0.27, 0.01, 0.13, 0.03, 0.14, L.hair);
   for (const [upper, lower, hand] of [
     [N.upperArmL, N.lowerArmL, N.handL],
     [N.upperArmR, N.lowerArmR, N.handR],
   ] as const) {
     part(upper, 0, -0.15, 0, 0.075, 0.16, 0.075, L.tunic);
     part(lower, 0, -0.14, 0, 0.065, 0.15, 0.065, L.skin);
-    part(hand, 0, -0.06, 0, 0.055, 0.07, 0.04, L.skin);
+    if (!coarse) part(hand, 0, -0.06, 0, 0.055, 0.07, 0.04, L.skin);
   }
   for (const [upper, lower, foot] of [
     [N.upperLegL, N.lowerLegL, N.footL],
@@ -169,7 +170,7 @@ export function createBodyMesh(skeleton: Skeleton, look: BodyLook): MeshData {
   ] as const) {
     part(upper, 0, -0.21, 0, 0.095, 0.22, 0.1, L.pants);
     part(lower, 0, -0.21, 0, 0.08, 0.22, 0.085, L.pants);
-    part(foot, 0, -0.025, -0.05, 0.085, 0.03, 0.15, L.boots);
+    if (!coarse) part(foot, 0, -0.025, -0.05, 0.085, 0.03, 0.15, L.boots);
   }
   if (L.cape) {
     const c = L.cape;

@@ -1,8 +1,9 @@
 /**
  * Procedural helpers for the ARPG (copied from demos/arena): the skinned box builder the bodies
- * use (`@thunderclap/engine/geom` writes the 3D layout only), hash noise, a seeded random source
- * and the textures. Setup-time code: it allocates freely and runs once.
+ * use (`@thunderclap/engine/geom` writes the 3D layout only) and the textures, whose per-texel
+ * rolls are core's positional `hash2f`. Setup-time code: it allocates freely and runs once.
  */
+import { hash2f } from '@thunderclap/engine/core';
 import { setVertexSkin } from '@thunderclap/engine/render';
 
 export interface MeshData {
@@ -131,13 +132,6 @@ export class MeshBuilder {
   }
 }
 
-/** Deterministic hash noise in [0, 1). */
-export function hash(x: number, y: number, seed: number): number {
-  let h = (x * 374761393 + y * 668265263 + seed * 1274126177) | 0;
-  h = ((h ^ (h >>> 13)) * 1274126177) | 0;
-  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-}
-
 export interface TilePixelsOptions {
   size: number;
   /** Tiles across the texture. */
@@ -162,8 +156,8 @@ export function tilePixels(o: TilePixelsOptions): Uint8Array<ArrayBuffer> {
       const inGrout = x % tile < o.grout || y % tile < o.grout;
       const shade =
         1 -
-        o.jitter * (hash(tx, ty, o.seed) - 0.5) -
-        o.jitter * 0.5 * (hash(x, y, o.seed + 7) - 0.5);
+        o.jitter * (hash2f(o.seed, tx, ty) - 0.5) -
+        o.jitter * 0.5 * (hash2f(o.seed + 7, x, y) - 0.5);
       const c = inGrout ? o.groutColor : o.base;
       const i = (y * o.size + x) * 4;
       out[i] = Math.max(0, Math.min(255, Math.round(c[0] * 255 * shade)));
@@ -199,7 +193,7 @@ export function runePixels(size: number, seed: number): Uint8Array<ArrayBuffer> 
         lx < cell - 1 &&
         ly < cell - 1 &&
         (lx % 2 === 1 || ly % 2 === 1);
-      const lit = stroke && hash(cx * 3 + sx, cy * 3 + sy, seed) > 0.45;
+      const lit = stroke && hash2f(seed, cx * 3 + sx, cy * 3 + sy) > 0.45;
       const o = (y * size + x) * 4;
       const v = lit ? 255 : 0;
       out[o] = v;

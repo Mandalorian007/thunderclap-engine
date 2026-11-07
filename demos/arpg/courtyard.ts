@@ -1,10 +1,14 @@
 /**
  * The ruined courtyard: a 60 × 60 m floor of stone tiles inside broken perimeter walls, two
  * colonnades with fallen pillars, a raised dais reached by a flight of stairs under an arch,
- * rubble and six braziers. Every prop kind is one `InstanceList` (one draw each), built from
- * `geom` meshes; the same placements feed the navmesh bake as triangle soup. Setup-time code:
- * allocates freely. The layout is fixed (its hash seed is not `?seed`).
+ * rubble and six braziers. Most prop kinds are one `InstanceList` (one draw each), built from
+ * `geom` meshes; walls and pillars are `MeshLod` chains drawn per instance (`frame.mesh`, one
+ * draw per level in view) because `InstanceList` takes a single mesh. The same placements feed
+ * the navmesh bake as triangle soup. Setup-time code: allocates freely. The layout is fixed
+ * (its `hash2f` seed is not `?seed`).
  */
+
+import { hash2f } from '@thunderclap/engine/core';
 import {
   arch,
   box,
@@ -20,10 +24,13 @@ import {
   type InstanceList,
   type InstanceParams,
   type Material,
+  type MeshLod,
   type Renderer,
   Transform,
 } from '@thunderclap/engine/render';
-import { hash } from './geom';
+
+/** `hash2f` under the courtyard's fixed seed plus `k` (the old `hash(x, y, SEED + k)` call sites). */
+const roll = (x: number, y: number, k = 0) => hash2f(SEED + k, x, y);
 
 export const HALF = 30;
 const TILE = 2;
@@ -42,9 +49,26 @@ export interface Brazier {
   z: number;
 }
 
+/** A prop kind on a `MeshLod`: one `frame.mesh` per transform (each its own hysteresis key). */
+export interface LodProp {
+  label: string;
+  lod: MeshLod;
+  material: Material;
+  transforms: Transform[];
+  params: InstanceParams;
+}
+
+/** On-screen sphere heights (target px) at which a pillar keeps 16, then 8 sides; below, 5. */
+export const PILLAR_LOD_PX = [300, 170] as const;
+/** On-screen sphere height (target px) at which a wall keeps its coping and chunks. */
+export const WALL_LOD_PX = [200] as const;
+const PILLAR_SIDES = [16, 8, 5] as const;
+
 export interface Courtyard {
   /** Static prop lists, drawn with `frame.list` in this order. */
   lists: InstanceList[];
+  /** Walls, pillars and drums on LOD chains, drawn with `frame.mesh` per transform. */
+  lods: LodProp[];
   /** The flame cores (one per brazier; the demo rescales them as they flicker). */
   flames: InstanceList;
   braziers: Brazier[];
@@ -140,13 +164,39 @@ export function buildCourtyard(renderer: Renderer, mats: CourtyardMaterials): Co
     return l;
   };
 
+  const lods: LodProp[] = [];
+  /** A prop kind on a LOD chain (`levels[0]` the full mesh) at `puts`; `navGeom` (or level 0) feeds the bake. */
+  const lodProp = (
+    label: string,
+    levels: Geometry[],
+    thresholdsPx: readonly number[],
+    mat: Material,
+    puts: Put[],
+    navGeom?: Geometry,
+  ) => {
+    const meshes = levels.map((g, i) => renderer.createMesh({ ...g, label: `${label}-lod${i}` }));
+    const transforms = puts.map((p) => {
+      const t = new Transform({});
+      t.setMatrix(matrixOf(p));
+      addNav(navGeom ?? levels[0]!, t.world);
+      return t;
+    });
+    lods.push({
+      label,
+      lod: { meshes, thresholdsPx: [...thresholdsPx] },
+      material: mat,
+      transforms,
+      params: { castShadow: true, receiveShadow: true },
+    });
+  };
+
   // ── Floor: 30 × 30 tiles, each its own shade; a few cracked dark ones ───
   const tiles: Put[] = [];
   const n = (HALF * 2) / TILE;
   for (let j = 0; j < n; j++) {
     for (let i = 0; i < n; i++) {
-      const h = hash(i, j, SEED);
-      const shade = 0.78 + 0.26 * hash(i, j, SEED + 1);
+      const h = roll(i, j);
+      const shade = 0.78 + 0.26 * roll(i, j, 1);
       const k = h < 0.1 ? 0.55 : 1;
       tiles.push({
         x: -HALF + TILE / 2 + i * TILE,
@@ -185,12 +235,12 @@ export function buildCourtyard(renderer: Renderer, mats: CourtyardMaterials): Co
       const x = side === 0 ? along : side === 1 ? along : side === 2 ? -off : off;
       const z = side === 0 ? -off : side === 1 ? off : along;
       const yaw = side < 2 ? 0 : Math.PI / 2;
-      const h = hash(side, i, SEED + 2);
+      const h = roll(side, i, 2);
       if (h < 0.42) {
-        broken.push({ x, y: 0, z, yaw, sy: 0.7 + 0.6 * hash(side, i, SEED + 3) });
+        broken.push({ x, y: 0, z, yaw, sy: 0.7 + 0.6 * roll(side, i, 3) });
         for (let r = 0; r < 3; r++) {
-          const a = hash(side * 31 + i, r, SEED + 4);
-          const inward = 1.2 + 1.6 * hash(side * 31 + i, r, SEED + 5);
+          const a = roll(side * 31 + i, r, 4);
+          const inward = 1.2 + 1.6 * roll(side * 31 + i, r, 5);
           rubble.push({
             x: x + (side < 2 ? (a - 0.5) * 3 : side === 2 ? inward : -inward),
             y: 0.08,
@@ -203,48 +253,70 @@ export function buildCourtyard(renderer: Renderer, mats: CourtyardMaterials): Co
       } else full.push({ x, y: WALL_H / 2, z, yaw });
     }
   }
-  list('wall', box({ size: [WALL_LEN - 0.04, WALL_H, WALL_T], uvScale: [2, 2] }), mats.wall, full, {
-    nav: true,
-  });
-  const brokenWall = mergeGeometry(
+  // Near: the slab under a coping course; far: the slab alone.
+  const wallSlab = box({ size: [WALL_LEN - 0.04, WALL_H, WALL_T], uvScale: [2, 2] });
+  const wallNear = mergeGeometry(
+    wallSlab,
     transformGeometry(
-      box({ size: [WALL_LEN - 0.04, 1.4, WALL_T] }),
-      matrixOf({ x: 0, y: 0.7, z: 0 }),
+      box({ size: [WALL_LEN - 0.04, 0.22, WALL_T + 0.16] }),
+      matrixOf({ x: 0, y: WALL_H / 2 + 0.11, z: 0 }),
     ),
-    transformGeometry(box({ size: [1.4, 0.9, WALL_T * 0.9] }), matrixOf({ x: -1.1, y: 1.8, z: 0 })),
+  );
+  lodProp('wall', [wallNear, wallSlab], WALL_LOD_PX, mats.wall, full, wallSlab);
+  const brokenBase = transformGeometry(
+    box({ size: [WALL_LEN - 0.04, 1.4, WALL_T] }),
+    matrixOf({ x: 0, y: 0.7, z: 0 }),
+  );
+  const brokenChunk = transformGeometry(
+    box({ size: [1.4, 0.9, WALL_T * 0.9] }),
+    matrixOf({ x: -1.1, y: 1.8, z: 0 }),
+  );
+  const brokenWall = mergeGeometry(
+    brokenBase,
+    brokenChunk,
     transformGeometry(
       box({ size: [0.9, 0.5, WALL_T * 0.8] }),
       matrixOf({ x: 0.6, y: 1.55, z: 0.05, tilt: 0.2 }),
     ),
   );
-  list('wall-broken', brokenWall, mats.wall, broken, { nav: true });
+  lodProp(
+    'wall-broken',
+    [brokenWall, mergeGeometry(brokenBase, brokenChunk)],
+    WALL_LOD_PX,
+    mats.wall,
+    broken,
+  );
 
   // ── Colonnades: pillars down both sides, some snapped with drums fallen beside them ──
-  const pillarGeom = mergeGeometry(
-    transformGeometry(box({ size: [1.3, 0.5, 1.3] }), matrixOf({ x: 0, y: 0.25, z: 0 })),
-    transformGeometry(
-      cylinder({ radius: 0.45, height: 4.2, segments: [16, 1], uvScale: [3, 3] }),
-      matrixOf({ x: 0, y: 2.6, z: 0 }),
-    ),
-    transformGeometry(box({ size: [1.2, 0.45, 1.2] }), matrixOf({ x: 0, y: 4.9, z: 0 })),
-  );
-  const brokenGeom = mergeGeometry(
-    transformGeometry(box({ size: [1.3, 0.5, 1.3] }), matrixOf({ x: 0, y: 0.25, z: 0 })),
-    transformGeometry(
-      cylinder({ radius: [0.42, 0.45], height: 1.7, segments: [16, 1], uvScale: [3, 1] }),
-      matrixOf({ x: 0, y: 1.35, z: 0 }),
-    ),
-    transformGeometry(
-      cylinder({ radius: 0.42, height: 0.5, segments: [16, 1] }),
-      matrixOf({ x: 0.08, y: 2.3, z: 0, tilt: 0.35 }),
-    ),
-  );
+  // Each level is the same geom builders at fewer sides (PILLAR_SIDES).
+  const pillarGeom = (sides: number) =>
+    mergeGeometry(
+      transformGeometry(box({ size: [1.3, 0.5, 1.3] }), matrixOf({ x: 0, y: 0.25, z: 0 })),
+      transformGeometry(
+        cylinder({ radius: 0.45, height: 4.2, segments: [sides, 1], uvScale: [3, 3] }),
+        matrixOf({ x: 0, y: 2.6, z: 0 }),
+      ),
+      transformGeometry(box({ size: [1.2, 0.45, 1.2] }), matrixOf({ x: 0, y: 4.9, z: 0 })),
+    );
+  const brokenGeom = (sides: number) =>
+    mergeGeometry(
+      transformGeometry(box({ size: [1.3, 0.5, 1.3] }), matrixOf({ x: 0, y: 0.25, z: 0 })),
+      transformGeometry(
+        cylinder({ radius: [0.42, 0.45], height: 1.7, segments: [sides, 1], uvScale: [3, 1] }),
+        matrixOf({ x: 0, y: 1.35, z: 0 }),
+      ),
+      transformGeometry(
+        cylinder({ radius: 0.42, height: 0.5, segments: [sides, 1] }),
+        matrixOf({ x: 0.08, y: 2.3, z: 0, tilt: 0.35 }),
+      ),
+    );
+  const drumGeom = (sides: number) => cylinder({ radius: 0.42, height: 1.1, segments: [sides, 1] });
   const pillars: Put[] = [];
   const snapped: Put[] = [];
   const drums: Put[] = [];
   for (const side of [-1, 1]) {
     for (const z of [-8, 0, 8, 16]) {
-      const h = hash(side + 3, z + 20, SEED + 6);
+      const h = roll(side + 3, z + 20, 6);
       if (h < 0.3) {
         snapped.push({ x: side * 9, y: 0, z, yaw: h * 9 });
         drums.push({
@@ -261,15 +333,10 @@ export function buildCourtyard(renderer: Renderer, mats: CourtyardMaterials): Co
     drums.push({ x: side * 20.5, y: 0.42, z: -4.5, yaw: 0.4 * side, tilt: Math.PI / 2 });
   }
   const pillarNav = box({ size: [1.3, 2.5, 1.3] });
-  list('pillar', pillarGeom, mats.pillar, pillars, { nav: true, navGeom: pillarNav });
-  list('pillar-broken', brokenGeom, mats.pillar, snapped, { nav: true, navGeom: pillarNav });
-  list(
-    'pillar-drum',
-    cylinder({ radius: 0.42, height: 1.1, segments: [16, 1] }),
-    mats.pillar,
-    drums,
-    { nav: true },
-  );
+  const chain = (g: (sides: number) => Geometry) => PILLAR_SIDES.map(g);
+  lodProp('pillar', chain(pillarGeom), PILLAR_LOD_PX, mats.pillar, pillars, pillarNav);
+  lodProp('pillar-broken', chain(brokenGeom), PILLAR_LOD_PX, mats.pillar, snapped, pillarNav);
+  lodProp('pillar-drum', chain(drumGeom), PILLAR_LOD_PX, mats.pillar, drums);
 
   // ── The dais, its stairs and the arch behind ────────────────────────────
   const daisGeom = mergeGeometry(
@@ -299,14 +366,14 @@ export function buildCourtyard(renderer: Renderer, mats: CourtyardMaterials): Co
   // ── Rubble: rocks under the broken walls and around the snapped pillars ─
   for (let i = 0; i < 24; i++) {
     const p = snapped[i % snapped.length]!;
-    const a = hash(i, 3, SEED + 7) * Math.PI * 2;
-    const r = 1.1 + 1.4 * hash(i, 4, SEED + 7);
+    const a = roll(i, 3, 7) * Math.PI * 2;
+    const r = 1.1 + 1.4 * roll(i, 4, 7);
     rubble.push({
       x: p.x + Math.cos(a) * r,
       y: 0.06,
       z: p.z + Math.sin(a) * r,
       yaw: a,
-      s: 0.4 + 0.6 * hash(i, 5, SEED + 7),
+      s: 0.4 + 0.6 * roll(i, 5, 7),
       tilt: a,
     });
   }
@@ -353,6 +420,7 @@ export function buildCourtyard(renderer: Renderer, mats: CourtyardMaterials): Co
 
   return {
     lists,
+    lods,
     flames,
     braziers,
     nav: { positions: new Float32Array(navPos), indices: new Uint32Array(navIdx), stride: 3 },
