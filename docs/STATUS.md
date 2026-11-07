@@ -178,7 +178,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Testing kit: fake host, fixed clock, headless `createTestGame` in `./testing` | ws/testing-kit | brief `docs/briefs/testing-kit.md` | train 14 | ✅ merged in E-031 train 14 (`7089b86`; main a147d20) |
 | 5 | Aux-aware scene pipelines: velocity on stops breaking particles, sky, decals and water | ws/render-10 | brief `docs/briefs/render-10.md` | train 15 | ✅ merged in E-031 train 15 (`2cf8e4b`; main 0fb66ba) |
 | 5 | glTF sun `direction`; anim `skinPose` one-call skinning | ws/assets-4 | brief `docs/briefs/assets-4.md` | train 15 | ✅ merged in E-031 train 15 (`a700f83`; main 0fb66ba) |
-| 5 | v1 docs: README front door, guide pass, migration guide, deprecated-name check on snippets | ws/docs-v1 | brief `docs/briefs/docs-v1.md` | after train 15 | 🔵 running |
+| 5 | v1 docs: README front door, guide pass, migration guide, deprecated-name check on snippets | ws/docs-v1 | brief `docs/briefs/docs-v1.md` | after train 15 | 🟣 done at `1d82121` (README front door; 77-row migration guide with drift test; `check:snippets` fails on deprecated; 3 stale uses fixed). Train 16 |
 | 5 | v1 templates and demos: no deprecated names (lint), third-person on `skinPose`, template READMEs and tests | ws/templates-v1 | brief `docs/briefs/templates-v1.md` | after train 15 | 🔵 running |
 | 5 | Headless `createGame` (`gpu`, `clock`, `host`); touch replay sink; `HostLifecycle.state` getter; WorldPanel keyed on aux | ws/core-8 | brief `docs/briefs/core-8.md` | train 16 | 🔵 running |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
@@ -468,6 +468,9 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
   - Move `templates/third-person` `character.ts` onto `skinPose`. → next template or adoption stream.
   - Add a public `SkinPalette.jointCount` getter so `skinPose` can check palette size. → render.
 - E-031 train 15 landed at 0fb66ba: api-core, render-10 and assets-4. The matrix ran 2801 passed, 209 skipped, 0 failed. README count: 2388 tests in 217 files. E-036 renames now cover every module; v1 waits on the docs-v1 and templates-v1 migrations, then removing the aliases.
+- ws/docs-v1 findings:
+  - The engine's own `src` has **240 internal uses of deprecated names**, found with `findDeprecatedUses` on tsconfig.json. They must be cleared before the v1 alias removal. → ws/src-v1 after train 16.
+  - `testing-your-game.md` ~334 and the testing README must be updated after core-8 lands.
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
