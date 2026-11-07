@@ -1,8 +1,8 @@
 # testing
 
-`@thunderclap/engine/testing` holds what a game's unit tests need to run in Vitest or plain Node, with no browser and no GPU: a fake host, a fixed-step clock and the recording fake GPU device. The engine itself never imports it.
+`@thunderclap/engine/testing` holds what a game's unit tests need to run in Vitest or plain Node, with no browser and no GPU: a fake host, a fixed-step clock, the recording fake GPU device and `createTestGame`, a whole headless game on them. The engine itself never imports it.
 
-The entry is `src/testing/index.ts`. It re-exports the fake GPU from `src/render/fake-gpu.ts` and adds `fake-host.ts` and `fixed-clock.ts`.
+The entry is `src/testing/index.ts`. It re-exports the fake GPU from `src/render/fake-gpu.ts` and adds `fake-host.ts`, `fixed-clock.ts` and `test-game.ts`.
 
 How a game uses these is in [Testing your game](../../docs/guide/testing-your-game.md).
 
@@ -11,7 +11,7 @@ How a game uses these is in [Testing your game](../../docs/guide/testing-your-ga
 `createFakeHost(opts?: FakeHostOptions): FakeHost` returns a full `Host` (`@thunderclap/engine/host`). Every optional facet (`lifecycle`, `haptics`, `safeArea`) is present, and nothing touches the DOM.
 
 - **Storage.** `storage.open()` returns the same `MemoryStorage` on every call, and `memory` is that object. A game's save store can open it and round-trip through it. `{ storage: null }` makes a host with no working storage, where `open()` returns null. `{ storage }` hands in a backend the test built.
-- **Lifecycle.** `setState('background' | 'active')` moves `lifecycle.state()`. The `lifecycle.watch` listeners run only when the state changes. `{ state }` sets the starting state.
+- **Lifecycle.** `setState('background' | 'active')` moves `lifecycle.state` (a getter). The `lifecycle.watch` listeners run only when the state changes. `{ state }` sets the starting state.
 - **Haptics.** `impact`, `notification` and `vibrate` are pushed to `hapticCalls` as `FakeHapticCall`s (`{ op: 'impact', style }`, `{ op: 'notification', kind }`, `{ op: 'vibrate', ms }`). `{ haptics: false }` makes `available()` false, and the calls are still recorded.
 - **Safe area.** `setSafeArea(partial)` sets some or all of the insets. The `safeArea.watch` listeners run only when a value changes. `{ safeArea }` sets the starting insets; missing sides are 0. The object `insets()` returns is reused.
 - **Fullscreen.** Each `fullscreen.toggle(opts)` is pushed to `fullscreenCalls`. It flips `active()`, calls the watchers and resolves the new state. With `{ fullscreen: false }`, `available()` is false and `toggle` resolves false without changing anything.
@@ -24,15 +24,26 @@ How a game uses these is in [Testing your game](../../docs/guide/testing-your-ga
 `createFixedClock(stepMs = 1000 / 60, start = 0): FixedClock` returns a `TickClock` (`@thunderclap/engine/input`), so it goes wherever `ctx.clock` goes: `createGestures({ clock })`, `createLook({ clock })`, `createInputPlayback(input, rec, { clock })`, or `GameLoop`'s `now` as `() => clock.now()`.
 
 - `step(n = 1)` moves it by `n` whole steps. A negative, fractional or non-finite `n` is ignored. `ticks` counts the steps taken.
-- `advance(ms)` moves it by a loose amount, the same as `createTickClock`. A negative or non-finite value is ignored. Loose time is not counted in `ticks`.
+- `advance(ms)` moves it by a loose amount, the same as `createTickClock`. A negative or non-finite value is ignored. An advance of exactly `stepMs` counts as a step (ws/core-8), so a game loop that advances its clock by the fixed step reads exactly N × `stepMs` after N updates; other loose time is not counted in `ticks`.
 - `now()` is `start + advanced + ticks × stepMs`. N steps read exactly N × `stepMs`, with no float drift from repeated adds.
 - `stepMs` reads the step back. A step that is not a positive finite number throws a `RangeError`.
 
 A test drives a game tick by tick in the order `createGame`'s loop uses: `clock.step()`, then `input.update()`, then the game's update.
 
-## Headless `createGame`
+## Headless `createGame`: `createTestGame`
 
-This kit has no `createTestGame` yet. `createGame` mounts a canvas into `root` and boots WebGPU itself. It has no option to take a GPU device or a clock, so it cannot run in Node (ws/testing-kit wish). Until it can, a test drives the parts it needs on their own: `Input`, gestures on the fixed clock, a `GameLoop` on the fake host, a `Renderer` on the fake GPU.
+`createGame` runs headless (ws/core-8): given `gpu` (a `GpuContext`) it skips WebGPU and the canvas context, `root` becomes optional, and `clock` and `host` take fakes. `createTestGame(opts): Promise<TestGame>` is that call with this kit's fakes: a `FakeDevice` as the GPU, a `FakeHost` (save storage in memory) and a `FixedClock` on the step of `opts.sim` (default 1/60 s) as `ctx.clock`. It needs a DOM for the overlay (`// @vitest-environment happy-dom`), and throws without one.
+
+```ts
+const g = await createTestGame({ input: { bindings } });
+g.input.keyDown('Space');
+g.step(10);                      // ten frames: one fixed update and one render each
+expect(g.clock.now()).toBe(10 * (1000 / 60));
+```
+
+- `TestGameOptions` are `createGame`'s, without `gpu`, `host` and `clock`, plus `root?` (default a new `<div>` in `document.body`), `host?: FakeHost`, `device?: FakeDevice` and `viewport?: { width, height }` (the CSS px size the root reports, since happy-dom lays nothing out; default the design size, so client px are design px). The canvas reports the box the surface gave it, so touch zones and the pointer router measure as on a page.
+- `TestGame`: `ctx` (exactly what `createGame` built), `input`, `host`, `clock`, `device`, and `step(n = 1)`, which runs `ctx.loop.tickOnce(step)` `n` times: the replay feed, clock, input, `hooks.update`, scenes and one render, in the engine's order. The loop is not started; `ctx.loop.start()` with the fake host runs on `host.runFrame()` instead.
+- Same input, same steps, same state: two games fed the same keys or the same recording read the same values frame for frame (`src/testing/test-game.test.ts`).
 
 ## Fake GPU
 

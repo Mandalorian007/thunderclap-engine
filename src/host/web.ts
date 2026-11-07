@@ -79,7 +79,9 @@ export function createWebLifecycle(win: Window): HostLifecycle {
   const state = (): HostLifecycleState =>
     pagedOut || doc.visibilityState === 'hidden' ? 'background' : 'active';
   return {
-    state,
+    get state() {
+      return state();
+    },
     watch(fn) {
       let last = state();
       const emit = () => {

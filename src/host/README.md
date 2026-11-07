@@ -48,7 +48,7 @@ iOS or Android store app. Nothing else in the engine touches `window.open`, `nav
 | `HostFullscreen` | `available()`, `active` (getter), `toggle({ lockLandscape? }): Promise<boolean>`, `watch(fn): () => void` |
 | `HostStorage` | `kind` (`'local'` on the web host) and `open(): StorageLike \| null`, probed on every call |
 | `HostWindow` | Desktop window controls: `close()`, optional `minimize`, `toggleMaximize`, `setTitle` |
-| `HostLifecycle` / `HostLifecycleState` | `state(): 'active' \| 'background'` and `watch(fn)` (called on each change). `createGame` stops frames and flushes the save on `background`, restarts on `active`, and calls `hooks.lifecycle(state)` |
+| `HostLifecycle` / `HostLifecycleState` | `state` (a getter: `'active' \| 'background'`) and `watch(fn)` (called on each change). `createGame` stops frames and flushes the save on `background`, restarts on `active`, and calls `hooks.lifecycle(state)` |
 | `HostHaptics` / `HapticImpact` / `HapticNotification` | `available()`, `impact('light' \| 'medium' \| 'heavy')`, `notification('success' \| 'warning' \| 'error')`, `vibrate(ms)`; every call is a no-op when unavailable |
 | `HostSafeArea` / `HostInsets` | `insets(): { top, right, bottom, left }` in CSS px (the object is reused) and `watch(fn)`; `createGame` feeds it to `ui.layout` through `followSafeArea` |
 | `createWebHost(opts?: WebHostOptions)` | The browser host; `WebHostOptions` is `{ win?: Window }` (tests pass a stub). Fills all three facets |
@@ -75,7 +75,7 @@ await host.fullscreen.toggle({ lockLandscape: true });
 const off = host.fullscreen.watch((on) => {});
 host.storage.open(); // a StorageLike, or null (missing, blocked, or a write throws); probes each call
 host.window?.close(); // desktop shells only
-host.lifecycle?.state(); // 'active' | 'background'
+host.lifecycle?.state; // 'active' | 'background'
 host.lifecycle?.watch((state) => {}); // createGame does this; games use hooks.lifecycle
 host.haptics?.available(); host.haptics?.impact('light'); host.haptics?.notification('success');
 host.safeArea?.insets(); // { top, right, bottom, left } CSS px; copy it to keep it

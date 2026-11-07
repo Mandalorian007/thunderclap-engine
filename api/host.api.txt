@@ -61,7 +61,7 @@ type HostKind = 'web' | 'electron' | 'xr' | 'capacitor';
 
 ## HostLifecycle  (type-only)
 interface HostLifecycle {
-    state(): HostLifecycleState;
+    readonly state: HostLifecycleState;
     watch(fn: (state: HostLifecycleState) => void): () => void;
 }
 

@@ -64,6 +64,24 @@ describe('createPointerDispatcher', () => {
     expect(order).toEqual(['a:1:pen:100,50:0', 'b:1:pen:100,50:0', 'c:1:pen:100,50:0']);
   });
 
+  it('measures `bounds` instead of the target when given one (ws/core-8)', () => {
+    const canvas = document.createElement('canvas');
+    vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue(new DOMRect(100, 50, 400, 200));
+    const plain = createPointerDispatcher(el);
+    expect(plain.bounds()).toEqual(new DOMRect(10, 20, 800, 400));
+    plain.destroy();
+    const d = createPointerDispatcher(el, { bounds: canvas });
+    expect(d.bounds()).toEqual(new DOMRect(100, 50, 400, 200));
+    const seen: [number, number, boolean][] = [];
+    d.add({ pointerMove: (p) => seen.push([p.x, p.y, p.inside]) });
+    el.dispatchEvent(ptr('pointermove', 150, 70));
+    el.dispatchEvent(ptr('pointermove', 20, 30));
+    expect(seen).toEqual([
+      [50, 20, true],
+      [-80, -20, true],
+    ]);
+  });
+
   it('keeps client coordinates and reports inside with a transform', () => {
     const transform = vi.fn((x: number, y: number) => (x < 400 ? { x: x * 2, y } : null));
     const d = createPointerDispatcher(el, { transform });

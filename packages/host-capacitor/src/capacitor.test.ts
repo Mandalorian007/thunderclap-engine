@@ -143,11 +143,11 @@ describe('createCapacitorHost', () => {
     const f = fakePlugins({ promisedHandles: true });
     const host = createCapacitorHost({ plugins: f.plugins, win: window });
     const seen: string[] = [];
-    expect(host.lifecycle?.state()).toBe('active');
+    expect(host.lifecycle?.state).toBe('active');
     const off = host.lifecycle!.watch((s) => seen.push(s));
     f.emit('appStateChange', { isActive: false });
     f.emit('appStateChange', { isActive: false });
-    expect(host.lifecycle?.state()).toBe('background');
+    expect(host.lifecycle?.state).toBe('background');
     f.emit('resume');
     f.emit('pause');
     f.emit('appStateChange', { isActive: true });
@@ -176,7 +176,7 @@ describe('createCapacitorHost', () => {
     host.lifecycle!.watch((s) => seen.push(s));
     await tick();
     expect(seen).toEqual(['background']);
-    expect(host.lifecycle?.state()).toBe('background');
+    expect(host.lifecycle?.state).toBe('background');
   });
 
   it('maps haptics onto the plugin and drops rejections', async () => {
@@ -263,7 +263,7 @@ describe('createCapacitorHost', () => {
         watch: () => () => {},
       },
       storage: { kind: 'local', open: () => null },
-      lifecycle: { state: () => 'active', watch: () => () => {} },
+      lifecycle: { state: 'active', watch: () => () => {} },
       haptics: { available: () => false, impact() {}, notification() {}, vibrate() {} },
       safeArea: { insets: () => ({ top: 1, right: 2, bottom: 3, left: 4 }), watch: () => () => {} },
     } as unknown as Host;

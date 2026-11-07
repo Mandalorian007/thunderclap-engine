@@ -10,7 +10,11 @@ import type { TickClock } from '../input';
 export interface FixedClock extends TickClock {
   /** The step length, ms. */
   readonly stepMs: number;
-  /** Whole steps taken so far (`step` only; `advance` does not count). */
+  /**
+   * Whole steps taken so far: each `step`, and each `advance(ms)` of exactly `stepMs` (how
+   * `createGame`'s loop moves its clock once per fixed update, ws/core-8). Other advances do
+   * not count.
+   */
   readonly ticks: number;
   /** Moves the clock by `n` steps (default 1). Negative, fractional and non-finite `n` are ignored. */
   step(n?: number): void;
@@ -36,7 +40,9 @@ export function createFixedClock(stepMs = 1000 / 60, start = 0): FixedClock {
     },
     now: () => origin + loose + ticks * stepMs,
     advance(ms) {
-      if (ms > 0 && Number.isFinite(ms)) loose += ms;
+      // The loop's own step is a whole step, so N fixed updates read exactly N × step.
+      if (ms === stepMs) ticks++;
+      else if (ms > 0 && Number.isFinite(ms)) loose += ms;
     },
     step(n = 1) {
       if (Number.isInteger(n) && n > 0) ticks += n;

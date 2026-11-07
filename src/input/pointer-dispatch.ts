@@ -76,6 +76,13 @@ export interface PointerDispatcherOptions {
    * router until it is released.
    */
   hoverWhileClaimed?: boolean;
+  /**
+   * The element whose box positions are measured against (ws/core-8): `PointerRecord.x`/`y`
+   * without a transform, touch zones and `Look`'s move zone. Default the target. A target that
+   * is not laid out (a replay sink outside the page) passes the element it stands in for, so a
+   * replayed touch stick lands where the recorded one did.
+   */
+  bounds?: Element;
 }
 
 function wallNow(): number {
@@ -113,6 +120,8 @@ export const POINTER_PRIORITY = {
 
 export interface PointerDispatcher {
   readonly target: HTMLElement;
+  /** The box positions are measured against: `PointerDispatcherOptions.bounds`, else the target's. */
+  bounds(): DOMRect;
   /** `PointerDispatcherOptions.hoverWhileClaimed`; may be changed at any time. */
   hoverWhileClaimed: boolean;
   /**
@@ -160,6 +169,7 @@ export function createPointerDispatcher(
 ): PointerDispatcher {
   const doc = target.ownerDocument;
   const win = doc.defaultView ?? window;
+  const boundsEl: Element = opts.bounds ?? target;
   let transform: PointerTransform | null = opts.transform ?? null;
   const entries: Entry[] = [];
   const claims = new Map<number, object>();
@@ -196,7 +206,7 @@ export function createPointerDispatcher(
       r.y = e.clientY;
       r.inside = transform(e.clientX, e.clientY) !== null;
     } else {
-      const b = target.getBoundingClientRect();
+      const b = boundsEl.getBoundingClientRect();
       r.x = e.clientX - b.left;
       r.y = e.clientY - b.top;
       r.inside = true;
@@ -259,6 +269,7 @@ export function createPointerDispatcher(
 
   return {
     target,
+    bounds: () => boundsEl.getBoundingClientRect(),
     hoverWhileClaimed: opts.hoverWhileClaimed ?? false,
     get replayAge() {
       return replayAge;

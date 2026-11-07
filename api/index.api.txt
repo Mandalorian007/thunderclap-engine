@@ -3,7 +3,9 @@
 
 ## CreateGameOptions  (type-only)
 interface CreateGameOptions<A extends string, S extends FlushableSave | null = null> {
-    root: HTMLElement;
+    root?: HTMLElement;
+    gpu?: GpuContext;
+    clock?: TickClock;
     title?: string;
     design?: {
         width: number;

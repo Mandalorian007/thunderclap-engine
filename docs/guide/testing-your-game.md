@@ -331,7 +331,7 @@ it('saves when the app is backgrounded and buzzes once', () => {
 });
 ```
 
-`host.runFrame()` runs the frames requested so far, one display frame per call, so a `GameLoop` built with `{ frames: host }` advances only when the test says. `createGame` itself does not run headless yet: it mounts a canvas and boots WebGPU, so test the game's own logic with these pieces and the page with the Playwright tests below.
+`host.runFrame()` runs the frames requested so far, one display frame per call, so a `GameLoop` built with `{ frames: host }` advances only when the test says. `createGame({ gpu, clock })` runs headless: given a GPU context and a clock it skips the canvas and WebGPU, and `createTestGame` in `./testing` wraps it with the fake GPU, a fake host and a fixed clock, so a whole game runs in a unit test ([testing README](../../src/testing/README.md)). Test the page itself with the Playwright tests below.
 
 ## Test rendering on the fake GPU
 

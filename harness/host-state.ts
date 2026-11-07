@@ -13,7 +13,7 @@ export interface HarnessHostState {
   /** Rendered frames (counted in `hooks.afterRender`). */
   frames: number;
   loopRunning: boolean;
-  /** `host.lifecycle.state()` now. */
+  /** `host.lifecycle.state` now. */
   lifecycle: 'active' | 'background';
   /** Every `hooks.lifecycle` call, in order. */
   lifecycleEvents: ('active' | 'background')[];

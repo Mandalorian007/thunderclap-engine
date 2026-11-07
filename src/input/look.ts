@@ -734,7 +734,7 @@ export class Look {
       }
       let inZone = false;
       if (this.moveZone !== 'none' && this.target) {
-        const r = this.target.getBoundingClientRect();
+        const r = this.dispatcher ? this.dispatcher.bounds() : this.target.getBoundingClientRect();
         const left = p.clientX < r.left + r.width / 2;
         inZone = this.moveZone === 'left' ? left : !left;
       }

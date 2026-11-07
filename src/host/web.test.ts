@@ -266,23 +266,23 @@ describe('web host lifecycle', () => {
     const win = fakeWin({ addEventListener: vi.fn(), removeEventListener: vi.fn() });
     const host = createWebHost({ win });
     const seen: string[] = [];
-    expect(host.lifecycle?.state()).toBe('active');
+    expect(host.lifecycle?.state).toBe('active');
     const off = host.lifecycle!.watch((s) => seen.push(s));
     setHidden(true);
     setHidden(true);
-    expect(host.lifecycle?.state()).toBe('background');
+    expect(host.lifecycle?.state).toBe('background');
     setHidden(false);
     expect(seen).toEqual(['background', 'active']);
     // freeze (Android) counts as paged out until resume, whatever visibilityState says.
     document.dispatchEvent(new Event('freeze'));
-    expect(host.lifecycle?.state()).toBe('background');
+    expect(host.lifecycle?.state).toBe('background');
     document.dispatchEvent(new Event('resume'));
     expect(seen).toEqual(['background', 'active', 'background', 'active']);
     // pagehide / pageshow go through the window.
     const add = win.addEventListener as unknown as ReturnType<typeof vi.fn>;
     expect(add.mock.calls.map((c) => c[0])).toEqual(['pagehide', 'pageshow']);
     (add.mock.calls[0]![1] as () => void)();
-    expect(host.lifecycle?.state()).toBe('background');
+    expect(host.lifecycle?.state).toBe('background');
     (add.mock.calls[1]![1] as () => void)();
     expect(seen).toEqual(['background', 'active', 'background', 'active', 'background', 'active']);
     off();
