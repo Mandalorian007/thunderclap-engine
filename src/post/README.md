@@ -260,7 +260,25 @@ feature against a reference stack with the feature off, read back from the GPU, 
   `quality.taa` off) or on `destroy()`, it calls `renderer.setJitter(null)` once, which clears
   the jitter and restarts the cycle. A hook someone else sets while TAA runs is left alone
   until TAA stops. Nothing in src/post calls `Camera.setJitter` (a test greps for it).
-  `addJitterCamera` / `removeJitterCamera` are deprecated no-ops.
+  `addJitterCamera` / `removeJitterCamera` are deprecated no-ops; no engine page calls them
+  since ws/post-7, and they go in the second release after 0.2.0-alpha.1.
+- **Hook ownership (ws/post-7).** The stack recognises its own hook, so a detached stack never
+  leaves the renderer jittering. The mechanism is a check at the next frame, made by the hook
+  itself: the hook only runs while it is installed, in `beginFrame`, so it is the stack's own
+  by construction, and it clears itself (`renderer.setJitter(null)`, zero jitter that frame)
+  when `renderer.post` is `null` (before that frame draws) or when the stack's TAA resolve did
+  not run during the last frame (a frame later: `renderer.post` is another processor). The
+  test is "did I resolve", not `renderer.post === this`, because pages wrap the stack in a
+  processor that forwards `encode` (`harness/post3`, `harness/post4`). It was chosen over an
+  `onDetach` the renderer calls because `renderer.post` is a plain field: a detach callback
+  needs a setter and a stored previous processor in src/render, more than one additive line,
+  while the hook check needs no renderer change. A module `WeakMap` records which stack set
+  each renderer's hook: a stack clears the hook (TAA off, `destroy()`, detached) only while it
+  is still its own, so swapping `renderer.post` from stack A to stack B and destroying A leaves
+  B's hook installed. A stack that thinks it is hooked but finds no owner (another stack took
+  the hook and has let go) sets its own again, so A attached again after B jitters again. Two
+  stacks resolving every frame (the post4 bilinear twin) do not fight: the last to start keeps
+  the hook. A hook a page set by hand is not tracked and is still cleared when TAA stops.
 - **History filter.** `TaaSettings.historyFilter: TaaHistoryFilter` (`'catmull-rom'` default,
   or `'bilinear'`). `'catmull-rom'` samples the history with a 5-tap Catmull-Rom (the two
   middle taps per axis folded into one bilinear tap, the corners dropped, normalised by the
