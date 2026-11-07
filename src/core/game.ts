@@ -4,8 +4,8 @@
  *
  * It blocks browser zoom, boots WebGPU on a letterboxed surface and builds, in this order:
  * renderer, post stack, particles, host, the game's save (if any), overlay and pad navigation,
- * audio (mixer persisted through the host), input with its gestures and pointer router, the scene
- * stack and the frame loop (frames come from the host). It also wires the page lifecycle (hide, pagehide
+ * audio (mixer persisted through the host), the game's tick clock, input with its gestures (on
+ * that clock) and pointer router, the scene stack and the frame loop (frames come from the host). It also wires the page lifecycle (hide, pagehide
  * and freeze stop frames and flush the save; show resumes) and device loss (the reload screen,
  * then loop, audio and captions halt for good).
  *
@@ -40,12 +40,15 @@ import {
 } from '../host';
 import {
   type Bindings,
+  createGestures,
   createInputPlayback,
   createInputRecorder,
   createPointerRouter,
+  createTickClock,
   type GamepadLike,
-  Gestures,
+  type Gestures,
   Input,
+  type InputClock,
   type InputRecording,
   type MagnifyOptions,
   type PointerRouter,
@@ -266,6 +269,14 @@ export interface EngineCtx<
   readonly particles: ParticleSystem;
   readonly input: Input<A>;
   /**
+   * The game's tick clock (ws/core-4), in ms: it moves by the fixed step before each fixed
+   * update (by the frame delta with `sim: false`) and stands still while `loop.paused` is set
+   * or the loop is stopped. `ctx.gestures` reads it, so long-press and double-tap run on game
+   * time and a recording replays them on the same ticks. Gestures or a `Look` the game builds
+   * itself take it as `{ clock: ctx.clock }`.
+   */
+  readonly clock: InputClock;
+  /**
    * Tap, double tap, long-press, pan, drag and pinch, linked to `input` (shared block and
    * transform, advanced in `input.update()`), so `{ gesture }` bindings work out of the box.
    * Read a gesture's position here (`gestures.tap`) when an action fires.
@@ -362,7 +373,10 @@ export async function createGame<
   const extraBlock = opts.input.blocked;
   // Gestures and pointer rays link to the input: same block, same transform, same attach,
   // advanced in `input.update()`. The rays go through whatever camera the renderer draws with.
-  const gestures = new Gestures({ magnify: opts.input.magnify });
+  // The gestures run on the game's tick clock (advanced by the loop below), so their timers
+  // are game time and a replay lands them on the same ticks.
+  const clock = createTickClock();
+  const gestures = createGestures({ magnify: opts.input.magnify, clock });
   const pointers = createPointerRouter({ camera: () => renderer.camera });
   const input = new Input<A>(opts.input.bindings, {
     blocked: extraBlock ? () => ui.stack.hasModal || extraBlock() : () => ui.stack.hasModal,
@@ -375,7 +389,15 @@ export async function createGame<
   // A replay feeds the input itself: no DOM listeners, so a real key never leaks in (E-011).
   const playback = opts.input.replay ? createInputPlayback(input, opts.input.replay) : null;
   if (opts.input.record) createInputRecorder(input);
-  if (!playback) input.attach({ pointerTarget: surface.canvas });
+  if (playback) {
+    // The recorded pointers are dispatched through a pointer target nothing real can reach (an
+    // element outside the page that keys are read from too), so the gestures, rays and any look
+    // see them on their recorded ticks and never a real pointer or key.
+    const sink = surface.root.ownerDocument.createElement('div');
+    input.attach({ pointerTarget: sink, keyTarget: sink });
+  } else {
+    input.attach({ pointerTarget: surface.canvas });
+  }
   input.setPointerTransform((x, y) => surface.clientToLogical(x, y));
 
   // ── Scenes + loop ──────────────────────────────────────────────────────
@@ -392,7 +414,11 @@ export async function createGame<
   const loop = new GameLoop(
     {
       update: (dt: number) => {
+        // A replay feeds this tick's events first: live, they arrived between the frames, while
+        // the clock still read the last tick. Then the clock moves by the step, before the
+        // input (and its gestures) update.
         playback?.step();
+        clock.advance(dt * 1000);
         input.update();
         padNav.update();
         audio.update(dt);
@@ -570,6 +596,7 @@ export async function createGame<
     post,
     particles,
     input,
+    clock,
     gestures,
     pointers,
     padNav,

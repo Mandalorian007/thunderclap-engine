@@ -53,7 +53,29 @@ JSON; `serializeRecording` in `@thunderclap/engine/input`). `createGame({ input:
 runs from a recording instead: the input is not attached to the canvas or the window, and before
 each fixed step `ctx.input.playback.step()` feeds that tick's keys, buttons, pointer, wheel and
 pads, so an identical game sees identical `pressed`/`held`/`value` per tick. Once the recording is
-done the input holds its last state. Both options keep the rest of the pipeline untouched.
+done the input holds its last state. A replay attaches the input to an element outside the page
+(keys are read from it too), so the recorded pointers (the recording's `ptr` lane) reach
+`ctx.gestures` and `ctx.pointers` while no real pointer or key can (ws/core-4). Both options keep the rest of the pipeline untouched.
+
+## createGame: the tick clock
+
+`ctx.clock` (an `InputClock` from `@thunderclap/engine/input`, ms, starting at 0) is the game's
+tick clock (ws/core-4). The loop advances it by the fixed step before each fixed update (before
+the replay feed and `input.update()`; with `sim: false`, by the frame delta once per frame), so
+N fixed steps move `ctx.clock.now()` by exactly N × step, and a paused (`loop.paused`), stopped
+or halted loop does not move it. `ctx.gestures` runs on it, so long-press and double-tap
+windows are game time, and a recording made under `createGame` replays its long-presses on the
+same tick whatever the wall time between ticks.
+
+Gestures or a `Look` the game builds itself take the same clock, so both share one time base:
+
+```ts
+const look = createLook({ clock: ctx.clock });       // or new Look({ clock: ctx.clock })
+const extra = createGestures({ clock: ctx.clock });  // a second recogniser, if any
+```
+
+`InputPlayback.speed` above 1 feeds the extra ticks inside one step without advancing the clock
+(see the input README *Clock*); fast-forward a `createGame` replay by ticking the loop instead.
 
 ## Scenes
 
@@ -93,6 +115,11 @@ done the input holds its last state. Both options keep the rest of the pipeline 
   the parent has been drawn), so `world.fork('loot')` stays the same when another system draws
   more. `key` is the stream's 32-bit seed key; `state` reads and writes the four state words (a
   copy) for saves and replays.
+- `seedKey(seed: Seed): number`: the 32-bit key a seed turns into (an integer number seed `>>> 0`,
+  anything else FNV-1a over its UTF-8 bytes), the same key `createRandom(seed).key` holds and
+  `hash2` / `hash3` start from. A game derives its own stable hashes from the engine's seed with
+  it (`seedKey('level-3') ^ id`) instead of re-implementing FNV-1a. Allocation-free; its values
+  are pinned by the FNV-1a reference tests and do not change.
 
 ## Hash
 

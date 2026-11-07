@@ -449,6 +449,130 @@ describe('createGame', () => {
   });
 });
 
+describe('createGame: tick clock (ws/core-4)', () => {
+  it('N fixed steps advance ctx.clock by exactly N × step; the gestures read it', async () => {
+    const ctx = await createGame({ ...options([]), sim: { step: 1 / 64 } });
+    if (!ctx) throw new Error('no ctx');
+    expect(ctx.gestures.clock).toBe(ctx.clock);
+    expect(ctx.clock.now()).toBe(0);
+    for (let i = 0; i < 37; i++) ctx.loop.tickOnce(1 / 64);
+    expect(ctx.loop.time.tick).toBe(37);
+    expect(ctx.clock.now()).toBe(37 * 15.625);
+    // One frame of three steps advances three steps' worth.
+    ctx.loop.tickOnce(3 / 64);
+    expect(ctx.clock.now()).toBe(40 * 15.625);
+  });
+
+  it('the default 1/60 step advances the clock by the step per fixed update', async () => {
+    const ctx = await createGame(options([]));
+    if (!ctx) throw new Error('no ctx');
+    const seen: number[] = [];
+    ctx.hooks.update = () => seen.push(ctx.clock.now());
+    for (let i = 0; i < 60; i++) ctx.loop.tickOnce(1 / 60);
+    expect(seen.length).toBe(60);
+    expect(seen[0]).toBeCloseTo(1000 / 60, 9);
+    expect(ctx.clock.now()).toBeCloseTo(1000, 6);
+  });
+
+  it('a paused loop advances the clock by 0', async () => {
+    const ctx = await createGame(options([]));
+    if (!ctx) throw new Error('no ctx');
+    ctx.loop.tickOnce(1 / 60);
+    const before = ctx.clock.now();
+    ctx.loop.paused = true;
+    for (let i = 0; i < 10; i++) ctx.loop.tickOnce(1 / 60);
+    expect(ctx.clock.now()).toBe(before);
+    ctx.loop.paused = false;
+    ctx.loop.tickOnce(1 / 60);
+    expect(ctx.clock.now()).toBeCloseTo(before + 1000 / 60, 9);
+  });
+
+  it('sim: false advances the clock by the frame delta', async () => {
+    const ctx = await createGame({ ...options([]), sim: false });
+    if (!ctx) throw new Error('no ctx');
+    ctx.loop.tickOnce(0.03125);
+    ctx.loop.tickOnce(0.0078125);
+    expect(ctx.clock.now()).toBe(31.25 + 7.8125);
+  });
+
+  it('a long-press recorded under createGame replays on the same tick at another wall spacing', async () => {
+    // Speed 1 only: `InputPlayback.speed` > 1 does not advance a tick clock until ws/input-9.
+    // A 1/64 s step keeps the clock's sums exact. The playback anchors the first replayed
+    // event at the tick it is fed, dropping its live age (2 ms here), so a long-press whose
+    // threshold falls within that age of a tick boundary can still move by one tick.
+    let wall = 1000;
+    vi.spyOn(performance, 'now').mockImplementation(() => wall);
+    try {
+      /** Tick indices where each gesture fired, on a game ticked at `spacing` wall ms. */
+      const watch = (ctx: NonNullable<Awaited<ReturnType<typeof createGame>>>) => {
+        let tick = 0;
+        const fired: string[] = [];
+        ctx.gestures.onGesture((kind, phase) => fired.push(`${kind}:${phase}@${tick}`));
+        ctx.hooks.update = () => tick++;
+        return fired;
+      };
+      const recorded = await createGame({
+        ...options([]),
+        sim: { step: 1 / 64 },
+        input: { ...options([]).input, record: true },
+      });
+      if (!recorded) throw new Error('no ctx');
+      const live = watch(recorded);
+      const canvas = recorded.surface.canvas;
+      const ev = (type: string, buttons: number) => {
+        const e = new PointerEvent(type, {
+          pointerId: 3,
+          pointerType: 'touch',
+          clientX: 200,
+          clientY: 150,
+          isPrimary: true,
+          button: 0,
+          buttons,
+          bubbles: true,
+        });
+        Object.defineProperty(e, 'timeStamp', { value: wall - 2 });
+        canvas.dispatchEvent(e);
+      };
+      const tick = (spacing: number, ctx: typeof recorded) => {
+        wall += spacing;
+        ctx.loop.tickOnce(1 / 64);
+      };
+      tick(16, recorded);
+      ev('pointerdown', 1);
+      // Held for 40 ticks (625 ms of game time) at 16 ms of wall time per tick.
+      for (let i = 0; i < 40; i++) tick(16, recorded);
+      ev('pointerup', 0);
+      tick(16, recorded);
+      tick(16, recorded);
+      const recording = recorded.input.recorder?.stop();
+      if (!recording) throw new Error('no recording');
+      const longs = live.filter((g) => g.startsWith('longPress'));
+      expect(longs.length).toBe(1);
+      expect(live.some((g) => g.startsWith('tap'))).toBe(false);
+
+      // Replay with 50 ms of wall time between ticks: the long-press lands on the same tick.
+      document.body.innerHTML = '<main id="root"></main>';
+      wall = 90_000;
+      const ctx = await createGame({
+        ...options([]),
+        sim: { step: 1 / 64 },
+        input: { ...options([]).input, replay: recording },
+      });
+      if (!ctx) throw new Error('no ctx');
+      const again = watch(ctx);
+      // A real pointer on the canvas never reaches the replayed gestures.
+      ctx.surface.canvas.dispatchEvent(
+        new PointerEvent('pointerdown', { pointerId: 9, pointerType: 'touch', bubbles: true }),
+      );
+      for (let i = 0; i < 50 && !ctx.input.playback?.done; i++) tick(50, ctx);
+      expect(again.filter((g) => g.startsWith('longPress'))).toEqual(longs);
+      expect(again).toEqual(live);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+});
+
 describe('createGame: xr', () => {
   it('ctx.xr.supported() is false without WebXR or the binding, and enter() rejects', async () => {
     const ctx = await createGame(options([]));
