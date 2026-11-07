@@ -27,6 +27,14 @@ export interface HarnessPost4State {
   /** `PostStack.wantsJitter` and the `PostInputs.view.jitter` of the last frame (target px). */
   wantsJitter: boolean;
   jitter: [number, number];
+  /**
+   * `?taa` (E-035): the largest |x| and |y| of `jitter` over the frames drawn in the `converge`
+   * phase, and in the `subpixel` phase. Latched, so a read after the page has moved on (to the
+   * object phases' unjittered frames, or past a hook hand-over frame) still sees what that phase
+   * drew with; `jitter` itself is only the last frame's.
+   */
+  jitterConverge: [number, number];
+  jitterSubpixel: [number, number];
   /** `taaActive` / `ssrActive` / `motionBlurActive` of the measured stack, last frame. */
   active: boolean;
   /**
