@@ -42,17 +42,6 @@ export interface Landmark {
   readonly height: number;
 }
 
-/**
- * A 32-bit integer hash of two coordinates and a seed, mixed to a float in 0..1. A per-point roll
- * (the block textures' speckle), not noise: the terrain's noise is `createNoise` below.
- */
-export function hash2(x: number, z: number, seed: number): number {
-  let h = (x | 0) * 374761393 + (z | 0) * 668265263 + (seed | 0) * 2147483647;
-  h = Math.imul(h ^ (h >>> 13), 1274126177);
-  h ^= h >>> 16;
-  return (h >>> 0) / 4294967296;
-}
-
 /** The noise for one seed, built once: `sampleHeight` runs per column. */
 let noiseSeed = 0;
 let noise: Noise | null = null;

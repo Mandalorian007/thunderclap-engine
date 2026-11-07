@@ -1,7 +1,7 @@
 # engine/core
 
 The game loop, the scene stack (with async preload), a typed event emitter, 4×4 matrix helpers and
-the deterministic game utilities: seeded random, noise, a scheduler and pools. `createGame`
+the deterministic game utilities: seeded random, positional hashing, noise, a scheduler and pools. `createGame`
 (root `@thunderclap/engine`) wires these together; a game reaches for this subpath when it needs
 one of them on its own (a tool, a test, a second loop).
 
@@ -94,6 +94,20 @@ done the input holds its last state. Both options keep the rest of the pipeline 
   more. `key` is the stream's 32-bit seed key; `state` reads and writes the four state words (a
   copy) for saves and replays.
 
+## Hash
+
+- `hash2(seed, x, z)` and `hash3(seed, x, y, z)`: a uint32 per lattice cell; `hash2f` and
+  `hash3f` are the same value as a float in [0, 1) (`hash * 2^-32`). For a roll per point (a tree
+  in this column, a speckle on this texel), where `Noise` would give a field between points and
+  `Random` a sequence. `seed` is a `Seed` hashed exactly as `createRandom` hashes it, so `hash2('level-3', x, z)` is stable across engines; a string seed is rehashed per call, so a
+  hot loop passes a number. Each coordinate is truncated toward zero to an
+  int32 (`x | 0`): floor first when the cell is `Math.floor(x)`. The key (tagged per dimension)
+  and then each coordinate are folded in with the lowbias32 finaliser, so neighbouring cells do
+  not correlate (tested: mean and lag-1 correlation over a 256×256 grid) and `hash3(s, x, 0, z)`
+  is unrelated to `hash2(s, x, z)`. Pure 32-bit integer arithmetic; nothing allocates.
+- `Noise` keeps its own lattice hash, the seeded 256-entry permutation table: it is a lookup with
+  period 256 that the noise goldens pin, so it is not re-expressed on `hash2` / `hash3`.
+
 ## Noise
 
 - `createNoise(seed)`: a `Noise` with `perlin2`, `perlin3` (improved Perlin), `simplex2`,
@@ -141,4 +155,4 @@ done the input holds its last state. Both options keep the rest of the pipeline 
   looking down -z; clip depth 0..1.
 
 Tests: `loop.test.ts`, `scene.test.ts`, `math.test.ts`, `game.test.ts`, `random.test.ts`,
-`noise.test.ts`, `timer.test.ts`, `pool.test.ts`; e2e/core2.spec.ts drives harness/core2.html.
+`hash.test.ts`, `noise.test.ts`, `timer.test.ts`, `pool.test.ts`; e2e/core2.spec.ts drives harness/core2.html.

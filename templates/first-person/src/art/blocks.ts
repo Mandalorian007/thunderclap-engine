@@ -4,8 +4,9 @@
  * have something to blend. `loadTextureArray` uploads them as one `texture_2d_array`; the
  * mesher writes each face's layer into the vertex colour's alpha.
  */
+import { hash2f } from '@thunderclap/engine/core';
 import type { PixelSource } from '@thunderclap/engine/render';
-import { hash2, LAYER_COUNT } from '../world/terrain';
+import { LAYER_COUNT } from '../world/terrain';
 
 export const BLOCK_TEXELS = 16;
 
@@ -24,7 +25,7 @@ export function blockLayers(): PixelSource[] {
     for (let y = 0; y < n; y++) {
       for (let x = 0; x < n; x++) {
         const rim = x === 0 || y === 0 || x === n - 1 || y === n - 1;
-        const k = rim ? 0.8 : 0.86 + 0.14 * hash2(x, y, layer + 101);
+        const k = rim ? 0.8 : 0.86 + 0.14 * hash2f(layer + 101, x, y);
         const o = (y * n + x) * 4;
         data[o] = rgb[0] * k;
         data[o + 1] = rgb[1] * k;
