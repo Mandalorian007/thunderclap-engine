@@ -182,7 +182,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | v1 templates and demos: no deprecated names (lint), third-person on `skinPose`, template READMEs and tests | ws/templates-v1 | brief `docs/briefs/templates-v1.md` | after train 15 | ✅ merged in E-031 train 16 (`01705a7`; main df400c4) |
 | 5 | Headless `createGame` (`gpu`, `clock`, `host`); touch replay sink; `HostLifecycle.state` getter; WorldPanel keyed on aux | ws/core-8 | brief `docs/briefs/core-8.md` | train 16 | ✅ merged in E-031 train 16 (`327aacc`; main df400c4) |
 | 5 | v1 internal migration: no deprecated names in `src`, harness, e2e or packages; check wired into `pnpm check` | ws/src-v1 | brief `docs/briefs/src-v1.md` | after train 16 | ✅ merged in E-031 train 17 (`5b11204`; main 7c57746) |
-| 5 | **engine-v1.0.0 cut**: remove every deprecated alias, freeze `api/` (diff needs a CHANGELOG line), version 1.0.0; tag left to the user | ws/v1-cut | brief `docs/briefs/v1-cut.md` | after train 17 | 🟣 done at `75ffe99` (73 aliases removed; `api/` frozen with a CHANGELOG-gated diff rule; version 1.0.0; full e2e 2801/0). Train 18, alone; **tag waits on the user** |
+| 5 | **engine-v1.0.0 cut**: remove every deprecated alias, freeze `api/` (diff needs a CHANGELOG line), version 1.0.0; tag left to the user | ws/v1-cut | brief `docs/briefs/v1-cut.md` | after train 17 | ✅ merged in E-031 train 18 (`75ffe99`; main 6418f5e). **engine 1.0.0 in tree; tag waits on the user** |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
@@ -485,6 +485,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - ws/v1-cut notes:
   - **Freeze baseline.** It is the `v<version>` tag (release.mjs tags `v1.0.0`) or, failing that, the commit that set the version. **Waiting on the user** to tag.
   - **The Last Rune.** Its engine copy (D-051) still has the aliases. Port the removals at its next hand-sync, using `docs/guide/migrating-to-v1.md`.
+- E-031 train 18 landed at 6418f5e: v1-cut alone. The matrix ran 2801 passed, 209 skipped, 0 failed. `package.json` is 1.0.0, `api/` is frozen, and the freeze rule passes on the merge (baseline 75ffe99 until a tag exists). README count: 2399 tests in 219 files. **E-036 v1 gate met.**
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.

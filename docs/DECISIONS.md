@@ -213,5 +213,5 @@ ws/harden-api added `api/*.api.txt` and `check:api`, and audited the surface. Ru
 
   Validators are named `validate<Thing>`.
 - **Duplicates.** One spelling survives and the other is deprecated: `Renderer.white` gives way to `defaultTextures.white`, `mipFilter` to `filter`, and the assets skin offsets to render's.
-- **v1 gate.** `engine-v1.0.0` ships when the deprecated aliases are removed and `api/` is frozen. After that, an `api/` diff in a branch needs a CHANGELOG *Breaking* or *Added* line.
+- **v1 gate** (met 2026-11-07 at 6418f5e, train 18; tagging is the user's call). `engine-v1.0.0` ships when the deprecated aliases are removed and `api/` is frozen. After that, an `api/` diff in a branch needs a CHANGELOG *Breaking* or *Added* line.
 
