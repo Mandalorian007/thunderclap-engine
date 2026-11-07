@@ -54,6 +54,18 @@ describe('PostStack through renderer.resolve', () => {
     expect(fake.errors).toEqual([]);
   });
 
+  it('the screen path writes each pass’s uniforms directly; no staging ring (ws/render-12)', () => {
+    const { fake, r } = setup();
+    for (let i = 0; i < 3; i++) {
+      r.beginFrame(i / 60, 1 / 60);
+      r.endFrame();
+    }
+    expect(fake.buffers.some((b) => b.label === 'post-eye-uniforms')).toBe(false);
+    expect(fake.bufferCopies.filter((c) => c.dst.label?.startsWith('pass:post-'))).toEqual([]);
+    expect(fake.writes.some((w) => w.buffer.label === 'pass:post-composite-uniforms')).toBe(true);
+    expect(fake.errors).toEqual([]);
+  });
+
   it('runs once per eye into the layer at the eye viewport, loading the rest', () => {
     const { fake, r, post } = setup();
     post.set({ godRays: { enabled: true } });

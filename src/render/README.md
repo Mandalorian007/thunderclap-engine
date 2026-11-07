@@ -1082,8 +1082,14 @@ rough-metal, bit 1 velocity) keys the pipeline variants.
 - XR eye targets (`XrSurface`) take the aux set from `XrSurfaceOptions.aux` (ws/render-11);
   `createGame({ aux, xr })` passes its own, so each eye's scene pass has the same attachments
   as `renderer.target` and every pipeline above matches it. In scene mode (`scene: true`, what
-  `createGame` uses) the aux attachments sit on the surface's HDR `scene` target and post reads
-  them; the eye layer targets the post output lands in stay without aux. In direct mode each
+  `createGame` uses) the aux attachments sit on the surface's HDR `scene` target, which every
+  eye renders into and resolves at once (`render(eye0) → resolve → render(eye1) → resolve`, one
+  encoder), so each eye's resolve hands post that eye's own aux: `PostInputs.velocity` holds what
+  the eye's scene pass just wrote, and the stack's uniform block (reprojection, jitter, ray
+  source) is that eye's too (ws/render-12: staged per eye and copied on the encoder; see the
+  post README *XR*). Object motion blur in XR therefore smears each eye by its own velocity. The
+  eye layer targets the post output lands in stay without aux: no pass writes them in scene
+  mode, so attachments there would cost two eye-sized sets nothing fills. In direct mode each
   eye's `SceneTarget.external` gets the aux textures at the eye's size (half the layer, or one
   per array layer). Each eye camera keeps its own `previousViewProj` (history is recorded per
   `renderer.render`), so the motion of a fragment is measured against that eye's last frame,

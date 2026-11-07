@@ -66,6 +66,11 @@ interface InputGroups {
 
 /** The jitter a detached stack's hook returns on the frame it clears itself (ws/post-7). */
 const NO_JITTER: readonly [number, number] = [0, 0];
+/**
+ * Uniform staging slots for encodes with a viewport (ws/render-12): XR eyes resolved in one
+ * submit, each reading its own. Four covers a headset's two eyes and a quad-view layout.
+ */
+const EYE_UNIFORM_SLOTS = 4;
 
 /**
  * The painterly post stack: bloom (mip chain), floor mist, god rays, ACES tonemap, colour
@@ -103,6 +108,16 @@ export class PostStack implements PostProcessor {
 
   private readonly renderer: Renderer;
   private readonly uniforms = new Float32Array(POST_UNIFORM_FLOATS);
+  /**
+   * XR eyes (ws/render-12): every eye resolves on the frame's one encoder, so a `writeBuffer`
+   * per eye would leave each pass reading the last eye's uniforms at submit. An encode with a
+   * `viewport` writes its block into its own slot of this staging ring and copies it into each
+   * pass's buffer on the encoder, just before the pass. Made on the first such encode.
+   */
+  private eyeUniforms: GPUBuffer | null = null;
+  /** The staging slot of the encode under way, or -1: write the passes' buffers directly. */
+  private eyeSlot = -1;
+  private eyeNext = 0;
   private readonly prefilter: FullscreenPass;
   private readonly down: FullscreenPass;
   private readonly up: FullscreenPass;
@@ -622,18 +637,19 @@ export class PostStack implements PostProcessor {
       fs,
       this.raySource(s, view, r.logicalWidth, r.logicalHeight),
     );
+    this.beginUploads(viewport);
     const needBloomChain = s.bloom.enabled || (s.godRays.enabled && s.godRays.bloomSource > 0);
-    this.composite.setUniforms(this.uniforms);
+    this.upload(encoder, this.composite.bindings!.uniformBuffer!, this.composite);
     // GPU timing labels (undefined unless this frame is sampled; see Renderer.gpuTimer).
     const timer = r.gpuTimer;
 
     if (wantOutline && depthInfo) {
-      this.outline.setUniforms(this.uniforms);
+      this.upload(encoder, this.outline.uniformBuffer, this.outline);
       this.outline.encode(encoder, this.outlineView!, this.outlineGroup!, timer?.pass('outline'));
     }
     if (wantAo && depthInfo) {
-      this.ao.setUniforms(this.uniforms);
-      this.aoBlur.setUniforms(this.uniforms);
+      this.upload(encoder, this.ao.uniformBuffer, this.ao);
+      this.upload(encoder, this.aoBlur.uniformBuffer, this.aoBlur);
       this.ao.encode(encoder, this.aoView!, this.aoGroup!, timer?.pass('ao'));
       this.aoBlur.encode(encoder, this.aoBlurView!, this.aoBlurGroup!, timer?.pass('ao'));
     }
@@ -648,7 +664,7 @@ export class PostStack implements PostProcessor {
       const read = this.histIndex;
       const write = 1 - read;
       const group = this.taaGroup(raw, depthView, read);
-      this.taaPass.setUniforms(this.uniforms);
+      this.upload(encoder, this.taaPass.uniformBuffer, this.taaPass);
       this.taaExtra[0] = this.histAuxViews![write]!;
       this.taaPass.encode(
         encoder,
@@ -666,14 +682,14 @@ export class PostStack implements PostProcessor {
     this.motionBlurOn = wantMotionBlur && depthInfo !== null;
     if (this.motionBlurOn && depthView) {
       const group = this.motionBlurGroup(scene, depthView);
-      this.motionBlurPass.setUniforms(this.uniforms);
+      this.upload(encoder, this.motionBlurPass.uniformBuffer, this.motionBlurPass);
       this.motionBlurPass.encode(encoder, this.motionBlurView!, group, timer?.pass('motion-blur'));
       scene = this.motionBlurView!;
     }
     const groups = this.groupsFor(scene);
 
     if (wantDof && depthInfo && depthView) {
-      this.dof.setUniforms(this.uniforms);
+      this.upload(encoder, this.dof.uniformBuffer, this.dof);
       this.dof.encode(
         encoder,
         this.dofView!,
@@ -683,7 +699,7 @@ export class PostStack implements PostProcessor {
     }
     this.ssrOn = wantSsr && depthInfo !== null;
     if (this.ssrOn && depthView) {
-      this.ssrPass.setUniforms(this.uniforms);
+      this.upload(encoder, this.ssrPass.uniformBuffer, this.ssrPass);
       this.ssrPass.encode(
         encoder,
         this.ssrView!,
@@ -703,7 +719,7 @@ export class PostStack implements PostProcessor {
     }
 
     if (needBloomChain) {
-      this.prefilter.setUniforms(this.uniforms);
+      this.upload(encoder, this.prefilter.bindings!.uniformBuffer!, this.prefilter);
       this.prefilter.encode(encoder, this.mipViews[0]!, {
         bindGroup: this.prefilterGroup(groups, scene),
         timestampWrites: timer?.pass('bloom'),
@@ -730,7 +746,7 @@ export class PostStack implements PostProcessor {
     // When the chain is skipped, mip 0 is stale or zero; composite/rays ignore it then.
 
     if (s.godRays.enabled) {
-      this.rays.setUniforms(this.uniforms);
+      this.upload(encoder, this.rays.bindings!.uniformBuffer!, this.rays);
       this.rays.encode(encoder, this.raysView!, {
         bindGroup: this.raysGroup!,
         timestampWrites: timer?.pass('rays'),
@@ -765,7 +781,7 @@ export class PostStack implements PostProcessor {
       });
     }
     if (wantFxaa) {
-      this.fxaa.setUniforms(this.uniforms);
+      this.upload(encoder, this.fxaa.bindings!.uniformBuffer!, this.fxaa);
       this.fxaa.encode(encoder, output, {
         bindGroup: this.fxaaGroup!,
         clear,
@@ -773,6 +789,52 @@ export class PostStack implements PostProcessor {
         timestampWrites: timer?.pass('fxaa'),
       });
     }
+  }
+
+  /**
+   * Pick how this encode's uniform block reaches the passes (ws/render-12). Without a viewport
+   * (the screen, one encode per submit) each pass's buffer is written directly, as before.
+   * With one (an XR eye; the eyes share a submit) the block goes into the next slot of a ring of
+   * `EYE_UNIFORM_SLOTS` and `upload` copies it on the encoder, so each eye's passes read that
+   * eye's reprojection, jitter and ray source. No allocation after the first eye.
+   */
+  private beginUploads(viewport: SceneTargetViewport | undefined): void {
+    if (!viewport) {
+      this.eyeSlot = -1;
+      return;
+    }
+    const bytes = this.uniforms.byteLength;
+    if (!this.eyeUniforms) {
+      this.eyeUniforms = this.renderer.device.createBuffer({
+        label: 'post-eye-uniforms',
+        size: bytes * EYE_UNIFORM_SLOTS,
+        usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+      });
+    }
+    this.eyeSlot = this.eyeNext;
+    this.eyeNext = (this.eyeNext + 1) % EYE_UNIFORM_SLOTS;
+    const u = this.uniforms;
+    this.renderer.device.queue.writeBuffer(
+      this.eyeUniforms,
+      this.eyeSlot * bytes,
+      u.buffer,
+      u.byteOffset,
+      bytes,
+    );
+  }
+
+  /** This encode's uniform block into `buffer` (the pass's): see `beginUploads`. */
+  private upload(
+    encoder: GPUCommandEncoder,
+    buffer: GPUBuffer,
+    pass: { setUniforms(data: Float32Array<ArrayBuffer>): void },
+  ): void {
+    if (this.eyeSlot < 0 || !this.eyeUniforms) {
+      pass.setUniforms(this.uniforms);
+      return;
+    }
+    const bytes = this.uniforms.byteLength;
+    encoder.copyBufferToBuffer(this.eyeUniforms, this.eyeSlot * bytes, buffer, 0, bytes);
   }
 
   /**
@@ -1147,6 +1209,8 @@ export class PostStack implements PostProcessor {
     this.prefilter.destroy();
     this.rays.destroy();
     this.composite.destroy();
+    this.eyeUniforms?.destroy();
+    this.eyeUniforms = null;
     this.freeLdr();
     this.upscale.destroy();
   }

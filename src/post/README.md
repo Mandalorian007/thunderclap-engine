@@ -382,14 +382,26 @@ texture; `renderer.endFrame({ present: false })` then only submits. Inside `enco
   to it and loads the rest of the output instead of clearing, so the second eye keeps the first;
   `compositeAtScene` compares the scene size with the viewport, not the canvas.
 - Both eyes share the bloom chain and ray textures (the passes run one eye after the other on
-  one encoder), so VR costs no extra HDR allocation. Settings and blends apply to both eyes;
+  one encoder), so VR costs no extra HDR allocation.
+- Each eye reads its own uniform block (ws/render-12). A `writeBuffer` lands before the whole
+  submit, so one per eye would leave every eye's passes reading the last eye's reprojection,
+  jitter and ray source. An encode with a `viewport` instead writes its block into the next slot
+  of a four-slot staging ring (`post-eye-uniforms`, made on the first eye) and copies it into
+  each pass's uniform buffer on the encoder just before the pass. The screen path (no
+  `viewport`) still writes the passes' buffers directly. Aux reads are per eye already: the
+  eye's resolve follows its scene pass, so `inputs.velocity` and `inputs.roughMetal` hold that
+  eye's values (`src/platform/xr-scene-aux.test.ts`: each eye's object motion blur binds the
+  scene velocity right after that eye's scene pass and sees that eye's block at submit). Settings and blends apply to both eyes;
   `godRays.x/y` stay in logical px of the design space.
 - Output is encoded to sRGB as on screen, so the layer is made in the swap-chain format
   (`XrSurfaceOptions.colorFormat = renderer.format`).
 - `postQualityFor('xr')` keeps TAA, SSR and motion blur off (ws/post-3): the stack composites
   one eye at a time through a single history pair and one previous view-projection, so a TAA
   resolve or a velocity would mix the left eye's last frame into the right eye; per-eye
-  histories are the step that lifts the cap. Auto exposure runs per eye on the same readback.
+  histories are the step that lifts the TAA cap. Motion blur keeps no history, and since
+  ws/render-12 each eye's pass reads its own velocity and reprojection, so a game may turn it on
+  in XR (`post.setQuality({ ...postQualityFor('xr'), motionBlur: true })`); the tier default is
+  unchanged. Auto exposure runs per eye on the same readback.
 
 ## Types
 
