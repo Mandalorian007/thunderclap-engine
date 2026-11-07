@@ -59,7 +59,7 @@ post.finishBlend(); // jump to the end values
 | Outline (ws/post-2) | scene res, over the scene depth | `outline.thickness` (px), `depthThreshold`, `normalThreshold`. A Roberts cross over linear depth and normals-from-depth written as an edge mask the composite mixes toward `outline.color` × `intensity` before fog. Off by default; off with a one-time warning when the frame has no depth. |
 | AO (ws/post-depth) | half res, over the scene depth | `ao.radius` (world units), `intensity`, `bias`, `power`. Normals from depth derivatives; 12 (`aoSamples`) spiral samples rotated per pixel by interleaved-gradient noise. Under an ortho projection the screen radius drops the depth divide (`aoProjectedRadius`, ws/post-4), so it holds across zoom and distance. Off by default. |
 | AO blur | half res | 4×4 depth-aware blur of the AO term. |
-| TAA (ws/post-3) | scene res, over the scene depth, into an `rgba16float` history pair | `taa.feedback` 0.9, `sharpen` 0.2, `clampMode` `aabb` \| `variance`. Reprojects last frame's resolve by the previous view-projection against the current depth, clamps it to the 3×3 neighbourhood, blends. Since ws/post-4 the camera's projection carries the frame's Halton (2, 3) jitter (`wantsJitter`) and the reprojection comes from `PostInputs.view`; the resolve un-jitters by `view.jitter`. The resolve replaces the scene colour downstream. Off by default; needs depth. |
+| TAA (ws/post-3) | scene res, over the scene depth, into an `rgba16float` history pair | `taa.feedback` 0.9, `sharpen` 0.2, `clampMode` `aabb` \| `variance`. Reprojects last frame's resolve by the previous view-projection against the current depth, clamps it to the 3×3 neighbourhood, blends. Since ws/post-4 the camera's projection carries the frame's Halton (2, 3) jitter (`wantsJitter`) and the reprojection comes from `PostInputs.view`; the resolve un-jitters by `view.jitter`. Since ws/post-5, with a velocity target and `taa.reprojection` `'velocity'` (the default) each pixel finds its history at `uv - velocity` (the nearest depth's in its 3×3; the camera matrix where nothing wrote one) and drops it where last frame's depth or velocity there disagree (`depthReject` 0.1 of the depth, `velocityReject` 2 px), from an `rgba16float` aux pair the resolve writes beside its history; `'camera'`, or no target, is the ws/post-4 path. The resolve replaces the scene colour downstream. Off by default; needs depth. |
 | Motion blur (ws/post-3) | scene res, over the scene depth | `motionBlur.mode` `'object'` \| `'camera'`, `intensity`, `maxSamples` 8. Per-pixel velocity from the velocity target in `'object'` mode (ws/post-4: moving instances blur under a still camera), else, and where nothing wrote one, the depth reprojected by the previous view-projection; the colour gathered along it. Off by default; needs depth. |
 | DoF (ws/post-depth) | half res, over the scene depth and colour | `dof.focusDistance`, `focusRange` (world units), `maxBlur` (px at output res), `nearBlur`. Circle of confusion from linear depth; 24 (`dofTaps`) golden-angle disc taps weighted by each tap's own CoC. Off by default. |
 | SSR (ws/post-3) | half res, over the scene depth and colour | `ssr.maxSteps` 32, `thickness`, `maxDistance`, `roughnessCutoff` 0.6, `intensity`, `fadeEdges`. A view-space ray march from normals-from-depth (the AO helper), faded by roughness (per surface from the rough-metal target since ws/post-4, else a mirror) and at the screen edges, weighted by metalness over Schlick Fresnel, added to the scene before bloom. Off by default; needs depth. |
@@ -232,6 +232,28 @@ The harness page `harness/post4.html` (`?taa ?ssr ?blur ?ortho ?still`) measures
 feature against a reference stack with the feature off, read back from the GPU, for
 `e2e/post4.spec.ts`.
 
+### Post 5 (ws/post-5)
+
+- **TAA velocity reprojection.** `TaaSettings.reprojection: TaaReprojection` (`'velocity'`
+  default, `'camera'`), `depthReject` (0.1) and `velocityReject` (2 px). With
+  `PostInputs.velocity` and `'velocity'`, the resolve takes the velocity of the nearest depth
+  in the pixel's 3×3 and samples the history at `uv - velocity` (falling back to
+  `view.previousViewProj` where the target is zero), so a moving or skinned object keeps its
+  own history instead of the background's. The resolve writes a second target beside each
+  history (`TAA_AUX_FORMAT` `rgba16float`: velocity in uv, linear depth) and drops the history
+  where the aux at `uv - velocity` differs from the pixel by more than `depthReject` of the
+  nearer depth or `velocityReject` px (`taaRejects(...)` is the CPU twin); the 3×3 clamp is
+  unchanged. Without the target, or in `'camera'`, the ws/post-4 resolve runs unchanged.
+  `PostStack.taaVelocityActive` says which path the last frame took.
+- The internal `DepthPass` takes several target formats (`format: GPUTextureFormat | GPUTextureFormat[]`,
+  `encode(..., extraTargets)`).
+- New uniform fields: `taa2.w` (velocity reprojection) and, appended after `reproj`, `taa3`
+  (`depthReject`, `velocityReject`); `POST_UNIFORM_FLOATS` is 192.
+- `harness/post4.html?taa` adds a striped cube sliding through an `InstanceList` with
+  velocity under the still camera, read against the TAA-off frame with `'camera'`
+  (`ghostObjectCamera`) and `'velocity'` (`ghostObject`); `e2e/post4.spec.ts` wants the
+  velocity ghost at most half the camera one.
+
 ## Notes
 
 - `defaultPostSettings()` is tuned for a dark, jewel-toned scene: a strong emissive glow, a
@@ -283,7 +305,8 @@ texture; `renderer.endFrame({ present: false })` then only submits. Inside `enco
   `tonemap: Tonemap`), `ao: AoSettings`, `dof: DofSettings`, and the finishing sections
   `fxaa: FxaaSettings`, `lut: LutSettings`, `grain: GrainSettings`, `aberration:
   AberrationSettings`, `sharpen: SharpenSettings`, `outline: OutlineSettings`, and the post-3
-  sections `taa: TaaSettings`, `ssr: SsrSettings`, `exposure: ExposureSettings`,
+  sections `taa: TaaSettings` (its `reprojection` a `TaaReprojection`, `'camera' |
+  'velocity'`, ws/post-5), `ssr: SsrSettings`, `exposure: ExposureSettings`,
   `whiteBalance: WhiteBalanceSettings`, `motionBlur: MotionBlurSettings` (its `mode` a
   `MotionBlurMode`, `'camera' | 'object'`, ws/post-4). `RGB` is
   `[r, g, b]`. `LutSize` is `16 | 32`; `LutFn` is `(r, g, b) => readonly [r, g, b]`.

@@ -39,6 +39,7 @@ export type {
   RGB,
   SharpenSettings,
   SsrSettings,
+  TaaReprojection,
   TaaSettings,
   Tonemap,
   VignetteSettings,
@@ -53,5 +54,13 @@ export {
   postQualityFor,
 } from './settings';
 export { ssrEdgeFade, ssrRoughnessFade, ssrStep, ssrSurfaceWeight } from './ssr';
-export { halton, TAA_MAX_FEEDBACK, Taa, taaBlendWeight, taaReprojection } from './taa';
+export {
+  halton,
+  TAA_AUX_FORMAT,
+  TAA_MAX_FEEDBACK,
+  Taa,
+  taaBlendWeight,
+  taaRejects,
+  taaReprojection,
+} from './taa';
 export { planckianXy, whiteBalanceMatrix } from './white-balance';

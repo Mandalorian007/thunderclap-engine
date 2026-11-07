@@ -31,7 +31,7 @@ import {
   UP_WGSL,
 } from './shaders';
 import { SSR_WGSL } from './ssr';
-import { TAA_WGSL, Taa, taaReprojection } from './taa';
+import { TAA_AUX_FORMAT, TAA_WGSL, Taa, taaReprojection } from './taa';
 
 const HDR: GPUTextureFormat = 'rgba16float';
 const AO: GPUTextureFormat = 'r8unorm';
@@ -166,6 +166,11 @@ export class PostStack implements PostProcessor {
   /** Scene-size TAA history pair (ws/post-3), made on the first TAA frame; `histIndex` was last written. */
   private histTex: [GPUTexture, GPUTexture] | null = null;
   private histViews: [GPUTextureView, GPUTextureView] | null = null;
+  /** The aux pair written beside each history (ws/post-5): velocity, linear depth. */
+  private histAuxTex: [GPUTexture, GPUTexture] | null = null;
+  private histAuxViews: [GPUTextureView, GPUTextureView] | null = null;
+  /** `encode`'s extra target, reused (no allocation per frame). */
+  private readonly taaExtra: GPUTextureView[] = [];
   private histIndex = 0;
   private historyValid = false;
   /** Half-res SSR term and scene-size motion-blur result, made on the first frame that needs them. */
@@ -183,10 +188,12 @@ export class PostStack implements PostProcessor {
     autoExposure: 1,
     roughMetal: 0,
     objectVelocity: 0,
+    taaVelocity: 0,
   };
   /** The current EV (`exposure`), eased in auto mode, `log2(grade.exposure)` in manual. */
   private ev = 0;
   private taaOn = false;
+  private taaVelocityOn = false;
   private ssrOn = false;
   private motionBlurOn = false;
   private readonly depthInfo: PostDepthInfo = {
@@ -216,6 +223,7 @@ export class PostStack implements PostProcessor {
   private jittering = false;
   private boundRoughMetal: GPUTextureView | null = null;
   private boundVelocity: GPUTextureView | null = null;
+  private boundTaaVelocity: GPUTextureView | null = null;
 
   constructor(renderer: Renderer, patch: PostSettingsPatch = {}) {
     this.renderer = renderer;
@@ -297,8 +305,8 @@ export class PostStack implements PostProcessor {
     this.taaPass = new DepthPass(renderer, {
       label: 'post-taa',
       wgsl: TAA_WGSL,
-      format: HDR,
-      textures: 2,
+      format: [HDR, TAA_AUX_FORMAT],
+      textures: 4,
     });
     this.ssrPass = new DepthPass(renderer, {
       label: 'post-ssr',
@@ -408,6 +416,14 @@ export class PostStack implements PostProcessor {
   /** True when the last `encode` ran the TAA resolve (depth present, enabled, allowed). */
   get taaActive(): boolean {
     return this.taaOn;
+  }
+
+  /**
+   * True when the last TAA resolve reprojected by the velocity target (ws/post-5):
+   * `taa.reprojection` `'velocity'` and the frame had one.
+   */
+  get taaVelocityActive(): boolean {
+    return this.taaVelocityOn;
   }
 
   /** True when the last `encode` ran the SSR march. */
@@ -540,7 +556,15 @@ export class PostStack implements PostProcessor {
       wantMotionBlur && s.motionBlur.mode === 'object' && inputs.velocity
         ? inputs.velocity.view
         : null;
-    this.bindInputs(inputs.emissive.view, depth ? depth.view : null, roughMetal, objectVelocity);
+    const taaVelocity =
+      wantTaa && s.taa.reprojection === 'velocity' && inputs.velocity ? inputs.velocity.view : null;
+    this.bindInputs(
+      inputs.emissive.view,
+      depth ? depth.view : null,
+      roughMetal,
+      objectVelocity,
+      taaVelocity,
+    );
     if (s.grain.animated && s.grain.intensity > 0) this.grainSeed += dt;
     let depthInfo: PostDepthInfo | null = null;
     if (depth && proj) {
@@ -570,6 +594,7 @@ export class PostStack implements PostProcessor {
     fs.jitterY = wantTaa && view ? view.jitter[1] / ih : 0;
     fs.roughMetal = roughMetal ? 1 : 0;
     fs.objectVelocity = objectVelocity ? 1 : 0;
+    fs.taaVelocity = taaVelocity ? 1 : 0;
     this.updateExposure(wantAuto, dt);
 
     packPostUniforms(
@@ -612,11 +637,19 @@ export class PostStack implements PostProcessor {
       const write = 1 - read;
       const group = this.taaGroup(raw, depthView, read);
       this.taaPass.setUniforms(this.uniforms);
-      this.taaPass.encode(encoder, this.histViews![write]!, group, timer?.pass('taa'));
+      this.taaExtra[0] = this.histAuxViews![write]!;
+      this.taaPass.encode(
+        encoder,
+        this.histViews![write]!,
+        group,
+        timer?.pass('taa'),
+        this.taaExtra,
+      );
       this.histIndex = write;
       this.historyValid = true;
       scene = this.histViews![write]!;
     }
+    this.taaVelocityOn = this.taaOn && taaVelocity !== null;
     this.stepJitter(this.taaOn);
     this.motionBlurOn = wantMotionBlur && depthInfo !== null;
     if (this.motionBlurOn && depthView) {
@@ -810,6 +843,20 @@ export class PostStack implements PostProcessor {
     const b = device.createTexture({ label: 'post-taa-history-1', size, format: HDR, usage });
     this.histTex = [a, b];
     this.histViews = [a.createView(), b.createView()];
+    const auxA = device.createTexture({
+      label: 'post-taa-aux-0',
+      size,
+      format: TAA_AUX_FORMAT,
+      usage,
+    });
+    const auxB = device.createTexture({
+      label: 'post-taa-aux-1',
+      size,
+      format: TAA_AUX_FORMAT,
+      usage,
+    });
+    this.histAuxTex = [auxA, auxB];
+    this.histAuxViews = [auxA.createView(), auxB.createView()];
     this.histIndex = 0;
     this.historyValid = false;
     this.invalidateGroups();
@@ -846,6 +893,12 @@ export class PostStack implements PostProcessor {
     }
     this.histTex = null;
     this.histViews = null;
+    if (this.histAuxTex) {
+      this.histAuxTex[0].destroy();
+      this.histAuxTex[1].destroy();
+    }
+    this.histAuxTex = null;
+    this.histAuxViews = null;
     this.historyValid = false;
     this.ssrTex?.destroy();
     this.ssrTex = null;
@@ -930,6 +983,7 @@ export class PostStack implements PostProcessor {
     this.boundDepth = null;
     this.boundRoughMetal = null;
     this.boundVelocity = null;
+    this.boundTaaVelocity = null;
     this.exposurePasses?.invalidate();
   }
 
@@ -939,12 +993,14 @@ export class PostStack implements PostProcessor {
     depth: GPUTextureView | null,
     roughMetal: GPUTextureView | null,
     velocity: GPUTextureView | null,
+    taaVelocity: GPUTextureView | null,
   ): void {
     if (
       emissive === this.boundEmissive &&
       depth === this.boundDepth &&
       roughMetal === this.boundRoughMetal &&
-      velocity === this.boundVelocity
+      velocity === this.boundVelocity &&
+      taaVelocity === this.boundTaaVelocity
     ) {
       return;
     }
@@ -953,6 +1009,7 @@ export class PostStack implements PostProcessor {
     this.boundDepth = depth;
     this.boundRoughMetal = roughMetal;
     this.boundVelocity = velocity;
+    this.boundTaaVelocity = taaVelocity;
     if (depth) {
       this.aoGroup = this.aoView ? this.ao.createBindGroup(depth, []) : null;
       this.aoBlurGroup = this.aoView ? this.aoBlur.createBindGroup(depth, [this.aoView]) : null;
@@ -1026,12 +1083,18 @@ export class PostStack implements PostProcessor {
     return g.motionBlur;
   }
 
-  /** The TAA resolve group reading the raw colour and history `read`. */
+  /** The TAA resolve group reading the raw colour, history `read` and its aux. */
   private taaGroup(raw: GPUTextureView, depth: GPUTextureView, read: number): GPUBindGroup {
     const g = this.groupsFor(raw);
     let group = g.taa[read];
     if (!group) {
-      group = this.taaPass.createBindGroup(depth, [raw, this.histViews![read]!]);
+      // Without a velocity target the raw colour stands in (the shader does not read it).
+      group = this.taaPass.createBindGroup(depth, [
+        raw,
+        this.histViews![read]!,
+        this.boundTaaVelocity ?? raw,
+        this.histAuxViews![read]!,
+      ]);
       g.taa[read] = group;
     }
     return group;

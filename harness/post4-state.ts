@@ -17,7 +17,10 @@ export interface HarnessPost4State {
   mode: Post4Mode;
   /** `?still`: nothing in the scene moves. */
   still: boolean;
-  /** The page's step: 'warm', 'reference', 'converge', 'ghost', 'done' (`?taa`), else 'run'. */
+  /**
+   * The page's step: 'warm', 'reference', 'converge', 'ghost', 'objectCamera',
+   * 'objectVelocity', 'done' (`?taa`), else 'run'.
+   */
   phase: string;
   /** Readbacks completed. */
   readbacks: number;
@@ -38,6 +41,17 @@ export interface HarnessPost4State {
    * background in the window 2..16 px behind the bar's trailing edge as drawn, with TAA on.
    */
   ghost: number | null;
+  /**
+   * `?taa` (ws/post-5): a striped cube slides through an `InstanceList` with velocity under the
+   * still camera; the mean absolute difference (0..1 per channel) between the TAA frame and the
+   * same inputs with TAA off over the cube's screen rect widened by 16 px, averaged over the
+   * reads, with `taa.reprojection` `'velocity'` (`ghostObject`) and `'camera'`
+   * (`ghostObjectCamera`).
+   */
+  ghostObject: number | null;
+  ghostObjectCamera: number | null;
+  /** `?taa`: `PostStack.taaVelocityActive` in the last frame. */
+  velocityActive: boolean;
   /**
    * `?ssr`: the mean absolute colour difference (0..1) SSR adds over the floor in front of the
    * bright pillar on the smooth half (roughness 0.05) and on the rough half (0.9).

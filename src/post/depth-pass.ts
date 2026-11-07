@@ -11,6 +11,9 @@ import { POST_UNIFORM_FLOATS } from './settings';
  * - `@binding(3)` the depth as `texture_depth_2d`,
  * - `@binding(4 + i)` `textures` further `texture_2d<f32>` inputs.
  *
+ * `format` may list several targets (ws/post-5: the TAA resolve also writes its history aux);
+ * `encode` then takes the targets after the first in `extraTargets`.
+ *
  * One uniform buffer per pass, written with `setUniforms`. Bind groups come from
  * `createBindGroup` and are cached by the caller, as with `FullscreenPass`.
  */
@@ -23,14 +26,21 @@ export class DepthPass {
   private readonly nearest: GPUSampler;
   private readonly linear: GPUSampler;
   private readonly textures: number;
-  private readonly colorAttachment: GPURenderPassColorAttachment;
+  private readonly colorAttachments: GPURenderPassColorAttachment[];
   private readonly passDesc: GPURenderPassDescriptor;
   private readonly entries: GPUBindGroupEntry[];
 
   constructor(
     renderer: Renderer,
-    desc: { label: string; wgsl: string; format: GPUTextureFormat; textures: number },
+    desc: {
+      label: string;
+      wgsl: string;
+      format: GPUTextureFormat | readonly GPUTextureFormat[];
+      textures: number;
+    },
   ) {
+    const formats: readonly GPUTextureFormat[] =
+      typeof desc.format === 'string' ? [desc.format] : desc.format;
     const device = renderer.device;
     this.device = device;
     this.label = desc.label;
@@ -59,7 +69,7 @@ export class DepthPass {
       label: `pass:${desc.label}`,
       layout: device.createPipelineLayout({ bindGroupLayouts: [this.layout] }),
       vertex: { module, entryPoint: 'vs_fullscreen' },
-      fragment: { module, entryPoint: 'fs_main', targets: [{ format: desc.format }] },
+      fragment: { module, entryPoint: 'fs_main', targets: formats.map((format) => ({ format })) },
       primitive: { topology: 'triangle-list' },
     });
     this.entries = [
@@ -67,13 +77,13 @@ export class DepthPass {
       { binding: 1, resource: this.nearest },
       { binding: 2, resource: this.linear },
     ];
-    this.colorAttachment = {
+    this.colorAttachments = formats.map(() => ({
       view: undefined as unknown as GPUTextureView,
       loadOp: 'clear',
       storeOp: 'store',
       clearValue: { r: 1, g: 1, b: 1, a: 1 },
-    };
-    this.passDesc = { label: `pass:${desc.label}`, colorAttachments: [this.colorAttachment] };
+    }));
+    this.passDesc = { label: `pass:${desc.label}`, colorAttachments: this.colorAttachments };
   }
 
   setUniforms(data: Float32Array): void {
@@ -102,8 +112,15 @@ export class DepthPass {
     target: GPUTextureView,
     group: GPUBindGroup,
     timestampWrites?: GPURenderPassTimestampWrites,
+    extraTargets?: readonly GPUTextureView[],
   ): void {
-    this.colorAttachment.view = target;
+    const atts = this.colorAttachments;
+    atts[0]!.view = target;
+    for (let i = 1; i < atts.length; i++) {
+      const view = extraTargets?.[i - 1];
+      if (!view) throw new Error(`pass ${this.label}: expected ${atts.length} targets`);
+      atts[i]!.view = view;
+    }
     this.passDesc.timestampWrites = timestampWrites;
     const pass = encoder.beginRenderPass(this.passDesc);
     pass.setPipeline(this.pipeline);

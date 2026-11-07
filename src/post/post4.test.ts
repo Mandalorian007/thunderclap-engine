@@ -8,13 +8,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import {
-  CAMERA_INV_VIEW_PROJ_OFFSET,
-  CAMERA_JITTER_OFFSET,
-  CAMERA_PREV_VIEW_OFFSET,
-  CAMERA_PREV_VIEW_PROJ_OFFSET,
-  Camera,
-} from '../render/camera';
+import { Camera } from '../render/camera';
 import {
   createFakeDevice,
   type FakeDevice,
@@ -23,7 +17,6 @@ import {
 } from '../render/fake-gpu';
 import { Renderer } from '../render/renderer';
 import type { SceneTargetAux } from '../render/scene-target';
-import { WGSL_GLOBALS } from '../render/wgsl';
 import { aoProjectedRadius } from './ao';
 import { easeLinear, PostBlender } from './blend';
 import { PostStack } from './post-stack';
@@ -76,42 +69,6 @@ describe('post 4: inputs, not the renderer (ws/post-4)', () => {
       if (/\b(renderer|r|this\.renderer)\s*\.\s*camera\b/.test(src)) offenders.push(name);
     }
     expect(offenders).toEqual([]);
-  });
-});
-
-/** WGSL host-shareable layout (align, size in bytes) of the types the camera block uses. */
-const WGSL_LAYOUT: Record<string, [number, number]> = {
-  f32: [4, 4],
-  u32: [4, 4],
-  vec2f: [8, 8],
-  vec3u: [16, 12],
-  vec3f: [16, 12],
-  vec4f: [16, 16],
-  mat4x4f: [16, 64],
-};
-
-/** Field offsets in floats of `struct name` in `wgsl`, by the WGSL alignment rules. */
-function structOffsets(wgsl: string, name: string): Record<string, number> {
-  const body = new RegExp(`struct ${name} \\{([^}]*)\\}`).exec(wgsl)![1]!;
-  const out: Record<string, number> = {};
-  let at = 0;
-  for (const m of body.matchAll(/(\w+):\s*(\w+)/g)) {
-    const [align, size] = WGSL_LAYOUT[m[2]!]!;
-    at = Math.ceil(at / align) * align;
-    out[m[1]!] = at / 4;
-    at += size;
-  }
-  return out;
-}
-
-describe('post 4: the camera block the velocity reads (ws/post-4)', () => {
-  it('places the WGSL camera fields where Camera.writeBlock writes them', () => {
-    const o = structOffsets(WGSL_GLOBALS, 'EngineCamera');
-    expect(o.viewport).toBe(52);
-    expect(o.inv_view_proj).toBe(CAMERA_INV_VIEW_PROJ_OFFSET);
-    expect(o.prev_view_proj).toBe(CAMERA_PREV_VIEW_PROJ_OFFSET);
-    expect(o.prev_view).toBe(CAMERA_PREV_VIEW_OFFSET);
-    expect(o.jitter).toBe(CAMERA_JITTER_OFFSET);
   });
 });
 

@@ -5,7 +5,9 @@
  *
  * - taa: on camera jitter, a static scene converges within 1/255 of the TAA-off frame over its
  *   flat pixels after 16 frames, and a bar sliding over a dark band leaves no more trail than
- *   the ws/post-3 resolve did;
+ *   the ws/post-3 resolve did; a striped cube moving under a still camera strays from the
+ *   TAA-off frame at most half as far with velocity reprojection as with the camera matrix
+ *   (ws/post-5);
  * - ssr: with the rough-metal target the smooth half of the floor reflects and the rough half
  *   does not;
  * - blur: with the velocity target a cube moving under a still camera blurs and the static
@@ -94,6 +96,22 @@ test('taa: a static scene converges on camera jitter; a moving edge ghosts no mo
   const g = await read();
   expect(g.ghost!).toBeLessThanOrEqual(GHOST_TODAY + GHOST_MARGIN);
   expect(g.gpuErrors).toBe(0);
+  expect(errors).toEqual([]);
+});
+
+test('taa: velocity reprojection halves the ghost of a cube moving under a still camera', async ({
+  page,
+  wrapper,
+}) => {
+  const s0 = await open(page, wrapper, 'taa');
+  expect(s0.mode).toBe('taa');
+  // Each phase reads six frames after the bar's; the poll waits for both (E-017).
+  const s = await settle((x) => x.ghostObject !== null && x.ghostObjectCamera !== null);
+  expect(s.phase).toBe('done');
+  expect(s.velocityActive).toBe(true);
+  expect(s.ghostObjectCamera!).toBeGreaterThan(0);
+  expect(s.ghostObject!).toBeLessThanOrEqual(s.ghostObjectCamera! * 0.5);
+  expect(s.gpuErrors).toBe(0);
   expect(errors).toEqual([]);
 });
 
