@@ -1,4 +1,4 @@
-/// <reference path="../platform/xr-types.d.ts" />
+/// <reference path="../platform/xr-types.d.ts" preserve="true" />
 /**
  * XR controllers and hands as pointers (ws/xr; ARCHITECTURE "Input"). `XrPointerSource` is a
  * `PointerSource` the router polls like any other: each `XRInputSource` of the session becomes

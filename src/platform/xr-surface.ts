@@ -1,4 +1,4 @@
-/// <reference path="./xr-types.d.ts" />
+/// <reference path="./xr-types.d.ts" preserve="true" />
 /**
  * The XR surface (ws/xr; ARCHITECTURE "Surface"): a `SceneTarget` per eye per frame. Built on
  * the WebXR/WebGPU binding, it makes one `XRProjectionLayer` for the session (colour in

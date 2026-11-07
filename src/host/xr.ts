@@ -1,4 +1,4 @@
-/// <reference path="../platform/xr-types.d.ts" />
+/// <reference path="../platform/xr-types.d.ts" preserve="true" />
 /**
  * The XR host (ws/xr): a `Host` whose frames come from `XRSession.requestAnimationFrame`, so
  * `GameLoop.setFrames(createXrHost(session, host))` moves a running game into the headset and

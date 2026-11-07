@@ -98,7 +98,19 @@ Each line names where to start and links its guide or reference. [docs/OFFERING.
 
 ## Quick start
 
-The package is not on npm yet, so a game starts from a clone of this repo. `pnpm create-game` copies a template into a folder of its own, with the engine linked to the clone:
+### Install
+
+The engine is on npm. Add it to any Vite (or other ESM bundler) project:
+
+```sh
+pnpm add @thunderclap/engine
+```
+
+It ships ESM JavaScript and `.d.ts` files with no runtime dependencies. The hosts are separate packages: `pnpm add @thunderclap/host-electron`, `@thunderclap/host-capacitor` or `@thunderclap/host-pwa`. The type declarations use the browser's WebGPU types (`GPUDevice`, `GPUTexture`). TypeScript 7's DOM lib has them. If your TypeScript reports `Cannot find name 'GPUDevice'`, run `pnpm add -D @webgpu/types` and add `"@webgpu/types"` to `compilerOptions.types`.
+
+### Start from a template
+
+`pnpm create-game` copies a template into a folder of its own, with the engine linked to your clone of this repo:
 
 ```sh
 git clone https://github.com/Mandalorian007/thunderclap-engine.git
@@ -125,7 +137,7 @@ Pick another template with `--template <name>`:
 
 The new folder is a standalone project with `@thunderclap/engine` as a dependency. Each template ships a `CLAUDE.md` that names the engine concepts it uses. `--engine <spec>` points it at another copy of the engine (`"github:Mandalorian007/thunderclap-engine"`, `link:../engine`), `--dry-run` prints the plan, and a non-empty folder needs `--force`. [Getting started](docs/guide/getting-started.md) walks through the rest.
 
-The engine ships TypeScript source, which your bundler compiles (Vite is what it's built and tested with). Import only from the public entry points listed under [Modules](#modules). Anything not re-exported from a module's `index.ts` is internal.
+The npm package ships compiled ESM (`pnpm build` makes it; [Releasing](docs/releasing.md) covers how a version is published). Inside this repo the workspace links to the TypeScript source instead, which Vite compiles. Import only from the public entry points listed under [Modules](#modules). Anything not re-exported from a module's `index.ts` is internal.
 
 ## Your first game
 
@@ -300,7 +312,7 @@ Headless Chromium gets a WebGPU adapter with `--enable-unsafe-webgpu`. On macOS 
 
 Version **1.0.0**. Everything under [Features](#features) is on `main` and tested on the device matrix. The public surface in `api/*.api.txt` is the frozen `engine-v1.0.0` surface: the 0.x deprecated aliases are removed, and [Migrating to v1](docs/guide/migrating-to-v1.md) maps each old name to its replacement. Any later change to that surface needs a CHANGELOG entry. Read [CHANGELOG.md](CHANGELOG.md) before you upgrade.
 Two games set the range it must cover: The Last Rune (2D) and Forgewilds (3D voxel), and each new capability arrives with a game that needs it ([VISION](docs/VISION.md)).
-Next: publishing `engine-v1.0.0` to npm. Current branches are on [docs/STATUS.md](docs/STATUS.md), the decisions behind the engine in [docs/DECISIONS.md](docs/DECISIONS.md).
+`@thunderclap/engine` and the three hosts publish to npm from a `v*` tag ([Releasing](docs/releasing.md)). Current branches are on [docs/STATUS.md](docs/STATUS.md), the decisions behind the engine in [docs/DECISIONS.md](docs/DECISIONS.md).
 The engine was extracted from [The Last Rune](https://github.com/Mandalorian007/last-rune) with its history, so `D-0xx` numbers and some `docs/` paths in comments point at that repo.
 
 ### Built with ThunderClap

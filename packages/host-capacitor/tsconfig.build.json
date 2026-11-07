@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "types": ["@webgpu/types"],
+    "paths": {
+      "@thunderclap/engine": ["../../dist/index.d.ts"],
+      "@thunderclap/engine/*": ["../../dist/*/index.d.ts"]
+    }
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts"]
+}

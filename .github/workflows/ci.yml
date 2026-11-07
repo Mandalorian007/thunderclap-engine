@@ -96,3 +96,20 @@ jobs:
             dist/desktop/*.tar.gz
           if-no-files-found: error
           retention-days: 14
+
+  pack:
+    # The npm packages as a stranger installs them (E-037): `pnpm build`, `pnpm pack` of the engine
+    # and the three hosts, a tarball audit, then a typecheck and Vite build of a fresh project
+    # outside the workspace that installs the tarballs (scripts/pack-smoke.mjs).
+    name: pack
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check:pack

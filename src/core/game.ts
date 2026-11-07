@@ -1,4 +1,4 @@
-/// <reference path="../platform/xr-types.d.ts" />
+/// <reference path="../platform/xr-types.d.ts" preserve="true" />
 /**
  * `createGame` (D-041 Phase 1): the noun-free wiring every ThunderClap game starts from.
  *

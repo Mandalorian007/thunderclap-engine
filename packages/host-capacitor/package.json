@@ -1,14 +1,52 @@
 {
   "name": "@thunderclap/host-capacitor",
-  "version": "0.1.0-dev",
-  "private": true,
+  "version": "0.1.0",
   "type": "module",
   "description": "ThunderClap's Capacitor host: createCapacitorHost() fills the engine's Host interface from Capacitor's plugins for an iOS or Android store app. It knows nothing about any game and has no dependencies; the @capacitor/* plugins are the app's own (not declared here: pnpm would try to install them), handed in through the plugins option.",
   "license": "MIT",
   "author": "ThunderClap",
+  "homepage": "https://github.com/Mandalorian007/thunderclap-engine/tree/main/packages/host-capacitor#readme",
+  "bugs": {
+    "url": "https://github.com/Mandalorian007/thunderclap-engine/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Mandalorian007/thunderclap-engine.git",
+    "directory": "packages/host-capacitor"
+  },
+  "keywords": [
+    "thunderclap",
+    "capacitor",
+    "ios",
+    "android",
+    "webgpu",
+    "game-engine"
+  ],
+  "sideEffects": false,
   "exports": {
     ".": "./src/index.ts",
     "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      },
+      "./package.json": "./package.json"
+    },
+    "main": "./dist/index.js"
+  },
+  "peerDependencies": {
+    "@thunderclap/engine": "^1.0.0"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
