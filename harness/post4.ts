@@ -10,7 +10,10 @@
  * - `?taa`: a static lit scene. TAA off for a while (the reference frame), then on with
  *   `sharpen: 0` and the camera jittered by the stack: after 16 frames `convergedDelta` is the
  *   flat-pixel difference to the reference. Then a bright bar slides across a dark band and
- *   `ghost` is the brightest trail behind it. `?still` skips the bar.
+ *   `ghost` is the brightest trail behind it. Then (ws/post-5) a striped cube slides through an
+ *   `InstanceList` with velocity under the still camera, first with `taa.reprojection`
+ *   `'camera'`, then `'velocity'`: `ghostObjectCamera` / `ghostObject` are how far the TAA frame
+ *   strays from the same inputs with TAA off around the cube. `?still` skips the bar and cube.
  * - `?ssr`: a floor split into a rough (0.9) and a smooth (0.05) metal half, a bright pillar on
  *   each, the rough-metal target on: `smoothReflect` / `roughReflect` are what SSR adds in front
  *   of each pillar.
@@ -70,6 +73,9 @@ const state: HarnessPost4State = {
   active: false,
   convergedDelta: null,
   ghost: null,
+  ghostObject: null,
+  ghostObjectCamera: null,
+  velocityActive: false,
   smoothReflect: null,
   roughReflect: null,
   cubeBlurPx: null,
@@ -331,6 +337,18 @@ const BAR_H = 0.35;
 const BAR_W = 0.5;
 const BAR_SPEED = 0.03;
 const BAR_X0 = -2.2;
+/**
+ * `?taa` (ws/post-5): the striped cube (`OBJ_STRIPES` slabs across x), its slide (world units
+ * per frame, about 5 px at 1280 × 720) and the frames each reprojection runs before it is read.
+ */
+const OBJ_Y = 1.3;
+const OBJ_Z = 1.2;
+const OBJ_STRIPES = 4;
+const OBJ_SPEED = 0.04;
+const OBJ_X0 = -2.4;
+const OBJ_WARM = 20;
+const OBJ_READS = 6;
+const OBJ_MARGIN = 16;
 /** `?blur`: the cube's swing. */
 const CUBE_Y = 0.6;
 const CUBE_SWING = 1.6;
@@ -362,7 +380,7 @@ async function main(): Promise<void> {
   const { surface, gpu } = res;
   installGpuErrorLogging(gpu.device);
   const renderer = new Renderer(gpu, {
-    aux: { roughMetal: mode === 'ssr', velocity: mode === 'blur' },
+    aux: { roughMetal: mode === 'ssr', velocity: mode === 'blur' || mode === 'taa' },
   });
   renderer.resize(surface.backbuffer.width, surface.backbuffer.height);
   surface.onResize(({ backbuffer }) => renderer.resize(backbuffer.width, backbuffer.height));
@@ -390,7 +408,8 @@ async function main(): Promise<void> {
   };
   const measured = new PostStack(renderer, patches[mode]);
   measured.addJitterCamera(camera);
-  const reference = mode === 'taa' ? null : new PostStack(renderer, base);
+  // `?taa` reads the reference only around the moving cube (ws/post-5).
+  const reference = new PostStack(renderer, base);
   const post = new CapturePost(renderer, measured, reference);
   renderer.post = post;
 
@@ -421,6 +440,18 @@ async function main(): Promise<void> {
   let cubeT: Transform | null = null;
   let barT: Transform | null = null;
   let barX = BAR_X0;
+  let objList: InstanceList | null = null;
+  const objT: Transform[] = [];
+  let objX = OBJ_X0;
+  const placeObject = (x: number, y: number) => {
+    for (let i = 0; i < OBJ_STRIPES; i++) {
+      const w = 1 / OBJ_STRIPES;
+      objT[i]!.setPosition(x - 0.5 + w * (i + 0.5), y, OBJ_Z);
+      objList!.set(i, objT[i]!, {
+        tint: i % 2 === 0 ? [0.95, 0.95, 0.9, 1] : [0.08, 0.08, 0.1, 1],
+      });
+    }
+  };
 
   if (mode === 'taa') {
     camera.lookAt([0, 1.4, 7], [0, 1.2, 0]);
@@ -435,6 +466,12 @@ async function main(): Promise<void> {
       emissiveFactor: [1.5, 1.5, 1.5],
     });
     barT = add(bright, barX, BAR_Y, -1.8, BAR_W, BAR_H, 0.1, [1, 1, 1, 1]);
+    // Out of sight (under the floor) until its phase.
+    objList = renderer.createInstanceList(cube, plain, OBJ_STRIPES, { velocity: true });
+    for (let i = 0; i < OBJ_STRIPES; i++) {
+      objT.push(new Transform({ scaleX: 1 / OBJ_STRIPES, scaleY: 1, scaleZ: 1 }));
+    }
+    placeObject(0, -30);
   } else if (mode === 'ssr') {
     camera.lookAt([0, 1.6, 5], [0, 0.4, -1]);
     const rough = createStandardMaterial(renderer, { label: 'rough', metallic: 1, roughness: 0.9 });
@@ -481,6 +518,8 @@ async function main(): Promise<void> {
   let reference0: Image | null = null;
   let ghostMax = 0;
   let ghostReads = 0;
+  let objSum = 0;
+  let objReads = 0;
   let orthoIndex = 0;
   const terms: [number, number] = [Number.NaN, Number.NaN];
   /** The frame being captured's bar rect in output px (left, right, top, bottom). */
@@ -521,7 +560,39 @@ async function main(): Promise<void> {
         ghostMax = Math.max(ghostMax, g);
         if (++ghostReads >= GHOST_READS) {
           state.ghost = ghostMax;
-          state.phase = 'done';
+          state.phase = 'objectCamera';
+          phaseFrame = 0;
+          objX = OBJ_X0;
+          measured.set({ taa: { reprojection: 'camera' } });
+        }
+      } else if (
+        (state.phase === 'objectCamera' || state.phase === 'objectVelocity') &&
+        at &&
+        ref
+      ) {
+        const [left, right, top, bottom] = at as [number, number, number, number];
+        objSum += meanDiff(
+          img,
+          ref,
+          left - OBJ_MARGIN,
+          top - OBJ_MARGIN,
+          right + OBJ_MARGIN,
+          bottom + OBJ_MARGIN,
+        );
+        if (++objReads >= OBJ_READS) {
+          const mean = objSum / objReads;
+          objSum = 0;
+          objReads = 0;
+          if (state.phase === 'objectCamera') {
+            state.ghostObjectCamera = mean;
+            state.phase = 'objectVelocity';
+            phaseFrame = 0;
+            objX = OBJ_X0;
+            measured.set({ taa: { reprojection: 'velocity' } });
+          } else {
+            state.ghostObject = mean;
+            state.phase = 'done';
+          }
         }
       }
       return;
@@ -591,6 +662,22 @@ async function main(): Promise<void> {
             at = barRect.slice();
           }
         }
+        if ((state.phase === 'objectCamera' || state.phase === 'objectVelocity') && objList) {
+          objX += OBJ_SPEED;
+          if (objX > -OBJ_X0) {
+            objX = OBJ_X0;
+            phaseFrame = 0;
+          }
+          placeObject(objX, OBJ_Y);
+          const a = toOut(objX - 0.5, OBJ_Y + 0.5, OBJ_Z + 0.5);
+          const b = toOut(objX + 0.5, OBJ_Y - 0.5, OBJ_Z + 0.5);
+          // After the history has followed it a while, and well inside the screen.
+          const inside = a[0] - OBJ_MARGIN > 0 && b[0] + OBJ_MARGIN < renderer.outputWidth;
+          if (phaseFrame > OBJ_WARM && inside) {
+            post.capture = true;
+            at = [a[0], b[0], a[1], b[1]];
+          }
+        }
       } else if (mode === 'ssr') {
         post.capture = state.frames > 6;
       } else if (mode === 'blur') {
@@ -611,6 +698,7 @@ async function main(): Promise<void> {
       frame.lights = lights;
       for (const d of draws) frame.mesh(d.mesh, d.material, d.t, { tint: d.tint });
       if (list) frame.list(list);
+      if (objList) frame.list(objList);
       renderer.endFrame();
       const ortho = orthoIndex;
       const reading = post.read((img, ref) => onRead(img, ref, at, ortho));
@@ -631,6 +719,7 @@ async function main(): Promise<void> {
             : mode === 'blur'
               ? measured.motionBlurActive
               : true;
+      state.velocityActive = measured.taaVelocityActive;
       state.gpuErrors = gpuDiagnostics.errorCount;
     },
   });

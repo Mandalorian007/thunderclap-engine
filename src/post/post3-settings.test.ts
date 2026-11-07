@@ -26,6 +26,7 @@ const WB0 = 152;
 const MOTION_BLUR = 164;
 const DIRT = 168;
 const REPROJ = 172;
+const TAA3 = 188;
 
 const depthInfo = {
   outputWidth: 1600,
@@ -70,7 +71,15 @@ function wgslStructFloats(): { name: string; floats: number }[] {
 describe('post 3 settings', () => {
   it('default to off with the brief values', () => {
     const s = defaultPostSettings();
-    expect(s.taa).toEqual({ enabled: false, feedback: 0.9, sharpen: 0.2, clampMode: 'aabb' });
+    expect(s.taa).toEqual({
+      enabled: false,
+      feedback: 0.9,
+      sharpen: 0.2,
+      clampMode: 'aabb',
+      reprojection: 'velocity',
+      depthReject: 0.1,
+      velocityReject: 2,
+    });
     expect(s.ssr).toMatchObject({
       enabled: false,
       maxSteps: 32,
@@ -108,7 +117,8 @@ describe('post 3 settings', () => {
     expect(offsets.get('motionBlur')).toBe(MOTION_BLUR);
     expect(offsets.get('dirt')).toBe(DIRT);
     expect(offsets.get('reproj')).toBe(REPROJ);
-    expect(REPROJ + 16).toBe(POST_UNIFORM_FLOATS);
+    expect(offsets.get('taa3')).toBe(TAA3);
+    expect(TAA3 + 4).toBe(POST_UNIFORM_FLOATS);
   });
 
   it('pack every section off by default: identity white balance, identity reproject', () => {

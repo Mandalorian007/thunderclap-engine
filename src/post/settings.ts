@@ -202,6 +202,13 @@ export interface OutlineSettings {
  * the current pixel's 3×3 neighbourhood and blends it in by `feedback`. Needs the scene depth
  * and a frame with a view (3D path); when on, FXAA is skipped. Resize and the first frame
  * reset the history. `PostStack.taa.jitter(frame)` gives the frame's sub-pixel offset.
+ *
+ * Reprojection (ws/post-5): with a velocity target (`PostInputs.velocity`) and `reprojection`
+ * `'velocity'` (the default) each pixel finds its history at `uv - velocity` (the velocity of
+ * the nearest depth in its 3×3, so a moving or skinned object's edge follows it), falling back
+ * to the camera matrix where nothing wrote a velocity; the history is dropped where its depth
+ * or velocity disagree with the pixel's by more than `depthReject` / `velocityReject`.
+ * Without the target, or in `'camera'`, the camera matrix alone reprojects, as before.
  */
 export interface TaaSettings {
   enabled: boolean;
@@ -211,7 +218,22 @@ export interface TaaSettings {
   sharpen: number;
   /** `'aabb'`: clamp the history to the neighbourhood min/max; `'variance'`: to mean ± 1 σ. */
   clampMode: 'aabb' | 'variance';
+  /**
+   * What finds a pixel's history (ws/post-5): `'velocity'` the velocity target where the frame
+   * has one (else the camera), `'camera'` the camera's previous view-projection only.
+   */
+  reprojection: TaaReprojection;
+  /**
+   * `'velocity'` only: drop the history where its linear depth differs from the pixel's by more
+   * than this fraction of the nearer one (0.1 = 10 %).
+   */
+  depthReject: number;
+  /** `'velocity'` only: drop the history where its velocity differs by more than this, in px. */
+  velocityReject: number;
 }
+
+/** What TAA reprojects its history by (ws/post-5). See `TaaSettings.reprojection`. */
+export type TaaReprojection = 'camera' | 'velocity';
 
 /**
  * Screen-space reflections (ws/post-3): a half-res view-space ray march over the scene depth
@@ -384,7 +406,15 @@ export function defaultPostSettings(): PostSettings {
       normalThreshold: 0.4,
       intensity: 1,
     },
-    taa: { enabled: false, feedback: 0.9, sharpen: 0.2, clampMode: 'aabb' },
+    taa: {
+      enabled: false,
+      feedback: 0.9,
+      sharpen: 0.2,
+      clampMode: 'aabb',
+      reprojection: 'velocity',
+      depthReject: 0.1,
+      velocityReject: 2,
+    },
     ssr: {
       enabled: false,
       maxSteps: 32,
@@ -584,10 +614,15 @@ export interface PostFrameState {
   roughMetal?: number;
   /** 1 when motion blur gathers along the frame's velocity target (ws/post-4), else 0. */
   objectVelocity?: number;
+  /** 1 when TAA reprojects by the frame's velocity target (ws/post-5), else 0. */
+  taaVelocity?: number;
 }
 
-/** Uniform layout shared by all post shaders: 22 × vec4f + mat4x4f + 17 × vec4f + mat4x4f. */
-export const POST_UNIFORM_FLOATS = 188;
+/**
+ * Uniform layout shared by all post shaders: 22 × vec4f + mat4x4f + 17 × vec4f + mat4x4f +
+ * vec4f.
+ */
+export const POST_UNIFORM_FLOATS = 192;
 
 export const WGSL_POST_UNIFORMS = /* wgsl */ `
 struct PostUniforms {
@@ -623,7 +658,7 @@ struct PostUniforms {
   outlineColor: vec4f, // rgb, intensity
   // Post 3 (ws/post-3).
   taa: vec4f,        // enabled (0 without depth), feedback, sharpen, clampMode (0 aabb, 1 variance)
-  taa2: vec4f,       // view jitter x (uv), view jitter y (uv), reset (1 = copy the current frame), -
+  taa2: vec4f,       // view jitter x (uv), view jitter y (uv), reset (1 = copy the current frame), velocity reprojection (1, ws/post-5)
   ssr: vec4f,        // enabled (0 without depth), maxSteps, thickness, maxDistance
   ssr2: vec4f,       // roughnessCutoff, intensity, fadeEdges (uv), rough-metal target (1)
   exposure: vec4f,   // auto (1), histogramLow, histogramHigh, keyValue
@@ -633,6 +668,8 @@ struct PostUniforms {
   motionBlur: vec4f, // enabled (0 without depth), intensity, samples, velocity target (1 = object)
   dirt: vec4f,       // enabled, intensity, -, -
   reproj: mat4x4f,   // current clip -> previous frame's clip (identity on a reset)
+  // Post 5 (ws/post-5).
+  taa3: vec4f,       // depthReject (fraction), velocityReject (px), -, -
 };
 @group(0) @binding(0) var<uniform> P: PostUniforms;
 `;
@@ -757,7 +794,14 @@ export function packPostUniforms(
     Math.max(0, t.sharpen),
     t.clampMode === 'variance' ? 1 : 0,
   );
-  o = put(out, o, frame?.jitterX ?? 0, frame?.jitterY ?? 0, frame?.reset ?? 1, 0);
+  o = put(
+    out,
+    o,
+    frame?.jitterX ?? 0,
+    frame?.jitterY ?? 0,
+    frame?.reset ?? 1,
+    taa ? (frame?.taaVelocity ?? 0) : 0,
+  );
   const sr = s.ssr;
   const ssr = depth !== null && sr.enabled && quality.ssr ? 1 : 0;
   o = put(
@@ -807,6 +851,8 @@ export function packPostUniforms(
   } else {
     for (let i = 0; i < 16; i++) out[o + i] = IDENTITY[i]!;
   }
+  o += 16;
+  put(out, o, Math.max(0, t.depthReject), Math.max(0, t.velocityReject), 0, 0);
 }
 
 const DEFAULT_QUALITY = defaultPostQuality();
