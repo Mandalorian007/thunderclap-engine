@@ -16,7 +16,11 @@
 //    (docs/guide/migrating-to-v1.md) is reported with that row's replacement: a missing export
 //    (TS2305, TS2724, TS2614, TS2694), a missing member or options field (TS2339, TS2551,
 //    TS2353, TS2561) on the row's type, or a call to a removed overload (TS2345, TS2554,
-//    TS2769) by method name.
+//    TS2769) by method name. A member whose error does not print the engine type is matched
+//    through the checker (ws/testing-3): a read that became a getter or a plain value, called
+//    as before (TS2349, `cache.stats()`), and a missing member (TS2339, TS2551) on a type the
+//    game wraps (`type Ctx = SceneStack & {…}`), by the engine types of the receiver and of
+//    the member's declaration.
 //
 // Exit 1 when anything is found, 0 when the game uses no old engine name.
 // Node built-ins only, plus the engine's own `typescript`.
@@ -40,13 +44,15 @@ export function migrationTable(text) {
   for (const line of text.split('\n')) {
     const cells = line.split('|').map((c) => c.trim());
     if (cells.length < 5 || cells[0] !== '') continue;
-    const mod = /^`([^`]+)`$/.exec(cells[1]);
+    // The module cell is `anim` or a bare anim: the getter table leaves out the backticks, so
+    // `check-snippets`' "no row is still exported" rule skips its rows (their names still are).
+    const mod = /^`([\w-]+)`$|^([\w-]+)$/.exec(cells[1]);
     const old = /^`([^`(]+)(\(([^)]*)\))?/.exec(cells[2]);
     if (!mod || !old) continue;
     const name = old[1].trim();
     const dot = name.lastIndexOf('.');
     rows.push({
-      module: mod[1],
+      module: mod[1] ?? mod[2],
       name,
       type: dot < 0 ? null : name.slice(0, dot),
       member: dot < 0 ? name : name.slice(dot + 1),
@@ -77,6 +83,9 @@ export function inEngine(root = engineRoot) {
 const EXPORT_CODES = new Set([2305, 2614, 2694, 2724]);
 const MEMBER_CODES = new Set([2339, 2551, 2353, 2561]);
 const CALL_CODES = new Set([2345, 2554, 2769]);
+/** Member errors whose position is the member name of `receiver.member`. */
+const RECEIVER_CODES = new Set([2339, 2551]);
+const NOT_CALLABLE = 2349;
 
 /** The identifiers in a type's printed text: `DeepPartial<PostSettings>` → both names. */
 const typeNames = (t) => new Set(t.match(/[A-Za-z_$][\w$]*/g) ?? []);
@@ -106,12 +115,18 @@ export function calleeAt(text, pos) {
   return null;
 }
 
+/** The identifier that starts at `pos` of `text` (`stats` in `cache.stats()`), or null. */
+const identifierAt = (text, pos) => /^[A-Za-z_$][\w$]*/.exec(text.slice(pos))?.[0] ?? null;
+
 /**
  * The migration rows a type error at `pos` of `text` names, or [] when it names none:
  * the error is the game's own, not an old engine name. `engineSpecifier` matches an import of
- * the engine and captures its module (none for the root barrel).
+ * the engine and captures its module (none for the root barrel). `engineTypesAt(pos)`, when
+ * given, returns the names of the engine types behind the member at `pos` (the receiver's type
+ * and its union or intersection parts, and the type declaring the member), for the errors
+ * whose text does not print them (ws/testing-3).
  */
-export function removedRowsFor(d, text, rows, engineSpecifier) {
+export function removedRowsFor(d, text, rows, engineSpecifier, engineTypesAt) {
   const quoted = [...d.text.matchAll(/'((?:[^'\\]|\\.)*)'/g)].map((m) => m[1]);
   if (EXPORT_CODES.has(d.code)) {
     // Module '"@thunderclap/engine/anim"' has no exported member 'BlendMode'.
@@ -127,13 +142,49 @@ export function removedRowsFor(d, text, rows, engineSpecifier) {
     const [member, type] = quoted;
     if (!member || !type) return [];
     const names = typeNames(type);
-    return rows.filter((r) => r.type !== null && r.member === member && names.has(r.type));
+    const hit = rows.filter((r) => r.type !== null && r.member === member && names.has(r.type));
+    if (hit.length > 0 || !engineTypesAt || !RECEIVER_CODES.has(d.code)) return hit;
+    return memberRows(rows, member, engineTypesAt(d.pos));
+  }
+  if (d.code === NOT_CALLABLE) {
+    // This expression is not callable. (`cache.stats()`: the error spans the member name.)
+    const member = identifierAt(text, d.pos);
+    if (!member || !engineTypesAt || text[d.pos - 1] !== '.') return [];
+    return memberRows(rows, member, engineTypesAt(d.pos));
   }
   if (CALL_CODES.has(d.code)) {
     const callee = calleeAt(text, d.pos);
     return callee ? rows.filter((r) => r.signature && r.member === callee) : [];
   }
   return [];
+}
+
+const memberRows = (rows, member, types) =>
+  rows.filter((r) => r.type !== null && r.member === member && types.has(r.type));
+
+/**
+ * The `engineTypesAt(pos)` of `removedRowsFor` for `file`, on the project's checker: the
+ * symbols of the receiver's type (before the `.` / `?.` / `!.` ahead of `pos`), its alias and
+ * its union or intersection parts, plus the parent of the member's own symbol when it resolves,
+ * each kept when `isEngine` holds for its declaration's file.
+ */
+function engineTypesAtFor(checker, file, text, isEngine) {
+  const inEngineDecl = (sym) => sym?.declarations?.some((h) => isEngine(h.path)) ?? false;
+  return (pos) => {
+    const out = new Set();
+    const add = (sym) => {
+      if (sym && inEngineDecl(sym)) out.add(sym.name);
+    };
+    add(checker.getSymbolAtPosition(file, pos)?.getParent());
+    let i = pos - 1;
+    while (i >= 0 && /[\s.?!]/.test(text[i])) i--;
+    const type = i >= 0 ? checker.getTypeAtPosition(file, i) : undefined;
+    for (const t of type ? [type, ...(type.getTypes?.() ?? [])] : []) {
+      add(t.getSymbol());
+      add(t.getAliasSymbol());
+    }
+    return out;
+  };
 }
 
 /**
@@ -155,7 +206,8 @@ export function findGameDeprecations(
   } = {},
 ) {
   const configs = (Array.isArray(tsconfig) ? tsconfig : [tsconfig]).map((c) => resolve(c));
-  const out = findDeprecatedUses(configs, undefined, { declaredIn: inEngine(engine) }).map((u) => ({
+  const isEngine = inEngine(engine);
+  const out = findDeprecatedUses(configs, undefined, { declaredIn: isEngine }).map((u) => ({
     ...u,
     kind: 'deprecated',
     rows: [],
@@ -174,8 +226,9 @@ export function findGameDeprecations(
         for (const file of project.rootFiles) {
           if (!project.program.getSourceFile(file)) continue;
           const text = readFileSync(file, 'utf8');
+          const typesAt = engineTypesAtFor(project.checker, file, text, isEngine);
           for (const d of project.program.getSemanticDiagnostics(file)) {
-            const hit = removedRowsFor(d, text, rows, engineSpecifier);
+            const hit = removedRowsFor(d, text, rows, engineSpecifier, typesAt);
             if (hit.length === 0) continue;
             const before = text.slice(0, d.pos).split('\n');
             const use = {

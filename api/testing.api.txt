@@ -228,7 +228,7 @@ interface TestGame<A extends string, S extends FlushableSave | null = null, C = 
 }
 
 ## TestGameOptions  (type-only)
-interface TestGameOptions<A extends string, S extends FlushableSave | null = null> extends Omit<CreateGameOptions<A, S>, 'gpu' | 'host' | 'clock' | 'root'> {
+interface TestGameOptions<A extends string, S extends FlushableSave | null = null, P = any> extends Omit<CreateGameOptions<A, S, P>, 'gpu' | 'host' | 'clock' | 'root'> {
     root?: HTMLElement;
     host?: FakeHost;
     device?: FakeDevice;
@@ -249,7 +249,7 @@ function createFakeHost(opts?: FakeHostOptions): FakeHost;
 function createFixedClock(stepMs?: number, start?: number): FixedClock;
 
 ## createTestGame
-function createTestGame<A extends string, S extends FlushableSave | null = null, C = unknown, P = unknown>(opts: TestGameOptions<A, S>): Promise<TestGame<A, S, C, P>>;
+function createTestGame<A extends string, S extends FlushableSave | null = null, C = unknown, P = unknown>(opts: TestGameOptions<A, S, P>): Promise<TestGame<A, S, C, P>>;
 
 ## fakeCanvasContext
 function fakeCanvasContext(fake: FakeDevice): GPUCanvasContext;
