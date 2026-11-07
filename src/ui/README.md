@@ -363,7 +363,7 @@ inside the overlay.
 ## Layout API: `ui.layout`
 
 `createOverlay` builds the one layout from `OverlayOptions.layout` (a `LayoutSpec`: `forms`,
-`classify`, `safeArea`, `collapseEmpty`); a game reads it as `ui.layout` (`Layout`). What follows
+`classify`, `safeArea`, `collapseEmpty`, `bars`); a game reads it as `ui.layout` (`Layout`). What follows
 lists the exported names; ARCHITECTURE.md *Layout* describes the model.
 
 - **Form factors.** `FormFactor` is one of `FORM_FACTORS` (`phone-landscape`, `phone-portrait`,
@@ -371,7 +371,8 @@ lists the exported names; ARCHITECTURE.md *Layout* describes the model.
   coarsePointer, shortSide }`: a phone is a coarse pointer with a short side of at most
   `PHONE_MAX_SHORT_SIDE` (600) or any view under `PHONE_MAX_VIEW_SHORT` (480).
 - **Forms.** `FormSpec` is `{ columns, rows, areas, tapMin, textMin, pad, modalMargin, units }`;
-  a `Track` is CSS px, `'fill'` or `{ frac, min?, max? }`; `Units` is `'frame' | 'css'`.
+  a `Track` is CSS px, `'fill'` or `{ frac, min?, max? }`; `Units` is `'frame' | 'css'`; the
+  optional `bars` sizes the bars (below).
   `defaultForms` holds the engine's forms; `formSpec(ff, spec?)` merges a spec's overrides over
   them.
 - **Regions and widgets.** `RegionName` is one of `REGIONS` (`top`, `left`, `right`, `bottom`,
@@ -379,6 +380,15 @@ lists the exported names; ARCHITECTURE.md *Layout* describes the model.
   per form factor plus `default`, `order`, `id`) returns a `WidgetHandle` (`element`, `region`,
   `setPlace`, `remove`). A `Placement` is a region, `'hidden'` or a `FreePlacement` (`{ region:
   'free', rect, reason }`); `placementFor(place, ff)` resolves one.
+- **Content bars** (ws/ui-8). `bars` (on `LayoutSpec` for every form factor, or on a
+  `FormSpec`, which wins bar by bar) maps a `BarName` (`top`, `bottom`) to a `BarSize`
+  `{ size: 'fixed' | 'content', max? }`. `fixed`, the default, keeps the form's row track.
+  `content` grows the bar's outer row track to its tallest widget plus the form's `pad` each
+  side, never below the form's track and never above `max` (CSS px, default no limit), and the
+  grid re-flows: `fill` (and so `freeRect`) gives up the space. The layout reads the bar
+  widgets' heights once per re-layout, after placing them, and lays the grid out again only if
+  a track moved. A widget taller than `max` allows is clamped and reported by `overflows()`.
+  `{ bars: { bottom: { size: 'content', max: 160 } } }` holds a 128 px orb meter on a phone.
 - **Overflow** (ws/ui-7). On each re-layout (`add`, `setPlace`, a resize, `refresh`; never per
   frame) the layout measures every widget placed in a region against the region's inner box
   (its rect less the form's `pad` each side). One that is larger on either axis warns once
@@ -537,6 +547,7 @@ declarations, and `applyTheme(el, tokens)` sets them on an element. `ensureStyle
   `CanvasMinimapHost`, `CanvasMinimapOptions`, `MinimapWorld`, `MinimapRotate`, `MinimapShape`,
   `MinimapMarker`, `MinimapMarkerShape`, `MinimapKindStyle`, `MinimapBackground` and (ws/ui-6)
   `MinimapMarkerPlace` (the minimap). ws/ui-7: `LayoutOverflow` (`layout.overflows()`).
+  ws/ui-8: `BarName`, `BarSize` (`LayoutSpec.bars`, `FormSpec.bars`).
 - **External links.** `externalLink(opts: ExternalLinkOptions)` returns an `ExternalLink`
   (`element`, `anchor`, `copyButton`, …) or null; `ExternalLinkLabels` are the strings shown
   above.

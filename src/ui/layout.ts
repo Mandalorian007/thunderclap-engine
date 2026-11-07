@@ -70,6 +70,21 @@ export type Track = number | 'fill' | { frac: number; min?: number; max?: number
  */
 export type Units = 'frame' | 'css';
 
+/** The chrome bars whose height can follow their content (`BarSize`). */
+export type BarName = 'top' | 'bottom';
+
+/**
+ * How a `top` or `bottom` bar is sized (ws/ui-8). `'fixed'` (the default) keeps the form's row
+ * track. `'content'` grows the bar's track to its tallest widget plus the form's `pad` each side,
+ * never below the form's track and never above `max`; the layout re-flows (the world's `fill`
+ * gives up the space). A widget taller than `max` allows still reports through `overflows()`.
+ */
+export interface BarSize {
+  size: 'fixed' | 'content';
+  /** Largest track for `content`, CSS px. Default no limit. */
+  max?: number;
+}
+
 export interface FormSpec {
   /** One entry per column of `areas`. */
   columns: Track[];
@@ -93,6 +108,11 @@ export interface FormSpec {
    * toasts with the canvas frame; `css` keeps them at CSS px over the whole overlay.
    */
   units: Units;
+  /**
+   * How the `top` and `bottom` bars are sized (ws/ui-8). Default fixed (the row track). Merged
+   * over `LayoutSpec.bars` bar by bar.
+   */
+  bars?: Partial<Record<BarName, BarSize>>;
 }
 
 export interface ClassifyInput {
@@ -117,6 +137,11 @@ export interface LayoutSpec {
   safeArea?: Insets;
   /** Collapse tracks whose regions hold no registered widget. Default true. */
   collapseEmpty?: boolean;
+  /**
+   * Bar sizing for every form factor (ws/ui-8), e.g. `{ bottom: { size: 'content', max: 200 } }`.
+   * A form's own `bars` wins bar by bar.
+   */
+  bars?: Partial<Record<BarName, BarSize>>;
 }
 
 /** A rect in overlay CSS px, for the `'free'` escape hatch. */
@@ -294,7 +319,9 @@ export const defaultForms: Readonly<Record<FormFactor, FormSpec>> = {
 
 /** The spec for `ff` with `spec.forms[ff]` merged over the default. */
 export function formSpec(ff: FormFactor, spec: LayoutSpec = {}): FormSpec {
-  return { ...defaultForms[ff], ...spec.forms?.[ff] };
+  const form = { ...defaultForms[ff], ...spec.forms?.[ff] };
+  if (spec.bars) form.bars = { ...spec.bars, ...form.bars };
+  return form;
 }
 
 /** Parses `areas` into a cell grid; throws on ragged rows, unknown names or non-rectangles. */
@@ -377,9 +404,49 @@ export function effectiveInsets(
 }
 
 /**
+ * The row tracks of `form` with each `content` bar's outer track grown to hold `content[bar]`
+ * (its tallest widget, CSS px) plus `pad` each side, clamped by the bar's `max`, and never
+ * below the track's own size (ws/ui-8). Pure; returns `form.rows` itself when nothing grows.
+ */
+function barRows(
+  form: FormSpec,
+  cells: readonly (readonly string[])[],
+  content: Readonly<Partial<Record<BarName, number>>> | null,
+): Track[] {
+  if (!content || !form.bars) return form.rows;
+  let rows: Track[] = form.rows;
+  for (const bar of ['top', 'bottom'] as const) {
+    const b = form.bars[bar];
+    const tallest = content[bar];
+    if (b?.size !== 'content' || tallest === undefined || !(tallest > 0)) continue;
+    let r = -1;
+    for (let i = 0; i < cells.length; i++) {
+      if (!cells[i]!.includes(bar)) continue;
+      // The outer track: the first row for `top`, the last for `bottom`.
+      if (r < 0 || bar === 'bottom') r = i;
+    }
+    const t = rows[r];
+    if (t === undefined || t === 'fill') continue;
+    const want = Math.min(tallest + 2 * form.pad, b.max ?? Number.POSITIVE_INFINITY);
+    let next: Track;
+    if (typeof t === 'number') {
+      if (want <= t) continue;
+      next = want;
+    } else {
+      if (want <= (t.min ?? 0)) continue;
+      next = { ...t, min: want, max: Math.max(t.max ?? Number.POSITIVE_INFINITY, want) };
+    }
+    if (rows === form.rows) rows = [...form.rows];
+    rows[r] = next;
+  }
+  return rows;
+}
+
+/**
  * Lays out one form at one size. `occupied` names the grid regions that hold widgets; with
  * `collapseEmpty`, a track collapses when every region in it is empty or also spans another
  * track on that axis (so a full-width bar never holds a side rail open). `fill` is never empty.
+ * `content` is the tallest widget per bar (CSS px) for the form's `content` bars (`barRows`).
  * Pure.
  */
 export function resolveLayout(
@@ -389,6 +456,7 @@ export function resolveLayout(
   height: number,
   safeArea: Insets = NO_INSETS,
   occupied: ReadonlySet<RegionName> | null = null,
+  content: Readonly<Partial<Record<BarName, number>>> | null = null,
 ): LayoutState {
   const cells = parseAreas(form.areas);
   if (cells.length !== form.rows.length || cells[0]!.length !== form.columns.length) {
@@ -430,7 +498,7 @@ export function resolveLayout(
     if (rowCollapsed.slice(s.r0, s.r1 + 1).every(Boolean)) rowCollapsed[s.r0] = false;
   }
   const columns = resolveTracks(form.columns, innerW, colCollapsed);
-  const rows = resolveTracks(form.rows, innerH, rowCollapsed);
+  const rows = resolveTracks(barRows(form, cells, content), innerH, rowCollapsed);
   const offs = (t: number[], i: number) => t.slice(0, i).reduce((a, b) => a + b, 0);
   const regions = Object.fromEntries(REGIONS.map((n) => [n, null])) as Record<
     RegionName,
@@ -683,16 +751,113 @@ export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout
       if (typeof p === 'string' && p !== 'hidden') occupied.add(p);
     }
     const insets = measureInsets();
-    state = resolveLayout(
-      ff,
-      form,
-      overlay.rect.width,
-      overlay.rect.height,
-      insets,
-      collapseEmpty ? occupied : null,
-    );
+    const resolve = (content: Partial<Record<BarName, number>> | null) =>
+      resolveLayout(
+        ff,
+        form,
+        overlay.rect.width,
+        overlay.rect.height,
+        insets,
+        collapseEmpty ? occupied : null,
+        content,
+      );
+    state = resolve(null);
+    writeGrid(ff, form, insets, occupied);
 
-    // Tokens and grid.
+    // Widgets.
+    freeUses = [];
+    const sorted = [...entries].sort((a, b) => a.order - b.order || a.seq - b.seq);
+    const freed: [Entry, FreePlacement][] = [];
+    for (const e of sorted) {
+      let p = placementFor(e.place, ff);
+      if (typeof p === 'string' && p !== 'hidden' && !state.regions[p]) {
+        console.warn(`[layout] ${e.id}: no "${p}" region in ${ff}; hidden`);
+        p = 'hidden';
+      }
+      e.el.toggleAttribute(HIDDEN_ATTR, p === 'hidden');
+      e.el.style.order = e.order ? String(e.order) : '';
+      if (typeof p === 'object') {
+        if (!e.loggedFree) {
+          console.info(`[layout] free placement: ${e.id} (${p.reason})`);
+          e.loggedFree = true;
+        }
+        freeUses.push({ id: e.id, reason: p.reason });
+        if (e.caption) e.caption.dock(null);
+        if (e.el.parentNode !== free) free.append(e.el);
+        freed.push([e, p]);
+        e.current = 'free';
+        continue;
+      }
+      if (e.current === 'free') {
+        for (const k of ['position', 'left', 'top', 'width', 'height'] as const) e.el.style[k] = '';
+      }
+      if (p === 'hidden') {
+        if (e.caption) e.caption.dock(null);
+        e.current = 'hidden';
+        continue;
+      }
+      if (e.caption) e.caption.dock(regionEls[p]);
+      else regionEls[p].append(e.el);
+      e.current = p;
+    }
+
+    // Content bars (ws/ui-8): one read of the bar widgets' heights, then the grid re-flows once.
+    if (form.bars?.top?.size === 'content' || form.bars?.bottom?.size === 'content') {
+      const content: Partial<Record<BarName, number>> = {};
+      for (const e of sorted) {
+        if (e.current !== 'top' && e.current !== 'bottom') continue;
+        if (form.bars[e.current]?.size !== 'content') continue;
+        const hgt = e.el.getBoundingClientRect?.().height ?? 0;
+        content[e.current] = Math.max(content[e.current] ?? 0, hgt);
+      }
+      const next = resolve(content);
+      if (next.rows.some((r, i) => r !== state.rows[i])) {
+        state = next;
+        writeGrid(ff, form, insets, occupied);
+      }
+    }
+    for (const [e, p] of freed) {
+      const r = typeof p.rect === 'function' ? p.rect(state) : p.rect;
+      Object.assign(e.el.style, {
+        position: 'absolute',
+        left: `${r.x}px`,
+        top: `${r.y}px`,
+        width: `${r.width}px`,
+        height: `${r.height}px`,
+      });
+    }
+
+    // Overflow: one read pass after the writes above (one reflow per re-layout, none per frame).
+    overflows = [];
+    for (const e of sorted) {
+      const p = e.current;
+      if (p === 'free' || p === 'hidden') continue;
+      const r = state.regions[p];
+      const box = e.el.getBoundingClientRect?.();
+      if (!r || !box) continue;
+      const rw = r2(Math.max(0, r.width - 2 * form.pad));
+      const rh = r2(Math.max(0, r.height - 2 * form.pad));
+      const w = r2(box.width);
+      const bh = r2(box.height);
+      if (w <= rw + OVERFLOW_SLACK && bh <= rh + OVERFLOW_SLACK) continue;
+      overflows.push({ id: e.id, region: p, w, h: bh, rw, rh });
+      if (!e.warnedOverflow) {
+        e.warnedOverflow = true;
+        console.warn(
+          `[layout] ${e.id} overflows its "${p}" region in ${ff}: ${w}x${bh} px in ${rw}x${rh} px`,
+        );
+      }
+    }
+    for (const f of subs) f(state);
+  };
+
+  /** Tokens, grid tracks and region visibility for the current `state`. */
+  const writeGrid = (
+    ff: FormFactor,
+    form: FormSpec,
+    insets: Insets,
+    occupied: ReadonlySet<RegionName>,
+  ) => {
     root.dataset.formFactor = ff;
     root.style.setProperty('--tc-tap-min', `${form.tapMin}px`);
     root.style.setProperty('--tc-text-min', `${form.textMin}px`);
@@ -726,72 +891,6 @@ export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout
         });
       }
     }
-
-    // Widgets.
-    freeUses = [];
-    const sorted = [...entries].sort((a, b) => a.order - b.order || a.seq - b.seq);
-    for (const e of sorted) {
-      let p = placementFor(e.place, ff);
-      if (typeof p === 'string' && p !== 'hidden' && !state.regions[p]) {
-        console.warn(`[layout] ${e.id}: no "${p}" region in ${ff}; hidden`);
-        p = 'hidden';
-      }
-      e.el.toggleAttribute(HIDDEN_ATTR, p === 'hidden');
-      e.el.style.order = e.order ? String(e.order) : '';
-      if (typeof p === 'object') {
-        const r = typeof p.rect === 'function' ? p.rect(state) : p.rect;
-        if (!e.loggedFree) {
-          console.info(`[layout] free placement: ${e.id} (${p.reason})`);
-          e.loggedFree = true;
-        }
-        freeUses.push({ id: e.id, reason: p.reason });
-        if (e.caption) e.caption.dock(null);
-        if (e.el.parentNode !== free) free.append(e.el);
-        Object.assign(e.el.style, {
-          position: 'absolute',
-          left: `${r.x}px`,
-          top: `${r.y}px`,
-          width: `${r.width}px`,
-          height: `${r.height}px`,
-        });
-        e.current = 'free';
-        continue;
-      }
-      if (e.current === 'free') {
-        for (const k of ['position', 'left', 'top', 'width', 'height'] as const) e.el.style[k] = '';
-      }
-      if (p === 'hidden') {
-        if (e.caption) e.caption.dock(null);
-        e.current = 'hidden';
-        continue;
-      }
-      if (e.caption) e.caption.dock(regionEls[p]);
-      else regionEls[p].append(e.el);
-      e.current = p;
-    }
-
-    // Overflow: one read pass after the writes above (one reflow per re-layout, none per frame).
-    overflows = [];
-    for (const e of sorted) {
-      const p = e.current;
-      if (p === 'free' || p === 'hidden') continue;
-      const r = state.regions[p];
-      const box = e.el.getBoundingClientRect?.();
-      if (!r || !box) continue;
-      const rw = r2(Math.max(0, r.width - 2 * form.pad));
-      const rh = r2(Math.max(0, r.height - 2 * form.pad));
-      const w = r2(box.width);
-      const bh = r2(box.height);
-      if (w <= rw + OVERFLOW_SLACK && bh <= rh + OVERFLOW_SLACK) continue;
-      overflows.push({ id: e.id, region: p, w, h: bh, rw, rh });
-      if (!e.warnedOverflow) {
-        e.warnedOverflow = true;
-        console.warn(
-          `[layout] ${e.id} overflows its "${p}" region in ${ff}: ${w}x${bh} px in ${rw}x${rh} px`,
-        );
-      }
-    }
-    for (const f of subs) f(state);
   };
 
   const unwatch = overlay.onResize(() => apply());
