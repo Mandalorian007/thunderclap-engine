@@ -36,7 +36,8 @@ function typeName(v: unknown): string {
   return typeof v;
 }
 
-export interface NumberOpts {
+/** `s.number(opts)`: an inclusive range and an integer check. */
+export interface NumberOptions {
   min?: number;
   max?: number;
   int?: boolean;
@@ -74,7 +75,7 @@ export const s = {
     });
   },
 
-  number(opts: NumberOpts = {}): Schema<number> {
+  number(opts: NumberOptions = {}): Schema<number> {
     return make((v, p) => {
       if (typeof v !== 'number' || !Number.isFinite(v))
         return `${p}: expected finite number, got ${typeName(v)}`;

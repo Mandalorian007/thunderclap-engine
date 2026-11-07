@@ -6,19 +6,32 @@
  * (`parents: Int16Array`, `rest` 10 floats per node `t3 q4 s3`, `inverseBind` 12 floats per joint
  * as 3×4 rows, `joints: Uint16Array` joint → node), so a `GltfSkeleton` is a `Skeleton`.
  */
+import {
+  SKIN_JOINTS_BYTE_OFFSET,
+  SKIN_WEIGHTS_BYTE_OFFSET,
+  VERTEX_SKINNED_STRIDE,
+} from '../render/mesh';
 import { type GltfDocument, GltfError, type GltfPrimitive } from './gltf';
 
-/** Floats per vertex in the skinned layout's float part (the 3D layout: pos, normal, uv, colour). */
-const SKINNED_FLOATS = 12;
-/** Bytes per skinned vertex: 12 floats + joints `uint8x4` + weights `unorm8x4`. */
-export const SKINNED_VERTEX_STRIDE = SKINNED_FLOATS * 4 + 4 + 4;
-/** Byte offset of the joints within a skinned vertex, then the weights. */
-export const SKINNED_JOINTS_OFFSET = SKINNED_FLOATS * 4;
-export const SKINNED_WEIGHTS_OFFSET = SKINNED_JOINTS_OFFSET + 4;
+/**
+ * @deprecated (ws/harden-api) Use `VERTEX_SKINNED_STRIDE` from `@thunderclap/engine/render`
+ * (the same 56 bytes: 12 floats + joints `uint8x4` + weights `unorm8x4`). Removed next minor.
+ */
+export const SKINNED_VERTEX_STRIDE = VERTEX_SKINNED_STRIDE;
+/**
+ * @deprecated (ws/harden-api) Use `SKIN_JOINTS_BYTE_OFFSET` from `@thunderclap/engine/render`
+ * (byte 48). Removed next minor.
+ */
+export const SKINNED_JOINTS_OFFSET = SKIN_JOINTS_BYTE_OFFSET;
+/**
+ * @deprecated (ws/harden-api) Use `SKIN_WEIGHTS_BYTE_OFFSET` from `@thunderclap/engine/render`
+ * (byte 52). Removed next minor.
+ */
+export const SKINNED_WEIGHTS_OFFSET = SKIN_WEIGHTS_BYTE_OFFSET;
 
 /** Interleaved skinned vertices, ready for a `Mesh` in `VERTEX_LAYOUT_SKINNED`. */
 export interface SkinnedVertices {
-  /** `vertexCount * SKINNED_VERTEX_STRIDE` bytes: `x y z nx ny nz u v r g b a` as f32, 4 joint bytes, 4 weight bytes. */
+  /** `vertexCount * VERTEX_SKINNED_STRIDE` bytes: `x y z nx ny nz u v r g b a` as f32, 4 joint bytes, 4 weight bytes. */
   vertices: ArrayBuffer;
   layout: 'skinned';
 }
@@ -35,10 +48,10 @@ export function interleaveSkinned(p: GltfPrimitive): SkinnedVertices {
     throw new GltfError('interleaveSkinned: joint indices above 255 do not fit uint8x4');
   }
   const n = p.vertexCount;
-  const out = new ArrayBuffer(n * SKINNED_VERTEX_STRIDE);
+  const out = new ArrayBuffer(n * VERTEX_SKINNED_STRIDE);
   const f32 = new Float32Array(out);
   const u8 = new Uint8Array(out);
-  const fStride = SKINNED_VERTEX_STRIDE / 4;
+  const fStride = VERTEX_SKINNED_STRIDE / 4;
   for (let i = 0; i < n; i++) {
     const o = i * fStride;
     f32[o] = p.position[i * 3]!;
@@ -53,7 +66,7 @@ export function interleaveSkinned(p: GltfPrimitive): SkinnedVertices {
     f32[o + 9] = p.color0[i * 4 + 1]!;
     f32[o + 10] = p.color0[i * 4 + 2]!;
     f32[o + 11] = p.color0[i * 4 + 3]!;
-    const b = i * SKINNED_VERTEX_STRIDE + SKINNED_JOINTS_OFFSET;
+    const b = i * VERTEX_SKINNED_STRIDE + SKIN_JOINTS_BYTE_OFFSET;
     u8[b] = p.joints[i * 4]!;
     u8[b + 1] = p.joints[i * 4 + 1]!;
     u8[b + 2] = p.joints[i * 4 + 2]!;
