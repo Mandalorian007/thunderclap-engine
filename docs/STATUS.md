@@ -188,7 +188,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | `FakeDevice` loss; DOM-free headless option; game-side deprecation filter | ws/testing-2 | brief `docs/briefs/testing-2.md` | train 19 | ✅ merged at `08d34c2` (`FakeDevice.loseDevice`, `TestGame.loseDevice`; `overlay: false` runs in plain node; `check-deprecated-game.mjs`). merged at `1c136a6`, E-031 train 19 landed at `f3b14a9` |
 | 5 | Core no-overlay mode; testing uses it | ws/core-9 | brief `docs/briefs/core-9.md` | train 20 | 🟣 done at `876d584` (`createGame({ overlay: false })` runs with no DOM, `ctx.ui` throws; `createTestGame` uses it; `null-dom.ts` deleted). Train 20 |
 | 5 | Game-side script maps getter and read removals; `TestGameOptions` `P` | ws/testing-3 | brief `docs/briefs/testing-3.md` | train 20 | 🟣 done at `22d9f68` (script maps getter and read removals through the checker; `TestGameOptions` `P` inferred, default `any`). Train 20 |
-| 5 | XR scene-mode per-eye aux | ws/render-12 | brief `docs/briefs/render-12.md` | train 20 | 🔵 running |
+| 5 | XR scene-mode per-eye aux | ws/render-12 | brief `docs/briefs/render-12.md` | train 20 | 🟣 done at `1e3177b` (post reads per-eye aux in XR scene mode; fixed eyes reading the last eye's uniforms with a staged ring; no API change). Train 20 |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
@@ -507,6 +507,9 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
   - Ruling: under `overlay: false`, `ctx.ui` throws. This refines unreleased train 19 behaviour, so it is not a break against 1.0.0.
   - Wish: a public `Surface` interface in platform, to remove the cast in `detached-surface.ts`.
   - Known limit: replay with no DOM drives keys, buttons and pads only.
+- ws/render-12 notes:
+  - Ruling: `postQualityFor('xr')` keeps motion blur off by default, since VR frame budget and comfort come first and changing a default is a behaviour change. Games can opt in, as the README documents. A candidate for a later XR quality pass.
+  - Wish: per-eye TAA histories, which are what keep TAA off in XR.
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
