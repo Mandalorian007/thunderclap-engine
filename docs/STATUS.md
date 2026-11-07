@@ -173,7 +173,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Comment sweep: stale code comments from the backlog plus a rename sweep; comments only | ws/comment-sweep | brief `docs/briefs/comment-sweep.md` | train 12 | ✅ merged in E-031 train 13 (`c6d511f`; main 36144e0) |
 | 5 | v1 API: E-036 plus ergonomics in core, ui and input; replay mutes pointers | ws/api-core | brief `docs/briefs/api-core.md` | after train 13 | 🔵 running |
 | 5 | v1 API: E-036 plus ergonomics in render, post and fx | ws/api-render | brief `docs/briefs/api-render.md` | after train 13 | 🔵 running |
-| 5 | v1 API: E-036 in the other 12 modules; templates build; create-game installable | ws/api-rest | brief `docs/briefs/api-rest.md` | after train 13 | 🔵 running |
+| 5 | v1 API: E-036 in the other 12 modules; templates build; create-game installable | ws/api-rest | brief `docs/briefs/api-rest.md` | after train 13 | 🟣 done at `c02996e` (check 2322, snap 0, templates build offline; all area specs green). Train 14 |
 | 5 | arpg demo on `place` maps, `ctx.replay` and object blur | ws/adoption-6 | brief `docs/briefs/adoption-6.md` | after train 13 | 🔵 running |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
@@ -412,6 +412,15 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
   - ARCHITECTURE input *Today* text. → next doc sweep.
 - Next wave (PM, 2026-11-06): ws/harden-api-2, ws/ergonomics-1/-2 and ws/core-8 are folded into ws/api-core, ws/api-render and ws/api-rest, split by module ownership so all three run in parallel. Deprecated aliases keep demos and templates compiling, so no cross-module edits are needed.
 - E-031 train 13 landed at 36144e0: core-7, docs-modules, input-11, ui-11, docs-guide, harden-api and comment-sweep. The matrix ran 2769 passed / 209 skipped / 0 failed. The README count is now 2319 tests in 210 files. `api/` is live, and `check` now runs `check:docs && check:snippets && check:api`. Caught in the merge: core-7's stale merge of main silently dropped two ARCHITECTURE clauses (input-10 playback anchor, ui-10 rails). The integrator restored both; the new integrate.md rule follows.
+- ws/api-rest notes:
+  - Renames (old names kept as deprecated aliases until the next minor): `NavCell`, `AnimPlayOptions`, `AnimBlendMode`, `AudioPlayOptions`, `AudioFollowTarget`, `GeomAabb`, `RayHit` (geom `Hit`), `LetterboxRect` (platform `Rect`), `isReducedMotion(win?)`.
+  - `AssetCache.stats` and `HostFullscreen.active` are getters now. This is a breaking change for custom `Host` implementers; both host packages are updated.
+  - Templates gain `build` and `preview` scripts. `create-game` links the engine to the local clone until the first publish, behind a `PUBLISHED` flag.
+  - Wishes:
+    - `HostLifecycle.state` to a getter (blocked by the stub at `src/core/game.test.ts:157`, owned by api-core). → follow-up after train 14.
+    - `snapToGrid`/`MagnifyOptions.snap` fit (input). → api-core or a follow-up.
+    - Root README:216 and OFFERING:95 still say `PlayOptions.at`. → next doc sweep.
+    - `./testing` could gain a fake host and a fixed clock, which don't exist yet. → new small stream.
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
