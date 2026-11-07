@@ -165,11 +165,11 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Core 5: `createGame` test of a playback installed mid-session (clock already advanced), speed 1 and 4 | ws/core-5 | brief `docs/briefs/core-5.md`; branched from ws/input-10 c2de796 | core-4, input-10 | ✅ merged in E-031 train 11 (`00a773d`; main 336ed25) |
 | 5 | Core 6: `EngineCtx.clock` typed as the tick clock; `ctx.replay(rec, opts)` detaches real input and reattaches it at the end | ws/core-6 | brief `docs/briefs/core-6.md`; branched from ws/core-5 fdc822e | core-5 | 🟣 done at `ad6ea9c` (check 2274, snap 0, replay 16, core2 40, lifecycle 32). Opens E-031 train 12 |
 | 5 | UI 11: meter `setPlace` (or a per-form place map), the minimap holds its size in content rails, `meter.size` getter | ws/ui-11 | brief `docs/briefs/ui-11.md` | ui-10 | 🔵 dispatched |
-| 5 | Core 7: `ctx.replay` `onEnd`; `createGame` velocity-target option | ws/core-7 | brief `docs/briefs/core-7.md`; branched from ws/core-6 ad6ea9c | core-6 | 🔵 dispatched |
+| 5 | Core 7: `ctx.replay` `onEnd`; `createGame` velocity-target option | ws/core-7 | brief `docs/briefs/core-7.md`; branched from ws/core-6 ad6ea9c | core-6 | 🟣 done at `f935af7` (check 2283, snap 0, replay 16, core2 40, lifecycle 32). Train 12 or 13 |
 | 5 | Input 11: pointer-source mute (XR included) for replays | ws/input-11 | brief `docs/briefs/input-11.md` | core-6 | 🔵 dispatched |
-| 5 | Docs guide: root README rewritten for a first-time user; `docs/guide/` (9 task guides); a snippet typecheck in `pnpm check`; OFFERING refreshed | ws/docs-guide | brief `docs/briefs/docs-guide.md` | — | 🔵 dispatched |
-| 5 | Docs modules: every module README opens with purpose, a checked *Quick use* and *Entry points*; contents lists; false statements fixed | ws/docs-modules | brief `docs/briefs/docs-modules.md` | — | 🔵 dispatched |
-| 5 | Harden API: `api/*.api.txt` surface snapshot plus `check:api`; audit of leaked internals and naming; safe fixes with aliases | ws/harden-api | brief `docs/briefs/harden-api.md` | — | 🔵 dispatched |
+| 5 | Docs guide: root README rewritten for a first-time user; `docs/guide/` (9 task guides); a snippet typecheck in `pnpm check`; OFFERING refreshed | ws/docs-guide | brief `docs/briefs/docs-guide.md` | — | 🔵 running |
+| 5 | Docs modules: every module README opens with purpose, a checked *Quick use* and *Entry points*; contents lists; false statements fixed | ws/docs-modules | brief `docs/briefs/docs-modules.md` | — | 🔵 running |
+| 5 | Harden API: `api/*.api.txt` surface snapshot plus `check:api`; audit of leaked internals and naming; safe fixes with aliases | ws/harden-api | brief `docs/briefs/harden-api.md` | — | 🔵 running |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
@@ -367,6 +367,10 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
     - the `runPass` hook exists for tests to supply a pass's outputs
 - E-031 train 12 (integrator dispatched, scratch `integrate-7`), in order: core-6 ad6ea9c, adoption-5 fe44ac7, render-8 7d17781, post-8 5a51e3b, render-9 26a7f87. E-035 tolerance doesn't apply to this train because the post4 fix is on it.
 - ws/render-8 notes: E-035 cause confirmed, with no render code involved. `:81` was read too late: by then the page had set `NO_JITTER` from objectCamera on, and the failure screenshots show the cube on screen. `:119` is post-8's gap frame. The fix makes the spec check the largest jitter seen during each phase, so the timing of the read can't zero it. The race never reproduced in 140 runs, so the fix is by construction.
+- ws/core-7 notes:
+  - `ctx.replay(rec, { onEnd })` fires once on the ending step, after input is reattached. It does not fire on `stop()` or when replaced.
+  - `createGame({ aux: { velocity: true } })` puts the velocity texture into `PostInputs.velocity`, so object motion blur works without touching the renderer.
+  - Wish: the XR scene target can't take aux attachments, so motion blur in VR is camera-only (render/platform backlog).
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
