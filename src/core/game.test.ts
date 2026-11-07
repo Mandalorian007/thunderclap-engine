@@ -6,17 +6,25 @@
  * The real-browser checks are in e2e/lifecycle.spec.ts and e2e/surface.spec.ts.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createInputPlayback, type InputRecording } from '../input';
+import {
+  createInputPlayback,
+  createSample,
+  type InputRecording,
+  type PointerSource,
+  planeTester,
+  screenRay,
+} from '../input';
 import type { BootResult } from '../platform';
 import { mountSurface } from '../platform/surface';
 import { type FakeXr, FakeXrInputSource, installFakeXr } from '../platform/xr-fake';
+import { Camera } from '../render/camera';
 import {
   createFakeDevice,
   type FakeDevice,
   fakeRendererGpu,
   installGpuGlobals,
 } from '../render/fake-gpu';
-import { type CreateGameOptions, createGame } from './game';
+import { type CreateGameOptions, createGame, type EngineCtx } from './game';
 
 const lost = new Set<(info: GPUDeviceLostInfo) => void>();
 let bootOk = true;
@@ -304,7 +312,7 @@ describe('createGame', () => {
       },
     });
     if (!ctx) throw new Error('no ctx');
-    expect(ctx.input.getGestures()).toBe(ctx.gestures);
+    expect(ctx.input.gestures).toBe(ctx.gestures);
     const canvas = ctx.surface.canvas;
     const ev = (type: string, extra: PointerEventInit = {}) =>
       canvas.dispatchEvent(
@@ -331,7 +339,7 @@ describe('createGame', () => {
   it('wires a pointer router through the renderer camera and the input', async () => {
     const ctx = await createGame(options([]));
     if (!ctx) throw new Error('no ctx');
-    expect(ctx.input.getPointers()).toBe(ctx.pointers);
+    expect(ctx.input.pointers).toBe(ctx.pointers);
     const hits: number[] = [];
     ctx.pointers.addTester(() => {
       hits.push(1);
@@ -808,6 +816,52 @@ describe('createGame: ctx.replay (ws/core-6)', () => {
     expect(held).toEqual([false, true, false]);
   });
 
+  it('a live screen or XR press never reaches the game during a replay; a game mute outlives it (ws/api-core)', async () => {
+    const recording = await recordSpace();
+    const ctx = await createGame(options([]));
+    if (!ctx) throw new Error('no ctx');
+    const selects: string[] = [];
+    ctx.pointers.addTester(planeTester(0, 'plane'));
+    ctx.pointers.on('select', (e) => selects.push(e.pointer.device));
+    // A world-space source like an XR controller, pressing on every tick.
+    const s = createSample(0, 'xr');
+    screenRay(ctx.camera, 100, 100, s.ray);
+    const xrLike: PointerSource = { poll: () => [s] };
+    ctx.pointers.addSource(xrLike);
+    const other: PointerSource = { poll: () => [] };
+    ctx.pointers.addSource(other);
+    const gameMute = ctx.pointers.mute([other]);
+    const press = () => {
+      s.select = !s.select;
+      // The screen source driven directly, not through the DOM the sink stops.
+      if (s.select) ctx.pointers.screen.pointerDown(5, 100, 100, 'touch');
+      else ctx.pointers.screen.pointerUp(5, 100, 100);
+    };
+    const playback = ctx.replay(recording);
+    expect(ctx.pointers.isMuted(xrLike)).toBe(true);
+    expect(ctx.pointers.isMuted(ctx.pointers.screen)).toBe(true);
+    for (let i = 0; i < 10; i++) {
+      press();
+      ctx.loop.tickOnce(1 / 60);
+    }
+    expect(selects).toEqual([]);
+    expect(playback.done).toBe(true);
+    ctx.loop.tickOnce(1 / 60);
+    expect(ctx.input.playback).toBeNull();
+    // The replay's mute is gone; the game's stays.
+    expect(ctx.pointers.isMuted(xrLike)).toBe(false);
+    expect(ctx.pointers.isMuted(ctx.pointers.screen)).toBe(false);
+    expect(ctx.pointers.isMuted(other)).toBe(true);
+    // Live again: a fresh press selects (a press held across the end is not a new one).
+    s.select = false;
+    ctx.loop.tickOnce(1 / 60);
+    s.select = true;
+    ctx.loop.tickOnce(1 / 60);
+    expect(selects).toContain('xr');
+    gameMute();
+    expect(ctx.pointers.isMuted(other)).toBe(false);
+  });
+
   it('stop() gives the input back at once; a second replay replaces the first', async () => {
     const recording = await recordSpace();
     const ctx = await createGame(options([]));
@@ -976,6 +1030,79 @@ describe('createGame: ctx.replay (ws/core-6)', () => {
     for (let i = 0; i < 30; i++) ctx.loop.tickOnce(1 / 60);
     expect(ends).toEqual(['third', 'fourth']);
     expect(ctx.input.playback).toBeNull();
+  });
+});
+
+describe('createGame: ergonomics (ws/api-core)', () => {
+  it('setCamera swaps the camera the loop, ctx.camera and the pointer rays use', async () => {
+    const ctx = await createGame(options([]));
+    if (!ctx) throw new Error('no ctx');
+    const first = ctx.camera;
+    const seen: unknown[] = [];
+    ctx.stack.push({ render: (_f, camera) => seen.push(camera) });
+    const persp = Camera.perspective(1, 16 / 9, 0.1, 100);
+    ctx.setCamera(persp);
+    expect(ctx.camera).toBe(persp);
+    expect(ctx.renderer.camera).toBe(persp);
+    expect(ctx.pointers.camera).toBe(persp);
+    ctx.loop.tickOnce(1 / 60);
+    ctx.setCamera(first);
+    ctx.loop.tickOnce(1 / 60);
+    expect(seen).toEqual([persp, first]);
+  });
+
+  it('ui.anchors() and ui.floats() default to the game camera', async () => {
+    const ctx = await createGame(options([]));
+    if (!ctx) throw new Error('no ctx');
+    expect(() => ctx.ui.anchors()).not.toThrow();
+    expect(ctx.ui.floats()).toBe(ctx.ui.floats());
+  });
+
+  it('theme and textScale reach the overlay', async () => {
+    const ctx = await createGame({
+      ...options([]),
+      theme: { colorAccent: '#ff00ff' },
+      textScale: 1.5,
+    });
+    if (!ctx) throw new Error('no ctx');
+    expect(ctx.ui.root.style.getPropertyValue('--tc-color-accent')).toBe('#ff00ff');
+    expect(ctx.ui.root.dataset.textScale).toBe('150');
+    const plain = await createGame(options([]));
+    expect(plain?.ui.root.dataset.textScale).toBeUndefined();
+  });
+
+  it('types: a ctx without a save is an EngineCtx<A>; P types the pointer hits', async () => {
+    const ctx = await createGame<'go', null, unknown, { id: number }>({
+      root: document.getElementById('root') as HTMLElement,
+      input: { bindings: { go: [{ key: 'Space' }] } },
+    });
+    if (!ctx) throw new Error('no ctx');
+    const takesAny = (c: EngineCtx<'go'>) => c.save;
+    expect(takesAny(ctx)).toBeNull();
+    const withSave = await createGame(options([]));
+    if (!withSave) throw new Error('no ctx');
+    expect(takesAny(withSave)).not.toBeNull();
+    ctx.pointers.addTester(planeTester(0, { id: 3 }));
+    const ids: number[] = [];
+    ctx.pointers.on('hit', (e) => {
+      if (e.hit) ids.push(e.hit.target.id);
+    });
+    // @ts-expect-error the router's targets are `{ id: number }`
+    ctx.pointers.addTester(planeTester(0, 'not an id'));
+    expect(ids).toEqual([]);
+  });
+
+  it('the pointer rays go through the head camera while VR runs', async () => {
+    xr = installFakeXr();
+    const ctx = await createGame({ ...options([]), xr: {} });
+    if (!ctx) throw new Error('no ctx');
+    ctx.loop.start();
+    expect(ctx.pointers.camera).toBe(ctx.camera);
+    await ctx.xr.enter();
+    expect(ctx.xr.surface).not.toBeNull();
+    expect(ctx.pointers.camera).toBe(ctx.xr.surface?.head);
+    await ctx.xr.exit();
+    expect(ctx.pointers.camera).toBe(ctx.camera);
   });
 });
 

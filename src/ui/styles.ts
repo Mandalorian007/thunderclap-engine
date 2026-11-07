@@ -176,7 +176,14 @@ ${CSSU} .tc-link-fallback { min-width: 0; width: min(480px, 90vw); }
 }
 `;
 
-/** Base stylesheet for the overlay. Injected once per document. Everything is under `.tc-overlay`. */
+/**
+ * The overlay's base stylesheet: tokens, layers, panels, widgets and units. Injected once
+ * per document by `ensureStyles`; the HUD, cursor, tooltip and other widget sheets add
+ * their own `<style>` beside it. Everything is under `.tc-overlay`.
+ *
+ * @deprecated (ws/api-core, E-036) Internal: `ensureStyles` injects it. Leaves the `ui` entry next
+ * minor; tests import it from this file.
+ */
 export const BASE_CSS = ROOT_CSS + toFrameUnits(WIDGET_CSS) + CSS_UNITS_CSS;
 
 const STYLE_ID = 'tc-ui-base';
@@ -190,11 +197,20 @@ export function ensureStyles(doc: Document = document): void {
   doc.head.appendChild(style);
 }
 
-/** True if the user prefers reduced motion (false where `matchMedia` is unavailable). */
-export function prefersReducedMotion(win: Window | undefined = globalThis.window): boolean {
+/**
+ * True if the user prefers reduced motion in `win` (default the global window; false where
+ * `matchMedia` is unavailable). `platform`'s `prefersReducedMotion()` reads the global window only.
+ */
+export function prefersReducedMotionIn(win: Window | undefined = globalThis.window): boolean {
   try {
     return !!win?.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
   } catch {
     return false;
   }
 }
+
+/**
+ * @deprecated (ws/api-core, E-036) Use `prefersReducedMotionIn`: `platform` exports a
+ * `prefersReducedMotion()` without the window argument. Removed next minor.
+ */
+export const prefersReducedMotion: (win?: Window) => boolean = prefersReducedMotionIn;

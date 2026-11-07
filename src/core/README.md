@@ -127,7 +127,10 @@ A replay started mid-session (from a menu, after the game has run live) is one c
 `InputPlayback` it installs on `ctx.input`, driven by `ctx.clock`, plus `stop()`). For the
 replay's length the input is attached to the same detached element `input.replay` uses, so real
 pointers and keys never reach `ctx.input`, its gestures or its rays (whatever the player held is
-released), while the recorded pointers still do. The loop reads `ctx.input.playback` each fixed
+released), while the recorded pointers still do. Sources off the DOM (an XR controller, a custom
+`PointerSource`, the screen source fed directly) are muted for the replay with
+`ctx.pointers.mute()` (ws/api-core); the replay lifts only its own mute when it ends, so a mute
+the game set stays. The loop reads `ctx.input.playback` each fixed
 step (ws/core-5), so from the next step it runs `playback.step()`, skips its own advance while the
 playback drives `ctx.clock`, and resumes it once the recording ends; the long-press lands on its
 recorded tick (counted from the call) at any speed. On the first step after the last recorded
@@ -140,12 +143,31 @@ detached element. A game can still build the playback itself with
 `createInputPlayback(ctx.input, recording, { clock: ctx.clock, speed })` (no cast: `ctx.clock` is
 a `TickClock`), but the input then stays attached to the canvas and the player can disturb it.
 
+## createGame: camera, theme and the ctx types
+
+- `ctx.camera` is the camera the loop, the pointer rays and `ui.anchors()` use (`renderer.camera`,
+  `Camera.ortho2d(design)` by default). Re-aim it in place, or swap it:
+  `ctx.setCamera(Camera.perspective(fovY, aspect, near, far))` (ws/api-core); `ctx.camera`
+  reads the new one at once and the next frame draws through it. While an XR session runs the
+  pointer router's camera is `ctx.xr.surface.head`, so a head-locked or billboard `WorldPanel`
+  faces the headset.
+- `createGame({ theme, textScale })`: token overrides for the overlay (`OverlayOptions.theme`)
+  and its text scale at boot (`applyTextScale(ctx.ui.root, textScale, ctx.ui.setTheme)`).
+- The overlay's `anchors()` and `floats()` default to the game's camera, so `ctx.ui.anchors()`
+  needs no argument.
+- `EngineCtx<A, S, C, P>`: `S` defaults to `FlushableSave | null`, so a helper typed
+  `EngineCtx<A>` takes a ctx with or without a save (name the save, `EngineCtx<A, MySave>`, to
+  read it). `P` is the pointer hits' target type (`createGame<A, S, C, P>` types
+  `ctx.pointers`); it defaults to `any` on `EngineCtx`, so `EngineCtx<A>` takes any of them.
+- The save is flushed on hide, on `host.lifecycle` going to `background` and on device loss.
+
 ## Scenes
 
 - `Scene<Ctx, Frame, Cam>`: an interface with optional `name`, `transparent`, `enter(ctx)`,
   `exit()`, `pause()`, `resume()`, `update(dt)` and `render(frame, camera, alpha)`. A game
   implements one per screen (title, level, pause menu).
-- `SceneStack(ctx)`: `push`, `pop`, `replace`, `clear`, `top`, `size`, `list()`. Only the top
+- `SceneStack(ctx)`: `push`, `pop`, `replace`, `clear`, `top`, `size`, `scenes` (bottom first,
+  the live array; `list()`, a copy, is deprecated, ws/api-core). Only the top
   scene updates; rendering starts at the highest scene that is not `transparent` and goes up, so a
   pause menu draws over the level beneath it. Stack changes made inside `update` or `render` are
   deferred until that call returns. `createGame` exposes one as `ctx.stack` and renders it with

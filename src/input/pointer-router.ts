@@ -1,8 +1,9 @@
 /**
- * The pointer router: every pointing source (mouse, pen, touch, the pad cursor, later XR) becomes
- * a world-space ray through the active camera; the game's `HitTester`s say what each ray hits;
- * the router keeps the nearest hit per pointer and reports `hit`, `hitEnd`, `select` and
- * `secondary`. A game reads the hit and the `select` action; it never sees which device pointed.
+ * The pointer router: every pointing source (mouse, pen, touch, the pad cursor, XR controllers
+ * and hands through `XrPointerSource`) becomes a world-space ray through the active camera; the
+ * game's `HitTester`s say what each ray hits; the router keeps the nearest hit per pointer and
+ * reports `hit`, `hitEnd`, `select` and `secondary`. A game reads the hit and the `select`
+ * action; it never sees which device pointed.
  */
 import { Emitter } from '../core/events';
 import type { Gestures } from './gestures';
@@ -14,7 +15,14 @@ import {
   ScreenPointers,
   type XrButtons,
 } from './pointer-sources';
-import { createHit, createRay, type Hit, type HitTester, type Ray, type RayCamera } from './rays';
+import {
+  createHit,
+  createRay,
+  type HitTester,
+  type PickHit,
+  type Ray,
+  type RayCamera,
+} from './rays';
 import type { Hand, PointerButton, PointerTransform, XrButton } from './types';
 
 /** One live pointer after routing: its sample plus its nearest hit. Reused; read, don't keep. */
@@ -31,14 +39,14 @@ export interface RoutedPointer<T = unknown> {
   readonly secondary: boolean;
   readonly xr: Readonly<XrButtons> | null;
   /** The nearest hit this tick, or `null`. */
-  readonly hit: Hit<T> | null;
+  readonly hit: PickHit<T> | null;
 }
 
 /** Payload of every router event. Reused between emits: read it in the listener or copy it. */
 export interface PointerHitEvent<T = unknown> {
   pointer: RoutedPointer<T>;
   /** `hit`/`hitEnd`: the hit that started or ended. `select`/`secondary`: the pointer's hit, or `null`. */
-  hit: Hit<T> | null;
+  hit: PickHit<T> | null;
 }
 
 export interface PointerRouterEvents<T = unknown> {
@@ -96,12 +104,12 @@ interface Track<T> {
   select: boolean;
   secondary: boolean;
   xr: XrButtons | null;
-  hit: Hit<T> | null;
+  hit: PickHit<T> | null;
   /** Storage behind `hit`. */
-  readonly store: Hit<T>;
+  readonly store: PickHit<T>;
   readonly storeNormal: [number, number, number];
   /** Storage for the `hitEnd` payload. */
-  readonly ended: Hit<T>;
+  readonly ended: PickHit<T>;
   readonly endedNormal: [number, number, number];
   readonly xrStore: XrButtons;
   readonly xrPrev: XrButtons;
@@ -144,14 +152,15 @@ export class PointerRouter<T = unknown> {
   private readonly pool: Track<T>[] = [];
   private tick = 0;
   private isBlocked = false;
-  /** `mute()` with no argument: every source, including ones added later. */
-  private muteAll = false;
-  private readonly muted: PointerSource[] = [];
-  /** Sources `unmute()` just woke: their pointers held through the mute are not new presses. */
-  private wakeAll = false;
+  /**
+   * Live mutes, one entry per `mute()` call: `null` mutes every source (ones added later
+   * included), a list mutes those sources. A source is muted while any entry names it.
+   */
+  private readonly mutes: (readonly PointerSource[] | null)[] = [];
+  /** Sources a mute's end just woke: their pointers held through the mute are not new presses. */
   private readonly waking: PointerSource[] = [];
   private target: HTMLElement | null = null;
-  private readonly best: Hit<T> = createHit<T>(undefined as T);
+  private readonly best: PickHit<T> = createHit<T>(undefined as T);
   private readonly bestNormal: [number, number, number] = [0, 0, 0];
   private readonly evHit: PointerHitEvent<T> = { pointer: null as never, hit: null };
   private readonly evEnd: PointerHitEvent<T> = { pointer: null as never, hit: null };
@@ -180,7 +189,7 @@ export class PointerRouter<T = unknown> {
   }
 
   /** The primary pointer's hit, or `null`. */
-  get hit(): Hit<T> | null {
+  get hit(): PickHit<T> | null {
     return this.primary?.hit ?? null;
   }
 
@@ -203,7 +212,7 @@ export class PointerRouter<T = unknown> {
     };
   }
 
-  /** Add a pointer source (a `PadCursor`, later an XR source); returns its remover. */
+  /** Add a pointer source (a `PadCursor`, an `XrPointerSource`); returns its remover. */
   addSource(s: PointerSource): () => void {
     this.sources.push(s);
     if (this.target) s.attach?.(this.target);
@@ -222,31 +231,61 @@ export class PointerRouter<T = unknown> {
    * (the pointers `Input.replayPointer` dispatches) are never muted, so a replay keeps its own
    * pointers while the real ones are silenced. A pointer that holds select or secondary when
    * its source is muted is released on the next tick: `hitEnd`, then `released` with `hit:
-   * null` (it let go over nothing, as a cancel), and `held` reads false. Calls add up until
-   * `unmute()`.
+   * null` (it let go over nothing, as a cancel), and `held` reads false.
+   *
+   * Returns the remover (ws/api-core): it lifts this mute only, so a game's mute and a replay's
+   * mute do not clear each other; a source stays muted while another mute names it. Calling it
+   * twice, or after `unmute()`, does nothing.
    */
-  mute(sources?: readonly PointerSource[]): void {
-    if (!sources) {
-      this.muteAll = true;
-      return;
-    }
-    for (const s of sources) if (!this.muted.includes(s)) this.muted.push(s);
+  mute(sources?: readonly PointerSource[]): () => void {
+    const entry = sources ? sources.slice() : null;
+    this.mutes.push(entry);
+    return () => {
+      const i = this.mutes.indexOf(entry);
+      if (i < 0) return;
+      const before = this.mutedNow();
+      this.mutes.splice(i, 1);
+      this.wake(before);
+    };
   }
 
   /**
-   * Lift every mute. A button a woken pointer still holds reads up (not held, not pressed) until
-   * it is let go, so a press held through the mute never lands as a new one; its next press does.
+   * Lift every mute, the removers' included. A button a woken pointer still holds reads up (not
+   * held, not pressed) until it is let go, so a press held through the mute never lands as a new
+   * one; its next press does.
    */
   unmute(): void {
-    if (this.muteAll) this.wakeAll = true;
-    for (const s of this.muted) if (!this.waking.includes(s)) this.waking.push(s);
-    this.muteAll = false;
-    this.muted.length = 0;
+    if (this.mutes.length === 0) return;
+    const before = this.mutedNow();
+    this.mutes.length = 0;
+    this.wake(before);
   }
 
   /** True while `source` is muted (by `mute()` or `mute([source])`). */
   isMuted(source: PointerSource): boolean {
-    return this.muteAll || this.muted.includes(source);
+    const mutes = this.mutes;
+    for (let i = 0; i < mutes.length; i++) {
+      const m = mutes[i]!;
+      if (m === null || m.includes(source)) return true;
+    }
+    return false;
+  }
+
+  /** The sources muted now (current sources for a mute-all, listed ones otherwise). */
+  private mutedNow(): PointerSource[] {
+    const out: PointerSource[] = [];
+    for (const s of this.sources) if (this.isMuted(s)) out.push(s);
+    for (const m of this.mutes) {
+      if (m) for (const s of m) if (!out.includes(s)) out.push(s);
+    }
+    return out;
+  }
+
+  /** Mark every source of `before` that is no longer muted as just woken. */
+  private wake(before: readonly PointerSource[]): void {
+    for (const s of before) {
+      if (!this.isMuted(s) && !this.waking.includes(s)) this.waking.push(s);
+    }
   }
 
   /** Client → camera screen units for the screen source (`Input.setPointers` shares the input's). */
@@ -335,14 +374,13 @@ export class PointerRouter<T = unknown> {
     for (const src of this.sources) {
       const samples = src.poll(camera);
       const muted = this.isMuted(src);
-      const woken = this.wakeAll || this.waking.includes(src);
+      const woken = this.waking.includes(src);
       for (let i = 0; i < samples.length; i++) {
         const s = samples[i]!;
         if (muted && !s.synthetic) continue;
         this.route(src, s, blocked, woken);
       }
     }
-    this.wakeAll = false;
     this.waking.length = 0;
 
     // Pointers that were not reported have ended.
@@ -579,7 +617,7 @@ export class PointerRouter<T = unknown> {
   }
 }
 
-function copyHit<T>(dst: Hit<T>, normal: [number, number, number], src: Hit<T>): void {
+function copyHit<T>(dst: PickHit<T>, normal: [number, number, number], src: PickHit<T>): void {
   dst.point[0] = src.point[0];
   dst.point[1] = src.point[1];
   dst.point[2] = src.point[2];

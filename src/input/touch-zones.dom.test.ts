@@ -211,4 +211,27 @@ describe('createTouchZones', () => {
     expect(zones.zones.move.active).toBe(false);
     expect(input.dispatcher!.claimed(1)).toBe(false);
   });
+
+  it('types bindings against the input actions and the zone names (ws/api-core)', () => {
+    const zones = { move: { kind: 'stick', rect: () => ({ x: 0, y: 0, w: 1, h: 1 }) } } as const;
+    const ok = createTouchZones(input, {
+      zones,
+      bindings: { moveLeft: { zone: 'move', axis: 'x', dir: -1 } },
+    });
+    ok.destroy();
+    const typo = () =>
+      createTouchZones(input, {
+        zones,
+        // @ts-expect-error: 'mvoe' is not a zone
+        bindings: { moveLeft: { zone: 'mvoe', axis: 'x', dir: -1 } },
+      });
+    const unknownAction = () =>
+      createTouchZones(input, {
+        zones,
+        // @ts-expect-error: 'fly' is not one of the input's actions
+        bindings: { fly: { zone: 'move', axis: 'y', dir: 1 } },
+      });
+    expect(typeof typo).toBe('function');
+    expect(typeof unknownAction).toBe('function');
+  });
 });

@@ -76,6 +76,7 @@ export {
   type DropTarget,
   defaultInventoryLabels,
   ensureInventoryStyles,
+  type GridCell,
   INVENTORY_CSS,
   type InventoryHost,
   type InventoryLabels,
@@ -238,7 +239,7 @@ export {
   PanelStack,
   type PanelStackFocusOptions,
 } from './stack';
-export { BASE_CSS, ensureStyles, prefersReducedMotion } from './styles';
+export { BASE_CSS, ensureStyles, prefersReducedMotion, prefersReducedMotionIn } from './styles';
 export {
   applyTextScale,
   CSS_FONT_PX,
@@ -299,6 +300,8 @@ export {
   select,
   stepper,
   WIDGETS2_CSS,
+  type WidgetCooldown,
+  type WidgetCooldownOptions,
   type WidgetReticle,
   type WidgetReticleOptions,
   type WidgetTone,

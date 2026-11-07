@@ -113,10 +113,39 @@ describe('action contexts (ws/input-5)', () => {
     const a = input.pushContext('a');
     input.pushContext('b');
     input.pushContext('a', { pass: 'none' });
-    expect(input.contextStack()).toEqual(['b', 'a']);
+    expect(input.contexts).toEqual(['b', 'a']);
     a();
+    expect(input.contexts).toEqual(['b', 'a']);
+    // The deprecated reader is a copy of the same names.
     expect(input.contextStack()).toEqual(['b', 'a']);
-    expect(() => input.pushContext('c', { bindings: { nope: [] } as never })).toThrow(/unknown/);
+    expect(input.contextStack()).not.toBe(input.contexts);
+  });
+
+  it('a context can add an action the base map lacks (ws/api-core)', () => {
+    const input = new Input<string>({ jump: [{ key: 'Space' }] }, { getGamepads: () => [] });
+    expect(input.bindings().back).toBeUndefined();
+    const pop = input.pushContext('menu', { bindings: { back: [{ key: 'Escape' }] } });
+    input.keyDown('Escape');
+    input.update();
+    expect(input.pressed('back')).toBe(true);
+    expect(input.bindings().back).toEqual([{ key: 'Escape' }]);
+    expect(input.bindings(null).back).toBeUndefined();
+    input.keyUp('Escape');
+    input.update();
+    pop();
+    // Popped, it stays a known action bound to nothing.
+    input.keyDown('Escape');
+    input.update();
+    expect(input.pressed('back')).toBe(false);
+    expect(input.bindings().back).toEqual([]);
+    // A base rebuild keeps it while the context is on the stack.
+    input.pushContext('menu', { bindings: { back: [{ key: 'Escape' }] } });
+    input.setBindings({ jump: [{ key: 'KeyJ' }] });
+    expect(input.bindings().back).toEqual([{ key: 'Escape' }]);
+    expect(input.listening).toBeNull();
+    expect(input.gestures).toBeNull();
+    expect(input.pointers).toBeNull();
+    expect(input.look).toBeNull();
   });
 });
 

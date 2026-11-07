@@ -1,6 +1,6 @@
 import { h } from './dom';
 import type { Rect } from './overlay';
-import { prefersReducedMotion } from './styles';
+import { prefersReducedMotionIn } from './styles';
 
 export type Corner = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left';
 
@@ -112,7 +112,7 @@ export class CaptionCard {
 
   constructor(container: HTMLElement, opts: CaptionOptions = {}) {
     this.corner = opts.corner ?? 'bottom-right';
-    this.reducedMotion = opts.reducedMotion ?? prefersReducedMotion();
+    this.reducedMotion = opts.reducedMotion ?? prefersReducedMotionIn();
     this.cps = opts.cps ?? 45;
     this.portraitEl = h('div', { class: 'tc-caption-portrait', 'aria-hidden': 'true' });
     this.speakerEl = h('div', { class: 'tc-caption-speaker', 'aria-hidden': 'true' });

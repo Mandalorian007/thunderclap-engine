@@ -281,6 +281,12 @@ export function createCompass(host: Widgets3Host, opts: CompassOptions = {}): Co
 
 // ------------------------------------------------------------------ styles
 
+/**
+ * Stylesheet for these widgets (theme tokens).
+ *
+ * @deprecated (ws/api-core, E-036) Internal: its `ensure*Styles` injects it. Leaves the `ui` entry next
+ * minor; tests import it from this file.
+ */
 export const WIDGETS3_CSS = `
 .tc-overlay .tc-ring { position: relative; display: grid; place-items: center; width: var(--tc-ring-size); height: var(--tc-ring-size);
   font-family: var(--tc-font-ui); font-size: var(--tc-font-size-s); color: var(--tc-color-text); }

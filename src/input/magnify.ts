@@ -62,18 +62,24 @@ export interface MagnifyOptions {
   clear?: (
     target: MagnifyTarget | null,
     aim: { x: number; y: number },
-  ) => { keep: Rect[]; spare?: Rect[]; avoid?: Rect[] } | null;
+  ) => { keep: Edges[]; spare?: Edges[]; avoid?: Edges[] } | null;
   /** Draw a thin leader from the loupe's rim to the snapped target (`Loupe` `leader`). */
   leader?: boolean;
 }
 
-/** An axis-aligned rectangle, client CSS px. */
-export interface Rect {
+/** An axis-aligned rectangle by its edges (left, top, right, bottom), client CSS px. */
+export interface Edges {
   l: number;
   t: number;
   r: number;
   b: number;
 }
+
+/**
+ * @deprecated (ws/api-core, E-036) Use `Edges`: `ui` and `platform` export an x/y/width/height
+ * `Rect`. Removed next minor.
+ */
+export type Rect = Edges;
 
 /** One tick's aim (see `Gestures.aim`). */
 export interface Aim {
@@ -110,7 +116,7 @@ export function magnifySize(m: Pick<MagnifyOptions, 'size'>): number {
 }
 
 /** A square grid of cells: `cols × rows`, cell (i, j) spans `left + i·pitch` to `+ pitch`. */
-export interface Grid {
+export interface SnapGrid {
   left: number;
   top: number;
   pitch: number;
@@ -119,12 +125,18 @@ export interface Grid {
 }
 
 /**
+ * @deprecated (ws/api-core, E-036) Use `SnapGrid`: `ui` exports a different `Grid` (the item
+ * grid widget). Removed next minor.
+ */
+export type Grid = SnapGrid;
+
+/**
  * The accepted cell nearest a point, within half a pitch of its square (so a point just off the
  * board still finds an edge cell, and a point on a refused cell steps to an accepted neighbour),
  * or `null`. Distances are measured between the point and the cell centres, in pitches.
  */
 export function snapToGrid(
-  g: Grid,
+  g: SnapGrid,
   x: number,
   y: number,
   ok: (i: number, j: number) => boolean = () => true,
@@ -184,15 +196,15 @@ export function loupeClear(
   aim: { x: number; y: number },
   size: number,
   view: { width: number; height: number },
-  keep: Rect[],
-  avoid: Rect[] = [],
-  spare: Rect[] = [],
+  keep: Edges[],
+  avoid: Edges[] = [],
+  spare: Edges[] = [],
 ): { x: number; y: number } {
   const half = size / 2;
   const gap = 6;
   const inView = (x: number, y: number) =>
     x >= half + 4 && x <= view.width - half - 4 && y >= half + 4 && y <= view.height - half - 4;
-  const hits = (x: number, y: number, q: Rect, pad: number) => {
+  const hits = (x: number, y: number, q: Edges, pad: number) => {
     const dx = Math.max(q.l - x, 0, x - q.r);
     const dy = Math.max(q.t - y, 0, y - q.b);
     return Math.hypot(dx, dy) < half + pad;

@@ -647,5 +647,29 @@ describe('attach (ws/ui-4)', () => {
   it('attach needs a pointer router', () => {
     const { panel } = make();
     expect(() => panel.attach({ getPointers: () => null, onUpdated: () => () => {} })).toThrow();
+    expect(() => panel.attach({ pointers: null, onUpdated: () => () => {} })).toThrow();
+  });
+
+  it('attach faces the router camera, or opts.camera when given (ws/api-core)', () => {
+    const { panel } = make({ headLocked: { distance: 1 } });
+    const routerCam = Camera.perspective(1, 1, 0.1, 10);
+    const head = Camera.perspective(1, 1, 0.1, 10);
+    const ticks: (() => void)[] = [];
+    const router = { pointers: [], camera: routerCam, addTester: () => () => {} };
+    const input = {
+      pointers: router as unknown as PointerRouter<unknown>,
+      onUpdated: (fn: () => void) => {
+        ticks.push(fn);
+        return () => ticks.splice(ticks.indexOf(fn), 1);
+      },
+    };
+    const seen: Camera[] = [];
+    panel.update = (c) => seen.push(c);
+    panel.attach(input);
+    for (const t of ticks) t();
+    panel.attach(input, { camera: () => head });
+    for (const t of ticks) t();
+    expect(seen).toEqual([routerCam, head]);
+    expect(seen[1]).toBe(head);
   });
 });

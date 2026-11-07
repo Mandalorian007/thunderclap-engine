@@ -44,7 +44,8 @@ export type BindingSource =
   | { pointer: PointerButton }
   /**
    * An XR controller or hand button from an XR `PointerSource` (`hand` omitted = either hand).
-   * No XR source ships yet, so this reads inactive until one is added to the router.
+   * `createGame({ xr })` adds an `XrPointerSource` to `ctx.pointers` for the session; with no XR
+   * source on the router this reads inactive.
    */
   | { xr: XrButton; hand?: Hand }
   /**

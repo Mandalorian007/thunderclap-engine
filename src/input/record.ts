@@ -20,18 +20,18 @@ import type { GamepadLike, PointerState } from './types';
 
 /** The linked gestures' clock, else the linked look's, else the wall clock. */
 function linkedClock<A extends string>(input: Input<A>): () => number {
-  const g = input.getGestures();
+  const g = input.gestures;
   if (g) return g.now;
-  const look = input.getLook();
+  const look = input.look;
   if (look) return () => look.clock.now();
   return wallClock.now;
 }
 
 /** True when neither the linked gestures nor the linked look has a clock of its own. */
 function onWallClock<A extends string>(input: Input<A>): boolean {
-  const g = input.getGestures();
+  const g = input.gestures;
   if (g) return g.clock === wallClock;
-  const look = input.getLook();
+  const look = input.look;
   return !look || look.clock === wallClock;
 }
 

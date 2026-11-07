@@ -188,3 +188,47 @@ describe('PointerRouter.mute: screen and synthetic', () => {
     expect(log).toEqual(['hit:gamepad:a']);
   });
 });
+
+describe('PointerRouter.mute: removers (ws/api-core)', () => {
+  it('a mute remover lifts only its own mute; unmute lifts them all', () => {
+    const { router, log } = screenSetup();
+    const game = router.mute([router.screen]);
+    const replay = router.mute();
+    expect(router.isMuted(router.screen)).toBe(true);
+    replay();
+    // The game's mute survives the other one ending.
+    expect(router.isMuted(router.screen)).toBe(true);
+    router.screen.pointerMove(1, 150, 150);
+    router.update();
+    expect(log).toEqual([]);
+    replay();
+    game();
+    game();
+    expect(router.isMuted(router.screen)).toBe(false);
+    router.update();
+    expect(log).toEqual(['hit:mouse:a']);
+    router.mute();
+    const late = router.mute([router.screen]);
+    router.unmute();
+    expect(router.isMuted(router.screen)).toBe(false);
+    late();
+    expect(router.isMuted(router.screen)).toBe(false);
+  });
+
+  it('a press held while one of two mutes ends stays read as up', () => {
+    const { router, log } = screenSetup();
+    router.screen.pointerMove(1, 150, 150);
+    router.screen.pointerDown(1, 150, 150, 'mouse', 0);
+    router.update();
+    const a = router.mute();
+    const b = router.mute([router.screen]);
+    router.update();
+    a();
+    router.update();
+    expect(log).toEqual(['hit:mouse:a', 'select:mouse:a', 'hitEnd:mouse:a', 'released:mouse:-']);
+    b();
+    router.update();
+    expect(log.slice(4)).toEqual(['hit:mouse:a']);
+    expect(router.held('select')).toBe(false);
+  });
+});

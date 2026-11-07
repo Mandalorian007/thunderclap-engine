@@ -118,19 +118,30 @@ export type TouchZoneReading<O extends TouchZoneOptions> = O extends StickZoneOp
     ? ButtonsZone
     : SwipeZone;
 
-/** How an action reads a zone. */
-export type TouchZoneBinding =
+/**
+ * How an action reads a zone. `Z` is the zone names (ws/api-core: `createTouchZones` checks
+ * `zone` against its `zones`); default any string.
+ */
+export type TouchZoneBinding<Z extends string = string> =
   /** A stick axis in one direction: 0..1 of the deflection along it. */
-  | { zone: string; axis: 'x' | 'y'; dir: 1 | -1 }
+  | { zone: Z; axis: 'x' | 'y'; dir: 1 | -1 }
   /** A button: 1 while held, with a fresh press each landing. */
-  | { zone: string; button: string }
+  | { zone: Z; button: string }
   /** A swipe: 1 on the tick it is recognised. */
-  | { zone: string; swipe: SwipeDirection };
+  | { zone: Z; swipe: SwipeDirection };
 
-export interface TouchZonesOptions<Z extends Record<string, TouchZoneOptions>> {
+export interface TouchZonesOptions<
+  Z extends Record<string, TouchZoneOptions>,
+  A extends string = string,
+> {
   zones: Z;
-  /** Actions fed through `input` from the zones. */
-  bindings?: Record<string, TouchZoneBinding | readonly TouchZoneBinding[]>;
+  /**
+   * Actions fed through `input` from the zones. Typed (ws/api-core): the actions are the
+   * input's, the `zone`s are names in `zones`.
+   */
+  bindings?: Partial<
+    Record<A, TouchZoneBinding<keyof Z & string> | readonly TouchZoneBinding<keyof Z & string>[]>
+  >;
   /** Pointer devices the zones take. Default `['touch']`. */
   devices?: readonly PointerRecordDevice[];
 }
@@ -185,10 +196,10 @@ interface ZoneState {
 const inRect = (r: ZoneRect, x: number, y: number): boolean =>
   x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
 
-export function createTouchZones<Z extends Record<string, TouchZoneOptions>>(
-  input: Input<string>,
-  opts: TouchZonesOptions<Z>,
-): TouchZones<Z> {
+export function createTouchZones<
+  Z extends Record<string, TouchZoneOptions>,
+  A extends string = string,
+>(input: Input<A>, opts: TouchZonesOptions<Z, NoInfer<A>>): TouchZones<Z> {
   const devices = opts.devices ?? ['touch'];
   const states: ZoneState[] = [];
   const byName = new Map<string, ZoneState>();
@@ -224,7 +235,9 @@ export function createTouchZones<Z extends Record<string, TouchZoneOptions>>(
   const bindings = new Map<string, readonly TouchZoneBinding[]>();
   if (opts.bindings) {
     for (const action of Object.keys(opts.bindings)) {
-      const b = opts.bindings[action]!;
+      const b = (opts.bindings as Record<string, TouchZoneBinding | readonly TouchZoneBinding[]>)[
+        action
+      ]!;
       bindings.set(
         action,
         Array.isArray(b) ? (b as readonly TouchZoneBinding[]) : [b as TouchZoneBinding],

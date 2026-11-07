@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { loupeLeader } from '../ui/loupe';
 import { type GestureOptions, Gestures } from './gestures';
 import {
+  type Edges,
   loupeClear,
   loupeSpot,
   type MagnifyOptions,
   magnifySize,
-  type Rect,
   snapToGrid,
 } from './magnify';
 
@@ -57,7 +57,7 @@ describe('loupeSpot', () => {
 
 describe('loupeClear: the loupe leaves the kept area in sight', () => {
   const view = { width: 800, height: 400 };
-  const disc = (c: { x: number; y: number }, q: Rect, half: number) =>
+  const disc = (c: { x: number; y: number }, q: Edges, half: number) =>
     Math.hypot(Math.max(q.l - c.x, 0, c.x - q.r), Math.max(q.t - c.y, 0, c.y - q.b)) >= half;
   it('never covers a kept rect or the fingertip, and stays on screen', () => {
     for (const [fx, fy] of [

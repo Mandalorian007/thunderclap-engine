@@ -101,6 +101,7 @@ The options you will use first:
 - `input.bindings`: one list of bindings per action. Your code reads actions (`ctx.input.pressed('flare')`), never keys.
 - `save(host)`: builds the game's save from the host's storage. Leave it out and `ctx.save` is `null`.
 - `layout`: the HUD regions per form factor (phone, tablet, desktop).
+- `theme` and `textScale`: the overlay's colour and size tokens, and its text scale (1.5 is 150%).
 - `sim`: the fixed-step simulation (see below).
 - `host`: where the game runs. The default is the web host. You swap it to ship to the desktop.
 
@@ -110,10 +111,12 @@ Others: `post` (bloom, fog, grade), `mixerKey` (persist audio volumes), `styles(
 
 `EngineCtx` is everything the engine built for you, in one object:
 
-- `renderer`, `camera`, `post` and `particles` for drawing.
+- `renderer`, `camera`, `post` and `particles` for drawing. `ctx.setCamera(camera)` swaps the camera, for example to `Camera.perspective(...)` for a 3D game.
 - `input`, `gestures`, `pointers` and `padNav` for input.
 - `ui` (the DOM overlay and its layout), `audio`, `save` and `host`.
 - `stack` (the scenes), `loop` (the frame loop), `clock` (game time in ms) and `hooks`.
+
+Type a helper `EngineCtx<Action>` and it takes a game with a save or without one; name the save (`EngineCtx<Action, MySave>`) to read it.
 
 ### Scenes and `ctx.stack`
 

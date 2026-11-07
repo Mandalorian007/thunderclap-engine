@@ -129,7 +129,7 @@ export function openMenu(ctx: EngineCtx<Action, null>) {
 
 `pass` says what the contexts below still do: `'unbound'` (the default) keeps their bindings for actions this context leaves out, `'all'` keeps all of theirs, `'none'` keeps nothing. A key held while the context changes does not fire in the new one, so the Space that opened the menu does not also confirm it.
 
-Every action name in a context must be in your `Action` type. Declare menu actions in the base map too, even with an empty list.
+Every action name in a context must be in your `Action` type. With a typed `Action`, declare menu actions in the base map too, even with an empty list. An `Input<string>` can bind an action in the context alone: it reads as unbound everywhere else.
 
 ## Gestures
 
@@ -158,9 +158,9 @@ A finger covers about 44 CSS px. When your cells are smaller, turn on the magnif
 
 ```ts
 import { createGame } from '@thunderclap/engine';
-import { type Grid, type MagnifyTarget, snapToGrid } from '@thunderclap/engine/input';
+import { type MagnifyTarget, type SnapGrid, snapToGrid } from '@thunderclap/engine/input';
 
-const grid: Grid = { left: 360, top: 140, pitch: 40, cols: 20, rows: 20 };
+const grid: SnapGrid = { left: 360, top: 140, pitch: 40, cols: 20, rows: 20 };
 
 const ctx = await createGame<'select'>({
   root: document.getElementById('app')!,
@@ -192,7 +192,7 @@ Every pointer becomes a ray through the camera: the mouse, a pen, a touch, the p
 
 | Tester | Hits |
 | --- | --- |
-| `planeTester(z, target?)` | The plane at depth `z`. Through a 2D camera this is the world point under the pointer. |
+| `planeTester(z, target?)` | The plane at depth `z`. Through a 2D camera this is the world point under the pointer. Pass `{ normal, offset }` instead of `z` for any other plane, such as a floor. |
 | `aabbTester(boxes)` | A live array of `{ min, max, target }` boxes. Edit the array freely. |
 | `sphereTester(transform, bounds, target?)` | A sphere placed by a `Transform`. |
 | `obbTester(transform, halfExtents, target?)` | A box placed by a `Transform`. |
@@ -202,7 +202,7 @@ Each tester returns a remover. Bind `{ pointer: 'select' }` and any press of tha
 
 ```ts
 import type { EngineCtx } from '@thunderclap/engine';
-import { type Aabb, aabbTester, meshTester } from '@thunderclap/engine/input';
+import { aabbTester, meshTester, type RayBox } from '@thunderclap/engine/input';
 import { Transform } from '@thunderclap/engine/render';
 
 interface Card { name: string }
@@ -211,7 +211,7 @@ export function setup(
   ctx: EngineCtx<'select', null>,
   rock: { transform: Transform; vertices: Float32Array; indices: Uint16Array },
 ) {
-  const boxes: Aabb<Card>[] = [{ min: [100, 100, 0], max: [250, 250, 0], target: { name: 'ace' } }];
+  const boxes: RayBox<Card>[] = [{ min: [100, 100, 0], max: [250, 250, 0], target: { name: 'ace' } }];
   const removeBoxes = ctx.pointers.addTester(aabbTester(boxes));
   ctx.pointers.addTester(meshTester(rock.transform, rock.vertices, rock.indices, rock));
 
@@ -315,6 +315,7 @@ export function addThumbs(ctx: EngineCtx<Action, null>) {
 - Each zone holds one pointer and claims it, so two thumbs never pinch and a thumb on the stick never taps.
 - Use one zone per thumb. Two buttons a thumb might press at once go in separate zones.
 - Read a zone directly with `zones.zones.move.vector` when you want to draw it.
+- The `bindings` are typed: each key must be one of your actions and each `zone` one of your zones, so a typo is a compile error.
 
 ## Record and replay a session
 
@@ -353,7 +354,7 @@ const ctx = await createGame<'jump'>({
 
 `parseRecording` throws an `InputRecordingError` on bad data.
 
-To start a replay from a menu in a running game, call `ctx.replay(rec)`. It detaches the input from the canvas and the window while the recording runs, so the player cannot disturb it. The loop steps it from the next fixed step. When the recording ends, or you call `stop()`, the player gets the input back:
+To start a replay from a menu in a running game, call `ctx.replay(rec)`. It detaches the input from the canvas and the window while the recording runs, and mutes `ctx.pointers` (VR controllers too), so the player cannot disturb it. A mute you set yourself (`ctx.pointers.mute(...)`) is still on after the replay. The loop steps it from the next fixed step. When the recording ends, or you call `stop()`, the player gets the input back:
 
 ```ts
 import type { EngineCtx } from '@thunderclap/engine';

@@ -2,13 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { Camera, ORTHO2D_HALF_DEPTH } from '../render/camera';
 import { Transform } from '../render/transform';
 import {
-  type Aabb,
   aabbTester,
   createRay,
   meshTester,
   obbTester,
   planeTester,
   type Ray,
+  type RayBox,
+  type RayPlane,
   rayAt,
   rayTriangle,
   screenRay,
@@ -116,10 +117,36 @@ describe('planeTester', () => {
     expect(a).toBe(b);
     expect(b?.point).toEqual([1, 0, 2]);
   });
+
+  it('takes any plane (ws/api-core): a floor, a tilted wall, moved in place', () => {
+    const floor: RayPlane = { normal: [0, 1, 0] };
+    const t = planeTester(floor, 'floor');
+    const h = t(ray([3, 4, -2], [0, -1, 0]));
+    expect(h?.point[0]).toBeCloseTo(3);
+    expect(h?.point[1]).toBeCloseTo(0);
+    expect(h?.point[2]).toBeCloseTo(-2);
+    expect(h?.distance).toBeCloseTo(4);
+    expect(h?.normal).toEqual([0, 1, 0]);
+    expect(h?.target).toBe('floor');
+    // From below the normal turns to face the ray.
+    expect(t(ray([0, -1, 0], [0, 1, 0]))?.normal).toEqual([-0, -1, -0]);
+    expect(t(ray([0, 1, 0], [1, 0, 0]))).toBeNull();
+    expect(t(ray([0, 1, 0], [0, 1, 0]))).toBeNull();
+    floor.offset = 2;
+    expect(t(ray([0, 5, 0], [0, -1, 0]))?.distance).toBeCloseTo(3);
+    // Not unit length: x + y = 2 is the plane 2x + 2y = 4.
+    const wall = planeTester({ normal: [2, 2, 0], offset: 4 });
+    const w = wall(ray([0, 0, 0], [1, 0, 0]));
+    expect(w?.distance).toBeCloseTo(2);
+    expect(w?.normal?.[0]).toBeCloseTo(-Math.SQRT1_2);
+    expect(planeTester({ normal: [0, 0, 1], offset: 2 })(ray([0, 0, 0], [0, 0, 1]))?.point).toEqual(
+      [0, 0, 2],
+    );
+  });
 });
 
 describe('aabbTester', () => {
-  const boxes: Aabb<string>[] = [
+  const boxes: RayBox<string>[] = [
     { min: [-1, -1, -1], max: [1, 1, 1], target: 'near' },
     { min: [-1, -1, -6], max: [1, 1, -4], target: 'far' },
     { min: [5, 5, -1], max: [6, 6, 1], target: 'aside' },
@@ -162,7 +189,7 @@ describe('aabbTester', () => {
   });
 
   it('flat 2D quads at z = 0 are picked through ortho2d; ties go to the earlier box', () => {
-    const quads: Aabb<number>[] = [
+    const quads: RayBox<number>[] = [
       { min: [0, 0, 0], max: [100, 100, 0], target: 1 },
       { min: [50, 50, 0], max: [150, 150, 0], target: 2 },
     ];

@@ -157,7 +157,11 @@ describe('SceneStack preload and transitions', () => {
     const boom = new Error('boom');
     const bad = rec('bad', log, { preload: () => Promise.reject(boom) });
     await expect(st.replace(bad)).rejects.toBe(boom);
+    expect(st.scenes).toEqual([a]);
+    // The getter is the live stack; the deprecated list() a copy (ws/api-core).
+    expect(st.scenes).toBe(st.scenes);
     expect(st.list()).toEqual([a]);
+    expect(st.list()).not.toBe(st.scenes);
     expect(st.transitioning).toBe(false);
     expect(log).toEqual(['a.enter(c)']);
     // A preload that throws synchronously behaves the same, and the queue keeps going.
@@ -169,7 +173,7 @@ describe('SceneStack preload and transitions', () => {
     const after = st.push(rec('b', log));
     await expect(st.push(thrower)).rejects.toBe(boom);
     await after;
-    expect(st.list().map((s) => s.name)).toEqual(['a', 'b']);
+    expect(st.scenes.map((s) => s.name)).toEqual(['a', 'b']);
   });
 
   it('sync scenes resolve; replace reports exit then enter', async () => {
