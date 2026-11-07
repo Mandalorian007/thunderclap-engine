@@ -36,7 +36,7 @@ Platform deprecations such as DOM `execCommand` are not ours and stay.
 **Version.**
 - Set `package.json` `version` to `1.0.0`.
 - Turn CHANGELOG `## Unreleased` into `## 1.0.0 (2026-11-07)`, with a *Removed* section listing every alias by module. Open a fresh empty `## Unreleased` above it.
-- Update the root README *Status* section and the migration guide: aliases are removed in 1.0.0, and the guide is the map from 0.x.
+- Update the root README *Status* section and the migration guide (including guide line ~119, `PostStack.addJitterCamera`, which says "the rest go in the next minor"): aliases are removed in 1.0.0, and the guide is the map from 0.x.
 - Do **not** create a git tag. The PM and the user tag.
 
 **Templates and demos.** These already use no deprecated names. Confirm `check:create-game` and `check:deprecated` both pass.
