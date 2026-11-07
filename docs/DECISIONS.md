@@ -182,3 +182,8 @@ Train 5's matrix (ea53645: nav-6, post-5, audio-6, input-7, render-6) had 1 fail
 Ruling: land ea53645. The test joins the tolerated list (as E-017) until ws/e2e-harden-3 lands. That workstream finds out whether the demo drops a same-frame press, which would be an engine or demo bug and a finding, or whether the spec presses wrong, and fixes the spec. Any other tactics failure is still real.
 
 **Closed 2026-11-06:** ws/e2e-harden-3 (32a6126, train 7) found the cause in the spec. Polled pads report state, so the test re-pressed before the release had been read. The spec now polls between press and release. From train 7 on, `tactics.spec.ts:247` leaves the tolerated list.
+
+## E-034: train 9 proceeds over the record-timing unit failure (2026-11-06, PM)
+After the adoption-4 merge, the train 9 `pnpm check` had 1 failure at load 13.8: `src/input/record-timing.dom.test.ts:149` "ptr entries carry their time since the recorder started" (`expected 6.41 to be greater than 10`). The recorded up time came out 13.6 ms early. adoption-4 touches no `src/`. The src tree is identical to the two green check runs before it (core-4 400e2ae, post-7 376acb3). The test reads real DOM event timestamps, so it depends on wall-clock time.
+
+Ruling: no rerun. Commit adoption-4 and run the matrix. The test is tolerated in trains 9 and 10 only. ws/input-10, which owns `src/input`, makes the assertion honest about time (an injected clock or synthetic `timeStamp`s) and shows it 20× green under load. Any other check failure is still real.
