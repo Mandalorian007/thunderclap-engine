@@ -1,6 +1,6 @@
 # ThunderClap: vision
 
-*2026-11-05. The target every engine proposal is judged against. `ARCHITECTURE.md` says what exists today and what is planned; this file says why.*
+*2026-11-05, pillar status refreshed 2026-11-06. The target every engine proposal is judged against. `ARCHITECTURE.md` says what exists today and what is planned; this file says why.*
 
 ## The goal
 
@@ -21,12 +21,12 @@ These are *candidate styles*, not the feature list. The engine is style-agnostic
 
 ## The six pillars, in the order they matter to a game author
 
-1. **Runs everywhere, laid out properly.** Phone, tablet, desktop, Electron, iframe embed and headset from one bundle. Safe areas, form factors, DPR, page lifecycle, device loss, browser-zoom blocking. *Largely done.*
-2. **One input vocabulary.** Touch, keyboard, mouse, pen, gamepad, VR controllers and hands all land as the same actions and the same ray hits. A game reads `select` and `hit.cell`; it never sees a touch, a button or an `XRInputSource`. *Action map and gestures done; rays and XR bindings ahead.*
-3. **2D and 3D on one renderer.** A matrix camera with presets (ortho 2D is the default), depth when a camera asks, instanced sprites and meshes sharing one instance format, a vertex layout per mesh, sorted draw lists. *Phase 3 begins it.*
-4. **Lots of style, shader-first.** Custom WGSL materials, HDR colour and emissive targets, a rich post stack, a lighting block with shadows, GPU particles and weather-class FX. Style comes from shaders and light, not from asset pipelines; glTF is secondary. *Material and post foundation done; lighting and FX ahead.*
-5. **UI that follows the game.** DOM panels, toasts and captions in CSS-px regions on screens; world-anchored labels; in-world and head-locked panels where there is no screen. *Overlay and layout done; placements ahead.*
-6. **Framework plumbing.** Host seam, saves, analytics events, game templates, and a `createGame` where the fixed-step sim and the save store are opt-in, so a pure client fits. *Host and saves done; analytics, templates and opt-in ahead.*
+1. **Runs everywhere, laid out properly.** Phone, tablet, desktop, Electron, iframe embed and headset from one bundle. Safe areas, form factors, DPR, page lifecycle, device loss, browser-zoom blocking. *Done, including headsets.*
+2. **One input vocabulary.** Touch, keyboard, mouse, pen, gamepad, VR controllers and hands all land as the same actions and the same ray hits. A game reads `select` and `hit.cell`; it never sees a touch, a button or an `XRInputSource`. *Done: rays, XR controllers and hands, and deterministic record and replay (also mid-session). Ahead: muting XR pointers during a replay.*
+3. **2D and 3D on one renderer.** A matrix camera with presets (ortho 2D is the default), depth when a camera asks, instanced sprites and meshes sharing one instance format, a vertex layout per mesh, sorted draw lists. *Done: perspective and depth, culling, LOD, picking, voxel chunks, two views. The 2D path is pixel-identical.*
+4. **Lots of style, shader-first.** Custom WGSL materials, HDR colour and emissive targets, a rich post stack, a lighting block with shadows, GPU particles and weather-class FX. Style comes from shaders and light, not from asset pipelines; glTF is secondary. *Done: PBR, sun and spot shadows, sky, water, weather, GPU particles, trails, decals, and a post stack with TAA on camera jitter, SSR, AO and object motion blur. Ahead: polish.*
+5. **UI that follows the game.** DOM panels, toasts and captions in CSS-px regions on screens; world-anchored labels; in-world and head-locked panels where there is no screen. *Done: HUD widgets (orbs, floats, minimap), rails per form factor, anchors, world and VR panels, inventory. Ahead: easier widget handling.*
+6. **Framework plumbing.** Host seam, saves, analytics events, game templates, and a `createGame` where the fixed-step sim and the save store are opt-in, so a pure client fits. *Done: analytics, i18n, four templates, client mode. Ahead: usage guides, the API surface frozen for `engine-v1.0.0`, and a real game on it.*
 
 ## The rules that do not move
 
