@@ -37,6 +37,7 @@ export { buildEmitSurface, sampleEmitSurface } from './emit-surface';
 export type { FlickerOptions, PulseOptions } from './flicker';
 export { flicker, pulse, valueNoise1 } from './flicker';
 export type {
+  AttractFalloff,
   EmitParams,
   EmitShape,
   ParticleForce,

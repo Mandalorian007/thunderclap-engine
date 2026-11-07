@@ -144,10 +144,29 @@ export interface EmitParams {
   inherit?: number;
 }
 
+/** How an `attract` force scales with distance (see `ParticleForce`). */
+export type AttractFalloff = 'constant' | 'linear' | 'inverse-square';
+
 /** A force applied to every particle each frame (`ParticleSystem.forces`). */
 export type ParticleForce =
-  /** Pull toward (x, y, z) at `strength` units/s², fading linearly to 0 at `radius` (0 = everywhere). */
-  | { kind: 'attract'; x: number; y: number; z?: number; strength: number; radius?: number }
+  /**
+   * Pull toward (x, y, z), fading linearly to 0 at `radius` (0 = everywhere). `falloff` shapes it
+   * by the distance r: `'constant'` (default) pulls at `strength` units/s² everywhere, so with
+   * light drag particles fly through the point and orbit it; `'linear'` pulls at `strength × r`
+   * (a spring: with drag they settle on the point); `'inverse-square'` at `strength / r²`
+   * (gravity-like). Nothing pulls inside `deadZone` (0) units, which also keeps
+   * `'inverse-square'` finite.
+   */
+  | {
+      kind: 'attract';
+      x: number;
+      y: number;
+      z?: number;
+      strength: number;
+      radius?: number;
+      falloff?: AttractFalloff;
+      deadZone?: number;
+    }
   /** Swirl about the `axis` through (x, y, z) at `strength` units/s², fading to 0 at `radius`. */
   | {
       kind: 'vortex';
@@ -275,6 +294,7 @@ const SIZE_2D = [6, 1] as const;
 const WORLD_SIZE = [0.1, 0.02] as const;
 const LIFE = [0.5, 1.2] as const;
 const FORCE_ID = { attract: 0, vortex: 1, turbulence: 2, drag: 3 } as const;
+const FALLOFF_ID = { constant: 0, linear: 1, 'inverse-square': 2 } as const;
 
 const ADDITIVE: GPUBlendState = {
   color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
@@ -1275,6 +1295,9 @@ export class ParticleSystem implements Drawable {
           s[o + 8] = f.axis[0];
           s[o + 9] = f.axis[1];
           s[o + 10] = f.axis[2];
+        } else {
+          s[o + 8] = FALLOFF_ID[f.falloff ?? 'constant'];
+          s[o + 9] = f.deadZone ?? 0;
         }
       } else if (f.kind === 'turbulence') {
         s[o + 4] = f.strength;
@@ -1599,8 +1622,10 @@ export function applyForces(
       const dz = (f.z ?? 0) - pz;
       const r = Math.hypot(dx, dy, dz);
       const radius = f.radius ?? 0;
-      const w = radius > 0 ? Math.max(1 - r / radius, 0) : 1;
-      if (r > 1e-4) {
+      let w = radius > 0 ? Math.max(1 - r / radius, 0) : 1;
+      if (f.falloff === 'linear') w *= r;
+      else if (f.falloff === 'inverse-square') w /= Math.max(r * r, 1e-4);
+      if (r > 1e-4 && r >= (f.deadZone ?? 0)) {
         ax += (dx / r) * f.strength * w;
         ay += (dy / r) * f.strength * w;
         az += (dz / r) * f.strength * w;

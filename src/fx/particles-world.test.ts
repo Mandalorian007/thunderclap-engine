@@ -8,6 +8,7 @@ import {
   applyForces,
   type EmitParams,
   evaluateCurve,
+  type ParticleForce,
   ParticleSystem,
   type ParticleSystemOptions,
 } from './particles';
@@ -602,6 +603,93 @@ describe('ParticleSystem extended kernel', () => {
     expect(dragged[0]).toBeCloseTo(1);
   });
 
+  it('applyForces: attract falloff and dead zone (constant is the default)', () => {
+    const pull = (f: Partial<Extract<ParticleForce, { kind: 'attract' }>>, r: number) => {
+      const vel = new Float32Array(3);
+      applyForces([{ kind: 'attract', x: 0, y: 0, z: 0, strength: 2, ...f }], [r, 0, 0], vel, 1);
+      return -vel[0]!;
+    };
+    expect(pull({}, 4)).toBeCloseTo(2);
+    expect(pull({ falloff: 'constant' }, 4)).toBeCloseTo(2);
+    expect(pull({ falloff: 'linear' }, 4)).toBeCloseTo(8);
+    expect(pull({ falloff: 'inverse-square' }, 4)).toBeCloseTo(2 / 16);
+    // The reach still fades on top of the falloff.
+    expect(pull({ falloff: 'linear', radius: 8 }, 4)).toBeCloseTo(4);
+    expect(pull({ deadZone: 0.5 }, 0.4)).toBeCloseTo(0);
+    expect(pull({ falloff: 'inverse-square', deadZone: 0.5 }, 0.5)).toBeCloseTo(8);
+    // Without a dead zone, inverse-square stays finite next to the point.
+    expect(Number.isFinite(pull({ falloff: 'inverse-square' }, 1e-3))).toBe(true);
+  });
+
+  it('applyForces: a spring pull with drag gathers a shell; constant pull with light drag orbits through', () => {
+    // The fx3?forces setup: a shell of radius 3 at rest, a weak vortex, 6 s at 60 Hz.
+    const within = (
+      attract: Partial<Extract<ParticleForce, { kind: 'attract' }>>,
+      drag: number,
+    ) => {
+      const forces: ParticleForce[] = [
+        { kind: 'attract', x: 0, y: 0, z: 0, strength: 4, ...attract },
+        { kind: 'vortex', axis: [0, 1, 0], x: 0, y: 0, z: 0, strength: 0.35, radius: 6 },
+        { kind: 'drag', amount: drag },
+      ];
+      const pos: number[][] = [];
+      const vel: Float32Array[] = [];
+      for (let i = 0; i < 64; i++) {
+        const a = (i / 64) * Math.PI * 2;
+        const b = ((i % 8) / 8 - 0.5) * Math.PI;
+        pos.push([3 * Math.cos(a) * Math.cos(b), 3 * Math.sin(b), 3 * Math.sin(a) * Math.cos(b)]);
+        vel.push(new Float32Array(3));
+      }
+      let near = 0;
+      let samples = 0;
+      for (let f = 0; f < 360; f++) {
+        for (let i = 0; i < 64; i++) {
+          const p = pos[i]!;
+          const v = vel[i]!;
+          applyForces(forces, p, v, 1 / 60);
+          for (let k = 0; k < 3; k++) p[k]! += v[k]! / 60;
+          if (f >= 120) {
+            samples++;
+            if (Math.hypot(p[0]!, p[1]!, p[2]!) < 0.3) near++;
+          }
+        }
+      }
+      return near / samples;
+    };
+    // Measured: constant at drag 0.4 is within 0.3 of the point 9% of the time from 2 s on.
+    expect(within({}, 0.4)).toBeLessThan(0.2);
+    // Linear at drag 3 is there 100% of the time from 2 s on.
+    expect(within({ falloff: 'linear' }, 3)).toBeGreaterThan(0.95);
+  });
+
+  it('uploads attract falloff and dead zone into the force block', () => {
+    const { fake, ps } = makeSystem({
+      space: 'world',
+      forces: [
+        { kind: 'attract', x: 0, y: 0, strength: 1 },
+        { kind: 'attract', x: 0, y: 0, strength: 1, falloff: 'linear', deadZone: 0.25 },
+        { kind: 'attract', x: 0, y: 0, strength: 1, falloff: 'inverse-square' },
+      ],
+    });
+    ps.update(1 / 60);
+    ps.prepare(fake.device.createCommandEncoder(), FLAT_FRAME);
+    const s = simFloats(ps);
+    expect(Array.from(s.subarray(28, 30))).toEqual([0, 0]);
+    expect(Array.from(s.subarray(40, 42))).toEqual([1, 0.25]);
+    expect(Array.from(s.subarray(52, 54))).toEqual([2, 0]);
+    expect(PARTICLE_WORLD_COMPUTE_WGSL).toContain('r >= f.c.y');
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('collide pushes out along the surface normal, not back along the view ray', () => {
+    // A view-ray push moves a resting drop toward the camera every frame (ws/fx-5: drops born
+    // 3 units from the fx3 slab's front edge crept off it in 1.8 s).
+    expect(PARTICLE_COLLIDE_WGSL).toContain(
+      'p.pos.xyz + n * (max(dot(hit - p.pos.xyz, n), 0.0) + 1e-3)',
+    );
+    expect(PARTICLE_COLLIDE_WGSL).not.toContain('hit - ray * 1e-3');
+  });
+
   it('pins the extended kernels: the world kernel carries the force step, the 2D legacy one does not', () => {
     for (const name of ['attract', 'vortex', 'curl', 'surface_tri', 'subspawn', 'advance']) {
       expect(PARTICLE_WORLD_COMPUTE_WGSL).toContain(name);
@@ -610,9 +698,9 @@ describe('ParticleSystem extended kernel', () => {
     }
     expect(PARTICLE_EXT_RENDER_WGSL).toContain('sheet');
     expect(PARTICLE_COLLIDE_WGSL).toContain('thickness');
-    expect(hash(PARTICLE_WORLD_COMPUTE_WGSL)).toMatchInlineSnapshot(`"bcf1b4c9"`);
-    expect(hash(PARTICLE_EXT_COMPUTE_WGSL)).toMatchInlineSnapshot(`"b4a624ec"`);
-    expect(hash(PARTICLE_COLLIDE_WGSL)).toMatchInlineSnapshot(`"7df355d7"`);
+    expect(hash(PARTICLE_WORLD_COMPUTE_WGSL)).toMatchInlineSnapshot(`"fb795e2c"`);
+    expect(hash(PARTICLE_EXT_COMPUTE_WGSL)).toMatchInlineSnapshot(`"95490997"`);
+    expect(hash(PARTICLE_COLLIDE_WGSL)).toMatchInlineSnapshot(`"4c271825"`);
   });
 
   it('sub-emission: interns onDeath/onLife descriptors one level deep and dispatches subspawn', () => {

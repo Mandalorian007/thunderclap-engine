@@ -194,7 +194,7 @@ struct Particle {
 struct Force {
   a: vec4f,       // kind (0 attract, 1 vortex, 2 turbulence, 3 drag), x, y, z
   b: vec4f,       // strength, radius, frequency, seed
-  c: vec4f,       // axis xyz, drag amount
+  c: vec4f,       // vortex axis xyz | attract falloff (0 constant, 1 linear, 2 inverse-square), dead zone; drag amount
 };
 struct Sim {
   dt: f32,
@@ -456,8 +456,9 @@ fn request(pos: vec3f, vel: vec3f, slot: f32, count: f32) {
     if (kind < 0.5) {
       let d = f.a.yzw - pos;
       let r = length(d);
-      let w = select(1.0, max(1.0 - r / f.b.y, 0.0), f.b.y > 0.0);
-      if (r > 1e-4) { acc += d / r * f.b.x * w; }
+      var w = select(1.0, max(1.0 - r / f.b.y, 0.0), f.b.y > 0.0);
+      if (f.c.x > 1.5) { w /= max(r * r, 1e-4); } else if (f.c.x > 0.5) { w *= r; }
+      if (r > 1e-4 && r >= f.c.y) { acc += d / r * f.b.x * w; }
     } else if (kind < 1.5) {
       let rel = pos - f.a.yzw;
       let ax = normalize(f.c.xyz);
@@ -696,8 +697,9 @@ export const PARTICLE_WORLD_RENDER_WGSL = fxRenderWgsl(true);
 /**
  * Depth collision (world space, \`readsDepth\` + \`collide\`): runs in the depth hook over this
  * frame's opaque depth. A live particle whose projected depth lies behind the scene by less
- * than \`thickness\` (view-ray units) is pushed back along the view ray onto the surface and its
- * velocity is reflected about the surface normal (from the depth's neighbours), scaled by
+ * than \`thickness\` (view-ray units) is pushed out along the surface normal (from the depth's
+ * neighbours) onto the surface, so a resting particle does not creep along the view ray, and its
+ * velocity is reflected about that normal, scaled by
  * \`bounce\` normally and by \`1 - friction\` tangentially. A particle deeper than that is
  * swept: if its position one step back (\`pos - vel * dt\`) was in front of the scene it
  * crossed the surface this frame and is put back there, so a slow frame does not tunnel.
@@ -741,7 +743,16 @@ fn scene_at(px: vec2i, dims: vec2i) -> vec3f {
   let near = unproject(ndc.xy, 0.0);
   let hit = unproject(ndc.xy, d);
   let ray = normalize(hit - near);
-  var put = hit - ray * 1e-3;
+  let sx = scene_at(px + vec2i(1, 0), dims) - hit;
+  let sy = scene_at(px + vec2i(0, 1), dims) - hit;
+  var n = cross(sx, sy);
+  if (dot(n, n) < 1e-12) { n = -ray; } else { n = normalize(n); }
+  if (dot(n, ray) > 0.0) { n = -n; }
+  // Out along the surface normal onto the plane through the hit, not back along the view ray:
+  // a ray push moves a resting particle toward the camera by its sink depth over tan(grazing
+  // angle) every frame, and it creeps off the front edge. dot(hit - pos, n) >= 0 and is at
+  // most the depth behind the surface, so a noisy normal cannot throw the particle far.
+  var put = p.pos.xyz + n * (max(dot(hit - p.pos.xyz, n), 0.0) + 1e-3);
   if (length(p.pos.xyz - hit) > col.params.z) {
     // Deeper than thickness: a hit only if one step back it was in front of the scene.
     let prev = p.pos.xyz - p.vel.xyz * col.params.w;
@@ -753,11 +764,6 @@ fn scene_at(px: vec2i, dims: vec2i) -> vec3f {
     if (pn.z > textureLoad(scene_depth, clamp(ppx, vec2i(0), dims - 1), 0)) { return; }
     put = prev;
   }
-  let sx = scene_at(px + vec2i(1, 0), dims) - hit;
-  let sy = scene_at(px + vec2i(0, 1), dims) - hit;
-  var n = cross(sx, sy);
-  if (dot(n, n) < 1e-12) { n = -ray; } else { n = normalize(n); }
-  if (dot(n, ray) > 0.0) { n = -n; }
   let v = p.vel.xyz;
   let vn = dot(v, n);
   var nv = v;
