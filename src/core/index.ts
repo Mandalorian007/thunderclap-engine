@@ -1,5 +1,6 @@
 export type { EventMap } from './events';
 export { Emitter } from './events';
+export { hash2, hash2f, hash3, hash3f } from './hash';
 export type { FixedStepperOptions, GameLoopOptions, LoopCallbacks, Time } from './loop';
 export { FixedStepper, GameLoop } from './loop';
 export type { Mat4 } from './math';
@@ -14,4 +15,3 @@ export type { Scene, TransitionListener, TransitionPhase } from './scene';
 export { SceneStack } from './scene';
 export type { Cooldown, EveryOptions, Scheduler, TimerHandle } from './timer';
 export { createScheduler } from './timer';
-export { hash2, hash2f, hash3, hash3f } from './hash';

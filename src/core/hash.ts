@@ -11,7 +11,7 @@
  * so neighbouring cells share no bits and `hash3(s, x, 0, z)` is unrelated to `hash2(s, x, z)`.
  *
  * Pure integer arithmetic (`Math.imul`, shifts): the same uint32 on every engine. Nothing
- * allocates; a string seed is rehashed per call, so a hot loop passes `seedKey(seed)` instead.
+ * allocates; a string seed is rehashed per call, so a hot loop passes a number seed.
  */
 
 import { type Seed, seedKey } from './random';

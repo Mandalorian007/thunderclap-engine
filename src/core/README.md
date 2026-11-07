@@ -99,9 +99,8 @@ done the input holds its last state. Both options keep the rest of the pipeline 
 - `hash2(seed, x, z)` and `hash3(seed, x, y, z)`: a uint32 per lattice cell; `hash2f` and
   `hash3f` are the same value as a float in [0, 1) (`hash * 2^-32`). For a roll per point (a tree
   in this column, a speckle on this texel), where `Noise` would give a field between points and
-  `Random` a sequence. `seed` is a `Seed` hashed exactly as `createRandom` hashes it (`seedKey`),
-  so `hash2('level-3', x, z)` is stable across engines; a string seed is rehashed per call, so a
-  hot loop passes `seedKey(seed)` or a number. Each coordinate is truncated toward zero to an
+  `Random` a sequence. `seed` is a `Seed` hashed exactly as `createRandom` hashes it, so `hash2('level-3', x, z)` is stable across engines; a string seed is rehashed per call, so a
+  hot loop passes a number. Each coordinate is truncated toward zero to an
   int32 (`x | 0`): floor first when the cell is `Math.floor(x)`. The key (tagged per dimension)
   and then each coordinate are folded in with the lowbias32 finaliser, so neighbouring cells do
   not correlate (tested: mean and lag-1 correlation over a 256×256 grid) and `hash3(s, x, 0, z)`
