@@ -70,14 +70,23 @@ export type Track = number | 'fill' | { frac: number; min?: number; max?: number
  */
 export type Units = 'frame' | 'css';
 
-/** The chrome bars whose height can follow their content (`BarSize`). */
-export type BarName = 'top' | 'bottom';
+/**
+ * The chrome bars and side rails whose size can follow their content (`BarSize`): `top` and
+ * `bottom` by height (ws/ui-8), `left` and `right` by width (ws/ui-9).
+ */
+export type BarName = 'top' | 'bottom' | 'left' | 'right';
 
 /**
- * How a `top` or `bottom` bar is sized (ws/ui-8). `'fixed'` (the default) keeps the form's row
- * track. `'content'` grows the bar's track to its tallest widget plus the form's `pad` each side,
- * never below the form's track and never above `max`; the layout re-flows (the world's `fill`
- * gives up the space). A widget taller than `max` allows still reports through `overflows()`.
+ * How a bar or rail is sized. `'fixed'` (the default) keeps the form's track. `'content'` grows
+ * the outer track to the bar's tallest widget (`top`, `bottom`; ws/ui-8) or the rail's widest
+ * widget (`left`, `right`; ws/ui-9) plus the form's `pad` each side, never below the form's track
+ * and never above `max`; the layout re-flows (the world's `fill`, so `freeRect`, gives up the
+ * space). A widget larger than `max` allows still reports through `overflows()`.
+ *
+ * Corner rule (ws/ui-9): where a content bar and a content rail meet (the cell on the bar's outer
+ * row and the rail's outer column, held by one of them in `areas`), the cell goes to the one whose
+ * content wants the larger track (widget plus pad, clamped by `max`). A tie keeps the form's
+ * `areas`, and so does a swap that would leave either region not a rectangle.
  */
 export interface BarSize {
   size: 'fixed' | 'content';
@@ -109,8 +118,8 @@ export interface FormSpec {
    */
   units: Units;
   /**
-   * How the `top` and `bottom` bars are sized (ws/ui-8). Default fixed (the row track). Merged
-   * over `LayoutSpec.bars` bar by bar.
+   * How the `top` and `bottom` bars (ws/ui-8) and the `left` and `right` rails (ws/ui-9) are
+   * sized. Default fixed (the form's track). Merged over `LayoutSpec.bars` bar by bar.
    */
   bars?: Partial<Record<BarName, BarSize>>;
 }
@@ -138,8 +147,8 @@ export interface LayoutSpec {
   /** Collapse tracks whose regions hold no registered widget. Default true. */
   collapseEmpty?: boolean;
   /**
-   * Bar sizing for every form factor (ws/ui-8), e.g. `{ bottom: { size: 'content', max: 200 } }`.
-   * A form's own `bars` wins bar by bar.
+   * Bar and rail sizing for every form factor (ws/ui-8, ws/ui-9), e.g.
+   * `{ bottom: { size: 'content', max: 200 } }`. A form's own `bars` wins bar by bar.
    */
   bars?: Partial<Record<BarName, BarSize>>;
 }
@@ -403,31 +412,91 @@ export function effectiveInsets(
   };
 }
 
+/** The tallest widget per bar and the widest per rail, CSS px (`resolveLayout`'s `content`). */
+type BarContent = Readonly<Partial<Record<BarName, number>>>;
+
+const ROW_BARS = ['top', 'bottom'] as const;
+const COL_BARS = ['left', 'right'] as const;
+const BAR_NAMES: readonly BarName[] = ['top', 'bottom', 'left', 'right'];
+
 /**
- * The row tracks of `form` with each `content` bar's outer track grown to hold `content[bar]`
- * (its tallest widget, CSS px) plus `pad` each side, clamped by the bar's `max`, and never
- * below the track's own size (ws/ui-8). Pure; returns `form.rows` itself when nothing grows.
+ * The outer track of `bar` in `cells`: the first row for `top`, the last for `bottom`, the first
+ * column for `left`, the last for `right`; -1 when the bar is not in the grid.
  */
-function barRows(
+function outerTrack(cells: readonly (readonly string[])[], bar: BarName): number {
+  const rows = bar === 'top' || bar === 'bottom';
+  const n = rows ? cells.length : (cells[0]?.length ?? 0);
+  let t = -1;
+  for (let i = 0; i < n; i++) {
+    const has = rows ? cells[i]!.includes(bar) : cells.some((row) => row[i] === bar);
+    if (has && (t < 0 || bar === 'bottom' || bar === 'right')) t = i;
+  }
+  return t;
+}
+
+/** The track a `content` bar or rail wants (its content plus `pad` each side, clamped by `max`), or 0. */
+function contentWant(form: FormSpec, content: BarContent | null, bar: BarName): number {
+  const b = form.bars?.[bar];
+  const v = content?.[bar];
+  if (b?.size !== 'content' || v === undefined || !(v > 0)) return 0;
+  return Math.min(v + 2 * form.pad, b.max ?? Number.POSITIVE_INFINITY);
+}
+
+/**
+ * `cells` with the corner rule applied (ws/ui-9, `BarSize`): where a content bar and a content
+ * rail meet, the corner cell goes to the one that wants the larger track. A tie, or a swap that
+ * would leave a region not a rectangle, keeps the cell. Pure; returns `cells` itself when nothing
+ * moves.
+ */
+function cornerCells(form: FormSpec, cells: string[][], content: BarContent | null): string[][] {
+  if (!content || !form.bars) return cells;
+  let out = cells;
+  for (const bar of ROW_BARS) {
+    const wb = contentWant(form, content, bar);
+    if (!wb) continue;
+    for (const rail of COL_BARS) {
+      const wr = contentWant(form, content, rail);
+      if (!wr || wr === wb) continue;
+      const r = outerTrack(out, bar);
+      const c = outerTrack(out, rail);
+      if (r < 0 || c < 0) continue;
+      const owner = out[r]![c]!;
+      const winner = wb > wr ? bar : rail;
+      if ((owner !== bar && owner !== rail) || owner === winner) continue;
+      const next = out.map((row) => [...row]);
+      next[r]![c] = winner;
+      if (!next.some((row) => row.includes(owner))) continue;
+      try {
+        parseAreas(next.map((row) => row.join(' ')));
+      } catch {
+        continue; // not a rectangle any more: keep the form's cell
+      }
+      out = next;
+    }
+  }
+  return out;
+}
+
+/**
+ * The tracks on one axis of `form` with each `content` bar's (rows: `top`, `bottom`; ws/ui-8) or
+ * rail's (columns: `left`, `right`; ws/ui-9) outer track grown to `contentWant`, never below the
+ * track's own size. Pure; returns the form's own tracks when nothing grows.
+ */
+function contentTracks(
   form: FormSpec,
   cells: readonly (readonly string[])[],
-  content: Readonly<Partial<Record<BarName, number>>> | null,
+  content: BarContent | null,
+  axis: 'rows' | 'columns',
 ): Track[] {
-  if (!content || !form.bars) return form.rows;
-  let rows: Track[] = form.rows;
-  for (const bar of ['top', 'bottom'] as const) {
-    const b = form.bars[bar];
-    const tallest = content[bar];
-    if (b?.size !== 'content' || tallest === undefined || !(tallest > 0)) continue;
-    let r = -1;
-    for (let i = 0; i < cells.length; i++) {
-      if (!cells[i]!.includes(bar)) continue;
-      // The outer track: the first row for `top`, the last for `bottom`.
-      if (r < 0 || bar === 'bottom') r = i;
-    }
-    const t = rows[r];
+  const base = form[axis];
+  if (!content || !form.bars) return base;
+  let tracks: Track[] = base;
+  for (const bar of axis === 'rows' ? ROW_BARS : COL_BARS) {
+    const want = contentWant(form, content, bar);
+    if (!want) continue;
+    const i = outerTrack(cells, bar);
+    const t = tracks[i];
     if (t === undefined || t === 'fill') continue;
-    const want = Math.min(tallest + 2 * form.pad, b.max ?? Number.POSITIVE_INFINITY);
     let next: Track;
     if (typeof t === 'number') {
       if (want <= t) continue;
@@ -436,17 +505,25 @@ function barRows(
       if (want <= (t.min ?? 0)) continue;
       next = { ...t, min: want, max: Math.max(t.max ?? Number.POSITIVE_INFINITY, want) };
     }
-    if (rows === form.rows) rows = [...form.rows];
-    rows[r] = next;
+    if (tracks === base) tracks = [...base];
+    tracks[i] = next;
   }
-  return rows;
+  return tracks;
+}
+
+/** The `grid-template-areas` rows `resolveLayout` lays out for `content` (the corner rule applied). */
+function resolvedAreas(form: FormSpec, content: BarContent | null): readonly string[] {
+  const cells = parseAreas(form.areas);
+  const out = cornerCells(form, cells, content);
+  return out === cells ? form.areas : out.map((row) => row.join(' '));
 }
 
 /**
  * Lays out one form at one size. `occupied` names the grid regions that hold widgets; with
  * `collapseEmpty`, a track collapses when every region in it is empty or also spans another
  * track on that axis (so a full-width bar never holds a side rail open). `fill` is never empty.
- * `content` is the tallest widget per bar (CSS px) for the form's `content` bars (`barRows`).
+ * `content` is the tallest widget per bar (`top`, `bottom`) and the widest per rail (`left`,
+ * `right`), CSS px, for the form's `content` bars and rails (`BarSize`, with its corner rule).
  * Pure.
  */
 export function resolveLayout(
@@ -456,9 +533,9 @@ export function resolveLayout(
   height: number,
   safeArea: Insets = NO_INSETS,
   occupied: ReadonlySet<RegionName> | null = null,
-  content: Readonly<Partial<Record<BarName, number>>> | null = null,
+  content: BarContent | null = null,
 ): LayoutState {
-  const cells = parseAreas(form.areas);
+  const cells = cornerCells(form, parseAreas(form.areas), content);
   if (cells.length !== form.rows.length || cells[0]!.length !== form.columns.length) {
     throw new Error('layout: rows/columns do not match areas');
   }
@@ -497,8 +574,12 @@ export function resolveLayout(
     if (colCollapsed.slice(s.c0, s.c1 + 1).every(Boolean)) colCollapsed[s.c0] = false;
     if (rowCollapsed.slice(s.r0, s.r1 + 1).every(Boolean)) rowCollapsed[s.r0] = false;
   }
-  const columns = resolveTracks(form.columns, innerW, colCollapsed);
-  const rows = resolveTracks(barRows(form, cells, content), innerH, rowCollapsed);
+  const columns = resolveTracks(
+    contentTracks(form, cells, content, 'columns'),
+    innerW,
+    colCollapsed,
+  );
+  const rows = resolveTracks(contentTracks(form, cells, content, 'rows'), innerH, rowCollapsed);
   const offs = (t: number[], i: number) => t.slice(0, i).reduce((a, b) => a + b, 0);
   const regions = Object.fromEntries(REGIONS.map((n) => [n, null])) as Record<
     RegionName,
@@ -801,19 +882,28 @@ export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout
       e.current = p;
     }
 
-    // Content bars (ws/ui-8): one read of the bar widgets' heights, then the grid re-flows once.
-    if (form.bars?.top?.size === 'content' || form.bars?.bottom?.size === 'content') {
+    // Content bars and rails (ws/ui-8, ws/ui-9): one read of the bar widgets' heights and the
+    // rail widgets' widths, then the grid re-flows once if a track or a corner moved.
+    const bars = form.bars;
+    if (bars && BAR_NAMES.some((b) => bars[b]?.size === 'content')) {
       const content: Partial<Record<BarName, number>> = {};
       for (const e of sorted) {
-        if (e.current !== 'top' && e.current !== 'bottom') continue;
-        if (form.bars[e.current]?.size !== 'content') continue;
-        const hgt = e.el.getBoundingClientRect?.().height ?? 0;
-        content[e.current] = Math.max(content[e.current] ?? 0, hgt);
+        const p = e.current;
+        if (p !== 'top' && p !== 'bottom' && p !== 'left' && p !== 'right') continue;
+        if (bars[p]?.size !== 'content') continue;
+        const box = e.el.getBoundingClientRect?.();
+        const v = (p === 'left' || p === 'right' ? box?.width : box?.height) ?? 0;
+        content[p] = Math.max(content[p] ?? 0, v);
       }
       const next = resolve(content);
-      if (next.rows.some((r, i) => r !== state.rows[i])) {
+      const areas = resolvedAreas(form, content);
+      if (
+        areas !== form.areas ||
+        next.rows.some((r, i) => r !== state.rows[i]) ||
+        next.columns.some((c, i) => c !== state.columns[i])
+      ) {
         state = next;
-        writeGrid(ff, form, insets, occupied);
+        writeGrid(ff, form, insets, occupied, areas);
       }
     }
     for (const [e, p] of freed) {
@@ -857,6 +947,8 @@ export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout
     form: FormSpec,
     insets: Insets,
     occupied: ReadonlySet<RegionName>,
+    /** The grid areas `state` was laid out with (the corner rule may move a cell; ws/ui-9). */
+    areas: readonly string[] = form.areas,
   ) => {
     root.dataset.formFactor = ff;
     root.style.setProperty('--tc-tap-min', `${form.tapMin}px`);
@@ -874,7 +966,7 @@ export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout
       padding: `${insets.top}px ${insets.right}px ${insets.bottom}px ${insets.left}px`,
       gridTemplateColumns: state.columns.map((c) => `${c}px`).join(' '),
       gridTemplateRows: state.rows.map((r) => `${r}px`).join(' '),
-      gridTemplateAreas: form.areas.map((a) => `"${a.trim().split(/\s+/).join(' ')}"`).join(' '),
+      gridTemplateAreas: areas.map((a) => `"${a.trim().split(/\s+/).join(' ')}"`).join(' '),
     });
     for (const n of REGIONS) {
       const r = state.regions[n];
