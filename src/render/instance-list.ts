@@ -45,7 +45,11 @@ export class InstanceList implements InstanceBatch {
   order = 0;
   /** Draw into the sun's shadow map; default: the mesh is not 2D. */
   castShadow?: boolean;
-  /** The GPU vertex buffer the instances live in (`capacity` × `INSTANCE_STRIDE` bytes). */
+  /**
+   * The GPU vertex buffer the instances live in (`capacity` × `INSTANCE_STRIDE` bytes). A LOD
+   * list (`lod`) never writes it (ws/render-9): its instances reach the GPU in the frame's
+   * per-level copy.
+   */
   readonly buffer: GPUBuffer;
   /**
    * With `velocity` (ws/render-4): the previous frame's matrices (12 floats per instance) and
@@ -325,7 +329,8 @@ export class InstanceList implements InstanceBatch {
 
   /**
    * Upload the changed range to `buffer` (one `writeBuffer`, or none when nothing changed) and
-   * refresh the automatic bounds. The renderer calls it from `frame.list`; no allocation.
+   * refresh the automatic bounds. The renderer calls it from `frame.list`; no allocation. A LOD
+   * list uploads nothing: `frame.list` copies its instances into the frame's upload per level.
    */
   flush(queue: GPUQueue): void {
     if (this.boundsDirty) this.computeBounds();
@@ -336,7 +341,8 @@ export class InstanceList implements InstanceBatch {
     if (this.velocity) this.flushPrevious(queue, lo, hi);
     this.lastCount = this._count;
     this.flushes++;
-    if (lo >= hi) return;
+    // A LOD list is drawn from the frame's per-level copy, never from `buffer` (ws/render-9).
+    if (lo >= hi || this.lod) return;
     const d = this.data;
     const mats = this.matrices;
     const prm = this.params;

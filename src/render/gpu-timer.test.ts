@@ -1,44 +1,19 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import { createFakeDevice } from './fake-gpu';
 import { GpuTimer, supportsTimestamps } from './gpu-timer';
 
-// Minimal fakes: the timer only needs createQuerySet/createBuffer, an encoder that records
-// calls, and a read buffer whose mapped range we fill with chosen timestamps (ns).
-beforeAll(() => {
-  const g = globalThis as Record<string, unknown>;
-  g.GPUBufferUsage ??= { QUERY_RESOLVE: 0x200, COPY_SRC: 4, COPY_DST: 8, MAP_READ: 1 };
-  g.GPUMapMode ??= { READ: 1 };
-});
-
+// The fake GPU resolves the query set, copies it into the read buffer and maps it for real
+// (ws/render-9); a test fills the query set's `values` with chosen timestamps (ns).
 function fakeDevice() {
-  const bufs: { data: BigInt64Array; mapState: string }[] = [];
-  const device = {
-    createQuerySet: () => ({ destroy() {} }),
-    createBuffer: (d: { size: number }) => {
-      const b = {
-        data: new BigInt64Array(d.size / 8),
-        mapState: 'unmapped',
-        mapAsync() {
-          b.mapState = 'mapped';
-          return Promise.resolve();
-        },
-        getMappedRange: () => b.data.buffer,
-        unmap() {
-          b.mapState = 'unmapped';
-        },
-        destroy() {},
-      };
-      bufs.push(b);
-      return b;
-    },
-  } as unknown as GPUDevice;
-  const calls: string[] = [];
-  const encoder = {
-    beginComputePass: () => ({ end: () => calls.push('mark') }),
-    resolveQuerySet: () => calls.push('resolve'),
-    copyBufferToBuffer: () => calls.push('copy'),
-  } as unknown as GPUCommandEncoder;
-  // bufs[1] is the MAP_READ buffer (resolve buffer is created first).
-  return { device, encoder, calls, read: () => bufs[1]! };
+  const fake = createFakeDevice({}, ['timestamp-query']);
+  const encoder = fake.device.createCommandEncoder();
+  return {
+    fake,
+    device: fake.device,
+    encoder,
+    queries: () => fake.querySets[0]!.values,
+    submit: () => fake.device.queue.submit([encoder.finish()]),
+  };
 }
 
 // Real timestamps never read 0 (that marks an unwritten pair), so offset the time base.
@@ -63,18 +38,8 @@ describe('GpuTimer', () => {
     expect(t.busy).toBe(true);
     expect(t.begin()).toBe(false);
     // mark 0–0.1; scene 1–9; bloom 8–10 (overlaps scene by 1) and 10–11; composite 11–12.
-    f.read().data.set([
-      ms(0),
-      ms(0.1),
-      ms(1),
-      ms(9),
-      ms(8),
-      ms(10),
-      ms(10),
-      ms(11),
-      ms(11),
-      ms(12),
-    ]);
+    f.queries().set([ms(0), ms(0.1), ms(1), ms(9), ms(8), ms(10), ms(10), ms(11), ms(11), ms(12)]);
+    f.submit();
     const got = new Promise((r) => t.onResult(r));
     t.afterSubmit();
     await got;
@@ -86,7 +51,15 @@ describe('GpuTimer', () => {
     expect(p.composite).toBeCloseTo(1);
     expect(p.pre! + p.scene! + p.bloom! + p.composite!).toBeCloseTo(12 - 0.1);
     expect(t.busy).toBe(false);
-    expect(f.calls).toEqual(['mark', 'resolve', 'copy']);
+    expect(f.fake.passes.map((p) => p.label)).toEqual(['gpu-timer-mark']);
+    const copy = f.fake.bufferCopies[0]!;
+    expect([copy.src.label, copy.dst.label, copy.size]).toEqual([
+      'gpu-timer-resolve',
+      'gpu-timer-read',
+      10 * 8,
+    ]);
+    expect(f.fake.buffers.find((b) => b.label === 'gpu-timer-read')!.mapState).toBe('unmapped');
+    expect(f.fake.errors).toEqual([]);
   });
 
   it('hands out nothing when not sampling and ignores unwritten pairs', async () => {
@@ -97,7 +70,8 @@ describe('GpuTimer', () => {
     t.pass('scene');
     t.pass('rays'); // skipped pass: its pair stays 0
     t.resolve(f.encoder);
-    f.read().data.set([0n, 0n, ms(2), ms(5), 0n, 0n]);
+    f.queries().set([0n, 0n, ms(2), ms(5), 0n, 0n]);
+    f.submit();
     const got = new Promise((r) => t.onResult(r));
     t.afterSubmit();
     await got;

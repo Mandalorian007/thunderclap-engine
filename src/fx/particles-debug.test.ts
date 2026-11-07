@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createFakeDevice, type FakeBuffer } from '../render/fake-gpu';
+import { createFakeDevice } from '../render/fake-gpu';
 import type { Renderer } from '../render/renderer';
 import {
   applyForces,
@@ -9,37 +9,12 @@ import {
 } from './particles';
 import { FX_PARTICLE_FLOATS } from './particles-wgsl';
 
-interface Staging {
-  mapAsync: (mode: number) => Promise<void>;
-  getMappedRange: (offset?: number, size?: number) => ArrayBuffer;
-  unmap: () => void;
-}
-
-/** A system on the fake GPU whose staging buffer maps `contents` (filled by the test). */
+/**
+ * A system on the fake GPU, with no stubs (ws/render-9): `contents` writes the particle buffer
+ * as the kernels would, and `debugReadback` copies, maps and unmaps the real staging buffer.
+ */
 function makeSystem(opts: ParticleSystemOptions) {
-  (globalThis as Record<string, unknown>).GPUMapMode ??= { READ: 1, WRITE: 2 };
   const fake = createFakeDevice();
-  const copies: { src: FakeBuffer; dst: FakeBuffer; size: number }[] = [];
-  let submits = 0;
-  const create = fake.device.createCommandEncoder.bind(fake.device);
-  (fake.device as unknown as { createCommandEncoder: unknown }).createCommandEncoder = (
-    desc?: GPUCommandEncoderDescriptor,
-  ) => {
-    const e = create(desc);
-    e.copyBufferToBuffer = ((
-      src: FakeBuffer,
-      _so: number,
-      dst: FakeBuffer,
-      _do: number,
-      size: number,
-    ) => copies.push({ src, dst, size })) as never;
-    return e;
-  };
-  const submit = fake.device.queue.submit.bind(fake.device.queue);
-  (fake.device.queue as unknown as { submit: unknown }).submit = (b: GPUCommandBuffer[]) => {
-    submits++;
-    submit(b);
-  };
   const renderer = {
     device: fake.device,
     globalsLayout: fake.device.createBindGroupLayout({ entries: [] }),
@@ -47,34 +22,17 @@ function makeSystem(opts: ParticleSystemOptions) {
     target: { depth: null },
   } as unknown as Renderer;
   const ps = new ParticleSystem(renderer, { capacity: 256, ...opts });
-  const staging = fake.buffers.find((b) => b.label === 'particles-debug-read') as
-    | (FakeBuffer & Staging)
-    | undefined;
-  let contents: Float32Array = new Float32Array(staging ? staging.size / 4 : 0);
-  let maps = 0;
-  let unmaps = 0;
-  if (staging) {
-    staging.mapAsync = () => {
-      maps++;
-      return Promise.resolve();
-    };
-    staging.getMappedRange = () => contents.buffer as ArrayBuffer;
-    staging.unmap = () => {
-      unmaps++;
-    };
-  }
+  const particles = fake.buffers.find((b) => b.label === 'particles')!;
+  const staging = fake.buffers.find((b) => b.label === 'particles-debug-read');
   return {
     fake,
     ps,
     staging,
-    copies,
-    get contents() {
-      return contents;
-    },
+    copies: fake.bufferCopies,
     set contents(c: Float32Array) {
-      contents = c;
+      particles.data.set(new Uint8Array(c.buffer, c.byteOffset, c.byteLength));
     },
-    counts: () => ({ maps, unmaps, submits }),
+    counts: () => ({ submits: fake.submits, mapState: staging?.mapState }),
   };
 }
 
@@ -103,7 +61,7 @@ describe('ParticleSystem.debugReadback', () => {
       t.ps.prepare(t.fake.device.createCommandEncoder());
     }
     expect(t.copies).toEqual([]);
-    expect(t.counts().maps).toBe(0);
+    expect(t.counts()).toEqual({ submits: 0, mapState: 'unmapped' });
   });
 
   it('reads back the CPU shadow of the fx3 shell: live particles, positions, velocities', async () => {
@@ -155,7 +113,7 @@ describe('ParticleSystem.debugReadback', () => {
     expect(t.copies[0]!.src.label).toBe('particles');
     expect(t.copies[0]!.dst.label).toBe('particles-debug-read');
     expect(t.copies[0]!.size).toBe(particles.size);
-    expect(t.counts()).toEqual({ maps: 1, unmaps: 1, submits: 1 });
+    expect(t.counts()).toEqual({ submits: 1, mapState: 'unmapped' });
     expect(r.alive).toBe(64);
     expect(r.time).toBeCloseTo(0.05, 6);
     expect(r.positions).toHaveLength(64 * 3);
@@ -315,7 +273,7 @@ describe('ParticleSystem.readbackFields', () => {
     expect(t.ps.readbackFields()).toBe(fieldsP);
     const [r, f] = await Promise.all([packedP, fieldsP]);
     expect(t.copies).toHaveLength(1);
-    expect(t.counts()).toEqual({ maps: 1, unmaps: 1, submits: 1 });
+    expect(t.counts()).toEqual({ submits: 1, mapState: 'unmapped' });
     expect(f.alive).toBe(r.alive);
     expect(Array.from(f.position)).toEqual(Array.from(r.positions));
     expect(Array.from(f.velocity)).toEqual(Array.from(r.velocities));
@@ -327,9 +285,14 @@ describe('ParticleSystem.readbackFields', () => {
 
   it('releases the in-flight copy when mapping fails', async () => {
     const t = makeSystem({ space: 'world', debug: true });
-    t.staging!.mapAsync = () => Promise.reject(new Error('lost'));
-    await expect(t.ps.readbackFields()).rejects.toThrow('lost');
-    await expect(t.ps.debugReadback()).rejects.toThrow('lost');
+    // Someone else holds the staging buffer mapped: each readback's map is refused.
+    await t.staging!.mapAsync(GPUMapMode.READ);
+    await expect(t.ps.readbackFields()).rejects.toThrow(/particles-debug-read is mapped/);
+    await expect(t.ps.debugReadback()).rejects.toThrow(/particles-debug-read is mapped/);
     expect(t.copies).toHaveLength(2);
+    t.fake.errors.length = 0;
+    t.staging!.unmap();
+    expect((await t.ps.debugReadback()).alive).toBe(0);
+    expect(t.fake.errors).toEqual([]);
   });
 });

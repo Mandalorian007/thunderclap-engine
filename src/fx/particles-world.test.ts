@@ -375,49 +375,41 @@ describe('ParticleSystem world space', () => {
 
 describe('ParticleSystem.alive', () => {
   it('counts on the GPU and reads the count back a frame later', async () => {
-    (globalThis as Record<string, unknown>).GPUMapMode ??= { READ: 1, WRITE: 2 };
     const { fake, ps } = makeSystem({ space: 'world', countAlive: true });
-    const read = fake.buffers.find((b) => b.label === 'particles-alive-read')! as unknown as {
-      mapAsync: (mode: number) => Promise<void>;
-      getMappedRange: () => ArrayBuffer;
-      unmap: () => void;
+    const count = fake.buffers.find((b) => b.label === 'particles-alive')!;
+    const read = fake.buffers.find((b) => b.label === 'particles-alive-read')!;
+    // The count kernel's result (ws/render-9: the fake runs the copy and the map for real).
+    let counted = [42, 7];
+    fake.runPass = (pass) => {
+      if (pass.kind === 'compute') count.data.set(new Uint8Array(new Uint32Array(counted).buffer));
     };
-    let maps = 0;
-    let unmaps = 0;
-    read.mapAsync = () => {
-      maps++;
-      return Promise.resolve();
-    };
-    read.getMappedRange = () => new Uint32Array([42, 7]).buffer;
-    read.unmap = () => {
-      unmaps++;
-    };
-    expect(ps.alive).toBe(-1);
-    const copies: string[] = [];
-    const enc = () => {
+    const frame = () => {
       const e = fake.device.createCommandEncoder();
-      e.copyBufferToBuffer = ((src: { label: string }) => copies.push(src.label)) as never;
-      return e;
+      ps.prepare(e);
+      fake.device.queue.submit([e.finish()]);
     };
+    const copied = () => fake.bufferCopies.map((c) => `${c.src.label}→${c.dst.label}`);
+    expect(ps.alive).toBe(-1);
     ps.update(1 / 60);
-    ps.prepare(enc());
+    frame();
     // Frame 1: advance + update + count dispatched, the copy recorded, nothing mapped yet.
     expect(fake.passes.at(-1)!.commands.filter((c) => c.op === 'dispatch')).toHaveLength(3);
-    expect(copies).toEqual(['particles-alive']);
-    expect(maps).toBe(0);
+    expect(copied()).toEqual(['particles-alive→particles-alive-read']);
+    expect(read.mapState).toBe('unmapped');
     // Frame 2: map last frame's copy; record no new copy.
+    counted = [1, 1];
     ps.update(1 / 60);
-    ps.prepare(enc());
-    expect(maps).toBe(1);
-    expect(copies).toHaveLength(1);
+    frame();
+    expect(read.mapState).toBe('pending');
+    expect(copied()).toHaveLength(1);
     await Promise.resolve();
     await Promise.resolve();
     expect(ps.alive).toBe(42);
     expect(ps.below).toBe(7);
-    expect(unmaps).toBe(1);
+    expect(read.mapState).toBe('unmapped');
     // Frame 3: counting again.
-    ps.prepare(enc());
-    expect(copies).toHaveLength(2);
+    frame();
+    expect(copied()).toHaveLength(2);
     expect(fake.errors).toEqual([]);
   });
 

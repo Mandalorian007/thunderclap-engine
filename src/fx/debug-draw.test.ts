@@ -165,8 +165,8 @@ describe('DebugDraw.draw', () => {
     const { pass: p, rec } = pass(fake);
     dd.draw(p, frame(null));
     expect(fake.writes).toHaveLength(1);
-    // The fake records the `size` argument as given: floats here (the used range, not the array).
-    expect(fake.writes[0]!.bytes).toBe(13 * SF);
+    // The used range, not the array (the fake counts a typed array's `size` in elements).
+    expect(fake.writes[0]!.bytes).toBe(13 * SF * 4);
     expect(fake.writes[0]!.buffer.size).toBe(100 * SF * 4);
     const cmds = rec().commands;
     expect(cmds.map((c) => c.op)).toEqual(['setPipeline', 'other', 'draw']);
