@@ -7,11 +7,11 @@
  *   plays tiles 5..15 at 2 fps (`tile`, `tileRate`), spinning, beside a stream of upright
  *   sprites. `state.tileSeen` mirrors the tile the kernel shows.
  * - `?forces`: motes born on a shell gather into a blob on a spring attractor (`falloff: 'linear'`)
- *   with a vortex and drag (`system.forces`); a `debugReadback()` every 500 ms measures their
+ *   with a vortex and drag (`system.forces`); a `readbackFields()` every 500 ms measures their
  *   `state.meanRadius` (and `radiusSettledAt`); 64 of them are also shadowed on the CPU with
  *   `applyForces` (`state.shadowRadius`).
  * - `?collide`: rain over a floating slab with `readsDepth` and `collide`; `countBelowY` counts
- *   what gets under the slab into `state.belowSlab`, and a `debugReadback()` every 500 ms
+ *   what gets under the slab into `state.belowSlab`, and a `readbackFields()` every 500 ms
  *   measures how fast the resting drops drift (`state.meanDriftPerSec`).
  * - `?sub`: bursts of rising parents whose `onDeath` sub-emitters scatter long-lived children;
  *   `state.aliveAfterParents` is the live count once every parent has died.
@@ -27,6 +27,7 @@ import {
   type EmitParams,
   MAGIC_AURA_EFFECT,
   ParticleEmitter,
+  type ParticleFields,
   type ParticleForce,
   type ParticleReadback,
   ParticleSystem,
@@ -70,6 +71,7 @@ const state: HarnessFx3State = {
   meanDriftPerSec: -1,
   restingDrops: 0,
   readbacks: 0,
+  unpackedError: -1,
   belowSlab: -1,
   aliveAfterParents: -1,
   effectInstances: 0,
@@ -454,9 +456,9 @@ async function main(): Promise<void> {
   restX.fill(Number.NaN);
   let restTime = -1;
   let lastReadback = 0;
-  const onReadback = (r: ParticleReadback): void => {
+  const onReadback = (r: ParticleFields): void => {
     state.readbacks++;
-    const p = r.positions;
+    const p = r.position;
     if (mode === 'forces') {
       if (r.alive === 0) return;
       let sum = 0;
@@ -612,7 +614,17 @@ async function main(): Promise<void> {
       // After `endFrame`, so the copy holds every frame submitted so far.
       if (readSystem && time - lastReadback >= READBACK_PERIOD) {
         lastReadback = time;
-        readSystem.debugReadback().then(onReadback, (err) => console.error('[readback]', err));
+        const fields = readSystem.readbackFields();
+        fields.then(onReadback, (err) => console.error('[readback]', err));
+        // Until one has live particles: the packed form of the same copy, to check the unpacking.
+        if (state.unpackedError < 0) {
+          Promise.all([readSystem.debugReadback(), fields]).then(
+            ([packed, f]) => {
+              if (f.alive > 0) state.unpackedError = unpackedError(packed, f);
+            },
+            (err) => console.error('[readback]', err),
+          );
+        }
       }
       state.gpuErrors = gpuDiagnostics.errorCount;
       camera.worldToScreen(probeAt[0], probeAt[1], probeAt[2], probePoint);
@@ -624,6 +636,18 @@ async function main(): Promise<void> {
   loop.start();
   state.gpu = 'ok';
   state.ready = true;
+}
+
+/** The largest difference between the two readback forms of one copy (`state.unpackedError`). */
+function unpackedError(r: ParticleReadback, f: ParticleFields): number {
+  if (r.alive !== f.alive) return Number.POSITIVE_INFINITY;
+  let e = 0;
+  for (let i = 0; i < r.positions.length; i++) {
+    e = Math.max(e, Math.abs(r.positions[i]! - f.position[i]!));
+    e = Math.max(e, Math.abs(r.velocities[i]! - f.velocity[i]!));
+  }
+  for (let i = 0; i < r.alive; i++) e = Math.max(e, Math.abs(r.slots[i]! - f.slots[i]!));
+  return e;
 }
 
 main().catch((err) => {

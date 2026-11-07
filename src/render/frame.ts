@@ -40,6 +40,14 @@ export interface InstanceBatch {
   order?: number;
   /** Draw into the sun's shadow map; default: the mesh is not in `VERTEX_LAYOUT_2D`. */
   castShadow?: boolean;
+  /**
+   * Each instance's previous-frame matrix (`count` × 12 floats, index for index with
+   * `matrices`), or null (ws/render-7). Drawn into a target with a velocity attachment by a
+   * material with `aux`, the batch then writes per-instance motion through the renderer's
+   * shared previous-matrix lane; without it the instances report camera motion only. A LOD
+   * `InstanceList` made with `velocity` carries its own.
+   */
+  prevMatrices?: Float32Array | null;
 }
 
 /**

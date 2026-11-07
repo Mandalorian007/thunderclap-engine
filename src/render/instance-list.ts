@@ -72,13 +72,29 @@ export class InstanceList implements InstanceBatch {
   /** With velocity: the range dirty at the last flush, settled (prev := current) at the next. */
   private settleLo = 0;
   private settleHi = 0;
+  /** Live instances at the last flush. */
+  private lastCount = 0;
+  /** Per-slot keys (`setKey`; NaN: none), made on the first `setKey`. */
+  private keys: Float64Array | null = null;
+  /**
+   * Key → slot hash tables (open addressing, `tableMask + 1` entries): `tableSlots[t]` -1 is
+   * empty. `cur` is the one the last flush filled; the other is refilled at the next.
+   */
+  private tableKeys: [Float64Array, Float64Array] | null = null;
+  private tableSlots: [Int32Array, Int32Array] | null = null;
+  private tableMask = 0;
+  private cur = 0;
+  /** With velocity and keys: each slot's matrix at the last flush. */
+  private lastMatrices: Float32Array | null = null;
+  private _previousIndex: Int32Array | null = null;
 
   /** The list's mesh: the one it was made with, or the first level of its `lod`. */
   readonly mesh: Mesh;
   /**
    * The LOD chain the list was made with (ws/render-6), else null. Each instance then picks a
    * level per view, and `frame.list` copies the instances into the frame's upload bucketed by
-   * level rather than drawing from `buffer` (so the previous-matrix lane is not read).
+   * level rather than drawing from `buffer`; with `velocity` its `prevMatrices` travel with
+   * the copy into the renderer's shared lane (ws/render-7), so `prevBuffer` is not bound.
    */
   readonly lod: MeshLod | null;
 
@@ -138,6 +154,57 @@ export class InstanceList implements InstanceBatch {
     return this._bounds;
   }
 
+  /**
+   * True once any instance has a key (`setKey`, ws/render-7): the list then matches each
+   * instance to last frame's by key (keyless slots by index) at every flush, for its LOD
+   * level memory and its velocity history.
+   */
+  get keyed(): boolean {
+    return this.keys !== null;
+  }
+
+  /**
+   * Flushes so far (`flush`, once per `frame.list`). `previousIndex` maps the instances of
+   * flush `flushCount` onto those of flush `flushCount - 1`.
+   */
+  get flushCount(): number {
+    return this.flushes - 1;
+  }
+
+  /**
+   * With keys (`keyed`), after each flush: per live instance, the index it held at the
+   * previous flush (matched by key, a keyless slot by its own index), or -1 for an instance
+   * that was not there (a new key, or an index past last flush's count). Null until keyed.
+   */
+  get previousIndex(): Int32Array | null {
+    return this._previousIndex;
+  }
+
+  /**
+   * Give instance `i` (0..count-1) a stable `key` (ws/render-7): a finite number, an entity
+   * id, unique in the list (on duplicates the last slot wins). The instance's LOD level
+   * memory and velocity history then follow the key, not the index, so removing or
+   * reordering instances (`remove`'s swap, a `clear` and refill in another order) changes no
+   * other instance's level and no other instance's motion. `null` clears it. The key stays
+   * with the slot through `set` and moves with `remove`; a slot appended by `set` starts
+   * without one. Chain it after `set`: `list.set(i, t).setKey(i, id)`.
+   */
+  setKey(i: number, key: number | null): this {
+    if (i < 0 || i >= this._count)
+      throw new Error(`InstanceList.setKey: index ${i} of ${this._count}`);
+    if (key !== null && !Number.isFinite(key))
+      throw new Error(`InstanceList.setKey: key ${key} is not a finite number`);
+    if (key === null && !this.keys) return this;
+    this.ensureKeys()[i] = key ?? Number.NaN;
+    return this;
+  }
+
+  /** Instance `i`'s key (`setKey`), or null for none. */
+  keyOf(i: number): number | null {
+    const k = this.keys ? this.keys[i]! : Number.NaN;
+    return i < this._count && !Number.isNaN(k) ? k : null;
+  }
+
   /** True when the next `frame.list` has something to upload. */
   get dirty(): boolean {
     return this.dirtyLo < this.dirtyHi;
@@ -156,7 +223,10 @@ export class InstanceList implements InstanceBatch {
   ): this {
     if (i < 0 || i > this._count) throw new Error(`InstanceList.set: index ${i} of ${this._count}`);
     if (i === this.capacity) throw new Error(`InstanceList.set: full (capacity ${this.capacity})`);
-    if (i === this._count) this._count++;
+    if (i === this._count) {
+      this._count++;
+      if (this.keys) this.keys[i] = Number.NaN;
+    }
     const mats = this.matrices;
     const o = i * MATRIX3X4_FLOATS;
     if (this.velocity) this.capture(i, o);
@@ -189,6 +259,7 @@ export class InstanceList implements InstanceBatch {
     if (i === last) return -1;
     const mats = this.matrices;
     const prm = this.params;
+    if (this.keys) this.keys[i] = this.keys[last]!;
     mats.copyWithin(i * MATRIX3X4_FLOATS, last * MATRIX3X4_FLOATS, (last + 1) * MATRIX3X4_FLOATS);
     if (this.velocity) {
       // The moved instance keeps its own history.
@@ -255,7 +326,10 @@ export class InstanceList implements InstanceBatch {
     const lo = this.dirtyLo;
     const hi = Math.min(this.dirtyHi, this._count);
     this.dirtyLo = this.dirtyHi = 0;
+    if (this.keys) this.matchKeys();
     if (this.velocity) this.flushPrevious(queue, lo, hi);
+    this.lastCount = this._count;
+    this.flushes++;
     if (lo >= hi) return;
     const d = this.data;
     const mats = this.matrices;
@@ -303,6 +377,8 @@ export class InstanceList implements InstanceBatch {
     const sLo = this.settleLo;
     const sHi = Math.min(this.settleHi, this._count);
     const now = this.flushes;
+    // Slots that died since the last flush lose their history: one appended there later is new.
+    for (let i = this._count; i < this.lastCount; i++) this.stamp[i] = 0;
     for (let i = sLo; i < sHi; i++) {
       if (this.stamp[i] === now) continue;
       const o = i * MATRIX3X4_FLOATS;
@@ -318,12 +394,106 @@ export class InstanceList implements InstanceBatch {
     }
     this.settleLo = lo;
     this.settleHi = hi;
-    this.flushes = now + 1;
-    const uLo = sLo < sHi ? (lo < hi ? Math.min(lo, sLo) : sLo) : lo;
-    const uHi = sLo < sHi ? (lo < hi ? Math.max(hi, sHi) : sHi) : hi;
+    let uLo = sLo < sHi ? (lo < hi ? Math.min(lo, sLo) : sLo) : lo;
+    let uHi = sLo < sHi ? (lo < hi ? Math.max(hi, sHi) : sHi) : hi;
+    if (this.keys) {
+      // Keyed slots take the matrix their key held at the last flush (none: no motion);
+      // keyless ones keep the index history above. The whole live range uploads.
+      const keys = this.keys;
+      const pi = this._previousIndex!;
+      const n = this._count;
+      let last = this.lastMatrices;
+      if (!last) last = this.lastMatrices = new Float32Array(this.capacity * MATRIX3X4_FLOATS);
+      for (let i = 0; i < n; i++) {
+        const k = keys[i]!;
+        if (Number.isNaN(k)) continue;
+        const j = pi[i]!;
+        const o = i * MATRIX3X4_FLOATS;
+        const src = j >= 0 ? last : cur;
+        const so = j >= 0 ? j * MATRIX3X4_FLOATS : o;
+        for (let f = 0; f < MATRIX3X4_FLOATS; f++) prev[o + f] = src[so + f]!;
+        this.stamp[i] = now;
+      }
+      last.set(cur.subarray(0, n * MATRIX3X4_FLOATS));
+      uLo = 0;
+      uHi = n;
+    }
     if (uLo >= uHi) return;
     const bytes = MATRIX3X4_FLOATS * 4;
     queue.writeBuffer(this.prevBuffer!, uLo * bytes, prev.buffer, uLo * bytes, (uHi - uLo) * bytes);
+  }
+
+  private ensureKeys(): Float64Array {
+    let keys = this.keys;
+    if (keys) return keys;
+    keys = this.keys = new Float64Array(this.capacity).fill(Number.NaN);
+    let size = 16;
+    while (size < this.capacity * 2) size *= 2;
+    this.tableMask = size - 1;
+    this.tableKeys = [new Float64Array(size), new Float64Array(size)];
+    this.tableSlots = [new Int32Array(size).fill(-1), new Int32Array(size).fill(-1)];
+    this._previousIndex = new Int32Array(this.capacity);
+    return keys;
+  }
+
+  /** Hash table start index of `k`. */
+  private hashOf(k: number): number {
+    const lo = k | 0;
+    const hi = (k / 4294967296) | 0;
+    let h = Math.imul(lo ^ Math.imul(hi, 0x85ebca6b), 0x9e3779b1);
+    h ^= h >>> 15;
+    return h & this.tableMask;
+  }
+
+  /**
+   * Fill `previousIndex` from the table of the last flush (keyed slots by key, keyless by
+   * index), then refill the other table with this flush's keys and make it current. No
+   * allocation.
+   */
+  private matchKeys(): void {
+    const keys = this.keys!;
+    const pi = this._previousIndex!;
+    const mask = this.tableMask;
+    const lastK = this.tableKeys![this.cur]!;
+    const lastS = this.tableSlots![this.cur]!;
+    const n = this._count;
+    const lastCount = this.lastCount;
+    for (let i = 0; i < n; i++) {
+      const k = keys[i]!;
+      if (Number.isNaN(k)) {
+        pi[i] = i < lastCount ? i : -1;
+        continue;
+      }
+      let t = this.hashOf(k);
+      let j = -1;
+      for (;;) {
+        const s = lastS[t]!;
+        if (s < 0) break;
+        if (lastK[t] === k) {
+          j = s;
+          break;
+        }
+        t = (t + 1) & mask;
+      }
+      pi[i] = j;
+    }
+    const next = 1 - this.cur;
+    const nk = this.tableKeys![next]!;
+    const ns = this.tableSlots![next]!;
+    ns.fill(-1);
+    for (let i = 0; i < n; i++) {
+      const k = keys[i]!;
+      if (Number.isNaN(k)) continue;
+      let t = this.hashOf(k);
+      for (;;) {
+        const s = ns[t]!;
+        if (s < 0 || nk[t] === k) break;
+        t = (t + 1) & mask;
+      }
+      nk[t] = k;
+      ns[t] = i;
+    }
+    this.cur = next;
   }
 
   /** The automatic sphere: `mesh.bounds` through every live instance. */

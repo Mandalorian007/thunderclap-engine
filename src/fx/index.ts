@@ -40,6 +40,7 @@ export type {
   AttractFalloff,
   EmitParams,
   EmitShape,
+  ParticleFields,
   ParticleForce,
   ParticleReadback,
   ParticleSystemOptions,

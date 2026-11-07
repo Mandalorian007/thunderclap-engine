@@ -267,10 +267,18 @@ interface DrawCmd {
   buffer: GPUBuffer | null;
   /** The list's previous-matrix lane (vertex slot 2), when the pipeline reads one. */
   prevBuffer: GPUBuffer | null;
+  /**
+   * The instances' previous matrices are in the renderer's shared lane (`laneBuffer`, at this
+   * view's base), copied from a batch's `prevMatrices` (ws/render-7).
+   */
+  lane: boolean;
   /** Index range (`InstanceParams.range`): `firstIndex`, `indexCount` (-1: the whole mesh). */
   firstIndex: number;
   indexCount: number;
 }
+
+/** Bytes per instance of the previous-matrix lane (a 3×4 matrix). */
+const LANE_STRIDE = 48;
 
 /** What `resolve`'s built-in present clears to when it covers the whole output. */
 const PRESENT_CLEAR: GPUColorDict = { r: 0, g: 0, b: 0, a: 1 };
@@ -297,7 +305,18 @@ interface ViewSlot {
  */
 interface LodMemory {
   keyed: WeakMap<object, number>;
-  indexed: WeakMap<object, Int8Array>;
+  indexed: WeakMap<object, LodSlots>;
+}
+
+/**
+ * One view's per-instance levels for a batch or list: `levels[i]` the level instance `i` drew
+ * last (-1: none), `spare` the remap scratch, and `flush` the list's `flushCount` the levels
+ * belong to (a keyed list remaps them through `previousIndex` at its next flush).
+ */
+interface LodSlots {
+  levels: Int8Array;
+  spare: Int8Array;
+  flush: number;
 }
 
 /** The per-frame jitter hook of `Renderer.setJitter`: pixels `[x, y]` for frame `frame`. */
@@ -351,6 +370,13 @@ interface DrawRec {
   /** Scene sort keys grouping opaque LOD draws per (mesh, material); -1 for every other draw. */
   lk: number;
   lt: number;
+  /**
+   * A copied batch's previous matrices (`InstanceBatch.prevMatrices`, a LOD list's
+   * `prevMatrices`), else null (ws/render-7).
+   */
+  prev: Float32Array | null;
+  /** This view draws the batch with the shared previous-matrix lane (`buildDraws`). */
+  lane: boolean;
 }
 
 /**
@@ -489,6 +515,19 @@ export class Renderer implements FrameSink {
   private instanceBase = 0;
   /** Instance buffers outgrown this frame, destroyed after submit (passes still reference them). */
   private readonly retired: GPUBuffer[] = [];
+  /**
+   * The shared previous-matrix lane (ws/render-7): 12 floats per instance, indexed like the
+   * view's upload, for batches with `prevMatrices` drawn into a velocity target by an aux
+   * material. Made on first use; `laneBase` is the current view's byte offset in it.
+   */
+  private laneData = new Float32Array(0);
+  private laneBuffer: GPUBuffer | null = null;
+  private laneBase = 0;
+  /** The previous matrices `copyBatch` / `copyBatchLod` copy into `laneData`, else null. */
+  private laneSrc: Float32Array | null = null;
+  /** Batch records with `prev` this frame, and whether the current view drew one with the lane. */
+  private laneRecs = 0;
+  private laneUsed = false;
   private instanceCount = 0;
   /** Instances in this frame's batches (`pushBatch`), excluding lists; they take the sort path. */
   private batchInstances = 0;
@@ -972,6 +1011,18 @@ export class Renderer implements FrameSink {
     this.jitterCams.length = 0;
   }
 
+  /**
+   * The LOD level instance `index` of a LOD batch or list (`frame.meshes` / `frame.list` on a
+   * `MeshLod`) drew at for `camera` (default `this.camera`) in the last frame that drew it,
+   * or -1 when it has none (ws/render-7). For probes and debug overlays: it reads the view's
+   * level memory, which a keyed `InstanceList` carries by key across flushes.
+   */
+  lodLevelOf(batch: object, index: number, camera: Camera = this.camera): number {
+    const slots = this.lodMemory.get(camera)?.indexed.get(batch);
+    if (!slots || index < 0 || index >= slots.levels.length) return -1;
+    return slots.levels[index]!;
+  }
+
   /** Start recording a frame. `time`/`dt` in seconds are exposed to shaders via `globals`. */
   beginFrame(time: number, dt: number): Frame {
     if (this.inFrame) throw new Error('beginFrame called twice without endFrame');
@@ -981,6 +1032,7 @@ export class Renderer implements FrameSink {
     this.batchInstances = 0;
     this.batchRecs = 0;
     this.lodRecs = 0;
+    this.laneRecs = 0;
     this.scene.count = 0;
     this.shadowCmds.count = 0;
     this.recCount = 0;
@@ -1103,6 +1155,7 @@ export class Renderer implements FrameSink {
       device.queue.writeBuffer(this.instanceBuffer, base, this.uploadData.buffer, 0, needed);
       this.instanceBase = base + needed;
     }
+    if (this.laneUsed) this.uploadLane(base);
 
     const shadow = this.encodeShadow(enc, frame, camera, base);
     const slot = this.viewSlot(this.viewCount);
@@ -1235,7 +1288,13 @@ export class Renderer implements FrameSink {
         pass.setPipeline(c.pipeline!);
         curPipeline = c.pipeline;
       }
-      if (c.prevBuffer && c.prevBuffer !== curPrev) {
+      if (c.lane) {
+        const lane = this.laneBuffer!;
+        if (lane !== curPrev) {
+          pass.setVertexBuffer(2, lane, this.laneBase);
+          curPrev = lane;
+        }
+      } else if (c.prevBuffer && c.prevBuffer !== curPrev) {
         pass.setVertexBuffer(2, c.prevBuffer, 0);
         curPrev = c.prevBuffer;
       }
@@ -1461,6 +1520,8 @@ export class Renderer implements FrameSink {
     this.gpuTimer?.destroy();
     this.target.destroy();
     this.instanceBuffer.destroy();
+    this.laneBuffer?.destroy();
+    this.laneBuffer = null;
     for (const b of this.retired) b.destroy();
     this.retired.length = 0;
     for (const v of this.views) v.buffer.destroy();
@@ -1596,6 +1657,17 @@ export class Renderer implements FrameSink {
       r.lod = lod;
       this.lodRecs++;
     }
+    // A copied batch (not a list drawn from its own buffer) brings its previous matrices.
+    const prev = !r.list ? (batch.prevMatrices ?? null) : null;
+    if (prev) {
+      if (prev.length < batch.count * MATRIX3X4_FLOATS) {
+        throw new Error(
+          `frame.meshes: prevMatrices holds ${prev.length} floats for ${batch.count} instances`,
+        );
+      }
+      r.prev = prev;
+      this.laneRecs++;
+    }
     const bb = batch.bounds;
     if (bb) {
       r.bx = bb.center[0];
@@ -1681,9 +1753,13 @@ export class Renderer implements FrameSink {
         lodLevels: null,
         lk: -1,
         lt: -1,
+        prev: null,
+        lane: false,
       });
     }
     const r = this.recs[this.recCount++]!;
+    r.prev = null;
+    r.lane = false;
     r.lod = null;
     r.lodKey = null;
     r.lodLevel = -1;
@@ -1823,6 +1899,15 @@ export class Renderer implements FrameSink {
       this.sortedData = new Float32Array(Math.max(need, this.sortedData.length * 2));
     }
     const dst = this.sortedData;
+    // The shared previous-matrix lane: only into a velocity target, for batches that bring one.
+    const laneOn = this.laneRecs > 0 && (target.auxKey & 2) !== 0;
+    this.laneUsed = false;
+    if (laneOn) {
+      const laneNeed = (this.instanceCount + this.batchInstances) * MATRIX3X4_FLOATS;
+      if (this.laneData.length < laneNeed) {
+        this.laneData = new Float32Array(Math.max(laneNeed, this.laneData.length * 2));
+      }
+    }
     let inst = 0;
     let batches = 0;
     let listInst = 0;
@@ -1837,6 +1922,9 @@ export class Renderer implements FrameSink {
       }
       const mode: DepthMode = !depth ? 0 : r.group === 0 && depthWrite ? 2 : 1;
       if (r.batch) {
+        r.lane = laneOn && r.prev !== null && r.material!.aux;
+        this.laneSrc = r.lane ? r.prev : null;
+        if (r.lane) this.laneUsed = true;
         const list = r.list;
         if (list) {
           batches++;
@@ -1876,6 +1964,7 @@ export class Renderer implements FrameSink {
       this.batch(this.scene, r, this.scenePipeline(r, mode), inst);
       inst++;
     }
+    this.laneSrc = null;
     this.culledCount = culled;
     this.sceneBatches = batches;
     this.sceneListInstances = listInst;
@@ -1961,14 +2050,36 @@ export class Renderer implements FrameSink {
   ): void {
     const b = r.batch!;
     const n = b.count;
-    let mem = memory.indexed.get(b);
-    if (!mem || mem.length < n) {
-      const next = new Int8Array(Math.max(n, mem ? mem.length * 2 : 0));
-      next.fill(-1);
-      if (mem) next.set(mem);
-      memory.indexed.set(b, next);
-      mem = next;
+    let slots = memory.indexed.get(b);
+    if (!slots) {
+      const size = Math.max(n, 16);
+      slots = { levels: new Int8Array(size).fill(-1), spare: new Int8Array(size), flush: -1 };
+      memory.indexed.set(b, slots);
+    } else if (slots.levels.length < n) {
+      const next = new Int8Array(Math.max(n, slots.levels.length * 2)).fill(-1);
+      next.set(slots.levels);
+      slots.levels = next;
+      slots.spare = new Int8Array(next.length);
     }
+    // A keyed list (ws/render-7): carry each level from the index its key held at the last
+    // flush, so a removal or reorder moves no other instance's level.
+    if (b instanceof InstanceList && b.keyed) {
+      const now = b.flushCount;
+      if (slots.flush !== now) {
+        const pi = b.previousIndex!;
+        const old = slots.levels;
+        const spare = slots.spare;
+        const remap = slots.flush === now - 1;
+        for (let i = 0; i < n; i++) {
+          const j = remap ? pi[i]! : -1;
+          spare[i] = j >= 0 ? old[j]! : -1;
+        }
+        slots.levels = spare;
+        slots.spare = old;
+      }
+      slots.flush = now;
+    }
+    const mem = slots.levels;
     r.lodLevels = mem;
     const meshes = lod.meshes;
     const count = meshes.length;
@@ -2030,6 +2141,8 @@ export class Renderer implements FrameSink {
     const cy = mb ? mb.center[1] : 0;
     const cz = mb ? mb.center[2] : 0;
     const cr = mb ? mb.radius : 0;
+    const lane = this.laneSrc;
+    const laneDst = this.laneData;
     let written = 0;
     let culled = 0;
     for (let i = 0; i < n; i++) {
@@ -2048,6 +2161,10 @@ export class Renderer implements FrameSink {
       }
       const to = (inst + written) * INSTANCE_FLOATS;
       for (let f = 0; f < MATRIX3X4_FLOATS; f++) dst[to + f] = m[mo + f]!;
+      if (lane) {
+        const lo = (inst + written) * MATRIX3X4_FLOATS;
+        for (let f = 0; f < MATRIX3X4_FLOATS; f++) laneDst[lo + f] = lane[mo + f]!;
+      }
       if (p) {
         const po = i * INSTANCE_PARAM_FLOATS;
         for (let f = 0; f < INSTANCE_PARAM_FLOATS; f++) {
@@ -2121,6 +2238,8 @@ export class Renderer implements FrameSink {
       lv[i] = l;
       bc[l]!++;
     }
+    const lane = this.laneSrc;
+    const laneDst = this.laneData;
     let next = inst;
     for (let l = 0; l < count; l++) {
       bf[l] = next;
@@ -2131,8 +2250,13 @@ export class Renderer implements FrameSink {
       const l = lv[i]!;
       if (l < 0) continue;
       const mo = i * MATRIX3X4_FLOATS;
-      const to = at[l]!++ * INSTANCE_FLOATS;
+      const slot = at[l]!++;
+      const to = slot * INSTANCE_FLOATS;
       for (let f = 0; f < MATRIX3X4_FLOATS; f++) dst[to + f] = m[mo + f]!;
+      if (lane) {
+        const lo = slot * MATRIX3X4_FLOATS;
+        for (let f = 0; f < MATRIX3X4_FLOATS; f++) laneDst[lo + f] = lane[mo + f]!;
+      }
       if (p) {
         const po = i * INSTANCE_PARAM_FLOATS;
         for (let f = 0; f < INSTANCE_PARAM_FLOATS; f++) {
@@ -2247,7 +2371,7 @@ export class Renderer implements FrameSink {
       r.mesh!.layout,
       depth,
       this.drawTarget,
-      r.list !== null && r.list.prevBuffer !== null,
+      r.lane || (r.list !== null && r.list.prevBuffer !== null),
     );
   }
 
@@ -2276,6 +2400,7 @@ export class Renderer implements FrameSink {
       c.castShadow = false;
       c.buffer = null;
       c.prevBuffer = null;
+      c.lane = false;
       c.firstIndex = 0;
       c.indexCount = -1;
       return;
@@ -2312,6 +2437,7 @@ export class Renderer implements FrameSink {
     c.buffer = buffer;
     // The lane is read only by a pipeline built for it (an aux material into a velocity target).
     c.prevBuffer = list === this.scene && r.list ? r.list.prevBuffer : null;
+    c.lane = list === this.scene && r.lane;
     c.firstIndex = r.rangeFirst;
     c.indexCount = r.rangeCount;
   }
@@ -2382,6 +2508,7 @@ export class Renderer implements FrameSink {
         castShadow: false,
         buffer: null,
         prevBuffer: null,
+        lane: false,
         firstIndex: 0,
         indexCount: -1,
       });
@@ -2393,6 +2520,30 @@ export class Renderer implements FrameSink {
     const next = new Float32Array(this.instanceData.length * 2);
     next.set(this.instanceData);
     this.instanceData = next;
+  }
+
+  /**
+   * Upload this view's scene instances of the shared previous-matrix lane at the byte offset
+   * matching `base` in the instance buffer (48 bytes per instance where it has 112), growing
+   * the lane buffer when the frame outgrows it (the old one retires after submit).
+   */
+  private uploadLane(base: number): void {
+    const first = base / INSTANCE_STRIDE;
+    const laneBase = first * LANE_STRIDE;
+    const bytes = this.sceneCount * LANE_STRIDE;
+    let buf = this.laneBuffer;
+    if (!buf || laneBase + bytes > buf.size) {
+      if (buf) this.retired.push(buf);
+      let cap = Math.max(256, buf ? buf.size / LANE_STRIDE : 0);
+      while (cap * LANE_STRIDE < laneBase + bytes) cap *= 2;
+      buf = this.laneBuffer = this.device.createBuffer({
+        label: 'instance-lane',
+        size: cap * LANE_STRIDE,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      });
+    }
+    this.laneBase = laneBase;
+    if (bytes > 0) this.device.queue.writeBuffer(buf, laneBase, this.laneData.buffer, 0, bytes);
   }
 
   private makeInstanceBuffer(count: number): GPUBuffer {
