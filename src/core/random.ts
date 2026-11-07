@@ -83,7 +83,14 @@ function fnv1a(s: string, basis: number = FNV_OFFSET): number {
   return h >>> 0;
 }
 
-/** The 32-bit key of a seed (see the module comment). */
+/**
+ * The 32-bit key of a seed: the key `createRandom(seed)` is seeded from (`random.key`) and the
+ * one `hash2`/`hash3` mix their coordinates into. An integer number seed is taken `>>> 0`; any
+ * other number, and every string, is hashed with 32-bit FNV-1a over its UTF-8 bytes. A game uses
+ * it to derive its own stable hashes from the same seed the engine does, for example
+ * `seedKey('level-3') ^ chunkId`. Pure and allocation-free; the value never changes between
+ * engine versions (the FNV-1a reference values are tested).
+ */
 export function seedKey(seed: Seed): number {
   if (typeof seed === 'number' && Number.isInteger(seed)) return seed >>> 0;
   return fnv1a(String(seed));

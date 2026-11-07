@@ -70,9 +70,18 @@ export interface ArpgDemoState {
   /**
    * `?still` only: the mean brightness (0..255) of the canvas's centre column (640 on
    * desktop-1280) less the mean of the columns 4 px either side, read back once on frame 60;
-   * a floor gap under the hero shows as a positive spike. Null before (and without `?still`).
+   * a floor gap shows as a positive spike, a grout line as a negative one. Null before (and
+   * without `?still`).
    */
   centreSeam: number | null;
+  /** The layout's form factor (`ui.layout.formFactor`). */
+  formFactor: string;
+  /** `ui.layout.overflows()` as of the last re-layout: widget ids that overflow their region. */
+  overflows: string[];
+  /** The content-sized `bottom` bar's height, CSS px (ws/ui-8: the orbs and slots size it). */
+  bottomBar: number;
+  /** The share of the layout's height between the top and bottom bars (the world's band), 0..1. */
+  worldView: number;
 }
 
 /** Test helpers (functions, so they live beside `__demo` rather than in it). */
