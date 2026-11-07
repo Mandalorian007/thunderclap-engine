@@ -48,10 +48,12 @@ import {
   type GamepadLike,
   type Gestures,
   Input,
-  type InputClock,
+  type InputPlayback,
+  type InputPlaybackOptions,
   type InputRecording,
   type MagnifyOptions,
   type PointerRouter,
+  type TickClock,
   XrPointerSource,
 } from '../input';
 import {
@@ -243,6 +245,20 @@ export interface XrControl {
   readonly surface: XrSurface | null;
 }
 
+/** `ctx.replay(recording, opts)`: ticks per `step()` and ms per fed tick (`InputPlaybackOptions`). */
+export type ReplayOptions = Pick<InputPlaybackOptions, 'speed' | 'tickMs'>;
+
+/**
+ * What `ctx.replay` returns: the `InputPlayback` installed on `ctx.input` (it is
+ * `ctx.input.playback`), driving `ctx.clock`. `stop()` (or `detach()`, the same call) uninstalls
+ * it and reattaches the input to the canvas at once; the loop does the same on the first step
+ * after the recording ends.
+ */
+export interface GameReplay extends InputPlayback {
+  /** Uninstall the playback and give the input back to the player. Idempotent. */
+  stop(): void;
+}
+
 /**
  * Everything noun-free a scene may use. `A` is the game's action names, `S` its save and `C`
  * the ctx the scene stack hands to scenes (the game's own ctx type, which extends this one).
@@ -273,9 +289,20 @@ export interface EngineCtx<
    * update (by the frame delta with `sim: false`) and stands still while `loop.paused` is set
    * or the loop is stopped. `ctx.gestures` reads it, so long-press and double-tap run on game
    * time and a recording replays them on the same ticks. Gestures or a `Look` the game builds
-   * itself take it as `{ clock: ctx.clock }`.
+   * itself take it as `{ clock: ctx.clock }`, and so does a playback (`createInputPlayback`'s
+   * `clock`), which is why it is typed `TickClock`; only the loop or a playback advances it.
    */
-  readonly clock: InputClock;
+  readonly clock: TickClock;
+  /**
+   * Replay `recording` from now (a replay started from a menu, ws/core-6): installs an
+   * `InputPlayback` on `input`, driven by `clock`, and detaches the input from the canvas and the
+   * window for its length, so the real player cannot disturb it; the recorded pointers still
+   * reach `gestures` and `pointers`. From the next fixed step the loop steps it. When the
+   * recording ends (the first step after its last tick) or `stop()` is called, the playback is
+   * uninstalled and the input reattached as before. A second call stops the first replay; a
+   * playback from `input.replay` is replaced (the input then returns to its detached element).
+   */
+  replay(recording: InputRecording, opts?: ReplayOptions): GameReplay;
   /**
    * Tap, double tap, long-press, pan, drag and pinch, linked to `input` (shared block and
    * transform, advanced in `input.update()`), so `{ gesture }` bindings work out of the box.
@@ -393,16 +420,38 @@ export async function createGame<
     ? createInputPlayback(input, opts.input.replay, { clock })
     : null;
   if (opts.input.record) createInputRecorder(input);
-  if (playback) {
-    // The recorded pointers are dispatched through a pointer target nothing real can reach (an
-    // element outside the page that keys are read from too), so the gestures, rays and any look
-    // see them on their recorded ticks and never a real pointer or key.
-    const sink = surface.root.ownerDocument.createElement('div');
-    input.attach({ pointerTarget: sink, keyTarget: sink });
-  } else {
-    input.attach({ pointerTarget: surface.canvas });
-  }
+  // The recorded pointers are dispatched through a pointer target nothing real can reach (an
+  // element outside the page that keys are read from too), so the gestures, rays and any look
+  // see them on their recorded ticks and never a real pointer or key.
+  const sink = surface.root.ownerDocument.createElement('div');
+  const attachSink = () => input.attach({ pointerTarget: sink, keyTarget: sink });
+  // Where the input lives outside a `ctx.replay`: the canvas, or the sink in replay mode.
+  const attachHome = playback ? attachSink : () => input.attach({ pointerTarget: surface.canvas });
+  attachHome();
   input.setPointerTransform((x, y) => surface.clientToLogical(x, y));
+  /** The playback `ctx.replay` installed, until it ends or is stopped. */
+  let replaying: GameReplay | null = null;
+  const replay = (recording: InputRecording, ropts: ReplayOptions = {}): GameReplay => {
+    replaying?.stop();
+    input.playback?.detach();
+    // `attach` releases every key and button first, so nothing the player held leaks in.
+    attachSink();
+    const pb = createInputPlayback(input, recording, {
+      speed: ropts.speed,
+      tickMs: ropts.tickMs,
+      clock,
+    }) as GameReplay;
+    const uninstall = pb.detach;
+    pb.stop = pb.detach = () => {
+      uninstall();
+      if (replaying !== pb) return;
+      replaying = null;
+      // Releases the recording's last held keys and buttons too.
+      attachHome();
+    };
+    replaying = pb;
+    return pb;
+  };
 
   // ── Scenes + loop ──────────────────────────────────────────────────────
   const hooks: GameHooks = {};
@@ -425,8 +474,11 @@ export async function createGame<
         // is read from the input each step, so one the game installs mid-session (a replay
         // started from a menu: `createInputPlayback(ctx.input, rec, { clock: ctx.clock })`) is
         // stepped here too, in the same order (ws/core-5).
+        // A `ctx.replay` whose recording ran out last step gives the input back here, before
+        // this step's update, so its last tick was updated with the replayed state (ws/core-6).
         const pb = input.playback;
         const fed = pb ? pb.step() : false;
+        if (!fed && pb !== null && pb === replaying) pb.stop();
         if (!fed || pb?.clock !== clock) clock.advance(dt * 1000);
         input.update();
         padNav.update();
@@ -606,6 +658,7 @@ export async function createGame<
     particles,
     input,
     clock,
+    replay,
     gestures,
     pointers,
     padNav,
