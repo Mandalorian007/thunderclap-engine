@@ -84,7 +84,22 @@ class Entry implements AtlasRegion {
   lastUsed = 0;
   shelf: Shelf | null = null;
   key = '';
+  /** An owned cell's resolved style (`TextAtlas.cell`); null for a cached string. */
+  style: Resolved | null = null;
 }
+
+/** A `TextStyle` with every default applied. */
+interface Resolved {
+  font: string;
+  size: number;
+  color: string;
+  stroke: string;
+  sw: number;
+  pad: number;
+}
+
+/** An owned cell's width is rounded up to this many atlas px, headroom for `rewrite`. */
+const CELL_STEP = 32;
 
 /** A row of the canvas: fixed height, entries packed left to right. */
 class Shelf {
@@ -130,6 +145,8 @@ export class TextAtlas {
   /** Next free y for a new shelf. */
   private top = 0;
   private tick = 0;
+  /** Owned cells made so far (their cache keys). */
+  private cells = 0;
 
   constructor(opts: TextAtlasOptions = {}) {
     this.size = Math.max(16, Math.floor(opts.size ?? 1024));
@@ -152,51 +169,74 @@ export class TextAtlas {
    * string is wider or taller than the whole canvas.
    */
   text(text: string, style: TextStyle = {}): AtlasRegion | null {
-    const size = style.size ?? 32;
-    const font = style.font ?? this.font;
-    const color = style.color ?? '#fff';
-    const stroke = style.stroke ?? '';
-    const sw = stroke ? (style.strokeWidth ?? 0) : 0;
-    const pad = style.padding ?? 2;
-    const key = `${text}\u0001${font}\u0001${size}\u0001${color}\u0001${stroke}\u0001${sw}\u0001${pad}`;
+    const r = this.resolve(style);
+    const key = `${text}\u0001${r.font}\u0001${r.size}\u0001${r.color}\u0001${r.stroke}\u0001${r.sw}\u0001${r.pad}`;
     this.tick++;
     const hit = this.cache.get(key);
     if (hit) {
       hit.lastUsed = this.tick;
       return hit;
     }
-    const ctx = this.ctx;
-    ctx.font = `${size}px ${font}`;
-    const w = Math.ceil(ctx.measureText(text).width + 2 * pad + sw);
-    const h = Math.ceil(size * 1.25 + 2 * pad + sw);
+    const w = this.measure(text, r);
+    const h = this.lineHeight(r);
     if (w > this.size || h > this.size) return null;
-    const e = this.place(w, h);
-    e.key = key;
-    e.lastUsed = this.tick;
-    e.width = w;
-    e.height = h;
-    const inv = 1 / this.size;
-    e.u0 = e.x * inv;
-    e.v0 = e.y * inv;
-    e.u1 = (e.x + w) * inv;
-    e.v1 = (e.y + h) * inv;
-    this.cache.set(key, e);
-    this.count++;
-    ctx.font = `${size}px ${font}`;
-    ctx.textBaseline = 'middle';
-    ctx.textAlign = 'center';
-    const cx = e.x + w / 2;
-    const cy = e.y + h / 2;
-    if (sw > 0) {
-      ctx.lineJoin = 'round';
-      ctx.lineWidth = sw;
-      ctx.strokeStyle = stroke;
-      ctx.strokeText(text, cx, cy);
-    }
-    ctx.fillStyle = color;
-    ctx.fillText(text, cx, cy);
-    this.dirty = true;
+    const e = this.make(key, w, h);
+    this.draw(e, text, r);
     return e;
+  }
+
+  /**
+   * An **owned** cell for text that changes (ws/fx-4): not shared through the cache, its width
+   * rounded up for headroom, the region covering the whole cell with `text` centred in it.
+   * Change its text with `rewrite`; `release` it when done. Evicted like any string when the
+   * canvas is full and it is the least recently used (`touch` keeps it). Returns `null` only
+   * when the text is larger than the whole canvas.
+   */
+  cell(text: string, style: TextStyle = {}): AtlasRegion | null {
+    return this.makeCell(text, this.resolve(style));
+  }
+
+  /** The size in atlas px `cell(text, style)` would get, without placing anything. */
+  cellSize(text: string, style: TextStyle = {}): { width: number; height: number } {
+    const r = this.resolve(style);
+    const tw = this.measure(text, r);
+    return {
+      width: Math.min(this.size, Math.ceil(tw / CELL_STEP) * CELL_STEP),
+      height: this.lineHeight(r),
+    };
+  }
+
+  /**
+   * Redraw an owned cell with `text`, in place (the same region object, nothing allocated) when
+   * it fits the cell, else in a new wider cell (the old one released). Also a new cell when
+   * `cell` was evicted since. Returns `null` when the text is larger than the whole canvas.
+   */
+  rewrite(cell: AtlasRegion, text: string): AtlasRegion | null {
+    const e = cell as Entry;
+    if (!e.style) throw new Error('TextAtlas.rewrite: not an owned cell (use `cell`)');
+    const r = e.style;
+    this.tick++;
+    if (this.has(e) && this.measure(text, r) <= e.width) {
+      e.lastUsed = this.tick;
+      this.draw(e, text, r);
+      return e;
+    }
+    this.release(e);
+    return this.makeCell(text, r);
+  }
+
+  /** Give back an owned cell (a no-op for a cached string or one already released/evicted). */
+  release(cell: AtlasRegion): void {
+    const e = cell as Entry;
+    if (!e.style || !this.has(e)) return;
+    this.cache.delete(e.key);
+    const s = e.shelf!;
+    const at = s.entries.indexOf(e);
+    if (at >= 0) s.entries.splice(at, 1);
+    this.ctx.clearRect(e.x, e.y, e.width, e.height);
+    this.recycle(e);
+    this.count--;
+    this.dirty = true;
   }
 
   /** Mark `region` as used now, so a live quad's text is not the first evicted. */
@@ -223,6 +263,75 @@ export class TextAtlas {
     this.top = 0;
     this.count = 0;
     this.ctx.clearRect(0, 0, this.size, this.size);
+    this.dirty = true;
+  }
+
+  private resolve(style: TextStyle): Resolved {
+    const stroke = style.stroke ?? '';
+    return {
+      font: style.font ?? this.font,
+      size: style.size ?? 32,
+      color: style.color ?? '#fff',
+      stroke,
+      sw: stroke ? (style.strokeWidth ?? 0) : 0,
+      pad: style.padding ?? 2,
+    };
+  }
+
+  private measure(text: string, r: Resolved): number {
+    this.ctx.font = `${r.size}px ${r.font}`;
+    return Math.ceil(this.ctx.measureText(text).width + 2 * r.pad + r.sw);
+  }
+
+  private lineHeight(r: Resolved): number {
+    return Math.ceil(r.size * 1.25 + 2 * r.pad + r.sw);
+  }
+
+  private makeCell(text: string, r: Resolved): Entry | null {
+    const h = this.lineHeight(r);
+    const tw = this.measure(text, r);
+    if (tw > this.size || h > this.size) return null;
+    const w = Math.min(this.size, Math.ceil(tw / CELL_STEP) * CELL_STEP);
+    const e = this.make(`\u0002cell#${this.cells++}`, w, h);
+    e.style = r;
+    this.draw(e, text, r);
+    return e;
+  }
+
+  /** Place, size and cache a `w × h` entry under `key`. */
+  private make(key: string, w: number, h: number): Entry {
+    const e = this.place(w, h);
+    e.key = key;
+    e.lastUsed = this.tick;
+    e.width = w;
+    e.height = h;
+    const inv = 1 / this.size;
+    e.u0 = e.x * inv;
+    e.v0 = e.y * inv;
+    e.u1 = (e.x + w) * inv;
+    e.v1 = (e.y + h) * inv;
+    this.cache.set(key, e);
+    this.count++;
+    return e;
+  }
+
+  /** Clear `e`'s rect and draw `text` centred in it. */
+  private draw(e: Entry, text: string, r: Resolved): void {
+    const ctx = this.ctx;
+    ctx.clearRect(e.x, e.y, e.width, e.height);
+    ctx.font = `${r.size}px ${r.font}`;
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'center';
+    const cx = e.x + e.width / 2;
+    const cy = e.y + e.height / 2;
+    if (r.sw > 0) {
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = r.sw;
+      ctx.strokeStyle = r.stroke;
+      ctx.strokeText(text, cx, cy);
+    }
+    ctx.fillStyle = r.color;
+    ctx.fillText(text, cx, cy);
     this.dirty = true;
   }
 

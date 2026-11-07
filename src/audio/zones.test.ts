@@ -66,6 +66,7 @@ class FakeVoice implements Voice {
   filter() {}
   readonly sendCount = 0;
   readonly occlusion = 0;
+  readonly doppler = 1;
 }
 
 class Host implements AudioZoneHost {

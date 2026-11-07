@@ -40,6 +40,7 @@ const SILENT: Voice = {
   playing: false,
   sendCount: 0,
   occlusion: 0,
+  doppler: 1,
 };
 
 export function createVariations(

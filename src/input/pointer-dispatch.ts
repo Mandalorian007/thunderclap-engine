@@ -33,7 +33,10 @@ export interface PointerRecord {
   /** Raw `clientX`/`clientY`. */
   clientX: number;
   clientY: number;
-  /** `Event.timeStamp`. */
+  /**
+   * `Event.timeStamp`: when the event happened, ms on the `performance.now()` clock (not when the
+   * page got round to handling it). `eventTime` maps it onto another clock.
+   */
   time: number;
   /** False when the transform maps the point outside the game (true without a transform). */
   inside: boolean;
@@ -61,6 +64,23 @@ export interface PointerDispatcherOptions {
    * router until it is released.
    */
   hoverWhileClaimed?: boolean;
+}
+
+function wallNow(): number {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
+
+/**
+ * When an event happened, on the clock `now` (ws/input-6). `timeStamp` is `Event.timeStamp`, on
+ * the `performance.now()` clock; its age (how long the page took to handle it) is subtracted
+ * from `now()`, so a fake or tick-driven clock still sees a late event as early. An unusable
+ * stamp (not finite, negative, or in the future) counts as handled at once: `now()`.
+ */
+export function eventTime(timeStamp: number, now: () => number): number {
+  const wall = wallNow();
+  const age =
+    Number.isFinite(timeStamp) && timeStamp >= 0 && timeStamp <= wall ? wall - timeStamp : 0;
+  return now() - age;
 }
 
 /** Consumer priorities `Input` uses, lowest first. A game's own consumer picks any number. */

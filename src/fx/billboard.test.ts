@@ -289,3 +289,65 @@ describe('Billboards sorting and drawing', () => {
     expect(fake.errors).toEqual([]);
   });
 });
+
+describe('Billboards text plates (ws/fx-4)', () => {
+  const regions = (bb: Billboards) => (bb as unknown as { regions: unknown[] }).regions;
+  const inst = (bb: Billboards) => (bb as unknown as { inst: Float32Array }).inst;
+
+  it('setText re-rasterises into the plate cell: no new texture, same region, same size', () => {
+    const { fake, bb } = make(16);
+    const h = bb.add({ position: [0, 0, 0], size: [2, 0.5], text: 'Score 10' });
+    expect(h.text).toBe('Score 10');
+    bb.update(0);
+    drawFrame(fake, bb);
+    const textures = fake.textures.length;
+    const region = regions(bb)[h.slot];
+    const o = h.slot * BILLBOARD_FLOATS;
+    const before = Array.from(inst(bb).subarray(o + 4, o + 12));
+    h.setText('Score 99');
+    expect(h.text).toBe('Score 99');
+    expect(bb.atlas.dirty).toBe(true);
+    bb.update(0);
+    drawFrame(fake, bb);
+    expect(fake.textures.length).toBe(textures);
+    expect(regions(bb)[h.slot]).toBe(region);
+    expect(Array.from(inst(bb).subarray(o + 4, o + 12))).toEqual(before);
+    expect(bb.atlas.dirty).toBe(false);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('a longer text grows the cell and the quad width with it, keeping the height', () => {
+    const { fake, bb } = make(16);
+    const size = bb.measure('ab');
+    expect(size.width).toBe(32);
+    const h = bb.add({ position: [0, 0, 0], size: [1, 0.5], text: 'ab' });
+    const textures = fake.textures.length;
+    const region = regions(bb)[h.slot];
+    h.setText('a much longer line');
+    expect(regions(bb)[h.slot]).not.toBe(region);
+    const o = h.slot * BILLBOARD_FLOATS;
+    expect(inst(bb)[o + 4]).toBeCloseTo(bb.measure('a much longer line').width / 32);
+    expect(inst(bb)[o + 5]).toBeCloseTo(0.5);
+    expect(fake.textures.length).toBe(textures);
+  });
+
+  it('removing or clearing plates gives their cells back; a plain handle becomes a plate', () => {
+    const { bb } = make(16);
+    const a = bb.add({ position: [0, 0, 0], size: [1, 1], text: 'one' });
+    const b = bb.add({ position: [0, 0, 0], size: [1, 1], text: 'two' });
+    const plain = bb.add({ position: [0, 0, 0], size: [1, 1] });
+    expect(plain.text).toBeNull();
+    expect(bb.atlas.count).toBe(2);
+    bb.remove(a);
+    expect(bb.atlas.count).toBe(1);
+    expect(b.text).toBe('two');
+    plain.setText('three'); // swap-removed into a slot, now a plate
+    expect(plain.text).toBe('three');
+    expect(bb.atlas.count).toBe(2);
+    b.region = bb.text('shared');
+    expect(b.text).toBeNull();
+    expect(bb.atlas.count).toBe(2); // b's cell released, 'shared' cached
+    bb.clear();
+    expect(bb.atlas.count).toBe(1);
+  });
+});

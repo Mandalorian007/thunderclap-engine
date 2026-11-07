@@ -82,6 +82,29 @@ export interface StandardMaterialDesc {
   maps?: Partial<Record<StandardMapSlot, StandardMapDesc>>;
   /** The sampler every map is read with. Default `'linear-mip-repeat'`. */
   sampler?: SamplerKind;
+  /**
+   * A noise-threshold dissolve (ws/render-5): fragments whose value noise is below `amount`
+   * are discarded, in the scene pass and in the sun's shadow pass alike, and a band
+   * `edgeWidth` wide above the threshold glows `edgeColor` (to the emissive target). Given at
+   * creation (even with `amount: 0`), the material builds its own shadow pipeline
+   * (`shadowFragmentEntry`); animate it with `setUniforms(packStandardUniforms(next))`.
+   */
+  dissolve?: StandardDissolve;
+}
+
+/** `StandardMaterialDesc.dissolve`. */
+export interface StandardDissolve {
+  /** 0 (whole) .. 1 (gone): the noise threshold below which fragments are discarded. */
+  amount: number;
+  /** Linear RGB of the glowing band at the edge. Default `[1, 0.5, 0.1]`. */
+  edgeColor?: ArrayLike<number>;
+  /** Width of the band in noise units (0..1). Default 0.05; 0 draws no edge. */
+  edgeWidth?: number;
+  /**
+   * Noise scale: cells of value noise per uv unit of the mesh's own coordinates
+   * (`VSOut.local`). Default 6.
+   */
+  noise?: number;
 }
 
 /** A map's own settings (`StandardMaterialDesc.maps`). */
@@ -106,8 +129,10 @@ export const STANDARD_TEXTURE_SLOTS = {
 const STANDARD_HEAD_FLOATS = 20;
 /** Floats per map slot: `scale_offset` (4), `rot` (cos, sin, texCoord, 0). */
 const STANDARD_SLOT_FLOATS = 8;
+/** Float offset of the dissolve tail (`dissolve`, `dissolve_edge`) after the slots. */
+export const STANDARD_DISSOLVE_OFFSET = STANDARD_HEAD_FLOATS + 5 * STANDARD_SLOT_FLOATS;
 /** The standard material's uniform block, in floats (`setUniforms` takes the whole block). */
-export const STANDARD_UNIFORM_FLOATS = STANDARD_HEAD_FLOATS + 5 * STANDARD_SLOT_FLOATS;
+export const STANDARD_UNIFORM_FLOATS = STANDARD_DISSOLVE_OFFSET + 8;
 
 const SLOT_NAMES: readonly StandardMapSlot[] = [
   'baseColor',
@@ -121,14 +146,17 @@ const SLOT_NAMES: readonly StandardMapSlot[] = [
 const FLAG_DOUBLE_SIDED = 1;
 const FLAG_MASK = 2;
 const FLAG_BLEND = 4;
+const FLAG_DISSOLVE = 8;
 
 /**
  * Pack a desc's factors into the standard material's uniform block:
  * `base_color` (rgba), `factors` (metallic, roughness, normal_scale, alpha_cutoff),
- * `emissive` (rgb, flags: bit 0 double-sided, bit 1 alpha mask, bit 2 alpha blend),
+ * `emissive` (rgb, flags: bit 0 double-sided, bit 1 alpha mask, bit 2 alpha blend, bit 3
+ * dissolve),
  * `uv_scale_offset` (sx, sy, ox, oy) and `uv_rot` (cos, sin, occlusion_strength, 0) from
  * `uvTransform`, then one `StandardSlot` per map (`scale_offset`, `rot` = cos, sin, texCoord,
- * 0) from `maps`, defaulting to the material's transform. `out` must hold
+ * 0) from `maps`, defaulting to the material's transform, then at `STANDARD_DISSOLVE_OFFSET`
+ * `dissolve` (amount, edge width, noise scale, 0) and `dissolve_edge` (rgb, 0). `out` must hold
  * `STANDARD_UNIFORM_FLOATS`; returns it.
  */
 export function packStandardUniforms(
@@ -156,6 +184,8 @@ export function packStandardUniforms(
   if (desc.doubleSided) flags |= FLAG_DOUBLE_SIDED;
   if (desc.alphaMode === 'mask') flags |= FLAG_MASK;
   if (desc.alphaMode === 'blend') flags |= FLAG_BLEND;
+  const dv = desc.dissolve;
+  if (dv) flags |= FLAG_DISSOLVE;
   out[11] = flags;
   const t = desc.uvTransform;
   out[12] = t?.[0] ?? 1;
@@ -181,6 +211,16 @@ export function packStandardUniforms(
     out[o + 6] = slot?.texCoord === 1 ? 1 : 0;
     out[o + 7] = 0;
   }
+  const o = STANDARD_DISSOLVE_OFFSET;
+  const ec = dv?.edgeColor;
+  out[o] = dv ? dv.amount : 0;
+  out[o + 1] = dv ? (dv.edgeWidth ?? 0.05) : 0;
+  out[o + 2] = dv?.noise ?? 6;
+  out[o + 3] = 0;
+  out[o + 4] = ec?.[0] ?? 1;
+  out[o + 5] = ec?.[1] ?? 0.5;
+  out[o + 6] = ec?.[2] ?? 0.1;
+  out[o + 7] = 0;
   return out;
 }
 
@@ -206,6 +246,8 @@ struct StandardParams {
   uv_scale_offset: vec4f,
   uv_rot: vec4f,
   slots: array<StandardSlot, 5>,
+  dissolve: vec4f,
+  dissolve_edge: vec4f,
 };
 @group(1) @binding(0) var<uniform> standard: StandardParams;
 @group(1) @binding(1) var standard_sampler: sampler;
@@ -225,6 +267,20 @@ fn standard_uv_slot(in: VSOut, slot: u32) -> vec2f {
   let uv = select(in.uv, in.uv1, p.rot.z > 0.5);
   let s = uv * p.scale_offset.xy;
   return vec2f(p.rot.x * s.x - p.rot.y * s.y, p.rot.y * s.x + p.rot.x * s.y) + p.scale_offset.zw;
+}
+// Dissolve noise at a fragment, 0..1 (value-noise fbm over the mesh's own uv).
+fn standard_dissolve_noise(in: VSOut) -> f32 {
+  return engine_fbm(in.local * standard.dissolve.z, 3) / 0.875;
+}
+// True when the dissolve discards this fragment (flag bit 3 and noise below the amount).
+fn standard_dissolved(in: VSOut) -> bool {
+  if ((u32(standard.emissive.w) & 8u) == 0u) { return false; }
+  let a = standard.dissolve.x;
+  return a >= 1.0 || standard_dissolve_noise(in) < a;
+}
+// The shadow pass fragment (shadowFragmentEntry): the same holes as the dissolve in fs_main.
+@fragment fn fs_shadow(in: VSOut) {
+  if (standard_dissolved(in)) { discard; }
 }
 
 @fragment fn fs_main(in: VSOut, @builtin(front_facing) front: bool) -> FragOut {
@@ -252,13 +308,23 @@ fn standard_uv_slot(in: VSOut, slot: u32) -> vec2f {
     n = nd;
   }
   if ((flags & 2u) != 0u && base.a < standard.factors.w) { discard; }
+  var edge = vec3f(0.0);
+  if ((flags & 8u) != 0u) {
+    let dn = standard_dissolve_noise(in);
+    let da = standard.dissolve.x;
+    if (da >= 1.0 || dn < da) { discard; }
+    let w = standard.dissolve.y;
+    if (da > 0.0 && w > 0.0) {
+      edge = standard.dissolve_edge.rgb * (1.0 - smoothstep(da, da + w, dn));
+    }
+  }
   let metallic = mr.b * standard.factors.x;
   let roughness = mr.g * standard.factors.y;
   let lit = engine_pbr_layers(
     base.rgb, metallic, roughness, n, v, in.worldPos, ao, vec3f(0.0),
     engine_instance_layers(in.flags),
   );
-  let glow = em + base.rgb * in.emissive;
+  let glow = em + base.rgb * in.emissive + edge;
   // Fog attenuates the emissive without tinting it: fog(e) - fog(0) = e × (1 - f).
   let fogged_glow = engine_fog(glow, in.worldPos) - engine_fog(vec3f(0.0), in.worldPos);
   let alpha = select(1.0, base.a, (flags & 4u) != 0u);
@@ -271,7 +337,7 @@ fn standard_uv_slot(in: VSOut, slot: u32) -> vec2f {
 `;
 
 /**
- * A standard PBR `Material` for `desc`: `createMaterial` with `STANDARD_WGSL`, a 240-byte block
+ * A standard PBR `Material` for `desc`: `createMaterial` with `STANDARD_WGSL`, a 272-byte block
  * from `packStandardUniforms` and the five maps (the device's `defaultTextures` for the missing
  * ones: `white` for the base colour, metallic-roughness and occlusion, since a 255 texel reads
  * as 1.0 whether the view is sRGB or linear, `flatNormal` and `black`). The instance
@@ -299,6 +365,8 @@ export function createStandardMaterial(renderer: Renderer, desc: StandardMateria
     textures: 5,
     sampler: desc.sampler ?? 'linear-mip-repeat',
     buffers,
+    // A dissolve's holes show in the shadow too: the material's own shadow pipeline.
+    shadowFragmentEntry: desc.dissolve ? 'fs_shadow' : undefined,
   });
   m.setUniforms(packStandardUniforms(desc));
   m.setTexture(STANDARD_TEXTURE_SLOTS.baseColor, desc.baseColor ?? d.white);

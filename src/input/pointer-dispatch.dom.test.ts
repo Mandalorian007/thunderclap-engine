@@ -4,7 +4,7 @@ import { Camera } from '../render/camera';
 import { Gestures } from './gestures';
 import { Input } from './input';
 import { Look } from './look';
-import { createPointerDispatcher, type PointerConsumer } from './pointer-dispatch';
+import { createPointerDispatcher, eventTime, type PointerConsumer } from './pointer-dispatch';
 import { createPointerRouter } from './pointer-router';
 import { aabbTester } from './rays';
 
@@ -336,5 +336,18 @@ describe('Input with the dispatcher', () => {
     off();
     input.update();
     expect(input.held('jump')).toBe(false);
+  });
+});
+
+describe('eventTime (ws/input-6)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('moves a timeStamp onto a clock by its age; unusable stamps read as now', () => {
+    vi.spyOn(performance, 'now').mockReturnValue(1000);
+    expect(eventTime(880, () => 1000)).toBe(880);
+    expect(eventTime(880, () => 50)).toBe(-70);
+    expect(eventTime(1200, () => 50)).toBe(50);
+    expect(eventTime(Number.NaN, () => 50)).toBe(50);
+    expect(eventTime(-1, () => 50)).toBe(50);
   });
 });

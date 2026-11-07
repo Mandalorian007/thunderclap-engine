@@ -1,3 +1,4 @@
+import type { Random } from '../core/random';
 import type { Drawable, Frame, ViewInfo } from '../render/frame';
 import type { Renderer } from '../render/renderer';
 import type { SceneTarget } from '../render/scene-target';
@@ -23,6 +24,7 @@ import {
   SIZE_CURVE_FLOATS,
   SURFACE_TRI_FLOATS,
 } from './particles-wgsl';
+import { defaultFxRandom, SPAWN_SEED_MAX } from './random';
 
 const PARTICLE_BYTES = 80;
 const SPAWN_FLOATS = 28;
@@ -244,6 +246,11 @@ export interface ParticleSystemOptions {
   maxSubEmitters?: number;
   /** Distinct `sizeCurve` plus `colorCurve` arrays the system can hold at once. Default 32 each. */
   maxCurves?: number;
+  /**
+   * The stream every emit draws its spawn seed from (ws/fx-4). Default: a fork of the fx
+   * module default (`FX_DEFAULT_SEED`), named by creation order.
+   */
+  random?: Random;
 }
 
 const POINT: EmitShape = { kind: 'point' };
@@ -399,6 +406,8 @@ export class ParticleSystem implements Drawable {
   readonly forces: ParticleForce[];
   /** Live: depth collision parameters (world, `readsDepth`; null = off). */
   collide: { bounce: number; friction: number; thickness?: number } | null;
+  /** Live: the stream `emit` draws spawn seeds from (see `ParticleSystemOptions.random`). */
+  random: Random;
 
   private readonly renderer: Renderer;
   private readonly device: GPUDevice;
@@ -463,6 +472,7 @@ export class ParticleSystem implements Drawable {
     this.readsDepth = opts.readsDepth ?? false;
     this.forces = opts.forces ?? [];
     this.collide = world && opts.collide ? opts.collide : null;
+    this.random = opts.random ?? defaultFxRandom('particles');
     this.spawnFloats = fx ? FX_SPAWN_FLOATS : SPAWN_FLOATS;
     this.simData = new Float32Array(fx ? FX_SIM_FLOATS : SIM_FLOATS);
 
@@ -856,8 +866,12 @@ export class ParticleSystem implements Drawable {
     return { pipeline, group, count, read, params, state: 'idle' };
   }
 
-  /** Queue `count` new particles. Cheap: one small record, spawned on the GPU next frame. */
-  emit(p: EmitParams, count: number): void {
+  /**
+   * Queue `count` new particles. Cheap: one small record, spawned on the GPU next frame. The
+   * record's seed (every per-particle random on the GPU derives from it) is drawn from `random`,
+   * default the system's own stream.
+   */
+  emit(p: EmitParams, count: number, random: Random = this.random): void {
     const n = Math.min(Math.floor(count * this.spawnScale), this.capacity);
     if (n <= 0) return;
     if (this.spawnCount >= this.maxSpawns) {
@@ -870,16 +884,16 @@ export class ParticleSystem implements Drawable {
     const o = this.spawnCount++ * this.spawnFloats;
     const fx = this.fx;
     if (fx) {
-      this.writeFxSpawn(this.spawnData, p, n, fx.spawnTotal, o, 0);
+      this.writeFxSpawn(this.spawnData, p, n, fx.spawnTotal, o, 0, random);
       fx.spawnTotal += n;
     } else {
-      this.writeSpawn(p, n, o);
+      this.writeSpawn(p, n, o, random);
       this.head = (this.head + n) % this.capacity;
     }
     if (n > this.maxSpawnInCmd) this.maxSpawnInCmd = n;
   }
 
-  private writeSpawn(p: EmitParams, n: number, at: number): void {
+  private writeSpawn(p: EmitParams, n: number, at: number, random: Random): void {
     const d = this.spawnData;
     let o = at;
     const shape = p.shape ?? POINT;
@@ -938,7 +952,7 @@ export class ParticleSystem implements Drawable {
     // e
     d[o++] = this.head;
     d[o++] = n;
-    d[o++] = Math.floor(Math.random() * 16777215);
+    d[o++] = random.int(0, SPAWN_SEED_MAX);
     d[o++] = p.emissive ?? 1;
   }
 
@@ -953,6 +967,7 @@ export class ParticleSystem implements Drawable {
     start: number,
     at: number,
     depth: number,
+    random: Random,
   ): void {
     const world = this.space === 'world';
     const fx = this.fx!;
@@ -996,10 +1011,10 @@ export class ParticleSystem implements Drawable {
     let lifeSlot = -1;
     if (depth === 0) {
       if (p.onDeath && p.onDeath.count > 0) {
-        deathSlot = this.internSub(fx, p.onDeath, p.onDeath.params, p.inherit ?? 0);
+        deathSlot = this.internSub(fx, p.onDeath, p.onDeath.params, p.inherit ?? 0, random);
       }
       if (p.onLife && p.onLife.rate > 0) {
-        lifeSlot = this.internSub(fx, p.onLife, p.onLife.params, p.inherit ?? 0);
+        lifeSlot = this.internSub(fx, p.onLife, p.onLife.params, p.inherit ?? 0, random);
       }
     }
     // a
@@ -1037,7 +1052,7 @@ export class ParticleSystem implements Drawable {
     // g
     d[o++] = start;
     d[o++] = n;
-    d[o++] = Math.floor(Math.random() * 16777215);
+    d[o++] = random.int(0, SPAWN_SEED_MAX);
     d[o++] = p.inherit ?? 0;
     // h
     d[o++] = typeof tile === 'number' ? tile : tile[0];
@@ -1106,7 +1121,13 @@ export class ParticleSystem implements Drawable {
   }
 
   /** The sub-emitter record slot of `key` (by identity; rewritten on every parent emit). */
-  private internSub(fx: Fx, key: object, params: EmitParams, inherit: number): number {
+  private internSub(
+    fx: Fx,
+    key: object,
+    params: EmitParams,
+    inherit: number,
+    random: Random,
+  ): number {
     const maxSubs = fx.subData.length / FX_SPAWN_FLOATS;
     let slot = fx.subSlots.get(key);
     if (slot === undefined) {
@@ -1119,7 +1140,7 @@ export class ParticleSystem implements Drawable {
       fx.subUsed = Math.min(fx.subNext, maxSubs);
       fx.subSlots.set(key, slot);
     }
-    this.writeFxSpawn(fx.subData, params, 0, 0, slot * FX_SPAWN_FLOATS, 1);
+    this.writeFxSpawn(fx.subData, params, 0, 0, slot * FX_SPAWN_FLOATS, 1, random);
     fx.subData[slot * FX_SPAWN_FLOATS + 35] = inherit;
     fx.subDirty = true;
     return slot;
@@ -1631,18 +1652,25 @@ export function applyForces(
   if (vel.length > 2) vel[2] = (vel[2]! + az * dt) * damp;
 }
 
-/** Continuous emission at `rate` particles/second, plus bursts. Mutate `params` freely. */
+/**
+ * Continuous emission at `rate` particles/second, plus bursts. Mutate `params` freely. With
+ * `random` the emitter's spawn seeds come from that stream instead of the system's (ws/fx-4).
+ */
 export class ParticleEmitter {
   rate: number;
   active = true;
+  /** Live: the stream this emitter's emits draw from; null uses the system's `random`. */
+  random: Random | null;
   private carry = 0;
 
   constructor(
     readonly system: ParticleSystem,
     public params: EmitParams,
     rate = 0,
+    random?: Random,
   ) {
     this.rate = rate;
+    this.random = random ?? null;
   }
 
   update(dt: number): void {
@@ -1651,11 +1679,15 @@ export class ParticleEmitter {
     const n = Math.floor(this.carry);
     if (n > 0) {
       this.carry -= n;
-      this.system.emit(this.params, n);
+      this.system.emit(this.params, n, this.random ?? this.system.random);
     }
   }
 
   burst(count: number, overrides?: Partial<EmitParams>): void {
-    this.system.emit(overrides ? { ...this.params, ...overrides } : this.params, count);
+    this.system.emit(
+      overrides ? { ...this.params, ...overrides } : this.params,
+      count,
+      this.random ?? this.system.random,
+    );
   }
 }

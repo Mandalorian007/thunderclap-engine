@@ -15,6 +15,23 @@ export type { Follow2D, Follow2DBounds, Follow2DCamera, Follow2DOptions } from '
 export { createFollow2D } from './camera-2d';
 export type { RGBA } from './color';
 export { hex, linearToSrgb, rgba, scaleRgb, srgbToLinear } from './color';
+export type {
+  BlockInfo,
+  CompressedUploadTarget,
+  CompressionFamily,
+  Ktx2LevelLayout,
+  RendererCaps,
+  UploadKtx2Options,
+} from './compressed';
+export {
+  blockInfo,
+  COMPRESSION_FEATURES,
+  CompressedTextureError,
+  compressionFeatures,
+  ktx2LevelLayout,
+  rendererCaps,
+  uploadKtx2,
+} from './compressed';
 export { gpuDiagnostics, installGpuErrorLogging, onGpuError, reportGpuError } from './diagnostics';
 export {
   DynamicResolution,
@@ -58,6 +75,8 @@ export {
   SUN_VIEW_PROJ_OFFSET_FLOATS,
   spotCone,
 } from './lights';
+export type { MeshLod } from './lod';
+export { DEFAULT_LOD_HYSTERESIS, isMeshLod, lodSizePx, pickLodLevel } from './lod';
 export type { DepthMode, MaterialDesc } from './material';
 export {
   DEPTH_FORMAT,
@@ -132,10 +151,16 @@ export { DEFAULT_SHADOW_SIZE, SHADOW_FORMAT, ShadowMap } from './shadow';
 export type { SkinPaletteDesc } from './skin';
 export { JOINT_FLOATS, SKIN_PALETTE_HEADER_FLOATS, SkinPalette, setVertexSkin } from './skin';
 export { type SnapshotOptions, SnapshotRenderer } from './snapshot';
-export type { StandardMapDesc, StandardMapSlot, StandardMaterialDesc } from './standard';
+export type {
+  StandardDissolve,
+  StandardMapDesc,
+  StandardMapSlot,
+  StandardMaterialDesc,
+} from './standard';
 export {
   createStandardMaterial,
   packStandardUniforms,
+  STANDARD_DISSOLVE_OFFSET,
   STANDARD_TEXTURE_SLOTS,
   STANDARD_UNIFORM_FLOATS,
   STANDARD_WGSL,

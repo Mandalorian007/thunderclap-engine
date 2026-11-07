@@ -139,6 +139,11 @@ export interface Voice {
   readonly sendCount: number;
   /** The last answer of `audio.occlusion.probe` for this voice, 0 clear .. 1 occluded (0 when unprobed). */
   readonly occlusion: number;
+  /**
+   * The Doppler multiplier on the playback rate as of the last `audio.update` (1 without
+   * `spatial.doppler`, and on every voice the mixer did not start; diagnostics).
+   */
+  readonly doppler: number;
 }
 
 /** `Voice.filter` kinds (the `BiquadFilterNode` types a voice offers). */
@@ -522,6 +527,7 @@ const NULL_VOICE: Voice = {
   playing: false,
   sendCount: 0,
   occlusion: 0,
+  doppler: 1,
 };
 
 /** Internal: set a pooled biquad's type, cutoff and Q (a step, or a ramp from the current values). */
@@ -1147,6 +1153,8 @@ export class AudioEngine {
   private rateZeroOk: boolean | null = null;
   /** Registered voices frozen by `pause`, with the rate to restore. */
   private readonly frozenExternal = new Map<Voice, number>();
+  /** Per-bus multipliers on the settings gain (`setBusScale`: the ducker). */
+  private readonly scales: Record<BusName, number> = { master: 1, music: 1, sfx: 1, ui: 1 };
 
   constructor(opts: AudioEngineOptions = {}) {
     this._settings = sanitizeMixer(opts.settings);
@@ -1247,6 +1255,8 @@ export class AudioEngine {
   background(hidden: boolean): void {
     if (this.hidden === hidden) return;
     this.hidden = hidden;
+    // Bus writes held while hidden (`applyBus`) land now, before the context resumes.
+    if (!hidden) for (const b of BUS_NAMES) this.applyBus(b);
     void this.syncSuspension();
   }
   /** True while `background(true)` holds (the document hidden or the app in the background). */
@@ -1487,7 +1497,7 @@ export class AudioEngine {
       g.connect(master);
       this.buses[name] = g;
     }
-    for (const name of BUS_NAMES) this.buses[name]!.gain.value = busGain(this._settings[name]);
+    for (const name of BUS_NAMES) this.buses[name]!.gain.value = this.busTarget(name);
     // Paused before the context existed: the paused buses are born silent.
     for (const name of this.pausedList) this.buses[name]!.gain.value = 0;
     this.buildReverb();
@@ -1646,13 +1656,39 @@ export class AudioEngine {
     return this.buses[name] ?? null;
   }
 
-  private applyBus(name: BusName) {
+  /** What a bus gain should be when nothing holds it: the settings gain times its scale. */
+  private busTarget(name: BusName): number {
+    return busGain(this._settings[name]) * this.scales[name];
+  }
+
+  private applyBus(name: BusName, timeConstant = 0.015) {
     const node = this.buses[name];
     if (!node || !this.ctx) return;
-    // A paused bus stays silent; the new setting is applied by `unpause`.
-    if (this.isBusPaused(name)) return;
+    // A paused bus stays silent; the new value is applied by `unpause`. In the background the
+    // write waits for `background(false)`, so nothing is queued on a suspended clock.
+    if (this.isBusPaused(name) || this.hidden) return;
     // Short time-constant ramp avoids zipper clicks.
-    node.gain.setTargetAtTime(busGain(this._settings[name]), this.ctx.currentTime, 0.015);
+    node.gain.setTargetAtTime(this.busTarget(name), this.ctx.currentTime, timeConstant);
+  }
+
+  /**
+   * Multiply a bus's settings gain by `scale` (0..1), approached with time constant
+   * `timeConstant` seconds (default 0.015). The bus gain is always
+   * `busGain(settings[bus]) × scale`, so `setVolume` and `setMuted` keep composing with it.
+   * The engine owns the write: while `pause` holds the bus or `inBackground` is true the scale
+   * is only stored, and `unpause` / `background(false)` ramp to the scaled gain; set before the
+   * context exists, the bus is built at it. `createDucker` drives this; one owner per bus.
+   */
+  setBusScale(bus: BusName, scale: number, timeConstant?: number): void {
+    const s = Number.isFinite(scale) ? Math.min(1, Math.max(0, scale)) : 1;
+    if (s === this.scales[bus]) return;
+    this.scales[bus] = s;
+    this.applyBus(bus, timeConstant);
+  }
+
+  /** The bus's current `setBusScale` multiplier (1 by default). */
+  busScale(bus: BusName): number {
+    return this.scales[bus];
   }
 
   // ------------------------------------------------------------ pause
@@ -1700,7 +1736,7 @@ export class AudioEngine {
     }
   }
 
-  /** Undo `pause`: bus gains back to the settings, voice rates back to the game's. */
+  /** Undo `pause`: bus gains back to the settings (times any `setBusScale`), voice rates back to the game's. */
   unpause(): void {
     if (!this._paused) return;
     this._paused = false;
@@ -1708,7 +1744,10 @@ export class AudioEngine {
     if (ctx) {
       for (const b of this.pausedList) {
         const node = this.buses[b];
-        if (node) rampParamTo(node.gain, busGain(this._settings[b]), ctx.currentTime, PAUSE_RAMP);
+        // Back to the scaled gain (a duck in progress), not the raw setting. Held in the
+        // background, `background(false)` writes it.
+        if (node && !this.hidden)
+          rampParamTo(node.gain, this.busTarget(b), ctx.currentTime, PAUSE_RAMP);
       }
     }
     this.pausedList.length = 0;
@@ -2185,6 +2224,7 @@ export function createVoiceAdapter(audio: AudioEngine, opts: VoiceAdapterOptions
       return sends?.count ?? 0;
     },
     occlusion: 0,
+    doppler: 1,
   };
   source.connect(g);
   g.connect(busNode);

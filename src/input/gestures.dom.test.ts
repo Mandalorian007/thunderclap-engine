@@ -166,3 +166,114 @@ describe('Gestures magnify: the loupe element', () => {
     source.remove();
   });
 });
+
+/** `e` with its `timeStamp` set to `ms` (when it happened, on the `performance.now()` clock). */
+function stamped<E extends Event>(e: E, ms: number): E {
+  Object.defineProperty(e, 'timeStamp', { value: ms });
+  return e;
+}
+
+describe('Gestures time events by timeStamp, not handling time (ws/input-6)', () => {
+  let canvas: HTMLElement;
+  let wall: number;
+
+  beforeEach(() => {
+    canvas = document.createElement('div');
+    document.body.appendChild(canvas);
+    wall = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => wall);
+  });
+
+  afterEach(() => {
+    canvas.remove();
+    vi.restoreAllMocks();
+  });
+
+  it('a down at 0 and an up stamped 120 but handled at 900 are a tap, not a long-press', () => {
+    const g = new Gestures();
+    g.attach({ pointerTarget: canvas });
+    const seen: string[] = [];
+    g.onGesture((kind) => seen.push(kind));
+    canvas.dispatchEvent(stamped(ptr('pointerdown', 1, 10, 10), 0));
+    g.update();
+    // The thread stalls; the move and the up are handled 900 ms in, before the next tick.
+    wall = 900;
+    canvas.dispatchEvent(stamped(ptr('pointermove', 1, 11, 10), 60));
+    canvas.dispatchEvent(stamped(ptr('pointerup', 1, 11, 10), 120));
+    g.update();
+    expect(g.tap).not.toBeNull();
+    expect(g.longPress).toBeNull();
+    expect(seen).toEqual(['tap']);
+    g.detach();
+  });
+
+  it('a down and up both handled late, stamped 0 and 120, are a tap', () => {
+    const g = new Gestures();
+    g.attach({ pointerTarget: canvas });
+    wall = 900;
+    canvas.dispatchEvent(stamped(ptr('pointerdown', 1, 10, 10), 0));
+    canvas.dispatchEvent(stamped(ptr('pointerup', 1, 10, 10), 120));
+    g.update();
+    expect(g.tap).not.toBeNull();
+    expect(g.longPress).toBeNull();
+    g.detach();
+  });
+
+  it('a real hold past the threshold is still a long-press, timed from the down stamp', () => {
+    const g = new Gestures();
+    g.attach({ pointerTarget: canvas });
+    // The down is handled 200 ms late; the timer measures from its stamp, not from 200.
+    wall = 200;
+    canvas.dispatchEvent(stamped(ptr('pointerdown', 1, 10, 10), 0));
+    g.update();
+    expect(g.longPress).toBeNull();
+    wall = 460;
+    g.update();
+    expect(g.longPress).toMatchObject({ x: 10, y: 10 });
+    wall = 900;
+    canvas.dispatchEvent(stamped(ptr('pointerup', 1, 10, 10), 600));
+    g.update();
+    expect(g.tap).toBeNull();
+    expect(g.longPress).toBeNull();
+
+    // Held past the threshold with no tick in between, up handled late: a long-press too.
+    wall = 2000;
+    canvas.dispatchEvent(stamped(ptr('pointerdown', 1, 10, 10), 1000));
+    canvas.dispatchEvent(stamped(ptr('pointerup', 1, 10, 10), 1500));
+    g.update();
+    expect(g.tap).toBeNull();
+    expect(g.longPress).not.toBeNull();
+    g.detach();
+  });
+
+  it('double taps use the stamps: two late taps 450 ms apart are not a double tap', () => {
+    const g = new Gestures();
+    g.attach({ pointerTarget: canvas });
+    wall = 900;
+    canvas.dispatchEvent(stamped(ptr('pointerdown', 1, 10, 10), 0));
+    canvas.dispatchEvent(stamped(ptr('pointerup', 1, 10, 10), 50));
+    canvas.dispatchEvent(stamped(ptr('pointerdown', 1, 10, 10), 500));
+    canvas.dispatchEvent(stamped(ptr('pointerup', 1, 10, 10), 550));
+    g.update();
+    expect(g.tap).not.toBeNull();
+    g.update();
+    expect(g.tap).not.toBeNull();
+    expect(g.doubleTap).toBeNull();
+    g.detach();
+  });
+
+  it('a fake clock sees the event age: stamps are moved onto it', () => {
+    let t = 0;
+    const g = new Gestures({ now: () => t });
+    g.attach({ pointerTarget: canvas });
+    // Wall and fake clocks differ; the press happened 900 ms before it was handled.
+    wall = 5000;
+    t = 900;
+    canvas.dispatchEvent(stamped(ptr('pointerdown', 1, 10, 10), 4100));
+    canvas.dispatchEvent(stamped(ptr('pointerup', 1, 10, 10), 4220));
+    g.update();
+    expect(g.tap).not.toBeNull();
+    expect(g.longPress).toBeNull();
+    g.detach();
+  });
+});
