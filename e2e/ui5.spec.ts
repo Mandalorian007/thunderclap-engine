@@ -13,6 +13,8 @@
  * - no variant warns `[layout] … overflows` (ws/ui-8: the orbs sit in a content-sized bar);
  * - `?orb-rails` puts the orbs in content-sized side rails, wider than a phone's 56 px (ws/ui-9);
  * - `?orb-sized` sizes them per form factor: each is its map's size on every row (ws/ui-10).
+ * - `?orb` with `moveOrb` (ws/ui-11): `meter.setPlace` moves the live orb, and its band drains on;
+ * - `?minimap-rail`: the map holds its size in a content rail, which grows to it (ws/ui-11).
  */
 import type { Frame, Page } from '@playwright/test';
 import type { HarnessUi5State } from '../harness/ui5-state';
@@ -283,6 +285,62 @@ test('?orb-sized: each orb is its per-form-factor size and nothing overflows (ws
     expect(s.orbWant[i]!).toBeGreaterThan(0);
     expect(Math.abs(s.orbWidths[i]! - s.orbWant[i]!)).toBeLessThan(0.5);
   }
+  expect(s.overflows).toEqual([]);
+  expect(overflowWarnings).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test('an orb moved mid-trail keeps its value and its band on screen (ws/ui-11)', async ({
+  page,
+  wrapper,
+}) => {
+  await open(page, wrapper, 'orb&still');
+  const orb = frame.locator('#orb-0');
+  // The hit, the move and the counters' reset in one evaluate: the band starts its hold.
+  const at = await frame.evaluate(() => {
+    const api = window.__harnessUi5!;
+    const el = document.getElementById('orb-0');
+    api.setOrb(0, 30);
+    api.moveOrb(0, 'right');
+    api.state.trailGap[0] = 0;
+    api.state.trailFrames[0] = 0;
+    return {
+      same: document.getElementById('orb-0') === el,
+      region: el?.parentElement?.dataset.region ?? '',
+    };
+  });
+  expect(at.same).toBe(true);
+  expect(at.region).toBe('right');
+  await expect(orb).toHaveAttribute('aria-valuenow', '30');
+  // The band drains to the value in the model and on screen.
+  await expect
+    .poll(async () => {
+      const s = await read();
+      return Math.abs(s.trail[0]! - 0.3) < 1e-6 && Math.abs(s.trailDom[0]! - 0.3) < 0.02;
+    })
+    .toBe(true);
+  const s = await read();
+  // Counted in the page on every frame the band stood above the value: the drawn band never
+  // fell under the model (a move that cancelled its transition would draw it at the value).
+  expect(s.trailFrames[0]!).toBeGreaterThan(0);
+  expect(s.trailGap[0]!).toBeLessThan(0.05);
+  await expect(frame.locator('.tc-orb[role="meter"]')).toHaveCount(2);
+  expect(errors).toEqual([]);
+});
+
+test('?minimap-rail: the map holds its size and the content rail grows to it (ws/ui-11)', async ({
+  page,
+  wrapper,
+}) => {
+  await open(page, wrapper, 'minimap-rail&still');
+  const start = (await read()).frames;
+  await expect.poll(async () => (await read()).frames).toBeGreaterThan(start + 5);
+  const s = await read();
+  expect(s.mapRegion).toBe('right');
+  expect(s.mapWant).toBeGreaterThan(0);
+  // 200 theme px: 100 CSS px on a phone, whose fixed rail is 56 px.
+  expect(Math.abs(s.mapWidth - s.mapWant)).toBeLessThan(0.5);
+  expect(s.railWidths.right).toBeGreaterThan(s.mapWant);
   expect(s.overflows).toEqual([]);
   expect(overflowWarnings).toEqual([]);
   expect(errors).toEqual([]);

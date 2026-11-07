@@ -832,6 +832,56 @@ describe('overlay.layout (DOM)', () => {
     expect(seen.at(-1)).toBe('tablet');
   });
 
+  it('a re-layout leaves widgets where they are: focus kept, onMove only on a move (ws/ui-11)', async () => {
+    const layout = make({ classify });
+    const moves: string[] = [];
+    const a = h('button', { id: 'a' });
+    const b = h('button', { id: 'b' });
+    const ha = layout.add(a, { place: { default: 'left' }, onMove: (r) => moves.push(`a:${r}`) });
+    layout.add(b, { place: { default: 'left' }, order: 1, onMove: (r) => moves.push(`b:${r}`) });
+    expect(moves).toEqual(['a:left', 'b:left']);
+    const rail = layout.region('left');
+    expect([...rail.children]).toEqual([a, b]);
+    // Re-inserting a node drops its focus (and cancels its CSS transitions): a refresh does not.
+    b.focus();
+    let inserts = 0;
+    const observer = new MutationObserver((rs) => {
+      for (const r of rs) inserts += r.addedNodes.length;
+    });
+    observer.observe(layout.element, { childList: true, subtree: true });
+    layout.refresh();
+    resize(900, 360);
+    await Promise.resolve();
+    expect(inserts).toBe(0);
+    expect(document.activeElement).toBe(b);
+    expect(moves).toEqual(['a:left', 'b:left']);
+    // A move tells the widget once, after the layout has measured.
+    ha.setPlace({ default: 'right' });
+    expect(moves.at(-1)).toBe('a:right');
+    expect(document.activeElement).toBe(b);
+    // A new widget ordered first goes before the rest without moving them.
+    moves.length = 0;
+    const c = h('div', { id: 'c' });
+    layout.add(c, { place: { default: 'left' }, order: -1, onMove: (r) => moves.push(`c:${r}`) });
+    expect([...rail.children]).toEqual([c, b]);
+    expect(moves).toEqual(['c:left']);
+    expect(document.activeElement).toBe(b);
+    // Hidden and back counts as a move (display none cancels transitions too).
+    ha.setPlace({ default: 'hidden' });
+    ha.setPlace({ default: 'left' });
+    expect(moves.slice(1)).toEqual(['a:hidden', 'a:left']);
+    observer.disconnect();
+  });
+
+  it('content bars and rails carry data-content; fixed ones do not (ws/ui-11)', () => {
+    const layout = make({ classify, bars: { right: { size: 'content' } } });
+    expect(layout.region('right').hasAttribute('data-content')).toBe(true);
+    expect(layout.region('left').hasAttribute('data-content')).toBe(false);
+    expect(layout.region('bottom').hasAttribute('data-content')).toBe(false);
+    layout.setForms({ 'phone-landscape': { bars: { right: { size: 'fixed' } } } });
+    expect(layout.region('right').hasAttribute('data-content')).toBe(false);
+  });
+
   it('device mode leaves the density tokens to the layout', () => {
     make({ classify });
     const dm = createDeviceMode(ov!.root);

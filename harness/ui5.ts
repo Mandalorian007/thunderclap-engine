@@ -18,6 +18,9 @@
  *   background, 20 markers and a player circling; a click picks the world point (`pick`).
  *   One more marker is an `arrow` kind carrying a `heading` that turns on the clock (ws/ui-7).
  *   `redraws`, `player`, `headingMarkers`.
+ * - `?minimap-rail` (ws/ui-11): the `?minimap` page with the map in a content-sized `right` rail
+ *   (`max` 400). The map holds its `size` and the rail grows to fit it. `mapWidth` (measured) and
+ *   `mapWant` (its size in CSS px), `railWidths`.
  *
  * `?still` (or `park(true)`) stops the clock (E-017).
  */
@@ -47,11 +50,13 @@ const root = document.getElementById('root') as HTMLElement;
 const LOGICAL = { width: 1920, height: 1080 };
 const query = new URLSearchParams(location.search);
 const MODES: HarnessUi5Mode[] = ['orb', 'floats', 'minimap'];
-const mode = MODES.find((m) => query.has(m)) ?? 'orb';
+const mode = query.has('minimap-rail') ? 'minimap' : (MODES.find((m) => query.has(m)) ?? 'orb');
 /** `?orb-rails` (ws/ui-9): the orb mode with the orbs in content-sized side rails. */
 /** `?orb-sized` (ws/ui-10): the `?orb-rails` page with a per-form-factor orb `size`. */
 const sizedOrbs = mode === 'orb' && query.has('orb-sized');
 const rails = mode === 'orb' && (query.has('orb-rails') || sizedOrbs);
+/** `?minimap-rail` (ws/ui-11): the minimap mode with the map in a content-sized `right` rail. */
+const mapRail = mode === 'minimap' && query.has('minimap-rail');
 /** `?orb-sized`: each orb's diameter per form factor, theme px. */
 const ORB_SIZES: FormSizes[] = [
   { phone: 96, tablet: 112, default: 128 },
@@ -69,6 +74,8 @@ const state: HarnessUi5State = {
   fill: [],
   trail: [],
   trailDom: [],
+  trailGap: [],
+  trailFrames: [],
   active: 0,
   pooled: 0,
   spawned: 0,
@@ -82,6 +89,9 @@ const state: HarnessUi5State = {
   railWidths: { left: 0, right: 0 },
   orbWidths: [],
   orbWant: [],
+  mapRegion: '',
+  mapWidth: 0,
+  mapWant: 0,
 };
 
 // ------------------------------------------------------------------ geometry (12 floats/vertex)
@@ -258,7 +268,9 @@ async function main(): Promise<void> {
         }
       : mode === 'orb'
         ? { bars: { bottom: { size: 'content', max: 160 } } }
-        : undefined,
+        : mapRail
+          ? { bars: { right: { size: 'content', max: 400 } } }
+          : undefined,
   });
   surface.onResize(({ rect, backbuffer }) => {
     renderer.resize(backbuffer.width, backbuffer.height);
@@ -280,6 +292,9 @@ async function main(): Promise<void> {
     },
     setOrb(i, v) {
       orbs[i]?.set(v);
+    },
+    moveOrb(i, region) {
+      orbs[i]?.setPlace(region);
     },
     toWorld: (u, v) => toWorld(u, v),
   };
@@ -374,6 +389,13 @@ async function main(): Promise<void> {
         state.trail[i] = o.trail / o.max;
         state.fill[i] = covered(o, '.tc-orb-fill');
         state.trailDom[i] = covered(o, '.tc-orb-trail');
+        // Counted here, each frame: on how many frames the band stood above the value, and how
+        // far the drawn band fell under the model on them (ws/ui-11: a move keeps the band).
+        if (state.trail[i]! - state.value[i]! > 0.05 && state.trailDom[i]! >= 0) {
+          state.trailFrames[i] = (state.trailFrames[i] ?? 0) + 1;
+          const gap = state.trail[i]! - state.trailDom[i]!;
+          state.trailGap[i] = Math.max(state.trailGap[i] ?? 0, gap);
+        }
       }
     };
   } else if (mode === 'floats') {
@@ -426,6 +448,25 @@ async function main(): Promise<void> {
       },
     });
     map.el.id = 'minimap';
+    if (mapRail) {
+      // A hidden probe in the rail, `MAP_SIZE` theme px wide, turns the map's size into CSS
+      // px with the rail's own tokens; the map should be that wide, not shrunk to the rail.
+      const probe = document.createElement('div');
+      Object.assign(probe.style, { position: 'absolute', visibility: 'hidden', height: '0' });
+      probe.style.width = `calc(${MAP_SIZE} * var(--tc-space-1) / 4)`;
+      const note = () => {
+        map.el.parentElement?.append(probe);
+        state.mapRegion = map.el.parentElement?.dataset.region ?? '';
+        state.mapWant = probe.getBoundingClientRect().width;
+        state.mapWidth = map.el.getBoundingClientRect().width;
+        state.railWidths = {
+          left: ui.layout.state.regions.left?.width ?? 0,
+          right: ui.layout.state.regions.right?.width ?? 0,
+        };
+      };
+      ui.layout.onChange(note);
+      note();
+    }
     toWorld = (u, v) => {
       const p = map.toWorld(u, v, { x: 0, y: 0 });
       return { x: p.x, z: p.y };

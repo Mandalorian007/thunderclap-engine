@@ -25,6 +25,12 @@ export interface HarnessUi5State {
   trail: number[];
   /** `?orb`: per orb, the trail band's height over the well's, measured from the DOM. */
   trailDom: number[];
+  /**
+   * `?orb` (ws/ui-11): per orb, the frames on which the trail stood above the value, and the
+   * most the drawn band fell under the model (`trail` − `trailDom`) on them. A test resets both.
+   */
+  trailGap: number[];
+  trailFrames: number[];
   /** `?floats`: `floats.live`, `floats.pooled`, spawns so far, live labels hidden (culled). */
   active: number;
   pooled: number;
@@ -53,6 +59,13 @@ export interface HarnessUi5State {
    */
   orbWidths: number[];
   orbWant: number[];
+  /**
+   * `?minimap-rail` (ws/ui-11): the map's region, its measured width and its `size` in CSS px,
+   * as of the last re-layout. Empty and 0 in the other modes.
+   */
+  mapRegion: string;
+  mapWidth: number;
+  mapWant: number;
 }
 
 export interface HarnessUi5Api {
@@ -61,6 +74,8 @@ export interface HarnessUi5Api {
   park(on: boolean): void;
   /** `?orb`: set orb `i` to `v` (of its max, 100). */
   setOrb(i: number, v: number): void;
+  /** `?orb`: move orb `i` to a layout region (`meter.setPlace`, ws/ui-11). */
+  moveOrb(i: number, region: 'top' | 'bottom' | 'left' | 'right'): void;
   /** `?minimap`: the world point under map px (u, v), from the top-left in the map's size. */
   toWorld(u: number, v: number): { x: number; z: number };
   /** `?minimap`: the map's design size. */
