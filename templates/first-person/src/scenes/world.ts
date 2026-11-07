@@ -17,10 +17,10 @@
 import type { Scene } from '@thunderclap/engine/core';
 import { ParticleEmitter, ParticleSystem } from '@thunderclap/engine/fx';
 import {
-  type Aabb,
   aabbTester,
   createRay,
   type HitTester,
+  type RayBox,
   screenRay,
 } from '@thunderclap/engine/input';
 import {
@@ -221,7 +221,7 @@ export function createWorldScene(ctx: GameCtx): Scene<GameCtx, Frame> {
   // ── Lights: a sun with a shadow map, fog the colour of the sky ────────
   const lights = new Lights();
   lights.ambient.set([0.26, 0.28, 0.34]);
-  lights.sun.dir = [-0.5, -1.0, -0.35];
+  lights.sun.direction = [-0.5, -1.0, -0.35];
   lights.sun.color = [1.0, 0.95, 0.85];
   lights.sun.shadow = { extent: SHADOW_EXTENT, size: SHADOW_SIZE };
   lights.fog.color = SKY;
@@ -260,7 +260,7 @@ export function createWorldScene(ctx: GameCtx): Scene<GameCtx, Frame> {
   );
 
   // ── Picking: hit boxes on the pointer router, and the same tester for the crosshair ──
-  const boxes: Aabb<Landmark>[] = world.landmarks.map((l) => ({
+  const boxes: RayBox<Landmark>[] = world.landmarks.map((l) => ({
     min: [l.x, l.height, l.z],
     max: [l.x + 1, l.height + MARKER_HEIGHT, l.z + 1],
     target: l,

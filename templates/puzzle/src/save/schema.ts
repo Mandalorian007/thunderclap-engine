@@ -55,3 +55,10 @@ export function createProgressStore(
     ...opts,
   });
 }
+
+/** Folds a solved board into the progress: one more win, and the best move count so far. */
+export const recordWin = (p: Progress, moves: number): Progress => ({
+  ...p,
+  wins: p.wins + 1,
+  bestMoves: p.bestMoves === null ? moves : Math.min(p.bestMoves, moves),
+});

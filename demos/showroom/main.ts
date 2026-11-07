@@ -21,7 +21,7 @@ import { Gestures, Input, Look } from '@thunderclap/engine/input';
 import { boot } from '@thunderclap/engine/platform';
 import {
   applyPostPatch,
-  defaultPostSettings,
+  cinematicPostSettings,
   type PostSettings,
   type PostSettingsPatch,
   PostStack,
@@ -142,9 +142,9 @@ const BLEND_SECONDS = 1.2;
  * The looks are full `PostSettings`, so any look can follow any other through `blendTo`: a
  * neutral base on the engine defaults, then each look as the patch that differs from it.
  */
-const NEUTRAL: PostSettings = applyPostPatch(defaultPostSettings(), {
+const NEUTRAL: PostSettings = applyPostPatch(cinematicPostSettings(), {
   bloom: { enabled: true, intensity: 0.35, threshold: 1.3, knee: 0.5, scatter: 0.6 },
-  fog: { enabled: false, density: 0 },
+  mist: { enabled: false, density: 0 },
   godRays: { enabled: false, intensity: 0 },
   vignette: { enabled: true, intensity: 0.3, radius: 0.6, softness: 0.5, color: [0, 0, 0] },
   grade: { enabled: true, exposure: 1, tonemap: 'aces', saturation: 1, contrast: 1 },
@@ -155,7 +155,7 @@ const LOOKS: Record<LookName, PostSettings> = {
   neutral: NEUTRAL,
   warm: look({
     bloom: { intensity: 1.2, threshold: 0.9, knee: 0.6, scatter: 0.8 },
-    fog: { enabled: true, density: 0.35, color: [0.36, 0.22, 0.12], top: 0.6, bottom: 1 },
+    mist: { enabled: true, density: 0.35, color: [0.36, 0.22, 0.12], top: 0.6, bottom: 1 },
     vignette: { intensity: 0.45, radius: 0.5, softness: 0.6, color: [0.05, 0, 0] },
     grade: {
       exposure: 1.1,
@@ -360,7 +360,7 @@ async function main(): Promise<void> {
 
   const lights = new Lights();
   lights.ambient.set(AMBIENT);
-  lights.sun.dir = SUN_DIR;
+  lights.sun.direction = SUN_DIR;
   lights.sun.color = SUN_COLOR;
   lights.sun.shadow = { extent: SHADOW_EXTENT, size: SHADOW_SIZE };
   lights.fog.color = FOG_COLOR;
