@@ -149,6 +149,10 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Adoption 3: arpg instanced `MeshLod`, floor seam fix (`centreSeam`), minimap ghoul headings | ws/adoption-3 | brief `docs/briefs/adoption-3.md` | render-6, ui-7, demo-arpg-2 | 🟣 ready at `db03d73` (check 2196, snap 0, arpg 57/7; `centreSeam` +69.1 → −21.5, the remaining dark line is the tile's own grout; draw calls unchanged at 15–18, accepted) → train 7 if the matrix hasn't started, else train 8 |
 | 5 | FX 6: opt-in `debugReadback()`; fx3 asserts drift and settle radius directly | ws/fx-6 | brief `docs/briefs/fx-6.md` | fx-5 | 🟣 ready at `659e778` (check 2203, snap 0, fx3 40, fx4 24, decals 32; drift 0.13 → 0.0009 u/s after a collide-normal kernel fix; shell radius under 0.3 at 1.57 s) → train 7 if the matrix hasn't started, else train 8 |
 | 5 | UI 8: content-sized `top`/`bottom` bars; ui5 harness free of overflow warnings | ws/ui-8 | brief `docs/briefs/ui-8.md` | ui-7 | 🟣 in E-031 train 7 at `b6eb711` (check 2200, snap 0, ui5 80, ui 77/11, ui4 48, layout 40/10 at load 15–29; overflow warnings 16/run → 0) |
+| 5 | Core 4: export `seedKey`; `createGame` owns and advances a tick `game.clock` | ws/core-4 | brief `docs/briefs/core-4.md` | core-3, input-8 | 🔵 dispatched (Opus, offset 1040) |
+| 5 | Input 9: Look reads recorded pads; playback `speed` advances a tick clock | ws/input-9 | brief `docs/briefs/input-9.md` | input-8 | 🔵 dispatched (Opus, offset 1050) |
+| 5 | UI 9: content-sized `left`/`right` rails; `ui5?orb-rails` | ws/ui-9 | brief `docs/briefs/ui-9.md` | ui-8 | 🔵 dispatched (Opus, offset 1060) |
+| 5 | Render 7: stable LOD keys on `InstanceList`; per-instance velocity for instanced draws | ws/render-7 | brief `docs/briefs/render-7.md` | render-6, adoption-3 | 🔵 dispatched (Opus, offset 1070) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
