@@ -77,7 +77,7 @@
 | Third-person follow camera | `Follow` |
 | Touch zones: sticks, buttons, swipes | `createTouchZones` |
 | Gyro aim | `createGyroSource` |
-| Record a session and replay it tick for tick | `createGame({ input: { record, replay } })`, `createInputRecorder`, `createInputPlayback` |
+| Record a session and replay it tick for tick | `createGame({ input: { record, replay } })`, `ctx.replay(rec)`, `createInputRecorder`, `createInputPlayback` |
 | WebXR: immersive session, an eye per render, controllers and hands as rays | `createGame({ xr })`, `ctx.xr.enter()`; `XrSurface`, `XrPointerSource` |
 
 ## UI, audio and plumbing

@@ -351,22 +351,38 @@ const ctx = await createGame<'jump'>({
 });
 ```
 
-`parseRecording` throws an `InputRecordingError` on bad data. To start a replay from a menu in a running game, install a playback yourself. The loop finds it on `ctx.input.playback` and steps it for you:
+`parseRecording` throws an `InputRecordingError` on bad data.
+
+To start a replay from a menu in a running game, call `ctx.replay(rec)`. It detaches the input from the canvas and the window while the recording runs, so the player cannot disturb it. The loop steps it from the next fixed step. When the recording ends, or you call `stop()`, the player gets the input back:
+
+```ts
+import type { EngineCtx } from '@thunderclap/engine';
+import type { InputRecording } from '@thunderclap/engine/input';
+
+export function watchReplay(ctx: EngineCtx<'jump', null>, rec: InputRecording) {
+  const run = ctx.replay(rec, { speed: 2 }); // two recorded ticks per step
+  return () => run.stop();                    // call this from a "Skip" button
+}
+```
+
+A second `ctx.replay` call stops the first. The returned object is the playback itself, so `run.done` and `run.tick` work too.
+
+The manual form installs a playback on `ctx.input` yourself. The loop finds it on `ctx.input.playback` and steps it, but you do the detaching and cleanup:
 
 ```ts
 import type { EngineCtx } from '@thunderclap/engine';
 import { createInputPlayback, type InputRecording } from '@thunderclap/engine/input';
 
-export function replay(ctx: EngineCtx<'jump', null>, rec: InputRecording) {
+export function replayByHand(ctx: EngineCtx<'jump', null>, rec: InputRecording) {
   ctx.input.releaseAll();
-  const pb = createInputPlayback(ctx.input, rec);
+  const pb = createInputPlayback(ctx.input, rec, { clock: ctx.clock });
   ctx.hooks.update = () => {
     if (pb.done) pb.detach();
   };
 }
 ```
 
-At normal speed the loop advances `ctx.clock` as usual. The playback can drive a tick clock itself (its `clock` option, for `speed` above 1), but `ctx.clock` is typed as a read-only `InputClock`, so you cannot pass it there without a cast.
+Passing `ctx.clock` lets the playback drive the game clock, which matters for `speed` above 1.
 
 For a replay to match, the game must be the same: same bindings, same layout, same fixed step, and your own randomness seeded. A recording does not capture the pointer lock's raw mouse motion or extra pointer sources such as VR controllers.
 

@@ -215,7 +215,7 @@ A recording is plain JSON. `serializeRecording(rec)` writes it and `parseRecordi
 
 ### Record and replay a running game
 
-`createGame` wires the same thing into the loop. `input: { record: true }` records from the first tick into `ctx.input.recorder`. There is no `ctx.replay`; the recorder and the playback both live on `ctx.input`. A debug key that copies the session so a tester can paste it into a bug report:
+`createGame` wires the same thing into the loop. `input: { record: true }` records from the first tick into `ctx.input.recorder`. The recorder lives on `ctx.input`; to replay mid-session, call `ctx.replay(rec)` (see the [input guide](input.md#record-and-replay-a-session)). A debug key that copies the session so a tester can paste it into a bug report:
 
 ```ts
 import type { EngineCtx } from '@thunderclap/engine';

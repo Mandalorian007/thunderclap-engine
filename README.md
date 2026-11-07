@@ -74,7 +74,7 @@ Each line names where to start. [docs/OFFERING.md](docs/OFFERING.md) has the lon
 - **Gestures.** Tap, double tap, long press, pan, drag and pinch, and a loupe for small targets: `ctx.gestures`, `input.magnify`.
 - **Picking.** Every pointer is a ray; test it against planes, boxes or meshes: `ctx.pointers`, `meshTester`.
 - **First and third person.** Pointer lock, touch zones, sticks and a follow camera: `createLook`, `Follow`, `createTouchZones`.
-- **Record and replay.** Record a session and run it back tick for tick: `createGame({ input: { record, replay } })`, `createInputPlayback`.
+- **Record and replay.** Record a session and run it back tick for tick: `createGame({ input: { record, replay } })`, `ctx.replay(rec)` mid-session, `createInputPlayback`.
 - **WebXR.** Enter VR, render each eye through the post stack, controllers and hands as rays: `createGame({ xr })`, `ctx.xr.enter()`.
 
 **UI, audio and plumbing**
