@@ -160,6 +160,8 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | UI 10: intrinsic `max-content` rail measure; per-form-factor `ui.meter({ size })` and `setSize` | ws/ui-10 | brief `docs/briefs/ui-10.md` | ui-9, adoption-4 | 🔵 dispatched |
 | 5 | FX 7: unpacked per-field particle readback | ws/fx-7 | brief `docs/briefs/fx-7.md` | fx-6 | 🟣 in E-031 train 10 at `c5ee45a` (check 2246, snap 0, fx3 40) |
 | 5 | Adoption 5: arpg phone HUD on content rails; keyed ghouls with velocity; grout corner | ws/adoption-5 | brief `docs/briefs/adoption-5.md`; branched from ws/render-7 7d60386 | adoption-4, ui-9, render-7 | 🔵 dispatched |
+| 5 | Post 8: stack owns jitter by `renderer.jitter === hook`; WeakMap deleted | ws/post-8 | brief `docs/briefs/post-8.md`; branched from ws/render-8 b3dc3b6 | post-7, render-8 | 🔵 dispatched |
+| 5 | Render 9: LOD lists skip the undrawn main upload; fake GPU checks usage flags and maps staging buffers; readback tests off stubs | ws/render-9 | brief `docs/briefs/render-9.md`; branched from ws/render-8 b3dc3b6 | render-8, fx-6/7 wishes | 🔵 dispatched |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
