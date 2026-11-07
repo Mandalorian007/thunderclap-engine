@@ -2,7 +2,8 @@
 // scripts/fixtures/deprecated-game: each game is copied to a temp folder whose
 // `node_modules/@thunderclap/engine` links to an engine, as an installed game has it.
 //   game-1x: a game still on 0.x names, against this engine (1.0.0, aliases removed); its
-//   src/reads.ts holds the errors that do not print the engine type (ws/testing-3).
+//   src/reads.ts holds the errors that do not print the engine type (ws/testing-3), and
+//   src/wrapped.ts the same on receivers wrapped in parentheses or assertions (ws/testing-4).
 //   game-0x + engine-0x: a game on a 0.x engine that still has a `@deprecated` alias.
 // Both use the DOM's deprecated `document.execCommand`, which must not be reported.
 import assert from 'node:assert/strict';
@@ -127,6 +128,26 @@ test('reads that became getters and members on a wrapped engine type map to thei
   assert.match(uses[0].rows[0].replacement, /`stats` getter/);
 });
 
+test('receivers wrapped in parentheses or assertions resolve to the engine type', (t) => {
+  const game = install('game-1x', repoRoot, t);
+  const uses = inFile(findGameDeprecations(join(game, 'tsconfig.json')), 'wrapped.ts');
+  assert.deepEqual(
+    uses.map((u) => `${u.line}:${u.code}:${u.rows.map((r) => `${r.module} ${r.name}`)}`),
+    [
+      '20:2339:core SceneStack.list', // `(value as Stack).list()`
+      '21:2339:core SceneStack.list', // `(<Stack>value).list()`
+      '22:2339:core SceneStack.list', // `maybe!.list()` on `Stack | undefined`
+      '23:2339:core SceneStack.list', // `(maybe as Stack | undefined)!.list()`
+      '24:2339:core SceneStack.list', // `(stack satisfies SceneStack).list()`
+      '25:2349:host HostFullscreen.active', // nested assertions
+      '26:2349:assets AssetCache.stats', // `(cache as AssetCache).stats()`
+      '27:2349:host HostLifecycle.state', // `(… as Host['lifecycle'])?.state()`
+    ],
+  );
+  // Not reported: `(own as { count: number }).count()` (28, the game's own value).
+  assert.ok(uses.every((u) => u.kind === 'removed' && u.line < 28));
+});
+
 test('removedRowsFor maps TS2349 and a wrapped TS2339 only through engineTypesAt', () => {
   const rows = migrationTable(
     [
@@ -186,5 +207,5 @@ test('the CLI runs from the game folder through node_modules and exits 1 on a us
   assert.doesNotMatch(r.stdout, /execCommand/);
   assert.match(r.stdout, /src\/reads\.ts:21:\d+ {2}TS2349: /);
   assert.match(r.stdout, /assets AssetCache\.stats → the `stats` getter/);
-  assert.match(r.stdout, /14 uses of old engine names/);
+  assert.match(r.stdout, /22 uses of old engine names/);
 });
