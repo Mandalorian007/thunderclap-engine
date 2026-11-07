@@ -1,4 +1,5 @@
 import { Emitter } from '../core/events';
+import { type InputClock, resolveClock } from './clock';
 import type { GyroSource } from './gyro';
 import { type StickOptions, shapeStick } from './input';
 import {
@@ -78,7 +79,12 @@ export interface LookOptions {
   padDeadzone?: number;
   /** Which pad; omitted = the first connected one. */
   pad?: number;
-  /** Gamepad source. Default `navigator.getGamepads()` (guarded). */
+  /**
+   * Gamepad source. Default `navigator.getGamepads()` (guarded); linked to an `Input`, the
+   * default is the input's pads for the tick instead (ws/input-9), so a recording captures and a
+   * playback replaces the look's sticks with the rest. A source given here is always read
+   * as is, linked or not, and is not replaced by a playback.
+   */
   getGamepads?: () => readonly (GamepadLike | null)[];
   /**
    * Keys that move (read through the linked `Input`'s raw key state; `Look` has no key listener
@@ -87,8 +93,14 @@ export interface LookOptions {
   keys?: LookKeys;
   /** While true everything reads zero and the pointer lock is released. `Input.setLook` replaces it. */
   blocked?: () => boolean;
-  /** Clock in ms, for the stick's `dt`. Default `performance.now()`. */
+  /** Clock in ms, for the stick's `dt`. Default `performance.now()`. The older spelling of `clock`; `clock` wins. */
   now?: () => number;
+  /**
+   * The clock the look is timed on (ws/input-8): the pad stick's turn and zoom rate (`dt`) and
+   * `onTap`'s `maxMs`. Pass the gestures' `createTickClock()` so both run on game time.
+   * Default `performance.now()`.
+   */
+  clock?: InputClock;
   /**
    * A mouse (or pen) `pointerdown` on the attached element while the lock is not held calls
    * `request()`, so the first click into the game locks the pointer and, after the player
@@ -153,8 +165,6 @@ function defaultGamepads(): readonly (GamepadLike | null)[] {
     return [];
   }
 }
-
-const defaultNow = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
 /**
  * First- and third-person look and move. Each tick it reports `look` (yaw and pitch deltas in
@@ -223,6 +233,8 @@ export class Look {
   private readonly pad: number | undefined;
   private readonly getGamepads: () => readonly (GamepadLike | null)[];
   private readonly now: () => number;
+  /** The clock (`LookOptions.clock`, or one wrapping `now`, or the wall clock). */
+  readonly clock: InputClock;
   private readonly events = new Emitter<LookEvents>();
   private lastTime = Number.NaN;
   private mouseX = 0;
@@ -252,6 +264,14 @@ export class Look {
    * `Input.setLook`.
    */
   orbitFromInput = false;
+  /**
+   * The linked `Input`'s pads for this tick (ws/input-9), read instead of the default
+   * `navigator.getGamepads()` so a playback's recorded pads turn the look. Ignored when
+   * `LookOptions.getGamepads` was given. Set by `Input.setLook`.
+   */
+  padsFromInput: (() => readonly (GamepadLike | null)[]) | null = null;
+  /** True when `LookOptions.getGamepads` was given: it wins over `padsFromInput`. */
+  private readonly ownPads: boolean;
 
   constructor(opts: LookOptions = {}) {
     this.sensitivity = opts.sensitivity ?? 0.0025;
@@ -269,8 +289,11 @@ export class Look {
     this.zoomPad = opts.zoom?.pad ?? 'none';
     this.zoomStepPx = opts.zoom?.stepPx ?? 100;
     this.getGamepads = opts.getGamepads ?? defaultGamepads;
+    this.ownPads = opts.getGamepads !== undefined;
     this.blocked = opts.blocked ?? (() => false);
-    this.now = opts.now ?? defaultNow;
+    const c = resolveClock(opts.clock, opts.now);
+    this.clock = c.clock;
+    this.now = c.now;
     this.lockOnFirstClick = opts.lockOnFirstClick ?? false;
     this.modeValue = opts.mode ?? 'locked';
     this.gyro = opts.gyro ?? null;
@@ -432,8 +455,9 @@ export class Look {
 
   private padState(): GamepadLike | null {
     let pads: readonly (GamepadLike | null)[];
+    const linked = this.ownPads ? null : this.padsFromInput;
     try {
-      pads = this.getGamepads();
+      pads = linked ? linked() : this.getGamepads();
     } catch {
       return null;
     }
@@ -798,4 +822,9 @@ function anyHeld(held: (code: string) => boolean, codes: readonly string[] | und
   if (!codes) return 0;
   for (let i = 0; i < codes.length; i++) if (held(codes[i]!)) return 1;
   return 0;
+}
+
+/** `new Look(opts)`: look controls, on `opts.clock` when given (ws/input-8). */
+export function createLook(opts: LookOptions = {}): Look {
+  return new Look(opts);
 }

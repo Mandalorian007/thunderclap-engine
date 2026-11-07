@@ -37,10 +37,31 @@ export interface HarnessFx3State {
    */
   tileSeen: number;
   /**
+   * `forces`: the mean distance of the GPU particles from the attractor, from the last
+   * `debugReadback()` (every 500 ms; -1 before the first with live particles).
+   */
+  meanRadius: number;
+  /**
+   * `forces`: the age (s of simulated time) of the first shell at the first readback that found
+   * `meanRadius` below 0.3; -1 until then. Only the first shell counts: later shells are born
+   * around the blob of the one before.
+   */
+  radiusSettledAt: number;
+  /**
    * `forces`: the mean distance of 64 shadow particles (the CPU `applyForces` run on the same
    * forces) from the attractor; it shrinks as the attractor pulls them in.
    */
-  meanRadius: number;
+  shadowRadius: number;
+  /**
+   * `collide`: the mean horizontal speed (units/s) of the drops resting on the slab, measured
+   * from the readbacks (every 500 ms): each slot resting on the slab top in two readbacks in a
+   * row moved `hypot(dx, dz)` over the simulated time between them. -1 before the second.
+   */
+  meanDriftPerSec: number;
+  /** `collide`: the resting drops that `meanDriftPerSec` averaged (0 before the second readback). */
+  restingDrops: number;
+  /** `forces` and `collide`: particle readbacks completed. */
+  readbacks: number;
   /**
    * `collide`: live particles below the slab's underside (`ParticleSystem.below`); rain over
    * the slab with `collide` stays on top, so it stays near 0 while `alive` grows.

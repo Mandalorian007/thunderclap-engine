@@ -107,8 +107,15 @@ async function pointAt(page: Page, touch: boolean, p: { x: number; y: number }):
 async function clickAt(page: Page, touch: boolean, p: { x: number; y: number }): Promise<void> {
   if (!touch) {
     await page.mouse.move(p.x, p.y);
-    await page.mouse.down();
-    await page.mouse.up();
+    // Press and release back to back over CDP, as `pointAt` does for touch: a runner stall
+    // between `mouse.down()` and `mouse.up()` stretches the click past the 450 ms long-press.
+    const cdp = await page.context().newCDPSession(page);
+    const click = { x: p.x, y: p.y, button: 'left', clickCount: 1 } as const;
+    await Promise.all([
+      cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', buttons: 1, ...click }),
+      cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', buttons: 0, ...click }),
+    ]);
+    await cdp.detach();
     return;
   }
   await pointAt(page, touch, p);
@@ -247,12 +254,24 @@ test.describe('demo: tactics', () => {
   test('the d-pad steps cursorTile by one', async ({ page }) => {
     const errors: string[] = [];
     await openDemo(page, errors);
-    const press = (b: number) =>
-      page.evaluate((i) => {
-        const d = (window as unknown as { __demo: DemoApi }).__demo;
-        d.pad(i, true);
-        d.pad(i, false);
-      }, b);
+    // Pads are polled: a release and the next press between two polls read as one hold, so the
+    // second press of a button is lost. Press, wait for a poll to read the down, release, wait
+    // for a poll to read the up. Each set reads the counts in the same evaluate (E-033).
+    const set = (b: number, pressed: boolean) =>
+      page.evaluate(
+        ([i, p]) => {
+          const d = (window as unknown as { __demo: DemoApi }).__demo;
+          d.pad(i, p);
+          return p ? d.state.padPresses : d.state.padReleases;
+        },
+        [b, pressed] as const,
+      );
+    const press = async (b: number) => {
+      const presses = await set(b, true);
+      await expect.poll(() => readState(page).then((s) => s.padPresses)).toBeGreaterThan(presses);
+      const releases = await set(b, false);
+      await expect.poll(() => readState(page).then((s) => s.padReleases)).toBeGreaterThan(releases);
+    };
     // First press lands the pad cursor on the first player unit.
     await press(12);
     await expect.poll(() => readState(page).then((s) => s.cursorTile.x)).toBeGreaterThanOrEqual(0);

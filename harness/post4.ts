@@ -13,7 +13,17 @@
  *   `ghost` is the brightest trail behind it. Then (ws/post-5) a striped cube slides through an
  *   `InstanceList` with velocity under the still, unjittered camera, first with `taa.reprojection`
  *   `'camera'`, then `'velocity'`: `ghostObjectCamera` / `ghostObject` are how far the TAA frame
- *   strays from the same inputs with TAA off around the cube. `?still` skips the bar and cube.
+ *   strays from the same inputs with TAA off around the cube. Then (ws/post-6) the same cube
+ *   creeps `SUB_PX` (0.37) output px a frame with the jitter back on, and a twin stack with
+ *   `taa.historyFilter` `'bilinear'` resolves the same frames beside the measured
+ *   `'catmull-rom'` one: `blurSubpixel*` is the share of the cube's horizontal gradient energy
+ *   each TAA frame lost against the TAA-off one, `ghostSubpixel*` the mean difference in the
+ *   bands beside it, both read from the same frames. `?still` skips the bar and cube.
+ *
+ *   The stack jitters through `renderer.setJitter` (ws/post-6) from its first TAA frame. The
+ *   integer-pixel cube phases replace that hook with a zero one (the stack leaves a hook it did
+ *   not set alone until TAA stops), and the sub-pixel phases hand the renderer the stack's own
+ *   sequence again.
  * - `?ssr`: a floor split into a rough (0.9) and a smooth (0.05) metal half, a bright pillar on
  *   each, the rough-metal target on: `smoothReflect` / `roughReflect` are what SSR adds in front
  *   of each pillar.
@@ -75,6 +85,10 @@ const state: HarnessPost4State = {
   ghost: null,
   ghostObject: null,
   ghostObjectCamera: null,
+  ghostSubpixel: null,
+  blurSubpixel: null,
+  ghostSubpixelBilinear: null,
+  blurSubpixelBilinear: null,
   velocityActive: false,
   smoothReflect: null,
   roughReflect: null,
@@ -172,14 +186,20 @@ class Grab {
 /**
  * The page's post processor: the measured stack resolves into `main` (blitted to the output);
  * on a capture frame the reference stack (if any) resolves the same inputs into `ref`, and both
- * are copied for read-back. It forwards the measured stack's `wantsJitter`.
+ * are copied for read-back. While `twinOn` (ws/post-6) a second TAA stack resolves the same
+ * inputs into `twin` every frame (it keeps a history of its own) and is read back beside them.
+ * It forwards the measured stack's `wantsJitter`.
  */
 class CapturePost implements PostProcessor {
   readonly jitter: [number, number] = [0, 0];
   /** Set by the page before `endFrame` to read this frame back. */
   capture = false;
+  /** Run the twin stack this frame (it needs every frame for its history). */
+  twinOn = false;
   private readonly mainGrab: Grab;
   private readonly refGrab: Grab;
+  private readonly twinGrab: Grab;
+  private twinCopied = false;
   private readonly blit: FullscreenPass;
   private copied = false;
   private mapping = false;
@@ -188,9 +208,11 @@ class CapturePost implements PostProcessor {
     renderer: Renderer,
     readonly main: PostStack,
     readonly ref: PostStack | null,
+    readonly twin: PostStack | null = null,
   ) {
     this.mainGrab = new Grab(renderer, 'main');
     this.refGrab = new Grab(renderer, 'ref');
+    this.twinGrab = new Grab(renderer, 'twin');
     this.blit = renderer.createFullscreenPass({
       label: 'post4-blit',
       wgsl: BLIT_WGSL,
@@ -210,6 +232,7 @@ class CapturePost implements PostProcessor {
   resize(width: number, height: number): void {
     this.main.resize(width, height);
     this.ref?.resize(width, height);
+    this.twin?.resize(width, height);
   }
 
   encode(
@@ -227,8 +250,15 @@ class CapturePost implements PostProcessor {
     this.jitter[1] = j ? j[1] : 0;
     this.blit.setTexture(0, this.mainGrab.tex!);
     this.blit.encode(encoder, output);
+    const twin = this.twinOn ? this.twin : null;
+    if (twin) {
+      this.twinGrab.fit(w, h);
+      twin.encode(encoder, inputs, this.twinGrab.tex!.view, viewport);
+    }
     if (!this.capture || this.mapping || this.copied) return;
     this.mainGrab.copy(encoder);
+    if (twin) this.twinGrab.copy(encoder);
+    this.twinCopied = twin !== null;
     if (this.ref) {
       this.refGrab.fit(w, h);
       this.ref.encode(encoder, inputs, this.refGrab.tex!.view, viewport);
@@ -237,16 +267,20 @@ class CapturePost implements PostProcessor {
     this.copied = true;
   }
 
-  /** After the frame's submit: map what was copied; `done(main, ref)` on arrival. */
-  read(done: (main: Image, ref: Image | null) => void): boolean {
+  /** After the frame's submit: map what was copied; `done(main, ref, twin)` on arrival. */
+  read(done: (main: Image, ref: Image | null, twin: Image | null) => void): boolean {
     if (!this.copied || this.mapping) return false;
     this.copied = false;
     this.mapping = true;
-    const both = Promise.all([this.mainGrab.map(), this.ref ? this.refGrab.map() : null]);
-    both.then(
-      ([m, r]) => {
+    const all = Promise.all([
+      this.mainGrab.map(),
+      this.ref ? this.refGrab.map() : null,
+      this.twinCopied ? this.twinGrab.map() : null,
+    ]);
+    all.then(
+      ([m, r, t]) => {
         this.mapping = false;
-        done(m, r);
+        done(m, r, t);
       },
       (err) => {
         this.mapping = false;
@@ -292,6 +326,22 @@ function meanDiff(a: Image, b: Image, x0: number, y0: number, x1: number, y1: nu
     }
   }
   return n ? sum / n / 255 : 0;
+}
+
+/** Sum of squared horizontal luma steps over a rect (inclusive, clamped to the image). */
+function gradientEnergy(img: Image, x0: number, y0: number, x1: number, y1: number): number {
+  const xa = Math.max(0, Math.floor(x0));
+  const xb = Math.min(img.w - 1, Math.ceil(x1));
+  const ya = Math.max(0, Math.floor(y0));
+  const yb = Math.min(img.h - 1, Math.ceil(y1));
+  let e = 0;
+  for (let y = ya; y <= yb; y++) {
+    for (let x = xa; x < xb; x++) {
+      const d = luma(img, x + 1, y) - luma(img, x, y);
+      e += d * d;
+    }
+  }
+  return e;
 }
 
 /** `convergedDelta`: mean difference over pixels whose 3×3 range in `ref` is under 8/255. */
@@ -351,6 +401,17 @@ const OBJ_X0 = -2.4;
 const OBJ_WARM = 20;
 const OBJ_READS = 6;
 const OBJ_MARGIN = 16;
+/**
+ * `?taa` (ws/post-6): the sub-pixel creep (output px per frame at the cube's front face), the
+ * frames both history filters run before they are read, the reads averaged, and the bands beside
+ * the cube (px from its edge) the ghost is read over.
+ */
+const SUB_PX = 0.37;
+const SUB_WARM = 40;
+const SUB_READS = 12;
+const SUB_BAND = [3, 14] as const;
+/** No jitter (the integer-pixel phases), and the stack's sequence (the sub-pixel ones). */
+const NO_JITTER: readonly [number, number] = [0, 0];
 /** `?blur`: the cube's swing. */
 const CUBE_Y = 0.6;
 const CUBE_SWING = 1.6;
@@ -409,10 +470,17 @@ async function main(): Promise<void> {
     ortho: { ...base, ao: { enabled: true, radius: 0.6, intensity: 1.5 } },
   };
   const measured = new PostStack(renderer, patches[mode]);
-  measured.addJitterCamera(camera);
   // `?taa` reads the reference only around the moving cube (ws/post-5).
   const reference = new PostStack(renderer, base);
-  const post = new CapturePost(renderer, measured, reference);
+  // `?taa` (ws/post-6): the bilinear twin of the measured stack, run only in the sub-pixel phase.
+  const twin =
+    mode === 'taa'
+      ? new PostStack(renderer, {
+          ...base,
+          taa: { enabled: false, sharpen: 0, historyFilter: 'bilinear' },
+        })
+      : null;
+  const post = new CapturePost(renderer, measured, reference, twin);
   renderer.post = post;
 
   const lights = new Lights();
@@ -522,12 +590,20 @@ async function main(): Promise<void> {
   let ghostReads = 0;
   let objSum = 0;
   let objReads = 0;
+  /** `?taa` sub-pixel sums: [measured (Catmull-Rom), twin (bilinear)]. */
+  const sub = { energy: [0, 0], refEnergy: 0, ghost: [0, 0], reads: 0 };
   let orthoIndex = 0;
   const terms: [number, number] = [Number.NaN, Number.NaN];
   /** The frame being captured's bar rect in output px (left, right, top, bottom). */
   const barRect = [0, 0, 0, 0];
 
-  const onRead = (img: Image, ref: Image | null, at: number[] | null, ortho: number) => {
+  const onRead = (
+    img: Image,
+    ref: Image | null,
+    twinImg: Image | null,
+    at: number[] | null,
+    ortho: number,
+  ) => {
     state.readbacks++;
     if (mode === 'taa') {
       if (state.phase === 'reference') {
@@ -567,7 +643,7 @@ async function main(): Promise<void> {
           objX = OBJ_X0;
           // No jitter from here: the still background then resolves to the reference exactly and
           // the difference around the cube is its trail alone.
-          measured.removeJitterCamera(camera);
+          renderer.setJitter(() => NO_JITTER);
           measured.set({ taa: { reprojection: 'camera' } });
         }
       } else if (
@@ -596,8 +672,41 @@ async function main(): Promise<void> {
             measured.set({ taa: { reprojection: 'velocity' } });
           } else {
             state.ghostObject = mean;
-            state.phase = 'done';
+            state.phase = 'subpixel';
+            phaseFrame = 0;
+            objX = OBJ_X0;
+            // The jitter back on (the twin's first TAA frame hands the renderer the same sequence
+            // again), and the bilinear twin resolving the same frames as the Catmull-Rom stack.
+            renderer.setJitter((i) => measured.taa.jitter(i));
+            twin?.set({ taa: { enabled: true } });
+            post.twinOn = true;
           }
+        }
+      } else if (state.phase === 'subpixel' && at && ref && twinImg) {
+        const [left, right, top, bottom] = at as [number, number, number, number];
+        const y0 = top + 2;
+        const y1 = bottom - 2;
+        // The stripes' (and the outer edges') horizontal steps: what a soft history smears. Both
+        // filters are read from the same frame, so both see the same jitter and edge phase.
+        const energy = (x: Image) => gradientEnergy(x, left - 3, y0, right + 3, y1);
+        // Beside the cube, both sides: where a lagging or smeared history shows.
+        const ghost = (x: Image) =>
+          (meanDiff(x, ref, left - SUB_BAND[1], y0, left - SUB_BAND[0], y1) +
+            meanDiff(x, ref, right + SUB_BAND[0], y0, right + SUB_BAND[1], y1)) /
+          2;
+        sub.energy[0]! += energy(img);
+        sub.energy[1]! += energy(twinImg);
+        sub.refEnergy += energy(ref);
+        sub.ghost[0]! += ghost(img);
+        sub.ghost[1]! += ghost(twinImg);
+        if (++sub.reads >= SUB_READS) {
+          const blur = (e: number) => (sub.refEnergy > 0 ? 1 - e / sub.refEnergy : 0);
+          state.blurSubpixel = blur(sub.energy[0]!);
+          state.blurSubpixelBilinear = blur(sub.energy[1]!);
+          state.ghostSubpixel = sub.ghost[0]! / sub.reads;
+          state.ghostSubpixelBilinear = sub.ghost[1]! / sub.reads;
+          state.phase = 'done';
+          post.twinOn = false;
         }
       }
       return;
@@ -667,9 +776,13 @@ async function main(): Promise<void> {
             at = barRect.slice();
           }
         }
-        if ((state.phase === 'objectCamera' || state.phase === 'objectVelocity') && objList) {
+        const creep = state.phase === 'subpixel';
+        if (
+          (state.phase === 'objectCamera' || state.phase === 'objectVelocity' || creep) &&
+          objList
+        ) {
           const perPx = 1 / (toOut(1, OBJ_Y, OBJ_Z + 0.5)[0] - toOut(0, OBJ_Y, OBJ_Z + 0.5)[0]);
-          objX += OBJ_PX * perPx;
+          objX += (creep ? SUB_PX : OBJ_PX) * perPx;
           if (objX > -OBJ_X0) {
             objX = OBJ_X0;
             phaseFrame = 0;
@@ -679,7 +792,7 @@ async function main(): Promise<void> {
           const b = toOut(objX + 0.5, OBJ_Y - 0.5, OBJ_Z + 0.5);
           // After the history has followed it a while, and well inside the screen.
           const inside = a[0] - OBJ_MARGIN > 0 && b[0] + OBJ_MARGIN < renderer.outputWidth;
-          if (phaseFrame > OBJ_WARM && inside) {
+          if (phaseFrame > (creep ? SUB_WARM : OBJ_WARM) && inside) {
             post.capture = true;
             at = [a[0], b[0], a[1], b[1]];
           }
@@ -707,7 +820,7 @@ async function main(): Promise<void> {
       if (objList) frame.list(objList);
       renderer.endFrame();
       const ortho = orthoIndex;
-      const reading = post.read((img, ref) => onRead(img, ref, at, ortho));
+      const reading = post.read((img, ref, t) => onRead(img, ref, t, at, ortho));
       if (mode === 'ortho' && reading) {
         orthoIndex = 1 - orthoIndex;
         setOrtho(orthoIndex);

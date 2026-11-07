@@ -230,10 +230,20 @@ export interface TaaSettings {
   depthReject: number;
   /** `'velocity'` only: drop the history where its velocity differs by more than this, in px. */
   velocityReject: number;
+  /**
+   * How the resolve reads the history between texels (ws/post-6): `'catmull-rom'` (the
+   * default) a 5-tap Catmull-Rom sample, which keeps a slowly moving surface sharp;
+   * `'bilinear'` one bilinear tap, which softens it a little more every frame it moves by a
+   * fraction of a pixel. Either is clamped to the 3×3 neighbourhood.
+   */
+  historyFilter: TaaHistoryFilter;
 }
 
 /** What TAA reprojects its history by (ws/post-5). See `TaaSettings.reprojection`. */
 export type TaaReprojection = 'camera' | 'velocity';
+
+/** How TAA samples its history (ws/post-6). See `TaaSettings.historyFilter`. */
+export type TaaHistoryFilter = 'bilinear' | 'catmull-rom';
 
 /**
  * Screen-space reflections (ws/post-3): a half-res view-space ray march over the scene depth
@@ -414,6 +424,7 @@ export function defaultPostSettings(): PostSettings {
       reprojection: 'velocity',
       depthReject: 0.1,
       velocityReject: 2,
+      historyFilter: 'catmull-rom',
     },
     ssr: {
       enabled: false,
@@ -669,7 +680,7 @@ struct PostUniforms {
   dirt: vec4f,       // enabled, intensity, -, -
   reproj: mat4x4f,   // current clip -> previous frame's clip (identity on a reset)
   // Post 5 (ws/post-5).
-  taa3: vec4f,       // depthReject (fraction), velocityReject (px), -, -
+  taa3: vec4f,       // depthReject (fraction), velocityReject (px), history filter (1 = Catmull-Rom, ws/post-6), -
 };
 @group(0) @binding(0) var<uniform> P: PostUniforms;
 `;
@@ -852,7 +863,14 @@ export function packPostUniforms(
     for (let i = 0; i < 16; i++) out[o + i] = IDENTITY[i]!;
   }
   o += 16;
-  put(out, o, Math.max(0, t.depthReject), Math.max(0, t.velocityReject), 0, 0);
+  put(
+    out,
+    o,
+    Math.max(0, t.depthReject),
+    Math.max(0, t.velocityReject),
+    t.historyFilter === 'bilinear' ? 0 : 1,
+    0,
+  );
 }
 
 const DEFAULT_QUALITY = defaultPostQuality();

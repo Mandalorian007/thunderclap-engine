@@ -84,6 +84,10 @@ export interface DemoState {
   busy: boolean;
   /** Winner once `phase` is `over`. */
   winner: 'player' | 'enemy' | null;
+  /** Fake-pad button downs the input has polled (counted in the sim step that read them). */
+  padPresses: number;
+  /** Fake-pad button ups the input has polled. A press before the last up is counted is merged. */
+  padReleases: number;
 }
 
 export interface UnitInfo {
@@ -126,6 +130,8 @@ const state: DemoState = {
   mapHash: 0,
   busy: false,
   winner: null,
+  padPresses: 0,
+  padReleases: 0,
 };
 
 // Fake gamepad, latched so a scripted press survives until the action map has seen it.
@@ -133,6 +139,8 @@ const padButtons = Array.from({ length: 17 }, () => ({ pressed: false, value: 0 
 const fakePad: GamepadLike = { connected: true, buttons: padButtons, axes: [0, 0, 0, 0] };
 const padSeen = padButtons.map(() => false);
 const padReleasePending = padButtons.map(() => false);
+// What the input's last poll read per button, for the `padPresses`/`padReleases` counts.
+const padPolledDown = padButtons.map(() => false);
 
 const ctx = await createGame({
   root: document.getElementById('app')!,
@@ -822,7 +830,14 @@ if (ctx) {
   // --- Hooks and the __demo surface ------------------------------------------------------------
   ctx.hooks.update = () => {
     for (let i = 0; i < padButtons.length; i++) {
-      if (!padButtons[i]!.pressed) continue;
+      // `input.update()` ran just before this hook in the same step: `pressed` is what it read.
+      const down = padButtons[i]!.pressed;
+      if (down !== padPolledDown[i]) {
+        padPolledDown[i] = down;
+        if (down) state.padPresses++;
+        else state.padReleases++;
+      }
+      if (!down) continue;
       if (!padSeen[i]) {
         padSeen[i] = true;
         continue;

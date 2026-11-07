@@ -39,6 +39,14 @@ export interface HarnessUi5State {
    * radians clockwise from north, and `markerAt(id).angle`, the turn drawn on the player-up map.
    */
   headingMarkers: { id: string; heading: number; angle: number }[];
+  /** Widget ids in `ui.layout.overflows()` (ws/ui-8: empty in every mode on every row). */
+  overflows: string[];
+  /**
+   * `?orb-rails` (ws/ui-9): the layout region each orb sits in (`left`, `right`) and the side
+   * rails' widths, CSS px, as of the last re-layout. Empty and 0 in the other modes.
+   */
+  orbRegions: string[];
+  railWidths: { left: number; right: number };
 }
 
 export interface HarnessUi5Api {

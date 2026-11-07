@@ -4,7 +4,11 @@
  *
  * - `?orb`: two orb meters (`ui.meter({ shape: 'orb' })`), one with the default damage trail and
  *   a value readout, one with a quick trail, a percent readout and a colour override; they drain
- *   in steps and refill. `value`, `fill` and `trailDom` (measured from the DOM), `trail`.
+ *   in steps and refill. They sit at the two ends of a content-sized `bottom` bar (ws/ui-8:
+ *   `bars: { bottom: { size: 'content', max: 160 } }`), so no form factor overflows. `value`, `fill` and `trailDom` (measured from the DOM), `trail`.
+ * - `?orb-rails`: the same orbs, one in a content-sized `left` rail and one in a content-sized
+ *   `right` rail (ws/ui-9: `bars: { left/right: { size: 'content', max: 160 } }`), so a phone's
+ *   56 px rails widen to hold them. `orbRegions`, `railWidths`.
  * - `?floats`: floating text (`ui.floats(camera)`, ws/ui-6) from a ring of points, a crit every seventh, and
  *   a label behind the camera every half second; `active`, `pooled`, `spawned`, `culled`.
  * - `?minimap`: a round, player-up canvas minimap (`ui.minimap`, ws/ui-6) over a painted
@@ -26,7 +30,12 @@ import {
   Transform,
   VERTEX_LAYOUT_3D,
 } from '@thunderclap/engine/render';
-import { createOverlay, type Meter, type MinimapMarker } from '@thunderclap/engine/ui';
+import {
+  createOverlay,
+  type LayoutOverflow,
+  type Meter,
+  type MinimapMarker,
+} from '@thunderclap/engine/ui';
 import type { HarnessUi5Api, HarnessUi5Mode, HarnessUi5State } from './ui5-state';
 
 const root = document.getElementById('root') as HTMLElement;
@@ -34,6 +43,8 @@ const LOGICAL = { width: 1920, height: 1080 };
 const query = new URLSearchParams(location.search);
 const MODES: HarnessUi5Mode[] = ['orb', 'floats', 'minimap'];
 const mode = MODES.find((m) => query.has(m)) ?? 'orb';
+/** `?orb-rails` (ws/ui-9): the orb mode with the orbs in content-sized side rails. */
+const rails = mode === 'orb' && query.has('orb-rails');
 
 const state: HarnessUi5State = {
   ready: false,
@@ -54,6 +65,9 @@ const state: HarnessUi5State = {
   pick: null,
   player: { x: 0, z: 0, yaw: 0 },
   headingMarkers: [],
+  overflows: [],
+  orbRegions: [],
+  railWidths: { left: 0, right: 0 },
 };
 
 // ------------------------------------------------------------------ geometry (12 floats/vertex)
@@ -215,7 +229,23 @@ async function main(): Promise<void> {
   const renderer = new Renderer(gpu);
   renderer.resize(surface.backbuffer.width, surface.backbuffer.height);
 
-  const ui = createOverlay({ parent: root, caption: { reducedMotion: true } });
+  // `?orb` sizes the bottom bar to its orbs (ws/ui-8): the bar grows from its fixed track to the
+  // tallest orb plus pad, up to 160 px, so no form factor reports a `[layout] … overflows`.
+  // `?orb-rails` sizes the side rails to them instead (ws/ui-9): a rail widens to its orb plus pad.
+  const ui = createOverlay({
+    parent: root,
+    caption: { reducedMotion: true },
+    layout: rails
+      ? {
+          bars: {
+            left: { size: 'content', max: 160 },
+            right: { size: 'content', max: 160 },
+          },
+        }
+      : mode === 'orb'
+        ? { bars: { bottom: { size: 'content', max: 160 } } }
+        : undefined,
+  });
   surface.onResize(({ rect, backbuffer }) => {
     renderer.resize(backbuffer.width, backbuffer.height);
     ui.setFrame(rect);
@@ -253,7 +283,7 @@ async function main(): Promise<void> {
         tone: 'danger',
         trail: true,
         reducedMotion: false,
-        region: 'bottom',
+        region: rails ? 'left' : 'bottom',
         order: 0,
       }),
       ui.meter({
@@ -265,13 +295,31 @@ async function main(): Promise<void> {
         size: 104,
         trail: { delay: 200, duration: 400 },
         reducedMotion: false,
-        region: 'bottom',
+        region: rails ? 'right' : 'bottom',
         order: 2,
       }),
     );
     orbs.forEach((o, i) => {
       o.el.id = `orb-${i}`;
     });
+    // The orbs at the bar's two ends, the world between them (or one per rail, centred).
+    if (rails) {
+      for (const r of ['left', 'right'] as const) {
+        Object.assign(ui.layout.region(r).style, {
+          justifyContent: 'center',
+          alignItems: 'center',
+        });
+      }
+      const note = () => {
+        state.orbRegions = orbs.map((o) => o.el.parentElement?.dataset.region ?? '');
+        state.railWidths = {
+          left: ui.layout.state.regions.left?.width ?? 0,
+          right: ui.layout.state.regions.right?.width ?? 0,
+        };
+      };
+      ui.layout.onChange(note);
+      note();
+    } else ui.layout.region('bottom').style.justifyContent = 'space-between';
     const steps = [
       { every: 1.2, drop: 25 },
       { every: 0.8, drop: 15 },
@@ -410,6 +458,7 @@ async function main(): Promise<void> {
   lights.fog.near = 8;
   lights.fog.far = 30;
 
+  let lastOverflows: readonly LayoutOverflow[] | null = null;
   const loop = new GameLoop({
     update(dt) {
       if (state.parked) return;
@@ -425,6 +474,12 @@ async function main(): Promise<void> {
       renderer.endFrame();
       ui.updateAnchors();
       perFrame();
+      // `overflows()` is a new list only after a re-layout: copy the ids then, not per frame.
+      const over = ui.layout.overflows();
+      if (over !== lastOverflows) {
+        lastOverflows = over;
+        state.overflows = over.map((o) => o.id);
+      }
       state.frames++;
       if (gpuDiagnostics.errorCount > 0 && state.gpu === 'ok') state.gpu = 'error: gpu errors';
     },

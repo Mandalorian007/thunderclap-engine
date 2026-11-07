@@ -1,4 +1,5 @@
 import { Loupe } from '../ui/loupe';
+import { type InputClock, resolveClock } from './clock';
 import {
   type Aim,
   loupeClear,
@@ -91,9 +92,14 @@ export interface GestureOptions {
   /**
    * Clock in ms. Default `performance.now()`. Tests pass a fake one. Attached DOM events are
    * timed by their `timeStamp`, moved onto this clock by their age (`eventTime`); the long-press
-   * timer in `update()` reads this clock.
+   * timer in `update()` reads this clock. The older spelling of `clock`; `clock` wins.
    */
   now?: () => number;
+  /**
+   * The clock gestures are timed on (ws/input-8), e.g. a `createTickClock()` the game advances
+   * from its fixed step and shares with `Look`. Default `performance.now()`.
+   */
+  clock?: InputClock;
   /**
    * Loupe and snap for small touch targets (see `magnify.ts`): while one touch pointer is down
    * each tick reports `aim`, and below `below` CSS px of pitch a loupe shows the aim point.
@@ -186,10 +192,6 @@ const CANDIDATE_FRACTION = 0.25;
 const CONTINUOUS = ['pan', 'drag', 'pinch'] as const;
 type ContinuousKind = (typeof CONTINUOUS)[number];
 
-function defaultNow(): number {
-  return typeof performance !== 'undefined' ? performance.now() : Date.now();
-}
-
 /**
  * Touch and pointer gestures: tap, double tap, long-press, pan, drag and pinch. Feed it pointer
  * events (via `attach` or the public feed methods), call `update()` once per simulation tick,
@@ -251,9 +253,11 @@ export class Gestures {
 
   /**
    * The clock gestures are timed on (`GestureOptions.now`). Recordings stamp pointer events on
-   * it and playbacks replay them on it (ws/input-7).
+   * it and playbacks replay them on it (ws/input-7). `clock.now`, bound.
    */
   readonly now: () => number;
+  /** The clock (`GestureOptions.clock`, or one wrapping `now`, or the wall clock). */
+  readonly clock: InputClock;
   private readonly onPanCandidate: ((pointer: number, travel: number) => void) | null;
   private transform: PointerTransform | null = null;
   private session: Session | null = null;
@@ -285,7 +289,9 @@ export class Gestures {
     this.doubleTapMs = opts.doubleTapMs ?? DEFAULTS.doubleTapMs;
     this.doubleTapDistance = opts.doubleTapDistance ?? DEFAULTS.doubleTapDistance;
     this.blocked = opts.blocked ?? (() => false);
-    this.now = opts.now ?? defaultNow;
+    const c = resolveClock(opts.clock, opts.now);
+    this.clock = c.clock;
+    this.now = c.now;
     this.magnify = opts.magnify ?? null;
     this.panMode = opts.pan ?? null;
     this.onPanCandidate = opts.onPanCandidate ?? null;
@@ -848,4 +854,9 @@ function mergePan<E extends PanEvent | DragEvent>(a: E, b: E): E {
 
 function mergePinch(a: PinchEvent, b: PinchEvent): PinchEvent {
   return { ...b, delta: a.delta * b.delta };
+}
+
+/** `new Gestures(opts)`: gestures, on `opts.clock` when given (ws/input-8). */
+export function createGestures(opts: GestureOptions = {}): Gestures {
+  return new Gestures(opts);
 }
