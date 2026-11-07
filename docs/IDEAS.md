@@ -2,6 +2,17 @@
 
 Parked ideas, not scheduled. The PM keeps this. An idea leaves this file when it becomes a brief and a row in `docs/STATUS.md`, or when the user drops it. Newest first.
 
+## XR rough edges (2026-11-07, user + PM)
+
+The XR shape works: one `xr` option, an Enter VR button, scenes recorded through the head camera, controllers and hands as rays, world panels for menus, post per eye. Rough edges found while explaining it (performance is the next entry):
+
+- **Never run on a real headset.** `e2e/xr.spec.ts` checks only that the button is disabled when XR is missing. The VR path is unit-tested against `platform/xr-fake.ts`, and the spec says "a real headset is a manual check". No such check is on record. Do a Quest smoke run of `harness/xr.html`, plus a short manual checklist (enter, exit from the headset menu, select with trigger and pinch, panel press, post on both eyes).
+- **The head-locked panel trap.** `attach` positions a head-locked panel from `renderer.camera`, the page camera, so a game that forgets `hud.update(camera)` gets a misplaced HUD in VR with no error. Have `attach` follow the camera that is drawing (the head in VR). Anchors and floating labels have the same issue: in VR they default to the game camera, not the head (STATUS backlog).
+- **No locomotion or interaction kit.** Games move the world by hand. Offer opt-in helpers: snap and smooth turn about the head, stick walking with a comfort vignette, teleport with an arc, and grab and throw on `squeeze`. Forgewilds has snap turn about the head (`apps/web/src/xr/pivot.ts`), stick walking and a vignette to learn from.
+- **VR only.** There's no `immersive-ar` or passthrough. Park until a game needs it (VISION rule 6).
+- **Stale doc note.** Older input backlog notes say XR pointers still reach a running replay; input-11 fixed that (pointer-source mute). Correct the note in the next doc sweep.
+- **Fold into the recipes guides.** The VR grab and world-menu recipe already planned for `input-recipes.md` should also show the head-locked `update(camera)` call.
+
 ## VR performance without quality cuts (2026-11-07, user + PM)
 
 The user's rule: the game must look and feel the same in VR. So no foveation, no lower frame-rate request, no resolution or viewport scaling, no quality ladder, no shorter draw distance and no turning bloom off. Each item below keeps the image the same, or fixes a bug. Sources: a read of Forgewilds' shelved VR client (`apps/web/src/xr/`, `docs/client/vr/`) and of ThunderClap's XR path. Citations are as of `fce9288`.
