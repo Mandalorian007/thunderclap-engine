@@ -178,9 +178,10 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Testing kit: fake host, fixed clock, headless `createTestGame` in `./testing` | ws/testing-kit | brief `docs/briefs/testing-kit.md` | train 14 | ✅ merged in E-031 train 14 (`7089b86`; main a147d20) |
 | 5 | Aux-aware scene pipelines: velocity on stops breaking particles, sky, decals and water | ws/render-10 | brief `docs/briefs/render-10.md` | train 15 | ✅ merged in E-031 train 15 (`2cf8e4b`; main 0fb66ba) |
 | 5 | glTF sun `direction`; anim `skinPose` one-call skinning | ws/assets-4 | brief `docs/briefs/assets-4.md` | train 15 | ✅ merged in E-031 train 15 (`a700f83`; main 0fb66ba) |
-| 5 | v1 docs: README front door, guide pass, migration guide, deprecated-name check on snippets | ws/docs-v1 | brief `docs/briefs/docs-v1.md` | after train 15 | 🟣 done at `1d82121` (README front door; 77-row migration guide with drift test; `check:snippets` fails on deprecated; 3 stale uses fixed). Train 16 |
-| 5 | v1 templates and demos: no deprecated names (lint), third-person on `skinPose`, template READMEs and tests | ws/templates-v1 | brief `docs/briefs/templates-v1.md` | after train 15 | 🔵 running |
-| 5 | Headless `createGame` (`gpu`, `clock`, `host`); touch replay sink; `HostLifecycle.state` getter; WorldPanel keyed on aux | ws/core-8 | brief `docs/briefs/core-8.md` | train 16 | 🔵 running |
+| 5 | v1 docs: README front door, guide pass, migration guide, deprecated-name check on snippets | ws/docs-v1 | brief `docs/briefs/docs-v1.md` | after train 15 | 🟣 merged in integrate-7 at 464d6c9 (train 16) |
+| 5 | v1 templates and demos: no deprecated names (lint), third-person on `skinPose`, template READMEs and tests | ws/templates-v1 | brief `docs/briefs/templates-v1.md` | after train 15 | 🟣 done at `01705a7` (`check:deprecated` lint; 16 uses migrated; third-person on `skinPose`, byte-identical; template READMEs and tests). Train 16 |
+| 5 | Headless `createGame` (`gpu`, `clock`, `host`); touch replay sink; `HostLifecycle.state` getter; WorldPanel keyed on aux | ws/core-8 | brief `docs/briefs/core-8.md` | train 16 | 🟣 merged in integrate-7 at 2c8ea2c (train 16) |
+| 5 | v1 internal migration: no deprecated names in `src`, harness, e2e or packages; check wired into `pnpm check` | ws/src-v1 | brief `docs/briefs/src-v1.md` | after train 16 | ⏳ queued |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
@@ -471,6 +472,12 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - ws/docs-v1 findings:
   - The engine's own `src` has **240 internal uses of deprecated names**, found with `findDeprecatedUses` on tsconfig.json. They must be cleared before the v1 alias removal. → ws/src-v1 after train 16.
   - `testing-your-game.md` ~334 and the testing README must be updated after core-8 lands.
+- ws/core-8 wishes:
+  - **Device loss.** FakeDevice has no `lost` promise, so device loss can't be simulated headless. → testing.
+  - **Headless DOM.** The headless overlay still needs a DOM (happy-dom).
+  - **Page-button recording.** Overlay page-button events can't be recorded, because DOM identity isn't stable across sessions. Needs an id-based scheme. → ui.
+  - **Stale note.** The `src/fx/render10.test.ts` and CHANGELOG note says WorldPanel is right for `renderer.target` only, which is now stale. → ws/src-v1.
+- ws/templates-v1 wishes: merge `check:deprecated` and docs-v1's `findDeprecatedUses` into one check, and mark deprecated names in the `api/` snapshots so the lint needs no `.d.ts` emit. → ws/src-v1.
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
