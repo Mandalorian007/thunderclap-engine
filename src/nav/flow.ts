@@ -3,7 +3,7 @@
  * direction to step, so any number of agents share one build. Arrays are sized to the grid once;
  * the goals are kept, so `update()` recomputes in place after the grid or the goals move.
  */
-import type { Cell, NavGrid, NavPoint } from './grid';
+import type { NavCell, NavGrid, NavPoint } from './grid';
 import { edgeCostOf, NEIGHBOUR_X, NEIGHBOUR_Y, stepLength } from './grid';
 import { CellHeap } from './heap';
 
@@ -44,7 +44,7 @@ export interface FlowField {
    */
   readonly stepCosts: Float32Array;
   /** Dijkstra from `goals` (cells; unwalkable or out-of-grid ones are skipped). */
-  build(goals: ArrayLike<Readonly<Cell>>): void;
+  build(goals: ArrayLike<Readonly<NavCell>>): void;
   /** Dijkstra from `goals` given as row-major indices (unwalkable or out-of-grid are skipped). */
   setGoals(goals: ArrayLike<number>): void;
   /** Recomputes from the kept goals, in place: after a grid edit, or to clear `stale`. */
@@ -89,7 +89,7 @@ class Field implements FlowField {
     return this.version !== this.grid.version;
   }
 
-  build(goals: ArrayLike<Readonly<Cell>>): void {
+  build(goals: ArrayLike<Readonly<NavCell>>): void {
     const grid = this.grid;
     let count = 0;
     for (let i = 0; i < goals.length && count < this.goals.length; i++) {

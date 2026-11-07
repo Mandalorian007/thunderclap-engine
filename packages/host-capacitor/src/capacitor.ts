@@ -100,7 +100,7 @@ export function createCapacitorHost(opts: CapacitorHostOptions = {}): CapacitorH
     fullscreen: {
       // A store app already fills the screen; there is nothing to enter or leave.
       available: () => false,
-      active: () => false,
+      active: false,
       async toggle(o) {
         if (o?.lockLandscape && ScreenOrientation) {
           try {

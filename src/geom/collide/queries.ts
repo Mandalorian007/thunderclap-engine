@@ -46,7 +46,7 @@ import {
 export const ALL_LAYERS = 0xffffffff;
 
 /** Where a ray met the collider. `t` is the distance along the ray; `n` the triangle normal facing the ray. */
-export interface Hit {
+export interface RayHit {
   t: number;
   x: number;
   y: number;
@@ -59,15 +59,18 @@ export interface Hit {
   userData: unknown;
 }
 
+/** @deprecated (ws/api-rest, E-036) Use `RayHit`. Removed next minor. */
+export type Hit = RayHit;
+
 /**
  * Where a swept shape first touches: `t` in 0..1 along the displacement (0 with `depth > 0` when
  * it started overlapping), the point on the triangle and the unit normal pointing into the shape.
  */
-export interface SweepHit extends Hit {
+export interface SweepHit extends RayHit {
   depth: number;
 }
 
-export function createHit(): Hit {
+export function createHit(): RayHit {
   return {
     t: 0,
     x: 0,
@@ -176,7 +179,7 @@ export function raycast(
   origin: ArrayLike<number>,
   dir: ArrayLike<number>,
   maxDist: number,
-  out: Hit,
+  out: RayHit,
   layerMask = ALL_LAYERS,
 ): boolean {
   return raycastReg(
@@ -206,7 +209,7 @@ export function raycastReg(
   dy: number,
   dz: number,
   maxDist: number,
-  out: Hit,
+  out: RayHit,
   layerMask = ALL_LAYERS,
 ): boolean {
   const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
@@ -686,7 +689,7 @@ export function raycast2(
   dx: number,
   dz: number,
   maxDist: number,
-  out: Hit,
+  out: RayHit,
   layerMask = ALL_LAYERS,
 ): boolean {
   const oy = (c.bounds.min[1] + c.bounds.max[1]) / 2;

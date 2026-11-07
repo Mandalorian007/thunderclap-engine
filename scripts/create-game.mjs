@@ -4,13 +4,17 @@
 //   pnpm create-game <dir> [--template <name>] [--name <pkg>] [--engine <spec>] [--force] [--dry-run]
 //   pnpm create-game --list
 //
-// Copies templates/<name> (default: puzzle) to <dir> as a standalone project on the published
-// engine: node_modules, dist, .turbo and lockfiles stay behind; package.json is rewritten in place
-// (name from --name or the directory's basename, private, @thunderclap/engine from "workspace:*"
-// to --engine or "^<this repo's version>", monorepo-only scripts dropped); the repo's biome.json,
-// a .gitignore and a README.md are written; the template's CLAUDE.md stays, minus its references to
+// Copies templates/<name> (default: puzzle) to <dir> as a standalone project on the engine:
+// node_modules, dist, .turbo and lockfiles stay behind; package.json is rewritten in place (name
+// from --name or the directory's basename, private, @thunderclap/engine from "workspace:*" to
+// --engine or the default below, monorepo-only scripts dropped); the repo's biome.json, a
+// .gitignore and a README.md are written; the template's CLAUDE.md stays, minus its references to
 // this repo. --engine takes any dependency spec ("^0.3.0", "github:...", "link:../engine",
 // "file:../engine.tgz") or a directory, which becomes "link:<path relative to <dir>>".
+//
+// Default engine: a link to the clone this script runs from, because that is the engine a user
+// can install today (the package is not on npm yet). The first publish flips PUBLISHED, and the
+// default becomes "^<this repo's version>".
 //
 // Refuses a non-empty <dir> without --force (which overwrites files and keeps the rest). --dry-run
 // prints the plan and writes nothing. --list prints the templates and their descriptions.
@@ -29,6 +33,11 @@ import { fileURLToPath } from 'node:url';
 
 export const ENGINE = '@thunderclap/engine';
 export const ENGINE_REPO = 'https://github.com/Mandalorian007/thunderclap-engine';
+/**
+ * Whether the engine is on the npm registry. While false, the default engine spec links the clone
+ * this script runs from; set it true with the first publish so the default is `^<version>`.
+ */
+export const PUBLISHED = false;
 
 /** Directory entries never copied out of a template (any depth). */
 export const SKIP = new Set([
@@ -64,7 +73,8 @@ const USAGE = `usage: pnpm create-game <dir> [--template <name>] [--name <pkg>] 
   --template <name>  a folder of templates/ (default: puzzle); --list shows them
   --name <pkg>       package.json "name"
   --engine <spec>    ${ENGINE} dependency: a version range, "github:..." , "link:<path>",
-                     "file:<path>" or a directory holding the engine (becomes link:<relative path>)
+                     "file:<path>" or a directory holding the engine (becomes link:<relative path>);
+                     default: a link to this clone (the engine is not on npm yet)
   --force            write into a non-empty <dir>, overwriting files that exist in the template
   --dry-run          print what would be written and change nothing
   --list             print the templates with their descriptions`;
@@ -137,12 +147,13 @@ export function templateFiles(src, rel = '') {
 
 /**
  * The engine spec to write. A directory becomes link:<path> (relative to <dir> when that is shorter
- * than the absolute path); a protocol spec or version range is kept as given.
+ * than the absolute path); a protocol spec or version range is kept as given. Without --engine:
+ * `^<engineVersion>` once published, a link to this clone until then.
  */
-export function engineSpec(engine, dest, engineVersion) {
-  if (engine === null) return `^${engineVersion}`;
-  if (/^[a-z]+:/i.test(engine) || /^[\^~>=<*\d]/.test(engine)) return engine;
-  const abs = resolve(engine);
+export function engineSpec(engine, dest, engineVersion, published = PUBLISHED) {
+  if (engine === null && published) return `^${engineVersion}`;
+  if (engine !== null && (/^[a-z]+:/i.test(engine) || /^[\^~>=<*\d]/.test(engine))) return engine;
+  const abs = resolve(engine ?? root);
   if (!existsSync(abs) || !statSync(abs).isDirectory()) {
     throw new UsageError(`--engine ${engine}: not a dependency spec or an existing directory`);
   }
@@ -187,8 +198,17 @@ scenes and art.
 pnpm install
 pnpm dev        # Vite at http://127.0.0.1:5173 (a WebGPU browser: Chrome, Edge or Safari 26+)
 pnpm check      # tsc, Biome, Vitest
+pnpm build      # the static game in dist/ (pnpm preview serves it)
 \`\`\`
-
+${
+  engine.startsWith('link:')
+    ? `
+The engine is linked from a local clone (\`${engine}\`) because ${ENGINE} is not on npm yet. Keep
+the clone where it is, or point the dependency at \`github:Mandalorian007/thunderclap-engine\`. Once
+the package is published, replace the link with a version range (\`^x.y.z\`).
+`
+    : ''
+}
 ## Where things are
 
 - \`CLAUDE.md\`: the shape of this project and the engine concepts it uses. Read it first.

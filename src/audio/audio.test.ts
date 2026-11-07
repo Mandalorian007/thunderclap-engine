@@ -714,7 +714,7 @@ describe('spatial audio', () => {
     });
   });
 
-  it('PlayOptions.at routes gain → PannerNode → bus with the spatial options', async () => {
+  it('AudioPlayOptions.at routes gain → PannerNode → bus with the spatial options', async () => {
     const ctx = new SpatialFakeContext();
     const audio = await spatialSetup(ctx);
     await audio.unlock();

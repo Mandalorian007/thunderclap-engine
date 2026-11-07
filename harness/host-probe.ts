@@ -49,7 +49,7 @@ export function createHostProbe(): HarnessHostProbe {
     storage: host.storage.open() !== null,
     clipboardWriteAllowed: host.clipboardWriteAllowed(),
     fullscreenAvailable: host.fullscreen.available(),
-    fullscreenActive: host.fullscreen.active(),
+    fullscreenActive: host.fullscreen.active,
     copies: [...copies],
     opens: [...opens],
     fullscreen: [...fullscreen],

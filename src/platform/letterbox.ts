@@ -7,15 +7,18 @@
  * - "backbuffer" = physical pixels of the canvas drawing buffer.
  */
 
-export interface Rect {
+export interface LetterboxRect {
   x: number;
   y: number;
   width: number;
   height: number;
 }
 
+/** @deprecated (ws/api-rest, E-036) Use `LetterboxRect`. Removed next minor. */
+export type Rect = LetterboxRect;
+
 /** Letterboxed viewport inside a container, in client (CSS) pixels. */
-export interface Letterbox extends Rect {
+export interface Letterbox extends LetterboxRect {
   /** CSS pixels per logical unit. */
   scale: number;
 }
@@ -48,7 +51,7 @@ export function computeLetterbox(
 
 /** Map a client point (CSS px relative to the container) into logical space. */
 export function clientToLogical(
-  box: Rect,
+  box: LetterboxRect,
   logicalW: number,
   logicalH: number,
   cx: number,
@@ -67,7 +70,7 @@ export function clientToLogical(
 
 /** Map a logical point back to client CSS px relative to the container. */
 export function logicalToClient(
-  box: Rect,
+  box: LetterboxRect,
   logicalW: number,
   logicalH: number,
   lx: number,

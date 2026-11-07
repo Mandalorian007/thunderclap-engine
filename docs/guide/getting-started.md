@@ -38,15 +38,15 @@ There are four:
 Pick one and copy it out of the repo. Run this from the engine checkout:
 
 ```sh
-pnpm create-game ../my-game --template platformer --engine .
+pnpm create-game ../my-game --template platformer
 cd ../my-game
 pnpm install
 pnpm dev
 ```
 
-`--engine .` points the new game at your clone (it becomes a `link:` dependency). Without it, the game asks for `@thunderclap/engine` from the npm registry, which the engine is not published to yet. Other useful flags: `--name <pkg>` sets the package name, `--dry-run` prints the files it would write, and `--force` writes into a folder that is not empty.
+The new game's `@thunderclap/engine` dependency is a `link:` to your clone, because the engine is not on npm yet; keep the clone where it is. Once the engine is published, `create-game` writes a version range instead, and you can switch an existing game by replacing the link with `^<version>`. `--engine <spec>` picks the dependency yourself: a version range, `github:Mandalorian007/thunderclap-engine`, or a directory. Other useful flags: `--name <pkg>` sets the package name, `--dry-run` prints the files it would write, and `--force` writes into a folder that is not empty.
 
-`pnpm dev` starts Vite at `http://127.0.0.1:5173`. `pnpm check` runs the type checker, the linter and the game's tests.
+`pnpm dev` starts Vite at `http://127.0.0.1:5173`. `pnpm check` runs the type checker, the linter and the game's tests. `pnpm build` writes the static game to `dist/`, and `pnpm preview` serves it.
 
 Each template has a `CLAUDE.md` that lists its files, its house rules and every engine noun it uses. Read it before you change anything. It is written so that you (or an agent) never need to open the engine's source.
 
@@ -230,7 +230,7 @@ The three type arguments are your action names, your save type and your ctx type
 
 ## Ship it
 
-A game is a static web build. `vite build` writes it to `dist/`. The templates do not ship a `build` script, so add one to `package.json` (`"build": "vite build"`), or run `pnpm exec vite build`.
+A game is a static web build. `pnpm build` (the templates' `vite build`) writes it to `dist/`; `pnpm preview` serves that folder to check it before you upload.
 
 ### itch.io
 
@@ -249,7 +249,7 @@ export default defineConfig({
 Then build and zip the contents of `dist/` (not the folder itself), so `index.html` is at the top of the zip:
 
 ```sh
-pnpm exec vite build
+pnpm build
 cd dist && zip -r ../my-game.zip . && cd ..
 ```
 

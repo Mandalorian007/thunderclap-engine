@@ -31,7 +31,7 @@ describe('createAssetCache', () => {
     expect(x).toBe(y);
     expect(calls.get('a')).toBe(1);
     expect(cache.refs('a')).toBe(2);
-    expect(cache.stats()).toEqual({ bytes: 10, entries: 1, hits: 1, misses: 1, evictions: 0 });
+    expect(cache.stats).toEqual({ bytes: 10, entries: 1, hits: 1, misses: 1, evictions: 0 });
   });
 
   it('evicts unreferenced entries least recently used first, through onEvict', async () => {
@@ -56,7 +56,7 @@ describe('createAssetCache', () => {
     expect(evicted).toEqual(['b', 'a']);
     expect(cache.has('a')).toBe(false);
     expect(cache.has('c')).toBe(true);
-    expect(cache.stats()).toMatchObject({ bytes: 80, entries: 2, evictions: 2 });
+    expect(cache.stats).toMatchObject({ bytes: 80, entries: 2, evictions: 2 });
   });
 
   it('never evicts a held or pinned entry, even over budget', async () => {
@@ -67,8 +67,8 @@ describe('createAssetCache', () => {
     cache.pin('pinned');
     cache.release('pinned');
     await get('big'); // held: 130 bytes, nothing evictable
-    expect(cache.stats().bytes).toBe(130);
-    expect(cache.stats().evictions).toBe(0);
+    expect(cache.stats.bytes).toBe(130);
+    expect(cache.stats.evictions).toBe(0);
     cache.release('big'); // big is unreferenced now: it goes, pinned stays
     expect(cache.has('big')).toBe(false);
     expect(cache.has('pinned')).toBe(true);
@@ -77,7 +77,7 @@ describe('createAssetCache', () => {
     expect(cache.has('pinned')).toBe(true);
     cache.unpin('pinned');
     expect(cache.has('pinned')).toBe(true); // 60 bytes: within budget
-    expect(cache.stats()).toEqual({ bytes: 60, entries: 2, hits: 0, misses: 3, evictions: 1 });
+    expect(cache.stats).toEqual({ bytes: 60, entries: 2, hits: 0, misses: 3, evictions: 1 });
   });
 
   it('dispose frees an unreferenced entry now and refuses a held one', async () => {
@@ -96,7 +96,7 @@ describe('createAssetCache', () => {
     expect(cache.dispose('x')).toBe(true);
     expect(freed).toEqual(['gpu-x']);
     expect(cache.dispose('x')).toBe(false);
-    expect(cache.stats()).toMatchObject({ bytes: 0, entries: 0, evictions: 0 });
+    expect(cache.stats).toMatchObject({ bytes: 0, entries: 0, evictions: 0 });
   });
 
   it('a failed load leaves nothing behind and the next acquire retries', async () => {

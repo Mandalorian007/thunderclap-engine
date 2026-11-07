@@ -4,7 +4,7 @@
  * ambient loop per zone and per-bus reverb sends. Pure bookkeeping over `AudioEngine`: no new
  * graph nodes, nothing allocated per `update`.
  */
-import type { OutputBus, PlayOptions, Voice } from './audio';
+import type { AudioPlayOptions, OutputBus, Voice } from './audio';
 
 /** A sphere or an axis-aligned box in world units. */
 export type ZoneShape =
@@ -55,7 +55,7 @@ export interface AudioZone {
 /** What `AudioZones` needs from the engine (`AudioEngine` implements it). */
 export interface AudioZoneHost {
   readonly listener: { readonly position: ArrayLike<number> };
-  loop(sound: string, opts?: PlayOptions): Voice;
+  loop(sound: string, opts?: AudioPlayOptions): Voice;
   /** The zones' contribution to one bus's reverb send (blended with the base by the host). */
   setZoneReverbSend(bus: OutputBus, level: number): void;
 }

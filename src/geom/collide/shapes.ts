@@ -26,10 +26,13 @@ export interface Capsule {
 }
 
 /** An axis-aligned box: `min` and `max` corners (`[x, y, z]`). */
-export interface Aabb {
+export interface GeomAabb {
   min: [number, number, number];
   max: [number, number, number];
 }
+
+/** @deprecated (ws/api-rest, E-036) Use `GeomAabb`. Removed next minor. */
+export type Aabb = GeomAabb;
 
 /** A circle in the xz plane (the 2D case). */
 export interface Circle {
@@ -47,7 +50,7 @@ export interface Box2 {
 }
 
 /** Any 3D shape the queries take. */
-export type Shape = Sphere | Capsule | Aabb;
+export type Shape = Sphere | Capsule | GeomAabb;
 /** Any 2D shape the `*2` queries take. */
 export type Shape2 = Circle | Box2;
 
@@ -82,7 +85,7 @@ export function isCapsule(s: Shape): s is Capsule {
   return 'halfHeight' in s;
 }
 
-export function isAabb(s: Shape): s is Aabb {
+export function isAabb(s: Shape): s is GeomAabb {
   return 'min' in s;
 }
 
@@ -138,7 +141,7 @@ function loadCapsule(s: Capsule): void {
   SH[5] = s.r;
 }
 
-function loadAabb(s: Aabb): void {
+function loadAabb(s: GeomAabb): void {
   SH[0] = SH_BOX;
   SH[1] = s.min[0];
   SH[2] = s.min[1];
@@ -818,7 +821,7 @@ export function aabbTri(out: Contact): boolean {
  * `depth` the overlap along it, the point the triangle point closest to the box centre.
  */
 export function aabbTriangle(
-  box: Aabb,
+  box: GeomAabb,
   ax: number,
   ay: number,
   az: number,

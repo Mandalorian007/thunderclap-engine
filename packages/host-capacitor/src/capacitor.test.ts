@@ -128,7 +128,7 @@ describe('createCapacitorHost', () => {
     const f = fakePlugins();
     const host = createCapacitorHost({ plugins: f.plugins, win: window });
     expect(host.fullscreen.available()).toBe(false);
-    expect(host.fullscreen.active()).toBe(false);
+    expect(host.fullscreen.active).toBe(false);
     expect(await host.fullscreen.toggle()).toBe(false);
     expect(await host.fullscreen.toggle({ lockLandscape: true })).toBe(false);
     expect(f.calls).toEqual(['lock landscape']);
@@ -258,7 +258,7 @@ describe('createCapacitorHost', () => {
       clipboardWriteAllowed: () => false,
       fullscreen: {
         available: () => true,
-        active: () => false,
+        active: false,
         toggle: async () => true,
         watch: () => () => {},
       },

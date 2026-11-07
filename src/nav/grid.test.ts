@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { type Cell, createNavGrid, hasLineOfWalkable, type NavPoint } from './grid';
+import { createNavGrid, hasLineOfWalkable, type NavCell, type NavPoint } from './grid';
 
 describe('createNavGrid', () => {
   it('starts walkable at cost 1 and takes the callbacks', () => {
@@ -49,7 +49,7 @@ describe('createNavGrid', () => {
 
   it('maps world points to cells (clamped) and cells to centres', () => {
     const g = createNavGrid({ width: 4, height: 2, cellSize: 10, origin: { x: 100, z: -50 } });
-    const c: Cell = { x: 0, y: 0 };
+    const c: NavCell = { x: 0, y: 0 };
     expect(g.toCell(105, -45, c)).toEqual({ x: 0, y: 0 });
     expect(g.toCell(139.9, -30.1, c)).toEqual({ x: 3, y: 1 });
     expect(g.toCell(1000, -1000, c)).toEqual({ x: 3, y: 0 });

@@ -329,15 +329,15 @@ work in typed-array registers, never in doubles passed between calls).
   solid cells are left out, so a run of tiles is one flat wall and a circle sliding along it
   meets no interior edges. `gridTriangles(grid)` is that mesh, nine floats per triangle.
 - Shapes: `Sphere { x, y, z, r }`, `Capsule { x, y, z, halfHeight, r }` (along y; `halfHeight`
-  is centre to hemisphere centre, total height `2 × (halfHeight + r)`), `Aabb { min, max }`;
+  is centre to hemisphere centre, total height `2 × (halfHeight + r)`), `GeomAabb { min, max }`;
   `Shape` is any of them, `isCapsule(s)` and `isAabb(s)` tell them apart, `shapeBounds(s, min,
   max)` is the world AABB. The 2D shapes `Circle { x, z, r }` and `Box2 { x, z, hw, hh }` (`Shape2`,
   `isBox2(s)`) are lifted to the collider's full height by the `*2` queries, so a 2D game builds
   its collider from a `GridSource` or any geometry and never thinks about y. `Vec3Out` is
   `[x, y, z]`, `Float32Array` or `Float64Array`.
-- `raycast(c, origin, dir, maxDist, out: Hit, layerMask?)`: the nearest triangle along the ray
+- `raycast(c, origin, dir, maxDist, out: RayHit, layerMask?)`: the nearest triangle along the ray
   (`dir` any length; `t` in world units); back faces hit too, with the normal turned to face the
-  ray. `Hit { t; x, y, z; nx, ny, nz; triangle; source; userData }`, from `createHit()`.
+  ray. `RayHit { t; x, y, z; nx, ny, nz; triangle; source; userData }`, from `createHit()`.
   `raycastReg(c, ox, oy, oz, dx, dy, dz, maxDist, out, layerMask?)` is the same query in
   register form (eight numbers, nothing to allocate for the origin and direction; `raycast` and
   `slide`'s ground probe call it). `raycast2(c, ox, oz, dx, dz, maxDist, out, layerMask?)` casts
@@ -348,7 +348,7 @@ work in typed-array registers, never in doubles passed between calls).
   far along it to separate), returns the count; touching is not a contact. `overlap2` for a
   `Shape2`, normals in xz.
 - `sweepShape(c, shape, dx, dy, dz, out: SweepHit, layerMask?)` moves the shape by a
-  displacement and finds the first triangle it touches: `SweepHit` (a `Hit` plus `depth`, from
+  displacement and finds the first triangle it touches: `SweepHit` (a `RayHit` plus `depth`, from
   `createSweepHit()`) with `t` in 0..1 along the displacement; a shape already overlapping reports
   `t` 0 and its `depth`; false when the whole move is free. (`sweep` is the profile sweep above;
   the shape sweep is `sweepShape` at this index.) `sweep2(c, shape, dx, dz, out, layerMask?)`.
@@ -484,3 +484,7 @@ if (isoInverseProbe(iso, px, py, heightAt, maxElev, pt)) hover(pt.x, pt.y);
 Harness: `harness/tiles.html?iso` lays a 12 × 12 map with a two-level ramp through a painter
 `TileLayer` (`render/README.md`), walks a sprite between the tiles and resolves the hovered tile
 with `isoInverseProbe`; `e2e/tiles.spec.ts` hovers every row of the ramp.
+
+## Deprecated aliases
+
+Kept until the next minor (ws/api-rest, E-036), same shapes: `Aabb` (use `GeomAabb`) and `Hit` (use `RayHit`).

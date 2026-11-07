@@ -67,7 +67,7 @@ export function busGain(s: BusSettings): number {
  */
 export type AudioState = 'locked' | 'running' | 'suspended' | 'unavailable';
 
-export interface PlayOptions {
+export interface AudioPlayOptions {
   /** Default `sfx` for `play`, `music` for `loop`. */
   bus?: OutputBus;
   /** Linear gain on top of the bus. Default 1. */
@@ -94,6 +94,9 @@ export interface PlayOptions {
   /** Seconds to fade in. Default 0 for one-shots, 0.5 for loops. */
   fadeIn?: number;
 }
+
+/** @deprecated (ws/api-rest, E-036) Use `AudioPlayOptions`. Removed next minor. */
+export type PlayOptions = AudioPlayOptions;
 
 /** A playing (or pending) sound. Every method is safe to call at any time. */
 export interface Voice {
@@ -310,11 +313,14 @@ export class VoiceSends {
 }
 
 /** Anything with a 3×4 world matrix a voice can follow (`Voice.follow`). */
-export interface FollowTarget {
+export interface AudioFollowTarget {
   readonly world: ArrayLike<number>;
   /** A counter that moves whenever `world` may have (a `Transform.changed`); lets the follower skip the read. */
   readonly changed?: number;
 }
+
+/** @deprecated (ws/api-rest, E-036) Use `AudioFollowTarget`. Removed next minor. */
+export type FollowTarget = AudioFollowTarget;
 
 /** Distance model of a spatial voice (`PannerNode.distanceModel`). */
 export type Rolloff = 'linear' | 'inverse' | 'exponential';
@@ -329,7 +335,7 @@ export interface ConeOptions {
   outerGain?: number;
 }
 
-/** Attenuation and panning of a voice played with `PlayOptions.at`. */
+/** Attenuation and panning of a voice played with `AudioPlayOptions.at`. */
 export interface SpatialOptions {
   /** Distance (world units) at which attenuation starts. Default 1. */
   refDistance?: number;
@@ -586,7 +592,7 @@ class VoiceImpl implements Voice, OccludableVoice {
   /** Emitter position and cone direction (kept for a voice that has not started yet). */
   private readonly spatial: boolean;
   private readonly pos = new Float64Array(3);
-  private target: FollowTarget | null = null;
+  private target: AudioFollowTarget | null = null;
   /** `target.changed` at the last `syncFollow`; a target without one is read every update. */
   private followSeen = -1;
   private dx = 1;
@@ -611,7 +617,7 @@ class VoiceImpl implements Voice, OccludableVoice {
   constructor(
     private readonly engine: AudioEngine,
     readonly loop: boolean,
-    private readonly opts: PlayOptions,
+    private readonly opts: AudioPlayOptions,
     private readonly onEnd: (v: VoiceImpl) => void,
     /** A sprite clip's range, or null for the whole buffer. */
     private readonly schedule: SpriteSchedule | null = null,
@@ -985,7 +991,7 @@ class VoiceImpl implements Voice, OccludableVoice {
     if (this.panner) writePannerPosition(this.panner, x, y, z);
   }
 
-  follow(target: FollowTarget | null): void {
+  follow(target: AudioFollowTarget | null): void {
     if (!this.spatial) return;
     this.target = target;
     this.followSeen = -1;
@@ -1964,7 +1970,7 @@ export class AudioEngine {
    * Fire a one-shot. Dropped (returns an inert voice) while audio is locked, suspended or
    * unavailable: a click sound arriving seconds late after unlock would be wrong.
    */
-  play(sound: string | AudioBuffer, opts: PlayOptions = {}): Voice {
+  play(sound: string | AudioBuffer, opts: AudioPlayOptions = {}): Voice {
     if (this._state !== 'running' || !this.ctx || this._halted) return NULL_VOICE;
     return this.startVoice(sound, false, opts, false);
   }
@@ -1973,7 +1979,7 @@ export class AudioEngine {
    * Start a loop (music, ambience). If audio is still locked, it starts as soon as it unlocks.
    * Stop it with `voice.stop(fade)`.
    */
-  loop(sound: string | AudioBuffer, opts: PlayOptions = {}): Voice {
+  loop(sound: string | AudioBuffer, opts: AudioPlayOptions = {}): Voice {
     if (this._state === 'unavailable' || this._halted) return NULL_VOICE;
     return this.startVoice(sound, true, opts, this._state !== 'running');
   }
@@ -1981,7 +1987,7 @@ export class AudioEngine {
   private startVoice(
     sound: string | AudioBuffer,
     loop: boolean,
-    opts: PlayOptions,
+    opts: AudioPlayOptions,
     defer: boolean,
   ): Voice {
     let schedule: SpriteSchedule | null = null;

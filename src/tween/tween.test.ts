@@ -32,6 +32,20 @@ describe('Tweens.to', () => {
     expect(tw.active).toBe(0);
   });
 
+  it('treats NaN and negative dt as 0', () => {
+    const tw = createTweens();
+    const o = { x: 0 };
+    const t = tw.to(o, { x: 10 }, 1);
+    tw.update(0.5);
+    tw.update(Number.NaN);
+    tw.update(-1);
+    expect(t.elapsed).toBeCloseTo(0.5);
+    expect(o.x).toBeCloseTo(5);
+    tw.update(0.5);
+    expect(o.x).toBe(10);
+    expect(t.complete).toBe(true);
+  });
+
   it('reads start values when the tween starts, after its delay', () => {
     const tw = createTweens();
     const o = { x: 0 };

@@ -5,10 +5,13 @@
  */
 
 /** A cell coordinate (`x` across, `y` down the grid; integers inside the grid). Mutable, reused. */
-export interface Cell {
+export interface NavCell {
   x: number;
   y: number;
 }
+
+/** @deprecated (ws/api-rest, E-036) Use `NavCell`. Removed next minor. */
+export type Cell = NavCell;
 
 /** A point on the world XZ plane. `y` (height) is the game's or `geom`'s job. Mutable, reused. */
 export interface NavPoint {
@@ -81,7 +84,7 @@ export interface NavGrid {
   /** Row-major index of a cell (no bounds check). */
   index(x: number, y: number): number;
   /** The cell under a world point (clamped into the grid). Returns `out`. */
-  toCell(worldX: number, worldZ: number, out: Cell): Cell;
+  toCell(worldX: number, worldZ: number, out: NavCell): NavCell;
   /** The world centre of a cell. Returns `out`. */
   toWorld(cx: number, cy: number, out: NavPoint): NavPoint;
 }
@@ -182,7 +185,7 @@ class Grid implements NavGrid {
     this.version++;
   }
 
-  toCell(worldX: number, worldZ: number, out: Cell): Cell {
+  toCell(worldX: number, worldZ: number, out: NavCell): NavCell {
     const cx = Math.floor((worldX - this.origin.x) / this.cellSize);
     const cy = Math.floor((worldZ - this.origin.z) / this.cellSize);
     out.x = cx < 0 ? 0 : cx >= this.width ? this.width - 1 : cx;

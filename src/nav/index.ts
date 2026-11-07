@@ -19,7 +19,7 @@ export type {
 export { createCrowd } from './crowd';
 export type { FlowDirection, FlowField, FlowFieldOptions } from './flow';
 export { createFlowField } from './flow';
-export type { Cell, EdgeCost, NavGrid, NavGridOptions, NavPoint } from './grid';
+export type { Cell, EdgeCost, NavCell, NavGrid, NavGridOptions, NavPoint } from './grid';
 export { createNavGrid } from './grid';
 // ws/nav-4: areas, obstacles, queue, corridors, mesh flow field.
 export {

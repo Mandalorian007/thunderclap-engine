@@ -23,6 +23,7 @@ export {
   blockBrowserZoom,
   deviceTraits,
   HANDHELD_SHORT_SIDE,
+  isReducedMotion,
   prefersReducedMotion,
   watchLifecycle,
   watchReducedMotion,
@@ -30,7 +31,7 @@ export {
 } from './environment';
 export type { GpuContext, GpuFailureReason, GpuInitOptions, GpuInitResult } from './gpu';
 export { initGpu } from './gpu';
-export type { BackbufferSize, Letterbox, Rect, Vec2 } from './letterbox';
+export type { BackbufferSize, Letterbox, LetterboxRect, Rect, Vec2 } from './letterbox';
 export {
   clientToLogical,
   computeBackbuffer,

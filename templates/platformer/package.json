@@ -3,10 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "A copyable 2D side-scrolling platformer on @thunderclap/engine: a tile map from a string level format, a flipbook player with coyote time and jump buffering, one-way and moving platforms, parallax, a look-ahead camera, a HUD, a pad-walkable pause menu, synthesised sounds and a versioned save. Copy the folder, rename the package, replace levels/.",
+  "description": "A 2D side-scrolling platformer on @thunderclap/engine: a tile map from a string level format, a flipbook player with coyote time and jump buffering, one-way and moving platforms, parallax, a look-ahead camera, a HUD, a pad-walkable pause menu, synthesised sounds and a versioned save. The game-specific code is levels/.",
   "license": "MIT",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "test": "vitest run",

@@ -195,6 +195,7 @@ interface StoredMeta extends SlotMeta {
 }
 
 ## TYPED_CTORS
+@deprecated
 const TYPED_CTORS: Record<TypedKind, TypedCtor>;
 
 ## TypedArrayOf  (type-only)

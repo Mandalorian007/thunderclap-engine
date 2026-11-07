@@ -51,7 +51,7 @@ host over the WebView's window by default) or to a no-op.
 | `openExternal(url)` | `Browser.open` (an in-app sheet; every activation opens, `invalid` for a bad URL) | `base.openExternal` (`window.open`) |
 | `copyText(text)` | `Clipboard.write` → `'copied'`, `'manual'` on a rejection | `base.copyText` |
 | `clipboardWriteAllowed()` | `true` | `base`'s answer |
-| `fullscreen` | `available()` and `active()` false, `toggle()` resolves false; `toggle({ lockLandscape: true })` calls `ScreenOrientation.lock({ orientation: 'landscape' })` | the same, without the lock |
+| `fullscreen` | `available()` and the `active` getter false, `toggle()` resolves false; `toggle({ lockLandscape: true })` calls `ScreenOrientation.lock({ orientation: 'landscape' })` | the same, without the lock |
 | `storage` | `kind: 'preferences'`: a synchronous `StorageLike` over an in-memory mirror of `Preferences` (keys prefixed `tc:`), reads from the mirror, writes through in order; `open()` is null until `await host.ready` | `base.storage` (the WebView's `localStorage`) |
 | `lifecycle` | `App` `appStateChange` / `pause` / `resume`; starts `active`, corrected from `App.getState()` | `base.lifecycle` (document visibility) |
 | `haptics` | `Haptics.impact` (`LIGHT` / `MEDIUM` / `HEAVY`), `Haptics.notification`, `Haptics.vibrate`; `available()` true | `base.haptics` (`navigator.vibrate`) |

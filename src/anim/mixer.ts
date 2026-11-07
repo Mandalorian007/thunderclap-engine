@@ -14,14 +14,14 @@
  */
 import {
   type AnimationClip,
-  type BlendMode,
+  type AnimBlendMode,
   type ClipCursor,
   createClipCursor,
   sampleClip,
 } from './clip';
 import { blendPose, createPose, type Pose, type Skeleton } from './pose';
 
-export interface PlayOptions {
+export interface AnimPlayOptions {
   /** Layer, ascending order of application. Default 0. */
   layer?: number;
   /** Target weight, 0..1. Default 1. */
@@ -33,10 +33,13 @@ export interface PlayOptions {
   /** Seconds to fade the weight in from 0. Default 0. */
   fadeIn?: number;
   /** `'override'` (default) or `'additive'`, see `sampleClip`. */
-  blend?: BlendMode;
+  blend?: AnimBlendMode;
   /** Start time in seconds. Default 0 (or `clip.duration` when `speed < 0`). */
   startTime?: number;
 }
+
+/** @deprecated (ws/api-rest, E-036) Use `AnimPlayOptions`. Removed next minor. */
+export type PlayOptions = AnimPlayOptions;
 
 export type AnimationEventListener = (name: string, action: AnimationAction) => void;
 
@@ -55,7 +58,7 @@ export class AnimationAction {
   time = 0;
   /** Settable: a paused action keeps its pose and weight but does not advance. */
   paused = false;
-  blend: BlendMode = 'override';
+  blend: AnimBlendMode = 'override';
   /** True once a non-looping action reached its end (or start when reversed). */
   finished = false;
   /** `weight × fade` from the last update; what the pose actually used. */
@@ -126,7 +129,7 @@ export class AnimationMixer {
   }
 
   /** Start `clip` in a free slot. Throws when the pool (`maxActions`) is full. */
-  play(clip: AnimationClip, opts: PlayOptions = {}): AnimationAction {
+  play(clip: AnimationClip, opts: AnimPlayOptions = {}): AnimationAction {
     let slot: AnimationAction | null = null;
     for (const a of this.actions) {
       if (!a.clip) {
@@ -169,7 +172,7 @@ export class AnimationMixer {
     from: AnimationAction,
     to: AnimationClip | AnimationAction,
     seconds: number,
-    opts: PlayOptions = {},
+    opts: AnimPlayOptions = {},
   ): AnimationAction {
     const target =
       to instanceof AnimationAction

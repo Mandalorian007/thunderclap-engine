@@ -45,7 +45,7 @@ iOS or Android store app. Nothing else in the engine touches `window.open`, `nav
 | `Host` | The interface: `FrameSource` plus `kind`, `embed`, `openExternal`, `copyText`, `clipboardWriteAllowed`, `fullscreen`, `storage` and the optional `window`, `lifecycle`, `haptics` and `safeArea` |
 | `HostKind` | `'web' \| 'electron' \| 'xr' \| 'capacitor'` |
 | `FrameSource` | `requestFrame(cb: (timeMs) => void): number` and `cancelFrame(handle)`; what `GameLoop` schedules through |
-| `HostFullscreen` | `available()`, `active()`, `toggle({ lockLandscape? }): Promise<boolean>`, `watch(fn): () => void` |
+| `HostFullscreen` | `available()`, `active` (getter), `toggle({ lockLandscape? }): Promise<boolean>`, `watch(fn): () => void` |
 | `HostStorage` | `kind` (`'local'` on the web host) and `open(): StorageLike \| null`, probed on every call |
 | `HostWindow` | Desktop window controls: `close()`, optional `minimize`, `toggleMaximize`, `setTitle` |
 | `HostLifecycle` / `HostLifecycleState` | `state(): 'active' \| 'background'` and `watch(fn)` (called on each change). `createGame` stops frames and flushes the save on `background`, restarts on `active`, and calls `hooks.lifecycle(state)` |
@@ -70,7 +70,7 @@ host.embed; // 'top' | 'same-origin-frame' | 'cross-origin-frame' (detected)
 host.openExternal(url, { activation: 'gamepad' }); // 'opened' | 'blocked' | 'invalid'
 await host.copyText(url); // 'copied' | 'manual' (show the URL in a field)
 host.clipboardWriteAllowed(); // false in itch's iframe: copy goes through execCommand
-host.fullscreen.available(); host.fullscreen.active();
+host.fullscreen.available(); host.fullscreen.active; // getter
 await host.fullscreen.toggle({ lockLandscape: true });
 const off = host.fullscreen.watch((on) => {});
 host.storage.open(); // a StorageLike, or null (missing, blocked, or a write throws); probes each call

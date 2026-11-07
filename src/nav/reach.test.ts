@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { findPath } from './astar';
-import { type Cell, createNavGrid, type NavGrid } from './grid';
+import { createNavGrid, type NavCell, type NavGrid } from './grid';
 import { createNavPath, type NavPath } from './path';
 import { createReach, reachable } from './reach';
 
 function cells(grid: NavGrid, path: NavPath): [number, number][] {
-  const c: Cell = { x: 0, y: 0 };
+  const c: NavCell = { x: 0, y: 0 };
   const out: [number, number][] = [];
   for (let i = 0; i < path.length; i++) {
     grid.toCell(path.points[i * 2]!, path.points[i * 2 + 1]!, c);

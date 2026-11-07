@@ -3,7 +3,7 @@
  * desired velocity per tick, and string pulling (`smoothPath` over `hasLineOfWalkable`, both
  * honouring the grid's edge-cost hook). Allocation-free after the path's capacity settles.
  */
-import type { Cell, EdgeCost, NavGrid, NavPoint } from './grid';
+import type { EdgeCost, NavCell, NavGrid, NavPoint } from './grid';
 
 export interface NavPath {
   /** Waypoints as world `x, z` pairs; `length * 2` floats are valid. Grows in place as needed. */
@@ -161,8 +161,8 @@ export function hasLineOfWalkable(
   return true;
 }
 
-const sa: Cell = { x: 0, y: 0 };
-const sb: Cell = { x: 0, y: 0 };
+const sa: NavCell = { x: 0, y: 0 };
+const sb: NavCell = { x: 0, y: 0 };
 
 /**
  * String pulling: drops every waypoint that a straight line of walkable cells can skip, in

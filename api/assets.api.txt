@@ -10,7 +10,7 @@ interface AssetCache<T = unknown> {
     has(key: string): boolean;
     refs(key: string): number;
     dispose(key: string): boolean;
-    stats(): AssetCacheStats;
+    readonly stats: AssetCacheStats;
 }
 
 ## AssetCacheOptions  (type-only)

@@ -52,7 +52,7 @@ Every handler checks that the call came from the main frame of the shell's windo
 - `kind: 'electron'`; `embed` is detected, so it is `top` in the shell.
 - `openExternal` returns `invalid` for a bad URL without calling the bridge. Otherwise it returns `opened` for every activation, because a desktop window has no popup blocker.
 - `copyText` returns `copied` when the bridge succeeds, else `manual`. `clipboardWriteAllowed()` is `true`.
-- `fullscreen.active()` is synchronous and kept up to date by the main process's change events.
+- `fullscreen.active` is a synchronous getter and kept up to date by the main process's change events.
 - `window` exposes `close`, `minimize`, `toggleMaximize` and `setTitle`. `HostWindow.setTitle?` was added to the engine for it.
 
 ## WebGPU switches

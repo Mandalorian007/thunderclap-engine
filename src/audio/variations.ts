@@ -2,7 +2,7 @@
  * Round-robin-ish one-shots: footsteps, impacts, hits. Picks one of several buffers at random,
  * never the one just played, with a little pitch and gain jitter so repeats do not sound stamped.
  */
-import type { AudioEngine, OutputBus, PlayOptions, Voice } from './audio';
+import type { AudioEngine, AudioPlayOptions, OutputBus, Voice } from './audio';
 import { dbToGain } from './dsp';
 
 export interface VariationsOptions {
@@ -20,7 +20,7 @@ export interface VariationsOptions {
 
 export interface Variations {
   /** Play one variation. `opts.rate` and `opts.gain` are multiplied by the jitter. */
-  play(opts?: PlayOptions): Voice;
+  play(opts?: AudioPlayOptions): Voice;
   /** Index of the buffer played last, -1 before the first play. */
   readonly last: number;
   readonly count: number;

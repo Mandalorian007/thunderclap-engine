@@ -51,7 +51,7 @@ const probe: DesktopProbe = {
     storage: host.storage.open() !== null,
     clipboardWriteAllowed: host.clipboardWriteAllowed(),
     fullscreenAvailable: host.fullscreen.available(),
-    fullscreenActive: host.fullscreen.active(),
+    fullscreenActive: host.fullscreen.active,
     hasWindow: !!host.window,
   }),
   open: (url, activation) => host.openExternal(url, { activation }),

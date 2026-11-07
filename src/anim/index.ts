@@ -10,6 +10,7 @@ export type {
   AnimationChannel,
   AnimationClip,
   AnimationEvent,
+  AnimBlendMode,
   BlendMode,
   ChannelPath,
   ClipCursor,
@@ -52,7 +53,12 @@ export type { IkChain, IkChainDesc, LookAtOptions, TwoBoneIkOptions } from './ik
 export { createIkChain, lookAt, twoBoneIk } from './ik';
 export type { FindBestFrameOptions, PoseFeatures, PoseFeaturesOptions, PoseMatch } from './match';
 export { buildPoseFeatures, findBestFrame, rootSpacePositions } from './match';
-export type { AnimationEventListener, AnimationMixerOptions, PlayOptions } from './mixer';
+export type {
+  AnimationEventListener,
+  AnimationMixerOptions,
+  AnimPlayOptions,
+  PlayOptions,
+} from './mixer';
 export { AnimationAction, AnimationMixer } from './mixer';
 export type { MorphBlender, MorphLayout, MorphTarget } from './morph';
 export { createMorphBlender } from './morph';

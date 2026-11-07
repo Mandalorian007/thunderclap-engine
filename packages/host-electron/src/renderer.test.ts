@@ -123,14 +123,14 @@ describe('createElectronHost', () => {
     const host = createElectronHost({ bridge });
     expect(host.fullscreen.available()).toBe(true);
     await tick();
-    expect(host.fullscreen.active()).toBe(true);
+    expect(host.fullscreen.active).toBe(true);
 
     const seen: boolean[] = [];
     const off = host.fullscreen.watch((on) => seen.push(on));
     expect(await host.fullscreen.toggle()).toBe(false);
-    expect(host.fullscreen.active()).toBe(false);
+    expect(host.fullscreen.active).toBe(false);
     bridge.emit(true); // e.g. the macOS green button
-    expect(host.fullscreen.active()).toBe(true);
+    expect(host.fullscreen.active).toBe(true);
     bridge.emit(true); // no change, no report
     off();
     bridge.emit(false);
@@ -142,7 +142,7 @@ describe('createElectronHost', () => {
     const host = createElectronHost({ bridge });
     await tick();
     expect(await host.fullscreen.toggle()).toBe(false);
-    expect(host.fullscreen.active()).toBe(false);
+    expect(host.fullscreen.active).toBe(false);
   });
 
   it('window controls call the bridge', () => {
