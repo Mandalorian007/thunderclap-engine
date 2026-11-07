@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { createFakeDevice, type FakeBuffer, type FakeDevice } from '../render/fake-gpu';
+import {
+  createFakeDevice,
+  type FakeBuffer,
+  type FakeDevice,
+  fakeSceneTargets,
+} from '../render/fake-gpu';
 import type { Renderer } from '../render/renderer';
 import { ParticleSystem } from './particles';
 
@@ -9,6 +14,8 @@ function makeSystem(capacity = 256): { fake: FakeDevice; ps: ParticleSystem } {
     device: fake.device,
     globalsLayout: fake.device.createBindGroupLayout({ entries: [] }),
     sceneFormats: ['rgba16float', 'rgba16float'],
+    sceneTargets: fakeSceneTargets,
+    target: { auxKey: 0 },
   } as unknown as Renderer;
   return { fake, ps: new ParticleSystem(renderer, { capacity }) };
 }
@@ -78,10 +85,10 @@ describe('ParticleSystem.draw', () => {
   it('uses the plain pipeline without depth and a test-only depth pipeline with it', () => {
     const { fake, ps } = makeSystem();
     const { p } = pass(fake);
-    ps.draw(p, { depthFormat: null } as never);
+    ps.draw(p, { depthFormat: null, auxKey: 0 } as never);
     expect(pipelineOf(fake).label).toBe('particles-render');
     expect(pipelineOf(fake).desc.depthStencil).toBeUndefined();
-    ps.draw(pass(fake).p, { depthFormat: 'depth24plus' } as never);
+    ps.draw(pass(fake).p, { depthFormat: 'depth24plus', auxKey: 0 } as never);
     const d = pipelineOf(fake);
     expect(d.label).toBe('particles-render:depth24plus');
     expect(d.desc.depthStencil).toEqual({
@@ -92,7 +99,7 @@ describe('ParticleSystem.draw', () => {
     expect(d.desc.fragment).toBe(pipelineOf(fake).desc.fragment);
     // Cached: a second depth frame makes no new pipeline.
     const before = fake.passes.length;
-    ps.draw(pass(fake).p, { depthFormat: 'depth24plus' } as never);
+    ps.draw(pass(fake).p, { depthFormat: 'depth24plus', auxKey: 0 } as never);
     expect(fake.passes.length).toBe(before + 1);
     expect(pipelineOf(fake)).toBe(d);
   });

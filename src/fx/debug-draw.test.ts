@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { createFakeDevice, type FakeDevice, type FakePass } from '../render/fake-gpu';
+import {
+  createFakeDevice,
+  type FakeDevice,
+  type FakePass,
+  fakeSceneTargets,
+} from '../render/fake-gpu';
 import type { Frame } from '../render/frame';
 import type { Renderer } from '../render/renderer';
 import { Transform } from '../render/transform';
@@ -13,6 +18,8 @@ function make(opts: DebugDrawOptions = {}) {
     device: fake.device,
     globalsLayout: fake.device.createBindGroupLayout({ entries: [] }),
     sceneFormats: ['rgba16float', 'rgba16float'],
+    sceneTargets: fakeSceneTargets,
+    target: { auxKey: 0 },
   } as unknown as Renderer;
   return { fake, dd: createDebugDraw(renderer, opts) };
 }
@@ -24,7 +31,7 @@ function pass(fake: FakeDevice): { pass: GPURenderPassEncoder; rec: () => FakePa
 }
 
 function frame(depthFormat: GPUTextureFormat | null): Frame {
-  return { depthFormat } as Frame;
+  return { depthFormat, auxKey: 0 } as Frame;
 }
 
 describe('DebugDraw shapes', () => {

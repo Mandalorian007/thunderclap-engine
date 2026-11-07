@@ -1045,6 +1045,27 @@ rough-metal, bit 1 velocity) keys the pipeline variants.
   bound, and the 2D path is untouched.
 - `camera.previousViewProj` (see *Camera jitter and history*) is the other half: the previous
   clip position is `prev_view_proj × previous world position`.
+- **Pipelines drawing into the scene pass take their targets from `renderer.sceneTargets`**
+  (ws/render-10). `renderer.sceneTargets(blend?, aux = renderer.target.auxKey)` returns the
+  colour target list of a scene pass with that aux key: colour and emissive (`sceneFormats`,
+  with `blend`), then `rough-metal` and `velocity` when the key has them, with `writeMask: 0`
+  (the pipeline does not write them). The list is cached per (blend object, aux), so calling it
+  allocates nothing after the first time. `renderer.sceneFormats` alone is the 2-target list and
+  fails validation in an aux pass. Every view's target can differ (an aux `renderer.target`, a
+  plain offscreen `SceneTarget`, an XR eye), so `frame.auxKey` gives the key of the view being
+  drawn beside `frame.depthFormat`. A drawable keys its pipelines on the target set (depth
+  format × aux key) and builds each variant on first use, `renderer.sceneTargets(blend,
+  frame.auxKey)`. Nothing is rebuilt: a target's aux set is fixed when it is made, so a new set
+  is a new key. Every shipped drawable does this: `Sky`, `ParticleSystem` (2D and world),
+  `Decals`, `Water`, `Billboards`, `DebugDraw` and, through `Material.targetsFor`, every
+  material. `WorldPanel` (`@thunderclap/engine/ui`) builds its pipelines from the helper for
+  `renderer.target` only; in a view whose target has a different aux set (an XR eye beside an
+  aux `renderer.target`) it is still wrong. `src/fx/render10.test.ts` checks, on the fake GPU,
+  that every pipeline bound in a `scene` or `scene-blend` pass declares as many targets as the
+  pass has attachments, with aux on and off.
+- XR eye targets (`XrSurface`) are made without aux: VR draws camera-only, with no velocity or
+  rough-metal input to post. `SceneTarget.external` takes `aux`, but the platform does not ask
+  for it yet.
 
 Mode `?aux` of `harness/render4.html` renders into a target with both attachments: a quad
 with a roughness gradient and a cube sliding through a velocity list, both read back through a
@@ -1054,7 +1075,9 @@ row sliding and one standing, through the same per-frame churn, and reads the ve
 rock's centre (`velocityMoving` above zero, `velocityStatic` zero; `&unkeyed` and `&still` are
 the controls); `?single-velocity` slides one rock drawn by `frame.mesh` under a still camera
 (`velocityMoving` above zero on the rock, `velocityStatic` 0 on the background; `&still` the
-control); `e2e/render7.spec.ts` checks them. Switching
+control); `e2e/render7.spec.ts` checks them. `harness/render10.html` draws sky, water, box decals, world
+and 2D particles, billboards and debug lines through `createGame({ aux })`, `?aux=velocity`
+(default), `all` or `none`; `e2e/render10.spec.ts` checks it reports `gpuErrors: 0`. Switching
 TAA, SSR and motion blur over to these inputs is ws/post-4 (see `src/post/README.md`).
 
 ### Per-draw uniforms
@@ -1289,7 +1312,8 @@ that device, or reports the typed error.
   without knowing the layout.
 - `Drawable { prepare?(encoder, frame); draw(pass, frame) }` lets you run your own pipelines
   inside the scene pass. Build them with `layout: [renderer.globalsLayout, yours]` and
-  `targets: renderer.sceneFormats`.
+  `targets: renderer.sceneTargets(blend, frame.auxKey)`, one pipeline per target set (see
+  *Aux targets*).
 
 ### Depth hooks
 
@@ -1321,7 +1345,8 @@ the pieces. `Water` and `ParticleSystem` take `readsDepth` and then skip their o
   props run in Node. It is test-only and not exported from the index.
   `installGpuGlobals()` defines `GPUBufferUsage`, `GPUTextureUsage`, `GPUShaderStage` and
   `GPUMapMode` in Node;
-  `fakeCanvasContext(fake)` is the context `fakeRendererGpu` uses. What a test inspects on a
+  `fakeCanvasContext(fake)` is the context `fakeRendererGpu` uses;
+  `fakeSceneTargets(blend?, aux?)` is `renderer.sceneTargets` for a stub renderer (ws/render-10). What a test inspects on a
   `FakeDevice`: `buffers` (`FakeBuffer`: `size`, `usage`, `destroyed`), `textures`
   (`FakeTexture`, whose views are `FakeView`s), `bindGroups` (`FakeBindGroup`: layout and
   entries), `writes`, `textureWrites`, `passes` (`FakePass`: `kind`, `label`, `commands`) and

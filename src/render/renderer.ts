@@ -33,6 +33,7 @@ import {
   Material,
   type MaterialDesc,
   SPRITE_WGSL,
+  sceneColorTargets,
 } from './material';
 import { Mesh, type MeshBounds, type MeshDesc, quadGeometry, VERTEX_LAYOUT_2D } from './mesh';
 import { PingPong } from './ping-pong';
@@ -300,6 +301,12 @@ interface DrawCmd {
 const LANE_STRIDE = 48;
 
 /** What `resolve`'s built-in present clears to when it covers the whole output. */
+/** `sceneTargets` cache key for a pipeline without blending. */
+const NO_BLEND: GPUBlendState = Object.freeze({
+  color: Object.freeze({}),
+  alpha: Object.freeze({}),
+}) as GPUBlendState;
+
 const PRESENT_CLEAR: GPUColorDict = { r: 0, g: 0, b: 0, a: 1 };
 /** Globals block (binding 0) floats: logicalSize, targetSize, time, dt, pad. */
 const GLOBALS_FLOATS = 8;
@@ -448,6 +455,11 @@ export class Renderer implements FrameSink {
   readonly context: GPUCanvasContext;
   /** Swapchain format. */
   readonly format: GPUTextureFormat;
+  /**
+   * Formats of the scene pass's two base colour targets (HDR colour, HDR emissive). A target
+   * with aux attachments adds more after them: build a pipeline's target list with
+   * `sceneTargets`, not from this.
+   */
   readonly sceneFormats: readonly GPUTextureFormat[] = [SCENE_FORMAT, SCENE_FORMAT];
   readonly logicalWidth: number;
   readonly logicalHeight: number;
@@ -551,6 +563,12 @@ export class Renderer implements FrameSink {
   private readonly usedDepth: boolean[] = [];
   /** The last depth camera into each used target (ws/post-depth: `PostInputs.projection`). */
   private readonly usedCamera: Camera[] = [];
+  /** `sceneTargets` lists per blend state object (`NO_BLEND` for none; weak, so a caller's
+   * fresh blend object is not kept), indexed by aux key. */
+  private readonly sceneTargetLists = new WeakMap<
+    GPUBlendState,
+    (GPUColorTargetState[] | undefined)[]
+  >();
   /** The target `buildDraws` is building for (its aux set keys the pipelines). */
   private drawTarget: SceneTarget | null = null;
   private readonly postProjection: PostProjection = { near: 0, far: 0, proj: new Float32Array(16) };
@@ -858,6 +876,33 @@ export class Renderer implements FrameSink {
   onResize(fn: (width: number, height: number) => void): () => void {
     this.resizeListeners.add(fn);
     return () => this.resizeListeners.delete(fn);
+  }
+
+  /**
+   * The colour target list (`GPUFragmentState.targets`) of a pipeline that draws into the
+   * scene pass of a target with aux key `aux` (`SceneTarget.auxKey`; default
+   * `renderer.target`'s, ws/render-10): colour and emissive (`sceneFormats`) with `blend`,
+   * then each aux attachment the target has (rough-metal, velocity) with `writeMask: 0`. Every
+   * pipeline drawing into the scene pass takes its targets from here (materials build theirs
+   * the same way), so its count matches the pass's whichever aux attachments are on. A
+   * `Drawable` that may draw into more than one target keys its pipelines on
+   * `frame.auxKey` (set per view, like `frame.depthFormat`) and passes it here. The list is
+   * built once per (`blend`, `aux`) and the same array returned after; do not mutate it.
+   */
+  sceneTargets(blend?: GPUBlendState, aux: number = this.target.auxKey): GPUColorTargetState[] {
+    const key = blend ?? NO_BLEND;
+    let lists = this.sceneTargetLists.get(key);
+    if (!lists) {
+      lists = [undefined, undefined, undefined, undefined];
+      this.sceneTargetLists.set(key, lists);
+    }
+    const a = aux & 3;
+    let t = lists[a];
+    if (!t) {
+      t = sceneColorTargets(this.sceneFormats, a, blend, false);
+      lists[a] = t;
+    }
+    return t;
   }
 
   // ---------------------------------------------------------------- resources
@@ -1906,6 +1951,7 @@ export class Renderer implements FrameSink {
     const cull = cam.cull;
     const shadowCfg = this.frame.lights.sun.shadow;
     this.frame.depthFormat = depth ? DEPTH_FORMAT : null;
+    this.frame.auxKey = target.auxKey;
     const recs = this.recs;
     const n = this.recCount;
     this.scene.count = 0;

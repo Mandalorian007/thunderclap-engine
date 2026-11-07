@@ -1,5 +1,6 @@
 import type { Drawable, Frame } from '../render/frame';
 import type { Renderer } from '../render/renderer';
+import { auxSuffix, ScenePipelineCache, sceneVariant } from '../render/scene-pipelines';
 import type { ReadonlyQuat, ReadonlyVec3, Transform } from '../render/transform';
 import { createShaderModule } from '../render/wgsl';
 import { DEBUG_DRAW_WGSL } from './debug-wgsl';
@@ -31,8 +32,6 @@ const SF = DEBUG_VERTEX_FLOATS * 2;
 const STRIDE = DEBUG_VERTEX_FLOATS * 4;
 const DEFAULT_CAPACITY = 16384;
 const GROWTH = 1.5;
-/** Key for the pipeline of a frame without a depth attachment (the 2D path). */
-const NO_DEPTH = 'none';
 
 const ALPHA_BLEND: GPUBlendState = {
   color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
@@ -139,7 +138,12 @@ export class DebugDraw implements Drawable {
   private readonly label: string;
   private readonly depth: 'test' | 'always';
   private readonly retain: boolean;
-  private readonly pipelines = new Map<GPUTextureFormat | typeof NO_DEPTH, GPURenderPipeline>();
+  private readonly renderer: Renderer;
+  /**
+   * Pipelines per depth format (null: none) × the view target's aux key, built on first use
+   * from `renderer.sceneTargets` (ws/render-10).
+   */
+  private readonly pipelines = new ScenePipelineCache();
   private readonly desc: GPURenderPipelineDescriptor;
   private verts: Float32Array<ArrayBuffer>;
   private buffer: GPUBuffer | null = null;
@@ -154,6 +158,7 @@ export class DebugDraw implements Drawable {
 
   constructor(renderer: Renderer, opts: DebugDrawOptions = {}) {
     this.device = renderer.device;
+    this.renderer = renderer;
     this.label = opts.label ?? 'debug-draw';
     this.depth = opts.depth ?? 'test';
     this.retain = opts.retain ?? false;
@@ -179,7 +184,7 @@ export class DebugDraw implements Drawable {
       fragment: {
         module,
         entryPoint: 'fs',
-        targets: renderer.sceneFormats.map((format) => ({ format, blend: ALPHA_BLEND })),
+        targets: renderer.sceneTargets(ALPHA_BLEND),
       },
       primitive: { topology: 'line-list' },
     };
@@ -550,33 +555,34 @@ export class DebugDraw implements Drawable {
       }
       this.device.queue.writeBuffer(buffer, 0, this.verts, 0, n * SF);
       this._uploads++;
-      pass.setPipeline(this.pipeline(frame.depthFormat));
+      pass.setPipeline(this.pipeline(frame.depthFormat, frame.auxKey));
       pass.setVertexBuffer(0, buffer, 0, n * SF * 4);
       pass.draw(n * 2);
     }
     if (!this.retain) this.segments = 0;
   }
 
-  private pipeline(format: GPUTextureFormat | null): GPURenderPipeline {
-    const key = format ?? NO_DEPTH;
-    let p = this.pipelines.get(key);
-    if (!p) {
-      p = this.device.createRenderPipeline(
-        format
-          ? {
-              ...this.desc,
-              label: `${this.label}:${format}:${this.depth}`,
-              depthStencil: {
+  private pipeline(format: GPUTextureFormat | null, aux: number): GPURenderPipeline {
+    const p = this.pipelines.get(format, aux);
+    if (p) return p;
+    return this.pipelines.set(
+      format,
+      aux,
+      this.device.createRenderPipeline(
+        sceneVariant(
+          this.desc,
+          this.renderer.sceneTargets(ALPHA_BLEND, aux),
+          `${this.label}${format ? `:${format}:${this.depth}` : ''}${auxSuffix(aux)}`,
+          format
+            ? {
                 format,
                 depthWriteEnabled: false,
                 depthCompare: this.depth === 'always' ? 'always' : 'less-equal',
-              },
-            }
-          : this.desc,
-      );
-      this.pipelines.set(key, p);
-    }
-    return p;
+              }
+            : undefined,
+        ),
+      ),
+    );
   }
 
   /** Free the GPU buffer. The object draws nothing afterwards until segments are appended. */

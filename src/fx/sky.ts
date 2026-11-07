@@ -1,6 +1,7 @@
 import type { Camera } from '../render/camera';
 import type { Drawable, Frame } from '../render/frame';
 import type { Renderer } from '../render/renderer';
+import { auxSuffix, ScenePipelineCache, sceneVariant } from '../render/scene-pipelines';
 import { createShaderModule } from '../render/wgsl';
 import { SKY_WGSL } from './sky-wgsl';
 
@@ -80,13 +81,17 @@ export class Sky implements Drawable {
   private readonly paramsBuffer: GPUBuffer;
   private readonly group: GPUBindGroup;
   private readonly desc: GPURenderPipelineDescriptor;
-  private readonly flatPipeline: GPURenderPipeline;
-  /** Per depth format: the same pipeline with a test-only `depthStencil` (built on first use). */
-  private readonly depthPipelines = new Map<GPUTextureFormat, GPURenderPipeline>();
+  private readonly renderer: Renderer;
+  /**
+   * Pipelines per depth format (null: none; a depth one tests without writing) × the view
+   * target's aux key, built on first use from `renderer.sceneTargets` (ws/render-10).
+   */
+  private readonly pipelines = new ScenePipelineCache();
 
   constructor(renderer: Renderer, opts: SkyOptions = {}) {
     const device = renderer.device;
     this.device = device;
+    this.renderer = renderer;
     set3(this.zenith, opts.zenith ?? DEFAULT_ZENITH);
     set3(this.horizon, opts.horizon ?? DEFAULT_HORIZON);
     set3(this.ground, opts.ground ?? DEFAULT_GROUND);
@@ -125,11 +130,11 @@ export class Sky implements Drawable {
       fragment: {
         module,
         entryPoint: 'fs',
-        targets: renderer.sceneFormats.map((format) => ({ format })),
+        targets: renderer.sceneTargets(),
       },
       primitive: { topology: 'triangle-list', cullMode: 'none' },
     };
-    this.flatPipeline = device.createRenderPipeline(this.desc);
+    this.pipelines.set(null, renderer.target.auxKey, device.createRenderPipeline(this.desc));
   }
 
   /**
@@ -163,22 +168,26 @@ export class Sky implements Drawable {
   /** Draw inside the scene pass: one 3-vertex draw, a depth pipeline when the frame has depth. */
   draw(pass: GPURenderPassEncoder, frame?: Frame): void {
     const fmt = frame?.depthFormat ?? null;
-    pass.setPipeline(fmt ? this.depthPipeline(fmt) : this.flatPipeline);
+    pass.setPipeline(this.pipelineFor(fmt, frame ? frame.auxKey : this.renderer.target.auxKey));
     pass.setBindGroup(1, this.group);
     pass.draw(3);
   }
 
-  private depthPipeline(format: GPUTextureFormat): GPURenderPipeline {
-    let p = this.depthPipelines.get(format);
-    if (!p) {
-      p = this.device.createRenderPipeline({
-        ...this.desc,
-        label: `sky:${format}`,
-        depthStencil: { format, depthWriteEnabled: false, depthCompare: 'less-equal' },
-      });
-      this.depthPipelines.set(format, p);
-    }
-    return p;
+  private pipelineFor(format: GPUTextureFormat | null, aux: number): GPURenderPipeline {
+    const p = this.pipelines.get(format, aux);
+    if (p) return p;
+    return this.pipelines.set(
+      format,
+      aux,
+      this.device.createRenderPipeline(
+        sceneVariant(
+          this.desc,
+          this.renderer.sceneTargets(undefined, aux),
+          `sky${format ? `:${format}` : ''}${auxSuffix(aux)}`,
+          format ? { format, depthWriteEnabled: false, depthCompare: 'less-equal' } : undefined,
+        ),
+      ),
+    );
   }
 
   destroy(): void {

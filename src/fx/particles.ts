@@ -1,6 +1,7 @@
 import type { Random } from '../core/random';
 import type { Drawable, Frame, ViewInfo } from '../render/frame';
 import type { Renderer } from '../render/renderer';
+import { auxSuffix, ScenePipelineCache, sceneVariant } from '../render/scene-pipelines';
 import type { SceneTarget } from '../render/scene-target';
 import type { Texture, TextureLike } from '../render/texture';
 import { createShaderModule } from '../render/wgsl';
@@ -518,10 +519,13 @@ export class ParticleSystem implements Drawable {
   private readonly maxSpawns: number;
   private readonly spawnPipeline: GPUComputePipeline;
   private readonly updatePipeline: GPUComputePipeline;
-  private readonly renderPipeline: GPURenderPipeline;
-  /** Per depth format: the same pipeline with a test-only `depthStencil` (made on first use). */
-  private readonly depthPipelines = new Map<GPUTextureFormat, GPURenderPipeline>();
+  /**
+   * Render pipelines per depth format (null: none; a depth one tests without writing) × the
+   * view target's aux key, made on first use from `renderer.sceneTargets` (ws/render-10).
+   */
+  private readonly pipelines = new ScenePipelineCache();
   private readonly renderDesc: GPURenderPipelineDescriptor;
+  private readonly blend: GPUBlendState;
   private computeGroup: GPUBindGroup;
   private readonly renderGroup: GPUBindGroup;
   private readonly soft: SoftDepth | null = null;
@@ -690,11 +694,12 @@ export class ParticleSystem implements Drawable {
       fragment: {
         module: rmod,
         entryPoint: 'fs',
-        targets: renderer.sceneFormats.map((format) => ({ format, blend })),
+        targets: renderer.sceneTargets(blend),
       },
       primitive: { topology: 'triangle-list' },
     };
-    this.renderPipeline = device.createRenderPipeline(this.renderDesc);
+    this.blend = blend;
+    this.pipelines.set(null, renderer.target.auxKey, device.createRenderPipeline(this.renderDesc));
 
     if (world) this.soft = this.makeSoftDepth(renderLayout);
     this.renderGroup = this.makeRenderGroup(
@@ -1498,7 +1503,7 @@ export class ParticleSystem implements Drawable {
    */
   draw(pass: GPURenderPassEncoder, frame?: Frame): void {
     const fmt = frame?.depthFormat ?? null;
-    pass.setPipeline(fmt ? this.depthPipeline(fmt) : this.renderPipeline);
+    pass.setPipeline(this.pipelineFor(fmt, frame ? frame.auxKey : this.renderer.target.auxKey));
     pass.setBindGroup(1, this.depthGroup ?? this.renderGroup);
     pass.draw(6, this.capacity);
   }
@@ -1564,17 +1569,22 @@ export class ParticleSystem implements Drawable {
     }
   }
 
-  private depthPipeline(format: GPUTextureFormat): GPURenderPipeline {
-    let p = this.depthPipelines.get(format);
-    if (!p) {
-      p = this.device.createRenderPipeline({
-        ...this.renderDesc,
-        label: `${this.renderDesc.label}:${format}`,
-        depthStencil: { format, depthWriteEnabled: false, depthCompare: 'less-equal' },
-      });
-      this.depthPipelines.set(format, p);
-    }
-    return p;
+  private pipelineFor(format: GPUTextureFormat | null, aux: number): GPURenderPipeline {
+    const p = this.pipelines.get(format, aux);
+    if (p) return p;
+    const desc = this.renderDesc;
+    return this.pipelines.set(
+      format,
+      aux,
+      this.device.createRenderPipeline(
+        sceneVariant(
+          desc,
+          this.renderer.sceneTargets(this.blend, aux),
+          `${desc.label}${format ? `:${format}` : ''}${auxSuffix(aux)}`,
+          format ? { format, depthWriteEnabled: false, depthCompare: 'less-equal' } : undefined,
+        ),
+      ),
+    );
   }
 
   /**

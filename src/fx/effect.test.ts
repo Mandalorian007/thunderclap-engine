@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createFakeDevice } from '../render/fake-gpu';
+import { createFakeDevice, fakeSceneTargets } from '../render/fake-gpu';
 import type { Renderer } from '../render/renderer';
 import { createEffect, type EffectDesc, validateEffectDesc } from './effect';
 import { HIT_SPARK_EFFECT, MAGIC_AURA_EFFECT, SMOKE_PUFF_EFFECT } from './effects';
@@ -10,7 +10,8 @@ function fakeRenderer() {
     device: fake.device,
     globalsLayout: fake.device.createBindGroupLayout({ entries: [] }),
     sceneFormats: ['rgba16float', 'rgba16float'],
-    target: { depth: null },
+    sceneTargets: fakeSceneTargets,
+    target: { depth: null, auxKey: 0 },
   } as unknown as Renderer;
   return { fake, renderer };
 }

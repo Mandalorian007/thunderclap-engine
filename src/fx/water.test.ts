@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { createFakeDevice, type FakeDevice, type FakeTexture } from '../render/fake-gpu';
+import {
+  createFakeDevice,
+  type FakeDevice,
+  type FakeTexture,
+  fakeSceneTargets,
+} from '../render/fake-gpu';
 import type { Frame, ViewInfo } from '../render/frame';
 import { Mesh, type MeshDesc } from '../render/mesh';
 import type { Renderer } from '../render/renderer';
@@ -18,6 +23,7 @@ function makeWater(opts: WaterOptions = {}, depth = true) {
       })
     : null;
   const target = {
+    auxKey: 0,
     depth: depthTex
       ? { view: depthTex.createView(), width: 320, height: 180, texture: depthTex }
       : null,
@@ -27,6 +33,7 @@ function makeWater(opts: WaterOptions = {}, depth = true) {
     device,
     globalsLayout: device.createBindGroupLayout({ entries: [] }),
     sceneFormats: ['rgba16float', 'rgba16float'],
+    sceneTargets: fakeSceneTargets,
     target,
     createMesh: (desc: MeshDesc) => {
       descs.push(desc);
@@ -37,8 +44,8 @@ function makeWater(opts: WaterOptions = {}, depth = true) {
   return { fake, water, target, descs };
 }
 
-const DEPTH_FRAME = { depthFormat: 'depth24plus' } as unknown as Frame;
-const FLAT_FRAME = { depthFormat: null } as unknown as Frame;
+const DEPTH_FRAME = { depthFormat: 'depth24plus', auxKey: 0 } as unknown as Frame;
+const FLAT_FRAME = { depthFormat: null, auxKey: 0 } as unknown as Frame;
 
 function encoder(fake: FakeDevice) {
   return fake.device.createCommandEncoder();
@@ -100,7 +107,7 @@ describe('Water', () => {
       'rgba16float',
     ]);
     expect(flat.desc.vertex.buffers).toHaveLength(1);
-    water.draw(scenePass(fake), { depthFormat: 'depth32float' } as unknown as Frame);
+    water.draw(scenePass(fake), { depthFormat: 'depth32float', auxKey: 0 } as unknown as Frame);
     expect(lastPipeline(fake).label).toBe('water:depth32float');
     water.draw(scenePass(fake), DEPTH_FRAME);
     expect(lastPipeline(fake)).toBe(depth);

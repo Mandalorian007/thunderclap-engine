@@ -7,6 +7,7 @@ import {
   type FakeDevice,
   type FakeView,
   fakeRendererGpu,
+  fakeSceneTargets,
 } from '../render/fake-gpu';
 import type { Frame } from '../render/frame';
 import { Renderer } from '../render/renderer';
@@ -43,14 +44,15 @@ function makeDecals(opts: Partial<DecalsOptions> = {}, withDepth = false) {
     device,
     globalsLayout: device.createBindGroupLayout({ entries: [] }),
     sceneFormats: ['rgba16float', 'rgba16float'],
-    target: { depth },
+    sceneTargets: fakeSceneTargets,
+    target: { depth, auxKey: 0 },
   } as unknown as Renderer;
   const decals = new Decals(renderer, { texture, ...opts });
   return { fake, decals };
 }
 
-const DEPTH_FRAME = { depthFormat: 'depth24plus' } as unknown as Frame;
-const FLAT_FRAME = { depthFormat: null } as unknown as Frame;
+const DEPTH_FRAME = { depthFormat: 'depth24plus', auxKey: 0 } as unknown as Frame;
+const FLAT_FRAME = { depthFormat: null, auxKey: 0 } as unknown as Frame;
 
 function data(d: Decals): Float32Array {
   return (d as unknown as { data: Float32Array }).data;

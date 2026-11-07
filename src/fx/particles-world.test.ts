@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { createFakeDevice, type FakeDevice, type FakeTexture } from '../render/fake-gpu';
+import {
+  createFakeDevice,
+  type FakeDevice,
+  type FakeTexture,
+  fakeSceneTargets,
+} from '../render/fake-gpu';
 import type { Frame, ViewInfo } from '../render/frame';
 import type { Renderer } from '../render/renderer';
 import { WGSL_GLOBALS, WGSL_LIGHTS } from '../render/wgsl';
@@ -29,15 +34,17 @@ import {
 
 interface FakeTarget {
   depth: { view: unknown; width: number; height: number } | null;
+  auxKey: number;
 }
 
 function makeSystem(opts: ParticleSystemOptions = {}) {
   const fake = createFakeDevice();
-  const target: FakeTarget = { depth: null };
+  const target: FakeTarget = { depth: null, auxKey: 0 };
   const renderer = {
     device: fake.device,
     globalsLayout: fake.device.createBindGroupLayout({ entries: [] }),
     sceneFormats: ['rgba16float', 'rgba16float'],
+    sceneTargets: fakeSceneTargets,
     target,
   } as unknown as Renderer;
   const ps = new ParticleSystem(renderer, { capacity: 256, ...opts });
@@ -54,8 +61,8 @@ function depthTexture(fake: FakeDevice, width: number, height: number) {
   return { texture: t, view: t.createView(), width, height };
 }
 
-const DEPTH_FRAME = { depthFormat: 'depth24plus' } as unknown as Frame;
-const FLAT_FRAME = { depthFormat: null } as unknown as Frame;
+const DEPTH_FRAME = { depthFormat: 'depth24plus', auxKey: 0 } as unknown as Frame;
+const FLAT_FRAME = { depthFormat: null, auxKey: 0 } as unknown as Frame;
 
 /** The spawn staging array `prepare` uploads (read it before `prepare`). */
 function spawnFloats(ps: ParticleSystem): Float32Array {

@@ -223,10 +223,7 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
       fragment: {
         module: mod,
         entryPoint: 'fs',
-        targets: renderer.sceneFormats.map((format) => ({
-          format,
-          blend: blendState('premultiplied'),
-        })),
+        targets: renderer.sceneTargets(blendState('premultiplied')),
       },
       primitive: { topology: 'triangle-list', cullMode: 'none' },
     };

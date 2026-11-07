@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Camera } from '../render/camera';
-import { createFakeDevice, type FakeDevice } from '../render/fake-gpu';
+import { createFakeDevice, type FakeDevice, fakeSceneTargets } from '../render/fake-gpu';
 import type { Frame } from '../render/frame';
 import type { Renderer } from '../render/renderer';
 import { SKY_PARAMS_FLOATS, Sky, type SkyOptions, skyRay } from './sky';
@@ -12,13 +12,15 @@ function makeSky(opts: SkyOptions = {}) {
     device: fake.device,
     globalsLayout: fake.device.createBindGroupLayout({ entries: [] }),
     sceneFormats: ['rgba16float', 'rgba16float'],
+    sceneTargets: fakeSceneTargets,
+    target: { auxKey: 0 },
   } as unknown as Renderer;
   const sky = new Sky(renderer, opts);
   return { fake, sky };
 }
 
-const DEPTH_FRAME = { depthFormat: 'depth24plus' } as unknown as Frame;
-const FLAT_FRAME = { depthFormat: null } as unknown as Frame;
+const DEPTH_FRAME = { depthFormat: 'depth24plus', auxKey: 0 } as unknown as Frame;
+const FLAT_FRAME = { depthFormat: null, auxKey: 0 } as unknown as Frame;
 
 function encoder(fake: FakeDevice) {
   return fake.device.createCommandEncoder();

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createFakeDevice } from '../render/fake-gpu';
+import { createFakeDevice, fakeSceneTargets } from '../render/fake-gpu';
 import type { Renderer } from '../render/renderer';
 import {
   applyForces,
@@ -19,7 +19,8 @@ function makeSystem(opts: ParticleSystemOptions) {
     device: fake.device,
     globalsLayout: fake.device.createBindGroupLayout({ entries: [] }),
     sceneFormats: ['rgba16float', 'rgba16float'],
-    target: { depth: null },
+    sceneTargets: fakeSceneTargets,
+    target: { depth: null, auxKey: 0 },
   } as unknown as Renderer;
   const ps = new ParticleSystem(renderer, { capacity: 256, ...opts });
   const particles = fake.buffers.find((b) => b.label === 'particles')!;

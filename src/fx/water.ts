@@ -2,6 +2,7 @@ import { plane } from '../geom';
 import type { Drawable, Frame, ViewInfo } from '../render/frame';
 import { type Mesh, VERTEX_LAYOUT_3D } from '../render/mesh';
 import type { Renderer } from '../render/renderer';
+import { auxSuffix, ScenePipelineCache, sceneVariant } from '../render/scene-pipelines';
 import type { SceneTarget } from '../render/scene-target';
 import { createShaderModule } from '../render/wgsl';
 import { WATER_DEPTH_COPY_WGSL, WATER_MAX_WAVES, WATER_WGSL } from './water-wgsl';
@@ -148,9 +149,11 @@ export class Water implements Drawable {
   private readonly dummy: GPUTexture;
   private readonly dummyGroup: GPUBindGroup;
   private readonly desc: GPURenderPipelineDescriptor;
-  private readonly flatPipeline: GPURenderPipeline;
-  /** Per depth format: the same pipeline writing depth (built on first use). */
-  private readonly depthPipelines = new Map<GPUTextureFormat, GPURenderPipeline>();
+  /**
+   * Pipelines per depth format (null: none; a depth one writes depth) × the view target's aux
+   * key, built on first use from `renderer.sceneTargets` (ws/render-10).
+   */
+  private readonly pipelines = new ScenePipelineCache();
   private readonly copyLayout: GPUBindGroupLayout;
   private readonly copyPipeline: GPURenderPipeline;
   private readonly copyAtt: GPURenderPassDepthStencilAttachment;
@@ -235,11 +238,11 @@ export class Water implements Drawable {
       fragment: {
         module,
         entryPoint: 'fs',
-        targets: renderer.sceneFormats.map((format) => ({ format, blend: PREMULTIPLIED })),
+        targets: renderer.sceneTargets(PREMULTIPLIED),
       },
       primitive: { topology: 'triangle-list', cullMode: 'none' },
     };
-    this.flatPipeline = device.createRenderPipeline(this.desc);
+    this.pipelines.set(null, renderer.target.auxKey, device.createRenderPipeline(this.desc));
 
     this.copyLayout = device.createBindGroupLayout({
       label: 'water-depth-copy-layout',
@@ -324,7 +327,7 @@ export class Water implements Drawable {
     const mesh = this.mesh;
     if (mesh.indexCount <= 0) return;
     const fmt = frame?.depthFormat ?? null;
-    pass.setPipeline(fmt ? this.depthPipeline(fmt) : this.flatPipeline);
+    pass.setPipeline(this.pipelineFor(fmt, frame ? frame.auxKey : this.renderer.target.auxKey));
     pass.setBindGroup(1, this.depthGroup ?? this.dummyGroup);
     pass.setVertexBuffer(0, mesh.vertexBuffer);
     pass.setIndexBuffer(mesh.indexBuffer!, mesh.indexFormat);
@@ -392,17 +395,21 @@ export class Water implements Drawable {
     });
   }
 
-  private depthPipeline(format: GPUTextureFormat): GPURenderPipeline {
-    let p = this.depthPipelines.get(format);
-    if (!p) {
-      p = this.device.createRenderPipeline({
-        ...this.desc,
-        label: `water:${format}`,
-        depthStencil: { format, depthWriteEnabled: true, depthCompare: 'less-equal' },
-      });
-      this.depthPipelines.set(format, p);
-    }
-    return p;
+  private pipelineFor(format: GPUTextureFormat | null, aux: number): GPURenderPipeline {
+    const p = this.pipelines.get(format, aux);
+    if (p) return p;
+    return this.pipelines.set(
+      format,
+      aux,
+      this.device.createRenderPipeline(
+        sceneVariant(
+          this.desc,
+          this.renderer.sceneTargets(PREMULTIPLIED, aux),
+          `water${format ? `:${format}` : ''}${auxSuffix(aux)}`,
+          format ? { format, depthWriteEnabled: true, depthCompare: 'less-equal' } : undefined,
+        ),
+      ),
+    );
   }
 
   destroy(): void {
