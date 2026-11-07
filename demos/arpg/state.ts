@@ -67,6 +67,12 @@ export interface ArpgDemoState {
   still: boolean;
   /** `gpuDiagnostics.errorCount`. */
   gpuErrors: number;
+  /**
+   * `?still` only: the mean brightness (0..255) of the canvas's centre column (640 on
+   * desktop-1280) less the mean of the columns 4 px either side, read back once on frame 60;
+   * a floor gap under the hero shows as a positive spike. Null before (and without `?still`).
+   */
+  centreSeam: number | null;
 }
 
 /** Test helpers (functions, so they live beside `__demo` rather than in it). */

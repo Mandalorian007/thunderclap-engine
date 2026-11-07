@@ -1,10 +1,10 @@
 /**
  * The ruined courtyard: a 60 × 60 m floor of stone tiles inside broken perimeter walls, two
  * colonnades with fallen pillars, a raised dais reached by a flight of stairs under an arch,
- * rubble and six braziers. Most prop kinds are one `InstanceList` (one draw each), built from
- * `geom` meshes; walls and pillars are `MeshLod` chains drawn per instance (`frame.mesh`, one
- * draw per level in view) because `InstanceList` takes a single mesh. The same placements feed
- * the navmesh bake as triangle soup. Setup-time code: allocates freely. The layout is fixed
+ * rubble and six braziers. Every prop kind is one `InstanceList` built from `geom` meshes;
+ * walls, pillars and drums are lists on a `MeshLod` chain (ws/render-6: each instance picks its
+ * level, one draw per non-empty level). The same placements feed the navmesh bake as triangle
+ * soup. Setup-time code: allocates freely. The layout is fixed
  * (its `hash2f` seed is not `?seed`).
  */
 
@@ -49,15 +49,6 @@ export interface Brazier {
   z: number;
 }
 
-/** A prop kind on a `MeshLod`: one `frame.mesh` per transform (each its own hysteresis key). */
-export interface LodProp {
-  label: string;
-  lod: MeshLod;
-  material: Material;
-  transforms: Transform[];
-  params: InstanceParams;
-}
-
 /** On-screen sphere heights (target px) at which a pillar keeps 16, then 8 sides; below, 5. */
 export const PILLAR_LOD_PX = [300, 170] as const;
 /** On-screen sphere height (target px) at which a wall keeps its coping and chunks. */
@@ -67,8 +58,12 @@ const PILLAR_SIDES = [16, 8, 5] as const;
 export interface Courtyard {
   /** Static prop lists, drawn with `frame.list` in this order. */
   lists: InstanceList[];
-  /** Walls, pillars and drums on LOD chains, drawn with `frame.mesh` per transform. */
-  lods: LodProp[];
+  /**
+   * Walls, broken walls, pillars, broken pillars and drums: one `InstanceList` per kind on a
+   * `MeshLod` chain (each instance picks its level; one draw per non-empty level), drawn with
+   * `frame.list` after `lists`.
+   */
+  lods: InstanceList[];
   /** The flame cores (one per brazier; the demo rescales them as they flicker). */
   flames: InstanceList;
   braziers: Brazier[];
@@ -164,8 +159,8 @@ export function buildCourtyard(renderer: Renderer, mats: CourtyardMaterials): Co
     return l;
   };
 
-  const lods: LodProp[] = [];
-  /** A prop kind on a LOD chain (`levels[0]` the full mesh) at `puts`; `navGeom` (or level 0) feeds the bake. */
+  const lods: InstanceList[] = [];
+  /** A prop kind on a LOD chain (`levels[0]` the full mesh) at `puts`, as one LOD `InstanceList`; `navGeom` (or level 0) feeds the bake. */
   const lodProp = (
     label: string,
     levels: Geometry[],
@@ -175,33 +170,31 @@ export function buildCourtyard(renderer: Renderer, mats: CourtyardMaterials): Co
     navGeom?: Geometry,
   ) => {
     const meshes = levels.map((g, i) => renderer.createMesh({ ...g, label: `${label}-lod${i}` }));
-    const transforms = puts.map((p) => {
-      const t = new Transform({});
-      t.setMatrix(matrixOf(p));
-      addNav(navGeom ?? levels[0]!, t.world);
-      return t;
-    });
-    lods.push({
-      label,
-      lod: { meshes, thresholdsPx: [...thresholdsPx] },
-      material: mat,
-      transforms,
-      params: { castShadow: true, receiveShadow: true },
-    });
+    const lod: MeshLod = { meshes, thresholdsPx: [...thresholdsPx] };
+    const l = renderer.createInstanceList(lod, mat, Math.max(1, puts.length));
+    const params: InstanceParams = { castShadow: true, receiveShadow: true };
+    for (let i = 0; i < puts.length; i++) {
+      const m = matrixOf(puts[i]!);
+      l.set(i, m, params);
+      addNav(navGeom ?? levels[0]!, m);
+    }
+    lods.push(l);
   };
 
-  // ── Floor: 30 × 30 tiles, each its own shade; a few cracked dark ones ───
+  // ── Floor: 29 × 29 tiles, each its own shade; a few cracked dark ones ───
+  // Tiles centre on even coordinates (-28..28), so the courtyard's axes (the hero's spawn at
+  // x = 0) run through tile middles, not a grout gap; the outer 1 m under the walls is the bed.
   const tiles: Put[] = [];
-  const n = (HALF * 2) / TILE;
+  const n = (HALF * 2) / TILE - 1;
   for (let j = 0; j < n; j++) {
     for (let i = 0; i < n; i++) {
       const h = roll(i, j);
       const shade = 0.78 + 0.26 * roll(i, j, 1);
       const k = h < 0.1 ? 0.55 : 1;
       tiles.push({
-        x: -HALF + TILE / 2 + i * TILE,
+        x: -HALF + TILE + i * TILE,
         y: -0.15,
-        z: -HALF + TILE / 2 + j * TILE,
+        z: -HALF + TILE + j * TILE,
         tint: [shade * k * 1.02, shade * k * 0.96, shade * k * 1.04],
         yaw: (Math.floor(h * 4) * Math.PI) / 2,
       });
