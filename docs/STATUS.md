@@ -170,7 +170,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Docs guide: root README rewritten for a first-time user; `docs/guide/` (9 task guides); a snippet typecheck in `pnpm check`; OFFERING refreshed | ws/docs-guide | brief `docs/briefs/docs-guide.md` | — | 🟣 done at `243a84e` (merged main; `ctx.replay` documented; check 2300, snap 0). Train 13 or 14 |
 | 5 | Docs modules: every module README opens with purpose, a checked *Quick use* and *Entry points*; contents lists; false statements fixed | ws/docs-modules | brief `docs/briefs/docs-modules.md` | — | 🟣 done at `98d0745` (18 READMEs, 11 false statements fixed; check green, snap 0). Train 13 |
 | 5 | Harden API: `api/*.api.txt` surface snapshot plus `check:api`; audit of leaked internals and naming; safe fixes with aliases | ws/harden-api | brief `docs/briefs/harden-api.md` | — | 🟣 done at `700f3e4` (api snapshot + check:api; 2 safe fixes; check green, snap 0, gltf/gltf3/skin/save green). Train 13 or 14 |
-| 5 | Comment sweep: stale code comments from the backlog plus a rename sweep; comments only | ws/comment-sweep | brief `docs/briefs/comment-sweep.md` | train 12 | 🔵 running |
+| 5 | Comment sweep: stale code comments from the backlog plus a rename sweep; comments only | ws/comment-sweep | brief `docs/briefs/comment-sweep.md` | train 12 | 🟣 done at `c6d511f` (22 fixes in 14 files; check 2300 and snap 0, identical before and after). Train 13 or 14 |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
@@ -401,6 +401,11 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
   - A minimap holds its size in rails, and `overflows()` reports when it can't.
   - Bug fixed: every re-layout re-appended every widget, which killed CSS animations and focus.
   - → ws/adoption-6: drop the arpg minimap `min-width` workaround and the orb rebuild, and use `place` maps.
+- ws/comment-sweep deferred stale comments (files owned by other streams at the time):
+  - `src/input/types.ts:47`, `pointer-sources.ts:4`, `pointer-router.ts:2` and `:196` still say "no XR source yet". → ws/core-8 or the next input stream.
+  - `src/core/game.ts:76` and `:142`: the flush note omits the lifecycle `background` flush. `:323`: the host list omits lifecycle, haptics and safe area. → ws/core-8.
+  - `src/ui/styles.ts:179`: the `BASE_CSS` doc implies it is the only sheet. → ws/adoption-6 or the next ui stream.
+  - ARCHITECTURE input *Today* text. → next doc sweep.
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
