@@ -143,6 +143,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Audio 6: keyed bus scales (product), one key per ducker | ws/audio-6 | brief `docs/briefs/audio-6.md` | audio-5 note | 🟣 in E-031 train 5 at `70b4d33` (check 2141, snap 0, music 49/7, audio4 35/5, lifecycle 32, zones 24 at load 28–39) |
 | 5 | UI 7: `layout.add` overflow warning + `layout.overflows()`; `MinimapMarker.heading` with arrow kinds | ws/ui-7 | brief `docs/briefs/ui-7.md` | ui-6 wishes | 🔵 dispatched (Opus, offset 950) |
 | 5 | Demo arpg 2: dissolve deaths, `MeshLod` on props/enemies, core hash; Known limits refreshed | ws/demo-arpg-2 | brief `docs/briefs/demo-arpg-2.md` | render-5, core-3, ui-6 | 🔵 dispatched (Opus, offset 960) |
+| 5 | E2E harden 3: tactics d-pad same-frame press (E-033), sweep press/release-in-one-evaluate specs | ws/e2e-harden-3 | brief `docs/briefs/e2e-harden-3.md` | train 5 | 🔵 dispatched (Opus, offset 970) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
