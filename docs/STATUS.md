@@ -164,13 +164,17 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Render 9: LOD lists skip the undrawn main upload; fake GPU checks usage flags and maps staging buffers; readback tests off stubs | ws/render-9 | brief `docs/briefs/render-9.md`; branched from ws/render-8 b3dc3b6 | render-8, fx-6/7 wishes | ✅ merged in E-031 train 12 (`26a7f87`; main 7d5f6af) |
 | 5 | Core 5: `createGame` test of a playback installed mid-session (clock already advanced), speed 1 and 4 | ws/core-5 | brief `docs/briefs/core-5.md`; branched from ws/input-10 c2de796 | core-4, input-10 | ✅ merged in E-031 train 11 (`00a773d`; main 336ed25) |
 | 5 | Core 6: `EngineCtx.clock` typed as the tick clock; `ctx.replay(rec, opts)` detaches real input and reattaches it at the end | ws/core-6 | brief `docs/briefs/core-6.md`; branched from ws/core-5 fdc822e | core-5 | ✅ merged in E-031 train 12 (`ad6ea9c`; main 7d5f6af) |
-| 5 | UI 11: meter `setPlace` (or a per-form place map), the minimap holds its size in content rails, `meter.size` getter | ws/ui-11 | brief `docs/briefs/ui-11.md` | ui-10 | 🔵 dispatched |
+| 5 | UI 11: meter `setPlace` (or a per-form place map), the minimap holds its size in content rails, `meter.size` getter | ws/ui-11 | brief `docs/briefs/ui-11.md` | ui-10 | 🟣 done at `a861416` (check green, snap 0, ui5 112, ui4 48, ui 77). Train 13 or 14 |
 | 5 | Core 7: `ctx.replay` `onEnd`; `createGame` velocity-target option | ws/core-7 | brief `docs/briefs/core-7.md`; branched from ws/core-6 ad6ea9c | core-6 | 🟣 done at `f935af7` (check 2283, snap 0, replay 16, core2 40, lifecycle 32). Train 12 or 13 |
-| 5 | Input 11: pointer-source mute (XR included) for replays | ws/input-11 | brief `docs/briefs/input-11.md` | core-6 | 🔵 dispatched |
-| 5 | Docs guide: root README rewritten for a first-time user; `docs/guide/` (9 task guides); a snippet typecheck in `pnpm check`; OFFERING refreshed | ws/docs-guide | brief `docs/briefs/docs-guide.md` | — | 🟡 `5b22ffd` done (check 2276, snap 0); merging main for `ctx.replay`, then train 13 |
-| 5 | Docs modules: every module README opens with purpose, a checked *Quick use* and *Entry points*; contents lists; false statements fixed | ws/docs-modules | brief `docs/briefs/docs-modules.md` | — | 🔵 running |
-| 5 | Harden API: `api/*.api.txt` surface snapshot plus `check:api`; audit of leaked internals and naming; safe fixes with aliases | ws/harden-api | brief `docs/briefs/harden-api.md` | — | 🔵 running |
-| 5 | Comment sweep: stale code comments from the backlog plus a rename sweep; comments only | ws/comment-sweep | brief `docs/briefs/comment-sweep.md` | train 12 | 🔵 running |
+| 5 | Input 11: pointer-source mute (XR included) for replays | ws/input-11 | brief `docs/briefs/input-11.md` | core-6 | 🟣 done at `6b48bfd` (check 2284, snap 0, replay 16, xr 8, input 52, input5 48). Train 13 |
+| 5 | Docs guide: root README rewritten for a first-time user; `docs/guide/` (9 task guides); a snippet typecheck in `pnpm check`; OFFERING refreshed | ws/docs-guide | brief `docs/briefs/docs-guide.md` | — | 🟣 done at `243a84e` (merged main; `ctx.replay` documented; check 2300, snap 0). Train 13 or 14 |
+| 5 | Docs modules: every module README opens with purpose, a checked *Quick use* and *Entry points*; contents lists; false statements fixed | ws/docs-modules | brief `docs/briefs/docs-modules.md` | — | 🟣 done at `98d0745` (18 READMEs, 11 false statements fixed; check green, snap 0). Train 13 |
+| 5 | Harden API: `api/*.api.txt` surface snapshot plus `check:api`; audit of leaked internals and naming; safe fixes with aliases | ws/harden-api | brief `docs/briefs/harden-api.md` | — | 🟣 done at `700f3e4` (api snapshot + check:api; 2 safe fixes; check green, snap 0, gltf/gltf3/skin/save green). Train 13 or 14 |
+| 5 | Comment sweep: stale code comments from the backlog plus a rename sweep; comments only | ws/comment-sweep | brief `docs/briefs/comment-sweep.md` | train 12 | 🟣 done at `c6d511f` (22 fixes in 14 files; check 2300 and snap 0, identical before and after). Train 13 or 14 |
+| 5 | v1 API: E-036 plus ergonomics in core, ui and input; replay mutes pointers | ws/api-core | brief `docs/briefs/api-core.md` | after train 13 | ⚪ briefed |
+| 5 | v1 API: E-036 plus ergonomics in render, post and fx | ws/api-render | brief `docs/briefs/api-render.md` | after train 13 | ⚪ briefed |
+| 5 | v1 API: E-036 in the other 12 modules; templates build; create-game installable | ws/api-rest | brief `docs/briefs/api-rest.md` | after train 13 | ⚪ briefed |
+| 5 | arpg demo on `place` maps, `ctx.replay` and object blur | ws/adoption-6 | brief `docs/briefs/adoption-6.md` | after train 13 | ⚪ briefed |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
@@ -383,7 +387,30 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
   - `createSpriteMaterial` is positional while `createMaterial` takes an object; device vs renderer arguments are mixed.
   - `createGame` has no theme option; text scale needs `applyTextScale(root, scale, setTheme)`.
   - `create-game` defaults to the unpublished `^0.2.0-alpha.1`; templates have no `build` script.
-  → candidates for ws/harden-api-2 / ergonomics wave after the harden-api audit lands.
+  - Added after the re-gate:
+    - `godRays` are placed in 2D px, Lights field shapes are mixed, and there is no automatic quality tier.
+    - `WorldPanel` uses the wrong camera in VR.
+    - `ctx.pointers` and touch-zone bindings are untyped, `planeTester` handles z-planes only, and `pushContext` can't add actions.
+    - The host packages are unpublished, the testing entry holds only the fake GPU, and the Playwright probe has a single hook slot.
+    - `atlasFrames` has no inset, `screenToWorld` needs depth in 2D, `fitFreeRect` resubscription is manual, and the parallax origin is fixed at layer creation.
+  → ws/ergonomics-1 (core, ui, input) and ws/ergonomics-2 (render, post, tooling) after harden-api-2.
+- ws/docs-modules wish: tween `update` clamps negative `dt` with `Math.max(dt, 0)` but lets NaN through (`src/tween/timeline.ts:175`); use `dt > 0 ? dt : 0`. → next tween/harden code stream.
+- ws/input-11 notes:
+  - `PointerRouter.mute(sources?)` / `unmute()` / `isMuted(source)`. A muted source still polls, but its pointers drop before routing. A held pointer releases with `hit: null`. A button held across `unmute()` reads up until it is let go. Synthetic replay pointers are never muted.
+  - → ws/core-8: in `ctx.replay`, call `pointers.mute()` after `attachSink()` and `pointers.unmute()` in `stop` before `attachHome()`.
+  - Wish: `mute()` returns a remover, so a game mute and a replay mute don't clear each other (→ input-12 or core-8).
+- ws/harden-api audit is ruled in E-036. ws/harden-api-2 is briefed after harden-api lands (it touches every `index.ts`). The ws/docs-guide ergonomics wishes become ws/ergonomics-1 after the same landing.
+- ws/ui-11 notes:
+  - `MeterOptions.place` takes a region or a per-form map, plus `meter.setPlace`, `meter.region`, `meter.size` and `WidgetOptions.onMove`.
+  - A minimap holds its size in rails, and `overflows()` reports when it can't.
+  - Bug fixed: every re-layout re-appended every widget, which killed CSS animations and focus.
+  - → ws/adoption-6: drop the arpg minimap `min-width` workaround and the orb rebuild, and use `place` maps.
+- ws/comment-sweep deferred stale comments (files owned by other streams at the time):
+  - `src/input/types.ts:47`, `pointer-sources.ts:4`, `pointer-router.ts:2` and `:196` still say "no XR source yet". → ws/core-8 or the next input stream.
+  - `src/core/game.ts:76` and `:142`: the flush note omits the lifecycle `background` flush. `:323`: the host list omits lifecycle, haptics and safe area. → ws/core-8.
+  - `src/ui/styles.ts:179`: the `BASE_CSS` doc implies it is the only sheet. → ws/adoption-6 or the next ui stream.
+  - ARCHITECTURE input *Today* text. → next doc sweep.
+- Next wave (PM, 2026-11-06): ws/harden-api-2, ws/ergonomics-1/-2 and ws/core-8 are folded into ws/api-core, ws/api-render and ws/api-rest, split by module ownership so all three run in parallel. Deprecated aliases keep demos and templates compiling, so no cross-module edits are needed.
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.

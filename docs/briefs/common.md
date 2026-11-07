@@ -31,6 +31,7 @@ Your worktree may start from an old commit. First `git reset --hard main` (or th
 - Unit tests cover what you added; the fake GPU (`src/render/fake-gpu.ts`) covers renderer changes.
 - `ARCHITECTURE.md` *Today* text, the module README and `CHANGELOG.md` ("Next (unreleased)") describe the change, in the same branch.
 - Public API is exported only from the module's `index.ts`; new subpaths go in `package.json` `exports` and the root README table.
+- A branch that changes the public API commits the updated `api/*.api.txt` (`pnpm api:update`), and the diff follows E-036's conventions. `pnpm check:api` fails otherwise. The integrator resolves `api/` conflicts by re-running `api:update` on the merged head, never by hand.
 
 ## Report back (under 400 words)
 

@@ -196,3 +196,22 @@ Train 10 failed `[phone-iphone] e2e/post4.spec.ts:81` and `[ipad] :119`. Both as
 Ruling: land train 11. `post4.spec.ts:81` and `:119` are tolerated, and no other post4 test, until the spec fix lands. ws/render-8's engineer owns the fix: they confirm the cause, make the read honest about time (a latched field or a poll inside the converge phase), and bring render-8 back in train 12.
 
 E-035 closed 2026-11-06: render-8's latched-jitter spec fix landed in train 12 (7d5f6af). The matrix had 0 failures and needed no tolerance.
+
+## E-036: public API conventions for engine-v1.0.0 (2026-11-06, PM)
+
+ws/harden-api added `api/*.api.txt` and `check:api`, and audited the surface. Ruling, applied by ws/harden-api-2 and every branch after it:
+
+- **Internals.** Constants and WGSL strings that only the module's own tests import get deprecated now and removed in the next minor: render offsets and `*_FLOATS`, `STANDARD_WGSL`, `SPRITE_WGSL`, the ui `*_CSS` and `WORLD_PANEL_WGSL`, and save `TYPED_CTORS`. Tests import them from the source file. The fx WGSL chunks and layout constants stay public, because they are the documented surface for custom shaders.
+- **One name, one shape.** A name exported by two modules with different shapes gets a module-specific name: `Rect` (input l/t/r/b → `Edges`), `Hit`, `Aabb`, `Cell`, `Grid`, `Cooldown`, `BlendMode`, `PlayOptions`, `FollowTarget`, `prefersReducedMotion`. The old name stays as a deprecated alias for one minor.
+- **Reads are getters.** State and stats reads are getters (`renderer.stats`, `host.state`, `cache.stats`). Methods are for things that do work or take arguments.
+- **Construction.** `createX(...)` is the documented way to construct. A class is still exported, but documented as a type.
+- **Suffixes.**
+  - `Options`: arguments to a call.
+  - `Desc`: an immutable GPU or resource description.
+  - `Settings`: a mutable tunable bag.
+  - `Spec`: serialized data that games author.
+
+  Validators are named `validate<Thing>`.
+- **Duplicates.** One spelling survives and the other is deprecated: `Renderer.white` gives way to `defaultTextures.white`, `mipFilter` to `filter`, and the assets skin offsets to render's.
+- **v1 gate.** `engine-v1.0.0` ships when the deprecated aliases are removed and `api/` is frozen. After that, an `api/` diff in a branch needs a CHANGELOG *Breaking* or *Added* line.
+
