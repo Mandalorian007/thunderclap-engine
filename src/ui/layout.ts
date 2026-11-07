@@ -792,7 +792,9 @@ export interface LayoutHost {
  *
  * The density tokens `--tc-tap-min` and `--tc-text-min` (from the form spec), `data-form-factor`
  * and the form's `units` go on the overlay root, so the base widgets in the panels layer follow
- * them too.
+ * them too. `data-form-factor` (`phone-landscape`, `phone-portrait`, `tablet`, `desktop`) is
+ * public: it replaces the removed `ctx.device` for game stylesheets
+ * (`.tc-overlay[data-form-factor^="phone"]`) and code (`ui.root.dataset.formFactor`).
  */
 export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout {
   const root = overlay.root;

@@ -2,7 +2,7 @@
 /**
  * `createGame` (D-041 Phase 1): the noun-free wiring every ThunderClap game starts from.
  *
- * It blocks browser zoom, boots WebGPU on a letterboxed surface and builds, in this order:
+ * It blocks browser zoom, boots WebGPU on a surface and builds, in this order:
  * renderer, post stack, particles, host, the game's save (if any), overlay and pad navigation,
  * audio (mixer persisted through the host), the game's tick clock, input with its gestures (on
  * that clock) and pointer router, the scene stack and the frame loop (frames come from the
@@ -11,7 +11,8 @@
  * `active` resumes) and device loss (the reload screen, then loop, audio and captions halt for
  * good).
  *
- * The surface letterboxes the design space; what the overlay's layout leaves free of UI is
+ * The surface letterboxes the design space (or covers it, cropped to a band, under
+ * `surface.fit`); what the overlay's layout leaves free of UI is
  * `ctx.ui.layout.freeRect`, and a 2D game frames its world into it with
  * `ctx.camera.fitFreeRect(worldRect, ctx.ui.layout.freeRect, ctx.surface)`. Scenes draw through
  * `ctx.camera` (`Scene.render(frame, camera, alpha)`); the loop calls
@@ -196,7 +197,11 @@ export interface CreateGameOptions<
   title?: string;
   /** Logical design size the renderer, surface and overlay share. Default 1920×1080. */
   design?: { width: number; height: number };
-  /** Surface options other than the design size (DPR cap, pixel cap, bar colour). */
+  /**
+   * Surface options other than the design size (DPR cap, pixel cap, bar colour, and `fit`:
+   * `{ fit: { minVisibleHeight, belowScale: PHONE_SCALE } }` fills a phone instead of
+   * letterboxing, #1).
+   */
   surface?: Omit<SurfaceOptions, 'logicalWidth' | 'logicalHeight'>;
   /** Initial post settings (`PostStack` patch). */
   post?: PostSettingsPatch;

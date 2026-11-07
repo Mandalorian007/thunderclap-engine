@@ -84,6 +84,17 @@ input.blocked = () => ui.stack.hasModal;       // the game ignores input while a
 - `ui.layout` is the overlay's layout (`ui/layout.ts`): regions per form factor over the whole root.
   Each form's units (`ui.units`, `data-units`) size the base UI: `frame` (desktop, tablet) in design
   px of the frame, `css` (phones) in CSS px (`cssPxTheme`).
+- **Form factor in CSS** (#1). The root carries `data-form-factor` = `phone-landscape`,
+  `phone-portrait`, `tablet` or `desktop` (`ui.layout`'s classification: a phone is a coarse
+  pointer with a short side of at most 600 CSS px, or any view under 480), updated on every
+  re-layout. It replaces the removed `ctx.device`: a phone stylesheet keys off
+  `.tc-overlay[data-form-factor^="phone"] .my-hud { … }`, and code reads
+  `ctx.ui.root.dataset.formFactor` (or `ui.layout.onChange`). `data-units` sits beside it.
+- **Native controls on the frame's layers.** Selects and range sliders in `hud`, `captions` and
+  (in `frame` units) `panels` and `toasts` are zoomed by `--tc-zoom`, and a select divides the
+  theme tokens it reads (font size, padding, border, radius) back out. Those rules sit in
+  `:where()` (#3), so they have no specificity: a game's ordinary `.my-panel select { … }` wins
+  over them. The engine's own `select()` widget keeps its look (its fix is `(0,2,1)`).
 - Widgets inside a region flow in a flex box: `top` and `bottom` are **rows** (widgets side by
   side, in `order`), `left` and `right` (and `cardLane`) are **columns**; `captionLane` is a row,
   `fill` and `modal` centre their content. A game that wants another arrangement wraps its widgets
@@ -964,7 +975,7 @@ element's delay, leave, focus, Escape and hand-over, and a world point riding th
 `cursor.test.ts` covers `pickTarget`, the latch and repeat, the keys, the modal rule and the
 anchored element in targets mode; `loading.test.ts` the bar, tips, `aria-busy`, key swallowing
 and `done`; `notify.test.ts` the stack, timeouts, actions, `menuNav` and Escape; `dom.test.ts`
-the `h` string style; `styles.test.ts` the select zoom rule. `e2e/ui.spec.ts` runs the four
+the `h` string style; `styles.test.ts` the select zoom rule and its `:where()` specificity (#3); `e2e/cover.spec.ts` checks a game's select rule wins in a real browser. `e2e/ui.spec.ts` runs the four
 harness modes (`harness/ui.html?tooltip`, `?cursor&mode=`, `?loading&stall`, `?notify`) on the matrix.
 ws/ui-4: `anchor.test.ts` covers `frame` and `project` against a placed anchor across a resize,
 `tooltip.test.ts` a world-target tooltip landing on the anchored point, `pad-owner.test.ts` the

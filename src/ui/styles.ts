@@ -25,22 +25,27 @@ const ROOT_CSS = `
 .tc-layer[data-layer="layout"],
 .tc-overlay[data-units="css"] > .tc-layer:is([data-layer="panels"], [data-layer="toasts"]) { --tc-unit: 1px; }
 /* Native controls draw their thumb, track and arrow in CSS px whatever their box: on the frame's
-   layers they are zoomed by the frame's scale instead, their own px read as design px. */
-.tc-layer:is([data-layer="hud"], [data-layer="captions"]) :is(input[type="range"], select),
-.tc-overlay[data-units="frame"] > .tc-layer:is([data-layer="panels"], [data-layer="toasts"]) :is(input[type="range"], select) {
+   layers they are zoomed by the frame's scale instead, their own px read as design px.
+   These rules sit in :where() (#3): specificity 0, so a game's .my-panel select rule wins. */
+:where(.tc-layer:is([data-layer="hud"], [data-layer="captions"]) :is(input[type="range"], select),
+.tc-overlay[data-units="frame"] > .tc-layer:is([data-layer="panels"], [data-layer="toasts"]) :is(input[type="range"], select)) {
   zoom: var(--tc-zoom, 1); --tc-unit: 1px; }
 /* Theme tokens are resolved on the root, so they are frame px already: a zoomed select would
-   draw them at --tc-dpx² (ws/ui-widgets wish). Divide the ones it reads back out. */
-.tc-layer:is([data-layer="hud"], [data-layer="captions"]) select,
-.tc-overlay[data-units="frame"] > .tc-layer:is([data-layer="panels"], [data-layer="toasts"]) select {
+   draw them at --tc-dpx² (ws/ui-widgets wish). Divide the ones it reads back out. The engine's
+   own select widget (.tc-ui-select) keeps this over its own rule, at (0,2,1). */
+:where(.tc-layer:is([data-layer="hud"], [data-layer="captions"]) select,
+.tc-overlay[data-units="frame"] > .tc-layer:is([data-layer="panels"], [data-layer="toasts"]) select),
+:where(.tc-layer:is([data-layer="hud"], [data-layer="captions"]),
+.tc-overlay[data-units="frame"] > .tc-layer:is([data-layer="panels"], [data-layer="toasts"])) .tc-field.tc-ui-select select {
   font-size: calc(var(--tc-font-size-s) / var(--tc-zoom, 1));
   padding: calc(var(--tc-space-2) / var(--tc-zoom, 1)) calc(var(--tc-space-3) / var(--tc-zoom, 1));
   border-width: calc(var(--tc-border-width) / var(--tc-zoom, 1));
   border-radius: calc(var(--tc-radius-m) / var(--tc-zoom, 1)); }
 /* Theme lengths are already frame px there: undo the zoom for them (a hair over, so the
-   whole-pixel ring the token rounds to does not snap down a pixel). */
-.tc-layer:is([data-layer="hud"], [data-layer="captions"]) :is(input[type="range"], select):focus-visible,
-.tc-overlay[data-units="frame"] > .tc-layer:is([data-layer="panels"], [data-layer="toasts"]) :is(input[type="range"], select):focus-visible {
+   whole-pixel ring the token rounds to does not snap down a pixel). (0,2,1): just over the
+   overlay's own focus ring (.tc-overlay :focus-visible). */
+:where(.tc-layer:is([data-layer="hud"], [data-layer="captions"]),
+.tc-overlay[data-units="frame"] > .tc-layer:is([data-layer="panels"], [data-layer="toasts"])) :is(input[type="range"], select):focus-visible {
   outline-width: calc(var(--tc-focus-ring) / var(--tc-zoom, 1) + 0.1px); }
 `;
 

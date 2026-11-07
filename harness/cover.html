@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>ThunderClap engine harness: cover fit</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+      #root { position: fixed; inset: 0; }
+      /* An ordinary game rule (0,1,1): it must beat the engine's zoomed-select rules (#3). */
+      .cover-probe select { padding: 7px; }
+    </style>
+  </head>
+  <body>
+    <main id="root"></main>
+    <script type="module" src="./cover.ts"></script>
+  </body>
+</html>

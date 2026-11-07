@@ -25,6 +25,7 @@ if (res.ok) {
 | `mountSurface / Surface` | the letterboxed canvas and its resize events |
 | `initGpu(canvas, opts?)` | WebGPU device and context on their own |
 | `clientToLogical / computeLetterbox` | letterbox math between CSS px and design px |
+| `SurfaceOptions.fit / computeCover` | fill a phone instead of letterboxing (cover, cropped to a band) |
 | `deviceTraits()` | touch, handheld, reduced motion and friends |
 | `watchLifecycle(handlers)` | hide, show and freeze events |
 | `toggleFullscreen()` | fullscreen where the page allows it |
@@ -74,6 +75,24 @@ const p = surface.clientToLogical(e.offsetX, e.offsetY); // design px
   with a `SurfaceSize` `{ rect, backbuffer }`), `clientToLogical` / `logicalToClient`,
   `containsLogical`, `setFrame(rect | null)` (letterbox inside part of the container, e.g. the
   layout's `freeRect`), `layout()` and `destroy()`.
+- **Fit** (#1). `SurfaceOptions.fit?: SurfaceFit` is `'contain'` (the default: letterbox, the
+  whole design shows, unchanged), `'cover'` or a `CoverOptions` band. Under a cover fit the canvas
+  covers the container, or the frame given to `setFrame` (not clamped to the container then), and
+  the design is cropped: in a frame wider than the design the top and bottom overflow (`rect.y`
+  negative, `rect.height` past the frame), in a taller one the sides. `CoverOptions`:
+  `minVisibleHeight` / `minVisibleWidth` (the band that always stays on screen; past it the bars
+  come back, narrower than the letterbox's; default 0, and the design size on an axis keeps the
+  letterbox there), `focusX` / `focusY` (the band's centre, default the middle) and `belowScale`
+  (cover only while `fitRect.scale` is below it: `PHONE_SCALE` covers phones and letterboxes
+  tablets and desktops). `setFit(fit)` switches at runtime (a per-scene band) and lays out again.
+  `visibleRect` is the design rect on screen, logical units: the whole design under `'contain'`,
+  the canvas clipped to the frame and the container under cover. `clientToLogical` /
+  `logicalToClient` map through the covered rect, `containsLogical` tests the visible rect, and
+  `onResize` listeners get the covered rect, so `createGame`'s overlay frame (`--tc-frame-*`) and
+  `Camera.fitFreeRect` follow it. `fitRect` stays the whole container's contain fit.
+  `createGame({ surface: { fit } })` passes it through. On the `Surface` interface `visibleRect`
+  and `setFit` are optional (a game's own surface may leave them out, and core's no-DOM surface
+  does); the DOM surface always has both.
 - `Surface` is also an interface (ws/platform-surface): those members, with no private state.
   `EngineCtx.surface`, `BootResult.surface` and `mountSurface` are typed with it, and
   `new Surface(root, opts)` is the DOM canvas that implements it. Anything with the same members
@@ -84,7 +103,10 @@ const p = surface.clientToLogical(e.offsetX, e.offsetY); // design px
 - Pure math (no DOM, tested in Node): `computeLetterbox(containerW, containerH, logicalW,
   logicalH): Letterbox`, `computeBackbuffer(cssW, cssH, dpr, maxDpr?,
   maxPixels?)`, and `clientToLogical(box, logicalW, logicalH, cx, cy, out?)` /
-  `logicalToClient(...)`. `LetterboxRect` is `{ x, y, width, height }`; `Letterbox` adds `scale` (CSS px per
+  `logicalToClient(...)`. `computeCover(frameW, frameH, logicalW, logicalH, opts?:
+  CoverOptions): Letterbox` is the cover fit (never smaller than the letterbox, whole CSS px;
+  ignores `belowScale`), and `visibleLogicalRect(box, clip, logicalW, logicalH, out?)` the
+  logical part of a canvas at `box` that shows through `clip` (empty when they miss). `LetterboxRect` is `{ x, y, width, height }`; `Letterbox` adds `scale` (CSS px per
   logical unit); `Vec2` is `{ x, y }`.
 
 ## Page, device and fullscreen

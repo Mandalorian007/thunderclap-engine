@@ -30,12 +30,14 @@ export {
 } from './environment';
 export type { GpuContext, GpuFailureReason, GpuInitOptions, GpuInitResult } from './gpu';
 export { initGpu } from './gpu';
-export type { BackbufferSize, Letterbox, LetterboxRect, Vec2 } from './letterbox';
+export type { BackbufferSize, CoverOptions, Letterbox, LetterboxRect, Vec2 } from './letterbox';
 export {
   clientToLogical,
   computeBackbuffer,
+  computeCover,
   computeLetterbox,
   logicalToClient,
+  visibleLogicalRect,
 } from './letterbox';
 export type { CopyResult, EmbedContext, LinkActivation, OpenResult } from './links';
 export { embedContext, safeExternalUrl } from './links';
@@ -46,6 +48,6 @@ export {
   showMessageScreen,
   showUnsupportedScreen,
 } from './screens';
-export type { SurfaceOptions, SurfaceSize } from './surface';
+export type { SurfaceFit, SurfaceOptions, SurfaceSize } from './surface';
 export { mountSurface, Surface } from './surface';
 export { type XrEyeView, XrSurface, type XrSurfaceOptions } from './xr-surface';

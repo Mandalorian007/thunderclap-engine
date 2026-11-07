@@ -30,6 +30,15 @@ type BootResult = {
 ## CopyResult  (type-only)
 type CopyResult = 'copied' | 'manual';
 
+## CoverOptions  (type-only)
+interface CoverOptions {
+    minVisibleHeight?: number;
+    minVisibleWidth?: number;
+    focusX?: number;
+    focusY?: number;
+    belowScale?: number;
+}
+
 ## CropInfo  (type-only)
 interface CropInfo {
     readonly fitScale: number;
@@ -171,6 +180,8 @@ interface Surface {
         width: number;
         height: number;
     } | null): void;
+    readonly visibleRect?: Readonly<LetterboxRect>;
+    setFit?(fit: SurfaceFit): void;
     layout(): void;
     destroy(): void;
 }
@@ -179,6 +190,9 @@ const Surface: {
     readonly prototype: Surface;
 };
 
+## SurfaceFit  (type-only)
+type SurfaceFit = 'contain' | 'cover' | CoverOptions;
+
 ## SurfaceOptions  (type-only)
 interface SurfaceOptions {
     logicalWidth?: number;
@@ -186,6 +200,7 @@ interface SurfaceOptions {
     maxDpr?: number;
     maxPixels?: number;
     barColor?: string;
+    fit?: SurfaceFit;
 }
 
 ## SurfaceSize  (type-only)
@@ -247,6 +262,9 @@ function clientToLogical(box: LetterboxRect, logicalW: number, logicalH: number,
 
 ## computeBackbuffer
 function computeBackbuffer(cssW: number, cssH: number, devicePixelRatio: number, maxDpr?: number, maxPixels?: number): BackbufferSize;
+
+## computeCover
+function computeCover(frameW: number, frameH: number, logicalW: number, logicalH: number, opts?: CoverOptions): Letterbox;
 
 ## computeLetterbox
 function computeLetterbox(containerW: number, containerH: number, logicalW: number, logicalH: number): Letterbox;
@@ -310,6 +328,9 @@ function showUnsupportedScreen(root: HTMLElement, opts?: {
 function toggleFullscreen(el?: HTMLElement, opts?: {
     lockLandscape?: boolean;
 }): Promise<boolean>;
+
+## visibleLogicalRect
+function visibleLogicalRect(box: LetterboxRect, clip: LetterboxRect, logicalW: number, logicalH: number, out?: LetterboxRect): LetterboxRect;
 
 ## watchFullscreen
 function watchFullscreen(fn: (on: boolean) => void, doc?: Document): () => void;
