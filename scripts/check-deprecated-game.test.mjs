@@ -1,14 +1,15 @@
 // Tests for the game-side old-name finder (ws/testing-2). Fixtures in
 // scripts/fixtures/deprecated-game: each game is copied to a temp folder whose
 // `node_modules/@thunderclap/engine` links to an engine, as an installed game has it.
-//   game-1x: a game still on 0.x names, against this engine (1.0.0, aliases removed).
+//   game-1x: a game still on 0.x names, against this engine (1.0.0, aliases removed); its
+//   src/reads.ts holds the errors that do not print the engine type (ws/testing-3).
 //   game-0x + engine-0x: a game on a 0.x engine that still has a `@deprecated` alias.
 // Both use the DOM's deprecated `document.execCommand`, which must not be reported.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
@@ -16,6 +17,7 @@ import {
   findGameDeprecations,
   inEngine,
   migrationTable,
+  removedRowsFor,
 } from './check-deprecated-game.mjs';
 
 const repoRoot = join(fileURLToPath(new URL('.', import.meta.url)), '..');
@@ -38,6 +40,7 @@ function install(game, engine, t) {
 }
 
 const lines = (uses) => uses.map((u) => `${u.line}:${u.kind}:${u.rows.map((r) => r.name)}`);
+const inFile = (uses, name) => uses.filter((u) => basename(u.file) === name);
 
 test('migrationTable reads every row of the guide, with dotted names and signatures split', () => {
   const rows = migrationTable(
@@ -47,6 +50,9 @@ test('migrationTable reads every row of the guide, with dotted names and signatu
       '| `anim` | `BlendMode` | `AnimBlendMode` |',
       '| `core` | `SceneStack.list()` | the `scenes` getter |',
       '| `render` | `Renderer.createSpriteMaterial(texture, label?)` | an options object |',
+      '',
+      '| Module | 0.x call | v1 read |',
+      '| assets | `AssetCache.stats()` | the `stats` getter |',
     ].join('\n'),
   );
   assert.deepEqual(
@@ -55,6 +61,7 @@ test('migrationTable reads every row of the guide, with dotted names and signatu
       ['anim', 'BlendMode', null, 'BlendMode', false],
       ['core', 'SceneStack.list', 'SceneStack', 'list', false],
       ['render', 'Renderer.createSpriteMaterial', 'Renderer', 'createSpriteMaterial', true],
+      ['assets', 'AssetCache.stats', 'AssetCache', 'stats', false],
     ],
   );
   assert.equal(rows[0].replacement, '`AnimBlendMode`');
@@ -76,7 +83,7 @@ test('inEngine keeps the engine source and drops its dependencies and other path
 
 test('a game on 0.x names against engine 1.0.0: each removed name with its replacement', (t) => {
   const game = install('game-1x', repoRoot, t);
-  const uses = findGameDeprecations(join(game, 'tsconfig.json'));
+  const uses = inFile(findGameDeprecations(join(game, 'tsconfig.json')), 'game.ts');
   assert.deepEqual(lines(uses), [
     '4:removed:Hit,Hit', // the root barrel: geom's and input's
     '5:removed:BlendMode',
@@ -102,6 +109,62 @@ test('a game on 0.x names against engine 1.0.0: each removed name with its repla
   assert.ok(uses.every((u) => u.line < 36));
 });
 
+test('reads that became getters and members on a wrapped engine type map to their rows', (t) => {
+  const game = install('game-1x', repoRoot, t);
+  const uses = inFile(findGameDeprecations(join(game, 'tsconfig.json')), 'reads.ts');
+  assert.deepEqual(
+    uses.map((u) => `${u.line}:${u.code}:${u.rows.map((r) => `${r.module} ${r.name}`)}`),
+    [
+      '21:2349:assets AssetCache.stats', // `cache.stats()`
+      '22:2349:host HostFullscreen.active', // `host.fullscreen.active()`
+      '23:2349:host HostLifecycle.state', // through `?.` on `HostLifecycle | undefined`
+      '24:2339:core SceneStack.list', // the error prints `Stack`, the game's alias
+      '25:2349:assets AssetCache.stats', // on the game's own `Cache extends AssetCache`
+    ],
+  );
+  // Not reported: `own.count()` (26, the game's own value) and `stack.nothing` (27, no row).
+  assert.ok(uses.every((u) => u.kind === 'removed' && u.line < 26));
+  assert.match(uses[0].rows[0].replacement, /`stats` getter/);
+});
+
+test('removedRowsFor maps TS2349 and a wrapped TS2339 only through engineTypesAt', () => {
+  const rows = migrationTable(
+    [
+      '| core | `SceneStack.list()` | the `scenes` getter |',
+      '| assets | `AssetCache.stats()` | the `stats` getter |',
+    ].join('\n'),
+  );
+  const text = 'cache.stats(); stack.list(); stats();';
+  const at = (s) => text.indexOf(s);
+  const notCallable = { code: 2349, pos: at('stats('), text: 'This expression is not callable.' };
+  const missing = {
+    code: 2339,
+    pos: at('list'),
+    text: "Property 'list' does not exist on type 'Stack'.",
+  };
+  const spec = /^@thunderclap\/engine(?:\/([\w-]+))?$/;
+  const names = (r) => r.map((x) => x.name);
+  // Without a checker neither error prints an engine type.
+  assert.deepEqual(removedRowsFor(notCallable, text, rows, spec), []);
+  assert.deepEqual(removedRowsFor(missing, text, rows, spec), []);
+  const types = { [at('stats(')]: ['AssetCache'], [at('list')]: ['SceneStack'] };
+  const typesAt = (pos) => new Set(types[pos] ?? []);
+  assert.deepEqual(names(removedRowsFor(notCallable, text, rows, spec, typesAt)), [
+    'AssetCache.stats',
+  ]);
+  assert.deepEqual(names(removedRowsFor(missing, text, rows, spec, typesAt)), ['SceneStack.list']);
+  // A bare call (no receiver) and a game type are not engine members.
+  const bare = { ...notCallable, pos: text.lastIndexOf('stats') };
+  assert.deepEqual(
+    removedRowsFor(bare, text, rows, spec, () => new Set(['AssetCache'])),
+    [],
+  );
+  assert.deepEqual(
+    removedRowsFor(notCallable, text, rows, spec, () => new Set(['Own'])),
+    [],
+  );
+});
+
 test('a game on a 0.x engine: the engine alias, not the DOM or the game deprecations', (t) => {
   const engine = realpathSync(mkdtempSync(join(tmpdir(), 'check-deprecated-engine-')));
   t.after(() => rmSync(engine, { recursive: true, force: true }));
@@ -121,5 +184,7 @@ test('the CLI runs from the game folder through node_modules and exits 1 on a us
   assert.match(r.stdout, /src\/game\.ts:5:15 {2}TS2305: .*'BlendMode'/);
   assert.match(r.stdout, /anim BlendMode → `AnimBlendMode`/);
   assert.doesNotMatch(r.stdout, /execCommand/);
-  assert.match(r.stdout, /9 uses of old engine names/);
+  assert.match(r.stdout, /src\/reads\.ts:21:\d+ {2}TS2349: /);
+  assert.match(r.stdout, /assets AssetCache\.stats → the `stats` getter/);
+  assert.match(r.stdout, /14 uses of old engine names/);
 });

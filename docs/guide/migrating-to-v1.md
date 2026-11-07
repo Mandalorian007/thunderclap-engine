@@ -42,10 +42,12 @@ The script is a file path because `scripts/` is not a package entry point. To us
 in your own tooling, import `findGameDeprecations(tsconfig)` from the same file. It returns
 `{ file, line, col, code, text, kind, rows }`, where `kind` is `'deprecated'` (0.x) or
 `'removed'` (1.0.0) and `rows` holds the matching table rows. The script reads this guide
-from the installed engine, so its table always matches your version. An old name that is a
-type error of another kind, such as a method that became a getter (`cache.stats()` →
-`cache.stats`), shows up as an ordinary `tsc` error and is not in the list. Tests:
-`scripts/check-deprecated-game.test.mjs`, which uses a game on 0.x names against both
+from the installed engine, so its tables always match your version. A read that became a
+getter, still called as a method (`cache.stats()`), is TS2349 (not callable); it and a
+missing member on a type your game wraps (`type Stack = SceneStack & { … }`, TS2339) don't
+print the engine type, so the script asks the compiler for the receiver's type and maps them
+to their rows in [Reads that became getters](#reads-that-became-getters) and the table below.
+Tests: `scripts/check-deprecated-game.test.mjs`, which uses a game on 0.x names against both
 engines.
 
 `pnpm check` in this repo runs the same deprecation pass over every checked snippet in the
@@ -139,11 +141,16 @@ other row, they are removed in `1.0.0`.
 
 ## Reads that became getters
 
-These changed without an alias, so the compiler flags them as errors, not suggestions:
+These changed without an alias, so the compiler flags them as errors, not suggestions: a call
+of each is TS2349 (*This expression is not callable*). The members keep their names, so the
+*Module* cells here have no backticks: that keeps these rows out of the "no row is still
+exported" test in `scripts/check-snippets.test.mjs`, which the table above must pass.
 
-- `cache.stats` (`AssetCache`), not `cache.stats()`.
-- `host.fullscreen.active` (`HostFullscreen`), not `active()`. A custom `Host` writes `active` as
-  a getter or a plain boolean.
+| Module | 0.x call | v1 read |
+| --- | --- | --- |
+| assets | `AssetCache.stats()` | the `stats` getter: `cache.stats` |
+| host | `HostFullscreen.active()` | the `active` getter: `host.fullscreen.active`; a custom `Host` writes it as a getter or a plain boolean |
+| host | `HostLifecycle.state()` | the `state` getter: `host.lifecycle?.state`; a custom `Host` writes it as a getter or a value |
 
 ## A worked rename
 

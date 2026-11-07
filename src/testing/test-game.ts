@@ -23,8 +23,12 @@ import { installNullDom } from './null-dom';
  * `createTestGame` options: `createGame`'s, without `gpu`, `host` and `clock` (the kit makes
  * them; pass `host` or `device` to bring your own) and with `root` optional.
  */
-export interface TestGameOptions<A extends string, S extends FlushableSave | null = null>
-  extends Omit<CreateGameOptions<A, S>, 'gpu' | 'host' | 'clock' | 'root'> {
+export interface TestGameOptions<
+  A extends string,
+  S extends FlushableSave | null = null,
+  // biome-ignore lint/suspicious/noExplicitAny: as `CreateGameOptions`: a bare `TestGameOptions<A, S>` takes testers of any target (ws/testing-3)
+  P = any,
+> extends Omit<CreateGameOptions<A, S, P>, 'gpu' | 'host' | 'clock' | 'root'> {
   /** Where the canvas and overlay mount. Default a new `<div>` appended to `document.body`. */
   root?: HTMLElement;
   /** The host. Default `createFakeHost()`. */
@@ -94,7 +98,7 @@ export async function createTestGame<
   S extends FlushableSave | null = null,
   C = unknown,
   P = unknown,
->(opts: TestGameOptions<A, S>): Promise<TestGame<A, S, C, P>> {
+>(opts: TestGameOptions<A, S, P>): Promise<TestGame<A, S, C, P>> {
   const design = { width: opts.design?.width ?? 1920, height: opts.design?.height ?? 1080 };
   const view = opts.viewport ?? design;
   const headless = opts.overlay === false;
