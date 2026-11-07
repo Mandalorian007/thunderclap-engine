@@ -43,3 +43,4 @@ Your worktree may start from an old commit. First `git reset --hard main` (or th
 
 Every commit message ends with the project's attribution line: `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` (the user's convention for this repo, whatever model runs the session).
 - Scratch scripts and logs are per-agent: name them with your workstream (e.g. `scratchpad/<ws>-gate.sh`) or keep them in your worktree. Never write to or run a shared helper another agent may own (E-031 train 4).
+- The slot guard covers every command in a chain: join guarded commands with `&&` inside the guard, or guard each one. A command after `;` runs unguarded (E-031 train 6).
