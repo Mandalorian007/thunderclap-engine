@@ -179,6 +179,14 @@ export interface WidgetOptions {
    * changed.
    */
   onForm?: (ff: FormFactor) => void;
+  /**
+   * Called after a re-layout that moved the widget's element (ws/ui-11): into another region,
+   * to another place among its region's widgets, into `free` or out of `hidden`, with where it is
+   * now. It runs once the layout has measured, before `onChange`. Moving a node cancels its CSS
+   * transitions, so a widget that animates with them restarts them here. A re-layout that leaves
+   * a widget where it was does not move its element (its transitions and focus are kept).
+   */
+  onMove?: (region: RegionName | 'free' | 'hidden') => void;
 }
 
 /**
@@ -760,6 +768,7 @@ interface Entry {
   loggedFree: boolean;
   warnedOverflow: boolean;
   onForm?: (ff: FormFactor) => void;
+  onMove?: (region: RegionName | 'free' | 'hidden') => void;
 }
 
 /** Slack before a measured box counts as larger than its region, CSS px (sub-pixel rounding). */
@@ -872,11 +881,16 @@ export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout
     writeGrid(ff, form, insets, occupied);
     for (const e of entries) e.onForm?.(ff);
 
-    // Widgets.
+    // Widgets. A widget already in its region after the one placed before it stays put
+    // (ws/ui-11): re-inserting a node cancels its CSS transitions and drops its focus, so a
+    // re-layout moves only the elements whose region or order changed, and tells them (`onMove`).
     freeUses = [];
     const sorted = [...entries].sort((a, b) => a.order - b.order || a.seq - b.seq);
     const freed: [Entry, FreePlacement][] = [];
+    const moved: Entry[] = [];
+    const lastIn = new Map<HTMLElement, Element>();
     for (const e of sorted) {
+      const was = e.current;
       let p = placementFor(e.place, ff);
       if (typeof p === 'string' && p !== 'hidden' && !state.regions[p]) {
         console.warn(`[layout] ${e.id}: no "${p}" region in ${ff}; hidden`);
@@ -894,6 +908,7 @@ export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout
         if (e.el.parentNode !== free) free.append(e.el);
         freed.push([e, p]);
         e.current = 'free';
+        if (was !== 'free') moved.push(e);
         continue;
       }
       if (e.current === 'free') {
@@ -902,11 +917,24 @@ export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout
       if (p === 'hidden') {
         if (e.caption) e.caption.dock(null);
         e.current = 'hidden';
+        if (was !== 'hidden') moved.push(e);
         continue;
       }
-      if (e.caption) e.caption.dock(regionEls[p]);
-      else regionEls[p].append(e.el);
+      const r = regionEls[p];
+      const prev = lastIn.get(r);
+      let move = was !== p;
+      if (e.caption) e.caption.dock(r);
+      else if (
+        e.el.parentNode !== r ||
+        (prev && !(prev.compareDocumentPosition(e.el) & Node.DOCUMENT_POSITION_FOLLOWING))
+      ) {
+        if (prev) prev.after(e.el);
+        else r.prepend(e.el);
+        move = true;
+      }
+      lastIn.set(r, e.caption ? e.caption.element : e.el);
       e.current = p;
+      if (move) moved.push(e);
     }
 
     // Content bars and rails (ws/ui-8, ws/ui-9): one read of the bar widgets' heights and the
@@ -972,6 +1000,7 @@ export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout
         );
       }
     }
+    for (const e of moved) e.onMove?.(e.current);
     for (const f of subs) f(state);
   };
 
@@ -1024,6 +1053,9 @@ export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout
       const el = regionEls[n];
       const absent = !r || r.width <= 0 || r.height <= 0;
       el.toggleAttribute('data-empty', absent || (n !== 'fill' && !occupied.has(n)));
+      // A content bar or rail (ws/ui-11): widgets that otherwise shrink to fit their region
+      // (the minimap) hold their own size here, and the track grows to them instead.
+      el.toggleAttribute('data-content', form.bars?.[n as BarName]?.size === 'content');
       el.hidden = absent;
       if (n === 'modal' && r) {
         Object.assign(el.style, {
@@ -1071,6 +1103,7 @@ export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout
         loggedFree: false,
         warnedOverflow: false,
         onForm: opts.onForm,
+        onMove: opts.onMove,
       };
       entries.push(e);
       apply();

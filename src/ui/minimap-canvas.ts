@@ -118,7 +118,8 @@ export interface CanvasMinimapOptions {
   /**
    * Placement per form factor, as `layout.add` takes it; overrides `region`. A phone's side rail
    * is 56 px, so a full-size map usually wants `{ default: 'right', 'phone-landscape': 'cardLane' }`.
-   * The map shrinks (square) to fit a smaller region; `toMap`/picks stay in `size` units.
+   * The map shrinks (square) to fit a smaller fixed region; in a content bar or rail it holds
+   * `size` and the track grows to it (ws/ui-11). `toMap`/picks stay in `size` units.
    */
   place?: WidgetOptions['place'];
   order?: number;
@@ -591,6 +592,7 @@ export const CANVAS_MINIMAP_CSS = `
   box-sizing: border-box; border: var(--tc-border-width) solid var(--tc-color-border); box-shadow: var(--tc-shadow);
   border-radius: var(--tc-radius-m); overflow: hidden; background: var(--tc-color-surface); touch-action: none; }
 .tc-overlay .tc-cminimap[data-shape="round"] { border-radius: 50%; }
+.tc-overlay .tc-region[data-content] > .tc-cminimap { max-width: none; max-height: none; }
 .tc-overlay .tc-cminimap-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 `;
 

@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { h } from './dom';
-import { themePx } from './hud';
-import type { FormFactor } from './layout';
+import { type Meter, themePx } from './hud';
+import { type FormFactor, formSize } from './layout';
 import { ORB_CSS, TrailClock } from './orb';
 import { createOverlay, type Overlay } from './overlay';
 
@@ -185,5 +185,122 @@ describe('orb meter (ws/ui-5)', () => {
     relayouts = 0;
     bar.setSize(40);
     expect(relayouts).toBe(0);
+  });
+
+  it("size: the orb's FormSize as last given, 128 by default; undefined on a bar (ws/ui-11)", () => {
+    expect(ui.meter({ shape: 'orb' }).size).toBe(128);
+    const orb = ui.meter({ shape: 'orb', size: { phone: 56, default: 96 } });
+    expect(orb.size).toEqual({ phone: 56, default: 96 });
+    expect(formSize(orb.size!, ui.layout.formFactor)).toBe(96);
+    orb.setSize(72);
+    expect(orb.size).toBe(72);
+    expect(ui.meter({ label: 'HP' }).size).toBeUndefined();
+  });
+
+  /** Every element under the overlay's root, and how many are meters. */
+  const census = () => ({
+    nodes: ui.root.querySelectorAll('*').length,
+    meters: ui.root.querySelectorAll('[role="meter"]').length,
+  });
+
+  for (const shape of ['orb', 'bar'] as const) {
+    it(`setPlace moves a live ${shape} meter: value, trail, tone and colour stay (ws/ui-11)`, () => {
+      const m: Meter = ui.meter({
+        shape,
+        max: 100,
+        tone: 'danger',
+        color: '#ff0000',
+        trail: { delay: 400, duration: 600 },
+        reducedMotion: false,
+        region: 'bottom',
+        now,
+      });
+      const el = m.el;
+      const band = el.querySelector<HTMLElement>(
+        shape === 'orb' ? '.tc-orb-trail' : '.tc-meter-trail',
+      )!;
+      const holder = shape === 'orb' ? el : band;
+      const prefix = shape === 'orb' ? 'orb' : 'meter';
+      m.set(40);
+      t += 700; // 300 ms into the drain: the band is halfway, at 70
+      expect(m.trail).toBeCloseTo(70, 6);
+      const before = census();
+      m.setPlace('right');
+      expect(m.region).toBe('right');
+      expect(el.parentElement).toBe(ui.layout.region('right'));
+      expect(m.el).toBe(el);
+      expect(m.value).toBe(40);
+      expect(m.trail).toBeCloseTo(70, 6);
+      expect(el.dataset.tone).toBe('danger');
+      expect(el.style.getPropertyValue('--tc-meter-color')).toBe('#ff0000');
+      // The move cancelled the band's transition: it re-runs the rest of the drain from 70.
+      expect(el.style.getPropertyValue(`--tc-${prefix}-trail-delay`)).toBe('0ms');
+      expect(el.style.getPropertyValue(`--tc-${prefix}-trail-duration`)).toBe('300ms');
+      expect(Number(holder.style.getPropertyValue(`--tc-${prefix}-trail`))).toBeCloseTo(0.4, 9);
+      expect(band.style.transition).toBe('');
+      // No node made or lost.
+      expect(census()).toEqual(before);
+      m.setPlace({ default: 'left' });
+      m.setPlace('bottom');
+      expect(census()).toEqual(before);
+      t += 300;
+      expect(m.trail).toBeCloseTo(40, 6);
+      // The next hit runs on the configured timings again.
+      m.set(10);
+      expect(el.style.getPropertyValue(`--tc-${prefix}-trail-delay`)).toBe('400ms');
+      expect(el.style.getPropertyValue(`--tc-${prefix}-trail-duration`)).toBe('600ms');
+      m.remove();
+      expect(census().meters).toBe(before.meters - 1);
+    });
+  }
+
+  it('a move during the hold re-arms the rest of the hold and the whole drain (ws/ui-11)', () => {
+    const orb = ui.meter({ shape: 'orb', max: 100, trail: true, reducedMotion: false, now });
+    orb.set(50);
+    t += 150;
+    orb.setPlace('top');
+    expect(orb.el.style.getPropertyValue('--tc-orb-trail-delay')).toBe('250ms');
+    expect(orb.el.style.getPropertyValue('--tc-orb-trail-duration')).toBe('600ms');
+    expect(orb.trail).toBe(100);
+    // A settled band has nothing to re-run.
+    t += 2000;
+    const orb2 = ui.meter({ shape: 'orb', max: 100, trail: true, reducedMotion: false, now });
+    orb2.setPlace('top');
+    expect(orb2.el.style.getPropertyValue('--tc-orb-trail-delay')).toBe('400ms');
+  });
+
+  it('place per form factor: the layout moves the live orb when the form changes (ws/ui-11)', () => {
+    ui.destroy();
+    let ff: FormFactor = 'desktop';
+    ui = createOverlay({
+      parent,
+      caption: { reducedMotion: true },
+      layout: { classify: () => ff },
+    });
+    const orb = ui.meter({
+      shape: 'orb',
+      max: 100,
+      trail: true,
+      reducedMotion: false,
+      now,
+      region: 'top', // `place` wins
+      place: { default: 'bottom', 'phone-landscape': 'right' },
+    });
+    const el = orb.el;
+    expect(orb.region).toBe('bottom');
+    orb.set(30);
+    const before = census();
+    ff = 'phone-landscape';
+    ui.layout.refresh();
+    expect(orb.region).toBe('right');
+    expect(orb.el).toBe(el);
+    expect(orb.value).toBe(30);
+    expect(orb.trail).toBe(100);
+    expect(census()).toEqual(before);
+    ff = 'desktop';
+    ui.layout.refresh();
+    expect(orb.region).toBe('bottom');
+    // A region name alone is a default.
+    expect(ui.meter({ label: 'HP', place: 'left' }).region).toBe('left');
   });
 });

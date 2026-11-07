@@ -206,6 +206,17 @@ reticle.pulse();              // a short flash on a hit
   `--tc-orb-size` from `WidgetOptions.onForm` on every re-layout, before the layout measures, so
   a content bar or rail sizes to the new diameter in the same pass. `meter.setSize(size)` changes
   it live and re-lays out once when the current form's diameter changes (a bar ignores it).
+  `meter.size` reads the `FormSize` back (an orb's, 128 when unset; `undefined` on a bar).
+- **Placed meters** (ws/ui-11). `MeterOptions.place` is a region or a per-form-factor map as
+  `layout.add` takes it (`{ phone: 'right', default: 'bottom' }`), overriding `region`; the
+  layout moves the live meter when the form factor changes, in the same re-layout, so a game
+  needs no `onChange` handler and no rebuild. `meter.setPlace(place)` (same shape) moves it
+  later; `meter.region` reads where it sits. A move keeps the element, so value, tone, colour,
+  focus and the trail band carry over: the layout's `onMove` re-arms the band's transition from
+  where it stands with the time left on its hold and drain (moving a node cancels CSS
+  transitions), and the next `set` restores the configured timings. The map is the primary
+  form because placement is per form factor everywhere else (`layout.add`, `ui.minimap`) and
+  the engine re-lays out on the form change itself; `setPlace` is the escape hatch.
 - **Slots** (`SlotsOptions`: `count`, `region` `bottom`, `order`, `hints` per slot, `label`
   `Slots`, `selected` 0, `size` 72). `Slots`: `el` (`role="listbox"`), `count`, `selected`,
   `select(i)` (**wraps**: `select(count)` is 0, `select(-1)` the last, so a wheel cycles),
@@ -386,7 +397,11 @@ lists the exported names; ARCHITECTURE.md *Layout* describes the model.
   `cardLane`, `captionLane`, `modal`, `fill`). `layout.add(el, opts: WidgetOptions)` (`place`
   per form factor plus `default`, `order`, `id`) returns a `WidgetHandle` (`element`, `region`,
   `setPlace`, `remove`). `WidgetOptions.onForm(ff)` (ws/ui-10) runs on every re-layout before the
-  layout measures, for a widget sized per form factor. `FormSize` is a number or `FormSizes`
+  layout measures, for a widget sized per form factor. `WidgetOptions.onMove(region)`
+  (ws/ui-11) runs after a re-layout that moved the element (another region, another position in
+  its order, free, or into or out of hidden), after the measure and before `onChange`. A
+  re-layout leaves every widget that is already in place where it is (no DOM move), so a
+  resize, `refresh`, `add` or `setSize` keeps running CSS transitions and focus. `FormSize` is a number or `FormSizes`
   (`{ default } & Partial<Record<FormFactor | 'phone', number>>`); the pure `formSize(size, ff)`
   resolves one (the form's own entry, then `phone` on either phone form, then `default`). A `Placement` is a region, `'hidden'` or a `FreePlacement` (`{ region:
   'free', rect, reason }`); `placementFor(place, ff)` resolves one.
@@ -733,7 +748,9 @@ kind, `MinimapKindStyle { shape: MinimapMarkerShape, color, size }`; the shapes 
 `square`, `diamond`, `triangle`, `ring`, `arrow`; defaults for `self`, `ally`, `enemy`, `objective`, `info`),
 `onPick(worldX, worldZ)`, `region` (`right`), `place` (per form factor as `layout.add` takes it,
 overriding `region`: a phone's 56 px rail is too narrow for a map, so put it in `cardLane` there),
-`order`, `label`. The map is square and shrinks to fit a smaller region; picks read the drawn rect. `CanvasMinimap`: `el`, `canvas`,
+`order`, `label`. The map is square and shrinks to fit a smaller fixed region; in a `content` bar or rail
+(which carries `data-content`) it holds its `size` and the track grows to it, past the rail's
+`max` too, where `layout.overflows()` reports it (ws/ui-11); picks read the drawn rect. `CanvasMinimap`: `el`, `canvas`,
 `size`, `redraws`, `markers`, `rim` (markers held on the rim at the last draw), `zoom` (get and
 set), `setMarkers(list: MinimapMarker[])` (`{ id, x, z, kind, color?, icon?, heading? }`; `icon` is a glyph
 drawn in place of the shape), `markerAt(id, out?)` (a `MinimapMarkerPlace { x, y, outside, angle }` in

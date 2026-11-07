@@ -12,12 +12,14 @@
  * so they follow the regions and the modal rule the layout already applies.
  */
 import { h } from './dom';
-import type { FormSize, Layout, RegionName, WidgetHandle } from './layout';
+import type { FormSize, Layout, RegionName, WidgetHandle, WidgetOptions } from './layout';
 import {
   createOrbMeter,
   meterClock,
+  meterPlace,
   meterReducedMotion,
   readoutText,
+  rearmTrail,
   TrailClock,
   trailTimings,
 } from './orb';
@@ -223,6 +225,12 @@ export interface MeterOptions {
   value?: number;
   /** Layout region. Default `bottom`. */
   region?: RegionName;
+  /**
+   * Placement per form factor, as `layout.add` takes it (ws/ui-11); overrides `region`. The
+   * layout moves the live meter when the form factor changes: `{ default: 'bottom',
+   * 'phone-landscape': 'right' }`. A region name alone is `{ default: name }`.
+   */
+  place?: RegionName | WidgetOptions['place'];
   order?: number;
   /** Fill colour token. Default `accent`. */
   tone?: MeterTone;
@@ -276,6 +284,13 @@ export interface Meter {
   readonly max: number;
   /** Where the damage trail is now (same units as `value`); `value` without a trail. */
   readonly trail: number;
+  /**
+   * An orb's `size` as last given (a number or `FormSizes`, theme px; 128 when none was), ws/ui-11.
+   * `formSize(meter.size, layout.formFactor)` is the diameter now. `undefined` on a bar.
+   */
+  readonly size: FormSize | undefined;
+  /** Where the layout has it now: a region, `free` or `hidden` (ws/ui-11). */
+  readonly region: RegionName | 'free' | 'hidden';
   /** Clamped to `[0, max]`; a new `max` re-clamps. */
   set(value: number, max?: number): void;
   setTone(tone: MeterTone): void;
@@ -286,6 +301,12 @@ export interface Meter {
    * layout re-lays out once when the diameter in the current form factor changes. A bar ignores it.
    */
   setSize(size: FormSize): void;
+  /**
+   * Move the live meter (ws/ui-11): a region, or a placement per form factor as
+   * `MeterOptions.place` takes it. The same element moves, so its value, trail, tone, colour and
+   * size stay; a running trail carries on from where it was.
+   */
+  setPlace(place: RegionName | WidgetOptions['place']): void;
   remove(): void;
 }
 
@@ -327,6 +348,8 @@ export function createMeter(host: HudHost, opts: MeterOptions = {}): Meter {
     h('div', { class: 'tc-meter-track' }, trailEl, fill),
   );
   const frac = () => (max > 0 ? value / max : 0);
+  /** The band's timings were rewritten by a re-arm after a move (ws/ui-11). */
+  let rearmed = false;
   if (clock && trailEl) {
     clock.reset(frac());
     trailEl.style.setProperty('--tc-meter-trail', String(frac()));
@@ -344,15 +367,24 @@ export function createMeter(host: HudHost, opts: MeterOptions = {}): Meter {
       if (opts.readout === 'percent') el.setAttribute('aria-valuetext', text);
       readout.textContent = text;
     }
-    if (clock && trailEl) {
+    if (clock && trailEl && timings) {
+      if (rearmed) {
+        rearmed = false;
+        el.style.setProperty('--tc-meter-trail-delay', `${timings.delay}ms`);
+        el.style.setProperty('--tc-meter-trail-duration', `${timings.duration}ms`);
+      }
       clock.retarget(frac());
       trailEl.style.setProperty('--tc-meter-trail', String(frac()));
     }
   };
   write();
   const handle: WidgetHandle = host.layout.add(el, {
-    place: { default: opts.region ?? 'bottom' },
+    place: meterPlace(opts.place, opts.region),
     order: opts.order,
+    // A move cancels the band's transition: run the rest of it from where the model is.
+    onMove: () => {
+      if (clock && trailEl && rearmTrail(clock, trailEl, 'meter', trailEl, el)) rearmed = true;
+    },
   });
   return {
     el,
@@ -365,6 +397,10 @@ export function createMeter(host: HudHost, opts: MeterOptions = {}): Meter {
     },
     get trail() {
       return clock ? Math.max(value, clock.at() * max) : value;
+    },
+    size: undefined,
+    get region() {
+      return handle.region;
     },
     set(v, m) {
       if (m !== undefined) max = Math.max(0, m);
@@ -382,6 +418,9 @@ export function createMeter(host: HudHost, opts: MeterOptions = {}): Meter {
       el.toggleAttribute('data-color', !!color);
     },
     setSize() {},
+    setPlace(place) {
+      handle.setPlace(meterPlace(place, undefined));
+    },
     remove() {
       handle.remove();
       el.remove();

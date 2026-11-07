@@ -15,7 +15,13 @@
  */
 import { h } from './dom';
 import type { HudHost, Meter, MeterOptions, MeterTrailOptions } from './hud';
-import { type FormFactor, formSize, type WidgetHandle } from './layout';
+import {
+  type FormFactor,
+  formSize,
+  type RegionName,
+  type WidgetHandle,
+  type WidgetOptions,
+} from './layout';
 import { prefersReducedMotion } from './styles';
 
 /** `n` theme px (the same `calc` as `themePx` in `hud.ts`, kept local to avoid an import cycle). */
@@ -58,6 +64,53 @@ export class TrailClock {
     this.to = v;
     this.t0 = -1e12;
   }
+
+  /** The clock's time now, ms. */
+  time(): number {
+    return this.now();
+  }
+}
+
+/**
+ * Restart a trail band's CSS transition where `clock` has it (ws/ui-11). Moving a node (the
+ * layout putting a meter in another region) cancels its transitions, so the band would jump to
+ * the value; this puts it back where the model is and runs the rest of the hold and the drain,
+ * on the same curve. `prefix` is `orb` or `meter`: `--tc-<prefix>-trail` goes on `valueEl`, the
+ * timings (`--tc-<prefix>-trail-delay`, `-duration`) on `timingEl`. Returns whether it re-armed
+ * (the caller puts the configured timings back on its next change). @internal
+ */
+export function rearmTrail(
+  clock: TrailClock,
+  band: HTMLElement,
+  prefix: 'orb' | 'meter',
+  valueEl: HTMLElement,
+  timingEl: HTMLElement,
+): boolean {
+  const t = clock.time();
+  const v = clock.at(t);
+  if (v === clock.to) return false;
+  const since = t - clock.t0;
+  band.style.transition = 'none';
+  valueEl.style.setProperty(`--tc-${prefix}-trail`, String(v));
+  // One style read so the jump lands before the transition comes back (off the frame path).
+  void band.ownerDocument.defaultView?.getComputedStyle(band).transform;
+  band.style.transition = '';
+  timingEl.style.setProperty(`--tc-${prefix}-trail-delay`, `${Math.max(0, clock.delay - since)}ms`);
+  timingEl.style.setProperty(
+    `--tc-${prefix}-trail-duration`,
+    `${clock.duration - Math.max(0, since - clock.delay)}ms`,
+  );
+  valueEl.style.setProperty(`--tc-${prefix}-trail`, String(clock.to));
+  return true;
+}
+
+/** A meter's layout placement: `MeterOptions.place`, else `region` (default `bottom`). @internal */
+export function meterPlace(
+  place: RegionName | WidgetOptions['place'] | undefined,
+  region: RegionName | undefined,
+): WidgetOptions['place'] {
+  if (typeof place === 'string') return { default: place };
+  return place ?? { default: region ?? 'bottom' };
 }
 
 /** Resolve `MeterOptions.trail` into timings, or null when off (or under reduced motion). */
@@ -189,6 +242,8 @@ export function createOrbMeter(host: HudHost, opts: MeterOptions = {}): Meter {
   );
 
   const frac = (v: number) => (max > 0 ? v / max : 0);
+  /** The band's timings were rewritten by a re-arm after a move (ws/ui-11). */
+  let rearmed = false;
   const write = () => {
     el.setAttribute('aria-valuenow', String(value));
     el.setAttribute('aria-valuemax', String(max));
@@ -199,7 +254,12 @@ export function createOrbMeter(host: HudHost, opts: MeterOptions = {}): Meter {
     if (readout.textContent !== text) readout.textContent = text;
     if (opts.format) el.setAttribute('aria-valuetext', opts.format(value, max));
     else if (mode === 'percent') el.setAttribute('aria-valuetext', text);
-    if (clock) {
+    if (clock && timings) {
+      if (rearmed) {
+        rearmed = false;
+        el.style.setProperty('--tc-orb-trail-delay', `${timings.delay}ms`);
+        el.style.setProperty('--tc-orb-trail-duration', `${timings.duration}ms`);
+      }
       clock.retarget(f);
       el.style.setProperty('--tc-orb-trail', String(f));
     }
@@ -222,9 +282,13 @@ export function createOrbMeter(host: HudHost, opts: MeterOptions = {}): Meter {
   write();
 
   const handle: WidgetHandle = host.layout.add(el, {
-    place: { default: opts.region ?? 'bottom' },
+    place: meterPlace(opts.place, opts.region),
     order: opts.order,
     onForm: writeSize,
+    // A move cancels the band's transition: run the rest of it from where the model is.
+    onMove: () => {
+      if (clock && trailEl && rearmTrail(clock, trailEl, 'orb', el, el)) rearmed = true;
+    },
   });
 
   return {
@@ -239,6 +303,12 @@ export function createOrbMeter(host: HudHost, opts: MeterOptions = {}): Meter {
     get trail() {
       // The band never shows under the fill, so a rising value reads as the value.
       return clock ? Math.max(value, clock.at() * max) : value;
+    },
+    get size() {
+      return size ?? 128;
+    },
+    get region() {
+      return handle.region;
     },
     set(v, m) {
       if (m !== undefined) max = Math.max(0, m);
@@ -257,6 +327,9 @@ export function createOrbMeter(host: HudHost, opts: MeterOptions = {}): Meter {
     setSize(next) {
       size = next;
       if (writeSize(host.layout.formFactor)) host.layout.refresh();
+    },
+    setPlace(place) {
+      handle.setPlace(meterPlace(place, undefined));
     },
     remove() {
       handle.remove();
