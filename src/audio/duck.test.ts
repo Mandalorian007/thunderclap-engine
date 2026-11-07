@@ -191,7 +191,108 @@ describe('createDucker', () => {
   });
 });
 
+describe('two duckers on one target', () => {
+  it('combine as a product; releasing one leaves the other; disposing one clears its key', async () => {
+    const { audio } = setupEngine();
+    await audio.unlock();
+    const music = audio.busNode('music') as unknown as FakeGain;
+    const base = busGain(audio.settings.music);
+    const dialogue = createDucker(audio, {
+      trigger: 'ui',
+      target: 'music',
+      amount: 0.5,
+      attack: 0.01,
+      release: 0.1,
+    });
+    const stinger = createDucker(audio, {
+      trigger: 'sfx',
+      target: 'music',
+      amount: 0.4,
+      attack: 0.01,
+      release: 0.1,
+    });
+    expect(dialogue.key).not.toBe(stinger.key);
+
+    const line = dialogue.watch(audio.play(fakeBuffer(1), { bus: 'ui' }));
+    const hit = stinger.watch(audio.play(fakeBuffer(1), { bus: 'sfx' }));
+    dialogue.update(0.05);
+    stinger.update(0.05);
+    expect(dialogue.gain).toBeCloseTo(0.5);
+    expect(stinger.gain).toBeCloseTo(0.6);
+    expect(audio.busScale('music', dialogue.key)).toBeCloseTo(0.5);
+    expect(audio.busScale('music', stinger.key)).toBeCloseTo(0.6);
+    expect(audio.busScale('music')).toBeCloseTo(0.3);
+    expect(music.gain.value).toBeCloseTo(base * 0.3);
+
+    // The stinger ends and releases; the dialogue duck holds.
+    hit.stop();
+    await tick();
+    dialogue.update(0.2);
+    stinger.update(0.2);
+    expect(stinger.level).toBe(0);
+    expect(audio.busScale('music', stinger.key)).toBe(1);
+    expect(audio.busScale('music')).toBeCloseTo(0.5);
+    expect(music.gain.value).toBeCloseTo(base * 0.5);
+
+    // Stinger again, then dispose the dialogue ducker mid-line: only its key goes.
+    stinger.watch(audio.play(fakeBuffer(1), { bus: 'sfx' }));
+    stinger.update(0.05);
+    expect(audio.busScale('music')).toBeCloseTo(0.3);
+    dialogue.dispose();
+    expect(audio.busScale('music', dialogue.key)).toBe(1);
+    expect(audio.busScale('music')).toBeCloseTo(0.6);
+    expect(music.gain.value).toBeCloseTo(base * 0.6);
+    expect(line.playing).toBe(true);
+    stinger.dispose();
+    expect(audio.busScale('music')).toBe(1);
+    expect(music.gain.value).toBeCloseTo(base);
+  });
+
+  it('a paused target holds the product and unpause lands on it', async () => {
+    const { audio } = setupEngine();
+    await audio.unlock();
+    const music = audio.busNode('music') as unknown as FakeGain;
+    const a = createDucker(audio, { trigger: 'ui', target: 'music', amount: 0.5, attack: 0.01 });
+    const b = createDucker(audio, { trigger: 'sfx', target: 'music', amount: 0.5, attack: 0.01 });
+    audio.pause();
+    a.watch(audio.play(fakeBuffer(1), { bus: 'ui' }));
+    b.watch(audio.play(fakeBuffer(1), { bus: 'sfx' }));
+    a.update(0.05);
+    b.update(0.05);
+    expect(music.gain.value).toBe(0);
+    audio.unpause();
+    expect(music.gain.value).toBeCloseTo(busGain(audio.settings.music) * 0.25);
+  });
+});
+
 describe('AudioEngine.setBusScale', () => {
+  it('keeps one scale per key; the bus scale is their product', async () => {
+    const { audio } = setupEngine();
+    audio.setBusScale('sfx', 0.5);
+    audio.setBusScale('sfx', 0.5, undefined, 'cutscene');
+    expect(audio.busScale('sfx', 'default')).toBe(0.5);
+    expect(audio.busScale('sfx', 'cutscene')).toBe(0.5);
+    expect(audio.busScale('sfx', 'never-set')).toBe(1);
+    expect(audio.busScale('sfx')).toBe(0.25);
+    await audio.unlock();
+    const sfx = audio.busNode('sfx') as unknown as FakeGain;
+    expect(sfx.gain.value).toBeCloseTo(busGain(audio.settings.sfx) * 0.25);
+    audio.setBusScale('sfx', 0.8, 0.005, 'cutscene');
+    expect(audio.busScale('sfx')).toBeCloseTo(0.4);
+    expect(sfx.gain.value).toBeCloseTo(busGain(audio.settings.sfx) * 0.4);
+    audio.clearBusScale('sfx', 'cutscene');
+    expect(audio.busScale('sfx', 'cutscene')).toBe(1);
+    expect(audio.busScale('sfx')).toBe(0.5);
+    expect(sfx.gain.value).toBeCloseTo(busGain(audio.settings.sfx) * 0.5);
+    // Clearing an unknown key is a no-op; clearing 'default' restores the bus.
+    audio.clearBusScale('sfx', 'cutscene');
+    audio.clearBusScale('sfx', 'default');
+    expect(audio.busScale('sfx')).toBe(1);
+    expect(sfx.gain.value).toBeCloseTo(busGain(audio.settings.sfx));
+    // Other buses are untouched.
+    expect(audio.busScale('music')).toBe(1);
+  });
+
   it('multiplies the settings gain, composes with setVolume and clamps', async () => {
     const { audio } = setupEngine();
     audio.setBusScale('sfx', 0.5);

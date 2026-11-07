@@ -1153,7 +1153,23 @@ export class AudioEngine {
   private rateZeroOk: boolean | null = null;
   /** Registered voices frozen by `pause`, with the rate to restore. */
   private readonly frozenExternal = new Map<Voice, number>();
-  /** Per-bus multipliers on the settings gain (`setBusScale`: the ducker). */
+  /**
+   * Per-bus keyed multipliers on the settings gain (`setBusScale`: the duckers). Parallel
+   * key/value arrays, searched linearly (a bus has a handful of keys), so a per-frame
+   * `setBusScale` on an existing key allocates nothing. `scales` caches each bus's product.
+   */
+  private readonly scaleKeys: Record<BusName, string[]> = {
+    master: [],
+    music: [],
+    sfx: [],
+    ui: [],
+  };
+  private readonly scaleValues: Record<BusName, number[]> = {
+    master: [],
+    music: [],
+    sfx: [],
+    ui: [],
+  };
   private readonly scales: Record<BusName, number> = { master: 1, music: 1, sfx: 1, ui: 1 };
 
   constructor(opts: AudioEngineOptions = {}) {
@@ -1672,23 +1688,62 @@ export class AudioEngine {
   }
 
   /**
-   * Multiply a bus's settings gain by `scale` (0..1), approached with time constant
-   * `timeConstant` seconds (default 0.015). The bus gain is always
-   * `busGain(settings[bus]) × scale`, so `setVolume` and `setMuted` keep composing with it.
-   * The engine owns the write: while `pause` holds the bus or `inBackground` is true the scale
-   * is only stored, and `unpause` / `background(false)` ramp to the scaled gain; set before the
-   * context exists, the bus is built at it. `createDucker` drives this; one owner per bus.
+   * Multiply a bus's settings gain by `scale` (0..1) under `key` (default `'default'`),
+   * approached with time constant `timeConstant` seconds (default 0.015). A bus keeps one scale
+   * per key and its effective scale is the product of them all, so two duckers on one bus
+   * combine instead of fighting. The bus gain is always `busGain(settings[bus]) × product`, so
+   * `setVolume` and `setMuted` keep composing with it. The engine owns the write: while `pause`
+   * holds the bus or `inBackground` is true the scale is only stored, and `unpause` /
+   * `background(false)` ramp to the scaled gain; set before the context exists, the bus is
+   * built at it. `createDucker` drives this with a key of its own.
    */
-  setBusScale(bus: BusName, scale: number, timeConstant?: number): void {
+  setBusScale(bus: BusName, scale: number, timeConstant?: number, key = 'default'): void {
     const s = Number.isFinite(scale) ? Math.min(1, Math.max(0, scale)) : 1;
-    if (s === this.scales[bus]) return;
-    this.scales[bus] = s;
-    this.applyBus(bus, timeConstant);
+    const keys = this.scaleKeys[bus];
+    const values = this.scaleValues[bus];
+    const i = keys.indexOf(key);
+    if (i >= 0) {
+      if (values[i] === s) return;
+      values[i] = s;
+    } else {
+      keys.push(key);
+      values.push(s);
+    }
+    this.updateBusScale(bus, timeConstant);
   }
 
-  /** The bus's current `setBusScale` multiplier (1 by default). */
-  busScale(bus: BusName): number {
-    return this.scales[bus];
+  /**
+   * Remove `key`'s scale from `bus` (a no-op for a key never set), ramping to the product of
+   * the keys left with time constant `timeConstant` (default 0.015). `Ducker.dispose` calls it.
+   */
+  clearBusScale(bus: BusName, key: string, timeConstant?: number): void {
+    const keys = this.scaleKeys[bus];
+    const values = this.scaleValues[bus];
+    const i = keys.indexOf(key);
+    if (i < 0) return;
+    keys.splice(i, 1);
+    values.splice(i, 1);
+    this.updateBusScale(bus, timeConstant);
+  }
+
+  /**
+   * `key`'s `setBusScale` multiplier on `bus` (1 for a key never set or cleared), or, with
+   * `key` omitted, the bus's effective scale: the product of all its keys (1 by default).
+   */
+  busScale(bus: BusName, key?: string): number {
+    if (key === undefined) return this.scales[bus];
+    const i = this.scaleKeys[bus].indexOf(key);
+    return i < 0 ? 1 : this.scaleValues[bus][i]!;
+  }
+
+  /** Recompute a bus's product of keyed scales and write the bus if it changed. */
+  private updateBusScale(bus: BusName, timeConstant?: number): void {
+    const values = this.scaleValues[bus];
+    let p = 1;
+    for (let j = 0; j < values.length; j++) p *= values[j]!;
+    if (p === this.scales[bus]) return;
+    this.scales[bus] = p;
+    this.applyBus(bus, timeConstant);
   }
 
   // ------------------------------------------------------------ pause
