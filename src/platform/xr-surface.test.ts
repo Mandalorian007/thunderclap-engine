@@ -78,7 +78,11 @@ describe('XrSurface', () => {
     expect(l.camera.view[13]).toBeCloseTo(-1.6);
     expect(surface.head.view[12]).toBeCloseTo(0);
     expect(surface.head.view[13]).toBeCloseTo(-1.6);
-    expect(surface.head.projection).toEqual(l.camera.projection);
+    // The head frustum is the union of both eyes' (ws/xr-fixes): with symmetric eyes it keeps
+    // their fov and depth range, pulled back behind the head by the eye offset.
+    expect(surface.head.projection[0]).toBeCloseTo(l.camera.projection[0]!);
+    expect(surface.head.projection[5]).toBeCloseTo(l.camera.projection[5]!);
+    expect(surface.head.projection[15]).toBeGreaterThan(0);
     expect(l.camera.projection[0]).toBeCloseTo(0.5); // 90° at 2:1
   });
 

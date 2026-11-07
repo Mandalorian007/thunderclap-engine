@@ -69,6 +69,9 @@ loop.maxFps = 30;    // steady 30 fps on a 60 Hz display; null = every display f
   old source is cancelled and the next comes from the new one; called from inside a frame, the
   running frame finishes and reschedules through the new source; `createGame` uses it to move
   onto an XR session's host and back), `isRunning`, `halted`, `paused`, `maxFps`, `time`.
+  A frame that throws still schedules the next one, then the error goes on to the frame source
+  (a headset no longer freezes on one bad frame); `maxFps` is ignored while frames come from an
+  XR session (a `kind: 'xr'` source), since the headset sets the rate (ws/xr-fixes).
   In VR `createGame`'s render step draws each eye into the XR surface's HDR `scene` target and
   resolves it through the post stack into the eye's part of the layer (`renderer.resolve`,
   ws/xr-post), then `endFrame({ present: false })`.

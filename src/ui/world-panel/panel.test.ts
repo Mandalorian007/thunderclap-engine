@@ -672,4 +672,31 @@ describe('attach (ws/ui-4)', () => {
     expect(seen).toEqual([routerCam, head]);
     expect(seen[1]).toBe(head);
   });
+
+  it('an attached head-locked panel follows the camera as it is at draw time (ws/xr-fixes)', () => {
+    const { fake, panel } = make({ headLocked: { distance: 2 } });
+    const head = Camera.perspective(1, 1, 0.1, 100);
+    head.lookAt([0, 1.6, 0], [0, 1.6, -1]);
+    const ticks: (() => void)[] = [];
+    const router = { pointers: [], camera: head, addTester: () => () => {} };
+    panel.attach({
+      pointers: router as unknown as PointerRouter<unknown>,
+      onUpdated: (fn: () => void) => {
+        ticks.push(fn);
+        return () => ticks.splice(ticks.indexOf(fn), 1);
+      },
+    });
+    for (const t of ticks) t();
+    expect(panel.transform.position.z).toBeCloseTo(-2);
+    // The headset poses the head after the tick (or runs no tick this frame): the draw follows.
+    head.lookAt([3, 1.6, 0], [3, 1.6, -1]);
+    prepare(fake, panel);
+    expect(panel.transform.position.x).toBeCloseTo(3);
+    expect(panel.transform.position.z).toBeCloseTo(-2);
+    // Detached: the draw no longer moves it.
+    panel.detach();
+    head.lookAt([-3, 1.6, 0], [-3, 1.6, -1]);
+    prepare(fake, panel);
+    expect(panel.transform.position.x).toBeCloseTo(3);
+  });
 });

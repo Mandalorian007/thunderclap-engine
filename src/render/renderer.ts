@@ -1150,7 +1150,9 @@ export class Renderer implements FrameSink {
 
   /** Start recording a frame. `time`/`dt` in seconds are exposed to shaders via `globals`. */
   beginFrame(time: number, dt: number): Frame {
-    if (this.inFrame) throw new Error('beginFrame called twice without endFrame');
+    // The last frame threw between `beginFrame` and `endFrame` (ws/xr-fixes): drop it unsubmitted
+    // so this one starts clean and the game (a headset) keeps running.
+    if (this.inFrame) this.dropFrame();
     this.inFrame = true;
     if (this.timingEvery > 0) this.frameStart = performance.now();
     this.instanceCount = 0;
@@ -1562,7 +1564,15 @@ export class Renderer implements FrameSink {
       this.inFrame = false;
       return;
     }
-    if (!this.encoder) this.render(this.frame, this.camera);
+    if (!this.encoder) {
+      // `present: false` with no view (an XR frame without a pose, ws/xr-fixes): nothing went to
+      // the layer and nothing goes to the canvas, so the page target is not rendered either.
+      if (opts?.present === false) {
+        this.dropFrame();
+        return;
+      }
+      this.render(this.frame, this.camera);
+    }
     this.inFrame = false;
     const enc = this.encoder!;
     this.encoder = null;
@@ -1605,6 +1615,20 @@ export class Renderer implements FrameSink {
         this.device.queue.onSubmittedWorkDone().then(this.onTimingDone, this.onTimingDone);
       }
     }
+  }
+
+  /**
+   * End the open frame without submitting: its encoder (if any) is dropped and the per-frame
+   * view state reset, as `endFrame` leaves it. A throwing frame and a frame with no views end
+   * here.
+   */
+  private dropFrame(): void {
+    this.inFrame = false;
+    this.encoder = null;
+    this.viewCount = 0;
+    this.shadowCount = 0;
+    this.usedCount = 0;
+    this.instanceBase = 0;
   }
 
   /** Every `timingEvery` frames, when no sample is in flight. */

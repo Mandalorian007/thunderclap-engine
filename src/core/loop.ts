@@ -102,6 +102,11 @@ export interface GameLoopOptions extends FixedStepperOptions {
 /** Early-frame tolerance for `GameLoop.maxFps`, ms. */
 const FRAME_CAP_SLACK_MS = 3;
 
+/** An XR session's frames (`createXrHost`'s `kind: 'xr'`): `maxFps` never applies to them. */
+function isXrSource(src: FrameSource | null): boolean {
+  return (src as { readonly kind?: unknown } | null)?.kind === 'xr';
+}
+
 export class GameLoop {
   readonly time: Time;
   private readonly stepper: FixedStepper;
@@ -145,6 +150,8 @@ export class GameLoop {
    * Cap the render rate (null = every display frame). With 30 on a 60 Hz display the loop runs
    * on every other vsync: a steady 30 fps instead of a GPU-bound jitter between 30 and 60.
    * Frames are skipped whole (no update, no render), so the fixed step still keeps time.
+   * Ignored while frames come from an XR session (a `kind: 'xr'` source): the headset sets
+   * the rate.
    */
   get maxFps(): number | null {
     return this.minFrameMs > 0 ? 1000 / this.minFrameMs : null;
@@ -213,7 +220,12 @@ export class GameLoop {
     if (!this.running) return;
     const t = this.now();
     // A few ms of slack: vsync timestamps jitter, and a 33.3 ms target must not miss 33.2.
-    if (this.minFrameMs > 0 && t - this.last < this.minFrameMs - FRAME_CAP_SLACK_MS) {
+    // Never in XR: the headset paces the session, and a skipped XR frame is a dropped frame.
+    if (
+      this.minFrameMs > 0 &&
+      !isXrSource(this.source) &&
+      t - this.last < this.minFrameMs - FRAME_CAP_SLACK_MS
+    ) {
       this.frameId = this.frames.requestFrame(this.frame);
       return;
     }
@@ -223,9 +235,11 @@ export class GameLoop {
     try {
       this.runFrame(dt);
     } finally {
+      // A frame that throws still schedules the next one (a headset otherwise freezes for good);
+      // the error then propagates to the frame source, which reports it.
       this.inFrame = false;
+      if (this.running) this.frameId = this.frames.requestFrame(this.frame);
     }
-    if (this.running) this.frameId = this.frames.requestFrame(this.frame);
   };
 
   private runFrame(rawDt: number): void {

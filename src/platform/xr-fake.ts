@@ -21,6 +21,17 @@ export interface FakeXrOptions {
   supported?: boolean;
   /** A new layer texture every frame (a real compositor rotates them). Default false. */
   rotateTextures?: boolean;
+  /**
+   * With `rotateTextures`, cycle through this many textures instead of making a new one every
+   * frame, as a real compositor's swapchain does (ws/xr-fixes). Default 0: always new.
+   */
+  textureRing?: number;
+  /**
+   * Off-axis eye frusta as tangents, the way headsets have them (ws/xr-fixes): `outer` toward
+   * the eye's own side (left for the left eye), `inner` toward the nose, `up`, `down`, all
+   * positive. Default none: both eyes get the same symmetric 90° projection.
+   */
+  fov?: { outer: number; inner: number; up: number; down: number } | null;
 }
 
 function translation(x: number, y: number, z: number): Float32Array {
@@ -56,6 +67,16 @@ function perspective90(aspect: number): Float32Array {
   m[10] = far / (near - far);
   m[11] = -1;
   m[14] = (near * far) / (near - far);
+  return m;
+}
+
+/** An off-axis projection from tangents (left < 0 < right, bottom < 0 < top), depth 0..1. */
+function offAxis(l: number, r: number, b: number, t: number): Float32Array {
+  const m = perspective90(1);
+  m[0] = 2 / (r - l);
+  m[5] = 2 / (t - b);
+  m[8] = (r + l) / (r - l);
+  m[9] = (t + b) / (t - b);
   return m;
 }
 
@@ -131,10 +152,15 @@ export class FakeXrFrame implements XRFrame {
     const s = this.session;
     const [hx, hy, hz] = s.headPosition;
     const half = s.opts.ipd / 2;
+    const fov = s.opts.fov;
     const proj = perspective90(s.opts.eyeWidth / s.opts.eyeHeight);
     const view = (eye: XREye, dx: number): XRView => ({
       eye,
-      projectionMatrix: proj,
+      projectionMatrix: !fov
+        ? proj
+        : eye === 'left'
+          ? offAxis(-fov.outer, fov.inner, -fov.down, fov.up)
+          : offAxis(-fov.inner, fov.outer, -fov.down, fov.up),
       transform: fakeTransform(hx + dx, hy, hz),
     });
     return {
@@ -323,6 +349,7 @@ export class FakeXrProjectionLayer implements XRProjectionLayer {
   private color: GPUTexture | null = null;
   private depth: GPUTexture | null = null;
   private lastFrameTime = -1;
+  private ringIndex = -1;
 
   constructor(
     readonly binding: FakeXRGPUBinding,
@@ -347,6 +374,13 @@ export class FakeXrProjectionLayer implements XRProjectionLayer {
   textures(frameTime: number): { color: GPUTexture; depth: GPUTexture | null } {
     const rotate = this.binding.session.opts.rotateTextures && frameTime !== this.lastFrameTime;
     this.lastFrameTime = frameTime;
+    const ring = this.binding.session.opts.textureRing;
+    if (rotate && ring > 0 && this.colorTextures.length >= ring) {
+      this.ringIndex = (this.ringIndex + 1) % ring;
+      this.color = this.colorTextures[this.ringIndex]!;
+      this.depth = this.depthTextures[this.ringIndex] ?? null;
+      return { color: this.color, depth: this.depth };
+    }
     if (!this.color || rotate) {
       const size = [this.textureWidth, this.textureHeight, this.textureArrayLength];
       const device = this.binding.device;
@@ -431,6 +465,8 @@ export function installFakeXr(opts: FakeXrOptions = {}): FakeXr {
     ipd: opts.ipd ?? 0.064,
     supported: opts.supported ?? true,
     rotateTextures: opts.rotateTextures ?? false,
+    textureRing: opts.textureRing ?? 0,
+    fov: opts.fov ?? null,
   };
   const system = new FakeXrSystem(full);
   const bindings: FakeXRGPUBinding[] = [];

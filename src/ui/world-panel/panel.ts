@@ -166,6 +166,8 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
   private readonly routerNormal: Vec3 = [0, 0, 0];
   private readonly basis = new Float32Array(12);
   private detachFn: (() => void) | null = null;
+  /** The camera `attach` follows, read again at draw time (`prepare`); null when not attached. */
+  private followCam: (() => Camera | null) | null = null;
 
   constructor(renderer: Renderer, opts: WorldPanelOptions) {
     this.renderer = renderer;
@@ -662,22 +664,31 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
    * pointer router and, through `input.onUpdated`, calls `poll(router.pointers)` after every
    * `input.update()` and `update(camera)` with the router's camera (the one the rays go through,
    * `renderer.camera` in a game, the head camera while `ctx.xr` is active). `opts.camera`
-   * (ws/api-core) names another camera to face, read each tick. Call once; `detach()` (and
-   * `dispose()`) undoes it. Manual `poll`/`update` still work for an input without a router.
+   * (ws/api-core) names another camera to face, read each tick. A head-locked or billboard
+   * panel also re-reads that camera when the frame draws (`prepare`), so in VR it sits in front
+   * of the head as posed for this frame, also on frames with no sim step (ws/xr-fixes). Call
+   * once; `detach()` (and `dispose()`) undoes it. Manual `poll`/`update` still work for an
+   * input without a router.
    */
   attach(input: WorldPanelInput, opts: { camera?: () => Camera | null } = {}): void {
     this.detach();
     const router = input.pointers ?? null;
     if (!router) throw new Error('WorldPanel.attach: the input has no pointer router');
     const offTester = this.attachTo(router);
+    // The router sees a `RayCamera`; a full `Camera` (a game's `renderer.camera`) has `view`.
+    const follow = (): Camera | null => {
+      const cam = opts.camera ? opts.camera() : router.camera;
+      return cam && 'view' in cam ? (cam as Camera) : null;
+    };
     const offTick = input.onUpdated(() => {
       if (this.disposed) return;
       this.poll(router.pointers);
-      // The router sees a `RayCamera`; a full `Camera` (a game's `renderer.camera`) has `view`.
-      const cam = opts.camera ? opts.camera() : router.camera;
-      if (cam && 'view' in cam) this.update(cam as Camera);
+      const cam = follow();
+      if (cam) this.update(cam);
     });
+    this.followCam = follow;
     this.detachFn = () => {
+      this.followCam = null;
       offTick();
       offTester();
     };
@@ -766,6 +777,14 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
   /** Repaint what is dirty and upload it (once) before the pass. */
   prepare(_encoder: GPUCommandEncoder, _frame?: Frame): void {
     if (this.disposed) return;
+    // An attached head-locked or billboard panel follows the camera as it is when the frame
+    // draws (ws/xr-fixes): in VR the head was posed after the input tick, and a headset frame
+    // with no sim step runs no tick at all, so placing it only on the tick lags or judders.
+    const follow = this.followCam;
+    if (follow && (this.headLocked || this.billboard)) {
+      const cam = follow();
+      if (cam) this.update(cam);
+    }
     this.repaint();
     if (this.needsUpload) {
       this.needsUpload = false;
