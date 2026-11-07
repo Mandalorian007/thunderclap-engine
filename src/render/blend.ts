@@ -11,12 +11,6 @@
  */
 export type RenderBlendMode = 'alpha' | 'premultiplied' | 'additive' | 'opaque' | 'multiply';
 
-/**
- * @deprecated (E-036) Use `RenderBlendMode`: `anim` exports a different `BlendMode` (clip
- * layering). Removed next minor.
- */
-export type BlendMode = RenderBlendMode;
-
 export function blendState(mode: RenderBlendMode): GPUBlendState | undefined {
   switch (mode) {
     case 'opaque':

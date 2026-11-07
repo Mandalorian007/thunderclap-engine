@@ -2,7 +2,7 @@
 // Markdown line where the fixed one passes, and a deprecated name failing the same way.
 // Run by `pnpm check:snippets`.
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
@@ -18,6 +18,27 @@ import {
 
 const dir = mkdtempSync(join(tmpdir(), 'check-snippets-'));
 after(() => rmSync(dir, { recursive: true, force: true }));
+
+/** Every export and member name in `api/`, as `module name` (`render Renderer.white`). */
+function apiNames(apiDir = join(root, 'api')) {
+  const out = new Set();
+  for (const f of readdirSync(apiDir)) {
+    if (!f.endsWith('.api.txt')) continue;
+    const module = f === 'index.api.txt' ? 'engine' : f.slice(0, -'.api.txt'.length);
+    let section = '';
+    for (const line of readFileSync(join(apiDir, f), 'utf8').split('\n')) {
+      const head = /^## (\S+)/.exec(line);
+      if (head) {
+        section = head[1];
+        out.add(`${module} ${section}`);
+        continue;
+      }
+      const member = /^\s+(?:readonly\s+|static\s+|get\s+|set\s+)*([A-Za-z_$][\w$]*)/.exec(line);
+      if (member && section) out.add(`${module} ${section}.${member[1]}`);
+    }
+  }
+  return out;
+}
 
 const fence = '```';
 const doc = (body) => `# Guide\n\nSome prose.\n\n${fence}ts\n${body}\n${fence}\n`;
@@ -62,25 +83,30 @@ test('a broken snippet fails at its Markdown line; the fixed one passes', () => 
 test('a snippet that uses a deprecated name fails with TS6385/TS6387; the v1 names pass', () => {
   const md = join(dir, 'deprecated.md');
   const cache = join(dir, 'cache-deprecated');
+  // engine-v1.0.0 deprecates nothing, so the snippet declares its own deprecated names; the
+  // DOM's `execCommand` counts too (snippets show no deprecated name of any origin).
   writeFileSync(
     md,
     doc(
       [
-        "import type { PlayOptions } from '@thunderclap/engine/audio';",
-        "import type { Input } from '@thunderclap/engine/input';",
-        'declare const input: Input<string>;',
+        "import type { AudioPlayOptions } from '@thunderclap/engine/audio';",
+        '/** @deprecated use `AudioPlayOptions` */',
+        'type PlayOptions = AudioPlayOptions;',
+        '/** @deprecated use the getter */',
+        'declare function getGestures(): void;',
         'export const opts: PlayOptions = {};',
-        'input.getGestures();',
+        'getGestures();',
+        "document.execCommand('copy');",
       ].join('\n'),
     ),
   );
   const bad = checkSnippets([[md, true]], cache);
   assert.equal(bad.count, 1);
-  // The import of `PlayOptions`, its use, and the deprecated method signature.
+  // The deprecated type's use, the deprecated call, and the DOM's deprecated call.
   assert.equal(bad.errors.length, 3, bad.errors.join('\n'));
-  assert.match(bad.errors[0], /deprecated\.md:6:15 +error TS6385: 'PlayOptions' is deprecated/);
-  assert.match(bad.errors[1], /deprecated\.md:9:20 +error TS6385/);
-  assert.match(bad.errors[2], /deprecated\.md:10:7 +error TS6387: .*getGestures/);
+  assert.match(bad.errors[0], /deprecated\.md:11:20 +error TS6385: 'PlayOptions' is deprecated/);
+  assert.match(bad.errors[1], /deprecated\.md:12:1 +error TS6387: .*getGestures/);
+  assert.match(bad.errors[2], /deprecated\.md:13:10 +error TS6387: .*execCommand/);
   // With the pass off, only real type errors count.
   assert.deepEqual(checkSnippets([[md, true]], cache, { deprecations: false }), {
     count: 1,
@@ -106,10 +132,8 @@ test('findDeprecatedUses reports 1-based lines and columns past non-ASCII text',
   const sub = join(dir, 'find');
   mkdirSync(sub, { recursive: true });
   const file = join(sub, 'a.ts');
-  writeFileSync(
-    file,
-    "// é → ×\nimport type { Rect } from '@thunderclap/engine/platform';\nexport type R = Rect;\n",
-  );
+  writeFileSync(join(sub, 'old.ts'), '/** @deprecated */\nexport type Rect = { w: number };\n');
+  writeFileSync(file, "// é → ×\nimport type { Rect } from './old.ts';\nexport type R = Rect;\n");
   writeFileSync(
     join(sub, 'tsconfig.json'),
     JSON.stringify({
@@ -122,7 +146,6 @@ test('findDeprecatedUses reports 1-based lines and columns past non-ASCII text',
         allowImportingTsExtensions: true,
         noEmit: true,
         types: [],
-        paths: { '@thunderclap/engine/platform': [join(root, 'src', 'platform', 'index.ts')] },
       },
       files: [file],
     }),
@@ -136,23 +159,33 @@ test('findDeprecatedUses reports 1-based lines and columns past non-ASCII text',
   );
 });
 
-test('the migration guide lists every @deprecated export in api/, and nothing else', () => {
+test('the migration guide lists every @deprecated export in api/, and no row is still exported', () => {
   const key = (r) => `${r.module === '.' ? 'engine' : r.module} ${r.name}`;
   const api = deprecatedApiNames().map(key);
-  const guide = join(root, 'docs', 'guide', 'migrating-to-v1.md');
-  const rows = migrationRows(readFileSync(guide, 'utf8')).map(key);
-  assert.ok(api.length > 0, 'api/ has no @deprecated entries: is the parser still right?');
+  const guide = readFileSync(join(root, 'docs', 'guide', 'migrating-to-v1.md'), 'utf8');
+  const rows = migrationRows(guide);
+  // A later deprecation needs its row before it can ship (engine-v1.0.0 has none).
   assert.deepEqual(
-    api.filter((k) => !rows.includes(k)),
+    api.filter((k) => !rows.map(key).includes(k)),
     [],
     'deprecated in api/*.api.txt but missing from docs/guide/migrating-to-v1.md',
   );
-  assert.deepEqual(
-    rows.filter((k) => !api.includes(k)),
-    [],
-    'a row of docs/guide/migrating-to-v1.md names nothing deprecated in api/*.api.txt',
+  // Every row is a 0.x name the 1.0.0 cut removed: none is still on its entry's surface. A row
+  // for a retired call signature (`createSpriteMaterial(texture, label?, opts?)`) keeps its name.
+  const exported = apiNames();
+  const overload = new Set(
+    guide
+      .split('\n')
+      .filter((l) => /^\|\s*`[^`]+`\s*\|\s*`[^`(]+\([^)`]+\)`/.test(l))
+      .map((l) => /^\|\s*`([^`]+)`\s*\|\s*`([^`(]+)/.exec(l).slice(1).join(' ')),
   );
-  assert.equal(new Set(rows).size, rows.length, 'a row is listed twice');
+  assert.ok(rows.length > 0, 'the migration table has no rows: is the parser still right?');
+  assert.deepEqual(
+    rows.map(key).filter((k) => exported.has(k) && !overload.has(k)),
+    [],
+    'a row of docs/guide/migrating-to-v1.md names something api/*.api.txt still exports',
+  );
+  assert.equal(new Set(rows.map(key)).size, rows.length, 'a row is listed twice');
 });
 
 test('deprecatedApiNames reads top-level and member deprecations', () => {

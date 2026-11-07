@@ -173,8 +173,7 @@ The replay sink (`ctx.replay`, `input.replay`) is a detached element, so it meas
   `exit()`, `pause()`, `resume()`, `update(dt)` and `render(frame, camera, alpha)`. A game
   implements one per screen (title, level, pause menu).
 - `SceneStack(ctx)`: `push`, `pop`, `replace`, `clear`, `top`, `size`, `scenes` (bottom first,
-  the live array; `list()`, a copy, is deprecated, ws/api-core). Only the top
-  scene updates; rendering starts at the highest scene that is not `transparent` and goes up, so a
+  the live array, ws/api-core). Only the top scene updates; rendering starts at the highest scene that is not `transparent` and goes up, so a
   pause menu draws over the level beneath it. Stack changes made inside `update` or `render` are
   deferred until that call returns. `createGame` exposes one as `ctx.stack` and renders it with
   `ctx.camera` (or with `ctx.xr.surface.head` while an XR session runs).

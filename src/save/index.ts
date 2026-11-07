@@ -4,7 +4,6 @@ export {
   fnv1a,
   saveReplacer,
   saveReviver,
-  TYPED_CTORS,
   type TypedArrayOf,
   type TypedKind,
   typedKindOf,

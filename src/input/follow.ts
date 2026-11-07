@@ -20,12 +20,6 @@ export interface FollowSubject {
 }
 
 /**
- * @deprecated (ws/api-core, E-036) Use `FollowSubject`: `audio` exports a different
- * `FollowTarget`. Removed next minor.
- */
-export type FollowTarget = FollowSubject;
-
-/**
  * The game's line-of-sight test (the engine has no world). `from` is the pivot, `to` the camera
  * position the orbit wants. Return true and write the first obstacle point into `outHit` to pull
  * the camera in to `outHit` minus `margin`; return false for a clear line.

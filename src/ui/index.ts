@@ -30,21 +30,6 @@ export {
   type WorldCursor,
   type WorldTarget,
 } from './cursor';
-export {
-  BASE_CSS,
-  CANVAS_MINIMAP_CSS,
-  CURSOR_CSS,
-  FLOATS_CSS,
-  HUD_CSS,
-  INVENTORY_CSS,
-  LOADING_CSS,
-  NOTIFY_CSS,
-  ORB_CSS,
-  TOOLTIP_CSS,
-  WIDGETS2_CSS,
-  WIDGETS3_CSS,
-  WORLD_PANEL_WGSL,
-} from './deprecated';
 export { append, type Child, focusableWithin, h } from './dom';
 export {
   createFloats,
@@ -79,7 +64,6 @@ export {
   wrapDegrees,
 } from './hud';
 export {
-  type Cell,
   type CellItem,
   type CellRef,
   type DragLink,
@@ -247,7 +231,7 @@ export {
   PanelStack,
   type PanelStackFocusOptions,
 } from './stack';
-export { ensureStyles, prefersReducedMotion, prefersReducedMotionIn } from './styles';
+export { ensureStyles, prefersReducedMotionIn } from './styles';
 export {
   applyTextScale,
   CSS_FONT_PX,
@@ -291,8 +275,6 @@ export {
   type BarOptions,
   bar,
   type ChoiceOption,
-  type Cooldown,
-  type CooldownOptions,
   cooldown,
   ensureWidgets2Styles,
   type KeyPrompt,

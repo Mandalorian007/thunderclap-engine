@@ -1,4 +1,4 @@
-export type { BlendMode, RenderBlendMode } from './blend';
+export type { RenderBlendMode } from './blend';
 export type { CameraPoint, CameraRect } from './camera';
 export {
   ALL_LAYERS,
@@ -27,24 +27,6 @@ export {
   rendererCaps,
   uploadKtx2,
 } from './compressed';
-export {
-  BUFFER_BINDING_BASE,
-  CAMERA_INV_VIEW_PROJ_OFFSET,
-  CAMERA_JITTER_OFFSET,
-  CAMERA_PREV_VIEW_OFFSET,
-  CAMERA_PREV_VIEW_PROJ_OFFSET,
-  FOG_OFFSET_FLOATS,
-  LAYERS_OFFSET_FLOATS,
-  LIGHTS_BLOCK_FLOATS,
-  POINT_LAYERS_OFFSET_FLOATS,
-  POINT_LIGHTS_OFFSET_FLOATS,
-  SHADOW_PARAMS_OFFSET_FLOATS,
-  SKIN_PALETTE_HEADER_FLOATS,
-  SPOT_LIGHTS_OFFSET_FLOATS,
-  SPRITE_WGSL,
-  STANDARD_WGSL,
-  SUN_VIEW_PROJ_OFFSET_FLOATS,
-} from './deprecated';
 export { gpuDiagnostics, installGpuErrorLogging, onGpuError, reportGpuError } from './diagnostics';
 export {
   DynamicResolution,
@@ -62,7 +44,6 @@ export { InstanceList, type InstanceListOptions } from './instance-list';
 export type {
   DirectionalLight,
   DistanceFog,
-  Fog,
   PointLight,
   ShadowUniforms,
   SpotLight,

@@ -75,12 +75,6 @@ export interface Edges {
   b: number;
 }
 
-/**
- * @deprecated (ws/api-core, E-036) Use `Edges`: `ui` and `platform` export an x/y/width/height
- * `Rect`. Removed next minor.
- */
-export type Rect = Edges;
-
 /** One tick's aim (see `Gestures.aim`). */
 export interface Aim {
   /** The aim point in game space (the finger, lifted while dragging). */
@@ -123,12 +117,6 @@ export interface SnapGrid {
   cols: number;
   rows: number;
 }
-
-/**
- * @deprecated (ws/api-core, E-036) Use `SnapGrid`: `ui` exports a different `Grid` (the item
- * grid widget). Removed next minor.
- */
-export type Grid = SnapGrid;
 
 /**
  * The accepted cell nearest a point, within half a pitch of its square (so a point just off the

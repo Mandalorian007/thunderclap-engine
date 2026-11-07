@@ -14,9 +14,6 @@ export interface LetterboxRect {
   height: number;
 }
 
-/** @deprecated (ws/api-rest, E-036) Use `LetterboxRect`. Removed next minor. */
-export type Rect = LetterboxRect;
-
 /** Letterboxed viewport inside a container, in client (CSS) pixels. */
 export interface Letterbox extends LetterboxRect {
   /** CSS pixels per logical unit. */

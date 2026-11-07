@@ -29,12 +29,6 @@ export interface GridCell {
   row: number;
 }
 
-/**
- * @deprecated (ws/api-core, E-036) Use `GridCell`: `nav` exports an x/y `Cell`. Removed next
- * minor.
- */
-export type Cell = GridCell;
-
 /** A cell of a particular grid: what `canDrop` and `onMove` get for both ends of a move. */
 export interface CellRef extends GridCell {
   grid: Grid;

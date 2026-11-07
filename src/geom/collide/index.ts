@@ -24,7 +24,6 @@ export {
   colliderTriangle,
   createHit,
   createSweepHit,
-  type Hit,
   overlap,
   overlap2,
   type RayHit,
@@ -37,7 +36,6 @@ export {
 } from './queries';
 export { exportCollider, importCollider } from './serialize';
 export {
-  type Aabb,
   aabbTriangle,
   type Box2,
   type Capsule,

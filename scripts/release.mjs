@@ -35,11 +35,12 @@ if (!version || !/^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/.test(version)) {
 const tagName = `v${version}`;
 const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
 const log = readFileSync(logPath, 'utf8');
-// The first "## <x> (unreleased)" heading becomes "## <version> (<date>)".
-const head = /^## [^\n]*\(unreleased\)[^\n]*$/m;
-if (!head.test(log)) fail('CHANGELOG.md has no "## … (unreleased)" section to release');
+// The first "## Unreleased" heading (or an older "## <x> (unreleased)") becomes
+// "## <version> (<date>)", under a fresh empty "## Unreleased" (the section `check:api` reads).
+const head = /^## (?:Unreleased[ \t]*|[^\n]*\(unreleased\)[^\n]*)$/m;
+if (!head.test(log)) fail('CHANGELOG.md has no "## Unreleased" section to release');
 const date = new Date().toISOString().slice(0, 10);
-const nextLog = log.replace(head, `## ${version} (${date})`);
+const nextLog = log.replace(head, `## Unreleased\n\n## ${version} (${date})`);
 
 const problems = [];
 if (git('status', '--porcelain')) problems.push('working tree is not clean');

@@ -1,5 +1,4 @@
 import { mat4 } from '../core/math';
-import type { Camera } from '../render/camera';
 import type { FullscreenPass } from '../render/fullscreen';
 import type { JitterFn, PostInputs, PostProcessor, PostView, Renderer } from '../render/renderer';
 import type { SceneTargetViewport } from '../render/scene-target';
@@ -423,23 +422,6 @@ export class PostStack implements PostProcessor {
    */
   get wantsJitter(): boolean {
     return this.settings.taa.enabled && this.quality.taa;
-  }
-
-  /**
-   * @deprecated Since ws/post-6 the stack jitters every camera through `renderer.setJitter`
-   * while TAA runs; registering a camera does nothing. No engine page calls it (ws/post-7).
-   * Kept for one release: removed in the second release after 0.2.0-alpha.1.
-   */
-  addJitterCamera(_camera: Camera): this {
-    return this;
-  }
-
-  /**
-   * @deprecated See `addJitterCamera`: does nothing since ws/post-6. Removed in the second
-   * release after 0.2.0-alpha.1.
-   */
-  removeJitterCamera(_camera: Camera): this {
-    return this;
   }
 
   /** True when the last `encode` ran the TAA resolve (depth present, enabled, allowed). */

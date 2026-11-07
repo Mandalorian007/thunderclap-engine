@@ -59,9 +59,6 @@ export interface RayHit {
   userData: unknown;
 }
 
-/** @deprecated (ws/api-rest, E-036) Use `RayHit`. Removed next minor. */
-export type Hit = RayHit;
-
 /**
  * Where a swept shape first touches: `t` in 0..1 along the displacement (0 with `depth > 0` when
  * it started overlapping), the point on the triangle and the unit normal pointing into the shape.

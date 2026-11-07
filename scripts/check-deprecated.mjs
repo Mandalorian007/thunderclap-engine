@@ -17,12 +17,12 @@
 //    `harness` and `e2e`, `packages/*`, `templates/*`) against that stripped engine. A use is then
 //    a type error, including what pass 1 cannot see: a key of a deprecated field in a mapped-type
 //    patch (`post.set({ fog: … })`). `src` imports itself by relative path, so only pass 1 covers
-//    it. When v1 removes the aliases, nothing the check passes breaks.
+//    it.
 //
-// A test that exists only to cover a deprecated alias keeps its use: the line ends with
-// `// deprecated-alias test` (or the comment sits alone on the line above). The alias's own
-// implementation, reading the deprecated field it still honours, says `// deprecated-alias impl`.
-// Both passes skip those lines.
+// Since engine-v1.0.0 (ws/v1-cut) the engine declares nothing deprecated, so the strip pass
+// deletes nothing and the check guards the next deprecation: a new `@deprecated` engine name
+// fails here wherever the repo still uses it. There are no exemption markers: a deprecated
+// platform name (DOM `execCommand`) is filtered by where it is declared, not by a comment.
 //
 //   node scripts/check-deprecated.mjs        exit 1 and print the errors on any use
 //   --keep                                   keep the stripped declarations (prints the path)
@@ -46,25 +46,6 @@ import { API, SymbolFlags } from 'typescript/unstable/sync';
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 // ---------------------------------------------------------------------------------------------
-// Exemptions
-
-/** The comment that keeps a deprecated use: an alias test, or the alias's own implementation. */
-export const EXEMPT = /\/\/\s*deprecated-alias (?:test|impl)\b/;
-
-/** True when 1-based `line` of `lines` carries the marker, or the line above is only the marker. */
-export function isExempt(lines, line) {
-  if (EXEMPT.test(lines[line - 1] ?? '')) return true;
-  const above = (lines[line - 2] ?? '').trim();
-  return above.startsWith('//') && EXEMPT.test(above);
-}
-
-const fileLines = new Map();
-function linesOf(file) {
-  if (!fileLines.has(file)) fileLines.set(file, readFileSync(file, 'utf8').split('\n'));
-  return fileLines.get(file);
-}
-
-// ---------------------------------------------------------------------------------------------
 // Pass 1: the type checker's deprecation suggestions
 
 /** TypeScript's "is deprecated" suggestion codes: a name (6385) and a signature (6387). */
@@ -83,10 +64,10 @@ export function inRepoSource(path) {
  * and column, sorted by file and position, one entry per position.
  *
  * `declaredIn(path)` keeps only uses whose deprecated symbol is declared in a file it accepts
- * (`inRepoSource` keeps the engine's and drops the DOM's); `exempt` drops `deprecated-alias`
- * lines. By default both are off and every deprecated name is listed.
+ * (`inRepoSource` keeps the engine's and drops the DOM's). By default it is off and every
+ * deprecated name is listed.
  */
-export function findDeprecatedUses(tsconfig, files, { declaredIn, exempt = false } = {}) {
+export function findDeprecatedUses(tsconfig, files, { declaredIn } = {}) {
   const configs = (Array.isArray(tsconfig) ? tsconfig : [tsconfig]).map((c) => resolve(c));
   const api = new API({ cwd: repoRoot });
   try {
@@ -112,7 +93,6 @@ export function findDeprecatedUses(tsconfig, files, { declaredIn, exempt = false
           const key = `${file}:${use.line}:${use.col}:${d.code}`;
           if (seen.has(key)) continue;
           seen.add(key);
-          if (exempt && isExempt(linesOf(file), use.line)) continue;
           if (declaredIn) {
             let sym = project.checker.getSymbolAtPosition(file, d.pos);
             // An imported name is an alias declared in the importing file: judge its target.
@@ -438,29 +418,18 @@ function checkProject(p, dts, cache) {
   writeFileSync(configPath, JSON.stringify(config));
   const r = run(configPath);
   if (r.status === 0) return { ok: true, lines: [] };
-  // One error is a `file(line,col): error …` head and its indented continuation lines. Drop the
-  // errors on a `deprecated-alias` line; any other error (deprecated or not) fails the project.
-  const errors = [];
-  for (const l of `${r.stdout}${r.stderr}`.split('\n')) {
-    if (!l.trim()) continue;
-    if (/^\s/.test(l) && errors.length) errors[errors.length - 1].push(l);
-    else errors.push([l]);
-  }
-  const kept = errors.filter(([head]) => {
-    const m = /^(.+?)\((\d+),\d+\): error/.exec(head);
-    if (!m) return true;
-    const file = resolve(p.dir, m[1]);
-    return !(existsSync(file) && isExempt(linesOf(file), Number(m[2])));
-  });
-  const lines = kept.flat().map((l) => (l.startsWith('/') ? relative(repoRoot, l) : l));
-  return { ok: kept.length === 0, lines };
+  // Any error (deprecated or not) fails the project.
+  const lines = `${r.stdout}${r.stderr}`
+    .split('\n')
+    .filter((l) => l.trim())
+    .map((l) => (l.startsWith('/') ? relative(repoRoot, l) : l));
+  return { ok: false, lines };
 }
 
-/** Pass 1 over every project: the engine's deprecated names used anywhere but on exempt lines. */
+/** Pass 1 over every project: the engine's deprecated names used anywhere. */
 export function suggestionPass() {
   return findDeprecatedUses(suggestionConfigs(), undefined, {
     declaredIn: inRepoSource,
-    exempt: true,
   }).filter((u) => !u.file.includes('/node_modules/'));
 }
 
@@ -491,7 +460,7 @@ function main() {
     }
     if (failed === 0) {
       console.log(
-        `check-deprecated: src, ${list.map((p) => p.name).join(', ')} use none of the ${count} deprecated engine declarations (exempt: \`// deprecated-alias test|impl\` lines)`,
+        `check-deprecated: src, ${list.map((p) => p.name).join(', ')} use none of the ${count} deprecated engine declarations`,
       );
     }
   } finally {

@@ -58,9 +58,6 @@ export type ClipCursor = Uint32Array;
 /** How `sampleClip` writes into the pose. */
 export type AnimBlendMode = 'override' | 'additive';
 
-/** @deprecated (ws/api-rest, E-036) Use `AnimBlendMode`. Removed next minor. */
-export type BlendMode = AnimBlendMode;
-
 /** Components per key of a channel (3, 4, or the morph weight count). */
 export function channelComponents(channel: AnimationChannel): number {
   switch (channel.path) {

@@ -189,8 +189,6 @@ export interface LoadTextureArrayOptions {
   mips?: boolean;
   /** How each mip level is reduced from the one above (default `'linear'`, a 2×2 box). */
   filter?: MipFilter;
-  /** @deprecated Use `filter` (ws/render-4); read when `filter` is absent. */
-  mipFilter?: MipFilter;
   /**
    * Default `rgba8unorm-srgb` (colour). Image layers need an 8-bit RGBA/BGRA format; pixel
    * layers any format `bytesPerTexel` lists.
@@ -238,7 +236,7 @@ export function loadTextureArray(
   sources.forEach((s, layer) => {
     uploadLayer(device, tex, s, layer, 'loadTextureArray');
   });
-  if (tex.mipLevels > 1) generateMipmaps(device, tex, { filter: opts.filter ?? opts.mipFilter }); // deprecated-alias impl
+  if (tex.mipLevels > 1) generateMipmaps(device, tex, { filter: opts.filter });
   return tex;
 }
 

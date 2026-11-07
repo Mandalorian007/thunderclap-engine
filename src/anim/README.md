@@ -263,7 +263,3 @@ Exporters bake dense keys; most of them a linear fit reproduces. `compressClip(c
 ## Not here
 
 Full-body IK, any GPU upload (`render/skin.ts`, `assets/gltf-load.ts` for morphed vertex buffers), glTF parsing (`assets/`).
-
-## Deprecated aliases
-
-Kept until the next minor (ws/api-rest, E-036), same shapes: `BlendMode` (use `AnimBlendMode`) and `PlayOptions` (use `AnimPlayOptions`).

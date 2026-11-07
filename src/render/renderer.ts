@@ -484,13 +484,6 @@ export class Renderer implements FrameSink {
    */
   globalsBindGroup: GPUBindGroup;
   readonly quad: Mesh;
-  /**
-   * @deprecated (E-036) Use `defaultTextures(renderer.device).white`, the same texture (1×1
-   * sRGB white, the unbound-slot default). Removed next minor.
-   */
-  get white(): Texture {
-    return defaultTextures(this.device).white;
-  }
   /** Built-in sprite material bound to the default white texture (solid colour quads via tint). */
   readonly defaultSprite: Material;
   readonly stats: RenderStats = {
@@ -924,32 +917,15 @@ export class Renderer implements FrameSink {
    * option-object shape as `createMaterial`. `label` defaults to `'sprite'`, `blend` to
    * `'alpha'` and `sampler` to `'linear-clamp'`.
    */
-  createSpriteMaterial(opts: SpriteMaterialOptions): Material;
-  /**
-   * @deprecated (ws/api-render) Positional form; pass one `SpriteMaterialOptions` object
-   * (`{ texture, label, blend, sampler }`). Removed next minor.
-   */
-  createSpriteMaterial(
-    texture: TextureLike,
-    label?: string,
-    opts?: { blend?: MaterialDesc['blend']; sampler?: SamplerKind },
-  ): Material;
-  createSpriteMaterial(
-    a: SpriteMaterialOptions | TextureLike,
-    label?: string,
-    opts: { blend?: MaterialDesc['blend']; sampler?: SamplerKind } = {},
-  ): Material {
-    // A texture always has a `view`; the options object never does.
-    const o: SpriteMaterialOptions =
-      'view' in a ? { texture: a, label, blend: opts.blend, sampler: opts.sampler } : a;
+  createSpriteMaterial(opts: SpriteMaterialOptions): Material {
     const m = this.createMaterial({
-      label: o.label ?? 'sprite',
+      label: opts.label ?? 'sprite',
       wgsl: SPRITE_WGSL,
       textures: 1,
-      blend: o.blend,
-      sampler: o.sampler,
+      blend: opts.blend,
+      sampler: opts.sampler,
     });
-    m.setTexture(0, o.texture);
+    m.setTexture(0, opts.texture);
     return m;
   }
 

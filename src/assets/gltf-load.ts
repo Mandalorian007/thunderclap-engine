@@ -604,24 +604,9 @@ export async function loadGltf(
   return scene;
 }
 
-/** A `SunLight` record whose deprecated `dir` is an accessor over `direction`, as `Lights.sun`. */
-function sunLight(dir: Float32Array, color: Float32Array): SunLight {
-  let direction: ArrayLike<number> = dir;
-  return {
-    get direction(): ArrayLike<number> {
-      return direction;
-    },
-    set direction(v: ArrayLike<number>) {
-      direction = v;
-    },
-    get dir(): ArrayLike<number> {
-      return direction;
-    },
-    set dir(v: ArrayLike<number>) {
-      direction = v;
-    },
-    color,
-  };
+/** A `SunLight` record, the shape of `Lights.sun`. */
+function sunLight(direction: Float32Array, color: Float32Array): SunLight {
+  return { direction, color };
 }
 
 const orthoScratch = new Float32Array(16);

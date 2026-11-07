@@ -323,7 +323,7 @@ pad.on('select', () => bag.act('select'));                          // pad: sele
   `element` (`role="grid"` of `gridcell`s, `aria-rowcount/colcount`), `cols`, `rows`,
   `set(cell, item | null)`, `get(cell)`, `find(item)`, `move(from, to)`, `items: GridEntry[]`,
   `focus(cell)`, `focused`, `held`, `act(action: PadAction)`, `clear()`, `remove()`. A `CellItem`
-  is `{ id, icon, label?, count?, span?, tone?, locked? }` (`GridCell` is `{ col, row }`, `Cell` its deprecated alias since nav exports an x/y `Cell`; `CellRef`
+  is `{ id, icon, label?, count?, span?, tone?, locked? }` (`GridCell` is `{ col, row }`; `CellRef`
   adds `grid`); a span covers its cells (`data-covered`), a count shows in `.tc-cell-count`.
   Keyboard: a roving tabindex, arrows clamp (no wrap), Home/End, Enter or Space activates on
   release, a **held** Enter or Space picks up (`aria-grabbed="true"`), the next Enter drops,
@@ -594,13 +594,13 @@ panel.dispose();
 - `createWorldPanel(renderer, opts)`: `WorldPanelOptions` `width`/`height` in world units, `resolution` px per unit (256), `theme` (partial `ThemeTokens` over `cssPxTheme`, so 16 px text on a 256 px/unit panel reads at arm's length), `background` `'panel'` (rounded surface and border) or `'transparent'`, `billboard` (turns to the camera each `update`), `headLocked: { distance, offset?: [x, y] }` (sits `distance` in front of the eye, offset along the view's right and up, each `update(camera)`), `depthTest` (default on; off for head-locked), `canvas` (inject a `PanelCanvas` in tests), `label`.
 - `WorldPanel`: `transform` (a `Transform` the game places; head-locked and billboard panels rewrite it in `update(camera)`), `drawable` (a `Drawable`: push it with `frame.drawable(panel.drawable, order)` after the opaque pass; one quad, premultiplied alpha, depth-tested without writing depth; its pipeline is keyed on the pass's `frame.auxKey` through `renderer.sceneTargets(blend, aux)`, so one panel draws into a target with aux attachments such as velocity and into a plain target in the same frame, ws/core-8), `add(widget)`/`remove(widget)`, `widgets`, `hitTest(ray)` (`WorldPanelHit { x, y, widget, distance }` in panel px, reused), `pointerDown/Move/Up(x, y, id)`, `pointerLeave(id)`, `wheel(x, y, dy)`, `poll(pointers)`, `focus(widget)`, `focused`, `focusNext()`/`focusPrev()` (wrapping, skipping labels, progress and disabled widgets), `activate()`, `key(event)` (`PanelKeyEvent { key, shiftKey? }`: Tab, Shift+Tab, Enter, Space, then the focused widget's arrows), `hovered`, `pressing`, `dirty`, `repaint()`, `update(camera)`, `stats` (`WorldPanelStats { repaints, uploads, bytes }`), `fontLoaded` (resolves on `document.fonts.ready` and remeasures; already resolved without `document`), `theme` (`PanelTheme`), `painter`, `texture`, `dispose()`.
 - **Widgets** (`WorldWidget` subclasses, built by `worldLabel`, `worldButton`, `worldToggle`, `worldSlider`, `worldList`, `worldProgress`): `WorldLabel` (`WorldLabelOptions` `text`, `size` `WorldWidgetSize` `'s' | 'm' | 'l'`, `align` `WorldWidgetAlign`, `tone` `WorldWidgetTone`), `WorldButton` (`WorldButtonOptions` `text`, `onPress`, `disabled`; fires on the release over it, not the press), `WorldToggle` (`WorldToggleOptions` `text`, `value`, `onChange`), `WorldSlider` (`WorldSliderOptions` `min`, `max`, `value`, `step`, `onChange`; drag anywhere on the track, arrows step), `WorldList` (`WorldListOptions` `items`, `selected`, `onSelect`, `visibleRows`; scrolls by drag and wheel, clamped, arrows move the selection and keep it visible), `WorldProgress` (`WorldProgressOptions` `value` 0..1, `tone`). Every option set takes `rect?: PanelRect` to place the widget by hand; otherwise `flowLayout` stacks them top to bottom with the theme's `space3` padding and `space2` gap (`FlowItem`, `FlowOptions`). `widget.set(patch)` writes only the fields that changed and marks the widget's rect dirty (a layout field relayouts); `options`, `layoutRect`, `hover`, `pressed`, `focused`, `disabled`, `focusable`. Hover tints, a pressed shade, a `colorFocus` ring and 45 % alpha when disabled; `WorldWidgetHost` is what a widget sees of its panel.
-- **Painting**: Canvas2D through `Painter` (`fillRoundRect`, `strokeRoundRect`, `focusRing`, `text` with a per-font measure cache, `clearMeasures`) over a `PanelContext2D` (the subset a `CanvasRenderingContext2D` satisfies) from a `PanelCanvas`; `resolvePanelTheme(overrides)` reads the tokens once by value. Repaints cover the union of the dirty rects only; the frame's `prepare` then uploads that rect with one `copyExternalImageToTexture` (premultiplied), so `uploads` stays flat while nothing changes. `WORLD_PANEL_WGSL` is the quad's shader (deprecated on the `ui` entry, ws/api-core: the panel builds its pipeline from it) (six corners from `vertex_index`, `camera.view_proj`, the texture sampled with the linear-clamp sampler).
+- **Painting**: Canvas2D through `Painter` (`fillRoundRect`, `strokeRoundRect`, `focusRing`, `text` with a per-font measure cache, `clearMeasures`) over a `PanelContext2D` (the subset a `CanvasRenderingContext2D` satisfies) from a `PanelCanvas`; `resolvePanelTheme(overrides)` reads the tokens once by value. Repaints cover the union of the dirty rects only; the frame's `prepare` then uploads that rect with one `copyExternalImageToTexture` (premultiplied), so `uploads` stays flat while nothing changes. `WORLD_PANEL_WGSL` (internal since 1.0.0: the panel builds its pipeline from it) is the quad's shader (six corners from `vertex_index`, `camera.view_proj`, the texture sampled with the linear-clamp sampler).
 - **Pointers**: `worldPanelTarget(panel)` is a router `HitTester` whose hit carries the panel as `target`, the world point, a normal facing the ray and the distance, so `router.hit`, `{ pointer: 'select' }` bindings and the nearest-hit rule work as for meshes. `panel.poll(router.pointers)` once per tick (after `input.update()`, so in `hooks.beforeRender` or `hooks.update`) turns the routed pointers into hover, press and release: a press that leaves the quad keeps dragging on the panel's plane and releases where the ray meets it, a vanished pointer releases where it was. Without a ray, `focusNext`/`focusPrev`/`activate` and `key` drive it from a pad or keyboard.
 
 ### World panels on the input tick
 
 Call `attach(ctx.input)` once. `panel.attach(input, opts?)` (a `WorldPanelInput`: `pointers`
-(the deprecated `getPointers()` is read when `pointers` is absent) and `onUpdated(fn)`, which
+and `onUpdated(fn)`, which
 `Input` fits) adds the panel's tester to the input's pointer router and,
 through `input.onUpdated`, calls `poll(router.pointers)` after every `input.update()` and then
 `update(router.camera)` (the camera the rays go through: `ctx.camera` in `createGame`, the head
@@ -627,13 +627,11 @@ undoes it (so does `dispose()`); the manual `addTester(worldPanelTarget(panel))`
 `ThemeOverrides` adds a game's own tokens. `tokenVar(name)` gives the custom property
 (`colorAccent` → `--tc-color-accent`), `cssVar(name)` its `var(...)`, `themeToCss(tokens)` the
 declarations, and `applyTheme(el, tokens)` sets them on an element. `ensureStyles(doc?)` injects
-`BASE_CSS` once; `prefersReducedMotionIn(win?)` reads the media query (`prefersReducedMotion` is
-its deprecated alias, ws/api-core: platform exports one without the window argument).
+`BASE_CSS` once; `prefersReducedMotionIn(win?)` reads the media query (ws/api-core).
 
 The stylesheet constants (`BASE_CSS`, `HUD_CSS`, `TOOLTIP_CSS`, `CURSOR_CSS`, `NOTIFY_CSS`,
 `ORB_CSS`, `INVENTORY_CSS`, `FLOATS_CSS`, `CANVAS_MINIMAP_CSS`, `LOADING_CSS`, `WIDGETS2_CSS`,
-`WIDGETS3_CSS`) are deprecated on the `ui` entry (ws/api-core): their `ensure*Styles` inject
-them, and they leave the entry next minor.
+`WIDGETS3_CSS`) are internal since 1.0.0: their `ensure*Styles` inject them.
 
 ## More widgets and helpers
 
@@ -655,8 +653,7 @@ them, and they leave the entry next minor.
 - **Widget options.** `ButtonOptions` (`variant`, `disabled`, `ariaLabel`, `className`) and
   `SliderOptions` (`min`, `max`, `step`, `format`); for the second set, `WidgetReticleOptions`,
   `BarOptions`, `KeyPromptOptions`, `StepperOptions`, `WidgetCooldownOptions` and the handles `WidgetReticle`,
-  `Bar`, `Segmented`, `Select`, `KeyPrompt`, `Stepper`, `WidgetCooldown` (`Cooldown` and
-  `CooldownOptions` are deprecated aliases, ws/api-core: core exports a scheduler `Cooldown`). `h`'s children are `Child` (`Node`, string,
+  `Bar`, `Segmented`, `Select`, `KeyPrompt`, `Stepper`, `WidgetCooldown` (ws/api-core). `h`'s children are `Child` (`Node`, string,
   number or nothing); `append(el, ...children)` adds them to an existing element.
 - **ws/ui-5 types.** `MeterShape`, `MeterReadout`, `MeterTrailOptions` (the meter, above);
   `Floats`, `FloatsHost`, `FloatsOptions`, `FloatTextOptions` (floating text); `CanvasMinimap`,
@@ -705,8 +702,6 @@ modal panel too); the latest `show` owns it and `ui.tooltips.active` is the tool
 - Types: `TooltipOptions`, `TooltipTarget`, `TooltipSide`, `TooltipPlacement` (a side or `auto`),
   `TooltipPlace` (what `placeTooltip` returns), `TooltipHost` (the layers, `rect`, `units` and
   `anchors()` an overlay provides). The frame comes from `anchors().frame.rect` (ws/ui-4).
-- Deprecated: `TooltipHost.frame` is still accepted, and read only before a camera built the
-  anchors; once they exist `anchors.frame` wins.
 
 ## World cursor: `ui.cursor`
 
@@ -730,7 +725,7 @@ off), and `cursor.press(dir)` feeds a press from the game's own input.
   transition, and it resumes after the panel closes without taking a press that outlived it.
   `cursor.latched` is true while a control is held or repeating. `enable()` / `disable()` /
   `dispose()`.
-- Deprecated: a `CursorHost` whose `stack` has no `onPadOwnerChange` is still accepted and polled
+- A `CursorHost` whose `stack` has no `onPadOwnerChange` (optional) is polled
   through `stack.hasModal` each frame.
 - `CURSOR_CSS` is injected once on first use (`ensureCursorStyles`); `createCursor(host, opts)`
   builds one outside an overlay. `defaultPads()` is the guarded `navigator.getGamepads()`.

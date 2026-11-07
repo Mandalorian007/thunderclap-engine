@@ -24,14 +24,13 @@ export {
   deviceTraits,
   HANDHELD_SHORT_SIDE,
   isReducedMotion,
-  prefersReducedMotion,
   watchLifecycle,
   watchReducedMotion,
   watchVisibility,
 } from './environment';
 export type { GpuContext, GpuFailureReason, GpuInitOptions, GpuInitResult } from './gpu';
 export { initGpu } from './gpu';
-export type { BackbufferSize, Letterbox, LetterboxRect, Rect, Vec2 } from './letterbox';
+export type { BackbufferSize, Letterbox, LetterboxRect, Vec2 } from './letterbox';
 export {
   clientToLogical,
   computeBackbuffer,

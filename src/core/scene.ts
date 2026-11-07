@@ -91,11 +91,6 @@ export class SceneStack<Ctx = unknown, Frame = unknown, Cam = Camera> {
     return this.items;
   }
 
-  /** @deprecated (ws/api-core, E-036) Read `scenes` (this returns a copy). Removed next minor. */
-  list(): readonly Scene<Ctx, Frame, Cam>[] {
-    return this.items.slice();
-  }
-
   /** Push `scene` (after its `preload`, if any); resolves once it has entered. */
   push(scene: Scene<Ctx, Frame, Cam>): Promise<void> {
     return this.queueScene('push', scene);

@@ -47,8 +47,6 @@ import type { PanelKeyEvent, WorldWidget, WorldWidgetHost } from './widgets';
 export interface WorldPanelInput {
   /** The input's pointer router, or null when it has none (`Input.pointers`, ws/api-core). */
   readonly pointers?: PointerRouter<unknown> | null;
-  /** @deprecated (ws/api-core, E-036) Give `pointers`; read when `pointers` is absent. */
-  getPointers?(): PointerRouter<unknown> | null;
   /** Called after every `update()`; returns the remover. */
   onUpdated(fn: () => void): () => void;
 }
@@ -669,7 +667,7 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
    */
   attach(input: WorldPanelInput, opts: { camera?: () => Camera | null } = {}): void {
     this.detach();
-    const router = input.pointers !== undefined ? input.pointers : (input.getPointers?.() ?? null); // deprecated-alias impl
+    const router = input.pointers ?? null;
     if (!router) throw new Error('WorldPanel.attach: the input has no pointer router');
     const offTester = this.attachTo(router);
     const offTick = input.onUpdated(() => {

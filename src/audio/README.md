@@ -377,7 +377,3 @@ Measured in Chromium: all eight render in ~80 ms total (drone pad, the heaviest,
 - **Synth specs**: `SoundSpec` holds `Layer`s; a layer's `source` is a `Source` (`OscSource` with a `Wave`, `NoiseSource` with a `NoiseColor`, or `CrackleSource`), its `filter` one or more `FilterSpec`s and its `env` an `Envelope`. `Segment` is one envelope breakpoint (`{ t, v, ramp }`); `envelopeLength(env, gate)` is an envelope's total length. `OfflineContextFactory` is the offline renderer factory `renderSound` and the engine take.
 - **Music, variations, sends, ducking**: `createMusic(mixer, opts: MusicOptions)` → `Music`, `Stem` (`buffer` or `url`), `MusicPlayOptions` (`at`, `fadeBeats`, `gain`, `stream`), `MusicStart`, `intensityGains`; `createVariations(mixer, buffers, opts?: VariationsOptions)` → `Variations`; `createSend(mixer, opts: SendOptions)` → `Send`, `SendKind`, `impulseResponse`, `ImpulseResponseOptions`, `BufferFactory`; `createDucker(mixer, opts: DuckerOptions)` → `Ducker` (drives `setBusScale` under its own `key`, so duckers on one target multiply; so it respects `pause` and the background flag). All described above.
 - **Recipes**: `recipes` maps each `RecipeName` to its function; every recipe takes `RecipeOptions` (`{ pitch, length, brightness, seed, level }`, plus the per-recipe extras listed above).
-
-## Deprecated aliases
-
-Kept until the next minor (ws/api-rest, E-036), same shapes: `PlayOptions` (use `AudioPlayOptions`) and `FollowTarget` (use `AudioFollowTarget`).

@@ -149,7 +149,3 @@ layout's form factors replace it.
 
 Tests: `letterbox.test.ts`, `surface.test.ts`, `device-mode.test.ts`, `links.test.ts`,
 `xr-surface.test.ts`, and the harness specs in `e2e/`.
-
-## Deprecated aliases
-
-Kept until the next minor (ws/api-rest, E-036), same shapes: `Rect` (use `LetterboxRect`) and `prefersReducedMotion()` (use `isReducedMotion(win?)`).

@@ -1928,13 +1928,12 @@ describe('batch submit (ws/batch-submit)', () => {
   });
 });
 
-describe('Renderer.white (ws/pbr-lights)', () => {
+describe('default white (ws/pbr-lights)', () => {
   it('is the device registry white and survives destroy()', () => {
     const { fake, r } = setup();
     const d = defaultTextures(fake.device);
-    expect(r.white).toBe(d.white); // deprecated-alias test
-    expect(r.white.format).toBe('rgba8unorm-srgb'); // deprecated-alias test
-    expect([r.white.width, r.white.height]).toEqual([1, 1]); // deprecated-alias test
+    expect(d.white.format).toBe('rgba8unorm-srgb');
+    expect([d.white.width, d.white.height]).toEqual([1, 1]);
     const write = fake.textureWrites.find((w) => (w.texture as unknown) === d.white.texture);
     expect([...(write!.data as Uint8Array)]).toEqual([255, 255, 255, 255]);
     // No second white: the renderer makes none of its own.
@@ -1942,7 +1941,7 @@ describe('Renderer.white (ws/pbr-lights)', () => {
     r.destroy();
     expect((d.white.texture as unknown as { destroyed: boolean }).destroyed).toBeFalsy();
     const r2 = new Renderer(fakeRendererGpu(fake));
-    expect(r2.white).toBe(d.white); // deprecated-alias test
+    expect(defaultTextures(r2.device).white).toBe(d.white);
   });
 });
 

@@ -31,9 +31,6 @@ export interface GeomAabb {
   max: [number, number, number];
 }
 
-/** @deprecated (ws/api-rest, E-036) Use `GeomAabb`. Removed next minor. */
-export type Aabb = GeomAabb;
-
 /** A circle in the xz plane (the 2D case). */
 export interface Circle {
   x: number;

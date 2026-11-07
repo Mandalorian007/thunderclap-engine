@@ -6,28 +6,8 @@
  * (`parents: Int16Array`, `rest` 10 floats per node `t3 q4 s3`, `inverseBind` 12 floats per joint
  * as 3×4 rows, `joints: Uint16Array` joint → node), so a `GltfSkeleton` is a `Skeleton`.
  */
-import {
-  SKIN_JOINTS_BYTE_OFFSET,
-  SKIN_WEIGHTS_BYTE_OFFSET,
-  VERTEX_SKINNED_STRIDE,
-} from '../render/mesh';
+import { SKIN_JOINTS_BYTE_OFFSET, VERTEX_SKINNED_STRIDE } from '../render/mesh';
 import { type GltfDocument, GltfError, type GltfPrimitive } from './gltf';
-
-/**
- * @deprecated (ws/harden-api) Use `VERTEX_SKINNED_STRIDE` from `@thunderclap/engine/render`
- * (the same 56 bytes: 12 floats + joints `uint8x4` + weights `unorm8x4`). Removed next minor.
- */
-export const SKINNED_VERTEX_STRIDE = VERTEX_SKINNED_STRIDE;
-/**
- * @deprecated (ws/harden-api) Use `SKIN_JOINTS_BYTE_OFFSET` from `@thunderclap/engine/render`
- * (byte 48). Removed next minor.
- */
-export const SKINNED_JOINTS_OFFSET = SKIN_JOINTS_BYTE_OFFSET;
-/**
- * @deprecated (ws/harden-api) Use `SKIN_WEIGHTS_BYTE_OFFSET` from `@thunderclap/engine/render`
- * (byte 52). Removed next minor.
- */
-export const SKINNED_WEIGHTS_OFFSET = SKIN_WEIGHTS_BYTE_OFFSET;
 
 /** Interleaved skinned vertices, ready for a `Mesh` in `VERTEX_LAYOUT_SKINNED`. */
 export interface SkinnedVertices {

@@ -484,7 +484,3 @@ if (isoInverseProbe(iso, px, py, heightAt, maxElev, pt)) hover(pt.x, pt.y);
 Harness: `harness/tiles.html?iso` lays a 12 × 12 map with a two-level ramp through a painter
 `TileLayer` (`render/README.md`), walks a sprite between the tiles and resolves the hovered tile
 with `isoInverseProbe`; `e2e/tiles.spec.ts` hovers every row of the ramp.
-
-## Deprecated aliases
-
-Kept until the next minor (ws/api-rest, E-036), same shapes: `Aabb` (use `GeomAabb`) and `Hit` (use `RayHit`).
