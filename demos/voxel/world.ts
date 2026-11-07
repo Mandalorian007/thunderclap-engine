@@ -318,6 +318,13 @@ export interface VoxelDemoState {
   locked: boolean;
   /** `gpuDiagnostics.errorCount`. */
   gpuErrors: number;
+  /**
+   * The lowest and highest `terrainHeight` over every column of the built world (trees and
+   * caves aside), measured once at boot; `[-1, -1]` before.
+   */
+  terrainTops: [number, number];
+  /** The spawn cell (`spawnColumn`, world cell coords), set once at boot; `[-1, -1, -1]` before. */
+  spawn: [number, number, number];
 }
 
 export interface VoxelDemoApi extends VoxelDemoState {

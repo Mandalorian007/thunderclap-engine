@@ -55,6 +55,7 @@ const state: HarnessUi4State = {
   heading: 0,
   markers: {},
   onRim: 0,
+  onRimSeen: [],
   padOwner: 'game',
   cursorLatched: false,
   latchedBeforeModal: false,
@@ -301,6 +302,7 @@ async function main(): Promise<void> {
         if (map.markerAt(id)?.outside) onRim++;
       }
       state.onRim = onRim;
+      if (!state.onRimSeen.includes(onRim)) state.onRimSeen.push(onRim);
     };
   } else {
     // ?modal: a grid cursor over the blocks and PadNav, both on the fake pad.

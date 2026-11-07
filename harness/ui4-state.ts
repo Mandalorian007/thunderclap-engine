@@ -27,6 +27,11 @@ export interface HarnessUi4State {
   markers: Record<string, number | null>;
   /** `?minimap`: markers held on the rim. */
   onRim: number;
+  /**
+   * `?minimap`: every distinct `onRim` value seen so far, in the order first seen (written on
+   * the frame it happens: a count of 3 lasts about 0.37 s of each 2.6 s, too short to sample).
+   */
+  onRimSeen: number[];
   /** `?modal`: `ui.padOwner`, the cursor's latch and how many owner transitions fired. */
   padOwner: 'stack' | 'game';
   cursorLatched: boolean;
