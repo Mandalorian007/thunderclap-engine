@@ -128,6 +128,7 @@ export type { PingPongStepOptions } from './ping-pong';
 export { PingPong } from './ping-pong';
 export type {
   FrameTiming,
+  JitterFn,
   PostInputs,
   PostProcessor,
   PostProjection,

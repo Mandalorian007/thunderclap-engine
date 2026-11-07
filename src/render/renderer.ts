@@ -289,6 +289,20 @@ interface ViewSlot {
   group: GPUBindGroup;
 }
 
+/**
+ * One view's LOD level memory (ws/render-6): the level each `frame.mesh` key (its `Transform`
+ * or params object) drew last through this camera, and per batch or list the level of each
+ * instance index. Kept per camera, so two eyes or two split-screen views each hold their own
+ * hysteresis.
+ */
+interface LodMemory {
+  keyed: WeakMap<object, number>;
+  indexed: WeakMap<object, Int8Array>;
+}
+
+/** The per-frame jitter hook of `Renderer.setJitter`: pixels `[x, y]` for frame `frame`. */
+export type JitterFn = (frame: number) => readonly [number, number];
+
 /** One recorded draw (instance or drawable), kept until `endFrame` sorts and batches them. */
 interface DrawRec {
   material: Material | null;
@@ -329,6 +343,11 @@ interface DrawRec {
   lodKey: object | null;
   /** The level picked for this view; -1 without a chain. */
   lodLevel: number;
+  /**
+   * A LOD batch's per-instance levels for this view (the view's memory for the batch, index
+   * by index), set by `pickLods`; null for every other draw.
+   */
+  lodLevels: Int8Array | null;
   /** Scene sort keys grouping opaque LOD draws per (mesh, material); -1 for every other draw. */
   lk: number;
   lt: number;
@@ -477,8 +496,23 @@ export class Renderer implements FrameSink {
   private batchRecs = 0;
   /** Records with a LOD chain this frame. */
   private lodRecs = 0;
-  /** The level each LOD draw's key drew last (hysteresis). */
-  private readonly lodLevels = new WeakMap<object, number>();
+  /** The camera `pickLods` is picking for. */
+  private lodCam: Camera | null = null;
+  /** The LOD level memory of each camera (view) that drew a LOD record. */
+  private readonly lodMemory = new WeakMap<Camera, LodMemory>();
+  /** Per-instance level scratch of `copyBatchLod` (-1: culled). */
+  private lodScratch = new Int8Array(256);
+  /** `copyBatchLod`'s buckets: first instance, count and write cursor per level. */
+  private bucketFirst = new Int32Array(8);
+  private bucketCount = new Int32Array(8);
+  private bucketAt = new Int32Array(8);
+  /** `setJitter`'s hook, the frames it has run and this frame's offset. */
+  private jitterFn: JitterFn | null = null;
+  private jitterFrame = 0;
+  private jitterX = 0;
+  private jitterY = 0;
+  /** Cameras the hook has jittered (cleared when it is removed). */
+  private readonly jitterCams: Camera[] = [];
   /** Batch or list draws of the current view's scene pass, and instances `copyBatch` dropped. */
   private sceneBatches = 0;
   private batchCulled = 0;
@@ -917,6 +951,27 @@ export class Renderer implements FrameSink {
 
   // ---------------------------------------------------------------- frame
 
+  /**
+   * The renderer's jitter hook (ws/render-6): `fn(frame)` runs once per `beginFrame` (`frame`
+   * counts from 0 since the hook was set) and its `[x, y]` (target pixels, +x right, +y down)
+   * goes to every camera `render` draws this frame, XR eyes included, through
+   * `camera.setJitter`, with the jitter target set per view as when the post processor
+   * `wantsJitter`. The renderer keeps each camera's history (`recordHistory`), so
+   * `previousViewProj` and `previousView` stay unjittered. `null` removes the hook and clears
+   * the jitter of every camera it reached. Without a hook `Camera.setJitter` works as before.
+   * Return a reused tuple to keep the frame allocation-free.
+   */
+  setJitter(fn: JitterFn | null): void {
+    if (fn === this.jitterFn) return;
+    this.jitterFn = fn;
+    this.jitterFrame = 0;
+    this.jitterX = 0;
+    this.jitterY = 0;
+    if (fn) return;
+    for (const c of this.jitterCams) c.clearJitter();
+    this.jitterCams.length = 0;
+  }
+
   /** Start recording a frame. `time`/`dt` in seconds are exposed to shaders via `globals`. */
   beginFrame(time: number, dt: number): Frame {
     if (this.inFrame) throw new Error('beginFrame called twice without endFrame');
@@ -945,6 +1000,12 @@ export class Renderer implements FrameSink {
     this.stats.passes = 0;
     const lc = this.stats.lodCounts;
     for (let i = 0; i < lc.length; i++) lc[i] = 0;
+    const jf = this.jitterFn;
+    if (jf) {
+      const j = jf(this.jitterFrame++);
+      this.jitterX = j[0];
+      this.jitterY = j[1];
+    }
     const f = this.frame;
     f.time = time;
     f.dt = dt;
@@ -1004,7 +1065,11 @@ export class Renderer implements FrameSink {
     // History first, before anything reads the camera: last frame's matrices are what the
     // camera held at its previous view. Jitter applies only when the post stack asks for it.
     camera.recordHistory();
-    if (this.post?.wantsJitter) camera.setJitterTarget(vp.width, vp.height);
+    if (this.jitterFn) {
+      camera.setJitter(this.jitterX, this.jitterY);
+      if (!this.jitterCams.includes(camera)) this.jitterCams.push(camera);
+    }
+    if (this.jitterFn || this.post?.wantsJitter) camera.setJitterTarget(vp.width, vp.height);
     else camera.setJitterTarget(0, 0);
 
     // The sun box is placed before the draw lists are built: the shadow list culls against it.
@@ -1510,12 +1575,14 @@ export class Renderer implements FrameSink {
     batch: InstanceBatch,
     bounds: MeshBounds | null,
     list: InstanceList | null,
+    lod: MeshLod | null = null,
   ): void {
     if (material.bindings?.perDraw) {
       throw new Error(`material ${material.label}: a batch cannot use perDrawUniforms`);
     }
     if (list) list.flush(this.device.queue);
-    else this.batchInstances += batch.count;
+    // A LOD list is copied into the upload bucketed per level, like a batch.
+    if (!list || lod) this.batchInstances += batch.count;
     this.batchRecs++;
     const r = this.nextRec(batch.order ?? 0, batch.layerBits ?? 1);
     r.material = material;
@@ -1524,7 +1591,11 @@ export class Renderer implements FrameSink {
     r.offset = -1;
     r.inst = -1;
     r.batch = batch;
-    r.list = list;
+    r.list = lod ? null : list;
+    if (lod) {
+      r.lod = lod;
+      this.lodRecs++;
+    }
     const bb = batch.bounds;
     if (bb) {
       r.bx = bb.center[0];
@@ -1536,15 +1607,21 @@ export class Renderer implements FrameSink {
       r.br = -1;
       r.mb = bounds && bounds.radius !== Number.POSITIVE_INFINITY ? bounds : null;
     }
+    // A LOD list is copied per instance anyway, so its instances are culled one by one too.
+    if (lod && list) {
+      const lb = lod.meshes[0]!.bounds;
+      r.mb = lb.radius !== Number.POSITIVE_INFINITY ? lb : null;
+    }
     r.castShadow = batch.castShadow ?? mesh.layout !== VERTEX_LAYOUT_2D;
   }
 
   /**
    * A retained `InstanceList` of up to `capacity` instances of `mesh` with `material`, drawn
-   * with `frame.list(list)`. Owns a GPU buffer; `list.destroy()` releases it.
+   * with `frame.list(list)`. Owns a GPU buffer; `list.destroy()` releases it. A `MeshLod`
+   * (ws/render-6) makes a list whose instances pick their level per view.
    */
   createInstanceList(
-    mesh: Mesh,
+    mesh: Mesh | MeshLod,
     material: Material,
     capacity: number,
     opts?: InstanceListOptions,
@@ -1601,6 +1678,7 @@ export class Renderer implements FrameSink {
         lod: null,
         lodKey: null,
         lodLevel: -1,
+        lodLevels: null,
         lk: -1,
         lt: -1,
       });
@@ -1609,6 +1687,7 @@ export class Renderer implements FrameSink {
     r.lod = null;
     r.lodKey = null;
     r.lodLevel = -1;
+    r.lodLevels = null;
     r.lk = -1;
     r.lt = -1;
     r.batch = null;
@@ -1699,7 +1778,7 @@ export class Renderer implements FrameSink {
         continue;
       }
       idx[k++] = i;
-      if (r.lod) this.countLod(r.lodLevel);
+      if (r.lod && !r.batch) this.countLod(r.lodLevel, 1);
       if (!depth) continue;
       if (r.drawable) {
         // No position: sorts as the nearest blended draw of its order (drawn after the rest).
@@ -1765,6 +1844,24 @@ export class Renderer implements FrameSink {
           this.batch(this.scene, r, this.scenePipeline(r, mode), 0, list.count, list.buffer);
           continue;
         }
+        if (r.lod) {
+          // One command per non-empty level, the instances bucketed by level (ws/render-6).
+          const written = this.copyBatchLod(r, dst, inst, planes);
+          culled += this.batchCulled;
+          if (written === 0) continue;
+          batches++;
+          const meshes = r.lod.meshes;
+          for (let l = 0; l < meshes.length; l++) {
+            const c = this.bucketCount[l]!;
+            if (c === 0) continue;
+            r.mesh = meshes[l]!;
+            this.batch(this.scene, r, this.scenePipeline(r, mode), this.bucketFirst[l]!, c);
+            this.countLod(l, c);
+          }
+          r.mesh = meshes[0]!;
+          inst += written;
+          continue;
+        }
         const written = this.copyBatch(r, dst, inst, planes);
         culled += this.batchCulled;
         if (written === 0) continue;
@@ -1807,11 +1904,22 @@ export class Renderer implements FrameSink {
     const vpH = this.viewRect.height;
     const bias = cam.lodBias;
     const h = this.lodHysteresis;
-    const levels = this.lodLevels;
+    const camLayers = cam.layers >>> 0;
+    this.lodCam = cam;
+    let memory = this.lodMemory.get(cam);
+    if (!memory) {
+      memory = { keyed: new WeakMap(), indexed: new WeakMap() };
+      this.lodMemory.set(cam, memory);
+    }
+    const levels = memory.keyed;
     for (let i = 0; i < n; i++) {
       const r = recs[i]!;
       const lod = r.lod;
       if (!lod) continue;
+      if (r.batch) {
+        if ((r.layers & camLayers) !== 0) this.pickBatchLods(r, lod, memory, ex, ey, ez, vpH);
+        continue;
+      }
       const meshes = lod.meshes;
       let level = 0;
       if (meshes.length > 1) {
@@ -1835,11 +1943,69 @@ export class Renderer implements FrameSink {
     }
   }
 
-  /** Count one scene instance of LOD level `level` in `stats.lodCounts`. */
-  private countLod(level: number): void {
+  /**
+   * `pickLods` for a batch or list record: every instance's level for this view, from the
+   * sphere of `meshes[0].bounds` through its matrix (as `pushInstance` places it), with the
+   * hysteresis held per instance index in the view's memory for the batch. The levels land in
+   * `r.lodLevels` (that memory), read by the scene and the shadow copy alike, so a shadow pass
+   * draws the level the view picked. Grows the memory only when the batch does.
+   */
+  private pickBatchLods(
+    r: DrawRec,
+    lod: MeshLod,
+    memory: LodMemory,
+    ex: number,
+    ey: number,
+    ez: number,
+    vpH: number,
+  ): void {
+    const b = r.batch!;
+    const n = b.count;
+    let mem = memory.indexed.get(b);
+    if (!mem || mem.length < n) {
+      const next = new Int8Array(Math.max(n, mem ? mem.length * 2 : 0));
+      next.fill(-1);
+      if (mem) next.set(mem);
+      memory.indexed.set(b, next);
+      mem = next;
+    }
+    r.lodLevels = mem;
+    const meshes = lod.meshes;
+    const count = meshes.length;
+    const mb = meshes[0]!.bounds;
+    if (count <= 1 || !(mb.radius < Number.POSITIVE_INFINITY)) {
+      mem.fill(0, 0, n);
+      return;
+    }
+    const cam = this.lodCam!;
+    const proj = cam.projection;
+    const bias = cam.lodBias;
+    const h = this.lodHysteresis;
+    const th = lod.thresholdsPx;
+    const m = b.matrices;
+    const cx = mb.center[0];
+    const cy = mb.center[1];
+    const cz = mb.center[2];
+    for (let i = 0; i < n; i++) {
+      const mo = i * MATRIX3X4_FLOATS;
+      const x = m[mo]! * cx + m[mo + 1]! * cy + m[mo + 2]! * cz + m[mo + 3]!;
+      const y = m[mo + 4]! * cx + m[mo + 5]! * cy + m[mo + 6]! * cz + m[mo + 7]!;
+      const z = m[mo + 8]! * cx + m[mo + 9]! * cy + m[mo + 10]! * cz + m[mo + 11]!;
+      const s0 = m[mo]! * m[mo]! + m[mo + 4]! * m[mo + 4]! + m[mo + 8]! * m[mo + 8]!;
+      const s1 = m[mo + 1]! * m[mo + 1]! + m[mo + 5]! * m[mo + 5]! + m[mo + 9]! * m[mo + 9]!;
+      const s2 = m[mo + 2]! * m[mo + 2]! + m[mo + 6]! * m[mo + 6]! + m[mo + 10]! * m[mo + 10]!;
+      const radius = mb.radius * Math.sqrt(Math.max(s0, s1, s2));
+      const dist = Math.hypot(x - ex, y - ey, z - ez);
+      const size = lodSizePx(radius, dist, proj, vpH) * bias;
+      mem[i] = pickLodLevel(size, th, count, mem[i]!, h);
+    }
+  }
+
+  /** Count `n` scene instances of LOD level `level` in `stats.lodCounts`. */
+  private countLod(level: number, n: number): void {
     const lc = this.stats.lodCounts;
     while (lc.length <= level) lc.push(0);
-    lc[level]!++;
+    lc[level]! += n;
   }
 
   /**
@@ -1899,6 +2065,101 @@ export class Renderer implements FrameSink {
   }
 
   /**
+   * `copyBatch` for a LOD batch or list: the instances that pass the same per-instance test,
+   * written bucketed by the level `pickLods` chose for this view (`r.lodLevels`), level 0
+   * first. Sets `bucketFirst` / `bucketCount` per level and `batchCulled`; returns the
+   * instances written. Grows its scratch only when a batch outgrows it.
+   */
+  private copyBatchLod(
+    r: DrawRec,
+    dst: Float32Array,
+    inst: number,
+    planes: Float32Array | null,
+  ): number {
+    const b = r.batch!;
+    const n = b.count;
+    const m = b.matrices;
+    const p = b.params ?? null;
+    const levels = r.lodLevels;
+    const count = r.lod!.meshes.length;
+    if (this.bucketCount.length < count) {
+      const c = Math.max(count, this.bucketCount.length * 2);
+      this.bucketFirst = new Int32Array(c);
+      this.bucketCount = new Int32Array(c);
+      this.bucketAt = new Int32Array(c);
+    }
+    if (this.lodScratch.length < n) {
+      this.lodScratch = new Int8Array(Math.max(n, this.lodScratch.length * 2));
+    }
+    const lv = this.lodScratch;
+    const bc = this.bucketCount;
+    const bf = this.bucketFirst;
+    const at = this.bucketAt;
+    bc.fill(0, 0, count);
+    const mb = planes ? r.mb : null;
+    const cx = mb ? mb.center[0] : 0;
+    const cy = mb ? mb.center[1] : 0;
+    const cz = mb ? mb.center[2] : 0;
+    const cr = mb ? mb.radius : 0;
+    let culled = 0;
+    for (let i = 0; i < n; i++) {
+      if (mb) {
+        const mo = i * MATRIX3X4_FLOATS;
+        const x = m[mo]! * cx + m[mo + 1]! * cy + m[mo + 2]! * cz + m[mo + 3]!;
+        const y = m[mo + 4]! * cx + m[mo + 5]! * cy + m[mo + 6]! * cz + m[mo + 7]!;
+        const z = m[mo + 8]! * cx + m[mo + 9]! * cy + m[mo + 10]! * cz + m[mo + 11]!;
+        const s0 = m[mo]! * m[mo]! + m[mo + 4]! * m[mo + 4]! + m[mo + 8]! * m[mo + 8]!;
+        const s1 = m[mo + 1]! * m[mo + 1]! + m[mo + 5]! * m[mo + 5]! + m[mo + 9]! * m[mo + 9]!;
+        const s2 = m[mo + 2]! * m[mo + 2]! + m[mo + 6]! * m[mo + 6]! + m[mo + 10]! * m[mo + 10]!;
+        if (outside(planes!, x, y, z, cr * Math.sqrt(Math.max(s0, s1, s2)))) {
+          lv[i] = -1;
+          culled++;
+          continue;
+        }
+      }
+      const l = levels ? Math.min(Math.max(levels[i]!, 0), count - 1) : 0;
+      lv[i] = l;
+      bc[l]!++;
+    }
+    let next = inst;
+    for (let l = 0; l < count; l++) {
+      bf[l] = next;
+      at[l] = next;
+      next += bc[l]!;
+    }
+    for (let i = 0; i < n; i++) {
+      const l = lv[i]!;
+      if (l < 0) continue;
+      const mo = i * MATRIX3X4_FLOATS;
+      const to = at[l]!++ * INSTANCE_FLOATS;
+      for (let f = 0; f < MATRIX3X4_FLOATS; f++) dst[to + f] = m[mo + f]!;
+      if (p) {
+        const po = i * INSTANCE_PARAM_FLOATS;
+        for (let f = 0; f < INSTANCE_PARAM_FLOATS; f++) {
+          dst[to + MATRIX3X4_FLOATS + f] = p[po + f]!;
+        }
+      } else {
+        const sx = Math.hypot(m[mo]!, m[mo + 4]!, m[mo + 8]!);
+        const sy = Math.hypot(m[mo + 1]!, m[mo + 5]!, m[mo + 9]!);
+        writeInstanceParams(dst, to + MATRIX3X4_FLOATS, NO_PARAMS, sx, sy);
+      }
+    }
+    this.batchCulled = culled;
+    return next - inst;
+  }
+
+  /** The shadow pipeline of a caster record (its current `mesh`). */
+  private shadowPipeline(r: DrawRec): GPURenderPipeline {
+    const layout = r.mesh!.layout;
+    const material = r.material!;
+    // A material with a shadow fragment (alpha mask, dissolve) discards in the shadow pass too;
+    // every other caster takes the depth-only pipeline.
+    return material.shadowFragment
+      ? material.shadowPipelineFor(layout, SHADOW_FORMAT)
+      : this.shadow.pipelineFor(layout, layout.skinned ? material.bindings?.layout : undefined);
+  }
+
+  /**
    * Build this view's shadow-pass commands: every opaque mesh draw with `castShadow` on the
    * camera's layers whose bounding sphere touches the sun's box (`ShadowMap.sunCamera.frustum`,
    * placed by `render` before the lists are built), whether or not the view's own frustum sees
@@ -1930,15 +2191,24 @@ export class Renderer implements FrameSink {
     this.sortShadow = true;
     this.sortDraws(idx, this.shadowTmp, k);
     const src = this.instanceData;
-    const shadow = this.shadow;
     for (let j = 0; j < k; j++) {
       const r = recs[idx[j]!]!;
-      const layout = r.mesh!.layout;
-      const material = r.material!;
-      // A material with a shadow fragment (a dissolve) discards in the shadow pass too.
-      const pipeline = material.shadowFragment
-        ? material.shadowPipelineFor(layout, SHADOW_FORMAT)
-        : shadow.pipelineFor(layout, layout.skinned ? material.bindings?.layout : undefined);
+      if (r.batch && r.lod) {
+        // The levels the view picked, bucketed: one shadow draw per non-empty level.
+        const written = this.copyBatchLod(r, dst, inst, planes);
+        if (written === 0) continue;
+        const meshes = r.lod.meshes;
+        for (let l = 0; l < meshes.length; l++) {
+          const c = this.bucketCount[l]!;
+          if (c === 0) continue;
+          r.mesh = meshes[l]!;
+          this.batch(this.shadowCmds, r, this.shadowPipeline(r), this.bucketFirst[l]!, c);
+        }
+        r.mesh = meshes[0]!;
+        inst += written;
+        continue;
+      }
+      const pipeline = this.shadowPipeline(r);
       if (r.batch) {
         const list = r.list;
         if (list) {

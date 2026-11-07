@@ -25,7 +25,9 @@ const p = surface.clientToLogical(e.offsetX, e.offsetY); // design px
   unsupported screen shown.
 - `initGpu(canvas, opts?: GpuInitOptions): Promise<GpuInitResult>`: requests adapter and device
   and configures the canvas; never throws. `GpuInitOptions` is `{ powerPreference?, onLost?,
-  timestamps? }` (timestamps default true). `GpuContext` is `{ adapter, device, context, format,
+  timestamps?, compression? }` (timestamps default true; `compression?: boolean`, default true,
+  asks for the adapter's texture-compression features so `renderer.caps.compressed` reports
+  them). `GpuContext` is `{ adapter, device, context, format,
   timestamps }`; a failure is `{ ok: false, reason: GpuFailureReason, detail? }` with
   `GpuFailureReason` `'no-api' | 'no-adapter' | 'no-device' | 'no-context'`.
 

@@ -3,8 +3,8 @@
  * e2e/render5.spec.ts. Shared by the page (harness/render5.ts) and the spec.
  */
 
-/** The page's modes, one per flag (`?ktx2`, `?lod`, `?dissolve`). */
-export type Render5Mode = 'ktx2' | 'lod' | 'dissolve';
+/** The page's modes, one per flag (`?ktx2`, `?lod`, `?dissolve`, `?mask`). */
+export type Render5Mode = 'ktx2' | 'lod' | 'dissolve' | 'mask';
 
 export interface HarnessRender5State {
   /** True once boot resolved (whether or not WebGPU came up). */
@@ -16,6 +16,8 @@ export interface HarnessRender5State {
   mode: Render5Mode;
   /** `?still`: the scene is frozen at its first pose (no motion, a fixed dissolve amount). */
   still: boolean;
+  /** `?lod&instanced`: the rocks are one `InstanceList` on the `MeshLod`. */
+  instanced: boolean;
   /** `renderer.caps.compressed` of the page's device. */
   caps: { bc: boolean; etc2: boolean; astc: boolean };
   /**
@@ -36,6 +38,26 @@ export interface HarnessRender5State {
   instances: number;
   /** `?dissolve`: the dissolve amount the last frame drew with (0..1). */
   amount: number;
+  /**
+   * `?lod&instanced`: `renderer.stats.drawCalls` of the last frame, the list being the only
+   * draw: one per non-empty level of `lodCounts`. 0 in every other mode.
+   */
+  instancedDraws: number;
+  /**
+   * `?mask`: grid samples (of `shadowSamples`) inside the masked quad's shadow brighter than
+   * halfway between `litRef` and `darkRef`: light through the mask's holes. Updated per
+   * readback (`readbacks`).
+   */
+  shadowHolePx: number;
+  /** `?mask`: the grid samples at or below the halfway line (shadowed by the mask's cells). */
+  shadowDarkPx: number;
+  /** `?mask`: grid samples per readback (32 × 32); 0 before the first. */
+  shadowSamples: number;
+  /** `?mask`: luminance of lit ground, and of the solid quad's shadow. */
+  litRef: number;
+  darkRef: number;
+  /** `?mask`: probe readbacks that arrived. */
+  readbacks: number;
   /** `gpuDiagnostics.errorCount` (WGSL compile errors, uncaptured errors). */
   gpuErrors: number;
 }

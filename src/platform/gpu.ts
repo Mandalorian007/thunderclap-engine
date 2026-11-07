@@ -1,5 +1,7 @@
 /** WebGPU capability check + device creation. */
 
+import { compressionFeatures } from '../render/compressed';
+
 export interface GpuContext {
   adapter: GPUAdapter;
   device: GPUDevice;
@@ -25,6 +27,12 @@ export interface GpuInitOptions {
   onLost?: (info: GPUDeviceLostInfo) => void;
   /** Ask for `timestamp-query` when the adapter has it. Default true. */
   timestamps?: boolean;
+  /**
+   * Ask for the adapter's texture-compression features (`compressionFeatures(adapter)`:
+   * `texture-compression-bc`, `-etc2`, `-astc`), so `renderer.caps.compressed` reports what the
+   * adapter can upload without a second device (ws/render-6). Default true.
+   */
+  compression?: boolean;
 }
 
 /**
@@ -49,16 +57,17 @@ export async function initGpu(
   if (!adapter) return { ok: false, reason: 'no-adapter' };
 
   // Optional features: requested only when the adapter offers them, so a device without
-  // them still comes up (and a refused request retries without).
-  const wantTs = (opts.timestamps ?? true) && adapter.features.has('timestamp-query');
+  // them still comes up (and a refused request retries without any).
+  const wanted: GPUFeatureName[] = [];
+  if ((opts.timestamps ?? true) && adapter.features.has('timestamp-query')) {
+    wanted.push('timestamp-query');
+  }
+  if (opts.compression ?? true) wanted.push(...compressionFeatures(adapter));
   let device: GPUDevice;
   try {
-    device = await adapter.requestDevice({
-      label: 'engine-device',
-      requiredFeatures: wantTs ? ['timestamp-query'] : [],
-    });
+    device = await adapter.requestDevice({ label: 'engine-device', requiredFeatures: wanted });
   } catch (e) {
-    if (!wantTs) return { ok: false, reason: 'no-device', detail: String(e) };
+    if (wanted.length === 0) return { ok: false, reason: 'no-device', detail: String(e) };
     try {
       device = await adapter.requestDevice({ label: 'engine-device' });
     } catch (e2) {

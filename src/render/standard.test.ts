@@ -240,8 +240,9 @@ describe('standard material variants (ws/gltf-materials)', () => {
     expect(STANDARD_WGSL).toContain('fn standard_uv(uv: vec2f) -> vec2f');
     expect(STANDARD_WGSL).toContain('uv_scale_offset: vec4f');
     expect(STANDARD_WGSL).toContain('uv_rot: vec4f');
-    // Five samples, each through its own slot's transform (ws/render-4), none through `in.uv`.
-    expect(STANDARD_WGSL.match(/standard_sampler, standard_uv_slot\(in, \du\)\)/g)).toHaveLength(4);
+    // Five scene samples, each through its own slot's transform (ws/render-4), none through
+    // `in.uv`, plus the shadow entry's base alpha sample (ws/render-6).
+    expect(STANDARD_WGSL.match(/standard_sampler, standard_uv_slot\(in, \du\)\)/g)).toHaveLength(5);
     expect(STANDARD_WGSL.match(/standard_sampler, uv\)/g)).toHaveLength(1);
     expect(STANDARD_WGSL).toContain('let uv = standard_uv_slot(in, 2u);');
     expect(STANDARD_WGSL).not.toContain('standard_sampler, in.uv');
