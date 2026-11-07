@@ -79,7 +79,7 @@ export type BarName = 'top' | 'bottom' | 'left' | 'right';
 /**
  * How a bar or rail is sized. `'fixed'` (the default) keeps the form's track. `'content'` grows
  * the outer track to the bar's tallest widget (`top`, `bottom`; ws/ui-8) or the rail's widest
- * widget (`left`, `right`; ws/ui-9) plus the form's `pad` each side, never below the form's track
+ * widget at its `max-content` width (`left`, `right`; ws/ui-9, ws/ui-10) plus the form's `pad` each side, never below the form's track
  * and never above `max`; the layout re-flows (the world's `fill`, so `freeRect`, gives up the
  * space). A widget larger than `max` allows still reports through `overflows()`.
  *
@@ -172,6 +172,31 @@ export interface WidgetOptions {
   order?: number;
   /** Name for logs and `freeUses`. Default the element's id or `widget-N`. */
   id?: string;
+  /**
+   * Called on every re-layout with the form factor, before the layout measures its widgets
+   * (ws/ui-10), so a widget sized per form factor (`ui.meter({ size: { phone: 56, default: 96 } })`)
+   * is already that size when a content bar or rail measures it. Keep it cheap: write only what
+   * changed.
+   */
+  onForm?: (ff: FormFactor) => void;
+}
+
+/**
+ * A length per form factor (ws/ui-10): `default` covers the forms not named, and `phone` covers
+ * both `phone-landscape` and `phone-portrait` (a form's own name wins over it).
+ */
+export type FormSizes = { default: number } & Partial<Record<FormFactor | 'phone', number>>;
+
+/** A length, or one per form factor (`FormSizes`). */
+export type FormSize = number | FormSizes;
+
+/** `size` in `ff`: the number itself, else the form's entry, `phone` on a phone, `default`. Pure. */
+export function formSize(size: FormSize, ff: FormFactor): number {
+  if (typeof size === 'number') return size;
+  const own = size[ff];
+  if (own !== undefined) return own;
+  if (ff.startsWith('phone') && size.phone !== undefined) return size.phone;
+  return size.default;
 }
 
 export interface WidgetHandle {
@@ -734,6 +759,7 @@ interface Entry {
   home?: { parent: Node | null; next: Node | null };
   loggedFree: boolean;
   warnedOverflow: boolean;
+  onForm?: (ff: FormFactor) => void;
 }
 
 /** Slack before a measured box counts as larger than its region, CSS px (sub-pixel rounding). */
@@ -844,6 +870,7 @@ export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout
       );
     state = resolve(null);
     writeGrid(ff, form, insets, occupied);
+    for (const e of entries) e.onForm?.(ff);
 
     // Widgets.
     freeUses = [];
@@ -883,10 +910,15 @@ export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout
     }
 
     // Content bars and rails (ws/ui-8, ws/ui-9): one read of the bar widgets' heights and the
-    // rail widgets' widths, then the grid re-flows once if a track or a corner moved.
+    // rail widgets' widths, then the grid re-flows once if a track or a corner moved. A content
+    // rail is measured at `max-content` (ws/ui-10): for the read it is as wide as its widest
+    // widget wants and does not stretch them, so a widget reports its intrinsic width rather than
+    // the rail's current one, and the rail follows its content both ways.
     const bars = form.bars;
     if (bars && BAR_NAMES.some((b) => bars[b]?.size === 'content')) {
       const content: Partial<Record<BarName, number>> = {};
+      const left = bars.left?.size === 'content' ? intrinsic(regionEls.left) : null;
+      const right = bars.right?.size === 'content' ? intrinsic(regionEls.right) : null;
       for (const e of sorted) {
         const p = e.current;
         if (p !== 'top' && p !== 'bottom' && p !== 'left' && p !== 'right') continue;
@@ -895,6 +927,8 @@ export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout
         const v = (p === 'left' || p === 'right' ? box?.width : box?.height) ?? 0;
         content[p] = Math.max(content[p] ?? 0, v);
       }
+      left?.();
+      right?.();
       const next = resolve(content);
       const areas = resolvedAreas(form, content);
       if (
@@ -939,6 +973,23 @@ export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout
       }
     }
     for (const f of subs) f(state);
+  };
+
+  /**
+   * Lay a rail out at `max-content` for a measure (ws/ui-10): the region as wide as its widest
+   * widget wants, its widgets at their own width (`align-items: flex-start` instead of the rail's
+   * stretch). Returns the restore. Inline values a game set on the region come back.
+   */
+  const intrinsic = (el: HTMLElement): (() => void) => {
+    const s = el.style;
+    const width = s.width;
+    const align = s.alignItems;
+    s.width = 'max-content';
+    s.alignItems = 'flex-start';
+    return () => {
+      s.width = width;
+      s.alignItems = align;
+    };
   };
 
   /** Tokens, grid tracks and region visibility for the current `state`. */
@@ -1019,6 +1070,7 @@ export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout
         home: el.parentNode ? { parent: el.parentNode, next: el.nextSibling } : undefined,
         loggedFree: false,
         warnedOverflow: false,
+        onForm: opts.onForm,
       };
       entries.push(e);
       apply();
