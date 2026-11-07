@@ -34,6 +34,11 @@ export interface HarnessUi5State {
   redraws: number;
   pick: { x: number; z: number } | null;
   player: { x: number; z: number; yaw: number };
+  /**
+   * `?minimap` (ws/ui-7): the markers that carry a `heading` (an `arrow` kind): the heading set,
+   * radians clockwise from north, and `markerAt(id).angle`, the turn drawn on the player-up map.
+   */
+  headingMarkers: { id: string; heading: number; angle: number }[];
 }
 
 export interface HarnessUi5Api {

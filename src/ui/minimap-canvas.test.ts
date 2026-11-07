@@ -191,4 +191,54 @@ describe('canvas minimap (ws/ui-5)', () => {
     map.flush();
     expect(map.redraws).toBe(before + 1);
   });
+
+  it('an arrow kind turns to the marker heading, in north and player modes (ws/ui-7)', () => {
+    /** A 2D context that records `rotate` and ignores the rest. */
+    const recorder = (map: { canvas: HTMLCanvasElement }) => {
+      const turns: number[] = [];
+      const ctx = new Proxy(
+        {},
+        {
+          get: (_, k) => (k === 'rotate' ? (a: number) => turns.push(a) : () => {}),
+          set: () => true,
+        },
+      );
+      map.canvas.getContext = (() => ctx) as unknown as HTMLCanvasElement['getContext'];
+      return turns;
+    };
+    const kinds = { mover: { shape: 'arrow' as const, color: '#fc0', size: 14 } };
+    const list: MinimapMarker[] = [
+      { id: 'a', x: 3, z: 1, kind: 'mover', heading: 1 },
+      { id: 'dot', x: -3, z: 1, kind: 'enemy', heading: 2 }, // a dot does not turn
+      { id: 'n', x: 0, z: 4, kind: 'mover' }, // no heading: north
+    ];
+    const place = { x: 0, y: 0, outside: false, angle: 9 };
+
+    const north = createCanvasMinimap(ov, { world: WORLD, kinds });
+    const nt = recorder(north);
+    north.setPlayer(0, 0, 0.5);
+    north.setMarkers(list);
+    north.flush();
+    // The arrow at its heading, the headless one north, then the player's arrow at its yaw.
+    expect(nt).toEqual([1, 0, 0.5]);
+    expect(north.markerAt('a', place)!.angle).toBe(1);
+    expect(north.markerAt('n')!.angle).toBe(0);
+
+    const up = createCanvasMinimap(ov, { world: WORLD, kinds, rotate: 'player' });
+    const ut = recorder(up);
+    up.setPlayer(0, 0, 0.5);
+    up.setMarkers(list);
+    up.flush();
+    // The map turns by −yaw: each heading less the yaw; the player's arrow points up.
+    expect(ut).toEqual([0.5, -0.5, 0]);
+    expect(up.markerAt('a', place)).toBe(place);
+    expect(place.angle).toBe(0.5);
+    expect(up.markerAt('dot')!.angle).toBe(1.5);
+    // A heading change alone redraws.
+    const before = up.redraws;
+    up.setMarkers(list.map((m) => (m.id === 'a' ? { ...m, heading: 2 } : m)));
+    up.flush();
+    expect(up.redraws).toBe(before + 1);
+    expect(ut.slice(3)).toEqual([1.5, -0.5, 0]);
+  });
 });

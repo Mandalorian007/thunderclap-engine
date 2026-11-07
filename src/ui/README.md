@@ -379,9 +379,16 @@ lists the exported names; ARCHITECTURE.md *Layout* describes the model.
   per form factor plus `default`, `order`, `id`) returns a `WidgetHandle` (`element`, `region`,
   `setPlace`, `remove`). A `Placement` is a region, `'hidden'` or a `FreePlacement` (`{ region:
   'free', rect, reason }`); `placementFor(place, ff)` resolves one.
+- **Overflow** (ws/ui-7). On each re-layout (`add`, `setPlace`, a resize, `refresh`; never per
+  frame) the layout measures every widget placed in a region against the region's inner box
+  (its rect less the form's `pad` each side). One that is larger on either axis warns once
+  through `console.warn` (`[layout] <id> overflows its "<region>" region in <form factor>: WxH
+  px in RWxRH px`; again after `setPlace`), and `layout.overflows()` lists the current ones as
+  `LayoutOverflow { id, region, w, h, rw, rh }` (CSS px) for tests and dev overlays. Hidden and
+  `free` widgets are not measured; content that grows later is caught at the next re-layout.
 - **State.** `LayoutState` is the pure result for one size (`formFactor`, `units`, `width`,
   `height`, `safeArea`, `columns`, `rows`, `regions`, `freeRect`). `Layout` adds `element`,
-  `freeUses`, `region(name)`, `dockCaption`, `setSafeArea`, `setForms`, `refresh`, `onChange` and
+  `freeUses`, `overflows()`, `region(name)`, `dockCaption`, `setSafeArea`, `setForms`, `refresh`, `onChange` and
   `destroy`. `LayoutHost` is what the layout needs from its overlay.
 - **Pure helpers** (tested in Node): `parseAreas(areas)`, `resolveTracks(tracks, length,
   collapsed?)`, `resolveLayout(ff, form, width, height, safeArea?, occupied?)`,
@@ -529,7 +536,7 @@ declarations, and `applyTheme(el, tokens)` sets them on an element. `ensureStyle
   `Floats`, `FloatsHost`, `FloatsOptions`, `FloatTextOptions` (floating text); `CanvasMinimap`,
   `CanvasMinimapHost`, `CanvasMinimapOptions`, `MinimapWorld`, `MinimapRotate`, `MinimapShape`,
   `MinimapMarker`, `MinimapMarkerShape`, `MinimapKindStyle`, `MinimapBackground` and (ws/ui-6)
-  `MinimapMarkerPlace` (the minimap).
+  `MinimapMarkerPlace` (the minimap). ws/ui-7: `LayoutOverflow` (`layout.overflows()`).
 - **External links.** `externalLink(opts: ExternalLinkOptions)` returns an `ExternalLink`
   (`element`, `anchor`, `copyButton`, …) or null; `ExternalLinkLabels` are the strings shown
   above.
@@ -672,6 +679,9 @@ const map = ui.minimap({                                      // ws/ui-5, ws/ui-
 });
 map.setPlayer(p.x, p.z, yaw);                                 // radians, clockwise from north
 map.setMarkers([{ id: 'a', x: 4, z: -9, kind: 'enemy' }]);
+// ws/ui-7: a kind with shape 'arrow' draws as the player's arrow, turned to the marker's heading.
+// ui.minimap({ ..., kinds: { mover: { shape: 'arrow', size: 14 } } })
+map.setMarkers([{ id: 'b', x: 2, z: 3, kind: 'mover', heading: Math.PI / 2 }]); // facing east
 ```
 
 `ui.minimap(opts)` / `createCanvasMinimap(host: CanvasMinimapHost, opts: CanvasMinimapOptions)`
@@ -682,18 +692,23 @@ MinimapRotate` (`'north' | 'player'`), `shape: MinimapShape` (`'round' | 'square
 (world units from the centre to the rim, inset 5 px; overrides `zoom`), `background`
 (`MinimapBackground`: a canvas, `ImageBitmap` or image the game paints), `kinds` (per marker
 kind, `MinimapKindStyle { shape: MinimapMarkerShape, color, size }`; the shapes are `dot`,
-`square`, `diamond`, `triangle`, `ring`; defaults for `self`, `ally`, `enemy`, `objective`, `info`),
+`square`, `diamond`, `triangle`, `ring`, `arrow`; defaults for `self`, `ally`, `enemy`, `objective`, `info`),
 `onPick(worldX, worldZ)`, `region` (`right`), `place` (per form factor as `layout.add` takes it,
 overriding `region`: a phone's 56 px rail is too narrow for a map, so put it in `cardLane` there),
 `order`, `label`. The map is square and shrinks to fit a smaller region; picks read the drawn rect. `CanvasMinimap`: `el`, `canvas`,
 `size`, `redraws`, `markers`, `rim` (markers held on the rim at the last draw), `zoom` (get and
-set), `setMarkers(list: MinimapMarker[])` (`{ id, x, z, kind, color?, icon? }`; `icon` is a glyph
-drawn in place of the shape), `markerAt(id, out?)` (a `MinimapMarkerPlace { x, y, outside }` in
+set), `setMarkers(list: MinimapMarker[])` (`{ id, x, z, kind, color?, icon?, heading? }`; `icon` is a glyph
+drawn in place of the shape), `markerAt(id, out?)` (a `MinimapMarkerPlace { x, y, outside, angle }` in
 map px from the top-left after the rim clamp, or `null`), `setPlayer(x, z, yaw)`, `setBackground(bg | null)`, `toMap(x, z, out)`,
 `toWorld(u, v, out)` (exact inverses, map px from the top-left), `flush()`, `remove()`. It
 redraws only on change: each setter compares with what it holds and schedules one draw on the
 next animation frame. Markers past the edge sit on the rim, dimmed; colours may be `var(--tc-…)`
 tokens. A click or tap gives `onPick` through `toWorld` (ignored off a round map's disc).
+**Heading** (ws/ui-7): `MinimapMarker.heading` is radians clockwise from north (−z), the
+convention of `setPlayer`'s yaw, default 0. A kind with `shape: 'arrow'` draws the player's
+arrow (`size` is its length; the player's is 16), turned by the heading on a north-up map and by
+heading − yaw on a player-up one; `markerAt(id).angle` is that turn (radians clockwise from up).
+Other shapes do not turn. A heading change redraws like any other marker change.
 `CANVAS_MINIMAP_CSS` (`ensureCanvasMinimapStyles`, `#tc-ui-cminimap`). ws/ui-6 retired ws/ui-4's
 DOM `createMinimap` (pooled marker nodes, `setCenter`/`setMarker`): `rotate: 'player'` with
 `worldRadius` and `markerAt` cover what it did.
@@ -827,5 +842,9 @@ hold, drain and retarget on an injected clock, reduced motion and the bar's trai
 the stack fan, the rise and fade and the crit pop, and `ui.floats` memoised and disposed;
 `minimap-canvas.test.ts` the mapping in both `rotate` modes, `toWorld` inverting `toMap`, no redraw
 without a change, the pick, and `ui.minimap` with `worldRadius`, `markerAt` and `rim`.
-`e2e/ui5.spec.ts` runs `harness/ui5.html` (`?orb`, `?floats`, `?minimap`, `?still`). Layout and
+ws/ui-7: `layout.test.ts` an oversized widget listed in `overflows()` and warned once (a fitting
+one not, a hidden one not measured, `setPlace` warning again); `minimap-canvas.test.ts` the arrow
+kind's drawn rotation (recorded `rotate` calls) in north and player modes and `markerAt.angle`.
+`e2e/ui5.spec.ts` runs `harness/ui5.html` (`?orb`, `?floats`, `?minimap`, `?still`); since
+ws/ui-7 `?minimap` holds an arrow marker whose `headingMarkers` angle tracks heading − yaw. Layout and
 focus were also checked once in Chromium via Playwright (not part of CI).

@@ -495,6 +495,51 @@ describe('overlay.layout (DOM)', () => {
     expect(ov!.caption.docked).toBeNull();
   });
 
+  it('a widget larger than its region warns once and is listed in overflows() (ws/ui-7)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const layout = make({ classify });
+    /** happy-dom lays nothing out: give the element a measured box. */
+    const sized = <T extends HTMLElement>(el: T, width: number, height: number): T => {
+      el.getBoundingClientRect = () =>
+        ({ x: 0, y: 0, left: 0, top: 0, right: width, bottom: height, width, height }) as DOMRect;
+      return el;
+    };
+    const fits = sized(h('button', { id: 'fits' }), 44, 44);
+    const wide = sized(h('div'), 120.004, 30);
+    layout.add(fits, { place: { default: 'left' } });
+    expect(layout.overflows()).toEqual([]);
+    expect(warn).not.toHaveBeenCalled();
+    const hd = layout.add(wide, { id: 'wide', place: { default: 'left' } });
+    const left = layout.state.regions.left!;
+    const pad = defaultForms['phone-landscape'].pad;
+    const rw = left.width - 2 * pad;
+    const rh = left.height - 2 * pad;
+    expect(rw).toBe(48); // the 56 px rail less 4 px each side
+    expect(layout.overflows()).toEqual([{ id: 'wide', region: 'left', w: 120, h: 30, rw, rh }]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]![0]).toBe(
+      `[layout] wide overflows its "left" region in phone-landscape: 120x30 px in ${rw}x${rh} px`,
+    );
+    // Re-layouts re-measure but do not warn again.
+    layout.refresh();
+    resize(915, 360);
+    expect(layout.overflows().map((o) => o.id)).toEqual(['wide']);
+    expect(warn).toHaveBeenCalledTimes(1);
+    // Where it fits, it is no longer listed; hidden widgets are not measured.
+    hd.setPlace({ default: 'cardLane' });
+    expect(layout.overflows()).toEqual([]);
+    hd.setPlace({ default: 'hidden' });
+    sized(wide, 4000, 4000);
+    layout.refresh();
+    expect(layout.overflows()).toEqual([]);
+    // A new placement that overflows warns again.
+    hd.setPlace({ default: 'top' });
+    expect(layout.overflows()[0]).toMatchObject({ id: 'wide', region: 'top', w: 4000 });
+    expect(warn).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
+    layout.destroy();
+  });
+
   it('device mode leaves the density tokens to the layout', () => {
     make({ classify });
     const dm = createDeviceMode(ov!.root);

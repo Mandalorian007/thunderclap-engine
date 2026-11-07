@@ -8,7 +8,7 @@
  * - `?floats`: labels stream from a bounded pool (the layer holds exactly the pooled nodes) and
  *   the ones behind the camera are hidden;
  * - `?minimap`: a moving player redraws the map, a still one does not, and a click picks the
- *   world point under it;
+ *   world point under it; an arrow marker turns to its heading less the player's yaw (ws/ui-7);
  * - `?still` parks the clock while frames keep coming.
  */
 import type { Frame, Page } from '@playwright/test';
@@ -187,6 +187,31 @@ test('a click on the minimap picks the world point under it', async ({ page, wra
   await canvas.click({ position: { x: 2, y: 2 }, force: true });
   await expect.poll(async () => (await read()).frames).toBeGreaterThan(s.frames + 3);
   expect((await read()).pick).toBeNull();
+  expect(errors).toEqual([]);
+});
+
+test('an arrow marker turns to its heading on the player-up map (ws/ui-7)', async ({
+  page,
+  wrapper,
+}) => {
+  await open(page, wrapper, 'minimap');
+  /** The drawn turn less (heading − yaw), wrapped to (−π, π]. */
+  const off = (s: HarnessUi5State) => {
+    const m = s.headingMarkers[0]!;
+    const d = m.angle - (m.heading - s.player.yaw);
+    return Math.abs(Math.atan2(Math.sin(d), Math.cos(d)));
+  };
+  await expect.poll(async () => (await read()).headingMarkers.length).toBe(1);
+  const s0 = await read();
+  expect(s0.headingMarkers[0]!.id).toBe('mover');
+  // The heading turns on the clock; each read (one evaluate) has the turn match it.
+  await expect
+    .poll(async () => {
+      const s = await read();
+      expect(off(s)).toBeLessThan(1e-9);
+      return Math.abs(s.headingMarkers[0]!.heading - s0.headingMarkers[0]!.heading);
+    })
+    .toBeGreaterThan(0.5);
   expect(errors).toEqual([]);
 });
 

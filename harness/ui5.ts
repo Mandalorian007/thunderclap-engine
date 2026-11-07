@@ -9,7 +9,8 @@
  *   a label behind the camera every half second; `active`, `pooled`, `spawned`, `culled`.
  * - `?minimap`: a round, player-up canvas minimap (`ui.minimap`, ws/ui-6) over a painted
  *   background, 20 markers and a player circling; a click picks the world point (`pick`).
- *   `redraws`, `player`.
+ *   One more marker is an `arrow` kind carrying a `heading` that turns on the clock (ws/ui-7).
+ *   `redraws`, `player`, `headingMarkers`.
  *
  * `?still` (or `park(true)`) stops the clock (E-017).
  */
@@ -52,6 +53,7 @@ const state: HarnessUi5State = {
   redraws: 0,
   pick: null,
   player: { x: 0, z: 0, yaw: 0 },
+  headingMarkers: [],
 };
 
 // ------------------------------------------------------------------ geometry (12 floats/vertex)
@@ -164,6 +166,8 @@ const WORLD = { minX: -20, minZ: -20, maxX: 20, maxZ: 20 };
 const MAP_SIZE = 200;
 const PLAYER_RADIUS = 8;
 const PLAYER_RAD_PER_S = 0.4;
+/** `?minimap`: how fast the arrow marker's heading turns. */
+const HEADING_RAD_PER_S = 1.1;
 
 /** Fraction of an orb's well a layer covers, from its transformed rect. */
 function covered(orb: Meter, layer: string): number {
@@ -335,6 +339,7 @@ async function main(): Promise<void> {
       zoom: 1.6,
       background: paintBackground(),
       region: 'right',
+      kinds: { mover: { shape: 'arrow', color: 'var(--tc-color-warn)', size: 14 } },
       onPick: (x, z) => {
         state.pick = { x, z };
       },
@@ -350,6 +355,10 @@ async function main(): Promise<void> {
       const r = 2 + i * 0.9;
       return { id: `m${i}`, x: Math.cos(a) * r, z: Math.sin(a) * r, kind: kinds[i % 4]! };
     });
+    // An arrow marker facing a heading that turns on the clock (0.8 rad at t = 0).
+    const mover: MinimapMarker = { id: 'mover', x: -4, z: -3, kind: 'mover', heading: 0.8 };
+    markers.push(mover);
+    const where = { x: 0, y: 0, outside: false, angle: 0 };
     const place = () => {
       const a = state.t * PLAYER_RAD_PER_S;
       const x = Math.cos(a) * PLAYER_RADIUS;
@@ -358,6 +367,7 @@ async function main(): Promise<void> {
       const yaw = Math.atan2(-Math.sin(a), -Math.cos(a));
       state.player = { x, z, yaw };
       map.setPlayer(x, z, yaw);
+      mover.heading = 0.8 + state.t * HEADING_RAD_PER_S;
     };
     place();
     perStep = () => place();
@@ -365,6 +375,12 @@ async function main(): Promise<void> {
       // The same list every frame: an unchanged list does not redraw.
       map.setMarkers(markers);
       state.redraws = map.redraws;
+      map.markerAt(mover.id, where);
+      if (!state.headingMarkers.length)
+        state.headingMarkers.push({ id: mover.id, heading: 0, angle: 0 });
+      const hm = state.headingMarkers[0]!;
+      hm.heading = mover.heading!;
+      hm.angle = where.angle;
     };
   }
 

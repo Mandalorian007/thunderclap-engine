@@ -18,6 +18,9 @@
  * - Markers past the view's edge sit on the rim, dimmed; `markerAt(id)` says where one is drawn
  *   and whether it is on the rim, `rim` counts them. A marker may carry an `icon` (a glyph drawn
  *   on it). Colours may be CSS colours or `var(--tc-…)` theme tokens (resolved on each draw).
+ * - A marker may carry a `heading` (radians, clockwise from north, as `setPlayer`'s yaw); a kind
+ *   with `shape: 'arrow'` draws it as the player's arrow, turned to that heading on the map
+ *   (less the player's yaw on a `rotate: 'player'` map). `markerAt(id).angle` is that turn.
  *
  * `ui.minimap(opts)` is this map on the overlay (ws/ui-6 retired ui-4's DOM minimap).
  */
@@ -41,14 +44,15 @@ export interface MinimapWorld {
 
 export type MinimapRotate = 'north' | 'player';
 export type MinimapShape = 'round' | 'square';
-export type MinimapMarkerShape = 'dot' | 'square' | 'diamond' | 'triangle' | 'ring';
+/** `arrow` is the player's arrow shape, turned to the marker's `heading` (ws/ui-7). */
+export type MinimapMarkerShape = 'dot' | 'square' | 'diamond' | 'triangle' | 'ring' | 'arrow';
 
 /** How a marker kind draws. */
 export interface MinimapKindStyle {
   shape?: MinimapMarkerShape;
   /** CSS colour or `var(--tc-…)`. */
   color?: string;
-  /** Diameter, map px. Default 8. */
+  /** Diameter, map px (an arrow's length; the player's arrow is 16). Default 8. */
   size?: number;
 }
 
@@ -62,6 +66,11 @@ export interface MinimapMarker {
   color?: string;
   /** A short glyph drawn on the marker (one or two characters), in the theme text colour. */
   icon?: string;
+  /**
+   * Facing, radians clockwise from north (−z), the convention of `setPlayer`'s yaw (ws/ui-7).
+   * An `arrow` kind points this way; other shapes do not turn. Default 0 (north).
+   */
+  heading?: number;
 }
 
 /** Where a marker is drawn, as of now (`markerAt`). */
@@ -71,6 +80,13 @@ export interface MinimapMarkerPlace {
   y: number;
   /** True while held on the rim (past the view's edge). */
   outside: boolean;
+  /**
+   * The marker's heading as drawn on the map, radians clockwise from up: `heading` on a north-up
+   * map, `heading − yaw` on a player-up one (`heading` defaults to 0, north). An `arrow` is turned
+   * by this.
+   * `markerAt` always writes it (optional so an `out` from before ws/ui-7 still type-checks).
+   */
+  angle?: number;
 }
 
 export type MinimapBackground = HTMLCanvasElement | ImageBitmap | HTMLImageElement;
@@ -205,6 +221,7 @@ export function createCanvasMinimap(
   const mkind: string[] = [];
   const mcolor: (string | undefined)[] = [];
   const micon: (string | undefined)[] = [];
+  const mheading: (number | undefined)[] = [];
   let count = 0;
   let rim = 0;
   let redraws = 0;
@@ -248,6 +265,12 @@ export function createCanvasMinimap(
     out.x = cx + du * cos - dv * sin;
     out.y = cz + du * sin + dv * cos;
     return out;
+  };
+
+  /** Marker `i`'s heading on the map, radians clockwise from up. */
+  const markerAngle = (i: number): number => {
+    const hd = mheading[i] ?? 0;
+    return turn ? hd - yaw : hd;
   };
 
   /** Marker `i` on the map, rim-clamped, into `tmp`; true when held on the rim. */
@@ -294,12 +317,18 @@ export function createCanvasMinimap(
     style: MinimapKindStyle,
     color: string,
     dim: boolean,
+    angle: number,
   ) => {
     const r = (style.size ?? 8) / 2;
     ctx.globalAlpha = dim ? 0.55 : 1;
     ctx.fillStyle = color;
     ctx.strokeStyle = 'rgba(0, 0, 0, 0.75)';
     ctx.lineWidth = 1.5;
+    if (style.shape === 'arrow') {
+      arrow(ctx, x, y, r, angle);
+      ctx.globalAlpha = 1;
+      return;
+    }
     ctx.beginPath();
     switch (style.shape ?? 'dot') {
       case 'square':
@@ -331,6 +360,22 @@ export function createCanvasMinimap(
     ctx.fill();
     ctx.stroke();
     ctx.globalAlpha = 1;
+  };
+
+  /** The arrow (half-length `r`; the player's is 8) at (x, y), turned by `angle`; fill and stroke as set. */
+  const arrow = (ctx: CanvasRenderingContext2D, x: number, y: number, r: number, angle: number) => {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    ctx.beginPath();
+    ctx.moveTo(0, -r);
+    ctx.lineTo(r * 0.75, r * 0.75);
+    ctx.lineTo(0, r * 0.375);
+    ctx.lineTo(-r * 0.75, r * 0.75);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
   };
 
   const draw = () => {
@@ -386,7 +431,8 @@ export function createCanvasMinimap(
       const dim = placeMarker(i);
       if (dim) onRim++;
       const style = kinds[mkind[i]!] ?? FALLBACK;
-      marker(ctx, tmp.x, tmp.y, style, resolve(mcolor[i] ?? style.color ?? '#fff'), dim);
+      const color = resolve(mcolor[i] ?? style.color ?? '#fff');
+      marker(ctx, tmp.x, tmp.y, style, color, dim, markerAngle(i));
       const icon = micon[i];
       if (icon) {
         ctx.globalAlpha = dim ? 0.55 : 1;
@@ -401,22 +447,10 @@ export function createCanvasMinimap(
     rim = onRim;
     // The player's arrow.
     toMap(px, pz, tmp);
-    const a = turn ? 0 : yaw;
-    ctx.save();
-    ctx.translate(tmp.x, tmp.y);
-    ctx.rotate(a);
-    ctx.beginPath();
-    ctx.moveTo(0, -8);
-    ctx.lineTo(6, 6);
-    ctx.lineTo(0, 3);
-    ctx.lineTo(-6, 6);
-    ctx.closePath();
     ctx.fillStyle = resolve('var(--tc-color-accent)');
     ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
     ctx.lineWidth = 1.5;
-    ctx.fill();
-    ctx.stroke();
-    ctx.restore();
+    arrow(ctx, tmp.x, tmp.y, 8, turn ? 0 : yaw);
   };
 
   const schedule = () => {
@@ -493,7 +527,8 @@ export function createCanvasMinimap(
           mz[i] === m.z &&
           mkind[i] === m.kind &&
           mcolor[i] === m.color &&
-          micon[i] === m.icon
+          micon[i] === m.icon &&
+          mheading[i] === m.heading
         ) {
           continue;
         }
@@ -504,6 +539,7 @@ export function createCanvasMinimap(
         mkind[i] = m.kind;
         mcolor[i] = m.color;
         micon[i] = m.icon;
+        mheading[i] = m.heading;
       }
       count = list.length;
       if (changed) schedule();
@@ -527,10 +563,11 @@ export function createCanvasMinimap(
       for (let i = 0; i < count; i++) {
         if (ids[i] !== id) continue;
         const outside = placeMarker(i);
-        const o = out ?? { x: 0, y: 0, outside: false };
+        const o = out ?? { x: 0, y: 0, outside: false, angle: 0 };
         o.x = tmp.x;
         o.y = tmp.y;
         o.outside = outside;
+        o.angle = markerAngle(i);
         return o;
       }
       return null;
