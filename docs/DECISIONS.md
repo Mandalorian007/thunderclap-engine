@@ -180,3 +180,5 @@ Ruling: until ws/e2e-harden lands, a failure of either test while every other te
 Train 5's matrix (ea53645: nav-6, post-5, audio-6, input-7, render-6) had 1 failure at load 7.7, so under E-031 it is a real failure: `[phone-promax] e2e/demos/tactics.spec.ts:247` "the d-pad steps cursorTile by one". Its second press of up never moved the cursor. No member touches `demos/tactics`, the pad path or that spec. The spec presses and releases inside one `page.evaluate`, so whether a frame sees the press depends on timing; alone with `--repeat-each=10` it passed 10/10.
 
 Ruling: land ea53645. The test joins the tolerated list (as E-017) until ws/e2e-harden-3 lands. That workstream finds out whether the demo drops a same-frame press, which would be an engine or demo bug and a finding, or whether the spec presses wrong, and fixes the spec. Any other tactics failure is still real.
+
+**Closed 2026-11-06:** ws/e2e-harden-3 (32a6126, train 7) found the cause in the spec. Polled pads report state, so the test re-pressed before the release had been read. The spec now polls between press and release. From train 7 on, `tactics.spec.ts:247` leaves the tolerated list.
