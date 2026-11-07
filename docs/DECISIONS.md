@@ -219,6 +219,6 @@ ws/harden-api added `api/*.api.txt` and `check:api`, and audited the surface. Ru
 ## E-037: open source on public npm (2026-11-07, user + PM)
 
 - The engine is shared through the public npm registry, not GitHub Packages, because GitHub Packages makes every installer log in to GitHub, even for a public package. The user created the `thunderclap` npm org on 2026-11-07.
-- This repo publishes: `@thunderclap/engine` from 1.x, and `@thunderclap/host-electron`, `host-capacitor` and `host-pwa` from 0.1.0. That makes this repo the source of truth. Last Rune's `packages/engine` copy is retired once Last Rune depends on the npm range, which is a later stream in that repo.
+- This repo publishes: `@thunderclap/engine` from 1.x, and `@thunderclap/host-electron`, `host-capacitor` and `host-pwa` from 0.1.0. That makes this repo the source of truth for the published engine. Whether Last Rune moves off its in-repo copy (D-051 in last-rune: the user said Last Rune stays on the original engine) is the user's call and is not part of this decision.
 - Releases publish from a GitHub Action on a `v*` tag using npm trusted publishing (OIDC, provenance, no stored token). The first publish of each package is manual by the user, because npm attaches a trusted publisher only to a package that already exists. Brief: `docs/briefs/publish.md` (ws/publish).
 - Once a version is published, the 1.0 API rules (E-036, common.md *Post-1.0 API changes*) are a public promise. A breaking change means 2.0.
