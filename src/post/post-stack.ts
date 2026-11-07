@@ -64,6 +64,16 @@ interface InputGroups {
   taa: [GPUBindGroup | null, GPUBindGroup | null];
 }
 
+/** The jitter a detached stack's hook returns on the frame it clears itself (ws/post-7). */
+const NO_JITTER: readonly [number, number] = [0, 0];
+
+/**
+ * The stack whose hook each renderer's `setJitter` holds (ws/post-7): set when a stack sets its
+ * hook, dropped when it clears it. A stack clears only its own, so swapping `renderer.post` from
+ * one TAA stack to another and destroying the first leaves the second's hook installed.
+ */
+const jitterOwners = new WeakMap<Renderer, PostStack>();
+
 /**
  * The painterly post stack: bloom (mip chain), floor mist, god rays, ACES tonemap, colour
  * grade, vignette, dither, plus ambient occlusion and depth of field over the scene depth when
@@ -216,10 +226,25 @@ export class PostStack implements PostProcessor {
   private readonly noClear = null;
   private readonly blender = new PostBlender();
   private lastTime: number | null = null;
-  /** The hook the stack gives `renderer.setJitter` while TAA runs (made once: no per-frame closure). */
-  private readonly jitterFn: JitterFn = (i) => this.taa.jitter(i);
-  /** True while the stack has set `renderer.setJitter` (cleared once TAA stops or on `dispose`). */
+  /**
+   * The hook the stack gives `renderer.setJitter` while TAA runs (made once: no per-frame
+   * closure). It runs in `beginFrame`, so only while it is installed, and checks there that the
+   * stack is still attached (ws/post-7): a stack whose TAA resolve did not run during the last
+   * frame, or a renderer with no post processor, has been detached, and the hook clears itself
+   * before the frame draws.
+   */
+  private readonly jitterFn: JitterFn = (i) => {
+    if (this.jitterResolved && this.renderer.post !== null) {
+      this.jitterResolved = false;
+      return this.taa.jitter(i);
+    }
+    this.releaseJitter();
+    return NO_JITTER;
+  };
+  /** True while the stack has set `renderer.setJitter` (cleared once TAA stops or on `destroy`). */
   private jitterHooked = false;
+  /** A TAA resolve ran since the hook last ran (ws/post-7: the stack is still attached). */
+  private jitterResolved = false;
   private boundRoughMetal: GPUTextureView | null = null;
   private boundVelocity: GPUTextureView | null = null;
   private boundTaaVelocity: GPUTextureView | null = null;
@@ -393,13 +418,17 @@ export class PostStack implements PostProcessor {
 
   /**
    * @deprecated Since ws/post-6 the stack jitters every camera through `renderer.setJitter`
-   * while TAA runs; registering a camera does nothing. Kept for one release.
+   * while TAA runs; registering a camera does nothing. No engine page calls it (ws/post-7).
+   * Kept for one release: removed in the second release after 0.2.0-alpha.1.
    */
   addJitterCamera(_camera: Camera): this {
     return this;
   }
 
-  /** @deprecated See `addJitterCamera`: does nothing since ws/post-6. Kept for one release. */
+  /**
+   * @deprecated See `addJitterCamera`: does nothing since ws/post-6. Removed in the second
+   * release after 0.2.0-alpha.1.
+   */
   removeJitterCamera(_camera: Camera): this {
     return this;
   }
@@ -758,12 +787,29 @@ export class PostStack implements PostProcessor {
    * After the first TAA frame, hand the Halton sequence to `renderer.setJitter` (the renderer
    * runs it from frame 0 at the next `beginFrame`, so the sequence restarts each time TAA
    * starts); once TAA stops, clear the hook with `null`, once. Only on those edges: a hook set
-   * by someone else in between is left alone until TAA stops.
+   * by someone else in between is left alone until TAA stops. Another stack that sets its hook
+   * on the same renderer takes it over (ws/post-7, `jitterOwners`): this one then never clears
+   * it, and sets its own again once the other has let go.
    */
   private syncJitter(taa: boolean): void {
-    if (taa === this.jitterHooked) return;
-    this.jitterHooked = taa;
-    this.renderer.setJitter(taa ? this.jitterFn : null);
+    if (taa) {
+      this.jitterResolved = true;
+      if (this.jitterHooked && jitterOwners.has(this.renderer)) return;
+      this.jitterHooked = true;
+      jitterOwners.set(this.renderer, this);
+      this.renderer.setJitter(this.jitterFn);
+    } else if (this.jitterHooked) {
+      this.releaseJitter();
+    }
+  }
+
+  /** Drop the hook: clear it with `null` if it is still this stack's, else leave it alone. */
+  private releaseJitter(): void {
+    this.jitterHooked = false;
+    this.jitterResolved = false;
+    if (jitterOwners.get(this.renderer) !== this) return;
+    jitterOwners.delete(this.renderer);
+    this.renderer.setJitter(null);
   }
 
   /** Ease the EV toward the metered target in auto mode; mirror the manual value otherwise. */
