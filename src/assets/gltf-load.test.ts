@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Camera } from '../render/camera';
 import { createFakeDevice, fakeRendererGpu } from '../render/fake-gpu';
+import { Lights } from '../render/lights';
 import { VERTEX_LAYOUT_3D, VERTEX_LAYOUT_3D_TANGENT, VERTEX_LAYOUT_SKINNED } from '../render/mesh';
 import { Renderer } from '../render/renderer';
 import { SkinPalette } from '../render/skin';
@@ -845,7 +846,38 @@ describe('loadGltf lights and cameras on the fake GPU', () => {
     expect(spot!.radius).toBeCloseTo(16 * Math.sqrt(0.125), 6);
     const [sun] = scene.lights.directional;
     expect(Array.from(sun!.color)).toEqual([1, 1, 1]);
-    expect(Array.from(sun!.dir)).toEqual([0, 0, -1]);
+    expect(Array.from(sun!.direction)).toEqual([0, 0, -1]);
+    expect(sun!.dir).toBe(sun!.direction);
+  });
+
+  it('gives a rotated directional light a SunLight direction: the world -Z of its node', async () => {
+    // Parent: 90° about +Y, uniform scale 3. Child: 30° about +X, holding the light.
+    // -Z → child (0, sin 30°, -cos 30°) → parent's yaw (x' = z, z' = -x) → (-cos 30°, sin 30°, 0).
+    const json = variantDoc();
+    const s45 = Math.SQRT1_2;
+    const s15 = Math.sin(Math.PI / 12);
+    const c15 = Math.cos(Math.PI / 12);
+    json.nodes![3] = { children: [5], rotation: [0, s45, 0, s45], scale: [3, 3, 3] };
+    json.nodes!.push({
+      extensions: { KHR_lights_punctual: { light: 2 } },
+      rotation: [s15, 0, 0, c15],
+    });
+    const r = new Renderer(fakeRendererGpu(createFakeDevice()));
+    const doc = parseGltf({ json, buffers: [variantBin] });
+    const scene = await loadGltf(r, doc, { decodeImage });
+    const [sun] = scene.lights.directional;
+    const expected = [-Math.cos(Math.PI / 6), 0.5, 0];
+    expect(sun!.direction).toHaveLength(3);
+    for (let i = 0; i < 3; i++)
+      expect(Math.abs(sun!.direction[i]! - expected[i]!)).toBeLessThan(1e-5);
+    // It drops into Lights.sun as is; the deprecated `dir` follows a reassignment.
+    const lights = new Lights();
+    lights.sun.direction = sun!.direction;
+    lights.sun.color = sun!.color;
+    expect(lights.sun.dir).toBe(sun!.direction);
+    const flipped = new Float32Array([0, -1, 0]);
+    sun!.dir = flipped;
+    expect(sun!.direction).toBe(flipped);
   });
 
   it('applyGltfCamera sets an orthographic projection and the node view', async () => {

@@ -411,6 +411,15 @@ interface Skeleton {
     names?: string[];
 }
 
+## SkinPoseSource  (type-only)
+interface SkinPoseSource {
+    readonly pose: Pose;
+    update(dt: number): void;
+}
+
+## SkinPoseTarget  (type-only)
+type SkinPoseTarget = Pick<SkinPalette, 'write'>;
+
 ## Socket  (type-only)
 interface Socket {
     joint: number;
@@ -635,6 +644,9 @@ function sampleWeights(clip: AnimationClip, node: number, t: number, out: Float3
 
 ## skinMatrices
 function skinMatrices(skeleton: Skeleton, world3x4: Float32Array, out: Float32Array): void;
+
+## skinPose
+function skinPose(skeleton: Skeleton, source: Pose | SkinPoseSource, palette: SkinPoseTarget, slot?: number, dt?: number, world?: Float32Array): Float32Array;
 
 ## socketWorld
 function socketWorld(socket: Socket, worldPose: Float32Array, instanceWorld: Float32Array | null, out: Float32Array): Float32Array;

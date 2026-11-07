@@ -14,7 +14,7 @@
  * nothing on the CPU.
  *
  * Lights and cameras: `scene.lights` holds the file's `KHR_lights_punctual` lights as the
- * render module's `DirectionalLight` / `PointLight` / `SpotLight` records (push them into
+ * render module's `SunLight` / `PointLight` / `SpotLight` records (push them into
  * `frame.lights`); `scene.cameras` the file's cameras, which `applyGltfCamera` sets on a
  * `Camera`. Material variants (`KHR_materials_variants`): every material is created at load;
  * `scene.setVariant(name)` swaps the material of each mapped draw in place.
@@ -23,7 +23,7 @@ import { createMorphBlender, type MorphBlender } from '../anim/morph';
 import { mat4 } from '../core/math';
 import type { Camera } from '../render/camera';
 import type { Frame, InstanceParams } from '../render/frame';
-import type { DirectionalLight, PointLight, SpotLight } from '../render/lights';
+import type { PointLight, SpotLight, SunLight } from '../render/lights';
 import type { Material } from '../render/material';
 import {
   Mesh,
@@ -115,10 +115,14 @@ export interface LoadGltfOptions {
  * (`GltfDocument.lights` keeps glTF's units). `color` is glTF `color × intensity × lightScale`;
  * `radius` is `range`, or `16·√(intensity × lightScale)` without one (where an inverse-square
  * light has fallen to 1/256); spot `innerAngle` / `outerAngle` are the cone half-angles.
- * Push them into `frame.lights.points` / `.spots`, or copy one into `frame.lights.sun`.
+ * A directional light is a `SunLight` (ws/assets-4): `direction` is the node's world -Z,
+ * normalised, the way the light travels (the engine's convention, as `SpotLight.direction`),
+ * and the deprecated `dir` reads and replaces the same array. Push the points and spots into
+ * `frame.lights.points` / `.spots`, or copy a sun's `direction` and `color` into
+ * `frame.lights.sun`.
  */
 export interface GltfSceneLights {
-  directional: DirectionalLight[];
+  directional: SunLight[];
   points: PointLight[];
   spots: SpotLight[];
 }
@@ -583,7 +587,7 @@ export async function loadGltf(
     const color = new Float32Array([l.color[0] * k, l.color[1] * k, l.color[2] * k]);
     const radius = l.range ?? 16 * Math.sqrt(Math.max(k, 0));
     if (l.type === 'directional') {
-      scene.lights.directional.push({ dir: new Float32Array(l.direction), color });
+      scene.lights.directional.push(sunLight(new Float32Array(l.direction), color));
     } else if (l.type === 'point') {
       scene.lights.points.push({ position: new Float32Array(l.position), color, radius });
     } else {
@@ -598,6 +602,26 @@ export async function loadGltf(
     }
   }
   return scene;
+}
+
+/** A `SunLight` record whose deprecated `dir` is an accessor over `direction`, as `Lights.sun`. */
+function sunLight(dir: Float32Array, color: Float32Array): SunLight {
+  let direction: ArrayLike<number> = dir;
+  return {
+    get direction(): ArrayLike<number> {
+      return direction;
+    },
+    set direction(v: ArrayLike<number>) {
+      direction = v;
+    },
+    get dir(): ArrayLike<number> {
+      return direction;
+    },
+    set dir(v: ArrayLike<number>) {
+      direction = v;
+    },
+    color,
+  };
 }
 
 const orthoScratch = new Float32Array(16);

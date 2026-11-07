@@ -35,6 +35,7 @@ frame(1 / 60, false);
 | `createAnimGraph(desc)` | states, blend spaces and conditional transitions over a mixer |
 | `poseToWorld(skeleton, pose, out)` | node world matrices (3×4 each) |
 | `skinMatrices(...)` | joint matrices for a skinned mesh |
+| `skinPose(skeleton, source, palette, slot?, dt?, world?)` | update, `poseToWorld`, `skinMatrices` and `palette.write(slot)` in one call |
 | `twoBoneIk / lookAt` | IK on a resolved pose |
 | `retargetClip(map, clip)` | play one rig's clip on another |
 | `createMorphBlender(...)` | morph-target weights from clips |
@@ -127,7 +128,30 @@ function frame(dt: number) {
 
 ## Pose (`pose.ts`)
 
-`createPose(skeleton)` (a copy of `rest`), `copyPose(src, dst)`, `blendPose(a, b, t, out)` (lerp translation and scale, slerp rotation; `out` may alias), `poseToWorld(skeleton, pose, out3x4)`, `skinMatrices(skeleton, world3x4, out)` (copies world matrices when there is no `inverseBind`), `inverseBindFromRest(skeleton)` (12-float inverse bind matrices so the rest pose skins to the identity; allocates, call once). Matrix helpers on the 3×4 layout: `writeNodeMatrix(out, o, pose, po)` (`T · R · S` of one node), `multiplyAffine(out, oo, a, ao, b, bo)`, `invertAffine(out, oo, m, mo)`.
+`createPose(skeleton)` (a copy of `rest`), `copyPose(src, dst)`, `blendPose(a, b, t, out)` (lerp translation and scale, slerp rotation; `out` may alias), `poseToWorld(skeleton, pose, out3x4)`, `skinMatrices(skeleton, world3x4, out)` (copies world matrices when there is no `inverseBind`, without making a view per joint), `inverseBindFromRest(skeleton)` (12-float inverse bind matrices so the rest pose skins to the identity; allocates, call once). Matrix helpers on the 3×4 layout: `writeNodeMatrix(out, o, pose, po)` (`T · R · S` of one node), `multiplyAffine(out, oo, a, ao, b, bo)`, `invertAffine(out, oo, m, mo)`.
+
+## One-call skinning (`skin-pose.ts`)
+
+`skinPose(skeleton, source: Pose | SkinPoseSource, palette: SkinPoseTarget, slot = 0, dt?, world?): Float32Array` (ws/assets-4) is the per-frame skinning path in one call. With a `SkinPoseSource` (`{ readonly pose; update(dt) }`, which `AnimationMixer` is) and a `dt`, it calls `source.update(dt)` first; without `dt`, or with a bare `Pose`, it poses what is there, so a game that updates an `AnimGraph` or edits the pose with IK passes the mixer with no `dt`. It then runs `poseToWorld` and `skinMatrices(skeleton, world, palette.write(slot))`, bit for bit the same as those calls by hand. `SkinPoseTarget` is `Pick<SkinPalette, 'write'>`, so the module still imports no `render/` code. It returns the node world matrices, for sockets: `world` when given, else one scratch array per skeleton (held in a `WeakMap`, made on the first call) that the next call for that skeleton overwrites. It does not flush: call `palette.flush()` once per frame after posing every slot. No allocation after the first call per skeleton.
+
+<!-- snippet:check -->
+```ts
+import { AnimationMixer, type AnimationClip, type Skeleton, skinPose } from '@thunderclap/engine/anim';
+import type { SkinPalette } from '@thunderclap/engine/render';
+
+declare const skeleton: Skeleton;
+declare const walk: AnimationClip;
+declare const palette: SkinPalette; // joints = the skin's joint count
+
+const mixer = new AnimationMixer(skeleton);
+mixer.play(walk);
+function frame(dt: number) {
+  const world = skinPose(skeleton, mixer, palette, 0, dt); // world matrices, for sockets
+  palette.flush();
+  return world;
+}
+frame(1 / 60);
+```
 
 ## Sockets (`socket.ts`)
 
