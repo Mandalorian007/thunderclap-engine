@@ -133,6 +133,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Audio 5: ducker respects pause (and boot write ordering), `Voice.doppler` on the interface | ws/audio-5 | brief `docs/briefs/audio-5.md` | e2e-harden finding, audio-4 wish | 🟣 in E-031 train 3 at `60badbf` (check 2055, snap 0, music 49/7 incl. new paused-duck case, lifecycle+zones 56; audio4:73 phone-android 1 fail = the spec error fixed in train 2) |
 | 5 | Input 6: gestures classify by `event.timeStamp`, not handling time | ws/input-6 | brief `docs/briefs/input-6.md` | e2e-harden finding | 🔵 dispatched (Opus, offset 850) |
 | 5 | E2E harden 2: fx3 forces/collide, ui4:118 minimap rim, voxel demo terrain-range asserts | ws/e2e-harden-2 | brief `docs/briefs/e2e-harden-2.md` | fx-4, ui-5, adopt-sweep findings | 🔵 dispatched (Opus, offset 860) |
+| 5 | UI 6: one `ui.floats(camera?)` and one `ui.minimap` (ui-5 implementations, ui-4's retired), arpg adopts orb meters, floats and a pickable minimap | ws/ui-6 | brief `docs/briefs/ui-6.md` | ui-5 notes, demo-arpg wishes | 🔵 dispatched (Opus, offset 870) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
