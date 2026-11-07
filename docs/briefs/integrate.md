@@ -25,3 +25,5 @@ Merge commit hashes; every conflict resolved (file, what each side wanted, what 
 > E-026 (2026-11-06): if main moved only by docs (`docs/**`, README, CHANGELOG, ARCHITECTURE), merge it and run `pnpm check:docs` + `pnpm lint` only, then land. Any other file → `pnpm check`; E-025 decides e2e.
 
 > Before landing, `git grep -n '^<<<<<<<\|^>>>>>>>' HEAD -- . ` must be empty: a resolver pass once committed stale markers (chain 3, ws/audio-2) and only a grep caught it.
+
+- **Silent removals.** After each member merge, run `git diff <pre-merge main> HEAD -- ARCHITECTURE.md README.md CHANGELOG.md src/*/README.md | grep '^-[^-]'`. Account for every removed line: either the member's brief owns that change, or you restore the line. A branch carrying a stale merge of main can drop lines with no conflict (train 13, core-7).
