@@ -31,18 +31,18 @@ export function tunePost(ctx: EngineCtx) {
 Changing settings is cheap. It never rebuilds pipelines, so you can animate values every
 frame.
 
-The defaults are tuned for a dark, moody scene. Bloom, a floor mist, god rays, a vignette
-and a colour grade are on. If your game looks hazy or too dark, start by turning the extras
-off and add back what you want:
+The stack starts from `cinematicPostSettings()`, tuned for a dark, moody scene. Bloom, a
+floor mist, god rays, a vignette and a colour grade are on. If your game looks hazy or too
+dark, start from `neutralPostSettings()` instead, which turns the extras off and keeps only
+the tone map, and add back what you want:
 
 ```ts
 import type { EngineCtx } from '@thunderclap/engine';
+import { neutralPostSettings } from '@thunderclap/engine/post';
 
 export function plainPost(ctx: EngineCtx) {
-  const s = ctx.post.settings;
-  s.fog.enabled = false; // screen-space floor mist (not lights.fog)
-  s.godRays.enabled = false;
-  s.vignette.enabled = false;
+  ctx.post.set(neutralPostSettings());
+  ctx.post.set({ bloom: { enabled: true, intensity: 0.6 } }); // then add back what you want
 }
 ```
 
@@ -55,9 +55,13 @@ export function plainPost(ctx: EngineCtx) {
   triples for shadows, midtones and highlights. `saturation` and `contrast` are plain numbers.
 - **Vignette** darkens the edges: `intensity`, `radius`, `softness`, `color`.
 - **God rays** stream from a light point: `x` and `y` in design pixels (they may be off
-  screen), plus `intensity`, `decay`, `density`, `weight` and `color`.
-- **Fog** here is a screen-space mist rising from the bottom of the screen (`top`, `bottom`,
-  `falloff`, `density`). For distance fog in 3D, use `lights.fog` instead.
+  screen), plus `intensity`, `decay`, `density`, `weight` and `color`. In 3D, set
+  `direction` to the sun's direction (the same value as `lights.sun.direction`) and the rays
+  follow the sun on screen as the camera turns, fading out when it is behind you.
+- **Mist** (`mist`) is a screen-space haze rising from the bottom of the screen (`top`,
+  `bottom`, `falloff`, `density`). It is not distance fog: for that, use `lights.fog`. You can
+  use both; the mist goes on top of the fogged scene. Older code calls this section `fog`,
+  which still works.
 
 ## 3D passes
 
@@ -238,7 +242,7 @@ export function coast(): Scene<EngineCtx, Frame> {
     enter(ctx) {
       ctx.camera.setPerspective(Math.PI / 3, ctx.design.width / ctx.design.height, 0.1, 500);
       ctx.camera.lookAt([0, 6, 20], [0, 0, 0]);
-      lights.sun.dir = [-0.3, -0.6, -0.5];
+      lights.sun.direction = [-0.3, -0.6, -0.5];
       lights.sun.color = [1.3, 1.15, 0.95];
       sky = new Sky(ctx.renderer, { stars: true });
       water = new Water(ctx.renderer, { size: 200, segments: 128, level: 0 });
@@ -257,7 +261,7 @@ export function coast(): Scene<EngineCtx, Frame> {
 }
 ```
 
-Change `sky.sunSize`, `sky.sunGlow` or `sky.exposure` at any time. Move `lights.sun.dir` over
+Change `sky.sunSize`, `sky.sunGlow` or `sky.exposure` at any time. Move `lights.sun.direction` over
 the day and the sky follows.
 
 ## Weather

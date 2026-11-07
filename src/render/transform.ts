@@ -146,11 +146,18 @@ export class Transform {
     return this;
   }
 
-  setScale(x: number, y = x, z = 1): this {
+  /**
+   * Set the local scale. One argument scales all three axes (`setScale(2)` is `2, 2, 2`, so a
+   * 3D node keeps its shape; a flat 2D quad has no depth, so it draws the same). Two arguments
+   * are the 2D form: `z` stays 1. Three set each axis.
+   */
+  setScale(s: number): this;
+  setScale(x: number, y: number, z?: number): this;
+  setScale(x: number, y?: number, z?: number): this {
     const s = this._scale;
     s.x = x;
-    s.y = y;
-    s.z = z;
+    s.y = y ?? x;
+    s.z = z ?? (y === undefined ? x : 1);
     this._changed++;
     this.localDirty = true;
     return this;

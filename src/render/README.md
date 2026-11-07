@@ -201,7 +201,7 @@ renderer.endFrame();
 ### Tile layers and flipbooks
 
 ```ts
-const atlas = renderer.createSpriteMaterial(atlasTex, 'tiles', { sampler: 'nearest-clamp' });
+const atlas = renderer.createSpriteMaterial({ texture: atlasTex, label: 'tiles', sampler: 'nearest-clamp' });
 const layer = createTileLayer(renderer, {
   material: atlas, tileW: 32, tileH: 32, columns: 60, rows: 34, atlas: { cols: 8, rows: 8 },
 });
@@ -307,8 +307,11 @@ zone's centre, `lookX`, `lookY` the current look-ahead; `deadZone`, `lookAhead`,
 (`UvRect` is `[u0, v0, u1, v1]`, what `DrawParams.uv` takes) at `fps` (default 12), `loop`
 (default true). `update(dt)` advances; `uv` and `frame` are the current frame; a non-looping book
 holds its last frame and sets `done`; `reset()` and `play(frames?)` start over. `fps` and `loop`
-are live. `atlasFrames({ cols, rows }, indices?)` lists a grid atlas's cells as `UvRect`s (every
-cell row-major, or those indices in order); it allocates, so call it at load time.
+are live. `atlasFrames({ cols, rows, inset?, width?, height? }, indices?)` (`AtlasGrid`) lists a
+grid atlas's cells as `UvRect`s (every cell row-major, or those indices in order); `inset`
+(ws/api-render) pulls each rect in by that many texels per side (0.5 stops filtering bleeding in
+from the next cell) and needs the texture's `width` and `height`. It allocates, so call it at
+load time.
 
 ### Transforms
 
@@ -326,7 +329,8 @@ A `Transform` has position xyz, a rotation (`rotation` about Z for 2D, or
 cached 3×4 row-major matrix that recomputes only when it or an ancestor changed. The quad
 spans -0.5..0.5, so a transform's scale is the sprite's size.
 `transform.position`, `scale` (`ReadonlyVec3`) and `quaternion` (`ReadonlyQuat`) are
-read-only views; set them through the transform's setters.
+read-only views; set them through the transform's setters. `setScale(s)` scales all three
+axes by `s` (ws/api-render); `setScale(x, y, z?)` sets each, `z` defaulting to 1.
 `Transform.setMatrix(m)` takes a raw 3×4 (sockets write through it); later setters rebuild
 T·R·S from the decomposed values. `Transform.changed` is a version counter bumped by every setter and parent change (ws/audio-4), so a consumer such as `Voice.follow` can skip an unchanged `world`.
 
@@ -436,11 +440,15 @@ ranges in three tints and publishes `drawCalls` = 3.
 `frame.mesh` takes a `MeshLod` in place of a `Mesh` (ws/render-5): `{ meshes, thresholdsPx }`,
 `meshes[0]` the full mesh and each later one coarser, `thresholdsPx[i]` the smallest on-screen
 height (target px) at which level `i` still draws (descending). It is geom's `LodChain` with its
-`meshes` filled, so `createLodChain` plus one `renderer.createMesh` per geometry builds one:
+`meshes` filled. `renderer.createMeshLod({ geometries, thresholdsPx, label? })` (`MeshLodDesc`,
+ws/api-render) takes the chain `createLodChain` builds, uploads one mesh per level
+(`<label>-lod<i>`) and returns a `MeshLodChain`: the `MeshLod` plus its `geometries`, so it is
+both shapes at once. `createLodChain(g, ratios)` puts `g` first, so `ratios.length + 1` levels
+take `ratios.length` thresholds; more thresholds than levels throws.
 
 ```ts
-const geos = createLodChain(rock, [0.25, 0.06]);
-const lod: MeshLod = { meshes: geos.map((g) => renderer.createMesh(g)), thresholdsPx: [160, 50] };
+const geometries = createLodChain(rock, [0.25, 0.06]); // three levels
+const lod = renderer.createMeshLod({ geometries, thresholdsPx: [160, 50], label: 'rock' });
 for (const t of rocks) frame.mesh(lod, material, t);
 ```
 
@@ -507,7 +515,7 @@ cam.x = 120; cam.zoom = 1.5;               // the 2D controls, as before
 cam.fitRect({ x: 0, y: 0, width: 800, height: 600 },     // frame a world rect…
             { x: 400, y: 0, width: 1520, height: 1080 }); // …into part of the screen
 const p = surface.clientToLogical(e.clientX, e.clientY);
-const world = cam.screenToWorld(p.x, p.y, 0, hit);        // touch aiming; pass `out` per frame
+const world = cam.screenToWorld(p.x, p.y, hit);           // touch aiming, on z = 0; reuse `hit`
 
 const eye = Camera.perspective(Math.PI / 3, 16 / 9, 0.1, 500).lookAt([0, 4, 10], [0, 0, 0]);
 eye.setViewMatrix(xrView.transform.inverse.matrix); // or: a view matrix from elsewhere (XR)
@@ -516,8 +524,9 @@ renderer.render(frame, eye);                              // or renderer.camera 
 ```
 
 - `worldToScreen(x, y, z?)` returns screen units (the `screen` rect; the design space for
-  `ortho2d`) and clip depth in `z`. `screenToWorld(sx, sy, depth?)` inverts it; depth 0 and 1
-  give a pick ray.
+  `ortho2d`) and clip depth in `z`. `screenToWorld(sx, sy, depth?, out?)` inverts it; depth 0
+  and 1 give a pick ray. `screenToWorld(sx, sy, out)` (ws/api-render) is the 2D pick: the
+  point on the plane z = 0 under the screen point, with no depth to choose.
 - `ortho2d` looks down +z: larger z is farther, and world z in ±`ORTHO2D_HALF_DEPTH` (1024)
   survives the near and far planes (z = 0 is clip depth 0.5). x and y are the old 2D camera's.
 - `setView(m)` / `setViewMatrix(m)` take a world → view matrix as is (`setViewMatrix` is the
@@ -585,9 +594,9 @@ renderer.render(frame, eye);                              // or renderer.camera 
   `camera.recordHistory()` at the start of each view, before the camera is read, so a camera
   moved during `update` sees its old matrices there during `render`. Identity until the first
   view (that view reads `previous == current`, so reprojection starts still). The camera block
-  carries them for WGSL as `camera.prev_view_proj` (float `CAMERA_PREV_VIEW_PROJ_OFFSET` = 76)
-  and `camera.prev_view` (`CAMERA_PREV_VIEW_OFFSET` = 92), and the jitter as `camera.jitter`
-  (`CAMERA_JITTER_OFFSET` = 108: clip-space dx, dy, then the pixel offset x, y).
+  carries them for WGSL as `camera.prev_view_proj` (float 76) and `camera.prev_view` (float
+  92), and the jitter as `camera.jitter` (float 108: clip-space dx, dy, then the pixel offset
+  x, y).
 - A post processor reads the same through `PostInputs.view` (`PostView`): the jittered
   `viewProj` and `invViewProj`, `previousViewProj`, `previousView` and the `jitter` applied,
   for the last camera that rendered into the target. Mode `?jitter` of `harness/render4.html`
@@ -597,7 +606,7 @@ renderer.render(frame, eye);                              // or renderer.camera 
 ## Lighting
 
 The engine supplies the lights; the style is your WGSL. `frame.lights` is a `Lights` (ambient
-rgb, one `sun { dir, color }`, `points: PointLight[]` with `position`, `color`, `radius`, the
+rgb, one `sun { direction, color }`, `points: PointLight[]` with `position`, `color`, `radius`, the
 first `MAX_POINT_LIGHTS` = 16 uploaded, `spots: SpotLight[]`, the first `MAX_SPOT_LIGHTS` = 8
 uploaded, each light with an optional `layers` mask) that the renderer writes as `EngineLights` at
 `@group(0) @binding(2)` with every view, in the same upload as the globals and the camera. The
@@ -607,7 +616,7 @@ one that multiplies by `engine_lambert`, draws exactly as before until the game 
 ```ts
 const lights = new Lights();                       // or mutate frame.lights in place
 lights.ambient.set([0.18, 0.18, 0.2]);
-lights.sun.dir = [-0.45, -1, -0.65];              // the direction the light travels; normalised on upload
+lights.sun.direction = [-0.45, -1, -0.65];        // the direction the light travels; normalised on upload
 lights.sun.color = [0.8, 0.8, 0.78];
 const lamp = { position: new Float32Array(3), color: [1.6, 0.9, 0.4], radius: 5 };
 lights.points.push(lamp);                         // keep the object; move lamp.position per frame
@@ -630,15 +639,15 @@ In WGSL the block is `lights.ambient`, `lights.point_count` (u32), `lights.sun_d
 falloff; `engine_lambert(n, p)` adds the ambient and the sun (and the spot lights: it is the
 shared `wgslLightLoop` under "Spot lights and layer masks"). Toon, rim or wrapped lighting
 reads the same fields and ignores the helpers. `Lights.writeBlock(f32, u32, offset, shadow?)`
-is the CPU layout (`LIGHTS_BLOCK_FLOATS` = 316 floats; `POINT_LIGHTS_OFFSET_FLOATS`,
-`POINT_LIGHT_FLOATS`, `SUN_VIEW_PROJ_OFFSET_FLOATS`, `SHADOW_PARAMS_OFFSET_FLOATS`,
-`FOG_OFFSET_FLOATS`, `LAYERS_OFFSET_FLOATS`, `POINT_LAYERS_OFFSET_FLOATS`,
-`SPOT_LIGHTS_OFFSET_FLOATS`, `SPOT_LIGHT_FLOATS`), and allocates nothing; `lights.reset()`
-returns to the unlit default.
+is the CPU layout (316 floats; `POINT_LIGHT_FLOATS` and `SPOT_LIGHT_FLOATS` per light), and
+allocates nothing; `lights.reset()` returns to the unlit default. The block's offset and size
+constants (`LIGHTS_BLOCK_FLOATS`, `*_OFFSET_FLOATS`) are deprecated exports (E-036).
 Drawables that want the block add `WGSL_LIGHTS` to their shader (it also declares bindings 3
 and 4 below); `renderer.globalsLayout` already has bindings 2 to 4.
-`lights.sun` is a `DirectionalLight`: `dir` (the direction the light travels, any length),
-`color` (linear RGB; all zero means no sun) and `shadow`.
+`lights.sun` is a `SunLight`: `direction` (the direction the light travels, any length; the
+same spelling as `SpotLight.direction`), `color` (linear RGB; all zero means no sun) and
+`shadow`. `dir` is the deprecated old name of `direction` (ws/api-render): reading or assigning
+either reads or replaces the same array.
 
 ### Shadows
 
@@ -732,12 +741,14 @@ point light masked to one of them; `e2e/lights.spec.ts` samples both effects on 
 
 ### Fog
 
-`lights.fog` is a `Fog`: `color` (linear RGB), `density` (0, the default, is no fog), `near`
+`lights.fog` is a `DistanceFog` (`Fog` is its deprecated old name): `color` (linear RGB), `density` (0, the default, is no fog), `near`
 and `far` (distance from the camera position). With `far > near` the fog is linear from `near`
 to `far` scaled by `density` (≤ 1); otherwise it is exponential, `1 - exp(-density × (d -
 near))`. In WGSL the block has `lights.fog` (rgb, density) and `lights.fog_range` (near, far),
 and `engine_fog(color, world_pos) -> vec3f` mixes `color` towards the fog colour; it is the
 identity at density 0, and materials call it on their final colour (the engine does not).
+It is the only distance fog. Post's `mist` (formerly `fog`) is a screen-space haze over the
+finished image; the two stack, so a 3D scene can have both.
 
 ```ts
 lights.sun.shadow = { extent: 20, size: 2048 };
@@ -759,17 +770,19 @@ packed words through a byte view, not as floats: `setVertexSkin(bytes, vertex, j
 normalises the weights so the four bytes sum to 255. `VertexLayout.skinned` marks such a layout.
 
 A `SkinPalette(device, { joints, instances?, label?, history? })` (`SkinPaletteDesc`) is the storage buffer
-the vertex shader reads: a 16-byte header (`SKIN_PALETTE_HEADER_FLOATS` = 4: joints per instance,
-instances, history flag) and then `instances × joints` joint matrices of `JOINT_FLOATS` = 12 floats each, the
+the vertex shader reads: a 16-byte header (4 floats: joints per instance, instances, history
+flag) and then `instances × joints` joint matrices of `JOINT_FLOATS` = 12 floats each, the
 3×4 row-major affine layout the instance matrix and `anim`'s `skinMatrices` (world × inverse
 bind, one per joint) use, so an `anim` output goes in with one call. `palette.set(slot, matrices,
 offset = 0)` copies one instance's block into CPU staging (`palette.offsetOf(slot)` is its float
 offset; `setIdentity(slot)` is the bind pose, every slot's initial state), and `palette.flush()`
-uploads the dirty slot range in one `writeBuffer`, once per frame, allocating nothing
+uploads the dirty slot range in one `writeBuffer`, once per frame, allocating nothing.
+`palette.write(slot)` (ws/api-render) is that slot's staging block as a `Float32Array` to fill
+in place, `skinMatrices(skeleton, world, palette.write(0))`, marked for the next flush; and
+`palette.params(slot)` is the cached `InstanceParams` naming the slot, for `frame.mesh`
 (`isDirty` says whether it would; `destroy()` frees the buffer). Bind it to the material as a
 storage buffer: `createMaterial({ ..., buffers: [palette.buffer] })` (`BindingDesc.buffers`:
-read-only storage buffers at `@group(1) @binding(BUFFER_BINDING_BASE + i)`, `BUFFER_BINDING_BASE`
-= 16, in the same group as the material's uniform and textures; `BindingSet.setBuffer(slot,
+read-only storage buffers at `@group(1) @binding(16 + i)`, in the same group as the material's uniform and textures; `BindingSet.setBuffer(slot,
 buffer)` swaps one later). The palette is slot 0, `SKIN_PALETTE_BINDING` = 16; a material has one
 palette, and two skinned materials take two palettes or share one buffer.
 
@@ -791,9 +804,9 @@ const palette = new SkinPalette(renderer.device, { joints: 3, instances: 2 });
 const mat = renderer.createMaterial({ wgsl, blend: 'opaque', buffers: [palette.buffer] });
 const mesh = renderer.createMesh({ vertices, indices, layout: VERTEX_LAYOUT_SKINNED });
 // each frame
-palette.set(0, skinMatrices0);
+skinMatrices(skeleton, world, palette.write(0)); // or palette.set(0, matrices)
 palette.flush();
-frame.mesh(mesh, mat, transform, { params: [0, 0, 0, 0] });
+frame.mesh(mesh, mat, transform, palette.params(0)); // { params: [0, 0, 0, 0] }
 ```
 
 ## Standard material
@@ -874,7 +887,7 @@ frame.mesh(mesh, skin, transform, { tint: [1, 0.9, 0.8, 1] });
 - The material writes the aux attachments of a target that has them (`MaterialDesc.aux`,
   *Aux targets*): roughness and metalness after the factors and maps, and the instance's
   screen-space velocity.
-- `STANDARD_WGSL` is the fragment shader (entry `fs_main`); `STANDARD_TEXTURE_SLOTS` names the
+- `STANDARD_WGSL` (a deprecated export, E-036) is the fragment shader (entry `fs_main`); `STANDARD_TEXTURE_SLOTS` names the
   five texture slots (`baseColor` 0 … `emissive` 4, at `@group(1) @binding(2 + slot)`);
   `packStandardUniforms(desc, out?)` fills the `STANDARD_UNIFORM_FLOATS` (68, 272 bytes) block
   the shader reads: base rgba, metallic, roughness, normal scale, alpha cutoff, emissive rgb,
@@ -903,11 +916,11 @@ engine prepends a prelude that provides:
 - `globals`: `logicalSize`, `targetSize`, `time`, `dt` at `@group(0) @binding(0)`
 - `camera`: `view`, `proj`, `view_proj` (world → clip), `camera_pos`, `viewport` (scene target
   px), `view_index` (from `camera.viewIndex`) and `inv_view_proj` (clip → world, the inverse
-  of `view_proj`: `camera.invViewProj`, at float `CAMERA_INV_VIEW_PROJ_OFFSET` = 60 of the
+  of `view_proj`: `camera.invViewProj`, at float 60 of the
   `CAMERA_BLOCK_FLOATS` block, for reconstructing world positions from depth; after
   `view_index` come three `u32` pads, not a `vec3u`, which would align to 16 bytes and shift
   every later field: `src/render/camera-layout.test.ts` checks the WGSL offsets against the
-  `CAMERA_*_OFFSET` constants) at `@group(0) @binding(1)`
+  camera's internal offset constants) at `@group(0) @binding(1)`
 - `lights`: `ambient`, `point_count`, `sun_dir`, `sun_color`, `points[16]` (`position`,
   `radius`, `color`), `sun_view_proj`, `shadow_params`, `fog` and `fog_range` at
   `@group(0) @binding(2)`, the sun's shadow map `engine_shadow_map` and comparison sampler
@@ -955,7 +968,7 @@ A material can also override the vertex stage with `vertexEntry`. Use `engine_ve
 inside it to keep the standard transform.
 
 - `renderer.createMaterial(desc: MaterialDesc)` returns a `Material`. `MaterialDesc` takes
-  `label`, `wgsl`, `blend` (`BlendMode`: `alpha`, `premultiplied`, `additive`, `multiply`
+  `label`, `wgsl`, `blend` (`RenderBlendMode`, formerly `BlendMode`, ws/api-render: `alpha`, `premultiplied`, `additive`, `multiply`
   (`dst × rgb`, destination alpha kept), `opaque`; `blendState(mode)` is the `GPUBlendState`),
   `uniformBytes`, `textures`, `sampler` (`SamplerKind`: `linear-clamp`, `linear-repeat`, `linear-mip-repeat`, `nearest-mip-clamp`,
   `nearest-mip-repeat`, `nearest-clamp`), `perDrawUniforms`, `vertexEntry`, `fragmentEntry`,
@@ -972,8 +985,8 @@ inside it to keep the standard transform.
   use `DEPTH_FORMAT` (`depth24plus`).
   `DepthMode` is exported so a `Drawable` that records with a material's pipeline can type the
   argument (from `frame.depthFormat`).
-- `SPRITE_WGSL` is the built-in sprite fragment (`texture × vertex colour × tint`), the shader
-  behind `createSpriteMaterial`.
+- `SPRITE_WGSL` (a deprecated export, E-036) is the built-in sprite fragment (`texture × vertex
+  colour × tint`), the shader behind `createSpriteMaterial`.
 - The WGSL pieces, for a `Drawable` that compiles its own shader against the engine's bindings:
   `WGSL_GLOBALS` (the `globals` and `camera` blocks), `WGSL_LIGHTS`, `WGSL_NOISE` (the
   `engine_hash*`/`engine_noise`/`engine_fbm`/`engine_luma` helpers), `materialPrelude(layout,
@@ -1114,7 +1127,9 @@ textures every frame, as ping-pong does, builds no new bind groups after the fir
   take `white` (emissive `black` when it should not glow), the normal slot `flatNormal`, the
   metal-rough slot `white` (glTF's default: metallic × factor) or `metalRough` (no metal, full
   roughness, whatever the factors say).
-- `renderer.createSpriteMaterial(texture, label, { blend, sampler })`
+- `renderer.createSpriteMaterial({ texture, label?, blend?, sampler? })` (`SpriteMaterialOptions`,
+  ws/api-render); the positional `(texture, label, { blend, sampler })` form is deprecated.
+  `renderer.white` is deprecated too: use `defaultTextures(renderer.device).white`.
 - `SamplerKind` is `'linear-clamp'`, `'linear-repeat'`, `'nearest-clamp'`, `'linear-mip-repeat'`
   `'nearest-mip-clamp'` or `'nearest-mip-repeat'`. The `-mip` kinds blend between mip levels:
   linear for tiling surfaces, nearest for pixel-art faces that stay crisp up close and calm far
@@ -1385,3 +1400,19 @@ renderer.resolutionScale;                          // scene width / output width
   drop. That stops it pumping at the edge. `saturated` says it is at the floor and still
   over budget. `DynamicResolutionOptions`: `budgetMs` (14), `minScale` (0.5), `maxScale` (1),
   `step` (0.1), `dropAfterMs`, `raiseAfterMs`, `raiseMargin`, `cooldownMs`, `burnMs`, `smoothing`.
+
+## Deprecated (E-036, ws/api-render)
+
+Still exported, unchanged, and removed in the next minor:
+
+- Block internals only the module's tests read: `CAMERA_INV_VIEW_PROJ_OFFSET`,
+  `CAMERA_PREV_VIEW_PROJ_OFFSET`, `CAMERA_PREV_VIEW_OFFSET`, `CAMERA_JITTER_OFFSET`,
+  `POINT_LIGHTS_OFFSET_FLOATS`, `SUN_VIEW_PROJ_OFFSET_FLOATS`, `SHADOW_PARAMS_OFFSET_FLOATS`,
+  `FOG_OFFSET_FLOATS`, `LAYERS_OFFSET_FLOATS`, `POINT_LAYERS_OFFSET_FLOATS`,
+  `SPOT_LIGHTS_OFFSET_FLOATS`, `LIGHTS_BLOCK_FLOATS`, `SKIN_PALETTE_HEADER_FLOATS`,
+  `BUFFER_BINDING_BASE`, `STANDARD_WGSL` and `SPRITE_WGSL`. The WGSL prelude names the same
+  fields, so a shader never needs them.
+- `Renderer.white`: use `defaultTextures(renderer.device).white`.
+- `BlendMode`: use `RenderBlendMode` (anim's `BlendMode` is a different type).
+- `createSpriteMaterial(texture, label?, opts?)`: use `createSpriteMaterial({ texture, ... })`.
+- `Lights.sun.dir`: use `direction` (the same array). `Fog`: use `DistanceFog`.

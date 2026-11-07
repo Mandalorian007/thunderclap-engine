@@ -1,3 +1,4 @@
+import type { InstanceParams } from './frame';
 import { SKIN_JOINTS_BYTE_OFFSET, SKIN_WEIGHTS_BYTE_OFFSET, VERTEX_SKINNED_STRIDE } from './mesh';
 
 /**
@@ -57,6 +58,10 @@ export class SkinPalette {
   /** With history: the flush each slot was last written in (0 = never); `flushes` counts them. */
   private readonly stamp: Uint32Array;
   private flushes = 1;
+  /** `write(i)` views, made on first use. */
+  private views: (Float32Array<ArrayBuffer> | undefined)[] = [];
+  /** `params(i)` objects, made on first use. */
+  private slotParams: (InstanceParams | undefined)[] = [];
   /** With history: slots whose previous block must follow their current one at the next flush. */
   private settleLo = 0;
   private settleHi = -1;
@@ -137,6 +142,41 @@ export class SkinPalette {
     this.capture(instance);
     for (let i = 0; i < n; i++) d[o + i] = matrices[offset + i]!;
     this.dirty(instance);
+  }
+
+  /**
+   * Slot `instance`'s `joints × 12` floats to write in place (ws/api-render), for example
+   * `skinMatrices(skeleton, world, palette.write(0))` with no staging array of your own. Marks
+   * the slot for the next `flush()` (and, with `history`, keeps its current block as the
+   * previous one first), so call it each frame you write the slot, before writing. The view is
+   * made once per slot; no allocation after that.
+   */
+  write(instance: number): Float32Array<ArrayBuffer> {
+    this.check(instance);
+    let v = this.views[instance];
+    if (!v) {
+      const o = this.offsetOf(instance);
+      v = this.data.subarray(o, o + this.instanceFloats);
+      this.views[instance] = v;
+    }
+    this.capture(instance);
+    this.dirty(instance);
+    return v;
+  }
+
+  /**
+   * The `InstanceParams` that draw with slot `instance` (ws/api-render): `params` is
+   * `[0, 0, 0, instance]`, the slot in `params[SKIN_PARAM]`. One object per slot, made on first
+   * use; pass it to `frame.mesh(mesh, material, transform, palette.params(i))`.
+   */
+  params(instance: number): InstanceParams {
+    this.check(instance);
+    let p = this.slotParams[instance];
+    if (!p) {
+      p = { params: [0, 0, 0, instance] };
+      this.slotParams[instance] = p;
+    }
+    return p;
   }
 
   /** Reset every joint of slot `instance` to the identity (the mesh's bind pose). */

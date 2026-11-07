@@ -28,6 +28,7 @@ export type {
   GrainSettings,
   LensDirtSettings,
   LutSettings,
+  MistSettings,
   MotionBlurMode,
   MotionBlurSettings,
   OutlineSettings,
@@ -48,10 +49,13 @@ export type {
 } from './settings';
 export {
   applyPostPatch,
+  cinematicPostSettings,
   clonePostSettings,
   defaultPostQuality,
   defaultPostSettings,
+  godRaySource,
   lowPostQuality,
+  neutralPostSettings,
   postQualityFor,
 } from './settings';
 export { ssrEdgeFade, ssrRoughnessFade, ssrStep, ssrSurfaceWeight } from './ssr';

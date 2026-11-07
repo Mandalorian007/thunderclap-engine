@@ -1,5 +1,5 @@
 import { type BindingDesc, BindingSet, hasBindings } from './bindings';
-import { type BlendMode, blendState } from './blend';
+import { blendState, type RenderBlendMode } from './blend';
 import type { TextureLike } from './texture';
 import { createShaderModule, WGSL_FULLSCREEN_PRELUDE } from './wgsl';
 
@@ -13,7 +13,7 @@ export interface FullscreenPassDesc extends BindingDesc {
   wgsl: string;
   /** Colour target formats. */
   targets: GPUTextureFormat[];
-  blend?: BlendMode | GPUBlendState;
+  blend?: RenderBlendMode | GPUBlendState;
   fragmentEntry?: string;
 }
 

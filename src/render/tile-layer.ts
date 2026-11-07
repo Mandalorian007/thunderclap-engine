@@ -27,7 +27,7 @@ import type { Renderer } from './renderer';
 export type TileLayerOrder = 'grid' | 'painter';
 
 export interface TileLayerOptions {
-  /** The material drawn with (usually `renderer.createSpriteMaterial(atlasTexture)`). */
+  /** The material drawn with (usually `renderer.createSpriteMaterial({ texture: atlasTexture })`). */
   material: Material;
   /** One tile's quad size in logical px (at `scale` 1). */
   tileW: number;

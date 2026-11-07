@@ -62,17 +62,8 @@ interface ExposureSettings {
 }
 
 ## FogSettings  (type-only)
-interface FogSettings {
-    enabled: boolean;
-    color: RGB;
-    density: number;
-    top: number;
-    bottom: number;
-    falloff: number;
-    noiseScale: number;
-    speed: number;
-    lightScatter: number;
-}
+@deprecated
+type FogSettings = MistSettings;
 
 ## FxaaSettings  (type-only)
 interface FxaaSettings {
@@ -86,6 +77,7 @@ interface GodRaySettings {
     enabled: boolean;
     x: number;
     y: number;
+    direction?: RGB | null;
     intensity: number;
     decay: number;
     density: number;
@@ -135,6 +127,19 @@ interface LutSettings {
 
 ## LutSize  (type-only)
 type LutSize = 16 | 32;
+
+## MistSettings  (type-only)
+interface MistSettings {
+    enabled: boolean;
+    color: RGB;
+    density: number;
+    top: number;
+    bottom: number;
+    falloff: number;
+    noiseScale: number;
+    speed: number;
+    lightScatter: number;
+}
 
 ## MotionBlurMode  (type-only)
 type MotionBlurMode = 'camera' | 'object';
@@ -200,7 +205,9 @@ type PostQualityTier = 'phone' | 'tablet' | 'desktop' | 'xr';
 ## PostSettings  (type-only)
 interface PostSettings {
     bloom: BloomSettings;
-    fog: FogSettings;
+    mist: MistSettings;
+    @deprecated
+    fog: MistSettings;
     godRays: GodRaySettings;
     vignette: VignetteSettings;
     grade: GradeSettings;
@@ -327,6 +334,9 @@ function aoProjectedRadius(radius: number, projScale: number, z: number, ortho: 
 ## applyPostPatch
 function applyPostPatch(target: PostSettings, patch: PostSettingsPatch): PostSettings;
 
+## cinematicPostSettings
+function cinematicPostSettings(): PostSettings;
+
 ## clonePostSettings
 function clonePostSettings(s: PostSettings): PostSettings;
 
@@ -340,6 +350,7 @@ function createLutTexture(device: GPUDevice, size: LutSize, fn: LutFn): GPUTextu
 function defaultPostQuality(): PostQuality;
 
 ## defaultPostSettings
+@deprecated
 function defaultPostSettings(): PostSettings;
 
 ## easeIn
@@ -369,6 +380,12 @@ function exposureHistogram(rgba: ArrayLike<number>, count: number, out?: Uint32A
 ## exposureTarget
 function exposureTarget(averageLog: number, keyValue: number, minEv: number, maxEv: number): number;
 
+## godRaySource
+function godRaySource(viewProj: ArrayLike<number>, direction: ArrayLike<number>, width: number, height: number, out: {
+    0: number;
+    1: number;
+} | number[] | Float32Array): number;
+
 ## halton
 function halton(index: number, base: number): number;
 
@@ -388,6 +405,9 @@ function lutTexels(size: LutSize, fn: LutFn): Uint8Array;
 function motionVelocity(out: {
     [i: number]: number;
 }, reproj: ArrayLike<number>, u: number, v: number, depth: number): typeof out;
+
+## neutralPostSettings
+function neutralPostSettings(): PostSettings;
 
 ## planckianXy
 function planckianXy(out: {

@@ -7,9 +7,9 @@ import { createTileLayer } from './tile-layer';
 function setup() {
   const fake = createFakeDevice();
   const r = new Renderer(fakeRendererGpu(fake));
-  const material = r.createSpriteMaterial(
-    r.textureFromPixels({ width: 2, height: 2, data: new Uint8Array(16) }),
-  );
+  const material = r.createSpriteMaterial({
+    texture: r.textureFromPixels({ width: 2, height: 2, data: new Uint8Array(16) }),
+  });
   const layer = (label: string) =>
     createTileLayer(r, {
       material,

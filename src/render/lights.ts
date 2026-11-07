@@ -85,7 +85,7 @@ export function spotCone(cosTheta: number, cosOuter: number, cosInner: number): 
 
 /**
  * The sun's shadow map: an orthographic box centred on the rendering camera's position, looking
- * along `sun.dir`, `extent` world units of half-width, spanning `near`..`far` along the light
+ * along `sun.direction`, `extent` world units of half-width, spanning `near`..`far` along the light
  * (measured from the camera position; defaults `-extent`..`extent`). `size` is the map's side
  * in texels (default 2048); `bias` is subtracted from the receiver's depth before the compare
  * (default `DEFAULT_SHADOW_BIAS`). Set `sun.shadow` to one of these and the renderer encodes a
@@ -102,7 +102,10 @@ export interface SunShadow {
 /** Depth bias of `SunShadow` when none is given (in 0..1 shadow-depth units). */
 export const DEFAULT_SHADOW_BIAS = 0.0015;
 
-/** A directional light: `dir` is the direction the light travels (sun → scene), any length. */
+/**
+ * A directional light: `dir` is the direction the light travels (sun → scene), any length.
+ * `Lights.sun` is a `SunLight`, which spells it `direction` like `SpotLight`.
+ */
 export interface DirectionalLight {
   dir: ArrayLike<number>;
   /** Linear RGB, HDR allowed. All zero is "no sun". */
@@ -111,6 +114,18 @@ export interface DirectionalLight {
   shadow?: SunShadow | null;
   /** Layer mask (u32): the light reaches instances whose `layers` share a bit. Default all. */
   layers?: number;
+}
+
+/**
+ * `Lights.sun`: a `DirectionalLight` whose direction is spelled `direction`, like
+ * `SpotLight.direction` (ws/api-render). `dir` is the same array under the old name: reading
+ * or assigning either one reads or replaces both.
+ */
+export interface SunLight extends Omit<DirectionalLight, 'dir'> {
+  /** The direction the light travels (sun → scene), any length. */
+  direction: ArrayLike<number>;
+  /** @deprecated (ws/api-render) Use `direction` (the same array). Removed next minor. */
+  dir: ArrayLike<number>;
 }
 
 /** A point light: world position, linear RGB colour and the radius where it falls to zero. */
@@ -143,14 +158,21 @@ export interface SpotLight {
  * and the camera. `density` 0 (the default) is no fog. With `far > near` the fog is linear:
  * nothing until `near`, fully `density` (clamped to 1) of `color` at `far`. With `far <= near`
  * it is exponential past `near`: `1 - exp(-density × distance)`.
+ *
+ * `Lights.fog` is the only depth fog. Post's `mist` (`MistSettings`, formerly `fog`) is a
+ * screen-space haze composited on top of the finished scene; the two stack, neither replaces
+ * the other.
  */
-export interface Fog {
+export interface DistanceFog {
   /** Linear RGB the scene fades to. */
   color: ArrayLike<number>;
   density: number;
   near: number;
   far: number;
 }
+
+/** @deprecated (ws/api-render) Use `DistanceFog` (the same shape). Removed next minor. */
+export type Fog = DistanceFog;
 
 /**
  * What the renderer passes to `Lights.writeBlock` when a shadow pass rendered this view: the
@@ -169,24 +191,23 @@ export interface ShadowUniforms {
 export class Lights {
   /** Linear RGB added to everything the game's lighting touches. Default white (unlit). */
   readonly ambient = new Float32Array([1, 1, 1]);
-  /** The one directional light. Default: no colour, so it contributes nothing; no shadow. */
-  readonly sun: DirectionalLight = {
-    dir: new Float32Array([0, -1, 0]),
-    color: new Float32Array([0, 0, 0]),
-    shadow: null,
-  };
+  /**
+   * The one directional light. Default: travelling straight down with no colour, so it
+   * contributes nothing; no shadow.
+   */
+  readonly sun: SunLight = createSun();
   /** Point lights, in order; the first `MAX_POINT_LIGHTS` reach the shader. */
   readonly points: PointLight[] = [];
   /** Spot lights, in order; the first `MAX_SPOT_LIGHTS` reach the shader. */
   readonly spots: SpotLight[] = [];
   /** Distance fog. Default density 0: `engine_fog` is the identity. */
-  readonly fog: Fog = { color: new Float32Array([0, 0, 0]), density: 0, near: 0, far: 0 };
+  readonly fog: DistanceFog = { color: new Float32Array([0, 0, 0]), density: 0, near: 0, far: 0 };
 
   /** Back to the unlit default: ambient 1, no sun or shadow, `points` and `spots` emptied, no fog. */
   reset(): this {
     this.ambient.fill(1);
     const s = this.sun;
-    set3(s.dir, 0, -1, 0);
+    set3(s.direction, 0, -1, 0);
     set3(s.color, 0, 0, 0);
     s.shadow = null;
     s.layers = undefined;
@@ -223,7 +244,7 @@ export class Lights {
     out[o + 2] = a[2]!;
     const n = Math.min(this.points.length, MAX_POINT_LIGHTS);
     u32[o + 3] = n;
-    const d = this.sun.dir;
+    const d = this.sun.direction;
     const dx = d[0] ?? 0;
     const dy = d[1] ?? 0;
     const dz = d[2] ?? 0;
@@ -316,6 +337,29 @@ export class Lights {
     }
     out.fill(0, sp2, o + LIGHTS_BLOCK_FLOATS);
   }
+}
+
+/** The default sun, with `dir` an accessor over `direction` so both spellings share one array. */
+function createSun(): SunLight {
+  let direction: ArrayLike<number> = new Float32Array([0, -1, 0]);
+  const sun = {
+    get direction(): ArrayLike<number> {
+      return direction;
+    },
+    set direction(v: ArrayLike<number>) {
+      direction = v;
+    },
+    get dir(): ArrayLike<number> {
+      return direction;
+    },
+    set dir(v: ArrayLike<number>) {
+      direction = v;
+    },
+    color: new Float32Array([0, 0, 0]) as ArrayLike<number>,
+    shadow: null as SunShadow | null | undefined,
+    layers: undefined as number | undefined,
+  };
+  return sun;
 }
 
 function set3(v: ArrayLike<number>, x: number, y: number, z: number): void {

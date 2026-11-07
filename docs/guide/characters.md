@@ -68,34 +68,32 @@ scale). Turning that pose into pixels takes three calls each frame:
 
 1. `poseToWorld` turns local joint poses into world matrices.
 2. `skinMatrices` multiplies each by its inverse bind matrix, giving 12 floats per joint.
-3. `palette.set(0, ...)` and `palette.flush()` upload them.
+   `palette.write(0)` is slot 0's joint matrices in the palette itself, so they go straight in.
+3. `palette.flush()` uploads them.
 
-Then draw the mesh. The palette slot goes in the w of `params`; slot 0 is the first
-character.
+Then draw the mesh with `palette.params(0)`, the draw parameters that name slot 0 (the slot
+goes in the w of `params`). Slot 0 is the first character.
 
 ```ts
 import { AnimationMixer, poseToWorld, type Skeleton, skinMatrices, WORLD_NODE_FLOATS } from '@thunderclap/engine/anim';
-import type { Frame, InstanceParams, Material, Mesh, SkinPalette } from '@thunderclap/engine/render';
+import type { Frame, Material, Mesh, SkinPalette } from '@thunderclap/engine/render';
 import { Transform } from '@thunderclap/engine/render';
 
-export function createHeroRig(skeleton: Skeleton, jointCount: number) {
+export function createHeroRig(skeleton: Skeleton) {
   const mixer = new AnimationMixer(skeleton, { maxActions: 8 });
   // Allocate once. Nothing below allocates per frame.
   const world = new Float32Array(skeleton.parents.length * WORLD_NODE_FLOATS);
-  const joints = new Float32Array(jointCount * 12);
   const body = new Transform();
-  const params: InstanceParams = { params: [0, 0, 0, 0] };
 
   function update(dt: number, palette: SkinPalette) {
     mixer.update(dt);
     poseToWorld(skeleton, mixer.pose, world);
-    skinMatrices(skeleton, world, joints);
-    palette.set(0, joints);
+    skinMatrices(skeleton, world, palette.write(0));
   }
 
   function render(frame: Frame, mesh: Mesh, material: Material, palette: SkinPalette) {
     palette.flush();
-    frame.mesh(mesh, material, body, params);
+    frame.mesh(mesh, material, body, palette.params(0));
   }
 
   return { mixer, world, body, update, render };

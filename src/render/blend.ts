@@ -1,4 +1,7 @@
 /**
+ * How a material or fullscreen pass blends into its target (`MaterialDesc.blend`,
+ * `FullscreenPassDesc.blend`):
+ *
  * - `alpha`: straight alpha (`rgb * a + dst * (1 - a)`). Default.
  * - `premultiplied`: shader outputs rgb already multiplied by alpha.
  * - `additive`: `rgb * a + dst`. Destination alpha untouched. Glows, sparks.
@@ -6,9 +9,15 @@
  * - `multiply`: `dst * rgb` (colour factors `dst` / `zero`); destination alpha kept (alpha
  *   factors `zero` / `one`). Decals, stains, tinted glass: white leaves the surface alone.
  */
-export type BlendMode = 'alpha' | 'premultiplied' | 'additive' | 'opaque' | 'multiply';
+export type RenderBlendMode = 'alpha' | 'premultiplied' | 'additive' | 'opaque' | 'multiply';
 
-export function blendState(mode: BlendMode): GPUBlendState | undefined {
+/**
+ * @deprecated (E-036) Use `RenderBlendMode`: `anim` exports a different `BlendMode` (clip
+ * layering). Removed next minor.
+ */
+export type BlendMode = RenderBlendMode;
+
+export function blendState(mode: RenderBlendMode): GPUBlendState | undefined {
   switch (mode) {
     case 'opaque':
       return undefined;

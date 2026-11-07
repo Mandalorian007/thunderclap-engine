@@ -99,7 +99,7 @@ export async function loadHero(ctx: EngineCtx, url: string) {
   const bitmap = await createImageBitmap(blob);
   const tex = ctx.renderer.textureFromSource(bitmap, 'hero');
   // 'nearest-clamp' keeps pixel art crisp. The default is 'linear-clamp'.
-  const hero = ctx.renderer.createSpriteMaterial(tex, 'hero', { sampler: 'nearest-clamp' });
+  const hero = ctx.renderer.createSpriteMaterial({ texture: tex, label: 'hero', sampler: 'nearest-clamp' });
   const draw: DrawParams = { x: 960, y: 540, w: 128, h: 128 };
   return { hero, draw };
 }
@@ -107,7 +107,7 @@ export async function loadHero(ctx: EngineCtx, url: string) {
 
 Put many sprites in one texture (an atlas) so they share one material and batch into one call. Two ways to get UVs out of an atlas:
 
-- **A grid.** If every cell is the same size, `atlasFrames({ cols, rows }, indices)` returns the UV rect of each listed cell (row-major). It allocates, so call it at load time.
+- **A grid.** If every cell is the same size, `atlasFrames({ cols, rows }, indices)` returns the UV rect of each listed cell (row-major). Add `inset: 0.5, width, height` (the texture size in texels) to pull every rect in by half a texel, so a neighbour cell never bleeds in. It allocates, so call it at load time.
 - **Packed images.** `packAtlas` from `@thunderclap/engine/assets` packs named images of any size into one sheet. `createAtlasTexture` uploads it. Each rect has `u0`, `v0`, `u1`, `v1`.
 
 ```ts
@@ -120,14 +120,14 @@ export function buildSheet(ctx: EngineCtx, coin: ImageBitmap, gem: ImageBitmap) 
   const layout = packAtlas(images, { padding: 2 });
   // mips: false for pixel art.
   const sheet = createAtlasTexture(ctx.gpu.device, layout, images, { mips: false });
-  const material = ctx.renderer.createSpriteMaterial(sheet.texture, 'sheet');
+  const material = ctx.renderer.createSpriteMaterial({ texture: sheet.texture, label: 'sheet' });
   const r = sheet.rects.gem;
   const gemDraw: DrawParams = { x: 400, y: 300, w: r.w, h: r.h, uv: [r.u0, r.v0, r.u1, r.v1] };
   return { material, gemDraw };
 }
 ```
 
-The platformer paints its whole atlas on a canvas at boot (`templates/platformer/src/world/atlas.ts`): 8 by 8 cells of 64 px, every tile, frame and prop. With nearest sampling, inset each UV rect by half a texel so a neighbour cell never bleeds into a sprite's edge. Its `cellUv` helper does that.
+The platformer paints its whole atlas on a canvas at boot (`templates/platformer/src/world/atlas.ts`): 8 by 8 cells of 64 px, every tile, frame and prop. With nearest sampling, inset each UV rect by half a texel so a neighbour cell never bleeds into a sprite's edge. Its `cellUv` helper does that; `atlasFrames` does the same with `inset`.
 
 ## Write your own shader
 
@@ -181,7 +181,7 @@ A flipbook steps through a list of UV rects over time. It is pure timing: you co
 ```ts
 import { atlasFrames, createFlipbook, type DrawParams, type Frame, type Material } from '@thunderclap/engine/render';
 
-const grid = { cols: 8, rows: 8 };
+const grid = { cols: 8, rows: 8, inset: 0.5, width: 512, height: 512 }; // 64 px cells
 const idle = atlasFrames(grid, [16, 17]);
 const run = atlasFrames(grid, [18, 19, 20, 21]);
 const book = createFlipbook({ frames: idle, fps: 4 });
@@ -305,7 +305,7 @@ const hit: CameraPoint = { x: 0, y: 0, z: 0 };
 export function tapToWorld(ctx: EngineCtx): CameraPoint | null {
   const tap = ctx.gestures.tap;
   if (!tap) return null;
-  return ctx.camera.screenToWorld(tap.x, tap.y, 0, hit);
+  return ctx.camera.screenToWorld(tap.x, tap.y, hit); // the point on the sprites' plane, z = 0
 }
 ```
 

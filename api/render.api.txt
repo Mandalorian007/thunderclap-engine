@@ -10,11 +10,22 @@ const ALL_LIGHT_LAYERS = 4294967295;
 ## AUTO_BOUNDS_MAX_VERTICES
 const AUTO_BOUNDS_MAX_VERTICES = 65536;
 
+## AtlasGrid  (type-only)
+interface AtlasGrid {
+    cols: number;
+    rows: number;
+    inset?: number;
+    width?: number;
+    height?: number;
+}
+
 ## BUFFER_BINDING_BASE
+@deprecated
 const BUFFER_BINDING_BASE = 16;
 
 ## BlendMode  (type-only)
-type BlendMode = 'alpha' | 'premultiplied' | 'additive' | 'opaque' | 'multiply';
+@deprecated
+type BlendMode = RenderBlendMode;
 
 ## BlockInfo  (type-only)
 interface BlockInfo {
@@ -25,15 +36,19 @@ interface BlockInfo {
 }
 
 ## CAMERA_INV_VIEW_PROJ_OFFSET
+@deprecated
 const CAMERA_INV_VIEW_PROJ_OFFSET = 60;
 
 ## CAMERA_JITTER_OFFSET
+@deprecated
 const CAMERA_JITTER_OFFSET = 108;
 
 ## CAMERA_PREV_VIEW_OFFSET
+@deprecated
 const CAMERA_PREV_VIEW_OFFSET = 92;
 
 ## CAMERA_PREV_VIEW_PROJ_OFFSET
+@deprecated
 const CAMERA_PREV_VIEW_PROJ_OFFSET = 76;
 
 ## COMPRESSION_FEATURES
@@ -88,6 +103,7 @@ class Camera {
     frustumCorners(out: Float32Array): Float32Array;
     worldToScreen(x: number, y: number, z?: number, out?: CameraPoint): CameraPoint;
     screenToWorld(sx: number, sy: number, depth?: number, out?: CameraPoint): CameraPoint;
+    screenToWorld(sx: number, sy: number, out: CameraPoint): CameraPoint;
     writeBlock(f32: Float32Array, u32: Uint32Array, o: number, viewport: CameraRect, viewIndex?: number): void;
     get frustum(): Float32Array;
     seesSphere(x: number, y: number, z: number, radius: number): boolean;
@@ -157,6 +173,14 @@ interface DirectionalLight {
     layers?: number;
 }
 
+## DistanceFog  (type-only)
+interface DistanceFog {
+    color: ArrayLike<number>;
+    density: number;
+    near: number;
+    far: number;
+}
+
 ## DrawParams  (type-only)
 interface DrawParams extends InstanceParams {
     x: number;
@@ -202,6 +226,7 @@ interface DynamicResolutionOptions {
 }
 
 ## FOG_OFFSET_FLOATS
+@deprecated
 const FOG_OFFSET_FLOATS: number;
 
 ## FRUSTUM_FLOATS
@@ -228,12 +253,8 @@ interface FlipbookOptions {
 }
 
 ## Fog  (type-only)
-interface Fog {
-    color: ArrayLike<number>;
-    density: number;
-    near: number;
-    far: number;
-}
+@deprecated
+type Fog = DistanceFog;
 
 ## Follow2D  (type-only)
 interface Follow2D {
@@ -348,7 +369,7 @@ interface FullscreenPassDesc extends BindingDesc {
     label: string;
     wgsl: string;
     targets: GPUTextureFormat[];
-    blend?: BlendMode | GPUBlendState;
+    blend?: RenderBlendMode | GPUBlendState;
     fragmentEntry?: string;
 }
 
@@ -492,18 +513,20 @@ interface Ktx2LevelLayout {
 }
 
 ## LAYERS_OFFSET_FLOATS
+@deprecated
 const LAYERS_OFFSET_FLOATS: number;
 
 ## LIGHTS_BLOCK_FLOATS
+@deprecated
 const LIGHTS_BLOCK_FLOATS: number;
 
 ## Lights
 class Lights {
     readonly ambient: Float32Array<ArrayBuffer>;
-    readonly sun: DirectionalLight;
+    readonly sun: SunLight;
     readonly points: PointLight[];
     readonly spots: SpotLight[];
-    readonly fog: Fog;
+    readonly fog: DistanceFog;
     reset(): this;
     writeBlock(out: Float32Array, u32: Uint32Array, o?: number, shadow?: ShadowUniforms | null): void;
 }
@@ -540,7 +563,7 @@ class Material {
     readonly label: string;
     readonly name: string;
     readonly depthTest: boolean;
-    readonly blend: BlendMode;
+    readonly blend: RenderBlendMode;
     readonly bindings: BindingSet | null;
     readonly shadowFragment: boolean;
     readonly aux: boolean;
@@ -560,7 +583,7 @@ interface MaterialDesc extends BindingDesc {
     depthTest?: boolean;
     aux?: boolean;
     wgsl: string;
-    blend?: BlendMode;
+    blend?: RenderBlendMode;
     vertexEntry?: string;
     fragmentEntry?: string;
     shadowFragmentEntry?: string;
@@ -621,6 +644,18 @@ type MeshLod = Pick<LodChain<Mesh>, 'thresholdsPx'> & {
     readonly meshes: readonly Mesh[];
 };
 
+## MeshLodChain  (type-only)
+type MeshLodChain = MeshLod & {
+    readonly geometries: readonly MeshDesc[];
+};
+
+## MeshLodDesc  (type-only)
+interface MeshLodDesc {
+    geometries: readonly MeshDesc[];
+    thresholdsPx: readonly number[];
+    label?: string;
+}
+
 ## MeshRange  (type-only)
 interface MeshRange {
     first: number;
@@ -655,9 +690,11 @@ const ORTHO2D_HALF_DEPTH = 1024;
 const PLAIN_VARIANT: PreludeVariant;
 
 ## POINT_LAYERS_OFFSET_FLOATS
+@deprecated
 const POINT_LAYERS_OFFSET_FLOATS: number;
 
 ## POINT_LIGHTS_OFFSET_FLOATS
+@deprecated
 const POINT_LIGHTS_OFFSET_FLOATS = 12;
 
 ## POINT_LIGHT_FLOATS
@@ -787,6 +824,9 @@ interface ReadonlyVec3 {
     readonly z: number;
 }
 
+## RenderBlendMode  (type-only)
+type RenderBlendMode = 'alpha' | 'premultiplied' | 'additive' | 'opaque' | 'multiply';
+
 ## RenderStats  (type-only)
 interface RenderStats {
     drawCalls: number;
@@ -814,6 +854,7 @@ class Renderer implements FrameSink {
     readonly globalsLayout: GPUBindGroupLayout;
     globalsBindGroup: GPUBindGroup;
     readonly quad: Mesh;
+    @deprecated
     get white(): Texture;
     readonly defaultSprite: Material;
     readonly stats: RenderStats;
@@ -837,11 +878,14 @@ class Renderer implements FrameSink {
     onGpuTime(fn: (gpuMs: number) => void): () => void;
     onResize(fn: (width: number, height: number) => void): () => void;
     createMaterial(desc: MaterialDesc): Material;
+    createSpriteMaterial(opts: SpriteMaterialOptions): Material;
+    @deprecated
     createSpriteMaterial(texture: TextureLike, label?: string, opts?: {
         blend?: MaterialDesc['blend'];
         sampler?: SamplerKind;
     }): Material;
     createMesh(desc: MeshDesc): Mesh;
+    createMeshLod(desc: MeshLodDesc): MeshLodChain;
     createTexture(desc: TextureDesc): Texture;
     createSceneTarget(desc: SceneTargetDesc): SceneTarget;
     createRenderTarget(desc: TextureDesc): Texture;
@@ -915,6 +959,7 @@ const SCENE_FORMAT: GPUTextureFormat;
 const SHADOW_FORMAT: GPUTextureFormat;
 
 ## SHADOW_PARAMS_OFFSET_FLOATS
+@deprecated
 const SHADOW_PARAMS_OFFSET_FLOATS: number;
 
 ## SKIN_JOINTS_BYTE_OFFSET
@@ -924,6 +969,7 @@ const SKIN_JOINTS_BYTE_OFFSET = 48;
 const SKIN_PALETTE_BINDING = 16;
 
 ## SKIN_PALETTE_HEADER_FLOATS
+@deprecated
 const SKIN_PALETTE_HEADER_FLOATS = 4;
 
 ## SKIN_PARAM
@@ -933,12 +979,14 @@ const SKIN_PARAM = 3;
 const SKIN_WEIGHTS_BYTE_OFFSET = 52;
 
 ## SPOT_LIGHTS_OFFSET_FLOATS
+@deprecated
 const SPOT_LIGHTS_OFFSET_FLOATS: number;
 
 ## SPOT_LIGHT_FLOATS
 const SPOT_LIGHT_FLOATS = 16;
 
 ## SPRITE_WGSL
+@deprecated
 const SPRITE_WGSL = "\n@group(1) @binding(1) var spriteSampler: sampler;\n@group(1) @binding(2) var spriteTex: texture_2d<f32>;\n\n@fragment fn fs_main(in: VSOut) -> FragOut {\n  let c = textureSample(spriteTex, spriteSampler, in.uv) * in.color;\n  var o: FragOut;\n  o.color = c;\n  o.emissive = vec4f(c.rgb * in.emissive, c.a);\n  return o;\n}\n";
 
 ## STANDARD_DISSOLVE_OFFSET
@@ -957,9 +1005,11 @@ const STANDARD_TEXTURE_SLOTS: {
 const STANDARD_UNIFORM_FLOATS: number;
 
 ## STANDARD_WGSL
+@deprecated
 const STANDARD_WGSL = "\nstruct StandardSlot {\n  scale_offset: vec4f,\n  rot: vec4f,\n};\nstruct StandardParams {\n  base_color: vec4f,\n  factors: vec4f,\n  emissive: vec4f,\n  uv_scale_offset: vec4f,\n  uv_rot: vec4f,\n  slots: array<StandardSlot, 5>,\n  dissolve: vec4f,\n  dissolve_edge: vec4f,\n};\n@group(1) @binding(0) var<uniform> standard: StandardParams;\n@group(1) @binding(1) var standard_sampler: sampler;\n@group(1) @binding(2) var standard_base_color: texture_2d<f32>;\n@group(1) @binding(3) var standard_metallic_roughness: texture_2d<f32>;\n@group(1) @binding(4) var standard_normal: texture_2d<f32>;\n@group(1) @binding(5) var standard_occlusion: texture_2d<f32>;\n@group(1) @binding(6) var standard_emissive: texture_2d<f32>;\nfn standard_uv(uv: vec2f) -> vec2f {\n  let s = uv * standard.uv_scale_offset.xy;\n  let r = standard.uv_rot.xy;\n  return vec2f(r.x * s.x - r.y * s.y, r.y * s.x + r.x * s.y) + standard.uv_scale_offset.zw;\n}\n// Map slot's coordinates: its texture coordinate set through its own transform.\nfn standard_uv_slot(in: VSOut, slot: u32) -> vec2f {\n  let p = standard.slots[slot];\n  let uv = select(in.uv, in.uv1, p.rot.z > 0.5);\n  let s = uv * p.scale_offset.xy;\n  return vec2f(p.rot.x * s.x - p.rot.y * s.y, p.rot.y * s.x + p.rot.x * s.y) + p.scale_offset.zw;\n}\n// Dissolve noise at a fragment, 0..1 (value-noise fbm over the mesh's own uv).\nfn standard_dissolve_noise(in: VSOut) -> f32 {\n  return engine_fbm(in.local * standard.dissolve.z, 3) / 0.875;\n}\n// True when the dissolve discards this fragment (flag bit 3 and noise below the amount).\nfn standard_dissolved(in: VSOut) -> bool {\n  if ((u32(standard.emissive.w) & 8u) == 0u) { return false; }\n  let a = standard.dissolve.x;\n  return a >= 1.0 || standard_dissolve_noise(in) < a;\n}\n// The shadow pass fragment (shadowFragmentEntry): the same holes as fs_main's alpha mask\n// (flag bit 1, base alpha below the cutoff) and dissolve. The sample comes first, in uniform\n// control flow.\n@fragment fn fs_shadow(in: VSOut) {\n  let a = textureSample(standard_base_color, standard_sampler, standard_uv_slot(in, 0u)).a\n    * standard.base_color.a * in.color.a;\n  let masked = (u32(standard.emissive.w) & 2u) != 0u && a < standard.factors.w;\n  if (masked || standard_dissolved(in)) { discard; }\n}\n\n@fragment fn fs_main(in: VSOut, @builtin(front_facing) front: bool) -> FragOut {\n  let uv = standard_uv_slot(in, 2u);\n  let base = textureSample(standard_base_color, standard_sampler, standard_uv_slot(in, 0u)) * standard.base_color * in.color;\n  let mr = textureSample(standard_metallic_roughness, standard_sampler, standard_uv_slot(in, 1u));\n  let nmap = textureSample(standard_normal, standard_sampler, uv).xyz;\n  let ao_tex = textureSample(standard_occlusion, standard_sampler, standard_uv_slot(in, 3u)).r;\n  let em = textureSample(standard_emissive, standard_sampler, standard_uv_slot(in, 4u)).rgb * standard.emissive.rgb;\n  let ao = mix(1.0, ao_tex, standard.uv_rot.z);\n  let flags = u32(standard.emissive.w);\n  var n = normalize(in.normal);\n  if ((flags & 1u) != 0u && !front) { n = -n; }\n  let v = normalize(camera.camera_pos.xyz - in.worldPos);\n  // Derivative path first (uniform control flow), then the tangent frame when the mesh has one.\n  let nd = engine_perturb_normal(n, in.worldPos, uv, nmap, standard.factors.z);\n  let tp = in.tangent.xyz - n * dot(n, in.tangent.xyz);\n  let tl = length(tp);\n  if (in.tangent.w != 0.0 && tl > 1e-6) {\n    let t = tp / tl;\n    let b = in.tangent.w * cross(n, t);\n    let m = (nmap * 2.0 - 1.0) * vec3f(standard.factors.z, standard.factors.z, 1.0);\n    n = normalize(t * m.x + b * m.y + n * m.z);\n  } else {\n    n = nd;\n  }\n  if ((flags & 2u) != 0u && base.a < standard.factors.w) { discard; }\n  var edge = vec3f(0.0);\n  if ((flags & 8u) != 0u) {\n    let dn = standard_dissolve_noise(in);\n    let da = standard.dissolve.x;\n    if (da >= 1.0 || dn < da) { discard; }\n    let w = standard.dissolve.y;\n    if (da > 0.0 && w > 0.0) {\n      edge = standard.dissolve_edge.rgb * (1.0 - smoothstep(da, da + w, dn));\n    }\n  }\n  let metallic = mr.b * standard.factors.x;\n  let roughness = mr.g * standard.factors.y;\n  let lit = engine_pbr_layers(\n    base.rgb, metallic, roughness, n, v, in.worldPos, ao, vec3f(0.0),\n    engine_instance_layers(in.flags),\n  );\n  let glow = em + base.rgb * in.emissive + edge;\n  // Fog attenuates the emissive without tinting it: fog(e) - fog(0) = e \u00D7 (1 - f).\n  let fogged_glow = engine_fog(glow, in.worldPos) - engine_fog(vec3f(0.0), in.worldPos);\n  let alpha = select(1.0, base.a, (flags & 4u) != 0u);\n  var o: FragOut;\n  o.color = vec4f(lit, alpha);\n  o.emissive = vec4f(fogged_glow, alpha);\n  engine_write_aux(&o, vec2f(roughness, metallic), engine_velocity(in));\n  return o;\n}\n";
 
 ## SUN_VIEW_PROJ_OFFSET_FLOATS
+@deprecated
 const SUN_VIEW_PROJ_OFFSET_FLOATS: number;
 
 ## SamplerKind  (type-only)
@@ -1066,6 +1116,8 @@ class SkinPalette {
     offsetOf(instance: number): number;
     previousOffsetOf(instance: number): number;
     set(instance: number, matrices: ArrayLike<number>, offset?: number): void;
+    write(instance: number): Float32Array<ArrayBuffer>;
+    params(instance: number): InstanceParams;
     setIdentity(instance: number): void;
     flush(): void;
     get isDirty(): boolean;
@@ -1105,6 +1157,14 @@ interface SpotLight {
     innerAngle: number;
     outerAngle: number;
     layers?: number;
+}
+
+## SpriteMaterialOptions  (type-only)
+interface SpriteMaterialOptions {
+    texture: TextureLike;
+    label?: string;
+    blend?: MaterialDesc['blend'];
+    sampler?: SamplerKind;
 }
 
 ## StandardDissolve  (type-only)
@@ -1148,6 +1208,13 @@ interface StandardMaterialDesc {
     maps?: Partial<Record<StandardMapSlot, StandardMapDesc>>;
     sampler?: SamplerKind;
     dissolve?: StandardDissolve;
+}
+
+## SunLight  (type-only)
+interface SunLight extends Omit<DirectionalLight, 'dir'> {
+    direction: ArrayLike<number>;
+    @deprecated
+    dir: ArrayLike<number>;
 }
 
 ## SunShadow  (type-only)
@@ -1281,7 +1348,8 @@ class Transform {
     get quaternion(): ReadonlyQuat;
     get scale(): ReadonlyVec3;
     setPosition(x: number, y: number, z?: number): this;
-    setScale(x: number, y?: number, z?: number): this;
+    setScale(s: number): this;
+    setScale(x: number, y: number, z?: number): this;
     get rotation(): number;
     set rotation(radians: number);
     setQuaternion(x: number, y: number, z: number, w: number): this;
@@ -1405,10 +1473,7 @@ const WGSL_PBR: string;
 const WGSL_SKIN = "struct EngineSkinPalette {\n  joints: u32,\n  instances: u32,\n  history: u32,\n  _pad1: u32,\n  rows: array<vec4f>,\n};\n@group(1) @binding(16) var<storage, read> engine_skin_palette: EngineSkinPalette;\nstruct EngineSkinned {\n  position: vec3f,\n  normal: vec3f,\n};\nfn engine_skin(v: VertexIn, position: vec3f, normal: vec3f) -> EngineSkinned {\n  let base = u32(v.params.w) * engine_skin_palette.joints * 3u;\n  let p = vec4f(position, 1.0);\n  var skinned: EngineSkinned;\n  skinned.position = vec3f(0.0);\n  skinned.normal = vec3f(0.0);\n  for (var k = 0u; k < 4u; k++) {\n    let w = v.weights[k];\n    if (w == 0.0) { continue; }\n    let r = base + v.joints[k] * 3u;\n    let r0 = engine_skin_palette.rows[r];\n    let r1 = engine_skin_palette.rows[r + 1u];\n    let r2 = engine_skin_palette.rows[r + 2u];\n    skinned.position += w * vec3f(dot(r0, p), dot(r1, p), dot(r2, p));\n    skinned.normal += w * vec3f(dot(r0.xyz, normal), dot(r1.xyz, normal), dot(r2.xyz, normal));\n  }\n  return skinned;\n}\n// The previous frame's skinned position from the palette's history block (SkinPalette\n// with history), w = 1; w = 0 when the palette keeps none (velocity reads zero).\nfn engine_skin_previous(v: VertexIn, position: vec3f) -> vec4f {\n  if (engine_skin_palette.history == 0u) { return vec4f(0.0); }\n  let base = (engine_skin_palette.instances + u32(v.params.w)) * engine_skin_palette.joints * 3u;\n  let p = vec4f(position, 1.0);\n  var out = vec3f(0.0);\n  for (var k = 0u; k < 4u; k++) {\n    let w = v.weights[k];\n    if (w == 0.0) { continue; }\n    let r = base + v.joints[k] * 3u;\n    out += w * vec3f(dot(engine_skin_palette.rows[r], p), dot(engine_skin_palette.rows[r + 1u], p), dot(engine_skin_palette.rows[r + 2u], p));\n  }\n  return vec4f(out, 1.0);\n}";
 
 ## atlasFrames
-function atlasFrames(atlas: {
-    cols: number;
-    rows: number;
-}, indices?: readonly number[]): UvRect[];
+function atlasFrames(atlas: AtlasGrid, indices?: readonly number[]): UvRect[];
 
 ## blockInfo
 function blockInfo(format: GPUTextureFormat): BlockInfo | null;
