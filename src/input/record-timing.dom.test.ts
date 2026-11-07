@@ -17,12 +17,21 @@ import {
 
 /**
  * 20 ms ticks put the 450 ms long-press between ticks 22 (440 ms) and 23 (460 ms), so a live
- * event's real age (a few ms under load) cannot move it to another tick.
+ * event's age cannot move it to another tick.
  */
 const TICK_MS = 20;
+/**
+ * Every live event is handled this many ms after it happened. `performance.now()` is mocked to
+ * the rig clock and each event's `timeStamp` is set, so the age is exact under any load (E-034:
+ * real stamps came out 13.6 ms early at load 13.8).
+ */
+const LAG_MS = 3;
+
+/** The rig clock `t`, which `performance.now()` also reads. */
+let t = 0;
 
 function ptr(type: string, x: number, y: number): PointerEvent {
-  return new PointerEvent(type, {
+  const e = new PointerEvent(type, {
     pointerId: 1,
     clientX: x,
     clientY: y,
@@ -31,6 +40,8 @@ function ptr(type: string, x: number, y: number): PointerEvent {
     button: 0,
     bubbles: true,
   });
+  Object.defineProperty(e, 'timeStamp', { value: t - LAG_MS });
+  return e;
 }
 
 type Step = (el: HTMLElement) => void;
@@ -64,13 +75,13 @@ const SCENARIOS: Record<string, { steps: Step[]; kinds: string[] }> = {
 
 describe('recorded pointer timing (ws/input-7)', () => {
   let el: HTMLElement;
-  let t = 0;
 
   beforeEach(() => {
     el = document.createElement('div');
     document.body.appendChild(el);
     vi.spyOn(el, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 800, 400));
     t = 1000;
+    vi.spyOn(performance, 'now').mockImplementation(() => t);
   });
 
   afterEach(() => {
@@ -140,14 +151,8 @@ describe('recorded pointer timing (ws/input-7)', () => {
     const { recording } = recordLive(SCENARIOS.tap!.steps);
     const lane = recording.ticks.flatMap((e) => ('ptr' in e && e.ptr ? e.ptr : []));
     expect(lane.map((e) => e[0])).toEqual([0, 2]);
-    // Down on tick 0 (20 ms in), up on tick 3 (80 ms in), less the events' real age.
-    for (const [e, at] of [
-      [lane[0]!, 20],
-      [lane[1]!, 80],
-    ] as const) {
-      expect(e[7]).toBeLessThanOrEqual(at);
-      expect(e[7]).toBeGreaterThan(at - 10);
-    }
+    // Down on tick 0 (20 ms in), up on tick 3 (80 ms in), less the events' age.
+    expect(lane.map((e) => e[7])).toEqual([20 - LAG_MS, 80 - LAG_MS]);
   });
 
   it('a version 2 recording without times replays on the tick spacing', () => {
