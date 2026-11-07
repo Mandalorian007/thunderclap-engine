@@ -38,7 +38,7 @@
     "./tween": "./src/tween/index.ts",
     "./ui": "./src/ui/index.ts",
     "./voxel": "./src/voxel/index.ts",
-    "./testing": "./src/render/fake-gpu.ts",
+    "./testing": "./src/testing/index.ts",
     "./package.json": "./package.json"
   },
   "scripts": {

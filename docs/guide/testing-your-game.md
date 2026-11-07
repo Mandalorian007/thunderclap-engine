@@ -1,6 +1,8 @@
 # Testing your game
 
-In this guide you test a game the way the templates do: pure rules and the save schema in Vitest, input sessions recorded and replayed tick by tick, the renderer on a fake GPU, and the running page in Playwright through a small state probe.
+In this guide you test a game the way the templates do: pure rules and the save schema in Vitest, input sessions recorded and replayed tick by tick, game logic stepped on a fixed clock against a fake host, the renderer on a fake GPU, and the running page in Playwright through a small state probe.
+
+Everything a unit test needs comes from `@thunderclap/engine/testing`: `createFakeHost`, `createFixedClock` and the fake GPU device. These run in Vitest or plain Node with no browser and no GPU.
 
 The engine tests the platform itself (WebGPU, input devices, layout on every form factor) on its own device matrix. Your tests cover only your product: your rules, your save, your scenes.
 
@@ -248,6 +250,86 @@ ctx?.loop.start();
 ```
 
 A replay gives the same result only on the same game: the same bindings, the same fixed step, the same layout (pointer positions are recorded in CSS pixels) and the same seeds. Anything your game reads from `Date.now()` or `Math.random()` breaks it, which is one more reason to keep rules pure. Gestures run on `ctx.clock`, which is game time, so a long-press lands on the same tick in a replay. `ctx.input.playback.speed = 4` fast-forwards.
+
+## Step a game on a fixed clock
+
+`createFixedClock(stepMs?)` is a `TickClock`, the same type as `ctx.clock`. It moves only when the test calls `step(n)` (whole fixed steps) or `advance(ms)`, and N steps read exactly N × `stepMs`. Give it to the gestures (or a `Look`, or a playback) and run each tick in the order `createGame`'s loop does: step the clock, then `input.update()`, then your update. Timers such as long-press then run on game time:
+
+```ts
+import { type Bindings, createGestures, Input } from '@thunderclap/engine/input';
+import { createFixedClock } from '@thunderclap/engine/testing';
+import { expect, it } from 'vitest';
+
+type Action = 'right' | 'info';
+const bindings: Bindings<Action> = {
+  right: [{ key: 'ArrowRight' }],
+  info: [{ gesture: 'longPress' }],
+};
+
+it('walks while held and opens info on a long-press', () => {
+  const clock = createFixedClock(10); // 10 ms steps
+  const gestures = createGestures({ clock });
+  const input = new Input<Action>(bindings, { getGamepads: () => [], gestures });
+  const player = { x: 0, infoAt: -1 };
+  const tick = () => {
+    clock.step();
+    input.update();
+    if (input.held('right')) player.x += 2;
+    if (input.pressed('info') && player.infoAt < 0) player.infoAt = clock.ticks;
+  };
+
+  input.keyDown('ArrowRight');
+  for (let i = 0; i < 10; i++) tick();
+  input.keyUp('ArrowRight');
+  expect(player.x).toBe(20);
+
+  gestures.pointerDown(1, 50, 50, 'touch', clock.now());
+  for (let i = 0; i < 60; i++) tick();
+  expect(player.infoAt).toBe(10 + 45); // 450 ms is 45 steps of 10 ms
+});
+```
+
+The same tick function, fed by `createInputPlayback(input, recording)` instead of by hand, replays a recorded session to the same state (see the previous section).
+
+## Fake the host
+
+`createFakeHost(opts?)` returns a full `Host`: storage in memory, a lifecycle you move with `setState`, haptics, links and copies written down, a safe area you set, fullscreen and wake-lock stubs that record their calls, and frames that run only when you call `runFrame()`. Use it to test the code that reacts to the platform, such as autosaving when the app goes to the background:
+
+```ts
+import { createSaveStore, s } from '@thunderclap/engine/save';
+import { createFakeHost } from '@thunderclap/engine/testing';
+import { expect, it } from 'vitest';
+
+it('saves when the app is backgrounded and buzzes once', () => {
+  const host = createFakeHost();
+  const open = () =>
+    createSaveStore({
+      game: 'my-game',
+      slot: 'main',
+      version: 1,
+      defaults: () => ({ coins: 0 }),
+      schema: s.object({ coins: s.number({ min: 0, int: true }) }),
+      storage: host.storage.open()!,
+      debounceMs: 60_000, // nothing is written until a flush
+      autoFlush: false,
+    });
+  const save = open();
+  host.lifecycle.watch((state) => {
+    if (state === 'background') {
+      save.flush();
+      host.haptics.impact('light');
+    }
+  });
+
+  save.update((d) => ({ coins: d.coins + 5 }));
+  expect(open().get().coins).toBe(0);
+  host.setState('background');
+  expect(open().get().coins).toBe(5);
+  expect(host.hapticCalls).toEqual([{ op: 'impact', style: 'light' }]);
+});
+```
+
+`host.runFrame()` runs the frames requested so far, one display frame per call, so a `GameLoop` built with `{ frames: host }` advances only when the test says. `createGame` itself does not run headless yet: it mounts a canvas and boots WebGPU, so test the game's own logic with these pieces and the page with the Playwright tests below.
 
 ## Test rendering on the fake GPU
 
