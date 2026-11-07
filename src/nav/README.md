@@ -321,8 +321,9 @@ within a movement budget, and the outline to draw around them.
   is points `loopStart[k]` to `loopStart[k + 1] - 1`, world `x, y, z` triples.
 
 On a 100×100 quad mesh (10 000 polygons), the whole-mesh reach takes 1.3 ms best and 3.4 ms
-median on an M-series laptop under load (`mesh-reach-bench.test.ts`, which asserts the best under
-2 ms); a budget of 12 (401 polygons) takes 0.06 ms and its outline 0.004 ms.
+median on an M-series laptop under load (`mesh-reach-bench.test.ts`, which asserts the best of
+101 runs under 4 ms, about 3× the unloaded time, so a loaded machine passes and a real regression
+fails; ws/nav-6 measured best 1.1–2.6 ms and median up to 9.9 ms at load 25–29); a budget of 12 (401 polygons) takes 0.06 ms and its outline 0.004 ms.
 
 ## Off-mesh links
 
