@@ -171,7 +171,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Docs modules: every module README opens with purpose, a checked *Quick use* and *Entry points*; contents lists; false statements fixed | ws/docs-modules | brief `docs/briefs/docs-modules.md` | — | ✅ merged in E-031 train 13 (`98d0745`; main 36144e0) |
 | 5 | Harden API: `api/*.api.txt` surface snapshot plus `check:api`; audit of leaked internals and naming; safe fixes with aliases | ws/harden-api | brief `docs/briefs/harden-api.md` | — | ✅ merged in E-031 train 13 (`700f3e4`; main 36144e0) |
 | 5 | Comment sweep: stale code comments from the backlog plus a rename sweep; comments only | ws/comment-sweep | brief `docs/briefs/comment-sweep.md` | train 12 | ✅ merged in E-031 train 13 (`c6d511f`; main 36144e0) |
-| 5 | v1 API: E-036 plus ergonomics in core, ui and input; replay mutes pointers | ws/api-core | brief `docs/briefs/api-core.md` | after train 13 | 🔵 running |
+| 5 | v1 API: E-036 plus ergonomics in core, ui and input; replay mutes pointers | ws/api-core | brief `docs/briefs/api-core.md` | after train 13 | 🟡 `d698e90` done (check green, snap 0, 9 specs green); renaming input `RayHit` → `PickHit` (collides with geom), then train 15 |
 | 5 | v1 API: E-036 plus ergonomics in render, post and fx | ws/api-render | brief `docs/briefs/api-render.md` | after train 13 | 🟣 done at `60c5980` (E-036 plus ergonomics in render, post and fx; snap 0, 11 specs green). Train 14 |
 | 5 | v1 API: E-036 in the other 12 modules; templates build; create-game installable | ws/api-rest | brief `docs/briefs/api-rest.md` | after train 13 | 🟣 done at `c02996e` (check 2322, snap 0, templates build offline; all area specs green). Train 14 |
 | 5 | arpg demo on `place` maps, `ctx.replay` and object blur | ws/adoption-6 | brief `docs/briefs/adoption-6.md` | after train 13 | 🟣 done at `ded218b` (arpg on `place` maps and `ctx.replay`; object blur blocked → render-10; arpg 82, snap 0). Train 14 or 15 |
@@ -442,6 +442,19 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
   - Wish: `ctx.replay`'s input sink is 0×0, so a touch stick can't replay. → core-8.
   - Wish: overlay (page-button) events can't be recorded. → core-8 or input-12.
   - The dungeon meter could use `place`. → next adoption.
+- ws/api-core notes:
+  - Renames:
+    - input: `PickHit` (was `Hit`), `RayBox`, `Edges`, `SnapGrid`, `FollowSubject`, and getters `gestures`/`pointers`/`look`/`listening`/`contexts`
+    - ui: `WidgetCooldown`, `GridCell`, `prefersReducedMotionIn`
+    - core: `SceneStack.scenes`
+  - New:
+    - `ctx.setCamera`, with `ctx.camera` as a live getter
+    - `createGame({ theme, textScale })`
+    - anchors and floats default to the game camera; in VR the router camera is the head
+    - typed touch zones; contexts can add actions; `planeTester` takes a `RayPlane`
+  - Replay mutes pointers, and `mute()` returns a remover.
+  - Wishes: widen `Bindings<A>` to Partial for typed context actions; tighten `EngineCtx` `P = any`.
+  - Lesson: parallel rename streams must publish their picks before committing. → common.md note.
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
