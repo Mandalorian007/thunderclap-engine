@@ -690,6 +690,14 @@ describe('ParticleSystem extended kernel', () => {
     expect(PARTICLE_COLLIDE_WGSL).not.toContain('hit - ray * 1e-3');
   });
 
+  it('collide takes the surface normal from pixel centres, not from the sub-pixel hit', () => {
+    // Differences from `hit` tilted a resting drop's normal by a fixed amount and slid it
+    // 0.13 units/s across the fx3 slab (ws/fx-6, read back with debugReadback); 0.0008 after.
+    expect(PARTICLE_COLLIDE_WGSL).not.toContain('dims) - hit');
+    expect(PARTICLE_COLLIDE_WGSL).toContain('let c = scene_at(px, dims);');
+    expect(PARTICLE_COLLIDE_WGSL).toContain('select(lx, rx, dot(rx, rx) < dot(lx, lx))');
+  });
+
   it('pins the extended kernels: the world kernel carries the force step, the 2D legacy one does not', () => {
     for (const name of ['attract', 'vortex', 'curl', 'surface_tri', 'subspawn', 'advance']) {
       expect(PARTICLE_WORLD_COMPUTE_WGSL).toContain(name);
@@ -700,7 +708,7 @@ describe('ParticleSystem extended kernel', () => {
     expect(PARTICLE_COLLIDE_WGSL).toContain('thickness');
     expect(hash(PARTICLE_WORLD_COMPUTE_WGSL)).toMatchInlineSnapshot(`"fb795e2c"`);
     expect(hash(PARTICLE_EXT_COMPUTE_WGSL)).toMatchInlineSnapshot(`"95490997"`);
-    expect(hash(PARTICLE_COLLIDE_WGSL)).toMatchInlineSnapshot(`"4c271825"`);
+    expect(hash(PARTICLE_COLLIDE_WGSL)).toMatchInlineSnapshot(`"825d24ed"`);
   });
 
   it('sub-emission: interns onDeath/onLife descriptors one level deep and dispatches subspawn', () => {

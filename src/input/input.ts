@@ -236,6 +236,13 @@ export interface InputFeedHook {
   releaseAll(): void;
   /** Called once per `update()` with the pads `getGamepads` returned; what it returns is used. */
   gamepads(pads: readonly (GamepadLike | null)[]): readonly (GamepadLike | null)[];
+  /**
+   * Replace this tick's pads before anything reads them (ws/input-9): called once per `update()`,
+   * before gestures and a linked look advance, with the pads `getGamepads` returned. A playback
+   * returns its recorded snapshot here, so the linked look turns from the recorded sticks too.
+   * `gamepads` then sees what this returned.
+   */
+  padSource?(pads: readonly (GamepadLike | null)[]): readonly (GamepadLike | null)[];
   /** Sees every `rumble` call (ws/input-3), after defaults are applied. */
   rumble?(strong: number, weak: number, ms: number, pad: number | undefined): void;
   /**
@@ -463,6 +470,8 @@ export class Input<A extends string> {
   private boundMouse = new Set<number>();
   private boundWheel = false;
   private pads: readonly (GamepadLike | null)[] = [];
+  /** `this.pads`, bound once, for a linked look (`Look.padsFromInput`). */
+  private readonly readTickPads = (): readonly (GamepadLike | null)[] => this.pads;
   /** Keys and mouse buttons that were down or tapped on the last tick. */
   private readonly prevKeys = new Set<string>();
   private readonly prevButtons = new Set<number>();
@@ -576,6 +585,7 @@ export class Input<A extends string> {
       this.look.keyHeld = null;
       this.look.orbitFromInput = false;
       this.look.pointerTransform = null;
+      this.look.padsFromInput = null;
     }
     this.look = look;
     this.wireClaim();
@@ -585,6 +595,8 @@ export class Input<A extends string> {
     // Orbit drags come through this input's own pointer feed, so recordings capture them.
     look.orbitFromInput = true;
     look.pointerTransform = this.transform;
+    // Its pad stick reads this tick's pads, recorded and replayed with the rest (ws/input-9).
+    look.padsFromInput = this.readTickPads;
     if (this.attached) look.attach(this.attached.pointerTarget, this.dispatcherValue ?? undefined);
   }
 
@@ -1071,12 +1083,19 @@ export class Input<A extends string> {
 
   /** Advance one tick: poll gamepads, compute edges, clear per-tick accumulators. */
   update(): void {
+    // The pads are read first, so a linked look turns from the same snapshot the action map
+    // reads and a recorder writes down (ws/input-9), and a playback's replace both.
+    let pads = this.getGamepads();
+    const hooks = this.feedHooks;
+    for (let i = 0; i < hooks.length; i++) {
+      const src = hooks[i]!.padSource;
+      if (src) pads = src(pads);
+    }
+    this.pads = pads;
     this.gestures?.update();
     this.look?.update();
     this.pointers?.poll();
     const blocked = this.blocked();
-    let pads = this.getGamepads();
-    const hooks = this.feedHooks;
     for (let i = 0; i < hooks.length; i++) pads = hooks[i]!.gamepads(pads);
     this.pads = pads;
     this.tick++;

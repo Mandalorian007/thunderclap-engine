@@ -10,13 +10,30 @@
  * Version 2 (ws/input-5) adds the `ptr` lane (every pointer the dispatcher saw, so touch zones,
  * gestures and a second thumb replay) and the observational `cx` and `cs`. Version 3
  * (ws/input-7) stamps each `ptr` entry with its time, so a replayed tap, long-press or
- * double-tap classifies as it did live. Versions 1 and 2 still parse and play.
+ * double-tap classifies as it did live. Versions 1 and 2 still parse and play. A recording may
+ * carry `tickMs`, its tick spacing (ws/input-9), which a playback given a tick `clock` advances
+ * it by per fed tick, so a replay at any `speed` keeps game time.
  */
+import { type TickClock, wallClock } from './clock';
 import type { Input, InputFeedHook, InputPointerPhase } from './input';
 import type { GamepadLike, PointerState } from './types';
 
-const defaultNow = (): number =>
-  typeof performance !== 'undefined' ? performance.now() : Date.now();
+/** The linked gestures' clock, else the linked look's, else the wall clock. */
+function linkedClock<A extends string>(input: Input<A>): () => number {
+  const g = input.getGestures();
+  if (g) return g.now;
+  const look = input.getLook();
+  if (look) return () => look.clock.now();
+  return wallClock.now;
+}
+
+/** True when neither the linked gestures nor the linked look has a clock of its own. */
+function onWallClock<A extends string>(input: Input<A>): boolean {
+  const g = input.getGestures();
+  if (g) return g.clock === wallClock;
+  const look = input.getLook();
+  return !look || look.clock === wallClock;
+}
 
 /** One gamepad as recorded: button values (1 when `pressed`) and axes. `null` for an empty slot. */
 export type PadSnapshot = { buttons: number[]; axes: number[] } | null;
@@ -96,6 +113,13 @@ export interface InputRecording {
   /** 3 from ws/input-7 (`ptr` entries carry `time`); 2 (ws/input-5: `ptr`, `cx`, `cs`) and 1 still read. */
   version: 1 | 2 | 3;
   ticks: InputTick[];
+  /**
+   * Ms between ticks while recording (ws/input-9): the mean spacing on the recorder's clock
+   * (exactly the fixed step on a `createTickClock()`), or `Input.tickMs` when the recorder ran on
+   * the wall clock. A playback given a `clock` advances it by this per fed tick. Absent in
+   * recordings made before ws/input-9 and in a recording of no ticks.
+   */
+  tickMs?: number;
 }
 
 export interface InputRecorderOptions {
@@ -103,7 +127,9 @@ export interface InputRecorderOptions {
   pads?: boolean;
   /**
    * The clock pointer `time`s are stamped on (ws/input-7). Default: the clock of the gestures
-   * linked to the input when the recorder is made (`Gestures.now`), else `performance.now()`.
+   * linked to the input when the recorder is made (`Gestures.now`), else the linked look's
+   * (`Look.clock`, ws/input-8), else `performance.now()`. With a `createTickClock()` shared by
+   * gestures and look, times are game time.
    */
   now?: () => number;
 }
@@ -126,11 +152,27 @@ export interface InputPlaybackOptions {
   /** Ticks fed per `step()`. Default 1. See `InputPlayback.speed`. */
   speed?: number;
   /**
-   * The clock recorded pointer `time`s replay on (ws/input-7). Default: the clock of the
-   * gestures linked to the input when the playback is made (`Gestures.now`), else
-   * `performance.now()`.
+   * The clock recorded pointer `time`s replay on (ws/input-7). Default: `clock` when given, else
+   * the clock of the gestures linked to the input when the playback is made (`Gestures.now`),
+   * else the linked look's (`Look.clock`, ws/input-8), else `performance.now()`. On a
+   * `createTickClock()` the replay is the same on every tick index whatever the wall time
+   * between `step()`s.
    */
   now?: () => number;
+  /**
+   * A tick clock the playback drives (ws/input-9): every fed tick advances it by `tickMs`, after
+   * the tick's events are fed and before its `update()`, as a fixed step does live. So
+   * `speed: 4` advances it 4 × `tickMs` per `step()`, and a long-press fires on the same recorded
+   * tick at any speed. Pass the clock the input's gestures and look run on, and stop advancing it
+   * from the game's own step while the playback is installed (`InputPlayback.clock` says which
+   * clock it drives). Omitted, the playback advances nothing (the default, as before).
+   */
+  clock?: TickClock;
+  /**
+   * Ms a fed tick advances `clock` by. Default: the recording's `tickMs`, else the input's
+   * `Input.tickMs` (for recordings made before ws/input-9).
+   */
+  tickMs?: number;
 }
 
 export interface InputPlayback {
@@ -151,6 +193,10 @@ export interface InputPlayback {
   seek(tick: number): void;
   /** Ticks per `step()` (an integer of at least 1). */
   speed: number;
+  /** The tick clock this playback advances per fed tick (`InputPlaybackOptions.clock`), or null. */
+  readonly clock: TickClock | null;
+  /** Ms each fed tick advances `clock` by (`InputPlaybackOptions.tickMs`, resolved). */
+  readonly tickMs: number;
   /** Uninstall the hook; `input.playback` is null again. */
   detach(): void;
 }
@@ -186,8 +232,10 @@ export function createInputRecorder<A extends string>(
 ): InputRecorder {
   const capturePads = opts.pads !== false;
   const recording: InputRecording = { version: 3, ticks: [] };
-  const clock = opts.now ?? input.getGestures()?.now ?? defaultNow;
+  const clock = opts.now ?? linkedClock(input);
   const start = clock();
+  /** The spacing is measured on the recorder's clock unless that is the wall clock. */
+  const measure = opts.now !== undefined || !onWallClock(input);
   /** ms since `start`, `age` ms ago, to 0.01 ms. */
   const stamp = (age: number): number => Math.round((clock() - age - start) * 100) / 100;
   /** Pointers down (by id), for turning a blur into cancels. */
@@ -305,6 +353,8 @@ export function createInputRecorder<A extends string>(
         else recording.ticks.push({ t, n: 1 });
       }
       t++;
+      const ms = measure ? (clock() - start) / t : input.tickMs;
+      if (ms > 0 && Number.isFinite(ms)) recording.tickMs = ms;
     },
     stop() {
       remove();
@@ -391,7 +441,9 @@ export function createInputPlayback<A extends string>(
   let speed = Math.max(1, Math.floor(opts.speed ?? 1));
   /** Replayed pointers still down, cancelled on `seek`. */
   const live = new Map<number, InputPointerEntry>();
-  const clock = opts.now ?? input.getGestures()?.now ?? defaultNow;
+  const driven = opts.clock ?? null;
+  const clock = opts.now ?? (driven ? () => driven.now() : linkedClock(input));
+  const tickMs = positive(opts.tickMs) ?? positive(recording.tickMs) ?? input.tickMs;
   /**
    * The clock reading that recorded time 0 maps to, set by the first timed entry fed (which then
    * happens as it is fed, as a live event is handled just before its tick's update) and again
@@ -434,13 +486,16 @@ export function createInputPlayback<A extends string>(
         else input.keyUp(code);
       }
     }
+    // The pointer moves before the buttons (ws/input-8), as a DOM pointer event sets the
+    // position before its button: an orbit look's drag then starts where the press was, not at
+    // the previous position.
+    if (e.p && !e.d) input.pointerAt(e.p[0], e.p[1], e.p[2] ?? 'mouse');
     if (e.b) {
       for (const [button, down] of e.b) {
         if (down) input.buttonDown(button);
         else input.buttonUp(button);
       }
     }
-    if (e.p && !e.d) input.pointerAt(e.p[0], e.p[1], e.p[2] ?? 'mouse');
     if (e.w) input.wheel(e.w[0], e.w[1]);
     if (e.ptr) for (const p of e.ptr) replayPointer(p);
     if (e.g) pads = e.g.map(padFromSnapshot);
@@ -454,16 +509,23 @@ export function createInputPlayback<A extends string>(
     wheel: noop,
     pointerAt: noop,
     releaseAll: noop,
+    padSource: () => pads,
     gamepads: () => pads,
+  };
+
+  /** Feed one tick, then advance the driven clock past it, as a live fixed step does. */
+  const feedAndAdvance = (): void => {
+    feedTick();
+    driven?.advance(tickMs);
   };
 
   const pb: InputPlayback = {
     step() {
       if (tick >= length) return false;
-      feedTick();
+      feedAndAdvance();
       for (let i = 1; i < speed && tick < length; i++) {
         input.update();
-        feedTick();
+        feedAndAdvance();
       }
       return true;
     },
@@ -495,6 +557,8 @@ export function createInputPlayback<A extends string>(
     set speed(v) {
       speed = Math.max(1, Math.floor(v));
     },
+    clock: driven,
+    tickMs,
     detach() {
       remove();
       if (input.playback === pb) input.playback = null;
@@ -506,6 +570,10 @@ export function createInputPlayback<A extends string>(
 }
 
 function noop(): void {}
+
+function positive(v: number | undefined): number | undefined {
+  return v !== undefined && v > 0 && Number.isFinite(v) ? v : undefined;
+}
 
 function padFromSnapshot(s: PadSnapshot): GamepadLike {
   if (!s) return DISCONNECTED;
@@ -545,6 +613,12 @@ export function parseRecording(source: string | unknown): InputRecording {
   if (version !== 1 && version !== 2 && version !== 3)
     throw new InputRecordingError(`unsupported version ${String(v.version)}`);
   if (!Array.isArray(v.ticks)) throw new InputRecordingError('ticks is not an array');
+  if (
+    v.tickMs !== undefined &&
+    !(typeof v.tickMs === 'number' && v.tickMs > 0 && Number.isFinite(v.tickMs))
+  ) {
+    throw new InputRecordingError('bad tickMs');
+  }
   let next = 0;
   v.ticks.forEach((e, i) => {
     if (!isObject(e) || typeof e.t !== 'number' || e.t !== next) {

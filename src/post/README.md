@@ -200,11 +200,9 @@ The stack reads the frame from `PostInputs` only: nothing in src/post reads `ren
 (a test greps for it).
 
 - **TAA on camera jitter.** `PostStack.wantsJitter` is true while `taa.enabled` and
-  `quality.taa`, so the renderer applies the camera's jitter to the projection. The stack
-  cannot see the camera, so `addJitterCamera(camera): this` registers the cameras it steps:
-  each TAA frame it calls `camera.setJitter(...taa.jitter(i))` through the Halton (2, 3)
-  cycle, and when TAA stops it calls `clearJitter()` once and restarts the cycle.
-  `removeJitterCamera(camera): this` unregisters a camera and clears its jitter. The
+  `quality.taa`, so the renderer applies the camera's jitter to the projection. (Since
+  ws/post-6 the stack drives the jitter through `renderer.setJitter`, see Post 6; the
+  post-4 `addJitterCamera` / `removeJitterCamera` are deprecated no-ops.) The
   reprojection is `taaReprojection(out, view.previousViewProj, view.invViewProj)`, and the
   resolve samples the colour, the neighbourhood and the depth at `uv + view.jitter / size`,
   so the history holds the unjittered image. The old sample-UV jitter is gone. With no
@@ -253,6 +251,27 @@ feature against a reference stack with the feature off, read back from the GPU, 
   velocity under the still camera, read against the TAA-off frame with `'camera'`
   (`ghostObjectCamera`) and `'velocity'` (`ghostObject`); `e2e/post4.spec.ts` wants the
   velocity ghost at most half the camera one.
+
+### Post 6 (ws/post-6)
+
+- **Jitter source.** While TAA runs (`wantsJitter`), the stack hands the renderer its Halton
+  (2, 3) sequence through `renderer.setJitter(fn)` from its first TAA frame, so every camera
+  the renderer draws is jittered. When TAA stops (`taa.enabled` or
+  `quality.taa` off) or on `destroy()`, it calls `renderer.setJitter(null)` once, which clears
+  the jitter and restarts the cycle. A hook someone else sets while TAA runs is left alone
+  until TAA stops. Nothing in src/post calls `Camera.setJitter` (a test greps for it).
+  `addJitterCamera` / `removeJitterCamera` are deprecated no-ops.
+- **History filter.** `TaaSettings.historyFilter: TaaHistoryFilter` (`'catmull-rom'` default,
+  or `'bilinear'`). `'catmull-rom'` samples the history with a 5-tap Catmull-Rom (the two
+  middle taps per axis folded into one bilinear tap, the corners dropped, normalised by the
+  weights; `taaCatmullRomWeights(f)` is the CPU twin of the weights) before the 3×3 clamp,
+  so a sub-pixel move no longer softens the history a little every frame. `'bilinear'` is the
+  ws/post-5 sample. Packed into `taa3.z`; `POST_UNIFORM_FLOATS` is unchanged (192).
+- `harness/post4.html?taa` adds a sub-pixel phase: the striped cube creeps 0.37 px a frame
+  with the jitter on, and a bilinear twin stack resolves the same frames as the Catmull-Rom
+  one. `blurSubpixel*` is the share of horizontal gradient energy over the cube lost against
+  the TAA-off frame, `ghostSubpixel*` the mean difference beside it. `e2e/post4.spec.ts`
+  wants less blur with Catmull-Rom than bilinear and no more ghost.
 
 ## Notes
 
@@ -306,7 +325,8 @@ texture; `renderer.endFrame({ present: false })` then only submits. Inside `enco
   `fxaa: FxaaSettings`, `lut: LutSettings`, `grain: GrainSettings`, `aberration:
   AberrationSettings`, `sharpen: SharpenSettings`, `outline: OutlineSettings`, and the post-3
   sections `taa: TaaSettings` (its `reprojection` a `TaaReprojection`, `'camera' |
-  'velocity'`, ws/post-5), `ssr: SsrSettings`, `exposure: ExposureSettings`,
+  'velocity'`, ws/post-5; its `historyFilter` a `TaaHistoryFilter`, `'bilinear' |
+  'catmull-rom'`, ws/post-6), `ssr: SsrSettings`, `exposure: ExposureSettings`,
   `whiteBalance: WhiteBalanceSettings`, `motionBlur: MotionBlurSettings` (its `mode` a
   `MotionBlurMode`, `'camera' | 'object'`, ws/post-4). `RGB` is
   `[r, g, b]`. `LutSize` is `16 | 32`; `LutFn` is `(r, g, b) => readonly [r, g, b]`.

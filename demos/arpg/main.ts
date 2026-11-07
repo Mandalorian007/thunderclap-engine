@@ -3,8 +3,8 @@
  * courtyard at dusk clicks (or taps, or holds, or sticks) to move over a baked navmesh, cuts
  * down ghouls that path in with crowd separation, and swaps between three gear sets on sockets.
  *
- * - Scene: `courtyard.ts`, prop kinds as `InstanceList`s of `geom` meshes on PBR stone (walls
- *   and pillars as `MeshLod` chains drawn per instance),
+ * - Scene: `courtyard.ts`, prop kinds as `InstanceList`s of `geom` meshes on PBR stone (walls,
+ *   pillars and drums as lists on `MeshLod` chains, ws/render-6),
  *   six braziers with emissive cores, additive flame particles and a flickering point light
  *   each, a low warm sun with a shadow map, bloom, AO, vignette and a saturated grade.
  * - Hero: the skinned rig on `createStandardMaterial({ skin })`, an anim graph (a 1D idle/run
@@ -13,13 +13,13 @@
  *   `followPath3`, steered with a turn rate; a held pointer re-picks every 0.2 s.
  * - Enemies: twelve ghouls on the same skeleton (one `InstanceList`, one `SkinPalette`), each
  *   with its own mixer and graph, replanning a `NavPath3` toward the hero and stepping through
- *   `createCrowd`, each body a two-level `MeshLod`. Three hits kill; a death burns away on a
+ *   `createCrowd`, the live ones one `InstanceList` on a two-level `MeshLod`. Three hits kill; a death burns away on a
  *   pooled `dissolve` material (shadow included), bursts and respawns at the edge after 3 s.
  * - HUD: health and mana orbs (`ui.meter({ shape: 'orb', trail: true })`), a four-slot ability
  *   row with cooldown sweeps, gear buttons, anchored health bars, floating damage numbers
  *   (`ui.floats(camera)`, the third hit on a ghoul a crit) and a north-up minimap of the whole
- *   courtyard (`ui.minimap`) with ghouls and braziers as marker kinds: a tap on it walks the
- *   hero there over the same navmesh path as a ground click.
+ *   courtyard (`ui.minimap`) with ghouls (arrows on their `heading`) and braziers as marker
+ *   kinds: a tap on it walks the hero there over the same navmesh path as a ground click.
  *
  * `?still` parks the idle bob, the flame flicker and the enemy AI; `?seed=N` fixes the spawns.
  */
@@ -125,6 +125,7 @@ const state: ArpgDemoState = {
   seed: SEED,
   still: STILL,
   gpuErrors: 0,
+  centreSeam: null,
 };
 demoWindow.__demo = state;
 
@@ -560,6 +561,8 @@ async function main(): Promise<void> {
     ],
     thresholdsPx: GHOUL_LOD_PX,
   };
+  /** The live ghouls as one LOD `InstanceList` (ws/render-6), refilled each frame. */
+  const ghouls = renderer.createInstanceList(ghoulLod, ghoulMat, ENEMY_COUNT);
   const idleClip = createIdleClip();
   const runClip = createRunClip();
   const attackClip = createAttackClip();
@@ -899,7 +902,8 @@ async function main(): Promise<void> {
     shape: 'round',
     background: paintCourtyard(document, HALF, DAIS, yard.braziers),
     kinds: {
-      ghoul: { shape: 'dot', color: 'var(--tc-color-danger)', size: 7 },
+      // ws/ui-7: an arrow turned to each ghoul's facing (`heading`, as the hero's yaw).
+      ghoul: { shape: 'arrow', color: 'var(--tc-color-danger)', size: 12 },
       brazier: { shape: 'diamond', color: '#ffb14a', size: 9 },
     },
     // The phone rails are 56 px: there the map takes the card lane beside or under the world.
@@ -936,6 +940,7 @@ async function main(): Promise<void> {
       const m = ghoulMarkers[i]!;
       m.x = e.x;
       m.z = e.z;
+      m.heading = e.yaw;
       mapMarkers.push(m);
     }
     map.setMarkers(mapMarkers);
@@ -1447,13 +1452,16 @@ async function main(): Promise<void> {
       palette.flush();
       for (const l of yard.lists) frame.list(l);
       frame.list(yard.flames);
-      for (const p of yard.lods) {
-        for (const t of p.transforms) frame.mesh(p.lod, p.material, t, p.params);
-      }
+      for (const l of yard.lods) frame.list(l);
+      // Live ghouls: one LOD list, refilled in place (its level memory is per index, so a
+      // death shifts the later ghouls' hysteresis once). A burning one is alone on its pooled
+      // dissolve material.
+      ghouls.clear();
       for (const e of enemies) {
-        if (e.alive) frame.mesh(ghoulLod, ghoulMat, e.t, e.params);
+        if (e.alive) ghouls.set(ghouls.count, e.t, e.params);
         else if (e.burn >= 0) frame.mesh(ghoulLod, burns[e.burn]!.mat, e.t, e.params);
       }
+      frame.list(ghouls);
       frame.mesh(heroMesh, heroMat, hero.t, heroP);
       const s = sets[gear]!;
       frame.mesh(s.helmet, s.armour, helmT, gearP);
@@ -1504,9 +1512,39 @@ async function main(): Promise<void> {
     },
   };
 
+  /**
+   * `?still`: once, on frame SEAM_FRAME, read columns c-4..c+4 of the canvas (c its centre, 640
+   * on desktop-1280) back in the frame's own task and publish column c's mean brightness less
+   * the mean of columns c-4 and c+4 (`centreSeam`). Setup-time scratch: one 9-px-wide canvas.
+   */
+  const SEAM_FRAME = 60;
+  const measureSeam = () => {
+    const w = canvas.width;
+    const h = canvas.height;
+    const c = Math.round(w / 2);
+    if (w < 16 || h < 1) return;
+    const probe = document.createElement('canvas');
+    probe.width = 9;
+    probe.height = h;
+    const g = probe.getContext('2d', { willReadFrequently: true });
+    if (!g) return;
+    g.drawImage(canvas, c - 4, 0, 9, h, 0, 0, 9, h);
+    const px = g.getImageData(0, 0, 9, h).data;
+    const col = (x: number) => {
+      let sum = 0;
+      for (let y = 0; y < h; y++) {
+        const o = (y * 9 + x) * 4;
+        sum += (px[o]! + px[o + 1]! + px[o + 2]!) / 3;
+      }
+      return sum / h;
+    };
+    state.centreSeam = col(4) - (col(0) + col(8)) / 2;
+  };
+
   let fps = 0;
   hooks.afterRender = (time) => {
     state.frame++;
+    if (STILL && state.frame === SEAM_FRAME) measureSeam();
     const dt = time.frameDt;
     if (dt > 0 && dt < 1) {
       const inst = 1 / dt;

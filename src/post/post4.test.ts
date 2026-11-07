@@ -82,37 +82,6 @@ describe('post 4: TAA on camera jitter (ws/post-4)', () => {
     expect(post.wantsJitter).toBe(false);
   });
 
-  it('steps the jitter camera through the Halton sequence and clears it when TAA stops', () => {
-    const { r, post, camera } = setup();
-    post.addJitterCamera(camera).addJitterCamera(camera);
-    deep(r, camera);
-    expect(camera.jitter).toEqual([0, 0]);
-    post.set({ taa: { enabled: true } });
-    const seen: string[] = [];
-    for (let i = 0; i < 8; i++) {
-      deep(r, camera, i / 60);
-      const [x, y] = camera.jitter;
-      const j = post.taa.jitter(i);
-      expect([x, y]).toEqual([j[0], j[1]]);
-      seen.push(`${x},${y}`);
-      expect(Math.abs(x)).toBeLessThanOrEqual(0.5);
-      expect(Math.abs(y)).toBeLessThanOrEqual(0.5);
-    }
-    expect(new Set(seen).size).toBe(8);
-    post.set({ taa: { enabled: false } });
-    deep(r, camera, 1);
-    expect(camera.jitter).toEqual([0, 0]);
-    // Back on: the sequence restarts.
-    post.set({ taa: { enabled: true } });
-    deep(r, camera, 2);
-    const j0 = post.taa.jitter(0);
-    expect(camera.jitter).toEqual([j0[0], j0[1]]);
-    post.removeJitterCamera(camera);
-    expect(camera.jitter).toEqual([0, 0]);
-    deep(r, camera, 3);
-    expect(camera.jitter).toEqual([0, 0]);
-  });
-
   it('packs the view jitter in uv and the reprojection from the view', () => {
     const out = new Float32Array(POST_UNIFORM_FLOATS);
     const s = defaultPostSettings();

@@ -270,6 +270,31 @@ export interface ParticleSystemOptions {
    * module default (`FX_DEFAULT_SEED`), named by creation order.
    */
   random?: Random;
+  /**
+   * Allow `debugReadback()` (ws/fx-6): the particle buffer gains `COPY_SRC` and a mapped
+   * staging buffer of the same size is made. Off (default): no staging buffer, no cost.
+   */
+  debug?: boolean;
+}
+
+/**
+ * What `ParticleSystem.debugReadback()` resolves to: the live particles (age < lifetime) at
+ * the copy, in slot order. Fresh arrays each call; a debugging aid, not a frame path.
+ */
+export interface ParticleReadback {
+  /** Live particles in the copy. */
+  alive: number;
+  /** xyz per live particle (`alive × 3`); 2D systems: logical px, z 0 on the original kernel. */
+  positions: Float32Array;
+  /** Velocity xyz per live particle (`alive × 3`), units per second. */
+  velocities: Float32Array;
+  /**
+   * The ring-buffer slot of each live particle. A slot keeps its particle until the ring wraps
+   * (`capacity` emits later), so two readbacks can be matched slot by slot.
+   */
+  slots: Uint32Array;
+  /** The system's simulated time (s, the sum of the clamped steps) when the copy was made. */
+  time: number;
 }
 
 const POINT: EmitShape = { kind: 'point' };
@@ -450,6 +475,9 @@ export class ParticleSystem implements Drawable {
   private readonly counter: AliveCounter | null = null;
   private readonly fx: Fx | null = null;
   private readonly collider: Collider | null = null;
+  /** `debug`: the staging buffer `debugReadback` copies the particles into. */
+  private readonly debugRead: GPUBuffer | null = null;
+  private debugPending: Promise<ParticleReadback> | null = null;
   /** Whether this frame's `prepare` copied scene depth (world space). */
   private softActive = false;
   /** The renderer's `depthCopy` view `hookGroup` was made for (`readsDepth`). */
@@ -499,9 +527,19 @@ export class ParticleSystem implements Drawable {
     this.particleBuffer = device.createBuffer({
       label: 'particles',
       size: this.capacity * (fx ? FX_PARTICLE_BYTES : PARTICLE_BYTES),
-      // COPY_DST: `clear()` zeroes it with `encoder.clearBuffer`.
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      // COPY_DST: `clear()` zeroes it with `encoder.clearBuffer`. COPY_SRC only for `debug`.
+      usage:
+        GPUBufferUsage.STORAGE |
+        GPUBufferUsage.COPY_DST |
+        (opts.debug ? GPUBufferUsage.COPY_SRC : 0),
     });
+    if (opts.debug) {
+      this.debugRead = device.createBuffer({
+        label: 'particles-debug-read',
+        size: this.particleBuffer.size,
+        usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+      });
+    }
     this.spawnData = new Float32Array(this.maxSpawns * this.spawnFloats);
     this.spawnBuffer = device.createBuffer({
       label: 'particle-spawns',
@@ -1498,7 +1536,47 @@ export class ParticleSystem implements Drawable {
     if (this.fx) this.fx.spawnTotal = 0;
   }
 
+  /**
+   * Copy the particle buffer into the staging buffer, map it and return the live particles
+   * (`debug: true` only; rejects otherwise). Never runs on its own. The copy is submitted at
+   * once, so call it outside a frame (after `endFrame`): it then holds every frame submitted so
+   * far. A call while one is in flight returns that one's promise.
+   */
+  debugReadback(): Promise<ParticleReadback> {
+    const read = this.debugRead;
+    if (!read) {
+      return Promise.reject(new Error('ParticleSystem.debugReadback needs `debug: true`'));
+    }
+    if (this.debugPending) return this.debugPending;
+    const enc = this.device.createCommandEncoder({ label: 'particles-debug-readback' });
+    enc.copyBufferToBuffer(this.particleBuffer, 0, read, 0, read.size);
+    this.device.queue.submit([enc.finish()]);
+    const time = this.time;
+    const done = (): void => {
+      this.debugPending = null;
+    };
+    this.debugPending = read.mapAsync(GPUMapMode.READ).then(
+      () => {
+        const out = parseParticles(
+          new Float32Array(read.getMappedRange(0, read.size)),
+          this.capacity,
+          this.extended,
+          time,
+        );
+        read.unmap();
+        done();
+        return out;
+      },
+      (err: unknown) => {
+        done();
+        throw err;
+      },
+    );
+    return this.debugPending;
+  }
+
   destroy(): void {
+    this.debugRead?.destroy();
     this.particleBuffer.destroy();
     this.spawnBuffer.destroy();
     this.simBuffer.destroy();
@@ -1523,6 +1601,49 @@ export class ParticleSystem implements Drawable {
     }
     this.collider?.uniform.destroy();
   }
+}
+
+/**
+ * The live particles of a particle buffer's floats. Layouts: the original kernel's 20 floats
+ * (`posVel`, c0, c1, `life` at 12), the extended kernel's 40 (`pos` at 0, `vel` at 4, `life`
+ * at 16). Live means age < lifetime, as `PARTICLE_COUNT_WGSL` counts.
+ */
+function parseParticles(
+  d: Float32Array,
+  capacity: number,
+  extended: boolean,
+  time: number,
+): ParticleReadback {
+  const stride = extended ? FX_PARTICLE_FLOATS : PARTICLE_BYTES / 4;
+  const lifeAt = extended ? 16 : 12;
+  let alive = 0;
+  for (let i = 0; i < capacity; i++) {
+    const o = i * stride + lifeAt;
+    if (d[o]! < d[o + 1]!) alive++;
+  }
+  const positions = new Float32Array(alive * 3);
+  const velocities = new Float32Array(alive * 3);
+  const slots = new Uint32Array(alive);
+  let n = 0;
+  for (let i = 0; i < capacity; i++) {
+    const o = i * stride;
+    if (!(d[o + lifeAt]! < d[o + lifeAt + 1]!)) continue;
+    slots[n] = i;
+    const k = n * 3;
+    positions[k] = d[o]!;
+    positions[k + 1] = d[o + 1]!;
+    if (extended) {
+      positions[k + 2] = d[o + 2]!;
+      velocities[k] = d[o + 4]!;
+      velocities[k + 1] = d[o + 5]!;
+      velocities[k + 2] = d[o + 6]!;
+    } else {
+      velocities[k] = d[o + 2]!;
+      velocities[k + 1] = d[o + 3]!;
+    }
+    n++;
+  }
+  return { alive, positions, velocities, slots, time };
 }
 
 /** Write `c0` and `c1` (default: `c0` with alpha 0) at `o`; returns the next offset. */

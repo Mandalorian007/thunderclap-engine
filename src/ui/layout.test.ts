@@ -150,6 +150,143 @@ describe('effectiveInsets', () => {
   });
 });
 
+describe('resolveLayout: content bars (ws/ui-8)', () => {
+  const occupied = new Set<RegionName>(['top', 'bottom']);
+  it('a content bar grows its track to the tallest widget plus pad; the fill gives it up', () => {
+    const ff: FormFactor = 'phone-landscape';
+    const fixed = resolveLayout(ff, formSpec(ff), 844, 390, undefined, occupied, { bottom: 128 });
+    expect(fixed.regions.bottom!.height).toBe(52); // fixed bars ignore content
+    const spec: LayoutSpec = { bars: { bottom: { size: 'content' } } };
+    const s = resolveLayout(ff, formSpec(ff, spec), 844, 390, undefined, occupied, { bottom: 128 });
+    expect(s.regions.bottom!.height).toBe(128 + 2 * defaultForms[ff].pad);
+    expect(s.regions.top!.height).toBe(52);
+    expect(s.freeRect.height).toBe(fixed.freeRect.height - (136 - 52));
+    expect(s.regions.bottom!.y + s.regions.bottom!.height).toBe(390);
+  });
+  it('never shrinks below the form track; max clamps; a form override wins over the spec', () => {
+    const ff: FormFactor = 'desktop';
+    const spec: LayoutSpec = {
+      bars: { top: { size: 'content' }, bottom: { size: 'content', max: 100 } },
+      forms: { tablet: { bars: { top: { size: 'fixed' } } } },
+    };
+    const s = resolveLayout(ff, formSpec(ff, spec), 1280, 720, undefined, occupied, {
+      top: 20,
+      bottom: 300,
+    });
+    expect(s.regions.top!.height).toBe(64);
+    expect(s.regions.bottom!.height).toBe(100);
+    expect(formSpec('tablet', spec).bars).toEqual({
+      top: { size: 'fixed' },
+      bottom: { size: 'content', max: 100 },
+    });
+    expect(formSpec('desktop').bars).toBeUndefined();
+  });
+  it('the bottom bar of phone-portrait grows its own row only', () => {
+    const ff: FormFactor = 'phone-portrait';
+    const spec: LayoutSpec = { bars: { bottom: { size: 'content' } } };
+    const s = resolveLayout(ff, formSpec(ff, spec), 375, 667, undefined, occupied, { bottom: 140 });
+    expect(s.rows[4]).toBe(148);
+    expect(s.regions.top!.height).toBe(56);
+  });
+});
+
+describe('resolveLayout: content rails and the corner rule (ws/ui-9)', () => {
+  it('a 96 px widget in a content left rail on a phone widens the rail; freeRect gives it up', () => {
+    const ff: FormFactor = 'phone-landscape';
+    const occupied = new Set<RegionName>(['left']);
+    const pad = defaultForms[ff].pad;
+    const fixed = resolveLayout(ff, formSpec(ff), 844, 390, undefined, occupied, { left: 96 });
+    expect(fixed.regions.left!.width).toBe(56); // fixed rails ignore content
+    const spec: LayoutSpec = { bars: { left: { size: 'content' } } };
+    const s = resolveLayout(ff, formSpec(ff, spec), 844, 390, undefined, occupied, { left: 96 });
+    const grow = 96 + 2 * pad - 56;
+    expect(s.regions.left!.width).toBe(96 + 2 * pad);
+    expect(s.freeRect.width).toBe(fixed.freeRect.width - grow);
+    expect(s.freeRect.x).toBe(fixed.freeRect.x + grow);
+    expect(s.freeRect.height).toBe(fixed.freeRect.height);
+  });
+  it('right rails grow their own column; never below the track; max clamps', () => {
+    const ff: FormFactor = 'phone-portrait';
+    const occupied = new Set<RegionName>(['left', 'right']);
+    const spec: LayoutSpec = {
+      bars: { left: { size: 'content' }, right: { size: 'content', max: 100 } },
+    };
+    const s = resolveLayout(ff, formSpec(ff, spec), 390, 844, undefined, occupied, {
+      left: 20,
+      right: 300,
+    });
+    expect(s.columns).toEqual([56, 390 - 156, 100]);
+    expect(s.regions.right!.x).toBe(290);
+    // No content at all: exactly the fixed layout.
+    const none = resolveLayout(ff, formSpec(ff, spec), 390, 844, undefined, occupied, {});
+    expect(none).toEqual(resolveLayout(ff, formSpec(ff), 390, 844, undefined, occupied));
+  });
+  it('the corner cell goes to the larger of a content bar and a content rail; a tie keeps it', () => {
+    const occupied = new Set<RegionName>(['top', 'left']);
+    const bars: LayoutSpec['bars'] = { top: { size: 'content' }, left: { size: 'content' } };
+    // phone-landscape: the left rail holds the corner by default; a taller top bar takes it.
+    let ff: FormFactor = 'phone-landscape';
+    let s = resolveLayout(ff, formSpec(ff, { bars }), 844, 390, undefined, occupied, {
+      top: 128,
+      left: 96,
+    });
+    expect(s.regions.top).toMatchObject({ x: 0, y: 0, height: 136 });
+    expect(s.regions.left).toMatchObject({ x: 0, y: 136, width: 104, height: 390 - 136 });
+    expect(overlaps(s.regions.top!, s.regions.left!)).toBe(false);
+    // A wider rail keeps it.
+    s = resolveLayout(ff, formSpec(ff, { bars }), 844, 390, undefined, occupied, {
+      top: 60,
+      left: 96,
+    });
+    expect(s.regions.left).toMatchObject({ x: 0, y: 0, height: 390 });
+    expect(s.regions.top!.x).toBe(104);
+    // desktop: the top bar holds the corner by default; a wider left rail takes it.
+    ff = 'desktop';
+    s = resolveLayout(ff, formSpec(ff, { bars }), 1280, 720, undefined, occupied, {
+      top: 100,
+      left: 250,
+    });
+    expect(s.regions.left).toMatchObject({ x: 0, y: 0, width: 274 });
+    expect(s.regions.top).toMatchObject({ x: 274, y: 0, height: 124 });
+    // A tie keeps the form's areas.
+    s = resolveLayout(ff, formSpec(ff, { bars }), 1280, 720, undefined, occupied, {
+      top: 250,
+      left: 250,
+    });
+    expect(s.regions.top).toMatchObject({ x: 0, width: 1280 });
+    // A fixed rail never takes the corner.
+    s = resolveLayout(
+      ff,
+      formSpec(ff, { bars: { top: { size: 'content' } } }),
+      1280,
+      720,
+      undefined,
+      occupied,
+      { top: 100, left: 250 },
+    );
+    expect(s.regions.top).toMatchObject({ x: 0, width: 1280 });
+  });
+  it('a swap that would split a region keeps the form cell (phone-portrait bottom-left)', () => {
+    const ff: FormFactor = 'phone-portrait';
+    const occupied = new Set<RegionName>(['bottom', 'left']);
+    const bars: LayoutSpec['bars'] = { bottom: { size: 'content' }, left: { size: 'content' } };
+    const s = resolveLayout(ff, formSpec(ff, { bars }), 390, 844, undefined, occupied, {
+      bottom: 40,
+      left: 120,
+    });
+    expect(s.regions.bottom).toMatchObject({ x: 0, width: 390 });
+    expect(s.regions.left!.width).toBe(128);
+    for (const a of GRID) {
+      for (const b of GRID) {
+        if (a === b) continue;
+        const ra = s.regions[a];
+        const rb = s.regions[b];
+        if (ra && rb) expect(overlaps(ra, rb), `${a}/${b}`).toBe(false);
+      }
+    }
+  });
+});
+
 describe('resolveLayout: region assignment per form factor', () => {
   for (const r of ROWS) {
     it(`${r.name}: all regions present, inside the safe area, no grid overlap`, () => {
@@ -538,6 +675,82 @@ describe('overlay.layout (DOM)', () => {
     expect(warn).toHaveBeenCalledTimes(2);
     warn.mockRestore();
     layout.destroy();
+  });
+
+  it('content bars hold a 128 px orb; a fixed bar reports it; max clamps and reports (ws/ui-8)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const sized = <T extends HTMLElement>(el: T, width: number, height: number): T => {
+      el.getBoundingClientRect = () =>
+        ({ x: 0, y: 0, left: 0, top: 0, right: width, bottom: height, width, height }) as DOMRect;
+      return el;
+    };
+    const pad = defaultForms['phone-landscape'].pad;
+    // A content bar: the bar grows to 128 + pad each side; nothing overflows.
+    let layout = make({ classify, bars: { bottom: { size: 'content' } } });
+    const free0 = layout.freeRect.height;
+    const orb = sized(h('div'), 128, 128);
+    layout.add(orb, { id: 'orb', place: { default: 'bottom' } });
+    expect(layout.state.regions.bottom!.height).toBe(128 + 2 * pad);
+    expect(layout.freeRect.height).toBeLessThan(free0);
+    expect(layout.overflows()).toEqual([]);
+    expect(warn).not.toHaveBeenCalled();
+    // The grid draws the same track the state reports.
+    expect(layout.element.style.gridTemplateRows.split(' ').at(-1)).toBe(`${128 + 2 * pad}px`);
+    ov!.destroy();
+    // A fixed bar keeps its 52 px and reports the orb.
+    layout = make({ classify });
+    layout.add(sized(h('div'), 128, 128), { id: 'orb', place: { default: 'bottom' } });
+    expect(layout.state.regions.bottom!.height).toBe(52);
+    expect(layout.overflows()).toMatchObject([{ id: 'orb', region: 'bottom', h: 128, rh: 44 }]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    ov!.destroy();
+    // `max` clamps the bar, and the orb taller than it still reports.
+    layout = make({ classify, bars: { bottom: { size: 'content', max: 100 } } });
+    layout.add(sized(h('div'), 128, 128), { id: 'orb', place: { default: 'bottom' } });
+    expect(layout.state.regions.bottom!.height).toBe(100);
+    expect(layout.overflows()).toMatchObject([{ id: 'orb', h: 128, rh: 100 - 2 * pad }]);
+    expect(warn).toHaveBeenCalledTimes(2);
+    ov!.destroy();
+    ov = null;
+    warn.mockRestore();
+  });
+
+  it('content rails hold a 96 px widget; max clamps and still reports; the grid draws the corner (ws/ui-9)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const sized = <T extends HTMLElement>(el: T, width: number, height: number): T => {
+      el.getBoundingClientRect = () =>
+        ({ x: 0, y: 0, left: 0, top: 0, right: width, bottom: height, width, height }) as DOMRect;
+      return el;
+    };
+    const pad = defaultForms['phone-landscape'].pad;
+    let layout = make({ classify, bars: { left: { size: 'content' } } });
+    const free0 = layout.freeRect.width;
+    layout.add(sized(h('div'), 96, 96), { id: 'orb', place: { default: 'left' } });
+    expect(layout.state.regions.left!.width).toBe(96 + 2 * pad);
+    expect(layout.freeRect.width).toBe(free0 - (96 + 2 * pad));
+    expect(layout.element.style.gridTemplateColumns.split(' ')[0]).toBe(`${96 + 2 * pad}px`);
+    expect(layout.overflows()).toEqual([]);
+    expect(warn).not.toHaveBeenCalled();
+    ov!.destroy();
+    // `max` caps the rail; the wider widget still reports.
+    layout = make({ classify, bars: { right: { size: 'content', max: 80 } } });
+    layout.add(sized(h('div'), 96, 96), { id: 'orb', place: { default: 'right' } });
+    expect(layout.state.regions.right!.width).toBe(80);
+    expect(layout.overflows()).toMatchObject([
+      { id: 'orb', region: 'right', w: 96, rw: 80 - 2 * pad },
+    ]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    ov!.destroy();
+    // A taller content top bar takes the left rail's corner, in the DOM grid too.
+    layout = make({ classify, bars: { top: { size: 'content' }, left: { size: 'content' } } });
+    layout.add(sized(h('div'), 96, 96), { id: 'orb', place: { default: 'left' } });
+    layout.add(sized(h('div'), 200, 128), { id: 'bar', place: { default: 'top' } });
+    expect(layout.state.regions.top).toMatchObject({ x: 0, height: 128 + 2 * pad });
+    expect(layout.state.regions.left!.y).toBe(128 + 2 * pad);
+    expect(layout.element.style.gridTemplateAreas.startsWith('"top top top right"')).toBe(true);
+    ov!.destroy();
+    ov = null;
+    warn.mockRestore();
   });
 
   it('device mode leaves the density tokens to the layout', () => {

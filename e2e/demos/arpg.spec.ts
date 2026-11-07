@@ -4,7 +4,8 @@
  * spot, a gear key and a gear button swap the set's materials without rebuilding the rig, three
  * strikes on an adjacent ghoul kill it (the third number a crit) and it burns away on a pooled
  * dissolve material, a tap on the minimap walks the hero there, zooming out puts the walls,
- * pillars and ghouls on more than one LOD level, and the desktop rows hold a playable frame rate.
+ * pillars and ghouls on more than one LOD level, no floor seam shows at screen centre at spawn
+ * (desktop-1280), and the desktop rows hold a playable frame rate.
  *
  * `?still&seed=3` parks the enemy AI and fixes the spawns so the interaction rows are
  * deterministic; every wait is a poll on `window.__demo`, never a sleep.
@@ -16,7 +17,7 @@ import { HARNESS_URL } from '../ports';
 const URL = `${HARNESS_URL}demos/arpg/`;
 
 /**
- * Scene lists (~10), LOD props (walls, pillars, drums, ghouls: one draw per level in view), hero,
+ * Scene lists (~10), LOD lists (walls, pillars, drums, ghouls: one draw per level in view), hero,
  * four gear pieces, trail and particles, plus shadow and post passes.
  */
 const DRAW_CALLS_MIN = 10;
@@ -195,6 +196,19 @@ test.describe('demo: arpg', () => {
     const s = await read(page);
     expect(s.drawCalls).toBeLessThanOrEqual(DRAW_CALLS_MAX);
     expect(s.gpuErrors).toBe(0);
+    expect(errors).toEqual([]);
+  });
+
+  test('no floor seam at screen centre at spawn', async ({ page }, info) => {
+    test.skip(info.project.name !== 'desktop-1280', 'measured on desktop-1280 (column 640)');
+    const { errors } = await boot(page, '?still&seed=3');
+    // Read back once, on frame 60, in the frame's own task: poll until it is published.
+    await expect
+      .poll(async () => (await read(page)).centreSeam, { timeout: 15_000 })
+      .not.toBeNull();
+    const s = await read(page);
+    // Column 640 less the mean of 636 and 644: the old grout gap at x = 0 read about +69.
+    expect(s.centreSeam!).toBeLessThan(10);
     expect(errors).toEqual([]);
   });
 
