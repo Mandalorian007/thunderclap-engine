@@ -178,6 +178,8 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Testing kit: fake host, fixed clock, headless `createTestGame` in `./testing` | ws/testing-kit | brief `docs/briefs/testing-kit.md` | train 14 | ✅ merged in E-031 train 14 (`7089b86`; main a147d20) |
 | 5 | Aux-aware scene pipelines: velocity on stops breaking particles, sky, decals and water | ws/render-10 | brief `docs/briefs/render-10.md` | train 15 | 🟣 done at `2cf8e4b` (`renderer.sceneTargets`; pipelines keyed per depth × aux; gpuErrors 0; 7 specs green). Train 15 |
 | 5 | glTF sun `direction`; anim `skinPose` one-call skinning | ws/assets-4 | brief `docs/briefs/assets-4.md` | train 15 | 🟣 done at `a700f83` (`skinPose`; gltf `SunLight.direction`; allocation-free `skinMatrices`; gltf, gltf3 and skin green). Train 15 |
+| 5 | v1 docs: README front door, guide pass, migration guide, deprecated-name check on snippets | ws/docs-v1 | brief `docs/briefs/docs-v1.md` | after train 15 | ⏳ queued |
+| 5 | v1 templates and demos: no deprecated names (lint), third-person on `skinPose`, template READMEs and tests | ws/templates-v1 | brief `docs/briefs/templates-v1.md` | after train 15 | ⏳ queued |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
