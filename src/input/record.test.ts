@@ -198,7 +198,7 @@ describe('input recording and replay', () => {
 
   it('records deltas only: runs for idle ticks, pads only when they change', () => {
     const { recording } = record();
-    expect(recording.version).toBe(2);
+    expect(recording.version).toBe(3);
     expect(recording.ticks.length).toBeLessThan(STEPS.length);
     // Ticks 4..6: events, then two idle ticks as one run.
     const run = recording.ticks.find((t) => 'n' in t && t.t === 5);
@@ -239,7 +239,7 @@ describe('input recording and replay', () => {
   });
 
   it('parseRecording rejects a bad version and malformed ticks', () => {
-    expect(() => parseRecording('{"version":3,"ticks":[]}')).toThrow(/version/);
+    expect(() => parseRecording('{"version":4,"ticks":[]}')).toThrow(/version/);
     expect(() => parseRecording('{"ticks":[]}')).toThrow(/version/);
     expect(() => parseRecording('nope')).toThrow(/JSON/);
     expect(() => parseRecording('[]')).toThrow(/object/);

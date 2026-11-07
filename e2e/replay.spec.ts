@@ -67,7 +67,7 @@ test('the replayed session matches the recorded one on every tick', async () => 
 test('the recording is compact JSON that round-trips through serialize and parse', async () => {
   const s = await replayed();
   const rec = JSON.parse(s.json) as { version: number; ticks: { t: number; n?: number }[] };
-  expect(rec.version).toBe(2);
+  expect(rec.version).toBe(3);
   expect(Array.isArray(rec.ticks)).toBe(true);
   // Deltas only: far fewer entries than ticks, and the idle stretches are runs.
   expect(rec.ticks.length).toBeLessThan(40);

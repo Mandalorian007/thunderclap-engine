@@ -1545,8 +1545,10 @@ export class Input<A extends string> {
    * Dispatch a recorded pointer event on the attached pointer target (ws/input-5), so every
    * dispatcher consumer (gestures, look, touch zones, the router) sees it as it saw the original;
    * the feed's own key/button/pointer state is left to the playback's `b` and `p` lanes.
-   * `createInputPlayback` calls it for the recording's `ptr` lane. Returns false (and does
-   * nothing) while detached or without `PointerEvent`.
+   * `createInputPlayback` calls it for the recording's `ptr` lane. `age` (ws/input-7) is how
+   * many ms ago the event happened on the consumers' clocks (`PointerRecord.age`; negative is
+   * ahead); omitted, it happened now. Returns false (and does nothing) while detached or
+   * without `PointerEvent`.
    */
   replayPointer(
     phase: InputPointerPhase,
@@ -1556,6 +1558,7 @@ export class Input<A extends string> {
     clientY: number,
     button: number,
     primary: boolean,
+    age = 0,
   ): boolean {
     const d = this.dispatcherValue;
     if (!d || typeof PointerEvent !== 'function') return false;
@@ -1578,10 +1581,12 @@ export class Input<A extends string> {
       clientY,
     });
     this.injecting = true;
+    d.replayAge = age;
     try {
       d.target.dispatchEvent(e);
     } finally {
       this.injecting = false;
+      d.replayAge = null;
     }
     return true;
   }

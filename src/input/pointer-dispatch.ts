@@ -38,6 +38,13 @@ export interface PointerRecord {
    * page got round to handling it). `eventTime` maps it onto another clock.
    */
   time: number;
+  /**
+   * How long ago the event happened, ms (ws/input-7): for a live event `performance.now() -
+   * time` (0 when the stamp is unusable, see `eventTime`); for one `Input.replayPointer`
+   * dispatches, the age the playback gave it (negative when the replay runs ahead of the
+   * recording). A consumer times the event as `now() - age` on its own clock.
+   */
+  age: number;
   /** False when the transform maps the point outside the game (true without a transform). */
   inside: boolean;
 }
@@ -77,10 +84,13 @@ function wallNow(): number {
  * stamp (not finite, negative, or in the future) counts as handled at once: `now()`.
  */
 export function eventTime(timeStamp: number, now: () => number): number {
+  return now() - stampAge(timeStamp);
+}
+
+/** `performance.now() - timeStamp`, or 0 for an unusable stamp (see `eventTime`). */
+function stampAge(timeStamp: number): number {
   const wall = wallNow();
-  const age =
-    Number.isFinite(timeStamp) && timeStamp >= 0 && timeStamp <= wall ? wall - timeStamp : 0;
-  return now() - age;
+  return Number.isFinite(timeStamp) && timeStamp >= 0 && timeStamp <= wall ? wall - timeStamp : 0;
 }
 
 /** Consumer priorities `Input` uses, lowest first. A game's own consumer picks any number. */
@@ -118,6 +128,12 @@ export interface PointerDispatcher {
   /** The owner of a claimed pointer, or `null`. */
   owner(id: number): object | null;
   claimed(id: number): boolean;
+  /**
+   * While not `null`, the `age` every record gets instead of the event's own (ws/input-7).
+   * `Input.replayPointer` sets it around one synthetic dispatch, so a replayed event keeps its
+   * recorded timing; nothing else should.
+   */
+  replayAge: number | null;
   /** Replace the transform (`Input.setPointerTransform` does this). */
   setTransform(fn: PointerTransform | null): void;
   /** Remove the DOM listeners and every consumer and claim. */
@@ -152,8 +168,10 @@ export function createPointerDispatcher(
     clientX: 0,
     clientY: 0,
     time: 0,
+    age: 0,
     inside: true,
   };
+  let replayAge: number | null = null;
 
   const fill = (e: PointerEvent): PointerRecord => {
     const r = record;
@@ -165,6 +183,7 @@ export function createPointerDispatcher(
     r.clientX = e.clientX;
     r.clientY = e.clientY;
     r.time = e.timeStamp;
+    r.age = replayAge ?? stampAge(e.timeStamp);
     if (transform) {
       r.x = e.clientX;
       r.y = e.clientY;
@@ -234,6 +253,12 @@ export function createPointerDispatcher(
   return {
     target,
     hoverWhileClaimed: opts.hoverWhileClaimed ?? false,
+    get replayAge() {
+      return replayAge;
+    },
+    set replayAge(v) {
+      replayAge = v;
+    },
     add(consumer, priority = 0, seesClaimed = false) {
       remove(consumer);
       let at = entries.length;
