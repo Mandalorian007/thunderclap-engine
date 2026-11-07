@@ -7,10 +7,10 @@
 import { describe, expect, it } from 'vitest';
 import { Camera } from './camera';
 import { createFakeDevice, type FakeDevice, fakeRendererGpu, type PassCommand } from './fake-gpu';
-import type { JitterFn } from './renderer';
 import type { MeshLod } from './lod';
 import type { MaterialDesc } from './material';
 import { type Mesh, VERTEX_LAYOUT_3D, VERTEX3D_FLOATS } from './mesh';
+import type { JitterFn } from './renderer';
 import { Renderer } from './renderer';
 import { createStandardMaterial } from './standard';
 import { Transform } from './transform';
@@ -72,11 +72,18 @@ function laneBinds(cmds: PassCommand[]) {
 function capture(fake: FakeDevice, label: string): Float32Array[] {
   const out: Float32Array[] = [];
   const queue = fake.device.queue as unknown as {
-    writeBuffer: (b: { label: string }, o: number, d: ArrayBuffer, off?: number, n?: number) => void;
+    writeBuffer: (
+      b: { label: string },
+      o: number,
+      d: ArrayBuffer,
+      off?: number,
+      n?: number,
+    ) => void;
   };
   const write = queue.writeBuffer.bind(queue);
   queue.writeBuffer = (b, o, d, off = 0, n) => {
-    if (b.label === label) out.push(new Float32Array(d.slice(off, off + (n ?? d.byteLength - off))));
+    if (b.label === label)
+      out.push(new Float32Array(d.slice(off, off + (n ?? d.byteLength - off))));
     write(b, o, d, off, n);
   };
   return out;
@@ -297,7 +304,7 @@ describe('velocity LOD lists upload no prevBuffer (ws/render-8)', () => {
     }
     const prevWrites = fake.writes.filter((w) => w.buffer.label === 'instance-list-prev');
     expect(prevWrites.length).toBe(4);
-    expect(prevWrites.every((w) => w.buffer === plainList.prevBuffer)).toBe(true);
+    expect(prevWrites.every((w) => (w.buffer as unknown) === plainList.prevBuffer)).toBe(true);
     // The LOD list's motion still reaches the lane: x moved by 1 per frame.
     const lane = lastWrite(fake, 'instance-lane');
     const inst = lastWrite(fake, 'instances');
