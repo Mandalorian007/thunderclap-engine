@@ -387,7 +387,11 @@ export async function createGame<
     pointers,
   });
   // A replay feeds the input itself: no DOM listeners, so a real key never leaks in (E-011).
-  const playback = opts.input.replay ? createInputPlayback(input, opts.input.replay) : null;
+  // The playback drives the game's clock (ws/input-9): each fed tick advances it by the
+  // recording's tick spacing, so `playback.speed` above 1 keeps game time too.
+  const playback = opts.input.replay
+    ? createInputPlayback(input, opts.input.replay, { clock })
+    : null;
   if (opts.input.record) createInputRecorder(input);
   if (playback) {
     // The recorded pointers are dispatched through a pointer target nothing real can reach (an
@@ -416,9 +420,10 @@ export async function createGame<
       update: (dt: number) => {
         // A replay feeds this tick's events first: live, they arrived between the frames, while
         // the clock still read the last tick. Then the clock moves by the step, before the
-        // input (and its gestures) update.
-        playback?.step();
-        clock.advance(dt * 1000);
+        // input (and its gestures) update. A playback driving the clock has already moved it
+        // for each tick it fed; once the recording is done the step moves it again.
+        const fed = playback ? playback.step() : false;
+        if (!fed || playback?.clock !== clock) clock.advance(dt * 1000);
         input.update();
         padNav.update();
         audio.update(dt);

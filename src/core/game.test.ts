@@ -495,20 +495,26 @@ describe('createGame: tick clock (ws/core-4)', () => {
     expect(ctx.clock.now()).toBe(31.25 + 7.8125);
   });
 
-  it('a long-press recorded under createGame replays on the same tick at another wall spacing', async () => {
-    // Speed 1 only: `InputPlayback.speed` > 1 does not advance a tick clock until ws/input-9.
+  it('a long-press recorded under createGame replays on the same tick and game time at 1× and 2×', async () => {
+    // The playback drives ctx.clock (ws/input-9), so at `speed` 2 each loop tick feeds and
+    // times two recorded ticks and createGame does not advance the clock a second time.
     // A 1/64 s step keeps the clock's sums exact. The playback anchors the first replayed
     // event at the tick it is fed, dropping its live age (2 ms here), so a long-press whose
     // threshold falls within that age of a tick boundary can still move by one tick.
     let wall = 1000;
     vi.spyOn(performance, 'now').mockImplementation(() => wall);
     try {
-      /** Tick indices where each gesture fired, on a game ticked at `spacing` wall ms. */
+      /**
+       * Each gesture with the input tick it fired on (input updates so far, so the extra
+       * updates a fast playback runs inside `step()` count) and the game clock's reading.
+       */
       const watch = (ctx: NonNullable<Awaited<ReturnType<typeof createGame>>>) => {
         let tick = 0;
         const fired: string[] = [];
-        ctx.gestures.onGesture((kind, phase) => fired.push(`${kind}:${phase}@${tick}`));
-        ctx.hooks.update = () => tick++;
+        ctx.gestures.onGesture((kind, phase) =>
+          fired.push(`${kind}:${phase}@${tick}/${ctx.clock.now()}`),
+        );
+        ctx.input.onUpdated(() => tick++);
         return fired;
       };
       const recorded = await createGame({
@@ -549,24 +555,44 @@ describe('createGame: tick clock (ws/core-4)', () => {
       const longs = live.filter((g) => g.startsWith('longPress'));
       expect(longs.length).toBe(1);
       expect(live.some((g) => g.startsWith('tap'))).toBe(false);
+      expect(recording.tickMs).toBe(15.625);
 
-      // Replay with 50 ms of wall time between ticks: the long-press lands on the same tick.
-      document.body.innerHTML = '<main id="root"></main>';
-      wall = 90_000;
-      const ctx = await createGame({
-        ...options([]),
-        sim: { step: 1 / 64 },
-        input: { ...options([]).input, replay: recording },
-      });
-      if (!ctx) throw new Error('no ctx');
-      const again = watch(ctx);
-      // A real pointer on the canvas never reaches the replayed gestures.
-      ctx.surface.canvas.dispatchEvent(
-        new PointerEvent('pointerdown', { pointerId: 9, pointerType: 'touch', bubbles: true }),
-      );
-      for (let i = 0; i < 50 && !ctx.input.playback?.done; i++) tick(50, ctx);
-      expect(again.filter((g) => g.startsWith('longPress'))).toEqual(longs);
-      expect(again).toEqual(live);
+      // Replay with 50 ms of wall time between ticks, at 1× and 2×: the long-press lands on the
+      // same recorded tick at the same game time.
+      const recordedTicks = recording.ticks.reduce((n, e) => n + ('n' in e ? e.n : 1), 0);
+      expect(recordedTicks).toBe(43);
+      for (const speed of [1, 2]) {
+        document.body.innerHTML = '<main id="root"></main>';
+        wall = 90_000;
+        const ctx = await createGame({
+          ...options([]),
+          sim: { step: 1 / 64 },
+          input: { ...options([]).input, replay: recording },
+        });
+        if (!ctx) throw new Error('no ctx');
+        const playback = ctx.input.playback;
+        if (!playback) throw new Error('no playback');
+        expect(playback.clock).toBe(ctx.clock);
+        playback.speed = speed;
+        const again = watch(ctx);
+        // A real pointer on the canvas never reaches the replayed gestures.
+        ctx.surface.canvas.dispatchEvent(
+          new PointerEvent('pointerdown', { pointerId: 9, pointerType: 'touch', bubbles: true }),
+        );
+        let loopTicks = 0;
+        while (!playback.done && loopTicks < 60) {
+          tick(50, ctx);
+          loopTicks++;
+        }
+        expect(loopTicks).toBe(Math.ceil(recordedTicks / speed));
+        expect(again).toEqual(live);
+        // One advance per recorded tick, never two.
+        const recordedMs = recordedTicks * 15.625;
+        expect(ctx.clock.now()).toBe(recordedMs);
+        // After the recording ends the loop's own step moves the clock again.
+        tick(50, ctx);
+        expect(ctx.clock.now()).toBe(recordedMs + 15.625);
+      }
     } finally {
       vi.restoreAllMocks();
     }

@@ -74,8 +74,12 @@ const look = createLook({ clock: ctx.clock });       // or new Look({ clock: ctx
 const extra = createGestures({ clock: ctx.clock });  // a second recogniser, if any
 ```
 
-`InputPlayback.speed` above 1 feeds the extra ticks inside one step without advancing the clock
-(see the input README *Clock*); fast-forward a `createGame` replay by ticking the loop instead.
+With `input: { replay }` the playback drives the clock instead (`createInputPlayback(input,
+recording, { clock: ctx.clock })`, ws/input-9): each tick it feeds advances it by the
+recording's `tickMs`, so `ctx.input.playback.speed = 2` replays two recorded ticks per loop tick
+with a long-press on the same recorded tick and game time, and the loop does not advance the
+clock a second time (`playback.clock === ctx.clock`). Once the recording is done the loop's step
+moves the clock again. `seek` never moves it.
 
 ## Scenes
 
