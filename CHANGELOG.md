@@ -64,7 +64,7 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 
 ### Deprecated (ws/api-core, E-036)
 Each keeps working and is removed next minor.
-- input: `Hit` → `RayHit` (geom exports another `Hit`), `Aabb` → `RayBox`, `Rect` → `Edges`, `Grid` → `SnapGrid` (ui exports a `Grid` widget), `FollowTarget` → `FollowSubject`; `Input.getGestures()`, `getPointers()`, `getLook()`, `listeningFor()`, `contextStack()` → the `gestures`, `pointers`, `look`, `listening`, `contexts` getters; `getBindings()` → `bindings()`.
+- input: `Hit` → `PickHit` (geom exports another `Hit`, renamed `RayHit` there), `Aabb` → `RayBox`, `Rect` → `Edges`, `Grid` → `SnapGrid` (ui exports a `Grid` widget), `FollowTarget` → `FollowSubject`; `Input.getGestures()`, `getPointers()`, `getLook()`, `listeningFor()`, `contextStack()` → the `gestures`, `pointers`, `look`, `listening`, `contexts` getters; `getBindings()` → `bindings()`.
 - ui: `Cooldown`/`CooldownOptions` → `WidgetCooldown`/`WidgetCooldownOptions` (core exports a scheduler `Cooldown`), `Cell` → `GridCell` (nav exports an x/y `Cell`), `prefersReducedMotion(win?)` → `prefersReducedMotionIn` (platform exports one without the argument); `WorldPanelInput.getPointers()` → `pointers`. The stylesheet exports (`BASE_CSS`, `HUD_CSS`, `TOOLTIP_CSS`, `CURSOR_CSS`, `NOTIFY_CSS`, `ORB_CSS`, `INVENTORY_CSS`, `FLOATS_CSS`, `CANVAS_MINIMAP_CSS`, `LOADING_CSS`, `WIDGETS2_CSS`, `WIDGETS3_CSS`) and `WORLD_PANEL_WGSL` leave the `ui` entry: the `ensure*Styles` functions and the panel use them.
 - core: `SceneStack.list()` → `scenes`.
 

@@ -388,10 +388,10 @@ type Hand = 'left' | 'right';
 
 ## Hit  (type-only)
 @deprecated
-type Hit<T = unknown> = RayHit<T>;
+type Hit<T = unknown> = PickHit<T>;
 
 ## HitTester  (type-only)
-type HitTester<T = unknown> = (ray: Ray) => RayHit<T> | null;
+type HitTester<T = unknown> = (ray: Ray) => PickHit<T> | null;
 
 ## Input
 class Input<A extends string> {
@@ -848,6 +848,14 @@ interface PanGesture extends GesturePoint {
     device: GestureDevice;
 }
 
+## PickHit  (type-only)
+interface PickHit<T = unknown> {
+    readonly point: Vec3;
+    normal: Vec3 | null;
+    distance: number;
+    target: T;
+}
+
 ## PinchGesture  (type-only)
 interface PinchGesture extends GesturePoint {
     phase: GesturePhase;
@@ -901,7 +909,7 @@ interface PointerDispatcherOptions {
 ## PointerHitEvent  (type-only)
 interface PointerHitEvent<T = unknown> {
     pointer: RoutedPointer<T>;
-    hit: RayHit<T> | null;
+    hit: PickHit<T> | null;
 }
 
 ## PointerRecord  (type-only)
@@ -934,7 +942,7 @@ class PointerRouter<T = unknown> {
     constructor(opts?: PointerRouterOptions<T>);
     get camera(): RayCamera | null;
     set camera(c: RayCamera | (() => RayCamera | null) | null);
-    get hit(): RayHit<T> | null;
+    get hit(): PickHit<T> | null;
     on<K extends keyof PointerRouterEvents<T>>(type: K, fn: (e: PointerRouterEvents<T>[K]) => void): () => void;
     addTester(t: HitTester<T>): () => void;
     addSource(s: PointerSource): () => void;
@@ -1033,14 +1041,6 @@ interface RayBox<T = unknown> {
 ## RayCamera  (type-only)
 type RayCamera = Pick<Camera, 'screen' | 'screenToWorld'>;
 
-## RayHit  (type-only)
-interface RayHit<T = unknown> {
-    readonly point: Vec3;
-    normal: Vec3 | null;
-    distance: number;
-    target: T;
-}
-
 ## RayPlane  (type-only)
 interface RayPlane {
     normal: readonly [number, number, number];
@@ -1066,7 +1066,7 @@ interface RoutedPointer<T = unknown> {
     readonly select: boolean;
     readonly secondary: boolean;
     readonly xr: Readonly<XrButtons> | null;
-    readonly hit: RayHit<T> | null;
+    readonly hit: PickHit<T> | null;
 }
 
 ## RumbleOptions  (type-only)
@@ -1268,7 +1268,7 @@ function createGestures(opts?: GestureOptions): Gestures;
 function createGyroSource(opts?: GyroSourceOptions): GyroSource;
 
 ## createHit
-function createHit<T = unknown>(target: T): RayHit<T>;
+function createHit<T = unknown>(target: T): PickHit<T>;
 
 ## createInputPlayback
 function createInputPlayback<A extends string>(input: Input<A>, recording: InputRecording, opts?: InputPlaybackOptions): InputPlayback;

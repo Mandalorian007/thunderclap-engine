@@ -1,6 +1,6 @@
 /**
  * Rays and hit testing for the pointer router (`pointer-router.ts`). Plain math, no DOM, no
- * game nouns: a `HitTester` turns a world-space `Ray` into the nearest `RayHit` it knows, and the
+ * game nouns: a `HitTester` turns a world-space `Ray` into the nearest `PickHit` it knows, and the
  * game decides what `target` means.
  */
 import type { Camera } from '../render/camera';
@@ -21,7 +21,7 @@ export interface Ray {
  * `normal` faces the ray (unit), or `null` when the tester has none (the ray started inside).
  * Hits the router hands out are reused: read them in the listener or copy them.
  */
-export interface RayHit<T = unknown> {
+export interface PickHit<T = unknown> {
   readonly point: Vec3;
   normal: Vec3 | null;
   distance: number;
@@ -30,16 +30,16 @@ export interface RayHit<T = unknown> {
 }
 
 /**
- * @deprecated (ws/api-core, E-036) Use `RayHit`: `geom` exports a different `Hit`. Removed next
+ * @deprecated (ws/api-core, E-036) Use `PickHit`: `geom` exports a different `Hit` (now `RayHit`). Removed next
  * minor.
  */
-export type Hit<T = unknown> = RayHit<T>;
+export type Hit<T = unknown> = PickHit<T>;
 
 /**
  * Returns the nearest hit of `ray` against what this tester knows, or `null`. It may return the
  * same object on every call (the router copies it before calling again).
  */
-export type HitTester<T = unknown> = (ray: Ray) => RayHit<T> | null;
+export type HitTester<T = unknown> = (ray: Ray) => PickHit<T> | null;
 
 /** The camera slice the router needs: `screen` and the inverse projection (`render`'s `Camera`). */
 export type RayCamera = Pick<Camera, 'screen' | 'screenToWorld'>;
@@ -48,7 +48,7 @@ export function createRay(): Ray {
   return { origin: [0, 0, 0], dir: [0, 0, 1] };
 }
 
-export function createHit<T = unknown>(target: T): RayHit<T> {
+export function createHit<T = unknown>(target: T): PickHit<T> {
   return { point: [0, 0, 0], normal: null, distance: 0, target };
 }
 

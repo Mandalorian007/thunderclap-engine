@@ -17,8 +17,8 @@ import {
   createHit,
   createRay,
   type HitTester,
+  type PickHit,
   type Ray,
-  type RayHit,
   rayAt,
   transformRayInto,
   type Vec3,
@@ -158,7 +158,7 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
   private readonly depthPipelines = new Map<string, GPURenderPipeline>();
   private readonly localRay = createRay();
   private readonly hit: WorldPanelHit = { x: 0, y: 0, widget: null, distance: 0 };
-  private readonly routerHit: RayHit<WorldPanel>;
+  private readonly routerHit: PickHit<WorldPanel>;
   private readonly routerNormal: Vec3 = [0, 0, 0];
   private readonly basis = new Float32Array(12);
   private detachFn: (() => void) | null = null;

@@ -19,9 +19,9 @@ import {
   createHit,
   createRay,
   type HitTester,
+  type PickHit,
   type Ray,
   type RayCamera,
-  type RayHit,
 } from './rays';
 import type { Hand, PointerButton, PointerTransform, XrButton } from './types';
 
@@ -39,14 +39,14 @@ export interface RoutedPointer<T = unknown> {
   readonly secondary: boolean;
   readonly xr: Readonly<XrButtons> | null;
   /** The nearest hit this tick, or `null`. */
-  readonly hit: RayHit<T> | null;
+  readonly hit: PickHit<T> | null;
 }
 
 /** Payload of every router event. Reused between emits: read it in the listener or copy it. */
 export interface PointerHitEvent<T = unknown> {
   pointer: RoutedPointer<T>;
   /** `hit`/`hitEnd`: the hit that started or ended. `select`/`secondary`: the pointer's hit, or `null`. */
-  hit: RayHit<T> | null;
+  hit: PickHit<T> | null;
 }
 
 export interface PointerRouterEvents<T = unknown> {
@@ -104,12 +104,12 @@ interface Track<T> {
   select: boolean;
   secondary: boolean;
   xr: XrButtons | null;
-  hit: RayHit<T> | null;
+  hit: PickHit<T> | null;
   /** Storage behind `hit`. */
-  readonly store: RayHit<T>;
+  readonly store: PickHit<T>;
   readonly storeNormal: [number, number, number];
   /** Storage for the `hitEnd` payload. */
-  readonly ended: RayHit<T>;
+  readonly ended: PickHit<T>;
   readonly endedNormal: [number, number, number];
   readonly xrStore: XrButtons;
   readonly xrPrev: XrButtons;
@@ -160,7 +160,7 @@ export class PointerRouter<T = unknown> {
   /** Sources a mute's end just woke: their pointers held through the mute are not new presses. */
   private readonly waking: PointerSource[] = [];
   private target: HTMLElement | null = null;
-  private readonly best: RayHit<T> = createHit<T>(undefined as T);
+  private readonly best: PickHit<T> = createHit<T>(undefined as T);
   private readonly bestNormal: [number, number, number] = [0, 0, 0];
   private readonly evHit: PointerHitEvent<T> = { pointer: null as never, hit: null };
   private readonly evEnd: PointerHitEvent<T> = { pointer: null as never, hit: null };
@@ -189,7 +189,7 @@ export class PointerRouter<T = unknown> {
   }
 
   /** The primary pointer's hit, or `null`. */
-  get hit(): RayHit<T> | null {
+  get hit(): PickHit<T> | null {
     return this.primary?.hit ?? null;
   }
 
@@ -617,7 +617,7 @@ export class PointerRouter<T = unknown> {
   }
 }
 
-function copyHit<T>(dst: RayHit<T>, normal: [number, number, number], src: RayHit<T>): void {
+function copyHit<T>(dst: PickHit<T>, normal: [number, number, number], src: PickHit<T>): void {
   dst.point[0] = src.point[0];
   dst.point[1] = src.point[1];
   dst.point[2] = src.point[2];
