@@ -297,6 +297,59 @@ export interface ParticleReadback {
   time: number;
 }
 
+/**
+ * What `ParticleSystem.readbackFields()` resolves to (ws/fx-7): every field of the live
+ * particles (age < lifetime) at the copy, one named typed array each, in slot order, so a reader
+ * needs no knowledge of the GPU packing. Vector fields are interleaved (`alive × n`); the rest
+ * hold one number per live particle. Fields the original 2D kernel does not carry are 0 there
+ * (`curveSlots` -1). Fresh arrays each call; a debugging aid, not a frame path.
+ */
+export interface ParticleFields {
+  /** Live particles in the copy; every array below is sized for it. */
+  alive: number;
+  /** The ring-buffer slot of each live particle (as `ParticleReadback.slots`). */
+  slots: Uint32Array;
+  /** The system's simulated time (s) when the copy was made. */
+  time: number;
+  /** xyz (`alive × 3`); z 0 on the original 2D kernel. */
+  position: Float32Array;
+  /** Velocity xyz (`alive × 3`), units per second; z 0 on the original 2D kernel. */
+  velocity: Float32Array;
+  /** Seconds since birth. */
+  age: Float32Array;
+  /** Lifetime in seconds (the particle dies when `age` reaches it). */
+  life: Float32Array;
+  /**
+   * Half the drawn size at this age: the size curve (by the system's current curve table) or the
+   * start-to-end lerp, clamped at 0, as the render shader computes it.
+   */
+  radius: Float32Array;
+  /** Size at birth (with a size curve: the curve's scale). */
+  sizeStart: Float32Array;
+  /** Size at death (unused with a size curve). */
+  sizeEnd: Float32Array;
+  /** Colour at birth, RGBA (`alive × 4`). */
+  color0: Float32Array;
+  /** Colour at death, RGBA (`alive × 4`). */
+  color1: Float32Array;
+  /** Gravity xyz (`alive × 3`); z 0 on the original 2D kernel. */
+  gravity: Float32Array;
+  drag: Float32Array;
+  emissive: Float32Array;
+  /** Rotation (rad). */
+  rotation: Float32Array;
+  /** Spin (rad/s). */
+  spin: Float32Array;
+  /** Wind xyz (`alive × 3`). */
+  wind: Float32Array;
+  /** Tile from, tile to, tile rate (fps, 0 = over life), flags (1 align to velocity) (`alive × 4`). */
+  tile: Float32Array;
+  /** Curve table slots: size, colour, death, life (`alive × 4`; -1 none). */
+  curveSlots: Int32Array;
+  /** Sub-emission: death count, life rate, life carry (`alive × 3`). */
+  sub: Float32Array;
+}
+
 const POINT: EmitShape = { kind: 'point' };
 /** 2D maps `box` to `rect` and `sphere` to `circle`, so the 2D shader is unchanged. */
 const SHAPE_ID = { point: 0, circle: 1, rect: 2, line: 3, box: 2, sphere: 1, mesh: 6 } as const;
@@ -477,7 +530,8 @@ export class ParticleSystem implements Drawable {
   private readonly collider: Collider | null = null;
   /** `debug`: the staging buffer `debugReadback` copies the particles into. */
   private readonly debugRead: GPUBuffer | null = null;
-  private debugPending: Promise<ParticleReadback> | null = null;
+  /** The copy in flight, shared by `debugReadback` and `readbackFields` calls made meanwhile. */
+  private debugJob: DebugJob | null = null;
   /** Whether this frame's `prepare` copied scene depth (world space). */
   private softActive = false;
   /** The renderer's `depthCopy` view `hookGroup` was made for (`readsDepth`). */
@@ -1543,36 +1597,74 @@ export class ParticleSystem implements Drawable {
    * far. A call while one is in flight returns that one's promise.
    */
   debugReadback(): Promise<ParticleReadback> {
-    const read = this.debugRead;
-    if (!read) {
+    const job = this.debugCopy('debugReadback');
+    if (!job) {
       return Promise.reject(new Error('ParticleSystem.debugReadback needs `debug: true`'));
     }
-    if (this.debugPending) return this.debugPending;
-    const enc = this.device.createCommandEncoder({ label: 'particles-debug-readback' });
+    if (!job.packed) {
+      job.wantPacked = true;
+      job.packed = job.done.then((r) => r.packed!);
+    }
+    return job.packed;
+  }
+
+  /**
+   * As `debugReadback`, but resolves to every field of the live particles by name
+   * (`ParticleFields`), unpacked from the kernel's layout (ws/fx-7). `debug: true` only. Calls
+   * made while a copy is in flight share it with each other and with `debugReadback`, so both
+   * forms called back to back describe the same copy.
+   */
+  readbackFields(): Promise<ParticleFields> {
+    const job = this.debugCopy('readbackFields');
+    if (!job) {
+      return Promise.reject(new Error('ParticleSystem.readbackFields needs `debug: true`'));
+    }
+    if (!job.fields) {
+      job.wantFields = true;
+      job.fields = job.done.then((r) => r.fields!);
+    }
+    return job.fields;
+  }
+
+  /** The copy in flight, or a new one submitted now; null without `debug`. */
+  private debugCopy(label: string): DebugJob | null {
+    const read = this.debugRead;
+    if (!read) return null;
+    if (this.debugJob) return this.debugJob;
+    const enc = this.device.createCommandEncoder({ label: `particles-${label}` });
     enc.copyBufferToBuffer(this.particleBuffer, 0, read, 0, read.size);
     this.device.queue.submit([enc.finish()]);
     const time = this.time;
-    const done = (): void => {
-      this.debugPending = null;
+    const job: DebugJob = {
+      wantPacked: false,
+      wantFields: false,
+      packed: null,
+      fields: null,
+      done: read.mapAsync(GPUMapMode.READ).then(
+        () => {
+          const d = new Float32Array(read.getMappedRange(0, read.size));
+          const out = {
+            packed: job.wantPacked ? parseParticles(d, this.capacity, this.extended, time) : null,
+            fields: job.wantFields ? this.parseFields(d, time) : null,
+          };
+          read.unmap();
+          this.debugJob = null;
+          return out;
+        },
+        (err: unknown) => {
+          this.debugJob = null;
+          throw err;
+        },
+      ),
     };
-    this.debugPending = read.mapAsync(GPUMapMode.READ).then(
-      () => {
-        const out = parseParticles(
-          new Float32Array(read.getMappedRange(0, read.size)),
-          this.capacity,
-          this.extended,
-          time,
-        );
-        read.unmap();
-        done();
-        return out;
-      },
-      (err: unknown) => {
-        done();
-        throw err;
-      },
-    );
-    return this.debugPending;
+    this.debugJob = job;
+    return job;
+  }
+
+  /** `parseFields` with this system's layout and curve table. */
+  private parseFields(d: Float32Array, time: number): ParticleFields {
+    const fx = this.fx;
+    return parseFields(d, this.capacity, this.extended, time, fx ? fx.curveData : null);
   }
 
   destroy(): void {
@@ -1644,6 +1736,118 @@ function parseParticles(
     n++;
   }
   return { alive, positions, velocities, slots, time };
+}
+
+/** A particle-buffer copy in flight and the forms asked of it (`debugReadback`, `readbackFields`). */
+interface DebugJob {
+  wantPacked: boolean;
+  wantFields: boolean;
+  packed: Promise<ParticleReadback> | null;
+  fields: Promise<ParticleFields> | null;
+  done: Promise<{ packed: ParticleReadback | null; fields: ParticleFields | null }>;
+}
+
+/**
+ * Every field of the live particles of a particle buffer's floats (ws/fx-7). The original
+ * kernel's 20 floats: `posVel` (pos.xy, vel.xy), c0, c1, `life` (age, lifetime, size at birth,
+ * size at death), `phys` (gravity.xy, drag, emissive). The extended kernel's 40: `pos` (xyz,
+ * rotation), `vel` (xyz, spin), c0, c1, `life`, `phys` (gravity xyz, drag), `wind` (xyz,
+ * emissive), `tile`, `curve` (slots), `sub`. `curves` is the curve table (extended only) for
+ * `radius`, read as the kernel's `size_at` does.
+ */
+function parseFields(
+  d: Float32Array,
+  capacity: number,
+  extended: boolean,
+  time: number,
+  curves: Float32Array | null,
+): ParticleFields {
+  const stride = extended ? FX_PARTICLE_FLOATS : PARTICLE_BYTES / 4;
+  const lifeAt = extended ? 16 : 12;
+  let alive = 0;
+  for (let i = 0; i < capacity; i++) {
+    const o = i * stride + lifeAt;
+    if (d[o]! < d[o + 1]!) alive++;
+  }
+  const f: ParticleFields = {
+    alive,
+    slots: new Uint32Array(alive),
+    time,
+    position: new Float32Array(alive * 3),
+    velocity: new Float32Array(alive * 3),
+    age: new Float32Array(alive),
+    life: new Float32Array(alive),
+    radius: new Float32Array(alive),
+    sizeStart: new Float32Array(alive),
+    sizeEnd: new Float32Array(alive),
+    color0: new Float32Array(alive * 4),
+    color1: new Float32Array(alive * 4),
+    gravity: new Float32Array(alive * 3),
+    drag: new Float32Array(alive),
+    emissive: new Float32Array(alive),
+    rotation: new Float32Array(alive),
+    spin: new Float32Array(alive),
+    wind: new Float32Array(alive * 3),
+    tile: new Float32Array(alive * 4),
+    curveSlots: new Int32Array(alive * 4).fill(-1),
+    sub: new Float32Array(alive * 3),
+  };
+  let n = 0;
+  for (let i = 0; i < capacity; i++) {
+    const o = i * stride;
+    const age = d[o + lifeAt]!;
+    const life = d[o + lifeAt + 1]!;
+    if (!(age < life)) continue;
+    const s0 = d[o + lifeAt + 2]!;
+    const s1 = d[o + lifeAt + 3]!;
+    const t = age / life;
+    const k3 = n * 3;
+    const k4 = n * 4;
+    f.slots[n] = i;
+    f.age[n] = age;
+    f.life[n] = life;
+    f.sizeStart[n] = s0;
+    f.sizeEnd[n] = s1;
+    // c0 then c1 straight before `life` in both layouts.
+    f.color0.set(d.subarray(o + lifeAt - 8, o + lifeAt - 4), k4);
+    f.color1.set(d.subarray(o + lifeAt - 4, o + lifeAt), k4);
+    f.position[k3] = d[o]!;
+    f.position[k3 + 1] = d[o + 1]!;
+    let size = s0 + (s1 - s0) * t;
+    if (extended) {
+      f.position[k3 + 2] = d[o + 2]!;
+      f.rotation[n] = d[o + 3]!;
+      f.velocity.set(d.subarray(o + 4, o + 7), k3);
+      f.spin[n] = d[o + 7]!;
+      f.gravity.set(d.subarray(o + 20, o + 23), k3);
+      f.drag[n] = d[o + 23]!;
+      f.wind.set(d.subarray(o + 24, o + 27), k3);
+      f.emissive[n] = d[o + 27]!;
+      f.tile.set(d.subarray(o + 28, o + 32), k4);
+      for (let c = 0; c < 4; c++) f.curveSlots[k4 + c] = d[o + 32 + c]!;
+      f.sub.set(d.subarray(o + 36, o + 39), k3);
+      const slot = d[o + 32]!;
+      if (slot >= 0 && curves) {
+        // size_at: piecewise-linear over the slot's stops, times the size at birth.
+        const base = Math.floor(slot) * SIZE_CURVE_FLOATS;
+        const stops = curves[base]!;
+        const x = Math.min(Math.max(t, 0), 1) * (stops - 1);
+        const j = Math.min(Math.floor(x), stops - 2);
+        const a = curves[base + 1 + j]!;
+        size = (a + (curves[base + 2 + j]! - a) * (x - j)) * s0;
+      }
+    } else {
+      f.velocity[k3] = d[o + 2]!;
+      f.velocity[k3 + 1] = d[o + 3]!;
+      f.gravity[k3] = d[o + 16]!;
+      f.gravity[k3 + 1] = d[o + 17]!;
+      f.drag[n] = d[o + 18]!;
+      f.emissive[n] = d[o + 19]!;
+    }
+    f.radius[n] = Math.max(size, 0) * 0.5;
+    n++;
+  }
+  return f;
 }
 
 /** Write `c0` and `c1` (default: `c0` with alpha 0) at `o`; returns the next offset. */

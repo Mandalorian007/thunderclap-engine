@@ -213,3 +213,123 @@ describe('ParticleSystem.debugReadback', () => {
     expect(t.staging!.destroyed).toBe(true);
   });
 });
+
+describe('ParticleSystem.readbackFields', () => {
+  it('is opt-in: without `debug` it rejects and copies nothing', async () => {
+    const t = makeSystem({ space: 'world' });
+    await expect(t.ps.readbackFields()).rejects.toThrow(/readbackFields needs `debug: true`/);
+    expect(t.copies).toEqual([]);
+  });
+
+  it('unpacks every field of a known extended-layout buffer', async () => {
+    const t = makeSystem({ space: 'world', debug: true });
+    // Intern a size curve into slot 0: 1 at birth, 3 at death (scaled by the size at birth).
+    t.ps.emit({ x: 0, y: 0, colorStart: [1, 1, 1], sizeCurve: [1, 3] }, 1);
+    const F = FX_PARTICLE_FLOATS;
+    const d = new Float32Array(t.staging!.size / 4);
+    // Slot 2: every float distinct (i + 1), age 0.25 of lifetime 1, no curves.
+    const a = 2 * F;
+    for (let i = 0; i < F; i++) d[a + i] = i + 1;
+    d.set([0.25, 1, 4, 8], a + 16);
+    d.set([-1, -1, -1, -1], a + 32);
+    // Slot 4: dead (age at lifetime).
+    d.set([5, 5], 4 * F + 16);
+    // Slot 7: the size curve in slot 0, half way through life, size at birth 2.
+    const b = 7 * F;
+    d.set([1, 2, 3, 0.5, -1, -2, -3, 0.25], b);
+    d.set([1, 2, 2, 0], b + 16);
+    d.set([0, -1, -1, -1], b + 32);
+    t.contents = d;
+
+    const f = await t.ps.readbackFields();
+    expect(f.alive).toBe(2);
+    expect(Array.from(f.slots)).toEqual([2, 7]);
+    expect(Array.from(f.position)).toEqual([1, 2, 3, 1, 2, 3]);
+    expect(Array.from(f.rotation)).toEqual([4, 0.5]);
+    expect(Array.from(f.velocity)).toEqual([5, 6, 7, -1, -2, -3]);
+    expect(Array.from(f.spin)).toEqual([8, 0.25]);
+    expect(Array.from(f.color0.subarray(0, 4))).toEqual([9, 10, 11, 12]);
+    expect(Array.from(f.color1.subarray(0, 4))).toEqual([13, 14, 15, 16]);
+    expect(Array.from(f.age)).toEqual([0.25, 1]);
+    expect(Array.from(f.life)).toEqual([1, 2]);
+    expect(Array.from(f.sizeStart)).toEqual([4, 2]);
+    expect(Array.from(f.sizeEnd)).toEqual([8, 0]);
+    // lerp(4, 8, 0.25) / 2; the curve: lerp(1, 3, 0.5) × 2 / 2.
+    expect(Array.from(f.radius)).toEqual([2.5, 2]);
+    expect(Array.from(f.gravity.subarray(0, 3))).toEqual([21, 22, 23]);
+    expect(Array.from(f.drag.subarray(0, 1))).toEqual([24]);
+    expect(Array.from(f.wind.subarray(0, 3))).toEqual([25, 26, 27]);
+    expect(Array.from(f.emissive.subarray(0, 1))).toEqual([28]);
+    expect(Array.from(f.tile.subarray(0, 4))).toEqual([29, 30, 31, 32]);
+    expect(Array.from(f.curveSlots)).toEqual([-1, -1, -1, -1, 0, -1, -1, -1]);
+    expect(Array.from(f.sub.subarray(0, 3))).toEqual([37, 38, 39]);
+    expect(f.time).toBe(0);
+    for (const k of ['age', 'life', 'radius', 'drag', 'spin'] as const)
+      expect(f[k]).toHaveLength(2);
+    for (const k of ['position', 'velocity', 'gravity', 'wind', 'sub'] as const) {
+      expect(f[k]).toHaveLength(6);
+    }
+    for (const k of ['color0', 'color1', 'tile', 'curveSlots'] as const)
+      expect(f[k]).toHaveLength(8);
+  });
+
+  it('unpacks the original 2D layout; fields it does not carry are 0 (curve slots -1)', async () => {
+    const t = makeSystem({ debug: true });
+    expect(t.ps.extended).toBe(false);
+    const d = new Float32Array(t.staging!.size / 4);
+    const o = 3 * 20;
+    for (let i = 0; i < 20; i++) d[o + i] = i + 1;
+    d.set([0.5, 2, 6, 2], o + 12);
+    t.contents = d;
+    const f = await t.ps.readbackFields();
+    expect(f.alive).toBe(1);
+    expect(Array.from(f.slots)).toEqual([3]);
+    expect(Array.from(f.position)).toEqual([1, 2, 0]);
+    expect(Array.from(f.velocity)).toEqual([3, 4, 0]);
+    expect(Array.from(f.color0)).toEqual([5, 6, 7, 8]);
+    expect(Array.from(f.color1)).toEqual([9, 10, 11, 12]);
+    expect(Array.from(f.age)).toEqual([0.5]);
+    expect(Array.from(f.life)).toEqual([2]);
+    expect(Array.from(f.radius)).toEqual([2.5]);
+    expect(Array.from(f.gravity)).toEqual([17, 18, 0]);
+    expect(Array.from(f.drag)).toEqual([19]);
+    expect(Array.from(f.emissive)).toEqual([20]);
+    expect(Array.from(f.rotation)).toEqual([0]);
+    expect(Array.from(f.wind)).toEqual([0, 0, 0]);
+    expect(Array.from(f.curveSlots)).toEqual([-1, -1, -1, -1]);
+  });
+
+  it('shares one copy with debugReadback; both forms agree on the fx3 shell', async () => {
+    const t = makeSystem({ space: 'world', debug: true });
+    const d = new Float32Array(t.staging!.size / 4);
+    for (let i = 0; i < 64; i++) {
+      const o = i * FX_PARTICLE_FLOATS;
+      d.set([Math.cos(i) * 3, 6.5 + Math.sin(i), -4 + i / 64], o);
+      d.set([Math.sin(i), -i / 7, 0.1], o + 4);
+      d[o + 16] = 1;
+      d[o + 17] = 2;
+    }
+    t.contents = d;
+    const packedP = t.ps.debugReadback();
+    const fieldsP = t.ps.readbackFields();
+    expect(t.ps.readbackFields()).toBe(fieldsP);
+    const [r, f] = await Promise.all([packedP, fieldsP]);
+    expect(t.copies).toHaveLength(1);
+    expect(t.counts()).toEqual({ maps: 1, unmaps: 1, submits: 1 });
+    expect(f.alive).toBe(r.alive);
+    expect(Array.from(f.position)).toEqual(Array.from(r.positions));
+    expect(Array.from(f.velocity)).toEqual(Array.from(r.velocities));
+    expect(Array.from(f.slots)).toEqual(Array.from(r.slots));
+    // A later call makes a new copy.
+    await t.ps.readbackFields();
+    expect(t.copies).toHaveLength(2);
+  });
+
+  it('releases the in-flight copy when mapping fails', async () => {
+    const t = makeSystem({ space: 'world', debug: true });
+    t.staging!.mapAsync = () => Promise.reject(new Error('lost'));
+    await expect(t.ps.readbackFields()).rejects.toThrow('lost');
+    await expect(t.ps.debugReadback()).rejects.toThrow('lost');
+    expect(t.copies).toHaveLength(2);
+  });
+});
