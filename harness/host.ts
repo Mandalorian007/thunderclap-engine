@@ -69,7 +69,7 @@ async function main(): Promise<void> {
 
   const sync = () => {
     state.loopRunning = loop.isRunning;
-    state.lifecycle = host.lifecycle?.state() ?? 'active';
+    state.lifecycle = host.lifecycle?.state ?? 'active';
     state.hapticsAvailable = host.haptics?.available() ?? false;
     state.safeArea = { ...(host.safeArea?.insets() ?? state.safeArea) };
     const s = ui.layout.state;

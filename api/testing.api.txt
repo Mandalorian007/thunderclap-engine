@@ -213,6 +213,27 @@ type PassCommand = {
     offset?: number;
 };
 
+## TestGame  (type-only)
+interface TestGame<A extends string, S extends FlushableSave | null = null, C = unknown, P = unknown> {
+    readonly ctx: EngineCtx<A, S, C, P>;
+    readonly input: Input<A>;
+    readonly host: FakeHost;
+    readonly clock: FixedClock;
+    readonly device: FakeDevice;
+    step(n?: number): void;
+}
+
+## TestGameOptions  (type-only)
+interface TestGameOptions<A extends string, S extends FlushableSave | null = null> extends Omit<CreateGameOptions<A, S>, 'gpu' | 'host' | 'clock' | 'root'> {
+    root?: HTMLElement;
+    host?: FakeHost;
+    device?: FakeDevice;
+    viewport?: {
+        width: number;
+        height: number;
+    };
+}
+
 ## createFakeDevice
 function createFakeDevice(limits?: Partial<Record<string, number>>, features?: Iterable<string>): FakeDevice;
 
@@ -221,6 +242,9 @@ function createFakeHost(opts?: FakeHostOptions): FakeHost;
 
 ## createFixedClock
 function createFixedClock(stepMs?: number, start?: number): FixedClock;
+
+## createTestGame
+function createTestGame<A extends string, S extends FlushableSave | null = null, C = unknown, P = unknown>(opts: TestGameOptions<A, S>): Promise<TestGame<A, S, C, P>>;
 
 ## fakeCanvasContext
 function fakeCanvasContext(fake: FakeDevice): GPUCanvasContext;

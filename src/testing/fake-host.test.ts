@@ -9,7 +9,7 @@ describe('createFakeHost', () => {
     const host: Host = createFakeHost();
     expect(host.kind).toBe('web');
     expect(host.embed).toBe('top');
-    expect(host.lifecycle?.state()).toBe('active');
+    expect(host.lifecycle?.state).toBe('active');
     expect(host.haptics?.available()).toBe(true);
     expect(host.safeArea?.insets()).toEqual({ top: 0, right: 0, bottom: 0, left: 0 });
     expect(host.storage.open()).toBeInstanceOf(MemoryStorage);
@@ -26,7 +26,7 @@ describe('createFakeHost', () => {
     off();
     host.setState('background');
     expect(seen).toEqual(['background', 'active']);
-    expect(host.lifecycle.state()).toBe('background');
+    expect(host.lifecycle.state).toBe('background');
   });
 
   it('round-trips a save through its storage', () => {

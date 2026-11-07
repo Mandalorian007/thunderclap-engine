@@ -62,7 +62,11 @@ export type HostLifecycleState = 'active' | 'background';
  * store app's host reads it from the shell (Capacitor's `appStateChange`).
  */
 export interface HostLifecycle {
-  state(): HostLifecycleState;
+  /**
+   * The state now (a getter, E-036: read it each time). Before ws/core-8 this was a method,
+   * `state()`; a custom host writes it as a getter.
+   */
+  readonly state: HostLifecycleState;
   /** Calls `fn` on every change (never twice with the same state). Returns unsubscribe. */
   watch(fn: (state: HostLifecycleState) => void): () => void;
 }

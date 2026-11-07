@@ -143,6 +143,12 @@ detached element. A game can still build the playback itself with
 `createInputPlayback(ctx.input, recording, { clock: ctx.clock, speed })` (no cast: `ctx.clock` is
 a `TickClock`), but the input then stays attached to the canvas and the player can disturb it.
 
+## createGame: headless
+
+`createGame` runs without WebGPU when it is handed a GPU (ws/core-8): `gpu` (a `GpuContext`: `device`, `context`, `format`, `adapter`, `timestamps`) skips the WebGPU boot and the canvas context, so a fake device (`fakeRendererGpu` in `@thunderclap/engine/testing`) runs the whole game in Vitest. With `gpu`, `root` is optional (default a detached `<div>`); a DOM is still needed for the overlay (happy-dom). `clock` sets `ctx.clock` (default `createTickClock()`; a `FixedClock` makes N steps read exactly N × step) and `host` the host, as before. A `gpu.device.lost` promise, when the device has one, halts the loop as on a page. `createTestGame` (`@thunderclap/engine/testing`) is this call with the testing kit's fakes and a `step(n)` driver.
+
+The replay sink (`ctx.replay`, `input.replay`) is a detached element, so it measures pointers against the canvas (`AttachOptions.bounds`): a touch stick or `Look` move zone replays from a recording with the same values frame for frame.
+
 ## createGame: camera, theme and the ctx types
 
 - `ctx.camera` is the camera the loop, the pointer rays and `ui.anchors()` use (`renderer.camera`,

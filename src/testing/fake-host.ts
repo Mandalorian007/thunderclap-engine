@@ -119,7 +119,9 @@ export function createFakeHost(opts: FakeHostOptions = {}): FakeHost {
   let state: HostLifecycleState = opts.state ?? 'active';
   const stateWatchers = new Set<(s: HostLifecycleState) => void>();
   const lifecycle: HostLifecycle = {
-    state: () => state,
+    get state() {
+      return state;
+    },
     watch(fn) {
       stateWatchers.add(fn);
       return () => stateWatchers.delete(fn);

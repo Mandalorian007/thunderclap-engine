@@ -34,6 +34,14 @@ describe('createFixedClock', () => {
     expect(clock.stepMs).toBe(10);
   });
 
+  it('counts a step-sized advance as a step (the game loop advances by step × 1000; ws/core-8)', () => {
+    const clock = createFixedClock(1000 / 60);
+    for (let i = 0; i < 30; i++) clock.advance(1000 / 60);
+    clock.advance(4);
+    expect(clock.ticks).toBe(30);
+    expect(clock.now()).toBe(30 * (1000 / 60) + 4);
+  });
+
   it('rejects a step that is not a positive finite number', () => {
     expect(() => createFixedClock(0)).toThrow(RangeError);
     expect(() => createFixedClock(Number.POSITIVE_INFINITY)).toThrow(RangeError);

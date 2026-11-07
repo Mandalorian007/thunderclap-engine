@@ -51,6 +51,7 @@ interface AttachOptions {
     keyTarget?: Window | HTMLElement;
     disableTouchScroll?: boolean;
     hoverWhileClaimed?: boolean;
+    bounds?: Element;
 }
 
 ## Binding  (type-only)
@@ -888,6 +889,7 @@ type PointerDevice = 'mouse' | 'touch' | 'pen' | 'gamepad' | 'xr';
 ## PointerDispatcher  (type-only)
 interface PointerDispatcher {
     readonly target: HTMLElement;
+    bounds(): DOMRect;
     hoverWhileClaimed: boolean;
     add(consumer: PointerConsumer, priority?: number, seesClaimed?: boolean): () => void;
     remove(consumer: PointerConsumer): void;
@@ -904,6 +906,7 @@ interface PointerDispatcher {
 interface PointerDispatcherOptions {
     transform?: PointerTransform | null;
     hoverWhileClaimed?: boolean;
+    bounds?: Element;
 }
 
 ## PointerHitEvent  (type-only)

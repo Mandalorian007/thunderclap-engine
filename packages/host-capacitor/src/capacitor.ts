@@ -166,7 +166,9 @@ export function createAppLifecycle(app: AppPlugin): HostLifecycle {
       .catch(() => {});
   };
   return {
-    state: () => state,
+    get state() {
+      return state;
+    },
     watch(fn) {
       listen();
       watchers.add(fn);

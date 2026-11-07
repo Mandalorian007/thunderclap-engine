@@ -24,3 +24,8 @@ export {
   type FakeWakeLock,
 } from './fake-host';
 export { createFixedClock, type FixedClock } from './fixed-clock';
+export {
+  createTestGame,
+  type TestGame,
+  type TestGameOptions,
+} from './test-game';

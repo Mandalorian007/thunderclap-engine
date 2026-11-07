@@ -25,6 +25,12 @@
  * scene stack hands scenes this same object, so a scene typed against the game's own ctx sees
  * them. Game logic plugs into the frame and the lifecycle through `ctx.hooks`.
  *
+ * Headless (ws/core-8): given `gpu` (a fake device in a test) `createGame` skips the WebGPU
+ * boot and its fatal screens and mounts the surface without a GPU canvas context; with `clock`
+ * the game runs on that tick clock and with `host` on that host's frames. `root` may then be
+ * left out. The overlay still needs a DOM (happy-dom in Vitest). `@thunderclap/engine/testing`
+ * `createTestGame` wires the fakes in.
+ *
  * VR is one call (`ctx.xr.enter()`, ws/xr): frames then come from the session through an XR
  * host, the scenes record once through the surface's head camera and the renderer draws each
  * eye into the surface's HDR scene target and resolves it through the post stack into the
@@ -59,9 +65,11 @@ import {
   XrPointerSource,
 } from '../input';
 import {
+  type BootResult,
   blockBrowserZoom,
   boot,
   type GpuContext,
+  mountSurface,
   type Surface,
   type SurfaceOptions,
   watchLifecycle,
@@ -144,8 +152,25 @@ export interface GameHooks {
 }
 
 export interface CreateGameOptions<A extends string, S extends FlushableSave | null = null> {
-  /** Element the canvas and overlay mount into. */
-  root: HTMLElement;
+  /**
+   * Element the canvas and overlay mount into. Required unless `gpu` is given; a headless game
+   * without it mounts into a new detached `<div>` of `document`.
+   */
+  root?: HTMLElement;
+  /**
+   * Headless (ws/core-8): the GPU to build on, instead of booting WebGPU on the canvas. Nothing
+   * is asked of `navigator.gpu`, the unsupported and device-lost screens are never shown, and the
+   * canvas gets no context; device loss is read from `gpu.device.lost` where the device has it
+   * (a lost device reaches `hooks.deviceLost` and `ctx.onDeviceLost` as usual). A test passes the
+   * fake GPU (`@thunderclap/engine/testing`); `createTestGame` does.
+   */
+  gpu?: GpuContext;
+  /**
+   * The game's tick clock (`ctx.clock`, ws/core-8). Default `createTickClock()`. The loop
+   * advances it by the fixed step (`clock.advance(step × 1000)`) before each fixed update; a
+   * test passes `createFixedClock(step × 1000)`, which counts each such advance as one whole step.
+   */
+  clock?: TickClock;
   /** The game's name, shown as the eyebrow on the fatal screens. */
   title?: string;
   /** Logical design size the renderer, surface and overlay share. Default 1920×1080. */
@@ -417,15 +442,24 @@ export async function createGame<
   P = unknown,
 >(opts: CreateGameOptions<A, S>): Promise<EngineCtx<A, NoInfer<S>, C, P> | null> {
   const design = { width: opts.design?.width ?? 1920, height: opts.design?.height ?? 1080 };
+  const root = opts.root ?? (opts.gpu ? globalThis.document?.createElement('div') : undefined);
+  if (!root) {
+    throw new Error('createGame: `root` is required (a headless game passes `gpu` and a DOM)');
+  }
   // Before boot, so it holds from the first frame (and on the fatal screens too).
-  if (opts.blockBrowserZoom !== false) blockBrowserZoom(opts.root.ownerDocument);
-  const res = await boot(opts.root, {
+  if (opts.blockBrowserZoom !== false) blockBrowserZoom(root.ownerDocument);
+  const surfaceOpts = {
     ...opts.surface,
     logicalWidth: design.width,
     logicalHeight: design.height,
-    title: opts.title,
-    forceUnsupported: opts.forceUnsupported,
-  });
+  };
+  const res = opts.gpu
+    ? headlessBoot(root, opts.gpu, surfaceOpts)
+    : await boot(root, {
+        ...surfaceOpts,
+        title: opts.title,
+        forceUnsupported: opts.forceUnsupported,
+      });
   if (!res.ok) return null;
   const { surface, gpu } = res;
   opts.onGpuReady?.(gpu);
@@ -483,7 +517,7 @@ export async function createGame<
   // the head while a VR session runs (so a head-locked `WorldPanel` faces the headset).
   // The gestures run on the game's tick clock (advanced by the loop below), so their timers
   // are game time and a replay lands them on the same ticks.
-  const clock = createTickClock();
+  const clock = opts.clock ?? createTickClock();
   const gestures = createGestures({ magnify: opts.input.magnify, clock });
   // While a session runs: its host (frames and the current `XRFrame`) and its surface (eyes).
   let xrHost: XrHost | null = null;
@@ -507,8 +541,11 @@ export async function createGame<
   // The recorded pointers are dispatched through a pointer target nothing real can reach (an
   // element outside the page that keys are read from too), so the gestures, rays and any look
   // see them on their recorded ticks and never a real pointer or key.
+  // Its box is the canvas's (ws/core-8), so a touch stick or touch zone, which measures the
+  // pointer against the box, replays where it was recorded.
   const sink = surface.root.ownerDocument.createElement('div');
-  const attachSink = () => input.attach({ pointerTarget: sink, keyTarget: sink });
+  const attachSink = () =>
+    input.attach({ pointerTarget: sink, keyTarget: sink, bounds: surface.canvas });
   // Where the input lives outside a `ctx.replay`: the canvas, or the sink in replay mode.
   const attachHome = playback ? attachSink : () => input.attach({ pointerTarget: surface.canvas });
   attachHome();
@@ -777,6 +814,42 @@ export async function createGame<
     configurable: true,
   });
   return ctx;
+}
+
+/**
+ * `boot` for a headless game (`CreateGameOptions.gpu`): the surface is mounted as usual, the
+ * GPU is the one given, and device loss comes from `gpu.device.lost` when the device has one
+ * (a reason of `destroyed` is an explicit `destroy()`, not a loss).
+ */
+function headlessBoot(
+  root: HTMLElement,
+  gpu: GpuContext,
+  opts: SurfaceOptions,
+): Extract<BootResult, { ok: true }> {
+  const surface = mountSurface(root, opts);
+  const listeners = new Set<(info: GPUDeviceLostInfo) => void>();
+  const lost = (gpu.device as { lost?: Promise<GPUDeviceLostInfo> }).lost;
+  if (lost && typeof lost.then === 'function') {
+    void lost.then((info) => {
+      if (info.reason === 'destroyed') return;
+      for (const fn of [...listeners]) {
+        try {
+          fn(info);
+        } catch (err) {
+          console.error('[createGame] device-lost handler failed', err);
+        }
+      }
+    });
+  }
+  return {
+    ok: true,
+    surface,
+    gpu,
+    onDeviceLost(fn) {
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
+  };
 }
 
 /** What the XR render step iterates when the frame has no viewer pose. */

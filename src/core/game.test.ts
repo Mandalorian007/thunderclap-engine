@@ -162,7 +162,7 @@ describe('createGame', () => {
     const host = {
       ...createWebHost(),
       lifecycle: {
-        state: () => 'active' as const,
+        state: 'active' as const,
         watch: (fn: (s: 'active' | 'background') => void) => {
           fire = fn;
           return () => {};

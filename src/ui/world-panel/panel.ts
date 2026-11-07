@@ -27,6 +27,7 @@ import { blendState } from '../../render/blend';
 import type { Camera } from '../../render/camera';
 import type { Drawable, Frame } from '../../render/frame';
 import type { Renderer } from '../../render/renderer';
+import { auxSuffix, ScenePipelineCache, sceneVariant } from '../../render/scene-pipelines';
 import type { Texture } from '../../render/texture';
 import { Transform } from '../../render/transform';
 import { createShaderModule } from '../../render/wgsl';
@@ -153,9 +154,14 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
   private readonly uniformSent = new Float32Array(WORLD_PANEL_UNIFORM_FLOATS);
   private uniformDirty = true;
   private readonly group: GPUBindGroup;
+  private readonly renderer: Renderer;
   private readonly pipelineDesc: GPURenderPipelineDescriptor;
-  private flatPipeline: GPURenderPipeline | null = null;
-  private readonly depthPipelines = new Map<string, GPURenderPipeline>();
+  /**
+   * Pipelines per (depth format, target aux key) (ws/core-8): a panel drawn into
+   * `renderer.target` with aux attachments and into a plain target (an XR eye, a probe) in the
+   * same frame binds the variant whose colour targets match each pass.
+   */
+  private readonly pipelines = new ScenePipelineCache();
   private readonly localRay = createRay();
   private readonly hit: WorldPanelHit = { x: 0, y: 0, widget: null, distance: 0 };
   private readonly routerHit: PickHit<WorldPanel>;
@@ -164,6 +170,7 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
   private detachFn: (() => void) | null = null;
 
   constructor(renderer: Renderer, opts: WorldPanelOptions) {
+    this.renderer = renderer;
     this.device = renderer.device;
     this.label = opts.label ?? 'world-panel';
     this.width = opts.width;
@@ -223,7 +230,7 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
       fragment: {
         module: mod,
         entryPoint: 'fs',
-        targets: renderer.sceneTargets(blendState('premultiplied')),
+        targets: renderer.sceneTargets(PREMULTIPLIED),
       },
       primitive: { topology: 'triangle-list', cullMode: 'none' },
     };
@@ -793,37 +800,41 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
     }
   }
 
-  /** Draw the quad inside the scene pass. */
+  /** Draw the quad inside the scene pass, with the pipeline for its depth format and aux key. */
   draw(pass: GPURenderPassEncoder, frame?: Frame): void {
     this.draws = 0;
     if (this.disposed) return;
     const fmt = frame?.depthFormat ?? null;
+    const aux = frame ? (frame.auxKey ?? 0) : this.renderer.target.auxKey;
     pass.setBindGroup(1, this.group);
-    pass.setPipeline(this.pipelineFor(fmt));
+    pass.setPipeline(this.pipelineFor(fmt, aux));
     pass.draw(6, 1);
     this.draws = 1;
   }
 
-  private pipelineFor(format: GPUTextureFormat | null): GPURenderPipeline {
-    if (!format) {
-      this.flatPipeline ??= this.device.createRenderPipeline(this.pipelineDesc);
-      return this.flatPipeline;
-    }
-    const key = `${format}:${this.depthTest ? 'test' : 'always'}`;
-    let p = this.depthPipelines.get(key);
-    if (!p) {
-      p = this.device.createRenderPipeline({
-        ...this.pipelineDesc,
-        label: `${this.label}:${key}`,
-        depthStencil: {
-          format,
-          depthWriteEnabled: false,
-          depthCompare: this.depthTest ? 'less-equal' : 'always',
-        },
-      });
-      this.depthPipelines.set(key, p);
-    }
-    return p;
+  private pipelineFor(format: GPUTextureFormat | null, aux: number): GPURenderPipeline {
+    const p = this.pipelines.get(format, aux);
+    if (p) return p;
+    const key = format ? `${format}:${this.depthTest ? 'test' : 'always'}` : '';
+    const label = `${this.label}${key ? `:${key}` : ''}${auxSuffix(aux)}`;
+    return this.pipelines.set(
+      format,
+      aux,
+      this.device.createRenderPipeline(
+        sceneVariant(
+          this.pipelineDesc,
+          this.renderer.sceneTargets(PREMULTIPLIED, aux),
+          label,
+          format
+            ? {
+                format,
+                depthWriteEnabled: false,
+                depthCompare: this.depthTest ? 'less-equal' : 'always',
+              }
+            : undefined,
+        ),
+      ),
+    );
   }
 
   /** Release the texture and buffers; the panel draws nothing after. */
@@ -846,6 +857,9 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
     return this.pressCount > 0;
   }
 }
+
+/** The panel's blend (one object, so `sceneTargets` caches one list per aux key). */
+const PREMULTIPLIED = blendState('premultiplied');
 
 /** `new WorldPanel(renderer, opts)`. */
 export function createWorldPanel(renderer: Renderer, opts: WorldPanelOptions): WorldPanel {

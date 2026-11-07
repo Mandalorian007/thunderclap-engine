@@ -266,7 +266,7 @@ export function createTouchZones<
   const consumer: PointerConsumer = {
     pointerDown: (p: PointerRecord) => {
       if (!enabled || !dispatcher || devices.indexOf(p.device) < 0) return;
-      const b = dispatcher.target.getBoundingClientRect();
+      const b = dispatcher.bounds();
       const x = p.clientX - b.left;
       const y = p.clientY - b.top;
       for (let i = 0; i < states.length; i++) {

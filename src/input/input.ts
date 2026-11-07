@@ -274,6 +274,12 @@ export interface AttachOptions {
    * from the router until it is released.
    */
   hoverWhileClaimed?: boolean;
+  /**
+   * The element whose box pointer positions are measured against (ws/core-8;
+   * `PointerDispatcherOptions.bounds`). Default the pointer target. `createGame`'s replay sink
+   * passes the canvas, so a recorded touch stick or touch zone replays at its recorded place.
+   */
+  bounds?: Element;
 }
 
 const DEFAULT_AXIS_THRESHOLD = 0.5;
@@ -1525,6 +1531,7 @@ export class Input<A extends string> {
     const dispatcher = createPointerDispatcher(target, {
       transform: this.transform,
       hoverWhileClaimed: opts.hoverWhileClaimed,
+      bounds: opts.bounds,
     });
     this.dispatcherValue = dispatcher;
     // The feed sees every pointer, claimed or not, so recordings stay complete and identical.
