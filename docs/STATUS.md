@@ -175,6 +175,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | v1 API: E-036 plus ergonomics in render, post and fx | ws/api-render | brief `docs/briefs/api-render.md` | after train 13 | 🔵 running |
 | 5 | v1 API: E-036 in the other 12 modules; templates build; create-game installable | ws/api-rest | brief `docs/briefs/api-rest.md` | after train 13 | 🟣 done at `c02996e` (check 2322, snap 0, templates build offline; all area specs green). Train 14 |
 | 5 | arpg demo on `place` maps, `ctx.replay` and object blur | ws/adoption-6 | brief `docs/briefs/adoption-6.md` | after train 13 | 🔵 running |
+| 5 | Testing kit: fake host, fixed clock, headless `createTestGame` in `./testing` | ws/testing-kit | brief `docs/briefs/testing-kit.md` | train 14 | 🔵 running |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
