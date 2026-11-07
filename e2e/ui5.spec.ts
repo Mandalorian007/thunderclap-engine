@@ -10,7 +10,8 @@
  * - `?minimap`: a moving player redraws the map, a still one does not, and a click picks the
  *   world point under it; an arrow marker turns to its heading less the player's yaw (ws/ui-7);
  * - `?still` parks the clock while frames keep coming;
- * - no variant warns `[layout] … overflows` (ws/ui-8: the orbs sit in a content-sized bar).
+ * - no variant warns `[layout] … overflows` (ws/ui-8: the orbs sit in a content-sized bar);
+ * - `?orb-rails` puts the orbs in content-sized side rails, wider than a phone's 56 px (ws/ui-9).
  */
 import type { Frame, Page } from '@playwright/test';
 import type { HarnessUi5State } from '../harness/ui5-state';
@@ -244,3 +245,25 @@ for (const query of ['orb', 'floats', 'minimap']) {
     expect(errors).toEqual([]);
   });
 }
+
+test('?orb-rails: the orbs widen content side rails and overflow nothing (ws/ui-9)', async ({
+  page,
+  wrapper,
+}) => {
+  await open(page, wrapper, 'orb-rails&still');
+  const start = (await read()).frames;
+  await expect.poll(async () => (await read()).frames).toBeGreaterThan(start + 5);
+  const s = await read();
+  expect(s.orbRegions).toEqual(['left', 'right']);
+  expect(s.overflows).toEqual([]);
+  const ff = await frame.evaluate(
+    () => document.querySelector<HTMLElement>('[data-form-factor]')?.dataset.formFactor ?? '',
+  );
+  if (ff.startsWith('phone')) {
+    // A phone's rails are 56 px fixed; content rails grow past that to hold the orbs.
+    expect(s.railWidths.left).toBeGreaterThan(56);
+    expect(s.railWidths.right).toBeGreaterThan(56);
+  }
+  expect(overflowWarnings).toEqual([]);
+  expect(errors).toEqual([]);
+});

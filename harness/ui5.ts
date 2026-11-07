@@ -6,6 +6,9 @@
  *   a value readout, one with a quick trail, a percent readout and a colour override; they drain
  *   in steps and refill. They sit at the two ends of a content-sized `bottom` bar (ws/ui-8:
  *   `bars: { bottom: { size: 'content', max: 160 } }`), so no form factor overflows. `value`, `fill` and `trailDom` (measured from the DOM), `trail`.
+ * - `?orb-rails`: the same orbs, one in a content-sized `left` rail and one in a content-sized
+ *   `right` rail (ws/ui-9: `bars: { left/right: { size: 'content', max: 160 } }`), so a phone's
+ *   56 px rails widen to hold them. `orbRegions`, `railWidths`.
  * - `?floats`: floating text (`ui.floats(camera)`, ws/ui-6) from a ring of points, a crit every seventh, and
  *   a label behind the camera every half second; `active`, `pooled`, `spawned`, `culled`.
  * - `?minimap`: a round, player-up canvas minimap (`ui.minimap`, ws/ui-6) over a painted
@@ -40,6 +43,8 @@ const LOGICAL = { width: 1920, height: 1080 };
 const query = new URLSearchParams(location.search);
 const MODES: HarnessUi5Mode[] = ['orb', 'floats', 'minimap'];
 const mode = MODES.find((m) => query.has(m)) ?? 'orb';
+/** `?orb-rails` (ws/ui-9): the orb mode with the orbs in content-sized side rails. */
+const rails = mode === 'orb' && query.has('orb-rails');
 
 const state: HarnessUi5State = {
   ready: false,
@@ -61,6 +66,8 @@ const state: HarnessUi5State = {
   player: { x: 0, z: 0, yaw: 0 },
   headingMarkers: [],
   overflows: [],
+  orbRegions: [],
+  railWidths: { left: 0, right: 0 },
 };
 
 // ------------------------------------------------------------------ geometry (12 floats/vertex)
@@ -224,10 +231,20 @@ async function main(): Promise<void> {
 
   // `?orb` sizes the bottom bar to its orbs (ws/ui-8): the bar grows from its fixed track to the
   // tallest orb plus pad, up to 160 px, so no form factor reports a `[layout] … overflows`.
+  // `?orb-rails` sizes the side rails to them instead (ws/ui-9): a rail widens to its orb plus pad.
   const ui = createOverlay({
     parent: root,
     caption: { reducedMotion: true },
-    layout: mode === 'orb' ? { bars: { bottom: { size: 'content', max: 160 } } } : undefined,
+    layout: rails
+      ? {
+          bars: {
+            left: { size: 'content', max: 160 },
+            right: { size: 'content', max: 160 },
+          },
+        }
+      : mode === 'orb'
+        ? { bars: { bottom: { size: 'content', max: 160 } } }
+        : undefined,
   });
   surface.onResize(({ rect, backbuffer }) => {
     renderer.resize(backbuffer.width, backbuffer.height);
@@ -266,7 +283,7 @@ async function main(): Promise<void> {
         tone: 'danger',
         trail: true,
         reducedMotion: false,
-        region: 'bottom',
+        region: rails ? 'left' : 'bottom',
         order: 0,
       }),
       ui.meter({
@@ -278,15 +295,31 @@ async function main(): Promise<void> {
         size: 104,
         trail: { delay: 200, duration: 400 },
         reducedMotion: false,
-        region: 'bottom',
+        region: rails ? 'right' : 'bottom',
         order: 2,
       }),
     );
     orbs.forEach((o, i) => {
       o.el.id = `orb-${i}`;
     });
-    // The orbs at the bar's two ends, the world between them.
-    ui.layout.region('bottom').style.justifyContent = 'space-between';
+    // The orbs at the bar's two ends, the world between them (or one per rail, centred).
+    if (rails) {
+      for (const r of ['left', 'right'] as const) {
+        Object.assign(ui.layout.region(r).style, {
+          justifyContent: 'center',
+          alignItems: 'center',
+        });
+      }
+      const note = () => {
+        state.orbRegions = orbs.map((o) => o.el.parentElement?.dataset.region ?? '');
+        state.railWidths = {
+          left: ui.layout.state.regions.left?.width ?? 0,
+          right: ui.layout.state.regions.right?.width ?? 0,
+        };
+      };
+      ui.layout.onChange(note);
+      note();
+    } else ui.layout.region('bottom').style.justifyContent = 'space-between';
     const steps = [
       { every: 1.2, drop: 25 },
       { every: 0.8, drop: 15 },
