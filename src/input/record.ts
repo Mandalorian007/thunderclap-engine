@@ -12,11 +12,18 @@
  * (ws/input-7) stamps each `ptr` entry with its time, so a replayed tap, long-press or
  * double-tap classifies as it did live. Versions 1 and 2 still parse and play.
  */
+import { wallClock } from './clock';
 import type { Input, InputFeedHook, InputPointerPhase } from './input';
 import type { GamepadLike, PointerState } from './types';
 
-const defaultNow = (): number =>
-  typeof performance !== 'undefined' ? performance.now() : Date.now();
+/** The linked gestures' clock, else the linked look's, else the wall clock. */
+function linkedClock<A extends string>(input: Input<A>): () => number {
+  const g = input.getGestures();
+  if (g) return g.now;
+  const look = input.getLook();
+  if (look) return () => look.clock.now();
+  return wallClock.now;
+}
 
 /** One gamepad as recorded: button values (1 when `pressed`) and axes. `null` for an empty slot. */
 export type PadSnapshot = { buttons: number[]; axes: number[] } | null;
@@ -103,7 +110,9 @@ export interface InputRecorderOptions {
   pads?: boolean;
   /**
    * The clock pointer `time`s are stamped on (ws/input-7). Default: the clock of the gestures
-   * linked to the input when the recorder is made (`Gestures.now`), else `performance.now()`.
+   * linked to the input when the recorder is made (`Gestures.now`), else the linked look's
+   * (`Look.clock`, ws/input-8), else `performance.now()`. With a `createTickClock()` shared by
+   * gestures and look, times are game time.
    */
   now?: () => number;
 }
@@ -127,8 +136,9 @@ export interface InputPlaybackOptions {
   speed?: number;
   /**
    * The clock recorded pointer `time`s replay on (ws/input-7). Default: the clock of the
-   * gestures linked to the input when the playback is made (`Gestures.now`), else
-   * `performance.now()`.
+   * gestures linked to the input when the playback is made (`Gestures.now`), else the linked
+   * look's (`Look.clock`, ws/input-8), else `performance.now()`. On a `createTickClock()` the
+   * replay is the same on every tick index whatever the wall time between `step()`s.
    */
   now?: () => number;
 }
@@ -186,7 +196,7 @@ export function createInputRecorder<A extends string>(
 ): InputRecorder {
   const capturePads = opts.pads !== false;
   const recording: InputRecording = { version: 3, ticks: [] };
-  const clock = opts.now ?? input.getGestures()?.now ?? defaultNow;
+  const clock = opts.now ?? linkedClock(input);
   const start = clock();
   /** ms since `start`, `age` ms ago, to 0.01 ms. */
   const stamp = (age: number): number => Math.round((clock() - age - start) * 100) / 100;
@@ -391,7 +401,7 @@ export function createInputPlayback<A extends string>(
   let speed = Math.max(1, Math.floor(opts.speed ?? 1));
   /** Replayed pointers still down, cancelled on `seek`. */
   const live = new Map<number, InputPointerEntry>();
-  const clock = opts.now ?? input.getGestures()?.now ?? defaultNow;
+  const clock = opts.now ?? linkedClock(input);
   /**
    * The clock reading that recorded time 0 maps to, set by the first timed entry fed (which then
    * happens as it is fed, as a live event is handled just before its tick's update) and again
@@ -434,13 +444,16 @@ export function createInputPlayback<A extends string>(
         else input.keyUp(code);
       }
     }
+    // The pointer moves before the buttons (ws/input-8), as a DOM pointer event sets the
+    // position before its button: an orbit look's drag then starts where the press was, not at
+    // the previous position.
+    if (e.p && !e.d) input.pointerAt(e.p[0], e.p[1], e.p[2] ?? 'mouse');
     if (e.b) {
       for (const [button, down] of e.b) {
         if (down) input.buttonDown(button);
         else input.buttonUp(button);
       }
     }
-    if (e.p && !e.d) input.pointerAt(e.p[0], e.p[1], e.p[2] ?? 'mouse');
     if (e.w) input.wheel(e.w[0], e.w[1]);
     if (e.ptr) for (const p of e.ptr) replayPointer(p);
     if (e.g) pads = e.g.map(padFromSnapshot);

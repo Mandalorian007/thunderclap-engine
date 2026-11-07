@@ -6,6 +6,12 @@ export {
   serializeBindings,
 } from './bindings';
 export {
+  createTickClock,
+  type InputClock,
+  type TickClock,
+  wallClock,
+} from './clock';
+export {
   Follow,
   type FollowCamera,
   type FollowMode,
@@ -14,6 +20,7 @@ export {
   type FollowTarget,
 } from './follow';
 export {
+  createGestures,
   type DragGesture,
   type GestureAttachOptions,
   type GestureDevice,
@@ -68,6 +75,7 @@ export {
 } from './input';
 export type { LookTapListener, LookTapOptions } from './look';
 export {
+  createLook,
   Look,
   type LookEvents,
   type LookKeys,
