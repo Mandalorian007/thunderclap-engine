@@ -159,11 +159,14 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Input 10: playback anchors the first event's age at its first step; README *Clock* points at `ctx.clock` | ws/input-10 | brief `docs/briefs/input-10.md` | input-9, core-4 | ✅ merged in E-031 train 11 (`f8aa5ff`; main 336ed25) |
 | 5 | UI 10: intrinsic `max-content` rail measure; per-form-factor `ui.meter({ size })` and `setSize` | ws/ui-10 | brief `docs/briefs/ui-10.md` | ui-9, adoption-4 | ✅ merged in E-031 train 11 (`f1df57a`; main 336ed25) |
 | 5 | FX 7: unpacked per-field particle readback | ws/fx-7 | brief `docs/briefs/fx-7.md` | fx-6 | ✅ merged in E-031 train 10 (`38501f5`; main 50c07f9) |
-| 5 | Adoption 5: arpg phone HUD on content rails; keyed ghouls with velocity; grout corner | ws/adoption-5 | brief `docs/briefs/adoption-5.md`; branched from ws/render-7 7d60386 | adoption-4, ui-9, render-7 | 🔵 dispatched |
+| 5 | Adoption 5: arpg phone HUD on content rails; keyed ghouls with velocity; grout corner | ws/adoption-5 | brief `docs/briefs/adoption-5.md`; branched from ws/render-7 7d60386 | adoption-4, ui-9, render-7 | 🟣 done at `fe44ac7` (check green, snap 0, arpg 74/14 skip). Train 12 |
 | 5 | Post 8: stack owns jitter by `renderer.jitter === hook`; WeakMap deleted | ws/post-8 | brief `docs/briefs/post-8.md`; branched from ws/render-8 b3dc3b6 | post-7, render-8 | 🟣 done at `5a51e3b` (check 2277, snap 0, post2 56, post3 48, post4 56, depth-post 32, xr 8). Train 12, after render-8, which it stacks on; it re-merges render-8 once render-8's post4 fix lands |
 | 5 | Render 9: LOD lists skip the undrawn main upload; fake GPU checks usage flags and maps staging buffers; readback tests off stubs | ws/render-9 | brief `docs/briefs/render-9.md`; branched from ws/render-8 b3dc3b6 | render-8, fx-6/7 wishes | 🔵 dispatched |
 | 5 | Core 5: `createGame` test of a playback installed mid-session (clock already advanced), speed 1 and 4 | ws/core-5 | brief `docs/briefs/core-5.md`; branched from ws/input-10 c2de796 | core-4, input-10 | ✅ merged in E-031 train 11 (`00a773d`; main 336ed25) |
 | 5 | Core 6: `EngineCtx.clock` typed as the tick clock; `ctx.replay(rec, opts)` detaches real input and reattaches it at the end | ws/core-6 | brief `docs/briefs/core-6.md`; branched from ws/core-5 fdc822e | core-5 | 🟣 done at `ad6ea9c` (check 2274, snap 0, replay 16, core2 40, lifecycle 32). Opens E-031 train 12 |
+| 5 | UI 11: meter `setPlace` (or a per-form place map), the minimap holds its size in content rails, `meter.size` getter | ws/ui-11 | brief `docs/briefs/ui-11.md` | ui-10 | 🔵 dispatched |
+| 5 | Core 7: `ctx.replay` `onEnd`; `createGame` velocity-target option | ws/core-7 | brief `docs/briefs/core-7.md`; branched from ws/core-6 ad6ea9c | core-6 | 🔵 dispatched |
+| 5 | Input 11: pointer-source mute (XR included) for replays | ws/input-11 | brief `docs/briefs/input-11.md` | core-6 | 🔵 dispatched |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
@@ -343,6 +346,15 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
   - Wishes:
     - XR controller and hand pointers still reach a running replay (needs a pointer-source mute in input or XR; input backlog).
     - `onEnd` callback on `ctx.replay` (core backlog).
+- ws/adoption-5 notes:
+  - Phone-landscape now puts the map and mana orb on the right rail and the health orb on the left. The bottom bar holds abilities only (52 px). `worldView` rose by +0.03–0.04 on every phone.
+  - **Accepted deviation:** phone-portrait keeps the card-lane map and the bottom bar. Rails there would leave the world only about 218 of 390 px of width.
+  - Keyed ghouls have velocity under `?blur`. Killing one mid-pack causes 0 LOD shifts; the negative control (keys removed) shifted 1–2 survivors. The grout corner is filled.
+  - Wishes, routed:
+    - meter `setPlace` → ui-11
+    - minimap `max-width` in rails → ui-11
+    - a `createGame` velocity-target option → core-7
+    - ui-10's per-form meter size → adoption-6
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
