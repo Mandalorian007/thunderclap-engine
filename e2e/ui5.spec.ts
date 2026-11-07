@@ -9,7 +9,8 @@
  *   the ones behind the camera are hidden;
  * - `?minimap`: a moving player redraws the map, a still one does not, and a click picks the
  *   world point under it; an arrow marker turns to its heading less the player's yaw (ws/ui-7);
- * - `?still` parks the clock while frames keep coming.
+ * - `?still` parks the clock while frames keep coming;
+ * - no variant warns `[layout] … overflows` (ws/ui-8: the orbs sit in a content-sized bar).
  */
 import type { Frame, Page } from '@playwright/test';
 import type { HarnessUi5State } from '../harness/ui5-state';
@@ -18,12 +19,18 @@ import { HARNESS_URL, WRAPPER_URL } from './ports';
 
 let frame: Frame;
 const errors: string[] = [];
+/** `[layout] … overflows` warnings since the last `open` (ws/ui-8: there are none). */
+const overflowWarnings: string[] = [];
 
 async function open(page: Page, wrapper: string, query: string): Promise<void> {
   errors.length = 0;
+  overflowWarnings.length = 0;
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => {
     if (m.type() === 'error') errors.push(m.text());
+    if (m.type() === 'warning' && /^\[layout\] .* overflows /.test(m.text())) {
+      overflowWarnings.push(m.text());
+    }
   });
   const path = `ui5.html?${query}`;
   if (wrapper === 'top') {
@@ -225,3 +232,15 @@ test('?still parks the clock while frames keep coming', async ({ page, wrapper }
   expect(s1.spawned).toBe(0);
   expect(errors).toEqual([]);
 });
+
+for (const query of ['orb', 'floats', 'minimap']) {
+  test(`?${query}: no widget overflows its layout region (ws/ui-8)`, async ({ page, wrapper }) => {
+    await open(page, wrapper, `${query}&still`);
+    // The layout measures on every re-layout; let a few frames (and any resize) pass first.
+    const start = (await read()).frames;
+    await expect.poll(async () => (await read()).frames).toBeGreaterThan(start + 5);
+    expect((await read()).overflows).toEqual([]);
+    expect(overflowWarnings).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+}

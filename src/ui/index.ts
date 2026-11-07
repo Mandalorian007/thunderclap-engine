@@ -113,6 +113,8 @@ export {
 } from './inventory-grid';
 export { type Radial, type RadialItem, type RadialOptions, radial } from './inventory-radial';
 export {
+  type BarName,
+  type BarSize,
   type ClassifyInput,
   classifyFormFactor,
   defaultForms,

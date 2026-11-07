@@ -39,6 +39,8 @@ export interface HarnessUi5State {
    * radians clockwise from north, and `markerAt(id).angle`, the turn drawn on the player-up map.
    */
   headingMarkers: { id: string; heading: number; angle: number }[];
+  /** Widget ids in `ui.layout.overflows()` (ws/ui-8: empty in every mode on every row). */
+  overflows: string[];
 }
 
 export interface HarnessUi5Api {

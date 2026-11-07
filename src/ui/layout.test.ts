@@ -150,6 +150,46 @@ describe('effectiveInsets', () => {
   });
 });
 
+describe('resolveLayout: content bars (ws/ui-8)', () => {
+  const occupied = new Set<RegionName>(['top', 'bottom']);
+  it('a content bar grows its track to the tallest widget plus pad; the fill gives it up', () => {
+    const ff: FormFactor = 'phone-landscape';
+    const fixed = resolveLayout(ff, formSpec(ff), 844, 390, undefined, occupied, { bottom: 128 });
+    expect(fixed.regions.bottom!.height).toBe(52); // fixed bars ignore content
+    const spec: LayoutSpec = { bars: { bottom: { size: 'content' } } };
+    const s = resolveLayout(ff, formSpec(ff, spec), 844, 390, undefined, occupied, { bottom: 128 });
+    expect(s.regions.bottom!.height).toBe(128 + 2 * defaultForms[ff].pad);
+    expect(s.regions.top!.height).toBe(52);
+    expect(s.freeRect.height).toBe(fixed.freeRect.height - (136 - 52));
+    expect(s.regions.bottom!.y + s.regions.bottom!.height).toBe(390);
+  });
+  it('never shrinks below the form track; max clamps; a form override wins over the spec', () => {
+    const ff: FormFactor = 'desktop';
+    const spec: LayoutSpec = {
+      bars: { top: { size: 'content' }, bottom: { size: 'content', max: 100 } },
+      forms: { tablet: { bars: { top: { size: 'fixed' } } } },
+    };
+    const s = resolveLayout(ff, formSpec(ff, spec), 1280, 720, undefined, occupied, {
+      top: 20,
+      bottom: 300,
+    });
+    expect(s.regions.top!.height).toBe(64);
+    expect(s.regions.bottom!.height).toBe(100);
+    expect(formSpec('tablet', spec).bars).toEqual({
+      top: { size: 'fixed' },
+      bottom: { size: 'content', max: 100 },
+    });
+    expect(formSpec('desktop').bars).toBeUndefined();
+  });
+  it('the bottom bar of phone-portrait grows its own row only', () => {
+    const ff: FormFactor = 'phone-portrait';
+    const spec: LayoutSpec = { bars: { bottom: { size: 'content' } } };
+    const s = resolveLayout(ff, formSpec(ff, spec), 375, 667, undefined, occupied, { bottom: 140 });
+    expect(s.rows[4]).toBe(148);
+    expect(s.regions.top!.height).toBe(56);
+  });
+});
+
 describe('resolveLayout: region assignment per form factor', () => {
   for (const r of ROWS) {
     it(`${r.name}: all regions present, inside the safe area, no grid overlap`, () => {
@@ -538,6 +578,44 @@ describe('overlay.layout (DOM)', () => {
     expect(warn).toHaveBeenCalledTimes(2);
     warn.mockRestore();
     layout.destroy();
+  });
+
+  it('content bars hold a 128 px orb; a fixed bar reports it; max clamps and reports (ws/ui-8)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const sized = <T extends HTMLElement>(el: T, width: number, height: number): T => {
+      el.getBoundingClientRect = () =>
+        ({ x: 0, y: 0, left: 0, top: 0, right: width, bottom: height, width, height }) as DOMRect;
+      return el;
+    };
+    const pad = defaultForms['phone-landscape'].pad;
+    // A content bar: the bar grows to 128 + pad each side; nothing overflows.
+    let layout = make({ classify, bars: { bottom: { size: 'content' } } });
+    const free0 = layout.freeRect.height;
+    const orb = sized(h('div'), 128, 128);
+    layout.add(orb, { id: 'orb', place: { default: 'bottom' } });
+    expect(layout.state.regions.bottom!.height).toBe(128 + 2 * pad);
+    expect(layout.freeRect.height).toBeLessThan(free0);
+    expect(layout.overflows()).toEqual([]);
+    expect(warn).not.toHaveBeenCalled();
+    // The grid draws the same track the state reports.
+    expect(layout.element.style.gridTemplateRows.split(' ').at(-1)).toBe(`${128 + 2 * pad}px`);
+    ov!.destroy();
+    // A fixed bar keeps its 52 px and reports the orb.
+    layout = make({ classify });
+    layout.add(sized(h('div'), 128, 128), { id: 'orb', place: { default: 'bottom' } });
+    expect(layout.state.regions.bottom!.height).toBe(52);
+    expect(layout.overflows()).toMatchObject([{ id: 'orb', region: 'bottom', h: 128, rh: 44 }]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    ov!.destroy();
+    // `max` clamps the bar, and the orb taller than it still reports.
+    layout = make({ classify, bars: { bottom: { size: 'content', max: 100 } } });
+    layout.add(sized(h('div'), 128, 128), { id: 'orb', place: { default: 'bottom' } });
+    expect(layout.state.regions.bottom!.height).toBe(100);
+    expect(layout.overflows()).toMatchObject([{ id: 'orb', h: 128, rh: 100 - 2 * pad }]);
+    expect(warn).toHaveBeenCalledTimes(2);
+    ov!.destroy();
+    ov = null;
+    warn.mockRestore();
   });
 
   it('device mode leaves the density tokens to the layout', () => {
