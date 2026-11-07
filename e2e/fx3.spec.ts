@@ -7,8 +7,8 @@
  * - `?sheet`: the sheet is sampled (the parked sprite's pixel differs from the sky) and the tile
  *   advances (the sampled colour changes while `tileSeen` walks 5..15);
  * - `?forces`: `meanRadius` (the CPU shadow of the same forces) shrinks, and the attractor's
- *   pixel lights as the GPU particles swing through it (sampled every 50 ms: each pass is short);
- * - `?collide`: rain over a slab stays on it (`belowSlab` stays a small share of `alive`);
+ *   pixel lights as the GPU particles gather on it (sampled every 50 ms);
+ * - `?collide`: rain over a slab stays on it (`belowSlab` stays under 0.5% of `alive`);
  * - `?sub`: particles are alive after every parent has died;
  * - `?effect`: the attached effect has one instance and live particles;
  * - every mode boots with no GPU error.
@@ -144,10 +144,11 @@ test('forces: the attractor pulls the shell in', async ({ page, wrapper }) => {
   await expect
     .poll(async () => (await read()).meanRadius, { message: 'mean radius shrinks' })
     .toBeLessThan(1.5);
-  // The GPU particles swing through the same point rather than settling on it: measured over
-  // 16 runs, the 5×5 centre is lit for about 0.3 s of each ~1.8 s pass. A sample every second
-  // (the default poll cadence) can miss every pass for the whole timeout, so the poll samples
-  // every 50 ms: about twenty samples land in each lit stretch.
+  // The GPU particles gather into a blob on the same point (a linear pull under drag 3, ws/fx-5):
+  // after the first second the 5×5 centre was lit in every 50 ms sample over 6 s on all eight
+  // rows (1423 of 1423, meanRadius 0.07..0.15). Before, a constant pull swung them through it
+  // (lit about 0.3 s of each ~1.8 s pass, ws/e2e-harden-2), which is why the poll samples every
+  // 50 ms; that cadence stays, so the poll still lands in a lit stretch if the blob ever swings.
   const at = await toPage((await read()).probe);
   await setParticles(false);
   await frames(3);
@@ -171,12 +172,14 @@ test('collide: rain over the slab stays on it', async ({ page, wrapper }) => {
   await expect.poll(async () => (await read()).time).toBeGreaterThan(2.5);
   const s = await read();
   expect(s.belowSlab).toBeGreaterThanOrEqual(0);
-  // Not zero: rain over the slab's edge falls past it by design (`alive` counts every drop, and
-  // about a quarter of a drop's life is the fall above the slab). Measured over 29 runs, under
-  // CPU throttling up to 20×, the leak past the slab was 2.4..6.2% of `alive` (worst 6.2%, on
-  // the first wave); a collision that stopped working would put it near 75%. 12% holds the
-  // measured worst with room and still fails a broken collide by a factor of six.
-  expect(s.belowSlab).toBeLessThan(s.alive * 0.12);
+  // The rain is born over the slab's middle half, so no drop misses it. The 2.4..6.2% that
+  // e2e-harden-2 measured was resting drops creeping off the front edge: the collide pushed them
+  // back along the view ray, toward the camera, every frame (drops born 3 units from the edge got
+  // off in about 1.8 s). With the push along the surface normal (ws/fx-5) the leak measured 0 in
+  // 40 runs (every matrix row × 4 at load ~23, and 4 rows × 2 under 20× CPU throttling), with
+  // 3750..4141 alive. 0.5% (about 20 drops) leaves room for a stray at a silhouette edge and
+  // still fails the old creep, let alone a broken collide (near 75%).
+  expect(s.belowSlab).toBeLessThan(s.alive * 0.005);
   expect(s.gpuErrors).toBe(0);
   expect(errors).toEqual([]);
 });
