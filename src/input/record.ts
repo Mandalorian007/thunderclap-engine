@@ -445,11 +445,23 @@ export function createInputPlayback<A extends string>(
   const clock = opts.now ?? (driven ? () => driven.now() : linkedClock(input));
   const tickMs = positive(opts.tickMs) ?? positive(recording.tickMs) ?? input.tickMs;
   /**
-   * The clock reading that recorded time 0 maps to, set by the first timed entry fed (which then
-   * happens as it is fed, as a live event is handled just before its tick's update) and again
-   * by the first one after a `seek`. `null` until then.
+   * Anchor at the first `step()` (ws/input-10) unless the clock is the wall clock, whose readings
+   * between steps follow the replay's frame rate rather than its ticks.
+   */
+  const anchorAtStep = opts.now !== undefined || driven !== null || !onWallClock(input);
+  /**
+   * The clock reading that recorded time 0 maps to. Off the wall clock it is set at the first
+   * `step()` (and the first after a `seek`): that reading less the fed tick's recorded start
+   * (`tick × tickMs`), so the first event keeps its recorded age however late the replay starts.
+   * On the wall clock, and wherever that anchor would put the first timed entry after the
+   * moment it is fed, the first timed entry sets it so that entry happens as it is fed (age 0),
+   * as before ws/input-10. `null` until then.
    */
   let base: number | null = null;
+  /** Set at creation and by `seek`: the next `step()` anchors `base`. */
+  let fresh = true;
+  /** Set with `fresh`: the next timed entry may re-anchor `base` (see above). */
+  let firstTimed = true;
 
   const replayPointer = (e: InputPointerEntry): void => {
     // Version 3 entries happen at their recorded offset from tick 0; older ones (and the
@@ -458,7 +470,11 @@ export function createInputPlayback<A extends string>(
     let age = 0;
     if (time !== undefined) {
       const now = clock();
-      if (base === null) base = now - time;
+      // An event cannot happen after it is handled: a step anchor that would say so (a
+      // recording made with the clock advanced before the events, or a frozen replay clock)
+      // gives way to the entry itself.
+      if (base === null || (firstTimed && now < base + time)) base = now - time;
+      firstTimed = false;
       age = now - (base + time);
     }
     input.replayPointer(PHASES[e[0]]!, e[1], e[2], e[3], e[4], e[5], e[6] === 1, age);
@@ -522,6 +538,10 @@ export function createInputPlayback<A extends string>(
   const pb: InputPlayback = {
     step() {
       if (tick >= length) return false;
+      if (fresh) {
+        fresh = false;
+        if (anchorAtStep) base = clock() - tick * tickMs;
+      }
       feedAndAdvance();
       for (let i = 1; i < speed && tick < length; i++) {
         input.update();
@@ -544,6 +564,8 @@ export function createInputPlayback<A extends string>(
       tick = Math.max(0, Math.min(length, Math.floor(to)));
       index = 0;
       base = null;
+      fresh = true;
+      firstTimed = true;
       // The pads in force at `to` are the last snapshot at or before it.
       pads = [];
       for (const e of ticks) {
