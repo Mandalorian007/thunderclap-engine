@@ -1,6 +1,6 @@
 /**
  * The voxel world of the voxel demo: the constants, the block ids and their texture layers, the
- * noise and the generator that pours a world into an engine `VoxelGrid`, and the block rules
+ * terrain (the engine's `createNoise`) and the generator that pours a world into an engine `VoxelGrid`, and the block rules
  * (what lies beyond the grid, where the player spawns). Shared by the page (`main.ts`), the
  * mesher Worker (`mesher.worker.ts`, for `blockLayer` and `outsideBlock`) and the spec
  * (`e2e/demos/voxel.spec.ts`). The grid, the mesher, the chunk meshes and the picking ray are
@@ -9,6 +9,7 @@
  * Coordinates: the grid's corner is the world origin, so a voxel `(x, y, z)` occupies the world
  * cube `[x, x + 1) × [y, y + 1) × [z, z + 1)` and grid coordinates are world coordinates.
  */
+import { createNoise, type FbmOptions, type Noise } from '@thunderclap/engine/core';
 import type { VoxelFace, VoxelGrid } from '@thunderclap/engine/voxel';
 
 export const CHUNK = 16;
@@ -98,6 +99,10 @@ export function surfaceHeight(grid: VoxelGrid, x: number, z: number): number {
 
 // ─── noise ───────────────────────────────────────────────────────────────────
 
+/**
+ * Point hashes for per-column and per-cell rolls (a tree here, a lantern there). These are not
+ * noise: a roll needs a number per lattice point, not a field between them.
+ */
 function hash2(x: number, y: number, seed: number): number {
   let h = (x * 374761393 + y * 668265263 + seed * 1442695041) | 0;
   h = Math.imul(h ^ (h >>> 13), 1274126177);
@@ -112,71 +117,49 @@ function hash3(x: number, y: number, z: number, seed: number): number {
   return (h >>> 0) / 4294967296;
 }
 
-const smooth = (t: number) => t * t * (3 - 2 * t);
-const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
-
-/** 2D value noise in [0, 1]. */
-export function valueNoise2(x: number, y: number, seed: number): number {
-  const x0 = Math.floor(x);
-  const y0 = Math.floor(y);
-  const tx = smooth(x - x0);
-  const ty = smooth(y - y0);
-  const a = hash2(x0, y0, seed);
-  const b = hash2(x0 + 1, y0, seed);
-  const c = hash2(x0, y0 + 1, seed);
-  const d = hash2(x0 + 1, y0 + 1, seed);
-  return lerp(lerp(a, b, tx), lerp(c, d, tx), ty);
-}
-
-/** 3D value noise in [0, 1]. */
-export function valueNoise3(x: number, y: number, z: number, seed: number): number {
-  const x0 = Math.floor(x);
-  const y0 = Math.floor(y);
-  const z0 = Math.floor(z);
-  const tx = smooth(x - x0);
-  const ty = smooth(y - y0);
-  const tz = smooth(z - z0);
-  const c000 = hash3(x0, y0, z0, seed);
-  const c100 = hash3(x0 + 1, y0, z0, seed);
-  const c010 = hash3(x0, y0 + 1, z0, seed);
-  const c110 = hash3(x0 + 1, y0 + 1, z0, seed);
-  const c001 = hash3(x0, y0, z0 + 1, seed);
-  const c101 = hash3(x0 + 1, y0, z0 + 1, seed);
-  const c011 = hash3(x0, y0 + 1, z0 + 1, seed);
-  const c111 = hash3(x0 + 1, y0 + 1, z0 + 1, seed);
-  const z0v = lerp(lerp(c000, c100, tx), lerp(c010, c110, tx), ty);
-  const z1v = lerp(lerp(c001, c101, tx), lerp(c011, c111, tx), ty);
-  return lerp(z0v, z1v, tz);
-}
-
-/** Fractal 2D value noise, `octaves` layers, in [0, 1]. */
-export function fbm2(x: number, y: number, seed: number, octaves: number): number {
-  let sum = 0;
-  let amp = 0.5;
-  let norm = 0;
-  for (let o = 0; o < octaves; o++) {
-    sum += amp * valueNoise2(x, y, seed + o * 17);
-    norm += amp;
-    x *= 2.03;
-    y *= 1.97;
-    amp *= 0.5;
+/** The engine's seeded noise for one seed, built once (the permutation table is per seed). */
+let noiseSeed = 0;
+let noise: Noise | null = null;
+function noiseFor(seed: number): Noise {
+  if (noise === null || seed !== noiseSeed) {
+    noise = createNoise(seed);
+    noiseSeed = seed;
   }
-  return sum / norm;
+  return noise;
 }
+
+const HILLS: FbmOptions = { octaves: 4 };
+const RIDGES: FbmOptions = { octaves: 3 };
+/**
+ * Where the world's window sits on the noise field, in columns along z: chosen so the seed's
+ * spawn looks north over flat grass (the spec places a block a few cells ahead).
+ */
+const WINDOW_Z = -40;
 
 // ─── generation ──────────────────────────────────────────────────────────────
 
+/**
+ * The band every column's terrain top falls in (seed 1337 spans 19..39; the mulberry-era value
+ * noise spanned 22..39). The page checks it at boot (`worldProblem`).
+ */
+export const TERRAIN_MIN = 16;
+export const TERRAIN_MAX = 44;
+
 /** Terrain height of column `(x, z)`: rolling hills with a sea between them. */
 export function terrainHeight(x: number, z: number, seed: number): number {
-  const base = fbm2(x / 56, z / 56, seed, 4);
-  const ridge = fbm2(x / 23 + 100, z / 23 - 50, seed + 7, 3);
-  const h = 18 + base * 26 + (ridge - 0.5) * 8;
+  const n = noiseFor(seed);
+  z += WINDOW_Z;
+  // `fbm` is in [-1, 1]; the hills read it as 0..1 around 0.5, the ridges as ±0.5.
+  const base = 0.5 + 0.5 * n.fbm(n.value2, x / 56, z / 56, 0, HILLS);
+  const ridge = 0.5 * n.fbm(n.value2, x / 23 + 100, z / 23 - 50, 0, RIDGES);
+  const h = 16 + base * 26 + ridge * 8;
   return Math.max(4, Math.min(WORLD_Y - 6, Math.round(h)));
 }
 
 /** A cave cell: a 3D noise band carved out of the rock, never through the surface skin. */
 function carved(x: number, y: number, z: number, h: number, seed: number): boolean {
-  return y > 3 && y < h - 3 && valueNoise3(x / 13, y / 9, z / 13, seed + 99) > 0.66;
+  // value3 in [-1, 1]: above 0.32 is the old 0..1 field's band above 0.66.
+  return y > 3 && y < h - 3 && noiseFor(seed).value3(x / 13 + 99, y / 9, z / 13) > 0.32;
 }
 
 /**
@@ -257,6 +240,32 @@ export function spawnColumn(grid: VoxelGrid, out: [number, number, number]): voi
   out[0] = cx;
   out[1] = surfaceHeight(grid, cx, cz) + 1;
   out[2] = cz;
+}
+
+/**
+ * The generator's promises, checked on the built world: every terrain top inside
+ * `[TERRAIN_MIN, TERRAIN_MAX]`, and the spawn cell open with solid land (not sand, not air)
+ * under it, above the sea. Returns what broke, or null. The page logs a broken promise as a
+ * console error, which the spec's no-errors check fails on.
+ */
+export function worldProblem(
+  grid: VoxelGrid,
+  seed: number,
+  spawn: readonly [number, number, number],
+): string | null {
+  for (let z = 0; z < WORLD_Z; z++) {
+    for (let x = 0; x < WORLD_X; x++) {
+      const h = terrainHeight(x, z, seed);
+      if (h < TERRAIN_MIN || h > TERRAIN_MAX)
+        return `terrain at (${x}, ${z}) is ${h}, outside ${TERRAIN_MIN}..${TERRAIN_MAX}`;
+    }
+  }
+  const [x, y, z] = spawn;
+  const under = grid.get(x, y - 1, z);
+  if (grid.get(x, y, z) !== Block.Air || under === Block.Air || under === Block.Sand)
+    return `spawn (${x}, ${y}, ${z}) does not stand on solid land (block below: ${under})`;
+  if (y - 1 <= SEA_LEVEL) return `spawn (${x}, ${y}, ${z}) is at or below the sea`;
+  return null;
 }
 
 // ─── what the page publishes ─────────────────────────────────────────────────

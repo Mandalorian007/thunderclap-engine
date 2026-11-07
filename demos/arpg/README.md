@@ -2,7 +2,7 @@
 
 An isometric action-RPG slice: a hero in a ruined courtyard at dusk cuts down ghouls that path in
 from the edges. `pnpm demo arpg`, or `/demos/arpg/` on the harness server. `?still` parks the idle
-bob, flame flicker, cape and enemy AI; `?seed=N` fixes the spawns.
+bob, flame flicker, cape and enemy AI; `?seed=N` fixes the spawns (`createRandom`).
 
 Controls: click or tap the ground to walk there (hold to keep steering); click a ghoul to chase
 and strike it; WASD, the left stick or a bottom-left touch stick run directly. Space strikes,
@@ -29,6 +29,8 @@ Q whirls, E dashes, R casts a nova; keys 1–3 or the top buttons swap gear.
 No minimap (`ui.minimap({ world, markers })` is missing). The orbs are hand DOM (no
 `ui.meter({ shape: 'orb' })`); damage numbers are a pool of anchors risen by hand (no
 `ui.floats.spawn(text, world)`). Deaths shrink instead of dissolving (no
-`createStandardMaterial({ dissolve })`). Gear swapping is by hand until `loaded.setVariant`.
+`createStandardMaterial({ dissolve })`). Gear swapping stays by hand: the three sets are procedural `geom` meshes, not a
+glTF, and they differ in shape as well as colour, while `loaded.setVariant` swaps only the
+materials of a loaded glTF (`KHR_materials_variants`).
 The hero is a crowd agent with zero preferred velocity, so ghouls part around it but it does not
 push them.

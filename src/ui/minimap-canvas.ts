@@ -1,0 +1,486 @@
+/**
+ * Canvas minimap (ws/ui-5): a map of the ground plane (x, z) of a bounded world, drawn on its own
+ * `<canvas>` in a layout region, round or square. The game paints its layout once into a canvas
+ * or `ImageBitmap` covering the world rectangle (`setBackground`); the map draws that, the
+ * markers (`setMarkers`, a shape per `kind`) and the player's arrow (`setPlayer`).
+ *
+ * - **Redrawn only on change.** Every setter compares with what it holds and, on a change,
+ *   schedules one draw on the next animation frame; a still map never touches its canvas.
+ *   `redraws` counts the draws, `flush()` draws a pending change now.
+ * - **Mapping.** The view is centred on the player (or on the world's centre with `center:
+ *   'world'`). At `zoom` 1 the world's longer side spans the map; `zoom` 2 shows half that.
+ *   `rotate: 'north'` keeps north (−z) up; `'player'` turns the map so the player's heading
+ *   points up. `toMap(x, z, out)` and `toWorld(u, v, out)` are the pair (map px from the
+ *   top-left corner, in the map's `size` units), exact inverses.
+ * - **Pick.** With `onPick`, a click or a tap on the map gives `onPick(worldX, worldZ)` through
+ *   `toWorld`: click-to-move from the map. Off a round map's disc it is ignored.
+ * - Markers past the view's edge sit on the rim, dimmed. Colours may be CSS colours or
+ *   `var(--tc-…)` theme tokens (resolved on each draw).
+ */
+import { h } from './dom';
+import { themePx } from './hud';
+import type { Layout, RegionName, WidgetHandle } from './layout';
+
+/** What the canvas minimap needs from its overlay (`Overlay` fits). */
+export interface CanvasMinimapHost {
+  readonly layers: { readonly hud: HTMLElement };
+  readonly layout: Layout;
+}
+
+/** The world's ground rectangle the background covers. */
+export interface MinimapWorld {
+  minX: number;
+  minZ: number;
+  maxX: number;
+  maxZ: number;
+}
+
+export type MinimapRotate = 'north' | 'player';
+export type MinimapShape = 'round' | 'square';
+export type MinimapMarkerShape = 'dot' | 'square' | 'diamond' | 'triangle' | 'ring';
+
+/** How a marker kind draws. */
+export interface MinimapKindStyle {
+  shape?: MinimapMarkerShape;
+  /** CSS colour or `var(--tc-…)`. */
+  color?: string;
+  /** Diameter, map px. Default 8. */
+  size?: number;
+}
+
+/** One marker for `setMarkers`. */
+export interface MinimapMarker {
+  id: string;
+  x: number;
+  z: number;
+  kind: string;
+  /** Over the kind's colour. */
+  color?: string;
+}
+
+export type MinimapBackground = HTMLCanvasElement | ImageBitmap | HTMLImageElement;
+
+export interface CanvasMinimapOptions {
+  /** Width and height, design px. Default 200. */
+  size?: number;
+  world: MinimapWorld;
+  /** Default `'north'`. */
+  rotate?: MinimapRotate;
+  /** Default `'round'`. */
+  shape?: MinimapShape;
+  /** Default `'player'`. */
+  center?: 'player' | 'world';
+  /** Default 1 (the world's longer side spans the map). */
+  zoom?: number;
+  background?: MinimapBackground | null;
+  /** Styles per marker kind, over the defaults (`ally`, `enemy`, `objective`, `info`). */
+  kinds?: Readonly<Record<string, MinimapKindStyle>>;
+  /** Click or tap on the map, in world units. */
+  onPick?: (x: number, z: number) => void;
+  /** Layout region. Default `right`. */
+  region?: RegionName;
+  order?: number;
+  /** Accessible name. Default `'Map'`. */
+  label?: string;
+}
+
+export interface CanvasMinimap {
+  readonly el: HTMLElement;
+  readonly canvas: HTMLCanvasElement;
+  readonly size: number;
+  /** Draws so far. */
+  readonly redraws: number;
+  /** Markers held. */
+  readonly markers: number;
+  /** View zoom; setting it redraws. */
+  zoom: number;
+  /** Replace the markers (copied; an unchanged list does not redraw). */
+  setMarkers(list: readonly MinimapMarker[]): void;
+  /** The player's place and heading (radians, clockwise from north, −z). */
+  setPlayer(x: number, z: number, yaw: number): void;
+  /** The game's painted layout over the world rectangle, or null for none. */
+  setBackground(bg: MinimapBackground | null): void;
+  /** World → map px (from the top-left, `size` units). Allocates nothing. */
+  toMap(x: number, z: number, out: { x: number; y: number }): { x: number; y: number };
+  /** Map px → world (`out.x`, `out.y` are world x and z). The inverse of `toMap`. */
+  toWorld(u: number, v: number, out: { x: number; y: number }): { x: number; y: number };
+  /** Draw a pending change now (normally on the next animation frame). */
+  flush(): void;
+  remove(): void;
+}
+
+const DEFAULT_KINDS: Readonly<Record<string, MinimapKindStyle>> = {
+  ally: { shape: 'dot', color: 'var(--tc-color-success)' },
+  enemy: { shape: 'dot', color: 'var(--tc-color-danger)' },
+  objective: { shape: 'diamond', color: 'var(--tc-color-accent)', size: 11 },
+  info: { shape: 'square', color: 'var(--tc-color-info)' },
+};
+const FALLBACK: MinimapKindStyle = { shape: 'dot', color: 'var(--tc-color-info)' };
+
+/** The map (see the module comment). */
+export function createCanvasMinimap(
+  host: CanvasMinimapHost,
+  opts: CanvasMinimapOptions,
+): CanvasMinimap {
+  const doc = host.layers.hud.ownerDocument;
+  const win = doc.defaultView;
+  ensureCanvasMinimapStyles(doc);
+  const size = Math.max(16, opts.size ?? 200);
+  const half = size / 2;
+  const world = { ...opts.world };
+  const span = Math.max(1e-6, world.maxX - world.minX, world.maxZ - world.minZ);
+  const turn = opts.rotate === 'player';
+  const round = (opts.shape ?? 'round') === 'round';
+  const followWorld = opts.center === 'world';
+  const kinds: Record<string, MinimapKindStyle> = { ...DEFAULT_KINDS, ...opts.kinds };
+  const onPick = opts.onPick;
+
+  const canvas = h('canvas', { class: 'tc-cminimap-canvas', 'aria-hidden': 'true' });
+  const el = h(
+    'div',
+    {
+      class: onPick ? 'tc-cminimap tc-interactive' : 'tc-cminimap',
+      role: 'img',
+      'aria-label': opts.label ?? 'Map',
+      dataset: { shape: round ? 'round' : 'square', rotate: turn ? 'player' : 'north' },
+      style: { '--tc-cminimap-size': themePx(size) },
+    },
+    canvas,
+  );
+
+  let zoom = Math.max(1e-3, opts.zoom ?? 1);
+  let k = (size * zoom) / span;
+  let px = (world.minX + world.maxX) / 2;
+  let pz = (world.minZ + world.maxZ) / 2;
+  let yaw = 0;
+  let cos = 1;
+  let sin = 0;
+  let background: MinimapBackground | null = opts.background ?? null;
+  // Markers, flattened and grown as needed (a steady list reuses them).
+  const ids: string[] = [];
+  const mx: number[] = [];
+  const mz: number[] = [];
+  const mkind: string[] = [];
+  const mcolor: (string | undefined)[] = [];
+  let count = 0;
+  let redraws = 0;
+  let dirty = false;
+  let raf = 0;
+  let removed = false;
+  const tmp = { x: 0, y: 0 };
+
+  const centre = () => {
+    if (followWorld) {
+      tmp.x = (world.minX + world.maxX) / 2;
+      tmp.y = (world.minZ + world.maxZ) / 2;
+    } else {
+      tmp.x = px;
+      tmp.y = pz;
+    }
+    return tmp;
+  };
+  /** The view's rotation: −yaw on a turning map. */
+  const setTurn = () => {
+    const a = turn ? yaw : 0;
+    cos = Math.cos(a);
+    sin = Math.sin(a);
+  };
+
+  const toMap = (x: number, z: number, out: { x: number; y: number }) => {
+    const c = centre();
+    const dx = x - c.x;
+    const dz = z - c.y;
+    // Rotate by −yaw (y down): the heading (sin yaw, −cos yaw) comes out as (0, −1), up.
+    out.x = half + (dx * cos + dz * sin) * k;
+    out.y = half + (-dx * sin + dz * cos) * k;
+    return out;
+  };
+  const toWorld = (u: number, v: number, out: { x: number; y: number }) => {
+    const du = (u - half) / k;
+    const dv = (v - half) / k;
+    const c = centre();
+    const cx = c.x;
+    const cz = c.y;
+    out.x = cx + du * cos - dv * sin;
+    out.y = cz + du * sin + dv * cos;
+    return out;
+  };
+
+  // ---- drawing
+  const tokens = new Map<string, string>();
+  let computed: CSSStyleDeclaration | null = null;
+  const resolve = (color: string): string => {
+    const m = /^var\((--[\w-]+)\)$/.exec(color.trim());
+    if (!m) return color;
+    let v = tokens.get(m[1]!);
+    if (v === undefined) {
+      computed ??= win?.getComputedStyle(el) ?? null;
+      v = computed?.getPropertyValue(m[1]!).trim() || '#fff';
+      tokens.set(m[1]!, v);
+    }
+    return v;
+  };
+
+  const marker = (
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    style: MinimapKindStyle,
+    color: string,
+    dim: boolean,
+  ) => {
+    const r = (style.size ?? 8) / 2;
+    ctx.globalAlpha = dim ? 0.55 : 1;
+    ctx.fillStyle = color;
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.75)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    switch (style.shape ?? 'dot') {
+      case 'square':
+        ctx.rect(x - r, y - r, r * 2, r * 2);
+        break;
+      case 'diamond':
+        ctx.moveTo(x, y - r * 1.2);
+        ctx.lineTo(x + r * 1.2, y);
+        ctx.lineTo(x, y + r * 1.2);
+        ctx.lineTo(x - r * 1.2, y);
+        ctx.closePath();
+        break;
+      case 'triangle':
+        ctx.moveTo(x, y - r * 1.2);
+        ctx.lineTo(x + r * 1.1, y + r * 0.9);
+        ctx.lineTo(x - r * 1.1, y + r * 0.9);
+        ctx.closePath();
+        break;
+      case 'ring':
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+        return;
+      default:
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+    }
+    ctx.fill();
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  };
+
+  const draw = () => {
+    dirty = false;
+    redraws++;
+    computed = null;
+    tokens.clear();
+    // Backing store: the canvas's CSS size × devicePixelRatio, else the design size.
+    const rect = canvas.getBoundingClientRect?.();
+    const dpr = win?.devicePixelRatio ?? 1;
+    const bw = Math.max(1, Math.round((rect && rect.width > 0 ? rect.width : size) * dpr));
+    if (canvas.width !== bw) canvas.width = bw;
+    if (canvas.height !== bw) canvas.height = bw;
+    const ctx = canvas.getContext?.('2d') ?? null;
+    if (!ctx) return;
+    const s = bw / size;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, bw, bw);
+    ctx.setTransform(s, 0, 0, s, 0, 0);
+    ctx.save();
+    ctx.beginPath();
+    if (round) ctx.arc(half, half, half, 0, Math.PI * 2);
+    else ctx.rect(0, 0, size, size);
+    ctx.clip();
+    ctx.fillStyle = resolve('var(--tc-color-surface)');
+    ctx.fillRect(0, 0, size, size);
+    if (background) {
+      // World → map as a canvas transform, then the picture over the world rectangle.
+      const c = centre();
+      ctx.save();
+      ctx.translate(half, half);
+      ctx.rotate(-(turn ? yaw : 0));
+      ctx.scale(k, k);
+      ctx.translate(-c.x, -c.y);
+      ctx.drawImage(
+        background,
+        world.minX,
+        world.minZ,
+        world.maxX - world.minX,
+        world.maxZ - world.minZ,
+      );
+      ctx.restore();
+    }
+    ctx.restore();
+    // Markers, held on the rim past the edge.
+    const rim = half - 5;
+    for (let i = 0; i < count; i++) {
+      toMap(mx[i]!, mz[i]!, tmp);
+      let x = tmp.x - half;
+      let y = tmp.y - half;
+      let dim = false;
+      if (round) {
+        const d = Math.hypot(x, y);
+        if (d > rim) {
+          x = (x / d) * rim;
+          y = (y / d) * rim;
+          dim = true;
+        }
+      } else {
+        const d = Math.max(Math.abs(x), Math.abs(y));
+        if (d > rim) {
+          x = (x / d) * rim;
+          y = (y / d) * rim;
+          dim = true;
+        }
+      }
+      const style = kinds[mkind[i]!] ?? FALLBACK;
+      marker(ctx, half + x, half + y, style, resolve(mcolor[i] ?? style.color ?? '#fff'), dim);
+    }
+    // The player's arrow.
+    toMap(px, pz, tmp);
+    const a = turn ? 0 : yaw;
+    ctx.save();
+    ctx.translate(tmp.x, tmp.y);
+    ctx.rotate(a);
+    ctx.beginPath();
+    ctx.moveTo(0, -8);
+    ctx.lineTo(6, 6);
+    ctx.lineTo(0, 3);
+    ctx.lineTo(-6, 6);
+    ctx.closePath();
+    ctx.fillStyle = resolve('var(--tc-color-accent)');
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+    ctx.lineWidth = 1.5;
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  };
+
+  const schedule = () => {
+    if (removed) return;
+    dirty = true;
+    if (raf) return;
+    const run = () => {
+      raf = 0;
+      if (dirty && !removed) draw();
+    };
+    if (win?.requestAnimationFrame) raf = win.requestAnimationFrame(run);
+    else {
+      raf = 1;
+      queueMicrotask(run);
+    }
+  };
+
+  // ---- pick
+  const pickAt = (clientX: number, clientY: number) => {
+    const r = canvas.getBoundingClientRect();
+    if (!(r.width > 0 && r.height > 0)) return;
+    const u = ((clientX - r.left) / r.width) * size;
+    const v = ((clientY - r.top) / r.height) * size;
+    if (round && Math.hypot(u - half, v - half) > half) return;
+    toWorld(u, v, tmp);
+    onPick?.(tmp.x, tmp.y);
+  };
+  const onDown = (e: PointerEvent) => {
+    if (e.button !== 0 || !e.isPrimary) return;
+    e.preventDefault();
+    e.stopPropagation();
+    pickAt(e.clientX, e.clientY);
+  };
+  if (onPick) el.addEventListener('pointerdown', onDown);
+
+  setTurn();
+  const handle: WidgetHandle = host.layout.add(el, {
+    place: { default: opts.region ?? 'right' },
+    order: opts.order,
+  });
+  schedule();
+
+  return {
+    el,
+    canvas,
+    size,
+    get redraws() {
+      return redraws;
+    },
+    get markers() {
+      return count;
+    },
+    get zoom() {
+      return zoom;
+    },
+    set zoom(z) {
+      const next = Math.max(1e-3, z);
+      if (next === zoom) return;
+      zoom = next;
+      k = (size * zoom) / span;
+      schedule();
+    },
+    setMarkers(list) {
+      let changed = list.length !== count;
+      for (let i = 0; i < list.length; i++) {
+        const m = list[i]!;
+        if (
+          !changed &&
+          ids[i] === m.id &&
+          mx[i] === m.x &&
+          mz[i] === m.z &&
+          mkind[i] === m.kind &&
+          mcolor[i] === m.color
+        ) {
+          continue;
+        }
+        changed = true;
+        ids[i] = m.id;
+        mx[i] = m.x;
+        mz[i] = m.z;
+        mkind[i] = m.kind;
+        mcolor[i] = m.color;
+      }
+      count = list.length;
+      if (changed) schedule();
+    },
+    setPlayer(x, z, y) {
+      if (x === px && z === pz && y === yaw) return;
+      px = x;
+      pz = z;
+      yaw = y;
+      setTurn();
+      schedule();
+    },
+    setBackground(bg) {
+      if (bg === background) return;
+      background = bg;
+      schedule();
+    },
+    toMap,
+    toWorld,
+    flush() {
+      if (dirty && !removed) draw();
+    },
+    remove() {
+      removed = true;
+      if (raf && win?.cancelAnimationFrame && raf !== 1) win.cancelAnimationFrame(raf);
+      el.removeEventListener('pointerdown', onDown);
+      handle.remove();
+      el.remove();
+    },
+  };
+}
+
+export const CANVAS_MINIMAP_CSS = `
+.tc-overlay .tc-cminimap { position: relative; width: var(--tc-cminimap-size); height: var(--tc-cminimap-size); flex: none;
+  box-sizing: border-box; border: var(--tc-border-width) solid var(--tc-color-border); box-shadow: var(--tc-shadow);
+  border-radius: var(--tc-radius-m); overflow: hidden; background: var(--tc-color-surface); touch-action: none; }
+.tc-overlay .tc-cminimap[data-shape="round"] { border-radius: 50%; }
+.tc-overlay .tc-cminimap-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+`;
+
+const STYLE_ID = 'tc-ui-cminimap';
+
+/** Add `CANVAS_MINIMAP_CSS` to `doc` once (the first map does it). */
+export function ensureCanvasMinimapStyles(doc: Document = document): void {
+  if (doc.getElementById(STYLE_ID)) return;
+  const style = doc.createElement('style');
+  style.id = STYLE_ID;
+  style.textContent = CANVAS_MINIMAP_CSS;
+  doc.head.appendChild(style);
+}

@@ -7,10 +7,14 @@
  * march distance, and by the roughness term, and written as premultiplied colour with the
  * fade in alpha; the composite adds it to the scene before bloom.
  *
- * The projection of a ray point assumes a perspective camera (`P.ao2.zw`, the projection's
- * x/y scale), as the AO radius does. Roughness: no per-pixel roughness exists yet (the standard
- * material writes none), so `ROUGHNESS` below is a global 0 and `roughnessCutoff` only shapes
- * the fade; a material-property target is a renderer wish (README).
+ * A ray point projects through the projection's x/y scale (`P.ao2.zw`), divided by the depth
+ * under a perspective camera and not under an orthographic one (`P.quality.z`, ws/post-4),
+ * where the eye ray is the view axis too.
+ *
+ * Per surface (ws/post-4): with the rough-metal target bound (`P.ssr2.w`, `@binding(5)`) the
+ * pixel's roughness fades the term (`ssrRoughnessFade` against `roughnessCutoff`) and its
+ * metalness weights it (`ssrSurfaceWeight`: Schlick Fresnel from F0 0.04 for a dielectric,
+ * 1 for a metal). Without it every surface is a mirror at full weight, as in ws/post-3.
  */
 import { WGSL_DEPTH_VIEW } from './ao';
 import { WGSL_POST_UNIFORMS } from './settings';
@@ -39,16 +43,31 @@ export function ssrRoughnessFade(roughness: number, cutoff: number): number {
   return 1 - x * x;
 }
 
+/**
+ * The weight of a reflection off a surface of `metalness` seen at `cosView` (the cosine
+ * between the normal and the direction to the eye): Schlick's Fresnel with F0 0.04 for a
+ * dielectric, mixed toward 1 for a metal. The shader's `surface_weight` does the same.
+ */
+export function ssrSurfaceWeight(metalness: number, cosView: number): number {
+  const m = Math.min(1, Math.max(0, metalness));
+  const c = Math.min(1, Math.max(0, cosView));
+  const f = 0.04 + 0.96 * (1 - c) ** 5;
+  return m + (1 - m) * f;
+}
+
 export const SSR_WGSL = /* wgsl */ `
 ${WGSL_POST_UNIFORMS}
 @group(0) @binding(1) var nearest: sampler;
 @group(0) @binding(2) var linSamp: sampler;
 @group(0) @binding(3) var depthTex: texture_depth_2d;
 @group(0) @binding(4) var colorTex: texture_2d<f32>;
+@group(0) @binding(5) var roughMetalTex: texture_2d<f32>;
 ${WGSL_DEPTH_VIEW}
 
-// Global roughness until a material-property target exists (see the README's wishes).
-const ROUGHNESS: f32 = 0.0;
+fn surface_weight(metal: f32, cosView: f32) -> f32 {
+  let f = 0.04 + 0.96 * pow(1.0 - clamp(cosView, 0.0, 1.0), 5.0);
+  return mix(f, 1.0, clamp(metal, 0.0, 1.0));
+}
 
 fn fetch(uv: vec2f, dim: vec2f) -> vec4f {
   let tuv = texel_uv(uv, dim);
@@ -63,7 +82,7 @@ fn edge_fade(uv: vec2f) -> f32 {
 }
 
 fn project(p: vec3f) -> vec2f {
-  let z = max(-p.z, 1e-4);
+  let z = select(max(-p.z, 1e-4), 1.0, P.quality.z > 0.5);
   let ndc = vec2f(P.ao2.z * p.x, P.ao2.w * p.y) / z;
   return vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
 }
@@ -74,13 +93,18 @@ fn project(p: vec3f) -> vec2f {
   if (c.w >= 1.0) {
     return vec4f(0.0);
   }
-  let rough = ROUGHNESS / max(P.ssr2.x, 1e-4);
-  let roughFade = 1.0 - clamp(rough, 0.0, 1.0) * clamp(rough, 0.0, 1.0);
+  let uv = texel_uv(in.uv, dim);
+  // Per-surface roughness and metalness when the target is bound; a mirror at full weight else.
+  var roughMetal = vec2f(0.0, 1.0);
+  if (P.ssr2.w > 0.5) {
+    roughMetal = textureSampleLevel(roughMetalTex, nearest, uv, 0.0).rg;
+  }
+  let rough = clamp(roughMetal.x / max(P.ssr2.x, 1e-4), 0.0, 1.0);
+  let roughFade = 1.0 - rough * rough;
   if (roughFade <= 0.0) {
     return vec4f(0.0);
   }
   let p = c.xyz;
-  let uv = texel_uv(in.uv, dim);
   let t = 1.0 / dim;
   let pl = fetch(uv - vec2f(t.x, 0.0), dim).xyz;
   let pr = fetch(uv + vec2f(t.x, 0.0), dim).xyz;
@@ -89,10 +113,15 @@ fn project(p: vec3f) -> vec2f {
   let dx = select(p - pl, pr - p, length(pr - p) < length(p - pl));
   let dy = select(p - pu, pd - p, length(pd - p) < length(p - pu));
   var n = normalize(cross(dx, dy));
-  if (dot(n, -p) < 0.0) {
+  // The eye ray: toward the point under a perspective camera, the view axis under an ortho one.
+  let v = select(normalize(p), vec3f(0.0, 0.0, -1.0), P.quality.z > 0.5);
+  if (dot(n, -v) < 0.0) {
     n = -n;
   }
-  let v = normalize(p);
+  var weight = 1.0;
+  if (P.ssr2.w > 0.5) {
+    weight = surface_weight(roughMetal.y, dot(n, -v));
+  }
   let r = reflect(v, n);
   let steps = i32(P.ssr.y);
   let stepLen = P.ssr.w / f32(steps);
@@ -123,7 +152,7 @@ fn project(p: vec3f) -> vec2f {
   if (hitFade <= 0.0) {
     return vec4f(0.0);
   }
-  let fade = hitFade * edge_fade(hitUv) * roughFade;
+  let fade = hitFade * edge_fade(hitUv) * roughFade * weight;
   let col = textureSampleLevel(colorTex, linSamp, hitUv, 0.0).rgb;
   return vec4f(col * fade * P.ssr2.y, fade);
 }

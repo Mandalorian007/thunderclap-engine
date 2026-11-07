@@ -32,6 +32,13 @@ export interface NavPath3 {
   /** The polygon corridor the path crosses, start to goal; `polyCount` entries are valid. */
   polys: Int32Array;
   polyCount: number;
+  /**
+   * The search's cost of the route (ws/nav-5): the priced length of its legs between portal
+   * midpoints (each × its polygon's `areaCost`) plus every link's cost, 0 when both ends share
+   * a polygon or there is no path. It is what `reachable(mesh, …)` budgets against, not the
+   * length of the pulled string (`pathDistance3`), which is never longer.
+   */
+  cost: number;
 }
 
 export interface FindMeshPathOptions extends AreaQueryOptions {
@@ -41,6 +48,12 @@ export interface FindMeshPathOptions extends AreaQueryOptions {
   snapRadius?: number;
   /** False keeps the portal midpoints instead of pulling the string taut (for debugging). Default true. */
   stringPull?: boolean;
+  /**
+   * Scales the straight-line heuristic (ws/nav-5). Default 1; 0 makes the search a Dijkstra,
+   * which settles every polygon at the same cost `reachable(mesh, …)` gives it (the heuristic
+   * can settle a polygon through a costlier portal when a nearer one points away from the goal).
+   */
+  heuristicWeight?: number;
 }
 
 /** A path with room for `capacity` waypoints (grows on demand). */
@@ -54,6 +67,7 @@ export function createNavPath3(capacity = 64): NavPath3 {
     linkCount: 0,
     polys: new Int32Array(Math.max(1, capacity)),
     polyCount: 0,
+    cost: 0,
   };
 }
 
@@ -80,6 +94,7 @@ export function clearPath3(path: NavPath3): void {
   path.cursor = 0;
   path.linkCount = 0;
   path.polyCount = 0;
+  path.cost = 0;
 }
 
 /** Writes waypoint `i` into `out`. */
@@ -191,6 +206,7 @@ export class MeshSearch {
   private expanded = 0;
   private maxExpand = Number.POSITIVE_INFINITY;
   private pull = true;
+  private hw = 1;
   private areaCost: Float32Array | undefined;
   private areaMask: Uint8Array | undefined;
 
@@ -232,6 +248,7 @@ export class MeshSearch {
     if (!areaAllowed(mesh.area[endPoly]!, this.areaCost, this.areaMask)) return false;
     this.maxExpand = opts?.maxExpand ?? Number.POSITIVE_INFINITY;
     this.pull = opts?.stringPull ?? true;
+    this.hw = opts?.heuristicWeight ?? 1;
     this.startPoly = startPoly;
     this.endPoly = endPoly;
     this.stamp = (this.stamp + 1) >>> 0;
@@ -244,7 +261,7 @@ export class MeshSearch {
     const s = this.start;
     const e = this.end;
     this.g[startPoly] = 0;
-    this.f[startPoly] = dist3(s.x, s.y, s.z, e.x, e.y, e.z);
+    this.f[startPoly] = this.hw * dist3(s.x, s.y, s.z, e.x, e.y, e.z);
     this.parent[startPoly] = -1;
     this.via[startPoly] = 0;
     this.px[startPoly] = s.x;
@@ -276,6 +293,7 @@ export class MeshSearch {
     const ex = this.end.x;
     const ey = this.end.y;
     const ez = this.end.z;
+    const hw = this.hw;
     let pops = 0;
     while (pops < maxPops) {
       if (heap.size === 0) {
@@ -325,7 +343,7 @@ export class MeshSearch {
         if (seen[next] === stamp && ng >= g[next]!) continue;
         seen[next] = stamp;
         g[next] = ng;
-        f[next] = ng + dist3(nx, ny, nz, ex, ey, ez);
+        f[next] = ng + hw * dist3(nx, ny, nz, ex, ey, ez);
         parent[next] = cur;
         via[next] = e;
         px[next] = nx;
@@ -350,7 +368,7 @@ export class MeshSearch {
         if (seen[next] === stamp && ng >= g[next]!) continue;
         seen[next] = stamp;
         g[next] = ng;
-        f[next] = ng + dist3(dst.x, dst.y, dst.z, ex, ey, ez);
+        f[next] = ng + hw * dist3(dst.x, dst.y, dst.z, ex, ey, ez);
         parent[next] = cur;
         via[next] = -rec - 1;
         px[next] = dst.x;
@@ -394,6 +412,7 @@ export class MeshSearch {
     reservePolys3(out, len);
     out.polys.set(corridor.subarray(0, len));
     out.polyCount = len;
+    out.cost = endPoly === this.startPoly ? 0 : this.g[endPoly]!;
 
     // String-pull each stretch between links through the portals.
     let apexX = this.start.x;

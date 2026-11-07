@@ -180,25 +180,28 @@ describe('stepPlayer', () => {
     expect(p.jumped).toBe(false);
   });
 
+  // The buffer window itself is the engine input's (`input.buffered`); here the scene's side of
+  // it: a press stays live for JUMP_BUFFER seconds until the player uses it.
   it('jump buffering: a press shortly before landing jumps on touchdown', () => {
     const p = createPlayer(TILE, 3 * TILE);
     // Fall; press jump when the feet are a little above the floor.
-    let pressed = false;
+    let pressedAt = -1;
     let jumpedOnLanding = false;
     for (let i = 0; i < 240 && !jumpedOnLanding; i++) {
       const feetGap = 5 * TILE - (p.body.y + PLAYER_H);
-      const press = !pressed && feetGap < p.body.vy * JUMP_BUFFER * 0.5 && feetGap > 10;
-      if (press) pressed = true;
-      stepPlayer(p, intent({ jumpPressed: press, jumpHeld: pressed }), room, noMovers, DT);
+      if (pressedAt < 0 && feetGap < p.body.vy * JUMP_BUFFER * 0.5 && feetGap > 10) pressedAt = i;
+      const live = pressedAt >= 0 && (i - pressedAt) * DT <= JUMP_BUFFER;
+      stepPlayer(p, intent({ jumpPressed: live, jumpHeld: pressedAt >= 0 }), room, noMovers, DT);
       if (p.jumped) jumpedOnLanding = true;
     }
-    expect(pressed).toBe(true);
+    expect(pressedAt).toBeGreaterThanOrEqual(0);
     expect(jumpedOnLanding).toBe(true);
   });
 
-  it('a stale buffered press does not fire', () => {
+  it('a press in the air without coyote time does not jump', () => {
     const p = createPlayer(TILE, TILE);
     stepPlayer(p, intent({ jumpPressed: true }), room, noMovers, DT); // high in the air
+    expect(p.jumped).toBe(false);
     for (let i = 0; i < 240 && !p.body.grounded; i++) stepPlayer(p, idle, room, noMovers, DT);
     expect(p.body.grounded).toBe(true);
     expect(p.jumped).toBe(false);
@@ -229,7 +232,7 @@ describe('stepPlayer', () => {
     expect(p.body.vx).toBeGreaterThan(1000);
     for (let i = 0; i < 30; i++) stepPlayer(p, idle, room, noMovers, DT);
     expect(p.state).not.toBe('dash');
-    expect(p.dashCooldown).toBeGreaterThan(0);
+    expect(p.dash.remaining).toBeGreaterThan(0);
     stepPlayer(p, intent({ dashPressed: true }), room, noMovers, DT);
     expect(p.dashed).toBe(false);
   });

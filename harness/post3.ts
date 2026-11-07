@@ -281,6 +281,10 @@ function blockPoint(
 class RecordingPost implements PostProcessor {
   private readonly labels: string[] = [];
   constructor(private readonly inner: PostStack) {}
+  /** The stack's TAA asks the renderer for camera jitter (ws/post-4). */
+  get wantsJitter(): boolean {
+    return this.inner.wantsJitter;
+  }
   resize(width: number, height: number): void {
     this.inner.resize(width, height);
   }
@@ -354,6 +358,7 @@ async function main(): Promise<void> {
   const camera = Camera.perspective((50 * Math.PI) / 180, LOGICAL.width / LOGICAL.height, 0.1, 100);
   Object.assign(camera.screen, { x: 0, y: 0, ...LOGICAL });
   renderer.camera = camera;
+  post.addJitterCamera(camera);
   placeCamera(camera, 0);
 
   const lit = renderer.createMaterial({ label: 'lit', blend: 'opaque', wgsl: LIT_WGSL });

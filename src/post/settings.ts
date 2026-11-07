@@ -217,8 +217,10 @@ export interface TaaSettings {
  * Screen-space reflections (ws/post-3): a half-res view-space ray march over the scene depth
  * from normals derived from it (the AO pass's helper), sampling the scene colour where the ray
  * meets the depth, faded at the screen edges and composited into the scene before bloom.
- * Needs the scene depth. Roughness: the standard material writes no roughness target yet, so
- * `roughnessCutoff` is read as one global value (see the README's wish list).
+ * Needs the scene depth. Per surface (ws/post-4): with a rough-metal target
+ * (`PostInputs.roughMetal`) each pixel fades by its own roughness against `roughnessCutoff` and
+ * is weighted by its metalness (Schlick Fresnel from F0 0.04 for a dielectric, 1 for a metal);
+ * without it every surface reads as a smooth mirror at full weight, as before.
  */
 export interface SsrSettings {
   enabled: boolean;
@@ -280,8 +282,19 @@ export interface WhiteBalanceSettings {
  * before bloom. Needs the scene depth. Objects moving on their own do not blur (no velocity
  * target yet; see the README's wish list).
  */
+/** What a motion-blur pixel moves by (ws/post-4). See `MotionBlurSettings.mode`. */
+export type MotionBlurMode = 'camera' | 'object';
+
 export interface MotionBlurSettings {
   enabled: boolean;
+  /**
+   * `'object'` (the default): with a velocity target (`PostInputs.velocity`) each pixel blurs
+   * along the velocity the renderer wrote for it, so moving and skinned objects smear under a
+   * still camera; pixels with no velocity fall back to the camera's reprojection. Without the
+   * target, and in `'camera'`, only the camera's movement blurs (the depth reprojected by the
+   * previous view-projection).
+   */
+  mode: MotionBlurMode;
   /** Scale on the frame-to-frame velocity (1 = the full frame's movement). */
   intensity: number;
   /** Taps along the velocity (2..16). */
@@ -392,12 +405,32 @@ export function defaultPostSettings(): PostSettings {
       histogramHigh: 0.95,
     },
     whiteBalance: { temperature: 6500, tint: 0 },
-    motionBlur: { enabled: false, intensity: 1, maxSamples: 8 },
+    motionBlur: { enabled: false, mode: 'object', intensity: 1, maxSamples: 8 },
   };
 }
 
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? Partial<T[K]> : T[K] };
 export type PostSettingsPatch = DeepPartial<PostSettings>;
+
+/**
+ * A deep copy of `s` (ws/post-4): every section and every array (`RGB`) is new, so mutating
+ * the copy or blending it never touches the original. GPU handles (`lut.texture`,
+ * `bloom.dirt.texture`) are shared, not copied.
+ */
+export function clonePostSettings(s: PostSettings): PostSettings {
+  const out = {} as Record<string, unknown>;
+  for (const key of Object.keys(s) as (keyof PostSettings)[]) out[key] = cloneValue(s[key]);
+  return out as unknown as PostSettings;
+}
+
+function cloneValue(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(cloneValue);
+  if (v === null || typeof v !== 'object') return v;
+  const out: Record<string, unknown> = {};
+  // `texture` fields are GPU handles: shared, never copied.
+  for (const [k, x] of Object.entries(v)) out[k] = k === 'texture' ? x : cloneValue(x);
+  return out;
+}
 
 /** Shallow-per-section merge of `patch` into `target` (mutates target). */
 export function applyPostPatch(target: PostSettings, patch: PostSettingsPatch): PostSettings {
@@ -526,6 +559,11 @@ export interface PostDepthInfo {
   projX: number;
   projY: number;
   outputWidth: number;
+  /**
+   * The projection is orthographic (`proj[11] === 0`, ws/post-4): AO and SSR project a view
+   * point without the divide by depth, and SSR's eye ray is the view axis.
+   */
+  ortho?: boolean;
 }
 
 /**
@@ -542,6 +580,10 @@ export interface PostFrameState {
   reproj: ArrayLike<number>;
   /** Linear exposure multiplier used while `exposure.mode` is `'auto'` (`2^EV`). */
   autoExposure: number;
+  /** 1 when SSR reads the frame's rough-metal target (ws/post-4), else 0 (the constant path). */
+  roughMetal?: number;
+  /** 1 when motion blur gathers along the frame's velocity target (ws/post-4), else 0. */
+  objectVelocity?: number;
 }
 
 /** Uniform layout shared by all post shaders: 22 × vec4f + mat4x4f + 17 × vec4f + mat4x4f. */
@@ -566,7 +608,7 @@ struct PostUniforms {
   gamma: vec4f,
   gain: vec4f,
   grade: vec4f,      // saturation, contrast, -, -
-  quality: vec4f,    // ray samples, fog octaves, -, -
+  quality: vec4f,    // ray samples, fog octaves, ortho projection (1, ws/post-4), -
   ao: vec4f,         // enabled (0 without depth), radius, intensity, bias
   ao2: vec4f,        // power, samples, proj x scale, proj y scale
   dof: vec4f,        // enabled (0 without depth), focus distance, focus range, max blur (uv of width)
@@ -581,14 +623,14 @@ struct PostUniforms {
   outlineColor: vec4f, // rgb, intensity
   // Post 3 (ws/post-3).
   taa: vec4f,        // enabled (0 without depth), feedback, sharpen, clampMode (0 aabb, 1 variance)
-  taa2: vec4f,       // jitter x (uv), jitter y (uv), reset (1 = copy the current frame), -
+  taa2: vec4f,       // view jitter x (uv), view jitter y (uv), reset (1 = copy the current frame), -
   ssr: vec4f,        // enabled (0 without depth), maxSteps, thickness, maxDistance
-  ssr2: vec4f,       // roughnessCutoff, intensity, fadeEdges (uv), -
+  ssr2: vec4f,       // roughnessCutoff, intensity, fadeEdges (uv), rough-metal target (1)
   exposure: vec4f,   // auto (1), histogramLow, histogramHigh, keyValue
   wb0: vec4f,        // white-balance matrix row 0 (rgb weights), enabled
   wb1: vec4f,        // row 1
   wb2: vec4f,        // row 2
-  motionBlur: vec4f, // enabled (0 without depth), intensity, samples, -
+  motionBlur: vec4f, // enabled (0 without depth), intensity, samples, velocity target (1 = object)
   dirt: vec4f,       // enabled, intensity, -, -
   reproj: mat4x4f,   // current clip -> previous frame's clip (identity on a reset)
 };
@@ -647,7 +689,7 @@ export function packPostUniforms(
     o,
     Math.round(Math.min(64, Math.max(8, quality.raySamples))),
     Math.round(Math.min(5, Math.max(2, quality.fogOctaves))),
-    0,
+    depth?.ortho ? 1 : 0,
     0,
   );
   const a = s.ao;
@@ -726,7 +768,14 @@ export function packPostUniforms(
     Math.max(1e-3, sr.thickness),
     Math.max(1e-3, sr.maxDistance),
   );
-  o = put(out, o, sr.roughnessCutoff, sr.intensity, Math.max(0, sr.fadeEdges), 0);
+  o = put(
+    out,
+    o,
+    sr.roughnessCutoff,
+    sr.intensity,
+    Math.max(0, sr.fadeEdges),
+    ssr ? (frame?.roughMetal ?? 0) : 0,
+  );
   const ex = s.exposure;
   o = put(out, o, auto ? 1 : 0, ex.histogramLow, ex.histogramHigh, ex.keyValue);
   const wb = s.whiteBalance;
@@ -743,7 +792,14 @@ export function packPostUniforms(
   }
   const mb = s.motionBlur;
   const mblur = temporal && mb.enabled && quality.motionBlur ? 1 : 0;
-  o = put(out, o, mblur, mb.intensity, Math.round(Math.min(16, Math.max(2, mb.maxSamples))), 0);
+  o = put(
+    out,
+    o,
+    mblur,
+    mb.intensity,
+    Math.round(Math.min(16, Math.max(2, mb.maxSamples))),
+    mblur ? (frame?.objectVelocity ?? 0) : 0,
+  );
   const dirt = b.dirt;
   o = put(out, o, dirt && dirt.texture !== null ? 1 : 0, dirt?.intensity ?? 0, 0, 0);
   if (frame) {

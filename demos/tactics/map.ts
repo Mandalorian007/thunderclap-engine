@@ -3,6 +3,7 @@
  * hills. `?seed=N` fixes it. Every non-water tile is reachable from the player spawn (the
  * generator floods from there and drowns what it cannot reach), so a unit is never boxed in.
  */
+import { createRandom } from '@thunderclap/engine/core';
 import { MAP } from './iso';
 
 export type Terrain = 0 | 1 | 2;
@@ -30,17 +31,6 @@ export function inBounds(tx: number, ty: number): boolean {
   return tx >= 0 && ty >= 0 && tx < MAP && ty < MAP;
 }
 
-/** mulberry32: a small seeded generator, so a seed reproduces the map and the AI's rolls. */
-export function rng(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
 function blob(
   out: Uint8Array,
   cx: number,
@@ -62,24 +52,23 @@ function blob(
 }
 
 export function buildMap(seed: number): TacticsMap {
-  const random = rng(seed);
+  const random = createRandom(seed);
   const terrain = new Uint8Array(MAP * MAP);
   const elevation = new Uint8Array(MAP * MAP);
-  const pick = (lo: number, hi: number) => lo + Math.floor(random() * (hi - lo + 1));
 
   // Hills: four mounds of elevation 1 with a crown of elevation 2.
   for (let k = 0; k < 4; k++) {
-    const cx = pick(4, MAP - 5);
-    const cy = pick(4, MAP - 5);
-    const r = 2 + random() * 2.2;
+    const cx = random.int(4, MAP - 5);
+    const cy = random.int(4, MAP - 5);
+    const r = random.float(2, 4.2);
     blob(elevation, cx, cy, r, 1, () => true);
     blob(elevation, cx, cy, r - 1.6, 2, () => true);
   }
   // Ponds on the flats, ringed by mud.
   for (let k = 0; k < 3; k++) {
-    const cx = pick(3, MAP - 4);
-    const cy = pick(3, MAP - 4);
-    const r = 1.4 + random() * 1.3;
+    const cx = random.int(3, MAP - 4);
+    const cy = random.int(3, MAP - 4);
+    const r = random.float(1.4, 2.7);
     blob(terrain, cx, cy, r + 1.3, MUD, (i) => elevation[i] === 0);
     blob(terrain, cx, cy, r, WATER, (i) => elevation[i] === 0);
   }
@@ -87,9 +76,9 @@ export function buildMap(seed: number): TacticsMap {
   for (let k = 0; k < 4; k++) {
     blob(
       terrain,
-      pick(2, MAP - 3),
-      pick(2, MAP - 3),
-      1 + random() * 1.4,
+      random.int(2, MAP - 3),
+      random.int(2, MAP - 3),
+      random.float(1, 2.4),
       MUD,
       (i) => terrain[i] !== WATER,
     );

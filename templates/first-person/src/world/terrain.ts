@@ -1,10 +1,15 @@
 /**
- * The terrain: a seeded height field of whole-unit columns. Pure TypeScript, no engine, no DOM,
- * no `Math.random`: the same seed gives the same world on the page, in the Worker and in a test.
+ * The terrain: a seeded height field of whole-unit columns. Pure TypeScript, no DOM, no
+ * `Math.random`; the noise is the engine's `createNoise(seed)`, so the same seed gives the same
+ * world on the page, in the Worker and in a test.
  *
  * World coordinates: x and z in `0..size` (one column per unit), y up, column `(cx, cz)` covers
  * `cx..cx+1` × `cz..cz+1` and its top face is at `y = height`. Outside the field the height is 0.
  */
+import { createNoise, type Noise } from '@thunderclap/engine/core';
+
+/** The world's seed: the page and the mesher Worker both generate from it. */
+export const SEED = 2026;
 
 /** Columns per side of the world. */
 export const WORLD_SIZE = 64;
@@ -37,7 +42,10 @@ export interface Landmark {
   readonly height: number;
 }
 
-/** A 32-bit integer hash of two coordinates and a seed, mixed to a float in 0..1. */
+/**
+ * A 32-bit integer hash of two coordinates and a seed, mixed to a float in 0..1. A per-point roll
+ * (the block textures' speckle), not noise: the terrain's noise is `createNoise` below.
+ */
 export function hash2(x: number, z: number, seed: number): number {
   let h = (x | 0) * 374761393 + (z | 0) * 668265263 + (seed | 0) * 2147483647;
   h = Math.imul(h ^ (h >>> 13), 1274126177);
@@ -45,30 +53,31 @@ export function hash2(x: number, z: number, seed: number): number {
   return (h >>> 0) / 4294967296;
 }
 
-function smooth(t: number): number {
-  return t * t * (3 - 2 * t);
+/** The noise for one seed, built once: `sampleHeight` runs per column. */
+let noiseSeed = 0;
+let noise: Noise | null = null;
+function noiseFor(seed: number): Noise {
+  if (noise === null || seed !== noiseSeed) {
+    noise = createNoise(seed);
+    noiseSeed = seed;
+  }
+  return noise;
 }
 
-/** Value noise: lattice points hashed, bilinear with a smoothstep. 0..1. */
-export function valueNoise(x: number, z: number, seed: number): number {
-  const x0 = Math.floor(x);
-  const z0 = Math.floor(z);
-  const tx = smooth(x - x0);
-  const tz = smooth(z - z0);
-  const a = hash2(x0, z0, seed);
-  const b = hash2(x0 + 1, z0, seed);
-  const c = hash2(x0, z0 + 1, seed);
-  const d = hash2(x0 + 1, z0 + 1, seed);
-  return (a + (b - a) * tx) * (1 - tz) + (c + (d - c) * tx) * tz;
+/** The engine's value noise (in -1..1) read as 0..1. */
+function value01(n: Noise, x: number, z: number): number {
+  return 0.5 + 0.5 * n.value2(x, z);
 }
 
 /** Height of the column at (x, z) in the world `seed` describes, before the field exists. */
 export function sampleHeight(x: number, z: number, seed: number, size: number): number {
   // Two octaves of rolling hills plus a sharp ridge, raised toward the middle so the edge of the
   // world is low ground.
-  const base = valueNoise(x / 14, z / 14, seed);
-  const detail = valueNoise(x / 5, z / 5, seed + 1);
-  const ridge = 1 - Math.abs(2 * valueNoise(x / 22, z / 22, seed + 2) - 1);
+  // Three reads of one seeded field, offset so they do not line up.
+  const n = noiseFor(seed);
+  const base = value01(n, x / 14, z / 14);
+  const detail = value01(n, x / 5 + 37.1, z / 5 - 11.3);
+  const ridge = 1 - Math.abs(n.value2(x / 22 - 53.7, z / 22 + 71.9));
   const dx = (x + 0.5) / size - 0.5;
   const dz = (z + 0.5) / size - 0.5;
   const centre = 1 - Math.min(1, 2 * Math.hypot(dx, dz));

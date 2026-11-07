@@ -172,3 +172,5 @@ That covers nav-4, core-2, fx-3, render-4 and ui-4, and geom-3 at load 35→23, 
 
 Ruling: until ws/e2e-harden lands, a failure of either test while every other test passes counts as the spec's, not the merge's. Land, and name it in the report, as for the E-017 list. When ws/e2e-harden lands, both leave the list, as the dungeon pad walk did under E-028.
 
+
+**Closed 2026-11-06:** ws/e2e-harden landed in train 2 (c998d8f), and both specs passed in its 2504/194/0 matrix. They leave the tolerated list. audio4:73 was a spec error. demos/voxel:159 was a stretched tap, now fixed by pipelining the CDP press and release.
