@@ -39,6 +39,26 @@ frame.drawable(particles);   // order and layers optional, like any draw
 - Box and sphere shapes (`box { width, height, depth }`, `sphere { radius }`) act as `rect` and
   `circle` in 2D, which stays pixel-identical to before.
 
+### Seeded randomness (ws/fx-4)
+
+Nothing in `src/fx` calls `Math.random` (a test greps for it). Every draw goes through a core
+`Random` (`createRandom(seed)` from `@thunderclap/engine/core`):
+
+- `ParticleSystemOptions.random?: Random` seeds the per-particle spawn seeds (the GPU kernel's
+  only randomness); `system.random` is live. `emit(params, count, random?)` takes a stream for
+  one call. `new ParticleEmitter(system, params, rate?, random?)` gives an emitter its own
+  stream (`emitter.random`, live; `null` uses the system's).
+- `createEffect(renderer, desc, { textures?, random? })` (`CreateEffectOptions`): the effect
+  keeps `effect.random` and forks it once per system by the system's `name`, so the same seed
+  replays the same particles whatever else the game draws.
+- `DecalsOptions.random?: Random` serves `DecalDesc.rotation: 'random'` and `tile: 'random'`.
+- Without one, each system, effect and decal batch forks a module root seeded with
+  `FX_DEFAULT_SEED` (`'thunderclap-fx'`) by kind and creation order: a page that creates the same
+  things in the same order replays the same, and two systems never share a stream.
+- Spawn order is deterministic (indices come from the frame's head plus the record offset), so
+  same-seed runs are identical on the GPU too, except sub-emission (`onDeath`, `onLife`), whose
+  child slots are claimed with atomics in whatever order the GPU runs.
+
 ### World space
 
 ```ts
@@ -189,8 +209,8 @@ sparks.draw(frame); aura.draw(frame, 2);
   `EffectEmitterDesc`: `params`, `rate`, `duration`, `delay`, `burst`), `duration`, `loop`.
   `validateEffectDesc(json, { textures? })` returns the problems (stop counts, unknown texture
   names, missing colours, negative numbers, a second level of sub-emission) as strings;
-  `createEffect(renderer, desc, { textures? })` throws them as one readable `Error` and resolves
-  texture names through the map.
+  `createEffect(renderer, desc, { textures?, random? })` throws them as one readable `Error`,
+  resolves texture names through the map and seeds the systems (*Seeded randomness*).
 - `Effect`: `systems`, `instances` (pooled `EffectInstance`s: `position`, `time`, `done`,
   `attach(fn)`, `stop()`), `duration`, `loop`, `play(at?: EffectPoint)`, `attach(fn:
   EffectFollow)`, `stop()`, `update(dt)` (drives the emitters and the systems; no allocation
@@ -325,9 +345,17 @@ frame.drawable(bb, 10);                // in the render step, after the scene's 
   (`[w, h]` world units or `{ px: [w, h] }` logical px), `region?: AtlasRegion | null`, `color?`
   (straight-alpha RGBA, default white), `facing?: BillboardFacing` (`'camera'` or `'cameraY'`,
   upright and turning about y only), `depth?: BillboardDepth` (`'test'` or `'always'`), `life?`,
-  `velocity?`, `bar?: { fraction, bg }`.
+  `velocity?`, `bar?: { fraction, bg }`, `text?: string` and `textStyle?: TextStyle` (a text
+  plate, below).
 - `BillboardHandle`: `alive`, and setters `position`, `offset`, `color`, `size`, `region`,
   `fraction`. A dead handle's setters do nothing; `remove(handle)` is idempotent.
+- Text plates (ws/fx-4): `add({ ..., text: 'Score 10' })` gives the quad its own atlas cell, its
+  width rounded up to 32 px for headroom. `handle.setText(text)` re-rasterises into that cell
+  when the text fits (same region, same quad size, no new texture: only the atlas canvas is
+  uploaded again) and otherwise moves to a wider cell, scaling the quad's width by the cell
+  ratio so the glyphs keep their size. `handle.text` reads it back (`null` when the quad is not a
+  plate); `setText` on a plain quad makes it one, assigning `region` or removing the quad gives
+  the cell back. `bb.measure(text, style?)` is the cell size a plate would take.
 - `Billboards`: `add(desc)`, `remove(handle)`, `clear()`, `update(dt, camera?)` (ages, drifts,
   removes expired quads, touches their atlas regions, sorts back to front for `camera`),
   `prepare`/`draw` (the `Drawable` pair; `prepare` uploads the instances and, when the atlas
@@ -366,6 +394,11 @@ owns one, and it works alone for any text-on-a-texture need.
   does it for every live quad), `has(region)` says whether it is still valid, `clear()` forgets
   everything. `dirty` is set when the canvas has text the GPU has not seen; the owner uploads
   `canvas` and calls `markUploaded()`. `count` and `used` (shelf area share) describe the fill.
+- Owned cells (ws/fx-4), for text that changes: `cell(text, style?)` places an uncached cell
+  (width rounded up to 32 px) that only its owner draws into; `rewrite(cell, text)` clears and
+  redraws it in place when the text fits and returns the same region, else releases it and
+  returns a new, wider one (it throws for a region that is not an owned cell); `release(cell)`
+  frees it (idempotent); `cellSize(text, style?)` is the `{ width, height }` a cell would take.
 
 ## Light helpers
 
@@ -456,10 +489,17 @@ decals.remove(h);
     over the outer `fadeEdge` share of the box's half depth (default 0.2) and by `normalBias`
     (default 0.3): a surface whose normal, from `dpdx`/`dpdy` of the reconstructed position,
     makes a cosine below it with the decal's is skipped. Depth test and write off, so the decal
-    wraps corners and steps. The copy (an own `depth32float` texture, as the particles' soft
-    depth) is taken in `prepare`, before this frame's scene pass, so it holds the **previous
-    frame's** depth: a decal placed this frame appears next frame, and a camera cut shows one
-    frame of mismatch. Nothing is drawn until the scene has rendered depth once.
+    wraps corners and steps. The depth is **this frame's** opaque depth, from the renderer's
+    depth hook (ws/fx-4): `readsDepth` (default `true` for `box`/`auto`, `false` for `quad`)
+    splits the scene pass after the opaques, and `afterOpaque` binds the renderer's
+    `scene-depth-copy` view (the bind group is rebuilt only when that view changes), so a decal
+    on a moving surface stays on it (`harness/fx4.html?decalLag`, `lagPx` 0).
+  - **Fallback copy**: `readsDepth: false`, or a target whose depth cannot be copied (an adopted
+    XR depth without `COPY_SRC`), takes the old path: `prepare` copies the depth into an own
+    `depth32float` texture before this frame's scene pass, so it holds the **previous frame's**
+    depth. A decal placed this frame appears next frame, one on a moving surface trails it by a
+    frame (`?decalLag&copy`), and a camera cut shows one frame of mismatch. Nothing is drawn
+    until the scene has rendered depth once.
   - **Quad**: a camera-independent quad lifted along the normal by `offset` (default 0.01),
     depth test on, write off. The fallback without depth, or by `mode: 'quad'`.
 - Blend `DecalBlend`: `alpha` (default), `additive`, or `multiply` (the shader lerps its colour
@@ -471,8 +511,21 @@ decals.remove(h);
   `invViewProj`, the shape values, the fade) is 96 bytes. `WGSL_DECAL_BOX`, `WGSL_DECAL_QUAD`
   and `WGSL_DECAL_DEPTH_COPY` are exported.
 
+- `rotation: 'random'` and `tile: 'random'` draw from `DecalsOptions.random` (*Seeded
+  randomness*).
+
 Tests: `decals.test.ts` (fake GPU: ring buffer order, compaction, mode by `frame.depthFormat`,
-instance layout, expiry). Demo: `harness/decals.html` (click to stamp; `?mode=box|quad`).
+instance layout, expiry, this frame's depth view bound through the hook, the fallback copy).
+Demos: `harness/decals.html` (click to stamp; `?mode=box|quad`), `harness/fx4.html?decalLag`.
+
+## fx-4 demo
+
+`harness/fx4.html` with `e2e/fx4.spec.ts` (state in `fx4-state.ts`): `?seed=N` steps a two-system
+effect seeded with N for 120 fixed steps, freezes it and hashes a readback of the frame (the same
+seed hashes the same on every load); `?decalLag` slides a cube under a box decal and counts decal
+pixels off the cube (`lagPx`: 0 on the hook, more than 0 with `&copy`). Tests:
+`random.test.ts` (no `Math.random`; two same-seed effects write identical particle buffers over
+120 steps).
 
 ## Water
 

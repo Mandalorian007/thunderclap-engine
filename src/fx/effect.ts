@@ -4,6 +4,7 @@
  * name), so an effect loads through the asset manifest as `{ kind: 'json', uri }` and is
  * validated with `validateEffectDesc` before `createEffect`.
  */
+import type { Random } from '../core/random';
 import type { Frame } from '../render/frame';
 import type { Renderer } from '../render/renderer';
 import type { TextureLike } from '../render/texture';
@@ -13,6 +14,7 @@ import {
   ParticleSystem,
   type ParticleSystemOptions,
 } from './particles';
+import { defaultFxRandom } from './random';
 
 /** One emitter of an effect system: continuous at `rate`, a `burst` at `delay`, or both. */
 export interface EffectEmitterDesc {
@@ -28,7 +30,10 @@ export interface EffectEmitterDesc {
 }
 
 /** A system's options in a descriptor: textures by name, no scene-target references. */
-export type EffectSystemOptions = Omit<ParticleSystemOptions, 'texture' | 'depthTarget'> & {
+export type EffectSystemOptions = Omit<
+  ParticleSystemOptions,
+  'texture' | 'depthTarget' | 'random'
+> & {
   /** A key of the `textures` map given to `createEffect`. */
   texture?: string;
 };
@@ -261,18 +266,33 @@ export class Effect {
   /** Seconds an instance lives (Infinity: until stopped). */
   readonly duration: number;
   readonly loop: boolean;
+  /**
+   * The effect's stream (ws/fx-4): system `name` draws from `random.fork(name)`, so the same
+   * seed plays the same particles whatever else the game draws.
+   */
+  readonly random: Random;
   private readonly desc: EffectDesc;
   private readonly pool: EffectInstance[] = [];
 
-  constructor(renderer: Renderer, desc: EffectDesc, textures: Record<string, TextureLike> = {}) {
+  constructor(
+    renderer: Renderer,
+    desc: EffectDesc,
+    textures: Record<string, TextureLike> = {},
+    random?: Random,
+  ) {
     const problems = validateEffectDesc(desc, { textures });
     if (problems.length) throw new Error(`createEffect: ${problems.join('; ')}`);
     this.desc = desc;
     this.loop = desc.loop ?? false;
+    this.random = random ?? defaultFxRandom('effect');
     let end = 0;
     for (const sys of desc.systems) {
       const { texture, ...rest } = sys.options ?? {};
-      const options: ParticleSystemOptions = { ...rest, extended: true };
+      const options: ParticleSystemOptions = {
+        ...rest,
+        extended: true,
+        random: this.random.fork(sys.name),
+      };
       if (texture) options.texture = textures[texture];
       this.systems.push(new ParticleSystem(renderer, options));
       for (const em of sys.emitters) {
@@ -398,6 +418,17 @@ export class Effect {
   }
 }
 
+/** `createEffect` options. */
+export interface CreateEffectOptions {
+  /** Texture names the descriptor's systems refer to. */
+  textures?: Record<string, TextureLike>;
+  /**
+   * The effect's random stream (ws/fx-4; each system forks it by name). Default: a fork of the
+   * fx module default (`FX_DEFAULT_SEED`), named by creation order.
+   */
+  random?: Random;
+}
+
 /**
  * Build an `Effect` from a descriptor, resolving texture names through `textures`. Throws a
  * readable `Error` listing every problem `validateEffectDesc` finds.
@@ -405,7 +436,7 @@ export class Effect {
 export function createEffect(
   renderer: Renderer,
   desc: EffectDesc,
-  opts: { textures?: Record<string, TextureLike> } = {},
+  opts: CreateEffectOptions = {},
 ): Effect {
-  return new Effect(renderer, desc, opts.textures ?? {});
+  return new Effect(renderer, desc, opts.textures ?? {}, opts.random);
 }

@@ -32,6 +32,13 @@ export interface BillboardDesc {
   size: BillboardSize;
   /** An atlas region to show (`billboards.text(...)`), or `null`/unset for a solid colour. */
   region?: AtlasRegion | null;
+  /**
+   * A text plate (ws/fx-4): `text` in its own atlas cell (`TextAtlas.cell`), changed later with
+   * `handle.setText`. Overrides `region`. Size the quad to the text with `billboards.measure`.
+   */
+  text?: string;
+  /** The plate's style (with `text`). */
+  textStyle?: TextStyle;
   /** Linear RGBA multiplier (straight alpha). Default white. */
   color?: ArrayLike<number>;
   /** Default `'camera'`. `{ px }` sizes are always screen-aligned. */
@@ -117,6 +124,19 @@ export class BillboardHandle {
   set region(r: AtlasRegion | null) {
     if (this.slot >= 0) this.owner.setRegion(this.slot, r);
   }
+  /** The text plate's text (`desc.text`, `setText`); null when not a plate. */
+  get text(): string | null {
+    return this.slot >= 0 ? this.owner.plateText(this.slot) : null;
+  }
+  /**
+   * Change a text plate's text (ws/fx-4). Re-rasterised into the plate's own atlas cell when it
+   * fits (no new region, no new texture), else into a wider cell: the quad's height stays and
+   * its width grows with the cell, so the glyphs keep their scale. A handle that is not a plate
+   * becomes one, in the default style, at its current size.
+   */
+  setText(text: string): void {
+    if (this.slot >= 0) this.owner.setText(this.slot, text);
+  }
   /** The filled share of a bar quad, 0..1. */
   set fraction(f: number) {
     if (this.slot >= 0) this.owner.setFraction(this.slot, f);
@@ -166,6 +186,8 @@ export class Billboards implements Drawable {
   private rgba: Float32Array;
   private mode: Uint8Array;
   private regions: (AtlasRegion | null)[];
+  /** A text plate's text (its region an owned atlas cell); null when not a plate. */
+  private plates: (string | null)[];
   private handles: BillboardHandle[];
   /** Instance data per slot, in `BILLBOARD_WGSL`'s layout. */
   private inst: Float32Array;
@@ -202,6 +224,7 @@ export class Billboards implements Drawable {
     this.rgba = new Float32Array(cap * 4);
     this.mode = new Uint8Array(cap);
     this.regions = new Array<AtlasRegion | null>(cap).fill(null);
+    this.plates = new Array<string | null>(cap).fill(null);
     this.handles = new Array<BillboardHandle>(cap);
     this.inst = new Float32Array(cap * F);
     this.order = new Uint32Array(cap);
@@ -293,10 +316,12 @@ export class Billboards implements Drawable {
     this.upload = new Float32Array(cap * F);
     this.tracked.length = cap;
     this.regions.length = cap;
+    this.plates.length = cap;
     this.handles.length = cap;
     for (let i = this.capacity; i < cap; i++) {
       this.tracked[i] = null;
       this.regions[i] = null;
+      this.plates[i] = null;
     }
     this.capacity = cap;
     this.buffer.destroy();
@@ -325,7 +350,10 @@ export class Billboards implements Drawable {
     inst.fill(0, o, o + F);
     inst[o + 3] = desc.facing === 'cameraY' ? BB_FLAG_YAW : 0;
     this.setSize(i, desc.size);
-    this.setRegion(i, desc.region ?? null);
+    this.plates[i] = null;
+    this.regions[i] = null;
+    if (desc.text !== undefined) this.makePlate(i, desc.text, desc.textStyle);
+    else this.setRegion(i, desc.region ?? null);
     this.setColor(i, desc.color ?? WHITE);
     const bar = desc.bar;
     if (bar) {
@@ -346,10 +374,11 @@ export class Billboards implements Drawable {
     this.removeAt(i);
   }
 
-  /** Remove every billboard. Atlas text stays cached. */
+  /** Remove every billboard. Atlas text stays cached; text plates give their cells back. */
   clear(): void {
     for (let i = 0; i < this.n; i++) {
       this.handles[i]!.slot = -1;
+      this.releasePlate(i);
       this.tracked[i] = null;
       this.regions[i] = null;
     }
@@ -363,12 +392,14 @@ export class Billboards implements Drawable {
   private removeAt(i: number): void {
     const last = --this.n;
     this.handles[i]!.slot = -1;
+    this.releasePlate(i);
     if (i !== last) {
       const h = this.handles[last]!;
       h.slot = i;
       this.handles[i] = h;
       this.tracked[i] = this.tracked[last];
       this.regions[i] = this.regions[last];
+      this.plates[i] = this.plates[last]!;
       this.mode[i] = this.mode[last]!;
       this.anchor.copyWithin(i * 3, last * 3, last * 3 + 3);
       this.offset.copyWithin(i * 3, last * 3, last * 3 + 3);
@@ -379,6 +410,7 @@ export class Billboards implements Drawable {
     }
     this.tracked[last] = null;
     this.regions[last] = null;
+    this.plates[last] = null;
   }
 
   /**
@@ -448,8 +480,58 @@ export class Billboards implements Drawable {
     }
   }
 
+  /**
+   * The width and height, in atlas px, a text plate of `text` in `style` gets (its cell): size
+   * a plate's quad to this aspect.
+   */
+  measure(text: string, style?: TextStyle): { width: number; height: number } {
+    return this.atlas.cellSize(text, style);
+  }
+
+  /** @internal */
+  plateText(i: number): string | null {
+    return this.plates[i] ?? null;
+  }
+
+  /** @internal */
+  setText(i: number, text: string): void {
+    const old = this.regions[i];
+    if (this.plates[i] === null || !old) {
+      this.makePlate(i, text);
+      return;
+    }
+    const r = this.atlas.rewrite(old, text);
+    if (!r) throw new Error(`billboards: "${text}" does not fit a ${this.atlas.size}px atlas`);
+    if (r !== old) {
+      // A wider cell: keep the height and the glyph scale.
+      this.inst[i * F + 4] *= r.width / old.width;
+      this.regions[i] = null;
+      this.writeRegion(i, r);
+    }
+    this.plates[i] = text;
+  }
+
+  private makePlate(i: number, text: string, style?: TextStyle): void {
+    const r = this.atlas.cell(text, style);
+    if (!r) throw new Error(`billboards: "${text}" does not fit a ${this.atlas.size}px atlas`);
+    this.setRegion(i, r);
+    this.plates[i] = text;
+  }
+
+  private releasePlate(i: number): void {
+    if (this.plates[i] === null) return;
+    const r = this.regions[i];
+    if (r) this.atlas.release(r);
+    this.plates[i] = null;
+  }
+
   /** @internal */
   setRegion(i: number, r: AtlasRegion | null): void {
+    if (this.regions[i] !== r) this.releasePlate(i);
+    this.writeRegion(i, r);
+  }
+
+  private writeRegion(i: number, r: AtlasRegion | null): void {
     const o = i * F;
     const inst = this.inst;
     this.regions[i] = r;

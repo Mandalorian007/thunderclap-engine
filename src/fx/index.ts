@@ -22,6 +22,7 @@ export type { DecalBlend, DecalDesc, DecalMode, DecalsOptions } from './decals';
 export { DECAL_INSTANCE_FLOATS, DECAL_PARAMS_FLOATS, Decals } from './decals';
 export { WGSL_DECAL_BOX, WGSL_DECAL_DEPTH_COPY, WGSL_DECAL_QUAD } from './decals-wgsl';
 export type {
+  CreateEffectOptions,
   EffectDesc,
   EffectEmitterDesc,
   EffectFollow,
@@ -67,6 +68,7 @@ export {
   SIZE_CURVE_FLOATS,
   SURFACE_TRI_FLOATS,
 } from './particles-wgsl';
+export { FX_DEFAULT_SEED } from './random';
 export type { SkyOptions, SkyStars } from './sky';
 export { SKY_PARAMS_FLOATS, Sky, skyRay } from './sky';
 export { SKY_WGSL } from './sky-wgsl';

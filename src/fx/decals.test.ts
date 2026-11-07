@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { createFakeDevice, type FakeDevice } from '../render/fake-gpu';
+import { createRandom } from '../core/random';
+import { Camera } from '../render/camera';
+import {
+  createFakeDevice,
+  type FakeBindGroup,
+  type FakeDevice,
+  type FakeView,
+  fakeRendererGpu,
+} from '../render/fake-gpu';
 import type { Frame } from '../render/frame';
-import type { Renderer } from '../render/renderer';
+import { Renderer } from '../render/renderer';
 import type { TextureLike } from '../render/texture';
 import { DECAL_INSTANCE_FLOATS, Decals, type DecalsOptions } from './decals';
 import { WGSL_DECAL_BOX, WGSL_DECAL_QUAD } from './decals-wgsl';
@@ -273,5 +281,105 @@ describe('Decals draw', () => {
     }
     expect(WGSL_DECAL_BOX).toContain('inv_view_proj * vec4f(ndc, d, 1.0)');
     expect(fake.errors).toEqual([]);
+  });
+});
+
+describe('Decals on the depth hook (ws/fx-4)', () => {
+  function real(opts: Partial<DecalsOptions> = {}) {
+    const fake = createFakeDevice();
+    const r = new Renderer(fakeRendererGpu(fake));
+    r.camera = Camera.perspective(1, 1, 0.1, 100).lookAt([0, 5, 10], [0, 0, 0]);
+    const tex = fake.device.createTexture({
+      size: [4, 4],
+      format: 'rgba8unorm',
+      usage: GPUTextureUsage.TEXTURE_BINDING,
+    });
+    const decals = new Decals(r, {
+      texture: { view: tex.createView(), width: 4, height: 4 },
+      ...opts,
+    });
+    decals.add(floor(0, 0));
+    return { fake, r, decals };
+  }
+
+  function frame(r: Renderer, decals: Decals) {
+    const f = r.beginFrame(0, 0);
+    f.drawable(decals, 1);
+    r.endFrame();
+  }
+
+  /** The depth view bound (binding 3) by the decal box draw in `pass`. */
+  function boundDepth(fake: FakeDevice, label: string): FakeView | undefined {
+    const pass = [...fake.passes].reverse().find((p) => p.label === label)!;
+    const set = pass.commands.find(
+      (c) =>
+        c.op === 'setBindGroup' && c.index === 1 && (c.group as FakeBindGroup).label === 'decals',
+    ) as { group: FakeBindGroup } | undefined;
+    return set?.group.entries.find((e) => e.binding === 3)?.resource as FakeView | undefined;
+  }
+
+  it("reads depth by default and binds this frame's depth copy in the blended pass", () => {
+    const { fake, r, decals } = real();
+    expect(decals.readsDepth).toBe(true);
+    frame(r, decals);
+    const labels = fake.passes.map((p) => p.label);
+    expect(labels).toContain('scene-blend');
+    expect(labels).not.toContain('decals-depth-copy');
+    expect(decals.activeMode).toBe('box');
+    const view = boundDepth(fake, 'scene-blend');
+    expect(view?.texture).toBe(r.target.depthCopy!.texture as unknown);
+    // The copy is taken after this frame's opaque pass.
+    const copy = fake.textureCopies.at(-1)!;
+    expect(copy.dst).toBe(view!.texture);
+    const blend = fake.passes.map((p) => p.label).lastIndexOf('scene-blend');
+    expect(copy.afterPasses).toBe(blend);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it("reuses its hook bind group while the renderer's copy is unchanged", () => {
+    const { fake, r, decals } = real();
+    frame(r, decals);
+    const groups = fake.bindGroups.filter((g) => g.label === 'decals').length;
+    for (let i = 0; i < 5; i++) frame(r, decals);
+    expect(fake.bindGroups.filter((g) => g.label === 'decals').length).toBe(groups);
+    expect(boundDepth(fake, 'scene-blend')?.texture).toBe(r.target.depthCopy!.texture as unknown);
+  });
+
+  it("readsDepth: false is the fallback copy of last frame's depth in prepare", () => {
+    const { fake, r, decals } = real({ readsDepth: false });
+    frame(r, decals); // no scene depth yet on the first frame: nothing to copy
+    frame(r, decals);
+    const labels = fake.passes.map((p) => p.label);
+    expect(labels).not.toContain('scene-blend');
+    const copyAt = labels.lastIndexOf('decals-depth-copy');
+    expect(copyAt).toBeGreaterThanOrEqual(0);
+    expect(copyAt).toBeLessThan(labels.lastIndexOf('scene'));
+    expect(boundDepth(fake, 'scene')?.texture.label).toBe('decals-depth');
+  });
+
+  it("mode 'quad' does not read depth (no pass split)", () => {
+    const { fake, r, decals } = real({ mode: 'quad' });
+    expect(decals.readsDepth).toBe(false);
+    frame(r, decals);
+    expect(fake.passes.map((p) => p.label)).not.toContain('scene-blend');
+  });
+});
+
+describe('Decals random (ws/fx-4)', () => {
+  it("'random' rotation and tile draw from the decals' stream, the same under the same seed", () => {
+    const rows = (seed: number) => {
+      const { decals } = makeDecals({ atlas: { columns: 4, rows: 2 }, random: createRandom(seed) });
+      for (let i = 0; i < 6; i++) decals.add(floor(i, 0, { rotation: 'random', tile: 'random' }));
+      return Array.from(data(decals).subarray(0, 6 * F));
+    };
+    expect(rows(7)).toEqual(rows(7));
+    expect(rows(7)).not.toEqual(rows(8));
+    const d = rows(7);
+    for (let i = 0; i < 6; i++) {
+      const u = d[i * F + 12]!;
+      const v = d[i * F + 13]!;
+      expect([0, 0.25, 0.5, 0.75]).toContain(u);
+      expect([0, 0.5]).toContain(v);
+    }
   });
 });

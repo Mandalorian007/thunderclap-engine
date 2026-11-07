@@ -123,3 +123,40 @@ describe('TextAtlas', () => {
     expect(calls.at(-1)).toBe('clear 0 0 64 64');
   });
 });
+
+describe('TextAtlas owned cells (ws/fx-4)', () => {
+  it('a cell is uncached, rounded up for headroom, and rewritten in place when the text fits', () => {
+    const { canvas, calls } = stubCanvas(256);
+    const atlas = new TextAtlas({ size: 256, canvas });
+    const c = atlas.cell('HP 10', { padding: 0 })!;
+    expect(c.width).toBe(64); // 50 px of text, rounded up to 32s
+    expect(atlas.cellSize('HP 10', { padding: 0 })).toEqual({ width: 64, height: c.height });
+    expect(atlas.text('HP 10', { padding: 0 })).not.toBe(c);
+    atlas.markUploaded();
+    calls.length = 0;
+    const same = atlas.rewrite(c, 'HP 9')!;
+    expect(same).toBe(c);
+    expect(calls).toEqual([`clear 0 0 64 ${c.height}`, `fill HP 9 32 ${c.height / 2}`]);
+    expect(atlas.dirty).toBe(true);
+    expect(atlas.has(c)).toBe(true);
+  });
+
+  it('grows into a wider cell and releases the old one when the text does not fit', () => {
+    const { canvas } = stubCanvas(256);
+    const atlas = new TextAtlas({ size: 256, canvas });
+    const c = atlas.cell('abc', { padding: 0 })!;
+    const count = atlas.count;
+    const wide = atlas.rewrite(c, 'abcdefghij')!;
+    expect(wide).not.toBe(c);
+    expect(wide.width).toBe(128);
+    expect(atlas.has(c)).toBe(false);
+    expect(atlas.has(wide)).toBe(true);
+    expect(atlas.count).toBe(count);
+    atlas.release(wide);
+    expect(atlas.has(wide)).toBe(false);
+    expect(atlas.count).toBe(count - 1);
+    atlas.release(wide); // twice is a no-op
+    expect(atlas.count).toBe(count - 1);
+    expect(() => atlas.rewrite(atlas.text('x')!, 'y')).toThrow(/owned/);
+  });
+});
