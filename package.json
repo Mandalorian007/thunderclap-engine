@@ -50,7 +50,7 @@
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "check:docs": "node scripts/check-docs.mjs",
     "check:create-game": "node --test scripts/create-game.test.mjs",
-    "check:bake": "node --test scripts/bake.test.mjs",
+    "check:bake": "node --test scripts/bake.test.mjs scripts/bake-nav.test.mjs",
     "create-game": "node scripts/create-game.mjs",
     "bake": "node scripts/bake.mjs",
     "bake:nav": "node scripts/bake-nav.mjs",

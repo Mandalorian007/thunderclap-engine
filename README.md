@@ -209,7 +209,7 @@ pnpm bake:nav level.glb level.navm --options nav.json   # one source to one navm
 ```json
 {
   "out": "public/baked",
-  "nav": [{ "name": "level", "sources": ["assets/level.glb"], "options": { "cellSize": 0.3, "agentRadius": 0.4 } }],
+  "nav": [{ "name": "level", "sources": ["assets/level.glb"], "options": { "cellSize": 0.3, "agentHeight": 1.8, "agentRadius": 0.4 } }],
   "colliders": [{ "name": "level", "sources": ["assets/level.glb", "assets/props.json"], "options": { "leafSize": 4 } }]
 }
 ```
@@ -217,7 +217,11 @@ pnpm bake:nav level.glb level.navm --options nav.json   # one source to one navm
 A source is a `.glb`, a `.gltf` (external buffers read from beside it) or a geometry JSON
 (`{ "positions": [x, y, z, …], "indices": [...], "transform"?: [12 floats, 3×4 row-major] }` or an
 array of those); every mesh of every scene node is placed by its world matrix. `options` are the
-`NavBakeOptions` (`nav`) or `StaticColliderOptions` (`geom`) the runtime takes. The manifest
+`NavBakeOptions` (`nav`) or `StaticColliderOptions` (`geom`) the runtime takes. A navmesh entry
+needs only `cellSize`: the rest default from it (`cellHeight` = `cellSize / 2`, `agentHeight` 2,
+`agentRadius` = `cellSize * 2`, `agentMaxClimb` = `cellHeight * 2`, `agentMaxSlope` 45; the
+table is in the nav README's *Baking*), and a bad value fails the bake with a `NavBakeError`
+naming the option. The manifest
 lists each entry's `sha256` over its sources' bytes and options, so `--check` in CI (`pnpm bake
 bake.config.json --check` after `pnpm install`) fails the build when someone edits a level without
 rebaking. A game loads the bytes with `fetch` or a `bytes` bundle entry and calls `importNavMesh`
@@ -226,10 +230,10 @@ or `importCollider`; from a game's folder the script is
 template's `pnpm bake`). The script runs the engine's TypeScript sources straight from
 `node_modules` through Node's own type stripping (`module.registerHooks`), so it needs no build
 step and no dependency; the output is byte-identical between runs. `pnpm check:bake` tests it
-against `scripts/fixtures/`. `pnpm bake:nav <input> <output> [--options nav.json]`
+and `bake:nav` against `scripts/fixtures/`. `pnpm bake:nav <input> <output> [--options nav.json]`
 (`scripts/bake-nav.mjs`) bakes one navmesh from one source read the same way, with the
-`NavBakeOptions` in `nav.json` (fields left out take a 1.8 m human agent on 0.3 m cells), and
-writes format 2; a game loads it with `loadNavMesh(bytes)`, which validates the bytes.
+`NavBakeOptions` in `nav.json` (`cellSize` defaults to 0.3, the rest to the engine defaults
+above; a bad value exits 1 naming the option), and writes format 2; a game loads it with `loadNavMesh(bytes)`, which validates the bytes.
 
 ## Testing
 

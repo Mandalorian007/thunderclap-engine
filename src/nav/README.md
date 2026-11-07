@@ -192,13 +192,10 @@ world units; polygons are counter-clockwise seen from above.
   `NavBakeSource { positions, indices, stride?, offset? }` reads world-space positions from any
   interleaved vertex buffer (`stride` floats per vertex, default 3; `offset` into each vertex,
   default 0), so a `geom` `Geometry` goes in as `{ positions: g.vertices, indices: g.indices,
-  stride: 12 }`. `NavBakeOptions`: `cellSize`, `cellHeight`, `agentHeight`, `agentRadius`,
-  `agentMaxClimb` (a step an agent walks over), `agentMaxSlope` (degrees), and optional
-  `minRegionArea` / `mergeRegionArea` (cells; islands smaller than the first are dropped, regions
-  smaller than the second are merged into a neighbour; defaults 8 and 20), `maxEdgeLength` (world
-  units; default 12 cells), `maxSimplification` (world units the contour may stray; default 1.3
-  cells) and `maxVertsPerPoly` (3..6, default 6). Bake offline where you can (see
-  *Serialisation*): a 64×64 m floor at `cellSize` 0.3 takes about 100 ms on a desktop.
+  stride: 12 }`. `NavBakeOptions` needs only `cellSize`; every other option has a default
+  derived from it (see *Baking* below), and a bad value throws a `NavBakeError`. Bake offline
+  where you can (see *Serialisation*): a 64×64 m floor at `cellSize` 0.3 takes about 100 ms on a
+  desktop.
 - `NavMesh` – `verts: Float32Array` (`vertCount` × `x, y, z`), `polys: Int32Array`
   (`polyCount` × `maxVertsPerPoly` vertex indices, `-1` padded), `adjacency: Int32Array` (per
   polygon edge `k`, from vertex `k` to `k + 1`, the polygon across it or `-1`), `bounds:
@@ -218,6 +215,49 @@ world units; polygons are counter-clockwise seen from above.
   when it meets a boundary edge (`out` is the hit point), false when `to` is reachable in a
   straight line (`out` is `to`). A `from` off the mesh hits at once.
 - `NavPoint3 { x, y, z }` is a world point; `NavBounds { min: NavPoint3; max: NavPoint3 }`.
+
+### Baking
+
+`bakeNavMesh` never returns an empty mesh silently (ws/nav-6). Every option but `cellSize` has a
+default derived from it, so `bakeNavMesh(src, { cellSize: 0.3 })` bakes a 2 m agent; every value
+is checked before the bake starts.
+
+| Option | Default | Valid |
+| --- | --- | --- |
+| `cellSize` | none (required) | finite, > 0 |
+| `cellHeight` | `cellSize / 2` | finite, > 0 |
+| `agentHeight` | 2 | finite, > 0 |
+| `agentRadius` | `cellSize * 2` | finite, >= 0 |
+| `agentMaxClimb` | `cellHeight * 2` | finite, >= 0 |
+| `agentMaxSlope` | 45 (degrees) | 0..90 |
+| `minRegionArea` | 8 (cells) | finite, >= 0 |
+| `mergeRegionArea` | 20 (cells) | finite, >= 0 |
+| `maxEdgeLength` | `cellSize * 12` (0 never splits) | finite, >= 0 |
+| `maxSimplification` | `cellSize * 1.3` | finite, >= 0 |
+| `maxVertsPerPoly` | 6 | integer 3..6 |
+
+`minRegionArea` and `mergeRegionArea` are in cells: islands smaller than the first are dropped,
+regions smaller than the second merge into a neighbour. `maxEdgeLength` and `maxSimplification`
+are world units (the longest boundary edge, and how far a contour may stray). The heights and
+radius quantise to cells (`ceil(agentHeight / cellHeight)`, `floor(agentMaxClimb / cellHeight)`,
+`ceil(agentRadius / cellSize)`), so at `cellSize` 0.3 the defaults bake the arpg demo's
+courtyard (`cellHeight` 0.1, a 1.8 m agent of radius 0.4, climb 0.3) and the `pnpm bake`
+fixture (`cellHeight` 0.2, climb 0.4) to the same polygons: the same vertex indices and `x, z`,
+with heights within half a cell of each other (`scripts/bake-nav.test.mjs`).
+
+- `NavBakeOptions` – the bake settings above; only `cellSize` is required.
+- `resolveNavBakeOptions(opts: NavBakeOptions): ResolvedNavBakeOptions` – fills the defaults and
+  validates; `bakeNavMesh` and `pnpm bake:nav` call it. `ResolvedNavBakeOptions` is
+  `Required<NavBakeOptions>`. `NAV_BAKE_DEFAULTS` holds the fixed defaults (`agentHeight`,
+  `agentMaxSlope`, `minRegionArea`, `mergeRegionArea`, `maxVertsPerPoly`).
+- `NavBakeError` – thrown for a missing `cellSize` or a value that is not a finite number in
+  range (a string from JSON, `null`, NaN, a negative radius, a slope over 90, `maxVertsPerPoly`
+  8). `option` names the option and `value` holds what was given; the message reads
+  `bakeNavMesh: agentHeight must be a finite number > 0, got NaN`.
+- An input with triangles that bakes to 0 polygons (all too steep, too low or eroded away)
+  returns the empty mesh with one `console.warn` (`[nav] bakeNavMesh: 0 polygons from N
+  triangles (…options…); nothing is walkable`). An input with no triangles returns the empty mesh
+  quietly.
 
 ### Paths on a mesh
 
@@ -430,8 +470,9 @@ README's *Baking*) does it from the command line: a `bake.config.json` names the
 JSON sources and the `NavBakeOptions` per entry, and the script writes `<name>.navm` next to a
 manifest that `--check` verifies in CI. `pnpm bake:nav <input> <output> [--options file.json]`
 (`scripts/bake-nav.mjs`, ws/nav-5) is the single-file form: one glTF or geometry JSON in, read
-the same way, baked with the `NavBakeOptions` in the options file (fields it leaves out take a
-1.8 m human agent on 0.3 m cells), and one format-2 file out; no network, no manifest.
+the same way, baked with the `NavBakeOptions` in the options file (`cellSize` defaults to 0.3
+there, every other field it leaves out takes the *Baking* default above, and a bad value exits 1
+naming it), and one format-2 file out; no network, no manifest.
 
 - `exportNavMesh(mesh): ArrayBuffer` – a little-endian, self-describing buffer (magic `NAVM`,
   format 2): the vertices, polygons, adjacency, the area byte per polygon (padded to four) and

@@ -33,6 +33,12 @@ export {
   markArea,
   OBSTACLE_AREA,
 } from './mesh/areas';
+export {
+  NAV_BAKE_DEFAULTS,
+  NavBakeError,
+  type ResolvedNavBakeOptions,
+  resolveNavBakeOptions,
+} from './mesh/bake-options';
 export { createFlowField3, type FlowField3, type FlowField3Options } from './mesh/flow3';
 export type { OffMeshLink, OffMeshLinkOptions } from './mesh/links';
 export { addOffMeshLink, getOffMeshLink, removeOffMeshLink } from './mesh/links';

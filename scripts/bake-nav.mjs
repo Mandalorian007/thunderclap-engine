@@ -6,8 +6,10 @@
 // <input> is a .glb, .gltf or .json source, read exactly as `pnpm bake` reads a source
 // (scripts/bake.mjs `loadSource`: a glTF document with every mesh placed by its node's world
 // matrix, or a geometry JSON `{ positions, indices, transform? }` or an array of those).
-// `--options` names a JSON file holding the `NavMeshOptions` (`bakeNavMesh`'s second argument);
-// fields it leaves out take DEFAULT_OPTIONS (a 1.8 m human agent on 0.3 m cells). <output> receives the navmesh in format 2
+// `--options` names a JSON file holding the `NavBakeOptions` (`bakeNavMesh`'s second argument);
+// `cellSize` defaults to 0.3 here (DEFAULT_OPTIONS) and every other field it leaves out takes the
+// engine's own default (`resolveNavBakeOptions`, ws/nav-6), so the script and a runtime bake agree.
+// A bad value exits 1 naming the option. <output> receives the navmesh in format 2
 // (`exportNavMesh`), which `loadNavMesh(bytes)` reads back at runtime. The bytes are a pure
 // function of the inputs. No network, no build step: the engine is imported from its TypeScript
 // sources the way scripts/bake.mjs does it.
@@ -18,15 +20,8 @@ import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadEngine, loadSource, UsageError } from './bake.mjs';
 
-/** The required `NavBakeOptions` a file may leave out: a 1.8 m human agent on 0.3 m cells. */
-export const DEFAULT_OPTIONS = Object.freeze({
-  cellSize: 0.3,
-  cellHeight: 0.2,
-  agentHeight: 1.8,
-  agentRadius: 0.4,
-  agentMaxClimb: 0.4,
-  agentMaxSlope: 45,
-});
+/** The script's own default: `cellSize`, the one option the engine requires. The rest derive from it. */
+export const DEFAULT_OPTIONS = Object.freeze({ cellSize: 0.3 });
 
 const USAGE = 'usage: pnpm bake:nav <input> <output> [--options <options.json>] [--verbose]';
 
@@ -50,16 +45,30 @@ export function parseNavArgs(argv) {
   return { input: positional[0], output: positional[1], options, verbose };
 }
 
+/**
+ * Resolve the options a file gives (or none) to the full `NavBakeOptions` the bake uses: the
+ * script's `cellSize` default, then the engine's. Throws UsageError naming a bad option.
+ */
+export async function resolveNavOptions(json = {}, label = 'options') {
+  const { nav } = await loadEngine();
+  try {
+    // `areas` (and any other non-numeric field) passes through to `bakeNavMesh` untouched.
+    return { ...json, ...nav.resolveNavBakeOptions({ ...DEFAULT_OPTIONS, ...json }) };
+  } catch (e) {
+    if (e instanceof nav.NavBakeError) throw new UsageError(`${label}: ${e.message}`);
+    throw e;
+  }
+}
+
 /** Bake `input` with the options in `optionsFile` (or the defaults); returns the format-2 bytes. */
 export async function bakeNavFile(input, optionsFile = null) {
   const { nav, assets } = await loadEngine();
   const file = resolve(input);
   if (!existsSync(file)) throw new UsageError(`no input at ${input}`);
-  let options = { ...DEFAULT_OPTIONS };
+  let json = {};
   if (optionsFile) {
     const path = resolve(optionsFile);
     if (!existsSync(path)) throw new UsageError(`no options file at ${optionsFile}`);
-    let json;
     try {
       json = JSON.parse(readFileSync(path, 'utf8'));
     } catch (e) {
@@ -68,14 +77,8 @@ export async function bakeNavFile(input, optionsFile = null) {
     if (!json || typeof json !== 'object' || Array.isArray(json)) {
       throw new UsageError(`${optionsFile}: the options must be a JSON object`);
     }
-    options = { ...options, ...json };
   }
-  for (const key of Object.keys(DEFAULT_OPTIONS)) {
-    const v = options[key];
-    if (typeof v !== 'number' || !Number.isFinite(v) || (key.startsWith('cell') && v <= 0)) {
-      throw new UsageError(`${optionsFile ?? 'options'}: "${key}" must be a finite number`);
-    }
-  }
+  const options = await resolveNavOptions(json, optionsFile ?? 'options');
   const sets = loadSource(file, assets);
   if (sets.length === 0) throw new Error(`${input}: the source holds no mesh`);
   const mesh = nav.bakeNavMesh(sets, options);

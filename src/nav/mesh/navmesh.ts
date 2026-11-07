@@ -5,6 +5,7 @@
  * (`area2 > 0`), so for edge `e` the right portal vertex is `v[e]` and the left is `v[e + 1]`.
  */
 import { type AreaStamp, markArea } from './areas';
+import { resolveNavBakeOptions } from './bake-options';
 import { buildContours } from './contour';
 import type { OffMeshLink } from './links';
 import { buildPolyMesh } from './polymesh';
@@ -651,25 +652,28 @@ export function buildAdjacency(
   return adjacency;
 }
 
-/**
- * Bakes a navmesh from triangle soup: voxelise, filter by height, climb and slope, erode by the
- * agent radius, partition into regions, trace and simplify contours, triangulate and merge into
- * convex polygons, then stamp `opts.areas` (if any). Bake-time only; allocates freely. An input
- * with no walkable surface gives an empty mesh.
- */
 export interface NavBakeAreaOptions {
   /** Area stamps applied to the baked polygons (`markArea` for each, in order). Optional. */
   areas?: AreaStamp[];
 }
 
+/**
+ * Bakes a navmesh from triangle soup: voxelise, filter by height, climb and slope, erode by the
+ * agent radius, partition into regions, trace and simplify contours, triangulate and merge into
+ * convex polygons, then stamp `opts.areas` (if any). Bake-time only; allocates freely. Options
+ * left out take the `resolveNavBakeOptions` defaults; a bad one throws a `NavBakeError`. An input
+ * with no triangles gives an empty mesh; one whose triangles yield no polygon gives an empty mesh
+ * and one `console.warn`.
+ */
 export function bakeNavMesh(
   input: NavBakeSource | NavBakeSource[],
-  opts: NavBakeOptions & NavBakeAreaOptions,
+  options: NavBakeOptions & NavBakeAreaOptions,
 ): NavMesh {
+  const opts = resolveNavBakeOptions(options);
   const sources = Array.isArray(input) ? input : [input];
   const cs = opts.cellSize;
   const ch = opts.cellHeight;
-  const nvp = Math.min(6, Math.max(3, opts.maxVertsPerPoly ?? 6));
+  const nvp = opts.maxVertsPerPoly;
   const bmin: [number, number, number] = [0, 0, 0];
   const bmax: [number, number, number] = [0, 0, 0];
   if (!computeBounds(sources, bmin, bmax)) {
@@ -695,12 +699,10 @@ export function bakeNavMesh(
   filterWalkableLowHeightSpans(hf, walkableHeight);
   const chf = buildCompactHeightfield(hf, walkableHeight, walkableClimb);
   erodeWalkableArea(chf, walkableRadius);
-  const minRegionArea = opts.minRegionArea ?? 8;
-  const mergeRegionArea = opts.mergeRegionArea ?? 20;
   // Recast's convention: the region thresholds are areas in cells.
-  buildRegions(chf, minRegionArea, mergeRegionArea);
-  const maxError = (opts.maxSimplification ?? 1.3 * cs) / cs;
-  const maxEdgeLen = Math.floor((opts.maxEdgeLength ?? 12 * cs) / cs);
+  buildRegions(chf, opts.minRegionArea, opts.mergeRegionArea);
+  const maxError = opts.maxSimplification / cs;
+  const maxEdgeLen = Math.floor(opts.maxEdgeLength / cs);
   const contours = buildContours(chf, maxError, maxEdgeLen);
   const pm = buildPolyMesh(contours, nvp);
 
@@ -712,9 +714,20 @@ export function bakeNavMesh(
   }
   const polys = pm.polys.slice(0, Math.max(1, pm.polyCount) * nvp);
   const mesh = new NavMesh(verts, pm.vertCount, polys, pm.polyCount, nvp, cs, ch);
-  if (opts.areas) {
-    for (const stamp of opts.areas) markArea(mesh, stamp.shape, stamp.area);
+  if (pm.polyCount === 0) {
+    console.warn(
+      `[nav] bakeNavMesh: 0 polygons from ${countTriangles(sources)} triangles (cellSize ${cs}, cellHeight ${ch}, agentHeight ${opts.agentHeight}, agentRadius ${opts.agentRadius}, agentMaxClimb ${opts.agentMaxClimb}, agentMaxSlope ${opts.agentMaxSlope}); nothing is walkable`,
+    );
+  }
+  if (options.areas) {
+    for (const stamp of options.areas) markArea(mesh, stamp.shape, stamp.area);
     mesh.version = 0;
   }
   return mesh;
+}
+
+function countTriangles(sources: readonly NavBakeSource[]): number {
+  let n = 0;
+  for (const s of sources) n += Math.floor(s.indices.length / 3);
+  return n;
 }
