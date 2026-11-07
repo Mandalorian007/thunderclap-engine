@@ -11,7 +11,6 @@ export type {
   AnimationClip,
   AnimationEvent,
   AnimBlendMode,
-  BlendMode,
   ChannelPath,
   ClipCursor,
   Interpolation,
@@ -57,7 +56,6 @@ export type {
   AnimationEventListener,
   AnimationMixerOptions,
   AnimPlayOptions,
-  PlayOptions,
 } from './mixer';
 export { AnimationAction, AnimationMixer } from './mixer';
 export type { MorphBlender, MorphLayout, MorphTarget } from './morph';

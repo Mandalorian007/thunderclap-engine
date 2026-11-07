@@ -432,10 +432,6 @@ export interface GltfMaterial {
    * when the material does not carry one. `GltfDocument.unsupportedExtensions` lists them.
    */
   extensions: GltfMaterialExtensions;
-  /** @deprecated `baseColor?.index ?? null`; removed next release. */
-  baseColorTexture: number | null;
-  /** @deprecated `baseColor?.texCoord ?? 0`; removed next release. */
-  texCoord: number;
 }
 
 /** `KHR_materials_clearcoat`, spec defaults (factors 0). */
@@ -858,8 +854,6 @@ function parseMaterial(m: GltfJsonMaterial, i: number, textureCount: number): Gl
     alphaMode: m.alphaMode ?? 'OPAQUE',
     alphaCutoff: m.alphaCutoff ?? 0.5,
     extensions: parseMaterialExtensions(m, where, textureCount),
-    baseColorTexture: baseColor?.index ?? null,
-    texCoord: baseColor?.texCoord ?? 0,
   };
 }
 

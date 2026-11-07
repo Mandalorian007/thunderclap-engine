@@ -1,15 +1,12 @@
 // ws/api-render (E-036): post presets, the `mist` section (formerly `fog`) and world-space god rays.
-import { describe, expect, expectTypeOf, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { mat4 } from '../core/math';
 import { easeLinear, PostBlender } from './blend';
 import {
   applyPostPatch,
   cinematicPostSettings,
   clonePostSettings,
-  defaultPostSettings, // deprecated-alias test
-  type FogSettings, // deprecated-alias test
   godRaySource,
-  type MistSettings,
   neutralPostSettings,
   POST_UNIFORM_FLOATS,
   packPostUniforms,
@@ -17,8 +14,7 @@ import {
 } from './settings';
 
 describe('presets', () => {
-  it('defaultPostSettings is the cinematic look', () => {
-    expect(JSON.stringify(defaultPostSettings())).toBe(JSON.stringify(cinematicPostSettings())); // deprecated-alias test
+  it('cinematic turns the look on', () => {
     const c = cinematicPostSettings();
     expect(c.bloom.enabled && c.mist.enabled && c.godRays.enabled && c.vignette.enabled).toBe(true);
   });
@@ -43,26 +39,24 @@ describe('presets', () => {
 });
 
 describe('mist (formerly fog)', () => {
-  it('fog is the same section on every built settings object', () => {
+  it('no settings object has a fog section', () => {
     for (const s of [cinematicPostSettings(), neutralPostSettings()]) {
-      expect(s.fog).toBe(s.mist); // deprecated-alias test
       const c = clonePostSettings(s);
-      expect(c.fog).toBe(c.mist); // deprecated-alias test
       expect(c.mist).not.toBe(s.mist);
+      expect('fog' in s).toBe(false);
+      expect('fog' in c).toBe(false);
     }
-    expect(Object.keys(cinematicPostSettings())).not.toContain('fog');
-    expectTypeOf<FogSettings>().toEqualTypeOf<MistSettings>(); // deprecated-alias test
   });
 
-  it('a fog patch writes mist; so does a fog blend', () => {
+  it('a mist patch and a mist blend write mist', () => {
     const s = cinematicPostSettings();
-    applyPostPatch(s, { fog: { density: 0.25 } }); // deprecated-alias test
+    applyPostPatch(s, { mist: { density: 0.25 } });
     expect(s.mist.density).toBe(0.25);
     const b = new PostBlender();
-    b.blendTo(s, { fog: { density: 0.75 } }, 1, easeLinear); // deprecated-alias test
+    b.blendTo(s, { mist: { density: 0.75 } }, 1, easeLinear);
     b.advance(s, 0.5);
     expect(s.mist.density).toBeCloseTo(0.5, 6);
-    b.cancel({ fog: { density: 0 } }); // deprecated-alias test
+    b.cancel({ mist: { density: 0 } });
     expect(b.active).toBe(false);
   });
 });

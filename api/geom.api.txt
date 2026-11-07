@@ -4,10 +4,6 @@
 ## ALL_LAYERS
 const ALL_LAYERS = 4294967295;
 
-## Aabb  (type-only)
-@deprecated
-type Aabb = GeomAabb;
-
 ## ArchOptions  (type-only)
 interface ArchOptions extends GeometryOptions {
     width?: number;
@@ -194,10 +190,6 @@ interface HeightfieldSource {
 
 ## HeightfieldVec3  (type-only)
 type HeightfieldVec3 = [number, number, number] | Float32Array | Float64Array;
-
-## Hit  (type-only)
-@deprecated
-type Hit = RayHit;
 
 ## ISO_ELEV_DEPTH
 const ISO_ELEV_DEPTH: number;

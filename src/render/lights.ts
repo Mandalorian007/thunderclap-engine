@@ -118,14 +118,11 @@ export interface DirectionalLight {
 
 /**
  * `Lights.sun`: a `DirectionalLight` whose direction is spelled `direction`, like
- * `SpotLight.direction` (ws/api-render). `dir` is the same array under the old name: reading
- * or assigning either one reads or replaces both.
+ * `SpotLight.direction` (ws/api-render).
  */
 export interface SunLight extends Omit<DirectionalLight, 'dir'> {
   /** The direction the light travels (sun → scene), any length. */
   direction: ArrayLike<number>;
-  /** @deprecated (ws/api-render) Use `direction` (the same array). Removed next minor. */
-  dir: ArrayLike<number>;
 }
 
 /** A point light: world position, linear RGB colour and the radius where it falls to zero. */
@@ -170,9 +167,6 @@ export interface DistanceFog {
   near: number;
   far: number;
 }
-
-/** @deprecated (ws/api-render) Use `DistanceFog` (the same shape). Removed next minor. */
-export type Fog = DistanceFog;
 
 /**
  * What the renderer passes to `Lights.writeBlock` when a shadow pass rendered this view: the
@@ -339,27 +333,14 @@ export class Lights {
   }
 }
 
-/** The default sun, with `dir` an accessor over `direction` so both spellings share one array. */
+/** The default sun: travelling straight down, no colour, no shadow. */
 function createSun(): SunLight {
-  let direction: ArrayLike<number> = new Float32Array([0, -1, 0]);
-  const sun = {
-    get direction(): ArrayLike<number> {
-      return direction;
-    },
-    set direction(v: ArrayLike<number>) {
-      direction = v;
-    },
-    get dir(): ArrayLike<number> {
-      return direction;
-    },
-    set dir(v: ArrayLike<number>) {
-      direction = v;
-    },
-    color: new Float32Array([0, 0, 0]) as ArrayLike<number>,
-    shadow: null as SunShadow | null | undefined,
-    layers: undefined as number | undefined,
+  return {
+    direction: new Float32Array([0, -1, 0]),
+    color: new Float32Array([0, 0, 0]),
+    shadow: null,
+    layers: undefined,
   };
-  return sun;
 }
 
 function set3(v: ArrayLike<number>, x: number, y: number, z: number): void {

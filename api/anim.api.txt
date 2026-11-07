@@ -205,10 +205,6 @@ interface AnimationMixerOptions {
     maxActions?: number;
 }
 
-## BlendMode  (type-only)
-@deprecated
-type BlendMode = AnimBlendMode;
-
 ## ChannelPath  (type-only)
 type ChannelPath = 'translation' | 'rotation' | 'scale' | 'weights';
 
@@ -326,10 +322,6 @@ interface MorphTarget {
 
 ## POSE_NODE_FLOATS
 const POSE_NODE_FLOATS = 10;
-
-## PlayOptions  (type-only)
-@deprecated
-type PlayOptions = AnimPlayOptions;
 
 ## Pose  (type-only)
 type Pose = Float32Array;

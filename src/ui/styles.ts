@@ -205,9 +205,3 @@ export function prefersReducedMotionIn(win: Window | undefined = globalThis.wind
     return false;
   }
 }
-
-/**
- * @deprecated (ws/api-core, E-036) Use `prefersReducedMotionIn`: `platform` exports a
- * `prefersReducedMotion()` without the window argument. Removed next minor.
- */
-export const prefersReducedMotion: (win?: Window) => boolean = prefersReducedMotionIn;

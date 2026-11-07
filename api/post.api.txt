@@ -61,10 +61,6 @@ interface ExposureSettings {
     histogramHigh: number;
 }
 
-## FogSettings  (type-only)
-@deprecated
-type FogSettings = MistSettings;
-
 ## FxaaSettings  (type-only)
 interface FxaaSettings {
     enabled: boolean;
@@ -206,8 +202,6 @@ type PostQualityTier = 'phone' | 'tablet' | 'desktop' | 'xr';
 interface PostSettings {
     bloom: BloomSettings;
     mist: MistSettings;
-    @deprecated
-    fog: MistSettings;
     godRays: GodRaySettings;
     vignette: VignetteSettings;
     grade: GradeSettings;
@@ -243,10 +237,6 @@ class PostStack implements PostProcessor {
     finishBlend(): this;
     get exposure(): number;
     get wantsJitter(): boolean;
-    @deprecated
-    addJitterCamera(_camera: Camera): this;
-    @deprecated
-    removeJitterCamera(_camera: Camera): this;
     get taaActive(): boolean;
     get taaVelocityActive(): boolean;
     get ssrActive(): boolean;
@@ -348,10 +338,6 @@ function createLutTexture(device: GPUDevice, size: LutSize, fn: LutFn): GPUTextu
 
 ## defaultPostQuality
 function defaultPostQuality(): PostQuality;
-
-## defaultPostSettings
-@deprecated
-function defaultPostSettings(): PostSettings;
 
 ## easeIn
 const easeIn: Ease;

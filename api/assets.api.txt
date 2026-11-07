@@ -672,10 +672,6 @@ interface GltfMaterial {
     alphaMode: GltfAlphaMode;
     alphaCutoff: number;
     extensions: GltfMaterialExtensions;
-    @deprecated
-    baseColorTexture: number | null;
-    @deprecated
-    texCoord: number;
 }
 
 ## GltfMaterialExtensions  (type-only)
@@ -960,18 +956,6 @@ type ReadResult = ArrayBuffer | Blob | ImageBitmap | {
     data: ArrayBuffer | Blob | ImageBitmap;
     total?: number;
 };
-
-## SKINNED_JOINTS_OFFSET
-@deprecated
-const SKINNED_JOINTS_OFFSET = 48;
-
-## SKINNED_VERTEX_STRIDE
-@deprecated
-const SKINNED_VERTEX_STRIDE: number;
-
-## SKINNED_WEIGHTS_OFFSET
-@deprecated
-const SKINNED_WEIGHTS_OFFSET = 52;
 
 ## SkinnedVertices  (type-only)
 interface SkinnedVertices {

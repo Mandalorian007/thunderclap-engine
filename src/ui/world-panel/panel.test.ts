@@ -614,7 +614,7 @@ describe('attach (ws/ui-4)', () => {
       },
     };
     const input = {
-      getPointers: () => router as unknown as PointerRouter<unknown>,
+      pointers: router as unknown as PointerRouter<unknown>,
       onUpdated: (fn: () => void) => {
         ticks.push(fn);
         return () => ticks.splice(ticks.indexOf(fn), 1);
@@ -646,7 +646,7 @@ describe('attach (ws/ui-4)', () => {
 
   it('attach needs a pointer router', () => {
     const { panel } = make();
-    expect(() => panel.attach({ getPointers: () => null, onUpdated: () => () => {} })).toThrow();
+    expect(() => panel.attach({ onUpdated: () => () => {} })).toThrow();
     expect(() => panel.attach({ pointers: null, onUpdated: () => () => {} })).toThrow();
   });
 

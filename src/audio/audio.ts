@@ -95,9 +95,6 @@ export interface AudioPlayOptions {
   fadeIn?: number;
 }
 
-/** @deprecated (ws/api-rest, E-036) Use `AudioPlayOptions`. Removed next minor. */
-export type PlayOptions = AudioPlayOptions;
-
 /** A playing (or pending) sound. Every method is safe to call at any time. */
 export interface Voice {
   /** Stop, optionally fading out over `fade` seconds. */
@@ -318,9 +315,6 @@ export interface AudioFollowTarget {
   /** A counter that moves whenever `world` may have (a `Transform.changed`); lets the follower skip the read. */
   readonly changed?: number;
 }
-
-/** @deprecated (ws/api-rest, E-036) Use `AudioFollowTarget`. Removed next minor. */
-export type FollowTarget = AudioFollowTarget;
 
 /** Distance model of a spatial voice (`PannerNode.distanceModel`). */
 export type Rolloff = 'linear' | 'inverse' | 'exponential';

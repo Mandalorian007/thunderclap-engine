@@ -447,14 +447,6 @@ export interface WidgetCooldown {
 }
 
 /**
- * @deprecated (ws/api-core, E-036) Use `WidgetCooldown`: `core` exports the scheduler's
- * `Cooldown`. Removed next minor.
- */
-export type Cooldown = WidgetCooldown;
-/** @deprecated (ws/api-core, E-036) Use `WidgetCooldownOptions`. Removed next minor. */
-export type CooldownOptions = WidgetCooldownOptions;
-
-/**
  * A radial cooldown: a disc whose `conic-gradient` sweep follows `--tc-ui-sweep`, lit when
  * ready (`data-ready`). Decorative (`aria-hidden`): the game announces readiness itself.
  */

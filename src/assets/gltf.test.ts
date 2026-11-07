@@ -614,8 +614,6 @@ describe('parseGltf (GLB)', () => {
         name: 'checkered',
         baseColorFactor: [1, 0.5, 0.25, 1],
         baseColor: { index: 0, texCoord: 0, transform: null },
-        baseColorTexture: 0,
-        texCoord: 0,
         doubleSided: false,
         alphaMode: 'OPAQUE',
         alphaCutoff: 0.5,
@@ -625,8 +623,6 @@ describe('parseGltf (GLB)', () => {
         name: 'moss',
         baseColorFactor: [0.2, 0.6, 0.3, 1],
         baseColor: null,
-        baseColorTexture: null,
-        texCoord: 0,
         doubleSided: true,
         alphaMode: 'MASK',
         alphaCutoff: 0.3,
@@ -1104,9 +1100,6 @@ describe('parseGltf (materials)', () => {
     expect(m.emissiveFactor).toEqual([3, 1.5, 0]);
     expect(m.alphaMode).toBe('BLEND');
     expect(m.doubleSided).toBe(true);
-    // Deprecated mirrors.
-    expect(m.baseColorTexture).toBe(0); // deprecated-alias test
-    expect(m.texCoord).toBe(0); // deprecated-alias test
     // Both extensions are handled: no warning, and `extensionsRequired` is accepted.
     expect(doc.warnings).toEqual([]);
   });
@@ -1137,8 +1130,6 @@ describe('parseGltf (materials)', () => {
         ior: null,
         specular: null,
       },
-      baseColorTexture: null,
-      texCoord: 0,
     });
   });
 

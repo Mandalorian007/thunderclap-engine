@@ -501,10 +501,10 @@ describe('loadTextureArray filter (ws/render-4)', () => {
     return { width: w, height: h, data: new Uint8Array(new ArrayBuffer(w * h * 4)) };
   }
 
-  it('takes `filter`, and the deprecated `mipFilter`, the same way', () => {
+  it('takes `filter` for every layer texture', () => {
     const fake = createFakeDevice();
     loadTextureArray(fake.device, [pixels(4, 4)], { filter: 'nearest', label: 'a' });
-    loadTextureArray(fake.device, [pixels(4, 4)], { mipFilter: 'nearest', label: 'b' });
+    loadTextureArray(fake.device, [pixels(4, 4)], { filter: 'nearest', label: 'b' });
     const mips = fake.passes.filter((p) => p.label?.startsWith('mipmap:'));
     expect(mips.length).toBe(4);
     for (const p of mips) {

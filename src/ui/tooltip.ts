@@ -50,11 +50,6 @@ export interface TooltipHost {
   readonly layers: { readonly hud: HTMLElement; readonly toasts: HTMLElement };
   /** The overlay's box: in `css` units the toasts layer covers it. */
   readonly rect: Readonly<Rect>;
-  /**
-   * @deprecated (ws/ui-4) The frame is read from `anchors().frame.rect` once a camera built the
-   * anchors; this is only read before then (an element target with no camera yet).
-   */
-  readonly frame?: Readonly<Rect>;
   /** In `frame` units the toasts layer is the frame (`anchors().frame.rect`), else the box. */
   readonly units: 'frame' | 'css';
   /** The overlay's `Anchors`; throws until a camera built it. Needed for world-point targets. */
@@ -195,9 +190,9 @@ export function createTooltips(host: TooltipHost): Tooltips {
   const size = { width: 0, height: 0 };
   const NO_FRAME: Readonly<Rect> = { x: 0, y: 0, width: 0, height: 0 };
   // The overlay's anchors once a world point built them: their frame is the one source for
-  // where the frame is (ws/ui-4); before that the host's own (deprecated) `frame`.
+  // where the frame is (ws/ui-4); before that, an empty frame.
   let anchors: Anchors | null = null;
-  const frameOf = (): Readonly<Rect> => anchors?.frame.rect ?? host.frame ?? NO_FRAME; // deprecated-alias impl
+  const frameOf = (): Readonly<Rect> => anchors?.frame.rect ?? NO_FRAME;
 
   function place(entry: Entry): void {
     const t = entry.target;

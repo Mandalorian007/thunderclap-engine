@@ -847,7 +847,6 @@ describe('loadGltf lights and cameras on the fake GPU', () => {
     const [sun] = scene.lights.directional;
     expect(Array.from(sun!.color)).toEqual([1, 1, 1]);
     expect(Array.from(sun!.direction)).toEqual([0, 0, -1]);
-    expect(sun!.dir).toBe(sun!.direction); // deprecated-alias test
   });
 
   it('gives a rotated directional light a SunLight direction: the world -Z of its node', async () => {
@@ -870,14 +869,11 @@ describe('loadGltf lights and cameras on the fake GPU', () => {
     expect(sun!.direction).toHaveLength(3);
     for (let i = 0; i < 3; i++)
       expect(Math.abs(sun!.direction[i]! - expected[i]!)).toBeLessThan(1e-5);
-    // It drops into Lights.sun as is; the deprecated `dir` follows a reassignment.
+    // It drops into Lights.sun as is.
     const lights = new Lights();
     lights.sun.direction = sun!.direction;
     lights.sun.color = sun!.color;
-    expect(lights.sun.dir).toBe(sun!.direction); // deprecated-alias test
-    const flipped = new Float32Array([0, -1, 0]);
-    sun!.dir = flipped; // deprecated-alias test
-    expect(sun!.direction).toBe(flipped);
+    expect(lights.sun.direction).toBe(sun!.direction);
   });
 
   it('applyGltfCamera sets an orthographic projection and the node view', async () => {

@@ -60,9 +60,6 @@ export interface MistSettings {
   lightScatter: number;
 }
 
-/** @deprecated (ws/api-render) Use `MistSettings` (the same shape). Removed next minor. */
-export type FogSettings = MistSettings;
-
 export interface GodRaySettings {
   enabled: boolean;
   /**
@@ -356,12 +353,6 @@ export interface PostSettings {
   bloom: BloomSettings;
   /** The screen-space floor mist (not `Lights.fog`, the distance fog). */
   mist: MistSettings;
-  /**
-   * @deprecated (ws/api-render) Use `mist`: the same section under its old name, a forwarder
-   * on every settings object the module builds (`neutralPostSettings`, `cinematicPostSettings`,
-   * `clonePostSettings`), and read as `mist` in a patch. Removed next minor.
-   */
-  fog: MistSettings;
   godRays: GodRaySettings;
   vignette: VignetteSettings;
   grade: GradeSettings;
@@ -386,7 +377,7 @@ export interface PostSettings {
  * contrast lift. `PostStack` and `createGame` start from it. A new settings object each call.
  */
 export function cinematicPostSettings(): PostSettings {
-  return withMistAlias({
+  return {
     bloom: {
       enabled: true,
       intensity: 0.9,
@@ -478,7 +469,7 @@ export function cinematicPostSettings(): PostSettings {
     },
     whiteBalance: { temperature: 6500, tint: 0 },
     motionBlur: { enabled: false, mode: 'object', intensity: 1, maxSamples: 8 },
-  } as Omit<PostSettings, 'fog'>);
+  };
 }
 
 /**
@@ -497,35 +488,6 @@ export function neutralPostSettings(): PostSettings {
   return s;
 }
 
-/**
- * @deprecated (ws/api-render) The name does not say which look it is: it returns
- * `cinematicPostSettings()`. Call that, or `neutralPostSettings()` for no look. Removed next
- * minor.
- */
-export function defaultPostSettings(): PostSettings {
-  return cinematicPostSettings();
-}
-
-/** Define the deprecated `fog` forwarder on `s` (not enumerable, so copies and blends skip it). */
-function withMistAlias(s: Omit<PostSettings, 'fog'>): PostSettings {
-  Object.defineProperty(s, 'fog', {
-    get(this: PostSettings) {
-      return this.mist;
-    },
-    set(this: PostSettings, v: MistSettings) {
-      this.mist = v;
-    },
-    enumerable: false,
-    configurable: true,
-  });
-  return s as PostSettings;
-}
-
-/** The section a patch key names: the deprecated `fog` is `mist`. */
-export function postSection(key: string): keyof PostSettings {
-  return (key === 'fog' ? 'mist' : key) as keyof PostSettings;
-}
-
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? Partial<T[K]> : T[K] };
 export type PostSettingsPatch = DeepPartial<PostSettings>;
 
@@ -537,7 +499,7 @@ export type PostSettingsPatch = DeepPartial<PostSettings>;
 export function clonePostSettings(s: PostSettings): PostSettings {
   const out = {} as Record<string, unknown>;
   for (const key of Object.keys(s) as (keyof PostSettings)[]) out[key] = cloneValue(s[key]);
-  return withMistAlias(out as unknown as Omit<PostSettings, 'fog'>);
+  return out as unknown as PostSettings;
 }
 
 function cloneValue(v: unknown): unknown {
@@ -553,7 +515,7 @@ function cloneValue(v: unknown): unknown {
 export function applyPostPatch(target: PostSettings, patch: PostSettingsPatch): PostSettings {
   for (const key of Object.keys(patch) as (keyof PostSettings)[]) {
     const section = patch[key];
-    if (section) Object.assign(target[postSection(key)], section);
+    if (section) Object.assign(target[key], section);
   }
   return target;
 }

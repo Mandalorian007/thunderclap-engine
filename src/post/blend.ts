@@ -1,5 +1,5 @@
 import { type Ease, ease } from '../tween/ease';
-import { type PostSettings, type PostSettingsPatch, postSection } from './settings';
+import type { PostSettings, PostSettingsPatch } from './settings';
 
 // The easing functions live in `@thunderclap/engine/tween`; these names stay as aliases.
 export type { Ease };
@@ -50,7 +50,7 @@ export class PostBlender {
     for (const name of Object.keys(patch) as Section[]) {
       const src = patch[name] as Record<string, unknown> | undefined;
       if (!src) continue;
-      const section = postSection(name);
+      const section = name;
       const cur = target[section] as unknown as Record<string, unknown>;
       for (const key of Object.keys(src)) {
         const to = src[key];
@@ -94,7 +94,7 @@ export class PostBlender {
     for (const name of Object.keys(patch) as Section[]) {
       const src = patch[name];
       if (!src) continue;
-      for (const key of Object.keys(src)) this.drop(postSection(name), key);
+      for (const key of Object.keys(src)) this.drop(name, key);
     }
   }
 

@@ -100,9 +100,6 @@ export const TYPED_KIND_CTORS: Record<TypedKind, TypedCtor> = {
   f64: Float64Array,
 };
 
-/** @deprecated (ws/api-rest, E-036) An internal table; removed next minor. */
-export const TYPED_CTORS: Record<TypedKind, TypedCtor> = TYPED_KIND_CTORS;
-
 const KIND_OF = new Map<unknown, TypedKind>(
   (Object.keys(TYPED_KIND_CTORS) as TypedKind[]).map((k) => [TYPED_KIND_CTORS[k], k]),
 );

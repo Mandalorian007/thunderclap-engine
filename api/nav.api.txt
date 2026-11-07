@@ -33,10 +33,6 @@ interface AreaStamp {
     area: number;
 }
 
-## Cell  (type-only)
-@deprecated
-type Cell = NavCell;
-
 ## Corridor  (type-only)
 interface Corridor {
     readonly polys: Int32Array;

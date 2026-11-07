@@ -100,13 +100,7 @@ export {
   loadGltf,
 } from './gltf-load';
 export type { GltfSkeleton, SkinnedVertices } from './gltf-skin';
-export {
-  interleaveSkinned,
-  SKINNED_JOINTS_OFFSET,
-  SKINNED_VERTEX_STRIDE,
-  SKINNED_WEIGHTS_OFFSET,
-  skeletonFromSkin,
-} from './gltf-skin';
+export { interleaveSkinned, skeletonFromSkin } from './gltf-skin';
 export type {
   Ktx2DataFormat,
   Ktx2Level,

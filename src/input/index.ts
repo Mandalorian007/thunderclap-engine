@@ -18,7 +18,6 @@ export {
   type FollowObstacle,
   type FollowOptions,
   type FollowSubject,
-  type FollowTarget,
 } from './follow';
 export {
   createGestures,
@@ -92,11 +91,9 @@ export {
 export {
   type Aim,
   type Edges,
-  type Grid,
   MAGNIFY_DEFAULTS,
   type MagnifyOptions,
   type MagnifyTarget,
-  type Rect,
   type SnapGrid,
   snapToGrid,
 } from './magnify';
@@ -129,11 +126,9 @@ export {
   type XrButtons,
 } from './pointer-sources';
 export {
-  type Aabb,
   aabbTester,
   createHit,
   createRay,
-  type Hit,
   type HitTester,
   type MeshTesterOptions,
   meshTester,

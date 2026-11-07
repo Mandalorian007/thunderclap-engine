@@ -10,7 +10,6 @@
 // ws/geom-3: clone, simplification and LODs, hulls and collision proxies, split and slice, the
 // 2D tile slide, and the positions-only collider source.
 export type {
-  Aabb,
   Box2,
   Capsule,
   Circle,
@@ -23,7 +22,6 @@ export type {
   GeometrySource,
   GridSource,
   HeightfieldSource,
-  Hit,
   PositionsSource,
   RayHit,
   Shape,

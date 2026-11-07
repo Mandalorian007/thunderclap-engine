@@ -10,9 +10,6 @@ export interface NavCell {
   y: number;
 }
 
-/** @deprecated (ws/api-rest, E-036) Use `NavCell`. Removed next minor. */
-export type Cell = NavCell;
-
 /** A point on the world XZ plane. `y` (height) is the game's or `geom`'s job. Mutable, reused. */
 export interface NavPoint {
   x: number;

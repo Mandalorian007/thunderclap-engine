@@ -30,12 +30,6 @@ export interface PickHit<T = unknown> {
 }
 
 /**
- * @deprecated (ws/api-core, E-036) Use `PickHit`: `geom` exports a different `Hit` (now `RayHit`). Removed next
- * minor.
- */
-export type Hit<T = unknown> = PickHit<T>;
-
-/**
  * Returns the nearest hit of `ray` against what this tester knows, or `null`. It may return the
  * same object on every call (the router copies it before calling again).
  */
@@ -166,12 +160,6 @@ export interface RayBox<T = unknown> {
   max: readonly [number, number, number];
   target: T;
 }
-
-/**
- * @deprecated (ws/api-core, E-036) Use `RayBox`: `geom` exports a different `Aabb`. Removed next
- * minor.
- */
-export type Aabb<T = unknown> = RayBox<T>;
 
 /**
  * Hits the nearest of `boxes` (read on every call, so the game may edit the array and its

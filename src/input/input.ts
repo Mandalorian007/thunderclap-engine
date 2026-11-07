@@ -563,11 +563,6 @@ export class Input<A extends string> {
     return this.linkedGestures;
   }
 
-  /** @deprecated (ws/api-core, E-036) Read `gestures`. Removed next minor. */
-  getGestures(): Gestures | null {
-    return this.linkedGestures;
-  }
-
   /**
    * Link a pointer router (or unlink with `null`). A linked router shares this input's
    * `blocked()`, pointer transform (client → camera screen units) and gestures (the magnify aim),
@@ -590,11 +585,6 @@ export class Input<A extends string> {
 
   /** The linked pointer router (`setPointers`), or `null`. */
   get pointers(): PointerRouter<unknown> | null {
-    return this.linkedPointers;
-  }
-
-  /** @deprecated (ws/api-core, E-036) Read `pointers`. Removed next minor. */
-  getPointers(): PointerRouter<unknown> | null {
     return this.linkedPointers;
   }
 
@@ -674,11 +664,6 @@ export class Input<A extends string> {
 
   /** The linked look controls (`setLook`), or `null`. */
   get look(): Look | null {
-    return this.linkedLook;
-  }
-
-  /** @deprecated (ws/api-core, E-036) Read `look`. Removed next minor. */
-  getLook(): Look | null {
     return this.linkedLook;
   }
 
@@ -788,11 +773,6 @@ export class Input<A extends string> {
   /** The pushed context names, bottom first. One array, rebuilt when the stack changes. */
   get contexts(): readonly string[] {
     return this.contextNames;
-  }
-
-  /** @deprecated (ws/api-core, E-036) Read `contexts` (this returns a copy). Removed next minor. */
-  contextStack(): string[] {
-    return this.contextNames.slice();
   }
 
   /** Shorthand for `on('context', fn)`: the top context changed. Returns the remover. */
@@ -992,11 +972,6 @@ export class Input<A extends string> {
     return this.listenState?.action ?? null;
   }
 
-  /** @deprecated (ws/api-core, E-036) Read `listening`. Removed next minor. */
-  listeningFor(): A | null {
-    return this.listenState?.action ?? null;
-  }
-
   private settleListen(b: Binding | null): void {
     const l = this.listenState;
     if (!l) return;
@@ -1012,11 +987,6 @@ export class Input<A extends string> {
   /** Replace the button keys (see `InputOptions.buttonKeys`). */
   setButtonKeys(codes: Iterable<string>): void {
     this.buttonKeys = new Set(codes);
-  }
-
-  /** @deprecated (ws/api-core, E-036) Use `bindings()`, the same map. Removed next minor. */
-  getBindings(): Bindings<A> {
-    return this.active;
   }
 
   /**

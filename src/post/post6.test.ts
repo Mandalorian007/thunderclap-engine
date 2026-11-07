@@ -94,9 +94,6 @@ describe('post 6: jitter through the renderer (ws/post-6)', () => {
     deep(r, [camera], 2.1);
     const j0 = post.taa.jitter(0);
     expect(camera.jitter).toEqual([j0[0], j0[1]]);
-    // The deprecated registration is a no-op.
-    post.removeJitterCamera(camera).addJitterCamera(camera); // deprecated-alias test
-    expect(camera.jitter).toEqual([j0[0], j0[1]]);
   });
 
   it('quality.taa off clears the hook; destroy clears it; a stack that never ran TAA leaves it alone', () => {

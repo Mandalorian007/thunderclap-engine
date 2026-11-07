@@ -151,10 +151,6 @@ type PlatformFamily = 'ios' | 'android' | 'desktop';
 ## PointerKind  (type-only)
 type PointerKind = 'touch' | 'mouse' | 'keyboard';
 
-## Rect  (type-only)
-@deprecated
-type Rect = LetterboxRect;
-
 ## Surface
 class Surface {
     readonly root: HTMLElement;
@@ -285,10 +281,6 @@ function mountSurface(root: HTMLElement, opts?: SurfaceOptions): Surface;
 
 ## platformFamily
 function platformFamily(ua?: string, touchPoints?: number): PlatformFamily;
-
-## prefersReducedMotion
-@deprecated
-const prefersReducedMotion: () => boolean;
 
 ## safeExternalUrl
 function safeExternalUrl(url: string | null | undefined): string | null;

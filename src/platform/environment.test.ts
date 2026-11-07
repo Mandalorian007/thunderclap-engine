@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { isReducedMotion, prefersReducedMotion } from './environment'; // deprecated-alias test
+import { isReducedMotion } from './environment';
 
 const winWith = (reduce: boolean) =>
   ({
@@ -18,6 +18,5 @@ describe('isReducedMotion', () => {
     expect(isReducedMotion()).toBe(false);
     vi.stubGlobal('matchMedia', winWith(true).matchMedia);
     expect(isReducedMotion()).toBe(true);
-    expect(prefersReducedMotion()).toBe(true); // deprecated-alias test
   });
 });

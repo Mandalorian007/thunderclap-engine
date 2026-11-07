@@ -166,8 +166,6 @@ class SceneStack<Ctx = unknown, Frame = unknown, Cam = Camera> {
     get top(): Scene<Ctx, Frame, Cam> | undefined;
     get transitioning(): boolean;
     get scenes(): readonly Scene<Ctx, Frame, Cam>[];
-    @deprecated
-    list(): readonly Scene<Ctx, Frame, Cam>[];
     push(scene: Scene<Ctx, Frame, Cam>): Promise<void>;
     pop(): void;
     replace(scene: Scene<Ctx, Frame, Cam>): Promise<void>;

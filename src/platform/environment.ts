@@ -15,9 +15,6 @@ export function isReducedMotion(win?: Window): boolean {
   return typeof mm === 'function' && mm.call(win ?? globalThis, REDUCED).matches;
 }
 
-/** @deprecated (ws/api-rest, E-036) Use `isReducedMotion`. Removed next minor. */
-export const prefersReducedMotion = (): boolean => isReducedMotion();
-
 /** What the device looks like from the page: enough to pick sensible defaults, not to sniff. */
 export interface DeviceTraits {
   /** The primary pointer is coarse (a finger). */

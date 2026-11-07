@@ -116,9 +116,6 @@ describe('action contexts (ws/input-5)', () => {
     expect(input.contexts).toEqual(['b', 'a']);
     a();
     expect(input.contexts).toEqual(['b', 'a']);
-    // The deprecated reader is a copy of the same names.
-    expect(input.contextStack()).toEqual(['b', 'a']); // deprecated-alias test
-    expect(input.contextStack()).not.toBe(input.contexts); // deprecated-alias test
   });
 
   it('a context can add an action the base map lacks (ws/api-core)', () => {

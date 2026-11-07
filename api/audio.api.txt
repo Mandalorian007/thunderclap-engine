@@ -245,10 +245,6 @@ interface FilterSpec {
     gain?: number;
 }
 
-## FollowTarget  (type-only)
-@deprecated
-type FollowTarget = AudioFollowTarget;
-
 ## ImpulseResponseOptions  (type-only)
 interface ImpulseResponseOptions {
     seconds?: number;
@@ -405,10 +401,6 @@ interface PersistMixerOptions {
     debounceMs?: number;
     autoFlush?: boolean;
 }
-
-## PlayOptions  (type-only)
-@deprecated
-type PlayOptions = AudioPlayOptions;
 
 ## RecipeName  (type-only)
 type RecipeName = keyof typeof recipes;

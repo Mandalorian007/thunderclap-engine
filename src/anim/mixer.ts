@@ -38,9 +38,6 @@ export interface AnimPlayOptions {
   startTime?: number;
 }
 
-/** @deprecated (ws/api-rest, E-036) Use `AnimPlayOptions`. Removed next minor. */
-export type PlayOptions = AnimPlayOptions;
-
 export type AnimationEventListener = (name: string, action: AnimationAction) => void;
 
 /** One playing clip. Fields marked settable may be changed between updates. */
