@@ -153,6 +153,22 @@ export interface WidgetHandle {
   remove(): void;
 }
 
+/**
+ * A widget whose measured box is larger than its region's inner box (the region less its `pad`
+ * on each side) in the current form factor (`Layout.overflows`). CSS px.
+ */
+export interface LayoutOverflow {
+  /** The widget's id (`WidgetOptions.id`). */
+  id: string;
+  region: RegionName;
+  /** The widget's measured box. */
+  w: number;
+  h: number;
+  /** The region's inner box. */
+  rw: number;
+  rh: number;
+}
+
 /** The pure result of laying out one form factor at one size. */
 export interface LayoutState {
   formFactor: FormFactor;
@@ -520,7 +536,18 @@ export interface Layout {
   readonly freeUses: readonly { id: string; reason: string }[];
   /** The element of a region (for styling; register widgets with `add`). */
   region(name: RegionName): HTMLElement;
-  /** Register a widget. It is moved into its region now and on every form-factor change. */
+  /**
+   * The widgets in a region whose measured box is larger than the region's inner box, as of the
+   * last re-layout (ws/ui-7). Measured on each re-layout (`add`, `setPlace`, a resize,
+   * `refresh`), never per frame; a widget whose content grows later is caught at the next one.
+   */
+  overflows(): readonly LayoutOverflow[];
+  /**
+   * Register a widget. It is moved into its region now and on every form-factor change. When
+   * its measured box is larger than its region's inner box, it warns once (`[layout] … overflows`,
+   * naming the widget, the region and both sizes; again after `setPlace`) and is listed in
+   * `overflows()`.
+   */
   add(element: HTMLElement, opts: WidgetOptions): WidgetHandle;
   /**
    * Dock a caption card (`overlay.caption` by default) in a region, `captionLane` unless
@@ -557,7 +584,12 @@ interface Entry {
   caption?: { element: HTMLElement; dock(host: HTMLElement | null): void };
   home?: { parent: Node | null; next: Node | null };
   loggedFree: boolean;
+  warnedOverflow: boolean;
 }
+
+/** Slack before a measured box counts as larger than its region, CSS px (sub-pixel rounding). */
+const OVERFLOW_SLACK = 0.5;
+const r2 = (v: number) => Math.round(v * 100) / 100;
 
 const HIDDEN_ATTR = 'data-tc-layout-hidden';
 
@@ -610,6 +642,7 @@ export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout
   let seq = 0;
   let state: LayoutState;
   let freeUses: { id: string; reason: string }[] = [];
+  let overflows: LayoutOverflow[] = [];
 
   const measureInsets = (): Insets => {
     const vp = {
@@ -736,6 +769,28 @@ export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout
       else regionEls[p].append(e.el);
       e.current = p;
     }
+
+    // Overflow: one read pass after the writes above (one reflow per re-layout, none per frame).
+    overflows = [];
+    for (const e of sorted) {
+      const p = e.current;
+      if (p === 'free' || p === 'hidden') continue;
+      const r = state.regions[p];
+      const box = e.el.getBoundingClientRect?.();
+      if (!r || !box) continue;
+      const rw = r2(Math.max(0, r.width - 2 * form.pad));
+      const rh = r2(Math.max(0, r.height - 2 * form.pad));
+      const w = r2(box.width);
+      const bh = r2(box.height);
+      if (w <= rw + OVERFLOW_SLACK && bh <= rh + OVERFLOW_SLACK) continue;
+      overflows.push({ id: e.id, region: p, w, h: bh, rw, rh });
+      if (!e.warnedOverflow) {
+        e.warnedOverflow = true;
+        console.warn(
+          `[layout] ${e.id} overflows its "${p}" region in ${ff}: ${w}x${bh} px in ${rw}x${rh} px`,
+        );
+      }
+    }
     for (const f of subs) f(state);
   };
 
@@ -761,6 +816,7 @@ export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout
     region(name) {
       return regionEls[name];
     },
+    overflows: () => overflows,
     add(el, opts) {
       const e: Entry = {
         id: opts.id ?? (el.id || `widget-${seq + 1}`),
@@ -771,6 +827,7 @@ export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout
         current: 'hidden',
         home: el.parentNode ? { parent: el.parentNode, next: el.nextSibling } : undefined,
         loggedFree: false,
+        warnedOverflow: false,
       };
       entries.push(e);
       apply();
@@ -786,6 +843,7 @@ export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout
         current: 'hidden',
         caption,
         loggedFree: false,
+        warnedOverflow: false,
       };
       entries.push(e);
       apply();
@@ -839,6 +897,7 @@ export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout
       setPlace(place) {
         e.place = { ...place };
         e.loggedFree = false;
+        e.warnedOverflow = false;
         apply();
       },
       remove() {

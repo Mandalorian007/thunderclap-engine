@@ -126,6 +126,7 @@ export {
   type Insets,
   type Layout,
   type LayoutHost,
+  type LayoutOverflow,
   type LayoutSpec,
   type LayoutState,
   NO_INSETS,
