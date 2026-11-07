@@ -2,7 +2,8 @@
  * `createTestGame` (ws/core-8): `createGame` itself, headless, on the fake GPU, the fake host
  * and the fixed clock. `step(n)` runs the game's own loop for `n` frames of one fixed step
  * each, so a test presses an action, steps and asserts state with the engine's real frame
- * order. Needs a DOM for the overlay (`// @vitest-environment happy-dom`).
+ * order. Needs a DOM for the overlay (`// @vitest-environment happy-dom`), unless
+ * `overlay: false` (ws/testing-2), which runs in plain Node on an inert stand-in DOM.
  */
 import type { CreateGameOptions, EngineCtx, FlushableSave } from '../core/game';
 import { createGame } from '../core/game';
@@ -16,6 +17,7 @@ import {
 } from '../render/fake-gpu';
 import { createFakeHost, type FakeHost } from './fake-host';
 import { createFixedClock, type FixedClock } from './fixed-clock';
+import { installNullDom } from './null-dom';
 
 /**
  * `createTestGame` options: `createGame`'s, without `gpu`, `host` and `clock` (the kit makes
@@ -35,6 +37,17 @@ export interface TestGameOptions<A extends string, S extends FlushableSave | nul
    * px. The root sits at the viewport's top-left.
    */
   viewport?: { width: number; height: number };
+  /**
+   * `false` (ws/testing-2): the test needs no DOM. In an environment without one (plain Node,
+   * Vitest's default `node` environment) the kit installs an inert stand-in on `globalThis`
+   * (`document`, `window`, `getComputedStyle`, `ResizeObserver` and the `Node`/`HTMLElement`
+   * classes, only those missing, for the rest of the file), so `createGame` mounts its canvas,
+   * overlay and input into elements that never lay out, paint or receive events. `ctx.ui`
+   * exists but shows nothing; drive the game through `input`. With a real DOM it is used as
+   * usual, and the default root is a detached `<div>` instead of one in `document.body`.
+   * Default true: the overlay needs a DOM (`// @vitest-environment happy-dom`).
+   */
+  overlay?: boolean;
 }
 
 /** What `createTestGame` returns. */
@@ -61,6 +74,14 @@ export interface TestGame<
    * loop (device lost) runs nothing.
    */
   step(n?: number): void;
+  /**
+   * Lose the GPU device (ws/testing-2): `device.loseDevice(reason, message)`, then wait until the
+   * engine has handled it. Afterwards the loop is halted for good (`ctx.loop.halted`, `step`
+   * runs nothing), `hooks.deviceLost` and every `ctx.onDeviceLost` listener ran with the info,
+   * audio is halted, captions are suspended and the save flushed, as on a page. Default reason
+   * `'unknown'`; `'destroyed'` is an explicit `device.destroy()`, which the engine ignores.
+   */
+  loseDevice(reason?: GPUDeviceLostReason, message?: string): Promise<void>;
 }
 
 /**
@@ -74,9 +95,14 @@ export async function createTestGame<
   C = unknown,
   P = unknown,
 >(opts: TestGameOptions<A, S>): Promise<TestGame<A, S, C, P>> {
-  const doc = globalThis.document;
+  const design = { width: opts.design?.width ?? 1920, height: opts.design?.height ?? 1080 };
+  const view = opts.viewport ?? design;
+  const headless = opts.overlay === false;
+  const doc = headless ? installNullDom(view) : globalThis.document;
   if (!doc) {
-    throw new Error('createTestGame needs a DOM: add `// @vitest-environment happy-dom`');
+    throw new Error(
+      'createTestGame needs a DOM: add `// @vitest-environment happy-dom`, or pass `overlay: false`',
+    );
   }
   installGpuGlobals();
   const device = opts.device ?? createFakeDevice();
@@ -84,9 +110,9 @@ export async function createTestGame<
   const step = opts.sim ? (opts.sim.step ?? 1 / 60) : 1 / 60;
   // `step × 1000` is what the loop advances the clock by, so each fixed update is one tick.
   const clock = createFixedClock(step * 1000);
-  const design = { width: opts.design?.width ?? 1920, height: opts.design?.height ?? 1080 };
-  const view = opts.viewport ?? design;
-  const root = opts.root ?? doc.body.appendChild(doc.createElement('div'));
+  const root =
+    opts.root ??
+    (headless ? doc.createElement('div') : doc.body.appendChild(doc.createElement('div')));
   sizeElement(root, () => ({ left: 0, top: 0, width: view.width, height: view.height }));
   const gpu: GpuContext = {
     ...fakeRendererGpu(device),
@@ -109,6 +135,11 @@ export async function createTestGame<
     device,
     step(n = 1) {
       for (let i = 0; i < n; i++) ctx.loop.tickOnce(step);
+    },
+    loseDevice(reason, message) {
+      device.loseDevice(reason, message);
+      // The engine's `lost` handler was attached at boot, so it has run once this one resolves.
+      return device.lost.then(() => undefined);
     },
   };
 }

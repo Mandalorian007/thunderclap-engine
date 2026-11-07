@@ -69,6 +69,8 @@ interface FakeDevice {
     readonly submits: number;
     runPass: ((pass: FakePass) => void) | null;
     readonly errors: string[];
+    readonly lost: Promise<GPUDeviceLostInfo>;
+    loseDevice(reason?: GPUDeviceLostReason, message?: string): void;
 }
 
 ## FakeGpuValidationError
@@ -222,6 +224,7 @@ interface TestGame<A extends string, S extends FlushableSave | null = null, C = 
     readonly clock: FixedClock;
     readonly device: FakeDevice;
     step(n?: number): void;
+    loseDevice(reason?: GPUDeviceLostReason, message?: string): Promise<void>;
 }
 
 ## TestGameOptions  (type-only)
@@ -233,6 +236,7 @@ interface TestGameOptions<A extends string, S extends FlushableSave | null = nul
         width: number;
         height: number;
     };
+    overlay?: boolean;
 }
 
 ## createFakeDevice

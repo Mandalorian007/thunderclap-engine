@@ -50,7 +50,7 @@
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "check:docs": "node scripts/check-docs.mjs",
     "check:snippets": "node scripts/check-snippets.mjs && node --test scripts/check-snippets.test.mjs",
-    "check:deprecated": "node scripts/check-deprecated.mjs && node --test scripts/check-deprecated.test.mjs",
+    "check:deprecated": "node scripts/check-deprecated.mjs && node --test scripts/check-deprecated.test.mjs scripts/check-deprecated-game.test.mjs",
     "check:api": "node scripts/api-surface.mjs && node --test scripts/api-surface.test.mjs",
     "api:update": "node scripts/api-surface.mjs --update",
     "check:create-game": "node --test scripts/create-game.test.mjs",

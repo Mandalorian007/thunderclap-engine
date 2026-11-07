@@ -333,6 +333,30 @@ it('saves when the app is backgrounded and buzzes once', () => {
 
 `host.runFrame()` runs the frames requested so far, one display frame per call, so a `GameLoop` built with `{ frames: host }` advances only when the test says. `createGame({ gpu, clock })` runs headless: given a GPU context and a clock it skips the canvas and WebGPU, and `createTestGame` in `./testing` wraps it with the fake GPU, a fake host and a fixed clock, so a whole game runs in a unit test ([testing README](../../src/testing/README.md)). Test the page itself with the Playwright tests below.
 
+### A whole game with no DOM, and device loss
+
+`createTestGame` builds the engine's DOM overlay, so by default the test file needs happy-dom (`// @vitest-environment happy-dom`). If the test never touches the overlay, pass `overlay: false` and leave that line out. The game then runs in plain Node: the kit puts an inert stand-in for `document`, `window`, `getComputedStyle` and `ResizeObserver` in place of the ones Node lacks. `ctx.ui` still exists, but it shows nothing and gets no events. Drive the game through `input` and assert on its state. Keep happy-dom for tests that click overlay buttons.
+
+A real GPU can be lost at any time, for example by a driver reset or a tab sent to the background on mobile. `g.loseDevice(reason?, message?)` does that to the fake one and resolves once the engine has handled it, so a test can check that the game reacts the way it does on a page. The loop halts for good, `hooks.deviceLost(info)` runs, audio halts, the save flushes, and then each `ctx.onDeviceLost` listener runs. A loss with reason `'destroyed'` (the game destroyed the device itself) is ignored, as on a page.
+
+```ts
+import { createTestGame } from '@thunderclap/engine/testing';
+import { expect, it } from 'vitest';
+
+it('stops and reports when the GPU is lost', async () => {
+  const g = await createTestGame({ overlay: false, input: { bindings: { jump: [{ key: 'Space' }] } } });
+  const seen: string[] = [];
+  g.ctx.onDeviceLost((info) => seen.push(info.reason));
+  g.step(3);
+  await g.loseDevice('unknown', 'driver reset');
+  expect(seen).toEqual(['unknown']);
+  expect(g.ctx.loop.halted).toBe(true);
+  expect(g.clock.ticks).toBe(3);
+  g.step(5); // halted: runs nothing
+  expect(g.clock.ticks).toBe(3);
+});
+```
+
 ## Test rendering on the fake GPU
 
 Most games never need this. If you build your own draw code (a batch of props, a custom material, a mesh builder), `@thunderclap/engine/testing` gives you a fake WebGPU device that runs in Node. It records every buffer, texture, pass and draw, and flags mistakes a real device would reject, such as writing to a buffer without `COPY_DST`.

@@ -2,7 +2,7 @@
 
 `@thunderclap/engine/testing` holds what a game's unit tests need to run in Vitest or plain Node, with no browser and no GPU: a fake host, a fixed-step clock, the recording fake GPU device and `createTestGame`, a whole headless game on them. The engine itself never imports it.
 
-The entry is `src/testing/index.ts`. It re-exports the fake GPU from `src/render/fake-gpu.ts` and adds `fake-host.ts`, `fixed-clock.ts` and `test-game.ts`.
+The entry is `src/testing/index.ts`. It re-exports the fake GPU from `src/render/fake-gpu.ts` and adds `fake-host.ts`, `fixed-clock.ts` and `test-game.ts`. `null-dom.ts` (internal) is the inert DOM behind `createTestGame({ overlay: false })`.
 
 How a game uses these is in [Testing your game](../../docs/guide/testing-your-game.md).
 
@@ -32,7 +32,7 @@ A test drives a game tick by tick in the order `createGame`'s loop uses: `clock.
 
 ## Headless `createGame`: `createTestGame`
 
-`createGame` runs headless (ws/core-8): given `gpu` (a `GpuContext`) it skips WebGPU and the canvas context, `root` becomes optional, and `clock` and `host` take fakes. `createTestGame(opts): Promise<TestGame>` is that call with this kit's fakes: a `FakeDevice` as the GPU, a `FakeHost` (save storage in memory) and a `FixedClock` on the step of `opts.sim` (default 1/60 s) as `ctx.clock`. It needs a DOM for the overlay (`// @vitest-environment happy-dom`), and throws without one.
+`createGame` runs headless (ws/core-8): given `gpu` (a `GpuContext`) it skips WebGPU and the canvas context, `root` becomes optional, and `clock` and `host` take fakes. `createTestGame(opts): Promise<TestGame>` is that call with this kit's fakes: a `FakeDevice` as the GPU, a `FakeHost` (save storage in memory) and a `FixedClock` on the step of `opts.sim` (default 1/60 s) as `ctx.clock`. By default it needs a DOM for the overlay (`// @vitest-environment happy-dom`), and throws without one; `overlay: false` runs it with none (below).
 
 ```ts
 const g = await createTestGame({ input: { bindings } });
@@ -44,12 +44,39 @@ expect(g.clock.now()).toBe(10 * (1000 / 60));
 - `TestGameOptions` are `createGame`'s, without `gpu`, `host` and `clock`, plus `root?` (default a new `<div>` in `document.body`), `host?: FakeHost`, `device?: FakeDevice` and `viewport?: { width, height }` (the CSS px size the root reports, since happy-dom lays nothing out; default the design size, so client px are design px). The canvas reports the box the surface gave it, so touch zones and the pointer router measure as on a page.
 - `TestGame`: `ctx` (exactly what `createGame` built), `input`, `host`, `clock`, `device`, and `step(n = 1)`, which runs `ctx.loop.tickOnce(step)` `n` times: the replay feed, clock, input, `hooks.update`, scenes and one render, in the engine's order. The loop is not started; `ctx.loop.start()` with the fake host runs on `host.runFrame()` instead.
 - Same input, same steps, same state: two games fed the same keys or the same recording read the same values frame for frame (`src/testing/test-game.test.ts`).
+- `loseDevice(reason = 'unknown', message?): Promise<void>` loses the GPU device (`device.loseDevice`) and resolves once the engine has handled it, so a test asserts what follows; see *Device loss*.
+
+### The DOM requirement, and `overlay: false`
+
+`createGame` always builds the DOM overlay, mounts the canvas in `root`, attaches input listeners to the canvas and audio's page-lifecycle listeners to `document` and `window`, and the surface reads `getComputedStyle` and a `ResizeObserver`. So by default `createTestGame` needs a DOM: happy-dom (`// @vitest-environment happy-dom` at the top of the file), which lays nothing out, so the kit sizes the root to `viewport` itself.
+
+`overlay: false` drops that need: the test runs in Vitest's default `node` environment with no DOM library (ws/testing-2). When `globalThis.document` is missing, the kit installs an inert stand-in (`null-dom.ts`): `document`, `window`, `getComputedStyle`, `ResizeObserver`, and `Node`, `Element`, `HTMLElement`, `HTMLInputElement` and `HTMLSelectElement` for the engine's `instanceof` checks, each only if missing. Its elements keep children, attributes, classes, inline styles and listeners (on Node's `EventTarget`); nothing lays out, paints or fires by itself, queries find nothing and media queries never match. The globals stay for the rest of the test file. `ctx.ui` exists and its calls work, but nothing is shown and no DOM event reaches it, so drive the game through `input` (`keyDown`, `setPointer` and the rest) and assert on game state, the clock and the `FakeDevice`. With a real DOM present (happy-dom), `overlay: false` uses it, and the default root is a detached `<div>` rather than one in `document.body`. Tests that click overlay buttons or read the overlay's DOM keep happy-dom.
+
+```ts
+// game.test.ts: no `@vitest-environment` line
+const g = await createTestGame({ overlay: false, input: { bindings } });
+g.input.keyDown('Space');
+g.step(10);
+```
+
+### Device loss
+
+`FakeDevice.lost` is the device's `lost` promise (`fake.device.lost` is the same one). It stays pending until `loseDevice(reason = 'unknown', message = 'fake device lost')` resolves it with a `GPUDeviceLostInfo`, or `device.destroy()` resolves it with reason `'destroyed'`. Only the first loss counts. `createGame` reads it as on a page: on any reason but `'destroyed'` it halts the loop for good (`ctx.loop.halted`; `step` and `loop.start()` then do nothing), calls `hooks.deviceLost(info)`, halts audio, suspends captions, flushes the save, then runs each `ctx.onDeviceLost` listener. `TestGame.loseDevice` awaits all of that:
+
+```ts
+const g = await createTestGame({ overlay: false, input: { bindings }, save });
+g.ctx.hooks.deviceLost = (info) => log.push(info.reason);
+await g.loseDevice('unknown', 'gpu reset');
+expect(g.ctx.loop.halted).toBe(true);    // and g.step() now runs nothing
+```
+
+The headless game shows no reload screen (there is none without WebGPU); a game that draws its own does so in `hooks.deviceLost`. Tests: `src/testing/test-game-node.test.ts`.
 
 ## Fake GPU
 
 `createFakeDevice(opts?)` returns a recording fake `GPUDevice` as a `FakeDevice`, and `fakeRendererGpu(fake)` wraps it for `new Renderer(...)`, so the renderer and its props run in Node. It checks buffer and texture usage flags such as COPY_DST, catches writes past the end of a buffer, and records pass commands such as `setBindGroup` offsets and draws. `installGpuGlobals()` defines `GPUBufferUsage`, `GPUTextureUsage`, `GPUShaderStage` and `GPUMapMode` in Node. `fakeCanvasContext(fake)` is the context `fakeRendererGpu` uses.
 
-A test can inspect these fields on a `FakeDevice`:
+A test can inspect these fields on a `FakeDevice` (and lose it with `loseDevice`, see *Device loss*):
 
 - `buffers`: each is a `FakeBuffer`, with `size`, `usage`, `destroyed` and `data`.
 - `textures`: each is a `FakeTexture`, and its views are `FakeView`s.
