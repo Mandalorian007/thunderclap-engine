@@ -13,27 +13,43 @@ that imports `Hit` from `input` and `Hit` from `geom` now writes `PickHit` and `
 
 ## Find what you use
 
-Run this on your 0.x engine, before you bump. TypeScript knows every deprecated name: it reports each use as a suggestion,
-TS6385 for a name and TS6387 for a call signature. Your editor shows them as struck-through
-text. To list them from the command line, the engine's snippet checker exports the same pass:
+The engine ships a script that lists every old engine name your game uses. Run it from your
+game's folder, with the engine installed in `node_modules`:
 
-```ts no-check
-// find-deprecated.mjs, run from your game's folder with `node find-deprecated.mjs`
-import { findDeprecatedUses } from './node_modules/@thunderclap/engine/scripts/check-snippets.mjs';
-
-for (const u of findDeprecatedUses('tsconfig.json')) {
-  console.log(`${u.file}:${u.line}:${u.col}  TS${u.code}: ${u.text}`);
-}
+```sh
+node node_modules/@thunderclap/engine/scripts/check-deprecated-game.mjs
 ```
 
-The block opts out of the snippet check: it is a Node script, not engine code. The path is a
-file path because `scripts/` is not a package entry point. It uses the engine's own
-`typescript` (7, the native compiler), and lists every deprecated name your project's root
-files use, the engine's and the DOM's alike.
+It reads `tsconfig.json` (or each tsconfig you name), prints one line per use and exits 1 if
+it found any. It uses the engine's own `typescript` (7, the native compiler). It reports engine
+names only. Platform deprecations, such as the DOM's `document.execCommand`, are left out,
+and so are your game's own `@deprecated` names and its other type errors. It works on either
+side of the bump:
 
-`pnpm check` in this repo runs the same pass over every checked snippet in the README and the
-guides, so the docs never show a deprecated name. After the bump the old names no longer exist,
-so `tsc` reports them as errors and the table below says what each becomes.
+- **On 0.x** (aliases still there): TypeScript reports each use of a deprecated name as a
+  suggestion, TS6385 for a name and TS6387 for a call signature, and your editor shows them as
+  struck-through text. The script keeps the ones the engine declares.
+- **On 1.0.0** with a game still on 0.x names: each old name is now a type error, such as TS2305
+  (no such export) or TS2339 (no such member). The script matches each error to its row in the
+  table below and prints the replacement:
+
+```text
+src/game.ts:5:15  TS2305: Module '"@thunderclap/engine/anim"' has no exported member 'BlendMode'.
+    anim BlendMode → `AnimBlendMode`
+```
+
+The script is a file path because `scripts/` is not a package entry point. To use the list
+in your own tooling, import `findGameDeprecations(tsconfig)` from the same file. It returns
+`{ file, line, col, code, text, kind, rows }`, where `kind` is `'deprecated'` (0.x) or
+`'removed'` (1.0.0) and `rows` holds the matching table rows. The script reads this guide
+from the installed engine, so its table always matches your version. An old name that is a
+type error of another kind, such as a method that became a getter (`cache.stats()` →
+`cache.stats`), shows up as an ordinary `tsc` error and is not in the list. Tests:
+`scripts/check-deprecated-game.test.mjs`, which uses a game on 0.x names against both
+engines.
+
+`pnpm check` in this repo runs the same deprecation pass over every checked snippet in the
+README and the guides, so the docs never show a deprecated name.
 
 ## Renamed and retired names
 
@@ -161,12 +177,12 @@ const sprite = renderer.createSpriteMaterial({ texture: tex, label: 'hero' });
 
 ## Removal
 
-`engine-v1.0.0` deleted every alias in the table above (CHANGELOG *Removed*). Before you bump,
-run the script from [Find what you use](#find-what-you-use) in your game's folder on your 0.x
-engine; when it prints no engine name, the bump compiles:
+`engine-v1.0.0` deleted every alias in the table above (CHANGELOG *Removed*). Run the script
+from [Find what you use](#find-what-you-use) in your game's folder, before the bump or after
+it. When it prints no engine name, the game is on v1 names:
 
 ```sh
-node find-deprecated.mjs
+node node_modules/@thunderclap/engine/scripts/check-deprecated-game.mjs
 ```
 
 From 1.0.0 the public surface is frozen: `api/*.api.txt` records it, and a change to it ships

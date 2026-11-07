@@ -186,6 +186,17 @@ export interface FakeDevice {
   runPass: ((pass: FakePass) => void) | null;
   /** Validation errors that a real device would raise. */
   readonly errors: string[];
+  /**
+   * `device.lost` (ws/testing-2): pending until `loseDevice` or `device.destroy()` resolves it
+   * once with a `GPUDeviceLostInfo`, as a real device's does. The same promise as `device.lost`.
+   */
+  readonly lost: Promise<GPUDeviceLostInfo>;
+  /**
+   * Simulate a device loss (ws/testing-2): resolve `lost` with `{ reason, message }`. Default
+   * reason `'unknown'` (a driver crash or reset); `'destroyed'` is what `device.destroy()` sends,
+   * which the engine treats as no loss. Only the first loss counts; later calls do nothing.
+   */
+  loseDevice(reason?: GPUDeviceLostReason, message?: string): void;
 }
 
 /** A recorded command that changes buffer bytes when its command buffer is submitted. */
@@ -237,6 +248,15 @@ export function createFakeDevice(
   const querySets: FakeQuerySet[] = [];
   const errors: string[] = [];
   let submits = 0;
+  let resolveLost: ((info: GPUDeviceLostInfo) => void) | null = null;
+  const lost = new Promise<GPUDeviceLostInfo>((resolve) => {
+    resolveLost = resolve;
+  });
+  const loseDevice = (reason: GPUDeviceLostReason = 'unknown', message = 'fake device lost') => {
+    const resolve = resolveLost;
+    resolveLost = null;
+    resolve?.({ reason, message } as GPUDeviceLostInfo);
+  };
 
   /** Record and throw a usage-flag error, as a real device rejects it. */
   const needs = (b: FakeBuffer, flag: keyof typeof BUFFER_USAGE, where: string): void => {
@@ -380,6 +400,8 @@ export function createFakeDevice(
   const device = {
     limits: { minUniformBufferOffsetAlignment: 256, maxUniformBufferBindingSize: 65536, ...limits },
     features: new Set<string>(features),
+    lost,
+    destroy: () => loseDevice('destroyed', 'device destroyed'),
     addEventListener() {},
     createBuffer(desc: GPUBufferDescriptor) {
       const b = makeBuffer(desc);
@@ -578,6 +600,8 @@ export function createFakeDevice(
     },
     runPass: null,
     errors,
+    lost,
+    loseDevice,
   };
   return fake;
 }
