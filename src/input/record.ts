@@ -5,14 +5,18 @@
  * `update()` and hands it the recorded pads, so an identical game sees identical `pressed`,
  * `held`, `released` and `value` per tick. Neither changes how `Input` evaluates bindings.
  *
- * The recording is plain JSON: `{ version: 2, ticks: [...] }`, deltas only. A tick with events
+ * The recording is plain JSON: `{ version: 3, ticks: [...] }`, deltas only. A tick with events
  * is `{ t, k?, b?, p?, w?, r?, d?, g?, ptr?, cx?, cs? }`; a run of ticks with none is `{ t, n }`.
  * Version 2 (ws/input-5) adds the `ptr` lane (every pointer the dispatcher saw, so touch zones,
- * gestures and a second thumb replay) and the observational `cx` and `cs`; version 1 recordings
- * still parse and play.
+ * gestures and a second thumb replay) and the observational `cx` and `cs`. Version 3
+ * (ws/input-7) stamps each `ptr` entry with its time, so a replayed tap, long-press or
+ * double-tap classifies as it did live. Versions 1 and 2 still parse and play.
  */
 import type { Input, InputFeedHook, InputPointerPhase } from './input';
 import type { GamepadLike, PointerState } from './types';
+
+const defaultNow = (): number =>
+  typeof performance !== 'undefined' ? performance.now() : Date.now();
 
 /** One gamepad as recorded: button values (1 when `pressed`) and axes. `null` for an empty slot. */
 export type PadSnapshot = { buttons: number[]; axes: number[] } | null;
@@ -60,9 +64,11 @@ export interface InputTickEvents {
 }
 
 /**
- * One recorded pointer event: `[phase, id, device, clientX, clientY, button, primary]`, phase 0
- * down, 1 move, 2 up, 3 cancel, 4 leave; `primary` 1 or 0. A window blur is recorded as a
- * cancel of every pointer still down.
+ * One recorded pointer event: `[phase, id, device, clientX, clientY, button, primary, time]`,
+ * phase 0 down, 1 move, 2 up, 3 cancel, 4 leave; `primary` 1 or 0. `time` (version 3) is when
+ * the event happened, ms since the recorder started, on the recorder's clock (the linked
+ * gestures' `now`), rounded to 0.01 ms; version 2 entries have no `time`. A window blur is
+ * recorded as a cancel of every pointer still down.
  */
 export type InputPointerEntry = [
   0 | 1 | 2 | 3 | 4,
@@ -72,6 +78,7 @@ export type InputPointerEntry = [
   number,
   number,
   0 | 1,
+  number?,
 ];
 
 const PHASES: readonly InputPointerPhase[] = ['down', 'move', 'up', 'cancel', 'leave'];
@@ -86,14 +93,19 @@ export type InputTick = InputTickEvents | InputTickRun;
 
 /** What `createInputRecorder` builds and `createInputPlayback` reads. Plain JSON. */
 export interface InputRecording {
-  /** 2 from ws/input-5 (the `ptr`, `cx` and `cs` lanes); 1 still reads. */
-  version: 1 | 2;
+  /** 3 from ws/input-7 (`ptr` entries carry `time`); 2 (ws/input-5: `ptr`, `cx`, `cs`) and 1 still read. */
+  version: 1 | 2 | 3;
   ticks: InputTick[];
 }
 
 export interface InputRecorderOptions {
   /** Capture the pads `update()` reads. Default true. */
   pads?: boolean;
+  /**
+   * The clock pointer `time`s are stamped on (ws/input-7). Default: the clock of the gestures
+   * linked to the input when the recorder is made (`Gestures.now`), else `performance.now()`.
+   */
+  now?: () => number;
 }
 
 export interface InputRecorder {
@@ -113,6 +125,12 @@ export interface InputRecorder {
 export interface InputPlaybackOptions {
   /** Ticks fed per `step()`. Default 1. See `InputPlayback.speed`. */
   speed?: number;
+  /**
+   * The clock recorded pointer `time`s replay on (ws/input-7). Default: the clock of the
+   * gestures linked to the input when the playback is made (`Gestures.now`), else
+   * `performance.now()`.
+   */
+  now?: () => number;
 }
 
 export interface InputPlayback {
@@ -167,7 +185,11 @@ export function createInputRecorder<A extends string>(
   opts: InputRecorderOptions = {},
 ): InputRecorder {
   const capturePads = opts.pads !== false;
-  const recording: InputRecording = { version: 2, ticks: [] };
+  const recording: InputRecording = { version: 3, ticks: [] };
+  const clock = opts.now ?? input.getGestures()?.now ?? defaultNow;
+  const start = clock();
+  /** ms since `start`, `age` ms ago, to 0.01 ms. */
+  const stamp = (age: number): number => Math.round((clock() - age - start) * 100) / 100;
   /** Pointers down (by id), for turning a blur into cancels. */
   const live = new Map<number, InputPointerEntry>();
   let t = 0;
@@ -232,6 +254,7 @@ export function createInputRecorder<A extends string>(
         p.clientY,
         p.button,
         p.primary ? 1 : 0,
+        stamp(p.age),
       ];
       if (!c.ptr) c.ptr = [];
       const lane = c.ptr;
@@ -246,7 +269,8 @@ export function createInputRecorder<A extends string>(
       const c = open();
       if (!c.ptr) c.ptr = [];
       const lane = c.ptr;
-      for (const e of live.values()) lane.push([3, e[1], e[2], e[3], e[4], e[5], e[6]]);
+      const at = stamp(0);
+      for (const e of live.values()) lane.push([3, e[1], e[2], e[3], e[4], e[5], e[6], at]);
       live.clear();
     },
     context: (name, pushed) => {
@@ -367,9 +391,25 @@ export function createInputPlayback<A extends string>(
   let speed = Math.max(1, Math.floor(opts.speed ?? 1));
   /** Replayed pointers still down, cancelled on `seek`. */
   const live = new Map<number, InputPointerEntry>();
+  const clock = opts.now ?? input.getGestures()?.now ?? defaultNow;
+  /**
+   * The clock reading that recorded time 0 maps to, set by the first timed entry fed (which then
+   * happens as it is fed, as a live event is handled just before its tick's update) and again
+   * by the first one after a `seek`. `null` until then.
+   */
+  let base: number | null = null;
 
   const replayPointer = (e: InputPointerEntry): void => {
-    input.replayPointer(PHASES[e[0]]!, e[1], e[2], e[3], e[4], e[5], e[6] === 1);
+    // Version 3 entries happen at their recorded offset from tick 0; older ones (and the
+    // cancels `seek` makes) when their tick is fed, so their timing is the replay's tick spacing.
+    const time = e[7];
+    let age = 0;
+    if (time !== undefined) {
+      const now = clock();
+      if (base === null) base = now - time;
+      age = now - (base + time);
+    }
+    input.replayPointer(PHASES[e[0]]!, e[1], e[2], e[3], e[4], e[5], e[6] === 1, age);
     if (e[0] === 0 || (e[0] === 1 && live.has(e[1]))) live.set(e[1], e);
     else if (e[0] === 2 || e[0] === 3) live.delete(e[1]);
   };
@@ -441,6 +481,7 @@ export function createInputPlayback<A extends string>(
       input.releaseAll();
       tick = Math.max(0, Math.min(length, Math.floor(to)));
       index = 0;
+      base = null;
       // The pads in force at `to` are the last snapshot at or before it.
       pads = [];
       for (const e of ticks) {
@@ -500,7 +541,8 @@ export function parseRecording(source: string | unknown): InputRecording {
     }
   } else v = source;
   if (!isObject(v)) throw new InputRecordingError('recording is not an object');
-  if (v.version !== 1 && v.version !== 2)
+  const version = v.version;
+  if (version !== 1 && version !== 2 && version !== 3)
     throw new InputRecordingError(`unsupported version ${String(v.version)}`);
   if (!Array.isArray(v.ticks)) throw new InputRecordingError('ticks is not an array');
   let next = 0;
@@ -526,8 +568,12 @@ export function parseRecording(source: string | unknown): InputRecording {
     if (e.rumble !== undefined && !(Array.isArray(e.rumble) && e.rumble.every(isRumble))) {
       throw bad(i, 'rumble');
     }
-    if (v.version === 1) return;
-    if (e.ptr !== undefined && !(Array.isArray(e.ptr) && e.ptr.every(isPointerEntry))) {
+    if (version === 1) return;
+    const timed = version === 3;
+    if (
+      e.ptr !== undefined &&
+      !(Array.isArray(e.ptr) && e.ptr.every((p) => isPointerEntry(p, timed)))
+    ) {
       throw bad(i, 'ptr');
     }
     if (e.cx !== undefined && !isPairs(e.cx, 'string')) throw bad(i, 'cx');
@@ -570,10 +616,12 @@ function isPointer(v: unknown): boolean {
   return v.length === 2 || v[2] === 'mouse' || v[2] === 'touch' || v[2] === 'pen';
 }
 
-function isPointerEntry(v: unknown): boolean {
+/** A `ptr` entry: 7 fields in version 2, 8 (with a finite `time`) in version 3. */
+function isPointerEntry(v: unknown, timed: boolean): boolean {
   return (
     Array.isArray(v) &&
-    v.length === 7 &&
+    v.length === (timed ? 8 : 7) &&
+    (!timed || (typeof v[7] === 'number' && Number.isFinite(v[7]))) &&
     Number.isInteger(v[0]) &&
     v[0] >= 0 &&
     v[0] <= 4 &&

@@ -160,13 +160,13 @@ describe('recording every pointer (ws/input-5)', () => {
       want.push(live.snap());
     }
     const recording = rec.stop();
-    expect(recording.version).toBe(2);
+    expect(recording.version).toBe(3);
     const lanes = recording.ticks.flatMap((t) => ('ptr' in t && t.ptr ? t.ptr : []));
     // The two coalesced moves on tick 2 keep only the last.
     expect(lanes.filter((p) => p[0] === 1 && p[3] === 150)).toHaveLength(1);
     expect(lanes.filter((p) => p[0] === 1 && p[3] === 140)).toHaveLength(0);
     // The blur cancels thumb 1.
-    expect(lanes.at(-1)).toEqual([3, 1, 'touch', 60, 220, 0, 1]);
+    expect(lanes.at(-1)).toEqual([3, 1, 'touch', 60, 220, 0, 1, 0]);
     expect(want.some((s) => s.includes('[true,true,false,1000]'))).toBe(true);
     live.zones.destroy();
     live.input.detach();

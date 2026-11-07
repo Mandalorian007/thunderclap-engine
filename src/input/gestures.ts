@@ -9,7 +9,6 @@ import {
 } from './magnify';
 import {
   createPointerDispatcher,
-  eventTime,
   POINTER_PRIORITY,
   type PointerConsumer,
   type PointerDispatcher,
@@ -250,7 +249,11 @@ export class Gestures {
    */
   claim: ((id: number, device: GestureDevice) => boolean) | null = null;
 
-  private readonly now: () => number;
+  /**
+   * The clock gestures are timed on (`GestureOptions.now`). Recordings stamp pointer events on
+   * it and playbacks replay them on it (ws/input-7).
+   */
+  readonly now: () => number;
   private readonly onPanCandidate: ((pointer: number, travel: number) => void) | null;
   private transform: PointerTransform | null = null;
   private session: Session | null = null;
@@ -789,19 +792,18 @@ export class Gestures {
 
   /**
    * The dispatcher consumer: mouse primary button only; every touch and pen contact. Each event
-   * is timed by its `timeStamp` (`eventTime`), not by when it was handled, so a tap delivered
-   * after a stalled frame is still a tap.
+   * is timed by its `timeStamp` (`eventTime`: `now() - age`), not by when it was handled, so a
+   * tap delivered after a stalled frame is still a tap; a replayed event by its recorded time.
    */
   private readonly consumer: PointerConsumer = {
     pointerDown: (p: PointerRecord) => {
       if (p.device === 'mouse' && p.button !== 0) return;
-      this.pointerDown(p.id, p.x, p.y, p.device, eventTime(p.time, this.now));
+      this.pointerDown(p.id, p.x, p.y, p.device, this.now() - p.age);
     },
-    pointerMove: (p: PointerRecord) =>
-      this.pointerMove(p.id, p.x, p.y, eventTime(p.time, this.now)),
+    pointerMove: (p: PointerRecord) => this.pointerMove(p.id, p.x, p.y, this.now() - p.age),
     pointerUp: (p: PointerRecord) => {
       if (p.device === 'mouse' && p.button !== 0) return;
-      this.pointerUp(p.id, p.x, p.y, eventTime(p.time, this.now));
+      this.pointerUp(p.id, p.x, p.y, this.now() - p.age);
     },
     pointerCancel: (p: PointerRecord) => this.pointerCancel(p.id),
     cancelAll: () => this.cancelAll(),

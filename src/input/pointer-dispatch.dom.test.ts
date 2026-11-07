@@ -351,3 +351,28 @@ describe('eventTime (ws/input-6)', () => {
     expect(eventTime(-1, () => 50)).toBe(50);
   });
 });
+
+describe('PointerRecord.age (ws/input-7)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('is the stamp age for a live event and replayAge while one is set', () => {
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const d = createPointerDispatcher(el);
+    const ages: number[] = [];
+    d.add({ pointerDown: (p) => ages.push(p.age) });
+    vi.spyOn(performance, 'now').mockReturnValue(1000);
+    const live = ptr('pointerdown', 1, 1);
+    Object.defineProperty(live, 'timeStamp', { value: 940 });
+    el.dispatchEvent(live);
+    const future = ptr('pointerdown', 1, 1);
+    Object.defineProperty(future, 'timeStamp', { value: 1200 });
+    el.dispatchEvent(future);
+    d.replayAge = -25;
+    el.dispatchEvent(ptr('pointerdown', 1, 1));
+    d.replayAge = null;
+    expect(ages).toEqual([60, 0, -25]);
+    d.destroy();
+    el.remove();
+  });
+});
