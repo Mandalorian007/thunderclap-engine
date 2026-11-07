@@ -9,7 +9,7 @@
  * Coordinates: the grid's corner is the world origin, so a voxel `(x, y, z)` occupies the world
  * cube `[x, x + 1) × [y, y + 1) × [z, z + 1)` and grid coordinates are world coordinates.
  */
-import { createNoise, type FbmOptions, type Noise } from '@thunderclap/engine/core';
+import { createNoise, type FbmOptions, hash2f, hash3f, type Noise } from '@thunderclap/engine/core';
 import type { VoxelFace, VoxelGrid } from '@thunderclap/engine/voxel';
 
 export const CHUNK = 16;
@@ -99,24 +99,6 @@ export function surfaceHeight(grid: VoxelGrid, x: number, z: number): number {
 
 // ─── noise ───────────────────────────────────────────────────────────────────
 
-/**
- * Point hashes for per-column and per-cell rolls (a tree here, a lantern there). These are not
- * noise: a roll needs a number per lattice point, not a field between them.
- */
-function hash2(x: number, y: number, seed: number): number {
-  let h = (x * 374761393 + y * 668265263 + seed * 1442695041) | 0;
-  h = Math.imul(h ^ (h >>> 13), 1274126177);
-  h ^= h >>> 16;
-  return (h >>> 0) / 4294967296;
-}
-
-function hash3(x: number, y: number, z: number, seed: number): number {
-  let h = (x * 374761393 + y * 668265263 + z * 2246822519 + seed * 1442695041) | 0;
-  h = Math.imul(h ^ (h >>> 13), 1274126177);
-  h ^= h >>> 16;
-  return (h >>> 0) / 4294967296;
-}
-
 /** The engine's seeded noise for one seed, built once (the permutation table is per seed). */
 let noiseSeed = 0;
 let noise: Noise | null = null;
@@ -178,7 +160,7 @@ export function generateWorld(grid: VoxelGrid, seed: number): void {
     if (carved(x, y, z, h, seed)) {
       // Glowstone on a cave floor: the cell below is rock that was not carved.
       const floor = !carved(x, y - 1, z, h, seed);
-      return floor && hash3(x, y, z, seed + 5) < 0.04 ? Block.Glowstone : Block.Air;
+      return floor && hash3f(seed + 5, x, y, z) < 0.04 ? Block.Glowstone : Block.Air;
     }
     if (y === h) return beach ? Block.Sand : Block.Grass;
     if (y > h - 4) return beach ? Block.Sand : Block.Dirt;
@@ -190,9 +172,9 @@ export function generateWorld(grid: VoxelGrid, seed: number): void {
       const h = heights[x + WORLD_X * z]!;
       if (h <= SEA_LEVEL + 2 || h > WORLD_Y - 10) continue;
       if (grid.get(x, h, z) !== Block.Grass) continue;
-      const r = hash2(x, z, seed + 31);
+      const r = hash2f(seed + 31, x, z);
       if (r < 0.012) {
-        const trunk = 4 + Math.floor(hash2(x, z, seed + 32) * 2);
+        const trunk = 4 + Math.floor(hash2f(seed + 32, x, z) * 2);
         for (let y = 1; y <= trunk; y++) grid.set(x, h + y, z, Block.Wood);
         const top = h + trunk;
         for (let dz = -2; dz <= 2; dz++) {

@@ -5,6 +5,8 @@
  * and one draw call.
  */
 
+import { hash2f } from '@thunderclap/engine/core';
+
 export const TILE = 32;
 const COLS = 4;
 const ROWS = 4;
@@ -33,12 +35,6 @@ export function cellUv(i: number): [number, number, number, number] {
   return [c / COLS + INSET, r / ROWS + INSET, (c + 1) / COLS - INSET, (r + 1) / ROWS - INSET];
 }
 
-function hash(x: number, y: number, seed: number): number {
-  let h = (x * 374761393 + y * 668265263 + seed * 1442695041) | 0;
-  h = Math.imul(h ^ (h >>> 13), 1274126177);
-  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-}
-
 type Ctx2D = CanvasRenderingContext2D;
 
 function cellOrigin(i: number): [number, number] {
@@ -51,7 +47,7 @@ function floor(g: Ctx2D, i: number, seed: number): void {
   g.fillRect(ox, oy, TILE, TILE);
   for (let y = 0; y < TILE; y += 4) {
     for (let x = 0; x < TILE; x += 4) {
-      const n = hash(x, y, seed);
+      const n = hash2f(seed, x, y);
       const v = 34 + Math.floor(n * 14);
       g.fillStyle = `rgb(${v},${v - 4},${v + 6})`;
       g.fillRect(ox + x, oy + y, 4, 4);

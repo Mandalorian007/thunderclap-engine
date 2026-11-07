@@ -5,6 +5,7 @@
  * the unit's eight flipbook frames (four facings × two steps). Everything the map, overlays and
  * units draw is this one material, so the whole skirmish is one draw call.
  */
+import { hash2f } from '@thunderclap/engine/core';
 import { EH, TH, TW } from './iso';
 
 export const CELL_SIZE = 64;
@@ -45,12 +46,6 @@ function cellOrigin(i: number): [number, number] {
   return [(i % ATLAS_COLS) * CELL_SIZE, Math.floor(i / ATLAS_COLS) * CELL_SIZE];
 }
 
-function hash(x: number, y: number, seed: number): number {
-  let h = (x * 374761393 + y * 668265263 + seed * 1442695041) | 0;
-  h = Math.imul(h ^ (h >>> 13), 1274126177);
-  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-}
-
 /** The diamond path, centred in the cell (its centre is the cell centre). */
 function diamondPath(g: Ctx2D, ox: number, oy: number, inset = 0): void {
   const cx = ox + CELL_SIZE / 2;
@@ -71,10 +66,10 @@ function terrain(g: Ctx2D, i: number, base: string, speck: string, seed: number)
   g.save();
   g.clip();
   for (let k = 0; k < 40; k++) {
-    const x = ox + hash(k, 1, seed) * CELL_SIZE;
-    const y = oy + CELL_SIZE / 2 - TH / 2 + hash(k, 2, seed) * TH;
+    const x = ox + hash2f(seed, k, 1) * CELL_SIZE;
+    const y = oy + CELL_SIZE / 2 - TH / 2 + hash2f(seed, k, 2) * TH;
     g.fillStyle = speck;
-    g.globalAlpha = 0.35 + hash(k, 3, seed) * 0.4;
+    g.globalAlpha = 0.35 + hash2f(seed, k, 3) * 0.4;
     g.fillRect(x, y, 2, 1);
   }
   g.restore();

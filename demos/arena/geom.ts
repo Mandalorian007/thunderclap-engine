@@ -2,6 +2,7 @@
  * Procedural geometry for the arena, in the renderer's 3D and skinned vertex layouts. Setup-time
  * code: it allocates freely and runs once. (`@thunderclap/engine/geom` would replace most of it.)
  */
+import { hash2f } from '@thunderclap/engine/core';
 import { setVertexSkin, VERTEX_SKINNED_FLOATS, VERTEX3D_FLOATS } from '@thunderclap/engine/render';
 
 export interface MeshData {
@@ -213,13 +214,6 @@ export class MeshBuilder {
 /** Floats per vertex of the layout a builder writes (a sanity check for the two layouts). */
 export const BUILDER_FLOATS = { plain: VERTEX3D_FLOATS, skinned: VERTEX_SKINNED_FLOATS } as const;
 
-/** Deterministic hash noise in [0, 1). */
-export function hash(x: number, y: number, seed: number): number {
-  let h = (x * 374761393 + y * 668265263 + seed * 1274126177) | 0;
-  h = ((h ^ (h >>> 13)) * 1274126177) | 0;
-  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-}
-
 export interface TilePixelsOptions {
   size: number;
   /** Tiles across the texture. */
@@ -244,8 +238,8 @@ export function tilePixels(o: TilePixelsOptions): Uint8Array<ArrayBuffer> {
       const inGrout = x % tile < o.grout || y % tile < o.grout;
       const shade =
         1 -
-        o.jitter * (hash(tx, ty, o.seed) - 0.5) -
-        o.jitter * 0.5 * (hash(x, y, o.seed + 7) - 0.5);
+        o.jitter * (hash2f(o.seed, tx, ty) - 0.5) -
+        o.jitter * 0.5 * (hash2f(o.seed + 7, x, y) - 0.5);
       const c = inGrout ? o.groutColor : o.base;
       const i = (y * o.size + x) * 4;
       out[i] = Math.max(0, Math.min(255, Math.round(c[0] * 255 * shade)));
@@ -263,7 +257,7 @@ export function scorchPixels(size: number, seed: number): Uint8Array<ArrayBuffer
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const r = Math.hypot((x + 0.5) / size - 0.5, (y + 0.5) / size - 0.5) * 2;
-      const a = Math.max(0, 1 - r * r) * (0.6 + 0.4 * hash(x, y, seed));
+      const a = Math.max(0, 1 - r * r) * (0.6 + 0.4 * hash2f(seed, x, y));
       const o = (y * size + x) * 4;
       out[o] = 28;
       out[o + 1] = 22;
