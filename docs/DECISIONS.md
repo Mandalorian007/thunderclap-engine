@@ -194,3 +194,5 @@ Ruling: no rerun. Commit adoption-4 and run the matrix. The test is tolerated in
 Train 10 failed `[phone-iphone] e2e/post4.spec.ts:81` and `[ipad] :119`. Both assert `Math.hypot(jitter) > 0` and read 0. render-8 was dropped for it, because post4 is in its area. Train 11 (00a773d: ui-10, input-10, core-5, none of which touch render or post) then failed `:81` the same way without render-8. So the cause is not render-8. The spec polls until `convergedDelta >= 0` and then reads `state.jitter` once. The page rewrites that every frame and moves on to its ghost phase, which sets `NO_JITTER`.
 
 Ruling: land train 11. `post4.spec.ts:81` and `:119` are tolerated, and no other post4 test, until the spec fix lands. ws/render-8's engineer owns the fix: they confirm the cause, make the read honest about time (a latched field or a poll inside the converge phase), and bring render-8 back in train 12.
+
+E-035 closed 2026-11-06: render-8's latched-jitter spec fix landed in train 12 (7d5f6af). The matrix had 0 failures and needed no tolerance.
