@@ -1,12 +1,14 @@
 {
   "name": "@thunderclap/engine",
   "version": "1.0.0",
-  "private": true,
   "type": "module",
   "description": "ThunderClap: a WebGPU game engine for the browser. It knows nothing about any game.",
   "license": "MIT",
   "author": "ThunderClap Gaming",
   "homepage": "https://github.com/Mandalorian007/thunderclap-engine#readme",
+  "bugs": {
+    "url": "https://github.com/Mandalorian007/thunderclap-engine/issues"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Mandalorian007/thunderclap-engine.git"
@@ -16,8 +18,13 @@
     "game-engine",
     "typescript",
     "browser",
-    "2d"
+    "2d",
+    "3d",
+    "voxel",
+    "webxr",
+    "gamedev"
   ],
+  "sideEffects": false,
   "exports": {
     ".": "./src/index.ts",
     "./analytics": "./src/analytics/index.ts",
@@ -41,6 +48,101 @@
     "./testing": "./src/testing/index.ts",
     "./package.json": "./package.json"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      },
+      "./analytics": {
+        "types": "./dist/analytics/index.d.ts",
+        "import": "./dist/analytics/index.js"
+      },
+      "./anim": {
+        "types": "./dist/anim/index.d.ts",
+        "import": "./dist/anim/index.js"
+      },
+      "./assets": {
+        "types": "./dist/assets/index.d.ts",
+        "import": "./dist/assets/index.js"
+      },
+      "./audio": {
+        "types": "./dist/audio/index.d.ts",
+        "import": "./dist/audio/index.js"
+      },
+      "./core": {
+        "types": "./dist/core/index.d.ts",
+        "import": "./dist/core/index.js"
+      },
+      "./fx": {
+        "types": "./dist/fx/index.d.ts",
+        "import": "./dist/fx/index.js"
+      },
+      "./geom": {
+        "types": "./dist/geom/index.d.ts",
+        "import": "./dist/geom/index.js"
+      },
+      "./host": {
+        "types": "./dist/host/index.d.ts",
+        "import": "./dist/host/index.js"
+      },
+      "./i18n": {
+        "types": "./dist/i18n/index.d.ts",
+        "import": "./dist/i18n/index.js"
+      },
+      "./input": {
+        "types": "./dist/input/index.d.ts",
+        "import": "./dist/input/index.js"
+      },
+      "./nav": {
+        "types": "./dist/nav/index.d.ts",
+        "import": "./dist/nav/index.js"
+      },
+      "./platform": {
+        "types": "./dist/platform/index.d.ts",
+        "import": "./dist/platform/index.js"
+      },
+      "./post": {
+        "types": "./dist/post/index.d.ts",
+        "import": "./dist/post/index.js"
+      },
+      "./render": {
+        "types": "./dist/render/index.d.ts",
+        "import": "./dist/render/index.js"
+      },
+      "./save": {
+        "types": "./dist/save/index.d.ts",
+        "import": "./dist/save/index.js"
+      },
+      "./tween": {
+        "types": "./dist/tween/index.d.ts",
+        "import": "./dist/tween/index.js"
+      },
+      "./ui": {
+        "types": "./dist/ui/index.d.ts",
+        "import": "./dist/ui/index.js"
+      },
+      "./voxel": {
+        "types": "./dist/voxel/index.d.ts",
+        "import": "./dist/voxel/index.js"
+      },
+      "./testing": {
+        "types": "./dist/testing/index.d.ts",
+        "import": "./dist/testing/index.js"
+      },
+      "./package.json": "./package.json"
+    }
+  },
   "scripts": {
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.e2e.json",
     "lint": "biome check .",
@@ -59,6 +161,8 @@
     "bake": "node scripts/bake.mjs",
     "bake:nav": "node scripts/bake-nav.mjs",
     "release": "node scripts/release.mjs",
+    "build": "node scripts/build.mjs",
+    "check:pack": "node scripts/pack-smoke.mjs",
     "bench": "node scripts/bench.mjs",
     "test:e2e": "playwright test",
     "snap": "node scripts/snap.mjs --update",

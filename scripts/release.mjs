@@ -7,6 +7,7 @@
 //   --skip-checks                   skip `pnpm check` and `pnpm test:e2e` before the bump
 //
 // This is the only way the repo gets tags. It never pushes: the printed push command is yours to run.
+// Pushing a v* tag publishes the npm packages (.github/workflows/publish.yml, docs/releasing.md).
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -70,3 +71,6 @@ if (tag) git('tag', '-a', tagName, '-m', `@thunderclap/engine ${version}`);
 
 console.log(`release: committed${tag ? ` and tagged ${tagName}` : ''}. Push with:`);
 console.log(`  git push origin main${tag ? ` ${tagName}` : ''}`);
+if (tag) {
+  console.log(`release: pushing ${tagName} publishes to npm (publish.yml, docs/releasing.md).`);
+}

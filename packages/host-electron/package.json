@@ -1,16 +1,60 @@
 {
   "name": "@thunderclap/host-electron",
   "productName": "ThunderClap",
-  "version": "0.1.0-dev",
-  "private": true,
+  "version": "0.1.0",
   "type": "module",
   "description": "ThunderClap's Electron host: a desktop shell (main process and preload bridge) and createElectronHost() for the renderer. It knows nothing about any game. Games depend on @thunderclap/engine themselves; everything the shell runs is bundled into out/, so it has no runtime dependencies.",
   "license": "MIT",
   "author": "ThunderClap",
+  "homepage": "https://github.com/Mandalorian007/thunderclap-engine/tree/main/packages/host-electron#readme",
+  "bugs": {
+    "url": "https://github.com/Mandalorian007/thunderclap-engine/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Mandalorian007/thunderclap-engine.git",
+    "directory": "packages/host-electron"
+  },
+  "keywords": [
+    "thunderclap",
+    "electron",
+    "desktop",
+    "webgpu",
+    "game-engine"
+  ],
+  "sideEffects": false,
   "main": "out/main.mjs",
   "exports": {
     ".": "./src/index.ts",
     "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "out/main.mjs",
+    "out/preload.cjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      },
+      "./package.json": "./package.json"
+    }
+  },
+  "peerDependencies": {
+    "@thunderclap/engine": "^1.0.0",
+    "electron": ">=45.0.0"
+  },
+  "peerDependenciesMeta": {
+    "electron": {
+      "optional": true
+    }
   },
   "scripts": {
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json",

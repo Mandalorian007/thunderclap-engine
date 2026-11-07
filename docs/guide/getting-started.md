@@ -9,6 +9,18 @@ In this guide you clone the engine, run the example, scaffold a game from a temp
 - Node 22 or newer and pnpm (the repo pins the version in `package.json`).
 - A WebGPU browser: Chrome or Edge 113+, or Safari 26+. A browser without WebGPU shows a styled "unsupported" screen instead of the game.
 
+## Install from npm
+
+To add the engine to a project you already have, install it from npm:
+
+```sh
+pnpm add @thunderclap/engine
+```
+
+The package is compiled ESM with `.d.ts` types and no runtime dependencies. Import from its entry points (`@thunderclap/engine`, `@thunderclap/engine/render` and so on). The hosts for the desktop, the stores and installable web apps are `@thunderclap/host-electron`, `@thunderclap/host-capacitor` and `@thunderclap/host-pwa`. If TypeScript reports `Cannot find name 'GPUDevice'`, your TypeScript's DOM lib has no WebGPU types: run `pnpm add -D @webgpu/types` and add `"@webgpu/types"` to `compilerOptions.types`.
+
+The rest of this guide works from a clone of the engine, which holds the example and the templates.
+
 ## Run the example
 
 ```sh
@@ -46,7 +58,7 @@ pnpm install
 pnpm dev
 ```
 
-The new game's `@thunderclap/engine` dependency is a `link:` to your clone, because the engine is not on npm yet; keep the clone where it is. Once the engine is published, `create-game` writes a version range instead, and you can switch an existing game by replacing the link with `^<version>`. `--engine <spec>` picks the dependency yourself: a version range, `github:Mandalorian007/thunderclap-engine`, or a directory. Other useful flags: `--name <pkg>` sets the package name, `--dry-run` prints the files it would write, and `--force` writes into a folder that is not empty.
+The new game's `@thunderclap/engine` dependency is a `link:` to your clone; keep the clone where it is. To move the game onto the npm package instead, replace the link with a version range (`pnpm add @thunderclap/engine` in the game folder). `--engine <spec>` picks the dependency yourself: a version range, `github:Mandalorian007/thunderclap-engine`, or a directory. Other useful flags: `--name <pkg>` sets the package name, `--dry-run` prints the files it would write, and `--force` writes into a folder that is not empty.
 
 `pnpm dev` starts Vite at `http://127.0.0.1:5173`. `pnpm check` runs the type checker, the linter and the game's tests. `pnpm build` writes the static game to `dist/`, and `pnpm preview` serves it.
 

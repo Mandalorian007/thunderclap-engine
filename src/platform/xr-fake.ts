@@ -1,4 +1,4 @@
-/// <reference path="./xr-types.d.ts" />
+/// <reference path="./xr-types.d.ts" preserve="true" />
 /**
  * A fake WebXR stack for unit tests (ws/xr): `XRSystem`, `XRSession`, `XRFrame`, input sources
  * and the WebXR/WebGPU binding, stepped by hand. `installFakeXr(device)` puts a `navigator.xr`

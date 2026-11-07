@@ -1,15 +1,63 @@
 {
   "name": "@thunderclap/host-pwa",
-  "version": "0.1.0-dev",
-  "private": true,
+  "version": "0.1.0",
   "type": "module",
   "description": "ThunderClap's installable web shell: a Vite plugin that emits a game's web manifest and service worker at build time, and createPwaHost(), the web Host plus install, update, offline and cache state. It knows nothing about any game and has no runtime dependencies.",
   "license": "MIT",
   "author": "ThunderClap",
+  "homepage": "https://github.com/Mandalorian007/thunderclap-engine/tree/main/packages/host-pwa#readme",
+  "bugs": {
+    "url": "https://github.com/Mandalorian007/thunderclap-engine/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Mandalorian007/thunderclap-engine.git",
+    "directory": "packages/host-pwa"
+  },
+  "keywords": [
+    "thunderclap",
+    "pwa",
+    "service-worker",
+    "vite-plugin",
+    "webgpu",
+    "game-engine"
+  ],
+  "sideEffects": false,
   "exports": {
     ".": "./src/index.ts",
     "./vite": "./src/vite.ts",
     "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      },
+      "./vite": {
+        "types": "./dist/vite.d.ts",
+        "import": "./dist/vite.js"
+      },
+      "./package.json": "./package.json"
+    },
+    "main": "./dist/index.js"
+  },
+  "peerDependencies": {
+    "@thunderclap/engine": "^1.0.0",
+    "vite": ">=7.0.0"
+  },
+  "peerDependenciesMeta": {
+    "vite": {
+      "optional": true
+    }
   },
   "scripts": {
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
