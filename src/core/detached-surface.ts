@@ -126,11 +126,6 @@ export class DetachedSurface implements Surface {
   destroy(): void {
     this.listeners.clear();
   }
-
-  /** As the `Surface` the ctx is typed with: the interface this class implements, no cast. */
-  asSurface(): Surface {
-    return this;
-  }
 }
 
 /** The error a DOM-only member throws with `overlay: false`. */
