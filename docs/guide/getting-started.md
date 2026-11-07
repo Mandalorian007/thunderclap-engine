@@ -1,5 +1,7 @@
 # Getting started
 
+## What you'll build
+
 In this guide you clone the engine, run the example, scaffold a game from a template and run it. Then you learn the shape every ThunderClap game shares, and how to ship one to itch.io, the desktop or an installable web app.
 
 ## What you need
@@ -340,4 +342,5 @@ The puzzle template's `vite.config.ts` has the plugin line commented out, ready 
 - [2D game](2d-game.md) and [3D game](3d-game.md)
 - [Input](input.md)
 - [UI and HUD](ui-and-hud.md)
+- [Migrating to v1](migrating-to-v1.md): coming from `0.2.0-alpha.1` names
 - [Testing your game](testing-your-game.md)

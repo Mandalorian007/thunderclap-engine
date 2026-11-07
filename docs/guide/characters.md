@@ -1,5 +1,7 @@
 # Animate a character
 
+## What you'll build
+
 This guide takes a rigged, animated glTF character from a file to the screen. You draw the
 skinned mesh, play and blend its clips, drive them from a state graph, attach a sword to its
 hand, and follow it with a third-person camera.

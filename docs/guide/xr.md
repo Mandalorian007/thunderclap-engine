@@ -1,5 +1,7 @@
 # VR with WebXR
 
+## What you'll build
+
 This guide takes a 3D ThunderClap game into a VR headset. You will add an Enter VR button, see what changes while a session runs, pick things with controllers and hands, and put a menu in the world and in front of the player's eyes.
 
 A game that never enters VR runs the same code as before. The same build works on a page and in a headset.

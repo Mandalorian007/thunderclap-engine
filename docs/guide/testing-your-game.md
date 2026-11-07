@@ -1,5 +1,7 @@
 # Testing your game
 
+## What you'll build
+
 In this guide you test a game the way the templates do: pure rules and the save schema in Vitest, input sessions recorded and replayed tick by tick, game logic stepped on a fixed clock against a fake host, the renderer on a fake GPU, and the running page in Playwright through a small state probe.
 
 Everything a unit test needs comes from `@thunderclap/engine/testing`: `createFakeHost`, `createFixedClock` and the fake GPU device. These run in Vitest or plain Node with no browser and no GPU.
@@ -22,7 +24,7 @@ What each template tests:
 | `puzzle` | `rules/board.test.ts` (dealing and moves), `save/schema.test.ts`, `analytics.test.ts` |
 | `platformer` | `physics/physics.test.ts` (collision, coyote time, jump buffer), `levels/format.test.ts`, `save/schema.test.ts` |
 | `first-person` | `world/terrain.test.ts`, `world/mesher.test.ts` |
-| `third-person` | `character/rig.test.ts`, `controller.test.ts`, `cosmetics.test.ts`, `world/stones.test.ts`, `enemies/enemies.test.ts` |
+| `third-person` | `character/rig.test.ts`, `character/controller.test.ts`, `character/cosmetics.test.ts`, `world/stones.test.ts`, `enemies/enemies.test.ts` |
 
 None of them needs a browser. That is on purpose: the code worth testing is kept apart from the DOM and the GPU.
 
@@ -465,9 +467,11 @@ Some rules that keep these tests stable:
 
 ## Next
 
+- [Testing reference](../../src/testing/README.md): the `./testing` kit, every fake and option
 - [Input reference](../../src/input/README.md): see "Recording and replay" for the format and the clock rules
 - [Save reference](../../src/save/README.md): schemas, migrations, slots and settings
 - [Core reference](../../src/core/README.md): `createRandom`, the loop and `tickOnce`
 - [Render reference](../../src/render/README.md): the fake GPU and what it records
 - [Getting started](getting-started.md)
 - [Input](input.md)
+- [Migrating to v1](migrating-to-v1.md): the deprecated names your tests should not use
