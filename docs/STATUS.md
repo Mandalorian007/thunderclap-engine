@@ -161,7 +161,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | FX 7: unpacked per-field particle readback | ws/fx-7 | brief `docs/briefs/fx-7.md` | fx-6 | ✅ merged in E-031 train 10 (`38501f5`; main 50c07f9) |
 | 5 | Adoption 5: arpg phone HUD on content rails; keyed ghouls with velocity; grout corner | ws/adoption-5 | brief `docs/briefs/adoption-5.md`; branched from ws/render-7 7d60386 | adoption-4, ui-9, render-7 | 🟣 done at `fe44ac7` (check green, snap 0, arpg 74/14 skip). Train 12 |
 | 5 | Post 8: stack owns jitter by `renderer.jitter === hook`; WeakMap deleted | ws/post-8 | brief `docs/briefs/post-8.md`; branched from ws/render-8 b3dc3b6 | post-7, render-8 | 🟣 done at `5a51e3b` (check 2277, snap 0, post2 56, post3 48, post4 56, depth-post 32, xr 8). Train 12, after render-8, which it stacks on; it re-merges render-8 once render-8's post4 fix lands |
-| 5 | Render 9: LOD lists skip the undrawn main upload; fake GPU checks usage flags and maps staging buffers; readback tests off stubs | ws/render-9 | brief `docs/briefs/render-9.md`; branched from ws/render-8 b3dc3b6 | render-8, fx-6/7 wishes | 🔵 dispatched |
+| 5 | Render 9: LOD lists skip the undrawn main upload; fake GPU checks usage flags and maps staging buffers; readback tests off stubs | ws/render-9 | brief `docs/briefs/render-9.md`; branched from ws/render-8 b3dc3b6 | render-8, fx-6/7 wishes | 🟣 done at `26a7f87` (check green, snap 0, render4 32, render5 48, render7 56, fx3 40, pbr 40). Train 12, after render-8 (it merges render-8 7d17781) |
 | 5 | Core 5: `createGame` test of a playback installed mid-session (clock already advanced), speed 1 and 4 | ws/core-5 | brief `docs/briefs/core-5.md`; branched from ws/input-10 c2de796 | core-4, input-10 | ✅ merged in E-031 train 11 (`00a773d`; main 336ed25) |
 | 5 | Core 6: `EngineCtx.clock` typed as the tick clock; `ctx.replay(rec, opts)` detaches real input and reattaches it at the end | ws/core-6 | brief `docs/briefs/core-6.md`; branched from ws/core-5 fdc822e | core-5 | 🟣 done at `ad6ea9c` (check 2274, snap 0, replay 16, core2 40, lifecycle 32). Opens E-031 train 12 |
 | 5 | UI 11: meter `setPlace` (or a per-form place map), the minimap holds its size in content rails, `meter.size` getter | ws/ui-11 | brief `docs/briefs/ui-11.md` | ui-10 | 🔵 dispatched |
@@ -355,6 +355,13 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
     - minimap `max-width` in rails → ui-11
     - a `createGame` velocity-target option → core-7
     - ui-10's per-form meter size → adoption-6
+- ws/render-9 notes:
+  - A LOD `InstanceList` no longer uploads its undrawn main buffer (0 bytes, the same draws).
+  - The fake GPU now validates usage flags (it throws `GPUValidationError`) and has real buffer bytes, copies at submit, and `mapAsync`/`getMappedRange`/`unmap`. The particles and gpu-timer readback tests no longer use stubs.
+  - Found a fake-GPU `writes.bytes` element-vs-byte miscount and fixed it; `debug-draw.test` was updated to match. No engine bugs.
+  - Wishes, in the render backlog:
+    - a LOD list should not create the unused buffer at all (API change)
+    - the `runPass` hook exists for tests to supply a pass's outputs
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
