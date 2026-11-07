@@ -9,6 +9,8 @@
  * - instanced-velocity: the sliding rocks write velocity and the standing ones write none,
  *   though the churn moves them between slots; `&unkeyed` gives standing rocks a moved one's
  *   history; `&still` parks the sliders and every rock writes zero.
+ * - single-velocity (ws/render-8): one sliding rock drawn by `frame.mesh` under a still camera
+ *   writes its own motion and the background writes none; `&still` parks it.
  */
 import type { Frame, Page } from '@playwright/test';
 import type { HarnessRender7State } from '../harness/render7-state';
@@ -143,6 +145,40 @@ test('instanced-velocity&unkeyed: standing rocks take a moved rock history', asy
   await reset();
   await expect.poll(async () => (await read()).velocityStaticPeak).toBeGreaterThan(1e-3);
   const s = await read();
+  expect(s.gpuErrors).toBe(0);
+  expect(errors).toEqual([]);
+});
+
+test('single-velocity: a frame.mesh rock writes its own motion, the background none', async ({
+  page,
+  wrapper,
+}) => {
+  const s0 = await open(page, wrapper, 'single-velocity');
+  expect(s0.mode).toBe('single-velocity');
+  await reset();
+  await expect.poll(async () => (await read()).readbacks).toBeGreaterThanOrEqual(10);
+  // The camera stands still: only the rock's Transform history can make this non-zero.
+  await expect.poll(async () => (await read()).velocityMoving).toBeGreaterThan(1e-3);
+  const s = await read();
+  expect(s.velocityStatic).toBe(0);
+  expect(s.velocityStaticPeak).toBe(0);
+  expect(s.instances).toBe(1);
+  expect(s.churns).toBe(0);
+  expect(s.gpuErrors).toBe(0);
+  expect(errors).toEqual([]);
+});
+
+test('single-velocity&still: a parked frame.mesh rock writes zero velocity', async ({
+  page,
+  wrapper,
+}) => {
+  const s0 = await open(page, wrapper, 'single-velocity&still');
+  expect(s0.still).toBe(true);
+  await reset();
+  await expect.poll(async () => (await read()).readbacks).toBeGreaterThanOrEqual(10);
+  const s = await read();
+  expect(s.velocityMoving).toBeLessThan(1e-4);
+  expect(s.velocityStaticPeak).toBe(0);
   expect(s.gpuErrors).toBe(0);
   expect(errors).toEqual([]);
 });

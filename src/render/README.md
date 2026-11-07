@@ -518,7 +518,9 @@ renderer.render(frame, eye);                              // or renderer.camera 
   records each camera's history before applying it, so `previousViewProj` / `previousView` stay
   unjittered; `setJitter(null)` removes the hook and clears the jitter of every camera it
   reached. Return a reused tuple to keep the frame allocation-free. Without a hook
-  `camera.setJitter` works as above.
+  `camera.setJitter` works as above. `renderer.jitter` (ws/render-8, read-only) returns the
+  installed hook or null, so an owner such as the post stack can check by identity that the
+  renderer still holds its hook before clearing it.
 - *Migration (post):* `PostStack` jitters today through `addJitterCamera(camera)` and its own
   `stepJitter` (`taa.jitter(frameIndex++)` onto each registered camera), which misses cameras it
   was not told about (a second XR eye, an offscreen view). The post workstream moves it to
@@ -963,8 +965,19 @@ rough-metal, bit 1 velocity) keys the pipeline variants.
   Only a velocity target and an `aux` material read it; otherwise nothing is written and the
   pipeline is the two-buffer one. A keyed list matches its history by key; a new instance (a
   new key, or a slot past last flush's count) takes its current matrix as previous: zero
-  motion on its first frame. `frame.mesh` draws still carry no lane: a per-frame instance draw
-  of a moving object reports camera motion only, so put what moves in a list or a batch.
+  motion on its first frame. A velocity LOD list keeps `prevMatrices` but has no `prevBuffer`
+  and uploads none (ws/render-8): only the copy is drawn.
+- Single draws (ws/render-8): `frame.mesh(mesh, material, transform)` (and `frame.sprite` with
+  a `Transform`) with an `aux` material into a velocity target writes the object's own motion
+  through the same lane. The renderer keeps each `Transform`'s world matrix per view (per
+  camera, like LOD level memory and `previousViewProj`): the previous matrix is the one the
+  transform held at that camera's last view. A transform seen for the first time in a view,
+  or not drawn in the view before (culled, or not submitted), writes zero motion; drawing one
+  transform several times in a view with the same matrix (two meshes of one object) gives
+  each draw its motion, while a scratch transform moved between draws in one view reports
+  camera motion only from then on. Draws placed by `DrawParams` carry no history (camera
+  motion only). Without a velocity target or an aux material nothing is kept, written or
+  bound, and the 2D path is untouched.
 - `camera.previousViewProj` (see *Camera jitter and history*) is the other half: the previous
   clip position is `prev_view_proj × previous world position`.
 
@@ -974,7 +987,9 @@ debug blit (`roughSample`, `velocitySample`); `e2e/render4.spec.ts` checks them.
 `harness/render7.html?instanced-velocity` draws two rows of rocks in one keyed LOD list, one
 row sliding and one standing, through the same per-frame churn, and reads the velocity at every
 rock's centre (`velocityMoving` above zero, `velocityStatic` zero; `&unkeyed` and `&still` are
-the controls); `e2e/render7.spec.ts` checks them. Switching
+the controls); `?single-velocity` slides one rock drawn by `frame.mesh` under a still camera
+(`velocityMoving` above zero on the rock, `velocityStatic` 0 on the background; `&still` the
+control); `e2e/render7.spec.ts` checks them. Switching
 TAA, SSR and motion blur over to these inputs is ws/post-4 (see `src/post/README.md`).
 
 ### Per-draw uniforms
