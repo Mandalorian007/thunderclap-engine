@@ -129,15 +129,26 @@ describe('post 6: jitter through the renderer (ws/post-6)', () => {
     const { r, post, camera } = setup();
     post.set({ taa: { enabled: true } });
     let fn: ((i: number) => readonly [number, number]) | null = null;
+    const out: (readonly [number, number])[] = [];
     const real = r.setJitter.bind(r);
     r.setJitter = (f) => {
       fn = f;
-      real(f);
+      // Record what the renderer gets each frame (ws/post-7: the hook is called once per frame).
+      real(
+        f &&
+          ((i) => {
+            const t = f(i);
+            out.push(t);
+            return t;
+          }),
+      );
     };
     deep(r, [camera]);
     expect(fn).not.toBeNull();
-    const a = fn!(0);
-    const b = fn!(1);
+    deep(r, [camera]);
+    deep(r, [camera]);
+    expect(out).toHaveLength(2);
+    const [a, b] = out;
     expect(a).toBe(b);
   });
 });
