@@ -613,7 +613,3 @@ it, grows with the budget to the whole board, and recomputes every frame. Unit t
 costs equal to a Dijkstra `findMeshPath` (and never above the default A*) on a baked level, mud
 priced and masked, a link, `maxPolys`, reuse without allocation, `pathTo`, outlines with a hole,
 the `loadNavMesh` round trip against an in-memory bake and its errors, and the 10k-polygon bench.
-
-## Deprecated aliases
-
-Kept until the next minor (ws/api-rest, E-036), same shapes: `Cell` (use `NavCell`).

@@ -8,7 +8,6 @@ import { fileURLToPath } from 'node:url';
 import {
   findDeprecatedUses,
   inRepoSource,
-  isExempt,
   pruneExportLists,
   stripDeprecated,
   stripTree,
@@ -136,22 +135,6 @@ test('stripTree follows barrels of barrels, per source file', () => {
   }
 });
 
-test('isExempt takes the marker on the line or alone on the line above, test or impl', () => {
-  const lines = [
-    'a.dir = 1; // deprecated-alias test',
-    '// deprecated-alias impl',
-    'b.dir = 2;',
-    'c.dir = 3; // deprecated alias',
-    'x(); // deprecated-alias test',
-    'd.dir = 4;',
-  ];
-  assert.equal(isExempt(lines, 1), true);
-  assert.equal(isExempt(lines, 3), true);
-  assert.equal(isExempt(lines, 4), false);
-  // A trailing marker on the line above covers that line only.
-  assert.equal(isExempt(lines, 6), false);
-});
-
 test('inRepoSource keeps repo files and drops libs and dependencies', () => {
   assert.equal(inRepoSource(join(repoRoot, 'src/render/lights.ts')), true);
   assert.equal(inRepoSource(join(repoRoot, 'src/render/lights.ts').toLowerCase()), true);
@@ -159,14 +142,20 @@ test('inRepoSource keeps repo files and drops libs and dependencies', () => {
   assert.equal(inRepoSource('/elsewhere/lib.d.ts'), false);
 });
 
-test('findDeprecatedUses keeps engine names only and skips exempt lines when asked', () => {
+test('findDeprecatedUses keeps the names declaredIn accepts: no marker exempts a use', () => {
   const dir = mkdtempSync(join(tmpdir(), 'check-deprecated-find-'));
   try {
     const file = join(dir, 'a.ts');
+    // `old.ts` stands in for an engine module that deprecates a name; the DOM's `execCommand`
+    // is the platform's and is dropped by `declaredIn`.
+    writeFileSync(
+      join(dir, 'old.ts'),
+      'export interface Box { w: number }\n/** @deprecated use `Box` */\nexport type Rect = Box;\n',
+    );
     writeFileSync(
       file,
       [
-        "import type { Rect } from '@thunderclap/engine/platform';",
+        "import type { Rect } from './old';",
         'export type R = Rect;',
         'export type S = Rect; // deprecated-alias test',
         "document.execCommand('copy');",
@@ -184,7 +173,6 @@ test('findDeprecatedUses keeps engine names only and skips exempt lines when ask
           lib: ['es2022', 'dom'],
           noEmit: true,
           types: [],
-          paths: { '@thunderclap/engine/platform': [join(repoRoot, 'src/platform/index.ts')] },
         },
         files: [file],
       }),
@@ -194,13 +182,13 @@ test('findDeprecatedUses keeps engine names only and skips exempt lines when ask
       findDeprecatedUses(config).map((u) => u.line),
       [1, 2, 3, 4],
     );
-    const engine = findDeprecatedUses(config, undefined, {
-      declaredIn: inRepoSource,
-      exempt: true,
+    const ours = findDeprecatedUses(config, undefined, {
+      declaredIn: (path) => path.endsWith('/old.ts'),
     });
+    // The old marker comment no longer exempts line 3.
     assert.deepEqual(
-      engine.map((u) => u.line),
-      [1, 2],
+      ours.map((u) => u.line),
+      [1, 2, 3],
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });

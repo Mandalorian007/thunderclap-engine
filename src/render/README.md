@@ -586,8 +586,7 @@ renderer.render(frame, eye);                              // or renderer.camera 
 - *Migration (post, done in ws/post-6):* `PostStack` used to jitter through
   `addJitterCamera(camera)` and its own `stepJitter`, which missed cameras it was not told about
   (a second XR eye, an offscreen view). It now calls `renderer.setJitter(...)` while TAA runs and
-  `renderer.setJitter(null)` when it stops; `addJitterCamera` is a deprecated no-op kept for a
-  release, `stepJitter` is gone, and `wantsJitter` is kept only for the target sizing. With no
+  `renderer.setJitter(null)` when it stops; `addJitterCamera` was removed in 1.0.0, `stepJitter` is gone, and `wantsJitter` is kept only for the target sizing. With no
   hook set the renderer behaves exactly as before.
 - `camera.previousViewProj` and `camera.previousView` (`Float32Array` 16 each, column-major)
   hold the unjittered matrices of the last frame this camera rendered: the renderer calls
@@ -641,13 +640,12 @@ shared `wgslLightLoop` under "Spot lights and layer masks"). Toon, rim or wrappe
 reads the same fields and ignores the helpers. `Lights.writeBlock(f32, u32, offset, shadow?)`
 is the CPU layout (316 floats; `POINT_LIGHT_FLOATS` and `SPOT_LIGHT_FLOATS` per light), and
 allocates nothing; `lights.reset()` returns to the unlit default. The block's offset and size
-constants (`LIGHTS_BLOCK_FLOATS`, `*_OFFSET_FLOATS`) are deprecated exports (E-036).
+constants (`LIGHTS_BLOCK_FLOATS`, `*_OFFSET_FLOATS`) are internal since 1.0.0 (E-036).
 Drawables that want the block add `WGSL_LIGHTS` to their shader (it also declares bindings 3
 and 4 below); `renderer.globalsLayout` already has bindings 2 to 4.
 `lights.sun` is a `SunLight`: `direction` (the direction the light travels, any length; the
 same spelling as `SpotLight.direction`), `color` (linear RGB; all zero means no sun) and
-`shadow`. `dir` is the deprecated old name of `direction` (ws/api-render): reading or assigning
-either reads or replaces the same array.
+`shadow`.
 
 ### Shadows
 
@@ -741,7 +739,7 @@ point light masked to one of them; `e2e/lights.spec.ts` samples both effects on 
 
 ### Fog
 
-`lights.fog` is a `DistanceFog` (`Fog` is its deprecated old name): `color` (linear RGB), `density` (0, the default, is no fog), `near`
+`lights.fog` is a `DistanceFog`: `color` (linear RGB), `density` (0, the default, is no fog), `near`
 and `far` (distance from the camera position). With `far > near` the fog is linear from `near`
 to `far` scaled by `density` (≤ 1); otherwise it is exponential, `1 - exp(-density × (d -
 near))`. In WGSL the block has `lights.fog` (rgb, density) and `lights.fog_range` (near, far),
@@ -887,7 +885,7 @@ frame.mesh(mesh, skin, transform, { tint: [1, 0.9, 0.8, 1] });
 - The material writes the aux attachments of a target that has them (`MaterialDesc.aux`,
   *Aux targets*): roughness and metalness after the factors and maps, and the instance's
   screen-space velocity.
-- `STANDARD_WGSL` (a deprecated export, E-036) is the fragment shader (entry `fs_main`); `STANDARD_TEXTURE_SLOTS` names the
+- `STANDARD_WGSL` (internal since 1.0.0, E-036) is the fragment shader (entry `fs_main`); `STANDARD_TEXTURE_SLOTS` names the
   five texture slots (`baseColor` 0 … `emissive` 4, at `@group(1) @binding(2 + slot)`);
   `packStandardUniforms(desc, out?)` fills the `STANDARD_UNIFORM_FLOATS` (68, 272 bytes) block
   the shader reads: base rgba, metallic, roughness, normal scale, alpha cutoff, emissive rgb,
@@ -985,7 +983,7 @@ inside it to keep the standard transform.
   use `DEPTH_FORMAT` (`depth24plus`).
   `DepthMode` is exported so a `Drawable` that records with a material's pipeline can type the
   argument (from `frame.depthFormat`).
-- `SPRITE_WGSL` (a deprecated export, E-036) is the built-in sprite fragment (`texture × vertex
+- `SPRITE_WGSL` (internal since 1.0.0, E-036) is the built-in sprite fragment (`texture × vertex
   colour × tint`), the shader behind `createSpriteMaterial`.
 - The WGSL pieces, for a `Drawable` that compiles its own shader against the engine's bindings:
   `WGSL_GLOBALS` (the `globals` and `camera` blocks), `WGSL_LIGHTS`, `WGSL_NOISE` (the
@@ -1151,8 +1149,7 @@ textures every frame, as ping-pong does, builds no new bind groups after the fir
   metal-rough slot `white` (glTF's default: metallic × factor) or `metalRough` (no metal, full
   roughness, whatever the factors say).
 - `renderer.createSpriteMaterial({ texture, label?, blend?, sampler? })` (`SpriteMaterialOptions`,
-  ws/api-render); the positional `(texture, label, { blend, sampler })` form is deprecated.
-  `renderer.white` is deprecated too: use `defaultTextures(renderer.device).white`.
+  ws/api-render). The default white texture is `defaultTextures(renderer.device).white`.
 - `SamplerKind` is `'linear-clamp'`, `'linear-repeat'`, `'nearest-clamp'`, `'linear-mip-repeat'`
   `'nearest-mip-clamp'` or `'nearest-mip-repeat'`. The `-mip` kinds blend between mip levels:
   linear for tiling surfaces, nearest for pixel-art faces that stay crisp up close and calm far
@@ -1175,8 +1172,7 @@ index, instead of an atlas whose tiles bleed into each other at a distance.
   `copyExternalImageToTexture`, or pixel data (`PixelSource`: `{ width, height, data }`, which
   `ImageData` also is) through `writeTexture`. All sources must share the first one's size (it
   throws otherwise). Options: `mips` (default true: the full chain is generated on the GPU),
-  `filter` (`MipFilter`: `'linear'` default, or `'nearest'`; `mipFilter` is the deprecated
-  old name, read when `filter` is absent), `format` (default `rgba8unorm-srgb`) and `label`.
+  `filter` (`MipFilter`: `'linear'` default, or `'nearest'`), `format` (default `rgba8unorm-srgb`) and `label`.
 - `generateMipmaps(device, texture, { filter?: MipFilter })` fills levels 1.. of any `Texture`
   created with `mips: true` (2D or array), each from the level above, layer by layer, with a
   tiny blit pipeline per format and filter cached per device. `'linear'` averages each 2×2 block
@@ -1425,19 +1421,3 @@ renderer.resolutionScale;                          // scene width / output width
   drop. That stops it pumping at the edge. `saturated` says it is at the floor and still
   over budget. `DynamicResolutionOptions`: `budgetMs` (14), `minScale` (0.5), `maxScale` (1),
   `step` (0.1), `dropAfterMs`, `raiseAfterMs`, `raiseMargin`, `cooldownMs`, `burnMs`, `smoothing`.
-
-## Deprecated (E-036, ws/api-render)
-
-Still exported, unchanged, and removed in the next minor:
-
-- Block internals only the module's tests read: `CAMERA_INV_VIEW_PROJ_OFFSET`,
-  `CAMERA_PREV_VIEW_PROJ_OFFSET`, `CAMERA_PREV_VIEW_OFFSET`, `CAMERA_JITTER_OFFSET`,
-  `POINT_LIGHTS_OFFSET_FLOATS`, `SUN_VIEW_PROJ_OFFSET_FLOATS`, `SHADOW_PARAMS_OFFSET_FLOATS`,
-  `FOG_OFFSET_FLOATS`, `LAYERS_OFFSET_FLOATS`, `POINT_LAYERS_OFFSET_FLOATS`,
-  `SPOT_LIGHTS_OFFSET_FLOATS`, `LIGHTS_BLOCK_FLOATS`, `SKIN_PALETTE_HEADER_FLOATS`,
-  `BUFFER_BINDING_BASE`, `STANDARD_WGSL` and `SPRITE_WGSL`. The WGSL prelude names the same
-  fields, so a shader never needs them.
-- `Renderer.white`: use `defaultTextures(renderer.device).white`.
-- `BlendMode`: use `RenderBlendMode` (anim's `BlendMode` is a different type).
-- `createSpriteMaterial(texture, label?, opts?)`: use `createSpriteMaterial({ texture, ... })`.
-- `Lights.sun.dir`: use `direction` (the same array). `Fog`: use `DistanceFog`.

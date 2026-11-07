@@ -271,10 +271,6 @@ the types below restate `AnimationClip`, `AnimationChannel` and `Skeleton` struc
   the four joint bytes at `SKIN_JOINTS_BYTE_OFFSET` (48), the four weights as `unorm8` at
   `SKIN_WEIGHTS_BYTE_OFFSET` (52), renormalised and rounded so they sum to exactly 255. Throws for
   an unskinned primitive or joint indices above 255.
-- Deprecated aliases (ws/harden-api, removed next minor): `SKINNED_VERTEX_STRIDE`,
-  `SKINNED_JOINTS_OFFSET` and `SKINNED_WEIGHTS_OFFSET` are the render constants above under
-  their old `assets` names; import `VERTEX_SKINNED_STRIDE`, `SKIN_JOINTS_BYTE_OFFSET` and
-  `SKIN_WEIGHTS_BYTE_OFFSET` from `@thunderclap/engine/render` instead.
 - `skeletonFromSkin(doc, skinIndex): GltfSkeleton` spans every node of the document, so a
   channel's `node` indexes the pose directly: `parents: Int16Array` (-1 for a root), `rest`
   (10 floats per node from its TRS: `tx ty tz qx qy qz qw sx sy sz`), `inverseBind` (the skin's
@@ -325,8 +321,8 @@ scene, in glTF units (`type`, `color`, `intensity`, `range`, cone angles, world 
 intensity × lightScale` (`LoadGltfOptions.lightScale`, default 1), `radius` is `range` or
 `16·√(intensity × lightScale)`. Each directional light is a render `SunLight` (ws/assets-4):
 `direction` is its node's world -Z, normalised, the way the light travels, which is the
-engine's convention for `Lights.sun.direction` and `SpotLight.direction`; the deprecated `dir`
-reads and replaces the same array. The game decides what to light with:
+engine's convention for `Lights.sun.direction` and `SpotLight.direction`. The game decides what
+to light with:
 
 <!-- snippet:check -->
 ```ts

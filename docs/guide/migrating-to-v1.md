@@ -2,17 +2,18 @@
 
 ## What you'll do
 
-You move a game from `0.2.0-alpha.1` names to the names `engine-v1.0.0` keeps. Every old name
-below still works today: it is a deprecated alias with the same shape, and your editor shows it
-struck through. The aliases are removed in `engine-v1.0.0`, which ships without them
-([E-036](../DECISIONS.md), [Removal](#removal)). Rename them now and the upgrade is a version bump.
+You move a game from `0.x` names to the names `engine-v1.0.0` keeps. In `0.2.0-alpha.1` every
+old name below was a deprecated alias with the same shape; `1.0.0` removed them all
+([E-036](../DECISIONS.md), [Removal](#removal)), so this guide is the map from 0.x. On 0.x,
+rename them first and the upgrade is a version bump; on 1.0.0, each old name is a type error
+whose fix is its row in the table.
 
 Most renames exist because two modules exported the same name with different shapes. The game
 that imports `Hit` from `input` and `Hit` from `geom` now writes `PickHit` and `RayHit`.
 
 ## Find what you use
 
-TypeScript already knows every deprecated name: it reports each use as a suggestion,
+Run this on your 0.x engine, before you bump. TypeScript knows every deprecated name: it reports each use as a suggestion,
 TS6385 for a name and TS6387 for a call signature. Your editor shows them as struck-through
 text. To list them from the command line, the engine's snippet checker exports the same pass:
 
@@ -31,15 +32,17 @@ file path because `scripts/` is not a package entry point. It uses the engine's 
 files use, the engine's and the DOM's alike.
 
 `pnpm check` in this repo runs the same pass over every checked snippet in the README and the
-guides, so the docs never show a deprecated name.
+guides, so the docs never show a deprecated name. After the bump the old names no longer exist,
+so `tsc` reports them as errors and the table below says what each becomes.
 
 ## Renamed and retired names
 
-The *Module* column is the entry point (`@thunderclap/engine/<module>`). A test in
-`scripts/check-snippets.test.mjs` fails when an `@deprecated` export in `api/*.api.txt` is
-missing from this table.
+The *Module* column is the entry point (`@thunderclap/engine/<module>`). Every name in the
+*0.x name* column is gone from `engine-v1.0.0`. A test in `scripts/check-snippets.test.mjs`
+fails when a row names something `api/*.api.txt` still exports, or when a later `@deprecated`
+export is missing from this table.
 
-| Module | Deprecated | v1 replacement |
+| Module | 0.x name | v1 replacement |
 | --- | --- | --- |
 | `anim` | `BlendMode` | `AnimBlendMode` (render has its own blend mode) |
 | `anim` | `PlayOptions` | `AnimPlayOptions` |
@@ -115,8 +118,8 @@ missing from this table.
 | `ui` | `WIDGETS3_CSS` | internal: `ensureWidgets3Styles` |
 | `ui` | `WORLD_PANEL_WGSL` | internal: `createWorldPanel` builds its pipeline from it |
 
-`PostStack.addJitterCamera` and `removeJitterCamera` are no-ops since ws/post-6 and go in the
-second release after `0.2.0-alpha.1`; the rest go in the next minor.
+`PostStack.addJitterCamera` and `removeJitterCamera` were no-ops since ws/post-6; like every
+other row, they are removed in `1.0.0`.
 
 ## Reads that became getters
 
@@ -128,7 +131,7 @@ These changed without an alias, so the compiler flags them as errors, not sugges
 
 ## A worked rename
 
-Before:
+Before (0.x):
 
 ```ts no-check
 import type { PlayOptions } from '@thunderclap/engine/audio';
@@ -158,16 +161,19 @@ const sprite = renderer.createSpriteMaterial({ texture: tex, label: 'hero' });
 
 ## Removal
 
-The `engine-v1.0.0` release deletes every alias in the table above. Before you bump, run the
-script from [Find what you use](#find-what-you-use) in your game's folder; when it prints no
-engine name, the bump compiles:
+`engine-v1.0.0` deleted every alias in the table above (CHANGELOG *Removed*). Before you bump,
+run the script from [Find what you use](#find-what-you-use) in your game's folder on your 0.x
+engine; when it prints no engine name, the bump compiles:
 
 ```sh
 node find-deprecated.mjs
 ```
 
+From 1.0.0 the public surface is frozen: `api/*.api.txt` records it, and a change to it ships
+only with a *Breaking* or *Added* CHANGELOG line naming the module.
+
 ## Next
 
-- [CHANGELOG.md](../../CHANGELOG.md): the *Deprecated* entries, with the branch that made each change
+- [CHANGELOG.md](../../CHANGELOG.md): the 1.0.0 *Removed* list, and the *Deprecated* entries of 0.x with the branch that made each change
 - [Getting started](getting-started.md)
 - [Testing your game](testing-your-game.md)

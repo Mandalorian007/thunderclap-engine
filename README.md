@@ -213,7 +213,7 @@ Short, task-shaped walkthroughs. Each opens with what you'll build and ends with
 7. [Style and post](docs/guide/style-and-post.md): the post stack, quality tiers, FX, sky, water and weather.
 8. [VR](docs/guide/xr.md): entering VR, controllers and hands, per-eye post, panels.
 9. [Testing your game](docs/guide/testing-your-game.md): the `./testing` kit (fake host, fixed clock, fake GPU), replay tests, the harness pattern and `expect.poll`.
-10. [Migrating to v1](docs/guide/migrating-to-v1.md): every deprecated name, its v1 replacement and its module.
+10. [Migrating to v1](docs/guide/migrating-to-v1.md): every 0.x name removed in 1.0.0, its v1 replacement and its module.
 
 The module READMEs under `src/<module>/` are the full reference.
 
@@ -276,7 +276,7 @@ A source is a `.glb`, a `.gltf` or a geometry JSON (`{ "positions": [...], "indi
 ## Testing
 
 ```sh
-pnpm check       # typecheck + Biome lint + import boundaries + README coverage (check:docs) + snippet and deprecation check (check:snippets) + API snapshots (check:api) + Vitest unit tests (2403 tests in 219 files) + the host-electron, host-capacitor, host-pwa, template, create-game and bake checks
+pnpm check       # typecheck + Biome lint + import boundaries + README coverage (check:docs) + snippet and deprecation check (check:snippets) + API snapshots and the v1 freeze rule (check:api) + Vitest unit tests (2399 tests in 219 files) + the host-electron, host-capacitor, host-pwa, template, create-game and bake checks
 pnpm test:e2e    # Playwright e2e against the harness pages, on a device matrix
 pnpm harness     # serve the harness pages yourself
 ```
@@ -298,7 +298,7 @@ Headless Chromium gets a WebGPU adapter with `--enable-unsafe-webgpu`. On macOS 
 
 ## Status
 
-Version **0.2.0-alpha.1**. Everything under [Features](#features) is on `main` and tested on the device matrix. The API is settling towards `engine-v1.0.0`: the old names still work as deprecated aliases until the next minor, and [Migrating to v1](docs/guide/migrating-to-v1.md) lists each one with its replacement. Read [CHANGELOG.md](CHANGELOG.md) before you upgrade.
+Version **1.0.0**. Everything under [Features](#features) is on `main` and tested on the device matrix. The public surface in `api/*.api.txt` is the frozen `engine-v1.0.0` surface: the 0.x deprecated aliases are removed, and [Migrating to v1](docs/guide/migrating-to-v1.md) maps each old name to its replacement. Any later change to that surface needs a CHANGELOG entry. Read [CHANGELOG.md](CHANGELOG.md) before you upgrade.
 Two games set the range it must cover: The Last Rune (2D) and Forgewilds (3D voxel), and each new capability arrives with a game that needs it ([VISION](docs/VISION.md)).
 Next: publishing `engine-v1.0.0` to npm. Current branches are on [docs/STATUS.md](docs/STATUS.md), the decisions behind the engine in [docs/DECISIONS.md](docs/DECISIONS.md).
 The engine was extracted from [The Last Rune](https://github.com/Mandalorian007/last-rune) with its history, so `D-0xx` numbers and some `docs/` paths in comments point at that repo.

@@ -56,8 +56,7 @@ post.set({ bloom: { intensity: 1.2 }, grade: { saturation: 1.2 } }); // merges p
 post.settings.mist.enabled = false;                                  // or mutate directly
 ```
 
-`mist` is the section formerly called `fog` (ws/api-render): `fog` still works everywhere,
-deprecated, as the same object. A 3D game can place the rays from the sun instead of a screen
+`mist` is the section formerly called `fog` (ws/api-render; `fog` was removed in 1.0.0). A 3D game can place the rays from the sun instead of a screen
 point: `godRays: { direction: [-0.3, -0.6, -0.5] }` (world space, the way the light travels,
 like `lights.sun.direction`) projects the sun through the frame's view each frame and turns
 the rays off while it is behind the camera; `godRaySource(viewProj, direction, w, h, out)` is
@@ -253,7 +252,7 @@ The stack reads the frame from `PostInputs` only: nothing in src/post reads `ren
 - **TAA on camera jitter.** `PostStack.wantsJitter` is true while `taa.enabled` and
   `quality.taa`, so the renderer applies the camera's jitter to the projection. (Since
   ws/post-6 the stack drives the jitter through `renderer.setJitter`, see Post 6; the
-  post-4 `addJitterCamera` / `removeJitterCamera` are deprecated no-ops.) The
+  post-4 `addJitterCamera` / `removeJitterCamera` were removed in 1.0.0.) The
   reprojection is `taaReprojection(out, view.previousViewProj, view.invViewProj)`, and the
   resolve samples the colour, the neighbourhood and the depth at `uv + view.jitter / size`,
   so the history holds the unjittered image. The old sample-UV jitter is gone. With no
@@ -311,8 +310,7 @@ feature against a reference stack with the feature off, read back from the GPU, 
   `quality.taa` off) or on `destroy()`, it calls `renderer.setJitter(null)` once, which clears
   the jitter and restarts the cycle. A hook someone else sets while TAA runs is left alone
   until TAA stops. Nothing in src/post calls `Camera.setJitter` (a test greps for it).
-  `addJitterCamera` / `removeJitterCamera` are deprecated no-ops; no engine page calls them
-  since ws/post-7, and they go in the second release after 0.2.0-alpha.1.
+  `addJitterCamera` / `removeJitterCamera` were removed in 1.0.0.
 - **Hook ownership (ws/post-7).** The stack recognises its own hook, so a detached stack never
   leaves the renderer jittering. The mechanism is a check at the next frame, made by the hook
   itself: the hook only runs while it is installed, in `beginFrame`, so it is the stack's own
@@ -352,7 +350,6 @@ feature against a reference stack with the feature off, read back from the GPU, 
   slight saturation and contrast lift. `PostStack` and `createGame` start from it.
   `neutralPostSettings()` turns all of that off and leaves the ACES tone map with dithering, so
   the image is the scene: `post.set(neutralPostSettings())` and add what the game wants.
-  `defaultPostSettings()` is the deprecated old name of `cinematicPostSettings()`.
 - Output is encoded to sRGB in the shader because the swapchain is a non-sRGB format
   (`navigator.gpu.getPreferredCanvasFormat()`: `bgra8unorm` or `rgba8unorm`).
 - All intermediate textures are reallocated only on resize (or a bloom level cap change).
@@ -396,8 +393,7 @@ texture; `renderer.endFrame({ present: false })` then only submits. Inside `enco
 
 ## Types
 
-- `PostSettings` has one section per pass: `bloom: BloomSettings`, `mist: MistSettings` (also
-  readable as the deprecated `fog`; `FogSettings` is a deprecated alias of `MistSettings`),
+- `PostSettings` has one section per pass: `bloom: BloomSettings`, `mist: MistSettings`,
   `godRays: GodRaySettings`, `vignette: VignetteSettings`, `grade: GradeSettings` (which holds
   `tonemap: Tonemap`), `ao: AoSettings`, `dof: DofSettings`, and the finishing sections
   `fxaa: FxaaSettings`, `lut: LutSettings`, `grain: GrainSettings`, `aberration:
