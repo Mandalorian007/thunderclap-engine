@@ -10,7 +10,7 @@ The npm path works (E-037). These are what the first cut left. ws/publish-2 take
 - **Install from npm after publishing.** After `publish.yml` publishes, install the new version from the registry into a fresh project, then typecheck and import it. A broken tarball then fails the run, not a user.
 - **GitHub Release per tag.** Have the publish job create a GitHub Release from that version's CHANGELOG section, so the repo's Releases page keeps itself current.
 - ~~**WebXR types versus `@types/webxr`.**~~ Fixed by ws/xr-types (E-039). The engine ships its own XR globals (`platform/xr-types.d.ts`). A consumer with `@types/webxr` and `skipLibCheck` off may hit duplicate declarations. Add that case to `check:pack`; if it clashes, rename the engine's XR types to module-scoped names or depend on `@types/webxr`.
-- **host-capacitor peer.** The package imports no `@capacitor/*` module, so it has no peer dependency. Decide whether an optional `@capacitor/core` peer helps users anyway, as documentation in the manifest.
+- ~~**host-capacitor peer.**~~ Fixed by ws/hosts-tidy: `@capacitor/core` `^8.0.0` is an optional peer, documented in the README's install section. The package imports no `@capacitor/*` module, so it has no peer dependency. Decide whether an optional `@capacitor/core` peer helps users anyway, as documentation in the manifest.
 
 ## XR rough edges (2026-11-07, user + PM)
 

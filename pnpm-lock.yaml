@@ -38,6 +38,9 @@ importers:
       '@biomejs/biome':
         specifier: ^2.6.4
         version: 2.6.5
+      '@capacitor/core':
+        specifier: ^8.6.0
+        version: 8.6.0
       '@thunderclap-engine/engine':
         specifier: workspace:*
         version: link:../..
@@ -288,6 +291,9 @@ packages:
     engines: {node: '>=14.21.3'}
     cpu: [x64]
     os: [win32]
+
+  '@capacitor/core@8.6.0':
+    resolution: {integrity: sha512-9F2zzuGYTJu+wqmQSEmqnFBfGrhC/njjMCfmxbvg9mq8xJT4wNh5pxbMFZxvW/yDhYJWPEBFQxeqzfo1gKrvxg==}
 
   '@electron-internal/extract-zip@1.0.8':
     resolution: {integrity: sha512-8iajeLFbzNwM0m3AsQZSZgYREWglAImyGvvFSWU34FgMW8sHlzdwj9QKvv9dgN7jMP591EFUF/sLOC3Jl9YIjQ==}
@@ -1882,6 +1888,10 @@ snapshots:
 
   '@biomejs/cli-win32-x64@2.6.5':
     optional: true
+
+  '@capacitor/core@8.6.0':
+    dependencies:
+      tslib: 2.9.1
 
   '@electron-internal/extract-zip@1.0.8': {}
 
