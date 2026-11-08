@@ -627,7 +627,9 @@ and `onUpdated(fn)`, which
 through `input.onUpdated`, calls `poll(router.pointers)` after every `input.update()` and then
 `update(router.camera)` (the camera the rays go through: `ctx.camera` in `createGame`, the head
 camera while `ctx.xr` is active; `opts.camera`, a getter, names another, ws/api-core), so
-the page never calls `poll` or `update`. It throws when the input has no router. `detach()`
+the page never calls `poll` or `update`. A head-locked or billboard panel is placed again from
+that camera in `prepare`, as the frame draws, so in VR it follows the head as posed for the frame
+(also on a frame with no input tick, ws/xr-fixes). It throws when the input has no router. `detach()`
 undoes it (so does `dispose()`); the manual `addTester(worldPanelTarget(panel))` +
 `poll`/`update` path stays for an input without a router.
 

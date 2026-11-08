@@ -156,8 +156,11 @@ view's projection and inverse pose, `screen` the viewport as a fraction of the t
 `target`, a `SceneTarget.external` over the layer's `getViewSubImage` colour and depth textures
 (eyes on one texture share one target, so the first eye clears and the second loads), plus the
 `viewport` in px. The array and the views are reused; nothing is allocated per frame once the
-layer's textures settle. `head` is a camera between the eyes (eye 0's projection, the viewer
-pose) for a single `Scene.render` record. `XrSurface.supported()` says whether `XRGPUBinding`
+layer's textures settle (each texture the compositor hands out is wrapped once, so a cycling
+swapchain allocates nothing either). The eye cameras cull (`cull: true`). `head` is a camera at the
+viewer pose whose projection covers both eyes' frustums (their union, pulled back behind the eyes
+inside the projection, so `head.position` stays the viewer's) for a single `Scene.render` record
+and for post and world UI (ws/xr-fixes). `XrSurface.supported()` says whether `XRGPUBinding`
 exists; the constructor throws without it. `destroy()` frees the eye targets and the layer.
 With `scene: true` (ws/xr-post) the eyes go through the post stack: the surface keeps `scene`, one
 HDR `SceneTarget` the size of an eye (made on the first frame with a pose, resized when the eye

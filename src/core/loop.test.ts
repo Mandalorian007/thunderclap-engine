@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { setDefaultHost } from '../host/default';
-import type { Host } from '../host/types';
+import type { FrameSource, Host } from '../host/types';
 import { FixedStepper, GameLoop } from './loop';
 
 describe('FixedStepper', () => {
@@ -228,6 +228,31 @@ describe('GameLoop.maxFps', () => {
     expect(k.updates()).toBe(60);
   });
 
+  it('never caps an XR session: a kind xr source renders every headset frame (ws/xr-fixes)', () => {
+    const clock = { t: 0, cb: null as (() => void) | null };
+    let renders = 0;
+    const loop = new GameLoop(
+      { update: () => {}, render: () => renders++ },
+      {
+        now: () => clock.t,
+        frames: {
+          kind: 'xr',
+          requestFrame: (f: (t: number) => void) => {
+            clock.cb = () => f(clock.t);
+            return 1;
+          },
+          cancelFrame: () => {
+            clock.cb = null;
+          },
+        } as FrameSource,
+      },
+    );
+    loop.maxFps = 30;
+    loop.start();
+    drive(clock, 90, 90);
+    expect(renders).toBe(90);
+  });
+
   it('null lifts the cap', () => {
     const h = make();
     h.loop.maxFps = 30;
@@ -322,5 +347,54 @@ describe('GameLoop.setFrames', () => {
     loop.start();
     expect(log).toEqual(['b.request']);
     loop.stop();
+  });
+});
+
+describe('GameLoop: a frame that throws (ws/xr-fixes)', () => {
+  it('schedules the next frame, clears inFrame and rethrows to the frame source', () => {
+    let pending: ((t: number) => void) | null = null;
+    let requests = 0;
+    let renders = 0;
+    let fail = true;
+    const log: string[] = [];
+    const b = { requestFrame: () => 7, cancelFrame: () => {} };
+    let loop: GameLoop | null = null;
+    const l = new GameLoop(
+      {
+        update: () => {},
+        render: () => {
+          renders++;
+          if (fail) throw new Error('boom');
+        },
+      },
+      {
+        now: () => renders * 16,
+        frames: {
+          requestFrame: (cb) => {
+            requests++;
+            pending = cb;
+            return requests;
+          },
+          cancelFrame: (h) => log.push(`cancel ${h}`),
+        },
+      },
+    );
+    loop = l;
+    l.start();
+    const fire = () => {
+      const cb = pending;
+      pending = null;
+      cb?.(0);
+    };
+    expect(fire).toThrow('boom');
+    expect(requests).toBe(2);
+    expect(pending).not.toBeNull();
+    fail = false;
+    fire();
+    expect(renders).toBe(2);
+    expect(requests).toBe(3);
+    // inFrame was cleared: a setFrames outside a frame swaps the pending request at once.
+    loop.setFrames(b);
+    expect(log).toEqual(['cancel 3']);
   });
 });

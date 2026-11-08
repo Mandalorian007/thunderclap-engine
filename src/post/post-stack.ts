@@ -243,6 +243,8 @@ export class PostStack implements PostProcessor {
     objectVelocity: 0,
     taaVelocity: 0,
   };
+  /** `inputs.time` of the last `encode` that adapted the EV (one adaptation per frame). */
+  private adaptedTime = Number.NaN;
   /** The current EV (`exposure`), eased in auto mode, `log2(grade.exposure)` in manual. */
   private ev = 0;
   private taaOn = false;
@@ -658,7 +660,7 @@ export class PostStack implements PostProcessor {
     fs.roughMetal = roughMetal ? 1 : 0;
     fs.objectVelocity = objectVelocity ? 1 : 0;
     fs.taaVelocity = taaVelocity ? 1 : 0;
-    this.updateExposure(wantAuto, dt);
+    this.updateExposure(wantAuto, dt, inputs.time);
 
     packPostUniforms(
       this.uniforms,
@@ -899,7 +901,7 @@ export class PostStack implements PostProcessor {
   }
 
   /** Ease the EV toward the metered target in auto mode; mirror the manual value otherwise. */
-  private updateExposure(auto: boolean, dt: number): void {
+  private updateExposure(auto: boolean, dt: number, time: number): void {
     const ex = this.settings.exposure;
     if (!auto || !this.exposurePasses) {
       this.ev = Math.log2(Math.max(1e-6, this.settings.grade.exposure));
@@ -908,7 +910,14 @@ export class PostStack implements PostProcessor {
     }
     const passes = this.exposurePasses;
     passes.poll();
-    // Hold until the first histogram has been read back, then ease toward the metered target.
+    // Hold until the first histogram has been read back, then ease toward the metered target,
+    // once per frame: every later `encode` with the same frame time (the second XR eye) reuses
+    // this frame's EV, so both eyes match and the speed is the frame's (ws/xr-fixes).
+    if (time === this.adaptedTime) {
+      this.frameState.autoExposure = 2 ** this.ev;
+      return;
+    }
+    this.adaptedTime = time;
     if (passes.readbacks > 0) {
       const target = exposureTarget(passes.averageLog, ex.keyValue, ex.minEv, ex.maxEv);
       this.ev = adaptExposure(this.ev, target, dt, ex.speedUp, ex.speedDown);

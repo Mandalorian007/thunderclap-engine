@@ -711,7 +711,7 @@ export async function createGame<
             renderer.render(frame, eye.camera, scene);
             renderer.resolve(scene, eye.target.color.view, eye.viewport);
           }
-          renderer.endFrame({ present: false });
+          renderer.endFrame(NO_PRESENT);
         } else {
           // Read each frame: `ctx.setCamera` swaps it.
           const camera = renderer.camera;
@@ -949,3 +949,5 @@ const NO_PANELS = {
 
 /** What the XR render step iterates when the frame has no viewer pose. */
 const NO_EYES: readonly XrEyeView[] = [];
+/** `endFrame`'s XR options, hoisted so a headset frame allocates none (ws/xr-fixes). */
+const NO_PRESENT = { present: false } as const;

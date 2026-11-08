@@ -59,7 +59,7 @@ lights, and materials that take custom WGSL. It has no runtime dependencies.
 ## Frame model
 
 ```
-beginFrame(time, dt) → Frame
+beginFrame(time, dt) → Frame   (a frame still open, because the last one threw, is dropped unsubmitted)
   frame.sprite / frame.mesh / frame.drawable   (record only; nothing hits the GPU yet)
 render(frame, camera, target = renderer.target)   once per camera
   1. first call of the frame: pre-passes and the per-draw uniform upload; every call: drawable.prepare()
@@ -72,7 +72,8 @@ render(frame, camera, target = renderer.target)   once per camera
      has depth), the pass splits at the opaque/blended boundary: opaque pass, depth copy,
      drawable.afterOpaque(encoder, view), blended pass ("Depth hooks" below)
 endFrame(opts?)
-  4. render(frame, renderer.camera) if nothing was rendered (the single-camera path)
+  4. render(frame, renderer.camera) if nothing was rendered (the single-camera path;
+     with { present: false } nothing is rendered or submitted instead: a viewless XR frame)
   5. renderer.post (e.g. PostStack) or the built-in present pass: renderer.target → swapchain
      (skipped with { present: false }: an XR frame resolved each eye into the session's layer
      with renderer.resolve(target, outView, viewport?) during step 3, not the canvas)
@@ -109,7 +110,8 @@ renderer.endFrame();
   external target of one size on a device shares one emissive texture, stored with `discard`, released by the last
   (`sharedEmissiveCount(device)` reads the pool size; two XR eyes allocate one, ws/ergo-3d); `isExternal`, `adoptedColor`, `viewport`
   (`SceneTargetViewport`, the sub-image rect in px) and `adopt(desc)` (re-point at the next
-  frame's textures; a no-op when they are the same) are its extras; `resize` throws, `destroy`
+  frame's textures; a no-op when they are the same; the last few textures' wrappers are cached, so a
+  compositor cycling a ring of textures allocates nothing, ws/xr-fixes) are its extras; `resize` throws, `destroy`
   never destroys what it adopted. `XrSurface` in `@thunderclap-engine/engine/platform` builds one per
   eye. `endFrame({ present: false })` skips the swapchain (post and present) for such a frame.
 - **Resolve (XR post, ws/xr-post).** `renderer.resolve(target, out: GPUTextureView, viewport?:

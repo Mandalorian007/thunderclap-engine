@@ -21,9 +21,12 @@
  * the same bloom, tone map and grade as the screen; the layer then takes `colorFormat`, the
  * format the post stack writes (`renderer.format`), and no depth by default.
  *
- * `head` is a camera at the viewer pose with the first eye's projection, for the scenes' one
- * `render(frame, camera, alpha)` call per frame.
+ * `head` is a camera at the viewer pose whose frustum contains every eye's (the union, see
+ * `unionProjection`), for the scenes' one `render(frame, camera, alpha)` call per frame and the
+ * scene-level culling done through it. The eye cameras cull (`cull` on) like a flat
+ * perspective camera does.
  */
+import { type Mat4, mat4 } from '../core/math';
 import { Camera } from '../render/camera';
 import { DEPTH_FORMAT } from '../render/material';
 import {
@@ -107,6 +110,8 @@ class EyeView implements XrEyeView {
     this.camera.depthTest = true;
     this.camera.depthWrite = true;
     this.camera.viewIndex = index;
+    // Frustum culling, as `Camera.perspective` turns on for a flat 3D camera (ws/xr-fixes).
+    this.camera.cull = true;
     this.own = SceneTarget.external({
       device,
       color: first.colorTexture,
@@ -124,8 +129,10 @@ export class XrSurface {
   readonly layer: XRProjectionLayer;
   readonly referenceSpace: XRReferenceSpace;
   /**
-   * A camera at the viewer pose (between the eyes) with the first eye's projection, depth on,
-   * updated by `views`: what the scenes record through once per frame.
+   * A camera at the viewer pose (between the eyes), depth on, updated by `views`: what the
+   * scenes record through once per frame. Its view is the viewer pose's; its projection is the
+   * union of the eyes' frusta (pulled back behind the head so it holds both eye positions), so
+   * culling against `head.frustum` never drops what only one eye sees (ws/xr-fixes).
    */
   readonly head: Camera = new Camera();
   /**
@@ -250,11 +257,16 @@ export class XrSurface {
       out.push(eye);
     }
     if (views.length > 0) {
-      this.head.setProjection(views[0]!.projectionMatrix);
-      this.head.setViewMatrix(pose.transform.inverse.matrix);
+      const headView = pose.transform.inverse.matrix;
+      unionProjection(this.headProj, headView, views);
+      this.head.setProjection(this.headProj);
+      this.head.setViewMatrix(headView);
     }
     return out;
   }
+
+  /** `head`'s projection, rebuilt in place each frame. */
+  private readonly headProj: Mat4 = new Float32Array(16);
 
   private makeScene(): SceneTarget {
     this.scene = new SceneTarget(this.device, {
@@ -276,4 +288,87 @@ export class XrSurface {
     this.scene = null;
     this.layer.destroy();
   }
+}
+
+const relScratch: Mat4 = new Float32Array(16);
+
+/**
+ * Into `out`: a perspective projection, in the head's view space (`headView`, the inverse
+ * viewer pose), whose frustum contains every view's frustum (ws/xr-fixes). Each eye's frustum
+ * is four corner rays from the eye's position; the union takes the widest tangent on each side
+ * in head space and moves the apex back along +z (behind the head) far enough that every eye's
+ * position lies inside, then folds that pull-back into the matrix so `head`'s view (and so its
+ * `position`) stays the true viewer pose. Depth terms (`[10]`, `[14]`) are the first eye's; the
+ * pull-back only widens the near and far planes, which stays conservative. Falls back to the
+ * first eye's projection when a corner ray does not point forward. No allocation.
+ */
+function unionProjection(
+  out: Mat4,
+  headView: ArrayLike<number>,
+  views: ArrayLike<{ projectionMatrix: ArrayLike<number>; transform: XRRigidTransform }>,
+): Mat4 {
+  const p0 = views[0]!.projectionMatrix;
+  let lo = Number.POSITIVE_INFINITY;
+  let hi = Number.NEGATIVE_INFINITY;
+  let bo = Number.POSITIVE_INFINITY;
+  let to = Number.NEGATIVE_INFINITY;
+  const rel = relScratch;
+  // Pass 1: the union tangents (x / -z, y / -z) of every corner ray in head space.
+  for (let i = 0; i < views.length; i++) {
+    const v = views[i]!;
+    const p = v.projectionMatrix;
+    mat4.multiply(rel, headView, v.transform.matrix);
+    const l = (p[8]! - 1) / p[0]!;
+    const r = (p[8]! + 1) / p[0]!;
+    const b = (p[9]! - 1) / p[5]!;
+    const t = (p[9]! + 1) / p[5]!;
+    for (let c = 0; c < 4; c++) {
+      const ex = c & 1 ? r : l;
+      const ey = c & 2 ? t : b;
+      // The eye-space direction (ex, ey, -1) rotated into head space.
+      const dx = rel[0]! * ex + rel[4]! * ey - rel[8]!;
+      const dy = rel[1]! * ex + rel[5]! * ey - rel[9]!;
+      const dz = rel[2]! * ex + rel[6]! * ey - rel[10]!;
+      if (!(dz < -1e-6)) return mat4.copy(out, p0);
+      const tx = dx / -dz;
+      const ty = dy / -dz;
+      if (tx < lo) lo = tx;
+      if (tx > hi) hi = tx;
+      if (ty < bo) bo = ty;
+      if (ty > to) to = ty;
+    }
+  }
+  if (!(hi > lo && to > bo)) return mat4.copy(out, p0);
+  // Pass 2: the pull-back zb (apex at head-space z = zb) that holds every eye origin o:
+  // lo·(zb - o.z) <= o.x <= hi·(zb - o.z), and the same on y.
+  let zb = 0;
+  for (let i = 0; i < views.length; i++) {
+    mat4.multiply(rel, headView, views[i]!.transform.matrix);
+    const ox = rel[12]!;
+    const oy = rel[13]!;
+    const oz = rel[14]!;
+    if (lo < 0) zb = Math.max(zb, oz + ox / lo);
+    if (hi > 0) zb = Math.max(zb, oz + ox / hi);
+    if (bo < 0) zb = Math.max(zb, oz + oy / bo);
+    if (to > 0) zb = Math.max(zb, oz + oy / to);
+  }
+  // frustum(lo, hi, bo, to) × translate(0, 0, -zb), column-major.
+  const a = 2 / (hi - lo);
+  const c8 = (hi + lo) / (hi - lo);
+  const b5 = 2 / (to - bo);
+  const c9 = (to + bo) / (to - bo);
+  const e = p0[10]!;
+  const f = p0[14]!;
+  out.fill(0);
+  out[0] = a;
+  out[5] = b5;
+  out[8] = c8;
+  out[9] = c9;
+  out[10] = e;
+  out[11] = -1;
+  out[12] = -zb * c8;
+  out[13] = -zb * c9;
+  out[14] = f - zb * e;
+  out[15] = zb;
+  return out;
 }

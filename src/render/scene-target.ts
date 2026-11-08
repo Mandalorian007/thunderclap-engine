@@ -114,6 +114,9 @@ export interface SceneTargetExternal {
   aux?: SceneTargetAux;
 }
 
+/** How many adopted textures a `SceneTarget` keeps wrappers for (colour and depth together). */
+const ADOPT_CACHE = 8;
+
 /** A texture owned by someone else, in the shape of `Texture` (its `destroy` does nothing). */
 class AdoptedTexture {
   readonly view: GPUTextureView;
@@ -127,6 +130,8 @@ class AdoptedTexture {
   constructor(
     readonly texture: GPUTexture,
     view?: GPUTextureViewDescriptor,
+    /** The array layer `view` selects (the cache key beside `texture`). */
+    readonly layer = 0,
   ) {
     this.view = texture.createView(view);
     this.width = texture.width;
@@ -212,6 +217,9 @@ export class SceneTarget {
   /** The adopted depth texture of an external target, when its layer has one. */
   private externalDepth: GPUTexture | null = null;
   private adoptedLayer = 0;
+  /** `adopted`'s wrappers, colour and depth alike. */
+  private readonly adoptCache: AdoptedTexture[] = [];
+  private adoptNext = 0;
 
   /** `external`: internal, set by `SceneTarget.external`; the textures then come from `adopt`. */
   constructor(
@@ -352,16 +360,40 @@ export class SceneTarget {
       this.depthCopyTex = null;
       this.resizeAux(w, h);
     }
-    this.color = new AdoptedTexture(desc.color, desc.view);
+    this.color = this.adopted(desc.color, layer, desc.view);
     this.colorAtt.view = this.color.view;
     this.blendColorAtt.view = this.color.view;
     if (depth) {
-      this.depthTex = new AdoptedTexture(depth, desc.view);
+      this.depthTex = this.adopted(depth, layer, desc.view);
       this.depthAtt.view = this.depthTex.view;
       this.blendDepthAtt.view = this.depthTex.view;
     } else if (this.depthTex && this.depthTex instanceof AdoptedTexture) {
       this.depthTex = null;
     }
+  }
+
+  /**
+   * The wrapper (and view) over `texture` at array `layer`, made once and kept: an XR
+   * compositor cycles a few textures, so steady-state adoption allocates nothing (ws/xr-fixes).
+   * The cache holds the last `ADOPT_CACHE` textures, replaced oldest first.
+   */
+  private adopted(
+    texture: GPUTexture,
+    layer: number,
+    view: GPUTextureViewDescriptor | undefined,
+  ): AdoptedTexture {
+    const c = this.adoptCache;
+    for (let i = 0; i < c.length; i++) {
+      const a = c[i]!;
+      if (a.texture === texture && a.layer === layer) return a;
+    }
+    const a = new AdoptedTexture(texture, view, layer);
+    if (c.length < ADOPT_CACHE) c.push(a);
+    else {
+      c[this.adoptNext] = a;
+      this.adoptNext = (this.adoptNext + 1) % ADOPT_CACHE;
+    }
+    return a;
   }
 
   /** Recreate the textures at a new size (no-op when unchanged). Returns whether they changed. */
@@ -525,5 +557,6 @@ export class SceneTarget {
     this.depthTex = null;
     this.depthCopyTex?.destroy();
     this.depthCopyTex = null;
+    this.adoptCache.length = 0;
   }
 }
