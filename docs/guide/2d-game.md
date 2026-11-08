@@ -313,6 +313,28 @@ export function tapToWorld(ctx: EngineCtx): CameraPoint | null {
 
 Once the camera has moved or zoomed, screen and world coordinates differ. Always convert a tap or `ctx.input.pointer` with `screenToWorld` before you test it against the world. Pass a reused `out` point so nothing is allocated. `worldToScreen` goes the other way. The [UI and HUD guide](ui-and-hud.md) covers the layout regions and `LayoutSpec` that decide how big the free rect is.
 
+### Fill a phone instead of letterboxing
+
+A landscape design letterboxes on a wide phone: bars at the sides. To fill the phone, pass a cover fit with the band of the design that must stay on screen. The canvas then covers the screen and crops the top and bottom, never past the band. `belowScale: PHONE_SCALE` keeps tablets and desktops letterboxed.
+
+```ts
+import { createGame } from '@thunderclap-engine/engine';
+import { PHONE_SCALE } from '@thunderclap-engine/engine/platform';
+
+const ctx = await createGame({
+  root: document.getElementById('app')!,
+  input: { bindings: { tap: [{ mouse: 0 }] } },
+  surface: { fit: { minVisibleHeight: 720, belowScale: PHONE_SCALE } }, // keep the middle 1920×720
+});
+if (ctx) {
+  const v = ctx.surface.visibleRect; // the design rect on screen, in design px
+  console.log(v?.y, v?.height);
+  ctx.surface.setFit?.('contain'); // switch back, e.g. for a scene that needs all of the design
+}
+```
+
+`clientToLogical`, taps, `fitFreeRect` and the HUD layer all follow the covered canvas, so a scene framed with `fitFreeRect` keeps its board inside what shows. Put HUD art and buttons in the layout regions rather than at the design's edges, since the edges may be cropped. To style for phones, key CSS off the overlay root's `data-form-factor` (`phone-landscape`, `phone-portrait`, `tablet`, `desktop`): `.tc-overlay[data-form-factor^="phone"] .my-score { … }`.
+
 ## Particles
 
 `ctx.particles` is a shared GPU `ParticleSystem`. The engine steps it each fixed step; you emit into it and draw it.
