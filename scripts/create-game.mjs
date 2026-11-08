@@ -13,9 +13,8 @@
 // this repo. --engine takes any dependency spec ("^0.3.0", "github:...", "link:../engine",
 // "file:../engine.tgz") or a directory, which becomes "link:<path relative to <dir>>".
 //
-// Default engine: a link to the clone this script runs from, because that is the engine a user
-// can install today (the package is not on npm yet). The first publish flips PUBLISHED, and the
-// default becomes "^<this repo's version>".
+// Default engine: "^<this repo's version>" from the npm registry (PUBLISHED, E-037/E-039). Pass
+// --engine <this clone> to develop a game against unreleased engine changes.
 //
 // Refuses a non-empty <dir> without --force (which overwrites files and keeps the rest). --dry-run
 // prints the plan and writes nothing. --list prints the templates and their descriptions.
@@ -35,10 +34,10 @@ import { fileURLToPath } from 'node:url';
 export const ENGINE = '@thunderclap-engine/engine';
 export const ENGINE_REPO = 'https://github.com/Mandalorian007/thunderclap-engine';
 /**
- * Whether the engine is on the npm registry. While false, the default engine spec links the clone
- * this script runs from; set it true with the first publish so the default is `^<version>`.
+ * Whether the engine is on the npm registry (it is, from 1.1.0). True: the default engine spec is
+ * `^<version>`. False would link the clone this script runs from instead.
  */
-export const PUBLISHED = false;
+export const PUBLISHED = true;
 
 /** Directory entries never copied out of a template (any depth). */
 export const SKIP = new Set([
@@ -75,7 +74,7 @@ const USAGE = `usage: pnpm create-game <dir> [--template <name>] [--name <pkg>] 
   --name <pkg>       package.json "name"
   --engine <spec>    ${ENGINE} dependency: a version range, "github:..." , "link:<path>",
                      "file:<path>" or a directory holding the engine (becomes link:<relative path>);
-                     default: a link to this clone (the engine is not on npm yet)
+                     default: ^<this clone's version> from npm
   --force            write into a non-empty <dir>, overwriting files that exist in the template
   --dry-run          print what would be written and change nothing
   --list             print the templates with their descriptions`;
@@ -149,7 +148,7 @@ export function templateFiles(src, rel = '') {
 /**
  * The engine spec to write. A directory becomes link:<path> (relative to <dir> when that is shorter
  * than the absolute path); a protocol spec or version range is kept as given. Without --engine:
- * `^<engineVersion>` once published, a link to this clone until then.
+ * `^<engineVersion>` (the engine is on npm; `published` false links this clone instead).
  */
 export function engineSpec(engine, dest, engineVersion, published = PUBLISHED) {
   if (engine === null && published) return `^${engineVersion}`;
@@ -208,9 +207,8 @@ ${linkNote(engine)}`;
 function linkNote(engine) {
   return engine.startsWith('link:')
     ? `
-The engine is linked from a local clone (\`${engine}\`) because ${ENGINE} is not on npm yet. Keep
-the clone where it is, or point the dependency at \`github:Mandalorian007/thunderclap-engine\`. Once
-the package is published, replace the link with a version range (\`^x.y.z\`).
+The engine is linked from a local clone (\`${engine}\`). Keep the clone where it is, or replace the
+link with a version range from npm (\`^x.y.z\`) once the engine changes you need are released.
 `
     : '';
 }

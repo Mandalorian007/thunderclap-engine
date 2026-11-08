@@ -1,4 +1,3 @@
-/// <reference path="../platform/xr-types.d.ts" preserve="true" />
 /**
  * `createGame` (D-041 Phase 1): the noun-free wiring every ThunderClap game starts from.
  *
@@ -38,6 +37,7 @@
  * session's layer (ws/xr-post); controllers and hands join `ctx.pointers`. Leaving (`exit()` or
  * the session ending) puts everything back; a game that never enters runs the same code as before.
  */
+
 import { AudioEngine, persistMixer } from '../audio';
 import { ParticleSystem, type ParticleSystemOptions } from '../fx';
 import {
@@ -78,6 +78,7 @@ import {
   type XrEyeView,
   XrSurface,
 } from '../platform';
+import type { XRReferenceSpace, XRSession, XrNavigator } from '../platform/xr-types';
 import { type PostSettingsPatch, PostStack } from '../post';
 import {
   type Camera,
@@ -742,7 +743,7 @@ export async function createGame<
       return xrSurface;
     },
     async supported() {
-      const sys = globalThis.navigator?.xr;
+      const sys = (globalThis.navigator as XrNavigator | undefined)?.xr;
       if (!sys || !XrSurface.supported()) return false;
       try {
         return await sys.isSessionSupported('immersive-vr');
@@ -753,7 +754,7 @@ export async function createGame<
     enter() {
       if (xrSession) return Promise.resolve();
       if (xrEntering) return xrEntering;
-      const sys = globalThis.navigator?.xr;
+      const sys = (globalThis.navigator as XrNavigator | undefined)?.xr;
       if (!sys || !XrSurface.supported()) {
         return Promise.reject(new Error('WebXR with the WebGPU binding is not available here'));
       }

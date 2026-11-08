@@ -3,6 +3,7 @@
  * their target-ray poses, trigger and squeeze from the gamepad or the session's events, pinch
  * from the hand's joints with hysteresis, nothing outside a frame, and the router routes them.
  */
+
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   type FakeXr,
@@ -10,6 +11,7 @@ import {
   type FakeXrSession,
   installFakeXr,
 } from '../platform/xr-fake';
+import type { XRFrame, XRReferenceSpace } from '../platform/xr-types';
 import { Camera } from '../render/camera';
 import { createPointerRouter, type PointerHitEvent } from './pointer-router';
 import { planeTester } from './rays';

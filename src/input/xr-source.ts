@@ -1,4 +1,3 @@
-/// <reference path="../platform/xr-types.d.ts" preserve="true" />
 /**
  * XR controllers and hands as pointers (ws/xr; ARCHITECTURE "Input"). `XrPointerSource` is a
  * `PointerSource` the router polls like any other: each `XRInputSource` of the session becomes
@@ -12,6 +11,15 @@
  * Poses are only readable inside an `XRFrame`, so the source takes a getter for the frame that is
  * running (`() => xrHost.frame`); polled outside one it reports no pointers.
  */
+import type {
+  XRFrame,
+  XRInputSource,
+  XRInputSourceEvent,
+  XRInputSourcesChangeEvent,
+  XRPose,
+  XRReferenceSpace,
+  XRSession,
+} from '../platform/xr-types';
 import { createSample, type PointerSample, type PointerSource } from './pointer-sources';
 import type { RayCamera } from './rays';
 

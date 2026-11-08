@@ -1,4 +1,3 @@
-/// <reference path="./xr-types.d.ts" preserve="true" />
 /**
  * The XR surface (ws/xr; ARCHITECTURE "Surface"): a `SceneTarget` per eye per frame. Built on
  * the WebXR/WebGPU binding, it makes one `XRProjectionLayer` for the session (colour in
@@ -26,6 +25,7 @@
  * scene-level culling done through it. The eye cameras cull (`cull` on) like a flat
  * perspective camera does.
  */
+
 import { type Mat4, mat4 } from '../core/math';
 import { Camera } from '../render/camera';
 import { DEPTH_FORMAT } from '../render/material';
@@ -35,6 +35,17 @@ import {
   type SceneTargetAux,
   type SceneTargetViewport,
 } from '../render/scene-target';
+import type {
+  XREye,
+  XRFrame,
+  XRGPUBinding,
+  XRGPUSubImage,
+  XRProjectionLayer,
+  XRReferenceSpace,
+  XRRigidTransform,
+  XRSession,
+  XrGlobals,
+} from './xr-types';
 
 export interface XrSurfaceOptions {
   /** The space poses are expressed in (the game's `local-floor`, `local` or `viewer` space). */
@@ -157,7 +168,7 @@ export class XrSurface {
     readonly device: GPUDevice,
     opts: XrSurfaceOptions,
   ) {
-    const Binding = globalThis.XRGPUBinding;
+    const Binding = (globalThis as XrGlobals).XRGPUBinding;
     if (!Binding) throw new Error('XrSurface: this browser has no WebXR/WebGPU binding');
     this.referenceSpace = opts.referenceSpace;
     this.viaScene = opts.scene === true;
@@ -185,7 +196,7 @@ export class XrSurface {
 
   /** True where `XRGPUBinding` exists (the WebXR/WebGPU binding). */
   static supported(): boolean {
-    return typeof globalThis.XRGPUBinding !== 'undefined';
+    return typeof (globalThis as XrGlobals).XRGPUBinding !== 'undefined';
   }
 
   /**

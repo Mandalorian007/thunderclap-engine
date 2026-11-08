@@ -170,8 +170,13 @@ takes `colorFormat` (pass `renderer.format`, what the post stack writes) and no 
 `eye.target` at `eye.viewport`. `createGame({ xr })` builds one that way on `ctx.xr.enter()` and
 renders every eye with `renderer.render(frame, eye.camera, surface.scene)` then
 `renderer.resolve(surface.scene, eye.target.color.view, eye.viewport)`, and ends the frame with
-`renderer.endFrame({ present: false })`. The ambient WebXR and WebXR/WebGPU-binding declarations are
-`xr-types.d.ts` (`navigator.xr` and `XRGPUBinding` optional, so nothing here assumes they exist);
+`renderer.endFrame({ present: false })`. The WebXR and WebXR/WebGPU-binding types are
+the engine's own, exported from the module `xr-types.ts` and never declared globally (E-039).
+Each is a structural subset of `@types/webxr`'s type of the same name, so a game may install
+`@types/webxr` beside the engine (`skipLibCheck` off) and pass its `XRSession`, `XRFrame` and
+`XRReferenceSpace` to `XrSurface`, `createXrHost`, `XrPointerSource` and `createGame({ xr })`.
+`navigator.xr` and `XRGPUBinding` are read through typed casts of `globalThis` (`XrNavigator`,
+`XrGlobals`) and may be missing, so nothing here assumes they exist;
 `xr-fake.ts` is the in-repo fake (`installFakeXr`) the unit tests drive, not an export.
 
 ## Device mode (interim)

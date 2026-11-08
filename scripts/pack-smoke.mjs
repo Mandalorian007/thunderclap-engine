@@ -18,12 +18,13 @@
 //   5. Runs host-electron's bin (#2) through npm's `.bin` link: `thunderclap-desktop --help`, then
 //      `thunderclap-desktop package --dry-run`, which stages the Vite build with the shell under
 //      the consumer's `thunderclap.desktop` identity (no Electron or electron-builder needed).
+//   6. Typechecks the consumer again with @types/webxr installed beside the engine (skipLibCheck
+//      off, E-039), passing @types/webxr's own `XRSession`, `XRFrame` and `XRReferenceSpace` to
+//      `createXrHost`, `XrSurface`, `XrPointerSource` and `createGame({ xr })`. The engine's XR
+//      types are module exports and a structural subset of @types/webxr's, so nothing clashes.
 //
-// The tooling (typescript, vite, @webgpu/types) is linked in from this repo's node_modules, so
-// the check needs no network.
-//   --webxr           also install @types/webxr (needs the registry or npm's cache) and typecheck
-//                     the consumer with it, skipLibCheck off. Opt-in: the engine's ambient XR
-//                     globals (src/platform/xr-types.d.ts) clash with it today (ws/publish-3)
+// The tooling (typescript, vite) is linked in from this repo's node_modules, and @types/webxr
+// comes from a pinned tarball in scripts/fixtures/ (WEBXR_TARBALL), so the check needs no network.
 //   --keep            leave the temp folder for inspection
 //   --from-npm        skip steps 1-3 and install each package at its package.json version from
 //                     the npm registry instead of from tarballs (publish.yml, after publishing)
@@ -48,7 +49,8 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const argv = process.argv.slice(2);
 const keep = argv.includes('--keep');
 const fromNpm = argv.includes('--from-npm');
-const webxr = argv.includes('--webxr');
+/** @types/webxr, vendored (`npm pack @types/webxr@0.5.24`) so step 6 runs offline. */
+const WEBXR_TARBALL = join(root, 'scripts', 'fixtures', 'types-webxr-0.5.24.tgz');
 const waitAt = argv.indexOf('--wait');
 const waitSeconds = waitAt === -1 ? 0 : Number(argv[waitAt + 1]);
 if (!Number.isFinite(waitSeconds) || waitSeconds < 0) {
@@ -92,6 +94,36 @@ const used: unknown[] = [
 ];
 const device: GPUDevice | null = null;
 console.log(used.length, device);
+`;
+
+// Step 6: @types/webxr's globals beside the engine, and its values into every XR entry point.
+const XR_TS = `import { createGame } from '@thunderclap-engine/engine';
+import { createXrHost, defaultHost } from '@thunderclap-engine/engine/host';
+import { XrPointerSource } from '@thunderclap-engine/engine/input';
+import { XrSurface } from '@thunderclap-engine/engine/platform';
+
+export function enterVr(
+  session: XRSession,
+  frame: XRFrame,
+  space: XRReferenceSpace,
+  device: GPUDevice,
+): unknown[] {
+  const host = createXrHost(session, defaultHost());
+  const surface = new XrSurface(session, device, { referenceSpace: space });
+  const eyes = surface.views(frame);
+  const pointers = new XrPointerSource(session, space, () => frame);
+  const sys: XRSystem | undefined = navigator.xr;
+  const game = createGame({
+    input: { bindings: { select: [{ xr: 'trigger' }] } },
+    xr: {
+      referenceSpace: 'local-floor',
+      onEnter(s: XRSession) {
+        console.log(s.visibilityState);
+      },
+    },
+  });
+  return [host.frame, eyes.length, pointers, sys, game];
+}
 `;
 
 const problems = [];
@@ -179,7 +211,7 @@ try {
       ...(fromNpm ? ['--prefer-online'] : []),
       ...packages.map((p) => p.spec),
       // In the same install: a second `npm install` would prune the tooling links below.
-      ...(webxr ? ['@types/webxr'] : []),
+      WEBXR_TARBALL,
     ],
     app,
   );
@@ -244,11 +276,17 @@ try {
     );
   }
 
-  if (webxr) {
-    // A consumer with @types/webxr and skipLibCheck off (IDEAS, Publishing follow-ups).
-    step('typecheck with @types/webxr (Bundler resolution)');
-    const c = tsconfig('ESNext', 'Bundler');
+  // 6. A consumer with @types/webxr and skipLibCheck off (E-039): the engine declares no WebXR
+  // globals, and @types/webxr's values pass to its XR entry points.
+  writeFileSync(join(app, 'xr.ts'), XR_TS);
+  for (const [module, resolution] of [
+    ['ESNext', 'Bundler'],
+    ['NodeNext', 'NodeNext'],
+  ]) {
+    step(`typecheck with @types/webxr (${resolution} resolution)`);
+    const c = tsconfig(module, resolution);
     c.compilerOptions.types = ['webxr'];
+    c.files = ['main.ts', 'xr.ts'];
     writeFileSync(join(app, 'tsconfig.webxr.json'), JSON.stringify(c));
     run('node', [tsc, '-p', 'tsconfig.webxr.json'], app);
   }

@@ -58,12 +58,13 @@ test('parseArgs: positional dir, valued options, flags, misuse', () => {
 /** The directory a `link:` spec written for a project in `dest` points at. */
 const linkTarget = (spec, dest) => resolve(dest, spec.slice('link:'.length));
 
-test('engineSpec: default links this clone until published, then a caret range', () => {
-  assert.equal(PUBLISHED, false);
-  const d = engineSpec(null, join(tmp, 'game'), '0.2.0-alpha.1');
+test('engineSpec: default is a caret range from npm; unpublished would link this clone', () => {
+  assert.equal(PUBLISHED, true);
+  assert.equal(engineSpec(null, join(tmp, 'game'), '1.2.0'), '^1.2.0');
+  assert.equal(engineSpec(null, tmp, '0.2.0-alpha.1', true), '^0.2.0-alpha.1');
+  const d = engineSpec(null, join(tmp, 'game'), '1.2.0', false);
   assert.match(d, /^link:/);
   assert.equal(linkTarget(d, join(tmp, 'game')), resolve(root));
-  assert.equal(engineSpec(null, tmp, '0.2.0-alpha.1', true), '^0.2.0-alpha.1');
 });
 
 test('engineSpec: specs kept, directories become link:', () => {
@@ -172,11 +173,15 @@ for (const { name: template } of listTemplates()) {
     }
     assert.ok(!Object.values(pkg.scripts).some((c) => /--filter/.test(c)));
 
-    // Every template builds; the default engine spec links this clone (not on npm yet).
+    // Every template builds; the default engine spec is this version's caret range from npm.
     assert.equal(pkg.scripts.build, 'vite build');
     assert.doesNotMatch(pkg.description, /Copy the folder/);
     const d = run(join(tmp, `${template}-default`), '--template', template, '--dry-run');
-    assert.match(d.stdout, new RegExp(`${ENGINE.replace('/', '\\/')} "link:`));
+    const { version } = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+    assert.match(
+      d.stdout,
+      new RegExp(`${ENGINE.replace('/', '\\/')} "\\^${version.replaceAll('.', '\\.')}"`),
+    );
 
     // CLAUDE.md no longer points at this repo's root scripts.
     const claude = readFileSync(join(dir, 'CLAUDE.md'), 'utf8');

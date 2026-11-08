@@ -4,6 +4,7 @@
  * restores dispatch without turning a held button into a new press, and synthetic (replayed)
  * samples pass a mute.
  */
+
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   type FakeXr,
@@ -11,6 +12,7 @@ import {
   type FakeXrSession,
   installFakeXr,
 } from '../platform/xr-fake';
+import type { XRFrame } from '../platform/xr-types';
 import { Camera } from '../render/camera';
 import { Input } from './input';
 import { createPointerRouter, type PointerHitEvent } from './pointer-router';
