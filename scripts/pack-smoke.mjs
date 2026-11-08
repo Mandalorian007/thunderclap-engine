@@ -15,9 +15,15 @@
 //      workspace, then typechecks (Bundler and NodeNext resolution, skipLibCheck off) and
 //      Vite-builds a page that imports the root, /render, /input, /ui, /voxel and each host's
 //      create function. Node also loads `@thunderclap-engine/host-pwa/vite` natively, as a vite.config does.
+//   5. Runs host-electron's bin (#2) through npm's `.bin` link: `thunderclap-desktop --help`, then
+//      `thunderclap-desktop package --dry-run`, which stages the Vite build with the shell under
+//      the consumer's `thunderclap.desktop` identity (no Electron or electron-builder needed).
 //
 // The tooling (typescript, vite, @webgpu/types) is linked in from this repo's node_modules, so
 // the check needs no network.
+//   --webxr           also install @types/webxr (needs the registry or npm's cache) and typecheck
+//                     the consumer with it, skipLibCheck off. Opt-in: the engine's ambient XR
+//                     globals (src/platform/xr-types.d.ts) clash with it today (ws/publish-3)
 //   --keep            leave the temp folder for inspection
 //   --from-npm        skip steps 1-3 and install each package at its package.json version from
 //                     the npm registry instead of from tarballs (publish.yml, after publishing)
@@ -42,6 +48,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const argv = process.argv.slice(2);
 const keep = argv.includes('--keep');
 const fromNpm = argv.includes('--from-npm');
+const webxr = argv.includes('--webxr');
 const waitAt = argv.indexOf('--wait');
 const waitSeconds = waitAt === -1 ? 0 : Number(argv[waitAt + 1]);
 if (!Number.isFinite(waitSeconds) || waitSeconds < 0) {
@@ -150,7 +157,17 @@ try {
   );
   writeFileSync(
     join(app, 'package.json'),
-    `${JSON.stringify({ name: 'pack-smoke', private: true, type: 'module' }, null, 2)}\n`,
+    `${JSON.stringify(
+      {
+        name: 'pack-smoke',
+        version: '0.0.1',
+        private: true,
+        type: 'module',
+        thunderclap: { desktop: { productName: 'Pack Smoke', appId: 'dev.thunderclap.packsmoke' } },
+      },
+      null,
+      2,
+    )}\n`,
   );
   run(
     'npm',
@@ -161,6 +178,8 @@ try {
       '--ignore-scripts',
       ...(fromNpm ? ['--prefer-online'] : []),
       ...packages.map((p) => p.spec),
+      // In the same install: a second `npm install` would prune the tooling links below.
+      ...(webxr ? ['@types/webxr'] : []),
     ],
     app,
   );
@@ -204,6 +223,35 @@ try {
   step('node loads @thunderclap-engine/host-pwa/vite');
   const out = run('node', ['--input-type=module', '-e', NODE_CHECK], app).trim();
   if (out !== 'function') throw new Error(`pwaPlugin is ${out}, not a function`);
+
+  // The desktop entry points (#2), through the bin link npm made, as a game's script runs them.
+  const desktop = join(app, 'node_modules', '.bin', 'thunderclap-desktop');
+  step('thunderclap-desktop --help');
+  const help = run(desktop, ['--help'], app);
+  if (!help.includes('thunderclap-desktop dev') || !help.includes('thunderclap-desktop package')) {
+    throw new Error(`thunderclap-desktop --help printed no usage:\n${help}`);
+  }
+  step('thunderclap-desktop package --dry-run (stages the vite build with the shell)');
+  const staged = run(desktop, ['package', '--dry-run'], app);
+  for (const f of ['out/main.mjs', 'out/preload.cjs', 'out/renderer/index.html', 'package.json']) {
+    if (!staged.split('\n').some((l) => l.trim() === f)) {
+      throw new Error(`thunderclap-desktop package --dry-run did not stage ${f}:\n${staged}`);
+    }
+  }
+  if (!staged.includes('"appId": "dev.thunderclap.packsmoke"')) {
+    throw new Error(
+      `thunderclap-desktop package --dry-run ignored thunderclap.desktop:\n${staged}`,
+    );
+  }
+
+  if (webxr) {
+    // A consumer with @types/webxr and skipLibCheck off (IDEAS, Publishing follow-ups).
+    step('typecheck with @types/webxr (Bundler resolution)');
+    const c = tsconfig('ESNext', 'Bundler');
+    c.compilerOptions.types = ['webxr'];
+    writeFileSync(join(app, 'tsconfig.webxr.json'), JSON.stringify(c));
+    run('node', [tsc, '-p', 'tsconfig.webxr.json'], app);
+  }
 
   step('ok');
 } catch (e) {

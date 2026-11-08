@@ -1,64 +1,18 @@
-// electron-builder config for the ThunderClap shell (D-041, Phase 4). Unsigned: no certificate,
-// key or notarisation credential is used or read (code signing is an open question, README.md).
-// macOS builds are ad-hoc signed ("-"), which needs no certificate and lets Apple silicon run
-// the app after the quarantine prompt.
+// electron-builder config for this repo's `pnpm desktop:build` (scripts/dist.mjs): the harness
+// shell, or another built web app with --renderer. The rules (unsigned, asar, no node_modules,
+// per-OS targets) live in bin/desktop-config.mjs and are the same ones the published
+// `thunderclap-desktop package` uses for a game.
 //
-// The app identity is a noun-free default; a game sets its own through the environment when it
-// packages its renderer (ws/last-rune-desktop): TC_APP_ID, TC_PRODUCT_NAME, TC_APP_VERSION and
-// TC_ICON (an absolute path to a PNG of at least 512x512; electron-builder makes the .icns and
-// .ico from it). Without TC_ICON the build uses Electron's default icon. Artefact file names
-// start with the product name with spaces turned into dashes ("The-Last-Rune-1.0.0-mac-arm64.dmg").
-// Output: dist/desktop/ at the repo root. Run through scripts/dist.mjs.
+// The identity is a noun-free default; set TC_APP_ID, TC_PRODUCT_NAME, TC_APP_VERSION and TC_ICON
+// (an absolute path to a PNG of at least 512x512) to override it here. A game uses the package's
+// bin and its own package.json `thunderclap.desktop` field instead (README.md, Packaging a game).
+// Output: dist/desktop/ at the repo root.
+import { builderConfig } from './bin/desktop-config.mjs';
 
-const productName = process.env.TC_PRODUCT_NAME || 'ThunderClap';
-const version = process.env.TC_APP_VERSION;
-const icon = process.env.TC_ICON || undefined;
-const fileStem = productName.replace(/\s+/g, '-');
-
-/** @type {import('electron-builder').Configuration} */
-export default {
+export default builderConfig({
+  productName: process.env.TC_PRODUCT_NAME || 'ThunderClap',
   appId: process.env.TC_APP_ID || 'dev.thunderclap.shell',
-  productName,
-  // Electron names the app (and its userData folder, where localStorage lives) from this.
-  extraMetadata: { productName, ...(version ? { version } : {}) },
-  ...(icon ? { icon } : {}),
-  copyright: 'MIT License',
-  directories: { output: '../../dist/desktop' },
-  // Everything the app needs is bundled into out/ (main, preload, renderer); no node_modules.
-  files: ['out/**/*', 'package.json'],
-  asar: true,
-  npmRebuild: false,
-  nodeGypRebuild: false,
-  publish: null,
-  // The escaped \${…} are electron-builder's own macros, filled in at packaging time.
-  artifactName: `${fileStem}-\${version}-\${os}-\${arch}.\${ext}`,
-  mac: {
-    target: ['dmg', 'zip'],
-    category: 'public.app-category.games',
-    identity: '-',
-    hardenedRuntime: false,
-    gatekeeperAssess: false,
-  },
-  dmg: { writeUpdateInfo: false },
-  win: {
-    target: [
-      { target: 'nsis', arch: ['x64'] },
-      { target: 'zip', arch: ['x64'] },
-    ],
-    signAndEditExecutable: true,
-  },
-  nsis: {
-    oneClick: false,
-    perMachine: false,
-    allowToChangeInstallationDirectory: true,
-    differentialPackage: false,
-  },
-  linux: {
-    target: [
-      { target: 'AppImage', arch: ['x64'] },
-      { target: 'tar.gz', arch: ['x64'] },
-    ],
-    category: 'Game',
-    executableName: productName.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
-  },
-};
+  version: process.env.TC_APP_VERSION || undefined,
+  icon: process.env.TC_ICON || undefined,
+  output: '../../dist/desktop',
+});

@@ -164,6 +164,7 @@
     "prepublishOnly": "node scripts/refuse-publish.mjs",
     "build": "node scripts/build.mjs",
     "check:pack": "node scripts/pack-smoke.mjs",
+    "check:pack:webxr": "node scripts/pack-smoke.mjs --webxr",
     "bench": "node scripts/bench.mjs",
     "test:e2e": "playwright test",
     "snap": "node scripts/snap.mjs --update",
