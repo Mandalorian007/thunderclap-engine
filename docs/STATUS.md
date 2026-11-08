@@ -196,7 +196,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 5 | Publish 2: refuse plain `npm publish`, install-from-npm check after publish, GitHub Release per tag; its 1.1.1 is the first trusted CI publish | ws/publish-2 | brief `docs/briefs/publish-2.md` | publish | ✅ merged at `fed93c2` (check 2456 unit tests; snap 0 px; `check:pack` ok; e2e 2817/209/0; the install-from-npm step first runs on the 1.1.1 tag) |
 | 6 | Fill/cover surface mode for phones (#1); `data-form-factor` documented; zoomed-select CSS at lower specificity (#3) | ws/surface-fill | brief `docs/briefs/surface-fill.md` | E-038 | ✅ merged at 127564f (e2e 2837 passed / 0 failed, snap 0 px) |
 | 6 | host-electron `dev`/`package` entry points (#2); `@types/webxr` consumer check; README/ARCHITECTURE version text | ws/publish-3 | brief `docs/briefs/publish-3.md` | E-038 | 🔄 dispatched |
-| 6 | VR correctness: loop survives a throwing frame, no XR frame cap, exposure once per frame, union head frustum, XR culls, no viewless page render, head-locked panels follow the head | ws/xr-fixes | brief `docs/briefs/xr-fixes.md` | E-038 | 🔀 done at abe827b; integrating |
+| 6 | VR correctness: loop survives a throwing frame, no XR frame cap, exposure once per frame, union head frustum, XR culls, no viewless page render, head-locked panels follow the head | ws/xr-fixes | brief `docs/briefs/xr-fixes.md` | E-038 | ✅ merged at 57b6cbd (e2e 2837 passed / 0 failed, snap 0 px) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 
 ## Gates
