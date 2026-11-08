@@ -63,3 +63,11 @@ The action map design is sound: named actions in a typed union, one bindings map
 - **Input recipes guide.** `docs/guide/input-recipes.md`: per-genre examples (platformer, tactics, first-person, VR grab and world menu, pause menu with prompts and rebinding, bug-report replay), all under `check:snippets`. Draft examples from the 2026-11-07 PM session need fixes: the world panel `poll` call, and `confirm`/`back` declared in the action union.
 - **Verify gaps.** Local multiplayer (several pads, each mapped to its own player) was not seen in the docs; replays do not capture XR controllers or pointer-lock raw motion. Confirm and decide.
 - **A "start here" cut of `src/input/README.md`** (510 lines): what a newcomer can ignore.
+
+## Wave 6 leftovers (E-038, 2026-11-07)
+
+- **Surface:** `createGame({ overlay: false })` (`DetachedSurface`) ignores `fit` and has no `visibleRect` / `setFit` (ws/surface-fill).
+- **XR:** a frame that throws mid-session leaves the XR layer stale; clearing it needs a try/catch in `core/game.ts` or new API (ws/xr-fixes).
+- **XR:** DOM anchors and HUD floats still project through the page camera in VR; they are wired in `core/game.ts` / `ui` (ws/xr-fixes).
+- **XR:** `PostStack` advances `grainSeed` once per eye. Cosmetic, the same double count as the exposure bug.
+- **Render:** `GpuTimer` has no reset hook, so a timing sample started in a dropped frame stays busy.
