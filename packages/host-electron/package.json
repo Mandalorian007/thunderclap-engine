@@ -24,11 +24,15 @@
   ],
   "sideEffects": false,
   "main": "out/main.mjs",
+  "bin": {
+    "thunderclap-desktop": "bin/thunderclap-desktop.mjs"
+  },
   "exports": {
     ".": "./src/index.ts",
     "./package.json": "./package.json"
   },
   "files": [
+    "bin",
     "dist",
     "out/main.mjs",
     "out/preload.cjs",
@@ -49,10 +53,18 @@
   },
   "peerDependencies": {
     "@thunderclap-engine/engine": "^1.0.0",
-    "electron": ">=45.0.0"
+    "electron": ">=45.0.0",
+    "electron-builder": ">=26.0.0",
+    "vite": ">=7.0.0"
   },
   "peerDependenciesMeta": {
     "electron": {
+      "optional": true
+    },
+    "electron-builder": {
+      "optional": true
+    },
+    "vite": {
       "optional": true
     }
   },

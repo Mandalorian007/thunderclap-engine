@@ -1,12 +1,16 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "types": ["@webgpu/types", "node"]
+    "types": ["@webgpu/types", "node"],
+    "allowJs": true,
+    "checkJs": true
   },
   "include": [
     "src/bridge.ts",
     "src/main",
     "src/preload",
+    "src/desktop-config.test.ts",
+    "bin",
     "e2e",
     "harness/state.ts",
     "playwright.config.ts",

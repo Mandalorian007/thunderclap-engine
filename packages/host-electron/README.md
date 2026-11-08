@@ -17,8 +17,10 @@ engine's exports map (`pnpm check:boundaries` enforces both).
 | `src/main/policy.ts`, `switches.ts` | The main process's rules as pure, unit-tested functions |
 | `harness/` | A noun-free page: boots WebGPU, clears each frame, publishes `window.__desktop`. It is the default renderer |
 | `e2e/shell.spec.ts` | The Playwright Electron-driver smoke on the built shell |
-| `scripts/build.mjs`, `dev.mjs`, `dist.mjs` | Build `out/`, the dev loop, and packaging |
-| `electron-builder.config.mjs` | Unsigned Windows, macOS and Linux packaging into `dist/desktop/` at the repo root (gitignored) |
+| `bin/thunderclap-desktop.mjs` | The published `thunderclap-desktop` command: a game's `dev` loop and `package` step (see *Desktop dev and packaging for a game*) |
+| `bin/desktop-config.mjs` | The packaging rules (`builderConfig`) and the game's `thunderclap.desktop` field (`readDesktopConfig`), shared by the bin and this repo's build |
+| `scripts/build.mjs`, `dev.mjs`, `dist.mjs` | This repo's build of `out/`, dev loop on the harness, and packaging |
+| `electron-builder.config.mjs` | This repo's packaging config (from `builderConfig`): unsigned Windows, macOS and Linux into `dist/desktop/` at the repo root (gitignored) |
 
 ## Using it from a game
 
@@ -32,6 +34,56 @@ host.window?.close(); // a desktop-only Quit entry
 ```
 
 A game does this in one boot file with a dynamic import, so its web build never loads this package, and shows Quit only when `host.window` exists. The Last Rune does exactly this.
+
+## Desktop dev and packaging for a game
+
+The package ships a `thunderclap-desktop` command (#2), so a game needs no launcher or packaging script of its own. It is a bin rather than an exported electron-builder config plus a staging helper because the game then writes no code at all: one `package.json` field and two scripts. Install the tools it drives as the game's dev dependencies; this package keeps no runtime dependencies and lists them only as optional peers:
+
+```sh
+npm i -D @thunderclap-engine/host-electron electron electron-builder
+```
+
+(`vite` too, which a ThunderClap game already has.) Then name the app in the game's `package.json`:
+
+```json
+{
+  "scripts": {
+    "desktop:dev": "thunderclap-desktop dev",
+    "desktop:build": "vite build && thunderclap-desktop package"
+  },
+  "thunderclap": {
+    "desktop": {
+      "productName": "My Game",
+      "appId": "com.example.mygame",
+      "icon": "build/icon.png"
+    }
+  }
+}
+```
+
+| Key | Meaning |
+|---|---|
+| `productName` | Required to package. Names the app and its `userData` folder, where saves live: never change it after a release |
+| `appId` | Required to package. The reverse-DNS bundle id |
+| `icon` | A PNG of at least 512x512, relative to the game's folder; electron-builder makes the `.icns` and `.ico`. Default: Electron's icon |
+| `version` | Default: the game's `package.json` `version` |
+| `executableName` | The Linux executable. Default: the product name in kebab case |
+| `renderer` | The built web app. Default: `dist` |
+| `output` | Where artefacts go. Default: `dist/desktop` |
+
+Unknown keys are an error, so a typo does not silently ship the default identity.
+
+Run it in the game's folder:
+
+| Command | What it does |
+|---|---|
+| `thunderclap-desktop dev` | Starts the game's Vite dev server (its own `vite.config`) on 127.0.0.1:5198 and opens it in the shell, with hot reload in the window. `--port <n>` picks the port; `--url <url>` uses a dev server you already run on this machine; `--dist [dir]` opens a built web app instead (default: `renderer`) |
+| `thunderclap-desktop package` | Stages an app folder in the OS temp folder (this package's `out/main.mjs` and `out/preload.cjs`, the built game as `out/renderer/`, and a dependency-free `package.json`) and runs electron-builder on it with the shipped config (see *Packaging*). Flags: `--mac`, `--win`, `--linux` (default: this OS); `--dir` (unpacked only); `--renderer <dir>`, `--out <dir>`; `--dry-run` (stage, print the file list and config, and stop; needs no Electron or electron-builder) |
+| `thunderclap-desktop --help` | Usage |
+
+`package` never packages an earlier `dist/desktop/` that sits inside the renderer folder. Run the game's build first: `vite build` empties `dist/`, desktop builds included. In `dev`, the shell runs unpackaged from this package's folder, so its `userData` is this package's (`ThunderClap`), shared by every game you run this way; packaged apps use their own `productName`.
+
+**If you write your own electron-builder config** instead: electron-builder collects `node_modules` from the project and the folders above it, so when the game is a workspace root, `files` needs `!**/node_modules/**` (the shipped config has it, and also stages outside the game's folder).
 
 ## The bridge: `window.thunderclap`
 
@@ -97,7 +149,7 @@ The versioning stays `engine/save`'s, unchanged. Moving existing saves would be 
 
 ## Scripts
 
-From the repo root:
+From this repo's root (a game uses `thunderclap-desktop`, above):
 
 | Command | What it does |
 |---|---|
@@ -118,15 +170,15 @@ The build is unsigned: no certificate, key or notarisation credential is used or
 | Windows | NSIS installer (`.exe`) and `.zip` (x64). Unsigned, so SmartScreen warns |
 | Linux | `.AppImage` and `.tar.gz` (x64) |
 
-The identity defaults to `ThunderClap` / `dev.thunderclap.shell`, with Electron's default icon. A game sets its own identity with these variables:
+The config comes from `builderConfig` in `bin/desktop-config.mjs`, for a game's `thunderclap-desktop package` and this repo's `pnpm desktop:build` alike. Its `files` are `out/**/*`, `package.json` and `!**/node_modules/**`, with asar on and no native rebuild.
+
+A game names its identity in `thunderclap.desktop` (above). This repo's `pnpm desktop:build` defaults to `ThunderClap` / `dev.thunderclap.shell` with Electron's default icon, and takes these variables instead:
 
 - `TC_PRODUCT_NAME` and `TC_APP_ID`;
 - `TC_APP_VERSION`;
-- `TC_ICON`: an absolute path to a PNG of at least 512x512. electron-builder makes the `.icns` and `.ico` from it.
+- `TC_ICON`: an absolute path to a PNG of at least 512x512.
 
 Artefacts are named `<product name, spaces as dashes>-<version>-<os>-<arch>.<ext>`.
-
-A game's own repo sets these when it calls `dist` with `--renderer`; this repo only builds the harness shell.
 
 The CI job `desktop` in `.github/workflows/ci.yml` builds the harness shell for all three OSes and uploads the artefacts. It is non-blocking.
 
