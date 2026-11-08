@@ -6,6 +6,16 @@ install prompt, the update prompt and the offline state through `host.pwa`. No d
 workbox: the worker is written here. The engine itself stays network-free; the worker and the
 manifest are this package's and the game's.
 
+## Install
+
+```sh
+pnpm add @thunderclap-engine/host-pwa @thunderclap-engine/engine
+pnpm add -D vite
+```
+
+`vite` (`>=7`) is an optional peer: only `pwaPlugin` (`@thunderclap-engine/host-pwa/vite`) needs it,
+at build time. `createPwaHost` runs without it.
+
 ## Layout
 
 | Path | What it is |
@@ -43,7 +53,7 @@ import { createPwaHost } from '@thunderclap-engine/host-pwa';
 const host = createPwaHost(); // a web Host (kind 'web') with host.pwa
 const ctx = await createGame({ host, ... });
 
-host.pwa.onInstallable(() => showInstallButton(() => host.pwa.install())); // 'accepted' | 'dismissed' | 'unavailable'
+host.pwa.onInstallable((can) => showInstallButton(can, () => host.pwa.install())); // 'accepted' | 'dismissed' | 'unavailable'
 host.pwa.onUpdateReady(() => toast('Update ready', () => host.pwa.applyUpdate())); // skip-waiting, then reload
 host.pwa.onOffline((off) => hint(off ? 'Offline: playing from the cache' : ''));
 host.pwa.standalone; // launched from the home screen or the dock
@@ -59,11 +69,49 @@ tests and harness take the SVG-only path; a game can list ready-made PNGs in `ma
 instead). Its post `transformIndexHtml` hook then injects `<link rel="manifest">`,
 `<meta name="theme-color">` and a registration snippet that also sets `window.__tcPwa = { sw, version }`,
 which is how `createPwaHost()` finds the worker (`opts.swUrl` overrides it; `register: false` leaves
-registration to the page). `inStandalone()` reads the `display-mode` media query.
+registration to the page). `inStandalone()` is true for the `standalone` or `fullscreen`
+`display-mode` media query, or iOS's `navigator.standalone`.
 
 `createPwaHost` is guarded: in a browser without `serviceWorker`, `caches` or
 `beforeinstallprompt`, `install()` resolves `'unavailable'`, `applyUpdate()` and `clearCache()` do
 nothing, `cacheStatus()` reports zeros, and the host is otherwise the plain web host.
+
+### `pwaPlugin(opts)`
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `manifest` | (required) | The web manifest, below |
+| `runtimeCache` | `[]` | Scope-relative path prefixes (`levels/`, `audio/`) served stale-while-revalidate from `tc-pwa-runtime` |
+| `maxRuntimeEntries` | `60` | Most entries the runtime cache keeps; the oldest go first |
+| `version` | fnv1a of the precache list | The version stamp; a new one is an update |
+| `swFile` | `'sw.js'` | The worker's file name in the build |
+| `manifestFile` | `'manifest.webmanifest'` | The manifest's file name in the build |
+
+`manifest` (`ManifestOptions`) takes `name` (required), `short_name` (default `name`),
+`description`, `theme_color` and `background_color` (default `#000000`), `display` (default
+`'standalone'`), `orientation` (default `'landscape'`), `start_url` and `scope` (default `'.'`),
+`categories` (default `['games']`), `svg` (one SVG document, emitted as `icon.svg` and rasterised
+where it can be) and `icons` (`ManifestIcon[]`, the game's own icons, listed after the SVG ones).
+
+### `createPwaHost(opts?)`
+
+Returns `Host & { pwa: PwaHost }`. `opts` (`PwaHostOptions`) is `createWebHost`'s options (`win`)
+plus `swUrl` (default `window.__tcPwa.sw`; with neither, nothing is registered) and `register`
+(default `true`; `false` only looks up the registration the plugin's snippet made).
+
+| `host.pwa` member | What it is |
+| --- | --- |
+| `installable` | True while the browser's install prompt (`beforeinstallprompt`) is held and unused |
+| `install()` | Shows that prompt: `'accepted'`, `'dismissed'`, or `'unavailable'` when there is none |
+| `onInstallable(fn)` | `fn(installable)` on every change, including `false` after an install; returns unsubscribe |
+| `updateReady` | True when a new worker is installed and waiting behind the one controlling the page |
+| `applyUpdate()` | Tells the waiting worker to take over, then reloads once it controls the page; resolves at once with no update waiting |
+| `onUpdateReady(fn)` | `fn()` when an update becomes ready; returns unsubscribe |
+| `offline` | `!navigator.onLine`, kept current from the `online` and `offline` events |
+| `onOffline(fn)` | `fn(offline)` on every change; returns unsubscribe |
+| `standalone` | `inStandalone()`: launched as an installed app |
+| `cacheStatus()` | `{ precached, runtime, bytes }` over the `tc-pwa-*` caches; zeros without `caches` |
+| `clearCache()` | Deletes the `tc-pwa-*` caches; saves are untouched |
 
 ## Routing
 
@@ -88,7 +136,9 @@ waiting worker take over; `applyUpdate()` does that and reloads on `controllerch
   minus `.map` files), `index.html`, and the `runtimeCache` prefixes a game opts into.
 - **Never cached**: the game's saves (they live in the host's `storage`, `localStorage` on the web;
   `clearCache()` does not touch them), anything the game fetches outside the prefixes, other
-  origins, `POST`s, the worker and manifest themselves.
+  origins, `POST`s, the worker, the manifest and the icons the plugin emits. Files in vite's
+  `public/` are copied, not bundled, so they are not precached either: put them under a
+  `runtimeCache` prefix (the harness serves `public/data/` as `data/`) to have them offline.
 
 An update is a new version stamp: the new worker installs its own precache beside the old one,
 reaches `installed`, and `host.pwa.updateReady` flips (`onUpdateReady` fires); nothing changes

@@ -8,8 +8,20 @@ engine's exports map (`pnpm check:boundaries`).
 
 It also never imports a `@capacitor/*` package. The plugins are the app's own: it installs the
 ones it wants and hands them in through `plugins`. `src/plugins.ts` types the slices this host
-calls by hand, so the package typechecks and tests here without Capacitor in the store (the repo
-installs offline), and the real plugin objects satisfy those types structurally.
+calls by hand, so the package typechecks and tests without any plugin installed, and the real
+plugin objects satisfy those types structurally.
+
+## Install
+
+```sh
+pnpm add @thunderclap-engine/host-capacitor @thunderclap-engine/engine @capacitor/core
+```
+
+`@capacitor/core` is an *optional* peer at `^8.0.0`: it records the Capacitor major this host runs
+inside, and a package manager flags an app on another major, but nothing is installed for
+you and the host imports no `@capacitor/*` module, at runtime or in its types. The app owns
+`@capacitor/core`, `@capacitor/cli` and each plugin it hands to `createCapacitorHost` (see
+[Wrapping a game](#wrapping-a-game-ten-lines-of-config) for the full list).
 
 ## Layout
 

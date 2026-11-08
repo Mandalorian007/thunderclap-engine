@@ -1,6 +1,6 @@
 {
   "name": "@thunderclap-engine/host-pwa",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "ThunderClap's installable web shell: a Vite plugin that emits a game's web manifest and service worker at build time, and createPwaHost(), the web Host plus install, update, offline and cache state. It knows nothing about any game and has no runtime dependencies.",
   "license": "MIT",
