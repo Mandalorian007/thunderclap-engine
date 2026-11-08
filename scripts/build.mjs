@@ -11,18 +11,10 @@
 //   - relative specifiers get their file extension (`./a` -> `./a.js`, `./dir` -> `./dir/index.js`,
 //     `./a.ts` -> `./a.js`), in .js and .d.ts alike, so Node, browsers and NodeNext resolution load it;
 //   - JSON imports get `with { type: 'json' }`, which native ESM requires.
-// Every relative specifier must resolve to an emitted file, or the build fails.
+// Every relative specifier must resolve to an emitted file, and no .d.ts may carry a
+// `/// <reference path>` (the packages declare no globals, E-039), or the build fails.
 import { execFileSync } from 'node:child_process';
-import {
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -38,13 +30,6 @@ for (const dir of builds) {
   rmSync(join(abs, 'dist'), { recursive: true, force: true });
   // The engine goes first: the hosts compile against its dist/*.d.ts (their tsconfig `paths`).
   run(tsc, ['-p', join(abs, 'tsconfig.build.json')]);
-  // tsc never copies hand-written .d.ts files (src/platform/xr-types.d.ts, the WebXR ambient
-  // types), which emitted declarations reference with `/// <reference path preserve="true">`.
-  for (const f of walk(join(abs, 'src')).filter((p) => p.endsWith('.d.ts'))) {
-    const to = join(abs, 'dist', relative(join(abs, 'src'), f));
-    mkdirSync(dirname(to), { recursive: true });
-    copyFileSync(f, to);
-  }
   const n = fixSpecifiers(abs);
   console.log(`build: ${dir === '.' ? '@thunderclap-engine/engine' : dir} -> dist/ (${n} files)`);
 }
@@ -57,35 +42,29 @@ function fixSpecifiers(pkg) {
   const bad = [];
   // `from '…'`, `import '…'`, `import('…')`, `export … from '…'`
   const re = /(\bfrom\s*|\bimport\s*\(?\s*)(['"])(\.{1,2}(?:\/[^'"]*)?)\2(\s*\))?/g;
-  const refRe = /^\/\/\/ <reference path=(['"])([^'"]+)\1/gm;
   for (const file of files) {
     const dts = file.endsWith('.d.ts');
     const src = readFileSync(file, 'utf8');
-    const out = src
-      .replace(refRe, (whole, q, ref) => {
-        // tsc writes a preserved reference to a hand-written .d.ts as a path back into src/.
-        const target = join(dirname(file), ref);
-        const inSrc = relative(join(pkg, 'src'), target);
-        if (inSrc.startsWith('..')) return whole;
-        const mapped = relative(dirname(file), join(dist, inSrc));
-        if (!existsSync(join(dist, inSrc))) bad.push(`${relative(root, file)}: reference '${ref}'`);
-        return `/// <reference path=${q}${mapped.startsWith('.') ? mapped : `./${mapped}`}${q}`;
-      })
-      .replace(re, (whole, lead, q, spec, close, at, str) => {
-        // Examples in doc comments (`import('./ru.json')`) are prose, not imports.
-        const line = str.slice(str.lastIndexOf('\n', at) + 1, at).trimStart();
-        if (/^(?:\*|\/\*|\/\/)/.test(line)) return whole;
-        close ??= '';
-        const resolved = resolveSpec(dirname(file), spec, dts);
-        if (resolved === null) {
-          bad.push(`${relative(root, file)}: '${spec}'`);
-          return whole;
-        }
-        const json = resolved.endsWith('.json') && !dts;
-        const attr = json && !lead.includes('(') ? ` with { type: 'json' }` : '';
-        const dynAttr = json && lead.includes('(') ? `, { with: { type: 'json' } }` : '';
-        return `${lead}${q}${resolved}${q}${dynAttr}${close}${attr}`;
-      });
+    // The packages ship no ambient declarations (E-039), so a game can install @types/webxr or
+    // any other global typings beside them; a triple-slash path reference would pull globals in.
+    if (dts && /^\/\/\/ <reference path=/m.test(src)) {
+      bad.push(`${relative(root, file)}: /// <reference path> (types must be module exports)`);
+    }
+    const out = src.replace(re, (whole, lead, q, spec, close, at, str) => {
+      // Examples in doc comments (`import('./ru.json')`) are prose, not imports.
+      const line = str.slice(str.lastIndexOf('\n', at) + 1, at).trimStart();
+      if (/^(?:\*|\/\*|\/\/)/.test(line)) return whole;
+      close ??= '';
+      const resolved = resolveSpec(dirname(file), spec, dts);
+      if (resolved === null) {
+        bad.push(`${relative(root, file)}: '${spec}'`);
+        return whole;
+      }
+      const json = resolved.endsWith('.json') && !dts;
+      const attr = json && !lead.includes('(') ? ` with { type: 'json' }` : '';
+      const dynAttr = json && lead.includes('(') ? `, { with: { type: 'json' } }` : '';
+      return `${lead}${q}${resolved}${q}${dynAttr}${close}${attr}`;
+    });
     if (out !== src) writeFileSync(file, out);
   }
   if (bad.length) {

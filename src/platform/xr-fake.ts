@@ -1,4 +1,3 @@
-/// <reference path="./xr-types.d.ts" preserve="true" />
 /**
  * A fake WebXR stack for unit tests (ws/xr): `XRSystem`, `XRSession`, `XRFrame`, input sources
  * and the WebXR/WebGPU binding, stepped by hand. `installFakeXr(device)` puts a `navigator.xr`
@@ -10,6 +9,39 @@
  * one `textureType: 'texture'` layer texture (`2 * eyeWidth × eyeHeight`); a `texture-array`
  * layer gives each eye its own array layer. Input sources carry a position and point down -z.
  */
+
+import type {
+  XREye,
+  XRFrame,
+  XRFrameRequestCallback,
+  XRGPUBinding,
+  XRGPUBindingConstructor,
+  XRGPUProjectionLayerInit,
+  XRGPUSubImage,
+  XRHand,
+  XRHandedness,
+  XRHandJoint,
+  XRInputSource,
+  XRInputSourceEvent,
+  XRInputSourcesChangeEvent,
+  XRJointPose,
+  XRJointSpace,
+  XRPose,
+  XRProjectionLayer,
+  XRReferenceSpace,
+  XRReferenceSpaceType,
+  XRRenderState,
+  XRRenderStateInit,
+  XRRigidTransform,
+  XRSession,
+  XRSessionInit,
+  XRSessionMode,
+  XRSpace,
+  XRSystem,
+  XRTargetRayMode,
+  XRView,
+  XRViewerPose,
+} from './xr-types';
 
 export interface FakeXrOptions {
   /** Per-eye texture size. Default 64 × 32. */

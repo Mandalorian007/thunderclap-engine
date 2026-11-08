@@ -2,8 +2,10 @@
  * `createXrHost`: frames come from the session and the `XRFrame` is readable for the length of
  * the callback; everything else is the wrapped host's.
  */
+
 import { afterEach, describe, expect, it } from 'vitest';
 import { type FakeXr, type FakeXrSession, installFakeXr } from '../platform/xr-fake';
+import type { XRFrame } from '../platform/xr-types';
 import type { Host } from './types';
 import { createXrHost } from './xr';
 

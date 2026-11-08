@@ -1,4 +1,3 @@
-/// <reference path="../platform/xr-types.d.ts" preserve="true" />
 /**
  * The XR host (ws/xr): a `Host` whose frames come from `XRSession.requestAnimationFrame`, so
  * `GameLoop.setFrames(createXrHost(session, host))` moves a running game into the headset and
@@ -7,6 +6,7 @@
  * for the length of that tick (poses, input sources and the layer's textures are only valid
  * then), so `XrSurface.views(host.frame)` and `XrPointerSource` read it from here.
  */
+import type { XRFrame, XRFrameRequestCallback, XRSession } from '../platform/xr-types';
 import type { Host } from './types';
 
 export interface XrHost extends Host {
