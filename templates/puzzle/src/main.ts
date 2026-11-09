@@ -34,6 +34,10 @@ const engine = await createGame<Action, ProgressStore, GameCtx>({
   save: (host) => createProgressStore({ host }),
   input: { bindings, buttonKeys: ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'] },
   layout: layoutSpec,
+  // The engine's crash card: a throw while booting, or an uncaught error later, shows
+  // "Something went wrong" with Reload (and Keep playing) instead of a blank or frozen page.
+  // The save is flushed first; its flush says whether the progress is safe.
+  crash: true,
 });
 
 if (engine) {

@@ -58,7 +58,9 @@ const p = surface.clientToLogical(e.offsetX, e.offsetY); // design px
   onDeviceLost(fn) }` or `{ ok: false, reason }`; on failure the canvas is removed and the
   unsupported screen shown.
 - `initGpu(canvas, opts?: GpuInitOptions): Promise<GpuInitResult>`: requests adapter and device
-  and configures the canvas; never throws. `GpuInitOptions` is `{ powerPreference?, onLost?,
+  and configures the canvas; never throws. A `getContext('webgpu')` that throws (a blocked or
+  broken GPU process) is `no-context` like one that returns null, with the thrown message as
+  `detail`, so `boot` shows the unsupported screen (#5). `GpuInitOptions` is `{ powerPreference?, onLost?,
   timestamps?, compression? }` (timestamps default true; `compression?: boolean`, default true,
   asks for the adapter's texture-compression features so `renderer.caps.compressed` reports
   them). `GpuContext` is `{ adapter, device, context, format,

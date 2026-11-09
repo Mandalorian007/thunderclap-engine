@@ -398,3 +398,74 @@ describe('GameLoop: a frame that throws (ws/xr-fixes)', () => {
     expect(log).toEqual(['cancel 3']);
   });
 });
+
+describe('GameLoop: a clock that throws (#7)', () => {
+  /** A loop on a hand-fired frame source; `fire()` runs the pending frame. */
+  function rig(now: () => number) {
+    let pending: ((t: number) => void) | null = null;
+    let requests = 0;
+    let renders = 0;
+    const loop = new GameLoop(
+      {
+        update: () => {},
+        render: () => {
+          renders++;
+        },
+      },
+      {
+        now,
+        frames: {
+          requestFrame: (cb) => {
+            requests++;
+            pending = cb;
+            return requests;
+          },
+          cancelFrame: () => {},
+        },
+      },
+    );
+    const fire = () => {
+      const cb = pending;
+      pending = null;
+      cb?.(0);
+    };
+    return {
+      loop,
+      fire,
+      requests: () => requests,
+      renders: () => renders,
+      pending: () => pending,
+    };
+  }
+
+  it('still schedules the next frame and rethrows to the frame source', () => {
+    let fail = false;
+    let calls = 0;
+    const r = rig(() => {
+      calls++;
+      if (fail) throw new Error('clock');
+      return calls * 16;
+    });
+    r.loop.start();
+    fail = true;
+    expect(r.fire).toThrow('clock');
+    expect(r.requests()).toBe(2);
+    expect(r.pending()).not.toBeNull();
+    expect(r.renders()).toBe(0);
+    fail = false;
+    r.fire();
+    expect(r.renders()).toBe(1);
+    expect(r.requests()).toBe(3);
+  });
+
+  it('a frame skipped by maxFps is requested once, not twice', () => {
+    let t = 0;
+    const r = rig(() => t);
+    r.loop.maxFps = 30;
+    r.loop.start();
+    t = 10;
+    r.fire();
+    expect(r.requests()).toBe(2);
+    expect(r.renders()).toBe(0);
+  });
+});

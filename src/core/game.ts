@@ -97,6 +97,7 @@ import {
   type PanelStack,
   type ThemeOverrides,
 } from '../ui';
+import { type CrashScreen, type CrashScreenOptions, installCrashScreen } from './crash';
 import { DetachedSurface, NO_DOM } from './detached-surface';
 import type { Time } from './loop';
 import { GameLoop } from './loop';
@@ -299,6 +300,17 @@ export interface CreateGameOptions<
   blockBrowserZoom?: boolean;
   /** Dev aid: show the unsupported screen as if WebGPU were missing. */
   forceUnsupported?: boolean;
+  /**
+   * The crash screen (#6, `installCrashScreen`): `true` or options turn it on. Default off. It is
+   * installed into `root` before boot, so a throw while `createGame` builds shows the card (Reload
+   * only) instead of a blank page; `createGame` still rejects with the error. After boot an
+   * uncaught error or unhandled rejection from the game's code shows it with Reload and Keep
+   * playing. The save is flushed first: `crash.flush` when given, else the game's `save`, whose
+   * flush must return true (the engine's `SaveStore` does when the write reached storage) for the
+   * card to say the progress is saved. Not installed without a DOM (`overlay: false`) or a
+   * `root`.
+   */
+  crash?: boolean | CrashOptions;
   /** VR (ws/xr): the reference space and session callbacks `ctx.xr.enter()` uses. */
   xr?: XrOptions;
   /**
@@ -308,6 +320,9 @@ export interface CreateGameOptions<
    */
   pointers?: { testers?: readonly HitTester<P>[] };
 }
+
+/** `CreateGameOptions.crash` as options: the crash screen's save flush and reload. */
+export type CrashOptions = Pick<CrashScreenOptions, 'flush' | 'reload'>;
 
 /** `CreateGameOptions.xr`: how `ctx.xr.enter()` sets the session up. */
 export interface XrOptions {
@@ -482,6 +497,48 @@ export async function createGame<
   C = unknown,
   P = unknown,
 >(opts: CreateGameOptions<A, S, P>): Promise<EngineCtx<A, NoInfer<S>, C, P> | null> {
+  const crash = gameCrash(opts);
+  if (!crash) return buildGame<A, S, C, P>(opts, null);
+  try {
+    return await buildGame<A, S, C, P>(opts, crash);
+  } catch (err) {
+    // A boot throw: the card instead of a blank page, and the caller still sees the error.
+    crash.screen.report(err, { fatal: true });
+    throw err;
+  }
+}
+
+/** The crash screen `createGame` installed, and where it learns the save once one is built. */
+interface GameCrash {
+  readonly screen: CrashScreen;
+  setSave(save: FlushableSave | null): void;
+}
+
+function gameCrash<A extends string, S extends FlushableSave | null, P>(
+  opts: CreateGameOptions<A, S, P>,
+): GameCrash | null {
+  if (!opts.crash || opts.overlay === false || !opts.root) return null;
+  const custom = opts.crash === true ? {} : opts.crash;
+  let save: FlushableSave | null = null;
+  const screen = installCrashScreen({
+    root: opts.root,
+    title: opts.title,
+    reload: custom.reload,
+    // `FlushableSave.flush` is typed void; a save that says where the write went returns a boolean.
+    flush: custom.flush ?? (() => save !== null && (save.flush as () => unknown)() === true),
+  });
+  return {
+    screen,
+    setSave(s) {
+      save = s;
+    },
+  };
+}
+
+async function buildGame<A extends string, S extends FlushableSave | null, C, P>(
+  opts: CreateGameOptions<A, S, P>,
+  crash: GameCrash | null,
+): Promise<EngineCtx<A, S, C, P> | null> {
   const design = { width: opts.design?.width ?? 1920, height: opts.design?.height ?? 1080 };
   const surfaceOpts = {
     ...opts.surface,
@@ -533,6 +590,7 @@ export async function createGame<
   const host = opts.host ?? createWebHost();
   // No save, no storage access: a pure client keeps nothing on the device.
   const save = (opts.save ? opts.save(host) : null) as S;
+  crash?.setSave(save);
   let ui: Overlay | null = null;
   if (dom) {
     opts.styles?.(surface.root.ownerDocument);

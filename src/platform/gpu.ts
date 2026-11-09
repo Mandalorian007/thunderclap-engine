@@ -82,7 +82,15 @@ export async function initGpu(
     opts.onLost?.(info);
   });
 
-  const context = canvas.getContext('webgpu');
+  // A blocked or broken GPU process can make getContext throw rather than return null (#5).
+  // Both mean the same to the player, so a throw is the unsupported result too, with its
+  // message kept for diagnostics.
+  let context: GPUCanvasContext | null;
+  try {
+    context = canvas.getContext('webgpu');
+  } catch (e) {
+    return { ok: false, reason: 'no-context', detail: String(e) };
+  }
   if (!context) return { ok: false, reason: 'no-context' };
   const format = gpu.getPreferredCanvasFormat();
   context.configure({ device, format, alphaMode: 'opaque' });
