@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { builderConfig, kebab, readDesktopConfig } from './desktop-config.mjs';
+import { runPrePackage } from './pre-package.mjs';
 
 const HELP = `thunderclap-desktop: run and package a game in the ThunderClap desktop shell
 
@@ -32,17 +33,20 @@ Usage (in the game's folder):
 
   thunderclap-desktop package [--mac] [--win] [--linux] [--dir] [--renderer <dir>]
                               [--out <dir>] [--dry-run]
-      Stages the built web app (run the game's build first) with the shell and runs
+      Runs thunderclap.desktop.prePackage (if set) in the game's folder, then stages
+      the built web app (run the game's build first) with the shell and runs
       electron-builder. Unsigned. Default target: this OS.
         --dir             unpacked app only, no installers
         --renderer <dir>  the built web app (default: thunderclap.desktop.renderer or dist)
         --out <dir>       where artefacts go (default: thunderclap.desktop.output or dist/desktop)
-        --dry-run         stage the app, print what would be packaged, and stop
+        --dry-run         run prePackage, stage the app, print what would be
+                          packaged, and stop
 
 The game names itself in package.json:
   "thunderclap": { "desktop": { "productName": "My Game", "appId": "com.example.mygame",
                                 "icon": "build/icon.png" } }
-Optional keys: version (default: package.json version), executableName, renderer, output.
+Optional keys: version (default: package.json version), executableName, renderer, output,
+prePackage (a shell command run before packaging; a non-zero exit stops it).
 
 Dev dependencies the game installs: electron (dev, package), vite (dev),
 electron-builder (package).
@@ -170,6 +174,16 @@ async function packageApp() {
     config = readDesktopConfig(pkg, { requireIdentity: true });
   } catch (e) {
     return fail(/** @type {Error} */ (e).message);
+  }
+  // The game's own step (#4), before anything is checked or staged: it may write the icon or
+  // the renderer. --dry-run runs it too.
+  if (config.prePackage) {
+    console.log(`thunderclap-desktop package: prePackage: ${config.prePackage}`);
+    try {
+      runPrePackage(config.prePackage, gameDir);
+    } catch (e) {
+      return fail(/** @type {Error} */ (e).message);
+    }
   }
   const renderer = resolve(gameDir, value('--renderer') ?? config.renderer);
   const output = resolve(gameDir, value('--out') ?? config.output);

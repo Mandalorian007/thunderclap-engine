@@ -4,6 +4,8 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 
 ## Unreleased
 
+- Desktop pre-package step (ws/prepackage, #4, E-040). No engine API change (`api/` unchanged). *Added:* the `thunderclap.desktop` field of a game's `package.json` takes an optional `prePackage` shell command. `thunderclap-desktop package` runs it in the game's folder before it checks or stages anything, and `package --dry-run` runs it too, so a generated icon or renderer is fresh in both. A non-zero exit fails the command with `prePackage "<command>" failed with exit code <n>`. A config without `prePackage` behaves as before; `dev` never runs it. `@thunderclap-engine/host-electron` goes to 0.3.0.
+
 ## 1.2.1 (2026-11-08)
 
 - Host tidy for the hosts' first CI publish (ws/hosts-tidy). No engine API change (`api/` unchanged), no host source change. *Changed:* `@thunderclap-engine/host-capacitor` goes to 0.1.1 and lists `@capacitor/core` `^8.0.0` as an optional peer (`peerDependenciesMeta`), naming the Capacitor major it runs inside; it still imports no `@capacitor/*` module, and its README gains an install section saying so. `@thunderclap-engine/host-pwa` goes to 0.1.1; its README gains an install line, a `pwaPlugin` options table with the manifest defaults, the `createPwaHost` options and a `host.pwa` member table, and now says that the plugin's icons and vite `public/` files are not precached and that `inStandalone()` also reads `fullscreen` and iOS's `navigator.standalone`.
