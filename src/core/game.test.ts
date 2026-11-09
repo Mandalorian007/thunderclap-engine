@@ -84,6 +84,73 @@ afterEach(() => {
   xr = null;
 });
 
+describe('createGame: crash (#6)', () => {
+  const root = () => document.getElementById('root') as HTMLElement;
+  const buttons = () => [...root().querySelectorAll('button')].map((b) => b.textContent);
+  const boom = () => {
+    throw new Error('boot fault');
+  };
+
+  it('a boot throw shows the card with Reload only, and createGame still rejects', async () => {
+    const opts = { ...options([]), crash: true, save: boom };
+    await expect(createGame(opts)).rejects.toThrow('boot fault');
+    expect(root().textContent).toContain('Something went wrong');
+    expect(root().textContent).not.toContain('progress is saved');
+    expect(buttons()).toEqual(['Reload']);
+  });
+
+  it('is off by default: a boot throw shows nothing', async () => {
+    await expect(createGame({ ...options([]), save: boom })).rejects.toThrow('boot fault');
+    expect(root().querySelector('.engine-msg')).toBeNull();
+  });
+
+  it('after boot an uncaught error flushes the save, which says whether it reached storage', async () => {
+    let reloads = 0;
+    const log: string[] = [];
+    const ctx = await createGame({
+      ...options(log),
+      save: () => ({
+        flush: () => {
+          log.push('flush');
+          return true;
+        },
+      }),
+      crash: { reload: () => reloads++ },
+    });
+    expect(ctx).not.toBeNull();
+    window.dispatchEvent(new ErrorEvent('error', { message: 'late fault', filename: '' }));
+    expect(log).toEqual(['flush']);
+    expect(root().textContent).toContain('Your progress is saved');
+    expect(buttons()).toEqual(['Reload', 'Keep playing']);
+    root().querySelector('button')!.click();
+    expect(reloads).toBe(1);
+  });
+
+  it('a save whose flush returns nothing is never called saved; crash.flush overrides it', async () => {
+    const log: string[] = [];
+    await createGame({ ...options(log), crash: true });
+    window.dispatchEvent(new ErrorEvent('error', { message: 'late fault', filename: '' }));
+    expect(log).toEqual(['flush']);
+    expect(root().textContent).toContain('Something went wrong');
+    expect(root().textContent).not.toContain('progress is saved');
+
+    document.body.innerHTML = '<main id="root"></main>';
+    await createGame({ ...options(log), crash: { flush: () => true } });
+    window.dispatchEvent(new ErrorEvent('error', { message: 'late fault', filename: '' }));
+    expect(root().textContent).toContain('Your progress is saved');
+  });
+
+  it('defers to the unsupported screen', async () => {
+    bootOk = false;
+    const unsupported = document.createElement('div');
+    unsupported.className = 'engine-msg';
+    root().appendChild(unsupported);
+    expect(await createGame({ ...options([]), crash: true })).toBeNull();
+    window.dispatchEvent(new ErrorEvent('error', { message: 'late fault', filename: '' }));
+    expect(root().querySelectorAll('.engine-msg')).toHaveLength(1);
+  });
+});
+
 describe('createGame', () => {
   it('resolves null when WebGPU does not come up', async () => {
     bootOk = false;

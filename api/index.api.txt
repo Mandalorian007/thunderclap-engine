@@ -2,6 +2,27 @@
 // Do not edit by hand. After an intended API change run `pnpm api:update` and commit this file.
 // engine-v1.0.0 frozen surface: a change here needs a *Breaking* or *Added* line naming this module under CHANGELOG.md `## Unreleased`.
 
+## CrashOptions  (type-only)
+type CrashOptions = Pick<CrashScreenOptions, 'flush' | 'reload'>;
+
+## CrashScreen  (type-only)
+interface CrashScreen {
+    report(err: unknown, opts?: {
+        fatal?: boolean;
+    }): void;
+    readonly shown: boolean;
+    dispose(): void;
+}
+
+## CrashScreenOptions  (type-only)
+interface CrashScreenOptions {
+    root: HTMLElement;
+    title?: string;
+    flush?: () => boolean;
+    reload?: () => void;
+    win?: Window;
+}
+
 ## CreateGameOptions  (type-only)
 interface CreateGameOptions<A extends string, S extends FlushableSave | null = null, P = any> {
     root?: HTMLElement;
@@ -38,6 +59,7 @@ interface CreateGameOptions<A extends string, S extends FlushableSave | null = n
     onGpuReady?(gpu: GpuContext): void;
     blockBrowserZoom?: boolean;
     forceUnsupported?: boolean;
+    crash?: boolean | CrashOptions;
     xr?: XrOptions;
     pointers?: {
         testers?: readonly HitTester<P>[];
@@ -131,3 +153,6 @@ interface XrOptions {
 
 ## createGame
 function createGame<A extends string, S extends FlushableSave | null = null, C = unknown, P = unknown>(opts: CreateGameOptions<A, S, P>): Promise<EngineCtx<A, NoInfer<S>, C, P> | null>;
+
+## installCrashScreen
+function installCrashScreen(opts: CrashScreenOptions): CrashScreen;

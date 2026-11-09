@@ -70,7 +70,8 @@ loop.maxFps = 30;    // steady 30 fps on a 60 Hz display; null = every display f
   running frame finishes and reschedules through the new source; `createGame` uses it to move
   onto an XR session's host and back), `isRunning`, `halted`, `paused`, `maxFps`, `time`.
   A frame that throws still schedules the next one, then the error goes on to the frame source
-  (a headset no longer freezes on one bad frame); `maxFps` is ignored while frames come from an
+  (a headset no longer freezes on one bad frame); so does a frame whose clock (`now()`) throws
+  (#7); `maxFps` is ignored while frames come from an
   XR session (a `kind: 'xr'` source), since the headset sets the rate (ws/xr-fixes).
   In VR `createGame`'s render step draws each eye into the XR surface's HDR `scene` target and
   resolves it through the post stack into the eye's part of the layer (`renderer.resolve`,
@@ -180,6 +181,43 @@ The replay sink (`ctx.replay`, `input.replay`) is a detached element, so it meas
   `createGame<'jump' | 'back'>({ input: { bindings: { jump } } })` leaves `back` to a context
   (`ctx.input.pushContext('menu', { bindings: { back } })`).
 - The save is flushed on hide, on `host.lifecycle` going to `background` and on device loss.
+
+## Crash screen
+
+Opt-in (#6, E-040): one styled card, "Something went wrong", instead of a blank page when boot
+throws or a frozen canvas when the game's code throws later.
+
+```ts
+const engine = await createGame({
+  root,
+  title: 'My Game',
+  save: (host) => createProgressStore({ host }), // a SaveStore: flush() says if it reached storage
+  input: { bindings },
+  crash: true,
+});
+```
+
+- `createGame({ crash: true | CrashOptions })` installs it into `root` before boot. A throw while
+  `createGame` builds shows the card with Reload only, and `createGame` still rejects with the
+  error. After boot, an uncaught error or unhandled rejection from the game's own code shows it
+  with Reload and Keep playing (which closes the card and focuses the canvas). Default off; not
+  installed with `overlay: false` or without `root`.
+- `CrashOptions` is `{ flush?, reload? }`. The save is flushed before the card shows: `flush()`
+  when given, else the game's `save`. The card says "Your progress is saved" only when that flush
+  returns true (the engine's `SaveStore.flush()` does when the write reached real storage); a
+  flush that returns nothing or throws gets "Reloading the page usually fixes it". `reload`
+  defaults to `location.reload()`.
+- `installCrashScreen(opts: CrashScreenOptions): CrashScreen` is the same guard on its own, for a
+  game that wants it before `createGame` runs (its own boot work) or reports errors it catches.
+  `CrashScreenOptions` is `{ root, title?, flush?, reload?, win? }`; `CrashScreen` has
+  `report(err, { fatal? })` (`fatal`: Reload only), `shown` and `dispose()` (stop watching).
+  Use one or the other, not both.
+- It shows once per page; later errors only reach the console. It ignores errors from browser
+  extensions and other origins' scripts (with their cross-origin "Script error."), ResizeObserver
+  loop notices, and `AbortError` / `NotAllowedError` rejections. While the engine's unsupported
+  or device-lost screen is up it stays hidden.
+- It is the platform message screen (`showMessageScreen`, the `.engine-msg` classes), so the CSS
+  that restyles the unsupported screen restyles it too.
 
 ## Scenes
 

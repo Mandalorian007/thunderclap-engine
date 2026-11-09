@@ -218,21 +218,22 @@ export class GameLoop {
 
   private readonly frame = (): void => {
     if (!this.running) return;
-    const t = this.now();
-    // A few ms of slack: vsync timestamps jitter, and a 33.3 ms target must not miss 33.2.
-    // Never in XR: the headset paces the session, and a skipped XR frame is a dropped frame.
-    if (
-      this.minFrameMs > 0 &&
-      !isXrSource(this.source) &&
-      t - this.last < this.minFrameMs - FRAME_CAP_SLACK_MS
-    ) {
-      this.frameId = this.frames.requestFrame(this.frame);
-      return;
-    }
-    const dt = (t - this.last) / 1000;
-    this.last = t;
     this.inFrame = true;
     try {
+      // The clock is read inside the try too: a throwing `now()` must not stop the loop (#7).
+      const t = this.now();
+      // A few ms of slack: vsync timestamps jitter, and a 33.3 ms target must not miss 33.2.
+      // Never in XR: the headset paces the session, and a skipped XR frame is a dropped frame.
+      // A skipped frame returns here; the finally below requests the next one.
+      if (
+        this.minFrameMs > 0 &&
+        !isXrSource(this.source) &&
+        t - this.last < this.minFrameMs - FRAME_CAP_SLACK_MS
+      ) {
+        return;
+      }
+      const dt = (t - this.last) / 1000;
+      this.last = t;
       this.runFrame(dt);
     } finally {
       // A frame that throws still schedules the next one (a headset otherwise freezes for good);

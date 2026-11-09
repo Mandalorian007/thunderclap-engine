@@ -65,3 +65,25 @@ describe('initGpu', () => {
     if (res.ok) expect(res.gpu.device.features.has('texture-compression-bc')).toBe(false);
   });
 });
+
+describe('initGpu: the canvas context (#5)', () => {
+  it('treats a throwing getContext like a null one, keeping the message', async () => {
+    fakeGpu([]);
+    const canvas = {
+      getContext: () => {
+        throw new Error('context creation crashed');
+      },
+    } as unknown as HTMLCanvasElement;
+    expect(await initGpu(canvas)).toEqual({
+      ok: false,
+      reason: 'no-context',
+      detail: 'Error: context creation crashed',
+    });
+  });
+
+  it('a null getContext is still no-context', async () => {
+    fakeGpu([]);
+    const canvas = { getContext: () => null } as unknown as HTMLCanvasElement;
+    expect(await initGpu(canvas)).toEqual({ ok: false, reason: 'no-context' });
+  });
+});
