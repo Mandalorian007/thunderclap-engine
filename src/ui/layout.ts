@@ -151,6 +151,14 @@ export interface LayoutSpec {
    * `{ bottom: { size: 'content', max: 200 } }`. A form's own `bars` wins bar by bar.
    */
   bars?: Partial<Record<BarName, BarSize>>;
+  /**
+   * Warn through `console.warn` when a widget overflows its region (`[layout] … overflows`,
+   * #8). Default `import.meta.env?.DEV === true`: on under Vite's dev server and Vitest, off in
+   * a production build (Vite replaces the condition with `false` and the minifier drops the
+   * call) and under a bundler that has no `import.meta.env`. `Layout.overflows()` reports in
+   * every build either way.
+   */
+  warnOverflows?: boolean;
 }
 
 /** A rect in overlay CSS px, for the `'free'` escape hatch. */
@@ -221,8 +229,8 @@ export interface WidgetHandle {
 }
 
 /**
- * A widget whose measured box is larger than its region's inner box (the region less its `pad`
- * on each side) in the current form factor (`Layout.overflows`). CSS px.
+ * A widget whose measured box is larger than its region's content box (the region less its
+ * computed padding and border, #10) in the current form factor (`Layout.overflows`). CSS px.
  */
 export interface LayoutOverflow {
   /** The widget's id (`WidgetOptions.id`). */
@@ -231,7 +239,7 @@ export interface LayoutOverflow {
   /** The widget's measured box. */
   w: number;
   h: number;
-  /** The region's inner box. */
+  /** The region's content box. */
   rw: number;
   rh: number;
 }
@@ -719,18 +727,31 @@ export interface Layout {
   /** The element of a region (for styling; register widgets with `add`). */
   region(name: RegionName): HTMLElement;
   /**
-   * The widgets in a region whose measured box is larger than the region's inner box, as of the
-   * last re-layout (ws/ui-7). Measured on each re-layout (`add`, `setPlace`, a resize,
-   * `refresh`), never per frame; a widget whose content grows later is caught at the next one.
+   * The widgets in a region whose measured box is larger than the region's content box (its
+   * rect less its computed padding and border, #10), as of the last re-layout (ws/ui-7). Callable
+   * and accurate in every build (#8), so a game's e2e can assert `[]` against a production
+   * preview. Measured once after each re-layout (`add`, `setPlace`, a resize, `refresh`): at the
+   * end of the task, or here if read sooner; never per frame. A widget whose content grows later
+   * is caught at the next re-layout. The list is a new array only when it was measured again.
    */
   overflows(): readonly LayoutOverflow[];
   /**
-   * Register a widget. It is moved into its region now and on every form-factor change. When
-   * its measured box is larger than its region's inner box, it warns once (`[layout] … overflows`,
-   * naming the widget, the region and both sizes; again after `setPlace`) and is listed in
-   * `overflows()`.
+   * Register a widget. It is moved into its region now and on every form-factor change. It is
+   * judged with the finished layout (#9): the overflow check runs in a microtask after the
+   * current run of `add` calls (or at the end of a `batch`), not on each half-built step. When
+   * its measured box is larger than its region's content box it is listed in `overflows()` and,
+   * with `LayoutSpec.warnOverflows` (dev builds by default), warns once (`[layout] … overflows`,
+   * naming the widget, the region and both sizes). It warns again only after it has fitted, or
+   * in another region or form factor.
    */
   add(element: HTMLElement, opts: WidgetOptions): WidgetHandle;
+  /**
+   * Run `fn` with re-layout held (#9): `add`, `setPlace`, `remove`, `refresh` and resizes inside
+   * it lay out once, when it returns (or throws), and the overflow check judges that one layout.
+   * Inside, `state`, `freeRect` and a new handle's `region` still show the layout before the
+   * batch. Nests: the outermost batch lays out. Returns what `fn` returns.
+   */
+  batch<T>(fn: () => T): T;
   /**
    * Dock a caption card (`overlay.caption` by default) in a region, `captionLane` unless
    * `place` says otherwise. Docked, it fills its region; `hidden` or `free` placements undock
@@ -766,7 +787,8 @@ interface Entry {
   caption?: { element: HTMLElement; dock(host: HTMLElement | null): void };
   home?: { parent: Node | null; next: Node | null };
   loggedFree: boolean;
-  warnedOverflow: boolean;
+  /** `<region> <form factor>` of the overflow last warned for, or null once it fits (#9). */
+  warnedOverflow: string | null;
   onForm?: (ff: FormFactor) => void;
   onMove?: (region: RegionName | 'free' | 'hidden') => void;
 }
@@ -829,6 +851,19 @@ export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout
   let state: LayoutState;
   let freeUses: { id: string; reason: string }[] = [];
   let overflows: LayoutOverflow[] = [];
+  /** The entry of each `overflows` item, same index. */
+  let overflowEntries: Entry[] = [];
+  /** The widgets in grid regions, in layout order, as of the last re-layout. */
+  let placed: Entry[] = [];
+  /** The form's `pad`, the fallback when a region's computed padding cannot be read. */
+  let formPad = 0;
+  /** `overflows` is up to date with the last re-layout. */
+  let measured = false;
+  let checkQueued = false;
+  let batchDepth = 0;
+  let batchPending = false;
+  let destroyed = false;
+  const warnOverflows = spec.warnOverflows ?? import.meta.env?.DEV === true;
 
   const measureInsets = (): Insets => {
     const vp = {
@@ -860,6 +895,10 @@ export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout
   };
 
   const apply = () => {
+    if (batchDepth > 0) {
+      batchPending = true;
+      return;
+    }
     const ff = classifyNow();
     const form = { ...formSpec(ff, spec), ...formOverride?.[ff] };
     // Which grid regions hold a widget in this form factor.
@@ -981,29 +1020,91 @@ export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout
       });
     }
 
-    // Overflow: one read pass after the writes above (one reflow per re-layout, none per frame).
+    formPad = form.pad;
+    placed = sorted.filter((e) => e.current !== 'free' && e.current !== 'hidden');
+    // Overflow (#9): judged once on the finished layout, in a microtask after this run of
+    // re-layouts (or sooner, when `overflows()` is read), not on each half-built step.
+    measured = false;
+    if (!checkQueued) {
+      checkQueued = true;
+      queueMicrotask(check);
+    }
+    for (const e of moved) e.onMove?.(e.current);
+    for (const f of subs) f(state);
+  };
+
+  /**
+   * One read pass over the placed widgets against their regions' content boxes (#10: the
+   * region's rect less its computed padding and border, so a game's restyled padding counts).
+   */
+  const measure = () => {
+    measured = true;
     overflows = [];
-    for (const e of sorted) {
+    overflowEntries = [];
+    const inner = new Map<RegionName, { rw: number; rh: number }>();
+    for (const e of placed) {
       const p = e.current;
       if (p === 'free' || p === 'hidden') continue;
       const r = state.regions[p];
       const box = e.el.getBoundingClientRect?.();
       if (!r || !box) continue;
-      const rw = r2(Math.max(0, r.width - 2 * form.pad));
-      const rh = r2(Math.max(0, r.height - 2 * form.pad));
+      let ib = inner.get(p);
+      if (!ib) {
+        ib = contentBox(regionEls[p], r);
+        inner.set(p, ib);
+      }
+      const { rw, rh } = ib;
       const w = r2(box.width);
       const bh = r2(box.height);
       if (w <= rw + OVERFLOW_SLACK && bh <= rh + OVERFLOW_SLACK) continue;
       overflows.push({ id: e.id, region: p, w, h: bh, rw, rh });
-      if (!e.warnedOverflow) {
-        e.warnedOverflow = true;
+      overflowEntries.push(e);
+    }
+  };
+
+  /** The deferred check: measure if needed, then warn for each new overflow (#8, #9). */
+  const check = () => {
+    checkQueued = false;
+    if (destroyed || batchDepth > 0) return;
+    if (!measured) measure();
+    const ff = state.formFactor;
+    for (const e of entries) {
+      const i = overflowEntries.indexOf(e);
+      const o = i < 0 ? undefined : overflows[i];
+      if (!o) {
+        e.warnedOverflow = null;
+        continue;
+      }
+      const key = `${o.region} ${ff}`;
+      if (e.warnedOverflow === key) continue;
+      e.warnedOverflow = key;
+      if (warnOverflows) {
         console.warn(
-          `[layout] ${e.id} overflows its "${p}" region in ${ff}: ${w}x${bh} px in ${rw}x${rh} px`,
+          `[layout] ${e.id} overflows its "${o.region}" region in ${ff}: ${o.w}x${o.h} px in ${o.rw}x${o.rh} px`,
         );
       }
     }
-    for (const e of moved) e.onMove?.(e.current);
-    for (const f of subs) f(state);
+  };
+
+  /** A region's content box (#10): `r` less the region element's computed padding and border. */
+  const contentBox = (el: HTMLElement, r: Rect): { rw: number; rh: number } => {
+    const cs = win?.getComputedStyle?.(el);
+    const pad = formPad;
+    const n = (v: string | undefined, fallback: number) => {
+      const x = Number.parseFloat(v ?? '');
+      return Number.isFinite(x) ? x : fallback;
+    };
+    const x =
+      n(cs?.paddingLeft, pad) +
+      n(cs?.paddingRight, pad) +
+      n(cs?.borderLeftWidth, 0) +
+      n(cs?.borderRightWidth, 0);
+    const y =
+      n(cs?.paddingTop, pad) +
+      n(cs?.paddingBottom, pad) +
+      n(cs?.borderTopWidth, 0) +
+      n(cs?.borderBottomWidth, 0);
+    return { rw: r2(Math.max(0, r.width - x)), rh: r2(Math.max(0, r.height - y)) };
   };
 
   /**
@@ -1092,7 +1193,21 @@ export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout
     region(name) {
       return regionEls[name];
     },
-    overflows: () => overflows,
+    overflows() {
+      if (!measured && batchDepth === 0) measure();
+      return overflows;
+    },
+    batch(fn) {
+      batchDepth++;
+      try {
+        return fn();
+      } finally {
+        if (--batchDepth === 0 && batchPending) {
+          batchPending = false;
+          apply();
+        }
+      }
+    },
     add(el, opts) {
       const e: Entry = {
         id: opts.id ?? (el.id || `widget-${seq + 1}`),
@@ -1103,7 +1218,7 @@ export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout
         current: 'hidden',
         home: el.parentNode ? { parent: el.parentNode, next: el.nextSibling } : undefined,
         loggedFree: false,
-        warnedOverflow: false,
+        warnedOverflow: null,
         onForm: opts.onForm,
         onMove: opts.onMove,
       };
@@ -1121,7 +1236,7 @@ export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout
         current: 'hidden',
         caption,
         loggedFree: false,
-        warnedOverflow: false,
+        warnedOverflow: null,
       };
       entries.push(e);
       apply();
@@ -1141,6 +1256,7 @@ export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout
       return () => subs.delete(fn);
     },
     destroy() {
+      destroyed = true;
       unwatch();
       subs.clear();
       for (const e of entries.splice(0)) {
@@ -1175,7 +1291,7 @@ export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout
       setPlace(place) {
         e.place = { ...place };
         e.loggedFree = false;
-        e.warnedOverflow = false;
+        e.warnedOverflow = null;
         apply();
       },
       remove() {
