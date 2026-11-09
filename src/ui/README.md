@@ -517,16 +517,32 @@ lists the exported names; ARCHITECTURE.md *Layout* describes the model.
   left rail runs the full width and the rail starts under it. A tie keeps the form's `areas`, as
   does a swap that would leave a region not a rectangle (`phone-portrait`'s bottom-left cell
   stays the bottom bar's: the left rail does not reach it). The DOM grid draws the same areas.
-- **Overflow** (ws/ui-7). On each re-layout (`add`, `setPlace`, a resize, `refresh`; never per
-  frame) the layout measures every widget placed in a region against the region's inner box
-  (its rect less the form's `pad` each side). One that is larger on either axis warns once
-  through `console.warn` (`[layout] <id> overflows its "<region>" region in <form factor>: WxH
-  px in RWxRH px`; again after `setPlace`), and `layout.overflows()` lists the current ones as
-  `LayoutOverflow { id, region, w, h, rw, rh }` (CSS px) for tests and dev overlays. Hidden and
-  `free` widgets are not measured; content that grows later is caught at the next re-layout.
+- **Overflow** (ws/ui-7, E-040). After each re-layout (`add`, `setPlace`, a resize, `refresh`;
+  never per frame) the layout measures every widget placed in a region against the region's
+  content box: its rect less the region element's computed padding and border (#10), so a game
+  that restyles `.tc-region` padding gets neither false reports nor misses. The check judges the
+  finished layout, not each step (#9): it runs once in a microtask after the current run of
+  `add` calls, so a widget added before its column's siblings is measured with them in place.
+  Code that builds across several tasks wraps the build in `layout.batch(() => { … })`, which
+  holds re-layout until it returns (nested batches lay out at the outermost; inside, `state` and
+  a new handle's `region` still show the layout before it). `layout.overflows()` lists the
+  current ones as `LayoutOverflow { id, region, w, h, rw, rh }` (CSS px); read before the
+  microtask, it measures then. Each overflow warns once through `console.warn` (`[layout] <id>
+  overflows its "<region>" region in <form factor>: WxH px in RWxRH px`): again only after it
+  fitted, moved region or form factor, or `setPlace`. The warning is for development (#8):
+  `LayoutSpec.warnOverflows` defaults to `import.meta.env?.DEV === true`, on under Vite's dev
+  server and Vitest. A Vite production build replaces the condition with `false`, so the warning
+  is off and the minifier drops the call; a bundler without `import.meta.env` is silent too, and
+  `warnOverflows: true` or `false` (`createOverlay({ layout: { warnOverflows } })`) overrides
+  either way. `overflows()` is callable and accurate in every build, so a game's e2e asserts
+  layout health against a production preview (`vite build && vite preview`) by reading it, not
+  the console: publish the ids on a test hook after each re-layout (`layout.onChange(() => {
+  hook.overflows = layout.overflows().map((o) => o.id) })`, as `demos/arpg` does on `__demo`)
+  and poll them to `[]` in the spec. Hidden and `free` widgets are not measured; content that
+  grows later is caught at the next re-layout.
 - **State.** `LayoutState` is the pure result for one size (`formFactor`, `units`, `width`,
   `height`, `safeArea`, `columns`, `rows`, `regions`, `freeRect`). `Layout` adds `element`,
-  `freeUses`, `overflows()`, `region(name)`, `dockCaption`, `setSafeArea`, `setForms`, `refresh`, `onChange` and
+  `freeUses`, `overflows()`, `batch(fn)`, `region(name)`, `dockCaption`, `setSafeArea`, `setForms`, `refresh`, `onChange` and
   `destroy`. `LayoutHost` is what the layout needs from its overlay.
 - **Pure helpers** (tested in Node): `parseAreas(areas)`, `resolveTracks(tracks, length,
   collapsed?)`, `resolveLayout(ff, form, width, height, safeArea?, occupied?)`,
@@ -993,7 +1009,12 @@ the stack fan, the rise and fade and the crit pop, and `ui.floats` memoised and 
 `minimap-canvas.test.ts` the mapping in both `rotate` modes, `toWorld` inverting `toMap`, no redraw
 without a change, the pick, and `ui.minimap` with `worldRadius`, `markerAt` and `rim`.
 ws/ui-7: `layout.test.ts` an oversized widget listed in `overflows()` and warned once (a fitting
-one not, a hidden one not measured, `setPlace` warning again); `minimap-canvas.test.ts` the arrow
+one not, a hidden one not measured, `setPlace` warning again); E-040: `warnOverflows: false` and
+`import.meta.env.DEV` false silent with `overflows()` still reporting (#8), a run of `add` calls
+and a nested `batch` judged once on the finished layout, a later overflow of a widget that was
+large while half-built still warning, and a new overflow after it fitted warning again (#9), a
+region restyled to no padding, more padding or a border measured against its computed content
+box (#10); `minimap-canvas.test.ts` the arrow
 kind's drawn rotation (recorded `rotate` calls) in north and player modes and `markerAt.angle`.
 `e2e/ui5.spec.ts` runs `harness/ui5.html` (`?orb`, `?floats`, `?minimap`, `?still`); since
 ws/ui-7 `?minimap` holds an arrow marker whose `headingMarkers` angle tracks heading − yaw. Layout and

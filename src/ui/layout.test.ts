@@ -22,6 +22,9 @@ import {
 import { createOverlay, type Overlay, type Rect } from './overlay';
 import { applyTextScale, CSS_FONT_PX, textScaleTokens } from './text-scale';
 
+/** Let the layout's deferred overflow check (a microtask, #9) run. */
+const settle = () => new Promise<void>((r) => setTimeout(r, 0));
+
 const overlaps = (a: Rect, b: Rect) =>
   Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x) > 0.01 &&
   Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y) > 0.01;
@@ -643,7 +646,7 @@ describe('overlay.layout (DOM)', () => {
     expect(ov!.caption.docked).toBeNull();
   });
 
-  it('a widget larger than its region warns once and is listed in overflows() (ws/ui-7)', () => {
+  it('a widget larger than its region warns once and is listed in overflows() (ws/ui-7)', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const layout = make({ classify });
     /** happy-dom lays nothing out: give the element a measured box. */
@@ -656,6 +659,7 @@ describe('overlay.layout (DOM)', () => {
     const wide = sized(h('div'), 120.004, 30);
     layout.add(fits, { place: { default: 'left' } });
     expect(layout.overflows()).toEqual([]);
+    await settle();
     expect(warn).not.toHaveBeenCalled();
     const hd = layout.add(wide, { id: 'wide', place: { default: 'left' } });
     const left = layout.state.regions.left!;
@@ -664,13 +668,18 @@ describe('overlay.layout (DOM)', () => {
     const rh = left.height - 2 * pad;
     expect(rw).toBe(48); // the 56 px rail less 4 px each side
     expect(layout.overflows()).toEqual([{ id: 'wide', region: 'left', w: 120, h: 30, rw, rh }]);
+    // The warning waits for the finished layout (#9): it comes in a microtask.
+    expect(warn).not.toHaveBeenCalled();
+    await settle();
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0]![0]).toBe(
       `[layout] wide overflows its "left" region in phone-landscape: 120x30 px in ${rw}x${rh} px`,
     );
     // Re-layouts re-measure but do not warn again.
     layout.refresh();
+    await settle();
     resize(915, 360);
+    await settle();
     expect(layout.overflows().map((o) => o.id)).toEqual(['wide']);
     expect(warn).toHaveBeenCalledTimes(1);
     // Where it fits, it is no longer listed; hidden widgets are not measured.
@@ -683,12 +692,13 @@ describe('overlay.layout (DOM)', () => {
     // A new placement that overflows warns again.
     hd.setPlace({ default: 'top' });
     expect(layout.overflows()[0]).toMatchObject({ id: 'wide', region: 'top', w: 4000 });
+    await settle();
     expect(warn).toHaveBeenCalledTimes(2);
     warn.mockRestore();
     layout.destroy();
   });
 
-  it('content bars hold a 128 px orb; a fixed bar reports it; max clamps and reports (ws/ui-8)', () => {
+  it('content bars hold a 128 px orb; a fixed bar reports it; max clamps and reports (ws/ui-8)', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const sized = <T extends HTMLElement>(el: T, width: number, height: number): T => {
       el.getBoundingClientRect = () =>
@@ -704,6 +714,7 @@ describe('overlay.layout (DOM)', () => {
     expect(layout.state.regions.bottom!.height).toBe(128 + 2 * pad);
     expect(layout.freeRect.height).toBeLessThan(free0);
     expect(layout.overflows()).toEqual([]);
+    await settle();
     expect(warn).not.toHaveBeenCalled();
     // The grid draws the same track the state reports.
     expect(layout.element.style.gridTemplateRows.split(' ').at(-1)).toBe(`${128 + 2 * pad}px`);
@@ -713,6 +724,7 @@ describe('overlay.layout (DOM)', () => {
     layout.add(sized(h('div'), 128, 128), { id: 'orb', place: { default: 'bottom' } });
     expect(layout.state.regions.bottom!.height).toBe(52);
     expect(layout.overflows()).toMatchObject([{ id: 'orb', region: 'bottom', h: 128, rh: 44 }]);
+    await settle();
     expect(warn).toHaveBeenCalledTimes(1);
     ov!.destroy();
     // `max` clamps the bar, and the orb taller than it still reports.
@@ -720,13 +732,14 @@ describe('overlay.layout (DOM)', () => {
     layout.add(sized(h('div'), 128, 128), { id: 'orb', place: { default: 'bottom' } });
     expect(layout.state.regions.bottom!.height).toBe(100);
     expect(layout.overflows()).toMatchObject([{ id: 'orb', h: 128, rh: 100 - 2 * pad }]);
+    await settle();
     expect(warn).toHaveBeenCalledTimes(2);
     ov!.destroy();
     ov = null;
     warn.mockRestore();
   });
 
-  it('content rails hold a 96 px widget; max clamps and still reports; the grid draws the corner (ws/ui-9)', () => {
+  it('content rails hold a 96 px widget; max clamps and still reports; the grid draws the corner (ws/ui-9)', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const sized = <T extends HTMLElement>(el: T, width: number, height: number): T => {
       el.getBoundingClientRect = () =>
@@ -741,6 +754,7 @@ describe('overlay.layout (DOM)', () => {
     expect(layout.freeRect.width).toBe(free0 - (96 + 2 * pad));
     expect(layout.element.style.gridTemplateColumns.split(' ')[0]).toBe(`${96 + 2 * pad}px`);
     expect(layout.overflows()).toEqual([]);
+    await settle();
     expect(warn).not.toHaveBeenCalled();
     ov!.destroy();
     // `max` caps the rail; the wider widget still reports.
@@ -750,6 +764,7 @@ describe('overlay.layout (DOM)', () => {
     expect(layout.overflows()).toMatchObject([
       { id: 'orb', region: 'right', w: 96, rw: 80 - 2 * pad },
     ]);
+    await settle();
     expect(warn).toHaveBeenCalledTimes(1);
     ov!.destroy();
     // A taller content top bar takes the left rail's corner, in the DOM grid too.
@@ -762,6 +777,180 @@ describe('overlay.layout (DOM)', () => {
     ov!.destroy();
     ov = null;
     warn.mockRestore();
+  });
+
+  describe('overflow check for shipped games (E-040: #8, #9, #10)', () => {
+    const sized = <T extends HTMLElement>(el: T, width: number, height: number): T => {
+      el.getBoundingClientRect = () =>
+        ({ x: 0, y: 0, left: 0, top: 0, right: width, bottom: height, width, height }) as DOMRect;
+      return el;
+    };
+    /** A widget whose box comes from `size()` at each read. */
+    const live = (size: () => { w: number; h: number }) => {
+      const el = h('div');
+      el.getBoundingClientRect = () => {
+        const { w, h: ht } = size();
+        return {
+          x: 0,
+          y: 0,
+          left: 0,
+          top: 0,
+          right: w,
+          bottom: ht,
+          width: w,
+          height: ht,
+        } as DOMRect;
+      };
+      return el;
+    };
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+    });
+
+    it('#8: warnOverflows: false never warns; overflows() still reports', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const layout = make({ classify, warnOverflows: false });
+      layout.add(sized(h('div'), 400, 30), { id: 'wide', place: { default: 'left' } });
+      await settle();
+      expect(warn).not.toHaveBeenCalled();
+      expect(layout.overflows().map((o) => o.id)).toEqual(['wide']);
+    });
+
+    it('#8: a production build (import.meta.env.DEV false) is silent by default', async () => {
+      vi.stubEnv('DEV', false);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const layout = make({ classify });
+      layout.add(sized(h('div'), 400, 30), { id: 'wide', place: { default: 'left' } });
+      await settle();
+      expect(warn).not.toHaveBeenCalled();
+      expect(layout.overflows()).toMatchObject([{ id: 'wide', region: 'left', w: 400 }]);
+    });
+
+    it('#8: dev (import.meta.env.DEV true) warns by default; warnOverflows: true forces it', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.stubEnv('DEV', true);
+      let layout = make({ classify });
+      layout.add(sized(h('div'), 400, 30), { id: 'wide', place: { default: 'left' } });
+      await settle();
+      expect(warn).toHaveBeenCalledTimes(1);
+      ov!.destroy();
+      vi.stubEnv('DEV', false);
+      layout = make({ classify, warnOverflows: true });
+      layout.add(sized(h('div'), 400, 30), { id: 'wide', place: { default: 'left' } });
+      await settle();
+      expect(warn).toHaveBeenCalledTimes(2);
+    });
+
+    /** A widget that shares its column: 400 px tall alone, 40 px once two more are in it. */
+    const sharing = (layout: ReturnType<typeof make>) =>
+      live(() => ({ w: 40, h: layout.region('left').children.length >= 3 ? 40 : 400 }));
+
+    it('#9: a run of add() calls is judged once, on the finished layout', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const layout = make({ classify });
+      // The first widget alone would overflow the rail; its column-mates arrive next.
+      layout.add(sharing(layout), { id: 'button', place: { default: 'left' } });
+      layout.add(sized(h('div'), 40, 40), { id: 'a', place: { default: 'left' } });
+      layout.add(sized(h('div'), 40, 40), { id: 'b', place: { default: 'left' } });
+      await settle();
+      expect(warn).not.toHaveBeenCalled();
+      expect(layout.overflows()).toEqual([]);
+    });
+
+    it('#9: batch() lays out once at the end and judges that layout', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const layout = make({ classify });
+      const changes = vi.fn();
+      layout.onChange(changes);
+      const out = layout.batch(() => {
+        const hd = layout.add(sharing(layout), { id: 'button', place: { default: 'left' } });
+        // Held: nothing placed yet, and the nested batch does not lay out on its own.
+        expect(hd.region).toBe('hidden');
+        layout.batch(() => {
+          layout.add(sized(h('div'), 40, 40), { id: 'a', place: { default: 'left' } });
+          layout.add(sized(h('div'), 40, 40), { id: 'b', place: { default: 'left' } });
+        });
+        expect(changes).not.toHaveBeenCalled();
+        return hd;
+      });
+      expect(changes).toHaveBeenCalledTimes(1);
+      expect(out.region).toBe('left');
+      expect(layout.overflows()).toEqual([]);
+      await settle();
+      expect(warn).not.toHaveBeenCalled();
+      // A throwing batch still lays out what it registered.
+      expect(() =>
+        layout.batch(() => {
+          layout.add(sized(h('div'), 40, 40), { id: 'c', place: { default: 'right' } });
+          throw new Error('boom');
+        }),
+      ).toThrow('boom');
+      expect(changes).toHaveBeenCalledTimes(2);
+    });
+
+    it('#9: each real overflow warns once, and a later one is never hidden', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const layout = make({ classify });
+      let tall = 30;
+      // The widget is half-built-large (the first of its column), then fits once its mates come.
+      layout.add(sharing(layout), { id: 'button', place: { default: 'left' } });
+      layout.add(
+        live(() => ({ w: 40, h: tall })),
+        { id: 'grows', place: { default: 'left' } },
+      );
+      layout.add(sized(h('div'), 40, 40), { id: 'b', place: { default: 'left' } });
+      await settle();
+      expect(warn).not.toHaveBeenCalled();
+      // Later, a real overflow of the very widget that would have warned while half-built.
+      tall = 4000;
+      layout.refresh();
+      layout.refresh();
+      await settle();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]![0]).toMatch(/^\[layout\] grows overflows its "left" region/);
+      // Re-layouts of the same overflow do not repeat it.
+      layout.refresh();
+      await settle();
+      expect(warn).toHaveBeenCalledTimes(1);
+      // It fits again, then overflows again: a new overflow, a new warning.
+      tall = 30;
+      layout.refresh();
+      await settle();
+      tall = 4000;
+      layout.refresh();
+      await settle();
+      expect(warn).toHaveBeenCalledTimes(2);
+    });
+
+    it("#10: the check measures the region's computed content box, not the form's pad", async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const layout = make({ classify });
+      const left = layout.region('left');
+      const rw = () => layout.state.regions.left!.width;
+      // A game restyles the rail with no padding; a widget fills it exactly.
+      left.style.padding = '0px';
+      layout.add(
+        live(() => ({ w: rw(), h: 20 })),
+        { id: 'exact', place: { default: 'left' } },
+      );
+      expect(layout.overflows()).toEqual([]);
+      await settle();
+      expect(warn).not.toHaveBeenCalled();
+      // A game that pads the rail more than the form's pad: a widget that fit the pad no longer does.
+      const pad = defaultForms['phone-landscape'].pad;
+      left.style.padding = '12px';
+      layout.add(sized(h('div'), rw() - 2 * pad, 20), { id: 'snug', place: { default: 'left' } });
+      expect(layout.overflows()).toMatchObject([
+        { id: 'exact', rw: rw() - 24 },
+        { id: 'snug', rw: rw() - 24 },
+      ]);
+      // Borders count too.
+      left.style.padding = '0px';
+      left.style.border = '3px solid red';
+      layout.refresh();
+      expect(layout.overflows()).toMatchObject([{ id: 'exact', rw: rw() - 6 }]);
+    });
   });
 
   it('content rails measure max-content: a stretch label grows and shrinks its rail (ws/ui-10)', () => {

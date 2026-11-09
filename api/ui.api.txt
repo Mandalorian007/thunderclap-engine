@@ -704,6 +704,7 @@ interface Layout {
     region(name: RegionName): HTMLElement;
     overflows(): readonly LayoutOverflow[];
     add(element: HTMLElement, opts: WidgetOptions): WidgetHandle;
+    batch<T>(fn: () => T): T;
     dockCaption(caption?: {
         element: HTMLElement;
         dock(host: HTMLElement | null): void;
@@ -743,6 +744,7 @@ interface LayoutSpec {
     safeArea?: Insets;
     collapseEmpty?: boolean;
     bars?: Partial<Record<BarName, BarSize>>;
+    warnOverflows?: boolean;
 }
 
 ## LayoutState  (type-only)
