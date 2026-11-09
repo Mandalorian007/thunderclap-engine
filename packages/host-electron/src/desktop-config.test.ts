@@ -1,5 +1,30 @@
-import { describe, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
 import { builderConfig, kebab, readDesktopConfig } from '../bin/desktop-config.mjs';
+import { runPrePackage } from '../bin/pre-package.mjs';
+
+const BIN = join(import.meta.dirname, '../bin/thunderclap-desktop.mjs');
+/** A shell command running `node -e <code>`, quoted for sh and cmd alike. */
+const nodeCmd = (code: string) => `${JSON.stringify(process.execPath)} -e ${JSON.stringify(code)}`;
+
+const temps: string[] = [];
+function tempGame(desktop?: Record<string, unknown>): string {
+  const dir = mkdtempSync(join(tmpdir(), 'tc-prepackage-test-'));
+  temps.push(dir);
+  if (desktop) {
+    writeFileSync(
+      join(dir, 'package.json'),
+      JSON.stringify({ name: 'g', version: '1.0.0', thunderclap: { desktop } }),
+    );
+  }
+  return dir;
+}
+afterEach(() => {
+  for (const d of temps.splice(0)) rmSync(d, { recursive: true, force: true });
+});
 
 describe('readDesktopConfig', () => {
   it('reads thunderclap.desktop and defaults the rest', () => {
@@ -15,7 +40,23 @@ describe('readDesktopConfig', () => {
       executableName: undefined,
       renderer: 'dist',
       output: 'dist/desktop',
+      prePackage: undefined,
     });
+  });
+
+  it('reads an optional prePackage command', () => {
+    const c = readDesktopConfig({
+      thunderclap: {
+        desktop: { productName: 'G', appId: 'a.b', prePackage: 'node scripts/icon.mjs' },
+      },
+    });
+    expect(c.prePackage).toBe('node scripts/icon.mjs');
+    expect(() => readDesktopConfig({ thunderclap: { desktop: { prePackage: '' } } })).toThrow(
+      /prePackage" must be a non-empty string/,
+    );
+    expect(() =>
+      readDesktopConfig({ thunderclap: { desktop: { prePackage: ['a', 'b'] } } }),
+    ).toThrow(/prePackage" must be a non-empty string/);
   });
 
   it('lets the field override version, renderer and output', () => {
@@ -97,6 +138,64 @@ describe('builderConfig', () => {
     expect(c.extraMetadata).toEqual({ productName: 'The Last Word' });
     expect('icon' in c).toBe(false);
     expect('electronVersion' in c).toBe(false);
+  });
+});
+
+describe('runPrePackage', () => {
+  it("runs the command through the shell in the game's folder", () => {
+    const dir = tempGame();
+    runPrePackage(nodeCmd("require('fs').writeFileSync('made.txt', process.cwd())"), dir, {
+      stdio: 'ignore',
+    });
+    expect(readFileSync(join(dir, 'made.txt'), 'utf8')).toBeTruthy();
+  });
+
+  it('throws naming the command and its exit code on a non-zero exit', () => {
+    const cmd = nodeCmd('process.exit(3)');
+    expect(() => runPrePackage(cmd, tempGame(), { stdio: 'ignore' })).toThrow(
+      /prePackage ".*" failed with exit code 3/,
+    );
+  });
+});
+
+describe('thunderclap-desktop package with prePackage', () => {
+  const run = (dir: string) =>
+    spawnSync(process.execPath, [BIN, 'package', '--dry-run'], { cwd: dir, encoding: 'utf8' });
+
+  it('runs prePackage on --dry-run before checking the renderer', () => {
+    // The command writes the renderer itself, so the index.html check after it passes.
+    const dir = tempGame({
+      productName: 'G',
+      appId: 'a.b',
+      prePackage: nodeCmd(
+        "const f=require('fs');f.mkdirSync('dist');f.writeFileSync('dist/index.html','<!doctype html>')",
+      ),
+    });
+    const r = run(dir);
+    expect(r.stdout).toContain('thunderclap-desktop package: prePackage: ');
+    expect(existsSync(join(dir, 'dist/index.html'))).toBe(true);
+    expect(r.stderr).not.toMatch(/has no index\.html/);
+  });
+
+  it('fails the command with a clear message when prePackage exits non-zero', () => {
+    const dir = tempGame({
+      productName: 'G',
+      appId: 'a.b',
+      prePackage: nodeCmd('process.exit(7)'),
+    });
+    mkdirSync(join(dir, 'dist'));
+    writeFileSync(join(dir, 'dist/index.html'), '<!doctype html>');
+    const r = run(dir);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/thunderclap-desktop: prePackage ".*" failed with exit code 7/);
+    expect(r.stdout).not.toContain('would package');
+  });
+
+  it('runs nothing extra without prePackage', () => {
+    const dir = tempGame({ productName: 'G', appId: 'a.b' });
+    const r = run(dir);
+    expect(r.stdout).not.toContain('prePackage');
+    expect(r.stderr).toMatch(/has no index\.html; build the game first/);
   });
 });
 

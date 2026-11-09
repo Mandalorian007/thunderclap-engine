@@ -1,7 +1,7 @@
 {
   "name": "@thunderclap-engine/host-electron",
   "productName": "ThunderClap",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "ThunderClap's Electron host: a desktop shell (main process and preload bridge) and createElectronHost() for the renderer. It knows nothing about any game. Games depend on @thunderclap-engine/engine themselves; everything the shell runs is bundled into out/, so it has no runtime dependencies.",
   "license": "MIT",

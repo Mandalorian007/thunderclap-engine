@@ -11,6 +11,7 @@ export const DESKTOP_KEYS = /** @type {const} */ ([
   'executableName',
   'renderer',
   'output',
+  'prePackage',
 ]);
 
 /**
@@ -22,6 +23,7 @@ export const DESKTOP_KEYS = /** @type {const} */ ([
  * @property {string} [executableName] The Linux executable; defaults to the product name in kebab case.
  * @property {string} renderer The built web app to package, relative to the game's folder (default `dist`).
  * @property {string} output Where installers go, relative to the game's folder (default `dist/desktop`).
+ * @property {string} [prePackage] A shell command `thunderclap-desktop package` runs in the game's folder before staging (also with `--dry-run`); a non-zero exit fails packaging.
  */
 
 /**
@@ -64,6 +66,7 @@ export function readDesktopConfig(pkg, opts = {}) {
     executableName: str('executableName'),
     renderer: str('renderer') ?? 'dist',
     output: str('output') ?? 'dist/desktop',
+    prePackage: str('prePackage'),
   };
 }
 

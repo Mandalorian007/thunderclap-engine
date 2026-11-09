@@ -19,6 +19,7 @@ engine's exports map (`pnpm check:boundaries` enforces both).
 | `e2e/shell.spec.ts` | The Playwright Electron-driver smoke on the built shell |
 | `bin/thunderclap-desktop.mjs` | The published `thunderclap-desktop` command: a game's `dev` loop and `package` step (see *Desktop dev and packaging for a game*) |
 | `bin/desktop-config.mjs` | The packaging rules (`builderConfig`) and the game's `thunderclap.desktop` field (`readDesktopConfig`), shared by the bin and this repo's build |
+| `bin/pre-package.mjs` | `runPrePackage`, which runs the game's `prePackage` command for `thunderclap-desktop package` |
 | `scripts/build.mjs`, `dev.mjs`, `dist.mjs` | This repo's build of `out/`, dev loop on the harness, and packaging |
 | `electron-builder.config.mjs` | This repo's packaging config (from `builderConfig`): unsigned Windows, macOS and Linux into `dist/desktop/` at the repo root (gitignored) |
 
@@ -70,15 +71,29 @@ npm i -D @thunderclap-engine/host-electron electron electron-builder
 | `executableName` | The Linux executable. Default: the product name in kebab case |
 | `renderer` | The built web app. Default: `dist` |
 | `output` | Where artefacts go. Default: `dist/desktop` |
+| `prePackage` | A shell command that `package` runs in the game's folder before it checks or stages anything, `--dry-run` included. Use it to generate files the package needs, such as an icon. A non-zero exit stops `package` with `prePackage "<command>" failed with exit code <n>`. Default: none |
 
 Unknown keys are an error, so a typo does not silently ship the default identity.
+
+For example, a game that draws its icon with a script needs no `&&` step in `desktop:build`:
+
+```json
+"desktop": {
+  "productName": "My Game",
+  "appId": "com.example.mygame",
+  "icon": "build/icon.png",
+  "prePackage": "node scripts/icon.mjs"
+}
+```
+
+The command runs through the system shell (`sh` on macOS and Linux, `cmd.exe` on Windows), with its output passed through. `dev` does not run it.
 
 Run it in the game's folder:
 
 | Command | What it does |
 |---|---|
 | `thunderclap-desktop dev` | Starts the game's Vite dev server (its own `vite.config`) on 127.0.0.1:5198 and opens it in the shell, with hot reload in the window. `--port <n>` picks the port; `--url <url>` uses a dev server you already run on this machine; `--dist [dir]` opens a built web app instead (default: `renderer`) |
-| `thunderclap-desktop package` | Stages an app folder in the OS temp folder (this package's `out/main.mjs` and `out/preload.cjs`, the built game as `out/renderer/`, and a dependency-free `package.json`) and runs electron-builder on it with the shipped config (see *Packaging*). Flags: `--mac`, `--win`, `--linux` (default: this OS); `--dir` (unpacked only); `--renderer <dir>`, `--out <dir>`; `--dry-run` (stage, print the file list and config, and stop; needs no Electron or electron-builder) |
+| `thunderclap-desktop package` | Runs `prePackage`, if set. Then stages an app folder in the OS temp folder (this package's `out/main.mjs` and `out/preload.cjs`, the built game as `out/renderer/`, and a dependency-free `package.json`) and runs electron-builder on it with the shipped config (see *Packaging*). Flags: `--mac`, `--win`, `--linux` (default: this OS); `--dir` (unpacked only); `--renderer <dir>`, `--out <dir>`; `--dry-run` (run `prePackage`, stage, print the file list and config, and stop; needs no Electron or electron-builder) |
 | `thunderclap-desktop --help` | Usage |
 
 `package` never packages an earlier `dist/desktop/` that sits inside the renderer folder. Run the game's build first: `vite build` empties `dist/`, desktop builds included. In `dev`, the shell runs unpackaged from this package's folder, so its `userData` is this package's (`ThunderClap`), shared by every game you run this way; packaged apps use their own `productName`.
