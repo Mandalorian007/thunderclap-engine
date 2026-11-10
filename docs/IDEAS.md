@@ -71,3 +71,8 @@ The action map design is sound: named actions in a typed union, one bindings map
 - **XR:** DOM anchors and HUD floats still project through the page camera in VR; they are wired in `core/game.ts` / `ui` (ws/xr-fixes).
 - **XR:** `PostStack` advances `grainSeed` once per eye. Cosmetic, the same double count as the exposure bug.
 - **Render:** `GpuTimer` has no reset hook, so a timing sample started in a dropped frame stays busy.
+
+## From Last Rune's 1.3.0 migration (2026-11-10)
+
+- **A fatal error the game can report through `createGame({ crash })`.** Last Rune used `installCrashScreen` instead, because its own setup after `createGame` (`startGame` and its demo routes) gets no card from the option. Either expose the screen as `ctx.crash`, or let `crash` accept an `installCrashScreen` handle.
+- **The `[layout] … no "<region>" region` warning** in `layout.ts` isn't gated by `warnOverflows`, so it can still reach a production console. Gate it the same way.
