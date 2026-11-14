@@ -1,5 +1,5 @@
 import { plane } from '../geom';
-import { RenderCore } from '../render/core/core';
+import type { RenderCore } from '../render/core/core';
 import type { Drawable, Frame, ViewInfo } from '../render/frame';
 import { Mesh, VERTEX_LAYOUT_3D } from '../render/mesh';
 import type { Renderer } from '../render/renderer';
@@ -216,7 +216,7 @@ export class Water implements Drawable {
    */
   constructor(renderer: Renderer | RenderCore, opts: WaterOptions = {}) {
     const device = renderer.device;
-    const core = renderer instanceof RenderCore ? renderer : null;
+    const core = 'addDrawable' in renderer ? (renderer as RenderCore) : null; // no value import: fx without the core stays small
     this.renderer = core ? null : (renderer as Renderer);
     this.device = device;
     this.refraction = opts.refraction ?? 1;

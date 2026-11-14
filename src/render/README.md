@@ -1331,6 +1331,23 @@ core.draw(encoder, 0, { view: texView, format, width, height, clear: { r: 0, g: 
 
 Each slot binds its instance range with `setVertexBuffer(1, buffer, offset, size)`, so the indirect `firstInstance` stays 0 and the path runs without `indirect-first-instance` (WebKit). A stereo pair is one `CullGroup`: one view write, one cull dispatch and one bundle, executed once per eye, costs the mono frame plus 5 GPU calls (`harness/views.html`, `e2e/views.spec.ts`). Not here yet: shadow passes (a cull group is the unit they will share), occlusion, and the XR session drawing through the core (it uses `Renderer` until the immediate path moves onto the core).
 
+### Drawables (ws/core-effects)
+
+Anything that is not a draw set joins the core as a `CoreDrawable` (`core.addDrawable(d)`,
+`removeDrawable`, `coreDrawables`): it names its `pass`, `order`, `bounds` (a sphere; out of
+every view of a group, it is left out), `active` and `version`, prepares once a frame
+(`prepare(encoder, core)`) and records into a `CoreDrawableEncoder` (a bundle, cached per cull
+group and re-made when `version` or `targetsVersion` moves, or `encoding: 'direct'` into the
+pass each view). `record(enc, ctx: CoreDrawContext)` returns its call count; `DrawablePipelines`
+caches a pipeline per colour and depth format. `readsDepth` makes the depth attachment
+sampleable and read-only in the pass (`core.sceneDepthView`; refused in a writing pass);
+`readsColor` copies each view's viewport of `CoreTarget.texture` into `core.sceneColorView`
+before the pass. Shaders start from `CORE_DRAWABLE_WGSL` (the core's `view` at group 0);
+`CoreViewExtras.of(core)` adds each view's inverse view-projection and image-plane axes
+(`CORE_VIEW_EXTRA_WGSL`, `VIEW_EXTRA_FLOATS` a view), written once a frame. The fx module's
+particles, water and weather are drawables. Tests `core/drawable.test.ts`.
+
+
 ## Merged mesh runs
 
 Many distinct meshes drawn with `frame.mesh` under one material do not batch (each is its own

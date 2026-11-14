@@ -1,5 +1,5 @@
 import type { Random } from '../core/random';
-import { RenderCore } from '../render/core/core';
+import type { RenderCore } from '../render/core/core';
 import type { Drawable, Frame, ViewInfo } from '../render/frame';
 import type { Renderer } from '../render/renderer';
 import {
@@ -577,7 +577,7 @@ export class ParticleSystem implements Drawable {
    */
   constructor(renderer: Renderer | RenderCore, opts: ParticleSystemOptions = {}) {
     const device = renderer.device;
-    const core = renderer instanceof RenderCore ? renderer : null;
+    const core = 'addDrawable' in renderer ? (renderer as RenderCore) : null; // no value import: fx without the core stays small
     this.renderer = core ? null : (renderer as Renderer);
     this.core = core;
     this.device = device;

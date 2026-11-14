@@ -728,5 +728,11 @@ weather.update(dt); // each frame; core.prepare and core.draw do the rest
 weather.configure(WEATHER_SNOW);
 ```
 
+Types and shaders: `ParticlesOnCoreSource`, `ParticleBudgetKnobOptions`, `PARTICLE_CORE_RENDER_WGSL`;
+`WaterOnCoreOptions`, `WATER_CORE_WGSL` (group 1: params, the `WATER_CORE_FLOATS` block, depth,
+colour, view extras); `WeatherConfig`, `WeatherOptions`, `PrecipShape`, `WeatherOcclusionMap`,
+`WeatherDensityKnobOptions`, `WEATHER_WGSL` with `WEATHER_HEAD_FLOATS` + `WEATHER_LAYER_FLOATS`
+a layer.
+
 Decals stay on the immediate path for now. Tests `particles-core.test.ts`, `water-core.test.ts`,
 `weather.test.ts`; demo `harness/fx-core.html` (`?weather=dust|snow|rain|off`), a stereo pair.
