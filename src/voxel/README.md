@@ -37,6 +37,10 @@ if (raycastVoxels(grid, 32, 20, 32, 0, -1, 0, 8, hit)) grid.set(hit.x, hit.y, hi
 | `createVoxelMesher / installVoxelMesherWorker` | the two ends of the Worker bridge |
 | `VOXEL_WGSL` | the WGSL prelude a block material reads |
 | `deserializeVoxelGrid(bytes)` | a grid back from `grid.serialize()` |
+| `defineVoxelFormat({ blocks, vertex, cell })` | a streamed world's block table, vertex layout and cell layout (*Streamed sections*) |
+| `createSectionStore(opts)` | sparse sections by key: readiness, nearest-first meshing, edits, Worker jobs |
+| `SectionMeshPool` / `installSectionMesherWorker` | the two ends of the section mesher Workers |
+| `raycastCells(probe, ...)` / `sectionRayProbe(store)` | picking through a streamed world |
 
 ## Overview
 
@@ -65,6 +69,17 @@ write into state they own.
 | `chunks.ts` | `createVoxelChunks`: one `Mesh` per non-empty chunk, remesh on dirty, cull, draw |
 | `ray.ts` | `raycastVoxels`, `createVoxelHit`: cell-by-cell DDA picking |
 | `wgsl.ts` | `VOXEL_WGSL`: `voxel_layer`, `voxel_ao`, `voxel_uv_wrap` |
+| `blocks.ts` | `defineBlockTable`, `FACE_CLASS`, `CellLayout`: block behaviour as data |
+| `schema.ts` | `defineVertexSchema`, `packVertexField`, `vertexSchemaWgsl`: the declared 2 × u32 vertex |
+| `format.ts` | `defineVoxelFormat`, `sectionKey`, `SectionCodec`, `RAW_SECTION_CODEC` |
+| `store.ts` | `createSectionStore`: sparse sections, readiness, priority, edits, jobs |
+| `sources.ts` | `SectionJob`, `packSources`, `SectionInputBuilder`: a job's sources into the padded volume |
+| `section-mesher.ts` | `SectionMesher`: greedy faces, AO, smooth sky and block light, cross quads, `meshPiece` |
+| `light.ts` | `BlockLightFlood`: block light over the 27 sections around a job |
+| `connectivity.ts` | `ConnectivityFlood`, `facePairBit`: which faces a section's open cells connect |
+| `section-protocol.ts` | `installSectionMesherWorker`, the Worker messages |
+| `pool.ts` | `SectionMeshPool`, `MesherPort`, `workerMesherPort`, `inThreadMesherPort` |
+| `section-ray.ts` | `raycastCells`, `sectionRayProbe` |
 
 ## Quick start
 
@@ -243,6 +258,94 @@ placed block goes) and `distance`. Cells outside the grid are air; a ray that st
 block hits it at distance 0 with a zero normal and `p` equal to the cell, so a placement there
 is for the game to refuse. Grid units are world units from the grid's corner: subtract the
 world's `origin` from the ray first when it is not at the world origin. No allocation.
+
+## Streamed sections
+
+The grid above is a bounded demo world. A game whose world streams in from a server (or a
+generator) as cubic sections uses the second half of the module: the CPU and Worker side of
+any block game, generalized from Forge Wilds' mesher. The renderer side (section buffers,
+visibility, draw) is not here yet.
+
+**The format, as data.** `defineBlockTable(blocks, { hueMix })` (`BlockTableOptions`) compiles one `BlockDef` per id into a `BlockTable`:
+its `FaceClass` (`none`, `opaque`, `liquid`, `cutout` an inset cube that hides nothing,
+`foliage` drawn in its own stream and culled against its own kind, `cross` crossed quads),
+`lightCost`, `emission` and `hue` (one of `LIGHT_HUES` = 8 colours; `hueMix` names the blend
+where two meet, `NO_HUE_MIX` where none), `inset`, `quads` and constant vertex `fields`.
+`defineVertexSchema(fields, { defaults })` (`VertexFieldDef`s, `VertexSchemaOptions`) lays out a `VertexSchema`: two u32 words (`SECTION_VERTEX_WORDS`),
+`VOXEL_VERTEX_DEFAULTS` (`x y z face ao sky block id`) first, then the game's fields first-fit
+or at a declared `word` and `shift`; the mesher also fills `VOXEL_VERTEX_OPTIONAL` (`side quad
+inset hue`) when they are declared. Each placed `VertexField` packs with `packVertexField`,
+reads with `vertexFieldValue` (`vertexField(schema, name)` finds it, `unpackSectionVertex`
+reads them all) and `vertexSchemaWgsl(schema, opts)` (`VertexSchemaWgslOptions`) writes the
+matching `struct VoxelVertex` and `fn decode_voxel_vertex(w0: u32, w1: u32)` include (no
+`override`). A `CellLayout` says where the id sits in a cell (one u32) and which `CellField`s
+reach the vertices (`fromFacing`: a flag on the air a face looks into, such as "dug out").
+`defineVoxelFormat({ sectionSize, blocks, vertex, cell, skyFalloff, liquidSkyFalloff })`
+(`VoxelFormatOptions`) checks and bundles them into a `VoxelFormat`.
+
+<!-- snippet:check -->
+```ts
+import {
+  createSectionStore,
+  defineBlockTable,
+  defineVertexSchema,
+  defineVoxelFormat,
+  encodeRawSection,
+  RAW_SECTION_CODEC,
+  vertexSchemaWgsl,
+} from '@thunderclap-engine/engine/voxel';
+
+const format = defineVoxelFormat({
+  blocks: defineBlockTable([
+    { class: 'none' },
+    { class: 'opaque', fields: { material: 1 } },
+    { class: 'opaque', emission: 12, hue: 2, fields: { material: 2 } },
+  ]),
+  vertex: defineVertexSchema([{ name: 'material', bits: 4 }]),
+});
+const decode = vertexSchemaWgsl(format.vertex); // prepend to the block shader
+const store = createSectionStore({ format, codec: RAW_SECTION_CODEC, minSectionY: 0, maxSectionY: 3 });
+store.putSection(0, 0, 0, encodeRawSection(Uint32Array.of(1))); // a uniform section of id 1
+```
+
+**The store.** `createSectionStore({ format, codec, air, minSectionY, maxSectionY, outside })`
+(`SectionStoreOptions`) is a `SectionStore` holding sections by `sectionKey(sx, sy, sz)` (`sectionKeyX`, `sectionKeyY`,
+`sectionKeyZ` take it apart; `sectionIndex` is a cell's local index) as the bytes they arrived in, decoding through
+the game's `SectionCodec` (`RAW_SECTION_CODEC` and `encodeRawSection` are the engine's trivial
+one) only to edit. `putSection` / `dropSection`, `has`, `cellAt`; a section is `ready` when all
+26 around it are known; `setInterest` and `takeReady(out, max)` hand out dirty ready sections
+nearest first; `edit(key, [index, cell, ...])` returns every section whose mesh changed (the
+neighbours sharing the edited border, sky-lit rows below a moved column top, and all 27 around
+when a glowing block is near); `jobFor(key)` packs a `SectionJob` with transferable buffers;
+`stats()` is a `SectionStoreStats`. `HEIGHT_OPEN` and `HEIGHT_BLOCKED` mark column heights.
+
+**The mesher.** A job holds its 27 sources (`SourceSection`: one cell, encoded bytes or cells;
+`packSources`, `sourceIndex`, `jobTransfers`); `SectionInputBuilder(format, codec).build(job)`
+makes the `SectionInput` (the padded volume, column heights, and near emitters the 27 sections
+whole). `new SectionMesher(format).mesh(input, { greedy })` (`SectionMeshOptions`) returns a
+`SectionMesh`: `opaque`, `liquid` and `foliage` streams of four-vertex quads (cross quads have
+face `CROSS_FACE`), bounds, and connectivity. It ports Forge's rules unchanged: per-corner AO with
+the flipped diagonal, smooth sky light (×4, falling off `skyFalloff` per block under a column's
+top), block light from `BlockLightFlood` (Dial's algorithm over the wide volume, exact and
+seamless for sections of 15 or more, the lower hue on a tie, half levels at the vertices) and
+greedy merging only of faces whose id, fields, AO and light all match. `meshPiece(cells, sx, sy,
+sz)` meshes a small free-standing grid (a held block). `ConnectivityFlood` reports a
+`SectionConnectivity`: the 15 face pairs (`facePairBit`, `ALL_FACE_PAIRS`) the open cells
+connect, for a renderer's cave culling; `uniformConnectivity` is a uniform section's.
+
+**Workers.** The game's Worker script calls `installSectionMesherWorker({ codec })` (it answers
+`SectionMesherRequest`s with `SectionMesherReply`s, a `SectionMeshResult` or a failure, over a
+`SectionWorkerScopeLike`; `sectionReplyTransfers` lists what moves). On the page,
+`new SectionMeshPool({ format, ports, build: (k) => store.jobFor(k), onMesh, respawn })`
+(`SectionMeshPoolOptions`) queues sections by priority, builds a job only when a `MesherPort`
+has room (`workerMesherPort(worker)`, or `inThreadMesherPort(codec)` without Workers), and
+survives failures: a job the mesher throws on is counted (`SectionMeshPoolErrors`), a dead
+Worker is replaced and its jobs rerun once. `stats` is a `SectionMeshPoolStats`.
+
+**Picking.** `raycastCells(probe, ox, oy, oz, dx, dy, dz, maxDist, out)` is the DDA over a probe
+that answers `RAY_PASS`, `RAY_HIT` or `RAY_UNKNOWN` per cell; `sectionRayProbe(store, hits)`
+makes one over the store (a missing section is unknown, so a pick never goes through the
+unloaded world). Both allocate nothing per call.
 
 ## Demo migration recipe
 
