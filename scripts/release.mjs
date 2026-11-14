@@ -11,12 +11,14 @@
 //
 // Run it on `main`, or on a detached HEAD at main's commit (an integrator's worktree, which may
 // not check out `main` while the main checkout has it; E-039). This is the only way the repo gets
-// tags. It never pushes: the printed push command is yours to run. Pushing a v* tag publishes the
+// tags. It refuses to cut a version whose CHANGELOG section would be empty, the check
+// publish-notes.mjs makes in publish.yml (2.0.0-next.6 was tagged empty and never reached npm). It never pushes: the printed push command is yours to run. Pushing a v* tag publishes the
 // npm packages (.github/workflows/publish.yml, docs/releasing.md).
 import { execFileSync } from 'node:child_process';
 import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { sectionFor } from './publish-notes.mjs';
 
 /** The attribution line every commit in this repo ends with (docs/briefs/common.md). */
 export const ATTRIBUTION = 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>';
@@ -52,6 +54,16 @@ export function distTag(version) {
 }
 
 /** The push command to print: a detached HEAD pushes itself to main, since main did not move. */
+/**
+ * Why `log` (the CHANGELOG as the release would write it) cannot be published as `version`, or
+ * null when it can: publish.yml runs publish-notes.mjs on the tag, which fails on a section that
+ * is missing or has no entries, after the tag is already pushed.
+ */
+export function notesProblem(log, version) {
+  if (sectionFor(log, version)) return null;
+  return `the CHANGELOG section for ${version} would be empty: add its entries under "## Unreleased" first (publish-notes.mjs fails on an empty section)`;
+}
+
 export function pushCommand(branch, tagName) {
   return `git push origin ${branch === 'main' ? 'main' : 'HEAD:main'}${tagName ? ` ${tagName}` : ''}`;
 }
@@ -103,6 +115,8 @@ function main() {
     main: tryGit('rev-parse', '--verify', '--quiet', 'refs/heads/main'),
   });
   if (where) problems.push(where);
+  const notes = notesProblem(nextLog, version);
+  if (notes) problems.push(notes);
   if (tag && git('tag', '--list', tagName)) problems.push(`tag ${tagName} already exists`);
 
   console.log(`release: ${pkg.version} -> ${version}${tag ? `, tag ${tagName}` : ', no tag'}`);

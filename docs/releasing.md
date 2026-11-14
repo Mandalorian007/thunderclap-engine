@@ -64,7 +64,7 @@ Run it on `main`, or on a detached HEAD at `main`'s commit, which is how an inte
 Pushing the tag runs `publish.yml`. It:
 
 1. fails unless the tag is `v` plus the root `package.json` version;
-2. takes that version's `CHANGELOG.md` section as the release notes (`scripts/publish-notes.mjs`, with repo-relative links made absolute at the tag), failing before anything is published if the section is missing or empty;
+2. takes that version's `CHANGELOG.md` section as the release notes (`scripts/publish-notes.mjs`, with repo-relative links made absolute at the tag), failing before anything is published if the section is missing or empty (`pnpm release` runs the same check before it commits or tags, so an empty section is refused locally);
 3. runs `pnpm install --frozen-lockfile`, `pnpm check`, `pnpm build` and `pnpm check:pack`;
 4. packs each of the four packages and publishes it with provenance, skipping any whose exact version is already on npm;
 5. installs from npm: polls the registry every 10 seconds, for up to 10 minutes, until all four `package.json` versions are listed, then installs them into a fresh project, typechecks it, builds it with Vite and loads every entry (`pack-smoke.mjs --from-npm --wait 600`). A broken publish fails the run here, not for a user;
