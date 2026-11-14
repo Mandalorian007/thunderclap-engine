@@ -22,8 +22,8 @@ import type { Arena, ArenaAlloc } from './arena';
 import {
   ARGS_BYTES,
   CULL_PARAMS_BYTES,
-  DRAW_ARGS_BYTES,
   CULL_WORKGROUP,
+  DRAW_ARGS_BYTES,
   SLOT,
   SLOT_BYTES,
   SLOT_HIDDEN,
@@ -511,8 +511,7 @@ export class DrawSet {
     if (this.argsStride < 0 || this.argsStride % 4 !== 0) {
       throw new Error(`${this.label}: argsStride ${this.argsStride} is not a multiple of 4`);
     }
-    this.argsOffsets =
-      this.cull === 'external' ? new Int32Array(desc.capacity).fill(-1) : null;
+    this.argsOffsets = this.cull === 'external' ? new Int32Array(desc.capacity).fill(-1) : null;
     this.vertexSlot = desc.vertexLayout.attributes.length > 0 ? 0 : -1;
     this.instanceSlot = this.vertexSlot + 1;
     this.capacity = desc.capacity;
@@ -1370,8 +1369,7 @@ ${il?.wgslDecode ?? ''}
     const variant = this.variants[vi]!;
     const sh = variant.shader;
     const module = this.moduleOf(variant);
-    const buffers: GPUVertexBufferLayout[] =
-      this.vertexSlot >= 0 ? [d.vertexLayout.buffer(0)] : [];
+    const buffers: GPUVertexBufferLayout[] = this.vertexSlot >= 0 ? [d.vertexLayout.buffer(0)] : [];
     if (d.instanceLayout) buffers.push(d.instanceLayout.buffer(d.vertexLayout.attributes.length));
     if (this.originBuffer) {
       // One vec3f per slot, bound at the slot's offset: stride 0 repeats it for every instance.

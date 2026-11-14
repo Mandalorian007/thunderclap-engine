@@ -224,10 +224,9 @@ describe('unindexed sets (ws/actor-fit)', () => {
     ext.add({ indexCount: 6, bounds: [0, 0, 0, 1] });
     frame(w);
     const bundle = w.fake.bundles.at(-1)!.commands;
-    expect(bundle.filter((c) => c.op === 'drawIndirect').map((c) => (c as { offset: number }).offset)).toEqual([
-      0,
-      DRAW_ARGS_BYTES,
-    ]);
+    expect(
+      bundle.filter((c) => c.op === 'drawIndirect').map((c) => (c as { offset: number }).offset),
+    ).toEqual([0, DRAW_ARGS_BYTES]);
     expect(bundle.some((c) => c.op === 'other' && c.name === 'setVertexBuffer')).toBe(false);
     // With no fields, VertexIn holds the vertex index.
     expect(w.modules.some((m) => m.includes('@builtin(vertex_index) core_vertex: u32'))).toBe(true);

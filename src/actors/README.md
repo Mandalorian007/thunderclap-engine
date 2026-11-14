@@ -49,12 +49,16 @@ actors.prepare(encoder, [view], performance.now() / 1000);
 | `actors.bones`, `actors.args`, `drawOf(model, lod)` | the GPU outputs, for readback or a game's own pass |
 | `recordShape(layout)` / `opts.recordLayout` | extra per-actor fields (`f32`, `u32`, `i32`) after the 20 header words, visible to WGSL as `ACTOR_FIELD_<NAME>` |
 | `ACTOR_RECORD` | the header's word offsets |
+| `opts.poseWgsl` / `opts.poseCpu` | the pose hook (ws/actor-fit): `fn actor_pose(actor, model, node, p: Trs, time) -> Trs` changes each node's local transform after the clips; its CPU twin keeps `poseCpu` matching |
+| `actors.addDrawSet(desc)` | another set over the same models, poses and visible lists with its own shader (`ActorDrawSetDesc`: entries, blend, pass, order, own groups at 2+); `shape: 'actor'` with `opts.actorVertices` draws that many unindexed vertices per visible actor (a contact shadow's quad) |
 
 ## How it works
 
 - **Records.** `slots` × `stride` words on the CPU and in one storage buffer. `setRecord` marks a dirty range; `prepare` uploads it in one `writeBuffer`.
 - **Pose pass.** One thread per slot up to the highest used. It places the actor at `position + velocity × (time − since)` and culls its bounding sphere against each view's frustum. It picks the LOD by distance to view 0, samples the baked clips (two, blended), and writes the bones into `actors.bones`. Then it appends itself to its draw's instance list with an atomic add on the indirect args.
 - **Draws.** One `DrawSet` with `cull: 'external'`: the core records its bundle once, and the pose pass fills the instance counts. A vertex is 32 bytes (position, normal, colour, four joints and weights, and the draw id), so rigid and skinned models share one pipeline.
+- **Empty models.** A model no record shows has its draws hidden, so its indirect draws leave the bundle (re-recorded only when a model gains its first actor or loses its last).
+- **Shared sets.** `addDrawSet` prepends the actor buffers at group 1 and helpers (`actor_at(draw, inst)`, `actor_word`, `actor_position`, `actor_yaw`, `actor_scale`, `actor_model`, `actor_bone`, `actor_skin`, `actor_point`, `actor_dir`, `actor_draw_of`, `actor_light`). Its slots are the model meshes and read the system's arguments, so it costs one more bundle and no pass. With `actorVertices` each (view, mesh) cell is nine words: the body's `drawIndexedIndirect`, then a `drawIndirect` of `actorVertices` vertices whose first vertex is `mesh × actorVertices`.
 - **Lighting.** Each record carries a light word (RGBA8). `opts.sampleLight(x, y, z)` fills it when a position is set (for example, from a voxel light grid). `opts.lightWgsl` replaces the default `actor_light(actor, world, normal, color, light)` with the game's shading.
 
 ## Limits

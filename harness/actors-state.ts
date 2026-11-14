@@ -42,6 +42,13 @@ export interface HarnessActorsState {
   gpuMs: number;
   /** GPU samples taken. */
   gpuSamples: number;
+  /**
+   * `?fit=1` (ws/actor-fit): a pose hook nods the robots' heads (CPU twin included, so
+   * `poseError` checks it) and an `'actor'` draw set lays a contact shadow under each actor.
+   */
+  fit: boolean;
+  /** With `fit`: shadow quads the pose pass counted in view 0 (read back with `check()`). */
+  shadows: number;
 }
 
 declare global {
