@@ -13,6 +13,9 @@ interface BlockDef {
     hue?: number;
     inset?: number;
     quads?: number;
+    lodSolid?: boolean;
+    parts?: number;
+    partsReplace?: boolean;
     fields?: Readonly<Record<string, number>>;
 }
 
@@ -32,6 +35,9 @@ interface BlockTable {
     readonly hue: Uint8Array;
     readonly inset: Uint8Array;
     readonly quads: Uint8Array;
+    readonly lodSolid?: Uint8Array;
+    readonly parts?: Uint8Array;
+    readonly partsReplace?: Uint8Array;
     readonly hueMix: Uint8Array;
     readonly emissive: boolean;
     readonly fields: readonly (Readonly<Record<string, number>> | null)[];
@@ -169,6 +175,7 @@ interface SectionJob {
     heights: Int32Array;
     wetTops?: Uint8Array;
     glow?: number;
+    insets?: Int32Array;
 }
 
 ## SectionMesh  (type-only)
@@ -184,11 +191,14 @@ interface SectionMesh {
     connectivity: number;
     openCells: number;
     dark: boolean;
+    tiered: boolean;
 }
 
 ## SectionMeshOptions  (type-only)
 interface SectionMeshOptions {
     greedy?: boolean;
+    leafLod?: number;
+    insets?: Int32Array;
 }
 
 ## SectionMeshPool
@@ -220,6 +230,7 @@ interface SectionMeshPoolOptions {
     build: (key: number) => SectionJob | null;
     onMesh: (key: number, result: SectionMeshResult) => void;
     greedy?: boolean;
+    leafLod?: (key: number) => number;
     perWorker?: number;
     respawn?: (index: number) => MesherPort;
 }
@@ -275,6 +286,7 @@ type SectionMesherRequest = {
     job: number;
     input: SectionJob;
     greedy: boolean;
+    leafLod?: number;
 };
 
 ## SectionStore  (type-only)
@@ -509,6 +521,8 @@ interface VoxelHit {
 ## VoxelMaterial  (type-only)
 interface VoxelMaterial {
     fragment: string;
+    vertex?: string;
+    vertexEntry?: string;
     bindGroups?: readonly {
         layout: GPUBindGroupLayout;
         group: GPUBindGroup;
@@ -554,6 +568,7 @@ interface VoxelWorldOptions {
     perWorker?: number;
     greedy?: boolean;
     materials?: Partial<Record<VoxelStream, VoxelMaterial>>;
+    leafLod?: (sx: number, sy: number, sz: number) => number;
     radius?: number;
     verticalRadius?: number;
     uploadsPerFrame?: number;
