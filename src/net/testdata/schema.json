@@ -1,0 +1,114 @@
+[
+  {
+    "desc": {
+      "roots": ["Root"],
+      "types": {
+        "Id": {
+          "newtype": "u64"
+        },
+        "Inner": {
+          "struct": {
+            "a": "i32",
+            "b": {
+              "option": "String"
+            }
+          }
+        },
+        "Root": {
+          "enum": {
+            "A": {
+              "x": "u32",
+              "y": "Inner"
+            },
+            "B": null,
+            "C": ["Id"]
+          }
+        }
+      }
+    },
+    "text": "thunderclap-wire 2\nroot Root\nenum Root {\n  A { x: u32, y: Inner }\n  B\n  C(Id)\n}\nstruct Inner { a: i32, b: Option<String> }\nnewtype Id(u64)\n",
+    "hash": "7e3c1aedc4c69602"
+  },
+  {
+    "desc": {
+      "roots": ["A"],
+      "types": {
+        "C": {
+          "struct": {}
+        },
+        "B": {
+          "struct": {
+            "c": "C"
+          }
+        },
+        "A": {
+          "struct": {
+            "b": "B",
+            "m": {
+              "map": [
+                "u32",
+                {
+                  "vec": "Bytes"
+                }
+              ]
+            }
+          }
+        },
+        "Q": {
+          "newtype": "String"
+        }
+      },
+      "queries": {
+        "find": {
+          "args": {
+            "name": "Q",
+            "at": "Fixed"
+          },
+          "result": {
+            "option": "B"
+          }
+        }
+      }
+    },
+    "text": "thunderclap-wire 2\nroot A\nquery find(name: Q, at: Fixed) -> Option<B>\nstruct A { b: B, m: Map<u32, Vec<Bytes>> }\nstruct B { c: C }\nstruct C {  }\nnewtype Q(String)\n",
+    "hash": "5e9f14f6252d8cb9"
+  },
+  {
+    "desc": {
+      "roots": ["Msg"],
+      "types": {
+        "Msg": {
+          "enum": {
+            "Hello": {
+              "player_name": "String",
+              "at": "Fixed",
+              "tags": {
+                "map": ["String", "u16"]
+              }
+            },
+            "Bye": null,
+            "Empty": {},
+            "Raw": ["Bytes"],
+            "Many": [
+              {
+                "vec": {
+                  "option": "i32"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "queries": {
+        "scores": {
+          "args": {},
+          "result": {
+            "map": ["String", "i64"]
+          }
+        }
+      }
+    },
+    "text": "thunderclap-wire 2\nroot Msg\nquery scores() -> Map<String, i64>\nenum Msg {\n  Hello { player_name: String, at: Fixed, tags: Map<String, u16> }\n  Bye\n  Empty {  }\n  Raw(Bytes)\n  Many(Vec<Option<i32>>)\n}\n",
+    "hash": "7cc8873c9606bfb0"
+  }
+]
