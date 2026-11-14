@@ -20,6 +20,9 @@ export { createDebugDraw, DEBUG_VERTEX_FLOATS, DebugDraw } from './debug-draw';
 export { DEBUG_DRAW_WGSL } from './debug-wgsl';
 export type { DecalBlend, DecalDesc, DecalMode, DecalsOptions } from './decals';
 export { DECAL_INSTANCE_FLOATS, DECAL_PARAMS_FLOATS, Decals } from './decals';
+export type { DecalsOnCoreOptions, DecalsOnCoreSource } from './decals-core';
+export { DecalsOnCore } from './decals-core';
+export { DECAL_CORE_BOX_WGSL, DECAL_CORE_QUAD_WGSL } from './decals-core-wgsl';
 export { WGSL_DECAL_BOX, WGSL_DECAL_DEPTH_COPY, WGSL_DECAL_QUAD } from './decals-wgsl';
 export type {
   CreateEffectOptions,
