@@ -450,7 +450,7 @@ processor and is remembered for later ones. At most `VIEW_POST_MAX` (8) views. T
   table in `@thunderclap-engine/engine/tween` (`ease.linear`, `ease.quadIn`, `ease.quadOut`,
   `ease.smoothstep`), which also has the full set.
 
-**Post on the render core (ws/core-passes).** `createCorePost(core, processor, opts?)` adds a
+**Post on the render core (ws/core-passes).** `createCorePost(core, processor, opts?: CorePostOptions)` (a `CorePost`) adds a
 `'post'` resolve pass after `'transparent'` (`PassDesc.resolve`): each view's HDR colour, depth
 and projection, and this and the last frame's matrices of the same view index, go to
 `processor` (a `PostStack`, FXAA, TAA, or a `ViewPost` of them so each eye keeps its own

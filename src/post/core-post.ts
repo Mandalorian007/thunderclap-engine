@@ -3,7 +3,7 @@ import type { RenderCore } from '../render/core/core';
 import type { CorePass, CoreResolveContext } from '../render/core/pass-list';
 import type { PostInputs, PostProcessor, PostProjection, PostView } from '../render/renderer';
 import type { SceneTargetViewport } from '../render/scene-target';
-import { defaultTextures, type TextureLike } from '../render/texture';
+import type { TextureLike } from '../render/texture';
 import { VIEW_POST_MAX, ViewPost } from './view-post';
 
 /** Options for `createCorePost`. */
@@ -69,6 +69,9 @@ export class CorePost {
   private width = 0;
   private height = 0;
   private readonly inv: Mat4 = mat4.create();
+  /** A 1×1 texel of zeros (WebGPU clears new textures): the emissive when the game gives none. */
+  private black: Tex | null = null;
+  private blackDevice: GPUDevice | null = null;
 
   constructor(core: RenderCore, processor: PostProcessor, opts: CorePostOptions = {}) {
     this.core = core;
@@ -103,6 +106,20 @@ export class CorePost {
     });
   }
 
+  private blackTexel(): Tex {
+    const device = this.core.device;
+    if (this.black && this.blackDevice === device) return this.black;
+    const t = device.createTexture({
+      label: 'core-post-black',
+      size: [1, 1],
+      format: 'rgba8unorm',
+      usage: GPUTextureUsage.TEXTURE_BINDING,
+    });
+    this.black = { view: t.createView(), width: 1, height: 1 };
+    this.blackDevice = device;
+    return this.black;
+  }
+
   private resolve(encoder: GPUCommandEncoder, ctx: CoreResolveContext): void {
     const i = ctx.viewIndex;
     if (i >= VIEW_POST_MAX) throw new Error(`CorePost: view ${i} (0 to ${VIEW_POST_MAX - 1})`);
@@ -118,7 +135,7 @@ export class CorePost {
     c.width = ctx.width;
     c.height = ctx.height;
     inputs.color = c;
-    inputs.emissive = this.emissive ?? defaultTextures(this.core.device).black;
+    inputs.emissive = this.emissive ?? this.blackTexel();
     inputs.time = this.time;
     inputs.dt = this.dt;
 
