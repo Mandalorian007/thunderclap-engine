@@ -14,6 +14,9 @@
 //!   (`close::REVOKED`), which the client takes as final. Its guest mode
 //!   ([`SessionAuth::with_guests`]) lets an empty token in, for dev.
 //!   [`DevTokens`] are signed tokens with no store, for dev servers.
+//! - **Live tokens** ([`LiveTokens`]): the open sessions' names and
+//!   tokens, through tc-net's Hello hook, so a revoke can say how many
+//!   sessions it closed ([`LiveTokens::revoke`]).
 //!
 //! Tokens are Forge Wilds' scheme with its nouns made options:
 //! `<prefix>.<name>.<perms>[.<generation>].<hex HMAC-SHA256>`.
@@ -32,6 +35,7 @@
 
 mod accounts;
 mod auth;
+mod live;
 mod names;
 mod token;
 
@@ -39,5 +43,6 @@ pub use accounts::{
     AccountError, Accounts, Claim, Claimed, Clock, FileAccounts, MemoryAccounts, Record, unix_now,
 };
 pub use auth::{DevTokens, GUEST_PERMISSION, GUEST_TOKEN_PREFIX, Issued, SessionAuth};
+pub use live::{LiveSlot, LiveTokens, Revoked};
 pub use names::{NameRules, quote};
-pub use token::{TokenError, TokenFormat};
+pub use token::{TokenError, TokenFormat, TokenWords};

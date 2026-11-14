@@ -41,6 +41,61 @@ pub struct TokenFormat {
     /// The reason a dev token is refused where only session tokens are
     /// taken.
     pub needs_session: String,
+    /// The other words a player reads (a bad name, a guest name an
+    /// account holds, a token from another scheme).
+    pub words: TokenWords,
+}
+
+/// The words of [`TokenFormat`]'s other refusals, each a template read
+/// after `invalid token: ` (which every refused token's reason starts
+/// with): `{name}` stands for the quoted name ([`quote`]), `{rules}` for
+/// [`NameRules::describe`], `{prefix}` for the quoted first field.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TokenWords {
+    /// A token whose name breaks the rules (`{name}`, `{rules}`).
+    pub bad_name: String,
+    /// A guest name ([`crate::SessionAuth::with_guests`]) an account holds
+    /// (`{name}`).
+    pub has_account: String,
+    /// A token whose first field is neither prefix (`{prefix}`).
+    pub unknown_version: String,
+}
+
+impl Default for TokenWords {
+    fn default() -> TokenWords {
+        TokenWords {
+            bad_name: "bad name {name} (use {rules})".into(),
+            has_account: "{name} has an account: sign in instead".into(),
+            unknown_version: "unknown token version {prefix}".into(),
+        }
+    }
+}
+
+impl TokenWords {
+    /// `template` with `{name}` and `{prefix}` as `quoted` (already quoted)
+    /// and `{rules}` as `rules`, in one pass: what goes in is never read
+    /// as a placeholder.
+    fn fill(template: &str, quoted: &str, rules: &str) -> String {
+        let mut out = String::with_capacity(template.len() + quoted.len());
+        let mut rest = template;
+        while let Some(at) = rest.find('{') {
+            out.push_str(&rest[..at]);
+            rest = &rest[at..];
+            let (with, len) = if rest.starts_with("{name}") {
+                (quoted, 6)
+            } else if rest.starts_with("{prefix}") {
+                (quoted, 8)
+            } else if rest.starts_with("{rules}") {
+                (rules, 7)
+            } else {
+                ("{", 1)
+            };
+            out.push_str(with);
+            rest = &rest[len..];
+        }
+        out.push_str(rest);
+        out
+    }
 }
 
 impl Default for TokenFormat {
@@ -53,6 +108,7 @@ impl Default for TokenFormat {
             exclusive: Vec::new(),
             expired: "this token has been revoked: ask for a new one".into(),
             needs_session: "this server takes session tokens only".into(),
+            words: TokenWords::default(),
         }
     }
 }
@@ -65,9 +121,8 @@ impl TokenFormat {
             TokenError::Expired => self.expired.clone(),
             TokenError::NeedsSession => self.needs_session.clone(),
             TokenError::InvalidName(name) => format!(
-                "invalid token: bad name {} (use {})",
-                quote(name),
-                self.names.describe
+                "invalid token: {}",
+                TokenWords::fill(&self.words.bad_name, &quote(name), self.names.describe)
             ),
             other => other.to_string(),
         }
@@ -113,6 +168,20 @@ impl TokenFormat {
             )));
         }
         Ok(perms)
+    }
+
+    /// Why a guest may not take `name`: an account holds it.
+    pub(crate) fn has_account(&self, name: &str) -> TokenError {
+        TokenError::Malformed(TokenWords::fill(&self.words.has_account, &quote(name), ""))
+    }
+
+    /// Why a token whose first field is `prefix` is refused.
+    pub(crate) fn unknown_version(&self, prefix: &str) -> TokenError {
+        TokenError::Malformed(TokenWords::fill(
+            &self.words.unknown_version,
+            &quote(prefix),
+            "",
+        ))
     }
 
     /// Checks `name` against the rules.
@@ -251,6 +320,46 @@ mod tests {
     fn hex_round_trips() {
         let bytes: Vec<u8> = (0..32).map(|i| i * 8).collect();
         assert_eq!(unhex(&hex(&bytes)), Some(bytes));
+    }
+
+    #[test]
+    fn words_fill_their_placeholders_once() {
+        assert_eq!(
+            TokenWords::fill("{name} {x} {rules}{prefix}{", "\"{rules}\"", "a-z"),
+            "\"{rules}\" {x} a-z\"{rules}\"{"
+        );
+        let format = TokenFormat {
+            words: TokenWords {
+                bad_name: "{name}: not a name ({rules})".into(),
+                has_account: "{name} is taken".into(),
+                unknown_version: "not our link: {prefix}".into(),
+            },
+            ..TokenFormat::default()
+        };
+        let bad = format.check_name("Bo!").unwrap_err();
+        assert_eq!(
+            format.reason(&bad),
+            format!(
+                "invalid token: \"Bo!\": not a name ({})",
+                format.names.describe
+            )
+        );
+        assert_eq!(
+            format.has_account("ada").to_string(),
+            "invalid token: \"ada\" is taken"
+        );
+        assert_eq!(
+            format.unknown_version("zz").to_string(),
+            "invalid token: not our link: \"zz\""
+        );
+        let default = TokenFormat::default();
+        assert_eq!(
+            default.reason(&bad),
+            format!(
+                "invalid token: bad name \"Bo!\" (use {})",
+                default.names.describe
+            )
+        );
     }
 
     #[test]

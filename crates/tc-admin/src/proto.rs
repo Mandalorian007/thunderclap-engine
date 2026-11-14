@@ -2,7 +2,14 @@
 //! token, and the server's [`Reply`]. Each is one line of JSON naming
 //! [`ADMIN_VERSION`].
 
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
+
+/// `value` (anything `json!` takes) as JSON text.
+macro_rules! j {
+    ($value:expr) => {
+        json!($value).to_string()
+    };
+}
 
 /// The protocol's version, in every request and reply. A new request or
 /// field doesn't change it (an older server answers a request it doesn't
@@ -206,26 +213,25 @@ impl Request {
 
     /// The request's line (without its newline), carrying `token`.
     pub fn encode(&self, token: &str) -> String {
-        let mut r = Map::new();
-        r.insert("type".into(), self.name().into());
+        let mut r = vec![("type", j!(self.name()))];
         match self {
-            Request::Backup { out } => {
-                r.insert("out".into(), json!(out));
-            }
-            Request::Revoke { name } => {
-                r.insert("name".into(), json!(name));
-            }
+            Request::Backup { out } => r.push(("out", j!(out))),
+            Request::Revoke { name } => r.push(("name", j!(name))),
             Request::Reports { since, kind } => {
-                r.insert("since".into(), json!(since));
-                r.insert("kind".into(), json!(kind));
+                r.push(("since", j!(since)));
+                r.push(("kind", j!(kind)));
             }
             Request::Game { name, args } => {
-                r.insert("name".into(), json!(name));
-                r.insert("args".into(), args.clone());
+                r.push(("name", j!(name)));
+                r.push(("args", args.to_string()));
             }
             _ => {}
         }
-        json!({ "admin": ADMIN_VERSION, "token": token, "request": r }).to_string()
+        obj(&[
+            ("admin", j!(ADMIN_VERSION)),
+            ("token", j!(token)),
+            ("request", obj(&r)),
+        ])
     }
 }
 
@@ -281,80 +287,91 @@ impl Reply {
     /// The reply's line (without its newline).
     pub fn encode(&self) -> String {
         let reply = match self {
-            Reply::Status(s) => json!({
-                "type": "status",
-                "pid": s.pid,
-                "build": s.build,
-                "port": s.port,
-                "started": s.started,
-                "uptime_secs": s.uptime_secs,
-                "players": s.players,
-                "connections": s.connections,
-                "version": s.version,
-                "time": s.time,
-                "paused": s.paused,
-                "reloading": s.reloading,
-                "stopping": s.stopping,
-                "store_error": s.store_error,
-                "refused": s.refused,
-                "limited": s.limited,
-                "frames_sent": s.frames_sent,
-                "bytes_sent": s.bytes_sent,
-            }),
-            Reply::Stopping { already } => json!({ "type": "stopping", "already": already }),
-            Reply::Clock { paused, time } => {
-                json!({ "type": "clock", "paused": paused, "time": time })
+            Reply::Status(s) => obj(&[
+                ("type", j!("status")),
+                ("pid", j!(s.pid)),
+                ("build", j!(s.build)),
+                ("port", j!(s.port)),
+                ("started", j!(s.started)),
+                ("uptime_secs", j!(s.uptime_secs)),
+                ("players", j!(s.players)),
+                ("connections", j!(s.connections)),
+                ("version", j!(s.version)),
+                ("time", j!(s.time)),
+                ("paused", j!(s.paused)),
+                ("reloading", j!(s.reloading)),
+                ("stopping", j!(s.stopping)),
+                ("store_error", j!(s.store_error)),
+                ("refused", j!(s.refused)),
+                ("limited", j!(s.limited)),
+                ("frames_sent", j!(s.frames_sent)),
+                ("bytes_sent", j!(s.bytes_sent)),
+            ]),
+            Reply::Stopping { already } => {
+                obj(&[("type", j!("stopping")), ("already", j!(already))])
             }
+            Reply::Clock { paused, time } => obj(&[
+                ("type", j!("clock")),
+                ("paused", j!(paused)),
+                ("time", j!(time)),
+            ]),
             Reply::Reloaded {
                 time,
                 version,
                 rounds,
                 replayed,
-            } => json!({
-                "type": "reloaded",
-                "time": time,
-                "version": version,
-                "rounds": rounds,
-                "replayed": replayed,
-            }),
+            } => obj(&[
+                ("type", j!("reloaded")),
+                ("time", j!(time)),
+                ("version", j!(version)),
+                ("rounds", j!(rounds)),
+                ("replayed", j!(replayed)),
+            ]),
             Reply::BackedUp {
                 dir,
                 files,
                 bytes,
                 last_seq,
                 pruned,
-            } => json!({
-                "type": "backed_up",
-                "dir": dir,
-                "files": files,
-                "bytes": bytes,
-                "last_seq": last_seq,
-                "pruned": pruned,
-            }),
-            Reply::Revoked { name, generation } => {
-                json!({ "type": "revoked", "name": name, "generation": generation })
-            }
-            Reply::Reports(r) => json!({
-                "type": "reports",
-                "kept": r.kept,
-                "count": r.count,
-                "newest": r.newest.iter().map(|b| json!({
-                    "file": b.file,
-                    "received": b.received,
-                    "from": b.from,
-                    "kind": b.kind,
-                    "text": b.text,
-                })).collect::<Vec<_>>(),
-                "received": r.received,
-                "saved": r.saved,
-                "dropped": r.dropped,
-                "pruned": r.pruned,
-            }),
-            Reply::Game(value) => json!({ "type": "game", "value": value }),
-            Reply::Refused(why) => json!({ "type": "refused", "why": why }),
-            Reply::Unknown(name) => json!({ "type": "unknown", "request": name }),
+            } => obj(&[
+                ("type", j!("backed_up")),
+                ("dir", j!(dir)),
+                ("files", j!(files)),
+                ("bytes", j!(bytes)),
+                ("last_seq", j!(last_seq)),
+                ("pruned", j!(pruned)),
+            ]),
+            Reply::Revoked { name, generation } => obj(&[
+                ("type", j!("revoked")),
+                ("name", j!(name)),
+                ("generation", j!(generation)),
+            ]),
+            Reply::Reports(r) => obj(&[
+                ("type", j!("reports")),
+                ("kept", j!(r.kept)),
+                ("count", j!(r.count)),
+                (
+                    "newest",
+                    list(r.newest.iter().map(|b| {
+                        obj(&[
+                            ("file", j!(b.file)),
+                            ("received", j!(b.received)),
+                            ("from", j!(b.from)),
+                            ("kind", j!(b.kind)),
+                            ("text", j!(b.text)),
+                        ])
+                    })),
+                ),
+                ("received", j!(r.received)),
+                ("saved", j!(r.saved)),
+                ("dropped", j!(r.dropped)),
+                ("pruned", j!(r.pruned)),
+            ]),
+            Reply::Game(value) => obj(&[("type", j!("game")), ("value", j!(value))]),
+            Reply::Refused(why) => obj(&[("type", j!("refused")), ("why", j!(why))]),
+            Reply::Unknown(name) => obj(&[("type", j!("unknown")), ("request", j!(name))]),
         };
-        json!({ "admin": ADMIN_VERSION, "reply": reply }).to_string()
+        obj(&[("admin", j!(ADMIN_VERSION)), ("reply", reply)])
     }
 
     /// Reads a reply line.
@@ -437,6 +454,28 @@ impl Reply {
             None => Err("no reply type".into()),
         }
     }
+}
+
+/// A JSON object, its fields in the order given (each value JSON text
+/// already): the lines keep their order whatever `serde_json` features a
+/// game's crates turn on.
+fn obj(fields: &[(&str, String)]) -> String {
+    let mut out = String::from("{");
+    for (i, (key, value)) in fields.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(&Value::from(*key).to_string());
+        out.push(':');
+        out.push_str(value);
+    }
+    out.push('}');
+    out
+}
+
+/// A JSON array of JSON texts.
+fn list(items: impl Iterator<Item = String>) -> String {
+    format!("[{}]", items.collect::<Vec<_>>().join(","))
 }
 
 fn brief(v: &Value) -> ReportBrief {

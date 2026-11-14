@@ -30,6 +30,7 @@ pub mod deflate;
 pub mod entity;
 pub mod envelope;
 pub mod flow;
+pub mod hooks;
 pub mod origin;
 pub mod outbound;
 pub mod rate;

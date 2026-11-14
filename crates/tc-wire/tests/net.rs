@@ -29,14 +29,14 @@ fn testdata(file: &str) -> PathBuf {
 
 #[test]
 fn typescript_schema_vectors_match() {
-    let cases = read_json(testdata("schema.json"));
-    for case in cases.as_array().unwrap() {
+    let cases = read_ordered(testdata("schema.json"));
+    for case in cases.items() {
         let s = schema_from_desc(WIRE_HEADER, &case["desc"]);
-        assert_eq!(s.canonical_text(), case["text"].as_str().unwrap());
-        assert_eq!(s.hash(), case["hash"].as_str().unwrap());
+        assert_eq!(s.canonical_text(), case["text"].value().as_str().unwrap());
+        assert_eq!(s.hash(), case["hash"].value().as_str().unwrap());
     }
     // schema.test.ts's first schema under Forge's header.
-    let first = &cases[0]["desc"];
+    let first = &cases.items()[0]["desc"];
     assert_eq!(
         schema_from_desc(FORGE_HEADER, first).hash(),
         "f5fdfd2f9a7219a0"
@@ -231,71 +231,96 @@ fn spec(ty: &TypeRef) -> Value {
     }
 }
 
-/// The schema as TypeScript's `TypesDesc`.
-fn desc(s: &Schema) -> Value {
+/// The schema as TypeScript's `TypesDesc`, its fields and variants in
+/// order.
+fn desc(s: &Schema) -> Json {
+    let obj = |entries: Vec<(&str, Json)>| {
+        Json::Object(
+            entries
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect(),
+        )
+    };
+    let spec = |ty: &TypeRef| Json::from(spec(ty));
     let fields = |fields: &[Field]| {
-        Value::Object(
+        Json::Object(
             fields
                 .iter()
                 .map(|f| (f.name.to_string(), spec(&f.ty)))
                 .collect(),
         )
     };
-    let mut types = serde_json::Map::new();
-    for def in s.types() {
-        let shape = match &def.kind {
-            TypeKind::Struct(f) => json!({ "struct": fields(f) }),
-            TypeKind::Newtype(inner) => json!({ "newtype": spec(inner) }),
-            TypeKind::Enum(variants) => {
-                let vs: serde_json::Map<String, Value> = variants
-                    .iter()
-                    .map(|v| {
-                        let fields = match &v.fields {
-                            VariantFields::Unit => Value::Null,
-                            VariantFields::Newtype(inner) => json!([spec(inner)]),
-                            VariantFields::Named(f) => fields(f),
-                        };
-                        (v.name.to_string(), fields)
-                    })
-                    .collect();
-                json!({ "enum": vs })
-            }
-        };
-        types.insert(def.name.to_string(), shape);
-    }
-    let queries: serde_json::Map<String, Value> = s
+    let types = s
+        .types()
+        .iter()
+        .map(|def| {
+            let shape = match &def.kind {
+                TypeKind::Struct(f) => obj(vec![("struct", fields(f))]),
+                TypeKind::Newtype(inner) => obj(vec![("newtype", spec(inner))]),
+                TypeKind::Enum(variants) => {
+                    let vs = variants
+                        .iter()
+                        .map(|v| {
+                            let fields = match &v.fields {
+                                VariantFields::Unit => Json::Scalar(Value::Null),
+                                VariantFields::Newtype(inner) => Json::Array(vec![spec(inner)]),
+                                VariantFields::Named(f) => fields(f),
+                            };
+                            (v.name.to_string(), fields)
+                        })
+                        .collect();
+                    obj(vec![("enum", Json::Object(vs))])
+                }
+            };
+            (def.name.to_string(), shape)
+        })
+        .collect();
+    let queries = s
         .queries()
         .iter()
         .map(|q| {
-            (
-                q.name.to_string(),
-                json!({ "args": fields(&q.args), "result": spec(&q.result) }),
-            )
+            let query = obj(vec![("args", fields(&q.args)), ("result", spec(&q.result))]);
+            (q.name.to_string(), query)
         })
         .collect();
-    json!({ "roots": s.roots(), "types": types, "queries": queries })
+    obj(vec![
+        ("roots", Json::from(json!(s.roots()))),
+        ("types", Json::Object(types)),
+        ("queries", Json::Object(queries)),
+    ])
 }
 
-fn vectors() -> Value {
+fn vectors() -> Json {
     let s = schema();
     let ty = TypeRef::Named("Msg");
-    let cases: Vec<Value> = messages()
+    let cases: Vec<Json> = messages()
         .into_iter()
         .map(|(name, msg)| {
             let bytes = msg.to_bytes();
             assert_eq!(Msg::from_bytes(&bytes).unwrap(), msg, "{name}");
             let value = decode_all(&s, &ty, &bytes).unwrap();
             assert_eq!(encode_all(&s, &ty, &value), bytes, "{name}");
-            json!({ "name": name, "ty": "Msg", "hex": hex(&bytes), "value": value })
+            Json::Object(vec![
+                ("name".into(), Json::from(json!(name))),
+                ("ty".into(), Json::from(json!("Msg"))),
+                ("hex".into(), Json::from(json!(hex(&bytes)))),
+                ("value".into(), Json::from(value)),
+            ])
         })
         .collect();
-    json!({
-        "_note": "Written by crates/tc-wire/tests/net.rs (TC_BLESS=1 cargo test -p tc-wire --test net); checked by wire-rust.test.ts.",
-        "desc": desc(&s),
-        "text": s.canonical_text(),
-        "hash": s.hash(),
-        "cases": cases,
-    })
+    Json::Object(vec![
+        (
+            "_note".into(),
+            Json::from(json!(
+                "Written by crates/tc-wire/tests/net.rs (TC_BLESS=1 cargo test -p tc-wire --test net); checked by wire-rust.test.ts."
+            )),
+        ),
+        ("desc".into(), desc(&s)),
+        ("text".into(), Json::from(json!(s.canonical_text()))),
+        ("hash".into(), Json::from(json!(s.hash()))),
+        ("cases".into(), Json::Array(cases)),
+    ])
 }
 
 #[test]
@@ -343,13 +368,13 @@ fn rust_vectors_for_typescript() {
     let path = testdata("wire-rust.json");
     let ours = vectors();
     if std::env::var_os("TC_BLESS").is_some() {
-        let text = serde_json::to_string_pretty(&ours).unwrap() + "\n";
-        std::fs::write(&path, text).unwrap();
+        std::fs::write(&path, ours.pretty() + "\n").unwrap();
         return;
     }
-    let committed = read_json(path);
+    let committed = read_ordered(path);
+    // The values as values; the desc in order (its fields and variants are).
     assert!(
-        committed == ours,
+        committed.value() == ours.value() && committed["desc"] == ours["desc"],
         "src/net/testdata/wire-rust.json is stale: TC_BLESS=1 cargo test -p tc-wire --test net"
     );
 }

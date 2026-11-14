@@ -412,6 +412,7 @@ mod tests {
                 describe: <Bye as Wire>::describe,
                 codes: &[1012, 4003],
             }),
+            ..Envelope::ENGINE
         };
     }
 

@@ -107,6 +107,42 @@ enum Bye {
     expect(envelopeOf(plain).closeCodes).toBeNull();
   });
 
+  it('lays a split Hello out as the Rust side does', () => {
+    // `Split` in crates/tc-net/src/envelope.rs's tests.
+    const s = defineSchema({
+      types: {
+        Joining: { struct: { watch: 'bool', content: 'String', opening: { option: 'u32' } } },
+      },
+      roles: { hello: 'Joining' },
+      envelope: {
+        hello: ['token', 'schema_hash', { ext: 1 }, 'bulk', { ext: 2 }],
+        rejected: ['reason'],
+        ack: 'messages',
+      },
+    });
+    expect(s.text).toContain(
+      '  Hello { token: String, schema_hash: String, watch: bool, bulk: Option<u8>, content: String, opening: Option<u32> }\n',
+    );
+    expect(s.text).toContain('  Rejected { reason: String }\n');
+    expect(s.text).toContain('  Ack { total: u64 }\n');
+    expect(s.text).not.toContain('Joining');
+    const hello = {
+      type: 'Hello',
+      token: 't',
+      schemaHash: 'h',
+      watch: true,
+      bulk: 1,
+      content: 'c',
+      opening: 5,
+    };
+    expect(encode(s, 'ClientMsg', hello)).toEqual([0, 1, 116, 1, 104, 1, 1, 1, 1, 99, 1, 5]);
+    expect(decode(s, 'ServerMsg', [1, 2, 110, 111])).toEqual({ type: 'Rejected', reason: 'no' });
+    const info = envelopeOf(s);
+    expect(info.ack).toBe('messages');
+    expect(info.helloSplit).toBe(true);
+    expect(envelopeOf(custom()).helloSplit).toBe(false);
+  });
+
   it('refuses a layout a session cannot follow', () => {
     const bad =
       (e: EnvelopeSpec, types = {}) =>
@@ -119,6 +155,18 @@ enum Bye {
     expect(bad({ client: ['Hello', 'Ping', 'Game', { Jump: null }] })).toThrow(/both/);
     expect(bad({ hello: ['token', 'schema_hash'] })).toThrow(/ext is required/);
     expect(bad({ close: { type: 'Nope', codes: [] } })).toThrow(SchemaError);
+    const joining = { J: { struct: { a: 'u8', b: 'u8' } } };
+    const split = (hello: EnvelopeSpec['hello'], rejected?: EnvelopeSpec['rejected']) => () =>
+      defineSchema({ types: joining, roles: { hello: 'J' }, envelope: { hello, rejected } });
+    expect(split(['token', 'schema_hash', { ext: 1 }])).toThrow(/list 1 of J's 2/);
+    expect(split(['token', 'schema_hash', { ext: 3 }])).toThrow(/past J's 2/);
+    expect(split(['token', 'schema_hash', 'ext', { ext: 2 }])).toThrow(/both/);
+    expect(split(['token', 'schema_hash', { ext: 2 }], ['stale_schema'])).toThrow(
+      /reason is required/,
+    );
+    expect(() =>
+      defineSchema({ envelope: { hello: ['token', 'schema_hash', { ext: 1 }] } }),
+    ).toThrow(/game's structs/);
     expect(
       bad({ close: { type: 'E', codes: [1] } }, { E: { enum: { A: null, B: null } } }),
     ).toThrow(/one code for each/);

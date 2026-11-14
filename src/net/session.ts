@@ -252,8 +252,10 @@ export class Net {
   readonly #plainBulk: boolean;
   /** The schema's envelope layout. */
   readonly #env: EnvelopeInfo;
-  /** Bulk data bytes taken this connection (an `Ack`'s total, for `ack: 'total'`). */
+  /** Bulk bytes taken this connection (an `Ack`'s total, for `ack: 'total'` or `'messages'`). */
   #taken = 0;
+  /** The size of the message being handled (a `Bulk`'s whole size, for `ack: 'messages'`). */
+  #frameBytes = 0;
   /** `CommandResult`'s tag when results are raw, else -1. */
   readonly #rawResult: number;
   readonly #throwListenerErrors: boolean;
@@ -573,13 +575,24 @@ export class Net {
         const h = typeof this.#hello === 'function' ? this.#hello() : this.#hello;
         this.#lastHeard = this.#timers.now();
         this.#taken = 0;
-        this.#send({
-          type: 'Hello',
-          token: h.token ?? '',
-          schemaHash: this.schema.hash,
-          bulk: this.#bulk,
-          ext: h.ext ?? {},
-        });
+        const ext = h.ext ?? {};
+        this.#send(
+          this.#env.helloSplit
+            ? ({
+                type: 'Hello',
+                token: h.token ?? '',
+                schemaHash: this.schema.hash,
+                bulk: this.#bulk,
+                ...(ext as object),
+              } as unknown as ClientMsg)
+            : {
+                type: 'Hello',
+                token: h.token ?? '',
+                schemaHash: this.schema.hash,
+                bulk: this.#bulk,
+                ext,
+              },
+        );
       },
       message: (frame) => {
         if (live()) this.#receive(frame);
@@ -724,6 +737,7 @@ export class Net {
       this.#protocolError(`undecodable message: ${(e as Error).message}`);
       return;
     }
+    this.#frameBytes = frame.length;
     try {
       this.#handle(msg);
     } catch (e) {
@@ -781,7 +795,7 @@ export class Net {
         return;
       case 'Rejected':
         try {
-          this.#emit('rejected', msg.reason, msg.staleSchema);
+          this.#emit('rejected', msg.reason, msg.staleSchema ?? false);
         } finally {
           this.#end(4000, { kind: 'rejected', detail: `rejected: ${msg.reason}` });
         }
@@ -852,7 +866,7 @@ export class Net {
         return;
       }
       case 'Bulk':
-        this.#bulkLane(msg.codec, msg.data);
+        this.#bulkLane(msg.codec, msg.data, this.#frameBytes);
         return;
       case 'Game':
         this.#emit('game', msg.value);
@@ -947,18 +961,19 @@ export class Net {
     this.#subscribe(sub, false);
   }
 
-  /** Acknowledges one `Bulk`'s `bytes` of data, as the layout counts them. */
-  #ack(bytes: number): void {
-    this.#taken += bytes;
+  /** Acknowledges one `Bulk` (`bytes` of data, `whole` the message), as the layout counts them. */
+  #ack(bytes: number, whole: number): void {
+    const ack = this.#env.ack;
+    this.#taken += ack === 'messages' ? whole : bytes;
     this.#send(
-      this.#env.ack === 'total'
-        ? ({ type: 'Ack', total: this.#taken } as unknown as ClientMsg)
-        : { type: 'Ack', bytes },
+      ack === 'each'
+        ? { type: 'Ack', bytes }
+        : ({ type: 'Ack', total: this.#taken } as unknown as ClientMsg),
     );
   }
 
   /** A bulk lane: inflate, then handle its frames in order, holding later frames meanwhile. */
-  #bulkLane(codec: number, data: Uint8Array): void {
+  #bulkLane(codec: number, data: Uint8Array, whole: number): void {
     if (codec === 0 && this.#plainBulk) {
       // Uncompressed: its frames now, in order (nothing is held: held frames come in order too).
       const gen = this.#generation;
@@ -967,7 +982,7 @@ export class Net {
         this.#handleFrame(r.bytes());
         if (gen !== this.#generation) return;
       }
-      this.#ack(data.length);
+      this.#ack(data.length, whole);
       return;
     }
     const inflate = this.#inflate;
@@ -990,7 +1005,7 @@ export class Net {
           this.#protocolError(`bad bulk lane: ${(e as Error).message}`);
           return;
         }
-        this.#ack(data.length);
+        this.#ack(data.length, whole);
         for (const f of held) {
           if (gen !== this.#generation) return;
           const waiting = this.#held as Uint8Array[] | null;

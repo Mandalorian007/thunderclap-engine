@@ -28,6 +28,7 @@ use tracing::{debug, info, warn};
 use crate::auth::{AllowAll, Auth};
 use crate::deflate::{Deflater, threads};
 use crate::envelope::Protocol;
+use crate::hooks::Hooks;
 use crate::origin::Origins;
 use crate::session::{self, ConnId, GameState, Limits, Pending, Request, SessionContext};
 use crate::stats::{IoCounters, IoStats};
@@ -90,6 +91,15 @@ impl<P: Protocol> Server<P> {
         config: ServerConfig,
         game: Sender<Request<P>>,
     ) -> std::io::Result<Server<P>> {
+        Self::start_with(config, game, Hooks::default()).await
+    }
+
+    /// [`Server::start`], with the game's [`Hooks`] on every session.
+    pub async fn start_with(
+        config: ServerConfig,
+        game: Sender<Request<P>>,
+        hooks: Hooks<P>,
+    ) -> std::io::Result<Server<P>> {
         let origins = Origins::new(&config.allow_origins)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
         let listener = WsListener::bind((config.host.as_str(), config.port)).await?;
@@ -107,6 +117,7 @@ impl<P: Protocol> Server<P> {
             rates: config.limits.rates,
             io: io.clone(),
             deflate,
+            hooks,
         };
         let ws = WsConfig {
             origins: Arc::new(origins),

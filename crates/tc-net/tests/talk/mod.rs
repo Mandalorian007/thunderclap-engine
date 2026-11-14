@@ -106,6 +106,7 @@ impl Protocol for Talk {
             describe: <Bye as Wire>::describe,
             codes: &[close::RESTART, KICKED],
         }),
+        ..Envelope::ENGINE
     };
 }
 

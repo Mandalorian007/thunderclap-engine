@@ -267,10 +267,22 @@ impl Outbound {
         }
     }
 
-    /// Frames the priority lane has room for.
-    #[cfg(test)]
-    pub(super) fn capacity(&self) -> usize {
+    /// Frames the priority lane has room for. For tests (tc-net's own,
+    /// or a game's with the `test-util` feature).
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn capacity(&self) -> usize {
         OUTBOUND_QUEUE.saturating_sub(lock(&self.shared.prio).len())
+    }
+
+    /// The priority lane's frames not yet taken by the session, oldest
+    /// first. For tests (tc-net's own, or a game's with the `test-util`
+    /// feature).
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn queued_frames(&self) -> Vec<Frame> {
+        lock(&self.shared.prio)
+            .iter()
+            .map(|(f, _)| f.clone())
+            .collect()
     }
 }
 
@@ -523,6 +535,7 @@ mod tests {
         }
         assert!(matches!(out.try_send(vec![0]), Err(TrySendError::Full(_))));
         assert_eq!(out.capacity(), 0);
+        assert_eq!(out.queued_frames().len(), OUTBOUND_QUEUE);
     }
 
     /// Bulk frames wake the session only once enough gathered or the
