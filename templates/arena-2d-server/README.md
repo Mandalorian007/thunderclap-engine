@@ -1,7 +1,7 @@
 # Arena: the 2D server template
 
 Tag, for two to eight players on one server. Everyone moves in a box; one player is "it" and
-passes it on by touching someone. The server (Rust, on the engine's `tc-sim` and `tc-net` crates)
+passes it on by touching someone. The server (Rust, served by the engine's `thunderclap-server`)
 decides every move; each page moves its own player at once by running the same rules, and draws
 the others a little in the past, smoothly. Start here for any real-time game a server owns: an
 arena, a racer, a co-op room.
@@ -11,6 +11,7 @@ arena, a racer, a co-op room.
 ```sh
 pnpm install
 pnpm dev        # the server (cargo, ws://127.0.0.1:4711) and the client (http://127.0.0.1:4710)
+pnpm server serve      # the server alone; `pnpm server status` (stop, pause, backup, ...) asks it
 pnpm test       # Vitest: the client's copy of the rules, and the schema hash
 pnpm check      # tsc, Biome, Vitest, then cargo test for the server
 pnpm build      # the static client in dist/; pnpm build:server for the server binary

@@ -13,13 +13,14 @@ Two games in the engine repo use everything here, so open them next to this page
 
 | Side | Crate or module | What it does |
 | --- | --- | --- |
+| Server | `thunderclap-server` | The facade: serves a game from a data directory (store, loop, WebSocket server, sign-in, admin channel) and gives it a CLI. Re-exports the crates below. |
 | Server | `tc-wire` | Binary encoding (`#[derive(Wire)]`) and the schema both sides hash. |
 | Server | `tc-sim` | Your game: the `Game` trait, the fixed-step loop (`Sim`), the log, queries, the entity stream. |
 | Server | `tc-net` | The WebSocket server, sessions, the hello and reconnect handshake. |
-| Server | `tc-store` | The log on disk, snapshots, replay and rollback (optional: a `Sim` can keep its log in memory). |
+| Server | `tc-store` | The log on disk, snapshots, replay and rollback. |
 | Client | `@thunderclap-engine/engine/net` | `createNet`: the session, queries, commands, inputs, the predictor and the snapshot buffer. |
 
-The server's crates live in this repo under `crates/`; a game names them by path in its `Cargo.toml` (see the arena's `server/Cargo.toml`).
+The server's crates live in this repo under `crates/`; a game names `thunderclap-server` (and `tc-wire`, for `#[derive(Wire)]`) by path in its `Cargo.toml` (see the arena's `server/Cargo.toml`), and reaches the others through it: `thunderclap_server::sim`, `::net`, `::store`.
 
 ## Everything that happens is an event
 
@@ -100,15 +101,22 @@ A client subscribes with `net.query('score', {}, fn)`. The loop reruns a query o
 ## Serving it
 
 ```rust
-let sim = Sim::new(Core::new(Arena::new()), None, SimConfig::default()); // log in memory
-let running = sim.spawn()?;
-let mut config = ServerConfig::new(Arena::schema().hash());
-config.host = "127.0.0.1".into();
-config.port = 4711;
-let server = Server::<ArenaProto>::start(config, running.requests.clone()).await?;
+pub fn server() -> Builder<Arena> {
+    Server::builder(Arena::new())
+        .data_dir("data/arena")
+        .port(4711)
+        .auth(AuthMode::Open) // the page's token is its player's name
+        .build(concat!("arena ", env!("CARGO_PKG_VERSION")))
+}
+
+fn main() {
+    std::process::exit(thunderclap_server::cli::main(std::env::args(), arena_server::server));
+}
 ```
 
-`SimConfig::default()` steps 20 times a second. For a world you keep, use `Sim::create` or `Sim::open` with a directory: the log and snapshots go to disk, and `tc_store::rollback` can take the world back to an earlier version.
+That `main` is the whole server binary. `cargo run -- serve` opens the store in the data directory (or creates it), runs the loop at `SimConfig::default()`'s 20 steps a second, serves WebSockets and listens for its admin channel. While it runs, `status`, `pause`, `resume`, `reload` and `stop` from a second shell ask it; `backup` and `rollback` work on the data directory while it is stopped. Every command takes `--data DIR`. A test calls `server().data_dir(dir).port(0).start().await` instead and gets the address, the loop and, from `stop().await`, the final state.
+
+`AuthMode::DevGuests` (the default) issues tokens; `Open` takes the token as the name, which suits a template and tests, not a server on the internet.
 
 ## The client
 
@@ -176,12 +184,12 @@ Draw everyone else from the entity stream, a little in the past, through the sna
 
 - **Rules, from Rust.** `Driver` runs a game with no network: `connect(name, hello)`, `client(conn, msg)`, `tick(now)` (takes inputs at the input tick), `advance(steps)`, and `received(rx)` for what a connection was sent. See `templates/arena-2d-server/server/tests/arena.rs`.
 - **Replay and rollback.** Play a game into a store, reopen it, and compare `hash_state`. See `crates/tc-sim/tests/turns.rs`.
-- **The real client.** Start the server on port 0 in a Rust test and run a Vitest file against it with `createNet` (`turns.rs` runs `src/net/turns-interop.test.ts`), or start both in Playwright (`e2e/arena-2d-server.spec.ts`).
+- **The real client.** Start the server on port 0 in a Rust test and run a Vitest file against it with `createNet` (`crates/thunderclap-server/tests/turns.rs` serves tic-tac-toe through the facade and runs `src/net/turns-interop.test.ts`), or start both in Playwright (`e2e/arena-2d-server.spec.ts`).
 
 ## Known rough edges
 
 - The rules (`apply`, `Cx`) cannot read players' bodies, so a body change that matters to others must be copied into the state with an event.
-- A `Sim` with its log in memory keeps the whole history, so a long-lived real-time server grows without bound. Use a store for anything that runs for days.
+- Every event is logged for good, so a real-time game that logs a `Moved` per step grows its store on disk for as long as it runs.
 - The client's schema is written by hand. Compare its hash in tests.
 - A small query result is resent whole instead of patched, so resuming it saves nothing.
 - `Driver` takes inputs only in `tick(now)`, so a test needs wall-clock instants to drive inputs.

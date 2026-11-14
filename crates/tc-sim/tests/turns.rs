@@ -9,17 +9,16 @@
 //!   reopens there, at the mark's hash, to play on differently;
 //! - a player who drops comes back to the same seat and resumes the board
 //!   with a patch;
-//! - TypeScript's `createNet` (`src/net/turns-interop.test.ts`, by vitest)
-//!   plays a round, watches the board and resumes after a dropped link.
-//!   Skipped, with a notice, where node or `node_modules` is missing.
+//!
+//! TypeScript's `createNet` plays it through the facade in
+//! `thunderclap-server/tests/turns.rs`.
 
 mod turns_game;
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use tc_net::outbound::OutboundRx;
-use tc_net::{ClientMsg, Empty, Resume, Server, ServerConfig, ServerMsg};
+use tc_net::{ClientMsg, Empty, Resume, ServerMsg};
 use tc_sim::{Core, Driver, Sim, SimConfig};
 use tc_store::{Output, RollbackTo};
 use tc_wire::{Bytes, Wire};
@@ -267,58 +266,5 @@ fn a_returning_player_takes_its_seat_and_resumes_the_board() {
     let b: Board = d.core().game().board();
     assert_eq!(b.cells, vec![2, 0, 0, 0, 1, 0, 0, 0, 1]);
     d.stop();
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-fn repo() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-
-#[test]
-fn typescript_create_net_plays_a_round() {
-    let vitest = repo().join("node_modules/vitest/vitest.mjs");
-    let node_ok = Command::new("node")
-        .arg("--version")
-        .output()
-        .is_ok_and(|o| o.status.success());
-    if !node_ok || !vitest.exists() {
-        eprintln!("turns interop: node or node_modules missing; skipping the TypeScript client");
-        return;
-    }
-    let dir = temp_dir("interop");
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()
-        .unwrap();
-    let sim = Sim::create(&dir, Turns::new(), b"turns", SimConfig::default()).unwrap();
-    let running = sim.spawn().unwrap();
-    let mut config = ServerConfig::new(turns_game::schema().hash());
-    config.deflate_threads = Some(1);
-    let server = runtime
-        .block_on(Server::<TurnsProto>::start(
-            config,
-            running.requests.clone(),
-        ))
-        .expect("the server starts");
-    let out = Command::new("node")
-        .arg(&vitest)
-        .args(["run", "src/net/turns-interop.test.ts"])
-        .current_dir(repo())
-        .env("TC_TURNS_URL", format!("ws://{}", server.local_addr()))
-        .env("TC_TURNS_HASH", turns_game::schema().hash())
-        .env("NO_COLOR", "1")
-        .output()
-        .expect("vitest runs");
-    let text = String::from_utf8_lossy(&out.stdout);
-    eprintln!("{text}{}", String::from_utf8_lossy(&out.stderr));
-    assert!(out.status.success(), "vitest failed");
-    assert!(text.contains("3 passed"), "every interop test ran");
-    runtime.block_on(server.stop());
-    let live = running.stop();
-    assert_eq!(live.game().wins, [0, 1], "O won the TypeScript round");
-    assert_eq!(live.game().round, 2, "and O started the next");
-    let (hash, _) = replayed_hash(&dir, live.time());
-    assert_eq!(hash, live.state_hash());
     let _ = std::fs::remove_dir_all(&dir);
 }

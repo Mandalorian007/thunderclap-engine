@@ -15,11 +15,11 @@ use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::sync::Arc;
 
-use tc_net::{Empty, Identity, Protocol};
-use tc_sim::{Cx, Game, PlayerId, Query, QueryCtx, Seat};
-use tc_store::{LogCodec, NameTable, Names};
 use tc_wire::Wire;
 use tc_wire::hash::StableHasher;
+use thunderclap_server::net::{Empty, Identity, Protocol};
+use thunderclap_server::sim::{Cx, Game, PlayerId, Query, QueryCtx, Seat};
+use thunderclap_server::store::{LogCodec, NameTable, Names};
 
 /// The box's size, in arena units.
 pub const WIDTH: i32 = 1280;

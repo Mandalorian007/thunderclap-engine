@@ -65,6 +65,11 @@ index. Decoding is strict: trailing bytes, bad tags and unsorted keys fail.
   resume, backup, reload, reports, revoke (the client closed with 4001) and
   stop work end to end, the store reopens, and the CLI backs up and rolls
   back offline.
+- `thunderclap-server/tests/turns.rs` serves tc-sim's tic-tac-toe game
+  (`tc-sim/tests/turns_game/`, E7) through the facade with `AuthMode::Open`;
+  `createNet` (`src/net/turns-interop.test.ts`) plays a round, watches the
+  board and resumes it after a dropped link, and the store replays to the
+  live state hash.
 
 The `tests/forge/` fixtures are data from a game, kept as a test; they are
 excluded from biome.

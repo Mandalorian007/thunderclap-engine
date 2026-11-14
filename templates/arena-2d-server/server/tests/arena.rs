@@ -6,9 +6,9 @@ use arena_server::game::{
 };
 use std::time::{Duration, Instant};
 
-use tc_net::outbound::OutboundRx;
-use tc_net::{ClientMsg, Empty, ServerMsg};
-use tc_sim::{Core, Driver, Sim, SimConfig};
+use thunderclap_server::net::outbound::OutboundRx;
+use thunderclap_server::net::{ClientMsg, Empty, ServerMsg};
+use thunderclap_server::sim::{Core, Driver, Sim, SimConfig};
 
 const RULES: &str = include_str!("../../shared/rules.json");
 const HASH_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../shared/schema-hash.txt");

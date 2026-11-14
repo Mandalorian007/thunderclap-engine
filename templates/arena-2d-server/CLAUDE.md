@@ -1,7 +1,7 @@
 # Arena: a ThunderClap server template
 
 This folder is a complete, copyable real-time 2D game with a Rust server: `server/` (a crate on
-`tc-sim`, `tc-net`, `tc-wire`) owns the game; the page (`src/`, on `@thunderclap-engine/engine`)
+`thunderclap-server` and `tc-wire`) owns the game; the page (`src/`, on `@thunderclap-engine/engine`)
 joins it, predicts its own player and draws everyone. Everything an agent needs to extend it is in
 this file and in the engine's guide `docs/guide/server-game.md`.
 
@@ -10,7 +10,7 @@ this file and in the engine's guide `docs/guide/server-game.md`.
 - `pnpm dev`: `scripts/dev.mjs` starts the server (`cargo run --release`, port 4711) and Vite
   (port 4710) together (from the repo root: `pnpm template:arena-2d-server`).
 - `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm test:server`: `tsc`, Biome (the repo's `biome.json`), Vitest, `cargo test`. `pnpm check` runs all four; the repo root's `pnpm check` runs it too (`check:template-arena-2d-server`).
-- The repo's `e2e/arena-2d-server.spec.ts` starts the server (`--port 0`) and the client, opens two
+- The repo's `e2e/arena-2d-server.spec.ts` starts the server (`serve --port 0` in a temp data directory) and the client, opens two
   pages and checks each sees the other move. It reads `window.__arena` (set in `main.ts`).
 
 ## Shape
@@ -19,8 +19,8 @@ this file and in the engine's guide `docs/guide/server-game.md`.
 shared/rules.json        the numbers and step cases both sides read and test
 shared/schema-hash.txt   the schema hash both sides must agree on
 server/src/game.rs       the rules (step) and the game (Arena: tc_sim::Game)
-server/src/lib.rs        schema(), serve(host, port): the Sim plus its WebSocket server
-server/src/main.rs       the binary: --host, --port (0 = any free port), Ctrl-C stops it
+server/src/lib.rs        schema(), server(): the facade's Builder (data/arena, open sign-in)
+server/src/main.rs       the binary: the facade's CLI (`pnpm server serve`, status, stop, ..., --data DIR)
 server/tests/arena.rs    the rules against rules.json, the schema hash, tagging, the stream
 src/rules.ts             the client's copy of step (and the constants, from rules.json)
 src/schema.ts            defineSchema: the same types and roles the server builds
@@ -53,9 +53,10 @@ Server (Rust; `docs/guide/server-game.md` walks through them):
   stream sends: `Player`). `apply` changes state from a logged event; `join` seats a player or an
   observer; `presence` hears a player come and go; `input` moves a body; `player_state` is what
   the player hears back; `entities` streams what a page sees; `queries` serves `score`.
-- **`Sim`, `Server`**: `Sim::new(Core::new(game), None, SimConfig::default())` runs the game in
-  memory at 20 steps a second; `sim.spawn()` gives the request channel; `tc_net::Server::start`
-  serves it over WebSocket.
+- **`thunderclap_server::Server`**: `Server::builder(game)` serves the game from a data directory
+  (`data/arena`: the log and snapshots on disk) at 20 steps a second over WebSocket;
+  `cli::main(args, server)` is the whole binary (`serve`, `status`, `stop`, `backup`, ...).
+  `AuthMode::Open` takes the page's token as its name.
 
 Client (`@thunderclap-engine/engine/net`, `/kit`, `/render`):
 

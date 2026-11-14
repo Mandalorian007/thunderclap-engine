@@ -1,11 +1,13 @@
 /**
  * The arena-2d-server template (E7): its Rust server and its Vite client, both started here (the
- * server with `--port 0`, the client on a free port), and two browser pages that join, move, and
+ * server with `serve --port 0` in a fresh data directory, the client on a free port), and two browser pages that join, move, and
  * see each other move. Desktop only (the device matrix is e2e/templates.spec.ts's job); skipped
  * where cargo is missing.
  */
 import { type ChildProcess, execFileSync, spawn } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, type Page, test } from '@playwright/test';
 
@@ -101,6 +103,7 @@ test.describe('arena-2d-server', () => {
   let client: ChildProcess | undefined;
   let serverUrl = '';
   let clientUrl = '';
+  let data = '';
 
   test.beforeAll(async ({ browserName }, info) => {
     test.skip(
@@ -109,10 +112,23 @@ test.describe('arena-2d-server', () => {
     );
     // The first build of the server takes a while.
     test.setTimeout(600_000);
+    // A fresh arena each run: the facade keeps its store in the data directory.
+    data = mkdtempSync(join(tmpdir(), 'tc-arena-'));
     const s = await start(
       'cargo',
-      ['run', '--quiet', '--manifest-path', 'server/Cargo.toml', '--', '--port', '0'],
-      /listening on (ws:\/\/[\d.]+:\d+)/,
+      [
+        'run',
+        '--quiet',
+        '--manifest-path',
+        'server/Cargo.toml',
+        '--',
+        'serve',
+        '--port',
+        '0',
+        '--data',
+        data,
+      ],
+      /serving (ws:\/\/[\d.]+:\d+)/,
       540_000,
     );
     server = s.child;
@@ -128,9 +144,12 @@ test.describe('arena-2d-server', () => {
     clientUrl = c.match[1]!;
   });
 
-  test.afterAll(() => {
+  test.afterAll(async () => {
     stop(client);
     stop(server);
+    // The server flushes its log as it stops; then its data directory goes.
+    await new Promise((r) => setTimeout(r, 1000));
+    if (data) rmSync(data, { recursive: true, force: true });
   });
 
   test('two players join, see each other move, and nobody errors', async ({ browser }) => {

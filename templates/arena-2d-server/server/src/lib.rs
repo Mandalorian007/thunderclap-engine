@@ -1,40 +1,28 @@
 //! The arena-2d-server template's server: the game ([`game`]) and how it
-//! is served ([`serve`]).
+//! is served ([`server`], on the `thunderclap-server` facade).
 
 pub mod game;
 
-use tc_net::{Server, ServerConfig};
-use tc_sim::{Core, Running, Sim, SimConfig};
 use tc_wire::schema::Schema;
+use thunderclap_server::{AuthMode, Builder, Game, Server};
 
 pub use game::{Arena, ArenaProto};
 
 /// The schema the client's `defineSchema` must hash to (`src/schema.ts`;
 /// both are checked against `shared/schema-hash.txt`).
 pub fn schema() -> Schema {
-    use tc_sim::Game;
     Arena::schema()
 }
 
-/// The running game and its WebSocket server.
-pub struct Served {
-    /// The game loop.
-    pub running: Running<Arena>,
-    /// The connections.
-    pub server: Server<ArenaProto>,
-}
-
-/// Starts the arena on `host:port` (0: any free port). Must be called
-/// inside a tokio runtime.
-pub async fn serve(host: &str, port: u16) -> Result<Served, String> {
-    // The log stays in memory: the arena forgets everything on restart.
-    let sim = Sim::new(Core::new(Arena::new()), None, SimConfig::default());
-    let running = sim.spawn().map_err(|e| e.to_string())?;
-    let mut config = ServerConfig::new(schema().hash());
-    config.host = host.to_string();
-    config.port = port;
-    let server = Server::<ArenaProto>::start(config, running.requests.clone())
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(Served { running, server })
+/// The arena's server, with the facade's defaults but three: the data
+/// lives in `data/arena`, it serves on port 4711 (the client's default),
+/// and a page's token is its player's name ([`AuthMode::Open`]: a dev
+/// setting, anyone can take any name). The
+/// command line (`serve`, `status`, `stop`, `backup`, ...) runs it.
+pub fn server() -> Builder<Arena> {
+    Server::builder(Arena::new())
+        .data_dir("data/arena")
+        .port(4711)
+        .auth(AuthMode::Open)
+        .build(concat!("arena ", env!("CARGO_PKG_VERSION")))
 }

@@ -1,6 +1,6 @@
-// Interop with a turn-based game on the Rust loop (crates/tc-sim): `createNet` over a real
-// WebSocket to the tic-tac-toe game in crates/tc-sim/tests/turns_game. Run by
-// `cargo test -p tc-sim --test turns`, which starts the server
+// Interop with a turn-based game on the Rust server: `createNet` over a real WebSocket to the
+// tic-tac-toe game in crates/tc-sim/tests/turns_game. Run by
+// `cargo test -p thunderclap-server --test turns`, which serves it through the facade
 // and sets TC_TURNS_URL; skipped otherwise.
 import { describe, expect, it } from 'vitest';
 import { defineSchema } from './envelope';

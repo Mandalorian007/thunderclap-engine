@@ -40,6 +40,7 @@ run('server', 'cargo', [
   '--manifest-path',
   'server/Cargo.toml',
   '--',
+  'serve',
   '--host',
   host,
   '--port',
