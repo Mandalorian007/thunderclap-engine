@@ -4,6 +4,8 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 
 ## Unreleased
 
+## 2.0.0-next.7 (2026-11-14)
+
 - Release: the same code as 2.0.0-next.5 and 2.0.0-next.6, neither of which reached npm (next.5 failed the `./post` budget in CI; next.6 had an empty CHANGELOG section). Includes every entry under those two headings.
 
 ## 2.0.0-next.6 (2026-11-14)
