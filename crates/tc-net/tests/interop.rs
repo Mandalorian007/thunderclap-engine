@@ -295,6 +295,79 @@ async fn a_rust_client_speaks_a_wire_of_its_own() {
     server.stop().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hooks_see_hello_and_frames_and_may_refuse() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tc_net::hooks::{FrameDir, Hooks};
+
+    /// Counts the sessions it was handed to, while they live.
+    struct Live(Arc<AtomicUsize>);
+    impl Drop for Live {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+    let live = Arc::new(AtomicUsize::new(0));
+    let (frames_in, frames_out) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let mut hooks = Hooks::<Echo>::default();
+    let held = live.clone();
+    hooks.hello = Some(Arc::new(move |seen| {
+        if seen.identity.name == "mallory" {
+            return Err("not today".into());
+        }
+        assert_eq!(seen.token, "ada");
+        held.fetch_add(1, Ordering::SeqCst);
+        Ok(Some(Box::new(Live(held.clone()))))
+    }));
+    let (fin, fout) = (frames_in.clone(), frames_out.clone());
+    hooks.frames = Some(Arc::new(move |_, dir, frame| {
+        assert!(!frame.is_empty());
+        match dir {
+            FrameDir::In => fin.fetch_add(1, Ordering::SeqCst),
+            FrameDir::Out => fout.fetch_add(1, Ordering::SeqCst),
+        };
+    }));
+    let (requests, game) = std::sync::mpsc::channel();
+    std::thread::spawn(move || echo::run(game));
+    let server = Server::start_with(ServerConfig::new(echo::schema().hash()), requests, hooks)
+        .await
+        .expect("the server starts");
+    let hash = echo::schema().hash();
+
+    // Refused with the game's reason, not as a stale schema.
+    let mut ws = connect(&server).await;
+    let mut refused = hello(&hash, None);
+    if let ClientMsg::Hello { token, .. } = &mut refused {
+        *token = "mallory".into();
+    }
+    send(&mut ws, refused).await;
+    match msg(&mut ws).await {
+        ServerMsg::Rejected {
+            reason,
+            stale_schema,
+        } => assert_eq!((reason.as_str(), stale_schema), ("not today", false)),
+        other => panic!("{other:?}"),
+    }
+    assert!(recv(&mut ws).await.is_none());
+    assert_eq!(live.load(Ordering::SeqCst), 0);
+
+    // Let in: what the hook gave is held until the session ends.
+    let mut ws = connect(&server).await;
+    send(&mut ws, hello(&hash, None)).await;
+    assert!(matches!(msg(&mut ws).await, ServerMsg::Welcome { .. }));
+    assert_eq!(live.load(Ordering::SeqCst), 1);
+    assert_eq!(frames_in.load(Ordering::SeqCst), 2, "two Hellos");
+    assert!(frames_out.load(Ordering::SeqCst) >= 2, "Rejected, Welcome");
+    ws.close(None).await.unwrap();
+    let end = std::time::Instant::now() + Duration::from_secs(5);
+    while live.load(Ordering::SeqCst) != 0 {
+        assert!(std::time::Instant::now() < end, "the session's hold is dropped");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    server.stop().await;
+}
+
 fn repo() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }

@@ -44,6 +44,7 @@ use tracing::{debug, info};
 use crate::auth::{Auth, Identity};
 use crate::envelope::{AckMode, ClientMsg, HelloField, Protocol, ServerMsg, close, codec};
 use crate::flow::{BULK_HIGH_WATER, Flow};
+use crate::hooks::{HelloSeen, Hooked, Hooks};
 use crate::outbound::{self, Batch, Outbound, Ready};
 use crate::rate::{Kind, Limiter, Rates};
 use crate::stats::IoCounters;
@@ -175,6 +176,8 @@ pub struct SessionContext<P: Protocol> {
     pub io: Arc<IoCounters>,
     /// Compresses bulk data for clients that take it so.
     pub deflate: crate::deflate::Deflater,
+    /// The game's hooks on `Hello` and the transport (default: none).
+    pub hooks: Hooks<P>,
 }
 
 impl<P: Protocol> Clone for SessionContext<P> {
@@ -188,6 +191,7 @@ impl<P: Protocol> Clone for SessionContext<P> {
             rates: self.rates,
             io: self.io.clone(),
             deflate: self.deflate.clone(),
+            hooks: self.hooks.clone(),
         }
     }
 }
@@ -271,12 +275,13 @@ impl Drop for PendingSlot {
 /// `hello_deadline`; until it does, the connection holds `pending` and is
 /// closed if that is evicted.
 pub async fn run<T: Transport, P: Protocol>(
-    mut transport: T,
+    transport: T,
     conn: ConnId,
     mut ctx: SessionContext<P>,
     hello_deadline: Instant,
     mut pending: PendingSlot,
 ) {
+    let mut transport = Hooked::new(transport, conn, ctx.hooks.frames.clone());
     let first = tokio::select! {
         first = tokio::time::timeout_at(hello_deadline, transport.recv()) => Some(first),
         () = stopped(&mut ctx.shutdown) => None,
@@ -313,6 +318,28 @@ pub async fn run<T: Transport, P: Protocol>(
         Err((reason, stale_schema)) => {
             reject::<_, P>(&mut transport, conn, &reason, stale_schema).await;
             return;
+        }
+    };
+    // The game's say, before it hears of the connection; what it holds is
+    // dropped as the session ends.
+    let _held = match &ctx.hooks.hello {
+        None => None,
+        Some(hook) => {
+            let seen = HelloSeen {
+                conn,
+                token: &token,
+                identity: &identity,
+                bulk,
+                ext: &ext,
+            };
+            match hook(&seen) {
+                Ok(held) => held,
+                Err(reason) => {
+                    info!(conn, "refused at Hello: {reason}");
+                    reject::<_, P>(&mut transport, conn, &reason, false).await;
+                    return;
+                }
+            }
         }
     };
 
