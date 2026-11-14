@@ -38,124 +38,57 @@
  * the session ending) puts everything back; a game that never enters runs the same code as before.
  */
 
-import { AudioEngine, persistMixer } from '../audio';
-import { ParticleSystem, type ParticleSystemOptions } from '../fx';
-import {
-  createWebHost,
-  createXrHost,
-  type Host,
-  type HostLifecycleState,
-  type XrHost,
-} from '../host';
-import {
-  type Bindings,
-  createGestures,
-  createInputPlayback,
-  createInputRecorder,
-  createPointerRouter,
-  createTickClock,
-  type GamepadLike,
-  type Gestures,
-  type HitTester,
+import type { AudioEngine } from '../audio';
+import type { ParticleSystem, ParticleSystemOptions } from '../fx';
+import type { Host } from '../host';
+import type {
+  Bindings,
+  GamepadLike,
+  Gestures,
+  HitTester,
   Input,
-  type InputPlayback,
-  type InputPlaybackOptions,
-  type InputRecording,
-  type MagnifyOptions,
-  type PointerRouter,
-  type TickClock,
-  XrPointerSource,
+  InputRecording,
+  MagnifyOptions,
+  PointerRouter,
+  TickClock,
 } from '../input';
-import {
-  type BootResult,
-  blockBrowserZoom,
-  boot,
-  type GpuContext,
-  mountSurface,
-  type Surface,
-  type SurfaceOptions,
-  watchLifecycle,
-  type XrEyeView,
-  XrSurface,
-} from '../platform';
-import type { XRReferenceSpace, XRSession, XrNavigator } from '../platform/xr-types';
-import { type PostSettingsPatch, PostStack } from '../post';
-import {
-  type Camera,
-  type Frame,
-  installGpuErrorLogging,
-  Renderer,
-  type SceneTargetAux,
-} from '../render';
-import {
-  applyTextScale,
-  createOverlay,
-  followSafeArea,
-  type LayoutSpec,
-  type Overlay,
-  PadNav,
-  type PanelStack,
-  type ThemeOverrides,
-} from '../ui';
-import { type CrashScreen, type CrashScreenOptions, installCrashScreen } from './crash';
-import { DetachedSurface, NO_DOM } from './detached-surface';
-import type { Time } from './loop';
-import { GameLoop } from './loop';
-import { SceneStack } from './scene';
+import { withAudio } from '../kit/audio';
+import { composeGame } from '../kit/compose';
+import { withInput } from '../kit/input';
+import { withOverlay } from '../kit/overlay';
+import { withParticles, withPost } from '../kit/post';
+import type {
+  CrashOptions,
+  FlushableSave,
+  GameHooks,
+  GameReplay,
+  ReplayOptions,
+  SimOption,
+  XrControl,
+  XrOptions,
+} from '../kit/types';
+import { withXr } from '../kit/xr';
+import type { GpuContext, Surface, SurfaceOptions } from '../platform';
+import type { PostSettingsPatch, PostStack } from '../post';
+import type { Camera, Frame, Renderer, SceneTargetAux } from '../render';
+import type { LayoutSpec, Overlay, PadNav, ThemeOverrides } from '../ui';
+import { NO_DOM } from './detached-surface';
+import type { GameLoop } from './loop';
+import type { SceneStack } from './scene';
 
-/**
- * What `createGame` needs from a game's save: it is flushed on hide (and `host.lifecycle`
- * going to `background`) and on device loss.
- */
-export interface FlushableSave {
-  flush(): void;
-}
-
-/** Why the page is going away: `visibilitychange` to hidden, `pagehide` or `freeze`. */
-export type HideReason = 'hidden' | 'pagehide' | 'freeze';
-
-/** Why the page is back: `visibilitychange` to visible, `pageshow` or `resume`. */
-export type ShowReason = 'visible' | 'pageshow' | 'resume';
-
-/**
- * The fixed-step sim (`CreateGameOptions.sim`). `step` is in seconds (default 1/60); `false`
- * runs the loop at render rate only, for a client that applies server state each frame.
- */
-export type SimOption = { step?: number } | false;
-
-/** Game logic plugged into the frame loop and the lifecycle. Set fields on `ctx.hooks`. */
-export interface GameHooks {
-  /**
-   * Each fixed step, after input and pad navigation, before particles and the scenes. Not
-   * called with `sim: false` (see `frame`).
-   */
-  update?(dt: number): void;
-  /**
-   * `sim: false` only: once per rendered frame with the real frame delta, after input and pad
-   * navigation, before particles, the scenes (`update(dt)` with the same delta) and render.
-   * Apply the latest server state here.
-   */
-  frame?(dt: number): void;
-  /** Each rendered frame, before `renderer.beginFrame`. */
-  beforeRender?(time: Time): void;
-  /** Each rendered frame, after `renderer.endFrame`. */
-  afterRender?(time: Time): void;
-  /**
-   * The page is hidden, paged out or frozen: after the loop stops, before the save flushes.
-   * Can fire several times in a row (hidden, then pagehide, then freeze).
-   */
-  hide?(reason: HideReason): void;
-  /** The page is back and visible: after the loop restarts (not after a device loss). */
-  show?(reason: ShowReason): void;
-  /**
-   * The host's lifecycle changed (`host.lifecycle`, ws/host-mobile): `background` after the loop
-   * stops and the save flushes (autosave here), `active` after it restarts. On the web host this
-   * follows the same page events as `hide`/`show`; in a store app it follows the shell.
-   */
-  lifecycle?(state: HostLifecycleState): void;
-  /** The GPU device was lost: after the loop halts, before audio halts and the save flushes. */
-  deviceLost?(info: GPUDeviceLostInfo): void;
-}
+// The kit's shared types, under their 1.x names (they moved to `kit/types.ts`, ws/kit).
+export type {
+  CrashOptions,
+  FlushableSave,
+  GameHooks,
+  GameReplay,
+  HideReason,
+  ReplayOptions,
+  ShowReason,
+  SimOption,
+  XrControl,
+  XrOptions,
+} from '../kit/types';
 
 export interface CreateGameOptions<
   A extends string,
@@ -321,72 +254,6 @@ export interface CreateGameOptions<
   pointers?: { testers?: readonly HitTester<P>[] };
 }
 
-/** `CreateGameOptions.crash` as options: the crash screen's save flush and reload. */
-export type CrashOptions = Pick<CrashScreenOptions, 'flush' | 'reload'>;
-
-/** `CreateGameOptions.xr`: how `ctx.xr.enter()` sets the session up. */
-export interface XrOptions {
-  /**
-   * The reference space poses and pointer rays are expressed in. Default `local-floor` (the
-   * origin on the floor; standing play), `local` (at the headset's start) or `viewer`.
-   */
-  referenceSpace?: 'local-floor' | 'local' | 'viewer';
-  /** The session is up and frames come from it. */
-  onEnter?(session: XRSession): void;
-  /** The session ended (by `exit()` or the headset); frames come from the page again. */
-  onExit?(): void;
-}
-
-/**
- * `ctx.xr`: entering and leaving VR. `supported()` is false and `enter()` rejects where the
- * browser has no WebXR or no WebXR/WebGPU binding, so the same build runs on the page and in a
- * headset.
- */
-export interface XrControl {
-  /** Whether `enter()` can work here: WebXR with the WebGPU binding and `immersive-vr`. */
-  supported(): Promise<boolean>;
-  /**
-   * Request an `immersive-vr` session (call from a user gesture) and move the game into it: the
-   * loop's frames come from the session, each eye renders into the session's layer, controllers
-   * and hands are pointers. Resolves once the first frame can run; rejects when the browser
-   * refuses. A call while active resolves at once.
-   */
-  enter(): Promise<void>;
-  /** End the session and return to the page; resolves when everything is restored. */
-  exit(): Promise<void>;
-  /** True while a session runs. */
-  readonly active: boolean;
-  /** The running session, or null. */
-  readonly session: XRSession | null;
-  /** The XR surface (eye views, head camera, layer) while active, or null. */
-  readonly surface: XrSurface | null;
-}
-
-/**
- * `ctx.replay(recording, opts)`: ticks per `step()` and ms per fed tick (`InputPlaybackOptions`),
- * and `onEnd`.
- */
-export interface ReplayOptions extends Pick<InputPlaybackOptions, 'speed' | 'tickMs'> {
-  /**
-   * The recording ended (ws/core-7): called once, on the fixed step where the loop uninstalls
-   * the replay (the first step after its last tick), after the input is reattached and before
-   * that step's input update and `hooks.update`. Not called on `stop()`, nor when a second
-   * `ctx.replay` replaces this one. A `ctx.replay` started here is stepped from the next step.
-   */
-  onEnd?(): void;
-}
-
-/**
- * What `ctx.replay` returns: the `InputPlayback` installed on `ctx.input` (it is
- * `ctx.input.playback`), driving `ctx.clock`. `stop()` (or `detach()`, the same call) uninstalls
- * it and reattaches the input to the canvas at once; the loop does the same on the first step
- * after the recording ends.
- */
-export interface GameReplay extends InputPlayback {
-  /** Uninstall the playback and give the input back to the player. Idempotent. */
-  stop(): void;
-}
-
 /**
  * Everything noun-free a scene may use. `A` is the game's action names, `S` its save, `C` the
  * ctx the scene stack hands to scenes (the game's own ctx type, which extends this one) and `P`
@@ -490,6 +357,9 @@ export interface EngineCtx<
  *
  * Nothing runs until the game calls `ctx.loop.start()`, except the lifecycle handlers (a show
  * starts the loop) and resize, which keeps the renderer and overlay in step.
+ *
+ * This is the default kit (ws/kit): `composeGame` from `@thunderclap-engine/engine/kit` with
+ * every service passed. A game that wants fewer composes its own.
  */
 export async function createGame<
   A extends string,
@@ -497,516 +367,51 @@ export async function createGame<
   C = unknown,
   P = unknown,
 >(opts: CreateGameOptions<A, S, P>): Promise<EngineCtx<A, NoInfer<S>, C, P> | null> {
-  const crash = gameCrash(opts);
-  if (!crash) return buildGame<A, S, C, P>(opts, null);
-  try {
-    return await buildGame<A, S, C, P>(opts, crash);
-  } catch (err) {
-    // A boot throw: the card instead of a blank page, and the caller still sees the error.
-    crash.screen.report(err, { fatal: true });
-    throw err;
-  }
-}
-
-/** The crash screen `createGame` installed, and where it learns the save once one is built. */
-interface GameCrash {
-  readonly screen: CrashScreen;
-  setSave(save: FlushableSave | null): void;
-}
-
-function gameCrash<A extends string, S extends FlushableSave | null, P>(
-  opts: CreateGameOptions<A, S, P>,
-): GameCrash | null {
-  if (!opts.crash || opts.overlay === false || !opts.root) return null;
-  const custom = opts.crash === true ? {} : opts.crash;
-  let save: FlushableSave | null = null;
-  const screen = installCrashScreen({
-    root: opts.root,
-    title: opts.title,
-    reload: custom.reload,
-    // `FlushableSave.flush` is typed void; a save that says where the write went returns a boolean.
-    flush: custom.flush ?? (() => save !== null && (save.flush as () => unknown)() === true),
-  });
-  return {
-    screen,
-    setSave(s) {
-      save = s;
-    },
-  };
-}
-
-async function buildGame<A extends string, S extends FlushableSave | null, C, P>(
-  opts: CreateGameOptions<A, S, P>,
-  crash: GameCrash | null,
-): Promise<EngineCtx<A, S, C, P> | null> {
-  const design = { width: opts.design?.width ?? 1920, height: opts.design?.height ?? 1080 };
-  const surfaceOpts = {
-    ...opts.surface,
-    logicalWidth: design.width,
-    logicalHeight: design.height,
-  };
-  // `overlay: false` (ws/core-9): no DOM is touched from here on.
+  // `overlay: false` (ws/core-9): no DOM is touched.
   const dom = opts.overlay !== false;
-  let res: Extract<BootResult, { ok: true }>;
-  if (!dom) {
-    if (!opts.gpu || !opts.host) {
-      throw new Error('createGame: `overlay: false` needs `gpu` and `host` (it touches no DOM)');
-    }
-    res = gpuBoot(new DetachedSurface(surfaceOpts), opts.gpu);
-  } else {
-    const root = opts.root ?? (opts.gpu ? globalThis.document?.createElement('div') : undefined);
-    if (!root) {
-      throw new Error(
-        'createGame: `root` is required (a headless game passes `gpu` and a DOM, or `overlay: false`)',
-      );
-    }
-    // Before boot, so it holds from the first frame (and on the fatal screens too).
-    if (opts.blockBrowserZoom !== false) blockBrowserZoom(root.ownerDocument);
-    const booted = opts.gpu
-      ? gpuBoot(mountSurface(root, surfaceOpts), opts.gpu)
-      : await boot(root, {
-          ...surfaceOpts,
-          title: opts.title,
-          forceUnsupported: opts.forceUnsupported,
-        });
-    if (!booted.ok) return null;
-    res = booted;
+  if (!dom && (!opts.gpu || !opts.host)) {
+    throw new Error('createGame: `overlay: false` needs `gpu` and `host` (it touches no DOM)');
   }
-  const { surface, gpu } = res;
-  opts.onGpuReady?.(gpu);
-  installGpuErrorLogging(gpu.device);
-
-  // ── GPU ────────────────────────────────────────────────────────────────
-  const renderer = new Renderer(gpu, {
-    logicalWidth: design.width,
-    logicalHeight: design.height,
+  const ctx = await composeGame({
+    root: opts.root,
+    gpu: opts.gpu,
+    dom,
+    host: opts.host,
+    clock: opts.clock,
+    title: opts.title,
+    design: opts.design,
+    surface: opts.surface,
     aux: opts.aux,
+    onGpuReady: opts.onGpuReady,
+    blockBrowserZoom: opts.blockBrowserZoom,
+    forceUnsupported: opts.forceUnsupported,
+    save: opts.save,
+    crash: opts.crash,
+    loop: { sim: opts.sim },
+    post: withPost(opts.post),
+    particles: withParticles(opts.particles),
+    ui: dom
+      ? withOverlay({
+          styles: opts.styles,
+          layout: opts.layout,
+          theme: opts.theme,
+          textScale: opts.textScale,
+        })
+      : undefined,
+    audio: withAudio({ mixerKey: opts.mixerKey }),
+    input: withInput<A, P>({ ...opts.input, testers: opts.pointers?.testers }),
+    xr: withXr(opts.xr),
   });
-  const post = new PostStack(renderer, opts.post);
-  renderer.post = post;
-  const particles = new ParticleSystem(renderer, opts.particles);
-
-  // ── Host, save + overlay ───────────────────────────────────────────────
-  const host = opts.host ?? createWebHost();
-  // No save, no storage access: a pure client keeps nothing on the device.
-  const save = (opts.save ? opts.save(host) : null) as S;
-  crash?.setSave(save);
-  let ui: Overlay | null = null;
-  if (dom) {
-    opts.styles?.(surface.root.ownerDocument);
-    // When a panel closes and its opener can't take focus back, focus returns to the canvas so
-    // keys keep reaching the game.
-    const overlay = createOverlay({
-      parent: surface.root,
-      designWidth: design.width,
-      designHeight: design.height,
-      layout: opts.layout,
-      focusHome: () => surface.canvas,
-      theme: opts.theme,
-      // `ui.anchors()` and `ui.floats()` without a camera follow the game's (ws/api-core).
-      camera: () => renderer.camera,
-    });
-    if (opts.textScale !== undefined && opts.textScale !== 1) {
-      applyTextScale(overlay.root, opts.textScale, (t) => overlay.setTheme(t));
-    }
-    // A host that knows the notch and home indicator pads the layout's regions by them.
-    if (host.safeArea) followSafeArea(overlay.layout, host.safeArea);
-    ui = overlay;
-  }
-  // Input is blocked while a modal panel is up, so the pad drives panels through this. With no
-  // overlay there are no panels: the pad stays the game's.
-  const padNav = new PadNav(ui ? ui.stack : NO_PANELS, { getGamepads: opts.input.getGamepads });
-  surface.onResize(({ rect, backbuffer }) => {
-    renderer.resize(backbuffer.width, backbuffer.height);
-    ui?.setFrame(rect);
-  });
-
-  // ── Audio ──────────────────────────────────────────────────────────────
-  // Unlocks on the first gesture and pauses itself while the page is hidden (see attach).
-  // Without a DOM nothing unlocks it: it stays locked and silent.
-  const audio = new AudioEngine();
-  if (dom) audio.attach();
-  if (opts.mixerKey) persistMixer(audio, { game: opts.mixerKey, host });
-
-  // ── Input (blocked under modal panels) ─────────────────────────────────
-  const extraBlock = opts.input.blocked;
-  // Gestures and pointer rays link to the input: same block, same transform, same attach,
-  // advanced in `input.update()`. The rays go through whatever camera the renderer draws with:
-  // the head while a VR session runs (so a head-locked `WorldPanel` faces the headset).
-  // The gestures run on the game's tick clock (advanced by the loop below), so their timers
-  // are game time and a replay lands them on the same ticks.
-  const clock = opts.clock ?? createTickClock();
-  const gestures = createGestures({ magnify: opts.input.magnify, clock });
-  // While a session runs: its host (frames and the current `XRFrame`) and its surface (eyes).
-  let xrHost: XrHost | null = null;
-  let xrSurface: XrSurface | null = null;
-  const pointers = createPointerRouter<P>({
-    camera: () => xrSurface?.head ?? renderer.camera,
-    testers: opts.pointers?.testers,
-  });
-  const panels = ui?.stack;
-  const modal = panels ? () => panels.hasModal : () => false;
-  const input = new Input<A>(opts.input.bindings, {
-    blocked: extraBlock ? () => modal() || extraBlock() : modal,
-    globalKeys: opts.input.globalKeys,
-    buttonKeys: opts.input.buttonKeys,
-    getGamepads: opts.input.getGamepads,
-    gestures,
-    pointers,
-  });
-  // A replay feeds the input itself: no DOM listeners, so a real key never leaks in (E-011).
-  // The playback drives the game's clock (ws/input-9): each fed tick advances it by the
-  // recording's tick spacing, so `playback.speed` above 1 keeps game time too.
-  const playback = opts.input.replay
-    ? createInputPlayback(input, opts.input.replay, { clock })
-    : null;
-  if (opts.input.record) createInputRecorder(input);
-  // The recorded pointers are dispatched through a pointer target nothing real can reach (an
-  // element outside the page that keys are read from too), so the gestures, rays and any look
-  // see them on their recorded ticks and never a real pointer or key.
-  // Its box is the canvas's (ws/core-8), so a touch stick or touch zone, which measures the
-  // pointer against the box, replays where it was recorded.
-  // With `overlay: false` there is nothing to attach to: `detach()` only releases what is held.
-  const sink = dom ? surface.root.ownerDocument.createElement('div') : null;
-  const attachSink = sink
-    ? () => input.attach({ pointerTarget: sink, keyTarget: sink, bounds: surface.canvas })
-    : () => input.detach();
-  // Where the input lives outside a `ctx.replay`: the canvas, or the sink in replay mode.
-  const attachHome =
-    playback || !sink ? attachSink : () => input.attach({ pointerTarget: surface.canvas });
-  attachHome();
-  input.setPointerTransform((x, y) => surface.clientToLogical(x, y));
-  // Overlay controls (ws/input-12): every button click reaches the input by its stable id, so a
-  // recording carries it; a replay's `ui` lane comes back as `'control'` and clicks the button
-  // with that id before the tick's update, on the tick it was clicked live.
-  if (ui) {
-    const overlay = ui;
-    overlay.onControl((id) => input.control(id));
-    input.on('control', (id) => {
-      overlay.activate(id);
-    });
-  }
-  /** The playback `ctx.replay` installed, until it ends or is stopped. */
-  let replaying: GameReplay | null = null;
-  /** Its `onEnd`, cleared by `stop()` so a stopped or replaced replay never reports an end. */
-  let replayEnd: (() => void) | undefined;
-  const replay = (recording: InputRecording, ropts: ReplayOptions = {}): GameReplay => {
-    replaying?.stop();
-    input.playback?.detach();
-    // `attach` releases every key and button first, so nothing the player held leaks in.
-    attachSink();
-    // A live pointer source (the screen, an XR controller) is muted for the replay too: the
-    // sink stops the DOM ones, the mute the rest. Its remover lifts only this mute, so a mute
-    // the game set stays.
-    const unmute = pointers.mute();
-    const pb = createInputPlayback(input, recording, {
-      speed: ropts.speed,
-      tickMs: ropts.tickMs,
-      clock,
-    }) as GameReplay;
-    const uninstall = pb.detach;
-    pb.stop = pb.detach = () => {
-      uninstall();
-      unmute();
-      if (replaying !== pb) return;
-      replaying = null;
-      replayEnd = undefined;
-      // Releases the recording's last held keys and buttons too.
-      attachHome();
-    };
-    replaying = pb;
-    replayEnd = ropts.onEnd;
-    return pb;
-  };
-
-  // ── Scenes + loop ──────────────────────────────────────────────────────
-  const hooks: GameHooks = {};
-  // The stack hands scenes this object on enter; the game fills in its nouns before then.
-  const ctx = {} as EngineCtx<A, S, C, P>;
-  const stack = new SceneStack<C, Frame, Camera>(ctx as C);
-  // With `sim: false` the loop calls update once per rendered frame with the real delta.
-  const fixed = opts.sim !== false;
-  const loop = new GameLoop(
-    {
-      update: (dt: number) => {
-        // A replay feeds this tick's events first: live, they arrived between the frames, while
-        // the clock still read the last tick. Then the clock moves by the step, before the
-        // input (and its gestures) update. A playback driving the clock has already moved it
-        // for each tick it fed; once the recording is done the step moves it again. The playback
-        // is read from the input each step, so one the game installs mid-session (a replay
-        // started from a menu: `createInputPlayback(ctx.input, rec, { clock: ctx.clock })`) is
-        // stepped here too, in the same order (ws/core-5).
-        // A `ctx.replay` whose recording ran out last step gives the input back here, before
-        // this step's update, so its last tick was updated with the replayed state (ws/core-6).
-        const pb = input.playback;
-        const fed = pb ? pb.step() : false;
-        if (!fed && replaying !== null && pb === replaying) {
-          const onEnd = replayEnd;
-          replaying.stop();
-          onEnd?.();
-        }
-        if (!fed || pb?.clock !== clock) clock.advance(dt * 1000);
-        input.update();
-        padNav.update();
-        audio.update(dt);
-        if (fixed) hooks.update?.(dt);
-        else hooks.frame?.(dt);
-        particles.update(dt);
-        stack.update(dt);
-      },
-      render: (alpha: number, time: Time) => {
-        hooks.beforeRender?.(time);
-        const frame = renderer.beginFrame(time.realTime, time.frameDt);
-        if (xrSurface && xrHost) {
-          // The scenes record once, through the head; each eye draws the record into the
-          // surface's HDR scene target and the post stack resolves it into the eye's part of
-          // the layer (ws/xr-post), so the headset sees what the screen would.
-          const xrFrame = xrHost.frame;
-          const eyes = xrFrame ? xrSurface.views(xrFrame) : NO_EYES;
-          stack.render(frame, xrSurface.head, alpha);
-          for (let i = 0; i < eyes.length; i++) {
-            const eye = eyes[i]!;
-            const scene = xrSurface.scene!;
-            renderer.render(frame, eye.camera, scene);
-            renderer.resolve(scene, eye.target.color.view, eye.viewport);
-          }
-          renderer.endFrame(NO_PRESENT);
-        } else {
-          // Read each frame: `ctx.setCamera` swaps it.
-          const camera = renderer.camera;
-          stack.render(frame, camera, alpha);
-          renderer.render(frame, camera);
-          renderer.endFrame();
-        }
-        hooks.afterRender?.(time);
-        ui?.updateAnchors();
-      },
-    },
-    { step: opts.sim ? opts.sim.step : undefined, fixed, frames: host },
-  );
-
-  // ── XR ─────────────────────────────────────────────────────────────────
-  let xrSession: XRSession | null = null;
-  let xrEntering: Promise<void> | null = null;
-  // Restores the page host, pointers and surface; set while a session runs, idempotent.
-  let leaveXr: (() => void) | null = null;
-  const xr: XrControl = {
-    get active() {
-      return xrSession !== null;
-    },
-    get session() {
-      return xrSession;
-    },
-    get surface() {
-      return xrSurface;
-    },
-    async supported() {
-      const sys = (globalThis.navigator as XrNavigator | undefined)?.xr;
-      if (!sys || !XrSurface.supported()) return false;
-      try {
-        return await sys.isSessionSupported('immersive-vr');
-      } catch {
-        return false;
-      }
-    },
-    enter() {
-      if (xrSession) return Promise.resolve();
-      if (xrEntering) return xrEntering;
-      const sys = (globalThis.navigator as XrNavigator | undefined)?.xr;
-      if (!sys || !XrSurface.supported()) {
-        return Promise.reject(new Error('WebXR with the WebGPU binding is not available here'));
-      }
-      const refType = opts.xr?.referenceSpace ?? 'local-floor';
-      xrEntering = (async () => {
-        const session = await sys.requestSession('immersive-vr', {
-          requiredFeatures: ['webgpu', refType],
-          optionalFeatures: ['hand-tracking'],
-        });
-        let referenceSpace: XRReferenceSpace;
-        try {
-          referenceSpace = await session.requestReferenceSpace(refType);
-        } catch (err) {
-          await session.end().catch(() => {});
-          throw err;
-        }
-        const surface = new XrSurface(session, gpu.device, {
-          referenceSpace,
-          scene: true,
-          colorFormat: renderer.format,
-          aux: opts.aux,
-        });
-        const sessionHost = createXrHost(session, host);
-        const source = new XrPointerSource(session, referenceSpace, () => sessionHost.frame);
-        const removeSource = pointers.addSource(source);
-        const onEnd = () => leaveXr?.();
-        leaveXr = () => {
-          leaveXr = null;
-          session.removeEventListener('end', onEnd);
-          removeSource();
-          loop.setFrames(host);
-          xrHost = null;
-          xrSurface = null;
-          xrSession = null;
-          surface.destroy();
-          opts.xr?.onExit?.();
-        };
-        session.addEventListener('end', onEnd);
-        xrSession = session;
-        xrSurface = surface;
-        xrHost = sessionHost;
-        loop.setFrames(sessionHost);
-        opts.xr?.onEnter?.(session);
-      })().finally(() => {
-        xrEntering = null;
-      });
-      return xrEntering;
-    },
-    async exit() {
-      const session = xrSession;
-      if (!session) return;
-      try {
-        await session.end();
-      } finally {
-        // The `end` event normally restored everything; a session ending without it does here.
-        leaveXr?.();
-      }
-    },
-  };
-
-  // Hidden, pagehide (iOS app switch) or freeze (Android): stop drawing and persist now; a
-  // phone may kill a background tab without another word.
-  if (dom) {
-    watchLifecycle({
-      onHide: (reason) => {
-        loop.stop();
-        hooks.hide?.(reason);
-        save?.flush();
-      },
-      onShow: (reason) => {
-        if (loop.halted) return;
-        loop.start();
-        hooks.show?.(reason);
-      },
-    });
-  }
-
-  // ── Host lifecycle (ws/host-mobile) ────────────────────────────────────
-  // A host that knows the app's state (the web host from the page's visibility, a store app's
-  // from its shell): background stops frames and flushes the save, active resumes. On the web
-  // host the page events above have usually done both already (the loop is then stopped, so the
-  // flush is not repeated); a shell's state change without a page event does them here. Audio
-  // follows the document's visibility in `audio.attach`; a shell's background state also reaches
-  // it through `audio.background` (ws/audio-4), the same flag, so it is not suspended twice.
-  host.lifecycle?.watch((state) => {
-    audio.background(state === 'background');
-    if (state === 'background') {
-      if (loop.isRunning) {
-        loop.stop();
-        save?.flush();
-      }
-    } else if (!loop.halted) {
-      loop.start();
-    }
-    hooks.lifecycle?.(state);
-  });
-
-  // Device lost: boot has shown the reload screen; stop all work behind it for good.
-  res.onDeviceLost((info) => {
-    loop.halt();
-    hooks.deviceLost?.(info);
-    void audio.halt();
-    ui?.caption.suspend(true);
-    save?.flush();
-  });
-
-  Object.assign(ctx, {
-    design,
-    surface,
-    gpu,
-    renderer,
-    camera: renderer.camera,
-    setCamera: (cam: Camera) => {
-      renderer.camera = cam;
-    },
-    post,
-    particles,
-    input,
-    clock,
-    replay,
-    gestures,
-    pointers,
-    padNav,
-    audio,
-    host,
-    save,
-    stack,
-    loop,
-    hooks,
-    onDeviceLost: res.onDeviceLost,
-    xr,
-  } satisfies Omit<EngineCtx<A, S, C, P>, 'ui'>);
+  if (!ctx) return null;
   // `overlay: false`: `ctx.ui` throws instead of handing out an overlay that does not exist.
-  const liveUi = ui;
-  Object.defineProperty(ctx, 'ui', {
-    get: liveUi
-      ? () => liveUi
-      : () => {
-          throw new Error(NO_DOM('ctx.ui'));
-        },
-    enumerable: liveUi !== null,
-    configurable: true,
-  });
-  // `camera` follows `setCamera` (`Object.assign` copied a value).
-  Object.defineProperty(ctx, 'camera', {
-    get: () => renderer.camera,
-    enumerable: true,
-    configurable: true,
-  });
-  return ctx;
-}
-
-/**
- * `boot` for a headless game (`CreateGameOptions.gpu`): the surface is the one given (mounted
- * as usual, or detached with `overlay: false`), the GPU is the one given, and device loss comes
- * from `gpu.device.lost` when the device has one (a reason of `destroyed` is an explicit
- * `destroy()`, not a loss).
- */
-function gpuBoot(surface: Surface, gpu: GpuContext): Extract<BootResult, { ok: true }> {
-  const listeners = new Set<(info: GPUDeviceLostInfo) => void>();
-  const lost = (gpu.device as { lost?: Promise<GPUDeviceLostInfo> }).lost;
-  if (lost && typeof lost.then === 'function') {
-    void lost.then((info) => {
-      if (info.reason === 'destroyed') return;
-      for (const fn of [...listeners]) {
-        try {
-          fn(info);
-        } catch (err) {
-          console.error('[createGame] device-lost handler failed', err);
-        }
-      }
+  if (!dom) {
+    Object.defineProperty(ctx, 'ui', {
+      get: () => {
+        throw new Error(NO_DOM('ctx.ui'));
+      },
+      enumerable: false,
+      configurable: true,
     });
   }
-  return {
-    ok: true,
-    surface,
-    gpu,
-    onDeviceLost(fn) {
-      listeners.add(fn);
-      return () => listeners.delete(fn);
-    },
-  };
+  return ctx as unknown as EngineCtx<A, S, C, P>;
 }
-
-/**
- * `PadNav`'s stack with `overlay: false`: no panels, so the pad never leaves the game. PadNav
- * reads only `padOwner` and `onPadOwnerChange`.
- */
-const NO_PANELS = {
-  padOwner: 'game',
-  onPadOwnerChange: () => () => {},
-} as unknown as PanelStack;
-
-/** What the XR render step iterates when the frame has no viewer pose. */
-const NO_EYES: readonly XrEyeView[] = [];
-/** `endFrame`'s XR options, hoisted so a headset frame allocates none (ws/xr-fixes). */
-const NO_PRESENT = { present: false } as const;
