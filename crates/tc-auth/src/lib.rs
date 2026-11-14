@@ -38,6 +38,6 @@ mod token;
 pub use accounts::{
     AccountError, Accounts, Claim, Claimed, Clock, FileAccounts, MemoryAccounts, Record, unix_now,
 };
-pub use auth::{DevTokens, GUEST_PERMISSION, Issued, SessionAuth};
+pub use auth::{DevTokens, GUEST_PERMISSION, GUEST_TOKEN_PREFIX, Issued, SessionAuth};
 pub use names::{NameRules, quote};
 pub use token::{TokenError, TokenFormat};

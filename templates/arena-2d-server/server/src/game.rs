@@ -5,21 +5,23 @@
 //!   at each input tick, unlogged, and predicted by its own client with
 //!   the same [`step`] (the TypeScript twin is `src/rules.ts`; both are
 //!   checked against `shared/rules.json`).
-//! - Tagging needs everyone's position, and the rules only see the
-//!   state, so each move is also an event ([`Event::Moved`]) that copies
-//!   the position into the state, where [`Arena::apply`] checks for a tag.
-//! - Everyone sees everyone through the entity stream ([`Player`] views),
-//!   and the scoreboard through the `score {}` query.
+//! - Tagging needs everyone's position: after each input tick
+//!   [`Game::moved`] reads the bodies and, when "it" touches someone,
+//!   logs [`Event::Tagged`]. Only tags, arrivals and departures are
+//!   logged, never a step.
+//! - Everyone sees everyone through the entity stream ([`Player`] views,
+//!   read off the bodies), and the scoreboard through the `score {}`
+//!   query.
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::sync::Arc;
 
-use tc_wire::Wire;
-use tc_wire::hash::StableHasher;
 use thunderclap_server::net::{Empty, Identity, Protocol};
-use thunderclap_server::sim::{Cx, Game, PlayerId, Query, QueryCtx, Seat};
+use thunderclap_server::sim::{Bodies, Cx, Game, PlayerId, Query, QueryCtx, Seat};
 use thunderclap_server::store::{LogCodec, NameTable, Names};
+use thunderclap_server::wire::Wire;
+use thunderclap_server::wire::hash::StableHasher;
 
 /// The box's size, in arena units.
 pub const WIDTH: i32 = 1280;
@@ -52,6 +54,16 @@ pub struct Pos {
     pub x: i32,
     /// Down.
     pub y: i32,
+}
+
+/// A player's body: where it is and its last move. Unlogged; the
+/// entity stream and the tag rule read it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Body {
+    /// Where it is.
+    pub at: Pos,
+    /// Its last step.
+    pub vel: Pos,
 }
 
 /// The one rule a client predicts: where `keys` held for a step take a
@@ -146,12 +158,12 @@ pub enum Event {
         /// Where it is (arriving) or was (leaving).
         at: Pos,
     },
-    /// A player's body moved: its new position.
-    Moved {
-        /// Who.
-        player: u64,
-        /// Where to.
-        to: Pos,
+    /// "It" touched someone, who is it now.
+    Tagged {
+        /// Who tagged.
+        by: u64,
+        /// Who was tagged.
+        who: u64,
     },
 }
 
@@ -185,10 +197,9 @@ impl LogCodec for ArenaLog {
 /// What queries and the entity stream key on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Change {
-    /// Who is here, who is it, the tag counts.
+    /// Who is here, who is it, the tag counts. (Positions are bodies,
+    /// which queries read with `QueryCtx::body`.)
     Roster,
-    /// One player's position.
-    Moved(PlayerId),
 }
 
 /// One seat's state.
@@ -198,10 +209,9 @@ pub struct Seated {
     pub name: String,
     /// Here or not.
     pub present: bool,
-    /// Its last position (a copy of its body, from [`Event::Moved`]).
+    /// Where it arrived or left (from [`Event::Present`]): where it
+    /// comes back to.
     pub at: Pos,
-    /// Its last move.
-    pub vel: Pos,
     /// Tags made.
     pub tags: u32,
 }
@@ -255,34 +265,25 @@ impl Arena {
         }
     }
 
-    /// If "it" touches anyone, the nearest (then the lowest id) is it now.
-    fn check_tag(&mut self, now: u64) -> bool {
-        if self.it == 0 || now < self.calm_until {
-            return false;
+    /// Who "it" tags at `time` with everyone where `bodies` has them:
+    /// the nearest present player in reach (then the lowest id), unless
+    /// a tag was too recent.
+    pub fn tag(&self, time: u64, bodies: &Bodies<'_, Arena>) -> Option<PlayerId> {
+        if self.it == 0 || time < self.calm_until {
+            return None;
         }
-        let Some(tagger) = self.seats.get(&self.it).map(|s| s.at) else {
-            return false;
-        };
+        let tagger = bodies.get(self.it)?.at;
         let reach = i64::from(REACH) * i64::from(REACH);
-        let near = self
-            .seats
+        bodies
             .iter()
-            .filter(|(id, s)| **id != self.it && s.present)
-            .map(|(id, s)| {
-                let (dx, dy) = (i64::from(s.at.x - tagger.x), i64::from(s.at.y - tagger.y));
-                (dx * dx + dy * dy, *id)
+            .filter(|(id, _)| *id != self.it && self.seats.get(id).is_some_and(|s| s.present))
+            .map(|(id, b)| {
+                let (dx, dy) = (i64::from(b.at.x - tagger.x), i64::from(b.at.y - tagger.y));
+                (dx * dx + dy * dy, id)
             })
             .filter(|(d, _)| *d <= reach)
-            .min();
-        let Some((_, tagged)) = near else {
-            return false;
-        };
-        if let Some(s) = self.seats.get_mut(&self.it) {
-            s.tags += 1;
-        }
-        self.it = tagged;
-        self.calm_until = now + IMMUNE_STEPS;
-        true
+            .min()
+            .map(|(_, id)| id)
     }
 }
 
@@ -292,7 +293,7 @@ impl Game for Arena {
     type Scheduled = Empty;
     type Change = Change;
     type Data = ();
-    type Body = Pos;
+    type Body = Body;
     type View = Player;
 
     fn queries() -> Vec<Query<Arena>> {
@@ -335,20 +336,17 @@ impl Game for Arena {
                 let s = self.seats.get_mut(player).ok_or("no such seat")?;
                 s.present = *present;
                 s.at = *at;
-                s.vel = Pos::default();
                 self.settle_it();
             }
-            Event::Moved { player, to } => {
-                let s = self.seats.get_mut(player).ok_or("no such seat")?;
-                s.vel = Pos {
-                    x: to.x - s.at.x,
-                    y: to.y - s.at.y,
-                };
-                s.at = *to;
-                cx.mark(Change::Moved(*player));
-                if !self.check_tag(cx.time()) {
-                    return Ok(());
+            Event::Tagged { by, who } => {
+                if *by != self.it || !self.seats.get(who).is_some_and(|s| s.present) {
+                    return Err("not a tag".into());
                 }
+                if let Some(s) = self.seats.get_mut(by) {
+                    s.tags += 1;
+                }
+                self.it = *who;
+                self.calm_until = cx.time() + IMMUNE_STEPS;
             }
         }
         cx.mark(Change::Roster);
@@ -361,7 +359,7 @@ impl Game for Arena {
             h.write_u64(*id);
             h.write_str(&s.name);
             h.write_bool(s.present);
-            for v in [s.at.x, s.at.y, s.vel.x, s.vel.y] {
+            for v in [s.at.x, s.at.y] {
                 h.write_i32(v);
             }
             h.write_u32(s.tags);
@@ -386,27 +384,40 @@ impl Game for Arena {
         Ok(Seat::Player(self.seats.len() as PlayerId + 1))
     }
 
+    fn on_open(&self, _: u64, events: &mut Vec<Event>) {
+        // A crash never logged who left: everyone has.
+        for (id, s) in &self.seats {
+            if s.present {
+                events.push(Event::Present {
+                    player: *id,
+                    present: false,
+                    at: s.at,
+                });
+            }
+        }
+    }
+
     fn welcome(&self, _: PlayerId) -> Empty {
         Empty
     }
 
-    fn body(&self, player: PlayerId) -> Option<Pos> {
-        // A seat taken in this same join isn't in the state yet.
-        Some(
-            self.seats
-                .get(&player)
-                .map_or_else(|| spawn(player), |s| s.at),
-        )
+    fn body(&self, player: PlayerId) -> Option<Body> {
+        // Its join is applied: a new seat is in the state at its spawn.
+        let at = self.seats.get(&player)?.at;
+        Some(Body {
+            at,
+            vel: Pos::default(),
+        })
     }
 
     fn presence(
         &self,
         player: PlayerId,
         present: bool,
-        body: Option<&Pos>,
+        body: Option<&Body>,
         events: &mut Vec<Event>,
     ) {
-        let at = body.copied().unwrap_or_else(|| spawn(player));
+        let at = body.map_or_else(|| spawn(player), |b| b.at);
         events.push(Event::Present {
             player,
             present,
@@ -422,16 +433,23 @@ impl Game for Arena {
         Empty
     }
 
-    fn input(&self, player: PlayerId, body: &mut Pos, keys: u8, events: &mut Vec<Event>) {
-        let to = step(*body, keys);
-        if to != *body {
-            *body = to;
-            events.push(Event::Moved { player, to });
+    fn input(&self, _: PlayerId, body: &mut Body, keys: u8, _: &mut Vec<Event>) {
+        let to = step(body.at, keys);
+        body.vel = Pos {
+            x: to.x - body.at.x,
+            y: to.y - body.at.y,
+        };
+        body.at = to;
+    }
+
+    fn moved(&self, bodies: &Bodies<'_, Arena>, events: &mut Vec<Event>) {
+        if let Some(who) = self.tag(bodies.time(), bodies) {
+            events.push(Event::Tagged { by: self.it, who });
         }
     }
 
-    fn player_state(&self, _: PlayerId, body: &Pos) -> Option<Pos> {
-        Some(*body)
+    fn player_state(&self, _: PlayerId, body: &Body) -> Option<Pos> {
+        Some(body.at)
     }
 
     fn entities(&self, cx: &QueryCtx<'_, Arena>, _: &Empty, out: &mut Vec<(u64, Player)>) {
@@ -440,15 +458,18 @@ impl Game for Arena {
             if !s.present {
                 continue;
             }
-            cx.read(Change::Moved(*id));
+            let b = cx.body(*id).copied().unwrap_or(Body {
+                at: s.at,
+                vel: Pos::default(),
+            });
             out.push((
                 *id,
                 Player {
                     name: s.name.clone(),
-                    x: s.at.x,
-                    y: s.at.y,
-                    vx: s.vel.x,
-                    vy: s.vel.y,
+                    x: b.at.x,
+                    y: b.at.y,
+                    vx: b.vel.x,
+                    vy: b.vel.y,
                     it: *id == self.it,
                 },
             ));

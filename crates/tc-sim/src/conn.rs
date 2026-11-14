@@ -30,7 +30,11 @@ use crate::sim::{Conn, Sim};
 impl<G: Game> Sim<G> {
     /// Handles one request from tc-net.
     pub fn handle(&mut self, request: Request<G::Protocol>) {
-        let now = Instant::now();
+        self.handle_at(request, Instant::now());
+    }
+
+    /// [`Sim::handle`] as if it arrived at `now` (a test's clock).
+    pub fn handle_at(&mut self, request: Request<G::Protocol>, now: Instant) {
         match request {
             Request::Connect {
                 conn,

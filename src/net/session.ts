@@ -625,7 +625,7 @@ export class Net {
         this.#update(msg.sub, msg.version, msg.hash, msg.patch);
         return;
       case 'Resync':
-        this.#resync(msg.sub, msg.version, msg.result);
+        this.#resync(msg.sub, msg.version, msg.hash, msg.result);
         return;
       case 'QueryFailed': {
         const sub = this.#subs.get(msg.sub);
@@ -711,14 +711,18 @@ export class Net {
     });
   }
 
-  #resync(id: number, version: number, bytes: Uint8Array): void {
+  #resync(id: number, version: number, hash: string, bytes: Uint8Array): void {
     const sub = this.#subs.get(id);
     if (!sub) return; // Unsubscribed while it was on its way.
+    const h = resultHash(bytes);
+    if (sub.options.checkHash !== false && hash !== '' && h !== hash) {
+      throw new NetError(`${sub.name}: a whole result that does not match its hash`);
+    }
     const value = this.schema.decode(sub.result, bytes);
     sub.bytes = bytes;
     sub.value = value;
     sub.version = version;
-    sub.hash = resultHash(bytes);
+    sub.hash = h;
     sub.listener(value, null);
   }
 

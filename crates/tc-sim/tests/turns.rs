@@ -213,9 +213,8 @@ fn the_store_rolls_back_to_a_mark_and_plays_on_from_it() {
 
 #[test]
 fn a_returning_player_takes_its_seat_and_resumes_the_board() {
-    // Long names: the board must outweigh a patch's hash, or the server
-    // resends it whole (cheaper), and a resume shows no difference.
-    let (ada, bo) = ("ada-of-the-long-name", "bo-of-the-even-longer-name");
+    // A small board: both messages carry the hash, so it is patched.
+    let (ada, bo) = ("ada", "bo");
     let dir = temp_dir("resume");
     let mut d = create(&dir);
     let (x, mut rx_x) = d.connect(ada, Empty);
@@ -234,9 +233,18 @@ fn a_returning_player_takes_its_seat_and_resumes_the_board() {
     for m in recv(&mut rx_x) {
         match m {
             ServerMsg::Resync {
-                version, result, ..
+                version,
+                hash,
+                result,
+                ..
             } => {
-                held = Some((version, tc_wire::diff::result_hash(&result.0)));
+                let h = tc_wire::diff::result_hash(&result.0);
+                assert_eq!(
+                    hash,
+                    tc_wire::diff::hash_hex(h),
+                    "a resync carries its hash"
+                );
+                held = Some((version, h));
             }
             ServerMsg::Update { version, hash, .. } => {
                 held = Some((version, tc_wire::diff::parse_hash_hex(&hash).unwrap()));

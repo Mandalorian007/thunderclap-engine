@@ -1,17 +1,18 @@
 //! The arena's rules, its shared vectors and its schema hash.
 
+use arena_server::game::Event;
 use arena_server::game::{
     Arena, DOWN, HEIGHT, IMMUNE_STEPS, LEFT, MAX_PLAYERS, Pos, RADIUS, REACH, RIGHT, SPEED, UP,
     WIDTH, step,
 };
-use std::time::{Duration, Instant};
-
+use thunderclap_server::Game;
 use thunderclap_server::net::outbound::OutboundRx;
 use thunderclap_server::net::{ClientMsg, Empty, ServerMsg};
 use thunderclap_server::sim::{Core, Driver, Sim, SimConfig};
 
 const RULES: &str = include_str!("../../shared/rules.json");
 const HASH_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../shared/schema-hash.txt");
+const SCHEMA_TS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../src/schema.ts");
 
 fn rules() -> serde_json::Value {
     serde_json::from_str(RULES).unwrap()
@@ -60,7 +61,26 @@ fn the_schema_hash_is_the_committed_one() {
     assert_eq!(
         committed.trim(),
         hash,
-        "the schema changed: update src/schema.ts to match, then rerun with TC_BLESS=1"
+        "the schema changed: rerun with TC_BLESS=1"
+    );
+}
+
+/// The client's schema is generated from the server's; `TC_BLESS=1`
+/// rewrites it.
+#[test]
+fn the_client_schema_is_generated() {
+    let ts = thunderclap_server::define_schema_ts(
+        &arena_server::schema(),
+        thunderclap_server::NET_IMPORT,
+    )
+    .unwrap();
+    if std::env::var_os("TC_BLESS").is_some() {
+        std::fs::write(SCHEMA_TS, &ts).unwrap();
+    }
+    let committed = std::fs::read_to_string(SCHEMA_TS).unwrap_or_default();
+    assert!(
+        committed == ts,
+        "src/schema.ts is stale: rerun with TC_BLESS=1"
     );
 }
 
@@ -78,32 +98,14 @@ fn driver() -> Driver<Arena> {
     Driver::new(Sim::new(Core::new(Arena::new()), None, config))
 }
 
-thread_local! {
-    static NOW: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
-}
-
-/// The next input tick's wall time.
-fn later() -> Instant {
-    NOW.with(|now| {
-        let t = now.get().unwrap_or_else(Instant::now) + Duration::from_millis(50);
-        now.set(Some(t));
-        t
-    })
-}
-
-/// Holds `keys` for `steps` input ticks.
-fn hold(d: &mut Driver<Arena>, conn: u64, keys: u8, steps: u32, seq: &mut u32) {
+/// Holds `keys` for `steps` input ticks, on the driver's own clock.
+fn hold(d: &mut Driver<Arena>, conn: u64, keys: u8, steps: u32) -> u32 {
+    let mut seq = 0;
     for _ in 0..steps {
-        *seq += 1;
-        d.client(
-            conn,
-            ClientMsg::Input {
-                seq: *seq,
-                input: keys,
-            },
-        );
-        d.tick(later());
+        seq = d.push_input(conn, keys);
+        d.input_tick();
     }
+    seq
 }
 
 #[test]
@@ -116,8 +118,10 @@ fn it_tags_the_nearest_and_the_tagged_one_is_it() {
     recv(&mut rx_a);
 
     // Ada starts 240 left of the middle, Bo 240 right: Ada runs at him.
-    let mut seq = 0;
-    hold(&mut d, a, RIGHT, 40, &mut seq);
+    // Her steps are unlogged; only the tag is.
+    let version = d.core().version();
+    let seq = hold(&mut d, a, RIGHT, 40);
+    assert_eq!(d.core().version(), version + 1, "one event: the tag");
     let arena = d.core().game();
     assert_eq!(arena.it, 2, "Bo was tagged");
     assert_eq!(arena.seats[&1].tags, 1);
@@ -130,12 +134,11 @@ fn it_tags_the_nearest_and_the_tagged_one_is_it() {
         })
         .next_back()
         .expect("a PlayerState");
-    assert_eq!(state.1, arena.seats[&1].at);
+    assert_eq!(Some(state.1), d.sim().body(1).map(|b| b.at));
     assert_eq!(state.0, seq);
 
     // No tag-back while calm, even touching.
-    let mut seq_b = 0;
-    hold(&mut d, b, 0, 1, &mut seq_b);
+    hold(&mut d, b, 0, 1);
     assert_eq!(d.core().game().it, 2);
     // Ada leaves: Bo is alone, so nobody is it.
     d.disconnect(a);
@@ -149,8 +152,7 @@ fn everyone_sees_everyone_in_the_entity_stream() {
     let (a, mut rx_a) = d.connect("ada", Empty);
     let (b, _rx_b) = d.connect("bo", Empty);
     d.client(a, ClientMsg::SetInterest { interest: Empty });
-    let mut seq = 0;
-    hold(&mut d, b, DOWN, 3, &mut seq);
+    hold(&mut d, b, DOWN, 3);
     let streamed = recv(&mut rx_a)
         .iter()
         .filter(|m| matches!(m, ServerMsg::EntityStream { .. }))
@@ -172,5 +174,28 @@ fn a_ninth_name_watches() {
         _ => None,
     });
     assert_eq!(player, Some(0));
+    d.stop();
+}
+
+#[test]
+fn opening_after_a_crash_clears_who_was_here() {
+    let mut d = driver();
+    let (_a, _rx_a) = d.connect("ada", Empty);
+    let (_b, _rx_b) = d.connect("bo", Empty);
+    // As a crash leaves it: two here, nobody logged leaving.
+    let mut events = Vec::new();
+    d.core().game().on_open(0, &mut events);
+    let left: Vec<u64> = events
+        .iter()
+        .map(|e| match e {
+            Event::Present {
+                player,
+                present: false,
+                ..
+            } => *player,
+            e => panic!("{e:?}"),
+        })
+        .collect();
+    assert_eq!(left, [1, 2]);
     d.stop();
 }

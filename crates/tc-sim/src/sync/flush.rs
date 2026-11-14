@@ -293,13 +293,14 @@ impl<G: Game> Out<'_, G> {
                 };
                 match base {
                     Some(base) if base.hash() == Some(*hash) => {
-                        if !first {
-                            cs.sent = Some(value);
-                            return None;
+                        // Unchanged, or resumed with the current result:
+                        // the client has it, so nothing is sent.
+                        if first {
+                            stats.resumed += 1;
                         }
-                        // Resumed with the current result: an empty patch.
-                        stats.updates += 1;
-                        update_frame::<G>(sub, version, *hash, &Vec::<PatchOp>::new().to_bytes())
+                        cs.sent = Some(value);
+                        cs.resume = None;
+                        return None;
                     }
                     Some(base) => {
                         let from = base.hash().expect("base is a result");
@@ -312,12 +313,12 @@ impl<G: Game> Out<'_, G> {
                             update_frame::<G>(sub, version, *hash, &patch)
                         } else {
                             stats.resyncs += 1;
-                            resync_frame::<G>(sub, version, bytes)
+                            resync_frame::<G>(sub, version, *hash, bytes)
                         }
                     }
                     None => {
                         stats.resyncs += 1;
-                        resync_frame::<G>(sub, version, bytes)
+                        resync_frame::<G>(sub, version, *hash, bytes)
                     }
                 }
             }
@@ -340,10 +341,10 @@ impl<G: Game> Out<'_, G> {
             }]
         });
         let encoded = ops.to_bytes();
-        // An Update also carries the hash; a Resync the result's length.
-        let update = encoded.len() + HASH_WIRE_LEN;
+        // Both carry the hash; a Resync also the result's length. A small
+        // result is patched whenever its patch is smaller.
         let resync = bytes.len() + varint_len(bytes.len() as u64);
-        (update < resync).then(|| Arc::new(encoded))
+        (encoded.len() < resync).then(|| Arc::new(encoded))
     }
 }
 
@@ -355,10 +356,6 @@ fn varint_len(mut n: u64) -> usize {
     }
     len
 }
-
-/// The encoded size of an `Update`'s hash: a length byte and 16 hex
-/// digits.
-const HASH_WIRE_LEN: usize = 17;
 
 /// The variant tags of `Update` and `Resync`, read off encoded templates
 /// so they always match the envelope (the same for every protocol).
@@ -374,6 +371,7 @@ fn tags<G: Game>() -> (u8, u8) {
         let resync = ServerMsg::<G::Protocol>::Resync {
             sub: 0,
             version: 0,
+            hash: String::new(),
             result: Bytes::default(),
         };
         (update.to_bytes()[0], resync.to_bytes()[0])
@@ -393,11 +391,12 @@ fn update_frame<G: Game>(sub: SubId, version: u64, hash: u64, patch: &[u8]) -> V
 }
 
 /// `ServerMsg::Resync` without copying the result into a message.
-fn resync_frame<G: Game>(sub: SubId, version: u64, result: &[u8]) -> Vec<u8> {
+fn resync_frame<G: Game>(sub: SubId, version: u64, hash: u64, result: &[u8]) -> Vec<u8> {
     let mut w = Writer::new();
     w.write_u8(tags::<G>().1);
     sub.encode(&mut w);
     version.encode(&mut w);
+    w.write_str(&diff::hash_hex(hash));
     w.write_len(result.len());
     w.write_raw(result);
     w.into_bytes()

@@ -4,7 +4,7 @@
  * from `shared/rules.json` and are tested against its cases.
  */
 import rules from '../shared/rules.json';
-import type { Pos } from './schema';
+import type { Pos } from './types';
 
 export const {
   width: WIDTH,

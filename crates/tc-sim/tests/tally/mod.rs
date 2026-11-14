@@ -24,7 +24,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use tc_net::{Empty, Identity, Protocol};
-use tc_sim::{Changes, Cx, EventOf, Game, Lane, Outbox, PlayerId, Query, QueryCtx, Seat, To};
+use tc_sim::{
+    Bodies, Changes, Cx, EventOf, Game, Lane, Outbox, PlayerId, Query, QueryCtx, Seat, To,
+};
 use tc_store::format::{Reader, Writer};
 use tc_store::{LogCodec, NameTable, Names};
 use tc_wire::Wire;
@@ -217,6 +219,9 @@ pub struct Player {
     pub at: i32,
     pub present: bool,
 }
+
+/// How far a body goes to score ([`Game::moved`]).
+pub const FAR: i32 = 1000;
 
 pub struct Tally {
     pub stepping: bool,
@@ -508,6 +513,27 @@ impl Game for Tally {
 
     fn input(&self, _: u64, body: &mut i32, by: i32, _: &mut Vec<Event>) {
         *body += by;
+    }
+
+    /// A rule on bodies: a body that went past [`FAR`] scores a point.
+    fn moved(&self, bodies: &Bodies<'_, Tally>, events: &mut Vec<Event>) {
+        for &player in bodies.moved() {
+            if bodies.get(player).is_some_and(|&at| at >= FAR) {
+                events.push(Event::Add { player, n: 1 });
+            }
+        }
+    }
+
+    /// After a crash, nobody is here.
+    fn on_open(&self, _: u64, events: &mut Vec<Event>) {
+        for (id, p) in &self.players {
+            if p.present {
+                events.push(Event::Present {
+                    player: *id,
+                    present: false,
+                });
+            }
+        }
     }
 
     fn player_state(&self, _: u64, body: &i32) -> Option<i32> {
