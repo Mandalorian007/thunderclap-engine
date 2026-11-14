@@ -1,0 +1,26 @@
+# The arena's server: a tc-sim game served by the thunderclap-server facade.
+# Its own workspace (not the engine's), as a game's server would be; the
+# engine crates come by path from this checkout.
+[workspace]
+
+[package]
+name = "arena-server"
+description = "The arena-2d-server template's authoritative server: 2 to 8 players move and tag, on tc-sim and the thunderclap-server facade"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT"
+
+[dependencies]
+thunderclap-server = { path = "../../../crates/thunderclap-server" }
+# `#[derive(Wire)]` names `tc_wire` paths, so the game names the crate too.
+tc-wire = { path = "../../../crates/tc-wire" }
+
+[dev-dependencies]
+serde_json = "1"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
