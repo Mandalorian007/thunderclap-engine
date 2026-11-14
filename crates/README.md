@@ -10,6 +10,7 @@ with its own types.
 | `tc-wire` | The wire format. `Wire` (encode, decode, describe) for scalars, `String`, `Bytes`, `Vec`, `Option`, `BTreeMap` and `Fixed` (32.32); `#[derive(Wire)]` for structs, newtypes and enums, type parameters included (`Page<Slot>` is named `PageSlot`). `SchemaBuilder` collects roots and queries into a `Schema`: canonical text, its stable hash (SplitMix64, the same as `src/net/schema.ts`), `diff`/`patch` of query results, strict `DecodeError`s. |
 | `tc-wire-derive` | The `#[derive(Wire)]` proc macro; use it through `tc_wire::Wire`. |
 | `tc-tsgen` | TypeScript from a `Schema`: `generate(&schema, &Config)` returns `(path, contents)` pairs, the protocol module (types, codecs, `TYPES`, query descriptors) and, with `Config::sdk`, the SDK's pass-through event files. The header, imports, hash doc, constants and event lists are the game's. |
+| `tc-store` | The event-log store (E3a): `Log<C: LogCodec>` appends a game's events to `main.log` or per-key files, with batches all or none, clock marks written on an I/O thread once what they cover is durable, log generations (`prepare`, `rotate`, `open_from`), crash recovery (gap-free prefix, torn tails cut and kept in `recovered/`) and a directory lock. Syncs go through writable handles, so native Windows works. See `tc-store/README.md`. |
 
 ## Format
 

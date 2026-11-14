@@ -1,0 +1,7 @@
+# Every sync goes through `src/durable.rs` (the I/O and background
+# threads hold appends while they sync; see `src/hold.rs`).
+disallowed-methods = [
+  { path = "std::fs::File::sync_all", reason = "the store's syncs go through durable (they hold appends on its threads)" },
+  { path = "std::fs::File::sync_data", reason = "the store's syncs go through durable (they hold appends on its threads)" },
+  { path = "std::fs::DirEntry::metadata", reason = "on Windows it can be stale for a file open for writing; stat the path" },
+]
