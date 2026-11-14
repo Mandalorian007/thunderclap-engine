@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>ThunderClap engine intents harness</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #0c0f14; overflow: hidden; font: 13px/1.4 ui-monospace, monospace; color: #c8d0dc; }
+      #root { position: fixed; inset: 0; touch-action: none; }
+      #stage { position: absolute; background: #161c26; outline: 1px solid #3a4456; }
+      #stick { position: absolute; left: 0; top: 0; width: 50%; height: 100%; background: rgba(90, 140, 220, 0.08); }
+      #stick-hold { position: absolute; left: 0; top: 0; width: 50%; height: 50%; outline: 1px dashed rgba(150, 200, 255, 0.35); }
+      #dot { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; background: #ffcc55; display: none; }
+      #out { position: absolute; right: 8px; top: 8px; width: 40%; white-space: pre; pointer-events: none; }
+    </style>
+  </head>
+  <body>
+    <main id="root"><div id="stage"><div id="stick"></div><div id="stick-hold"></div><div id="dot"></div><div id="out"></div></div></main>
+    <script type="module" src="./intents.ts"></script>
+  </body>
+</html>

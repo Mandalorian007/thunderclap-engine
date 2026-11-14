@@ -42,6 +42,16 @@ interface Aim {
     };
 }
 
+## AimIntent  (type-only)
+interface AimIntent {
+    readonly kind: 'aim';
+}
+
+## AimRay  (type-only)
+interface AimRay extends Ray {
+    readonly screen: readonly [number, number] | null;
+}
+
 ## AttachOptions  (type-only)
 interface AttachOptions {
     pointerTarget: HTMLElement;
@@ -125,6 +135,14 @@ interface ContextOptions<A extends string> {
 
 ## ContextPass  (type-only)
 type ContextPass = 'none' | 'unbound' | 'all';
+
+## CycleIntent  (type-only)
+interface CycleIntent<A extends string> {
+    readonly kind: 'cycle';
+    readonly next?: readonly A[];
+    readonly prev?: readonly A[];
+    readonly wheel?: boolean;
+}
 
 ## DEFAULT_DOUBLE_TAP_MS
 const DEFAULT_DOUBLE_TAP_MS = 300;
@@ -379,6 +397,21 @@ type Hand = 'left' | 'right';
 ## HitTester  (type-only)
 type HitTester<T = unknown> = (ray: Ray) => PickHit<T> | null;
 
+## HoldHandler  (type-only)
+interface HoldHandler {
+    start(aim: IntentAim, pressedAt: number): void;
+    aim?(aim: IntentAim): void;
+    end(): void;
+}
+
+## HoldIntent  (type-only)
+interface HoldIntent<A extends string> {
+    readonly kind: 'hold';
+    readonly actions?: readonly A[];
+    readonly touch?: StillHoldSpec | false;
+    readonly stickSide?: StickSideHoldSpec<IntentAim>;
+}
+
 ## Input
 class Input<A extends string> {
     readonly pointer: PointerState;
@@ -581,6 +614,61 @@ interface InputTickEvents {
 interface InputTickRun {
     t: number;
     n: number;
+}
+
+## IntentAim  (type-only)
+type IntentAim = AimRay | null;
+
+## IntentDecl  (type-only)
+type IntentDecl<A extends string> = PressIntent<A> | ReleaseIntent<A> | TapIntent<A> | HoldIntent<A> | AimIntent | CycleIntent<A> | SelectIntent<A>;
+
+## IntentHandler  (type-only)
+type IntentHandler<D> = D extends {
+    kind: 'hold';
+} ? HoldHandler : D extends {
+    kind: 'cycle';
+} ? (delta: number) => void : D extends {
+    kind: 'select';
+} ? (n: number) => void : D extends {
+    kind: 'aim';
+} ? (aim: IntentAim, aiming: boolean) => void : (aim: IntentAim) => void;
+
+## IntentInput  (type-only)
+type IntentInput<A extends string> = Pick<Input<A>, 'pressed' | 'held' | 'released' | 'pointer' | 'lastDevice' | 'blocked' | 'dispatcher' | 'on'>;
+
+## IntentSink  (type-only)
+type IntentSink<S> = {
+    readonly [K in keyof S]: IntentHandler<S[K]>;
+};
+
+## IntentSpec  (type-only)
+type IntentSpec<A extends string> = Readonly<Record<string, IntentDecl<A>>>;
+
+## Intents  (type-only)
+interface Intents {
+    readonly aim: IntentAim;
+    readonly aiming: boolean;
+    readonly holding: string | null;
+    update(): void;
+    touchDown(id: number, clientX: number, clientY: number, time?: number, inStick?: boolean): void;
+    touchMove(id: number, clientX: number, clientY: number, time?: number): void;
+    touchUp(id: number, clientX?: number, clientY?: number, time?: number): void;
+    touchCancel(id: number): void;
+    cancelAll(): void;
+    attach(dispatcher: PointerDispatcher): void;
+    detach(): void;
+    dispose(): void;
+}
+
+## IntentsOptions  (type-only)
+interface IntentsOptions<A extends string> {
+    input: IntentInput<A>;
+    camera: RayCamera | (() => RayCamera);
+    pointers?: Pick<PointerRouter, 'primary'>;
+    centred?: () => boolean;
+    toScreen?: PointerTransform;
+    stickZone?: 'left' | 'right' | 'none';
+    now?: () => number;
 }
 
 ## ListenOptions  (type-only)
@@ -1003,6 +1091,12 @@ type PointerTransform = (clientX: number, clientY: number) => {
     y: number;
 } | null;
 
+## PressIntent  (type-only)
+interface PressIntent<A extends string> {
+    readonly kind: 'press';
+    readonly actions: readonly A[];
+}
+
 ## Ray  (type-only)
 interface Ray {
     readonly origin: Vec3;
@@ -1031,6 +1125,12 @@ interface RayPlane {
 ## RayTransform  (type-only)
 type RayTransform = Pick<Transform, 'world'>;
 
+## ReleaseIntent  (type-only)
+interface ReleaseIntent<A extends string> {
+    readonly kind: 'release';
+    readonly actions: readonly A[];
+}
+
 ## RoutedPointer  (type-only)
 interface RoutedPointer<T = unknown> {
     readonly source: PointerSource;
@@ -1054,6 +1154,12 @@ interface RumbleOptions {
     pad?: number;
 }
 
+## STILL_HOLD_DEFAULTS
+const STILL_HOLD_DEFAULTS: {
+    readonly tolerancePx: 10;
+    readonly ms: 300;
+};
+
 ## ScreenPointers
 class ScreenPointers implements PointerSource {
     claim: ((id: number) => boolean) | null;
@@ -1068,6 +1174,12 @@ class ScreenPointers implements PointerSource {
     poll(camera: RayCamera | null): readonly PointerSample[];
     attach(target: HTMLElement, dispatcher?: PointerDispatcher): void;
     detach(): void;
+}
+
+## SelectIntent  (type-only)
+interface SelectIntent<A extends string> {
+    readonly kind: 'select';
+    readonly actions: readonly A[];
 }
 
 ## SnapGrid  (type-only)
@@ -1090,6 +1202,22 @@ interface StickOptions {
 ## StickShape  (type-only)
 type StickShape = 'radial' | 'axial' | 'scaledRadial';
 
+## StickSide  (type-only)
+type StickSide = 'left' | 'right';
+
+## StickSideHoldOptions  (type-only)
+interface StickSideHoldOptions<Aim = unknown> extends StillHoldOptions {
+    when: (aim: Aim) => boolean;
+}
+
+## StickSideHoldSpec  (type-only)
+interface StickSideHoldSpec<Aim = unknown> {
+    readonly type: 'stickSide';
+    readonly tolerancePx: number;
+    readonly ms: number;
+    readonly when: (aim: Aim) => boolean;
+}
+
 ## StickZone  (type-only)
 interface StickZone {
     readonly kind: 'stick';
@@ -1109,6 +1237,40 @@ interface StickZoneOptions {
     radius?: number;
     anchor?: 'down' | 'center';
 }
+
+## StillHoldOptions  (type-only)
+interface StillHoldOptions {
+    tolerancePx?: number;
+    ms?: number;
+}
+
+## StillHoldSpec  (type-only)
+interface StillHoldSpec {
+    readonly type: 'still';
+    readonly tolerancePx: number;
+    readonly ms: number;
+}
+
+## StillPress
+class StillPress {
+    kind: StillPressKind;
+    x0: number;
+    y0: number;
+    t0: number;
+    x: number;
+    y: number;
+    tolerancePx: number;
+    holdMs: number;
+    constructor(spec?: StillHoldOptions);
+    set(spec: StillHoldOptions): void;
+    begin(x: number, y: number, t: number): void;
+    tick(t: number): boolean;
+    move(x: number, y: number, t: number): StillPressKind;
+    end(t: number, x?: number, y?: number): 'tap' | 'drag' | 'hold';
+}
+
+## StillPressKind  (type-only)
+type StillPressKind = 'pending' | 'drag' | 'hold';
 
 ## SwipeDirection  (type-only)
 type SwipeDirection = 'left' | 'right' | 'up' | 'down';
@@ -1130,6 +1292,13 @@ interface SwipeZoneOptions {
 ## TapGesture  (type-only)
 interface TapGesture extends GesturePoint {
     device: GestureDevice;
+}
+
+## TapIntent  (type-only)
+interface TapIntent<A extends string> {
+    readonly kind: 'tap';
+    readonly actions?: readonly A[];
+    readonly touch?: StillHoldSpec | false;
 }
 
 ## TickClock  (type-only)
@@ -1194,6 +1363,19 @@ interface TriggerOptions {
 ## Vec3  (type-only)
 type Vec3 = [number, number, number];
 
+## WheelSteps
+class WheelSteps {
+    constructor(opts?: WheelStepsOptions);
+    add(deltaY: number, deltaMode: number, t: number): number;
+    reset(): void;
+}
+
+## WheelStepsOptions  (type-only)
+interface WheelStepsOptions {
+    pixelsPerStep?: number;
+    idleMs?: number;
+}
+
 ## XrButton  (type-only)
 type XrButton = 'trigger' | 'squeeze' | 'pinch';
 
@@ -1253,6 +1435,9 @@ function createInputPlayback<A extends string>(input: Input<A>, recording: Input
 ## createInputRecorder
 function createInputRecorder<A extends string>(input: Input<A>, opts?: InputRecorderOptions): InputRecorder;
 
+## createIntents
+function createIntents<A extends string, S extends IntentSpec<A>>(spec: S, sink: IntentSink<S>, options: IntentsOptions<A>): Intents;
+
 ## createLook
 function createLook(opts?: LookOptions): Look;
 
@@ -1282,6 +1467,9 @@ function glyphForBinding(b: Binding, layout?: PadLayout): Glyph;
 
 ## guessPadLayout
 function guessPadLayout(id: string | undefined): PadLayout;
+
+## inStickZone
+function inStickZone(x: number, width: number, side: StickSide, stickTaken?: boolean, zone?: number): boolean;
 
 ## isBinding
 function isBinding(v: unknown): v is Binding;
@@ -1348,6 +1536,12 @@ function snapToGrid(g: SnapGrid, x: number, y: number, ok?: (i: number, j: numbe
 
 ## sphereTester
 function sphereTester<T = null>(transform: RayTransform, bounds: RayBounds, target?: T): HitTester<T>;
+
+## stickSideHold
+function stickSideHold<Aim = unknown>(opts: StickSideHoldOptions<Aim>): StickSideHoldSpec<Aim>;
+
+## stillHold
+function stillHold(opts?: StillHoldOptions): StillHoldSpec;
 
 ## transformRayInto
 function transformRayInto(ray: Ray, worldMatrix3x4: ArrayLike<number>, outRay: Ray): number;
