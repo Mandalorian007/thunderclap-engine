@@ -142,6 +142,8 @@ interface XrControl {
     readonly active: boolean;
     readonly session: XRSession | null;
     readonly surface: XrSurface | null;
+    setCore(core: RenderCore | null, opts?: XrCoreOptions): void;
+    readonly core: RenderCore | null;
 }
 
 ## XrOptions  (type-only)

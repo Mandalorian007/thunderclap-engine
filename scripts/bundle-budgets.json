@@ -19,7 +19,7 @@
     "./tween": 3700,
     "./ui": 83400,
     "./voxel": 19900,
-    "./testing": 171700,
+    "./testing": 181300,
     "render { Renderer }": 36300,
     "render { Renderer, Camera, Transform }": 36300,
     "render + voxel { Renderer, createVoxelGrid, createVoxelChunks }": 40400,
@@ -27,6 +27,7 @@
     "./kit": 168300,
     "./models": 13200,
     "./quality": 2500,
-    "./net": 16800
+    "./net": 16800,
+    "./xr": 4200
   }
 }

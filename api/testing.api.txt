@@ -23,6 +23,12 @@ type BudgetLimits = Partial<Record<Exclude<keyof GpuCounts, 'byMethod'>, number>
     clockReads?: number;
 };
 
+## EmulateXrOptions  (type-only)
+interface EmulateXrOptions extends Omit<FakeXrOptions, 'textureUsage'> {
+    mirror?: HTMLCanvasElement | null;
+    head?: [number, number, number];
+}
+
 ## FakeBindGroup  (type-only)
 interface FakeBindGroup {
     label?: string;
@@ -210,6 +216,85 @@ interface FakeWakeLock {
     release(): void;
 }
 
+## FakeXr  (type-only)
+interface FakeXr {
+    readonly system: FakeXrSystem;
+    readonly bindings: FakeXRGPUBinding[];
+    step(dtMs?: number): FakeXrFrame;
+    uninstall(): void;
+}
+
+## FakeXrInputSource
+class FakeXrInputSource implements XRInputSource {
+    readonly handedness: XRHandedness;
+    readonly targetRayMode: XRTargetRayMode;
+    readonly targetRaySpace: FakeXrSpace;
+    readonly gripSpace: XRSpace | null;
+    readonly profiles: readonly string[];
+    position: [number, number, number];
+    readonly buttons: {
+        pressed: boolean;
+        touched: boolean;
+        value: number;
+    }[];
+    readonly axes: number[];
+    gamepad: Gamepad | null;
+    hand: FakeXrHand | null;
+    constructor(handedness: XRHandedness, opts?: {
+        gamepad?: boolean;
+        hand?: boolean;
+        standard?: boolean;
+    });
+    press(i: number, down: boolean): void;
+    stick(x: number, y: number): void;
+}
+
+## FakeXrOptions  (type-only)
+interface FakeXrOptions {
+    eyeWidth?: number;
+    eyeHeight?: number;
+    ipd?: number;
+    supported?: boolean;
+    rotateTextures?: boolean;
+    textureRing?: number;
+    fov?: {
+        outer: number;
+        inner: number;
+        up: number;
+        down: number;
+    } | null;
+    textureUsage?: number;
+}
+
+## FakeXrSession
+class FakeXrSession extends EventTarget implements XRSession {
+    readonly mode: XRSessionMode;
+    readonly init: XRSessionInit | undefined;
+    readonly opts: Required<FakeXrOptions>;
+    readonly inputSources: FakeXrInputSource[];
+    readonly referenceSpace: FakeXrReferenceSpace;
+    renderState: XRRenderState;
+    visibilityState: 'visible' | 'visible-blurred' | 'hidden';
+    headPosition: [number, number, number];
+    headYaw: number;
+    tracking: boolean;
+    ended: boolean;
+    readonly referenceSpaceRequests: XRReferenceSpaceType[];
+    readonly renderStateUpdates: XRRenderStateInit[];
+    constructor(mode: XRSessionMode, init: XRSessionInit | undefined, opts: Required<FakeXrOptions>);
+    get now(): number;
+    get pendingFrames(): number;
+    requestReferenceSpace(type: XRReferenceSpaceType): Promise<XRReferenceSpace>;
+    updateRenderState(state?: XRRenderStateInit): void;
+    requestAnimationFrame(callback: XRFrameRequestCallback): number;
+    cancelAnimationFrame(handle: number): void;
+    step(dtMs?: number): FakeXrFrame;
+    addInputSource(src: FakeXrInputSource): void;
+    removeInputSource(src: FakeXrInputSource): void;
+    fire(kind: 'select' | 'squeeze', src: FakeXrInputSource, down: boolean): void;
+    end(): Promise<void>;
+}
+
 ## FixedClock  (type-only)
 interface FixedClock extends TickClock {
     readonly stepMs: number;
@@ -372,6 +457,15 @@ interface WorkReport {
     trace: string[] | null;
 }
 
+## XrEmulator  (type-only)
+interface XrEmulator {
+    readonly xr: FakeXr;
+    readonly session: FakeXrSession | null;
+    readonly frames: number;
+    readonly mirrored: number;
+    stop(): void;
+}
+
 ## budget
 function budget(report: WorkReport, limits: BudgetLimits, label?: string): WorkReport;
 
@@ -396,6 +490,9 @@ function createWorkMeter(device: GPUDevice, opts?: WorkMeterOptions): WorkMeter;
 ## diffTraceGolden
 function diffTraceGolden(got: TraceGolden, want: TraceGolden): string | null;
 
+## emulateXr
+function emulateXr(opts?: EmulateXrOptions): XrEmulator;
+
 ## expectProportional
 function expectProportional(run: (size: number) => number, sizes: readonly number[], opts?: ProportionalOptions): ProportionalResult;
 
@@ -408,6 +505,9 @@ function fakeRendererGpu(fake: FakeDevice): {
     context: GPUCanvasContext;
     format: GPUTextureFormat;
 };
+
+## installFakeXr
+function installFakeXr(opts?: FakeXrOptions): FakeXr;
 
 ## installGpuGlobals
 function installGpuGlobals(): void;

@@ -10,7 +10,22 @@ import type { Host, HostLifecycleState } from '../host';
 import type { InputPlayback, InputPlaybackOptions, PointerRouter, TickClock } from '../input';
 import type { GpuContext, Surface, XrSurface } from '../platform';
 import type { XRSession } from '../platform/xr-types';
-import type { Camera, Renderer, SceneTargetAux } from '../render';
+import type { Camera, RenderCore, Renderer, SceneTargetAux } from '../render';
+
+/** `ctx.xr.setCore`'s options (ws/xr-merge). */
+export interface XrCoreOptions {
+  /**
+   * Whether the immediate renderer still draws the eyes (default true): each eye a
+   * `renderer.render` of the scenes' record into the HDR scene target, resolved through the post
+   * stack into the layer, and the core's sets drawn over it with the core's own depth. False: the
+   * eyes are the core's alone, on a layer it clears to `clear`; the scenes still record once
+   * through the head, and nothing they push is drawn.
+   */
+  immediate?: boolean;
+  /** The colour a core-only eye clears to (`immediate: false`). Default opaque black. */
+  clear?: GPUColor;
+}
+
 import type { Overlay } from '../ui';
 
 /**
@@ -106,6 +121,15 @@ export interface XrControl {
   readonly session: XRSession | null;
   /** The XR surface (eye views, head camera, layer) while active, or null. */
   readonly surface: XrSurface | null;
+  /**
+   * Draw the eyes on a render core too (ws/xr-merge), or stop (null): each frame in a session the
+   * core prepares the surface's `group` once (one cull for both eyes) and draws each eye into
+   * its part of the layer (`eye.core`), after the renderer's frame. Make the core on `ctx.gpu`.
+   * Takes effect at once; `opts.clear` from the next session on.
+   */
+  setCore(core: RenderCore | null, opts?: XrCoreOptions): void;
+  /** The core `setCore` gave, or null. */
+  readonly core: RenderCore | null;
 }
 
 /**

@@ -222,6 +222,8 @@ interface XrEyeView {
     readonly camera: Camera;
     readonly target: SceneTarget;
     readonly viewport: SceneTargetViewport;
+    readonly view: RenderView;
+    readonly core: CoreTarget;
 }
 
 ## XrSurface
@@ -233,6 +235,9 @@ class XrSurface {
     readonly referenceSpace: XRReferenceSpace;
     readonly head: Camera;
     scene: SceneTarget | null;
+    readonly group: CullGroup;
+    readonly colorFormat: GPUTextureFormat;
+    coreClear: GPUColor | null;
     constructor(session: XRSession, device: GPUDevice, opts: XrSurfaceOptions);
     static supported(): boolean;
     views(frame: XRFrame): readonly XrEyeView[];
@@ -249,6 +254,7 @@ interface XrSurfaceOptions {
     depthNear?: number;
     depthFar?: number;
     aux?: SceneTargetAux;
+    coreClear?: GPUColor | null;
 }
 
 ## blockBrowserZoom

@@ -49,6 +49,7 @@
     "./tween": "./src/tween/index.ts",
     "./ui": "./src/ui/index.ts",
     "./voxel": "./src/voxel/index.ts",
+    "./xr": "./src/xr/index.ts",
     "./testing": "./src/testing/index.ts",
     "./package.json": "./package.json"
   },
@@ -155,6 +156,10 @@
       "./voxel": {
         "types": "./dist/voxel/index.d.ts",
         "import": "./dist/voxel/index.js"
+      },
+      "./xr": {
+        "types": "./dist/xr/index.d.ts",
+        "import": "./dist/xr/index.js"
       },
       "./testing": {
         "types": "./dist/testing/index.d.ts",

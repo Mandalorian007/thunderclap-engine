@@ -1,6 +1,18 @@
 // @thunderclap-engine/engine/testing: helpers for a game's unit tests. Never imported by the engine.
 
 export {
+  type EmulateXrOptions,
+  emulateXr,
+  type XrEmulator,
+} from '../platform/xr-emulate';
+export {
+  type FakeXr,
+  FakeXrInputSource,
+  type FakeXrOptions,
+  FakeXrSession,
+  installFakeXr,
+} from '../platform/xr-fake';
+export {
   createFakeDevice,
   type FakeBindGroup,
   type FakeBuffer,
