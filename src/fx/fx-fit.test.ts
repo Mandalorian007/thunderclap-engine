@@ -250,6 +250,8 @@ describe('the depth convention (ws/fx-fit)', () => {
     cam.setProjection(p);
     r.eyes = [setViewFromCamera(createRenderView(), cam)];
     const ps = new ParticleSystem(r.core, { capacity: 16 });
+    // Something alive: an idle system writes nothing (ws/fx-fit, B14).
+    ps.emit(BURST, 1);
     const enc = r.device.createCommandEncoder();
     r.core.prepare(enc, [{ views: r.eyes }]);
     r.core.draw(enc, 0, r.target);
@@ -475,11 +477,11 @@ describe('lit-box particles (ws/fx-fit)', () => {
     ps.emit(BURST, 8);
     stereo(r);
     expect(r.fake.errors).toEqual([]);
-    const draws = r.fake.bundles.flatMap((b) => b.commands).filter((c) => c.op === 'draw') as {
-      vertices: number;
-      instances: number;
-    }[];
-    expect(draws).toEqual([expect.objectContaining({ vertices: 36, instances: 128 })]);
+    // One indirect draw of the live window (B14): 36 vertices, the 8 alive.
+    const draws = r.fake.bundles.flatMap((b) => b.commands).filter((c) => c.op.startsWith('draw'));
+    expect(draws.map((c) => c.op)).toEqual(['drawIndirect']);
+    const args = r.fake.buffers.find((b) => b.label === 'particles-core-draw')!;
+    expect([...new Uint32Array(args.data.buffer, args.data.byteOffset, 2)]).toEqual([36, 8]);
     const p = pipelines(r.fake).get('particles-core-box')![0]!;
     expect(p.primitive!.cullMode).toBe('back');
     const light = lastWrite(r.fake, 'particles-core-box-light');

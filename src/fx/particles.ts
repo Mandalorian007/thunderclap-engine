@@ -152,6 +152,26 @@ export interface EmitParams {
   onLife?: { params: EmitParams; rate: number };
   /** Fraction of the parent's velocity its children inherit. Default 0. */
   inherit?: number;
+  /**
+   * World space only (ws/fx-fit): the launch axis [x, y, z] in 3D, replacing `angle` (`spread`
+   * is the cone around it; `vz` still adds). Need not be normalised. Default none: `angle`.
+   */
+  axis?: ArrayLike<number>;
+  /**
+   * ws/fx-fit: each particle's colour (both ends, or the curve's base) scaled by a random factor
+   * in 1 ± `colorJitter`, alpha kept: chips of one block in a few shades. Default 0.
+   */
+  colorJitter?: number;
+  /**
+   * On a render core (ws/fx-fit): a side-to-side sway of this many world units over the
+   * particle's life, phased per particle: leaves. Default 0.
+   */
+  flutter?: number;
+  /**
+   * Box particles (`shape: 'box'`, ws/fx-fit): the box's edges [x, y, z] as fractions of its
+   * size, before it turns: `[1, 0.2, 1]` is a flat flake. Default [1, 1, 1], a cube.
+   */
+  boxScale?: ArrayLike<number>;
 }
 
 /** How an `attract` force scales with distance (see `ParticleForce`). */
@@ -235,6 +255,13 @@ export interface ParticleSystemOptions {
    * premultiplied alpha unless `blend` says `'additive'`, and write no depth.
    */
   shape?: ParticleShape;
+  /**
+   * On a render core (ws/fx-fit): the core pass the system's drawable joins, e.g. a game's water
+   * pass so debris draws over the water. Default `'transparent'`.
+   */
+  pass?: string;
+  /** On a render core (ws/fx-fit): its order among that pass's members. Default 0. */
+  order?: number;
   /**
    * World space only: fade out with distance to the camera: whole nearer than `near`, gone
    * beyond `far` (world units). Default none.
@@ -575,6 +602,10 @@ export class ParticleSystem implements Drawable {
   private warnedOverflow = false;
   private warnedExtended = false;
   private clearPending = false;
+  /** On a core: box particles (`boxScale` goes in the tile slot). */
+  private readonly box: boolean = false;
+  /** On a core: the live window the draw covers (ws/fx-fit). */
+  private readonly live: LiveWindow | null = null;
 
   /**
    * On a `Renderer` (a `Drawable`: `frame.drawable(system)`), or on a `RenderCore` (B5): world
@@ -709,7 +740,11 @@ export class ParticleSystem implements Drawable {
         blend,
         readsDepth: this.softness > 0 && opts.shape !== 'box',
         shape: opts.shape ?? 'quad',
+        pass: opts.pass,
+        order: opts.order,
       });
+      this.box = opts.shape === 'box';
+      this.live = new LiveWindow();
       core!.addDrawable(this.coreDrawable);
       if (opts.countAlive) this.counter = this.makeCounter(fx, opts.countBelowY ?? -Infinity);
       return;
@@ -1059,6 +1094,7 @@ export class ParticleSystem implements Drawable {
     if (fx) {
       this.writeFxSpawn(this.spawnData, p, n, fx.spawnTotal, o, 0, random);
       fx.spawnTotal += n;
+      this.live?.emitted(this.time + (p.life ?? LIFE)[1]);
     } else {
       this.writeSpawn(p, n, o, random);
       this.head = (this.head + n) % this.capacity;
@@ -1227,10 +1263,17 @@ export class ParticleSystem implements Drawable {
     d[o++] = n;
     d[o++] = random.int(0, SPAWN_SEED_MAX);
     d[o++] = p.inherit ?? 0;
-    // h
-    d[o++] = typeof tile === 'number' ? tile : tile[0];
-    d[o++] = typeof tile === 'number' ? tile : tile[1];
-    d[o++] = p.tileRate ?? 0;
+    // h (a box system's edge scale in place of the tiles: boxes have no sheet)
+    if (this.box) {
+      const bs = p.boxScale;
+      d[o++] = bs ? bs[0]! : 1;
+      d[o++] = bs ? bs[1]! : 1;
+      d[o++] = bs ? bs[2]! : 1;
+    } else {
+      d[o++] = typeof tile === 'number' ? tile : tile[0];
+      d[o++] = typeof tile === 'number' ? tile : tile[1];
+      d[o++] = p.tileRate ?? 0;
+    }
     d[o++] = flags;
     // i
     d[o++] = rot[0];
@@ -1247,6 +1290,17 @@ export class ParticleSystem implements Drawable {
     d[o++] = p.onLife?.rate ?? 0;
     d[o++] = meshOffset;
     d[o++] = meshCount;
+    // l
+    const ax = world ? p.axis : undefined;
+    d[o++] = ax ? ax[0]! : 0;
+    d[o++] = ax ? ax[1]! : 0;
+    d[o++] = ax ? ax[2]! : 0;
+    d[o++] = ax ? 1 : 0;
+    // m
+    d[o++] = p.colorJitter ?? 0;
+    d[o++] = p.flutter ?? 0;
+    d[o++] = 0;
+    d[o++] = 0;
   }
 
   /** The curve table slot of `stops` (by identity; rewritten on every emit, so edits are live). */
@@ -1345,12 +1399,32 @@ export class ParticleSystem implements Drawable {
     this.pendingDt += dt;
   }
 
+  /**
+   * On a render core (ws/fx-fit): the ring slots the draw covers after the last `prepare`: the
+   * live window (the newest emits still within their longest life), the whole ring while
+   * sub-emitters run or the window wraps the ring's end, 0 while nothing is alive. Off a core,
+   * the capacity.
+   */
+  get drawCount(): number {
+    return this.live ? this.live.count : this.capacity;
+  }
+
   prepare(encoder: GPUCommandEncoder, frame?: Frame): void {
     const dt = Math.min(this.pendingDt, 0.1);
     this.pendingDt = 0;
     this.time += dt;
     const s = this.simData;
     const fx = this.fx;
+    const live = this.live;
+    if (live && fx) {
+      live.frame(this.time, fx.spawnTotal, this.capacity, fx.subUsed > 0);
+      s[19] = live.base;
+      // Nothing alive and nothing to do: no compute (the time still moves).
+      if (live.count === 0 && !this.clearPending && !this.counter) {
+        this.warnedOverflow = false;
+        return;
+      }
+    }
     s[0] = dt;
     s[1] = this.floorY;
     s[2] = this.bounce;
@@ -1672,6 +1746,7 @@ export class ParticleSystem implements Drawable {
     this.spawnCount = 0;
     this.maxSpawnInCmd = 0;
     this.head = 0;
+    this.live?.reset();
     if (this.fx) this.fx.spawnTotal = 0;
   }
 
@@ -2126,5 +2201,85 @@ export class ParticleEmitter {
       count,
       this.random ?? this.system.random,
     );
+  }
+}
+
+/** Frames of emits the live window keeps apart (older ones merge, conservatively). */
+const LIVE_FRAMES = 64;
+/** Seconds past an emit's longest life its particles may still draw (f32 ages, the first step). */
+const LIVE_MARGIN = 0.05;
+
+/**
+ * ws/fx-fit: which ring slots a core draw must cover. Per frame of emits: how many, and when the
+ * last of them is dead (emit time + its longest life). The window is the newest `count` slots
+ * before the ring head the CPU mirrors (`advance` moves the GPU's by each frame's total), from
+ * `base`; the whole ring while sub-emitters claim slots on the GPU or the window wraps (so the
+ * draw keeps the ring's slot order, and with it the blend order).
+ */
+export class LiveWindow {
+  /** Ring slots the draw covers. */
+  count = 0;
+  /** The first of them. */
+  base = 0;
+  private readonly until = new Float64Array(LIVE_FRAMES);
+  private readonly sizes = new Float64Array(LIVE_FRAMES);
+  private first = 0;
+  private length = 0;
+  private sum = 0;
+  private head = 0;
+  private pending = Number.NEGATIVE_INFINITY;
+
+  /** An emit this frame whose particles are all dead by `until` (seconds of system time). */
+  emitted(until: number): void {
+    if (until > this.pending) this.pending = until;
+  }
+
+  /** The frame's prepare at `time`: `total` slots spawned this frame. */
+  frame(time: number, total: number, capacity: number, gpuSlots: boolean): void {
+    if (total > 0) {
+      if (this.length === LIVE_FRAMES) {
+        // Full: fold the oldest frame into the next (its count, the later death).
+        const a = this.first;
+        const b = (a + 1) % LIVE_FRAMES;
+        this.sizes[b]! += this.sizes[a]!;
+        if (this.until[a]! > this.until[b]!) this.until[b] = this.until[a]!;
+        this.first = b;
+        this.length--;
+      }
+      const at = (this.first + this.length) % LIVE_FRAMES;
+      this.until[at] = this.pending + LIVE_MARGIN;
+      this.sizes[at] = total;
+      this.length++;
+      this.sum += total;
+      this.head = (this.head + total) % capacity;
+    }
+    this.pending = Number.NEGATIVE_INFINITY;
+    // Drop the oldest frames once dead (a later frame dying sooner waits behind them).
+    while (this.length > 0 && this.until[this.first]! <= time) {
+      this.sum -= this.sizes[this.first]!;
+      this.first = (this.first + 1) % LIVE_FRAMES;
+      this.length--;
+    }
+    if (this.length === 0) this.sum = 0;
+    const n = Math.min(this.sum, capacity);
+    const base = (this.head - n + capacity) % capacity;
+    if (gpuSlots || base + n > capacity) {
+      this.count = capacity;
+      this.base = 0;
+    } else {
+      this.count = n;
+      this.base = base;
+    }
+  }
+
+  /** Everything gone (`clear`: the GPU head is zeroed too). */
+  reset(): void {
+    this.first = 0;
+    this.length = 0;
+    this.sum = 0;
+    this.head = 0;
+    this.count = 0;
+    this.base = 0;
+    this.pending = Number.NEGATIVE_INFINITY;
   }
 }

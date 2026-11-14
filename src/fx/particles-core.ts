@@ -1,7 +1,9 @@
 /**
  * ws/core-effects (B5): a world `ParticleSystem` on the render core. The system's compute runs
- * in `core.prepare`; the draw is one instanced call over the whole ring (`draw(6, capacity)`),
- * so the call count stays flat in particle count. Each eye faces its own image plane from the
+ * in `core.prepare`; the draw is one instanced call, indirect since ws/fx-fit: the live window
+ * of the ring (the system's `drawCount` from `sim.drawBase`, the whole ring while sub-emitters
+ * run), so the call count stays flat in particle count and the bundle is kept while the count
+ * moves. Idle (inactive, no compute) while nothing is alive; the core warms its pipeline then. Each eye faces its own image plane from the
  * same bundle (`CoreViewExtras`), and a particle outside an eye's frusta collapses in the vertex
  * stage. Soft particles sample the core's depth (`readsDepth`).
  */
@@ -28,10 +30,35 @@ import {
 /** How a core particle is drawn: a camera-facing quad, or (ws/fx-fit) a small lit cube. */
 export type ParticleShape = 'quad' | 'box';
 
+/**
+ * The light lit-box particles are shaded by (`ParticlesOnCore.boxLight`, ws/fx-fit): live, read
+ * in every `prepare`.
+ */
+export interface ParticleBoxLight {
+  /** The sun's travel direction (xyz). Default (-0.4, -0.8, -0.45). */
+  readonly sunDir: Float32Array;
+  /** The sun's linear colour. Default white. */
+  readonly sunColor: Float32Array;
+  /** The ambient linear colour. Default (0.3, 0.3, 0.35). */
+  readonly ambient: Float32Array;
+  /**
+   * Distance fog on the boxes, shaped as `Lights.fog` (`DistanceFog`): `density` 0 (the default)
+   * is none; `far > near` linear, else exponential past `near`.
+   */
+  readonly fog: { readonly color: Float32Array; density: number; near: number; far: number };
+}
+
 /** What `ParticlesOnCore` draws from (the system's buffers). */
 export interface ParticlesOnCoreSource {
-  /** The system: `prepare(encoder)` runs its compute once a frame. */
-  readonly system: { prepare(encoder: GPUCommandEncoder): void; readonly capacity: number };
+  /**
+   * The system: `prepare(encoder)` runs its compute once a frame; `drawCount` (ws/fx-fit) is how
+   * many ring slots the draw covers after it (absent: the whole `capacity`).
+   */
+  readonly system: {
+    prepare(encoder: GPUCommandEncoder): void;
+    readonly capacity: number;
+    readonly drawCount?: number;
+  };
   readonly particles: GPUBuffer;
   readonly sim: GPUBuffer;
   readonly curves: GPUBuffer;
@@ -42,17 +69,24 @@ export interface ParticlesOnCoreSource {
   readonly readsDepth: boolean;
   /** Default `'quad'`. */
   readonly shape?: ParticleShape;
+  /** The core pass it joins (ws/fx-fit). Default `'transparent'`. */
+  readonly pass?: string;
+  /** Its order among the pass's members (ws/fx-fit). Default 0. */
+  readonly order?: number;
 }
 
 /** The core drawable behind a `ParticleSystem` made on a `RenderCore`. */
 export class ParticlesOnCore implements CoreDrawable {
   readonly label = 'particles';
-  readonly pass = 'transparent';
-  readonly order = 0;
+  /** The pass it joins (`ParticlesOnCoreSource.pass`, default `'transparent'`). */
+  readonly pass: string;
+  /** Its order in that pass (default 0). */
+  readonly order: number;
   readonly readsDepth: boolean;
   version = 0;
-  active = true;
-  /** Draw calls a record makes (1: the whole ring in one instanced draw). */
+  /** Whether anything is drawn: false while nothing is alive (set by `prepare`). */
+  active = false;
+  /** Draw calls a record makes (1: the live window in one indirect instanced draw). */
   static readonly CALLS = 1;
   /** `'quad'` or `'box'` (lit cubes, 36 vertices a particle). */
   readonly shape: ParticleShape;
@@ -60,11 +94,16 @@ export class ParticlesOnCore implements CoreDrawable {
    * Box shape: the light the cubes are shaded by (a sun's travel direction and linear colour,
    * and an ambient colour). Live; uploaded in `prepare`.
    */
-  readonly boxLight = {
+  readonly boxLight: ParticleBoxLight = {
     sunDir: new Float32Array([-0.4, -0.8, -0.45]),
     sunColor: new Float32Array([1, 1, 1]),
     ambient: new Float32Array([0.3, 0.3, 0.35]),
+    fog: { color: new Float32Array(3), density: 0, near: 0, far: 0 },
   };
+  /** Instances the indirect draw covers (last written to `args`). */
+  private drawn = -1;
+  private readonly args: GPUBuffer;
+  private readonly argsData = new Uint32Array(4);
   private readonly lightData = new Float32Array(PARTICLE_BOX_LIGHT_FLOATS);
   private readonly lightBuffer: GPUBuffer | null;
   private readonly layout: GPUBindGroupLayout;
@@ -82,7 +121,15 @@ export class ParticlesOnCore implements CoreDrawable {
     const device = core.device;
     this.readsDepth = src.readsDepth;
     this.shape = src.shape ?? 'quad';
+    this.pass = src.pass ?? 'transparent';
+    this.order = src.order ?? 0;
     const box = this.shape === 'box';
+    this.argsData[0] = box ? 36 : 6;
+    this.args = device.createBuffer({
+      label: 'particles-core-draw',
+      size: 16,
+      usage: GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST,
+    });
     this.extras = CoreViewExtras.of(core);
     const V = GPUShaderStage.VERTEX;
     const F = GPUShaderStage.FRAGMENT;
@@ -147,6 +194,17 @@ export class ParticlesOnCore implements CoreDrawable {
   }
 
   prepare(encoder: GPUCommandEncoder): void {
+    const system = this.src.system;
+    system.prepare(encoder);
+    const n = system.drawCount ?? system.capacity;
+    this.active = n > 0;
+    // Written every live frame (16 bytes; the work stays flat), and once on going idle.
+    if (n > 0 || n !== this.drawn) {
+      this.drawn = n;
+      this.argsData[1] = n;
+      this.core.device.queue.writeBuffer(this.args, 0, this.argsData);
+    }
+    if (n === 0) return;
     this.extras.update();
     if (this.lightBuffer) {
       const d = this.lightData;
@@ -154,9 +212,13 @@ export class ParticlesOnCore implements CoreDrawable {
       d.set(l.sunDir, 0);
       d.set(l.sunColor, 4);
       d.set(l.ambient, 8);
+      const f = l.fog;
+      d.set(f.color, 12);
+      d[15] = f.density;
+      d[16] = f.near;
+      d[17] = f.far;
       this.core.device.queue.writeBuffer(this.lightBuffer, 0, d);
     }
-    this.src.system.prepare(encoder);
   }
 
   /** Its pipeline's empty first draw (`CoreDrawable.warm`, ws/warm-voxel-fit). */
@@ -172,7 +234,7 @@ export class ParticlesOnCore implements CoreDrawable {
     enc.setPipeline(this.pipes.get(ctx));
     enc.setBindGroup(0, ctx.viewGroup);
     enc.setBindGroup(1, this.bindGroup());
-    enc.draw(this.lightBuffer ? 36 : 6, this.src.system.capacity);
+    enc.drawIndirect(this.args, 0);
     return ParticlesOnCore.CALLS;
   }
 
@@ -206,6 +268,7 @@ export class ParticlesOnCore implements CoreDrawable {
   destroy(): void {
     this.dummyDepth?.destroy();
     this.lightBuffer?.destroy();
+    this.args.destroy();
     this.group = null;
   }
 }
