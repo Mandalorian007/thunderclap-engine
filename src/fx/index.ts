@@ -134,6 +134,7 @@ export type {
   PrecipShape,
   WeatherConfig,
   WeatherDensityKnobOptions,
+  WeatherHeightDecode,
   WeatherOcclusionMap,
   WeatherOptions,
 } from './weather';

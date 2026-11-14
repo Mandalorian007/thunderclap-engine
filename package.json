@@ -34,6 +34,7 @@
     "./audio": "./src/audio/index.ts",
     "./core": "./src/core/index.ts",
     "./fx": "./src/fx/index.ts",
+    "./fx/weather": "./src/fx/weather-entry.ts",
     "./geom": "./src/geom/index.ts",
     "./host": "./src/host/index.ts",
     "./i18n": "./src/i18n/index.ts",
@@ -97,6 +98,10 @@
       "./fx": {
         "types": "./dist/fx/index.d.ts",
         "import": "./dist/fx/index.js"
+      },
+      "./fx/weather": {
+        "types": "./dist/fx/weather-entry.d.ts",
+        "import": "./dist/fx/weather-entry.js"
       },
       "./geom": {
         "types": "./dist/geom/index.d.ts",
