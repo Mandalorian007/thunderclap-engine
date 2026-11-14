@@ -178,7 +178,7 @@
     "lint": "biome check .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "pnpm typecheck && pnpm lint && pnpm check:rust && pnpm check:boundaries && pnpm check:docs && pnpm check:snippets && pnpm check:deprecated && pnpm check:api && pnpm check:wgsl && pnpm check:bundle && pnpm test && pnpm check:host-electron && pnpm check:host-capacitor && pnpm check:host-pwa && pnpm check:template-puzzle && pnpm check:template-first-person && pnpm check:template-third-person && pnpm check:template-platformer && pnpm check:create-game && pnpm check:release && pnpm check:bake",
+    "check": "pnpm typecheck && pnpm lint && pnpm check:rust && pnpm check:boundaries && pnpm check:docs && pnpm check:snippets && pnpm check:deprecated && pnpm check:api && pnpm check:wgsl && pnpm check:bundle && pnpm test && pnpm check:host-electron && pnpm check:host-capacitor && pnpm check:host-pwa && pnpm check:template-puzzle && pnpm check:template-first-person && pnpm check:template-third-person && pnpm check:template-platformer && pnpm check:template-arena-2d-server && pnpm check:create-game && pnpm check:release && pnpm check:bake",
     "check:rust": "node scripts/check-rust.mjs",
     "test:net-interop": "cargo test -p tc-net --test interop",
     "test:auth-interop": "cargo test -p tc-auth --test interop",
@@ -224,7 +224,9 @@
     "check:template-third-person": "pnpm --filter @thunderclap-engine/template-third-person check",
     "template:third-person": "pnpm --filter @thunderclap-engine/template-third-person dev",
     "check:template-platformer": "pnpm --filter @thunderclap-engine/template-platformer check",
-    "template:platformer": "pnpm --filter @thunderclap-engine/template-platformer dev"
+    "template:platformer": "pnpm --filter @thunderclap-engine/template-platformer dev",
+    "check:template-arena-2d-server": "pnpm --filter @thunderclap-engine/template-arena-2d-server check",
+    "template:arena-2d-server": "pnpm --filter @thunderclap-engine/template-arena-2d-server dev"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.4",

@@ -118,7 +118,7 @@ It ships ESM JavaScript and `.d.ts` files with no runtime dependencies. The host
 git clone https://github.com/Mandalorian007/thunderclap-engine.git
 cd thunderclap-engine
 pnpm install
-pnpm create-game ../my-game          # the puzzle template; --list shows all four
+pnpm create-game ../my-game          # the puzzle template; --list shows all five
 cd ../my-game && pnpm install && pnpm dev
 ```
 
@@ -227,7 +227,8 @@ Short, task-shaped walkthroughs. Each opens with what you'll build and ends with
 7. [Style and post](docs/guide/style-and-post.md): the post stack, quality tiers, FX, sky, water and weather.
 8. [VR](docs/guide/xr.md): entering VR, controllers and hands, per-eye post, panels.
 9. [Testing your game](docs/guide/testing-your-game.md): the `./testing` kit (fake host, fixed clock, fake GPU), replay tests, the harness pattern and `expect.poll`.
-10. [Migrating to v1](docs/guide/migrating-to-v1.md): every 0.x name removed in 1.0.0, its v1 replacement and its module.
+10. [Write a server game](docs/guide/server-game.md): a Rust server on `tc-sim` and `tc-net`, commands and inputs, queries and the entity stream, prediction, reconnects.
+11. [Migrating to v1](docs/guide/migrating-to-v1.md): every 0.x name removed in 1.0.0, its v1 replacement and its module.
 
 The module READMEs under `src/<module>/` are the full reference.
 
@@ -261,7 +262,7 @@ The module READMEs under `src/<module>/` are the full reference.
 | `@thunderclap-engine/engine/geom` | Procedural geometry: `box`, `plane`, `sphere`, `icosphere`, `capsule`, `cylinder`, `torus`, heightfields (`heightAt`, `normalAt`, `raycastHeightfield`, `heightfieldGeometry`), `mergeGeometry`, `transformGeometry`; pure, a `Geometry` is a `MeshDesc` ([README](src/geom/README.md)) |
 | `@thunderclap-engine/engine/models` | Procedural part models: `PartModel` part trees (box, cylinder, gear, ring, prism, frustum, wedge, any `Geometry`; turn, move, repeat), `compileModel` against the game's `MaterialCodeTable`, channel-driven motion and glow evaluated in the shader, `createModelScene` (a `Drawable`, one draw per unit), `ModelInstances` packing, `evaluateUnit` CPU twin ([README](src/models/README.md)) |
 
-**Templates.** Copyable games under `templates/`, each with a `CLAUDE.md` that names the engine concepts for an agent extending it: `puzzle`, `platformer`, `first-person` and `third-person` (see [Quick start](#quick-start)). `pnpm template:<name>` runs one inside this repo. `pnpm check` runs each one's typecheck and tests and scaffolds one into a temp dir (`check:create-game`); `pnpm test:e2e` boots each on the device matrix (`e2e/templates.spec.ts`).
+**Templates.** Copyable games under `templates/`, each with a `CLAUDE.md` that names the engine concepts for an agent extending it: `puzzle`, `platformer`, `first-person` and `third-person` (see [Quick start](#quick-start)), and `arena-2d-server`, real-time tag on a Rust server ([Write a server game](docs/guide/server-game.md)). `pnpm template:<name>` runs one inside this repo. `pnpm check` runs each one's typecheck and tests and scaffolds one into a temp dir (`check:create-game`); `pnpm test:e2e` boots each on the device matrix (`e2e/templates.spec.ts`).
 
 **Demos.** Playable showcases under `demos/` (E-021), each a page on the public API with no network assets, exposing `window.__demo` for its spec under `e2e/demos/`. `pnpm demo <name>` serves one (`pnpm demo` lists them); the harness server also serves them at `/demos/<name>/`, so the matrix runs them. [demos/README.md](demos/README.md) has the table.
 

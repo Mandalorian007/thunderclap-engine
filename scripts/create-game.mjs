@@ -48,6 +48,8 @@ export const SKIP = new Set([
   'package-lock.json',
   'yarn.lock',
   '.DS_Store',
+  // A Rust server's build output (templates/arena-2d-server/server).
+  'target',
 ]);
 
 /**
@@ -64,6 +66,7 @@ export const REWRITES = {
   'first-person': CLAUDE_MD_RULES,
   'third-person': CLAUDE_MD_RULES,
   platformer: CLAUDE_MD_RULES,
+  'arena-2d-server': CLAUDE_MD_RULES,
 };
 
 const USAGE = `usage: pnpm create-game <dir> [--template <name>] [--name <pkg>] [--engine <spec>] [--force] [--dry-run]

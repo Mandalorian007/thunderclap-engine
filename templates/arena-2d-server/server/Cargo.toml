@@ -1,0 +1,28 @@
+# The arena's server: a tc-sim game behind a tc-net WebSocket server.
+# Its own workspace (not the engine's), as a game's server would be; the
+# engine crates come by path from this checkout.
+[workspace]
+
+[package]
+name = "arena-server"
+description = "The arena-2d-server template's authoritative server: 2 to 8 players move and tag, on tc-sim and tc-net"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT"
+
+[dependencies]
+tc-wire = { path = "../../../crates/tc-wire" }
+tc-net = { path = "../../../crates/tc-net" }
+tc-store = { path = "../../../crates/tc-store" }
+tc-sim = { path = "../../../crates/tc-sim" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
+
+[dev-dependencies]
+serde_json = "1"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
