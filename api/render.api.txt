@@ -1119,6 +1119,7 @@ class Renderer implements FrameSink {
     outputWidth: number;
     outputHeight: number;
     readonly target: SceneTarget;
+    core: RenderCore | null;
     constructor(gpu: RendererGpu, opts?: RendererOptions);
     get sceneColor(): Texture;
     get sceneEmissive(): Texture;
@@ -1161,7 +1162,6 @@ class Renderer implements FrameSink {
     lodLevelOf(batch: object, index: number, camera?: Camera): number;
     beginFrame(time: number, dt: number): Frame;
     render(frame: Frame, camera: Camera, target?: SceneTarget): void;
-    get core(): RenderCore;
     resolve(target: SceneTarget, out: GPUTextureView, viewport?: SceneTargetViewport): void;
     endFrame(opts?: {
         present?: boolean;

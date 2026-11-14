@@ -1345,7 +1345,7 @@ if (device) core.restore(device);
 
 `set.setHidden(id, true)` hides a slot without removing it (`SLOT_HIDDEN`, flags bit 1): a GPU-culled set uploads one slot and re-records nothing. With `coalesceRebuilds` (default) at most one GPU-culled set re-records its bundle per frame when only its slots changed; the others replay their old bundle until their turn (`core.stats.deferredBuilds`).
 
-`renderer.core` is a core drawn inside the renderer's frames, in each frame's first depth-tested view: its `depthPre`, `opaque` and `cutout` passes after the view's opaque draws, its `transparent` and later passes after the view's blended draws, into the scene target's colour and depth. Any core can do the same with `CoreTarget.depth` (a depth it loads and never clears) and `CoreTarget.phase` (`'opaque'`, `'blend'`, `'all'`).
+`renderer.core = createRenderCore(renderer, { depthFormat: DEPTH_FORMAT })` draws that core inside the renderer's frames (opt-in: a renderer without one does not bundle the core), in each frame's first depth-tested view: its `depthPre`, `opaque` and `cutout` passes after the view's opaque draws, its `transparent` and later passes after the view's blended draws, into the scene target's colour and depth. Any core can do the same with `CoreTarget.depth` (a depth it loads and never clears) and `CoreTarget.phase` (`'opaque'`, `'blend'`, `'all'`).
 
 ## Merged mesh runs
 

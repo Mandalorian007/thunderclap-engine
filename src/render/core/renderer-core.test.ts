@@ -9,6 +9,7 @@ import { createFakeDevice, fakeRendererGpu } from '../fake-gpu';
 import { DEPTH_FORMAT } from '../material';
 import { Renderer } from '../renderer';
 import { Transform } from '../transform';
+import { createRenderCore } from './core';
 import { createVertexLayout } from './layout';
 
 const WGSL = /* wgsl */ `
@@ -27,7 +28,8 @@ function setup() {
   const r = new Renderer(fakeRendererGpu(fake));
   r.camera = Camera.perspective(Math.PI / 2, 1, 0.1, 100);
   r.camera.depthTest = true;
-  const core = r.core;
+  const core = createRenderCore(r, { depthFormat: DEPTH_FORMAT });
+  r.core = core;
   const vertices = core.createArena({ kind: 'vertex', blockBytes: 4096 });
   const box = vertices.alloc(24 * 8, 8);
   const add = (pass: 'opaque' | 'transparent') => {
@@ -66,7 +68,7 @@ describe('the core inside a Renderer frame (ws/core-passes)', () => {
       (l) => l === 'scene' || l === 'scene-blend' || l?.startsWith('core'),
     );
     expect(seq).toEqual(['scene', 'core pass', 'scene-blend', 'core pass']);
-    expect(r.core.depth).toBeNull();
+    expect(r.core!.depth).toBeNull();
     // The core's passes load the scene's depth, in its format, and never clear it.
     const corePasses = fake.passes.slice(from).filter((p) => p.label === 'core pass');
     for (const p of corePasses) {

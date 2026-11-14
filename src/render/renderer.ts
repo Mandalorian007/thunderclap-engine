@@ -1,12 +1,7 @@
 import type { BindingSet } from './bindings';
 import { ALL_LAYERS, CAMERA_BLOCK_FLOATS, Camera, type CameraRect, FRUSTUM_FLOATS } from './camera';
 import { type RendererCaps, rendererCaps } from './compressed';
-import {
-  type CoreTarget,
-  createRenderCore,
-  MULTI_DRAW_FEATURE,
-  type RenderCore,
-} from './core/core';
+import { type CoreTarget, MULTI_DRAW_FEATURE, type RenderCore } from './core/core';
 import { createRenderView, type RenderView, setViewFromCamera } from './core/view';
 import { installGpuErrorLogging } from './diagnostics';
 import {
@@ -723,8 +718,17 @@ export class Renderer implements FrameSink {
   private splitAt = -1;
   /** The first blended draw of this view's scene list (-1: none), where the core's opaque work goes. */
   private blendAt = -1;
-  /** The retained core drawn inside this renderer's frames (`core`), made on first use. */
-  private coreInst: RenderCore | null = null;
+  /**
+   * A retained render core drawn inside this renderer's frames (ws/core-passes), or null (the
+   * default). Assign one made on this renderer's device with the scene's depth format:
+   * `renderer.core = createRenderCore(renderer, { depthFormat: DEPTH_FORMAT })`. It draws in
+   * each frame's first depth-tested view: `prepare` with that view's camera before the scene
+   * pass, its `depthPre`, `opaque` and `cutout` passes after the view's opaque draws into the
+   * same colour and depth, its `transparent` and later passes after the view's blended draws.
+   * Later views of the same frame (a second eye, a minimap) do not draw it yet. Opt-in, so a
+   * renderer without one does not bundle the core.
+   */
+  core: RenderCore | null = null;
   private readonly coreView: RenderView = createRenderView();
   private readonly coreViews: RenderView[] = [this.coreView];
   private readonly coreTarget: CoreTarget = {
@@ -1475,19 +1479,6 @@ export class Renderer implements FrameSink {
     this.stats.batches += this.sceneBatches;
   }
 
-  /**
-   * The retained render core drawn inside this renderer's frames (ws/core-passes), on its
-   * device with the scene's depth format; made on first use. Its sets draw in each frame's
-   * first depth-tested view (`render`): `prepare` with that view's camera before the scene
-   * pass, its opaque passes (`depthPre` to `cutout`) after the view's opaque draws into the
-   * same colour and depth, its `transparent` and later passes after the view's blended draws.
-   * Later views of the same frame (a second eye, a minimap) do not draw it yet.
-   */
-  get core(): RenderCore {
-    this.coreInst ??= createRenderCore(this.device, { depthFormat: DEPTH_FORMAT });
-    return this.coreInst;
-  }
-
   /** The core to draw into this view, prepared, its target set; null when it has nothing. */
   private coreFor(
     camera: Camera,
@@ -1495,8 +1486,13 @@ export class Renderer implements FrameSink {
     vp: CameraRect,
     enc: GPUCommandEncoder,
   ): RenderCore | null {
-    const core = this.coreInst;
+    const core = this.core;
     if (!core || this.coreFrame === this.coreFrames || !core.hasWork) return null;
+    if (core.depthFormat !== DEPTH_FORMAT || core.device !== this.device) {
+      throw new Error(
+        `renderer.core: make it on the renderer's device with depthFormat ${DEPTH_FORMAT}`,
+      );
+    }
     this.coreFrame = this.coreFrames;
     setViewFromCamera(this.coreView, camera);
     core.prepare(enc, this.coreViews);
