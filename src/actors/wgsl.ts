@@ -38,6 +38,14 @@ export interface ActorShaderConsts {
   maxDraws: number;
   slots: number;
   views: number;
+  /** Words per (view, model mesh) argument cell: 5, or 9 with per-actor vertices. */
+  argsWords: number;
+  /** Vertices per visible actor of the `'actor'` sets (0: none). */
+  actorVertices: number;
+  /** `ActorSystemOptions.poseWgsl`, or empty. */
+  pose: string;
+  /** The record fields' `ACTOR_FIELD_*` constants (for the pose hook). */
+  fieldConsts: string;
 }
 
 function consts(c: ActorShaderConsts): string {
@@ -131,6 +139,14 @@ fn mul(a: M34, b: M34) -> M34 { return M34(mulRow(a.r0, b), mulRow(a.r1, b), mul
 fn wmAt(i: u32) -> M34 { return M34(wm[i * 3u], wm[i * 3u + 1u], wm[i * 3u + 2u]); }
 fn wmSet(i: u32, m: M34) { wm[i * 3u] = m.r0; wm[i * 3u + 1u] = m.r1; wm[i * 3u + 2u] = m.r2; }
 
+${
+  c.pose
+    ? `${c.fieldConsts}
+/** Word \`word\` of actor \`actor\`'s record. */
+fn actor_word(actor: u32, word: u32) -> u32 { return records[actor * ACTOR_STRIDE + word]; }
+${c.pose}`
+    : ''
+}
 @compute @workgroup_size(${c.bones})
 fn pose(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_index) b: u32) {
   let s = wg.x;
@@ -152,7 +168,7 @@ fn pose(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_index) b: u3
     if (c1 < clips && w > 0.0) {
       let p1 = sampleLayer(hdr, c1, (params.time - recf(r + ${R.clip2Start}u)) * recf(r + ${R.clip2Rate}u), b, nodes);
       p = mixTrs(p, p1, w);
-    }
+    }${c.pose ? '\n    p = actor_pose(s, model, b, p, params.time);' : ''}
     wmSet(b, trsMatrix(p));
   }
   workgroupBarrier();
@@ -195,8 +211,8 @@ fn pose(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_index) b: u3
       if (lod >= params.lodCount) { continue; }
       let d = drawBase + min(lod, meshes - 1u);
       let cell = v * ACTOR_MAX_DRAWS + d;
-      let at = atomicAdd(&args[cell * 5u + 1u], 1u);
-      lists[cell * ACTOR_LIST + at] = s;
+      let at = atomicAdd(&args[cell * ${c.argsWords}u + 1u], 1u);
+      lists[cell * ACTOR_LIST + at] = s;${c.actorVertices ? `\n      atomicAdd(&args[cell * ${c.argsWords}u + 6u], 1u);` : ''}
     }
   }
   workgroupBarrier();
@@ -228,14 +244,20 @@ fn actor_light(actor: u32, world: vec3f, normal: vec3f, color: vec3f, light: u32
 `;
 
 /** The draw: the core prepends the view and `VertexIn`; this reads group 1. */
+/** The `ACTOR_FIELD_<NAME>` constants of a record's game fields. */
+export function actorFieldConsts(fields: ReadonlyMap<string, { word: number }>): string {
+  let names = '';
+  for (const [name, f] of fields)
+    names += `const ACTOR_FIELD_${name.toUpperCase()} = ${f.word}u;\n`;
+  return names;
+}
+
 export function actorDrawWgsl(
   c: ActorShaderConsts,
   light: string,
   fields: ReadonlyMap<string, { word: number }>,
 ): string {
-  let names = '';
-  for (const [name, f] of fields)
-    names += `const ACTOR_FIELD_${name.toUpperCase()} = ${f.word}u;\n`;
+  const names = actorFieldConsts(fields);
   return /* wgsl */ `${consts(c)}
 ${names}
 @group(1) @binding(0) var<storage, read> bones: array<vec4f>;
@@ -286,5 +308,73 @@ struct ActorOut {
 @fragment fn fs(in: ActorOut) -> @location(0) vec4f {
   return vec4f(actor_light(in.actor, in.world, normalize(in.normal), in.color, in.light), 1.0);
 }
+`;
+}
+
+/**
+ * What the core prepends to a set added with `ActorSystem.addDrawSet` (after the view and
+ * `VertexIn`): the actor buffers at group 1 and helpers over them. The game's code follows with
+ * its own entries.
+ */
+export function actorSetPreludeWgsl(
+  c: ActorShaderConsts,
+  light: string,
+  fields: ReadonlyMap<string, { word: number }>,
+): string {
+  return /* wgsl */ `${consts(c)}
+${actorFieldConsts(fields)}
+const ACTOR_SET_VERTICES = ${Math.max(1, c.actorVertices)}u;
+struct ActorSetParams { time: f32, high: u32, views: u32, models: u32 };
+@group(1) @binding(0) var<storage, read> bones: array<vec4f>;
+@group(1) @binding(1) var<storage, read> lists: array<u32>;
+@group(1) @binding(2) var<storage, read> records: array<u32>;
+@group(1) @binding(3) var<uniform> actor_params: ActorSetParams;
+
+/** Word \`word\` of actor \`actor\`'s record (the header's, or a game field's \`ACTOR_FIELD_*\`). */
+fn actor_word(actor: u32, word: u32) -> u32 { return records[actor * ACTOR_STRIDE + word]; }
+fn actor_f32(actor: u32, word: u32) -> f32 { return bitcast<f32>(actor_word(actor, word)); }
+/** The actor drawn as instance \`inst\` of model mesh \`draw\` in this view. */
+fn actor_at(draw: u32, inst: u32) -> u32 {
+  return lists[(view.index * ACTOR_MAX_DRAWS + draw) * ACTOR_LIST + inst];
+}
+/** In an \`'actor'\` set: the model mesh of vertex \`v\` (\`core_vertex\`); \`v % ACTOR_SET_VERTICES\` is the corner. */
+fn actor_draw_of(v: u32) -> u32 { return v / ACTOR_SET_VERTICES; }
+/** Where the actor stands now (its position moved on by its velocity). */
+fn actor_position(actor: u32) -> vec3f {
+  let dt = actor_params.time - actor_f32(actor, ${R.since}u);
+  return vec3f(actor_f32(actor, ${R.x}u), actor_f32(actor, ${R.y}u), actor_f32(actor, ${R.z}u))
+    + vec3f(actor_f32(actor, ${R.vx}u), actor_f32(actor, ${R.vy}u), actor_f32(actor, ${R.vz}u)) * dt;
+}
+fn actor_yaw(actor: u32) -> f32 { return actor_f32(actor, ${R.yaw}u); }
+fn actor_scale(actor: u32) -> f32 { return actor_f32(actor, ${R.scale}u); }
+fn actor_model(actor: u32) -> u32 { return actor_word(actor, ${R.model}u); }
+/** Joint \`joint\`'s skin matrix rows (world × inverse bind) for actor \`actor\`. */
+struct ActorSkin { r0: vec4f, r1: vec4f, r2: vec4f };
+fn actor_bone(actor: u32, joint: u32) -> ActorSkin {
+  let o = (actor * ACTOR_BONES + joint) * 3u;
+  return ActorSkin(bones[o], bones[o + 1u], bones[o + 2u]);
+}
+/** The skin of a vertex's four joints and weights. */
+fn actor_skin(actor: u32, joints: vec4u, weights: vec4f) -> ActorSkin {
+  var m = ActorSkin(vec4f(0.0), vec4f(0.0), vec4f(0.0));
+  for (var k = 0u; k < 4u; k++) {
+    let w = weights[k];
+    if (w > 0.0) {
+      let b = actor_bone(actor, joints[k]);
+      m.r0 += b.r0 * w;
+      m.r1 += b.r1 * w;
+      m.r2 += b.r2 * w;
+    }
+  }
+  return m;
+}
+fn actor_point(m: ActorSkin, p: vec3f) -> vec3f {
+  let q = vec4f(p, 1.0);
+  return vec3f(dot(m.r0, q), dot(m.r1, q), dot(m.r2, q));
+}
+fn actor_dir(m: ActorSkin, n: vec3f) -> vec3f {
+  return vec3f(dot(m.r0.xyz, n), dot(m.r1.xyz, n), dot(m.r2.xyz, n));
+}
+${light}
 `;
 }

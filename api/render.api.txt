@@ -389,6 +389,9 @@ const DEFAULT_SHADOW_SIZE = 2048;
 ## DEPTH_FORMAT
 const DEPTH_FORMAT: GPUTextureFormat;
 
+## DRAW_ARGS_BYTES
+const DRAW_ARGS_BYTES = 16;
+
 ## DefaultTextures  (type-only)
 interface DefaultTextures {
     readonly white: Texture;
@@ -432,6 +435,7 @@ class DrawSet {
     readonly kind: DrawSetKind;
     readonly cull: 'none' | 'cpu' | 'gpu' | 'external';
     readonly capacity: number;
+    readonly indexed: boolean;
     readonly pass: CorePass;
     readonly order: number;
     readonly depth: boolean;
@@ -452,6 +456,7 @@ class DrawSet {
     get count(): number;
     get highWater(): number;
     add(slot: SlotDesc): number;
+    addAt(id: number, slot: SlotDesc): number;
     update(id: number, slot: SlotDesc): void;
     setBounds(id: number, x: number, y: number, z: number, r: number): void;
     setHidden(id: number, hidden: boolean): void;
@@ -492,6 +497,8 @@ interface DrawSetDesc {
         group: GPUBindGroup;
     }[];
     args?: GPUBuffer;
+    argsStride?: number;
+    indexed?: boolean;
     variants?: Readonly<Record<string, DrawSetVariant>>;
     passes?: readonly DrawSetPassJoin[];
     maxDistance?: number;
@@ -1590,13 +1597,14 @@ interface SkinPaletteDesc {
 
 ## SlotDesc  (type-only)
 interface SlotDesc {
-    vertices: ArenaAlloc;
+    vertices?: ArenaAlloc;
     indices?: ArenaAlloc;
     indexCount: number;
     instances?: ArenaAlloc;
     instanceCount?: number;
     bounds: ArrayLike<number>;
     origin?: ArrayLike<number>;
+    argsOffset?: number;
 }
 
 ## SnapshotOptions  (type-only)

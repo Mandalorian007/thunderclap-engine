@@ -16,7 +16,7 @@ import {
   sampleClip,
   validateSkeleton,
 } from '../anim';
-import { COLOR_MODE, MODEL_VERTEX_FLOATS } from '../models/builder';
+import { COLOR_MODE, type DownShade, MODEL_VERTEX_FLOATS } from '../models/builder';
 import { compileModel } from '../models/compile';
 import type { MaterialCodeTable, Part, PartModel, PartVec3 } from '../models/spec';
 import { SKIN_JOINTS_BYTE_OFFSET, VERTEX_SKINNED_STRIDE } from '../render/mesh';
@@ -61,6 +61,11 @@ export interface RigidRigDesc {
   fps?: number;
   /** Bounding-sphere radius over every pose (default the rest mesh's, with a margin). */
   radius?: number;
+  /**
+   * Which normal darkens down faces (ws/actor-fit; `compileModel`'s `downShade`): default
+   * `'model'`; `'part'` keeps a turned part's own underside dark.
+   */
+  downShade?: DownShade;
 }
 
 /**
@@ -342,7 +347,9 @@ function defineRigid(desc: RigidRigDesc): ActorRig {
       const b = boneNames.indexOf(name);
       if (b < 0) throw new Error(`defineRig ${model.name}: part '${name}' matches no bone`);
       const { motion: _motion, glow: _glow, ...still } = part as Part;
-      const units = compileModel({ name: model.name, parts: [still] }, table);
+      const units = compileModel({ name: model.name, parts: [still] }, table, {
+        downShade: desc.downShade,
+      });
       const v = units.verts;
       joints[0] = b;
       for (let o = 0; o < v.length; o += MODEL_VERTEX_FLOATS) {

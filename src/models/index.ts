@@ -4,8 +4,15 @@
  * game's material table into draw units, placed by slot and animated in the shader by named
  * state channels. See README.md.
  */
-export { COLOR_MODE, MODEL_VERTEX_FLOATS, ModelBuilder } from './builder';
 export {
+  COLOR_MODE,
+  type DownShade,
+  MODEL_VERTEX_FLOATS,
+  ModelBuilder,
+  type ModelBuilderOptions,
+} from './builder';
+export {
+  type CompileModelOptions,
   channelOf,
   compileModel,
   evaluateUnit,

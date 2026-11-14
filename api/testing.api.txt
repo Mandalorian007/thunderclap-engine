@@ -529,6 +529,7 @@ type PassCommand = {
     vertices: number;
     instances: number;
     firstInstance: number;
+    firstVertex?: number;
 } | {
     op: 'drawIndexed';
     indices: number;

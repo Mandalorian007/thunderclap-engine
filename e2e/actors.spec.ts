@@ -2,7 +2,8 @@
  * The actors page (harness/actors.html, ws/actors): a crowd of rigid and skinned actors in one
  * pose pass and one bundle of indirect draws. A frame costs the same GPU calls at 100 and at
  * 1,000 actors, the bundle is recorded once, the GPU's skin matrices match `poseCpu`, the pose
- * pass draws actors at both LODs, and the device reports no error.
+ * pass draws actors at both LODs, and the device reports no error. ws/actor-fit: empty models
+ * draw nothing, a pose hook matches its CPU twin, and a shared set draws a shadow per actor.
  */
 import type { Frame, Page } from '@playwright/test';
 import type { HarnessActorsState } from '../harness/actors-state';
@@ -79,5 +80,55 @@ test('a crowd costs the same GPU calls at 100 and 1,000 actors, posed as the CPU
   expect(skinned).toBeGreaterThan(0);
   // One target: the bundle is recorded once, however the actors move.
   expect(large.bundleBuilds).toBe(1);
+  expect(errors).toEqual([]);
+});
+
+/** Open `query` and, with timestamps, wait for 150 GPU samples. */
+async function timed(page: Page, wrapper: string, query: string): Promise<HarnessActorsState> {
+  const s = await open(page, wrapper, query);
+  if (!s.timestamps) return s;
+  await expect
+    .poll(async () => (await read()).gpuSamples, { timeout: 30_000 })
+    .toBeGreaterThan(150);
+  return read();
+}
+
+test('models no actor shows draw nothing: their empty indirect draws are left out', async ({
+  page,
+  wrapper,
+}) => {
+  test.skip(wrapper !== 'top', 'timing on the top page only');
+  const bare = await timed(page, wrapper, 'n=16&models=0&timing=1');
+  const many = await timed(page, wrapper, 'n=16&models=120&timing=1');
+  expect(many.emptyModels).toBe(120);
+  for (const s of [bare, many]) {
+    expect(s.gpuErrors).toBe(0);
+    expect(s.drawn).toBeGreaterThan(0);
+  }
+  if (many.timestamps) {
+    console.log(
+      `[actors] 16 actors: GPU ${bare.gpuMs.toFixed(3)} ms with 2 models, ${many.gpuMs.toFixed(3)} ms with 122 (244 mesh draws)`,
+    );
+    expect(many.gpuMs).toBeGreaterThan(0);
+  }
+  expect(errors).toEqual([]);
+});
+
+test('a pose hook nods the heads as poseCpu does, and a shared set lays a shadow under each actor', async ({
+  page,
+  wrapper,
+}) => {
+  const s = await open(page, wrapper, 'n=200&fit=1');
+  expect(s.fit).toBe(true);
+  expect(s.gpuErrors).toBe(0);
+  // The hook runs in the pose pass and in its CPU twin alike.
+  expect(s.checkedSlots).toBe(16);
+  expect(s.poseError).toBeGreaterThanOrEqual(0);
+  expect(s.poseError).toBeLessThan(2e-3);
+  // One shadow quad per actor drawn, counted by the same pose pass; the bodies and the shadows
+  // are two bundles.
+  expect(s.drawn).toBeGreaterThan(0);
+  expect(s.shadows).toBe(s.drawn);
+  expect(s.bundles).toBe(2);
   expect(errors).toEqual([]);
 });

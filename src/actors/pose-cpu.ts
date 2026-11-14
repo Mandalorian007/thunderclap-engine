@@ -6,6 +6,20 @@
 import { ACTOR_NONE, ACTOR_RECORD as R } from './record';
 import { ACTOR_TRS_FLOATS, type ActorRig, type BakedClip } from './rig';
 
+/**
+ * The CPU twin of `ActorSystemOptions.poseWgsl`'s `actor_pose` (ws/actor-fit): change node
+ * `node`'s local TRS at `trs[at..at+10)` (translation, rotation quaternion xyzw, scale) of the
+ * actor in slot `slot` showing model `model`, in place. Must allocate nothing.
+ */
+export type ActorPoseCpu = (
+  slot: number,
+  model: number,
+  node: number,
+  trs: Float32Array,
+  at: number,
+  time: number,
+) => void;
+
 /** Scratch for `poseRecord`, sized for `nodes` nodes. */
 export interface PoseScratch {
   /** One TRS per node, then one for the second layer's sample. */
@@ -174,7 +188,8 @@ export function actorMatrix(
  * Pose the record at word `base` of `f32`/`u32` with `rig` at `time`. `space: 'world'` writes
  * one world matrix per node (12 floats each, actor placement included: attachments and
  * picking); `'skin'` writes one skin matrix per joint (world × inverse bind: what the GPU
- * pass writes to the bone buffer).
+ * pass writes to the bone buffer). `hook` (with the record's `slot`) changes each node's local
+ * TRS after the clips, as the GPU pass's `actor_pose` does.
  */
 export function poseRecord(
   rig: ActorRig,
@@ -185,6 +200,8 @@ export function poseRecord(
   scratch: PoseScratch,
   out: Float32Array,
   space: 'world' | 'skin',
+  hook?: ActorPoseCpu | null,
+  slot = 0,
 ): void {
   const nodes = rig.nodes;
   const trs = scratch.trs;
@@ -202,6 +219,7 @@ export function poseRecord(
       sampleLayer(clips[c1]!, p1, b, nodes, scratch.layer, 0);
       mixTrs(trs, o, trs, o, scratch.layer, 0, blend);
     }
+    if (hook) hook(slot, u32[base + R.model]!, b, trs, o, time);
   }
   const world = space === 'world' ? out : scratch.world;
   actorMatrix(f32, base, time, scratch.actor);

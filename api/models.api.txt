@@ -13,6 +13,14 @@ const COLOR_MODE: {
 ## ChannelInput  (type-only)
 type ChannelInput = number | readonly [value: number, rate: number];
 
+## CompileModelOptions  (type-only)
+interface CompileModelOptions {
+    downShade?: DownShade;
+}
+
+## DownShade  (type-only)
+type DownShade = 'model' | 'part';
+
 ## MAX_MODEL_CHANNELS
 const MAX_MODEL_CHANNELS = 4;
 
@@ -58,6 +66,7 @@ type MaterialCodeTable = Readonly<Record<string, ModelMaterial>>;
 ## ModelBuilder
 class ModelBuilder {
     color: [number, number, number, number];
+    constructor(opts?: ModelBuilderOptions);
     rotated(axis: AxisIndex, angle: number, pivot: V3, body: () => void): void;
     moved(d: V3, body: () => void): void;
     tri(a: V3, b: V3, c: V3, mat: number, shade?: number, normals?: readonly [V3, V3, V3]): void;
@@ -77,6 +86,11 @@ class ModelBuilder {
     mesh(vertices: ArrayLike<number>, indices: ArrayLike<number>, stride: number, mat: number, shade?: number): void;
     get vertexCount(): number;
     done(): Float32Array<ArrayBuffer>;
+}
+
+## ModelBuilderOptions  (type-only)
+interface ModelBuilderOptions {
+    downShade?: DownShade;
 }
 
 ## ModelChannel  (type-only)
@@ -366,7 +380,7 @@ interface UnitPose {
 function channelOf(model: ModelUnits, name: string): number;
 
 ## compileModel
-function compileModel(spec: PartModel, materials: MaterialCodeTable): ModelUnits;
+function compileModel(spec: PartModel, materials: MaterialCodeTable, opts?: CompileModelOptions): ModelUnits;
 
 ## createModelInstances
 function createModelInstances(opts?: ModelInstancesOptions): ModelInstances;

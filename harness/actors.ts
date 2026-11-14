@@ -21,10 +21,12 @@ import {
   Camera,
   createRenderCore,
   createRenderView,
+  GpuTimer,
   gpuDiagnostics,
   installGpuErrorLogging,
   SKIN_JOINTS_BYTE_OFFSET,
   setViewFromCamera,
+  supportsTimestamps,
   VERTEX_SKINNED_STRIDE,
 } from '@thunderclap-engine/engine/render';
 import type { HarnessActorsState } from './actors-state';
@@ -32,6 +34,9 @@ import type { HarnessActorsState } from './actors-state';
 const root = document.getElementById('root') as HTMLElement;
 const params = new URLSearchParams(location.search);
 const n = Math.max(1, Math.min(4096, Number(params.get('n') ?? 1000) | 0));
+const emptyModels = Math.max(0, Math.min(120, Number(params.get('models') ?? 0) | 0));
+const timing = params.get('timing') === '1';
+const fit = params.get('fit') === '1';
 
 const state: HarnessActorsState = {
   ready: false,
@@ -50,6 +55,12 @@ const state: HarnessActorsState = {
   drawnPerDraw: [],
   drawn: 0,
   cpuMs: 0,
+  emptyModels,
+  timestamps: false,
+  gpuMs: -1,
+  gpuSamples: 0,
+  fit,
+  shadows: 0,
 };
 let wantCheck = false;
 window.__harnessActors = {
@@ -58,6 +69,56 @@ window.__harnessActors = {
     wantCheck = true;
   },
 };
+
+/** `?fit=1`: the nod about x, as the pose hook's local rotation times the clip's. */
+const NOD_WGSL = /* wgsl */ `
+fn actor_pose(actor: u32, model: u32, node: u32, p: Trs, time: f32) -> Trs {
+  if (model != 0u || node != 1u) { return p; }
+  let h = sin(time * 3.0) * 0.4 * 0.5;
+  let n = vec4f(sin(h), 0.0, 0.0, cos(h));
+  var o = p;
+  o.q = vec4f(
+    n.w * p.q.x + n.x * p.q.w + n.y * p.q.z - n.z * p.q.y,
+    n.w * p.q.y - n.x * p.q.z + n.y * p.q.w + n.z * p.q.x,
+    n.w * p.q.z + n.x * p.q.y - n.y * p.q.x + n.z * p.q.w,
+    n.w * p.q.w - n.x * p.q.x - n.y * p.q.y - n.z * p.q.z);
+  return o;
+}
+`;
+
+/** The CPU twin of `NOD_WGSL`: `q = nod(angle about x) · q`. */
+function nod(trs: Float32Array, at: number, angle: number): void {
+  const h = angle * 0.5;
+  const nx = Math.sin(h);
+  const nw = Math.cos(h);
+  const x = trs[at + 3]!;
+  const y = trs[at + 4]!;
+  const z = trs[at + 5]!;
+  const w = trs[at + 6]!;
+  trs[at + 3] = nw * x + nx * w;
+  trs[at + 4] = nw * y - nx * z;
+  trs[at + 5] = nw * z + nx * y;
+  trs[at + 6] = nw * w - nx * x;
+}
+
+/** `?fit=1`: a soft dark disc on the ground under each visible actor. */
+const SHADOW_WGSL = /* wgsl */ `
+struct ShadowOut { @builtin(position) clip: vec4f, @location(0) uv: vec2f };
+@vertex fn vs(in: VertexIn, @builtin(instance_index) inst: u32) -> ShadowOut {
+  let actor = actor_at(actor_draw_of(in.core_vertex), inst);
+  var corners = array<vec2f, 6>(vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0),
+    vec2f(-1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, 1.0));
+  let uv = corners[in.core_vertex % ACTOR_SET_VERTICES];
+  let p = actor_position(actor) + vec3f(uv.x, 0.0, uv.y) * 0.7 * actor_scale(actor);
+  var o: ShadowOut;
+  o.clip = view.viewProj * vec4f(p.x, p.y + 0.02, p.z, 1.0);
+  o.uv = uv;
+  return o;
+}
+@fragment fn fs(in: ShadowOut) -> @location(0) vec4f {
+  return vec4f(0.0, 0.0, 0.0, clamp(1.0 - dot(in.uv, in.uv), 0.0, 1.0) * 0.45);
+}
+`;
 
 const MATS: MaterialCodeTable = {
   metal: { color: [0.62, 0.66, 0.72] },
@@ -227,8 +288,43 @@ async function main(): Promise<void> {
     bonesPerSlot: 8,
     lods: [35, 120],
     maxViews: 1,
+    maxModels: 2 + emptyModels,
     sampleLight,
+    ...(fit
+      ? {
+          // The robot's head (node 1) nods, on the GPU and in `poseCpu` alike.
+          poseWgsl: NOD_WGSL,
+          poseCpu: (
+            _slot: number,
+            model: number,
+            node: number,
+            trs: Float32Array,
+            at: number,
+            time: number,
+          ) => {
+            if (model !== 0 || node !== 1) return;
+            nod(trs, at, Math.fround(Math.sin(time * 3) * 0.4));
+          },
+          actorVertices: 6,
+        }
+      : {}),
   });
+  if (fit) {
+    actors.addDrawSet({
+      label: 'contact shadows',
+      shape: 'actor',
+      order: 10,
+      castShadow: false,
+      shader: {
+        code: SHADOW_WGSL,
+        cullMode: 'none',
+        blend: {
+          color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha' },
+          alpha: { srcFactor: 'zero', dstFactor: 'one' },
+        },
+      },
+    });
+  }
   // The robot's part order: body, head, armL, armR, legL, legR.
   const robot = actors.addModel(
     defineRig({
@@ -254,6 +350,17 @@ async function main(): Promise<void> {
       ],
     }),
   );
+  // Models no actor shows (`?models=M`): their draws are empty every frame.
+  for (let m = 0; m < emptyModels; m++) {
+    actors.addModel(
+      defineRig({
+        kind: 'rigid',
+        model: { ...ROBOT, name: `robot-${m}` },
+        lods: [ROBOT_FAR],
+        materials: MATS,
+      }),
+    );
+  }
   const fig = figure();
   const figureModel = actors.addModel(
     defineRig({
@@ -304,10 +411,14 @@ async function main(): Promise<void> {
     width: 1,
     height: 1,
     clear: { r: 0.55, g: 0.66, b: 0.78, a: 1 },
+    timestamps: undefined as
+      | ((label: string) => GPURenderPassTimestampWrites | undefined)
+      | undefined,
   };
   // Readback for `check()`.
   const boneBytes = CHECK_SLOTS * actors.bonesPerSlot * 48;
-  const argsBytes = actors.maxDraws * 20;
+  const argsWords = fit ? 9 : 5;
+  const argsBytes = actors.maxDraws * argsWords * 4;
   const boneRead = device.createBuffer({
     label: 'actors check bones',
     size: boneBytes,
@@ -320,6 +431,18 @@ async function main(): Promise<void> {
   });
   const cpuSkin = new Float32Array(CHECK_SLOTS * actors.bonesPerSlot * 12);
   let checking = false;
+
+  // GPU time (`?timing=1`): every frame sampled that the timer is free for.
+  state.timestamps = supportsTimestamps(device);
+  const timer = timing && state.timestamps ? new GpuTimer(device) : null;
+  const gpuTimes: number[] = [];
+  timer?.onResult((r) => {
+    gpuTimes.push(r.totalMs);
+    if (gpuTimes.length > 120) gpuTimes.shift();
+    state.gpuSamples++;
+    state.gpuMs = [...gpuTimes].sort((p, q) => p - q)[gpuTimes.length >> 1]!;
+  });
+  const timestamps = timer ? (label: string) => timer.pass(label) : undefined;
 
   state.gpu = 'ok';
   state.ready = true;
@@ -354,6 +477,9 @@ async function main(): Promise<void> {
     });
 
     const encoder = device.createCommandEncoder();
+    const timed = timer?.begin() ?? false;
+    target.timestamps = timed ? timestamps : undefined;
+    if (timed) timer!.mark(encoder);
     actors.prepare(encoder, views, t);
     core.prepare(encoder, views);
     const doCheck = wantCheck && !checking;
@@ -364,7 +490,9 @@ async function main(): Promise<void> {
       encoder.copyBufferToBuffer(actors.args, 0, argsRead, 0, argsBytes);
     }
     core.draw(encoder, 0, target);
+    if (timed) timer!.resolve(encoder);
     device.queue.submit([encoder.finish()]);
+    if (timed) timer!.afterSubmit();
     times.push(performance.now() - t0);
     if (times.length > 60) times.shift();
 
@@ -393,10 +521,15 @@ async function main(): Promise<void> {
             }
           }
           const per = [
-            args[actors.drawOf(robot, 0) * 5 + 1]!,
-            args[actors.drawOf(robot, 1) * 5 + 1]!,
-            args[actors.drawOf(figureModel, 0) * 5 + 1]!,
+            args[actors.drawOf(robot, 0) * argsWords + 1]!,
+            args[actors.drawOf(robot, 1) * argsWords + 1]!,
+            args[actors.drawOf(figureModel, 0) * argsWords + 1]!,
           ];
+          if (fit) {
+            let shadows = 0;
+            for (let d = 0; d < actors.maxDraws; d++) shadows += args[d * argsWords + 6]!;
+            state.shadows = shadows;
+          }
           state.poseError = err;
           state.checkedSlots = CHECK_SLOTS;
           state.drawnPerDraw = per;

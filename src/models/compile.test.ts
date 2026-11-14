@@ -308,3 +308,47 @@ describe('compileModel', () => {
     expect(code.match(/fn model_shade/g)?.length).toBe(1);
   });
 });
+
+describe('down-face shading (ws/actor-fit)', () => {
+  const upside: PartModel = {
+    name: 'tipped',
+    parts: [
+      {
+        material: 'stone',
+        turn: { axis: 'x', angle: Math.PI },
+        shape: { type: 'box', from: [-0.5, -0.5, -0.5], to: [0.5, 0.5, 0.5] },
+      },
+    ],
+  };
+  /** The shade of the faces looking up and down in the model. */
+  function shades(v: Float32Array): { up: number[]; down: number[] } {
+    const F = MODEL_VERTEX_FLOATS;
+    const up = new Set<number>();
+    const down = new Set<number>();
+    for (let i = 0; i < v.length; i += F) {
+      const ny = v[i + 5]!;
+      const shade = Math.round(v[i + 7]! * 100) / 100;
+      if (ny > 0.5) up.add(shade);
+      if (ny < -0.5) down.add(shade);
+    }
+    return { up: [...up], down: [...down] };
+  }
+
+  it("darkens faces looking down in the model by default, and by the part's own normal with 'part'", () => {
+    const model = shades(compileModel(upside, MATS).verts);
+    expect(model).toEqual({ up: [1], down: [0.72] });
+    expect(shades(compileModel(upside, MATS, { downShade: 'model' }).verts)).toEqual(model);
+    // Turned over: the part's own underside now looks up, and stays the dark one.
+    expect(shades(compileModel(upside, MATS, { downShade: 'part' }).verts)).toEqual({
+      up: [0.72],
+      down: [1],
+    });
+  });
+
+  it('an unturned part shades the same either way', () => {
+    const flat: PartModel = { name: 'flat', parts: [{ ...upside.parts[0]!, turn: undefined }] };
+    expect(compileModel(flat, MATS, { downShade: 'part' }).verts).toEqual(
+      compileModel(flat, MATS).verts,
+    );
+  });
+});

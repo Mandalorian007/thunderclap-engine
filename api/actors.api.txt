@@ -50,6 +50,20 @@ interface ActorClipDesc {
     loop?: boolean;
 }
 
+## ActorDrawSetDesc  (type-only)
+interface ActorDrawSetDesc {
+    label?: string;
+    shader: DrawSetShader;
+    shape?: 'mesh' | 'actor';
+    pass?: string;
+    order?: number;
+    depth?: boolean;
+    castShadow?: boolean;
+    bindGroups?: DrawSetDesc['bindGroups'];
+    variants?: DrawSetDesc['variants'];
+    passes?: DrawSetDesc['passes'];
+}
+
 ## ActorFieldType  (type-only)
 type ActorFieldType = 'f32' | 'u32' | 'i32';
 
@@ -59,6 +73,9 @@ interface ActorMesh {
     readonly indices: Uint32Array<ArrayBuffer>;
     readonly vertexCount: number;
 }
+
+## ActorPoseCpu  (type-only)
+type ActorPoseCpu = (slot: number, model: number, node: number, trs: Float32Array, at: number, time: number) => void;
 
 ## ActorRecordInput  (type-only)
 interface ActorRecordInput {
@@ -133,6 +150,7 @@ class ActorSystem {
     time: number;
     args: GPUBuffer;
     constructor(core: RenderCore, opts: ActorSystemOptions);
+    addDrawSet(desc: ActorDrawSetDesc): DrawSet;
     get models(): number;
     rig(id: number): ActorRig;
     drawOf(id: number, lod?: number): number;
@@ -159,6 +177,9 @@ interface ActorSystemOptions {
     sampleLight?: (x: number, y: number, z: number) => number;
     lightWgsl?: string;
     pass?: string;
+    poseWgsl?: string;
+    poseCpu?: ActorPoseCpu;
+    actorVertices?: number;
     label?: string;
 }
 
@@ -210,6 +231,7 @@ interface RigidRigDesc {
     clips?: readonly ActorClipDesc[];
     fps?: number;
     radius?: number;
+    downShade?: DownShade;
 }
 
 ## SkinnedMeshDesc  (type-only)
@@ -235,7 +257,7 @@ function createPoseScratch(nodes: number): PoseScratch;
 function defineRig(desc: RigDesc): ActorRig;
 
 ## poseRecord
-function poseRecord(rig: ActorRig, f32: Float32Array, u32: Uint32Array, base: number, time: number, scratch: PoseScratch, out: Float32Array, space: 'world' | 'skin'): void;
+function poseRecord(rig: ActorRig, f32: Float32Array, u32: Uint32Array, base: number, time: number, scratch: PoseScratch, out: Float32Array, space: 'world' | 'skin', hook?: ActorPoseCpu | null, slot?: number): void;
 
 ## recordShape
 function recordShape(layout?: ActorRecordLayout): ActorRecordShape;

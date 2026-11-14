@@ -44,12 +44,12 @@ scene.placeModel(units, 0, new Transform().setPosition(4, 0, 0), { channels: { s
 | --- | --- |
 | `PartModel / Part / PartShape / PartMotion / PartGlow` | the spec: a part tree with shapes, `turn`, `move`, `repeat`, child `parts`, `material`, `color` (`'instance'`, `'instance2'` or RGB), `shade` |
 | `MaterialCodeTable / ModelMaterial` | the game's materials: name to `{ color, emissive? }`; codes are declaration order |
-| `compileModel(spec, materials)` | packs a spec into `ModelUnits`: one static unit plus one per moving or glowing top-level part; pure, throws on unknown names |
+| `compileModel(spec, materials, opts?)` | packs a spec into `ModelUnits`: one static unit plus one per moving or glowing top-level part; pure, throws on unknown names. `CompileModelOptions.downShade: 'part'` (ws/actor-fit) darkens faces by the part's own normal before its `turn` (default `'model'`: the turned normal) |
 | `evaluateUnit(unit, values, out?)` | the CPU twin of the shader's pose (angle, offset, glow) for picking and tests |
 | `createModelScene(renderer, opts)` | `ModelScene`, a `Drawable`: `place`, `placeModel`, `remove`, `removeRange`, `clear`, `stats` |
 | `ModelInstances / createModelInstances` | the GPU-free packing: slots, draw order, dirty float ranges |
 | `modelShaderWgsl(table, shade?) / MODEL_SURFACE_WGSL / materialConstantsWgsl` | the shader and the pieces a custom shade function sees |
-| `ModelBuilder` | the triangle builder `compileModel` uses, for tools that want raw vertices |
+| `ModelBuilder` | the triangle builder `compileModel` uses, for tools that want raw vertices (`ModelBuilderOptions.downShade`, `DownShade`) |
 
 ## Smaller pieces
 

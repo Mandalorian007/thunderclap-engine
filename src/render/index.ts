@@ -43,6 +43,7 @@ export {
   ARGS_WORDS,
   CULL_WGSL,
   cullSlotsCpu,
+  DRAW_ARGS_BYTES,
   SLOT,
   SLOT_BYTES,
   SLOT_LIVE,

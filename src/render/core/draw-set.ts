@@ -23,6 +23,7 @@ import {
   ARGS_BYTES,
   CULL_PARAMS_BYTES,
   CULL_WORKGROUP,
+  DRAW_ARGS_BYTES,
   SLOT,
   SLOT_BYTES,
   SLOT_HIDDEN,
@@ -160,8 +161,23 @@ export interface DrawSetDesc {
    * the caller's compute before the draw. Slot `id` of cull group `g` reads five `u32` (index
    * count, instance count, first index, base vertex, first instance) at byte
    * `(g * capacity + id) * 20`. Needs `INDIRECT` usage; the set never writes or destroys it.
+   * An unindexed set (`indexed: false`) reads four (`DRAW_ARGS_BYTES`: vertex count, instance
+   * count, first vertex, first instance) at `(g * capacity + id) * 16`. `SlotDesc.argsOffset`
+   * and `argsStride` place a slot's record elsewhere (ws/actor-fit).
    */
   args?: GPUBuffer;
+  /**
+   * With `cull: 'external'` (ws/actor-fit): bytes from one cull group's argument records to the
+   * next's. Default `capacity × 20` (`× 16` unindexed).
+   */
+  argsStride?: number;
+  /**
+   * Draw with indices (default true). `false` (ws/actor-fit): slots draw `draw` /
+   * `drawIndirect` with no index buffer (billboards, quads made in the vertex shader),
+   * `SlotDesc.indexCount` is the vertex count and the first vertex is the slot's place in the
+   * vertex arena. Not with `cull: 'gpu'` (`'auto'` culls on the CPU); no index arena.
+   */
+  indexed?: boolean;
   /** Pipeline variants by name (ws/render-fit; `DrawSetVariant`). */
   variants?: Readonly<Record<string, DrawSetVariant>>;
   /**
@@ -180,11 +196,15 @@ export interface DrawSetDesc {
 
 /** One slot: a draw's geometry, instances and bounds. */
 export interface SlotDesc {
-  /** Vertices in the set's vertex arena (allocated with `align` = the layout's stride). */
-  vertices: ArenaAlloc;
+  /**
+   * Vertices in the set's vertex arena (allocated with `align` = the layout's stride). Optional
+   * only when the vertex layout has no attributes (ws/actor-fit: a shader that makes its
+   * vertices from `core_vertex`, the vertex index): no vertex buffer is bound.
+   */
+  vertices?: ArenaAlloc;
   /** Indices in the set's index arena; without it, the shared quad index from index 0. */
   indices?: ArenaAlloc;
-  /** Indices to draw (a quad mesh: quads × 6). */
+  /** Indices to draw (a quad mesh: quads × 6); in an unindexed set, vertices. */
   indexCount: number;
   /** Instances in the set's instance arena (allocated with `align` = the layout's stride). */
   instances?: ArenaAlloc;
@@ -197,6 +217,12 @@ export interface SlotDesc {
    * to it. Needs the core's `originGrid`; the shader reads it, frame-relative, as `core_origin`.
    */
   origin?: ArrayLike<number>;
+  /**
+   * With `cull: 'external'` (ws/actor-fit): the byte offset of the slot's argument record for
+   * cull group 0 in `DrawSetDesc.args` (group `g` adds `g × argsStride`), in place of
+   * `id × 20` (`× 16` unindexed): the caller's own layout of its arguments. A multiple of 4.
+   */
+  argsOffset?: number;
 }
 
 /** What a set needs of its core (the core passes itself). */
@@ -360,6 +386,8 @@ export class DrawSet {
   readonly kind: DrawSetKind;
   readonly cull: 'none' | 'cpu' | 'gpu' | 'external';
   readonly capacity: number;
+  /** Whether slots draw with indices (`DrawSetDesc.indexed`). */
+  readonly indexed: boolean;
   readonly pass: CorePass;
   readonly order: number;
   /** Whether the set tests depth. */
@@ -397,6 +425,14 @@ export class DrawSet {
   private readonly vertexAllocs: (ArenaAlloc | null)[];
   private readonly indexAllocs: (ArenaAlloc | null)[];
   private readonly instanceAllocs: (ArenaAlloc | null)[];
+  /** Per slot: its `SlotDesc.argsOffset`, or -1 for the default place. */
+  private readonly argsOffsets: Int32Array | null;
+  /** Bytes of one argument record, and between cull groups' records. */
+  private readonly argBytes: number;
+  private readonly argsStride: number;
+  /** Vertex buffer slots: the vertices (-1: no attributes, none bound) and the instances. */
+  private readonly vertexSlot: number;
+  private readonly instanceSlot: number;
   /** With an origin: each slot's origin + bounds centre, float64 (x, y, z per slot). */
   private readonly centres: Float64Array | null;
   private readonly origins: Float64Array | null;
@@ -460,11 +496,31 @@ export class DrawSet {
       throw new Error(`${this.label}: an instance layout needs an instance arena`);
     }
     this.kind = desc.kind ?? 'static';
+    this.indexed = desc.indexed ?? true;
     const cull = desc.cull ?? 'auto';
-    this.cull = cull === 'auto' ? (desc.capacity >= GPU_CULL_MIN_SLOTS ? 'gpu' : 'cpu') : cull;
+    this.cull =
+      cull === 'auto'
+        ? desc.capacity >= GPU_CULL_MIN_SLOTS && this.indexed
+          ? 'gpu'
+          : 'cpu'
+        : cull;
     if ((this.cull === 'external') !== !!desc.args) {
       throw new Error(`${this.label}: \`args\` goes with cull 'external' (and only with it)`);
     }
+    if (!this.indexed && (this.cull === 'gpu' || desc.indices)) {
+      throw new Error(`${this.label}: an unindexed set has no index arena and no GPU cull`);
+    }
+    if (desc.argsStride !== undefined && this.cull !== 'external') {
+      throw new Error(`${this.label}: argsStride goes with cull 'external'`);
+    }
+    this.argBytes = this.indexed ? ARGS_BYTES : DRAW_ARGS_BYTES;
+    this.argsStride = desc.argsStride ?? desc.capacity * this.argBytes;
+    if (this.argsStride < 0 || this.argsStride % 4 !== 0) {
+      throw new Error(`${this.label}: argsStride ${this.argsStride} is not a multiple of 4`);
+    }
+    this.argsOffsets = this.cull === 'external' ? new Int32Array(desc.capacity).fill(-1) : null;
+    this.vertexSlot = desc.vertexLayout.attributes.length > 0 ? 0 : -1;
+    this.instanceSlot = this.vertexSlot + 1;
     this.capacity = desc.capacity;
     this.pass = host.pass(desc.pass ?? 'opaque');
     this.order = desc.order ?? 0;
@@ -526,7 +582,7 @@ export class DrawSet {
       this.origins = null;
       this.originRel = null;
     }
-    this.originSlot = desc.instanceLayout ? 2 : 1;
+    this.originSlot = this.instanceSlot + (desc.instanceLayout ? 1 : 0);
     this.bindGroups = desc.bindGroups ?? null;
     this.build();
   }
@@ -554,6 +610,10 @@ export class DrawSet {
       vl.wgslFields(0),
       il ? il.wgslFields(vl.attributes.length) : '',
       host.originOn ? `@location(${originLoc}) core_origin: vec3f,` : '',
+      // No fields: the vertex index, so the struct is not empty.
+      vl.attributes.length + (il?.attributes.length ?? 0) === 0 && !host.originOn
+        ? '@builtin(vertex_index) core_vertex: u32,'
+        : '',
     ]
       .filter(Boolean)
       .join('\n  ');
@@ -706,6 +766,29 @@ ${il?.wgslDecode ?? ''}
     return id;
   }
 
+  /**
+   * Add a slot at id `id`, the caller's choice (ws/actor-fit: a layout of its own, the slot
+   * id its draw's index). Throws when `id` is live or past the capacity. Ids skipped below it
+   * are free for `add`.
+   */
+  addAt(id: number, slot: SlotDesc): number {
+    if (!(Number.isInteger(id) && id >= 0 && id < this.capacity)) {
+      throw new Error(`${this.label}: no slot id ${id} (capacity ${this.capacity})`);
+    }
+    if (this.has(id)) throw new Error(`${this.label}: slot ${id} is taken`);
+    if (id >= this.high) {
+      // The ids between go free, lowest reused first.
+      for (let i = id - 1; i >= this.high; i--) this.freeIds.push(i);
+      this.high = id + 1;
+    } else {
+      const at = this.freeIds.indexOf(id);
+      if (at >= 0) this.freeIds.splice(at, 1);
+    }
+    this.live++;
+    this.write(id, slot);
+    return id;
+  }
+
   /** Replace slot `id`'s geometry, instances and bounds. */
   update(id: number, slot: SlotDesc): void {
     this.check(id);
@@ -724,7 +807,9 @@ ${il?.wgslDecode ?? ''}
   /**
    * Hide or show slot `id` (D1 §3.3 `hiddenMask`): a hidden slot stays in the set, keeps its
    * geometry and draws nothing, as if culled. A GPU- or CPU-culled set takes it with no bundle
-   * rebuild (the slot table's word changes); a `cull: 'none'` static set re-records its bundle.
+   * rebuild (the slot table's word changes); a `cull: 'none'` or `'external'` static set
+   * re-records its bundle, without the hidden slot's draw (ws/actor-fit: an external set issues
+   * no indirect draw for it at all).
    */
   setHidden(id: number, hidden: boolean): void {
     this.check(id);
@@ -734,7 +819,7 @@ ${il?.wgslDecode ?? ''}
     if (now === was) return;
     this.slotU32[at] = now;
     this.dirty(id);
-    if (this.cull === 'none') this.bump();
+    if (this.cull === 'none' || this.cull === 'external') this.bump();
   }
 
   /** Is slot `id` hidden (`setHidden`)? */
@@ -750,6 +835,7 @@ ${il?.wgslDecode ?? ''}
     this.vertexAllocs[id] = null;
     this.indexAllocs[id] = null;
     this.instanceAllocs[id] = null;
+    if (this.argsOffsets) this.argsOffsets[id] = -1;
     this.freeIds.push(id);
     this.live--;
     this.dirty(id);
@@ -949,9 +1035,11 @@ ${il?.wgslDecode ?? ''}
     if (this.useMulti()) {
       const { stats } = this.host;
       this.bindCommon(pass, group, color, depth);
-      const v0 = this.vertexAllocs[this.firstLive()]!;
-      pass.setVertexBuffer(0, this.desc.vertices.buffers[v0.block]!);
-      if (this.desc.instanceLayout) pass.setVertexBuffer(1, this.desc.instances!.buffers[0]!);
+      const v0 = this.vertexAllocs[this.firstLive()];
+      if (v0) pass.setVertexBuffer(0, this.desc.vertices.buffers[v0.block]!);
+      if (this.desc.instanceLayout) {
+        pass.setVertexBuffer(this.instanceSlot, this.desc.instances!.buffers[0]!);
+      }
       pass.setIndexBuffer(this.indexBufferOf(this.firstLive()), 'uint32');
       (pass as unknown as MultiDrawPass).multiDrawIndexedIndirect(
         this.argsBuffer!,
@@ -1020,8 +1108,9 @@ ${il?.wgslDecode ?? ''}
     if (!this.origins && so && (so[0] !== 0 || so[1] !== 0 || so[2] !== 0)) {
       throw new Error(`${this.label}: a slot origin needs the core's originGrid`);
     }
-    const v = slot.vertices;
-    if (v.offset % vertexLayout.stride !== 0) {
+    const v = slot.vertices ?? null;
+    if (!v && this.vertexSlot >= 0) throw new Error(`${this.label}: slot needs vertices`);
+    if (v && v.offset % vertexLayout.stride !== 0) {
       throw new Error(
         `${this.label}: vertices at ${v.offset} not aligned to stride ${vertexLayout.stride}`,
       );
@@ -1031,6 +1120,12 @@ ${il?.wgslDecode ?? ''}
     }
     if (slot.indices && !this.desc.indices) {
       throw new Error(`${this.label}: slot indices given but the set has no index arena`);
+    }
+    const ao = slot.argsOffset;
+    if (ao !== undefined && (!this.argsOffsets || !(ao >= 0) || ao % 4 !== 0)) {
+      throw new Error(
+        `${this.label}: argsOffset ${ao} (a multiple of 4, with cull 'external' only)`,
+      );
     }
     let instanceCount = slot.instanceCount ?? 1;
     if (instanceLayout) {
@@ -1057,7 +1152,8 @@ ${il?.wgslDecode ?? ''}
     this.slotF32[s + SLOT.r] = b[3]!;
     this.slotU32[s + SLOT.indexCount] = slot.indexCount;
     this.slotU32[s + SLOT.firstIndex] = slot.indices ? slot.indices.offset / 4 : 0;
-    this.slotI32[s + SLOT.baseVertex] = v.offset / vertexLayout.stride;
+    this.slotI32[s + SLOT.baseVertex] = v ? v.offset / vertexLayout.stride : 0;
+    if (this.argsOffsets) this.argsOffsets[id] = ao ?? -1;
     this.slotU32[s + SLOT.instanceCount] = instanceCount;
     this.slotU32[s + SLOT.firstInstance] =
       instanceLayout && slot.instances ? slot.instances.offset / instanceLayout.stride : 0;
@@ -1069,7 +1165,7 @@ ${il?.wgslDecode ?? ''}
     this.vertexAllocs[id] = v;
     this.indexAllocs[id] = slot.indices ?? null;
     this.instanceAllocs[id] = slot.instances ?? null;
-    if (!slot.indices) this.host.quadIndex(slot.indexCount);
+    if (!slot.indices && this.indexed) this.host.quadIndex(slot.indexCount);
     this.dirty(id);
     this.bump();
   }
@@ -1081,8 +1177,14 @@ ${il?.wgslDecode ?? ''}
   }
 
   /** What a recorded draw of a slot binds: its vertex block and its index buffer. */
-  private bindingKey(v: ArenaAlloc, indices: ArenaAlloc | null): number {
-    return v.block * 65536 + (indices ? indices.block + 1 : 0);
+  private bindingKey(v: ArenaAlloc | null, indices: ArenaAlloc | null): number {
+    return (v ? v.block : 0) * 65536 + (indices ? indices.block + 1 : 0);
+  }
+
+  /** The byte offset of slot `id`'s argument record for cull group `group`. */
+  private argsAt(id: number, group: number): number {
+    const own = this.argsOffsets ? this.argsOffsets[id]! : -1;
+    return (own >= 0 ? own : id * this.argBytes) + group * this.argsStride;
   }
 
   /**
@@ -1274,7 +1376,7 @@ ${il?.wgslDecode ?? ''}
     const variant = this.variants[vi]!;
     const sh = variant.shader;
     const module = this.moduleOf(variant);
-    const buffers: GPUVertexBufferLayout[] = [d.vertexLayout.buffer(0)];
+    const buffers: GPUVertexBufferLayout[] = this.vertexSlot >= 0 ? [d.vertexLayout.buffer(0)] : [];
     if (d.instanceLayout) buffers.push(d.instanceLayout.buffer(d.vertexLayout.attributes.length));
     if (this.originBuffer) {
       // One vec3f per slot, bound at the slot's offset: stride 0 repeats it for every instance.
@@ -1395,7 +1497,12 @@ ${il?.wgslDecode ?? ''}
     const d = this.desc;
     this.bindCommon(enc, group, color, depth);
     const cpu = this.cull === 'cpu';
-    const gpu = this.argsBuffer !== null;
+    const indirect = this.argsBuffer !== null;
+    // Only the GPU cull zeroes a hidden slot's arguments: its bundle keeps every slot.
+    const keepHidden = this.cull === 'gpu';
+    const indexed = this.indexed;
+    const vSlot = this.vertexSlot;
+    const instSlot = this.instanceSlot;
     if (cpu) this.cullCpu(group);
     const vis = this.visible;
     const origins = this.originBuffer;
@@ -1411,39 +1518,62 @@ ${il?.wgslDecode ?? ''}
       if ((flags & SLOT_LIVE) === 0) continue;
       if (cpu && vis![id] === 0) continue;
       // A GPU-culled slot is recorded hidden or not (the cull zeroes its instances); others skip.
-      if (!gpu && (flags & SLOT_HIDDEN) !== 0) continue;
-      const va = this.vertexAllocs[id]!;
+      if (!keepHidden && (flags & SLOT_HIDDEN) !== 0) continue;
+      // A direct draw of nothing is left out (an indirect one's count is the GPU's).
+      if (
+        !indirect &&
+        (this.slotU32[s + SLOT.indexCount] === 0 || this.slotU32[s + SLOT.instanceCount] === 0)
+      ) {
+        continue;
+      }
+      const va = this.vertexAllocs[id] ?? null;
       this.recorded[id] = this.bindingKey(va, this.indexAllocs[id] ?? null);
-      if (va.block !== vBlock) {
+      if (va && va.block !== vBlock) {
         vBlock = va.block;
-        enc.setVertexBuffer(0, d.vertices.buffers[vBlock]!);
+        enc.setVertexBuffer(vSlot, d.vertices.buffers[vBlock]!);
         calls++;
       }
-      const ib = this.indexBufferOf(id);
-      if (ib !== iBuffer) {
-        iBuffer = ib;
-        enc.setIndexBuffer(ib, 'uint32');
-        calls++;
+      if (indexed) {
+        const ib = this.indexBufferOf(id);
+        if (ib !== iBuffer) {
+          iBuffer = ib;
+          enc.setIndexBuffer(ib, 'uint32');
+          calls++;
+        }
       }
       const inst = this.instanceAllocs[id];
       if (inst) {
         // The slot's instances bound at their offset: first instance stays 0, so no
         // `indirect-first-instance` is needed (WebKit, and Chromium without the feature).
         const n = this.slotU32[s + SLOT.instanceCount]!;
-        enc.setVertexBuffer(1, d.instances!.buffers[inst.block]!, inst.offset, n * instStride);
+        enc.setVertexBuffer(
+          instSlot,
+          d.instances!.buffers[inst.block]!,
+          inst.offset,
+          n * instStride,
+        );
         calls++;
       }
       if (origins) {
         enc.setVertexBuffer(originSlot, origins, id * 16, 12);
         calls++;
       }
-      if (gpu) {
-        enc.drawIndexedIndirect(this.argsBuffer!, (group * this.capacity + id) * ARGS_BYTES);
-      } else {
+      if (indirect) {
+        const at = this.argsAt(id, group);
+        if (indexed) enc.drawIndexedIndirect(this.argsBuffer!, at);
+        else enc.drawIndirect(this.argsBuffer!, at);
+      } else if (indexed) {
         enc.drawIndexed(
           this.slotU32[s + SLOT.indexCount]!,
           this.slotU32[s + SLOT.instanceCount]!,
           this.slotU32[s + SLOT.firstIndex]!,
+          this.slotI32[s + SLOT.baseVertex]!,
+          0,
+        );
+      } else {
+        enc.draw(
+          this.slotU32[s + SLOT.indexCount]!,
+          this.slotU32[s + SLOT.instanceCount]!,
           this.slotI32[s + SLOT.baseVertex]!,
           0,
         );
