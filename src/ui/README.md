@@ -981,6 +981,56 @@ hud.update();
 - Notifications are a polite live region of cards with real buttons: pad users reach the actions
   through `menuNav`, Escape dismisses the focused card and focus moves to the next card, not the body.
 
+## UI specs: `panel`, `hud`, `presentDom` (ws/ui-spec)
+
+UI written as data, from Forge Wilds' spec framework with its game nouns taken out. A
+`PanelSpec` (`{ id, body, fade?, held? }`) is a tree of words (`SpecNode`): `col`/`row`
+(`SpecStack`: gap, pad, align, scroll, a `tap` stack), `grid` (`SpecGrid`), `list` (`SpecList`:
+rows of one `row` subtree by key, a `head` word for keys starting `#`, `tail` to follow the end),
+`text` (`SpecText`, a `SpecTextStyle` from `SPEC_LINE` and `SPEC_TYPE`, `wrap` counted lines,
+`marked` `{w}…{/}` runs), `slot` (`SpecSlot`), `meter` (`SpecMeter`, `SpecMark`s), `icon`
+(`SpecIcon`, `SpecGlyphPart`s), `button` (`SpecButton`, `SpecButtonPress`: tap, toggle or held),
+`field` (`SpecField`, `SpecFieldKind`), `tabs` (`SpecTabs`) and `range` (`SpecRange`); every word
+takes `SpecCommon` (id, cls, w, h, grow, show, state, label, tint, again), `SpecAlign`, and a
+`SpecStr` or `SpecNum` is fixed or a `Bind` made with `b(key)` (`b('row.name')` in a list's row).
+`SpecFontFamily` names a `SPEC_FAMILY` stack (`SPEC_SANS`, `SPEC_SERIF`, `SPEC_MONO`).
+
+```ts
+const p = panel({ id: 'vitals', body: { k: 'col', gap: 6, children: [
+  { k: 'meter', id: 'hp', value: b('hp'), w: 180, h: 14 },
+  { k: 'button', id: 'rest', text: 'Rest', w: 100, h: 40 },
+] } });
+presentDom(p, host, { theme: theme({ accent: '#5fd3e6' }) });
+p.frame(0, 0);                 // natural size
+p.model.set('hp', 0.8);        // drawn at the next frame, nothing else written
+p.onEvent = (e) => { if (e.id === 'rest') rest(); };
+```
+
+`panel(spec, opts?)` (`SpecPanelOptions`: a `SpecSchedule`, or null to apply it yourself) compiles
+a spec once per object (`CompiledSpec`) and returns a `SpecPanel`: its `model` (`SpecModel`: `set`,
+`setAll`, `get`, `setList`, `row` (a `SpecRow` of a `SpecListState`, moved `SpecListMove` keep,
+top or end), `focus`; values are `SpecValue`s) marks only keys that changed, its `boxes`
+(`SpecBoxes`) are a pure two-pass layout over typed arrays that allocates nothing once warm, and
+`apply()` returns at once when nothing changed. `frame(w, h, text)` gives it a frame (0: natural).
+Events come out as `PanelEvent`s (`SpecPressKind`: tap, hold, toggle, down, up, input, enter, pick,
+change, focus, blur, held), `one` on a shift press. A `SpecPresenter` draws a panel:
+`presentDom(panel, host, opts?)` (`DomOptions`: scale, theme, fit, slotArt, a `SpecTimer` for
+holds) returns a `DomPresenter` that builds one real element per word (`<button>`s, inputs,
+`role=meter`, `tablist`, a list's pooled rows), writes only what changed keys bind (`writes`
+counts), keeps `data-tc-id` control ids (`<panel>/<word>[:<row>]`) so `PadNav`, arrow keys and
+`onControl` work, and holds after `SPEC_HOLD_MS` within `SPEC_HOLD_SLOP` px.
+
+`hud(spec)` (`HudSpec` of `HudItem`s: a spec, a layout `place`, an order, a width) is a `SpecHud`
+of panels; `presentHud(hud, ui)` adds each panel's host through `ui.layout.add` (regions, safe
+areas and form factors as for any widget) at `specScale(ui)` CSS px per unit and follows resizes
+(`HudView`). `presentModal(ui, panel, opts)` (`SpecModalOptions`) opens a panel on `ui.stack` as a
+`SpecModal` (focus trap, Escape, focus return). Both take a `SpecOverlay` (the overlay's root,
+layout, units, scale, `onResize` and stack). The look is tokens, not parsed CSS: `theme(tokens)`
+resolves `SpecTokens` over `defaultSpecTokens` into a `SpecTheme` of `--tcs-*` properties
+(`specTokenVar`). Text lines are counted with `wrapCount`/`wrapText` (`WrapOptions`) and
+`textWidth`, measuring with an `OffscreenCanvas` or an estimate; `measureWith` (a `SpecMeasurer`)
+fixes it for tests. See `spec/README.md` and `harness/ui-spec.html`.
+
 ## Tests
 
 `inventory.test.ts` covers the grid (shape, aria, clamping, hold to pick up, drop, cancel, `canDrop`, context hooks, the card on focus), the drag context (pad walk across grids, both-end `onMove`, pointer thresholds, the long press, `slotsTarget`), `placeCard`, the card, the radial and the context list. `hud.test.ts` covers the HUD widgets (DOM shape, aria, clamping, wrapping, heading offsets, the modal rule, pulse). `ui.test.ts` runs under happy-dom and covers theme var names, overlay mount and scaling,
@@ -1019,3 +1069,6 @@ kind's drawn rotation (recorded `rotate` calls) in north and player modes and `m
 `e2e/ui5.spec.ts` runs `harness/ui5.html` (`?orb`, `?floats`, `?minimap`, `?still`); since
 ws/ui-7 `?minimap` holds an arrow marker whose `headingMarkers` angle tracks heading − yaw. Layout and
 focus were also checked once in Chromium via Playwright (not part of CI).
+ws/ui-spec: `spec/spec.test.ts` (layout, model, press, the zero-allocation budgets) and
+`spec/present-dom.test.ts` (idle frames write nothing, pooled rows, fields, held buttons, today's
+widgets as specs); `e2e/ui-spec.spec.ts` runs `harness/ui-spec.html` on the matrix.
