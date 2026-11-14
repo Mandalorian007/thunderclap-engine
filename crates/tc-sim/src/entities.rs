@@ -3,8 +3,10 @@
 //! ([`tc_net::EntityEncoder`]), each the change from what that connection
 //! was last sent.
 //!
-//! A stream is made by the first accepted `SetInterest` ([`Game::interest`])
-//! and reruns at a flush only when it is due: its interest changed, its
+//! A stream is made by the first accepted `SetInterest` ([`Game::interest`]),
+//! or, for a game whose streams follow the body ([`Game::follow`]), when a
+//! player's connection joins (its interest then moves with the body and
+//! `SetInterest` is only checked). It reruns at a flush only when it is due: its interest changed, its
 //! client asked for a key frame (`EntityResync`), something it read
 //! changed (its [`Reads`]), or the game was reloaded. A client over its
 //! byte budget is skipped and stays due; its next frame skips the states
@@ -26,10 +28,13 @@ use crate::sim::{OUTBOUND_BUDGET, Sim};
 
 /// One connection's entity stream.
 pub(crate) struct Stream<G: Game> {
-    interest: InterestOf<G>,
-    encoder: EntityEncoder<G::View>,
-    reads: Reads<G::Change>,
-    due: bool,
+    pub(crate) interest: InterestOf<G>,
+    pub(crate) encoder: EntityEncoder<G::View>,
+    pub(crate) reads: Reads<G::Change>,
+    pub(crate) due: bool,
+    /// Its interest follows its player's body ([`Game::follow`]), not
+    /// `SetInterest`.
+    pub(crate) followed: bool,
 }
 
 impl<G: Game> Stream<G> {
@@ -58,6 +63,8 @@ impl<G: Game> Sim<G> {
             return;
         }
         match self.streams.get_mut(&conn) {
+            // The body leads; the client's interest is only checked.
+            Some(s) if s.followed => return,
             Some(s) => {
                 s.interest = interest;
                 s.due = true;
@@ -71,6 +78,7 @@ impl<G: Game> Sim<G> {
                             encoder,
                             reads: Reads::default(),
                             due: true,
+                            followed: false,
                         },
                     );
                 }
@@ -102,7 +110,7 @@ impl<G: Game> Sim<G> {
     ) {
         let time = self.core.time();
         let game = self.core.game();
-        let mut things = Vec::new();
+        let mut things = std::mem::take(&mut self.scratch_things);
         for (conn, s) in &mut self.streams {
             if only.is_some_and(|o| o != *conn) {
                 continue;
@@ -121,11 +129,15 @@ impl<G: Game> Sim<G> {
             game.entities(&cx, &s.interest, &mut things);
             s.reads = cx.into_reads();
             s.due = false;
+            self.counters.entity_runs += 1;
             if let Some(frame) = s.encoder.frame(time, things.iter().map(|(id, v)| (*id, v))) {
                 let msg = ServerMsg::<G::Protocol>::EntityStream { data: Bytes(frame) };
                 c.send_frame(Frame::from(msg.to_bytes()));
+                self.counters.entity_frames += 1;
             }
         }
+        things.clear();
+        self.scratch_things = things;
     }
 
     /// Forgets `conn`'s stream.

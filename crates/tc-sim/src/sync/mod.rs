@@ -225,6 +225,11 @@ impl<G: Game> SyncLayer<G> {
         }
     }
 
+    /// The query named `name`, if the game serves one.
+    pub(crate) fn query(&self, name: &str) -> Option<&Arc<Query<G>>> {
+        self.queries.get(name)
+    }
+
     pub(crate) fn stats(&self) -> SyncStats {
         SyncStats {
             entries: self.entries.len(),

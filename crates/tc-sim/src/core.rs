@@ -108,6 +108,41 @@ impl<G: Game> Core<G> {
         self.changes.set_muted(muted);
     }
 
+    /// The game and its change marks, for a live hook.
+    pub(crate) fn live_parts(&mut self) -> (&mut G, &mut Changes<G::Change>) {
+        (&mut self.game, &mut self.changes)
+    }
+
+    /// Advances toward `target` like [`Core::advance_to`], but stops as
+    /// soon as the game is live ([`Game::live`]) after a step or an
+    /// event, so the loop can step it one step at a time from there.
+    pub(crate) fn advance_until_live(&mut self, target: u64) {
+        let target = target.min(MAX_TIME);
+        if self.game.steps() {
+            while self.time < target {
+                self.time += 1;
+                self.fire_due(self.time);
+                let (game, mut cx) = self.cx();
+                game.step(&mut cx);
+                if self.game.live() {
+                    return;
+                }
+            }
+        } else {
+            while let Some(next) = self.scheduler.next_time() {
+                if next > target {
+                    break;
+                }
+                self.time = self.time.max(next);
+                self.fire_due(next);
+                if self.game.live() {
+                    return;
+                }
+            }
+            self.time = self.time.max(target);
+        }
+    }
+
     fn cx(&mut self) -> (&mut G, Cx<'_, G>) {
         (
             &mut self.game,

@@ -141,6 +141,11 @@ impl<G: Game> Sim<G> {
         if let Some(player) = player {
             self.conns_of.entry(player).or_default().push(conn);
             self.drive(player, conn);
+            // A game whose streams follow the body: this connection's
+            // starts now.
+            if self.follow(player) {
+                self.flush_entities(&Default::default(), false, Some(conn));
+            }
         }
         tracing::info!(conn, player = id, name = %identity.name, "joined");
         self.publish_status(now);
@@ -227,11 +232,20 @@ impl<G: Game> Sim<G> {
         match msg {
             ClientMsg::Command { seq, command } => {
                 self.tick(now);
-                let mut events = Vec::new();
-                let mut result = self.core.game().command(player, command, &mut events);
-                if let Err(reason) = self.commit(events) {
-                    result = self.core.game().command_error(reason);
-                }
+                self.counters.commands += 1;
+                let result = if let Some(e) = &self.store_error {
+                    let reason = format!("the server can't save: {e}");
+                    self.core.game().command_error(reason)
+                } else {
+                    let started = Instant::now();
+                    let (result, applied) =
+                        self.run_live(now, |game, cx| game.act(cx, player, command));
+                    self.counters.live_us += crate::counters::micros(started);
+                    match applied {
+                        Ok(()) => result,
+                        Err(reason) => self.core.game().command_error(reason),
+                    }
+                };
                 // Read your writes: what the command changed goes out
                 // before its result.
                 self.flush_all();

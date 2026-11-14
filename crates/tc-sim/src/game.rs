@@ -62,6 +62,7 @@ use tc_wire::schema::Schema;
 
 use crate::changes::Changes;
 use crate::lanes::Lane;
+use crate::live::LiveCx;
 use crate::query::{Query, QueryCtx};
 use crate::scheduler::{EventKey, Scheduler};
 
@@ -237,13 +238,82 @@ pub trait Game: Sized + Send + 'static {
     }
 
     /// A command from `player`: its result, and the events that carry it
-    /// out.
+    /// out. Called by the default [`Game::act`]; a game that implements
+    /// `act` need not implement this (the default refuses with
+    /// [`Game::command_error`]).
     fn command(
         &self,
         player: PlayerId,
         command: <Self::Protocol as Protocol>::Command,
         events: &mut Vec<EventOf<Self>>,
-    ) -> <Self::Protocol as Protocol>::Result;
+    ) -> <Self::Protocol as Protocol>::Result {
+        let _ = (player, command, events);
+        self.command_error("this game takes no commands".into())
+    }
+
+    /// A command from `player`, with the loop's live side ([`LiveCx`]):
+    /// the wall clock (cooldowns, credits), bodies to move (a teleport),
+    /// news to send before the result ([`LiveCx::out`]), a wake to arm.
+    /// The events pushed to [`LiveCx::events`] are logged as one batch
+    /// and applied; if they aren't, the result is [`Game::command_error`]
+    /// and the news is dropped. It may change the game's *live* fields
+    /// (see [`Game::live_step`]), never what [`Game::hash_state`] covers.
+    /// The default calls [`Game::command`].
+    fn act(
+        &mut self,
+        cx: &mut LiveCx<'_, Self>,
+        player: PlayerId,
+        command: <Self::Protocol as Protocol>::Command,
+    ) -> <Self::Protocol as Protocol>::Result {
+        self.command(player, command, cx.events())
+    }
+
+    /// True while the game has live work every step (things moving that
+    /// aren't logged: creatures, projectiles, falling things). While it
+    /// is, the loop steps one step at a time and calls
+    /// [`Game::live_step`] after each; otherwise it jumps from one
+    /// scheduled event to the next. Read again after every step, event
+    /// and batch. Live play only: a replay never asks. The default is
+    /// false.
+    fn live(&self) -> bool {
+        false
+    }
+
+    /// One live step, after the step's scheduled events (and
+    /// [`Game::step`]) ran, in live play only. It moves the game's *live*
+    /// fields: state that is not logged, not in [`Game::hash_state`] and
+    /// not in a base, rebuilt from the logged state when needed (a
+    /// replay, a reload and a restart start with none). What should last
+    /// is pushed as events ([`LiveCx::events`]: an outcome, logged and
+    /// applied at the step's time, so a replay applies it instead of
+    /// recomputing it). [`LiveCx::since`] is the last live step's time,
+    /// so a pass can make up the steps a jump skipped. With
+    /// [`SimConfig::verify_live`](crate::SimConfig::verify_live) the loop
+    /// checks the hashed state didn't move. The default does nothing.
+    fn live_step(&mut self, cx: &mut LiveCx<'_, Self>) {
+        let _ = cx;
+    }
+
+    /// A wake armed with [`LiveCx::wake_at`] is due (on the wall clock,
+    /// whether or not the game clock runs): a channel that finishes, a
+    /// window that closes, a debounce. Re-arm with `cx.wake_at` for
+    /// another. Same rules as [`Game::live_step`]. The default does
+    /// nothing.
+    fn wake(&mut self, cx: &mut LiveCx<'_, Self>) {
+        let _ = cx;
+    }
+
+    /// The interest `player`'s entity stream follows, from its body (a
+    /// watch radius around it), if the game picks it rather than the
+    /// client: then each of the player's connections gets a stream
+    /// without `SetInterest`, its interest re-derived whenever the body
+    /// moves and resent only when it changed, and a `SetInterest` from
+    /// it is checked ([`Game::interest`]) but doesn't move the stream.
+    /// The default (`None`) leaves the stream to `SetInterest`.
+    fn follow(&self, player: PlayerId, body: &Self::Body) -> Option<InterestOf<Self>> {
+        let _ = (player, body);
+        None
+    }
 
     /// The result a command gets when its events weren't applied: the log
     /// couldn't encode one (a game bug), or the store can't save. `reason`
