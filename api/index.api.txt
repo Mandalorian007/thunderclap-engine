@@ -107,6 +107,7 @@ interface GameHooks {
     frame?(dt: number): void;
     beforeRender?(time: Time): void;
     afterRender?(time: Time): void;
+    render?(alpha: number, time: Time): void;
     hide?(reason: HideReason): void;
     show?(reason: ShowReason): void;
     lifecycle?(state: HostLifecycleState): void;

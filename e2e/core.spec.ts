@@ -148,3 +148,29 @@ test('after device.destroy() the core is restored on a new device and draws the 
   expect(await offShare(page, beforeShot, await shot(), 24)).toBeLessThan(0.01);
   expect(errors).toEqual([]);
 });
+
+test('the sky as a core pass fills the background behind the boxes and survives a loss', async ({
+  page,
+  wrapper,
+}) => {
+  // ws/core-passes: a pass with its own encode, after the opaque sets, depth-tested at the far
+  // plane from the core's view; rebuilt by the core's restore.
+  const plain = await open(page, wrapper, 'sets=400&still');
+  const plainShot = await shot();
+  const withSky = await open(page, wrapper, 'sets=400&still&sky');
+  const skyShot = await shot();
+  expect(plain.gpuErrors + withSky.gpuErrors).toBe(0);
+  expect(withSky.skyDraws).toBeGreaterThan(0);
+  expect(withSky.visible).toBe(plain.visible);
+  // Most of the frame is background: the dome changes it, the boxes stay.
+  expect(await offShare(page, plainShot, skyShot, 24)).toBeGreaterThan(0.2);
+  await frame.evaluate(() => window.__harnessCore!.lose());
+  await expect
+    .poll(async () => (await read()).frames, { timeout: 15_000 })
+    .toBeGreaterThan(withSky.frames + 10);
+  const after = await read();
+  expect(after.restores).toBe(1);
+  expect(after.gpuErrors).toBe(0);
+  expect(await offShare(page, skyShot, await shot(), 24)).toBeLessThan(0.01);
+  expect(errors).toEqual([]);
+});

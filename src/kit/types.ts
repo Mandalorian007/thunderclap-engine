@@ -66,6 +66,12 @@ export interface GameHooks {
   /** Each rendered frame, after `renderer.endFrame`. */
   afterRender?(time: Time): void;
   /**
+   * `composeGame({ renderer: null })` only (ws/kit-fit): each rendered frame, between
+   * `beforeRender` and `afterRender`; the game draws and presents here. `alpha` and `time` are
+   * the loop's (`LoopCallbacks.render`).
+   */
+  render?(alpha: number, time: Time): void;
+  /**
    * The page is hidden, paged out or frozen: after the loop stops, before the save flushes.
    * Can fire several times in a row (hidden, then pagehide, then freeze).
    */
@@ -169,7 +175,16 @@ export interface KitCore {
   readonly design: { readonly width: number; readonly height: number };
   readonly surface: Surface;
   readonly gpu: GpuContext;
+  /**
+   * The engine's renderer. With `KitOptions.renderer` (the game's own, or none) reading it
+   * throws: a service that draws through it can't run there.
+   */
   readonly renderer: Renderer;
+  /**
+   * The camera the game draws through (ws/kit-fit): `renderer.camera`, or the kit's own camera
+   * with `KitOptions.renderer`. Optional for a hand-made core; the kit's always has it.
+   */
+  camera?(): Camera;
   readonly host: Host;
   readonly clock: TickClock;
   readonly loop: GameLoop;

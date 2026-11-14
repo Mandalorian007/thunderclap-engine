@@ -67,4 +67,5 @@ export {
   taaRejects,
   taaReprojection,
 } from './taa';
+export { createViewPost, VIEW_POST_MAX, ViewPost } from './view-post';
 export { planckianXy, whiteBalanceMatrix } from './white-balance';

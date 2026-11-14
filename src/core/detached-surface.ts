@@ -22,8 +22,12 @@ import {
 type Rect = { x: number; y: number; width: number; height: number };
 
 export class DetachedSurface implements Surface {
-  readonly logicalWidth: number;
-  readonly logicalHeight: number;
+  private readonly designW: number;
+  private readonly designH: number;
+  /** `fit: 'fill'` (ws/kit-fit): the rect is the frame, the logical size its CSS size. */
+  private readonly fill: boolean;
+  private lw: number;
+  private lh: number;
   rect: Letterbox = { x: 0, y: 0, width: 0, height: 0, scale: 0 };
   fitRect: Letterbox = { x: 0, y: 0, width: 0, height: 0, scale: 0 };
   backbuffer: BackbufferSize = { width: 1, height: 1, pixelRatio: 1 };
@@ -35,13 +39,26 @@ export class DetachedSurface implements Surface {
   private readonly listeners = new Set<(size: SurfaceSize) => void>();
 
   constructor(opts: SurfaceOptions = {}) {
-    this.logicalWidth = opts.logicalWidth ?? 1920;
-    this.logicalHeight = opts.logicalHeight ?? 1080;
+    this.designW = opts.logicalWidth ?? 1920;
+    this.designH = opts.logicalHeight ?? 1080;
+    this.lw = this.designW;
+    this.lh = this.designH;
+    this.fill = opts.fit === 'fill';
     this.maxDpr = opts.maxDpr ?? 2;
-    this.maxPixels = opts.maxPixels ?? 2560 * 1440;
-    this.containerW = this.logicalWidth;
-    this.containerH = this.logicalHeight;
+    this.maxPixels = opts.maxPixels ?? (this.fill ? Number.POSITIVE_INFINITY : 2560 * 1440);
+    this.containerW = this.designW;
+    this.containerH = this.designH;
     this.layout();
+  }
+
+  /** The design width, or the frame's CSS width under `fit: 'fill'`. */
+  get logicalWidth(): number {
+    return this.lw;
+  }
+
+  /** The design height, or the frame's CSS height under `fit: 'fill'`. */
+  get logicalHeight(): number {
+    return this.lh;
   }
 
   get root(): HTMLElement {
@@ -99,12 +116,19 @@ export class DetachedSurface implements Surface {
   layout(): void {
     const cw = this.containerW;
     const ch = this.containerH;
-    this.fitRect = computeLetterbox(cw, ch, this.logicalWidth, this.logicalHeight);
+    this.fitRect = computeLetterbox(cw, ch, this.designW, this.designH);
     const fr = this.frame;
     const w = fr ? Math.max(1, Math.min(fr.width, cw)) : cw;
     const h = fr ? Math.max(1, Math.min(fr.height, ch)) : ch;
-    let rect = fr ? computeLetterbox(w, h, this.logicalWidth, this.logicalHeight) : this.fitRect;
-    if (fr) rect = { ...rect, x: rect.x + fr.x, y: rect.y + fr.y };
+    let rect: Letterbox;
+    if (this.fill) {
+      rect = { x: fr ? fr.x : 0, y: fr ? fr.y : 0, width: w, height: h, scale: 1 };
+      this.lw = w;
+      this.lh = h;
+    } else {
+      rect = fr ? computeLetterbox(w, h, this.designW, this.designH) : this.fitRect;
+      if (fr) rect = { ...rect, x: rect.x + fr.x, y: rect.y + fr.y };
+    }
     const bb = computeBackbuffer(rect.width, rect.height, 1, this.maxDpr, this.maxPixels);
     const r = this.rect;
     const b = this.backbuffer;

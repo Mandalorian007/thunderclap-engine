@@ -30,6 +30,7 @@ frame.drawable(particles); // each frame, inside render
 | `createBillboards(...)` | camera-facing quads and bars in world space |
 | `Decals` | projected decals on the depth buffer |
 | `Sky` | a procedural sky and stars |
+| `createSkyPass(core, look)` | the same sky as a render-core pass, drawn per view |
 | `createDebugDraw(...)` | lines, boxes and axes for debugging |
 | `flicker / pulse` | light intensity over time, no allocation |
 | `Weather` | precipitation volumes on the render core (rain, snow, dust storm configs) |
@@ -560,6 +561,20 @@ sky.sunSize = 0.04; // every field is live
 Tests: `sky.test.ts` (fake GPU, `skyRay` against `Camera.screenToWorld`). Demo:
 `harness/sky.html` (`?still` parks the sun at noon).
 
+**As a core pass (ws/core-passes).** `createSkyPass(core, look, opts?)` defines a `'sky'` pass
+(after `'cutout'`, depth read) on a `RenderCore` and draws the same dome in every view the core
+draws, from the core's own `CoreView`: the vertex stage inverts `viewProj` and hands the
+fragment a homogeneous point on each pixel's ray, so stereo eyes, cube faces and
+origin-relative views need nothing more. `look` is a `Sky` or any `SkyLook` (the fields
+`packSkyParams` reads; no `Renderer` needed); the pass's live `sunDir`, `sunColor` and `fog`
+stand in for the renderer's lights. Call `pass.prepare()` once a frame before the core draws.
+The pass is a `SkyPass` (options `SkyPassOptions`: `id`, `after`, `label`), its shader
+`SKY_PASS_WGSL`, its light block `SKY_PASS_LIGHT_FLOATS` floats. Both skies shade through one
+`sky_shade` (`SKY_SHADE_WGSL`) over the `SKY_PARAMS_WGSL` block. The core's passes have one colour
+target, so the core sky writes no emissive (no bloom on the sun disc there). It rebuilds itself
+on `core.onDeviceRestored`. Tests `sky-pass.test.ts`; `harness/core.html?sky` (e2e
+`core.spec.ts`, Chromium and WebKit, through a device loss).
+
 ## Decals
 
 `Decals(renderer, opts: DecalsOptions)` is a `Drawable`: an atlas stamped onto scenery, every
@@ -734,5 +749,39 @@ colour, view extras); `WeatherConfig`, `WeatherOptions`, `PrecipShape`, `Weather
 `WeatherDensityKnobOptions`, `WEATHER_WGSL` with `WEATHER_HEAD_FLOATS` + `WEATHER_LAYER_FLOATS`
 a layer.
 
-Decals stay on the immediate path for now. Tests `particles-core.test.ts`, `water-core.test.ts`,
+Decals: next section. Tests `particles-core.test.ts`, `water-core.test.ts`,
 `weather.test.ts`; demo `harness/fx-core.html` (`?weather=dust|snow|rain|off`), a stereo pair.
+
+### Decals on the render core
+
+ws/core-decals (B6). `new Decals(core, opts)` on a `RenderCore` makes the decals a core drawable
+(`DecalsOnCore`, its `coreDrawable`): the transparent pass, order -2 (before water and particles),
+one bundle a cull group, so both eyes of a stereo pair execute the same bundle. The same `Decals`
+API (`add`, `remove`, `update`, `clear`, `count`, lifetimes, the atlas) drives it; only the
+drawing moves.
+
+- Box decals read the core's depth (`core.sceneDepthView`) and unproject each pixel with this
+  view's inverse view-projection (`CoreViewExtras`), so a box projects onto any surface under it,
+  folds over corners, and lands right in each eye. `mode: 'quad'` draws a flat quad lifted by
+  `offset`, depth tested, no depth read. `'auto'` is `'box'` on the core (the depth is there).
+- The instance count lives in an indirect draw: adding and removing decals writes the args, never
+  re-records the bundle. Instances upload only when they change (adds, removes, finite-life age).
+  Calls are flat in decal count; nothing is allocated a frame.
+- One bounding sphere around every live decal culls them once a pair.
+- `decals.texture` is live on the core: set a new atlas and the bind group is re-made (no new
+  pipeline). On a `Renderer` it stays fixed.
+- Device loss: the decals rebuild their buffers and pipelines on the core's `onDeviceRestored`
+  and re-upload every live decal; hand the new device's atlas to `decals.texture` from your own
+  listener.
+
+```ts
+const decals = new Decals(core, { texture: atlas, atlas: { columns: 2, rows: 2 } });
+decals.add({ x, y, z, nx: 0, ny: 1, nz: 0, size: 1.5, tile: 1 });
+decals.update(dt); // each frame; core.prepare and core.draw do the rest
+```
+
+Types and shaders: `DecalsOnCoreSource`, `DecalsOnCoreOptions`, `DECAL_CORE_BOX_WGSL`,
+`DECAL_CORE_QUAD_WGSL` (group 0 the core's view, group 1: params, sampler, atlas, scene depth,
+view extras). The `Renderer` path is unchanged. Test `decals-core.test.ts`; demo
+`harness/decals-core.html`, a stereo pair (ring on the ground, a splat folded over a pillar's
+corner, a cross on a slab).

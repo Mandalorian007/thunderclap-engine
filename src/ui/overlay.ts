@@ -150,6 +150,12 @@ export interface OverlayOptions {
   /** The frame's logical size (the canvas's design size). Default 1920×1080. */
   designWidth?: number;
   designHeight?: number;
+  /**
+   * The logical size the anchors project into, read live each frame, when it can differ from the
+   * design size (a surface with `fit: 'fill'`, ws/kit-fit; pass the surface). Default the design
+   * size.
+   */
+  logicalSize?: { readonly logicalWidth: number; readonly logicalHeight: number };
   /** Region tracks per form factor and the form-factor rule (see `Layout`). */
   layout?: LayoutSpec;
   /**
@@ -484,8 +490,12 @@ export function createOverlay(opts: OverlayOptions): Overlay {
           get rect() {
             return frame;
           },
-          logicalWidth: dw,
-          logicalHeight: dh,
+          get logicalWidth() {
+            return opts.logicalSize?.logicalWidth ?? dw;
+          },
+          get logicalHeight() {
+            return opts.logicalSize?.logicalHeight ?? dh;
+          },
         },
         layers,
         // hud and captions sit on the frame; layout covers the root; panels and toasts follow units.

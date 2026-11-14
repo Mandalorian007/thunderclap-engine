@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { initGpu } from './gpu';
+import { DRAW_FEATURES_ALL, initGpu, restoreGpu } from './gpu';
 
 /** A fake adapter offering `features`, recording each `requestDevice` descriptor. */
 function fakeGpu(features: string[], refuse = false) {
   const requests: GPUDeviceDescriptor[] = [];
+  const adapterRequests: (GPURequestAdapterOptions & { xrCompatible?: boolean })[] = [];
   const adapter = {
     features: new Set(features),
     async requestDevice(desc: GPUDeviceDescriptor) {
@@ -15,12 +16,15 @@ function fakeGpu(features: string[], refuse = false) {
   };
   vi.stubGlobal('navigator', {
     gpu: {
-      requestAdapter: async () => adapter,
+      requestAdapter: async (o: GPURequestAdapterOptions) => {
+        adapterRequests.push(o);
+        return adapter;
+      },
       getPreferredCanvasFormat: () => 'bgra8unorm',
     },
   });
   const canvas = { getContext: () => ({ configure() {} }) } as unknown as HTMLCanvasElement;
-  return { requests, canvas };
+  return { requests, adapterRequests, canvas };
 }
 
 afterEach(() => vi.unstubAllGlobals());
@@ -66,6 +70,44 @@ describe('initGpu', () => {
     const b = fakeGpu(['indirect-first-instance']);
     await initGpu(b.canvas, { drawFeatures: false });
     expect(b.requests[0]!.requiredFeatures).toEqual([]);
+  });
+
+  it('drawFeatures flags ask for each feature on its own (ws/kit-fit)', async () => {
+    const both = ['indirect-first-instance', 'chromium-experimental-multi-draw-indirect'];
+    const a = fakeGpu(both);
+    await initGpu(a.canvas, { drawFeatures: { indirectFirstInstance: true } });
+    expect(a.requests[0]!.requiredFeatures).toEqual(['indirect-first-instance']);
+    const b = fakeGpu(both);
+    await initGpu(b.canvas, { drawFeatures: { multiDrawIndirect: true } });
+    expect(b.requests[0]!.requiredFeatures).toEqual(['chromium-experimental-multi-draw-indirect']);
+    const c = fakeGpu(both);
+    await initGpu(c.canvas, { drawFeatures: {} });
+    expect(c.requests[0]!.requiredFeatures).toEqual([]);
+    // The preset is what `true` (and the default) asks for.
+    const d = fakeGpu(both);
+    await initGpu(d.canvas, { drawFeatures: DRAW_FEATURES_ALL });
+    expect(d.requests[0]!.requiredFeatures).toEqual(both);
+    // A flag on for a feature the adapter lacks asks for nothing.
+    const e = fakeGpu([]);
+    await initGpu(e.canvas, { drawFeatures: { indirectFirstInstance: true } });
+    expect(e.requests[0]!.requiredFeatures).toEqual([]);
+  });
+
+  it('xrCompatible asks for an XR-compatible adapter, and only when set (ws/kit-fit)', async () => {
+    const a = fakeGpu([]);
+    await initGpu(a.canvas);
+    expect(a.adapterRequests[0]).toEqual({ powerPreference: 'high-performance' });
+    const b = fakeGpu([]);
+    await initGpu(b.canvas, { xrCompatible: true, powerPreference: 'low-power' });
+    expect(b.adapterRequests[0]).toEqual({ powerPreference: 'low-power', xrCompatible: true });
+    // restoreGpu takes the same option for the new adapter.
+    const res = await initGpu(b.canvas, { xrCompatible: true });
+    if (!res.ok) throw new Error('initGpu failed');
+    await restoreGpu(res.gpu, { xrCompatible: true });
+    expect(b.adapterRequests.at(-1)).toEqual({
+      powerPreference: 'high-performance',
+      xrCompatible: true,
+    });
   });
 
   it('retries without features when the device request is refused', async () => {

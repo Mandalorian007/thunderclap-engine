@@ -14,12 +14,18 @@ use tc_store::{Log, LogEntry, StoreError};
 use tc_wire::Wire;
 use tracing::{error, warn};
 
+use tc_wire::schema::Schema;
+
 use crate::MAX_TIME;
 use crate::core::{ApplyError, Core};
+use crate::entities::Stream;
 use crate::game::{EventOf, Game, Outbox, PlayerId, To};
 use crate::input::{InputConfig, InputQueue};
+use crate::lanes::{Budgets, Lane};
+use crate::query::Key;
 use crate::reload::Reloads;
 use crate::status::{MarkStatus, STATUS_PUBLISH, SimStatus, StatusHandle};
+use crate::sync::{SyncConfig, SyncLayer, World};
 
 /// The shortest time between two flushes of the game's changes.
 pub const FLUSH_INTERVAL: Duration = Duration::from_millis(50);
@@ -55,22 +61,26 @@ pub struct SimConfig {
     pub paused: bool,
     /// How inputs are taken.
     pub input: InputConfig,
+    /// How live queries are kept.
+    pub sync: SyncConfig,
 }
 
 impl Default for SimConfig {
-    /// 50 ms steps, running, default inputs.
+    /// 50 ms steps, running, default inputs and queries.
     fn default() -> Self {
         SimConfig {
             step: Duration::from_millis(50),
             paused: false,
             input: InputConfig::default(),
+            sync: SyncConfig::default(),
         }
     }
 }
 
-/// One connection, joined as a player.
+/// One connection, joined as a player or an observer.
 pub(crate) struct Conn {
-    pub(crate) player: PlayerId,
+    /// `None` for an observer.
+    pub(crate) player: Option<PlayerId>,
     pub(crate) out: Outbound,
     /// Set when the outbound queue filled or the client stayed over its
     /// budget too long; the connection is then dropped.
@@ -135,6 +145,21 @@ pub struct Sim<G: Game> {
     pub(crate) refused: u64,
     /// The reasons logged so far (each logged once).
     pub(crate) refused_kinds: BTreeSet<String>,
+    /// The game's schema ([`Game::schema`]).
+    pub(crate) schema: Arc<Schema>,
+    pub(crate) sync: SyncLayer<G>,
+    /// Each watching connection's entity stream.
+    pub(crate) streams: BTreeMap<ConnId, Stream<G>>,
+    /// Each present player's body ([`Game::Body`]).
+    pub(crate) bodies: BTreeMap<PlayerId, G::Body>,
+    /// Bodies moved since the last flush.
+    pub(crate) moved: BTreeSet<PlayerId>,
+    /// The version at the last flush.
+    pub(crate) flushed_version: u64,
+    pub(crate) lanes: Vec<Lane>,
+    pub(crate) budgets: Budgets,
+    /// Game messages dropped over a lane's budget.
+    pub(crate) limited: u64,
 }
 
 /// Distinct refusal reasons logged before the rest are only counted.
@@ -146,6 +171,9 @@ impl<G: Game> Sim<G> {
     pub fn new(core: Core<G>, log: Option<Log<G::Codec>>, config: SimConfig) -> Sim<G> {
         let now = Instant::now();
         let history = log.is_none().then(Vec::new);
+        let schema = Arc::new(G::schema());
+        let sync = SyncLayer::new(config.sync, schema.clone(), crate::query::registry());
+        let flushed_version = core.version();
         let mut sim = Sim {
             clock: WallClock::new(config.step, config.paused, now, core.time()),
             core,
@@ -170,6 +198,15 @@ impl<G: Game> Sim<G> {
             reloads: Reloads::default(),
             refused: 0,
             refused_kinds: BTreeSet::new(),
+            flushed_version,
+            schema,
+            sync,
+            streams: BTreeMap::new(),
+            bodies: BTreeMap::new(),
+            moved: BTreeSet::new(),
+            lanes: G::lanes(),
+            budgets: Budgets::default(),
+            limited: 0,
         };
         sim.schedule_timers(now);
         sim.publish_status(now);
@@ -233,6 +270,21 @@ impl<G: Game> Sim<G> {
     /// Sets how long one advance may run (default [`ADVANCE_BUDGET`]).
     pub fn set_advance_budget(&mut self, budget: Duration) {
         self.advance_budget = budget;
+    }
+
+    /// The game's schema.
+    pub fn schema(&self) -> &Schema {
+        &self.schema
+    }
+
+    /// What the live queries cost so far.
+    pub fn sync_stats(&self) -> crate::SyncStats {
+        self.sync.stats()
+    }
+
+    /// `player`'s body, if it is present.
+    pub fn body(&self, player: PlayerId) -> Option<&G::Body> {
+        self.bodies.get(&player)
     }
 
     /// The players present, in order.
@@ -374,22 +426,81 @@ impl<G: Game> Sim<G> {
             .filter_map(|id| self.conns.get(id))
     }
 
-    /// Hands the changes since the last flush to the game, which sends
-    /// what they touch.
+    /// Flushes for everyone.
     pub(crate) fn flush_all(&mut self) {
-        self.next_flush = None;
-        if !self.core.has_changes() {
-            return;
-        }
-        let changes = self.core.take_changes();
-        let mut out = Outbox::new();
-        self.core.game().flush(&changes, &mut out);
-        self.deliver(out);
+        self.flush(None);
     }
 
-    /// A flush within [`FLUSH_INTERVAL`] if anything changed.
+    /// Hands the changes since the last flush to the game, which sends
+    /// what they touch, then brings live queries and entity streams up to
+    /// date: everyone's, or `only` that connection's (the others' wait for
+    /// the next flush).
+    pub(crate) fn flush(&mut self, only: Option<ConnId>) {
+        if only.is_none() {
+            self.next_flush = None;
+        }
+        let now = Instant::now();
+        let changes = self.core.take_changes();
+        if !changes.is_empty() {
+            let mut out = Outbox::new();
+            self.core.game().flush(&changes, &mut out);
+            self.deliver(out);
+        }
+        let moved = std::mem::take(&mut self.moved);
+        let version = self.core.version();
+        let any = !changes.is_empty() || !moved.is_empty() || version != self.flushed_version;
+        self.flushed_version = version;
+        let changed: BTreeSet<Key<G::Change>> = changes
+            .keys()
+            .cloned()
+            .map(Key::Game)
+            .chain(moved.into_iter().map(Key::Body))
+            .collect();
+        let time = self.core.time();
+        self.sync.changed(&changed, any);
+        self.sync.expire(time);
+        if self.sync.has_work() {
+            let world = World {
+                game: self.core.game(),
+                time,
+                version,
+                bodies: &self.bodies,
+            };
+            let conns = &self.conns;
+            let frames = self.sync.flush(&world, now, only, |conn| {
+                conns
+                    .get(&conn)
+                    .is_none_or(|c| c.out.queued() > OUTBOUND_BUDGET)
+            });
+            for (conn, frame) in frames {
+                if let Some(c) = self.conns.get(&conn) {
+                    c.send_frame(Frame::from(frame));
+                }
+            }
+        }
+        self.flush_entities(&changed, any, only);
+    }
+
+    /// The earliest time a query result or an entity frame runs out.
+    pub(crate) fn next_expiry(&self) -> Option<u64> {
+        [self.sync.next_expiry(), self.streams_expiry()]
+            .into_iter()
+            .flatten()
+            .min()
+    }
+
+    /// A flush within [`FLUSH_INTERVAL`] if anything changed or waits.
     pub(crate) fn schedule_flush(&mut self, now: Instant) {
-        if self.next_flush.is_none() && self.core.has_changes() {
+        if self.next_flush.is_some() {
+            return;
+        }
+        let due = self.core.has_changes()
+            || !self.moved.is_empty()
+            || self.core.version() != self.flushed_version
+            || self.sync.has_work()
+            || self.streams_waiting()
+            || self.next_expiry().is_some_and(|t| t <= self.core.time());
+        if due {
             self.next_flush = Some(now + FLUSH_INTERVAL);
         }
     }
@@ -498,6 +609,8 @@ impl<G: Game> Sim<G> {
             reloading: self.reloads.running(),
             store_error: self.store_error.clone(),
             refused: self.refused,
+            limited: self.limited,
+            sync: self.sync.stats(),
         });
         self.next_status = now + STATUS_PUBLISH;
     }
@@ -561,8 +674,14 @@ impl<G: Game> Sim<G> {
                 .next_time()
                 .and_then(|t| self.clock.next_step_at(t.max(time + 1) - 1))
         };
+        // A query result or entity frame that runs out: flush at its time.
+        let expiry = self
+            .next_expiry()
+            .filter(|t| *t > time)
+            .and_then(|t| self.clock.next_step_at(t - 1));
         [
             step,
+            expiry,
             self.next_input_tick,
             self.next_flush,
             self.next_clock_push,
@@ -584,13 +703,20 @@ impl<G: Game> Sim<G> {
             .inputs
             .tick(now, |player, _, input, _| taken.push((player, input)));
         for (player, input) in taken {
+            let Some(body) = self.bodies.get_mut(&player) else {
+                continue;
+            };
             let mut events = Vec::new();
-            self.core.game().input(player, input, &mut events);
+            self.core.game().input(player, body, input, &mut events);
+            self.moved.insert(player);
             let _ = self.commit(events);
         }
         self.input_tick_us = u32::try_from(started.elapsed().as_micros()).unwrap_or(u32::MAX);
         for (player, seq) in applied {
-            if let Some(state) = self.core.game().player_state(player) {
+            let Some(body) = self.bodies.get(&player) else {
+                continue;
+            };
+            if let Some(state) = self.core.game().player_state(player, body) {
                 let frame = Frame::from(
                     ServerMsg::<G::Protocol>::PlayerState {
                         seq,
@@ -637,8 +763,11 @@ impl<G: Game> Sim<G> {
         let now = Instant::now();
         self.tick(now);
         for player in self.present() {
+            let body = self.bodies.remove(&player);
             let mut events = Vec::new();
-            self.core.game().presence(player, false, &mut events);
+            self.core
+                .game()
+                .presence(player, false, body.as_ref(), &mut events);
             let _ = self.commit(events);
         }
         self.flush_all();

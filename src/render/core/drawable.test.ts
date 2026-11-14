@@ -122,9 +122,10 @@ describe('core drawables', () => {
     const [a, b] = renders(r.fake).slice(-2);
     expect(executed(a!)).toBeDefined();
     expect(executed(a!)).toEqual(executed(b!));
-    // The transparent pass by default: depth attached read-only.
+    // The transparent pass by default: depth attached; nothing wrote it before (ws/core-passes),
+    // so the pass clears it rather than read uncleared depth, and it is not read-only.
     expect(d.lastCtx.depth).toBe('depth24plus');
-    expect(d.lastCtx.depthReadOnly).toBe(true);
+    expect(d.lastCtx.depthReadOnly).toBe(false);
   });
 
   it('re-records when its version moves, and not otherwise', () => {
@@ -192,6 +193,11 @@ describe('core drawables', () => {
     stereo(r, target(r.device));
     expect(r.core.targetsVersion).toBe(v);
     expect(d.records).toBe(1);
+    // Nothing wrote depth first: a depth-only clear pass, then the sampling pass read-only:
+    // one per eye, two stereo frames.
+    expect(d.lastCtx.depthReadOnly).toBe(true);
+    const clears = renders(r.fake).filter((p) => p.label === 'core depth clear');
+    expect(clears.length).toBe(4);
     // A new size re-makes depth: the version moves and the bundle is re-recorded.
     const big = r.device.createTexture({
       size: [400, 200],

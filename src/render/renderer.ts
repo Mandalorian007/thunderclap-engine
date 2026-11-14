@@ -506,6 +506,8 @@ export class Renderer implements FrameSink {
    * `rotation` pan the 2D view. Assign another `Camera` to swap presets.
    */
   camera: Camera;
+  /** The camera the constructor made, which `setLogicalSize` keeps on the design. */
+  private readonly defaultCamera: Camera;
   readonly samplers: Record<SamplerKind, GPUSampler>;
   /**
    * What the device can do beyond core WebGPU, read from its features at construction
@@ -737,6 +739,7 @@ export class Renderer implements FrameSink {
     width: 1,
     height: 1,
     viewport: { x: 0, y: 0, width: 1, height: 1 },
+    timestamps: (label) => this.gpuTimer?.pass(label),
   };
   /** `frames` of the frame whose view the core drew (it draws in a frame's first view). */
   private coreFrame = -1;
@@ -796,6 +799,7 @@ export class Renderer implements FrameSink {
     this.logicalWidth = opts.logicalWidth ?? 1920;
     this.logicalHeight = opts.logicalHeight ?? 1080;
     this.camera = Camera.ortho2d(this.logicalWidth, this.logicalHeight);
+    this.defaultCamera = this.camera;
     const device = this.device;
     installGpuErrorLogging(device);
     this.caps = rendererCaps(device);
@@ -895,6 +899,22 @@ export class Renderer implements FrameSink {
   /** The default target's HDR emissive texture (`target.emissive`). */
   get sceneEmissive(): Texture {
     return this.target.emissive;
+  }
+
+  /**
+   * Change the logical (2D design) size, for a surface whose logical size follows the window
+   * (`fit: 'fill'`, ws/kit-fit): the frame's logical size and the globals follow, and the
+   * default camera, if it is still the one the renderer made, is set to `ortho2d` of the new
+   * size (its pan and zoom kept). A camera the game assigned is the game's to resize. No-op
+   * when nothing changes.
+   */
+  setLogicalSize(width: number, height: number): void {
+    if (width === this.logicalWidth && height === this.logicalHeight) return;
+    (this as { logicalWidth: number }).logicalWidth = width;
+    (this as { logicalHeight: number }).logicalHeight = height;
+    (this.frame as { logicalWidth: number }).logicalWidth = width;
+    (this.frame as { logicalHeight: number }).logicalHeight = height;
+    if (this.camera === this.defaultCamera) this.camera.setOrtho2d(width, height);
   }
 
   /**

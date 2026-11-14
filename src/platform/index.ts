@@ -1,4 +1,4 @@
-export type { BootOptions, BootResult } from './boot';
+export type { BootGpuOptions, BootOptions, BootResult } from './boot';
 export { boot } from './boot';
 export type { PointerKind } from './device';
 export {
@@ -28,8 +28,14 @@ export {
   watchReducedMotion,
   watchVisibility,
 } from './environment';
-export type { GpuContext, GpuFailureReason, GpuInitOptions, GpuInitResult } from './gpu';
-export { initGpu, restoreGpu } from './gpu';
+export type {
+  DrawFeatures,
+  GpuContext,
+  GpuFailureReason,
+  GpuInitOptions,
+  GpuInitResult,
+} from './gpu';
+export { DRAW_FEATURES_ALL, initGpu, restoreGpu } from './gpu';
 export type { BackbufferSize, CoverOptions, Letterbox, LetterboxRect, Vec2 } from './letterbox';
 export {
   clientToLogical,

@@ -4,9 +4,11 @@
  * (`dom: false`) on the fake GPU and the fake host.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { DetachedSurface } from '../core/detached-surface';
 import { GameLoop } from '../core/loop';
 import type { Host } from '../host';
 import type { GpuContext } from '../platform';
+import { Camera } from '../render/camera';
 import {
   createFakeDevice,
   type FakeDevice,
@@ -15,7 +17,7 @@ import {
 } from '../render/fake-gpu';
 import { createFakeHost } from '../testing/fake-host';
 import { withAudio } from './audio';
-import { composeGame, type KitOptions } from './compose';
+import { composeGame, type KitOptions, kitGpuOptions } from './compose';
 import { createExternalFrames } from './frames';
 import { withInput } from './input';
 import { withParticles, withPost } from './post';
@@ -235,5 +237,207 @@ describe('client mode: loop.frames external (ws/kit)', () => {
     frames.frame(loop, 10);
     frames.frame(loop, 30);
     expect(ticks.map((d) => Math.round(d * 1000))).toEqual([0, 20]);
+  });
+});
+
+describe('the loop maxFps on external frames (ws/kit-fit)', () => {
+  it('skips a frame that comes too soon, and times the next from the last that ran', () => {
+    const frames = createExternalFrames();
+    const dts: number[] = [];
+    const loop = new GameLoop(
+      { update: (dt) => dts.push(Math.round(dt * 1000)), render: () => {} },
+      { fixed: false, frames, now: () => 0 },
+    );
+    loop.maxFps = 30;
+    loop.start();
+    frames.frame(loop, 1000); // first: runs at 0
+    frames.frame(loop, 1016.7); // 60 Hz vsync: too soon, skipped
+    frames.frame(loop, 1033.3); // 33.3 ms: runs
+    frames.frame(loop, 1050); // skipped
+    frames.frame(loop, 1064); // 30.7 ms: inside the vsync slack, runs
+    expect(dts).toEqual([0, 33, 31]);
+    expect(loop.time.frame).toBe(3);
+    // Uncapped again: every call runs.
+    loop.maxFps = null;
+    frames.frame(loop, 1070);
+    expect(dts).toEqual([0, 33, 31, 6]);
+  });
+
+  it('applies through composeGame client mode', async () => {
+    const { device: _d, ...kit } = headless();
+    const ctx = (await composeGame({ ...kit, loop: { sim: false, frames: 'external' } }))!;
+    let renders = 0;
+    ctx.hooks.afterRender = () => renders++;
+    ctx.loop.maxFps = 30;
+    ctx.loop.start();
+    for (let i = 0; i < 12; i++) ctx.frame(i * (1000 / 60));
+    expect(renders).toBe(6);
+  });
+});
+
+describe('composeGame with the game own renderer, or none (ws/kit-fit)', () => {
+  /** A renderer of the game's own that logs what the kit hands it. */
+  function ownRenderer(log: string[]) {
+    return {
+      drawn: 0,
+      resize(w: number, h: number) {
+        log.push(`resize ${w}x${h}`);
+      },
+      render(alpha: number) {
+        this.drawn++;
+        log.push(`render ${alpha}`);
+      },
+    };
+  }
+
+  it('hands each frame to the game renderer between the hooks; the engine renderer is never built', async () => {
+    const { device, ...kit } = headless();
+    const log: string[] = [];
+    const mine = ownRenderer(log);
+    const passes = device.passes.length;
+    const ctx = (await composeGame({ ...kit, renderer: mine, loop: { sim: false } }))!;
+    // Typed as the game's own.
+    expect(ctx.renderer.drawn).toBe(0);
+    expect(ctx.renderer).toBe(mine);
+    expect(log).toEqual([
+      `resize ${ctx.surface.backbuffer.width}x${ctx.surface.backbuffer.height}`,
+    ]);
+    log.length = 0;
+    ctx.hooks.frame = () => log.push('frame');
+    ctx.hooks.beforeRender = () => log.push('before');
+    ctx.hooks.afterRender = () => log.push('after');
+    ctx.stack.push({
+      update: () => log.push('scene update'),
+      render: () => log.push('scene render'),
+    });
+    ctx.loop.tickOnce(1 / 60);
+    expect(log).toEqual(['frame', 'scene update', 'before', 'render 1', 'after']);
+    // Nothing of the engine's drew.
+    expect(device.passes.length).toBe(passes);
+    // The kit keeps a camera of its own.
+    const cam = ctx.camera;
+    expect(cam).toBeDefined();
+    const other = Camera.ortho2d(640, 360);
+    expect(other).not.toBe(cam);
+    ctx.setCamera(other);
+    expect(ctx.camera).toBe(other);
+  });
+
+  it('builds it from a factory on the booted GPU and surface (async too)', async () => {
+    const { device: _d, ...kit } = headless();
+    const log: string[] = [];
+    let got: unknown[] = [];
+    const ctx = (await composeGame({
+      ...kit,
+      renderer: async (gpu, surface) => {
+        got = [gpu, surface];
+        return ownRenderer(log);
+      },
+    }))!;
+    expect(got).toEqual([ctx.gpu, ctx.surface]);
+    expect(ctx.renderer.drawn).toBe(0);
+    ctx.loop.tickOnce(1 / 60);
+    expect(ctx.renderer.drawn).toBe(1);
+  });
+
+  it('`renderer: null`: the game draws in hooks.render', async () => {
+    const { device: _d, ...kit } = headless();
+    const ctx = (await composeGame({ ...kit, renderer: null, loop: { sim: false } }))!;
+    expect(ctx.renderer).toBeNull();
+    const log: string[] = [];
+    ctx.hooks.render = (alpha, time) => log.push(`render ${alpha} ${time.frame}`);
+    ctx.loop.tickOnce(1 / 60);
+    ctx.loop.tickOnce(1 / 60);
+    expect(log).toEqual(['render 1 1', 'render 1 2']);
+  });
+
+  it('keeps input, the lifecycle and device loss; refuses the services that draw', async () => {
+    const { device, ...kit } = headless();
+    let flushes = 0;
+    const ctx = (await composeGame({
+      ...kit,
+      renderer: null,
+      save: () => ({ flush: () => void flushes++ }),
+      input: withInput<'go'>({ bindings: { go: [{ key: 'Space' }] } }),
+    }))!;
+    let held = 0;
+    ctx.hooks.update = () => {
+      if (ctx.input.held('go')) held++;
+    };
+    ctx.input.keyDown('Space');
+    ctx.loop.tickOnce(1 / 60);
+    expect(held).toBe(1);
+    device.loseDevice('unknown', 'gone');
+    await device.lost;
+    await Promise.resolve();
+    expect(ctx.loop.halted).toBe(true);
+    expect(flushes).toBe(1);
+    for (const extra of [{ post: withPost() }, { particles: withParticles() }, { xr: withXr() }]) {
+      const { device: _x, ...k } = headless();
+      await expect(composeGame({ ...k, renderer: null, ...extra })).rejects.toThrow(
+        /draws through the engine's renderer/,
+      );
+    }
+  });
+});
+
+describe('fit fill: the logical size follows the surface (ws/kit-fit rulings)', () => {
+  it('ctx.design, the renderer frame and its default camera follow a fill surface', async () => {
+    const { device: _d, ...kit } = headless();
+    const ctx = (await composeGame({
+      ...kit,
+      design: { width: 640, height: 360 },
+      surface: { fit: 'fill' },
+    }))!;
+    const surf = ctx.surface as DetachedSurface;
+    expect(ctx.design).toEqual({ width: 640, height: 360 });
+    surf.resizeContainer(800, 600);
+    expect(surf.rect).toEqual({ x: 0, y: 0, width: 800, height: 600, scale: 1 });
+    expect(ctx.design).toEqual({ width: 800, height: 600 });
+    expect([ctx.renderer.logicalWidth, ctx.renderer.logicalHeight]).toEqual([800, 600]);
+    const frame = (
+      ctx.renderer as unknown as { frame: { logicalWidth: number; logicalHeight: number } }
+    ).frame;
+    expect([frame.logicalWidth, frame.logicalHeight]).toEqual([800, 600]);
+    expect(ctx.camera.screen).toMatchObject({ width: 800, height: 600 });
+    expect(surf.clientToLogical(400, 300)).toMatchObject({ x: 400, y: 300 });
+    // A camera the game set is the game's to resize.
+    const mine = Camera.ortho2d(100, 100);
+    ctx.setCamera(mine);
+    surf.resizeContainer(1000, 500);
+    expect(ctx.design).toEqual({ width: 1000, height: 500 });
+    expect(mine.screen).toMatchObject({ width: 100, height: 100 });
+  });
+
+  it('any other fit keeps the design size', async () => {
+    const { device: _d, ...kit } = headless();
+    const ctx = (await composeGame({ ...kit, design: { width: 640, height: 360 } }))!;
+    (ctx.surface as DetachedSurface).resizeContainer(800, 800);
+    expect(ctx.design).toEqual({ width: 640, height: 360 });
+    expect([ctx.renderer.logicalWidth, ctx.renderer.logicalHeight]).toEqual([640, 360]);
+    expect(ctx.surface.rect.width).toBe(800);
+  });
+
+  it("the kit's own camera follows too when the game draws on its own", async () => {
+    const { device: _d, ...kit } = headless();
+    const ctx = (await composeGame({ ...kit, surface: { fit: 'fill' }, renderer: null }))!;
+    (ctx.surface as DetachedSurface).resizeContainer(300, 200);
+    expect(ctx.design).toEqual({ width: 300, height: 200 });
+    expect(ctx.camera.screen).toMatchObject({ width: 300, height: 200 });
+  });
+});
+
+describe('xr asks for an XR-compatible adapter (ws/kit-fit rulings)', () => {
+  it('by default with xr, never without it, and `xrCompatible: false` wins', () => {
+    expect(kitGpuOptions({})).toBeUndefined();
+    expect(kitGpuOptions({ gpuOptions: { timestamps: false } })).toEqual({ timestamps: false });
+    expect(kitGpuOptions({ xr: withXr() })).toEqual({ xrCompatible: true });
+    expect(kitGpuOptions({ xr: withXr(), gpuOptions: { timestamps: false } })).toEqual({
+      timestamps: false,
+      xrCompatible: true,
+    });
+    expect(kitGpuOptions({ xr: withXr(), gpuOptions: { xrCompatible: false } })).toEqual({
+      xrCompatible: false,
+    });
   });
 });

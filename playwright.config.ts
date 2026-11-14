@@ -101,6 +101,7 @@ export const WEBKIT_SPECS = [
   'render4',
   'post2',
   'fx-core',
+  'decals-core',
   'demos/voxel',
   'demos/showroom',
   'stereo',

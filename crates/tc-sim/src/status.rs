@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use crate::game::PlayerId;
+use crate::sync::SyncStats;
 
 /// The longest a published status lags the game while it advances.
 pub const STATUS_PUBLISH: Duration = Duration::from_secs(1);
@@ -48,6 +49,11 @@ pub struct SimStatus {
     /// Batches of events refused because the log couldn't encode them (a
     /// game bug; the loop runs on).
     pub refused: u64,
+    /// Game messages dropped over a rate lane's budget
+    /// ([`Game::lanes`](crate::Game::lanes)).
+    pub limited: u64,
+    /// The live queries' counters.
+    pub sync: SyncStats,
 }
 
 impl fmt::Display for SimStatus {
@@ -72,6 +78,12 @@ impl fmt::Display for SimStatus {
         }
         if self.refused > 0 {
             write!(f, " {} refused", self.refused)?;
+        }
+        if self.limited > 0 {
+            write!(f, " {} limited", self.limited)?;
+        }
+        if self.sync.entries > 0 {
+            write!(f, " {} queries", self.sync.entries)?;
         }
         if let Some(e) = &self.store_error {
             write!(f, " store failed: {e}")?;
