@@ -5,6 +5,7 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 ## Unreleased
 
 - Render fit (ws/render-fit, wave 2.0 B8): the core and voxel hooks a voxel game's renderer needs, all off by default. *Added* (render): `RenderCoreOptions.reversedZ` / `passLabels`, `PassDesc.reversedZ` / `depthClear`, `CorePass.label` / `reversedZ` / `depthClear`, `RenderCore.reversedZ`, `CoreDrawContext.reversedZ`, `CorePassContext.reversedZ`, `coreDepthCompare`, `coreDepthFar`, `CoreTarget.clearDepth` / `variant`, `CoreTimestamps` (pass ids; `prepare(encoder, views, timestamps)`), `DrawSetDesc.variants` / `passes` / `maxDistance` / `enabled` (`DrawSetVariant`, `DrawSetPassJoin`, `DrawSet.maxDistance` / `enabled` / `variantNames`), `sphereBeyond`, and `cullSlotsCpu`'s trailing `maxDistance`. Shader modules are shared between sets with equal WGSL, and `setBindGroups` with the same layouts keeps pipelines. *Added* (voxel): `VoxelMaterial.vertex` / `vertexEntry` over the world's new `voxel_vertex` function, `BlockDef.lodSolid` / `parts` / `partsReplace` (and the optional `BlockTable` arrays), `SectionMeshOptions.leafLod` / `insets`, `SectionMesh.tiered`, `SectionJob.insets`, `SectionMeshPoolOptions.leafLod`, `VoxelWorldOptions.leafLod`, the job request's `leafLod`, and the `solid` / `part` / `twin` fields in `VOXEL_VERTEX_OPTIONAL`.
+- Bundle budget after B8 (ws/render-fit): `./render` 68700 (merged local 67927 B gzip, +827 B for the render-fit core hooks).
 
 ## 2.0.0-next.8 (2026-11-14)
 
