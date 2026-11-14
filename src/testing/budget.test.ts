@@ -119,9 +119,10 @@ describe('createWorkMeter', () => {
     const { meter } = setup();
     const r = meter.measure(() => {
       const enc = meter.device.createCommandEncoder();
+      const args = meter.device.createBuffer({ size: 20, usage: GPUBufferUsage.INDIRECT });
       const pass = enc.beginRenderPass({ colorAttachments: [] });
-      pass.drawIndirect({} as GPUBuffer, 0);
-      pass.drawIndexedIndirect({} as GPUBuffer, 0);
+      pass.drawIndirect(args, 0);
+      pass.drawIndexedIndirect(args, 0);
       pass.executeBundles([]);
       pass.end();
     });
