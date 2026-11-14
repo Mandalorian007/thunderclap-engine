@@ -228,6 +228,9 @@ export function createPointerDispatcher(
 
   const onDown = (e: PointerEvent) => {
     deliver('pointerDown', fill(e));
+    // A finger is captured implicitly. Explicit capture on one can outlive the finger in WebKit
+    // (iPad Safari) and take the next tap's release, so only mice and pens are captured.
+    if (e.pointerType === 'touch') return;
     try {
       target.setPointerCapture(e.pointerId);
     } catch {
