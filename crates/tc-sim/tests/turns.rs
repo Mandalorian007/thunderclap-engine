@@ -213,8 +213,9 @@ fn the_store_rolls_back_to_a_mark_and_plays_on_from_it() {
 
 #[test]
 fn a_returning_player_takes_its_seat_and_resumes_the_board() {
-    // A small board: both messages carry the hash, so it is patched.
-    let (ada, bo) = ("ada", "bo");
+    // Long names: the board must outweigh its patch, or the server resends
+    // it whole (cheaper), and a resume shows no difference.
+    let (ada, bo) = ("ada-of-the-long-name", "bo-of-the-even-longer-name");
     let dir = temp_dir("resume");
     let mut d = create(&dir);
     let (x, mut rx_x) = d.connect(ada, Empty);
