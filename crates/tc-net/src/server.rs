@@ -135,6 +135,12 @@ impl<P: Protocol> Server<P> {
         self.io.snapshot()
     }
 
+    /// The live network counters, to read later (an admin channel's
+    /// status).
+    pub fn io_counters(&self) -> Arc<IoCounters> {
+        self.io.clone()
+    }
+
     /// Tells the sessions the game has stopped taking requests: they close
     /// (sending `Rejected` with [`session::GAME_CRASHED`] if `crashed`).
     pub fn game_ended(&self, crashed: bool) {

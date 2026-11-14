@@ -1,0 +1,24 @@
+[package]
+name = "tc-admin"
+description = "ThunderClap's admin side of a game server: a loopback control channel (status, stop, pause, resume, reload, backup, revoke, reports, game arms), its blocking client, and a self-pruning reports directory"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+tc-net.workspace = true
+tc-auth.workspace = true
+tc-store.workspace = true
+tc-sim.workspace = true
+tokio = { workspace = true, features = ["rt", "net", "io-util", "sync", "time", "macros"] }
+serde_json.workspace = true
+sha2.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tc-wire.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util", "sync", "time", "macros"] }
+
+[lints]
+workspace = true

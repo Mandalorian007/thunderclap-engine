@@ -19,6 +19,8 @@ tc-auth = { path = "crates/tc-auth" }
 tc-store = { path = "crates/tc-store" }
 tc-sim = { path = "crates/tc-sim" }
 tc-stream = { path = "crates/tc-stream" }
+tc-admin = { path = "crates/tc-admin" }
+thunderclap-server = { path = "crates/thunderclap-server" }
 
 # tc-net: the connection layer.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
