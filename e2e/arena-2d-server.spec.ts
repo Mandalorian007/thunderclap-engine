@@ -20,6 +20,12 @@ interface ArenaProbe {
   frames: number;
 }
 
+declare global {
+  interface Window {
+    __arena?: ArenaProbe;
+  }
+}
+
 const hasCargo = (() => {
   try {
     execFileSync('cargo', ['--version'], { stdio: 'ignore' });
