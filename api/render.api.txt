@@ -91,10 +91,10 @@ const COMPRESSION_FEATURES: Readonly<Record<CompressionFamily, GPUFeatureName>>;
 const CORE_PASSES: readonly PassDesc[];
 
 ## CORE_VIEW_WGSL
-const CORE_VIEW_WGSL = "\nstruct CoreView {\n  viewProj: mat4x4f,\n  position: vec4f,\n  planes: array<vec4f, 6>,\n  index: u32,\n  _a: u32,\n  _b: u32,\n  _c: u32,\n  _pad: array<vec4f, 4>,\n};\n";
+const CORE_VIEW_WGSL = "\nstruct CoreView {\n  viewProj: mat4x4f,\n  position: vec4f,\n  planes: array<vec4f, 6>,\n  index: u32,\n  _a: u32,\n  _b: u32,\n  _c: u32,\n  origin: vec4f,\n  _pad: array<vec4f, 3>,\n};\n";
 
 ## CULL_WGSL
-const CULL_WGSL = "\nstruct CoreView {\n  viewProj: mat4x4f,\n  position: vec4f,\n  planes: array<vec4f, 6>,\n  index: u32,\n  _a: u32,\n  _b: u32,\n  _c: u32,\n  _pad: array<vec4f, 4>,\n};\n\nstruct CullParams { count: u32, capacity: u32, views: u32, firstInstance: u32 };\nstruct Slot { sphere: vec4f, draw: vec4u, inst: vec4u };\n@group(0) @binding(0) var<uniform> views: array<CoreView, 8>;\n@group(0) @binding(1) var<uniform> params: CullParams;\n@group(0) @binding(2) var<storage, read> slots: array<Slot>;\n@group(0) @binding(3) var<storage, read_write> args: array<u32>;\n\n@compute @workgroup_size(64) fn cs_cull(@builtin(global_invocation_id) id: vec3u) {\n  let i = id.x;\n  let v = id.y;\n  if (i >= params.count || v >= params.views) { return; }\n  let s = slots[i];\n  var visible = (s.inst.y & 1u) != 0u;\n  for (var k = 0u; k < 6u; k++) {\n    let p = views[v].planes[k];\n    if (dot(p.xyz, s.sphere.xyz) + p.w < -s.sphere.w) { visible = false; }\n  }\n  let o = (v * params.capacity + i) * 5u;\n  args[o] = s.draw.x;\n  args[o + 1u] = select(0u, s.draw.w, visible);\n  args[o + 2u] = s.draw.y;\n  args[o + 3u] = s.draw.z;\n  args[o + 4u] = select(0u, s.inst.x, params.firstInstance != 0u);\n}\n";
+const CULL_WGSL = "\nstruct CoreView {\n  viewProj: mat4x4f,\n  position: vec4f,\n  planes: array<vec4f, 6>,\n  index: u32,\n  _a: u32,\n  _b: u32,\n  _c: u32,\n  origin: vec4f,\n  _pad: array<vec4f, 3>,\n};\n\nstruct CullParams { count: u32, capacity: u32, views: u32, firstInstance: u32 };\nstruct Slot { sphere: vec4f, draw: vec4u, inst: vec4u };\n@group(0) @binding(0) var<uniform> views: array<CoreView, 8>;\n@group(0) @binding(1) var<uniform> params: CullParams;\n@group(0) @binding(2) var<storage, read> slots: array<Slot>;\n@group(0) @binding(3) var<storage, read_write> args: array<u32>;\n\n@compute @workgroup_size(64) fn cs_cull(@builtin(global_invocation_id) id: vec3u) {\n  let i = id.x;\n  let v = id.y;\n  if (i >= params.count || v >= params.views) { return; }\n  let s = slots[i];\n  var visible = (s.inst.y & 1u) != 0u;\n  for (var k = 0u; k < 6u; k++) {\n    let p = views[v].planes[k];\n    if (dot(p.xyz, s.sphere.xyz) + p.w < -s.sphere.w) { visible = false; }\n  }\n  let o = (v * params.capacity + i) * 5u;\n  args[o] = s.draw.x;\n  args[o + 1u] = select(0u, s.draw.w, visible);\n  args[o + 2u] = s.draw.y;\n  args[o + 3u] = s.draw.z;\n  args[o + 4u] = select(0u, s.inst.x, params.firstInstance != 0u);\n}\n";
 
 ## Camera
 class Camera {
@@ -215,6 +215,18 @@ interface CoreTarget {
     width: number;
     height: number;
     clear?: GPUColor;
+    viewport?: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    };
+}
+
+## CullGroup  (type-only)
+interface CullGroup {
+    readonly views: readonly RenderView[];
+    readonly planes?: 'union' | 'each';
 }
 
 ## DEFAULT_LOD_HYSTERESIS
@@ -286,11 +298,11 @@ class DrawSet {
     has(id: number): boolean;
     destroy(): void;
     get isDestroyed(): boolean;
-    upload(views: number): void;
-    dispatch(pass: GPUComputePassEncoder, views: number): void;
+    upload(groups: number): void;
+    dispatch(pass: GPUComputePassEncoder, groups: number): void;
     encoding(): Encoding;
-    bundle(view: number, color: GPUTextureFormat, depth: GPUTextureFormat | undefined, readOnly: boolean): GPURenderBundle;
-    encodeDirect(pass: GPURenderPassEncoder, view: number, color: GPUTextureFormat, depth: GPUTextureFormat | undefined): void;
+    bundle(group: number, color: GPUTextureFormat, depth: GPUTextureFormat | undefined, readOnly: boolean): GPURenderBundle;
+    encodeDirect(pass: GPURenderPassEncoder, group: number, color: GPUTextureFormat, depth: GPUTextureFormat | undefined): void;
 }
 
 ## DrawSetCull  (type-only)
@@ -1007,6 +1019,10 @@ class RenderCore {
     readonly depthFormat: GPUTextureFormat;
     readonly stats: CoreStats;
     frame: number;
+    readonly origin: Float64Array<ArrayBuffer>;
+    readonly originGrid: number;
+    groups: number;
+    onView: ((viewIndex: number) => void) | null;
      readonly viewLayout: GPUBindGroupLayout;
      readonly cullLayout: GPUBindGroupLayout;
      readonly viewBuffer: GPUBuffer;
@@ -1018,7 +1034,7 @@ class RenderCore {
     definePass(desc: PassDesc): CorePass;
     get drawSets(): readonly DrawSet[];
     get depth(): GPUTexture | null;
-    prepare(encoder: GPUCommandEncoder, views: readonly RenderView[]): void;
+    prepare(encoder: GPUCommandEncoder, views: readonly RenderView[] | readonly CullGroup[]): void;
     draw(encoder: GPUCommandEncoder, viewIndex: number, target: CoreTarget): void;
     destroy(): void;
 }
@@ -1028,6 +1044,8 @@ interface RenderCoreOptions {
     maxViews?: number;
     depthFormat?: GPUTextureFormat;
     multiDraw?: boolean;
+    originGrid?: number;
+    onView?: ((viewIndex: number) => void) | null;
 }
 
 ## RenderStats  (type-only)
@@ -1048,6 +1066,9 @@ interface RenderView {
     readonly viewProj: Float32Array;
     readonly planes: Float32Array;
     readonly position: Float32Array;
+    readonly proj?: Float32Array;
+    readonly view?: Float32Array;
+    readonly eye?: Float64Array;
 }
 
 ## Renderer
@@ -1344,6 +1365,7 @@ interface SlotDesc {
     instances?: ArenaAlloc;
     instanceCount?: number;
     bounds: ArrayLike<number>;
+    origin?: ArrayLike<number>;
 }
 
 ## SnapshotOptions  (type-only)
@@ -1633,6 +1655,15 @@ const VERTEX_SKINNED_STRIDE: number;
 ## VERTEX_STRIDE
 const VERTEX_STRIDE: number;
 
+## VIEW_SLOT
+const VIEW_SLOT: {
+    readonly viewProj: 0;
+    readonly position: 16;
+    readonly planes: 20;
+    readonly index: 44;
+    readonly origin: 48;
+};
+
 ## VIEW_SLOT_BYTES
 const VIEW_SLOT_BYTES = 256;
 
@@ -1838,7 +1869,10 @@ function sceneSize(outW: number, outH: number, opts: Required<ResolutionOptions>
 function setVertexSkin(bytes: Uint8Array, vertex: number, joints: ArrayLike<number>, weights: ArrayLike<number>): void;
 
 ## setViewFromCamera
-function setViewFromCamera(view: RenderView, camera: Camera): RenderView;
+function setViewFromCamera(view: RenderView, camera: Camera, eye?: ArrayLike<number>): RenderView;
+
+## setViewFromMatrices
+function setViewFromMatrices(view: RenderView, proj: ArrayLike<number>, worldToEye: ArrayLike<number>, eye: ArrayLike<number>): RenderView;
 
 ## sphereInPlanes
 function sphereInPlanes(planes: Float32Array, at: number, x: number, y: number, z: number, r: number): boolean;
@@ -1851,6 +1885,9 @@ function srgbToLinear(c: number): number;
 
 ## supportsTimestamps
 function supportsTimestamps(device: GPUDevice): boolean;
+
+## unionPlanesInto
+function unionPlanesInto(out: Float32Array, at: number, views: readonly RenderView[], first: number, count: number, origin: Float64Array, relative: boolean): boolean;
 
 ## uploadKtx2
 function uploadKtx2(renderer: CompressedUploadTarget, ktx2: Ktx2Texture, opts?: UploadKtx2Options): Texture;

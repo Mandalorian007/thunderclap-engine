@@ -124,7 +124,9 @@ function cullOnSubmit(s: Scene): void {
         (group!.entries[i]!.resource as unknown as { buffer: FakeBuffer }).buffer;
       const params = new Uint32Array(buf(1).data.buffer, 0, 4);
       const slots = buf(2).data.buffer;
-      const views = new Float32Array(buf(0).data.buffer);
+      // The cull binds the groups' half of the view buffer, at an offset.
+      const at = (group.entries[0]!.resource as unknown as { offset?: number }).offset ?? 0;
+      const views = new Float32Array(buf(0).data.buffer, at);
       cullSlotsCpu(
         new Float32Array(slots),
         new Uint32Array(slots),

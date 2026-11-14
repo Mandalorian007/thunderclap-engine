@@ -56,13 +56,16 @@ export { createInstanceLayout, createVertexLayout, vertexFormatBytes } from './c
 export type { CorePass, PassDepth, PassDesc } from './core/pass-list';
 export { CORE_PASSES, PassList } from './core/pass-list';
 export { QUAD_INDICES, QuadIndex, quadIndices } from './core/quad-index';
-export type { RenderView } from './core/view';
+export type { CullGroup, RenderView } from './core/view';
 export {
   CORE_VIEW_WGSL,
   createRenderView,
   MAX_VIEWS,
   setViewFromCamera,
+  setViewFromMatrices,
   sphereInPlanes,
+  unionPlanesInto,
+  VIEW_SLOT,
   VIEW_SLOT_BYTES,
   VIEW_SLOT_FLOATS,
 } from './core/view';
