@@ -103,20 +103,31 @@ at once. `NetOptions` documents each; `Hello` is the token and the game's `ext`.
   `Rejected` (the `rejected` event says whether the schema was stale; closed for good).
 - **Liveness.** A `Ping` every `pingMs` (its `Pong` measures latency for the clock); nothing heard
   for `deadMs` drops the link. Call `net.wake()` when the page comes back from hidden
-  (`LivenessOptions`).
+  (`LivenessOptions`). On a busy link, `heardBy: 'tick'` reads the clock once per liveness tick
+  instead of once per message.
 - **Reconnect.** A lost link reconnects with doubling waits and random jitter, giving up after
   `giveUpAfter` (`ReconnectOptions`). Commands in flight fail with `NetError`; live queries resume
   from the result they hold; interest is sent again. A server `Closed` with a code 4000 to 4999 (the
   game's: kicked, banned) closes for good; others reconnect. `net.status` is a `NetStatus`.
+  `net.reconnect()` drops the link and reopens at once; `reconnect({ backoff: true })` waits the
+  backoff first (`ReconnectNowOptions`).
+- **Reasons.** `down` and `closed` carry the code, the reason text and a typed `NetReason`
+  (`kind`: `gaveUp` with the `last` reason, `dead`, `handshakeTimeout`, `serverClosed`, ...;
+  `detail`, the text). A `NetError` carries its `reason` too (`commandTimeout`, `notOpen`, ...).
 - **Events.** `net.on(event, listener)` for `NetEvents`: `welcome` (a `Welcome`), `rejected`, `entities`,
-  `down`, `closed`, `game`, `interestRejected`, `control`, `state`, `error`.
-- **Commands.** `net.command(cmd)` resolves with its `CommandResult`, matched by seq.
+  `down`, `closed`, `game`, `interestRejected`, `control`, `state`, `error`. A throwing listener
+  doesn't stop the others and is reported as `error`; with `listenerErrors: 'throw'` the first
+  error is thrown out of the call that emitted it (the transport's message callback, say), as it is.
+- **Commands.** `net.command(cmd)` resolves with its `CommandResult`, matched by seq. With
+  `rawResults: true` it resolves with the result's bytes, undecoded, for a game that reads its own
+  outcome type.
 - **Live queries.** `net.query(name, args, listener, QueryOptions)` returns a `LiveQuery`. The
   server sends the result whole (`Resync`), then `Update`s whose `PatchOp`s (`PathStep` paths) the
   client applies (`applyPatch`) and checks against the result's hash (`resultHash`); a mismatch
   asks for the whole result again.
 - **Bulk lane.** With `inflate`, `Hello` offers a codec; a `Bulk` message's inflated frames are
-  handled in order and acknowledged with `Ack`.
+  handled in order and acknowledged with `Ack`. With `plainBulk: true` an uncompressed lane
+  (codec 0) is handled in the same call that received it, no `inflate` needed.
 - **Game messages.** `net.send(value)` and the `game` event carry the game's own messages.
 
 `ClientMsg` and `ServerMsg` are the envelope's TypeScript value types.

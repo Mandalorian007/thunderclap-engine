@@ -178,6 +178,7 @@ interface LivenessOptions {
     readonly pingMs?: number;
     readonly deadMs?: number;
     readonly wakeMs?: number;
+    readonly heardBy?: 'message' | 'tick';
 }
 
 ## MAX_VIEW_FIELDS
@@ -208,7 +209,7 @@ class Net {
     input(input: unknown): boolean;
     optimistic<K, V>(store: OptimisticStore<K, V>, equal?: (a: V, b: V) => boolean): Optimistic<K, V>;
     wake(): void;
-    reconnect(): void;
+    reconnect(options?: ReconnectNowOptions): void;
     close(): void;
 }
 
@@ -225,15 +226,16 @@ class NetClock {
 
 ## NetError
 class NetError extends Error {
-    constructor(message: string);
+    readonly reason: NetReason | undefined;
+    constructor(message: string, reason?: NetReason);
 }
 
 ## NetEvents  (type-only)
 interface NetEvents {
     welcome: [welcome: Welcome];
     rejected: [reason: string, stale: boolean];
-    down: [code: number, reason: string];
-    closed: [code: number, reason: string];
+    down: [code: number, reason: string, why: NetReason];
+    closed: [code: number, reason: string, why: NetReason];
     game: [value: unknown];
     entities: [changes: EntityChanges];
     interestRejected: [reason: string];
@@ -253,11 +255,37 @@ interface NetOptions {
     readonly commandMs?: number;
     readonly inflate?: (codec: number, data: Uint8Array) => Promise<Uint8Array>;
     readonly bulk?: number;
+    readonly plainBulk?: boolean;
+    readonly rawResults?: boolean;
+    readonly listenerErrors?: 'report' | 'throw';
     readonly entities?: string;
     readonly snapshots?: SnapshotBufferOptions;
     readonly timers?: Timers;
     readonly random?: () => number;
 }
+
+## NetReason  (type-only)
+interface NetReason {
+    readonly kind: NetReasonKind;
+    readonly detail: string;
+    readonly last?: NetReason;
+}
+
+## NetReasonKind  (type-only)
+type NetReasonKind =
+'closed'
+ | 'rejected'
+ | 'serverClosed'
+ | 'gaveUp'
+ | 'lost'
+ | 'handshakeTimeout'
+ | 'dead'
+ | 'wakeTimeout'
+ | 'protocol'
+ | 'reconnect'
+ | 'commandTimeout'
+ | 'notOpen'
+ | 'unencodable';
 
 ## NetSchema
 class NetSchema {
@@ -436,6 +464,11 @@ class Reader {
     option<T>(some: () => T): T | null;
     variant(): number;
     unknownVariant(typeName: string): DecodeError;
+}
+
+## ReconnectNowOptions  (type-only)
+interface ReconnectNowOptions {
+    readonly backoff?: boolean;
 }
 
 ## ReconnectOptions  (type-only)

@@ -451,3 +451,193 @@ describe('net session: game messages, interest, prediction, entities, bulk', () 
     expect(second).toBe(1);
   });
 });
+
+describe('net session: fit options', () => {
+  const welcome = schema.encode('ServerMsg', {
+    type: 'Welcome',
+    player: 1,
+    time: 0,
+    paused: false,
+    stepUs: 50_000,
+    ext: {},
+  });
+
+  /** A session over a hand-driven transport: `deliver` hands it a frame in the same call. */
+  function direct(options: Partial<NetOptions> = {}) {
+    const timers = new FakeTimers();
+    const out: ClientMsg[] = [];
+    let events: Parameters<NetOptions['connect']>[0] | null = null;
+    let opens = 0;
+    const net = createNet({
+      schema,
+      timers,
+      random: () => 0.5,
+      hello: { ext: { name: 'ann' } },
+      connect: (e) => {
+        events = e;
+        opens++;
+        timers.setTimeout(() => e.open(), 0);
+        return { send: (f) => out.push(schema.decode<ClientMsg>('ClientMsg', f)), close() {} };
+      },
+      ...options,
+    });
+    const deliver = (frame: Uint8Array) => events!.message(frame);
+    const sentOf = (type: ClientMsg['type']) => out.filter((m) => m.type === type);
+    return { net, timers, deliver, sentOf, opens: () => opens };
+  }
+
+  it('rawResults: a command resolves with its result bytes, undecoded', async () => {
+    const { net, timers, deliver, sentOf } = direct({ rawResults: true });
+    await timers.advance(0);
+    deliver(welcome);
+    const p = net.command({ type: 'Add', n: 1 });
+    const seq = (sentOf('Command')[0] as { seq: number }).seq;
+    const frame = schema.encode('ServerMsg', {
+      type: 'CommandResult',
+      seq,
+      result: { type: 'Ok', total: 5 },
+    });
+    deliver(frame);
+    const bytes = (await p) as Uint8Array;
+    expect(bytes).toBeInstanceOf(Uint8Array);
+    expect(schema.decode('Res', bytes)).toEqual({ type: 'Ok', total: 5 });
+    // Everything else is decoded as before.
+    const game: unknown[] = [];
+    net.on('game', (v) => game.push(v));
+    deliver(schema.encode('ServerMsg', { type: 'Game', value: { text: 'x' } }));
+    expect(game).toEqual([{ text: 'x' }]);
+  });
+
+  it('plainBulk: an uncompressed lane is handled in the same call and acknowledged', async () => {
+    const { net, timers, deliver, sentOf } = direct({ plainBulk: true });
+    await timers.advance(0);
+    expect(sentOf('Hello')[0]).toMatchObject({ bulk: 0 });
+    deliver(welcome);
+    const heard: string[] = [];
+    net.on('game', (v) => heard.push((v as { text: string }).text));
+    const lane = new Writer();
+    for (const text of ['a', 'b'])
+      lane.bytes(schema.encode('ServerMsg', { type: 'Game', value: { text } }));
+    const data = lane.finish();
+    deliver(schema.encode('ServerMsg', { type: 'Bulk', codec: 0, data }));
+    expect(heard).toEqual(['a', 'b']);
+    expect(sentOf('Ack')).toEqual([{ type: 'Ack', bytes: data.length }]);
+    // A compressed one with no inflate hook is still a protocol error.
+    const errors: Error[] = [];
+    net.on('error', (e) => errors.push(e));
+    deliver(schema.encode('ServerMsg', { type: 'Bulk', codec: 1, data }));
+    expect(errors[0]?.message).toMatch(/inflate hook/);
+  });
+
+  it("heardBy 'tick': reads the clock once per tick, not per message", async () => {
+    const { net, timers, deliver, opens } = direct({
+      liveness: { pingMs: 1000, deadMs: 4000, heardBy: 'tick' },
+    });
+    await timers.advance(0);
+    deliver(welcome);
+    let reads = 0;
+    const now = timers.now.bind(timers);
+    timers.now = () => {
+      reads++;
+      return now();
+    };
+    const pong = schema.encode('ServerMsg', { type: 'InterestRejected', reason: '' });
+    for (let i = 0; i < 100; i++) deliver(pong);
+    expect(reads).toBeLessThan(5);
+    // Still alive: heard at each tick, so it never counts as dead while frames arrive.
+    for (let i = 0; i < 10; i++) {
+      await timers.advance(1000);
+      deliver(pong);
+    }
+    expect(opens()).toBe(1);
+    await timers.advance(5000);
+    expect(opens()).toBe(2);
+    expect(net.status).not.toBe('closed');
+  });
+
+  it('structured reasons: down and closed carry a typed kind, NetError a reason', async () => {
+    const { net, timers, deliver } = direct({
+      liveness: { pingMs: 1000, deadMs: 2000 },
+      reconnect: { giveUpAfter: 1000 },
+      handshakeMs: 300,
+      commandMs: 100,
+    });
+    await timers.advance(0);
+    deliver(welcome);
+    const cmd = net.command({ type: 'Fail' });
+    const timedOut = expect(cmd).rejects.toMatchObject({
+      reason: { kind: 'commandTimeout', detail: 'command 1 timed out' },
+    });
+    await timers.advance(100);
+    await timedOut;
+    const seen: unknown[] = [];
+    net.on('down', (code, reason, why) => seen.push(['down', code, reason, why.kind]));
+    net.on('closed', (code, _r, why) => seen.push(['closed', code, why.kind, why.last?.kind]));
+    await timers.advance(2500);
+    expect(seen[0]).toEqual(['down', 1006, expect.stringMatching(/nothing heard/), 'dead']);
+    await timers.advance(5000);
+    expect(seen.at(-1)).toEqual(['closed', 1006, 'gaveUp', 'handshakeTimeout']);
+    await expect(net.ready).resolves.toBeDefined();
+    await expect(net.command({})).rejects.toMatchObject({ reason: { kind: 'notOpen' } });
+  });
+
+  it('structured reasons: Rejected, a final Closed and close()', async () => {
+    const a = direct();
+    const why: string[] = [];
+    a.net.on('closed', (_c, _r, w) => why.push(w.kind));
+    await a.timers.advance(0);
+    a.deliver(schema.encode('ServerMsg', { type: 'Rejected', reason: 'no', staleSchema: false }));
+    const b = direct();
+    b.net.on('closed', (_c, _r, w) => why.push(w.kind));
+    await b.timers.advance(0);
+    b.deliver(welcome);
+    b.deliver(schema.encode('ServerMsg', { type: 'Closed', code: 4002, reason: 'banned' }));
+    const c = direct();
+    c.net.on('closed', (_c, _r, w) => why.push(`${w.kind}:${w.detail}`));
+    c.net.close();
+    expect(why).toEqual(['rejected', 'serverClosed', 'closed:closed']);
+  });
+
+  it("listenerErrors 'throw': the others run, then the first error leaves the call", async () => {
+    const { net, timers, deliver } = direct({ listenerErrors: 'throw' });
+    await timers.advance(0);
+    const boom = new Error('boom');
+    let second = 0;
+    const errors: Error[] = [];
+    net.on('error', (e) => errors.push(e));
+    net.on('welcome', () => {
+      throw boom;
+    });
+    net.on('welcome', () => second++);
+    expect(() => deliver(welcome)).toThrow(boom);
+    expect(second).toBe(1);
+    expect(errors).toEqual([]);
+    expect(net.status).toBe('open');
+    // Not a protocol error: the connection stays up.
+    net.on('game', () => {
+      throw boom;
+    });
+    expect(() =>
+      deliver(schema.encode('ServerMsg', { type: 'Game', value: { text: 'x' } })),
+    ).toThrow(boom);
+    expect(net.status).toBe('open');
+  });
+
+  it('reconnect({ backoff: true }) waits the backoff; reconnect() reopens at once', async () => {
+    const { net, timers, deliver, opens } = direct({
+      reconnect: { initialDelay: 400, jitter: 0 },
+    });
+    await timers.advance(0);
+    deliver(welcome);
+    net.reconnect();
+    await timers.advance(0);
+    expect(opens()).toBe(2);
+    deliver(welcome);
+    net.reconnect({ backoff: true });
+    await timers.advance(399);
+    expect(opens()).toBe(2);
+    expect(net.status).toBe('down');
+    await timers.advance(1);
+    expect(opens()).toBe(3);
+  });
+});

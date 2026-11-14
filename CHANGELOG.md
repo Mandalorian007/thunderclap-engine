@@ -4,6 +4,7 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 
 ## Unreleased
 
+- Net session fit for a game with its own protocol (ws/net-fit, E9 part 1). Additive; defaults unchanged (`api/` grows). *Added* (net): `NetOptions.rawResults` (`command()` resolves with the result's encoded bytes, undecoded), `NetOptions.plainBulk` (an uncompressed `Bulk`, codec 0, handled in the same call that received it and acknowledged; without `inflate`, `Hello` offers codec 0), `LivenessOptions.heardBy: 'message' | 'tick'` (`'tick'` reads the clock once per liveness tick, not per message), `NetReason` / `NetReasonKind` (typed reasons: the `down` and `closed` events take a third argument `why`, and `NetError.reason`; `gaveUp` names the `last` reason), `NetOptions.listenerErrors: 'report' | 'throw'` (`'throw'` runs the other listeners, then throws the first error out of the emitting call), and `Net.reconnect(options?: ReconnectNowOptions)` with `backoff` (wait the reconnect backoff instead of reopening at once). *Changed:* a `down` listener now runs after the retry is scheduled, so a listener that calls `close()` stops it. Tests in `src/net/session.test.ts` (*net session: fit options*).
 ## 2.0.0-next.9 (2026-11-14)
 
 - Release budget: `./ui` 94300 -> 94500 (ui-follow left 580 B of local headroom; CI's gzip reads about 300 B more).

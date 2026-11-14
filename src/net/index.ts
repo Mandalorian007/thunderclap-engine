@@ -67,8 +67,11 @@ export {
   NetError,
   type NetEvents,
   type NetOptions,
+  type NetReason,
+  type NetReasonKind,
   type NetStatus,
   type QueryOptions,
+  type ReconnectNowOptions,
   type ReconnectOptions,
   type Welcome,
 } from './session';
