@@ -19,11 +19,12 @@ export type LutFn = (r: number, g: number, b: number) => readonly [number, numbe
 /**
  * The texels `createLutTexture` uploads: `size`³ RGBA8 values, red fastest, then green, then
  * blue (one `size`×`size` slice per blue step). Exported so a LUT can be checked or edited on the
- * CPU before upload.
+ * CPU before upload. `into` (ws/actor-post-fit): an array at least `size`³ × 4 long to fill and
+ * return instead of a new one.
  */
-export function lutTexels(size: LutSize, fn: LutFn): Uint8Array {
+export function lutTexels(size: LutSize, fn: LutFn, into?: Uint8Array): Uint8Array {
   const n = size;
-  const out = new Uint8Array(n * n * n * 4);
+  const out = lutOut(into, n * n * n * 4, Uint8Array);
   const step = 1 / (n - 1);
   let o = 0;
   for (let b = 0; b < n; b++) {
@@ -43,11 +44,12 @@ export function lutTexels(size: LutSize, fn: LutFn): Uint8Array {
 
 /**
  * `lutTexels` as `rgba16float` (ws/post-fit): `size`³ half floats ×4 (bit patterns), same order,
- * alpha 1. Values are not clamped.
+ * alpha 1. Values are not clamped. `into` (ws/actor-post-fit) is filled instead of a new array
+ * when given (at least `size`³ × 4 long), as for `lutTexels`.
  */
-export function lutTexelsHalf(size: LutSize, fn: LutFn): Uint16Array {
+export function lutTexelsHalf(size: LutSize, fn: LutFn, into?: Uint16Array): Uint16Array {
   const n = size;
-  const out = new Uint16Array(n * n * n * 4);
+  const out = lutOut(into, n * n * n * 4, Uint16Array);
   const step = 1 / (n - 1);
   const one = toHalf(1);
   let o = 0;
@@ -91,16 +93,57 @@ export function createLutTexture(
  * Rewrite a LUT made by `createLutTexture` from `fn` in place (ws/post-fit): same texture, so
  * a stack that binds it keeps its bind groups (a regrade costs one upload, no rebuild). Its
  * size and format are the texture's.
+ *
+ * `out` (ws/actor-post-fit): the texels are built in it instead of a new array, so a game that
+ * regrades during play allocates nothing. A `Uint16Array` for an `rgba16float` LUT, a
+ * `Uint8Array` for `rgba8unorm`, at least `size`³ × 4 long (`lutScratch` makes one); the
+ * wrong kind or a short one throws.
  */
-export function writeLutTexture(device: GPUDevice, texture: GPUTexture, fn: LutFn): void {
+export function writeLutTexture(
+  device: GPUDevice,
+  texture: GPUTexture,
+  fn: LutFn,
+  out?: Uint8Array | Uint16Array,
+): void {
   const size = texture.width as LutSize;
   const half = texture.format === 'rgba16float';
+  if (out !== undefined && out instanceof Uint16Array !== half) {
+    throw new Error(
+      `writeLutTexture: a ${texture.format} LUT needs a ${half ? 'Uint16Array' : 'Uint8Array'}`,
+    );
+  }
   device.queue.writeTexture(
     { texture },
-    half ? lutTexelsHalf(size, fn) : lutTexels(size, fn),
+    half
+      ? lutTexelsHalf(size, fn, out as Uint16Array | undefined)
+      : lutTexels(size, fn, out as Uint8Array | undefined),
     { bytesPerRow: size * (half ? 8 : 4), rowsPerImage: size },
     [size, size, size],
   );
+}
+
+/**
+ * A buffer for `writeLutTexture`'s `out` (ws/actor-post-fit): `size`³ × 4 texels of `format`'s
+ * kind (`Uint16Array` for `rgba16float`, 256 KB at 32³; `Uint8Array` for `rgba8unorm`).
+ */
+export function lutScratch(size: LutSize, format: 'rgba16float'): Uint16Array;
+export function lutScratch(size: LutSize, format?: 'rgba8unorm'): Uint8Array;
+export function lutScratch(
+  size: LutSize,
+  format: LutFormat = 'rgba8unorm',
+): Uint8Array | Uint16Array {
+  const n = size * size * size * 4;
+  return format === 'rgba16float' ? new Uint16Array(n) : new Uint8Array(n);
+}
+
+function lutOut<T extends Uint8Array | Uint16Array>(
+  into: T | undefined,
+  n: number,
+  Kind: { new (n: number): T },
+): T {
+  if (into === undefined) return new Kind(n);
+  if (into.length < n) throw new Error(`LUT texels: ${into.length} < ${n}`);
+  return into;
 }
 
 /** A LUT that leaves colours alone: the starting point for a graded one. */

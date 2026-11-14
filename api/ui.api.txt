@@ -467,6 +467,7 @@ class DomPresenter implements SpecPresenter {
     get unitScale(): number;
     setScale(scale: number): void;
     apply(relaid: boolean): void;
+    tailsToEnd(): void;
     el(id: string, row?: string | null): HTMLElement | null;
     rows(id: string): string[];
     reveal(id: string, key: string): boolean;

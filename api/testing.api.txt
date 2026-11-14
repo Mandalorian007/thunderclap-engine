@@ -167,10 +167,11 @@ class FakeAudioPanner extends FakeAudioNode {
 
 ## FakeAudioParam
 class FakeAudioParam {
-    value: number;
     events: FakeAudioParamEvent[];
     minValue?: number;
     constructor(v?: number);
+    get value(): number;
+    set value(v: number);
     setValueAtTime(v: number, t: number): void;
     linearRampToValueAtTime(v: number, t: number): void;
     exponentialRampToValueAtTime(v: number, t: number): void;

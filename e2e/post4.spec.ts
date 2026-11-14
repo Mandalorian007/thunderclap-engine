@@ -8,7 +8,8 @@
  *   the ws/post-3 resolve did; a striped cube moving under a still camera strays from the
  *   TAA-off frame at most half as far with velocity reprojection as with the camera matrix
  *   (ws/post-5); creeping 0.37 px a frame on jitter, it keeps more of its detail with the
- *   Catmull-Rom history filter than with bilinear, and trails no more (ws/post-6);
+ *   Catmull-Rom history filter than with bilinear, and trails no more (ws/post-6); the cheaper
+ *   `quality: 'fast'` path converges and trails within the same bounds (ws/actor-post-fit);
  * - ssr: with the rough-metal target the smooth half of the floor reflects and the rough half
  *   does not;
  * - blur: with the velocity target a cube moving under a still camera blurs and the static
@@ -98,6 +99,23 @@ test('taa: a static scene converges on camera jitter; a moving edge ghosts no mo
   expect(Math.hypot(c.jitterConverge[0], c.jitterConverge[1])).toBeGreaterThan(0);
   expect(c.jitterConverge[0]).toBeLessThanOrEqual(0.5);
   expect(c.jitterConverge[1]).toBeLessThanOrEqual(0.5);
+  expect(c.convergedDelta!).toBeLessThan(1 / 255);
+  await expect.poll(async () => (await read()).ghost ?? -1).toBeGreaterThanOrEqual(0);
+  const g = await read();
+  expect(g.ghost!).toBeLessThanOrEqual(GHOST_TODAY + GHOST_MARGIN);
+  expect(g.gpuErrors).toBe(0);
+  expect(errors).toEqual([]);
+});
+
+test('taa fast: the cheaper path converges as close and ghosts no more than before', async ({
+  page,
+  wrapper,
+}) => {
+  const s0 = await open(page, wrapper, 'taa&fast');
+  expect(s0.mode).toBe('taa');
+  await expect.poll(async () => (await read()).convergedDelta ?? -1).toBeGreaterThanOrEqual(0);
+  const c = await read();
+  expect(c.active).toBe(true);
   expect(c.convergedDelta!).toBeLessThan(1 / 255);
   await expect.poll(async () => (await read()).ghost ?? -1).toBeGreaterThanOrEqual(0);
   const g = await read();

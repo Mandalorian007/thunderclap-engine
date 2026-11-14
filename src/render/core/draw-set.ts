@@ -56,7 +56,8 @@ export interface DrawSetShader {
    * the layouts' `wgslDecode` and a `struct VertexIn` holding the vertex layout's fields and then
    * the instance layout's, so the code starts at `@vertex fn vs(in: VertexIn) -> ...`. With the
    * core's `originGrid`, `VertexIn` ends with `core_origin: vec3f`: the slot's origin relative to
-   * the frame origin, which the shader adds to its slot-local positions.
+   * the frame origin, which the shader adds to its slot-local positions. With no vertex or
+   * instance attributes it holds `core_vertex: u32` (the vertex index), with or without the origin.
    */
   code: string;
   /** Default `'vs'`. */
@@ -648,8 +649,9 @@ export class DrawSet {
       vl.wgslFields(0),
       il ? il.wgslFields(vl.attributes.length) : '',
       host.originOn ? `@location(${originLoc}) core_origin: vec3f,` : '',
-      // No fields: the vertex index, so the struct is not empty.
-      vl.attributes.length + (il?.attributes.length ?? 0) === 0 && !host.originOn
+      // No attributes: the vertex index (also beside the origin, ws/actor-post-fit, so a set
+      // drawn from the vertex index alone reads both).
+      vl.attributes.length + (il?.attributes.length ?? 0) === 0
         ? '@builtin(vertex_index) core_vertex: u32,'
         : '',
     ]

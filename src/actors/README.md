@@ -41,24 +41,28 @@ actors.prepare(encoder, [view], performance.now() / 1000);
 | --- | --- |
 | `createActorSystem(core, opts)` | the slot table, the pose pass and the actors' draw set on a render core |
 | `defineRig(desc)` | a model to add: `kind: 'rigid'` (a part model, each named top-level part a bone) or `kind: 'linear'` (a `Skeleton` and skinned meshes in the 56-byte `VERTEX_SKINNED_STRIDE` layout); clips are baked at `fps` (30) |
-| `actors.addModel(rig)` | returns the model id a record names |
-| `actors.setRecord(slot, input)` | writes fields; only changed slots upload, as one range a frame |
+| `actors.addModel(rig, opts?)` | returns the model id a record names; `opts.lods` (`ActorModelOptions`) gives the model its own LOD distances |
+| `actors.setRecord(slot, input)` | writes fields; only changed slots upload, one write per run of changed slots (`stats.recordWrites`) |
 | `actors.remove(slot)`, `has(slot)`, `readF32` / `readU32` | the CPU mirror |
-| `actors.prepare(encoder, views, time)` | uploads, resets the indirect counts and runs the pose pass |
+| `actors.prepare(encoder, views, time, timestampWrites?)` | uploads, resets the indirect counts and runs the pose pass (timed with the writes given, for example `GpuTimer.pass('actors')`) |
+| `actors.lodScale`, `actors.vertexCap` (`opts.lodScale`, `opts.vertexCap`) | scale every LOD distance, and cap the vertices of actors per view (an actor past it draws its model's coarsest mesh); read each `prepare`, so a frame governor may set them |
+| `opts.tableWords`, `actors.writeTable(data, at?)` | a game table bound to the pose pass at group 0 binding 7, read with `actor_table_word(i)` / `actor_table_f32(i)` |
+| `opts.asyncPipeline`, `actors.ready` | make the pose pipeline with `createComputePipelineAsync`; the actors draw nothing until `ready` settles |
+| `opts.showLive` | false keeps every model's draws in the body's bundle from the start (no re-record on a model's first actor); `ActorDrawSetDesc.showLive` does the same for one set |
 | `actors.poseCpu(slot, out, 'world' or 'skin', time?)` | the same pose on the CPU, for hit tests, attachments and tests |
 | `actors.bones`, `actors.args`, `drawOf(model, lod)` | the GPU outputs, for readback or a game's own pass |
 | `recordShape(layout)` / `opts.recordLayout` | extra per-actor fields (`f32`, `u32`, `i32`) after the 20 header words, visible to WGSL as `ACTOR_FIELD_<NAME>` |
 | `ACTOR_RECORD` | the header's word offsets |
 | `opts.poseWgsl` / `opts.poseCpu` (`ActorPoseCpu`) | the pose hook (ws/actor-fit): `fn actor_pose(actor, model, node, p: Trs, time) -> Trs` changes each node's local transform after the clips; its CPU twin keeps `poseCpu` matching |
-| `actors.addDrawSet(desc)` | another set over the same models, poses and visible lists with its own shader (`ActorDrawSetDesc`: entries, blend, pass, order, own groups at 2+); `shape: 'actor'` with `opts.actorVertices` draws that many unindexed vertices per visible actor (a contact shadow's quad) |
+| `actors.addDrawSet(desc)` | another set over the same models, poses and visible lists with its own shader (`ActorDrawSetDesc`: entries, blend, pass, order, own groups at 2+); `shape: 'actor'` with `opts.actorVertices` draws that many unindexed vertices per visible actor (a contact shadow's quad); a list (`[6, 36]`) gives each count its own record and a set picks one with `desc.vertices` |
 
 ## How it works
 
-- **Records.** `slots` × `stride` words on the CPU and in one storage buffer. `setRecord` marks a dirty range; `prepare` uploads it in one `writeBuffer`.
-- **Pose pass.** One thread per slot up to the highest used. It places the actor at `position + velocity × (time − since)` and culls its bounding sphere against each view's frustum. It picks the LOD by distance to view 0, samples the baked clips (two, blended), and writes the bones into `actors.bones`. Then it appends itself to its draw's instance list with an atomic add on the indirect args.
+- **Records.** `slots` × `stride` words on the CPU and in one storage buffer. `setRecord` marks its slot; `prepare` uploads each run of changed slots, merging runs less than 1 KB apart, at most 16 writes a frame (the last covers the rest).
+- **Pose pass.** One thread per slot up to the highest used. It places the actor at `position + velocity × (time − since)` and culls its bounding sphere against each view's frustum. Its sphere's radius is the record's `cullRadius` (word 19), or the model's radius × scale when 0. It picks the LOD by distance to view 0 against the model's own distances (or the system's), each × `lodScale`; with `vertexCap`, a per-view counter of indices drawn sends an actor past it to its model's coarsest mesh. It samples the baked clips (two, blended), and writes the bones into `actors.bones`. Then it appends itself to its draw's instance list with an atomic add on the indirect args.
 - **Draws.** One `DrawSet` with `cull: 'external'`: the core records its bundle once, and the pose pass fills the instance counts. A vertex is 32 bytes (position, normal, colour, four joints and weights, and the draw id), so rigid and skinned models share one pipeline.
 - **Empty models.** A model no record shows has its draws hidden, so its indirect draws leave the bundle (re-recorded only when a model gains its first actor or loses its last).
-- **Shared sets.** `addDrawSet` prepends the actor buffers at group 1 and helpers (`actor_at(draw, inst)`, `actor_word`, `actor_position`, `actor_yaw`, `actor_scale`, `actor_model`, `actor_bone`, `actor_skin`, `actor_point`, `actor_dir`, `actor_draw_of`, `actor_light`). Its slots are the model meshes and read the system's arguments, so it costs one more bundle and no pass. With `actorVertices` each (view, mesh) cell is nine words: the body's `drawIndexedIndirect`, then a `drawIndirect` of `actorVertices` vertices whose first vertex is `mesh × actorVertices`.
+- **Shared sets.** `addDrawSet` prepends the actor buffers at group 1 and helpers (`actor_at(draw, inst)`, `actor_word`, `actor_position`, `actor_yaw`, `actor_scale`, `actor_model`, `actor_bone`, `actor_skin`, `actor_point`, `actor_dir`, `actor_draw_of`, `actor_light`). Its slots are the model meshes and read the system's arguments, so it costs one more bundle and no pass. With `actorVertices` each (view, mesh) cell is the body's five words of `drawIndexedIndirect`, then a four-word `drawIndirect` per count, of that many vertices, whose first vertex is `mesh × count`. Every set (the body too) has an empty shadow fragment entry (`actor_shadow_fs`), so its shadow pipeline keeps the actor groups bound.
 - **Lighting.** Each record carries a light word (RGBA8). `opts.sampleLight(x, y, z)` fills it when a position is set (for example, from a voxel light grid). `opts.lightWgsl` replaces the default `actor_light(actor, world, normal, color, light)` with the game's shading.
 
 ## Limits
@@ -69,7 +73,8 @@ Up to 65,535 slots, 64 bones a slot (16 by default), 4 LOD distances, `maxModels
 
 | Name | Kind |
 | --- | --- |
-| `ActorSystem`, `ActorSystemOptions`, `ActorStats` (`calls`, `recordBytes`, `dispatched`) | the system, its options and its per-frame counts |
+| `ActorSystem`, `ActorSystemOptions`, `ActorStats` (`calls`, `recordBytes`, `recordWrites`, `dispatched`) | the system, its options and its per-frame counts |
+| `ActorModelOptions` | `addModel`'s per-model options (`lods`) |
 | `ActorRig`, `ActorMesh`, `BakedClip` | what `defineRig` returns: bones, meshes (one per LOD) and clips baked into TRS frames |
 | `RigDesc`, `RigidRigDesc`, `RigidBoneDesc`, `LinearRigDesc`, `SkinnedMeshDesc`, `ActorClipDesc` | what `defineRig` takes |
 | `bakeClip`, `ACTOR_CLIP_FPS` | bake one `AnimationClip` at a rate (30 by default) |

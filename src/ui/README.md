@@ -1138,10 +1138,17 @@ flat screen, a touch screen and in a headset. All additive: a spec without them 
 - **Lists.** A list's new count lays the panel out again (its content's height follows). A tail
   list goes to its end after its rows are placed (the new end, not the old), and back to it when
   a hidden log is shown again (WebKit resets a hidden scroller to 0); a player who scrolled up
-  stays there until they scroll back to the end.
+  stays there until they scroll back to the end. A tail kept due while the embedder hid the host (`hidden`,
+  `display: none`) goes to its end when the host gets a box again (the presenter's
+  `ResizeObserver` on the host, before that paint), or at once with `presenter.tailsToEnd()`
+  for an embedder that shows the host and reads its scroll in the same task (ws/actor-post-fit).
 - **No forced layout.** `flash`, `ring` and `again` play again from their start through the
   element's own `getAnimations()` (`currentTime = 0`, `play()`), never a class toggle with a
-  layout read in between. A flash's text set to `''` takes its class off.
+  layout read in between. A flash's text set to `''` takes its class off. The first `again` value
+  only puts `tcs-again` on (its animation plays as the class comes); each later change replays.
+  `again` on the panel's root also replays the host's own CSS animations (the embedder's look of
+  the whole panel: a shake, a flash), from the first change, with no class on the host
+  (ws/actor-post-fit).
 - **Keys.** Type-ahead calls `stopImmediatePropagation` on the keys it takes (a letter, `/`), so
   the game's key handler never also sees them, skips a key already default-prevented, and asks
   `DomOptions.holdTypeAhead(e)` first: true leaves the key to the game. A close key in the empty

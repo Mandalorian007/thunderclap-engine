@@ -17,6 +17,11 @@
  * Since ws/post-6 the history is read with a 5-tap Catmull-Rom filter by default
  * (`taa.historyFilter`, `P.taa3.z`; `taaCatmullRomWeights` is the CPU twin of its weights), so
  * a surface moving a fraction of a pixel a frame is not re-blurred by a bilinear tap each frame.
+ *
+ * Since ws/actor-post-fit `taa.quality: 'fast'` (`P.taa3.w`) takes the cheaper path for a
+ * tile GPU (an iPad's): the neighbourhood is the 5-tap cross (`TAA_CROSS`) instead of the 3×3,
+ * and the history is read with one bilinear tap whatever `historyFilter` says. About half the
+ * pass's cost on WebKit at 2360×1640; the default (`'full'`) output is unchanged.
  */
 import { type Mat4, mat4 } from '../core/math';
 import { WGSL_DEPTH_VIEW } from './ao';
@@ -148,6 +153,9 @@ struct TaaOut {
   @location(1) aux: vec4f,
 };
 
+// The 'fast' neighbourhood: the centre and its four edge neighbours.
+const TAA_CROSS = array<vec2f, 5>(vec2f(0.0, 0.0), vec2f(-1.0, 0.0), vec2f(1.0, 0.0), vec2f(0.0, -1.0), vec2f(0.0, 1.0));
+
 fn cur(uv: vec2f) -> vec3f { return textureSampleLevel(colorTex, nearest, uv, 0.0).rgb; }
 
 fn hist(uv: vec2f) -> vec3f { return textureSampleLevel(historyTex, linSamp, uv, 0.0).rgb; }
@@ -195,9 +203,14 @@ fn hist_catmull_rom(uv: vec2f) -> vec3f {
   var m2 = vec3f(0.0);
   var nearD = d;
   var nearUv = uv;
-  for (var y = -1; y <= 1; y++) {
-    for (var x = -1; x <= 1; x++) {
-      let o = uv + vec2f(f32(x), f32(y)) * t;
+  // 'fast' (ws/actor-post-fit, P.taa3.w): the centre and its four edge neighbours (a cross),
+  // and one bilinear history tap: 7 fewer colour and depth taps and 4 fewer history taps.
+  let fast = P.taa3.w > 0.5;
+  var taps = 9.0;
+  if (fast) {
+    taps = 5.0;
+    for (var k = 0u; k < 5u; k++) {
+      let o = uv + TAA_CROSS[k] * t;
       let s = cur(o);
       mn = min(mn, s);
       mx = max(mx, s);
@@ -211,10 +224,28 @@ fn hist_catmull_rom(uv: vec2f) -> vec3f {
         }
       }
     }
+  } else {
+    for (var y = -1; y <= 1; y++) {
+      for (var x = -1; x <= 1; x++) {
+        let o = uv + vec2f(f32(x), f32(y)) * t;
+        let s = cur(o);
+        mn = min(mn, s);
+        mx = max(mx, s);
+        m1 += s;
+        m2 += s * s;
+        if (velocityMode) {
+          let sd = textureSampleLevel(depthTex, nearest, o, 0u);
+          if (depth_nearer(sd, nearD)) {
+            nearD = sd;
+            nearUv = o;
+          }
+        }
+      }
+    }
   }
-  let mean = m1 / 9.0;
+  let mean = m1 / taps;
   if (P.taa.w > 0.5) {
-    let sigma = sqrt(max(m2 / 9.0 - mean * mean, vec3f(0.0)));
+    let sigma = sqrt(max(m2 / taps - mean * mean, vec3f(0.0)));
     mn = max(mn, mean - sigma);
     mx = min(mx, mean + sigma);
   }
@@ -250,7 +281,7 @@ fn hist_catmull_rom(uv: vec2f) -> vec3f {
     }
     if (keep) {
       var hs: vec3f;
-      if (P.taa3.z > 0.5) {
+      if (P.taa3.z > 0.5 && !fast) {
         hs = hist_catmull_rom(puv);
       } else {
         hs = hist(puv);

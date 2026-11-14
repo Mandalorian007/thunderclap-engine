@@ -119,8 +119,13 @@ export type { Drawable, DrawParams, InstanceBatch, InstanceParams, ViewInfo } fr
 export { Frame, INSTANCE_PARAM_FLOATS, SKIN_PARAM, writeInstanceParams } from './frame';
 export type { FullscreenEncodeOptions, FullscreenPassDesc } from './fullscreen';
 export { FullscreenPass } from './fullscreen';
-export type { GpuPassTimes, GpuTimerResult } from './gpu-timer';
-export { GpuTimer, supportsTimestamps } from './gpu-timer';
+export type {
+  GpuPassTimes,
+  GpuTimerMeasure,
+  GpuTimerOptions,
+  GpuTimerResult,
+} from './gpu-timer';
+export { GpuTimer, isWebKitUserAgent, supportsTimestamps } from './gpu-timer';
 export { InstanceList, type InstanceListOptions } from './instance-list';
 export type {
   DirectionalLight,

@@ -23,6 +23,11 @@ export type {
   SkinnedMeshDesc,
 } from './rig';
 export { ACTOR_CLIP_FPS, ACTOR_VERTEX_BYTES, bakeClip, defineRig } from './rig';
-export type { ActorDrawSetDesc, ActorStats, ActorSystemOptions } from './system';
+export type {
+  ActorDrawSetDesc,
+  ActorModelOptions,
+  ActorStats,
+  ActorSystemOptions,
+} from './system';
 export { ACTOR_VERTEX_LAYOUT, ActorSystem, createActorSystem } from './system';
 export { ACTOR_DEFAULT_LIGHT_WGSL } from './wgsl';

@@ -259,7 +259,17 @@ export interface TaaSettings {
    * fraction of a pixel. Either is clamped to the 3×3 neighbourhood.
    */
   historyFilter: TaaHistoryFilter;
+  /**
+   * The resolve's cost (ws/actor-post-fit): `'full'` (the default) the 3×3 neighbourhood and
+   * `historyFilter`; `'fast'` the centre and its four edge neighbours (a cross) for the clamp,
+   * the nearest depth and the mean, and one bilinear history tap whatever `historyFilter` says:
+   * about half the texture reads, a little softer under motion.
+   */
+  quality?: TaaQuality;
 }
+
+/** How much the TAA resolve reads (ws/actor-post-fit). See `TaaSettings.quality`. */
+export type TaaQuality = 'full' | 'fast';
 
 /** What TAA reprojects its history by (ws/post-5). See `TaaSettings.reprojection`. */
 export type TaaReprojection = 'camera' | 'velocity';
@@ -453,6 +463,7 @@ export function cinematicPostSettings(): PostSettings {
       depthReject: 0.1,
       velocityReject: 2,
       historyFilter: 'catmull-rom',
+      quality: 'full',
     },
     ssr: {
       enabled: false,
@@ -734,7 +745,7 @@ struct PostUniforms {
   dirt: vec4f,       // enabled, intensity, -, -
   reproj: mat4x4f,   // current clip -> previous frame's clip (identity on a reset)
   // Post 5 (ws/post-5).
-  taa3: vec4f,       // depthReject (fraction), velocityReject (px), history filter (1 = Catmull-Rom, ws/post-6), -
+  taa3: vec4f,       // depthReject (fraction), velocityReject (px), history filter (1 = Catmull-Rom, ws/post-6), quality (1 = fast, ws/actor-post-fit)
 };
 @group(0) @binding(0) var<uniform> P: PostUniforms;
 `;
@@ -983,7 +994,7 @@ export function packPostUniforms(
     Math.max(0, t.depthReject),
     Math.max(0, t.velocityReject),
     t.historyFilter === 'bilinear' ? 0 : 1,
-    0,
+    t.quality === 'fast' ? 1 : 0,
   );
 }
 

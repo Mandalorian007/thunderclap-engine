@@ -49,6 +49,22 @@ export interface HarnessActorsState {
   fit: boolean;
   /** With `fit`: shadow quads the pose pass counted in view 0 (read back with `check()`). */
   shadows: number;
+  /**
+   * `?crowd=1` (ws/actor-post-fit; implies `fit`): the pose pipeline made async, the nod's
+   * amplitude read from a game table, a second `'actor'` set of 3 vertices (a marker over each
+   * head) beside the 6 of the shadow, the robot's own LOD distances (30, 200) at `?scale=` (default 1),
+   * a vertex cap (`?cap=`, default 0), each 9th actor's cull radius 0.01, `showLive` off and the
+   * pose pass timed with its own timestamp writes (label 'actors').
+   */
+  crowd: boolean;
+  /** With `crowd`: `ActorSystem.ready` settled. */
+  pipelineReady: boolean;
+  /** With `crowd`: marker triangles the pose pass counted in view 0. */
+  markers: number;
+  /** With `crowd`: record uploads of the last frame (`stats.recordWrites`). */
+  recordWrites: number;
+  /** With `crowd` and timestamps: median GPU ms of the pose pass ('actors'); -1 unmeasured. */
+  poseMs: number;
 }
 
 declare global {

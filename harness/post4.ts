@@ -18,7 +18,8 @@
  *   `taa.historyFilter` `'bilinear'` resolves the same frames beside the measured
  *   `'catmull-rom'` one: `blurSubpixel*` is the share of the cube's horizontal gradient energy
  *   each TAA frame lost against the TAA-off one, `ghostSubpixel*` the mean difference in the
- *   bands beside it, both read from the same frames. `?still` skips the bar and cube.
+ *   bands beside it, both read from the same frames. `?still` skips the bar and cube. `?fast`
+ *   (ws/actor-post-fit) measures TAA's `quality: 'fast'` path instead.
  *
  *   The stack jitters through `renderer.setJitter` (ws/post-6) from its first TAA frame. The
  *   integer-pixel cube phases replace that hook with a zero one (the stack leaves a hook it did
@@ -69,6 +70,8 @@ const mode: Post4Mode = query.has('ssr')
       ? 'ortho'
       : 'taa';
 const still = query.has('still');
+/** `?fast` (ws/actor-post-fit): the measured stack's TAA at `quality: 'fast'`. */
+const fast = query.has('fast');
 
 const state: HarnessPost4State = {
   ready: false,
@@ -612,7 +615,7 @@ async function main(): Promise<void> {
         reference0 = img;
         state.phase = 'converge';
         phaseFrame = 0;
-        measured.set({ taa: { enabled: true } });
+        measured.set({ taa: { enabled: true, ...(fast ? { quality: 'fast' as const } : {}) } });
       } else if (state.phase === 'converge' && reference0) {
         state.convergedDelta = flatDelta(img, reference0);
         state.phase = still ? 'done' : 'ghost';

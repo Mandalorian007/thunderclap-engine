@@ -38,7 +38,13 @@ export const ACTOR_RECORD = {
   tint: 17,
   /** RGBA8 light the default lighting multiplies by (white without `sampleLight`). */
   light: 18,
-  /** Reserved. */
+  /**
+   * Cull radius, f32 world units (ws/actor-post-fit): the sphere about the model's centre the
+   * pose pass culls the actor by; 0 (default) the model's radius times `scale`. Larger for an
+   * actor whose shader draws past its mesh (a held item, a flag).
+   */
+  cullRadius: 19,
+  /** The old name of word 19 (`cullRadius`). */
   flags: 19,
 } as const;
 
@@ -76,6 +82,8 @@ export interface ActorRecordInput {
   blend?: number;
   /** RGBA8 (`0xAABBGGRR`), applied to tinted vertices. */
   tint?: number;
+  /** `ACTOR_RECORD.cullRadius` (ws/actor-post-fit): world units, 0 for the model's. */
+  cullRadius?: number;
   /** The game's fields by name. */
   fields?: Readonly<Record<string, number>>;
 }

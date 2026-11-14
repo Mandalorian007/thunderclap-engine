@@ -16,6 +16,7 @@ import {
 import type { MaterialCodeTable, PartModel } from '../models/spec';
 import { Camera } from '../render/camera';
 import { createRenderCore, type RenderCore } from '../render/core/core';
+import type { DrawSetShader } from '../render/core/draw-set';
 import { createRenderView, type RenderView, setViewFromCamera } from '../render/core/view';
 import { createFakeDevice, type FakeDevice } from '../render/fake-gpu';
 import { SKIN_JOINTS_BYTE_OFFSET, VERTEX_SKINNED_STRIDE } from '../render/mesh';
@@ -24,6 +25,21 @@ import { actorMatrix } from './pose-cpu';
 import { ACTOR_HEADER_WORDS, ACTOR_NONE, ACTOR_RECORD, recordShape } from './record';
 import { ACTOR_VERTEX_BYTES, type ActorRig, defineRig } from './rig';
 import { type ActorSystem, createActorSystem } from './system';
+import { type ActorShaderConsts, actorPoseWgsl } from './wgsl';
+
+const POSE_CONSTS: ActorShaderConsts = {
+  bones: 16,
+  stride: 20,
+  maxDraws: 4,
+  slots: 8,
+  views: 1,
+  argsWords: 5,
+  actorVertices: [],
+  counters: 0,
+  table: false,
+  pose: '',
+  fieldConsts: '',
+};
 
 const MATS: MaterialCodeTable = {
   body: { color: [0.5, 0.5, 0.6] },
@@ -674,6 +690,189 @@ describe('sets sharing the actors (ws/actor-fit)', () => {
       6,
       0,
     ]);
+    expect(fake.errors).toEqual([]);
+  });
+});
+
+describe('fit for a crowd (ws/actor-post-fit)', () => {
+  const QUAD =
+    '@vertex fn vs(in: VertexIn, @builtin(instance_index) inst: u32) -> @builtin(position) vec4f {\n' +
+    '  let actor = actor_at(actor_draw_of(in.core_vertex), inst);\n' +
+    '  return view.viewProj * vec4f(actor_position(actor), 1.0);\n}\n' +
+    '@fragment fn fs() -> @location(0) vec4f { return vec4f(0.0); }';
+  const words = (fake: FakeDevice, label: string) => {
+    fake.device.queue.submit([]);
+    const b = fake.buffers.filter((x) => x.label === label).at(-1)!;
+    return { u: new Uint32Array(b.data.buffer), f: new Float32Array(b.data.buffer) };
+  };
+  const recordWrites = (s: Scene) =>
+    s.fake.writes.filter((w) => w.buffer.label === 'actors records');
+
+  it('uploads only the changed slots, near ones in one write, at most 16 writes', () => {
+    const s = scene(0, 1024);
+    frame(s, 0);
+    const before = recordWrites(s).length;
+    // Far apart (players at 1, creatures at 257): two writes, not the 255 slots between.
+    s.actors.setRecord(1, { model: 0, position: [1, 0, 1] });
+    s.actors.setRecord(257, { model: 1, position: [2, 0, 2] });
+    s.actors.setRecord(258, { model: 1, position: [3, 0, 2] });
+    frame(s, 0.016);
+    const st = s.actors.stats;
+    expect(st.recordWrites).toBe(2);
+    expect(st.recordBytes).toBe(3 * s.actors.stride * 4);
+    expect(recordWrites(s).length - before).toBe(2);
+    // Near ones (within 1 KB of unchanged records) go as one.
+    s.actors.setRecord(10, { yaw: 1 });
+    s.actors.setRecord(12, { yaw: 2 });
+    frame(s, 0.032);
+    expect(st.recordWrites).toBe(1);
+    expect(st.recordBytes).toBe(3 * s.actors.stride * 4);
+    // Many far runs: capped, the last write covers the rest, and the GPU copy matches.
+    for (let i = 0; i < 40; i++) s.actors.setRecord(i * 25, { model: 0, yaw: i });
+    frame(s, 0.048);
+    expect(st.recordWrites).toBe(16);
+    const gpu = words(s.fake, 'actors records');
+    for (let i = 0; i < 40; i++) {
+      expect(gpu.f[i * 25 * s.actors.stride + ACTOR_RECORD.yaw]).toBe(i);
+    }
+    frame(s, 0.064);
+    expect(st.recordWrites).toBe(0);
+    expect(s.fake.errors).toEqual([]);
+  });
+
+  it('takes LOD distances per model, a scale and a vertex cap', () => {
+    const s = scene(4, 16);
+    const own = s.actors.addModel(walkerRig(), { lods: [8, 16, Infinity] });
+    expect(() => s.actors.addModel(walkerRig(), { lods: [8, 4] })).toThrow(/rise/);
+    s.actors.lodScale = 0.5;
+    s.actors.vertexCap = 5000;
+    frame(s, 0);
+    const rig = words(s.fake, 'actors rigs');
+    // Header of 20 words: the system's models have no LODs of their own.
+    expect(rig.u[1 * 20 + 14]).toBe(0);
+    expect(rig.u[own * 20 + 14]).toBe(3);
+    expect([...rig.f.slice(own * 20 + 16, own * 20 + 19)]).toEqual(
+      [8, 16, 3.4e38].map(Math.fround),
+    );
+    const params = words(s.fake, 'actors params');
+    expect(params.f[9]).toBe(0.5);
+    expect(params.u[10]).toBe(5000);
+    // The counters (one per view) follow the cells and reset with them.
+    const tpl = words(s.fake, 'actors args template');
+    expect(tpl.u.length).toBe(s.core.maxViews * s.actors.maxDraws * 5 + s.actors.maxViews);
+    expect(actorPoseWgsl({ ...POSE_CONSTS, counters: 40 })).toContain(
+      'atomicAdd(&args[40u + v], n)',
+    );
+    expect(s.fake.errors).toEqual([]);
+  });
+
+  it('keeps a cull radius per record', () => {
+    const s = scene(2, 8);
+    s.actors.setRecord(1, { cullRadius: 6 });
+    expect(s.actors.readF32(1, ACTOR_RECORD.cullRadius)).toBe(6);
+    expect(s.actors.readF32(0, ACTOR_RECORD.cullRadius)).toBe(0);
+    frame(s, 0);
+    expect(words(s.fake, 'actors records').f[s.actors.stride + 19]).toBe(6);
+  });
+
+  it('makes the pose pipeline asynchronously, drawing nothing until it is ready', async () => {
+    const fake = createFakeDevice();
+    let made = 0;
+    const dev = fake.device as unknown as GPUDevice & {
+      createComputePipelineAsync: (d: GPUComputePipelineDescriptor) => Promise<GPUComputePipeline>;
+    };
+    dev.createComputePipelineAsync = async (d) => {
+      made++;
+      return dev.createComputePipeline(d);
+    };
+    const core = createRenderCore(dev);
+    const actors = createActorSystem(core, { slots: 8, asyncPipeline: true });
+    actors.addModel(walkerRig());
+    actors.setRecord(0, { model: 0 });
+    const s = { fake, device: dev, core, actors, views: [createRenderView()] } as unknown as Scene;
+    frame(s, 0);
+    expect(actors.stats.dispatched).toBe(0);
+    await actors.ready;
+    expect(made).toBe(1);
+    frame(s, 0.016);
+    expect(actors.stats.dispatched).toBe(1);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('binds a game table for the pose hook', () => {
+    const fake = createFakeDevice();
+    const core = createRenderCore(fake.device as unknown as GPUDevice);
+    const actors = createActorSystem(core, {
+      slots: 4,
+      tableWords: 8,
+      poseWgsl:
+        'fn actor_pose(actor: u32, model: u32, node: u32, p: Trs, time: f32) -> Trs {\n' +
+        '  var q = p; q.t.y += actor_table_f32(node); return q;\n}',
+    });
+    actors.addModel(walkerRig());
+    const data = new Float32Array([0.5, 1.5]);
+    actors.writeTable(data, 3);
+    // Nothing of the system's (the fake queue's own copy of the bytes aside).
+    const q = fake.device.queue;
+    const write = q.writeBuffer;
+    q.writeBuffer = () => {};
+    expect(countAllocs(() => actors.writeTable(data, 3)).typedArrays).toBe(0);
+    q.writeBuffer = write;
+    expect([...words(fake, 'actors table').f.slice(3, 5)]).toEqual([0.5, 1.5]);
+    expect(() => actors.writeTable(data, 7)).toThrow(/table words/);
+    const plain = createActorSystem(core, { slots: 4, label: 'plain' });
+    expect(() => plain.writeTable(data)).toThrow(/no table/);
+    actors.setRecord(0, { model: 0 });
+    const s = { fake, device: fake.device, core, actors, views: [createRenderView()] };
+    frame(s as unknown as Scene, 0);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it("gives each 'actor' set its own vertex count, keeps sets drawn with showLive off, times the pose pass", () => {
+    const fake = createFakeDevice();
+    const device = fake.device as unknown as GPUDevice;
+    const core = createRenderCore(device);
+    const actors = createActorSystem(core, { slots: 8, actorVertices: [6, 36], showLive: false });
+    actors.addModel(walkerRig());
+    actors.addModel(tubeRig());
+    const shadow = actors.addDrawSet({ label: 'shadow', shader: { code: QUAD }, shape: 'actor' });
+    const icon = actors.addDrawSet({
+      label: 'icon',
+      shader: { code: QUAD },
+      shape: 'actor',
+      vertices: 36,
+      showLive: false,
+    });
+    expect(() =>
+      actors.addDrawSet({ shader: { code: QUAD }, shape: 'actor', vertices: 7 }),
+    ).toThrow(/not in actorVertices/);
+    actors.setRecord(0, { model: 0 });
+    const s = { fake, device, core, actors, views: [createRenderView()] } as unknown as Scene;
+    frame(s, 0);
+    expect(shadow.ready && icon.ready).toBe(true);
+    // Thirteen words a cell: the body's five, the 6-vertex record, the 36-vertex record.
+    expect(bundleDraws(s, 'actors').map((d) => d.offset)).toEqual([0, 52]);
+    expect(bundleDraws(s, 'shadow')).toEqual([{ op: 'drawIndirect', offset: 20 }]);
+    expect(bundleDraws(s, 'icon')).toEqual([
+      { op: 'drawIndirect', offset: 36 },
+      { op: 'drawIndirect', offset: 88 },
+    ]);
+    const tpl = words(fake, 'actors args template').u;
+    expect([...tpl.slice(13 + 5, 13 + 13)]).toEqual([6, 0, 6, 0, 36, 0, 36, 0]);
+    // Each set's shadow pipeline keeps its groups (its vertices read the actors at group 1): an
+    // empty shadow fragment entry, in the body's code and every set's prelude.
+    for (const set of [actors.drawSet, shadow, icon]) {
+      const sh = (set as unknown as { desc: { shader: DrawSetShader } }).desc.shader;
+      expect(sh.shadowFragmentEntry).toBe('actor_shadow_fs');
+      expect(sh.code).toContain('@fragment fn actor_shadow_fs() {}');
+    }
+    // Timestamps for the pose pass.
+    const qs = device.createQuerySet({ type: 'timestamp', count: 2 });
+    const tw = { querySet: qs, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1 };
+    const enc = device.createCommandEncoder();
+    actors.prepare(enc, 1, 0.1, tw);
+    const pose = fake.passes.filter((p) => p.kind === 'compute').at(-1)!;
+    expect((pose.desc as GPUComputePassDescriptor).timestampWrites).toBe(tw);
     expect(fake.errors).toEqual([]);
   });
 });
