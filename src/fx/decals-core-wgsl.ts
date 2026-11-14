@@ -1,4 +1,5 @@
 import { CORE_DRAWABLE_WGSL, CORE_VIEW_EXTRA_WGSL } from '../render/core/drawable';
+import { FX_DEPTH_WGSL } from './depth';
 
 /**
  * ws/core-decals (B6): the decal shaders on the render core. Same instance layout and params
@@ -10,6 +11,7 @@ import { CORE_DRAWABLE_WGSL, CORE_VIEW_EXTRA_WGSL } from '../render/core/drawabl
 const DECAL_CORE_COMMON = /* wgsl */ `
 ${CORE_DRAWABLE_WGSL}
 ${CORE_VIEW_EXTRA_WGSL}
+${FX_DEPTH_WGSL}
 struct DecalParams {
   inv_view_proj: mat4x4f, // unused on the core (the view's extras carry it)
   // normal_bias, fade_edge, offset, multiply (1 = multiply blend)
@@ -105,7 +107,7 @@ struct BoxOut {
   let dims = vec2i(textureDimensions(scene_depth));
   let px = clamp(vec2i(in.clip.xy), vec2i(0), dims - vec2i(1));
   let d = textureLoad(scene_depth, px, 0);
-  if (d >= 1.0) { discard; }
+  if (fx_depth_is_far(d)) { discard; }
   // The fragment's own NDC: this eye's viewport, whichever half of the target it covers.
   let ndc = in.ndc.xy / in.ndc.w;
   let h = extras[view.index].invViewProj * vec4f(ndc, d, 1.0);

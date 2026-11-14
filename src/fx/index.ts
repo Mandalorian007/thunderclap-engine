@@ -24,6 +24,7 @@ export type { DecalsOnCoreOptions, DecalsOnCoreSource } from './decals-core';
 export { DecalsOnCore } from './decals-core';
 export { DECAL_CORE_BOX_WGSL, DECAL_CORE_QUAD_WGSL } from './decals-core-wgsl';
 export { WGSL_DECAL_BOX, WGSL_DECAL_DEPTH_COPY, WGSL_DECAL_QUAD } from './decals-wgsl';
+export { FX_DEPTH_WGSL, FxDepthModules, fxDepthCode } from './depth';
 export type {
   CreateEffectOptions,
   EffectDesc,
@@ -39,6 +40,15 @@ export type { EmitSurface, MeshShapeSource } from './emit-surface';
 export { buildEmitSurface, sampleEmitSurface } from './emit-surface';
 export type { FlickerOptions, PulseOptions } from './flicker';
 export { flicker, pulse, valueNoise1 } from './flicker';
+export type { LightningOptions } from './lightning';
+export {
+  LIGHTNING_FLOATS,
+  LIGHTNING_SEGMENTS,
+  LIGHTNING_STRANDS,
+  LIGHTNING_WGSL,
+  Lightning,
+  lightningFlash,
+} from './lightning';
 export type {
   AttractFalloff,
   EmitParams,
@@ -56,7 +66,11 @@ export {
   ParticleEmitter,
   ParticleSystem,
 } from './particles';
-export type { ParticleBudgetKnobOptions, ParticlesOnCoreSource } from './particles-core';
+export type {
+  ParticleBudgetKnobOptions,
+  ParticleShape,
+  ParticlesOnCoreSource,
+} from './particles-core';
 export { ParticlesOnCore, particleBudgetKnob } from './particles-core';
 export {
   COLOR_CURVE_FLOATS,
@@ -65,8 +79,10 @@ export {
   FX_SIM_FLOATS,
   FX_SPAWN_FLOATS,
   MAX_FORCES,
+  PARTICLE_BOX_LIGHT_FLOATS,
   PARTICLE_COLLIDE_WGSL,
   PARTICLE_COMPUTE_WGSL,
+  PARTICLE_CORE_BOX_WGSL,
   PARTICLE_CORE_RENDER_WGSL,
   PARTICLE_COUNT_WGSL,
   PARTICLE_EXT_COMPUTE_WGSL,
@@ -81,7 +97,15 @@ export { FX_DEFAULT_SEED } from './random';
 export type { SkyLook, SkyOptions, SkyStars } from './sky';
 export { packSkyParams, SKY_PARAMS_FLOATS, Sky, skyRay } from './sky';
 export type { SkyPassOptions } from './sky-pass';
-export { createSkyPass, SKY_PASS_LIGHT_FLOATS, SKY_PASS_WGSL, SkyPass } from './sky-pass';
+export {
+  createSkyPass,
+  SKY_INPUT_WGSL,
+  SKY_PASS_LIGHT_FLOATS,
+  SKY_PASS_MAX_PARAMS,
+  SKY_PASS_WGSL,
+  SkyPass,
+  skyHorizonColor,
+} from './sky-pass';
 export { SKY_PARAMS_WGSL, SKY_SHADE_WGSL, SKY_WGSL } from './sky-wgsl';
 export type {
   AtlasCanvas,
@@ -116,6 +140,7 @@ export type {
 export {
   WEATHER_DUST_STORM,
   WEATHER_RAIN,
+  WEATHER_RAIN_SPLASHES,
   WEATHER_SNOW,
   Weather,
   weatherDensityKnob,

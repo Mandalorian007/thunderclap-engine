@@ -75,6 +75,13 @@ export interface DrawSetShader {
    */
   shadowFragmentEntry?: string;
   /**
+   * A vertex entry for the depth-only shadow pass (ws/fx-fit): default `vertexEntry`. The
+   * shadow pass binds the view group alone (without `shadowFragmentEntry`), so a set whose
+   * colour vertex entry reads its own groups gives one that reads only the view and its vertex
+   * input, and casts from the same set.
+   */
+  shadowVertexEntry?: string;
+  /**
    * The core's extra targets the fragment entry writes (ws/core-targets): `emissive` at
    * `@location(1)`, `roughMetal` at 2, `velocity` at 3 (`core_velocity(view, p)`). Those the
    * core has and the set does not write are masked off; a written one the core lacks is dropped.
@@ -1389,7 +1396,12 @@ ${il?.wgslDecode ?? ''}
     const pipeline = this.host.device.createRenderPipeline({
       label: this.label,
       layout: this.depthOnly(color) ? this.shadowPipelineLayout() : this.layout,
-      vertex: { module, entryPoint: sh.vertexEntry ?? 'vs', buffers },
+      vertex: {
+        module,
+        entryPoint:
+          (color === null ? d.shader.shadowVertexEntry : undefined) ?? sh.vertexEntry ?? 'vs',
+        buffers,
+      },
       fragment:
         color === null
           ? d.shader.shadowFragmentEntry

@@ -118,9 +118,13 @@ describe.skipIf(!url)('turns interop', () => {
   });
 
   it('plays a round, a watcher following the board', async () => {
-    const x = open(X);
-    const o = open(O);
+    // Seats go first come, first served (the game's `join`), and two sockets opened together
+    // reach the server in either order, so X takes its seat before O connects. X's socket also
+    // opens 50 ms late, as a slow first connect would: a test that opened both at once would
+    // seat O as X every time (CI's 2.0.0-next.9 publish read ext 2 for X this way).
+    const x = open(X, { seen: [], held: new Promise((r) => setTimeout(r, 50)) });
     expect((await x.ready).ext).toBe(1);
+    const o = open(O);
     expect((await o.ready).ext).toBe(2);
     const watcher = open('cy');
     expect((await watcher.ready).ext).toBe(0);
