@@ -807,10 +807,16 @@ export interface DomCounts {
 /**
  * Count DOM writes under `root` and layout reads anywhere between `start` and `stop`, by a
  * `MutationObserver` and by wrapping the layout-reading methods and getters on the prototypes
- * (restored by `stop`). For S6's idle frames.
+ * (restored by `stop`). For S6's idle frames. `reading(false)` leaves reads between frames out
+ * (a test tool's own, such as Playwright's trace snapshots); reads count from `start` until then.
  */
-export function countDom(root: Node): { start(): void; stop(): DomCounts } {
+export function countDom(root: Node): {
+  start(): void;
+  stop(): DomCounts;
+  reading(on: boolean): void;
+} {
   const counts: DomCounts = { writes: 0, reads: 0 };
+  let live = true;
   const observer = new MutationObserver((records) => {
     counts.writes += records.length;
   });
@@ -831,7 +837,7 @@ export function countDom(root: Node): { start(): void; stop(): DomCounts } {
     Object.defineProperty(proto, name, {
       ...desc,
       value(this: unknown, ...args: unknown[]) {
-        counts.reads++;
+        if (live) counts.reads++;
         return fn.apply(this, args);
       },
     });
@@ -844,16 +850,20 @@ export function countDom(root: Node): { start(): void; stop(): DomCounts } {
     Object.defineProperty(proto, name, {
       ...desc,
       get(this: unknown) {
-        counts.reads++;
+        if (live) counts.reads++;
         return get.call(this);
       },
     });
     restore.push(() => Object.defineProperty(proto, name, desc));
   };
   return {
+    reading(on: boolean) {
+      live = on;
+    },
     start() {
       counts.writes = 0;
       counts.reads = 0;
+      live = true;
       observer.observe(root, {
         attributes: true,
         childList: true,

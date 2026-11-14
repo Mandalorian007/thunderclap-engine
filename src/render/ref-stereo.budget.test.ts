@@ -6,11 +6,18 @@
  * 1.15× one view. Today each eye costs in full: the ratio is pinned as a note.
  * `TC_REF=write` rewrites the JSON.
  */
+import { readFileSync, writeFileSync } from 'node:fs';
+import { cwd, env } from 'node:process';
 import { describe, expect, it } from 'vitest';
 import { countedRenderer, refBook, runScene } from './ref-budget.test-util';
 import { createRefScene } from './ref-scenes.test-util';
 
-const book = refBook('src/render/ref-stereo.budget.json');
+const book = refBook('src/render/ref-stereo.budget.json', {
+  readFileSync,
+  writeFileSync,
+  root: cwd(),
+  write: env.TC_REF === 'write',
+});
 
 describe('reference scene S5: stereo', () => {
   it('two eyes and one view: at or under their rows, the ratio pinned', () => {

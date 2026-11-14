@@ -17,7 +17,6 @@ import {
 } from '@thunderclap-engine/engine/render';
 import { createVoxelMesher } from '@thunderclap-engine/engine/voxel';
 import { BENCH_FRAMES, BENCH_WARMUP } from './bench-state';
-import type { HarnessRefState } from './ref-state';
 import {
   countDom,
   createRefScene,
@@ -26,6 +25,7 @@ import {
   REF_STATS_FRAME,
   type RefSceneId,
 } from './ref-scenes';
+import type { HarnessRefState } from './ref-state';
 
 const root = document.getElementById('root') as HTMLElement;
 const name = /ref-([a-z]+)\.html$/.exec(location.pathname)?.[1] ?? '';
@@ -112,9 +112,11 @@ async function main(): Promise<void> {
         measuring = true;
         dom?.start();
       }
+      dom?.reading(true);
       const t0 = performance.now();
       scene.step(i);
       const ms = performance.now() - t0;
+      dom?.reading(false);
       if (measuring && cpuCount < cpu.length) cpu[cpuCount++] = ms;
       if (i === REF_STATS_FRAME) {
         const s = renderer.stats;

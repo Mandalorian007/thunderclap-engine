@@ -6,11 +6,18 @@
  * `ref-hud.budget.json`, and so are the DOM writes (mutation records) and layout reads a frame
  * makes: the bar is 0 of each. `TC_REF=write` rewrites the JSON.
  */
+import { readFileSync, writeFileSync } from 'node:fs';
+import { cwd, env } from 'node:process';
 import { describe, expect, it } from 'vitest';
 import { countedRenderer, refBook, runScene } from '../render/ref-budget.test-util';
 import { countDom, createRefScene } from '../render/ref-scenes.test-util';
 
-const book = refBook('src/ui/ref-hud.budget.json');
+const book = refBook('src/ui/ref-hud.budget.json', {
+  readFileSync,
+  writeFileSync,
+  root: cwd(),
+  write: env.TC_REF === 'write',
+});
 
 describe('reference scene S6: the idle HUD', () => {
   it('idle frames: GPU work at or under its row, DOM writes and reads pinned', () => {

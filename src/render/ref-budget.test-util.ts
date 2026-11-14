@@ -9,16 +9,30 @@
  *   page draws the same frame, so the counted scene and the timed one cannot drift apart.
  * - `notes` keeps a scene's other numbers (DOM writes, ratios), held exactly.
  */
-import { readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { cwd, env } from 'node:process';
 import { afterAll, expect } from 'vitest';
-import { type BudgetLimits, budget, createWorkMeter, type WorkMeter, type WorkReport } from '../testing/budget';
+import {
+  type BudgetLimits,
+  budget,
+  createWorkMeter,
+  type WorkMeter,
+  type WorkReport,
+} from '../testing/budget';
 import { createFakeDevice, type FakeDevice, fakeCanvasContext } from './fake-gpu';
 import { REF_STATS_FRAME, type RefScene } from './ref-scenes.test-util';
 import { Renderer } from './renderer';
 
-export const REF_WRITE = env.TC_REF === 'write';
+/**
+ * What `refBook` needs from node, passed in by the test: this file is a test helper the build
+ * and the API checks still type without node's types.
+ */
+export interface RefHost {
+  readFileSync(path: string, encoding: 'utf8'): string;
+  writeFileSync(path: string, text: string): void;
+  /** The repo root (vitest's working directory). */
+  root: string;
+  /** `TC_REF=write`: write the JSON instead of holding to it. */
+  write: boolean;
+}
 
 /** The counters a row keeps (per frame). */
 export const REF_KEYS = [
@@ -92,18 +106,16 @@ function partRow(r: WorkReport, name: string): RefRow {
   return out;
 }
 
-/**
- * The kept JSON at `path` (from the repo root, where vitest runs: under happy-dom
- * `import.meta.url` is not a file URL) and the holds against it.
- */
-export function refBook(path: string) {
-  const file = join(cwd(), path);
+/** The kept JSON at `path` (from the repo root) and the holds against it. */
+export function refBook(path: string, host: RefHost) {
+  const file = `${host.root}/${path}`;
+  const REF_WRITE = host.write;
   const kept: RefBudget = REF_WRITE
     ? { rows: {}, parts: {}, stats: {}, notes: {} }
-    : (JSON.parse(readFileSync(file, 'utf8')) as RefBudget);
+    : (JSON.parse(host.readFileSync(file, 'utf8')) as RefBudget);
   const got: RefBudget = { rows: {}, parts: {}, stats: {}, notes: {} };
   afterAll(() => {
-    if (REF_WRITE) writeFileSync(file, `${JSON.stringify(got, null, 2)}\n`);
+    if (REF_WRITE) host.writeFileSync(file, `${JSON.stringify(got, null, 2)}\n`);
   });
   return {
     got,
@@ -123,7 +135,8 @@ export function refBook(path: string) {
       for (const [part, p] of Object.entries(parts)) {
         const w = kept.parts[name]?.[part];
         expect(w, `${name}/${part}: no row`).toBeDefined();
-        for (const k of REF_KEYS) expect(p[k], `${name}/${part} ${k}`).toBeLessThanOrEqual(w![k] + 0.0011);
+        for (const k of REF_KEYS)
+          expect(p[k], `${name}/${part} ${k}`).toBeLessThanOrEqual(w![k] + 0.0011);
       }
       return row;
     },

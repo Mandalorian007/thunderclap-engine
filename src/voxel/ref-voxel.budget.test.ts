@@ -6,11 +6,18 @@
  * every visible chunk, so the larger world costs more: both are pinned. `TC_REF=write`
  * rewrites the JSON.
  */
+import { readFileSync, writeFileSync } from 'node:fs';
+import { cwd, env } from 'node:process';
 import { describe, expect, it } from 'vitest';
 import { countedRenderer, prepared, refBook, runScene } from '../render/ref-budget.test-util';
 import { createRefScene } from '../render/ref-scenes.test-util';
 
-const book = refBook('src/voxel/ref-voxel.budget.json');
+const book = refBook('src/voxel/ref-voxel.budget.json', {
+  readFileSync,
+  writeFileSync,
+  root: cwd(),
+  write: env.TC_REF === 'write',
+});
 
 describe('reference scene S4: the voxel world', () => {
   for (const size of [8, 16]) {

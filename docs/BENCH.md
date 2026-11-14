@@ -51,6 +51,89 @@ The perf overlay (`createPerfMonitor` / `createPerfOverlay` in `@thunderclap-eng
 
 
 
+## Reference scenes
+
+Six scenes every engine change is measured on (E-041 A4): `harness/ref-<scene>.html` in a browser, the same code counted on the fake device by `src/<module>/ref-<scene>.budget.test.ts`. Each is deterministic: a fixed seed, frame `i` at `i / 60` s, a fixed camera path, procedural art only, a 1920×1080 logical view on a 1280×720 backbuffer.
+
+- `ref-board` (S1, 2D): a 48×27 tile layer, a flipbook walker and 4,000 sprites drifting on circles under the `ortho2d` camera.
+- `ref-characters` (S2): 64 (and 256) seven-joint figures, each its own `AnimationMixer` on a walk clip, skinned through one `SkinPalette`, under a sun shadow; the camera orbits.
+- `ref-arena` (S3): standard-material spheres and pillars on a floor, a sun shadow, 8 moving point lights and 2 spots, bloom and vignette (`PostStack`).
+- `ref-voxel` (S4): an 8×2×8 (and 16×2×16) chunk world of 16³ chunks, meshed before frame 0 (in a Worker on the page), flown over.
+- `ref-stereo` (S5): S2's figures (32) seen by two eyes a frame (`viewIndex` 0 and 1, half the target each); `ref-stereo-mono` is the same frame through one view.
+- `ref-hud` (S6): an idle overlay (reticle, two meters, six slots, a heading) over a still scene; every frame sets the widgets to the values they hold.
+
+Counted per frame (40 measured after 10 warm-up), as in "Counted work, 1.3 baseline" below; a row must stay at or under these, counter by counter. `↳` rows split the frame by `meter.view`: `update` is the scene's own work (animation, skinning), `view`/`left`/`right` a `renderer.render`, `hud` the overlay's `set` calls, `present` `endFrame`. Written by `TC_REF=write pnpm vitest run /ref-`; this part of the section is checked against the JSONs by `src/render/ref-scenes.budget.test.ts`.
+
+| Row | Commands | Draws | Pipelines | Bind groups | Passes | Submits | Writes | Bytes written | Creates | Typed arrays | Clock reads |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `ref-board` | 28 | 4 | 4 | 5 | 2 | 1 | 2 | 450,256 | 1 | 0 | 0 |
+| `ref-characters-64` | 46 | 6 | 6 | 6 | 3 | 1 | 4 | 36,852 | 1 | 0 | 0 |
+| ↳ `update` | 1 | 0 | 0 | 0 | 0 | 0 | 1 | 21,504 | 0 | 0 | 0 |
+| ↳ `view` | 38 | 5 | 5 | 5 | 2 | 0 | 3 | 15,348 | 1 | 0 | 0 |
+| ↳ `present` | 7 | 1 | 1 | 1 | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
+| `ref-characters-256` | 46 | 6 | 6 | 6 | 3 | 1 | 4 | 130,145.2 | 1 | 0 | 0 |
+| ↳ `update` | 1 | 0 | 0 | 0 | 0 | 0 | 1 | 86,016 | 0 | 0 | 0 |
+| ↳ `view` | 38 | 5 | 5 | 5 | 2 | 0 | 3 | 44,129.2 | 1 | 0 | 0 |
+| ↳ `present` | 7 | 1 | 1 | 1 | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
+| `ref-arena` | 252.25 | 52.38 | 48.6 | 49.6 | 15 | 1 | 6 | 18,822.4 | 1 | 0 | 0 |
+| ↳ `view` | 177.25 | 39.38 | 35.6 | 36.6 | 2 | 0 | 3 | 16,518.4 | 1 | 0 | 0 |
+| ↳ `present` | 75 | 13 | 13 | 13 | 13 | 1 | 3 | 2,304 | 0 | 0 | 0 |
+| `ref-voxel-8` | 147 | 34 | 2 | 3 | 2 | 1 | 2 | 5,728 | 1 | 0.03 | 1 |
+| ↳ `view` | 140 | 33 | 1 | 2 | 1 | 0 | 2 | 5,728 | 1 | 0 | 0 |
+| ↳ `present` | 7 | 1 | 1 | 1 | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
+| `ref-voxel-16` | 348.6 | 84.4 | 2 | 3 | 2 | 1 | 2 | 11,372.8 | 1 | 0.03 | 1 |
+| ↳ `view` | 341.6 | 83.4 | 1 | 2 | 1 | 0 | 2 | 11,372.8 | 1 | 0 | 0 |
+| ↳ `present` | 7 | 1 | 1 | 1 | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
+| `ref-stereo` | 87 | 11 | 11 | 11 | 5 | 1 | 7 | 30,780 | 1 | 0 | 0 |
+| ↳ `update` | 1 | 0 | 0 | 0 | 0 | 0 | 1 | 10,752 | 0 | 0 | 0 |
+| ↳ `left` | 40 | 5 | 5 | 5 | 2 | 0 | 3 | 10,019.6 | 1 | 0 | 0 |
+| ↳ `right` | 39 | 5 | 5 | 5 | 2 | 0 | 3 | 10,008.4 | 0 | 0 | 0 |
+| ↳ `present` | 7 | 1 | 1 | 1 | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
+| `ref-stereo-mono` | 46 | 6 | 6 | 6 | 3 | 1 | 4 | 20,766 | 1 | 0 | 0 |
+| ↳ `update` | 1 | 0 | 0 | 0 | 0 | 0 | 1 | 10,752 | 0 | 0 | 0 |
+| ↳ `view` | 38 | 5 | 5 | 5 | 2 | 0 | 3 | 10,014 | 1 | 0 | 0 |
+| ↳ `present` | 7 | 1 | 1 | 1 | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
+| `ref-hud` | 22 | 3 | 2 | 2 | 2 | 1 | 2 | 2,480 | 1 | 0 | 0 |
+| ↳ `view` | 15 | 2 | 1 | 1 | 1 | 0 | 2 | 2,480 | 1 | 0 | 0 |
+| ↳ `present` | 7 | 1 | 1 | 1 | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
+
+`renderer.stats` at frame 30, pinned exactly; e2e/ref-scenes.spec.ts checks each page draws the same:
+
+| Row | Draw calls | Triangles | Instances | Culled | Shadow draws | Views |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `ref-board` | 3 | 10,594 | 4,002 | 0 | 0 | 1 |
+| `ref-characters-64` | 3 | 5,378 | 65 | 0 | 36 | 1 |
+| `ref-characters-256` | 3 | 21,506 | 257 | 0 | 100 | 1 |
+| `ref-arena` | 35 | 47,138 | 58 | 0 | 53 | 1 |
+| `ref-voxel-8` | 33 | 15,136 | 33 | 0 | 0 | 1 |
+| `ref-voxel-16` | 83 | 47,624 | 83 | 0 | 0 | 1 |
+| `ref-stereo` | 6 | 5,380 | 66 | 0 | 42 | 2 |
+| `ref-stereo-mono` | 3 | 2,690 | 33 | 0 | 21 | 1 |
+| `ref-hud` | 2 | 38 | 4 | 0 | 0 | 1 |
+
+Other pinned numbers:
+
+- ref-stereo: commands, two eyes over one view: 1.89
+- ref-hud: DOM writes a frame: 0
+- ref-hud: DOM reads a frame: 0
+
+### Timings
+
+Chromium only (no WebKit project yet), headless at 1280×720 on the e2e `desktop-1280` row, 2026-11-14, Apple M-series (`apple metal-3`), timestamps on, a machine shared with other agents' runs. `TC_REF_TIMES=<file> E2E_PORT_OFFSET=… pnpm test:e2e e2e/ref-scenes.spec.ts` writes these; a `ref-*` page skips `BENCH_WARMUP` (20) frames and takes the median of the rest of `BENCH_FRAMES` (140): CPU is `performance.now()` around the frame's `step` (scene work, `beginFrame` → `endFrame`), GPU the median `renderer.onGpuTime` sample. `core-*` rungs are B1's retained core page (harness/core.html, `?sets=`): its own median CPU of the last 60 frames, no GPU time. `performance.now()` is coarsened to 0.1 ms in the page, so a CPU median under 1 ms is a step of that grain.
+
+| Rung | Frames | CPU ms | CPU p95 ms | GPU ms |
+| --- | ---: | ---: | ---: | ---: |
+| `ref-board` | 120 | 1.00 | 1.20 | 0.16 |
+| `ref-characters` | 120 | 0.30 | 0.50 | 0.23 |
+| `ref-characters-256` | 120 | 0.60 | 1.20 | 0.24 |
+| `ref-arena` | 120 | 0.40 | 0.50 | 2.03 |
+| `ref-voxel` | 120 | 0.20 | 0.30 | 0.18 |
+| `ref-voxel-16` | 120 | 0.30 | 0.80 | 0.30 |
+| `ref-stereo` | 120 | 0.40 | 1.00 | 0.35 |
+| `ref-hud` | 120 | 0.20 | 0.30 | 0.08 |
+| `core-1.5k` | 60 | 0.10 | — | — |
+| `core-6k` | 60 | 0.10 | — | — |
+
 ## Counted work, 1.3 baseline
 
 What a frame does, counted on the fake device by `createWorkMeter` (`@thunderclap-engine/engine/testing`), averaged per frame over the measured frames after a warm-up. Written by `TC_BUDGET=write pnpm vitest run src/render/baseline.budget.test.ts` from `src/render/baseline.budget.json`; that test fails any scene that does more of any counter than its row, and fails if this section and the JSON disagree. `pnpm bench` keeps this section. Today's numbers (engine 1.3) are the guard the render core must beat or explain (E-041, D2 R2).
