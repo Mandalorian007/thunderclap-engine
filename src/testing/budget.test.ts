@@ -117,11 +117,13 @@ describe('createWorkMeter', () => {
 
   it('counts indirect draws and bundles even where the device lacks them', () => {
     const { meter } = setup();
+    // The fake records indirect draws since ws/core-retained, so the arguments need INDIRECT.
+    const args = meter.device.createBuffer({ size: 64, usage: GPUBufferUsage.INDIRECT });
     const r = meter.measure(() => {
       const enc = meter.device.createCommandEncoder();
       const pass = enc.beginRenderPass({ colorAttachments: [] });
-      pass.drawIndirect({} as GPUBuffer, 0);
-      pass.drawIndexedIndirect({} as GPUBuffer, 0);
+      pass.drawIndirect(args, 0);
+      pass.drawIndexedIndirect(args, 0);
       pass.executeBundles([]);
       pass.end();
     });
