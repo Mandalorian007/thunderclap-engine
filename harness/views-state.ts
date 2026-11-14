@@ -21,7 +21,7 @@ export interface ViewsEye {
    * bare patch of ground; `marker`: the small head-locked block 0.6 m in front of the eyes.
    */
   probes: { near: ViewsProbe; far: ViewsProbe; ground: ViewsProbe; marker: ViewsProbe };
-  /** Draw calls of this eye's `render` call in the last frame. */
+  /** Bundles (or direct draws) this eye's `core.draw` executed in the last frame. */
   drawCalls: number;
 }
 
@@ -35,8 +35,18 @@ export interface HarnessViewsState {
   /** Interpupillary distance in world units (metres): the eyes sit ±half of it on the right axis. */
   ipd: number;
   eyes: [ViewsEye, ViewsEye];
-  /** `renderer.stats` summed over both views in the last frame. */
-  stats: { drawCalls: number; instances: number };
+  /**
+   * The last frame: `drawCalls` summed over both eyes, `instances` drawn (meshes × eyes), and the
+   * core's `stats.calls`, `dispatches` and `bundleBuilds` (both eyes are one cull group: one
+   * dispatch, one bundle recorded once).
+   */
+  stats: {
+    drawCalls: number;
+    instances: number;
+    calls: number;
+    dispatches: number;
+    bundleBuilds: number;
+  };
   /** `gpuDiagnostics.errorCount` (WGSL compile errors, uncaptured errors). */
   gpuErrors: number;
 }

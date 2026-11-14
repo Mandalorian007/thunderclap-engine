@@ -1,8 +1,12 @@
 /**
  * The frustum cull (D1 §3.3), on the GPU and its CPU twin. Both read a set's slot table and
- * write, per view and per slot, the five words of a `drawIndexedIndirect` (index count, instance
+ * write, per cull group and per slot, the five words of a `drawIndexedIndirect` (index count, instance
  * count, first index, base vertex, first instance); a culled slot gets instance count 0, so its
  * draw costs nothing. Generalized from Forge's `cs_cull` (sections → slots with a sphere).
+ *
+ * A cull group (D1 §3.5) is one plane set: a lone view's own planes, or the union frustum of a
+ * stereo pair, so both eyes share one args set. The core binds the groups' plane slots (the upper
+ * half of its view buffer) as `views` here; `params.views` counts groups.
  */
 import { CORE_VIEW_WGSL, MAX_VIEWS, sphereInPlanes, VIEW_SLOT_FLOATS } from './view';
 
@@ -67,9 +71,9 @@ struct Slot { sphere: vec4f, draw: vec4u, inst: vec4u };
 `;
 
 /**
- * The CPU twin of `cs_cull`: for each of `views` views (their slots in `viewData`, a
+ * The CPU twin of `cs_cull`: for each of `views` cull groups (their plane slots in `viewData`, a
  * `VIEW_SLOT_FLOATS`-strided array), write the argument records of slots `0..count` into `args`
- * at `(view * capacity + slot) * ARGS_WORDS`. Returns the visible slot-view pairs. Tests run it
+ * at `(group * capacity + slot) * ARGS_WORDS`. Returns the visible slot-group pairs. Tests run it
  * as the fake GPU's stand-in for the shader; nothing allocates.
  */
 export function cullSlotsCpu(
