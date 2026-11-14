@@ -31,7 +31,9 @@ if (raycastVoxels(grid, 32, 20, 32, 0, -1, 0, 8, hit)) grid.set(hit.x, hit.y, hi
 | Name | What it is for |
 | --- | --- |
 | `createVoxelGrid(opts)` | block ids in chunks with dirty flags |
-| `createVoxelChunks(renderer, grid, opts)` | one mesh per non-empty chunk; `update` and `draw` |
+| `createVoxelWorld(core, opts)` | a streamed block world drawn in three GPU-culled sets of the retained core, with cave culling (*The world*) |
+| `feedVoxelGrid(world, grid)` | a `VoxelGrid` as the world's source: a small bounded world |
+| `createVoxelChunks(renderer, grid, opts)` | superseded: one mesh per non-empty chunk; `update` and `draw` (the voxel demo's until the core draws inside `Renderer`) |
 | `raycastVoxels(grid, origin, dir, max, hit)` | the block under a ray, and the cell before it |
 | `meshChunk(...)` | the greedy mesher, pure |
 | `createVoxelMesher / installVoxelMesherWorker` | the two ends of the Worker bridge |
@@ -41,6 +43,8 @@ if (raycastVoxels(grid, 32, 20, 32, 0, -1, 0, 8, hit)) grid.set(hit.x, hit.y, hi
 | `createSectionStore(opts)` | sparse sections by key: readiness, nearest-first meshing, edits, Worker jobs |
 | `SectionMeshPool` / `installSectionMesherWorker` | the two ends of the section mesher Workers |
 | `raycastCells(probe, ...)` / `sectionRayProbe(store)` | picking through a streamed world |
+| `SectionVisibility` | cave culling: which sections an eye can see through open cells |
+| `voxelVertexWgsl(format)` / `VOXEL_DEFAULT_FRAGMENT` | the world's vertex stage and the engine's plain look |
 
 ## Overview
 
@@ -66,7 +70,7 @@ write into state they own.
 | `mesher.ts` | `meshChunk` (greedy quads per face, AO baked), `countExposedFaces`, `createChunkMeshOut`, the vertex convention constants |
 | `worker-client.ts` | `createVoxelMesher`: the page side; in-thread or over a Worker, coalescing; `packChunkMesh` |
 | `mesher-worker.ts` | `installVoxelMesherWorker`: the Worker side (a grid mirror answering `mesh` requests) |
-| `chunks.ts` | `createVoxelChunks`: one `Mesh` per non-empty chunk, remesh on dirty, cull, draw |
+| `chunks.ts` | `createVoxelChunks` (superseded): one `Mesh` per non-empty chunk, remesh on dirty, cull, draw |
 | `ray.ts` | `raycastVoxels`, `createVoxelHit`: cell-by-cell DDA picking |
 | `wgsl.ts` | `VOXEL_WGSL`: `voxel_layer`, `voxel_ao`, `voxel_uv_wrap` |
 | `blocks.ts` | `defineBlockTable`, `FACE_CLASS`, `CellLayout`: block behaviour as data |
@@ -80,6 +84,10 @@ write into state they own.
 | `section-protocol.ts` | `installSectionMesherWorker`, the Worker messages |
 | `pool.ts` | `SectionMeshPool`, `MesherPort`, `workerMesherPort`, `inThreadMesherPort` |
 | `section-ray.ts` | `raycastCells`, `sectionRayProbe` |
+| `world.ts` | `createVoxelWorld`: store, pool, upload into the core's arenas and sets, budgets, cave culling |
+| `world-shaders.ts` | `voxelVertexWgsl`, `VoxelVarying`, `VOXEL_DEFAULT_FRAGMENT` |
+| `visibility.ts` | `SectionVisibility`: Checchi-style connectivity search over sections, throttled |
+| `grid-source.ts` | `feedVoxelGrid`: a `VoxelGrid`'s chunks as the world's sections |
 
 ## Quick start
 
@@ -225,6 +233,8 @@ installed, so a test can feed it requests directly.
 
 ## Chunk renderer
 
+Superseded: `createVoxelWorld` with `feedVoxelGrid` replaces it (*The world*).
+
 `createVoxelChunks(renderer, grid, opts)` (`VoxelChunksOptions`: `material`, the
 `MeshChunkOptions`, `mesher`, `slack = 1.5`, `minQuads = 64`, `origin`, `params`, `now`)
 returns a `VoxelChunks`. `update()` (once per tick) uploads every finished remesh into its
@@ -263,8 +273,8 @@ world's `origin` from the ray first when it is not at the world origin. No alloc
 
 The grid above is a bounded demo world. A game whose world streams in from a server (or a
 generator) as cubic sections uses the second half of the module: the CPU and Worker side of
-any block game, generalized from Forge Wilds' mesher. The renderer side (section buffers,
-visibility, draw) is not here yet.
+any block game, generalized from Forge Wilds' mesher, and the world that draws it (*The world*
+below).
 
 **The format, as data.** `defineBlockTable(blocks, { hueMix })` (`BlockTableOptions`) compiles one `BlockDef` per id into a `BlockTable`:
 its `FaceClass` (`none`, `opaque`, `liquid`, `cutout` an inset cube that hides nothing,
@@ -347,6 +357,75 @@ that answers `RAY_PASS`, `RAY_HIT` or `RAY_UNKNOWN` per cell; `sectionRayProbe(s
 makes one over the store (a missing section is unknown, so a pick never goes through the
 unloaded world). Both allocate nothing per call.
 
+## The world
+
+`createVoxelWorld(core, opts)` (`VoxelWorldOptions`) returns a `VoxelWorld` that draws a streamed world on the retained
+render core (`createRenderCore`). It owns a `SectionStore` (or takes `store`), a
+`SectionMeshPool` over `workers` (`MesherPort`s; none means one in-thread mesher), one vertex and
+one instance arena, and three static, GPU-culled `DrawSet`s (`sets`): `opaque` (back faces
+culled, the opaque pass), `foliage` (both sides, the cutout pass) and `liquid` (both sides,
+alpha-blended in the transparent pass, unsorted: depth is read, not written). A section's three
+streams share one instance (its origin) and its mesh's bounds are its cull sphere.
+
+- **Feeding.** `putSection(sx, sy, sz, bytes)`, `dropSection`, `edit(key, changes)` (the
+  remesh set), `setInterest(x, y, z)` (world blocks; the eye by default). `update(ex, ey, ez)`
+  once a frame before `core.prepare`: ready sections go to the Workers nearest first (as many
+  as keep `perWorker` jobs in flight each), and at most `uploadsPerFrame` (32) finished meshes
+  upload, nearest first, into the arenas. A held world allocates nothing in `update`.
+- **Cave culling.** `SectionVisibility` (`visibility`, on unless `caveCulling: false`; `SectionVisibilityOptions`, `SectionVisibilityStats`, its area a `SectionBox`) walks the
+  sections the eye can reach through the connectivity bits (unknown sections count as open,
+  no turning back against a direction taken, a cost for dark open cells) and hides the rest
+  through their cull spheres; a search reruns when the eye changes section or a section's bits
+  change, throttled (250 ms opening, 1 s closing).
+- **Looks.** `materials: { opaque, foliage, liquid }` (keyed by `VoxelStream`), each a `VoxelMaterial`: a `fragment`
+  (`@fragment fn fs(in: VoxelVarying) -> @location(0) vec4f`; `decode_voxel_vertex`,
+  `VoxelVarying` (`VOXEL_VARYING_WGSL`) and `view` are in scope), its `bindGroups` (from 1) and `blend`. A missing
+  one is `VOXEL_DEFAULT_FRAGMENT[stream]`: a colour per id, sun, AO, sky and block light, haze.
+- **Reading.** `raycast(...)` (`raycastCells` over the store), `settled`, `stats`
+  (`VoxelWorldStats`: sections, drawn, hidden, pending, uploads, quads per stream, vertex bytes,
+  update ms) and `dispose()`.
+
+<!-- snippet:check -->
+```ts
+import { createRenderCore, createRenderView } from '@thunderclap-engine/engine/render';
+import {
+  createVoxelWorld,
+  defineBlockTable,
+  defineVoxelFormat,
+  encodeRawSection,
+  workerMesherPort,
+} from '@thunderclap-engine/engine/voxel';
+
+declare const device: GPUDevice;
+declare const encoder: GPUCommandEncoder;
+declare const worker: Worker; // its script: installSectionMesherWorker({ codec: RAW_SECTION_CODEC })
+
+const core = createRenderCore(device);
+const format = defineVoxelFormat({
+  blocks: defineBlockTable([{ class: 'none' }, { class: 'opaque' }, { class: 'liquid' }]),
+});
+const world = createVoxelWorld(core, {
+  format,
+  workers: [workerMesherPort(worker)],
+  minSectionY: 0,
+  maxSectionY: 3,
+  radius: 12,
+});
+world.putSection(0, 0, 0, encodeRawSection(Uint32Array.of(1))); // as sections arrive
+const view = createRenderView();
+world.update(8, 70, 8); // each frame, with the eye
+core.prepare(encoder, [view]);
+```
+
+A bounded `VoxelGrid` feeds the same world: `feedVoxelGrid(world, grid, { outside })`
+(`VoxelGridSourceOptions`) puts every chunk as a section (the format's `sectionSize` must be the
+grid's `chunk`) and a ring of empty sections around them, and its `sync()` (a
+`VoxelGridSource`) re-puts the chunks `grid.set` flagged, once a frame before `update`.
+
+The engine pages: `harness/voxel-world.html` (scene S4: a generated world streamed at
+`?radius=16` through Workers with a codec of its own, `e2e/voxel-world.spec.ts`) and
+`harness/voxel.html` (a grid through `feedVoxelGrid`).
+
 ## Demo migration recipe
 
 A game with its own block mesher moves over in four steps:
@@ -362,7 +441,10 @@ A game with its own block mesher moves over in four steps:
 4. Replace the custom pick with `raycastVoxels` from the eye along the view direction; break
    at `x, y, z`, place at `px, py, pz`.
 
-The engine page `harness/voxel.html` is this recipe end to end: a 4 × 2 × 4-chunk world
+This recipe is the superseded chunk path (the voxel demo's until the core draws inside
+`Renderer`). A new game uses *The world*: step 2 becomes `createVoxelWorld` with
+`feedVoxelGrid`, the material a `VoxelMaterial` fragment that reads the block id with
+`decode_voxel_vertex`. `harness/voxel.html` is that: a 4 × 2 × 4-chunk grid fed into the world
 (`harness/voxel.ts`, `harness/voxel-worker.ts`), pointer-lock look, a click breaks, the
-secondary button places, with `e2e/voxel.spec.ts` checking draw and cull counts, picking and
-that an edit leaves `growths` at 0.
+secondary button places, with `e2e/voxel.spec.ts` checking the world, the view, picking and
+that a place then break restores the quads.

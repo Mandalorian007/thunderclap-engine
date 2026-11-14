@@ -1,6 +1,7 @@
 import type { BindingSet } from './bindings';
 import { ALL_LAYERS, CAMERA_BLOCK_FLOATS, Camera, type CameraRect, FRUSTUM_FLOATS } from './camera';
 import { type RendererCaps, rendererCaps } from './compressed';
+import { MULTI_DRAW_FEATURE } from './core/core';
 import { installGpuErrorLogging } from './diagnostics';
 import {
   type Drawable,
@@ -36,6 +37,14 @@ import {
   sceneColorTargets,
 } from './material';
 import { Mesh, type MeshBounds, type MeshDesc, quadGeometry, VERTEX_LAYOUT_2D } from './mesh';
+import {
+  emptyRunBundle,
+  INDEXED_ARGS_BYTES,
+  MeshPool,
+  type PoolEntry,
+  type RunBundle,
+  runCapacity,
+} from './mesh-runs';
 import { PingPong } from './ping-pong';
 import {
   SCENE_FORMAT,
@@ -184,6 +193,13 @@ export interface RenderStats {
    * zeroed by `beginFrame`.
    */
   lodCounts: number[];
+  /**
+   * Merged mesh runs the scene passes drew (ws/core-immediate): stretches of distinct small
+   * meshes under one pipeline and material, each one multi-draw, one bundle of indirect draws or
+   * (without `indirect-first-instance`) direct draws from the mesh pool. Their draws still count
+   * in `drawCalls` one per mesh drawn.
+   */
+  runs: number;
 }
 
 /** Options of `Renderer.textureFromSource`. */
@@ -269,6 +285,26 @@ export function sceneSize(
   const width = Math.min(w, even(w * k));
   const height = Math.min(h, even(h * k));
   return { width, height, scale: width / w };
+}
+
+/** Fewest consecutive commands that make a merged mesh run (`Renderer.planRuns`). */
+const MIN_RUN = 4;
+
+/** A render pass with Chromium's multi-draw (`MULTI_DRAW_FEATURE`). */
+interface MultiDrawPass {
+  multiDrawIndexedIndirect(buffer: GPUBuffer, offset: number, maxDrawCount: number): void;
+}
+
+/** A scene command that can join a merged run: a fitting mesh from the shared instance buffer. */
+function runnable(c: DrawCmd): boolean {
+  return (
+    c.drawable === null &&
+    c.buffer === null &&
+    !c.lane &&
+    c.prevBuffer === null &&
+    c.mesh !== null &&
+    MeshPool.fits(c.mesh)
+  );
 }
 
 interface DrawCmd {
@@ -496,6 +532,7 @@ export class Renderer implements FrameSink {
     shadowDraws: 0,
     passes: 0,
     lodCounts: [],
+    runs: 0,
   };
   /**
    * The band around each LOD threshold an instance must cross before it changes level, as a
@@ -575,6 +612,27 @@ export class Renderer implements FrameSink {
   private instanceBase = 0;
   /** Instance buffers outgrown this frame, destroyed after submit (passes still reference them). */
   private readonly retired: GPUBuffer[] = [];
+  /**
+   * Merged mesh runs (ws/core-immediate, `mesh-runs.ts`): the pool of small meshes, how runs
+   * draw on this device (`multi`: one `multiDrawIndexedIndirect`; `bundle`: a cached bundle of
+   * `drawIndexedIndirect`; `direct`: `drawIndexed` with a base vertex), and per command of the
+   * view being drawn, where a run starting there ends (`runEnd[i] > i`), its pool entry, its
+   * ordinal in the frame and its argument slots.
+   */
+  private readonly pool: MeshPool;
+  private readonly runMode: 'multi' | 'bundle' | 'direct';
+  private runEnd = new Int32Array(64);
+  private runOrd = new Int32Array(64);
+  private runCap = new Int32Array(64);
+  private readonly runEntries: (PoolEntry | null)[] = [];
+  private readonly runBundles: RunBundle[] = [];
+  private readonly bundleList: GPURenderBundle[] = [];
+  private runOrdinal = 0;
+  private argsBuffer: GPUBuffer | null = null;
+  private argsData = new Uint32Array(0);
+  /** Byte offset in `argsBuffer` of this view's arguments; argument records written this view. */
+  private argsBase = 0;
+  private argsCount = 0;
   /**
    * The shared previous-matrix lane (ws/render-7): 12 floats per instance, indexed like the
    * view's upload, for batches with `prevMatrices` drawn into a velocity target by an aux
@@ -715,6 +773,10 @@ export class Renderer implements FrameSink {
     const device = this.device;
     installGpuErrorLogging(device);
     this.caps = rendererCaps(device);
+    this.pool = new MeshPool(device);
+    const feats = device.features as ReadonlySet<string> | undefined;
+    const firstInstance = feats?.has('indirect-first-instance') ?? false;
+    this.runMode = !firstInstance ? 'direct' : feats?.has(MULTI_DRAW_FEATURE) ? 'multi' : 'bundle';
     this.gpuTimer = supportsTimestamps(device) ? new GpuTimer(device) : null;
     if (this.gpuTimer) {
       this.timing.source = 'timestamp';
@@ -1173,6 +1235,7 @@ export class Renderer implements FrameSink {
     this.stats.triangles = 0;
     this.stats.instances = 0;
     this.stats.drawables = 0;
+    this.stats.runs = 0;
     this.stats.batches = 0;
     this.stats.culled = 0;
     this.stats.shadowDraws = 0;
@@ -1322,11 +1385,19 @@ export class Renderer implements FrameSink {
     // A view with a `readsDepth` drawable splits here: opaque draws, a copy of the depth
     // attachment, the drawables' `afterOpaque`, then the blended draws loading everything.
     const split = depth && this.splitAt >= 0 && target.canCopyDepth ? this.splitAt : -1;
+    const mainEnd = split >= 0 ? split : scene.count;
+    const runs = this.planRuns(enc, mainEnd);
     const pass = enc.beginRenderPass(desc);
     this.setViewRect(pass, vp, full);
     pass.setBindGroup(0, slot.group);
-    this.encodeDraws(pass, frame, slot, base, 0, split >= 0 ? split : scene.count);
+    this.encodeDraws(pass, frame, slot, base, 0, mainEnd, runs ? target : null, depth);
     pass.end();
+    if (this.argsCount > 0) {
+      const bytes = this.argsCount * INDEXED_ARGS_BYTES;
+      device.queue.writeBuffer(this.argsBuffer!, this.argsBase, this.argsData.buffer, 0, bytes);
+      this.argsBase += bytes;
+      this.argsCount = 0;
+    }
     this.stats.passes++;
     if (split >= 0) {
       const copy = target.copyDepth(enc)!;
@@ -1353,7 +1424,7 @@ export class Renderer implements FrameSink {
       const blend = enc.beginRenderPass(blendDesc);
       this.setViewRect(blend, vp, full);
       blend.setBindGroup(0, slot.group);
-      this.encodeDraws(blend, frame, slot, base, split, scene.count);
+      this.encodeDraws(blend, frame, slot, base, split, scene.count, null, depth);
       blend.end();
       this.stats.passes++;
     }
@@ -1384,8 +1455,11 @@ export class Renderer implements FrameSink {
     base: number,
     from: number,
     to: number,
+    runTarget: SceneTarget | null,
+    depth: boolean,
   ): void {
     const scene = this.scene;
+    const runEnd = this.runEnd;
     let curPipeline: GPURenderPipeline | null = null;
     let curMaterial: Material | null = null;
     let curOffset = -1;
@@ -1397,6 +1471,21 @@ export class Renderer implements FrameSink {
     let drawables = 0;
     for (let i = from; i < to; i++) {
       const c = scene.cmds[i]!;
+      if (runTarget && runEnd[i]! > i) {
+        const end = runEnd[i]!;
+        drawCalls += this.encodeRun(pass, slot, base, i, end, runTarget, depth);
+        this.stats.runs++;
+        triangles += this.runTriangles;
+        curPipeline = null;
+        curMaterial = null;
+        curOffset = -1;
+        curMesh = null;
+        curBuffer = null;
+        curPrev = null;
+        if (this.runMode === 'bundle' && end < to) pass.setBindGroup(0, slot.group);
+        i = end - 1;
+        continue;
+      }
       if (c.drawable) {
         c.drawable.draw(pass, frame);
         drawables++;
@@ -1458,6 +1547,253 @@ export class Renderer implements FrameSink {
     this.stats.drawCalls += drawCalls;
     this.stats.triangles += triangles;
     this.stats.drawables += drawables;
+  }
+
+  /** Triangles the last `encodeRun` drew. */
+  private runTriangles = 0;
+
+  /**
+   * Find this view's merged runs among scene commands `[0, end)` (`mesh-runs.ts`): at least
+   * `MIN_RUN` consecutive commands of one pipeline, material and offset, drawing more than one
+   * fitting mesh from the shared instance buffer. Their meshes join the pool (copies on `enc`,
+   * before the pass), the run splits where pool buffers change, and the argument buffer is sized
+   * for the view. Returns whether any run was found.
+   */
+  private planRuns(enc: GPUCommandEncoder, end: number): boolean {
+    this.argsCount = 0;
+    if (this.runEnd.length < end) {
+      let n = this.runEnd.length;
+      while (n < end) n *= 2;
+      this.runEnd = new Int32Array(n);
+      this.runOrd = new Int32Array(n);
+      this.runCap = new Int32Array(n);
+    }
+    const cmds = this.scene.cmds;
+    const runEnd = this.runEnd;
+    const entries = this.runEntries;
+    while (entries.length < end) entries.push(null);
+    let any = false;
+    let slots = 0;
+    let i = 0;
+    while (i < end) {
+      const c = cmds[i]!;
+      runEnd[i] = -1;
+      if (!runnable(c)) {
+        i++;
+        continue;
+      }
+      let j = i + 1;
+      let changes = 0;
+      while (j < end) {
+        const d = cmds[j]!;
+        if (
+          d.pipeline !== c.pipeline ||
+          d.material !== c.material ||
+          d.offset !== c.offset ||
+          !runnable(d)
+        ) {
+          break;
+        }
+        if (d.mesh !== cmds[j - 1]!.mesh) changes++;
+        runEnd[j] = -1;
+        j++;
+      }
+      if (j - i < MIN_RUN || changes === 0) {
+        i = j;
+        continue;
+      }
+      for (let k = i; k < j; k++) entries[k] = this.pool.get(cmds[k]!.mesh!, enc);
+      let s = i;
+      while (s < j) {
+        const e0 = entries[s]!;
+        let t = s + 1;
+        while (t < j) {
+          const e = entries[t]!;
+          if (e.vertexBuffer !== e0.vertexBuffer || e.indexBuffer !== e0.indexBuffer) break;
+          if (e.indexFormat !== e0.indexFormat) break;
+          t++;
+        }
+        if (t - s >= 2) {
+          runEnd[s] = t;
+          any = true;
+          const o = this.runOrdinal++;
+          while (this.runBundles.length <= o) this.runBundles.push(emptyRunBundle());
+          this.runOrd[s] = o;
+          const cap =
+            this.runMode === 'bundle' ? runCapacity(t - s, this.runBundles[o]!.capacity) : t - s;
+          this.runCap[s] = cap;
+          if (this.runMode !== 'direct') slots += cap;
+        }
+        s = t;
+      }
+      i = j;
+    }
+    if (slots > 0) {
+      const need = this.argsBase + slots * INDEXED_ARGS_BYTES;
+      const old = this.argsBuffer;
+      if (!old || old.size < need) {
+        if (old) this.retired.push(old);
+        let size = old ? old.size * 2 : 4096;
+        while (size < need) size *= 2;
+        this.argsBuffer = this.device.createBuffer({
+          label: 'mesh-run-args',
+          size,
+          usage: GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST,
+        });
+      }
+      if (this.argsData.length < slots * 5) {
+        let n = Math.max(this.argsData.length, 1280);
+        while (n < slots * 5) n *= 2;
+        this.argsData = new Uint32Array(n);
+      }
+    }
+    return any;
+  }
+
+  /** Bind `m`'s group 1 at `offset` (-1: no dynamic offset), on a pass or a bundle. */
+  private bindMaterial(
+    enc: GPURenderPassEncoder | GPURenderBundleEncoder,
+    m: Material,
+    offset: number,
+  ): void {
+    if (offset >= 0) {
+      this.dynamicOffsets[0] = offset;
+      enc.setBindGroup(1, m.bindings!.bindGroup, this.dynamicOffsets);
+    } else if (m.bindings) {
+      enc.setBindGroup(1, m.bindings.bindGroup);
+    }
+  }
+
+  /**
+   * Encode the merged run of scene commands `[s, e)` (`planRuns`): one multi-draw, one cached
+   * bundle of indirect draws, or (without `indirect-first-instance`) direct draws from the pool's
+   * buffers. Returns the draws it stands for; `runTriangles` their triangles. Pass state is left
+   * unknown (a bundle resets it).
+   */
+  private encodeRun(
+    pass: GPURenderPassEncoder,
+    slot: ViewSlot,
+    base: number,
+    s: number,
+    e: number,
+    target: SceneTarget,
+    depth: boolean,
+  ): number {
+    const cmds = this.scene.cmds;
+    const entries = this.runEntries;
+    const c0 = cmds[s]!;
+    const e0 = entries[s]!;
+    const m = c0.material!;
+    let draws = 0;
+    let tris = 0;
+    if (this.runMode === 'direct') {
+      pass.setPipeline(c0.pipeline!);
+      this.bindMaterial(pass, m, c0.offset);
+      pass.setVertexBuffer(0, e0.vertexBuffer);
+      pass.setVertexBuffer(1, this.instanceBuffer, base);
+      pass.setIndexBuffer(e0.indexBuffer, e0.indexFormat);
+      for (let k = s; k < e; k++) {
+        const c = cmds[k]!;
+        const p = entries[k]!;
+        const indices = c.indexCount >= 0 ? c.indexCount : c.mesh!.indexCount;
+        if (indices === 0) continue;
+        pass.drawIndexed(indices, c.count, p.firstIndex + c.firstIndex, p.baseVertex, c.first);
+        draws++;
+        tris += ((indices / 3) | 0) * c.count;
+      }
+      this.runTriangles = tris;
+      return draws;
+    }
+    const data = this.argsData;
+    const first = this.argsCount * 5;
+    const inst0 = base / INSTANCE_STRIDE;
+    let w = first;
+    for (let k = s; k < e; k++) {
+      const c = cmds[k]!;
+      const p = entries[k]!;
+      const indices = c.indexCount >= 0 ? c.indexCount : c.mesh!.indexCount;
+      data[w] = indices;
+      data[w + 1] = indices > 0 ? c.count : 0;
+      data[w + 2] = p.firstIndex + c.firstIndex;
+      data[w + 3] = p.baseVertex;
+      data[w + 4] = inst0 + c.first;
+      w += 5;
+      if (indices > 0) {
+        draws++;
+        tris += ((indices / 3) | 0) * c.count;
+      }
+    }
+    this.runTriangles = tris;
+    const cap = this.runCap[s]!;
+    if (cap > e - s) data.fill(0, w, first + cap * 5);
+    const args = this.argsBuffer!;
+    const argsOffset = this.argsBase + this.argsCount * INDEXED_ARGS_BYTES;
+    this.argsCount += cap;
+    if (this.runMode === 'multi') {
+      pass.setPipeline(c0.pipeline!);
+      this.bindMaterial(pass, m, c0.offset);
+      pass.setVertexBuffer(0, e0.vertexBuffer);
+      pass.setVertexBuffer(1, this.instanceBuffer, 0);
+      pass.setIndexBuffer(e0.indexBuffer, e0.indexFormat);
+      (pass as unknown as MultiDrawPass).multiDrawIndexedIndirect(args, argsOffset, e - s);
+      return draws;
+    }
+    const rb = this.runBundles[this.runOrd[s]!]!;
+    const group1 = m.bindings?.bindGroup ?? null;
+    if (
+      !rb.bundle ||
+      rb.pipeline !== c0.pipeline ||
+      rb.group0 !== slot.group ||
+      rb.group1 !== group1 ||
+      rb.offset !== c0.offset ||
+      rb.vertexBuffer !== e0.vertexBuffer ||
+      rb.indexBuffer !== e0.indexBuffer ||
+      rb.indexFormat !== e0.indexFormat ||
+      rb.instances !== this.instanceBuffer ||
+      rb.args !== args ||
+      rb.argsOffset !== argsOffset ||
+      rb.capacity !== cap ||
+      rb.target !== target ||
+      rb.colorFormat !== target.color.format ||
+      rb.aux !== target.auxKey ||
+      rb.depth !== depth
+    ) {
+      const colorFormats: GPUTextureFormat[] = [target.color.format, target.emissive.format];
+      if (target.auxKey & 1) colorFormats.push(target.roughMetal!.format);
+      if (target.auxKey & 2) colorFormats.push(target.velocity!.format);
+      const be = this.device.createRenderBundleEncoder({
+        label: 'mesh-run',
+        colorFormats,
+        depthStencilFormat: depth ? DEPTH_FORMAT : undefined,
+      });
+      be.setPipeline(c0.pipeline!);
+      be.setBindGroup(0, slot.group);
+      this.bindMaterial(be, m, c0.offset);
+      be.setVertexBuffer(0, e0.vertexBuffer);
+      be.setVertexBuffer(1, this.instanceBuffer, 0);
+      be.setIndexBuffer(e0.indexBuffer, e0.indexFormat);
+      for (let t = 0; t < cap; t++)
+        be.drawIndexedIndirect(args, argsOffset + t * INDEXED_ARGS_BYTES);
+      rb.bundle = be.finish();
+      rb.pipeline = c0.pipeline;
+      rb.group0 = slot.group;
+      rb.group1 = group1;
+      rb.offset = c0.offset;
+      rb.vertexBuffer = e0.vertexBuffer;
+      rb.indexBuffer = e0.indexBuffer;
+      rb.indexFormat = e0.indexFormat;
+      rb.instances = this.instanceBuffer;
+      rb.args = args;
+      rb.argsOffset = argsOffset;
+      rb.capacity = cap;
+      rb.target = target;
+      rb.colorFormat = target.color.format;
+      rb.aux = target.auxKey;
+      rb.depth = depth;
+    }
+    this.bundleList[0] = rb.bundle;
+    pass.executeBundles(this.bundleList);
+    return draws;
   }
 
   /**
@@ -1600,6 +1936,9 @@ export class Renderer implements FrameSink {
     this.shadowCount = 0;
     this.usedCount = 0;
     this.instanceBase = 0;
+    this.argsBase = 0;
+    this.runOrdinal = 0;
+    this.pool.endFrame();
     this.shadow.flush();
     if (this.retired.length > 0) {
       for (const b of this.retired) b.destroy();
@@ -1629,6 +1968,8 @@ export class Renderer implements FrameSink {
     this.shadowCount = 0;
     this.usedCount = 0;
     this.instanceBase = 0;
+    this.argsBase = 0;
+    this.runOrdinal = 0;
   }
 
   /** Every `timingEvery` frames, when no sample is in flight. */
@@ -1673,6 +2014,9 @@ export class Renderer implements FrameSink {
     this.laneBuffer = null;
     for (const b of this.retired) b.destroy();
     this.retired.length = 0;
+    this.pool.destroy();
+    this.argsBuffer?.destroy();
+    this.argsBuffer = null;
     for (const v of this.views) v.buffer.destroy();
     this.views.length = 0;
     for (const v of this.shadowSlots) v.buffer.destroy();

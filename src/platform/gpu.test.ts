@@ -56,6 +56,18 @@ describe('initGpu', () => {
     expect(b.requests[0]!.requiredFeatures).toEqual([]);
   });
 
+  it('requests indirect-first-instance and multi-draw when the adapter has them', async () => {
+    const a = fakeGpu(['indirect-first-instance', 'chromium-experimental-multi-draw-indirect']);
+    await initGpu(a.canvas);
+    expect(a.requests[0]!.requiredFeatures).toEqual([
+      'indirect-first-instance',
+      'chromium-experimental-multi-draw-indirect',
+    ]);
+    const b = fakeGpu(['indirect-first-instance']);
+    await initGpu(b.canvas, { drawFeatures: false });
+    expect(b.requests[0]!.requiredFeatures).toEqual([]);
+  });
+
   it('retries without features when the device request is refused', async () => {
     const { requests, canvas } = fakeGpu(['texture-compression-bc'], true);
     const res = await initGpu(canvas);

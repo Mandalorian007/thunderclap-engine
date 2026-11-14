@@ -203,21 +203,28 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 6 | host-electron `dev`/`package` entry points (#2); `@types/webxr` consumer check; README/ARCHITECTURE version text | ws/publish-3 | brief `docs/briefs/publish-3.md` | E-038 | ✅ merged at a8a0ef3 (check, check:pack, snap 0 px, desktop e2e 5/5); webxr clash open |
 | 6 | VR correctness: loop survives a throwing frame, no XR frame cap, exposure once per frame, union head frustum, XR culls, no viewless page render, head-locked panels follow the head | ws/xr-fixes | brief `docs/briefs/xr-fixes.md` | E-038 | ✅ merged at 57b6cbd (e2e 2837 passed / 0 failed, snap 0 px) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
-| 2.0-1 | A1 rails: WebKit iPad project, check:wgsl, check:bundle + tree-shake, `next` publishing | ws/rails | brief `docs/briefs/rails.md` | E-041 | ⏳ integrating (d8324bb): webkit-ipad 50 pass / 23 skip; check:wgsl, check:bundle, next publishing |
+| 2.0-1 | A1 rails: WebKit iPad project, check:wgsl, check:bundle + tree-shake, `next` publishing | ws/rails | brief `docs/briefs/rails.md` | E-041 | ✅ 8f7c787 |
 | 2.0-1 | A2 budget: counted work in `testing`, 1.3 baseline in BENCH | ws/budget | brief `docs/briefs/budget.md` | E-041 | ✅ merged at 24ba6ff (check 2547 tests, snap 0 px); baseline distinct 1.5k/6k = 1,418/5,775 cmds |
-| 2.0-1 | A3 kit: createGame as a service composer, `./kit`, external loop | ws/kit | brief `docs/briefs/kit.md` | E-041 | 🔨 running |
-| 2.0-1 | B1 core-retained: arenas, DrawSets, bundles + indirect, GPU cull, pass list, views | ws/core-retained | brief `docs/briefs/core-retained.md` | E-041 | ⏳ integrating (a237c57): held frame 9 GPU calls at 1.5k and 6k (was 1,418 / 5,775) |
-| 2.0-1 | C1 voxel-data: section store, BlockTable, VertexSchema, mesher pool, light, raycast | ws/voxel-data | brief `docs/briefs/voxel-data.md` | E-041 | ⏳ integrating (cd4fb11): 47 tests, Forge mesher tests ported, schema decode bit-exact |
-| 2.0-1 | C3 models: part models from data, `./models` | ws/models | brief `docs/briefs/models.md` | E-041 | ⏳ integrating (f8af713): models.spec 32/32 |
-| 2.0-1 | C5 ui-spec: UI words, model, layout, DOM presenter, tokens | ws/ui-spec | brief `docs/briefs/ui-spec.md` | E-041 | ⏳ integrating (d0dee7b): ui-spec e2e 35, ui 77, layout 40 |
-| 2.0-1 | C7 intents-quality: input intents, `./quality` tiers + governor | ws/intents-quality | brief `docs/briefs/intents-quality.md` | E-041 | ⏳ integrating (ec4d158): Forge intent + governor tests ported; first-person on intents |
-| 2.0-1 | C9 net: client sessions over a handed-in transport, schemas + hash, snapshots, prediction | ws/net | brief `docs/briefs/net.md` | E-042 | ⏳ integrating (249ff22): net e2e 35, 93 unit tests, in-page two-client demo |
-| 2.0-1 | A4 ref-scenes: S1–S6 pages, rungs, counted budgets | ws/ref-scenes | brief `docs/briefs/ref-scenes.md` | E-041 | 🔨 running |
-| 2.0-2 | B2 core-immediate: the immediate API as transient sets on the core; per-mesh path deleted | ws/core-immediate | brief `docs/briefs/core-immediate.md` | E-041 | 🔨 running |
-| 2.0-2 | B3 core-views: views plural, stereo once, camera-relative origin | ws/core-views | brief `docs/briefs/core-views.md` | E-041 | 🔨 running |
-| 2.0-2 | C2 voxel-draw: sections on the core, cave cull, streaming budgets; old demo module replaced | ws/voxel-draw | brief `docs/briefs/voxel-draw.md` | E-041 | 🔨 running |
-| 2.0-2 | C4 actors: GPU-posed crowds, rigid (part models) and skinned | ws/actors | brief `docs/briefs/actors.md` | E-041 | 🔨 running |
-| 2.0-2 | E1 server-wire: Rust workspace, tc-wire + derive, tc-tsgen, Rust↔TS hash parity, check:rust | ws/server-wire | brief `docs/briefs/server-wire.md` | E-042 | 🔨 running |
+| 2.0-1 | A3 kit: createGame as a service composer, `./kit`, external loop | ws/kit | brief `docs/briefs/kit.md` | E-041 | ✅ cee27df |
+| 2.0-1 | B1 core-retained: arenas, DrawSets, bundles + indirect, GPU cull, pass list, views | ws/core-retained | brief `docs/briefs/core-retained.md` | E-041 | ✅ 67acb50 |
+| 2.0-1 | C1 voxel-data: section store, BlockTable, VertexSchema, mesher pool, light, raycast | ws/voxel-data | brief `docs/briefs/voxel-data.md` | E-041 | ✅ edc8544 |
+| 2.0-1 | C3 models: part models from data, `./models` | ws/models | brief `docs/briefs/models.md` | E-041 | ✅ 6b9cf5a |
+| 2.0-1 | C5 ui-spec: UI words, model, layout, DOM presenter, tokens | ws/ui-spec | brief `docs/briefs/ui-spec.md` | E-041 | ✅ 9adf4b6 |
+| 2.0-1 | C7 intents-quality: input intents, `./quality` tiers + governor | ws/intents-quality | brief `docs/briefs/intents-quality.md` | E-041 | ✅ ca78bfb |
+| 2.0-1 | C9 net: client sessions over a handed-in transport, schemas + hash, snapshots, prediction | ws/net | brief `docs/briefs/net.md` | E-042 | ✅ 603340e |
+| 2.0-1 | A4 ref-scenes: S1–S6 pages, rungs, counted budgets | ws/ref-scenes | brief `docs/briefs/ref-scenes.md` | E-041 | ⏳ integrating (7b92849): six ref scenes counted, BENCH section |
+| 2.0-2 | B2 core-immediate: the immediate API as transient sets on the core; per-mesh path deleted | ws/core-immediate | brief `docs/briefs/core-immediate.md` | E-041 | ✅ 7caeb73: merged mesh runs, distinct-6k 5,775 → 33 commands |
+| 2.0-2 | B3 core-views: views plural, stereo once, camera-relative origin | ws/core-views | brief `docs/briefs/core-views.md` | E-041 | ✅ 85eb970: stereo = mono + 5 calls, one cull; camera-relative origin |
+| 2.0-2 | C2 voxel-draw: sections on the core, cave cull, streaming budgets; old demo module replaced | ws/voxel-draw | brief `docs/briefs/voxel-draw.md` | E-041 | ✅ c315702: createVoxelWorld, 19 calls at r8 and r16, cave culling; old demo API still in (B4 moves it) |
+| 2.0-2 | C4 actors: GPU-posed crowds, rigid (part models) and skinned | ws/actors | brief `docs/briefs/actors.md` | E-041 | ✅ b9844fc: 1,000 actors 12 calls, GPU pose |
+| 2.0-3 | B4 core-passes: device loss, hidden bits, Renderer.core (27c1ea9 integrating); post/AA, sky, shadows, voxel demo move | ws/core-passes | brief `docs/briefs/core-passes.md` | E-041 | 🔨 running |
+| 2.0-3 | B5 core-effects: particles, weather, water, decals on the core | ws/core-effects | brief `docs/briefs/core-effects.md` | E-041 | 🔨 running |
+| 2.0-3 | C6 ui-world: world presenter, head-follow HUD, ray aim | ws/ui-world | brief `docs/briefs/ui-world.md` | E-041 | 🔨 running |
+| 2.0-3 | C8 xr-merge: one XR on core views | ws/xr-merge | brief `docs/briefs/xr-merge.md` | E-041 | 🔨 running |
+| 2.0-3 | E2a server-net: tc-net, interop with createNet over a real WebSocket | ws/server-net | brief `docs/briefs/server-net.md` | E-042 | ⏳ integrating (ea36470) |
+| 2.0-3 | E3a server-store: tc-store log, recovery, lock | ws/server-store | brief `docs/briefs/server-store.md` | E-042 | 🔨 running |
+| 2.0-3 | D0 Forge on 2.0.0-next.0: boot, loop, GPU device (forgewilds PR) | client/tc-boot | Forge scratchpad brief | E-041 | 🔨 running |
+| 2.0-2 | E1 server-wire: Rust workspace, tc-wire + derive, tc-tsgen, Rust↔TS hash parity, check:rust | ws/server-wire | brief `docs/briefs/server-wire.md` | E-042 | ⏳ integrating (05969c6): Rust↔TS hash parity, Forge generated.ts byte-identical |
 | 2.0-1 | S0 server foundation + net seam research (proposal only) | — | ROADMAP S0 | E-041 | ✅ accepted: `docs/design/2.0/server.md`, E-042 |
 
 ## Gates
@@ -234,6 +241,10 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - Character pipeline, stage 2 (E-015): glTF skins + animations into `anim`/`skinning`; attachment sockets for cosmetics; a `templates/third-person` showcase; GPU picking.
 
 ## Backlog (from engineer reports, unscheduled)
+
+- (B4) The Renderer's own objects (materials, textures, targets) don't survive device loss; the kit halts on loss. Owner: a later core step.
+- (integrator) `demos/voxel` remesh < 50 ms and voxel-world maxStreamFrameMs fail under machine load (pass alone). Make them load-aware or move them to the bench.
+- (2.0.0-next.0) publish's npm smoke failed: hosts on npm still peer `^1.0.0`. Host patch bumps are with the integrator.
 
 - (C7) `core/game.ts` pointer transform calls `clientToLogical` without `out`: one allocation per pointer event. Owner: next kit/core step.
 

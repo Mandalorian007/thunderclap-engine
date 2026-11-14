@@ -9,7 +9,8 @@
  * - `kind: 'dynamic'` sets are encoded into the pass each frame (membership that churns).
  * - `cull: 'gpu'` culls in a compute pass that writes `drawIndexedIndirect` arguments per cull
  *   group; `'cpu'` tests spheres on the CPU once per group and draws the visible slots directly;
- *   `'none'` draws every live slot.
+ *   `'none'` draws every live slot; `'external'` draws indirect from `DrawSetDesc.args`, a
+ *   buffer the caller's own compute fills (the actors module culls and poses in one pass).
  * - With `multiDrawIndirect` and `indirect-first-instance` on the device, a GPU-culled set whose
  *   arenas are one block each draws with one `multiDrawIndexedIndirect`.
  *
@@ -31,8 +32,11 @@ import type { BufferLayout } from './layout';
 import type { CorePass } from './pass-list';
 import { CORE_VIEW_WGSL, sphereInPlanes } from './view';
 
-/** How a set's slots are culled. `'auto'` is `'gpu'` from 256 slots of capacity, else `'cpu'`. */
-export type DrawSetCull = 'none' | 'cpu' | 'gpu' | 'auto';
+/**
+ * How a set's slots are culled. `'auto'` is `'gpu'` from 256 slots of capacity, else `'cpu'`.
+ * `'external'`: the caller writes the indirect arguments (`DrawSetDesc.args`).
+ */
+export type DrawSetCull = 'none' | 'cpu' | 'gpu' | 'auto' | 'external';
 /** How a set is encoded: a cached bundle (`'static'`) or into the pass each frame (`'dynamic'`). */
 export type DrawSetKind = 'static' | 'dynamic';
 
@@ -86,6 +90,13 @@ export interface DrawSetDesc {
   order?: number;
   /** Extra bind groups at 1, 2, …: the set's own textures, samplers and storage. */
   bindGroups?: readonly { layout: GPUBindGroupLayout; group: GPUBindGroup }[];
+  /**
+   * With `cull: 'external'` (and only then): the `drawIndexedIndirect` arguments, written by
+   * the caller's compute before the draw. Slot `id` of cull group `g` reads five `u32` (index
+   * count, instance count, first index, base vertex, first instance) at byte
+   * `(g * capacity + id) * 20`. Needs `INDIRECT` usage; the set never writes or destroys it.
+   */
+  args?: GPUBuffer;
 }
 
 /** One slot: a draw's geometry, instances and bounds. */
@@ -192,7 +203,7 @@ type Encoding = 'bundle' | 'direct' | 'multi';
 export class DrawSet {
   readonly label: string;
   readonly kind: DrawSetKind;
-  readonly cull: 'none' | 'cpu' | 'gpu';
+  readonly cull: 'none' | 'cpu' | 'gpu' | 'external';
   readonly capacity: number;
   readonly pass: CorePass;
   readonly order: number;
@@ -250,6 +261,9 @@ export class DrawSet {
     this.kind = desc.kind ?? 'static';
     const cull = desc.cull ?? 'auto';
     this.cull = cull === 'auto' ? (desc.capacity >= GPU_CULL_MIN_SLOTS ? 'gpu' : 'cpu') : cull;
+    if ((this.cull === 'external') !== !!desc.args) {
+      throw new Error(`${this.label}: \`args\` goes with cull 'external' (and only with it)`);
+    }
     this.capacity = desc.capacity;
     this.pass = host.pass(desc.pass ?? 'opaque');
     this.order = desc.order ?? 0;
@@ -340,7 +354,7 @@ ${desc.shader.code}`;
       });
     } else {
       this.slotBuffer = null;
-      this.argsBuffer = null;
+      this.argsBuffer = desc.args ?? null;
       this.paramsBuffer = null;
       this.cullGroup = null;
     }
@@ -406,7 +420,7 @@ ${desc.shader.code}`;
   destroy(): void {
     this.destroyed = true;
     this.slotBuffer?.destroy();
-    this.argsBuffer?.destroy();
+    if (this.cull !== 'external') this.argsBuffer?.destroy();
     this.paramsBuffer?.destroy();
     this.originBuffer?.destroy();
     this.bundles.length = 0;
@@ -820,7 +834,7 @@ ${desc.shader.code}`;
     const d = this.desc;
     this.bindCommon(enc, group, color, depth);
     const cpu = this.cull === 'cpu';
-    const gpu = this.cull === 'gpu';
+    const gpu = this.argsBuffer !== null;
     if (cpu) this.cullCpu(group);
     const vis = this.visible;
     const origins = this.originBuffer;

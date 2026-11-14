@@ -1,6 +1,7 @@
 /** WebGPU capability check + device creation. */
 
 import { compressionFeatures } from '../render/compressed';
+import { MULTI_DRAW_FEATURE } from '../render/core/core';
 
 export interface GpuContext {
   adapter: GPUAdapter;
@@ -33,6 +34,13 @@ export interface GpuInitOptions {
    * adapter can upload without a second device (ws/render-6). Default true.
    */
   compression?: boolean;
+  /**
+   * Ask for the draw features the render core uses when the adapter has them:
+   * `indirect-first-instance` (indirect draws of the immediate path's merged mesh runs and of
+   * retained sets) and Chromium's `chromium-experimental-multi-draw-indirect`
+   * (`MULTI_DRAW_FEATURE`). Default true.
+   */
+  drawFeatures?: boolean;
 }
 
 /**
@@ -63,6 +71,11 @@ export async function initGpu(
     wanted.push('timestamp-query');
   }
   if (opts.compression ?? true) wanted.push(...compressionFeatures(adapter));
+  if (opts.drawFeatures ?? true) {
+    const has = adapter.features as ReadonlySet<string>;
+    if (has.has('indirect-first-instance')) wanted.push('indirect-first-instance');
+    if (has.has(MULTI_DRAW_FEATURE)) wanted.push(MULTI_DRAW_FEATURE as GPUFeatureName);
+  }
   let device: GPUDevice;
   try {
     device = await adapter.requestDevice({ label: 'engine-device', requiredFeatures: wanted });
