@@ -28,7 +28,7 @@ post.blendTo({ vignette: { intensity: 0.6 } }, 2); // ease to a new look over 2 
 | `postQualityFor(...) / lowPostQuality` | quality tiers for weaker devices |
 | `neutralPostSettings()` / `cinematicPostSettings()` | a look-free preset / the tuned look `PostStack` starts from |
 | `createLutTexture(...)` | a colour-grading LUT |
-| `createPostHost(device, format, opts?)` | a stack without a `Renderer` (render-core games) |
+| `createPostHost(device, format, opts?: PostHostOptions)` | a stack without a `Renderer` (render-core games) |
 
 ## Contents
 
