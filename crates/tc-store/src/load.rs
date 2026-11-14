@@ -91,6 +91,23 @@ pub fn read<C: LogCodec>(dir: &Path, codec: &C) -> Result<ReadLog<C::Event>, Sto
     })
 }
 
+/// [`read`], from generation `from_gen` on, whose entries must all come
+/// after entry `after`: the tail of a game's base ([`crate::bases`]).
+pub fn read_from<C: LogCodec>(
+    dir: &Path,
+    codec: &C,
+    from_gen: u64,
+    after: u64,
+) -> Result<ReadLog<C::Event>, StoreError> {
+    let loaded = load(dir, codec, after, from_gen)?;
+    Ok(ReadLog {
+        meta: loaded.meta,
+        entries: loaded.entries,
+        clock: loaded.clock,
+        report: loaded.report,
+    })
+}
+
 /// The game's metadata bytes in `dir`.
 pub(crate) fn read_meta(dir: &Path) -> Result<Vec<u8>, StoreError> {
     let path = dir.join(META_FILE);

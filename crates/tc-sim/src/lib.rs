@@ -32,6 +32,7 @@
 //! [`Core::state_hash`]; nothing outside the log (wall time, connection
 //! ids, input credit) reaches the game's state.
 
+mod bases;
 mod changes;
 mod conn;
 mod core;
@@ -49,6 +50,7 @@ mod status;
 mod sync;
 mod wheel;
 
+pub use bases::{BASE_SETTLE, KEEP_BASES};
 pub use changes::Changes;
 pub use core::{ApplyError, Core, Replayed, STATE_HASH_VERSION};
 pub use driver::Driver;
@@ -60,8 +62,8 @@ pub use reload::{MAX_ROUNDS, RELOAD_POLL, ReloadReply, ReloadReport, SWAP_BEHIND
 pub use run::{Control, Running, SimHandle};
 pub use scheduler::{EventKey, Scheduler};
 pub use sim::{
-    ADVANCE_BUDGET, ADVANCE_SLICE, CLOCK_MARK_INTERVAL, CLOCK_PUSH_INTERVAL, FLUSH_INTERVAL,
-    OUTBOUND_BUDGET, SLOW_CLIENT_GRACE, Sim, SimConfig,
+    ADVANCE_BUDGET, ADVANCE_SLICE, BASE_EVERY, CLOCK_MARK_INTERVAL, CLOCK_PUSH_INTERVAL,
+    FLUSH_INTERVAL, OUTBOUND_BUDGET, SLOW_CLIENT_GRACE, Sim, SimConfig,
 };
 pub use status::{MarkStatus, STATUS_PUBLISH, SimStatus, StatusHandle};
 pub use sync::{

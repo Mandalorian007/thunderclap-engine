@@ -11,6 +11,9 @@
 //! it opens with nothing to recover. Reading needs no codec (an entry's
 //! sequence number is in its record's head).
 //!
+//! The game's bases (`base/`) are read first and copied too, each one
+//! whose tail the copy holds.
+//!
 //! A file can vanish while it is read (the archive took its generation):
 //! the backup then starts again, at most [`TRIES`] times.
 
@@ -19,6 +22,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::archive::{ARCHIVE_DIR, write_durable};
+use crate::base::{read_bases, write_base};
 use crate::copy::make_empty_dir;
 use crate::durable::sync_dir;
 use crate::error::StoreError;
@@ -42,6 +46,8 @@ pub struct BackupReport {
     pub last_seq: u64,
     /// The archive's files copied (none unless asked for).
     pub archive_files: usize,
+    /// The game's bases copied (`base/`, see [`crate::bases`]).
+    pub bases: usize,
     /// How many times it started.
     pub tries: u32,
 }
@@ -55,11 +61,18 @@ pub fn backup(dir: &Path, out: &Path, archive: bool) -> Result<BackupReport, Sto
     let mut tries = 0;
     loop {
         tries += 1;
-        match read_files(dir) {
-            Ok(files) => {
+        // The bases first: each one's tail is in the log read after it.
+        let read = read_bases(dir).and_then(|bases| Ok((bases, read_files(dir)?)));
+        match read {
+            Ok((bases, files)) => {
                 let (last_seq, files) = cut(files)?;
                 make_empty_dir(out)?;
                 let (count, bytes) = write_files(out, &files)?;
+                let mut base_files = 0;
+                for (base, data) in bases.iter().filter(|(b, _)| b.after <= last_seq) {
+                    write_base(out, base.generation, base.after, data)?;
+                    base_files += 1;
+                }
                 let archive_files = if archive {
                     copy_tree(&dir.join(ARCHIVE_DIR), &out.join(ARCHIVE_DIR))?
                 } else {
@@ -71,6 +84,7 @@ pub fn backup(dir: &Path, out: &Path, archive: bool) -> Result<BackupReport, Sto
                     bytes,
                     last_seq,
                     archive_files,
+                    bases: base_files,
                     tries,
                 });
             }
