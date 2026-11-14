@@ -13,7 +13,7 @@ import type { SceneTarget } from '../render/scene-target';
 import type { Texture, TextureLike } from '../render/texture';
 import { createShaderModule } from '../render/wgsl';
 import { buildEmitSurface, type EmitSurface } from './emit-surface';
-import { ParticlesOnCore } from './particles-core';
+import { type ParticleShape, ParticlesOnCore } from './particles-core';
 import {
   COLOR_CURVE_FLOATS,
   FX_PARTICLE_FLOATS,
@@ -228,6 +228,13 @@ export interface ParticleSystemOptions {
    * (`engine_lambert`, so `frame.lights` ambient, sun and point lights apply). Default false.
    */
   lit?: boolean;
+  /**
+   * ws/fx-fit: on a render core, world space: `'box'` draws each particle as a small cube (edge
+   * = its size, turned by its rotation) shaded by `coreDrawable.boxLight` (sun and ambient):
+   * voxel debris. Default `'quad'` (camera-facing). No sheet or soft fade on boxes; they blend
+   * premultiplied alpha unless `blend` says `'additive'`, and write no depth.
+   */
+  shape?: ParticleShape;
   /**
    * World space only: fade out with distance to the camera: whole nearer than `near`, gone
    * beyond `far` (world units). Default none.
@@ -683,7 +690,9 @@ export class ParticleSystem implements Drawable {
       });
     }
 
-    const blend = opts.blend === 'alpha' ? PREMULTIPLIED : ADDITIVE;
+    // Lit boxes are solid debris: premultiplied alpha unless the game asks for additive.
+    const alpha = opts.blend === 'alpha' || (opts.blend === undefined && opts.shape === 'box');
+    const blend = alpha ? PREMULTIPLIED : ADDITIVE;
     this.blend = blend;
     const host = this.renderer;
     if (!host) {
@@ -698,7 +707,8 @@ export class ParticleSystem implements Drawable {
         sheet: fxs.sheet,
         sampler: fxs.sampler,
         blend,
-        readsDepth: this.softness > 0,
+        readsDepth: this.softness > 0 && opts.shape !== 'box',
+        shape: opts.shape ?? 'quad',
       });
       core!.addDrawable(this.coreDrawable);
       if (opts.countAlive) this.counter = this.makeCounter(fx, opts.countBelowY ?? -Infinity);

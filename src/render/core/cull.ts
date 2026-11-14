@@ -19,6 +19,11 @@ export const ARGS_WORDS = 5;
 /** Bytes of one argument record. */
 export const ARGS_BYTES = ARGS_WORDS * 4;
 /**
+ * Bytes of one `drawIndirect` argument record (ws/actor-fit; an unindexed set's,
+ * `DrawSetDesc.indexed: false`): vertex count, instance count, first vertex, first instance.
+ */
+export const DRAW_ARGS_BYTES = 16;
+/**
  * Bytes of a set's cull parameters (count, capacity, views, firstInstance mode, then the max
  * draw distance, ws/render-fit).
  */

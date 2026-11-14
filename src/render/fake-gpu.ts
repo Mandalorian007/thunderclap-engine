@@ -118,7 +118,14 @@ export interface FakeBindGroup {
 export type PassCommand =
   | { op: 'setPipeline'; pipeline: unknown }
   | { op: 'setBindGroup'; index: number; group: unknown; offsets: number[] }
-  | { op: 'draw'; vertices: number; instances: number; firstInstance: number }
+  | {
+      op: 'draw';
+      vertices: number;
+      instances: number;
+      firstInstance: number;
+      /** Recorded when non-zero (ws/actor-fit). */
+      firstVertex?: number;
+    }
   | {
       op: 'drawIndexed';
       indices: number;
@@ -430,8 +437,12 @@ export function createFakeDevice(
       setPipeline: (pipeline: unknown) => cmd({ op: 'setPipeline', pipeline }),
       setBindGroup: (index: number, group: unknown, offsets?: Iterable<number>) =>
         cmd({ op: 'setBindGroup', index, group, offsets: offsets ? [...offsets] : [] }),
-      draw: (vertices: number, instances = 1, _fv = 0, firstInstance = 0) =>
-        cmd({ op: 'draw', vertices, instances, firstInstance }),
+      draw: (vertices: number, instances = 1, firstVertex = 0, firstInstance = 0) =>
+        cmd(
+          firstVertex === 0
+            ? { op: 'draw', vertices, instances, firstInstance }
+            : { op: 'draw', vertices, instances, firstInstance, firstVertex },
+        ),
       drawIndexed: (indices: number, instances = 1, firstIndex = 0, _bv = 0, firstInstance = 0) =>
         cmd(
           firstIndex === 0

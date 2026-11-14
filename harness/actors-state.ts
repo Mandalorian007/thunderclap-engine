@@ -34,6 +34,21 @@ export interface HarnessActorsState {
   drawn: number;
   /** Median CPU ms of a frame's `prepare` + `draw` over the last 60 frames. */
   cpuMs: number;
+  /** Extra models with no actors (`?models=M`, default 0): robot copies whose draws stay empty. */
+  emptyModels: number;
+  /** The device has `timestamp-query` (`?timing=1` measures with it). */
+  timestamps: boolean;
+  /** Median GPU ms of a frame (pose pass + core passes) over the last 120 samples; -1 unmeasured. */
+  gpuMs: number;
+  /** GPU samples taken. */
+  gpuSamples: number;
+  /**
+   * `?fit=1` (ws/actor-fit): a pose hook nods the robots' heads (CPU twin included, so
+   * `poseError` checks it) and an `'actor'` draw set lays a contact shadow under each actor.
+   */
+  fit: boolean;
+  /** With `fit`: shadow quads the pose pass counted in view 0 (read back with `check()`). */
+  shadows: number;
 }
 
 declare global {

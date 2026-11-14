@@ -1,6 +1,7 @@
 import { CORE_DRAWABLE_WGSL, CORE_VIEW_EXTRA_WGSL } from '../render/core/drawable';
 import { WGSL_PBR } from '../render/pbr-wgsl';
 import { WGSL_GLOBALS, WGSL_LIGHTS, WGSL_NOISE } from '../render/wgsl';
+import { FX_DEPTH_WGSL } from './depth';
 
 /** Wave layers the params block carries (`WaterOptions.waves` beyond this are ignored). */
 export const WATER_MAX_WAVES = 4;
@@ -228,6 +229,7 @@ export const WATER_CORE_FLOATS = 16;
 export const WATER_CORE_WGSL = /* wgsl */ `
 ${CORE_DRAWABLE_WGSL}
 ${CORE_VIEW_EXTRA_WGSL}
+${FX_DEPTH_WGSL}
 ${WATER_PARAMS_WGSL}
 struct WaterCore {
   sun: vec4f,       // direction to the sun xyz, on
@@ -318,7 +320,7 @@ fn w_unproject(ndc: vec2f, d: f32) -> vec3f {
   if (has_depth_tex) {
     let px = clamp(vec2i(in.clip.xy), vec2i(0), ddims - 1);
     let d = textureLoad(scene_depth, px, 0);
-    if (d < 1.0) {
+    if (!fx_depth_is_far(d)) {
       diff = max(length(w_unproject(ndc, d) - eye) - own, 0.0);
       has_depth = true;
     }
@@ -361,7 +363,7 @@ fn w_unproject(ndc: vec2f, d: f32) -> vec3f {
       let fp = vp_min + (q * vec2f(0.5, -0.5) + 0.5) * vp_size;
       let ip = clamp(vec2i(fp), vec2i(0), ddims - 1);
       let sd = textureLoad(scene_depth, ip, 0);
-      if (sd < c.z / c.w) {
+      if (fx_depth_nearer(sd, c.z / c.w)) {
         refl = textureLoad(scene_color, clamp(ip, vec2i(0), cdims - 1), 0).rgb;
         break;
       }

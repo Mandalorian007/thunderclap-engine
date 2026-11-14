@@ -509,3 +509,171 @@ describe('device restore (ws/core-passes)', () => {
     expect(next.errors).toEqual([]);
   });
 });
+
+/** The draws of the last bundle `label` recorded. */
+function bundleDraws(s: Scene, label: string): { op: string; offset: number }[] {
+  const b = s.fake.bundles.filter((x) => x.label === `${label} bundle`).at(-1);
+  return (b?.commands ?? [])
+    .filter((c) => c.op.startsWith('draw'))
+    .map((c) => ({ op: c.op, offset: (c as { offset: number }).offset }));
+}
+
+describe('models with no actor draw nothing (ws/actor-fit)', () => {
+  it("leaves an empty model's indirect draws out of the bundle, and puts them back", () => {
+    const s = scene(4);
+    for (let i = 0; i < 6; i++) s.actors.addModel(walkerRig());
+    frame(s, 0);
+    // Eight models, two with actors: two draws, not eight.
+    expect(bundleDraws(s, 'actors').map((d) => d.offset)).toEqual([0, 20]);
+    s.actors.setRecord(9, { model: 5 });
+    frame(s, 0.016);
+    expect(bundleDraws(s, 'actors').map((d) => d.offset)).toEqual([0, 20, 5 * 20]);
+    const recorded = s.fake.bundles.length;
+    // Moving an actor between live models re-records nothing.
+    s.actors.setRecord(0, { model: 1 });
+    frame(s, 0.032);
+    expect(s.fake.bundles.length).toBe(recorded);
+    s.actors.remove(9);
+    frame(s, 0.048);
+    expect(bundleDraws(s, 'actors').map((d) => d.offset)).toEqual([0, 20]);
+    s.actors.setRecord(9, { model: 5 });
+    s.actors.setRecord(9, { model: -1 });
+    frame(s, 0.064);
+    expect(bundleDraws(s, 'actors')).toHaveLength(2);
+    expect(s.fake.errors).toEqual([]);
+  });
+});
+
+describe('the pose hook (ws/actor-fit)', () => {
+  it('calls actor_pose in the pose pass only when given, with the record fields', () => {
+    const fake = createFakeDevice();
+    const modules: string[] = [];
+    const make = fake.device.createShaderModule.bind(fake.device);
+    (fake.device as unknown as { createShaderModule: unknown }).createShaderModule = (
+      d: GPUShaderModuleDescriptor,
+    ) => {
+      modules.push(d.code);
+      return make(d);
+    };
+    const core = createRenderCore(fake.device as unknown as GPUDevice);
+    createActorSystem(core, { slots: 4, label: 'plain' });
+    const plain = modules.find((m) => m.includes('fn pose('))!;
+    expect(plain).not.toContain('actor_pose');
+    expect(plain).toContain('atomicAdd(&args[cell * 5u + 1u], 1u)');
+    const hook =
+      'fn actor_pose(actor: u32, model: u32, node: u32, p: Trs, time: f32) -> Trs {\n' +
+      '  var o = p; o.t.y += bitcast<f32>(actor_word(actor, ACTOR_FIELD_LIFT)); return o;\n}';
+    createActorSystem(core, { slots: 4, recordLayout: { lift: 'f32' }, poseWgsl: hook });
+    const posed = modules.filter((m) => m.includes('fn pose(')).at(-1)!;
+    expect(posed).toContain(hook);
+    expect(posed).toContain(`const ACTOR_FIELD_LIFT = ${ACTOR_HEADER_WORDS}u;`);
+    expect(posed).toContain('p = actor_pose(s, model, b, p, params.time);');
+  });
+
+  it("poseCpu runs the CPU twin on each node's local transform", () => {
+    const fake = createFakeDevice();
+    const core = createRenderCore(fake.device as unknown as GPUDevice);
+    const seen: number[] = [];
+    const a = createActorSystem(core, {
+      slots: 4,
+      recordLayout: { lift: 'f32' },
+      poseWgsl:
+        'fn actor_pose(actor: u32, model: u32, node: u32, p: Trs, time: f32) -> Trs { return p; }',
+      poseCpu: (slot, model, node, trs, at) => {
+        seen.push(slot * 100 + model * 10 + node);
+        trs[at + 1]! += a.readF32(slot, ACTOR_HEADER_WORDS);
+      },
+    });
+    const plainSys = createActorSystem(core, { slots: 4, label: 'plain' });
+    for (const sys of [a, plainSys]) {
+      sys.addModel(walkerRig());
+      sys.setRecord(2, { model: 0, position: [1, 0, 0] });
+    }
+    a.setRecord(2, { fields: { lift: 3 } });
+    const nodes = a.rig(0).nodes;
+    const lifted = new Float32Array(nodes * 12);
+    const plain = new Float32Array(nodes * 12);
+    a.poseCpu(2, lifted);
+    plainSys.poseCpu(2, plain);
+    expect(seen).toEqual(Array.from({ length: nodes }, (_, n) => 200 + n));
+    // Every root node rises by the record's lift; the hook allocates nothing.
+    for (let n = 0; n < nodes; n++) {
+      if (a.rig(0).parents[n]! < 0) expect(lifted[n * 12 + 7]! - plain[n * 12 + 7]!).toBeCloseTo(3);
+    }
+    expect(countAllocs(() => a.poseCpu(2, lifted)).typedArrays).toBe(0);
+  });
+});
+
+describe('sets sharing the actors (ws/actor-fit)', () => {
+  const VS =
+    '@vertex fn body(in: VertexIn, @builtin(instance_index) inst: u32) -> @builtin(position) vec4f {\n' +
+    '  let actor = actor_at(in.draw, inst);\n' +
+    '  return view.viewProj * vec4f(actor_point(actor_skin(actor, in.joints, in.weights), in.position), 1.0);\n}\n' +
+    '@fragment fn paint() -> @location(0) vec4f { return vec4f(0.0, 0.0, 0.0, 0.5); }';
+  const QUAD =
+    '@vertex fn vs(in: VertexIn, @builtin(instance_index) inst: u32) -> @builtin(position) vec4f {\n' +
+    '  let actor = actor_at(actor_draw_of(in.core_vertex), inst);\n' +
+    '  return view.viewProj * vec4f(actor_position(actor), 1.0);\n}\n' +
+    '@fragment fn fs() -> @location(0) vec4f { return vec4f(0.0); }';
+
+  it('draws the bodies again with its own entries, from the same arguments', () => {
+    const s = scene(4);
+    const outline = s.actors.addDrawSet({
+      label: 'outline',
+      shader: { code: VS, vertexEntry: 'body', fragmentEntry: 'paint', cullMode: 'front' },
+      order: 5,
+    });
+    s.actors.addModel(walkerRig());
+    frame(s, 0);
+    expect(outline.ready).toBe(true);
+    // The same records as the body's set: model meshes 0 and 1 (model 2 has no actor).
+    expect(bundleDraws(s, 'outline')).toEqual([
+      { op: 'drawIndexedIndirect', offset: 0 },
+      { op: 'drawIndexedIndirect', offset: 20 },
+    ]);
+    expect(() => s.actors.addDrawSet({ shader: { code: QUAD }, shape: 'actor' })).toThrow(
+      /actorVertices/,
+    );
+    expect(s.fake.errors).toEqual([]);
+  });
+
+  it("draws a few vertices per actor in an 'actor' set (a contact shadow's quad)", () => {
+    const fake = createFakeDevice();
+    const device = fake.device as unknown as GPUDevice;
+    const core = createRenderCore(device);
+    const actors = createActorSystem(core, { slots: 64, actorVertices: 6 });
+    actors.addModel(walkerRig());
+    actors.addModel(tubeRig());
+    const shadow = actors.addDrawSet({ label: 'shadow', shader: { code: QUAD }, shape: 'actor' });
+    actors.setRecord(0, { model: 0 });
+    actors.setRecord(1, { model: 1 });
+    const camera = Camera.perspective(Math.PI / 3, 16 / 9, 0.1, 500);
+    camera.lookAt([0, 10, -20], [0, 0, 0]);
+    const view = setViewFromCamera(createRenderView(), camera);
+    const s = { fake, device, core, actors, views: [view] } as unknown as Scene;
+    frame(s, 0);
+    expect(shadow.ready).toBe(true);
+    // Nine words a cell: the body's five, then the shadow's drawIndirect.
+    expect(bundleDraws(s, 'actors').map((d) => d.offset)).toEqual([0, 36]);
+    expect(bundleDraws(s, 'shadow')).toEqual([
+      { op: 'drawIndirect', offset: 20 },
+      { op: 'drawIndirect', offset: 56 },
+    ]);
+    fake.device.queue.submit([]);
+    const tpl = new Uint32Array(
+      fake.buffers.find((b) => b.label === 'actors args template')!.data.buffer,
+    );
+    expect([...tpl.slice(9, 18)]).toEqual([
+      actors.rig(1).meshes[0]!.indices.length,
+      0,
+      actors.rig(0).meshes[0]!.indices.length,
+      actors.rig(0).meshes[0]!.vertexCount,
+      0,
+      6,
+      0,
+      6,
+      0,
+    ]);
+    expect(fake.errors).toEqual([]);
+  });
+});

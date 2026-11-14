@@ -144,6 +144,6 @@ describe('SkyPass (ws/core-passes)', () => {
   it('shades the dome with the same sky_shade as the renderer sky', () => {
     expect(SKY_PASS_WGSL).toContain('fn sky_shade(');
     expect(SKY_WGSL).toContain('fn sky_shade(');
-    expect(SKY_PASS_WGSL).toContain('o.clip = vec4f(x, y, 1.0, 1.0);');
+    expect(SKY_PASS_WGSL).toContain('o.clip = vec4f(x, y, fx_depth_far(), 1.0);');
   });
 });

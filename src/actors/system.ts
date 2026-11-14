@@ -17,11 +17,11 @@
  */
 import type { Arena, ArenaAlloc } from '../render/core/arena';
 import type { RenderCore } from '../render/core/core';
-import { ARGS_BYTES } from '../render/core/cull';
-import type { DrawSet } from '../render/core/draw-set';
+import { ARGS_BYTES, DRAW_ARGS_BYTES } from '../render/core/cull';
+import type { DrawSet, DrawSetDesc, DrawSetShader } from '../render/core/draw-set';
 import { type BufferLayout, createVertexLayout } from '../render/core/layout';
 import { MAX_VIEWS, VIEW_SLOT_BYTES } from '../render/core/view';
-import { createPoseScratch, type PoseScratch, poseRecord } from './pose-cpu';
+import { type ActorPoseCpu, createPoseScratch, type PoseScratch, poseRecord } from './pose-cpu';
 import {
   ACTOR_NONE,
   type ActorRecordInput,
@@ -35,8 +35,11 @@ import {
   ACTOR_DEFAULT_LIGHT_WGSL,
   ACTOR_MAX_LODS,
   ACTOR_PARAMS_BYTES,
+  type ActorShaderConsts,
   actorDrawWgsl,
+  actorFieldConsts,
   actorPoseWgsl,
+  actorSetPreludeWgsl,
   RIG,
   RIG_CLIP_WORDS,
   RIG_HEADER_WORDS,
@@ -90,8 +93,62 @@ export interface ActorSystemOptions {
   lightWgsl?: string;
   /** The core pass the actors draw in (default `'opaque'`). */
   pass?: string;
+  /**
+   * The pose hook (ws/actor-fit): WGSL defining `fn actor_pose(actor: u32, model: u32, node: u32,
+   * p: Trs, time: f32) -> Trs`, called in the pose pass for every node of every actor after its
+   * clips are sampled and blended, on the node's local transform (`struct Trs { t: vec3f, q:
+   * vec4f, s: vec3f }`: translation, rotation quaternion xyzw, scale). It may read records with
+   * `actor_word(actor, ACTOR_FIELD_<NAME>)` (a game's own joint angles) and the rig table. A
+   * game drives its parts' transforms with it in place of its own pose pass. Default none: the
+   * pass is unchanged.
+   */
+  poseWgsl?: string;
+  /** The CPU twin of `poseWgsl`, for `poseCpu` (picking, attachments). */
+  poseCpu?: ActorPoseCpu;
+  /**
+   * Vertices per visible actor for draw sets added with `shape: 'actor'` (ws/actor-fit; a
+   * contact shadow's quad is 6). Default 0: no such sets, and the indirect arguments keep five
+   * words per (view, model mesh); with it each cell also holds a `drawIndirect` record the pose
+   * pass counts actors into.
+   */
+  actorVertices?: number;
   label?: string;
 }
+
+/**
+ * A draw set over the actor system's models (ws/actor-fit; `ActorSystem.addDrawSet`): the same
+ * meshes, poses, visible lists and indirect counts as the body, drawn again with the set's own
+ * shader (a shadow, a held item, an outline).
+ */
+export interface ActorDrawSetDesc {
+  label?: string;
+  /**
+   * The shader. The system prepends, after the core's view and `VertexIn`, the actor buffers at
+   * group 1 (`bones`, `lists`, `records`, `actor_params`) and helpers: `actor_at(draw, inst)`,
+   * `actor_word`, `actor_f32`, `actor_position`, `actor_yaw`, `actor_scale`, `actor_model`,
+   * `actor_bone`, `actor_skin`, `actor_point`, `actor_dir`, `actor_draw_of` and the system's
+   * `actor_light`. Entry points are the set's (`vertexEntry`, default `vs`).
+   */
+  shader: DrawSetShader;
+  /**
+   * `'mesh'` (default): each model mesh's indexed vertices (`ACTOR_VERTEX_LAYOUT`, `in.draw`
+   * the mesh) per visible actor, as the body. `'actor'`: `actorVertices` unindexed vertices
+   * per visible actor and no vertex buffer; `actor_draw_of(in.core_vertex)` is the mesh and
+   * `in.core_vertex % ACTOR_SET_VERTICES` the corner (needs `ActorSystemOptions.actorVertices`).
+   */
+  shape?: 'mesh' | 'actor';
+  pass?: string;
+  order?: number;
+  depth?: boolean;
+  castShadow?: boolean;
+  /** The set's own bind groups, at 2, 3, … (group 1 is the system's). */
+  bindGroups?: DrawSetDesc['bindGroups'];
+  variants?: DrawSetDesc['variants'];
+  passes?: DrawSetDesc['passes'];
+}
+
+/** The vertex layout of an `'actor'` set: no attributes (vertices come from the vertex index). */
+const NO_VERTICES: BufferLayout = createVertexLayout({ stride: 4, attributes: [] });
 
 /** Per-frame counts of the last `prepare`. */
 export interface ActorStats {
@@ -157,18 +214,26 @@ export class ActorSystem {
   private readonly computeDesc: GPUComputePassDescriptor;
   private readonly scratch: PoseScratch;
   private destroyed = false;
-  private readonly consts: {
-    bones: number;
-    stride: number;
-    maxDraws: number;
-    slots: number;
-    views: number;
-  };
+  private readonly consts: ActorShaderConsts;
   private drawLayout!: GPUBindGroupLayout;
   private drawGroup!: GPUBindGroup;
   /** Each model mesh's arena places, to write again after a device restore. */
   private readonly meshAllocs: { v: ArenaAlloc; ix: ArenaAlloc }[] = [];
   private readonly offRestored: () => void;
+  /** Words per argument cell (5, or 9 with `actorVertices`). */
+  private readonly argsWords: number;
+  private readonly actorVertices: number;
+  private readonly poseHook: ActorPoseCpu | null;
+  private readonly lightWgsl: string;
+  /** Live records per model, and whether its draws are shown (ws/actor-fit). */
+  private readonly live: Int32Array;
+  private readonly shown: Uint8Array;
+  private liveDirty = false;
+  /** Sets added with `addDrawSet`, and whether each is an `'actor'` set. */
+  private readonly extra: { set: DrawSet; actor: boolean; groups: DrawSetDesc['bindGroups'] }[] =
+    [];
+  private setLayout!: GPUBindGroupLayout;
+  private setGroup!: GPUBindGroup;
 
   constructor(core: RenderCore, opts: ActorSystemOptions) {
     this.core = core;
@@ -196,6 +261,12 @@ export class ActorSystem {
     this.stride = this.shape.stride;
     this.sampleLight = opts.sampleLight ?? null;
     this.scratch = createPoseScratch(this.bonesPerSlot);
+    this.actorVertices = Math.max(0, Math.floor(opts.actorVertices ?? 0));
+    this.argsWords = this.actorVertices > 0 ? (ARGS_BYTES + DRAW_ARGS_BYTES) / 4 : ARGS_BYTES / 4;
+    this.poseHook = opts.poseCpu ?? null;
+    this.lightWgsl = opts.lightWgsl ?? ACTOR_DEFAULT_LIGHT_WGSL;
+    this.live = new Int32Array(this.maxModels);
+    this.shown = new Uint8Array(this.maxModels).fill(1);
 
     // Records: every slot empty, unit scale, rate 1, white tint and light.
     this.recU32 = new Uint32Array(this.slots * this.stride);
@@ -208,12 +279,16 @@ export class ActorSystem {
       maxDraws: this.maxDraws,
       slots: this.slots,
       views: this.maxViews,
+      argsWords: this.argsWords,
+      actorVertices: this.actorVertices,
+      pose: opts.poseWgsl ?? '',
+      fieldConsts: actorFieldConsts(this.shape.fields),
     };
     const consts = this.consts;
     // The shader compares distances; an infinite one goes up as the largest float.
     for (let i = 0; i < ACTOR_MAX_LODS; i++) this.paramsF32[4 + i] = Math.min(lods[i] ?? 0, 3.4e38);
     this.paramsU32[8] = lods.length;
-    this.templateData = new Uint32Array((core.maxViews * this.maxDraws * ARGS_BYTES) / 4);
+    this.templateData = new Uint32Array(core.maxViews * this.maxDraws * this.argsWords);
     this.computeDesc = { label: `${this.label} pose` };
     this.build();
     this.vertexArena = core.createArena({
@@ -229,7 +304,7 @@ export class ActorSystem {
     this.drawSet = core.createDrawSet({
       label: this.label,
       shader: {
-        code: actorDrawWgsl(consts, opts.lightWgsl ?? ACTOR_DEFAULT_LIGHT_WGSL, this.shape.fields),
+        code: actorDrawWgsl(consts, this.lightWgsl, this.shape.fields),
         cullMode: 'none',
       },
       vertexLayout: ACTOR_VERTEX_LAYOUT,
@@ -239,6 +314,9 @@ export class ActorSystem {
       kind: 'static',
       cull: 'external',
       args: this.args,
+      ...(this.argsWords !== ARGS_BYTES / 4
+        ? { argsStride: this.argsWords * 4 * this.maxDraws }
+        : {}),
       pass: opts.pass ?? 'opaque',
       bindGroups: [{ layout: this.drawLayout, group: this.drawGroup }],
     });
@@ -263,7 +341,7 @@ export class ActorSystem {
       usage: u.STORAGE | u.COPY_SRC,
     });
     // Arguments for every view the core may draw, so a view past `maxViews` draws nothing.
-    const argsBytes = core.maxViews * this.maxDraws * ARGS_BYTES;
+    const argsBytes = core.maxViews * this.maxDraws * this.argsWords * 4;
     this.args = device.createBuffer({
       label: `${this.label} args`,
       size: argsBytes,
@@ -330,6 +408,25 @@ export class ActorSystem {
         { binding: 2, resource: { buffer: this.records } },
       ],
     });
+    this.setLayout = device.createBindGroupLayout({
+      label: `${this.label} sets`,
+      entries: [
+        { binding: 0, visibility: S.VERTEX | S.FRAGMENT, buffer: { type: 'read-only-storage' } },
+        { binding: 1, visibility: S.VERTEX | S.FRAGMENT, buffer: { type: 'read-only-storage' } },
+        { binding: 2, visibility: S.VERTEX | S.FRAGMENT, buffer: { type: 'read-only-storage' } },
+        { binding: 3, visibility: S.VERTEX | S.FRAGMENT, buffer: { type: 'uniform' } },
+      ],
+    });
+    this.setGroup = device.createBindGroup({
+      label: `${this.label} sets`,
+      layout: this.setLayout,
+      entries: [
+        { binding: 0, resource: { buffer: this.bones } },
+        { binding: 1, resource: { buffer: this.lists } },
+        { binding: 2, resource: { buffer: this.records } },
+        { binding: 3, resource: { buffer: this.paramsBuffer } },
+      ],
+    });
   }
 
   /**
@@ -352,6 +449,87 @@ export class ActorSystem {
       }
     }
     this.drawSet.setBindGroups([{ layout: this.drawLayout, group: this.drawGroup }], this.args);
+    for (const e of this.extra) e.set.setBindGroups(this.setGroups(e.groups), this.args);
+  }
+
+  private setGroups(
+    own: DrawSetDesc['bindGroups'],
+  ): { layout: GPUBindGroupLayout; group: GPUBindGroup }[] {
+    return [{ layout: this.setLayout, group: this.setGroup }, ...(own ?? [])];
+  }
+
+  /** Add model mesh `d`'s slot to an added set (slot `d`, its own argument record). */
+  private addExtraSlot(e: { set: DrawSet; actor: boolean }, d: number): void {
+    const w = this.argsWords * 4;
+    if (e.actor) {
+      e.set.addAt(d, {
+        indexCount: this.actorVertices,
+        instanceCount: 0,
+        bounds: [0, 0, 0, Infinity],
+        argsOffset: d * w + ARGS_BYTES,
+      });
+    } else {
+      const a = this.meshAllocs[d]!;
+      e.set.addAt(d, {
+        vertices: a.v,
+        indices: a.ix,
+        indexCount: a.ix.size / 4,
+        instanceCount: 0,
+        bounds: [0, 0, 0, Infinity],
+        ...(w !== ARGS_BYTES ? { argsOffset: d * w } : {}),
+      });
+    }
+    if (!this.shown[this.modelOfDraw(d)]) e.set.setHidden(d, true);
+  }
+
+  private modelOfDraw(d: number): number {
+    let m = 0;
+    while (m + 1 < this.drawBases.length && this.drawBases[m + 1]! <= d) m++;
+    return m;
+  }
+
+  /**
+   * Another draw set over the system's models (ws/actor-fit): the bodies' meshes (or, with
+   * `shape: 'actor'`, a few vertices per actor), poses and per-view visible lists, drawn with
+   * `desc.shader` — a contact shadow, a held item's icon, an outline. One slot per model mesh
+   * (slot = draw), indirect from the system's arguments, so it costs one bundle more and no
+   * extra pass. Models with no live actor are left out, as in the body's set. Allocates; call
+   * at load.
+   */
+  addDrawSet(desc: ActorDrawSetDesc): DrawSet {
+    this.alive();
+    const actor = desc.shape === 'actor';
+    if (actor && this.actorVertices === 0) {
+      throw new Error(`${this.label}: an 'actor' set needs ActorSystemOptions.actorVertices`);
+    }
+    const label = desc.label ?? `${this.label} set ${this.extra.length + 1}`;
+    const set = this.core.createDrawSet({
+      label,
+      shader: {
+        ...desc.shader,
+        code:
+          actorSetPreludeWgsl(this.consts, this.lightWgsl, this.shape.fields) + desc.shader.code,
+      },
+      vertexLayout: actor ? NO_VERTICES : ACTOR_VERTEX_LAYOUT,
+      vertices: this.vertexArena,
+      ...(actor ? { indexed: false } : { indices: this.indexArena }),
+      capacity: this.maxDraws,
+      kind: 'static',
+      cull: 'external',
+      args: this.args,
+      argsStride: this.argsWords * 4 * this.maxDraws,
+      pass: desc.pass ?? 'opaque',
+      ...(desc.order !== undefined ? { order: desc.order } : {}),
+      ...(desc.depth !== undefined ? { depth: desc.depth } : {}),
+      ...(desc.castShadow !== undefined ? { castShadow: desc.castShadow } : {}),
+      ...(desc.variants ? { variants: desc.variants } : {}),
+      ...(desc.passes ? { passes: desc.passes } : {}),
+      bindGroups: this.setGroups(desc.bindGroups),
+    });
+    const e = { set, actor, groups: desc.bindGroups };
+    this.extra.push(e);
+    for (let d = 0; d < this.draws; d++) this.addExtraSlot(e, d);
+    return set;
   }
 
   /** A mesh's vertices with the draw index `d` in each vertex's last word. */
@@ -407,25 +585,39 @@ export class ActorSystem {
       const ix = this.indexArena.alloc(mesh.indices.byteLength, 4);
       this.indexArena.write(ix, mesh.indices);
       this.meshAllocs[d] = { v, ix };
+      const W = this.argsWords;
       const slot = this.drawSet.add({
         vertices: v,
         indices: ix,
         indexCount: mesh.indices.length,
         instanceCount: 0,
         bounds: [0, 0, 0, Infinity],
+        ...(W !== ARGS_BYTES / 4 ? { argsOffset: d * W * 4 } : {}),
       });
       if (slot !== d) throw new Error(`${this.label}: draw slot ${slot} is not mesh ${d}`);
       for (let view = 0; view < this.core.maxViews; view++) {
-        const a = ((view * this.maxDraws + d) * ARGS_BYTES) / 4;
+        const a = (view * this.maxDraws + d) * W;
         this.templateData[a] = mesh.indices.length;
         this.templateData[a + 1] = 0;
         this.templateData[a + 2] = ix.offset / 4;
         this.templateData[a + 3] = v.offset / ACTOR_VERTEX_BYTES;
         this.templateData[a + 4] = 0;
+        if (W > 5) {
+          // The 'actor' sets' drawIndirect: the corners of each actor, the mesh in firstVertex.
+          this.templateData[a + 5] = this.actorVertices;
+          this.templateData[a + 6] = 0;
+          this.templateData[a + 7] = d * this.actorVertices;
+          this.templateData[a + 8] = 0;
+        }
       }
     }
     this.draws += rig.meshes.length;
     this.drawBases.push(drawBase);
+    // No live actor yet: its draws stay out of the bundles until one shows it.
+    this.liveDirty = true;
+    for (const e of this.extra) {
+      for (let m = 0; m < rig.meshes.length; m++) this.addExtraSlot(e, drawBase + m);
+    }
     this.rigs.push(rig);
     this.device.queue.writeBuffer(this.template, 0, this.templateData);
     this.rigBuffer.destroy();
@@ -449,7 +641,10 @@ export class ActorSystem {
       if (rec.model >= 0 && !this.rigs[rec.model]) {
         throw new Error(`${this.label}: no model ${rec.model}`);
       }
-      u[b + R.model] = rec.model < 0 ? ACTOR_NONE : rec.model;
+      const was = u[b + R.model]!;
+      const now = rec.model < 0 ? ACTOR_NONE : rec.model;
+      if (was !== now) this.count(was, now);
+      u[b + R.model] = now;
       if (rec.model >= 0 && slot >= this.high) this.high = slot + 1;
     }
     if (rec.position) {
@@ -496,6 +691,7 @@ export class ActorSystem {
   /** Empty slot `slot` (it draws nothing; its record resets). */
   remove(slot: number): void {
     this.check(slot);
+    this.count(this.recU32[slot * this.stride + R.model]!, ACTOR_NONE);
     this.reset(slot * this.stride);
     this.dirty(slot);
   }
@@ -538,7 +734,18 @@ export class ActorSystem {
     const rig = this.rigs[model]!;
     const need = (space === 'world' ? rig.nodes : rig.joints) * 12;
     if (out.length < need) throw new Error(`${this.label}: poseCpu needs ${need} floats`);
-    poseRecord(rig, this.recF32, this.recU32, base, time, this.scratch, out, space);
+    poseRecord(
+      rig,
+      this.recF32,
+      this.recU32,
+      base,
+      time,
+      this.scratch,
+      out,
+      space,
+      this.poseHook,
+      slot,
+    );
     return true;
   }
 
@@ -573,6 +780,7 @@ export class ActorSystem {
     }
     encoder.copyBufferToBuffer(this.template, 0, this.args, 0, this.templateData.byteLength);
     st.calls++;
+    if (this.liveDirty) this.showLive();
     if (this.high === 0 || this.rigs.length === 0) return;
     const pass = encoder.beginComputePass(this.computeDesc);
     pass.setPipeline(this.posePipeline);
@@ -589,6 +797,7 @@ export class ActorSystem {
     this.destroyed = true;
     this.offRestored();
     this.drawSet.destroy();
+    for (const e of this.extra) e.set.destroy();
     for (const b of [
       this.records,
       this.bones,
@@ -611,6 +820,32 @@ export class ActorSystem {
   private check(slot: number): void {
     if (!(slot >= 0 && slot < this.slots && Number.isInteger(slot))) {
       throw new Error(`${this.label}: no slot ${slot}`);
+    }
+  }
+
+  /** A record went from model `was` to `now` (either may be `ACTOR_NONE`). */
+  private count(was: number, now: number): void {
+    if (was !== ACTOR_NONE) this.live[was]!--;
+    if (now !== ACTOR_NONE) this.live[now]!++;
+    this.liveDirty = true;
+  }
+
+  /**
+   * Leave out the draws of models no record shows (ws/actor-fit), so the bundles hold no empty
+   * indirect draws; a set re-records only when a model gains its first actor or loses its last.
+   */
+  private showLive(): void {
+    this.liveDirty = false;
+    for (let m = 0; m < this.rigs.length; m++) {
+      const show = this.live[m]! > 0 ? 1 : 0;
+      if (show === this.shown[m]) continue;
+      this.shown[m] = show;
+      const base = this.drawBases[m]!;
+      const end = base + this.rigs[m]!.meshes.length;
+      for (let d = base; d < end; d++) {
+        this.drawSet.setHidden(d, !show);
+        for (const e of this.extra) e.set.setHidden(d, !show);
+      }
     }
   }
 

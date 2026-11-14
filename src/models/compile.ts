@@ -1,4 +1,11 @@
-import { type AxisIndex, COLOR_MODE, MODEL_VERTEX_FLOATS, ModelBuilder, type V3 } from './builder';
+import {
+  type AxisIndex,
+  COLOR_MODE,
+  type DownShade,
+  MODEL_VERTEX_FLOATS,
+  ModelBuilder,
+  type V3,
+} from './builder';
 import {
   MAX_MODEL_CHANNELS,
   type MaterialCodeTable,
@@ -312,6 +319,12 @@ function bound(p: Part): boolean {
   return !!p.motion || p.glow !== undefined;
 }
 
+/** How `compileModel` builds (ws/actor-fit). */
+export interface CompileModelOptions {
+  /** Which normal darkens down faces (`DownShade`; default `'model'`). */
+  downShade?: DownShade;
+}
+
 /**
  * Compile a part model against the game's material table into draw units: the top-level
  * parts that move or glow each become a unit, the rest bake into one static unit, and every
@@ -319,7 +332,11 @@ function bound(p: Part): boolean {
  * table give the same arrays. Throws on an unknown material or channel, on motion or glow
  * below the top level, and on more than `MAX_MODEL_CHANNELS` channels.
  */
-export function compileModel(spec: PartModel, materials: MaterialCodeTable): ModelUnits {
+export function compileModel(
+  spec: PartModel,
+  materials: MaterialCodeTable,
+  opts: CompileModelOptions = {},
+): ModelUnits {
   const names = Object.keys(materials);
   if (names.length === 0) throw new Error(`model ${spec.name}: the material table is empty`);
   const ctx: Ctx = { spec, materials, codes: new Map(names.map((n, i) => [n, i])) };
@@ -332,7 +349,7 @@ export function compileModel(spec: PartModel, materials: MaterialCodeTable): Mod
   };
   const chunks: Float32Array[] = [];
   let first = 0;
-  const b = new ModelBuilder();
+  const b = new ModelBuilder({ downShade: opts.downShade });
   const push = (name: string, p: Part | null, verts: Float32Array): void => {
     const count = verts.length / MODEL_VERTEX_FLOATS;
     const where = name;

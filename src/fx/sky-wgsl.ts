@@ -13,9 +13,17 @@ struct SkyParams {
 `;
 
 /**
- * `sky_stars` and `sky_shade(d, sun_dir, sun_color, fog)`: the dome's colour and emissive for a
- * world direction, shared by the renderer's sky and the core's sky pass. Reads `sky`
- * (`SKY_PARAMS_WGSL`) and needs `WGSL_NOISE`.
+ * The dome's WGSL, shared by the renderer's sky and the core's sky pass. Reads `sky`
+ * (`SKY_PARAMS_WGSL`) and needs `WGSL_NOISE`. Its pieces are built-ins a `SkyPass` shade hook
+ * (ws/fx-fit) calls to keep the engine's look where it wants it:
+ *
+ * - `sky_day(sun_dir, sun_color)`: 1 by day, 0 at night by the sun's elevation (1 without a sun);
+ * - `sky_dome(d, sun_dir, sun_color, fog)`: the gradient for world direction `d`, hazed towards
+ *   the fog at the horizon and darkened at night, linear, before the exposure;
+ * - `sky_sun(d, sun_dir)`: the sun's disc (x, 0..1) and glow (y) towards `-sun_dir`;
+ * - `sky_stars(d, density, seed)`, and `sky_night_stars(d, day)` (the params' field, faded by day);
+ * - `sky_shade(d, sun_dir, sun_color, fog)`: all of it, colour and emissive (`SkyShade`), times
+ *   the exposure.
  */
 export const SKY_SHADE_WGSL = /* wgsl */ `
 fn sky_stars(d: vec3f, density: f32, seed: f32) -> f32 {
@@ -39,45 +47,57 @@ struct SkyShade {
   emissive: vec3f,
 };
 
-// The dome for world direction d, lit by a sun along sun_dir (light travel) of sun_color, with
-// the horizon hazed towards fog (rgb, density in w). Linear, times the exposure.
-fn sky_shade(d: vec3f, sun_dir: vec3f, sun_color: vec3f, fog: vec4f) -> SkyShade {
-  let up = d.y;
-  let exposure = sky.zenith.w;
+// Day and night from the sun's elevation; no sun at all leaves the dome as set.
+fn sky_day(sun_dir: vec3f, sun_color: vec3f) -> f32 {
+  let to_sun = -sun_dir;
+  let has_sun = dot(sun_color, vec3f(1.0)) > 0.0;
+  return select(1.0, smoothstep(-0.12, 0.08, to_sun.y), has_sun);
+}
 
-  // The dome.
+// The dome for world direction d: zenith, horizon and ground, the horizon hazed towards fog
+// (rgb, density in w), darkened towards the night floor. Linear, before the exposure.
+fn sky_dome(d: vec3f, sun_dir: vec3f, sun_color: vec3f, fog: vec4f) -> vec3f {
+  let up = d.y;
   let above = mix(sky.horizon.rgb, sky.zenith.rgb, pow(saturate(up), 0.6));
   let below = mix(sky.horizon.rgb, sky.ground.rgb, smoothstep(0.0, 0.25, -up));
   var col = select(below, above, up >= 0.0);
-
   // Horizon haze towards the fog colour, so fogged ground meets the sky.
   let haze = saturate(fog.w) * exp(-abs(up) * 6.0);
   col = mix(col, fog.rgb, haze);
+  col *= mix(sky.stars.w, 1.0, sky_day(sun_dir, sun_color));
+  return col;
+}
 
-  // Day and night from the sun's elevation; no sun at all leaves the dome as set.
+// The sun towards -sun_dir: its disc (x, 0..1, hidden below the horizon) and glow (y).
+fn sky_sun(d: vec3f, sun_dir: vec3f) -> vec2f {
   let to_sun = -sun_dir;
-  let has_sun = dot(sun_color, vec3f(1.0)) > 0.0;
-  let day = select(1.0, smoothstep(-0.12, 0.08, to_sun.y), has_sun);
-  col *= mix(sky.stars.w, 1.0, day);
-
-  // Sun disc and glow.
   let cos_a = dot(d, to_sun);
   let cos_disc = cos(sky.horizon.w);
-  let disc = smoothstep(cos_disc - 0.0004, cos_disc, cos_a) * smoothstep(-0.02, 0.0, up);
+  let disc = smoothstep(cos_disc - 0.0004, cos_disc, cos_a) * smoothstep(-0.02, 0.0, d.y);
   let glow = sky.ground.w * (0.3 * pow(saturate(cos_a), 16.0) + pow(saturate(cos_a), 256.0));
-  let sun = sun_color * (disc * 12.0 + glow);
-  col += sun;
+  return vec2f(disc, glow);
+}
 
-  // Stars at night.
-  var stars = 0.0;
+// The params' starfield at night (0 when off, by day or below the horizon).
+fn sky_night_stars(d: vec3f, day: f32) -> f32 {
   if (sky.stars.z > 0.5) {
-    stars = sky_stars(d, sky.stars.x, sky.stars.y) * (1.0 - day) * smoothstep(-0.05, 0.05, up);
+    return sky_stars(d, sky.stars.x, sky.stars.y) * (1.0 - day) * smoothstep(-0.05, 0.05, d.y);
   }
-  col += vec3f(stars * 2.0);
+  return 0.0;
+}
 
+// The dome for world direction d, lit by a sun along sun_dir (light travel) of sun_color, with
+// the horizon hazed towards fog (rgb, density in w). Linear, times the exposure.
+fn sky_shade(d: vec3f, sun_dir: vec3f, sun_color: vec3f, fog: vec4f) -> SkyShade {
+  let exposure = sky.zenith.w;
+  var col = sky_dome(d, sun_dir, sun_color, fog);
+  let s = sky_sun(d, sun_dir);
+  col += sun_color * (s.x * 12.0 + s.y);
+  let stars = sky_night_stars(d, sky_day(sun_dir, sun_color));
+  col += vec3f(stars * 2.0);
   var o: SkyShade;
   o.color = col * exposure;
-  o.emissive = (sun_color * disc * 2.0 + vec3f(stars * 1.5)) * exposure;
+  o.emissive = (sun_color * s.x * 2.0 + vec3f(stars * 1.5)) * exposure;
   return o;
 }
 `;

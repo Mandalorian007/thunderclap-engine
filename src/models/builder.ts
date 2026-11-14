@@ -51,6 +51,20 @@ function apply(m: Mat3, v: V3): V3 {
 const DOWN_SHADE = 0.72;
 
 /**
+ * Which normal picks the darker down faces (ws/actor-fit): `'model'` (default) the face's
+ * normal in the model, after every turn; `'part'` its normal before the turns, as the shape
+ * was made (a part tipped over keeps its own underside dark, as an actor's limb posed at run
+ * time would).
+ */
+export type DownShade = 'model' | 'part';
+
+/** How a `ModelBuilder` builds. */
+export interface ModelBuilderOptions {
+  /** Default `'model'`. */
+  downShade?: DownShade;
+}
+
+/**
  * Builds triangles under a transform stack. `color` (rgb + `COLOR_MODE`) applies to what is
  * drawn next. Counter-clockwise triangles seen from outside face outward.
  */
@@ -60,6 +74,11 @@ export class ModelBuilder {
   private o: V3 = [0, 0, 0];
   /** The colour of what is drawn next: r, g, b, `COLOR_MODE`. */
   color: [number, number, number, number] = [0, 0, 0, COLOR_MODE.MATERIAL];
+  private readonly partDown: boolean;
+
+  constructor(opts: ModelBuilderOptions = {}) {
+    this.partDown = opts.downShade === 'part';
+  }
 
   /** Runs `body` with everything rotated by `angle` about `axis` through `pivot`. */
   rotated(axis: AxisIndex, angle: number, pivot: V3, body: () => void): void {
@@ -97,7 +116,7 @@ export class ModelBuilder {
       k[0],
       k[1],
       k[2],
-      shade * (k[1] < -0.5 ? DOWN_SHADE : 1),
+      shade * ((this.partDown ? n[1] : k[1]) < -0.5 ? DOWN_SHADE : 1),
       c[0],
       c[1],
       c[2],
