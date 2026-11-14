@@ -4,13 +4,8 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 
 ## Unreleased
 
-### Added
-
-- `./fx` (ws/fx-fit): every core effect and the sky pass follow the pass's depth convention (reversed-Z from `RenderCoreOptions.reversedZ` / `PassDesc.reversedZ`); `FX_DEPTH_WGSL`, `fxDepthCode`, `FxDepthModules` for shaders that read depth.
-- `./fx` (ws/fx-fit): `SkyPassOptions.shade`, `params`, `groupLayout` (a game's own `sky_look` over the built-ins), `SkyPass.time`, `params`, `gameGroup`, `gameLayout`, `horizon`; `SKY_INPUT_WGSL`, `SKY_PASS_MAX_PARAMS`, `skyHorizonColor`.
-- `./fx` (ws/fx-fit): `WeatherOcclusionMap.wrap`, the `'splash'` precipitation shape, `WEATHER_RAIN_SPLASHES`; `Lightning`, `LightningOptions`, `lightningFlash`, `LIGHTNING_STRANDS`, `LIGHTNING_SEGMENTS`, `LIGHTNING_FLOATS`, `LIGHTNING_WGSL`.
-- `./fx` (ws/fx-fit): `ParticleSystemOptions.shape: 'box'` (lit cubes, `ParticlesOnCore.boxLight`), `ParticleShape`, `PARTICLE_BOX_LIGHT_FLOATS`, `PARTICLE_CORE_BOX_WGSL`.
-- `./render` (ws/fx-fit): `DrawSetShader.shadowVertexEntry`; `DrawablePipelines` keys by `reversedZ` and passes it to `make`.
+- FX fit for a 3D game's renderer (ws/fx-fit, wave 2.0 B9): reversed-Z, a game's own sky, more weather, lit debris. Additive; defaults unchanged (a standard core compiles and draws what it did; `api/` grows). *Added* (fx): every core effect and the sky pass follow the pass's depth convention (B8's `reversedZ`), with `FX_DEPTH_WGSL`, `fxDepthCode`, `FxDepthModules` for shaders that read depth; `SkyPassOptions.shade` / `params` / `groupLayout` (a game's `sky_look` over the built-in `sky_dome`, `sky_sun`, `sky_day`, `sky_stars`, `sky_night_stars`), `SkyPass.time` / `params` / `gameGroup` / `gameLayout` / `horizon`, `SKY_INPUT_WGSL`, `SKY_PASS_MAX_PARAMS`, `skyHorizonColor`; `WeatherOcclusionMap.wrap`, the `'splash'` `PrecipShape`, `WEATHER_RAIN_SPLASHES`; `Lightning`, `LightningOptions`, `lightningFlash`, `LIGHTNING_STRANDS`, `LIGHTNING_SEGMENTS`, `LIGHTNING_FLOATS`, `LIGHTNING_WGSL`; `ParticleSystemOptions.shape: 'box'`, `ParticlesOnCore.shape` / `boxLight`, `ParticleShape`, `PARTICLE_BOX_LIGHT_FLOATS`, `PARTICLE_CORE_BOX_WGSL`. *Added* (render): `DrawSetShader.shadowVertexEntry`; `DrawablePipelines` keys by the pass's `reversedZ` and hands it to `make` as a fifth argument; `CoreViewExtras`' forward axis is right under reversed-Z. Harness `fx-reversed.html` and `e2e/fx-reversed.spec.ts` (on the WebKit row with `sky`, `weather`, `water`).
+- Bundle budgets after B9 (ws/fx-fit), about 700 B over its local sizes (the PM may reset them at merge): `./fx` 66200 -> 69300 (68598 B, B9 about +4.8 KB: lightning, the box particle shader, splashes, the sky hook and the reversed-Z modules), `.` and `. { createGame }` 175000 -> 176300 (175613 B, +1.3 KB), `./kit` 173900 -> 175100 (174449 B), `./testing` 187500 -> 188800 (188131 B).
 
 ## 2.0.0-next.9 (2026-11-14)
 

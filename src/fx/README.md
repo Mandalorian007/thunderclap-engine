@@ -843,6 +843,9 @@ bolt.strike(x, groundY, z);
 const debris = new ParticleSystem(core, { capacity: 1024, shape: 'box' });
 ```
 
+Types and shaders: `LightningOptions`, `LIGHTNING_FLOATS` (the bolt uniform), `LIGHTNING_WGSL`,
+`ParticleShape`, `PARTICLE_BOX_LIGHT_FLOATS` (the box light block), `PARTICLE_CORE_BOX_WGSL`.
+
 The legacy `Renderer` path (`Sky`, `Water`, `Decals`, particles' world collision, billboards,
 debug draw) keeps the standard convention. Test `fx-fit.test.ts`; demo `harness/fx-reversed.html`
 (every effect on a reversed-Z core, `?standard` for the same scene standard).
