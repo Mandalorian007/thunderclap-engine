@@ -87,7 +87,7 @@ export class ViewPost implements PostProcessor {
 }
 
 function same(a: number, b: number): boolean {
-  return a === b || (a !== a && b !== b);
+  return a === b || (Number.isNaN(a) && Number.isNaN(b));
 }
 
 /** `new ViewPost(make)`: one post processor per view, no shared history. */
