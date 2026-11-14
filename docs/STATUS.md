@@ -211,6 +211,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 2.0-1 | C3 models: part models from data, `./models` | ws/models | brief `docs/briefs/models.md` | E-041 | 🔨 running |
 | 2.0-1 | C5 ui-spec: UI words, model, layout, DOM presenter, tokens | ws/ui-spec | brief `docs/briefs/ui-spec.md` | E-041 | 🔨 running |
 | 2.0-1 | C7 intents-quality: input intents, `./quality` tiers + governor | ws/intents-quality | brief `docs/briefs/intents-quality.md` | E-041 | 🔨 running |
+| 2.0-1 | C9 net: client sessions over a handed-in transport, schemas + hash, snapshots, prediction | ws/net | brief `docs/briefs/net.md` | E-042 | 🔨 running |
 | 2.0-1 | S0 server foundation + net seam research (proposal only) | — | ROADMAP S0 | E-041 | ✅ accepted: `docs/design/2.0/server.md`, E-042 |
 
 ## Gates
