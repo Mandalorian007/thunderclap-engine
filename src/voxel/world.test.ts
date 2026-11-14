@@ -147,17 +147,57 @@ function frame(r: Rig, t = target(r.fake)): number {
   return r.fake.calls - before;
 }
 
+/** The heap spaces optimized code lands in: a reading that grew them caught the JIT compiling. */
+const CODE_SPACES = new Set([
+  'code_space',
+  'code_large_object_space',
+  'trusted_space',
+  'trusted_large_object_space',
+]);
+
+function codeBytes(): number {
+  let n = 0;
+  for (const s of v8.getHeapSpaceStatistics())
+    if (CODE_SPACES.has(s.space_name)) n += s.space_used_size;
+  return n;
+}
+
+/**
+ * Bytes allocated while `run` runs, retried until no collection ran and no code was compiled
+ * during it: under load the optimizing compiler can still be installing code (and allocating
+ * its own bookkeeping) long after warm-up, which is not the frame allocating.
+ */
 function allocated(run: () => void): number {
-  for (let attempt = 0; attempt < 8; attempt++) {
+  for (let attempt = 0; attempt < 40; attempt++) {
     const p = new v8.GCProfiler();
     p.start();
     v8.getHeapStatistics();
+    const c = codeBytes();
     const a = v8.getHeapStatistics().used_heap_size;
     run();
     const b = v8.getHeapStatistics().used_heap_size;
-    if (p.stop().statistics.length === 0) return b - a;
+    const compiled = codeBytes() !== c;
+    if (p.stop().statistics.length === 0 && !compiled) return b - a;
   }
-  throw new Error('a collection ran during every attempt');
+  throw new Error('a collection or a compile ran during every attempt');
+}
+
+/**
+ * Bytes 9,000 calls of `run` allocate beyond 1,000 calls (each the least of three readings): the
+ * reading's own fixed cost cancels, so anything allocated per call shows as 8,000 × its size.
+ */
+function leastGrowth(run: (frames: number) => void): number {
+  const least = (frames: number) => {
+    let bytes = Infinity;
+    for (let k = 0; k < 3; k++)
+      bytes = Math.min(
+        bytes,
+        allocated(() => run(frames)),
+      );
+    return bytes;
+  };
+  const short = least(1000);
+  return least(9000) - short;
 }
 
 describe('createVoxelWorld (ws/voxel-draw)', () => {
@@ -250,13 +290,11 @@ describe('createVoxelWorld (ws/voxel-draw)', () => {
       }
     };
     run(10_000);
-    let bytes = Infinity;
-    for (let k = 0; k < 5; k++)
-      bytes = Math.min(
-        bytes,
-        allocated(() => run(2000)),
-      );
-    expect(bytes).toBeLessThan(1024);
+    // A reading has a fixed cost of its own (the heap-statistics objects, a stray compile: 0 to
+    // a few kB under load), so compare a short run with a long one as core.test does: the fixed
+    // cost cancels and whatever a frame allocates (16 bytes at least) is multiplied by the
+    // 8,000 extra frames.
+    expect(leastGrowth(run)).toBeLessThan(8000);
   });
 
   it('edits mesh again and drops free the geometry', async () => {
@@ -329,15 +367,10 @@ describe('SectionVisibility (ws/voxel-draw)', () => {
     vis.update(8, 40, 8, 0);
     const n = vis.stats.searches;
     for (let i = 0; i < 20000; i++) vis.update(8, 40, 8, i);
-    let bytes = Infinity;
-    for (let k = 0; k < 5; k++)
-      bytes = Math.min(
-        bytes,
-        allocated(() => {
-          for (let i = 0; i < 1000; i++) vis.update(8, 40, 8, i);
-        }),
-      );
+    const growth = leastGrowth((frames) => {
+      for (let i = 0; i < frames; i++) vis.update(8, 40, 8, i);
+    });
     expect(vis.stats.searches).toBe(n);
-    expect(bytes).toBeLessThan(1024);
+    expect(growth).toBeLessThan(8000);
   });
 });
