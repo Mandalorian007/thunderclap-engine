@@ -204,7 +204,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 6 | VR correctness: loop survives a throwing frame, no XR frame cap, exposure once per frame, union head frustum, XR culls, no viewless page render, head-locked panels follow the head | ws/xr-fixes | brief `docs/briefs/xr-fixes.md` | E-038 | ✅ merged at 57b6cbd (e2e 2837 passed / 0 failed, snap 0 px) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 | 2.0-1 | A1 rails: WebKit iPad project, check:wgsl, check:bundle + tree-shake, `next` publishing | ws/rails | brief `docs/briefs/rails.md` | E-041 | 🔨 running |
-| 2.0-1 | A2 budget: counted work in `testing`, 1.3 baseline in BENCH | ws/budget | brief `docs/briefs/budget.md` | E-041 | 🔨 running |
+| 2.0-1 | A2 budget: counted work in `testing`, 1.3 baseline in BENCH | ws/budget | brief `docs/briefs/budget.md` | E-041 | ✅ merged at 24ba6ff (check 2547 tests, snap 0 px); baseline distinct 1.5k/6k = 1,418/5,775 cmds |
 | 2.0-1 | A3 kit: createGame as a service composer, `./kit`, external loop | ws/kit | brief `docs/briefs/kit.md` | E-041 | 🔨 running |
 | 2.0-1 | B1 core-retained: arenas, DrawSets, bundles + indirect, GPU cull, pass list, views | ws/core-retained | brief `docs/briefs/core-retained.md` | E-041 | 🔨 running |
 | 2.0-1 | C1 voxel-data: section store, BlockTable, VertexSchema, mesher pool, light, raycast | ws/voxel-data | brief `docs/briefs/voxel-data.md` | E-041 | 🔨 running |
