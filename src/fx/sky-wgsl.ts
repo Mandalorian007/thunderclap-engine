@@ -1,5 +1,87 @@
 import { WGSL_GLOBALS, WGSL_LIGHTS, WGSL_NOISE } from '../render/wgsl';
 
+/** The sky's params block at group 1, binding 0 (`SKY_PARAMS_FLOATS` floats). */
+export const SKY_PARAMS_WGSL = /* wgsl */ `
+struct SkyParams {
+  zenith: vec4f,   // rgb, exposure
+  horizon: vec4f,  // rgb, sun angular radius (radians)
+  ground: vec4f,   // rgb, sun glow
+  stars: vec4f,    // density, seed, enabled, night floor
+};
+@group(1) @binding(0) var<uniform> sky: SkyParams;
+
+`;
+
+/**
+ * `sky_stars` and `sky_shade(d, sun_dir, sun_color, fog)`: the dome's colour and emissive for a
+ * world direction, shared by the renderer's sky and the core's sky pass. Reads `sky`
+ * (`SKY_PARAMS_WGSL`) and needs `WGSL_NOISE`.
+ */
+export const SKY_SHADE_WGSL = /* wgsl */ `
+fn sky_stars(d: vec3f, density: f32, seed: f32) -> f32 {
+  let p = d * density;
+  let cell = floor(p);
+  let key = cell.xy + vec2f(cell.z * 37.0 + seed, cell.z * 11.0 - seed);
+  let h = engine_hash22(key);
+  let hz = engine_hash21(key + 17.0);
+  let bright = engine_hash21(key + 41.0);
+  if (bright < 0.72) { return 0.0; }
+  let centre = normalize(cell + 0.5 + (vec3f(h, hz) - 0.5) * 0.8);
+  let r = 0.07 / density;
+  let c = dot(d, centre);
+  let edge = 1.0 - r * r * 0.5;
+  let s = smoothstep(edge, edge + r * r * 0.4, c);
+  return s * (0.4 + 0.6 * (bright - 0.72) / 0.28);
+}
+
+struct SkyShade {
+  color: vec3f,
+  emissive: vec3f,
+};
+
+// The dome for world direction d, lit by a sun along sun_dir (light travel) of sun_color, with
+// the horizon hazed towards fog (rgb, density in w). Linear, times the exposure.
+fn sky_shade(d: vec3f, sun_dir: vec3f, sun_color: vec3f, fog: vec4f) -> SkyShade {
+  let up = d.y;
+  let exposure = sky.zenith.w;
+
+  // The dome.
+  let above = mix(sky.horizon.rgb, sky.zenith.rgb, pow(saturate(up), 0.6));
+  let below = mix(sky.horizon.rgb, sky.ground.rgb, smoothstep(0.0, 0.25, -up));
+  var col = select(below, above, up >= 0.0);
+
+  // Horizon haze towards the fog colour, so fogged ground meets the sky.
+  let haze = saturate(fog.w) * exp(-abs(up) * 6.0);
+  col = mix(col, fog.rgb, haze);
+
+  // Day and night from the sun's elevation; no sun at all leaves the dome as set.
+  let to_sun = -sun_dir;
+  let has_sun = dot(sun_color, vec3f(1.0)) > 0.0;
+  let day = select(1.0, smoothstep(-0.12, 0.08, to_sun.y), has_sun);
+  col *= mix(sky.stars.w, 1.0, day);
+
+  // Sun disc and glow.
+  let cos_a = dot(d, to_sun);
+  let cos_disc = cos(sky.horizon.w);
+  let disc = smoothstep(cos_disc - 0.0004, cos_disc, cos_a) * smoothstep(-0.02, 0.0, up);
+  let glow = sky.ground.w * (0.3 * pow(saturate(cos_a), 16.0) + pow(saturate(cos_a), 256.0));
+  let sun = sun_color * (disc * 12.0 + glow);
+  col += sun;
+
+  // Stars at night.
+  var stars = 0.0;
+  if (sky.stars.z > 0.5) {
+    stars = sky_stars(d, sky.stars.x, sky.stars.y) * (1.0 - day) * smoothstep(-0.05, 0.05, up);
+  }
+  col += vec3f(stars * 2.0);
+
+  var o: SkyShade;
+  o.color = col * exposure;
+  o.emissive = (sun_color * disc * 2.0 + vec3f(stars * 1.5)) * exposure;
+  return o;
+}
+`;
+
 /**
  * The sky shader: one fullscreen triangle at the far plane whose fragment reconstructs the view
  * ray from the camera block and shades a procedural dome.
@@ -26,14 +108,7 @@ export const SKY_WGSL = /* wgsl */ `
 ${WGSL_GLOBALS}
 ${WGSL_LIGHTS}
 ${WGSL_NOISE}
-struct SkyParams {
-  zenith: vec4f,   // rgb, exposure
-  horizon: vec4f,  // rgb, sun angular radius (radians)
-  ground: vec4f,   // rgb, sun glow
-  stars: vec4f,    // density, seed, enabled, night floor
-};
-@group(1) @binding(0) var<uniform> sky: SkyParams;
-
+${SKY_PARAMS_WGSL}
 struct SkyOut {
   @builtin(position) clip: vec4f,
   @location(0) ndc: vec2f,
@@ -68,61 +143,12 @@ fn sky_ray(ndc: vec2f) -> vec3f {
   return normalize(vec3f(dot(v[0].xyz, d), dot(v[1].xyz, d), dot(v[2].xyz, d)));
 }
 
-fn sky_stars(d: vec3f, density: f32, seed: f32) -> f32 {
-  let p = d * density;
-  let cell = floor(p);
-  let key = cell.xy + vec2f(cell.z * 37.0 + seed, cell.z * 11.0 - seed);
-  let h = engine_hash22(key);
-  let hz = engine_hash21(key + 17.0);
-  let bright = engine_hash21(key + 41.0);
-  if (bright < 0.72) { return 0.0; }
-  let centre = normalize(cell + 0.5 + (vec3f(h, hz) - 0.5) * 0.8);
-  let r = 0.07 / density;
-  let c = dot(d, centre);
-  let edge = 1.0 - r * r * 0.5;
-  let s = smoothstep(edge, edge + r * r * 0.4, c);
-  return s * (0.4 + 0.6 * (bright - 0.72) / 0.28);
-}
-
+${SKY_SHADE_WGSL}
 @fragment fn fs(in: SkyOut) -> FragOut {
-  let d = sky_ray(in.ndc);
-  let up = d.y;
-  let exposure = sky.zenith.w;
-
-  // The dome.
-  let above = mix(sky.horizon.rgb, sky.zenith.rgb, pow(saturate(up), 0.6));
-  let below = mix(sky.horizon.rgb, sky.ground.rgb, smoothstep(0.0, 0.25, -up));
-  var col = select(below, above, up >= 0.0);
-
-  // Horizon haze towards the fog colour, so fogged ground meets the sky.
-  let haze = saturate(lights.fog.w) * exp(-abs(up) * 6.0);
-  col = mix(col, lights.fog.rgb, haze);
-
-  // Day and night from the sun's elevation; no sun at all leaves the dome as set.
-  let to_sun = -lights.sun_dir;
-  let sun_color = lights.sun_color;
-  let has_sun = dot(sun_color, vec3f(1.0)) > 0.0;
-  let day = select(1.0, smoothstep(-0.12, 0.08, to_sun.y), has_sun);
-  col *= mix(sky.stars.w, 1.0, day);
-
-  // Sun disc and glow.
-  let cos_a = dot(d, to_sun);
-  let cos_disc = cos(sky.horizon.w);
-  let disc = smoothstep(cos_disc - 0.0004, cos_disc, cos_a) * smoothstep(-0.02, 0.0, up);
-  let glow = sky.ground.w * (0.3 * pow(saturate(cos_a), 16.0) + pow(saturate(cos_a), 256.0));
-  let sun = sun_color * (disc * 12.0 + glow);
-  col += sun;
-
-  // Stars at night.
-  var stars = 0.0;
-  if (sky.stars.z > 0.5) {
-    stars = sky_stars(d, sky.stars.x, sky.stars.y) * (1.0 - day) * smoothstep(-0.05, 0.05, up);
-  }
-  col += vec3f(stars * 2.0);
-
+  let s = sky_shade(sky_ray(in.ndc), lights.sun_dir, lights.sun_color, lights.fog);
   var o: FragOut;
-  o.color = vec4f(col * exposure, 1.0);
-  o.emissive = vec4f((sun_color * disc * 2.0 + vec3f(stars * 1.5)) * exposure, 1.0);
+  o.color = vec4f(s.color, 1.0);
+  o.emissive = vec4f(s.emissive, 1.0);
   return o;
 }
 `;

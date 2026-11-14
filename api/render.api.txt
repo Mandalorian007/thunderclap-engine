@@ -231,6 +231,17 @@ interface CorePass {
     readonly id: string;
     readonly depth: PassDepth;
     readonly when: (() => boolean) | null;
+    readonly encode: ((pass: GPURenderPassEncoder, ctx: CorePassContext) => void) | null;
+}
+
+## CorePassContext  (type-only)
+interface CorePassContext {
+    viewIndex: number;
+    view: GPUBindGroup;
+    viewLayout: GPUBindGroupLayout;
+    format: GPUTextureFormat;
+    depthFormat: GPUTextureFormat | undefined;
+    depthReadOnly: boolean;
 }
 
 ## CoreStats  (type-only)
@@ -262,6 +273,7 @@ interface CoreTarget {
     depth?: GPUTextureView;
     phase?: 'all' | 'opaque' | 'blend';
     texture?: GPUTexture;
+    timestamps?: (label: string) => GPURenderPassTimestampWrites | undefined;
 }
 
 ## CoreViewExtras
@@ -953,6 +965,7 @@ interface PassDesc {
     after?: string;
     depth?: PassDepth;
     when?: () => boolean;
+    encode?: (pass: GPURenderPassEncoder, ctx: CorePassContext) => void;
 }
 
 ## PassList
@@ -1183,6 +1196,7 @@ class Renderer implements FrameSink {
     constructor(gpu: RendererGpu, opts?: RendererOptions);
     get sceneColor(): Texture;
     get sceneEmissive(): Texture;
+    setLogicalSize(width: number, height: number): void;
     resize(width: number, height: number): void;
     setResolution(opts: ResolutionOptions): void;
     get resolutionOptions(): Readonly<Required<ResolutionOptions>>;

@@ -58,7 +58,22 @@ const DEFAULT_STARS: SkyStars = { density: 24, seed: 0 };
  * or after it wins wherever it wrote depth and the sky fills the rest. Without depth (a 2D
  * camera) it paints the whole view; give it the lowest `order` then. Nothing to cull.
  */
-export class Sky implements Drawable {
+/**
+ * A sky's look, the fields `packSkyParams` reads: a `Sky`, or a plain object for a
+ * `SkyPass` with no `Renderer` (ws/core-passes). Colours linear RGB.
+ */
+export interface SkyLook {
+  zenith: ArrayLike<number>;
+  horizon: ArrayLike<number>;
+  ground: ArrayLike<number>;
+  sunSize: number;
+  sunGlow: number;
+  stars: SkyStars | null;
+  exposure: number;
+  ambientFloor: number;
+}
+
+export class Sky implements Drawable, SkyLook {
   /** Linear RGB straight up. Live. */
   readonly zenith = new Float32Array(3);
   /** Linear RGB at the horizon. Live. */
@@ -145,23 +160,7 @@ export class Sky implements Drawable {
    */
   prepare(_encoder: GPUCommandEncoder, _frame?: Frame): void {
     const p = this.params;
-    p[0] = this.zenith[0]!;
-    p[1] = this.zenith[1]!;
-    p[2] = this.zenith[2]!;
-    p[3] = this.exposure;
-    p[4] = this.horizon[0]!;
-    p[5] = this.horizon[1]!;
-    p[6] = this.horizon[2]!;
-    p[7] = this.sunSize;
-    p[8] = this.ground[0]!;
-    p[9] = this.ground[1]!;
-    p[10] = this.ground[2]!;
-    p[11] = this.sunGlow;
-    const s = this.stars;
-    p[12] = s ? s.density : 0;
-    p[13] = s ? s.seed : 0;
-    p[14] = s ? 1 : 0;
-    p[15] = this.ambientFloor;
+    packSkyParams(this, p, 0);
     this.device.queue.writeBuffer(this.paramsBuffer, 0, p);
   }
 
@@ -193,6 +192,31 @@ export class Sky implements Drawable {
   destroy(): void {
     this.paramsBuffer.destroy();
   }
+}
+
+/**
+ * Pack a sky's live fields into `out` at `at` (`SKY_PARAMS_FLOATS` floats: zenith rgb +
+ * exposure, horizon rgb + sunSize, ground rgb + sunGlow, stars density, seed, enabled,
+ * ambientFloor): the `SkyParams` block both sky draws read. No allocation.
+ */
+export function packSkyParams(sky: SkyLook, out: Float32Array, at: number): void {
+  out[at] = sky.zenith[0]!;
+  out[at + 1] = sky.zenith[1]!;
+  out[at + 2] = sky.zenith[2]!;
+  out[at + 3] = sky.exposure;
+  out[at + 4] = sky.horizon[0]!;
+  out[at + 5] = sky.horizon[1]!;
+  out[at + 6] = sky.horizon[2]!;
+  out[at + 7] = sky.sunSize;
+  out[at + 8] = sky.ground[0]!;
+  out[at + 9] = sky.ground[1]!;
+  out[at + 10] = sky.ground[2]!;
+  out[at + 11] = sky.sunGlow;
+  const st = sky.stars;
+  out[at + 12] = st ? st.density : 0;
+  out[at + 13] = st ? st.seed : 0;
+  out[at + 14] = st ? 1 : 0;
+  out[at + 15] = sky.ambientFloor;
 }
 
 /**

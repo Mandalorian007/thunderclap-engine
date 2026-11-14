@@ -56,7 +56,7 @@
 | Typed asset loading with progress, an asset cache, atlas packing | `defineManifest`, `createBundle`, `createAssetCache`, `packAtlas` |
 | Procedural geometry and heightfields | `box`, `sphere`, `capsule`, `torus`, `createHeightfield`, `mergeGeometry` in `@thunderclap-engine/engine/geom` |
 | Static colliders, capsule and circle sliding, moving tiles | `createStaticCollider`, `slide`, `slide2`, `slideTiles` |
-| Voxel grids, greedy chunk meshing with baked AO in a Worker, culled chunks, block picking | `createVoxelGrid`, `createVoxelMesher`, `createVoxelChunks`, `raycastVoxels` in `@thunderclap-engine/engine/voxel` |
+| Voxel grids, streamed sections meshed in Workers (AO, sky and block light), GPU-culled, block picking | `createVoxelGrid`, `createVoxelWorld`, `feedVoxelGrid`, `raycastVoxels` in `@thunderclap-engine/engine/voxel` |
 | Grid navigation: A*, flow fields, reachability, steering | `createNavGrid`, `findPath`, `createFlowField`, `reachable` in `@thunderclap-engine/engine/nav` |
 | Navmeshes, path queues, crowds, carved obstacles | `bakeNavMesh`, `createPathQueue`, `createCrowd`, `createObstacleSet` |
 | Build-time bakes of navmeshes and colliders | `pnpm bake bake.config.json`, `importNavMesh`, `importCollider` |

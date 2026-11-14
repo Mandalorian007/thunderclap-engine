@@ -20,6 +20,9 @@ export { createDebugDraw, DEBUG_VERTEX_FLOATS, DebugDraw } from './debug-draw';
 export { DEBUG_DRAW_WGSL } from './debug-wgsl';
 export type { DecalBlend, DecalDesc, DecalMode, DecalsOptions } from './decals';
 export { DECAL_INSTANCE_FLOATS, DECAL_PARAMS_FLOATS, Decals } from './decals';
+export type { DecalsOnCoreOptions, DecalsOnCoreSource } from './decals-core';
+export { DecalsOnCore } from './decals-core';
+export { DECAL_CORE_BOX_WGSL, DECAL_CORE_QUAD_WGSL } from './decals-core-wgsl';
 export { WGSL_DECAL_BOX, WGSL_DECAL_DEPTH_COPY, WGSL_DECAL_QUAD } from './decals-wgsl';
 export type {
   CreateEffectOptions,
@@ -75,9 +78,11 @@ export {
   SURFACE_TRI_FLOATS,
 } from './particles-wgsl';
 export { FX_DEFAULT_SEED } from './random';
-export type { SkyOptions, SkyStars } from './sky';
-export { SKY_PARAMS_FLOATS, Sky, skyRay } from './sky';
-export { SKY_WGSL } from './sky-wgsl';
+export type { SkyLook, SkyOptions, SkyStars } from './sky';
+export { packSkyParams, SKY_PARAMS_FLOATS, Sky, skyRay } from './sky';
+export type { SkyPassOptions } from './sky-pass';
+export { createSkyPass, SKY_PASS_LIGHT_FLOATS, SKY_PASS_WGSL, SkyPass } from './sky-pass';
+export { SKY_PARAMS_WGSL, SKY_SHADE_WGSL, SKY_WGSL } from './sky-wgsl';
 export type {
   AtlasCanvas,
   AtlasContext2D,

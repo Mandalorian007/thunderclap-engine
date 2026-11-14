@@ -42,9 +42,9 @@ export const NAMED = [
     excludes: ['ui', 'audio', 'voxel', 'post', 'assets'],
   },
   {
-    name: 'render + voxel { Renderer, createVoxelGrid, createVoxelChunks }',
+    name: 'render + voxel { Renderer, createVoxelGrid, createVoxelWorld }',
     from: ['./render', './voxel', './voxel'],
-    names: ['Renderer', 'createVoxelGrid', 'createVoxelChunks'],
+    names: ['Renderer', 'createVoxelGrid', 'createVoxelWorld'],
     excludes: ['ui', 'audio'],
   },
   // createGame pulls the whole engine today (ui, audio, fx, post); D2 R5 wants a feature-off

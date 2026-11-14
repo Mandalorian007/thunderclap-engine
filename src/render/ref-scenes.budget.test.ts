@@ -106,7 +106,7 @@ Six scenes every engine change is measured on (E-041 A4): \`harness/ref-<scene>.
 - \`ref-board\` (S1, 2D): a 48×27 tile layer, a flipbook walker and 4,000 sprites drifting on circles under the \`ortho2d\` camera.
 - \`ref-characters\` (S2): 64 (and 256) seven-joint figures, each its own \`AnimationMixer\` on a walk clip, skinned through one \`SkinPalette\`, under a sun shadow; the camera orbits.
 - \`ref-arena\` (S3): standard-material spheres and pillars on a floor, a sun shadow, 8 moving point lights and 2 spots, bloom and vignette (\`PostStack\`).
-- \`ref-voxel\` (S4): an 8×2×8 (and 16×2×16) chunk world of 16³ chunks, meshed before frame 0 (in a Worker on the page), flown over.
+- \`ref-voxel\` (S4): an 8×2×8 (and 16×2×16) chunk world of 16³ sections in \`createVoxelWorld\` (fed by \`feedVoxelGrid\`, meshed before frame 0, in a Worker on the page), its GPU-culled core sets drawn in the renderer's frame, flown over; its counts are flat in the world's size.
 - \`ref-stereo\` (S5): S2's figures (32) seen by two eyes a frame (\`viewIndex\` 0 and 1, half the target each); \`ref-stereo-mono\` is the same frame through one view.
 - \`ref-hud\` (S6): an idle overlay (reticle, two meters, six slots, a heading) over a still scene; every frame sets the widgets to the values they hold.
 

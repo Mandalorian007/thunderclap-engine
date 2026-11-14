@@ -23,9 +23,9 @@ if (res.ok) {
 | --- | --- |
 | `boot(root, opts?)` | mount the surface and bring up WebGPU, or show why not |
 | `mountSurface / Surface` | the letterboxed canvas and its resize events |
-| `initGpu(canvas, opts?)` | WebGPU device and context on their own |
+| `initGpu(canvas, opts?)` | WebGPU device and context on their own (`xrCompatible`, `drawFeatures` flags) |
 | `clientToLogical / computeLetterbox` | letterbox math between CSS px and design px |
-| `SurfaceOptions.fit / computeCover` | fill a phone instead of letterboxing (cover, cropped to a band) |
+| `SurfaceOptions.fit / computeCover` | fill a phone instead of letterboxing (cover, cropped to a band), or `'fill'` the window with no design size |
 | `deviceTraits()` | touch, handheld, reduced motion and friends |
 | `watchLifecycle(handlers)` | hide, show and freeze events |
 | `toggleFullscreen()` | fullscreen where the page allows it |
@@ -61,13 +61,18 @@ const p = surface.clientToLogical(e.offsetX, e.offsetY); // design px
   and configures the canvas; never throws. A `getContext('webgpu')` that throws (a blocked or
   broken GPU process) is `no-context` like one that returns null, with the thrown message as
   `detail`, so `boot` shows the unsupported screen (#5). `GpuInitOptions` is `{ powerPreference?, onLost?,
-  timestamps?, compression? }` (timestamps default true; `compression?: boolean`, default true,
+  timestamps?, compression?, drawFeatures?, xrCompatible? }` (timestamps default true; `compression?: boolean`, default true,
   asks for the adapter's texture-compression features so `renderer.caps.compressed` reports
-  them). `GpuContext` is `{ adapter, device, context, format,
+  them). `drawFeatures?: boolean | DrawFeatures` (ws/kit-fit): `true` (default) is the render
+  core's preset `DRAW_FEATURES_ALL` (`indirect-first-instance` and Chromium's multi-draw),
+  `false` none, and `{ indirectFirstInstance?, multiDrawIndirect? }` exactly the flags set; each
+  is asked for only when the adapter has it. `xrCompatible?: boolean` (default false) requests an
+  XR-compatible adapter, which a WebXR session's `XRGPUBinding` needs. `boot` takes these as
+  `BootOptions.gpuOptions` (`BootGpuOptions`, all but `onLost`). `GpuContext` is `{ adapter, device, context, format,
   timestamps }`; a failure is `{ ok: false, reason: GpuFailureReason, detail? }` with
   `GpuFailureReason` `'no-api' | 'no-adapter' | 'no-device' | 'no-context'`.
 - `restoreGpu(gpu, opts?): Promise<GPUDevice | null>` (ws/core-passes): after a device loss,
-  requests a new adapter and device with the lost device's features, configures the canvas on
+  requests a new adapter (`xrCompatible` when `opts` says so) and device with the lost device's features, configures the canvas on
   it and updates `gpu` (`adapter`, `device`, `timestamps`) in place; `null` when the GPU is gone.
   Hand the device to `RenderCore.restore`.
 
@@ -96,7 +101,13 @@ const p = surface.clientToLogical(e.offsetX, e.offsetY); // design px
   `logicalToClient` map through the covered rect, `containsLogical` tests the visible rect, and
   `onResize` listeners get the covered rect, so `createGame`'s overlay frame (`--tc-frame-*`) and
   `Camera.fitFreeRect` follow it. `fitRect` stays the whole container's contain fit.
-  `createGame({ surface: { fit } })` passes it through. On the `Surface` interface `visibleRect`
+  `createGame({ surface: { fit } })` passes it through.
+- **Fill** (ws/kit-fit). `fit: 'fill'` has no design size: the canvas is the whole container (or
+  the frame, clamped to the container), no bars and no crop; `rect.scale` is 1, and
+  `logicalWidth` / `logicalHeight` (getters on the DOM surface) follow the frame in CSS px, so
+  client points map 1:1. The drawing buffer is `computeBackbuffer`'s with only the `maxDpr` cap
+  (`maxPixels` applies only when given). `fitRect` still measures the design size from the
+  options, so device-mode decisions read it as before; `setFit('contain')` goes back to it. On the `Surface` interface `visibleRect`
   and `setFit` are optional (a game's own surface may leave them out, and core's no-DOM surface
   does); the DOM surface always has both.
 - `Surface` is also an interface (ws/platform-surface): those members, with no private state.

@@ -23,6 +23,25 @@ export interface HarnessKitState {
   clockMs: number;
   /** `gpuDiagnostics.errorCount`. */
   gpuErrors: number;
+  /**
+   * Who draws (ws/kit-fit): `engine` (default), `own` (`?own`: a `KitRenderer` of the page's,
+   * raw WebGPU) or `none` (`?none`: `renderer: null`, the page draws in `hooks.render`).
+   */
+  renderer: 'engine' | 'own' | 'none';
+  /** `?fill`: the surface's `fit: 'fill'`. */
+  fill: boolean;
+  /** Frames the page's own renderer (or `hooks.render`) drew. */
+  ownFrames: number;
+  /** The last size the kit handed `KitRenderer.resize` ([w, h], device px). */
+  resized: number[];
+  /** `ctx.design` as last updated (it follows the window under `&fill`). */
+  design: number[];
+  /** The engine renderer's logical size (engine mode). */
+  logical: number[];
+  /** `ctx.renderer === null` (`?none`). */
+  rendererNull: boolean;
+  /** The colour the page's own renderer clears to (0..255 RGB). */
+  clear: number[];
 }
 
 export interface HarnessKitApi {

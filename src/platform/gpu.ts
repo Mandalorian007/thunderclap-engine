@@ -35,12 +35,51 @@ export interface GpuInitOptions {
    */
   compression?: boolean;
   /**
-   * Ask for the draw features the render core uses when the adapter has them:
-   * `indirect-first-instance` (indirect draws of the immediate path's merged mesh runs and of
-   * retained sets) and Chromium's `chromium-experimental-multi-draw-indirect`
-   * (`MULTI_DRAW_FEATURE`). Default true.
+   * The draw features to ask for, each only when the adapter has it. `true` (the default) is
+   * the render core's preset, `DRAW_FEATURES_ALL`: `indirect-first-instance` (indirect draws of
+   * the immediate path's merged mesh runs and of retained sets) and Chromium's
+   * `chromium-experimental-multi-draw-indirect` (`MULTI_DRAW_FEATURE`). `false` asks for none.
+   * A `DrawFeatures` object asks for exactly the flags set in it (a flag left out is off), e.g.
+   * `{ indirectFirstInstance: true }` for indirect draws without multi-draw.
    */
-  drawFeatures?: boolean;
+  drawFeatures?: boolean | DrawFeatures;
+  /**
+   * Request an XR-compatible adapter (`requestAdapter({ xrCompatible: true })`): a WebXR session
+   * draws through `XRGPUBinding` only with a device from such an adapter. Default false (some
+   * browsers pick a different GPU for it, so ask only when the game may enter XR).
+   */
+  xrCompatible?: boolean;
+}
+
+/** `GpuInitOptions.drawFeatures` flag by flag; a flag left out is off. */
+export interface DrawFeatures {
+  /** `indirect-first-instance`: indirect draws with a first instance other than 0. */
+  indirectFirstInstance?: boolean;
+  /** Chromium's `chromium-experimental-multi-draw-indirect` (`MULTI_DRAW_FEATURE`). */
+  multiDrawIndirect?: boolean;
+}
+
+/** The render core's draw features, every flag on: what `drawFeatures: true` asks for. */
+export const DRAW_FEATURES_ALL: Readonly<Required<DrawFeatures>> = Object.freeze({
+  indirectFirstInstance: true,
+  multiDrawIndirect: true,
+});
+
+/** The draw features `opts` asks for, as flags (`true` is `DRAW_FEATURES_ALL`). */
+function drawFlags(opt: boolean | DrawFeatures | undefined): DrawFeatures {
+  if (opt === undefined || opt === true) return DRAW_FEATURES_ALL;
+  return opt === false ? {} : opt;
+}
+
+/** The adapter request for `opts`: the power preference, and `xrCompatible` only when asked. */
+function adapterRequest(
+  opts: Pick<GpuInitOptions, 'powerPreference' | 'xrCompatible'>,
+): GPURequestAdapterOptions {
+  const req: GPURequestAdapterOptions & { xrCompatible?: boolean } = {
+    powerPreference: opts.powerPreference ?? 'high-performance',
+  };
+  if (opts.xrCompatible) req.xrCompatible = true;
+  return req;
 }
 
 /**
@@ -56,9 +95,7 @@ export async function initGpu(
 
   let adapter: GPUAdapter | null = null;
   try {
-    adapter = await gpu.requestAdapter({
-      powerPreference: opts.powerPreference ?? 'high-performance',
-    });
+    adapter = await gpu.requestAdapter(adapterRequest(opts));
   } catch (e) {
     return { ok: false, reason: 'no-adapter', detail: String(e) };
   }
@@ -71,10 +108,13 @@ export async function initGpu(
     wanted.push('timestamp-query');
   }
   if (opts.compression ?? true) wanted.push(...compressionFeatures(adapter));
-  if (opts.drawFeatures ?? true) {
-    const has = adapter.features as ReadonlySet<string>;
-    if (has.has('indirect-first-instance')) wanted.push('indirect-first-instance');
-    if (has.has(MULTI_DRAW_FEATURE)) wanted.push(MULTI_DRAW_FEATURE as GPUFeatureName);
+  const draw = drawFlags(opts.drawFeatures);
+  const has = adapter.features as ReadonlySet<string>;
+  if (draw.indirectFirstInstance && has.has('indirect-first-instance')) {
+    wanted.push('indirect-first-instance');
+  }
+  if (draw.multiDrawIndirect && has.has(MULTI_DRAW_FEATURE)) {
+    wanted.push(MULTI_DRAW_FEATURE as GPUFeatureName);
   }
   let device: GPUDevice;
   try {
@@ -121,15 +161,13 @@ export async function initGpu(
  */
 export async function restoreGpu(
   gpu: GpuContext,
-  opts: Pick<GpuInitOptions, 'powerPreference' | 'onLost'> = {},
+  opts: Pick<GpuInitOptions, 'powerPreference' | 'onLost' | 'xrCompatible'> = {},
 ): Promise<GPUDevice | null> {
   const api = (navigator as Navigator & { gpu?: GPU }).gpu;
   if (!api) return null;
   let adapter: GPUAdapter | null = null;
   try {
-    adapter = await api.requestAdapter({
-      powerPreference: opts.powerPreference ?? 'high-performance',
-    });
+    adapter = await api.requestAdapter(adapterRequest(opts));
   } catch {
     return null;
   }
