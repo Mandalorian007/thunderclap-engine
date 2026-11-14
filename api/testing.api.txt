@@ -88,6 +88,9 @@ interface FakeDevice {
     readonly bufferCopies: FakeBufferCopy[];
     readonly querySets: FakeQuerySet[];
     readonly submits: number;
+    readonly bundles: FakeBundle[];
+    readonly calls: number;
+    readonly bundleCalls: number;
     runPass: ((pass: FakePass) => void) | null;
     readonly errors: string[];
     readonly lost: Promise<GPUDeviceLostInfo>;
@@ -255,6 +258,23 @@ type PassCommand = {
     op: 'dispatch';
     x: number;
     y: number;
+}
+ | {
+    op: 'drawIndexedIndirect' | 'drawIndirect' | 'dispatchIndirect';
+    buffer: unknown;
+    offset: number;
+}
+ | {
+    op: 'multiDrawIndexedIndirect';
+    buffer: unknown;
+    offset: number;
+    maxDrawCount: number;
+    countBuffer?: unknown;
+    countOffset?: number;
+}
+ | {
+    op: 'executeBundles';
+    bundles: FakeBundle[];
 } | {
     op: 'other';
     name: string;
@@ -262,6 +282,7 @@ type PassCommand = {
     slot?: number;
     buffer?: unknown;
     offset?: number;
+    size?: number;
 };
 
 ## ProportionalOptions  (type-only)
