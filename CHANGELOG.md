@@ -4,6 +4,8 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 
 ## Unreleased
 
+- The section stream (ws/server-stream, E5, E-042). No engine API change (`api/` unchanged). *Added* (Rust, `crates/tc-stream`): `SectionSource` (`build`, `exists`, `cells`), `SectionStream` (`new`, `connect`, `disconnect`, `set_interest`, `changed`, `flush`, `reload`, `has_work`, `stats`), `StreamConfig`, `StreamError`, `StreamStats`, `Lanes` (implemented for maps of tc-net `Outbound`s), `game_frame`, the wire types `SectionPos`, `Area`, `Stamp`, `Claim`, `StreamInterest`, `StreamMsg` (`Section`, `Edit`, `Unload`), `encode_raw`/`decode_raw` (the voxel `RAW_SECTION_CODEC`), `Bounds`. Ported from Forge Wilds' chunk streaming with the voxel world taken out. `pnpm test:stream-interop` runs `src/net/stream-interop.test.ts` (createNet filling a `SectionStore`, resume after a reconnect) against it.
+
 ## 2.0.0-next.4 (2026-11-14)
 
 - Release budgets: `.` and `createGame` 170700 -> 171400, `./kit` 169500 -> 170200, `./testing` 181900 -> 182600 (local gzip sat 0.3 KB under each, CI's gzip reads about that much more); `./fx` 62400 -> 66200 (the core sky pass and core decals together).

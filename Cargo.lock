@@ -488,6 +488,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tc-stream"
+version = "0.1.0"
+dependencies = [
+ "tc-net",
+ "tc-wire",
+ "tokio",
+]
+
+[[package]]
 name = "tc-tsgen"
 version = "0.1.0"
 dependencies = [
