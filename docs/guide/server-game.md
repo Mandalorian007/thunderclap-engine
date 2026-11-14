@@ -14,13 +14,13 @@ Two games in the engine repo use everything here, so open them next to this page
 | Side | Crate or module | What it does |
 | --- | --- | --- |
 | Server | `thunderclap-server` | The facade: serves a game from a data directory (store, loop, WebSocket server, sign-in, admin channel) and gives it a CLI. Re-exports the crates below. |
-| Server | `tc-wire` | Binary encoding (`#[derive(Wire)]`) and the schema both sides hash. |
+| Server | `tc-wire` | Binary encoding (`#[derive(Wire)]`, re-exported by the facade) and the schema both sides hash. |
 | Server | `tc-sim` | Your game: the `Game` trait, the fixed-step loop (`Sim`), the log, queries, the entity stream. |
 | Server | `tc-net` | The WebSocket server, sessions, the hello and reconnect handshake. |
 | Server | `tc-store` | The log on disk, snapshots, replay and rollback. |
 | Client | `@thunderclap-engine/engine/net` | `createNet`: the session, queries, commands, inputs, the predictor and the snapshot buffer. |
 
-The server's crates live in this repo under `crates/`; a game names `thunderclap-server` (and `tc-wire`, for `#[derive(Wire)]`) by path in its `Cargo.toml` (see the arena's `server/Cargo.toml`), and reaches the others through it: `thunderclap_server::sim`, `::net`, `::store`.
+The server's crates live in this repo under `crates/`; a game names only `thunderclap-server` in its `Cargo.toml`: by path inside this repo (the arena's `server/Cargo.toml`), or by git tag `server-v<major>.<minor>` in a game made with `pnpm create-game` from the arena. It reaches the others through it: `thunderclap_server::sim`, `::net`, `::store`, `::wire`. `#[derive(Wire)]` comes from `thunderclap_server::Wire`; in a crate that names only the facade the derive's code goes through `thunderclap_server::wire`, and `#[wire(crate = "path")]` names another path.
 
 ## Everything that happens is an event
 
@@ -72,11 +72,13 @@ impl Protocol for ArenaProto {
 
 Use **commands** for things that happen once and need an answer: place a mark, buy an item, start a round. `command` returns events and a result; if `apply` refuses an event, `command_error` turns the error into the result.
 
-Use **inputs** for things held over time: movement keys, a stick, an aim. The loop takes each player's inputs once per step and calls `input` with the player's **body**, its unlogged per-player state (here its position). `input` moves the body; `player_state` says what to send back (`PlayerState { seq, state }`). Bodies are not logged, so a body change that the other players or the rules need must also push an event. The arena pushes `Moved { player, to }`, and its `apply` checks for a tag.
+Use **inputs** for things held over time: movement keys, a stick, an aim. The loop takes each player's inputs once per step and calls `input` with the player's **body**, its unlogged per-player state (here its position). `input` moves the body; `player_state` says what to send back (`PlayerState { seq, state }`). Bodies are not logged. After an input tick in which some player took an input, the loop calls `moved(bodies, events)` once: the rules read every body there (`bodies.get(player)`, `bodies.moved()` for who took an input) and push only the events they decide on. The arena checks for a tag there and pushes `Tagged { by, who }`; a step of movement is never logged, so the log grows with what happens, not with time. The events `moved` pushes are logged, so a replay applies them and never needs a body. `apply` and `Cx` still cannot read bodies.
 
 ## Seats
 
-`join(identity, hello, events)` returns `Seat::Player(id)` or `Seat::Observer`. A returning name gets its old seat back; a new one pushes a `Joined` event. Past eight players, the arena seats newcomers as observers, who watch but cannot act. `presence(player, present, body, events)` hears a player come and go.
+`join(identity, hello, events)` returns `Seat::Player(id)` or `Seat::Observer`. A returning name gets its old seat back; a new one pushes a `Joined` event. Past eight players, the arena seats newcomers as observers, who watch but cannot act. `presence(player, present, body, events)` hears a player come and go. `body(player)` makes a seated player's body after its `Joined` event is applied, so it can read the seat from the state. A seat's `PlayerId` is stable: a name keeps its seat for the life of the store, across restarts and reconnects, and ids are never reused.
+
+`on_open(time, events)` runs once each time the store is opened, after recovery and before any connection: its events are logged like any other. Nobody is connected then, so the arena marks every seat that was present when the last run stopped (or crashed) as gone.
 
 ## What clients see
 
@@ -105,7 +107,6 @@ pub fn server() -> Builder<Arena> {
     Server::builder(Arena::new())
         .data_dir("data/arena")
         .port(4711)
-        .auth(AuthMode::Open) // the page's token is its player's name
         .build(concat!("arena ", env!("CARGO_PKG_VERSION")))
 }
 
@@ -116,11 +117,13 @@ fn main() {
 
 That `main` is the whole server binary. `cargo run -- serve` opens the store in the data directory (or creates it), runs the loop at `SimConfig::default()`'s 20 steps a second, serves WebSockets and listens for its admin channel. While it runs, `status`, `pause`, `resume`, `reload` and `stop` from a second shell ask it; `backup` and `rollback` work on the data directory while it is stopped. Every command takes `--data DIR`. A test calls `server().data_dir(dir).port(0).start().await` instead and gets the address, the loop and, from `stop().await`, the final state.
 
-`AuthMode::DevGuests` (the default) issues tokens; `Open` takes the token as the name, which suits a template and tests, not a server on the internet.
+The builder's port defaults to 0: the OS picks a free one, which suits tests. A game that pages connect to names its port with `.port(n)`, as above, and `serve --port N` overrides it.
+
+`AuthMode::DevGuests` (the default) is for development: it issues guest tokens, and a page can also pick its own name with the token `guest:<name>` (lower_snake, 2 to 24 characters; a name held by an account is refused). `Open` takes the token as the name. Neither belongs on a server on the internet.
 
 ## The client
 
-The page describes the same types with `defineSchema`. Its hash must equal the server's, or the server refuses the connection with a "schema mismatch" message.
+The page describes the same types with `defineSchema`. Its hash must equal the server's, or the server refuses the connection with a "schema mismatch" message. You don't write it by hand: `thunderclap_server::generate_ts(&schema, dir)` writes `schema.ts` (the `defineSchema` call and `SCHEMA_HASH`) beside `generated.ts` (the TypeScript types). The arena's test `the_client_schema_is_generated` compares `src/schema.ts` with it, and `TC_BLESS=1 cargo test` rewrites it. It looks like this:
 
 ```ts
 import { type Connect, createNet, defineSchema, EMPTY } from '@thunderclap-engine/engine/net';
@@ -146,13 +149,15 @@ const connect: Connect = (events) => {
   return { send: (frame) => ws.send(frame as Uint8Array<ArrayBuffer>), close: () => ws.close() };
 };
 
-const net = createNet({ schema, connect, hello: { token: 'ada' }, entities: 'Player' });
+const net = createNet({ schema, connect, hello: { token: 'guest:ada' }, entities: 'Player' });
 net.setInterest(EMPTY);
 const welcome = await net.ready;
 console.log('seated as player', welcome.player);
 ```
 
-Keep the two schemas in step with a test on each side. The arena writes the server's hash to `shared/schema-hash.txt` (`TC_BLESS=1 cargo test` rewrites it) and both test suites compare against it.
+The arena also writes the server's hash to `shared/schema-hash.txt`, which the client's tests compare against.
+
+A resent query result carries its hash, which the client checks. A client that resumes with a result the server still holds unchanged is sent nothing for it.
 
 ## Prediction
 
@@ -182,14 +187,10 @@ Draw everyone else from the entity stream, a little in the past, through the sna
 
 ## Testing
 
-- **Rules, from Rust.** `Driver` runs a game with no network: `connect(name, hello)`, `client(conn, msg)`, `tick(now)` (takes inputs at the input tick), `advance(steps)`, and `received(rx)` for what a connection was sent. See `templates/arena-2d-server/server/tests/arena.rs`.
+- **Rules, from Rust.** `Driver` runs a game with no network: `connect(name, hello)`, `client(conn, msg)`, `push_input(conn, input)` (queues an input like a client's, returns its seq), `input_tick()` (runs the input tick now), `tick(now)`, `wait(duration)` and `now()` on the driver's own clock, which starts at its creation and moves only when told, `advance(steps)`, and `received(rx)` for what a connection was sent. See `templates/arena-2d-server/server/tests/arena.rs`.
 - **Replay and rollback.** Play a game into a store, reopen it, and compare `hash_state`. See `crates/tc-sim/tests/turns.rs`.
-- **The real client.** Start the server on port 0 in a Rust test and run a Vitest file against it with `createNet` (`crates/thunderclap-server/tests/turns.rs` serves tic-tac-toe through the facade and runs `src/net/turns-interop.test.ts`), or start both in Playwright (`e2e/arena-2d-server.spec.ts`).
+- **The real client.** Start the server on port 0 in a Rust test and run a Vitest file against it with `createNet` (`crates/thunderclap-server/tests/turns.rs` serves tic-tac-toe through the facade and runs `src/net/turns-interop.test.ts`). The engine's own interop tests share the Rust test game with these runs through `#[path = "..."] mod game;` in each test crate, and that is the pattern to copy: one module, built into each test that serves it, with no extra crate, or start both in Playwright (`e2e/arena-2d-server.spec.ts`).
 
 ## Known rough edges
 
-- The rules (`apply`, `Cx`) cannot read players' bodies, so a body change that matters to others must be copied into the state with an event.
-- Every event is logged for good, so a real-time game that logs a `Moved` per step grows its store on disk for as long as it runs.
-- The client's schema is written by hand. Compare its hash in tests.
-- A small query result is resent whole instead of patched, so resuming it saves nothing.
-- `Driver` takes inputs only in `tick(now)`, so a test needs wall-clock instants to drive inputs.
+- A long-running game's store keeps every event: log generations, a base and the archive exist in `tc-store`, but the loop doesn't write a base yet, so a store grows with what happens (not with time, once moves stay out of the log).

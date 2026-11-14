@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use tc_sim::Core;
-use thunderclap_server::{AuthMode, Server};
+use thunderclap_server::Server;
 
 use turns_game::{Turns, TurnsLog};
 
@@ -47,13 +47,12 @@ fn typescript_create_net_plays_a_round() {
         .enable_all()
         .build()
         .unwrap();
-    // The page's token is its name: no issued tokens in a test.
+    // Dev guests (the default): a page's token is `guest:<name>`.
     let running = runtime
         .block_on(
             Server::builder(Turns::new())
                 .data_dir(&dir)
                 .port(0)
-                .auth(AuthMode::Open)
                 .meta(b"turns".to_vec())
                 .net(|c| c.deflate_threads = Some(1))
                 .start(),

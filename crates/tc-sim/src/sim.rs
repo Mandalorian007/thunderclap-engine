@@ -19,7 +19,7 @@ use tc_wire::schema::Schema;
 use crate::MAX_TIME;
 use crate::core::{ApplyError, Core};
 use crate::entities::Stream;
-use crate::game::{EventOf, Game, Outbox, PlayerId, To};
+use crate::game::{Bodies, EventOf, Game, Outbox, PlayerId, To};
 use crate::input::{InputConfig, InputQueue};
 use crate::lanes::{Budgets, Lane};
 use crate::query::Key;
@@ -227,7 +227,8 @@ impl<G: Game> Sim<G> {
 
     /// Opens the store in `dir`, replays its log into `game` (a new game,
     /// at its start), and serves it from the later of its last entry's
-    /// time and its last clock mark. Returns the store's metadata too.
+    /// time and its last clock mark, after logging what
+    /// [`Game::on_open`] pushed. Returns the store's metadata too.
     pub fn open(
         dir: &std::path::Path,
         game: G,
@@ -243,7 +244,15 @@ impl<G: Game> Sim<G> {
         }
         // Time never goes back past a mark.
         core.advance_to(opened.clock);
-        Ok((Sim::new(core, Some(log), config), opened.meta))
+        let mut sim = Sim::new(core, Some(log), config);
+        // Whatever the last run left (it may have crashed): the game's
+        // events that tidy it, logged like any other.
+        let mut events = Vec::new();
+        sim.core.game().on_open(sim.core.time(), &mut events);
+        if let Err(e) = sim.commit(events) {
+            warn!("the game's on_open events weren't applied: {e}");
+        }
+        Ok((sim, opened.meta))
     }
 
     /// The game and its time, version and schedule.
@@ -702,6 +711,7 @@ impl<G: Game> Sim<G> {
         let applied = self
             .inputs
             .tick(now, |player, _, input, _| taken.push((player, input)));
+        let mut moved = Vec::new();
         for (player, input) in taken {
             let Some(body) = self.bodies.get_mut(&player) else {
                 continue;
@@ -709,6 +719,19 @@ impl<G: Game> Sim<G> {
             let mut events = Vec::new();
             self.core.game().input(player, body, input, &mut events);
             self.moved.insert(player);
+            moved.push(player);
+            let _ = self.commit(events);
+        }
+        if !moved.is_empty() {
+            moved.sort_unstable();
+            moved.dedup();
+            let mut events = Vec::new();
+            let bodies = Bodies {
+                time: self.core.time(),
+                bodies: &self.bodies,
+                moved: &moved,
+            };
+            self.core.game().moved(&bodies, &mut events);
             let _ = self.commit(events);
         }
         self.input_tick_us = u32::try_from(started.elapsed().as_micros()).unwrap_or(u32::MAX);

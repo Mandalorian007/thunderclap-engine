@@ -1,7 +1,13 @@
 // `pnpm check:rust`: the Rust workspace (crates/) formatted, lint-clean and
-// tested. Skipped with a notice where cargo is not installed, so a
+// tested, then each template's server crate (templates/<name>/server, its own
+// workspace on the engine's crates by path) the same way. Skipped with a notice where cargo is not installed, so a
 // JavaScript-only checkout still runs `pnpm check`.
 import { spawnSync } from 'node:child_process';
+import { existsSync, readdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const run = (args) =>
   spawnSync('cargo', args, { stdio: 'inherit', shell: process.platform === 'win32' });
@@ -16,14 +22,24 @@ if (probe.error || probe.status !== 0) {
   );
   process.exit(0);
 }
-for (const args of [
+/** The template server crates: templates/<name>/server/Cargo.toml. */
+const servers = readdirSync(join(root, 'templates'))
+  .map((name) => join(root, 'templates', name, 'server', 'Cargo.toml'))
+  .filter((p) => existsSync(p));
+
+const steps = [
   ['fmt', '--all', '--check'],
   ['clippy', '--workspace', '--all-targets', '--', '-D', 'warnings'],
   ['test', '--workspace'],
-]) {
-  const r = run(args);
-  if (r.status !== 0) {
-    console.error(`check:rust: cargo ${args.join(' ')} failed`);
-    process.exit(r.status ?? 1);
+];
+for (const manifest of [null, ...servers]) {
+  for (const step of steps) {
+    // A template's server builds into its own target/ (gitignored), as a game's would.
+    const args = manifest ? [step[0], '--manifest-path', manifest, ...step.slice(1)] : step;
+    const r = run(args);
+    if (r.status !== 0) {
+      console.error(`check:rust: cargo ${args.join(' ')} failed`);
+      process.exit(r.status ?? 1);
+    }
   }
 }

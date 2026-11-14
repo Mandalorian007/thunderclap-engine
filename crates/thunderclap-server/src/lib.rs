@@ -29,7 +29,8 @@ pub use server::{
     Server,
 };
 pub use tc_sim::{Game, SimConfig};
-pub use typescript::generate_ts;
+pub use tc_wire::Wire;
+pub use typescript::{NET_IMPORT, SCHEMA_TS, define_schema_ts, generate_ts};
 
 pub use tc_admin as admin;
 pub use tc_auth as auth;

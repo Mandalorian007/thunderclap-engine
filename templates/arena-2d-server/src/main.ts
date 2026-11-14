@@ -12,7 +12,8 @@ import { composeGame } from '@thunderclap-engine/engine/kit';
 import { type Connect, createNet, EMPTY } from '@thunderclap-engine/engine/net';
 import type { DrawParams } from '@thunderclap-engine/engine/render';
 import { DOWN, HEIGHT, LEFT, RADIUS, RIGHT, STEP_MS, step, UP, WIDTH } from './rules';
-import { type Player, type Pos, type Score, schema } from './schema';
+import { schema } from './schema';
+import type { Player, Pos, Score } from './types';
 
 interface ArenaProbe {
   status: string;
@@ -46,7 +47,7 @@ const serverUrl =
   params.get('server') ??
   (import.meta.env.VITE_ARENA_SERVER as string | undefined) ??
   `ws://${location.hostname || '127.0.0.1'}:4711`;
-const name = params.get('name') ?? `player-${Math.floor(Math.random() * 1e6)}`;
+const name = params.get('name') ?? `player_${Math.floor(Math.random() * 1e6)}`;
 
 /** A WebSocket per connection; the session reconnects on its own. */
 const connect: Connect = (events) => {
@@ -66,7 +67,8 @@ const connect: Connect = (events) => {
 const net = createNet({
   schema,
   connect,
-  hello: { token: name },
+  // Dev guests: the server takes `guest:<name>` as that name.
+  hello: { token: `guest:${name}` },
   entities: 'Player',
   snapshots: { dims: 2, stepMs: STEP_MS },
 });

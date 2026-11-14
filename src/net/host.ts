@@ -110,7 +110,13 @@ export class QueryFeed {
     this.#last = bytes;
     if (!last) {
       this.#version++;
-      return { type: 'Resync', sub: this.sub, version: this.#version, result: bytes };
+      return {
+        type: 'Resync',
+        sub: this.sub,
+        version: this.#version,
+        hash: resultHash(bytes),
+        result: bytes,
+      };
     }
     const patch = diffValues(this.#schema.types, this.#ty, last, bytes);
     if (patch.length === 0) return null;

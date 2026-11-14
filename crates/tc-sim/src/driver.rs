@@ -1,9 +1,16 @@
 //! [`Driver`]: a [`Sim`] run in-process by hand, with no sockets or
 //! threads: connections are tc-net outbound queues the caller reads, and
 //! time moves only when the caller ticks. For tests, bots and tools.
+//!
+//! **Its clock.** A driver keeps its own instant, which moves only when
+//! the caller says ([`Driver::wait`], [`Driver::input_tick`], or
+//! [`Driver::tick`] with a later instant); every request is handled at
+//! it. So a test feeds inputs with [`Driver::push_input`] and takes them
+//! with [`Driver::input_tick`], with no wall-clock instants of its own.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use tc_net::outbound::{OutboundRx, outbound};
 use tc_net::{ClientMsg, ConnId, Identity, Protocol, Request, ServerMsg};
@@ -19,6 +26,8 @@ pub struct Driver<G: Game> {
     sim: Sim<G>,
     next_conn: ConnId,
     permits: Arc<Semaphore>,
+    now: Instant,
+    seqs: BTreeMap<ConnId, u32>,
 }
 
 impl<G: Game> Driver<G> {
@@ -28,6 +37,8 @@ impl<G: Game> Driver<G> {
             sim,
             next_conn: 1,
             permits: Arc::new(Semaphore::new(Semaphore::MAX_PERMITS)),
+            now: Instant::now(),
+            seqs: BTreeMap::new(),
         }
     }
 
@@ -56,15 +67,18 @@ impl<G: Game> Driver<G> {
         let conn = self.next_conn;
         self.next_conn += 1;
         let (out, rx) = outbound();
-        self.sim.handle(Request::Connect {
-            conn,
-            identity: Identity {
-                name: name.to_string(),
-                permissions: Vec::new(),
+        self.sim.handle_at(
+            Request::Connect {
+                conn,
+                identity: Identity {
+                    name: name.to_string(),
+                    permissions: Vec::new(),
+                },
+                hello,
+                out,
             },
-            hello,
-            out,
-        });
+            self.now,
+        );
         (conn, rx)
     }
 
@@ -75,22 +89,56 @@ impl<G: Game> Driver<G> {
             .clone()
             .try_acquire_owned()
             .expect("the driver's permits never run out");
-        self.sim.handle(Request::Client {
-            conn,
-            msg,
-            permit,
-            sent: Instant::now(),
-        });
+        self.sim.handle_at(
+            Request::Client {
+                conn,
+                msg,
+                permit,
+                sent: self.now,
+            },
+            self.now,
+        );
     }
 
     /// Closes `conn`.
     pub fn disconnect(&mut self, conn: ConnId) {
-        self.sim.handle(Request::Disconnect { conn });
+        self.sim.handle_at(Request::Disconnect { conn }, self.now);
+        self.seqs.remove(&conn);
     }
 
-    /// Catches up with the wall clock at `now` ([`Sim::tick`]).
+    /// The driver's clock (see the [module docs](self)).
+    pub fn now(&self) -> Instant {
+        self.now
+    }
+
+    /// Moves the driver's clock to `now` (never back) and catches up with
+    /// it ([`Sim::tick`]).
     pub fn tick(&mut self, now: Instant) {
-        self.sim.tick(now);
+        self.now = self.now.max(now);
+        self.sim.tick(self.now);
+    }
+
+    /// Moves the driver's clock on by `by` and catches up with it.
+    pub fn wait(&mut self, by: Duration) {
+        self.tick(self.now + by);
+    }
+
+    /// Queues `input` from `conn` (`ClientMsg::Input`, with the next
+    /// `seq` for that connection, which it returns). The input is taken
+    /// at the next input tick ([`Driver::input_tick`]).
+    pub fn push_input(&mut self, conn: ConnId, input: <G::Protocol as Protocol>::Input) -> u32 {
+        let seq = self.seqs.entry(conn).or_insert(0);
+        *seq += 1;
+        let seq = *seq;
+        self.client(conn, ClientMsg::Input { seq, input });
+        seq
+    }
+
+    /// Moves the clock on by one input tick, which takes the inputs
+    /// waiting ([`Game::input`], then [`Game::moved`]).
+    pub fn input_tick(&mut self) {
+        let tick = self.sim.inputs.config().tick;
+        self.wait(tick);
     }
 
     /// Jumps `steps` ahead ([`Sim::advance`]).

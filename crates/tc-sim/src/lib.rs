@@ -52,7 +52,7 @@ mod wheel;
 pub use changes::Changes;
 pub use core::{ApplyError, Core, Replayed, STATE_HASH_VERSION};
 pub use driver::Driver;
-pub use game::{Cx, EventOf, Game, InterestOf, Outbox, PlayerId, Seat, To};
+pub use game::{Bodies, Cx, EventOf, Game, InterestOf, Outbox, PlayerId, Seat, To};
 pub use input::{InputConfig, InputQueue, Taken};
 pub use lanes::Lane;
 pub use query::{Key, Query, QueryCtx, Reads, schema_of};

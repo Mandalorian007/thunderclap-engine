@@ -311,9 +311,21 @@ fn generate_ts_writes_the_client_typescript_once() {
     let out = temp_dir("gen");
     let written =
         thunderclap_server::generate_ts::<Tally>(&out, &tc_tsgen::Config::default()).unwrap();
-    assert_eq!(written, [out.join("generated.ts")]);
+    assert_eq!(written, [out.join("generated.ts"), out.join("schema.ts")]);
     let text = std::fs::read_to_string(&written[0]).unwrap();
     assert!(text.contains(&tally::schema().hash()));
+    // The `defineSchema` input, hash and all (the turns interop test
+    // checks a generated one hashes the same in TypeScript).
+    let schema = std::fs::read_to_string(&written[1]).unwrap();
+    assert!(
+        schema.contains("export const schema = defineSchema({"),
+        "{schema}"
+    );
+    assert!(schema.contains(&tally::schema().hash()), "{schema}");
+    assert!(
+        !schema.contains("ClientMsg"),
+        "the envelope is defineSchema's: {schema}"
+    );
     let again =
         thunderclap_server::generate_ts::<Tally>(&out, &tc_tsgen::Config::default()).unwrap();
     assert!(again.is_empty());

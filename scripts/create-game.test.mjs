@@ -26,6 +26,7 @@ import {
   parseArgs,
   rewriteManifest,
   root,
+  serverTag,
   templateFiles,
   UsageError,
 } from './create-game.mjs';
@@ -234,3 +235,17 @@ for (const { name: template } of listTemplates()) {
     );
   });
 }
+
+test('a copied Rust server depends on the engine by git tag, not by path', () => {
+  const dir = join(tmp, 'arena');
+  const r = run(dir, '--template', 'arena-2d-server');
+  assert.equal(r.status, 0, r.stderr);
+  const cargo = readFileSync(join(dir, 'server', 'Cargo.toml'), 'utf8');
+  assert.match(serverTag(), /^server-v\d+\.\d+$/);
+  assert.match(
+    cargo,
+    new RegExp(`thunderclap-server = \\{ git = "https://[^"]+", tag = "${serverTag()}" \\}`),
+  );
+  assert.doesNotMatch(cargo, /path =/);
+  assert.equal(existsSync(join(dir, 'server', 'Cargo.lock')), false);
+});
