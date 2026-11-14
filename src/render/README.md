@@ -1545,6 +1545,7 @@ enough and the DOM overlay is untouched.
 renderer.setResolution({ maxPixels: 1280 * 720 }); // pixel budget for the scene targets
 renderer.setResolution({ scale: 0.8 });            // extra scale on top (0.25..1)
 renderer.resolutionScale;                          // scene width / output width
+renderer.setLogicalSize(1280, 800);                // the 2D logical size (a fill surface, ws/kit-fit)
 ```
 
 - `ResolutionOptions` is `{ scale?, maxPixels? }`; `scale` is clamped to
