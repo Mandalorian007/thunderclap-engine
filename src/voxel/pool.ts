@@ -74,6 +74,11 @@ export interface SectionMeshPoolOptions {
   onMesh: (key: number, result: SectionMeshResult) => void;
   /** Merge faces greedily. Default true. */
   greedy?: boolean;
+  /**
+   * The foliage level of detail a section meshes at (`SectionMeshOptions.leafLod`), read when
+   * its job is sent (ws/render-fit). Default 0 for all.
+   */
+  leafLod?: (key: number) => number;
   /** Jobs in flight per Worker. Default 2. */
   perWorker?: number;
   /** A new port to replace port `i` when it dies; without it the slot is dropped. */
@@ -221,7 +226,11 @@ export class SectionMeshPool {
         this.stats.inFlight++;
         this.inFlight.add(p.key);
         this.jobs.set(job, { key: p.key, priority: p.priority, worker: i });
-        this.ports[i].post({ type: 'mesh', job, input, greedy: this.greedy }, jobTransfers(input));
+        const leafLod = this.opts.leafLod?.(p.key) ?? 0;
+        this.ports[i].post(
+          { type: 'mesh', job, input, greedy: this.greedy, leafLod },
+          jobTransfers(input),
+        );
       }
     }
     this.stats.queued = this.queue.length - this.dropped;

@@ -48,6 +48,16 @@ export interface VoxelMaterial {
    * in scope.
    */
   fragment: string;
+  /**
+   * WGSL with the material's own vertex entry (ws/render-fit), named by `vertexEntry`: e.g.
+   * `@vertex fn vs_sway(in: VertexIn, @builtin(vertex_index) vi: u32) -> VoxelVarying` that
+   * calls the world's `voxel_vertex(in, vi)` and moves the result (sway, shrink, shape part
+   * quads), setting `out.clip = view.viewProj * vec4f(out.world, 1.0)` again. It follows the
+   * world's vertex stage, before `fragment`. Default none.
+   */
+  vertex?: string;
+  /** The vertex entry the stream draws (and casts its shadow) with. Default the world's `vs`. */
+  vertexEntry?: string;
   /** The material's own bind groups at 1, 2, …. */
   bindGroups?: readonly { layout: GPUBindGroupLayout; group: GPUBindGroup }[];
   /** Default: none for opaque and foliage, alpha blending for liquid. */
@@ -93,6 +103,12 @@ export interface VoxelWorldOptions {
   greedy?: boolean;
   /** The game's looks per stream; a missing one is the engine's plain default. */
   materials?: Partial<Record<VoxelStream, VoxelMaterial>>;
+  /**
+   * The foliage level of detail section (sx, sy, sz) meshes at (`SectionMeshOptions.leafLod`,
+   * ws/render-fit), read when its job is sent. A section whose mesh came back `tiered` must be
+   * meshed again by the game when its level changes. Default 0 everywhere.
+   */
+  leafLod?: (sx: number, sy: number, sz: number) => number;
   /** Horizontal radius held around the interest point, in sections. Default 8. */
   radius?: number;
   /** Rows searched above and below the interest point. Default `radius` (at most the world's rows). */
@@ -257,7 +273,8 @@ export function createVoxelWorld(core: RenderCore, opts: VoxelWorldOptions): Vox
     return core.createDrawSet({
       label: `${label} ${stream}`,
       shader: {
-        code: `${vertex}\n${m?.fragment ?? VOXEL_DEFAULT_FRAGMENT[stream]}`,
+        code: `${vertex}\n${m?.vertex ? `${m.vertex}\n` : ''}${m?.fragment ?? VOXEL_DEFAULT_FRAGMENT[stream]}`,
+        vertexEntry: m?.vertexEntry,
         blend: m?.blend ?? (stream === 'liquid' ? ALPHA_BLEND : undefined),
         cullMode: stream === 'opaque' ? 'back' : 'none',
         shadowFragmentEntry: m?.shadowFragmentEntry,
@@ -337,6 +354,9 @@ export function createVoxelWorld(core: RenderCore, opts: VoxelWorldOptions): Vox
     format,
     ports,
     build: (key) => (store.ready(key) ? store.jobFor(key) : null),
+    leafLod: opts.leafLod
+      ? (key) => opts.leafLod!(sectionKeyX(key), sectionKeyY(key), sectionKeyZ(key))
+      : undefined,
     onMesh: (key, result) => {
       if (store.has(key)) pending.set(key, result);
     },

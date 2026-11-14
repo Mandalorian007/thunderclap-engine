@@ -59,6 +59,8 @@ export interface SectionJob {
   wetTops?: Uint8Array;
   /** Which of the 27 may hold an emitter; with any, every source is whole. */
   glow?: number;
+  /** Per-cell inset overrides (`SectionMeshOptions.insets`, ws/render-fit). */
+  insets?: Int32Array;
 }
 
 /** A source section as the store hands it over: one cell, encoded bytes, or decoded cells. */
@@ -144,6 +146,7 @@ export function packSources(
 export function jobTransfers(job: SectionJob): ArrayBuffer[] {
   const out: ArrayBuffer[] = [job.layout.buffer as ArrayBuffer, job.heights.buffer as ArrayBuffer];
   if (job.wetTops) out.push(job.wetTops.buffer as ArrayBuffer);
+  if (job.insets) out.push(job.insets.buffer as ArrayBuffer);
   return out;
 }
 

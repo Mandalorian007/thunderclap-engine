@@ -10,7 +10,14 @@ import { SectionInputBuilder, type SectionJob } from './sources';
 /** Page to Worker. */
 export type SectionMesherRequest =
   | { type: 'init'; format: VoxelFormat }
-  | { type: 'mesh'; job: number; input: SectionJob; greedy: boolean };
+  | {
+      type: 'mesh';
+      job: number;
+      input: SectionJob;
+      greedy: boolean;
+      /** `SectionMeshOptions.leafLod` (ws/render-fit). Default 0. */
+      leafLod?: number;
+    };
 
 /** A meshed job. */
 export interface SectionMeshResult {
@@ -61,7 +68,11 @@ export function installSectionMesherWorker(
     try {
       if (!mesher || !builder) throw new Error('mesh before init');
       const t0 = performance.now();
-      const mesh = mesher.mesh(builder.build(req.input), { greedy: req.greedy });
+      const mesh = mesher.mesh(builder.build(req.input), {
+        greedy: req.greedy,
+        leafLod: req.leafLod,
+        insets: req.input.insets,
+      });
       return { type: 'mesh', job: req.job, sx, sy, sz, mesh, ms: performance.now() - t0 };
     } catch (e) {
       const message = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
