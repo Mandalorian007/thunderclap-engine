@@ -220,7 +220,7 @@ fn sky_look(i: SkyInput) -> SkyShade {
     const core = createRenderCore(fake.device as unknown as GPUDevice);
     const pass = createSkyPass(core, null, { shade: SHADE });
     expect(pass.sky.exposure).toBe(1);
-    expect([...pass.sky.zenith]).toEqual([0, 0, 0]);
+    expect(Array.from(pass.sky.zenith)).toEqual([0, 0, 0]);
     pass.prepare();
     expect([...pass.horizon]).toEqual([0, 0, 0]);
     expect(() => createSkyPass(core, null, { id: 'sky2' })).toThrow(/shade/);
