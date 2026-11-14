@@ -19,7 +19,8 @@ use std::sync::mpsc::{Sender, channel};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use tc_auth::{Claim, MemoryAccounts, SessionAuth, TokenFormat};
+use tc_auth::{Claim, LiveTokens, MemoryAccounts, Revoked, SessionAuth, TokenFormat};
+use tc_net::hooks::Hooks;
 use tc_net::{ClientMsg, Empty, Request, Server, ServerConfig, ServerMsg, close};
 use tc_wire::Wire;
 use tokio_tungstenite::tungstenite::Message;
@@ -51,10 +52,14 @@ fn game(auth: Arc<SessionAuth>) -> Sender<Request<Echo>> {
 }
 
 async fn start(auth: Arc<SessionAuth>) -> Server<Echo> {
+    start_with(auth, Hooks::default()).await
+}
+
+async fn start_with(auth: Arc<SessionAuth>, hooks: Hooks<Echo>) -> Server<Echo> {
     let mut config = ServerConfig::new(echo::schema().hash());
     config.auth = auth.clone();
     config.deflate_threads = Some(1);
-    Server::start(config, game(auth))
+    Server::start_with(config, game(auth), hooks)
         .await
         .expect("the server starts")
 }
@@ -177,6 +182,40 @@ async fn a_revoked_token_closes_its_session_with_4001() {
     }
     let (_, first) = join(&server, &token(&auth, "ada")).await;
     assert!(matches!(first, ServerMsg::Welcome { .. }), "{first:?}");
+    server.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_tokens_count_the_sessions_a_revoke_closes() {
+    let auth = auth();
+    let live = LiveTokens::new();
+    let hooks = Hooks {
+        hello: Some(live.hook()),
+        ..Hooks::default()
+    };
+    let server = start_with(auth.clone(), hooks).await;
+    let ada = token(&auth, "ada");
+    let (_a1, first) = join(&server, &ada).await;
+    assert!(matches!(first, ServerMsg::Welcome { .. }), "{first:?}");
+    let (_a2, _) = join(&server, &ada).await;
+    let (_b, _) = join(&server, &token(&auth, "bob")).await;
+    assert_eq!((live.len(), live.on("ada").len()), (3, 2));
+    assert_eq!(live.on("ada")[0].1, ada, "the token each joined on");
+
+    // Revoked in the store, as an operator's tool would.
+    auth.accounts().claim(&Claim::name("ada").reset()).unwrap();
+    let revoked = live
+        .revoke(auth.as_ref(), "ada", Duration::from_secs(5))
+        .await;
+    assert_eq!(
+        revoked,
+        Some(Revoked {
+            generation: 2,
+            closed: 2,
+            closing: 0
+        })
+    );
+    assert_eq!(live.len(), 1);
     server.stop().await;
 }
 

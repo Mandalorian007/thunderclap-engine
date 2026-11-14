@@ -10,7 +10,6 @@ use tc_net::{Auth, AuthError, Identity};
 use tokio::sync::watch;
 
 use crate::accounts::{Accounts, Claim, Claimed, Clock, system_clock};
-use crate::names::quote;
 use crate::token::{Signer, TokenError, TokenFormat, parse_generation};
 
 /// The permission a guest ([`SessionAuth::with_guests`]) carries.
@@ -69,10 +68,7 @@ impl DevTokens {
             )));
         };
         if prefix != format.dev_prefix {
-            return Err(TokenError::Malformed(format!(
-                "unknown token version {}",
-                quote(prefix)
-            )));
+            return Err(format.unknown_version(prefix));
         }
         format.check_name(name)?;
         let permissions = format.parse_perms(perms)?;
@@ -214,10 +210,7 @@ impl SessionAuth {
         {
             self.format.check_name(name)?;
             if self.accounts.get(name).is_some() {
-                return Err(TokenError::Malformed(format!(
-                    "{} has an account: sign in instead",
-                    quote(name)
-                )));
+                return Err(self.format.has_account(name));
             }
             return Ok(Identity {
                 name: name.to_string(),
@@ -236,10 +229,7 @@ impl SessionAuth {
             )));
         };
         if prefix != format.session_prefix {
-            return Err(TokenError::Malformed(format!(
-                "unknown token version {}",
-                quote(prefix)
-            )));
+            return Err(format.unknown_version(prefix));
         }
         format.check_name(name)?;
         let permissions = format.parse_perms(perms)?;
@@ -267,5 +257,9 @@ impl Auth for SessionAuth {
 
     fn revisions(&self) -> Option<watch::Receiver<u64>> {
         Some(self.accounts.subscribe())
+    }
+
+    fn generation(&self, name: &str) -> Option<u32> {
+        Some(self.accounts.generation(name))
     }
 }

@@ -57,6 +57,14 @@ pub trait Auth: Send + Sync + 'static {
     fn revisions(&self) -> Option<watch::Receiver<u64>> {
         None
     }
+
+    /// For an auth with [`Auth::revisions`]: `name`'s generation, read
+    /// from its store again now (a store changed behind the server's back
+    /// is seen at once). A token below it is revoked. `None` (the
+    /// default): tokens have no generations here.
+    fn generation(&self, _name: &str) -> Option<u32> {
+        None
+    }
 }
 
 /// The dev auth: every token is good, and names its player (an empty one

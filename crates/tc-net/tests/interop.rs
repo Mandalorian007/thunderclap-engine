@@ -191,6 +191,10 @@ async fn a_rust_client_handshakes_commands_and_acks_the_bulk_lane() {
         }
         assert_eq!(got, 50);
     }
+    // The four results went by the priority lane, each wait counted.
+    let io = server.io();
+    assert!(io.prio_wait.count() >= 4, "{:?}", io.prio_wait);
+    assert!(io.prio_wait.max_us < 5_000_000);
     // An ack for data never sent ends the session.
     send(&mut ws, ClientMsg::Ack { bytes: 1 << 40 }).await;
     assert!(recv(&mut ws).await.is_none());
@@ -362,7 +366,10 @@ async fn hooks_see_hello_and_frames_and_may_refuse() {
     ws.close(None).await.unwrap();
     let end = std::time::Instant::now() + Duration::from_secs(5);
     while live.load(Ordering::SeqCst) != 0 {
-        assert!(std::time::Instant::now() < end, "the session's hold is dropped");
+        assert!(
+            std::time::Instant::now() < end,
+            "the session's hold is dropped"
+        );
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
     server.stop().await;

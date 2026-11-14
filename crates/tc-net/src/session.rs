@@ -622,7 +622,6 @@ async fn send<T: Transport>(
     // A `Bulk` counts the frames it carries, not itself.
     let count = messages + std::mem::take(&mut batch.packed).saturating_sub(1) as u64;
     let bytes: usize = batch.frames.iter().map(Frame::len).sum();
-    batch.prio_queued.clear();
     let frames = &mut batch.frames;
     let write = async {
         for frame in frames.drain(..) {
@@ -633,6 +632,10 @@ async fn send<T: Transport>(
     match tokio::time::timeout(SEND_TIMEOUT, write).await {
         Ok(Ok(())) => {
             io.wrote(count, messages, bytes as u64);
+            let now = std::time::Instant::now();
+            for queued in batch.prio_queued.drain(..) {
+                io.prio_waited(now.saturating_duration_since(queued));
+            }
             true
         }
         Ok(Err(e)) => {

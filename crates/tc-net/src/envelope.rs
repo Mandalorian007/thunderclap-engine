@@ -982,6 +982,26 @@ fn welcome_fields<P: Protocol>(s: &mut SchemaBuilder) -> Vec<Field> {
         .collect()
 }
 
+impl<P: Protocol> ClientMsg<P> {
+    /// The message's kind, as the wire names it (`Hello`, `Command`,
+    /// `Game`, ...): for logs.
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            ClientMsg::Hello { .. } => "Hello",
+            ClientMsg::Command { .. } => "Command",
+            ClientMsg::Subscribe { .. } => "Subscribe",
+            ClientMsg::Unsubscribe { .. } => "Unsubscribe",
+            ClientMsg::Ping { .. } => "Ping",
+            ClientMsg::SetInterest { .. } => "SetInterest",
+            ClientMsg::Input { .. } => "Input",
+            ClientMsg::TakeControl => "TakeControl",
+            ClientMsg::EntityResync => "EntityResync",
+            ClientMsg::Ack { .. } => "Ack",
+            ClientMsg::Game(_) => "Game",
+        }
+    }
+}
+
 impl<P: Protocol> Wire for ClientMsg<P> {
     fn encode(&self, w: &mut Writer) {
         let env = P::ENVELOPE;
@@ -1614,6 +1634,7 @@ pub(crate) mod tests {
             let bytes = msg.to_bytes();
             assert_eq!(bytes[0] as usize, i, "{msg:?}");
             assert_eq!(&ClientMsg::<Game>::from_bytes(&bytes).unwrap(), msg);
+            assert_eq!(msg.kind_name(), format!("{:?}", Envelope::ENGINE.client[i]));
         }
         let server: Vec<ServerMsg<Game>> = vec![
             ServerMsg::Welcome {
