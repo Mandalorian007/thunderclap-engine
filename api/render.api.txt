@@ -89,19 +89,32 @@ interface BufferLayout {
 const COMPRESSION_FEATURES: Readonly<Record<CompressionFamily, GPUFeatureName>>;
 
 ## CORE_DRAWABLE_WGSL
-const CORE_DRAWABLE_WGSL = "\nstruct CoreView {\n  viewProj: mat4x4f,\n  position: vec4f,\n  planes: array<vec4f, 6>,\n  index: u32,\n  _a: u32,\n  _b: u32,\n  _c: u32,\n  origin: vec4f,\n  _pad: array<vec4f, 3>,\n};\n\n@group(0) @binding(0) var<uniform> view: CoreView;\n";
+const CORE_DRAWABLE_WGSL = "\nstruct CoreView {\n  viewProj: mat4x4f,\n  position: vec4f,\n  planes: array<vec4f, 6>,\n  index: u32,\n  _a: u32,\n  _b: u32,\n  _c: u32,\n  origin: vec4f,\n  prevRows: array<vec4f, 3>,\n};\n\nfn core_velocity(v: CoreView, p: vec3f) -> vec2f {\n  let q = vec4f(p, 1.0);\n  let c = v.viewProj * q;\n  let pw = dot(v.prevRows[2], q);\n  if (pw <= 0.0 || c.w <= 0.0) { return vec2f(0.0); }\n  let pn = vec2f(dot(v.prevRows[0], q), dot(v.prevRows[1], q)) / pw;\n  return (c.xy / c.w - pn) * vec2f(0.5, -0.5);\n}\n\n@group(0) @binding(0) var<uniform> view: CoreView;\n";
 
 ## CORE_PASSES
 const CORE_PASSES: readonly PassDesc[];
+
+## CORE_TARGET
+const CORE_TARGET: {
+    readonly emissive: 1;
+    readonly roughMetal: 2;
+    readonly velocity: 4;
+};
+
+## CORE_TARGET_FORMATS
+const CORE_TARGET_FORMATS: readonly GPUTextureFormat[];
+
+## CORE_TARGET_NAMES
+const CORE_TARGET_NAMES: readonly CoreTargetName[];
 
 ## CORE_VIEW_EXTRA_WGSL
 const CORE_VIEW_EXTRA_WGSL = "\nstruct CoreViewExtra {\n  invViewProj: mat4x4f,\n  right: vec4f,\n  up: vec4f,\n  forward: vec4f,\n  _pad: vec4f,\n};\n";
 
 ## CORE_VIEW_WGSL
-const CORE_VIEW_WGSL = "\nstruct CoreView {\n  viewProj: mat4x4f,\n  position: vec4f,\n  planes: array<vec4f, 6>,\n  index: u32,\n  _a: u32,\n  _b: u32,\n  _c: u32,\n  origin: vec4f,\n  _pad: array<vec4f, 3>,\n};\n";
+const CORE_VIEW_WGSL = "\nstruct CoreView {\n  viewProj: mat4x4f,\n  position: vec4f,\n  planes: array<vec4f, 6>,\n  index: u32,\n  _a: u32,\n  _b: u32,\n  _c: u32,\n  origin: vec4f,\n  prevRows: array<vec4f, 3>,\n};\n\nfn core_velocity(v: CoreView, p: vec3f) -> vec2f {\n  let q = vec4f(p, 1.0);\n  let c = v.viewProj * q;\n  let pw = dot(v.prevRows[2], q);\n  if (pw <= 0.0 || c.w <= 0.0) { return vec2f(0.0); }\n  let pn = vec2f(dot(v.prevRows[0], q), dot(v.prevRows[1], q)) / pw;\n  return (c.xy / c.w - pn) * vec2f(0.5, -0.5);\n}\n";
 
 ## CULL_WGSL
-const CULL_WGSL = "\nstruct CoreView {\n  viewProj: mat4x4f,\n  position: vec4f,\n  planes: array<vec4f, 6>,\n  index: u32,\n  _a: u32,\n  _b: u32,\n  _c: u32,\n  origin: vec4f,\n  _pad: array<vec4f, 3>,\n};\n\nstruct CullParams { count: u32, capacity: u32, views: u32, firstInstance: u32 };\nstruct Slot { sphere: vec4f, draw: vec4u, inst: vec4u };\n@group(0) @binding(0) var<uniform> views: array<CoreView, 8>;\n@group(0) @binding(1) var<uniform> params: CullParams;\n@group(0) @binding(2) var<storage, read> slots: array<Slot>;\n@group(0) @binding(3) var<storage, read_write> args: array<u32>;\n\n@compute @workgroup_size(64) fn cs_cull(@builtin(global_invocation_id) id: vec3u) {\n  let i = id.x;\n  let v = id.y;\n  if (i >= params.count || v >= params.views) { return; }\n  let s = slots[i];\n  var visible = (s.inst.y & 3u) == 1u;\n  for (var k = 0u; k < 6u; k++) {\n    let p = views[v].planes[k];\n    if (dot(p.xyz, s.sphere.xyz) + p.w < -s.sphere.w) { visible = false; }\n  }\n  let o = (v * params.capacity + i) * 5u;\n  args[o] = s.draw.x;\n  args[o + 1u] = select(0u, s.draw.w, visible);\n  args[o + 2u] = s.draw.y;\n  args[o + 3u] = s.draw.z;\n  args[o + 4u] = select(0u, s.inst.x, params.firstInstance != 0u);\n}\n";
+const CULL_WGSL = "\nstruct CoreView {\n  viewProj: mat4x4f,\n  position: vec4f,\n  planes: array<vec4f, 6>,\n  index: u32,\n  _a: u32,\n  _b: u32,\n  _c: u32,\n  origin: vec4f,\n  prevRows: array<vec4f, 3>,\n};\n\nfn core_velocity(v: CoreView, p: vec3f) -> vec2f {\n  let q = vec4f(p, 1.0);\n  let c = v.viewProj * q;\n  let pw = dot(v.prevRows[2], q);\n  if (pw <= 0.0 || c.w <= 0.0) { return vec2f(0.0); }\n  let pn = vec2f(dot(v.prevRows[0], q), dot(v.prevRows[1], q)) / pw;\n  return (c.xy / c.w - pn) * vec2f(0.5, -0.5);\n}\n\nstruct CullParams { count: u32, capacity: u32, views: u32, firstInstance: u32 };\nstruct Slot { sphere: vec4f, draw: vec4u, inst: vec4u };\n@group(0) @binding(0) var<uniform> views: array<CoreView, 8>;\n@group(0) @binding(1) var<uniform> params: CullParams;\n@group(0) @binding(2) var<storage, read> slots: array<Slot>;\n@group(0) @binding(3) var<storage, read_write> args: array<u32>;\n\n@compute @workgroup_size(64) fn cs_cull(@builtin(global_invocation_id) id: vec3u) {\n  let i = id.x;\n  let v = id.y;\n  if (i >= params.count || v >= params.views) { return; }\n  let s = slots[i];\n  var visible = (s.inst.y & 3u) == 1u;\n  for (var k = 0u; k < 6u; k++) {\n    let p = views[v].planes[k];\n    if (dot(p.xyz, s.sphere.xyz) + p.w < -s.sphere.w) { visible = false; }\n  }\n  let o = (v * params.capacity + i) * 5u;\n  args[o] = s.draw.x;\n  args[o + 1u] = select(0u, s.draw.w, visible);\n  args[o + 2u] = s.draw.y;\n  args[o + 3u] = s.draw.z;\n  args[o + 4u] = select(0u, s.inst.x, params.firstInstance != 0u);\n}\n";
 
 ## Camera
 class Camera {
@@ -203,6 +216,7 @@ interface CoreDrawContext {
     viewGroup: GPUBindGroup;
     readonly viewLayout: GPUBindGroupLayout;
     color: GPUTextureFormat;
+    aux: number;
     depth: GPUTextureFormat | undefined;
     depthReadOnly: boolean;
 }
@@ -243,6 +257,7 @@ interface CorePassContext {
     format: GPUTextureFormat;
     depthFormat: GPUTextureFormat | undefined;
     depthReadOnly: boolean;
+    aux: number;
 }
 
 ## CoreResolveContext  (type-only)
@@ -269,6 +284,9 @@ interface CoreResolveContext {
         width: number;
         height: number;
     } | undefined;
+    emissive: GPUTextureView | null;
+    roughMetal: GPUTextureView | null;
+    velocity: GPUTextureView | null;
 }
 
 ## CoreShadowTarget  (type-only)
@@ -326,7 +344,13 @@ interface CoreTarget {
         width: number;
         height: number;
     };
+    emissive?: GPUTextureView;
+    roughMetal?: GPUTextureView;
+    velocity?: GPUTextureView;
 }
+
+## CoreTargetName  (type-only)
+type CoreTargetName = 'emissive' | 'roughMetal' | 'velocity';
 
 ## CoreViewExtras
 class CoreViewExtras {
@@ -425,8 +449,8 @@ class DrawSet {
     upload(groups: number): void;
     dispatch(pass: GPUComputePassEncoder, groups: number): void;
     encoding(): Encoding;
-    bundle(group: number, color: GPUTextureFormat | null, depth: GPUTextureFormat | undefined, readOnly: boolean): GPURenderBundle;
-    encodeDirect(pass: GPURenderPassEncoder, group: number, color: GPUTextureFormat | null, depth: GPUTextureFormat | undefined): void;
+    bundle(group: number, color: GPUTextureFormat | null, depth: GPUTextureFormat | undefined, readOnly: boolean, aux?: number): GPURenderBundle;
+    encodeDirect(pass: GPURenderPassEncoder, group: number, color: GPUTextureFormat | null, depth: GPUTextureFormat | undefined, aux?: number): void;
     waitsForTurn(): boolean;
 }
 
@@ -468,6 +492,7 @@ interface DrawSetShader {
     cullMode?: GPUCullMode;
     depthCompare?: GPUCompareFunction;
     shadowFragmentEntry?: string;
+    writes?: readonly CoreTargetName[];
 }
 
 ## Drawable  (type-only)
@@ -480,7 +505,7 @@ interface Drawable {
 
 ## DrawablePipelines
 class DrawablePipelines {
-    constructor(make: (color: GPUTextureFormat, depth: GPUTextureFormat | undefined, readOnly: boolean) => GPURenderPipeline);
+    constructor(make: (color: GPUTextureFormat, depth: GPUTextureFormat | undefined, readOnly: boolean, aux: number) => GPURenderPipeline);
     get(ctx: CoreDrawContext): GPURenderPipeline;
 }
 
@@ -1167,6 +1192,8 @@ class RenderCore {
      readonly viewData: Float32Array;
     restores: number;
     constructor(device: GPUDevice, opts?: RenderCoreOptions);
+    get targetMask(): number;
+    setTargets(names: readonly CoreTargetName[]): void;
     createArena(desc: ArenaDesc): Arena;
     restore(device: GPUDevice): void;
     get hasResolve(): boolean;
@@ -1199,6 +1226,7 @@ interface RenderCoreOptions {
     originGrid?: number;
     onView?: ((viewIndex: number) => void) | null;
     coalesceRebuilds?: boolean;
+    targets?: readonly CoreTargetName[];
 }
 
 ## RenderStats  (type-only)
@@ -1824,6 +1852,7 @@ const VIEW_SLOT: {
     readonly planes: 20;
     readonly index: 44;
     readonly origin: 48;
+    readonly prevRows: 52;
 };
 
 ## VIEW_SLOT_BYTES
@@ -1895,8 +1924,17 @@ function bytesPerTexel(format: GPUTextureFormat): number;
 ## compressionFeatures
 function compressionFeatures(adapter: HasFeatures): GPUFeatureName[];
 
+## coreColorFormats
+function coreColorFormats(color: GPUTextureFormat, aux: number): (GPUTextureFormat | null)[];
+
+## coreColorTargets
+function coreColorTargets(color: GPUColorTargetState, aux: number, writes?: number | readonly CoreTargetName[]): (GPUColorTargetState | null)[];
+
 ## coreSunShadowWgsl
 function coreSunShadowWgsl(group: number): string;
+
+## coreTargetMask
+function coreTargetMask(names: readonly CoreTargetName[] | undefined | null): number;
 
 ## createArena
 function createArena(device: GPUDevice, desc: ArenaDesc): Arena;

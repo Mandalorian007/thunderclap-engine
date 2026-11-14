@@ -785,3 +785,8 @@ Types and shaders: `DecalsOnCoreSource`, `DecalsOnCoreOptions`, `DECAL_CORE_BOX_
 view extras). The `Renderer` path is unchanged. Test `decals-core.test.ts`; demo
 `harness/decals-core.html`, a stereo pair (ring on the ground, a splat folded over a pillar's
 corner, a cross on a slab).
+
+On a core with extra targets (ws/core-targets), the core effects write what applies: particles
+their emissive (bloom), water its roughness (`roughMetal`) and velocity, the sky pass the sun
+disc and stars as emissive and the dome's turn as velocity (a point at infinity). Weather and
+decals write colour only and leave the targets as they were.

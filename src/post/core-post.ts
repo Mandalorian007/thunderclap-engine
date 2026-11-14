@@ -16,8 +16,8 @@ export interface CorePostOptions {
    */
   after?: string;
   /**
-   * The scene's emissive (bloom source) when the game draws one, else a black texel: the core's
-   * passes write one colour target.
+   * The scene's emissive (bloom source) when the game draws one outside the core. Without it
+   * bloom reads the core's `emissive` target (`RenderCoreOptions.targets`), else a black texel.
    */
   emissive?: TextureLike | null;
 }
@@ -30,7 +30,8 @@ interface Tex {
 
 /**
  * Post on the retained core (ws/core-passes): a resolve pass in the core's `PassList` that hands
- * each view's colour and depth to a post processor (a `PostStack`, FXAA, TAA, or a `ViewPost` of
+ * each view's colour and depth, and the core's extra targets (ws/core-targets: emissive feeds
+ * bloom, velocity TAA and motion blur, roughMetal SSR), to a post processor (a `PostStack`, FXAA, TAA, or a `ViewPost` of
  * them) and writes `CoreTarget.output`. With a `ViewPost` every view (each eye of a stereo pair)
  * runs its own processor, so no history is shared between eyes; a plain processor serves view 0
  * and is used for every view. The view's matrices come from the core's `RenderView` (this frame's
@@ -60,6 +61,12 @@ export class CorePost {
     width: 1,
     height: 1,
   };
+  /** The core's extra targets (ws/core-targets): emissive, roughMetal, velocity. */
+  private readonly aux: Tex[] = [0, 1, 2].map(() => ({
+    view: undefined as unknown as GPUTextureView,
+    width: 1,
+    height: 1,
+  }));
   private readonly projection: PostProjection = { near: 0, far: 0, proj: new Float32Array(16) };
   private readonly views: PostView[] = [];
   /** Per view: whether `previous*` holds a real frame. */
@@ -120,6 +127,15 @@ export class CorePost {
     return this.black;
   }
 
+  private target(k: number, view: GPUTextureView | null, ctx: CoreResolveContext): Tex | null {
+    if (!view) return null;
+    const t = this.aux[k]!;
+    t.view = view;
+    t.width = ctx.width;
+    t.height = ctx.height;
+    return t;
+  }
+
   private resolve(encoder: GPUCommandEncoder, ctx: CoreResolveContext): void {
     const i = ctx.viewIndex;
     if (i >= VIEW_POST_MAX) throw new Error(`CorePost: view ${i} (0 to ${VIEW_POST_MAX - 1})`);
@@ -135,7 +151,9 @@ export class CorePost {
     c.width = ctx.width;
     c.height = ctx.height;
     inputs.color = c;
-    inputs.emissive = this.emissive ?? this.blackTexel();
+    inputs.emissive = this.emissive ?? this.target(0, ctx.emissive, ctx) ?? this.blackTexel();
+    inputs.roughMetal = this.target(1, ctx.roughMetal, ctx);
+    inputs.velocity = this.target(2, ctx.velocity, ctx);
     inputs.time = this.time;
     inputs.dt = this.dt;
 

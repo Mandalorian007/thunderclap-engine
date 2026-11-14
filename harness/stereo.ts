@@ -15,6 +15,11 @@
  * (`coreSunShadowWgsl`), and post as a core pass (`createCorePost` over a `ViewPost` of
  * `PostStack`s): each eye drawn into the HDR scene target and resolved by its own stack into its
  * half of the layer.
+ *
+ * `?passes=1&targets=1` (ws/core-targets): the same with the core's extra targets. The red block
+ * writes emissive (bloom glows around it in each eye), every box writes velocity, and the core's
+ * own emissive, rough-metal and velocity textures are drawn and cleared per eye and read by that
+ * eye's resolve.
  */
 import { createGame } from '@thunderclap-engine/engine';
 import { createCorePost, createViewPost, PostStack } from '@thunderclap-engine/engine/post';
@@ -49,8 +54,11 @@ const state: HarnessStereoState = {
   passes: false,
   shadowPasses: 0,
   resolves: 0,
+  targets: 0,
 };
-const PASSES = new URLSearchParams(location.search).get('passes') === '1';
+const QUERY = new URLSearchParams(location.search);
+const PASSES = QUERY.get('passes') === '1';
+const TARGETS = PASSES && QUERY.get('targets') === '1';
 window.__harnessStereo = { state };
 
 /** A unit cube centred on the origin, as six quads (4 vertices each: x, y, z, pad). */
@@ -146,6 +154,23 @@ const SHADOWED_WGSL = FLAT_WGSL.replace(
   return vec4f(in.color * (0.45 + 0.55 * core_sun_shadow(in.world)), 1.0);`,
 );
 
+/** With `?targets=1`: the shadowed boxes, the red one glowing, all writing velocity. */
+const TARGETS_WGSL = SHADOWED_WGSL.replace(
+  '@fragment fn fs(in: Out) -> @location(0) vec4f {\n  return vec4f(in.color * (0.45 + 0.55 * core_sun_shadow(in.world)), 1.0);',
+  `struct Frag {
+  @location(0) color: vec4f,
+  @location(1) emissive: vec4f,
+  @location(3) velocity: vec4f,
+};
+@fragment fn fs(in: Out) -> Frag {
+  var o: Frag;
+  o.color = vec4f(in.color * (0.45 + 0.55 * core_sun_shadow(in.world)), 1.0);
+  let red = select(0.0, 1.0, in.color.r > 0.5 && in.color.g < 0.3);
+  o.emissive = vec4f(in.color * 4.0 * red, 1.0);
+  o.velocity = vec4f(core_velocity(view, in.world), 0.0, 1.0);
+  return o;`,
+);
+
 /** Centre x, y, z, width/depth, then r, g, b, height. */
 const BOXES: readonly (readonly number[])[] = [
   [0, -0.05, -3, 8, 0.25, 0.4, 0.25, 0.1], // floor
@@ -169,14 +194,18 @@ async function main(): Promise<void> {
   }
   const device = ctx.gpu.device;
   installGpuErrorLogging(device);
-  const core = createRenderCore(device);
+  const core = createRenderCore(device, {
+    targets: TARGETS ? ['emissive', 'roughMetal', 'velocity'] : undefined,
+  });
   const sunShadow = PASSES ? ctx.renderer.coreShadow : null;
   let sunVersion = sunShadow?.version ?? 0;
   const vertices = core.createArena({ kind: 'vertex', blockBytes: 16 << 10, label: 'cube' });
   const instances = core.createArena({ kind: 'instance', blockBytes: 4 << 10, label: 'boxes' });
   const set = core.createDrawSet({
     label: 'stereo',
-    shader: { code: PASSES ? SHADOWED_WGSL : FLAT_WGSL },
+    shader: TARGETS
+      ? { code: TARGETS_WGSL, writes: ['emissive', 'velocity'] }
+      : { code: PASSES ? SHADOWED_WGSL : FLAT_WGSL },
     bindGroups: sunShadow ? [{ layout: sunShadow.layout, group: sunShadow.group }] : undefined,
     vertexLayout: VERTEX,
     instanceLayout: INSTANCE,
@@ -196,6 +225,7 @@ async function main(): Promise<void> {
   }
   ctx.xr.setCore(core, { immediate: false, clear: { r: 0.05, g: 0.07, b: 0.12, a: 1 } });
   state.passes = PASSES;
+  state.targets = core.targetMask;
   let post: ReturnType<typeof createCorePost> | null = null;
   if (PASSES) {
     const lights = new Lights();

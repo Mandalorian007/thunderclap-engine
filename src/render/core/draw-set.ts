@@ -31,6 +31,7 @@ import {
 } from './cull';
 import type { BufferLayout } from './layout';
 import type { CorePass } from './pass-list';
+import { type CoreTargetName, coreColorFormats, coreColorTargets, coreTargetMask } from './targets';
 import { CORE_VIEW_WGSL, sphereInPlanes } from './view';
 
 /**
@@ -70,6 +71,12 @@ export interface DrawSetShader {
    * hold the shadow map the pass draws into.
    */
   shadowFragmentEntry?: string;
+  /**
+   * The core's extra targets the fragment entry writes (ws/core-targets): `emissive` at
+   * `@location(1)`, `roughMetal` at 2, `velocity` at 3 (`core_velocity(view, p)`). Those the
+   * core has and the set does not write are masked off; a written one the core lacks is dropped.
+   */
+  writes?: readonly CoreTargetName[];
 }
 
 export interface DrawSetDesc {
@@ -208,6 +215,7 @@ interface BundleEntry {
   color: GPUTextureFormat | null;
   depth: GPUTextureFormat | undefined;
   readOnly: boolean;
+  aux: number;
   stamp: number;
   /** The part of `stamp` a stale bundle cannot be drawn without: buffers and bindings. */
   hard: number;
@@ -218,6 +226,7 @@ interface PipelineEntry {
   color: GPUTextureFormat | null;
   depth: GPUTextureFormat | undefined;
   depthWrite: boolean;
+  aux: number;
   pipeline: GPURenderPipeline;
 }
 
@@ -279,6 +288,8 @@ export class DrawSet {
   private cullGroup: GPUBindGroup | null = null;
   private readonly bundles: BundleEntry[] = [];
   private readonly pipelines: PipelineEntry[] = [];
+  /** The extra targets of the pass being recorded (ws/core-targets). */
+  private aux = 0;
   private module!: GPUShaderModule;
   private layout!: GPUPipelineLayout;
   /**
@@ -645,13 +656,21 @@ ${desc.shader.code}`;
     color: GPUTextureFormat | null,
     depth: GPUTextureFormat | undefined,
     readOnly: boolean,
+    aux = 0,
   ): GPURenderBundle {
+    this.aux = color === null ? 0 : aux;
     const stamp = this.stamp();
     const bind = this.host.drawGroup(group);
     let entry: BundleEntry | undefined;
     for (let i = 0; i < this.bundles.length; i++) {
       const b = this.bundles[i]!;
-      if (b.group === group && b.color === color && b.depth === depth && b.readOnly === readOnly) {
+      if (
+        b.group === group &&
+        b.color === color &&
+        b.depth === depth &&
+        b.readOnly === readOnly &&
+        b.aux === this.aux
+      ) {
         entry = b;
         break;
       }
@@ -671,7 +690,7 @@ ${desc.shader.code}`;
     }
     const enc = device.createRenderBundleEncoder({
       label: `${this.label} bundle`,
-      colorFormats: color === null ? [] : [color],
+      colorFormats: color === null ? [] : coreColorFormats(color, this.aux),
       depthStencilFormat: depth,
       depthReadOnly: readOnly,
       stencilReadOnly: readOnly,
@@ -691,7 +710,17 @@ ${desc.shader.code}`;
       entry.bind = bind;
       entry.bundle = bundle;
     } else {
-      this.bundles.push({ group, bind, color, depth, readOnly, stamp, hard, bundle });
+      this.bundles.push({
+        group,
+        bind,
+        color,
+        depth,
+        readOnly,
+        aux: this.aux,
+        stamp,
+        hard,
+        bundle,
+      });
     }
     this.staleFrame = -1;
     return bundle;
@@ -703,7 +732,9 @@ ${desc.shader.code}`;
     group: number,
     color: GPUTextureFormat | null,
     depth: GPUTextureFormat | undefined,
+    aux = 0,
   ): void {
+    this.aux = color === null ? 0 : aux;
     if (this.useMulti()) {
       const { stats } = this.host;
       this.bindCommon(pass, group, color, depth);
@@ -957,7 +988,14 @@ ${desc.shader.code}`;
     const depthWrite = color === null || this.pass.depth === 'write';
     for (let i = 0; i < this.pipelines.length; i++) {
       const p = this.pipelines[i]!;
-      if (p.color === color && p.depth === depth && p.depthWrite === depthWrite) return p.pipeline;
+      if (
+        p.color === color &&
+        p.depth === depth &&
+        p.depthWrite === depthWrite &&
+        p.aux === this.aux
+      ) {
+        return p.pipeline;
+      }
     }
     const d = this.desc;
     const buffers: GPUVertexBufferLayout[] = [d.vertexLayout.buffer(0)];
@@ -989,9 +1027,11 @@ ${desc.shader.code}`;
           : {
               module: this.module,
               entryPoint: d.shader.fragmentEntry ?? 'fs',
-              targets: [
+              targets: coreColorTargets(
                 d.shader.blend ? { format: color, blend: d.shader.blend } : { format: color },
-              ],
+                this.aux,
+                coreTargetMask(d.shader.writes),
+              ),
             },
       // The shadow pass draws both faces, as the renderer's own shadow pass does.
       primitive: {
@@ -1011,7 +1051,7 @@ ${desc.shader.code}`;
               ? { format: depth, depthWriteEnabled: false, depthCompare: 'always' }
               : undefined,
     });
-    this.pipelines.push({ color, depth, depthWrite, pipeline });
+    this.pipelines.push({ color, depth, depthWrite, aux: this.aux, pipeline });
     return pipeline;
   }
 

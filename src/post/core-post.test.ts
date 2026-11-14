@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { Camera } from '../render/camera';
 import { Arena } from '../render/core/arena';
-import { type CoreTarget, createRenderCore } from '../render/core/core';
+import { type CoreTarget, createRenderCore, type RenderCoreOptions } from '../render/core/core';
 import { createVertexLayout } from '../render/core/layout';
 import { createRenderView, setViewFromCamera } from '../render/core/view';
 import { createFakeDevice } from '../render/fake-gpu';
@@ -29,10 +29,10 @@ interface Call {
   previousViewProj: number[];
 }
 
-function setup() {
+function setup(targets?: RenderCoreOptions['targets']) {
   const fake = createFakeDevice();
   const device = fake.device as unknown as GPUDevice;
-  const core = createRenderCore(device, { depthFormat: 'depth24plus' });
+  const core = createRenderCore(device, { depthFormat: 'depth24plus', targets });
   const vertices = new Arena(device, { kind: 'vertex', blockBytes: 4096 });
   const set = core.createDrawSet({
     label: 'boxes',
@@ -159,5 +159,27 @@ describe('CorePost (ws/core-passes)', () => {
     expect(l1!.previousViewProj).toEqual(l0!.viewProj);
     expect(l1!.viewProj).not.toEqual(l0!.viewProj);
     expect(r1!.previousViewProj).toEqual(r0!.viewProj);
+  });
+
+  it('feeds bloom, SSR and TAA from the core’s extra targets when it has them (ws/core-targets)', () => {
+    const run = (targets?: RenderCoreOptions['targets']) => {
+      const { device, core, calls, proc, target, cam } = setup(targets);
+      createCorePost(core, proc(0));
+      const enc = device.createCommandEncoder();
+      core.prepare(enc, [cam(0)]);
+      core.draw(enc, 0, target);
+      return { inputs: calls[0]!.inputs };
+    };
+    const plain = run();
+    expect(plain.inputs.roughMetal).toBeNull();
+    expect(plain.inputs.velocity).toBeNull();
+    expect((plain.inputs.emissive as { width: number }).width).toBe(1);
+    const all = run(['emissive', 'roughMetal', 'velocity']);
+    const view = (t: unknown) => (t as { view: GPUTextureView; width: number }).view;
+    expect((all.inputs.emissive as { width: number }).width).toBe(64);
+    expect(view(all.inputs.emissive)).toBeDefined();
+    expect(view(all.inputs.roughMetal)).toBeDefined();
+    expect(view(all.inputs.velocity)).toBeDefined();
+    expect(view(all.inputs.velocity)).not.toBe(view(all.inputs.emissive));
   });
 });
