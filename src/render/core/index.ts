@@ -28,7 +28,7 @@ export type {
 export { DrawSet, GPU_CULL_MIN_SLOTS } from './draw-set';
 export type { BufferLayout, LayoutAttribute, LayoutDesc } from './layout';
 export { createInstanceLayout, createVertexLayout, vertexFormatBytes } from './layout';
-export type { CorePass, PassDepth, PassDesc } from './pass-list';
+export type { CorePass, CorePassContext, PassDepth, PassDesc } from './pass-list';
 export { CORE_PASSES, PassList } from './pass-list';
 export { QUAD_INDICES, QuadIndex, quadIndices } from './quad-index';
 export type { CullGroup, RenderView } from './view';

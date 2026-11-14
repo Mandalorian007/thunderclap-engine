@@ -1347,6 +1347,14 @@ if (device) core.restore(device);
 
 `renderer.core = createRenderCore(renderer, { depthFormat: DEPTH_FORMAT })` draws that core inside the renderer's frames (opt-in: a renderer without one does not bundle the core), in each frame's first depth-tested view: its `depthPre`, `opaque` and `cutout` passes after the view's opaque draws, its `transparent` and later passes after the view's blended draws, into the scene target's colour and depth. Any core can do the same with `CoreTarget.depth` (a depth it loads and never clears) and `CoreTarget.phase` (`'opaque'`, `'blend'`, `'all'`).
 
+
+**A pass's own work (ws/core-passes).** `PassDesc.encode(pass, ctx)` gives a pass work of its
+own, encoded per view after the pass's sets: a full-screen draw such as the sky
+(`createSkyPass` in `fx`). Such a pass runs even with no set in it and gets the depth
+attachment unless its `depth` is `'none'`; `ctx` (`CorePassContext`, one object rewritten per
+call) carries the view index, the core view bind group and its layout (group 0), the colour and
+depth formats and whether depth is read-only. A `'read'` pass that comes before any depth
+write now clears depth instead of reading uncleared depth.
 ## Merged mesh runs
 
 Many distinct meshes drawn with `frame.mesh` under one material do not batch (each is its own

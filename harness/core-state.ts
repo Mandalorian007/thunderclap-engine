@@ -36,6 +36,8 @@ export interface HarnessCoreState {
   restores: number;
   /** `core.onDeviceRestored` events the page saw. */
   restoredEvents: number;
+  /** `?sky`: the sky pass's draws so far (one per view per frame). */
+  skyDraws: number;
 }
 
 declare global {

@@ -416,6 +416,17 @@ texture; `renderer.endFrame({ present: false })` then only submits. Inside `enco
   (`post.setQuality({ ...postQualityFor('xr'), motionBlur: true })`). Auto exposure runs per eye
   on the same readback.
 
+## One stack per view (ws/core-passes)
+
+`createViewPost(make)` (a `ViewPost`) is a `PostProcessor` that keeps one processor per view, made on first use
+with `make(viewIndex)`: each distinct `viewport` passed to `encode` (an eye's rect of an XR
+layer under `renderer.resolve`) is its own view, and a call without a viewport is one more.
+Nothing is shared between views: TAA history (which `PostStack` already keys per viewport),
+auto exposure's adapted level, the bloom chain. Each view costs a whole stack's targets.
+`forView(i)` hands a render-core user the processor of core view `i`; `resize` reaches every
+processor and is remembered for later ones. At most `VIEW_POST_MAX` (8) views. Tests
+`view-post.test.ts`.
+
 ## Types
 
 - `PostSettings` has one section per pass: `bloom: BloomSettings`, `mist: MistSettings`,

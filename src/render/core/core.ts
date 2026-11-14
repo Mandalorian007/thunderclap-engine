@@ -18,7 +18,7 @@
 import { Arena, type ArenaDesc } from './arena';
 import { CULL_WGSL } from './cull';
 import { type CoreStats, DrawSet, type DrawSetDesc, type DrawSetHost } from './draw-set';
-import { type CorePass, type PassDesc, PassList } from './pass-list';
+import { type CorePass, type CorePassContext, type PassDesc, PassList } from './pass-list';
 import { QuadIndex } from './quad-index';
 import {
   type CullGroup,
@@ -177,6 +177,8 @@ export class RenderCore {
   private readonly computeDesc: GPUComputePassDescriptor = { label: 'core cull' };
   /** Whose stale bundles may be re-recorded this frame (see `coalesceRebuilds`). */
   private rebuildTurn: DrawSet | null = null;
+  /** The context handed to a pass's `encode`, rewritten per call. */
+  private readonly passCtx = {} as CorePassContext;
   private readonly coalesce: boolean;
 
   constructor(device: GPUDevice, opts: RenderCoreOptions = {}) {
@@ -466,8 +468,8 @@ export class RenderCore {
       const pass = list[p]!;
       const sets = this.bySet[p]!;
       if (pass.when && !pass.when()) continue;
-      let work = false;
-      let wantsDepth = false;
+      let work = pass.encode !== null;
+      let wantsDepth = work && pass.depth !== 'none';
       for (let i = 0; i < sets.length; i++) {
         const s = sets[i]!;
         if (s.count === 0 || !s.ready) continue;
@@ -476,7 +478,8 @@ export class RenderCore {
       }
       if (!work) continue;
       const depthFormat = wantsDepth ? this.depthFormat : undefined;
-      const readOnly = wantsDepth && pass.depth === 'read';
+      // A read pass with nothing written before it clears depth instead (nothing to read).
+      const readOnly = wantsDepth && pass.depth === 'read' && depthCleared;
       const color = this.colorAttachment;
       color.view = target.view;
       if (first && target.clear) {
@@ -525,6 +528,16 @@ export class RenderCore {
         s.encodeDirect(enc, group, target.format, depthFormat);
       }
       if (bundles.length > 0) this.flushBundles(enc);
+      if (pass.encode) {
+        const ctx = this.passCtx;
+        ctx.viewIndex = viewIndex;
+        ctx.view = this.groupSize[group]! > 1 ? this.currentGroup : this.viewGroups[viewIndex]!;
+        ctx.viewLayout = this.viewLayout;
+        ctx.format = target.format;
+        ctx.depthFormat = depthFormat;
+        ctx.depthReadOnly = readOnly;
+        pass.encode(enc, ctx);
+      }
       enc.end();
       st.calls++;
     }

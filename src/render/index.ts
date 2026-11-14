@@ -53,7 +53,7 @@ export type {
 export { DrawSet, GPU_CULL_MIN_SLOTS } from './core/draw-set';
 export type { BufferLayout, LayoutAttribute, LayoutDesc } from './core/layout';
 export { createInstanceLayout, createVertexLayout, vertexFormatBytes } from './core/layout';
-export type { CorePass, PassDepth, PassDesc } from './core/pass-list';
+export type { CorePass, CorePassContext, PassDepth, PassDesc } from './core/pass-list';
 export { CORE_PASSES, PassList } from './core/pass-list';
 export { QUAD_INDICES, QuadIndex, quadIndices } from './core/quad-index';
 export type { CullGroup, RenderView } from './core/view';
