@@ -9,8 +9,9 @@
  *   every terrain top in 16..44 (`terrainTops`) and the spawn cell open over solid land above
  *   the sea (`spawn`);
  * - a click (touch rows: a tap on the right half, real touch events through CDP) breaks the
- *   block under the reticle: `lookingAt` changes and, on desktop, the re-mesh round trip is
- *   under 50 ms, with no mesh growth;
+ *   block under the reticle: `lookingAt` changes and, on desktop, the first remeshed upload
+ *   lands under 250 ms and no frame until the world settles runs 50 ms over the frames before
+ *   the edit, with no mesh growth;
  * - a right click (touch rows: the place key) puts the hotbar block on the looked-at face, as
  *   fast and with no growth either;
  * - walking forward for a second moves `playerPos`;
@@ -225,7 +226,15 @@ test('a click breaks the looked-at block and re-meshes fast', async ({ page, wra
   const after = await read();
   // Since ws/core-passes the world remeshes the section and relights its neighbours in the
   // mesher Workers; the edit shows at the first upload, measured under the shared gate's load.
-  if (/^desktop-/.test(test.info().project.name)) expect(after.remeshMs).toBeLessThan(250);
+  if (/^desktop-/.test(test.info().project.name)) {
+    expect(after.remeshMs).toBeLessThan(250);
+    // No hitch while the sections remesh: the program's 50 ms floor, over the longest of the 64
+    // frames before the edit (the shared gate runs its software-GPU frames at 100+ ms already).
+    await expect.poll(async () => (await read()).settleMs).toBeGreaterThanOrEqual(0);
+    await frames(2);
+    const hitch = await read();
+    expect(hitch.remeshFrameMs - hitch.idleFrameMs).toBeLessThan(50);
+  }
   expect(after.growths).toBe(0);
   expect(after.gpuErrors).toBe(0);
   expect(pageErrors()).toEqual([]);
@@ -257,7 +266,15 @@ test('a right click places the hotbar block on the looked-at face', async ({ pag
   const after = await read();
   // Since ws/core-passes the world remeshes the section and relights its neighbours in the
   // mesher Workers; the edit shows at the first upload, measured under the shared gate's load.
-  if (/^desktop-/.test(test.info().project.name)) expect(after.remeshMs).toBeLessThan(250);
+  if (/^desktop-/.test(test.info().project.name)) {
+    expect(after.remeshMs).toBeLessThan(250);
+    // No hitch while the sections remesh: the program's 50 ms floor, over the longest of the 64
+    // frames before the edit (the shared gate runs its software-GPU frames at 100+ ms already).
+    await expect.poll(async () => (await read()).settleMs).toBeGreaterThanOrEqual(0);
+    await frames(2);
+    const hitch = await read();
+    expect(hitch.remeshFrameMs - hitch.idleFrameMs).toBeLessThan(50);
+  }
   expect(after.growths).toBe(0);
   expect(after.gpuErrors).toBe(0);
   expect(pageErrors()).toEqual([]);

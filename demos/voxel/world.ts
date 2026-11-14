@@ -305,6 +305,10 @@ export interface VoxelDemoState {
   remeshMs: number;
   /** Last block edit → the world settled (relit neighbours uploaded too), ms. -1 while waiting. */
   settleMs: number;
+  /** The longest frame (wall clock, ms) from the last edit until the world settled. 0 before any. */
+  remeshFrameMs: number;
+  /** The longest of the 64 frames (wall clock, ms) before the last edit: the baseline for `remeshFrameMs`. */
+  idleFrameMs: number;
   /** Remeshes the engine applied so far (`VoxelChunks.stats.remeshes`). */
   remeshes: number;
   /** Block edits so far. */

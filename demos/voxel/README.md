@@ -58,7 +58,7 @@ and long presses, `Input` bindings for mouse, wheel, keys and pad), `ui` (`creat
 **What the spec checks** (`e2e/demos/voxel.spec.ts`, every matrix row, via the harness server's
 `/demos/voxel/` route): boot with all 256 chunks meshed, no console errors and `drawCalls` < 200;
 `__demo.aim(0, -1.2)` then a click (a CDP tap on touch rows) breaks the looked-at block
-(`lookingAt` changes, `remeshMs` < 250 on desktop rows, `growths` 0); a right click (`E` on touch
+(`lookingAt` changes, `remeshMs` < 250 and `remeshFrameMs` within 50 ms of `idleFrameMs` on desktop rows, `growths` 0); a right click (`E` on touch
 rows) places the hotbar block on a face of the looked-at block, as fast and with no growth; `W`
 for 1 s moves `playerPos`; `?still&time=0.25` holds `timeOfDay`; desktop rows run above 20 fps.
 `window.__demo` also carries `fps`, `chunks`, `triangles`, `selectedBlock`, `yaw`, `pitch`,

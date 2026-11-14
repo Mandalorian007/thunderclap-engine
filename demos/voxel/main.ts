@@ -107,6 +107,8 @@ const state: VoxelDemoState = {
   triangles: 0,
   remeshMs: -1,
   settleMs: -1,
+  remeshFrameMs: 0,
+  idleFrameMs: 0,
   remeshes: 0,
   edits: 0,
   growths: 0,
@@ -361,6 +363,12 @@ async function main(): Promise<void> {
   world.setInterest(WORLD_X / 2, WORLD_Y / 2, WORLD_Z / 2);
   /** An edit's round trip: set when a block changes, cleared when its remeshes are uploaded. */
   let editStart = -1;
+  /** Between an edit and the world settling: the longest frame is `remeshFrameMs`. */
+  let watchHitch = false;
+  let lastRender = -1;
+  /** The last 64 frame gaps (ms), so an edit knows the longest frame before it: `idleFrameMs`. */
+  const recentGaps = new Float64Array(64);
+  let gapAt = 0;
   let uploadsAtEdit = 0;
 
   // ─── the player ───────────────────────────────────────────────────────────
@@ -535,6 +543,11 @@ async function main(): Promise<void> {
     uploadsAtEdit = world.stats.uploadsTotal;
     state.remeshMs = -1;
     state.settleMs = -1;
+    state.remeshFrameMs = 0;
+    state.idleFrameMs = 0;
+    for (let i = 0; i < recentGaps.length; i++)
+      state.idleFrameMs = Math.max(state.idleFrameMs, recentGaps[i]);
+    watchHitch = true;
     state.edits++;
   }
 
@@ -689,6 +702,19 @@ async function main(): Promise<void> {
       renderer.endFrame();
 
       state.frame++;
+      // Wall-clock frame time, so a remesh that stalls the main thread shows.
+      const now = performance.now();
+      if (lastRender >= 0) {
+        const gap = now - lastRender;
+        if (watchHitch) {
+          state.remeshFrameMs = Math.max(state.remeshFrameMs, gap);
+          if (state.settleMs >= 0) watchHitch = false;
+        } else {
+          recentGaps[gapAt] = gap;
+          gapAt = (gapAt + 1) % recentGaps.length;
+        }
+      }
+      lastRender = now;
       if (time.frameDt > 0) {
         const fps = 1 / time.frameDt;
         state.fps = state.fps === 0 ? fps : state.fps + (fps - state.fps) * 0.1;
