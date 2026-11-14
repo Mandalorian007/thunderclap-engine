@@ -17,7 +17,7 @@
     "./render": 62400,
     "./save": 7700,
     "./tween": 3700,
-    "./ui": 83400,
+    "./ui": 92600,
     "./voxel": 27500,
     "./testing": 181100,
     "render { Renderer }": 39900,
