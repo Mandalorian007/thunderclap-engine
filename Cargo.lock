@@ -401,6 +401,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "signal-hook-registry"
+version = "1.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
+dependencies = [
+ "errno",
+ "libc",
+]
+
+[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -436,6 +446,21 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "tc-admin"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "sha2",
+ "tc-auth",
+ "tc-net",
+ "tc-sim",
+ "tc-store",
+ "tc-wire",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -533,6 +558,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "thunderclap-server"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "serde_json",
+ "tc-admin",
+ "tc-auth",
+ "tc-net",
+ "tc-sim",
+ "tc-store",
+ "tc-tsgen",
+ "tc-wire",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+]
+
+[[package]]
 name = "tokio"
 version = "1.53.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -542,6 +585,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys",

@@ -4,6 +4,7 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 
 ## Unreleased
 
+- The server's admin side and facade (ws/server-admin, E6, E-042). No engine API change (`api/` unchanged). *Added* (Rust, `crates/`, not on npm): `tc-admin` (`AdminChannel`, a loopback control channel with an owner-only endpoint file and a 256-bit token: status, stop, pause, resume, reload, backup, revoke, reports and a game's own requests as JSON lines; `ask`, its blocking client; `Backups`, online copies keeping the newest five; `Reports`, a reports directory written off the loop and kept to two weeks and 64 MiB) and `thunderclap-server` (`Server::builder(game)...start()`/`run()` with a data directory, dev guest auth and a tidied store; `generate_ts`; `cli::main`, a game binary's `serve`/`status`/`stop`/`pause`/`resume`/`reload`/`revoke`/`reports`/`backup`/`rollback`/`gen`; `examples/tally.rs`). `tc-net`: `Server::io_counters`.
 ## 2.0.0-next.4 (2026-11-14)
 
 - Release budgets: `.` and `createGame` 170700 -> 171400, `./kit` 169500 -> 170200, `./testing` 181900 -> 182600 (local gzip sat 0.3 KB under each, CI's gzip reads about that much more); `./fx` 62400 -> 66200 (the core sky pass and core decals together).

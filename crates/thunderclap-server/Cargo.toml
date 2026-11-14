@@ -1,0 +1,29 @@
+[package]
+name = "thunderclap-server"
+description = "ThunderClap's game server in one crate: Server::<G>::builder()...run() wires tc-net, tc-auth, tc-store, tc-sim and tc-admin with dev defaults, plus a TypeScript gen helper and a small CLI a game's binary calls"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+tc-wire.workspace = true
+tc-net.workspace = true
+tc-auth.workspace = true
+tc-store.workspace = true
+tc-sim.workspace = true
+tc-admin.workspace = true
+tc-tsgen.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+
+[[example]]
+name = "tally"
+
+[lints]
+workspace = true
