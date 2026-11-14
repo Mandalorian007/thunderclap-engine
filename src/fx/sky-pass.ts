@@ -335,7 +335,10 @@ export class SkyPass {
     return !this.destroyed && !(this.gameLayout && !this.gameGroup);
   }
 
-  /** As a pass member (`SkyMember`): bind and draw the full-screen triangle into `enc`. */
+  /**
+   * @internal As a pass member (`SkyPassOptions.member`): bind and draw the full-screen
+   * triangle into `enc` (`vertices` 0: the warm draw). The core calls it through `member`.
+   */
   recordMember(enc: CoreDrawableEncoder, ctx: CoreDrawContext, vertices: number): void {
     enc.setPipeline(
       this.pipelineOf(

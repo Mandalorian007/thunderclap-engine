@@ -67,6 +67,7 @@ export {
   ParticleSystem,
 } from './particles';
 export type {
+  ParticleBoxLight,
   ParticleBudgetKnobOptions,
   ParticleShape,
   ParticlesOnCoreSource,

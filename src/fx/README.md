@@ -849,3 +849,37 @@ Types and shaders: `LightningOptions`, `LIGHTNING_FLOATS` (the bolt uniform), `L
 The legacy `Renderer` path (`Sky`, `Water`, `Decals`, particles' world collision, billboards,
 debug draw) keeps the standard convention. Test `fx-fit.test.ts`; demo `harness/fx-reversed.html`
 (every effect on a reversed-Z core, `?standard` for the same scene standard).
+
+B14 (the second fit, for a game's own passes and leaves, wind and weather). Defaults unchanged.
+
+- **Particles on a core.** `ParticleSystemOptions.pass` / `order` put the system's drawable in
+  any core pass (default `'transparent'`, order 0), e.g. a game's late pass so debris draws over
+  its water. The draw covers only the live window of the ring through an indirect draw (the
+  bundle holds while the count changes), and the system goes idle (inactive, no compute) while
+  nothing is alive; the core warms its pipeline then, so the first burst does not compile.
+  `EmitParams.axis` launches along a 3D axis (`spread` the cone around it), `colorJitter` shades
+  each particle by 1 ± jitter, `flutter` sways it side to side (world units, per-particle phase),
+  and `boxScale` shapes a box particle (`[1, 0.25, 1]` a flat flake). `ParticleBoxLight` (the
+  type of `coreDrawable.boxLight`) is public and gains `fog`, shaped like `Lights.fog`.
+- **Sky as a pass member.** `SkyPassOptions.member: 'opaque'` (any pass that tests depth) draws
+  the sky as a `CoreDrawable` of that pass at `order` (default 1000) instead of a pass of its own:
+  one less render pass (a tile load and store on tiled GPUs). `createSkyPass(core, null, { shade
+  })` takes no `SkyLook`: the game's `sky_look` draws everything (`SkyPass.sky` is then an all-zero
+  look).
+- **Weather for a game.** `WeatherOcclusionMap.decode` (`WeatherHeightDecode`: `floor`, `scale`,
+  `offset`) turns the map's texel into a height on the GPU, so a game samples its own surface
+  heights without a converted copy. Shape `'leaf'`: a tapered flake that spins in the image plane
+  and flutters. Up to `WEATHER_MAX_LAYERS` (8) layers, still one draw. `Weather` and `Lightning`
+  warm their pipelines while inactive.
+- **Lazy weather.** `@thunderclap-engine/engine/fx/weather` exports `Weather`, `Lightning` and
+  their types alone, so a game loads them when the first storm comes:
+
+```ts
+const { Weather, WEATHER_RAIN_SPLASHES } = await import('@thunderclap-engine/engine/fx/weather');
+const rain = new Weather(core, WEATHER_RAIN_SPLASHES);
+```
+
+Not in this fit: water over a game's meshed geometry (a draw set whose bind group samples the
+scene's depth and colour needs a core scene-read group that follows resizes; `WaterOnCore` stays
+one plane), and the mesher leftovers. Demo `harness/fx-reversed.html?fit` (the sky as an opaque
+member with no `SkyLook`, particles in a game pass, eight weather layers, box fog).

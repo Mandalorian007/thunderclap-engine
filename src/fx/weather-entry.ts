@@ -3,13 +3,8 @@
  * game can load when the weather first turns (a dynamic `import()`, its own chunk) instead of
  * shipping it in the first download. The same classes as `./fx` exports: pick one path per game.
  *
- * ```ts
- * let fx: typeof import('@thunderclap-engine/engine/fx/weather') | null = null;
- * async function storm(core: RenderCore) {
- *   fx ??= await import('@thunderclap-engine/engine/fx/weather');
- *   return new fx.Weather(core, fx.WEATHER_RAIN); // warmed by the core before it draws
- * }
- * ```
+ * A game imports this subpath dynamically, keeps the module, and makes `new Weather(core,
+ * WEATHER_RAIN)` from it (warmed by the core before it draws); the fx README shows the call.
  */
 export type { LightningOptions } from './lightning';
 export {
