@@ -102,6 +102,12 @@ export interface CoreTarget {
    * Needs `COPY_SRC` (a canvas configured with `usage: RENDER_ATTACHMENT | COPY_SRC`).
    */
   texture?: GPUTexture;
+  /**
+   * GPU timing for the core's render passes (ws/core-passes): called once per pass with the
+   * label `'core'`, its result set as the pass's `timestampWrites`. The `Renderer` hands its
+   * `GpuTimer` here, so a sampled frame's GPU time counts the core's work.
+   */
+  timestamps?: (label: string) => GPURenderPassTimestampWrites | undefined;
 }
 
 /** What the core's device offers it. */
@@ -640,6 +646,7 @@ export class RenderCore {
         d.depthReadOnly = false;
         d.depthLoadOp = 'clear';
         d.depthStoreOp = 'store';
+        this.passDescDepthClear.timestampWrites = target.timestamps?.('core');
         encoder.beginRenderPass(this.passDescDepthClear).end();
         st.calls += 2;
         st.passes++;
@@ -673,6 +680,7 @@ export class RenderCore {
         }
         desc = this.passDescDepth;
       }
+      desc.timestampWrites = target.timestamps?.('core');
       const enc = encoder.beginRenderPass(desc);
       st.calls++;
       st.passes++;
@@ -714,6 +722,7 @@ export class RenderCore {
       color.view = target.view;
       color.loadOp = 'clear';
       color.clearValue = target.clear;
+      this.passDesc.timestampWrites = target.timestamps?.('core');
       encoder.beginRenderPass(this.passDesc).end();
       st.calls += 2;
       st.passes++;

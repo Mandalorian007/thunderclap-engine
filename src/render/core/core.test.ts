@@ -361,6 +361,25 @@ describe('render core (ws/core-retained)', () => {
     expect(fake.textures.some((t) => t.label === 'core depth')).toBe(false);
   });
 
+  it('every render pass takes the target timestamp writes, labelled core', () => {
+    const s = scene(64);
+    const labels: string[] = [];
+    const writes = { querySet: {} as GPUQuerySet };
+    const timestamps = (label: string) => {
+      labels.push(label);
+      return writes;
+    };
+    const t = { ...target(s.fake), timestamps };
+    const before = s.fake.passes.length;
+    frame(s, t);
+    const render = s.fake.passes.slice(before).filter((p) => p.kind === 'render');
+    expect(render.length).toBeGreaterThan(0);
+    expect(labels).toEqual(render.map(() => 'core'));
+    for (const p of render) {
+      expect((p.desc as GPURenderPassDescriptor).timestampWrites).toBe(writes);
+    }
+  });
+
   it('a frame of a held scene allocates nothing', () => {
     const s = scene(1500);
     const t = target(s.fake);

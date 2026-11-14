@@ -737,6 +737,7 @@ export class Renderer implements FrameSink {
     width: 1,
     height: 1,
     viewport: { x: 0, y: 0, width: 1, height: 1 },
+    timestamps: (label) => this.gpuTimer?.pass(label),
   };
   /** `frames` of the frame whose view the core drew (it draws in a frame's first view). */
   private coreFrame = -1;

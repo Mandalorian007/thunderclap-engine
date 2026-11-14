@@ -273,6 +273,7 @@ interface CoreTarget {
     depth?: GPUTextureView;
     phase?: 'all' | 'opaque' | 'blend';
     texture?: GPUTexture;
+    timestamps?: (label: string) => GPURenderPassTimestampWrites | undefined;
 }
 
 ## CoreViewExtras
