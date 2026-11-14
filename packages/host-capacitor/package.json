@@ -1,6 +1,6 @@
 {
   "name": "@thunderclap-engine/host-capacitor",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "description": "ThunderClap's Capacitor host: createCapacitorHost() fills the engine's Host interface from Capacitor's plugins for an iOS or Android store app. It knows nothing about any game and has no dependencies; @capacitor/core is an optional peer that names the Capacitor major it runs inside, and the @capacitor/* plugins are the app's own, handed in through the plugins option.",
   "license": "MIT",
