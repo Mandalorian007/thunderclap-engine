@@ -4,7 +4,7 @@
  * ambient loop per zone and per-bus reverb sends. Pure bookkeeping over `AudioEngine`: no new
  * graph nodes, nothing allocated per `update`.
  */
-import type { AudioPlayOptions, OutputBus, Voice } from './audio';
+import type { AudioPlayOptions, BusId, OutputBus, Voice } from './audio';
 
 /** A sphere or an axis-aligned box in world units. */
 export type ZoneShape =
@@ -23,7 +23,7 @@ export interface AudioZoneDesc {
   ambient?: {
     /** A registered sound to loop. Optional when `voice` is given. */
     sound?: string;
-    bus?: OutputBus;
+    bus?: BusId;
     gain?: number;
     /**
      * Or a factory for the voice (ws/audio-4): any `Voice`, such as a `createVoiceAdapter` over a

@@ -19,6 +19,15 @@ How a game uses these is in [Testing your game](../../docs/guide/testing-your-ga
 - **Links and clipboard.** Each `openExternal(url, { activation })` is pushed to `opened` and answers `openResult` (default `'opened'`). Each `copyText(text)` is pushed to `copied` and resolves `copyResult` (default `'copied'`). `clipboardWriteAllowed()` answers `clipboardWriteAllowed` (default true). `kind` defaults to `'web'` and `embed` to `'top'`.
 - **Frames.** `requestFrame` queues a callback and `cancelFrame` drops one. Nothing runs until `runFrame(timeMs?)`, which runs every callback queued before the call. It passes `timeMs`, or the last frame time plus `frameMs` (default 1000 / 60, starting at `startTime`, default 0). It returns how many callbacks ran. A callback that requests another frame is queued for the next call, so one `runFrame` is one display frame, and a `GameLoop` given the host as `frames` runs one frame per call. `pendingFrames` and `frameTime` read the queue and the last timestamp.
 
+## Fake audio context
+
+`createFakeAudioContext(opts?: FakeAudioContextOptions): FakeAudioContext` (ws/audio-fit) is a recording stand-in for `AudioContext`, so a game tests its mixer code in Node: `new AudioEngine({ createContext: () => fake.asAudioContext() })`. Nothing is rendered.
+
+- **Options.** `spatial: true` returns a `FakeAudioSpatialContext`, which adds `createPanner` (pushed to `panners`) and a listener with `positionX`… params. `stereoPanner: false` removes `createStereoPanner`, as on browsers without it. `sampleRate` defaults to 48000.
+- **Recording.** Every `AudioParam` is a `FakeAudioParam` whose `events` list each `setValueAtTime`, ramp and `setTargetAtTime` (`FakeAudioParamEvent`); `sources` holds every buffer source made (`FakeAudioSource`) and `played` those other than the iOS silent unlock buffer; `convolvers`, `biquads`, `analysers` and `mediaSources` the nodes of those kinds. `outputs` on every `FakeAudioNode` is what it connects to.
+- **Clock and state.** `currentTime` moves only through `advance(seconds)` (a negative or non-finite value is ignored). `state` starts `suspended`; `resume()` / `suspend()` move it and are pushed to `stateCalls`; a test acts as the browser by setting `state` and calling `onstatechange`.
+- The node classes are exported too (`FakeAudioNode`, `FakeAudioGain`, `FakeAudioSource`, `FakeAudioConvolver`, `FakeAudioBiquad`, `FakeAudioPanner`, `FakeAudioAnalyser`, `FakeAudioMediaElement`, `FakeAudioMediaSource`) for a test that builds one directly.
+
 ## Fixed clock
 
 `createFixedClock(stepMs = 1000 / 60, start = 0): FixedClock` returns a `TickClock` (`@thunderclap-engine/engine/input`), so it goes wherever `ctx.clock` goes: `createGestures({ clock })`, `createLook({ clock })`, `createInputPlayback(input, rec, { clock })`, or `GameLoop`'s `now` as `() => clock.now()`.

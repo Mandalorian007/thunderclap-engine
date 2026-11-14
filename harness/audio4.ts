@@ -10,6 +10,9 @@
  * - `?sprites`: three clips cut from one synthesised buffer, on keys 1-3 or the buttons.
  * - `?stream`: a synthesised 8 s track encoded as a WAV Blob URL and streamed through a media
  *   element; the beat grid follows the element's clock.
+ * - `?fit`: a custom `ambient` bus carrying a loop panned hard right through the PannerNode
+ *   fallback (the context's `createStereoPanner` is removed), a three-voice budget the
+ *   `burst` buttons push past, and the watchdog on.
  */
 import {
   AudioEngine,
@@ -25,11 +28,27 @@ import {
 import type { HarnessAudio4Api, HarnessAudio4State } from './audio4-state';
 
 const params = new URLSearchParams(location.search);
-const MODES = ['occlude', 'doppler', 'sprites', 'stream'] as const;
+const MODES = ['occlude', 'doppler', 'sprites', 'stream', 'fit'] as const;
 const mode = MODES.find((m) => params.has(m)) ?? 'occlude';
 let still = params.has('still');
 
-const audio = new AudioEngine();
+const fit = mode === 'fit';
+const audio = new AudioEngine(
+  fit
+    ? {
+        voiceBudget: { max: 3 },
+        watchdog: true,
+        audioSession: 'playback',
+        // A context without StereoPannerNode, as on browsers that lack it: pan falls back.
+        createContext: () => {
+          const ctx = new AudioContext();
+          (ctx as { createStereoPanner?: unknown }).createStereoPanner = undefined;
+          return ctx;
+        },
+      }
+    : {},
+);
+if (fit) audio.addBus('ambient', { volume: 0.5 });
 audio.attach();
 audio.define('hum', recipes.dronePad({ pitch: 220, length: 0.5, brightness: 0.6 }));
 audio.define('clip-one', recipes.chime({ pitch: 660, length: 0.4 }));
@@ -72,6 +91,16 @@ const state: HarnessAudio4State = {
   streaming: false,
   background: false,
   paused: false,
+  fit: {
+    customBuses: [],
+    ambientGain: 0,
+    ambientVoices: 0,
+    live: 0,
+    stolen: 0,
+    dropped: 0,
+    panFallbacks: 0,
+    watchdogRestarts: 0,
+  },
 };
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -144,6 +173,16 @@ const api: HarnessAudio4Api = {
   background(hidden) {
     audio.background(hidden);
   },
+  burst(count, priority) {
+    if (!fit) return;
+    for (let i = 0; i < count; i++) audio.play('clip-one', { priority, gain: 0.3 });
+    publishFit();
+  },
+  setBus(volume, muted) {
+    if (!fit) return;
+    audio.setVolume('ambient', volume);
+    audio.setMuted('ambient', muted);
+  },
 };
 window.__harnessAudio4 = api;
 
@@ -159,6 +198,7 @@ window.addEventListener('keydown', (e) => {
   if (name) api.playClip(name);
 });
 $('still').addEventListener('click', () => api.setStill(!still));
+$('burst').addEventListener('click', () => api.burst(5, 0));
 $('bg').addEventListener('click', () => api.background(!audio.inBackground));
 audio.onStateChange(() => {
   if (audio.state === 'running') $('hint').textContent = 'Audio running.';
@@ -193,6 +233,20 @@ function drawMap(): void {
     g2d.arc(cx + emitterX * 3, cz - 2 * s, 6, 0, Math.PI * 2);
     g2d.stroke();
   }
+}
+
+/** `?fit`: copy the bus, budget, fallback and watchdog readings into `state.fit`. */
+function publishFit(): void {
+  const f = state.fit;
+  f.customBuses = [...audio.customBuses];
+  f.ambientGain = (audio.busNode('ambient') as GainNode | null)?.gain.value ?? 0;
+  f.ambientVoices = audio.voices('ambient').length;
+  const b = audio.voiceBudgetStats;
+  f.live = b.live;
+  f.stolen = b.stolen;
+  f.dropped = b.dropped;
+  f.panFallbacks = audio.panFallbackCount;
+  f.watchdogRestarts = audio.watchdogRestarts;
 }
 
 let last = performance.now();
@@ -242,6 +296,7 @@ function frame(now: number): void {
     streamEl !== null && !streamEl.paused && music?.playing.includes('track') === true;
   state.background = audio.inBackground;
   state.paused = audio.paused;
+  if (fit) publishFit();
   state.frames++;
   drawMap();
   readout.textContent =
@@ -317,6 +372,9 @@ async function boot(): Promise<void> {
   } else if (mode === 'sprites') {
     const sheet = buildSheet();
     audio.defineSprites('fx', sheet, { maxVoices: 6 });
+  } else if (fit) {
+    // Queued until the gesture.
+    audio.loop('hum', { bus: 'ambient', pan: 1, gain: 0.4 });
   } else {
     const url = wavUrl(audio.buffer('track')!);
     music = createMusic(audio, {

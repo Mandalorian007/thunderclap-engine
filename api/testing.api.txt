@@ -29,6 +29,192 @@ interface EmulateXrOptions extends Omit<FakeXrOptions, 'textureUsage'> {
     head?: [number, number, number];
 }
 
+## FakeAudioAnalyser
+class FakeAudioAnalyser extends FakeAudioNode {
+    fftSize: number;
+    level: number;
+    getFloatTimeDomainData(out: Float32Array): void;
+}
+
+## FakeAudioBiquad
+class FakeAudioBiquad extends FakeAudioNode {
+    readonly context?: FakeAudioContext | undefined;
+    type: string;
+    frequency: FakeAudioParam;
+    Q: FakeAudioParam;
+    constructor(context?: FakeAudioContext | undefined);
+}
+
+## FakeAudioContext
+class FakeAudioContext {
+    state: AudioContextState;
+    currentTime: number;
+    sampleRate: number;
+    destination: FakeAudioNode;
+    sources: FakeAudioSource[];
+    convolvers: FakeAudioConvolver[];
+    biquads: FakeAudioBiquad[];
+    analysers: FakeAudioAnalyser[];
+    mediaSources: FakeAudioMediaSource[];
+    onstatechange: (() => void) | null;
+    stateCalls: ('suspend' | 'resume')[];
+    constructor(opts?: FakeAudioContextOptions);
+    advance(seconds: number): void;
+    asAudioContext(): AudioContext;
+    createGain(): FakeAudioGain;
+    createBufferSource(): FakeAudioSource;
+    createStereoPanner(): FakeAudioNode & {
+        pan: FakeAudioParam;
+    };
+    createConvolver(): FakeAudioConvolver;
+    createBiquadFilter(): FakeAudioBiquad;
+    createMediaElementSource(el: FakeAudioMediaElement): FakeAudioMediaSource;
+    createAnalyser(): FakeAudioAnalyser;
+    createDynamicsCompressor(): FakeAudioNode & {
+        threshold: FakeAudioParam;
+        knee: FakeAudioParam;
+        ratio: FakeAudioParam;
+        attack: FakeAudioParam;
+        release: FakeAudioParam;
+    };
+    createBuffer(channels: number, length: number, sampleRate?: number): {
+        length: number;
+        numberOfChannels: number;
+        sampleRate: number;
+        duration: number;
+        data: Float32Array<ArrayBuffer>[];
+        copyToChannel(src: Float32Array, ch: number): void;
+    };
+    resume(): Promise<void>;
+    suspend(): Promise<void>;
+    close(): Promise<void>;
+    get played(): FakeAudioSource[];
+}
+
+## FakeAudioContextOptions  (type-only)
+interface FakeAudioContextOptions {
+    spatial?: boolean;
+    stereoPanner?: boolean;
+    sampleRate?: number;
+}
+
+## FakeAudioConvolver
+class FakeAudioConvolver extends FakeAudioNode {
+    buffer: unknown;
+    normalize: boolean;
+}
+
+## FakeAudioGain
+class FakeAudioGain extends FakeAudioNode {
+    gain: FakeAudioParam;
+}
+
+## FakeAudioMediaElement
+class FakeAudioMediaElement {
+    src: string;
+    loop: boolean;
+    currentTime: number;
+    duration: number;
+    paused: boolean;
+    playbackRate: number;
+    plays: number;
+    constructor(duration?: number);
+    play(): Promise<void>;
+    pause(): void;
+}
+
+## FakeAudioMediaSource
+class FakeAudioMediaSource extends FakeAudioNode {
+    readonly mediaElement: FakeAudioMediaElement;
+    constructor(mediaElement: FakeAudioMediaElement);
+}
+
+## FakeAudioNode
+class FakeAudioNode {
+    outputs: FakeAudioNode[];
+    connect<T extends FakeAudioNode>(n: T): T;
+    disconnect(target?: FakeAudioNode): void;
+}
+
+## FakeAudioPanner
+class FakeAudioPanner extends FakeAudioNode {
+    readonly context: FakeAudioContext;
+    panningModel: string;
+    distanceModel: string;
+    refDistance: number;
+    maxDistance: number;
+    rolloffFactor: number;
+    coneInnerAngle: number;
+    coneOuterAngle: number;
+    coneOuterGain: number;
+    positionX: FakeAudioParam;
+    positionY: FakeAudioParam;
+    positionZ: FakeAudioParam;
+    orientationX: FakeAudioParam;
+    orientationY: FakeAudioParam;
+    orientationZ: FakeAudioParam;
+    constructor(context: FakeAudioContext);
+    get position(): number[];
+}
+
+## FakeAudioParam
+class FakeAudioParam {
+    value: number;
+    events: FakeAudioParamEvent[];
+    minValue?: number;
+    constructor(v?: number);
+    setValueAtTime(v: number, t: number): void;
+    linearRampToValueAtTime(v: number, t: number): void;
+    exponentialRampToValueAtTime(v: number, t: number): void;
+    setTargetAtTime(v: number, t: number): void;
+    cancelScheduledValues(t: number): void;
+    get last(): FakeAudioParamEvent | undefined;
+}
+
+## FakeAudioParamEvent  (type-only)
+interface FakeAudioParamEvent {
+    type: 'set' | 'linear' | 'exp' | 'target' | 'cancel';
+    value: number;
+    time: number;
+}
+
+## FakeAudioSource
+class FakeAudioSource extends FakeAudioNode {
+    buffer: unknown;
+    loop: boolean;
+    playbackRate: FakeAudioParam;
+    detune: FakeAudioParam;
+    loopStart: number;
+    loopEnd: number;
+    onended: (() => void) | null;
+    startedAt: number | null;
+    offset: number | null;
+    duration: number | null;
+    stoppedAt: number | null;
+    constructor(ctx: FakeAudioContext);
+    start(t?: number, offset?: number, duration?: number): void;
+    stop(t?: number): void;
+    get gainNode(): FakeAudioGain;
+    get isSilentUnlock(): boolean;
+}
+
+## FakeAudioSpatialContext
+class FakeAudioSpatialContext extends FakeAudioContext {
+    panners: FakeAudioPanner[];
+    listener: {
+        positionX: FakeAudioParam;
+        positionY: FakeAudioParam;
+        positionZ: FakeAudioParam;
+        forwardX: FakeAudioParam;
+        forwardY: FakeAudioParam;
+        forwardZ: FakeAudioParam;
+        upX: FakeAudioParam;
+        upY: FakeAudioParam;
+        upZ: FakeAudioParam;
+    };
+    createPanner(): FakeAudioPanner;
+}
+
 ## FakeBindGroup  (type-only)
 interface FakeBindGroup {
     label?: string;
@@ -471,6 +657,12 @@ function budget(report: WorkReport, limits: BudgetLimits, label?: string): WorkR
 
 ## countAllocs
 function countAllocs(fn: () => void): AllocCounts;
+
+## createFakeAudioContext
+function createFakeAudioContext(opts: FakeAudioContextOptions & {
+    spatial: true;
+}): FakeAudioSpatialContext;
+function createFakeAudioContext(opts?: FakeAudioContextOptions): FakeAudioContext;
 
 ## createFakeDevice
 function createFakeDevice(limits?: Partial<Record<string, number>>, features?: Iterable<string>): FakeDevice;

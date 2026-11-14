@@ -2,7 +2,7 @@
  * Runtime audio: an `AudioContext` created and resumed on the first user gesture, four buses
  * (master ← music, sfx, ui), named sounds rendered from specs, one-shots and loops.
  */
-import { reverbImpulse, volumeToGain } from './dsp';
+import { type EarlyReflections, reverbImpulse, type VolumeCurve, volumeToGain } from './dsp';
 import {
   DEFAULT_OCCLUSION,
   type OccludableVoice,
@@ -18,6 +18,60 @@ export const BUS_NAMES = ['master', 'music', 'sfx', 'ui'] as const;
 export type BusName = (typeof BUS_NAMES)[number];
 /** Buses a sound can play on (everything feeds master). */
 export type OutputBus = Exclude<BusName, 'master'>;
+/**
+ * A bus by name: a built-in one (`BusName`) or one a game added with `audio.addBus` (an
+ * `ambient` bed, a `voice` line). Everything that takes a bus takes this.
+ */
+export type BusId = BusName | (string & {});
+
+/** `audio.addBus` options: the new bus's starting settings. */
+export interface CustomBusOptions {
+  /** Slider position 0..1, on the engine's `volumeCurve`. Default 1. */
+  volume?: number;
+  /** Default false. */
+  muted?: boolean;
+}
+
+/** `AudioEngineOptions.voiceBudget`: a cap on one-shots across every sound. */
+export interface VoiceBudgetOptions {
+  /** Most voices playing at once. */
+  max: number;
+  /**
+   * Which voice a new one past `max` cuts. `lowest` (default): the lowest priority, the oldest
+   * among equals. `oldest`: the oldest. Either way only a voice of priority no higher than the
+   * new one's; with none, the new voice is dropped (an inert voice comes back).
+   */
+  steal?: 'lowest' | 'oldest';
+  /** Seconds a cut voice fades over (a quick fade, not a click). Default 0.03. */
+  stealFade?: number;
+  /** Count (and cut) loops too. Default false: music and ambience never lose their voice. */
+  loops?: boolean;
+}
+
+/** `audio.voiceBudgetStats`: the budget's counters. */
+export interface VoiceBudgetStats {
+  /** Voices the budget counts that play now. */
+  readonly live: number;
+  /** Voices cut for a newer one. */
+  readonly stolen: number;
+  /** New voices not played (nothing worth no more than them to cut). */
+  readonly dropped: number;
+}
+
+/** WebKit's `navigator.audioSession.type` values (`AudioEngineOptions.audioSession`). */
+export type AudioSessionType =
+  | 'auto'
+  | 'playback'
+  | 'transient'
+  | 'transient-solo'
+  | 'ambient'
+  | 'play-and-record';
+
+/** `AudioEngineOptions.watchdog`. */
+export interface AudioWatchdogOptions {
+  /** Seconds of a frozen `currentTime` on a "running" context before it is restarted. Default 1. */
+  stall?: number;
+}
 
 export interface BusSettings {
   /** Slider position 0..1 (mapped to gain with a squared curve). */
@@ -54,9 +108,13 @@ export function sanitizeMixer(input: unknown): MixerSettings {
   return out;
 }
 
-/** Effective linear gain for a bus. */
-export function busGain(s: BusSettings): number {
-  return s.muted ? 0 : volumeToGain(s.volume);
+/** Effective linear gain for a bus, on `curve` (default `squared`). */
+export function busGain(s: BusSettings, curve: VolumeCurve = 'squared'): number {
+  return s.muted ? 0 : volumeToGain(s.volume, curve);
+}
+
+function isBuiltinBus(name: string): name is BusName {
+  return (BUS_NAMES as readonly string[]).includes(name);
 }
 
 /**
@@ -68,8 +126,13 @@ export function busGain(s: BusSettings): number {
 export type AudioState = 'locked' | 'running' | 'suspended' | 'unavailable';
 
 export interface AudioPlayOptions {
-  /** Default `sfx` for `play`, `music` for `loop`. */
-  bus?: OutputBus;
+  /** Default `sfx` for `play`, `music` for `loop`. A custom bus must exist (`addBus`). */
+  bus?: BusId;
+  /**
+   * Rank under `AudioEngineOptions.voiceBudget`: past the cap, a new voice cuts one of no
+   * higher priority. Default the sound's `define` priority, else 0.
+   */
+  priority?: number;
   /** Linear gain on top of the bus. Default 1. */
   gain?: number;
   /** Playback rate (1 = original, 2 = octave up). Default 1. */
@@ -78,7 +141,9 @@ export interface AudioPlayOptions {
   detune?: number;
   /**
    * 2D stereo position, -1 (left) .. 1 (right), through a `StereoPannerNode`. The shorthand
-   * for a flat game (a sound from the left of the board). Ignored when `at` is set.
+   * for a flat game (a sound from the left of the board). Ignored when `at` is set. Where the
+   * context has no `StereoPannerNode` (older WebKit) a pooled equal-power `PannerNode` placed
+   * beside the listener gives the same left/right gains.
    */
   pan?: number;
   /**
@@ -171,15 +236,18 @@ export interface StopAllOptions {
   /** Seconds to fade out. Default 0. */
   fade?: number;
   /** Only this bus. */
-  bus?: OutputBus;
+  bus?: BusId;
   /** Buses left playing, e.g. `['music']` to keep the score through a scene change. */
-  except?: readonly BusName[];
+  except?: readonly BusId[];
 }
 
 /** `audio.pause` options. */
 export interface PauseOptions {
-  /** Buses that keep playing. Default `['ui']` (menu clicks stay audible). `master` never ramps. */
-  keep?: readonly OutputBus[];
+  /**
+   * Buses that keep playing. Default `['ui']` (menu clicks stay audible). `master` never ramps.
+   * Custom buses pause too unless listed.
+   */
+  keep?: readonly BusId[];
 }
 
 /** Seconds `pause` / `unpause` ramp bus gains and voice rates over. */
@@ -471,6 +539,7 @@ export class SpatialListener {
       legacy.setPosition?.(p[0]!, p[1]!, p[2]!);
       legacy.setOrientation?.(p[3]!, p[4]!, p[5]!, p[6]!, p[7]!, p[8]!);
     }
+    this.engine.syncPans();
   }
 }
 
@@ -512,6 +581,22 @@ interface SoundEntry {
   /** Voices currently playing, oldest first, for voice-stealing. */
   voices: VoiceImpl[];
   maxVoices: number;
+  /** Default `AudioPlayOptions.priority` for this sound. */
+  priority: number;
+}
+
+/** `define` / `defineSprites` options. */
+export interface DefineSoundOptions {
+  /** Simultaneous plays of this sound; past it the oldest is stolen. Default 8. */
+  maxVoices?: number;
+  /** Default `AudioPlayOptions.priority` for this sound under `voiceBudget`. Default 0. */
+  priority?: number;
+}
+
+/** A bus added with `addBus`: its settings and, once the context exists, its node. */
+interface CustomBus {
+  settings: BusSettings;
+  node: GainNode | null;
 }
 
 const NULL_VOICE: Voice = {
@@ -607,6 +692,10 @@ class VoiceImpl implements Voice, OccludableVoice {
   private readonly prevPos = new Float64Array(3);
   private hasPrev = false;
   private dopplerRate = 1;
+  /** Internal: rank under the voice budget (`AudioPlayOptions.priority`). */
+  priority = 0;
+  /** A `pan` played through the equal-power panner fallback (no `StereoPannerNode`). */
+  private panFallback = false;
 
   constructor(
     private readonly engine: AudioEngine,
@@ -645,8 +734,13 @@ class VoiceImpl implements Voice, OccludableVoice {
     return this.src !== null;
   }
 
-  get bus(): OutputBus {
+  get bus(): BusId {
     return this.opts.bus ?? (this.loop ? 'music' : 'sfx');
+  }
+
+  /** Internal: the `pan` a fallback panner places (0 otherwise). */
+  get pan(): number {
+    return this.opts.pan ?? 0;
   }
 
   get occlusion(): number {
@@ -702,9 +796,21 @@ class VoiceImpl implements Voice, OccludableVoice {
       this.out = panner;
       this.panner = panner;
     } else if (this.opts.pan && !this.spatial) {
-      const p = ctx.createStereoPanner();
-      p.pan.value = this.opts.pan;
-      this.out = p;
+      if (typeof ctx.createStereoPanner === 'function') {
+        const p = ctx.createStereoPanner();
+        p.pan.value = this.opts.pan;
+        this.out = p;
+      } else {
+        // Older WebKit: an equal-power panner beside the listener, no distance attenuation.
+        const p = this.engine.acquirePanner(PAN_FALLBACK);
+        if (p) {
+          this.engine.placePan(p, this.opts.pan);
+          this.out = p;
+          this.panner = p;
+          this.panFallback = true;
+          this.engine.trackPanFallback(this, true);
+        }
+      }
     }
     src.connect(g);
     this.gainNode = g;
@@ -739,6 +845,7 @@ class VoiceImpl implements Voice, OccludableVoice {
         this.occFilter = null;
       }
       if (this.panner) {
+        if (this.panFallback) this.engine.trackPanFallback(this, false);
         this.engine.releasePanner(this.panner);
         this.panner = null;
       }
@@ -1015,7 +1122,15 @@ class VoiceImpl implements Voice, OccludableVoice {
     this.dz = z;
     if (this.panner) writePannerDirection(this.panner, x, y, z);
   }
+
+  /** Internal: re-place a fallback pan panner after the listener moved. */
+  syncPan(): void {
+    if (this.panFallback && this.panner) this.engine.placePan(this.panner, this.pan);
+  }
 }
+
+/** The pan fallback's panner: equal-power, no distance attenuation. */
+const PAN_FALLBACK: SpatialOptions = { panningModel: 'equalpower', rolloffFactor: 0 };
 
 /** Master limiter (a `DynamicsCompressorNode` between master and the output). */
 export interface LimiterOptions {
@@ -1047,6 +1162,10 @@ export interface ReverbOptions {
   decay?: number;
   /** Impulse noise seed. Default 1. */
   seed?: number;
+  /** High-frequency damping 0..1 over the tail (`ImpulseShape.damping`). Default 0. */
+  damping?: number;
+  /** Early reflections ahead of the tail. Default none. */
+  early?: EarlyReflections;
   /** Wet return level into master (linear). Default 1. */
   wet?: number;
   /** Send level per bus (linear, 0 = dry). Default music 0.2, sfx 0.25, ui 0. */
@@ -1079,12 +1198,37 @@ export interface AudioEngineOptions {
   limiter?: boolean | LimiterOptions;
   /** Optional shared reverb (off by default). Change later with `setReverb`. */
   reverb?: ReverbOptions | null;
+  /** How bus volumes map to gain. Default `squared`. */
+  volumeCurve?: VolumeCurve;
+  /** A cap on one-shots across every sound, with priority stealing. Default none. */
+  voiceBudget?: VoiceBudgetOptions | null;
+  /**
+   * Set WebKit's `navigator.audioSession.type` to this on each unlock, where the browser has
+   * it (iOS Safari 16.4+): `playback` keeps sound on with the ring/silent switch on silent.
+   * Default unset (the browser's own choice).
+   */
+  audioSession?: AudioSessionType;
+  /**
+   * Create no context while the master bus is muted or at volume 0: a gesture then leaves audio
+   * `locked`, and the context is created on the first unmute (`setVolume`, `setMuted`,
+   * `applySettings`) or `play` / `loop` once audible. Default false (a gesture always creates it).
+   */
+  lazyContext?: boolean;
+  /**
+   * Restart a context that reports `running` while its clock stands still (WebKit after an
+   * interruption can stay silent so). `audio.update(dt)` watches `currentTime`; after `stall`
+   * seconds frozen it suspends and resumes the context. Default off.
+   */
+  watchdog?: boolean | AudioWatchdogOptions;
 }
 
 export interface AttachAudioOptions {
   /** Where to listen for the unlocking gesture. Default `window`. */
   target?: EventTarget;
-  /** Suspend while the tab is hidden. Default true. */
+  /**
+   * Suspend while the tab is hidden. Default true. With false the context runs on in the
+   * background, and `pageshow` / `focus` still resume a context the browser stopped.
+   */
   pauseWhenHidden?: boolean;
 }
 
@@ -1145,9 +1289,29 @@ export class AudioEngine {
   };
   private _listener: SpatialListener | null = null;
   /** Externally owned voices (`register`): music stems, a game's own players. */
-  private readonly registered = new Map<Voice, BusName>();
+  private readonly registered = new Map<Voice, BusId>();
   private _paused = false;
   private readonly pausedList: OutputBus[] = [];
+  /** Custom buses `pause` silenced. */
+  private readonly pausedCustom: string[] = [];
+  /** Buses added with `addBus`, in order. */
+  private readonly customs = new Map<string, CustomBus>();
+  private readonly customNames: string[] = [];
+  private readonly curve: VolumeCurve;
+  private budget: Required<VoiceBudgetOptions> | null = null;
+  private readonly budgetStats = { live: 0, stolen: 0, dropped: 0 };
+  /** Voices on the equal-power pan fallback, re-placed when the listener moves. */
+  private readonly panFallbacks = new Set<VoiceImpl>();
+  private readonly sessionType: AudioSessionType | undefined;
+  private readonly lazy: boolean;
+  /** A gesture came while `lazyContext` held the context back. */
+  private lazyHeld = false;
+  /** Watchdog: stall limit (0 = off), the last clock seen, seconds frozen, restarts. */
+  private readonly stallLimit: number;
+  private lastClock = -1;
+  private stalled = 0;
+  private restarting = false;
+  private restarts = 0;
   private _pausedRate = false;
   /** Whether this context's `playbackRate` accepts 0, once a voice told us. */
   private rateZeroOk: boolean | null = null;
@@ -1158,22 +1322,28 @@ export class AudioEngine {
    * key/value arrays, searched linearly (a bus has a handful of keys), so a per-frame
    * `setBusScale` on an existing key allocates nothing. `scales` caches each bus's product.
    */
-  private readonly scaleKeys: Record<BusName, string[]> = {
+  private readonly scaleKeys: Record<string, string[]> = {
     master: [],
     music: [],
     sfx: [],
     ui: [],
   };
-  private readonly scaleValues: Record<BusName, number[]> = {
+  private readonly scaleValues: Record<string, number[]> = {
     master: [],
     music: [],
     sfx: [],
     ui: [],
   };
-  private readonly scales: Record<BusName, number> = { master: 1, music: 1, sfx: 1, ui: 1 };
+  private readonly scales: Record<string, number> = { master: 1, music: 1, sfx: 1, ui: 1 };
 
   constructor(opts: AudioEngineOptions = {}) {
     this._settings = sanitizeMixer(opts.settings);
+    this.curve = opts.volumeCurve === 'linear' ? 'linear' : 'squared';
+    this.setVoiceBudget(opts.voiceBudget ?? null);
+    this.sessionType = opts.audioSession;
+    this.lazy = opts.lazyContext === true;
+    const wd = opts.watchdog;
+    this.stallLimit = wd ? Math.max(0.1, (wd === true ? undefined : wd.stall) ?? 1) : 0;
     const lim = opts.limiter ?? true;
     this.limiterOpts = lim === false ? null : { ...DEFAULT_LIMITER, ...(lim === true ? {} : lim) };
     this.reverbOpts = opts.reverb ?? null;
@@ -1234,6 +1404,54 @@ export class AudioEngine {
     if (occ && this.ctx && this.occludable.length > 0 && this._state === 'running') {
       this.occluder.run(occ, this.listener.position, this.occludable, this.ctx.currentTime);
     }
+    if (this.stallLimit > 0) this.watch(dt);
+  }
+
+  /** The watchdog: a "running" context whose clock stands still for `stall` seconds is restarted. */
+  private watch(dt: number): void {
+    const ctx = this.ctx;
+    if (
+      !ctx ||
+      this.restarting ||
+      this._state !== 'running' ||
+      ctx.state !== 'running' ||
+      this.isPaused()
+    ) {
+      this.stalled = 0;
+      this.lastClock = -1;
+      return;
+    }
+    const now = ctx.currentTime;
+    if (now !== this.lastClock) {
+      this.lastClock = now;
+      this.stalled = 0;
+      return;
+    }
+    this.stalled += Number.isFinite(dt) && dt > 0 ? dt : 0;
+    if (this.stalled >= this.stallLimit) void this.restartContext();
+  }
+
+  private async restartContext(): Promise<void> {
+    const ctx = this.ctx;
+    if (!ctx || this.restarting) return;
+    this.restarting = true;
+    this.restarts++;
+    this.stalled = 0;
+    this.lastClock = -1;
+    try {
+      await ctx.suspend();
+      if (!this.isPaused()) await ctx.resume();
+    } catch {
+      // A resume the browser refuses waits for the next gesture (re-armed below).
+    } finally {
+      this.restarting = false;
+    }
+    this.onContextState();
+  }
+
+  /** Times the watchdog restarted a silent "running" context (diagnostics). */
+  get watchdogRestarts(): number {
+    return this.restarts;
   }
   /** Internal: a voice starts or stops following a matrix. */
   trackFollower(v: VoiceImpl, on: boolean): void {
@@ -1272,7 +1490,21 @@ export class AudioEngine {
     if (this.hidden === hidden) return;
     this.hidden = hidden;
     // Bus writes held while hidden (`applyBus`) land now, before the context resumes.
-    if (!hidden) for (const b of BUS_NAMES) this.applyBus(b);
+    if (!hidden) {
+      for (const b of BUS_NAMES) this.applyBus(b);
+      for (const b of this.customNames) this.applyBus(b);
+    }
+    void this.syncSuspension();
+  }
+
+  /**
+   * Bring back a context the browser stopped while it should run (after an interruption or an
+   * app switch), without waiting for a gesture where the browser allows that. `attach` calls it
+   * on `pageshow` and `focus`; safe to call any time.
+   */
+  wake(): void {
+    const ctx = this.ctx;
+    if (!ctx || this.isPaused() || ctx.state === 'running') return;
     void this.syncSuspension();
   }
   /** True while `background(true)` holds (the document hidden or the app in the background). */
@@ -1325,7 +1557,10 @@ export class AudioEngine {
       const onVis = () => this.background(!visible());
       // pagehide (iOS app switch, bfcache) and freeze can arrive while still "visible".
       const onAway = () => this.background(true);
-      const onBack = () => this.background(!visible());
+      const onBack = () => {
+        this.background(!visible());
+        this.wake();
+      };
       document.addEventListener('visibilitychange', onVis);
       window.addEventListener('pagehide', onAway);
       window.addEventListener('pageshow', onBack);
@@ -1339,6 +1574,15 @@ export class AudioEngine {
         window.removeEventListener('focus', onBack);
         document.removeEventListener('freeze', onAway);
         document.removeEventListener('resume', onBack);
+      });
+    } else if (typeof window !== 'undefined') {
+      // Not paused while hidden, but a phone still stops the context: resume it on return.
+      const onWake = () => this.wake();
+      window.addEventListener('pageshow', onWake);
+      window.addEventListener('focus', onWake);
+      this.detachFns.push(() => {
+        window.removeEventListener('pageshow', onWake);
+        window.removeEventListener('focus', onWake);
       });
     }
     return () => this.detach();
@@ -1375,6 +1619,12 @@ export class AudioEngine {
    */
   async unlock(): Promise<boolean> {
     if (this._state === 'unavailable' || this._halted) return false;
+    if (!this.ctx && this.lazy && !this.audible()) {
+      // Sound is off: no context until it is turned on (`setVolume` / `setMuted` call back).
+      this.lazyHeld = true;
+      return false;
+    }
+    this.applySession();
     if (!this.ctx) {
       try {
         this.ctx = this.createContext();
@@ -1408,6 +1658,33 @@ export class AudioEngine {
 
   private isPaused(): boolean {
     return this.hidden || this.userSuspended || this._halted;
+  }
+
+  /** Master neither muted nor at volume 0. */
+  private audible(): boolean {
+    const m = this._settings.master;
+    return !m.muted && m.volume > 0;
+  }
+
+  /** `lazyContext`: sound just turned on after a gesture was held back; create the context. */
+  private lazyWake(): void {
+    if (this.lazy && !this.ctx && this.lazyHeld && this.audible() && !this._halted) {
+      void this.unlock();
+    }
+  }
+
+  /** `audioSession`: WebKit's `navigator.audioSession.type`, where it exists. */
+  private applySession(): void {
+    const type = this.sessionType;
+    if (!type) return;
+    const session = (globalThis.navigator as { audioSession?: { type: string } } | undefined)
+      ?.audioSession;
+    if (!session || session.type === type) return;
+    try {
+      session.type = type;
+    } catch {
+      // A value this browser does not know.
+    }
   }
 
   private onContextState() {
@@ -1488,6 +1765,9 @@ export class AudioEngine {
     this.registered.clear();
     this.frozenExternal.clear();
     this.pausedList.length = 0;
+    this.pausedCustom.length = 0;
+    for (const c of this.customs.values()) c.node = null;
+    this.panFallbacks.clear();
     this._paused = false;
     this._pausedRate = false;
     if (ctx) await ctx.close().catch(() => {});
@@ -1514,6 +1794,7 @@ export class AudioEngine {
       this.buses[name] = g;
     }
     for (const name of BUS_NAMES) this.buses[name]!.gain.value = this.busTarget(name);
+    for (const name of this.customNames) this.buildCustom(name);
     // Paused before the context existed: the paused buses are born silent.
     for (const name of this.pausedList) this.buses[name]!.gain.value = 0;
     this.buildReverb();
@@ -1537,6 +1818,51 @@ export class AudioEngine {
     p.coneOuterAngle = opts?.cone?.outer ?? 360;
     p.coneOuterGain = opts?.cone?.outerGain ?? 0;
     return p;
+  }
+
+  /**
+   * Internal: place a pan-fallback panner at `pan` (-1..1) beside the listener: forward × cos,
+   * right × sin of `pan × 90°`, so an equal-power panner gives a `StereoPannerNode`'s gains.
+   */
+  placePan(p: PannerNode, pan: number): void {
+    const l = this.listener;
+    const pos = l.position;
+    const f = l.forward;
+    const u = l.up;
+    // right = forward × up
+    let rx = f[1]! * u[2]! - f[2]! * u[1]!;
+    let ry = f[2]! * u[0]! - f[0]! * u[2]!;
+    let rz = f[0]! * u[1]! - f[1]! * u[0]!;
+    const rl = Math.hypot(rx, ry, rz) || 1;
+    rx /= rl;
+    ry /= rl;
+    rz /= rl;
+    const fl = Math.hypot(f[0]!, f[1]!, f[2]!) || 1;
+    const a = (Math.min(1, Math.max(-1, pan)) * Math.PI) / 2;
+    const c = Math.cos(a) / fl;
+    const sn = Math.sin(a);
+    writePannerPosition(
+      p,
+      pos[0]! + f[0]! * c + rx * sn,
+      pos[1]! + f[1]! * c + ry * sn,
+      pos[2]! + f[2]! * c + rz * sn,
+    );
+  }
+
+  /** Internal: a voice joins or leaves the pan fallback. */
+  trackPanFallback(v: VoiceImpl, on: boolean): void {
+    if (on) this.panFallbacks.add(v);
+    else this.panFallbacks.delete(v);
+  }
+
+  /** Internal: the listener moved; re-place the pan-fallback panners. */
+  syncPans(): void {
+    for (const v of this.panFallbacks) v.syncPan();
+  }
+
+  /** Voices playing `pan` through the equal-power panner fallback (tests, diagnostics). */
+  get panFallbackCount(): number {
+    return this.panFallbacks.size;
   }
 
   /** Internal: take back an ended voice's (disconnected) panner. Dropped if its context is gone. */
@@ -1622,7 +1948,14 @@ export class AudioEngine {
     const opts = this.reverbOpts;
     const master = this.buses.master;
     if (!ctx || !opts || !master || typeof ctx.createConvolver !== 'function') return;
-    const ir = reverbImpulse(ctx.sampleRate, opts.seconds ?? 2, opts.decay ?? 3, opts.seed ?? 1);
+    const ir = reverbImpulse(
+      ctx.sampleRate,
+      opts.seconds ?? 2,
+      opts.decay ?? 3,
+      opts.seed ?? 1,
+      2,
+      opts,
+    );
     const buffer = ctx.createBuffer(ir.length, ir[0]!.length, ctx.sampleRate);
     ir.forEach((ch, i) => {
       buffer.copyToChannel(ch, i);
@@ -1667,18 +2000,100 @@ export class AudioEngine {
     r.wet.disconnect();
   }
 
-  /** Internal: the GainNode for a bus, once the context exists. */
-  busNode(name: BusName): GainNode | null {
-    return this.buses[name] ?? null;
+  /** Internal: the GainNode for a bus (built-in or custom), once the context exists. */
+  busNode(name: BusId): GainNode | null {
+    if (isBuiltinBus(name)) return this.buses[name] ?? null;
+    return this.customs.get(name)?.node ?? null;
+  }
+
+  /** The volume curve every bus maps its slider through (`AudioEngineOptions.volumeCurve`). */
+  get volumeCurve(): VolumeCurve {
+    return this.curve;
   }
 
   /** What a bus gain should be when nothing holds it: the settings gain times its scale. */
-  private busTarget(name: BusName): number {
-    return busGain(this._settings[name]) * this.scales[name];
+  private busTarget(name: BusId): number {
+    const s = this.busSettings(name);
+    return s ? busGain(s, this.curve) * (this.scales[name] ?? 1) : 0;
   }
 
-  private applyBus(name: BusName, timeConstant = 0.015) {
-    const node = this.buses[name];
+  /**
+   * Add a bus of the game's own (an `ambient` bed, a `voice` line) feeding master, with its own
+   * volume and mute: `play(…, { bus: 'ambient' })`, `setVolume('ambient', 0.5)`, `setBusScale`,
+   * `pause`, `stopAll` and `voices` all take it. Its settings live outside `MixerSettings` (not in
+   * `settings`, `onSettingsChange` or `applySettings`); a game that saves them does so itself.
+   * No reverb send. Safe before unlock: the node is built with the context. Adding a bus that
+   * exists updates the given settings. A built-in name throws a `RangeError`.
+   */
+  addBus(name: string, opts: CustomBusOptions = {}): void {
+    if (isBuiltinBus(name)) throw new RangeError(`[audio] "${name}" is a built-in bus`);
+    const prev = this.customs.get(name);
+    if (prev) {
+      if (opts.volume !== undefined) this.setVolume(name, opts.volume);
+      if (opts.muted !== undefined) this.setMuted(name, opts.muted);
+      return;
+    }
+    const v = opts.volume;
+    this.customs.set(name, {
+      settings: {
+        volume: typeof v === 'number' && Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 1,
+        muted: opts.muted === true,
+      },
+      node: null,
+    });
+    this.customNames.push(name);
+    this.scaleKeys[name] = [];
+    this.scaleValues[name] = [];
+    this.scales[name] = 1;
+    // Paused already: the new bus joins the pause.
+    if (this._paused) this.pausedCustom.push(name);
+    if (this.ctx && this.buses.master) this.buildCustom(name);
+  }
+
+  /** Remove a custom bus: its voices stop, its node is disconnected. No-op for an unknown or built-in name. */
+  removeBus(name: string): void {
+    const c = this.customs.get(name);
+    if (!c) return;
+    this.stopAll({ bus: name });
+    c.node?.disconnect();
+    this.customs.delete(name);
+    this.customNames.splice(this.customNames.indexOf(name), 1);
+    delete this.scaleKeys[name];
+    delete this.scaleValues[name];
+    delete this.scales[name];
+    const i = this.pausedCustom.indexOf(name);
+    if (i >= 0) this.pausedCustom.splice(i, 1);
+  }
+
+  /** True for a built-in bus or one added with `addBus`. */
+  hasBus(name: BusId): boolean {
+    return isBuiltinBus(name) || this.customs.has(name);
+  }
+
+  /** The buses added with `addBus`, in order. The same array every call. */
+  get customBuses(): readonly string[] {
+    return this.customNames;
+  }
+
+  /** A bus's settings (built-in from `settings`, custom from `addBus`), or null for an unknown bus. */
+  busSettings(name: BusId): Readonly<BusSettings> | null {
+    if (isBuiltinBus(name)) return this._settings[name];
+    return this.customs.get(name)?.settings ?? null;
+  }
+
+  private buildCustom(name: string): void {
+    const ctx = this.ctx;
+    const master = this.buses.master;
+    const c = this.customs.get(name);
+    if (!ctx || !master || !c) return;
+    const g = ctx.createGain();
+    g.gain.value = this.isBusPaused(name) ? 0 : this.busTarget(name);
+    g.connect(master);
+    c.node = g;
+  }
+
+  private applyBus(name: BusId, timeConstant = 0.015) {
+    const node = this.busNode(name);
     if (!node || !this.ctx) return;
     // A paused bus stays silent; the new value is applied by `unpause`. In the background the
     // write waits for `background(false)`, so nothing is queued on a suspended clock.
@@ -1697,10 +2112,11 @@ export class AudioEngine {
    * `background(false)` ramp to the scaled gain; set before the context exists, the bus is
    * built at it. `createDucker` drives this with a key of its own.
    */
-  setBusScale(bus: BusName, scale: number, timeConstant?: number, key = 'default'): void {
+  setBusScale(bus: BusId, scale: number, timeConstant?: number, key = 'default'): void {
     const s = Number.isFinite(scale) ? Math.min(1, Math.max(0, scale)) : 1;
     const keys = this.scaleKeys[bus];
     const values = this.scaleValues[bus];
+    if (!keys || !values) return;
     const i = keys.indexOf(key);
     if (i >= 0) {
       if (values[i] === s) return;
@@ -1716,9 +2132,10 @@ export class AudioEngine {
    * Remove `key`'s scale from `bus` (a no-op for a key never set), ramping to the product of
    * the keys left with time constant `timeConstant` (default 0.015). `Ducker.dispose` calls it.
    */
-  clearBusScale(bus: BusName, key: string, timeConstant?: number): void {
+  clearBusScale(bus: BusId, key: string, timeConstant?: number): void {
     const keys = this.scaleKeys[bus];
     const values = this.scaleValues[bus];
+    if (!keys || !values) return;
     const i = keys.indexOf(key);
     if (i < 0) return;
     keys.splice(i, 1);
@@ -1730,15 +2147,15 @@ export class AudioEngine {
    * `key`'s `setBusScale` multiplier on `bus` (1 for a key never set or cleared), or, with
    * `key` omitted, the bus's effective scale: the product of all its keys (1 by default).
    */
-  busScale(bus: BusName, key?: string): number {
-    if (key === undefined) return this.scales[bus];
-    const i = this.scaleKeys[bus].indexOf(key);
-    return i < 0 ? 1 : this.scaleValues[bus][i]!;
+  busScale(bus: BusId, key?: string): number {
+    if (key === undefined) return this.scales[bus] ?? 1;
+    const i = this.scaleKeys[bus]?.indexOf(key) ?? -1;
+    return i < 0 ? 1 : this.scaleValues[bus]![i]!;
   }
 
   /** Recompute a bus's product of keyed scales and write the bus if it changed. */
-  private updateBusScale(bus: BusName, timeConstant?: number): void {
-    const values = this.scaleValues[bus];
+  private updateBusScale(bus: BusId, timeConstant?: number): void {
+    const values = this.scaleValues[bus]!;
     let p = 1;
     for (let j = 0; j < values.length; j++) p *= values[j]!;
     if (p === this.scales[bus]) return;
@@ -1763,11 +2180,17 @@ export class AudioEngine {
     const keep = opts.keep ?? ['ui'];
     this.pausedList.length = 0;
     for (const b of BUS_NAMES) if (b !== 'master' && !keep.includes(b)) this.pausedList.push(b);
+    this.pausedCustom.length = 0;
+    for (const b of this.customNames) if (!keep.includes(b)) this.pausedCustom.push(b);
     const ctx = this.ctx;
     const t = ctx?.currentTime ?? 0;
     if (ctx) {
       for (const b of this.pausedList) {
         const node = this.buses[b];
+        if (node) rampParamTo(node.gain, 0, t, PAUSE_RAMP);
+      }
+      for (const b of this.pausedCustom) {
+        const node = this.busNode(b);
         if (node) rampParamTo(node.gain, 0, t, PAUSE_RAMP);
       }
     }
@@ -1804,8 +2227,14 @@ export class AudioEngine {
         if (node && !this.hidden)
           rampParamTo(node.gain, this.busTarget(b), ctx.currentTime, PAUSE_RAMP);
       }
+      for (const b of this.pausedCustom) {
+        const node = this.busNode(b);
+        if (node && !this.hidden)
+          rampParamTo(node.gain, this.busTarget(b), ctx.currentTime, PAUSE_RAMP);
+      }
     }
     this.pausedList.length = 0;
+    this.pausedCustom.length = 0;
     for (const v of this.active) v.thawRate(PAUSE_RAMP);
     for (const [v, rate] of this.frozenExternal) v.setRate(rate, PAUSE_RAMP);
     this.frozenExternal.clear();
@@ -1831,40 +2260,136 @@ export class AudioEngine {
     return this._pausedRate;
   }
 
+  /** The custom buses `pause` silenced (empty while not paused). The same array every call. */
+  get pausedCustomBuses(): readonly string[] {
+    return this.pausedCustom;
+  }
+
   /** Internal: whether `pause` silenced this bus. */
-  isBusPaused(bus: BusName): boolean {
-    return this._paused && this.pausedList.includes(bus as OutputBus);
+  isBusPaused(bus: BusId): boolean {
+    if (!this._paused) return false;
+    return isBuiltinBus(bus)
+      ? this.pausedList.includes(bus as OutputBus)
+      : this.pausedCustom.includes(bus);
   }
 
   private emitSettings() {
     for (const fn of this.settingsListeners) fn(this._settings);
   }
 
-  setVolume(bus: BusName, volume: number): void {
-    this._settings = {
-      ...this._settings,
-      [bus]: { ...this._settings[bus], volume: Math.min(1, Math.max(0, volume)) },
-    };
+  /**
+   * A bus's slider 0..1. A built-in bus changes `settings` and tells `onSettingsChange`; a
+   * custom bus (`addBus`) changes only its own settings. No-op for an unknown bus.
+   */
+  setVolume(bus: BusId, volume: number): void {
+    const v = Math.min(1, Math.max(0, volume));
+    if (isBuiltinBus(bus)) {
+      this._settings = { ...this._settings, [bus]: { ...this._settings[bus], volume: v } };
+      this.applyBus(bus);
+      this.emitSettings();
+      if (bus === 'master') this.lazyWake();
+      return;
+    }
+    const c = this.customs.get(bus);
+    if (!c) return;
+    c.settings = { ...c.settings, volume: v };
     this.applyBus(bus);
-    this.emitSettings();
   }
 
-  setMuted(bus: BusName, muted: boolean): void {
-    this._settings = { ...this._settings, [bus]: { ...this._settings[bus], muted } };
+  /** Mute or unmute a bus; the same rules as `setVolume`. */
+  setMuted(bus: BusId, muted: boolean): void {
+    if (isBuiltinBus(bus)) {
+      this._settings = { ...this._settings, [bus]: { ...this._settings[bus], muted } };
+      this.applyBus(bus);
+      this.emitSettings();
+      if (bus === 'master') this.lazyWake();
+      return;
+    }
+    const c = this.customs.get(bus);
+    if (!c) return;
+    c.settings = { ...c.settings, muted };
     this.applyBus(bus);
-    this.emitSettings();
   }
 
-  toggleMuted(bus: BusName): boolean {
-    this.setMuted(bus, !this._settings[bus].muted);
-    return this._settings[bus].muted;
+  /** Flip a bus's mute; returns the new state (false for an unknown bus). */
+  toggleMuted(bus: BusId): boolean {
+    const s = this.busSettings(bus);
+    if (!s) return false;
+    this.setMuted(bus, !s.muted);
+    return this.busSettings(bus)!.muted;
   }
 
-  /** Replace all settings (sanitized), e.g. after loading a save. */
+  /** Replace all settings (sanitized), e.g. after loading a save. Custom buses keep theirs. */
   applySettings(settings: unknown): void {
     this._settings = sanitizeMixer(settings);
     for (const b of BUS_NAMES) this.applyBus(b);
     this.emitSettings();
+    this.lazyWake();
+  }
+
+  // ------------------------------------------------------------ voice budget
+
+  /**
+   * Set or clear (`null`) the cap on one-shots across every sound (`AudioEngineOptions.voiceBudget`).
+   * Applies to the next `play`; voices already playing are not cut.
+   */
+  setVoiceBudget(opts: VoiceBudgetOptions | null): void {
+    if (!opts) {
+      this.budget = null;
+      return;
+    }
+    const max = Math.floor(opts.max);
+    if (!(max >= 1)) throw new RangeError(`[audio] voiceBudget.max must be ≥ 1 (got ${opts.max})`);
+    this.budget = {
+      max,
+      steal: opts.steal === 'oldest' ? 'oldest' : 'lowest',
+      stealFade: Math.max(0, opts.stealFade ?? 0.03),
+      loops: opts.loops === true,
+    };
+  }
+
+  /** The voice budget in force, or null for none. */
+  get voiceBudget(): Readonly<Required<VoiceBudgetOptions>> | null {
+    return this.budget;
+  }
+
+  /** The budget's counters (`live` is counted on read). The same object every call. */
+  get voiceBudgetStats(): VoiceBudgetStats {
+    const st = this.budgetStats;
+    st.live = 0;
+    const b = this.budget;
+    if (b) for (const v of this.active) if (b.loops || !v.loop) st.live++;
+    return st;
+  }
+
+  /**
+   * Admit a new voice of `priority` under the budget: true when there is room or a voice of no
+   * higher priority was cut for it, false when it must be dropped.
+   */
+  private admit(priority: number, loop: boolean): boolean {
+    const b = this.budget;
+    if (!b || (loop && !b.loops)) return true;
+    for (;;) {
+      let live = 0;
+      let victim: VoiceImpl | null = null;
+      for (const v of this.active) {
+        if (v.loop && !b.loops) continue;
+        live++;
+        if (v.priority > priority) continue;
+        if (b.steal === 'oldest') {
+          victim ??= v;
+        } else if (!victim || v.priority < victim.priority) {
+          victim = v;
+        }
+      }
+      if (live < b.max) return true;
+      if (!victim) {
+        this.budgetStats.dropped++;
+        return false;
+      }
+      victim.stop(b.stealFade);
+      this.budgetStats.stolen++;
+    }
   }
 
   // ------------------------------------------------------------ sounds
@@ -1873,7 +2398,7 @@ export class AudioEngine {
    * Register a named sound from a spec (rendered lazily or via `prepare`) or an async buffer
    * factory. `maxVoices` caps simultaneous plays of this sound (oldest is stolen). Default 8.
    */
-  define(name: string, source: SoundSource, opts: { maxVoices?: number } = {}): void {
+  define(name: string, source: SoundSource, opts: DefineSoundOptions = {}): void {
     const prev = this.sounds.get(name);
     for (const v of prev?.voices ?? []) v.stop();
     this.spriteSheets.delete(name);
@@ -1883,6 +2408,7 @@ export class AudioEngine {
       pending: null,
       voices: [],
       maxVoices: opts.maxVoices ?? 8,
+      priority: opts.priority ?? 0,
     });
   }
 
@@ -1896,7 +2422,7 @@ export class AudioEngine {
    * (a loop repeats between the clip's `loopPoints`, or its whole range); `play('name')` still
    * plays the whole buffer. `maxVoices` caps the sheet's simultaneous plays, every clip counted.
    */
-  defineSprites(name: string, sheet: SpriteSheet, opts: { maxVoices?: number } = {}): void {
+  defineSprites(name: string, sheet: SpriteSheet, opts: DefineSoundOptions = {}): void {
     const source: SoundSource = sheet.buffer
       ? ((() => Promise.resolve(sheet.buffer!)) as () => Promise<AudioBuffer>)
       : (sheet.source ?? (() => Promise.reject(new Error(`sprite sheet "${name}" has no buffer`))));
@@ -1965,7 +2491,10 @@ export class AudioEngine {
    * unavailable: a click sound arriving seconds late after unlock would be wrong.
    */
   play(sound: string | AudioBuffer, opts: AudioPlayOptions = {}): Voice {
-    if (this._state !== 'running' || !this.ctx || this._halted) return NULL_VOICE;
+    if (this._state !== 'running' || !this.ctx || this._halted) {
+      this.lazyWake();
+      return NULL_VOICE;
+    }
     return this.startVoice(sound, false, opts, false);
   }
 
@@ -1975,6 +2504,7 @@ export class AudioEngine {
    */
   loop(sound: string | AudioBuffer, opts: AudioPlayOptions = {}): Voice {
     if (this._state === 'unavailable' || this._halted) return NULL_VOICE;
+    this.lazyWake();
     return this.startVoice(sound, true, opts, this._state !== 'running');
   }
 
@@ -1999,6 +2529,16 @@ export class AudioEngine {
       console.warn(`[audio] unknown sound "${sound}"`);
       return NULL_VOICE;
     }
+    const bus = opts.bus;
+    if (bus !== undefined && !this.hasBus(bus)) {
+      console.warn(`[audio] unknown bus "${bus}" (addBus first)`);
+      return NULL_VOICE;
+    }
+    const priority = opts.priority ?? entry?.priority ?? 0;
+    // The sound's own cap steals from itself first; the budget only acts when that frees nothing.
+    if (!(entry && entry.voices.length >= entry.maxVoices) && !this.admit(priority, loop)) {
+      return NULL_VOICE;
+    }
     const voice: VoiceImpl = new VoiceImpl(
       this,
       loop,
@@ -2015,6 +2555,7 @@ export class AudioEngine {
       },
       schedule,
     );
+    voice.priority = priority;
     this.active.add(voice);
     if (entry) {
       entry.voices.push(voice);
@@ -2067,10 +2608,10 @@ export class AudioEngine {
    * with an optional fade, or only those on `bus`. The options form adds `except`:
    * `stopAll({ except: ['music'] })` clears the effects and keeps the score.
    */
-  stopAll(fade: number | StopAllOptions = 0, bus?: OutputBus): void {
+  stopAll(fade: number | StopAllOptions = 0, bus?: BusId): void {
     const o: StopAllOptions = typeof fade === 'object' ? fade : { fade, bus };
     const f = o.fade ?? 0;
-    const hit = (b: BusName) => (!o.bus || b === o.bus) && !o.except?.includes(b);
+    const hit = (b: BusId) => (!o.bus || b === o.bus) && !o.except?.includes(b);
     for (const v of [...this.active]) if (hit(v.bus)) v.stop(f);
     for (const [v, b] of [...this.registered]) if (hit(b)) v.stop(f);
   }
@@ -2080,7 +2621,7 @@ export class AudioEngine {
    * every bus when `bus` is omitted or `master`. A voice leaves the list the moment `stop` is
    * called or its source ends. Allocates one array per call; `forEachVoice` allocates nothing.
    */
-  voices(bus?: BusName): readonly Voice[] {
+  voices(bus?: BusId): readonly Voice[] {
     const out: Voice[] = [];
     this.forEachVoice(bus, (v) => {
       out.push(v);
@@ -2088,11 +2629,20 @@ export class AudioEngine {
     return out;
   }
 
-  /** `voices(bus)` without the array: `fn(voice, bus)` for each live voice. */
-  forEachVoice(bus: BusName | undefined, fn: (voice: Voice, bus: BusName) => void): void {
+  /**
+   * `voices(bus)` without the array: `fn(voice, bus)` for each live voice. Over every bus, a
+   * custom bus's voices come with its name (a callback typed `BusName` sees it as a string).
+   */
+  forEachVoice(bus: BusName | undefined, fn: (voice: Voice, bus: BusName) => void): void;
+  forEachVoice(bus: BusId | undefined, fn: (voice: Voice, bus: BusId) => void): void;
+  forEachVoice(
+    bus: BusId | undefined,
+    fn: ((voice: Voice, bus: BusName) => void) | ((voice: Voice, bus: BusId) => void),
+  ): void {
+    const each = fn as (voice: Voice, bus: BusId) => void;
     const all = bus === undefined || bus === 'master';
-    for (const v of this.active) if (all || v.bus === bus) fn(v, v.bus);
-    for (const [v, b] of this.registered) if ((all || b === bus) && v.playing) fn(v, b);
+    for (const v of this.active) if (all || v.bus === bus) each(v, v.bus);
+    for (const [v, b] of this.registered) if ((all || b === bus) && v.playing) each(v, b);
   }
 
   /**
@@ -2102,7 +2652,7 @@ export class AudioEngine {
    * `pause` and restored by `unpause`. Returns the unregister; a voice whose `playing` is false
    * is skipped meanwhile.
    */
-  register(voice: Voice, bus: BusName): () => void {
+  register(voice: Voice, bus: BusId): () => void {
     this.registered.set(voice, bus);
     return () => {
       this.registered.delete(voice);
@@ -2128,7 +2678,7 @@ export interface VoiceAdapterOptions {
   /** The raw source: a buffer or oscillator source, a media element source, a worklet. */
   source: AudioNode;
   /** Bus the adapter's gain feeds. Default `sfx`. */
-  bus?: OutputBus;
+  bus?: BusId;
   /** Linear gain to start at. Default 1. */
   gain?: number;
   /** Called once the voice is stopped (after its fade) or `end()` ran. */
