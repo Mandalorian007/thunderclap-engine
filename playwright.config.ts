@@ -82,6 +82,7 @@ export const WEBKIT_SPECS = [
   'core',
   'kit',
   'models',
+  'actors',
   'mesh',
   'views',
   'stream',

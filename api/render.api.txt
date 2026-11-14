@@ -282,7 +282,7 @@ interface DrawParams extends InstanceParams {
 class DrawSet {
     readonly label: string;
     readonly kind: DrawSetKind;
-    readonly cull: 'none' | 'cpu' | 'gpu';
+    readonly cull: 'none' | 'cpu' | 'gpu' | 'external';
     readonly capacity: number;
     readonly pass: CorePass;
     readonly order: number;
@@ -306,7 +306,7 @@ class DrawSet {
 }
 
 ## DrawSetCull  (type-only)
-type DrawSetCull = 'none' | 'cpu' | 'gpu' | 'auto';
+type DrawSetCull = 'none' | 'cpu' | 'gpu' | 'auto' | 'external';
 
 ## DrawSetDesc  (type-only)
 interface DrawSetDesc {
@@ -327,6 +327,7 @@ interface DrawSetDesc {
         layout: GPUBindGroupLayout;
         group: GPUBindGroup;
     }[];
+    args?: GPUBuffer;
 }
 
 ## DrawSetKind  (type-only)
