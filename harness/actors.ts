@@ -21,10 +21,12 @@ import {
   Camera,
   createRenderCore,
   createRenderView,
+  GpuTimer,
   gpuDiagnostics,
   installGpuErrorLogging,
   SKIN_JOINTS_BYTE_OFFSET,
   setViewFromCamera,
+  supportsTimestamps,
   VERTEX_SKINNED_STRIDE,
 } from '@thunderclap-engine/engine/render';
 import type { HarnessActorsState } from './actors-state';
@@ -32,6 +34,8 @@ import type { HarnessActorsState } from './actors-state';
 const root = document.getElementById('root') as HTMLElement;
 const params = new URLSearchParams(location.search);
 const n = Math.max(1, Math.min(4096, Number(params.get('n') ?? 1000) | 0));
+const emptyModels = Math.max(0, Math.min(120, Number(params.get('models') ?? 0) | 0));
+const timing = params.get('timing') === '1';
 
 const state: HarnessActorsState = {
   ready: false,
@@ -50,6 +54,10 @@ const state: HarnessActorsState = {
   drawnPerDraw: [],
   drawn: 0,
   cpuMs: 0,
+  emptyModels,
+  timestamps: false,
+  gpuMs: -1,
+  gpuSamples: 0,
 };
 let wantCheck = false;
 window.__harnessActors = {
@@ -227,6 +235,7 @@ async function main(): Promise<void> {
     bonesPerSlot: 8,
     lods: [35, 120],
     maxViews: 1,
+    maxModels: 2 + emptyModels,
     sampleLight,
   });
   // The robot's part order: body, head, armL, armR, legL, legR.
@@ -254,6 +263,17 @@ async function main(): Promise<void> {
       ],
     }),
   );
+  // Models no actor shows (`?models=M`): their draws are empty every frame.
+  for (let m = 0; m < emptyModels; m++) {
+    actors.addModel(
+      defineRig({
+        kind: 'rigid',
+        model: { ...ROBOT, name: `robot-${m}` },
+        lods: [ROBOT_FAR],
+        materials: MATS,
+      }),
+    );
+  }
   const fig = figure();
   const figureModel = actors.addModel(
     defineRig({
@@ -304,6 +324,7 @@ async function main(): Promise<void> {
     width: 1,
     height: 1,
     clear: { r: 0.55, g: 0.66, b: 0.78, a: 1 },
+    timestamps: undefined as ((label: string) => GPURenderPassTimestampWrites | undefined) | undefined,
   };
   // Readback for `check()`.
   const boneBytes = CHECK_SLOTS * actors.bonesPerSlot * 48;
@@ -320,6 +341,18 @@ async function main(): Promise<void> {
   });
   const cpuSkin = new Float32Array(CHECK_SLOTS * actors.bonesPerSlot * 12);
   let checking = false;
+
+  // GPU time (`?timing=1`): every frame sampled that the timer is free for.
+  state.timestamps = supportsTimestamps(device);
+  const timer = timing && state.timestamps ? new GpuTimer(device) : null;
+  const gpuTimes: number[] = [];
+  timer?.onResult((r) => {
+    gpuTimes.push(r.totalMs);
+    if (gpuTimes.length > 120) gpuTimes.shift();
+    state.gpuSamples++;
+    state.gpuMs = [...gpuTimes].sort((p, q) => p - q)[gpuTimes.length >> 1]!;
+  });
+  const timestamps = timer ? (label: string) => timer.pass(label) : undefined;
 
   state.gpu = 'ok';
   state.ready = true;
@@ -354,6 +387,9 @@ async function main(): Promise<void> {
     });
 
     const encoder = device.createCommandEncoder();
+    const timed = timer?.begin() ?? false;
+    target.timestamps = timed ? timestamps : undefined;
+    if (timed) timer!.mark(encoder);
     actors.prepare(encoder, views, t);
     core.prepare(encoder, views);
     const doCheck = wantCheck && !checking;
@@ -364,7 +400,9 @@ async function main(): Promise<void> {
       encoder.copyBufferToBuffer(actors.args, 0, argsRead, 0, argsBytes);
     }
     core.draw(encoder, 0, target);
+    if (timed) timer!.resolve(encoder);
     device.queue.submit([encoder.finish()]);
+    if (timed) timer!.afterSubmit();
     times.push(performance.now() - t0);
     if (times.length > 60) times.shift();
 

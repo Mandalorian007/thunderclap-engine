@@ -1,0 +1,11 @@
+
+> @thunderclap-engine/engine@2.0.0-next.9 test:e2e /Users/matthewfontana/repos/thunderclap-engine/.claude/worktrees/b10-actor-fit
+> playwright test e2e/actors.spec.ts --project=desktop-1280 -g empty
+
+
+Running 1 test using 1 worker
+
+[actors] 16 actors: GPU 0.053 ms with 2 models, 0.063 ms with 122 (244 draws)
+  ✓  1 [desktop-1280] › e2e/actors.spec.ts:93:1 › models no actor shows draw nothing: their empty indirect draws are left out (19.9s)
+
+  1 passed (34.1s)

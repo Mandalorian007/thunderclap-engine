@@ -16,6 +16,7 @@ export {
   ARGS_BYTES,
   ARGS_WORDS,
   CULL_WGSL,
+  DRAW_ARGS_BYTES,
   cullSlotsCpu,
   SLOT,
   SLOT_BYTES,

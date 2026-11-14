@@ -81,3 +81,32 @@ test('a crowd costs the same GPU calls at 100 and 1,000 actors, posed as the CPU
   expect(large.bundleBuilds).toBe(1);
   expect(errors).toEqual([]);
 });
+
+/** Open `query` and, with timestamps, wait for 150 GPU samples. */
+async function timed(page: Page, wrapper: string, query: string): Promise<HarnessActorsState> {
+  const s = await open(page, wrapper, query);
+  if (!s.timestamps) return s;
+  await expect.poll(async () => (await read()).gpuSamples, { timeout: 30_000 }).toBeGreaterThan(150);
+  return read();
+}
+
+test('models no actor shows draw nothing: their empty indirect draws are left out', async ({
+  page,
+  wrapper,
+}) => {
+  test.skip(wrapper !== 'top', 'timing on the top page only');
+  const bare = await timed(page, wrapper, 'n=16&models=0&timing=1');
+  const many = await timed(page, wrapper, 'n=16&models=120&timing=1');
+  expect(many.emptyModels).toBe(120);
+  for (const s of [bare, many]) {
+    expect(s.gpuErrors).toBe(0);
+    expect(s.drawn).toBeGreaterThan(0);
+  }
+  if (many.timestamps) {
+    console.log(
+      `[actors] 16 actors: GPU ${bare.gpuMs.toFixed(3)} ms with 2 models, ${many.gpuMs.toFixed(3)} ms with 122 (244 draws)`,
+    );
+    expect(many.gpuMs).toBeGreaterThan(0);
+  }
+  expect(errors).toEqual([]);
+});
