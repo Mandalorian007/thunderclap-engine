@@ -14,7 +14,7 @@ use crate::core::Core;
 use crate::game::Game;
 use crate::sim::Sim;
 
-/// A [`Sim`] driven by hand. See the [module docs](self).
+/// A [`Sim`] driven by hand. See the [crate docs](crate).
 pub struct Driver<G: Game> {
     sim: Sim<G>,
     next_conn: ConnId,
