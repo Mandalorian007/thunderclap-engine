@@ -22,9 +22,9 @@ characters; the page signs in as the dev guest `guest:<name>`). `?server=ws://ho
 points a page at another server; `pnpm dev` passes the server's address to the page for you
 (`CLIENT_PORT` and `SERVER_PORT` change the ports).
 
-The server needs Rust. In the engine repo `server/Cargo.toml` names `thunderclap-server` by path
-(`../../../crates`); a copy made by `pnpm create-game` names it by git tag (`server-v<major>.<minor>`),
-so it builds on its own.
+The server needs Rust. A copy made by `pnpm create-game` names `thunderclap-server` by git tag
+(`server-v<major>.<minor>`) in `server/Cargo.toml`, so it builds on its own; the template inside
+the engine names it by path (`../../../crates`).
 
 In the engine repo: `pnpm template:arena-2d-server` from the root.
 
