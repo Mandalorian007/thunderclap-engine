@@ -27,8 +27,6 @@ export interface UiFitState {
   uploads: number;
   /** The panel has given way. */
   given: boolean;
-  /** The search field's text, as the model has it. */
-  find: string;
 }
 
 export interface UiFitApi {

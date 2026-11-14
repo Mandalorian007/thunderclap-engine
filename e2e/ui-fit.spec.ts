@@ -8,6 +8,7 @@
  * - a row moved to the top slides there;
  * - type-ahead: a letter typed with nothing focused goes into the search field; its close key in
  *   the empty field closes the panel (it slides out), on the page and through the surface's keys;
+ * - text typed through the surface's keys shows in the page's field (the model is the one truth);
  * - the held slot says down and up (no tap) on the page and on the surface;
  * - the panel gives way while a sheet is open on a small screen.
  */
@@ -113,8 +114,11 @@ test('type-ahead fills the search field; its close key closes the panel', async 
 
 test('the surface’s keys: type-ahead and the close key', async ({ page }) => {
   expect(await page.evaluate(() => window.__harnessUiFit!.worldKey('t', 'KeyT'))).toBe(true);
-  await expect.poll(() => read(page).then((s) => s.find)).toBe('t');
+  // Typed on the surface, shown on the page: the model is the one truth, the game writes nothing back.
+  const find = page.locator('#page input[data-id="find"]');
+  await expect(find).toHaveValue('t');
   await page.evaluate(() => window.__harnessUiFit!.worldKey('Backspace'));
+  await expect(find).toHaveValue('');
   await page.evaluate(() => window.__harnessUiFit!.worldKey('e', 'KeyE'));
   await expect.poll(() => events(page)).toContain('find:close:null');
 });

@@ -308,6 +308,16 @@ export class DomPresenter implements SpecPresenter {
   private readonly litCls: string;
   /** It is drawn given way (`SpecPanel.given`). */
   private given = false;
+  /** Keys another presenter's field moved (`SpecModel.follow`), written at the next apply. */
+  private readonly followed: Int32Array;
+  private readonly followMark: Uint8Array;
+  private followN = 0;
+  private readonly follower = (i: number, _v: SpecValue, from: unknown): void => {
+    if (from === this || this.followMark[i] === 1) return;
+    this.followMark[i] = 1;
+    this.followed[this.followN++] = i;
+    this.m.changed();
+  };
   /** The last pointer down on the page was a touch. */
   private lastTouch = false;
 
@@ -315,6 +325,9 @@ export class DomPresenter implements SpecPresenter {
     this.p = panel;
     this.m = panel.model;
     this.host = host;
+    this.followed = new Int32Array(panel.spec.keys.length);
+    this.followMark = new Uint8Array(panel.spec.keys.length);
+    this.m.followers.push(this.follower);
     this.doc = host.ownerDocument;
     this.opts = opts;
     this.scale = opts.scale ?? 1;
@@ -412,6 +425,13 @@ export class DomPresenter implements SpecPresenter {
       if (relaid) this.placeAll();
       for (let j = 0; j < m.dirtyN; j++) this.writeKey(m.dirtyKeys[j]!);
     }
+    // What another presenter's field typed (the model has it already).
+    for (let j = 0; j < this.followN; j++) {
+      const k = this.followed[j]!;
+      this.followMark[k] = 0;
+      this.writeKey(k);
+    }
+    this.followN = 0;
     // Slides run once the rows stand at their new places; a window follows its list's new size.
     for (let o = 0; o < this.lists.length; o++) {
       const lv = this.lists[o]!;
@@ -520,6 +540,8 @@ export class DomPresenter implements SpecPresenter {
   }
 
   dispose(): void {
+    const fi = this.m.followers.indexOf(this.follower);
+    if (fi !== -1) this.m.followers.splice(fi, 1);
     this.observer?.disconnect();
     this.observer = null;
     for (const f of this.off) f();
@@ -1625,12 +1647,12 @@ export class DomPresenter implements SpecPresenter {
       if (k === K_FIELD) {
         const f = c.nodes[i] as SpecField;
         if (f.value && !f.value.b.startsWith('row.'))
-          this.m.follow(c.keyIndex.get(f.value.b)!, input.value);
+          this.m.follow(c.keyIndex.get(f.value.b)!, input.value, this);
         this.emit(i, row, 'input', input.value);
       } else if (k === K_RANGE) {
         const r = c.nodes[i] as SpecRange;
         const v = Number(input.value);
-        if (!r.value.b.startsWith('row.')) this.m.follow(c.keyIndex.get(r.value.b)!, v);
+        if (!r.value.b.startsWith('row.')) this.m.follow(c.keyIndex.get(r.value.b)!, v, this);
         this.emit(i, row, 'change', v);
       }
     });
