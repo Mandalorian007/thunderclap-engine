@@ -83,13 +83,13 @@ export const CORE_DRAWABLE_WGSL = `${CORE_VIEW_WGSL}
 /** @internal What the core needs from a pass member (a draw set or a drawable). */
 export interface PassMember {
   readonly count: number;
-  /** False while a member cannot draw yet (an external set waiting for its args); absent: ready. */
-  readonly ready?: boolean;
   readonly depth: boolean;
   readonly order: number;
   readonly pass: CorePass;
   readonly readsDepth?: boolean;
   readonly readsColor?: boolean;
+  /** False while a restored draw set waits for its bind groups (ws/core-passes). */
+  readonly ready?: boolean;
   encoding(): string;
   inView?(group: number): boolean;
   bundle(

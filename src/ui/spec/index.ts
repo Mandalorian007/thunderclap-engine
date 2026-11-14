@@ -1,6 +1,7 @@
 // ws/ui-spec: UI described as data. Words bound to model keys (`b`), a model that marks what
 // changed, a pure allocation-free layout, `panel(spec)` / `hud(spec)`, a DOM presenter that writes
-// only what changed, and a look from `theme(tokens)`. See ./README.md.
+// only what changed, a world presenter for a quad in the scene and a head-following screen
+// (ws/ui-world), and a look from `theme(tokens)`. See ./README.md.
 export type { SpecBoxes } from './boxes';
 export type { CompiledSpec } from './compile';
 export {
@@ -43,6 +44,7 @@ export {
   type SpecSchedule,
 } from './panel';
 export { type DomOptions, DomPresenter, presentDom } from './present-dom';
+export { presentWorld, type WorldOptions, WorldPresenter } from './present-world';
 export { SPEC_HOLD_MS, SPEC_HOLD_SLOP, type SpecTimer } from './press';
 export { defaultSpecTokens, type SpecTheme, type SpecTokens, specTokenVar, theme } from './theme';
 export {
@@ -76,3 +78,13 @@ export {
   type SpecText,
   type SpecTextStyle,
 } from './words';
+export {
+  presentWorldHud,
+  presentWorldModal,
+  type WorldHudOptions,
+  type WorldHudView,
+  type WorldModal,
+  type WorldModalOptions,
+  type WorldScreenOptions,
+  worldScreen,
+} from './world-screen';

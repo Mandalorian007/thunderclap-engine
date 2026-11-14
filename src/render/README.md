@@ -1354,7 +1354,9 @@ own, encoded per view after the pass's sets: a full-screen draw such as the sky
 attachment unless its `depth` is `'none'`; `ctx` (`CorePassContext`, one object rewritten per
 call) carries the view index, the core view bind group and its layout (group 0), the colour and
 depth formats and whether depth is read-only. A `'read'` pass that comes before any depth
-write now clears depth instead of reading uncleared depth.
+write now clears depth instead of reading uncleared depth. When a drawable in that pass samples depth (`readsDepth`), a depth-only
+`core depth clear` pass runs first and the pass stays read-only.
+
 ### Drawables (ws/core-effects)
 
 Anything that is not a draw set joins the core as a `CoreDrawable` (`core.addDrawable(d)`,

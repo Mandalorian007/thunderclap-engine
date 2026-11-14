@@ -204,6 +204,8 @@ export class RenderCore {
   private rebuildTurn: DrawSet | null = null;
   /** The last target's own depth (`CoreTarget.depth`), which `sceneDepthView` then is. */
   private extDepth: GPUTextureView | null = null;
+  /** Depth alone, cleared: before a read pass whose drawable samples depth nothing wrote yet. */
+  private readonly passDescDepthClear: GPURenderPassDescriptor;
   /** The context handed to a pass's `encode`, rewritten per call. */
   private readonly passCtx = {} as CorePassContext;
   private readonly coalesce: boolean;
@@ -248,6 +250,11 @@ export class RenderCore {
     this.passDescDepth = {
       label: 'core pass',
       colorAttachments: [this.colorAttachment],
+      depthStencilAttachment: this.depthAttachment,
+    };
+    this.passDescDepthClear = {
+      label: 'core depth clear',
+      colorAttachments: [],
       depthStencilAttachment: this.depthAttachment,
     };
     const core = this;
@@ -359,10 +366,12 @@ export class RenderCore {
     for (const fn of this.restoredFns.slice()) fn(device);
   }
 
-  /** True when some set has live slots to draw (ws/core-passes; the `Renderer` skips the core otherwise). */
+  /** True when some set has live slots, or some drawable is active (ws/core-passes; the `Renderer` skips the core otherwise). */
   get hasWork(): boolean {
     const sets = this.sets;
     for (let i = 0; i < sets.length; i++) if (sets[i]!.count > 0) return true;
+    const drawables = this.drawables;
+    for (let i = 0; i < drawables.length; i++) if (drawables[i]!.count > 0) return true;
     return false;
   }
 
@@ -609,14 +618,14 @@ export class RenderCore {
       let work = pass.encode !== null;
       let wantsDepth = work && pass.depth !== 'none';
       let readsColor = false;
-      let readsDepth = false;
+      let samplesDepth = false;
       for (let i = 0; i < sets.length; i++) {
         const s = sets[i]!;
         if (s.count === 0 || s.ready === false || (s.inView && !s.inView(group))) continue;
         work = true;
         if (s.depth && pass.depth !== 'none') wantsDepth = true;
         if (s.readsColor) readsColor = true;
-        if (s.readsDepth) readsDepth = true;
+        if (s.readsDepth) samplesDepth = true;
       }
       if (!work) continue;
       if (readsColor && !colorCopied && target.texture && this.colorTexture) {
@@ -624,9 +633,20 @@ export class RenderCore {
         colorCopied = true;
       }
       const depthFormat = wantsDepth ? this.depthFormat : undefined;
-      // A read pass with nothing written before it clears depth instead (nothing to read),
-      // unless a member samples depth (`readsDepth`), which needs the attachment read-only.
-      const readOnly = wantsDepth && pass.depth === 'read' && (depthCleared || readsDepth);
+      if (wantsDepth && samplesDepth && pass.depth === 'read' && !depthCleared) {
+        // A drawable samples depth here, so the pass must be read-only: clear depth first.
+        const d = this.depthAttachment;
+        d.view = target.depth ?? this.depthFor(target.width, target.height);
+        d.depthReadOnly = false;
+        d.depthLoadOp = 'clear';
+        d.depthStoreOp = 'store';
+        encoder.beginRenderPass(this.passDescDepthClear).end();
+        st.calls += 2;
+        st.passes++;
+        depthCleared = true;
+      }
+      // A read pass with nothing written before it clears depth instead (nothing to read).
+      const readOnly = wantsDepth && pass.depth === 'read' && depthCleared;
       const color = this.colorAttachment;
       color.view = target.view;
       if (first && target.clear) {

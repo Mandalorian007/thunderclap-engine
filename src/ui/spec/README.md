@@ -12,6 +12,8 @@ The public story (words, `panel`, `hud`, `presentDom`, `theme`) is in [../README
 | `press.ts` | `SpecPressable`: tap, hold, slop and a context press on an injected timer. |
 | `panel.ts` | `SpecPanel` and `panel(spec)`: one apply a frame, only when something changed. |
 | `present-dom.ts` | `presentDom`: one element per word, pooled list rows, delegated events, one stylesheet. |
+| `present-world.ts` | `presentWorld`: the boxes painted on a `WorldPanel`, ray presses and keys as the DOM's events, dirty-box repaints. |
+| `world-screen.ts` | `worldScreen` (a lazy head-following panel), `presentWorldHud`, `presentWorldModal`. |
 | `hud.ts` | `hud`, `presentHud` (through `ui.layout`), `presentModal` (through `ui.stack`), `specScale`. |
 | `theme.ts` | `theme(tokens)`: `SpecTokens` as `--tcs-*` custom properties. |
 | `measure.ts` | `wrapCount`, `wrapText`, `textWidth`, `measureWith`. |
@@ -25,5 +27,5 @@ Rules that keep it cheap:
   dirty keys and dirty row fields, and moves pooled rows on a resort; a scroll writes only
   `boxes.scroll` (for hit tests by a world presenter).
 
-Not ported from Forge Wilds: the game-specific words (item art, aim, give-way), the world presenter
-(the next step draws `SpecBoxes` on a world panel), list windowing.
+Not ported from Forge Wilds: the game-specific words (item art, aim, give-way), list windowing.
+The world presenter came in ws/ui-world (see `../README.md`).

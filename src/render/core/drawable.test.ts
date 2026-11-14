@@ -193,6 +193,11 @@ describe('core drawables', () => {
     stereo(r, target(r.device));
     expect(r.core.targetsVersion).toBe(v);
     expect(d.records).toBe(1);
+    // Nothing wrote depth first: a depth-only clear pass, then the sampling pass read-only:
+    // one per eye, two stereo frames.
+    expect(d.lastCtx.depthReadOnly).toBe(true);
+    const clears = renders(r.fake).filter((p) => p.label === 'core depth clear');
+    expect(clears.length).toBe(4);
     // A new size re-makes depth: the version moves and the bundle is re-recorded.
     const big = r.device.createTexture({
       size: [400, 200],

@@ -101,6 +101,17 @@ export class PanelStack {
   private owner: PadOwner = 'game';
   private readonly doc: Document;
   private readonly onKey = (e: KeyboardEvent) => this.handleKey(e);
+  /**
+   * The control last pressed by a pointer: WebKit doesn't focus a clicked button, so a panel it
+   * opens takes this as its opener when nothing is focused.
+   */
+  private pressed: Element | null = null;
+  private readonly onPress = (e: Event) => {
+    const t = e.target as Element | null;
+    this.pressed =
+      t?.closest?.('button, input, select, textarea, a[href], [tabindex]:not([tabindex="-1"])') ??
+      null;
+  };
 
   /**
    * @param container where panel hosts are appended (the overlay's `panels` layer).
@@ -114,6 +125,7 @@ export class PanelStack {
   ) {
     this.doc = container.ownerDocument;
     this.doc.addEventListener('keydown', this.onKey);
+    this.doc.addEventListener('pointerdown', this.onPress, true);
   }
 
   get size(): number {
@@ -189,7 +201,7 @@ export class PanelStack {
       host,
       panel,
       opts,
-      restoreFocus: this.doc.activeElement,
+      restoreFocus: this.opener(),
       open: true,
       handle: {
         element: panel,
@@ -248,6 +260,8 @@ export class PanelStack {
   destroy(): void {
     this.clear();
     this.doc.removeEventListener('keydown', this.onKey);
+    this.doc.removeEventListener('pointerdown', this.onPress, true);
+    this.pressed = null;
     this.listeners.clear();
     this.padListeners.clear();
   }
@@ -282,6 +296,13 @@ export class PanelStack {
     if (next === this.owner) return;
     this.owner = next;
     for (const fn of this.padListeners) fn(next);
+  }
+
+  /** Who opened a panel: the focused element, else (WebKit: clicks don't focus) the control last pressed. */
+  private opener(): Element | null {
+    const a = this.doc.activeElement;
+    if (a && a !== this.doc.body && a !== this.doc.documentElement) return a;
+    return this.pressed?.isConnected ? this.pressed : a;
   }
 
   private canRestore(el: HTMLElement | null): el is HTMLElement {
@@ -337,17 +358,14 @@ export class PanelStack {
         top.panel.focus();
         return;
       }
-      const first = items[0]!;
-      const last = items[items.length - 1]!;
+      // Always by hand (ws/ui-world): WebKit's native Tab skips buttons (Safari's default
+      // "Press Tab to highlight each item" is off), so leaning on it lets focus escape the panel.
+      e.preventDefault();
       const active = this.doc.activeElement;
-      const inside = active instanceof Node && top.panel.contains(active);
-      if (e.shiftKey && (active === first || !inside)) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && (active === last || !inside)) {
-        e.preventDefault();
-        first.focus();
-      }
+      const at = active instanceof HTMLElement ? items.indexOf(active) : -1;
+      const n = items.length;
+      const next = at === -1 ? (e.shiftKey ? n - 1 : 0) : (at + (e.shiftKey ? n - 1 : 1)) % n;
+      items[next]!.focus();
       return;
     }
     this.handleArrow(e, top);
