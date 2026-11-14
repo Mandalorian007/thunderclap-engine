@@ -1,6 +1,6 @@
 {
   "name": "@thunderclap-engine/engine",
-  "version": "2.0.0-next.5",
+  "version": "2.0.0-next.6",
   "type": "module",
   "description": "ThunderClap: a WebGPU game engine for the browser. It knows nothing about any game.",
   "license": "MIT",
