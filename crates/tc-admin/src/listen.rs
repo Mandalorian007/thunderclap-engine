@@ -104,6 +104,11 @@ impl Revoke for tc_auth::SessionAuth {
 /// why not out. Runs off the runtime's threads.
 pub type GameRequests = Arc<dyn Fn(&str, Value) -> Result<Value, String> + Send + Sync>;
 
+/// The game's own status (players by name, its world's numbers), asked at
+/// every status request on the runtime's thread: keep it quick (read what
+/// the game publishes, never wait on its loop).
+pub type GameStatus = Arc<dyn Fn() -> Value + Send + Sync>;
+
 /// What the channel reads and drives: the server's live parts. Each is
 /// optional but the loop; a request for a missing one is refused.
 pub struct Live {
@@ -125,6 +130,8 @@ pub struct Live {
     pub reports: Option<Reports>,
     /// The game's own requests.
     pub game: Option<GameRequests>,
+    /// The game's own status, in every [`Status`]'s `game`.
+    pub status: Option<GameStatus>,
 }
 
 impl Live {
@@ -140,6 +147,7 @@ impl Live {
             backups: None,
             reports: None,
             game: None,
+            status: None,
         }
     }
 }
@@ -430,6 +438,7 @@ impl Answerer {
             limited: game.limited,
             frames_sent: io.frames_written,
             bytes_sent: io.bytes_written,
+            game: self.live.status.as_ref().map(|f| f()),
         }
     }
 }

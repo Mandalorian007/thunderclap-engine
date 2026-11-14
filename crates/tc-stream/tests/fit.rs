@@ -326,7 +326,10 @@ fn a_layer_change_is_sent_on_the_priority_lane() {
     g.stream.layer_changed(CLIMATE, at(1, 0, 1));
     assert!(g.stream.has_work());
     g.stream.flush(&g.src, &mut g.lanes);
-    assert!(g.lanes.lane(A).bulk.is_empty(), "nothing waits behind loads");
+    assert!(
+        g.lanes.lane(A).bulk.is_empty(),
+        "nothing waits behind loads"
+    );
     assert_eq!(g.lanes.lane(A).priority.len(), 3);
     assert!(g.lanes.lane(B).priority.is_empty(), "B holds none of them");
     g.deliver();
@@ -350,7 +353,10 @@ fn a_layer_change_still_queued_is_folded_into_its_whole_frame() {
     g.src.climate.borrow_mut().insert((0, 0), 42);
     g.stream.layer_changed(CLIMATE, at(0, 0, 0));
     g.stream.flush(&g.src, &mut g.lanes);
-    assert!(g.lanes.lane(A).priority.is_empty(), "folded, not sent ahead");
+    assert!(
+        g.lanes.lane(A).priority.is_empty(),
+        "folded, not sent ahead"
+    );
     g.deliver();
     g.settle();
     let p = g.player(A);
@@ -458,7 +464,11 @@ fn flush_conn_sends_one_connection_its_changes_past_the_budget() {
         g.src.world.set(&mut g.stream, at(x, 0, 0), 0, 4);
     }
     g.stream.flush_conn(A, &g.src, &mut g.lanes);
-    assert_eq!(g.lanes.lane(A).priority.len(), 3, "all three, past the budget");
+    assert_eq!(
+        g.lanes.lane(A).priority.len(),
+        3,
+        "all three, past the budget"
+    );
     assert!(g.lanes.lane(B).priority.is_empty(), "B waits for the flush");
     g.settle();
     g.check(A);
