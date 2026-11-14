@@ -203,6 +203,10 @@ test('the world keeps its promises: terrain tops in 16..44, spawn on solid land'
 });
 
 test('a click breaks the looked-at block and re-meshes fast', async ({ page, wrapper }) => {
+  test.fixme(
+    test.info().project.use.browserName === 'webkit',
+    'Playwright drives touch through CDP, which is Chromium-only',
+  );
   await open(page, wrapper);
   // Look steeply down at the ground just ahead.
   await aim(0, -1.2);
