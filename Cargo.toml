@@ -16,6 +16,8 @@ tc-wire-derive = { path = "crates/tc-wire-derive" }
 tc-tsgen = { path = "crates/tc-tsgen" }
 tc-net = { path = "crates/tc-net" }
 tc-auth = { path = "crates/tc-auth" }
+tc-store = { path = "crates/tc-store" }
+tc-sim = { path = "crates/tc-sim" }
 
 # tc-net: the connection layer.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }

@@ -109,6 +109,10 @@ pub enum Request<P: Protocol> {
         /// The connection.
         conn: ConnId,
     },
+    /// Nothing from a connection: whoever else holds a sender (the game's
+    /// owner, a timer) wakes the game so it looks at its other inputs. A
+    /// session never sends it.
+    Wake,
 }
 
 /// Whether the game is still taking requests, as sessions see it.

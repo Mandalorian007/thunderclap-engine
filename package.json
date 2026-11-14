@@ -182,6 +182,7 @@
     "check:rust": "node scripts/check-rust.mjs",
     "test:net-interop": "cargo test -p tc-net --test interop",
     "test:auth-interop": "cargo test -p tc-auth --test interop",
+    "test:sim-interop": "cargo test -p tc-sim --test net",
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "check:docs": "node scripts/check-docs.mjs",
     "check:snippets": "node scripts/check-snippets.mjs && node --test scripts/check-snippets.test.mjs",

@@ -1,0 +1,22 @@
+[package]
+name = "tc-sim"
+description = "ThunderClap's authoritative game loop: the Game trait, fixed-step clock, timing wheel and scheduler, change marks, input queues, hot reload and the loop that serves tc-net connections from a tc-store log"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+tc-wire.workspace = true
+tc-net.workspace = true
+tc-store.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+
+[lints]
+workspace = true
