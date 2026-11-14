@@ -2,12 +2,12 @@
  * Round-robin-ish one-shots: footsteps, impacts, hits. Picks one of several buffers at random,
  * never the one just played, with a little pitch and gain jitter so repeats do not sound stamped.
  */
-import type { AudioEngine, AudioPlayOptions, OutputBus, Voice } from './audio';
+import type { AudioEngine, AudioPlayOptions, BusId, Voice } from './audio';
 import { dbToGain } from './dsp';
 
 export interface VariationsOptions {
   /** Default `sfx`. */
-  bus?: OutputBus;
+  bus?: BusId;
   /** Random pitch offset in ± semitones (through `playbackRate`). Default 0. */
   pitchJitter?: number;
   /** Random level offset in ± dB. Default 0. */

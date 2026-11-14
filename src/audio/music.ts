@@ -11,7 +11,7 @@
  */
 import {
   type AudioEngine,
-  type OutputBus,
+  type BusId,
   rampParamTo,
   type Voice,
   type VoiceFilterKind,
@@ -24,7 +24,7 @@ export interface MusicOptions {
   /** Beats in a bar. Default 4. */
   beatsPerBar?: number;
   /** Bus the stems play on. Default `music`. */
-  bus?: OutputBus;
+  bus?: BusId;
   /** Beats a `setIntensity` crossfade takes. Default 1. */
   intensityFadeBeats?: number;
   /**
@@ -193,7 +193,7 @@ export function intensityGains(
 export function createMusic(mixer: AudioEngine, opts: MusicOptions): Music {
   const bpm = opts.bpm;
   const beatsPerBar = Math.max(1, Math.round(opts.beatsPerBar ?? 4));
-  const bus: OutputBus = opts.bus ?? 'music';
+  const bus: BusId = opts.bus ?? 'music';
   const beatDuration = 60 / bpm;
   const intensityFade = (opts.intensityFadeBeats ?? 1) * beatDuration;
   const stems = new Map<string, Stem>();

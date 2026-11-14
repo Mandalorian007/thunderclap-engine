@@ -18,12 +18,14 @@ class AudioEngine {
     get listener(): SpatialListener;
     get zones(): AudioZones;
     update(dt: number): void;
+    get watchdogRestarts(): number;
     trackFollower(v: VoiceImpl, on: boolean): void;
     trackSpatial(v: VoiceImpl): void;
     get pooledPanners(): number;
     get pooledFilters(): number;
     get occludedVoiceCount(): number;
     background(hidden: boolean): void;
+    wake(): void;
     get inBackground(): boolean;
     get halted(): boolean;
     onStateChange(fn: (s: AudioState) => void): () => void;
@@ -36,6 +38,10 @@ class AudioEngine {
     halt(): Promise<void>;
     dispose(): Promise<void>;
     acquirePanner(opts: SpatialOptions | undefined): PannerNode | null;
+    placePan(p: PannerNode, pan: number): void;
+    trackPanFallback(v: VoiceImpl, on: boolean): void;
+    syncPans(): void;
+    get panFallbackCount(): number;
     releasePanner(p: PannerNode): void;
     acquireBiquad(): BiquadFilterNode | null;
     releaseBiquad(f: BiquadFilterNode): void;
@@ -46,37 +52,44 @@ class AudioEngine {
     setZoneReverbSend(bus: OutputBus, level: number): void;
     get reverbSendLevels(): Readonly<Record<OutputBus, number>>;
     get effectiveReverbSendLevels(): Readonly<Record<OutputBus, number>>;
-    busNode(name: BusName): GainNode | null;
-    setBusScale(bus: BusName, scale: number, timeConstant?: number, key?: string): void;
-    clearBusScale(bus: BusName, key: string, timeConstant?: number): void;
-    busScale(bus: BusName, key?: string): number;
+    busNode(name: BusId): GainNode | null;
+    get volumeCurve(): VolumeCurve;
+    addBus(name: string, opts?: CustomBusOptions): void;
+    removeBus(name: string): void;
+    hasBus(name: BusId): boolean;
+    get customBuses(): readonly string[];
+    busSettings(name: BusId): Readonly<BusSettings> | null;
+    setBusScale(bus: BusId, scale: number, timeConstant?: number, key?: string): void;
+    clearBusScale(bus: BusId, key: string, timeConstant?: number): void;
+    busScale(bus: BusId, key?: string): number;
     pause(opts?: PauseOptions): void;
     unpause(): void;
     get paused(): boolean;
     get pausedBuses(): readonly OutputBus[];
     get pausedRate(): boolean;
-    isBusPaused(bus: BusName): boolean;
-    setVolume(bus: BusName, volume: number): void;
-    setMuted(bus: BusName, muted: boolean): void;
-    toggleMuted(bus: BusName): boolean;
+    get pausedCustomBuses(): readonly string[];
+    isBusPaused(bus: BusId): boolean;
+    setVolume(bus: BusId, volume: number): void;
+    setMuted(bus: BusId, muted: boolean): void;
+    toggleMuted(bus: BusId): boolean;
     applySettings(settings: unknown): void;
-    define(name: string, source: SoundSource, opts?: {
-        maxVoices?: number;
-    }): void;
+    setVoiceBudget(opts: VoiceBudgetOptions | null): void;
+    get voiceBudget(): Readonly<Required<VoiceBudgetOptions>> | null;
+    get voiceBudgetStats(): VoiceBudgetStats;
+    define(name: string, source: SoundSource, opts?: DefineSoundOptions): void;
     has(name: string): boolean;
-    defineSprites(name: string, sheet: SpriteSheet, opts?: {
-        maxVoices?: number;
-    }): void;
+    defineSprites(name: string, sheet: SpriteSheet, opts?: DefineSoundOptions): void;
     spriteSheet(name: string): SpriteSheet | null;
     load(name: string): Promise<AudioBuffer>;
     prepare(names?: readonly string[]): Promise<void>;
     buffer(name: string): AudioBuffer | null;
     play(sound: string | AudioBuffer, opts?: AudioPlayOptions): Voice;
     loop(sound: string | AudioBuffer, opts?: AudioPlayOptions): Voice;
-    stopAll(fade?: number | StopAllOptions, bus?: OutputBus): void;
-    voices(bus?: BusName): readonly Voice[];
+    stopAll(fade?: number | StopAllOptions, bus?: BusId): void;
+    voices(bus?: BusId): readonly Voice[];
     forEachVoice(bus: BusName | undefined, fn: (voice: Voice, bus: BusName) => void): void;
-    register(voice: Voice, bus: BusName): () => void;
+    forEachVoice(bus: BusId | undefined, fn: (voice: Voice, bus: BusId) => void): void;
+    register(voice: Voice, bus: BusId): () => void;
     get voiceCount(): number;
 }
 
@@ -87,6 +100,11 @@ interface AudioEngineOptions {
     settings?: unknown;
     limiter?: boolean | LimiterOptions;
     reverb?: ReverbOptions | null;
+    volumeCurve?: VolumeCurve;
+    voiceBudget?: VoiceBudgetOptions | null;
+    audioSession?: AudioSessionType;
+    lazyContext?: boolean;
+    watchdog?: boolean | AudioWatchdogOptions;
 }
 
 ## AudioFollowTarget  (type-only)
@@ -97,7 +115,8 @@ interface AudioFollowTarget {
 
 ## AudioPlayOptions  (type-only)
 interface AudioPlayOptions {
-    bus?: OutputBus;
+    bus?: BusId;
+    priority?: number;
     gain?: number;
     rate?: number;
     detune?: number;
@@ -108,8 +127,16 @@ interface AudioPlayOptions {
     fadeIn?: number;
 }
 
+## AudioSessionType  (type-only)
+type AudioSessionType = 'auto' | 'playback' | 'transient' | 'transient-solo' | 'ambient' | 'play-and-record';
+
 ## AudioState  (type-only)
 type AudioState = 'locked' | 'running' | 'suspended' | 'unavailable';
+
+## AudioWatchdogOptions  (type-only)
+interface AudioWatchdogOptions {
+    stall?: number;
+}
 
 ## AudioZone  (type-only)
 interface AudioZone {
@@ -125,7 +152,7 @@ interface AudioZoneDesc {
     feather?: number;
     ambient?: {
         sound?: string;
-        bus?: OutputBus;
+        bus?: BusId;
         gain?: number;
         voice?: () => Voice;
     };
@@ -161,6 +188,9 @@ interface BufferFactory {
     createBuffer(channels: number, length: number, sampleRate: number): AudioBuffer;
 }
 
+## BusId  (type-only)
+type BusId = BusName | (string & {});
+
 ## BusName  (type-only)
 type BusName = (typeof BUS_NAMES)[number];
 
@@ -191,6 +221,12 @@ interface CrackleSource {
     clickDecay?: number;
 }
 
+## CustomBusOptions  (type-only)
+interface CustomBusOptions {
+    volume?: number;
+    muted?: boolean;
+}
+
 ## DEFAULT_LIMITER
 const DEFAULT_LIMITER: Readonly<Required<LimiterOptions>>;
 
@@ -206,6 +242,12 @@ const DEFAULT_OCCLUSION: Readonly<Required<Omit<OcclusionOptions, 'probe'>>>;
 ## DEFAULT_REVERB_SENDS
 const DEFAULT_REVERB_SENDS: Readonly<Record<OutputBus, number>>;
 
+## DefineSoundOptions  (type-only)
+interface DefineSoundOptions {
+    maxVoices?: number;
+    priority?: number;
+}
+
 ## Ducker  (type-only)
 interface Ducker {
     watch<V extends Voice>(voice: V): V;
@@ -219,12 +261,19 @@ interface Ducker {
 
 ## DuckerOptions  (type-only)
 interface DuckerOptions {
-    trigger: OutputBus;
-    target: OutputBus;
+    trigger: BusId;
+    target: BusId;
     amount?: number;
     attack?: number;
     release?: number;
     threshold?: number;
+}
+
+## EarlyReflections  (type-only)
+interface EarlyReflections {
+    count?: number;
+    time?: number;
+    gain?: number;
 }
 
 ## Envelope  (type-only)
@@ -252,6 +301,14 @@ interface ImpulseResponseOptions {
     decay?: number;
     seed?: number;
     channels?: number;
+    damping?: number;
+    early?: EarlyReflections;
+}
+
+## ImpulseShape  (type-only)
+interface ImpulseShape {
+    damping?: number;
+    early?: EarlyReflections;
 }
 
 ## Layer  (type-only)
@@ -308,7 +365,7 @@ interface Music {
 interface MusicOptions {
     bpm: number;
     beatsPerBar?: number;
-    bus?: OutputBus;
+    bus?: BusId;
     intensityFadeBeats?: number;
     createElement?: () => StreamElement;
 }
@@ -390,7 +447,7 @@ type OutputBus = Exclude<BusName, 'master'>;
 
 ## PauseOptions  (type-only)
 interface PauseOptions {
-    keep?: readonly OutputBus[];
+    keep?: readonly BusId[];
 }
 
 ## PersistMixerOptions  (type-only)
@@ -420,6 +477,8 @@ interface ReverbOptions {
     seconds?: number;
     decay?: number;
     seed?: number;
+    damping?: number;
+    early?: EarlyReflections;
     wet?: number;
     sends?: Partial<Record<OutputBus, number>>;
 }
@@ -453,7 +512,7 @@ type SendKind = 'reverb' | 'lowpass';
 ## SendOptions  (type-only)
 interface SendOptions {
     kind: SendKind;
-    bus?: OutputBus;
+    bus?: BusId;
     amount?: number;
     seconds?: number;
     decay?: number;
@@ -473,6 +532,8 @@ interface SoundSpec {
     loop?: {
         crossfade: number;
     };
+    env?: Envelope;
+    envGate?: number;
 }
 
 ## Source  (type-only)
@@ -544,8 +605,8 @@ interface Stem {
 ## StopAllOptions  (type-only)
 interface StopAllOptions {
     fade?: number;
-    bus?: OutputBus;
-    except?: readonly BusName[];
+    bus?: BusId;
+    except?: readonly BusId[];
 }
 
 ## StreamElement  (type-only)
@@ -569,7 +630,7 @@ interface Variations {
 
 ## VariationsOptions  (type-only)
 interface VariationsOptions {
-    bus?: OutputBus;
+    bus?: BusId;
     pitchJitter?: number;
     gainJitter?: number;
     noRepeat?: boolean;
@@ -605,10 +666,25 @@ interface VoiceAdapter extends Voice {
 ## VoiceAdapterOptions  (type-only)
 interface VoiceAdapterOptions {
     source: AudioNode;
-    bus?: OutputBus;
+    bus?: BusId;
     gain?: number;
     onEnd?: () => void;
     register?: boolean;
+}
+
+## VoiceBudgetOptions  (type-only)
+interface VoiceBudgetOptions {
+    max: number;
+    steal?: 'lowest' | 'oldest';
+    stealFade?: number;
+    loops?: boolean;
+}
+
+## VoiceBudgetStats  (type-only)
+interface VoiceBudgetStats {
+    readonly live: number;
+    readonly stolen: number;
+    readonly dropped: number;
 }
 
 ## VoiceFilterKind  (type-only)
@@ -620,6 +696,9 @@ interface VoiceFilterOptions {
     q?: number;
     ramp?: number;
 }
+
+## VolumeCurve  (type-only)
+type VolumeCurve = 'squared' | 'linear';
 
 ## Wave  (type-only)
 type Wave = 'sine' | 'square' | 'sawtooth' | 'triangle';
@@ -638,7 +717,7 @@ type ZoneShape = {
 };
 
 ## busGain
-function busGain(s: BusSettings): number;
+function busGain(s: BusSettings, curve?: VolumeCurve): number;
 
 ## chime
 function chime(o?: RecipeOptions): SoundSpec;
@@ -750,7 +829,7 @@ const recipes: {
 function renderSound(spec: SoundSpec, createOffline?: OfflineContextFactory): Promise<AudioBuffer>;
 
 ## reverbImpulse
-function reverbImpulse(sampleRate: number, seconds?: number, decay?: number, seed?: number, channels?: number): Float32Array<ArrayBuffer>[];
+function reverbImpulse(sampleRate: number, seconds?: number, decay?: number, seed?: number, channels?: number, shape?: ImpulseShape): Float32Array<ArrayBuffer>[];
 
 ## rng
 function rng(seed: number): () => number;
@@ -782,7 +861,7 @@ function thud(o?: RecipeOptions): SoundSpec;
 function validateSpec(spec: SoundSpec): string[];
 
 ## volumeToGain
-function volumeToGain(volume: number): number;
+function volumeToGain(volume: number, curve?: VolumeCurve): number;
 
 ## whoosh
 function whoosh(o?: RecipeOptions & {

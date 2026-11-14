@@ -3,7 +3,7 @@
  * procedural impulse) or a lowpass (`BiquadFilterNode`) back into master. A zone drives
  * `amount` (and `cutoff`) as the listener moves. Built with the context; safe before unlock.
  */
-import type { AudioEngine, OutputBus } from './audio';
+import type { AudioEngine, BusId } from './audio';
 import { impulseResponse } from './dsp';
 
 export type SendKind = 'reverb' | 'lowpass';
@@ -11,7 +11,7 @@ export type SendKind = 'reverb' | 'lowpass';
 export interface SendOptions {
   kind: SendKind;
   /** Bus whose signal feeds the send. Default `sfx`. */
-  bus?: OutputBus;
+  bus?: BusId;
   /** Starting send level 0..1. Default 0 (silent until a zone raises it). */
   amount?: number;
   /** Reverb: impulse length in seconds. Default 2. */
@@ -45,7 +45,7 @@ export interface Send {
 
 export function createSend(mixer: AudioEngine, opts: SendOptions): Send {
   const kind = opts.kind;
-  const bus: OutputBus = opts.bus ?? 'sfx';
+  const bus: BusId = opts.bus ?? 'sfx';
   let amount = clamp01(opts.amount ?? 0);
   let cutoff = Math.max(10, opts.cutoff ?? 800);
   const q = opts.q ?? 0.7;

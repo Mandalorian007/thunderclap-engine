@@ -2,8 +2,9 @@
  * ws/audio-4 on every top-level matrix row, against harness/audio4.html (no WebGPU): the
  * occlusion probe closes the emitter's lowpass behind a wall and opens it in the clear, a
  * passing emitter's Doppler multiplier rises then falls, sprite clips play from one buffer,
- * and a streamed track drives the beat grid from its element clock. The itch-iframe row is
- * skipped as in music.spec; every moving value is polled (E-017).
+ * a streamed track drives the beat grid from its element clock, and `?fit` checks a custom bus,
+ * the pan fallback and the voice budget. The itch-iframe row is skipped as in music.spec;
+ * every moving value is polled (E-017).
  */
 import type { Page } from '@playwright/test';
 import type { HarnessAudio4State } from '../harness/audio4-state';
@@ -109,4 +110,35 @@ test('?stream: the track streams through a media element and the grid advances f
   await background(page, false);
   await expect.poll(() => read(page).then((s) => s.audioState)).toBe('running');
   expect((await read(page)).paused).toBe(false);
+});
+
+test('?fit: a custom bus, the pan fallback and the voice budget on a real context', async ({
+  page,
+}) => {
+  // The ambient loop starts on the gesture, panned through a PannerNode: no StereoPanner here.
+  await expect.poll(() => read(page).then((s) => s.fit.ambientVoices)).toBe(1);
+  let s = await read(page);
+  expect(s.fit.customBuses).toEqual(['ambient']);
+  expect(s.fit.ambientGain).toBeCloseTo(0.25, 3);
+  expect(s.fit.panFallbacks).toBe(1);
+  await page.evaluate(() => window.__harnessAudio4?.setBus(1, true));
+  await expect.poll(() => read(page).then((s) => s.fit.ambientGain)).toBe(0);
+  await page.evaluate(() => window.__harnessAudio4?.setBus(1, false));
+  await expect.poll(() => read(page).then((s) => s.fit.ambientGain)).toBeCloseTo(1, 3);
+  // Five one-shots in one task against a budget of three: the two oldest are cut; the loop is
+  // outside the budget.
+  await page.evaluate(() => window.__harnessAudio4?.burst(5, 0));
+  s = await read(page);
+  expect(s.fit.stolen).toBe(2);
+  expect(s.fit.live).toBeLessThanOrEqual(3);
+  // A lower priority cannot cut equal-or-higher voices: dropped, when the budget is full.
+  await page.evaluate(() => {
+    window.__harnessAudio4?.burst(3, 0);
+    window.__harnessAudio4?.burst(1, -1);
+  });
+  s = await read(page);
+  expect(s.fit.dropped).toBe(1);
+  expect(s.fit.ambientVoices).toBe(1);
+  // The watchdog sees the clock moving: no restarts.
+  expect(s.fit.watchdogRestarts).toBe(0);
 });

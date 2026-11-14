@@ -132,18 +132,48 @@ export const dbToGain = (db: number): number => 10 ** (db / 20);
 export const gainToDb = (g: number): number => (g <= 0 ? -Infinity : 20 * Math.log10(g));
 
 /**
- * Slider position (0..1) to linear gain. Squared curve: 0.5 on the slider ≈ -12 dB, which
- * feels much closer to "half as loud" than linear gain does.
+ * How a volume slider (0..1) maps to gain. `squared` (the default): 0.5 on the slider ≈ -12 dB,
+ * which feels much closer to "half as loud". `linear`: the slider is the gain, for a game whose
+ * own sliders already shape the curve.
  */
-export function volumeToGain(volume: number): number {
+export type VolumeCurve = 'squared' | 'linear';
+
+/**
+ * Slider position (0..1) to linear gain on `curve` (default `squared`: 0.5 on the slider ≈
+ * -12 dB, which feels much closer to "half as loud" than linear gain does).
+ */
+export function volumeToGain(volume: number, curve: VolumeCurve = 'squared'): number {
   const v = Math.min(1, Math.max(0, Number.isFinite(volume) ? volume : 0));
-  return v * v;
+  return curve === 'linear' ? v : v * v;
+}
+
+/** Early reflections: a few sparse, seeded taps ahead of the tail (`ImpulseShape.early`). */
+export interface EarlyReflections {
+  /** Taps per channel. Default 6. */
+  count?: number;
+  /** Seconds the taps spread over from the start. Default 0.08. */
+  time?: number;
+  /** Level of the first tap; later ones fall off linearly. Default 0.5. */
+  gain?: number;
+}
+
+/** The optional shaping of a procedural impulse past its length and decay. */
+export interface ImpulseShape {
+  /**
+   * High-frequency damping 0..1: a one-pole lowpass on the noise that closes over the tail, so
+   * the onset stays bright and the end goes dark, as in a furnished room. Default 0 (none).
+   */
+  damping?: number;
+  /** Early reflections ahead of the tail. Default none. */
+  early?: EarlyReflections;
 }
 
 /**
  * Procedural reverb impulse response: decaying seeded noise, independent per channel (stereo
  * width), with a short fade-in so the onset doesn't click. `decay` shapes the tail
- * (`(1 - t)^decay`; higher = shorter, darker room). Same arguments, same samples.
+ * (`(1 - t)^decay`; higher = shorter, darker room). `shape` adds damping and early reflections;
+ * without it (or with damping 0 and no `early`) the samples are exactly the plain ones. Same
+ * arguments, same samples.
  */
 export function reverbImpulse(
   sampleRate: number,
@@ -151,20 +181,55 @@ export function reverbImpulse(
   decay = 3,
   seed = 1,
   channels = 2,
+  shape?: ImpulseShape,
 ): Float32Array<ArrayBuffer>[] {
   const n = Math.max(1, Math.round(sampleRate * Math.max(0.01, seconds)));
   const fadeIn = Math.min(n, Math.max(1, Math.round(sampleRate * 0.002)));
+  const damping = Math.min(1, Math.max(0, shape?.damping ?? 0));
+  const early = shape?.early;
   const out: Float32Array<ArrayBuffer>[] = [];
   for (let c = 0; c < channels; c++) {
     const r = rng(seed * 7919 + c * 104729);
     const ch = new Float32Array(n);
-    for (let i = 0; i < n; i++) {
-      const env = (1 - i / n) ** decay * Math.min(1, (i + 1) / fadeIn);
-      ch[i] = (r() * 2 - 1) * env;
+    if (damping > 0) {
+      // One-pole lowpass whose coefficient closes from 1 (open) to 1 - 0.95 × damping.
+      let y = 0;
+      for (let i = 0; i < n; i++) {
+        const env = (1 - i / n) ** decay * Math.min(1, (i + 1) / fadeIn);
+        const a = 1 - 0.95 * damping * (i / n);
+        y += a * (r() * 2 - 1 - y);
+        ch[i] = y * env;
+      }
+    } else {
+      for (let i = 0; i < n; i++) {
+        const env = (1 - i / n) ** decay * Math.min(1, (i + 1) / fadeIn);
+        ch[i] = (r() * 2 - 1) * env;
+      }
     }
+    if (early) addEarlyReflections(ch, sampleRate, early, seed * 15485863 + c * 32452843);
     out.push(ch);
   }
   return out;
+}
+
+/** Sparse seeded taps over `early.time`, falling off linearly from `early.gain`, random sign. */
+function addEarlyReflections(
+  ch: Float32Array,
+  sampleRate: number,
+  early: EarlyReflections,
+  seed: number,
+): void {
+  const count = Math.max(0, Math.floor(early.count ?? 6));
+  const span = Math.max(0, early.time ?? 0.08);
+  const gain = early.gain ?? 0.5;
+  const r = rng(seed);
+  for (let k = 0; k < count; k++) {
+    // Tap k sits in the k-th slice of the span, jittered inside it.
+    const t = (span * (k + 0.25 + 0.5 * r())) / count;
+    const i = Math.min(ch.length - 1, Math.max(0, Math.round(t * sampleRate)));
+    const sign = r() < 0.5 ? -1 : 1;
+    ch[i] = ch[i]! + sign * gain * (1 - k / count);
+  }
 }
 
 /** The part of a `BaseAudioContext` that `impulseResponse` needs (a fake will do in tests). */
@@ -182,6 +247,10 @@ export interface ImpulseResponseOptions {
   seed?: number;
   /** Default 2 (stereo width from independent channels). */
   channels?: number;
+  /** High-frequency damping 0..1 over the tail (`ImpulseShape.damping`). Default 0. */
+  damping?: number;
+  /** Early reflections ahead of the tail (`ImpulseShape.early`). Default none. */
+  early?: EarlyReflections;
 }
 
 /**
@@ -198,6 +267,7 @@ export function impulseResponse(
     opts.decay ?? 3,
     opts.seed ?? 1,
     opts.channels ?? 2,
+    opts,
   );
   const buffer = ctx.createBuffer(ir.length, ir[0]!.length, ctx.sampleRate);
   ir.forEach((ch, i) => {
