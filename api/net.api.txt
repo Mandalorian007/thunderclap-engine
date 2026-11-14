@@ -517,6 +517,7 @@ type ServerMsg<GWelcome = unknown, GResult = unknown, GState = unknown, GServer 
     type: 'Resync';
     sub: number;
     version: number;
+    hash: string;
     result: Uint8Array;
 } | {
     type: 'QueryFailed';

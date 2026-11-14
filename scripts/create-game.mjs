@@ -48,8 +48,10 @@ export const SKIP = new Set([
   'package-lock.json',
   'yarn.lock',
   '.DS_Store',
-  // A Rust server's build output (templates/arena-2d-server/server).
+  // A Rust server's build output (templates/arena-2d-server/server), and its lock, which names the
+  // engine's crates by path: the copy resolves its own against the git tag.
   'target',
+  'Cargo.lock',
 ]);
 
 /**
@@ -61,12 +63,42 @@ const CLAUDE_MD_RULES = [
   ['CLAUDE.md', /Biome \(the repo's `biome.json`\)/g, 'Biome (`biome.json`)'],
   ['CLAUDE.md', /; the repo root's `pnpm check` runs it too \(`check:template-[\w-]+`\)/g, ''],
 ];
+/** The engine's git repository, which a copied Rust server depends on by tag. */
+export const ENGINE_GIT = 'https://github.com/Mandalorian007/thunderclap-engine';
+
+/**
+ * The tag a copied Rust server builds against: `server-v<major>.<minor>` of the crates' workspace
+ * version (Cargo.toml), cut when the crates are released.
+ */
+export function serverTag() {
+  const text = readFileSync(join(root, 'Cargo.toml'), 'utf8');
+  const m = /\[workspace\.package\][^[]*?\nversion = "(\d+)\.(\d+)\./.exec(text);
+  if (!m) throw new Error('Cargo.toml: no [workspace.package] version');
+  return `server-v${m[1]}.${m[2]}`;
+}
+
+/**
+ * A template's server crate takes the engine's crates by path from this checkout; a copy takes
+ * them from git at the released tag, so it builds on its own.
+ */
+const SERVER_RULES = [
+  [
+    'server/Cargo.toml',
+    /(thunderclap-server = \{ )path = "[^"]*"( \})/g,
+    (_, head, tail) => `${head}git = "${ENGINE_GIT}", tag = "${serverTag()}"${tail}`,
+  ],
+  [
+    'server/Cargo.toml',
+    /# engine crates come by path from this checkout\./,
+    () => `# engine crates come from git at ${serverTag()}.`,
+  ],
+];
 export const REWRITES = {
   puzzle: CLAUDE_MD_RULES,
   'first-person': CLAUDE_MD_RULES,
   'third-person': CLAUDE_MD_RULES,
   platformer: CLAUDE_MD_RULES,
-  'arena-2d-server': CLAUDE_MD_RULES,
+  'arena-2d-server': [...CLAUDE_MD_RULES, ...SERVER_RULES],
 };
 
 const USAGE = `usage: pnpm create-game <dir> [--template <name>] [--name <pkg>] [--engine <spec>] [--force] [--dry-run]
