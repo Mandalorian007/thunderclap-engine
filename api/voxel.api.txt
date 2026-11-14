@@ -144,6 +144,16 @@ const RAY_UNKNOWN = -1;
 ## SECTION_VERTEX_WORDS
 const SECTION_VERTEX_WORDS = 2;
 
+## SectionBox  (type-only)
+interface SectionBox {
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+    minZ: number;
+    maxZ: number;
+}
+
 ## SectionCodec  (type-only)
 interface SectionCodec {
     decode(bytes: Uint8Array, out: Uint32Array): number | null;
@@ -328,6 +338,47 @@ interface SectionStoreStats {
     bytes: number;
 }
 
+## SectionVisibility
+class SectionVisibility {
+    readonly stats: SectionVisibilityStats;
+    version: number;
+    constructor(opts: SectionVisibilityOptions);
+    get enabled(): boolean;
+    set enabled(on: boolean);
+    get throttled(): boolean;
+    get active(): boolean;
+    setArea(box: SectionBox | null): void;
+    set(x: number, y: number, z: number, bits: number, openCells: number, dark: boolean): void;
+    clear(x: number, y: number, z: number): void;
+    openCells(x: number, y: number, z: number): number | undefined;
+    reached(x: number, y: number, z: number): boolean;
+    update(ex0: number, ey0: number, ez0: number, now: number): void;
+}
+
+## SectionVisibilityOptions  (type-only)
+interface SectionVisibilityOptions {
+    sectionSize: number;
+    solidAt: (x: number, y: number, z: number) => boolean;
+    margin?: number;
+    darkSteps?: number;
+    darkCost?: number;
+    wrapXZ?: number;
+    wrapY?: number;
+    clock?: () => number;
+}
+
+## SectionVisibilityStats  (type-only)
+interface SectionVisibilityStats {
+    searches: number;
+    crossings: number;
+    visited: number;
+    lastReached: number;
+    lastVisited: number;
+    lastMs: number;
+    changes: number;
+    nearOpenings: number;
+}
+
 ## SectionWorkerScopeLike  (type-only)
 interface SectionWorkerScopeLike {
     postMessage(message: SectionMesherReply, transfer?: Transferable[]): void;
@@ -342,8 +393,14 @@ type SourceSection = number | Uint8Array | Uint32Array;
 ## VOXEL_AO_CURVE
 const VOXEL_AO_CURVE: readonly number[];
 
+## VOXEL_DEFAULT_FRAGMENT
+const VOXEL_DEFAULT_FRAGMENT: Readonly<Record<VoxelStream, string>>;
+
 ## VOXEL_FACE_NORMALS
 const VOXEL_FACE_NORMALS: readonly (readonly [number, number, number])[];
+
+## VOXEL_VARYING_WGSL
+const VOXEL_VARYING_WGSL = "\nstruct VoxelVarying {\n  @builtin(position) clip: vec4f,\n  @location(0) world: vec3f,\n  @location(1) normal: vec3f,\n  @location(2) light: vec3f,\n  @location(3) uv: vec2f,\n  @location(4) @interpolate(flat) w0: u32,\n  @location(5) @interpolate(flat) w1: u32,\n}\n";
 
 ## VOXEL_VERTEX_DEFAULTS
 const VOXEL_VERTEX_DEFAULTS: readonly VertexFieldDef[];
@@ -502,6 +559,18 @@ interface VoxelGridOptions {
     chunk?: number;
 }
 
+## VoxelGridSource  (type-only)
+interface VoxelGridSource {
+    readonly grid: VoxelGrid;
+    sync(): number;
+    readonly puts: number;
+}
+
+## VoxelGridSourceOptions  (type-only)
+interface VoxelGridSourceOptions {
+    outside?: number;
+}
+
 ## VoxelHit  (type-only)
 interface VoxelHit {
     x: number;
@@ -514,6 +583,16 @@ interface VoxelHit {
     py: number;
     pz: number;
     distance: number;
+}
+
+## VoxelMaterial  (type-only)
+interface VoxelMaterial {
+    fragment: string;
+    bindGroups?: readonly {
+        layout: GPUBindGroupLayout;
+        group: GPUBindGroup;
+    }[];
+    blend?: GPUBlendState;
 }
 
 ## VoxelMesher  (type-only)
@@ -551,6 +630,9 @@ type VoxelMesherRequest = {
     chunk: number;
 };
 
+## VoxelStream  (type-only)
+type VoxelStream = 'opaque' | 'foliage' | 'liquid';
+
 ## VoxelWorkerLike  (type-only)
 interface VoxelWorkerLike {
     postMessage(message: VoxelMesherRequest, transfer?: Transferable[]): void;
@@ -568,6 +650,66 @@ interface VoxelWorkerScopeLike {
     addEventListener(type: 'message', listener: (e: {
         data: unknown;
     }) => void): void;
+}
+
+## VoxelWorld  (type-only)
+interface VoxelWorld {
+    readonly format: VoxelFormat;
+    readonly store: SectionStore;
+    readonly pool: SectionMeshPool;
+    readonly visibility: SectionVisibility;
+    readonly sets: Readonly<Record<VoxelStream, DrawSet>>;
+    readonly stats: VoxelWorldStats;
+    putSection(sx: number, sy: number, sz: number, bytes: Uint8Array): void;
+    dropSection(sx: number, sy: number, sz: number): void;
+    edit(key: number, changes: ArrayLike<number>): number[];
+    setInterest(x: number, y: number, z: number): void;
+    update(eyeX: number, eyeY: number, eyeZ: number): void;
+    raycast(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxDistance: number, out: VoxelHit): number;
+    readonly settled: boolean;
+    dispose(): void;
+}
+
+## VoxelWorldOptions  (type-only)
+interface VoxelWorldOptions {
+    format: VoxelFormat;
+    codec?: SectionCodec;
+    store?: SectionStore;
+    air?: number;
+    minSectionY?: number;
+    maxSectionY?: number;
+    outside?: number;
+    workers?: MesherPort[];
+    respawn?: (index: number) => MesherPort;
+    perWorker?: number;
+    greedy?: boolean;
+    materials?: Partial<Record<VoxelStream, VoxelMaterial>>;
+    radius?: number;
+    verticalRadius?: number;
+    uploadsPerFrame?: number;
+    capacity?: number;
+    caveCulling?: boolean;
+    vertexBlockBytes?: number;
+    clock?: () => number;
+    label?: string;
+}
+
+## VoxelWorldStats  (type-only)
+interface VoxelWorldStats {
+    sections: number;
+    drawn: number;
+    hidden: number;
+    pending: number;
+    uploads: number;
+    uploadsTotal: number;
+    opaqueQuads: number;
+    foliageQuads: number;
+    liquidQuads: number;
+    vertexBytes: number;
+    updateMs: number;
+    maxUpdateMs: number;
+    queued: number;
+    inFlight: number;
 }
 
 ## countExposedFaces
@@ -591,6 +733,9 @@ function createVoxelHit(): VoxelHit;
 ## createVoxelMesher
 function createVoxelMesher(grid: VoxelGrid, opts?: VoxelMesherOptions): VoxelMesher;
 
+## createVoxelWorld
+function createVoxelWorld(core: RenderCore, opts: VoxelWorldOptions): VoxelWorld;
+
 ## defineBlockTable
 function defineBlockTable(blocks: readonly BlockDef[], opts?: BlockTableOptions): BlockTable;
 
@@ -608,6 +753,9 @@ function encodeRawSection(cells: Uint32Array): Uint8Array;
 
 ## facePairBit
 function facePairBit(a: number, b: number): number;
+
+## feedVoxelGrid
+function feedVoxelGrid(world: VoxelWorld, grid: VoxelGrid, opts?: VoxelGridSourceOptions): VoxelGridSource;
 
 ## inThreadMesherPort
 function inThreadMesherPort(codec: SectionCodec): MesherPort;
@@ -682,6 +830,9 @@ function vertexFieldValue(f: VertexField | undefined, w0: number, w1: number): n
 
 ## vertexSchemaWgsl
 function vertexSchemaWgsl(schema: VertexSchema, opts?: VertexSchemaWgslOptions): string;
+
+## voxelVertexWgsl
+function voxelVertexWgsl(format: VoxelFormat): string;
 
 ## workerMesherPort
 function workerMesherPort(worker: Worker): MesherPort;

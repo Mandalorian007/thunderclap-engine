@@ -1,7 +1,7 @@
 /**
- * Voxel page (ws/voxel-render): a 4×2×4-chunk procedural block world through
- * `@thunderclap-engine/engine/voxel`, meshed in a Worker and drawn one chunk mesh at a time after a
- * frustum test; a first-person walk on `Look`.
+ * Voxel page (ws/voxel-render, moved onto the world by ws/voxel-draw): a 4×2×4-chunk block world
+ * in an engine `VoxelGrid`, fed into `createVoxelWorld` (`feedVoxelGrid`), meshed in a Worker and
+ * drawn through the retained core's GPU-culled sets; a first-person walk on `Look`.
  *
  * - The centre ray (`raycastVoxels` from the eye, 8 units) picks a block every frame.
  * - Mouse: click the canvas to take the pointer lock, then the mouse looks; WASD moves; the
@@ -11,28 +11,32 @@
  * - `?still` parks the sun for pixel probes.
  *
  * Block faces are textured from a 3-layer `texture_2d_array` of generated pixels (grass, dirt,
- * stone), the layer read from the vertex colour's alpha through the `VOXEL_WGSL` prelude.
+ * stone): the page's material is a fragment over `VoxelVarying` that reads the block id with
+ * `decode_voxel_vertex` and samples its layer.
  */
 import { GameLoop } from '@thunderclap-engine/engine/core';
 import { Input, Look } from '@thunderclap-engine/engine/input';
 import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
+  createRenderCore,
+  createRenderView,
   gpuDiagnostics,
   installGpuErrorLogging,
-  Lights,
   loadTextureArray,
-  type Material,
   type PixelSource,
-  Renderer,
+  setViewFromCamera,
+  sphereInPlanes,
 } from '@thunderclap-engine/engine/render';
 import {
-  createVoxelChunks,
   createVoxelGrid,
   createVoxelHit,
-  createVoxelMesher,
+  createVoxelWorld,
+  defineBlockTable,
+  defineVoxelFormat,
+  feedVoxelGrid,
   raycastVoxels,
-  VOXEL_WGSL,
+  workerMesherPort,
 } from '@thunderclap-engine/engine/voxel';
 import type { HarnessVoxelApi, HarnessVoxelState } from './voxel-state';
 
@@ -54,6 +58,17 @@ const WALK_PER_S = 4;
 const PITCH_LIMIT = 1.4;
 const TAP_MS = 250;
 
+/** The world's blocks: air, then grass, dirt and stone, all opaque. */
+const format = defineVoxelFormat({
+  sectionSize: CHUNK,
+  blocks: defineBlockTable([
+    { class: 'none' },
+    { class: 'opaque' },
+    { class: 'opaque' },
+    { class: 'opaque' },
+  ]),
+});
+
 const state: HarnessVoxelState = {
   ready: false,
   still: STILL,
@@ -64,12 +79,13 @@ const state: HarnessVoxelState = {
   position: [32.5, 0, 36.5],
   locked: false,
   chunks: 0,
+  sections: 0,
   drawn: 0,
-  culled: 0,
-  triangles: 0,
-  growths: 0,
-  remeshes: 0,
-  remeshMs: 0,
+  visible: 0,
+  quads: 0,
+  uploads: 0,
+  calls: 0,
+  settled: false,
   hit: null,
   broken: 0,
   placed: 0,
@@ -86,20 +102,21 @@ function terrainHeight(x: number, z: number): number {
   return Math.max(2, Math.min(SIZE_Y - 4, Math.round(h)));
 }
 
-const BLOCKS_WGSL = /* wgsl */ `
-${VOXEL_WGSL}
-@group(1) @binding(1) var blockSampler: sampler;
-@group(1) @binding(2) var blocks: texture_2d_array<f32>;
+/** The page's look: the block's layer of the array, the sun, sky light and AO. */
+const BLOCKS_FRAGMENT = /* wgsl */ `
+@group(1) @binding(0) var blockSampler: sampler;
+@group(1) @binding(1) var blocks: texture_2d_array<f32>;
+struct Sun { direction: vec4f, color: vec4f, ambient: vec4f };
+@group(1) @binding(2) var<uniform> sun: Sun;
 
-@fragment fn fs_main(in: VSOut) -> FragOut {
-  let albedo = textureSample(blocks, blockSampler, voxel_uv_wrap(in.uv), voxel_layer(in.color)).rgb;
-  let n = normalize(in.normal);
-  let sky = 0.5 + 0.5 * n.y;
-  let lit = engine_lambert(n, in.worldPos) + 0.15 * sky;
-  var o: FragOut;
-  o.color = vec4f(albedo * lit * voxel_ao(in.color), 1.0);
-  o.emissive = vec4f(0.0);
-  return o;
+@fragment fn fs(in: VoxelVarying) -> @location(0) vec4f {
+  let v = decode_voxel_vertex(in.w0, in.w1);
+  let layer = max(i32(v.id) - 1, 0);
+  let albedo = textureSample(blocks, blockSampler, fract(in.uv), layer).rgb;
+  let n = in.normal;
+  let lit = sun.ambient.rgb * (0.5 + 0.5 * n.y) + sun.color.rgb * max(dot(n, -sun.direction.xyz), 0.0);
+  let ao = mix(0.5, 1.0, in.light.x);
+  return vec4f(albedo * lit * ao, 1.0);
 }`;
 
 /** sRGB base colours of the block layers, in `layerOf` order (block − 1): grass, dirt, stone. */
@@ -130,18 +147,48 @@ function blockLayers(): PixelSource[] {
   });
 }
 
-function createBlockMaterial(renderer: Renderer): Material {
-  const array = loadTextureArray(renderer.device, blockLayers(), { label: 'blocks' });
-  const material = renderer.createMaterial({
-    label: 'blocks',
-    blend: 'opaque',
-    wgsl: BLOCKS_WGSL,
-    textures: 1,
-    viewDimension: '2d-array',
-    sampler: 'nearest-mip-repeat',
+/** The material's bind group 1: sampler, the block array and the sun uniform. */
+function createBlockLook(device: GPUDevice) {
+  const array = loadTextureArray(device, blockLayers(), { label: 'blocks' });
+  const sampler = device.createSampler({
+    magFilter: 'nearest',
+    minFilter: 'linear',
+    mipmapFilter: 'linear',
+    addressModeU: 'repeat',
+    addressModeV: 'repeat',
   });
-  material.setTexture(0, array);
-  return material;
+  const sun = device.createBuffer({
+    size: 48,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    label: 'sun',
+  });
+  const layout = device.createBindGroupLayout({
+    label: 'blocks',
+    entries: [
+      { binding: 0, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
+      { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { viewDimension: '2d-array' } },
+      { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: {} },
+    ],
+  });
+  const group = device.createBindGroup({
+    label: 'blocks',
+    layout,
+    entries: [
+      { binding: 0, resource: sampler },
+      { binding: 1, resource: array.view },
+      { binding: 2, resource: { buffer: sun } },
+    ],
+  });
+  const data = new Float32Array(12);
+  return {
+    bindGroups: [{ layout, group }],
+    /** Sun direction (towards the ground), colour, ambient. */
+    setSun(dir: readonly number[], color: readonly number[], ambient: readonly number[]): void {
+      const l = Math.hypot(dir[0]!, dir[1]!, dir[2]!) || 1;
+      data.set([dir[0]! / l, dir[1]! / l, dir[2]! / l, 0, ...color, 0, ...ambient, 0]);
+      device.queue.writeBuffer(sun, 0, data);
+    },
+  };
 }
 
 const look = new Look({
@@ -181,13 +228,12 @@ async function main(): Promise<void> {
   }
   const { surface, gpu } = res;
   installGpuErrorLogging(gpu.device);
-  const renderer = new Renderer(gpu);
-  renderer.resize(surface.backbuffer.width, surface.backbuffer.height);
-  surface.onResize(({ backbuffer }) => renderer.resize(backbuffer.width, backbuffer.height));
+  const core = createRenderCore(gpu);
 
   const camera = Camera.perspective((60 * Math.PI) / 180, LOGICAL.width / LOGICAL.height, 0.1, 200);
   Object.assign(camera.screen, { x: 0, y: 0, ...LOGICAL });
-  renderer.camera = camera;
+  const view = createRenderView();
+  const views = [view];
 
   // The world: a grid of 4 × 2 × 4 chunks, hills of stone under dirt under a grass top.
   const grid = createVoxelGrid({ sizeX: SIZE_X, sizeY: SIZE_Y, sizeZ: SIZE_Z, chunk: CHUNK });
@@ -200,15 +246,29 @@ async function main(): Promise<void> {
   state.position[1] = terrainHeight(32, 36) + EYE_HEIGHT;
   placeCamera(camera);
 
-  const material = createBlockMaterial(renderer);
+  const blockLook = createBlockLook(gpu.device);
+  const SUN_COLOR = [0.85, 0.82, 0.74];
+  const AMBIENT = [0.28, 0.3, 0.34];
+  blockLook.setSun([-0.45, -1.0, -0.55], SUN_COLOR, AMBIENT);
   const worker = new Worker(new URL('./voxel-worker.ts', import.meta.url), { type: 'module' });
-  const mesher = createVoxelMesher(grid, { worker });
-  const chunks = createVoxelChunks(renderer, grid, { material, mesher, slack: 1.5 });
-
-  const lights = new Lights();
-  lights.ambient.set([0.28, 0.3, 0.34]);
-  lights.sun.direction = [-0.45, -1.0, -0.55];
-  lights.sun.color = [0.85, 0.82, 0.74];
+  const world = createVoxelWorld(core, {
+    format,
+    workers: [workerMesherPort(worker)],
+    materials: { opaque: { fragment: BLOCKS_FRAGMENT, bindGroups: blockLook.bindGroups } },
+    radius: 4,
+    label: 'voxel',
+  });
+  const source = feedVoxelGrid(world, grid);
+  world.setInterest(SIZE_X / 2, SIZE_Y / 2, SIZE_Z / 2);
+  // The grid chunks' spheres, for the CPU twin of the GPU cull (`state.visible`).
+  const r = (CHUNK * Math.sqrt(3)) / 2;
+  const target = {
+    view: undefined as unknown as GPUTextureView,
+    format: gpu.format,
+    width: 1,
+    height: 1,
+    clear: { r: 0.5, g: 0.68, b: 0.9, a: 1 },
+  };
 
   const hit = createVoxelHit();
   const hitCell: [number, number, number] = [0, 0, 0];
@@ -309,29 +369,53 @@ async function main(): Promise<void> {
       }
       if (!STILL) {
         dayTime += dt * 0.05;
-        lights.sun.direction = [
-          Math.sin(dayTime) * 0.6 - 0.45,
-          -1.0,
-          Math.cos(dayTime) * 0.6 - 0.55,
-        ];
+        blockLook.setSun(
+          [Math.sin(dayTime) * 0.6 - 0.45, -1.0, Math.cos(dayTime) * 0.6 - 0.55],
+          SUN_COLOR,
+          AMBIENT,
+        );
       }
-      chunks.update();
+      source.sync();
+      world.update(eye[0]!, eye[1]!, eye[2]!);
     },
-    render(_alpha, time) {
-      const frame = renderer.beginFrame(time.realTime, time.frameDt);
-      frame.clear(0.5, 0.68, 0.9);
-      frame.lights = lights;
-      chunks.draw(frame, camera);
-      renderer.endFrame();
+    render() {
+      const { width, height } = surface.backbuffer;
+      camera.setPerspective((60 * Math.PI) / 180, width / Math.max(1, height), 0.1, 200);
+      placeCamera(camera);
+      setViewFromCamera(view, camera);
+      const texture = gpu.context.getCurrentTexture();
+      target.view = texture.createView();
+      target.width = texture.width;
+      target.height = texture.height;
+      const encoder = gpu.device.createCommandEncoder();
+      core.prepare(encoder, views);
+      core.draw(encoder, 0, target);
+      gpu.device.queue.submit([encoder.finish()]);
       state.frames++;
-      const s = chunks.stats;
-      state.chunks = s.chunks;
+      const s = world.stats;
+      state.chunks = grid.chunkCount;
+      state.sections = s.sections;
       state.drawn = s.drawn;
-      state.culled = s.culled;
-      state.triangles = s.triangles;
-      state.growths = s.growths;
-      state.remeshes = s.remeshes;
-      state.remeshMs = s.remeshMs;
+      state.quads = s.opaqueQuads + s.foliageQuads + s.liquidQuads;
+      state.uploads = s.uploadsTotal;
+      state.settled = world.settled;
+      state.calls = core.stats.calls;
+      let seen = 0;
+      for (let cz = 0; cz < grid.chunksZ; cz++)
+        for (let cy = 0; cy < grid.chunksY; cy++)
+          for (let cx = 0; cx < grid.chunksX; cx++)
+            if (
+              sphereInPlanes(
+                view.planes,
+                0,
+                (cx + 0.5) * CHUNK,
+                (cy + 0.5) * CHUNK,
+                (cz + 0.5) * CHUNK,
+                r,
+              )
+            )
+              seen++;
+      state.visible = seen;
       state.gpuErrors = gpuDiagnostics.errorCount;
     },
   });

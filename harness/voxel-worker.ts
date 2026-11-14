@@ -1,8 +1,7 @@
 /**
- * The mesher Worker of the voxel page (harness/voxel.html): the three lines a game writes.
- * The engine's `installVoxelMesherWorker` keeps a mirror of the grid here and answers each
- * `mesh` request with a transferred vertex + index buffer.
+ * The section mesher Worker of the voxel page (harness/voxel.html): the line a game writes. The
+ * grid source puts raw cells, so the Worker decodes with the engine's raw codec.
  */
-import { installVoxelMesherWorker } from '@thunderclap-engine/engine/voxel';
+import { installSectionMesherWorker, RAW_SECTION_CODEC } from '@thunderclap-engine/engine/voxel';
 
-installVoxelMesherWorker();
+installSectionMesherWorker({ codec: RAW_SECTION_CODEC });
