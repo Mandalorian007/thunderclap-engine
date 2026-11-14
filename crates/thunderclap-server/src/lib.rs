@@ -30,7 +30,7 @@ pub use server::{
 };
 pub use tc_sim::{Game, SimConfig};
 pub use tc_wire::Wire;
-pub use typescript::{NET_IMPORT, SCHEMA_TS, define_schema_ts, generate_ts};
+pub use typescript::{NET_IMPORT, SCHEMA_TS, define_schema_ts, define_schema_ts_with, generate_ts};
 
 pub use tc_admin as admin;
 pub use tc_auth as auth;

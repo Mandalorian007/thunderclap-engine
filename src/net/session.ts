@@ -13,7 +13,7 @@
 
 import { NetClock } from './clock';
 import { type EntityChanges, EntityStream } from './entities';
-import type { ClientMsg, ServerMsg } from './envelope';
+import { type ClientMsg, type EnvelopeInfo, envelopeOf, type ServerMsg } from './envelope';
 import { resultHash } from './hash';
 import { Optimistic, type OptimisticStore } from './optimistic';
 import { applyPatch, type PatchOp } from './patch';
@@ -43,6 +43,49 @@ export interface LivenessOptions {
   readonly deadMs?: number;
   /** After `wake()`, reconnect unless something arrives within this (default 2000). */
   readonly wakeMs?: number;
+  /**
+   * When hearing counts: `'message'` (default) reads the clock for each message received; `'tick'`
+   * only notes that something arrived, and the liveness tick (every quarter of the shortest of
+   * `pingMs`, `deadMs` and `wakeMs`) reads the clock once for all of them. For a busy link.
+   */
+  readonly heardBy?: 'message' | 'tick';
+}
+
+/** Why a session went down or closed, or a command failed: `NetReason.kind`. */
+export type NetReasonKind =
+  /** `close()` was called. */
+  | 'closed'
+  /** The server refused the handshake (`Rejected`). */
+  | 'rejected'
+  /** The server sent `Closed` (final for codes 4000 to 4999, else it reconnects). */
+  | 'serverClosed'
+  /** Reconnecting failed for `giveUpAfter` (`last` says why the last attempt ended). */
+  | 'gaveUp'
+  /** The transport closed (the code is its own). */
+  | 'lost'
+  /** A handshake took longer than `handshakeMs`. */
+  | 'handshakeTimeout'
+  /** Nothing was heard for `deadMs`. */
+  | 'dead'
+  /** Nothing arrived within `wakeMs` of `wake()`. */
+  | 'wakeTimeout'
+  /** The server sent something the session could not take. */
+  | 'protocol'
+  /** `reconnect()` was called. */
+  | 'reconnect'
+  /** A command had no result within `commandMs`. */
+  | 'commandTimeout'
+  /** A command was sent while the session was not open. */
+  | 'notOpen'
+  /** A command could not be encoded. */
+  | 'unencodable';
+
+/** A typed reason: what happened (`kind`) and its human detail (the `reason` string of old). */
+export interface NetReason {
+  readonly kind: NetReasonKind;
+  readonly detail: string;
+  /** For `gaveUp`: why the last connection ended. */
+  readonly last?: NetReason;
 }
 
 /** What `Hello` carries besides the schema hash. */
@@ -73,6 +116,22 @@ export interface NetOptions {
    */
   readonly inflate?: (codec: number, data: Uint8Array) => Promise<Uint8Array>;
   readonly bulk?: number;
+  /**
+   * Take uncompressed bulk lanes (codec 0) at once, in the same call that received them, instead of
+   * through `inflate` (default false). Without `inflate`, `Hello` then offers codec 0.
+   */
+  readonly plainBulk?: boolean;
+  /**
+   * `command()` resolves with the result's encoded bytes (a `Uint8Array`, the `result` role's
+   * wire form), not decoded, so a game's own outcome type is read by the game (default false).
+   */
+  readonly rawResults?: boolean;
+  /**
+   * What a throwing listener does: `'report'` (default) keeps the other listeners going and reports
+   * it as an `error` event; `'throw'` runs the others and then throws the first error out of the
+   * call that emitted the event (a transport's message callback, `close()`, ...), as it is.
+   */
+  readonly listenerErrors?: 'report' | 'throw';
   /** The struct the entity stream carries, if the game uses one (`net.entities`). */
   readonly entities?: string;
   /** The snapshot buffer's options (`net.snapshots`). */
@@ -91,10 +150,10 @@ export interface NetEvents {
   welcome: [welcome: Welcome];
   /** The server refused the handshake (closed for good). `stale`: the client's schema is old. */
   rejected: [reason: string, stale: boolean];
-  /** A connection was lost; it reconnects. */
-  down: [code: number, reason: string];
-  /** Closed for good. */
-  closed: [code: number, reason: string];
+  /** A connection was lost; it reconnects. `why` is the reason, typed. */
+  down: [code: number, reason: string, why: NetReason];
+  /** Closed for good. `why` is the reason, typed. */
+  closed: [code: number, reason: string, why: NetReason];
   /** A game server message (`ServerMsg::Game`). */
   game: [value: unknown];
   /** An entity-stream frame was applied (`net.entities`); the changes are reused next frame. */
@@ -114,10 +173,19 @@ export type NetStatus = 'connecting' | 'open' | 'down' | 'closed';
 
 /** A failed command or a session that can't carry one. */
 export class NetError extends Error {
-  constructor(message: string) {
+  /** Why, typed, when the session knows (a lost or closed session, a timed-out command). */
+  readonly reason: NetReason | undefined;
+  constructor(message: string, reason?: NetReason) {
     super(message);
     this.name = 'NetError';
+    this.reason = reason;
   }
+}
+
+/** Options for `Net.reconnect`. */
+export interface ReconnectNowOptions {
+  /** Wait the reconnect backoff before the next attempt instead of reopening at once (default false). */
+  readonly backoff?: boolean;
 }
 
 /** A live query's handle. */
@@ -181,6 +249,19 @@ export class Net {
   readonly #commandMs: number;
   readonly #inflate: NetOptions['inflate'];
   readonly #bulk: number | null;
+  readonly #plainBulk: boolean;
+  /** The schema's envelope layout. */
+  readonly #env: EnvelopeInfo;
+  /** Bulk data bytes taken this connection (an `Ack`'s total, for `ack: 'total'`). */
+  #taken = 0;
+  /** `CommandResult`'s tag when results are raw, else -1. */
+  readonly #rawResult: number;
+  readonly #throwListenerErrors: boolean;
+  readonly #heardByTick: boolean;
+  /** Something arrived since the last liveness tick (`heardBy: 'tick'`). */
+  #heard = false;
+  /** The error a listener threw, on its way out (`listenerErrors: 'throw'`). */
+  #thrown: { readonly error: unknown } | null = null;
   readonly #timers: Timers;
   readonly #random: () => number;
   readonly #listeners = new Map<keyof NetEvents, Set<(...args: never[]) => void>>();
@@ -232,7 +313,14 @@ export class Net {
     this.#handshakeMs = options.handshakeMs ?? 10_000;
     this.#commandMs = options.commandMs ?? 30_000;
     this.#inflate = options.inflate;
-    this.#bulk = options.inflate ? (options.bulk ?? 1) : null;
+    this.#plainBulk = options.plainBulk === true;
+    this.#env = envelopeOf(this.schema);
+    this.#bulk = options.inflate ? (options.bulk ?? 1) : this.#plainBulk ? 0 : null;
+    this.#rawResult = options.rawResults
+      ? this.schema.variants('ServerMsg').indexOf('CommandResult')
+      : -1;
+    this.#throwListenerErrors = options.listenerErrors === 'throw';
+    this.#heardByTick = options.liveness?.heardBy === 'tick';
     this.#timers = options.timers ?? pageTimers;
     this.#random = options.random ?? Math.random;
     const now = () => this.#timers.now();
@@ -290,18 +378,26 @@ export class Net {
    */
   command<R = unknown>(command: unknown): Promise<R> {
     if (this.#status !== 'open')
-      return Promise.reject(new NetError(`not connected (${this.#status})`));
+      return Promise.reject(
+        new NetError(`not connected (${this.#status})`, { kind: 'notOpen', detail: this.#status }),
+      );
     this.#seq = (this.#seq + 1) >>> 0;
     const seq = this.#seq;
     let frame: Uint8Array;
     try {
       frame = this.#encode({ type: 'Command', seq, command });
     } catch (e) {
-      return Promise.reject(new NetError(`command can't be sent: ${(e as Error).message}`));
+      const detail = (e as Error).message;
+      return Promise.reject(
+        new NetError(`command can't be sent: ${detail}`, { kind: 'unencodable', detail }),
+      );
     }
     return new Promise<R>((resolve, reject) => {
       const timer = this.#timers.setTimeout(() => {
-        if (this.#waiting.delete(seq)) reject(new NetError(`command ${seq} timed out`));
+        if (this.#waiting.delete(seq)) {
+          const detail = `command ${seq} timed out`;
+          reject(new NetError(detail, { kind: 'commandTimeout', detail }));
+        }
       }, this.#commandMs);
       this.#waiting.set(seq, { resolve: resolve as (v: unknown) => void, reject, timer });
       this.#transport!.send(frame);
@@ -358,10 +454,23 @@ export class Net {
     if (this.#status === 'open') this.#transport!.send(frame);
   }
 
-  /** Sends a game client message (`ClientMsg::Game`); false if not open. */
+  /**
+   * Sends a game client message (`ClientMsg::Game`, or with inline game messages, `value` itself:
+   * `{ type: Name, ...fields }`); false if not open.
+   */
   send(value: unknown): boolean {
+    const game = this.#env.clientGame;
+    if (game.size > 0) {
+      const type = (value as { type?: unknown } | null)?.type;
+      if (typeof type !== 'string' || !game.has(type)) {
+        throw new NetError(`send: ${JSON.stringify(type)} is not one of the game's messages`, {
+          kind: 'unencodable',
+          detail: `not a game message: ${JSON.stringify(type)}`,
+        });
+      }
+    }
     if (this.#status !== 'open') return false;
-    this.#send({ type: 'Game', value });
+    this.#send(game.size > 0 ? (value as ClientMsg) : { type: 'Game', value });
     return true;
   }
 
@@ -410,15 +519,18 @@ export class Net {
     this.#ping();
   }
 
-  /** Drops the connection and reconnects (keeping queries and interest). */
-  reconnect(): void {
+  /**
+   * Drops the connection and reconnects (keeping queries and interest): at once, or after the
+   * reconnect backoff with `{ backoff: true }`.
+   */
+  reconnect(options?: ReconnectNowOptions): void {
     if (this.#status === 'closed') return;
-    this.#lost(1000, 'reconnect', 0);
+    this.#lost(1000, { kind: 'reconnect', detail: 'reconnect' }, options?.backoff ? undefined : 0);
   }
 
   /** Closes for good. */
   close(): void {
-    this.#end(1000, 'closed');
+    this.#end(1000, { kind: 'closed', detail: 'closed' });
   }
 
   // ------------------------------------------------------------------ connection
@@ -426,14 +538,26 @@ export class Net {
   #emit<E extends keyof NetEvents>(event: E, ...args: NetEvents[E]): void {
     const set = this.#listeners.get(event);
     if (!set) return;
+    let thrown: { readonly error: unknown } | null = null;
     for (const fn of [...set]) {
       try {
         (fn as unknown as (...a: NetEvents[E]) => void)(...args);
       } catch (e) {
         // One throwing listener doesn't stop the others.
-        if (event !== 'error') this.#emit('error', e instanceof Error ? e : new Error(String(e)));
+        if (this.#throwListenerErrors) thrown ??= { error: e };
+        else if (event !== 'error')
+          this.#emit('error', e instanceof Error ? e : new Error(String(e)));
       }
     }
+    if (thrown) {
+      this.#thrown = thrown;
+      throw thrown.error;
+    }
+  }
+
+  /** Whether `e` is a listener's error on its way out (`listenerErrors: 'throw'`). */
+  #isThrown(e: unknown): boolean {
+    return this.#thrown !== null && this.#thrown.error === e;
   }
 
   #open(): void {
@@ -441,13 +565,14 @@ export class Net {
     this.#status = this.#downSince >= 0 ? 'down' : 'connecting';
     const live = () => gen === this.#generation;
     this.#handshakeTimer = this.#timers.setTimeout(() => {
-      if (live()) this.#lost(1006, 'handshake timed out');
+      if (live()) this.#lost(1006, { kind: 'handshakeTimeout', detail: 'handshake timed out' });
     }, this.#handshakeMs);
     this.#transport = this.#connect({
       open: () => {
         if (!live()) return;
         const h = typeof this.#hello === 'function' ? this.#hello() : this.#hello;
         this.#lastHeard = this.#timers.now();
+        this.#taken = 0;
         this.#send({
           type: 'Hello',
           token: h.token ?? '',
@@ -460,26 +585,33 @@ export class Net {
         if (live()) this.#receive(frame);
       },
       close: (code, reason) => {
-        if (live()) this.#lost(code, reason || 'connection closed');
+        if (live()) this.#lost(code, { kind: 'lost', detail: reason || 'connection closed' });
       },
     });
   }
 
   /** The connection ended (not by `close()`): reconnect or, if that's over, close for good. */
-  #lost(code: number, reason: string, delay?: number): void {
+  #lost(code: number, why: NetReason, delay?: number): void {
     if (this.#status === 'closed') return;
-    this.#teardown(new NetError(`connection lost: ${reason}`));
+    this.#teardown(new NetError(`connection lost: ${why.detail}`, why));
     const r = this.#reconnect;
     const now = this.#timers.now();
     if (this.#downSince < 0) this.#downSince = now;
     if (!r || now - this.#downSince >= r.giveUpAfter) {
-      this.#end(code, r ? `could not reconnect within ${r.giveUpAfter} ms: ${reason}` : reason);
+      this.#end(
+        code,
+        r
+          ? {
+              kind: 'gaveUp',
+              detail: `could not reconnect within ${r.giveUpAfter} ms: ${why.detail}`,
+              last: why,
+            }
+          : why,
+      );
       return;
     }
-    if (this.#status !== 'down') {
-      this.#status = 'down';
-      this.#emit('down', code, reason);
-    }
+    const announce = this.#status !== 'down';
+    this.#status = 'down';
     const wait =
       delay ??
       Math.min(r.maxDelay, r.initialDelay * 2 ** this.#attempt) *
@@ -489,18 +621,19 @@ export class Net {
       this.#retryTimer = null;
       if (this.#status === 'down') this.#open();
     }, wait);
+    if (announce) this.#emit('down', code, why.detail, why);
   }
 
   /** Closes for good. */
-  #end(code: number, reason: string): void {
+  #end(code: number, why: NetReason): void {
     if (this.#status === 'closed') return;
-    const error = new NetError(`closed: ${reason}`);
+    const error = new NetError(`closed: ${why.detail}`, why);
     this.#teardown(error);
     if (this.#retryTimer !== null) this.#timers.clearTimeout(this.#retryTimer);
     this.#retryTimer = null;
     this.#status = 'closed';
     this.#readyReject(error);
-    this.#emit('closed', code, reason);
+    this.#emit('closed', code, why.detail, why);
   }
 
   /** Ends the current connection: commands in flight fail, timers stop. */
@@ -546,13 +679,17 @@ export class Net {
     this.#tickTimer = null;
     if (this.#status !== 'open') return;
     const now = this.#timers.now();
+    if (this.#heard) {
+      this.#heard = false;
+      this.#lastHeard = now;
+    }
     const heard = now - this.#lastHeard;
     if (heard >= this.#deadMs) {
-      this.#lost(1006, `nothing heard for ${Math.round(heard)} ms`);
+      this.#lost(1006, { kind: 'dead', detail: `nothing heard for ${Math.round(heard)} ms` });
       return;
     }
     if (this.#wakeAt >= 0 && now - this.#wakeAt >= this.#wakeMs) {
-      this.#lost(1006, 'no answer after waking');
+      this.#lost(1006, { kind: 'wakeTimeout', detail: 'no answer after waking' });
       return;
     }
     if (now - this.#lastPing >= this.#pingMs) this.#ping();
@@ -567,7 +704,9 @@ export class Net {
   // ------------------------------------------------------------------ receiving
 
   #receive(frame: Uint8Array): void {
-    this.#lastHeard = this.#timers.now();
+    this.#thrown = null;
+    if (this.#heardByTick) this.#heard = true;
+    else this.#lastHeard = this.#timers.now();
     this.#wakeAt = -1;
     if (this.#held) {
       this.#held.push(frame);
@@ -577,6 +716,7 @@ export class Net {
   }
 
   #handleFrame(frame: Uint8Array): void {
+    if (this.#rawResult >= 0 && this.#rawCommandResult(frame)) return;
     let msg: ServerMsg;
     try {
       msg = this.schema.decode<ServerMsg>('ServerMsg', frame);
@@ -587,13 +727,43 @@ export class Net {
     try {
       this.#handle(msg);
     } catch (e) {
+      if (this.#isThrown(e)) throw e;
       this.#protocolError((e as Error).message);
     }
   }
 
+  /** A `CommandResult` resolved with its result's bytes (`rawResults`); false if `frame` is not one. */
+  #rawCommandResult(frame: Uint8Array): boolean {
+    let seq: number;
+    const r = new Reader(frame);
+    try {
+      if (r.variant() !== this.#rawResult) return false;
+      seq = r.u32();
+    } catch {
+      return false; // Not a well-formed result: the decoder says why.
+    }
+    if (!this.#welcome) {
+      this.#protocolError('CommandResult before Welcome');
+      return true;
+    }
+    const w = this.#waiting.get(seq);
+    if (!w) {
+      this.#protocolError(`result for unknown command ${seq}`);
+      return true;
+    }
+    this.#waiting.delete(seq);
+    this.#timers.clearTimeout(w.timer);
+    w.resolve(frame.subarray(r.position));
+    return true;
+  }
+
   #protocolError(message: string): void {
-    this.#emit('error', new NetError(`protocol: ${message}`));
-    this.#lost(1002, message);
+    const why: NetReason = { kind: 'protocol', detail: message };
+    try {
+      this.#emit('error', new NetError(`protocol: ${message}`, why));
+    } finally {
+      this.#lost(1002, why);
+    }
   }
 
   #handle(msg: ServerMsg): void {
@@ -610,8 +780,11 @@ export class Net {
         this.#welcomed(msg);
         return;
       case 'Rejected':
-        this.#emit('rejected', msg.reason, msg.staleSchema);
-        this.#end(4000, `rejected: ${msg.reason}`);
+        try {
+          this.#emit('rejected', msg.reason, msg.staleSchema);
+        } finally {
+          this.#end(4000, { kind: 'rejected', detail: `rejected: ${msg.reason}` });
+        }
         return;
       case 'CommandResult': {
         const w = this.#waiting.get(msg.seq);
@@ -649,6 +822,7 @@ export class Net {
           const changes = this.entities.apply(msg.data);
           if (changes) this.#emit('entities', changes);
         } catch (e) {
+          if (this.#isThrown(e)) throw e;
           this.#send({ type: 'EntityResync' });
           this.#emit('error', e as Error);
         }
@@ -667,16 +841,28 @@ export class Net {
         if (!msg.driving) this.#predictor?.clear();
         this.#emit('control', msg.driving);
         return;
-      case 'Closed':
-        if (msg.code >= 4000 && msg.code < 5000) this.#end(msg.code, msg.reason);
-        else this.#lost(msg.code, msg.reason);
+      case 'Closed': {
+        const codes = this.#env.closeCodes;
+        const code = codes
+          ? (codes.get((msg.code as unknown as { type: string }).type) ?? 1002)
+          : msg.code;
+        if (code >= 4000 && code < 5000) {
+          this.#end(code, { kind: 'serverClosed', detail: msg.reason });
+        } else this.#lost(code, { kind: 'serverClosed', detail: msg.reason });
         return;
+      }
       case 'Bulk':
         this.#bulkLane(msg.codec, msg.data);
         return;
       case 'Game':
         this.#emit('game', msg.value);
         return;
+      default: {
+        // One of the game's own messages, inline (`EnvelopeSpec`).
+        const type = (msg as { type: string }).type;
+        if (!this.#env.serverGame.has(type)) throw new NetError(`unexpected ${type}`);
+        this.#emit('game', msg);
+      }
     }
   }
 
@@ -684,6 +870,8 @@ export class Net {
     if (this.#welcome) throw new NetError('a second Welcome');
     if (this.#handshakeTimer !== null) this.#timers.clearTimeout(this.#handshakeTimer);
     this.#handshakeTimer = null;
+    // A layout without `step_us` (`EnvelopeSpec.welcome`) reads it as 0.
+    if (msg.stepUs === undefined) msg = { ...msg, stepUs: 0 };
     this.#welcome = msg;
     this.#status = 'open';
     this.#attempt = 0;
@@ -759,8 +947,29 @@ export class Net {
     this.#subscribe(sub, false);
   }
 
+  /** Acknowledges one `Bulk`'s `bytes` of data, as the layout counts them. */
+  #ack(bytes: number): void {
+    this.#taken += bytes;
+    this.#send(
+      this.#env.ack === 'total'
+        ? ({ type: 'Ack', total: this.#taken } as unknown as ClientMsg)
+        : { type: 'Ack', bytes },
+    );
+  }
+
   /** A bulk lane: inflate, then handle its frames in order, holding later frames meanwhile. */
   #bulkLane(codec: number, data: Uint8Array): void {
+    if (codec === 0 && this.#plainBulk) {
+      // Uncompressed: its frames now, in order (nothing is held: held frames come in order too).
+      const gen = this.#generation;
+      const r = new Reader(data);
+      while (r.remaining > 0) {
+        this.#handleFrame(r.bytes());
+        if (gen !== this.#generation) return;
+      }
+      this.#ack(data.length);
+      return;
+    }
     const inflate = this.#inflate;
     if (!inflate) throw new NetError('Bulk without an inflate hook');
     const gen = this.#generation;
@@ -777,10 +986,11 @@ export class Net {
             if (gen !== this.#generation) return;
           }
         } catch (e) {
+          if (this.#isThrown(e)) throw e;
           this.#protocolError(`bad bulk lane: ${(e as Error).message}`);
           return;
         }
-        this.#send({ type: 'Ack', bytes: data.length });
+        this.#ack(data.length);
         for (const f of held) {
           if (gen !== this.#generation) return;
           const waiting = this.#held as Uint8Array[] | null;

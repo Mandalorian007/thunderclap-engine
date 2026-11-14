@@ -39,7 +39,9 @@ and the reports. `start` is the same inside a caller's runtime, returning
 `Running` (`addr`, `store_dir`, `auth`, `sim`, `stopped`, `stop`).
 
 `generate_ts::<G>(out, &config)` writes the client TypeScript from
-`G::schema()` (tc-tsgen), leaving unchanged files alone.
+`G::schema()` (tc-tsgen), leaving unchanged files alone. A protocol with
+its own `Protocol::ENVELOPE` gets the matching `envelope` in `schema.ts`
+(`define_schema_ts_with(schema, net_import, envelope)`).
 
 ## The CLI
 
