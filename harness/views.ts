@@ -1,26 +1,33 @@
 /**
- * Two-views page (ws/two-views): the stereo seam without WebXR. The mesh demo's scene is drawn
- * twice per frame, once per eye, into the two halves of one surface in one
- * `beginFrame` / record / `render()` × 2 / `endFrame`. Each eye is its own `Camera.perspective`
- * offset ±`IPD / 2` on the camera's right axis, with `camera.screen` the left or right half in the
- * unit-square convention `render()` accepts and `camera.viewIndex` 0 or 1 (the `view_index` of
- * its camera block). Nothing here is engine code: the geometry and the shader are the mesh demo's
- * (copied, not imported), the eyes are what an XR host would hand a game.
+ * Two-views page (ws/two-views, moved onto the render core in ws/core-views): the stereo seam
+ * without WebXR. The mesh demo's scene is one static, GPU-culled draw set of the retained core,
+ * seen by two eyes as one `union` cull group (D1 §3.5): one view-buffer write, one cull
+ * dispatch, one recorded bundle, executed once per eye into the left and right half of one
+ * surface (`CoreTarget.viewport`). Each eye is its own `Camera.perspective` offset ±`IPD / 2` on
+ * the camera's right axis, with `camera.screen` the left or right half in the unit-square
+ * convention and `camera.viewIndex` 0 or 1 (the core writes `view.index` the same). Nothing here
+ * is engine code: the geometry and the shader are the mesh demo's (copied, not imported), the
+ * eyes are what an XR host would hand a game.
  *
  * A small head-locked block 0.6 m in front of the eyes (`marker`) makes the parallax large enough
  * to sample: it lands at different places in the two halves, while the scene behind it agrees.
  */
-import { GameLoop } from '@thunderclap-engine/engine/core';
+
 import { boot } from '@thunderclap-engine/engine/platform';
 import {
+  type ArenaAlloc,
   Camera,
   type CameraPoint,
+  type CoreTarget,
+  type CullGroup,
+  createInstanceLayout,
+  createRenderCore,
+  createRenderView,
+  createVertexLayout,
   gpuDiagnostics,
-  type InstanceParams,
   installGpuErrorLogging,
-  Renderer,
+  setViewFromCamera,
   Transform,
-  VERTEX_LAYOUT_3D,
 } from '@thunderclap-engine/engine/render';
 import type { HarnessViewsState, ViewsEye, ViewsProbe } from './views-state';
 
@@ -48,7 +55,7 @@ const state: HarnessViewsState = {
   frames: 0,
   ipd: IPD,
   eyes: [eyeState(0, 0), eyeState(1, 0.5)],
-  stats: { drawCalls: 0, instances: 0 },
+  stats: { drawCalls: 0, instances: 0, calls: 0, dispatches: 0, bundleBuilds: 0 },
   gpuErrors: 0,
 };
 window.__harnessViews = { state };
@@ -129,25 +136,64 @@ function groundGeometry(): { vertices: Float32Array; indices: Uint16Array } {
   return { vertices, indices: new Uint16Array([0, 1, 2, 0, 2, 3]) };
 }
 
-// ------------------------------------------------------------------ the material
+// ------------------------------------------------------------------ the shader
+
+/** The mesh demo's vertex: position, normal, uv, colour (12 floats). */
+const MESH = createVertexLayout({
+  stride: 48,
+  attributes: [
+    { name: 'position', format: 'float32x3', offset: 0 },
+    { name: 'normal', format: 'float32x3', offset: 12 },
+    { name: 'uv', format: 'float32x2', offset: 24 },
+    { name: 'color', format: 'float32x4', offset: 32 },
+  ],
+});
+/** Per instance: the 3×4 row-major world matrix, the tint, `params` (x > 0: checker). */
+const INSTANCE = createInstanceLayout({
+  stride: 80,
+  attributes: [
+    { name: 'row0', format: 'float32x4', offset: 0 },
+    { name: 'row1', format: 'float32x4', offset: 16 },
+    { name: 'row2', format: 'float32x4', offset: 32 },
+    { name: 'tint', format: 'float32x4', offset: 48 },
+    { name: 'params', format: 'float32x4', offset: 64 },
+  ],
+});
+const INSTANCE_FLOATS = 20;
 
 /** Lambert + ambient from the world normal; `params.x` > 0 draws a checker from the world position. */
 const LIT_WGSL = /* wgsl */ `
-@fragment fn fs_main(in: VSOut) -> FragOut {
+struct Out {
+  @builtin(position) clip: vec4f,
+  @location(0) normal: vec3f,
+  @location(1) world: vec3f,
+  @location(2) color: vec3f,
+  @location(3) checker: f32,
+};
+@vertex fn vs(in: VertexIn) -> Out {
+  let p = vec4f(in.position, 1.0);
+  let w = vec3f(dot(in.row0, p), dot(in.row1, p), dot(in.row2, p));
+  let n = vec3f(dot(in.row0.xyz, in.normal), dot(in.row1.xyz, in.normal), dot(in.row2.xyz, in.normal));
+  var o: Out;
+  o.clip = view.viewProj * vec4f(w, 1.0);
+  o.normal = n;
+  o.world = w;
+  o.color = in.color.rgb * in.tint.rgb;
+  o.checker = in.params.x;
+  return o;
+}
+@fragment fn fs(in: Out) -> @location(0) vec4f {
   let n = normalize(in.normal);
   let l = normalize(vec3f(0.45, 1.0, 0.65));
   let diffuse = max(dot(n, l), 0.0);
-  var albedo = in.color.rgb;
-  if (in.params.x > 0.0) {
-    let cell = floor(in.worldPos.x) + floor(in.worldPos.z);
+  var albedo = in.color;
+  if (in.checker > 0.0) {
+    let cell = floor(in.world.x) + floor(in.world.z);
     albedo *= 0.8 + 0.2 * (cell - 2.0 * floor(cell * 0.5));
   }
   // A faint sky term from above keeps the shadowed faces readable.
   let sky = 0.5 + 0.5 * n.y;
-  var o: FragOut;
-  o.color = vec4f(albedo * (0.18 + 0.12 * sky + 0.8 * diffuse), 1.0);
-  o.emissive = vec4f(0.0);
-  return o;
+  return vec4f(albedo * (0.18 + 0.12 * sky + 0.8 * diffuse), 1.0);
 }`;
 
 // ------------------------------------------------------------------ the eyes
@@ -214,6 +260,17 @@ function probe(camera: Camera, x: number, y: number, z: number, out: ViewsProbe)
   out.y = probePoint.y;
 }
 
+/** One mesh of the scene: its transform, tint and params, its instance and its slot. */
+interface Item {
+  t: Transform;
+  tint: readonly number[];
+  checker: number;
+  /** Bounding-sphere radius of the unit mesh under the transform's largest scale. */
+  radius: number;
+  inst: ArenaAlloc;
+  slot: number;
+}
+
 async function main(): Promise<void> {
   const res = await boot(root, { title: 'Engine two-views demo' });
   if (!res.ok) {
@@ -221,14 +278,12 @@ async function main(): Promise<void> {
     state.ready = true;
     return;
   }
-  const { surface, gpu } = res;
+  const { gpu } = res;
   installGpuErrorLogging(gpu.device);
-  const renderer = new Renderer(gpu);
-  renderer.resize(surface.backbuffer.width, surface.backbuffer.height);
-  surface.onResize(({ backbuffer }) => renderer.resize(backbuffer.width, backbuffer.height));
+  const core = createRenderCore(gpu);
 
   // One eye per half: the aspect is the half's, `screen` is the half as a fraction of the
-  // surface, `viewIndex` tells the camera blocks apart.
+  // surface, `viewIndex` tells the views apart.
   const fovY = (50 * Math.PI) / 180;
   const aspect = LOGICAL.width / 2 / LOGICAL.height;
   const eyes = [0, 1].map((i) => {
@@ -237,78 +292,164 @@ async function main(): Promise<void> {
     c.viewIndex = i;
     return c;
   }) as [Camera, Camera];
+  const views = [createRenderView(), createRenderView()] as const;
+  // Both eyes are one cull group: one union-frustum cull, one args set, one bundle.
+  const groups: CullGroup[] = [{ views, planes: 'union' }];
 
-  const lit = renderer.createMaterial({ label: 'lit', blend: 'opaque', wgsl: LIT_WGSL });
-  const cube = renderer.createMesh({ ...cubeGeometry(), layout: VERTEX_LAYOUT_3D, label: 'cube' });
-  const ground = renderer.createMesh({
-    ...groundGeometry(),
-    layout: VERTEX_LAYOUT_3D,
-    label: 'ground',
+  const vertices = core.createArena({ kind: 'vertex', blockBytes: 64 << 10, label: 'meshes' });
+  const instances = core.createArena({ kind: 'instance', blockBytes: 4 << 10, label: 'places' });
+  const set = core.createDrawSet({
+    label: 'scene',
+    shader: { code: LIT_WGSL },
+    vertexLayout: MESH,
+    instanceLayout: INSTANCE,
+    vertices,
+    instances,
+    capacity: 8,
+    kind: 'static',
+    cull: 'gpu',
   });
+  // Both meshes are quads (four vertices, triangles 0 1 2, 0 2 3), so they draw through the
+  // core's shared quad index.
+  const cubeGeo = cubeGeometry();
+  const groundGeo = groundGeometry();
+  const cube = vertices.alloc(cubeGeo.vertices.byteLength, 16);
+  vertices.write(cube, cubeGeo.vertices);
+  const ground = vertices.alloc(groundGeo.vertices.byteLength, 16);
+  vertices.write(ground, groundGeo.vertices);
 
   // The mesh demo's instances: the near block sits at z 1..2 and the far block (drawn after it)
   // fills x -1..1, y 0..3, z -1..0 right behind it. The marker is head-locked, placed per frame.
-  const groundT = new Transform({ scaleX: 16, scaleY: 1, scaleZ: 16 });
-  const near = new Transform({ x: 0, y: 0.5, z: 1.5 });
-  const far = new Transform({ x: 0, y: 1.5, z: -0.5, scaleX: 2, scaleY: 3, scaleZ: 1 });
-  const left = new Transform({ x: -3.2, y: 0.6, z: 0, scaleX: 1.2, scaleY: 1.2, scaleZ: 1.2 });
-  const right = new Transform({ x: 3.2, y: 0.6, z: 0, scaleX: 1.2, scaleY: 1.2, scaleZ: 1.2 });
-  const marker = new Transform({ scaleX: MARKER_SIZE, scaleY: MARKER_SIZE, scaleZ: MARKER_SIZE });
-  const groundP: InstanceParams = { tint: [0.42, 0.46, 0.36, 1], params: [1, 0, 0, 0] };
-  const nearP: InstanceParams = { tint: [1.0, 0.1, 0.06, 1] };
-  const farP: InstanceParams = { tint: [0.08, 0.28, 1.0, 1] };
-  const leftP: InstanceParams = { tint: [0.3, 0.85, 0.35, 1] };
-  const rightP: InstanceParams = { tint: [0.95, 0.8, 0.2, 1] };
-  const markerP: InstanceParams = { tint: [1.0, 0.12, 1.0, 1] };
-  let spin = 0;
+  const item = (t: Transform, tint: readonly number[], checker: number, flat: boolean): Item => {
+    const s = Math.max(t.scale.x, t.scale.y, t.scale.z);
+    const inst = instances.alloc(INSTANCE_FLOATS * 4, 16);
+    const it: Item = { t, tint, checker, radius: flat ? s * 0.75 : s * 0.87, inst, slot: -1 };
+    it.slot = set.add({
+      vertices: flat ? ground : cube,
+      indexCount: flat ? 6 : 36,
+      instances: inst,
+      bounds: [t.position.x, t.position.y, t.position.z, it.radius],
+    });
+    return it;
+  };
+  const items = [
+    item(new Transform({ scaleX: 16, scaleY: 1, scaleZ: 16 }), [0.42, 0.46, 0.36, 1], 1, true),
+    item(new Transform({ x: 0, y: 0.5, z: 1.5 }), [1.0, 0.1, 0.06, 1], 0, false),
+    item(
+      new Transform({ x: 0, y: 1.5, z: -0.5, scaleX: 2, scaleY: 3, scaleZ: 1 }),
+      [0.08, 0.28, 1.0, 1],
+      0,
+      false,
+    ),
+    item(
+      new Transform({ x: -3.2, y: 0.6, z: 0, scaleX: 1.2, scaleY: 1.2, scaleZ: 1.2 }),
+      [0.3, 0.85, 0.35, 1],
+      0,
+      false,
+    ),
+    item(
+      new Transform({ x: 3.2, y: 0.6, z: 0, scaleX: 1.2, scaleY: 1.2, scaleZ: 1.2 }),
+      [0.95, 0.8, 0.2, 1],
+      0,
+      false,
+    ),
+    item(
+      new Transform({ scaleX: MARKER_SIZE, scaleY: MARKER_SIZE, scaleZ: MARKER_SIZE }),
+      [1.0, 0.12, 1.0, 1],
+      0,
+      false,
+    ),
+  ];
+  const [, , , left, right, marker] = items as [Item, Item, Item, Item, Item, Item];
+  const data = new Float32Array(INSTANCE_FLOATS);
+  const writeItem = (it: Item): void => {
+    data.set(it.t.world, 0);
+    data.set(it.tint, 12);
+    data[16] = it.checker;
+    instances.write(it.inst, data);
+    const p = it.t.position;
+    set.setBounds(it.slot, p.x, p.y, p.z, it.radius);
+  };
+  for (const it of items) writeItem(it);
 
-  const loop = new GameLoop({
-    update(dt) {
-      spin += dt;
-    },
-    render(_alpha, time) {
-      placeHead();
-      const h = head;
-      marker.setPosition(
-        h.eye[0]! + h.fwd[0]! * MARKER_DISTANCE,
-        h.eye[1]! + h.fwd[1]! * MARKER_DISTANCE,
-        h.eye[2]! + h.fwd[2]! * MARKER_DISTANCE,
-      );
-      left.setAxisAngle(0, 1, 0, spin * 0.6);
-      right.setAxisAngle(1, 1, 0, spin * 0.4);
-
-      const frame = renderer.beginFrame(time.realTime, time.frameDt);
-      frame.clear(0.05, 0.07, 0.12);
-      frame.mesh(ground, lit, groundT, groundP);
-      frame.mesh(cube, lit, near, nearP);
-      frame.mesh(cube, lit, far, farP);
-      frame.mesh(cube, lit, left, leftP);
-      frame.mesh(cube, lit, right, rightP);
-      frame.mesh(cube, lit, marker, markerP);
-      for (let i = 0; i < 2; i++) {
-        const camera = eyes[i]!;
-        const eye = state.eyes[i as 0 | 1];
-        placeEye(camera, (i === 0 ? -1 : 1) * (IPD / 2), eye);
-        const before = renderer.stats.drawCalls;
-        renderer.render(frame, camera);
-        eye.drawCalls = renderer.stats.drawCalls - before;
-        probe(camera, 0, 0.75, 2, eye.probes.near);
-        probe(camera, 0, 2.5, 0, eye.probes.far);
-        probe(camera, 1.2, 0, 3.6, eye.probes.ground);
-        const m = marker.position;
-        probe(camera, m.x, m.y, m.z, eye.probes.marker);
-      }
-      renderer.endFrame();
-      state.frames++;
-      state.stats.drawCalls = renderer.stats.drawCalls;
-      state.stats.instances = renderer.stats.instances;
-      state.gpuErrors = gpuDiagnostics.errorCount;
-    },
+  const target = (clear: boolean): CoreTarget => ({
+    view: undefined as unknown as GPUTextureView,
+    format: gpu.format,
+    width: 1,
+    height: 1,
+    // Only the first eye clears; the second loads the colour and draws into its half.
+    clear: clear ? { r: 0.05, g: 0.07, b: 0.12, a: 1 } : undefined,
+    viewport: { x: 0, y: 0, width: 1, height: 1 },
   });
-  res.onDeviceLost(() => loop.stop());
-  loop.start();
+  const targets = [target(true), target(false)] as const;
+  let spin = 0;
+  let last = performance.now();
   state.gpu = 'ok';
   state.ready = true;
+
+  const frame = (): void => {
+    const now = performance.now();
+    spin += Math.min(0.1, (now - last) / 1000);
+    last = now;
+    placeHead();
+    const h = head;
+    marker.t.setPosition(
+      h.eye[0]! + h.fwd[0]! * MARKER_DISTANCE,
+      h.eye[1]! + h.fwd[1]! * MARKER_DISTANCE,
+      h.eye[2]! + h.fwd[2]! * MARKER_DISTANCE,
+    );
+    left.t.setAxisAngle(0, 1, 0, spin * 0.6);
+    right.t.setAxisAngle(1, 1, 0, spin * 0.4);
+    writeItem(marker);
+    writeItem(left);
+    writeItem(right);
+
+    const texture = gpu.context.getCurrentTexture();
+    const colour = texture.createView();
+    const w = texture.width;
+    const half = Math.floor(w / 2);
+    for (let i = 0; i < 2; i++) {
+      const camera = eyes[i]!;
+      const eye = state.eyes[i as 0 | 1];
+      placeEye(camera, (i === 0 ? -1 : 1) * (IPD / 2), eye);
+      setViewFromCamera(views[i]!, camera);
+      const t = targets[i]!;
+      t.view = colour;
+      t.width = w;
+      t.height = texture.height;
+      const vp = t.viewport!;
+      vp.x = i === 0 ? 0 : half;
+      vp.y = 0;
+      vp.width = i === 0 ? half : w - half;
+      vp.height = texture.height;
+      probe(camera, 0, 0.75, 2, eye.probes.near);
+      probe(camera, 0, 2.5, 0, eye.probes.far);
+      probe(camera, 1.2, 0, 3.6, eye.probes.ground);
+      const m = marker.t.position;
+      probe(camera, m.x, m.y, m.z, eye.probes.marker);
+    }
+    const encoder = gpu.device.createCommandEncoder();
+    core.prepare(encoder, groups);
+    for (let i = 0; i < 2; i++) {
+      const before = core.stats.bundles + core.stats.directDraws;
+      core.draw(encoder, i, targets[i]!);
+      state.eyes[i as 0 | 1].drawCalls = core.stats.bundles + core.stats.directDraws - before;
+    }
+    gpu.device.queue.submit([encoder.finish()]);
+    const st = core.stats;
+    state.frames++;
+    state.stats.drawCalls = state.eyes[0].drawCalls + state.eyes[1].drawCalls;
+    state.stats.instances = items.length * 2;
+    state.stats.calls = st.calls;
+    state.stats.dispatches = st.dispatches;
+    state.stats.bundleBuilds = st.bundleBuilds;
+    state.gpuErrors = gpuDiagnostics.errorCount;
+    requestAnimationFrame(frame);
+  };
+  res.onDeviceLost(() => {
+    state.gpu = 'lost';
+  });
+  requestAnimationFrame(frame);
 }
 
 main().catch((err) => {
