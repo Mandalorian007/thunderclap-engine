@@ -28,8 +28,13 @@ export interface HarnessVoxelWorldState {
   foliageQuads: number;
   liquidQuads: number;
   vertexBytes: number;
-  /** The core's GPU calls this frame, and the most in any frame since settled. */
+  /** The core's GPU calls this frame. */
   calls: number;
+  /**
+   * Frames held (settled, and no cave-culling search waiting on its throttle), and the GPU
+   * calls of the last of them.
+   */
+  held: number;
   heldCalls: number;
   /** Bundles executed and compute dispatches this frame; bundles recorded so far. */
   bundles: number;

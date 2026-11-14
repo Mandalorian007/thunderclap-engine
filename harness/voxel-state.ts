@@ -19,14 +19,20 @@ export interface HarnessVoxelState {
   position: [number, number, number];
   /** `look.locked`. */
   locked: boolean;
-  /** `VoxelChunksStats` of the last frame. */
+  /** Grid chunks (`grid.chunkCount`). */
   chunks: number;
+  /** `world.stats`: sections held (the grid's chunks and the ring around them), sections with geometry. */
+  sections: number;
   drawn: number;
-  culled: number;
-  triangles: number;
-  growths: number;
-  remeshes: number;
-  remeshMs: number;
+  /** Grid chunks inside the view (the CPU twin of the GPU cull, for the record). */
+  visible: number;
+  /** Quads on the GPU, and section results uploaded so far. */
+  quads: number;
+  uploads: number;
+  /** The core's GPU calls in the last frame. */
+  calls: number;
+  /** `world.settled`: nothing waiting to mesh or upload. */
+  settled: boolean;
   /** The block the centre ray hits (`raycastVoxels` from the eye, 8 units), else null. */
   hit: [number, number, number] | null;
   /** Blocks broken and placed so far. */

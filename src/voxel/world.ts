@@ -219,8 +219,7 @@ export function createVoxelWorld(core: RenderCore, opts: VoxelWorldOptions): Vox
   const vRadius = opts.verticalRadius ?? (bounded ? Math.min(radius, maxY - minY + 1) : radius);
   const rows = bounded ? Math.min(maxY - minY + 1, 2 * vRadius + 1) : 2 * vRadius + 1;
   const side = 2 * radius + 1;
-  const capacity =
-    opts.capacity ?? Math.max(256, side * side * rows + 64);
+  const capacity = opts.capacity ?? Math.max(256, side * side * rows + 64);
   const uploadsPerFrame = Math.max(1, opts.uploadsPerFrame ?? 32);
 
   const vertices: Arena = core.createArena({

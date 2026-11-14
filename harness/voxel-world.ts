@@ -60,6 +60,7 @@ const state: HarnessVoxelWorldState = {
   liquidQuads: 0,
   vertexBytes: 0,
   calls: 0,
+  held: 0,
   heldCalls: 0,
   bundles: 0,
   dispatches: 0,
@@ -283,7 +284,11 @@ async function main(): Promise<void> {
         state.settleFrames = state.frames;
         state.settleMs = Math.round(performance.now() - start);
       }
-    } else state.heldCalls = Math.max(state.heldCalls, st.calls);
+    } else if (!world.visibility.throttled) {
+      // Held: settled, and no cave-culling search waiting on its throttle.
+      state.held++;
+      state.heldCalls = st.calls;
+    }
     state.maxUpdateMs = ws.maxUpdateMs;
     state.sections = ws.sections;
     state.drawn = ws.drawn;

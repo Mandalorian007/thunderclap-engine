@@ -2,7 +2,9 @@
  * The voxel-world page (harness/voxel-world.html, ws/voxel-draw, scene S4): a streamed block
  * world drawn through `createVoxelWorld`. It settles at radius 8 and 16, a settled frame costs
  * the same GPU calls at both (three cull dispatches, three bundles), cave culling hides some
- * sections, no engine frame while streaming takes over 50 ms, and the device reports no error.
+ * sections and the device reports no error. On desktop-1280, the row that measures, no engine
+ * frame while streaming takes 50 ms or more (`world.update`, `prepare` and `draw`; the page's
+ * own generator runs outside it, at most 6 ms a frame).
  */
 import type { Frame, Page } from '@playwright/test';
 import type { HarnessVoxelWorldState } from '../harness/voxel-world-state';
@@ -26,14 +28,12 @@ async function open(page: Page, wrapper: string, query: string): Promise<Harness
     await page.goto(`${WRAPPER_URL}?page=${encodeURIComponent(url)}`);
     frame = await harnessFrame(page);
   }
-  let settledAt = -1;
   await expect
     .poll(
       async () => {
         const s = await read().catch(() => null);
         if (s?.ready && s.gpu !== 'ok') throw new Error(`voxel-world page: ${s.gpu}`);
-        if (s?.settled && settledAt < 0) settledAt = s.frames;
-        return s?.settled ? s.frames - settledAt : -1;
+        return s?.held ?? -1;
       },
       { timeout: 60_000 },
     )
@@ -66,7 +66,7 @@ test('a streamed world settles at radius 8 and 16 with flat GPU calls and no hit
     // `boot` does not ask for multi-draw: each set is one bundle after one cull dispatch.
     expect(s.bundles).toBe(3);
     expect(s.dispatches).toBe(3);
-    expect(s.maxStreamFrameMs).toBeLessThan(50);
+    if (info.project.name === 'desktop-1280') expect(s.maxStreamFrameMs).toBeLessThan(50);
   }
   expect(large.sections).toBeGreaterThan(small.sections * 3);
   expect(large.heldCalls).toBe(small.heldCalls);

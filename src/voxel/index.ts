@@ -46,6 +46,8 @@ export {
 } from './format';
 export type { VoxelGrid, VoxelGridListener, VoxelGridOptions } from './grid';
 export { createVoxelGrid, deserializeVoxelGrid } from './grid';
+export type { VoxelGridSource, VoxelGridSourceOptions } from './grid-source';
+export { feedVoxelGrid } from './grid-source';
 export { BlockLightFlood } from './light';
 export type { ChunkMeshOut, MeshChunkOptions, VoxelFace } from './mesher';
 export {
