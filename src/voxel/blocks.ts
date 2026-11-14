@@ -2,7 +2,8 @@
  * Block tables and cell layouts for streamed voxel sections: what each block id draws as and
  * how light passes it, declared as data. A game numbers its blocks (an id is the index of its
  * entry) and names nothing here; the engine reads only the face class, light cost, emission,
- * light hue, cutout inset, cross quads and the game's own vertex fields.
+ * light hue, cutout inset, cross quads and parts, the solid-far bit and the game's own vertex
+ * fields.
  */
 
 /**
@@ -46,6 +47,23 @@ export interface BlockDef {
   /** A `cross` block's quad count, 1..7. Default 2 (two crossed on the diagonals). */
   quads?: number;
   /**
+   * A `foliage` block that meshes solid away from the eye (ws/render-fit): at
+   * `SectionMeshOptions.leafLod` 1 and up its faces go into the opaque stream (with the `solid`
+   * vertex field set) and hide the opaque faces they cover. Default false.
+   */
+  lodSolid?: boolean;
+  /**
+   * Extra quads a `cross` block emits at full detail (`leafLod` 0) after its `quads`, 0..63:
+   * the game's shader shapes them (blades, petals, litter), told apart by the `part` vertex
+   * field and numbered on by `quad`. Default 0.
+   */
+  parts?: number;
+  /**
+   * The parts stand in for the block's own quads near the eye: those carry the `twin` vertex
+   * field, so the shader can fade one into the other. Default false.
+   */
+  partsReplace?: boolean;
+  /**
    * The game's vertex fields with a constant value for this block (names from its
    * `VertexSchema`), written into every vertex the block emits. Faces of blocks with different
    * values never merge; they are different ids anyway.
@@ -79,6 +97,12 @@ export interface BlockTable {
   readonly hue: Uint8Array;
   readonly inset: Uint8Array;
   readonly quads: Uint8Array;
+  /** 1 for a `foliage` block with `lodSolid`. Optional for tables built by hand: none. */
+  readonly lodSolid?: Uint8Array;
+  /** Part quads per `cross` block (`BlockDef.parts`). Optional: none. */
+  readonly parts?: Uint8Array;
+  /** 1 where the parts replace the block's quads (`BlockDef.partsReplace`). Optional: none. */
+  readonly partsReplace?: Uint8Array;
   /** `LIGHT_HUES²` entries, `a * LIGHT_HUES + b`, `NO_HUE_MIX` for none. */
   readonly hueMix: Uint8Array;
   /** Whether any block gives off light (a world without emitters skips the block light flood). */
@@ -114,6 +138,9 @@ export function defineBlockTable(
   const hue = new Uint8Array(n);
   const inset = new Uint8Array(n);
   const quads = new Uint8Array(n);
+  const lodSolid = new Uint8Array(n);
+  const parts = new Uint8Array(n);
+  const partsReplace = new Uint8Array(n);
   const fields: (Readonly<Record<string, number>> | null)[] = [];
   let emissive = false;
   for (let id = 0; id < n; id++) {
@@ -132,6 +159,15 @@ export function defineBlockTable(
     hue[id] = clampInt(b.hue ?? 0, 0, LIGHT_HUES - 1, `block ${id} hue`);
     inset[id] = clampInt(b.inset ?? 0, 0, 31, `block ${id} inset`);
     quads[id] = clampInt(b.quads ?? 2, 1, 7, `block ${id} quads`);
+    if (b.lodSolid && b.class !== 'foliage') {
+      throw new RangeError(`block ${id}: lodSolid is for foliage blocks`);
+    }
+    lodSolid[id] = b.lodSolid ? 1 : 0;
+    parts[id] = clampInt(b.parts ?? 0, 0, 63, `block ${id} parts`);
+    if (parts[id] > 0 && b.class !== 'cross') {
+      throw new RangeError(`block ${id}: parts are for cross blocks`);
+    }
+    partsReplace[id] = b.partsReplace ? 1 : 0;
     fields.push(b.fields ? { ...b.fields } : null);
   }
   const hueMix = new Uint8Array(LIGHT_HUES * LIGHT_HUES).fill(NO_HUE_MIX);
@@ -142,7 +178,21 @@ export function defineBlockTable(
     hueMix[a * LIGHT_HUES + b] = m;
     hueMix[b * LIGHT_HUES + a] = m;
   }
-  return { count: n, faceClass, lightCost, emission, hue, inset, quads, hueMix, emissive, fields };
+  return {
+    count: n,
+    faceClass,
+    lightCost,
+    emission,
+    hue,
+    inset,
+    quads,
+    lodSolid,
+    parts,
+    partsReplace,
+    hueMix,
+    emissive,
+    fields,
+  };
 }
 
 /**

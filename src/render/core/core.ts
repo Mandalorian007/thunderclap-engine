@@ -89,7 +89,29 @@ export interface RenderCoreOptions {
    * colour attachment, nothing more. `setTargets` changes them later.
    */
   targets?: readonly CoreTargetName[];
+  /**
+   * Reversed-Z for every pass (ws/render-fit; `PassDesc.reversedZ`): depth clears to 0 and sets
+   * test `'greater'` unless they say otherwise. A pass's own `reversedZ` wins. Default false.
+   * The shadow pass is unaffected (it clears to 1 and tests `'less'`).
+   */
+  reversedZ?: boolean;
+  /**
+   * Label each render pass after its pass (`CorePass.label`, `'core opaque'`; a clear-only pass
+   * `'core clear'`) for GPU captures and timings (ws/render-fit). Default false: every one is
+   * `'core pass'`.
+   */
+  passLabels?: boolean;
 }
+
+/**
+ * GPU timing for a pass (`CoreTarget.timestamps`): `label` is `'core'` for the view's render
+ * passes, `'shadow'` for `drawShadow` and `'prepare'` for the cull's compute pass; `pass` is
+ * the pass list's id (`'opaque'`, a pass of the game's), or `'clear'` for a clear-only pass.
+ */
+export type CoreTimestamps = (
+  label: string,
+  pass?: string,
+) => GPURenderPassTimestampWrites | undefined;
 
 /**
  * A depth-only target for `RenderCore.drawShadow` (ws/core-passes): a sun shadow map, or one
@@ -138,10 +160,23 @@ export interface CoreTarget {
   texture?: GPUTexture;
   /**
    * GPU timing for the core's render passes (ws/core-passes): called once per pass with the
-   * label `'core'`, its result set as the pass's `timestampWrites`. The `Renderer` hands its
-   * `GpuTimer` here, so a sampled frame's GPU time counts the core's work.
+   * label `'core'` and the pass's id (ws/render-fit: `CoreTimestamps`), its result set as the
+   * pass's `timestampWrites`. The `Renderer` hands its `GpuTimer` here, so a sampled frame's
+   * GPU time counts the core's work.
    */
-  timestamps?: (label: string) => GPURenderPassTimestampWrites | undefined;
+  timestamps?: CoreTimestamps;
+  /**
+   * Clear `depth` (the caller's) on the view's first depth pass, to that pass's `depthClear`
+   * (ws/render-fit), instead of loading it: the caller needs no clear pass of its own. Default
+   * false. Ignored without `depth` (the core's own depth is always cleared).
+   */
+  clearDepth?: boolean;
+  /**
+   * Draw the view with this pipeline variant (ws/render-fit; `DrawSetDesc.variants`): each set
+   * that has a variant of this name draws with it in its own pass; the others draw as usual
+   * (a forward eye, a debug view).
+   */
+  variant?: string;
   /**
    * Where a resolve pass (`PassDesc.resolve`: post) writes (ws/core-passes), in `outputFormat`;
    * passes after it draw here, without depth. Without it resolve passes are skipped.
@@ -196,6 +231,10 @@ export class RenderCore {
     return this.capsNow;
   }
   readonly passes: PassList;
+  /** The core's depth convention (`RenderCoreOptions.reversedZ`); a pass may override it. */
+  get reversedZ(): boolean {
+    return this.passes.reversedZ;
+  }
   readonly maxViews: number;
   readonly depthFormat: GPUTextureFormat;
   readonly stats: CoreStats = newStats();
@@ -276,6 +315,10 @@ export class RenderCore {
   };
   /** The extra targets (`CORE_TARGET` mask, ws/core-targets). */
   private auxMask = 0;
+  /** The view being drawn's `CoreTarget.variant` (ws/render-fit), else null. */
+  private viewVariant: string | null = null;
+  /** Shader modules by code (ws/render-fit): sets with the same code share one. */
+  private readonly modules = new Map<string, GPUShaderModule>();
   /** One attachment per extra target, in location order; set per view. */
   private readonly auxAtt: GPURenderPassColorAttachment[] = [];
   /** Per extra target: clear it on the view's first pass. */
@@ -294,6 +337,7 @@ export class RenderCore {
   /** The context handed to a pass's `encode`, rewritten per call. */
   private readonly passCtx = {} as CorePassContext;
   private readonly coalesce: boolean;
+  private readonly passLabels: boolean;
   private readonly copyOrigin = { x: 0, y: 0, z: 0 };
   private readonly copySrc: GPUTexelCopyTextureInfo = {
     texture: undefined as unknown as GPUTexture,
@@ -314,7 +358,8 @@ export class RenderCore {
     this.originGrid = Math.max(0, opts.originGrid ?? 0);
     this.onView = opts.onView ?? null;
     this.coalesce = opts.coalesceRebuilds ?? true;
-    this.passes = new PassList();
+    this.passLabels = opts.passLabels ?? false;
+    this.passes = new PassList(undefined, opts.reversedZ ?? false);
     this.quads = new QuadIndex(device);
     this.viewData = new Float32Array(2 * MAX_VIEWS * VIEW_SLOT_FLOATS);
     this.viewU32 = new Uint32Array(this.viewData.buffer);
@@ -397,6 +442,17 @@ export class RenderCore {
       get rebuildTurn() {
         return core.rebuildTurn;
       },
+      get viewVariant() {
+        return core.viewVariant;
+      },
+      module: (label, code) => {
+        let m = this.modules.get(code);
+        if (!m) {
+          m = this.device.createShaderModule({ label, code });
+          this.modules.set(code, m);
+        }
+        return m;
+      },
     };
     this.drawCtx = {
       core: this,
@@ -406,6 +462,7 @@ export class RenderCore {
       color: 'rgba8unorm',
       depth: undefined,
       depthReadOnly: false,
+      reversedZ: false,
       aux: 0,
     };
     this.drawableHost = {
@@ -497,6 +554,7 @@ export class RenderCore {
     // Drawables re-record their bundles and re-bind the core's depth and colour copy.
     this.targets++;
     this.viewsPrepared = 0;
+    this.modules.clear();
     this.build();
     this.quads.restore(device);
     for (const a of this.arenas) a.restore(device);
@@ -521,14 +579,14 @@ export class RenderCore {
     const sets = this.sets;
     for (let i = 0; i < sets.length; i++) {
       const s = sets[i]!;
-      if (s.castShadow && s.count > 0) return true;
+      if (s.castShadow && s.enabled && s.count > 0) return true;
     }
     return false;
   }
 
   get hasWork(): boolean {
     const sets = this.sets;
-    for (let i = 0; i < sets.length; i++) if (sets[i]!.count > 0) return true;
+    for (let i = 0; i < sets.length; i++) if (sets[i]!.enabled && sets[i]!.count > 0) return true;
     const drawables = this.drawables;
     for (let i = 0; i < drawables.length; i++) if (drawables[i]!.count > 0) return true;
     return false;
@@ -639,9 +697,14 @@ export class RenderCore {
    * Once a frame, before any `draw`: write the views' uniforms, upload what changed and cull
    * every GPU-culled set for every cull group in one compute pass. Resets `stats`' per-frame
    * counts. `views` is a view list (each view its own cull group) or a list of cull groups;
-   * either way views are numbered in order for `draw`.
+   * either way views are numbered in order for `draw`. `timestamps` times the cull's compute
+   * pass, called with `'prepare'` (ws/render-fit).
    */
-  prepare(encoder: GPUCommandEncoder, views: readonly RenderView[] | readonly CullGroup[]): void {
+  prepare(
+    encoder: GPUCommandEncoder,
+    views: readonly RenderView[] | readonly CullGroup[],
+    timestamps?: CoreTimestamps,
+  ): void {
     const n = this.flatten(views);
     if (n < 1 || n > this.maxViews) {
       throw new Error(`core.prepare: ${n} views (1 to ${this.maxViews})`);
@@ -681,6 +744,20 @@ export class RenderCore {
       } else if (!unionPlanesInto(data, at, flat, first, size, this.origin, relative)) {
         openPlanesInto(data, at);
       }
+      // The group's eye, for `DrawSet.maxDistance`: its views' positions averaged.
+      const pos = (MAX_VIEWS + g) * VIEW_SLOT_FLOATS + VIEW_SLOT.position;
+      let x = 0;
+      let y = 0;
+      let z = 0;
+      for (let k = 0; k < size; k++) {
+        const o = (first + k) * VIEW_SLOT_FLOATS + VIEW_SLOT.position;
+        x += data[o]!;
+        y += data[o + 1]!;
+        z += data[o + 2]!;
+      }
+      data[pos] = x / size;
+      data[pos + 1] = y / size;
+      data[pos + 2] = z / size;
     }
     // One write: the views, the padding up to the groups, the groups.
     this.device.queue.writeBuffer(
@@ -699,17 +776,18 @@ export class RenderCore {
     for (let i = 0; i < sets.length; i++) {
       const set = sets[i]!;
       set.upload(groups);
-      if (set.cull === 'gpu' && set.highWater > 0) gpu = true;
+      if (set.cull === 'gpu' && set.highWater > 0 && set.enabled) gpu = true;
       if (this.coalesce && set.waitsForTurn() && (!turn || set.staleFrame < turn.staleFrame)) {
         turn = set;
       }
     }
     this.rebuildTurn = turn;
     if (!gpu) return;
+    this.computeDesc.timestampWrites = timestamps?.('prepare', 'prepare');
     const pass = encoder.beginComputePass(this.computeDesc);
     pass.setPipeline(this.cullPipe());
     st.calls += 2;
-    for (let i = 0; i < sets.length; i++) sets[i]!.dispatch(pass, groups);
+    for (let i = 0; i < sets.length; i++) if (sets[i]!.enabled) sets[i]!.dispatch(pass, groups);
     pass.end();
     st.calls++;
   }
@@ -757,7 +835,8 @@ export class RenderCore {
     // A 'blend' draw continues an 'opaque' one: the core's own extra targets are loaded.
     if (auxMask !== 0) this.auxFor(target, target.phase === 'blend');
     let first = true;
-    let depthCleared = target.depth !== undefined;
+    let depthCleared = target.depth !== undefined && target.clearDepth !== true;
+    this.viewVariant = target.variant ?? null;
     let colorCopied = false;
     /** A resolve pass ran: later passes draw into `target.output`, without depth. */
     let resolved = false;
@@ -840,7 +919,8 @@ export class RenderCore {
         d.depthReadOnly = false;
         d.depthLoadOp = 'clear';
         d.depthStoreOp = 'store';
-        this.passDescDepthClear.timestampWrites = target.timestamps?.('core');
+        d.depthClearValue = pass.depthClear;
+        this.passDescDepthClear.timestampWrites = target.timestamps?.('core', pass.id);
         encoder.beginRenderPass(this.passDescDepthClear).end();
         st.calls += 2;
         st.passes++;
@@ -875,11 +955,13 @@ export class RenderCore {
           d.depthReadOnly = false;
           d.depthLoadOp = depthCleared ? 'load' : 'clear';
           d.depthStoreOp = 'store';
+          d.depthClearValue = pass.depthClear;
           depthCleared = true;
         }
         desc = aux !== 0 ? this.passDescAuxDepth : this.passDescDepth;
       }
-      desc.timestampWrites = target.timestamps?.('core');
+      if (this.passLabels) desc.label = pass.label;
+      desc.timestampWrites = target.timestamps?.('core', pass.id);
       const enc = encoder.beginRenderPass(desc);
       st.calls++;
       st.passes++;
@@ -910,6 +992,7 @@ export class RenderCore {
         ctx.format = colorFormat;
         ctx.depthFormat = depthFormat;
         ctx.depthReadOnly = readOnly;
+        ctx.reversedZ = pass.reversedZ;
         ctx.aux = aux;
         pass.encode(enc, ctx);
       }
@@ -929,7 +1012,8 @@ export class RenderCore {
     const aux = this.auxMask;
     for (let k = 0; k < 3; k++) if (aux & (1 << k)) this.auxAtt[k]!.loadOp = 'clear';
     const desc = aux !== 0 ? this.passDescAux : this.passDesc;
-    desc.timestampWrites = target.timestamps?.('core');
+    if (this.passLabels) desc.label = 'core clear';
+    desc.timestampWrites = target.timestamps?.('core', 'clear');
     encoder.beginRenderPass(desc).end();
     this.stats.calls += 2;
     this.stats.passes++;
@@ -1145,7 +1229,7 @@ export class RenderCore {
     let any = false;
     for (let i = 0; i < sets.length; i++) {
       const s = sets[i]!;
-      if (s.castShadow && s.count > 0 && s.ready !== false) {
+      if (s.castShadow && s.count > 0 && s.ready) {
         any = true;
         break;
       }
@@ -1174,7 +1258,7 @@ export class RenderCore {
     while (bundles.length > 0) bundles.pop();
     for (let i = 0; i < sets.length; i++) {
       const s = sets[i]!;
-      if (!s.castShadow || s.count === 0 || s.ready === false) continue;
+      if (!s.castShadow || s.count === 0 || !s.ready) continue;
       if (s.encoding() === 'bundle') {
         bundles.push(s.bundle(group, null, target.format, false, 0));
         continue;
@@ -1210,7 +1294,12 @@ export class RenderCore {
     this.bySet.length = 0;
     for (let p = 0; p < list.length; p++) {
       const id = list[p]!.id;
-      const members: PassMember[] = this.sets.filter((s) => s.pass.id === id);
+      const members: PassMember[] = [];
+      for (const s of this.sets) {
+        if (s.pass.id === id) members.push(s);
+        // A set's extra joins (`DrawSetDesc.passes`, ws/render-fit).
+        for (const j of s.joins) if (j.pass.id === id) members.push(j);
+      }
       for (const d of this.drawables) if (d.pass.id === id) members.push(d);
       // Stable: equal orders keep creation order, sets before drawables.
       members.sort((a, b) => a.order - b.order);

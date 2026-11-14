@@ -53,13 +53,19 @@ export const VOXEL_VERTEX_DEFAULTS: readonly VertexFieldDef[] = [
  * Optional fields the mesher also fills when a schema declares them (none by default):
  * `side` (3: which side of its cell a corner is on per axis, 1 = high; on a cross quad, its
  * corner across and up), `quad` (3: a cross quad's index), `inset` (5: a cutout's or cross
- * block's inset in 1/32 block) and `hue` (3: the block light's colour index).
+ * block's inset in 1/32 block), `hue` (3: the block light's colour index), and for the block
+ * shape hooks (ws/render-fit) `solid` (1: a `lodSolid` foliage face meshed into the opaque
+ * stream), `part` (1: one of a cross block's `parts` quads) and `twin` (1: a cross quad its
+ * parts stand in for). Declare `quad` wider when parts number past 7.
  */
 export const VOXEL_VERTEX_OPTIONAL: readonly VertexFieldDef[] = [
   { name: 'side', bits: 3 },
   { name: 'quad', bits: 3 },
   { name: 'inset', bits: 5 },
   { name: 'hue', bits: 3 },
+  { name: 'solid', bits: 1 },
+  { name: 'part', bits: 1 },
+  { name: 'twin', bits: 1 },
 ];
 
 /** Options for `defineVertexSchema`. */

@@ -114,7 +114,7 @@ const CORE_VIEW_EXTRA_WGSL = "\nstruct CoreViewExtra {\n  invViewProj: mat4x4f,\
 const CORE_VIEW_WGSL = "\nstruct CoreView {\n  viewProj: mat4x4f,\n  position: vec4f,\n  planes: array<vec4f, 6>,\n  index: u32,\n  _a: u32,\n  _b: u32,\n  _c: u32,\n  origin: vec4f,\n  prevRows: array<vec4f, 3>,\n};\n\nfn core_velocity(v: CoreView, p: vec3f) -> vec2f {\n  let q = vec4f(p, 1.0);\n  let c = v.viewProj * q;\n  let pw = dot(v.prevRows[2], q);\n  if (pw <= 0.0 || c.w <= 0.0) { return vec2f(0.0); }\n  let pn = vec2f(dot(v.prevRows[0], q), dot(v.prevRows[1], q)) / pw;\n  return (c.xy / c.w - pn) * vec2f(0.5, -0.5);\n}\n";
 
 ## CULL_WGSL
-const CULL_WGSL = "\nstruct CoreView {\n  viewProj: mat4x4f,\n  position: vec4f,\n  planes: array<vec4f, 6>,\n  index: u32,\n  _a: u32,\n  _b: u32,\n  _c: u32,\n  origin: vec4f,\n  prevRows: array<vec4f, 3>,\n};\n\nfn core_velocity(v: CoreView, p: vec3f) -> vec2f {\n  let q = vec4f(p, 1.0);\n  let c = v.viewProj * q;\n  let pw = dot(v.prevRows[2], q);\n  if (pw <= 0.0 || c.w <= 0.0) { return vec2f(0.0); }\n  let pn = vec2f(dot(v.prevRows[0], q), dot(v.prevRows[1], q)) / pw;\n  return (c.xy / c.w - pn) * vec2f(0.5, -0.5);\n}\n\nstruct CullParams { count: u32, capacity: u32, views: u32, firstInstance: u32 };\nstruct Slot { sphere: vec4f, draw: vec4u, inst: vec4u };\n@group(0) @binding(0) var<uniform> views: array<CoreView, 8>;\n@group(0) @binding(1) var<uniform> params: CullParams;\n@group(0) @binding(2) var<storage, read> slots: array<Slot>;\n@group(0) @binding(3) var<storage, read_write> args: array<u32>;\n\n@compute @workgroup_size(64) fn cs_cull(@builtin(global_invocation_id) id: vec3u) {\n  let i = id.x;\n  let v = id.y;\n  if (i >= params.count || v >= params.views) { return; }\n  let s = slots[i];\n  var visible = (s.inst.y & 3u) == 1u;\n  for (var k = 0u; k < 6u; k++) {\n    let p = views[v].planes[k];\n    if (dot(p.xyz, s.sphere.xyz) + p.w < -s.sphere.w) { visible = false; }\n  }\n  let o = (v * params.capacity + i) * 5u;\n  args[o] = s.draw.x;\n  args[o + 1u] = select(0u, s.draw.w, visible);\n  args[o + 2u] = s.draw.y;\n  args[o + 3u] = s.draw.z;\n  args[o + 4u] = select(0u, s.inst.x, params.firstInstance != 0u);\n}\n";
+const CULL_WGSL = "\nstruct CoreView {\n  viewProj: mat4x4f,\n  position: vec4f,\n  planes: array<vec4f, 6>,\n  index: u32,\n  _a: u32,\n  _b: u32,\n  _c: u32,\n  origin: vec4f,\n  prevRows: array<vec4f, 3>,\n};\n\nfn core_velocity(v: CoreView, p: vec3f) -> vec2f {\n  let q = vec4f(p, 1.0);\n  let c = v.viewProj * q;\n  let pw = dot(v.prevRows[2], q);\n  if (pw <= 0.0 || c.w <= 0.0) { return vec2f(0.0); }\n  let pn = vec2f(dot(v.prevRows[0], q), dot(v.prevRows[1], q)) / pw;\n  return (c.xy / c.w - pn) * vec2f(0.5, -0.5);\n}\n\nstruct CullParams { count: u32, capacity: u32, views: u32, firstInstance: u32, maxDistance: f32, _a: u32, _b: u32, _c: u32 };\nstruct Slot { sphere: vec4f, draw: vec4u, inst: vec4u };\n@group(0) @binding(0) var<uniform> views: array<CoreView, 8>;\n@group(0) @binding(1) var<uniform> params: CullParams;\n@group(0) @binding(2) var<storage, read> slots: array<Slot>;\n@group(0) @binding(3) var<storage, read_write> args: array<u32>;\n\n@compute @workgroup_size(64) fn cs_cull(@builtin(global_invocation_id) id: vec3u) {\n  let i = id.x;\n  let v = id.y;\n  if (i >= params.count || v >= params.views) { return; }\n  let s = slots[i];\n  var visible = (s.inst.y & 3u) == 1u;\n  for (var k = 0u; k < 6u; k++) {\n    let p = views[v].planes[k];\n    if (dot(p.xyz, s.sphere.xyz) + p.w < -s.sphere.w) { visible = false; }\n  }\n  if (params.maxDistance > 0.0 && length(s.sphere.xyz - views[v].position.xyz) - s.sphere.w > params.maxDistance) {\n    visible = false;\n  }\n  let o = (v * params.capacity + i) * 5u;\n  args[o] = s.draw.x;\n  args[o + 1u] = select(0u, s.draw.w, visible);\n  args[o + 2u] = s.draw.y;\n  args[o + 3u] = s.draw.z;\n  args[o + 4u] = select(0u, s.inst.x, params.firstInstance != 0u);\n}\n";
 
 ## Camera
 class Camera {
@@ -219,6 +219,7 @@ interface CoreDrawContext {
     aux: number;
     depth: GPUTextureFormat | undefined;
     depthReadOnly: boolean;
+    reversedZ: boolean;
 }
 
 ## CoreDrawable  (type-only)
@@ -243,7 +244,10 @@ type CoreDrawableEncoder = GPURenderPassEncoder | GPURenderBundleEncoder;
 ## CorePass  (type-only)
 interface CorePass {
     readonly id: string;
+    readonly label: string;
     readonly depth: PassDepth;
+    readonly reversedZ: boolean;
+    readonly depthClear: number;
     readonly when: (() => boolean) | null;
     readonly encode: ((pass: GPURenderPassEncoder, ctx: CorePassContext) => void) | null;
     readonly resolve: ((encoder: GPUCommandEncoder, ctx: CoreResolveContext) => void) | null;
@@ -257,6 +261,7 @@ interface CorePassContext {
     format: GPUTextureFormat;
     depthFormat: GPUTextureFormat | undefined;
     depthReadOnly: boolean;
+    reversedZ: boolean;
     aux: number;
 }
 
@@ -335,7 +340,9 @@ interface CoreTarget {
     depth?: GPUTextureView;
     phase?: 'all' | 'opaque' | 'blend';
     texture?: GPUTexture;
-    timestamps?: (label: string) => GPURenderPassTimestampWrites | undefined;
+    timestamps?: CoreTimestamps;
+    clearDepth?: boolean;
+    variant?: string;
     output?: GPUTextureView;
     outputFormat?: GPUTextureFormat;
     outputViewport?: {
@@ -351,6 +358,9 @@ interface CoreTarget {
 
 ## CoreTargetName  (type-only)
 type CoreTargetName = 'emissive' | 'roughMetal' | 'velocity';
+
+## CoreTimestamps  (type-only)
+type CoreTimestamps = (label: string, pass?: string) => GPURenderPassTimestampWrites | undefined;
 
 ## CoreViewExtras
 class CoreViewExtras {
@@ -426,6 +436,9 @@ class DrawSet {
     readonly order: number;
     readonly depth: boolean;
     readonly castShadow: boolean;
+    maxDistance: number;
+    enabled: boolean;
+    readonly joins: readonly PassMember[];
     version: number;
     staleFrame: number;
     constructor(host: DrawSetHost, desc: DrawSetDesc);
@@ -435,6 +448,7 @@ class DrawSet {
         group: GPUBindGroup;
     }[], args?: GPUBuffer): void;
     get ready(): boolean;
+    get variantNames(): string[];
     get count(): number;
     get highWater(): number;
     add(slot: SlotDesc): number;
@@ -449,8 +463,8 @@ class DrawSet {
     upload(groups: number): void;
     dispatch(pass: GPUComputePassEncoder, groups: number): void;
     encoding(): Encoding;
-    bundle(group: number, color: GPUTextureFormat | null, depth: GPUTextureFormat | undefined, readOnly: boolean, aux?: number): GPURenderBundle;
-    encodeDirect(pass: GPURenderPassEncoder, group: number, color: GPUTextureFormat | null, depth: GPUTextureFormat | undefined, aux?: number): void;
+    bundle(group: number, color: GPUTextureFormat | null, depth: GPUTextureFormat | undefined, readOnly: boolean, aux?: number, variant?: number, pass?: CorePass): GPURenderBundle;
+    encodeDirect(pass: GPURenderPassEncoder, group: number, color: GPUTextureFormat | null, depth: GPUTextureFormat | undefined, aux?: number, variant?: number, joined?: CorePass): void;
     waitsForTurn(): boolean;
 }
 
@@ -478,10 +492,21 @@ interface DrawSetDesc {
         group: GPUBindGroup;
     }[];
     args?: GPUBuffer;
+    variants?: Readonly<Record<string, DrawSetVariant>>;
+    passes?: readonly DrawSetPassJoin[];
+    maxDistance?: number;
+    enabled?: boolean;
 }
 
 ## DrawSetKind  (type-only)
 type DrawSetKind = 'static' | 'dynamic';
+
+## DrawSetPassJoin  (type-only)
+interface DrawSetPassJoin {
+    pass: string;
+    variant?: string;
+    order?: number;
+}
 
 ## DrawSetShader  (type-only)
 interface DrawSetShader {
@@ -493,6 +518,18 @@ interface DrawSetShader {
     depthCompare?: GPUCompareFunction;
     shadowFragmentEntry?: string;
     writes?: readonly CoreTargetName[];
+}
+
+## DrawSetVariant  (type-only)
+interface DrawSetVariant {
+    code?: string;
+    vertexEntry?: string;
+    fragmentEntry?: string;
+    blend?: GPUBlendState | null;
+    cullMode?: GPUCullMode;
+    depthCompare?: GPUCompareFunction;
+    writes?: readonly CoreTargetName[];
+    depthOnly?: boolean;
 }
 
 ## Drawable  (type-only)
@@ -1047,12 +1084,15 @@ interface PassDesc {
     when?: () => boolean;
     encode?: (pass: GPURenderPassEncoder, ctx: CorePassContext) => void;
     resolve?: (encoder: GPUCommandEncoder, ctx: CoreResolveContext) => void;
+    reversedZ?: boolean;
+    depthClear?: number;
 }
 
 ## PassList
 class PassList {
     readonly passes: CorePass[];
-    constructor(builtIn?: readonly PassDesc[]);
+    readonly reversedZ: boolean;
+    constructor(builtIn?: readonly PassDesc[], reversedZ?: boolean);
     define(desc: PassDesc): CorePass;
     get(id: string): CorePass | undefined;
     get order(): string[];
@@ -1178,6 +1218,7 @@ class RenderCore {
     get device(): GPUDevice;
     get caps(): CoreCaps;
     readonly passes: PassList;
+    get reversedZ(): boolean;
     readonly maxViews: number;
     readonly depthFormat: GPUTextureFormat;
     readonly stats: CoreStats;
@@ -1212,7 +1253,7 @@ class RenderCore {
     definePass(desc: PassDesc): CorePass;
     get drawSets(): readonly DrawSet[];
     get depth(): GPUTexture | null;
-    prepare(encoder: GPUCommandEncoder, views: readonly RenderView[] | readonly CullGroup[]): void;
+    prepare(encoder: GPUCommandEncoder, views: readonly RenderView[] | readonly CullGroup[], timestamps?: CoreTimestamps): void;
     draw(encoder: GPUCommandEncoder, viewIndex: number, target: CoreTarget): void;
     destroy(): void;
     drawShadow(encoder: GPUCommandEncoder, viewIndex: number, target: CoreShadowTarget): void;
@@ -1227,6 +1268,8 @@ interface RenderCoreOptions {
     onView?: ((viewIndex: number) => void) | null;
     coalesceRebuilds?: boolean;
     targets?: readonly CoreTargetName[];
+    reversedZ?: boolean;
+    passLabels?: boolean;
 }
 
 ## RenderStats  (type-only)
@@ -1930,6 +1973,12 @@ function coreColorFormats(color: GPUTextureFormat, aux: number): (GPUTextureForm
 ## coreColorTargets
 function coreColorTargets(color: GPUColorTargetState, aux: number, writes?: number | readonly CoreTargetName[]): (GPUColorTargetState | null)[];
 
+## coreDepthCompare
+function coreDepthCompare(reversedZ: boolean, orEqual?: boolean): GPUCompareFunction;
+
+## coreDepthFar
+function coreDepthFar(reversedZ: boolean): number;
+
 ## coreSunShadowWgsl
 function coreSunShadowWgsl(group: number): string;
 
@@ -1975,7 +2024,7 @@ function createTileLayer(renderer: Renderer, opts: TileLayerOptions): TileLayer;
 function createVertexLayout(desc: LayoutDesc): BufferLayout;
 
 ## cullSlotsCpu
-function cullSlotsCpu(slotsF32: Float32Array, slotsU32: Uint32Array, count: number, capacity: number, viewData: Float32Array, views: number, firstInstance: boolean, args: Uint32Array): number;
+function cullSlotsCpu(slotsF32: Float32Array, slotsU32: Uint32Array, count: number, capacity: number, viewData: Float32Array, views: number, firstInstance: boolean, args: Uint32Array, maxDistance?: number): number;
 
 ## defaultTextures
 function defaultTextures(device: GPUDevice): DefaultTextures;
@@ -2076,6 +2125,9 @@ function setViewFromCamera(view: RenderView, camera: Camera, eye?: ArrayLike<num
 
 ## setViewFromMatrices
 function setViewFromMatrices(view: RenderView, proj: ArrayLike<number>, worldToEye: ArrayLike<number>, eye: ArrayLike<number>): RenderView;
+
+## sphereBeyond
+function sphereBeyond(data: Float32Array, at: number, x: number, y: number, z: number, r: number, maxDistance: number): boolean;
 
 ## sphereInPlanes
 function sphereInPlanes(planes: Float32Array, at: number, x: number, y: number, z: number, r: number): boolean;

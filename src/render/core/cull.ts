@@ -18,8 +18,11 @@ export const SLOT_BYTES = SLOT_WORDS * 4;
 export const ARGS_WORDS = 5;
 /** Bytes of one argument record. */
 export const ARGS_BYTES = ARGS_WORDS * 4;
-/** Bytes of a set's cull parameters (count, capacity, views, firstInstance mode). */
-export const CULL_PARAMS_BYTES = 16;
+/**
+ * Bytes of a set's cull parameters (count, capacity, views, firstInstance mode, then the max
+ * draw distance, ws/render-fit).
+ */
+export const CULL_PARAMS_BYTES = 32;
 /** Cull workgroup size. */
 export const CULL_WORKGROUP = 64;
 
@@ -50,7 +53,7 @@ export const SLOT_LIVE = 1;
 export const SLOT_HIDDEN = 2;
 
 export const CULL_WGSL = /* wgsl */ `${CORE_VIEW_WGSL}
-struct CullParams { count: u32, capacity: u32, views: u32, firstInstance: u32 };
+struct CullParams { count: u32, capacity: u32, views: u32, firstInstance: u32, maxDistance: f32, _a: u32, _b: u32, _c: u32 };
 struct Slot { sphere: vec4f, draw: vec4u, inst: vec4u };
 @group(0) @binding(0) var<uniform> views: array<CoreView, ${MAX_VIEWS}>;
 @group(0) @binding(1) var<uniform> params: CullParams;
@@ -67,6 +70,9 @@ struct Slot { sphere: vec4f, draw: vec4u, inst: vec4u };
     let p = views[v].planes[k];
     if (dot(p.xyz, s.sphere.xyz) + p.w < -s.sphere.w) { visible = false; }
   }
+  if (params.maxDistance > 0.0 && length(s.sphere.xyz - views[v].position.xyz) - s.sphere.w > params.maxDistance) {
+    visible = false;
+  }
   let o = (v * params.capacity + i) * ${ARGS_WORDS}u;
   args[o] = s.draw.x;
   args[o + 1u] = select(0u, s.draw.w, visible);
@@ -80,7 +86,8 @@ struct Slot { sphere: vec4f, draw: vec4u, inst: vec4u };
  * The CPU twin of `cs_cull`: for each of `views` cull groups (their plane slots in `viewData`, a
  * `VIEW_SLOT_FLOATS`-strided array), write the argument records of slots `0..count` into `args`
  * at `(group * capacity + slot) * ARGS_WORDS`. Returns the visible slot-group pairs. Tests run it
- * as the fake GPU's stand-in for the shader; nothing allocates.
+ * as the fake GPU's stand-in for the shader; nothing allocates. `maxDistance` (> 0) also culls a
+ * slot whose sphere lies farther than that from the group's position (`DrawSet.maxDistance`).
  */
 export function cullSlotsCpu(
   slotsF32: Float32Array,
@@ -91,10 +98,12 @@ export function cullSlotsCpu(
   views: number,
   firstInstance: boolean,
   args: Uint32Array,
+  maxDistance = 0,
 ): number {
   let seen = 0;
   for (let v = 0; v < views; v++) {
     const at = v * VIEW_SLOT_FLOATS + 20;
+    const eye = v * VIEW_SLOT_FLOATS + 16;
     for (let i = 0; i < count; i++) {
       const s = i * SLOT_WORDS;
       const live = (slotsU32[s + SLOT.flags]! & (SLOT_LIVE | SLOT_HIDDEN)) === SLOT_LIVE;
@@ -107,7 +116,17 @@ export function cullSlotsCpu(
           slotsF32[s + 1]!,
           slotsF32[s + 2]!,
           slotsF32[s + 3]!,
-        );
+        ) &&
+        (maxDistance <= 0 ||
+          !sphereBeyond(
+            viewData,
+            eye,
+            slotsF32[s]!,
+            slotsF32[s + 1]!,
+            slotsF32[s + 2]!,
+            slotsF32[s + 3]!,
+            maxDistance,
+          ));
       const o = (v * capacity + i) * ARGS_WORDS;
       args[o] = slotsU32[s + SLOT.indexCount]!;
       args[o + 1] = visible ? slotsU32[s + SLOT.instanceCount]! : 0;
@@ -118,4 +137,23 @@ export function cullSlotsCpu(
     }
   }
   return seen;
+}
+
+/**
+ * Whether a sphere lies wholly farther than `maxDistance` from the position at `data[at..at+3)`
+ * (a view slot's `position`): the max draw distance test of the cull (ws/render-fit).
+ */
+export function sphereBeyond(
+  data: Float32Array,
+  at: number,
+  x: number,
+  y: number,
+  z: number,
+  r: number,
+  maxDistance: number,
+): boolean {
+  const dx = x - data[at]!;
+  const dy = y - data[at + 1]!;
+  const dz = z - data[at + 2]!;
+  return Math.sqrt(dx * dx + dy * dy + dz * dz) - r > maxDistance;
 }

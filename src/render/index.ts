@@ -30,7 +30,13 @@ export {
 // The retained render core (ws/core-retained, D1 §3, preview).
 export type { ArenaAlloc, ArenaDesc, ArenaKind } from './core/arena';
 export { Arena, createArena } from './core/arena';
-export type { CoreCaps, CoreShadowTarget, CoreTarget, RenderCoreOptions } from './core/core';
+export type {
+  CoreCaps,
+  CoreShadowTarget,
+  CoreTarget,
+  CoreTimestamps,
+  RenderCoreOptions,
+} from './core/core';
 export { createRenderCore, MULTI_DRAW_FEATURE, RenderCore } from './core/core';
 export {
   ARGS_BYTES,
@@ -41,13 +47,16 @@ export {
   SLOT_BYTES,
   SLOT_LIVE,
   SLOT_WORDS,
+  sphereBeyond,
 } from './core/cull';
 export type {
   CoreStats,
   DrawSetCull,
   DrawSetDesc,
   DrawSetKind,
+  DrawSetPassJoin,
   DrawSetShader,
+  DrawSetVariant,
   SlotDesc,
 } from './core/draw-set';
 export { DrawSet, GPU_CULL_MIN_SLOTS } from './core/draw-set';
@@ -68,7 +77,7 @@ export type {
   PassDepth,
   PassDesc,
 } from './core/pass-list';
-export { CORE_PASSES, PassList } from './core/pass-list';
+export { CORE_PASSES, coreDepthCompare, coreDepthFar, PassList } from './core/pass-list';
 export { QUAD_INDICES, QuadIndex, quadIndices } from './core/quad-index';
 export type { CoreTargetName } from './core/targets';
 export {

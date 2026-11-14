@@ -37,12 +37,30 @@ export interface SectionMesh {
   connectivity: number;
   openCells: number;
   dark: boolean;
+  /**
+   * Whether the mesh depends on `SectionMeshOptions.leafLod` (the section holds `lodSolid`
+   * foliage or cross blocks): a section without stays valid at any level of detail.
+   */
+  tiered: boolean;
 }
 
 /** Options for `SectionMesher.mesh`. */
 export interface SectionMeshOptions {
   /** Merge matching faces into larger quads. Default true. */
   greedy?: boolean;
+  /**
+   * Level of detail for foliage and cross blocks (ws/render-fit), chosen by the game per
+   * section by distance. 0 (default): full detail. 1: `lodSolid` foliage meshes into the
+   * opaque stream (vertex field `solid`) and hides the opaque faces it covers; cross blocks
+   * drop their `parts`. 2: also no `lodSolid` foliage faces across a one-cell gap to foliage or
+   * an opaque block, and no cross blocks.
+   */
+  leafLod?: number;
+  /**
+   * Insets that differ from the block's own for some cells (a growing plant): pairs of
+   * (padded cell index, inset 0..31; higher bits ignored). Applies to `cutout` and `cross`.
+   */
+  insets?: Int32Array;
 }
 
 /** Words per vertex. */
@@ -118,6 +136,7 @@ export class SectionMesher {
   private readonly blockLevel: Uint8Array;
   private readonly blockHue: Uint8Array;
   private readonly queue: Int32Array;
+  private readonly cellInset: Uint8Array;
   // Per face of a slice.
   private readonly maskKey: Int32Array;
   private readonly maskId: Int32Array;
@@ -126,6 +145,7 @@ export class SectionMesher {
   private readonly maskAo: Uint8Array;
   private readonly maskLight: Uint32Array;
   private readonly maskBlock: Uint32Array;
+  private readonly maskInset: Uint8Array;
   // Streams.
   private readonly outOpaque: Uint32Array;
   private readonly outLiquid: Uint32Array;
@@ -136,6 +156,11 @@ export class SectionMesher {
   private readonly flood: ConnectivityFlood;
   private blockFlood: BlockLightFlood | null = null;
   private hasBlock = false;
+  private lod = 0;
+  private tiered = false;
+  private readonly lodSolid: Uint8Array;
+  private readonly parts: Uint8Array;
+  private readonly partsReplace: Uint8Array;
   // Vertex fields.
   private readonly fx: VertexField | undefined;
   private readonly fy: VertexField | undefined;
@@ -149,6 +174,9 @@ export class SectionMesher {
   private readonly fQuad: VertexField | undefined;
   private readonly fInset: VertexField | undefined;
   private readonly fHue: VertexField | undefined;
+  private readonly fSolid: VertexField | undefined;
+  private readonly fPart: VertexField | undefined;
+  private readonly fTwin: VertexField | undefined;
   /** Per block id: its constant game fields, already in place in each word. */
   private readonly blockW0: Uint32Array;
   private readonly blockW1: Uint32Array;
@@ -179,6 +207,7 @@ export class SectionMesher {
     this.light = new Uint8Array(pv);
     this.blockLevel = new Uint8Array(pv);
     this.blockHue = new Uint8Array(pv);
+    this.cellInset = new Uint8Array(pv);
     let q = 1;
     while (q < pv * 16) q <<= 1;
     this.queue = new Int32Array(q);
@@ -190,11 +219,20 @@ export class SectionMesher {
     this.maskAo = new Uint8Array(area);
     this.maskLight = new Uint32Array(area);
     this.maskBlock = new Uint32Array(area);
+    this.maskInset = new Uint8Array(area);
+    const tb = format.blocks;
+    this.lodSolid = tb.lodSolid ?? new Uint8Array(tb.count);
+    this.parts = tb.parts ?? new Uint8Array(tb.count);
+    this.partsReplace = tb.partsReplace ?? new Uint8Array(tb.count);
+    let perCell = 7;
+    for (let id = 0; id < tb.count; id++) {
+      if (tb.faceClass[id] === CROSS) perCell = Math.max(perCell, tb.quads[id] + this.parts[id]);
+    }
     const maxQuads = S * S * S * 6;
     const words = 4 * SECTION_VERTEX_WORDS;
     this.outOpaque = new Uint32Array(maxQuads * words);
     this.outLiquid = new Uint32Array(maxQuads * words);
-    this.outFoliage = new Uint32Array(S * S * S * 7 * words);
+    this.outFoliage = new Uint32Array(S * S * S * perCell * words);
     this.flood = new ConnectivityFlood(S);
     const v = format.vertex;
     this.fx = vertexField(v, 'x');
@@ -209,6 +247,9 @@ export class SectionMesher {
     this.fQuad = vertexField(v, 'quad');
     this.fInset = vertexField(v, 'inset');
     this.fHue = vertexField(v, 'hue');
+    this.fSolid = vertexField(v, 'solid');
+    this.fPart = vertexField(v, 'part');
+    this.fTwin = vertexField(v, 'twin');
     const blocks = format.blocks;
     this.blockW0 = new Uint32Array(blocks.count);
     this.blockW1 = new Uint32Array(blocks.count);
@@ -247,7 +288,17 @@ export class SectionMesher {
     const box = this.box;
     box[0] = box[1] = box[2] = S;
     box[3] = box[4] = box[5] = 0;
+    this.lod = opts.leafLod ?? 0;
+    this.tiered = false;
     const cross = this.classifyAndLight(input);
+    const overrides = opts.insets;
+    if (overrides) {
+      const pv = this.cellInset.length;
+      for (let k = 0; k + 1 < overrides.length; k += 2) {
+        const i = overrides[k];
+        if (i >= 0 && i < pv) this.cellInset[i] = overrides[k + 1] & 31;
+      }
+    }
     this.hasBlock = false;
     if (this.blockFlood) this.blockFlood.visited = 0;
     if (input.wide && input.glowSources && this.format.blocks.emissive) {
@@ -263,7 +314,7 @@ export class SectionMesher {
     const greedy = opts.greedy !== false;
     let faces = 0;
     for (let face = 0; face < 6; face++) faces += this.meshDirection(input.blocks, face, greedy);
-    if (cross) faces += this.meshCross(input.blocks);
+    if (cross && this.lod < 2) faces += this.meshCross(input.blocks);
     const words = 4 * SECTION_VERTEX_WORDS;
     const empty = this.nOpaque + this.nLiquid + this.nFoliage === 0;
     return {
@@ -278,6 +329,7 @@ export class SectionMesher {
       connectivity: conn.bits,
       openCells: conn.open,
       dark: conn.dark,
+      tiered: this.tiered,
     };
   }
 
@@ -341,7 +393,9 @@ export class SectionMesher {
   private classifyAndLight(input: SectionInput): boolean {
     const { blocks, heights, wetTops } = input;
     const { idShift, idMask, skyFalloff, liquidSkyFalloff } = this.format;
-    const { faceClass, lightCost } = this.format.blocks;
+    const { faceClass, lightCost, inset } = this.format.blocks;
+    const cellInset = this.cellInset;
+    const lodSolid = this.lodSolid;
     const S = this.size;
     const P = this.pad;
     const PA = this.padArea;
@@ -360,14 +414,25 @@ export class SectionMesher {
           const c = faceClass[id] ?? OPAQUE;
           ids[i] = id;
           cls[i] = c;
+          cellInset[i] = c === CUTOUT || c === CROSS ? (inset[id] ?? 0) : 0;
           if (c === OPAQUE) {
             opq[i] = 1;
             light[i] = 0;
             continue;
           }
           opq[i] = 0;
-          if (c === CROSS && px > 0 && px <= S && py > 0 && py <= S && pz > 0 && pz <= S)
-            cross = true;
+          if (
+            (c === CROSS || (c === FOLIAGE && lodSolid[id] === 1)) &&
+            px > 0 &&
+            px <= S &&
+            py > 0 &&
+            py <= S &&
+            pz > 0 &&
+            pz <= S
+          ) {
+            this.tiered = true;
+            if (c === CROSS) cross = true;
+          }
           const h = heights[px + pz * P];
           if (wy > h) {
             light[i] = 15;
@@ -440,13 +505,19 @@ export class SectionMesher {
     const out = positive ? sa : -sa;
     const { cls, ids, opq, light } = this;
     const { maskKey, maskId, maskE0, maskE1, maskAo, maskLight, maskBlock } = this;
-    const inset = this.format.blocks.inset;
+    const cellInset = this.cellInset;
+    const maskInset = this.maskInset;
+    const lodSolid = this.lodSolid;
+    const lod = this.lod;
     const hasBlock = this.hasBlock;
     const blockLevel = this.blockLevel;
     const slots = this.cellSlots;
     const nSlots = slots.length;
     let faces = 0;
     for (let s = 0; s < S; s++) {
+      // Far foliage: a face across a one-cell gap is dropped when the cell past it is foliage
+      // or opaque and inside the padded volume.
+      const gaps = lod > 1 && (positive ? s <= S - 2 : s >= 1);
       let any = false;
       for (let v = 0; v < S; v++) {
         for (let u = 0; u < S; u++) {
@@ -459,11 +530,17 @@ export class SectionMesher {
           const id = ids[i];
           if (c === OPAQUE) {
             if (opq[n]) continue;
+            // Solid foliage hides what it covers.
+            if (lod > 0 && cls[n] === FOLIAGE && lodSolid[ids[n]] === 1) continue;
           } else if (c === LIQUID) {
             if (opq[n] || ids[n] === id) continue;
           } else if (c === FOLIAGE) {
             if (opq[n] || cls[n] === FOLIAGE) continue;
-          } else if ((inset[id] ?? 0) === 0 && opq[n]) {
+            if (gaps && lodSolid[id] === 1) {
+              const past = cls[n + out];
+              if (past === FOLIAGE || past === OPAQUE) continue;
+            }
+          } else if (cellInset[i] === 0 && opq[n]) {
             continue;
           }
           faces++;
@@ -488,6 +565,7 @@ export class SectionMesher {
           if (c === CUTOUT) {
             const l = light[i] * 4;
             maskKey[m] = KEY_PRESENT | KEY_NOMERGE;
+            maskInset[m] = cellInset[i];
             maskAo[m] = 0xff;
             maskLight[m] = l | (l << 6) | (l << 12) | (l << 18);
             if (hasBlock) {
@@ -671,10 +749,11 @@ export class SectionMesher {
     const c = this.format.blocks.faceClass[id] ?? OPAQUE;
     let buf: Uint32Array;
     let o: number;
+    const solid = c === FOLIAGE && this.lod > 0 && this.lodSolid[id] === 1 ? 1 : 0;
     if (c === LIQUID) {
       buf = this.outLiquid;
       o = this.nLiquid++ * 4 * SECTION_VERTEX_WORDS;
-    } else if (c === FOLIAGE) {
+    } else if (c === FOLIAGE && solid === 0) {
       buf = this.outFoliage;
       o = this.nFoliage++ * 4 * SECTION_VERTEX_WORDS;
     } else {
@@ -711,7 +790,7 @@ export class SectionMesher {
     const plane = s + (positive ? 1 : 0);
     const p = this.corner;
     const sides = this.sides;
-    const inset = c === CUTOUT ? (this.format.blocks.inset[id] ?? 0) : 0;
+    const inset = c === CUTOUT ? this.maskInset[m] : 0;
     const k0 = (id < this.blockW0.length ? this.blockW0[id] : 0) | this.maskE0[m];
     const k1 = (id < this.blockW1.length ? this.blockW1[id] : 0) | this.maskE1[m];
     const vw = this.vw;
@@ -741,6 +820,7 @@ export class SectionMesher {
       this.put(this.fSide, sides[0] | (sides[1] << 1) | (sides[2] << 2));
       this.put(this.fInset, inset);
       this.put(this.fHue, b >> 5);
+      if (solid) this.put(this.fSolid, 1);
       buf[o++] = vw[0];
       buf[o++] = vw[1];
       this.stretch(p[0], p[1], p[2]);
@@ -752,7 +832,9 @@ export class SectionMesher {
     const S = this.size;
     const P = this.pad;
     const PA = this.padArea;
-    const { quads, inset } = this.format.blocks;
+    const quads = this.format.blocks.quads;
+    const { cellInset, parts, partsReplace } = this;
+    const full = this.lod === 0;
     const slots = this.cellSlots;
     const out = this.outFoliage;
     const vw = this.vw;
@@ -775,7 +857,10 @@ export class SectionMesher {
           const bl = this.hasBlock ? this.blockLevel[i] * 2 : 0;
           const hue = bl ? this.blockHue[i] : 0;
           const count = quads[id] ?? 2;
-          for (let k = 0; k < count; k++) {
+          const extra = full ? parts[id] : 0;
+          const twin = extra > 0 && partsReplace[id] === 1 ? 1 : 0;
+          const ins = cellInset[i];
+          for (let k = 0; k < count + extra; k++) {
             let o = this.nFoliage++ * 4 * SECTION_VERTEX_WORDS;
             for (let c = 0; c < 4; c++) {
               const u = c === 1 || c === 2 ? 1 : 0;
@@ -792,8 +877,10 @@ export class SectionMesher {
               this.put(this.fId, id);
               this.put(this.fSide, u | (v << 1));
               this.put(this.fQuad, k);
-              this.put(this.fInset, inset[id] ?? 0);
+              this.put(this.fInset, ins);
               this.put(this.fHue, hue);
+              if (k >= count) this.put(this.fPart, 1);
+              else if (twin) this.put(this.fTwin, 1);
               out[o++] = vw[0];
               out[o++] = vw[1];
             }

@@ -30,6 +30,17 @@ export interface PassDesc {
    * It must not allocate.
    */
   resolve?: (encoder: GPUCommandEncoder, ctx: CoreResolveContext) => void;
+  /**
+   * Reversed-Z (ws/render-fit): depth is cleared to 0, not 1, when this pass clears it, and its
+   * sets' depth test defaults to `'greater'` (`DrawSetShader.depthCompare`). Default: the
+   * core's `RenderCoreOptions.reversedZ`.
+   */
+  reversedZ?: boolean;
+  /**
+   * The value depth is cleared to when this pass is the view's first depth pass (ws/render-fit).
+   * Default 0 with `reversedZ`, else 1.
+   */
+  depthClear?: number;
 }
 
 /**
@@ -85,6 +96,11 @@ export interface CorePassContext {
   /** The depth attachment is read-only in this pass (a `'read'` pass after a writing one). */
   depthReadOnly: boolean;
   /**
+   * The pass's depth convention (ws/render-fit, `PassDesc.reversedZ`): reversed-Z (depth
+   * clears to 0, nearer is greater) or not. Build depth tests from it with `coreDepthCompare`.
+   */
+  reversedZ: boolean;
+  /**
    * The pass's extra targets (ws/core-targets), a `CORE_TARGET` mask: build the pipeline's
    * targets with `coreColorTargets(color, aux, writes)`. 0 after a resolve.
    */
@@ -94,7 +110,13 @@ export interface CorePassContext {
 /** A pass in the list; draw sets join it by id. */
 export interface CorePass {
   readonly id: string;
+  /** `'core <id>'`: the pass's render pass label (ws/render-fit). */
+  readonly label: string;
   readonly depth: PassDepth;
+  /** Reversed-Z (`PassDesc.reversedZ`). */
+  readonly reversedZ: boolean;
+  /** What a first depth pass clears depth to (`PassDesc.depthClear`). */
+  readonly depthClear: number;
   readonly when: (() => boolean) | null;
   readonly encode: ((pass: GPURenderPassEncoder, ctx: CorePassContext) => void) | null;
   readonly resolve: ((encoder: GPUCommandEncoder, ctx: CoreResolveContext) => void) | null;
@@ -113,21 +135,44 @@ export const CORE_PASSES: readonly PassDesc[] = [
 ];
 
 /** The ordered list of view passes. */
+/**
+ * The depth test that passes nearer fragments under a depth convention (ws/render-fit):
+ * `'greater'` reversed, `'less'` not; `orEqual` for `'greater-equal'` / `'less-equal'`. The
+ * one place drawables, effects and sets turn `reversedZ` into a compare.
+ */
+export function coreDepthCompare(reversedZ: boolean, orEqual = false): GPUCompareFunction {
+  if (reversedZ) return orEqual ? 'greater-equal' : 'greater';
+  return orEqual ? 'less-equal' : 'less';
+}
+
+/** The depth a pass clears to under a convention: 0 reversed, 1 not. */
+export function coreDepthFar(reversedZ: boolean): number {
+  return reversedZ ? 0 : 1;
+}
+
 export class PassList {
   /** Passes in encode order. */
   readonly passes: CorePass[] = [];
   private readonly after = new Map<CorePass, string>();
 
-  constructor(builtIn: readonly PassDesc[] = CORE_PASSES) {
+  /** The default of `PassDesc.reversedZ` for passes defined on this list. */
+  readonly reversedZ: boolean;
+
+  constructor(builtIn: readonly PassDesc[] = CORE_PASSES, reversedZ = false) {
+    this.reversedZ = reversedZ;
     for (const p of builtIn) this.define(p);
   }
 
   /** Add a pass after `desc.after` (or at the end). Throws on a duplicate id or unknown `after`. */
   define(desc: PassDesc): CorePass {
     if (this.get(desc.id)) throw new Error(`pass ${desc.id} is already defined`);
+    const reversedZ = desc.reversedZ ?? this.reversedZ;
     const pass: CorePass = {
       id: desc.id,
+      label: `core ${desc.id}`,
       depth: desc.depth ?? 'write',
+      reversedZ,
+      depthClear: desc.depthClear ?? coreDepthFar(reversedZ),
       when: desc.when ?? null,
       encode: desc.encode ?? null,
       resolve: desc.resolve ?? null,

@@ -28,7 +28,11 @@ struct VoxelVarying {
 }
 `;
 
-/** The vertex stage for a format (`vs`), with the decode include and `VoxelVarying`. */
+/**
+ * The vertex stage for a format (`vs`), with the decode include and `VoxelVarying`. Its body is
+ * `fn voxel_vertex(in: VertexIn, vi: u32) -> VoxelVarying`, which a material's own vertex entry
+ * (`VoxelMaterial.vertex`) can call and then move (`out.world`, then `out.clip`).
+ */
 export function voxelVertexWgsl(format: VoxelFormat): string {
   const has = (name: string): boolean => vertexField(format.vertex, name) !== undefined;
   const corner = has('side') ? 'v.side & 3u' : 'vi & 3u';
@@ -41,6 +45,10 @@ const VOXEL_NORMALS = array<vec3f, 7>(
 );
 
 @vertex fn vs(in: VertexIn, @builtin(vertex_index) vi: u32) -> VoxelVarying {
+  return voxel_vertex(in, vi);
+}
+
+fn voxel_vertex(in: VertexIn, vi: u32) -> VoxelVarying {
   let v = decode_voxel_vertex(in.packed.x, in.packed.y);
   var local = vec3f(f32(v.x), f32(v.y), f32(v.z));
   let face = min(v.face, 6u);
