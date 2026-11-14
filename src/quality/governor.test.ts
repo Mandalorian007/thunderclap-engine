@@ -226,3 +226,46 @@ describe('createGovernor: knobs', () => {
     expect(g.shed).toBe(0);
   });
 });
+
+describe('createGovernor: cpuMisses (ws/input-fit)', () => {
+  const CPU_BOUND: Trace = { interval: 1000 / 30, cpu: 25, latency: 30 };
+  const cpuLadder = () => {
+    const applied: string[] = [];
+    const g = createGovernor({
+      cpuMisses: true,
+      rungs: ['draw distance', 'meshing'].map((name, i) =>
+        toggleKnob(name, (shed) => applied.push(`${shed ? '-' : '+'}${name}`), i + 1),
+      ),
+    });
+    return { g, applied };
+  };
+
+  it("off (the default), the main thread's misses never shed and changes carry no cause", () => {
+    const { g } = ladder();
+    expect(run(g, 0, 10_000, CPU_BOUND).changes).toEqual([]);
+    const gpu = run(g, 10_000, 2500, GPU_BOUND).changes;
+    expect(gpu.length).toBe(1);
+    expect('cause' in gpu[0]!).toBe(false);
+  });
+
+  it("on, the main thread's misses shed too, even with the GPU idle, marked 'cpu'", () => {
+    const { g, applied } = cpuLadder();
+    const r = run(g, 0, 2500, { ...CPU_BOUND, latency: 2 });
+    expect(r.changes.map((c) => [c.dir, c.cause])).toEqual([['down', 'cpu']]);
+    expect(applied).toEqual(['-draw distance']);
+  });
+
+  it("on, the GPU's misses still shed, marked 'gpu'; a clean spell restores as before", () => {
+    const { g } = cpuLadder();
+    const r = run(g, 0, 2500, GPU_BOUND);
+    expect(r.changes.map((c) => c.cause)).toEqual(['gpu']);
+    const back = run(g, r.t, 60_000, GOOD);
+    expect(g.shed).toBe(0);
+    for (const c of back.changes) if (c.dir === 'up') expect(c.cause).toBeUndefined();
+  });
+
+  it('on, a capped frame rate with little main-thread work still never sheds', () => {
+    const { g } = cpuLadder();
+    expect(run(g, 0, 10_000, { interval: 1000 / 30, cpu: 3, latency: 5 }).changes).toEqual([]);
+  });
+});

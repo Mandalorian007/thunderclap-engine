@@ -9,7 +9,8 @@
  * them, main-thread time and submit-to-done latency. Over a window (2 s):
  * - a frame is late when its interval is over 1.25 targets;
  * - a late frame whose own main-thread work took most of a target is the main thread's (a GC,
- *   streaming): shedding GPU work wouldn't help, so it isn't counted;
+ *   streaming): shedding GPU work wouldn't help, so it isn't counted (unless `cpuMisses` is on:
+ *   then those frames shed too, for knobs that cut main-thread work);
  * - a window whose average latency (minus main-thread time) stayed under half a target had a GPU
  *   with time to spare, so its misses are someone else's (a capped frame rate, the compositor).
  *
@@ -43,6 +44,11 @@ export interface GovernorChange {
   /** The knob stepped. */
   readonly knob: string;
   readonly dir: 'down' | 'up';
+  /**
+   * Why a step was shed, with `GovernorOptions.cpuMisses` on (ws/input-fit): `'gpu'` for misses
+   * the GPU made, `'cpu'` for misses the main thread made. Absent otherwise.
+   */
+  readonly cause?: 'gpu' | 'cpu';
 }
 
 export interface GovernorOptions {
@@ -54,6 +60,13 @@ export interface GovernorOptions {
   windowMs?: number;
   /** Share of a window's frames missed for the GPU that sheds a step. Default 0.1. */
   downShare?: number;
+  /**
+   * Shed for misses the main thread made too (ws/input-fit): a late frame whose own `cpuMs` took
+   * most of a target counts, and over `downShare` of a window's frames sheds a step even when the
+   * GPU had time to spare — for a game whose knobs cut CPU work (draw distance, meshing). Default
+   * false: only the GPU's misses shed.
+   */
+  cpuMisses?: boolean;
   /** Clean time (at most `upShare` late) before a step comes back, ms. Default 20000. */
   upAfterMs?: number;
   /** Default 0.01. */
@@ -122,6 +135,7 @@ export function createGovernor(options: GovernorOptions = {}): Governor {
     stickyFailures: options.stickyFailures ?? 2,
     stickyWithinMs: options.stickyWithinMs ?? 120_000,
     stickyForMs: options.stickyForMs ?? 300_000,
+    cpuMisses: options.cpuMisses ?? false,
   };
   const knobs: Knob[] = [];
   const order = new Map<Knob, number>();
@@ -136,6 +150,7 @@ export function createGovernor(options: GovernorOptions = {}): Governor {
   let windowStart = -1;
   let frames = 0;
   let missed = 0;
+  let cpuMissed = 0;
   let latencySum = 0;
   let latencyN = 0;
   let cleanSince = -1;
@@ -179,15 +194,23 @@ export function createGovernor(options: GovernorOptions = {}): Governor {
     return n < o.maxChanges || now - changes[n - o.maxChanges]!.at >= o.rateWindowMs;
   };
 
-  const record = (now: number, k: Knob, dir: 'down' | 'up'): GovernorChange => {
+  const record = (
+    now: number,
+    k: Knob,
+    dir: 'down' | 'up',
+    cause?: 'gpu' | 'cpu',
+  ): GovernorChange => {
     lastChange = now;
-    const c: GovernorChange = { at: now, shed: stack.length, knob: k.name, dir };
+    const c: GovernorChange =
+      cause === undefined
+        ? { at: now, shed: stack.length, knob: k.name, dir }
+        : { at: now, shed: stack.length, knob: k.name, dir, cause };
     if (changes.length >= MAX_CHANGES_KEPT) changes.shift();
     changes.push(c);
     return c;
   };
 
-  const down = (now: number): GovernorChange | null => {
+  const down = (now: number, cause?: 'gpu' | 'cpu'): GovernorChange | null => {
     const d = stack.length;
     const k = stepDown();
     if (!k) return null;
@@ -202,7 +225,7 @@ export function createGovernor(options: GovernorOptions = {}): Governor {
     } else {
       failures[d] = 0;
     }
-    return record(now, k, 'down');
+    return record(now, k, 'down', cause);
   };
 
   const up = (now: number): GovernorChange | null => {
@@ -243,7 +266,7 @@ export function createGovernor(options: GovernorOptions = {}): Governor {
       const t = g.targetMs;
       if (windowStart < 0) {
         windowStart = now;
-        frames = missed = latencySum = latencyN = 0;
+        frames = missed = cpuMissed = latencySum = latencyN = 0;
       }
       if (cleanSince < 0) {
         cleanSince = now;
@@ -254,6 +277,7 @@ export function createGovernor(options: GovernorOptions = {}): Governor {
       const late = intervalMs > t * 1.25;
       // A miss the main thread made (its own work took most of the frame) isn't the GPU's.
       if (late && cpuMs < t * 0.6) missed++;
+      else if (late) cpuMissed++;
       if (late) cleanMissed++;
       if (latencyMs !== null) {
         latencySum += Math.max(0, latencyMs - cpuMs);
@@ -264,12 +288,15 @@ export function createGovernor(options: GovernorOptions = {}): Governor {
         const enough = frames >= MIN_FRAMES;
         // A GPU with time to spare (latency well under a frame) didn't make the misses.
         const gpuIdle = latencyN > 0 && latencySum / latencyN < t * 0.5;
-        const shedNow = enough && !gpuIdle && missed > frames * o.downShare;
+        const shedGpu = enough && !gpuIdle && missed > frames * o.downShare;
+        // Opt-in: the main thread's misses shed too, whatever the GPU's latency said.
+        const shedCpu = o.cpuMisses && enough && !shedGpu && cpuMissed > frames * o.downShare;
         windowStart = now;
-        frames = missed = latencySum = latencyN = 0;
-        if (shedNow) {
+        frames = missed = cpuMissed = latencySum = latencyN = 0;
+        if (shedGpu || shedCpu) {
           cleanSince = -1;
-          if (mayChange(now)) change = down(now);
+          if (mayChange(now))
+            change = down(now, o.cpuMisses ? (shedGpu ? 'gpu' : 'cpu') : undefined);
         }
       }
       if (!change && cleanSince >= 0 && now - cleanSince >= o.upAfterMs) {

@@ -12,10 +12,12 @@ export interface IntentLogEntry {
   y?: number;
   /** True when the aim was `null` (the view's centre). */
   centre?: boolean;
-  /** Cycle delta or select index. */
+  /** Cycle delta, select index or wheel px. */
   n?: number;
   /** A hold's press time on the page clock. */
   at?: number;
+  /** A hold's pointer id (a finger's or the free mouse's), absent for an action's hold. */
+  id?: number;
   tick: number;
 }
 

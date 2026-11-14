@@ -65,6 +65,13 @@ export interface PointerConsumer {
   pointerLeave?(p: PointerRecord): void;
   /** Window blur or a hidden tab: drop every pointer. */
   cancelAll?(): void;
+  /**
+   * A mouse or pen pointer already down pressed (`down` true) or let go of another button
+   * (ws/input-fit): `p.button` is the button that changed. Browsers report such a chord as a
+   * `pointermove`, never a second `pointerdown`; the pointer's first press and last release stay
+   * `pointerDown` and `pointerUp`. Replayed (synthetic) events never chord.
+   */
+  pointerButton?(p: PointerRecord, down: boolean): void;
 }
 
 export interface PointerDispatcherOptions {
@@ -162,6 +169,11 @@ interface Entry {
 
 type Method = 'pointerDown' | 'pointerMove' | 'pointerUp' | 'pointerCancel' | 'pointerLeave';
 
+/** `PointerEvent.buttons`' bit for `PointerEvent.button` (0 → 1, 1 → 4, 2 → 2, 3 → 8, 4 → 16, …). */
+export function buttonBit(button: number): number {
+  return button === 1 ? 4 : button === 2 ? 2 : 1 << button;
+}
+
 /** Build a dispatcher on `target` (see `PointerDispatcher`). The listeners go on at once. */
 export function createPointerDispatcher(
   target: HTMLElement,
@@ -214,6 +226,17 @@ export function createPointerDispatcher(
     return r;
   };
 
+  const deliverButton = (r: PointerRecord, down: boolean): void => {
+    for (let i = 0; i < entries.length; i++) {
+      const en = entries[i]!;
+      if (!en.seesClaimed) {
+        const owner = claims.get(r.id);
+        if (owner !== undefined && owner !== en.consumer) continue;
+      }
+      en.consumer.pointerButton?.(r, down);
+    }
+  };
+
   const deliver = (method: Method, r: PointerRecord): void => {
     // Consumers may add or remove themselves while delivering; index by position.
     for (let i = 0; i < entries.length; i++) {
@@ -238,7 +261,18 @@ export function createPointerDispatcher(
       // Synthetic events have no active pointer.
     }
   };
-  const onMove = (e: PointerEvent) => deliver('pointerMove', fill(e));
+  const onMove = (e: PointerEvent) => {
+    const r = fill(e);
+    // A chord: a real mouse or pen move that names a button (a plain move's is -1) while some
+    // button stays down (the last one up is a pointerup). Replays never chord.
+    if (e.button >= 0 && e.buttons !== 0 && r.device !== 'touch' && replayAge === null) {
+      r.button = e.button;
+      deliverButton(r, (e.buttons & buttonBit(e.button)) !== 0);
+      // The chord's record moved nothing; the move consumers still see it as a move (button 0).
+      r.button = 0;
+    }
+    deliver('pointerMove', r);
+  };
   const onUp = (e: PointerEvent) => {
     deliver('pointerUp', fill(e));
     claims.delete(e.pointerId);

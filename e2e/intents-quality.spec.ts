@@ -7,7 +7,9 @@
  * - a still press held becomes a hold that starts, follows the pointer and ends (a still finger on
  *   touch rows, a held key aimed by the free mouse elsewhere);
  * - the move stick's thumb never taps, and holds only where the game's `stickSideHold` says;
- * - presses, selects, cycles (keys and the wheel), and the centre aim.
+ * - presses, selects, cycles (keys and the wheel), and the centre aim;
+ * - (ws/input-fit, every row) a locked mouse's chord, a free mouse's right click and still right
+ *   press, and the Alt-gated wheel.
  * The intents' clock is pinned (`setClock`): the spec decides how long a press lasts.
  *
  * The governor, against harness/quality.html: under a synthetic GPU load it steps dynamic
@@ -205,6 +207,109 @@ test.describe('intents', () => {
       await page.mouse.wheel(0, 120);
       await expect.poll(async () => (await logOf('cycle')).map((e) => e.n)).toEqual([1]);
     }
+  });
+});
+
+test.describe('intents: the free mouse, chords and the gated wheel (ws/input-fit)', () => {
+  // Playwright's mouse on every row, the iPad's included (a trackpad or mouse on an iPad).
+  test.beforeEach(async ({ page, wrapper }) => {
+    frame = await open(page, wrapper, 'intents.html');
+    await expect.poll(() => read().then((s) => s.ready && s.ticks > 2)).toBe(true);
+    await setClock(0);
+  });
+
+  test("a locked mouse's chord: the right button pressed under a held left one holds", async ({
+    page,
+  }) => {
+    const at = await mapper();
+    const p = at(600, 300);
+    await page.mouse.move(p.x, p.y);
+    await setCentred(true);
+    await page.mouse.down({ button: 'left' });
+    await frames(2);
+    await page.mouse.down({ button: 'right' });
+    await expect.poll(async () => (await read()).holding).toBe('dig');
+    const [start] = await logOf('dig');
+    expect(start?.centre).toBe(true);
+    expect(start?.id).toBeUndefined();
+    await page.mouse.up({ button: 'right' });
+    await expect.poll(async () => (await logOf('dig')).at(-1)?.phase).toBe('end');
+    await page.mouse.up({ button: 'left' });
+    await setCentred(false);
+  });
+
+  test("a free mouse's right click taps; its still right press holds, follows and ends", async ({
+    page,
+  }) => {
+    const at = await mapper();
+    const p = at(600, 300);
+    const q = at(660, 320);
+    await page.mouse.click(p.x, p.y, { button: 'right' });
+    await expect.poll(async () => (await logOf('place')).length).toBe(1);
+    const [place] = await logOf('place');
+    expect(near(place?.x, 600) && near(place?.y, 300)).toBe(true);
+    expect(await logOf('dig')).toEqual([]);
+
+    await clear();
+    await page.mouse.move(q.x, q.y);
+    await page.mouse.down({ button: 'right' });
+    await frames(2);
+    expect(await logOf('dig')).toEqual([]);
+    await setClock(400);
+    await expect.poll(async () => (await read()).holding).toBe('dig');
+    const [start] = await logOf('dig');
+    expect(near(start?.x, 660) && near(start?.y, 320)).toBe(true);
+    expect(typeof start?.id).toBe('number');
+    await page.mouse.move(p.x, p.y);
+    await expect
+      .poll(async () => (await logOf('dig')).some((e) => e.phase === 'aim' && near(e.x, 600)))
+      .toBe(true);
+    await page.mouse.up({ button: 'right' });
+    await expect.poll(async () => (await logOf('dig')).at(-1)?.phase).toBe('end');
+    expect(await logOf('place')).toEqual([]);
+  });
+
+  test('Alt+wheel reaches the speed intent; a plain wheel cycles instead', async ({
+    page,
+    browserName,
+  }) => {
+    const at = await mapper();
+    const p = at(600, 300);
+    await page.mouse.click(p.x, p.y); // focus the frame for the keys
+    await clear();
+    await page.mouse.move(p.x, p.y);
+    // Playwright's mobile WebKit has no wheel: an iPad's trackpad is a page-made WheelEvent there.
+    const wheel = async (deltaY: number, altKey: boolean) => {
+      if (browserName !== 'webkit') {
+        if (altKey) await page.keyboard.down('Alt');
+        await page.mouse.wheel(0, deltaY);
+        if (altKey) await page.keyboard.up('Alt');
+        return;
+      }
+      await frame.locator('#root').evaluate(
+        (el, a) => {
+          const r = el.getBoundingClientRect();
+          el.dispatchEvent(
+            new WheelEvent('wheel', {
+              deltaY: a.deltaY,
+              altKey: a.altKey,
+              clientX: r.left + r.width / 2,
+              clientY: r.top + r.height / 2,
+              bubbles: true,
+              cancelable: true,
+            }),
+          );
+        },
+        { deltaY, altKey },
+      );
+    };
+    await wheel(120, false);
+    await expect.poll(async () => (await logOf('cycle')).map((e) => e.n)).toEqual([1]);
+    expect(await logOf('speed')).toEqual([]);
+    await wheel(30, true);
+    await expect.poll(async () => (await logOf('speed')).length).toBeGreaterThan(0);
+    const total = (await logOf('speed')).reduce((n, e) => n + (e.n ?? 0), 0);
+    expect(total).toBeGreaterThan(0);
   });
 });
 
