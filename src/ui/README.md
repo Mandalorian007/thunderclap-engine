@@ -1111,8 +1111,15 @@ flat screen, a touch screen and in a headset. All additive: a spec without them 
   and upload the texture each `prepare`; `draw` does nothing: the game draws `panel.texture`.
 - **Type.** `panel(spec, { families: { sans: 'MyFont, sans-serif' } })` counts wrap texts' lines
   in the game's stacks (`typeMeasureIn`); give its theme the same fonts.
-- **Public pieces.** `compileSpec`, the `K_*` kinds and `R_*` roles, `SpecPressable`, `viewOf`,
-  `partsOf`, `maxRowsAt`, `typeMeasure`, for a game's own presenter.
+- **Public pieces**, for a game's own presenter: `compileSpec`, `SpecPressable`, `viewOf`,
+  `partsOf`, `maxRowsAt`, `typeMeasure` (a `SpecMeasure`), `SpecFamilies`, `specGivesWay` (the
+  give-way rule), `specEaseOut` (the slide's curve), `SPEC_SLIDE_MAX` (units past which a row jumps
+  instead of sliding), `PanelGpu` (a bare device's shape); the kinds `K_COL`, `K_ROW`, `K_TEXT`,
+  `K_BUTTON`, `K_FIELD`, `K_METER`, `K_RANGE`, `K_ICON`, `K_SLOT`, `K_LIST`, `K_GRID`, `K_TABS`; and
+  the roles a key binds to (`CompiledSpec.keyBinds`): `R_TEXT`, `R_LABEL`, `R_VALUE`,
+  `R_VALUETEXT`, `R_ON`, `R_SELECTED`, `R_ENABLED`, `R_SHOW`, `R_TINT`, `R_STATE`, `R_ITEM`,
+  `R_COUNT`, `R_KEY`, `R_BADGE`, `R_MARK`, `R_AGAIN`, `R_PLACEHOLDER`, `R_LINES`, `R_ROWS`,
+  `R_RING`, `R_AIM`.
 
 `harness/ui-fit.html` (e2e `ui-fit`) draws one such panel on the page and on a bare-device surface.
 
