@@ -3,7 +3,8 @@
  * instanced draw: an instance finds its layer by the layers' first instances, falls through a
  * column of the layer's volume around the anchor (the columns wrap, so the volume follows the
  * camera without popping), and dies below the occlusion height (a flat height, or a height map:
- * a roof, a canopy, the ground). Each eye orients the quad from its own view (`CoreView`, and
+ * a roof, a canopy, the ground; ws/fx-fit: a wrapping map tiles the plane, so it serves an endless
+ * world around the eye). A splash layer (ws/fx-fit) draws rings on that surface near the eye. Each eye orients the quad from its own view (`CoreView`, and
  * `CoreViewExtra` for the image plane), so a stereo pair shares one bundle.
  */
 import { CORE_DRAWABLE_WGSL, CORE_VIEW_EXTRA_WGSL } from '../render/core/drawable';
@@ -22,12 +23,12 @@ struct Layer {
   a: vec4f,   // first instance, instances, radius, height
   b: vec4f,   // fall speed, wind factor, length, width
   c: vec4f,   // rgb, alpha
-  d: vec4f,   // shape (0 streak, 1 flake, 2 dust), flutter, seed, unused
+  d: vec4f,   // shape (0 streak, 1 flake, 2 dust, 3 splash), flutter, seed, unused
 };
 struct Weather {
   anchor: vec4f,  // xyz (the core's frame), time
   wind: vec4f,    // x, z (units/s), intensity, layer count
-  occl: vec4f,    // flat height, map on, map origin x, map origin z
+  occl: vec4f,    // flat height, map (0 off, 1 on, 2 wrapping), map origin x, map origin z
   occl2: vec4f,   // map size x, map size z, near fade, light
   layers: array<Layer, ${WEATHER_MAX_LAYERS}>,
 };
@@ -53,7 +54,11 @@ fn hash11(p: f32) -> f32 {
 fn occlusion(xz: vec2f) -> f32 {
   var h = w.occl.x;
   if (w.occl.y > 0.5) {
-    let uv = (xz - w.occl.zw) / w.occl2.xy;
+    var uv = (xz - w.occl.zw) / w.occl2.xy;
+    if (w.occl.y > 1.5) {
+      // Wrapping: the map tiles the plane (an endless world keeps it centred on the eye).
+      uv = fract(uv);
+    }
     if (all(uv >= vec2f(0.0)) && all(uv < vec2f(1.0))) {
       let dims = vec2f(textureDimensions(height_map));
       let px = vec2i(uv * dims);
@@ -96,6 +101,24 @@ fn occlusion(xz: vec2f) -> f32 {
   let rel = start + wv * ph * H / speed - anchor.xz;
   let wrapped = (fract((rel + R) / (2.0 * R)) * 2.0 - 1.0) * R;
   var p = vec3f(anchor.x + wrapped.x, anchor.y + H * 0.55 - ph * H, anchor.z + wrapped.y);
+  if (shape == 3u) {
+    // A splash: a ring on the occluding surface near the eye, one per cycle (speed: per second).
+    let sc = t * speed + hash11(s * 9.41 + 1.0);
+    let scyc = floor(sc);
+    let sph = fract(sc);
+    let sxz = (vec2f(hash11(s * 3.1 + scyc * 7.7), hash11(s * 5.9 + scyc * 3.3)) * 2.0 - 1.0) * R;
+    let sp = anchor.xz + sxz;
+    let sy = occlusion(sp);
+    if (sy < -1e8 || sph > 0.999) { return o; }
+    let size = L.b.z * (0.25 + 0.75 * sph);
+    let q = vec3f(sp.x + corner.x * size, sy + 0.02, sp.y + corner.y * size);
+    o.clip = view.viewProj * vec4f(q, 1.0);
+    o.uv = corner;
+    let fade = 1.0 - smoothstep(R * 0.7, R, length(sxz));
+    o.color = vec4f(L.c.rgb * w.occl2.w, L.c.a * (1.0 - sph) * fade);
+    o.shape = shape;
+    return o;
+  }
   let ground = occlusion(p.xz);
   var vel = vec3f(wv.x, -speed, wv.y);
   if (shape == 2u) {
@@ -132,6 +155,9 @@ fn occlusion(xz: vec2f) -> f32 {
   var r: f32;
   if (in.shape == 0u) {
     r = 1.0 - in.uv.x * in.uv.x;
+  } else if (in.shape == 3u) {
+    // A thin ring at 0.8 of the quad.
+    r = 1.0 - abs(length(in.uv) - 0.8) * 6.0;
   } else {
     r = 1.0 - dot(in.uv, in.uv);
   }

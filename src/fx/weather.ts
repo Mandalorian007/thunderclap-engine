@@ -16,6 +16,7 @@ import {
   type CoreDrawableEncoder,
   type CoreDrawContext,
   CoreViewExtras,
+  coreDepthCompare,
   DrawablePipelines,
 } from '../render/core/drawable';
 import { coreColorTargets } from '../render/core/targets';
@@ -28,8 +29,13 @@ import {
   WEATHER_WGSL,
 } from './weather-wgsl';
 
-/** How one layer's pieces are drawn. */
-export type PrecipShape = 'streak' | 'flake' | 'dust';
+/**
+ * How one layer's pieces are drawn. `'splash'` (ws/fx-fit): rings on the occluding surface
+ * (the flat height or the map) around the anchor; `length` is the ring's radius at its widest,
+ * `speed` how many times a second each one replays, `height` unused. No surface (no flat height
+ * and no map): none drawn.
+ */
+export type PrecipShape = 'streak' | 'flake' | 'dust' | 'splash';
 
 /** One precipitation layer: a volume of falling (or blowing) pieces around the anchor. */
 export interface PrecipLayer {
@@ -71,6 +77,12 @@ export interface WeatherOcclusionMap {
   origin: readonly [number, number];
   /** World extent the texture covers, x and z. */
   size: readonly [number, number];
+  /**
+   * ws/fx-fit: the map tiles the plane (texel `floor((xz - origin) / size * dims)` modulo its
+   * size), so a map kept around the eye, written in place as it moves (a ring buffer), covers an
+   * endless world. Default false: outside the rectangle only the flat height stops anything.
+   */
+  wrap?: boolean;
 }
 
 export interface WeatherOptions extends Partial<WeatherConfig> {
@@ -159,7 +171,25 @@ export const WEATHER_DUST_STORM: WeatherConfig = {
   wind: [9, 3],
 };
 
-const SHAPES: Record<PrecipShape, number> = { streak: 0, flake: 1, dust: 2 };
+const SHAPES: Record<PrecipShape, number> = { streak: 0, flake: 1, dust: 2, splash: 3 };
+
+/** Rain with splashes: `WEATHER_RAIN`'s streaks and rings where they land (ws/fx-fit). */
+export const WEATHER_RAIN_SPLASHES: WeatherConfig = {
+  layers: [
+    ...WEATHER_RAIN.layers,
+    {
+      shape: 'splash',
+      count: 400,
+      radius: 12,
+      height: 0,
+      speed: 1.4,
+      length: 0.16,
+      color: [0.8, 0.85, 0.9],
+      alpha: 0.5,
+    },
+  ],
+  wind: WEATHER_RAIN.wind,
+};
 
 /**
  * Precipitation on a render core: `new Weather(core, WEATHER_RAIN)`. It adds itself as a core
@@ -250,7 +280,7 @@ export class Weather implements CoreDrawable {
     const layout = device.createPipelineLayout({
       bindGroupLayouts: [core.viewLayout, this.layout],
     });
-    this.pipes = new DrawablePipelines((color, depth, _readOnly, aux) =>
+    this.pipes = new DrawablePipelines((color, depth, _readOnly, aux, reversedZ) =>
       device.createRenderPipeline({
         label: 'weather',
         layout,
@@ -272,7 +302,11 @@ export class Weather implements CoreDrawable {
         },
         primitive: { topology: 'triangle-list' },
         depthStencil: depth
-          ? { format: depth, depthWriteEnabled: false, depthCompare: 'less-equal' }
+          ? {
+              format: depth,
+              depthWriteEnabled: false,
+              depthCompare: coreDepthCompare('less-equal', reversedZ),
+            }
           : undefined,
       }),
     );
@@ -295,7 +329,10 @@ export class Weather implements CoreDrawable {
     return this.layers.length;
   }
 
-  /** A height map that stops precipitation (null: the flat `occlusionHeight` only). */
+  /**
+   * A height map that stops precipitation (null: the flat `occlusionHeight` only). Moving a
+   * wrapping map's `origin` needs no call: `prepare` reads it each frame.
+   */
   setOcclusionMap(map: WeatherOcclusionMap | null): void {
     if (map === this.map) return;
     this.map = map;
@@ -334,7 +371,7 @@ export class Weather implements CoreDrawable {
     const occl = this.occlusionHeight;
     d[8] = Number.isFinite(occl) ? occl - o[1]! : -MAX_HEIGHT;
     const map = this.map;
-    d[9] = map ? 1 : 0;
+    d[9] = map ? (map.wrap ? 2 : 1) : 0;
     d[10] = map ? map.origin[0] - o[0]! : 0;
     d[11] = map ? map.origin[1] - o[2]! : 0;
     d[12] = map ? map.size[0] : 1;

@@ -1,8 +1,10 @@
 import type { RenderCore } from '../render/core/core';
+import { coreDepthCompare } from '../render/core/drawable';
 import type { CorePass, CorePassContext } from '../render/core/pass-list';
 import { CORE_TARGET, coreColorTargets } from '../render/core/targets';
 import { CORE_VIEW_WGSL } from '../render/core/view';
 import { createShaderModule, WGSL_NOISE } from '../render/wgsl';
+import { FX_DEPTH_WGSL, fxDepthCode } from './depth';
 import { packSkyParams, SKY_PARAMS_FLOATS, type SkyLook } from './sky';
 import { SKY_PARAMS_WGSL, SKY_SHADE_WGSL } from './sky-wgsl';
 
@@ -17,9 +19,10 @@ export const SKY_PASS_LIGHT_FLOATS = 12;
  * win. When the core has extra targets (ws/core-targets) the sun disc and stars go to emissive
  * (bloom) and the dome's motion, a direction at infinity so camera turns only, to velocity.
  */
-export const SKY_PASS_WGSL = /* wgsl */ `${CORE_VIEW_WGSL}
+const SKY_PASS_HEAD = /* wgsl */ `${CORE_VIEW_WGSL}
 @group(0) @binding(0) var<uniform> view: CoreView;
 ${WGSL_NOISE}
+${FX_DEPTH_WGSL}
 ${SKY_PARAMS_WGSL}
 struct SkyLight {
   sun_dir: vec4f,   // xyz: the way the light travels
@@ -28,6 +31,9 @@ struct SkyLight {
 };
 @group(1) @binding(1) var<uniform> light: SkyLight;
 ${SKY_SHADE_WGSL}
+`;
+
+const SKY_PASS_BODY = /* wgsl */ `
 fn sky_inverse(m: mat4x4f) -> mat4x4f {
   let a00 = m[0][0]; let a01 = m[0][1]; let a02 = m[0][2]; let a03 = m[0][3];
   let a10 = m[1][0]; let a11 = m[1][1]; let a12 = m[1][2]; let a13 = m[1][3];
@@ -63,7 +69,7 @@ struct SkyPassOut {
   let x = f32(i32(i & 1u) * 4 - 1);
   let y = f32(i32(i >> 1u) * 4 - 1);
   var o: SkyPassOut;
-  o.clip = vec4f(x, y, 1.0, 1.0);
+  o.clip = vec4f(x, y, fx_depth_far(), 1.0);
   o.ray = sky_inverse(view.viewProj) * vec4f(x, y, 0.5, 1.0);
   return o;
 }
@@ -76,7 +82,7 @@ struct SkyPassFrag {
 
 @fragment fn fs(in: SkyPassOut) -> SkyPassFrag {
   let d = normalize(in.ray.xyz / in.ray.w - view.position.xyz);
-  let s = sky_shade(d, light.sun_dir.xyz, light.sun_color.rgb, light.fog);
+  let s = SKY_PASS_SHADE;
   var o: SkyPassFrag;
   o.color = vec4f(s.color, 1.0);
   o.emissive = vec4f(s.emissive, 1.0);
@@ -93,6 +99,82 @@ struct SkyPassFrag {
 }
 `;
 
+/** The default fragment's shade call; a hook's pass calls `sky_look` instead. */
+const SHADE_DEFAULT = 'sky_shade(d, light.sun_dir.xyz, light.sun_color.rgb, light.fog)';
+const SHADE_HOOK = `sky_look(sky_input(d))`;
+
+/**
+ * The core sky pass's shader (the default look): the view block at group 0, the dome's params
+ * and light at group 1, and `FX_DEPTH_WGSL` (the far plane by the pass's depth convention).
+ */
+export const SKY_PASS_WGSL = `${SKY_PASS_HEAD}${SKY_PASS_BODY.replace('SKY_PASS_SHADE', SHADE_DEFAULT)}`;
+
+/**
+ * What a `SkyPassOptions.shade` hook's \`sky_look\` gets (ws/fx-fit), per pixel: the world
+ * direction, the light, the hook block's time and user params, and the eye in world space.
+ */
+export const SKY_INPUT_WGSL = /* wgsl */ `
+struct SkyInput {
+  dir: vec3f,       // the pixel's world direction, normalised
+  sun_dir: vec3f,   // the light's travel direction
+  sun_color: vec3f, // linear, all zero for no sun
+  fog: vec4f,       // rgb, density
+  time: f32,        // SkyPass.time, seconds
+  eye: vec3f,       // the view's eye, world space (origin added back)
+};
+`;
+
+/** The most `vec4f` user params a hook's block carries (`SkyPassOptions.params`). */
+export const SKY_PASS_MAX_PARAMS = 16;
+
+function hookWgsl(shade: string, params: number): string {
+  const n = Math.max(1, params);
+  return `${SKY_PASS_HEAD}${SKY_INPUT_WGSL}
+struct SkyHook {
+  time: vec4f, // seconds, unused, unused, unused
+  user: array<vec4f, ${n}>,
+};
+@group(1) @binding(2) var<uniform> sky_hook: SkyHook;
+fn sky_input(d: vec3f) -> SkyInput {
+  var i: SkyInput;
+  i.dir = d;
+  i.sun_dir = light.sun_dir.xyz;
+  i.sun_color = light.sun_color.rgb;
+  i.fog = light.fog;
+  i.time = sky_hook.time.x;
+  i.eye = view.position.xyz + view.origin.xyz;
+  return i;
+}
+// The user param at index k (SkyPass.params, vec4 k).
+fn sky_param(k: u32) -> vec4f { return sky_hook.user[k]; }
+${shade}
+${SKY_PASS_BODY.replace('SKY_PASS_SHADE', SHADE_HOOK)}`;
+}
+
+/**
+ * The CPU mirror of the dome's horizon colour (\`sky_dome\` at elevation 0, times the exposure):
+ * what a game's fog uses so fogged ground meets the sky. `sunDir` is the light's travel
+ * direction, `sunColor` all zero for no sun, `fog` rgb + density. Into `out` (rgb); no allocation.
+ */
+export function skyHorizonColor(
+  sky: SkyLook,
+  sunDir: ArrayLike<number>,
+  sunColor: ArrayLike<number>,
+  fog: ArrayLike<number>,
+  out: Float32Array,
+): Float32Array {
+  const hasSun = sunColor[0]! + sunColor[1]! + sunColor[2]! > 0;
+  const t = Math.min(Math.max((-sunDir[1]! + 0.12) / 0.2, 0), 1);
+  const day = hasSun ? t * t * (3 - 2 * t) : 1;
+  const dim = sky.ambientFloor + (1 - sky.ambientFloor) * day;
+  const haze = Math.min(Math.max(fog[3]!, 0), 1);
+  for (let k = 0; k < 3; k++) {
+    const h = sky.horizon[k]!;
+    out[k] = (h + (fog[k]! - h) * haze) * dim * sky.exposure;
+  }
+  return out;
+}
+
 export interface SkyPassOptions {
   /** The pass id. Default `'sky'`. */
   id?: string;
@@ -100,6 +182,23 @@ export interface SkyPassOptions {
   after?: string;
   /** Debug label. Default `'sky pass'`. */
   label?: string;
+  /**
+   * ws/fx-fit: the game's own sky, as WGSL defining `fn sky_look(i: SkyInput) -> SkyShade`
+   * (`SKY_INPUT_WGSL`; `SkyShade` is colour and emissive, linear, exposure applied). It can
+   * call the engine's built-ins (`sky_shade`, `sky_dome`, `sky_sun`, `sky_day`, `sky_stars`,
+   * `sky_night_stars`, `engine_hash*`/noise), read `sky` (the `SkyLook`'s params), `light`,
+   * `view`, `sky_param(k)` and, with `groupLayout`, its own bindings at `@group(2)`. The pass
+   * keeps the ray, the far-plane depth and the colour/emissive/velocity writes. Omitted: the
+   * default dome, the default shader and bind group, unchanged.
+   */
+  shade?: string;
+  /** With `shade`: `vec4f` user params (`SkyPass.params`, read by `sky_param(k)`). Default 0, at most 16. */
+  params?: number;
+  /**
+   * With `shade`: the layout of the game's `@group(2)` (its textures and buffers), made on the
+   * pass's device (again after a restore). Bind with `SkyPass.gameGroup`; no draw until set.
+   */
+  groupLayout?: (device: GPUDevice) => GPUBindGroupLayout;
 }
 
 /**
@@ -118,6 +217,19 @@ export class SkyPass {
   readonly fog = new Float32Array(4);
   /** The pass in the core's list. */
   readonly pass: CorePass;
+  /** With a shade hook: seconds the hook reads as `SkyInput.time`. Live. */
+  time = 0;
+  /** With a shade hook: the user params (`SkyPassOptions.params` vec4s). Live. */
+  readonly params: Float32Array;
+  /**
+   * With `SkyPassOptions.groupLayout`: the game's `@group(2)` bind group, made from
+   * `gameLayout`. Remade by the game after a device restore (null until then: no draw).
+   */
+  gameGroup: GPUBindGroup | null = null;
+  /** The `@group(2)` layout the game binds against (null without `groupLayout`). */
+  gameLayout: GPUBindGroupLayout | null = null;
+  /** The horizon colour the dome shows (rgb), as of `prepare()`: share it with fog. */
+  readonly horizon = new Float32Array(3);
   /** Draws encoded so far (one per view). */
   draws = 0;
 
@@ -138,6 +250,12 @@ export class SkyPass {
   >();
   private readonly offRestored: () => void;
   private destroyed = false;
+  private readonly code: string;
+  private reversedModule: GPUShaderModule | null = null;
+  private readonly hook: boolean;
+  private readonly hookData: Float32Array | null;
+  private hookBuffer: GPUBuffer | null = null;
+  private readonly groupLayoutOf: ((device: GPUDevice) => GPUBindGroupLayout) | null;
 
   constructor(
     core: RenderCore,
@@ -145,6 +263,15 @@ export class SkyPass {
     opts: SkyPassOptions = {},
   ) {
     this.label = opts.label ?? 'sky pass';
+    this.hook = opts.shade !== undefined;
+    const n = Math.min(Math.max(0, Math.floor(opts.params ?? 0)), SKY_PASS_MAX_PARAMS);
+    if (opts.params !== undefined && opts.params > SKY_PASS_MAX_PARAMS) {
+      throw new Error(`SkyPass: params ${opts.params} > ${SKY_PASS_MAX_PARAMS}`);
+    }
+    this.code = opts.shade !== undefined ? hookWgsl(opts.shade, n) : SKY_PASS_WGSL;
+    this.hookData = this.hook ? new Float32Array(4 + 4 * Math.max(1, n)) : null;
+    this.params = this.hookData ? this.hookData.subarray(4, 4 + 4 * n) : new Float32Array(0);
+    this.groupLayoutOf = this.hook ? (opts.groupLayout ?? null) : null;
     this.build(core.device);
     this.pass = core.definePass({
       id: opts.id ?? 'sky',
@@ -176,6 +303,12 @@ export class SkyPass {
     const q = this.device.queue;
     q.writeBuffer(this.paramsBuffer, 0, d, 0, SKY_PARAMS_FLOATS);
     q.writeBuffer(this.lightBuffer, 0, d, o, SKY_PASS_LIGHT_FLOATS);
+    skyHorizonColor(this.sky, this.sunDir, this.sunColor, this.fog, this.horizon);
+    const h = this.hookData;
+    if (h && this.hookBuffer) {
+      h[0] = this.time;
+      q.writeBuffer(this.hookBuffer, 0, h);
+    }
   }
 
   destroy(): void {
@@ -184,13 +317,16 @@ export class SkyPass {
     this.offRestored();
     this.paramsBuffer.destroy();
     this.lightBuffer.destroy();
+    this.hookBuffer?.destroy();
   }
 
   private encode(pass: GPURenderPassEncoder, ctx: CorePassContext): void {
     if (this.destroyed) return;
+    if (this.gameLayout && !this.gameGroup) return;
     pass.setPipeline(this.pipelineFor(ctx));
     pass.setBindGroup(0, ctx.view);
     pass.setBindGroup(1, this.group);
+    if (this.gameGroup && this.gameLayout) pass.setBindGroup(2, this.gameGroup);
     pass.draw(3);
     this.draws++;
   }
@@ -207,20 +343,26 @@ export class SkyPass {
       byAux = [];
       byDepth.set(key, byAux);
     }
-    const hit = byAux[ctx.aux];
+    // Slots 0..7 by the extra-target mask; 8..15 the same under reversed-Z.
+    const reversed = ctx.reversedZ === true;
+    const slot = ctx.aux + (reversed ? 8 : 0);
+    const hit = byAux[slot];
     if (hit) return hit;
     if (!this.pipelineLayout) {
+      const layouts = [ctx.viewLayout, this.layout];
+      if (this.gameLayout) layouts.push(this.gameLayout);
       this.pipelineLayout = this.device.createPipelineLayout({
         label: this.label,
-        bindGroupLayouts: [ctx.viewLayout, this.layout],
+        bindGroupLayouts: layouts,
       });
     }
+    const module = reversed ? this.reversedModuleOf() : this.module;
     const p = this.device.createRenderPipeline({
-      label: `${this.label}:${ctx.format}:${key}:${ctx.aux}`,
+      label: `${this.label}:${ctx.format}:${key}:${ctx.aux}${reversed ? ':rz' : ''}`,
       layout: this.pipelineLayout,
-      vertex: { module: this.module, entryPoint: 'vs' },
+      vertex: { module, entryPoint: 'vs' },
       fragment: {
-        module: this.module,
+        module,
         entryPoint: 'fs',
         targets: coreColorTargets(
           { format: ctx.format },
@@ -230,11 +372,24 @@ export class SkyPass {
       },
       primitive: { topology: 'triangle-list', cullMode: 'none' },
       depthStencil: ctx.depthFormat
-        ? { format: ctx.depthFormat, depthWriteEnabled: false, depthCompare: 'less-equal' }
+        ? {
+            format: ctx.depthFormat,
+            depthWriteEnabled: false,
+            depthCompare: coreDepthCompare('less-equal', reversed),
+          }
         : undefined,
     });
-    byAux[ctx.aux] = p;
+    byAux[slot] = p;
     return p;
+  }
+
+  private reversedModuleOf(): GPUShaderModule {
+    this.reversedModule ??= createShaderModule(
+      this.device,
+      fxDepthCode(this.code, true),
+      `${this.label} (reversed-Z)`,
+    );
+    return this.reversedModule;
   }
 
   /** Every GPU object, on `device` (the constructor's, or a restored one). */
@@ -252,22 +407,30 @@ export class SkyPass {
       size: SKY_PASS_LIGHT_FLOATS * 4,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
-    this.layout = device.createBindGroupLayout({
-      label: this.label,
-      entries: [
-        { binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: {} },
-        { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: {} },
-      ],
-    });
-    this.group = device.createBindGroup({
-      label: this.label,
-      layout: this.layout,
-      entries: [
-        { binding: 0, resource: { buffer: this.paramsBuffer } },
-        { binding: 1, resource: { buffer: this.lightBuffer } },
-      ],
-    });
-    this.module = createShaderModule(device, SKY_PASS_WGSL, this.label);
+    const layoutEntries: GPUBindGroupLayoutEntry[] = [
+      { binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: {} },
+      { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: {} },
+    ];
+    const entries: GPUBindGroupEntry[] = [
+      { binding: 0, resource: { buffer: this.paramsBuffer } },
+      { binding: 1, resource: { buffer: this.lightBuffer } },
+    ];
+    this.hookBuffer = null;
+    if (this.hookData) {
+      this.hookBuffer = device.createBuffer({
+        label: `${this.label} hook`,
+        size: this.hookData.byteLength,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
+      layoutEntries.push({ binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: {} });
+      entries.push({ binding: 2, resource: { buffer: this.hookBuffer } });
+    }
+    this.layout = device.createBindGroupLayout({ label: this.label, entries: layoutEntries });
+    this.group = device.createBindGroup({ label: this.label, layout: this.layout, entries });
+    this.gameGroup = null;
+    this.gameLayout = this.groupLayoutOf ? this.groupLayoutOf(device) : null;
+    this.reversedModule = null;
+    this.module = createShaderModule(device, this.code, this.label);
   }
 }
 

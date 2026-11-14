@@ -100,6 +100,11 @@ export interface CorePassContext {
    * targets with `coreColorTargets(color, aux, writes)`. 0 after a resolve.
    */
   aux: number;
+  /**
+   * The pass is reversed-Z (`CorePass.reversedZ`, ws/fx-fit): near is 1 and far 0, so a depth
+   * test is `coreDepthCompare(compare, reversedZ)` of the standard one.
+   */
+  reversedZ: boolean;
 }
 
 /** A pass in the list; draw sets join it by id. */

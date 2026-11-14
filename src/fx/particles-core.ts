@@ -14,11 +14,19 @@ import {
   type CoreDrawableEncoder,
   type CoreDrawContext,
   CoreViewExtras,
+  coreDepthCompare,
   DrawablePipelines,
 } from '../render/core/drawable';
 import { CORE_TARGET, coreColorTargets } from '../render/core/targets';
-import { createShaderModule } from '../render/wgsl';
-import { PARTICLE_CORE_RENDER_WGSL } from './particles-wgsl';
+import { FxDepthModules } from './depth';
+import {
+  PARTICLE_BOX_LIGHT_FLOATS,
+  PARTICLE_CORE_BOX_WGSL,
+  PARTICLE_CORE_RENDER_WGSL,
+} from './particles-wgsl';
+
+/** How a core particle is drawn: a camera-facing quad, or (ws/fx-fit) a small lit cube. */
+export type ParticleShape = 'quad' | 'box';
 
 /** What `ParticlesOnCore` draws from (the system's buffers). */
 export interface ParticlesOnCoreSource {
@@ -32,6 +40,8 @@ export interface ParticlesOnCoreSource {
   readonly blend: GPUBlendState;
   /** Sample the core's depth for the soft fade. */
   readonly readsDepth: boolean;
+  /** Default `'quad'`. */
+  readonly shape?: ParticleShape;
 }
 
 /** The core drawable behind a `ParticleSystem` made on a `RenderCore`. */
@@ -44,6 +54,19 @@ export class ParticlesOnCore implements CoreDrawable {
   active = true;
   /** Draw calls a record makes (1: the whole ring in one instanced draw). */
   static readonly CALLS = 1;
+  /** `'quad'` or `'box'` (lit cubes, 36 vertices a particle). */
+  readonly shape: ParticleShape;
+  /**
+   * Box shape: the light the cubes are shaded by (a sun's travel direction and linear colour,
+   * and an ambient colour). Live; uploaded in `prepare`.
+   */
+  readonly boxLight = {
+    sunDir: new Float32Array([-0.4, -0.8, -0.45]),
+    sunColor: new Float32Array([1, 1, 1]),
+    ambient: new Float32Array([0.3, 0.3, 0.35]),
+  };
+  private readonly lightData = new Float32Array(PARTICLE_BOX_LIGHT_FLOATS);
+  private readonly lightBuffer: GPUBuffer | null;
   private readonly layout: GPUBindGroupLayout;
   private readonly pipes: DrawablePipelines;
   private readonly extras: CoreViewExtras;
@@ -58,9 +81,18 @@ export class ParticlesOnCore implements CoreDrawable {
   ) {
     const device = core.device;
     this.readsDepth = src.readsDepth;
+    this.shape = src.shape ?? 'quad';
+    const box = this.shape === 'box';
     this.extras = CoreViewExtras.of(core);
     const V = GPUShaderStage.VERTEX;
     const F = GPUShaderStage.FRAGMENT;
+    this.lightBuffer = box
+      ? device.createBuffer({
+          label: 'particles-core-box-light',
+          size: PARTICLE_BOX_LIGHT_FLOATS * 4,
+          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        })
+      : null;
     this.layout = device.createBindGroupLayout({
       label: 'particles-core-layout',
       entries: [
@@ -71,6 +103,7 @@ export class ParticlesOnCore implements CoreDrawable {
         { binding: 4, visibility: F, texture: {} },
         { binding: 5, visibility: F, sampler: {} },
         { binding: 6, visibility: V | F, buffer: { type: 'read-only-storage' } },
+        ...(box ? [{ binding: 7, visibility: V, buffer: {} }] : []),
       ],
     });
     this.dummyDepth = src.readsDepth
@@ -81,13 +114,18 @@ export class ParticlesOnCore implements CoreDrawable {
           format: 'depth32float',
           usage: GPUTextureUsage.TEXTURE_BINDING,
         });
-    const module = createShaderModule(device, PARTICLE_CORE_RENDER_WGSL, 'particles-core');
+    const modules = new FxDepthModules(
+      device,
+      box ? PARTICLE_CORE_BOX_WGSL : PARTICLE_CORE_RENDER_WGSL,
+      box ? 'particles-core-box' : 'particles-core',
+    );
     const pipelineLayout = device.createPipelineLayout({
       bindGroupLayouts: [core.viewLayout, this.layout],
     });
-    this.pipes = new DrawablePipelines((color, depth, _readOnly, aux) =>
-      device.createRenderPipeline({
-        label: 'particles-core',
+    this.pipes = new DrawablePipelines((color, depth, _readOnly, aux, reversedZ) => {
+      const module = modules.get(reversedZ);
+      return device.createRenderPipeline({
+        label: box ? 'particles-core-box' : 'particles-core',
         layout: pipelineLayout,
         vertex: { module, entryPoint: 'vs' },
         fragment: {
@@ -95,16 +133,29 @@ export class ParticlesOnCore implements CoreDrawable {
           entryPoint: 'fs',
           targets: coreColorTargets({ format: color, blend: src.blend }, aux, CORE_TARGET.emissive),
         },
-        primitive: { topology: 'triangle-list' },
+        // A cube shows its outside faces only (it writes no depth, so the back must not paint over).
+        primitive: { topology: 'triangle-list', cullMode: box ? 'back' : 'none' },
         depthStencil: depth
-          ? { format: depth, depthWriteEnabled: false, depthCompare: 'less-equal' }
+          ? {
+              format: depth,
+              depthWriteEnabled: false,
+              depthCompare: coreDepthCompare('less-equal', reversedZ),
+            }
           : undefined,
-      }),
-    );
+      });
+    });
   }
 
   prepare(encoder: GPUCommandEncoder): void {
     this.extras.update();
+    if (this.lightBuffer) {
+      const d = this.lightData;
+      const l = this.boxLight;
+      d.set(l.sunDir, 0);
+      d.set(l.sunColor, 4);
+      d.set(l.ambient, 8);
+      this.core.device.queue.writeBuffer(this.lightBuffer, 0, d);
+    }
     this.src.system.prepare(encoder);
   }
 
@@ -112,7 +163,7 @@ export class ParticlesOnCore implements CoreDrawable {
     enc.setPipeline(this.pipes.get(ctx));
     enc.setBindGroup(0, ctx.viewGroup);
     enc.setBindGroup(1, this.bindGroup());
-    enc.draw(6, this.src.system.capacity);
+    enc.draw(this.lightBuffer ? 36 : 6, this.src.system.capacity);
     return ParticlesOnCore.CALLS;
   }
 
@@ -137,6 +188,7 @@ export class ParticlesOnCore implements CoreDrawable {
         { binding: 4, resource: src.sheet },
         { binding: 5, resource: src.sampler },
         { binding: 6, resource: { buffer: this.extras.buffer } },
+        ...(this.lightBuffer ? [{ binding: 7, resource: { buffer: this.lightBuffer } }] : []),
       ],
     });
     return this.group;
@@ -144,6 +196,7 @@ export class ParticlesOnCore implements CoreDrawable {
 
   destroy(): void {
     this.dummyDepth?.destroy();
+    this.lightBuffer?.destroy();
     this.group = null;
   }
 }

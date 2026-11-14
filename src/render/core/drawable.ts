@@ -40,6 +40,35 @@ export interface CoreDrawContext {
   depth: GPUTextureFormat | undefined;
   /** The pass holds depth read-only (a pipeline must not write it). */
   depthReadOnly: boolean;
+  /**
+   * The pass is reversed-Z (`CorePass.reversedZ`, ws/fx-fit): near is 1 and far 0. Test depth
+   * with `coreDepthCompare(compare, ctx.reversedZ)`; `DrawablePipelines` keys by it.
+   */
+  reversedZ: boolean;
+}
+
+/**
+ * A standard depth test as the pass's depth convention wants it (ws/fx-fit): under reversed-Z
+ * (`CorePass.reversedZ`) `'less'` becomes `'greater'`, `'less-equal'` `'greater-equal'` and the
+ * other way round; `'always'`, `'never'`, `'equal'` and `'not-equal'` stay.
+ */
+export function coreDepthCompare(
+  compare: GPUCompareFunction,
+  reversedZ: boolean,
+): GPUCompareFunction {
+  if (!reversedZ) return compare;
+  switch (compare) {
+    case 'less':
+      return 'greater';
+    case 'less-equal':
+      return 'greater-equal';
+    case 'greater':
+      return 'less';
+    case 'greater-equal':
+      return 'less-equal';
+    default:
+      return compare;
+  }
 }
 
 /**
@@ -282,15 +311,17 @@ export class DrawableEntry implements PassMember {
     ctx.color = color;
     ctx.depth = depth;
     ctx.depthReadOnly = readOnly;
+    ctx.reversedZ = this.pass.reversedZ;
     return ctx;
   }
 }
 
 /**
  * Render pipelines of one drawable by target: colour format × depth format × read-only × the
- * pass's extra targets (`aux`, ws/core-targets), made on first use by `make` (pass `depthWrite`
- * on to `GPUDepthStencilState.depthWriteEnabled` only when the pass is not read-only; list the
- * colour targets with `coreColorTargets(color, aux, writes)`).
+ * pass's extra targets (`aux`, ws/core-targets) × its depth convention (`reversedZ`, ws/fx-fit),
+ * made on first use by `make` (pass `depthWrite` on to `GPUDepthStencilState.depthWriteEnabled`
+ * only when the pass is not read-only; list the colour targets with
+ * `coreColorTargets(color, aux, writes)`; test depth with `coreDepthCompare(c, reversedZ)`).
  */
 export class DrawablePipelines {
   private readonly list: {
@@ -298,6 +329,7 @@ export class DrawablePipelines {
     depth: GPUTextureFormat | undefined;
     readOnly: boolean;
     aux: number;
+    reversedZ: boolean;
     pipeline: GPURenderPipeline;
   }[] = [];
 
@@ -307,6 +339,7 @@ export class DrawablePipelines {
       depth: GPUTextureFormat | undefined,
       readOnly: boolean,
       aux: number,
+      reversedZ: boolean,
     ) => GPURenderPipeline,
   ) {}
 
@@ -314,23 +347,26 @@ export class DrawablePipelines {
   get(ctx: CoreDrawContext): GPURenderPipeline {
     const l = this.list;
     const aux = ctx.aux ?? 0;
+    const reversedZ = ctx.reversedZ === true;
     for (let i = 0; i < l.length; i++) {
       const e = l[i]!;
       if (
         e.color === ctx.color &&
         e.depth === ctx.depth &&
         e.readOnly === ctx.depthReadOnly &&
-        e.aux === aux
+        e.aux === aux &&
+        e.reversedZ === reversedZ
       ) {
         return e.pipeline;
       }
     }
-    const pipeline = this.make(ctx.color, ctx.depth, ctx.depthReadOnly, aux);
+    const pipeline = this.make(ctx.color, ctx.depth, ctx.depthReadOnly, aux, reversedZ);
     l.push({
       color: ctx.color,
       depth: ctx.depth,
       readOnly: ctx.depthReadOnly,
       aux,
+      reversedZ,
       pipeline,
     });
     return pipeline;
@@ -400,6 +436,7 @@ export class CoreViewExtras {
     const src = core.viewData;
     const d = this.data;
     const inv = this.inv;
+    const near = core.passes.reversedZ ? 1 : 0;
     for (let i = 0; i < n; i++) {
       const at = i * VIEW_SLOT_FLOATS + VIEW_SLOT.viewProj;
       if (!mat4.invert(inv, src.subarray(at, at + 16))) mat4.identity(inv);
@@ -408,8 +445,9 @@ export class CoreViewExtras {
       // The image plane's axes: the far-plane points left of / above the centre, minus it.
       axis(inv, 1, 0, d, o + 16);
       axis(inv, 0, 1, d, o + 20);
-      // Forward: from the near-plane centre to the mid-depth one (an infinite far has no far plane).
-      unproject(inv, 0, 0, 0, d, o + 24);
+      // Forward: from the near-plane centre to the mid-depth one (an infinite far has no far
+      // plane). Near is depth 1 under reversed-Z (ws/fx-fit).
+      unproject(inv, 0, 0, near, d, o + 24);
       const nx = d[o + 24]!;
       const ny = d[o + 25]!;
       const nz = d[o + 26]!;

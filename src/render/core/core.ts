@@ -459,6 +459,7 @@ export class RenderCore {
       depth: undefined,
       depthReadOnly: false,
       aux: 0,
+      reversedZ: false,
     };
     this.drawableHost = {
       // Live: after `restore` drawables record on the new device (ws/core-decals).
@@ -988,6 +989,7 @@ export class RenderCore {
         ctx.depthFormat = depthFormat;
         ctx.depthReadOnly = readOnly;
         ctx.aux = aux;
+        ctx.reversedZ = pass.reversedZ;
         pass.encode(enc, ctx);
       }
       enc.end();

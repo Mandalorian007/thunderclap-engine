@@ -40,6 +40,7 @@ export {
   CORE_DRAWABLE_WGSL,
   CORE_VIEW_EXTRA_WGSL,
   CoreViewExtras,
+  coreDepthCompare,
   DrawablePipelines,
   VIEW_EXTRA_FLOATS,
 } from './drawable';

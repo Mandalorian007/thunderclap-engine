@@ -1,6 +1,7 @@
 import { CORE_DRAWABLE_WGSL, CORE_VIEW_EXTRA_WGSL } from '../render/core/drawable';
 import { WGSL_MOTION } from '../render/scene-pipelines';
 import { WGSL_GLOBALS, WGSL_LIGHTS } from '../render/wgsl';
+import { FX_DEPTH_WGSL } from './depth';
 
 const COMMON = /* wgsl */ `
 struct Particle {
@@ -857,9 +858,10 @@ struct Counts {
  * in the vertex stage; with `sim.softOn` it fades near the core's depth (binding 2). Colour,
  * premultiplied, and the core's emissive target (`@location(1)`, ws/core-targets).
  */
-export const PARTICLE_CORE_RENDER_WGSL = /* wgsl */ `
+const PARTICLE_CORE_HEAD = /* wgsl */ `
 ${CORE_DRAWABLE_WGSL}
 ${CORE_VIEW_EXTRA_WGSL}
+${FX_DEPTH_WGSL}
 ${fxCommon(true)}
 @group(1) @binding(0) var<storage, read> particles: array<Particle>;
 @group(1) @binding(1) var<uniform> sim: Sim;
@@ -868,7 +870,9 @@ ${fxCommon(true)}
 @group(1) @binding(4) var sheet: texture_2d<f32>;
 @group(1) @binding(5) var sheet_samp: sampler;
 @group(1) @binding(6) var<storage, read> extras: array<CoreViewExtra>;
+`;
 
+export const PARTICLE_CORE_RENDER_WGSL = /* wgsl */ `${PARTICLE_CORE_HEAD}
 struct PVOut {
   @builtin(position) clip: vec4f,
   @location(0) q: vec2f,
@@ -963,14 +967,113 @@ ${FX_CURVES_WGSL}
     let dims = vec2i(textureDimensions(scene_depth));
     let px = clamp(vec2i(in.clip.xy), vec2i(0), dims - 1);
     let depth = textureLoad(scene_depth, px, 0);
-    let w = extras[view.index].invViewProj * vec4f(in.ndc.xy / in.ndc.w, depth, 1.0);
-    let scene = length(w.xyz / w.w - view.position.xyz);
-    a *= saturate((scene - in.eye_dist) / max(sim.softness, 1e-4));
+    // Nothing behind (the far plane, which reversed-Z puts at infinity): no fade.
+    if (!fx_depth_is_far(depth)) {
+      let w = extras[view.index].invViewProj * vec4f(in.ndc.xy / in.ndc.w, depth, 1.0);
+      let scene = length(w.xyz / w.w - view.position.xyz);
+      a *= saturate((scene - in.eye_dist) / max(sim.softness, 1e-4));
+    }
   }
   var o: POut;
   o.color = vec4f(rgb * a, a);
   // The core's emissive target (bloom's source) when it has one: masked off otherwise.
   o.emissive = vec4f(rgb * a * in.emissive, a);
+  return o;
+}
+`;
+
+/** Floats of the lit-box particles' light block (`ParticlesOnCore` box mode, binding 7). */
+export const PARTICLE_BOX_LIGHT_FLOATS = 12;
+
+/**
+ * ws/fx-fit: world particles on the render core as small lit cubes (voxel debris): 36 vertices
+ * an instance, the cube's edge the particle's size, turned by its rotation about a tilted axis
+ * so a tumbling spin shows, shaded by a sun (direction, colour) and an ambient term from the
+ * light block (binding 7) per face. Same bindings 0..6 as the quads; no soft fade or sheet.
+ */
+export const PARTICLE_CORE_BOX_WGSL = /* wgsl */ `${PARTICLE_CORE_HEAD}
+struct BoxLight {
+  sun_dir: vec4f,   // the light's travel direction xyz
+  sun_color: vec4f, // linear rgb
+  ambient: vec4f,   // linear rgb
+};
+@group(1) @binding(7) var<uniform> box_light: BoxLight;
+
+struct BVOut {
+  @builtin(position) clip: vec4f,
+  @location(0) color: vec4f,
+  @location(1) emissive: f32,
+};
+
+struct POut {
+  @location(0) color: vec4f,
+  @location(1) emissive: vec4f,
+};
+
+${FX_CURVES_WGSL}
+fn box_turn(v: vec3f, a: f32) -> vec3f {
+  // About the y axis, then about x by half as much: debris tumbles.
+  let c = cos(a);
+  let s = sin(a);
+  let y = vec3f(v.x * c + v.z * s, v.y, -v.x * s + v.z * c);
+  let c2 = cos(a * 0.5);
+  let s2 = sin(a * 0.5);
+  return vec3f(y.x, y.y * c2 - y.z * s2, y.y * s2 + y.z * c2);
+}
+
+@vertex fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> BVOut {
+  var o: BVOut;
+  let p = particles[ii];
+  o.clip = vec4f(0.0, 0.0, 2.0, 1.0);
+  if (p.life.x >= p.life.y) { return o; }
+  let t = p.life.x / p.life.y;
+  let size = max(size_at(p.curve.x, t, p.life.z, p.life.w), 0.0);
+  let centre = p.pos.xyz - view.origin.xyz;
+  for (var k = 0u; k < 6u; k++) {
+    let pl = view.planes[k];
+    if (dot(pl.xyz, centre) + pl.w < -size) { return o; }
+  }
+  // Six faces of two triangles: face f's axis is f / 2, its side the sign of f % 2.
+  let face = vi / 6u;
+  let corner = vi % 6u;
+  var quad = array<vec2f, 6>(
+    vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0),
+    vec2f(-1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, 1.0)
+  );
+  let q = quad[corner];
+  let axis = face / 2u;
+  let side = select(-1.0, 1.0, (face & 1u) == 1u);
+  var n = vec3f(0.0);
+  var local = vec3f(0.0);
+  // Wound counter-clockwise from outside on every face.
+  if (axis == 0u) {
+    n = vec3f(side, 0.0, 0.0);
+    local = vec3f(side, q.x * side, q.y);
+  } else if (axis == 1u) {
+    n = vec3f(0.0, side, 0.0);
+    local = vec3f(q.y, side, q.x * side);
+  } else {
+    n = vec3f(0.0, 0.0, side);
+    local = vec3f(q.x, q.y * side, side);
+  }
+  let world = centre + box_turn(local * (size * 0.5), p.pos.w);
+  let wn = box_turn(n, p.pos.w);
+  o.clip = view.viewProj * vec4f(world, 1.0);
+  var color = color_at(p.curve.y, t, p.c0, p.c1);
+  if (sim.fadeFar > sim.fadeNear) {
+    color.a *= 1.0 - smoothstep(sim.fadeNear, sim.fadeFar, length(world - view.position.xyz));
+  }
+  let lambert = max(dot(wn, -box_light.sun_dir.xyz), 0.0);
+  o.color = vec4f(color.rgb * (box_light.ambient.rgb + box_light.sun_color.rgb * lambert), color.a);
+  o.emissive = p.wind.w;
+  return o;
+}
+
+@fragment fn fs(in: BVOut) -> POut {
+  let a = in.color.a;
+  var o: POut;
+  o.color = vec4f(in.color.rgb * a, a);
+  o.emissive = vec4f(in.color.rgb * a * in.emissive, a);
   return o;
 }
 `;
