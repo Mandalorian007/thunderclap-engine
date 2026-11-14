@@ -325,6 +325,60 @@ impl SchemaBuilder {
         TypeRef::Named(name)
     }
 
+    /// The definition of `name` described into this builder so far (none
+    /// while it is still being described).
+    pub fn defined(&self, name: &str) -> Option<&TypeDef> {
+        let &(slot, _) = self.index.get(name)?;
+        self.types[slot].as_ref()
+    }
+
+    /// Copies the named types `ty` uses from `from` (another builder that
+    /// described them) into this one, depth first in the order a
+    /// description would discover them: for a description assembled from
+    /// pieces of another (`tc-net`'s envelope, laying a game enum's
+    /// variants out as its own). Types already here are kept.
+    ///
+    /// # Panics
+    ///
+    /// If `from` lacks a type `ty` uses, or one is named here for another
+    /// Rust type.
+    pub fn adopt(&mut self, from: &SchemaBuilder, ty: &TypeRef) {
+        match ty {
+            TypeRef::Vec(t) | TypeRef::Option(t) => self.adopt(from, t),
+            TypeRef::Map(k, v) => {
+                self.adopt(from, k);
+                self.adopt(from, v);
+            }
+            TypeRef::Named(name) => {
+                let def = from
+                    .defined(name)
+                    .unwrap_or_else(|| panic!("`{name}` is not described in `from`"))
+                    .clone();
+                self.define(def.name, def.rust_path, def.doc, |s| {
+                    match &def.kind {
+                        TypeKind::Struct(fields) => {
+                            fields.iter().for_each(|f| s.adopt(from, &f.ty))
+                        }
+                        TypeKind::Newtype(t) => s.adopt(from, t),
+                        TypeKind::Enum(variants) => {
+                            for v in variants {
+                                match &v.fields {
+                                    VariantFields::Unit => {}
+                                    VariantFields::Named(fields) => {
+                                        fields.iter().for_each(|f| s.adopt(from, &f.ty));
+                                    }
+                                    VariantFields::Newtype(t) => s.adopt(from, t),
+                                }
+                            }
+                        }
+                    }
+                    def.kind.clone()
+                });
+            }
+            _ => {}
+        }
+    }
+
     /// Adds a live query. Its argument and result types must already be
     /// described into this builder (see [`SchemaBuilder::describe`]).
     pub fn query(&mut self, def: QueryDef) -> &mut Self {

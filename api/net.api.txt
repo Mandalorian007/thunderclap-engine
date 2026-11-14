@@ -72,6 +72,12 @@ class DecodeError extends Error {
 ## EMPTY
 const EMPTY: Readonly<Record<string, never>>;
 
+## ENVELOPE_CLIENT
+const ENVELOPE_CLIENT: readonly ['Hello', 'Command', 'Subscribe', 'Unsubscribe', 'Ping', 'SetInterest', 'Input', 'TakeControl', 'EntityResync', 'Ack', 'Game'];
+
+## ENVELOPE_SERVER
+const ENVELOPE_SERVER: readonly ['Welcome', 'Rejected', 'CommandResult', 'Update', 'Resync', 'QueryFailed', 'Clock', 'Pong', 'InterestRejected', 'EntityStream', 'PlayerState', 'Control', 'Closed', 'Bulk', 'Game'];
+
 ## ENVELOPE_TYPES
 const ENVELOPE_TYPES: readonly ['ClientMsg', 'ServerMsg', 'Resume', 'PatchOp', 'PathStep', 'Empty'];
 
@@ -104,6 +110,25 @@ class EntityStream<V extends object = Record<string, unknown>> {
 ## EntityStreamError
 class EntityStreamError extends Error {
     constructor(message: string);
+}
+
+## EnvelopeClientVariant  (type-only)
+type EnvelopeClientVariant = (typeof ENVELOPE_CLIENT)[number];
+
+## EnvelopeServerVariant  (type-only)
+type EnvelopeServerVariant = (typeof ENVELOPE_SERVER)[number];
+
+## EnvelopeSpec  (type-only)
+interface EnvelopeSpec {
+    readonly client?: readonly (EnvelopeClientVariant | Readonly<Record<string, VariantSpec>>)[];
+    readonly server?: readonly (EnvelopeServerVariant | Readonly<Record<string, VariantSpec>>)[];
+    readonly hello?: readonly ('token' | 'schema_hash' | 'bulk' | 'ext')[];
+    readonly welcome?: readonly ('player' | 'time' | 'paused' | 'step_us' | 'ext')[];
+    readonly ack?: 'each' | 'total';
+    readonly close?: {
+        readonly type: string;
+        readonly codes: readonly number[];
+    };
 }
 
 ## FieldSpecs  (type-only)
@@ -501,6 +526,7 @@ interface SchemaDesc {
     readonly roles?: Roles;
     readonly queries?: Readonly<Record<string, QuerySpec>>;
     readonly roots?: readonly string[];
+    readonly envelope?: EnvelopeSpec;
 }
 
 ## SchemaError

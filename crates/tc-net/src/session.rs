@@ -42,7 +42,7 @@ use tokio::time::Instant;
 use tracing::{debug, info};
 
 use crate::auth::{Auth, Identity, clip};
-use crate::envelope::{ClientMsg, Protocol, ServerMsg, close, codec};
+use crate::envelope::{AckMode, ClientMsg, HelloField, Protocol, ServerMsg, close, codec};
 use crate::flow::{BULK_HIGH_WATER, Flow};
 use crate::outbound::{self, Batch, Outbound, Ready};
 use crate::rate::{Kind, Limiter, Rates};
@@ -404,7 +404,11 @@ pub async fn run<T: Transport, P: Protocol>(
                     // others' acks mean nothing.
                     Ok(ClientMsg::Ack { bytes }) => if bulk.is_some() {
                         let now = std::time::Instant::now();
-                        bulk_acked = bulk_acked.saturating_add(bytes);
+                        bulk_acked = match P::ENVELOPE.ack {
+                            AckMode::Each => bulk_acked.saturating_add(bytes),
+                            // Never back: an old total says nothing new.
+                            AckMode::Total => bulk_acked.max(bytes),
+                        };
                         let f = flow.get_or_insert_with(|| Flow::new(now, bulk_sent));
                         if f.acked(bulk_acked, now).is_err() {
                             info!(conn, "closing: acknowledged bulk data never sent");
@@ -488,7 +492,12 @@ pub async fn run<T: Transport, P: Protocol>(
                             // the window holds bytes as written.
                             let frames = batch.frames.split_off(prio);
                             batch.packed += frames.len();
-                            let packed = ctx.deflate.pack(frames, codec).await;
+                            let mut packed = ctx.deflate.pack(frames, codec).await;
+                            // `Bulk`'s own tag, for a protocol of its own
+                            // (a client gets a bulk lane only with one).
+                            if let Some(tag) = P::ENVELOPE.bulk_tag() {
+                                packed.message[0] = tag;
+                            }
                             ctx.io.bulk(packed.raw, packed.message.len());
                             // Every batch it tried counts, so data that
                             // stops compressing brings the ratio back to 1.
@@ -637,7 +646,7 @@ fn hello<P: Protocol>(
         // shape; its schema hash still says so, and a page reloads itself
         // on a stale schema, not on a bad message.
         Err(e) => {
-            return Err(match old_hello_schema(frame) {
+            return Err(match old_hello_schema::<P>(frame) {
                 Some(theirs) if theirs != ours => mismatch(&theirs),
                 _ => (format!("bad message: {e}"), false),
             });
@@ -657,7 +666,10 @@ fn hello<P: Protocol>(
     }
     let identity = auth.verify(&token).map_err(|e| (e.to_string(), false))?;
     // A codec this server doesn't know is sent as plain frames.
-    let bulk = bulk.map(|c| if c == codec::DEFLATE { c } else { codec::NONE });
+    // No bulk lane on a wire without `Bulk`.
+    let bulk = bulk
+        .filter(|_| P::ENVELOPE.has_bulk())
+        .map(|c| if c == codec::DEFLATE { c } else { codec::NONE });
     Ok(Hello {
         token,
         identity,
@@ -666,15 +678,28 @@ fn hello<P: Protocol>(
     })
 }
 
-/// The schema hash of a frame that starts like a `Hello` (variant 0, then
-/// the token and the schema hash), whatever follows.
-fn old_hello_schema(frame: &[u8]) -> Option<String> {
+/// The schema hash of a frame that starts like this protocol's `Hello`
+/// (its tag, then its fields up to the schema hash), whatever follows.
+fn old_hello_schema<P: Protocol>(frame: &[u8]) -> Option<String> {
+    let env = P::ENVELOPE;
     let mut r = Reader::new(frame);
-    if r.read_variant().ok()? != 0 {
+    if r.read_variant().ok()? != env.client_tag(crate::envelope::ClientSlot::Hello)? {
         return None;
     }
-    r.read_string().ok()?;
-    r.read_string().ok()
+    for f in env.hello {
+        match f {
+            HelloField::Token => {
+                r.read_string().ok()?;
+            }
+            HelloField::SchemaHash => return r.read_string().ok(),
+            HelloField::Bulk => {
+                Option::<u8>::decode(&mut r).ok()?;
+            }
+            // The game's fields, of a shape this server can't know.
+            HelloField::Ext => return None,
+        }
+    }
+    None
 }
 
 /// Resolves when the tokens an auth checks may have changed; never
@@ -802,6 +827,33 @@ mod tests {
             .err()
             .unwrap();
         assert_eq!((reason.as_str(), stale), ("no such account", false));
+    }
+
+    #[test]
+    fn a_custom_hello_is_read_its_way() {
+        use crate::envelope::tests::Custom;
+        let frame = |hash: &str, bulk| {
+            ClientMsg::<Custom>::Hello {
+                token: "ada".into(),
+                schema_hash: hash.into(),
+                bulk,
+                ext: "ann".into(),
+            }
+            .to_bytes()
+        };
+        // No `bulk` field on this wire: no bulk lane, whatever was asked.
+        let h = hello::<Custom>(&frame("h1", Some(codec::DEFLATE)), "h1", &AllowAll).unwrap();
+        assert_eq!((h.bulk, h.ext.as_str()), (None, "ann"));
+        // A Hello of another shape after the hash: judged by the hash.
+        let mut stale = frame("old", None);
+        stale.push(9);
+        let (reason, stale) = hello::<Custom>(&stale, "new", &AllowAll).err().unwrap();
+        assert!(stale, "{reason}");
+        // Under the engine's tag, it is not this protocol's Hello.
+        assert_eq!(
+            old_hello_schema::<Custom>(&hello_frame("a", "old", None)),
+            None
+        );
     }
 
     #[tokio::test]

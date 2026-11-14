@@ -149,6 +149,11 @@ impl Outbound {
         if s.rx_closed.load(Ordering::Acquire) {
             return Err(TrySendError::Closed(frame));
         }
+        // A message not on this protocol's wire encodes as nothing
+        // (`tc_net::Envelope`): there is nothing to send.
+        if frame.is_empty() {
+            return Ok(());
+        }
         {
             let mut prio = lock(&s.prio);
             if prio.len() >= OUTBOUND_QUEUE {
@@ -194,6 +199,9 @@ impl Outbound {
             return false;
         }
         let len = frame.len();
+        if len == 0 {
+            return true;
+        }
         {
             let mut bulk = lock(&s.bulk);
             if bulk.len() >= BULK_QUEUE {

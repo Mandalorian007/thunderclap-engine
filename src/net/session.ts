@@ -13,7 +13,7 @@
 
 import { NetClock } from './clock';
 import { type EntityChanges, EntityStream } from './entities';
-import type { ClientMsg, ServerMsg } from './envelope';
+import { type ClientMsg, type EnvelopeInfo, envelopeOf, type ServerMsg } from './envelope';
 import { resultHash } from './hash';
 import { Optimistic, type OptimisticStore } from './optimistic';
 import { applyPatch, type PatchOp } from './patch';
@@ -250,6 +250,10 @@ export class Net {
   readonly #inflate: NetOptions['inflate'];
   readonly #bulk: number | null;
   readonly #plainBulk: boolean;
+  /** The schema's envelope layout. */
+  readonly #env: EnvelopeInfo;
+  /** Bulk data bytes taken this connection (an `Ack`'s total, for `ack: 'total'`). */
+  #taken = 0;
   /** `CommandResult`'s tag when results are raw, else -1. */
   readonly #rawResult: number;
   readonly #throwListenerErrors: boolean;
@@ -310,6 +314,7 @@ export class Net {
     this.#commandMs = options.commandMs ?? 30_000;
     this.#inflate = options.inflate;
     this.#plainBulk = options.plainBulk === true;
+    this.#env = envelopeOf(this.schema);
     this.#bulk = options.inflate ? (options.bulk ?? 1) : this.#plainBulk ? 0 : null;
     this.#rawResult = options.rawResults
       ? this.schema.variants('ServerMsg').indexOf('CommandResult')
@@ -449,10 +454,23 @@ export class Net {
     if (this.#status === 'open') this.#transport!.send(frame);
   }
 
-  /** Sends a game client message (`ClientMsg::Game`); false if not open. */
+  /**
+   * Sends a game client message (`ClientMsg::Game`, or with inline game messages, `value` itself:
+   * `{ type: Name, ...fields }`); false if not open.
+   */
   send(value: unknown): boolean {
+    const game = this.#env.clientGame;
+    if (game.size > 0) {
+      const type = (value as { type?: unknown } | null)?.type;
+      if (typeof type !== 'string' || !game.has(type)) {
+        throw new NetError(`send: ${JSON.stringify(type)} is not one of the game's messages`, {
+          kind: 'unencodable',
+          detail: `not a game message: ${JSON.stringify(type)}`,
+        });
+      }
+    }
     if (this.#status !== 'open') return false;
-    this.#send({ type: 'Game', value });
+    this.#send(game.size > 0 ? (value as ClientMsg) : { type: 'Game', value });
     return true;
   }
 
@@ -554,6 +572,7 @@ export class Net {
         if (!live()) return;
         const h = typeof this.#hello === 'function' ? this.#hello() : this.#hello;
         this.#lastHeard = this.#timers.now();
+        this.#taken = 0;
         this.#send({
           type: 'Hello',
           token: h.token ?? '',
@@ -822,17 +841,28 @@ export class Net {
         if (!msg.driving) this.#predictor?.clear();
         this.#emit('control', msg.driving);
         return;
-      case 'Closed':
-        if (msg.code >= 4000 && msg.code < 5000) {
-          this.#end(msg.code, { kind: 'serverClosed', detail: msg.reason });
-        } else this.#lost(msg.code, { kind: 'serverClosed', detail: msg.reason });
+      case 'Closed': {
+        const codes = this.#env.closeCodes;
+        const code = codes
+          ? (codes.get((msg.code as unknown as { type: string }).type) ?? 1002)
+          : msg.code;
+        if (code >= 4000 && code < 5000) {
+          this.#end(code, { kind: 'serverClosed', detail: msg.reason });
+        } else this.#lost(code, { kind: 'serverClosed', detail: msg.reason });
         return;
+      }
       case 'Bulk':
         this.#bulkLane(msg.codec, msg.data);
         return;
       case 'Game':
         this.#emit('game', msg.value);
         return;
+      default: {
+        // One of the game's own messages, inline (`EnvelopeSpec`).
+        const type = (msg as { type: string }).type;
+        if (!this.#env.serverGame.has(type)) throw new NetError(`unexpected ${type}`);
+        this.#emit('game', msg);
+      }
     }
   }
 
@@ -840,6 +870,8 @@ export class Net {
     if (this.#welcome) throw new NetError('a second Welcome');
     if (this.#handshakeTimer !== null) this.#timers.clearTimeout(this.#handshakeTimer);
     this.#handshakeTimer = null;
+    // A layout without `step_us` (`EnvelopeSpec.welcome`) reads it as 0.
+    if (msg.stepUs === undefined) msg = { ...msg, stepUs: 0 };
     this.#welcome = msg;
     this.#status = 'open';
     this.#attempt = 0;
@@ -915,6 +947,16 @@ export class Net {
     this.#subscribe(sub, false);
   }
 
+  /** Acknowledges one `Bulk`'s `bytes` of data, as the layout counts them. */
+  #ack(bytes: number): void {
+    this.#taken += bytes;
+    this.#send(
+      this.#env.ack === 'total'
+        ? ({ type: 'Ack', total: this.#taken } as unknown as ClientMsg)
+        : { type: 'Ack', bytes },
+    );
+  }
+
   /** A bulk lane: inflate, then handle its frames in order, holding later frames meanwhile. */
   #bulkLane(codec: number, data: Uint8Array): void {
     if (codec === 0 && this.#plainBulk) {
@@ -925,7 +967,7 @@ export class Net {
         this.#handleFrame(r.bytes());
         if (gen !== this.#generation) return;
       }
-      this.#send({ type: 'Ack', bytes: data.length });
+      this.#ack(data.length);
       return;
     }
     const inflate = this.#inflate;
@@ -948,7 +990,7 @@ export class Net {
           this.#protocolError(`bad bulk lane: ${(e as Error).message}`);
           return;
         }
-        this.#send({ type: 'Ack', bytes: data.length });
+        this.#ack(data.length);
         for (const f of held) {
           if (gen !== this.#generation) return;
           const waiting = this.#held as Uint8Array[] | null;

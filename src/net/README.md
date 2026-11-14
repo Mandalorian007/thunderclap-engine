@@ -71,6 +71,20 @@ Field names are the wire names in snake_case; values in TypeScript use camelCase
 `Empty`, the value `EMPTY`). `defineTypes(desc)` builds a schema without the envelope
 (`TypesDesc`).
 
+A game with a wire of its own lays the envelope out its way with `SchemaDesc.envelope`
+(`EnvelopeSpec`), the same layout a Rust game gives `Protocol::ENVELOPE`, so both build the same
+text and hash. `client` and `server` list the envelope's variants in wire order
+(`EnvelopeClientVariant`, `EnvelopeServerVariant`; the defaults are `ENVELOPE_CLIENT` and
+`ENVELOPE_SERVER`); a variant left out is not on the wire (`Hello` and `Ping`, and `Welcome`,
+`Rejected`, `Pong` and `Closed`, are required), and an entry `{ Name: fields | null }` is one of
+the game's own messages inline, at its own tag, in place of `Game`: `Net.send(value)` takes
+`{ type: 'Name', ...fields }` and the `game` event gives it the same way. `hello` and `welcome`
+order those messages' fields (`ext` is the role's value; `Hello.bulk` may be left out, so no bulk
+lane is asked for, and `Welcome.step_us`, read as 0). `ack: 'total'` acknowledges the bulk lane
+with a running total per connection (`Ack { total }`) instead of each `Bulk`'s length. `close`
+names an enum of unit variants and one close code for each: `Closed` carries the variant and the
+session reads its code. A layout the session cannot follow throws `SchemaError`.
+
 The schema's canonical text (`NetSchema.text`, first line `WIRE_HEADER`, format `WIRE_FORMAT`)
 lists the roots, the queries, then every type in the order the roots and queries reach it. Its
 hash (`NetSchema.hash`) is 16 hex digits of a SplitMix64 stable hash of the text's UTF-8 bytes
@@ -112,7 +126,7 @@ at once. `NetOptions` documents each; `Hello` is the token and the game's `ext`.
   `net.reconnect()` drops the link and reopens at once; `reconnect({ backoff: true })` waits the
   backoff first (`ReconnectNowOptions`).
 - **Reasons.** `down` and `closed` carry the code, the reason text and a typed `NetReason`
-  (`kind`: `gaveUp` with the `last` reason, `dead`, `handshakeTimeout`, `serverClosed`, ...;
+  (`kind`, a `NetReasonKind`: `gaveUp` with the `last` reason, `dead`, `handshakeTimeout`, `serverClosed`, ...;
   `detail`, the text). A `NetError` carries its `reason` too (`commandTimeout`, `notOpen`, ...).
 - **Events.** `net.on(event, listener)` for `NetEvents`: `welcome` (a `Welcome`), `rejected`, `entities`,
   `down`, `closed`, `game`, `interestRejected`, `control`, `state`, `error`. A throwing listener

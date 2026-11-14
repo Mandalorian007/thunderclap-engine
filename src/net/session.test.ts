@@ -641,3 +641,94 @@ describe('net session: fit options', () => {
     expect(opens()).toBe(3);
   });
 });
+
+describe('net session: an envelope of its own', () => {
+  const own = defineSchema({
+    types: { Bye: { enum: { Restart: null, Kicked: null } } },
+    roles: { hello: 'String', welcome: 'u32', command: 'u32', result: 'String' },
+    envelope: {
+      client: ['Ping', 'Hello', { Say: { text: 'String' } }, 'Command', 'Ack'],
+      server: ['Pong', 'Welcome', { Said: { text: 'String' } }, 'Rejected', 'Closed', 'Bulk'],
+      hello: ['schema_hash', 'token', 'bulk', 'ext'],
+      welcome: ['player', 'time', 'paused', 'ext'],
+      ack: 'total',
+      close: { type: 'Bye', codes: [1012, 4003] },
+    },
+  });
+
+  function direct(options: Partial<NetOptions> = {}) {
+    const timers = new FakeTimers();
+    const out: ClientMsg[] = [];
+    let events: Parameters<NetOptions['connect']>[0] | null = null;
+    const net = createNet({
+      schema: own,
+      timers,
+      random: () => 0.5,
+      hello: { ext: 'ann' },
+      plainBulk: true,
+      reconnect: { initialDelay: 10, maxDelay: 10 },
+      connect: (e) => {
+        events = e;
+        timers.setTimeout(() => e.open(), 0);
+        return { send: (f) => out.push(own.decode<ClientMsg>('ClientMsg', f)), close() {} };
+      },
+      ...options,
+    });
+    const deliver = (msg: unknown) => events!.message(own.encode('ServerMsg', msg));
+    const sentOf = (type: string) => out.filter((m) => m.type === type);
+    return { net, timers, deliver, sentOf };
+  }
+  const welcome = { type: 'Welcome', player: 1, time: 0, paused: false, ext: 7 };
+
+  it('sends and takes the game’s messages inline, with no step_us read as 0', async () => {
+    const { net, timers, deliver, sentOf } = direct();
+    await timers.advance(0);
+    deliver(welcome);
+    expect((await net.ready).stepUs).toBe(0);
+    const heard: unknown[] = [];
+    net.on('game', (m) => heard.push(m));
+    deliver({ type: 'Said', text: 'hi' });
+    expect(heard).toEqual([{ type: 'Said', text: 'hi' }]);
+    expect(net.send({ type: 'Say', text: 'yo' })).toBe(true);
+    expect(sentOf('Say')).toEqual([{ type: 'Say', text: 'yo' }]);
+    expect(() => net.send({ type: 'Ping', clientTime: 0 })).toThrow(/not one of the game's/);
+  });
+
+  it('acknowledges the bulk lane cumulatively, from 0 on each connection', async () => {
+    const { net, timers, deliver, sentOf } = direct();
+    await timers.advance(0);
+    deliver(welcome);
+    await net.ready;
+    const lane = (n: number) => {
+      const w = new Writer();
+      for (let i = 0; i < n; i++) w.bytes(own.encode('ServerMsg', { type: 'Said', text: 'x' }));
+      return w.finish();
+    };
+    const a = lane(1);
+    const b = lane(2);
+    deliver({ type: 'Bulk', codec: 0, data: a });
+    deliver({ type: 'Bulk', codec: 0, data: b });
+    expect(sentOf('Ack')).toEqual([
+      { type: 'Ack', total: a.length },
+      { type: 'Ack', total: a.length + b.length },
+    ]);
+    // A restart (not final): the count starts again with the next Hello.
+    deliver({ type: 'Closed', code: { type: 'Restart' }, reason: 'restart' });
+    await timers.advance(20);
+    deliver(welcome);
+    deliver({ type: 'Bulk', codec: 0, data: a });
+    expect(sentOf('Ack').at(-1)).toEqual({ type: 'Ack', total: a.length });
+  });
+
+  it('reads Closed’s code through the game’s close enum', async () => {
+    const { net, timers, deliver } = direct();
+    await timers.advance(0);
+    deliver(welcome);
+    await net.ready;
+    const closed: number[] = [];
+    net.on('closed', (code) => closed.push(code));
+    deliver({ type: 'Closed', code: { type: 'Kicked' }, reason: 'bye' });
+    expect(closed).toEqual([4003]);
+    expect(net.status).toBe('closed');
+  });
+});
