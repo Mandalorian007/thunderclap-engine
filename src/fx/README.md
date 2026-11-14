@@ -728,6 +728,36 @@ pair execute the same bundle. Their `coreDrawable` is what `core.addDrawable` /
   or `reflectionSteps > 0`, a per-view copy of the target's colour (the target must pass its
   `texture` with `COPY_SRC`). `refraction`, `reflectionSteps`, `reflectionReach`, `sunDirection`,
   `sunColor` and `skyColor` are live: the block is written each frame, no re-record.
+- Water over a game's own geometry (ws/scene-read-fit): `water.look(group = 1)` is a `WaterLook`
+  a draw set takes instead of the plane: `wgsl` (the params, the block and the view extras at
+  `group`, `fn water_look(frag, rel, up) -> WaterShade` with `rel` the core-frame position and
+  `up` the surface normal, `fn water_look_out(s) -> WaterLookOut` at locations 0, 2 and 3),
+  `bindGroup`, `blend`, `writes` and `readsDepth` / `readsColor` for the set's scene-read group
+  (`core.sceneRead`). The plane's own shading is the same function with up = +y.
+  `WaterOptions.plane: false` (live) draws no plane, the look alone; `update(dt)` still moves
+  the waves. A voxel world's liquid takes it as its `VoxelMaterial`
+  (`harness/voxel-world.html?water`, `e2e/voxel-world.spec.ts`):
+
+```ts
+const water = new Water(core, { plane: false });
+const look = water.look();
+const world = createVoxelWorld(core, {
+  format,
+  materials: {
+    liquid: {
+      fragment: `${look.wgsl}
+@fragment fn fs(in: VoxelVarying) -> WaterLookOut {
+  return water_look_out(water_look(in.clip, in.world, in.normal));
+}`,
+      bindGroups: [look.bindGroup],
+      blend: look.blend,
+      writes: look.writes,
+      readsDepth: look.readsDepth,
+      readsColor: look.readsColor,
+    },
+  },
+});
+```
 - Weather: up to `WEATHER_MAX_LAYERS` layers (`PrecipLayer`: `streak`, `flake` or `dust`, count,
   radius, height, speed, length, colour) in one instanced draw. The volume follows `anchor` (or
   the first view's eye), wraps without popping, and dies under `occlusionHeight` or an occlusion

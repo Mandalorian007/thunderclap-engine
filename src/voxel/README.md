@@ -231,6 +231,29 @@ Without them a section meshes the same as before.
   mesher writes only the engine's fields, so the game writes its union members. For example, a
   12-bit `id` can share its bits with a 9-bit plant id and 3 bits of plant-only data.
 
+**A game's own mesher (ws/scene-read-fit).** Opt-in too, for a game that calls
+`SectionMesher.mesh` itself (the pool passes only `greedy` and `leafLod`):
+- `BlockDef.liquid` (a `cross` block) names the `liquid` block it stands in: the cell meshes as
+  that liquid (its faces, its light cost) and the block's quads still go to the foliage stream.
+- `BlockDef.farPatch` (a `cross` block) adds one quad at a strand's top (the cell above holds
+  another block) with the `far` vertex field set and `quad` = its quad count. It is emitted at
+  every level of detail, alone where the block's own quads are not. Declare `far` (1 bit) in the
+  schema to read it.
+- `CellField.fromNeighbours: { when, y, x, z }`: in an `axial` block's cell whose value is
+  `when`, the field becomes `y` with an axial block over or under it, else `x` or `z` with one
+  beside it along that axis, else `y` (a log on its side faces along its neighbours).
+- `SectionMeshOptions.crossLod` (default 1) is the highest `leafLod` cross blocks mesh at.
+- `SectionMeshOptions.tieredPadding` counts solid foliage and cross blocks in the padding for
+  `tiered`: solid foliage beside a section hides its faces at level 1.
+- `SectionMeshOptions.partsCap` caps a section's part quads; `partsOrder: 'after'` puts every
+  part after every cross block's own quads, so the cap drops the last cells' parts (and their
+  `twin` marks) first.
+- `voxelSetDesc(format, stream, material?)` is the draw set `createVoxelWorld` makes for a
+  stream (shader, layouts, pass, groups, blend, scene reads), for a game that keeps its own
+  sets. A `VoxelMaterial` with `readsDepth` / `readsColor` reads the core's scene-read group: a
+  liquid material that is a `Water.look()` shades a world's lakes as water
+  (`harness/voxel-world.html?water`).
+
 **Workers.** The game's Worker script calls `installSectionMesherWorker({ codec })` (it answers
 `SectionMesherRequest`s with `SectionMesherReply`s, a `SectionMeshResult` or a failure, over a
 `SectionWorkerScopeLike`; `sectionReplyTransfers` lists what moves). On the page,
