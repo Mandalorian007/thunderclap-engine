@@ -12,6 +12,7 @@ mod gens;
 mod hold;
 mod log;
 mod marks;
+mod ops;
 mod recovery;
 
 /// The test game's events.

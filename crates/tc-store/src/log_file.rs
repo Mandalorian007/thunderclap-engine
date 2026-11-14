@@ -210,42 +210,61 @@ impl LogFile {
         codec: &C,
         hold: &Hold,
     ) -> Result<usize, StoreError> {
-        let mut payload = Vec::new();
-        format::encode_entry_head(&mut payload, entry.seq, entry.time);
-        let mut names = Names::new(&self.names);
-        codec
-            .encode(&entry.event, &mut names, &mut payload)
-            .map_err(|reason| StoreError::Encode {
-                seq: entry.seq,
-                reason,
-            })?;
-        let new_names = names.new;
-        if payload.len() > format::MAX_PAYLOAD {
+        let (bytes, new_names, entry_len) = encode_entry(entry, batch, codec, &self.names)?;
+        self.write(&bytes, hold)?;
+        self.names.extend(new_names);
+        Ok(entry_len)
+    }
+}
+
+/// An encoded entry: its bytes, the names it added to its file's table,
+/// and its entry record's length.
+pub(crate) type Encoded = (Vec<u8>, Vec<(String, u32)>, usize);
+
+/// An entry's records as one write: a batch record for `batch` if given,
+/// the name records it needs that `names` (the file's table) lacks, then
+/// the entry. Returns the bytes, the new names, and the entry record's
+/// length, framing included.
+pub(crate) fn encode_entry<C: LogCodec>(
+    entry: &LogEntry<C::Event>,
+    batch: Option<(u64, u64)>,
+    codec: &C,
+    names: &HashMap<String, u32>,
+) -> Result<Encoded, StoreError> {
+    let mut payload = Vec::new();
+    format::encode_entry_head(&mut payload, entry.seq, entry.time);
+    let mut names = Names::new(names);
+    codec
+        .encode(&entry.event, &mut names, &mut payload)
+        .map_err(|reason| StoreError::Encode {
+            seq: entry.seq,
+            reason,
+        })?;
+    let new_names = names.new;
+    if payload.len() > format::MAX_PAYLOAD {
+        return Err(StoreError::RecordTooLarge {
+            seq: entry.seq,
+            len: payload.len(),
+            max: format::MAX_PAYLOAD,
+        });
+    }
+    let mut bytes = Vec::new();
+    if let Some((first, last)) = batch {
+        format::push_record(&mut bytes, KIND_BATCH, &format::encode_batch(first, last));
+    }
+    for (name, local) in &new_names {
+        let record = format::encode_name(*local, name);
+        if record.len() > format::MAX_PAYLOAD {
             return Err(StoreError::RecordTooLarge {
                 seq: entry.seq,
-                len: payload.len(),
+                len: record.len(),
                 max: format::MAX_PAYLOAD,
             });
         }
-        let mut bytes = Vec::new();
-        if let Some((first, last)) = batch {
-            format::push_record(&mut bytes, KIND_BATCH, &format::encode_batch(first, last));
-        }
-        for (name, local) in &new_names {
-            let record = format::encode_name(*local, name);
-            if record.len() > format::MAX_PAYLOAD {
-                return Err(StoreError::RecordTooLarge {
-                    seq: entry.seq,
-                    len: record.len(),
-                    max: format::MAX_PAYLOAD,
-                });
-            }
-            format::push_record(&mut bytes, KIND_NAME, &record);
-        }
-        let names_end = bytes.len();
-        format::push_record(&mut bytes, KIND_ENTRY, &payload);
-        self.write(&bytes, hold)?;
-        self.names.extend(new_names);
-        Ok(bytes.len() - names_end)
+        format::push_record(&mut bytes, KIND_NAME, &record);
     }
+    let names_end = bytes.len();
+    format::push_record(&mut bytes, KIND_ENTRY, &payload);
+    let entry_len = bytes.len() - names_end;
+    Ok((bytes, new_names, entry_len))
 }

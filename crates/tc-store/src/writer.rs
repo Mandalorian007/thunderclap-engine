@@ -141,6 +141,27 @@ impl<K> LogCut<K> {
         &self.files
     }
 
+    /// The cut, less the generations before `generation`: what a
+    /// [`LogReader`](crate::LogReader) that starts at a game's base whose
+    /// tail starts there reads.
+    pub fn since_generation(&self, generation: u64) -> LogCut<K>
+    where
+        K: Clone,
+    {
+        LogCut {
+            dir: self.dir.clone(),
+            last_seq: self.last_seq,
+            time: self.time,
+            files: self
+                .files
+                .iter()
+                .filter(|f| f.generation >= generation)
+                .cloned()
+                .collect(),
+            generation: self.generation,
+        }
+    }
+
     /// The files of generations older than the cut's: none is written
     /// again.
     pub fn frozen_paths(&self) -> impl Iterator<Item = &Path> {
@@ -404,6 +425,8 @@ impl<C: LogCodec> Log<C> {
     ) -> Result<(Log<C>, Opened<C::Event>), StoreError> {
         read_meta(dir)?;
         let lock = Arc::new(StoreLock::acquire(dir)?);
+        // A repair or rollback in place cut short is finished first.
+        crate::swap::finish_swap(dir, "swap")?;
         let loaded = load(dir, &codec, after, from_gen)?;
         Log::reopen(dir, codec, loaded, lock, after)
     }
@@ -940,7 +963,7 @@ impl<C: LogCodec> Log<C> {
 }
 
 /// Writes `store.meta` through a temporary file and a rename, durable.
-fn write_meta(dir: &Path, meta: &[u8]) -> Result<(), StoreError> {
+pub(crate) fn write_meta(dir: &Path, meta: &[u8]) -> Result<(), StoreError> {
     let path = dir.join(META_FILE);
     let tmp = dir.join(format!(".{META_FILE}.tmp"));
     let mut file = OpenOptions::new()

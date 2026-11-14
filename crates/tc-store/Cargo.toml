@@ -8,6 +8,9 @@ license.workspace = true
 
 [dependencies]
 tc-wire.workspace = true
+# Deflates archived log generations (pure Rust, no C, no unsafe in its
+# API; builds on every target the store does).
+miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
 
 # A plain `fsync` on Apple platforms (std's syncs are `F_FULLFSYNC` there):
 # see `src/durable.rs`.
