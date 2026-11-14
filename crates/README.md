@@ -15,6 +15,8 @@ with its own types.
 | `tc-store` | The event-log store (E3a): `Log<C: LogCodec>` appends a game's events to `main.log` or per-key files, with batches all or none, clock marks written on an I/O thread once what they cover is durable, log generations (`prepare`, `rotate`, `open_from`), crash recovery (gap-free prefix, torn tails cut and kept in `recovered/`) and a directory lock. Syncs go through writable handles, so native Windows works. See `tc-store/README.md`. |
 | `tc-sim` | The authoritative game loop (E4a): a `Game` trait (state changed only by logged events, scheduled events and steps), `Core` (integer time, the `Scheduler` on a `TimingWheel`, `Changes`, `state_hash`), and `Sim`, which serves a core to `tc-net` connections on the wall clock, logs through `tc-store`, flushes change marks, paces inputs, keeps one driver per player, reloads the game's data live (in rounds when far behind) and publishes a status. E4b adds unlogged player bodies, live queries (`Query`, `QueryCtx`), the entity stream per interest, observers (`Seat`) and rate lanes (`Lane`). `Driver` runs one in-process. See `tc-sim/README.md`. |
 | `tc-stream` | The section stream (E5): a game's world sent per connection in sections by interest area (`Area`, radii per axis with hysteresis), nearest first, through a shared LRU cache with stamps; changes as `Edit`s of cells or whole sections, folded into a still-queued frame; `Unload` batches; build budgets and round robin; resume from a client's `Claim`s after a reconnect and after `reload`. The game supplies a `SectionSource` (voxel or 2D tiles); `Lanes` is tc-net's `Outbound`s. See `tc-stream/README.md`. |
+| `tc-admin` | The admin side of a server (E6): `AdminChannel` listens on a loopback TCP port (native on Windows) whose port and 256-bit token are in `admin.endpoint` (owner-only on Unix) beside the store's lock; one JSON line in (`Request`: status, stop, pause, resume, reload, backup, revoke, reports, a game's own), one out (`Reply`). It drives tc-sim (`SimControls` over a `SimHandle`, a reload's data from a loader), tc-store (`Backups`: an online copy into `backups/<unix>`, the newest five kept) and tc-auth (`Revoke` for `SessionAuth`). `ask(dir, &request)` is the blocking client, trusting only the lock holder's file. `Reports` writes players' reports on a thread of its own into a directory kept to two weeks and 64 MiB. |
+| `thunderclap-server` | The facade (E6): `Server::builder(game)...start()`/`.run()` opens or creates the store under a data directory (tidying its archive), runs the loop, serves it through tc-net and opens the admin channel, with dev defaults: loopback, `AuthMode::DevGuests` (session tokens over `FileAccounts` in `data/accounts`, a secret made once, guests), backups kept to five. `generate_ts::<G>(out, &config)` writes the client TypeScript (tc-tsgen); `cli::main(args, make)` is a game binary's command line: `serve`, `status`, `stop`, `pause`, `resume`, `reload`, `revoke`, `reports`, `backup` (through the server or offline), `rollback` and `gen`. Re-exports the crates. |
 
 ## Format
 
@@ -57,6 +59,12 @@ index. Decoding is strict: trailing bytes, bad tags and unsorted keys fail.
 - `tc-stream/tests/interop.rs` streams sections from a game loop on `tc-net`
   to `createNet` filling the voxel `SectionStore` (`src/net/stream-interop.test.ts`;
   `pnpm test:stream-interop`), with resume after a dropped connection.
+- `thunderclap-server/tests/admin.rs` serves the tally game through the
+  facade (`examples/tally.rs` is the same game as a binary on the CLI): a
+  client joins with an issued token, the admin channel's status, pause,
+  resume, backup, reload, reports, revoke (the client closed with 4001) and
+  stop work end to end, the store reopens, and the CLI backs up and rolls
+  back offline.
 
 The `tests/forge/` fixtures are data from a game, kept as a test; they are
 excluded from biome.
