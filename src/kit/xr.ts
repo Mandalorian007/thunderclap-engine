@@ -8,8 +8,9 @@ import type { GameLoop } from '../core/loop';
 import { createXrHost, type Host, type XrHost } from '../host';
 import { type PointerRouter, XrPointerSource } from '../input';
 import { type GpuContext, XrSurface } from '../platform';
+import type { XrEyeView } from '../platform/xr-surface';
 import type { XRFrame, XRReferenceSpace, XRSession, XrNavigator } from '../platform/xr-types';
-import type { Renderer, SceneTargetAux } from '../render';
+import type { CullGroup, RenderCore, Renderer, SceneTargetAux } from '../render';
 import type { KitPart, KitService, XrControl, XrOptions } from './types';
 
 /** `createKitXr`'s dependencies. */
@@ -33,6 +34,14 @@ export interface KitXr extends KitPart<KitXrFields> {
   readonly surface: XrSurface | null;
   /** The `XRFrame` of the frame callback running now; null between frames or off-session. */
   readonly frame: XRFrame | null;
+  /** `XrOptions.immediate`: false when the eyes are the core's alone. */
+  readonly immediate: boolean;
+  /**
+   * With `XrOptions.core`: prepare the surface's cull group once and draw each of `eyes` into its
+   * layer part, in one command buffer submitted after the renderer's frame. Nothing without a
+   * core, a surface or eyes.
+   */
+  drawCore(eyes: readonly XrEyeView[]): void;
 }
 
 /** `ctx.xr`. */
@@ -43,6 +52,11 @@ export interface KitXrFields {
 /** Entering and leaving VR, as `ctx.xr`. Nothing runs until `enter()`. */
 export function createKitXr(deps: KitXrDeps): KitXr {
   const { gpu, renderer, host, loop, pointers } = deps;
+  let core: RenderCore | null = null;
+  let immediate = true;
+  let coreClear: GPUColor = BLACK;
+  // `core.prepare`'s groups: the surface's one union group, swapped in per session.
+  const groups: CullGroup[] = [];
   // While a session runs: its host (frames and the current `XRFrame`) and its surface (eyes).
   let xrHost: XrHost | null = null;
   let xrSurface: XrSurface | null = null;
@@ -59,6 +73,15 @@ export function createKitXr(deps: KitXrDeps): KitXr {
     },
     get surface() {
       return xrSurface;
+    },
+    get core() {
+      return core;
+    },
+    setCore(next, opts = {}) {
+      core = next;
+      immediate = !(next && opts.immediate === false);
+      coreClear = opts.clear ?? BLACK;
+      if (xrSurface) xrSurface.coreClear = immediate ? null : coreClear;
     },
     async supported() {
       const sys = (globalThis.navigator as XrNavigator | undefined)?.xr;
@@ -94,7 +117,9 @@ export function createKitXr(deps: KitXrDeps): KitXr {
           scene: true,
           colorFormat: renderer.format,
           aux: deps.aux,
+          coreClear: immediate ? null : coreClear,
         });
+        groups[0] = surface.group;
         const sessionHost = createXrHost(session, host);
         const removeSource = pointers
           ? pointers.addSource(
@@ -110,6 +135,7 @@ export function createKitXr(deps: KitXrDeps): KitXr {
           xrHost = null;
           xrSurface = null;
           xrSession = null;
+          groups.length = 0;
           surface.destroy();
           deps.onExit?.();
         };
@@ -143,8 +169,20 @@ export function createKitXr(deps: KitXrDeps): KitXr {
     get frame() {
       return xrHost?.frame ?? null;
     },
+    get immediate() {
+      return immediate;
+    },
+    drawCore(eyes) {
+      if (!core || !xrSurface || eyes.length === 0 || groups.length === 0) return;
+      const encoder = gpu.device.createCommandEncoder({ label: 'xr-core' });
+      core.prepare(encoder, groups);
+      for (let i = 0; i < eyes.length; i++) core.draw(encoder, i, eyes[i]!.core);
+      gpu.device.queue.submit([encoder.finish()]);
+    },
   };
 }
+
+const BLACK: GPUColor = { r: 0, g: 0, b: 0, a: 1 };
 
 /**
  * The XR service: `ctx.xr`. While a session runs the loop records the scenes once through the

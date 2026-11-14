@@ -251,6 +251,8 @@ interface KitStepPart<F extends object> extends KitPart<F> {
 interface KitXr extends KitPart<KitXrFields> {
     readonly surface: XrSurface | null;
     readonly frame: XRFrame | null;
+    readonly immediate: boolean;
+    drawCore(eyes: readonly XrEyeView[]): void;
 }
 
 ## KitXrDeps  (type-only)
@@ -289,6 +291,14 @@ interface XrControl {
     readonly active: boolean;
     readonly session: XRSession | null;
     readonly surface: XrSurface | null;
+    setCore(core: RenderCore | null, opts?: XrCoreOptions): void;
+    readonly core: RenderCore | null;
+}
+
+## XrCoreOptions  (type-only)
+interface XrCoreOptions {
+    immediate?: boolean;
+    clear?: GPUColor;
 }
 
 ## XrOptions  (type-only)

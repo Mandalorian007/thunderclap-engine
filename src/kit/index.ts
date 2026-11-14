@@ -43,6 +43,7 @@ export type {
   ShowReason,
   SimOption,
   XrControl,
+  XrCoreOptions,
   XrOptions,
 } from './types';
 export type { KitXr, KitXrDeps, KitXrFields } from './xr';

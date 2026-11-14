@@ -100,6 +100,8 @@ export const WEBKIT_SPECS = [
   'post2',
   'demos/voxel',
   'demos/showroom',
+  'stereo',
+  'xr',
 ];
 const webkitMatch = new RegExp(`(^|/)e2e/(${WEBKIT_SPECS.join('|')})\\.spec\\.ts$`);
 const webkitOn =
