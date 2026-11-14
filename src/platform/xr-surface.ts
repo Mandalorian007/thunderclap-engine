@@ -24,10 +24,24 @@
  * `unionProjection`), for the scenes' one `render(frame, camera, alpha)` call per frame and the
  * scene-level culling done through it. The eye cameras cull (`cull` on) like a flat
  * perspective camera does.
+ *
+ * The render core (ws/xr-merge, C8): each eye is also a core `RenderView` (`eye.view`, filled by
+ * `setViewFromMatrices` from the `XRView`'s projection and inverse transform, the eye position at
+ * float64) and both eyes are one `union` cull group (`surface.group`), so `core.prepare(encoder,
+ * [surface.group])` culls once for the pair and `core.draw(encoder, eye.index, eye.core)` draws
+ * each eye into its `CoreTarget`: the eye's layer target at `eye.viewport`, cleared by the first
+ * eye on a target when `coreClear` is set.
  */
 
 import { type Mat4, mat4 } from '../core/math';
 import { Camera } from '../render/camera';
+import type { CoreTarget } from '../render/core/core';
+import {
+  type CullGroup,
+  createRenderView,
+  type RenderView,
+  setViewFromMatrices,
+} from '../render/core/view';
 import { DEPTH_FORMAT } from '../render/material';
 import {
   SCENE_FORMAT,
@@ -80,6 +94,12 @@ export interface XrSurfaceOptions {
    * motion. Default none.
    */
   aux?: SceneTargetAux;
+  /**
+   * The colour each eye's `core` target clears to on the first eye drawn into a layer texture
+   * (ws/xr-merge), or null (default) to load what is there: set it when the core draws the eyes
+   * alone; leave it null when the core draws over an eye the renderer resolved first.
+   */
+  coreClear?: GPUColor | null;
 }
 
 /** One eye of one frame: where it looks and what it draws into. */
@@ -99,6 +119,16 @@ export interface XrEyeView {
   readonly target: SceneTarget;
   /** The eye's part of `target`, in texture pixels (`renderer.resolve`'s viewport). */
   readonly viewport: SceneTargetViewport;
+  /**
+   * The eye as a render-core view (ws/xr-merge): the `XRView`'s projection and world-to-eye
+   * matrix, the eye at float64. `surface.group` holds every eye's.
+   */
+  readonly view: RenderView;
+  /**
+   * Where `core.draw(encoder, index, core)` draws this eye: the layer target's colour (the
+   * layer's format) at `viewport`, cleared to `coreClear` by the first eye on that texture.
+   */
+  readonly core: CoreTarget;
 }
 
 class EyeView implements XrEyeView {
@@ -110,12 +140,15 @@ class EyeView implements XrEyeView {
   layer = 0;
   /** This eye's own target, used unless an earlier eye already adopted the same texture. */
   readonly own: SceneTarget;
+  readonly view: RenderView = createRenderView();
+  readonly core: CoreTarget;
 
   constructor(
     readonly index: number,
     device: GPUDevice,
     first: XRGPUSubImage,
     aux: SceneTargetAux | undefined,
+    format: GPUTextureFormat,
   ) {
     this.camera = new Camera();
     this.camera.depthTest = true;
@@ -132,6 +165,13 @@ class EyeView implements XrEyeView {
       aux,
     });
     this.target = this.own;
+    this.core = {
+      view: this.own.color.view,
+      format,
+      width: 1,
+      height: 1,
+      viewport: this.viewport,
+    };
   }
 }
 
@@ -152,6 +192,18 @@ export class XrSurface {
    * then, and always null for a direct surface.
    */
   scene: SceneTarget | null = null;
+  /**
+   * Every eye of the last `views` as one `union` cull group (ws/xr-merge): what the render core
+   * prepares once a frame (`core.prepare(encoder, [surface.group])`, one cull for both eyes).
+   * Its `views` array is reused; it holds `eye.view` for each eye `views` returned.
+   */
+  readonly group: CullGroup;
+  /** The layer's colour format (each eye's `core.format`). */
+  readonly colorFormat: GPUTextureFormat;
+  /** `XrSurfaceOptions.coreClear`. */
+  coreClear: GPUColor | null;
+  private readonly groupViews: RenderView[] = [];
+  private readonly eyePos = new Float64Array(3);
   private readonly eyes: EyeView[] = [];
   private readonly out: EyeView[] = [];
   private readonly viaScene: boolean;
@@ -173,6 +225,9 @@ export class XrSurface {
     this.referenceSpace = opts.referenceSpace;
     this.viaScene = opts.scene === true;
     this.aux = opts.aux;
+    this.colorFormat = opts.colorFormat ?? SCENE_FORMAT;
+    this.coreClear = opts.coreClear ?? null;
+    this.group = { views: this.groupViews, planes: 'union' };
     this.binding = new Binding(session, device);
     const depth =
       opts.depthStencilFormat === undefined
@@ -181,7 +236,7 @@ export class XrSurface {
           : DEPTH_FORMAT
         : opts.depthStencilFormat;
     this.layer = this.binding.createProjectionLayer({
-      colorFormat: opts.colorFormat ?? SCENE_FORMAT,
+      colorFormat: this.colorFormat,
       ...(depth ? { depthStencilFormat: depth } : {}),
       textureType: opts.textureType ?? 'texture',
     });
@@ -207,6 +262,7 @@ export class XrSurface {
   views(frame: XRFrame): readonly XrEyeView[] {
     const out = this.out;
     out.length = 0;
+    this.groupViews.length = 0;
     if (this.destroyed) return out;
     const pose = frame.getViewerPose(this.referenceSpace);
     if (!pose) return out;
@@ -216,13 +272,27 @@ export class XrSurface {
       const sub = this.binding.getViewSubImage(this.layer, v);
       let eye = this.eyes[i];
       if (!eye) {
-        eye = new EyeView(i, this.device, sub, this.viaScene ? undefined : this.aux);
+        eye = new EyeView(
+          i,
+          this.device,
+          sub,
+          this.viaScene ? undefined : this.aux,
+          this.colorFormat,
+        );
         this.eyes[i] = eye;
       }
       eye.eye = v.eye;
       const cam = eye.camera;
+      const toEye = v.transform.inverse.matrix;
       cam.setProjection(v.projectionMatrix);
-      cam.setViewMatrix(v.transform.inverse.matrix);
+      cam.setViewMatrix(toEye);
+      const at = v.transform.position;
+      const pos = this.eyePos;
+      pos[0] = at.x;
+      pos[1] = at.y;
+      pos[2] = at.z;
+      setViewFromMatrices(eye.view, v.projectionMatrix, toEye, pos);
+      this.groupViews.push(eye.view);
       const vd = sub.getViewDescriptor();
       const layer = vd.baseArrayLayer ?? 0;
       const vp = eye.viewport;
@@ -248,6 +318,12 @@ export class XrSurface {
           viewport: vp,
         });
       }
+      const ct = eye.core;
+      ct.view = target.color.view;
+      ct.width = target.width;
+      ct.height = target.height;
+      // The first eye on a texture clears it (when asked); a later eye sharing it loads.
+      ct.clear = target === eye.own && this.coreClear ? this.coreClear : undefined;
       eye.target = target;
       eye.layer = layer;
       const s = cam.screen;

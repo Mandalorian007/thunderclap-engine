@@ -42,6 +42,7 @@ export {
   NetSchema,
   netType,
   propName,
+  type QueryApi,
   type QueryDef,
   type QuerySpec,
   type Scalar,
@@ -87,4 +88,12 @@ export {
   type Transport,
   type TransportEvents,
 } from './transport';
-export { compareKeys, DecodeError, Fixed, type MapKey, Reader, Writer } from './wire';
+export {
+  compareKeys,
+  DecodeError,
+  Fixed,
+  invalidVariant,
+  type MapKey,
+  Reader,
+  Writer,
+} from './wire';

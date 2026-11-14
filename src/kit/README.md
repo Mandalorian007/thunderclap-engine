@@ -73,3 +73,7 @@ The lean build drops the post stack, particles, audio and XR. Its frames go thro
 ## Tests and demo
 
 `src/kit/compose.test.ts` (plain Node, fake GPU and host): the core alone, each service's fields, the update order, the fake-GPU pass count with and without the post stack, device loss, client mode (no clock read, no frame scheduled, ignored while stopped). `harness/kit.html` is a 2D toy on the core alone (`?client` drives it with `ctx.frame(now)` from the page's own `requestAnimationFrame`); `e2e/kit.spec.ts` runs it.
+
+## XR on the render core
+
+`ctx.xr.setCore(core, opts?: XrCoreOptions)` (ws/xr-merge) hands a headset frame's eyes to a render core: each eye is a core view of its `XRView` and both eyes are one `union` cull group (`ctx.xr.surface.group`), so a frame is one `core.prepare` (one cull dispatch for the pair) and a `core.draw` per eye into its half of the layer, after the renderer's frame. `immediate: false` makes the eyes the core's alone, cleared to `clear`; the default keeps the immediate renderer drawing each eye first, with the core's sets drawn over it on their own depth. `ctx.xr.core` is the core given, `setCore(null)` drops it. Comfort and controllers are `@thunderclap-engine/engine/xr`.

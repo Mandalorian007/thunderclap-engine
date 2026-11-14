@@ -370,6 +370,16 @@ interface PredictorOptions<State, Input> {
     readonly now?: () => number;
 }
 
+## QueryApi  (type-only)
+interface QueryApi<A, R> {
+    readonly name: string;
+    readonly player: boolean;
+    readonly result: TypeRef;
+    encodeArgs(args: A): Uint8Array;
+    decodeResult(bytes: Uint8Array): R;
+    encodeResult(value: R): Uint8Array;
+}
+
 ## QueryDef  (type-only)
 interface QueryDef {
     readonly name: string;
@@ -721,6 +731,9 @@ function inPageLink(options?: InPageOptions, conditions?: LinkConditions): InPag
 
 ## inPagePair
 function inPagePair(options?: InPageOptions): [Connect, Connect];
+
+## invalidVariant
+function invalidVariant(typeName: string, value: never): TypeError;
 
 ## linkConditions
 function linkConditions(c?: Partial<LinkConditions>): LinkConditions;

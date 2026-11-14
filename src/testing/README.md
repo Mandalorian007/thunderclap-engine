@@ -88,7 +88,7 @@ A frame's cost, counted rather than timed, so a shared CI machine can hold it (w
 
 `traceGolden(trace)` turns a trace into a `TraceGolden` (`sha256`, `frames`, `perFrame` as run-length `[calls, frames]` pairs, and the `first` frame's calls) to commit as JSON; `diffTraceGolden(got, want)` is `null` on a match or names the first difference. `sha256Hex(text)` is the hash, in plain TS.
 
-`src/render/baseline.budget.test.ts` uses all of this on the bench rungs and harness scenes: the 1.3 baseline in docs/BENCH.md ("Counted work, 1.3 baseline").
+`src/render/baseline.budget.test.ts` uses all of this on the bench rungs and harness scenes: the 1.3 baseline in docs/BENCH.md ("Counted work, 1.3 baseline"). The six reference scenes (E-041 A4) do the same per scene: `src/<module>/ref-<scene>.budget.test.ts` on the shared helpers of `src/render/ref-budget.test-util.ts`, their pages `harness/ref-<scene>.html`, docs/BENCH.md ("Reference scenes").
 
 ## Fake GPU
 
@@ -113,3 +113,9 @@ Buffers hold bytes:
 - Nothing runs shaders. `fake.runPass` is called with each pass at submit, so a test can write into `data` what a dispatch would have written.
 
 The full rules are in the [render README](../render/README.md) under *Tests*.
+
+## Fake WebXR
+
+`installFakeXr(opts?: FakeXrOptions)` puts a fake `navigator.xr` and `XRGPUBinding` in place and returns a `FakeXr` (`system`, `bindings`, `step(dtMs)`, `uninstall()`): `createGame({ xr })`'s `ctx.xr.enter()` then runs over the fake GPU, one XR frame per `step`. The session is a `FakeXrSession` (`headPosition`, `headYaw`, `tracking`, `addInputSource`, `fire`); a `FakeXrInputSource(handedness, { standard: true })` carries an xr-standard gamepad driven with `press(i, down)` and `stick(x, y)`.
+
+`emulateXr(opts?: EmulateXrOptions)` is the same fake on a page's real GPU: it steps the session on `requestAnimationFrame` and, with `mirror`, copies the layer's two eyes side by side onto a canvas. The `XrEmulator` it returns counts `frames` and `mirrored` and `stop()`s. `harness/stereo.html` is a game in it.
