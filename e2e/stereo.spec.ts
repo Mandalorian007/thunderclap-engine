@@ -10,7 +10,9 @@
  * - the mirror shows each eye in its half: the red block straight ahead in both, the clear
  *   colour above the scene;
  * - with `?passes=1` (ws/core-passes): the sun's shadow is one core shadow pass a frame for both
- *   eyes and post resolves each eye on its own, the red block still red in both halves.
+ *   eyes and post resolves each eye on its own, the red block still red in both halves;
+ * - with `?passes=1&targets=1` (ws/core-targets): the core's extra targets per eye, the red
+ *   block's emissive glowing through each eye's bloom.
  */
 import type { Frame, Page } from '@playwright/test';
 import type { HarnessStereoState } from '../harness/stereo-state';
@@ -138,5 +140,39 @@ test('the core passes per eye: one sun shadow for both eyes, post per eye', asyn
   ]);
   expect(isRed(lCentre!), `left centre ${lCentre}`).toBe(true);
   expect(isRed(rCentre!), `right centre ${rCentre}`).toBe(true);
+  expect(errors).toEqual([]);
+});
+
+test('the core targets per eye: the red block’s emissive blooms in both eyes', async ({
+  page,
+  wrapper,
+}) => {
+  // Points from the block's centre up into the clear colour above it, in each eye.
+  const ys = [0.5, 0.42, 0.36, 0.3, 0.24, 0.18, 0.12];
+  const points: [number, number][] = [
+    ...ys.map((y): [number, number] => [0.25, y]),
+    ...ys.map((y): [number, number] => [0.75, y]),
+  ];
+  // Red over green above the block (not its centre, which burns white), summed per eye.
+  const redness = (cs: Rgb[]) =>
+    [0, 1].map((e) =>
+      cs.slice(e * ys.length + 1, (e + 1) * ys.length).reduce((a, c) => a + c[0] - c[1], 0),
+    );
+  await open(page, wrapper, '?passes=1');
+  const plain = redness(await sample(page, points));
+  await open(page, wrapper, '?passes=1&targets=1');
+  const s = await read();
+  expect(s.targets).toBe(7);
+  expect(s.gpuErrors).toBe(0);
+  expect(s.draws).toBe(2);
+  expect(s.resolves).toBe(2);
+  const lit = await sample(page, points);
+  // The glowing block burns bright, warm towards white.
+  for (const c of [lit[0]!, lit[ys.length]!]) {
+    expect(c[0] > 200 && c[0] >= c[1] && c[1] >= c[2], `centre ${c}`).toBe(true);
+  }
+  const glow = redness(lit);
+  expect(glow[0]!, `left ${glow[0]} vs ${plain[0]}`).toBeGreaterThan(plain[0]! + 40);
+  expect(glow[1]!, `right ${glow[1]} vs ${plain[1]}`).toBeGreaterThan(plain[1]! + 40);
   expect(errors).toEqual([]);
 });

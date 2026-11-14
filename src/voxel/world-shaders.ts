@@ -3,6 +3,7 @@
  * format's generated `decode_voxel_vertex`, placed at its section's origin) and the engine's
  * plain default look. A game's material is a fragment entry over `VoxelVarying`.
  */
+import type { CoreTargetName } from '../render/core/targets';
 import type { VoxelFormat } from './format';
 import { vertexField, vertexSchemaWgsl } from './schema';
 
@@ -92,26 +93,47 @@ fn voxel_default_shade(in: VoxelVarying, base: vec3f) -> vec3f {
   let d = distance(in.world, view.position.xyz);
   return mix(c, vec3f(0.62, 0.72, 0.82), clamp((d - 96.0) / 220.0, 0.0, 0.85));
 }
+
+struct VoxelFragOut {
+  @location(0) color: vec4f,
+  @location(2) rough_metal: vec4f,
+  @location(3) velocity: vec4f,
+};
+
+fn voxel_default_out(in: VoxelVarying, color: vec4f, rough: f32) -> VoxelFragOut {
+  var o: VoxelFragOut;
+  o.color = color;
+  o.rough_metal = vec4f(rough, 0.0, 0.0, 1.0);
+  o.velocity = vec4f(core_velocity(view, in.world), 0.0, 1.0);
+  return o;
+}
 `;
 
-/** The default fragment for each stream (`fs`). */
+/**
+ * The default fragment for each stream (`fs`). Besides colour each writes the core's rough-metal
+ * (`@location(2)`: rough, not metal; liquid smooth) and velocity (`@location(3)`) targets
+ * (ws/core-targets, `VOXEL_DEFAULT_WRITES`); a core without them drops those outputs.
+ */
 export const VOXEL_DEFAULT_FRAGMENT: Readonly<Record<VoxelStream, string>> = {
   opaque: /* wgsl */ `${DEFAULT_COMMON}
-@fragment fn fs(in: VoxelVarying) -> @location(0) vec4f {
+@fragment fn fs(in: VoxelVarying) -> VoxelFragOut {
   let v = decode_voxel_vertex(in.w0, in.w1);
-  return vec4f(voxel_default_shade(in, voxel_default_tint(v.id)), 1.0);
+  return voxel_default_out(in, vec4f(voxel_default_shade(in, voxel_default_tint(v.id)), 1.0), 1.0);
 }
 `,
   foliage: /* wgsl */ `${DEFAULT_COMMON}
-@fragment fn fs(in: VoxelVarying) -> @location(0) vec4f {
+@fragment fn fs(in: VoxelVarying) -> VoxelFragOut {
   let v = decode_voxel_vertex(in.w0, in.w1);
   let base = mix(voxel_default_tint(v.id), vec3f(0.25, 0.55, 0.2), 0.6);
-  return vec4f(voxel_default_shade(in, base), 1.0);
+  return voxel_default_out(in, vec4f(voxel_default_shade(in, base), 1.0), 1.0);
 }
 `,
   liquid: /* wgsl */ `${DEFAULT_COMMON}
-@fragment fn fs(in: VoxelVarying) -> @location(0) vec4f {
-  return vec4f(voxel_default_shade(in, vec3f(0.18, 0.38, 0.62)), 0.7);
+@fragment fn fs(in: VoxelVarying) -> VoxelFragOut {
+  return voxel_default_out(in, vec4f(voxel_default_shade(in, vec3f(0.18, 0.38, 0.62)), 0.7), 0.1);
 }
 `,
 };
+
+/** The core targets the default fragments write (`VoxelMaterial.writes`'s default for them). */
+export const VOXEL_DEFAULT_WRITES: readonly CoreTargetName[] = ['roughMetal', 'velocity'];

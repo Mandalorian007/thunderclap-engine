@@ -1601,3 +1601,28 @@ renderer.setLogicalSize(1280, 800);                // the 2D logical size (a fil
   drop. That stops it pumping at the edge. `saturated` says it is at the floor and still
   over budget. `DynamicResolutionOptions`: `budgetMs` (14), `minScale` (0.5), `maxScale` (1),
   `step` (0.1), `dropAfterMs`, `raiseAfterMs`, `raiseMargin`, `cooldownMs`, `burnMs`, `smoothing`.
+
+### Extra core targets (ws/core-targets)
+
+A core can draw more than colour for screen-space post: `createRenderCore(device, { targets:
+['emissive', 'roughMetal', 'velocity'] })`, or `core.setTargets(names)` later; `core.targetMask`
+holds them as `CORE_TARGET` bits (names are `CoreTargetName`s). A core without targets keeps one colour attachment and pays
+nothing. Each target has a fixed fragment location and format (`CORE_TARGET_NAMES`,
+`CORE_TARGET_FORMATS`): emissive `@location(1)` `rgba16float` (bloom), roughMetal `@location(2)`
+`rg8unorm` (SSR), velocity `@location(3)` `rg16float` (uv motion since last frame, +y down: TAA
+and motion blur). A pass attaches `[colour, emissive?, roughMetal?, velocity?]`, null where the
+core lacks one (`coreColorFormats`). A pipeline declares what it writes: `DrawSetShader.writes`
+for a draw set, `coreColorTargets(color, ctx.aux, writes)` for a `DrawablePipelines` maker
+(whose `make` now gets `aux`) or a pass's own pipeline (`CorePassContext.aux`). Targets it does
+not write get `writeMask: 0`, so the shader need not output them, and an output the core has no
+target for is dropped. `coreTargetMask(names)` turns names into bits.
+
+The core's own targets are made at the target's size and cleared on each view's first pass
+(except `phase: 'blend'`). `CoreTarget.emissive` / `roughMetal` / `velocity` give the caller's
+own views instead, cleared with `clear`; the `Renderer` passes its scene target's. A resolve
+reads them as `CoreResolveContext.emissive` / `roughMetal` / `velocity` (null when absent);
+passes after a resolve draw colour only. With velocity the core keeps each view index's last
+`viewProj` and writes rows x, y and w of it, moved to this frame's origin, into
+`CoreView.prevRows` (`VIEW_SLOT.prevRows`; `writePrevRows`): `core_velocity(view, p)` (WGSL,
+`p` origin-relative) gives the motion, 0 on a view's first frame. Each eye of a stereo pair is
+its own view index, so its history and its cleared targets are its own.

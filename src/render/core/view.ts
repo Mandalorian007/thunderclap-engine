@@ -27,6 +27,8 @@ export const VIEW_SLOT = {
   planes: 20,
   index: 44,
   origin: 48,
+  /** Rows x, y and w of the last frame's view-projection, relative to this frame's origin (ws/core-targets). */
+  prevRows: 52,
 } as const;
 
 /**
@@ -34,7 +36,10 @@ export const VIEW_SLOT = {
  * `view.planes` (six, unit normals pointing in), `view.index` (which view of the frame) and
  * `view.origin` (the frame origin, xyz, w 1; zero without `originGrid`). With an origin,
  * `viewProj`, `position` and `planes` are relative to it. The core prepends it to every draw
- * set's shader.
+ * set's shader. `view.prevRows` (ws/core-targets) holds rows x, y and w of the same view's
+ * last-frame view-projection, relative to this frame's origin, when the core has a velocity
+ * target (zero otherwise); `core_velocity(view, p)` turns a position `p` (in `viewProj`'s space)
+ * into its screen motion since then, in uv units (+x right, +y down), zero without history.
  */
 export const CORE_VIEW_WGSL = /* wgsl */ `
 struct CoreView {
@@ -46,8 +51,17 @@ struct CoreView {
   _b: u32,
   _c: u32,
   origin: vec4f,
-  _pad: array<vec4f, 3>,
+  prevRows: array<vec4f, 3>,
 };
+
+fn core_velocity(v: CoreView, p: vec3f) -> vec2f {
+  let q = vec4f(p, 1.0);
+  let c = v.viewProj * q;
+  let pw = dot(v.prevRows[2], q);
+  if (pw <= 0.0 || c.w <= 0.0) { return vec2f(0.0); }
+  let pn = vec2f(dot(v.prevRows[0], q), dot(v.prevRows[1], q)) / pw;
+  return (c.xy / c.w - pn) * vec2f(0.5, -0.5);
+}
 `;
 
 /** One view: fill it from a camera (`setViewFromCamera`) or write its arrays directly. */
@@ -427,5 +441,35 @@ export function openPlanesInto(out: Float32Array, at: number): void {
     out[at + i + 1] = 0;
     out[at + i + 2] = 0;
     out[at + i + 3] = 1;
+  }
+}
+
+/**
+ * Write rows x, y and w of `prev` (a view-projection relative to `prevOrigin`) moved to
+ * `origin` into slot `index`'s `prevRows` (ws/core-targets): `prev · translate(origin −
+ * prevOrigin)`, at float64.
+ */
+export function writePrevRows(
+  out: Float32Array,
+  index: number,
+  prev: ArrayLike<number>,
+  at: number,
+  prevOrigin: ArrayLike<number>,
+  po: number,
+  origin: ArrayLike<number>,
+): void {
+  const o = index * VIEW_SLOT_FLOATS + VIEW_SLOT.prevRows;
+  const dx = origin[0]! - prevOrigin[po]!;
+  const dy = origin[1]! - prevOrigin[po + 1]!;
+  const dz = origin[2]! - prevOrigin[po + 2]!;
+  for (let k = 0; k < 3; k++) {
+    const r = k === 2 ? 3 : k;
+    const a = prev[at + r]!;
+    const b = prev[at + 4 + r]!;
+    const c = prev[at + 8 + r]!;
+    out[o + k * 4] = a;
+    out[o + k * 4 + 1] = b;
+    out[o + k * 4 + 2] = c;
+    out[o + k * 4 + 3] = a * dx + b * dy + c * dz + prev[at + 12 + r]!;
   }
 }

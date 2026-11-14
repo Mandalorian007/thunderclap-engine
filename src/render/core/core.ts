@@ -34,6 +34,13 @@ import {
 } from './pass-list';
 import { QuadIndex } from './quad-index';
 import {
+  CORE_TARGET,
+  CORE_TARGET_FORMATS,
+  CORE_TARGET_NAMES,
+  type CoreTargetName,
+  coreTargetMask,
+} from './targets';
+import {
   type CullGroup,
   MAX_VIEWS,
   openPlanesInto,
@@ -42,6 +49,7 @@ import {
   VIEW_SLOT,
   VIEW_SLOT_BYTES,
   VIEW_SLOT_FLOATS,
+  writePrevRows,
   writeViewSlot,
 } from './view';
 
@@ -75,6 +83,12 @@ export interface RenderCoreOptions {
    * recorded slot to another buffer, a set with per-slot instances and a first bundle never wait.
    */
   coalesceRebuilds?: boolean;
+  /**
+   * Extra colour targets the core's passes draw (ws/core-targets; `./targets`): `'emissive'`,
+   * `'roughMetal'`, `'velocity'`, for post (bloom, SSR, TAA and motion blur). Default none: one
+   * colour attachment, nothing more. `setTargets` changes them later.
+   */
+  targets?: readonly CoreTargetName[];
 }
 
 /**
@@ -136,6 +150,15 @@ export interface CoreTarget {
   outputFormat?: GPUTextureFormat;
   /** The view's rectangle of `output` (an eye of a shared layer), else the whole output. */
   outputViewport?: { x: number; y: number; width: number; height: number };
+  /**
+   * The extra targets' attachments when the caller owns them (ws/core-targets): the target's
+   * size, in `CORE_TARGET_FORMATS`; cleared with `clear`, loaded otherwise. A target the core has
+   * (`targetMask`) and the caller does not give is the core's own, cleared each view (except in
+   * `phase: 'blend'`, which continues the `'opaque'` draw). Ignored for targets the core lacks.
+   */
+  emissive?: GPUTextureView;
+  roughMetal?: GPUTextureView;
+  velocity?: GPUTextureView;
 }
 
 /** What the core's device offers it. */
@@ -251,6 +274,21 @@ export class RenderCore {
     colorAttachments: [],
     depthStencilAttachment: this.shadowAttachment,
   };
+  /** The extra targets (`CORE_TARGET` mask, ws/core-targets). */
+  private auxMask = 0;
+  /** One attachment per extra target, in location order; set per view. */
+  private readonly auxAtt: GPURenderPassColorAttachment[] = [];
+  /** Per extra target: clear it on the view's first pass. */
+  private readonly auxClear: boolean[] = [false, false, false];
+  /** The core's own extra targets (when the caller gives none). */
+  private readonly ownAux: (GPUTexture | null)[] = [null, null, null];
+  private readonly ownAuxView: (GPUTextureView | null)[] = [null, null, null];
+  private passDescAux: GPURenderPassDescriptor;
+  private passDescAuxDepth: GPURenderPassDescriptor;
+  /** Per view index: last frame's view-projection (relative to `prevAt`), and when it was. */
+  private readonly prevVP = new Float32Array(MAX_VIEWS * 16);
+  private readonly prevAt = new Float64Array(MAX_VIEWS * 3);
+  private readonly prevFrame = new Int32Array(MAX_VIEWS).fill(-2);
   /** The context handed to a resolve pass, rewritten per call. */
   private readonly resolveCtx = {} as CoreResolveContext;
   /** The context handed to a pass's `encode`, rewritten per call. */
@@ -299,6 +337,17 @@ export class RenderCore {
       colorAttachments: [this.colorAttachment],
       depthStencilAttachment: this.depthAttachment,
     };
+    for (let k = 0; k < 3; k++) {
+      this.auxAtt.push({
+        view: undefined as unknown as GPUTextureView,
+        loadOp: 'clear',
+        storeOp: 'store',
+        clearValue: { r: 0, g: 0, b: 0, a: 0 },
+      });
+    }
+    this.passDescAux = this.passDesc;
+    this.passDescAuxDepth = this.passDescDepth;
+    this.setTargets(opts.targets ?? []);
     this.passDescDepthClear = {
       label: 'core depth clear',
       colorAttachments: [],
@@ -357,6 +406,7 @@ export class RenderCore {
       color: 'rgba8unorm',
       depth: undefined,
       depthReadOnly: false,
+      aux: 0,
     };
     this.drawableHost = {
       // Live: after `restore` drawables record on the new device (ws/core-decals).
@@ -372,6 +422,43 @@ export class RenderCore {
         return core.targets;
       },
     };
+  }
+
+  /** The extra targets the core's passes draw (`CORE_TARGET` bits; ws/core-targets). */
+  get targetMask(): number {
+    return this.auxMask;
+  }
+
+  /**
+   * Draw these extra targets from now on (ws/core-targets; `RenderCoreOptions.targets`). Sets
+   * and drawables record new pipelines and bundles for them on next use.
+   */
+  setTargets(names: readonly CoreTargetName[]): void {
+    const mask = coreTargetMask(names);
+    if (mask === this.auxMask) return;
+    this.auxMask = mask;
+    if (mask === 0) {
+      this.passDescAux = this.passDesc;
+      this.passDescAuxDepth = this.passDescDepth;
+    } else {
+      const list: (GPURenderPassColorAttachment | null)[] = [this.colorAttachment];
+      const last = mask & 4 ? 3 : mask & 2 ? 2 : 1;
+      for (let k = 0; k < last; k++) list.push(mask & (1 << k) ? this.auxAtt[k]! : null);
+      this.passDescAux = { label: 'core pass', colorAttachments: list };
+      this.passDescAuxDepth = {
+        label: 'core pass',
+        colorAttachments: list,
+        depthStencilAttachment: this.depthAttachment,
+      };
+    }
+    for (let k = 0; k < 3; k++) {
+      if (mask & (1 << k)) continue;
+      this.ownAux[k]?.destroy();
+      this.ownAux[k] = null;
+      this.ownAuxView[k] = null;
+    }
+    this.prevFrame.fill(-2);
+    this.targets++;
   }
 
   /**
@@ -403,6 +490,10 @@ export class RenderCore {
     this.depthUsage = 0;
     this.colorTexture = null;
     this.colorView = null;
+    for (let k = 0; k < 3; k++) {
+      this.ownAux[k] = null;
+      this.ownAuxView[k] = null;
+    }
     // Drawables re-record their bundles and re-bind the core's depth and colour copy.
     this.targets++;
     this.viewsPrepared = 0;
@@ -578,6 +669,7 @@ export class RenderCore {
     for (let i = 0; i < n; i++) {
       writeViewSlot(data, this.viewU32, i, flat[i]!, this.origin, relative);
     }
+    if (this.auxMask & CORE_TARGET.velocity) this.writeHistory(n);
     const groups = this.groups;
     for (let g = 0; g < groups; g++) {
       const first = this.groupFirst[g]!;
@@ -661,6 +753,9 @@ export class RenderCore {
       }
       if (live) this.colorFor(target);
     }
+    const auxMask = this.auxMask;
+    // A 'blend' draw continues an 'opaque' one: the core's own extra targets are loaded.
+    if (auxMask !== 0) this.auxFor(target, target.phase === 'blend');
     let first = true;
     let depthCleared = target.depth !== undefined;
     let colorCopied = false;
@@ -687,6 +782,11 @@ export class RenderCore {
       if (pass.when && !pass.when()) continue;
       if (pass.resolve) {
         if (!target.output || resolved) continue;
+        if (first && target.clear) {
+          // Nothing drew before post: it still reads a cleared scene.
+          this.clearOnly(encoder, target);
+          first = false;
+        }
         const r = this.resolveCtx;
         r.viewIndex = viewIndex;
         r.view = this.flat[viewIndex]!;
@@ -700,6 +800,12 @@ export class RenderCore {
         r.output = target.output;
         r.outputFormat = target.outputFormat ?? target.format;
         r.outputViewport = target.outputViewport;
+        r.emissive =
+          auxMask & CORE_TARGET.emissive ? (this.auxAtt[0]!.view as GPUTextureView) : null;
+        r.roughMetal =
+          auxMask & CORE_TARGET.roughMetal ? (this.auxAtt[1]!.view as GPUTextureView) : null;
+        r.velocity =
+          auxMask & CORE_TARGET.velocity ? (this.auxAtt[2]!.view as GPUTextureView) : null;
         pass.resolve(encoder, r);
         resolved = true;
         first = false;
@@ -726,6 +832,7 @@ export class RenderCore {
       const depthFormat = wantsDepth ? this.depthFormat : undefined;
       const colorFormat = resolved ? (target.outputFormat ?? target.format) : target.format;
       const colorRect = resolved ? target.outputViewport : vp;
+      const aux = resolved ? 0 : auxMask;
       if (wantsDepth && samplesDepth && pass.depth === 'read' && !depthCleared) {
         // A drawable samples depth here, so the pass must be read-only: clear depth first.
         const d = this.depthAttachment;
@@ -749,8 +856,13 @@ export class RenderCore {
       } else {
         color.loadOp = 'load';
       }
+      if (aux !== 0) {
+        for (let k = 0; k < 3; k++) {
+          if (aux & (1 << k)) this.auxAtt[k]!.loadOp = first && this.auxClear[k] ? 'clear' : 'load';
+        }
+      }
       first = false;
-      let desc = this.passDesc;
+      let desc = aux !== 0 ? this.passDescAux : this.passDesc;
       if (wantsDepth) {
         const d = this.depthAttachment;
         d.view = target.depth ?? this.depthFor(target.width, target.height);
@@ -765,7 +877,7 @@ export class RenderCore {
           d.depthStoreOp = 'store';
           depthCleared = true;
         }
-        desc = this.passDescDepth;
+        desc = aux !== 0 ? this.passDescAuxDepth : this.passDescDepth;
       }
       desc.timestampWrites = target.timestamps?.('core');
       const enc = encoder.beginRenderPass(desc);
@@ -783,11 +895,11 @@ export class RenderCore {
         const s = sets[i]!;
         if (s.count === 0 || s.ready === false || (s.inView && !s.inView(group))) continue;
         if (s.encoding() === 'bundle') {
-          bundles.push(s.bundle(group, colorFormat, depthFormat, readOnly));
+          bundles.push(s.bundle(group, colorFormat, depthFormat, readOnly, aux));
           continue;
         }
         if (bundles.length > 0) this.flushBundles(enc);
-        s.encodeDirect(enc, group, colorFormat, depthFormat);
+        s.encodeDirect(enc, group, colorFormat, depthFormat, aux);
       }
       if (bundles.length > 0) this.flushBundles(enc);
       if (pass.encode) {
@@ -798,21 +910,83 @@ export class RenderCore {
         ctx.format = colorFormat;
         ctx.depthFormat = depthFormat;
         ctx.depthReadOnly = readOnly;
+        ctx.aux = aux;
         pass.encode(enc, ctx);
       }
       enc.end();
       st.calls++;
     }
-    if (first && target.clear) {
-      // Nothing drew: still clear, as a target given a clear colour expects.
-      const color = this.colorAttachment;
-      color.view = target.view;
-      color.loadOp = 'clear';
-      color.clearValue = target.clear;
-      this.passDesc.timestampWrites = target.timestamps?.('core');
-      encoder.beginRenderPass(this.passDesc).end();
-      st.calls += 2;
-      st.passes++;
+    // Nothing drew: still clear, as a target given a clear colour expects.
+    if (first && target.clear) this.clearOnly(encoder, target);
+  }
+
+  /** One pass that only clears the target's colour and the view's extra targets. */
+  private clearOnly(encoder: GPUCommandEncoder, target: CoreTarget): void {
+    const color = this.colorAttachment;
+    color.view = target.view;
+    color.loadOp = 'clear';
+    color.clearValue = target.clear!;
+    const aux = this.auxMask;
+    for (let k = 0; k < 3; k++) if (aux & (1 << k)) this.auxAtt[k]!.loadOp = 'clear';
+    const desc = aux !== 0 ? this.passDescAux : this.passDesc;
+    desc.timestampWrites = target.timestamps?.('core');
+    encoder.beginRenderPass(desc).end();
+    this.stats.calls += 2;
+    this.stats.passes++;
+  }
+
+  /**
+   * Point the extra targets' attachments at the caller's views or the core's own (made at the
+   * target's size), and decide which are cleared on the view's first pass.
+   */
+  private auxFor(target: CoreTarget, blend: boolean): void {
+    const aux = this.auxMask;
+    for (let k = 0; k < 3; k++) {
+      if (!(aux & (1 << k))) continue;
+      const given = target[CORE_TARGET_NAMES[k]!];
+      const att = this.auxAtt[k]!;
+      if (given) {
+        att.view = given;
+        this.auxClear[k] = target.clear !== undefined;
+        continue;
+      }
+      let t = this.ownAux[k];
+      if (!t || t.width !== target.width || t.height !== target.height) {
+        t?.destroy();
+        t = this.device.createTexture({
+          label: `core ${CORE_TARGET_NAMES[k]}`,
+          size: [target.width, target.height],
+          format: CORE_TARGET_FORMATS[k]!,
+          usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+        });
+        this.ownAux[k] = t;
+        this.ownAuxView[k] = t.createView();
+        this.targets++;
+      }
+      att.view = this.ownAuxView[k]!;
+      this.auxClear[k] = !blend;
+    }
+  }
+
+  /** Each prepared view's last-frame rows (`CoreView.prevRows`), then this frame's kept. */
+  private writeHistory(n: number): void {
+    const data = this.viewData;
+    const prev = this.prevVP;
+    const at = this.prevAt;
+    const origin = this.origin;
+    for (let i = 0; i < n; i++) {
+      const o = i * VIEW_SLOT_FLOATS;
+      if (this.prevFrame[i] === this.frame - 1) {
+        writePrevRows(data, i, prev, i * 16, at, i * 3, origin);
+      } else {
+        // No last frame at this index: no motion.
+        writePrevRows(data, i, data, o, origin, 0, origin);
+      }
+      for (let k = 0; k < 16; k++) prev[i * 16 + k] = data[o + k]!;
+      at[i * 3] = origin[0]!;
+      at[i * 3 + 1] = origin[1]!;
+      at[i * 3 + 2] = origin[2]!;
+      this.prevFrame[i] = this.frame;
     }
   }
 
@@ -899,6 +1073,11 @@ export class RenderCore {
     this.colorTexture?.destroy();
     this.colorTexture = null;
     this.colorView = null;
+    for (let k = 0; k < 3; k++) {
+      this.ownAux[k]?.destroy();
+      this.ownAux[k] = null;
+      this.ownAuxView[k] = null;
+    }
     this.drawables.length = 0;
   }
 
@@ -997,11 +1176,11 @@ export class RenderCore {
       const s = sets[i]!;
       if (!s.castShadow || s.count === 0 || s.ready === false) continue;
       if (s.encoding() === 'bundle') {
-        bundles.push(s.bundle(group, null, target.format, false));
+        bundles.push(s.bundle(group, null, target.format, false, 0));
         continue;
       }
       if (bundles.length > 0) this.flushBundles(enc);
-      s.encodeDirect(enc, group, null, target.format);
+      s.encodeDirect(enc, group, null, target.format, 0);
     }
     if (bundles.length > 0) this.flushBundles(enc);
     enc.end();

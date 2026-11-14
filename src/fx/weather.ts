@@ -18,6 +18,7 @@ import {
   CoreViewExtras,
   DrawablePipelines,
 } from '../render/core/drawable';
+import { coreColorTargets } from '../render/core/targets';
 import { VIEW_SLOT } from '../render/core/view';
 import { createShaderModule } from '../render/wgsl';
 import {
@@ -249,7 +250,7 @@ export class Weather implements CoreDrawable {
     const layout = device.createPipelineLayout({
       bindGroupLayouts: [core.viewLayout, this.layout],
     });
-    this.pipes = new DrawablePipelines((color, depth) =>
+    this.pipes = new DrawablePipelines((color, depth, _readOnly, aux) =>
       device.createRenderPipeline({
         label: 'weather',
         layout,
@@ -257,7 +258,8 @@ export class Weather implements CoreDrawable {
         fragment: {
           module,
           entryPoint: 'fs',
-          targets: [
+          // Rain and snow write colour only: the core's extra targets keep what is behind.
+          targets: coreColorTargets(
             {
               format: color,
               blend: {
@@ -265,7 +267,8 @@ export class Weather implements CoreDrawable {
                 alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
               },
             },
-          ],
+            aux,
+          ),
         },
         primitive: { topology: 'triangle-list' },
         depthStencil: depth

@@ -30,6 +30,8 @@ export interface HarnessStereoState {
   shadowPasses: number;
   /** Post resolves last frame (one per eye with `passes`). */
   resolves: number;
+  /** `?targets=1` (ws/core-targets): the core's extra-target mask (7: all three). */
+  targets: number;
 }
 
 declare global {

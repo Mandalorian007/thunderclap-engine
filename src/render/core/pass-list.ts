@@ -58,6 +58,13 @@ export interface CoreResolveContext {
   output: GPUTextureView;
   outputFormat: GPUTextureFormat;
   outputViewport: { x: number; y: number; width: number; height: number } | undefined;
+  /**
+   * The view's extra targets as drawn so far (ws/core-targets; `RenderCore.targetMask`), the
+   * target's size: null for one the core does not have.
+   */
+  emissive: GPUTextureView | null;
+  roughMetal: GPUTextureView | null;
+  velocity: GPUTextureView | null;
 }
 
 /**
@@ -77,6 +84,11 @@ export interface CorePassContext {
   depthFormat: GPUTextureFormat | undefined;
   /** The depth attachment is read-only in this pass (a `'read'` pass after a writing one). */
   depthReadOnly: boolean;
+  /**
+   * The pass's extra targets (ws/core-targets), a `CORE_TARGET` mask: build the pipeline's
+   * targets with `coreColorTargets(color, aux, writes)`. 0 after a resolve.
+   */
+  aux: number;
 }
 
 /** A pass in the list; draw sets join it by id. */

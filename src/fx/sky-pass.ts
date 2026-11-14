@@ -1,5 +1,6 @@
 import type { RenderCore } from '../render/core/core';
 import type { CorePass, CorePassContext } from '../render/core/pass-list';
+import { CORE_TARGET, coreColorTargets } from '../render/core/targets';
 import { CORE_VIEW_WGSL } from '../render/core/view';
 import { createShaderModule, WGSL_NOISE } from '../render/wgsl';
 import { packSkyParams, SKY_PARAMS_FLOATS, type SkyLook } from './sky';
@@ -13,7 +14,8 @@ export const SKY_PASS_LIGHT_FLOATS = 12;
  * `CoreView` (the view ray from the inverse of `viewProj`, so an off-centre stereo eye, a
  * cube face or an origin-relative view all work). One full-screen triangle at the far plane,
  * tested `less-equal` against depth and never writing it, so the opaque sets drawn before it
- * win. The core's passes have one colour target: the sun disc and stars reach no emissive.
+ * win. When the core has extra targets (ws/core-targets) the sun disc and stars go to emissive
+ * (bloom) and the dome's motion, a direction at infinity so camera turns only, to velocity.
  */
 export const SKY_PASS_WGSL = /* wgsl */ `${CORE_VIEW_WGSL}
 @group(0) @binding(0) var<uniform> view: CoreView;
@@ -66,10 +68,28 @@ struct SkyPassOut {
   return o;
 }
 
-@fragment fn fs(in: SkyPassOut) -> @location(0) vec4f {
+struct SkyPassFrag {
+  @location(0) color: vec4f,
+  @location(1) emissive: vec4f,
+  @location(3) velocity: vec4f,
+};
+
+@fragment fn fs(in: SkyPassOut) -> SkyPassFrag {
   let d = normalize(in.ray.xyz / in.ray.w - view.position.xyz);
   let s = sky_shade(d, light.sun_dir.xyz, light.sun_color.rgb, light.fog);
-  return vec4f(s.color, 1.0);
+  var o: SkyPassFrag;
+  o.color = vec4f(s.color, 1.0);
+  o.emissive = vec4f(s.emissive, 1.0);
+  // A point at infinity (w = 0): only turning the view moves the sky.
+  let q = vec4f(d, 0.0);
+  let c = view.viewProj * q;
+  let pw = dot(view.prevRows[2], q);
+  var vel = vec2f(0.0);
+  if (pw > 0.0 && c.w > 0.0) {
+    vel = (c.xy / c.w - vec2f(dot(view.prevRows[0], q), dot(view.prevRows[1], q)) / pw) * vec2f(0.5, -0.5);
+  }
+  o.velocity = vec4f(vel, 0.0, 1.0);
+  return o;
 }
 `;
 
@@ -111,7 +131,11 @@ export class SkyPass {
   private module!: GPUShaderModule;
   private pipelineLayout: GPUPipelineLayout | null = null;
   /** Pipelines by colour format, then depth format (`'none'` without depth). */
-  private readonly pipelines = new Map<GPUTextureFormat, Map<string, GPURenderPipeline>>();
+  /** By colour format, depth format ('none'), then the pass's extra-target mask (0..7). */
+  private readonly pipelines = new Map<
+    GPUTextureFormat,
+    Map<string, (GPURenderPipeline | undefined)[]>
+  >();
   private readonly offRestored: () => void;
   private destroyed = false;
 
@@ -178,7 +202,12 @@ export class SkyPass {
       this.pipelines.set(ctx.format, byDepth);
     }
     const key = ctx.depthFormat ?? 'none';
-    const hit = byDepth.get(key);
+    let byAux = byDepth.get(key);
+    if (!byAux) {
+      byAux = [];
+      byDepth.set(key, byAux);
+    }
+    const hit = byAux[ctx.aux];
     if (hit) return hit;
     if (!this.pipelineLayout) {
       this.pipelineLayout = this.device.createPipelineLayout({
@@ -187,16 +216,24 @@ export class SkyPass {
       });
     }
     const p = this.device.createRenderPipeline({
-      label: `${this.label}:${ctx.format}:${key}`,
+      label: `${this.label}:${ctx.format}:${key}:${ctx.aux}`,
       layout: this.pipelineLayout,
       vertex: { module: this.module, entryPoint: 'vs' },
-      fragment: { module: this.module, entryPoint: 'fs', targets: [{ format: ctx.format }] },
+      fragment: {
+        module: this.module,
+        entryPoint: 'fs',
+        targets: coreColorTargets(
+          { format: ctx.format },
+          ctx.aux,
+          CORE_TARGET.emissive | CORE_TARGET.velocity,
+        ),
+      },
       primitive: { topology: 'triangle-list', cullMode: 'none' },
       depthStencil: ctx.depthFormat
         ? { format: ctx.depthFormat, depthWriteEnabled: false, depthCompare: 'less-equal' }
         : undefined,
     });
-    byDepth.set(key, p);
+    byAux[ctx.aux] = p;
     return p;
   }
 

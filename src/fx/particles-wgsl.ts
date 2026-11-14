@@ -854,8 +854,8 @@ struct Counts {
  * World particles on the render core (B5): the extended particle layout drawn from `CoreView`
  * (group 0) and `CoreViewExtra` (binding 6, by `view.index`), so each eye of a pair faces its
  * own image plane from one bundle. A particle outside the eye's frusta (by its size) collapses
- * in the vertex stage; with `sim.softOn` it fades near the core's depth (binding 2). One colour
- * target, premultiplied.
+ * in the vertex stage; with `sim.softOn` it fades near the core's depth (binding 2). Colour,
+ * premultiplied, and the core's emissive target (`@location(1)`, ws/core-targets).
  */
 export const PARTICLE_CORE_RENDER_WGSL = /* wgsl */ `
 ${CORE_DRAWABLE_WGSL}
@@ -876,6 +876,12 @@ struct PVOut {
   @location(2) uv: vec2f,
   @location(3) ndc: vec4f,
   @location(4) eye_dist: f32,
+  @location(5) emissive: f32,
+};
+
+struct POut {
+  @location(0) color: vec4f,
+  @location(1) emissive: vec4f,
 };
 
 ${FX_CURVES_WGSL}
@@ -926,6 +932,7 @@ ${FX_CURVES_WGSL}
   }
   o.eye_dist = d;
   o.color = color;
+  o.emissive = p.wind.w;
   let frames = max(p.tile.y - p.tile.x + 1.0, 1.0);
   var tile = p.tile.x;
   if (p.tile.z > 0.0) {
@@ -939,7 +946,7 @@ ${FX_CURVES_WGSL}
   return o;
 }
 
-@fragment fn fs(in: PVOut) -> @location(0) vec4f {
+@fragment fn fs(in: PVOut) -> POut {
   let tex = textureSample(sheet, sheet_samp, in.uv);
   var a: f32;
   var rgb: vec3f;
@@ -960,6 +967,10 @@ ${FX_CURVES_WGSL}
     let scene = length(w.xyz / w.w - view.position.xyz);
     a *= saturate((scene - in.eye_dist) / max(sim.softness, 1e-4));
   }
-  return vec4f(rgb * a, a);
+  var o: POut;
+  o.color = vec4f(rgb * a, a);
+  // The core's emissive target (bloom's source) when it has one: masked off otherwise.
+  o.emissive = vec4f(rgb * a * in.emissive, a);
+  return o;
 }
 `;

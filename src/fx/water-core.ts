@@ -15,6 +15,7 @@ import {
   CoreViewExtras,
   DrawablePipelines,
 } from '../render/core/drawable';
+import { CORE_TARGET, coreColorTargets } from '../render/core/targets';
 import { VERTEX_LAYOUT_3D } from '../render/mesh';
 import { createShaderModule } from '../render/wgsl';
 import type { Water } from './water';
@@ -94,12 +95,20 @@ export class WaterOnCore implements CoreDrawable {
     const pipelineLayout = device.createPipelineLayout({
       bindGroupLayouts: [core.viewLayout, this.layout],
     });
-    this.pipes = new DrawablePipelines((color, depth) =>
+    this.pipes = new DrawablePipelines((color, depth, _readOnly, aux) =>
       device.createRenderPipeline({
         label: 'water-core',
         layout: pipelineLayout,
         vertex: { module, entryPoint: 'vs', buffers: [VERTEX_LAYOUT_3D.buffer] },
-        fragment: { module, entryPoint: 'fs', targets: [{ format: color, blend: PREMULTIPLIED }] },
+        fragment: {
+          module,
+          entryPoint: 'fs',
+          targets: coreColorTargets(
+            { format: color, blend: PREMULTIPLIED },
+            aux,
+            CORE_TARGET.roughMetal | CORE_TARGET.velocity,
+          ),
+        },
         primitive: { topology: 'triangle-list', cullMode: 'none' },
         depthStencil: depth
           ? { format: depth, depthWriteEnabled: false, depthCompare: 'less-equal' }
