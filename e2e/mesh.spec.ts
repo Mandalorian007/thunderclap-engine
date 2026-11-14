@@ -218,6 +218,10 @@ test('the sun casts a shadow and distance fades the ground into the fog', async 
 });
 
 test('a pointer drag orbits the camera', async ({ page, wrapper }) => {
+  test.fixme(
+    test.info().project.use.browserName === 'webkit',
+    'Playwright drives touch through CDP, which is Chromium-only',
+  );
   await open(page, wrapper);
   const before = await read();
   const box = await canvasBox();

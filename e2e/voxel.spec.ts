@@ -126,6 +126,10 @@ test('turning the view changes how many chunks are drawn', async () => {
 });
 
 test('a click at the centre breaks the picked block, changing the triangles', async ({ page }) => {
+  test.fixme(
+    test.info().project.use.browserName === 'webkit',
+    'Playwright drives touch through CDP, which is Chromium-only',
+  );
   await aim(0, -0.45);
   await frames(2);
   const before = await read();
@@ -139,6 +143,10 @@ test('a click at the centre breaks the picked block, changing the triangles', as
 });
 
 test('place then break rewrites the chunk in place: growths stays 0', async ({ page }) => {
+  test.fixme(
+    test.info().project.use.browserName === 'webkit',
+    'Playwright drives touch through CDP, which is Chromium-only',
+  );
   await aim(0, -0.45);
   await frames(2);
   const before = await read();

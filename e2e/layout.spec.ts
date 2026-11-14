@@ -27,6 +27,7 @@ const FORM: Record<string, string> = {
   'desktop-1280': 'desktop',
   'desktop-1920': 'desktop',
   ipad: 'tablet',
+  'webkit-ipad': 'tablet',
   'tablet-port': 'tablet',
   'phone-se': 'phone-landscape',
   'phone-iphone': 'phone-landscape',
