@@ -102,6 +102,8 @@ A test can inspect these fields on a `FakeDevice` (and lose it with `loseDevice`
 - `writes` and `textureWrites`.
 - `passes`: each is a `FakePass`, with `kind`, `label` and `commands`. A `PassCommand` is one recorded `setPipeline`, `setBindGroup`, `draw`, `drawIndexed`, `dispatch` or other call.
 - `bufferCopies` (each a `FakeBufferCopy`), `querySets` (each a `FakeQuerySet`), `submits` and `errors`.
+- `bundles`: each finished render bundle is a `FakeBundle`, with its `label` and the `commands` recorded into it; an `executeBundles` command lists the bundles it ran. `calls` counts every GPU call (bundle-recorded ones go to `bundleCalls`).
+- `callsByView` (ws/core-views): `calls` split by the name last given to `markView(name | null)`, and each pass begun after a mark carries it as `FakePass.view`. A render core reports its views with `RenderCoreOptions.onView`, so `onView: (i) => fake.markView(\`eye ${i}\`)` counts what each eye costs.
 
 Buffers hold bytes:
 

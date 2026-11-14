@@ -1,6 +1,7 @@
 /**
  * The two-views page (harness/views.html) on every matrix row: the stereo seam without WebXR
- * (ws/two-views). One frame, two `render()` calls, two eyes into the two halves of one surface.
+ * (ws/two-views). One frame, one render-core cull group of two views, two eyes into the two
+ * halves of one surface (ws/core-views).
  *
  * - the page boots WebGPU, both halves draw the scene with depth on and nothing logs an error;
  * - the two eyes sit ±ipd/2 apart and carry `view_index` 0 and 1;
@@ -119,11 +120,15 @@ test('two eyes render one frame into two halves with view_index 0 and 1', async 
   );
   expect(d).toBeCloseTo(s.ipd, 4);
   expect(r.position[1]).toBeCloseTo(l.position[1], 4);
-  // Six instances recorded once, drawn once per view; both views drew.
+  // Six meshes recorded once, drawn once per view; both views drew. The eyes are one cull
+  // group of the render core (ws/core-views): one cull dispatch, one bundle recorded once and
+  // executed by each eye.
   expect(s.stats.instances).toBe(12);
-  expect(l.drawCalls).toBeGreaterThan(0);
-  expect(r.drawCalls).toBeGreaterThan(0);
+  expect(l.drawCalls).toBe(1);
+  expect(r.drawCalls).toBe(1);
   expect(s.stats.drawCalls).toBe(l.drawCalls + r.drawCalls);
+  expect(s.stats.dispatches).toBe(1);
+  expect(s.stats.bundleBuilds).toBe(1);
   // Every probe of an eye lies inside its half.
   for (const [eye, lo, hi] of [
     [l, 0, 0.5],

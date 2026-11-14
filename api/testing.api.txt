@@ -56,6 +56,13 @@ interface FakeBufferCopy {
     size: number;
 }
 
+## FakeBundle  (type-only)
+interface FakeBundle {
+    label?: string;
+    desc: GPURenderBundleEncoderDescriptor;
+    commands: PassCommand[];
+}
+
 ## FakeDevice  (type-only)
 interface FakeDevice {
     readonly device: GPUDevice;
@@ -91,6 +98,8 @@ interface FakeDevice {
     readonly bundles: FakeBundle[];
     readonly calls: number;
     readonly bundleCalls: number;
+    markView(name: string | null): void;
+    readonly callsByView: ReadonlyMap<string, number>;
     runPass: ((pass: FakePass) => void) | null;
     readonly errors: string[];
     readonly lost: Promise<GPUDeviceLostInfo>;
@@ -159,6 +168,7 @@ interface FakePass {
     label?: string;
     desc: unknown;
     commands: PassCommand[];
+    view?: string;
 }
 
 ## FakeQuerySet  (type-only)
