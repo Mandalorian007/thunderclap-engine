@@ -67,6 +67,7 @@ export {
   ParticleSystem,
 } from './particles';
 export type {
+  ParticleBoxLight,
   ParticleBudgetKnobOptions,
   ParticleShape,
   ParticlesOnCoreSource,
@@ -134,6 +135,7 @@ export type {
   PrecipShape,
   WeatherConfig,
   WeatherDensityKnobOptions,
+  WeatherHeightDecode,
   WeatherOcclusionMap,
   WeatherOptions,
 } from './weather';

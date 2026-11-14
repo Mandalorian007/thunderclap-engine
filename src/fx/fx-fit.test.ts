@@ -28,7 +28,7 @@ import { Sky } from './sky';
 import { createSkyPass, SKY_PASS_WGSL, skyHorizonColor } from './sky-pass';
 import { Water } from './water';
 import { WEATHER_RAIN, WEATHER_RAIN_SPLASHES, Weather } from './weather';
-import { WEATHER_WGSL } from './weather-wgsl';
+import { WEATHER_HEAD_FLOATS, WEATHER_WGSL } from './weather-wgsl';
 
 interface Rig {
   fake: FakeDevice;
@@ -250,6 +250,8 @@ describe('the depth convention (ws/fx-fit)', () => {
     cam.setProjection(p);
     r.eyes = [setViewFromCamera(createRenderView(), cam)];
     const ps = new ParticleSystem(r.core, { capacity: 16 });
+    // Something alive: an idle system writes nothing (ws/fx-fit, B14).
+    ps.emit(BURST, 1);
     const enc = r.device.createCommandEncoder();
     r.core.prepare(enc, [{ views: r.eyes }]);
     r.core.draw(enc, 0, r.target);
@@ -403,7 +405,7 @@ describe('weather: wrapping map, splashes, lightning (ws/fx-fit)', () => {
     stereo(r);
     const d = uniform(r.fake, 'weather');
     expect(d[7]).toBe(2);
-    expect(d[16 + 16 + 12]).toBe(3);
+    expect(d[WEATHER_HEAD_FLOATS + 16 + 12]).toBe(3);
     expect(w.instances).toBe(6000 + 400);
     const draws = r.fake.bundles.flatMap((b) => b.commands).filter((c) => c.op === 'drawIndirect');
     expect(draws.length).toBe(1);
@@ -475,11 +477,11 @@ describe('lit-box particles (ws/fx-fit)', () => {
     ps.emit(BURST, 8);
     stereo(r);
     expect(r.fake.errors).toEqual([]);
-    const draws = r.fake.bundles.flatMap((b) => b.commands).filter((c) => c.op === 'draw') as {
-      vertices: number;
-      instances: number;
-    }[];
-    expect(draws).toEqual([expect.objectContaining({ vertices: 36, instances: 128 })]);
+    // One indirect draw of the live window (B14): 36 vertices, the 8 alive.
+    const draws = r.fake.bundles.flatMap((b) => b.commands).filter((c) => c.op.startsWith('draw'));
+    expect(draws.map((c) => c.op)).toEqual(['drawIndirect']);
+    const args = r.fake.buffers.find((b) => b.label === 'particles-core-draw')!;
+    expect([...new Uint32Array(args.data.buffer, args.data.byteOffset, 2)]).toEqual([36, 8]);
     const p = pipelines(r.fake).get('particles-core-box')![0]!;
     expect(p.primitive!.cullMode).toBe('back');
     const light = lastWrite(r.fake, 'particles-core-box-light');
@@ -566,5 +568,104 @@ describe('DrawSetShader.shadowVertexEntry (ws/fx-fit)', () => {
     expect(shadow.vertex.entryPoint).toBe('vs_shadow');
     expect(color.vertex.entryPoint).toBe('vs');
     expect(fake.errors).toEqual([]);
+  });
+});
+
+describe('weather for a game (ws/fx-fit): decode, leaves, 8 layers, warmed', () => {
+  function uniform(f: FakeDevice, label: string): Float32Array {
+    for (let i = f.writes.length - 1; i >= 0; i--) {
+      if (f.writes[i]!.buffer.label === label) return f.writeData[i]!.data as Float32Array;
+    }
+    throw new Error(`no ${label} write`);
+  }
+  const map = (r: Rig) =>
+    r.device.createTexture({
+      size: [16, 16],
+      format: 'r32float',
+      usage: GPUTextureUsage.TEXTURE_BINDING,
+    });
+
+  it("decodes the map's texels: floor, scale, offset; default the texel itself", () => {
+    const r = rig();
+    const texture = map(r);
+    const w = new Weather(r.core, {
+      ...WEATHER_RAIN,
+      occlusionMap: { texture, origin: [0, 0], size: [16, 16] },
+    });
+    stereo(r);
+    let d = uniform(r.fake, 'weather');
+    expect([d[16], d[17], d[18]]).toEqual([0, 1, 0]);
+    w.setOcclusionMap({
+      texture,
+      origin: [0, 0],
+      size: [16, 16],
+      decode: { floor: true, scale: 0.5, offset: 2 },
+    });
+    stereo(r);
+    d = uniform(r.fake, 'weather');
+    expect([d[16], d[17], d[18]]).toEqual([1, 0.5, 2]);
+    expect(WEATHER_WGSL).toContain('if (w.decode.x > 0.5) { v = floor(v); }');
+    expect(WEATHER_WGSL).toContain('v * w.decode.y + w.decode.z');
+  });
+
+  it('draws up to 8 layers, a leaf layer among them, in one indirect draw', () => {
+    const r = rig();
+    const leaf = {
+      shape: 'leaf' as const,
+      count: 50,
+      radius: 10,
+      height: 8,
+      speed: 0.6,
+      length: 0.2,
+      width: 0.1,
+      color: [0.4, 0.6, 0.2] as const,
+      alpha: 1,
+      flutter: 0.3,
+    };
+    const layers = Array.from({ length: 8 }, () => leaf);
+    const w = new Weather(r.core, { layers });
+    stereo(r);
+    const d = uniform(r.fake, 'weather');
+    expect(d[7]).toBe(8);
+    for (let i = 0; i < 8; i++) {
+      const at = WEATHER_HEAD_FLOATS + i * 16;
+      expect([d[at], d[at + 1], d[at + 12]]).toEqual([i * 50, 50, 4]);
+    }
+    expect(w.instances).toBe(400);
+    const draws = r.fake.bundles.flatMap((b) => b.commands).filter((c) => c.op === 'drawIndirect');
+    expect(draws.length).toBe(1);
+    expect(WEATHER_WGSL).toContain('layers: array<Layer, 8>');
+    expect(WEATHER_WGSL).toContain('in.shape == 4u');
+    expect(() => w.configure({ layers: Array(9).fill(leaf) })).toThrow(/8/);
+  });
+
+  it('weather and lightning are warmed by the core before anything falls or strikes', () => {
+    const r = rig();
+    const w = new Weather(r.core, { ...WEATHER_RAIN, intensity: 0 });
+    const bolt = new Lightning(r.core);
+    stereo(r);
+    expect(w.active).toBe(false);
+    expect(bolt.active).toBe(false);
+    // No real pass drew them; each pipeline had its empty first draw in a scratch pass.
+    const real = r.fake.passes.flatMap((p) => p.commands).filter((c) => c.op === 'draw');
+    expect(real.length).toBe(0);
+    const warmed = r.fake.warmPasses.flatMap((p) => p.commands);
+    const labels = warmed
+      .filter((c) => c.op === 'setPipeline')
+      .map((c) =>
+        String((c as unknown as { pipeline: { desc: { label?: string } } }).pipeline.desc.label),
+      );
+    expect(labels.some((l) => l.startsWith('weather'))).toBe(true);
+    expect(labels.some((l) => l.startsWith('lightning'))).toBe(true);
+    for (const c of warmed.filter((c) => c.op === 'draw')) {
+      expect((c as { vertices: number }).vertices).toBe(0);
+    }
+    // Once rain falls it draws as itself.
+    w.intensity = 1;
+    stereo(r);
+    expect(w.active).toBe(true);
+    expect(r.fake.bundles.flatMap((b) => b.commands).some((c) => c.op === 'drawIndirect')).toBe(
+      true,
+    );
   });
 });

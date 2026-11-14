@@ -705,9 +705,9 @@ describe('ParticleSystem extended kernel', () => {
     }
     expect(PARTICLE_EXT_RENDER_WGSL).toContain('sheet');
     expect(PARTICLE_COLLIDE_WGSL).toContain('thickness');
-    expect(hash(PARTICLE_WORLD_COMPUTE_WGSL)).toMatchInlineSnapshot(`"fb795e2c"`);
-    expect(hash(PARTICLE_EXT_COMPUTE_WGSL)).toMatchInlineSnapshot(`"95490997"`);
-    expect(hash(PARTICLE_COLLIDE_WGSL)).toMatchInlineSnapshot(`"825d24ed"`);
+    expect(hash(PARTICLE_WORLD_COMPUTE_WGSL)).toMatchInlineSnapshot(`"f7ccc303"`);
+    expect(hash(PARTICLE_EXT_COMPUTE_WGSL)).toMatchInlineSnapshot(`"c1bf216a"`);
+    expect(hash(PARTICLE_COLLIDE_WGSL)).toMatchInlineSnapshot(`"44580895"`);
   });
 
   it('sub-emission: interns onDeath/onLife descriptors one level deep and dispatches subspawn', () => {

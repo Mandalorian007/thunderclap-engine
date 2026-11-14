@@ -396,6 +396,24 @@ function projects() {
   return list;
 }
 
+/**
+ * Subpaths whose entry is not a folder's `index.ts` (`./fx/weather` is `src/fx/weather-entry.ts`):
+ * mapped one by one, since the wildcard below only finds `<subpath>/index.d.ts`.
+ */
+function entryPaths(dts) {
+  const exports = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')).exports ?? {};
+  const out = {};
+  for (const [key, target] of Object.entries(exports)) {
+    if (typeof target !== 'string' || !key.startsWith('./') || !target.startsWith('./src/'))
+      continue;
+    if (target.endsWith('/index.ts') || !target.endsWith('.ts')) continue;
+    out[`@thunderclap-engine/engine/${key.slice(2)}`] = [
+      join(dts, target.slice('./src/'.length).replace(/\.ts$/, '.d.ts')),
+    ];
+  }
+  return out;
+}
+
 function checkProject(p, dts, cache) {
   const base = join(p.dir, p.tsconfig);
   const own = JSON.parse(readFileSync(base, 'utf8'));
@@ -405,6 +423,7 @@ function checkProject(p, dts, cache) {
     compilerOptions: {
       paths: {
         '@thunderclap-engine/engine': [join(dts, 'index.d.ts')],
+        ...entryPaths(dts),
         '@thunderclap-engine/engine/*': [join(dts, '*', 'index.d.ts')],
       },
       // `types` resolve from the project, whose node_modules this config cannot see from the

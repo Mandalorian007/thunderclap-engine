@@ -33,9 +33,11 @@ import {
  * How one layer's pieces are drawn. `'splash'` (ws/fx-fit): rings on the occluding surface
  * (the flat height or the map) around the anchor; `length` is the ring's radius at its widest,
  * `speed` how many times a second each one replays, `height` unused. No surface (no flat height
- * and no map): none drawn.
+ * and no map): none drawn. `'leaf'` (ws/fx-fit): a falling blade (`length` long, `width` wide)
+ * turning and tumbling as it drifts down, with the flakes' `flutter`; a slow, short layer of
+ * them is the motes or petals of a still day.
  */
-export type PrecipShape = 'streak' | 'flake' | 'dust' | 'splash';
+export type PrecipShape = 'streak' | 'flake' | 'dust' | 'splash' | 'leaf';
 
 /** One precipitation layer: a volume of falling (or blowing) pieces around the anchor. */
 export interface PrecipLayer {
@@ -83,6 +85,22 @@ export interface WeatherOcclusionMap {
    * endless world. Default false: outside the rectangle only the flat height stops anything.
    */
   wrap?: boolean;
+  /**
+   * ws/fx-fit: how a texel becomes a height, `(floor ? floor(v) : v) * scale + offset`, so a
+   * game's own height texture (say a column's top with a fraction packed in) serves without a
+   * converted copy. Default `{ floor: false, scale: 1, offset: 0 }`: the texel is the height.
+   */
+  decode?: WeatherHeightDecode;
+}
+
+/** `WeatherOcclusionMap.decode`: a texel to a world height. */
+export interface WeatherHeightDecode {
+  /** Floor the texel first. Default false. */
+  floor?: boolean;
+  /** Default 1. */
+  scale?: number;
+  /** Height units added after the scale. Default 0. */
+  offset?: number;
 }
 
 export interface WeatherOptions extends Partial<WeatherConfig> {
@@ -171,7 +189,7 @@ export const WEATHER_DUST_STORM: WeatherConfig = {
   wind: [9, 3],
 };
 
-const SHAPES: Record<PrecipShape, number> = { streak: 0, flake: 1, dust: 2, splash: 3 };
+const SHAPES: Record<PrecipShape, number> = { streak: 0, flake: 1, dust: 2, splash: 3, leaf: 4 };
 
 /** Rain with splashes: `WEATHER_RAIN`'s streaks and rings where they land (ws/fx-fit). */
 export const WEATHER_RAIN_SPLASHES: WeatherConfig = {
@@ -378,6 +396,12 @@ export class Weather implements CoreDrawable {
     d[13] = map ? map.size[1] : 1;
     d[14] = this.nearFade;
     d[15] = this.light;
+    // The map's decode (its heights are read as the core's frame, as before).
+    const dec = map?.decode;
+    d[16] = dec?.floor ? 1 : 0;
+    d[17] = dec?.scale ?? 1;
+    d[18] = dec?.offset ?? 0;
+    d[19] = 0;
     const share = clamp01(this.intensity) * clamp01(this.density);
     let first = 0;
     for (let i = 0; i < WEATHER_MAX_LAYERS; i++) {

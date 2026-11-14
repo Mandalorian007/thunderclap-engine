@@ -165,8 +165,8 @@ struct FragOut {
 
 /** Particles per `Particle` struct below: 10 vec4 = 160 bytes. */
 export const FX_PARTICLE_FLOATS = 40;
-/** Floats per extended spawn record (`Spawn` below). */
-export const FX_SPAWN_FLOATS = 52;
+/** Floats per extended spawn record (`Spawn` below; 60 since ws/fx-fit: the emit axis and jitter). */
+export const FX_SPAWN_FLOATS = 60;
 /** Forces the extended sim block carries. */
 export const MAX_FORCES = 8;
 /** Floats of the extended sim block: 20 scalars + 8 forces × 3 vec4. */
@@ -216,7 +216,7 @@ struct Particle {
   wind: vec4f,    // wind xyz, emissive
   tile: vec4f,    // tile from, tile to, tile rate (fps, 0 = over life), flags (1 align to velocity)
   curve: vec4f,   // size slot, colour slot, death slot, life slot (-1 none)
-  sub: vec4f,     // death count, life rate, life carry, unused
+  sub: vec4f,     // death count, life rate, life carry, flutter (world units; ws/fx-fit)
 };
 struct Force {
   a: vec4f,       // kind (0 attract, 1 vortex, 2 turbulence, 3 drag), x, y, z
@@ -243,7 +243,7 @@ struct Sim {
   forceCount: f32,
   colorBase: f32,
   maxRequests: f32,
-  _pad: f32,
+  drawBase: f32,  // on the core: the ring slot of the draw's first instance (ws/fx-fit)
   forces: array<Force, ${MAX_FORCES}>,
 };
 `;
@@ -284,6 +284,8 @@ struct Spawn {
   i: vec4f,   // rotation min, max, spin min, max
   j: vec4f,   // size slot, colour slot, death slot, life slot
   k: vec4f,   // death count, life rate, mesh offset (vec4s), mesh triangles
+  l: vec4f,   // emit axis xyz, axis on (ws/fx-fit: replaces angle in world space)
+  m: vec4f,   // colour jitter, flutter, unused, unused
 };
 struct Req {
   pos: vec4f,   // xyz, slot
@@ -380,6 +382,7 @@ fn make(cmd: Spawn, origin: vec3f, inherit: vec3f, idx: u32, st: ptr<function, u
   let kind = cmd.a.w;
   let s = cmd.b.xyz;
   var axis = vec3f(cos(cmd.c.x), sin(cmd.c.x), 0.0);
+  if (cmd.l.w > 0.5) { axis = cmd.l.xyz; }
   if (kind > 0.5 && kind < 1.5) {
     let r = sqrt(rnd(st)) * s.x;
     let th = rnd(st) * 6.2831853;
@@ -420,6 +423,12 @@ fn make(cmd: Spawn, origin: vec3f, inherit: vec3f, idx: u32, st: ptr<function, u
   p.vel = vec4f(dir * speed + vec3f(0.0, 0.0, cmd.c.y) + inherit, spin);
   p.c0 = cmd.c0;
   p.c1 = cmd.c1;
+  // Drawn last, and only when asked for, so the other draws stay what they were.
+  if (cmd.m.x > 0.0) {
+    let j = max(1.0 + (rnd(st) * 2.0 - 1.0) * cmd.m.x, 0.0);
+    p.c0 = vec4f(p.c0.rgb * j, p.c0.a);
+    p.c1 = vec4f(p.c1.rgb * j, p.c1.a);
+  }
   if (cmd.j.x >= 0.0) {
     p.life = vec4f(0.0, max(life, 1e-3), sj, sj);
   } else {
@@ -430,10 +439,10 @@ fn make(cmd: Spawn, origin: vec3f, inherit: vec3f, idx: u32, st: ptr<function, u
   p.tile = cmd.h;
   if (child) {
     p.curve = vec4f(cmd.j.xy, -1.0, -1.0);
-    p.sub = vec4f(0.0);
+    p.sub = vec4f(0.0, 0.0, 0.0, cmd.m.y);
   } else {
     p.curve = cmd.j;
-    p.sub = vec4f(cmd.k.x, cmd.k.y, 0.0, 0.0);
+    p.sub = vec4f(cmd.k.x, cmd.k.y, 0.0, cmd.m.y);
   }
   particles[idx] = p;
 }
@@ -870,6 +879,18 @@ ${fxCommon(true)}
 @group(1) @binding(4) var sheet: texture_2d<f32>;
 @group(1) @binding(5) var sheet_samp: sampler;
 @group(1) @binding(6) var<storage, read> extras: array<CoreViewExtra>;
+// The ring slot of instance \`ii\`: the core draws the live window from \`sim.drawBase\` (ws/fx-fit).
+fn core_particle_slot(ii: u32) -> u32 {
+  return (u32(sim.drawBase) + ii) % max(u32(sim.capacity), 1u);
+}
+// A side-to-side sway of \`p.sub.w\` units (leaves), phased by the slot.
+fn flutter_at(p: Particle, slot: u32) -> vec3f {
+  let f = p.sub.w;
+  if (f <= 0.0) { return vec3f(0.0); }
+  let ph = f32(slot) * 2.39996;
+  let a = p.life.x;
+  return vec3f(sin(a * 4.1 + ph), 0.0, cos(a * 3.3 + ph * 1.7)) * f;
+}
 `;
 
 export const PARTICLE_CORE_RENDER_WGSL = /* wgsl */ `${PARTICLE_CORE_HEAD}
@@ -891,12 +912,13 @@ struct POut {
 ${FX_CURVES_WGSL}
 @vertex fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> PVOut {
   var o: PVOut;
-  let p = particles[ii];
+  let slot = core_particle_slot(ii);
+  let p = particles[slot];
   o.clip = vec4f(0.0, 0.0, 2.0, 1.0);
   if (p.life.x >= p.life.y) { return o; }
   let t = p.life.x / p.life.y;
   let size = max(size_at(p.curve.x, t, p.life.z, p.life.w), 0.0);
-  let centre = p.pos.xyz - view.origin.xyz;
+  let centre = p.pos.xyz - view.origin.xyz + flutter_at(p, slot);
   // Culled per view: out of this eye's frustum by more than its size.
   let reach = size + length(p.vel.xyz) * sim.stretch;
   for (var k = 0u; k < 6u; k++) {
@@ -982,8 +1004,11 @@ ${FX_CURVES_WGSL}
 }
 `;
 
-/** Floats of the lit-box particles' light block (`ParticlesOnCore` box mode, binding 7). */
-export const PARTICLE_BOX_LIGHT_FLOATS = 12;
+/**
+ * Floats of the lit-box particles' light block (`ParticlesOnCore` box mode, binding 7): sun
+ * direction, sun colour, ambient, fog (rgb, density) and fog range (near, far); 20 since ws/fx-fit.
+ */
+export const PARTICLE_BOX_LIGHT_FLOATS = 20;
 
 /**
  * ws/fx-fit: world particles on the render core as small lit cubes (voxel debris): 36 vertices
@@ -996,8 +1021,20 @@ struct BoxLight {
   sun_dir: vec4f,   // the light's travel direction xyz
   sun_color: vec4f, // linear rgb
   ambient: vec4f,   // linear rgb
+  fog: vec4f,       // rgb, density (0 none; ws/fx-fit)
+  fog_range: vec4f, // near, far (far > near linear, else exponential past near), unused, unused
 };
 @group(1) @binding(7) var<uniform> box_light: BoxLight;
+// Distance fog as \`Lights.fog\` shapes it (\`DistanceFog\`), from the eye distance \`d\`.
+fn box_fog(color: vec3f, d: f32) -> vec3f {
+  let density = box_light.fog.w;
+  if (density == 0.0) { return color; }
+  let near = box_light.fog_range.x;
+  let far = box_light.fog_range.y;
+  let linear = saturate((d - near) / max(far - near, 1e-4)) * saturate(density);
+  let expo = 1.0 - exp(-density * max(d - near, 0.0));
+  return mix(color, box_light.fog.rgb, select(expo, linear, far > near));
+}
 
 struct BVOut {
   @builtin(position) clip: vec4f,
@@ -1023,12 +1060,13 @@ fn box_turn(v: vec3f, a: f32) -> vec3f {
 
 @vertex fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> BVOut {
   var o: BVOut;
-  let p = particles[ii];
+  let slot = core_particle_slot(ii);
+  let p = particles[slot];
   o.clip = vec4f(0.0, 0.0, 2.0, 1.0);
   if (p.life.x >= p.life.y) { return o; }
   let t = p.life.x / p.life.y;
   let size = max(size_at(p.curve.x, t, p.life.z, p.life.w), 0.0);
-  let centre = p.pos.xyz - view.origin.xyz;
+  let centre = p.pos.xyz - view.origin.xyz + flutter_at(p, slot);
   for (var k = 0u; k < 6u; k++) {
     let pl = view.planes[k];
     if (dot(pl.xyz, centre) + pl.w < -size) { return o; }
@@ -1056,15 +1094,18 @@ fn box_turn(v: vec3f, a: f32) -> vec3f {
     n = vec3f(0.0, 0.0, side);
     local = vec3f(q.x, q.y * side, side);
   }
-  let world = centre + box_turn(local * (size * 0.5), p.pos.w);
+  // \`tile.xyz\` scales the edges: a box system keeps the per-emit scale there (1 a cube).
+  let world = centre + box_turn(local * p.tile.xyz * (size * 0.5), p.pos.w);
   let wn = box_turn(n, p.pos.w);
   o.clip = view.viewProj * vec4f(world, 1.0);
   var color = color_at(p.curve.y, t, p.c0, p.c1);
+  let eye = length(world - view.position.xyz);
   if (sim.fadeFar > sim.fadeNear) {
-    color.a *= 1.0 - smoothstep(sim.fadeNear, sim.fadeFar, length(world - view.position.xyz));
+    color.a *= 1.0 - smoothstep(sim.fadeNear, sim.fadeFar, eye);
   }
   let lambert = max(dot(wn, -box_light.sun_dir.xyz), 0.0);
-  o.color = vec4f(color.rgb * (box_light.ambient.rgb + box_light.sun_color.rgb * lambert), color.a);
+  let lit = color.rgb * (box_light.ambient.rgb + box_light.sun_color.rgb * lambert);
+  o.color = vec4f(box_fog(lit, eye), color.a);
   o.emissive = p.wind.w;
   return o;
 }

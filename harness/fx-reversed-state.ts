@@ -25,12 +25,29 @@ export interface HarnessFxReversedState {
   skyDraws: number;
   weatherInstances: number;
   drawables: number;
+  /**
+   * `?fit` (ws/fx-fit): the sky a member of the opaque pass with no `SkyLook` (hook only), the
+   * fountain in a game pass (`late`), the debris lit boxes with an emit axis, colour jitter, flutter
+   * and flat boxes, the weather eight layers (leaves among them) on a floored occlusion map.
+   */
+  fit: boolean;
+  /** Core render passes in the last frame (`core.stats.passes`). */
+  passes: number;
+  /** The fountain's and the debris' drawn particles (`ParticleSystem.drawCount`). */
+  particleDraws: number;
+  boxDraws: number;
+  /** Weather layers configured. */
+  weatherLayers: number;
+  /** The core's pass ids, in order. */
+  passOrder: string[];
 }
 
 export interface FxReversedSet {
   paused?: boolean;
   show?: Partial<Record<FxReversedEffect, boolean>>;
   skyTint?: [number, number, number];
+  /** Clear both particle systems (idle until the next emit). */
+  clear?: boolean;
 }
 
 export interface HarnessFxReversedApi {
