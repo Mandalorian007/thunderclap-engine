@@ -169,14 +169,14 @@ export class PipelineWarmer {
       const first = q[0]!;
       const pass = encoder.beginRenderPass({
         label: 'warm',
-        colorAttachments: first.color.map((f) =>
+        colorAttachments: first.color.map((f, slot) =>
           f === null
             ? null
-            : { view: this.scratch(f, first.samples), loadOp: 'clear', storeOp: 'discard' },
+            : { view: this.scratch(f, first.samples, slot), loadOp: 'clear', storeOp: 'discard' },
         ),
         depthStencilAttachment: first.depth
           ? {
-              view: this.scratch(first.depth, first.samples),
+              view: this.scratch(first.depth, first.samples, -1),
               ...(hasDepth(first.depth)
                 ? { depthLoadOp: 'clear', depthStoreOp: 'discard', depthClearValue: 1 }
                 : {}),
@@ -212,8 +212,9 @@ export class PipelineWarmer {
     this.vertexScratch = null;
   }
 
-  private scratch(format: GPUTextureFormat, samples: number): GPUTextureView {
-    const key = `${format}|${samples}`;
+  /** A 1×1 attachment per format, sample count and slot (two slots of one format can't share). */
+  private scratch(format: GPUTextureFormat, samples: number, slot: number): GPUTextureView {
+    const key = `${format}|${samples}|${slot}`;
     let v = this.textures.get(key);
     if (!v) {
       v = this.device

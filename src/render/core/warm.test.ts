@@ -276,6 +276,21 @@ describe('pipeline warming (ws/warm-voxel-fit)', () => {
     expect(fake.errors).toEqual([]);
   });
 
+  it('two colour attachments of one format get distinct scratch views', () => {
+    const fake = createFakeDevice();
+    const device = fake.device as unknown as GPUDevice;
+    const w = pipelineWarmer(device);
+    w.warm(device.createRenderPipeline({} as GPURenderPipelineDescriptor), {
+      color: ['rgba16float', 'rgba16float'],
+      depth: 'depth24plus',
+    });
+    w.encode(fake.device.createCommandEncoder() as unknown as GPUCommandEncoder);
+    const d = fake.warmPasses[0]!.desc as GPURenderPassDescriptor;
+    const [a, b] = [...d.colorAttachments].map((x) => x!.view);
+    expect(formatsOf(fake.warmPasses[0]!).color).toEqual(['rgba16float', 'rgba16float']);
+    expect(a).not.toBe(b);
+  });
+
   it("a fullscreen pass's warm binds scratch views of each slot's dimension, never its unset ones", () => {
     const fake = createFakeDevice();
     const device = fake.device as unknown as GPUDevice;
