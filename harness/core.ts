@@ -17,6 +17,12 @@
  *
  * `?sky` (ws/core-passes) adds the sky as a core pass (`createSkyPass`): the dome drawn after
  * the boxes in the view, behind them by depth, from the core's own view; it survives `lose()`.
+ *
+ * `?stall` (ws/warm-voxel-fit) makes a second draw set at load with a large fragment shader
+ * (unique per load, so no shader cache holds it) and leaves it empty; at frame 30 it gets one
+ * box, so its pipeline is first drawn mid-run. The core warms it at load (an empty draw), so the
+ * frame it appears is an ordinary one; `?nowarm` turns warming off (`warm: false`) to show the
+ * stall WebKit takes compiling it at that first draw.
  */
 import { createSkyPass } from '@thunderclap-engine/engine/fx';
 import { boot, restoreGpu } from '@thunderclap-engine/engine/platform';
@@ -40,6 +46,10 @@ const still = params.has('still');
 /** How far out the scene sits on x and z, metres (0: at the origin). */
 const far = Math.max(0, Number(params.get('far') ?? 0) || 0);
 const withSky = params.has('sky');
+const stall = params.has('stall');
+const warm = !params.has('nowarm');
+/** The frame the `?stall` set gets its box. */
+const LATE_FRAME = 30;
 
 const state: HarnessCoreState = {
   ready: false,
@@ -61,6 +71,9 @@ const state: HarnessCoreState = {
   restores: 0,
   restoredEvents: 0,
   skyDraws: 0,
+  lateFrame: 0,
+  lateStallMs: 0,
+  warmed: 0,
 };
 let lose: () => Promise<void> = async () => {
   throw new Error('core page not ready');
@@ -109,6 +122,29 @@ const NORMALS = array<vec3f, 6>(
 @fragment fn fs(in: Out) -> @location(0) vec4f { return vec4f(in.color, 1.0); }
 `;
 
+/**
+ * `?stall`'s shader: the box shader with a long fragment loop unrolled by hand (a few hundred
+ * distinct terms), salted per load so a shader cache cannot hold it: slow to compile.
+ */
+function lateShader(): string {
+  const salt = (Math.random() * 1e6) | 0;
+  const terms: string[] = [];
+  for (let i = 0; i < 400; i++) {
+    const k = (i * 0.6180339 + salt * 1e-6).toFixed(7);
+    terms.push(`  a = fract(sin(a * ${k} + vec3f(${i}.0, ${salt % 997}.0, b.x)) * 43758.5453);`);
+    terms.push(`  b = b * 0.97 + vec2f(dot(a, vec3f(${k})), cos(b.y + ${k}));`);
+  }
+  return SHADER.replace(
+    '@fragment fn fs(in: Out) -> @location(0) vec4f { return vec4f(in.color, 1.0); }',
+    `@fragment fn fs(in: Out) -> @location(0) vec4f {
+  var a = in.color;
+  var b = in.clip.xy * 0.001;
+${terms.join('\n')}
+  return vec4f(mix(in.color, a, 0.001 * b.x), 1.0);
+}`,
+  );
+}
+
 /** The 24 corners of a box's six faces, counter-clockwise from outside, packed with `color`. */
 function boxVertices(color: number): Uint32Array {
   // Each face: four corners as xyz bits, in quad order (0, 1, 2, 3 → triangles 0 1 2, 0 2 3).
@@ -149,7 +185,7 @@ async function main(): Promise<void> {
   }
   const { surface, gpu } = res;
   installGpuErrorLogging(gpu.device);
-  const core = createRenderCore(gpu, far > 0 ? { originGrid: 1024 } : {});
+  const core = createRenderCore(gpu, { ...(far > 0 ? { originGrid: 1024 } : {}), warm });
   const sky = withSky
     ? createSkyPass(core, {
         zenith: [0.18, 0.36, 0.78],
@@ -216,6 +252,22 @@ async function main(): Promise<void> {
     });
   }
 
+  // `?stall`: the late set, made now and empty, its first box added at LATE_FRAME.
+  const late = stall
+    ? core.createDrawSet({
+        label: 'late',
+        shader: { code: lateShader() },
+        vertexLayout: PACKED,
+        instanceLayout: PLACE,
+        vertices,
+        instances,
+        capacity: 16,
+        kind: 'static',
+        cull: 'gpu',
+      })
+    : null;
+  let lateLast = 0;
+
   const camera = Camera.perspective(Math.PI / 3, 16 / 9, 0.5, 2000);
   const view = createRenderView();
   const views = [view];
@@ -254,6 +306,26 @@ async function main(): Promise<void> {
 
   const frame = () => {
     if (paused) return;
+    if (late) {
+      const now = performance.now();
+      if (state.lateFrame > 0 && state.frames <= state.lateFrame + 10) {
+        state.lateStallMs = Math.max(state.lateStallMs, now - lateLast);
+      }
+      lateLast = now;
+      if (state.frames === LATE_FRAME) {
+        const v = vertices.alloc(24 * 8, 8);
+        vertices.write(v, boxVertices(0xff40c0ff));
+        const inst = instances.alloc(16, 16);
+        instances.write(inst, new Float32Array([0, 0, 8, 12]));
+        late.add({
+          vertices: v,
+          indexCount: 36,
+          instances: inst,
+          bounds: Float32Array.of(0, 6, 0, 12),
+        });
+        state.lateFrame = LATE_FRAME;
+      }
+    }
     const t = still ? 0 : (performance.now() - start) / 1000;
     const { width, height } = surface.backbuffer;
     camera.setPerspective(Math.PI / 3, width / Math.max(1, height), 0.5, 2000);
@@ -277,6 +349,7 @@ async function main(): Promise<void> {
     core.prepare(encoder, views);
     core.draw(encoder, 0, target);
     state.skyDraws = sky ? sky.draws : 0;
+    state.warmed = core.warmer.warmed;
     gpu.device.queue.submit([encoder.finish()]);
     times.push(performance.now() - t0);
     if (times.length > 60) times.shift();

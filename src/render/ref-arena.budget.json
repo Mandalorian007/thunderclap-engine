@@ -1,12 +1,12 @@
 {
   "rows": {
     "ref-arena": {
-      "commands": 252.25,
+      "commands": 246.25,
       "draw": 13,
       "drawIndexed": 39.375,
       "setPipeline": 48.6,
       "setBindGroup": 49.6,
-      "setVertexBuffer": 38.45,
+      "setVertexBuffer": 34.45,
       "beginRenderPass": 15,
       "beginComputePass": 0,
       "dispatch": 0,
@@ -27,12 +27,12 @@
   "parts": {
     "ref-arena": {
       "view": {
-        "commands": 177.25,
+        "commands": 171.25,
         "draw": 0,
         "drawIndexed": 39.375,
         "setPipeline": 35.6,
         "setBindGroup": 36.6,
-        "setVertexBuffer": 38.45,
+        "setVertexBuffer": 34.45,
         "beginRenderPass": 2,
         "beginComputePass": 0,
         "dispatch": 0,

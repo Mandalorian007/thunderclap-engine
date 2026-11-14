@@ -78,12 +78,14 @@ function scene(opts: RenderCoreOptions = {}, writes?: ('emissive' | 'velocity')[
     const enc = fake.device.createCommandEncoder();
     const begin = enc.beginRenderPass.bind(enc);
     enc.beginRenderPass = (desc: GPURenderPassDescriptor) => {
-      passes.push({
-        label: desc.label,
-        attachments: [...desc.colorAttachments].map((a) =>
-          a ? { view: a.view, loadOp: a.loadOp } : null,
-        ),
-      });
+      // The warmer's scratch passes (ws/warm-voxel-fit) are not the frame's.
+      if (desc.label !== 'warm')
+        passes.push({
+          label: desc.label,
+          attachments: [...desc.colorAttachments].map((a) =>
+            a ? { view: a.view, loadOp: a.loadOp } : null,
+          ),
+        });
       return begin(desc);
     };
     return enc;

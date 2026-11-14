@@ -424,6 +424,15 @@ export class Weather implements CoreDrawable {
     }
   }
 
+  /** Its pipeline's empty first draw (`CoreDrawable.warm`, ws/warm-voxel-fit). */
+  warm(enc: GPURenderPassEncoder, ctx: CoreDrawContext): number {
+    enc.setPipeline(this.pipes.get(ctx));
+    enc.setBindGroup(0, ctx.viewGroup);
+    enc.setBindGroup(1, this.bindGroup());
+    enc.draw(0);
+    return 4;
+  }
+
   record(enc: CoreDrawableEncoder, ctx: CoreDrawContext): number {
     enc.setPipeline(this.pipes.get(ctx));
     enc.setBindGroup(0, ctx.viewGroup);

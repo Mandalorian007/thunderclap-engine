@@ -102,6 +102,12 @@ export {
   VIEW_SLOT_BYTES,
   VIEW_SLOT_FLOATS,
 } from './core/view';
+export {
+  CoreShadowMap,
+  type CoreShadowSource,
+  CoreSunShadow,
+  coreSunShadowWgsl,
+} from './core-shadow';
 export { gpuDiagnostics, installGpuErrorLogging, onGpuError, reportGpuError } from './diagnostics';
 export {
   DynamicResolution,
@@ -211,13 +217,7 @@ export {
   type SceneTargetDesc,
   VELOCITY_FORMAT,
 } from './scene-target';
-export {
-  CoreSunShadow,
-  coreSunShadowWgsl,
-  DEFAULT_SHADOW_SIZE,
-  SHADOW_FORMAT,
-  ShadowMap,
-} from './shadow';
+export { DEFAULT_SHADOW_SIZE, SHADOW_FORMAT, ShadowMap } from './shadow';
 export type { SkinPaletteDesc } from './skin';
 export { JOINT_FLOATS, SkinPalette, setVertexSkin } from './skin';
 export { type SnapshotOptions, SnapshotRenderer } from './snapshot';

@@ -114,7 +114,7 @@ const CORE_VIEW_EXTRA_WGSL = "\nstruct CoreViewExtra {\n  invViewProj: mat4x4f,\
 const CORE_VIEW_WGSL = "\nstruct CoreView {\n  viewProj: mat4x4f,\n  position: vec4f,\n  planes: array<vec4f, 6>,\n  index: u32,\n  _a: u32,\n  _b: u32,\n  _c: u32,\n  origin: vec4f,\n  prevRows: array<vec4f, 3>,\n};\n\nfn core_velocity(v: CoreView, p: vec3f) -> vec2f {\n  let q = vec4f(p, 1.0);\n  let c = v.viewProj * q;\n  let pw = dot(v.prevRows[2], q);\n  if (pw <= 0.0 || c.w <= 0.0) { return vec2f(0.0); }\n  let pn = vec2f(dot(v.prevRows[0], q), dot(v.prevRows[1], q)) / pw;\n  return (c.xy / c.w - pn) * vec2f(0.5, -0.5);\n}\n";
 
 ## CULL_WGSL
-const CULL_WGSL = "\nstruct CoreView {\n  viewProj: mat4x4f,\n  position: vec4f,\n  planes: array<vec4f, 6>,\n  index: u32,\n  _a: u32,\n  _b: u32,\n  _c: u32,\n  origin: vec4f,\n  prevRows: array<vec4f, 3>,\n};\n\nfn core_velocity(v: CoreView, p: vec3f) -> vec2f {\n  let q = vec4f(p, 1.0);\n  let c = v.viewProj * q;\n  let pw = dot(v.prevRows[2], q);\n  if (pw <= 0.0 || c.w <= 0.0) { return vec2f(0.0); }\n  let pn = vec2f(dot(v.prevRows[0], q), dot(v.prevRows[1], q)) / pw;\n  return (c.xy / c.w - pn) * vec2f(0.5, -0.5);\n}\n\nstruct CullParams { count: u32, capacity: u32, views: u32, firstInstance: u32, maxDistance: f32, _a: u32, _b: u32, _c: u32 };\nstruct Slot { sphere: vec4f, draw: vec4u, inst: vec4u };\n@group(0) @binding(0) var<uniform> views: array<CoreView, 8>;\n@group(0) @binding(1) var<uniform> params: CullParams;\n@group(0) @binding(2) var<storage, read> slots: array<Slot>;\n@group(0) @binding(3) var<storage, read_write> args: array<u32>;\n\n@compute @workgroup_size(64) fn cs_cull(@builtin(global_invocation_id) id: vec3u) {\n  let i = id.x;\n  let v = id.y;\n  if (i >= params.count || v >= params.views) { return; }\n  let s = slots[i];\n  var visible = (s.inst.y & 3u) == 1u;\n  for (var k = 0u; k < 6u; k++) {\n    let p = views[v].planes[k];\n    if (dot(p.xyz, s.sphere.xyz) + p.w < -s.sphere.w) { visible = false; }\n  }\n  if (params.maxDistance > 0.0 && length(s.sphere.xyz - views[v].position.xyz) - s.sphere.w > params.maxDistance) {\n    visible = false;\n  }\n  let o = (v * params.capacity + i) * 5u;\n  args[o] = s.draw.x;\n  args[o + 1u] = select(0u, s.draw.w, visible);\n  args[o + 2u] = s.draw.y;\n  args[o + 3u] = s.draw.z;\n  args[o + 4u] = select(0u, s.inst.x, params.firstInstance != 0u);\n}\n";
+const CULL_WGSL = "\nstruct CoreView {\n  viewProj: mat4x4f,\n  position: vec4f,\n  planes: array<vec4f, 6>,\n  index: u32,\n  _a: u32,\n  _b: u32,\n  _c: u32,\n  origin: vec4f,\n  prevRows: array<vec4f, 3>,\n};\n\nfn core_velocity(v: CoreView, p: vec3f) -> vec2f {\n  let q = vec4f(p, 1.0);\n  let c = v.viewProj * q;\n  let pw = dot(v.prevRows[2], q);\n  if (pw <= 0.0 || c.w <= 0.0) { return vec2f(0.0); }\n  let pn = vec2f(dot(v.prevRows[0], q), dot(v.prevRows[1], q)) / pw;\n  return (c.xy / c.w - pn) * vec2f(0.5, -0.5);\n}\n\nstruct CullParams { count: u32, capacity: u32, views: u32, firstInstance: u32, maxDistance: f32, groupMask: u32, groupFirst: u32, _c: u32 };\nstruct Slot { sphere: vec4f, draw: vec4u, inst: vec4u };\n@group(0) @binding(0) var<uniform> views: array<CoreView, 8>;\n@group(0) @binding(1) var<uniform> params: CullParams;\n@group(0) @binding(2) var<storage, read> slots: array<Slot>;\n@group(0) @binding(3) var<storage, read_write> args: array<u32>;\n\n@compute @workgroup_size(64) fn cs_cull(@builtin(global_invocation_id) id: vec3u) {\n  let i = id.x;\n  let v = id.y + params.groupFirst;\n  if (i >= params.count || v >= params.views || ((params.groupMask >> v) & 1u) == 0u) { return; }\n  let s = slots[i];\n  var visible = (s.inst.y & 3u) == 1u;\n  for (var k = 0u; k < 6u; k++) {\n    let p = views[v].planes[k];\n    if (dot(p.xyz, s.sphere.xyz) + p.w < -s.sphere.w) { visible = false; }\n  }\n  if (params.maxDistance > 0.0 && length(s.sphere.xyz - views[v].position.xyz) - s.sphere.w > params.maxDistance) {\n    visible = false;\n  }\n  let o = (v * params.capacity + i) * 5u;\n  args[o] = s.draw.x;\n  args[o + 1u] = select(0u, s.draw.w, visible);\n  args[o + 2u] = s.draw.y;\n  args[o + 3u] = s.draw.z;\n  args[o + 4u] = select(0u, s.inst.x, params.firstInstance != 0u);\n}\n";
 
 ## Camera
 class Camera {
@@ -236,6 +236,7 @@ interface CoreDrawable {
     readonly bounds?: ArrayLike<number> | null;
     prepare?(encoder: GPUCommandEncoder, core: RenderCore): void;
     record(enc: CoreDrawableEncoder, ctx: CoreDrawContext): number;
+    warm?(enc: GPURenderPassEncoder, ctx: CoreDrawContext): number;
 }
 
 ## CoreDrawableEncoder  (type-only)
@@ -297,6 +298,34 @@ interface CoreResolveContext {
     reversedZ: boolean;
 }
 
+## CoreShadowMap
+class CoreShadowMap implements CoreShadowSource {
+    readonly sampler: GPUSampler;
+    readonly uniforms: {
+        viewProj: Float32Array;
+        bias: number;
+        texelSize: number;
+    };
+    size: number;
+    generation: number;
+    readonly target: {
+        view: GPUTextureView;
+        format: GPUTextureFormat;
+    };
+    constructor(device: GPUDevice, size?: number, bias?: number);
+    get view(): GPUTextureView;
+    resize(size: number): void;
+    destroy(): void;
+}
+
+## CoreShadowSource  (type-only)
+interface CoreShadowSource {
+    readonly generation: number;
+    readonly view: GPUTextureView;
+    readonly sampler: GPUSampler;
+    readonly uniforms: ShadowUniforms;
+}
+
 ## CoreShadowTarget  (type-only)
 interface CoreShadowTarget {
     view: GPUTextureView;
@@ -316,13 +345,14 @@ interface CoreStats {
     bundleBuilds: number;
     bundleCalls: number;
     deferredBuilds: number;
+    warmed: number;
 }
 
 ## CoreSunShadow
 class CoreSunShadow {
     readonly layout: GPUBindGroupLayout;
     get version(): number;
-    constructor(device: GPUDevice, shadow: ShadowMap);
+    constructor(device: GPUDevice, shadow: CoreShadowSource);
     get group(): GPUBindGroup;
     write(on: boolean, origin: ArrayLike<number>): void;
 }
@@ -445,6 +475,7 @@ class DrawSet {
     readonly castShadow: boolean;
     maxDistance: number;
     enabled: boolean;
+    cullGroups: number;
     readonly joins: readonly PassMember[];
     version: number;
     staleFrame: number;
@@ -472,6 +503,8 @@ class DrawSet {
     dispatch(pass: GPUComputePassEncoder, groups: number): void;
     encoding(): Encoding;
     bundle(group: number, color: GPUTextureFormat | null, depth: GPUTextureFormat | undefined, readOnly: boolean, aux?: number, variant?: number, pass?: CorePass): GPURenderBundle;
+    inView(group: number): boolean;
+    warm(warmer: PipelineWarmer, group: number, color: GPUTextureFormat | null, depth: GPUTextureFormat | undefined, aux?: number, variant?: number, pass?: CorePass): number;
     encodeDirect(pass: GPURenderPassEncoder, group: number, color: GPUTextureFormat | null, depth: GPUTextureFormat | undefined, aux?: number, variant?: number, joined?: CorePass): void;
     waitsForTurn(): boolean;
 }
@@ -506,6 +539,7 @@ interface DrawSetDesc {
     passes?: readonly DrawSetPassJoin[];
     maxDistance?: number;
     enabled?: boolean;
+    cullGroups?: number;
 }
 
 ## DrawSetKind  (type-only)
@@ -1256,6 +1290,8 @@ class RenderCore {
     get castsShadow(): boolean;
     get hasWork(): boolean;
     onDeviceRestored(fn: (device: GPUDevice) => void): () => void;
+    get warmer(): PipelineWarmer;
+    warm(pipeline: GPURenderPipeline, target?: WarmTarget): void;
     createDrawSet(desc: DrawSetDesc): DrawSet;
     removeDrawSet(set: DrawSet): void;
     addDrawable(d: CoreDrawable): void;
@@ -1285,6 +1321,8 @@ interface RenderCoreOptions {
     targets?: readonly CoreTargetName[];
     reversedZ?: boolean;
     passLabels?: boolean;
+    warm?: boolean;
+    shadowFormat?: GPUTextureFormat;
 }
 
 ## RenderStats  (type-only)

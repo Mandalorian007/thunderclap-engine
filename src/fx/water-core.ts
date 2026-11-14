@@ -14,6 +14,7 @@ import {
   type CoreDrawContext,
   CoreViewExtras,
   DrawablePipelines,
+  warmBindings,
 } from '../render/core/drawable';
 import { coreDepthCompare } from '../render/core/pass-list';
 import { CORE_TARGET, coreColorTargets } from '../render/core/targets';
@@ -146,6 +147,17 @@ export class WaterOnCore implements CoreDrawable {
     b[13] = Math.max(0, Math.floor(w.reflectionSteps));
     b[14] = w.reflectionReach;
     this.core.device.queue.writeBuffer(this.blockBuffer, 0, b);
+  }
+
+  /** Its pipeline's empty first draw (`CoreDrawable.warm`, ws/warm-voxel-fit). */
+  warm(enc: GPURenderPassEncoder, ctx: CoreDrawContext): number {
+    enc.setPipeline(this.pipes.get(ctx));
+    enc.setBindGroup(0, ctx.viewGroup);
+    enc.setBindGroup(1, this.bindGroup());
+    let calls = 4;
+    calls += warmBindings(enc, ctx, 1);
+    enc.draw(0);
+    return calls;
   }
 
   record(enc: CoreDrawableEncoder, ctx: CoreDrawContext): number {

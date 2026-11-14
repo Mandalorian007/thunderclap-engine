@@ -17,6 +17,7 @@ import {
   type CoreDrawContext,
   CoreViewExtras,
   DrawablePipelines,
+  warmBindings,
 } from '../render/core/drawable';
 import { coreDepthCompare } from '../render/core/pass-list';
 import { coreColorTargets } from '../render/core/targets';
@@ -251,6 +252,17 @@ export class DecalsOnCore implements CoreDrawable {
     p[20] = src.fade[0];
     p[21] = src.fade[1];
     g.device.queue.writeBuffer(g.params, 0, p);
+  }
+
+  /** Its pipeline's empty first draw (`CoreDrawable.warm`, ws/warm-voxel-fit). */
+  warm(enc: GPURenderPassEncoder, ctx: CoreDrawContext): number {
+    enc.setPipeline(this.pipes.get(ctx));
+    enc.setBindGroup(0, ctx.viewGroup);
+    enc.setBindGroup(1, this.bindGroup());
+    let calls = 4;
+    calls += warmBindings(enc, ctx, 2);
+    enc.draw(0);
+    return calls;
   }
 
   record(enc: CoreDrawableEncoder, ctx: CoreDrawContext): number {

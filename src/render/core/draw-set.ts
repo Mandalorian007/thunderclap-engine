@@ -36,6 +36,7 @@ import type { BufferLayout } from './layout';
 import { type CorePass, coreDepthCompare } from './pass-list';
 import { type CoreTargetName, coreColorFormats, coreColorTargets, coreTargetMask } from './targets';
 import { CORE_VIEW_WGSL, sphereInPlanes, VIEW_SLOT } from './view';
+import type { PipelineWarmer } from './warm';
 
 /**
  * How a set's slots are culled. `'auto'` is `'gpu'` from 256 slots of capacity, else `'cpu'`.
@@ -192,6 +193,13 @@ export interface DrawSetDesc {
   maxDistance?: number;
   /** Draw at all (default true; `DrawSet.enabled`). */
   enabled?: boolean;
+  /**
+   * The cull groups the set is culled and drawn for (ws/warm-voxel-fit; `DrawSet.cullGroups`), a
+   * bit per group (bit `g`: the `g`th group `prepare` was given). Default all. Casters culled
+   * only for the sun's group, colour sets only for the eyes': each set's cull dispatch covers its
+   * groups alone, and a view of another group (or `drawShadow` of one) skips the set.
+   */
+  cullGroups?: number;
 }
 
 /** One slot: a draw's geometry, instances and bounds. */
@@ -284,6 +292,11 @@ export interface CoreStats {
    * (`RenderCoreOptions.rebuildsPerFrame`); each is re-recorded on a later frame.
    */
   deferredBuilds: number;
+  /**
+   * Pipelines queued for their empty first draw this frame (ws/warm-voxel-fit;
+   * `RenderCoreOptions.warm`): empty or disabled sets, idle casters, inactive drawables.
+   */
+  warmed: number;
 }
 
 /** The shape of `multiDrawIndexedIndirect` (Chromium's experimental feature). */
@@ -314,6 +327,8 @@ interface BundleEntry {
 }
 
 interface PipelineEntry {
+  /** It has had a draw (a real one, or its empty warm draw; ws/warm-voxel-fit). */
+  warm: boolean;
   color: GPUTextureFormat | null;
   depth: GPUTextureFormat | undefined;
   depthWrite: boolean;
@@ -375,6 +390,18 @@ class SetJoin implements PassMember {
   ): void {
     this.set.encodeDirect(pass, group, color, depth, aux, this.variant, this.pass);
   }
+  inView(group: number): boolean {
+    return this.set.inView(group);
+  }
+  warm(
+    warmer: PipelineWarmer,
+    group: number,
+    color: GPUTextureFormat,
+    depth: GPUTextureFormat | undefined,
+    aux: number,
+  ): number {
+    return this.set.warm(warmer, group, color, depth, aux, this.variant, this.pass);
+  }
 }
 
 /** How a frame draws a set. */
@@ -404,6 +431,11 @@ export class DrawSet {
    * draws nothing, in any pass or the shadow.
    */
   enabled: boolean;
+  /**
+   * The cull groups the set is culled and drawn for (ws/warm-voxel-fit;
+   * `DrawSetDesc.cullGroups`): a bit per group, default all (-1, every bit; kept as an int32).
+   */
+  cullGroups: number;
   /** @internal The set's extra pass memberships (`DrawSetDesc.passes`). */
   readonly joins: readonly PassMember[];
   /** Bumped when the slot set changes (a static set's bundles are rebuilt). */
@@ -457,6 +489,11 @@ export class DrawSet {
   private readonly params = new Uint32Array(CULL_PARAMS_BYTES / 4);
   private readonly paramsF32 = new Float32Array(this.params.buffer);
   private paramsDistance = -1;
+  /** The mask last uploaded (int32; a value `cullGroups` never has until the first upload). */
+  private paramsMask = 0;
+  private paramsMaskSet = false;
+  /** The shadow format the depth-only pipeline was warmed (or drawn) in; null when it was not. */
+  private shadowWarmed: GPUTextureFormat | null | undefined = null;
   /** Index 0: the set's own shader; then `desc.variants` in key order. */
   private readonly variants: VariantState[] = [];
   /** The variant, pass and depth write of the draw being recorded. */
@@ -529,6 +566,7 @@ export class DrawSet {
       desc.castShadow ?? (this.depth && this.pass.depth === 'write' && !desc.shader.blend);
     this.maxDistance = desc.maxDistance ?? 0;
     this.enabled = desc.enabled ?? true;
+    this.cullGroups = (desc.cullGroups ?? -1) | 0;
     this.usePass = this.pass;
     this.variants.push({
       name: '',
@@ -684,6 +722,7 @@ ${il?.wgslDecode ?? ''}
     if (this.destroyed) return;
     this.bundles.length = 0;
     this.pipelines.length = 0;
+    this.shadowWarmed = null;
     this.recorded.fill(-1);
     this.paramsViews = -1;
     this.paramsCount = -1;
@@ -731,6 +770,7 @@ ${il?.wgslDecode ?? ''}
         bindGroupLayouts: [this.host.viewLayout, ...groups.map((g) => g.layout)],
       });
       this.pipelines.length = 0;
+      this.shadowWarmed = null;
     }
     this.bundles.length = 0;
     this.bump();
@@ -895,21 +935,29 @@ ${il?.wgslDecode ?? ''}
     }
     const first = this.useMulti() ? 1 : 0;
     const dist = Math.max(this.maxDistance, 0);
+    const mask = this.cullGroups | 0;
     if (
+      !this.paramsMaskSet ||
       views !== this.paramsViews ||
       this.high !== this.paramsCount ||
       first !== this.paramsFirst ||
-      dist !== this.paramsDistance
+      dist !== this.paramsDistance ||
+      mask !== this.paramsMask
     ) {
       this.paramsViews = views;
       this.paramsCount = this.high;
       this.paramsFirst = first;
       this.paramsDistance = dist;
+      this.paramsMask = mask;
+      this.paramsMaskSet = true;
       this.params[0] = this.high;
       this.params[1] = this.capacity;
       this.params[2] = views;
       this.params[3] = first;
       this.paramsF32[4] = dist;
+      this.params[5] = mask;
+      // The first group the dispatch covers (its workgroup y 0): the mask's lowest bit.
+      this.params[6] = mask === 0 ? 0 : 31 - Math.clz32(mask & -mask);
       device.queue.writeBuffer(this.paramsBuffer, 0, this.params);
       stats.calls++;
     }
@@ -918,8 +966,13 @@ ${il?.wgslDecode ?? ''}
   /** @internal Dispatch the cull for `groups` cull groups into an open compute pass. */
   dispatch(pass: GPUComputePassEncoder, groups: number): void {
     if (!this.cullGroup || this.high === 0) return;
+    // Only the groups of `cullGroups`: from its lowest bit to its highest below `groups`.
+    const mask = this.cullGroups | 0;
+    const lo = mask === 0 ? 0 : 31 - Math.clz32(mask & -mask);
+    const hi = Math.min(groups, 32 - Math.clz32(mask));
+    if (hi <= lo) return;
     pass.setBindGroup(0, this.cullGroup);
-    pass.dispatchWorkgroups(Math.ceil(this.high / CULL_WORKGROUP), groups);
+    pass.dispatchWorkgroups(Math.ceil(this.high / CULL_WORKGROUP), hi - lo);
     this.host.stats.calls += 2;
     this.host.stats.dispatches++;
   }
@@ -1018,6 +1071,55 @@ ${il?.wgslDecode ?? ''}
     }
     this.staleFrame = -1;
     return bundle;
+  }
+
+  /** @internal Whether cull group `group` is one of `cullGroups`. */
+  inView(group: number): boolean {
+    return ((this.cullGroups >>> group) & 1) !== 0;
+  }
+
+  /**
+   * @internal Queue the empty first draw (ws/warm-voxel-fit) of the pipeline this set would
+   * draw with into a target of these formats (`color` null: the shadow's), unless a draw (real
+   * or warm) has used it. Made now if it does not exist. Returns 1 when queued, else 0. A set
+   * waiting for its bind groups is skipped (it is warmed once they come).
+   */
+  warm(
+    warmer: PipelineWarmer,
+    group: number,
+    color: GPUTextureFormat | null,
+    depth: GPUTextureFormat | undefined,
+    aux = 0,
+    variant = -1,
+    pass: CorePass = this.pass,
+  ): number {
+    if (this.waiting || this.destroyed || !warmer.enabled) return 0;
+    if (color === null && this.shadowWarmed === depth) return 0;
+    // The real draws' state (aux, pass, variant) is put back: a warm is not a draw.
+    const aux0 = this.aux;
+    const pass0 = this.usePass;
+    const variant0 = this.useVariant;
+    this.aux = color === null ? 0 : aux;
+    this.use(color, variant, pass);
+    const e = this.pipelineEntry(color, depth);
+    this.aux = aux0;
+    this.usePass = pass0;
+    this.useVariant = variant0;
+    if (color === null) this.shadowWarmed = depth;
+    if (e.warm) return 0;
+    e.warm = true;
+    queueSetWarm(
+      warmer,
+      e.pipeline,
+      this.host.drawGroup(group),
+      this.depthOnly(color) ? null : this.bindGroups,
+      (this.vertexSlot >= 0 ? 1 : 0) +
+        (this.desc.instanceLayout ? 1 : 0) +
+        (this.originBuffer ? 1 : 0),
+      color === null ? [] : coreColorFormats(color, aux),
+      depth,
+    );
+    return 1;
   }
 
   /** @internal Encode cull group `group`'s draws into an open render pass (dynamic, CPU, multi). */
@@ -1355,6 +1457,16 @@ ${il?.wgslDecode ?? ''}
     color: GPUTextureFormat | null,
     depth: GPUTextureFormat | undefined,
   ): GPURenderPipeline {
+    const e = this.pipelineEntry(color, depth);
+    e.warm = true;
+    return e.pipeline;
+  }
+
+  /** The pipeline (made on first use) for these formats and the `use`d variant and pass. */
+  private pipelineEntry(
+    color: GPUTextureFormat | null,
+    depth: GPUTextureFormat | undefined,
+  ): PipelineEntry {
     // A null colour is the depth-only shadow pipeline (`RenderCore.drawShadow`): depth written.
     const depthWrite = color === null || this.usePass.depth === 'write';
     const vi = this.useVariant;
@@ -1369,7 +1481,7 @@ ${il?.wgslDecode ?? ''}
         p.variant === vi &&
         p.reversed === reversed
       ) {
-        return p.pipeline;
+        return p;
       }
     }
     const d = this.desc;
@@ -1439,7 +1551,8 @@ ${il?.wgslDecode ?? ''}
               ? { format: depth, depthWriteEnabled: false, depthCompare: 'always' }
               : undefined,
     });
-    this.pipelines.push({
+    const entry: PipelineEntry = {
+      warm: false,
       color,
       depth,
       depthWrite,
@@ -1447,8 +1560,9 @@ ${il?.wgslDecode ?? ''}
       variant: vi,
       reversed,
       pipeline,
-    });
-    return pipeline;
+    };
+    this.pipelines.push(entry);
+    return entry;
   }
 
   /** The depth-only shadow pipeline with no fragment stage: the view group alone. */
@@ -1584,4 +1698,32 @@ ${il?.wgslDecode ?? ''}
     stats.calls += calls;
     stats.directDraws += draws;
   }
+}
+
+/**
+ * Queue a draw set's empty first draw (`DrawSet.warm`). Its own function: the closure's context
+ * is then made only when a warm is queued, not on every call of `warm` (no per-frame garbage).
+ */
+function queueSetWarm(
+  warmer: PipelineWarmer,
+  pipeline: GPURenderPipeline,
+  bind: GPUBindGroup,
+  extra: readonly { group: GPUBindGroup }[] | null,
+  vbs: number,
+  color: (GPUTextureFormat | null)[],
+  depth: GPUTextureFormat | undefined,
+): void {
+  warmer.job({ color, depth }, (enc) => {
+    enc.setPipeline(pipeline);
+    enc.setBindGroup(0, bind);
+    let calls = 2;
+    if (extra) {
+      for (let i = 0; i < extra.length; i++) enc.setBindGroup(i + 1, extra[i]!.group);
+      calls += extra.length;
+    }
+    const scratch = warmer.scratchVertex();
+    for (let i = 0; i < vbs; i++) enc.setVertexBuffer(i, scratch);
+    enc.draw(0);
+    return calls + vbs;
+  });
 }

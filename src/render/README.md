@@ -1634,6 +1634,40 @@ targets (a sky, an overlay). A resolve's `CoreResolveContext.timestamps(label, p
 `CoreTarget.timestamps`) times the passes the resolve encodes under labels of their own, and
 `CoreResolveContext.reversedZ` is the pass's depth convention.
 
+### Pipeline warming (ws/warm-voxel-fit)
+
+WebKit (Metal) compiles a render pipeline at its first draw. On a shader-cache miss, that draw
+blocks the page for hundreds of milliseconds. The core moves the cost to load with an empty
+`draw(0)` in a 1×1 scratch pass of the same formats. It is on by default
+(`RenderCoreOptions.warm`), and the picture is unchanged.
+
+- The core warms what it holds but does not draw yet: empty or disabled draw sets, casters
+  (in `RenderCoreOptions.shadowFormat`, default `depth32float`), and drawables that are not
+  active but have a `warm(enc, ctx)` hook. It encodes them in `prepare` and at the end of
+  `draw`, on the first frame they appear, and never again.
+- A `FullscreenPass` or `DepthPass` queues itself when it is made and encodes the queue
+  before its first pass.
+- A game's own pipeline that draws only sometimes: `core.warm(pipeline, target)` or
+  `warmPipeline(device, pipeline, target)`. `WarmTarget` gives the formats, sample count, bind
+  groups and vertex slots, or a `bind(pass)` callback. `pipelineWarmer(device)` is the device's
+  `PipelineWarmer` (`enabled`, `warmed`, `passes`, `pending`, `encode(encoder)`).
+  `warmBindings(enc, ctx, n)` binds scratch vertex buffers in a drawable's `warm` hook.
+- Warm passes are labelled `warm`. Their calls stay out of `stats.calls`; `stats.warmed`
+  counts this frame's warms.
+- On `harness/core.html?stall`, a set with a large shader first drawn at frame 30 takes 425 ms
+  on WebKit with `warm: false` and 19 ms with warming on.
+
+**Cull groups.** `DrawSet.cullGroups` (also `DrawSetDesc.cullGroups`) is an int32 mask of the
+cull groups (views or shadow groups) the set is drawn in. The default, -1, means all of them.
+The GPU cull covers only the masked groups, and `draw` and `drawShadow` skip the set in the
+others, so a set seen only by the main view costs no shadow cull.
+
+**Lean sun shadow.** `CoreShadowMap` (a `depth32float` map with `resize`, `target` and bias)
+and `CoreSunShadow` live in their own module, so a core-only game bundles them without the
+forward renderer. `CoreSunShadow` takes any `CoreShadowSource` (`generation`, `view`,
+`sampler`, `uniforms`). `core_sun_shadow` returns 1 (lit) before the divide when
+`params.z` is 0 (shadows off).
+
 ### Fitting a voxel game's renderer (ws/render-fit)
 
 All of these are off by default. Without them the core draws exactly as before.
