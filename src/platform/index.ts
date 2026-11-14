@@ -29,7 +29,7 @@ export {
   watchVisibility,
 } from './environment';
 export type { GpuContext, GpuFailureReason, GpuInitOptions, GpuInitResult } from './gpu';
-export { initGpu } from './gpu';
+export { initGpu, restoreGpu } from './gpu';
 export type { BackbufferSize, CoverOptions, Letterbox, LetterboxRect, Vec2 } from './letterbox';
 export {
   clientToLogical,

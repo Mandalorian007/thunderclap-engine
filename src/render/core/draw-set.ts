@@ -25,6 +25,7 @@ import {
   CULL_WORKGROUP,
   SLOT,
   SLOT_BYTES,
+  SLOT_HIDDEN,
   SLOT_LIVE,
   SLOT_WORDS,
 } from './cull';
@@ -145,6 +146,11 @@ export interface DrawSetHost {
   quadIndex(indexCount: number): GPUBuffer;
   readonly quadVersion: number;
   pass(id: string): CorePass;
+  /**
+   * The set whose stale bundles may be re-recorded this frame (D1 §3.3, streaming: one rebuild
+   * a frame, coalesced), or null when every set may rebuild.
+   */
+  readonly rebuildTurn: DrawSet | null;
 }
 
 /** Per-frame counts (reset by `prepare`) and running totals. */
@@ -165,6 +171,11 @@ export interface CoreStats {
   bundleBuilds: number;
   /** Calls recorded into bundles so far. */
   bundleCalls: number;
+  /**
+   * Stale bundles drawn as they were this frame because another set had the frame's rebuild
+   * (`RenderCoreOptions.rebuildsPerFrame`); each is re-recorded on a later frame.
+   */
+  deferredBuilds: number;
 }
 
 /** The shape of `multiDrawIndexedIndirect` (Chromium's experimental feature). */
@@ -186,6 +197,8 @@ interface BundleEntry {
   depth: GPUTextureFormat | undefined;
   readOnly: boolean;
   stamp: number;
+  /** The part of `stamp` a stale bundle cannot be drawn without: buffers and bindings. */
+  hard: number;
   bundle: GPURenderBundle;
 }
 
@@ -211,6 +224,15 @@ export class DrawSet {
   readonly depth: boolean;
   /** Bumped when the slot set changes (a static set's bundles are rebuilt). */
   version = 0;
+  /**
+   * Bumped when a change moves a slot already recorded into a bundle to another buffer: such a
+   * bundle must be re-recorded before it draws again (other changes may wait a frame).
+   */
+  private hardVersion = 0;
+  /** Per slot: the vertex block and index buffer it was last recorded with (-1: never). */
+  private readonly recorded: Int32Array;
+  /** @internal The frame the set went stale (a change its bundles have not seen), or -1. */
+  staleFrame = -1;
   private readonly host: DrawSetHost;
   private readonly desc: DrawSetDesc;
   private readonly slotF32: Float32Array;
@@ -224,7 +246,7 @@ export class DrawSet {
   private readonly origins: Float64Array | null;
   /** With an origin: each slot's origin relative to the frame origin, `vec4f` per slot. */
   private readonly originRel: Float32Array | null;
-  private readonly originBuffer: GPUBuffer | null;
+  private originBuffer: GPUBuffer | null = null;
   private readonly originSlot: number;
   private readonly frameOrigin = new Float64Array(3);
   /** CPU cull: the visible slots of the group last culled, and which (frame, group) that was. */
@@ -236,15 +258,18 @@ export class DrawSet {
   private high = 0;
   private dirtyLo = Infinity;
   private dirtyHi = -1;
-  private readonly slotBuffer: GPUBuffer | null;
-  private readonly argsBuffer: GPUBuffer | null;
-  private readonly paramsBuffer: GPUBuffer | null;
+  private slotBuffer: GPUBuffer | null = null;
+  private argsBuffer: GPUBuffer | null = null;
+  private paramsBuffer: GPUBuffer | null = null;
   private readonly params = new Uint32Array(4);
-  private readonly cullGroup: GPUBindGroup | null;
+  private cullGroup: GPUBindGroup | null = null;
   private readonly bundles: BundleEntry[] = [];
   private readonly pipelines: PipelineEntry[] = [];
-  private readonly module: GPUShaderModule;
-  private readonly layout: GPUPipelineLayout;
+  private module!: GPUShaderModule;
+  private layout!: GPUPipelineLayout;
+  private bindGroups: readonly { layout: GPUBindGroupLayout; group: GPUBindGroup }[] | null;
+  /** Restored with `bindGroups`: waits for `setBindGroups`. */
+  private waiting = false;
   private paramsViews = -1;
   private paramsCount = -1;
   private paramsFirst = -1;
@@ -276,25 +301,39 @@ export class DrawSet {
     this.indexAllocs = new Array(desc.capacity).fill(null);
     this.instanceAllocs = new Array(desc.capacity).fill(null);
     this.visible = this.cull === 'cpu' ? new Uint8Array(desc.capacity) : null;
+    this.recorded = new Int32Array(desc.capacity).fill(-1);
 
-    const { device } = host;
     if (host.originOn) {
       this.centres = new Float64Array(desc.capacity * 3);
       this.origins = new Float64Array(desc.capacity * 3);
       this.originRel = new Float32Array(desc.capacity * 4);
-      this.originBuffer = device.createBuffer({
-        label: `${this.label} origins`,
-        size: desc.capacity * 16,
-        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-      });
       this.frameOrigin.set(host.origin);
     } else {
       this.centres = null;
       this.origins = null;
       this.originRel = null;
-      this.originBuffer = null;
     }
     this.originSlot = desc.instanceLayout ? 2 : 1;
+    this.bindGroups = desc.bindGroups ?? null;
+    this.build();
+  }
+
+  /**
+   * Make the set's GPU objects on the host's device: the shader, the pipeline layout and, by
+   * cull mode, the slot table, argument and parameter buffers. The constructor's and
+   * `restore`'s work; the CPU slot table is kept, so it is all re-uploaded on the next frame.
+   */
+  private build(): void {
+    const host = this.host;
+    const desc = this.desc;
+    const { device } = host;
+    this.originBuffer = host.originOn
+      ? device.createBuffer({
+          label: `${this.label} origins`,
+          size: desc.capacity * 16,
+          usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+        })
+      : null;
     const vl = desc.vertexLayout;
     const il = desc.instanceLayout;
     const originLoc = vl.attributes.length + (il?.attributes.length ?? 0);
@@ -315,7 +354,7 @@ ${il?.wgslDecode ?? ''}
 ${desc.shader.code}`;
     this.module = device.createShaderModule({ label: this.label, code });
     const groups = [host.viewLayout];
-    for (const g of desc.bindGroups ?? []) groups.push(g.layout);
+    for (const g of this.bindGroups ?? []) groups.push(g.layout);
     this.layout = device.createPipelineLayout({ label: this.label, bindGroupLayouts: groups });
 
     if (this.cull === 'gpu') {
@@ -360,6 +399,66 @@ ${desc.shader.code}`;
     }
   }
 
+  /**
+   * @internal Rebuild on the host's new device after a device loss (`RenderCore.restore`). The
+   * slots, their bounds and the hidden bits are kept and re-uploaded; the arenas' contents are
+   * the game's to write again. A set made with `bindGroups` draws nothing until `setBindGroups`
+   * hands it groups made on the new device; an `'external'` set waits for its new `args` the
+   * same way.
+   */
+  restore(): void {
+    if (this.destroyed) return;
+    this.bundles.length = 0;
+    this.pipelines.length = 0;
+    this.recorded.fill(-1);
+    this.paramsViews = -1;
+    this.paramsCount = -1;
+    this.paramsFirst = -1;
+    this.visibleFrame = -1;
+    this.waiting =
+      (this.bindGroups !== null && this.bindGroups.length > 0) || this.cull === 'external';
+    this.build();
+    if (this.high > 0) {
+      this.dirty(0);
+      this.dirty(this.high - 1);
+    }
+    if (this.originRel) {
+      // Re-derive every slot's frame-relative origin on the next upload.
+      this.frameOrigin[0] = Number.NaN;
+    }
+    this.bump();
+  }
+
+  /**
+   * Replace the set's extra bind groups (at 1, 2, …) with groups of the same layouts' shape:
+   * after a device loss, the ones made on the new device (`RenderCore.onDeviceRestored`).
+   * Re-records the set's bundles. An `'external'` set also takes its new indirect `args` here
+   * (it waits for them after a restore).
+   */
+  setBindGroups(
+    groups: readonly { layout: GPUBindGroupLayout; group: GPUBindGroup }[],
+    args?: GPUBuffer,
+  ): void {
+    if (args) {
+      if (this.cull !== 'external') throw new Error(`${this.label}: args are for an external set`);
+      this.argsBuffer = args;
+    }
+    this.bindGroups = groups;
+    this.waiting = false;
+    this.layout = this.host.device.createPipelineLayout({
+      label: this.label,
+      bindGroupLayouts: [this.host.viewLayout, ...groups.map((g) => g.layout)],
+    });
+    this.pipelines.length = 0;
+    this.bundles.length = 0;
+    this.bump();
+  }
+
+  /** @internal False while a restored set waits for `setBindGroups`. */
+  get ready(): boolean {
+    return !this.waiting && !this.destroyed;
+  }
+
   /** Live slots. */
   get count(): number {
     return this.live;
@@ -395,6 +494,27 @@ ${desc.shader.code}`;
     this.dirty(id);
   }
 
+  /**
+   * Hide or show slot `id` (D1 §3.3 `hiddenMask`): a hidden slot stays in the set, keeps its
+   * geometry and draws nothing, as if culled. A GPU- or CPU-culled set takes it with no bundle
+   * rebuild (the slot table's word changes); a `cull: 'none'` static set re-records its bundle.
+   */
+  setHidden(id: number, hidden: boolean): void {
+    this.check(id);
+    const at = id * SLOT_WORDS + SLOT.flags;
+    const was = this.slotU32[at]!;
+    const now = hidden ? was | SLOT_HIDDEN : was & ~SLOT_HIDDEN;
+    if (now === was) return;
+    this.slotU32[at] = now;
+    this.dirty(id);
+    if (this.cull === 'none') this.bump();
+  }
+
+  /** Is slot `id` hidden (`setHidden`)? */
+  isHidden(id: number): boolean {
+    return this.has(id) && (this.slotU32[id * SLOT_WORDS + SLOT.flags]! & SLOT_HIDDEN) !== 0;
+  }
+
   /** Remove slot `id`; its id is reused by a later `add`. The allocations stay the caller's. */
   remove(id: number): void {
     this.check(id);
@@ -406,7 +526,7 @@ ${desc.shader.code}`;
     this.freeIds.push(id);
     this.live--;
     this.dirty(id);
-    this.version++;
+    this.bump();
   }
 
   /** Is `id` a live slot? */
@@ -515,7 +635,18 @@ ${desc.shader.code}`;
       }
     }
     if (entry && entry.stamp === stamp && entry.bind === bind) return entry.bundle;
+    const hard = this.hardStamp();
     const { device, stats } = this.host;
+    if (entry && entry.bind === bind && entry.hard === hard && this.deferrable()) {
+      const turn = this.host.rebuildTurn;
+      if (turn !== null && turn !== this) {
+        // Slots only came, went or were hidden: the GPU cull still writes every recorded slot's
+        // arguments (a removed one's are zero), so the old bundle draws correctly minus the new
+        // slots, until this set's turn.
+        stats.deferredBuilds++;
+        return entry.bundle;
+      }
+    }
     const enc = device.createRenderBundleEncoder({
       label: `${this.label} bundle`,
       colorFormats: [color],
@@ -534,11 +665,13 @@ ${desc.shader.code}`;
     stats.bundleBuilds++;
     if (entry) {
       entry.stamp = stamp;
+      entry.hard = hard;
       entry.bind = bind;
       entry.bundle = bundle;
     } else {
-      this.bundles.push({ group, bind, color, depth, readOnly, stamp, bundle });
+      this.bundles.push({ group, bind, color, depth, readOnly, stamp, hard, bundle });
     }
+    this.staleFrame = -1;
     return bundle;
   }
 
@@ -626,13 +759,54 @@ ${desc.shader.code}`;
     this.slotU32[s + SLOT.instanceCount] = instanceCount;
     this.slotU32[s + SLOT.firstInstance] =
       instanceLayout && slot.instances ? slot.instances.offset / instanceLayout.stride : 0;
-    this.slotU32[s + SLOT.flags] = SLOT_LIVE;
+    const hidden = this.slotU32[s + SLOT.flags]! & SLOT_HIDDEN;
+    this.slotU32[s + SLOT.flags] = SLOT_LIVE | hidden;
+    const rec = this.recorded[id]!;
+    if (rec >= 0 && rec !== this.bindingKey(v, slot.indices ?? null)) this.hardVersion++;
+    if (slot.instances && this.instanceAllocs[id] !== slot.instances) this.hardVersion++;
     this.vertexAllocs[id] = v;
     this.indexAllocs[id] = slot.indices ?? null;
     this.instanceAllocs[id] = slot.instances ?? null;
     if (!slot.indices) this.host.quadIndex(slot.indexCount);
     this.dirty(id);
+    this.bump();
+  }
+
+  /** The slot set changed: bundles are stale from this frame. */
+  private bump(): void {
     this.version++;
+    if (this.staleFrame < 0) this.staleFrame = this.host.frame;
+  }
+
+  /** What a recorded draw of a slot binds: its vertex block and its index buffer. */
+  private bindingKey(v: ArenaAlloc, indices: ArenaAlloc | null): number {
+    return v.block * 65536 + (indices ? indices.block + 1 : 0);
+  }
+
+  /**
+   * @internal Stale, and its bundles may wait for its turn (`RenderCore`'s one rebuild a frame).
+   */
+  waitsForTurn(): boolean {
+    return (
+      this.staleFrame >= 0 && this.live > 0 && this.encoding() === 'bundle' && this.deferrable()
+    );
+  }
+
+  /** A stale bundle of this set may be drawn a frame longer (GPU cull, no per-slot instances). */
+  private deferrable(): boolean {
+    return this.cull === 'gpu' && !this.desc.instanceLayout;
+  }
+
+  /** The stamp of the buffers a bundle binds (a change here forbids drawing a stale one). */
+  private hardStamp(): number {
+    const d = this.desc;
+    return (
+      this.hardVersion * 31 +
+      d.vertices.version * 7 +
+      (d.indices?.version ?? 0) * 13 +
+      (d.instances?.version ?? 0) * 17 +
+      this.host.quadVersion * 19
+    );
   }
 
   /** Slot `id`'s bounds centre (relative to its origin) into the slot table, frame-relative. */
@@ -702,7 +876,7 @@ ${desc.shader.code}`;
     for (let id = 0; id < this.high; id++) {
       const s = id * SLOT_WORDS;
       vis[id] =
-        (this.slotU32[s + SLOT.flags]! & SLOT_LIVE) !== 0 &&
+        (this.slotU32[s + SLOT.flags]! & (SLOT_LIVE | SLOT_HIDDEN)) === SLOT_LIVE &&
         sphereInPlanes(
           h.viewData,
           at,
@@ -814,7 +988,7 @@ ${desc.shader.code}`;
     enc.setPipeline(this.pipeline(color, depth));
     enc.setBindGroup(0, this.host.drawGroup(group));
     let calls = 2;
-    const extra = this.desc.bindGroups;
+    const extra = this.bindGroups;
     if (extra) {
       for (let i = 0; i < extra.length; i++) enc.setBindGroup(i + 1, extra[i]!.group);
       calls += extra.length;
@@ -846,9 +1020,13 @@ ${desc.shader.code}`;
     let draws = 0;
     for (let id = 0; id < this.high; id++) {
       const s = id * SLOT_WORDS;
-      if ((this.slotU32[s + SLOT.flags]! & SLOT_LIVE) === 0) continue;
+      const flags = this.slotU32[s + SLOT.flags]!;
+      if ((flags & SLOT_LIVE) === 0) continue;
       if (cpu && vis![id] === 0) continue;
+      // A GPU-culled slot is recorded hidden or not (the cull zeroes its instances); others skip.
+      if (!gpu && (flags & SLOT_HIDDEN) !== 0) continue;
       const va = this.vertexAllocs[id]!;
+      this.recorded[id] = this.bindingKey(va, this.indexAllocs[id] ?? null);
       if (va.block !== vBlock) {
         vBlock = va.block;
         enc.setVertexBuffer(0, d.vertices.buffers[vBlock]!);

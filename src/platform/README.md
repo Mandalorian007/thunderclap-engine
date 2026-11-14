@@ -66,6 +66,10 @@ const p = surface.clientToLogical(e.offsetX, e.offsetY); // design px
   them). `GpuContext` is `{ adapter, device, context, format,
   timestamps }`; a failure is `{ ok: false, reason: GpuFailureReason, detail? }` with
   `GpuFailureReason` `'no-api' | 'no-adapter' | 'no-device' | 'no-context'`.
+- `restoreGpu(gpu, opts?): Promise<GPUDevice | null>` (ws/core-passes): after a device loss,
+  requests a new adapter and device with the lost device's features, configures the canvas on
+  it and updates `gpu` (`adapter`, `device`, `timestamps`) in place; `null` when the GPU is gone.
+  Hand the device to `RenderCore.restore`.
 
 ## Surface and letterbox math
 

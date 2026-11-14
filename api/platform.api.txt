@@ -306,6 +306,9 @@ function mountSurface(root: HTMLElement, opts?: SurfaceOptions): Surface;
 ## platformFamily
 function platformFamily(ua?: string, touchPoints?: number): PlatformFamily;
 
+## restoreGpu
+function restoreGpu(gpu: GpuContext, opts?: Pick<GpuInitOptions, 'powerPreference' | 'onLost'>): Promise<GPUDevice | null>;
+
 ## safeExternalUrl
 function safeExternalUrl(url: string | null | undefined): string | null;
 

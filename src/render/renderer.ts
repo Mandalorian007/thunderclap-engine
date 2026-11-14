@@ -1,7 +1,8 @@
 import type { BindingSet } from './bindings';
 import { ALL_LAYERS, CAMERA_BLOCK_FLOATS, Camera, type CameraRect, FRUSTUM_FLOATS } from './camera';
 import { type RendererCaps, rendererCaps } from './compressed';
-import { MULTI_DRAW_FEATURE } from './core/core';
+import { type CoreTarget, MULTI_DRAW_FEATURE, type RenderCore } from './core/core';
+import { createRenderView, type RenderView, setViewFromCamera } from './core/view';
 import { installGpuErrorLogging } from './diagnostics';
 import {
   type Drawable,
@@ -715,6 +716,31 @@ export class Renderer implements FrameSink {
    * visible drawable asked (or the camera has no depth test).
    */
   private splitAt = -1;
+  /** The first blended draw of this view's scene list (-1: none), where the core's opaque work goes. */
+  private blendAt = -1;
+  /**
+   * A retained render core drawn inside this renderer's frames (ws/core-passes), or null (the
+   * default). Assign one made on this renderer's device with the scene's depth format:
+   * `renderer.core = createRenderCore(renderer, { depthFormat: DEPTH_FORMAT })`. It draws in
+   * each frame's first depth-tested view: `prepare` with that view's camera before the scene
+   * pass, its `depthPre`, `opaque` and `cutout` passes after the view's opaque draws into the
+   * same colour and depth, its `transparent` and later passes after the view's blended draws.
+   * Later views of the same frame (a second eye, a minimap) do not draw it yet. Opt-in, so a
+   * renderer without one does not bundle the core.
+   */
+  core: RenderCore | null = null;
+  private readonly coreView: RenderView = createRenderView();
+  private readonly coreViews: RenderView[] = [this.coreView];
+  private readonly coreTarget: CoreTarget = {
+    view: undefined as unknown as GPUTextureView,
+    format: 'rgba8unorm',
+    width: 1,
+    height: 1,
+    viewport: { x: 0, y: 0, width: 1, height: 1 },
+  };
+  /** `frames` of the frame whose view the core drew (it draws in a frame's first view). */
+  private coreFrame = -1;
+  private coreFrames = 0;
   /** Drawables whose `afterOpaque` ran for the current view (once each). */
   private readonly hooked = new Set<Drawable>();
   /** The `ViewInfo` handed to `afterOpaque`, reused across views. */
@@ -1216,6 +1242,7 @@ export class Renderer implements FrameSink {
     // so this one starts clean and the game (a headset) keeps running.
     if (this.inFrame) this.dropFrame();
     this.inFrame = true;
+    this.coreFrames++;
     if (this.timingEvery > 0) this.frameStart = performance.now();
     this.instanceCount = 0;
     this.batchInstances = 0;
@@ -1385,13 +1412,21 @@ export class Renderer implements FrameSink {
     // A view with a `readsDepth` drawable splits here: opaque draws, a copy of the depth
     // attachment, the drawables' `afterOpaque`, then the blended draws loading everything.
     const split = depth && this.splitAt >= 0 && target.canCopyDepth ? this.splitAt : -1;
-    const mainEnd = split >= 0 ? split : scene.count;
+    // The retained core (ws/core-passes) draws its opaque passes between this view's opaque
+    // and blended draws, into the same colour and depth, and its blended passes after them.
+    const core = depth ? this.coreFor(camera, target, vp, enc) : null;
+    const coreSplit = core && split < 0 && this.blendAt >= 0 ? this.blendAt : -1;
+    const mainEnd = split >= 0 ? split : coreSplit >= 0 ? coreSplit : scene.count;
     const runs = this.planRuns(enc, mainEnd);
     const pass = enc.beginRenderPass(desc);
     this.setViewRect(pass, vp, full);
     pass.setBindGroup(0, slot.group);
     this.encodeDraws(pass, frame, slot, base, 0, mainEnd, runs ? target : null, depth);
     pass.end();
+    if (core) {
+      this.coreTarget.phase = 'opaque';
+      core.draw(enc, 0, this.coreTarget);
+    }
     if (this.argsCount > 0) {
       const bytes = this.argsCount * INDEXED_ARGS_BYTES;
       device.queue.writeBuffer(this.argsBuffer!, this.argsBase, this.argsData.buffer, 0, bytes);
@@ -1427,9 +1462,52 @@ export class Renderer implements FrameSink {
       this.encodeDraws(blend, frame, slot, base, split, scene.count, null, depth);
       blend.end();
       this.stats.passes++;
+    } else if (coreSplit >= 0) {
+      target.depthAttachment();
+      const blend = enc.beginRenderPass(target.blendPassDesc);
+      this.setViewRect(blend, vp, full);
+      blend.setBindGroup(0, slot.group);
+      this.encodeDraws(blend, frame, slot, base, coreSplit, scene.count, null, depth);
+      blend.end();
+      this.stats.passes++;
+    }
+    if (core) {
+      this.coreTarget.phase = 'blend';
+      core.draw(enc, 0, this.coreTarget);
     }
     this.stats.instances += this.sceneCount + this.sceneListInstances;
     this.stats.batches += this.sceneBatches;
+  }
+
+  /** The core to draw into this view, prepared, its target set; null when it has nothing. */
+  private coreFor(
+    camera: Camera,
+    target: SceneTarget,
+    vp: CameraRect,
+    enc: GPUCommandEncoder,
+  ): RenderCore | null {
+    const core = this.core;
+    if (!core || this.coreFrame === this.coreFrames || !core.hasWork) return null;
+    if (core.depthFormat !== DEPTH_FORMAT || core.device !== this.device) {
+      throw new Error(
+        `renderer.core: make it on the renderer's device with depthFormat ${DEPTH_FORMAT}`,
+      );
+    }
+    this.coreFrame = this.coreFrames;
+    setViewFromCamera(this.coreView, camera);
+    core.prepare(enc, this.coreViews);
+    const t = this.coreTarget;
+    t.view = target.color.view;
+    t.format = target.color.format;
+    t.width = target.width;
+    t.height = target.height;
+    t.depth = target.depthAttachment().view as GPUTextureView;
+    const r = t.viewport!;
+    r.x = Math.floor(vp.x);
+    r.y = Math.floor(vp.y);
+    r.width = Math.ceil(vp.width);
+    r.height = Math.ceil(vp.height);
+    return core;
   }
 
   /** Viewport and scissor of a view that does not cover its target. */
@@ -2302,6 +2380,7 @@ export class Renderer implements FrameSink {
     this.shadowCmds.count = 0;
     this.culledCount = 0;
     this.splitAt = -1;
+    this.blendAt = -1;
 
     let visible = n;
     if (camLayers !== ALL_LAYERS) {
@@ -2398,7 +2477,12 @@ export class Renderer implements FrameSink {
     const total = (this.instanceCount + this.batchInstances) * INSTANCE_FLOATS;
     const need = shadowCfg ? total * 2 : total;
     if (this.sortedData.length < need) {
-      this.sortedData = new Float32Array(Math.max(need, this.sortedData.length * 2));
+      // Pooled (ws/core-passes): sized for the scene's and the shadow list's copies of the whole
+      // instance pool at once, a power of two, so chunks or batches entering the view never
+      // grow it a few instances at a time; it grows again only with the pool.
+      let size = Math.max(256, 2 * this.instanceData.length);
+      while (size < need) size *= 2;
+      this.sortedData = new Float32Array(size);
     }
     const dst = this.sortedData;
     // The shared previous-matrix lane: only into a velocity target, for batches that bring one.
@@ -2422,6 +2506,7 @@ export class Renderer implements FrameSink {
       if (this.splitAt < 0 && r.group === 1 && r.order >= hookOrder) {
         this.splitAt = this.scene.count;
       }
+      if (this.blendAt < 0 && r.group === 1) this.blendAt = this.scene.count;
       if (r.drawable) {
         this.batch(this.scene, r, null, 0);
         continue;

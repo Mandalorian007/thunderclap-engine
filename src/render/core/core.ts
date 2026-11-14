@@ -53,6 +53,15 @@ export interface RenderCoreOptions {
    * `FakeDevice.markView`, to split counts by view).
    */
   onView?: ((viewIndex: number) => void) | null;
+  /**
+   * Re-record at most one set's stale bundles a frame (default true; D1 §3.3). While sections
+   * stream in, every upload frame changes a set; rebuilding each set's bundle each frame is the
+   * hitch. A GPU-culled static set whose slots only came, went or were hidden keeps drawing its
+   * last bundle (the cull still writes every recorded slot's arguments, so nothing wrong draws;
+   * new slots wait) until its turn: the set stale the longest goes first. A change that moved a
+   * recorded slot to another buffer, a set with per-slot instances and a first bundle never wait.
+   */
+  coalesceRebuilds?: boolean;
 }
 
 /** Where a view draws: a colour view of a texture of `format` and size, cleared or loaded. */
@@ -68,6 +77,18 @@ export interface CoreTarget {
    * the target's size and is cleared whole by the view's first depth pass.
    */
   viewport?: { x: number; y: number; width: number; height: number };
+  /**
+   * A depth attachment the caller owns, in the core's `depthFormat` and the target's size, that
+   * already holds the scene's depth (ws/core-passes): the core loads it and never clears it,
+   * and makes no depth of its own. The `Renderer` hands its scene target's depth here.
+   */
+  depth?: GPUTextureView;
+  /**
+   * Which of the pass list's passes to draw (ws/core-passes): `'opaque'`, those before
+   * `transparent`; `'blend'`, `transparent` and every pass after it; `'all'` (default) every
+   * pass. A caller that draws blended work of its own between the two calls `draw` twice.
+   */
+  phase?: 'all' | 'opaque' | 'blend';
 }
 
 /** What the core's device offers it. */
@@ -88,13 +109,22 @@ function newStats(): CoreStats {
     slotBytes: 0,
     bundleBuilds: 0,
     bundleCalls: 0,
+    deferredBuilds: 0,
   };
 }
 
 /** The retained render core on one device. Make one with `createRenderCore`. */
 export class RenderCore {
-  readonly device: GPUDevice;
-  readonly caps: CoreCaps;
+  private dev: GPUDevice;
+  private capsNow: CoreCaps;
+  /** The device; a new one after `restore`. */
+  get device(): GPUDevice {
+    return this.dev;
+  }
+  /** What the device offers (re-read by `restore`). */
+  get caps(): CoreCaps {
+    return this.capsNow;
+  }
   readonly passes: PassList;
   readonly maxViews: number;
   readonly depthFormat: GPUTextureFormat;
@@ -109,15 +139,21 @@ export class RenderCore {
   groups = 0;
   /** Called as `draw` starts each view (see `RenderCoreOptions.onView`). */
   onView: ((viewIndex: number) => void) | null;
-  /** @internal */ readonly viewLayout: GPUBindGroupLayout;
-  /** @internal */ readonly cullLayout: GPUBindGroupLayout;
-  /** @internal */ readonly viewBuffer: GPUBuffer;
+  /** @internal */ viewLayout!: GPUBindGroupLayout;
+  /** @internal */ cullLayout!: GPUBindGroupLayout;
+  /** @internal */ viewBuffer!: GPUBuffer;
   /** @internal */ readonly viewData: Float32Array;
+  /** Device restores so far (`restore`). */
+  restores = 0;
   private readonly viewU32: Uint32Array;
   private readonly viewGroups: GPUBindGroup[] = [];
   /** The view a multi-view group's draw reads: `draw` copies its view's slot here. */
-  private readonly currentBuffer: GPUBuffer;
-  private readonly currentGroup: GPUBindGroup;
+  private currentBuffer!: GPUBuffer;
+  private currentGroup!: GPUBindGroup;
+  /** Arenas made through `createArena`: rebuilt by `restore`. */
+  private readonly arenas: Arena[] = [];
+  private readonly restoredFns: ((device: GPUDevice) => void)[] = [];
+  private readonly multiDrawOpt: boolean;
   /** Per prepared view: its cull group; per group: its first view and count. */
   private readonly groupOf = new Int32Array(MAX_VIEWS);
   private readonly groupFirst = new Int32Array(MAX_VIEWS);
@@ -139,77 +175,24 @@ export class RenderCore {
   private readonly passDesc: GPURenderPassDescriptor;
   private readonly passDescDepth: GPURenderPassDescriptor;
   private readonly computeDesc: GPUComputePassDescriptor = { label: 'core cull' };
+  /** Whose stale bundles may be re-recorded this frame (see `coalesceRebuilds`). */
+  private rebuildTurn: DrawSet | null = null;
+  private readonly coalesce: boolean;
 
   constructor(device: GPUDevice, opts: RenderCoreOptions = {}) {
-    this.device = device;
-    const features = device.features as ReadonlySet<string> | undefined;
-    this.caps = {
-      multiDraw: (opts.multiDraw ?? true) && !!features?.has(MULTI_DRAW_FEATURE),
-      firstInstance: !!features?.has('indirect-first-instance'),
-    };
+    this.dev = device;
+    this.multiDrawOpt = opts.multiDraw ?? true;
+    this.capsNow = this.capsOf(device);
     this.maxViews = Math.max(1, Math.min(opts.maxViews ?? MAX_VIEWS, MAX_VIEWS));
     this.depthFormat = opts.depthFormat ?? 'depth24plus';
     this.originGrid = Math.max(0, opts.originGrid ?? 0);
     this.onView = opts.onView ?? null;
+    this.coalesce = opts.coalesceRebuilds ?? true;
     this.passes = new PassList();
     this.quads = new QuadIndex(device);
-    const S = GPUShaderStage;
-    this.viewLayout = device.createBindGroupLayout({
-      label: 'core view',
-      entries: [
-        {
-          binding: 0,
-          visibility: S.VERTEX | S.FRAGMENT,
-          buffer: { type: 'uniform', minBindingSize: VIEW_SLOT_BYTES },
-        },
-      ],
-    });
-    this.cullLayout = device.createBindGroupLayout({
-      label: 'core cull',
-      entries: [
-        { binding: 0, visibility: S.COMPUTE, buffer: { type: 'uniform' } },
-        { binding: 1, visibility: S.COMPUTE, buffer: { type: 'uniform' } },
-        { binding: 2, visibility: S.COMPUTE, buffer: { type: 'read-only-storage' } },
-        { binding: 3, visibility: S.COMPUTE, buffer: { type: 'storage' } },
-      ],
-    });
-    // Views in slots [0, MAX_VIEWS), the cull groups' planes in [MAX_VIEWS, 2 · MAX_VIEWS): the
-    // cull binds the second half as `array<CoreView, MAX_VIEWS>`, so the buffer is always full size.
-    this.viewBuffer = device.createBuffer({
-      label: 'core views',
-      size: 2 * MAX_VIEWS * VIEW_SLOT_BYTES,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
-    });
     this.viewData = new Float32Array(2 * MAX_VIEWS * VIEW_SLOT_FLOATS);
     this.viewU32 = new Uint32Array(this.viewData.buffer);
-    for (let i = 0; i < this.maxViews; i++) {
-      this.viewGroups.push(
-        device.createBindGroup({
-          label: `core view ${i}`,
-          layout: this.viewLayout,
-          entries: [
-            {
-              binding: 0,
-              resource: {
-                buffer: this.viewBuffer,
-                offset: i * VIEW_SLOT_BYTES,
-                size: VIEW_SLOT_BYTES,
-              },
-            },
-          ],
-        }),
-      );
-    }
-    this.currentBuffer = device.createBuffer({
-      label: 'core current view',
-      size: VIEW_SLOT_BYTES,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    this.currentGroup = device.createBindGroup({
-      label: 'core current view',
-      layout: this.viewLayout,
-      entries: [{ binding: 0, resource: { buffer: this.currentBuffer } }],
-    });
+    this.build();
     this.colorAttachment = {
       view: undefined as unknown as GPUTextureView,
       loadOp: 'load',
@@ -230,15 +213,27 @@ export class RenderCore {
     };
     const core = this;
     this.host = {
-      device,
-      viewLayout: this.viewLayout,
-      cullLayout: this.cullLayout,
-      viewBuffer: this.viewBuffer,
+      get device() {
+        return core.device;
+      },
+      get viewLayout() {
+        return core.viewLayout;
+      },
+      get cullLayout() {
+        return core.cullLayout;
+      },
+      get viewBuffer() {
+        return core.viewBuffer;
+      },
       viewData: this.viewData,
       groupOffset: MAX_VIEWS * VIEW_SLOT_BYTES,
       maxViews: this.maxViews,
-      multiDraw: this.caps.multiDraw,
-      firstInstance: this.caps.firstInstance,
+      get multiDraw() {
+        return core.caps.multiDraw;
+      },
+      get firstInstance() {
+        return core.caps.firstInstance;
+      },
       stats: this.stats,
       drawGroup: (g) =>
         this.groupSize[g]! > 1 ? this.currentGroup : this.viewGroups[this.groupFirst[g]!]!,
@@ -257,12 +252,64 @@ export class RenderCore {
         if (!p) throw new Error(`no pass ${id}`);
         return p;
       },
+      get rebuildTurn() {
+        return core.rebuildTurn;
+      },
     };
   }
 
-  /** A new arena on the core's device (D1 §3.1 `renderer.arena(kind)`). */
+  /**
+   * A new arena on the core's device (D1 §3.1 `renderer.arena(kind)`); `restore` rebuilds it.
+   */
   createArena(desc: ArenaDesc): Arena {
-    return new Arena(this.device, desc);
+    const arena = new Arena(this.device, desc);
+    this.arenas.push(arena);
+    return arena;
+  }
+
+  /**
+   * Rebuild everything the core owns on `device`, after the old one was lost (D1 §3, device
+   * loss). The rebuild list: the core's view buffers, layouts and cull pipeline; every arena made
+   * through `createArena` (each block again, the same size, every allocation still valid, the
+   * bytes gone); every draw set (its slots, bounds and hidden bits kept and re-uploaded; its
+   * pipelines and bundles recorded again on first use); the shared quad index; the depth
+   * attachment (on next use). Passes are data and stay. Then each `onDeviceRestored` listener
+   * runs once, with the device: that is where the game writes its arenas' bytes again and hands
+   * sets made with `bindGroups` new ones (`DrawSet.setBindGroups`). Nothing is drawn until the
+   * next `prepare`.
+   */
+  restore(device: GPUDevice): void {
+    this.dev = device;
+    this.capsNow = this.capsOf(device);
+    this.cullPipeline = null;
+    this.depthTexture = null;
+    this.depthView = null;
+    this.viewsPrepared = 0;
+    this.build();
+    this.quads.restore(device);
+    for (const a of this.arenas) a.restore(device);
+    for (const s of this.sets) s.restore();
+    this.restores++;
+    for (const fn of this.restoredFns.slice()) fn(device);
+  }
+
+  /** True when some set has live slots to draw (ws/core-passes; the `Renderer` skips the core otherwise). */
+  get hasWork(): boolean {
+    const sets = this.sets;
+    for (let i = 0; i < sets.length; i++) if (sets[i]!.count > 0) return true;
+    return false;
+  }
+
+  /**
+   * Call `fn(device)` after each `restore`: the one "device restored" event a game sees for the
+   * core. Returns the unsubscribe.
+   */
+  onDeviceRestored(fn: (device: GPUDevice) => void): () => void {
+    this.restoredFns.push(fn);
+    return () => {
+      const i = this.restoredFns.indexOf(fn);
+      if (i >= 0) this.restoredFns.splice(i, 1);
+    };
   }
 
   /** A new draw set; it joins `desc.pass` (default `'opaque'`). */
@@ -325,6 +372,7 @@ export class RenderCore {
     st.bundles = 0;
     st.directDraws = 0;
     st.slotBytes = 0;
+    st.deferredBuilds = 0;
     this.frame++;
     this.viewsPrepared = n;
     const data = this.viewData;
@@ -354,11 +402,16 @@ export class RenderCore {
     st.calls++;
     let gpu = false;
     const sets = this.sets;
+    let turn: DrawSet | null = null;
     for (let i = 0; i < sets.length; i++) {
       const set = sets[i]!;
       set.upload(groups);
       if (set.cull === 'gpu' && set.highWater > 0) gpu = true;
+      if (this.coalesce && set.waitsForTurn() && (!turn || set.staleFrame < turn.staleFrame)) {
+        turn = set;
+      }
     }
+    this.rebuildTurn = turn;
     if (!gpu) return;
     const pass = encoder.beginComputePass(this.computeDesc);
     pass.setPipeline(this.cullPipe());
@@ -393,9 +446,23 @@ export class RenderCore {
     }
     const vp = target.viewport;
     let first = true;
-    let depthCleared = false;
+    let depthCleared = target.depth !== undefined;
     const list = this.passes.passes;
-    for (let p = 0; p < list.length; p++) {
+    const phase = target.phase ?? 'all';
+    let from = 0;
+    let to = list.length;
+    if (phase !== 'all') {
+      let at = list.length;
+      for (let p = 0; p < list.length; p++) {
+        if (list[p]!.id === 'transparent') {
+          at = p;
+          break;
+        }
+      }
+      if (phase === 'opaque') to = at;
+      else from = at;
+    }
+    for (let p = from; p < to; p++) {
       const pass = list[p]!;
       const sets = this.bySet[p]!;
       if (pass.when && !pass.when()) continue;
@@ -403,7 +470,7 @@ export class RenderCore {
       let wantsDepth = false;
       for (let i = 0; i < sets.length; i++) {
         const s = sets[i]!;
-        if (s.count === 0) continue;
+        if (s.count === 0 || !s.ready) continue;
         work = true;
         if (s.depth && pass.depth !== 'none') wantsDepth = true;
       }
@@ -422,7 +489,7 @@ export class RenderCore {
       let desc = this.passDesc;
       if (wantsDepth) {
         const d = this.depthAttachment;
-        d.view = this.depthFor(target.width, target.height);
+        d.view = target.depth ?? this.depthFor(target.width, target.height);
         if (readOnly) {
           // A read-only pass may not load or store depth; it must follow a writing pass.
           d.depthReadOnly = true;
@@ -449,7 +516,7 @@ export class RenderCore {
       while (bundles.length > 0) bundles.pop();
       for (let i = 0; i < sets.length; i++) {
         const s = sets[i]!;
-        if (s.count === 0) continue;
+        if (s.count === 0 || !s.ready) continue;
         if (s.encoding() === 'bundle') {
           bundles.push(s.bundle(group, target.format, depthFormat, readOnly));
           continue;
@@ -471,6 +538,75 @@ export class RenderCore {
       st.calls += 2;
       st.passes++;
     }
+  }
+
+  private capsOf(device: GPUDevice): CoreCaps {
+    const features = device.features as ReadonlySet<string> | undefined;
+    return {
+      multiDraw: this.multiDrawOpt && !!features?.has(MULTI_DRAW_FEATURE),
+      firstInstance: !!features?.has('indirect-first-instance'),
+    };
+  }
+
+  /** The core's own GPU objects: layouts, the view buffers and their bind groups. */
+  private build(): void {
+    const device = this.device;
+    const S = GPUShaderStage;
+    this.viewLayout = device.createBindGroupLayout({
+      label: 'core view',
+      entries: [
+        {
+          binding: 0,
+          visibility: S.VERTEX | S.FRAGMENT,
+          buffer: { type: 'uniform', minBindingSize: VIEW_SLOT_BYTES },
+        },
+      ],
+    });
+    this.cullLayout = device.createBindGroupLayout({
+      label: 'core cull',
+      entries: [
+        { binding: 0, visibility: S.COMPUTE, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: S.COMPUTE, buffer: { type: 'uniform' } },
+        { binding: 2, visibility: S.COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 3, visibility: S.COMPUTE, buffer: { type: 'storage' } },
+      ],
+    });
+    // Views in slots [0, MAX_VIEWS), the cull groups' planes in [MAX_VIEWS, 2 · MAX_VIEWS): the
+    // cull binds the second half as `array<CoreView, MAX_VIEWS>`, so the buffer is always full size.
+    this.viewBuffer = device.createBuffer({
+      label: 'core views',
+      size: 2 * MAX_VIEWS * VIEW_SLOT_BYTES,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+    });
+    this.viewGroups.length = 0;
+    for (let i = 0; i < this.maxViews; i++) {
+      this.viewGroups.push(
+        device.createBindGroup({
+          label: `core view ${i}`,
+          layout: this.viewLayout,
+          entries: [
+            {
+              binding: 0,
+              resource: {
+                buffer: this.viewBuffer,
+                offset: i * VIEW_SLOT_BYTES,
+                size: VIEW_SLOT_BYTES,
+              },
+            },
+          ],
+        }),
+      );
+    }
+    this.currentBuffer = device.createBuffer({
+      label: 'core current view',
+      size: VIEW_SLOT_BYTES,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    this.currentGroup = device.createBindGroup({
+      label: 'core current view',
+      layout: this.viewLayout,
+      entries: [{ binding: 0, resource: { buffer: this.currentBuffer } }],
+    });
   }
 
   /** Destroy every set, the shared buffers and the depth attachment. */

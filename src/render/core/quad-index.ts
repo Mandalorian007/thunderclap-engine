@@ -31,7 +31,7 @@ export class QuadIndex {
   quads = 0;
   /** Bumped when the buffer is replaced (anything recorded against it is stale). */
   version = 0;
-  private readonly device: GPUDevice;
+  private device: GPUDevice;
 
   constructor(device: GPUDevice) {
     this.device = device;
@@ -53,6 +53,16 @@ export class QuadIndex {
     this.quads = n;
     this.version++;
     return buffer;
+  }
+
+  /** After a device loss: make the buffer again, as large, on `device`. */
+  restore(device: GPUDevice): void {
+    this.device = device;
+    const quads = this.quads;
+    this.buffer = null;
+    this.quads = 0;
+    if (quads > 0) this.ensure(quads);
+    else this.version++;
   }
 
   destroy(): void {
