@@ -7,17 +7,19 @@
  * (`shape: 'box'`) of debris, `Weather` rain with splashes on a wrapping occlusion map and a
  * held `Lightning` bolt. `api.set({ show })` takes one effect off the core, `api.set({ paused })`
  * freezes them all so on/off pictures compare; `?standard` builds the same scene on a standard
- * core. Nothing here is a game.
+ * core. `?fit` (ws/fx-fit) builds it as a game fitting its renderer would: the sky a member of
+ * the opaque pass with a hook and no `SkyLook`, the fountain in a pass of its own, debris lit boxes
+ * with an emit axis, colour jitter, flutter and flat boxes, eight weather layers (a leaf one
+ * among them) on a floored occlusion map. Nothing here is a game.
  */
 
 import {
   createSkyPass,
-  Lightning,
   ParticleSystem,
+  type PrecipLayer,
   Water,
-  WEATHER_RAIN_SPLASHES,
-  Weather,
 } from '@thunderclap-engine/engine/fx';
+import { Lightning, WEATHER_RAIN_SPLASHES, Weather } from '@thunderclap-engine/engine/fx/weather';
 import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
@@ -35,6 +37,7 @@ import type { FxReversedEffect, FxReversedSet, HarnessFxReversedState } from './
 const root = document.getElementById('root') as HTMLElement;
 const query = new URLSearchParams(location.search);
 const reversedZ = !query.has('standard');
+const fit = query.has('fit');
 
 const state: HarnessFxReversedState = {
   ready: false,
@@ -49,6 +52,12 @@ const state: HarnessFxReversedState = {
   skyDraws: 0,
   weatherInstances: 0,
   drawables: 0,
+  fit,
+  passes: 0,
+  particleDraws: 0,
+  boxDraws: 0,
+  weatherLayers: 0,
+  passOrder: [],
 };
 let apply: (o: FxReversedSet) => void = (o) => {
   if (o.paused !== undefined) state.paused = o.paused;
@@ -134,6 +143,39 @@ fn sky_look(i: SkyInput) -> SkyShade {
   return s;
 }`;
 
+/** ?fit: no `SkyLook`, so the hook paints the whole dome (a gradient), tinted the same way. */
+const SKY_FIT_SHADE = /* wgsl */ `
+fn sky_look(i: SkyInput) -> SkyShade {
+  var s = sky_shade(i.dir, i.sun_dir, i.sun_color, i.fog);
+  let up = max(i.dir.y, 0.0);
+  s.color += mix(vec3f(0.62, 0.7, 0.82), vec3f(0.16, 0.3, 0.66), up) + sky_param(0u).rgb * up;
+  return s;
+}`;
+
+/** ?fit: rain and splashes, a leaf layer and five thin ones: eight layers in one draw. */
+const LEAVES: PrecipLayer = {
+  shape: 'leaf',
+  count: 400,
+  radius: 8,
+  height: 7,
+  speed: 0.8,
+  windFactor: 0.6,
+  length: 0.22,
+  width: 0.12,
+  color: [0.45, 0.6, 0.2],
+  alpha: 1,
+  flutter: 0.4,
+};
+const FIT_LAYERS: PrecipLayer[] = [
+  ...WEATHER_RAIN_SPLASHES.layers,
+  LEAVES,
+  ...Array.from({ length: 5 }, (_, i) => ({
+    ...LEAVES,
+    count: 40,
+    color: [0.6, 0.3 + i * 0.1, 0.1] as const,
+  })),
+];
+
 async function main(): Promise<void> {
   const res = await boot(root, { title: 'Engine reversed-Z effects demo' });
   if (!res.ok) {
@@ -151,20 +193,20 @@ async function main(): Promise<void> {
   });
   const core = createRenderCore(gpu, { reversedZ });
 
-  const sky = createSkyPass(
-    core,
-    {
-      zenith: [0.16, 0.3, 0.66],
-      horizon: [0.62, 0.7, 0.82],
-      ground: [0.3, 0.28, 0.25],
-      sunSize: 0.03,
-      sunGlow: 1,
-      stars: null,
-      exposure: 1,
-      ambientFloor: 0.06,
-    },
-    { shade: SKY_SHADE, params: 1 },
-  );
+  const look = {
+    zenith: [0.16, 0.3, 0.66],
+    horizon: [0.62, 0.7, 0.82],
+    ground: [0.3, 0.28, 0.25],
+    sunSize: 0.03,
+    sunGlow: 1,
+    stars: null,
+    exposure: 1,
+    ambientFloor: 0.06,
+  };
+  // ?fit: no SkyLook (the hook paints a dome of its own), drawn in the opaque pass.
+  const sky = fit
+    ? createSkyPass(core, null, { shade: SKY_FIT_SHADE, params: 1, member: 'opaque' })
+    : createSkyPass(core, look, { shade: SKY_SHADE, params: 1 });
   sky.sunDir.set([-0.4, -0.6, -0.7]);
 
   const vertices = core.createArena({ kind: 'vertex', blockBytes: 16 << 10, label: 'boxes' });
@@ -207,9 +249,19 @@ async function main(): Promise<void> {
     level: 0.25,
     depthFade: 0.8,
   });
-  const fountain = new ParticleSystem(core, { capacity: 4096, softness: 0.3 });
+  // ?fit: the fountain in a pass of the game's own (soft particles read depth: a read pass).
+  if (fit) core.definePass({ id: 'late', after: 'transparent', depth: 'read' });
+  const fountain = new ParticleSystem(core, {
+    capacity: 4096,
+    softness: 0.3,
+    ...(fit ? { pass: 'late', order: 5 } : {}),
+  });
   const debris = new ParticleSystem(core, { capacity: 1024, shape: 'box' });
   const lit = debris.coreDrawable!.boxLight;
+  if (fit) {
+    lit.fog.color.set([0.5, 0.55, 0.65]);
+    lit.fog.density = 0.02;
+  }
   lit.sunDir.set([-0.4, -0.6, -0.7]);
   lit.sunColor.set([1.2, 1.1, 0.95]);
   lit.ambient.set([0.25, 0.3, 0.4]);
@@ -220,10 +272,21 @@ async function main(): Promise<void> {
     usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
   });
   const heights = new Float32Array(16);
-  for (let i = 0; i < 16; i++) heights[i] = (i + (i >> 2)) % 2 === 0 ? 0 : 3;
+  // ?fit: the heights carry a fraction the decode floors away (3.6 stops at 3).
+  for (let i = 0; i < 16; i++) heights[i] = (i + (i >> 2)) % 2 === 0 ? 0 : fit ? 3.6 : 3;
   gpu.device.queue.writeTexture({ texture: occl }, heights, { bytesPerRow: 16 }, [4, 4]);
-  const weather = new Weather(core, { ...WEATHER_RAIN_SPLASHES, occlusionHeight: 0 });
-  weather.setOcclusionMap({ texture: occl, origin: [0, 0], size: [8, 8], wrap: true });
+  const weather = new Weather(core, {
+    ...WEATHER_RAIN_SPLASHES,
+    ...(fit ? { layers: FIT_LAYERS } : {}),
+    occlusionHeight: 0,
+  });
+  weather.setOcclusionMap({
+    texture: occl,
+    origin: [0, 0],
+    size: [8, 8],
+    wrap: true,
+    ...(fit ? { decode: { floor: true } } : {}),
+  });
   const lightning = new Lightning(core, { fadeTime: 1e6, height: 40 });
   lightning.strike(5, 0, -10, 11);
 
@@ -237,6 +300,10 @@ async function main(): Promise<void> {
   apply = (o) => {
     if (o.paused !== undefined) state.paused = o.paused;
     if (o.skyTint) state.skyTint = [...o.skyTint];
+    if (o.clear) {
+      fountain.clear();
+      debris.clear();
+    }
     for (const k of Object.keys(o.show ?? {}) as FxReversedEffect[]) {
       const on = o.show![k]!;
       if (on === state.show[k]) continue;
@@ -281,6 +348,10 @@ async function main(): Promise<void> {
     colorStart: [0.55, 0.42, 0.3, 1],
     colorEnd: [0.55, 0.42, 0.3, 1],
     gravity: [0, -9, 0] as [number, number, number],
+    // ?fit: thrown along a tilted axis, jittered, fluttering, flat.
+    ...(fit
+      ? { axis: [0.4, 1, 0.3], colorJitter: 0.25, flutter: 0.3, boxScale: [1, 0.25, 1] }
+      : {}),
   };
   let last = performance.now();
   let aspect = 0;
@@ -331,6 +402,11 @@ async function main(): Promise<void> {
     state.skyDraws = sky.draws;
     state.weatherInstances = state.show.weather ? weather.instances : 0;
     state.drawables = core.coreDrawables.length;
+    state.passes = core.stats.passes;
+    state.passOrder = [...core.passes.order];
+    state.particleDraws = fountain.drawCount;
+    state.boxDraws = debris.drawCount;
+    state.weatherLayers = weather.layerCount;
     state.gpuErrors = gpuDiagnostics.errorCount;
     requestAnimationFrame(frame);
   };

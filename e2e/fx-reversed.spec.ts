@@ -180,3 +180,56 @@ test('?standard: the same scene on a standard core', async ({ page, wrapper }) =
   expect(s.skyDraws).toBeGreaterThan(0);
   expect(errors).toEqual([]);
 });
+
+// ws/fx-fit: the same scene as a game fitting its renderer builds it.
+test('?fit: the sky in the opaque pass with no SkyLook; particles in a game pass', async ({
+  page,
+  wrapper,
+}) => {
+  await open(page, wrapper);
+  await frames(10);
+  const own = (await read()).passes;
+  await open(page, wrapper, '?fit');
+  await frames(10);
+  await expect.poll(async () => (await read()).skyDraws).toBeGreaterThan(5);
+  const s = await read();
+  expect(s.fit).toBe(true);
+  // No sky pass; one for the game's `late` (the fountain's): as many render passes as before.
+  expect(s.passOrder).not.toContain('sky');
+  expect(s.passOrder).toContain('late');
+  expect(s.passes).toBe(own);
+  expect(s.weatherLayers).toBe(8);
+  expect(s.weatherInstances).toBeGreaterThan(0);
+  expect(s.gpuErrors).toBe(0);
+  expect(errors).toEqual([]);
+});
+
+test('?fit: each effect draws; the hook tints the sky; dead particles draw nothing', async ({
+  page,
+  wrapper,
+}) => {
+  await open(page, wrapper, '?fit');
+  await frames(60);
+  await set({ paused: true });
+  const all = await shot(page);
+  for (const k of ['particles', 'boxes', 'weather'] as FxReversedEffect[]) {
+    await set({ show: { [k]: false } });
+    const [top, bottom] = await changed(page, all, await shot(page));
+    expect(top + bottom, `${k} off`).toBeGreaterThan(0.0004);
+    await set({ show: { [k]: true } });
+  }
+  await set({ show: { weather: false, particles: false, lightning: false } });
+  const plain = await shot(page);
+  await set({ skyTint: [4, 0, 0] });
+  const [top, bottom] = await changed(page, plain, await shot(page));
+  expect(top).toBeGreaterThan(0.1);
+  expect(bottom).toBeLessThan(top);
+  // Cleared and paused: nothing alive, nothing drawn; resumed, they draw again.
+  await set({ clear: true, show: { particles: true } });
+  await expect.poll(async () => (await read()).particleDraws).toBe(0);
+  expect((await read()).boxDraws).toBe(0);
+  await set({ paused: false });
+  await expect.poll(async () => (await read()).particleDraws).toBeGreaterThan(0);
+  expect((await read()).gpuErrors).toBe(0);
+  expect(errors).toEqual([]);
+});
