@@ -58,14 +58,18 @@ async function open(page: Page, wrapper: string, flags: string): Promise<Harness
   return read();
 }
 
-/** Poll the state until `done` holds for one snapshot and return that snapshot. */
+/** Poll the state until `done` holds for one snapshot and return that snapshot. The TAA phases
+ * take most of the default 10 s on a loaded machine, so the poll waits up to 20 s. */
 async function settle(done: (s: HarnessPost4State) => boolean): Promise<HarnessPost4State> {
   let last: HarnessPost4State | null = null;
   await expect
-    .poll(async () => {
-      last = await read();
-      return done(last);
-    })
+    .poll(
+      async () => {
+        last = await read();
+        return done(last);
+      },
+      { timeout: 20_000 },
+    )
     .toBe(true);
   return last!;
 }

@@ -97,12 +97,14 @@ function frame(w: World, t: CoreTarget, prepareTs?: Parameters<RenderCore['prepa
     d: GPURenderPassDescriptor,
   ) => {
     const ds = d.depthStencilAttachment;
-    w.begun.push({
-      label: d.label,
-      load: ds?.depthLoadOp,
-      clear: ds?.depthClearValue,
-      ts: d.timestampWrites,
-    });
+    // The warmer's scratch passes (ws/warm-voxel-fit) are not the frame's.
+    if (d.label !== 'warm')
+      w.begun.push({
+        label: d.label,
+        load: ds?.depthLoadOp,
+        clear: ds?.depthClearValue,
+        ts: d.timestampWrites,
+      });
     return begin(d);
   };
   w.core.prepare(enc as unknown as GPUCommandEncoder, [w.view], prepareTs);
@@ -376,6 +378,8 @@ describe('shared shaders (ws/render-fit)', () => {
       made++;
       return make(d);
     };
+    // Pipelines the draws make, not the warmer's (it makes the caster's depth-only one ahead).
+    w.core.warmer.enabled = false;
     frame(w, target(w));
     expect(made).toBe(1);
     const g2 = w.device.createBindGroup({ layout, entries: [] });

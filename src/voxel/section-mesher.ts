@@ -61,6 +61,12 @@ export interface SectionMeshOptions {
    * (padded cell index, inset 0..31; higher bits ignored). Applies to `cutout` and `cross`.
    */
   insets?: Int32Array;
+  /**
+   * Cell fields that read differently in the cells `insets` names (ws/warm-voxel-fit): field
+   * name to the value those cells mesh with, e.g. `{ ripe: 0 }` (a growing plant is not ripe
+   * yet). Names that are not cell fields are ignored. Default none.
+   */
+  insetFields?: Readonly<Record<string, number>>;
 }
 
 /** Words per vertex. */
@@ -112,9 +118,12 @@ function smooth(
 }
 
 interface CellSlot {
+  name: string;
   shift: number;
   mask: number;
   fromFacing: boolean;
+  /** The value `SectionMeshOptions.insetFields` gives cells `insets` names; −1: none. */
+  over: number;
   word: 0 | 1;
   to: number;
   toMask: number;
@@ -136,7 +145,10 @@ export class SectionMesher {
   private readonly blockLevel: Uint8Array;
   private readonly blockHue: Uint8Array;
   private readonly queue: Int32Array;
-  private readonly cellInset: Uint8Array;
+  private readonly insets: Uint8Array;
+  /** 1 on padded cells `SectionMeshOptions.insets` names, while `insetFields` applies. */
+  private readonly overridden: Uint8Array;
+  private overriding = false;
   // Per face of a slice.
   private readonly maskKey: Int32Array;
   private readonly maskId: Int32Array;
@@ -207,7 +219,8 @@ export class SectionMesher {
     this.light = new Uint8Array(pv);
     this.blockLevel = new Uint8Array(pv);
     this.blockHue = new Uint8Array(pv);
-    this.cellInset = new Uint8Array(pv);
+    this.insets = new Uint8Array(pv);
+    this.overridden = new Uint8Array(pv);
     let q = 1;
     while (q < pv * 16) q <<= 1;
     this.queue = new Int32Array(q);
@@ -270,6 +283,8 @@ export class SectionMesher {
         shift: cf.shift,
         mask: cf.bits >= 32 ? 0xffffffff : (1 << cf.bits) - 1,
         fromFacing: cf.fromFacing === true,
+        over: -1,
+        name: cf.name,
         word: f.word,
         to: f.shift,
         toMask: f.mask,
@@ -293,10 +308,26 @@ export class SectionMesher {
     const cross = this.classifyAndLight(input);
     const overrides = opts.insets;
     if (overrides) {
-      const pv = this.cellInset.length;
+      const pv = this.insets.length;
       for (let k = 0; k + 1 < overrides.length; k += 2) {
         const i = overrides[k];
-        if (i >= 0 && i < pv) this.cellInset[i] = overrides[k + 1] & 31;
+        if (i >= 0 && i < pv) this.insets[i] = overrides[k + 1] & 31;
+      }
+      const fields = opts.insetFields;
+      if (fields) {
+        for (const sl of this.cellSlots) {
+          const v = fields[sl.name];
+          if (v !== undefined) {
+            sl.over = (v & sl.mask) >>> 0;
+            this.overriding = true;
+          }
+        }
+        if (this.overriding) {
+          for (let k = 0; k + 1 < overrides.length; k += 2) {
+            const i = overrides[k];
+            if (i >= 0 && i < pv) this.overridden[i] = 1;
+          }
+        }
       }
     }
     this.hasBlock = false;
@@ -315,6 +346,14 @@ export class SectionMesher {
     let faces = 0;
     for (let face = 0; face < 6; face++) faces += this.meshDirection(input.blocks, face, greedy);
     if (cross && this.lod < 2) faces += this.meshCross(input.blocks);
+    if (this.overriding && overrides) {
+      for (let k = 0; k + 1 < overrides.length; k += 2) {
+        const i = overrides[k];
+        if (i >= 0 && i < this.overridden.length) this.overridden[i] = 0;
+      }
+      for (const sl of this.cellSlots) sl.over = -1;
+      this.overriding = false;
+    }
     const words = 4 * SECTION_VERTEX_WORDS;
     const empty = this.nOpaque + this.nLiquid + this.nFoliage === 0;
     return {
@@ -362,6 +401,15 @@ export class SectionMesher {
     return this.mesh(this.piece, opts);
   }
 
+  /**
+   * The inset (0..31, 1/32 block) per padded cell of the last section meshed (ws/warm-voxel-fit):
+   * a cutout's or cross block's own, or its `insets` override; 0 elsewhere. A game that adds
+   * quads of its own around the mesh reads the insets the mesh used here.
+   */
+  get cellInset(): Uint8Array {
+    return this.insets;
+  }
+
   /** Sky light per padded cell (0..15) of the last section meshed. For tests and tools. */
   get skyLevels(): Uint8Array {
     return this.light;
@@ -394,7 +442,7 @@ export class SectionMesher {
     const { blocks, heights, wetTops } = input;
     const { idShift, idMask, skyFalloff, liquidSkyFalloff } = this.format;
     const { faceClass, lightCost, inset } = this.format.blocks;
-    const cellInset = this.cellInset;
+    const cellInset = this.insets;
     const lodSolid = this.lodSolid;
     const S = this.size;
     const P = this.pad;
@@ -505,7 +553,7 @@ export class SectionMesher {
     const out = positive ? sa : -sa;
     const { cls, ids, opq, light } = this;
     const { maskKey, maskId, maskE0, maskE1, maskAo, maskLight, maskBlock } = this;
-    const cellInset = this.cellInset;
+    const cellInset = this.insets;
     const maskInset = this.maskInset;
     const lodSolid = this.lodSolid;
     const lod = this.lod;
@@ -554,6 +602,7 @@ export class SectionMesher {
               const sl = slots[k];
               let val = (b >>> sl.shift) & sl.mask;
               if (sl.fromFacing && facingNone) val |= (blocks[n] >>> sl.shift) & sl.mask;
+              if (sl.over >= 0 && this.overridden[i] === 1) val = sl.over;
               const bits = ((val & sl.toMask) << sl.to) >>> 0;
               if (sl.word === 0) e0 |= bits;
               else e1 |= bits;
@@ -833,7 +882,7 @@ export class SectionMesher {
     const P = this.pad;
     const PA = this.padArea;
     const quads = this.format.blocks.quads;
-    const { cellInset, parts, partsReplace } = this;
+    const { insets: cellInset, parts, partsReplace } = this;
     const full = this.lod === 0;
     const slots = this.cellSlots;
     const out = this.outFoliage;
@@ -848,8 +897,10 @@ export class SectionMesher {
           const b = blocks[i];
           let e0 = id < this.blockW0.length ? this.blockW0[id] : 0;
           let e1 = id < this.blockW1.length ? this.blockW1[id] : 0;
+          const over = this.overriding && this.overridden[i] === 1;
           for (const sl of slots) {
-            const bits = (((b >>> sl.shift) & sl.mask & sl.toMask) << sl.to) >>> 0;
+            const val = over && sl.over >= 0 ? sl.over : (b >>> sl.shift) & sl.mask;
+            const bits = ((val & sl.toMask) << sl.to) >>> 0;
             if (sl.word === 0) e0 |= bits;
             else e1 |= bits;
           }

@@ -564,3 +564,39 @@ describe('connectivity', () => {
     expect(out.openCells).toBe(16 ** 3 - 256);
   });
 });
+
+describe('cellInset (ws/warm-voxel-fit)', () => {
+  it('reads the inset each padded cell meshed with, 0 off cutout and cross blocks', () => {
+    const vol = new Volume().set(1, 1, 1, SAPLING).set(3, 1, 1, FERN).set(5, 1, 1, STONE);
+    const mesher = new SectionMesher(FORGE);
+    mesher.mesh(vol.input(), { greedy: false });
+    const P = vol.P;
+    expect(mesher.cellInset.length).toBe(P ** 3);
+    expect(mesher.cellInset[padIndex(P, 2, 2, 2)]).toBe(6);
+    expect(mesher.cellInset[padIndex(P, 4, 2, 2)]).toBe(4);
+    expect(mesher.cellInset[padIndex(P, 6, 2, 2)]).toBe(0);
+  });
+});
+
+describe('insetFields (ws/warm-voxel-fit)', () => {
+  it('gives the cells insets names another cell field value, and only those cells', () => {
+    const vol = new Volume()
+      .set(1, 1, 1, FERN | facing(3))
+      .set(3, 1, 1, FERN | facing(3))
+      .set(5, 1, 1, SAPLING | facing(3));
+    const P = vol.P;
+    const insets = Int32Array.of(padIndex(P, 2, 2, 2), 2, padIndex(P, 6, 2, 2), 3);
+    const mesher = new SectionMesher(FORGE);
+    const out = mesher.mesh(vol.input(), { greedy: false, insets, insetFields: { facing: 0 } });
+    const all = [...quads(out.foliage), ...quads(out.opaque)];
+    const at = (x: number): Quad[] =>
+      all.filter((q) => q.v.some((v) => v.x === x) && q.v.every((v) => v.x <= x + 1));
+    expect(at(1).length).toBeGreaterThan(0);
+    expect(at(1).every((q) => q.v.every((v) => v.facing === 0 && v.inset === 2))).toBe(true);
+    expect(at(3).every((q) => q.v.every((v) => v.facing === 3 && v.inset === 4))).toBe(true);
+    expect(at(5).every((q) => q.v.every((v) => v.facing === 0 && v.inset === 3))).toBe(true);
+    // The next mesh without them reads the cells' own again.
+    const again = quads(mesher.mesh(vol.input(), { greedy: false }).foliage);
+    expect(again.every((q) => q.v.every((v) => v.facing === 3))).toBe(true);
+  });
+});

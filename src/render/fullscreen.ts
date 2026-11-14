@@ -1,5 +1,6 @@
-import { type BindingDesc, BindingSet, hasBindings } from './bindings';
+import { type BindingDesc, BindingSet, hasBindings, slotViewDimension } from './bindings';
 import { blendState, type RenderBlendMode } from './blend';
+import { type PipelineWarmer, pipelineWarmer } from './core/warm';
 import type { TextureLike } from './texture';
 import { createShaderModule, WGSL_FULLSCREEN_PRELUDE } from './wgsl';
 
@@ -42,6 +43,7 @@ export class FullscreenPass {
   readonly bindings: BindingSet | null;
   private readonly colorAttachment: GPURenderPassColorAttachment;
   private readonly passDesc: GPURenderPassDescriptor;
+  private readonly warmer: PipelineWarmer;
 
   constructor(
     device: GPUDevice,
@@ -85,6 +87,26 @@ export class FullscreenPass {
       clearValue: { r: 0, g: 0, b: 0, a: 0 },
     };
     this.passDesc = { label: `pass:${desc.label}`, colorAttachments: [this.colorAttachment] };
+    // Its empty first draw (ws/warm-voxel-fit), encoded before the device's next real pass: a
+    // pass made at load but first run when enabled mid-play compiles now, not then.
+    this.warmer = pipelineWarmer(device);
+    // Its own group of scratch views, one of each slot's dimension: the pass's textures may not
+    // be set yet (a LUT slot's default view is 2D), and the group is never cached.
+    const bindings = this.bindings;
+    const warmer = this.warmer;
+    this.warmer.warm(this.pipeline, {
+      color: desc.targets,
+      bind: bindings
+        ? (pass) => {
+            const n = desc.textures ?? 0;
+            const views: GPUTextureView[] = [];
+            for (let i = 0; i < n; i++)
+              views.push(warmer.scratchSampled(false, slotViewDimension(desc, i)));
+            pass.setBindGroup(0, bindings.createGroup(views));
+            return 1;
+          }
+        : undefined,
+    });
   }
 
   setUniforms(data: BufferSource, byteOffset = 0): void {
@@ -118,6 +140,7 @@ export class FullscreenPass {
       ca.clearValue = opts.clear ?? { r: 0, g: 0, b: 0, a: 0 };
     }
     this.passDesc.timestampWrites = opts.timestampWrites;
+    this.warmer.encode(encoder);
     const pass = encoder.beginRenderPass(this.passDesc);
     pass.setPipeline(this.pipeline);
     const vp = opts.viewport;

@@ -43,6 +43,7 @@ export {
   CoreViewExtras,
   DrawablePipelines,
   VIEW_EXTRA_FLOATS,
+  warmBindings,
 } from './drawable';
 export type { BufferLayout, LayoutAttribute, LayoutDesc } from './layout';
 export { createInstanceLayout, createVertexLayout, vertexFormatBytes } from './layout';
@@ -77,3 +78,5 @@ export {
   VIEW_SLOT_BYTES,
   VIEW_SLOT_FLOATS,
 } from './view';
+export type { WarmTarget } from './warm';
+export { PipelineWarmer, pipelineWarmer, warmPipeline } from './warm';

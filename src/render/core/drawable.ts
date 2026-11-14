@@ -16,6 +16,7 @@ import type { RenderCore } from './core';
 import type { CorePass } from './pass-list';
 import { coreColorFormats } from './targets';
 import { CORE_VIEW_WGSL, MAX_VIEWS, sphereInPlanes, VIEW_SLOT, VIEW_SLOT_FLOATS } from './view';
+import { type PipelineWarmer, pipelineWarmer } from './warm';
 
 /** What a drawable records into: an open pass (direct) or a bundle. */
 export type CoreDrawableEncoder = GPURenderPassEncoder | GPURenderBundleEncoder;
@@ -81,6 +82,15 @@ export interface CoreDrawable {
   prepare?(encoder: GPUCommandEncoder, core: RenderCore): void;
   /** Record its draws (pipeline, bind groups, draws); returns the GPU calls it made. */
   record(enc: CoreDrawableEncoder, ctx: CoreDrawContext): number;
+  /**
+   * Record an empty draw (`draw(0)`) of each pipeline `record` would use for `ctx`'s target
+   * (ws/warm-voxel-fit): set the pipeline and what it binds (`warmBindings` binds scratch
+   * vertex buffers), draw nothing; returns the GPU calls made. The core calls it once per
+   * target while the drawable is inactive, into a scratch pass of the target's formats, so the
+   * pipeline compiles at load (WebKit compiles at the first draw) and not when it first draws.
+   * Absent: not warmed.
+   */
+  warm?(enc: GPURenderPassEncoder, ctx: CoreDrawContext): number;
 }
 
 /**
@@ -117,6 +127,17 @@ export interface PassMember {
     depth: GPUTextureFormat | undefined,
     aux: number,
   ): void;
+  /**
+   * Queue the empty first draw of what it would draw into a target of these formats unless
+   * done (ws/warm-voxel-fit); returns the warms queued.
+   */
+  warm?(
+    warmer: PipelineWarmer,
+    group: number,
+    color: GPUTextureFormat,
+    depth: GPUTextureFormat | undefined,
+    aux: number,
+  ): number;
 }
 
 /** @internal The core side the entry reads. */
@@ -272,6 +293,55 @@ export class DrawableEntry implements PassMember {
     host.stats.directDraws++;
   }
 
+  /** Targets warmed (`warm`). */
+  private readonly warmed: {
+    color: GPUTextureFormat;
+    depth: GPUTextureFormat | undefined;
+    readOnly: boolean;
+    aux: number;
+    reversed: boolean;
+  }[] = [];
+
+  warm(
+    warmer: PipelineWarmer,
+    group: number,
+    color: GPUTextureFormat,
+    depth: GPUTextureFormat | undefined,
+    aux = 0,
+  ): number {
+    const d = this.drawable;
+    if (!d.warm || !warmer.enabled) return 0;
+    const readOnly = depth !== undefined && this.pass.depth === 'read';
+    const reversed = this.pass.reversedZ;
+    const w = this.warmed;
+    for (let i = 0; i < w.length; i++) {
+      const e = w[i]!;
+      if (
+        e.color === color &&
+        e.depth === depth &&
+        e.readOnly === readOnly &&
+        e.aux === aux &&
+        e.reversed === reversed
+      ) {
+        return 0;
+      }
+    }
+    w.push({ color, depth, readOnly, aux, reversed });
+    queueDrawableWarm(
+      warmer,
+      d,
+      this.host.ctx,
+      this.host.drawGroup(group),
+      group,
+      color,
+      depth,
+      readOnly,
+      reversed,
+      aux,
+    );
+    return 1;
+  }
+
   private context(
     group: number,
     bind: GPUBindGroup,
@@ -347,6 +417,17 @@ export class DrawablePipelines {
     });
     return pipeline;
   }
+}
+
+/**
+ * Bind `n` scratch vertex buffers at slots 0 … n-1 for a drawable's empty warm draw
+ * (`CoreDrawable.warm`); returns the calls made.
+ */
+export function warmBindings(enc: GPURenderPassEncoder, ctx: CoreDrawContext, n: number): number {
+  if (n === 0) return 0;
+  const b = pipelineWarmer(ctx.core.device).scratchVertex();
+  for (let i = 0; i < n; i++) enc.setVertexBuffer(i, b);
+  return n;
 }
 
 /** Floats per view in `CoreViewExtras`: inverse view-projection, right, up, forward, spare. */
@@ -471,4 +552,35 @@ function norm3(out: Float32Array, o: number, x: number, y: number, z: number): v
   out[o + 1] = y / l;
   out[o + 2] = z / l;
   out[o + 3] = 0;
+}
+
+/**
+ * Queue a drawable's empty first draw (`DrawableEntry.warm`). Its own function, so `warm` makes
+ * no closure context on a call that queues nothing. The core's draw context is one reused
+ * object: the warm, which runs later, gets its own copy.
+ */
+function queueDrawableWarm(
+  warmer: PipelineWarmer,
+  d: CoreDrawable,
+  ctx: CoreDrawContext,
+  bind: GPUBindGroup,
+  group: number,
+  color: GPUTextureFormat,
+  depth: GPUTextureFormat | undefined,
+  readOnly: boolean,
+  reversed: boolean,
+  aux: number,
+): void {
+  const own: CoreDrawContext = {
+    core: ctx.core,
+    group,
+    viewGroup: bind,
+    viewLayout: ctx.viewLayout,
+    color,
+    aux,
+    depth,
+    depthReadOnly: readOnly,
+    reversedZ: reversed,
+  };
+  warmer.job({ color: coreColorFormats(color, aux), depth }, (enc) => d.warm!(enc, own));
 }
