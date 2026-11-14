@@ -476,6 +476,13 @@ the stack. All additive; a stack made as before draws the same pixels.
 - `harness/post-fit.html` measures TAA + bloom + LUT (god rays off) at the window's size: GPU
   per pass, CPU of the frame and bind groups per frame on `window.__harnessPostFit`.
 
+## Pipeline warming (ws/warm-voxel-fit)
+
+A `FullscreenPass` (and a `DepthPass`) queues an empty draw of its pipeline on the device's
+`PipelineWarmer` when it is made, and encodes the queue before its own pass. A pass made at
+load and enabled later then does not stall WebKit when it first draws. The render README has the
+details.
+
 ## Types
 
 - `PostSettings` has one section per pass: `bloom: BloomSettings`, `mist: MistSettings`,

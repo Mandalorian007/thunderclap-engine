@@ -222,6 +222,14 @@ Without them a section meshes the same as before.
   some `cutout` or `cross` cells. It is a list of (padded index, inset) pairs, for example a
   growing plant.
 - `solid`, `part` and `twin` are listed in `VOXEL_VERTEX_OPTIONAL`.
+- `SectionMeshOptions.insetFields` (ws/warm-voxel-fit) gives the cells `insets` names another
+  value for some cell fields, for example `{ ripe: 0 }`: a growing plant is not ripe yet.
+- `SectionMesher.cellInset` is the inset each padded cell of the last section meshed with (its
+  block's, or its `insets` override), for a game that adds quads of its own around the mesh.
+- A vertex field with `overlaps: true` (and a `word` and `shift`) is a union member: it shares
+  bits with other fields, and the game says, in another field, which one a vertex holds. The
+  mesher writes only the engine's fields, so the game writes its union members. For example, a
+  12-bit `id` can share its bits with a 9-bit plant id and 3 bits of plant-only data.
 
 **Workers.** The game's Worker script calls `installSectionMesherWorker({ codec })` (it answers
 `SectionMesherRequest`s with `SectionMesherReply`s, a `SectionMeshResult` or a failure, over a

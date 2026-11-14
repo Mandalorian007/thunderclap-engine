@@ -174,3 +174,31 @@ test('the sky as a core pass fills the background behind the boxes and survives 
   expect(await offShare(page, skyShot, await shot(), 24)).toBeLessThan(0.01);
   expect(errors).toEqual([]);
 });
+
+test('a draw set first drawn mid-run was warmed at load: no long frame when it appears', async ({
+  page,
+  wrapper,
+}, info) => {
+  // ws/warm-voxel-fit (B13): WebKit compiles a pipeline at its first draw. The late set's large
+  // shader is warmed with an empty draw at load, so the frame its first box appears is ordinary.
+  // `?nowarm` is the same page without warming: logged, the stall the warm moves to load.
+  const s = await open(page, wrapper, 'sets=400&still&stall');
+  await expect.poll(async () => (await read()).frames, { timeout: 20_000 }).toBeGreaterThan(45);
+  const after = await read();
+  expect(after.lateFrame).toBe(30);
+  expect(after.warmed).toBeGreaterThan(0);
+  expect(after.gpuErrors).toBe(0);
+  expect(errors).toEqual([]);
+  if (process.env.E2E_STALL_COMPARE === '1') {
+    await open(page, wrapper, 'sets=400&still&stall&nowarm');
+    await expect.poll(async () => (await read()).frames, { timeout: 20_000 }).toBeGreaterThan(45);
+    const cold = await read();
+    console.log(
+      `[stall ${info.project.name}] warm ${after.lateStallMs.toFixed(1)} ms, nowarm ${cold.lateStallMs.toFixed(1)} ms`,
+    );
+  }
+  expect(s.frames).toBeGreaterThan(0);
+  // The stall is WebKit's (Metal compiles at first draw); headless Chromium's frame pacing under
+  // load is too coarse for a 50 ms bound, so there it is logged only.
+  if (info.project.name === 'webkit-ipad') expect(after.lateStallMs).toBeLessThan(50);
+});

@@ -276,6 +276,7 @@ class DecalsOnCore implements CoreDrawable {
     constructor(core: RenderCore, src: DecalsOnCoreSource, opts: DecalsOnCoreOptions);
     restore(): void;
     prepare(): void;
+    warm(enc: GPURenderPassEncoder, ctx: CoreDrawContext): number;
     record(enc: CoreDrawableEncoder, ctx: CoreDrawContext): number;
     destroy(): void;
 }
@@ -535,6 +536,7 @@ class Lightning implements CoreDrawable {
     strike(x: number, groundY: number, z: number, seed?: number): void;
     update(dt: number): void;
     prepare(): void;
+    warm(enc: GPURenderPassEncoder, ctx: CoreDrawContext): number;
     record(enc: CoreDrawableEncoder, ctx: CoreDrawContext): number;
     destroy(): void;
 }
@@ -783,6 +785,7 @@ class ParticlesOnCore implements CoreDrawable {
     };
     constructor(core: RenderCore, src: ParticlesOnCoreSource);
     prepare(encoder: GPUCommandEncoder): void;
+    warm(enc: GPURenderPassEncoder, ctx: CoreDrawContext): number;
     record(enc: CoreDrawableEncoder, ctx: CoreDrawContext): number;
     destroy(): void;
 }
@@ -1143,6 +1146,7 @@ class WaterOnCore implements CoreDrawable {
     static readonly CALLS = 1;
     constructor(core: RenderCore, water: Water, params: GPUBuffer, opts: WaterOnCoreOptions);
     prepare(encoder: GPUCommandEncoder): void;
+    warm(enc: GPURenderPassEncoder, ctx: CoreDrawContext): number;
     record(enc: CoreDrawableEncoder, ctx: CoreDrawContext): number;
     destroy(): void;
 }
@@ -1208,6 +1212,7 @@ class Weather implements CoreDrawable {
     setOcclusionMap(map: WeatherOcclusionMap | null): void;
     update(dt: number): void;
     prepare(): void;
+    warm(enc: GPURenderPassEncoder, ctx: CoreDrawContext): number;
     record(enc: CoreDrawableEncoder, ctx: CoreDrawContext): number;
     destroy(): void;
 }

@@ -38,6 +38,15 @@ export interface HarnessCoreState {
   restoredEvents: number;
   /** `?sky`: the sky pass's draws so far (one per view per frame). */
   skyDraws: number;
+  /**
+   * `?stall` (ws/warm-voxel-fit): the frame a second draw set with a large shader got its first
+   * mesh (0 until then), the longest frame-to-frame interval (ms) over the 10 frames from
+   * there, and the pipelines the core's warmer warmed (`core.warmer.warmed`; `?nowarm` turns
+   * warming off).
+   */
+  lateFrame: number;
+  lateStallMs: number;
+  warmed: number;
 }
 
 declare global {

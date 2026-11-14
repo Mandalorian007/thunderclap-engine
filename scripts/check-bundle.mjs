@@ -55,6 +55,13 @@ export const NAMED = [
     names: ['createRenderCore', 'createCorePost', 'PostStack', 'createPostHost'],
     excludes: ['ui', 'audio', 'voxel', 'assets', 'render/renderer.ts'],
   },
+  // The core's sun shadow without the forward renderer (ws/warm-voxel-fit, Forge D2).
+  {
+    name: 'render core + shadow { createRenderCore, CoreShadowMap, CoreSunShadow }',
+    from: ['./render', './render', './render'],
+    names: ['createRenderCore', 'CoreShadowMap', 'CoreSunShadow'],
+    excludes: ['ui', 'audio', 'voxel', 'post', 'assets', 'render/renderer.ts', 'render/shadow.ts'],
+  },
   // createGame pulls the whole engine today (ui, audio, fx, post); D2 R5 wants a feature-off
   // createGame free of ui and audio. `todo` folders are reported, not failed, until A3 (ws/kit)
   // splits it; then they move to `excludes`.

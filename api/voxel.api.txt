@@ -199,6 +199,7 @@ interface SectionMeshOptions {
     greedy?: boolean;
     leafLod?: number;
     insets?: Int32Array;
+    insetFields?: Readonly<Record<string, number>>;
 }
 
 ## SectionMeshPool
@@ -261,6 +262,7 @@ class SectionMesher {
     meshPiece(cells: Uint32Array, sx: number, sy: number, sz: number, opts?: SectionMeshOptions & {
         air?: number;
     }): SectionMesh;
+    get cellInset(): Uint8Array;
     get skyLevels(): Uint8Array;
     get blockLevels(): Uint8Array;
     get blockHues(): Uint8Array;
@@ -397,6 +399,7 @@ interface VertexField {
     readonly word: 0 | 1;
     readonly shift: number;
     readonly mask: number;
+    readonly overlaps?: true;
 }
 
 ## VertexFieldDef  (type-only)
@@ -405,6 +408,7 @@ interface VertexFieldDef {
     bits: number;
     word?: 0 | 1;
     shift?: number;
+    overlaps?: boolean;
 }
 
 ## VertexSchema  (type-only)
