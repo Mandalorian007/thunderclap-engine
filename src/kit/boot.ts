@@ -1,7 +1,7 @@
 /**
  * The surface and GPU service (ws/kit): `bootKit` mounts the letterboxed surface and boots
- * WebGPU on it (or takes a given GPU, headless), and `createKitRenderer` builds the renderer on
- * that GPU. Both are constructible alone; `composeGame` calls them first.
+ * WebGPU on it (or takes a given GPU, headless); `createKitRenderer` (`./renderer`) builds the
+ * renderer on that GPU. Both are constructible alone; `composeGame` calls them first.
  */
 
 import { DetachedSurface } from '../core/detached-surface';
@@ -15,7 +15,6 @@ import {
   type Surface,
   type SurfaceOptions,
 } from '../platform';
-import { installGpuErrorLogging, Renderer, type SceneTargetAux } from '../render';
 
 /** `bootKit`'s inputs: where to mount, what to boot on, and the design size. */
 export interface KitBootOptions {
@@ -79,23 +78,6 @@ export async function bootKit(opts: KitBootOptions): Promise<KitBoot | null> {
         gpuOptions: opts.gpuOptions,
       });
   return booted.ok ? booted : null;
-}
-
-/**
- * The renderer on `gpu` at the design size, with GPU error logging installed on the device.
- * `aux` is `RendererOptions.aux`.
- */
-export function createKitRenderer(
-  gpu: GpuContext,
-  design: { width: number; height: number },
-  aux?: SceneTargetAux,
-): Renderer {
-  installGpuErrorLogging(gpu.device);
-  return new Renderer(gpu, {
-    logicalWidth: design.width,
-    logicalHeight: design.height,
-    aux,
-  });
 }
 
 /**

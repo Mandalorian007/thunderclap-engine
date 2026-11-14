@@ -34,6 +34,10 @@ export interface HarnessKitState {
   ownFrames: number;
   /** The last size the kit handed `KitRenderer.resize` ([w, h], device px). */
   resized: number[];
+  /** `ctx.design` as last updated (it follows the window under `&fill`). */
+  design: number[];
+  /** The engine renderer's logical size (engine mode). */
+  logical: number[];
   /** `ctx.renderer === null` (`?none`). */
   rendererNull: boolean;
   /** The colour the page's own renderer clears to (0..255 RGB). */

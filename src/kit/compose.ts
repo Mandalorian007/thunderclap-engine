@@ -25,7 +25,7 @@ import type { XRFrame } from '../platform/xr-types';
 import type { Frame, Renderer, SceneTargetAux } from '../render';
 import { Camera } from '../render/camera';
 import type { Overlay } from '../ui';
-import { bootKit, createKitRenderer } from './boot';
+import { bootKit } from './boot';
 import { createExternalFrames } from './frames';
 import type {
   CrashOptions,
@@ -271,6 +271,16 @@ function kitCrash(kit: KitOptions): KitCrash | null {
   };
 }
 
+/**
+ * What the boot asks the GPU for: `gpuOptions`, with an XR-compatible adapter by default when
+ * `xr` is in the kit (a headset session needs one; `xrCompatible: false` says otherwise).
+ * Internal, exported for the tests.
+ */
+export function kitGpuOptions(kit: KitOptions): BootGpuOptions | undefined {
+  if (!kit.xr) return kit.gpuOptions;
+  return { ...kit.gpuOptions, xrCompatible: kit.gpuOptions?.xrCompatible ?? true };
+}
+
 async function buildKit(kit: KitOptions, crash: KitCrash | null): Promise<object | null> {
   const design = { width: kit.design?.width ?? 1920, height: kit.design?.height ?? 1080 };
   const dom = kit.dom !== false;
@@ -301,15 +311,19 @@ async function buildKit(kit: KitOptions, crash: KitCrash | null): Promise<object
     title: kit.title,
     blockBrowserZoom: kit.blockBrowserZoom,
     forceUnsupported: kit.forceUnsupported,
-    gpuOptions: kit.gpuOptions,
+    gpuOptions: kitGpuOptions(kit),
   });
   if (!res) return null;
   const { surface, gpu } = res;
   kit.onGpuReady?.(gpu);
-  const renderer = ownMode ? null : createKitRenderer(gpu, design, kit.aux);
+  // Loaded only when the engine draws: a game with its own renderer (or none) never loads it.
+  const renderer = ownMode
+    ? null
+    : (await import('./renderer')).createKitRenderer(gpu, design, kit.aux);
   const own = typeof kit.renderer === 'function' ? await kit.renderer(gpu, surface) : kit.renderer;
   // Without the engine's renderer the kit keeps the camera itself (rays, overlay anchors).
-  let ownCamera = renderer ? null : Camera.ortho2d(design.width, design.height);
+  const kitCamera = renderer ? null : Camera.ortho2d(design.width, design.height);
+  let ownCamera = kitCamera;
   const camera = (): Camera => ownCamera ?? renderer!.camera;
 
   // ── Core: host, save, clock, scenes, loop ──────────────────────────────
@@ -432,6 +446,16 @@ async function buildKit(kit: KitOptions, crash: KitCrash | null): Promise<object
     fields.push(uiPart.fields);
   }
   surface.onResize(({ rect, backbuffer }) => {
+    // Under `fit: 'fill'` the logical size follows the surface (a no-op for any other fit, whose
+    // logical size is the design's): `ctx.design`, the renderer's 2D frame, the kit's camera.
+    const lw = surface.logicalWidth;
+    const lh = surface.logicalHeight;
+    if (lw !== design.width || lh !== design.height) {
+      design.width = lw;
+      design.height = lh;
+      renderer?.setLogicalSize(lw, lh);
+      if (ownCamera === kitCamera) kitCamera?.setOrtho2d(lw, lh);
+    }
     if (renderer) renderer.resize(backbuffer.width, backbuffer.height);
     else own?.resize?.(backbuffer.width, backbuffer.height);
     ui?.setFrame(rect);

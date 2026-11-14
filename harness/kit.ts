@@ -44,6 +44,8 @@ const state: HarnessKitState = {
   fill,
   ownFrames: 0,
   resized: [],
+  design: [],
+  logical: [],
   rendererNull: false,
   clear: CLEAR.map((c) => Math.round(c * 255)),
 };
@@ -138,6 +140,7 @@ try {
     ctx.hooks.update = () => {
       state.updates++;
       state.clockMs = ctx.clock.now();
+      state.design = [ctx.design.width, ctx.design.height];
     };
     ctx.loop.start();
   } else {
@@ -149,16 +152,21 @@ try {
       angle += dt * 0.8;
       state.updates++;
       state.clockMs = ctx.clock.now();
+      state.design = [ctx.design.width, ctx.design.height];
+      state.logical = [ctx.renderer.logicalWidth, ctx.renderer.logicalHeight];
     };
     ctx.stack.push({
       name: 'orbit',
       render(frame) {
+        hub.x = frame.logicalWidth / 2;
+        hub.y = frame.logicalHeight / 2;
         frame.sprite(null, hub);
         for (let i = 0; i < COUNT; i++) {
           const a = angle + (i / COUNT) * Math.PI * 2;
           const s = squares[i]!;
-          s.x = DESIGN.width / 2 + Math.cos(a) * 240;
-          s.y = DESIGN.height / 2 + Math.sin(a) * 240;
+          // The middle of the logical frame (the design, or the window under `&fill`).
+          s.x = frame.logicalWidth / 2 + Math.cos(a) * 240;
+          s.y = frame.logicalHeight / 2 + Math.sin(a) * 240;
           s.rotation = a;
           frame.sprite(null, s);
         }

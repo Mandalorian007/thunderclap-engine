@@ -56,6 +56,8 @@ export function createKitOverlay(deps: KitOverlayDeps): Overlay {
     parent: surface.root,
     designWidth: deps.design.width,
     designHeight: deps.design.height,
+    // Under `fit: 'fill'` the camera's logical space follows the surface.
+    logicalSize: surface,
     layout: deps.layout,
     focusHome: () => surface.canvas,
     theme: deps.theme,

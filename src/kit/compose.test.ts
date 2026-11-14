@@ -4,6 +4,7 @@
  * (`dom: false`) on the fake GPU and the fake host.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { DetachedSurface } from '../core/detached-surface';
 import { GameLoop } from '../core/loop';
 import type { Host } from '../host';
 import type { GpuContext } from '../platform';
@@ -16,7 +17,7 @@ import {
 } from '../render/fake-gpu';
 import { createFakeHost } from '../testing/fake-host';
 import { withAudio } from './audio';
-import { composeGame, type KitOptions } from './compose';
+import { composeGame, type KitOptions, kitGpuOptions } from './compose';
 import { createExternalFrames } from './frames';
 import { withInput } from './input';
 import { withParticles, withPost } from './post';
@@ -377,5 +378,66 @@ describe('composeGame with the game own renderer, or none (ws/kit-fit)', () => {
         /draws through the engine's renderer/,
       );
     }
+  });
+});
+
+describe('fit fill: the logical size follows the surface (ws/kit-fit rulings)', () => {
+  it('ctx.design, the renderer frame and its default camera follow a fill surface', async () => {
+    const { device: _d, ...kit } = headless();
+    const ctx = (await composeGame({
+      ...kit,
+      design: { width: 640, height: 360 },
+      surface: { fit: 'fill' },
+    }))!;
+    const surf = ctx.surface as DetachedSurface;
+    expect(ctx.design).toEqual({ width: 640, height: 360 });
+    surf.resizeContainer(800, 600);
+    expect(surf.rect).toEqual({ x: 0, y: 0, width: 800, height: 600, scale: 1 });
+    expect(ctx.design).toEqual({ width: 800, height: 600 });
+    expect([ctx.renderer.logicalWidth, ctx.renderer.logicalHeight]).toEqual([800, 600]);
+    const frame = (
+      ctx.renderer as unknown as { frame: { logicalWidth: number; logicalHeight: number } }
+    ).frame;
+    expect([frame.logicalWidth, frame.logicalHeight]).toEqual([800, 600]);
+    expect(ctx.camera.screen).toMatchObject({ width: 800, height: 600 });
+    expect(surf.clientToLogical(400, 300)).toMatchObject({ x: 400, y: 300 });
+    // A camera the game set is the game's to resize.
+    const mine = Camera.ortho2d(100, 100);
+    ctx.setCamera(mine);
+    surf.resizeContainer(1000, 500);
+    expect(ctx.design).toEqual({ width: 1000, height: 500 });
+    expect(mine.screen).toMatchObject({ width: 100, height: 100 });
+  });
+
+  it('any other fit keeps the design size', async () => {
+    const { device: _d, ...kit } = headless();
+    const ctx = (await composeGame({ ...kit, design: { width: 640, height: 360 } }))!;
+    (ctx.surface as DetachedSurface).resizeContainer(800, 800);
+    expect(ctx.design).toEqual({ width: 640, height: 360 });
+    expect([ctx.renderer.logicalWidth, ctx.renderer.logicalHeight]).toEqual([640, 360]);
+    expect(ctx.surface.rect.width).toBe(800);
+  });
+
+  it("the kit's own camera follows too when the game draws on its own", async () => {
+    const { device: _d, ...kit } = headless();
+    const ctx = (await composeGame({ ...kit, surface: { fit: 'fill' }, renderer: null }))!;
+    (ctx.surface as DetachedSurface).resizeContainer(300, 200);
+    expect(ctx.design).toEqual({ width: 300, height: 200 });
+    expect(ctx.camera.screen).toMatchObject({ width: 300, height: 200 });
+  });
+});
+
+describe('xr asks for an XR-compatible adapter (ws/kit-fit rulings)', () => {
+  it('by default with xr, never without it, and `xrCompatible: false` wins', () => {
+    expect(kitGpuOptions({})).toBeUndefined();
+    expect(kitGpuOptions({ gpuOptions: { timestamps: false } })).toEqual({ timestamps: false });
+    expect(kitGpuOptions({ xr: withXr() })).toEqual({ xrCompatible: true });
+    expect(kitGpuOptions({ xr: withXr(), gpuOptions: { timestamps: false } })).toEqual({
+      timestamps: false,
+      xrCompatible: true,
+    });
+    expect(kitGpuOptions({ xr: withXr(), gpuOptions: { xrCompatible: false } })).toEqual({
+      xrCompatible: false,
+    });
   });
 });

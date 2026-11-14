@@ -7,7 +7,7 @@
 export type { KitAudioDeps, KitAudioFields } from './audio';
 export { createKitAudio, withAudio } from './audio';
 export type { KitBoot, KitBootOptions } from './boot';
-export { bootKit, createKitRenderer } from './boot';
+export { bootKit } from './boot';
 export type {
   KitCtx,
   KitExternalFrame,
@@ -31,6 +31,7 @@ export type { KitOverlayDeps, KitOverlayFields, KitOverlayOptions } from './over
 export { createKitOverlay, withOverlay } from './overlay';
 export type { KitParticleFields, KitPostFields } from './post';
 export { withParticles, withPost } from './post';
+export { createKitRenderer } from './renderer';
 export type {
   CrashOptions,
   FlushableSave,
