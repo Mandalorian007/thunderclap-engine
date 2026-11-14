@@ -1024,12 +1024,58 @@ counts), keeps `data-tc-id` control ids (`<panel>/<word>[:<row>]`) so `PadNav`, 
 of panels; `presentHud(hud, ui)` adds each panel's host through `ui.layout.add` (regions, safe
 areas and form factors as for any widget) at `specScale(ui)` CSS px per unit and follows resizes
 (`HudView`). `presentModal(ui, panel, opts)` (`SpecModalOptions`) opens a panel on `ui.stack` as a
-`SpecModal` (focus trap, Escape, focus return). Both take a `SpecOverlay` (the overlay's root,
-layout, units, scale, `onResize` and stack). The look is tokens, not parsed CSS: `theme(tokens)`
+`SpecModal` (focus trap, Escape, focus return). Both take a `SpecOverlay` (the overlay's layout,
+units, scale, `onResize` and stack; the page comes from `layout.root`, the overlay root the layout
+is made over, ws/ui-world). The look is tokens, not parsed CSS: `theme(tokens)`
 resolves `SpecTokens` over `defaultSpecTokens` into a `SpecTheme` of `--tcs-*` properties
 (`specTokenVar`). Text lines are counted with `wrapCount`/`wrapText` (`WrapOptions`) and
 `textWidth`, measuring with an `OffscreenCanvas` or an estimate; `measureWith` (a `SpecMeasurer`)
 fixes it for tests. See `spec/README.md` and `harness/ui-spec.html`.
+
+### The world presenter: `presentWorld`, `worldScreen` (ws/ui-world)
+
+The same `SpecPanel` drawn on a `WorldPanel` in the scene, so one spec looks and behaves alike on a
+flat screen, on touch and in a headset (Forge's one HUD layout everywhere):
+
+```ts
+const quad = createWorldPanel(ctx.renderer, { width: 1.2, height: 1.35, resolution: 400 });
+const onQuad = presentWorld(kit, quad, { fit: 'none', scale: 480 / 360 }); // the DOM's words, in the world
+quad.attach(ctx.input);                                                    // rays: mouse, touch, pad cursor, XR
+const screen = worldScreen(ctx.renderer);                                  // head-following, lazy
+const bar = presentWorldHud(myHud, screen);                                // regions on the screen
+const dlg = presentWorldModal(screen, dialog, { onClose: (why) => {} });   // dim backdrop, Tab trap, Escape
+```
+
+- `presentWorld(panel, world, opts?)` (`WorldOptions`: `scale` px per unit, `fit` `'surface'` (fill
+  the panel), `'natural'` (the spec's own size) or `'none'`, `w` (the frame width, units), `rect`
+  (where on the canvas) or `place(w, h, out)`, `theme`, `slotArt`, `timer`, `onEscape`) returns a `WorldPresenter`: one `WorldWidget` (`widget`) that paints the
+  panel's `SpecBoxes` with Canvas2D and repaints only the boxes of dirty keys and rows (`paints`;
+  an idle frame paints nothing), routes ray presses, holds, drags on a range and the wheel on a
+  list into the same events as `presentDom` (tap, toggle, pick, down/up, change, input, enter then
+  the `submits` button's tap, focus and blur), takes keys while focused (`key`, `keyUp`: Tab order
+  as the DOM's tab stops, arrows on a range and tabs, typing into a field), and reports
+  `focusId`, `focusOrder()`, `rectOf(id, row?)` (a word's canvas-px box), `unitScale`,
+  `setScale`, `setRect`, `focusFirst`, `apply` and `dispose`.
+- `worldScreen(renderer, opts?)` (`WorldScreenOptions`: `width` 1.6, `height` 0.9, `resolution`
+  800, `distance` 1.2, `lazy` 0.35 rad, `ease` 0.12 s, `canvas`) is a transparent head-locked
+  `WorldPanel` that holds still while the view stays inside its `lazy` cone and eases back when it
+  leaves; it is not depth tested and its empty pixels let rays through (`hitEmpty: false`).
+- `presentWorldHud(hud, screen, opts?)` (`WorldHudOptions` `margin` 16 px) lays a `SpecHud`'s items
+  on the screen by their `desktop` (else `default`) region: top, bottom and caption lanes as
+  centred rows, left, right and card lanes as columns, the rest centred; `'hidden'` is skipped.
+  It returns a `WorldHudView` (`presenters`, `dispose`).
+- `presentWorldModal(screen, panel, opts?)` (`WorldModalOptions` `onClose(reason)`, `dismissable`
+  true) opens a panel centred over a dim backdrop on the screen, focuses its first word, traps Tab,
+  and closes by Escape, a backdrop press or `close()` (`WorldModal`).
+- World panels gained what the presenter needs: `WorldPanelOptions.hitEmpty` (a press on no widget
+  still hits the panel; false lets it through), `headLocked.lazy`/`ease`, `invalidateRect(r)` and
+  `paintClip` (a widget repaints a part of itself), `following` (a lazy screen is catching up),
+  `WorldWidget.keyFirst` (it sees keys before the panel's Tab and Enter) and
+  `PanelKeyEvent.ctrlKey`/`metaKey`.
+- Harness `harness/ui-world.html` (one panel on the page and on a quad, a HUD and a modal on the
+  screen; `?stereo` draws two eyes side by side); spec `e2e/ui-world.spec.ts` (DOM vs ray parity,
+  an idle quad, the screen's modal, stereo); tests `spec/present-world.dom.test.ts` (parity on the
+  fake GPU, Tab order, an idle frame paints nothing, the lazy screen, the modal, the HUD).
 
 ## Tests
 

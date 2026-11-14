@@ -146,3 +146,46 @@ describe('PanelStack arrows', () => {
     expect(key('ArrowDown').defaultPrevented).toBe(false);
   });
 });
+
+describe('PanelStack Tab trap (ws/ui-world)', () => {
+  it('every Tab is moved by hand (WebKit skips buttons on its own), wrapping both ways', () => {
+    const [a, b, c] = buttons('A', 'B', 'C');
+    push(h('div', null, a, b, c));
+    expect(document.activeElement).toBe(a);
+    expect(key('Tab').defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(b);
+    expect(key('Tab').defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(c);
+    key('Tab');
+    expect(document.activeElement).toBe(a);
+    expect(key('Tab', { shiftKey: true }).defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(c);
+    key('Tab', { shiftKey: true });
+    expect(document.activeElement).toBe(b);
+  });
+
+  it('focus outside the panel comes back in at the first (or, with Shift, the last)', () => {
+    const outside = h('button', { type: 'button' }, 'out');
+    document.body.append(outside);
+    const [a, b] = buttons('A', 'B');
+    push(h('div', null, a, b));
+    outside.focus();
+    key('Tab');
+    expect(document.activeElement).toBe(a);
+    outside.focus();
+    key('Tab', { shiftKey: true });
+    expect(document.activeElement).toBe(b);
+  });
+
+  it('a pressed but unfocused opener (WebKit) gets focus back on close', () => {
+    const opener = h('button', { type: 'button' }, 'open');
+    document.body.append(opener);
+    (document.activeElement as HTMLElement | null)?.blur();
+    opener.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    const [a] = buttons('A');
+    const handle = push(h('div', null, a));
+    expect(document.activeElement).toBe(a);
+    handle.close();
+    expect(document.activeElement).toBe(opener);
+  });
+});
