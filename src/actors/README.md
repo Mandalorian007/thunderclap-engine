@@ -49,7 +49,7 @@ actors.prepare(encoder, [view], performance.now() / 1000);
 | `actors.bones`, `actors.args`, `drawOf(model, lod)` | the GPU outputs, for readback or a game's own pass |
 | `recordShape(layout)` / `opts.recordLayout` | extra per-actor fields (`f32`, `u32`, `i32`) after the 20 header words, visible to WGSL as `ACTOR_FIELD_<NAME>` |
 | `ACTOR_RECORD` | the header's word offsets |
-| `opts.poseWgsl` / `opts.poseCpu` | the pose hook (ws/actor-fit): `fn actor_pose(actor, model, node, p: Trs, time) -> Trs` changes each node's local transform after the clips; its CPU twin keeps `poseCpu` matching |
+| `opts.poseWgsl` / `opts.poseCpu` (`ActorPoseCpu`) | the pose hook (ws/actor-fit): `fn actor_pose(actor, model, node, p: Trs, time) -> Trs` changes each node's local transform after the clips; its CPU twin keeps `poseCpu` matching |
 | `actors.addDrawSet(desc)` | another set over the same models, poses and visible lists with its own shader (`ActorDrawSetDesc`: entries, blend, pass, order, own groups at 2+); `shape: 'actor'` with `opts.actorVertices` draws that many unindexed vertices per visible actor (a contact shadow's quad) |
 
 ## How it works
