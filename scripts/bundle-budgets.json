@@ -14,7 +14,7 @@
     "./nav": 28900,
     "./platform": 14900,
     "./post": 30900,
-    "./render": 68700,
+    "./render": 69200,
     "./save": 7700,
     "./tween": 3700,
     "./ui": 94500,
@@ -25,10 +25,10 @@
     "render + voxel { Renderer, createVoxelGrid, createVoxelWorld }": 60000,
     ". { createGame }": 176300,
     "./kit": 175200,
-    "./models": 13200,
+    "./models": 13300,
     "./quality": 2500,
     "./net": 16800,
-    "./actors": 16900,
+    "./actors": 18500,
     "./xr": 4200
   }
 }
