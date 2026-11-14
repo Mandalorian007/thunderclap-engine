@@ -4,7 +4,13 @@
  */
 export type { ArenaAlloc, ArenaDesc, ArenaKind } from './arena';
 export { Arena, createArena } from './arena';
-export type { CoreCaps, CoreShadowTarget, CoreTarget, RenderCoreOptions } from './core';
+export type {
+  CoreCaps,
+  CoreShadowTarget,
+  CoreTarget,
+  CoreTimestamps,
+  RenderCoreOptions,
+} from './core';
 export { createRenderCore, MULTI_DRAW_FEATURE, RenderCore } from './core';
 export {
   ARGS_BYTES,
@@ -16,13 +22,16 @@ export {
   SLOT_HIDDEN,
   SLOT_LIVE,
   SLOT_WORDS,
+  sphereBeyond,
 } from './cull';
 export type {
   CoreStats,
   DrawSetCull,
   DrawSetDesc,
   DrawSetKind,
+  DrawSetPassJoin,
   DrawSetShader,
+  DrawSetVariant,
   SlotDesc,
 } from './draw-set';
 export { DrawSet, GPU_CULL_MIN_SLOTS } from './draw-set';
