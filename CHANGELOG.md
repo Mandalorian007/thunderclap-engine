@@ -1,6 +1,8 @@
 # Changelog: @thunderclap-engine/engine
 
-Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--dry]` (`scripts/release.mjs`) cuts a release from `main` (or a detached HEAD at `main`'s commit): it runs `pnpm check` and `pnpm test:e2e`, bumps `package.json`, dates the top `## Unreleased` section, opens a fresh one above it and commits; with `--tag` it also creates the annotated tag `v<version>`. It never pushes. Since `1.0.0` the `api/` snapshots are frozen: a change to one needs a *Breaking* or *Added* entry naming its module under `## Unreleased` (`pnpm check:api`). Entries before this repo existed were written while the engine lived in [The Last Rune](https://github.com/Mandalorian007/last-rune) (`packages/engine`); their decision numbers (`D-0xx`) and paths refer to that repo.
+Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--dry]` (`scripts/release.mjs`) cuts a release from `main` (or a detached HEAD at `main`'s commit): it runs `pnpm check` and `pnpm test:e2e`, bumps `package.json`, dates the top `## Unreleased`
+- Release budgets: `./post` 30100 -> 30800 (the 2.0.0-next.5 publish read 30281 B against 30100: CI's gzip reads about 270 B over local), and about 700 B over local size for `./input` 34600, `./audio` 25900, `render { Renderer }` and `render { Renderer, Camera, Transform }` 40400, `render + voxel` 59200. No runtime change; 2.0.0-next.5 never reached npm.
+ section, opens a fresh one above it and commits; with `--tag` it also creates the annotated tag `v<version>`. It never pushes. Since `1.0.0` the `api/` snapshots are frozen: a change to one needs a *Breaking* or *Added* entry naming its module under `## Unreleased` (`pnpm check:api`). Entries before this repo existed were written while the engine lived in [The Last Rune](https://github.com/Mandalorian007/last-rune) (`packages/engine`); their decision numbers (`D-0xx`) and paths refer to that repo.
 
 ## Unreleased
 
