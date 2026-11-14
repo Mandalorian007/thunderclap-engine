@@ -75,9 +75,11 @@ export {
   SURFACE_TRI_FLOATS,
 } from './particles-wgsl';
 export { FX_DEFAULT_SEED } from './random';
-export type { SkyOptions, SkyStars } from './sky';
-export { SKY_PARAMS_FLOATS, Sky, skyRay } from './sky';
-export { SKY_WGSL } from './sky-wgsl';
+export type { SkyLook, SkyOptions, SkyStars } from './sky';
+export { packSkyParams, SKY_PARAMS_FLOATS, Sky, skyRay } from './sky';
+export type { SkyPassOptions } from './sky-pass';
+export { createSkyPass, SKY_PASS_LIGHT_FLOATS, SKY_PASS_WGSL, SkyPass } from './sky-pass';
+export { SKY_PARAMS_WGSL, SKY_SHADE_WGSL, SKY_WGSL } from './sky-wgsl';
 export type {
   AtlasCanvas,
   AtlasContext2D,

@@ -711,6 +711,18 @@ const SIZE_CURVE_FLOATS = 12;
 ## SKY_PARAMS_FLOATS
 const SKY_PARAMS_FLOATS = 16;
 
+## SKY_PARAMS_WGSL
+const SKY_PARAMS_WGSL = "\nstruct SkyParams {\n  zenith: vec4f,   // rgb, exposure\n  horizon: vec4f,  // rgb, sun angular radius (radians)\n  ground: vec4f,   // rgb, sun glow\n  stars: vec4f,    // density, seed, enabled, night floor\n};\n@group(1) @binding(0) var<uniform> sky: SkyParams;\n\n";
+
+## SKY_PASS_LIGHT_FLOATS
+const SKY_PASS_LIGHT_FLOATS = 12;
+
+## SKY_PASS_WGSL
+const SKY_PASS_WGSL = "\nstruct CoreView {\n  viewProj: mat4x4f,\n  position: vec4f,\n  planes: array<vec4f, 6>,\n  index: u32,\n  _a: u32,\n  _b: u32,\n  _c: u32,\n  origin: vec4f,\n  _pad: array<vec4f, 3>,\n};\n\n@group(0) @binding(0) var<uniform> view: CoreView;\n\nfn engine_hash21(p: vec2f) -> f32 {\n  var p3 = fract(vec3f(p.x, p.y, p.x) * 0.1031);\n  p3 += dot(p3, p3.yzx + 33.33);\n  return fract((p3.x + p3.y) * p3.z);\n}\nfn engine_hash22(p: vec2f) -> vec2f {\n  var p3 = fract(vec3f(p.x, p.y, p.x) * vec3f(0.1031, 0.1030, 0.0973));\n  p3 += dot(p3, p3.yzx + 33.33);\n  return fract((p3.xx + p3.yz) * p3.zy);\n}\nfn engine_noise(p: vec2f) -> f32 {\n  let i = floor(p);\n  let f = fract(p);\n  let u = f * f * (3.0 - 2.0 * f);\n  let a = engine_hash21(i);\n  let b = engine_hash21(i + vec2f(1.0, 0.0));\n  let c = engine_hash21(i + vec2f(0.0, 1.0));\n  let d = engine_hash21(i + vec2f(1.0, 1.0));\n  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);\n}\nfn engine_fbm(p: vec2f, octaves: i32) -> f32 {\n  var v = 0.0;\n  var amp = 0.5;\n  var q = p;\n  for (var i = 0; i < octaves; i++) {\n    v += amp * engine_noise(q);\n    q = q * 2.03 + vec2f(17.1, 9.2);\n    amp *= 0.5;\n  }\n  return v;\n}\nfn engine_luma(c: vec3f) -> f32 {\n  return dot(c, vec3f(0.2126, 0.7152, 0.0722));\n}\n\n\nstruct SkyParams {\n  zenith: vec4f,   // rgb, exposure\n  horizon: vec4f,  // rgb, sun angular radius (radians)\n  ground: vec4f,   // rgb, sun glow\n  stars: vec4f,    // density, seed, enabled, night floor\n};\n@group(1) @binding(0) var<uniform> sky: SkyParams;\n\n\nstruct SkyLight {\n  sun_dir: vec4f,   // xyz: the way the light travels\n  sun_color: vec4f, // rgb, all zero for no sun\n  fog: vec4f,       // rgb, density\n};\n@group(1) @binding(1) var<uniform> light: SkyLight;\n\nfn sky_stars(d: vec3f, density: f32, seed: f32) -> f32 {\n  let p = d * density;\n  let cell = floor(p);\n  let key = cell.xy + vec2f(cell.z * 37.0 + seed, cell.z * 11.0 - seed);\n  let h = engine_hash22(key);\n  let hz = engine_hash21(key + 17.0);\n  let bright = engine_hash21(key + 41.0);\n  if (bright < 0.72) { return 0.0; }\n  let centre = normalize(cell + 0.5 + (vec3f(h, hz) - 0.5) * 0.8);\n  let r = 0.07 / density;\n  let c = dot(d, centre);\n  let edge = 1.0 - r * r * 0.5;\n  let s = smoothstep(edge, edge + r * r * 0.4, c);\n  return s * (0.4 + 0.6 * (bright - 0.72) / 0.28);\n}\n\nstruct SkyShade {\n  color: vec3f,\n  emissive: vec3f,\n};\n\n// The dome for world direction d, lit by a sun along sun_dir (light travel) of sun_color, with\n// the horizon hazed towards fog (rgb, density in w). Linear, times the exposure.\nfn sky_shade(d: vec3f, sun_dir: vec3f, sun_color: vec3f, fog: vec4f) -> SkyShade {\n  let up = d.y;\n  let exposure = sky.zenith.w;\n\n  // The dome.\n  let above = mix(sky.horizon.rgb, sky.zenith.rgb, pow(saturate(up), 0.6));\n  let below = mix(sky.horizon.rgb, sky.ground.rgb, smoothstep(0.0, 0.25, -up));\n  var col = select(below, above, up >= 0.0);\n\n  // Horizon haze towards the fog colour, so fogged ground meets the sky.\n  let haze = saturate(fog.w) * exp(-abs(up) * 6.0);\n  col = mix(col, fog.rgb, haze);\n\n  // Day and night from the sun's elevation; no sun at all leaves the dome as set.\n  let to_sun = -sun_dir;\n  let has_sun = dot(sun_color, vec3f(1.0)) > 0.0;\n  let day = select(1.0, smoothstep(-0.12, 0.08, to_sun.y), has_sun);\n  col *= mix(sky.stars.w, 1.0, day);\n\n  // Sun disc and glow.\n  let cos_a = dot(d, to_sun);\n  let cos_disc = cos(sky.horizon.w);\n  let disc = smoothstep(cos_disc - 0.0004, cos_disc, cos_a) * smoothstep(-0.02, 0.0, up);\n  let glow = sky.ground.w * (0.3 * pow(saturate(cos_a), 16.0) + pow(saturate(cos_a), 256.0));\n  let sun = sun_color * (disc * 12.0 + glow);\n  col += sun;\n\n  // Stars at night.\n  var stars = 0.0;\n  if (sky.stars.z > 0.5) {\n    stars = sky_stars(d, sky.stars.x, sky.stars.y) * (1.0 - day) * smoothstep(-0.05, 0.05, up);\n  }\n  col += vec3f(stars * 2.0);\n\n  var o: SkyShade;\n  o.color = col * exposure;\n  o.emissive = (sun_color * disc * 2.0 + vec3f(stars * 1.5)) * exposure;\n  return o;\n}\n\nfn sky_inverse(m: mat4x4f) -> mat4x4f {\n  let a00 = m[0][0]; let a01 = m[0][1]; let a02 = m[0][2]; let a03 = m[0][3];\n  let a10 = m[1][0]; let a11 = m[1][1]; let a12 = m[1][2]; let a13 = m[1][3];\n  let a20 = m[2][0]; let a21 = m[2][1]; let a22 = m[2][2]; let a23 = m[2][3];\n  let a30 = m[3][0]; let a31 = m[3][1]; let a32 = m[3][2]; let a33 = m[3][3];\n  let b00 = a00 * a11 - a01 * a10; let b01 = a00 * a12 - a02 * a10;\n  let b02 = a00 * a13 - a03 * a10; let b03 = a01 * a12 - a02 * a11;\n  let b04 = a01 * a13 - a03 * a11; let b05 = a02 * a13 - a03 * a12;\n  let b06 = a20 * a31 - a21 * a30; let b07 = a20 * a32 - a22 * a30;\n  let b08 = a20 * a33 - a23 * a30; let b09 = a21 * a32 - a22 * a31;\n  let b10 = a21 * a33 - a23 * a31; let b11 = a22 * a33 - a23 * a32;\n  let det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06;\n  let r = 1.0 / det;\n  return mat4x4f(\n    vec4f(a11 * b11 - a12 * b10 + a13 * b09, a02 * b10 - a01 * b11 - a03 * b09,\n          a31 * b05 - a32 * b04 + a33 * b03, a22 * b04 - a21 * b05 - a23 * b03) * r,\n    vec4f(a12 * b08 - a10 * b11 - a13 * b07, a00 * b11 - a02 * b08 + a03 * b07,\n          a32 * b02 - a30 * b05 - a33 * b01, a20 * b05 - a22 * b02 + a23 * b01) * r,\n    vec4f(a10 * b10 - a11 * b08 + a13 * b06, a01 * b08 - a00 * b10 - a03 * b06,\n          a30 * b04 - a31 * b02 + a33 * b00, a21 * b02 - a20 * b04 - a23 * b00) * r,\n    vec4f(a11 * b07 - a10 * b09 - a12 * b06, a00 * b09 - a01 * b07 + a02 * b06,\n          a31 * b01 - a30 * b03 - a32 * b00, a20 * b03 - a21 * b01 + a22 * b00) * r,\n  );\n}\n\nstruct SkyPassOut {\n  @builtin(position) clip: vec4f,\n  // A point on the pixel's view ray, homogeneous: linear in screen space, divided per pixel.\n  @location(0) @interpolate(linear) ray: vec4f,\n};\n\n@vertex fn vs(@builtin(vertex_index) i: u32) -> SkyPassOut {\n  let x = f32(i32(i & 1u) * 4 - 1);\n  let y = f32(i32(i >> 1u) * 4 - 1);\n  var o: SkyPassOut;\n  o.clip = vec4f(x, y, 1.0, 1.0);\n  o.ray = sky_inverse(view.viewProj) * vec4f(x, y, 0.5, 1.0);\n  return o;\n}\n\n@fragment fn fs(in: SkyPassOut) -> @location(0) vec4f {\n  let d = normalize(in.ray.xyz / in.ray.w - view.position.xyz);\n  let s = sky_shade(d, light.sun_dir.xyz, light.sun_color.rgb, light.fog);\n  return vec4f(s.color, 1.0);\n}\n";
+
+## SKY_SHADE_WGSL
+const SKY_SHADE_WGSL = "\nfn sky_stars(d: vec3f, density: f32, seed: f32) -> f32 {\n  let p = d * density;\n  let cell = floor(p);\n  let key = cell.xy + vec2f(cell.z * 37.0 + seed, cell.z * 11.0 - seed);\n  let h = engine_hash22(key);\n  let hz = engine_hash21(key + 17.0);\n  let bright = engine_hash21(key + 41.0);\n  if (bright < 0.72) { return 0.0; }\n  let centre = normalize(cell + 0.5 + (vec3f(h, hz) - 0.5) * 0.8);\n  let r = 0.07 / density;\n  let c = dot(d, centre);\n  let edge = 1.0 - r * r * 0.5;\n  let s = smoothstep(edge, edge + r * r * 0.4, c);\n  return s * (0.4 + 0.6 * (bright - 0.72) / 0.28);\n}\n\nstruct SkyShade {\n  color: vec3f,\n  emissive: vec3f,\n};\n\n// The dome for world direction d, lit by a sun along sun_dir (light travel) of sun_color, with\n// the horizon hazed towards fog (rgb, density in w). Linear, times the exposure.\nfn sky_shade(d: vec3f, sun_dir: vec3f, sun_color: vec3f, fog: vec4f) -> SkyShade {\n  let up = d.y;\n  let exposure = sky.zenith.w;\n\n  // The dome.\n  let above = mix(sky.horizon.rgb, sky.zenith.rgb, pow(saturate(up), 0.6));\n  let below = mix(sky.horizon.rgb, sky.ground.rgb, smoothstep(0.0, 0.25, -up));\n  var col = select(below, above, up >= 0.0);\n\n  // Horizon haze towards the fog colour, so fogged ground meets the sky.\n  let haze = saturate(fog.w) * exp(-abs(up) * 6.0);\n  col = mix(col, fog.rgb, haze);\n\n  // Day and night from the sun's elevation; no sun at all leaves the dome as set.\n  let to_sun = -sun_dir;\n  let has_sun = dot(sun_color, vec3f(1.0)) > 0.0;\n  let day = select(1.0, smoothstep(-0.12, 0.08, to_sun.y), has_sun);\n  col *= mix(sky.stars.w, 1.0, day);\n\n  // Sun disc and glow.\n  let cos_a = dot(d, to_sun);\n  let cos_disc = cos(sky.horizon.w);\n  let disc = smoothstep(cos_disc - 0.0004, cos_disc, cos_a) * smoothstep(-0.02, 0.0, up);\n  let glow = sky.ground.w * (0.3 * pow(saturate(cos_a), 16.0) + pow(saturate(cos_a), 256.0));\n  let sun = sun_color * (disc * 12.0 + glow);\n  col += sun;\n\n  // Stars at night.\n  var stars = 0.0;\n  if (sky.stars.z > 0.5) {\n    stars = sky_stars(d, sky.stars.x, sky.stars.y) * (1.0 - day) * smoothstep(-0.05, 0.05, up);\n  }\n  col += vec3f(stars * 2.0);\n\n  var o: SkyShade;\n  o.color = col * exposure;\n  o.emissive = (sun_color * disc * 2.0 + vec3f(stars * 1.5)) * exposure;\n  return o;\n}\n";
+
 ## SKY_WGSL
 const SKY_WGSL: string;
 
@@ -721,7 +733,7 @@ const SMOKE_PUFF_EFFECT: EffectDesc;
 const SURFACE_TRI_FLOATS = 24;
 
 ## Sky
-class Sky implements Drawable {
+class Sky implements Drawable, SkyLook {
     readonly zenith: Float32Array<ArrayBuffer>;
     readonly horizon: Float32Array<ArrayBuffer>;
     readonly ground: Float32Array<ArrayBuffer>;
@@ -736,6 +748,18 @@ class Sky implements Drawable {
     destroy(): void;
 }
 
+## SkyLook  (type-only)
+interface SkyLook {
+    zenith: ArrayLike<number>;
+    horizon: ArrayLike<number>;
+    ground: ArrayLike<number>;
+    sunSize: number;
+    sunGlow: number;
+    stars: SkyStars | null;
+    exposure: number;
+    ambientFloor: number;
+}
+
 ## SkyOptions  (type-only)
 interface SkyOptions {
     zenith?: ArrayLike<number>;
@@ -746,6 +770,26 @@ interface SkyOptions {
     stars?: boolean | Partial<SkyStars>;
     exposure?: number;
     ambientFloor?: number;
+}
+
+## SkyPass
+class SkyPass {
+    readonly sky: SkyLook;
+    readonly sunDir: Float32Array<ArrayBuffer>;
+    readonly sunColor: Float32Array<ArrayBuffer>;
+    readonly fog: Float32Array<ArrayBuffer>;
+    readonly pass: CorePass;
+    draws: number;
+    constructor(core: RenderCore, sky: SkyLook, opts?: SkyPassOptions);
+    prepare(): void;
+    destroy(): void;
+}
+
+## SkyPassOptions  (type-only)
+interface SkyPassOptions {
+    id?: string;
+    after?: string;
+    label?: string;
 }
 
 ## SkyStars  (type-only)
@@ -1073,11 +1117,17 @@ function createDebugDraw(renderer: Renderer, opts?: DebugDrawOptions): DebugDraw
 ## createEffect
 function createEffect(renderer: Renderer, desc: EffectDesc, opts?: CreateEffectOptions): Effect;
 
+## createSkyPass
+function createSkyPass(core: RenderCore, sky: SkyLook, opts?: SkyPassOptions): SkyPass;
+
 ## evaluateCurve
 function evaluateCurve(stops: ArrayLike<number>, stride: number, t: number, out: Float32Array): Float32Array;
 
 ## flicker
 function flicker(t: number, opts?: FlickerOptions): number;
+
+## packSkyParams
+function packSkyParams(sky: SkyLook, out: Float32Array, at: number): void;
 
 ## particleBudgetKnob
 function particleBudgetKnob(systems: readonly {

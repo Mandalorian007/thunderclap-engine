@@ -22,7 +22,7 @@
     "./testing": 181100,
     "render { Renderer }": 39900,
     "render { Renderer, Camera, Transform }": 39900,
-    "render + voxel { Renderer, createVoxelGrid, createVoxelChunks }": 44000,
+    "render + voxel { Renderer, createVoxelGrid, createVoxelWorld }": 58900,
     ". { createGame }": 168700,
     "./kit": 168300,
     "./models": 13200,

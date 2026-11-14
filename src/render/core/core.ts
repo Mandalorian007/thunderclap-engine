@@ -25,7 +25,7 @@ import {
   type DrawableHost,
   type PassMember,
 } from './drawable';
-import { type CorePass, type PassDesc, PassList } from './pass-list';
+import { type CorePass, type CorePassContext, type PassDesc, PassList } from './pass-list';
 import { QuadIndex } from './quad-index';
 import {
   type CullGroup,
@@ -102,6 +102,12 @@ export interface CoreTarget {
    * Needs `COPY_SRC` (a canvas configured with `usage: RENDER_ATTACHMENT | COPY_SRC`).
    */
   texture?: GPUTexture;
+  /**
+   * GPU timing for the core's render passes (ws/core-passes): called once per pass with the
+   * label `'core'`, its result set as the pass's `timestampWrites`. The `Renderer` hands its
+   * `GpuTimer` here, so a sampled frame's GPU time counts the core's work.
+   */
+  timestamps?: (label: string) => GPURenderPassTimestampWrites | undefined;
 }
 
 /** What the core's device offers it. */
@@ -202,6 +208,12 @@ export class RenderCore {
   private readonly computeDesc: GPUComputePassDescriptor = { label: 'core cull' };
   /** Whose stale bundles may be re-recorded this frame (see `coalesceRebuilds`). */
   private rebuildTurn: DrawSet | null = null;
+  /** The last target's own depth (`CoreTarget.depth`), which `sceneDepthView` then is. */
+  private extDepth: GPUTextureView | null = null;
+  /** Depth alone, cleared: before a read pass whose drawable samples depth nothing wrote yet. */
+  private readonly passDescDepthClear: GPURenderPassDescriptor;
+  /** The context handed to a pass's `encode`, rewritten per call. */
+  private readonly passCtx = {} as CorePassContext;
   private readonly coalesce: boolean;
   private readonly copyOrigin = { x: 0, y: 0, z: 0 };
   private readonly copySrc: GPUTexelCopyTextureInfo = {
@@ -244,6 +256,11 @@ export class RenderCore {
     this.passDescDepth = {
       label: 'core pass',
       colorAttachments: [this.colorAttachment],
+      depthStencilAttachment: this.depthAttachment,
+    };
+    this.passDescDepthClear = {
+      label: 'core depth clear',
+      colorAttachments: [],
       depthStencilAttachment: this.depthAttachment,
     };
     const core = this;
@@ -301,7 +318,9 @@ export class RenderCore {
       depthReadOnly: false,
     };
     this.drawableHost = {
-      device,
+      get device() {
+        return core.device;
+      },
       ctx: this.drawCtx,
       stats: this.stats,
       viewData: this.viewData,
@@ -339,9 +358,10 @@ export class RenderCore {
     this.cullPipeline = null;
     this.depthTexture = null;
     this.depthView = null;
-    // The scene colour copy too; a new target version re-records drawables' bundles.
+    this.depthUsage = 0;
     this.colorTexture = null;
     this.colorView = null;
+    // Drawables re-record their bundles and re-bind the core's depth and colour copy.
     this.targets++;
     this.viewsPrepared = 0;
     this.build();
@@ -429,7 +449,7 @@ export class RenderCore {
    * `draw` made it). Re-made when the target's size changes (`targetsVersion` bumps).
    */
   get sceneDepthView(): GPUTextureView | null {
-    return this.depthView;
+    return this.extDepth ?? this.depthView;
   }
 
   /**
@@ -565,7 +585,12 @@ export class RenderCore {
     }
     const vp = target.viewport;
     // Effects bind depth and colour by view: make them before any bundle is recorded.
-    if (this.wantsDepthBinding) this.depthFor(target.width, target.height);
+    const ext = target.depth ?? null;
+    if (ext !== this.extDepth) {
+      this.extDepth = ext;
+      this.targets++;
+    }
+    if (this.wantsDepthBinding && !ext) this.depthFor(target.width, target.height);
     if (this.wantsColor) {
       const live = target.texture !== undefined;
       if (live !== this.colorLive) {
@@ -596,15 +621,17 @@ export class RenderCore {
       const pass = list[p]!;
       const sets = this.bySet[p]!;
       if (pass.when && !pass.when()) continue;
-      let work = false;
-      let wantsDepth = false;
+      let work = pass.encode !== null;
+      let wantsDepth = work && pass.depth !== 'none';
       let readsColor = false;
+      let samplesDepth = false;
       for (let i = 0; i < sets.length; i++) {
         const s = sets[i]!;
         if (s.count === 0 || s.ready === false || (s.inView && !s.inView(group))) continue;
         work = true;
         if (s.depth && pass.depth !== 'none') wantsDepth = true;
         if (s.readsColor) readsColor = true;
+        if (s.readsDepth) samplesDepth = true;
       }
       if (!work) continue;
       if (readsColor && !colorCopied && target.texture && this.colorTexture) {
@@ -612,7 +639,21 @@ export class RenderCore {
         colorCopied = true;
       }
       const depthFormat = wantsDepth ? this.depthFormat : undefined;
-      const readOnly = wantsDepth && pass.depth === 'read';
+      if (wantsDepth && samplesDepth && pass.depth === 'read' && !depthCleared) {
+        // A drawable samples depth here, so the pass must be read-only: clear depth first.
+        const d = this.depthAttachment;
+        d.view = target.depth ?? this.depthFor(target.width, target.height);
+        d.depthReadOnly = false;
+        d.depthLoadOp = 'clear';
+        d.depthStoreOp = 'store';
+        this.passDescDepthClear.timestampWrites = target.timestamps?.('core');
+        encoder.beginRenderPass(this.passDescDepthClear).end();
+        st.calls += 2;
+        st.passes++;
+        depthCleared = true;
+      }
+      // A read pass with nothing written before it clears depth instead (nothing to read).
+      const readOnly = wantsDepth && pass.depth === 'read' && depthCleared;
       const color = this.colorAttachment;
       color.view = target.view;
       if (first && target.clear) {
@@ -639,6 +680,7 @@ export class RenderCore {
         }
         desc = this.passDescDepth;
       }
+      desc.timestampWrites = target.timestamps?.('core');
       const enc = encoder.beginRenderPass(desc);
       st.calls++;
       st.passes++;
@@ -661,6 +703,16 @@ export class RenderCore {
         s.encodeDirect(enc, group, target.format, depthFormat);
       }
       if (bundles.length > 0) this.flushBundles(enc);
+      if (pass.encode) {
+        const ctx = this.passCtx;
+        ctx.viewIndex = viewIndex;
+        ctx.view = this.groupSize[group]! > 1 ? this.currentGroup : this.viewGroups[viewIndex]!;
+        ctx.viewLayout = this.viewLayout;
+        ctx.format = target.format;
+        ctx.depthFormat = depthFormat;
+        ctx.depthReadOnly = readOnly;
+        pass.encode(enc, ctx);
+      }
       enc.end();
       st.calls++;
     }
@@ -670,6 +722,7 @@ export class RenderCore {
       color.view = target.view;
       color.loadOp = 'clear';
       color.clearValue = target.clear;
+      this.passDesc.timestampWrites = target.timestamps?.('core');
       encoder.beginRenderPass(this.passDesc).end();
       st.calls += 2;
       st.passes++;

@@ -15,6 +15,31 @@ export interface PassDesc {
   depth?: PassDepth;
   /** Checked each view; the pass is skipped when it returns false. */
   when?: () => boolean;
+  /**
+   * Work of the pass's own, encoded per view after its sets (ws/core-passes): a full-screen
+   * draw such as the sky. A pass with `encode` runs even when no set joined it, and gets the
+   * depth attachment unless its `depth` is `'none'`. It must not allocate.
+   */
+  encode?: (pass: GPURenderPassEncoder, ctx: CorePassContext) => void;
+}
+
+/**
+ * What a pass's `encode` gets for the view being drawn. One object, rewritten per call: read it
+ * inside `encode`, do not keep it.
+ */
+export interface CorePassContext {
+  /** The view of the last `prepare` being drawn. */
+  viewIndex: number;
+  /** The core's view bind group for it: `CORE_VIEW_WGSL`'s `CoreView` at binding 0. */
+  view: GPUBindGroup;
+  /** The layout of `view`, for the pass's pipeline layout (group 0). */
+  viewLayout: GPUBindGroupLayout;
+  /** The colour target's format. */
+  format: GPUTextureFormat;
+  /** The depth attachment's format, or undefined when the pass has none. */
+  depthFormat: GPUTextureFormat | undefined;
+  /** The depth attachment is read-only in this pass (a `'read'` pass after a writing one). */
+  depthReadOnly: boolean;
 }
 
 /** A pass in the list; draw sets join it by id. */
@@ -22,6 +47,7 @@ export interface CorePass {
   readonly id: string;
   readonly depth: PassDepth;
   readonly when: (() => boolean) | null;
+  readonly encode: ((pass: GPURenderPassEncoder, ctx: CorePassContext) => void) | null;
 }
 
 /**
@@ -49,7 +75,12 @@ export class PassList {
   /** Add a pass after `desc.after` (or at the end). Throws on a duplicate id or unknown `after`. */
   define(desc: PassDesc): CorePass {
     if (this.get(desc.id)) throw new Error(`pass ${desc.id} is already defined`);
-    const pass: CorePass = { id: desc.id, depth: desc.depth ?? 'write', when: desc.when ?? null };
+    const pass: CorePass = {
+      id: desc.id,
+      depth: desc.depth ?? 'write',
+      when: desc.when ?? null,
+      encode: desc.encode ?? null,
+    };
     if (desc.after === undefined) {
       this.passes.push(pass);
     } else {

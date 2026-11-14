@@ -301,6 +301,19 @@ interface TaaSettings {
 ## Tonemap  (type-only)
 type Tonemap = 'aces' | 'reinhard' | 'none';
 
+## VIEW_POST_MAX
+const VIEW_POST_MAX = 8;
+
+## ViewPost
+class ViewPost implements PostProcessor {
+    readonly wantsJitter: boolean;
+    readonly views: PostProcessor[];
+    constructor(make: (viewIndex: number) => PostProcessor);
+    forView(index: number): PostProcessor;
+    resize(width: number, height: number): void;
+    encode(encoder: GPUCommandEncoder, inputs: PostInputs, output: GPUTextureView, viewport?: SceneTargetViewport): void;
+}
+
 ## VignetteSettings  (type-only)
 interface VignetteSettings {
     enabled: boolean;
@@ -336,6 +349,9 @@ function createLensDirtTexture(device: GPUDevice, size?: number, seed?: number):
 
 ## createLutTexture
 function createLutTexture(device: GPUDevice, size: LutSize, fn: LutFn): GPUTexture;
+
+## createViewPost
+function createViewPost(make: (viewIndex: number) => PostProcessor): ViewPost;
 
 ## defaultPostQuality
 function defaultPostQuality(): PostQuality;

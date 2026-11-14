@@ -30,6 +30,7 @@ frame.drawable(particles); // each frame, inside render
 | `createBillboards(...)` | camera-facing quads and bars in world space |
 | `Decals` | projected decals on the depth buffer |
 | `Sky` | a procedural sky and stars |
+| `createSkyPass(core, look)` | the same sky as a render-core pass, drawn per view |
 | `createDebugDraw(...)` | lines, boxes and axes for debugging |
 | `flicker / pulse` | light intensity over time, no allocation |
 | `Weather` | precipitation volumes on the render core (rain, snow, dust storm configs) |
@@ -559,6 +560,20 @@ sky.sunSize = 0.04; // every field is live
 
 Tests: `sky.test.ts` (fake GPU, `skyRay` against `Camera.screenToWorld`). Demo:
 `harness/sky.html` (`?still` parks the sun at noon).
+
+**As a core pass (ws/core-passes).** `createSkyPass(core, look, opts?)` defines a `'sky'` pass
+(after `'cutout'`, depth read) on a `RenderCore` and draws the same dome in every view the core
+draws, from the core's own `CoreView`: the vertex stage inverts `viewProj` and hands the
+fragment a homogeneous point on each pixel's ray, so stereo eyes, cube faces and
+origin-relative views need nothing more. `look` is a `Sky` or any `SkyLook` (the fields
+`packSkyParams` reads; no `Renderer` needed); the pass's live `sunDir`, `sunColor` and `fog`
+stand in for the renderer's lights. Call `pass.prepare()` once a frame before the core draws.
+The pass is a `SkyPass` (options `SkyPassOptions`: `id`, `after`, `label`), its shader
+`SKY_PASS_WGSL`, its light block `SKY_PASS_LIGHT_FLOATS` floats. Both skies shade through one
+`sky_shade` (`SKY_SHADE_WGSL`) over the `SKY_PARAMS_WGSL` block. The core's passes have one colour
+target, so the core sky writes no emissive (no bloom on the sun disc there). It rebuilds itself
+on `core.onDeviceRestored`. Tests `sky-pass.test.ts`; `harness/core.html?sky` (e2e
+`core.spec.ts`, Chromium and WebKit, through a device loss).
 
 ## Decals
 

@@ -1347,6 +1347,16 @@ if (device) core.restore(device);
 
 `renderer.core = createRenderCore(renderer, { depthFormat: DEPTH_FORMAT })` draws that core inside the renderer's frames (opt-in: a renderer without one does not bundle the core), in each frame's first depth-tested view: its `depthPre`, `opaque` and `cutout` passes after the view's opaque draws, its `transparent` and later passes after the view's blended draws, into the scene target's colour and depth. Any core can do the same with `CoreTarget.depth` (a depth it loads and never clears) and `CoreTarget.phase` (`'opaque'`, `'blend'`, `'all'`).
 
+
+**A pass's own work (ws/core-passes).** `PassDesc.encode(pass, ctx)` gives a pass work of its
+own, encoded per view after the pass's sets: a full-screen draw such as the sky
+(`createSkyPass` in `fx`). Such a pass runs even with no set in it and gets the depth
+attachment unless its `depth` is `'none'`; `ctx` (`CorePassContext`, one object rewritten per
+call) carries the view index, the core view bind group and its layout (group 0), the colour and
+depth formats and whether depth is read-only. A `'read'` pass that comes before any depth
+write now clears depth instead of reading uncleared depth. When a drawable in that pass samples depth (`readsDepth`), a depth-only
+`core depth clear` pass runs first and the pass stays read-only.
+
 ### Drawables (ws/core-effects)
 
 Anything that is not a draw set joins the core as a `CoreDrawable` (`core.addDrawable(d)`,
@@ -1362,6 +1372,7 @@ before the pass. Shaders start from `CORE_DRAWABLE_WGSL` (the core's `view` at g
 `CoreViewExtras.of(core)` adds each view's inverse view-projection and image-plane axes
 (`CORE_VIEW_EXTRA_WGSL`, `VIEW_EXTRA_FLOATS` a view), written once a frame. The fx module's
 particles, water and weather are drawables. Tests `core/drawable.test.ts`.
+
 
 ## Merged mesh runs
 

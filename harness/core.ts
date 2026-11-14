@@ -14,7 +14,11 @@
  * `window.__harnessCore.lose()` (ws/core-passes) destroys the device; the page gets a new one
  * (`restoreGpu`), hands it to `core.restore`, and on the core's one `onDeviceRestored` event
  * writes the boxes' bytes again, so the same picture comes back.
+ *
+ * `?sky` (ws/core-passes) adds the sky as a core pass (`createSkyPass`): the dome drawn after
+ * the boxes in the view, behind them by depth, from the core's own view; it survives `lose()`.
  */
+import { createSkyPass } from '@thunderclap-engine/engine/fx';
 import { boot, restoreGpu } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
@@ -35,6 +39,7 @@ const sets = Math.max(1, Math.min(8192, Number(params.get('sets') ?? 1500) | 0))
 const still = params.has('still');
 /** How far out the scene sits on x and z, metres (0: at the origin). */
 const far = Math.max(0, Number(params.get('far') ?? 0) || 0);
+const withSky = params.has('sky');
 
 const state: HarnessCoreState = {
   ready: false,
@@ -55,6 +60,7 @@ const state: HarnessCoreState = {
   origin: [0, 0, 0],
   restores: 0,
   restoredEvents: 0,
+  skyDraws: 0,
 };
 let lose: () => Promise<void> = async () => {
   throw new Error('core page not ready');
@@ -144,6 +150,19 @@ async function main(): Promise<void> {
   const { surface, gpu } = res;
   installGpuErrorLogging(gpu.device);
   const core = createRenderCore(gpu, far > 0 ? { originGrid: 1024 } : {});
+  const sky = withSky
+    ? createSkyPass(core, {
+        zenith: [0.18, 0.36, 0.78],
+        horizon: [0.62, 0.74, 0.9],
+        ground: [0.3, 0.28, 0.25],
+        sunSize: 0.03,
+        sunGlow: 1,
+        stars: null,
+        exposure: 1,
+        ambientFloor: 0.06,
+      })
+    : null;
+  if (sky) sky.sunDir.set([-0.4, -0.6, -0.7]);
   state.multiDraw = core.caps.multiDraw;
   state.firstInstance = core.caps.firstInstance;
 
@@ -254,8 +273,10 @@ async function main(): Promise<void> {
     target.height = texture.height;
     const t0 = performance.now();
     const encoder = gpu.device.createCommandEncoder();
+    sky?.prepare();
     core.prepare(encoder, views);
     core.draw(encoder, 0, target);
+    state.skyDraws = sky ? sky.draws : 0;
     gpu.device.queue.submit([encoder.finish()]);
     times.push(performance.now() - t0);
     if (times.length > 60) times.shift();

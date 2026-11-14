@@ -79,7 +79,9 @@ describe('particles on the render core', () => {
     const computes = r.fake.passes.filter((p) => p.kind === 'compute');
     expect(computes.length).toBeGreaterThanOrEqual(3);
     expect(r.core.stats.bundleBuilds).toBe(1);
-    const renders = r.fake.passes.filter((p) => p.kind === 'render').slice(-2);
+    const renders = r.fake.passes
+      .filter((p) => p.kind === 'render' && p.label !== 'core depth clear')
+      .slice(-2);
     const exec = renders.map((p) => p.commands.find((c) => c.op === 'executeBundles'));
     expect(exec[0]).toBeDefined();
     expect(exec[0]).toEqual(exec[1]);

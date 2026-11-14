@@ -361,6 +361,25 @@ describe('render core (ws/core-retained)', () => {
     expect(fake.textures.some((t) => t.label === 'core depth')).toBe(false);
   });
 
+  it('every render pass takes the target timestamp writes, labelled core', () => {
+    const s = scene(64);
+    const labels: string[] = [];
+    const writes = { querySet: {} as GPUQuerySet };
+    const timestamps = (label: string) => {
+      labels.push(label);
+      return writes;
+    };
+    const t = { ...target(s.fake), timestamps };
+    const before = s.fake.passes.length;
+    frame(s, t);
+    const render = s.fake.passes.slice(before).filter((p) => p.kind === 'render');
+    expect(render.length).toBeGreaterThan(0);
+    expect(labels).toEqual(render.map(() => 'core'));
+    for (const p of render) {
+      expect((p.desc as GPURenderPassDescriptor).timestampWrites).toBe(writes);
+    }
+  });
+
   it('a frame of a held scene allocates nothing', () => {
     const s = scene(1500);
     const t = target(s.fake);
@@ -393,14 +412,20 @@ describe('render core (ws/core-retained)', () => {
       }
     };
     run(20_000); // warm: optimized code, no first-call allocations
-    // The least of a few measurements of 2,000 frames: a heap-statistics reading itself costs a
-    // few hundred bytes, and a stray compile now and then more.
-    let bytes = Infinity;
-    for (let r = 0; r < 5; r++)
-      bytes = Math.min(
-        bytes,
-        allocated(() => run(2000)),
-      );
-    expect(bytes).toBeLessThan(1024);
+    // A reading has a fixed cost of its own (the heap-statistics objects, a stray compile: 0 to
+    // ~1 kB, run to run), so compare a short run with a long one: the fixed cost cancels and
+    // whatever a frame allocates (16 bytes at least) is multiplied by the 8,000 extra frames.
+    const least = (frames: number) => {
+      let bytes = Infinity;
+      for (let r = 0; r < 3; r++)
+        bytes = Math.min(
+          bytes,
+          allocated(() => run(frames)),
+        );
+      return bytes;
+    };
+    const short = least(1000);
+    const long = least(9000);
+    expect(long - short).toBeLessThan(8000);
   });
 });
