@@ -34,6 +34,7 @@ frame.drawable(particles); // each frame, inside render
 | `createDebugDraw(...)` | lines, boxes and axes for debugging |
 | `flicker / pulse` | light intensity over time, no allocation |
 | `Weather` | precipitation volumes on the render core (rain, snow, dust storm configs) |
+| `Lightning` | a seeded bolt and sky flash on the render core |
 
 ## Contents
 
@@ -790,3 +791,58 @@ On a core with extra targets (ws/core-targets), the core effects write what appl
 their emissive (bloom), water its roughness (`roughMetal`) and velocity, the sky pass the sun
 disc and stars as emissive and the dome's turn as velocity (a point at infinity). Weather and
 decals write colour only and leave the targets as they were.
+
+### Fitting a 3D game's renderer (ws/fx-fit)
+
+B9. The core effects fit a game that renders reversed-Z, brings its own sky and wants more
+weather.
+
+- **Depth convention.** Every fx drawable and the sky pass take it from the pass they draw in
+  (`CoreDrawContext.reversedZ`, `CorePassContext.reversedZ`, set by `RenderCoreOptions.reversedZ`
+  or `PassDesc.reversedZ`), never from a flag of their own. Pipelines test with the core's
+  `coreDepthCompare(reversedZ, true)`; `DrawablePipelines` keys its cache by the convention and
+  hands it to `make` as a fifth argument. Shaders that read depth start from `FX_DEPTH_WGSL`
+  (`fx_depth_far()`, `fx_depth_is_far(d)`, `fx_depth_nearer(a, b)`) and are compiled once more,
+  only when a reversed pass draws, by `FxDepthModules` / `fxDepthCode(code, true)`. A standard
+  core compiles and draws exactly what it did.
+- **Sky shade hook.** `createSkyPass(core, look, { shade, params, groupLayout })`: `shade` is WGSL
+  defining `fn sky_look(i: SkyInput) -> SkyShade` (`SKY_INPUT_WGSL`: ray `dir`, `sun_dir`,
+  `sun_color`, `fog`, `time`, `eye`). It may call the built-ins `sky_shade`, `sky_dome`,
+  `sky_sun`, `sky_day`, `sky_stars`, `sky_night_stars`, read `sky_param(k)` (`SkyPass.params`,
+  up to `SKY_PASS_MAX_PARAMS` vec4s, and `SkyPass.time`) and bind its own `@group(2)` (draws
+  wait for `SkyPass.gameGroup`). The pass keeps the ray, the far-plane depth and the target
+  writes. `SkyPass.horizon` (and `skyHorizonColor(look, sunDir, sunColor, fog, out)` on the
+  CPU) is the default dome's horizon colour after exposure, for fog to match.
+- **Weather.** `WeatherOcclusionMap.wrap: true` tiles the map over the plane (a ring buffer kept
+  around the eye covers an endless world). Shape `'splash'`: rings on the occlusion surface
+  (`length` the ring radius, `speed` replays a second), one more layer in the same draw;
+  `WEATHER_RAIN_SPLASHES` is rain with them. `new Lightning(core, opts)`: `strike(x, groundY, z,
+  seed?)` grows a seeded branching bolt (`LIGHTNING_STRANDS` × `LIGHTNING_SEGMENTS` additive
+  quads, one draw, colour and emissive) and fades it; `lightning.flash` (`lightningFlash(age)`)
+  is the sky flash a game adds to its lights.
+- **Lit-box particles.** `new ParticleSystem(core, { shape: 'box' })` draws each particle as a
+  cube (36 vertices, back faces culled, premultiplied alpha unless `blend: 'additive'`, no depth
+  write), shaded by `coreDrawable.boxLight` (`sunDir`, `sunColor`, `ambient`): voxel debris.
+- **Shadow vertex entry.** `DrawSetShader.shadowVertexEntry`: the vertex entry the depth-only
+  shadow pass uses (default `vertexEntry`), for a set whose colour entry reads groups the shadow
+  pass does not bind.
+
+```ts
+const core = createRenderCore(gpu, { reversedZ: true });
+const sky = createSkyPass(core, look, {
+  shade: `fn sky_look(i: SkyInput) -> SkyShade {
+    var s = sky_shade(i.dir, i.sun_dir, i.sun_color, i.fog);
+    s.color += sky_param(0u).rgb * max(i.dir.y, 0.0);
+    return s;
+  }`,
+  params: 1,
+});
+const rain = new Weather(core, WEATHER_RAIN_SPLASHES);
+const bolt = new Lightning(core);
+bolt.strike(x, groundY, z);
+const debris = new ParticleSystem(core, { capacity: 1024, shape: 'box' });
+```
+
+The legacy `Renderer` path (`Sky`, `Water`, `Decals`, particles' world collision, billboards,
+debug draw) keeps the standard convention. Test `fx-fit.test.ts`; demo `harness/fx-reversed.html`
+(every effect on a reversed-Z core, `?standard` for the same scene standard).

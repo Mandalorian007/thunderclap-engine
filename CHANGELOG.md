@@ -4,6 +4,14 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 
 ## Unreleased
 
+### Added
+
+- `./fx` (ws/fx-fit): every core effect and the sky pass follow the pass's depth convention (reversed-Z from `RenderCoreOptions.reversedZ` / `PassDesc.reversedZ`); `FX_DEPTH_WGSL`, `fxDepthCode`, `FxDepthModules` for shaders that read depth.
+- `./fx` (ws/fx-fit): `SkyPassOptions.shade`, `params`, `groupLayout` (a game's own `sky_look` over the built-ins), `SkyPass.time`, `params`, `gameGroup`, `gameLayout`, `horizon`; `SKY_INPUT_WGSL`, `SKY_PASS_MAX_PARAMS`, `skyHorizonColor`.
+- `./fx` (ws/fx-fit): `WeatherOcclusionMap.wrap`, the `'splash'` precipitation shape, `WEATHER_RAIN_SPLASHES`; `Lightning`, `LightningOptions`, `lightningFlash`, `LIGHTNING_STRANDS`, `LIGHTNING_SEGMENTS`, `LIGHTNING_FLOATS`, `LIGHTNING_WGSL`.
+- `./fx` (ws/fx-fit): `ParticleSystemOptions.shape: 'box'` (lit cubes, `ParticlesOnCore.boxLight`), `ParticleShape`, `PARTICLE_BOX_LIGHT_FLOATS`, `PARTICLE_CORE_BOX_WGSL`.
+- `./render` (ws/fx-fit): `DrawSetShader.shadowVertexEntry`; `DrawablePipelines` keys by `reversedZ` and passes it to `make`.
+
 ## 2.0.0-next.9 (2026-11-14)
 
 - Release budget: `./ui` 94300 -> 94500 (ui-follow left 580 B of local headroom; CI's gzip reads about 300 B more).

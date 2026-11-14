@@ -517,6 +517,7 @@ interface DrawSetShader {
     cullMode?: GPUCullMode;
     depthCompare?: GPUCompareFunction;
     shadowFragmentEntry?: string;
+    shadowVertexEntry?: string;
     writes?: readonly CoreTargetName[];
 }
 
@@ -542,7 +543,7 @@ interface Drawable {
 
 ## DrawablePipelines
 class DrawablePipelines {
-    constructor(make: (color: GPUTextureFormat, depth: GPUTextureFormat | undefined, readOnly: boolean, aux: number) => GPURenderPipeline);
+    constructor(make: (color: GPUTextureFormat, depth: GPUTextureFormat | undefined, readOnly: boolean, aux: number, reversedZ: boolean) => GPURenderPipeline);
     get(ctx: CoreDrawContext): GPURenderPipeline;
 }
 
