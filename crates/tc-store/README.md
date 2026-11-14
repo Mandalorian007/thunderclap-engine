@@ -42,10 +42,34 @@ layout.
   `format` also provides `Writer` and `Reader`, which a codec can use for
   its payloads.
 
-## Not yet (E3b)
+- Past recovery (E3b):
+  - `check(dir, codec)`: what is wrong with each file, whether it opens,
+    and what a repair would keep (`CheckReport`, `Salvage`). Changes
+    nothing.
+  - `repair(dir, codec, output)` and `repair_with(.., accept)`: a new log
+    with the longest prefix it can trust (gap-free, each entry once,
+    batches whole, through no entry the game refuses).
+  - `rollback(dir, codec, RollbackTo::{Seq, Time, Wall}, output)`: a new
+    log through an earlier point, never inside a batch, reaching into the
+    archive if need be.
+  - `Output::Copy(path)` writes a new store; `Output::InPlace` writes into
+    `.swap/` under the lock and swaps it in, moving the old log and archive
+    to `recovered/`. Opening finishes a swap cut short.
+  - `tidy(dir, codec, below, &ArchivePolicy)`: archives the generations
+    below a base (deflated, `archive/g<n>/`), then prunes the archive and
+    `recovered/` past `keep_days` (7) or `max_bytes` (1 GiB). Safe while the
+    log is open. `summary(dir)` lists the archive.
+  - `backup(dir, out, archive)`: an online copy, taken while the log is
+    appended to, that opens with nothing to recover.
+  - `LogReader::after(dir, seq).read_to(&cut, codec)`: a tail reader that
+    decodes only what each `LogCut` adds (`LogCut::since_generation` for a
+    follower that starts at a base).
+  - `Store::memory(codec)` / `Store::disk(log)`: one type for a log on disk
+    or in memory (`MemoryLog`: same records, appends all or none,
+    `rollback_to`).
 
-Repair, rollback, archive and backup are not yet ported. Also missing: a
-tail reader for followers and `Store::memory()`.
+Not here: game bases (a game writes its own and calls `tidy` after), and
+a reader that polls another process's store.
 
 ## Tests
 
@@ -60,7 +84,13 @@ tail reader for followers and `Store::memory()`.
   - background syncs
   - generations and the one-sync batches
   - crash recovery
+  - `ops.rs`: check and repair of a double-written log, repair keeping
+    batches whole, the rollback to a mark, a backup while another thread
+    appends, the archive and a rollback into it, the tail reader, and the
+    memory store
 - `tests/board_game.rs`: a board game's turn log round-trips through the
   public API.
+- `tests/retention.rs`: the archive's week and a rollback by wall time,
+  with the store's clock set by hand (its own process).
 - Lint: `clippy.toml` refuses `File::sync_all` and `File::sync_data` outside
   `src/durable.rs`.

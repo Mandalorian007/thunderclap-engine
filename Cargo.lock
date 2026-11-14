@@ -469,6 +469,7 @@ dependencies = [
 name = "tc-store"
 version = "0.1.0"
 dependencies = [
+ "miniz_oxide",
  "rustix",
  "tc-wire",
 ]
