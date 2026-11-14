@@ -330,6 +330,10 @@ impl Game for Tally {
         }
     }
 
+    fn command_error(&self, reason: String) -> String {
+        format!("error: {reason}")
+    }
+
     fn input(&self, player: u64, by: i32, events: &mut Vec<Event>) {
         events.push(Event::Moved { player, by });
     }

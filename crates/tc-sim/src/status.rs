@@ -45,6 +45,9 @@ pub struct SimStatus {
     /// Why the store stopped taking writes, if it did (the clock is
     /// paused).
     pub store_error: Option<String>,
+    /// Batches of events refused because the log couldn't encode them (a
+    /// game bug; the loop runs on).
+    pub refused: u64,
 }
 
 impl fmt::Display for SimStatus {
@@ -66,6 +69,9 @@ impl fmt::Display for SimStatus {
         }
         if self.reloading {
             f.write_str(" reloading")?;
+        }
+        if self.refused > 0 {
+            write!(f, " {} refused", self.refused)?;
         }
         if let Some(e) = &self.store_error {
             write!(f, " store failed: {e}")?;

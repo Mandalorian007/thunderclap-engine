@@ -46,7 +46,10 @@ the entity stream follow in E4b.
 - Every client event is logged (one batch, all or none) at the current
   time, then applied. A store that fails pauses the clock, tells clients
   once (`Clock { paused: true }`), turns new connections away and changes
-  nothing more.
+  nothing more. An event the codec can't encode is a game bug, not a store
+  failure: its batch is refused (nothing logged or applied), a command gets
+  `Game::command_error`, `SimStatus.refused` counts it, and the loop runs
+  on.
 - Commands flush the changes they made before their `CommandResult`;
   otherwise changes flush at most every `FLUSH_INTERVAL` (50 ms).
 - One body, one driver: the newest connection drives, `TakeControl` moves
@@ -62,10 +65,10 @@ the entity stream follow in E4b.
 - Unit tests: the wheel (against a `BTreeMap`), scheduler order and
   restore, change marks, input credit, the status line.
 - `tests/sim.rs` (the tally game in `tests/tally/`, driven by hand): the
-  clock at the end of time, a budgeted and a stopped advance, a failed
-  store, one driver per body, flush before result, a reload, a log
+  clock at the end of time, a budgeted and a stopped advance, a refused
+  event, one driver per body, flush before result, a reload, a log
   replayed to the same hash.
 - `tests/net.rs`: two tc-net clients over WebSockets, the log replayed to
-  the live hash; and `createNet` through vitest (`tests/net.test.ts`, its
-  own `tests/vitest.config.ts`), skipped where node or `node_modules` is
+  the live hash; and `createNet` through vitest (`src/net/sim-interop.test.ts`,
+  `pnpm test:sim-interop`), skipped where node or `node_modules` is
   missing.

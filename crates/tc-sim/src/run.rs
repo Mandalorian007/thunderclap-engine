@@ -9,7 +9,6 @@ use std::time::Instant;
 
 use tc_net::Request;
 
-use crate::conn::WAKE;
 use crate::core::Core;
 use crate::game::Game;
 use crate::reload::{ReloadReply, ReloadReport};
@@ -65,8 +64,7 @@ impl<G: Game> SimHandle<G> {
         if matches!(control, Control::Stop) {
             self.stopping.store(true, Ordering::Relaxed);
         }
-        self.controls.send(control).is_ok()
-            && self.wake.send(Request::Disconnect { conn: WAKE }).is_ok()
+        self.controls.send(control).is_ok() && self.wake.send(Request::Wake).is_ok()
     }
 
     /// Pauses the clock.

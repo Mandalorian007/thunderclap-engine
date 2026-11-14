@@ -3,7 +3,7 @@
 //! connections in `conn`, reloads in `reload`.
 
 use std::cell::Cell;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime};
@@ -131,7 +131,14 @@ pub struct Sim<G: Game> {
     pub(crate) stopping: Arc<AtomicBool>,
     pub(crate) advance_budget: Duration,
     pub(crate) reloads: Reloads<G>,
+    /// Batches refused because the log couldn't encode them.
+    pub(crate) refused: u64,
+    /// The reasons logged so far (each logged once).
+    pub(crate) refused_kinds: BTreeSet<String>,
 }
+
+/// Distinct refusal reasons logged before the rest are only counted.
+const REFUSED_KINDS: usize = 64;
 
 impl<G: Game> Sim<G> {
     /// Serves `core` with its events going to `log` (`None`: kept in
@@ -161,6 +168,8 @@ impl<G: Game> Sim<G> {
             stopping: Arc::new(AtomicBool::new(false)),
             advance_budget: ADVANCE_BUDGET,
             reloads: Reloads::default(),
+            refused: 0,
+            refused_kinds: BTreeSet::new(),
         };
         sim.schedule_timers(now);
         sim.publish_status(now);
@@ -237,18 +246,20 @@ impl<G: Game> Sim<G> {
     }
 
     /// Logs `events` at the current time, as one batch (all or none), and
-    /// applies them. Nothing is applied once the store failed, or if this
-    /// write fails (which fails the store).
-    pub(crate) fn commit(&mut self, events: Vec<EventOf<G>>) {
+    /// applies them. An event the codec can't encode (or too large to
+    /// write) refuses the whole batch: nothing is logged or applied, the
+    /// refusal is counted and the loop runs on. Only a store that can't
+    /// write (I/O) fails the store. Returns why the batch wasn't applied.
+    pub(crate) fn commit(&mut self, events: Vec<EventOf<G>>) -> Result<(), String> {
         if events.is_empty() {
-            return;
+            return Ok(());
         }
         if let Some(e) = &self.store_error {
             warn!(
                 count = events.len(),
                 "events dropped: the store failed ({e})"
             );
-            return;
+            return Err(format!("the server can't save: {e}"));
         }
         let time = self.core.time();
         let first = self.core.version() + 1;
@@ -260,8 +271,16 @@ impl<G: Game> Sim<G> {
         if let Some(log) = &mut self.log
             && let Err(e) = log.append_all(&entries)
         {
-            self.store_failed(&e.to_string());
-            return;
+            return Err(match e {
+                StoreError::Encode { reason, .. } => self.refuse(reason),
+                StoreError::RecordTooLarge { len, max, .. } => {
+                    self.refuse(format!("an event of {len} bytes (at most {max})"))
+                }
+                e => {
+                    self.store_failed(&e.to_string());
+                    format!("the server can't save: {e}")
+                }
+            });
         }
         for entry in &entries {
             match self.core.apply(entry) {
@@ -280,6 +299,17 @@ impl<G: Game> Sim<G> {
         if let Some(history) = &mut self.history {
             history.extend(entries);
         }
+        Ok(())
+    }
+
+    /// Counts a batch the log refused, and logs the first of each kind.
+    fn refuse(&mut self, reason: String) -> String {
+        self.refused += 1;
+        if self.refused_kinds.len() < REFUSED_KINDS && self.refused_kinds.insert(reason.clone()) {
+            warn!("an event the log can't write was refused (a game bug): {reason}");
+        }
+        self.publish_status(Instant::now());
+        format!("refused: {reason}")
     }
 
     /// The store failed: the clock pauses, everyone is told, and nothing
@@ -467,6 +497,7 @@ impl<G: Game> Sim<G> {
             last_mark: self.last_mark,
             reloading: self.reloads.running(),
             store_error: self.store_error.clone(),
+            refused: self.refused,
         });
         self.next_status = now + STATUS_PUBLISH;
     }
@@ -555,7 +586,7 @@ impl<G: Game> Sim<G> {
         for (player, input) in taken {
             let mut events = Vec::new();
             self.core.game().input(player, input, &mut events);
-            self.commit(events);
+            let _ = self.commit(events);
         }
         self.input_tick_us = u32::try_from(started.elapsed().as_micros()).unwrap_or(u32::MAX);
         for (player, seq) in applied {
@@ -608,7 +639,7 @@ impl<G: Game> Sim<G> {
         for player in self.present() {
             let mut events = Vec::new();
             self.core.game().presence(player, false, &mut events);
-            self.commit(events);
+            let _ = self.commit(events);
         }
         self.flush_all();
         let closed = ServerMsg::<G::Protocol>::Closed {

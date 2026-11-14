@@ -2,7 +2,8 @@
 //!
 //! - two Rust clients (tokio-tungstenite) send commands; the log on disk,
 //!   replayed, reaches the live game's state hash;
-//! - TypeScript's `createNet` (`tests/net.test.ts`, run by vitest) joins,
+//! - TypeScript's `createNet` (`src/net/sim-interop.test.ts`, run by
+//!   vitest; `pnpm test:sim-interop` runs just this test) joins,
 //!   commands and sees the flush before the result. Skipped, with a
 //!   notice, where node or the repo's node_modules are missing.
 
@@ -190,7 +191,7 @@ fn typescript_create_net_interop() {
     let (server, running) = runtime.block_on(start(&dir));
     let out = Command::new("node")
         .arg(&vitest)
-        .args(["run", "--config", "crates/tc-sim/tests/vitest.config.ts"])
+        .args(["run", "src/net/sim-interop.test.ts"])
         .current_dir(repo())
         .env(
             "TC_SIM_INTEROP_URL",

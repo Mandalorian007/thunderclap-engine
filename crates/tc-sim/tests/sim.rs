@@ -79,32 +79,40 @@ fn a_stop_ends_a_long_advance() {
 }
 
 #[test]
-fn a_failed_store_pauses_the_clock_and_says_so_once() {
-    let dir = temp_dir("store-fails");
+fn an_event_the_log_cant_write_is_refused_and_the_loop_runs_on() {
+    let dir = temp_dir("refused");
     let sim = Sim::create(&dir, Tally::new(false), b"tally", SimConfig::default()).unwrap();
     let mut d = Driver::new(sim);
     let (ada, mut rx) = d.connect("ada", Empty);
     Driver::<Tally>::received(&mut rx);
+    let version = d.core().version();
     command(&mut d, ada, 1, "unlucky");
-    command(&mut d, ada, 2, "add 2");
+    command(&mut d, ada, 2, "unlucky");
+    command(&mut d, ada, 3, "add 2");
     let msgs = Driver::<Tally>::received(&mut rx);
-    let pauses = msgs
+    let results: Vec<_> = msgs
         .iter()
-        .filter(|m| matches!(m, ServerMsg::Clock { paused: true, .. }))
-        .count();
-    assert_eq!(pauses, 1, "{msgs:?}");
-    assert_eq!(d.core().game().tally_of("ada"), Some(0), "nothing applied");
-    assert!(d.sim().clock().paused());
-    assert!(!d.sim_mut().resume(), "no resuming a failed store");
+        .filter_map(|m| match m {
+            ServerMsg::CommandResult { result, .. } => Some(result.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        results,
+        ["error: refused: unlucky", "error: refused: unlucky", "2"]
+    );
+    assert!(
+        !msgs.iter().any(|m| matches!(m, ServerMsg::Clock { .. })),
+        "the clock runs on: {msgs:?}"
+    );
+    assert_eq!(d.core().version(), version + 1, "only the add was logged");
+    assert!(!d.sim().clock().paused());
     let status = d.sim().status().get();
-    assert!(status.store_error.is_some() && status.paused, "{status}");
-    // A new connection is turned away, to come back later.
-    let (_, mut rx) = d.connect("bo", Empty);
-    assert!(matches!(
-        Driver::<Tally>::received(&mut rx)[..],
-        [ServerMsg::Closed { .. }]
-    ));
+    assert_eq!(status.refused, 2, "{status}");
+    assert!(status.store_error.is_none());
     drop(d);
+    let read = tc_store::read(&dir, &tally::TallyLog).unwrap();
+    assert_eq!(read.entries.len() as u64, version + 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -44,8 +44,8 @@ index. Decoding is strict: trailing bytes, bad tags and unsorted keys fail.
   runs just this test.
 - `tc-sim/tests/net.rs` serves the tally game (`tests/tally/`) through
   `tc-net` to two Rust clients and replays the log to the live state hash,
-  then runs `createNet` against it through vitest (`tests/net.test.ts`,
-  `tests/vitest.config.ts`), skipping where node is missing.
+  then runs `createNet` against it through vitest (`src/net/sim-interop.test.ts`;
+  `pnpm test:sim-interop` runs just this test), skipping where node is missing.
 
 The `tests/forge/` fixtures are data from a game, kept as a test; they are
 excluded from biome.

@@ -1,11 +1,11 @@
 // Interop with the Rust game loop (crates/tc-sim): `createNet` over a real
 // WebSocket to the tally game in crates/tc-sim/tests/tally. Run by
-// `cargo test -p tc-sim --test net`, which starts the server and sets
-// TC_SIM_INTEROP_URL; skipped otherwise.
+// `cargo test -p tc-sim --test net` (or `pnpm test:sim-interop`), which
+// starts the server and sets TC_SIM_INTEROP_URL; skipped otherwise.
 import { describe, expect, it } from 'vitest';
-import { defineSchema } from '../../../src/net/envelope';
-import { createNet, type Net } from '../../../src/net/session';
-import type { Connect } from '../../../src/net/transport';
+import { defineSchema } from './envelope';
+import { createNet, type Net } from './session';
+import type { Connect } from './transport';
 
 const url = process.env.TC_SIM_INTEROP_URL;
 

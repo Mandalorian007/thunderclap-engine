@@ -22,10 +22,6 @@ use crate::game::{Game, Outbox, PlayerId};
 use crate::input::Taken;
 use crate::sim::{Conn, Sim};
 
-/// The connection id a `Disconnect` carries when it only wakes the loop
-/// (see [`crate::Control`]).
-pub(crate) const WAKE: ConnId = ConnId::MAX;
-
 impl<G: Game> Sim<G> {
     /// Handles one request from tc-net.
     pub fn handle(&mut self, request: Request<G::Protocol>) {
@@ -43,7 +39,7 @@ impl<G: Game> Sim<G> {
                 self.client(conn, msg, now);
                 drop(permit);
             }
-            Request::Disconnect { conn } if conn == WAKE => {}
+            Request::Wake => {}
             Request::Disconnect { conn } => self.disconnect(conn),
         }
     }
@@ -78,12 +74,19 @@ impl<G: Game> Sim<G> {
         };
         // Catch up first, so the events land at the time it is now.
         self.tick(now);
-        self.commit(events);
+        if let Err(reason) = self.commit(events) {
+            let rejected = ServerMsg::<G::Protocol>::Rejected {
+                reason,
+                stale_schema: false,
+            };
+            let _ = out.try_send(rejected.to_bytes());
+            return;
+        }
         let first = !self.conns_of.contains_key(&player);
         if first {
             let mut events = Vec::new();
             self.core.game().presence(player, true, &mut events);
-            self.commit(events);
+            let _ = self.commit(events);
             self.inputs.join(player);
         }
         self.flush_all();
@@ -144,8 +147,10 @@ impl<G: Game> Sim<G> {
             ClientMsg::Command { seq, command } => {
                 self.tick(now);
                 let mut events = Vec::new();
-                let result = self.core.game().command(player, command, &mut events);
-                self.commit(events);
+                let mut result = self.core.game().command(player, command, &mut events);
+                if let Err(reason) = self.commit(events) {
+                    result = self.core.game().command_error(reason);
+                }
                 // Read your writes: what the command changed goes out
                 // before its result.
                 self.flush_all();
@@ -192,7 +197,7 @@ impl<G: Game> Sim<G> {
                 let mut events = Vec::new();
                 let mut out = Outbox::new();
                 self.core.game().message(player, msg, &mut events, &mut out);
-                self.commit(events);
+                let _ = self.commit(events);
                 self.deliver(out);
             }
             // Nothing to unsubscribe, no entity stream to resync; the
@@ -229,7 +234,7 @@ impl<G: Game> Sim<G> {
                 self.tick(now);
                 let mut events = Vec::new();
                 self.core.game().presence(player, false, &mut events);
-                self.commit(events);
+                let _ = self.commit(events);
                 tracing::info!(conn, player, "left");
             }
         }

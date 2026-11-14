@@ -124,6 +124,11 @@ pub trait Game: Sized + Send + 'static {
         events: &mut Vec<EventOf<Self>>,
     ) -> <Self::Protocol as Protocol>::Result;
 
+    /// The result a command gets when its events weren't applied: the log
+    /// couldn't encode one (a game bug), or the store can't save. `reason`
+    /// says which.
+    fn command_error(&self, reason: String) -> <Self::Protocol as Protocol>::Result;
+
     /// An input from `player`'s driving connection, taken off its queue
     /// at an input tick ([`crate::InputQueue`]): the events it makes. The
     /// default ignores inputs.
