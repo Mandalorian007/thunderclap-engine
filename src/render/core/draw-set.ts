@@ -3,16 +3,19 @@
  * and a cull mode. A slot is one draw: a range of an arena's vertices, indices (its own or the
  * shared quad index), an optional range of instances and a bounding sphere.
  *
- * - `kind: 'static'` sets encode into a render bundle per (view, target signature), rebuilt only
- *   when the slot set changes; a frame executes it with one call.
+ * - `kind: 'static'` sets encode into a render bundle per (cull group, target signature), rebuilt
+ *   only when the slot set changes; a frame executes it with one call, and both eyes of a stereo
+ *   pair execute the same bundle.
  * - `kind: 'dynamic'` sets are encoded into the pass each frame (membership that churns).
- * - `cull: 'gpu'` culls in a compute pass that writes `drawIndexedIndirect` arguments per view;
- *   `'cpu'` tests spheres on the CPU and draws the visible slots directly (small sets);
+ * - `cull: 'gpu'` culls in a compute pass that writes `drawIndexedIndirect` arguments per cull
+ *   group; `'cpu'` tests spheres on the CPU once per group and draws the visible slots directly;
  *   `'none'` draws every live slot.
  * - With `multiDrawIndirect` and `indirect-first-instance` on the device, a GPU-culled set whose
  *   arenas are one block each draws with one `multiDrawIndexedIndirect`.
  *
  * Only the slot table's dirty range is uploaded; a held, unchanged set costs no CPU per frame.
+ * With the core's `originGrid`, each slot has a float64 origin; the shader sees it relative to the
+ * frame origin as `in.core_origin` (bound per slot, so a far world keeps float32 precision).
  */
 import type { Arena, ArenaAlloc } from './arena';
 import {
@@ -26,7 +29,7 @@ import {
 } from './cull';
 import type { BufferLayout } from './layout';
 import type { CorePass } from './pass-list';
-import { CORE_VIEW_WGSL, sphereInPlanes, VIEW_SLOT_FLOATS } from './view';
+import { CORE_VIEW_WGSL, sphereInPlanes } from './view';
 
 /** How a set's slots are culled. `'auto'` is `'gpu'` from 256 slots of capacity, else `'cpu'`. */
 export type DrawSetCull = 'none' | 'cpu' | 'gpu' | 'auto';
@@ -41,7 +44,9 @@ export interface DrawSetShader {
   /**
    * WGSL. The core prepends `CORE_VIEW_WGSL`, `@group(0) @binding(0) var<uniform> view: CoreView;`,
    * the layouts' `wgslDecode` and a `struct VertexIn` holding the vertex layout's fields and then
-   * the instance layout's, so the code starts at `@vertex fn vs(in: VertexIn) -> ...`.
+   * the instance layout's, so the code starts at `@vertex fn vs(in: VertexIn) -> ...`. With the
+   * core's `originGrid`, `VertexIn` ends with `core_origin: vec3f`: the slot's origin relative to
+   * the frame origin, which the shader adds to its slot-local positions.
    */
   code: string;
   /** Default `'vs'`. */
@@ -95,8 +100,13 @@ export interface SlotDesc {
   instances?: ArenaAlloc;
   /** Default: every instance `instances` holds, or 1 without instances. */
   instanceCount?: number;
-  /** World-space bounding sphere `[x, y, z, r]` of everything the slot draws. */
+  /** Bounding sphere `[x, y, z, r]` of everything the slot draws, relative to `origin`. */
   bounds: ArrayLike<number>;
+  /**
+   * The slot's origin in world space at float64 (default 0): its geometry and bounds are relative
+   * to it. Needs the core's `originGrid`; the shader reads it, frame-relative, as `core_origin`.
+   */
+  origin?: ArrayLike<number>;
 }
 
 /** What a set needs of its core (the core passes itself). */
@@ -106,11 +116,21 @@ export interface DrawSetHost {
   readonly cullLayout: GPUBindGroupLayout;
   readonly viewBuffer: GPUBuffer;
   readonly viewData: Float32Array;
+  /** Byte offset of the cull groups' slots in `viewBuffer`. */
+  readonly groupOffset: number;
   readonly maxViews: number;
   readonly multiDraw: boolean;
   readonly firstInstance: boolean;
   readonly stats: CoreStats;
-  viewGroup(index: number): GPUBindGroup;
+  /** The bind group a draw of cull group `group` binds at 0. */
+  drawGroup(group: number): GPUBindGroup;
+  /** Float offset in `viewData` of cull group `group`'s planes. */
+  groupPlanes(group: number): number;
+  /** Frames prepared so far. */
+  readonly frame: number;
+  /** The frame origin (float64), when `originOn`. */
+  readonly origin: Float64Array;
+  readonly originOn: boolean;
   quadIndex(indexCount: number): GPUBuffer;
   readonly quadVersion: number;
   pass(id: string): CorePass;
@@ -149,7 +169,8 @@ interface MultiDrawPass {
 
 /** A cached bundle: what it was recorded against. */
 interface BundleEntry {
-  view: number;
+  group: number;
+  bind: GPUBindGroup;
   color: GPUTextureFormat;
   depth: GPUTextureFormat | undefined;
   readOnly: boolean;
@@ -187,6 +208,18 @@ export class DrawSet {
   private readonly vertexAllocs: (ArenaAlloc | null)[];
   private readonly indexAllocs: (ArenaAlloc | null)[];
   private readonly instanceAllocs: (ArenaAlloc | null)[];
+  /** With an origin: each slot's origin + bounds centre, float64 (x, y, z per slot). */
+  private readonly centres: Float64Array | null;
+  private readonly origins: Float64Array | null;
+  /** With an origin: each slot's origin relative to the frame origin, `vec4f` per slot. */
+  private readonly originRel: Float32Array | null;
+  private readonly originBuffer: GPUBuffer | null;
+  private readonly originSlot: number;
+  private readonly frameOrigin = new Float64Array(3);
+  /** CPU cull: the visible slots of the group last culled, and which (frame, group) that was. */
+  private readonly visible: Uint8Array | null;
+  private visibleFrame = -1;
+  private visibleGroup = -1;
   private readonly freeIds: number[] = [];
   private live = 0;
   private high = 0;
@@ -228,11 +261,34 @@ export class DrawSet {
     this.vertexAllocs = new Array(desc.capacity).fill(null);
     this.indexAllocs = new Array(desc.capacity).fill(null);
     this.instanceAllocs = new Array(desc.capacity).fill(null);
+    this.visible = this.cull === 'cpu' ? new Uint8Array(desc.capacity) : null;
 
     const { device } = host;
+    if (host.originOn) {
+      this.centres = new Float64Array(desc.capacity * 3);
+      this.origins = new Float64Array(desc.capacity * 3);
+      this.originRel = new Float32Array(desc.capacity * 4);
+      this.originBuffer = device.createBuffer({
+        label: `${this.label} origins`,
+        size: desc.capacity * 16,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      });
+      this.frameOrigin.set(host.origin);
+    } else {
+      this.centres = null;
+      this.origins = null;
+      this.originRel = null;
+      this.originBuffer = null;
+    }
+    this.originSlot = desc.instanceLayout ? 2 : 1;
     const vl = desc.vertexLayout;
     const il = desc.instanceLayout;
-    const fields = [vl.wgslFields(0), il ? il.wgslFields(vl.attributes.length) : '']
+    const originLoc = vl.attributes.length + (il?.attributes.length ?? 0);
+    const fields = [
+      vl.wgslFields(0),
+      il ? il.wgslFields(vl.attributes.length) : '',
+      host.originOn ? `@location(${originLoc}) core_origin: vec3f,` : '',
+    ]
       .filter(Boolean)
       .join('\n  ');
     const code = `${CORE_VIEW_WGSL}
@@ -269,7 +325,14 @@ ${desc.shader.code}`;
         label: `${this.label} cull`,
         layout: host.cullLayout,
         entries: [
-          { binding: 0, resource: { buffer: host.viewBuffer } },
+          {
+            binding: 0,
+            resource: {
+              buffer: host.viewBuffer,
+              offset: host.groupOffset,
+              size: host.groupOffset,
+            },
+          },
           { binding: 1, resource: { buffer: this.paramsBuffer } },
           { binding: 2, resource: { buffer: this.slotBuffer } },
           { binding: 3, resource: { buffer: this.argsBuffer } },
@@ -313,9 +376,7 @@ ${desc.shader.code}`;
   setBounds(id: number, x: number, y: number, z: number, r: number): void {
     this.check(id);
     const s = id * SLOT_WORDS;
-    this.slotF32[s + SLOT.x] = x;
-    this.slotF32[s + SLOT.y] = y;
-    this.slotF32[s + SLOT.z] = z;
+    this.writeCentre(id, x, y, z);
     this.slotF32[s + SLOT.r] = r;
     this.dirty(id);
   }
@@ -347,6 +408,7 @@ ${desc.shader.code}`;
     this.slotBuffer?.destroy();
     this.argsBuffer?.destroy();
     this.paramsBuffer?.destroy();
+    this.originBuffer?.destroy();
     this.bundles.length = 0;
   }
 
@@ -356,14 +418,25 @@ ${desc.shader.code}`;
 
   // ------------------------------------------------------------------ core-facing
 
-  /** @internal Upload the slot table's dirty range and the cull parameters. */
-  upload(views: number): void {
+  /**
+   * @internal Upload the slot table's dirty range and the cull parameters for `groups` cull
+   * groups; first move to the host's frame origin when it changed.
+   */
+  upload(groups: number): void {
+    const { device, stats } = this.host;
+    if (this.originBuffer) this.rebase();
+    if (this.originBuffer && this.dirtyHi >= this.dirtyLo) {
+      const lo = this.dirtyLo * 4;
+      const n = (this.dirtyHi + 1) * 4 - lo;
+      device.queue.writeBuffer(this.originBuffer, lo * 4, this.originRel!, lo, n);
+      stats.calls++;
+    }
     if (!this.slotBuffer || !this.paramsBuffer) {
       this.dirtyLo = Infinity;
       this.dirtyHi = -1;
       return;
     }
-    const { device, stats } = this.host;
+    const views = groups;
     if (this.dirtyHi >= this.dirtyLo) {
       const lo = this.dirtyLo * SLOT_WORDS;
       const n = (this.dirtyHi + 1) * SLOT_WORDS - lo;
@@ -391,11 +464,11 @@ ${desc.shader.code}`;
     }
   }
 
-  /** @internal Dispatch the cull into an open compute pass (its pipeline set). */
-  dispatch(pass: GPUComputePassEncoder, views: number): void {
+  /** @internal Dispatch the cull for `groups` cull groups into an open compute pass. */
+  dispatch(pass: GPUComputePassEncoder, groups: number): void {
     if (!this.cullGroup || this.high === 0) return;
     pass.setBindGroup(0, this.cullGroup);
-    pass.dispatchWorkgroups(Math.ceil(this.high / CULL_WORKGROUP), views);
+    pass.dispatchWorkgroups(Math.ceil(this.high / CULL_WORKGROUP), groups);
     this.host.stats.calls += 2;
     this.host.stats.dispatches++;
   }
@@ -407,23 +480,27 @@ ${desc.shader.code}`;
     return 'direct';
   }
 
-  /** @internal The bundle for view `view` into a target of these formats, recorded if stale. */
+  /**
+   * @internal The bundle for cull group `group` into a target of these formats, recorded if
+   * stale. Every view of the group executes it.
+   */
   bundle(
-    view: number,
+    group: number,
     color: GPUTextureFormat,
     depth: GPUTextureFormat | undefined,
     readOnly: boolean,
   ): GPURenderBundle {
     const stamp = this.stamp();
+    const bind = this.host.drawGroup(group);
     let entry: BundleEntry | undefined;
     for (let i = 0; i < this.bundles.length; i++) {
       const b = this.bundles[i]!;
-      if (b.view === view && b.color === color && b.depth === depth && b.readOnly === readOnly) {
+      if (b.group === group && b.color === color && b.depth === depth && b.readOnly === readOnly) {
         entry = b;
         break;
       }
     }
-    if (entry && entry.stamp === stamp) return entry.bundle;
+    if (entry && entry.stamp === stamp && entry.bind === bind) return entry.bundle;
     const { device, stats } = this.host;
     const enc = device.createRenderBundleEncoder({
       label: `${this.label} bundle`,
@@ -435,7 +512,7 @@ ${desc.shader.code}`;
     // Recording is not this frame's pass work: its calls count as bundle calls.
     const calls = stats.calls;
     const draws = stats.directDraws;
-    this.record(enc, view, color, depth);
+    this.record(enc, group, color, depth);
     stats.bundleCalls += stats.calls - calls;
     stats.calls = calls;
     stats.directDraws = draws;
@@ -443,37 +520,38 @@ ${desc.shader.code}`;
     stats.bundleBuilds++;
     if (entry) {
       entry.stamp = stamp;
+      entry.bind = bind;
       entry.bundle = bundle;
     } else {
-      this.bundles.push({ view, color, depth, readOnly, stamp, bundle });
+      this.bundles.push({ group, bind, color, depth, readOnly, stamp, bundle });
     }
     return bundle;
   }
 
-  /** @internal Encode the set directly into an open render pass (dynamic, CPU-culled, multi). */
+  /** @internal Encode cull group `group`'s draws into an open render pass (dynamic, CPU, multi). */
   encodeDirect(
     pass: GPURenderPassEncoder,
-    view: number,
+    group: number,
     color: GPUTextureFormat,
     depth: GPUTextureFormat | undefined,
   ): void {
     if (this.useMulti()) {
       const { stats } = this.host;
-      this.bindCommon(pass, view, color, depth);
+      this.bindCommon(pass, group, color, depth);
       const v0 = this.vertexAllocs[this.firstLive()]!;
       pass.setVertexBuffer(0, this.desc.vertices.buffers[v0.block]!);
       if (this.desc.instanceLayout) pass.setVertexBuffer(1, this.desc.instances!.buffers[0]!);
       pass.setIndexBuffer(this.indexBufferOf(this.firstLive()), 'uint32');
       (pass as unknown as MultiDrawPass).multiDrawIndexedIndirect(
         this.argsBuffer!,
-        view * this.capacity * ARGS_BYTES,
+        group * this.capacity * ARGS_BYTES,
         this.high,
       );
       stats.calls += this.desc.instanceLayout ? 4 : 3;
       stats.directDraws++;
       return;
     }
-    this.record(pass, view, color, depth);
+    this.record(pass, group, color, depth);
   }
 
   // ------------------------------------------------------------------ internals
@@ -489,6 +567,10 @@ ${desc.shader.code}`;
 
   private write(id: number, slot: SlotDesc): void {
     const { vertexLayout, instanceLayout } = this.desc;
+    const so = slot.origin;
+    if (!this.origins && so && (so[0] !== 0 || so[1] !== 0 || so[2] !== 0)) {
+      throw new Error(`${this.label}: a slot origin needs the core's originGrid`);
+    }
     const v = slot.vertices;
     if (v.offset % vertexLayout.stride !== 0) {
       throw new Error(
@@ -514,9 +596,15 @@ ${desc.shader.code}`;
     }
     const s = id * SLOT_WORDS;
     const b = slot.bounds;
-    this.slotF32[s + SLOT.x] = b[0]!;
-    this.slotF32[s + SLOT.y] = b[1]!;
-    this.slotF32[s + SLOT.z] = b[2]!;
+    const o = slot.origin;
+    if (this.origins) {
+      const k = id * 3;
+      this.origins[k] = o ? o[0]! : 0;
+      this.origins[k + 1] = o ? o[1]! : 0;
+      this.origins[k + 2] = o ? o[2]! : 0;
+      this.writeOrigin(id);
+    }
+    this.writeCentre(id, b[0]!, b[1]!, b[2]!);
     this.slotF32[s + SLOT.r] = b[3]!;
     this.slotU32[s + SLOT.indexCount] = slot.indexCount;
     this.slotU32[s + SLOT.firstIndex] = slot.indices ? slot.indices.offset / 4 : 0;
@@ -533,6 +621,87 @@ ${desc.shader.code}`;
     this.version++;
   }
 
+  /** Slot `id`'s bounds centre (relative to its origin) into the slot table, frame-relative. */
+  private writeCentre(id: number, x: number, y: number, z: number): void {
+    const s = id * SLOT_WORDS;
+    const c = this.centres;
+    if (!c) {
+      this.slotF32[s + SLOT.x] = x;
+      this.slotF32[s + SLOT.y] = y;
+      this.slotF32[s + SLOT.z] = z;
+      return;
+    }
+    const k = id * 3;
+    const o = this.origins!;
+    const f = this.frameOrigin;
+    c[k] = o[k]! + x;
+    c[k + 1] = o[k + 1]! + y;
+    c[k + 2] = o[k + 2]! + z;
+    this.slotF32[s + SLOT.x] = c[k]! - f[0]!;
+    this.slotF32[s + SLOT.y] = c[k + 1]! - f[1]!;
+    this.slotF32[s + SLOT.z] = c[k + 2]! - f[2]!;
+  }
+
+  /** Slot `id`'s origin relative to the frame origin, for the shader. */
+  private writeOrigin(id: number): void {
+    const o = this.origins!;
+    const f = this.frameOrigin;
+    const k = id * 3;
+    const r = this.originRel!;
+    r[id * 4] = o[k]! - f[0]!;
+    r[id * 4 + 1] = o[k + 1]! - f[1]!;
+    r[id * 4 + 2] = o[k + 2]! - f[2]!;
+  }
+
+  /** Move every live slot to the host's frame origin, when it changed. */
+  private rebase(): void {
+    const h = this.host.origin;
+    const f = this.frameOrigin;
+    if (h[0] === f[0] && h[1] === f[1] && h[2] === f[2]) return;
+    f.set(h);
+    const c = this.centres!;
+    let any = false;
+    for (let id = 0; id < this.high; id++) {
+      const s = id * SLOT_WORDS;
+      if ((this.slotU32[s + SLOT.flags]! & SLOT_LIVE) === 0) continue;
+      const k = id * 3;
+      this.slotF32[s + SLOT.x] = c[k]! - f[0]!;
+      this.slotF32[s + SLOT.y] = c[k + 1]! - f[1]!;
+      this.slotF32[s + SLOT.z] = c[k + 2]! - f[2]!;
+      this.writeOrigin(id);
+      any = true;
+    }
+    if (any) {
+      this.dirty(0);
+      this.dirty(this.high - 1);
+    }
+  }
+
+  /** CPU cull: which live slots cull group `group` sees, once per (frame, group). */
+  private cullCpu(group: number): void {
+    const h = this.host;
+    if (this.visibleFrame === h.frame && this.visibleGroup === group) return;
+    this.visibleFrame = h.frame;
+    this.visibleGroup = group;
+    const vis = this.visible!;
+    const at = h.groupPlanes(group);
+    for (let id = 0; id < this.high; id++) {
+      const s = id * SLOT_WORDS;
+      vis[id] =
+        (this.slotU32[s + SLOT.flags]! & SLOT_LIVE) !== 0 &&
+        sphereInPlanes(
+          h.viewData,
+          at,
+          this.slotF32[s + SLOT.x]!,
+          this.slotF32[s + SLOT.y]!,
+          this.slotF32[s + SLOT.z]!,
+          this.slotF32[s + SLOT.r]!,
+        )
+          ? 1
+          : 0;
+    }
+  }
+
   /** Everything a cached bundle depends on, as one number. */
   private stamp(): number {
     const d = this.desc;
@@ -547,7 +716,7 @@ ${desc.shader.code}`;
 
   private useMulti(): boolean {
     const h = this.host;
-    if (!h.multiDraw || !h.firstInstance || this.cull !== 'gpu') return false;
+    if (!h.multiDraw || !h.firstInstance || this.cull !== 'gpu' || h.originOn) return false;
     const d = this.desc;
     return (
       d.vertices.buffers.length === 1 &&
@@ -580,8 +749,23 @@ ${desc.shader.code}`;
       if (p.color === color && p.depth === depth && p.depthWrite === depthWrite) return p.pipeline;
     }
     const d = this.desc;
-    const buffers = [d.vertexLayout.buffer(0)];
+    const buffers: GPUVertexBufferLayout[] = [d.vertexLayout.buffer(0)];
     if (d.instanceLayout) buffers.push(d.instanceLayout.buffer(d.vertexLayout.attributes.length));
+    if (this.originBuffer) {
+      // One vec3f per slot, bound at the slot's offset: stride 0 repeats it for every instance.
+      buffers.push({
+        arrayStride: 0,
+        stepMode: 'instance',
+        attributes: [
+          {
+            shaderLocation:
+              d.vertexLayout.attributes.length + (d.instanceLayout?.attributes.length ?? 0),
+            offset: 0,
+            format: 'float32x3',
+          },
+        ],
+      });
+    }
     const pipeline = this.host.device.createRenderPipeline({
       label: this.label,
       layout: this.layout,
@@ -609,12 +793,12 @@ ${desc.shader.code}`;
 
   private bindCommon(
     enc: GPURenderPassEncoder | GPURenderBundleEncoder,
-    view: number,
+    group: number,
     color: GPUTextureFormat,
     depth: GPUTextureFormat | undefined,
   ): void {
     enc.setPipeline(this.pipeline(color, depth));
-    enc.setBindGroup(0, this.host.viewGroup(view));
+    enc.setBindGroup(0, this.host.drawGroup(group));
     let calls = 2;
     const extra = this.desc.bindGroups;
     if (extra) {
@@ -624,20 +808,23 @@ ${desc.shader.code}`;
     this.host.stats.calls += calls;
   }
 
-  /** Record the set's draws into a pass or a bundle (one slot after another, by id). */
+  /** Record cull group `group`'s draws into a pass or a bundle (slot after slot, by id). */
   private record(
     enc: GPURenderPassEncoder | GPURenderBundleEncoder,
-    view: number,
+    group: number,
     color: GPUTextureFormat,
     depth: GPUTextureFormat | undefined,
   ): void {
     if (this.live === 0) return;
-    const { stats, viewData } = this.host;
+    const { stats } = this.host;
     const d = this.desc;
-    this.bindCommon(enc, view, color, depth);
+    this.bindCommon(enc, group, color, depth);
     const cpu = this.cull === 'cpu';
     const gpu = this.cull === 'gpu';
-    const planesAt = view * VIEW_SLOT_FLOATS + 20;
+    if (cpu) this.cullCpu(group);
+    const vis = this.visible;
+    const origins = this.originBuffer;
+    const originSlot = this.originSlot;
     const instStride = d.instanceLayout?.stride ?? 0;
     let vBlock = -1;
     let iBuffer: GPUBuffer | null = null;
@@ -646,19 +833,7 @@ ${desc.shader.code}`;
     for (let id = 0; id < this.high; id++) {
       const s = id * SLOT_WORDS;
       if ((this.slotU32[s + SLOT.flags]! & SLOT_LIVE) === 0) continue;
-      if (
-        cpu &&
-        !sphereInPlanes(
-          viewData,
-          planesAt,
-          this.slotF32[s + SLOT.x]!,
-          this.slotF32[s + SLOT.y]!,
-          this.slotF32[s + SLOT.z]!,
-          this.slotF32[s + SLOT.r]!,
-        )
-      ) {
-        continue;
-      }
+      if (cpu && vis![id] === 0) continue;
       const va = this.vertexAllocs[id]!;
       if (va.block !== vBlock) {
         vBlock = va.block;
@@ -679,8 +854,12 @@ ${desc.shader.code}`;
         enc.setVertexBuffer(1, d.instances!.buffers[inst.block]!, inst.offset, n * instStride);
         calls++;
       }
+      if (origins) {
+        enc.setVertexBuffer(originSlot, origins, id * 16, 12);
+        calls++;
+      }
       if (gpu) {
-        enc.drawIndexedIndirect(this.argsBuffer!, (view * this.capacity + id) * ARGS_BYTES);
+        enc.drawIndexedIndirect(this.argsBuffer!, (group * this.capacity + id) * ARGS_BYTES);
       } else {
         enc.drawIndexed(
           this.slotU32[s + SLOT.indexCount]!,

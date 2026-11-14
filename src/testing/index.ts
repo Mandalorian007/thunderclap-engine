@@ -5,6 +5,7 @@ export {
   type FakeBindGroup,
   type FakeBuffer,
   type FakeBufferCopy,
+  type FakeBundle,
   type FakeDevice,
   FakeGpuValidationError,
   type FakePass,

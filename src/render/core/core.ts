@@ -3,12 +3,17 @@
  * of the one renderer. A frame is
  *
  * ```
- * core.prepare(encoder, views)        once: view uniforms, dirty slot ranges, one cull dispatch per GPU set
+ * core.prepare(encoder, views | groups)   once: view uniforms, dirty slot ranges, one cull dispatch per GPU set
  * core.draw(encoder, viewIndex, target)   per view: the pass list, each pass only if it has work
  * ```
  *
  * and the caller submits the encoder. Held sets that did not change cost no CPU and the same GPU
  * calls whatever their slot count: a static GPU-culled set is one `executeBundles` entry.
+ *
+ * Views come in cull groups (D1 §3.5). A plain view list makes each view its own group. A group
+ * of several views (a stereo pair) is culled once by the union of its frusta: one dispatch row,
+ * one argument set and one bundle per set serve all its views; `draw` copies the view's uniforms
+ * into the group's binding first (one `copyBufferToBuffer`).
  */
 import { Arena, type ArenaDesc } from './arena';
 import { CULL_WGSL } from './cull';
@@ -16,8 +21,12 @@ import { type CoreStats, DrawSet, type DrawSetDesc, type DrawSetHost } from './d
 import { type CorePass, type PassDesc, PassList } from './pass-list';
 import { QuadIndex } from './quad-index';
 import {
+  type CullGroup,
   MAX_VIEWS,
+  openPlanesInto,
   type RenderView,
+  unionPlanesInto,
+  VIEW_SLOT,
   VIEW_SLOT_BYTES,
   VIEW_SLOT_FLOATS,
   writeViewSlot,
@@ -31,8 +40,19 @@ export interface RenderCoreOptions {
   maxViews?: number;
   /** The depth format of attachments made from use (default `'depth24plus'`). */
   depthFormat?: GPUTextureFormat;
-  /** Use `multiDrawIndexedIndirect` when the device has it (default true). */
+  /** Use `multiDrawIndexedIndirect` when the device has it (default true; off with an origin). */
   multiDraw?: boolean;
+  /**
+   * Camera-relative rendering (D1 §3.8): snap the frame origin to this grid (metres, e.g. 1024)
+   * around the first view's eye and hand the GPU everything relative to it. Slots then take a
+   * float64 `origin` and shaders read `in.core_origin`. Default 0: off, world space as given.
+   */
+  originGrid?: number;
+  /**
+   * Called as `draw` starts each view, with its index (a test's `meter.view` or
+   * `FakeDevice.markView`, to split counts by view).
+   */
+  onView?: ((viewIndex: number) => void) | null;
 }
 
 /** Where a view draws: a colour view of a texture of `format` and size, cleared or loaded. */
@@ -43,6 +63,11 @@ export interface CoreTarget {
   height: number;
   /** Clear to this colour on the first pass; without it the target is loaded. */
   clear?: GPUColor;
+  /**
+   * Draw into this rectangle of the target only (pixels; viewport and scissor). Depth is still
+   * the target's size and is cleared whole by the view's first depth pass.
+   */
+  viewport?: { x: number; y: number; width: number; height: number };
 }
 
 /** What the core's device offers it. */
@@ -76,12 +101,28 @@ export class RenderCore {
   readonly stats: CoreStats = newStats();
   /** Frames prepared so far. */
   frame = 0;
+  /** The frame origin (float64; zero unless `originGrid`), set by `prepare`. */
+  readonly origin = new Float64Array(3);
+  /** The origin grid (0: off). */
+  readonly originGrid: number;
+  /** Cull groups of the last `prepare`. */
+  groups = 0;
+  /** Called as `draw` starts each view (see `RenderCoreOptions.onView`). */
+  onView: ((viewIndex: number) => void) | null;
   /** @internal */ readonly viewLayout: GPUBindGroupLayout;
   /** @internal */ readonly cullLayout: GPUBindGroupLayout;
   /** @internal */ readonly viewBuffer: GPUBuffer;
   /** @internal */ readonly viewData: Float32Array;
   private readonly viewU32: Uint32Array;
   private readonly viewGroups: GPUBindGroup[] = [];
+  /** The view a multi-view group's draw reads: `draw` copies its view's slot here. */
+  private readonly currentBuffer: GPUBuffer;
+  private readonly currentGroup: GPUBindGroup;
+  /** Per prepared view: its cull group; per group: its first view and count. */
+  private readonly groupOf = new Int32Array(MAX_VIEWS);
+  private readonly groupFirst = new Int32Array(MAX_VIEWS);
+  private readonly groupSize = new Int32Array(MAX_VIEWS);
+  private readonly flat: RenderView[] = [];
   private readonly quads: QuadIndex;
   private cullPipeline: GPUComputePipeline | null = null;
   private readonly sets: DrawSet[] = [];
@@ -108,6 +149,8 @@ export class RenderCore {
     };
     this.maxViews = Math.max(1, Math.min(opts.maxViews ?? MAX_VIEWS, MAX_VIEWS));
     this.depthFormat = opts.depthFormat ?? 'depth24plus';
+    this.originGrid = Math.max(0, opts.originGrid ?? 0);
+    this.onView = opts.onView ?? null;
     this.passes = new PassList();
     this.quads = new QuadIndex(device);
     const S = GPUShaderStage;
@@ -130,13 +173,14 @@ export class RenderCore {
         { binding: 3, visibility: S.COMPUTE, buffer: { type: 'storage' } },
       ],
     });
-    // The cull binds the whole buffer as `array<CoreView, MAX_VIEWS>`, so it is always full size.
+    // Views in slots [0, MAX_VIEWS), the cull groups' planes in [MAX_VIEWS, 2 · MAX_VIEWS): the
+    // cull binds the second half as `array<CoreView, MAX_VIEWS>`, so the buffer is always full size.
     this.viewBuffer = device.createBuffer({
       label: 'core views',
-      size: MAX_VIEWS * VIEW_SLOT_BYTES,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      size: 2 * MAX_VIEWS * VIEW_SLOT_BYTES,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
     });
-    this.viewData = new Float32Array(MAX_VIEWS * VIEW_SLOT_FLOATS);
+    this.viewData = new Float32Array(2 * MAX_VIEWS * VIEW_SLOT_FLOATS);
     this.viewU32 = new Uint32Array(this.viewData.buffer);
     for (let i = 0; i < this.maxViews; i++) {
       this.viewGroups.push(
@@ -156,6 +200,16 @@ export class RenderCore {
         }),
       );
     }
+    this.currentBuffer = device.createBuffer({
+      label: 'core current view',
+      size: VIEW_SLOT_BYTES,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    this.currentGroup = device.createBindGroup({
+      label: 'core current view',
+      layout: this.viewLayout,
+      entries: [{ binding: 0, resource: { buffer: this.currentBuffer } }],
+    });
     this.colorAttachment = {
       view: undefined as unknown as GPUTextureView,
       loadOp: 'load',
@@ -181,11 +235,19 @@ export class RenderCore {
       cullLayout: this.cullLayout,
       viewBuffer: this.viewBuffer,
       viewData: this.viewData,
+      groupOffset: MAX_VIEWS * VIEW_SLOT_BYTES,
       maxViews: this.maxViews,
       multiDraw: this.caps.multiDraw,
       firstInstance: this.caps.firstInstance,
       stats: this.stats,
-      viewGroup: (i) => this.viewGroups[i]!,
+      drawGroup: (g) =>
+        this.groupSize[g]! > 1 ? this.currentGroup : this.viewGroups[this.groupFirst[g]!]!,
+      groupPlanes: (g) => (MAX_VIEWS + g) * VIEW_SLOT_FLOATS + VIEW_SLOT.planes,
+      get frame() {
+        return core.frame;
+      },
+      origin: this.origin,
+      originOn: this.originGrid > 0,
       quadIndex: (n) => this.quads.ensure(Math.ceil(n / 6)),
       get quadVersion() {
         return core.quads.version;
@@ -238,12 +300,23 @@ export class RenderCore {
 
   /**
    * Once a frame, before any `draw`: write the views' uniforms, upload what changed and cull
-   * every GPU-culled set for every view in one compute pass. Resets `stats`' per-frame counts.
+   * every GPU-culled set for every cull group in one compute pass. Resets `stats`' per-frame
+   * counts. `views` is a view list (each view its own cull group) or a list of cull groups;
+   * either way views are numbered in order for `draw`.
    */
-  prepare(encoder: GPUCommandEncoder, views: readonly RenderView[]): void {
-    const n = views.length;
+  prepare(encoder: GPUCommandEncoder, views: readonly RenderView[] | readonly CullGroup[]): void {
+    const n = this.flatten(views);
     if (n < 1 || n > this.maxViews) {
       throw new Error(`core.prepare: ${n} views (1 to ${this.maxViews})`);
+    }
+    const flat = this.flat;
+    const relative = this.originGrid > 0;
+    if (relative) {
+      const v0 = flat[0]!;
+      const g = this.originGrid;
+      for (let k = 0; k < 3; k++) {
+        this.origin[k] = Math.round((v0.eye ? v0.eye[k]! : v0.position[k]!) / g) * g;
+      }
     }
     const st = this.stats;
     st.calls = 0;
@@ -254,21 +327,43 @@ export class RenderCore {
     st.slotBytes = 0;
     this.frame++;
     this.viewsPrepared = n;
-    for (let i = 0; i < n; i++) writeViewSlot(this.viewData, this.viewU32, i, views[i]!);
-    this.device.queue.writeBuffer(this.viewBuffer, 0, this.viewData, 0, n * VIEW_SLOT_FLOATS);
+    const data = this.viewData;
+    for (let i = 0; i < n; i++) {
+      writeViewSlot(data, this.viewU32, i, flat[i]!, this.origin, relative);
+    }
+    const groups = this.groups;
+    for (let g = 0; g < groups; g++) {
+      const first = this.groupFirst[g]!;
+      const size = this.groupSize[g]!;
+      const at = (MAX_VIEWS + g) * VIEW_SLOT_FLOATS + VIEW_SLOT.planes;
+      if (size === 1) {
+        const from = first * VIEW_SLOT_FLOATS + VIEW_SLOT.planes;
+        data.copyWithin(at, from, from + 24);
+      } else if (!unionPlanesInto(data, at, flat, first, size, this.origin, relative)) {
+        openPlanesInto(data, at);
+      }
+    }
+    // One write: the views, the padding up to the groups, the groups.
+    this.device.queue.writeBuffer(
+      this.viewBuffer,
+      0,
+      data,
+      0,
+      (MAX_VIEWS + groups) * VIEW_SLOT_FLOATS,
+    );
     st.calls++;
     let gpu = false;
     const sets = this.sets;
     for (let i = 0; i < sets.length; i++) {
       const set = sets[i]!;
-      set.upload(n);
+      set.upload(groups);
       if (set.cull === 'gpu' && set.highWater > 0) gpu = true;
     }
     if (!gpu) return;
     const pass = encoder.beginComputePass(this.computeDesc);
     pass.setPipeline(this.cullPipe());
     st.calls += 2;
-    for (let i = 0; i < sets.length; i++) sets[i]!.dispatch(pass, n);
+    for (let i = 0; i < sets.length; i++) sets[i]!.dispatch(pass, groups);
     pass.end();
     st.calls++;
   }
@@ -284,6 +379,19 @@ export class RenderCore {
     }
     if (this.setsDirty) this.sortSets();
     const st = this.stats;
+    this.onView?.(viewIndex);
+    const group = this.groupOf[viewIndex]!;
+    if (this.groupSize[group]! > 1) {
+      encoder.copyBufferToBuffer(
+        this.viewBuffer,
+        viewIndex * VIEW_SLOT_BYTES,
+        this.currentBuffer,
+        0,
+        VIEW_SLOT_BYTES,
+      );
+      st.calls++;
+    }
+    const vp = target.viewport;
     let first = true;
     let depthCleared = false;
     const list = this.passes.passes;
@@ -331,6 +439,11 @@ export class RenderCore {
       const enc = encoder.beginRenderPass(desc);
       st.calls++;
       st.passes++;
+      if (vp) {
+        enc.setViewport(vp.x, vp.y, vp.width, vp.height, 0, 1);
+        enc.setScissorRect(vp.x, vp.y, vp.width, vp.height);
+        st.calls += 2;
+      }
       const bundles = this.bundleList;
       // Emptied by popping: `length = 0` drops the backing store, and the next push allocates.
       while (bundles.length > 0) bundles.pop();
@@ -338,11 +451,11 @@ export class RenderCore {
         const s = sets[i]!;
         if (s.count === 0) continue;
         if (s.encoding() === 'bundle') {
-          bundles.push(s.bundle(viewIndex, target.format, depthFormat, readOnly));
+          bundles.push(s.bundle(group, target.format, depthFormat, readOnly));
           continue;
         }
         if (bundles.length > 0) this.flushBundles(enc);
-        s.encodeDirect(enc, viewIndex, target.format, depthFormat);
+        s.encodeDirect(enc, group, target.format, depthFormat);
       }
       if (bundles.length > 0) this.flushBundles(enc);
       enc.end();
@@ -366,6 +479,7 @@ export class RenderCore {
     this.sets.length = 0;
     this.setsDirty = true;
     this.viewBuffer.destroy();
+    this.currentBuffer.destroy();
     this.quads.destroy();
     this.depthTexture?.destroy();
     this.depthTexture = null;
@@ -373,6 +487,51 @@ export class RenderCore {
   }
 
   // ------------------------------------------------------------------ internals
+
+  /**
+   * Flatten views or groups into `flat` and the group tables (nothing allocates); returns the
+   * view count, or `MAX_VIEWS + 1` when there are too many.
+   */
+  private flatten(list: readonly RenderView[] | readonly CullGroup[]): number {
+    const flat = this.flat;
+    while (flat.length > 0) flat.pop();
+    this.groups = 0;
+    for (let i = 0; i < list.length; i++) {
+      const item = list[i]!;
+      if (!('views' in item)) {
+        if (!this.addGroup(item, 0, 1, true)) return MAX_VIEWS + 1;
+        continue;
+      }
+      const vs = item.views;
+      if (item.planes === 'each') {
+        for (let k = 0; k < vs.length; k++) {
+          if (!this.addGroup(vs, k, 1, false)) return MAX_VIEWS + 1;
+        }
+      } else if (vs.length > 0 && !this.addGroup(vs, 0, vs.length, false)) {
+        return MAX_VIEWS + 1;
+      }
+    }
+    return flat.length;
+  }
+
+  /** Append a group of `count` views: `src` itself (`single`) or `src[first..]`. */
+  private addGroup(
+    src: RenderView | readonly RenderView[],
+    first: number,
+    count: number,
+    single: boolean,
+  ): boolean {
+    const flat = this.flat;
+    if (flat.length + count > MAX_VIEWS) return false;
+    const g = this.groups++;
+    this.groupFirst[g] = flat.length;
+    this.groupSize[g] = count;
+    for (let k = 0; k < count; k++) {
+      this.groupOf[flat.length] = g;
+      flat.push(single ? (src as RenderView) : (src as readonly RenderView[])[first + k]!);
+    }
+    return true;
+  }
 
   private flushBundles(enc: GPURenderPassEncoder): void {
     enc.executeBundles(this.bundleList);

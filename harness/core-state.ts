@@ -28,6 +28,10 @@ export interface HarnessCoreState {
   /** `multiDrawIndexedIndirect` and `indirect-first-instance` on the device. */
   multiDraw: boolean;
   firstInstance: boolean;
+  /** `?far=D`: the scene and the camera sit D metres out on x and z (0 at the origin). */
+  far: number;
+  /** The core's frame origin (the eye snapped to the 1024 m grid when `far` > 0). */
+  origin: [number, number, number];
 }
 
 declare global {

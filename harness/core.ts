@@ -5,7 +5,11 @@
  * height), all in one static GPU-culled draw set, under a camera circling the block. A held
  * frame is one view write, one cull dispatch and one `executeBundles`, whatever N is.
  *
- * `?still` parks the camera. Nothing here is engine code beyond the core and `boot`.
+ * `?still` parks the camera. `?far=D` (ws/core-views) moves the whole scene and the camera D
+ * metres out on x and z (float64 on the CPU) and turns on the core's camera-relative origin
+ * (`originGrid`, D1 §3.8): every slot's origin is the far corner, the view is written relative
+ * to the snapped frame origin, and the shader adds `core_origin`, so the picture matches the one
+ * at the origin. Nothing here is engine code beyond the core and `boot`.
  */
 import { boot } from '@thunderclap-engine/engine/platform';
 import {
@@ -25,6 +29,8 @@ const root = document.getElementById('root') as HTMLElement;
 const params = new URLSearchParams(location.search);
 const sets = Math.max(1, Math.min(8192, Number(params.get('sets') ?? 1500) | 0));
 const still = params.has('still');
+/** How far out the scene sits on x and z, metres (0: at the origin). */
+const far = Math.max(0, Number(params.get('far') ?? 0) || 0);
 
 const state: HarnessCoreState = {
   ready: false,
@@ -41,6 +47,8 @@ const state: HarnessCoreState = {
   cpuMs: 0,
   multiDraw: false,
   firstInstance: false,
+  far,
+  origin: [0, 0, 0],
 };
 window.__harnessCore = { state };
 
@@ -58,6 +66,9 @@ const PLACE = createInstanceLayout({
   attributes: [{ name: 'place', format: 'float32x4', offset: 0 }],
 });
 
+/** The far page adds the slot's origin relative to the frame origin (`core_origin`). */
+const LOCAL = far > 0 ? ' + in.core_origin' : '';
+
 const SHADER = /* wgsl */ `
 struct Out {
   @builtin(position) clip: vec4f,
@@ -72,7 +83,7 @@ const NORMALS = array<vec3f, 6>(
   let corner = vec3f(f32(w0 & 1u), f32((w0 >> 1u) & 1u), f32((w0 >> 2u) & 1u));
   let n = NORMALS[(w0 >> 3u) & 7u];
   let p = vec3f(in.place.x + (corner.x - 0.5) * in.place.z, corner.y * in.place.w,
-    in.place.y + (corner.z - 0.5) * in.place.z);
+    in.place.y + (corner.z - 0.5) * in.place.z)${LOCAL};
   let c = unpack4x8unorm(in.packed.y).rgb;
   let light = 0.35 + 0.65 * max(dot(n, normalize(vec3f(0.4, 0.8, 0.3))), 0.0);
   var o: Out;
@@ -123,7 +134,7 @@ async function main(): Promise<void> {
   }
   const { surface, gpu } = res;
   installGpuErrorLogging(gpu.device);
-  const core = createRenderCore(gpu);
+  const core = createRenderCore(gpu, far > 0 ? { originGrid: 1024 } : {});
   state.multiDraw = core.caps.multiDraw;
   state.firstInstance = core.caps.firstInstance;
 
@@ -145,6 +156,7 @@ async function main(): Promise<void> {
   const half = (side * spacing) / 2;
   const place = new Float32Array(4);
   const spheres = new Float32Array(sets * 4);
+  const origin = far > 0 ? [far, 0, far] : undefined;
   for (let i = 0; i < sets; i++) {
     const x = (i % side) * spacing - half;
     const z = Math.floor(i / side) * spacing - half;
@@ -166,12 +178,15 @@ async function main(): Promise<void> {
       indexCount: 36,
       instances: inst,
       bounds: spheres.subarray(i * 4, i * 4 + 4),
+      origin,
     });
   }
 
   const camera = Camera.perspective(Math.PI / 3, 16 / 9, 0.5, 2000);
   const view = createRenderView();
   const views = [view];
+  /** The eye in float64, `far` out: the camera's basis is local, its position is not. */
+  const eye = new Float64Array(3);
   const times: number[] = [];
   const target = {
     view: undefined as unknown as GPUTextureView,
@@ -190,8 +205,14 @@ async function main(): Promise<void> {
     camera.setPerspective(Math.PI / 3, width / Math.max(1, height), 0.5, 2000);
     const a = t * 0.15;
     const dist = half * 0.9 + 40;
-    camera.lookAt([Math.cos(a) * dist, 25 + half * 0.3, Math.sin(a) * dist], [0, 0, 0]);
-    setViewFromCamera(view, camera);
+    const ex = Math.cos(a) * dist;
+    const ey = 25 + half * 0.3;
+    const ez = Math.sin(a) * dist;
+    camera.lookAt([ex, ey, ez], [0, 0, 0]);
+    eye[0] = ex + far;
+    eye[1] = ey;
+    eye[2] = ez + far;
+    setViewFromCamera(view, camera, far > 0 ? eye : undefined);
     const texture = gpu.context.getCurrentTexture();
     target.view = texture.createView();
     target.width = texture.width;
@@ -209,6 +230,9 @@ async function main(): Promise<void> {
     state.bundles = st.bundles;
     state.dispatches = st.dispatches;
     state.bundleBuilds = st.bundleBuilds;
+    state.origin[0] = core.origin[0]!;
+    state.origin[1] = core.origin[1]!;
+    state.origin[2] = core.origin[2]!;
     let seen = 0;
     for (let i = 0; i < sets; i++) {
       const o = i * 4;
