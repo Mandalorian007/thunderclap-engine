@@ -167,6 +167,32 @@ export const BENCH_TINY: BenchRungDef = rung('tiny', 'instances', 100, {
   frames: BENCH_TINY_FRAMES,
 });
 
+/**
+ * The reference scenes' rungs (E-041 A4, docs/BENCH.md "Reference scenes"): each is a page of its
+ * own (`harness/<page>?<query>`), timed by e2e/ref-scenes.spec.ts the way a ladder rung is (the
+ * `ref-*` pages: `BENCH_WARMUP` frames, then the median over the rest of `BENCH_FRAMES`). The
+ * `core-*` rungs time B1's retained core page (harness/core.html), which keeps its own median CPU
+ * time of the last 60 frames and no GPU time.
+ */
+export interface RefRungDef {
+  id: string;
+  page: string;
+  query: string;
+}
+
+export const REF_RUNGS: readonly RefRungDef[] = [
+  { id: 'ref-board', page: 'ref-board.html', query: '' },
+  { id: 'ref-characters', page: 'ref-characters.html', query: '' },
+  { id: 'ref-characters-256', page: 'ref-characters.html', query: 'size=256' },
+  { id: 'ref-arena', page: 'ref-arena.html', query: '' },
+  { id: 'ref-voxel', page: 'ref-voxel.html', query: '' },
+  { id: 'ref-voxel-16', page: 'ref-voxel.html', query: 'size=16' },
+  { id: 'ref-stereo', page: 'ref-stereo.html', query: '' },
+  { id: 'ref-hud', page: 'ref-hud.html', query: '' },
+  { id: 'core-1.5k', page: 'core.html', query: 'sets=1500' },
+  { id: 'core-6k', page: 'core.html', query: 'sets=6000' },
+];
+
 /** Rungs for a `?rung=` value: `all`, `tiny`, or ids separated by commas. Unknown ids throw. */
 export function benchRungsFor(query: string | null): BenchRungDef[] {
   if (!query || query === 'all') return BENCH_LADDER;

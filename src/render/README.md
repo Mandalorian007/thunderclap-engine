@@ -1322,7 +1322,7 @@ core.draw(encoder, 0, { view: texView, format, width, height, clear: { r: 0, g: 
 | `createVertexLayout(desc)`, `createInstanceLayout(desc)` → `BufferLayout` | a vertex or instance buffer layout from a `LayoutDesc` `{ stride, attributes: LayoutAttribute[], wgslDecode? }`, any stride (the 8-byte packed vertex above); it writes the WGSL `VertexIn` fields. `vertexFormatBytes(format)` |
 | `core.createDrawSet(desc)` → `DrawSet` | one pipeline's meshes: `DrawSetDesc` `{ shader: DrawSetShader, vertexLayout, instanceLayout?, vertices, indices?, instances?, capacity, kind?: DrawSetKind, cull?: DrawSetCull, pass?, depth?, order?, bindGroups? }`. `set.add(SlotDesc)` → id, `update`, `setBounds`, `remove`, `has`; `core.removeDrawSet(set)` |
 | `DrawSetKind` | `'static'` sets record into a render bundle, rebuilt only when a slot or arena changes; `'dynamic'` sets encode directly and upload only dirty slot ranges |
-| `DrawSetCull` | `'gpu'` (the `CULL_WGSL` compute shader), `'cpu'` (`cullSlotsCpu`, its twin), `'none'`, or `'auto'`: GPU from `GPU_CULL_MIN_SLOTS` slots up |
+| `DrawSetCull` | `'gpu'` (the `CULL_WGSL` compute shader), `'cpu'` (`cullSlotsCpu`, its twin), `'none'`, `'auto'`: GPU from `GPU_CULL_MIN_SLOTS` slots up, or `'external'`: the caller fills the indirect args in `DrawSetDesc.args` (the actors' pose pass) |
 | `QuadIndex`, `quadIndices(quads, first?)`, `QUAD_INDICES` | the shared quad index (`v, v+1, v+2, v, v+2, v+3`, 6 per quad) a set without its own `indices` draws through |
 | `core.definePass(desc)`, `PassList`, `CORE_PASSES` | the pass list: `depthPre`, `opaque`, `cutout`, `transparent`, `overlay`, in order; `PassDesc` `{ id, after?, depth?: PassDepth, when? }` adds a `CorePass`. A pass encodes only when its `when` holds and a set joined it |
 | `createRenderView()`, `setViewFromCamera(view, camera, eye?)`, `setViewFromMatrices(view, proj, worldToEye, eye)`, `sphereInPlanes(planes, at, x, y, z, r)`, `unionPlanesInto(out, at, views, first, count, origin, relative)`, `VIEW_SLOT` | a `RenderView` `{ viewProj, planes, position, proj?, view?, eye? }` (`eye` float64: a far camera's true position; `setViewFromMatrices` takes an XR eye's matrices); each takes a `VIEW_SLOT_BYTES` (`VIEW_SLOT_FLOATS` floats) slot of the core's view buffer, `CORE_VIEW_WGSL` in the shader |
@@ -1330,6 +1330,25 @@ core.draw(encoder, 0, { view: texView, format, width, height, clear: { r: 0, g: 
 | `MULTI_DRAW_FEATURE` | `'chromium-experimental-multi-draw-indirect'`: with it, `indirect-first-instance` and single-block arenas, a set draws in one `multiDrawIndexedIndirect` instead of a bundle (`multiDraw: true`) |
 
 Each slot binds its instance range with `setVertexBuffer(1, buffer, offset, size)`, so the indirect `firstInstance` stays 0 and the path runs without `indirect-first-instance` (WebKit). A stereo pair is one `CullGroup`: one view write, one cull dispatch and one bundle, executed once per eye, costs the mono frame plus 5 GPU calls (`harness/views.html`, `e2e/views.spec.ts`). Not here yet: shadow passes (a cull group is the unit they will share), occlusion, and the XR session drawing through the core (it uses `Renderer` until the immediate path moves onto the core).
+
+## Merged mesh runs
+
+Many distinct meshes drawn with `frame.mesh` under one material do not batch (each is its own
+mesh), yet they cost one GPU call per run, not per mesh (ws/core-immediate). When four or more
+consecutive scene draws share pipeline, material and uniform offset and draw different small
+indexed meshes (≤ 256 KiB of vertices and of indices), the renderer copies each mesh once into its
+mesh pool (`src/render/mesh-runs.ts`, core `Arena`s) and draws the run with:
+
+- one `multiDrawIndexedIndirect` when the device has `chromium-experimental-multi-draw-indirect`;
+- else one cached render bundle of `drawIndexedIndirect` (`indirect-first-instance`);
+- else direct `drawIndexed` with a base vertex from the pool (one buffer bind per run).
+
+`initGpu` asks for both features when the adapter has them (`drawFeatures: false` opts out). Order,
+blending and depth are the draws' own. A mesh is copied again after `update()` (`Mesh.revision`);
+room of meshes unused for 600 frames is given back. `renderer.stats.runs` counts the runs drawn;
+`drawCalls` still counts one per mesh. Batches, lists, drawables, sprites, LOD lanes, velocity
+draws, large or non-indexed meshes and the shadow pass take the per-command path. The demo is
+`harness/runs.html` (`?n=6000`, `?split` for the per-mesh path, `?still`).
 
 ## Lower-level pieces
 

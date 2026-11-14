@@ -206,6 +206,7 @@ What a frame does, counted on the fake device by \`createWorkMeter\` (\`@thunder
 - Rows are the bench rungs above (the same seeded scenes on the fake device; timings are the browser's, these are counts), \`2d-tiles\` (harness/tiles.html's grid: a 32×18 tile layer and a flipbook walker), \`2d-game\` (\`createGame\` with one empty scene, its default post chain) and \`distinct-*\` (design/2.0/bar.md D2-P1: that many distinct meshes, nothing batches, the camera turning; \`2views\` renders an eye each with \`renderer.render\`).
 - \`Commands\` is every call on the device, queue, encoders and passes; \`Draws\` is \`draw\` + \`drawIndexed\`; \`Passes\` render + compute; \`Writes\` \`writeBuffer\` + \`writeTexture\`; \`Creates\` every \`create*\` call on the device during the frame (buffers, textures, bind groups, pipelines, command encoders: today's 1 is the frame's encoder); \`Typed arrays\` typed arrays, \`ArrayBuffer\`s made by the frame's code (not the device); \`Clock reads\` \`performance.now\` + \`Date.now\`. A fraction is a count that varies frame to frame (the turning camera sees a different set), averaged.
 - \`↳ view\` rows split a frame by \`meter.view(name)\`; \`present\` is \`endFrame\`.
+- Since ws/core-immediate (engine 2.0) the \`distinct-*\` rows draw their meshes as one merged run on a device with \`indirect-first-instance\` (as \`initGpu\` asks for): one cached bundle of \`drawIndexedIndirect\` per view, so the calls are flat in what is visible (1.5k: 1,418 → 19.2; 6k: 5,775 → 33.1; two views: 2,832 → 30.2). What rises: one \`writeBuffer\` per view (the run's 20-byte indirect arguments, hence the bytes), and \`copies\` (not in the table: about 4 a frame at 1.5k, 18 at 6k), the pool's one-time copy of each mesh the turning camera sees for the first time; the difference between the 1.5k and 6k rows is those copies only.
 
 ${table}
 
@@ -242,8 +243,8 @@ describe('counted work, 1.3 baseline: docs/BENCH.md', () => {
 });
 
 /** A renderer on a counted fake device, `width × height` backbuffer. */
-function counted(width = 1280, height = 720, trace = false) {
-  const fake = createFakeDevice();
+function counted(width = 1280, height = 720, trace = false, features: string[] = []) {
+  const fake = createFakeDevice({}, features);
   const meter = createWorkMeter(fake.device, { trace });
   const renderer = new Renderer({
     device: meter.device,
@@ -580,7 +581,8 @@ describe('counted work, 1.3 baseline: 2D harness scenes', () => {
  * visible and doubles for two views; the render core must make it flat (G3).
  */
 function distinct(held: number, views: 1 | 2): { report: WorkReport; meter: WorkMeter } {
-  const { fake, meter, renderer } = counted(2360, 1640);
+  // The draw features browsers offer and `initGpu` asks for (ws/core-immediate): runs bundle.
+  const { fake, meter, renderer } = counted(2360, 1640, false, ['indirect-first-instance']);
   const lit = renderer.createMaterial({ label: 'lit', blend: 'opaque', wgsl: LIT_WGSL });
   const geo = cube();
   const rand = lcg(42);
@@ -636,14 +638,18 @@ function distinct(held: number, views: 1 | 2): { report: WorkReport; meter: Work
 }
 
 describe('counted work, 1.3 baseline: distinct meshes (D2-P1)', () => {
-  it('1,500 and 6,000 held, one view: at or under baseline (grows with what is visible)', () => {
+  it('1,500 and 6,000 held, one view: at or under baseline, flat in what is visible', () => {
     const small = distinct(1500, 1).report;
     const large = distinct(6000, 1).report;
     hold('distinct-1.5k', small);
     hold('distinct-6k', large);
     holdView('distinct-1.5k', 'view', small);
-    // Today's shape, the reason for the render core: more held, more calls.
-    expect(large.gpu.commands).toBeGreaterThan(small.gpu.commands * 2);
+    // ws/core-immediate: the distinct meshes draw as one merged run (one bundle of indirect
+    // draws), so the calls no longer grow with what is visible. Only the pool's one-time copies
+    // of meshes the turning camera sees for the first time do.
+    expect(large.gpu.drawIndexed).toBe(0);
+    expect(large.gpu.executeBundles).toBe(small.gpu.executeBundles);
+    expect(large.gpu.commands - large.gpu.copies).toBe(small.gpu.commands - small.gpu.copies);
   });
 
   it('1,500 held, two views: per-view splits at or under baseline', () => {

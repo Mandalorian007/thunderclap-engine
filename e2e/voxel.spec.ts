@@ -1,12 +1,12 @@
 /**
- * Voxel page (ws/voxel-render) on every matrix row, against harness/voxel.html: a 4×2×4-chunk
- * block world through `@thunderclap-engine/engine/voxel`, meshed in a Worker, frustum-culled, picked
- * by the centre ray and edited in place.
+ * Voxel page (ws/voxel-render, on the world since ws/voxel-draw) on every matrix row, against
+ * harness/voxel.html: a 4×2×4-chunk `VoxelGrid` fed into `createVoxelWorld`, meshed in a Worker,
+ * drawn through the core's GPU-culled sets, picked by the centre ray and edited.
  *
- * - boot: every non-empty chunk is drawn or culled, the centre ray hits ground, no errors;
- * - aim: turning the view changes how many chunks are drawn;
- * - break: a click (a tap on the right half on touch rows) sets `hit` and changes `triangles`;
- * - place + break: a block placed then broken leaves the chunk meshes ungrown (`growths` 0).
+ * - boot: every grid chunk is in the world and drawn, the centre ray hits ground, no errors;
+ * - aim: turning the view changes how many chunks are in view, never the GPU calls;
+ * - break: a click (a tap on the right half on touch rows) sets `hit` and changes the quads;
+ * - place + break: a block placed then broken restores the quads exactly.
  */
 import type { Frame, Page } from '@playwright/test';
 import type { HarnessVoxelState } from '../harness/voxel-state';
@@ -39,9 +39,8 @@ test.beforeEach(async ({ page, wrapper }) => {
       return s?.ready ? s.frames : -1;
     })
     .toBeGreaterThanOrEqual(3);
-  // The Worker's first remeshes land over the first frames: wait for every chunk to be in.
-  await expect.poll(async () => (await read()).chunks).toBeGreaterThanOrEqual(16);
-  await expect.poll(async () => (await read()).remeshes).toBeGreaterThanOrEqual(32);
+  // The Worker's meshes land over the first frames: wait for the world to settle.
+  await expect.poll(async () => (await read()).settled).toBe(true);
   await frames(2);
 });
 
@@ -101,31 +100,31 @@ async function tapPlace(page: Page): Promise<void> {
   await page.mouse.up({ button: 'right' });
 }
 
-test('boots the world: every chunk drawn or culled, the centre ray on the ground', async () => {
+test('boots the world: every chunk drawn, the centre ray on the ground', async () => {
   const s = await read();
-  expect(s.chunks).toBeGreaterThanOrEqual(16);
-  expect(s.drawn + s.culled).toBe(s.chunks);
-  expect(s.drawn).toBeGreaterThan(0);
-  expect(s.triangles).toBeGreaterThan(0);
-  expect(s.growths).toBe(0);
+  expect(s.chunks).toBe(32);
+  // The grid's chunks and the empty ring around them: 6 × 4 × 6.
+  expect(s.sections).toBe(144);
+  expect(s.drawn).toBeGreaterThanOrEqual(16);
+  expect(s.quads).toBeGreaterThan(0);
   expect(s.hit).not.toBeNull();
   expect(s.gpuErrors).toBe(0);
   expect(pageErrors()).toEqual([]);
 });
 
-test('turning the view changes how many chunks are drawn', async () => {
+test('turning the view changes how many chunks are in view, not the GPU calls', async () => {
   await aim(0, -0.45);
   await frames(2);
   const level = await read();
   await aim(0, -1.4);
-  await expect.poll(async () => (await read()).drawn).not.toBe(level.drawn);
+  await expect.poll(async () => (await read()).visible).not.toBe(level.visible);
   const down = await read();
-  expect(down.drawn + down.culled).toBe(down.chunks);
-  expect(down.culled).toBeGreaterThan(level.culled);
+  expect(down.visible).toBeLessThan(level.visible);
+  expect(down.calls).toBe(level.calls);
   expect(pageErrors()).toEqual([]);
 });
 
-test('a click at the centre breaks the picked block, changing the triangles', async ({ page }) => {
+test('a click at the centre breaks the picked block, changing the quads', async ({ page }) => {
   test.fixme(
     test.info().project.use.browserName === 'webkit',
     'Playwright drives touch through CDP, which is Chromium-only',
@@ -136,13 +135,13 @@ test('a click at the centre breaks the picked block, changing the triangles', as
   expect(before.hit).not.toBeNull();
   await tapBreak(page);
   await expect.poll(async () => (await read()).broken).toBe(1);
-  await expect.poll(async () => (await read()).triangles).not.toBe(before.triangles);
+  await expect.poll(async () => (await read()).quads).not.toBe(before.quads);
   await expect.poll(async () => (await read()).hit).not.toEqual(before.hit);
-  expect((await read()).remeshes).toBeGreaterThan(before.remeshes);
+  expect((await read()).uploads).toBeGreaterThan(before.uploads);
   expect(pageErrors()).toEqual([]);
 });
 
-test('place then break rewrites the chunk in place: growths stays 0', async ({ page }) => {
+test('place then break restores the quads', async ({ page }) => {
   test.fixme(
     test.info().project.use.browserName === 'webkit',
     'Playwright drives touch through CDP, which is Chromium-only',
@@ -152,16 +151,15 @@ test('place then break rewrites the chunk in place: growths stays 0', async ({ p
   const before = await read();
   await tapPlace(page);
   await expect.poll(async () => (await read()).placed).toBe(1);
-  await expect.poll(async () => (await read()).triangles).not.toBe(before.triangles);
+  await expect.poll(async () => (await read()).quads).not.toBe(before.quads);
   // The new block is now what the centre ray hits; breaking it restores the view.
   await expect.poll(async () => (await read()).hit).not.toEqual(before.hit);
   await tapBreak(page);
   await expect.poll(async () => (await read()).broken).toBe(1);
-  await expect.poll(async () => (await read()).triangles).toBe(before.triangles);
+  await expect.poll(async () => (await read()).quads).toBe(before.quads);
   await expect.poll(async () => (await read()).hit).toEqual(before.hit);
   const after = await read();
-  expect(after.growths).toBe(0);
-  expect(after.remeshes).toBeGreaterThanOrEqual(before.remeshes + 2);
+  expect(after.uploads).toBeGreaterThanOrEqual(before.uploads + 2);
   expect(after.gpuErrors).toBe(0);
   expect(pageErrors()).toEqual([]);
 });
