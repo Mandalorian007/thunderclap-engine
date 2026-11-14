@@ -4,6 +4,8 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 
 ## Unreleased
 
+- Test: `src/net/turns-interop.test.ts` (run by `cargo test -p thunderclap-server --test turns`) seats X before O connects. The turn game seats players first come, first served, and the test opened both sockets at once, so a box where O's handshake landed first (the 2.0.0-next.9 publish run) seated O as X and failed both live tests. X's socket now also opens 50 ms late, which fails the old ordering every time. No engine or server change.
+
 ## 2.0.0-next.9 (2026-11-14)
 
 - Release budget: `./ui` 94300 -> 94500 (ui-follow left 580 B of local headroom; CI's gzip reads about 300 B more).
