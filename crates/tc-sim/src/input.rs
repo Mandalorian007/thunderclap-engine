@@ -80,7 +80,7 @@ impl<I> Queue<I> {
     }
 }
 
-/// Every player's waiting inputs of type `I`. See the [module docs](self).
+/// Every player's waiting inputs of type `I`. See the [crate docs](crate).
 #[derive(Debug)]
 pub struct InputQueue<I> {
     config: InputConfig,

@@ -9,8 +9,13 @@
 //! both connections are told (`Control`).
 //!
 //! **Presence.** A player is present while it has a connection: its first
-//! connection calls [`Game::presence`] with `true`, its last one closing
-//! calls it with `false`.
+//! connection makes its body ([`Game::body`]) and calls
+//! [`Game::presence`] with `true`, its last one closing calls it with
+//! `false` and the body it leaves.
+//!
+//! **Observers** ([`Seat::Observer`]) are never present and only watch:
+//! their commands get [`Game::command_error`], their inputs, control and
+//! game messages are dropped, and a per-player query is refused.
 
 use std::time::Instant;
 
@@ -18,7 +23,7 @@ use tc_net::transport::Frame;
 use tc_net::{ClientMsg, ConnId, Identity, Outbound, Protocol, Request, ServerMsg};
 use tc_wire::Wire;
 
-use crate::game::{Game, Outbox, PlayerId};
+use crate::game::{Game, Outbox, PlayerId, Seat};
 use crate::input::Taken;
 use crate::sim::{Conn, Sim};
 
@@ -61,8 +66,8 @@ impl<G: Game> Sim<G> {
             return;
         }
         let mut events = Vec::new();
-        let player = match self.core.game().join(identity, hello, &mut events) {
-            Ok(player) => player,
+        let seat = match self.core.game().join(identity, hello, &mut events) {
+            Ok(seat) => seat,
             Err(reason) => {
                 let rejected = ServerMsg::<G::Protocol>::Rejected {
                     reason,
@@ -82,11 +87,23 @@ impl<G: Game> Sim<G> {
             let _ = out.try_send(rejected.to_bytes());
             return;
         }
-        let first = !self.conns_of.contains_key(&player);
-        if first {
+        let player = match seat {
+            Seat::Player(player) => Some(player),
+            Seat::Observer => None,
+        };
+        if let Some(player) = player
+            && !self.conns_of.contains_key(&player)
+        {
+            let body = self.core.game().body(player);
             let mut events = Vec::new();
-            self.core.game().presence(player, true, &mut events);
+            self.core
+                .game()
+                .presence(player, true, body.as_ref(), &mut events);
             let _ = self.commit(events);
+            if let Some(body) = body {
+                self.bodies.insert(player, body);
+                self.moved.insert(player);
+            }
             self.inputs.join(player);
         }
         self.flush_all();
@@ -99,23 +116,29 @@ impl<G: Game> Sim<G> {
                 over_budget_since: None,
             },
         );
-        self.conns_of.entry(player).or_default().push(conn);
+        self.sync.connect(conn, player);
+        let id = player.unwrap_or(0);
         let welcome = ServerMsg::<G::Protocol>::Welcome {
-            player,
+            player: id,
             time: self.core.time(),
             paused: self.clock.paused(),
             step_us: self.clock.step_us(),
-            ext: self.core.game().welcome(player),
+            ext: self.core.game().welcome(id),
         };
         let mut greeting = vec![welcome];
-        self.core.game().greet(player, &mut greeting);
+        if let Some(player) = player {
+            self.core.game().greet(player, &mut greeting);
+        }
         if let Some(c) = self.conns.get(&conn) {
             for msg in greeting {
                 c.send_frame(Frame::from(msg.to_bytes()));
             }
         }
-        self.drive(player, conn);
-        tracing::info!(conn, player, name = %identity.name, "joined");
+        if let Some(player) = player {
+            self.conns_of.entry(player).or_default().push(conn);
+            self.drive(player, conn);
+        }
+        tracing::info!(conn, player = id, name = %identity.name, "joined");
         self.publish_status(now);
     }
 
@@ -133,14 +156,68 @@ impl<G: Game> Sim<G> {
         self.send_to(conn, &ServerMsg::Control { driving: true });
     }
 
-    fn send_to(&self, conn: ConnId, msg: &ServerMsg<G::Protocol>) {
+    pub(crate) fn send_to(&self, conn: ConnId, msg: &ServerMsg<G::Protocol>) {
         if let Some(c) = self.conns.get(&conn) {
             c.send_frame(Frame::from(msg.to_bytes()));
         }
     }
 
     fn client(&mut self, conn: ConnId, msg: ClientMsg<G::Protocol>, now: Instant) {
-        let Some(player) = self.conns.get(&conn).map(|c| c.player) else {
+        let Some(seat) = self.conns.get(&conn).map(|c| c.player) else {
+            return;
+        };
+        match msg {
+            ClientMsg::Subscribe {
+                sub,
+                query,
+                args,
+                resume,
+            } => {
+                self.tick(now);
+                match self
+                    .sync
+                    .subscribe(conn, sub, &query, args.0, resume.as_ref(), now)
+                {
+                    Ok(()) => self.flush(Some(conn)),
+                    Err(reason) => self.send_to(conn, &ServerMsg::QueryFailed { sub, reason }),
+                }
+                self.schedule_flush(now);
+                return;
+            }
+            ClientMsg::Unsubscribe { sub } => {
+                self.sync.unsubscribe(conn, sub, now);
+                return;
+            }
+            ClientMsg::SetInterest { interest } => {
+                self.tick(now);
+                self.set_interest(conn, interest);
+                return;
+            }
+            ClientMsg::EntityResync => {
+                self.entity_resync(conn);
+                return;
+            }
+            ClientMsg::Ping { client_time } => {
+                let time = self.clock.target(now).unwrap_or(self.core.time());
+                let pong = ServerMsg::Pong {
+                    client_time,
+                    time: time.max(self.core.time()),
+                    paused: self.clock.paused(),
+                };
+                self.send_to(conn, &pong);
+                return;
+            }
+            _ => {}
+        }
+        let Some(player) = seat else {
+            // An observer only watches.
+            if let ClientMsg::Command { seq, .. } = msg {
+                let result = self
+                    .core
+                    .game()
+                    .command_error("an observer can't act".into());
+                self.send_to(conn, &ServerMsg::CommandResult { seq, result });
+            }
             return;
         };
         match msg {
@@ -156,15 +233,6 @@ impl<G: Game> Sim<G> {
                 self.flush_all();
                 self.send_to(conn, &ServerMsg::CommandResult { seq, result });
             }
-            ClientMsg::Ping { client_time } => {
-                let time = self.clock.target(now).unwrap_or(self.core.time());
-                let pong = ServerMsg::Pong {
-                    client_time,
-                    time: time.max(self.core.time()),
-                    paused: self.clock.paused(),
-                };
-                self.send_to(conn, &pong);
-            }
             ClientMsg::Input { seq, input } => {
                 if self.drivers.get(&player) != Some(&conn) {
                     return;
@@ -179,20 +247,15 @@ impl<G: Game> Sim<G> {
                 }
             }
             ClientMsg::TakeControl => self.drive(player, conn),
-            ClientMsg::Subscribe { sub, query, .. } => {
-                let failed = ServerMsg::QueryFailed {
-                    sub,
-                    reason: format!("no query {query:?}: this server serves no queries"),
-                };
-                self.send_to(conn, &failed);
-            }
-            ClientMsg::SetInterest { .. } => {
-                let rejected = ServerMsg::InterestRejected {
-                    reason: "this server keeps no interest".into(),
-                };
-                self.send_to(conn, &rejected);
-            }
             ClientMsg::Game(msg) => {
+                if let Some(lane) = self.core.game().lane(&msg)
+                    && let Some(rule) = self.lanes.get(lane)
+                    && !self.budgets.take(player, lane, rule, now)
+                {
+                    self.limited += 1;
+                    tracing::debug!(player, lane = rule.name, "over its lane's budget; dropped");
+                    return;
+                }
                 self.tick(now);
                 let mut events = Vec::new();
                 let mut out = Outbox::new();
@@ -200,12 +263,8 @@ impl<G: Game> Sim<G> {
                 let _ = self.commit(events);
                 self.deliver(out);
             }
-            // Nothing to unsubscribe, no entity stream to resync; the
-            // session handles `Hello` and `Ack`.
-            ClientMsg::Unsubscribe { .. }
-            | ClientMsg::EntityResync
-            | ClientMsg::Hello { .. }
-            | ClientMsg::Ack { .. } => {}
+            // Handled above, or by the session (`Hello`, `Ack`).
+            _ => {}
         }
     }
 
@@ -215,8 +274,14 @@ impl<G: Game> Sim<G> {
         let Some(c) = self.conns.remove(&conn) else {
             return;
         };
-        let player = c.player;
         let now = Instant::now();
+        self.sync.disconnect(conn, now);
+        self.drop_stream(conn);
+        let Some(player) = c.player else {
+            tracing::info!(conn, "an observer left");
+            self.publish_status(now);
+            return;
+        };
         let left = self.conns_of.get_mut(&player).map(|conns| {
             conns.retain(|id| *id != conn);
             conns.last().copied()
@@ -231,9 +296,14 @@ impl<G: Game> Sim<G> {
                 self.conns_of.remove(&player);
                 self.drivers.remove(&player);
                 self.inputs.leave(player);
+                self.budgets.forget(player);
                 self.tick(now);
+                let body = self.bodies.remove(&player);
+                self.moved.insert(player);
                 let mut events = Vec::new();
-                self.core.game().presence(player, false, &mut events);
+                self.core
+                    .game()
+                    .presence(player, false, body.as_ref(), &mut events);
                 let _ = self.commit(events);
                 tracing::info!(conn, player, "left");
             }

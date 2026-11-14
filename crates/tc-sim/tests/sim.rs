@@ -133,7 +133,8 @@ fn one_body_one_driver() {
     d.client(second, ClientMsg::Input { seq: 1, input: 2 });
     d.client(second, ClientMsg::Input { seq: 2, input: 3 });
     d.tick(Instant::now());
-    assert_eq!(d.core().game().players[&1].at, 5);
+    assert_eq!(d.sim().body(1), Some(&5));
+    assert_eq!(d.core().game().players[&1].at, 0, "a body isn't logged");
     let states: Vec<_> = Driver::<Tally>::received(&mut rx1)
         .into_iter()
         .filter(|m| matches!(m, ServerMsg::PlayerState { .. }))
@@ -151,13 +152,15 @@ fn one_body_one_driver() {
     d.client(second, ClientMsg::Input { seq: 3, input: 100 });
     d.client(first, ClientMsg::TakeControl);
     d.tick(Instant::now() + Duration::from_millis(60));
-    assert_eq!(d.core().game().players[&1].at, 5);
+    assert_eq!(d.sim().body(1), Some(&5));
     // The driver leaving hands control to the one left.
     d.disconnect(first);
     assert!(Driver::<Tally>::received(&mut rx2).contains(&ServerMsg::Control { driving: true }));
     assert!(d.core().game().players[&1].present);
     d.disconnect(second);
     assert!(!d.core().game().players[&1].present);
+    assert_eq!(d.sim().body(1), None);
+    assert_eq!(d.core().game().players[&1].at, 5, "where it left is logged");
     assert!(d.sim().status().get().players.is_empty());
 }
 
@@ -254,4 +257,83 @@ fn a_log_replays_to_the_same_state_hash() {
     assert_eq!(sim.core().state_hash(), live.state_hash());
     drop(sim);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Ticks until the reload answers.
+fn reloaded(
+    d: &mut Driver<Tally>,
+    outcome: &std::sync::mpsc::Receiver<Result<tc_sim::ReloadReport, String>>,
+) -> tc_sim::ReloadReport {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        d.tick(Instant::now());
+        if let Ok(report) = outcome.try_recv() {
+            break report.expect("reloaded");
+        }
+        assert!(Instant::now() < deadline, "the reload never finished");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+#[test]
+fn a_reload_far_behind_takes_another_round() {
+    let mut d = Driver::new(Sim::new(Core::new(Tally::new(false)), None, paused()));
+    let (ada, mut rx) = d.connect("ada", Empty);
+    d.client(ada, ClientMsg::Input { seq: 1, input: 9 });
+    d.tick(Instant::now());
+    d.client(
+        ada,
+        ClientMsg::Subscribe {
+            sub: 1,
+            query: "mine".into(),
+            args: tc_wire::Bytes(Vec::new()),
+            resume: None,
+        },
+    );
+    command(&mut d, ada, 1, "add 1");
+    let hold = d.core().game().hold.clone();
+    hold.store(true, Ordering::Relaxed);
+    let (reply, outcome) = std::sync::mpsc::channel();
+    d.sim_mut().reload(Arc::new(2), Some(reply));
+    // Logged while the replay is held: more than one pause should take.
+    let behind = tc_sim::SWAP_BEHIND as u32 + 50;
+    for seq in 0..behind {
+        command(&mut d, ada, seq + 2, "add 1");
+    }
+    Driver::<Tally>::received(&mut rx);
+    hold.store(false, Ordering::Relaxed);
+    let report = reloaded(&mut d, &outcome);
+    assert_eq!(report.rounds, 2, "{report:?}");
+    assert_eq!(report.caught_up, behind as usize);
+    let total = u64::from(behind + 1) * 2;
+    assert_eq!(d.core().game().tally_of("ada"), Some(total));
+    assert_eq!(d.sim().body(1), Some(&9), "a body outlives a reload");
+    // The query reruns against the new game.
+    d.tick(Instant::now() + Duration::from_millis(100));
+    let msgs = Driver::<Tally>::received(&mut rx);
+    assert!(
+        msgs.iter()
+            .any(|m| matches!(m, ServerMsg::Resync { sub: 1, result, .. }
+            if *result.0 == tc_wire::Wire::to_bytes(&total)[..])),
+        "{msgs:?}"
+    );
+}
+
+#[test]
+fn a_reload_asked_for_during_one_waits_its_turn() {
+    let mut d = Driver::new(Sim::new(Core::new(Tally::new(false)), None, paused()));
+    let (ada, _rx) = d.connect("ada", Empty);
+    command(&mut d, ada, 1, "add 1");
+    let (reply, outcome) = std::sync::mpsc::channel();
+    d.sim_mut().reload(Arc::new(2), Some(reply.clone()));
+    d.sim_mut().reload(Arc::new(0), Some(reply.clone()));
+    d.sim_mut().reload(Arc::new(3), Some(reply));
+    assert_eq!(reloaded(&mut d, &outcome).rounds, 1);
+    assert!(
+        outcome.recv().unwrap().is_err(),
+        "the zero is refused in turn"
+    );
+    reloaded(&mut d, &outcome);
+    assert_eq!(d.core().game().tally_of("ada"), Some(3));
+    assert!(!d.sim().status().get().reloading);
 }
