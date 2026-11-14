@@ -24,6 +24,7 @@ interface BloomSettings {
     threshold: number;
     knee: number;
     emissiveWeight: number;
+    emissiveAdd?: number;
     scatter: number;
     levels: number;
     dirt?: LensDirtSettings;
@@ -38,6 +39,7 @@ class CorePost {
     emissive: TextureLike | null;
     resolves: number;
     constructor(core: RenderCore, processor: PostProcessor, opts?: CorePostOptions);
+    setJitter(x: number, y: number, viewIndex?: number): void;
 }
 
 ## CorePostOptions  (type-only)
@@ -45,6 +47,8 @@ interface CorePostOptions {
     id?: string;
     after?: string;
     emissive?: TextureLike | null;
+    velocityJitter?: 'keep' | 'remove';
+    relativeToOrigin?: boolean;
 }
 
 ## DofSettings  (type-only)
@@ -133,6 +137,9 @@ interface LensDirtSettings {
 ## LutFn  (type-only)
 type LutFn = (r: number, g: number, b: number) => readonly [number, number, number];
 
+## LutFormat  (type-only)
+type LutFormat = 'rgba8unorm' | 'rgba16float';
+
 ## LutSettings  (type-only)
 interface LutSettings {
     texture: GPUTexture | null;
@@ -186,6 +193,13 @@ class PostBlender {
     advance(target: PostSettings, dt: number): void;
 }
 
+## PostCompositeHook  (type-only)
+interface PostCompositeHook {
+    wgsl: string;
+    textures?: number;
+    buffers?: GPUBuffer[];
+}
+
 ## PostFrameState  (type-only)
 interface PostFrameState {
     jitterX: number;
@@ -196,6 +210,59 @@ interface PostFrameState {
     roughMetal?: number;
     objectVelocity?: number;
     taaVelocity?: number;
+    velocityJitterX?: number;
+    velocityJitterY?: number;
+    linearOutput?: number;
+}
+
+## PostHost  (type-only)
+interface PostHost {
+    readonly device: GPUDevice;
+    readonly format: GPUTextureFormat;
+    readonly samplers: Readonly<Record<'linear-clamp' | 'nearest-clamp', GPUSampler>>;
+    readonly width: number;
+    readonly height: number;
+    readonly logicalWidth: number;
+    readonly logicalHeight: number;
+    readonly outputWidth: number;
+    readonly outputHeight: number;
+    readonly post?: PostProcessor | null;
+    readonly jitter: JitterFn | null;
+    setJitter(fn: JitterFn | null): void;
+    readonly gpuTimer: {
+        pass(label: string): GPURenderPassTimestampWrites | undefined;
+    } | null;
+    createFullscreenPass(desc: FullscreenPassDesc): FullscreenPass;
+}
+
+## PostHostOptions  (type-only)
+interface PostHostOptions {
+    width?: number;
+    height?: number;
+    outputWidth?: number;
+    outputHeight?: number;
+    logicalWidth?: number;
+    logicalHeight?: number;
+    gpuTimer?: PostHost['gpuTimer'];
+}
+
+## PostHostState
+class PostHostState implements PostHost {
+    readonly device: GPUDevice;
+    readonly format: GPUTextureFormat;
+    readonly samplers: Readonly<Record<'linear-clamp' | 'nearest-clamp', GPUSampler>>;
+    width: number;
+    height: number;
+    logicalWidth: number;
+    logicalHeight: number;
+    outputWidth: number;
+    outputHeight: number;
+    gpuTimer: PostHost['gpuTimer'];
+    constructor(device: GPUDevice, format: GPUTextureFormat, opts?: PostHostOptions);
+    resize(width: number, height: number, outputWidth?: number, outputHeight?: number): void;
+    get jitter(): JitterFn | null;
+    setJitter(fn: JitterFn | null): void;
+    createFullscreenPass(desc: FullscreenPassDesc): FullscreenPass;
 }
 
 ## PostQuality  (type-only)
@@ -248,7 +315,7 @@ class PostStack implements PostProcessor {
     readonly quality: PostQuality;
     readonly taa: Taa;
     historyResets: number;
-    constructor(renderer: Renderer, patch?: PostSettingsPatch);
+    constructor(renderer: PostHost, patch?: PostSettingsPatch, opts?: PostStackOptions);
     setQuality(patch: Partial<PostQuality>): this;
     set(patch: PostSettingsPatch): this;
     blendTo(patch: PostSettingsPatch, seconds: number, ease?: Ease): this;
@@ -263,7 +330,15 @@ class PostStack implements PostProcessor {
     advanceBlend(time: number): void;
     resize(width: number, height: number): void;
     encode(encoder: GPUCommandEncoder, inputs: PostInputs, output: GPUTextureView, viewport?: SceneTargetViewport): void;
+    setHookTextures(views: readonly (GPUTextureView | null)[]): this;
     destroy(): void;
+}
+
+## PostStackOptions  (type-only)
+interface PostStackOptions {
+    format?: GPUTextureFormat;
+    toSrgb?: boolean;
+    hook?: PostCompositeHook;
 }
 
 ## RGB  (type-only)
@@ -369,7 +444,10 @@ function createCorePost(core: RenderCore, processor: PostProcessor, opts?: CoreP
 function createLensDirtTexture(device: GPUDevice, size?: number, seed?: number): GPUTexture;
 
 ## createLutTexture
-function createLutTexture(device: GPUDevice, size: LutSize, fn: LutFn): GPUTexture;
+function createLutTexture(device: GPUDevice, size: LutSize, fn: LutFn, format?: LutFormat): GPUTexture;
+
+## createPostHost
+function createPostHost(device: GPUDevice, format: GPUTextureFormat, opts?: PostHostOptions): PostHostState;
 
 ## createViewPost
 function createViewPost(make: (viewIndex: number) => PostProcessor): ViewPost;
@@ -425,6 +503,9 @@ function lowPostQuality(): PostQuality;
 ## lutTexels
 function lutTexels(size: LutSize, fn: LutFn): Uint8Array;
 
+## lutTexelsHalf
+function lutTexelsHalf(size: LutSize, fn: LutFn): Uint16Array;
+
 ## motionVelocity
 function motionVelocity(out: {
     [i: number]: number;
@@ -469,3 +550,6 @@ function taaReprojection(out: Mat4, prevViewProj: ArrayLike<number>, invViewProj
 function whiteBalanceMatrix(out: {
     [i: number]: number;
 }, kelvin: number, tint: number): typeof out;
+
+## writeLutTexture
+function writeLutTexture(device: GPUDevice, texture: GPUTexture, fn: LutFn): void;

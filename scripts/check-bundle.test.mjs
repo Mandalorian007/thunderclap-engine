@@ -47,7 +47,7 @@ test('foldersIn counts only modules that rendered code', () => {
     },
     '/r',
   );
-  assert.deepEqual([...f].sort(), ['audio', 'render']);
+  assert.deepEqual([...f].sort(), ['audio', 'audio/c.ts', 'render', 'render/a.ts']);
 });
 
 test('verdict: missing budget, over budget and a leak each fail', () => {

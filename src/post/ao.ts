@@ -42,7 +42,7 @@ fn is_sky(depth: f32) -> bool {
 }
 /** \`a\` is nearer the eye than \`b\` (smaller depth, or greater under reversed-Z). */
 fn depth_nearer(a: f32, b: f32) -> bool {
-  return select(a < b, a > b, P.quality.w > 0.5);
+  return select((a < b), (a > b), (P.quality.w > 0.5));
 }
 /** The centre of the depth texel under \`uv\`: positions must be rebuilt where the depth was read. */
 fn texel_uv(uv: vec2f, dim: vec2f) -> vec2f {

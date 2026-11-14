@@ -248,6 +248,7 @@ interface CorePass {
     readonly depth: PassDepth;
     readonly reversedZ: boolean;
     readonly depthClear: number;
+    readonly coreTargets: boolean;
     readonly when: (() => boolean) | null;
     readonly encode: ((pass: GPURenderPassEncoder, ctx: CorePassContext) => void) | null;
     readonly resolve: ((encoder: GPUCommandEncoder, ctx: CoreResolveContext) => void) | null;
@@ -292,6 +293,8 @@ interface CoreResolveContext {
     emissive: GPUTextureView | null;
     roughMetal: GPUTextureView | null;
     velocity: GPUTextureView | null;
+    timestamps: ((label: string, pass?: string) => GPURenderPassTimestampWrites | undefined) | undefined;
+    reversedZ: boolean;
 }
 
 ## CoreShadowTarget  (type-only)
@@ -1094,6 +1097,7 @@ interface PassDesc {
     resolve?: (encoder: GPUCommandEncoder, ctx: CoreResolveContext) => void;
     reversedZ?: boolean;
     depthClear?: number;
+    coreTargets?: boolean;
 }
 
 ## PassList
@@ -1154,6 +1158,7 @@ interface PostInputs {
     view: PostView | null;
     roughMetal: TextureLike | null;
     velocity: TextureLike | null;
+    timestamps?: ((label: string) => GPURenderPassTimestampWrites | undefined) | null;
 }
 
 ## PostProcessor  (type-only)
@@ -1168,6 +1173,7 @@ interface PostProjection {
     near: number;
     far: number;
     proj: Float32Array;
+    reversedZ?: boolean;
 }
 
 ## PostView  (type-only)
@@ -1177,6 +1183,7 @@ interface PostView {
     previousViewProj: Float32Array;
     previousView: Float32Array;
     jitter: [number, number];
+    velocityJitter?: [number, number];
 }
 
 ## PreludeVariant  (type-only)
