@@ -88,6 +88,7 @@ export const WEBKIT_SPECS = [
   'bench',
   'ui',
   'ui-spec',
+  'net',
   'input',
   'layout',
   'lights',
