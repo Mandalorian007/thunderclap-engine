@@ -53,6 +53,8 @@ export {
   ParticleEmitter,
   ParticleSystem,
 } from './particles';
+export type { ParticleBudgetKnobOptions, ParticlesOnCoreSource } from './particles-core';
+export { ParticlesOnCore, particleBudgetKnob } from './particles-core';
 export {
   COLOR_CURVE_FLOATS,
   FX_PARTICLE_FLOATS,
@@ -62,6 +64,7 @@ export {
   MAX_FORCES,
   PARTICLE_COLLIDE_WGSL,
   PARTICLE_COMPUTE_WGSL,
+  PARTICLE_CORE_RENDER_WGSL,
   PARTICLE_COUNT_WGSL,
   PARTICLE_EXT_COMPUTE_WGSL,
   PARTICLE_EXT_RENDER_WGSL,
@@ -90,4 +93,33 @@ export { Trail, TrailBatch } from './trail';
 export { TRAIL_TEXTURED_WGSL, TRAIL_WGSL } from './trail-wgsl';
 export type { WaterFoam, WaterOptions, WaterWave } from './water';
 export { WATER_PARAMS_FLOATS, Water, waterHeight } from './water';
-export { WATER_DEPTH_COPY_WGSL, WATER_MAX_WAVES, WATER_WGSL } from './water-wgsl';
+export type { WaterOnCoreOptions } from './water-core';
+export { WaterOnCore, waterReflectionKnob } from './water-core';
+export {
+  WATER_CORE_FLOATS,
+  WATER_CORE_WGSL,
+  WATER_DEPTH_COPY_WGSL,
+  WATER_MAX_WAVES,
+  WATER_WGSL,
+} from './water-wgsl';
+export type {
+  PrecipLayer,
+  PrecipShape,
+  WeatherConfig,
+  WeatherDensityKnobOptions,
+  WeatherOcclusionMap,
+  WeatherOptions,
+} from './weather';
+export {
+  WEATHER_DUST_STORM,
+  WEATHER_RAIN,
+  WEATHER_SNOW,
+  Weather,
+  weatherDensityKnob,
+} from './weather';
+export {
+  WEATHER_HEAD_FLOATS,
+  WEATHER_LAYER_FLOATS,
+  WEATHER_MAX_LAYERS,
+  WEATHER_WGSL,
+} from './weather-wgsl';

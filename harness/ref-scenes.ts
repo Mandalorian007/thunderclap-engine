@@ -22,13 +22,14 @@ import {
   atlasFrames,
   Camera,
   createFlipbook,
+  createRenderCore,
   createStandardMaterial,
   createTileLayer,
+  DEPTH_FORMAT,
   type DrawParams,
   type InstanceParams,
   Lights,
   loadTextureArray,
-  type Material,
   type PixelSource,
   type PointLight,
   type Renderer,
@@ -41,11 +42,12 @@ import {
 } from '@thunderclap-engine/engine/render';
 import { createOverlay } from '@thunderclap-engine/engine/ui';
 import {
-  createVoxelChunks,
   createVoxelGrid,
-  VOXEL_WGSL,
-  type VoxelGrid,
-  type VoxelMesher,
+  createVoxelWorld,
+  defineBlockTable,
+  defineVoxelFormat,
+  feedVoxelGrid,
+  type MesherPort,
 } from '@thunderclap-engine/engine/voxel';
 
 // ---- shared: identical in harness/ref-scenes.ts and src/render/ref-scenes.test-util.ts ----
@@ -90,8 +92,8 @@ export interface RefOptions {
    * `view` goes here.
    */
   mark?: (part: string) => void;
-  /** voxel: the mesher for the grid (the page passes a Worker one). Default in-thread. */
-  mesher?: (grid: VoxelGrid) => VoxelMesher;
+  /** voxel: the section mesher threads (the page passes a Worker one). Default in-thread. */
+  workers?: () => MesherPort[];
   /** hud: the overlay's parent element. */
   parent?: HTMLElement;
   /** stereo: 1 draws the same scene through one full-screen camera (the mono comparison). */
@@ -123,7 +125,7 @@ export function createRefScene(
     case 'arena':
       return refArena(renderer, size, mark);
     case 'voxel':
-      return refVoxel(renderer, size, mark, opts.mesher);
+      return refVoxel(renderer, size, mark, opts.workers);
     case 'stereo':
       return refFigures('stereo', renderer, size, opts.views ?? 2, true, mark);
     case 'hud': {
@@ -605,19 +607,29 @@ function terrainHeight(x: number, z: number): number {
   return Math.max(2, Math.min(VOXEL_HEIGHT - 4, Math.round(h)));
 }
 
-const BLOCKS_WGSL = /* wgsl */ `
-${VOXEL_WGSL}
-@group(1) @binding(1) var blockSampler: sampler;
-@group(1) @binding(2) var blocks: texture_2d_array<f32>;
+/** Air, then grass, dirt and stone, all opaque. */
+const REF_VOXEL_FORMAT = defineVoxelFormat({
+  sectionSize: VOXEL_CHUNK,
+  blocks: defineBlockTable([
+    { class: 'none' },
+    { class: 'opaque' },
+    { class: 'opaque' },
+    { class: 'opaque' },
+  ]),
+});
 
-@fragment fn fs_main(in: VSOut) -> FragOut {
-  let albedo = textureSample(blocks, blockSampler, voxel_uv_wrap(in.uv), voxel_layer(in.color)).rgb;
-  let n = normalize(in.normal);
-  let sky = 0.5 + 0.5 * n.y;
-  var o: FragOut;
-  o.color = vec4f(albedo * (engine_lambert(n, in.worldPos) + 0.15 * sky) * voxel_ao(in.color), 1.0);
-  o.emissive = vec4f(0.0);
-  return o;
+const BLOCKS_FRAGMENT = /* wgsl */ `
+@group(1) @binding(0) var blockSampler: sampler;
+@group(1) @binding(1) var blocks: texture_2d_array<f32>;
+struct Sun { direction: vec4f, color: vec4f, ambient: vec4f };
+@group(1) @binding(2) var<uniform> sun: Sun;
+
+@fragment fn fs(in: VoxelVarying) -> @location(0) vec4f {
+  let v = decode_voxel_vertex(in.w0, in.w1);
+  let albedo = textureSample(blocks, blockSampler, fract(in.uv), max(i32(v.id) - 1, 0)).rgb;
+  let n = in.normal;
+  let lit = sun.ambient.rgb * (0.5 + 0.5 * n.y) + sun.color.rgb * max(dot(n, -sun.direction.xyz), 0.0);
+  return vec4f(albedo * lit * mix(0.5, 1.0, in.light.x), 1.0);
 }`;
 
 function blockLayers(): PixelSource[] {
@@ -644,15 +656,16 @@ function blockLayers(): PixelSource[] {
 }
 
 /**
- * S4: a `size` × 2 × `size`-chunk block world (16³ chunks: grass over dirt over stone) through
- * the `voxel` module at its best settings today (greedy meshing with baked AO, a mesher off the
- * main thread on the page, per-chunk frustum culling), the camera flying a circle over it.
+ * S4: a `size` × 2 × `size`-chunk block world (16³ sections: grass over dirt over stone) through
+ * the `voxel` module at its best settings today (`createVoxelWorld` fed by `feedVoxelGrid`:
+ * greedy section meshing with baked light off the main thread on the page, GPU-culled core sets
+ * drawn in the renderer's frame through `renderer.core`), the camera flying a circle over it.
  */
 function refVoxel(
   renderer: Renderer,
   size: number,
   mark: (part: string) => void,
-  mesherFor?: (grid: VoxelGrid) => VoxelMesher,
+  workers?: () => MesherPort[],
 ): RefScene {
   const camera = perspective(60, 160);
   renderer.camera = camera;
@@ -669,21 +682,53 @@ function refVoxel(
     if (y === h - 1) return 1;
     return y >= h - 4 ? 2 : 3;
   });
-  const array = loadTextureArray(renderer.device, blockLayers(), { label: 'ref-blocks' });
-  const material: Material = renderer.createMaterial({
+  const device = renderer.device;
+  const core = createRenderCore(renderer, { depthFormat: DEPTH_FORMAT });
+  renderer.core = core;
+  const array = loadTextureArray(device, blockLayers(), { label: 'ref-blocks' });
+  const sampler = device.createSampler({
+    magFilter: 'nearest',
+    minFilter: 'linear',
+    mipmapFilter: 'linear',
+    addressModeU: 'repeat',
+    addressModeV: 'repeat',
+  });
+  const sun = device.createBuffer({
+    label: 'ref-sun',
+    size: 48,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
+  const l = Math.hypot(0.45, 1.0, 0.55);
+  device.queue.writeBuffer(
+    sun,
+    0,
+    new Float32Array([-0.45 / l, -1.0 / l, -0.55 / l, 0, 0.85, 0.82, 0.74, 0, 0.28, 0.3, 0.34, 0]),
+  );
+  const layout = device.createBindGroupLayout({
     label: 'ref-blocks',
-    blend: 'opaque',
-    wgsl: BLOCKS_WGSL,
-    textures: 1,
-    viewDimension: '2d-array',
-    sampler: 'nearest-mip-repeat',
+    entries: [
+      { binding: 0, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
+      { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { viewDimension: '2d-array' } },
+      { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: {} },
+    ],
   });
-  material.setTexture(0, array);
-  const chunks = createVoxelChunks(renderer, grid, {
-    material,
-    slack: 1.5,
-    ...(mesherFor ? { mesher: mesherFor(grid) } : {}),
+  const group = device.createBindGroup({
+    label: 'ref-blocks',
+    layout,
+    entries: [
+      { binding: 0, resource: sampler },
+      { binding: 1, resource: array.view },
+      { binding: 2, resource: { buffer: sun } },
+    ],
   });
+  const world = createVoxelWorld(core, {
+    format: REF_VOXEL_FORMAT,
+    ...(workers ? { workers: workers() } : {}),
+    materials: { opaque: { fragment: BLOCKS_FRAGMENT, bindGroups: [{ layout, group }] } },
+    radius: size,
+    label: 'ref-voxel',
+  });
+  const source = feedVoxelGrid(world, grid);
   const lights = new Lights();
   lights.ambient.set([0.28, 0.3, 0.34]);
   lights.sun.direction = [-0.45, -1.0, -0.55];
@@ -692,17 +737,20 @@ function refVoxel(
   const target = new Float32Array(3);
   const centre = extent / 2;
   const radius = extent * 0.3;
+  world.setInterest(centre, VOXEL_HEIGHT / 2, centre);
   return {
     id: 'voxel',
     size,
     prepare() {
-      const asked = chunks.update();
-      return asked === 0 && chunks.stats.pending === 0 && chunks.stats.chunks > 0;
+      source.sync();
+      world.update(centre, VOXEL_HEIGHT / 2, centre);
+      return world.settled && world.stats.drawn > 0;
     },
     step(i) {
       mark('update');
       const t = i * REF_DT;
-      chunks.update();
+      source.sync();
+      world.update(centre, VOXEL_HEIGHT / 2, centre);
       const a = t * 0.1;
       eye[0] = centre + Math.sin(a) * radius;
       eye[1] = VOXEL_HEIGHT + 6;
@@ -714,14 +762,16 @@ function refVoxel(
       const frame = renderer.beginFrame(t, REF_DT);
       frame.clear(0.5, 0.68, 0.9);
       frame.lights = lights;
-      chunks.draw(frame, camera);
       mark('view');
       renderer.render(frame, camera);
       mark('present');
       renderer.endFrame();
     },
     dispose() {
-      chunks.dispose();
+      renderer.core = null;
+      world.dispose();
+      core.destroy();
+      sun.destroy();
     },
   };
 }

@@ -51,6 +51,14 @@ export type {
   SlotDesc,
 } from './core/draw-set';
 export { DrawSet, GPU_CULL_MIN_SLOTS } from './core/draw-set';
+export type { CoreDrawable, CoreDrawableEncoder, CoreDrawContext } from './core/drawable';
+export {
+  CORE_DRAWABLE_WGSL,
+  CORE_VIEW_EXTRA_WGSL,
+  CoreViewExtras,
+  DrawablePipelines,
+  VIEW_EXTRA_FLOATS,
+} from './core/drawable';
 export type { BufferLayout, LayoutAttribute, LayoutDesc } from './core/layout';
 export { createInstanceLayout, createVertexLayout, vertexFormatBytes } from './core/layout';
 export type { CorePass, CorePassContext, PassDepth, PassDesc } from './core/pass-list';

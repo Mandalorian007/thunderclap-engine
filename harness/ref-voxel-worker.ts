@@ -1,9 +1,8 @@
 /**
- * The chunk mesher Worker of the reference voxel scene (harness/ref-run.ts): `createVoxelChunks`
- * with `createVoxelMesher`, the path the S4 row measures. The engine's `installVoxelMesherWorker`
- * keeps a mirror of the grid here and answers each `mesh` request with a transferred vertex +
- * index buffer. (harness/voxel-worker.ts is the section mesher of the streamed world.)
+ * The section mesher Worker of the reference voxel scene (harness/ref-run.ts): the streamed
+ * world's `installSectionMesherWorker`, the path the S4 row measures. The scene feeds raw grid
+ * cells (`feedVoxelGrid`), so the Worker decodes with the engine's raw codec.
  */
-import { installVoxelMesherWorker } from '@thunderclap-engine/engine/voxel';
+import { installSectionMesherWorker, RAW_SECTION_CODEC } from '@thunderclap-engine/engine/voxel';
 
-installVoxelMesherWorker();
+installSectionMesherWorker({ codec: RAW_SECTION_CODEC });

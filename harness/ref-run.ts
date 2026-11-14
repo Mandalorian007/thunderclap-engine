@@ -15,7 +15,7 @@ import {
   Renderer,
   supportsTimestamps,
 } from '@thunderclap-engine/engine/render';
-import { createVoxelMesher } from '@thunderclap-engine/engine/voxel';
+import { workerMesherPort } from '@thunderclap-engine/engine/voxel';
 import { BENCH_FRAMES, BENCH_WARMUP } from './bench-state';
 import {
   countDom,
@@ -83,10 +83,11 @@ async function main(): Promise<void> {
   const scene = createRefScene(id, renderer, {
     size: state.size,
     parent: root,
-    mesher: (grid) =>
-      createVoxelMesher(grid, {
-        worker: new Worker(new URL('./ref-voxel-worker.ts', import.meta.url), { type: 'module' }),
-      }),
+    workers: () => [
+      workerMesherPort(
+        new Worker(new URL('./ref-voxel-worker.ts', import.meta.url), { type: 'module' }),
+      ),
+    ],
   });
   const measuredFrames = BENCH_FRAMES - BENCH_WARMUP;
   const cpu = new Float64Array(measuredFrames);
