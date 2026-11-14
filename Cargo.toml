@@ -36,8 +36,10 @@ sha2 = "0.11"
 syn = { version = "3", features = ["full"] }
 quote = "1"
 proc-macro2 = "1"
-# Tests only: reading the shared vectors.
-serde_json = { version = "1", features = ["preserve_order"] }
+# JSON: tc-admin's and tc-auth's files and lines, the shared test vectors. No
+# `preserve_order`: features unify, and it would reorder every dependent
+# crate's `serde_json::Map`; output that needs an order writes it itself.
+serde_json = "1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -57,6 +57,171 @@ pub fn read_json(path: PathBuf) -> Value {
     serde_json::from_str(&read(path)).expect("json")
 }
 
+/// A file's JSON with its objects' keys in file order ([`Json`]).
+pub fn read_ordered(path: PathBuf) -> Json {
+    Json::parse(&read(path))
+}
+
+/// JSON whose objects keep their keys in order. `serde_json`'s `Map` sorts
+/// them (the engine turns on no `preserve_order`: the feature would unify
+/// into every game crate's build), and a desc's fields, variants and
+/// queries are in order.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Json {
+    /// A string, number, bool or null.
+    Scalar(Value),
+    /// An array.
+    Array(Vec<Json>),
+    /// An object, its entries in order.
+    Object(Vec<(String, Json)>),
+}
+
+impl Json {
+    /// Parses `text`, keeping the objects' order.
+    pub fn parse(text: &str) -> Json {
+        let (json, rest) = Json::read(text.trim_start());
+        assert!(rest.trim().is_empty(), "trailing JSON: {rest:.20}");
+        json
+    }
+
+    fn read(text: &str) -> (Json, &str) {
+        fn after(t: &str, c: char) -> Option<&str> {
+            t.trim_start().strip_prefix(c).map(str::trim_start)
+        }
+        if let Some(mut t) = after(text, '[') {
+            let mut items = Vec::new();
+            loop {
+                if let Some(rest) = after(t, ']') {
+                    return (Json::Array(items), rest);
+                }
+                if !items.is_empty() {
+                    t = after(t, ',').expect("a comma");
+                }
+                let (item, rest) = Json::read(t);
+                items.push(item);
+                t = rest.trim_start();
+            }
+        }
+        if let Some(mut t) = after(text, '{') {
+            let mut entries = Vec::new();
+            loop {
+                if let Some(rest) = after(t, '}') {
+                    return (Json::Object(entries), rest);
+                }
+                if !entries.is_empty() {
+                    t = after(t, ',').expect("a comma");
+                }
+                let (key, rest) = Json::read(t);
+                let Json::Scalar(Value::String(key)) = key else {
+                    panic!("an object key must be a string");
+                };
+                let (value, rest) = Json::read(after(rest, ':').expect("a colon"));
+                entries.push((key, value));
+                t = rest.trim_start();
+            }
+        }
+        let mut stream = serde_json::Deserializer::from_str(text).into_iter::<Value>();
+        let value = stream.next().expect("a value").expect("JSON");
+        (Json::Scalar(value), &text[stream.byte_offset()..])
+    }
+
+    /// The entry `key` of an object.
+    pub fn get(&self, key: &str) -> Option<&Json> {
+        self.entries()
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v)
+    }
+
+    /// An object's entries, in order (none for anything else).
+    pub fn entries(&self) -> &[(String, Json)] {
+        match self {
+            Json::Object(entries) => entries,
+            _ => &[],
+        }
+    }
+
+    /// An array's items (none for anything else).
+    pub fn items(&self) -> &[Json] {
+        match self {
+            Json::Array(items) => items,
+            _ => &[],
+        }
+    }
+
+    /// As `serde_json`'s value (its objects sorted).
+    pub fn value(&self) -> Value {
+        match self {
+            Json::Scalar(v) => v.clone(),
+            Json::Array(items) => Value::Array(items.iter().map(Json::value).collect()),
+            Json::Object(entries) => Value::Object(
+                entries
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.value()))
+                    .collect(),
+            ),
+        }
+    }
+
+    /// Pretty text, two spaces an indent, the objects in order.
+    pub fn pretty(&self) -> String {
+        let mut out = String::new();
+        self.write(&mut out, 0);
+        out
+    }
+
+    fn write(&self, out: &mut String, depth: usize) {
+        let pad = |out: &mut String, depth: usize| out.push_str(&"  ".repeat(depth));
+        match self {
+            Json::Scalar(v) => out.push_str(&v.to_string()),
+            Json::Array(items) if items.is_empty() => out.push_str("[]"),
+            Json::Object(entries) if entries.is_empty() => out.push_str("{}"),
+            Json::Array(items) => {
+                out.push_str("[\n");
+                for (i, item) in items.iter().enumerate() {
+                    pad(out, depth + 1);
+                    item.write(out, depth + 1);
+                    out.push_str(if i + 1 < items.len() { ",\n" } else { "\n" });
+                }
+                pad(out, depth);
+                out.push(']');
+            }
+            Json::Object(entries) => {
+                out.push_str("{\n");
+                for (i, (key, value)) in entries.iter().enumerate() {
+                    pad(out, depth + 1);
+                    out.push_str(&Value::from(key.as_str()).to_string());
+                    out.push_str(": ");
+                    value.write(out, depth + 1);
+                    out.push_str(if i + 1 < entries.len() { ",\n" } else { "\n" });
+                }
+                pad(out, depth);
+                out.push('}');
+            }
+        }
+    }
+}
+
+impl From<Value> for Json {
+    /// `serde_json`'s value (its objects in its order).
+    fn from(value: Value) -> Json {
+        match value {
+            Value::Array(items) => Json::Array(items.into_iter().map(Json::from).collect()),
+            Value::Object(map) => {
+                Json::Object(map.into_iter().map(|(k, v)| (k, Json::from(v))).collect())
+            }
+            scalar => Json::Scalar(scalar),
+        }
+    }
+}
+
+impl std::ops::Index<&str> for Json {
+    type Output = Json;
+    fn index(&self, key: &str) -> &Json {
+        self.get(key).unwrap_or_else(|| panic!("no {key}"))
+    }
+}
+
 /// The snake_case-to-camelCase rule of generated TypeScript.
 pub fn camel(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
@@ -202,18 +367,18 @@ pub fn forge_hash() -> String {
 /// A schema from TypeScript's `TypesDesc` (`src/net/schema.ts`), with its
 /// discovery order: each root's types depth first (a type before its
 /// parts), then each query's arguments and result.
-pub fn schema_from_desc(header: &'static str, desc: &Value) -> Schema {
+pub fn schema_from_desc(header: &'static str, desc: &Json) -> Schema {
     struct Build<'a> {
-        desc: &'a Value,
+        desc: &'a Json,
         order: Vec<&'static str>,
         defs: std::collections::BTreeMap<&'static str, TypeDef>,
     }
     impl Build<'_> {
-        fn fields(&mut self, specs: &Value) -> Vec<Field> {
-            let specs = specs.as_object().expect("fields");
+        fn fields(&mut self, specs: &Json) -> Vec<Field> {
             let out: Vec<Field> = specs
+                .entries()
                 .iter()
-                .map(|(name, spec)| Field::new(leak(name), "", type_ref(spec, true)))
+                .map(|(name, spec)| Field::new(leak(name), "", type_ref(&spec.value(), true)))
                 .collect();
             for f in &out {
                 self.reach(&f.ty);
@@ -240,18 +405,17 @@ pub fn schema_from_desc(header: &'static str, desc: &Value) -> Schema {
             let kind = if let Some(f) = spec.get("struct") {
                 TypeKind::Struct(self.fields(f))
             } else if let Some(inner) = spec.get("newtype") {
-                let ty = type_ref(inner, true);
+                let ty = type_ref(&inner.value(), true);
                 self.reach(&ty);
                 TypeKind::Newtype(ty)
             } else {
-                let variants = spec["enum"].as_object().expect("enum");
                 let mut out = Vec::new();
-                for (v, fields) in variants {
+                for (v, fields) in spec["enum"].entries() {
                     let v = leak(v);
                     out.push(match fields {
-                        Value::Null => Variant::unit(v, ""),
-                        Value::Array(one) => {
-                            let ty = type_ref(&one[0], true);
+                        Json::Scalar(Value::Null) => Variant::unit(v, ""),
+                        Json::Array(one) => {
+                            let ty = type_ref(&one[0].value(), true);
                             self.reach(&ty);
                             Variant::newtype(v, "", ty)
                         }
@@ -277,19 +441,18 @@ pub fn schema_from_desc(header: &'static str, desc: &Value) -> Schema {
         defs: Default::default(),
     };
     let roots: Vec<&'static str> = desc["roots"]
-        .as_array()
-        .unwrap()
+        .items()
         .iter()
-        .map(|r| leak(r.as_str().unwrap()))
+        .map(|r| leak(r.value().as_str().unwrap()))
         .collect();
     for r in &roots {
         b.define(r);
     }
     let mut queries = Vec::new();
-    if let Some(qs) = desc.get("queries").and_then(Value::as_object) {
-        for (name, q) in qs {
+    if let Some(qs) = desc.get("queries") {
+        for (name, q) in qs.entries() {
             let args = q.get("args").map(|a| b.fields(a)).unwrap_or_default();
-            let result = type_ref(&q["result"], true);
+            let result = type_ref(&q["result"].value(), true);
             b.reach(&result);
             queries.push(QueryDef {
                 name: leak(name),
