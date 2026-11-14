@@ -10,12 +10,12 @@
 
 import type { PatchOp } from './patch';
 import {
+  NetSchema,
+  netType,
   type QuerySpec,
-  Schema,
   SchemaError,
   type TypeDefSpec,
   type TypeSpec,
-  t,
   WIRE_HEADER,
 } from './schema';
 
@@ -69,7 +69,7 @@ const role = (r: TypeSpec | undefined): TypeSpec => r ?? 'Empty';
  * Builds a game's schema: its types inside the engine envelope, rooted at `ClientMsg` and
  * `ServerMsg` (then `roots`), plus its live queries. The hash is what `Hello` carries.
  */
-export function defineSchema(desc: SchemaDesc = {}): Schema {
+export function defineSchema(desc: SchemaDesc = {}): NetSchema {
   const game = desc.types ?? {};
   for (const name of ENVELOPE_TYPES) {
     if (Object.hasOwn(game, name)) throw new SchemaError(`${name} is an envelope type`);
@@ -81,11 +81,11 @@ export function defineSchema(desc: SchemaDesc = {}): Schema {
         Hello: {
           token: 'String',
           schema_hash: 'String',
-          bulk: t.option('u8'),
+          bulk: netType.option('u8'),
           ext: role(r.hello),
         },
         Command: { seq: 'u32', command: role(r.command) },
-        Subscribe: { sub: 'u32', query: 'String', args: 'Bytes', resume: t.option('Resume') },
+        Subscribe: { sub: 'u32', query: 'String', args: 'Bytes', resume: netType.option('Resume') },
         Unsubscribe: { sub: 'u32' },
         Ping: { client_time: 'u64' },
         SetInterest: { interest: role(r.interest) },
@@ -109,7 +109,7 @@ export function defineSchema(desc: SchemaDesc = {}): Schema {
         },
         Rejected: { reason: 'String', stale_schema: 'bool' },
         CommandResult: { seq: 'u32', result: role(r.result) },
-        Update: { sub: 'u32', version: 'u64', hash: 'String', patch: t.vec('PatchOp') },
+        Update: { sub: 'u32', version: 'u64', hash: 'String', patch: netType.vec('PatchOp') },
         Resync: { sub: 'u32', version: 'u64', result: 'Bytes' },
         QueryFailed: { sub: 'u32', reason: 'String' },
         Clock: { time: 'u64', paused: 'bool' },
@@ -125,9 +125,9 @@ export function defineSchema(desc: SchemaDesc = {}): Schema {
     },
     PatchOp: {
       enum: {
-        Set: { path: t.vec('PathStep'), value: 'Bytes' },
-        MapPut: { path: t.vec('PathStep'), key: 'Bytes', value: 'Bytes' },
-        MapRemove: { path: t.vec('PathStep'), key: 'Bytes' },
+        Set: { path: netType.vec('PathStep'), value: 'Bytes' },
+        MapPut: { path: netType.vec('PathStep'), key: 'Bytes', value: 'Bytes' },
+        MapRemove: { path: netType.vec('PathStep'), key: 'Bytes' },
       },
     },
     PathStep: {
@@ -153,7 +153,7 @@ export function defineSchema(desc: SchemaDesc = {}): Schema {
     server: r.server,
   }).some((v) => v === undefined || v === 'Empty');
   if (!usesEmpty) delete types.Empty;
-  return new Schema(WIRE_HEADER, {
+  return new NetSchema(WIRE_HEADER, {
     roots: ['ClientMsg', 'ServerMsg', ...(desc.roots ?? [])],
     types,
     queries: desc.queries,

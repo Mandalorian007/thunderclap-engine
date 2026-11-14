@@ -23,7 +23,7 @@
  */
 
 /** Tuning for a `SnapshotBuffer`. Every field has a default. */
-export interface SnapshotOptions {
+export interface SnapshotBufferOptions {
   /** Components per position: 2 or 3 (default 3). */
   readonly dims?: 2 | 3;
   /** Milliseconds per step (default 50: 20 steps a second). */
@@ -98,7 +98,7 @@ export class SnapshotBuffer {
   readonly #s: Float64Array;
   readonly #before: Float64Array;
 
-  constructor(options: SnapshotOptions = {}) {
+  constructor(options: SnapshotBufferOptions = {}) {
     this.dims = options.dims ?? 3;
     this.stepMs = options.stepMs ?? 50;
     this.#cap = options.capacity ?? 16;
@@ -222,7 +222,7 @@ export class SnapshotBuffer {
         for (let c = 0; c < D; c++) t.err[c] = before[c]!;
         t.errAt = now;
         const ms = e * this.#blendPerUnit;
-        t.errMs = ms < BLEND_MS ? BLEND_MS : ms > BLEND_MAX_MS ? BLEND_MAX_MS : ms;
+        t.errMs = ms < BLEND_MS ? BLEND_MS : Math.min(ms, BLEND_MAX_MS);
       } else if (fade > 0) {
         t.err.fill(0);
         t.errAt = Number.NEGATIVE_INFINITY;
@@ -264,7 +264,7 @@ export class SnapshotBuffer {
       const want = t.base + this.#delay;
       const d = want - t.shift;
       if (Math.abs(d) > SLEW_SNAP_MS) t.shift = want;
-      else t.shift += d > most ? most : d < -most ? -most : d;
+      else t.shift += d > most ? most : Math.max(d, -most);
     }
   }
 
@@ -308,12 +308,12 @@ export class SnapshotBuffer {
 
   #target(): number {
     const d = this.stepMs + this.#jitter + MARGIN_MS;
-    return d < this.#min ? this.#min : d > this.#max ? this.#max : d;
+    return d < this.#min ? this.#min : Math.min(d, this.#max);
   }
 
   #late(late: number, now: number): void {
     const j = Math.max(0, this.#jitter - (now - this.#jitterAt) * JITTER_DECAY);
-    this.#jitter = late > j ? late : j;
+    this.#jitter = Math.max(late, j);
     this.#jitterAt = now;
   }
 
@@ -361,7 +361,7 @@ export class SnapshotBuffer {
 
   #fade(t: Track, now: number): number {
     const k = 1 - (now - t.errAt) / t.errMs;
-    return k > 0 ? k : 0;
+    return Math.max(k, 0);
   }
 
   /** Where `t` is drawn at `now` and how fast (units a step) into `s`, before any fading difference. */

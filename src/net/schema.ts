@@ -79,7 +79,7 @@ export type TypeShape =
 export type Types = Readonly<Record<string, TypeShape>>;
 
 /** Builders for composite type references. */
-export const t = {
+export const netType = {
   vec: (inner: TypeSpec): TypeSpec => ({ vec: inner }),
   option: (inner: TypeSpec): TypeSpec => ({ option: inner }),
   map: (key: TypeSpec, value: TypeSpec): TypeSpec => ({ map: [key, value] }),
@@ -197,7 +197,7 @@ export function displayType(ty: TypeRef): string {
 }
 
 /** A built, checked schema: its canonical text, hash, shapes and value codecs. */
-export class Schema {
+export class NetSchema {
   /** The canonical text the hash is computed from. */
   readonly text: string;
   /** 16 lowercase hex digits: the stable hash of `text`. */
@@ -232,8 +232,17 @@ export class Schema {
   /** The variant names of enum `name`, in index order. */
   variants(name: string): readonly string[] {
     const def = this.#defs.get(name);
-    if (!def || def.kind.kind !== 'enum') throw new SchemaError(`${name} is not an enum`);
+    if (def?.kind.kind !== 'enum') throw new SchemaError(`${name} is not an enum`);
     return def.kind.variants.map((v) => v.name);
+  }
+
+  /** The fields of struct `name` in wire order: wire name, camelCase prop and type. */
+  fields(
+    name: string,
+  ): readonly { readonly wire: string; readonly prop: string; readonly ty: TypeRef }[] {
+    const def = this.#defs.get(name);
+    if (def?.kind.kind !== 'struct') throw new SchemaError(`${name} is not a struct`);
+    return def.kind.fields;
   }
 
   /** The codec for `ty` (compiled once per named type). */
@@ -398,13 +407,13 @@ const SCALAR_CODECS: Record<Scalar, Codec> = {
  * Builds a plain schema: named types reached from `roots` and `queries`, with the engine's header.
  * Most games want `defineSchema` (in `envelope`), which wraps their types in the engine envelope.
  */
-export function defineTypes(desc: TypesDesc): Schema {
-  return new Schema(WIRE_HEADER, desc);
+export function defineTypes(desc: TypesDesc): NetSchema {
+  return new NetSchema(WIRE_HEADER, desc);
 }
 
 /** @internal Builds with another header line: the parity test checks the text against the original. */
-export function defineTypesWithHeader(header: string, desc: TypesDesc): Schema {
-  return new Schema(header, desc);
+export function defineTypesWithHeader(header: string, desc: TypesDesc): NetSchema {
+  return new NetSchema(header, desc);
 }
 
 function build(desc: TypesDesc): {
@@ -414,11 +423,18 @@ function build(desc: TypesDesc): {
   const defs = new Map<string, Def | null>();
   const discover = (ty: TypeRef, context: string): void => {
     if (typeof ty === 'string') return;
-    if ('vec' in ty) return discover(ty.vec, context);
-    if ('option' in ty) return discover(ty.option, context);
+    if ('vec' in ty) {
+      discover(ty.vec, context);
+      return;
+    }
+    if ('option' in ty) {
+      discover(ty.option, context);
+      return;
+    }
     if ('map' in ty) {
       discover(ty.map[0], context);
-      return discover(ty.map[1], context);
+      discover(ty.map[1], context);
+      return;
     }
     define(ty.named, context);
   };
@@ -502,7 +518,7 @@ function build(desc: TypesDesc): {
 function resolve(defs: ReadonlyMap<string, Def>, ty: TypeRef): TypeRef {
   while (typeof ty === 'object' && 'named' in ty) {
     const def = defs.get(ty.named);
-    if (!def || def.kind.kind !== 'newtype') break;
+    if (def?.kind.kind !== 'newtype') break;
     ty = def.kind.inner;
   }
   return ty;
@@ -511,7 +527,10 @@ function resolve(defs: ReadonlyMap<string, Def>, ty: TypeRef): TypeRef {
 function validate(defs: ReadonlyMap<string, Def>, queries: ReadonlyMap<string, QueryDef>): void {
   const check = (context: string, ty: TypeRef): void => {
     if (typeof ty === 'string' || 'named' in ty) return;
-    if ('vec' in ty) return check(context, ty.vec);
+    if ('vec' in ty) {
+      check(context, ty.vec);
+      return;
+    }
     if ('map' in ty) {
       const key = resolve(defs, ty.map[0]);
       if (typeof key !== 'string' || !KEY_SCALARS.has(key)) {
@@ -519,7 +538,8 @@ function validate(defs: ReadonlyMap<string, Def>, queries: ReadonlyMap<string, Q
           `${context}: map key \`${displayType(ty.map[0])}\` must be an integer, a string, or a newtype of one`,
         );
       }
-      return check(context, ty.map[1]);
+      check(context, ty.map[1]);
+      return;
     }
     const inner = resolve(defs, ty.option);
     if (typeof inner === 'object' && 'option' in inner) {

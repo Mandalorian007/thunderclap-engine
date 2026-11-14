@@ -3,10 +3,10 @@ import { hashHex, resultHash, stableHash } from './hash';
 import {
   defineTypes,
   defineTypesWithHeader,
+  netType,
   propName,
   SchemaError,
   type TypesDesc,
-  t,
 } from './schema';
 import hashVectors from './testdata/hash.json';
 import schemaVectors from './testdata/schema.json';
@@ -20,7 +20,7 @@ const base: TypesDesc = {
   roots: ['Root'],
   types: {
     Id: { newtype: 'u64' },
-    Inner: { struct: { a: 'i32', b: t.option('String') } },
+    Inner: { struct: { a: 'i32', b: netType.option('String') } },
     Root: { enum: { A: { x: 'u32', y: 'Inner' }, B: null, C: ['Id'] } },
   },
 };
@@ -57,7 +57,10 @@ describe('schema', () => {
     expect(s.hash).toMatch(/^[0-9a-f]{16}$/);
     const variants: TypesDesc[] = [
       { ...base, types: { ...base.types, Id: { newtype: 'i64' } } },
-      { ...base, types: { ...base.types, Inner: { struct: { b: t.option('String'), a: 'i32' } } } },
+      {
+        ...base,
+        types: { ...base.types, Inner: { struct: { b: netType.option('String'), a: 'i32' } } },
+      },
       {
         ...base,
         types: { ...base.types, Root: { enum: { A: { x: 'u32', y: 'Inner' }, B: {}, C: ['Id'] } } },
@@ -74,10 +77,10 @@ describe('schema', () => {
       types: {
         C: { struct: {} },
         B: { struct: { c: 'C' } },
-        A: { struct: { b: 'B', m: t.map('u32', t.vec('Bytes')) } },
+        A: { struct: { b: 'B', m: netType.map('u32', netType.vec('Bytes')) } },
         Q: { newtype: 'String' },
       },
-      queries: { find: { args: { name: 'Q', at: 'Fixed' }, result: t.option('B') } },
+      queries: { find: { args: { name: 'Q', at: 'Fixed' }, result: netType.option('B') } },
     });
     expect(s.text).toBe(
       'thunderclap-wire 2\nroot A\nquery find(name: Q, at: Fixed) -> Option<B>\nstruct A { b: B, m: Map<u32, Vec<Bytes>> }\nstruct B { c: C }\nstruct C {  }\nnewtype Q(String)\n',
@@ -91,11 +94,11 @@ describe('schema', () => {
       /not reached/,
     );
     expect(bad({ ...base, queries: { Board: { result: 'u8' } } })).toThrow(/snake_case/);
-    expect(bad({ roots: ['M'], types: { M: { struct: { m: t.map('Fixed', 'u8') } } } })).toThrow(
-      /map key/,
-    );
     expect(
-      bad({ roots: ['M'], types: { M: { struct: { o: t.option(t.option('u8')) } } } }),
+      bad({ roots: ['M'], types: { M: { struct: { m: netType.map('Fixed', 'u8') } } } }),
+    ).toThrow(/map key/);
+    expect(
+      bad({ roots: ['M'], types: { M: { struct: { o: netType.option(netType.option('u8')) } } } }),
     ).toThrow(/nests options/);
     expect(bad({ roots: ['M'], types: { M: { struct: { a_b: 'u8', aB: 'u8' } } } })).toThrow(
       /share a name/,
@@ -108,10 +111,10 @@ describe('schema', () => {
       types: {
         Msg: {
           enum: {
-            Hello: { player_name: 'String', at: 'Fixed', tags: t.map('String', 'u16') },
+            Hello: { player_name: 'String', at: 'Fixed', tags: netType.map('String', 'u16') },
             Bye: null,
             Raw: ['Bytes'],
-            Many: [t.vec(t.option('i32'))],
+            Many: [netType.vec(netType.option('i32'))],
           },
         },
       },
@@ -148,7 +151,7 @@ describe('schema', () => {
   it('compiles recursive types', () => {
     const s = defineTypes({
       roots: ['Tree'],
-      types: { Tree: { struct: { value: 'u8', kids: t.vec('Tree') } } },
+      types: { Tree: { struct: { value: 'u8', kids: netType.vec('Tree') } } },
     });
     const tree = {
       value: 1,

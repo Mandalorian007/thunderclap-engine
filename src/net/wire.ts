@@ -149,6 +149,9 @@ export class Fixed {
   }
 }
 
+/** A high surrogate not followed by a low one, or a low one not after a high one. */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
 /** Encodes values into a growing byte buffer. */
 export class Writer {
   #buf = new Uint8Array(64);
@@ -157,6 +160,11 @@ export class Writer {
   /** The bytes written so far. */
   finish(): Uint8Array {
     return this.#buf.slice(0, this.#len);
+  }
+
+  /** Empties it, keeping its buffer, to write again. */
+  reset(): void {
+    this.#len = 0;
   }
 
   bool(value: boolean): void {
@@ -222,7 +230,7 @@ export class Writer {
     if (typeof value !== 'string') {
       throw new TypeError(`String: expected a string, got ${show(value)}`);
     }
-    if (!value.isWellFormed()) {
+    if (LONE_SURROGATE.test(value)) {
       throw new TypeError(`String: contains a lone surrogate: ${JSON.stringify(value)}`);
     }
     const bytes = textEncoder.encode(value);
