@@ -19,38 +19,38 @@ sun, the `Sky`, the fog and the shadow; glowstone flickers into the bloom.
   own value noise, terrain tops now 19..39, checked at boot against 16..44 with the spawn on
   grass above the sea, a console error otherwise; `WINDOW_Z` slides the world over the noise so
   the spawn looks north over flat grass), caves, trees and glowstone into a
-  `createVoxelGrid` and names the block rules (`blockLayer` per face, `outsideBlock` for the
-  world's edges); `mesher.worker.ts` is the engine's Worker recipe, `installVoxelMesherWorker`
-  with those two rules.
-- `createVoxelMesher` mirrors the grid in the Worker and `createVoxelChunks` keeps one mesh per
-  non-empty chunk, remeshes what `grid.set` dirtied (the chunk and its face neighbours) and
-  rewrites each mesh in place: `__demo.growths` stays 0 through breaks and places,
-  `__demo.remeshMs` is the round trip from the click to the last upload.
-- `chunks.draw(frame, camera)` frustum-culls on each chunk's bounding sphere: the spawn view is
-  ~73 draw calls for 256 chunks (`__demo.drawCalls`, `chunksDrawn`, `chunksCulled`).
-- One material for every block: a `texture_2d_array` of eight canvas-painted textures under the
-  `nearest-mip-repeat` sampler, `VOXEL_WGSL`'s `voxel_layer` and `voxel_ao` reading the layer and
-  the baked ambient occlusion out of the vertex colour; the uv is in block units, so a merged
-  quad tiles.
+  `createVoxelGrid` and declares the blocks as a voxel `format` (glowstone gives block light);
+  `mesher.worker.ts` is the engine's section mesher Worker, `installSectionMesherWorker`.
+- Since ws/core-passes the grid feeds `createVoxelWorld` (`feedVoxelGrid`; `sync()` re-puts what
+  `grid.set` dirtied), the Worker meshes sections with AO, sky light and block light, the world
+  streams them into the retained core's arenas, and the core draws its GPU-culled sets inside
+  the `Renderer` frame (`renderer.core`). `__demo.remeshMs` is the round trip from the click to
+  the first remeshed section on the GPU, `settleMs` to the relit neighbours too; `growths` stays 0 (arena allocations, no mesh growth).
+- `__demo.drawCalls` counts the renderer's draws plus the core's bundles and direct draws;
+  `chunksDrawn` and `chunksCulled` are the sections drawn and the ones cave culling hides.
+- One fragment for every block (a `VoxelMaterial`): a `texture_2d_array` of eight
+  canvas-painted textures under a nearest-mip repeat sampler, the layer from the block id and
+  face, lit by the sun, the sky light, glowstone's block light and AO; the uv is in block units,
+  so a merged quad tiles.
 - `raycastVoxels` picks the block under the reticle and the face to place on; `Water` sits at
   sea level with its `origin` at the world's centre (the grid's corner is the origin) and is
   drawn in a second view for its depth fade and foam; `Sky` keeps an `ambientFloor` at night.
 
-The move took the demo from 1619 lines of TypeScript (main 724, worker 278, world 498, textures
+The first move (onto the engine's grid and chunk mesher) took the demo from 1619 lines of TypeScript (main 724, worker 278, world 498, textures
 119) to 1071 (main 624, worker 9, world 319, textures 119).
 
 ## Known limits
 
-No block lighting beyond the baked AO (glowstone glows but lights nothing); no save, no infinite
-terrain, one block texture set. On some 1-block terrain steps the +z riser face shows as a
-triangle from some viewpoints, the hidden half showing a top face: the engine mesher's output was
-checked quad by quad and cell by cell and is correct (`riser.test.ts`, skipped with the evidence
-and the suspected draw-side lines); open as a wish for ws/voxel-2.
+No save, no infinite terrain, one block texture set. Since the move onto the core (ws/core-passes)
+the terrain casts and receives no sun shadow and writes no emissive (glowstone's bloom is only
+what passes the threshold): the core's sets draw in their own pass after the scene pass, and the
+shadow cascade pass is still to come. The +z riser note and `riser.test.ts` went with the old
+mesher.
 
-**Engine modules.** `voxel` (`createVoxelGrid`, `createVoxelMesher`, `installVoxelMesherWorker`,
-`createVoxelChunks`, `raycastVoxels`, `VOXEL_WGSL`), `render` (`loadTextureArray`, a
-`texture_2d_array` material with uniforms and the `nearest-mip-repeat` sampler, perspective
-`Camera`, `Lights` with a sun shadow and fog), `fx` (`Sky`, `Water`, `flicker`), `post` (bloom,
+**Engine modules.** `voxel` (`createVoxelGrid`, `defineVoxelFormat`, `createVoxelWorld`,
+`feedVoxelGrid`, `installSectionMesherWorker`, `raycastVoxels`), `render` (`loadTextureArray`,
+`createRenderCore` as `renderer.core`, perspective `Camera`, `Lights` for the sun, sky and
+water), `fx` (`Sky`, `Water`, `flicker`), `post` (bloom,
 vignette, grade), `input` (`Look` with keys, a touch move zone and the pad, `Gestures` for taps
 and long presses, `Input` bindings for mouse, wheel, keys and pad), `ui` (`createOverlay`,
 `reticle`, `slots`, toasts), `platform` (`boot`), `core` (`GameLoop`).
@@ -58,7 +58,7 @@ and long presses, `Input` bindings for mouse, wheel, keys and pad), `ui` (`creat
 **What the spec checks** (`e2e/demos/voxel.spec.ts`, every matrix row, via the harness server's
 `/demos/voxel/` route): boot with all 256 chunks meshed, no console errors and `drawCalls` < 200;
 `__demo.aim(0, -1.2)` then a click (a CDP tap on touch rows) breaks the looked-at block
-(`lookingAt` changes, `remeshMs` < 50 on desktop rows, `growths` 0); a right click (`E` on touch
+(`lookingAt` changes, `remeshMs` < 250 on desktop rows, `growths` 0); a right click (`E` on touch
 rows) places the hotbar block on a face of the looked-at block, as fast and with no growth; `W`
 for 1 s moves `playerPos`; `?still&time=0.25` holds `timeOfDay`; desktop rows run above 20 fps.
 `window.__demo` also carries `fps`, `chunks`, `triangles`, `selectedBlock`, `yaw`, `pitch`,

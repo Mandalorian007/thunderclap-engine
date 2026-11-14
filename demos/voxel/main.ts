@@ -2,15 +2,14 @@
  * Voxel demo: a small Forgewilds-class world, the reference for "a voxel game on the engine".
  *
  * - 8×8 columns of 16³ chunks, 64 high (256 chunks), generated from 2D value noise with caves
- *   and trees into an engine `VoxelGrid` (`world.ts`). `createVoxelChunks` owns one `Mesh` per
- *   non-empty chunk, remeshes dirty chunks through `createVoxelMesher` in the Worker
- *   (`mesher.worker.ts`: the engine's three-line recipe), rewrites each mesh in place and
- *   frustum-culls the chunks on draw.
- * - One material over a texture array of eight canvas-painted block textures, sampled by the
- *   per-vertex layer through the `VOXEL_WGSL` prelude with the `nearest-mip-repeat` sampler
- *   (the uv is in block units, so a merged quad tiles), lit by `engine_lambert` with the sun's
- *   shadow on the near chunks, fogged by `engine_fog`. Glowstone is emissive and flickers
- *   (`flicker`) into the bloom.
+ *   and trees into an engine `VoxelGrid` (`world.ts`), fed into `createVoxelWorld`
+ *   (`feedVoxelGrid`): the section mesher runs in the Worker (`mesher.worker.ts`), the world
+ *   streams the results into the retained core's arenas and its GPU-culled draw sets, and the
+ *   core draws them inside the `Renderer`'s frame (`renderer.core`, ws/core-passes).
+ * - One fragment over a texture array of eight canvas-painted block textures, the layer picked
+ *   from the block id and face (`blockLayer` in WGSL) with a nearest-mip repeat sampler (the uv
+ *   is in block units, so a merged quad tiles), lit by the sun, the world's sky light and AO,
+ *   fogged by distance. Glowstone gives block light and flickers (`flicker`).
  * - A day cycle drives the sun and `Sky` (with an `ambientFloor` for the night); `Water` sits
  *   at sea level with its `origin` at the world's centre, in a second view of the same camera so
  *   its shoreline reads this frame's depth.
@@ -29,6 +28,8 @@ import { boot } from '@thunderclap-engine/engine/platform';
 import { PostStack } from '@thunderclap-engine/engine/post';
 import {
   Camera,
+  createRenderCore,
+  DEPTH_FORMAT,
   gpuDiagnostics,
   installGpuErrorLogging,
   Lights,
@@ -37,12 +38,12 @@ import {
 } from '@thunderclap-engine/engine/render';
 import { createOverlay } from '@thunderclap-engine/engine/ui';
 import {
-  createVoxelChunks,
   createVoxelGrid,
   createVoxelHit,
-  createVoxelMesher,
+  createVoxelWorld,
+  feedVoxelGrid,
   raycastVoxels,
-  VOXEL_WGSL,
+  workerMesherPort,
 } from '@thunderclap-engine/engine/voxel';
 import { blockIcon, paintBlockTextures } from './textures';
 import {
@@ -50,9 +51,10 @@ import {
   blockLayer,
   CHUNK,
   CHUNK_COUNT,
+  format,
   generateWorld,
   HOTBAR,
-  outsideBlock,
+  Layer,
   REACH,
   SEED,
   spawnColumn,
@@ -104,6 +106,7 @@ const state: VoxelDemoState = {
   drawCalls: 0,
   triangles: 0,
   remeshMs: -1,
+  settleMs: -1,
   remeshes: 0,
   edits: 0,
   growths: 0,
@@ -122,32 +125,51 @@ const state: VoxelDemoState = {
 };
 
 /**
- * The block material over the engine's vertex convention: `VOXEL_WGSL` reads the texture layer
- * and the baked AO from the vertex colour; the `nearest-mip-repeat` sampler tiles the
- * block-unit uv across a merged quad with proper mips.
+ * The blocks' look, a fragment over the world's `VoxelVarying`: the layer from the block id and
+ * the face (the grass top and its dirt underside), sampled with nearest-mip repeat so the
+ * block-unit uv tiles across a merged quad; the sun, the ambient scaled by the world's sky light,
+ * glowstone's block light, AO and the distance fog. The demo's uniforms are bind group 1.
  */
-const BLOCKS_WGSL = /* wgsl */ `
-struct VoxelParams { glow: vec4f };
-@group(1) @binding(0) var<uniform> u: VoxelParams;
+const BLOCKS_FRAGMENT = /* wgsl */ `
+struct Look {
+  sunDir: vec4f,
+  sunColor: vec4f,
+  ambient: vec4f,
+  fogColor: vec4f,
+  // x: fog near, y: fog far, z: glowstone glow
+  params: vec4f,
+};
+@group(1) @binding(0) var<uniform> look: Look;
 @group(1) @binding(1) var blockSampler: sampler;
 @group(1) @binding(2) var blocks: texture_2d_array<f32>;
-${VOXEL_WGSL}
-@fragment fn fs_main(in: VSOut) -> FragOut {
-  let layer = voxel_layer(in.color);
-  let albedo = textureSample(blocks, blockSampler, in.uv, layer).rgb;
-  let n = normalize(in.normal);
-  let lit = engine_lambert(n, in.worldPos) * voxel_ao(in.color);
-  var color = albedo * lit;
-  var emissive = vec3f(0.0);
-  if (layer == 7u) {
-    // Glowstone: self-lit, and its glow (flickering through u.glow.x) goes to the bloom.
-    color = albedo * (0.55 + 0.45 * u.glow.x) + color * 0.25;
-    emissive = albedo * u.glow.x;
+
+fn block_layer(id: u32, face: u32) -> u32 {
+  if (id == ${Block.Grass}u) {
+    if (face == 3u) { return ${Layer.GrassTop}u; }
+    if (face == 2u) { return ${Layer.Dirt}u; }
+    return ${Layer.GrassSide}u;
   }
-  var o: FragOut;
-  o.color = vec4f(engine_fog(color, in.worldPos), 1.0);
-  o.emissive = vec4f(emissive, 0.0);
-  return o;
+  return id;
+}
+
+@fragment fn fs(in: VoxelVarying) -> @location(0) vec4f {
+  let v = decode_voxel_vertex(in.w0, in.w1);
+  let layer = block_layer(v.id, min(v.face, 6u));
+  let albedo = textureSample(blocks, blockSampler, in.uv, layer).rgb;
+  let n = in.normal;
+  let sky = in.light.y;
+  let sun = look.sunColor.rgb * max(dot(n, -look.sunDir.xyz), 0.0) * smoothstep(0.3, 0.9, sky);
+  let amb = look.ambient.rgb * (0.65 + 0.35 * n.y) * mix(0.25, 1.0, sky);
+  let torch = vec3f(1.0, 0.78, 0.5) * in.light.z * 1.4;
+  let ao = mix(0.45, 1.0, in.light.x);
+  var color = albedo * (sun + amb + torch) * ao;
+  if (layer == ${Layer.Glowstone}u) {
+    // Glowstone: self-lit, flickering through glow.
+    color = albedo * (0.55 + 0.45 * look.params.z) + color * 0.25;
+  }
+  let d = distance(in.world, view.position.xyz);
+  let fog = clamp((d - look.params.x) / (look.params.y - look.params.x), 0.0, 1.0);
+  return vec4f(mix(color, look.fogColor.rgb, fog), 1.0);
 }`;
 
 const smooth01 = (t: number) => {
@@ -185,7 +207,7 @@ async function main(): Promise<void> {
   renderer.camera = camera;
 
   // Post: bloom for the glowstone and the sun's glint on the water; the engine's own fog is in
-  // the material (`engine_fog`), so the post fog and god rays stay off.
+  // the blocks' fragment, so the post fog and god rays stay off.
   const post = new PostStack(renderer, {
     bloom: { enabled: true, intensity: 0.55, threshold: 1.0, knee: 0.5, emissiveWeight: 1.4 },
     mist: { enabled: false },
@@ -222,19 +244,41 @@ async function main(): Promise<void> {
     state.selectedBlock = HOTBAR[hotbar.selected]!;
   }
 
-  // The block textures as one array with GPU mips; the material samples them by layer.
+  // The block textures as one array with GPU mips; the fragment samples them by layer.
   const blockArray = loadTextureArray(gpu.device, textures, { label: 'blocks', mips: true });
-  const material = renderer.createMaterial({
-    label: 'blocks',
-    blend: 'opaque',
-    wgsl: BLOCKS_WGSL,
-    textures: 1,
-    viewDimension: '2d-array',
-    sampler: 'nearest-mip-repeat',
-    uniformBytes: 16,
+  const device = gpu.device;
+  const lookData = new Float32Array(20);
+  const lookBuffer = device.createBuffer({
+    label: 'blocks look',
+    size: lookData.byteLength,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
-  material.setTexture(0, blockArray);
-  const glow = new Float32Array(4);
+  const lookLayout = device.createBindGroupLayout({
+    label: 'blocks',
+    entries: [
+      { binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: {} },
+      { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
+      { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { viewDimension: '2d-array' } },
+    ],
+  });
+  const lookGroup = device.createBindGroup({
+    label: 'blocks',
+    layout: lookLayout,
+    entries: [
+      { binding: 0, resource: { buffer: lookBuffer } },
+      {
+        binding: 1,
+        resource: device.createSampler({
+          magFilter: 'nearest',
+          minFilter: 'linear',
+          mipmapFilter: 'linear',
+          addressModeU: 'repeat',
+          addressModeV: 'repeat',
+        }),
+      },
+      { binding: 2, resource: blockArray.view },
+    ],
+  });
 
   const sky = new Sky(renderer, { stars: true, ambientFloor: NIGHT_FLOOR });
   // The grid's corner is the world origin, so the water's centre is the world's centre.
@@ -290,16 +334,34 @@ async function main(): Promise<void> {
     lights.sun.shadow = elevation > 0.03 ? SHADOW : null;
   }
 
-  // The world: the game generates the blocks into the engine's grid; the engine meshes every
-  // dirty chunk in the Worker, keeps one mesh per non-empty chunk and culls them on draw.
+  // The world: the game generates the blocks into the engine's grid; `feedVoxelGrid` puts each
+  // chunk into the streamed world as a section, the Worker meshes it and the core draws it in
+  // the renderer's frame.
   const grid = createVoxelGrid({ sizeX: WORLD_X, sizeY: WORLD_Y, sizeZ: WORLD_Z, chunk: CHUNK });
   generateWorld(grid, SEED);
-  const worker = new Worker(new URL('./mesher.worker.ts', import.meta.url), { type: 'module' });
-  const blockRules = { layerOf: blockLayer, outside: outsideBlock };
-  const mesher = createVoxelMesher(grid, { worker, ...blockRules });
-  const chunks = createVoxelChunks(renderer, grid, { material, mesher, slack: 1.5, ...blockRules });
+  const core = createRenderCore(renderer, { depthFormat: DEPTH_FORMAT });
+  renderer.core = core;
+  // A few mesher Workers: an edit remeshes its section and the neighbours its light reaches.
+  const threads = Math.max(1, Math.min(3, (navigator.hardwareConcurrency || 2) - 1));
+  const workers = Array.from(
+    { length: threads },
+    () => new Worker(new URL('./mesher.worker.ts', import.meta.url), { type: 'module' }),
+  );
+  const world = createVoxelWorld(core, {
+    format,
+    workers: workers.map((w) => workerMesherPort(w)),
+    materials: {
+      opaque: { fragment: BLOCKS_FRAGMENT, bindGroups: [{ layout: lookLayout, group: lookGroup }] },
+    },
+    radius: Math.max(WORLD_X, WORLD_Z) / CHUNK,
+    verticalRadius: WORLD_Y / CHUNK,
+    label: 'voxel',
+  });
+  const source = feedVoxelGrid(world, grid, { outside: Block.Stone });
+  world.setInterest(WORLD_X / 2, WORLD_Y / 2, WORLD_Z / 2);
   /** An edit's round trip: set when a block changes, cleared when its remeshes are uploaded. */
   let editStart = -1;
+  let uploadsAtEdit = 0;
 
   // ─── the player ───────────────────────────────────────────────────────────
   const pos = state.playerPos;
@@ -470,6 +532,9 @@ async function main(): Promise<void> {
   function setBlock(x: number, y: number, z: number, block: number): void {
     if (!grid.set(x, y, z, block)) return;
     editStart = performance.now();
+    uploadsAtEdit = world.stats.uploadsTotal;
+    state.remeshMs = -1;
+    state.settleMs = -1;
     state.edits++;
   }
 
@@ -579,28 +644,41 @@ async function main(): Promise<void> {
         if (input.pressed(SLOT_ACTIONS[i]!)) selectSlot(i);
       }
 
-      // Finished remeshes in, dirty chunks (this tick's edit) out. An edit's round trip ends
-      // when its last chunk is uploaded and nothing is still in flight.
-      const applied = chunks.update();
-      const s = chunks.stats;
-      if (editStart >= 0 && applied > 0 && s.pending === 0) {
+      // Dirty chunks (this tick's edit) out to the world, finished meshes in. An edit's round
+      // trip ends when the world has nothing waiting.
+      source.sync();
+      world.setInterest(eye[0]!, eye[1]!, eye[2]!);
+      world.update(eye[0]!, eye[1]!, eye[2]!);
+      const s = world.stats;
+      // An edit's round trip: the click to the first remeshed section on the GPU (the edit
+      // visible); `settleMs` runs on until the relit neighbours are in too.
+      if (editStart >= 0 && state.remeshMs < 0 && s.uploadsTotal > uploadsAtEdit) {
         state.remeshMs = performance.now() - editStart;
+      }
+      if (editStart >= 0 && world.settled && state.remeshMs >= 0) {
+        state.settleMs = performance.now() - editStart;
         editStart = -1;
       }
-      state.chunks = Math.min(CHUNK_COUNT, s.remeshes);
-      state.chunksSolid = s.chunks;
-      state.remeshes = s.remeshes;
-      state.growths = s.growths;
+      // Every chunk is meshed once the world first settles with all of them put.
+      if (world.settled && s.uploadsTotal > 0) state.chunks = CHUNK_COUNT;
+      state.chunksSolid = s.drawn;
+      state.remeshes = s.uploadsTotal;
+      state.growths = 0;
     },
     render(_alpha, time) {
-      glow[0] = flicker(time.realTime, { seed: 3, speed: 5, amount: 0.35, base: 1.6 });
-      material.setUniforms(glow);
+      lookData.set(sunDir, 0);
+      lookData.set(sunColor, 4);
+      lookData.set(ambient, 8);
+      lookData.set(fogColor, 12);
+      lookData[16] = FOG_NEAR;
+      lookData[17] = FOG_FAR;
+      lookData[18] = flicker(time.realTime, { seed: 3, speed: 5, amount: 0.35, base: 1.6 });
+      device.queue.writeBuffer(lookBuffer, 0, lookData);
 
       const frame = renderer.beginFrame(time.realTime, time.frameDt);
       frame.clear(0, 0, 0);
       frame.lights = lights;
       frame.drawable(sky, -1);
-      const drawStats = chunks.draw(frame, camera);
       // The water in a second view of the same camera, so its depth copy holds this frame's
       // terrain (shoreline, depth tint).
       frame.drawable(water, 1, 2);
@@ -615,10 +693,12 @@ async function main(): Promise<void> {
         const fps = 1 / time.frameDt;
         state.fps = state.fps === 0 ? fps : state.fps + (fps - state.fps) * 0.1;
       }
-      state.chunksDrawn = drawStats.drawn;
-      state.chunksCulled = drawStats.culled;
-      state.triangles = drawStats.triangles;
-      state.drawCalls = renderer.stats.drawCalls;
+      // The core culls on the GPU: drawn is what it holds and cave culling keeps.
+      const ws = world.stats;
+      state.chunksDrawn = ws.drawn - ws.hidden;
+      state.chunksCulled = ws.hidden;
+      state.triangles = 2 * (ws.opaqueQuads + ws.foliageQuads + ws.liquidQuads);
+      state.drawCalls = renderer.stats.drawCalls + core.stats.bundles + core.stats.directDraws;
       state.stats.drawCalls = renderer.stats.drawCalls;
       state.stats.instances = renderer.stats.instances;
       state.stats.culled = renderer.stats.culled;
@@ -628,9 +708,8 @@ async function main(): Promise<void> {
   });
   res.onDeviceLost(() => {
     loop.stop();
-    chunks.dispose();
-    mesher.dispose();
-    worker.terminate();
+    world.dispose();
+    for (const w of workers) w.terminate();
   });
   loop.start();
   state.gpu = 'ok';

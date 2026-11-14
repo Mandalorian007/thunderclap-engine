@@ -298,7 +298,7 @@ class DrawSet {
     setBindGroups(groups: readonly {
         layout: GPUBindGroupLayout;
         group: GPUBindGroup;
-    }[]): void;
+    }[], args?: GPUBuffer): void;
     get ready(): boolean;
     get count(): number;
     get highWater(): number;

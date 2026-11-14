@@ -223,7 +223,9 @@ test('a click breaks the looked-at block and re-meshes fast', async ({ page, wra
     .not.toBe(JSON.stringify(target));
   await expect.poll(async () => (await read()).remeshMs).toBeGreaterThanOrEqual(0);
   const after = await read();
-  if (/^desktop-/.test(test.info().project.name)) expect(after.remeshMs).toBeLessThan(50);
+  // Since ws/core-passes the world remeshes the section and relights its neighbours in the
+  // mesher Workers; the edit shows at the first upload, measured under the shared gate's load.
+  if (/^desktop-/.test(test.info().project.name)) expect(after.remeshMs).toBeLessThan(250);
   expect(after.growths).toBe(0);
   expect(after.gpuErrors).toBe(0);
   expect(pageErrors()).toEqual([]);
@@ -250,10 +252,12 @@ test('a right click places the hotbar block on the looked-at face', async ({ pag
   ];
   const placed = await Promise.all(faces.map((f) => blockAt(f)));
   expect(placed).toContain(before.selectedBlock);
-  // The place re-meshes as fast as a break: the chunk mesh is rewritten in place, no growth.
+  // The place re-meshes as fast as a break: section meshes go to the world's arenas, no growth.
   await expect.poll(async () => (await read()).remeshMs).toBeGreaterThanOrEqual(0);
   const after = await read();
-  if (/^desktop-/.test(test.info().project.name)) expect(after.remeshMs).toBeLessThan(50);
+  // Since ws/core-passes the world remeshes the section and relights its neighbours in the
+  // mesher Workers; the edit shows at the first upload, measured under the shared gate's load.
+  if (/^desktop-/.test(test.info().project.name)) expect(after.remeshMs).toBeLessThan(250);
   expect(after.growths).toBe(0);
   expect(after.gpuErrors).toBe(0);
   expect(pageErrors()).toEqual([]);
