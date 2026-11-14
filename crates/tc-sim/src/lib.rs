@@ -17,7 +17,11 @@
 //!   [`InputQueue`]s, keeps one driver per player, pushes and marks the
 //!   clock, drops clients that don't read, reloads the game's data while
 //!   connections stay open ([`Sim::reload`]) and publishes a
-//!   [`SimStatus`]. [`Sim::spawn`] runs it on its own thread;
+//!   [`SimStatus`]. It keeps players' unlogged bodies ([`Game::Body`]),
+//!   serves live queries ([`Query`]) and entity streams
+//!   ([`Game::entities`]) rerun only when what they read changed, seats
+//!   observers ([`Seat`]) and drops game messages over their rate lane
+//!   ([`Lane`]). [`Sim::spawn`] runs it on its own thread;
 //!   [`SimHandle`] controls it. [`Driver`] runs one in-process, with no
 //!   sockets, for tests and tools.
 //!
@@ -32,21 +36,27 @@ mod changes;
 mod conn;
 mod core;
 mod driver;
+mod entities;
 mod game;
 mod input;
+mod lanes;
+mod query;
 mod reload;
 mod run;
 mod scheduler;
 mod sim;
 mod status;
+mod sync;
 mod wheel;
 
 pub use changes::Changes;
 pub use core::{ApplyError, Core, Replayed, STATE_HASH_VERSION};
 pub use driver::Driver;
-pub use game::{Cx, EventOf, Game, Outbox, PlayerId, To};
+pub use game::{Cx, EventOf, Game, InterestOf, Outbox, PlayerId, Seat, To};
 pub use input::{InputConfig, InputQueue, Taken};
-pub use reload::{RELOAD_POLL, ReloadReply, ReloadReport};
+pub use lanes::Lane;
+pub use query::{Key, Query, QueryCtx, Reads, schema_of};
+pub use reload::{MAX_ROUNDS, RELOAD_POLL, ReloadReply, ReloadReport, SWAP_BEHIND};
 pub use run::{Control, Running, SimHandle};
 pub use scheduler::{EventKey, Scheduler};
 pub use sim::{
@@ -54,6 +64,10 @@ pub use sim::{
     OUTBOUND_BUDGET, SLOW_CLIENT_GRACE, Sim, SimConfig,
 };
 pub use status::{MarkStatus, STATUS_PUBLISH, SimStatus, StatusHandle};
+pub use sync::{
+    HISTORY, MAX_IDLE, MAX_IDLE_PER_CONNECTION, MAX_SUBSCRIPTIONS, RESUME_GRACE, SyncConfig,
+    SyncStats,
+};
 pub use tc_wire::diff::hash_hex;
 pub use wheel::TimingWheel;
 
