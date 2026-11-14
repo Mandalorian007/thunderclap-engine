@@ -147,3 +147,85 @@ describe('SkyPass (ws/core-passes)', () => {
     expect(SKY_PASS_WGSL).toContain('o.clip = vec4f(x, y, fx_depth_far(), 1.0);');
   });
 });
+
+describe('SkyPass as a pass member (ws/fx-fit)', () => {
+  const SHADE = /* wgsl */ `
+fn sky_look(i: SkyInput) -> SkyShade {
+  return sky_shade(i.dir, i.sun_dir, i.sun_color, i.fog);
+}`;
+
+  it('joins an existing pass after its sets: no pass of its own, one direct draw per view', () => {
+    const fake = createFakeDevice();
+    const core = createRenderCore(fake.device as unknown as GPUDevice);
+    const order = [...core.passes.order];
+    const pass = createSkyPass(core, null, { shade: SHADE, member: 'opaque', order: 50 });
+    expect(core.passes.order).toEqual(order);
+    expect(pass.pass.id).toBe('opaque');
+    expect(pass.member).not.toBeNull();
+    expect(pass.member!.pass).toBe('opaque');
+    expect(pass.member!.order).toBe(50);
+    expect(pass.member!.encoding).toBe('direct');
+    expect(core.coreDrawables).toEqual([pass.member]);
+    pass.prepare();
+    draw(fake, core, [createRenderView(), createRenderView()]);
+    const render = fake.passes.filter((p) => p.kind === 'render');
+    // One render pass per view (the opaque pass, the sky in it), nothing else.
+    expect(render.length).toBe(2);
+    for (const p of render) {
+      expect(p.commands.filter((c) => c.op === 'draw')).toEqual([
+        { op: 'draw', vertices: 3, instances: 1, firstInstance: 0 },
+      ]);
+    }
+    expect(pass.draws).toBe(2);
+    // The opaque pass writes depth: the sky tests it without writing.
+    const set = render[0]!.commands.find((c) => c.op === 'setPipeline') as unknown as {
+      pipeline: { desc: GPURenderPipelineDescriptor };
+    };
+    const p = set.pipeline.desc;
+    expect(p.depthStencil!.depthWriteEnabled).toBe(false);
+    expect(p.depthStencil!.depthCompare).toBe('less-equal');
+    pass.destroy();
+    expect(core.coreDrawables).toEqual([]);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('waits for the game group, warming its pipeline meanwhile', () => {
+    const fake = createFakeDevice();
+    const core = createRenderCore(fake.device as unknown as GPUDevice);
+    const pass = createSkyPass(core, null, {
+      shade: `@group(2) @binding(0) var<uniform> tint: vec4f;\n${SHADE}`,
+      member: 'opaque',
+      groupLayout: (device) =>
+        device.createBindGroupLayout({
+          entries: [{ binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: {} }],
+        }),
+    });
+    expect(pass.member!.active).toBe(false);
+    pass.prepare();
+    draw(fake, core, [createRenderView()]);
+    expect(pass.draws).toBe(0);
+    const buf = fake.device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM });
+    pass.gameGroup = fake.device.createBindGroup({
+      layout: pass.gameLayout!,
+      entries: [{ binding: 0, resource: { buffer: buf } }],
+    });
+    expect(pass.member!.active).toBe(true);
+    draw(fake, core, [createRenderView()]);
+    expect(pass.draws).toBe(1);
+    expect(fake.errors).toEqual([]);
+  });
+
+  it('a hook needs no SkyLook; no look and no hook is refused, as is a pass without depth', () => {
+    const fake = createFakeDevice();
+    const core = createRenderCore(fake.device as unknown as GPUDevice);
+    const pass = createSkyPass(core, null, { shade: SHADE });
+    expect(pass.sky.exposure).toBe(1);
+    expect([...pass.sky.zenith]).toEqual([0, 0, 0]);
+    pass.prepare();
+    expect([...pass.horizon]).toEqual([0, 0, 0]);
+    expect(() => createSkyPass(core, null, { id: 'sky2' })).toThrow(/shade/);
+    core.definePass({ id: 'flat', depth: 'none' });
+    expect(() => createSkyPass(core, null, { shade: SHADE, member: 'flat' })).toThrow(/depth/);
+    expect(() => createSkyPass(core, null, { shade: SHADE, member: 'nope' })).toThrow(/nope/);
+  });
+});

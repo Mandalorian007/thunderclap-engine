@@ -1,4 +1,5 @@
 import type { RenderCore } from '../render/core/core';
+import type { CoreDrawable, CoreDrawableEncoder, CoreDrawContext } from '../render/core/drawable';
 import type { CorePass, CorePassContext } from '../render/core/pass-list';
 import { coreDepthCompare } from '../render/core/pass-list';
 import { CORE_TARGET, coreColorTargets } from '../render/core/targets';
@@ -199,6 +200,30 @@ export interface SkyPassOptions {
    * pass's device (again after a restore). Bind with `SkyPass.gameGroup`; no draw until set.
    */
   groupLayout?: (device: GPUDevice) => GPUBindGroupLayout;
+  /**
+   * ws/fx-fit: join this existing core pass as a member (`SkyPass.member`, a core drawable at
+   * `order`) instead of defining a render pass of its own: no extra pass (one tile load and
+   * store fewer on a tiled GPU). The pass must test depth (`'write'` or `'read'`); the sky draws
+   * after the members ordered before it, so give it an order after the opaque ones.
+   * `id` and `after` are then unused.
+   */
+  member?: string;
+  /** With `member`: its order in that pass. Default 1000 (after the pass's own sets). */
+  order?: number;
+}
+
+/** The look a hook-only sky packs (`createSkyPass(core, null, { shade })`): all zero, exposure 1. */
+function skyLookNone(): SkyLook {
+  return {
+    zenith: new Float32Array(3),
+    horizon: new Float32Array(3),
+    ground: new Float32Array(3),
+    sunSize: 0,
+    sunGlow: 0,
+    stars: null,
+    exposure: 1,
+    ambientFloor: 1,
+  };
 }
 
 /**
@@ -215,8 +240,18 @@ export class SkyPass {
   readonly sunColor = new Float32Array([1, 1, 1]);
   /** The fog colour (rgb) and density (w) the horizon hazes towards. Live. */
   readonly fog = new Float32Array(4);
-  /** The pass in the core's list. */
+  /** The pass in the core's list (with `member`, the pass it joined). */
   readonly pass: CorePass;
+  /**
+   * With `SkyPassOptions.member` (ws/fx-fit): the core drawable that draws the sky in that pass
+   * (null for a pass of its own). Its pipeline is warmed by the core while inactive.
+   */
+  readonly member: CoreDrawable | null = null;
+  /**
+   * The dome's colours (`sky`, or with a hook and no look, an all-zero stand-in whose fields
+   * the hook's `sky` still reads). Live.
+   */
+  readonly sky: SkyLook;
   /** With a shade hook: seconds the hook reads as `SkyInput.time`. Live. */
   time = 0;
   /** With a shade hook: the user params (`SkyPassOptions.params` vec4s). Live. */
@@ -258,12 +293,14 @@ export class SkyPass {
   private readonly groupLayoutOf: ((device: GPUDevice) => GPUBindGroupLayout) | null;
 
   constructor(
-    core: RenderCore,
-    readonly sky: SkyLook,
+    private readonly core: RenderCore,
+    sky: SkyLook | null,
     opts: SkyPassOptions = {},
   ) {
     this.label = opts.label ?? 'sky pass';
     this.hook = opts.shade !== undefined;
+    if (!sky && !this.hook) throw new Error('SkyPass: no SkyLook needs a shade hook');
+    this.sky = sky ?? skyLookNone();
     const n = Math.min(Math.max(0, Math.floor(opts.params ?? 0)), SKY_PASS_MAX_PARAMS);
     if (opts.params !== undefined && opts.params > SKY_PASS_MAX_PARAMS) {
       throw new Error(`SkyPass: params ${opts.params} > ${SKY_PASS_MAX_PARAMS}`);
@@ -273,13 +310,47 @@ export class SkyPass {
     this.params = this.hookData ? this.hookData.subarray(4, 4 + 4 * n) : new Float32Array(0);
     this.groupLayoutOf = this.hook ? (opts.groupLayout ?? null) : null;
     this.build(core.device);
-    this.pass = core.definePass({
-      id: opts.id ?? 'sky',
-      after: opts.after ?? 'cutout',
-      depth: 'read',
-      encode: (pass, ctx) => this.encode(pass, ctx),
-    });
+    if (opts.member !== undefined) {
+      const joined = core.passes.get(opts.member);
+      if (!joined) throw new Error(`SkyPass: no pass ${opts.member} to join`);
+      if (joined.depth === 'none') {
+        throw new Error(`SkyPass: pass ${opts.member} has no depth to test the sky against`);
+      }
+      this.pass = joined;
+      this.member = new SkyMember(this, opts.member, opts.order ?? 1000);
+      core.addDrawable(this.member);
+    } else {
+      this.pass = core.definePass({
+        id: opts.id ?? 'sky',
+        after: opts.after ?? 'cutout',
+        depth: 'read',
+        encode: (pass, ctx) => this.encode(pass, ctx),
+      });
+    }
     this.offRestored = core.onDeviceRestored((d) => this.build(d));
+  }
+
+  /** Whether a draw has what it needs (not destroyed; the game's group, when it has one). */
+  get ready(): boolean {
+    return !this.destroyed && !(this.gameLayout && !this.gameGroup);
+  }
+
+  /** As a pass member (`SkyMember`): bind and draw the full-screen triangle into `enc`. */
+  recordMember(enc: CoreDrawableEncoder, ctx: CoreDrawContext, vertices: number): void {
+    enc.setPipeline(
+      this.pipelineOf(
+        ctx.color,
+        ctx.depth,
+        ctx.aux ?? 0,
+        ctx.reversedZ === true,
+        this.core.viewLayout,
+      ),
+    );
+    enc.setBindGroup(0, ctx.viewGroup);
+    enc.setBindGroup(1, this.group);
+    if (this.gameGroup && this.gameLayout) enc.setBindGroup(2, this.gameGroup);
+    enc.draw(vertices);
+    if (vertices > 0) this.draws++;
   }
 
   /** Pack the sky's and this pass's live fields and upload them. Once a frame; no allocation. */
@@ -314,6 +385,7 @@ export class SkyPass {
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
+    if (this.member) this.core.removeDrawable(this.member);
     this.offRestored();
     this.paramsBuffer.destroy();
     this.lightBuffer.destroy();
@@ -323,7 +395,9 @@ export class SkyPass {
   private encode(pass: GPURenderPassEncoder, ctx: CorePassContext): void {
     if (this.destroyed) return;
     if (this.gameLayout && !this.gameGroup) return;
-    pass.setPipeline(this.pipelineFor(ctx));
+    pass.setPipeline(
+      this.pipelineOf(ctx.format, ctx.depthFormat, ctx.aux, ctx.reversedZ === true, ctx.viewLayout),
+    );
     pass.setBindGroup(0, ctx.view);
     pass.setBindGroup(1, this.group);
     if (this.gameGroup && this.gameLayout) pass.setBindGroup(2, this.gameGroup);
@@ -331,25 +405,30 @@ export class SkyPass {
     this.draws++;
   }
 
-  private pipelineFor(ctx: CorePassContext): GPURenderPipeline {
-    let byDepth = this.pipelines.get(ctx.format);
+  private pipelineOf(
+    format: GPUTextureFormat,
+    depthFormat: GPUTextureFormat | undefined,
+    aux: number,
+    reversed: boolean,
+    viewLayout: GPUBindGroupLayout,
+  ): GPURenderPipeline {
+    let byDepth = this.pipelines.get(format);
     if (!byDepth) {
       byDepth = new Map();
-      this.pipelines.set(ctx.format, byDepth);
+      this.pipelines.set(format, byDepth);
     }
-    const key = ctx.depthFormat ?? 'none';
+    const key = depthFormat ?? 'none';
     let byAux = byDepth.get(key);
     if (!byAux) {
       byAux = [];
       byDepth.set(key, byAux);
     }
     // Slots 0..7 by the extra-target mask; 8..15 the same under reversed-Z.
-    const reversed = ctx.reversedZ === true;
-    const slot = ctx.aux + (reversed ? 8 : 0);
+    const slot = aux + (reversed ? 8 : 0);
     const hit = byAux[slot];
     if (hit) return hit;
     if (!this.pipelineLayout) {
-      const layouts = [ctx.viewLayout, this.layout];
+      const layouts = [viewLayout, this.layout];
       if (this.gameLayout) layouts.push(this.gameLayout);
       this.pipelineLayout = this.device.createPipelineLayout({
         label: this.label,
@@ -358,22 +437,18 @@ export class SkyPass {
     }
     const module = reversed ? this.reversedModuleOf() : this.module;
     const p = this.device.createRenderPipeline({
-      label: `${this.label}:${ctx.format}:${key}:${ctx.aux}${reversed ? ':rz' : ''}`,
+      label: `${this.label}:${format}:${key}:${aux}${reversed ? ':rz' : ''}`,
       layout: this.pipelineLayout,
       vertex: { module, entryPoint: 'vs' },
       fragment: {
         module,
         entryPoint: 'fs',
-        targets: coreColorTargets(
-          { format: ctx.format },
-          ctx.aux,
-          CORE_TARGET.emissive | CORE_TARGET.velocity,
-        ),
+        targets: coreColorTargets({ format }, aux, CORE_TARGET.emissive | CORE_TARGET.velocity),
       },
       primitive: { topology: 'triangle-list', cullMode: 'none' },
-      depthStencil: ctx.depthFormat
+      depthStencil: depthFormat
         ? {
-            format: ctx.depthFormat,
+            format: depthFormat,
             depthWriteEnabled: false,
             depthCompare: coreDepthCompare(reversed, true),
           }
@@ -434,7 +509,47 @@ export class SkyPass {
   }
 }
 
-/** `new SkyPass(core, sky, opts)`: the sky drawn per view as a core pass. */
-export function createSkyPass(core: RenderCore, sky: SkyLook, opts?: SkyPassOptions): SkyPass {
+/**
+ * ws/fx-fit: the sky as a member of an existing pass (`SkyPassOptions.member`): drawn directly
+ * (the game's group may be replaced any frame), inactive until it can draw, warmed meanwhile.
+ */
+class SkyMember implements CoreDrawable {
+  readonly label: string;
+  readonly encoding = 'direct' as const;
+  version = 0;
+
+  constructor(
+    private readonly sky: SkyPass,
+    readonly pass: string,
+    readonly order: number,
+  ) {
+    this.label = 'sky';
+  }
+
+  get active(): boolean {
+    return this.sky.ready;
+  }
+
+  record(enc: CoreDrawableEncoder, ctx: CoreDrawContext): number {
+    this.sky.recordMember(enc, ctx, 3);
+    return 1;
+  }
+
+  warm(enc: GPURenderPassEncoder, ctx: CoreDrawContext): number {
+    if (this.sky.gameLayout && !this.sky.gameGroup) return 0;
+    this.sky.recordMember(enc, ctx, 0);
+    return 1;
+  }
+}
+
+/**
+ * `new SkyPass(core, sky, opts)`: the sky drawn per view as a core pass, or (`member`) in one.
+ * `sky` null (ws/fx-fit) needs a `shade` hook: the game's look, no dome.
+ */
+export function createSkyPass(
+  core: RenderCore,
+  sky: SkyLook | null,
+  opts?: SkyPassOptions,
+): SkyPass {
   return new SkyPass(core, sky, opts);
 }
