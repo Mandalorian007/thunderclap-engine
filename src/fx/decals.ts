@@ -1,28 +1,25 @@
 import type { Random } from '../core/random';
 import { blendState } from '../render/blend';
 import type { Camera } from '../render/camera';
+import type { RenderCore } from '../render/core/core';
 import type { Drawable, Frame, ViewInfo } from '../render/frame';
-import { Mesh, VERTEX_LAYOUT_3D, VERTEX3D_FLOATS, VERTEX3D_STRIDE } from '../render/mesh';
+import { Mesh, VERTEX_LAYOUT_3D } from '../render/mesh';
 import type { Renderer } from '../render/renderer';
 import { auxSuffix, ScenePipelineCache } from '../render/scene-pipelines';
 import type { TextureLike } from '../render/texture';
 import { createShaderModule } from '../render/wgsl';
+import {
+  DECAL_INSTANCE_FLOATS,
+  DECAL_PARAMS_FLOATS,
+  DecalsOnCore,
+  INSTANCE_LAYOUT,
+  MULTIPLY_BLEND,
+  POSITION_LAYOUT,
+  unitBox,
+  unitQuad,
+} from './decals-core';
 import { WGSL_DECAL_BOX, WGSL_DECAL_DEPTH_COPY, WGSL_DECAL_QUAD } from './decals-wgsl';
 import { defaultFxRandom } from './random';
-
-/**
- * Floats per decal instance (6 × vec4f = 96 bytes):
- *
- * | floats | WGSL (`DecalVertex`) | content |
- * | --- | --- | --- |
- * | 0..11 | `m0..m2` @location(3..5) | world → local 3×4 matrix, row-major (unit box) |
- * | 12..15 | `uv_rect` @location(6) | atlas rect: u0, v0, du, dv |
- * | 16..19 | `color` @location(7) | linear RGBA multiplier |
- * | 20..23 | `life` @location(8) | age / lifetime (0 when infinite), lifetime, 0, 0 |
- */
-export const DECAL_INSTANCE_FLOATS = 24;
-/** Floats in the decals' params block: `inv_view_proj` (16), `shape` (4), `fade` (4). */
-export const DECAL_PARAMS_FLOATS = 24;
 
 /** How decals mix with what is under them. */
 export type DecalBlend = 'alpha' | 'multiply' | 'additive';
@@ -87,6 +84,8 @@ export interface DecalDesc {
   lifetime?: number;
 }
 
+export { DECAL_INSTANCE_FLOATS, DECAL_PARAMS_FLOATS };
+
 const DEPTH_COPY_FORMAT: GPUTextureFormat = 'depth32float';
 const F = DECAL_INSTANCE_FLOATS;
 
@@ -128,9 +127,18 @@ export class Decals implements Drawable {
   readsDepth: boolean;
   /** The stream `'random'` rotations and tiles draw from. Live. */
   random: Random;
+  /**
+   * The atlas every decal samples. On a render core it is live (re-bound when set: hand the
+   * new atlas over after a device restore); on a `Renderer` it is fixed at construction.
+   */
+  texture: TextureLike;
+  /** On a render core (ws/core-decals): the core drawable that draws the decals (else null). */
+  readonly coreDrawable: DecalsOnCore | null = null;
+  /** Unsubscribes the core's device-restored listener (on a core with `onDeviceRestored`). */
+  private offRestored: (() => void) | null = null;
 
-  private readonly renderer: Renderer;
-  private readonly device: GPUDevice;
+  private readonly renderer!: Renderer;
+  private readonly device!: GPUDevice;
   private readonly columns: number;
   private readonly rows: number;
   private readonly multiply: boolean;
@@ -145,21 +153,22 @@ export class Decals implements Drawable {
   private used = 0;
   private dirty = false;
   private nextId = 1;
+  private instanceRev = 0;
+  private memberRev = 0;
 
-  private readonly params: Float32Array<ArrayBuffer>;
-  private readonly paramsBuffer: GPUBuffer;
-  private readonly instanceBuffer: GPUBuffer;
-  private readonly box: Mesh;
-  private readonly quad: Mesh;
-  private readonly layout: GPUBindGroupLayout;
-  private readonly sampler: GPUSampler;
-  private readonly texture: TextureLike;
-  private readonly dummyDepth: GPUTexture;
-  private group: GPUBindGroup;
-  private readonly boxModule: GPUShaderModule;
-  private readonly quadModule: GPUShaderModule;
-  private readonly pipelineLayout: GPUPipelineLayout;
-  private readonly blend: GPUBlendState | undefined;
+  private readonly params!: Float32Array<ArrayBuffer>;
+  private readonly paramsBuffer!: GPUBuffer;
+  private readonly instanceBuffer!: GPUBuffer;
+  private readonly box!: Mesh;
+  private readonly quad!: Mesh;
+  private readonly layout!: GPUBindGroupLayout;
+  private readonly sampler!: GPUSampler;
+  private readonly dummyDepth!: GPUTexture;
+  private group!: GPUBindGroup;
+  private readonly boxModule!: GPUShaderModule;
+  private readonly quadModule!: GPUShaderModule;
+  private readonly pipelineLayout!: GPUPipelineLayout;
+  private readonly blend!: GPUBlendState | undefined;
   /**
    * Pipelines per mode: depth format (null: none) × the view target's aux key, built on first
    * use from `renderer.sceneTargets` (ws/render-10).
@@ -167,10 +176,10 @@ export class Decals implements Drawable {
   private readonly boxPipelines = new ScenePipelineCache();
   private readonly quadPipelines = new ScenePipelineCache();
   // Depth copy (box mode).
-  private readonly copyLayout: GPUBindGroupLayout;
-  private readonly copyPipeline: GPURenderPipeline;
-  private readonly copyAtt: GPURenderPassDepthStencilAttachment;
-  private readonly copyPass: GPURenderPassDescriptor;
+  private readonly copyLayout!: GPUBindGroupLayout;
+  private readonly copyPipeline!: GPURenderPipeline;
+  private readonly copyAtt!: GPURenderPassDepthStencilAttachment;
+  private readonly copyPass!: GPURenderPassDescriptor;
   private copyTex: GPUTexture | null = null;
   private copySrc: TextureLike | null = null;
   private copySrcGroup: GPUBindGroup | null = null;
@@ -181,12 +190,16 @@ export class Decals implements Drawable {
   /** The renderer's `depthCopy` view the hook group was made for. */
   private hookView: GPUTextureView | null = null;
   private hookGroup: GPUBindGroup | null = null;
-  private readonly noDepthGroup: GPUBindGroup;
+  private readonly noDepthGroup!: GPUBindGroup;
 
-  constructor(renderer: Renderer, opts: DecalsOptions) {
-    const device = renderer.device;
-    this.renderer = renderer;
-    this.device = device;
+  /**
+   * On a `Renderer` (a `Drawable`: `frame.drawable(decals)`), or on a `RenderCore`
+   * (ws/core-decals): added to the core as a drawable in its `'transparent'` pass, drawn in
+   * every view from one bundle a cull group, box decals reading the core's depth (`'auto'` is
+   * `'box'` there; `readsDepth` is ignored).
+   */
+  constructor(renderer: Renderer | RenderCore, opts: DecalsOptions) {
+    const core = 'addDrawable' in renderer ? (renderer as RenderCore) : null; // no value import: fx without the core stays small
     this.capacity = Math.max(1, Math.floor(opts.capacity ?? 256));
     this.mode = opts.mode ?? 'auto';
     this.lifetime = opts.lifetime ?? Number.POSITIVE_INFINITY;
@@ -209,6 +222,20 @@ export class Decals implements Drawable {
     this.ids = new Float64Array(cap);
     this.alive = new Uint8Array(cap);
 
+    if (core) {
+      const mode = this.mode === 'quad' ? 'quad' : 'box';
+      this.activeMode = mode;
+      this.coreDrawable = new DecalsOnCore(core, this, { mode, blend, capacity: cap });
+      core.addDrawable(this.coreDrawable);
+      // Device loss: the core restores, then the decals rebuild and re-upload themselves.
+      const drawable = this.coreDrawable;
+      const hooks = core as { onDeviceRestored?: (fn: () => void) => () => void };
+      this.offRestored = hooks.onDeviceRestored?.(() => drawable.restore()) ?? null;
+      return;
+    }
+    const device = (renderer as Renderer).device;
+    this.renderer = renderer as Renderer;
+    this.device = device;
     this.params = new Float32Array(DECAL_PARAMS_FLOATS);
     this.paramsBuffer = device.createBuffer({
       label: 'decals-params',
@@ -253,7 +280,7 @@ export class Decals implements Drawable {
     this.noDepthGroup = this.makeGroup(this.dummyDepth.createView());
     this.group = this.noDepthGroup;
     this.pipelineLayout = device.createPipelineLayout({
-      bindGroupLayouts: [renderer.globalsLayout, this.layout],
+      bindGroupLayouts: [this.renderer.globalsLayout, this.layout],
     });
     this.blend = blend === 'multiply' ? MULTIPLY_BLEND : blendState(blend);
     this.boxModule = createShaderModule(device, WGSL_DECAL_BOX, 'decals-box');
@@ -314,6 +341,8 @@ export class Decals implements Drawable {
     this.slotOf.set(id, slot);
     this.live++;
     this.writeInstance(slot, d, life);
+    this.instanceRev++;
+    this.memberRev++;
     return id;
   }
 
@@ -334,6 +363,8 @@ export class Decals implements Drawable {
     this.live = 0;
     this.used = 0;
     this.dirty = false;
+    this.instanceRev++;
+    this.memberRev++;
   }
 
   /** Age every decal by `dt` seconds, expire the ones past their lifetime and compact. */
@@ -349,8 +380,11 @@ export class Decals implements Drawable {
         this.slotOf.delete(this.ids[i]!);
         this.live--;
         this.dirty = true;
+      } else if (Number.isFinite(life)) {
+        this.data[i * F + 20] = age / life;
+        this.instanceRev++;
       } else {
-        this.data[i * F + 20] = Number.isFinite(life) ? age / life : 0;
+        this.data[i * F + 20] = 0;
       }
     }
     if (this.dirty) this.compact();
@@ -440,7 +474,35 @@ export class Decals implements Drawable {
     pass.drawIndexed(mesh.indexCount, this.live);
   }
 
+  /** @internal `DecalsOnCoreSource`: the instance floats, live decals first after `flush`. */
+  get instanceData(): Float32Array<ArrayBuffer> {
+    return this.data;
+  }
+
+  /** @internal `DecalsOnCoreSource`: bumped whenever `instanceData` changes. */
+  get instanceRevision(): number {
+    return this.instanceRev;
+  }
+
+  /** @internal `DecalsOnCoreSource`: bumped whenever a decal is added or leaves. */
+  get memberRevision(): number {
+    return this.memberRev;
+  }
+
+  /** @internal `DecalsOnCoreSource`: compact removed decals out (no-op when none). */
+  flush(): void {
+    if (this.dirty) this.compact();
+  }
+
   destroy(): void {
+    const cd = this.coreDrawable;
+    if (cd) {
+      this.offRestored?.();
+      this.offRestored = null;
+      cd.core.removeDrawable(cd);
+      cd.destroy();
+      return;
+    }
     this.paramsBuffer.destroy();
     this.instanceBuffer.destroy();
     this.box.destroy();
@@ -538,6 +600,8 @@ export class Decals implements Drawable {
     this.used = w;
     this.live = w;
     this.dirty = false;
+    this.instanceRev++;
+    this.memberRev++;
   }
 
   /** Full and compact: drop slot 0 (the oldest) and shift the rest down. */
@@ -551,6 +615,8 @@ export class Decals implements Drawable {
     for (let i = 0; i < n - 1; i++) this.slotOf.set(this.ids[i]!, i);
     this.used = n - 1;
     this.live = n - 1;
+    this.instanceRev++;
+    this.memberRev++;
   }
 
   /** Copy the scene depth into our own texture; false when there is none yet. */
@@ -630,71 +696,3 @@ export class Decals implements Drawable {
 }
 
 const IDENTITY = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
-
-/** `dst × lerp(1, src, a)`: the shader outputs the lerp, the blend multiplies. */
-const MULTIPLY_BLEND: GPUBlendState = {
-  color: { srcFactor: 'dst', dstFactor: 'zero', operation: 'add' },
-  alpha: { srcFactor: 'zero', dstFactor: 'one', operation: 'add' },
-};
-
-/** The mesh's position only (the 3D layout's location 0); the rest of the vertex is skipped. */
-const POSITION_LAYOUT: GPUVertexBufferLayout = {
-  arrayStride: VERTEX3D_STRIDE,
-  stepMode: 'vertex',
-  attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }],
-};
-
-const INSTANCE_LAYOUT: GPUVertexBufferLayout = {
-  arrayStride: DECAL_INSTANCE_FLOATS * 4,
-  stepMode: 'instance',
-  attributes: [
-    { shaderLocation: 3, offset: 0, format: 'float32x4' },
-    { shaderLocation: 4, offset: 16, format: 'float32x4' },
-    { shaderLocation: 5, offset: 32, format: 'float32x4' },
-    { shaderLocation: 6, offset: 48, format: 'float32x4' },
-    { shaderLocation: 7, offset: 64, format: 'float32x4' },
-    { shaderLocation: 8, offset: 80, format: 'float32x4' },
-  ],
-};
-
-/** A vertex in the 3D layout: position, normal, uv, white. */
-function vertex(out: Float32Array, i: number, x: number, y: number, z: number): void {
-  const o = i * VERTEX3D_FLOATS;
-  out[o] = x;
-  out[o + 1] = y;
-  out[o + 2] = z;
-  out[o + 3] = 0;
-  out[o + 4] = 0;
-  out[o + 5] = 1;
-  out[o + 6] = x + 0.5;
-  out[o + 7] = 0.5 - y;
-  out[o + 8] = out[o + 9] = out[o + 10] = out[o + 11] = 1;
-}
-
-/** Unit box centred on the origin: 8 vertices, 12 triangles wound outward. */
-function unitBox(): { vertices: Float32Array; indices: Uint16Array } {
-  const vertices = new Float32Array(8 * VERTEX3D_FLOATS);
-  for (let i = 0; i < 8; i++) {
-    vertex(vertices, i, i & 1 ? 0.5 : -0.5, i & 2 ? 0.5 : -0.5, i & 4 ? 0.5 : -0.5);
-  }
-  // biome-ignore format: one face per line
-  const indices = new Uint16Array([
-    4, 5, 7, 4, 7, 6, // +z
-    1, 0, 2, 1, 2, 3, // -z
-    5, 1, 3, 5, 3, 7, // +x
-    0, 4, 6, 0, 6, 2, // -x
-    6, 7, 3, 6, 3, 2, // +y
-    0, 1, 5, 0, 5, 4, // -y
-  ]);
-  return { vertices, indices };
-}
-
-/** Unit quad in the xy plane facing +z. */
-function unitQuad(): { vertices: Float32Array; indices: Uint16Array } {
-  const vertices = new Float32Array(4 * VERTEX3D_FLOATS);
-  vertex(vertices, 0, -0.5, -0.5, 0);
-  vertex(vertices, 1, 0.5, -0.5, 0);
-  vertex(vertices, 2, 0.5, 0.5, 0);
-  vertex(vertices, 3, -0.5, 0.5, 0);
-  return { vertices, indices: new Uint16Array([0, 1, 2, 0, 2, 3]) };
-}
