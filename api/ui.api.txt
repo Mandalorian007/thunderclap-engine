@@ -455,6 +455,7 @@ interface DomOptions {
     timer?: SpecTimer;
     classes?: Readonly<Record<string, string>>;
     touching?: () => boolean;
+    holdTypeAhead?: (e: KeyboardEvent) => boolean;
 }
 
 ## DomPresenter
@@ -1931,7 +1932,7 @@ class SpecListState {
     gen: number;
     how: SpecListMove;
     readonly removed: SpecRow[];
-    constructor(model: SpecModel, id: string, node: number, fields: readonly string[], tall: (count: number) => number);
+    constructor(model: SpecModel, id: string, node: number, fields: readonly string[], tall: (count: number) => number, counted?: boolean);
     row(key: string): SpecRow;
     set(keys: readonly string[], how?: SpecListMove): boolean;
     rowChanged(r: SpecRow): void;
@@ -3126,6 +3127,9 @@ function segmented<T extends string>(label: string, options: ChoiceOption<T>[], 
 ## select
 function select<T extends string>(label: string, options: ChoiceOption<T>[], value: T, onChange: (value: T) => void): Select<T>;
 
+## setSpecStill
+function setSpecStill(on: boolean | null): void;
+
 ## slider
 function slider(label: string, value: number, onInput: (v: number) => void, opts?: SliderOptions): {
     element: HTMLLabelElement;
@@ -3135,6 +3139,9 @@ function slider(label: string, value: number, onInput: (v: number) => void, opts
 
 ## slotsTarget
 function slotsTarget(slots: Slots, onAssign: (index: number, item: CellItem, from: CellRef) => void, opts?: SlotsTargetOptions): SlotsTarget;
+
+## specEaseIn
+function specEaseIn(t: number): number;
 
 ## specEaseOut
 function specEaseOut(t: number): number;

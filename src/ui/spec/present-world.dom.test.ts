@@ -196,6 +196,7 @@ describe('presentWorld', () => {
     const vol = el('vol') as HTMLInputElement;
     vol.value = '4';
     vol.dispatchEvent(new Event('input', { bubbles: true }));
+    vol.dispatchEvent(new Event('change', { bubbles: true }));
     const f = el('say') as HTMLInputElement;
     f.value = 'h';
     f.dispatchEvent(new Event('input', { bubbles: true }));
@@ -225,7 +226,14 @@ describe('presentWorld', () => {
 
     const keep = (e: PanelEvent) => e.type !== 'focus' && e.type !== 'blur' && e.id !== 'vol';
     expect(wEvents.filter(keep).map(say)).toEqual(dEvents.filter(keep).map(say));
-    expect(before.every((e) => e.type === 'change')).toBe(true);
+    // A ray's drag says `input` as it moves, `change` as it lets go; a key says both.
+    expect(before.map((e) => e.type)).toEqual(['input', 'change']);
+    expect(
+      wEvents
+        .filter((e) => e.id === 'vol')
+        .map((e) => e.type)
+        .slice(-2),
+    ).toEqual(['input', 'change']);
     expect(wEvents.filter((e) => e.id === 'vol').at(-1)).toMatchObject({
       type: 'change',
       value: 4,

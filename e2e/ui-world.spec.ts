@@ -161,11 +161,14 @@ test('the same presses through the page and through rays: the same events and mo
     'use::tap:null',
     'mute::toggle:true',
     'tab:two:pick:two',
+    // A range says input as it moves and change once let go (a key is both at once).
+    'vol::input:4',
     'vol::change:4',
     'say::input:h',
     'say::input:hi',
     'say::enter:hi',
-    'send::tap:null',
+    // A submit carries its field's text.
+    'send::tap:hi',
   ]);
 
   await frame.evaluate(() => window.__harnessUiWorld?.reset());

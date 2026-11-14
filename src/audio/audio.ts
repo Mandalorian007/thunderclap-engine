@@ -209,6 +209,12 @@ export interface Voice {
    * `spatial.doppler`, and on every voice the mixer did not start; diagnostics).
    */
   readonly doppler: number;
+  /**
+   * The sound name it was played by (`play('step')`'s `'step'`, a sprite's `'sheet#clip'`), so a
+   * game can find and hush a sound's voices (`audio.stopSound`). Null for a voice played from an
+   * `AudioBuffer`, and for an inert one; a voice another module made may leave it out.
+   */
+  readonly sound?: string | null;
 }
 
 /** `Voice.filter` kinds (the `BiquadFilterNode` types a voice offers). */
@@ -613,6 +619,7 @@ const NULL_VOICE: Voice = {
   sendCount: 0,
   occlusion: 0,
   doppler: 1,
+  sound: null,
 };
 
 /** Internal: set a pooled biquad's type, cutoff and Q (a step, or a ramp from the current values). */
@@ -694,6 +701,8 @@ class VoiceImpl implements Voice, OccludableVoice {
   private dopplerRate = 1;
   /** Internal: rank under the voice budget (`AudioPlayOptions.priority`). */
   priority = 0;
+  /** `Voice.sound`: the name it was played by. */
+  sound: string | null = null;
   /** A `pan` played through the equal-power panner fallback (no `StereoPannerNode`). */
   private panFallback = false;
 
@@ -2515,6 +2524,7 @@ export class AudioEngine {
     defer: boolean,
   ): Voice {
     let schedule: SpriteSchedule | null = null;
+    const name = typeof sound === 'string' ? sound : null;
     if (typeof sound === 'string') {
       const ref = parseSpriteRef(sound);
       if (ref) {
@@ -2556,6 +2566,7 @@ export class AudioEngine {
       schedule,
     );
     voice.priority = priority;
+    voice.sound = name;
     this.active.add(voice);
     if (entry) {
       entry.voices.push(voice);
@@ -2614,6 +2625,24 @@ export class AudioEngine {
     const hit = (b: BusId) => (!o.bus || b === o.bus) && !o.except?.includes(b);
     for (const v of [...this.active]) if (hit(v.bus)) v.stop(f);
     for (const [v, b] of [...this.registered]) if (hit(b)) v.stop(f);
+  }
+
+  /**
+   * Stop every live voice played by the name `sound` (`Voice.sound`: a sound's name, or a sprite's
+   * `'sheet#clip'`; a sheet's name stops all its clips), fading over `fade` seconds. Returns how
+   * many it stopped. A game hushes one sound this way (a door's creak cut when it shuts) without
+   * keeping its voices.
+   */
+  stopSound(sound: string, fade = 0): number {
+    let n = 0;
+    for (const v of this.active) {
+      const s = v.sound;
+      if (s !== null && (s === sound || (s.startsWith(sound) && s[sound.length] === '#'))) {
+        v.stop(fade);
+        n++;
+      }
+    }
+    return n;
   }
 
   /**

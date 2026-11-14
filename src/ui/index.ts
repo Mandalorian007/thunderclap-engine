@@ -343,6 +343,8 @@ export {
   type SpecTimer,
   type SpecTokens,
   type SpecValue,
+  setSpecStill,
+  specEaseIn,
   specEaseOut,
   specGivesWay,
   specScale,

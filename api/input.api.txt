@@ -716,6 +716,10 @@ class Look {
     sprintRim: Required<LookSprintRim> | null;
     deadzone: number;
     radius: number;
+    leash: number;
+    freeDrag: Required<LookFreeDrag> | null;
+    speedWheel: Required<LookSpeedWheel> | null;
+    speed: number;
     touchSensitivity: number | undefined;
     padDeadzone: number;
     keys: LookKeys;
@@ -744,6 +748,7 @@ class Look {
     orbitMove(x: number, y: number): void;
     orbitUp(): void;
     wheel(units: number): void;
+    speedStep(dir: number): void;
     touchDown(id: number, x: number, y: number, inMoveZone: boolean): void;
     touchMove(id: number, x: number, y: number): void;
     get sprint(): boolean;
@@ -789,6 +794,9 @@ interface LookOptions {
     mode?: LookMode;
     gyro?: GyroSource;
     tap?: LookTapOptions;
+    freeDrag?: boolean | LookFreeDrag;
+    speedWheel?: boolean | LookSpeedWheel;
+    speed?: number;
 }
 
 ## LookSprintRim  (type-only)
@@ -806,6 +814,8 @@ interface LookStick {
     x: number;
     y: number;
     sprint?: boolean;
+    knobX?: number;
+    knobY?: number;
 }
 
 ## LookTapListener  (type-only)
@@ -825,6 +835,7 @@ interface LookTouchOptions {
     deadzone?: number;
     radius?: number;
     sensitivity?: number;
+    leash?: number;
 }
 
 ## LookZoomOptions  (type-only)

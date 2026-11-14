@@ -86,6 +86,7 @@ class AudioEngine {
     play(sound: string | AudioBuffer, opts?: AudioPlayOptions): Voice;
     loop(sound: string | AudioBuffer, opts?: AudioPlayOptions): Voice;
     stopAll(fade?: number | StopAllOptions, bus?: BusId): void;
+    stopSound(sound: string, fade?: number): number;
     voices(bus?: BusId): readonly Voice[];
     forEachVoice(bus: BusName | undefined, fn: (voice: Voice, bus: BusName) => void): void;
     forEachVoice(bus: BusId | undefined, fn: (voice: Voice, bus: BusId) => void): void;
@@ -284,6 +285,21 @@ interface Envelope {
     sustain: number;
     release: number;
     curve?: 'linear' | 'exp';
+}
+
+## EnvelopeShape  (type-only)
+interface EnvelopeShape {
+    env: Envelope;
+    gate: number;
+    at?: number;
+    peak?: number;
+}
+
+## EnvelopeWindow  (type-only)
+interface EnvelopeWindow {
+    env: Envelope;
+    gate: number;
+    level: number;
 }
 
 ## FilterSpec  (type-only)
@@ -654,6 +670,7 @@ interface Voice {
     readonly sendCount: number;
     readonly occlusion: number;
     readonly doppler: number;
+    readonly sound?: string | null;
 }
 
 ## VoiceAdapter  (type-only)
@@ -761,6 +778,9 @@ function envelopeSegments(env: Envelope, gate: number, peak?: number): Segment[]
 
 ## envelopeValueAt
 function envelopeValueAt(env: Envelope, t: number, gate: number, peak?: number): number;
+
+## envelopeWindow
+function envelopeWindow(shape: EnvelopeShape, start: number, dur: number): EnvelopeWindow;
 
 ## fillCrackle
 function fillCrackle(out: Float32Array, sampleRate: number, density: number, seed?: number, clickDecay?: number): Float32Array;

@@ -36,6 +36,13 @@ export interface LookTouchOptions {
   radius?: number;
   /** Radians per CSS px a look touch drags. Default: `LookOptions.sensitivity`. */
   sensitivity?: number;
+  /**
+   * The stick's leash, × `radius` (ws/ui-input-fit; a dynamic thumbstick): a thumb dragged farther
+   * than this from the origin pulls the origin after it, one leash behind, so turning back is
+   * immediate. Must exceed `sprintRim.at` to sprint. Default 0: the origin stays where the thumb
+   * landed.
+   */
+  leash?: number;
 }
 
 /**
@@ -142,6 +149,42 @@ export interface LookOptions {
   gyro?: GyroSource;
   /** The tap `onTap` reports (ws/input-5). */
   tap?: LookTapOptions;
+  /**
+   * Drag to look with a free mouse (ws/ui-input-fit): in `'locked'` mode while the pointer is not
+   * locked (a browser without pointer lock, or the game left it free), a primary-button drag past
+   * `slop` turns the view at `sensitivity`, from where the press began. A press that stays within
+   * the slop turns nothing (it stays the game's click or hold, and nothing is claimed). `true`
+   * takes `LookFreeDrag`'s defaults. Default off.
+   */
+  freeDrag?: boolean | LookFreeDrag;
+  /**
+   * A modifier + wheel sets a speed (ws/ui-input-fit; a flying camera's): each notch multiplies
+   * `Look.speed` by `faster` or `slower`, clamped to `min`..`max`, and does not zoom. `true` takes
+   * `LookSpeedWheel`'s defaults. Default off.
+   */
+  speedWheel?: boolean | LookSpeedWheel;
+  /** `Look.speed`'s start. Default 1. */
+  speed?: number;
+}
+
+/** `LookOptions.freeDrag`. */
+export interface LookFreeDrag {
+  /** CSS px a press may wander before it is a drag. Default 5. */
+  slop?: number;
+}
+
+/** `LookOptions.speedWheel`. */
+export interface LookSpeedWheel {
+  /** The modifier held with the wheel. Default `'alt'`. */
+  key?: 'alt' | 'shift' | 'ctrl' | 'meta';
+  /** Multiplier per notch up (away from the player). Default 1.18. */
+  faster?: number;
+  /** Multiplier per notch down. Default 0.85. */
+  slower?: number;
+  /** Default 0.1. */
+  min?: number;
+  /** Default 10. */
+  max?: number;
 }
 
 /** `Look.onTap` thresholds (ws/input-5). */
@@ -172,6 +215,12 @@ export interface LookStick {
   y: number;
   /** Pushed forward past the sprint rim (`LookTouchOptions.sprintRim`; always false without one). */
   sprint?: boolean;
+  /**
+   * The knob's offset from the origin as drawn, CSS px (screen y down), at most `radius` long
+   * (ws/ui-input-fit; 0 while inactive).
+   */
+  knobX?: number;
+  knobY?: number;
 }
 
 /** Longest gap between two ticks the stick integrates over, seconds. */
@@ -221,6 +270,8 @@ export class Look {
     x: 0,
     y: 0,
     sprint: false,
+    knobX: 0,
+    knobY: 0,
   };
   /** True while the attached element holds the pointer lock. */
   locked = false;
@@ -238,6 +289,14 @@ export class Look {
   sprintRim: Required<LookSprintRim> | null;
   deadzone: number;
   radius: number;
+  /** `LookTouchOptions.leash` (× `radius`; 0 is none); may change at any time. */
+  leash: number;
+  /** `LookOptions.freeDrag` in force, or null; may change at any time. */
+  freeDrag: Required<LookFreeDrag> | null;
+  /** `LookOptions.speedWheel` in force, or null; may change at any time. */
+  speedWheel: Required<LookSpeedWheel> | null;
+  /** The speed the speed wheel sets (the game reads it; it may set it too). */
+  speed: number;
   touchSensitivity: number | undefined;
   padDeadzone: number;
   keys: LookKeys;
@@ -295,6 +354,8 @@ export class Look {
   /** The orbit drag in progress (client CSS px), or NaN when none. */
   private orbitX = Number.NaN;
   private orbitY = Number.NaN;
+  /** The drag is a free mouse's press still within `freeDrag.slop` (it turns nothing yet). */
+  private orbitPending = false;
   /**
    * True once a linked `Input` feeds the orbit drag through its own pointer feed (so the drag is
    * recorded and replayed); the DOM listener here then leaves mouse and pen alone. Set by
@@ -326,6 +387,21 @@ export class Look {
       : null;
     this.deadzone = opts.touch?.deadzone ?? 0.12;
     this.radius = opts.touch?.radius ?? 56;
+    this.leash = opts.touch?.leash ?? 0;
+    const fd = opts.freeDrag;
+    this.freeDrag = fd ? { slop: (fd === true ? undefined : fd.slop) ?? 5 } : null;
+    const sw = opts.speedWheel;
+    const so = sw === true ? {} : sw || null;
+    this.speedWheel = so
+      ? {
+          key: so.key ?? 'alt',
+          faster: so.faster ?? 1.18,
+          slower: so.slower ?? 0.85,
+          min: so.min ?? 0.1,
+          max: so.max ?? 10,
+        }
+      : null;
+    this.speed = opts.speed ?? 1;
     this.touchSensitivity = opts.touch?.sensitivity;
     this.padDeadzone = opts.padDeadzone ?? 0.15;
     this.pad = opts.pad;
@@ -385,7 +461,7 @@ export class Look {
 
   /** True while an orbit drag is in progress. */
   get orbiting(): boolean {
-    return !Number.isNaN(this.orbitX);
+    return !Number.isNaN(this.orbitX) && !this.orbitPending;
   }
 
   /** Subscribe to `lockChange`. Returns the unsubscriber. */
@@ -528,11 +604,15 @@ export class Look {
   }
 
   /**
-   * An orbit drag began at client (x, y) (mouse or pen, primary button). Nothing in locked mode.
-   * A linked `Input` feeds these from its own `buttonDown`, `pointerAt` and `buttonUp`.
+   * An orbit drag began at client (x, y) (mouse or pen, primary button). In locked mode, only a
+   * free mouse's drag (`freeDrag`, the pointer not locked) begins. A linked `Input` feeds these
+   * from its own `buttonDown`, `pointerAt` and `buttonUp`.
    */
   orbitDown(x: number, y: number): void {
-    if (this.modeValue !== 'orbit' || this.blocked()) return;
+    if (this.blocked()) return;
+    if (this.modeValue === 'orbit') this.orbitPending = false;
+    else if (this.freeDrag && !this.locked) this.orbitPending = this.freeDrag.slop > 0;
+    else return;
     this.orbitX = x;
     this.orbitY = y;
   }
@@ -540,6 +620,11 @@ export class Look {
   /** The orbit pointer moved to client (x, y): the delta turns the view at `sensitivity`. */
   orbitMove(x: number, y: number): void {
     if (Number.isNaN(this.orbitX)) return;
+    if (this.orbitPending) {
+      // A free press within its slop: still a click; past it, it turns from where it began.
+      if (Math.hypot(x - this.orbitX, y - this.orbitY) <= (this.freeDrag?.slop ?? 0)) return;
+      this.orbitPending = false;
+    }
     if (!this.blocked()) {
       this.mouseX += x - this.orbitX;
       this.mouseY += y - this.orbitY;
@@ -551,12 +636,24 @@ export class Look {
   /** The orbit drag ended. */
   orbitUp(): void {
     this.orbitX = this.orbitY = Number.NaN;
+    this.orbitPending = false;
   }
 
   /** Zoom units (wheel notches) to add to this tick's `zoom`; positive is closer. */
   wheel(units: number): void {
     if (this.blocked() || !this.zoomWheel) return;
     this.zoomAcc += units;
+  }
+
+  /**
+   * One notch of the speed wheel (`speedWheel`): `dir` > 0 is faster, < 0 slower. The DOM
+   * listener feeds it for a wheel with the modifier held; nothing without a `speedWheel`.
+   */
+  speedStep(dir: number): void {
+    const w = this.speedWheel;
+    if (!w || this.blocked() || dir === 0) return;
+    const v = this.speed * (dir > 0 ? w.faster : w.slower);
+    this.speed = Math.max(w.min, Math.min(w.max, v));
   }
 
   /**
@@ -574,6 +671,7 @@ export class Look {
       s.sprint = false;
       s.originX = s.x = x;
       s.originY = s.y = y;
+      s.knobX = s.knobY = 0;
     } else if (this.lookId === null) {
       this.lookId = id;
       this.lookLastX = x;
@@ -591,7 +689,17 @@ export class Look {
       const s = this.stick;
       let ox = x - s.originX;
       let oy = y - s.originY;
-      const d = Math.hypot(ox, oy);
+      let d = Math.hypot(ox, oy);
+      const leash = this.leash * this.radius;
+      if (leash > 0 && d > leash) {
+        // The origin follows: one leash behind the thumb.
+        const k = (d - leash) / d;
+        s.originX += ox * k;
+        s.originY += oy * k;
+        ox -= ox * k;
+        oy -= oy * k;
+        d = leash;
+      }
       if (this.sprintRim) this.rimMoved(oy, d);
       if (d > this.radius && d > 0) {
         ox *= this.radius / d;
@@ -599,6 +707,8 @@ export class Look {
       }
       s.x = s.originX + ox;
       s.y = s.originY + oy;
+      s.knobX = ox;
+      s.knobY = oy;
     } else if (id === this.lookId) {
       if (this.pinchId === null) {
         this.touchX += x - this.lookLastX;
@@ -642,6 +752,7 @@ export class Look {
       this.moveId = null;
       this.stick.active = false;
       this.stick.sprint = false;
+      this.stick.knobX = this.stick.knobY = 0;
     } else if (id === this.lookId) {
       // The pinch finger, if any, carries on as the look drag.
       this.lookId = this.pinchId;
@@ -674,6 +785,7 @@ export class Look {
     this.pinchId = null;
     this.stick.active = false;
     this.stick.sprint = false;
+    this.stick.knobX = this.stick.knobY = 0;
   }
 
   // ---------------------------------------------------------------- pointer lock
@@ -752,6 +864,21 @@ export class Look {
       if (doc.pointerLockElement === target) this.mouseMove(e.movementX, e.movementY);
     };
     const onWheel = (e: WheelEvent) => {
+      const sw = this.speedWheel;
+      if (sw && e.deltaY !== 0) {
+        const held =
+          sw.key === 'alt'
+            ? e.altKey
+            : sw.key === 'shift'
+              ? e.shiftKey
+              : sw.key === 'ctrl'
+                ? e.ctrlKey
+                : e.metaKey;
+        if (held) {
+          this.speedStep(e.deltaY < 0 ? 1 : -1);
+          return;
+        }
+      }
       // Wheel up (deltaY < 0) is closer. deltaMode 0 = px (stepPx a notch), 1 = lines (3 a
       // notch), 2 = pages (1 a notch).
       const units =
@@ -803,6 +930,9 @@ export class Look {
             if (!this.orbitFromInput) this.orbitDown(p.clientX, p.clientY);
           }
         } else if (this.lockOnFirstClick && !this.locked) void this.request();
+        else if (this.freeDrag && !this.locked && p.button === 0 && !this.orbitFromInput) {
+          this.orbitDown(p.clientX, p.clientY);
+        }
         return;
       }
       let inZone = false;
