@@ -1,5 +1,6 @@
 export { aoProjectedRadius } from './ao';
 export { type Ease, easeIn, easeInOut, easeLinear, easeOut, PostBlender } from './blend';
+export { CorePost, type CorePostOptions, createCorePost } from './core-post';
 export {
   adaptExposure,
   EXPOSURE_BINS,

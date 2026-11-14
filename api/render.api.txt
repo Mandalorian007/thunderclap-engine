@@ -232,6 +232,7 @@ interface CorePass {
     readonly depth: PassDepth;
     readonly when: (() => boolean) | null;
     readonly encode: ((pass: GPURenderPassEncoder, ctx: CorePassContext) => void) | null;
+    readonly resolve: ((encoder: GPUCommandEncoder, ctx: CoreResolveContext) => void) | null;
 }
 
 ## CorePassContext  (type-only)
@@ -242,6 +243,32 @@ interface CorePassContext {
     format: GPUTextureFormat;
     depthFormat: GPUTextureFormat | undefined;
     depthReadOnly: boolean;
+}
+
+## CoreResolveContext  (type-only)
+interface CoreResolveContext {
+    viewIndex: number;
+    view: RenderView;
+    color: GPUTextureView;
+    colorTexture: GPUTexture | undefined;
+    format: GPUTextureFormat;
+    width: number;
+    height: number;
+    viewport: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    } | undefined;
+    depth: GPUTextureView | null;
+    output: GPUTextureView;
+    outputFormat: GPUTextureFormat;
+    outputViewport: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    } | undefined;
 }
 
 ## CoreShadowTarget  (type-only)
@@ -291,6 +318,14 @@ interface CoreTarget {
     phase?: 'all' | 'opaque' | 'blend';
     texture?: GPUTexture;
     timestamps?: (label: string) => GPURenderPassTimestampWrites | undefined;
+    output?: GPUTextureView;
+    outputFormat?: GPUTextureFormat;
+    outputViewport?: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    };
 }
 
 ## CoreViewExtras
@@ -986,6 +1021,7 @@ interface PassDesc {
     depth?: PassDepth;
     when?: () => boolean;
     encode?: (pass: GPURenderPassEncoder, ctx: CorePassContext) => void;
+    resolve?: (encoder: GPUCommandEncoder, ctx: CoreResolveContext) => void;
 }
 
 ## PassList
@@ -1133,6 +1169,7 @@ class RenderCore {
     constructor(device: GPUDevice, opts?: RenderCoreOptions);
     createArena(desc: ArenaDesc): Arena;
     restore(device: GPUDevice): void;
+    get hasResolve(): boolean;
     get castsShadow(): boolean;
     get hasWork(): boolean;
     onDeviceRestored(fn: (device: GPUDevice) => void): () => void;
@@ -1259,6 +1296,8 @@ class Renderer implements FrameSink {
     beginFrame(time: number, dt: number): Frame;
     render(frame: Frame, camera: Camera, target?: SceneTarget): void;
     get coreShadow(): CoreSunShadow;
+    coreSunFor(core: RenderCore, center: ArrayLike<number>): RenderView | null;
+    drawCoreSun(enc: GPUCommandEncoder, core: RenderCore, viewIndex: number): void;
     resolve(target: SceneTarget, out: GPUTextureView, viewport?: SceneTargetViewport): void;
     endFrame(opts?: {
         present?: boolean;

@@ -1369,6 +1369,17 @@ of their own and call `core_sun_shadow(world)` from `coreSunShadowWgsl(group)`: 
 as `engine_shadow`, its matrix moved to the core's frame origin. One map, as the renderer's: a
 cascade per `CullGroup` view (`planes: 'each'`) is what `drawShadow`'s view index is for.
 
+**Resolve passes (ws/core-passes).** A pass with `resolve(encoder, ctx)` instead of `encode` is
+post-processing in the pass list: per view, when the `CoreTarget` has an `output`, the core
+hands it the colour drawn so far, the view's depth (the core's own is then made sampleable),
+the view's matrices and where to write (`output`, `outputFormat`, `outputViewport`), and it
+encodes on the command encoder between render passes. Passes after it draw into the output,
+without depth (`overlay`, UI). Without an output it is skipped and the target is drawn as before.
+`createCorePost` (`./post`) is the one the engine ships. Outside a `Renderer` frame (a headset's
+eyes on the core alone) `renderer.coreSunFor(core, center)` places the sun's map and returns its
+view to prepare as one more cull group, and `renderer.drawCoreSun(encoder, core, viewIndex)`
+draws the casters into it; `ctx.xr.setCore` does both.
+
 ### Drawables (ws/core-effects)
 
 Anything that is not a draw set joins the core as a `CoreDrawable` (`core.addDrawable(d)`,

@@ -1541,6 +1541,37 @@ export class Renderer implements FrameSink {
     return this.coreShadowNow;
   }
 
+  /**
+   * The sun's shadow for a core drawn outside `render` (ws/core-passes): an XR frame's eyes on
+   * the core alone. After `beginFrame`, places the sun's map about `center` from the frame's sun
+   * and returns the sun's view, for the caller to prepare as a cull group of its own beside its
+   * views; null (and `coreShadow` off) when the sun casts no shadow or `core` has no casters.
+   * After `core.prepare`, `drawCoreSun` draws the casters into the map.
+   */
+  coreSunFor(core: RenderCore, center: ArrayLike<number>): RenderView | null {
+    const cfg = this.frame.lights.sun.shadow;
+    if (!cfg || !core.castsShadow) {
+      this.coreShadowNow?.write(false, core.origin);
+      return null;
+    }
+    const size = cfg.size ?? DEFAULT_SHADOW_SIZE;
+    this.ensureShadowMap(size);
+    this.shadow.place(center, this.frame.lights.sun.direction, cfg, size);
+    return setViewFromCamera(this.coreSunView, this.shadow.sunCamera);
+  }
+
+  /**
+   * `coreSunFor`'s second half: `core`'s casters into the sun's map (cleared) through the view
+   * prepared at `viewIndex`, and `coreShadow` on, about the core's origin.
+   */
+  drawCoreSun(enc: GPUCommandEncoder, core: RenderCore, viewIndex: number): void {
+    const t = this.coreShadowTarget;
+    t.view = this.shadow.view;
+    t.clear = true;
+    core.drawShadow(enc, viewIndex, t);
+    this.coreShadow.write(true, core.origin);
+  }
+
   /** The core to draw into this view, prepared, its target set; null when it has nothing. */
   private coreFor(
     camera: Camera,
@@ -3361,14 +3392,7 @@ export class Renderer implements FrameSink {
     if (n === 0 && !coreCasts) return null;
     const shadow = this.shadow;
     const size = cfg.size ?? DEFAULT_SHADOW_SIZE;
-    if (shadow.ensure(size)) {
-      // The map is new: every view's bind group must point at it.
-      for (let i = 0; i < this.views.length; i++) {
-        const v = this.views[i]!;
-        v.group = this.globalsGroup(v.buffer, i, false);
-      }
-      this.globalsBindGroup = this.views[0]!.group;
-    }
+    this.ensureShadowMap(size);
     const slot = this.shadowSlot(this.shadowCount++);
     const g = this.globalsData;
     g[0] = this.logicalWidth;
@@ -3475,6 +3499,16 @@ export class Renderer implements FrameSink {
     this.stats.shadowDraws += drawn;
     if (coreCasts) this.encodeCoreShadow(enc, core!, false);
     return shadow.uniforms;
+  }
+
+  /** Make the sun's map `size` texels; when it is new, every view's bind group points at it. */
+  private ensureShadowMap(size: number): void {
+    if (!this.shadow.ensure(size)) return;
+    for (let i = 0; i < this.views.length; i++) {
+      const v = this.views[i]!;
+      v.group = this.globalsGroup(v.buffer, i, false);
+    }
+    this.globalsBindGroup = this.views[0]!.group;
   }
 
   /** The core's casters into the sun's map, through the sun's cull group (view 1). */

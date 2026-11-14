@@ -21,6 +21,7 @@ import { PostStack } from '@thunderclap-engine/engine/post';
 import {
   atlasFrames,
   Camera,
+  coreSunShadowWgsl,
   createFlipbook,
   createRenderCore,
   createStandardMaterial,
@@ -623,12 +624,14 @@ const BLOCKS_FRAGMENT = /* wgsl */ `
 @group(1) @binding(1) var blocks: texture_2d_array<f32>;
 struct Sun { direction: vec4f, color: vec4f, ambient: vec4f };
 @group(1) @binding(2) var<uniform> sun: Sun;
+${coreSunShadowWgsl(2)}
 
 @fragment fn fs(in: VoxelVarying) -> @location(0) vec4f {
   let v = decode_voxel_vertex(in.w0, in.w1);
   let albedo = textureSample(blocks, blockSampler, fract(in.uv), max(i32(v.id) - 1, 0)).rgb;
   let n = in.normal;
-  let lit = sun.ambient.rgb * (0.5 + 0.5 * n.y) + sun.color.rgb * max(dot(n, -sun.direction.xyz), 0.0);
+  let direct = max(dot(n, -sun.direction.xyz), 0.0) * core_sun_shadow(in.world);
+  let lit = sun.ambient.rgb * (0.5 + 0.5 * n.y) + sun.color.rgb * direct;
   return vec4f(albedo * lit * mix(0.5, 1.0, in.light.x), 1.0);
 }`;
 
@@ -660,6 +663,8 @@ function blockLayers(): PixelSource[] {
  * the `voxel` module at its best settings today (`createVoxelWorld` fed by `feedVoxelGrid`:
  * greedy section meshing with baked light off the main thread on the page, GPU-culled core sets
  * drawn in the renderer's frame through `renderer.core`), the camera flying a circle over it.
+ * Since ws/core-passes the sun casts a shadow: the terrain draws into the sun's map as core
+ * casters through the sun's cull group (`renderer.coreShadow`, one more pass and cull dispatch).
  */
 function refVoxel(
   renderer: Renderer,
@@ -721,10 +726,16 @@ function refVoxel(
       { binding: 2, resource: { buffer: sun } },
     ],
   });
+  const sunShadow = renderer.coreShadow;
+  let sunVersion = sunShadow.version;
+  const groups = () => [
+    { layout, group },
+    { layout: sunShadow.layout, group: sunShadow.group },
+  ];
   const world = createVoxelWorld(core, {
     format: REF_VOXEL_FORMAT,
     ...(workers ? { workers: workers() } : {}),
-    materials: { opaque: { fragment: BLOCKS_FRAGMENT, bindGroups: [{ layout, group }] } },
+    materials: { opaque: { fragment: BLOCKS_FRAGMENT, bindGroups: groups() } },
     radius: size,
     label: 'ref-voxel',
   });
@@ -733,6 +744,7 @@ function refVoxel(
   lights.ambient.set([0.28, 0.3, 0.34]);
   lights.sun.direction = [-0.45, -1.0, -0.55];
   lights.sun.color = [0.85, 0.82, 0.74];
+  lights.sun.shadow = { extent: 48, size: 2048 };
   const eye = new Float32Array(3);
   const target = new Float32Array(3);
   const centre = extent / 2;
@@ -762,6 +774,11 @@ function refVoxel(
       const frame = renderer.beginFrame(t, REF_DT);
       frame.clear(0.5, 0.68, 0.9);
       frame.lights = lights;
+      // A new shadow map (its first frame) needs the terrain's groups re-made.
+      if (sunShadow.version !== sunVersion) {
+        sunVersion = sunShadow.version;
+        world.sets.opaque.setBindGroups(groups());
+      }
       mark('view');
       renderer.render(frame, camera);
       mark('present');
