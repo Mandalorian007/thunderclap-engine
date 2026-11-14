@@ -56,6 +56,7 @@ interface GovernorChange {
     readonly shed: number;
     readonly knob: string;
     readonly dir: 'down' | 'up';
+    readonly cause?: 'gpu' | 'cpu';
 }
 
 ## GovernorOptions  (type-only)
@@ -64,6 +65,7 @@ interface GovernorOptions {
     rungs?: readonly Knob[];
     windowMs?: number;
     downShare?: number;
+    cpuMisses?: boolean;
     upAfterMs?: number;
     upShare?: number;
     minGapMs?: number;

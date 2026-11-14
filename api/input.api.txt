@@ -141,7 +141,7 @@ interface CycleIntent<A extends string> {
     readonly kind: 'cycle';
     readonly next?: readonly A[];
     readonly prev?: readonly A[];
-    readonly wheel?: boolean;
+    readonly wheel?: boolean | WheelGate;
 }
 
 ## DEFAULT_DOUBLE_TAP_MS
@@ -399,9 +399,9 @@ type HitTester<T = unknown> = (ray: Ray) => PickHit<T> | null;
 
 ## HoldHandler  (type-only)
 interface HoldHandler {
-    start(aim: IntentAim, pressedAt: number): void;
-    aim?(aim: IntentAim): void;
-    end(): void;
+    start(aim: IntentAim, pressedAt: number, pointer?: number | null): void;
+    aim?(aim: IntentAim, pointer?: number | null): void;
+    end(pointer?: number | null): void;
 }
 
 ## HoldIntent  (type-only)
@@ -410,6 +410,7 @@ interface HoldIntent<A extends string> {
     readonly actions?: readonly A[];
     readonly touch?: StillHoldSpec | false;
     readonly stickSide?: StickSideHoldSpec<IntentAim>;
+    readonly mouse?: MouseStillSpec | false;
 }
 
 ## Input
@@ -620,13 +621,15 @@ interface InputTickRun {
 type IntentAim = AimRay | null;
 
 ## IntentDecl  (type-only)
-type IntentDecl<A extends string> = PressIntent<A> | ReleaseIntent<A> | TapIntent<A> | HoldIntent<A> | AimIntent | CycleIntent<A> | SelectIntent<A>;
+type IntentDecl<A extends string> = PressIntent<A> | ReleaseIntent<A> | TapIntent<A> | HoldIntent<A> | AimIntent | CycleIntent<A> | SelectIntent<A> | WheelIntent;
 
 ## IntentHandler  (type-only)
 type IntentHandler<D> = D extends {
     kind: 'hold';
 } ? HoldHandler : D extends {
     kind: 'cycle';
+} | {
+    kind: 'wheel';
 } ? (delta: number) => void : D extends {
     kind: 'select';
 } ? (n: number) => void : D extends {
@@ -644,6 +647,14 @@ type IntentSink<S> = {
 ## IntentSpec  (type-only)
 type IntentSpec<A extends string> = Readonly<Record<string, IntentDecl<A>>>;
 
+## IntentTiming  (type-only)
+interface IntentTiming {
+    touch?: StillHoldOptions;
+    stickSide?: StillHoldOptions;
+    mouse?: StillHoldOptions;
+    stickZoneShare?: number;
+}
+
 ## Intents  (type-only)
 interface Intents {
     readonly aim: IntentAim;
@@ -654,6 +665,11 @@ interface Intents {
     touchMove(id: number, clientX: number, clientY: number, time?: number): void;
     touchUp(id: number, clientX?: number, clientY?: number, time?: number): void;
     touchCancel(id: number): void;
+    mouseDown(button: number, clientX: number, clientY: number, time?: number, id?: number): void;
+    mouseMove(clientX: number, clientY: number, time?: number): void;
+    mouseUp(clientX?: number, clientY?: number, time?: number): void;
+    wheel(deltaY: number, deltaMode?: number, modifiers?: WheelModifiers, time?: number): void;
+    setTiming(timing: IntentTiming): void;
     cancelAll(): void;
     attach(dispatcher: PointerDispatcher): void;
     detach(): void;
@@ -668,6 +684,7 @@ interface IntentsOptions<A extends string> {
     centred?: () => boolean;
     toScreen?: PointerTransform;
     stickZone?: 'left' | 'right' | 'none';
+    stickZoneShare?: number;
     now?: () => number;
 }
 
@@ -695,6 +712,8 @@ class Look {
     padSensitivity: number;
     invertY: boolean;
     moveZone: MoveZone;
+    moveZoneShare: number;
+    sprintRim: Required<LookSprintRim> | null;
     deadzone: number;
     radius: number;
     touchSensitivity: number | undefined;
@@ -727,6 +746,7 @@ class Look {
     wheel(units: number): void;
     touchDown(id: number, x: number, y: number, inMoveZone: boolean): void;
     touchMove(id: number, x: number, y: number): void;
+    get sprint(): boolean;
     touchUp(id: number): void;
     cancelAll(): void;
     request(): Promise<boolean>;
@@ -771,6 +791,13 @@ interface LookOptions {
     tap?: LookTapOptions;
 }
 
+## LookSprintRim  (type-only)
+interface LookSprintRim {
+    at?: number;
+    coneDeg?: number;
+    keep?: number;
+}
+
 ## LookStick  (type-only)
 interface LookStick {
     active: boolean;
@@ -778,6 +805,7 @@ interface LookStick {
     originY: number;
     x: number;
     y: number;
+    sprint?: boolean;
 }
 
 ## LookTapListener  (type-only)
@@ -792,6 +820,8 @@ interface LookTapOptions {
 ## LookTouchOptions  (type-only)
 interface LookTouchOptions {
     moveZone?: MoveZone;
+    moveZoneShare?: number;
+    sprintRim?: boolean | LookSprintRim;
     deadzone?: number;
     radius?: number;
     sensitivity?: number;
@@ -814,6 +844,13 @@ const MAGNIFY_DEFAULTS: {
     readonly size: 128;
     readonly zoom: 2.5;
     readonly lift: 56;
+};
+
+## MOUSE_STILL_DEFAULTS
+const MOUSE_STILL_DEFAULTS: {
+    readonly button: 0;
+    readonly tolerancePx: 5;
+    readonly ms: 250;
 };
 
 ## MagnifyOptions  (type-only)
@@ -858,6 +895,19 @@ interface MeshTesterOptions {
     cullBack?: boolean;
     stride?: number;
     offset?: number;
+}
+
+## MouseStillOptions  (type-only)
+interface MouseStillOptions extends StillHoldOptions {
+    button?: number;
+}
+
+## MouseStillSpec  (type-only)
+interface MouseStillSpec {
+    readonly type: 'mouse';
+    readonly button: number;
+    readonly tolerancePx: number;
+    readonly ms: number;
 }
 
 ## MoveZone  (type-only)
@@ -947,6 +997,7 @@ interface PointerConsumer {
     pointerCancel?(p: PointerRecord): void;
     pointerLeave?(p: PointerRecord): void;
     cancelAll?(): void;
+    pointerButton?(p: PointerRecord, down: boolean): void;
 }
 
 ## PointerDevice  (type-only)
@@ -1299,6 +1350,7 @@ interface TapIntent<A extends string> {
     readonly kind: 'tap';
     readonly actions?: readonly A[];
     readonly touch?: StillHoldSpec | false;
+    readonly mouse?: MouseStillSpec | false;
 }
 
 ## TickClock  (type-only)
@@ -1362,6 +1414,28 @@ interface TriggerOptions {
 
 ## Vec3  (type-only)
 type Vec3 = [number, number, number];
+
+## WheelGate  (type-only)
+interface WheelGate {
+    readonly modifiers?: WheelModifiers;
+    readonly whileRay?: boolean;
+    readonly when?: () => boolean;
+}
+
+## WheelIntent  (type-only)
+interface WheelIntent extends WheelGate {
+    readonly kind: 'wheel';
+    readonly steps?: boolean;
+    readonly pixelsPerStep?: number;
+}
+
+## WheelModifiers  (type-only)
+interface WheelModifiers {
+    readonly alt?: boolean;
+    readonly ctrl?: boolean;
+    readonly shift?: boolean;
+    readonly meta?: boolean;
+}
 
 ## WheelSteps
 class WheelSteps {
@@ -1488,6 +1562,9 @@ function keyLabel(code: string): string;
 
 ## meshTester
 function meshTester<T = null>(transform: RayTransform, positions: Float32Array, indices: Uint16Array | Uint32Array | null, target?: T, opts?: MeshTesterOptions): HitTester<T>;
+
+## mouseStill
+function mouseStill(opts?: MouseStillOptions): MouseStillSpec;
 
 ## obbTester
 function obbTester<T = null>(transform: RayTransform, halfExtents: readonly [number, number, number], target?: T): HitTester<T>;
