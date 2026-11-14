@@ -121,3 +121,58 @@ describe('Surface fit: cover', () => {
     s.destroy();
   });
 });
+
+describe('Surface fit: fill (ws/kit-fit)', () => {
+  function withDpr(dpr: number): () => void {
+    const prev = window.devicePixelRatio;
+    Object.defineProperty(window, 'devicePixelRatio', { value: dpr, configurable: true });
+    return () =>
+      Object.defineProperty(window, 'devicePixelRatio', { value: prev, configurable: true });
+  }
+
+  it('is the whole container, no bars, the logical size its CSS size, the DPR capped', () => {
+    const restore = withDpr(3);
+    const s = mountSurface(root(1000, 700), { fit: 'fill' });
+    expect(s.rect).toEqual({ x: 0, y: 0, width: 1000, height: 700, scale: 1 });
+    expect(s.logicalWidth).toBe(1000);
+    expect(s.logicalHeight).toBe(700);
+    expect(s.visibleRect).toEqual({ x: 0, y: 0, width: 1000, height: 700 });
+    // The DPR cap (2) and no pixel cap: 2000×1400 is past the default 2560×1440 budget.
+    expect(s.backbuffer).toEqual({ width: 2000, height: 1400, pixelRatio: 2 });
+    expect(s.canvas.width).toBe(2000);
+    expect(s.canvas.style.width).toBe('1000px');
+    // fitRect still measures the design (device-mode decisions read it alike).
+    expect(s.fitRect.width).toBeLessThanOrEqual(1000);
+    expect(s.containsLogical({ x: 999, y: 699 })).toBe(true);
+    s.destroy();
+    restore();
+  });
+
+  it('maps client points 1:1, follows a frame and a given pixel cap', () => {
+    const restore = withDpr(2);
+    const s = mountSurface(root(800, 600), { fit: 'fill', maxPixels: 800 * 600 });
+    expect(s.backbuffer.width).toBe(800);
+    expect(s.clientToLogical(120, 45)).toEqual({ x: 120, y: 45 });
+    const sizes: number[][] = [];
+    s.onResize(({ rect }) => sizes.push([rect.x, rect.y, rect.width, rect.height]));
+    s.setFrame({ x: 0, y: 50, width: 800, height: 500 });
+    expect(s.rect).toEqual({ x: 0, y: 50, width: 800, height: 500, scale: 1 });
+    expect(s.logicalHeight).toBe(500);
+    expect(sizes.at(-1)).toEqual([0, 50, 800, 500]);
+    s.destroy();
+    restore();
+  });
+
+  it('setFit switches to fill and back to the design size', () => {
+    const s = mountSurface(root(844, 340), { logicalWidth: 1280, logicalHeight: 720 });
+    expect(s.logicalWidth).toBe(1280);
+    expect(s.rect.x).toBeGreaterThan(0);
+    s.setFit!('fill');
+    expect(s.logicalWidth).toBe(844);
+    expect(s.rect).toEqual({ x: 0, y: 0, width: 844, height: 340, scale: 1 });
+    s.setFit!('contain');
+    expect(s.logicalWidth).toBe(1280);
+    expect(s.rect.x).toBeGreaterThan(0);
+    s.destroy();
+  });
+});

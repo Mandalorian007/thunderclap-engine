@@ -6,6 +6,7 @@
 
 import { DetachedSurface } from '../core/detached-surface';
 import {
+  type BootGpuOptions,
   type BootResult,
   blockBrowserZoom,
   boot,
@@ -39,6 +40,8 @@ export interface KitBootOptions {
   blockBrowserZoom?: boolean;
   /** Dev aid: show the unsupported screen as if WebGPU were missing. */
   forceUnsupported?: boolean;
+  /** What the boot asks the GPU for (`BootOptions.gpuOptions`). Ignored with `gpu`. */
+  gpuOptions?: BootGpuOptions;
 }
 
 /** What `bootKit` resolves to: the surface, the GPU and the device-loss subscription. */
@@ -73,6 +76,7 @@ export async function bootKit(opts: KitBootOptions): Promise<KitBoot | null> {
         ...surfaceOpts,
         title: opts.title,
         forceUnsupported: opts.forceUnsupported,
+        gpuOptions: opts.gpuOptions,
       });
   return booted.ok ? booted : null;
 }

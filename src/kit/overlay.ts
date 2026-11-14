@@ -5,7 +5,7 @@
 
 import type { Host } from '../host';
 import type { Surface } from '../platform';
-import type { Renderer } from '../render';
+import type { Camera, Renderer } from '../render';
 import {
   applyTextScale,
   createOverlay,
@@ -32,8 +32,13 @@ export interface KitOverlayOptions {
 export interface KitOverlayDeps extends KitOverlayOptions {
   /** The surface the overlay mounts over (its `root`; focus returns to its `canvas`). */
   surface: Surface;
-  /** `ui.anchors()` and `ui.floats()` without a camera follow `renderer.camera`. */
-  renderer: Renderer;
+  /**
+   * `ui.anchors()` and `ui.floats()` without a camera follow `renderer.camera` (or `camera`).
+   * Needs one of the two.
+   */
+  renderer?: Renderer;
+  /** The camera anchors follow instead of `renderer.camera` (a game drawing on its own). */
+  camera?: () => Camera;
   design: { readonly width: number; readonly height: number };
   /** A host with `safeArea` pads the layout's regions by it. */
   host?: Host;
@@ -42,6 +47,8 @@ export interface KitOverlayDeps extends KitOverlayOptions {
 /** The overlay, mounted on `surface.root`. Needs a DOM. */
 export function createKitOverlay(deps: KitOverlayDeps): Overlay {
   const { surface, renderer } = deps;
+  const camera = deps.camera ?? (renderer ? () => renderer.camera : null);
+  if (!camera) throw new Error('createKitOverlay: needs `renderer` or `camera`');
   deps.styles?.(surface.root.ownerDocument);
   // When a panel closes and its opener can't take focus back, focus returns to the canvas so
   // keys keep reaching the game.
@@ -52,7 +59,7 @@ export function createKitOverlay(deps: KitOverlayDeps): Overlay {
     layout: deps.layout,
     focusHome: () => surface.canvas,
     theme: deps.theme,
-    camera: () => renderer.camera,
+    camera,
   });
   if (deps.textScale !== undefined && deps.textScale !== 1) {
     applyTextScale(overlay.root, deps.textScale, (t) => overlay.setTheme(t));
@@ -79,7 +86,7 @@ export function withOverlay(opts: KitOverlayOptions = {}): KitService<KitOverlay
           ui: createKitOverlay({
             ...opts,
             surface: core.surface,
-            renderer: core.renderer,
+            ...(core.camera ? { camera: core.camera } : { renderer: core.renderer }),
             design: core.design,
             host: core.host,
           }),

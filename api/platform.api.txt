@@ -9,11 +9,15 @@ interface BackbufferSize {
     pixelRatio: number;
 }
 
+## BootGpuOptions  (type-only)
+type BootGpuOptions = Omit<GpuInitOptions, 'onLost'>;
+
 ## BootOptions  (type-only)
 interface BootOptions extends SurfaceOptions {
     title?: string;
     onDeviceLost?: (info: GPUDeviceLostInfo) => void;
     forceUnsupported?: boolean;
+    gpuOptions?: BootGpuOptions;
 }
 
 ## BootResult  (type-only)
@@ -46,6 +50,9 @@ interface CropInfo {
     readonly bottom: number;
 }
 
+## DRAW_FEATURES_ALL
+const DRAW_FEATURES_ALL: Readonly<Required<DrawFeatures>>;
+
 ## DeviceMode  (type-only)
 interface DeviceMode {
     readonly phone: boolean;
@@ -75,6 +82,12 @@ interface DeviceTraits {
     handheld: boolean;
 }
 
+## DrawFeatures  (type-only)
+interface DrawFeatures {
+    indirectFirstInstance?: boolean;
+    multiDrawIndirect?: boolean;
+}
+
 ## EmbedContext  (type-only)
 type EmbedContext = 'top' | 'same-origin-frame' | 'cross-origin-frame';
 
@@ -96,7 +109,8 @@ interface GpuInitOptions {
     onLost?: (info: GPUDeviceLostInfo) => void;
     timestamps?: boolean;
     compression?: boolean;
-    drawFeatures?: boolean;
+    drawFeatures?: boolean | DrawFeatures;
+    xrCompatible?: boolean;
 }
 
 ## GpuInitResult  (type-only)
@@ -192,7 +206,7 @@ const Surface: {
 };
 
 ## SurfaceFit  (type-only)
-type SurfaceFit = 'contain' | 'cover' | CoverOptions;
+type SurfaceFit = 'contain' | 'cover' | 'fill' | CoverOptions;
 
 ## SurfaceOptions  (type-only)
 interface SurfaceOptions {
@@ -313,7 +327,7 @@ function mountSurface(root: HTMLElement, opts?: SurfaceOptions): Surface;
 function platformFamily(ua?: string, touchPoints?: number): PlatformFamily;
 
 ## restoreGpu
-function restoreGpu(gpu: GpuContext, opts?: Pick<GpuInitOptions, 'powerPreference' | 'onLost'>): Promise<GPUDevice | null>;
+function restoreGpu(gpu: GpuContext, opts?: Pick<GpuInitOptions, 'powerPreference' | 'onLost' | 'xrCompatible'>): Promise<GPUDevice | null>;
 
 ## safeExternalUrl
 function safeExternalUrl(url: string | null | undefined): string | null;

@@ -14,6 +14,8 @@ export type {
   KitGame,
   KitLoopOptions,
   KitOptions,
+  KitRenderer,
+  KitRendererOption,
 } from './compose';
 export { composeGame } from './compose';
 export type { ExternalFrames } from './frames';

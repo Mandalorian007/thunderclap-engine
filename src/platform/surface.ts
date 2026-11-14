@@ -16,8 +16,11 @@ import {
  * How the design fits the container (or the frame given to `setFrame`). `'contain'` (the
  * default) letterboxes: the whole design shows, with bars. `'cover'` fills the frame and crops
  * the design; `CoverOptions` is cover with a band that must stay on screen (`'cover'` is `{}`).
+ * `'fill'` (ws/kit-fit) has no design size: the canvas is the whole frame, no bars and no crop,
+ * and the logical size is the frame's size in CSS px (a 3D game, or one that lays out its own
+ * screen).
  */
-export type SurfaceFit = 'contain' | 'cover' | CoverOptions;
+export type SurfaceFit = 'contain' | 'cover' | 'fill' | CoverOptions;
 
 export interface SurfaceOptions {
   /** Logical design width. Default 1920. */
@@ -26,13 +29,19 @@ export interface SurfaceOptions {
   logicalHeight?: number;
   /** Cap on devicePixelRatio. Default 2. */
   maxDpr?: number;
-  /** Cap on drawing-buffer pixel count. Default 2560×1440. */
+  /**
+   * Cap on drawing-buffer pixel count. Default 2560×1440; under `fit: 'fill'` none (only
+   * `maxDpr` caps the buffer, as `computeBackbuffer` does: a game that fills the window scales
+   * its own resolution).
+   */
   maxPixels?: number;
   /** CSS colour of the letterbox bars (the container background). Default near-black ink. */
   barColor?: string;
   /**
-   * How the design fits: `'contain'` (default, letterbox) or a cover fit that fills the frame
-   * and crops the design to a band (#1). Change it later with `Surface.setFit`.
+   * How the design fits: `'contain'` (default, letterbox), a cover fit that fills the frame
+   * and crops the design to a band (#1), or `'fill'`: the whole frame with no design size
+   * (`logicalWidth` / `logicalHeight` then follow the frame in CSS px). Change it later with
+   * `Surface.setFit`.
    */
   fit?: SurfaceFit;
 }
@@ -58,9 +67,9 @@ export interface Surface {
   readonly root: HTMLElement;
   /** The canvas the renderer draws to. */
   readonly canvas: HTMLCanvasElement;
-  /** Logical design width. */
+  /** Logical design width (under `fit: 'fill'`, the frame's width in CSS px). */
   readonly logicalWidth: number;
-  /** Logical design height. */
+  /** Logical design height (under `fit: 'fill'`, the frame's height in CSS px). */
   readonly logicalHeight: number;
   /**
    * The canvas rect, CSS px, relative to `root`: the letterbox, or under a cover fit a rect that
@@ -108,8 +117,12 @@ export interface Surface {
 class DomSurface implements Surface {
   readonly root: HTMLElement;
   readonly canvas: HTMLCanvasElement;
-  readonly logicalWidth: number;
-  readonly logicalHeight: number;
+  /** The design size the options gave (what contain and cover fit, and `fitRect` measures). */
+  private readonly designW: number;
+  private readonly designH: number;
+  /** The logical size: the design's, or the frame's under `'fill'`. */
+  private lw: number;
+  private lh: number;
   /** The canvas rect, CSS px, relative to `root` (see `Surface.rect`). Replaced on resize. */
   rect: Letterbox = { x: 0, y: 0, width: 0, height: 0, scale: 0 };
   /** The plain contain fit for the whole container (what `rect` is unless a frame is set). */
@@ -117,12 +130,15 @@ class DomSurface implements Surface {
   backbuffer: BackbufferSize = { width: 1, height: 1, pixelRatio: 1 };
 
   private frame: { x: number; y: number; width: number; height: number } | null = null;
-  /** The cover band, or null to letterbox. */
+  /** The cover band, or null to letterbox (or fill). */
   private cover: CoverOptions | null = null;
+  /** `fit: 'fill'`: the canvas is the frame, the logical size its CSS size. */
+  private fill = false;
   private readonly visible: LetterboxRect = { x: 0, y: 0, width: 0, height: 0 };
   private readonly clip: LetterboxRect = { x: 0, y: 0, width: 0, height: 0 };
   private readonly maxDpr: number;
-  private readonly maxPixels: number;
+  /** `SurfaceOptions.maxPixels`, or undefined for the fit's default. */
+  private readonly maxPixelsOpt: number | undefined;
   private readonly listeners = new Set<(size: SurfaceSize) => void>();
   private readonly ro: ResizeObserver;
   private dprQuery: MediaQueryList | null = null;
@@ -134,11 +150,14 @@ class DomSurface implements Surface {
 
   constructor(root: HTMLElement, opts: SurfaceOptions = {}) {
     this.root = root;
-    this.logicalWidth = opts.logicalWidth ?? 1920;
-    this.logicalHeight = opts.logicalHeight ?? 1080;
+    this.designW = opts.logicalWidth ?? 1920;
+    this.designH = opts.logicalHeight ?? 1080;
+    this.lw = this.designW;
+    this.lh = this.designH;
     this.maxDpr = opts.maxDpr ?? 2;
-    this.maxPixels = opts.maxPixels ?? 2560 * 1440;
+    this.maxPixelsOpt = opts.maxPixels;
     this.cover = coverOf(opts.fit);
+    this.fill = opts.fit === 'fill';
 
     if (getComputedStyle(root).position === 'static') root.style.position = 'relative';
     root.style.overflow = 'hidden';
@@ -159,6 +178,16 @@ class DomSurface implements Surface {
     window.addEventListener('resize', this.onWindowResize);
     this.watchDpr();
     this.layout();
+  }
+
+  /** Logical width: the design's, or the frame's CSS width under `fit: 'fill'`. */
+  get logicalWidth(): number {
+    return this.lw;
+  }
+
+  /** Logical height: the design's, or the frame's CSS height under `fit: 'fill'`. */
+  get logicalHeight(): number {
+    return this.lh;
   }
 
   /** Subscribe to size changes. Called immediately with the current size. Returns unsubscribe. */
@@ -207,6 +236,7 @@ class DomSurface implements Surface {
   /** Switch the fit and lay out again (see `SurfaceOptions.fit`). */
   setFit(fit: SurfaceFit): void {
     this.cover = coverOf(fit);
+    this.fill = fit === 'fill';
     this.layout();
   }
 
@@ -240,14 +270,33 @@ class DomSurface implements Surface {
   layout(): void {
     const cw = this.root.clientWidth;
     const ch = this.root.clientHeight;
-    this.fitRect = computeLetterbox(cw, ch, this.logicalWidth, this.logicalHeight);
+    // `fitRect` measures the design size under every fit, so device-mode decisions read it alike.
+    this.fitRect = computeLetterbox(cw, ch, this.designW, this.designH);
     const fr = this.frame;
-    const lw = this.logicalWidth;
-    const lh = this.logicalHeight;
     const cover = this.cover;
     let rect: Letterbox;
     const v = this.visible;
-    if (cover && !(cover.belowScale !== undefined && this.fitRect.scale >= cover.belowScale)) {
+    // The design size, or under `'fill'` the frame's (set below).
+    const lw = this.designW;
+    const lh = this.designH;
+    this.lw = lw;
+    this.lh = lh;
+    if (this.fill) {
+      // The whole frame (clamped to the container, like the letterbox's), one logical unit per
+      // CSS px: no bars, nothing cropped.
+      const w = fr ? Math.max(1, Math.min(fr.width, cw)) : cw;
+      const h = fr ? Math.max(1, Math.min(fr.height, ch)) : ch;
+      rect = { x: fr ? fr.x : 0, y: fr ? fr.y : 0, width: w, height: h, scale: 1 };
+      this.lw = w;
+      this.lh = h;
+      v.x = 0;
+      v.y = 0;
+      v.width = w;
+      v.height = h;
+    } else if (
+      cover &&
+      !(cover.belowScale !== undefined && this.fitRect.scale >= cover.belowScale)
+    ) {
       const fw = fr ? Math.max(1, fr.width) : cw;
       const fh = fr ? Math.max(1, fr.height) : ch;
       rect = computeCover(fw, fh, lw, lh, cover);
@@ -274,7 +323,7 @@ class DomSurface implements Surface {
       rect.height,
       window.devicePixelRatio,
       this.maxDpr,
-      this.maxPixels,
+      this.maxPixelsOpt ?? (this.fill ? Number.POSITIVE_INFINITY : DEFAULT_MAX_PIXELS),
     );
     const same =
       rect.x === this.rect.x &&
@@ -313,8 +362,11 @@ class DomSurface implements Surface {
 }
 
 /** `SurfaceFit` as the cover band the layout reads, or null for the letterbox. */
+/** `SurfaceOptions.maxPixels`' default outside `fit: 'fill'`. */
+const DEFAULT_MAX_PIXELS = 2560 * 1440;
+
 function coverOf(fit: SurfaceFit | undefined): CoverOptions | null {
-  if (fit === undefined || fit === 'contain') return null;
+  if (fit === undefined || fit === 'contain' || fit === 'fill') return null;
   return fit === 'cover' ? {} : { ...fit };
 }
 

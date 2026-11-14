@@ -8,11 +8,12 @@
 
 import type { AudioEngine } from '../audio';
 import { type CrashScreen, installCrashScreen } from '../core/crash';
-import { GameLoop } from '../core/loop';
+import { GameLoop, type Time } from '../core/loop';
 import { SceneStack } from '../core/scene';
 import { createWebHost, type Host } from '../host';
 import { createTickClock, type PointerRouter, type TickClock } from '../input';
 import {
+  type BootGpuOptions,
   type GpuContext,
   type Surface,
   type SurfaceOptions,
@@ -21,7 +22,8 @@ import {
   type XrSurface,
 } from '../platform';
 import type { XRFrame } from '../platform/xr-types';
-import type { Camera, Frame, Renderer, SceneTargetAux } from '../render';
+import type { Frame, Renderer, SceneTargetAux } from '../render';
+import { Camera } from '../render/camera';
 import type { Overlay } from '../ui';
 import { bootKit, createKitRenderer } from './boot';
 import { createExternalFrames } from './frames';
@@ -48,6 +50,33 @@ export interface KitLoopOptions {
    */
   frames?: 'host' | 'external';
 }
+
+/**
+ * A game's own renderer (`KitOptions.renderer`, ws/kit-fit): the kit still gives the loop, the
+ * lifecycle, input and the other services, and hands each rendered frame to it.
+ */
+export interface KitRenderer {
+  /**
+   * The drawing buffer changed size (device px): called once when the renderer is taken, then on
+   * every surface resize (the surface has already sized the canvas).
+   */
+  resize?(width: number, height: number): void;
+  /**
+   * Draw and present one frame: after `hooks.beforeRender`, before `hooks.afterRender`. `alpha`
+   * and `time` are the loop's (`LoopCallbacks.render`).
+   */
+  render(alpha: number, time: Time): void;
+}
+
+/**
+ * `KitOptions.renderer`: a game's own `KitRenderer`, a factory that builds one on the booted GPU
+ * and surface (it may be async), or `null` for none (the game draws and presents in
+ * `hooks.render`).
+ */
+export type KitRendererOption<R extends KitRenderer = KitRenderer> =
+  | R
+  | ((gpu: GpuContext, surface: Surface) => R | Promise<R>)
+  | null;
 
 /**
  * `composeGame`'s options: the core's (where to mount, the GPU, the host, the save) and one
@@ -81,6 +110,22 @@ export interface KitOptions<S extends FlushableSave | null = FlushableSave | nul
   blockBrowserZoom?: boolean;
   /** Dev aid: show the unsupported screen as if WebGPU were missing. */
   forceUnsupported?: boolean;
+  /**
+   * What the boot asks the GPU for (`BootGpuOptions`: `xrCompatible`, `drawFeatures`,
+   * `compression`, `timestamps`, `powerPreference`). Ignored with `gpu` (already booted).
+   */
+  gpuOptions?: BootGpuOptions;
+  /**
+   * Who draws (ws/kit-fit). Left out: the engine's `Renderer` (`ctx.renderer`), the scenes
+   * drawn through it. A `KitRenderer` (or a factory for one): the game's own; `ctx.renderer`
+   * is it, and each rendered frame calls its `render(alpha, time)`. `null`: none; each
+   * rendered frame calls `hooks.render(alpha, time)` and `ctx.renderer` is null. With either,
+   * the scenes still update but are not drawn (they draw through the engine's `Frame`), and
+   * `post`, `particles` and `xr` (which draw through the engine's renderer) are refused.
+   * `ctx.camera` is then a camera of the kit's own (`Camera.ortho2d` of the design) that
+   * `setCamera` swaps; pointer rays and overlay anchors go through it.
+   */
+  renderer?: KitRendererOption;
   /** Builds the game's save from the host; flushed on hide, background and device loss. */
   save?(host: Host): S;
   /** The crash screen (`installCrashScreen`), as `CreateGameOptions.crash`. Default off. */
@@ -156,14 +201,27 @@ type FieldsOf<K, Key extends string> = K extends {
   ? F
   : unknown;
 
+/** The renderer `K.renderer` gives (a factory's result), or the engine's `Renderer`. */
+type RendererOf<K> = K extends { readonly renderer: infer R }
+  ? R extends (...args: never[]) => infer O
+    ? Awaited<O>
+    : R
+  : Renderer;
+
+/** `KitCtx` with `renderer` the one `K` gives. */
+type CtxOf<K, S extends FlushableSave | null> = K extends { readonly renderer: unknown }
+  ? Omit<KitCtx<S>, 'renderer'> & { readonly renderer: RendererOf<K> }
+  : KitCtx<S>;
+
 /** The save type `K.save` builds, or `null`. */
 type SaveOf<K> = K extends { save(host: Host): infer S extends FlushableSave | null } ? S : null;
 
 /**
  * What `composeGame(kit)` resolves to: `KitCtx` plus the fields of exactly the services `kit`
  * passed (`ctx.ui` only with `ui`, ...), plus `frame(now)` with `loop: { frames: 'external' }`.
+ * With `renderer` given, `ctx.renderer` is the game's renderer (a factory's result) or `null`.
  */
-export type KitGame<K extends KitOptions> = KitCtx<SaveOf<K>> &
+export type KitGame<K extends KitOptions> = CtxOf<K, SaveOf<K>> &
   FieldsOf<K, 'post'> &
   FieldsOf<K, 'particles'> &
   FieldsOf<K, 'ui'> &
@@ -223,6 +281,17 @@ async function buildKit(kit: KitOptions, crash: KitCrash | null): Promise<object
   if (!dom && (!kit.gpu || !kit.host)) {
     throw new Error('composeGame: `dom: false` needs `gpu` and `host` (it touches no DOM)');
   }
+  // `renderer` given (even `null`): the engine's renderer is not built.
+  const ownMode = kit.renderer !== undefined;
+  if (ownMode) {
+    for (const key of ['post', 'particles', 'xr'] as const) {
+      if (kit[key]) {
+        throw new Error(
+          `composeGame: \`${key}\` draws through the engine's renderer (not with \`renderer\`)`,
+        );
+      }
+    }
+  }
   const res = await bootKit({
     root: kit.root,
     gpu: kit.gpu,
@@ -232,11 +301,16 @@ async function buildKit(kit: KitOptions, crash: KitCrash | null): Promise<object
     title: kit.title,
     blockBrowserZoom: kit.blockBrowserZoom,
     forceUnsupported: kit.forceUnsupported,
+    gpuOptions: kit.gpuOptions,
   });
   if (!res) return null;
   const { surface, gpu } = res;
   kit.onGpuReady?.(gpu);
-  const renderer = createKitRenderer(gpu, design, kit.aux);
+  const renderer = ownMode ? null : createKitRenderer(gpu, design, kit.aux);
+  const own = typeof kit.renderer === 'function' ? await kit.renderer(gpu, surface) : kit.renderer;
+  // Without the engine's renderer the kit keeps the camera itself (rays, overlay anchors).
+  let ownCamera = renderer ? null : Camera.ortho2d(design.width, design.height);
+  const camera = (): Camera => ownCamera ?? renderer!.camera;
 
   // ── Core: host, save, clock, scenes, loop ──────────────────────────────
   const host = kit.host ?? createWebHost();
@@ -273,6 +347,14 @@ async function buildKit(kit: KitOptions, crash: KitCrash | null): Promise<object
       },
       render: (alpha, time) => {
         hooks.beforeRender?.(time);
+        if (!renderer) {
+          // The game's own renderer, or none: it draws and presents.
+          if (own) own.render(alpha, time);
+          else hooks.render?.(alpha, time);
+          hooks.afterRender?.(time);
+          ui?.updateAnchors();
+          return;
+        }
         const frame = renderer.beginFrame(time.realTime, time.frameDt);
         const xrSurface = xr?.surface ?? null;
         if (xrSurface) {
@@ -318,7 +400,14 @@ async function buildKit(kit: KitOptions, crash: KitCrash | null): Promise<object
     design,
     surface,
     gpu,
-    renderer,
+    // A service that draws through the engine's renderer can't run without it.
+    get renderer(): Renderer {
+      if (!renderer) {
+        throw new Error("composeGame: no engine renderer (`renderer` is the game's own or null)");
+      }
+      return renderer;
+    },
+    camera,
     host,
     clock,
     loop,
@@ -329,7 +418,7 @@ async function buildKit(kit: KitOptions, crash: KitCrash | null): Promise<object
     pointers: null,
     // The rays go through whatever camera the renderer draws with: the head while a VR session
     // runs (so a head-locked `WorldPanel` faces the headset).
-    rayCamera: () => xr?.surface?.head ?? renderer.camera,
+    rayCamera: () => xr?.surface?.head ?? camera(),
   };
   const fields: object[] = [];
   const postPart = kit.post?.setup(core);
@@ -343,7 +432,8 @@ async function buildKit(kit: KitOptions, crash: KitCrash | null): Promise<object
     fields.push(uiPart.fields);
   }
   surface.onResize(({ rect, backbuffer }) => {
-    renderer.resize(backbuffer.width, backbuffer.height);
+    if (renderer) renderer.resize(backbuffer.width, backbuffer.height);
+    else own?.resize?.(backbuffer.width, backbuffer.height);
     ui?.setFrame(rect);
   });
   const audioPart = kit.audio?.setup(core);
@@ -407,9 +497,10 @@ async function buildKit(kit: KitOptions, crash: KitCrash | null): Promise<object
       design,
       surface,
       gpu,
-      renderer,
+      renderer: renderer ?? own ?? null,
       setCamera: (cam: Camera) => {
-        renderer.camera = cam;
+        if (renderer) renderer.camera = cam;
+        else ownCamera = cam;
       },
       host,
       save,
@@ -418,13 +509,13 @@ async function buildKit(kit: KitOptions, crash: KitCrash | null): Promise<object
       loop,
       hooks,
       onDeviceLost: res.onDeviceLost,
-    } satisfies Omit<KitCtx, 'camera'>,
+    } satisfies Omit<KitCtx, 'camera' | 'renderer'> & { renderer: unknown },
     ...fields,
   );
   if (frames) ctx.frame = (now: number) => frames.frame(loop, now);
   // `camera` follows `setCamera`.
   Object.defineProperty(ctx, 'camera', {
-    get: () => renderer.camera,
+    get: camera,
     enumerable: true,
     configurable: true,
   });

@@ -7,14 +7,25 @@
  * - `?client`: client mode, `loop.frames: 'external'`; the page owns the frames and calls
  *   `ctx.frame(now)` from its own `requestAnimationFrame`, as a networked client's tick would.
  *
+ * - `?own` (ws/kit-fit): the page's own renderer (`KitOptions.renderer`, a `KitRenderer` that
+ *   clears the canvas with raw WebGPU); `?none`: `renderer: null`, the page draws the same in
+ *   `hooks.render`. Either way the kit still runs the loop, the lifecycle and device loss.
+ * - `&fill`: the surface's `fit: 'fill'`, the whole window with no design size and no bars.
+ *
  * Nothing here is engine code beyond `@thunderclap-engine/engine/kit` and the 2D renderer.
  */
-import { composeGame } from '@thunderclap-engine/engine/kit';
+import { composeGame, type KitRenderer } from '@thunderclap-engine/engine/kit';
+import type { GpuContext } from '@thunderclap-engine/engine/platform';
 import { type DrawParams, gpuDiagnostics } from '@thunderclap-engine/engine/render';
 import type { HarnessKitState } from './kit-state';
 
 const root = document.getElementById('root') as HTMLElement;
-const client = new URLSearchParams(location.search).has('client');
+const params = new URLSearchParams(location.search);
+const client = params.has('client');
+const rendererMode = params.has('own') ? 'own' : params.has('none') ? 'none' : 'engine';
+const fill = params.has('fill');
+/** What the page's own renderer clears to: a teal, unlike the page background and the 2D toy. */
+const CLEAR = [0.1, 0.55, 0.45];
 const DESIGN = { width: 1280, height: 720 };
 const COUNT = 12;
 
@@ -29,6 +40,12 @@ const state: HarnessKitState = {
   driven: 0,
   clockMs: 0,
   gpuErrors: 0,
+  renderer: rendererMode,
+  fill,
+  ownFrames: 0,
+  resized: [],
+  rendererNull: false,
+  clear: CLEAR.map((c) => Math.round(c * 255)),
 };
 window.__harnessKit = { state };
 
@@ -51,22 +68,78 @@ const hub: DrawParams = {
   tint: [0.95, 0.9, 0.8, 1],
 };
 
-const core = { root, title: 'Kit', design: DESIGN } as const;
+/** The page's own renderer: one cleared pass per frame, straight on the canvas's context. */
+function clearFrame(gpu: GpuContext): void {
+  const enc = gpu.device.createCommandEncoder();
+  const pass = enc.beginRenderPass({
+    colorAttachments: [
+      {
+        view: gpu.context.getCurrentTexture().createView(),
+        clearValue: { r: CLEAR[0]!, g: CLEAR[1]!, b: CLEAR[2]!, a: 1 },
+        loadOp: 'clear',
+        storeOp: 'store',
+      },
+    ],
+  });
+  pass.end();
+  gpu.device.queue.submit([enc.finish()]);
+  state.ownFrames++;
+  state.frames++;
+}
+
+function ownRenderer(gpu: GpuContext): KitRenderer {
+  return {
+    resize(w, h) {
+      state.resized = [w, h];
+    },
+    render() {
+      clearFrame(gpu);
+    },
+  };
+}
+
+const core = {
+  root,
+  title: 'Kit',
+  design: DESIGN,
+  ...(fill ? { surface: { fit: 'fill' as const } } : {}),
+};
 const sim = { step: 1 / 60 };
 
 /** The game, and in client mode the page's way to run a frame (`ctx.frame`). */
 async function boot() {
+  if (rendererMode !== 'engine') {
+    const ctx = await composeGame({
+      ...core,
+      loop: { sim },
+      renderer: rendererMode === 'own' ? ownRenderer : null,
+    });
+    if (ctx && rendererMode === 'none') {
+      state.rendererNull = ctx.renderer === null;
+      ctx.hooks.render = () => clearFrame(ctx.gpu);
+    }
+    return { ctx, drive: null, own: true as const };
+  }
   if (client) {
     const ctx = await composeGame({ ...core, loop: { sim, frames: 'external' } });
-    return { ctx, drive: ctx ? (now: number) => ctx.frame(now) : null };
+    return { ctx, drive: ctx ? (now: number) => ctx.frame(now) : null, own: false as const };
   }
-  return { ctx: await composeGame({ ...core, loop: { sim } }), drive: null };
+  return { ctx: await composeGame({ ...core, loop: { sim } }), drive: null, own: false as const };
 }
 
 try {
-  const { ctx, drive } = await boot();
+  const { ctx, drive, own } = await boot();
   if (!ctx) {
     state.gpu = 'unsupported';
+  } else if (own) {
+    // The page draws (its own renderer or `hooks.render`); the kit runs the loop.
+    state.gpu = 'ok';
+    state.fields = Object.keys(ctx).sort();
+    ctx.hooks.update = () => {
+      state.updates++;
+      state.clockMs = ctx.clock.now();
+    };
+    ctx.loop.start();
   } else {
     state.gpu = 'ok';
     state.fields = Object.keys(ctx).sort();
