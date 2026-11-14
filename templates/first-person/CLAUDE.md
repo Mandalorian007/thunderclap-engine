@@ -32,7 +32,7 @@ src/ui/hud.ts         crosshair (ui.layers.hud), prompt and focus line (ui.layou
 2. **Rendering, not mechanics.** The scene draws what `world/` says and turns `Look` and actions into movement and inspections. Collision is the game's (three lines against `surfaceY`), not the engine's.
 3. **A client keeps nothing.** `sim: false` and no `save`: the engine never touches storage and the loop runs at render rate (`update(dt)` gets the real frame delta). A server-driven game applies its state in `ctx.hooks.frame`. No network call anywhere in the engine; add your own transport.
 4. **Zero allocations per frame.** `update` and `render` mutate pre-built `Transform`s, `Float32Array`s and emitter params; the Worker's buffers are views, never copies. Nothing is created inside them in steady state.
-5. **Devices never leak past `ctx.ts` and `Look`.** Scenes read `look.look`, `look.move` and actions (`input.pressed('inspect')`), never keys, buttons, touches or `movementX`.
+5. **Devices never leak past `ctx.ts`, `Look` and the intents.** Scenes read `look.look`, `look.move`, actions (`input.held('sprint')`) and intents (`createIntents`: `inspect` is a tap aimed by a ray), never keys, buttons, touches or `movementX`.
 6. **Import only the public map.** `@thunderclap-engine/engine` and `@thunderclap-engine/engine/<module>` (`core`, `render`, `input`, `ui`, `fx`, `save`, `host`, `platform`, `post`, `audio`, `analytics`). Never a path into the engine's `src/`.
 
 ## The engine's nouns

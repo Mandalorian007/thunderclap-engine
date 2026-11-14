@@ -42,6 +42,7 @@
     "./nav": "./src/nav/index.ts",
     "./platform": "./src/platform/index.ts",
     "./post": "./src/post/index.ts",
+    "./quality": "./src/quality/index.ts",
     "./render": "./src/render/index.ts",
     "./save": "./src/save/index.ts",
     "./tween": "./src/tween/index.ts",
@@ -125,6 +126,10 @@
       "./post": {
         "types": "./dist/post/index.d.ts",
         "import": "./dist/post/index.js"
+      },
+      "./quality": {
+        "types": "./dist/quality/index.d.ts",
+        "import": "./dist/quality/index.js"
       },
       "./render": {
         "types": "./dist/render/index.d.ts",

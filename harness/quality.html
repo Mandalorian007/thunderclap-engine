@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>ThunderClap engine quality harness</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #10121a; color: #d6dae4; font: 14px/1.5 system-ui, sans-serif; }
+      main { padding: 16px; max-width: 720px; }
+      .bar { height: 18px; background: #232838; border-radius: 9px; overflow: hidden; margin: 6px 0 14px; }
+      .bar > div { height: 100%; background: linear-gradient(90deg, #4cc3a0, #e2c044); transition: width 0.2s; }
+      .rung { display: inline-block; padding: 2px 10px; margin: 2px 6px 2px 0; border-radius: 10px; background: #2b3246; }
+      .rung[data-shed] { background: #5a2d36; text-decoration: line-through; }
+      button { font: inherit; margin-right: 8px; padding: 4px 12px; }
+      code { color: #9fb4ff; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div>Tier: <code id="tier"></code></div>
+      <div id="reason"></div>
+      <p>
+        Synthetic GPU load at full scale:
+        <button id="light" type="button">8 ms</button><button id="heavy" type="button">30 ms</button>
+        <span id="sec"></span>
+      </p>
+      <div>Render scale <span id="scale"></span></div>
+      <div class="bar"><div id="fill"></div></div>
+      <div id="ladder"></div>
+      <p><code id="line"></code></p>
+    </main>
+    <script type="module" src="./quality.ts"></script>
+  </body>
+</html>

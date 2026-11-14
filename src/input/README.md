@@ -31,6 +31,7 @@ if (input.held('left')) x -= 4 * input.value('left');
 | `input.pressed / held / released / value` | read an action each tick |
 | `parseBindings / serializeBindings` | rebinding that survives a save |
 | `createGestures(...)` | tap, drag, pan and pinch |
+| `createIntents(...)` | tap, hold, press, select, cycle and aim from every scheme |
 | `createPointerRouter(...)` | pointers as world rays, routed to targets |
 | `createLook(...)` | mouse, stick and touch look for a camera |
 | `Follow` | a third-person follow camera |
@@ -52,6 +53,7 @@ if (input.held('left')) x -= 4 * input.value('left');
 - [Embedding (itch.io iframe)](#embedding-itchio-iframe)
 - [Clock](#clock)
 - [Gestures](#gestures)
+- [Intents](#intents)
 - [Rays and the pointer router](#rays-and-the-pointer-router)
 - [Look](#look)
 - [Orbit look](#orbit-look)
@@ -291,7 +293,7 @@ if (gestures.pinch) zoom *= gestures.pinch.delta;
 - Thresholds are CSS px (client coordinates); positions are game space through the transform. A point the transform maps to `null` reports `inside: false` with the last inside position.
 - One tap, double tap and long-press per tick; extras queue for the following ticks (up to 8). `start` and `end` each get their own tick.
 - `blocked()` (shared with the linked `Input`): nothing is reported and the press in progress is dropped; a running pan, drag or pinch gets one `cancel` so the game can put things back. Browser `pointercancel`, window blur and a hidden tab cancel the same way.
-- Mouse: primary button only. Each pointer is captured, so a drag off the target keeps reporting.
+- Mouse: primary button only. Mouse and pen pointers are captured, so a drag off the target keeps reporting; a finger is captured implicitly by the browser (explicit capture on one can outlive it in WebKit and take the next tap's release, ws/intents-quality).
 - Feed methods for tests and replays: `pointerDown(id, x, y, device?, time?)`, `pointerMove`, `pointerUp`, `pointerCancel`, `cancelAll`. Pass `clock` (a `createTickClock()`, see *Clock*) or `now` to drive long-press timing from a fake clock. Attached, the gestures consume from the pointer dispatcher (`GestureAttachOptions.dispatcher`, the input's when linked, else a private one).
 - `onGesture(listener)` observes the stream: `listener(kind, phase, g)` is called synchronously each time the recogniser decides something (a tap on lift, a long-press when its time is up, each pan/drag/pinch `start`, `move`, `end` and `cancel`), not once per tick, and before any tick reports it. Discrete kinds come with phase `'end'`; `g` is the same report object the tick field will carry (narrow it by `kind`). It returns the unsubscribe function. It is an observer for tests, replays and logging, not a replacement for the per-tick fields or action bindings, which stay how a game reads gestures. `GestureListener` is its type.
 - Gesture types: `GesturePoint` (`x`, `y`, `inside`, game space), `GesturePhase` (`start | move | end | cancel`), `GestureDevice` (`mouse | touch | pen`), `TapGesture` (tap, double tap, long press), `PanGesture` (`phase`, `dx`, `dy`, `pointers`), `DragGesture` (a pan with its `origin`) and `PinchGesture` (`phase`, `scale`, `delta`, centre in `x`/`y`). `GestureAttachOptions`: `pointerTarget`, `disableTouchScroll`, `dispatcher`. `createGestures(opts)` is `new Gestures(opts)`.
@@ -305,6 +307,54 @@ A finger covers about 44 CSS px. With `GestureOptions.magnify` (or `gestures.set
 - `Aim`: one tick's aim: game-space `x`, `y`, `inside`, `client` and `finger` (CSS px), `lifted`, the snapped `target`, `loupe` (wanted this tick), `ended` (the tick after the finger lifted: where a dragged thing lands) and `at` (the loupe centre).
 - `SnapGrid` (ws/api-core) and `snapToGrid(grid, x, y, ok?)`: the accepted cell nearest a point within half a pitch, or `null`; the usual `snap` for a board or list.
 - `Edges` (`l`, `t`, `r`, `b`, client CSS px): the type of the `clear` areas. A game drawing its own loupe (no `source`) places it at `aim.at`, which already follows the engine's placement rules.
+
+## Intents
+
+`createIntents(spec, sink, options)` (`input/intents.ts`, ws/intents-quality) turns every scheme into the few things a game does, so its code never asks which device is in use. The game declares each intent and its handler; the engine decides, per tick, what a key, a mouse, a finger, a pad or an XR controller meant, and hands over where it aimed as an `IntentAim`: a world ray (`AimRay`, a `Ray` plus the `screen` point it came from) or `null` for "the view's centre" (a pointer lock, a pad, a headset gaze).
+
+```ts
+import { createIntents, stickSideHold } from '@thunderclap-engine/engine/input';
+
+const intents = createIntents(
+  {
+    use:    { kind: 'tap', actions: ['use'] },               // a key/button press, or a still finger lifted
+    mine:   { kind: 'hold', actions: ['mine'],               // held key/button, or a still finger held 300 ms
+              stickSide: stickSideHold({ when: (aim) => inReach(aim) }) },
+    jump:   { kind: 'press', actions: ['jump'] },
+    slot:   { kind: 'select', actions: ['slot1', 'slot2', 'slot3'] },
+    cycle:  { kind: 'cycle', next: ['next'], prev: ['prev'], wheel: true },
+    look:   { kind: 'aim' },
+  },
+  {
+    use: (aim) => interact(aim),
+    mine: { start: (aim, at) => beginMining(aim, at), aim: (aim) => retarget(aim), end: () => stopMining() },
+    jump: () => player.jump(),
+    slot: (i) => hotbar.select(i),
+    cycle: (d) => hotbar.step(d),
+    look: (aim) => highlight(aim),
+  },
+  {
+    input: ctx.input,
+    camera,                                  // or () => camera
+    pointers: ctx.pointers,                  // XR controllers aim through the router's primary pointer
+    centred: () => look.locked,              // aim at the view's centre while true
+    stickZone: 'left',                       // a Look move stick lives there: its thumb never taps
+    toScreen: (x, y) => ctx.surface.clientToLogical(x, y, out),
+  },
+);
+// each tick, after input.update():
+intents.update();
+```
+
+- **Kinds.** `press` and `release` fire on an action's edge. `tap` fires on an action's press or on a finger lifted still (within `stillHold().tolerancePx`, 10 CSS px) before the hold time (300 ms). `hold` starts on an action's press or on a finger held still for the hold time, follows the aim (`aim`, only when it changed) and ends on release, lift or cancel; `start` gets the press time, so a game can time a hold from when it began. `aim` fires when the view's aim changes. `select` passes the index of the action pressed; `cycle` passes +1 / -1 from its `next` / `prev` actions and (with `wheel`) whole wheel steps (`WheelSteps`, 48 px a step for a trackpad stream, one per notch). Handlers fire in the spec's declaration order.
+- **Touch.** Fingers come from the input's `PointerDispatcher` (priority 35, above gestures). `touch: false` on a `tap` or `hold` leaves it to its actions only; `touch: stillHold({ tolerancePx, ms })` sets its own still rule. A finger that moves past the tolerance is a drag (the look or the game's) and never taps or holds. While a finger was seen this tick or `lastDevice` is touch or pen, actions bound to the same intent do not also fire (a tap's synthesised mouse click is not a second tap).
+- **The move stick's thumb** (`stickZone: 'left' | 'right'`, `inStickZone`) never taps. With a `stickSideHold({ when })` on a `hold`, a thumb that lands where `when(aim)` is true and stays still for the hold time stops walking and holds there; one that drags first stays the stick.
+- **Aim.** `intents.aim` is the view's aim this tick and `intents.aiming` whether there is one (false on touch with no finger down). In order: `centred()` → `null`; the router's primary XR pointer → its ray; touch → the holding (else the last) finger; a pad or XR → `null`; a mouse inside the stage → the ray through it.
+- `intents.holding` names the hold intent held now. `cancelAll()` ends every hold (also on `blocked()`), `detach()` / `attach()` follow the input's own attach, and `dispose()` removes the consumer. `touchDown(id, x, y, time?, inStick?)`, `touchMove`, `touchUp` and `touchCancel` feed fingers by hand for tests and replays.
+- Allocation-free per tick: aims are reused boxes (copy one to keep it), taps queue in fixed slots (five fingers).
+- **Primitives** (`input/gestures-hold.ts`): `StillPress` (`begin`, `tick`, `move`, `end` → `'tap' | 'drag' | 'hold'`), `stillHold`, `stickSideHold`, `inStickZone(x, width, side, stickTaken?, zone?)` and `WheelSteps({ pixelsPerStep, idleMs })`, pure and usable without intents.
+- Types: `IntentSpec` (name → `IntentDecl`), `IntentDecl` (`PressIntent`, `ReleaseIntent`, `TapIntent`, `HoldIntent`, `AimIntent`, `CycleIntent`, `SelectIntent`), `IntentSink` (name → `IntentHandler`, a `HoldHandler` `{ start, aim?, end }` for a hold), `IntentsOptions`, `IntentInput` (the slice of `Input` intents read). Primitive types: `StillPressKind`, `StillHoldOptions`, `StillHoldSpec`, `STILL_HOLD_DEFAULTS` (`{ tolerancePx: 10, ms: 300 }`), `StickSideHoldOptions`, `StickSideHoldSpec`, `StickSide`, `WheelStepsOptions`.
+- `harness/intents.html` shows them on every matrix row (`e2e/intents-quality.spec.ts`); `templates/first-person` inspects and respawns through intents.
 
 ## Rays and the pointer router
 

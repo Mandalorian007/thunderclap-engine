@@ -34,6 +34,21 @@ export {
   type TapGesture,
 } from './gestures';
 export {
+  inStickZone,
+  STILL_HOLD_DEFAULTS,
+  type StickSide,
+  type StickSideHoldOptions,
+  type StickSideHoldSpec,
+  type StillHoldOptions,
+  type StillHoldSpec,
+  StillPress,
+  type StillPressKind,
+  stickSideHold,
+  stillHold,
+  WheelSteps,
+  type WheelStepsOptions,
+} from './gestures-hold';
+export {
   bindingMatchesDevice,
   type Glyph,
   type GlyphKind,
@@ -73,6 +88,26 @@ export {
   type StickShape,
   shapeStick,
 } from './input';
+export {
+  type AimIntent,
+  type AimRay,
+  type CycleIntent,
+  createIntents,
+  type HoldHandler,
+  type HoldIntent,
+  type IntentAim,
+  type IntentDecl,
+  type IntentHandler,
+  type IntentInput,
+  type IntentSink,
+  type IntentSpec,
+  type Intents,
+  type IntentsOptions,
+  type PressIntent,
+  type ReleaseIntent,
+  type SelectIntent,
+  type TapIntent,
+} from './intents';
 export type { LookTapListener, LookTapOptions } from './look';
 export {
   createLook,
