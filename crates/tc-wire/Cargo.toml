@@ -1,0 +1,16 @@
+[package]
+name = "tc-wire"
+description = "ThunderClap's wire format: binary codec, schema, schema hash, diff and patch, Fixed"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+tc-wire-derive.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true
