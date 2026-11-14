@@ -207,6 +207,11 @@ export interface FakeDevice {
   }[];
   readonly passes: FakePass[];
   /**
+   * Scratch passes labelled `'warm'` (ws/warm-voxel-fit: empty first draws, `PipelineWarmer`),
+   * kept out of `passes` and `calls` so a frame's count is what it draws.
+   */
+  readonly warmPasses: FakePass[];
+  /**
    * `copyTextureToTexture` calls (ws/render-hooks): source, destination and how many passes
    * had been begun when the copy was encoded, so a test can place it between two passes.
    */
@@ -299,6 +304,7 @@ export function createFakeDevice(
   const writeData: FakeDevice['writeData'] = [];
   const textureWrites: FakeDevice['textureWrites'] = [];
   const passes: FakePass[] = [];
+  const warmPasses: FakePass[] = [];
   const textureCopies: FakeDevice['textureCopies'] = [];
   const bufferCopies: FakeBufferCopy[] = [];
   const querySets: FakeQuerySet[] = [];
@@ -491,9 +497,10 @@ export function createFakeDevice(
   ) => {
     const p: FakePass = { kind, label: desc?.label, desc, commands: [] };
     if (viewName !== null) p.view = viewName;
-    passes.push(p);
+    const warm = kind === 'render' && desc?.label === 'warm';
+    (warm ? warmPasses : passes).push(p);
     ops.push({ op: 'pass', pass: p });
-    const rec = recorder(p.commands, tick);
+    const rec = recorder(p.commands, warm ? () => {} : tick);
     return {
       ...rec,
       executeBundles: (list: Iterable<FakeBundle>) => {
@@ -612,7 +619,7 @@ export function createFakeDevice(
       return {
         label: desc?.label,
         beginRenderPass: (d: GPURenderPassDescriptor) => {
-          tick();
+          if (d.label !== 'warm') tick();
           return makePass(ops, 'render', d);
         },
         beginComputePass: (d?: GPUComputePassDescriptor) => {
@@ -750,6 +757,7 @@ export function createFakeDevice(
     writeData,
     textureWrites,
     passes,
+    warmPasses,
     textureCopies,
     bufferCopies,
     querySets,

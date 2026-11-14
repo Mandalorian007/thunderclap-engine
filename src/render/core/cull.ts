@@ -58,7 +58,7 @@ export const SLOT_LIVE = 1;
 export const SLOT_HIDDEN = 2;
 
 export const CULL_WGSL = /* wgsl */ `${CORE_VIEW_WGSL}
-struct CullParams { count: u32, capacity: u32, views: u32, firstInstance: u32, maxDistance: f32, _a: u32, _b: u32, _c: u32 };
+struct CullParams { count: u32, capacity: u32, views: u32, firstInstance: u32, maxDistance: f32, groupMask: u32, groupFirst: u32, _c: u32 };
 struct Slot { sphere: vec4f, draw: vec4u, inst: vec4u };
 @group(0) @binding(0) var<uniform> views: array<CoreView, ${MAX_VIEWS}>;
 @group(0) @binding(1) var<uniform> params: CullParams;
@@ -67,8 +67,8 @@ struct Slot { sphere: vec4f, draw: vec4u, inst: vec4u };
 
 @compute @workgroup_size(${CULL_WORKGROUP}) fn cs_cull(@builtin(global_invocation_id) id: vec3u) {
   let i = id.x;
-  let v = id.y;
-  if (i >= params.count || v >= params.views) { return; }
+  let v = id.y + params.groupFirst;
+  if (i >= params.count || v >= params.views || ((params.groupMask >> v) & 1u) == 0u) { return; }
   let s = slots[i];
   var visible = (s.inst.y & 3u) == 1u;
   for (var k = 0u; k < 6u; k++) {

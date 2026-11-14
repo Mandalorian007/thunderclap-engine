@@ -52,6 +52,7 @@ import {
   writePrevRows,
   writeViewSlot,
 } from './view';
+import { type PipelineWarmer, pipelineWarmer, type WarmTarget } from './warm';
 
 /** Chromium's multi-draw feature name. */
 export const MULTI_DRAW_FEATURE = 'chromium-experimental-multi-draw-indirect';
@@ -101,6 +102,20 @@ export interface RenderCoreOptions {
    * `'core pass'`.
    */
   passLabels?: boolean;
+  /**
+   * Give each pipeline a frame may draw only sometimes its empty first draw ahead of use
+   * (ws/warm-voxel-fit; `./warm`): an empty or disabled set's (in each of its passes), an idle
+   * caster's (in `shadowFormat`) and an inactive drawable's with a `warm` hook, in a scratch
+   * pass at the end of `draw`. WebKit compiles a pipeline at its first draw, which on a
+   * shader-cache miss stalls the page; this moves that to load. Nothing is drawn into any
+   * target, so the picture is unchanged. Default true.
+   */
+  warm?: boolean;
+  /**
+   * The depth format casters are warmed in before the first `drawShadow` (ws/warm-voxel-fit;
+   * after one, its `CoreShadowTarget.format`). Default `'depth32float'`.
+   */
+  shadowFormat?: GPUTextureFormat;
 }
 
 /**
@@ -215,6 +230,7 @@ function newStats(): CoreStats {
     bundleBuilds: 0,
     bundleCalls: 0,
     deferredBuilds: 0,
+    warmed: 0,
   };
 }
 
@@ -263,6 +279,12 @@ export class RenderCore {
   private readonly arenas: Arena[] = [];
   private readonly restoredFns: ((device: GPUDevice) => void)[] = [];
   private readonly multiDrawOpt: boolean;
+  /** The device's warmer (`./warm`): `warm` queues on it, `prepare` and `draw` encode it. */
+  private warmerNow: PipelineWarmer;
+  /** `RenderCoreOptions.warm`. */
+  private readonly autoWarm: boolean;
+  /** The format idle casters warm in (`RenderCoreOptions.shadowFormat`, then the last shadow target's). */
+  private shadowFormat: GPUTextureFormat;
   /** Per prepared view: its cull group; per group: its first view and count. */
   private readonly groupOf = new Int32Array(MAX_VIEWS);
   private readonly groupFirst = new Int32Array(MAX_VIEWS);
@@ -351,6 +373,9 @@ export class RenderCore {
 
   constructor(device: GPUDevice, opts: RenderCoreOptions = {}) {
     this.dev = device;
+    this.warmerNow = pipelineWarmer(device);
+    this.autoWarm = opts.warm ?? true;
+    this.shadowFormat = opts.shadowFormat ?? 'depth32float';
     this.multiDrawOpt = opts.multiDraw ?? true;
     this.capsNow = this.capsOf(device);
     this.maxViews = Math.max(1, Math.min(opts.maxViews ?? MAX_VIEWS, MAX_VIEWS));
@@ -540,6 +565,7 @@ export class RenderCore {
    */
   restore(device: GPUDevice): void {
     this.dev = device;
+    this.warmerNow = pipelineWarmer(device);
     this.capsNow = this.capsOf(device);
     this.cullPipeline = null;
     this.depthTexture = null;
@@ -602,6 +628,29 @@ export class RenderCore {
       const i = this.restoredFns.indexOf(fn);
       if (i >= 0) this.restoredFns.splice(i, 1);
     };
+  }
+
+  /** The device's pipeline warmer (`./warm`; a new one after `restore`). */
+  get warmer(): PipelineWarmer {
+    return this.warmerNow;
+  }
+
+  /**
+   * Queue `pipeline`'s empty first draw (ws/warm-voxel-fit) in a scratch pass of `target`'s
+   * formats, encoded by the next `prepare` or `draw`: a game's own pipeline that a frame draws
+   * only sometimes (an outline, a held item, a crack) compiles at load, not mid-play. Nothing is
+   * drawn. A no-op while the warmer is off (`warmer.enabled`).
+   */
+  warm(pipeline: GPURenderPipeline, target?: WarmTarget): void {
+    this.warmerNow.warm(pipeline, target);
+  }
+
+  /**
+   * Encode the warmer's queue into `encoder` (its scratch passes are not in `stats.calls` or
+   * `stats.passes`: the warmer counts them).
+   */
+  private flushWarm(encoder: GPUCommandEncoder): void {
+    if (this.warmerNow.pending > 0) this.warmerNow.encode(encoder);
   }
 
   /** A new draw set; it joins `desc.pass` (default `'opaque'`). */
@@ -726,7 +775,9 @@ export class RenderCore {
     st.directDraws = 0;
     st.slotBytes = 0;
     st.deferredBuilds = 0;
+    st.warmed = 0;
     this.frame++;
+    this.flushWarm(encoder);
     this.viewsPrepared = n;
     const data = this.viewData;
     for (let i = 0; i < n; i++) {
@@ -855,6 +906,7 @@ export class RenderCore {
       if (phase === 'opaque') to = at;
       else from = at;
     }
+    const warming = this.autoWarm && this.warmerNow.enabled;
     for (let p = from; p < to; p++) {
       const pass = list[p]!;
       const sets = this.bySet[p]!;
@@ -903,6 +955,20 @@ export class RenderCore {
         if (s.depth && pass.depth !== 'none') wantsDepth = true;
         if (s.readsColor) readsColor = true;
         if (s.readsDepth) samplesDepth = true;
+      }
+      if (warming) {
+        // Members that draw nothing here now: their pipelines' empty first draws (`warm`).
+        const wc = resolved ? (target.outputFormat ?? target.format) : target.format;
+        const wa = resolved || !pass.coreTargets ? 0 : auxMask;
+        for (let i = 0; i < sets.length; i++) {
+          const s = sets[i]!;
+          if (!s.warm || (s.count > 0 && s.ready !== false)) continue;
+          const sd =
+            !resolved && pass.depth !== 'none' && (wantsDepth || s.depth)
+              ? this.depthFormat
+              : undefined;
+          st.warmed += s.warm(this.warmerNow, group, wc, sd, wa);
+        }
       }
       if (!work) continue;
       if (readsColor && !colorCopied && target.texture && this.colorTexture) {
@@ -1004,6 +1070,16 @@ export class RenderCore {
     }
     // Nothing drew: still clear, as a target given a clear colour expects.
     if (first && target.clear) this.clearOnly(encoder, target);
+    if (warming) {
+      // Casters the shadow pass did not draw (shadows off, empty, disabled): their depth-only
+      // pipelines, in the shadow map's format.
+      const all = this.sets;
+      for (let i = 0; i < all.length; i++) {
+        const s = all[i]!;
+        if (s.castShadow) st.warmed += s.warm(this.warmerNow, group, null, this.shadowFormat);
+      }
+    }
+    this.flushWarm(encoder);
   }
 
   /** One pass that only clears the target's colour and the view's extra targets. */
@@ -1229,10 +1305,11 @@ export class RenderCore {
     }
     const group = this.groupOf[viewIndex]!;
     const sets = this.sets;
+    this.shadowFormat = target.format;
     let any = false;
     for (let i = 0; i < sets.length; i++) {
       const s = sets[i]!;
-      if (s.castShadow && s.count > 0 && s.ready) {
+      if (s.castShadow && s.count > 0 && s.ready && s.inView(group)) {
         any = true;
         break;
       }
@@ -1261,7 +1338,7 @@ export class RenderCore {
     while (bundles.length > 0) bundles.pop();
     for (let i = 0; i < sets.length; i++) {
       const s = sets[i]!;
-      if (!s.castShadow || s.count === 0 || !s.ready) continue;
+      if (!s.castShadow || s.count === 0 || !s.ready || !s.inView(group)) continue;
       if (s.encoding() === 'bundle') {
         bundles.push(s.bundle(group, null, target.format, false, 0));
         continue;

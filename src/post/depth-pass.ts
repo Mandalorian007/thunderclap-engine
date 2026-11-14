@@ -1,3 +1,4 @@
+import { type PipelineWarmer, pipelineWarmer } from '../render/core/warm';
 import { createShaderModule, WGSL_FULLSCREEN_PRELUDE } from '../render/wgsl';
 import type { PostHost } from './host';
 import { POST_UNIFORM_FLOATS } from './settings';
@@ -30,6 +31,7 @@ export class DepthPass {
   private readonly colorAttachments: GPURenderPassColorAttachment[];
   private readonly passDesc: GPURenderPassDescriptor;
   private readonly entries: GPUBindGroupEntry[];
+  private readonly warmer: PipelineWarmer;
 
   constructor(
     renderer: PostHost,
@@ -85,6 +87,19 @@ export class DepthPass {
       clearValue: { r: 1, g: 1, b: 1, a: 1 },
     }));
     this.passDesc = { label: `pass:${desc.label}`, colorAttachments: this.colorAttachments };
+    // Its empty first draw (ws/warm-voxel-fit) with scratch inputs, encoded before the device's
+    // next real pass: a depth pass enabled mid-play (outline, AO, DOF) compiles at load.
+    const warmer = pipelineWarmer(device);
+    this.warmer = warmer;
+    warmer.warm(this.pipeline, {
+      color: formats,
+      bind: (pass) => {
+        const views: GPUTextureView[] = [];
+        for (let i = 0; i < this.textures; i++) views.push(warmer.scratchSampled());
+        pass.setBindGroup(0, this.group(warmer.scratchSampled(true), views, `warm:${this.label}`));
+        return 1;
+      },
+    });
   }
 
   /** The pass's uniform buffer, for an encoder-ordered copy (ws/render-12: one per XR eye). */
@@ -103,14 +118,18 @@ export class DepthPass {
         `pass ${this.label}: expected ${this.textures} textures, got ${views.length}`,
       );
     }
+    return this.group(depth, views, `pass:${this.label}`);
+  }
+
+  private group(
+    depth: GPUTextureView,
+    views: readonly GPUTextureView[],
+    label: string,
+  ): GPUBindGroup {
     const entries = this.entries.slice();
     entries.push({ binding: 3, resource: depth });
     for (let i = 0; i < views.length; i++) entries.push({ binding: 4 + i, resource: views[i]! });
-    return this.device.createBindGroup({
-      label: `pass:${this.label}`,
-      layout: this.layout,
-      entries,
-    });
+    return this.device.createBindGroup({ label, layout: this.layout, entries });
   }
 
   encode(
@@ -128,6 +147,7 @@ export class DepthPass {
       atts[i]!.view = view;
     }
     this.passDesc.timestampWrites = timestampWrites;
+    this.warmer.encode(encoder);
     const pass = encoder.beginRenderPass(this.passDesc);
     pass.setPipeline(this.pipeline);
     pass.setBindGroup(0, group);

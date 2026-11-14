@@ -312,7 +312,8 @@ describe('PingPong', () => {
     }
     expect(targets).toEqual([b.view, a.view, b.view, a.view, b.view, a.view]);
     expect(pp.read).toBe(a);
-    expect(fake.bindGroups.length - before).toBe(2);
+    // Two, plus the managed group the pass's warm draw binds (ws/warm-voxel-fit) on its first encode.
+    expect(fake.bindGroups.length - before).toBe(3);
     pp.resize(32, 32);
     expect(a.texture as unknown as { destroyed: boolean }).toMatchObject({ destroyed: true });
     expect(pp.width).toBe(32);
