@@ -28,11 +28,13 @@ import {
   SLOT_HIDDEN,
   SLOT_LIVE,
   SLOT_WORDS,
+  sphereBeyond,
 } from './cull';
+import type { PassMember } from './drawable';
 import type { BufferLayout } from './layout';
 import type { CorePass } from './pass-list';
 import { type CoreTargetName, coreColorFormats, coreColorTargets, coreTargetMask } from './targets';
-import { CORE_VIEW_WGSL, sphereInPlanes } from './view';
+import { CORE_VIEW_WGSL, sphereInPlanes, VIEW_SLOT } from './view';
 
 /**
  * How a set's slots are culled. `'auto'` is `'gpu'` from 256 slots of capacity, else `'cpu'`.
@@ -62,7 +64,7 @@ export interface DrawSetShader {
   blend?: GPUBlendState;
   /** Default `'back'`. */
   cullMode?: GPUCullMode;
-  /** Default `'less'`. */
+  /** Default `'less'`; `'greater'` in a reversed-Z pass (`PassDesc.reversedZ`). */
   depthCompare?: GPUCompareFunction;
   /**
    * A fragment entry for the depth-only shadow pass (ws/core-passes), for casters with holes
@@ -77,6 +79,42 @@ export interface DrawSetShader {
    * core has and the set does not write are masked off; a written one the core lacks is dropped.
    */
   writes?: readonly CoreTargetName[];
+}
+
+/**
+ * A pipeline variant of a draw set (ws/render-fit; `DrawSetDesc.variants`): the set's shader
+ * with some of it replaced. Drawn where a view asks for it by name (`CoreTarget.variant`: a
+ * forward eye) or in an extra pass the set joins with it (`DrawSetDesc.passes`: a depth-only
+ * prepass). Same vertex layout, slots and bind groups as the set.
+ */
+export interface DrawSetVariant {
+  /**
+   * Other WGSL in place of `DrawSetShader.code` (the same prelude is prepended): its own module,
+   * compiled the first time the variant draws. Default: the set's code.
+   */
+  code?: string;
+  vertexEntry?: string;
+  fragmentEntry?: string;
+  /** `null`: no blending, though the set blends. */
+  blend?: GPUBlendState | null;
+  cullMode?: GPUCullMode;
+  depthCompare?: GPUCompareFunction;
+  writes?: readonly CoreTargetName[];
+  /**
+   * Depth alone (a depth prepass): a fragment entry the core adds, which writes no colour
+   * (every target's write mask 0). `fragmentEntry` is ignored.
+   */
+  depthOnly?: boolean;
+}
+
+/** An extra pass a set draws in (ws/render-fit; `DrawSetDesc.passes`). */
+export interface DrawSetPassJoin {
+  /** The pass's id. */
+  pass: string;
+  /** Draw there with this variant (a name in `DrawSetDesc.variants`). Default: as in its own pass. */
+  variant?: string;
+  /** Order within that pass (default the set's `order`). */
+  order?: number;
 }
 
 export interface DrawSetDesc {
@@ -117,6 +155,20 @@ export interface DrawSetDesc {
    * `(g * capacity + id) * 20`. Needs `INDIRECT` usage; the set never writes or destroys it.
    */
   args?: GPUBuffer;
+  /** Pipeline variants by name (ws/render-fit; `DrawSetVariant`). */
+  variants?: Readonly<Record<string, DrawSetVariant>>;
+  /**
+   * Passes the set also draws in, besides `pass` (ws/render-fit): the same slots, culled once,
+   * drawn again (a depth prepass in `'depthPre'` with a `depthOnly` variant).
+   */
+  passes?: readonly DrawSetPassJoin[];
+  /**
+   * Cull slots whose bounds lie wholly farther than this (world units) from the cull group's eye
+   * (ws/render-fit; `DrawSet.maxDistance`). GPU- and CPU-culled sets only. Default 0: no limit.
+   */
+  maxDistance?: number;
+  /** Draw at all (default true; `DrawSet.enabled`). */
+  enabled?: boolean;
 }
 
 /** One slot: a draw's geometry, instances and bounds. */
@@ -170,6 +222,10 @@ export interface DrawSetHost {
    * a frame, coalesced), or null when every set may rebuild.
    */
   readonly rebuildTurn: DrawSet | null;
+  /** The view being drawn's `CoreTarget.variant`, else null. */
+  readonly viewVariant: string | null;
+  /** A shader module for `code`, shared with every set of the same code (ws/render-fit). */
+  module(label: string, code: string): GPUShaderModule;
 }
 
 /** Per-frame counts (reset by `prepare`) and running totals. */
@@ -216,6 +272,8 @@ interface BundleEntry {
   depth: GPUTextureFormat | undefined;
   readOnly: boolean;
   aux: number;
+  variant: number;
+  write: boolean;
   stamp: number;
   /** The part of `stamp` a stale bundle cannot be drawn without: buffers and bindings. */
   hard: number;
@@ -227,7 +285,63 @@ interface PipelineEntry {
   depth: GPUTextureFormat | undefined;
   depthWrite: boolean;
   aux: number;
+  variant: number;
+  /** The joined pass is reversed-Z (its default depth test). */
+  reversed: boolean;
   pipeline: GPURenderPipeline;
+}
+
+/** A variant as drawn: index 0 is the set's own shader. */
+interface VariantState {
+  name: string;
+  shader: DrawSetShader;
+  /** Its own code after the prelude, or null for the set's module. */
+  code: string | null;
+  depthOnly: boolean;
+  module: GPUShaderModule | null;
+}
+
+/** The fragment entry a `depthOnly` variant draws with. */
+const DEPTH_ONLY_ENTRY = 'core_depth_only';
+
+/** A set's membership of an extra pass (`DrawSetDesc.passes`). */
+class SetJoin implements PassMember {
+  constructor(
+    private readonly set: DrawSet,
+    readonly pass: CorePass,
+    readonly order: number,
+    private readonly variant: number,
+  ) {}
+  get count(): number {
+    return this.set.count;
+  }
+  get depth(): boolean {
+    return this.set.depth && this.pass.depth !== 'none';
+  }
+  get ready(): boolean {
+    return this.set.ready;
+  }
+  encoding(): string {
+    return this.set.encoding();
+  }
+  bundle(
+    group: number,
+    color: GPUTextureFormat,
+    depth: GPUTextureFormat | undefined,
+    readOnly: boolean,
+    aux: number,
+  ): GPURenderBundle {
+    return this.set.bundle(group, color, depth, readOnly, aux, this.variant, this.pass);
+  }
+  encodeDirect(
+    pass: GPURenderPassEncoder,
+    group: number,
+    color: GPUTextureFormat,
+    depth: GPUTextureFormat | undefined,
+    aux: number,
+  ): void {
+    this.set.encodeDirect(pass, group, color, depth, aux, this.variant, this.pass);
+  }
 }
 
 /** How a frame draws a set. */
@@ -245,6 +359,18 @@ export class DrawSet {
   readonly depth: boolean;
   /** Whether the set casts the sun's shadow (`DrawSetDesc.castShadow`). */
   readonly castShadow: boolean;
+  /**
+   * Max draw distance (ws/render-fit; `DrawSetDesc.maxDistance`): slots wholly farther from the
+   * cull group's eye are culled. 0: no limit. Changing it costs one small upload.
+   */
+  maxDistance: number;
+  /**
+   * Draw at all (ws/render-fit): a disabled set keeps its slots and buffers, is not culled and
+   * draws nothing, in any pass or the shadow.
+   */
+  enabled: boolean;
+  /** @internal The set's extra pass memberships (`DrawSetDesc.passes`). */
+  readonly joins: readonly PassMember[];
   /** Bumped when the slot set changes (a static set's bundles are rebuilt). */
   version = 0;
   /**
@@ -276,6 +402,7 @@ export class DrawSet {
   private readonly visible: Uint8Array | null;
   private visibleFrame = -1;
   private visibleGroup = -1;
+  private visibleDistance = 0;
   private readonly freeIds: number[] = [];
   private live = 0;
   private high = 0;
@@ -284,7 +411,18 @@ export class DrawSet {
   private slotBuffer: GPUBuffer | null = null;
   private argsBuffer: GPUBuffer | null = null;
   private paramsBuffer: GPUBuffer | null = null;
-  private readonly params = new Uint32Array(4);
+  private readonly params = new Uint32Array(CULL_PARAMS_BYTES / 4);
+  private readonly paramsF32 = new Float32Array(this.params.buffer);
+  private paramsDistance = -1;
+  /** Index 0: the set's own shader; then `desc.variants` in key order. */
+  private readonly variants: VariantState[] = [];
+  /** The variant, pass and depth write of the draw being recorded. */
+  private useVariant = 0;
+  private usePass!: CorePass;
+  private lastViewVariant: string | null = null;
+  private lastViewIndex = 0;
+  /** WGSL the set's code goes after (the view, `VertexIn`, the layouts' decodes). */
+  private prelude = '';
   private cullGroup: GPUBindGroup | null = null;
   private readonly bundles: BundleEntry[] = [];
   private readonly pipelines: PipelineEntry[] = [];
@@ -326,6 +464,41 @@ export class DrawSet {
     this.depth = desc.depth ?? this.pass.depth !== 'none';
     this.castShadow =
       desc.castShadow ?? (this.depth && this.pass.depth === 'write' && !desc.shader.blend);
+    this.maxDistance = desc.maxDistance ?? 0;
+    this.enabled = desc.enabled ?? true;
+    this.usePass = this.pass;
+    this.variants.push({
+      name: '',
+      shader: desc.shader,
+      code: null,
+      depthOnly: false,
+      module: null,
+    });
+    for (const name of Object.keys(desc.variants ?? {})) {
+      const v = desc.variants![name]!;
+      const shader: DrawSetShader = {
+        ...desc.shader,
+        code: v.code ?? desc.shader.code,
+        vertexEntry: v.vertexEntry ?? desc.shader.vertexEntry,
+        fragmentEntry: v.depthOnly
+          ? DEPTH_ONLY_ENTRY
+          : (v.fragmentEntry ?? desc.shader.fragmentEntry),
+        blend: v.blend === null ? undefined : (v.blend ?? desc.shader.blend),
+        cullMode: v.cullMode ?? desc.shader.cullMode,
+        depthCompare: v.depthCompare ?? desc.shader.depthCompare,
+        writes: v.depthOnly ? [] : (v.writes ?? desc.shader.writes),
+      };
+      const depthOnly = v.depthOnly === true;
+      const code =
+        v.code === undefined && !depthOnly
+          ? null
+          : `${shader.code}${depthOnly ? `\n@fragment fn ${DEPTH_ONLY_ENTRY}() {}\n` : ''}`;
+      this.variants.push({ name, shader, code, depthOnly, module: null });
+    }
+    this.joins = (desc.passes ?? []).map(
+      (j) =>
+        new SetJoin(this, host.pass(j.pass), j.order ?? this.order, this.variantIndex(j.variant)),
+    );
     const words = new ArrayBuffer(desc.capacity * SLOT_BYTES);
     this.slotF32 = new Float32Array(words);
     this.slotU32 = new Uint32Array(words);
@@ -377,15 +550,16 @@ export class DrawSet {
     ]
       .filter(Boolean)
       .join('\n  ');
-    const code = `${CORE_VIEW_WGSL}
+    this.prelude = `${CORE_VIEW_WGSL}
 @group(0) @binding(0) var<uniform> view: CoreView;
 struct VertexIn {
   ${fields}
 };
 ${vl.wgslDecode}
 ${il?.wgslDecode ?? ''}
-${desc.shader.code}`;
-    this.module = device.createShaderModule({ label: this.label, code });
+`;
+    this.module = host.module(this.label, this.prelude + desc.shader.code);
+    for (const v of this.variants) v.module = null;
     const groups = [host.viewLayout];
     for (const g of this.bindGroups ?? []) groups.push(g.layout);
     this.layout = device.createPipelineLayout({ label: this.label, bindGroupLayouts: groups });
@@ -447,6 +621,7 @@ ${desc.shader.code}`;
     this.paramsViews = -1;
     this.paramsCount = -1;
     this.paramsFirst = -1;
+    this.paramsDistance = -1;
     this.visibleFrame = -1;
     this.waiting =
       (this.bindGroups !== null && this.bindGroups.length > 0) || this.cull === 'external';
@@ -476,20 +651,32 @@ ${desc.shader.code}`;
       if (this.cull !== 'external') throw new Error(`${this.label}: args are for an external set`);
       this.argsBuffer = args;
     }
+    const old = this.bindGroups;
+    // The same layouts (new groups on this device): the pipelines stay; only bundles re-record.
+    let same = !this.waiting && old !== null && old.length === groups.length;
+    for (let i = 0; same && i < groups.length; i++)
+      if (old![i]!.layout !== groups[i]!.layout) same = false;
     this.bindGroups = groups;
     this.waiting = false;
-    this.layout = this.host.device.createPipelineLayout({
-      label: this.label,
-      bindGroupLayouts: [this.host.viewLayout, ...groups.map((g) => g.layout)],
-    });
-    this.pipelines.length = 0;
+    if (!same) {
+      this.layout = this.host.device.createPipelineLayout({
+        label: this.label,
+        bindGroupLayouts: [this.host.viewLayout, ...groups.map((g) => g.layout)],
+      });
+      this.pipelines.length = 0;
+    }
     this.bundles.length = 0;
     this.bump();
   }
 
-  /** @internal False while a restored set waits for `setBindGroups`. */
+  /** @internal False while a restored set waits for `setBindGroups`, or while it is disabled. */
   get ready(): boolean {
-    return !this.waiting && !this.destroyed;
+    return !this.waiting && !this.destroyed && this.enabled;
+  }
+
+  /** The pipeline variants' names (`DrawSetDesc.variants`). */
+  get variantNames(): string[] {
+    return this.variants.slice(1).map((v) => v.name);
   }
 
   /** Live slots. */
@@ -614,18 +801,22 @@ ${desc.shader.code}`;
       this.dirtyHi = -1;
     }
     const first = this.useMulti() ? 1 : 0;
+    const dist = Math.max(this.maxDistance, 0);
     if (
       views !== this.paramsViews ||
       this.high !== this.paramsCount ||
-      first !== this.paramsFirst
+      first !== this.paramsFirst ||
+      dist !== this.paramsDistance
     ) {
       this.paramsViews = views;
       this.paramsCount = this.high;
       this.paramsFirst = first;
+      this.paramsDistance = dist;
       this.params[0] = this.high;
       this.params[1] = this.capacity;
       this.params[2] = views;
       this.params[3] = first;
+      this.paramsF32[4] = dist;
       device.queue.writeBuffer(this.paramsBuffer, 0, this.params);
       stats.calls++;
     }
@@ -649,7 +840,8 @@ ${desc.shader.code}`;
 
   /**
    * @internal The bundle for cull group `group` into a target of these formats, recorded if
-   * stale. Every view of the group executes it.
+   * stale. Every view of the group executes it. `variant` (an index; -1: the view's
+   * `CoreTarget.variant` when the set has it) and `pass` (default its own) pick the pipeline.
    */
   bundle(
     group: number,
@@ -657,8 +849,13 @@ ${desc.shader.code}`;
     depth: GPUTextureFormat | undefined,
     readOnly: boolean,
     aux = 0,
+    variant = -1,
+    pass: CorePass = this.pass,
   ): GPURenderBundle {
     this.aux = color === null ? 0 : aux;
+    this.use(color, variant, pass);
+    const v = this.useVariant;
+    const write = pass.depth === 'write';
     const stamp = this.stamp();
     const bind = this.host.drawGroup(group);
     let entry: BundleEntry | undefined;
@@ -669,7 +866,9 @@ ${desc.shader.code}`;
         b.color === color &&
         b.depth === depth &&
         b.readOnly === readOnly &&
-        b.aux === this.aux
+        b.aux === this.aux &&
+        b.variant === v &&
+        b.write === write
       ) {
         entry = b;
         break;
@@ -717,6 +916,8 @@ ${desc.shader.code}`;
         depth,
         readOnly,
         aux: this.aux,
+        variant: v,
+        write,
         stamp,
         hard,
         bundle,
@@ -733,8 +934,11 @@ ${desc.shader.code}`;
     color: GPUTextureFormat | null,
     depth: GPUTextureFormat | undefined,
     aux = 0,
+    variant = -1,
+    joined: CorePass = this.pass,
   ): void {
     this.aux = color === null ? 0 : aux;
+    this.use(color, variant, joined);
     if (this.useMulti()) {
       const { stats } = this.host;
       this.bindCommon(pass, group, color, depth);
@@ -755,6 +959,44 @@ ${desc.shader.code}`;
   }
 
   // ------------------------------------------------------------------ internals
+
+  /** Variant `name`'s index (0: none or no such variant; throws for an unknown join variant). */
+  private variantIndex(name: string | undefined): number {
+    if (name === undefined) return -1;
+    for (let i = 1; i < this.variants.length; i++) if (this.variants[i]!.name === name) return i;
+    throw new Error(`${this.label}: no variant ${name}`);
+  }
+
+  /** Set the variant and pass the next pipeline is for. */
+  private use(color: GPUTextureFormat | null, variant: number, pass: CorePass): void {
+    this.usePass = pass;
+    if (color === null) {
+      this.useVariant = 0;
+      return;
+    }
+    if (variant >= 0) {
+      this.useVariant = variant;
+      return;
+    }
+    const name = this.host.viewVariant;
+    if (name !== this.lastViewVariant) {
+      this.lastViewVariant = name;
+      this.lastViewIndex = 0;
+      if (name !== null) {
+        for (let i = 1; i < this.variants.length; i++) {
+          if (this.variants[i]!.name === name) this.lastViewIndex = i;
+        }
+      }
+    }
+    this.useVariant = this.lastViewIndex;
+  }
+
+  /** The module variant `v` draws with. */
+  private moduleOf(v: VariantState): GPUShaderModule {
+    if (v.code === null) return this.module;
+    v.module ??= this.host.module(`${this.label} ${v.name}`, this.prelude + v.code);
+    return v.module;
+  }
 
   private check(id: number): void {
     if (!this.has(id)) throw new Error(`${this.label}: no slot ${id}`);
@@ -921,11 +1163,21 @@ ${desc.shader.code}`;
   /** CPU cull: which live slots cull group `group` sees, once per (frame, group). */
   private cullCpu(group: number): void {
     const h = this.host;
-    if (this.visibleFrame === h.frame && this.visibleGroup === group) return;
+    if (
+      this.visibleFrame === h.frame &&
+      this.visibleGroup === group &&
+      this.visibleDistance === this.maxDistance
+    ) {
+      return;
+    }
+    this.visibleDistance = this.maxDistance;
     this.visibleFrame = h.frame;
     this.visibleGroup = group;
     const vis = this.visible!;
     const at = h.groupPlanes(group);
+    const eye = at - VIEW_SLOT.planes + VIEW_SLOT.position;
+    const dist = this.maxDistance;
+    const f = this.slotF32;
     for (let id = 0; id < this.high; id++) {
       const s = id * SLOT_WORDS;
       vis[id] =
@@ -933,11 +1185,21 @@ ${desc.shader.code}`;
         sphereInPlanes(
           h.viewData,
           at,
-          this.slotF32[s + SLOT.x]!,
-          this.slotF32[s + SLOT.y]!,
-          this.slotF32[s + SLOT.z]!,
-          this.slotF32[s + SLOT.r]!,
-        )
+          f[s + SLOT.x]!,
+          f[s + SLOT.y]!,
+          f[s + SLOT.z]!,
+          f[s + SLOT.r]!,
+        ) &&
+        (dist <= 0 ||
+          !sphereBeyond(
+            h.viewData,
+            eye,
+            f[s + SLOT.x]!,
+            f[s + SLOT.y]!,
+            f[s + SLOT.z]!,
+            f[s + SLOT.r]!,
+            dist,
+          ))
           ? 1
           : 0;
     }
@@ -985,19 +1247,26 @@ ${desc.shader.code}`;
     depth: GPUTextureFormat | undefined,
   ): GPURenderPipeline {
     // A null colour is the depth-only shadow pipeline (`RenderCore.drawShadow`): depth written.
-    const depthWrite = color === null || this.pass.depth === 'write';
+    const depthWrite = color === null || this.usePass.depth === 'write';
+    const vi = this.useVariant;
+    const reversed = color !== null && this.usePass.reversedZ;
     for (let i = 0; i < this.pipelines.length; i++) {
       const p = this.pipelines[i]!;
       if (
         p.color === color &&
         p.depth === depth &&
         p.depthWrite === depthWrite &&
-        p.aux === this.aux
+        p.aux === this.aux &&
+        p.variant === vi &&
+        p.reversed === reversed
       ) {
         return p.pipeline;
       }
     }
     const d = this.desc;
+    const variant = this.variants[vi]!;
+    const sh = variant.shader;
+    const module = this.moduleOf(variant);
     const buffers: GPUVertexBufferLayout[] = [d.vertexLayout.buffer(0)];
     if (d.instanceLayout) buffers.push(d.instanceLayout.buffer(d.vertexLayout.attributes.length));
     if (this.originBuffer) {
@@ -1018,25 +1287,30 @@ ${desc.shader.code}`;
     const pipeline = this.host.device.createRenderPipeline({
       label: this.label,
       layout: this.depthOnly(color) ? this.shadowPipelineLayout() : this.layout,
-      vertex: { module: this.module, entryPoint: d.shader.vertexEntry ?? 'vs', buffers },
+      vertex: { module, entryPoint: sh.vertexEntry ?? 'vs', buffers },
       fragment:
         color === null
           ? d.shader.shadowFragmentEntry
-            ? { module: this.module, entryPoint: d.shader.shadowFragmentEntry, targets: [] }
+            ? { module, entryPoint: d.shader.shadowFragmentEntry, targets: [] }
             : undefined
           : {
-              module: this.module,
-              entryPoint: d.shader.fragmentEntry ?? 'fs',
+              module,
+              entryPoint: sh.fragmentEntry ?? 'fs',
+              // A depth-only variant: every target present, none written.
               targets: coreColorTargets(
-                d.shader.blend ? { format: color, blend: d.shader.blend } : { format: color },
+                variant.depthOnly
+                  ? { format: color, writeMask: 0 }
+                  : sh.blend
+                    ? { format: color, blend: sh.blend }
+                    : { format: color },
                 this.aux,
-                coreTargetMask(d.shader.writes),
+                coreTargetMask(sh.writes),
               ),
             },
       // The shadow pass draws both faces, as the renderer's own shadow pass does.
       primitive: {
         topology: 'triangle-list',
-        cullMode: color === null ? 'none' : (d.shader.cullMode ?? 'back'),
+        cullMode: color === null ? 'none' : (sh.cullMode ?? 'back'),
       },
       depthStencil:
         color === null && depth
@@ -1045,13 +1319,21 @@ ${desc.shader.code}`;
             ? {
                 format: depth,
                 depthWriteEnabled: depthWrite,
-                depthCompare: d.shader.depthCompare ?? 'less',
+                depthCompare: sh.depthCompare ?? (reversed ? 'greater' : 'less'),
               }
             : depth
               ? { format: depth, depthWriteEnabled: false, depthCompare: 'always' }
               : undefined,
     });
-    this.pipelines.push({ color, depth, depthWrite, aux: this.aux, pipeline });
+    this.pipelines.push({
+      color,
+      depth,
+      depthWrite,
+      aux: this.aux,
+      variant: vi,
+      reversed,
+      pipeline,
+    });
     return pipeline;
   }
 
