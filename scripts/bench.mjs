@@ -225,9 +225,11 @@ async function main() {
     if (write) {
       const d = new Date();
       const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-      // Keep the counted-work section (src/render/baseline.budget.test.ts writes it, ws/budget).
+      // Keep the reference scenes (E-041 A4) and the counted-work section
+      // (src/render/baseline.budget.test.ts writes it, ws/budget): everything from the first.
       const prev = existsSync(out) ? readFileSync(out, 'utf8') : '';
-      const at = prev.indexOf('\n## Counted work, 1.3 baseline\n');
+      const ref = prev.indexOf('\n## Reference scenes\n');
+      const at = ref >= 0 ? ref : prev.indexOf('\n## Counted work, 1.3 baseline\n');
       writeFileSync(out, renderDoc(state, date) + (at < 0 ? '' : prev.slice(at)));
       console.log(`wrote ${relative(root, out)}`);
     }

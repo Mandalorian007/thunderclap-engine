@@ -1,0 +1,91 @@
+{
+  "rows": {
+    "ref-hud": {
+      "commands": 22,
+      "draw": 1,
+      "drawIndexed": 2,
+      "setPipeline": 2,
+      "setBindGroup": 2,
+      "setVertexBuffer": 4,
+      "beginRenderPass": 2,
+      "beginComputePass": 0,
+      "dispatch": 0,
+      "submit": 1,
+      "writeBuffer": 2,
+      "writeBufferBytes": 2480,
+      "writeTexture": 0,
+      "copies": 0,
+      "createBuffer": 0,
+      "createTexture": 0,
+      "createBindGroup": 0,
+      "createOther": 1,
+      "typedArrays": 0,
+      "arrayBuffers": 0,
+      "clockReads": 0
+    }
+  },
+  "parts": {
+    "ref-hud": {
+      "view": {
+        "commands": 15,
+        "draw": 0,
+        "drawIndexed": 2,
+        "setPipeline": 1,
+        "setBindGroup": 1,
+        "setVertexBuffer": 4,
+        "beginRenderPass": 1,
+        "beginComputePass": 0,
+        "dispatch": 0,
+        "submit": 0,
+        "writeBuffer": 2,
+        "writeBufferBytes": 2480,
+        "writeTexture": 0,
+        "copies": 0,
+        "createBuffer": 0,
+        "createTexture": 0,
+        "createBindGroup": 0,
+        "createOther": 1,
+        "typedArrays": 0,
+        "arrayBuffers": 0,
+        "clockReads": 0
+      },
+      "present": {
+        "commands": 7,
+        "draw": 1,
+        "drawIndexed": 0,
+        "setPipeline": 1,
+        "setBindGroup": 1,
+        "setVertexBuffer": 0,
+        "beginRenderPass": 1,
+        "beginComputePass": 0,
+        "dispatch": 0,
+        "submit": 1,
+        "writeBuffer": 0,
+        "writeBufferBytes": 0,
+        "writeTexture": 0,
+        "copies": 0,
+        "createBuffer": 0,
+        "createTexture": 0,
+        "createBindGroup": 0,
+        "createOther": 0,
+        "typedArrays": 0,
+        "arrayBuffers": 0,
+        "clockReads": 0
+      }
+    }
+  },
+  "stats": {
+    "ref-hud": {
+      "drawCalls": 2,
+      "triangles": 38,
+      "instances": 4,
+      "culled": 0,
+      "shadowDraws": 0,
+      "passes": 1
+    }
+  },
+  "notes": {
+    "ref-hud: DOM writes a frame": 0,
+    "ref-hud: DOM reads a frame": 0
+  }
+}

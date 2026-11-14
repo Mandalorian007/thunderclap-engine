@@ -1,0 +1,88 @@
+{
+  "rows": {
+    "ref-arena": {
+      "commands": 252.25,
+      "draw": 13,
+      "drawIndexed": 39.375,
+      "setPipeline": 48.6,
+      "setBindGroup": 49.6,
+      "setVertexBuffer": 38.45,
+      "beginRenderPass": 15,
+      "beginComputePass": 0,
+      "dispatch": 0,
+      "submit": 1,
+      "writeBuffer": 6,
+      "writeBufferBytes": 18822.4,
+      "writeTexture": 0,
+      "copies": 0,
+      "createBuffer": 0,
+      "createTexture": 0,
+      "createBindGroup": 0,
+      "createOther": 1,
+      "typedArrays": 0,
+      "arrayBuffers": 0,
+      "clockReads": 0
+    }
+  },
+  "parts": {
+    "ref-arena": {
+      "view": {
+        "commands": 177.25,
+        "draw": 0,
+        "drawIndexed": 39.375,
+        "setPipeline": 35.6,
+        "setBindGroup": 36.6,
+        "setVertexBuffer": 38.45,
+        "beginRenderPass": 2,
+        "beginComputePass": 0,
+        "dispatch": 0,
+        "submit": 0,
+        "writeBuffer": 3,
+        "writeBufferBytes": 16518.4,
+        "writeTexture": 0,
+        "copies": 0,
+        "createBuffer": 0,
+        "createTexture": 0,
+        "createBindGroup": 0,
+        "createOther": 1,
+        "typedArrays": 0,
+        "arrayBuffers": 0,
+        "clockReads": 0
+      },
+      "present": {
+        "commands": 75,
+        "draw": 13,
+        "drawIndexed": 0,
+        "setPipeline": 13,
+        "setBindGroup": 13,
+        "setVertexBuffer": 0,
+        "beginRenderPass": 13,
+        "beginComputePass": 0,
+        "dispatch": 0,
+        "submit": 1,
+        "writeBuffer": 3,
+        "writeBufferBytes": 2304,
+        "writeTexture": 0,
+        "copies": 0,
+        "createBuffer": 0,
+        "createTexture": 0,
+        "createBindGroup": 0,
+        "createOther": 0,
+        "typedArrays": 0,
+        "arrayBuffers": 0,
+        "clockReads": 0
+      }
+    }
+  },
+  "stats": {
+    "ref-arena": {
+      "drawCalls": 35,
+      "triangles": 47138,
+      "instances": 58,
+      "culled": 0,
+      "shadowDraws": 53,
+      "passes": 1
+    }
+  },
+  "notes": {}
+}

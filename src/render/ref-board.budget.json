@@ -1,0 +1,41 @@
+{
+  "rows": {
+    "ref-board": {
+      "commands": 28,
+      "draw": 1,
+      "drawIndexed": 3,
+      "setPipeline": 4,
+      "setBindGroup": 5,
+      "setVertexBuffer": 4,
+      "beginRenderPass": 2,
+      "beginComputePass": 0,
+      "dispatch": 0,
+      "submit": 1,
+      "writeBuffer": 2,
+      "writeBufferBytes": 450256,
+      "writeTexture": 0,
+      "copies": 0,
+      "createBuffer": 0,
+      "createTexture": 0,
+      "createBindGroup": 0,
+      "createOther": 1,
+      "typedArrays": 0,
+      "arrayBuffers": 0,
+      "clockReads": 0
+    }
+  },
+  "parts": {
+    "ref-board": {}
+  },
+  "stats": {
+    "ref-board": {
+      "drawCalls": 3,
+      "triangles": 10594,
+      "instances": 4002,
+      "culled": 0,
+      "shadowDraws": 0,
+      "passes": 1
+    }
+  },
+  "notes": {}
+}
