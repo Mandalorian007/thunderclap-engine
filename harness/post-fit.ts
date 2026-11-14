@@ -3,7 +3,10 @@
  * through a `PostStack` with TAA, bloom and a LUT (god rays off, the rest of the defaults). Measures `?frames=`
  * frames (default 240) after a 60-frame warm-up and publishes medians on `window.__harnessPostFit`.
  * Run it at the size to measure (iPad: a 2360×1640 viewport at device scale 1); `?scale=` sets the
- * renderer's resolution scale. Nothing here is engine code.
+ * renderer's resolution scale. `?variants=1` also runs a second stack each frame into an offscreen
+ * `rgba16float` target with the ws/post-fit options (a composite hook with a texture and a buffer,
+ * linear output, a half-float LUT, no emissive add), so their WGSL compiles on a real GPU
+ * (`gpuErrors`). Nothing here is engine code.
  */
 import { GameLoop } from '@thunderclap-engine/engine/core';
 import { boot } from '@thunderclap-engine/engine/platform';
@@ -13,7 +16,10 @@ import {
   gpuDiagnostics,
   type InstanceParams,
   installGpuErrorLogging,
+  type PostInputs,
+  type PostProcessor,
   Renderer,
+  type SceneTargetViewport,
   Transform,
   VERTEX_LAYOUT_3D,
 } from '@thunderclap-engine/engine/render';
@@ -134,6 +140,71 @@ async function main(): Promise<void> {
     lut: { texture: createLutTexture(device, 16, (r, g, b) => [r * 0.9 + b * 0.1, g, b]) },
   });
   renderer.post = post;
+  if (params.get('variants') === '1') {
+    const hookBuf = device.createBuffer({
+      label: 'post-fit-hook-buf',
+      size: 16,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
+    device.queue.writeBuffer(hookBuf, 0, new Float32Array([0.9, 1, 1.1, 0]));
+    const variant = new PostStack(
+      renderer,
+      {
+        taa: { enabled: true },
+        bloom: { enabled: true, emissiveAdd: 0 },
+        godRays: { enabled: false },
+      },
+      {
+        format: 'rgba16float',
+        toSrgb: false,
+        hook: {
+          wgsl: /* wgsl */ `
+@group(0) @binding(16) var<storage, read> hookBuf0: array<vec4f>;
+fn post_hook(uv: vec2f, c: vec3f) -> vec3f {
+  let t = textureSampleLevel(hookTex0, samp, uv, 0.0).rgb;
+  return c * hookBuf0[0].xyz * t;
+}`,
+          textures: 1,
+          buffers: [hookBuf],
+        },
+      },
+    );
+    variant.set({
+      lut: {
+        size: 16,
+        intensity: 1,
+        texture: createLutTexture(device, 16, (r, g, b) => [g, r, b], 'rgba16float'),
+      },
+    });
+    let offscreen: GPUTexture | null = null;
+    const pair: PostProcessor = {
+      resize(w, h) {
+        post.resize(w, h);
+        variant.resize(w, h);
+      },
+      encode(
+        encoder: GPUCommandEncoder,
+        inputs: PostInputs,
+        output: GPUTextureView,
+        viewport?: SceneTargetViewport,
+      ) {
+        post.encode(encoder, inputs, output, viewport);
+        const w = inputs.color.width;
+        const h = inputs.color.height;
+        if (!offscreen || offscreen.width !== w || offscreen.height !== h) {
+          offscreen?.destroy();
+          offscreen = device.createTexture({
+            label: 'post-fit-variant-out',
+            size: [w, h],
+            format: 'rgba16float',
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+          });
+        }
+        variant.encode(encoder, inputs, offscreen.createView());
+      },
+    };
+    renderer.post = pair;
+  }
 
   const camera = Camera.perspective((60 * Math.PI) / 180, 2360 / 1640, 0.1, 200);
   renderer.camera = camera;

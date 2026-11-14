@@ -451,8 +451,9 @@ the stack. All additive; a stack made as before draws the same pixels.
 - **Composite hook.** `PostStackOptions.hook: PostCompositeHook` adds WGSL defining
   `fn post_hook(uv: vec2f, c: vec3f) -> vec3f`, called after sharpen and before the outline,
   in linear colour. `textures` (up to 4) are bound as `hookTex0..3` (`setHookTextures(views)`;
-  a white texel until set), `buffers` as `hookBuf0..` (`var<storage, read>`); sample with
-  `samp`. The hook is compiled in only when given.
+  a white texel until set); `buffers` (up to 4) are bound at `@binding(16 + i)`, which the hook
+  declares itself with its own type (`@group(0) @binding(16) var<storage, read> tint: vec4f;`).
+  Sample with `samp`. The hook is compiled in only when given.
 - **Emissive add.** `bloom.emissiveAdd` (default 1) weights the emissive the composite adds to
   the scene; 0 skips the add (a game that already wrote its glow into colour).
 - **Jitter on the core.** `CorePost.setJitter(x, y, view?)` (px) tells the post the jitter the
