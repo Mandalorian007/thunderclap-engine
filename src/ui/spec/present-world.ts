@@ -181,7 +181,7 @@ export class WorldPresenter implements SpecPresenter {
   private readonly tabW = new Float64Array(32);
   private readonly scratch: PanelRect = { x: 0, y: 0, w: 0, h: 0 };
   private readonly glyphs = new Map<string, unknown>();
-  private readonly follower: (i: number, v: SpecValue) => void;
+  private readonly follower: (i: number, v: SpecValue, from: unknown) => void;
   private ctx: PanelContext2D | null = null;
   private clip: PanelRect = { x: 0, y: 0, w: 0, h: 0 };
   /** It is drawn given way (`SpecPanel.given`): not painted, not hit. */
@@ -237,7 +237,9 @@ export class WorldPresenter implements SpecPresenter {
     w.rect = { x: this.rect.x, y: this.rect.y, w: this.rect.w, h: this.rect.h };
     this.widget = w;
     surface.add(w);
-    this.follower = (i) => this.markKey(i);
+    this.follower = (i, _v, from) => {
+      if (from !== this) this.markKey(i);
+    };
     panel.model.followers.push(this.follower);
     if (this.fit === 'surface')
       panel.frame(this.rect.w / this.scale, this.rect.h / this.scale, panel.text);
@@ -1689,7 +1691,8 @@ export class WorldPresenter implements SpecPresenter {
     const v = Math.min(n.max, Math.max(n.min, Math.round(value / n.step) * n.step));
     const was = this.rangeValue(i, n, this.rowOf(i, row));
     if (v === was) return;
-    if (!n.value.b.startsWith('row.')) this.p.model.follow(this.p.spec.keyIndex.get(n.value.b)!, v);
+    if (!n.value.b.startsWith('row.'))
+      this.p.model.follow(this.p.spec.keyIndex.get(n.value.b)!, v, this);
     this.markAt(i, row);
     this.emit(i, row, 'change', v);
   }
@@ -1882,7 +1885,7 @@ export class WorldPresenter implements SpecPresenter {
     const c = this.p.spec;
     const f = c.nodes[i] as SpecField;
     if (f.value && !f.value.b.startsWith('row.'))
-      this.p.model.follow(c.keyIndex.get(f.value.b)!, v);
+      this.p.model.follow(c.keyIndex.get(f.value.b)!, v, this);
     else this.fieldText.set(`${i}|${row ?? ''}`, v);
     this.markAt(i, row);
     this.emit(i, row, 'input', v);

@@ -86,7 +86,6 @@ const state: UiFitState = {
   worldRows: [],
   uploads: 0,
   given: false,
-  find: '',
 };
 
 const p = panel(FIT, { schedule: null });
@@ -164,7 +163,6 @@ async function boot(): Promise<void> {
     state.worldRows = world.rows('things');
     state.uploads = surface.stats.uploads;
     state.given = p.given;
-    state.find = String(p.model.get('find') ?? '');
     requestAnimationFrame(frame);
   };
   state.gpu = 'ok';

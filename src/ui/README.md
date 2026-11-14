@@ -1102,6 +1102,10 @@ flat screen, a touch screen and in a headset. All additive: a spec without them 
 - **Fields.** `typeAhead: true` (one per panel): a letter typed with nothing focused goes into the
   field (a search's lowercased), `/` focuses it. `closeKey: 'KeyE'`: that key in the empty field
   says `close` (not while a finger last touched: a soft keyboard types it).
+- **Field text.** The model is the one truth: every presenter shows the model's value. Text typed
+  on one surface goes into the model (`SpecModel.follow(i, v, from)`) and every other presenter on
+  the panel shows it at its next apply; the game writes nothing back, and a `set` of `''` clears
+  it everywhere. Presenters never talk to each other, only through the model.
 - **Held slot.** `{ k: 'slot', press: 'held' }` says `down` and `up`, never `tap`.
 - **Automation.** `dom.el(id, row?)`, `rows(listId)` (the rows bound, in order), `reveal(listId,
   key)`; the world presenter's `rows` (in view) and `reveal`. Every word with an id has `data-id`.

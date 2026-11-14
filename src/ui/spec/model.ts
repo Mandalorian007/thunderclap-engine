@@ -212,8 +212,11 @@ export class SpecModel {
    * undefined (none asked).
    */
   focusing: string | null | undefined = undefined;
-  /** Told of each `follow` (a field typed in on one surface: the other presenters show it too). */
-  readonly followers: ((i: number, v: SpecValue) => void)[] = [];
+  /**
+   * Told of each `follow` (a field typed in on one surface: the other presenters show it too),
+   * with the presenter it came from (`from`; a follower skips its own).
+   */
+  readonly followers: ((i: number, v: SpecValue, from: unknown) => void)[] = [];
 
   constructor(spec: CompiledSpec) {
     this.spec = spec;
@@ -270,13 +273,15 @@ export class SpecModel {
   }
 
   /**
-   * Key number `i` is `v` already, on the page (a field the player typed
-   * in): the model's copy follows it without a write, so a later set of
-   * "" from the game clears it.
+   * Key number `i` is `v` already, on presenter `from`'s surface (a field
+   * the player typed in): the model's copy follows it without a write, so a
+   * later set of "" from the game clears it, and every other presenter
+   * shows it (ws/ui-follow: the model is the one truth; the game writes
+   * nothing back).
    */
-  follow(i: number, v: SpecValue): void {
+  follow(i: number, v: SpecValue, from: unknown = null): void {
     this.vals[i] = v;
-    for (let f = 0; f < this.followers.length; f++) this.followers[f]!(i, v);
+    for (let f = 0; f < this.followers.length; f++) this.followers[f]!(i, v, from);
   }
 
   /** Puts the cursor in field `id` (null: in no field, the keyboard away) at the next apply. */

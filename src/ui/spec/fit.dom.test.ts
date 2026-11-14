@@ -438,6 +438,33 @@ describe('presentWorld fit', () => {
     expect(canvas.log).toEqual([]);
   });
 
+  it('what one presenter’s field typed, the other shows: the model is the one truth', () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const d = presentDom(p, host);
+    p.frame(320, 0);
+    p.apply();
+    const input = d.el('find') as HTMLInputElement;
+    expect(input.value).toBe('');
+    // Typed on the surface: the page's field shows it at the next apply, nothing written back.
+    wv.key({ key: 'R', code: 'KeyR' });
+    expect(p.model.get('find')).toBe('r');
+    p.apply();
+    expect(input.value).toBe('r');
+    // Typed on the page: the surface repaints it; the page doesn't write its own field again.
+    const writes = d.writes;
+    input.value = 'ro';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(p.model.get('find')).toBe('ro');
+    canvas.log.length = 0;
+    p.apply();
+    surface.repaint();
+    expect(canvas.log.some((l) => l.startsWith('text ro '))).toBe(true);
+    expect(d.writes).toBe(writes);
+    d.dispose();
+    host.remove();
+  });
+
   it('a world panel and a screen on a bare device: painted and uploaded, drawn by the game', () => {
     const fake = createFakeDevice();
     const bare = createWorldPanel(

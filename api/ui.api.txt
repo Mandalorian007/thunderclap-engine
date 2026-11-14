@@ -1981,12 +1981,12 @@ class SpecModel {
     onChange: (() => void) | null;
     sets: number;
     focusing: string | null | undefined;
-    readonly followers: ((i: number, v: SpecValue) => void)[];
+    readonly followers: ((i: number, v: SpecValue, from: unknown) => void)[];
     constructor(spec: CompiledSpec);
     index(key: string): number;
     set(key: string, v: SpecValue): boolean;
     setAt(i: number, v: SpecValue): boolean;
-    follow(i: number, v: SpecValue): void;
+    follow(i: number, v: SpecValue, from?: unknown): void;
     focus(id: string | null): void;
     setAll(rec: Readonly<Record<string, SpecValue>>): number;
     get(key: string): SpecValue | null;
