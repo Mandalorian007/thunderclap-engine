@@ -4,6 +4,8 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 
 ## Unreleased
 
+## 2.0.0-next.2 (2026-11-14)
+
 ## 2.0.0-next.1 (2026-11-14)
 
 - Plural render views, stereo cull groups and a camera-relative origin (ws/core-views, wave 2.0-2 B3, D1 §3.5, §3.8). *Added* (render): `CullGroup` (`prepare(encoder, views | groups)`: a `'union'` group culls once for all its views, one args set and one bundle per stereo pair), `unionPlanesInto`, `setViewFromMatrices`, `VIEW_SLOT`, `setViewFromCamera(view, camera, eye?)`, `RenderView.proj`/`view`/`eye`, `CoreTarget.viewport`, `RenderCoreOptions.originGrid` and `onView`, `RenderCore.origin`, `SlotDesc.origin` (the shader's `core_origin`); `CORE_VIEW_WGSL` gains `origin`. *Added* (testing): `FakeDevice.markView`/`callsByView`, the `FakeBundle` type. The two-views page draws through the core.
