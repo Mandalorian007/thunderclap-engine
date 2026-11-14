@@ -6,6 +6,9 @@
 //   pnpm release <version> --dry    print what would happen, change nothing
 //   --skip-checks                   skip `pnpm check` and `pnpm test:e2e` before the bump
 //
+// A prerelease version (`2.0.0-next.0`) is cut the same way; publish.yml puts it on npm under the
+// `next` dist-tag, never `latest`. `pnpm test:e2e` includes the webkit-ipad project on macOS.
+//
 // Run it on `main`, or on a detached HEAD at main's commit (an integrator's worktree, which may
 // not check out `main` while the main checkout has it; E-039). This is the only way the repo gets
 // tags. It never pushes: the printed push command is yours to run. Pushing a v* tag publishes the
@@ -35,6 +38,17 @@ export function headProblem({ branch, head, main }) {
   if (head !== main)
     return `the detached HEAD (${head.slice(0, 7)}) is not main (${main.slice(0, 7)})`;
   return null;
+}
+
+/** A semver version `pnpm release` accepts: `1.2.3`, or a prerelease such as `2.0.0-next.0`. */
+export const VERSION = /^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/;
+
+/**
+ * The npm dist-tag a version publishes under (publish.yml): a prerelease (any `-` suffix) goes to
+ * `next`, so `npm install` keeps resolving the last stable version; everything else to `latest`.
+ */
+export function distTag(version) {
+  return version.includes('-') ? 'next' : 'latest';
 }
 
 /** The push command to print: a detached HEAD pushes itself to main, since main did not move. */
@@ -67,7 +81,7 @@ function main() {
   };
   const run = (cmd, ...a) => execFileSync(cmd, a, { cwd: root, stdio: 'inherit' });
 
-  if (!version || !/^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/.test(version)) {
+  if (!version || !VERSION.test(version)) {
     fail('usage: pnpm release <semver> [--tag] [--dry] [--skip-checks]');
   }
   const tagName = `v${version}`;
@@ -114,7 +128,9 @@ function main() {
   console.log(`release: committed${tag ? ` and tagged ${tagName}` : ''}. Push with:`);
   console.log(`  ${pushCommand(branch, tag ? tagName : null)}`);
   if (tag) {
-    console.log(`release: pushing ${tagName} publishes to npm (publish.yml, docs/releasing.md).`);
+    console.log(
+      `release: pushing ${tagName} publishes to npm under the dist-tag ${distTag(version)} (publish.yml, docs/releasing.md).`,
+    );
   }
 }
 

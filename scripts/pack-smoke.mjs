@@ -44,6 +44,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { distTag } from './release.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const argv = process.argv.slice(2);
@@ -59,6 +60,9 @@ if (!Number.isFinite(waitSeconds) || waitSeconds < 0) {
 }
 // Nothing listens here, so a dry-run publish cannot reach a real registry.
 const DEAD_REGISTRY = 'http://127.0.0.1:9';
+// A host's engine peer: 1.x, and the 2.0 prereleases (semver ranges skip a prerelease unless the
+// range names one; docs/releasing.md, "Prereleases").
+const ENGINE_PEER = '^1.0.0 || >=2.0.0-next.0 <3';
 const packages = [
   { dir: '.', name: '@thunderclap-engine/engine' },
   { dir: 'packages/host-capacitor', name: '@thunderclap-engine/host-capacitor' },
@@ -318,7 +322,9 @@ function checkPublishGuard(p) {
   else if (!folder.out.includes('docs/releasing.md')) {
     problems.push(`${p.name}: npm publish in ${p.dir} failed without the refusal:\n${folder.out}`);
   }
-  const tarball = dryPublish([p.spec], tmp);
+  // The same dist-tag publish.yml passes: npm refuses a prerelease without an explicit --tag.
+  const { version } = JSON.parse(readFileSync(join(root, p.dir, 'package.json'), 'utf8'));
+  const tarball = dryPublish([p.spec, '--tag', distTag(version)], tmp);
   if (tarball.status !== 0) {
     problems.push(`${p.name}: npm publish of the packed tarball failed:\n${tarball.out}`);
   }
@@ -377,9 +383,9 @@ function inspect(p) {
   }
   if (
     p.name !== '@thunderclap-engine/engine' &&
-    manifest.peerDependencies?.['@thunderclap-engine/engine'] !== '^1.0.0'
+    manifest.peerDependencies?.['@thunderclap-engine/engine'] !== ENGINE_PEER
   ) {
-    fail('@thunderclap-engine/engine must be a ^1.0.0 peer');
+    fail(`@thunderclap-engine/engine must be a ${ENGINE_PEER} peer`);
   }
   const kb = (readFileSync(p.spec).length / 1024).toFixed(1);
   step(`${p.name}@${manifest.version}: ${list.length} files, ${kb} kB packed`);

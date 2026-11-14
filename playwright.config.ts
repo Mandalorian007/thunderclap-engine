@@ -79,6 +79,7 @@ const MATRIX: MatrixEntry[] = [
  */
 export const WEBKIT_SPECS = [
   'smoke',
+  'core',
   'mesh',
   'views',
   'stream',

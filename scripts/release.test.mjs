@@ -9,7 +9,14 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { ATTRIBUTION, headProblem, pushCommand, releaseMessage } from './release.mjs';
+import {
+  ATTRIBUTION,
+  distTag,
+  headProblem,
+  pushCommand,
+  releaseMessage,
+  VERSION,
+} from './release.mjs';
 
 const script = join(dirname(fileURLToPath(import.meta.url)), 'release.mjs');
 const A = 'a'.repeat(40);
@@ -36,6 +43,24 @@ test('pushCommand pushes a detached HEAD to main', () => {
   assert.equal(pushCommand('main', 'v1.2.1'), 'git push origin main v1.2.1');
   assert.equal(pushCommand('HEAD', 'v1.2.1'), 'git push origin HEAD:main v1.2.1');
   assert.equal(pushCommand('HEAD', null), 'git push origin HEAD:main');
+});
+
+test('prerelease versions are accepted and go to the next dist-tag', () => {
+  for (const v of ['1.2.3', '2.0.0-next.0', '2.0.0-rc.1']) assert.ok(VERSION.test(v), v);
+  for (const v of ['2.0', 'v2.0.0', '2.0.0-', '2.0.0+build']) assert.ok(!VERSION.test(v), v);
+  assert.equal(distTag('1.3.0'), 'latest');
+  assert.equal(distTag('2.0.0-next.0'), 'next');
+});
+
+test('publish.yml publishes a prerelease under next, never latest', () => {
+  const yml = readFileSync(
+    join(dirname(script), '..', '.github', 'workflows', 'publish.yml'),
+    'utf8',
+  );
+  assert.match(yml, /\*-\*\) dist_tag=next ;;/);
+  assert.match(yml, /\*\) dist_tag=latest ;;/);
+  assert.match(yml, /npm publish "\$tarball" [^\n]*--tag "\$dist_tag"/);
+  assert.doesNotMatch(yml, /npm publish (?![^\n]*--tag)[^\n]*\n/);
 });
 
 // The script in a throwaway repo laid out like this one (scripts/release.mjs, package.json,
@@ -112,4 +137,20 @@ test('a release on main prints a plain push', () => {
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /git push origin main\n/);
   assert.equal(git('log', '-1', '--format=%B'), `release: 1.0.2\n\n${ATTRIBUTION}`);
+});
+
+test('a prerelease on main is cut like any release and says it publishes to next', () => {
+  git('switch', '-q', 'main');
+  const r = release('2.0.0-next.0', '--tag', '--skip-checks');
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /git push origin main v2\.0\.0-next\.0/);
+  assert.match(r.stdout, /dist-tag next/);
+  assert.equal(
+    JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8')).version,
+    '2.0.0-next.0',
+  );
+  assert.match(
+    readFileSync(join(repo, 'CHANGELOG.md'), 'utf8'),
+    /## Unreleased\n\n## 2\.0\.0-next\.0 \(/,
+  );
 });

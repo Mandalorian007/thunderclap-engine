@@ -4,7 +4,7 @@ This repo publishes four packages to the public npm registry (E-037):
 
 | Package | Version line | Folder |
 | --- | --- | --- |
-| `@thunderclap-engine/engine` | `1.x` | the repo root |
+| `@thunderclap-engine/engine` | `1.x`; `2.0.0-next.*` prereleases (E-041) | the repo root |
 | `@thunderclap-engine/host-electron` | `0.x` | `packages/host-electron` |
 | `@thunderclap-engine/host-capacitor` | `0.x` | `packages/host-capacitor` |
 | `@thunderclap-engine/host-pwa` | `0.x` | `packages/host-pwa` |
@@ -73,6 +73,25 @@ Pushing the tag runs `publish.yml`. It:
 So a release that changes only the engine publishes only the engine. Watch the run under *Actions*; the packages appear on npm a minute later, and the release under *Releases*.
 
 If a run fails after step 4, re-run the failed job: the publish loop skips versions already on npm, and the install check and release steps run again.
+
+## Prereleases
+
+The 2.0 line ships as prereleases first (E-041): the root `package.json` is `2.0.0-next.0` on `main`, and the CHANGELOG's open section is headed `## 2.0.0-next.0 (unreleased)` (it is the `## Unreleased` that `check:api` and `pnpm release` read, and it lets `check:pack` find a section for the version).
+
+```sh
+pnpm release 2.0.0-next.0 --tag     # same checks and commit as any release; tags v2.0.0-next.0
+git push origin main v2.0.0-next.0
+```
+
+- `pnpm release` accepts any `<major>.<minor>.<patch>-<id>` version (`2.0.0-next.1`, `2.0.0-rc.0`) and prints the npm dist-tag it will get.
+- `publish.yml` publishes a package whose version has a `-` with `npm publish --tag next`, never `latest`, so `npm install @thunderclap-engine/engine` keeps giving the last stable `1.x`; a game opts in with `@thunderclap-engine/engine@next` or an exact version. Each package's own version decides: a host still on a plain `0.x` version publishes to `latest`. The GitHub Release is marked a pre-release.
+- `scripts/release.test.mjs` holds both rules (the version pattern and the dist-tag lines of publish.yml).
+- A host's `peerDependencies` range must admit the prerelease (`^1.0.0 || >=2.0.0-next.0 <3`); semver ranges skip prereleases unless the range names one.
+- The stable `2.0.0` is a plain `pnpm release 2.0.0 --tag`, which publishes to `latest`.
+
+## The release gate on WebKit
+
+`pnpm release` runs `pnpm test:e2e`, which on macOS includes the `webkit-ipad` project (Playwright WebKit on the iPad Pro 11 landscape profile; `playwright.config.ts` lists its specs in `WEBKIT_SPECS`). So every tag is cut with the subset green on WebKit, the engine's iPad target. Tests marked `test.fixme` for WebKit (CDP touch, which is Chromium-only, and the modal Tab trap, an engine bug in `src/ui/stack.ts`) are skipped there. CI runs the project only by hand (`e2e-webkit`, a non-blocking macOS job on `workflow_dispatch`).
 
 ## Bumping a host package
 
