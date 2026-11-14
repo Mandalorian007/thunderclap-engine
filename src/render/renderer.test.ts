@@ -848,6 +848,24 @@ describe('draw list steady state', () => {
     expect(counts()).toEqual(before);
     expect(fake.errors).toEqual([]);
   });
+
+  it('the sorted copy is pooled: more draws entering the view do not grow it (ws/core-passes)', () => {
+    const { r } = setup();
+    const opaque = r.createMaterial({ label: 'o', wgsl: WGSL, uniformBytes: 16, blend: 'opaque' });
+    r.camera.depthTest = true;
+    const frame = (n: number) => {
+      const f = r.beginFrame(0, 0);
+      for (let i = 0; i < n; i++) f.sprite(opaque, { x: i % 7, y: 0, order: n - i });
+      r.endFrame();
+    };
+    const sorted = () => (r as unknown as { sortedData: Float32Array }).sortedData;
+    frame(4);
+    const first = sorted();
+    expect(first.length).toBeGreaterThan(0);
+    // Up to the instance pool's size (4096 by default), one array, grown never.
+    for (let n = 8; n <= 2048; n *= 2) frame(n);
+    expect(sorted()).toBe(first);
+  });
 });
 
 describe('frustum cull (ws/cull)', () => {

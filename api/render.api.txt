@@ -35,6 +35,7 @@ class Arena {
     free(a: ArenaAlloc): void;
     write(a: ArenaAlloc, data: ArrayBufferView | ArrayBuffer, byteOffset?: number): void;
     trim(): number;
+    restore(device: GPUDevice): void;
     destroy(): void;
     freeRanges(b: number): [number, number][];
 }
@@ -94,7 +95,7 @@ const CORE_PASSES: readonly PassDesc[];
 const CORE_VIEW_WGSL = "\nstruct CoreView {\n  viewProj: mat4x4f,\n  position: vec4f,\n  planes: array<vec4f, 6>,\n  index: u32,\n  _a: u32,\n  _b: u32,\n  _c: u32,\n  origin: vec4f,\n  _pad: array<vec4f, 3>,\n};\n";
 
 ## CULL_WGSL
-const CULL_WGSL = "\nstruct CoreView {\n  viewProj: mat4x4f,\n  position: vec4f,\n  planes: array<vec4f, 6>,\n  index: u32,\n  _a: u32,\n  _b: u32,\n  _c: u32,\n  origin: vec4f,\n  _pad: array<vec4f, 3>,\n};\n\nstruct CullParams { count: u32, capacity: u32, views: u32, firstInstance: u32 };\nstruct Slot { sphere: vec4f, draw: vec4u, inst: vec4u };\n@group(0) @binding(0) var<uniform> views: array<CoreView, 8>;\n@group(0) @binding(1) var<uniform> params: CullParams;\n@group(0) @binding(2) var<storage, read> slots: array<Slot>;\n@group(0) @binding(3) var<storage, read_write> args: array<u32>;\n\n@compute @workgroup_size(64) fn cs_cull(@builtin(global_invocation_id) id: vec3u) {\n  let i = id.x;\n  let v = id.y;\n  if (i >= params.count || v >= params.views) { return; }\n  let s = slots[i];\n  var visible = (s.inst.y & 1u) != 0u;\n  for (var k = 0u; k < 6u; k++) {\n    let p = views[v].planes[k];\n    if (dot(p.xyz, s.sphere.xyz) + p.w < -s.sphere.w) { visible = false; }\n  }\n  let o = (v * params.capacity + i) * 5u;\n  args[o] = s.draw.x;\n  args[o + 1u] = select(0u, s.draw.w, visible);\n  args[o + 2u] = s.draw.y;\n  args[o + 3u] = s.draw.z;\n  args[o + 4u] = select(0u, s.inst.x, params.firstInstance != 0u);\n}\n";
+const CULL_WGSL = "\nstruct CoreView {\n  viewProj: mat4x4f,\n  position: vec4f,\n  planes: array<vec4f, 6>,\n  index: u32,\n  _a: u32,\n  _b: u32,\n  _c: u32,\n  origin: vec4f,\n  _pad: array<vec4f, 3>,\n};\n\nstruct CullParams { count: u32, capacity: u32, views: u32, firstInstance: u32 };\nstruct Slot { sphere: vec4f, draw: vec4u, inst: vec4u };\n@group(0) @binding(0) var<uniform> views: array<CoreView, 8>;\n@group(0) @binding(1) var<uniform> params: CullParams;\n@group(0) @binding(2) var<storage, read> slots: array<Slot>;\n@group(0) @binding(3) var<storage, read_write> args: array<u32>;\n\n@compute @workgroup_size(64) fn cs_cull(@builtin(global_invocation_id) id: vec3u) {\n  let i = id.x;\n  let v = id.y;\n  if (i >= params.count || v >= params.views) { return; }\n  let s = slots[i];\n  var visible = (s.inst.y & 3u) == 1u;\n  for (var k = 0u; k < 6u; k++) {\n    let p = views[v].planes[k];\n    if (dot(p.xyz, s.sphere.xyz) + p.w < -s.sphere.w) { visible = false; }\n  }\n  let o = (v * params.capacity + i) * 5u;\n  args[o] = s.draw.x;\n  args[o + 1u] = select(0u, s.draw.w, visible);\n  args[o + 2u] = s.draw.y;\n  args[o + 3u] = s.draw.z;\n  args[o + 4u] = select(0u, s.inst.x, params.firstInstance != 0u);\n}\n";
 
 ## Camera
 class Camera {
@@ -206,6 +207,7 @@ interface CoreStats {
     slotBytes: number;
     bundleBuilds: number;
     bundleCalls: number;
+    deferredBuilds: number;
 }
 
 ## CoreTarget  (type-only)
@@ -221,6 +223,8 @@ interface CoreTarget {
         width: number;
         height: number;
     };
+    depth?: GPUTextureView;
+    phase?: 'all' | 'opaque' | 'blend';
 }
 
 ## CullGroup  (type-only)
@@ -288,12 +292,21 @@ class DrawSet {
     readonly order: number;
     readonly depth: boolean;
     version: number;
+    staleFrame: number;
     constructor(host: DrawSetHost, desc: DrawSetDesc);
+    restore(): void;
+    setBindGroups(groups: readonly {
+        layout: GPUBindGroupLayout;
+        group: GPUBindGroup;
+    }[]): void;
+    get ready(): boolean;
     get count(): number;
     get highWater(): number;
     add(slot: SlotDesc): number;
     update(id: number, slot: SlotDesc): void;
     setBounds(id: number, x: number, y: number, z: number, r: number): void;
+    setHidden(id: number, hidden: boolean): void;
+    isHidden(id: number): boolean;
     remove(id: number): void;
     has(id: number): boolean;
     destroy(): void;
@@ -303,6 +316,7 @@ class DrawSet {
     encoding(): Encoding;
     bundle(group: number, color: GPUTextureFormat, depth: GPUTextureFormat | undefined, readOnly: boolean): GPURenderBundle;
     encodeDirect(pass: GPURenderPassEncoder, group: number, color: GPUTextureFormat, depth: GPUTextureFormat | undefined): void;
+    waitsForTurn(): boolean;
 }
 
 ## DrawSetCull  (type-only)
@@ -987,6 +1001,7 @@ class QuadIndex {
     version: number;
     constructor(device: GPUDevice);
     ensure(quads: number): GPUBuffer;
+    restore(device: GPUDevice): void;
     destroy(): void;
 }
 
@@ -1013,8 +1028,8 @@ type RenderBlendMode = 'alpha' | 'premultiplied' | 'additive' | 'opaque' | 'mult
 
 ## RenderCore
 class RenderCore {
-    readonly device: GPUDevice;
-    readonly caps: CoreCaps;
+    get device(): GPUDevice;
+    get caps(): CoreCaps;
     readonly passes: PassList;
     readonly maxViews: number;
     readonly depthFormat: GPUTextureFormat;
@@ -1024,12 +1039,16 @@ class RenderCore {
     readonly originGrid: number;
     groups: number;
     onView: ((viewIndex: number) => void) | null;
-     readonly viewLayout: GPUBindGroupLayout;
-     readonly cullLayout: GPUBindGroupLayout;
-     readonly viewBuffer: GPUBuffer;
+     viewLayout: GPUBindGroupLayout;
+     cullLayout: GPUBindGroupLayout;
+     viewBuffer: GPUBuffer;
      readonly viewData: Float32Array;
+    restores: number;
     constructor(device: GPUDevice, opts?: RenderCoreOptions);
     createArena(desc: ArenaDesc): Arena;
+    restore(device: GPUDevice): void;
+    get hasWork(): boolean;
+    onDeviceRestored(fn: (device: GPUDevice) => void): () => void;
     createDrawSet(desc: DrawSetDesc): DrawSet;
     removeDrawSet(set: DrawSet): void;
     definePass(desc: PassDesc): CorePass;
@@ -1047,6 +1066,7 @@ interface RenderCoreOptions {
     multiDraw?: boolean;
     originGrid?: number;
     onView?: ((viewIndex: number) => void) | null;
+    coalesceRebuilds?: boolean;
 }
 
 ## RenderStats  (type-only)
@@ -1141,6 +1161,7 @@ class Renderer implements FrameSink {
     lodLevelOf(batch: object, index: number, camera?: Camera): number;
     beginFrame(time: number, dt: number): Frame;
     render(frame: Frame, camera: Camera, target?: SceneTarget): void;
+    get core(): RenderCore;
     resolve(target: SceneTarget, out: GPUTextureView, viewport?: SceneTargetViewport): void;
     endFrame(opts?: {
         present?: boolean;

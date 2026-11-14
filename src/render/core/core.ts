@@ -77,6 +77,18 @@ export interface CoreTarget {
    * the target's size and is cleared whole by the view's first depth pass.
    */
   viewport?: { x: number; y: number; width: number; height: number };
+  /**
+   * A depth attachment the caller owns, in the core's `depthFormat` and the target's size, that
+   * already holds the scene's depth (ws/core-passes): the core loads it and never clears it,
+   * and makes no depth of its own. The `Renderer` hands its scene target's depth here.
+   */
+  depth?: GPUTextureView;
+  /**
+   * Which of the pass list's passes to draw (ws/core-passes): `'opaque'`, those before
+   * `transparent`; `'blend'`, `transparent` and every pass after it; `'all'` (default) every
+   * pass. A caller that draws blended work of its own between the two calls `draw` twice.
+   */
+  phase?: 'all' | 'opaque' | 'blend';
 }
 
 /** What the core's device offers it. */
@@ -103,10 +115,16 @@ function newStats(): CoreStats {
 
 /** The retained render core on one device. Make one with `createRenderCore`. */
 export class RenderCore {
+  private dev: GPUDevice;
+  private capsNow: CoreCaps;
   /** The device; a new one after `restore`. */
-  device: GPUDevice;
+  get device(): GPUDevice {
+    return this.dev;
+  }
   /** What the device offers (re-read by `restore`). */
-  caps: CoreCaps;
+  get caps(): CoreCaps {
+    return this.capsNow;
+  }
   readonly passes: PassList;
   readonly maxViews: number;
   readonly depthFormat: GPUTextureFormat;
@@ -162,9 +180,9 @@ export class RenderCore {
   private readonly coalesce: boolean;
 
   constructor(device: GPUDevice, opts: RenderCoreOptions = {}) {
-    this.device = device;
+    this.dev = device;
     this.multiDrawOpt = opts.multiDraw ?? true;
-    this.caps = this.capsOf(device);
+    this.capsNow = this.capsOf(device);
     this.maxViews = Math.max(1, Math.min(opts.maxViews ?? MAX_VIEWS, MAX_VIEWS));
     this.depthFormat = opts.depthFormat ?? 'depth24plus';
     this.originGrid = Math.max(0, opts.originGrid ?? 0);
@@ -261,8 +279,8 @@ export class RenderCore {
    * next `prepare`.
    */
   restore(device: GPUDevice): void {
-    this.device = device;
-    this.caps = this.capsOf(device);
+    this.dev = device;
+    this.capsNow = this.capsOf(device);
     this.cullPipeline = null;
     this.depthTexture = null;
     this.depthView = null;
@@ -273,6 +291,13 @@ export class RenderCore {
     for (const s of this.sets) s.restore();
     this.restores++;
     for (const fn of this.restoredFns.slice()) fn(device);
+  }
+
+  /** True when some set has live slots to draw (ws/core-passes; the `Renderer` skips the core otherwise). */
+  get hasWork(): boolean {
+    const sets = this.sets;
+    for (let i = 0; i < sets.length; i++) if (sets[i]!.count > 0) return true;
+    return false;
   }
 
   /**
@@ -421,9 +446,23 @@ export class RenderCore {
     }
     const vp = target.viewport;
     let first = true;
-    let depthCleared = false;
+    let depthCleared = target.depth !== undefined;
     const list = this.passes.passes;
-    for (let p = 0; p < list.length; p++) {
+    const phase = target.phase ?? 'all';
+    let from = 0;
+    let to = list.length;
+    if (phase !== 'all') {
+      let at = list.length;
+      for (let p = 0; p < list.length; p++) {
+        if (list[p]!.id === 'transparent') {
+          at = p;
+          break;
+        }
+      }
+      if (phase === 'opaque') to = at;
+      else from = at;
+    }
+    for (let p = from; p < to; p++) {
       const pass = list[p]!;
       const sets = this.bySet[p]!;
       if (pass.when && !pass.when()) continue;
@@ -450,7 +489,7 @@ export class RenderCore {
       let desc = this.passDesc;
       if (wantsDepth) {
         const d = this.depthAttachment;
-        d.view = this.depthFor(target.width, target.height);
+        d.view = target.depth ?? this.depthFor(target.width, target.height);
         if (readOnly) {
           // A read-only pass may not load or store depth; it must follow a writing pass.
           d.depthReadOnly = true;

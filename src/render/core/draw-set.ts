@@ -220,7 +220,7 @@ export class DrawSet {
   private hardVersion = 0;
   /** Per slot: the vertex block and index buffer it was last recorded with (-1: never). */
   private readonly recorded: Int32Array;
-  /** The frame the set went stale (a change its bundles have not seen), or -1. */
+  /** @internal The frame the set went stale (a change its bundles have not seen), or -1. */
   staleFrame = -1;
   private readonly host: DrawSetHost;
   private readonly desc: DrawSetDesc;

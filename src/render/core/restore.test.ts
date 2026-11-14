@@ -9,16 +9,12 @@ import type { Arena, ArenaAlloc } from './arena';
 import { createRenderCore, type RenderCore } from './core';
 import { SLOT, SLOT_HIDDEN, SLOT_WORDS } from './cull';
 import type { DrawSet, DrawSetDesc } from './draw-set';
-import { createInstanceLayout, createVertexLayout } from './layout';
+import { createVertexLayout } from './layout';
 import { createRenderView, type RenderView, setViewFromCamera } from './view';
 
 const PACKED = createVertexLayout({
   stride: 8,
   attributes: [{ name: 'packed', format: 'uint32x2', offset: 0 }],
-});
-const PLACE = createInstanceLayout({
-  stride: 16,
-  attributes: [{ name: 'place', format: 'float32x4', offset: 0 }],
 });
 const SHADER = {
   code: '@vertex fn vs(in: VertexIn) -> @builtin(position) vec4f { return vec4f(in.place); }\n@fragment fn fs() -> @location(0) vec4f { return vec4f(1.0); }',
