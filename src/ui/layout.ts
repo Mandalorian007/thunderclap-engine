@@ -715,6 +715,11 @@ export function readSafeArea(doc: Document = document): Insets {
 export interface Layout {
   /** `.tc-layout`, the grid (in the overlay's `layout` layer). */
   readonly element: HTMLElement;
+  /**
+   * The overlay root it lays out over (ws/ui-world); `root.ownerDocument` is the page its hosts
+   * are made in (a presenter that adds widgets needs nothing else of the overlay).
+   */
+  readonly root: HTMLElement;
   readonly formFactor: FormFactor;
   /** The latest resolved layout. */
   readonly state: Readonly<LayoutState>;
@@ -1175,6 +1180,7 @@ export function createLayout(overlay: LayoutHost, spec: LayoutSpec = {}): Layout
 
   const layout: Layout = {
     element,
+    root,
     get formFactor() {
       return state.formFactor;
     },

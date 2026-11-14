@@ -230,7 +230,8 @@ export {
   type RotateCardColors,
   type RotateCardOptions,
 } from './rotate-card';
-// ws/ui-spec: UI described as data (`b`, `panel`, `hud`, `presentDom`, `theme`); ./spec/README.md.
+// ws/ui-spec: UI described as data (`b`, `panel`, `hud`, `presentDom`, `theme`); ws/ui-world: the
+// same on a world quad (`presentWorld`, `worldScreen`); ./spec/README.md.
 export {
   type Bind,
   b,
@@ -249,6 +250,9 @@ export {
   presentDom,
   presentHud,
   presentModal,
+  presentWorld,
+  presentWorldHud,
+  presentWorldModal,
   SPEC_FAMILY,
   SPEC_HOLD_MS,
   SPEC_HOLD_SLOP,
@@ -302,7 +306,15 @@ export {
   specTokenVar,
   textWidth,
   theme,
+  type WorldHudOptions,
+  type WorldHudView,
+  type WorldModal,
+  type WorldModalOptions,
+  type WorldOptions,
+  WorldPresenter,
+  type WorldScreenOptions,
   type WrapOptions,
+  worldScreen,
   wrapCount,
   wrapText,
 } from './spec';
