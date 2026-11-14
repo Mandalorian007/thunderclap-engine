@@ -1,20 +1,30 @@
 //! Tally: a tiny game on tc-sim for its tests. Players join by name and
 //! add to their tally with commands; `later N` schedules an add N steps
-//! on; inputs move a player along a line. A stepping tally also counts
-//! its steps. Its data is a multiplier on every add, so a reload changes
-//! what the same log adds up to.
+//! on; inputs move a player's body along a line, unlogged (where it stood
+//! is logged when it leaves). A stepping tally also counts its steps. Its
+//! data is a multiplier on every add, so a reload changes what the same
+//! log adds up to. A name starting `watch` joins as an observer.
 //!
 //! Commands (the result is the player's tally after, or an error):
 //! `add N`, `later N`, `unlucky` (an event the log refuses to write).
+//! Game messages: `wave` (in the `wave` lane, 2 at once then one a
+//! second), anything else (no lane); each is echoed to everyone.
+//!
+//! Queries: `tally {name}` (shared), `board {}` (every player's names and total), `mine {}` (per player), `where {player}`
+//! (a body), `steps {}` (volatile: nothing marks steps), `tick {every}`
+//! (the time rounded down to `every`, valid until the next). The entity
+//! stream shows each present player in the watched span as a [`Dot`].
 
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
-use tc_net::{Empty, Identity, Protocol, schema_builder};
-use tc_sim::{Changes, Cx, EventOf, Game, Outbox, PlayerId, To};
+use tc_net::{Empty, Identity, Protocol};
+use tc_sim::{Changes, Cx, EventOf, Game, Lane, Outbox, PlayerId, Query, QueryCtx, Seat, To};
 use tc_store::format::{Reader, Writer};
 use tc_store::{LogCodec, NameTable, Names};
 use tc_wire::Wire;
@@ -30,17 +40,55 @@ impl Protocol for TallyProto {
     type Welcome = u64;
     type Command = String;
     type Result = String;
-    type Interest = Empty;
+    type Interest = Span;
     type Input = i32;
     type State = i32;
-    type Client = Empty;
+    type Client = String;
     type Server = String;
+}
+
+/// The change key every join and presence marks: who is there.
+pub const ROSTER: PlayerId = 0;
+
+/// A span of the line to watch.
+#[derive(Wire, Clone, Debug, Default, PartialEq)]
+pub struct Span {
+    pub from: i32,
+    pub to: i32,
+}
+
+/// One player in the entity stream.
+#[derive(Wire, Clone, Debug, PartialEq)]
+pub struct Dot {
+    pub x: i32,
+    pub tally: u64,
+}
+
+/// Every player at once.
+#[derive(Wire, Clone, Debug, PartialEq)]
+pub struct Board {
+    pub names: Vec<String>,
+    pub total: u64,
+}
+
+#[derive(Wire, Clone, Debug, PartialEq)]
+pub struct ByName {
+    pub name: String,
+}
+
+#[derive(Wire, Clone, Debug, PartialEq)]
+pub struct ByPlayer {
+    pub player: u64,
+}
+
+#[derive(Wire, Clone, Debug, PartialEq)]
+pub struct Every {
+    pub every: u64,
 }
 
 /// Tally's schema.
 pub fn schema() -> Schema {
-    let b = schema_builder::<TallyProto>();
-    b.finish().expect("the tally schema is valid")
+    Tally::schema()
 }
 
 /// What the log records.
@@ -62,9 +110,10 @@ pub enum Event {
         n: u32,
         steps: u32,
     },
-    Moved {
+    /// Where a player stood when it left.
+    Parked {
         player: u64,
-        by: i32,
+        at: i32,
     },
     /// The codec refuses to write this one.
     Unlucky,
@@ -110,10 +159,10 @@ impl LogCodec for TallyLog {
                 w.u32(*n);
                 w.u32(*steps);
             }
-            Event::Moved { player, by } => {
+            Event::Parked { player, at } => {
                 w.u8(5);
                 w.u32(*player as u32);
-                w.u32(*by as u32);
+                w.u32(*at as u32);
             }
             Event::Unlucky => return Err("unlucky".into()),
         }
@@ -143,9 +192,9 @@ impl LogCodec for TallyLog {
                 n: r.u32()?,
                 steps: r.u32()?,
             },
-            5 => Event::Moved {
+            5 => Event::Parked {
                 player: r.u32()?.into(),
-                by: r.u32()? as i32,
+                at: r.u32()? as i32,
             },
             tag => return Err(format!("unknown event {tag}")),
         };
@@ -174,6 +223,10 @@ pub struct Tally {
     pub multiplier: u64,
     pub players: BTreeMap<u64, Player>,
     pub steps: u64,
+    /// While set, a game built by a reload waits before applying an entry
+    /// (a test holds a replay back).
+    pub hold: Arc<AtomicBool>,
+    held: bool,
 }
 
 impl Tally {
@@ -183,6 +236,8 @@ impl Tally {
             multiplier: 1,
             players: BTreeMap::new(),
             steps: 0,
+            hold: Arc::new(AtomicBool::new(false)),
+            held: false,
         }
     }
 
@@ -208,12 +263,121 @@ impl Game for Tally {
     type Scheduled = Bump;
     type Change = PlayerId;
     type Data = u64;
+    type Body = i32;
+    type View = Dot;
+
+    fn queries() -> Vec<Query<Tally>> {
+        vec![
+            Query::<Tally>::new(
+                "tally",
+                "A player's tally, by name.",
+                false,
+                |cx, a: ByName| {
+                    cx.read(ROSTER);
+                    let (id, p) = cx
+                        .game()
+                        .players
+                        .iter()
+                        .find(|(_, p)| p.name == a.name)
+                        .ok_or_else(|| format!("no player {:?}", a.name))?;
+                    cx.read(*id);
+                    Ok(p.tally)
+                },
+            ),
+            Query::<Tally>::new(
+                "board",
+                "Every player, and their total.",
+                false,
+                |cx, _: Empty| {
+                    cx.read(ROSTER);
+                    let players = &cx.game().players;
+                    players.keys().for_each(|id| cx.read(*id));
+                    Ok(Board {
+                        names: players.values().map(|p| p.name.clone()).collect(),
+                        total: players.values().map(|p| p.tally).sum(),
+                    })
+                },
+            ),
+            Query::<Tally>::new("mine", "The asker's tally.", true, |cx, _: Empty| {
+                let me = cx.player().ok_or("no player")?;
+                cx.read(me);
+                Ok(cx.game().players.get(&me).map_or(0, |p| p.tally))
+            }),
+            Query::<Tally>::new(
+                "where",
+                "Where a player stands.",
+                false,
+                |cx, a: ByPlayer| {
+                    cx.body(a.player)
+                        .copied()
+                        .ok_or_else(|| "not here".to_string())
+                },
+            ),
+            Query::<Tally>::new("steps", "Steps taken.", false, |cx, _: Empty| {
+                cx.volatile();
+                Ok(cx.game().steps)
+            }),
+            Query::<Tally>::new("tick", "The time, rounded down.", false, |cx, a: Every| {
+                if a.every == 0 {
+                    return Err("every 0".into());
+                }
+                let t = cx.time() / a.every * a.every;
+                cx.valid_until(t + a.every);
+                Ok(t)
+            }),
+        ]
+    }
+
+    fn lanes() -> Vec<Lane> {
+        vec![Lane {
+            name: "wave",
+            burst: 2,
+            every: Duration::from_secs(1),
+        }]
+    }
+
+    fn lane(&self, msg: &String) -> Option<usize> {
+        (msg == "wave").then_some(0)
+    }
+
+    fn message(&self, player: u64, msg: String, _: &mut Vec<Event>, out: &mut Outbox<TallyProto>) {
+        let name = self.players.get(&player).map_or("?", |p| p.name.as_str());
+        out.game(To::All, format!("{name}: {msg}"));
+    }
+
+    fn body(&self, player: u64) -> Option<i32> {
+        self.players.get(&player).map(|p| p.at)
+    }
+
+    fn interest(&self, _: Option<PlayerId>, span: &Span) -> Result<(), String> {
+        if span.to < span.from || span.to - span.from > 100 {
+            return Err("too wide".into());
+        }
+        Ok(())
+    }
+
+    fn entities(&self, cx: &QueryCtx<'_, Tally>, span: &Span, out: &mut Vec<(u64, Dot)>) {
+        cx.read(ROSTER);
+        for (id, p) in &self.players {
+            let Some(x) = cx.body(*id).copied() else {
+                continue;
+            };
+            if x < span.from || x > span.to {
+                continue;
+            }
+            cx.read(*id);
+            out.push((*id, Dot { x, tally: p.tally }));
+        }
+    }
 
     fn codec(&self) -> TallyLog {
         TallyLog
     }
 
     fn apply(&mut self, ev: &Event, cx: &mut Cx<'_, Tally>) -> Result<(), String> {
+        while self.held && self.hold.load(Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
         match ev {
             Event::Joined { name } => {
                 let id = self.players.len() as u64 + 1;
@@ -225,6 +389,7 @@ impl Game for Tally {
                     },
                 );
                 cx.mark(id);
+                cx.mark(ROSTER);
             }
             Event::Present { player, present } => {
                 self.players
@@ -232,6 +397,7 @@ impl Game for Tally {
                     .ok_or("no such player")?
                     .present = *present;
                 cx.mark(*player);
+                cx.mark(ROSTER);
             }
             Event::Add { player, n } => self.add(*player, *n, cx)?,
             Event::Later { player, n, steps } => {
@@ -244,8 +410,8 @@ impl Game for Tally {
                     },
                 );
             }
-            Event::Moved { player, by } => {
-                self.players.get_mut(player).ok_or("no such player")?.at += by;
+            Event::Parked { player, at } => {
+                self.players.get_mut(player).ok_or("no such player")?.at = *at;
             }
             Event::Unlucky => return Err("unlucky".into()),
         }
@@ -282,24 +448,30 @@ impl Game for Tally {
         who: &Identity,
         _: &Empty,
         events: &mut Vec<EventOf<Tally>>,
-    ) -> Result<u64, String> {
+    ) -> Result<Seat, String> {
         if who.name.is_empty() {
             return Err("no name".into());
         }
+        if who.name.starts_with("watch") {
+            return Ok(Seat::Observer);
+        }
         if let Some((id, _)) = self.players.iter().find(|(_, p)| p.name == who.name) {
-            return Ok(*id);
+            return Ok(Seat::Player(*id));
         }
         events.push(Event::Joined {
             name: who.name.clone(),
         });
-        Ok(self.players.len() as u64 + 1)
+        Ok(Seat::Player(self.players.len() as u64 + 1))
     }
 
     fn welcome(&self, player: u64) -> u64 {
         self.players.get(&player).map_or(0, |p| p.tally)
     }
 
-    fn presence(&self, player: u64, present: bool, events: &mut Vec<Event>) {
+    fn presence(&self, player: u64, present: bool, body: Option<&i32>, events: &mut Vec<Event>) {
+        if let (false, Some(&at)) = (present, body) {
+            events.push(Event::Parked { player, at });
+        }
         events.push(Event::Present { player, present });
     }
 
@@ -334,12 +506,12 @@ impl Game for Tally {
         format!("error: {reason}")
     }
 
-    fn input(&self, player: u64, by: i32, events: &mut Vec<Event>) {
-        events.push(Event::Moved { player, by });
+    fn input(&self, _: u64, body: &mut i32, by: i32, _: &mut Vec<Event>) {
+        *body += by;
     }
 
-    fn player_state(&self, player: u64) -> Option<i32> {
-        self.players.get(&player).map(|p| p.at)
+    fn player_state(&self, _: u64, body: &i32) -> Option<i32> {
+        Some(*body)
     }
 
     fn flush(&self, changes: &Changes<PlayerId>, out: &mut Outbox<TallyProto>) {
@@ -356,6 +528,8 @@ impl Game for Tally {
         }
         let mut t = Tally::new(self.stepping);
         t.multiplier = *data;
+        t.hold = self.hold.clone();
+        t.held = true;
         Ok(t)
     }
 

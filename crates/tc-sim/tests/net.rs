@@ -4,7 +4,8 @@
 //!   replayed, reaches the live game's state hash;
 //! - TypeScript's `createNet` (`src/net/sim-interop.test.ts`, run by
 //!   vitest; `pnpm test:sim-interop` runs just this test) joins,
-//!   commands and sees the flush before the result. Skipped, with a
+//!   commands and sees the flush before the result, follows a live
+//!   query's patches and the entity stream. Skipped, with a
 //!   notice, where node or the repo's node_modules are missing.
 
 mod tally;
@@ -204,7 +205,7 @@ fn typescript_create_net_interop() {
     let text = String::from_utf8_lossy(&out.stdout);
     eprintln!("{text}{}", String::from_utf8_lossy(&out.stderr));
     assert!(out.status.success(), "vitest failed");
-    assert!(text.contains("3 passed"), "every interop test ran");
+    assert!(text.contains("4 passed"), "every interop test ran");
     runtime.block_on(server.stop());
     let core = running.stop();
     assert_eq!(core.game().tally_of("cy"), Some(7));

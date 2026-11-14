@@ -123,7 +123,9 @@ export function createKitInput<A extends string, P = unknown>(
   const attachHome =
     playback || !sink ? attachSink : () => input.attach({ pointerTarget: surface.canvas });
   attachHome();
-  input.setPointerTransform((x, y) => surface.clientToLogical(x, y));
+  // One point reused: every reader copies x and y before the next pointer event.
+  const logical = { x: 0, y: 0 };
+  input.setPointerTransform((x, y) => surface.clientToLogical(x, y, logical));
   // Overlay controls (ws/input-12): every button click reaches the input by its stable id, so a
   // recording carries it; a replay's `ui` lane clicks the button with that id.
   if (ui) {

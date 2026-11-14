@@ -1218,6 +1218,7 @@ class Renderer implements FrameSink {
     constructor(gpu: RendererGpu, opts?: RendererOptions);
     get sceneColor(): Texture;
     get sceneEmissive(): Texture;
+    setLogicalSize(width: number, height: number): void;
     resize(width: number, height: number): void;
     setResolution(opts: ResolutionOptions): void;
     get resolutionOptions(): Readonly<Required<ResolutionOptions>>;

@@ -676,7 +676,9 @@ The stylesheet constants (`BASE_CSS`, `HUD_CSS`, `TOOLTIP_CSS`, `CURSOR_CSS`, `N
 ## More widgets and helpers
 
 - **Overlay types.** `createOverlay(opts: OverlayOptions)` (`parent`, `designWidth`,
-  `designHeight`, `layout`, `theme`, `caption`, `maxToasts`, `focusHome`) returns an `Overlay`;
+  `designHeight`, `logicalSize`, `layout`, `theme`, `caption`, `maxToasts`, `focusHome`) returns an `Overlay`;
+  `logicalSize` (ws/kit-fit) is read live by the anchors when the logical size can leave the
+  design size (a `fit: 'fill'` surface; pass the surface);
   `Rect` is `{ x, y, width, height }` in CSS px.
 - **Panels.** `PanelOptions` (`content`, `title`, `label`, `modal`, `dismissible`,
   `closeOnBackdrop`, `chrome`, `className`, `initialFocus`, `role`, `onClose`) and

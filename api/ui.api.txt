@@ -1136,6 +1136,10 @@ interface OverlayOptions {
     parent: HTMLElement;
     designWidth?: number;
     designHeight?: number;
+    logicalSize?: {
+        readonly logicalWidth: number;
+        readonly logicalHeight: number;
+    };
     layout?: LayoutSpec;
     theme?: ThemeOverrides;
     caption?: CaptionOptions;
