@@ -95,6 +95,7 @@ export const WEBKIT_SPECS = [
   'lights',
   'look',
   'voxel',
+  'voxel-world',
   'render4',
   'post2',
   'demos/voxel',

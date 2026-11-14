@@ -46,6 +46,8 @@ export {
 } from './format';
 export type { VoxelGrid, VoxelGridListener, VoxelGridOptions } from './grid';
 export { createVoxelGrid, deserializeVoxelGrid } from './grid';
+export type { VoxelGridSource, VoxelGridSourceOptions } from './grid-source';
+export { feedVoxelGrid } from './grid-source';
 export { BlockLightFlood } from './light';
 export type { ChunkMeshOut, MeshChunkOptions, VoxelFace } from './mesher';
 export {
@@ -111,6 +113,8 @@ export {
 } from './sources';
 export type { SectionStore, SectionStoreOptions, SectionStoreStats } from './store';
 export { createSectionStore } from './store';
+export type { SectionBox, SectionVisibilityOptions, SectionVisibilityStats } from './visibility';
+export { SectionVisibility } from './visibility';
 export { VOXEL_WGSL } from './wgsl';
 export type {
   ChunkMesh,
@@ -121,3 +125,7 @@ export type {
   VoxelWorkerLike,
 } from './worker-client';
 export { createVoxelMesher, packChunkMesh } from './worker-client';
+export type { VoxelMaterial, VoxelWorld, VoxelWorldOptions, VoxelWorldStats } from './world';
+export { createVoxelWorld } from './world';
+export type { VoxelStream } from './world-shaders';
+export { VOXEL_DEFAULT_FRAGMENT, VOXEL_VARYING_WGSL, voxelVertexWgsl } from './world-shaders';
