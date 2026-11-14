@@ -121,7 +121,9 @@ describe('VertexSchema', () => {
   });
 
   it('generates the WGSL decode a person would write', () => {
-    const s = defineVertexSchema([{ name: 'tint', bits: 4 }], { defaults: false });
+    const s = defineVertexSchema([{ name: 'tint', bits: 4 }], {
+      defaults: false,
+    });
     expect(vertexSchemaWgsl(s)).toBe(
       'struct VoxelVertex {\n  tint: u32,\n}\n\nfn decode_voxel_vertex(w0: u32, w1: u32) -> VoxelVertex {\n  var v: VoxelVertex;\n  v.tint = w0 & 15u;\n  return v;\n}\n',
     );
@@ -164,7 +166,9 @@ describe('VertexSchema', () => {
       ),
     ).toThrow();
     expect(() =>
-      defineVertexSchema([{ name: 'a', bits: 4, word: 1, shift: 30 }], { defaults: false }),
+      defineVertexSchema([{ name: 'a', bits: 4, word: 1, shift: 30 }], {
+        defaults: false,
+      }),
     ).toThrow();
     expect(() => defineVertexSchema([{ name: '1a', bits: 4 }])).toThrow();
     expect(() =>
@@ -186,5 +190,42 @@ describe('VertexSchema', () => {
     packVertexField(words, 0, vertexField(s, 'hue'), 5);
     expect([...words]).toEqual([0, 0]);
     expect(vertexFieldValue(undefined, 1, 1)).toBe(0);
+  });
+});
+
+describe('union vertex fields (ws/warm-voxel-fit)', () => {
+  it('lets an overlapping field share bits, leaving them free for the rest', () => {
+    const s = defineVertexSchema([
+      { name: 'plant', bits: 1 },
+      { name: 'plant_id', bits: 9, word: 1, shift: 0, overlaps: true },
+      { name: 'plant_ripe', bits: 3, word: 1, shift: 9, overlaps: true },
+    ]);
+    const id = vertexField(s, 'id')!;
+    const pid = vertexField(s, 'plant_id')!;
+    const ripe = vertexField(s, 'plant_ripe')!;
+    expect(pid.overlaps).toBe(true);
+    expect(id.overlaps).toBeUndefined();
+    expect([id.word, pid.word]).toEqual([1, 1]);
+    // `id` (12 bits) and the plant union share word 1's low 12 bits.
+    expect(id.shift).toBe(0);
+    const words = new Uint32Array(2);
+    packVertexField(words, 0, pid, 300);
+    packVertexField(words, 0, ripe, 5);
+    expect(vertexFieldValue(pid, words[0]!, words[1]!)).toBe(300);
+    expect(vertexFieldValue(ripe, words[0]!, words[1]!)).toBe(5);
+    expect(vertexFieldValue(id, words[0]!, words[1]!)).toBe(300 | (5 << 9));
+    expect(vertexSchemaWgsl(s)).toContain('v.plant_ripe = (w1 >> 9u) & 7u;');
+  });
+
+  it('needs a place, and still rejects plain overlaps', () => {
+    expect(() => defineVertexSchema([{ name: 'u', bits: 4, overlaps: true }])).toThrow(
+      /word and shift/,
+    );
+    expect(() =>
+      defineVertexSchema([
+        { name: 'u', bits: 4, word: 1, shift: 20 },
+        { name: 'v', bits: 4, word: 1, shift: 22 },
+      ]),
+    ).toThrow(/overlaps another/);
   });
 });

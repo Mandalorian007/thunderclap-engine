@@ -15,6 +15,13 @@ export interface VertexFieldDef {
   bits: number;
   word?: 0 | 1;
   shift?: number;
+  /**
+   * A union member (ws/warm-voxel-fit): the field may share bits with others, so one vertex
+   * holds this or those, and the game (another field) says which. Needs `word` and `shift`;
+   * the mesher writes only the engine's fields, so a game writes its union members itself.
+   * E.g. a 12-bit `id` beside a 9-bit `plant_id` and 3 more bits that only plant quads carry.
+   */
+  overlaps?: boolean;
 }
 
 /** A placed field. `mask` is `2^bits - 1` as an unsigned number. */
@@ -24,6 +31,8 @@ export interface VertexField {
   readonly word: 0 | 1;
   readonly shift: number;
   readonly mask: number;
+  /** A union member (`VertexFieldDef.overlaps`): its bits may be another field's too. */
+  readonly overlaps?: true;
 }
 
 /** A compiled schema: plain data, so it crosses to a Worker by structured clone. */
@@ -79,7 +88,9 @@ const WORDS = [0, 1] as const;
 
 /**
  * Compile a vertex layout. Fields with `word` and `shift` are placed there; the rest, in
- * order, take the first gap that holds them (word 0 first). Throws on an overlap, a field past
+ * order, take the first gap that holds them (word 0 first). A field marked `overlaps` is a union
+ * member: placed where it says, over any bits, and no gap for the others. Throws on any other
+ * overlap, a field past
  * bit 31, a duplicate or bad name, or a layout that does not fit 64 bits.
  */
 export function defineVertexSchema(
@@ -102,11 +113,23 @@ export function defineVertexSchema(
   const placed = new Map<string, VertexField>();
   const take = (f: VertexFieldDef, word: 0 | 1, shift: number): void => {
     const span = f.bits === 32 ? 0xffffffff : ((1 << f.bits) - 1) << shift;
+    const mask = f.bits === 32 ? 0xffffffff : ((1 << f.bits) - 1) >>> 0;
+    if (f.overlaps) {
+      // A union member: its bits stay free for the fields placed after it, overlapping or not.
+      placed.set(f.name, {
+        name: f.name,
+        bits: f.bits,
+        word,
+        shift,
+        mask,
+        overlaps: true,
+      });
+      return;
+    }
     if ((used[word] & span) !== 0) {
       throw new Error(`vertex field '${f.name}' overlaps another at word ${word} bit ${shift}`);
     }
     used[word] = (used[word] | span) >>> 0;
-    const mask = f.bits === 32 ? 0xffffffff : ((1 << f.bits) - 1) >>> 0;
     placed.set(f.name, { name: f.name, bits: f.bits, word, shift, mask });
   };
   for (const f of all) {
@@ -115,7 +138,10 @@ export function defineVertexSchema(
     if (!Number.isInteger(f.bits) || f.bits < 1 || f.bits > 32) {
       throw new RangeError(`vertex field '${f.name}' bits must be 1..32, got ${f.bits}`);
     }
-    if (f.word === undefined && f.shift === undefined) continue;
+    if (f.word === undefined && f.shift === undefined) {
+      if (f.overlaps) throw new Error(`vertex field '${f.name}' overlaps: give its word and shift`);
+      continue;
+    }
     const word = f.word ?? 0;
     const shift = f.shift ?? 0;
     if (word !== 0 && word !== 1)
