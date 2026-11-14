@@ -14,7 +14,14 @@
 //!   are generation 0), each started by a rotation ([`Log::rotate`]).
 //! - `store.lock` (and `store.holder` on Windows): the lock ([`StoreLock`]).
 //! - `recovered/`: every byte recovery cut off a file, kept
-//!   (`<file>.<from>-<to>.<unix time>.tail`).
+//!   (`<file>.<from>-<to>.<unix time>.tail`), and the old log (and
+//!   archive) a repair or rollback in place replaced
+//!   (`<repair|rollback>.<unix time>/`).
+//! - `archive/g<n>/`: generation `n`, archived by [`tidy`]: each file
+//!   deflated (`<file>.z`) and an `info` file (its entries, latest wall
+//!   time, size). Pruned by age and size ([`ArchivePolicy`]: a week, 1 GiB).
+//! - `.swap/`: a repair or rollback in place, while it is written; opening
+//!   finishes or clears it.
 //!
 //! Every entry carries its global sequence number, so opening reads the
 //! files of every generation and merges them by sequence. The binary
@@ -42,6 +49,12 @@
 //! missing entry, a duplicate entry) is an error that changes nothing.
 //! What opening did is the [`OpenReport`].
 //!
+//! Past that: [`check`] says what is wrong, changing nothing; [`repair`]
+//! writes a new log holding what can be trusted; [`rollback`] one holding
+//! an earlier point. Both write a copy or work in place, the old log moved
+//! to `recovered/`, never destroyed. [`backup`] copies a store while it is
+//! appended to, and the copy opens cleanly.
+//!
 //! # Windows
 //!
 //! Every sync goes through a writable handle (`FlushFileBuffers` needs
@@ -57,10 +70,16 @@
 //! syncs), `durable` (every sync), `background` (jobs off the appending
 //! thread), `read` and `load` (decoding and recovery), `recovered` (what
 //! recovery keeps), `gens` (generations), `lock` and `crash` (crash points
-//! for tests).
+//! for tests); `salvage` ([`check`], [`repair`]), `rollback`, `copy` (a
+//! store's history read and written again), `swap` (in place), `archive`
+//! ([`tidy`]), `backup`, `tail` ([`LogReader`]) and `memory` ([`Store`],
+//! [`MemoryLog`]).
 
+mod archive;
 mod background;
+mod backup;
 mod codec;
+mod copy;
 mod crash;
 mod durable;
 mod error;
@@ -71,8 +90,13 @@ mod io;
 mod load;
 mod lock;
 mod log_file;
+mod memory;
 mod read;
 mod recovered;
+mod rollback;
+mod salvage;
+mod swap;
+mod tail;
 mod writer;
 
 #[cfg(test)]
@@ -83,12 +107,21 @@ use std::fs::File;
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 
+pub use archive::{ARCHIVE_DIR, ArchivePolicy, Archived, Tidied, summary, tidy};
 pub use background::Background;
+pub use backup::{BackupReport, backup};
 pub use codec::{LogCodec, LogEntry, NameTable, Names};
 pub use error::StoreError;
 pub use gens::gen_dir;
 pub use load::{ReadLog, read};
 pub use lock::{HOLDER_FILE, Holder, LOCK_FILE, StoreLock, holder};
+pub use memory::{MemoryLog, Store};
+pub use rollback::{RollbackReport, RollbackTo, rollback};
+pub use salvage::{
+    CheckReport, FileSummary, Refused, RepairReport, Salvage, check, repair, repair_with,
+};
+pub use swap::{Output, SWAP_DIR};
+pub use tail::{LogReader, ReadMark};
 pub use writer::{Counters, CutFile, Log, LogCut, Opened, Prepared, prepare, sync_frozen};
 
 /// The most keyed log files a [`Log`] keeps open at once; the least

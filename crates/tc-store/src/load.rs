@@ -117,6 +117,7 @@ pub(crate) fn load<C: LogCodec>(
 ) -> Result<Loaded<C::Event, C::Key>, StoreError> {
     let meta = read_meta(dir)?;
     let listing = gens::list(codec, dir)?.strict()?;
+    check_not_archived(dir, &listing, from_gen)?;
     check_generations_listed(&listing, from_gen)?;
     let has_main_log = listing.gens.iter().any(Generation::has_main_log);
     if !has_main_log && listing.gens.len() <= 1 {
@@ -204,6 +205,30 @@ pub(crate) fn load<C: LogCodec>(
         from_gen,
         files: states,
     })
+}
+
+/// Says plainly when the first generation to read was archived
+/// ([`crate::tidy`]): the store opens from a base after it.
+fn check_not_archived<K: Clone>(
+    dir: &Path,
+    listing: &Listing<K>,
+    from_gen: u64,
+) -> Result<(), StoreError> {
+    let live = listing
+        .gens
+        .iter()
+        .any(|g| g.number == from_gen && !g.files.is_empty());
+    let archived = dir
+        .join(crate::ARCHIVE_DIR)
+        .join(format!("g{from_gen}"))
+        .exists();
+    if archived && !live {
+        return Err(StoreError::Sequence(format!(
+            "log generation {from_gen} is archived: open the store from a later generation, \
+             after a base (Log::open_from)"
+        )));
+    }
+    Ok(())
 }
 
 /// Checks that the generations from `from_gen` on are all there, in

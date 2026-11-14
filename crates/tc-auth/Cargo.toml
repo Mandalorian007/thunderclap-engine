@@ -1,0 +1,24 @@
+[package]
+name = "tc-auth"
+description = "ThunderClap's accounts and auth: name records, stores, signed session tokens with revocation, for tc-net's Auth seam"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+tc-net.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+hmac.workspace = true
+sha2.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tc-wire.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+
+[lints]
+workspace = true
