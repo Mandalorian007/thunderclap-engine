@@ -10,11 +10,11 @@
 import { CORE_DRAWABLE_WGSL, CORE_VIEW_EXTRA_WGSL } from '../render/core/drawable';
 
 /** Layers one `Weather` draws (each a shape, count, volume and colour). */
-export const WEATHER_MAX_LAYERS = 4;
+export const WEATHER_MAX_LAYERS = 8;
 /** Floats per layer in the weather uniform. */
 export const WEATHER_LAYER_FLOATS = 16;
 /** Floats of the weather uniform before the layers. */
-export const WEATHER_HEAD_FLOATS = 16;
+export const WEATHER_HEAD_FLOATS = 20;
 
 export const WEATHER_WGSL = /* wgsl */ `
 ${CORE_DRAWABLE_WGSL}
@@ -23,13 +23,14 @@ struct Layer {
   a: vec4f,   // first instance, instances, radius, height
   b: vec4f,   // fall speed, wind factor, length, width
   c: vec4f,   // rgb, alpha
-  d: vec4f,   // shape (0 streak, 1 flake, 2 dust, 3 splash), flutter, seed, unused
+  d: vec4f,   // shape (0 streak, 1 flake, 2 dust, 3 splash, 4 leaf), flutter, seed, unused
 };
 struct Weather {
   anchor: vec4f,  // xyz (the core's frame), time
   wind: vec4f,    // x, z (units/s), intensity, layer count
   occl: vec4f,    // flat height, map (0 off, 1 on, 2 wrapping), map origin x, map origin z
   occl2: vec4f,   // map size x, map size z, near fade, light
+  decode: vec4f,  // the map's texel to a height: floor (1) or not, scale, offset, unused
   layers: array<Layer, ${WEATHER_MAX_LAYERS}>,
 };
 @group(1) @binding(0) var<uniform> w: Weather;
@@ -62,7 +63,9 @@ fn occlusion(xz: vec2f) -> f32 {
     if (all(uv >= vec2f(0.0)) && all(uv < vec2f(1.0))) {
       let dims = vec2f(textureDimensions(height_map));
       let px = vec2i(uv * dims);
-      h = max(h, textureLoad(height_map, px, 0).r);
+      var v = textureLoad(height_map, px, 0).r;
+      if (w.decode.x > 0.5) { v = floor(v); }
+      h = max(h, v * w.decode.y + w.decode.z);
     }
   }
   return h;
@@ -126,7 +129,7 @@ fn occlusion(xz: vec2f) -> f32 {
     p.y = max(ground, anchor.y - 3.0) + hash11(s * 2.3 + cyc) * H * 0.7;
     vel = vec3f(wv.x, -0.15 * speed, wv.y);
   }
-  if (shape == 1u) {
+  if (shape == 1u || shape == 4u) {
     p.x += sin(t * 1.3 + s) * L.d.y;
     p.z += cos(t * 1.1 + s * 1.7) * L.d.y;
   }
@@ -140,6 +143,13 @@ fn occlusion(xz: vec2f) -> f32 {
   if (shape == 1u) {
     along = e.up.xyz;
     across = e.right.xyz;
+  }
+  if (shape == 4u) {
+    // A leaf: a facing blade turning in the image plane and tipping edge-on as it tumbles.
+    let spin = t * (0.8 + hash11(s * 4.7) * 1.6) + s * 2.39996;
+    let tip = 0.25 + 0.75 * abs(cos(t * (1.1 + hash11(s * 6.1)) + s));
+    along = e.up.xyz * cos(spin) + e.right.xyz * sin(spin);
+    across = (e.right.xyz * cos(spin) - e.up.xyz * sin(spin)) * tip;
   }
   let q = p + along * corner.y * L.b.z * 0.5 + across * corner.x * L.b.w * 0.5;
   o.clip = view.viewProj * vec4f(q, 1.0);
@@ -158,6 +168,10 @@ fn occlusion(xz: vec2f) -> f32 {
   } else if (in.shape == 3u) {
     // A thin ring at 0.8 of the quad.
     r = 1.0 - abs(length(in.uv) - 0.8) * 6.0;
+  } else if (in.shape == 4u) {
+    // A leaf: pointed at both ends, solid (the blade's width tapers along it).
+    let taper = 1.0 - in.uv.y * in.uv.y;
+    r = select(0.0, 1.0, abs(in.uv.x) < taper);
   } else {
     r = 1.0 - dot(in.uv, in.uv);
   }

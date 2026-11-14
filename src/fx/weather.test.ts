@@ -123,7 +123,7 @@ describe('weather on the render core', () => {
     stereo(r);
     expect(w.active).toBe(false);
     expect(r.core.stats.passes).toBe(0);
-    expect(() => w.configure({ layers: Array(5).fill(WEATHER_RAIN.layers[0]) })).toThrow(/4/);
+    expect(() => w.configure({ layers: Array(9).fill(WEATHER_RAIN.layers[0]) })).toThrow(/8/);
   });
 
   it('an occlusion map re-records the bundle with the map bound', () => {
