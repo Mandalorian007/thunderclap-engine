@@ -38,6 +38,20 @@ export interface HarnessAudio4State {
   /** `audio.inBackground` (the `background` flag) and `audio.paused`. */
   background: boolean;
   paused: boolean;
+  /**
+   * `?fit`: the custom buses and the `ambient` bus's gain and voices, the voice budget's
+   * stats, the voices panned through the PannerNode fallback and the watchdog's restarts.
+   */
+  fit: {
+    customBuses: string[];
+    ambientGain: number;
+    ambientVoices: number;
+    live: number;
+    stolen: number;
+    dropped: number;
+    panFallbacks: number;
+    watchdogRestarts: number;
+  };
 }
 
 export interface HarnessAudio4Api {
@@ -48,6 +62,10 @@ export interface HarnessAudio4Api {
   setStill(still: boolean): void;
   /** `audio.background(hidden)`. */
   background(hidden: boolean): void;
+  /** `?fit`: play `count` one-shots at `priority` against the three-voice budget. */
+  burst(count: number, priority: number): void;
+  /** `?fit`: the `ambient` bus's volume and mute. */
+  setBus(volume: number, muted: boolean): void;
 }
 
 declare global {

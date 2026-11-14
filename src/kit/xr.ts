@@ -10,7 +10,14 @@ import { type PointerRouter, XrPointerSource } from '../input';
 import { type GpuContext, XrSurface } from '../platform';
 import type { XrEyeView } from '../platform/xr-surface';
 import type { XRFrame, XRReferenceSpace, XRSession, XrNavigator } from '../platform/xr-types';
-import type { CullGroup, RenderCore, Renderer, SceneTargetAux } from '../render';
+import type {
+  CoreTarget,
+  CullGroup,
+  RenderCore,
+  Renderer,
+  RenderView,
+  SceneTargetAux,
+} from '../render';
 import type { KitPart, KitService, XrControl, XrOptions } from './types';
 
 /** `createKitXr`'s dependencies. */
@@ -57,6 +64,11 @@ export function createKitXr(deps: KitXrDeps): KitXr {
   let coreClear: GPUColor = BLACK;
   // `core.prepare`'s groups: the surface's one union group, swapped in per session.
   const groups: CullGroup[] = [];
+  // The same with the sun's view as a second group, when the core's casters draw its shadow.
+  const sunGroup: { views: RenderView[]; planes: 'union' } = { views: [], planes: 'union' };
+  const groupsSun: CullGroup[] = [];
+  // Per eye, a core-only eye with a post pass: the HDR scene target, resolved into the layer.
+  const postTargets: CoreTarget[] = [];
   // While a session runs: its host (frames and the current `XRFrame`) and its surface (eyes).
   let xrHost: XrHost | null = null;
   let xrSurface: XrSurface | null = null;
@@ -120,6 +132,8 @@ export function createKitXr(deps: KitXrDeps): KitXr {
           coreClear: immediate ? null : coreClear,
         });
         groups[0] = surface.group;
+        groupsSun[0] = surface.group;
+        groupsSun[1] = sunGroup;
         const sessionHost = createXrHost(session, host);
         const removeSource = pointers
           ? pointers.addSource(
@@ -136,6 +150,7 @@ export function createKitXr(deps: KitXrDeps): KitXr {
           xrSurface = null;
           xrSession = null;
           groups.length = 0;
+          groupsSun.length = 0;
           surface.destroy();
           deps.onExit?.();
         };
@@ -175,8 +190,36 @@ export function createKitXr(deps: KitXrDeps): KitXr {
     drawCore(eyes) {
       if (!core || !xrSurface || eyes.length === 0 || groups.length === 0) return;
       const encoder = gpu.device.createCommandEncoder({ label: 'xr-core' });
-      core.prepare(encoder, groups);
-      for (let i = 0; i < eyes.length; i++) core.draw(encoder, i, eyes[i]!.core);
+      // The sun's shadow (ws/core-passes): its view a cull group after the eyes, its casters
+      // drawn into the renderer's map once for both eyes.
+      const sun = renderer.coreSunFor(core, xrSurface.head.position);
+      if (sun) sunGroup.views[0] = sun;
+      core.prepare(encoder, sun ? groupsSun : groups);
+      if (sun) renderer.drawCoreSun(encoder, core, xrSurface.group.views.length);
+      // A core-only eye with a post pass (ws/core-passes): drawn into the eye-sized HDR scene
+      // target and resolved by the pass into its part of the layer, each eye its own view.
+      const scene = !immediate && core.hasResolve ? xrSurface.scene : null;
+      for (let i = 0; i < eyes.length; i++) {
+        const eye = eyes[i]!;
+        if (!scene) {
+          core.draw(encoder, i, eye.core);
+          continue;
+        }
+        let t = postTargets[i];
+        if (!t) {
+          t = { view: scene.color.view, format: scene.color.format, width: 1, height: 1 };
+          postTargets[i] = t;
+        }
+        t.view = scene.color.view;
+        t.format = scene.color.format;
+        t.width = scene.width;
+        t.height = scene.height;
+        t.clear = coreClear;
+        t.output = eye.core.view;
+        t.outputFormat = eye.core.format;
+        t.outputViewport = eye.viewport;
+        core.draw(encoder, i, t);
+      }
       gpu.device.queue.submit([encoder.finish()]);
     },
   };

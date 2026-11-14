@@ -1,3 +1,5 @@
+import type { RenderView } from './view';
+
 /**
  * The pass list (D1 §3.6): named passes in a declared order, not a graph. Each pass encodes only
  * when its `when` holds and something joined it, and the depth attachment exists only when a
@@ -21,6 +23,41 @@ export interface PassDesc {
    * depth attachment unless its `depth` is `'none'`. It must not allocate.
    */
   encode?: (pass: GPURenderPassEncoder, ctx: CorePassContext) => void;
+  /**
+   * A resolve pass (ws/core-passes): instead of a render pass, encoded per view on the frame's
+   * command encoder when the target has an `output`: post-processing from the target into
+   * `CoreTarget.output`. Passes after it draw into the output, without depth. No sets join it.
+   * It must not allocate.
+   */
+  resolve?: (encoder: GPUCommandEncoder, ctx: CoreResolveContext) => void;
+}
+
+/**
+ * What a resolve pass gets for the view being drawn. One object, rewritten per call: read it
+ * inside `resolve`, do not keep it.
+ */
+export interface CoreResolveContext {
+  /** The view of the last `prepare` being drawn. */
+  viewIndex: number;
+  /** That view (its matrices: `viewProj`, `proj`, `view`, `position`). */
+  view: RenderView;
+  /** The target drawn so far: `CoreTarget.view`, its texture when given, format and size. */
+  color: GPUTextureView;
+  colorTexture: GPUTexture | undefined;
+  format: GPUTextureFormat;
+  width: number;
+  height: number;
+  /** The view's rectangle of the target (`CoreTarget.viewport`), else undefined. */
+  viewport: { x: number; y: number; width: number; height: number } | undefined;
+  /**
+   * The view's depth when something wrote it (the target's own or the core's, sampleable as
+   * `texture_depth_2d`), else null.
+   */
+  depth: GPUTextureView | null;
+  /** Where to write: `CoreTarget.output`, its format and rectangle. */
+  output: GPUTextureView;
+  outputFormat: GPUTextureFormat;
+  outputViewport: { x: number; y: number; width: number; height: number } | undefined;
 }
 
 /**
@@ -48,6 +85,7 @@ export interface CorePass {
   readonly depth: PassDepth;
   readonly when: (() => boolean) | null;
   readonly encode: ((pass: GPURenderPassEncoder, ctx: CorePassContext) => void) | null;
+  readonly resolve: ((encoder: GPUCommandEncoder, ctx: CoreResolveContext) => void) | null;
 }
 
 /**
@@ -80,7 +118,10 @@ export class PassList {
       depth: desc.depth ?? 'write',
       when: desc.when ?? null,
       encode: desc.encode ?? null,
+      resolve: desc.resolve ?? null,
     };
+    if (pass.encode && pass.resolve)
+      throw new Error(`pass ${desc.id}: encode or resolve, not both`);
     if (desc.after === undefined) {
       this.passes.push(pass);
     } else {

@@ -6,13 +6,13 @@
  * owns the write: the bus keeps following `setVolume` and `setMuted`, stays silent while
  * `pause` holds it, and `unpause` lands on the ducked gain.
  */
-import type { AudioEngine, OutputBus, Voice } from './audio';
+import type { AudioEngine, BusId, Voice } from './audio';
 
 export interface DuckerOptions {
   /** Bus whose activity ducks the target. */
-  trigger: OutputBus;
+  trigger: BusId;
   /** Bus that is lowered. */
-  target: OutputBus;
+  target: BusId;
   /** Fraction of the target's gain removed when fully ducked, 0..1. Default 0.6. */
   amount?: number;
   /** Seconds from idle to fully ducked. Default 0.1. */

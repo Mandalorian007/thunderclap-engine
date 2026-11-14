@@ -50,6 +50,23 @@ export {
   type WorkReport,
 } from './budget';
 export {
+  createFakeAudioContext,
+  FakeAudioAnalyser,
+  FakeAudioBiquad,
+  FakeAudioContext,
+  type FakeAudioContextOptions,
+  FakeAudioConvolver,
+  FakeAudioGain,
+  FakeAudioMediaElement,
+  FakeAudioMediaSource,
+  FakeAudioNode,
+  FakeAudioPanner,
+  FakeAudioParam,
+  type FakeAudioParamEvent,
+  FakeAudioSource,
+  FakeAudioSpatialContext,
+} from './fake-audio';
+export {
   createFakeHost,
   type FakeHapticCall,
   type FakeHost,

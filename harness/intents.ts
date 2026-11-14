@@ -10,12 +10,17 @@
  *   still finger held), `gather` (a stick-side hold: a thumb held still in the stick's top half),
  *   `jump` (a press: Space), `slot` (select: Digit1..3), `cycle` (KeyQ / KeyR and the wheel) and
  *   `look` (the view's aim). The left half of the stage is the move stick's zone.
+ * - ws/input-fit: `dig` (a hold) and `place` (a tap) on the right button, a free mouse's still
+ *   press (`mouseStill`) or the button's action when locked (chorded under a held left button);
+ *   `speed` (a wheel intent Alt opens, in px). Mouse only (`touch: false`); the hold's pointer id
+ *   is logged as `id`.
  * - The intents' clock can be pinned (`setClock`) so the spec decides how long a press lasts.
  */
 import {
   createIntents,
   Input,
   type IntentAim,
+  mouseStill,
   type RayCamera,
   stickSideHold,
 } from '@thunderclap-engine/engine/input';
@@ -51,6 +56,8 @@ const input = new Input(
     s3: [{ key: 'Digit3' }],
     next: [{ key: 'KeyR' }],
     prev: [{ key: 'KeyQ' }],
+    dig: [{ mouse: 2 }],
+    place: [{ mouse: 2 }],
   },
   { getGamepads: () => [] },
 );
@@ -84,7 +91,8 @@ const push = (intent: string, aim: IntentAim, extra: Partial<IntentLogEntry> = {
   state.log.push(e);
 };
 const hold = (name: string) => ({
-  start: (aim: IntentAim, at: number) => push(name, aim, { phase: 'start', at }),
+  start: (aim: IntentAim, at: number, id?: number | null) =>
+    push(name, aim, id == null ? { phase: 'start', at } : { phase: 'start', at, id }),
   aim: (aim: IntentAim) => push(name, aim, { phase: 'aim' }),
   end: () => state.log.push({ intent: name, phase: 'end', tick: state.ticks }),
 });
@@ -103,6 +111,9 @@ const intents = createIntents(
     slot: { kind: 'select', actions: ['s1', 's2', 's3'] },
     cycle: { kind: 'cycle', next: ['next'], prev: ['prev'], wheel: true },
     look: { kind: 'aim' },
+    dig: { kind: 'hold', actions: ['dig'], touch: false, mouse: mouseStill({ button: 2 }) },
+    place: { kind: 'tap', actions: ['place'], touch: false, mouse: mouseStill({ button: 2 }) },
+    speed: { kind: 'wheel', modifiers: { alt: true }, steps: false },
   },
   {
     use: (aim) => push('use', aim),
@@ -112,6 +123,9 @@ const intents = createIntents(
     slot: (n) => state.log.push({ intent: 'slot', n, tick: state.ticks }),
     cycle: (n) => state.log.push({ intent: 'cycle', n, tick: state.ticks }),
     look: () => {},
+    dig: hold('dig'),
+    place: (aim) => push('place', aim),
+    speed: (n) => state.log.push({ intent: 'speed', n, tick: state.ticks }),
   },
   {
     input,

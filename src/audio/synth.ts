@@ -88,6 +88,22 @@ export interface SoundSpec {
   channels?: 1 | 2;
   /** Render `crossfade` extra seconds and fold them into the head for a seamless loop. */
   loop?: { crossfade: number };
+  /**
+   * A loudness envelope over the whole sound, every layer together, on the master gain (peak
+   * `gain`): a swell or a fade that no single layer's `env` can give. Default none.
+   */
+  env?: Envelope;
+  /**
+   * Seconds from 0 to note-off of `env`. Default: early enough for its release to end at
+   * `duration` (in a loop, held through the crossfade).
+   */
+  envGate?: number;
+}
+
+/** `spec.env`'s gate: `envGate`, or note-off early enough for the release to end at `duration`. */
+function specGate(spec: SoundSpec, env: Envelope): number {
+  if (spec.envGate !== undefined) return spec.envGate;
+  return Math.max(0, spec.duration - env.release);
 }
 
 function layerFilters(layer: Layer): readonly FilterSpec[] {
@@ -115,6 +131,16 @@ export function validateSpec(spec: SoundSpec): string[] {
   if (spec.layers.length === 0) errs.push('no layers');
   if (spec.loop && !(spec.loop.crossfade >= 0 && spec.loop.crossfade < spec.duration))
     errs.push('loop crossfade must be in [0, duration)');
+  if (spec.env) {
+    const env = spec.env;
+    for (const k of ['attack', 'decay', 'release'] as const)
+      if (!(env[k] >= 0)) errs.push(`env.${k} must be ≥ 0`);
+    if (!(env.sustain >= 0 && env.sustain <= 1)) errs.push('env.sustain not in [0, 1]');
+    if (spec.envGate !== undefined && !(spec.envGate >= 0)) errs.push('envGate must be ≥ 0');
+    const end = envelopeLength(env, specGate(spec, env));
+    if (!spec.loop && end > spec.duration + 1e-6)
+      errs.push(`env ends at ${end.toFixed(3)}s, after duration ${spec.duration}s`);
+  }
   spec.layers.forEach((l, i) => {
     const at = `layer ${i}`;
     const start = l.start ?? 0;
@@ -243,7 +269,12 @@ export async function renderSound(
   const ctx = createOffline(channels, loopLen + fadeLen, sr);
 
   const master = ctx.createGain();
-  master.gain.value = spec.gain ?? 1;
+  if (spec.env) {
+    const gate = spec.loop && spec.envGate === undefined ? renderLen : specGate(spec, spec.env);
+    scheduleEnvelope(master.gain, spec.env, 0, gate, spec.gain ?? 1);
+  } else {
+    master.gain.value = spec.gain ?? 1;
+  }
   master.connect(ctx.destination);
 
   for (const layer of spec.layers) {

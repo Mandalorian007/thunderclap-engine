@@ -35,6 +35,10 @@ export {
 } from './gestures';
 export {
   inStickZone,
+  MOUSE_STILL_DEFAULTS,
+  type MouseStillOptions,
+  type MouseStillSpec,
+  mouseStill,
   STILL_HOLD_DEFAULTS,
   type StickSide,
   type StickSideHoldOptions,
@@ -103,10 +107,14 @@ export {
   type IntentSpec,
   type Intents,
   type IntentsOptions,
+  type IntentTiming,
   type PressIntent,
   type ReleaseIntent,
   type SelectIntent,
   type TapIntent,
+  type WheelGate,
+  type WheelIntent,
+  type WheelModifiers,
 } from './intents';
 export type { LookTapListener, LookTapOptions } from './look';
 export {
@@ -116,6 +124,7 @@ export {
   type LookKeys,
   type LookMode,
   type LookOptions,
+  type LookSprintRim,
   type LookStick,
   type LookTouchOptions,
   type LookZoomOptions,

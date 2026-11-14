@@ -1357,6 +1357,29 @@ depth formats and whether depth is read-only. A `'read'` pass that comes before 
 write now clears depth instead of reading uncleared depth. When a drawable in that pass samples depth (`readsDepth`), a depth-only
 `core depth clear` pass runs first and the pass stays read-only.
 
+**The sun's shadow on the core (ws/core-passes).** A draw set casts when `castShadow` (default:
+it tests depth in a depth-writing pass and does not blend; a `shadowFragmentEntry` in its shader
+runs in the shadow pass for holes). `core.drawShadow(encoder, viewIndex, target)` encodes the
+casters, through view `viewIndex`'s cull, into a depth-only `CoreShadowTarget` (its own
+`core shadow` pass; `clear` or load). Inside a `Renderer` frame with `lights.sun.shadow` set,
+the renderer adds the sun's camera as a second cull group to `prepare` and draws the core's
+casters into its map after its own (or alone, clearing). Receivers bind `renderer.coreShadow`
+(`CoreSunShadow`: `layout`, `group`, `version`, which moves when the map is remade) at a group
+of their own and call `core_sun_shadow(world)` from `coreSunShadowWgsl(group)`: the same 3×3 PCF
+as `engine_shadow`, its matrix moved to the core's frame origin. One map, as the renderer's: a
+cascade per `CullGroup` view (`planes: 'each'`) is what `drawShadow`'s view index is for.
+
+**Resolve passes (ws/core-passes).** A pass with `resolve(encoder, ctx)` instead of `encode` is
+post-processing in the pass list: per view, when the `CoreTarget` has an `output`, the core
+hands it (a `CoreResolveContext`) the colour drawn so far, the view's depth (the core's own is then made sampleable),
+the view's matrices and where to write (`output`, `outputFormat`, `outputViewport`), and it
+encodes on the command encoder between render passes. Passes after it draw into the output,
+without depth (`overlay`, UI). Without an output it is skipped and the target is drawn as before.
+`createCorePost` (`./post`) is the one the engine ships. Outside a `Renderer` frame (a headset's
+eyes on the core alone) `renderer.coreSunFor(core, center)` places the sun's map and returns its
+view to prepare as one more cull group, and `renderer.drawCoreSun(encoder, core, viewIndex)`
+draws the casters into it; `ctx.xr.setCore` does both.
+
 ### Drawables (ws/core-effects)
 
 Anything that is not a draw set joins the core as a `CoreDrawable` (`core.addDrawable(d)`,
@@ -1392,6 +1415,10 @@ room of meshes unused for 600 frames is given back. `renderer.stats.runs` counts
 `drawCalls` still counts one per mesh. Batches, lists, drawables, sprites, LOD lanes, velocity
 draws, large or non-indexed meshes and the shadow pass take the per-command path. The demo is
 `harness/runs.html` (`?n=6000`, `?split` for the per-mesh path, `?still`).
+
+Since ws/core-passes the shadow pass takes runs too, always as direct `drawIndexed` from the
+pool (one vertex and index bind per run; the shadow map has no bundle or indirect path): plain
+indexed casters with no skin and no `shadowFragmentEntry`.
 
 ## Lower-level pieces
 

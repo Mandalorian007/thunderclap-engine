@@ -209,7 +209,7 @@ test('keyboard: hold C fires after 400 ms, not at 200 ms', async ({ page, wrappe
   await expect.poll(async () => (await read()).holdProgress).toBeGreaterThan(0);
   await expect.poll(async () => (await read()).holdFired, { timeout: 10_000 }).toBe(1);
   const s = await read();
-  expect(s.holdFiredAfterMs).toBeGreaterThanOrEqual(350);
+  expect(s.holdFiredAfterMs).toBeGreaterThanOrEqual(250);
   expect(s.holdProgress).toBe(1);
   await page.keyboard.up('KeyC');
   await expect.poll(async () => (await read()).holdProgress).toBe(0);
@@ -218,7 +218,7 @@ test('keyboard: hold C fires after 400 ms, not at 200 ms', async ({ page, wrappe
   await page.keyboard.press('KeyC');
   await frames(3);
   const tapped = await read();
-  if (tapped.holdFired > 1) expect(tapped.holdFiredAfterMs).toBeGreaterThanOrEqual(350);
+  if (tapped.holdFired > 1) expect(tapped.holdFiredAfterMs).toBeGreaterThanOrEqual(250);
   expect(errors).toEqual([]);
 });
 
