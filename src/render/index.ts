@@ -80,6 +80,8 @@ export type {
 } from './core/pass-list';
 export { CORE_PASSES, coreDepthCompare, coreDepthFar, PassList } from './core/pass-list';
 export { QUAD_INDICES, QuadIndex, quadIndices } from './core/quad-index';
+export type { CoreSceneRead } from './core/scene-read';
+export { coreSceneReadWgsl } from './core/scene-read';
 export type { CoreTargetName } from './core/targets';
 export {
   CORE_TARGET,

@@ -33,6 +33,7 @@ import {
   PassList,
 } from './pass-list';
 import { QuadIndex } from './quad-index';
+import { type CoreSceneRead, SceneRead } from './scene-read';
 import {
   CORE_TARGET,
   CORE_TARGET_FORMATS,
@@ -301,6 +302,7 @@ export class RenderCore {
   /** Some drawable samples depth / colour (rebuilt with `bySet`). */
   private wantsDepthBinding = false;
   private wantsColor = false;
+  private readonly sceneReadNow = new SceneRead(this);
   /** The current target can be copied (`CoreTarget.texture`): `sceneColorView` is live. */
   private colorLive = false;
   private depthUsage = 0;
@@ -470,6 +472,7 @@ export class RenderCore {
       get viewVariant() {
         return core.viewVariant;
       },
+      sceneRead: this.sceneReadNow,
       module: (label, code) => {
         let m = this.modules.get(code);
         if (!m) {
@@ -723,6 +726,15 @@ export class RenderCore {
   /** Bumped when `sceneDepthView` or `sceneColorView` is re-made (bind groups go stale). */
   get targetsVersion(): number {
     return this.targets;
+  }
+
+  /**
+   * The scene-read group (ws/scene-read-fit): `sceneDepthView` and `sceneColorView` in one bind
+   * group, re-made when `targetsVersion` moves. Draw sets that `readsDepth` or `readsColor`
+   * bind it themselves; a drawable binds `sceneRead.group` (read at record time).
+   */
+  get sceneRead(): CoreSceneRead {
+    return this.sceneReadNow;
   }
 
   /** Declare a pass (D1 §3.4 `definePass`); sets join it by id. */
@@ -1386,8 +1398,11 @@ export class RenderCore {
       this.bySet.push(members);
     }
     this.wantsDepthBinding =
-      list.some((p) => p.resolve !== null) || this.drawables.some((d) => d.readsDepth);
-    this.wantsColor = this.drawables.some((d) => d.readsColor);
+      list.some((p) => p.resolve !== null) ||
+      this.drawables.some((d) => d.readsDepth) ||
+      this.sets.some((s) => s.readsDepth);
+    this.wantsColor =
+      this.drawables.some((d) => d.readsColor) || this.sets.some((s) => s.readsColor);
     this.setsDirty = false;
   }
 

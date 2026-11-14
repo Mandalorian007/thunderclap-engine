@@ -34,6 +34,7 @@ import {
 import type { PassMember } from './drawable';
 import type { BufferLayout } from './layout';
 import { type CorePass, coreDepthCompare } from './pass-list';
+import { type CoreSceneRead, coreSceneReadWgsl } from './scene-read';
 import { type CoreTargetName, coreColorFormats, coreColorTargets, coreTargetMask } from './targets';
 import { CORE_VIEW_WGSL, sphereInPlanes, VIEW_SLOT } from './view';
 import type { PipelineWarmer } from './warm';
@@ -159,6 +160,20 @@ export interface DrawSetDesc {
   /** Extra bind groups at 1, 2, …: the set's own textures, samplers and storage. */
   bindGroups?: readonly { layout: GPUBindGroupLayout; group: GPUBindGroup }[];
   /**
+   * Samples the scene's depth as the passes before left it (ws/scene-read-fit): the core's
+   * scene-read group (`RenderCore.sceneRead`) is bound after `bindGroups` (at
+   * `1 + bindGroups.length`) and its prelude declares `core_scene_depth` and
+   * `core_scene_color`. Only in a pass whose depth is `'read'` or `'none'` (and in no
+   * depth-writing join); such a set casts no shadow. Default false.
+   */
+  readsDepth?: boolean;
+  /**
+   * Samples the target's colour as it was before the set's pass (`core_scene_color`, copied from
+   * `CoreTarget.texture`, which needs `COPY_SRC`; a 1×1 stand-in without one). Binds the
+   * scene-read group as `readsDepth` does. Default false.
+   */
+  readsColor?: boolean;
+  /**
    * With `cull: 'external'` (and only then): the `drawIndexedIndirect` arguments, written by
    * the caller's compute before the draw. Slot `id` of cull group `g` reads five `u32` (index
    * count, instance count, first index, base vertex, first instance) at byte
@@ -268,6 +283,8 @@ export interface DrawSetHost {
   readonly viewVariant: string | null;
   /** A shader module for `code`, shared with every set of the same code (ws/render-fit). */
   module(label: string, code: string): GPUShaderModule;
+  /** The core's scene-read group (ws/scene-read-fit). */
+  readonly sceneRead: CoreSceneRead;
 }
 
 /** Per-frame counts (reset by `prepare`) and running totals. */
@@ -367,6 +384,12 @@ class SetJoin implements PassMember {
   get depth(): boolean {
     return this.set.depth && this.pass.depth !== 'none';
   }
+  get readsDepth(): boolean {
+    return this.set.readsDepth;
+  }
+  get readsColor(): boolean {
+    return this.set.readsColor;
+  }
   get ready(): boolean {
     return this.set.ready;
   }
@@ -422,6 +445,12 @@ export class DrawSet {
   readonly depth: boolean;
   /** Whether the set casts the sun's shadow (`DrawSetDesc.castShadow`). */
   readonly castShadow: boolean;
+  /** Samples the scene's depth (`DrawSetDesc.readsDepth`, ws/scene-read-fit). */
+  readonly readsDepth: boolean;
+  /** Samples the scene's colour (`DrawSetDesc.readsColor`, ws/scene-read-fit). */
+  readonly readsColor: boolean;
+  /** Where the scene-read group binds (`1 + bindGroups.length`), or -1 when the set reads none. */
+  readonly sceneGroup: number;
   /**
    * Max draw distance (ws/render-fit; `DrawSetDesc.maxDistance`): slots wholly farther from the
    * cull group's eye are culled. 0: no limit. Changing it costs one small upload.
@@ -563,8 +592,16 @@ export class DrawSet {
     this.pass = host.pass(desc.pass ?? 'opaque');
     this.order = desc.order ?? 0;
     this.depth = desc.depth ?? this.pass.depth !== 'none';
+    this.readsDepth = desc.readsDepth === true;
+    this.readsColor = desc.readsColor === true;
+    const reads = this.readsDepth || this.readsColor;
+    this.sceneGroup = reads ? 1 + (desc.bindGroups?.length ?? 0) : -1;
     this.castShadow =
-      desc.castShadow ?? (this.depth && this.pass.depth === 'write' && !desc.shader.blend);
+      desc.castShadow ??
+      (this.depth && this.pass.depth === 'write' && !desc.shader.blend && !reads);
+    if (reads && this.castShadow) {
+      throw new Error(`${this.label}: a set that reads the scene casts no shadow`);
+    }
     this.maxDistance = desc.maxDistance ?? 0;
     this.enabled = desc.enabled ?? true;
     this.cullGroups = (desc.cullGroups ?? -1) | 0;
@@ -601,6 +638,15 @@ export class DrawSet {
       (j) =>
         new SetJoin(this, host.pass(j.pass), j.order ?? this.order, this.variantIndex(j.variant)),
     );
+    if (this.readsDepth) {
+      for (const p of [this.pass, ...this.joins.map((j) => j.pass)]) {
+        if (p.depth === 'write') {
+          throw new Error(
+            `${this.label}: readsDepth in pass '${p.id}', which writes depth (use a 'read' or 'none' pass)`,
+          );
+        }
+      }
+    }
     const words = new ArrayBuffer(desc.capacity * SLOT_BYTES);
     this.slotF32 = new Float32Array(words);
     this.slotU32 = new Uint32Array(words);
@@ -664,11 +710,12 @@ struct VertexIn {
 };
 ${vl.wgslDecode}
 ${il?.wgslDecode ?? ''}
-`;
+${this.sceneGroup > 0 ? coreSceneReadWgsl(this.sceneGroup) : ''}`;
     this.module = host.module(this.label, this.prelude + desc.shader.code);
     for (const v of this.variants) v.module = null;
     const groups = [host.viewLayout];
     for (const g of this.bindGroups ?? []) groups.push(g.layout);
+    if (this.sceneGroup > 0) groups.push(host.sceneRead.layout);
     this.layout = device.createPipelineLayout({ label: this.label, bindGroupLayouts: groups });
 
     if (this.cull === 'gpu') {
@@ -759,6 +806,11 @@ ${il?.wgslDecode ?? ''}
       if (this.cull !== 'external') throw new Error(`${this.label}: args are for an external set`);
       this.argsBuffer = args;
     }
+    if (this.sceneGroup > 0 && groups.length !== this.sceneGroup - 1) {
+      throw new Error(
+        `${this.label}: a set that reads the scene keeps its ${this.sceneGroup - 1} bind groups`,
+      );
+    }
     const old = this.bindGroups;
     // The same layouts (new groups on this device): the pipelines stay; only bundles re-record.
     let same = !this.waiting && old !== null && old.length === groups.length;
@@ -767,9 +819,11 @@ ${il?.wgslDecode ?? ''}
     this.bindGroups = groups;
     this.waiting = false;
     if (!same) {
+      const layouts = [this.host.viewLayout, ...groups.map((g) => g.layout)];
+      if (this.sceneGroup > 0) layouts.push(this.host.sceneRead.layout);
       this.layout = this.host.device.createPipelineLayout({
         label: this.label,
-        bindGroupLayouts: [this.host.viewLayout, ...groups.map((g) => g.layout)],
+        bindGroupLayouts: layouts,
       });
       this.pipelines.length = 0;
       this.shadowWarmed = null;
@@ -1115,6 +1169,8 @@ ${il?.wgslDecode ?? ''}
       e.pipeline,
       this.host.drawGroup(group),
       this.depthOnly(color) ? null : this.bindGroups,
+      this.sceneGroup > 0 && !this.depthOnly(color) ? this.host.sceneRead : null,
+      this.sceneGroup,
       (this.vertexSlot >= 0 ? 1 : 0) +
         (this.desc.instanceLayout ? 1 : 0) +
         (this.originBuffer ? 1 : 0),
@@ -1313,7 +1369,8 @@ ${il?.wgslDecode ?? ''}
       d.vertices.version * 7 +
       (d.indices?.version ?? 0) * 13 +
       (d.instances?.version ?? 0) * 17 +
-      this.host.quadVersion * 19
+      this.host.quadVersion * 19 +
+      this.sceneStamp()
     );
   }
 
@@ -1426,8 +1483,14 @@ ${il?.wgslDecode ?? ''}
       d.vertices.version * 7 +
       (d.indices?.version ?? 0) * 13 +
       (d.instances?.version ?? 0) * 17 +
-      this.host.quadVersion * 19
+      this.host.quadVersion * 19 +
+      this.sceneStamp()
     );
+  }
+
+  /** The scene-read group's version, for a set that binds it (its bundles hold the group). */
+  private sceneStamp(): number {
+    return this.sceneGroup > 0 ? this.host.sceneRead.version * 23 : 0;
   }
 
   private useMulti(): boolean {
@@ -1598,6 +1661,10 @@ ${il?.wgslDecode ?? ''}
       for (let i = 0; i < extra.length; i++) enc.setBindGroup(i + 1, extra[i]!.group);
       calls += extra.length;
     }
+    if (this.sceneGroup > 0 && !this.depthOnly(color)) {
+      enc.setBindGroup(this.sceneGroup, this.host.sceneRead.group);
+      calls++;
+    }
     this.host.stats.calls += calls;
   }
 
@@ -1711,6 +1778,8 @@ function queueSetWarm(
   pipeline: GPURenderPipeline,
   bind: GPUBindGroup,
   extra: readonly { group: GPUBindGroup }[] | null,
+  scene: CoreSceneRead | null,
+  sceneGroup: number,
   vbs: number,
   color: (GPUTextureFormat | null)[],
   depth: GPUTextureFormat | undefined,
@@ -1722,6 +1791,11 @@ function queueSetWarm(
     if (extra) {
       for (let i = 0; i < extra.length; i++) enc.setBindGroup(i + 1, extra[i]!.group);
       calls += extra.length;
+    }
+    if (scene) {
+      // Read when the warm runs: the group is that frame's.
+      enc.setBindGroup(sceneGroup, scene.group);
+      calls++;
     }
     const scratch = warmer.scratchVertex();
     for (let i = 0; i < vbs; i++) enc.setVertexBuffer(i, scratch);
