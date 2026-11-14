@@ -15,6 +15,27 @@
 //! carry out what they decided; the loop logs those events at the current
 //! time and applies them, in order.
 //!
+//! **Bodies.** What a player moves many times a second (where it stands,
+//! where it looks) is its *body* ([`Game::Body`]), kept by the loop
+//! outside the state and never logged: inputs change it
+//! ([`Game::input`]), queries and the entity stream read it
+//! ([`QueryCtx::body`]), and it is not in the state hash. A body starts
+//! from the state when a player arrives ([`Game::body`]) and is handed to
+//! [`Game::presence`] when it leaves, so a game logs what of it should
+//! last (a position to come back to). A reload keeps it.
+//!
+//! **What clients see.** Live queries ([`Game::queries`], see
+//! [`crate::Query`]) and the entity stream ([`Game::entities`], for a
+//! connection's interest, [`Game::interest`]) read the state and bodies
+//! through a [`QueryCtx`], which records what they read; the loop reruns
+//! them only when a change mark ([`Cx::mark`]) or a body they read
+//! changed.
+//!
+//! **Observers.** A join may seat an observer ([`Seat::Observer`]): it
+//! is welcomed as player 0, is never present, has no body and sends no
+//! commands, inputs or game messages; it subscribes to queries that
+//! aren't per player and watches the entity stream.
+//!
 //! **Determinism is a hard rule.** Time is a count of fixed steps (`u64`,
 //! at most [`MAX_TIME`](crate::MAX_TIME)); the state is integers or fixed
 //! point, never floats that differ between machines; every collection the
@@ -27,9 +48,13 @@ use std::sync::Arc;
 
 use tc_net::{Identity, Protocol, ServerMsg};
 use tc_store::LogCodec;
+use tc_wire::Wire;
 use tc_wire::hash::StableHasher;
+use tc_wire::schema::Schema;
 
 use crate::changes::Changes;
+use crate::lanes::Lane;
+use crate::query::{Query, QueryCtx};
 use crate::scheduler::{EventKey, Scheduler};
 
 /// A player, as `Welcome.player` names it: the game's own id.
@@ -38,7 +63,19 @@ pub type PlayerId = u64;
 /// The events a game's [`Game::Codec`] logs.
 pub type EventOf<G> = <<G as Game>::Codec as LogCodec>::Event;
 
-/// A game the loop runs. See the [module docs](self).
+/// Who a connection joins as ([`Game::join`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Seat {
+    /// A player (never 0).
+    Player(PlayerId),
+    /// An observer: watches, never acts (see the [crate docs](crate)).
+    Observer,
+}
+
+/// The interest a game's protocol carries.
+pub type InterestOf<G> = <<G as Game>::Protocol as Protocol>::Interest;
+
+/// A game the loop runs. See the [crate docs](crate).
 pub trait Game: Sized + Send + 'static {
     /// The game's roles on the wire (tc-net).
     type Protocol: Protocol;
@@ -54,6 +91,31 @@ pub trait Game: Sized + Send + 'static {
     /// The data it is built from and can reload while running (its
     /// content: rules, tables, tuning).
     type Data: Send + Sync + 'static;
+    /// A present player's unlogged state, moved by its inputs (see the
+    /// [crate docs](crate)); `()` for a game without.
+    type Body: Clone + Send + 'static;
+    /// One thing in the entity stream, as a client sees it: a struct of
+    /// the game's schema ([`tc_net::EntityEncoder`]); `tc_net::Empty` for
+    /// a game without one.
+    type View: Wire + Send + 'static;
+
+    /// Its schema: [`schema_of`](crate::schema_of) (the envelope, the
+    /// view and the queries) unless the game adds to it. Queries diff
+    /// against it and the entity stream encodes with it.
+    fn schema() -> Schema {
+        crate::query::schema_of::<Self>(|_| {})
+    }
+
+    /// The live queries it serves. The default serves none.
+    fn queries() -> Vec<Query<Self>> {
+        Vec::new()
+    }
+
+    /// Its rate lanes, indexed by [`Game::lane`] (see [`crate::Lane`]).
+    /// The default has none.
+    fn lanes() -> Vec<Lane> {
+        Vec::new()
+    }
 
     /// Its codec, for the log.
     fn codec(&self) -> Self::Codec;
@@ -89,18 +151,25 @@ pub trait Game: Sized + Send + 'static {
     /// caches). The loop adds the time, the version and the schedule.
     fn hash_state(&self, h: &mut StableHasher);
 
-    /// A connection passed `Hello` as `identity`: who it plays as, and
-    /// the events that record a first join (none for a returning player).
-    /// An error refuses it (`Rejected`).
+    /// A connection passed `Hello` as `identity`: who it plays as (or
+    /// that it observes), and the events that record a first join (none
+    /// for a returning player). An error refuses it (`Rejected`).
     fn join(
         &self,
         identity: &Identity,
         hello: &<Self::Protocol as Protocol>::Hello,
         events: &mut Vec<EventOf<Self>>,
-    ) -> Result<PlayerId, String>;
+    ) -> Result<Seat, String>;
 
-    /// `Welcome.ext` for `player`.
+    /// `Welcome.ext` for `player` (0 for an observer).
     fn welcome(&self, player: PlayerId) -> <Self::Protocol as Protocol>::Welcome;
+
+    /// `player`'s body as it arrives (its first connection opened), from
+    /// the state; `None` takes no inputs. The default has none.
+    fn body(&self, player: PlayerId) -> Option<Self::Body> {
+        let _ = player;
+        None
+    }
 
     /// What a connection is sent right after its `Welcome` (the state it
     /// starts from). The default sends nothing.
@@ -108,11 +177,17 @@ pub trait Game: Sized + Send + 'static {
         let _ = (player, out);
     }
 
-    /// `player`'s first connection opened (`present`) or its last one
-    /// closed; the events record it if the game keeps presence. The
-    /// default records nothing.
-    fn presence(&self, player: PlayerId, present: bool, events: &mut Vec<EventOf<Self>>) {
-        let _ = (player, present, events);
+    /// `player`'s first connection opened (`present`, with its new body)
+    /// or its last one closed (with the body it leaves); the events record
+    /// what should last. The default records nothing.
+    fn presence(
+        &self,
+        player: PlayerId,
+        present: bool,
+        body: Option<&Self::Body>,
+        events: &mut Vec<EventOf<Self>>,
+    ) {
+        let _ = (player, present, body, events);
     }
 
     /// A command from `player`: its result, and the events that carry it
@@ -130,21 +205,35 @@ pub trait Game: Sized + Send + 'static {
     fn command_error(&self, reason: String) -> <Self::Protocol as Protocol>::Result;
 
     /// An input from `player`'s driving connection, taken off its queue
-    /// at an input tick ([`crate::InputQueue`]): the events it makes. The
-    /// default ignores inputs.
+    /// at an input tick ([`crate::InputQueue`]): it moves `body`, unlogged,
+    /// and may push events (a rare one worth keeping). Only a player with
+    /// a body takes inputs. The default ignores them.
     fn input(
         &self,
         player: PlayerId,
+        body: &mut Self::Body,
         input: <Self::Protocol as Protocol>::Input,
         events: &mut Vec<EventOf<Self>>,
     ) {
-        let _ = (player, input, events);
+        let _ = (player, body, input, events);
     }
 
     /// What `player`'s connections are told after an input tick applied
     /// its inputs (`PlayerState`), if anything.
-    fn player_state(&self, player: PlayerId) -> Option<<Self::Protocol as Protocol>::State> {
-        let _ = player;
+    fn player_state(
+        &self,
+        player: PlayerId,
+        body: &Self::Body,
+    ) -> Option<<Self::Protocol as Protocol>::State> {
+        let _ = (player, body);
+        None
+    }
+
+    /// The rate lane `msg` goes in ([`Game::lanes`]), if any: over its
+    /// budget it is dropped before [`Game::message`]. The default puts
+    /// none in a lane.
+    fn lane(&self, msg: &<Self::Protocol as Protocol>::Client) -> Option<usize> {
+        let _ = msg;
         None
     }
 
@@ -166,6 +255,32 @@ pub trait Game: Sized + Send + 'static {
     /// before its result (read-your-writes). The default sends nothing.
     fn flush(&self, changes: &Changes<Self::Change>, out: &mut Outbox<Self::Protocol>) {
         let _ = (changes, out);
+    }
+
+    /// Whether a connection may watch `interest` (`SetInterest`): `player`
+    /// is `None` for an observer. An error is sent as `InterestRejected`
+    /// and the connection keeps what it watched. The default allows any.
+    fn interest(
+        &self,
+        player: Option<PlayerId>,
+        interest: &InterestOf<Self>,
+    ) -> Result<(), String> {
+        let _ = (player, interest);
+        Ok(())
+    }
+
+    /// The entity stream for a connection watching `interest`: each thing
+    /// in it once, by id, read through `cx` (which records what it read,
+    /// and whose [`QueryCtx::player`] is the watcher). It is sent as the
+    /// change from what that connection was last sent, rerun only when
+    /// something it read changed. The default shows nothing.
+    fn entities(
+        &self,
+        cx: &QueryCtx<'_, Self>,
+        interest: &InterestOf<Self>,
+        out: &mut Vec<(u64, Self::View)>,
+    ) {
+        let _ = (cx, interest, out);
     }
 
     /// A new game, at its start, built from `data`: what a reload
