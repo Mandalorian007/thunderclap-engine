@@ -1,4 +1,5 @@
 import type { Random } from '../core/random';
+import { RenderCore } from '../render/core/core';
 import type { Drawable, Frame, ViewInfo } from '../render/frame';
 import type { Renderer } from '../render/renderer';
 import {
@@ -12,6 +13,7 @@ import type { SceneTarget } from '../render/scene-target';
 import type { Texture, TextureLike } from '../render/texture';
 import { createShaderModule } from '../render/wgsl';
 import { buildEmitSurface, type EmitSurface } from './emit-surface';
+import { ParticlesOnCore } from './particles-core';
 import {
   COLOR_CURVE_FLOATS,
   FX_PARTICLE_FLOATS,
@@ -515,7 +517,13 @@ export class ParticleSystem implements Drawable {
   /** Live: the stream `emit` draws spawn seeds from (see `ParticleSystemOptions.random`). */
   random: Random;
 
-  private readonly renderer: Renderer;
+  /**
+   * On a render core (B5): the core drawable that runs `prepare` and draws the system (null on a
+   * `Renderer`). The core adds it on construction; `destroy` takes it out.
+   */
+  readonly coreDrawable: ParticlesOnCore | null = null;
+  private readonly renderer: Renderer | null;
+  private readonly core: RenderCore | null;
   private readonly device: GPUDevice;
   private readonly particleBuffer: GPUBuffer;
   private readonly spawnBuffer: GPUBuffer;
@@ -531,12 +539,12 @@ export class ParticleSystem implements Drawable {
    * view target's aux key, made on first use from `renderer.sceneTargets` (ws/render-10).
    */
   private readonly pipelines = new ScenePipelineCache();
-  private readonly renderDesc: GPURenderPipelineDescriptor;
+  private readonly renderDesc: GPURenderPipelineDescriptor | null = null;
   private readonly blend: GPUBlendState;
   /** World space: the velocity builds of the render shader by fragment location (ws/render-11). */
   private readonly motionModules: (GPUShaderModule | undefined)[] = [];
   private computeGroup: GPUBindGroup;
-  private readonly renderGroup: GPUBindGroup;
+  private readonly renderGroup: GPUBindGroup | null;
   private readonly soft: SoftDepth | null = null;
   private readonly counter: AliveCounter | null = null;
   private readonly fx: Fx | null = null;
@@ -561,11 +569,20 @@ export class ParticleSystem implements Drawable {
   private warnedExtended = false;
   private clearPending = false;
 
-  constructor(renderer: Renderer, opts: ParticleSystemOptions = {}) {
+  /**
+   * On a `Renderer` (a `Drawable`: `frame.drawable(system)`), or on a `RenderCore` (B5): world
+   * space by default, added to the core as a drawable in its `'transparent'` pass that runs the
+   * simulation in `core.prepare` and draws in every view, both eyes of a stereo pair from one
+   * bundle. 2D space needs a `Renderer`.
+   */
+  constructor(renderer: Renderer | RenderCore, opts: ParticleSystemOptions = {}) {
     const device = renderer.device;
-    this.renderer = renderer;
+    const core = renderer instanceof RenderCore ? renderer : null;
+    this.renderer = core ? null : (renderer as Renderer);
+    this.core = core;
     this.device = device;
-    const world = opts.space === 'world';
+    if (core && opts.space === '2d') throw new Error('ParticleSystem: 2D space needs a Renderer');
+    const world = opts.space === 'world' || (core !== null && opts.space === undefined);
     const fx =
       world ||
       !!opts.extended ||
@@ -666,6 +683,28 @@ export class ParticleSystem implements Drawable {
       });
     }
 
+    const blend = opts.blend === 'alpha' ? PREMULTIPLIED : ADDITIVE;
+    this.blend = blend;
+    const host = this.renderer;
+    if (!host) {
+      // On the core: its own shader and layout (particles-core.ts), no renderer pipeline.
+      const fxs = this.fx!;
+      this.renderGroup = null;
+      this.coreDrawable = new ParticlesOnCore(core!, {
+        system: this,
+        particles: this.particleBuffer,
+        sim: this.simBuffer,
+        curves: fxs.curves,
+        sheet: fxs.sheet,
+        sampler: fxs.sampler,
+        blend,
+        readsDepth: this.softness > 0,
+      });
+      core!.addDrawable(this.coreDrawable);
+      if (opts.countAlive) this.counter = this.makeCounter(fx, opts.countBelowY ?? -Infinity);
+      return;
+    }
+
     const renderEntries: GPUBindGroupLayoutEntry[] = [
       { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
       { binding: 1, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} },
@@ -693,22 +732,20 @@ export class ParticleSystem implements Drawable {
       world ? PARTICLE_WORLD_RENDER_WGSL : fx ? PARTICLE_EXT_RENDER_WGSL : PARTICLE_RENDER_WGSL,
       world ? 'particles-world-render' : fx ? 'particles-ext-render' : 'particles-render',
     );
-    const blend = opts.blend === 'alpha' ? PREMULTIPLIED : ADDITIVE;
     this.renderDesc = {
       label: world ? 'particles-world' : 'particles-render',
       layout: device.createPipelineLayout({
-        bindGroupLayouts: [renderer.globalsLayout, renderLayout],
+        bindGroupLayouts: [host.globalsLayout, renderLayout],
       }),
       vertex: { module: rmod, entryPoint: 'vs' },
       fragment: {
         module: rmod,
         entryPoint: 'fs',
-        targets: renderer.sceneTargets(blend),
+        targets: host.sceneTargets(blend),
       },
       primitive: { topology: 'triangle-list' },
     };
-    this.blend = blend;
-    this.pipelineFor(null, renderer.target.auxKey);
+    this.pipelineFor(null, host.target.auxKey);
 
     if (world) this.soft = this.makeSoftDepth(renderLayout);
     this.renderGroup = this.makeRenderGroup(
@@ -1312,10 +1349,15 @@ export class ParticleSystem implements Drawable {
     s[5] = this.stretch;
     s[6] = this.spawnCount;
     s[7] = fx ? fx.spawnTotal : 0;
-    if (this.soft) {
-      // With `readsDepth` the renderer's hook (`afterOpaque`) supplies this frame's depth.
-      this.softActive = this.readsDepth ? false : this.copyDepth(encoder, frame);
-      this.depthGroup = this.softActive ? this.soft.copyGroup : null;
+    if (this.soft || this.core) {
+      if (this.soft) {
+        // With `readsDepth` the renderer's hook (`afterOpaque`) supplies this frame's depth.
+        this.softActive = this.readsDepth ? false : this.copyDepth(encoder, frame);
+        this.depthGroup = this.softActive ? this.soft.copyGroup : null;
+      } else {
+        // On the core the draw samples the core's depth (`coreDrawable.readsDepth`).
+        this.softActive = this.softness > 0 && !!this.coreDrawable?.readsDepth;
+      }
       const f = this.fade;
       s[8] = f ? f.near : 0;
       s[9] = f ? f.far : 0;
@@ -1475,7 +1517,7 @@ export class ParticleSystem implements Drawable {
   private copyDepth(encoder: GPUCommandEncoder, frame: Frame | undefined): boolean {
     const sd = this.soft!;
     if (this.softness <= 0 || !frame?.depthFormat) return false;
-    const src = (this.depthTarget ?? this.renderer.target).depth;
+    const src = (this.depthTarget ?? this.renderer!.target).depth;
     if (!src) return false;
     const device = this.device;
     if (!sd.copy || sd.copy.width !== src.width || sd.copy.height !== src.height) {
@@ -1512,8 +1554,8 @@ export class ParticleSystem implements Drawable {
    */
   draw(pass: GPURenderPassEncoder, frame?: Frame): void {
     const fmt = frame?.depthFormat ?? null;
-    pass.setPipeline(this.pipelineFor(fmt, frame ? frame.auxKey : this.renderer.target.auxKey));
-    pass.setBindGroup(1, this.depthGroup ?? this.renderGroup);
+    pass.setPipeline(this.pipelineFor(fmt, frame ? frame.auxKey : this.renderer!.target.auxKey));
+    pass.setBindGroup(1, (this.depthGroup ?? this.renderGroup)!);
     pass.draw(6, this.capacity);
   }
 
@@ -1581,8 +1623,8 @@ export class ParticleSystem implements Drawable {
   private pipelineFor(format: GPUTextureFormat | null, aux: number): GPURenderPipeline {
     const p = this.pipelines.get(format, aux);
     if (p) return p;
-    const desc = this.renderDesc;
-    const targets = this.renderer.sceneTargets(this.blend, aux);
+    const desc = this.renderDesc!;
+    const targets = this.renderer!.sceneTargets(this.blend, aux);
     const label = `${desc.label}${format ? `:${format}` : ''}${auxSuffix(aux)}`;
     const depth: GPUDepthStencilState | undefined = format
       ? { format, depthWriteEnabled: false, depthCompare: 'less-equal' }
@@ -1701,6 +1743,8 @@ export class ParticleSystem implements Drawable {
   }
 
   destroy(): void {
+    if (this.coreDrawable) this.core!.removeDrawable(this.coreDrawable);
+    this.coreDrawable?.destroy();
     this.debugRead?.destroy();
     this.particleBuffer.destroy();
     this.spawnBuffer.destroy();
