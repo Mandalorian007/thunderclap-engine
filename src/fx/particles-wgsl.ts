@@ -1,3 +1,4 @@
+import { CORE_DRAWABLE_WGSL, CORE_VIEW_EXTRA_WGSL } from '../render/core/drawable';
 import { WGSL_MOTION } from '../render/scene-pipelines';
 import { WGSL_GLOBALS, WGSL_LIGHTS } from '../render/wgsl';
 
@@ -176,6 +177,30 @@ export const COLOR_CURVE_FLOATS = 36;
 export const FX_REQUEST_FLOATS = 8;
 /** Floats per mesh-surface triangle (p0 + cdf, p1, p2, n0, n1, n2). */
 export const SURFACE_TRI_FLOATS = 24;
+
+/** Size and colour over life (`size_at`, `color_at`), from the curve table. */
+const FX_CURVES_WGSL = /* wgsl */ `// Piecewise-linear over n stops spread evenly on 0..1.
+fn size_at(slot: f32, t: f32, s0: f32, s1: f32) -> f32 {
+  if (slot < 0.0) { return mix(s0, s1, t); }
+  let base = u32(slot) * ${SIZE_CURVE_FLOATS}u;
+  let n = u32(curves[base]);
+  let x = clamp(t, 0.0, 1.0) * f32(n - 1u);
+  let i = min(u32(floor(x)), n - 2u);
+  return mix(curves[base + 1u + i], curves[base + 2u + i], x - f32(i)) * s0;
+}
+fn color_at(slot: f32, t: f32, c0: vec4f, c1: vec4f) -> vec4f {
+  if (slot < 0.0) { return mix(c0, c1, t); }
+  let base = u32(sim.colorBase) + u32(slot) * ${COLOR_CURVE_FLOATS}u;
+  let n = u32(curves[base]);
+  let x = clamp(t, 0.0, 1.0) * f32(n - 1u);
+  let i = min(u32(floor(x)), n - 2u);
+  let a = base + 4u + i * 4u;
+  let ca = vec4f(curves[a], curves[a + 1u], curves[a + 2u], curves[a + 3u]);
+  let cb = vec4f(curves[a + 4u], curves[a + 5u], curves[a + 6u], curves[a + 7u]);
+  return mix(ca, cb, x - f32(i));
+}
+
+`;
 
 function fxCommon(world: boolean): string {
   return /* wgsl */ `
@@ -568,28 +593,7 @@ fn view_row(r: u32) -> vec3f {
   return vec3f(camera.view[0][r], camera.view[1][r], camera.view[2][r]);
 }
 
-// Piecewise-linear over n stops spread evenly on 0..1.
-fn size_at(slot: f32, t: f32, s0: f32, s1: f32) -> f32 {
-  if (slot < 0.0) { return mix(s0, s1, t); }
-  let base = u32(slot) * ${SIZE_CURVE_FLOATS}u;
-  let n = u32(curves[base]);
-  let x = clamp(t, 0.0, 1.0) * f32(n - 1u);
-  let i = min(u32(floor(x)), n - 2u);
-  return mix(curves[base + 1u + i], curves[base + 2u + i], x - f32(i)) * s0;
-}
-fn color_at(slot: f32, t: f32, c0: vec4f, c1: vec4f) -> vec4f {
-  if (slot < 0.0) { return mix(c0, c1, t); }
-  let base = u32(sim.colorBase) + u32(slot) * ${COLOR_CURVE_FLOATS}u;
-  let n = u32(curves[base]);
-  let x = clamp(t, 0.0, 1.0) * f32(n - 1u);
-  let i = min(u32(floor(x)), n - 2u);
-  let a = base + 4u + i * 4u;
-  let ca = vec4f(curves[a], curves[a + 1u], curves[a + 2u], curves[a + 3u]);
-  let cb = vec4f(curves[a + 4u], curves[a + 5u], curves[a + 6u], curves[a + 7u]);
-  return mix(ca, cb, x - f32(i));
-}
-
-@vertex fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> PVOut {
+${FX_CURVES_WGSL}@vertex fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> PVOut {
   var o: PVOut;
   let p = particles[ii];
   if (p.life.x >= p.life.y) {
@@ -843,5 +847,119 @@ struct Counts {
       atomicAdd(&counts.below, 1u);
     }
   }
+}
+`;
+
+/**
+ * World particles on the render core (B5): the extended particle layout drawn from `CoreView`
+ * (group 0) and `CoreViewExtra` (binding 6, by `view.index`), so each eye of a pair faces its
+ * own image plane from one bundle. A particle outside the eye's frusta (by its size) collapses
+ * in the vertex stage; with `sim.softOn` it fades near the core's depth (binding 2). One colour
+ * target, premultiplied.
+ */
+export const PARTICLE_CORE_RENDER_WGSL = /* wgsl */ `
+${CORE_DRAWABLE_WGSL}
+${CORE_VIEW_EXTRA_WGSL}
+${fxCommon(true)}
+@group(1) @binding(0) var<storage, read> particles: array<Particle>;
+@group(1) @binding(1) var<uniform> sim: Sim;
+@group(1) @binding(2) var scene_depth: texture_depth_2d;
+@group(1) @binding(3) var<storage, read> curves: array<f32>;
+@group(1) @binding(4) var sheet: texture_2d<f32>;
+@group(1) @binding(5) var sheet_samp: sampler;
+@group(1) @binding(6) var<storage, read> extras: array<CoreViewExtra>;
+
+struct PVOut {
+  @builtin(position) clip: vec4f,
+  @location(0) q: vec2f,
+  @location(1) color: vec4f,
+  @location(2) uv: vec2f,
+  @location(3) ndc: vec4f,
+  @location(4) eye_dist: f32,
+};
+
+${FX_CURVES_WGSL}
+@vertex fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> PVOut {
+  var o: PVOut;
+  let p = particles[ii];
+  o.clip = vec4f(0.0, 0.0, 2.0, 1.0);
+  if (p.life.x >= p.life.y) { return o; }
+  let t = p.life.x / p.life.y;
+  let size = max(size_at(p.curve.x, t, p.life.z, p.life.w), 0.0);
+  let centre = p.pos.xyz - view.origin.xyz;
+  // Culled per view: out of this eye's frustum by more than its size.
+  let reach = size + length(p.vel.xyz) * sim.stretch;
+  for (var k = 0u; k < 6u; k++) {
+    let pl = view.planes[k];
+    if (dot(pl.xyz, centre) + pl.w < -reach) { return o; }
+  }
+  var corners = array<vec2f, 6>(
+    vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0),
+    vec2f(-1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, 1.0)
+  );
+  let q = corners[vi];
+  let e = extras[view.index];
+  let right = e.right.xyz;
+  let up = e.up.xyz;
+  let vel = p.vel.xyz;
+  let v2 = vec2f(dot(vel, right), dot(vel, up));
+  let speed = length(v2);
+  var dir = vec2f(1.0, 0.0);
+  var len = size;
+  if ((u32(p.tile.w) & 1u) != 0u) {
+    if (speed > 1e-4) { dir = v2 / speed; }
+    len = size + speed * sim.stretch;
+  }
+  let cr = cos(p.pos.w);
+  let sr = sin(p.pos.w);
+  dir = vec2f(dir.x * cr - dir.y * sr, dir.x * sr + dir.y * cr);
+  let axis = right * dir.x + up * dir.y;
+  let perp = up * dir.x - right * dir.y;
+  let world = centre + axis * (q.x * len * 0.5) + perp * (q.y * size * 0.5);
+  o.clip = view.viewProj * vec4f(world, 1.0);
+  o.ndc = o.clip;
+  o.q = q;
+  var color = color_at(p.curve.y, t, p.c0, p.c1);
+  let d = length(world - view.position.xyz);
+  if (sim.fadeFar > sim.fadeNear) {
+    color.a *= 1.0 - smoothstep(sim.fadeNear, sim.fadeFar, d);
+  }
+  o.eye_dist = d;
+  o.color = color;
+  let frames = max(p.tile.y - p.tile.x + 1.0, 1.0);
+  var tile = p.tile.x;
+  if (p.tile.z > 0.0) {
+    tile += floor(p.life.x * p.tile.z) % frames;
+  } else {
+    tile += min(floor(t * frames), frames - 1.0);
+  }
+  let col = tile % sim.columns;
+  let row = floor(tile / sim.columns);
+  o.uv = (vec2f(col, row) + vec2f(q.x * 0.5 + 0.5, 0.5 - q.y * 0.5)) / vec2f(sim.columns, sim.rows);
+  return o;
+}
+
+@fragment fn fs(in: PVOut) -> @location(0) vec4f {
+  let tex = textureSample(sheet, sheet_samp, in.uv);
+  var a: f32;
+  var rgb: vec3f;
+  if (sim.textured > 0.5) {
+    a = in.color.a * tex.a;
+    rgb = in.color.rgb * tex.rgb;
+  } else {
+    let r = length(in.q);
+    a = clamp(1.0 - r, 0.0, 1.0);
+    a = a * a * in.color.a;
+    rgb = in.color.rgb;
+  }
+  if (sim.softOn > 0.5) {
+    let dims = vec2i(textureDimensions(scene_depth));
+    let px = clamp(vec2i(in.clip.xy), vec2i(0), dims - 1);
+    let depth = textureLoad(scene_depth, px, 0);
+    let w = extras[view.index].invViewProj * vec4f(in.ndc.xy / in.ndc.w, depth, 1.0);
+    let scene = length(w.xyz / w.w - view.position.xyz);
+    a *= saturate((scene - in.eye_dist) / max(sim.softness, 1e-4));
+  }
+  return vec4f(rgb * a, a);
 }
 `;

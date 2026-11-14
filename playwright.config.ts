@@ -99,6 +99,7 @@ export const WEBKIT_SPECS = [
   'voxel-world',
   'render4',
   'post2',
+  'fx-core',
   'demos/voxel',
   'demos/showroom',
   'stereo',
