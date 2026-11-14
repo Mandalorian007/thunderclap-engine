@@ -15,6 +15,9 @@ tc-wire = { path = "crates/tc-wire" }
 tc-wire-derive = { path = "crates/tc-wire-derive" }
 tc-tsgen = { path = "crates/tc-tsgen" }
 tc-net = { path = "crates/tc-net" }
+tc-auth = { path = "crates/tc-auth" }
+tc-store = { path = "crates/tc-store" }
+tc-sim = { path = "crates/tc-sim" }
 
 # tc-net: the connection layer.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
@@ -22,6 +25,10 @@ tokio-tungstenite = "0.30"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
 tracing = "0.1"
+
+# tc-auth: signed tokens.
+hmac = "0.13"
+sha2 = "0.11"
 
 syn = { version = "3", features = ["full"] }
 quote = "1"

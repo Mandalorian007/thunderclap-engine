@@ -115,6 +115,7 @@ pub fn run(requests: Receiver<Request<Echo>>) {
             Request::Disconnect { conn } => {
                 conns.remove(&conn);
             }
+            Request::Wake => {}
             Request::Client { conn, msg, .. } => {
                 let Some(c) = conns.get_mut(&conn) else {
                     continue;
