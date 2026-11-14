@@ -1,10 +1,12 @@
 import { plane } from '../geom';
+import type { RenderCore } from '../render/core/core';
 import type { Drawable, Frame, ViewInfo } from '../render/frame';
-import { type Mesh, VERTEX_LAYOUT_3D } from '../render/mesh';
+import { Mesh, VERTEX_LAYOUT_3D } from '../render/mesh';
 import type { Renderer } from '../render/renderer';
 import { auxSuffix, ScenePipelineCache, sceneVariant } from '../render/scene-pipelines';
 import type { SceneTarget } from '../render/scene-target';
 import { createShaderModule } from '../render/wgsl';
+import { WaterOnCore } from './water-core';
 import { WATER_DEPTH_COPY_WGSL, WATER_MAX_WAVES, WATER_WGSL } from './water-wgsl';
 
 /** Floats in the water's params block: 5 vec4 + `WATER_MAX_WAVES` vec4 (144 bytes). */
@@ -72,7 +74,30 @@ export interface WaterOptions {
    * elsewhere the water is then deep everywhere (no copy of its own). Default false.
    */
   readsDepth?: boolean;
+  /**
+   * On a render core: how far the scene behind the surface (the core's colour copy) is bent by
+   * the waves; 0 tints by depth only, as on a `Renderer`. Default 1.
+   */
+  refraction?: number;
+  /**
+   * On a render core: steps of the screen-space reflection march (0: the sky gradient only).
+   * Default 16. With `refraction`, makes the water read the core's colour (`readsColor`): the
+   * target then needs `CoreTarget.texture` with `COPY_SRC`.
+   */
+  reflectionSteps?: number;
+  /** On a render core: how far the reflection march reaches (world units). Default 30. */
+  reflectionReach?: number;
+  /** On a render core: the direction to the sun (normalised when packed). Default `[0.4, 0.8, 0.3]`. */
+  sunDirection?: ArrayLike<number>;
+  /** On a render core: the sun's linear colour (zero: no sun). Default `[1.6, 1.5, 1.3]`. */
+  sunColor?: ArrayLike<number>;
+  /** On a render core: the reflected sky's horizon colour. Default a pale haze. */
+  skyColor?: ArrayLike<number>;
 }
+
+const DEFAULT_SUN_DIR = [0.4, 0.8, 0.3] as const;
+const DEFAULT_SUN_COLOR = [1.6, 1.5, 1.3] as const;
+const DEFAULT_SKY = [0.62, 0.72, 0.9] as const;
 
 const DEFAULT_SHALLOW = [0.1, 0.45, 0.45] as const;
 const DEFAULT_DEEP = [0.01, 0.07, 0.14] as const;
@@ -140,24 +165,38 @@ export class Water implements Drawable {
   time = 0;
   /** The plane, owned; drawn through this drawable's own pipeline. */
   readonly mesh: Mesh;
+  /** On a render core: see `WaterOptions.refraction`. Live. */
+  refraction: number;
+  /** On a render core: see `WaterOptions.reflectionSteps` (the `waterReflectionKnob`). Live. */
+  reflectionSteps: number;
+  /** On a render core: see `WaterOptions.reflectionReach`. Live. */
+  reflectionReach: number;
+  /** On a render core: the direction to the sun. Live. */
+  readonly sunDirection = new Float32Array(3);
+  /** On a render core: the sun's linear colour. Live. */
+  readonly sunColor = new Float32Array(3);
+  /** On a render core: the reflected sky's horizon colour. Live. */
+  readonly skyColor = new Float32Array(3);
+  /** On a render core (B5): the core drawable that draws the water in every view (else null). */
+  readonly coreDrawable: WaterOnCore | null = null;
 
-  private readonly renderer: Renderer;
+  private readonly renderer: Renderer | null;
   private readonly device: GPUDevice;
   private readonly params: Float32Array<ArrayBuffer>;
   private readonly paramsBuffer: GPUBuffer;
-  private readonly layout: GPUBindGroupLayout;
-  private readonly dummy: GPUTexture;
-  private readonly dummyGroup: GPUBindGroup;
-  private readonly desc: GPURenderPipelineDescriptor;
+  private readonly layout!: GPUBindGroupLayout;
+  private readonly dummy!: GPUTexture;
+  private readonly dummyGroup!: GPUBindGroup;
+  private readonly desc!: GPURenderPipelineDescriptor;
   /**
    * Pipelines per depth format (null: none; a depth one writes depth) × the view target's aux
    * key, built on first use from `renderer.sceneTargets` (ws/render-10).
    */
   private readonly pipelines = new ScenePipelineCache();
-  private readonly copyLayout: GPUBindGroupLayout;
-  private readonly copyPipeline: GPURenderPipeline;
-  private readonly copyAtt: GPURenderPassDepthStencilAttachment;
-  private readonly copyPass: GPURenderPassDescriptor;
+  private readonly copyLayout!: GPUBindGroupLayout;
+  private readonly copyPipeline!: GPURenderPipeline;
+  private readonly copyAtt!: GPURenderPassDepthStencilAttachment;
+  private readonly copyPass!: GPURenderPassDescriptor;
   private copy: GPUTexture | null = null;
   private copyGroup: GPUBindGroup | null = null;
   private src: object | null = null;
@@ -170,10 +209,22 @@ export class Water implements Drawable {
   /** The group `draw` binds: own copy, the renderer's copy, or the 1×1 stand-in. */
   private depthGroup: GPUBindGroup | null = null;
 
-  constructor(renderer: Renderer, opts: WaterOptions = {}) {
+  /**
+   * On a `Renderer` (a `Drawable`: `frame.drawable(water)`), or on a `RenderCore` (B5): added
+   * to the core as a drawable in its `'transparent'` pass, drawn in every view, its depth and
+   * (with `refraction` or `reflectionSteps`) colour read from the core.
+   */
+  constructor(renderer: Renderer | RenderCore, opts: WaterOptions = {}) {
     const device = renderer.device;
-    this.renderer = renderer;
+    const core = 'addDrawable' in renderer ? (renderer as RenderCore) : null; // no value import: fx without the core stays small
+    this.renderer = core ? null : (renderer as Renderer);
     this.device = device;
+    this.refraction = opts.refraction ?? 1;
+    this.reflectionSteps = opts.reflectionSteps ?? 16;
+    this.reflectionReach = opts.reflectionReach ?? 30;
+    set3(this.sunDirection, opts.sunDirection ?? DEFAULT_SUN_DIR);
+    set3(this.sunColor, opts.sunColor ?? DEFAULT_SUN_COLOR);
+    set3(this.skyColor, opts.skyColor ?? DEFAULT_SKY);
     this.level = opts.level ?? 0;
     set3(this.shallowColor, opts.shallowColor ?? DEFAULT_SHALLOW);
     set3(this.deepColor, opts.deepColor ?? DEFAULT_DEEP);
@@ -205,7 +256,9 @@ export class Water implements Drawable {
       geometry.bounds.center[0] += ox;
       geometry.bounds.center[2] += oz;
     }
-    this.mesh = renderer.createMesh({ ...geometry, label: 'water' });
+    this.mesh = core
+      ? new Mesh(device, { ...geometry, label: 'water' })
+      : (renderer as Renderer).createMesh({ ...geometry, label: 'water' });
 
     this.params = new Float32Array(WATER_PARAMS_FLOATS);
     this.paramsBuffer = device.createBuffer({
@@ -213,6 +266,14 @@ export class Water implements Drawable {
       size: this.params.byteLength,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
+    if (core) {
+      this.coreDrawable = new WaterOnCore(core, this, this.paramsBuffer, {
+        readsColor: this.refraction > 0 || this.reflectionSteps > 0,
+      });
+      core.addDrawable(this.coreDrawable);
+      return;
+    }
+    const host = renderer as Renderer;
     this.layout = device.createBindGroupLayout({
       label: 'water-layout',
       entries: [
@@ -232,17 +293,17 @@ export class Water implements Drawable {
     this.desc = {
       label: 'water',
       layout: device.createPipelineLayout({
-        bindGroupLayouts: [renderer.globalsLayout, this.layout],
+        bindGroupLayouts: [host.globalsLayout, this.layout],
       }),
       vertex: { module, entryPoint: 'vs', buffers: [VERTEX_LAYOUT_3D.buffer] },
       fragment: {
         module,
         entryPoint: 'fs',
-        targets: renderer.sceneTargets(PREMULTIPLIED),
+        targets: host.sceneTargets(PREMULTIPLIED),
       },
       primitive: { topology: 'triangle-list', cullMode: 'none' },
     };
-    this.pipelines.set(null, renderer.target.auxKey, device.createRenderPipeline(this.desc));
+    this.pipelines.set(null, host.target.auxKey, device.createRenderPipeline(this.desc));
 
     this.copyLayout = device.createBindGroupLayout({
       label: 'water-depth-copy-layout',
@@ -285,8 +346,13 @@ export class Water implements Drawable {
    * No allocation in steady state.
    */
   prepare(encoder: GPUCommandEncoder, frame?: Frame): void {
-    // With `readsDepth` the renderer's hook (`afterOpaque`) supplies this frame's depth.
-    this.depthOn = this.readsDepth ? false : this.copyDepth(encoder, frame);
+    // With `readsDepth` the renderer's hook (`afterOpaque`) supplies this frame's depth; on a
+    // core the draw reads the core's own.
+    this.depthOn = this.coreDrawable
+      ? true
+      : this.readsDepth
+        ? false
+        : this.copyDepth(encoder, frame);
     this.depthGroup = this.depthOn ? this.copyGroup : null;
     const p = this.params;
     p[0] = this.shallowColor[0]!;
@@ -327,7 +393,7 @@ export class Water implements Drawable {
     const mesh = this.mesh;
     if (mesh.indexCount <= 0) return;
     const fmt = frame?.depthFormat ?? null;
-    pass.setPipeline(this.pipelineFor(fmt, frame ? frame.auxKey : this.renderer.target.auxKey));
+    pass.setPipeline(this.pipelineFor(fmt, frame ? frame.auxKey : this.renderer!.target.auxKey));
     pass.setBindGroup(1, this.depthGroup ?? this.dummyGroup);
     pass.setVertexBuffer(0, mesh.vertexBuffer);
     pass.setIndexBuffer(mesh.indexBuffer!, mesh.indexFormat);
@@ -353,7 +419,7 @@ export class Water implements Drawable {
 
   private copyDepth(encoder: GPUCommandEncoder, frame: Frame | undefined): boolean {
     if (!frame?.depthFormat) return false;
-    const src = (this.depthTarget ?? this.renderer.target).depth;
+    const src = (this.depthTarget ?? this.renderer!.target).depth;
     if (!src) return false;
     const device = this.device;
     if (!this.copy || this.copy.width !== src.width || this.copy.height !== src.height) {
@@ -404,7 +470,7 @@ export class Water implements Drawable {
       this.device.createRenderPipeline(
         sceneVariant(
           this.desc,
-          this.renderer.sceneTargets(PREMULTIPLIED, aux),
+          this.renderer!.sceneTargets(PREMULTIPLIED, aux),
           `water${format ? `:${format}` : ''}${auxSuffix(aux)}`,
           format ? { format, depthWriteEnabled: true, depthCompare: 'less-equal' } : undefined,
         ),
@@ -413,8 +479,13 @@ export class Water implements Drawable {
   }
 
   destroy(): void {
+    const cd = this.coreDrawable;
+    if (cd) {
+      cd.core.removeDrawable(cd);
+      cd.destroy();
+    }
     this.paramsBuffer.destroy();
-    this.dummy.destroy();
+    this.dummy?.destroy();
     this.copy?.destroy();
     this.copy = null;
     this.mesh.destroy();

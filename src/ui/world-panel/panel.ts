@@ -63,10 +63,21 @@ export interface WorldPanelOptions {
   background?: 'panel' | 'transparent';
   /** Turn to face the camera every `update(camera)`, keeping the position. */
   billboard?: boolean;
-  /** Follow the camera: `distance` ahead of the eye, `offset` in view units (x right, y up). */
-  headLocked?: { distance: number; offset?: [number, number] };
+  /**
+   * Follow the camera: `distance` ahead of the eye, `offset` in view units (x right, y up).
+   * `lazy` (ws/ui-world, radians, default 0: rigid): a lazy follow, a comfortable head-following
+   * screen for VR. The panel stays where it is in the world (at `distance` from the eye, facing
+   * it) until the view turns more than `lazy` away from it, then eases back in front by `ease`
+   * of the gap per update (default 0.12) until it is there again.
+   */
+  headLocked?: { distance: number; offset?: [number, number]; lazy?: number; ease?: number };
   /** Depth test against the scene. Default `true`; `false` for a head-locked panel. */
   depthTest?: boolean;
+  /**
+   * Whether a ray through it where no widget is counts as a hit (default true). False lets the
+   * rays through its empty parts to what is behind (ws/ui-world: the head screen).
+   */
+  hitEmpty?: boolean;
   /** The canvas to paint into (tests); default an `OffscreenCanvas` or a `<canvas>`. */
   canvas?: PanelCanvas;
   label?: string;
@@ -125,6 +136,8 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
   readonly drawable: Drawable = this;
   readonly label: string;
   depthTest: boolean;
+  /** Whether a ray through an empty part counts as a hit (`WorldPanelOptions.hitEmpty`). */
+  hitEmpty: boolean;
   /** Widgets in flow order. */
   readonly widgets: WorldWidget[] = [];
   /** The focused widget, or `null`. */
@@ -137,7 +150,18 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
   private readonly device: GPUDevice;
   private readonly background: 'panel' | 'transparent';
   private readonly billboard: boolean;
-  private readonly headLocked: { distance: number; offset: readonly [number, number] } | null;
+  private readonly headLocked: {
+    distance: number;
+    offset: readonly [number, number];
+    lazy: number;
+    ease: number;
+  } | null;
+  /** A lazy follow's direction from the eye (unit), and whether it is easing back. */
+  private readonly lazyDir = new Float64Array(3);
+  private lazyPlaced = false;
+  private lazyMoving = false;
+  /** The rect being repainted while widgets paint (ws/ui-world: a widget may skip what is outside). */
+  readonly paintClip: PanelRect = { x: 0, y: 0, w: 0, h: 0 };
   private readonly dirtyRect: PanelRect = { x: 0, y: 0, w: 0, h: 0 };
   private layoutDirty = true;
   private needsUpload = false;
@@ -181,9 +205,15 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
     this.background = opts.background ?? 'panel';
     this.billboard = opts.billboard === true;
     this.headLocked = opts.headLocked
-      ? { distance: opts.headLocked.distance, offset: opts.headLocked.offset ?? NO_OFFSET }
+      ? {
+          distance: opts.headLocked.distance,
+          offset: opts.headLocked.offset ?? NO_OFFSET,
+          lazy: Math.max(0, opts.headLocked.lazy ?? 0),
+          ease: Math.min(1, Math.max(0.001, opts.headLocked.ease ?? 0.12)),
+        }
       : null;
     this.depthTest = opts.depthTest ?? this.headLocked === null;
+    this.hitEmpty = opts.hitEmpty !== false;
     this.theme = resolvePanelTheme(opts.theme);
     this.canvas = opts.canvas ?? makePanelCanvas(this.pxWidth, this.pxHeight);
     const ctx = this.canvas.getContext('2d', { alpha: true });
@@ -285,6 +315,15 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
     rectUnion(this.dirtyRect, this.ringRect(widget.layoutRect));
   }
 
+  /**
+   * Repaint `r` (panel px) next frame (ws/ui-world): part of a widget, where `invalidate(widget)`
+   * would repaint all of it.
+   */
+  invalidateRect(r: PanelRect): void {
+    if (this.layoutDirty || r.w <= 0 || r.h <= 0) return;
+    rectUnion(this.dirtyRect, r);
+  }
+
   /** @internal `WorldWidgetHost`: re-run the flow and repaint everything next frame. */
   relayout(): void {
     this.layoutDirty = true;
@@ -357,6 +396,11 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
     ctx.rect(d.x, d.y, d.w, d.h);
     ctx.clip();
     ctx.clearRect(d.x, d.y, d.w, d.h);
+    const clip = this.paintClip;
+    clip.x = d.x;
+    clip.y = d.y;
+    clip.w = d.w;
+    clip.h = d.h;
     if (this.background === 'panel') {
       const all: PanelRect = { x: 0, y: 0, w: this.pxWidth, h: this.pxHeight };
       p.fillRoundRect(all, t.radiusM, t.tokens.colorSurface);
@@ -420,6 +464,10 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
       px = eye[0]! - bx * d + rx * ox + ux * oy;
       py = eye[1]! - by * d + ry * ox + uy * oy;
       pz = eye[2]! - bz * d + rz * ox + uz * oy;
+      if (hl.lazy > 0) {
+        this.lazyFollow(eye[0]!, eye[1]!, eye[2]!, px, py, pz, hl);
+        return;
+      }
     } else {
       const p = this.transform.position;
       px = p.x;
@@ -440,6 +488,94 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
     b[10] = bz * s.z;
     b[11] = pz;
     this.transform.setMatrix(b, 0);
+  }
+
+  /**
+   * A lazy follow (ws/ui-world): the panel keeps its direction from the eye until the wanted one
+   * (`tx, ty, tz`, where a rigid lock would put it) is more than `lazy` away, then eases toward
+   * it. It sits at its distance from the eye, turned to face it with the world's up kept up.
+   */
+  private lazyFollow(
+    ex: number,
+    ey: number,
+    ez: number,
+    tx: number,
+    ty: number,
+    tz: number,
+    hl: { distance: number; lazy: number; ease: number },
+  ): void {
+    let wx = tx - ex;
+    let wy = ty - ey;
+    let wz = tz - ez;
+    const wl = Math.hypot(wx, wy, wz) || 1;
+    wx /= wl;
+    wy /= wl;
+    wz /= wl;
+    const u = this.lazyDir;
+    if (!this.lazyPlaced) {
+      this.lazyPlaced = true;
+      u[0] = wx;
+      u[1] = wy;
+      u[2] = wz;
+    } else {
+      const dot = Math.max(-1, Math.min(1, u[0]! * wx + u[1]! * wy + u[2]! * wz));
+      const angle = Math.acos(dot);
+      if (angle > hl.lazy) this.lazyMoving = true;
+      if (this.lazyMoving) {
+        const k = hl.ease;
+        let nx = u[0]! + (wx - u[0]!) * k;
+        let ny = u[1]! + (wy - u[1]!) * k;
+        let nz = u[2]! + (wz - u[2]!) * k;
+        const nl = Math.hypot(nx, ny, nz) || 1;
+        nx /= nl;
+        ny /= nl;
+        nz /= nl;
+        u[0] = nx;
+        u[1] = ny;
+        u[2] = nz;
+        // Home: within a hundredth of a radian (about half a degree).
+        if (angle < 0.01) this.lazyMoving = false;
+      }
+    }
+    const dist = wl;
+    // Facing the eye: back = -u; right = up × back (the world's up kept up); up = back × right.
+    const kx = -u[0]!;
+    const ky = -u[1]!;
+    const kz = -u[2]!;
+    let rx = kz;
+    const ry = 0;
+    let rz = -kx;
+    const rl = Math.hypot(rx, rz);
+    if (rl < 1e-6) {
+      rx = 1;
+      rz = 0;
+    } else {
+      rx /= rl;
+      rz /= rl;
+    }
+    const ux = ky * rz - kz * ry;
+    const uy = kz * rx - kx * rz;
+    const uz = kx * ry - ky * rx;
+    const s = this.transform.scale;
+    const b = this.basis;
+    b[0] = rx * s.x;
+    b[1] = ux * s.y;
+    b[2] = kx * s.z;
+    b[3] = ex + u[0]! * dist;
+    b[4] = ry * s.x;
+    b[5] = uy * s.y;
+    b[6] = ky * s.z;
+    b[7] = ey + u[1]! * dist;
+    b[8] = rz * s.x;
+    b[9] = uz * s.y;
+    b[10] = kz * s.z;
+    b[11] = ez + u[2]! * dist;
+    this.transform.setMatrix(b, 0);
+  }
+
+  /** Whether a lazy head-locked panel is easing back in front of the view. */
+  get following(): boolean {
+    return this.lazyMoving;
   }
 
   // ------------------------------------------------------------------------------------------
@@ -483,7 +619,7 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
   tester(): HitTester<WorldPanel> {
     return (ray) => {
       const h = this.hitTest(ray);
-      if (!h) return null;
+      if (!h || (!h.widget && !this.hitEmpty)) return null;
       const out = this.routerHit;
       rayAt(ray, h.distance, out.point);
       const m = this.transform.world;
@@ -757,6 +893,8 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
    * go to the focused widget. Returns whether the key was consumed.
    */
   key(event: PanelKeyEvent): boolean {
+    const first = this.focused;
+    if (first && !first.disabled && first.keyFirst(event)) return true;
     if (event.key === 'Tab') {
       if (event.shiftKey) this.focusPrev();
       else this.focusNext();

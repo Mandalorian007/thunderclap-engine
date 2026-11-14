@@ -784,6 +784,7 @@ interface KeyPromptOptions {
 ## Layout  (type-only)
 interface Layout {
     readonly element: HTMLElement;
+    readonly root: HTMLElement;
     readonly formFactor: FormFactor;
     readonly state: Readonly<LayoutState>;
     readonly freeRect: Readonly<Rect>;
@@ -1255,6 +1256,8 @@ interface PanelHandle {
 interface PanelKeyEvent {
     key: string;
     shiftKey?: boolean;
+    ctrlKey?: boolean;
+    metaKey?: boolean;
 }
 
 ## PanelOptions  (type-only)
@@ -1862,7 +1865,7 @@ type SpecNode = SpecStack | SpecGrid | SpecList | SpecText | SpecSlot | SpecMete
 type SpecNum = number | Bind;
 
 ## SpecOverlay  (type-only)
-type SpecOverlay = Pick<Overlay, 'root' | 'layout' | 'units' | 'scale' | 'onResize' | 'stack'>;
+type SpecOverlay = Pick<Overlay, 'layout' | 'units' | 'scale' | 'onResize' | 'stack'>;
 
 ## SpecPanel
 class SpecPanel {
@@ -2237,6 +2240,17 @@ interface WorldCursor {
     dispose(): void;
 }
 
+## WorldHudOptions  (type-only)
+type WorldHudOptions = Omit<WorldOptions, 'rect' | 'fit' | 'w' | 'place'> & {
+    margin?: number;
+};
+
+## WorldHudView  (type-only)
+interface WorldHudView {
+    readonly presenters: readonly WorldPresenter[];
+    dispose(): void;
+}
+
 ## WorldLabel
 class WorldLabel extends WorldWidget<WorldLabelOptions> {
     constructor(opts: WorldLabelOptions);
@@ -2284,6 +2298,32 @@ interface WorldListOptions {
     rect?: PanelRect;
 }
 
+## WorldModal  (type-only)
+interface WorldModal {
+    readonly presenter: WorldPresenter;
+    readonly open: boolean;
+    close(): void;
+}
+
+## WorldModalOptions  (type-only)
+type WorldModalOptions = Omit<WorldOptions, 'rect' | 'fit' | 'place' | 'onEscape'> & {
+    onClose?: (reason: 'escape' | 'backdrop' | 'close') => void;
+    dismissable?: boolean;
+};
+
+## WorldOptions  (type-only)
+interface WorldOptions {
+    scale?: number;
+    rect?: PanelRect;
+    fit?: 'surface' | 'natural' | 'none';
+    w?: number;
+    place?: (w: number, h: number, out: PanelRect) => void;
+    theme?: SpecTheme;
+    slotArt?: (ctx: PanelContext2D, item: string, r: PanelRect) => void;
+    timer?: SpecTimer;
+    onEscape?: () => void;
+}
+
 ## WorldPanel
 class WorldPanel implements Drawable, WorldWidgetHost {
     readonly transform: Transform;
@@ -2301,19 +2341,23 @@ class WorldPanel implements Drawable, WorldWidgetHost {
     readonly drawable: Drawable;
     readonly label: string;
     depthTest: boolean;
+    hitEmpty: boolean;
     readonly widgets: WorldWidget[];
     focused: WorldWidget | null;
     hovered: WorldWidget | null;
     draws: number;
+    readonly paintClip: PanelRect;
     constructor(renderer: Renderer, opts: WorldPanelOptions);
     get dirty(): boolean;
     add<W extends WorldWidget>(widget: W): W;
     remove(widget: WorldWidget): void;
     invalidate(widget: WorldWidget): void;
+    invalidateRect(r: PanelRect): void;
     relayout(): void;
     widgetAt(x: number, y: number): WorldWidget | null;
     repaint(): void;
     update(camera: Camera): void;
+    get following(): boolean;
     hitTest(ray: Ray): WorldPanelHit | null;
     tester(): HitTester<WorldPanel>;
     pointerMove(x: number, y: number, id?: number): void;
@@ -2363,8 +2407,11 @@ interface WorldPanelOptions {
     headLocked?: {
         distance: number;
         offset?: [number, number];
+        lazy?: number;
+        ease?: number;
     };
     depthTest?: boolean;
+    hitEmpty?: boolean;
     canvas?: PanelCanvas;
     label?: string;
 }
@@ -2374,6 +2421,38 @@ interface WorldPanelStats {
     repaints: number;
     uploads: number;
     bytes: number;
+}
+
+## WorldPresenter
+class WorldPresenter implements SpecPresenter {
+    readonly surface: WorldPanel;
+    readonly widget: WorldWidget;
+    paints: number;
+    marks: number;
+    constructor(panel: SpecPanel, surface: WorldPanel, opts?: WorldOptions);
+    get unitScale(): number;
+    get focusId(): {
+        id: string;
+        row: string | null;
+    };
+    apply(relaid: boolean): void;
+    dispose(): void;
+    setScale(scale: number): void;
+    setRect(r: PanelRect): void;
+    focusFirst(): void;
+    rectOf(id: string, row?: string | null): PanelRect | null;
+    keyUp(e: PanelKeyEvent): void;
+    paint(p: Painter, _r: PanelRect): void;
+    pointerDown(px: number, py: number): void;
+    pointerMove(px: number, py: number, down: boolean): void;
+    pointerUp(px: number, py: number, inside: boolean): void;
+    wheel(dy: number): boolean;
+    focusOrder(): {
+        i: number;
+        row: string | null;
+    }[];
+    activate(): void;
+    key(e: PanelKeyEvent): boolean;
 }
 
 ## WorldProgress
@@ -2388,6 +2467,18 @@ interface WorldProgressOptions {
     value: number;
     tone?: WorldWidgetTone;
     rect?: PanelRect;
+}
+
+## WorldScreenOptions  (type-only)
+interface WorldScreenOptions {
+    width?: number;
+    height?: number;
+    resolution?: number;
+    distance?: number;
+    lazy?: number;
+    ease?: number;
+    label?: string;
+    canvas?: PanelCanvas;
 }
 
 ## WorldSlider
@@ -2469,6 +2560,7 @@ abstract class WorldWidget<O extends object = object> {
     wheel(_dy: number): boolean;
     activate(): void;
     key(_event: PanelKeyEvent): boolean;
+    keyFirst(_event: PanelKeyEvent): boolean;
     protected get t(): PanelTheme;
     protected controlHeight(): number;
     protected paintControl(p: Painter, r: PanelRect, fill: string, radius: number): void;
@@ -2810,6 +2902,15 @@ function presentHud(h: SpecHud, ui: SpecOverlay, opts?: DomOptions): HudView;
 ## presentModal
 function presentModal(ui: SpecOverlay, p: SpecPanel, opts?: SpecModalOptions): SpecModal;
 
+## presentWorld
+function presentWorld(panel: SpecPanel, surface: WorldPanel, opts?: WorldOptions): WorldPresenter;
+
+## presentWorldHud
+function presentWorldHud(h: SpecHud, screen: WorldPanel, opts?: WorldHudOptions): WorldHudView;
+
+## presentWorldModal
+function presentWorldModal(screen: WorldPanel, p: SpecPanel, opts?: WorldModalOptions): WorldModal;
+
 ## radial
 function radial(host: InventoryHost, opts: RadialOptions): Radial;
 
@@ -2913,6 +3014,9 @@ function worldPanelTarget(panel: WorldPanel): HitTester<WorldPanel>;
 
 ## worldProgress
 function progress(opts: WorldProgressOptions): WorldProgress;
+
+## worldScreen
+function worldScreen(renderer: Renderer, opts?: WorldScreenOptions): WorldPanel;
 
 ## worldSlider
 function slider(opts: WorldSliderOptions): WorldSlider;

@@ -1347,6 +1347,22 @@ if (device) core.restore(device);
 
 `renderer.core = createRenderCore(renderer, { depthFormat: DEPTH_FORMAT })` draws that core inside the renderer's frames (opt-in: a renderer without one does not bundle the core), in each frame's first depth-tested view: its `depthPre`, `opaque` and `cutout` passes after the view's opaque draws, its `transparent` and later passes after the view's blended draws, into the scene target's colour and depth. Any core can do the same with `CoreTarget.depth` (a depth it loads and never clears) and `CoreTarget.phase` (`'opaque'`, `'blend'`, `'all'`).
 
+### Drawables (ws/core-effects)
+
+Anything that is not a draw set joins the core as a `CoreDrawable` (`core.addDrawable(d)`,
+`removeDrawable`, `coreDrawables`): it names its `pass`, `order`, `bounds` (a sphere; out of
+every view of a group, it is left out), `active` and `version`, prepares once a frame
+(`prepare(encoder, core)`) and records into a `CoreDrawableEncoder` (a bundle, cached per cull
+group and re-made when `version` or `targetsVersion` moves, or `encoding: 'direct'` into the
+pass each view). `record(enc, ctx: CoreDrawContext)` returns its call count; `DrawablePipelines`
+caches a pipeline per colour and depth format. `readsDepth` makes the depth attachment
+sampleable and read-only in the pass (`core.sceneDepthView`; refused in a writing pass);
+`readsColor` copies each view's viewport of `CoreTarget.texture` into `core.sceneColorView`
+before the pass. Shaders start from `CORE_DRAWABLE_WGSL` (the core's `view` at group 0);
+`CoreViewExtras.of(core)` adds each view's inverse view-projection and image-plane axes
+(`CORE_VIEW_EXTRA_WGSL`, `VIEW_EXTRA_FLOATS` a view), written once a frame. The fx module's
+particles, water and weather are drawables. Tests `core/drawable.test.ts`.
+
 ## Merged mesh runs
 
 Many distinct meshes drawn with `frame.mesh` under one material do not batch (each is its own
