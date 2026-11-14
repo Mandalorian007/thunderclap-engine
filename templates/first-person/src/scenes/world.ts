@@ -11,15 +11,20 @@
  *   the camera, moves the snow with the player and finds the landmark in the crosshair.
  * - `render(frame)` sets the frame's lights (sun with a shadow map, fog that matches the sky),
  *   draws the chunks, the landmark markers and the weather. Nothing is allocated per frame.
- * - Landmarks carry a DOM label through `ui.anchors` and a hit box on `ctx.pointers`, so a tap or
- *   a click without the pointer lock inspects them too.
+ * - Landmarks carry a DOM label through `ui.anchors` and a hit box on `ctx.pointers`. The scene's
+ *   verbs are intents (`createIntents`): `inspect` is a tap aimed by a ray (a finger's or a free
+ *   mouse's point, or `null` for the crosshair under the pointer lock or on a pad), `respawn` a
+ *   press. The scene never asks which device it was.
  */
 import type { Scene } from '@thunderclap-engine/engine/core';
 import { ParticleEmitter, ParticleSystem } from '@thunderclap-engine/engine/fx';
 import {
   aabbTester,
+  createIntents,
   createRay,
   type HitTester,
+  type IntentAim,
+  type Intents,
   type RayBox,
   screenRay,
 } from '@thunderclap-engine/engine/input';
@@ -306,6 +311,40 @@ export function createWorldScene(ctx: GameCtx): Scene<GameCtx, Frame> {
     ctx.ui.toasts.show(`${landmark.name}: ${landmark.note}`, { tone: 'info', duration: 4000 });
   };
 
+  /** What `aim` points at in reach: its own ray's hit, or the crosshair's (`null` aims at the centre). */
+  const pointedAt = (aim: IntentAim): Landmark | null => {
+    if (aim === null) return focus;
+    const hit = tester(aim);
+    return hit && hit.distance <= INSPECT_RANGE ? hit.target : null;
+  };
+
+  // The scene's verbs. Every scheme reaches the same handlers: a key, a pad button, a click, a tap.
+  let intents: Intents | null = null;
+  const logical = { x: 0, y: 0 };
+  const startIntents = () =>
+    createIntents(
+      {
+        inspect: { kind: 'tap', actions: ['inspect'] },
+        respawn: { kind: 'press', actions: ['respawn'] },
+      },
+      {
+        inspect: (aim) => {
+          const chosen = pointedAt(aim);
+          if (chosen) inspect(chosen);
+        },
+        respawn: () => ctx.respawn(),
+      },
+      {
+        input: ctx.input,
+        camera,
+        pointers: ctx.pointers,
+        // The locked mouse aims at the crosshair; the move stick's thumb never taps.
+        centred: () => look.locked,
+        stickZone: 'left',
+        toScreen: (x, y) => ctx.surface.clientToLogical(x, y, logical),
+      },
+    );
+
   return {
     name: 'world',
     enter() {
@@ -339,6 +378,7 @@ export function createWorldScene(ctx: GameCtx): Scene<GameCtx, Frame> {
       }
 
       removeTester = ctx.pointers.addTester(tester);
+      intents = startIntents();
       const anchors = ctx.ui.anchors(() => camera);
       removeAnchors = world.landmarks.map((l) => {
         const label = h(
@@ -372,13 +412,14 @@ export function createWorldScene(ctx: GameCtx): Scene<GameCtx, Frame> {
       worker = null;
       removeTester?.();
       removeTester = null;
+      intents?.dispose();
+      intents = null;
       for (const r of removeAnchors) r();
       removeAnchors = [];
       ctx.hud.setFocus(null);
     },
     update(dt) {
       const { input } = ctx;
-      if (input.pressed('respawn')) ctx.respawn();
 
       // Look: the deltas are already summed over mouse, touch and pad for this tick.
       player.yaw += look.look.dx;
@@ -415,12 +456,8 @@ export function createWorldScene(ctx: GameCtx): Scene<GameCtx, Frame> {
       focus = hit && hit.distance <= INSPECT_RANGE ? hit.target : null;
       ctx.hud.setFocus(focus);
 
-      if (input.pressed('inspect')) {
-        // A tap or an unlocked click carries its own hit; the crosshair serves everything else.
-        const pointed = look.locked ? null : (ctx.pointers.hit?.target as Landmark | undefined);
-        const chosen = pointed ?? focus;
-        if (chosen) inspect(chosen);
-      }
+      // After the camera moved: the intents' rays are made through this frame's view.
+      intents?.update();
     },
     render(frame) {
       frame.clear(SKY[0], SKY[1], SKY[2]);
