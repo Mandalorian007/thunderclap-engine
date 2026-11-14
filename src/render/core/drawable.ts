@@ -339,7 +339,11 @@ export class CoreViewExtras {
   private readonly inv = new Float32Array(16);
   private frame = -1;
 
+  /** The device the buffer lives on: `of` makes new extras after `core.restore` (ws/core-decals). */
+  private readonly device: GPUDevice;
+
   private constructor(private readonly core: RenderCore) {
+    this.device = core.device;
     this.buffer = core.device.createBuffer({
       label: 'core view extras',
       size: this.data.byteLength,
@@ -347,10 +351,10 @@ export class CoreViewExtras {
     });
   }
 
-  /** The core's shared extras (made on first use). */
+  /** The core's shared extras (made on first use, and again on a restored core's new device). */
   static of(core: RenderCore): CoreViewExtras {
     let e = extrasByCore.get(core);
-    if (!e) {
+    if (!e || e.device !== core.device) {
       e = new CoreViewExtras(core);
       extrasByCore.set(core, e);
     }

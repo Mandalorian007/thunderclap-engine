@@ -203,6 +203,51 @@ describe('decals on the render core', () => {
     expect(r.fake.errors).toEqual([]);
   });
 
+  it('device loss: core.restore rebuilds the decals on the new device and re-uploads them', () => {
+    const r = rig();
+    const decals = new Decals(r.core, { texture: r.atlas });
+    decals.add(floor(0, 0));
+    decals.add(floor(1, -1));
+    stereo(r);
+    const next = createFakeDevice();
+    const atlas = {
+      ...r.atlas,
+      view: (next.device as unknown as GPUDevice)
+        .createTexture({
+          size: [4, 4],
+          format: 'rgba8unorm',
+          usage: GPUTextureUsage.TEXTURE_BINDING,
+        })
+        .createView(),
+    };
+    r.core.onDeviceRestored(() => {
+      decals.texture = atlas;
+    });
+    r.core.restore(next.device as unknown as GPUDevice);
+    const rr: Rig = { ...r, fake: next, device: next.device as unknown as GPUDevice };
+    const texture = rr.device.createTexture({
+      size: [200, 100],
+      format: 'rgba8unorm',
+      usage: GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    rr.target = { ...r.target, view: texture.createView() };
+    stereo(rr);
+    expect(next.errors).toEqual([]);
+    const ups = next.writes.filter((w) => w.buffer.label === 'decals-core-instances');
+    expect(ups).toHaveLength(1);
+    expect(ups[0]!.bytes).toBe(2 * DECAL_INSTANCE_FLOATS * 4);
+    expect(next.bindGroups.filter((g) => g.label === 'decals-core')).toHaveLength(1);
+    expect(decalBundles(rr)).toHaveLength(1);
+    // The shared view extras moved to the new device too.
+    expect(next.buffers.some((b) => b.label === 'core view extras')).toBe(true);
+    // Destroy unsubscribes: a second restore does not touch the destroyed decals.
+    decals.destroy();
+    const third = createFakeDevice();
+    r.core.restore(third.device as unknown as GPUDevice);
+    expect(third.writes.filter((w) => w.buffer.label === 'decals-core-instances')).toHaveLength(0);
+    expect(third.buffers.some((b) => b.label === 'decals-core-args')).toBe(false);
+  });
+
   it('the shaders read the core per view; the Renderer path keeps its own', () => {
     expect(DECAL_CORE_BOX_WGSL).toContain('extras[view.index].invViewProj');
     expect(DECAL_CORE_BOX_WGSL).toContain('rel + view.origin.xyz');

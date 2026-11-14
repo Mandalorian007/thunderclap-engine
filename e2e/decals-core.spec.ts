@@ -7,7 +7,9 @@
  *   (the count lives in an indirect draw);
  * - the decals draw in both eyes: taking the drawable off the core changes the picture at the
  *   ring on the ground and the splat folded over the pillar's corner, in each half (screenshots,
- *   no golden image); putting it back gives the same picture.
+ *   no golden image); putting it back gives the same picture;
+ * - device loss: after the device is destroyed and the core restored on a new one, the decals
+ *   draw the same picture again.
  */
 import type { Frame, Page } from '@playwright/test';
 import type {
@@ -170,5 +172,19 @@ test('the decals draw in both eyes, on the ground and folded over a corner', asy
   const again = await shot(page);
   for (const d of await diff(page, on, again, await halves())) expect(d).toBeLessThan(0.5);
   expect((await read()).gpuErrors).toBe(0);
+  expect(errors).toEqual([]);
+});
+
+test('device loss: the core restores and the decals draw again', async ({ page, wrapper }) => {
+  await open(page, wrapper);
+  const before = await shot(page);
+  await frame.evaluate(() => window.__harnessDecalsCore!.lose());
+  await frames(6);
+  const s = await read();
+  expect(s.restores).toBe(1);
+  expect(s.gpu).toBe('ok');
+  const after = await shot(page);
+  for (const d of await diff(page, before, after, await halves())) expect(d).toBeLessThan(0.5);
+  expect(s.gpuErrors).toBe(0);
   expect(errors).toEqual([]);
 });

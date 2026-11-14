@@ -11,7 +11,7 @@
  */
 
 import { Decals } from '@thunderclap-engine/engine/fx';
-import { boot } from '@thunderclap-engine/engine/platform';
+import { boot, restoreGpu } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   type CameraPoint,
@@ -62,7 +62,7 @@ const state: HarnessDecalsCoreState = {
   restores: 0,
 };
 let apply: (o: DecalsCoreSet) => void = () => {};
-const lose: () => Promise<void> = async () => {
+let lose: () => Promise<void> = async () => {
   throw new Error('not ready');
 };
 window.__harnessDecalsCore = { state, set: (o) => apply(o), lose: () => lose() };
@@ -478,7 +478,26 @@ async function main(): Promise<void> {
   });
   const targets = [target(true), target(false)] as const;
   const aspects = [0, 0];
-  const paused = false;
+  let paused = false;
+  // The one event the page sees after a loss: the core (and the decals with it) is rebuilt; the
+  // arenas' bytes and the atlas are ours.
+  core.onDeviceRestored((device) => {
+    installGpuErrorLogging(device);
+    for (const w of writes) w();
+    decals.texture = atlasTexture(device, canvas);
+  });
+  lose = async () => {
+    paused = true;
+    const lost = gpu.device.lost;
+    gpu.device.destroy();
+    await lost;
+    const device = await restoreGpu(gpu);
+    if (!device) throw new Error('no device after the loss');
+    core.restore(device);
+    state.restores = core.restores;
+    paused = false;
+    requestAnimationFrame(frame);
+  };
   state.gpu = 'ok';
   state.ready = true;
 

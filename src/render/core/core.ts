@@ -301,7 +301,10 @@ export class RenderCore {
       depthReadOnly: false,
     };
     this.drawableHost = {
-      device,
+      // Live: after `restore` drawables record on the new device (ws/core-decals).
+      get device() {
+        return core.device;
+      },
       ctx: this.drawCtx,
       stats: this.stats,
       viewData: this.viewData,

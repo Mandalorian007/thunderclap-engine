@@ -134,7 +134,7 @@ export class Decals implements Drawable {
   texture: TextureLike;
   /** On a render core (ws/core-decals): the core drawable that draws the decals (else null). */
   readonly coreDrawable: DecalsOnCore | null = null;
-  /** Unsubscribes the core's device-restored listener (on a core with `onDeviceRestored`). */
+  /** Unsubscribes the core's device-restored listener (on a core). */
   private offRestored: (() => void) | null = null;
 
   private readonly renderer!: Renderer;
@@ -229,8 +229,7 @@ export class Decals implements Drawable {
       core.addDrawable(this.coreDrawable);
       // Device loss: the core restores, then the decals rebuild and re-upload themselves.
       const drawable = this.coreDrawable;
-      const hooks = core as { onDeviceRestored?: (fn: () => void) => () => void };
-      this.offRestored = hooks.onDeviceRestored?.(() => drawable.restore()) ?? null;
+      this.offRestored = core.onDeviceRestored(() => drawable.restore());
       return;
     }
     const device = (renderer as Renderer).device;
