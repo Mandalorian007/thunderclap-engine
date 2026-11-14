@@ -13,6 +13,7 @@ with its own types.
 | `tc-tsgen` | TypeScript from a `Schema`: `generate(&schema, &Config)` returns `(path, contents)` pairs, the protocol module (types, codecs, `TYPES`, query descriptors) and, with `Config::sdk`, the SDK's pass-through event files. The header, imports, hash doc, constants and event lists are the game's. |
 | `tc-store` | The event-log store (E3a): `Log<C: LogCodec>` appends a game's events to `main.log` or per-key files, with batches all or none, clock marks written on an I/O thread once what they cover is durable, log generations (`prepare`, `rotate`, `open_from`), crash recovery (gap-free prefix, torn tails cut and kept in `recovered/`) and a directory lock. Syncs go through writable handles, so native Windows works. See `tc-store/README.md`. |
 | `tc-sim` | The authoritative game loop (E4a): a `Game` trait (state changed only by logged events, scheduled events and steps), `Core` (integer time, the `Scheduler` on a `TimingWheel`, `Changes`, `state_hash`), and `Sim`, which serves a core to `tc-net` connections on the wall clock, logs through `tc-store`, flushes change marks, paces inputs, keeps one driver per player, reloads the game's data live (in rounds when far behind) and publishes a status. E4b adds unlogged player bodies, live queries (`Query`, `QueryCtx`), the entity stream per interest, observers (`Seat`) and rate lanes (`Lane`). `Driver` runs one in-process. See `tc-sim/README.md`. |
+| `tc-stream` | The section stream (E5): a game's world sent per connection in sections by interest area (`Area`, radii per axis with hysteresis), nearest first, through a shared LRU cache with stamps; changes as `Edit`s of cells or whole sections, folded into a still-queued frame; `Unload` batches; build budgets and round robin; resume from a client's `Claim`s after a reconnect and after `reload`. The game supplies a `SectionSource` (voxel or 2D tiles); `Lanes` is tc-net's `Outbound`s. See `tc-stream/README.md`. |
 
 ## Format
 
@@ -46,6 +47,9 @@ index. Decoding is strict: trailing bytes, bad tags and unsorted keys fail.
   `tc-net` to two Rust clients and replays the log to the live state hash,
   then runs `createNet` against it through vitest (`src/net/sim-interop.test.ts`;
   `pnpm test:sim-interop` runs just this test), skipping where node is missing.
+- `tc-stream/tests/interop.rs` streams sections from a game loop on `tc-net`
+  to `createNet` filling the voxel `SectionStore` (`src/net/stream-interop.test.ts`;
+  `pnpm test:stream-interop`), with resume after a dropped connection.
 
 The `tests/forge/` fixtures are data from a game, kept as a test; they are
 excluded from biome.
