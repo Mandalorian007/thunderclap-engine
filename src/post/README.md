@@ -339,6 +339,12 @@ feature against a reference stack with the feature off, read back from the GPU, 
   weights; `taaCatmullRomWeights(f)` is the CPU twin of the weights) before the 3×3 clamp,
   so a sub-pixel move no longer softens the history a little every frame. `'bilinear'` is the
   ws/post-5 sample. Packed into `taa3.z`; `POST_UNIFORM_FLOATS` is unchanged (192).
+- **Fast TAA** (ws/actor-post-fit). `TaaSettings.quality: TaaQuality` (`'full'` default, or
+  `'fast'`; packed into `taa3.w`). `'fast'` clamps to the 5-tap cross (`TAA_CROSS`) instead of
+  the 3×3 neighbourhood and reads the history with one bilinear tap, whatever `historyFilter`
+  says. On WebKit at 2360×1640 (iPad size, `harness/post-fit.html?taa=fast`) the TAA pass took
+  0.81 to 0.91 ms against 1.38 to 2.25 ms full; Chromium at 1036×720, 0.17 against 0.31 ms. It
+  converges and trails within the same bounds (`e2e/post4.spec.ts`). `'full'` is unchanged.
 - `harness/post4.html?taa` adds a sub-pixel phase: the striped cube creeps 0.37 px a frame
   with the jitter on, and a bilinear twin stack resolves the same frames as the Catmull-Rom
   one. `blurSubpixel*` is the share of horizontal gradient energy over the cube lost against
@@ -447,7 +453,10 @@ the stack. All additive; a stack made as before draws the same pixels.
   emissive, depth, roughMetal and velocity views it was handed), least recently used out, so
   inputs that alternate (two targets, eyes, a core that ping-pongs) make no group in steady
   state. A new LUT, dirt or hook texture rebuilds the composite groups only; a LUT rewritten in
-  place (`writeLutTexture`) rebuilds nothing.
+  place (`writeLutTexture`) rebuilds nothing. Since ws/actor-post-fit `writeLutTexture(device,
+  texture, fn, out?)`, `lutTexels(size, fn, into?)` and `lutTexelsHalf(size, fn, into?)` take an
+  out array (`lutScratch(size, format?)` makes one of the right kind and length), so a LUT
+  regraded every frame allocates nothing; a short array or the wrong kind for the format throws.
 - **Composite hook.** `PostStackOptions.hook: PostCompositeHook` adds WGSL defining
   `fn post_hook(uv: vec2f, c: vec3f) -> vec3f`, called after sharpen and before the outline,
   in linear colour. `textures` (up to 4) are bound as `hookTex0..3` (`setHookTextures(views)`;

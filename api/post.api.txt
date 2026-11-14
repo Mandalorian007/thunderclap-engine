@@ -376,6 +376,9 @@ class Taa {
 ## TaaHistoryFilter  (type-only)
 type TaaHistoryFilter = 'bilinear' | 'catmull-rom';
 
+## TaaQuality  (type-only)
+type TaaQuality = 'full' | 'fast';
+
 ## TaaReprojection  (type-only)
 type TaaReprojection = 'camera' | 'velocity';
 
@@ -389,6 +392,7 @@ interface TaaSettings {
     depthReject: number;
     velocityReject: number;
     historyFilter: TaaHistoryFilter;
+    quality?: TaaQuality;
 }
 
 ## Tonemap  (type-only)
@@ -500,11 +504,15 @@ function lensDirtTexels(size: number, seed: number): Uint8Array;
 ## lowPostQuality
 function lowPostQuality(): PostQuality;
 
+## lutScratch
+function lutScratch(size: LutSize, format: 'rgba16float'): Uint16Array;
+function lutScratch(size: LutSize, format?: 'rgba8unorm'): Uint8Array;
+
 ## lutTexels
-function lutTexels(size: LutSize, fn: LutFn): Uint8Array;
+function lutTexels(size: LutSize, fn: LutFn, into?: Uint8Array): Uint8Array;
 
 ## lutTexelsHalf
-function lutTexelsHalf(size: LutSize, fn: LutFn): Uint16Array;
+function lutTexelsHalf(size: LutSize, fn: LutFn, into?: Uint16Array): Uint16Array;
 
 ## motionVelocity
 function motionVelocity(out: {
@@ -552,4 +560,4 @@ function whiteBalanceMatrix(out: {
 }, kelvin: number, tint: number): typeof out;
 
 ## writeLutTexture
-function writeLutTexture(device: GPUDevice, texture: GPUTexture, fn: LutFn): void;
+function writeLutTexture(device: GPUDevice, texture: GPUTexture, fn: LutFn, out?: Uint8Array | Uint16Array): void;

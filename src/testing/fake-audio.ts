@@ -21,37 +21,58 @@ export interface FakeAudioContextOptions {
   ios?: boolean;
 }
 
+/** `x`, or a `TypeError` as a browser's `AudioParam` throws for a non-finite float. */
+function finite(x: number, what: string): number {
+  if (typeof x !== 'number' || !Number.isFinite(x)) {
+    throw new TypeError(`FakeAudioParam: ${what} ${String(x)} is not finite`);
+  }
+  return x;
+}
+
 export interface FakeAudioParamEvent {
   type: 'set' | 'linear' | 'exp' | 'target' | 'cancel';
   value: number;
   time: number;
 }
 
+/**
+ * A recording `AudioParam`. Like a browser's, it refuses a non-finite value or time with a
+ * `TypeError` (ws/actor-post-fit): a NaN that reaches a real param throws there, so it throws here.
+ */
 export class FakeAudioParam {
-  value: number;
   events: FakeAudioParamEvent[] = [];
   /** Lower bound, like `AudioParam.minValue`; unset means any value (a test may raise it). */
   minValue?: number;
+  private v: number;
   constructor(v = 1) {
-    this.value = v;
+    this.v = finite(v, 'value');
+  }
+  get value(): number {
+    return this.v;
+  }
+  set value(v: number) {
+    this.v = finite(v, 'value');
   }
   setValueAtTime(v: number, t: number) {
-    this.value = v;
-    this.events.push({ type: 'set', value: v, time: t });
+    this.at('set', v, t);
   }
   linearRampToValueAtTime(v: number, t: number) {
-    this.value = v;
-    this.events.push({ type: 'linear', value: v, time: t });
+    this.at('linear', v, t);
   }
   exponentialRampToValueAtTime(v: number, t: number) {
-    this.value = v;
-    this.events.push({ type: 'exp', value: v, time: t });
+    this.at('exp', v, t);
   }
   setTargetAtTime(v: number, t: number) {
-    this.value = v;
-    this.events.push({ type: 'target', value: v, time: t });
+    this.at('target', v, t);
+  }
+  private at(type: FakeAudioParamEvent['type'], v: number, t: number): void {
+    finite(v, type === 'set' ? 'setValueAtTime value' : `${type} value`);
+    finite(t, 'time');
+    this.v = v;
+    this.events.push({ type, value: v, time: t });
   }
   cancelScheduledValues(t: number) {
+    finite(t, 'time');
     this.events.push({ type: 'cancel', value: 0, time: t });
   }
   /** The last ramp or set (ignoring cancels). */

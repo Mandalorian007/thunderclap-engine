@@ -772,10 +772,11 @@ type GpuPassTimes = Record<string, number>;
 
 ## GpuTimer
 class GpuTimer {
+    readonly measure: 'overlap' | 'chain';
     readonly maxPasses: number;
     readonly result: GpuTimerResult;
     active: boolean;
-    constructor(device: GPUDevice, maxPasses?: number);
+    constructor(device: GPUDevice, maxPasses?: number, opts?: GpuTimerOptions);
     get busy(): boolean;
     onResult(fn: (r: GpuTimerResult) => void): () => void;
     begin(): boolean;
@@ -784,6 +785,14 @@ class GpuTimer {
     resolve(encoder: GPUCommandEncoder): void;
     afterSubmit(): void;
     destroy(): void;
+}
+
+## GpuTimerMeasure  (type-only)
+type GpuTimerMeasure = 'auto' | 'overlap' | 'chain';
+
+## GpuTimerOptions  (type-only)
+interface GpuTimerOptions {
+    measure?: GpuTimerMeasure;
 }
 
 ## GpuTimerResult  (type-only)
@@ -2100,6 +2109,9 @@ function installGpuErrorLogging(device: GPUDevice): void;
 
 ## isMeshLod
 function isMeshLod(m: Mesh | MeshLod): m is MeshLod;
+
+## isWebKitUserAgent
+function isWebKitUserAgent(ua: string): boolean;
 
 ## ktx2LevelLayout
 function ktx2LevelLayout(width: number, height: number, level: number, block: BlockInfo): Ktx2LevelLayout;

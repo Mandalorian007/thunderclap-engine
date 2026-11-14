@@ -35,6 +35,7 @@ import {
   ACTOR_DEFAULT_LIGHT_WGSL,
   ACTOR_MAX_LODS,
   ACTOR_PARAMS_BYTES,
+  ACTOR_SHADOW_FS,
   type ActorShaderConsts,
   actorDrawWgsl,
   actorFieldConsts,
@@ -109,10 +110,46 @@ export interface ActorSystemOptions {
    * Vertices per visible actor for draw sets added with `shape: 'actor'` (ws/actor-fit; a
    * contact shadow's quad is 6). Default 0: no such sets, and the indirect arguments keep five
    * words per (view, model mesh); with it each cell also holds a `drawIndirect` record the pose
-   * pass counts actors into.
+   * pass counts actors into. A list (ws/actor-post-fit) gives each count its own record, and an
+   * `'actor'` set picks one with `ActorDrawSetDesc.vertices` (a shadow's 6 beside an icon's 36).
    */
-  actorVertices?: number;
+  actorVertices?: number | readonly number[];
+  /**
+   * Leave the body set's draws of models with no live actor out of its bundle (ws/actor-post-fit;
+   * default true). False keeps every model's draws recorded from the start, so the first actor
+   * of a model costs no re-record (its draws are empty indirect calls until then).
+   */
+  showLive?: boolean;
+  /**
+   * Scales every LOD distance (ws/actor-post-fit; default 1): 0.5 drops detail at half the
+   * distance. Read each `prepare` from `ActorSystem.lodScale`, which a frame governor may set.
+   */
+  lodScale?: number;
+  /**
+   * Most vertices (indices drawn) of actors per view (ws/actor-post-fit; default 0, none). An
+   * actor whose LOD mesh would pass it draws its model's coarsest mesh instead, in the pose
+   * pass's order. Read each `prepare` from `ActorSystem.vertexCap`.
+   */
+  vertexCap?: number;
+  /**
+   * Words of a game table the pose hook reads (ws/actor-post-fit; default 0, none): bound at
+   * group 0 binding 7 as `actor_table`, read with `actor_table_word(i)` / `actor_table_f32(i)`.
+   * Written with `ActorSystem.writeTable`; kept on the CPU for a device restore.
+   */
+  tableWords?: number;
+  /**
+   * Make the pose pipeline with `createComputePipelineAsync` (ws/actor-post-fit; default false),
+   * so building the system does not stall on the shader compile. Until `ready` settles (and
+   * again after a device restore) `prepare` runs no pose pass and the actors draw nothing.
+   */
+  asyncPipeline?: boolean;
   label?: string;
+}
+
+/** Per-model options of `ActorSystem.addModel` (ws/actor-post-fit). */
+export interface ActorModelOptions {
+  /** This model's LOD distances (as `ActorSystemOptions.lods`); default the system's. */
+  lods?: readonly number[];
 }
 
 /**
@@ -135,8 +172,16 @@ export interface ActorDrawSetDesc {
    * the mesh) per visible actor, as the body. `'actor'`: `actorVertices` unindexed vertices
    * per visible actor and no vertex buffer; `actor_draw_of(in.core_vertex)` is the mesh and
    * `in.core_vertex % ACTOR_SET_VERTICES` the corner (needs `ActorSystemOptions.actorVertices`).
+   * `VertexIn` holds `core_vertex`, and `core_origin` with the core's origin grid.
    */
   shape?: 'mesh' | 'actor';
+  /**
+   * An `'actor'` set's vertices per actor (ws/actor-post-fit): one of
+   * `ActorSystemOptions.actorVertices`; default its first.
+   */
+  vertices?: number;
+  /** As `ActorSystemOptions.showLive`, for this set (default true). */
+  showLive?: boolean;
   pass?: string;
   order?: number;
   depth?: boolean;
@@ -156,11 +201,29 @@ export interface ActorStats {
   calls: number;
   /** Record bytes uploaded. */
   recordBytes: number;
+  /**
+   * Record uploads (ws/actor-post-fit): one per run of changed slots, near runs merged, so
+   * slots far apart send their records and not the slots between.
+   */
+  recordWrites: number;
   /** Slots the pose pass covered (the high-water slot + 1). */
   dispatched: number;
 }
 
 const U = () => GPUBufferUsage;
+
+/** A set added with `addDrawSet`: an `'actor'` set's record (-1 for a mesh set) and vertices. */
+interface ExtraSet {
+  set: DrawSet;
+  rec: number;
+  vertices: number;
+  live: boolean;
+  groups: DrawSetDesc['bindGroups'];
+}
+/** Unchanged record bytes between two changed runs worth sending to save an upload call. */
+const RECORD_MERGE_BYTES = 1024;
+/** Most record uploads a frame; past it, the last covers the rest of the changed range. */
+const RECORD_MAX_WRITES = 16;
 
 /** Many animated characters, rigid or skinned, at a fixed draw count. Make one with `createActorSystem`. */
 export class ActorSystem {
@@ -173,7 +236,16 @@ export class ActorSystem {
   /** Record words per slot. */
   readonly stride: number;
   readonly shape: ActorRecordShape;
-  readonly stats: ActorStats = { calls: 0, recordBytes: 0, dispatched: 0 };
+  readonly stats: ActorStats = { calls: 0, recordBytes: 0, recordWrites: 0, dispatched: 0 };
+  /** `ActorSystemOptions.lodScale`, read each `prepare`. */
+  lodScale: number;
+  /** `ActorSystemOptions.vertexCap` (0: none), read each `prepare`. */
+  vertexCap: number;
+  /**
+   * Settles when the pose pipeline is made (ws/actor-post-fit): at once without
+   * `asyncPipeline`; replaced by a new promise when a device restore builds it again.
+   */
+  ready: Promise<void> = Promise.resolve();
   /** The draw set on the core (one slot per model mesh). */
   readonly drawSet: DrawSet;
   /** The skin matrices: `slots × bonesPerSlot` of three `vec4f` rows (the `SkinPalette` layout). */
@@ -189,6 +261,8 @@ export class ActorSystem {
   private readonly recF32: Float32Array<ArrayBuffer>;
   private dirtyLo = Infinity;
   private dirtyHi = -1;
+  /** Slots changed since the last upload (ws/actor-post-fit). */
+  private readonly dirtyFlags: Uint8Array;
   private high = 0;
   private readonly rigs: ActorRig[] = [];
   private draws = 0;
@@ -210,7 +284,16 @@ export class ActorSystem {
   private rigBuffer!: GPUBuffer;
   private poseLayout!: GPUBindGroupLayout;
   private poseGroup!: GPUBindGroup;
-  private posePipeline!: GPUComputePipeline;
+  private posePipeline: GPUComputePipeline | null = null;
+  /** Bumped by each build, so a slow async pipeline of an old device is dropped. */
+  private buildGen = 0;
+  private readonly asyncPipeline: boolean;
+  private readonly bodyLive: boolean;
+  private readonly tableData: Uint32Array<ArrayBuffer> | null;
+  private readonly tableF32: Float32Array<ArrayBuffer> | null;
+  private tableBuffer: GPUBuffer | null = null;
+  /** Each model's own LOD distances (empty: the system's). */
+  private readonly modelLods: (readonly number[])[] = [];
   private readonly computeDesc: GPUComputePassDescriptor;
   private readonly scratch: PoseScratch;
   private destroyed = false;
@@ -220,18 +303,17 @@ export class ActorSystem {
   /** Each model mesh's arena places, to write again after a device restore. */
   private readonly meshAllocs: { v: ArenaAlloc; ix: ArenaAlloc }[] = [];
   private readonly offRestored: () => void;
-  /** Words per argument cell (5, or 9 with `actorVertices`). */
+  /** Words per argument cell (5, and 4 per `actorVertices` count). */
   private readonly argsWords: number;
-  private readonly actorVertices: number;
+  private readonly actorVertices: readonly number[];
   private readonly poseHook: ActorPoseCpu | null;
   private readonly lightWgsl: string;
   /** Live records per model, and whether its draws are shown (ws/actor-fit). */
   private readonly live: Int32Array;
   private readonly shown: Uint8Array;
   private liveDirty = false;
-  /** Sets added with `addDrawSet`, and whether each is an `'actor'` set. */
-  private readonly extra: { set: DrawSet; actor: boolean; groups: DrawSetDesc['bindGroups'] }[] =
-    [];
+  /** Sets added with `addDrawSet`: an `'actor'` set's record (-1 for a mesh set) and vertices. */
+  private readonly extra: ExtraSet[] = [];
   private setLayout!: GPUBindGroupLayout;
   private setGroup!: GPUBindGroup;
 
@@ -248,12 +330,7 @@ export class ActorSystem {
       throw new Error(`${this.label}: bonesPerSlot ${opts.bonesPerSlot} (1 to 64)`);
     }
     const lods = opts.lods ?? [Infinity];
-    if (lods.length < 1 || lods.length > ACTOR_MAX_LODS) {
-      throw new Error(`${this.label}: 1 to ${ACTOR_MAX_LODS} LOD distances`);
-    }
-    for (let i = 1; i < lods.length; i++) {
-      if (!(lods[i]! > lods[i - 1]!)) throw new Error(`${this.label}: LOD distances must rise`);
-    }
+    this.checkLods(lods);
     this.maxModels = Math.max(1, Math.floor(opts.maxModels ?? 16));
     this.maxDraws = Math.max(1, Math.floor(opts.maxDraws ?? this.maxModels * lods.length));
     this.maxViews = Math.max(1, Math.min(Math.floor(opts.maxViews ?? 2), core.maxViews));
@@ -261,8 +338,19 @@ export class ActorSystem {
     this.stride = this.shape.stride;
     this.sampleLight = opts.sampleLight ?? null;
     this.scratch = createPoseScratch(this.bonesPerSlot);
-    this.actorVertices = Math.max(0, Math.floor(opts.actorVertices ?? 0));
-    this.argsWords = this.actorVertices > 0 ? (ARGS_BYTES + DRAW_ARGS_BYTES) / 4 : ARGS_BYTES / 4;
+    const av = opts.actorVertices ?? 0;
+    this.actorVertices = (typeof av === 'number' ? [av] : av)
+      .map((n) => Math.max(0, Math.floor(n)))
+      .filter((n) => n > 0);
+    this.argsWords = (ARGS_BYTES + this.actorVertices.length * DRAW_ARGS_BYTES) / 4;
+    this.bodyLive = opts.showLive ?? true;
+    this.lodScale = opts.lodScale ?? 1;
+    this.vertexCap = Math.max(0, Math.floor(opts.vertexCap ?? 0));
+    this.asyncPipeline = opts.asyncPipeline ?? false;
+    const tw = Math.max(0, Math.floor(opts.tableWords ?? 0));
+    this.tableData = tw > 0 ? new Uint32Array(tw) : null;
+    this.tableF32 = this.tableData ? new Float32Array(this.tableData.buffer) : null;
+    this.dirtyFlags = new Uint8Array(this.slots);
     this.poseHook = opts.poseCpu ?? null;
     this.lightWgsl = opts.lightWgsl ?? ACTOR_DEFAULT_LIGHT_WGSL;
     this.live = new Int32Array(this.maxModels);
@@ -281,6 +369,8 @@ export class ActorSystem {
       views: this.maxViews,
       argsWords: this.argsWords,
       actorVertices: this.actorVertices,
+      counters: core.maxViews * this.maxDraws * this.argsWords,
+      table: this.tableData !== null,
       pose: opts.poseWgsl ?? '',
       fieldConsts: actorFieldConsts(this.shape.fields),
     };
@@ -288,7 +378,8 @@ export class ActorSystem {
     // The shader compares distances; an infinite one goes up as the largest float.
     for (let i = 0; i < ACTOR_MAX_LODS; i++) this.paramsF32[4 + i] = Math.min(lods[i] ?? 0, 3.4e38);
     this.paramsU32[8] = lods.length;
-    this.templateData = new Uint32Array(core.maxViews * this.maxDraws * this.argsWords);
+    // The argument cells, then one vertex counter per view (the vertex cap's), all reset each frame.
+    this.templateData = new Uint32Array(consts.counters + this.maxViews);
     this.computeDesc = { label: `${this.label} pose` };
     this.build();
     this.vertexArena = core.createArena({
@@ -306,6 +397,7 @@ export class ActorSystem {
       shader: {
         code: actorDrawWgsl(consts, this.lightWgsl, this.shape.fields),
         cullMode: 'none',
+        shadowFragmentEntry: ACTOR_SHADOW_FS,
       },
       vertexLayout: ACTOR_VERTEX_LAYOUT,
       vertices: this.vertexArena,
@@ -326,7 +418,6 @@ export class ActorSystem {
   /** The system's buffers, layouts and pose pipeline on `this.device`. */
   private build(): void {
     const device = this.device;
-    const core = this.core;
     const consts = this.consts;
     const u = U();
     this.records = device.createBuffer({
@@ -341,7 +432,7 @@ export class ActorSystem {
       usage: u.STORAGE | u.COPY_SRC,
     });
     // Arguments for every view the core may draw, so a view past `maxViews` draws nothing.
-    const argsBytes = core.maxViews * this.maxDraws * this.argsWords * 4;
+    const argsBytes = this.templateData.byteLength;
     this.args = device.createBuffer({
       label: `${this.label} args`,
       size: argsBytes,
@@ -363,33 +454,59 @@ export class ActorSystem {
       usage: u.UNIFORM | u.COPY_DST,
     });
     this.rigBuffer = this.makeRigBuffer();
+    if (this.tableData) {
+      this.tableBuffer = device.createBuffer({
+        label: `${this.label} table`,
+        size: this.tableData.byteLength,
+        usage: u.STORAGE | u.COPY_DST,
+      });
+      device.queue.writeBuffer(this.tableBuffer, 0, this.tableData);
+    }
 
     const S = GPUShaderStage;
+    const poseEntries: GPUBindGroupLayoutEntry[] = [
+      { binding: 0, visibility: S.COMPUTE, buffer: { type: 'uniform' } },
+      { binding: 1, visibility: S.COMPUTE, buffer: { type: 'uniform' } },
+      { binding: 2, visibility: S.COMPUTE, buffer: { type: 'read-only-storage' } },
+      { binding: 3, visibility: S.COMPUTE, buffer: { type: 'read-only-storage' } },
+      { binding: 4, visibility: S.COMPUTE, buffer: { type: 'storage' } },
+      { binding: 5, visibility: S.COMPUTE, buffer: { type: 'storage' } },
+      { binding: 6, visibility: S.COMPUTE, buffer: { type: 'storage' } },
+    ];
+    if (this.tableBuffer) {
+      poseEntries.push({
+        binding: 7,
+        visibility: S.COMPUTE,
+        buffer: { type: 'read-only-storage' },
+      });
+    }
     this.poseLayout = device.createBindGroupLayout({
       label: `${this.label} pose`,
-      entries: [
-        { binding: 0, visibility: S.COMPUTE, buffer: { type: 'uniform' } },
-        { binding: 1, visibility: S.COMPUTE, buffer: { type: 'uniform' } },
-        { binding: 2, visibility: S.COMPUTE, buffer: { type: 'read-only-storage' } },
-        { binding: 3, visibility: S.COMPUTE, buffer: { type: 'read-only-storage' } },
-        { binding: 4, visibility: S.COMPUTE, buffer: { type: 'storage' } },
-        { binding: 5, visibility: S.COMPUTE, buffer: { type: 'storage' } },
-        { binding: 6, visibility: S.COMPUTE, buffer: { type: 'storage' } },
-      ],
+      entries: poseEntries,
     });
     this.poseGroup = this.makePoseGroup();
     const module = device.createShaderModule({
       label: `${this.label} pose`,
       code: actorPoseWgsl(consts),
     });
-    this.posePipeline = device.createComputePipeline({
+    const pipeDesc: GPUComputePipelineDescriptor = {
       label: `${this.label} pose`,
       layout: device.createPipelineLayout({
         label: `${this.label} pose`,
         bindGroupLayouts: [this.poseLayout],
       }),
       compute: { module, entryPoint: 'pose' },
-    });
+    };
+    const gen = ++this.buildGen;
+    this.posePipeline = null;
+    if (this.asyncPipeline && typeof device.createComputePipelineAsync === 'function') {
+      this.ready = device.createComputePipelineAsync(pipeDesc).then((p) => {
+        if (gen === this.buildGen && !this.destroyed) this.posePipeline = p;
+      });
+    } else {
+      this.posePipeline = device.createComputePipeline(pipeDesc);
+      this.ready = Promise.resolve();
+    }
 
     this.drawLayout = device.createBindGroupLayout({
       label: `${this.label} draw`,
@@ -459,14 +576,14 @@ export class ActorSystem {
   }
 
   /** Add model mesh `d`'s slot to an added set (slot `d`, its own argument record). */
-  private addExtraSlot(e: { set: DrawSet; actor: boolean }, d: number): void {
+  private addExtraSlot(e: ExtraSet, d: number): void {
     const w = this.argsWords * 4;
-    if (e.actor) {
+    if (e.rec >= 0) {
       e.set.addAt(d, {
-        indexCount: this.actorVertices,
+        indexCount: e.vertices,
         instanceCount: 0,
         bounds: [0, 0, 0, Infinity],
-        argsOffset: d * w + ARGS_BYTES,
+        argsOffset: d * w + ARGS_BYTES + e.rec * DRAW_ARGS_BYTES,
       });
     } else {
       const a = this.meshAllocs[d]!;
@@ -479,7 +596,7 @@ export class ActorSystem {
         ...(w !== ARGS_BYTES ? { argsOffset: d * w } : {}),
       });
     }
-    if (!this.shown[this.modelOfDraw(d)]) e.set.setHidden(d, true);
+    if (e.live && !this.shown[this.modelOfDraw(d)]) e.set.setHidden(d, true);
   }
 
   private modelOfDraw(d: number): number {
@@ -499,16 +616,24 @@ export class ActorSystem {
   addDrawSet(desc: ActorDrawSetDesc): DrawSet {
     this.alive();
     const actor = desc.shape === 'actor';
-    if (actor && this.actorVertices === 0) {
+    if (actor && this.actorVertices.length === 0) {
       throw new Error(`${this.label}: an 'actor' set needs ActorSystemOptions.actorVertices`);
+    }
+    const vertices = actor ? (desc.vertices ?? this.actorVertices[0]!) : 0;
+    const rec = actor ? this.actorVertices.indexOf(vertices) : -1;
+    if (actor && rec < 0) {
+      throw new Error(`${this.label}: ${vertices} vertices is not in actorVertices`);
     }
     const label = desc.label ?? `${this.label} set ${this.extra.length + 1}`;
     const set = this.core.createDrawSet({
       label,
       shader: {
+        // Its groups stay bound in the shadow pass (an actor's vertices read group 1).
+        shadowFragmentEntry: ACTOR_SHADOW_FS,
         ...desc.shader,
         code:
-          actorSetPreludeWgsl(this.consts, this.lightWgsl, this.shape.fields) + desc.shader.code,
+          actorSetPreludeWgsl(this.consts, this.lightWgsl, this.shape.fields, vertices) +
+          desc.shader.code,
       },
       vertexLayout: actor ? NO_VERTICES : ACTOR_VERTEX_LAYOUT,
       vertices: this.vertexArena,
@@ -526,7 +651,7 @@ export class ActorSystem {
       ...(desc.passes ? { passes: desc.passes } : {}),
       bindGroups: this.setGroups(desc.bindGroups),
     });
-    const e = { set, actor, groups: desc.bindGroups };
+    const e = { set, rec, vertices, live: desc.showLive ?? true, groups: desc.bindGroups };
     this.extra.push(e);
     for (let d = 0; d < this.draws; d++) this.addExtraSlot(e, d);
     return set;
@@ -562,8 +687,9 @@ export class ActorSystem {
    * Add a rig as a model; returns its id for `setRecord({ model })`. Uploads its meshes and
    * clips and re-records the draw bundle once. Allocates; call at load.
    */
-  addModel(rig: ActorRig): number {
+  addModel(rig: ActorRig, opts: ActorModelOptions = {}): number {
     this.alive();
+    if (opts.lods) this.checkLods(opts.lods);
     if (this.rigs.length >= this.maxModels) {
       throw new Error(`${this.label}: full (${this.maxModels} models)`);
     }
@@ -602,12 +728,14 @@ export class ActorSystem {
         this.templateData[a + 2] = ix.offset / 4;
         this.templateData[a + 3] = v.offset / ACTOR_VERTEX_BYTES;
         this.templateData[a + 4] = 0;
-        if (W > 5) {
-          // The 'actor' sets' drawIndirect: the corners of each actor, the mesh in firstVertex.
-          this.templateData[a + 5] = this.actorVertices;
-          this.templateData[a + 6] = 0;
-          this.templateData[a + 7] = d * this.actorVertices;
-          this.templateData[a + 8] = 0;
+        // The 'actor' sets' drawIndirects: the corners of each actor, the mesh in firstVertex.
+        for (let i = 0; i < this.actorVertices.length; i++) {
+          const n = this.actorVertices[i]!;
+          const at = a + 5 + i * 4;
+          this.templateData[at] = n;
+          this.templateData[at + 1] = 0;
+          this.templateData[at + 2] = d * n;
+          this.templateData[at + 3] = 0;
         }
       }
     }
@@ -619,6 +747,7 @@ export class ActorSystem {
       for (let m = 0; m < rig.meshes.length; m++) this.addExtraSlot(e, drawBase + m);
     }
     this.rigs.push(rig);
+    this.modelLods.push(opts.lods ?? []);
     this.device.queue.writeBuffer(this.template, 0, this.templateData);
     this.rigBuffer.destroy();
     this.rigBuffer = this.makeRigBuffer();
@@ -675,6 +804,7 @@ export class ActorSystem {
     if (rec.clip2Rate !== undefined) f[b + R.clip2Rate] = rec.clip2Rate;
     if (rec.blend !== undefined) f[b + R.blend] = rec.blend;
     if (rec.tint !== undefined) u[b + R.tint] = rec.tint >>> 0;
+    if (rec.cullRadius !== undefined) f[b + R.cullRadius] = rec.cullRadius;
     if (rec.fields) {
       for (const name in rec.fields) {
         const field = this.shape.fields.get(name);
@@ -755,11 +885,17 @@ export class ActorSystem {
    * arguments, and run the pose pass over every slot up to the highest used. `views` is the
    * view count of the frame's `core.prepare`. A fixed number of GPU calls, whatever the actors.
    */
-  prepare(encoder: GPUCommandEncoder, views: number | readonly unknown[], time: number): void {
+  prepare(
+    encoder: GPUCommandEncoder,
+    views: number | readonly unknown[],
+    time: number,
+    timestampWrites?: GPUComputePassTimestampWrites,
+  ): void {
     this.alive();
     const st = this.stats;
     st.calls = 0;
     st.recordBytes = 0;
+    st.recordWrites = 0;
     st.dispatched = 0;
     this.time = time;
     const n = typeof views === 'number' ? views : views.length;
@@ -767,21 +903,16 @@ export class ActorSystem {
     this.paramsF32[0] = time;
     this.paramsU32[1] = this.high;
     this.paramsU32[2] = n;
+    this.paramsF32[9] = this.lodScale;
+    this.paramsU32[10] = this.vertexCap;
     q.writeBuffer(this.paramsBuffer, 0, this.params);
     st.calls++;
-    if (this.dirtyHi >= this.dirtyLo) {
-      const lo = this.dirtyLo * this.stride;
-      const words = (this.dirtyHi + 1) * this.stride - lo;
-      q.writeBuffer(this.records, lo * 4, this.recU32, lo, words);
-      st.calls++;
-      st.recordBytes = words * 4;
-      this.dirtyLo = Infinity;
-      this.dirtyHi = -1;
-    }
+    if (this.dirtyHi >= this.dirtyLo) this.uploadRecords();
     encoder.copyBufferToBuffer(this.template, 0, this.args, 0, this.templateData.byteLength);
     st.calls++;
     if (this.liveDirty) this.showLive();
-    if (this.high === 0 || this.rigs.length === 0) return;
+    if (this.high === 0 || this.rigs.length === 0 || !this.posePipeline) return;
+    this.computeDesc.timestampWrites = timestampWrites;
     const pass = encoder.beginComputePass(this.computeDesc);
     pass.setPipeline(this.posePipeline);
     pass.setBindGroup(0, this.poseGroup);
@@ -809,9 +940,72 @@ export class ActorSystem {
     ]) {
       b.destroy();
     }
+    this.tableBuffer?.destroy();
+  }
+
+  /**
+   * Write `data` into the game table at word `at` (ws/actor-post-fit; `tableWords`): uploaded
+   * now and kept for a device restore. Allocates nothing.
+   */
+  writeTable(data: Uint32Array | Float32Array, at = 0): void {
+    this.alive();
+    const t = this.tableData;
+    if (!t || !this.tableBuffer) throw new Error(`${this.label}: no table (tableWords)`);
+    if (!(at >= 0 && Number.isInteger(at) && at + data.length <= t.length)) {
+      throw new Error(`${this.label}: table words ${at}+${data.length} > ${t.length}`);
+    }
+    if (data instanceof Float32Array) this.tableF32!.set(data, at);
+    else t.set(data, at);
+    this.device.queue.writeBuffer(this.tableBuffer, at * 4, t, at, data.length);
   }
 
   // ------------------------------------------------------------------ internals
+
+  private checkLods(lods: readonly number[]): void {
+    if (lods.length < 1 || lods.length > ACTOR_MAX_LODS) {
+      throw new Error(`${this.label}: 1 to ${ACTOR_MAX_LODS} LOD distances`);
+    }
+    for (let i = 1; i < lods.length; i++) {
+      if (!(lods[i]! > lods[i - 1]!)) throw new Error(`${this.label}: LOD distances must rise`);
+    }
+  }
+
+  /**
+   * Upload the changed records (ws/actor-post-fit): one write per run of changed slots, runs
+   * closer than `RECORD_MERGE_BYTES` joined, at most `RECORD_MAX_WRITES` writes.
+   */
+  private uploadRecords(): void {
+    const st = this.stats;
+    const q = this.device.queue;
+    const flags = this.dirtyFlags;
+    const stride = this.stride;
+    const gap = Math.max(1, Math.floor(RECORD_MERGE_BYTES / (stride * 4)));
+    const hi = this.dirtyHi;
+    let s = this.dirtyLo;
+    while (s <= hi) {
+      // A run from s: extend while the next changed slot is within the gap.
+      let last = s;
+      const lastWrite = st.recordWrites === RECORD_MAX_WRITES - 1;
+      for (let t = s + 1; t <= hi; t++) {
+        if (flags[t]) {
+          if (!lastWrite && t - last > gap) break;
+          last = t;
+        }
+      }
+      const end = last;
+      const lo = s * stride;
+      const words = (end + 1) * stride - lo;
+      q.writeBuffer(this.records, lo * 4, this.recU32, lo, words);
+      st.calls++;
+      st.recordWrites++;
+      st.recordBytes += words * 4;
+      flags.fill(0, s, end + 1);
+      s = end + 1;
+      while (s <= hi && !flags[s]) s++;
+    }
+    this.dirtyLo = Infinity;
+    this.dirtyHi = -1;
+  }
 
   private alive(): void {
     if (this.destroyed) throw new Error(`${this.label}: destroyed`);
@@ -843,13 +1037,14 @@ export class ActorSystem {
       const base = this.drawBases[m]!;
       const end = base + this.rigs[m]!.meshes.length;
       for (let d = base; d < end; d++) {
-        this.drawSet.setHidden(d, !show);
-        for (const e of this.extra) e.set.setHidden(d, !show);
+        if (this.bodyLive) this.drawSet.setHidden(d, !show);
+        for (const e of this.extra) if (e.live) e.set.setHidden(d, !show);
       }
     }
   }
 
   private dirty(slot: number): void {
+    this.dirtyFlags[slot] = 1;
     if (slot < this.dirtyLo) this.dirtyLo = slot;
     if (slot > this.dirtyHi) this.dirtyHi = slot;
   }
@@ -889,6 +1084,9 @@ export class ActorSystem {
       f32[h + RIG.cx] = r.center[0];
       f32[h + RIG.cy] = r.center[1];
       f32[h + RIG.cz] = r.center[2];
+      const lods = this.modelLods[m]!;
+      u32[h + RIG.lodCount] = lods.length;
+      for (let i = 0; i < lods.length; i++) f32[h + RIG.lods + i] = Math.min(lods[i]!, 3.4e38);
       u32[h + RIG.clips] = r.clips.length;
       u32[h + RIG.clipsAt] = at;
       const clipsAt = at;
@@ -940,6 +1138,7 @@ export class ActorSystem {
         { binding: 4, resource: { buffer: this.bones } },
         { binding: 5, resource: { buffer: this.args } },
         { binding: 6, resource: { buffer: this.lists } },
+        ...(this.tableBuffer ? [{ binding: 7, resource: { buffer: this.tableBuffer } }] : []),
       ],
     });
   }

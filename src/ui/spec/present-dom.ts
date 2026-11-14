@@ -424,10 +424,17 @@ export class DomPresenter implements SpecPresenter {
     this.press.onTap = (shift) => this.tap(shift);
     this.press.onHold = () => this.emit(this.pressNode, this.pressRow, 'hold', null);
     this.listen();
-    if (opts.fit === 'host' && typeof ResizeObserver === 'function') {
-      this.observer = new ResizeObserver(() => this.fitHost());
+    const fit = opts.fit === 'host';
+    const tails = this.lists.some((lv) => lv.tail);
+    if ((fit || tails) && typeof ResizeObserver === 'function') {
+      // The host's box: a fit's size, and (ws/actor-post-fit) a host the embedder shows again
+      // gets one, so a tail kept due while it had none goes to its end before that paint.
+      this.observer = new ResizeObserver(() => {
+        if (fit) this.fitHost();
+        this.tailsToEnd();
+      });
       this.observer.observe(host);
-      this.fitHost();
+      if (fit) this.fitHost();
     }
     panel.presenters.push(this);
     // Drawn whole at the next apply (the model may hold values set before it came).
@@ -498,6 +505,20 @@ export class DomPresenter implements SpecPresenter {
     if (m.focusing !== undefined) this.focusField(m.focusing);
   }
 
+  /**
+   * Put tail lists kept due at their ends now (ws/actor-post-fit). A tail that changed while the
+   * embedder hid the host (no box: `hidden`, `display: none`) is kept due; the presenter's
+   * `ResizeObserver` does this when the host gets a box again, before that frame paints, and
+   * an embedder that shows the host and reads its scroll in the same task calls this first.
+   * Reads layout only when a tail is due.
+   */
+  tailsToEnd(): void {
+    for (let o = 0; o < this.lists.length; o++) {
+      const lv = this.lists[o]!;
+      if (lv.tail && lv.pinned && lv.due) this.toEnd(lv);
+    }
+  }
+
   /** A tail list at its end: its scroll put there (written only when it isn't). */
   private toEnd(lv: ListView): void {
     const i = lv.node;
@@ -530,10 +551,11 @@ export class DomPresenter implements SpecPresenter {
 
   /**
    * `el`'s class `name` on, its animations (and, `subtree`, its words') played again from their
-   * start when it already was: no forced layout. Kept, one that ran out plays again too.
+   * start when it already was: no forced layout. Kept, one that ran out plays again too. With
+   * `name` null, no class: `el`'s animations play again from their start (a host's own look).
    */
-  private replay(el: Element, name: string, subtree: boolean): void {
-    if (!el.classList.contains(name)) {
+  private replay(el: Element, name: string | null, subtree: boolean): void {
+    if (name !== null && !el.classList.contains(name)) {
       el.classList.add(name);
       return;
     }
@@ -1494,6 +1516,9 @@ export class DomPresenter implements SpecPresenter {
         return;
       case R_AGAIN:
         this.replay(el, 'tcs-again', true);
+        // The root's (ws/actor-post-fit): the host's own CSS animations too, the embedder's look
+        // of the whole panel (a shake, a flash), played again from their start.
+        if (i === 0 && part === this.top.parts[0]) this.replay(this.host, null, false);
         return;
       default:
         if (role >= R_MARK && part.marks) {

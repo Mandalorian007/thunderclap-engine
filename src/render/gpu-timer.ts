@@ -28,7 +28,42 @@ export function supportsTimestamps(device: GPUDevice): boolean {
   return !!f && typeof f.has === 'function' && f.has('timestamp-query');
 }
 
+/**
+ * How a pass's cost is taken from its timestamps (ws/actor-post-fit):
+ * - `'overlap'`: its end minus the later of its own begin and the previous pass's end;
+ * - `'chain'`: its end minus the previous pass's end (the frame mark's for the first), its begin
+ *   unread. WebKit (Metal) writes begin timestamps that do not hold the pass's start, so there
+ *   `'overlap'` moves time between passes; ends are in order everywhere, so a chain of ends
+ *   still adds up to the frame. A gap between passes counts to the later one.
+ * - `'auto'` (default): `'chain'` on WebKit (a Safari, iPad or Playwright WebKit user agent),
+ *   else `'overlap'`.
+ */
+export type GpuTimerMeasure = 'auto' | 'overlap' | 'chain';
+
+export interface GpuTimerOptions {
+  /** See `GpuTimerMeasure`. Default `'auto'`. */
+  measure?: GpuTimerMeasure;
+}
+
+/**
+ * True for a browser on WebKit's engine: Safari, every iOS browser (Chrome's `CriOS` too) and
+ * Playwright's WebKit; not desktop Chromium.
+ */
+export function isWebKitUserAgent(ua: string): boolean {
+  return /AppleWebKit/.test(ua) && !/Chrome\/|Chromium|Edg\/|Electron/.test(ua);
+}
+
+function resolveMeasure(m: GpuTimerMeasure | undefined): 'overlap' | 'chain' {
+  if (m === 'overlap' || m === 'chain') return m;
+  const nav = (globalThis as { navigator?: { userAgent?: string } }).navigator;
+  return typeof nav?.userAgent === 'string' && isWebKitUserAgent(nav.userAgent)
+    ? 'chain'
+    : 'overlap';
+}
+
 export class GpuTimer {
+  /** How pass costs are taken (`GpuTimerOptions.measure`, `'auto'` resolved). */
+  readonly measure: 'overlap' | 'chain';
   readonly maxPasses: number;
   readonly result: GpuTimerResult = { totalMs: 0, passes: {}, samples: 0 };
   /** True between `begin()` and `resolve()`: passes should take `pass(label)` writes. */
@@ -55,8 +90,9 @@ export class GpuTimer {
     this.pending = false;
   };
 
-  constructor(device: GPUDevice, maxPasses = 48) {
+  constructor(device: GPUDevice, maxPasses = 48, opts: GpuTimerOptions = {}) {
     this.maxPasses = maxPasses;
+    this.measure = resolveMeasure(opts.measure);
     // Pair 0 is the frame mark; pairs 1.. are labelled passes.
     const count = (maxPasses + 1) * 2;
     this.querySet = device.createQuerySet({ label: 'gpu-timer', type: 'timestamp', count });
@@ -152,7 +188,8 @@ export class GpuTimer {
    * Per-pass cost is the pass's *marginal* time: its end minus the later of its own start and
    * the previous pass's end. Tiled GPUs (Apple, many mobiles) overlap consecutive passes, so a
    * plain end − begin counts the overlap twice and sums past the frame; ends are in order, so
-   * marginal times add up to the frame total.
+   * marginal times add up to the frame total. In `'chain'` (WebKit) the begin is not read: the
+   * cost is its end minus the previous end.
    */
   private read(): void {
     if (this.destroyed) return;
@@ -165,15 +202,17 @@ export class GpuTimer {
     let first = markB;
     let prevEnd = markE;
     let firstPass = 0n;
+    const chain = this.measure === 'chain';
     for (let i = 0; i < used; i++) {
       const b = ts[(i + 1) * 2]!;
       const e = ts[(i + 1) * 2 + 1]!;
-      // A zero timestamp was never written (a skipped pass): ignore the pair.
-      if (b <= 0n || e < b) continue;
-      if (first === 0n || b < first) first = b;
+      // A zero timestamp was never written (a skipped pass): ignore the pair. A chain reads
+      // only the end (a begin past it is WebKit's, not a skipped pass).
+      if (chain ? e <= 0n : b <= 0n || e < b) continue;
+      if (b > 0n && (first === 0n || b < first)) first = b;
       if (firstPass === 0n) firstPass = b;
       // biome-ignore lint/complexity/useMathMinMax: bigint (Math.max takes numbers)
-      const from = prevEnd > b ? prevEnd : b;
+      const from = chain && prevEnd > 0n ? prevEnd : prevEnd > b ? prevEnd : b;
       if (e > from) sums[this.pairLabel[i]!]! += Number(e - from) / 1e6;
       if (e > prevEnd) prevEnd = e;
     }
@@ -182,7 +221,8 @@ export class GpuTimer {
     const r = this.result;
     r.totalMs = first > 0n && prevEnd > first ? Number(prevEnd - first) / 1e6 : 0;
     for (let i = 0; i < this.labels.length; i++) r.passes[this.labels[i]!] = sums[i]!;
-    r.passes.pre = markE > 0n && firstPass > markE ? Number(firstPass - markE) / 1e6 : 0;
+    // A chain counts the time from the mark to the first pass's start in that pass.
+    r.passes.pre = !chain && markE > 0n && firstPass > markE ? Number(firstPass - markE) / 1e6 : 0;
     r.samples++;
     for (const fn of this.listeners) fn(r);
   }

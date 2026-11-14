@@ -192,7 +192,9 @@ describe('post 6: Catmull-Rom history filter (ws/post-6)', () => {
 
   it('the resolve branches on taa3.z between the 5-tap filter and one bilinear tap', () => {
     expect(TAA_WGSL).toContain('fn hist_catmull_rom(uv: vec2f) -> vec3f');
-    expect(TAA_WGSL).toMatch(/if \(P\.taa3\.z > 0\.5\) \{\s*hs = hist_catmull_rom\(puv\);/);
+    expect(TAA_WGSL).toMatch(
+      /if \(P\.taa3\.z > 0\.5 && !fast\) \{\s*hs = hist_catmull_rom\(puv\);/,
+    );
     // Five history taps in the filter, normalised by their weight.
     const body = TAA_WGSL.slice(TAA_WGSL.indexOf('fn hist_catmull_rom'));
     const fn = body.slice(0, body.indexOf('\n}\n'));

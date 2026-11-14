@@ -5,6 +5,8 @@
  * one pose pass and one bundle of indirect draws. Every frame one actor turns about (one record
  * write), so a frame's GPU calls are the same at 100 actors as at 1,000.
  *
+ * `?crowd=1` (ws/actor-post-fit) adds the crowd fit on top of `?fit=1`: see `HarnessActorsState.crowd`.
+ *
  * `check()` reads back the next frame's skin matrices and indirect counts and compares them
  * with `poseCpu`. Nothing here is engine code beyond the actors, the core and `boot`.
  */
@@ -36,7 +38,10 @@ const params = new URLSearchParams(location.search);
 const n = Math.max(1, Math.min(4096, Number(params.get('n') ?? 1000) | 0));
 const emptyModels = Math.max(0, Math.min(120, Number(params.get('models') ?? 0) | 0));
 const timing = params.get('timing') === '1';
-const fit = params.get('fit') === '1';
+const crowd = params.get('crowd') === '1';
+const fit = crowd || params.get('fit') === '1';
+const lodScale = Number(params.get('scale') ?? 1) || 1;
+const vertexCap = Math.max(0, Number(params.get('cap') ?? 0) | 0);
 
 const state: HarnessActorsState = {
   ready: false,
@@ -61,6 +66,11 @@ const state: HarnessActorsState = {
   gpuSamples: 0,
   fit,
   shadows: 0,
+  crowd,
+  pipelineReady: false,
+  markers: 0,
+  recordWrites: 0,
+  poseMs: -1,
 };
 let wantCheck = false;
 window.__harnessActors = {
@@ -74,7 +84,7 @@ window.__harnessActors = {
 const NOD_WGSL = /* wgsl */ `
 fn actor_pose(actor: u32, model: u32, node: u32, p: Trs, time: f32) -> Trs {
   if (model != 0u || node != 1u) { return p; }
-  let h = sin(time * 3.0) * 0.4 * 0.5;
+  let h = sin(time * 3.0) * NOD_AMP * 0.5;
   let n = vec4f(sin(h), 0.0, 0.0, cos(h));
   var o = p;
   o.q = vec4f(
@@ -84,6 +94,22 @@ fn actor_pose(actor: u32, model: u32, node: u32, p: Trs, time: f32) -> Trs {
     n.w * p.q.w - n.x * p.q.x - n.y * p.q.y - n.z * p.q.z);
   return o;
 }
+`;
+
+/** `?crowd=1` reads the nod's amplitude from the game table; else a constant. */
+const nodWgsl = (table: boolean) =>
+  `const NOD_AMP_C = 0.4;\n${NOD_WGSL.replace('NOD_AMP', table ? 'actor_table_f32(0u)' : 'NOD_AMP_C')}`;
+
+/** `?crowd=1`: a small triangle over each visible actor's head (3 vertices a set). */
+const MARKER_WGSL = /* wgsl */ `
+@vertex fn vs(in: VertexIn, @builtin(instance_index) inst: u32) -> @builtin(position) vec4f {
+  let actor = actor_at(actor_draw_of(in.core_vertex), inst);
+  var corners = array<vec2f, 3>(vec2f(-0.15, 0.0), vec2f(0.15, 0.0), vec2f(0.0, -0.25));
+  let c = corners[in.core_vertex % ACTOR_SET_VERTICES];
+  let p = actor_position(actor) + vec3f(c.x, 2.3 + c.y, 0.0) * actor_scale(actor);
+  return view.viewProj * vec4f(p, 1.0);
+}
+@fragment fn fs() -> @location(0) vec4f { return vec4f(1.0, 0.85, 0.2, 1.0); }
 `;
 
 /** The CPU twin of `NOD_WGSL`: `q = nod(angle about x) · q`. */
@@ -293,7 +319,7 @@ async function main(): Promise<void> {
     ...(fit
       ? {
           // The robot's head (node 1) nods, on the GPU and in `poseCpu` alike.
-          poseWgsl: NOD_WGSL,
+          poseWgsl: nodWgsl(crowd),
           poseCpu: (
             _slot: number,
             model: number,
@@ -305,10 +331,31 @@ async function main(): Promise<void> {
             if (model !== 0 || node !== 1) return;
             nod(trs, at, Math.fround(Math.sin(time * 3) * 0.4));
           },
-          actorVertices: 6,
+          actorVertices: crowd ? [6, 3] : 6,
         }
       : {}),
+    ...(crowd ? { asyncPipeline: true, tableWords: 4, showLive: false, lodScale, vertexCap } : {}),
   });
+  if (crowd) {
+    actors.writeTable(new Float32Array([0.4, 0, 0, 0]));
+    actors.ready.then(
+      () => {
+        state.pipelineReady = true;
+      },
+      (e: unknown) => {
+        state.gpu = e instanceof Error ? e.message : String(e);
+      },
+    );
+    actors.addDrawSet({
+      label: 'markers',
+      shape: 'actor',
+      vertices: 3,
+      showLive: false,
+      order: 11,
+      castShadow: false,
+      shader: { code: MARKER_WGSL, cullMode: 'none' },
+    });
+  }
   if (fit) {
     actors.addDrawSet({
       label: 'contact shadows',
@@ -349,6 +396,7 @@ async function main(): Promise<void> {
         ]),
       ],
     }),
+    crowd ? { lods: [30, 200] } : undefined,
   );
   // Models no actor shows (`?models=M`): their draws are empty every frame.
   for (let m = 0; m < emptyModels; m++) {
@@ -398,6 +446,7 @@ async function main(): Promise<void> {
       clipStart: -rand(i + 3),
       clipRate: speed * 1.6,
       tint,
+      ...(crowd && i % 9 === 8 ? { cullRadius: 0.01 } : {}),
     });
   }
 
@@ -417,7 +466,7 @@ async function main(): Promise<void> {
   };
   // Readback for `check()`.
   const boneBytes = CHECK_SLOTS * actors.bonesPerSlot * 48;
-  const argsWords = fit ? 9 : 5;
+  const argsWords = crowd ? 13 : fit ? 9 : 5;
   const argsBytes = actors.maxDraws * argsWords * 4;
   const boneRead = device.createBuffer({
     label: 'actors check bones',
@@ -434,9 +483,16 @@ async function main(): Promise<void> {
 
   // GPU time (`?timing=1`): every frame sampled that the timer is free for.
   state.timestamps = supportsTimestamps(device);
-  const timer = timing && state.timestamps ? new GpuTimer(device) : null;
+  const timer = (timing || crowd) && state.timestamps ? new GpuTimer(device) : null;
   const gpuTimes: number[] = [];
+  const poseTimes: number[] = [];
   timer?.onResult((r) => {
+    const pose = r.passes.actors;
+    if (pose !== undefined) {
+      poseTimes.push(pose);
+      if (poseTimes.length > 120) poseTimes.shift();
+      state.poseMs = [...poseTimes].sort((p, q) => p - q)[poseTimes.length >> 1]!;
+    }
     gpuTimes.push(r.totalMs);
     if (gpuTimes.length > 120) gpuTimes.shift();
     state.gpuSamples++;
@@ -480,7 +536,7 @@ async function main(): Promise<void> {
     const timed = timer?.begin() ?? false;
     target.timestamps = timed ? timestamps : undefined;
     if (timed) timer!.mark(encoder);
-    actors.prepare(encoder, views, t);
+    actors.prepare(encoder, views, t, crowd && timed ? timer!.pass('actors') : undefined);
     core.prepare(encoder, views);
     const doCheck = wantCheck && !checking;
     if (doCheck) {
@@ -530,6 +586,11 @@ async function main(): Promise<void> {
             for (let d = 0; d < actors.maxDraws; d++) shadows += args[d * argsWords + 6]!;
             state.shadows = shadows;
           }
+          if (crowd) {
+            let markers = 0;
+            for (let d = 0; d < actors.maxDraws; d++) markers += args[d * argsWords + 10]!;
+            state.markers = markers;
+          }
           state.poseError = err;
           state.checkedSlots = CHECK_SLOTS;
           state.drawnPerDraw = per;
@@ -549,6 +610,7 @@ async function main(): Promise<void> {
     state.bundles = core.stats.bundles;
     state.bundleBuilds = core.stats.bundleBuilds;
     state.dispatched = actors.stats.dispatched;
+    state.recordWrites = actors.stats.recordWrites;
     state.cpuMs = [...times].sort((p, q) => p - q)[times.length >> 1]!;
     state.gpuErrors = gpuDiagnostics.errorCount;
     state.frames++;

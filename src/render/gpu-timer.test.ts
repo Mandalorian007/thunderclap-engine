@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createFakeDevice } from './fake-gpu';
-import { GpuTimer, supportsTimestamps } from './gpu-timer';
+import { GpuTimer, isWebKitUserAgent, supportsTimestamps } from './gpu-timer';
 
 // The fake GPU resolves the query set, copies it into the read buffer and maps it for real
 // (ws/render-9); a test fills the query set's `values` with chosen timestamps (ns).
@@ -78,5 +78,42 @@ describe('GpuTimer', () => {
     expect(t.result.totalMs).toBeCloseTo(3);
     expect(t.result.passes.scene).toBeCloseTo(3);
     expect(t.result.passes.rays).toBe(0);
+  });
+
+  it("'chain' times each pass from the previous end, its begin unread (ws/actor-post-fit)", async () => {
+    const f = fakeDevice();
+    const t = new GpuTimer(f.device, 8, { measure: 'chain' });
+    expect(t.measure).toBe('chain');
+    t.begin();
+    t.mark(f.encoder);
+    t.pass('scene');
+    t.pass('taa');
+    t.pass('composite');
+    t.resolve(f.encoder);
+    // WebKit-like begins: taa's reads after its end, composite's reads 0.
+    f.queries().set([ms(0), ms(0.1), ms(1), ms(4), ms(7), ms(6), 0n, ms(7.5)]);
+    f.submit();
+    const got = new Promise((r) => t.onResult(r));
+    t.afterSubmit();
+    await got;
+    const p = t.result.passes;
+    expect(p.scene).toBeCloseTo(3.9);
+    expect(p.taa).toBeCloseTo(2);
+    expect(p.composite).toBeCloseTo(1.5);
+    expect(p.pre).toBe(0);
+    expect(p.scene! + p.taa! + p.composite!).toBeCloseTo(t.result.totalMs - 0.1);
+  });
+
+  it("'auto' chains on WebKit only", () => {
+    const safari =
+      'Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
+    const chrome =
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
+    expect(isWebKitUserAgent(safari)).toBe(true);
+    expect(isWebKitUserAgent(chrome)).toBe(false);
+    expect(isWebKitUserAgent('Mozilla/5.0 (iPhone) AppleWebKit/605.1.15 CriOS/130.0')).toBe(true);
+    const f = fakeDevice();
+    expect(new GpuTimer(f.device, 4).measure).toBe('overlap');
+    expect(new GpuTimer(f.device, 4, { measure: 'overlap' }).measure).toBe('overlap');
   });
 });

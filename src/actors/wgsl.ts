@@ -6,7 +6,7 @@ import { CORE_VIEW_WGSL, MAX_VIEWS } from '../render/core/view';
 import { ACTOR_RECORD as R } from './record';
 
 /** Words per model in the rig table's header area. */
-export const RIG_HEADER_WORDS = 16;
+export const RIG_HEADER_WORDS = 20;
 /** Word offsets in a model's header. */
 export const RIG = {
   nodes: 0,
@@ -23,6 +23,9 @@ export const RIG = {
   jointNodesAt: 11,
   inverseBindAt: 12,
   restAt: 13,
+  /** The model's own LOD distance count (0: the system's), then four distances at 16. */
+  lodCount: 14,
+  lods: 16,
 } as const;
 /** Words per clip entry: frames at, frame count, fps (f32), loop. */
 export const RIG_CLIP_WORDS = 4;
@@ -38,10 +41,14 @@ export interface ActorShaderConsts {
   maxDraws: number;
   slots: number;
   views: number;
-  /** Words per (view, model mesh) argument cell: 5, or 9 with per-actor vertices. */
+  /** Words per (view, model mesh) argument cell: 5, and 4 more per per-actor vertex count. */
   argsWords: number;
-  /** Vertices per visible actor of the `'actor'` sets (0: none). */
-  actorVertices: number;
+  /** The `'actor'` sets' vertex counts per visible actor (empty: none). */
+  actorVertices: readonly number[];
+  /** Word of `args` where the per-view vertex counters start (the vertex cap's). */
+  counters: number;
+  /** A game table is bound (`ActorSystemOptions.table`). */
+  table: boolean;
   /** `ActorSystemOptions.poseWgsl`, or empty. */
   pose: string;
   /** The record fields' `ACTOR_FIELD_*` constants (for the pose hook). */
@@ -69,8 +76,8 @@ struct ActorParams {
   models: u32,
   lods: vec4f,
   lodCount: u32,
-  _a: u32,
-  _b: u32,
+  lodScale: f32,
+  vertexCap: u32,
   _c: u32,
 };
 @group(0) @binding(0) var<uniform> views: array<CoreView, ${MAX_VIEWS}>;
@@ -80,7 +87,15 @@ struct ActorParams {
 @group(0) @binding(4) var<storage, read_write> bones: array<vec4f>;
 @group(0) @binding(5) var<storage, read_write> args: array<atomic<u32>>;
 @group(0) @binding(6) var<storage, read_write> lists: array<u32>;
-
+${
+  c.table
+    ? `@group(0) @binding(7) var<storage, read> actor_table: array<u32>;
+/** Word \`i\` of the game's table (\`ActorSystemOptions.table\`). */
+fn actor_table_word(i: u32) -> u32 { return actor_table[i]; }
+fn actor_table_f32(i: u32) -> f32 { return bitcast<f32>(actor_table[i]); }
+`
+    : ''
+}
 var<workgroup> wm: array<vec4f, ${c.bones * 3}>;
 
 struct Trs { t: vec3f, q: vec4f, s: vec3f };
@@ -194,7 +209,14 @@ fn pose(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_index) b: u3
     // Cull per view and pick the LOD; the visible slot joins its draw's list.
     let c = vec4f(rf(hdr + ${RIG.cx}u), rf(hdr + ${RIG.cy}u), rf(hdr + ${RIG.cz}u), 1.0);
     let center = vec3f(dot(actor.r0, c), dot(actor.r1, c), dot(actor.r2, c));
-    let radius = rf(hdr + ${RIG.radius}u) * abs(k);
+    // The record's own cull radius (world units) when set, else the model's, scaled.
+    let own = recf(r + ${R.cullRadius}u);
+    let radius = select(rf(hdr + ${RIG.radius}u) * abs(k), own, own > 0.0);
+    // The model's own LOD distances when it has them, else the system's.
+    let ml = rig[hdr + ${RIG.lodCount}u];
+    let lodCount = select(params.lodCount, ml, ml > 0u);
+    let lods = select(params.lods, vec4f(rf(hdr + ${RIG.lods}u), rf(hdr + ${RIG.lods + 1}u),
+      rf(hdr + ${RIG.lods + 2}u), rf(hdr + ${RIG.lods + 3}u)), ml > 0u);
     let meshes = rig[hdr + ${RIG.meshes}u];
     let drawBase = rig[hdr + ${RIG.drawBase}u];
     let nv = min(params.views, ACTOR_VIEWS);
@@ -207,12 +229,23 @@ fn pose(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_index) b: u3
       if (!inside) { continue; }
       let dist = distance(center, views[v].position.xyz);
       var lod = 0u;
-      while (lod < params.lodCount && dist >= params.lods[lod]) { lod++; }
-      if (lod >= params.lodCount) { continue; }
-      let d = drawBase + min(lod, meshes - 1u);
+      while (lod < lodCount && dist >= lods[lod] * params.lodScale) { lod++; }
+      if (lod >= lodCount) { continue; }
+      var d = drawBase + min(lod, meshes - 1u);
+      if (params.vertexCap > 0u) {
+        // Past the view's vertex cap, the coarsest mesh instead.
+        let coarse = drawBase + meshes - 1u;
+        let n = atomicLoad(&args[(v * ACTOR_MAX_DRAWS + d) * ${c.argsWords}u]);
+        let used = atomicAdd(&args[${c.counters}u + v], n);
+        if (d != coarse && used + n > params.vertexCap) {
+          atomicSub(&args[${c.counters}u + v], n);
+          d = coarse;
+          atomicAdd(&args[${c.counters}u + v], atomicLoad(&args[(v * ACTOR_MAX_DRAWS + d) * ${c.argsWords}u]));
+        }
+      }
       let cell = v * ACTOR_MAX_DRAWS + d;
       let at = atomicAdd(&args[cell * ${c.argsWords}u + 1u], 1u);
-      lists[cell * ACTOR_LIST + at] = s;${c.actorVertices ? `\n      atomicAdd(&args[cell * ${c.argsWords}u + 6u], 1u);` : ''}
+      lists[cell * ACTOR_LIST + at] = s;${c.actorVertices.map((_, i) => `\n      atomicAdd(&args[cell * ${c.argsWords}u + ${6 + i * 4}u], 1u);`).join('')}
     }
   }
   workgroupBarrier();
@@ -231,6 +264,16 @@ fn pose(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_index) b: u3
 }
 `;
 }
+
+/**
+ * An empty fragment entry for the actor sets' shadow pipelines (ws/actor-post-fit). Without a
+ * `shadowFragmentEntry` the core's depth-only shadow pipeline binds the view group alone, and
+ * an actor's vertex stage reads its records and bones at group 1: with one, the set's groups
+ * stay bound (none of them holds the shadow map), so actors cast, and a warmed idle caster's
+ * pipeline is valid.
+ */
+export const ACTOR_SHADOW_FS = 'actor_shadow_fs';
+const ACTOR_SHADOW_FS_WGSL = `\n@fragment fn ${ACTOR_SHADOW_FS}() {}\n`;
 
 /**
  * The default lighting: a fixed key light over an ambient floor, times the record's light word.
@@ -308,7 +351,7 @@ struct ActorOut {
 @fragment fn fs(in: ActorOut) -> @location(0) vec4f {
   return vec4f(actor_light(in.actor, in.world, normalize(in.normal), in.color, in.light), 1.0);
 }
-`;
+${ACTOR_SHADOW_FS_WGSL}`;
 }
 
 /**
@@ -320,10 +363,11 @@ export function actorSetPreludeWgsl(
   c: ActorShaderConsts,
   light: string,
   fields: ReadonlyMap<string, { word: number }>,
+  vertices = 1,
 ): string {
   return /* wgsl */ `${consts(c)}
 ${actorFieldConsts(fields)}
-const ACTOR_SET_VERTICES = ${Math.max(1, c.actorVertices)}u;
+const ACTOR_SET_VERTICES = ${Math.max(1, vertices)}u;
 struct ActorSetParams { time: f32, high: u32, views: u32, models: u32 };
 @group(1) @binding(0) var<storage, read> bones: array<vec4f>;
 @group(1) @binding(1) var<storage, read> lists: array<u32>;
@@ -375,6 +419,5 @@ fn actor_point(m: ActorSkin, p: vec3f) -> vec3f {
 fn actor_dir(m: ActorSkin, n: vec3f) -> vec3f {
   return vec3f(dot(m.r0.xyz, n), dot(m.r1.xyz, n), dot(m.r2.xyz, n));
 }
-${light}
-`;
+${light}${ACTOR_SHADOW_FS_WGSL}`;
 }

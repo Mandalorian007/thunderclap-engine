@@ -80,6 +80,7 @@ describe('post 3 settings', () => {
       depthReject: 0.1,
       velocityReject: 2,
       historyFilter: 'catmull-rom',
+      quality: 'full',
     });
     expect(s.ssr).toMatchObject({
       enabled: false,

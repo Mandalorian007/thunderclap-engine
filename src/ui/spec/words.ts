@@ -92,7 +92,12 @@ export interface SpecCommon {
   readonly label?: SpecStr;
   /** A colour the look takes (the presenter's `--tcs-tint`). */
   readonly tint?: SpecStr;
-  /** Its look plays again each time this is set (a CSS animation restarted). */
+  /**
+   * Its look plays again each time this is set (a CSS animation restarted). The first value
+   * only puts the class `tcs-again` on (its animation plays as the class comes); each later
+   * change plays its animations, and its words', again from their start. On the panel's root
+   * (ws/actor-post-fit) the host's own CSS animations play again too, from the first change.
+   */
   readonly again?: Bind;
 }
 

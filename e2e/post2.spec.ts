@@ -311,3 +311,47 @@ test('the outline draws dark pixels along the silhouette', async ({ page, wrappe
   expect(oh, `outline dark pixels ${oh}`).toBeGreaterThanOrEqual(9);
   expect(errors).toEqual([]);
 });
+
+/**
+ * ws/actor-post-fit: the post cost page (harness/post-fit.html) with TAA's `quality: 'fast'`,
+ * and the variants stack (fast TAA too) compiling beside it; the TAA pass's GPU time, full and
+ * fast, is logged where the device times passes.
+ */
+test('taa fast: the post cost page runs it without a GPU error and logs its cost', async ({
+  page,
+  wrapper,
+}) => {
+  test.skip(wrapper !== 'top', 'timing on the top page only');
+  test.setTimeout(60_000);
+  const errs: string[] = [];
+  page.on('pageerror', (e) => errs.push(e.message));
+  page.on('console', (m) => {
+    if (m.type() === 'error') errs.push(m.text());
+  });
+  const run = async (q: string) => {
+    await page.goto(`${HARNESS_URL}post-fit.html?frames=90&${q}`);
+    await expect
+      .poll(
+        async () => {
+          const s = await page.evaluate(() => window.__harnessPostFit?.state ?? null);
+          if (s?.ready && s.gpu !== 'ok') throw new Error(`post-fit: ${s.gpu}`);
+          return s?.done === true;
+        },
+        { timeout: 40_000 },
+      )
+      .toBe(true);
+    return page.evaluate(() => JSON.parse(JSON.stringify(window.__harnessPostFit!.state)));
+  };
+  const full = await run('taa=full');
+  const fast = await run('taa=fast');
+  // The variants stack (its TAA fast too) beside the measured one: its WGSL on a real GPU.
+  const variants = await run('taa=fast&variants=1');
+  for (const s of [full, fast, variants]) expect(s.gpuErrors).toBe(0);
+  const taa = (s: { passes: Record<string, number> }) => s.passes['post-taa'] ?? s.passes.taa;
+  if (full.gpuMs !== null && taa(full) !== undefined) {
+    console.log(
+      `[post2] TAA at ${full.width}x${full.height}: full ${taa(full)!.toFixed(3)} ms (frame ${full.gpuMs.toFixed(3)}), fast ${taa(fast)?.toFixed(3)} ms (frame ${fast.gpuMs?.toFixed(3)})`,
+    );
+  }
+  expect(errs).toEqual([]);
+});

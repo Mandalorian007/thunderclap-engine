@@ -1323,7 +1323,7 @@ core.draw(encoder, 0, { view: texView, format, width, height, clear: { r: 0, g: 
 | `core.createDrawSet(desc)` → `DrawSet` | one pipeline's meshes: `DrawSetDesc` `{ shader: DrawSetShader, vertexLayout, instanceLayout?, vertices, indices?, instances?, capacity, kind?: DrawSetKind, cull?: DrawSetCull, pass?, depth?, order?, bindGroups? }`. `set.add(SlotDesc)` → id, `update`, `setBounds`, `remove`, `has`; `core.removeDrawSet(set)` |
 | `DrawSetKind` | `'static'` sets record into a render bundle, rebuilt only when a slot or arena changes; `'dynamic'` sets encode directly and upload only dirty slot ranges |
 | `DrawSetCull` | `'gpu'` (the `CULL_WGSL` compute shader), `'cpu'` (`cullSlotsCpu`, its twin), `'none'`, `'auto'`: GPU from `GPU_CULL_MIN_SLOTS` slots up, or `'external'`: the caller fills the indirect args in `DrawSetDesc.args` (the actors' pose pass) |
-| `set.addAt(id, slot)`, `SlotDesc.argsOffset`, `DrawSetDesc.argsStride`, `DrawSetDesc.indexed`, `DRAW_ARGS_BYTES` | ws/actor-fit: a slot at a caller-chosen id; an external slot's own argument offset and the bytes between cull groups (a caller's argument layout, read in place); `indexed: false` draws `draw` / `drawIndirect` (16-byte records) with no index buffer, and with no vertex buffer when the vertex layout has no attributes (`VertexIn.core_vertex` is the vertex index). An external set leaves hidden slots out of its bundle (`setHidden`), so it issues no empty indirect draws |
+| `set.addAt(id, slot)`, `SlotDesc.argsOffset`, `DrawSetDesc.argsStride`, `DrawSetDesc.indexed`, `DRAW_ARGS_BYTES` | ws/actor-fit: a slot at a caller-chosen id; an external slot's own argument offset and the bytes between cull groups (a caller's argument layout, read in place); `indexed: false` draws `draw` / `drawIndirect` (16-byte records) with no index buffer, and with no vertex buffer when the vertex layout has no attributes (`VertexIn.core_vertex` is the vertex index; since ws/actor-post-fit also beside `core_origin` when the core has an origin grid). An external set leaves hidden slots out of its bundle (`setHidden`), so it issues no empty indirect draws |
 | `QuadIndex`, `quadIndices(quads, first?)`, `QUAD_INDICES` | the shared quad index (`v, v+1, v+2, v, v+2, v+3`, 6 per quad) a set without its own `indices` draws through |
 | `core.definePass(desc)`, `PassList`, `CORE_PASSES` | the pass list: `depthPre`, `opaque`, `cutout`, `transparent`, `overlay`, in order; `PassDesc` `{ id, after?, depth?: PassDepth, when? }` adds a `CorePass`. A pass encodes only when its `when` holds and a set joined it |
 | `createRenderView()`, `setViewFromCamera(view, camera, eye?)`, `setViewFromMatrices(view, proj, worldToEye, eye)`, `sphereInPlanes(planes, at, x, y, z, r)`, `unionPlanesInto(out, at, views, first, count, origin, relative)`, `VIEW_SLOT` | a `RenderView` `{ viewProj, planes, position, proj?, view?, eye? }` (`eye` float64: a far camera's true position; `setViewFromMatrices` takes an XR eye's matrices); each takes a `VIEW_SLOT_BYTES` (`VIEW_SLOT_FLOATS` floats) slot of the core's view buffer, `CORE_VIEW_WGSL` in the shader |
@@ -1594,6 +1594,12 @@ renderer.setLogicalSize(1280, 800);                // the 2D logical size (a fil
   custom `PostProcessor` calls for its own passes (the class is exported for that type). Its
   `onResult` listeners get a `GpuTimerResult` (`totalMs`, `passes`, `samples`). Without the
   feature `gpuTimer` is null and timing falls back to the queue.
+- `new GpuTimer(device, maxPasses?, opts?: GpuTimerOptions)` with `measure: GpuTimerMeasure` (ws/actor-post-fit): `'overlap'` times each
+  pass from its own begin to its end (the earlier behaviour); `'chain'` times it from the end
+  of the pass before, because WebKit (Metal) reports a pass's begin as the moment the GPU
+  first got to it, which on a tile GPU can be long before the pass's work ran, so begins read
+  near the frame's start and every pass looked as long as the frame. `'auto'` (default) takes
+  `'chain'` on WebKit (`isWebKitUserAgent(navigator.userAgent)`) and `'overlap'` elsewhere.
   `pnpm bench` (`harness/bench.html`, `scripts/bench.mjs`) uses these to record what a frame
   affords on one machine, per scene rung, in `docs/BENCH.md`.
 - `DynamicResolution` turns GPU-time samples into a scale. It drops after 1 s over budget

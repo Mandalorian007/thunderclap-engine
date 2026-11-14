@@ -3,7 +3,8 @@
  * through a `PostStack` with TAA, bloom and a LUT (god rays off, the rest of the defaults). Measures `?frames=`
  * frames (default 240) after a 60-frame warm-up and publishes medians on `window.__harnessPostFit`.
  * Run it at the size to measure (iPad: a 2360×1640 viewport at device scale 1); `?scale=` sets the
- * renderer's resolution scale. `?variants=1` also runs a second stack each frame into an offscreen
+ * renderer's resolution scale; `?taa=fast` runs TAA's cheaper path (`quality: 'fast'`) and
+ * `?taa=off` turns it off (ws/actor-post-fit). `?variants=1` also runs a second stack each frame into an offscreen
  * `rgba16float` target with the ws/post-fit options (a composite hook with a texture and a buffer,
  * linear output, a half-float LUT, no emissive add), so their WGSL compiles on a real GPU
  * (`gpuErrors`). Nothing here is engine code.
@@ -131,7 +132,10 @@ async function main(): Promise<void> {
   renderer.timingEvery = 1;
 
   const post = new PostStack(renderer, {
-    taa: { enabled: true },
+    taa: {
+      enabled: params.get('taa') !== 'off',
+      quality: params.get('taa') === 'fast' ? 'fast' : 'full',
+    },
     bloom: { enabled: true },
     godRays: { enabled: false },
     lut: { size: 16, intensity: 1 },
@@ -150,7 +154,7 @@ async function main(): Promise<void> {
     const variant = new PostStack(
       renderer,
       {
-        taa: { enabled: true },
+        taa: { enabled: true, quality: 'fast' },
         bloom: { enabled: true, emissiveAdd: 0 },
         godRays: { enabled: false },
       },

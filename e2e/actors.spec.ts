@@ -4,6 +4,9 @@
  * 1,000 actors, the bundle is recorded once, the GPU's skin matrices match `poseCpu`, the pose
  * pass draws actors at both LODs, and the device reports no error. ws/actor-fit: empty models
  * draw nothing, a pose hook matches its CPU twin, and a shared set draws a shadow per actor.
+ * ws/actor-post-fit: the crowd fit (an async pipeline, a game table, two `'actor'` sets of
+ * their own vertex counts, per-model LODs, an LOD scale, a vertex cap, cull radii, the pose
+ * pass timed) compiles and draws, its counts agree, and a cap and a scale move actors to LOD 1.
  */
 import type { Frame, Page } from '@playwright/test';
 import type { HarnessActorsState } from '../harness/actors-state';
@@ -31,7 +34,7 @@ async function open(page: Page, wrapper: string, query: string): Promise<Harness
     .poll(async () => {
       const s = await read().catch(() => null);
       if (s?.ready && s.gpu !== 'ok') throw new Error(`actors page: ${s.gpu}`);
-      return s?.ready ? s.frames : -1;
+      return s?.ready && (!s.crowd || s.pipelineReady) ? s.frames : -1;
     })
     .toBeGreaterThanOrEqual(10);
   // Ask for a readback and wait for it, in one evaluate per poll.
@@ -130,5 +133,47 @@ test('a pose hook nods the heads as poseCpu does, and a shared set lays a shadow
   expect(s.drawn).toBeGreaterThan(0);
   expect(s.shadows).toBe(s.drawn);
   expect(s.bundles).toBe(2);
+  expect(errors).toEqual([]);
+});
+
+test('the crowd fit: async pipeline, game table, two set sizes, per-model LODs, cap and scale', async ({
+  page,
+  wrapper,
+}) => {
+  const s = await open(page, wrapper, 'n=1000&crowd=1');
+  expect(s.crowd).toBe(true);
+  expect(s.pipelineReady).toBe(true);
+  expect(s.gpuErrors).toBe(0);
+  // The nod's amplitude comes from the table: still the CPU twin's pose.
+  expect(s.checkedSlots).toBe(16);
+  expect(s.poseError).toBeGreaterThanOrEqual(0);
+  expect(s.poseError).toBeLessThan(2e-3);
+  // Each set counts its own vertices per actor drawn: one shadow and one marker each.
+  expect(s.drawn).toBeGreaterThan(0);
+  expect(s.shadows).toBe(s.drawn);
+  expect(s.markers).toBe(s.drawn);
+  // One record changes a frame: one upload.
+  expect(s.recordWrites).toBe(1);
+  const [near, far] = s.drawnPerDraw;
+  expect(near).toBeGreaterThan(0);
+  expect(far).toBeGreaterThan(0);
+  // A tight vertex cap moves robots from LOD 0 to LOD 1 (the figures have one mesh) and the
+  // actors drawn stay drawn; (the actors walk, so a few cross the view's edge between loads).
+  const capped = await open(page, wrapper, 'n=1000&crowd=1&cap=4000');
+  expect(capped.gpuErrors).toBe(0);
+  expect(capped.drawnPerDraw[0]!).toBeLessThan(near!);
+  expect(Math.abs(capped.drawn - s.drawn)).toBeLessThan(s.drawn * 0.05 + 4);
+  // A small LOD scale brings every distance in: fewer near robots, and the farthest culled.
+  const scaled = await open(page, wrapper, 'n=1000&crowd=1&scale=0.25');
+  expect(scaled.gpuErrors).toBe(0);
+  expect(scaled.drawnPerDraw[0]!).toBeLessThan(near!);
+  expect(scaled.drawn).toBeGreaterThan(0);
+  expect(scaled.drawn).toBeLessThan(s.drawn * 0.5);
+  if (s.timestamps && wrapper === 'top') {
+    await expect.poll(async () => (await read()).poseMs, { timeout: 30_000 }).toBeGreaterThan(0);
+    console.log(
+      `[actors] crowd fit, 1,000 actors: pose pass ${(await read()).poseMs.toFixed(3)} ms`,
+    );
+  }
   expect(errors).toEqual([]);
 });
