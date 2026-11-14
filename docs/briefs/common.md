@@ -15,7 +15,8 @@ Your worktree may start from an old commit. First `git reset --hard main` (or th
 - **No game nouns.** Code joins the engine only if a shipped game uses it and the next game plausibly would, and its API names nothing from either.
 - **One direction.** The engine never imports a game, the harness or the tests.
 - **No runtime dependencies.** No network calls from the engine.
-- **Rendering, not mechanics.**
+- **Foundations, not rules** (VISION rule 5, E-041). Foundations every game of a kind would rebuild belong here; a game's rules, content, AI, world generation and art stay the game's. Anything moved in from Forge Wilds is generalized: its nouns become data the game declares.
+- **Forge Wilds is read-only.** Briefs point at `/Users/matthewfontana/repos/forgewilds/apps/web/src` (written `FW:`) as source to generalize. Read it, never edit it, never run its servers.
 - **Zero allocations per frame** in steady state on render paths.
 - Stay inside the files your brief gives you. If you need a change in a file another workstream owns, write it down in your report instead of making it.
 - Stop only your own processes, by PID.
@@ -40,6 +41,13 @@ Your worktree may start from an old commit. First `git reset --hard main` (or th
   These are breaking: removing something, narrowing a parameter, changing or narrowing a return type, or adding a required parameter or field. A breaking change needs a PM ruling before you write it.
 - Before you commit a new public name, grep `api/*.api.txt` on origin/main and the STATUS notes of streams running alongside you for that name. A name exported twice from the root barrel is a collision.
 - A branch that changes the public API commits the updated `api/*.api.txt` (`pnpm api:update`), and the diff follows E-036's conventions. `pnpm check:api` fails otherwise. The integrator resolves `api/` conflicts by re-running `api:update` on the merged head, never by hand.
+
+## The 2.0 program (E-041)
+
+- The program plan is `docs/ROADMAP.md`; the target architecture is `docs/design/2.0/architecture.md` ("D1", cite its sections); the bar is `docs/design/2.0/bar.md` ("D2"). Read only the sections your brief names.
+- Every new module lands with: a harness demo page that is **not** Forge's style, a counted budget test (once `testing/budget.ts` exists; until then a fake-GPU call-count test), a README, ARCHITECTURE *Today*, a CHANGELOG line and `api/` updated.
+- Breaking a 1.x API is allowed only where your brief names it; everything else stays additive. The Last Rune's surface (the 2D harness pages) stays pixel-identical.
+- Speed: design the fast path in (retained, GPU-driven, views done once, no per-frame allocation); tuning can come later, shape cannot.
 
 ## Report back (under 400 words)
 

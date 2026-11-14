@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ThunderClap Foundation Pitch</title>
+<style>
+:root{--bg:#fbfaf7;--fg:#1d1d1b;--muted:#6b6a64;--line:#e4e1d8;--card:#ffffff;--accent:#b4521f;--accent-soft:#f6e7dc;--ok:#2f7a4a;--warn:#a26a00;--code:#f2efe8}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#151514;--fg:#ecebe6;--muted:#a19f96;--line:#2e2d2a;--card:#1d1d1b;--accent:#e9884f;--accent-soft:#3a2518;--ok:#6cc08a;--warn:#e0b04a;--code:#252421}}
+:root[data-theme="dark"]{--bg:#151514;--fg:#ecebe6;--muted:#a19f96;--line:#2e2d2a;--card:#1d1d1b;--accent:#e9884f;--accent-soft:#3a2518;--ok:#6cc08a;--warn:#e0b04a;--code:#252421}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif}
+main{max-width:860px;margin:0 auto;padding:48px 16px 96px}
+h1{font-size:2.1rem;line-height:1.15;margin:0 0 8px;letter-spacing:-.01em}
+h2{font-size:1.35rem;margin:56px 0 12px;padding-top:12px;border-top:1px solid var(--line)}
+h3{font-size:1.05rem;margin:28px 0 8px}
+p{margin:0 0 14px}
+.sub{color:var(--muted);margin-bottom:28px}
+.lede{font-size:1.15rem;line-height:1.55}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:16px 0}
+.decision{border-left:4px solid var(--accent)}
+.decision h3{margin-top:0}
+.rec{background:var(--accent-soft);border-radius:6px;padding:10px 14px;margin:10px 0 0}
+.tag{display:inline-block;font-size:.75rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--accent);margin-bottom:4px}
+table{border-collapse:collapse;width:100%;margin:12px 0 18px;font-size:.93rem}
+th,td{text-align:left;vertical-align:top;padding:8px 10px;border-bottom:1px solid var(--line)}
+th{font-weight:600;color:var(--muted);font-size:.82rem;text-transform:uppercase;letter-spacing:.03em}
+.scroll{overflow-x:auto}
+details{border:1px solid var(--line);border-radius:10px;background:var(--card);margin:12px 0;padding:0 18px}
+details[open]{padding-bottom:12px}
+summary{cursor:pointer;padding:14px 0;font-weight:600}
+code{background:var(--code);padding:1px 5px;border-radius:4px;font-size:.88em}
+pre{background:var(--code);padding:14px;border-radius:8px;overflow-x:auto;font-size:.82rem;line-height:1.45}
+ul,ol{padding-left:22px;margin:0 0 14px}
+li{margin:4px 0}
+.phase{display:grid;grid-template-columns:110px 1fr;gap:4px 16px;padding:14px 0;border-bottom:1px solid var(--line)}
+.phase:last-child{border-bottom:0}
+.phase .when{color:var(--muted);font-size:.9rem}
+.phase b{display:block}
+.layers{display:grid;gap:6px;margin:16px 0}
+.layers div{border:1px solid var(--line);border-radius:8px;padding:10px 14px;background:var(--card)}
+.layers .game{border-color:var(--accent);background:var(--accent-soft)}
+.muted{color:var(--muted)}
+.ok{color:var(--ok);font-weight:600}.warn{color:var(--warn);font-weight:600}
+@media (max-width:600px){.phase{grid-template-columns:1fr}h1{font-size:1.7rem}}
+</style>
+</head>
+<body>
+<main>
+
+<div class="tag">Pitch for review · 2026-11-14</div>
+<h1>ThunderClap as the foundation for every game we make</h1>
+<p class="sub">Forge Wilds is the first large game it has to support. Prepared by the PM for both projects.</p>
+
+<p class="lede"><b>The pitch.</b> ThunderClap stops being a rendering framework that games bolt their own foundations onto, and becomes the foundation itself: rendering, worlds, characters, UI, input, VR, quality control, and the client–server seam. Every game, from a 2D puzzler to a voxel world in a headset, then writes only its rules, content and art. Forge Wilds is the proof at scale: about half of its client is already foundation code, and that code is better than what ThunderClap has today, so it moves into the engine, generalized, rather than being rebuilt.</p>
+
+<h2>Why now</h2>
+<ul>
+<li><b>We are building the same foundations twice.</b> Forge Wilds' client is 107k lines. About 60k of it is general-purpose: terrain streaming and meshing, procedural models, GPU-posed characters, one HUD for screen and headset, VR, quality tiers. ThunderClap is 9 days old and already has simpler versions of most of it.</li>
+<li><b>Each half is strong where the other is weak.</b> Forge has the scale engineering: a GPU-driven renderer that draws any amount of terrain in a fixed 46 GPU calls, an 8-byte vertex, tested on the iPad. ThunderClap has the breadth: 2D, glTF characters, a full post stack, shadows, GPU particles, sound, every page host, a clean module boundary and a release process.</li>
+<li><b>Neither is the foundation alone.</b> I measured ThunderClap drawing our real world on the iPad profile: 2.5× the CPU and 1.8× the GPU of today's client, and its voxel module can't hold our world. Forge's renderer, meanwhile, knows nothing about 2D, glTF or other games.</li>
+<li><b>The engine was designed before it knew about networked games.</b> Its rules make netcode, servers and world streaming "the game's job". A foundation for games at Forge's scale has to own the seam between client and server.</li>
+</ul>
+
+<h2>What the engine becomes</h2>
+<p>One renderer in two layers, a kit of modules a game picks from, and a game layer that holds only what makes that game itself.</p>
+<div class="layers">
+<div class="game"><b>Each game:</b> rules, content, art direction (its shaders), scenes, its server's rules. Forge Wilds keeps about 50k lines: net and play, panels, the world's look, its content adapters.</div>
+<div><b>Foundation modules (new or rebuilt from Forge):</b> streamed voxel worlds · procedural part models · GPU-posed characters (rigid or glTF-skinned) · UI described once, shown on screen and in a headset · input as intents, aimed by a ray · quality tiers and a load governor · the client side of networking</div>
+<div><b>Existing ThunderClap modules, kept:</b> 2D kit · glTF and animation · post stack · particles, sky, water, decals · audio · hosts (web, Electron, Capacitor, PWA) · saves · i18n</div>
+<div><b>Render core (rebuilt):</b> a retained, GPU-driven core that does the work once for every view (two eyes in VR cost one cull), with ThunderClap's simple per-frame calls on top so a 2D game never pays for it</div>
+<div><b>Rails:</b> counted-work tests, WebKit iPad as the reference device, a stereo path, reference scenes for 2D, 3D characters, voxel worlds and VR</div>
+</div>
+<p><b>What doesn't change in ThunderClap's vision:</b> no game nouns, games import the engine and never the reverse, no runtime dependencies, WebGPU and WebXR only, shader-first with asset files optional, one engine for 2D and 3D, and the goal of shipping a game in two weeks to a month. The Last Rune keeps its source and stays pixel-identical.</p>
+
+<h2>The decisions I need from you</h2>
+<p class="muted">Three. Each has my recommendation; a word is enough.</p>
+
+<div class="card decision">
+<h3>1. Change ThunderClap's rule 5 from “rendering, not mechanics” to “foundations, not rules”</h3>
+<p>Rule 5 today says a voxel mesher, a pathfinder or netcode is each game's own pipeline, “even when two games share it”. That rule blocks the whole pitch: under it, Forge keeps its world, models and characters, and the next game at its scale copies them.</p>
+<p>The new rule: anything every game of a kind would otherwise rebuild (world storage and streaming, meshing, light, characters, UI, the client side of networking) belongs in the engine. Rules, content, AI, world generation and art stay each game's. Rule 1 (no game nouns) still guards it: a module joins only when its API names nothing from any game.</p>
+<div class="rec"><b>Recommendation: yes.</b> It is the change that makes “the foundation for dozens of games” true.</div>
+</div>
+
+<div class="card decision">
+<h3>2. Does ThunderClap own the server side too?</h3>
+<p>Forge's strongest asset is its Rust server: an event-sourced, deterministic world with a scheduler, live areas, persistence, a generated protocol and an SDK that bots play through. Today none of that is ThunderClap's.</p>
+<table>
+<tr><th>Option</th><th>What it means</th></tr>
+<tr><td><b>A. Client side only</b></td><td>ThunderClap gains a networking client module (sessions over a transport the host supplies, snapshot buffers, interpolation, prediction and rollback, interest). Every game still writes its own server.</td></tr>
+<tr><td><b>B. Both sides, client first</b></td><td>A, then a sibling <code>thunderclap-server</code> made from Forge's Rust engine with the game taken out (log, scheduler, live areas, persistence, protocol generation, bot SDK). A game writes its rules; the engine runs them, saves them and streams them.</td></tr>
+<tr><td><b>C. A TypeScript server</b></td><td>A Node server that shares code with the client. Simpler for small games, but it throws away the Rust engine Forge spent 12 hardening rounds on.</td></tr>
+</table>
+<div class="rec"><b>Recommendation: B.</b> Build the client side in this program. Research the server half now, in parallel, and build it once the client foundation has proved itself. The engine still never opens a connection on its own: the host hands it one.</div>
+</div>
+
+<div class="card decision">
+<h3>3. When does Forge Wilds switch a module over?</h3>
+<p>You said the engine's performance can be tuned over time, and the vision must not be compromised. Forge's standing rule has been that no change may cost the iPad frame time. These pull against each other at the moment Forge switches a module to the engine.</p>
+<table>
+<tr><th>Option</th><th>What it means</th></tr>
+<tr><td><b>Strict parity</b></td><td>A module switches only when it costs nothing: counted work (GPU calls, allocations, bytes) equal or lower <i>and</i> measured CPU and GPU time within the day's noise. Safest for players; the program goes as slowly as the slowest module's tuning.</td></tr>
+<tr><td><b>Hard on design, soft on timing</b></td><td>Counted work, bundle size and memory stay hard limits, because they prove the architecture is right. Measured time may be somewhat worse at the switch, as long as the iPad still holds a steady 60 fps (GPU p95 ≤ 10 ms) with no new hitches. The time gap is logged as debt with an owner and closed by tuning.</td></tr>
+</table>
+<div class="rec"><b>Recommendation: hard on design, soft on timing.</b> It matches what you said: the foundation must be trustworthy (counted work can't regress, so nothing is built the slow way) while raw speed is tuned over time. The full gate is in “The speed bar” below.</div>
+</div>
+
+<h3>Calls I've made (tell me if you disagree)</h3>
+<ul>
+<li><b>VR is first-class in the engine from day one.</b> Every render-core change is tested with two views on a simulated headset. Forge's own headset work stays shelved until you lift it.</li>
+<li><b>The Last Rune stays pixel-identical</b> through the rewrite; only a bug fix you approve changes its look.</li>
+<li><b>Forge's game work continues only where nothing is moving.</b> Rules, content, the server and game UI words can keep going. The client's foundations (render, mesh, actors, UI framework, XR) are frozen except for fixes while they move.</li>
+<li><b>I run both repos as one program.</b> ThunderClap work follows its own PM rules (branches, integrators, its gate); Forge follows its PR flow. I own both roadmaps for this program.</li>
+<li><b>Pace:</b> 6 to 8 top-level agents across both repos, at most about 6 of them doing heavy builds at once. Raise or lower it as you like.</li>
+</ul>
+
+<h2>The plan at a glance</h2>
+<div class="card">
+<div class="phase"><div class="when">Phase 0<br>~1 week</div><div><b>Ground rules and rails</b>ThunderClap's vision and rules updated with your calls. WebKit testing, counted-work tests, reference scenes (2D, 3D characters, voxel world, stereo), bundle budgets per module. <code>createGame</code> split into a kit so games take only what they use.</div></div>
+<div class="phase"><div class="when">Phase 1<br>~3 weeks</div><div><b>The new render core</b>The retained, GPU-driven core, the work done once for all views, passes and targets built only when used, a camera-relative origin. ThunderClap's simple calls rebuilt on top; The Last Rune unchanged. <i>Done when</i> our world drawn through it meets the iPad floor. In parallel: research for the server half.</div></div>
+<div class="phase"><div class="when">Phase 2<br>~4 weeks</div><div><b>Foundations move in</b>In parallel, each with a demo scene: streamed voxel worlds, procedural models, GPU-posed characters, UI described once, input intents, quality governor, the networking client. Shadows and anti-aliasing reach the iPad.</div></div>
+<div class="phase"><div class="when">Phase 3<br>~3 weeks, overlaps 2</div><div><b>Forge Wilds switches over</b>One module at a time, in seam order: post and anti-aliasing, sky and weather and particles (with new sun shadows), input, UI, audio, terrain and world, characters and models, VR. Each switch deletes Forge's own copy in the same PR.</div></div>
+<div class="phase"><div class="when">Phase 4<br>after</div><div><b>The server side</b>If you choose B: <code>thunderclap-server</code> from Forge's Rust engine, and Forge's server moves onto it.</div></div>
+<div class="phase"><div class="when">Proof</div><div><b>A second game in two weeks</b>A small new 3D game built on the kit, holding only rules, content, scenes and shaders. That is ThunderClap's own goal, and the real test of the foundation.</div></div>
+</div>
+
+<h3>How we'll know it worked</h3>
+<ul>
+<li>Forge Wilds runs entirely on ThunderClap at or above the iPad floor, and its client shrinks from 107k to about 50k lines of game code.</li>
+<li>The Last Rune is pixel-identical and its bundle no larger.</li>
+<li>A new game reaches playable in two weeks with nothing in its repo but rules, content, scenes, shaders and a <code>createGame()</code> call.</li>
+<li>VR works for every game through the same path, tested on every core change.</li>
+</ul>
+
+<h3>The biggest risks</h3>
+<ul>
+<li><b>Generalizing costs speed.</b> Forge's terrain shader is 6–7 ms of an 8 ms iPad frame. Mitigation: the engine generates the vertex decode at build time and it must match today's shader token for token.</li>
+<li><b>ThunderClap is young and has never run on WebKit.</b> Mitigation: WebKit and iPad rails come first, in phase 0, before any code moves.</li>
+<li><b>Two repos, one cadence.</b> Mitigation: a <code>next</code> release channel and a local link, so Forge never waits on a publish.</li>
+<li><b>Bundle size.</b> Forge has about 30 KB of room. Mitigation: the kit split, and every module Forge adopts deletes at least its own size from Forge in the same PR.</li>
+</ul>
+
+<h2>The detail</h2>
+<p class="muted">For reference. Open what you need.</p>
+
+<details>
+<summary>The architecture's ten principles</summary>
+<ol>
+<li><b>One renderer, two layers.</b> A retained, GPU-driven core (buffer arenas, GPU culling, render bundles of indirect draws) under ThunderClap's immediate calls (<code>frame.sprite</code>, <code>frame.mesh</code>, <code>InstanceList</code>). A 50-sprite puzzle pays one upload and one sorted list; a voxel world pays only for what changed. <i>Rejected:</i> separate 2D and 3D renderers (two post, XR and test stacks); GPU-driven for everything (no gain for small games, harder to debug).</li>
+<li><b>Views are plural from the bottom.</b> Prepare once, draw each view. A stereo pair is one cull group. <i>Rejected:</i> render per eye, as ThunderClap does today.</li>
+<li><b>Pay only for what is used.</b> Passes, targets and attachments exist only when something records into them. The always-on emissive target is the spike's main GPU-cost suspect.</li>
+<li><b>Kit, not framework.</b> <code>createGame</code> composes services the game imports; nothing is mandatory. On/off flags alone still pull in all the code (169 KB gzip).</li>
+<li><b>Data in, no scene graph.</b> The game owns state; the engine owns buffers.</li>
+<li><b>Shader-first, asset-optional.</b> Games write WGSL; procedural geometry is first-class; glTF is an opt-in island. No WGSL <code>override</code> (the iPad's WebKit needs this).</li>
+<li><b>UI described once as data.</b> Presenters per surface (screen and in-world); the look is tokens, not parsed CSS.</li>
+<li><b>Input as actions, then intents; aim is always a ray.</b></li>
+<li><b>Counted work is the engine's product.</b> The WebKit iPad is the reference device; tests count GPU calls and allocations, since a shared machine can't gate wall time.</li>
+<li><b>Generalize, never copy.</b> Forge code moves only once its game nouns are declared data (for example, a vertex bitfield schema that generates the shader's decode).</li>
+</ol>
+</details>
+
+<details>
+<summary>The module map: what each module does, and where it comes from</summary>
+<div class="scroll"><table>
+<tr><th>Module</th><th>Job</th><th>From</th><th>Other games that use it</th></tr>
+<tr><td>core</td><td>Loop with swappable frame source (page, XR, Electron), optional fixed step, clocks</td><td>ThunderClap, plus Forge's clock-passed-down rule</td><td>Puzzlers and arenas (fixed step), networked games (client mode)</td></tr>
+<tr><td>platform, host, gpu</td><td>Pages and hosts; GPU device that rebuilds itself after loss</td><td>ThunderClap; device-loss recovery new</td><td>All</td></tr>
+<tr><td>render (core)</td><td>Retained draw sets, arenas, indirect draws, passes, views, targets from use, camera-relative origin</td><td>Forge's render model, generalized; ThunderClap's API on top</td><td>All</td></tr>
+<tr><td>render/2d</td><td>Sprites, tile layers, 2D camera, text in the world</td><td>ThunderClap</td><td>2D games, HUDs in 3D</td></tr>
+<tr><td>models (new)</td><td>Part trees as data → packed meshes, with motion from named channels</td><td>Forge's part-model interpreter (~2k lines)</td><td>Asset-free 3D (low-poly, toon, machines), editors</td></tr>
+<tr><td>actors (new)</td><td>Many animated characters at a fixed draw count; rigid or glTF-skinned</td><td>Forge's GPU-posed actors (14 calls, any count); ThunderClap's skinning</td><td>Character games, crowds, VR avatars</td></tr>
+<tr><td>voxel (rebuilt)</td><td>Sparse streamed sections, worker meshing, light, face classes, cave culling, raycast</td><td>Forge's mesher, worker pool, arenas, visibility (~6.7k lines); ThunderClap's small grid kept as a source</td><td>Block worlds, destructible arenas, voxel art, voxel puzzles</td></tr>
+<tr><td>terrain (later)</td><td>Heightfield and far LOD</td><td>New</td><td>Open-world 3D</td></tr>
+<tr><td>fx, post</td><td>Particles, sky, weather, water, decals; bloom, tone map, AA, AO, shadows</td><td>ThunderClap, with Forge's sky and weather where stronger</td><td>All 3D</td></tr>
+<tr><td>quality (new)</td><td>Device tiers and a load governor other modules register knobs with</td><td>Forge's governor</td><td>All</td></tr>
+<tr><td>input</td><td>Actions → game-declared intents; rays for every scheme; gestures; XR controllers; record and replay</td><td>ThunderClap, with Forge's intent seam</td><td>All</td></tr>
+<tr><td>ui</td><td>Specs as words; DOM and world presenters; token looks; head-following screen in VR</td><td>Forge's spec framework and world presenter (~9k); ThunderClap's layout regions and widgets</td><td>All; one HUD in VR</td></tr>
+<tr><td>xr</td><td>Sessions, views, controllers, hands, comfort</td><td>Forge's (further along) merged with ThunderClap's</td><td>Any VR game</td></tr>
+<tr><td>audio</td><td>Procedural sound, buses, spatial, music</td><td>ThunderClap</td><td>All</td></tr>
+<tr><td>net client (new, if decision 2)</td><td>Sessions over a host-supplied transport, snapshots, interpolation, prediction, interest</td><td>Forge's SDK and client, generalized</td><td>Any networked game</td></tr>
+<tr><td>testing</td><td>Fake GPU with counted work, golden traces, WebKit iPad, stereo path</td><td>Forge's rails, generalized</td><td>All</td></tr>
+<tr><td>kit</td><td><code>createGame</code> as a composer</td><td>ThunderClap</td><td>All</td></tr>
+</table></div>
+</details>
+
+<details>
+<summary>What stays in Forge Wilds, and the seam between them</summary>
+<p>About 50–55k of today's 107k lines stay: the networking session and protocol (until decision 2 moves the generic half), the world store's meaning and content table, play (controller, fights, tools, the Spire), ambient life and scenes, about 40 panel specs, all the art (the terrain painting shader, palettes, water look, sky values, creatures and their rigs), content adapters, settings values, and the wiring.</p>
+<pre>Forge                                    ThunderClap
+ChunkStore bytes + codec  ──putSection──▶ voxel world (workers, mesh, light, arenas, cull)
+BlockTable, VertexSchema  ──config─────▶ voxel (generated WGSL decode)
+terrain/water/foliage WGSL ─materials──▶ render core
+snapshot records          ──setRecord──▶ actors (pose compute, fixed draw count)
+content parts → PartModel ──compile────▶ models
+sky keys, climate values  ──set────────▶ fx/sky, weather
+panel specs               ──present────▶ ui (screen and world presenters)
+ActionSink                ◀──intents──── input
+rung list, tier values    ──register───▶ quality
+sound recipes             ──play───────▶ audio
+frame hook                ◀──loop────── core (client mode)</pre>
+<p><b>Rules:</b> ThunderClap never imports Forge. Forge never reaches into ThunderClap's internals. Only typed data crosses, with no allocation per frame. The clock is passed in.</p>
+</details>
+
+<details id="bar">
+<summary>The speed bar: what each module must meet</summary>
+<p>Every switch is measured on the WebKit iPad profile (2360×1640), with one kept world and one camera, in at least 5 interleaved A/B pairs, against same-day A/A runs that set the noise floor. The real iPad and a Quest 3 are checked by hand at the end.</p>
+<div class="scroll"><table>
+<tr><th>Gate</th><th>What</th><th>Pass</th><th>Under decision 3's recommendation</th></tr>
+<tr><td>G1</td><td>CPU per frame</td><td>Within noise (≥0.05 ms)</td><td>Soft: logged debt allowed</td></tr>
+<tr><td>G2</td><td>GPU per frame, same preset</td><td>Within noise (≥0.1 ms); live p95 ≤ 10 ms</td><td>Soft, but p95 ≤ 10 ms is hard</td></tr>
+<tr><td>G3</td><td>GPU calls per frame</td><td>≤ 46 clear, 58 storm, 48 Spire; same at 1.5k and 6k sections; one cull for two eyes</td><td>Hard</td></tr>
+<tr><td>G4</td><td>Allocations, clock reads per frame</td><td>0 and 0</td><td>Hard</td></tr>
+<tr><td>G5</td><td>Sections walked per frame</td><td>≤ held/60 + 1</td><td>Hard</td></tr>
+<tr><td>G6</td><td>Time to full view</td><td>Within 50 ms; no new frame over 50 ms</td><td>Soft on time; hitches hard</td></tr>
+<tr><td>G7</td><td>Edit-to-remesh latency</td><td>Within noise; ≤ 6 sections an edit</td><td>Soft on time; counts hard</td></tr>
+<tr><td>G8</td><td>Memory</td><td>GPU bytes ≤ today; 8 B vertex kept; no unbounded growth</td><td>Hard</td></tr>
+<tr><td>G9</td><td>Bundle</td><td>Net change ≤ 0 KB</td><td>Hard</td></tr>
+<tr><td>G10</td><td>Main thread per message</td><td>0 sections decoded on the main thread</td><td>Hard</td></tr>
+<tr><td>G11</td><td>Shaders</td><td>No WGSL <code>override</code></td><td>Hard</td></tr>
+<tr><td>G12</td><td>Pixels</td><td>Matches, or the PR names each change</td><td>Hard</td></tr>
+</table></div>
+<p><b>ThunderClap's own rails</b> (phase 0): a WebKit test project, a counted-work budget framework (~1k lines), bench rungs for 2D, a skinned crowd of 64, a streamed voxel world and stereo, bundle budgets per module, a tree-shaking check, 3D golden images. Six reference scenes: 2D (The Last Rune), characters, a lit arena, a voxel world, VR stereo, an idle HUD.</p>
+<p><b>New findings while setting the bar:</b> ThunderClap already allocates nothing and reads no clock per frame. It fails on GPU calls, which grow with what's visible (1,366 at 1,500 meshes, 5,358 at 6,000, doubled for two eyes) against Forge's flat 46. It ran in WebKit for the first time with no errors. WebKit's clock only resolves to 1 ms, so CPU times must be batch totals; the spike's 1.0 ms reading for Forge has the same flaw, and the terrain GPU gap (2.9 vs 5.1 ms) must be re-measured back to back before any terrain decision.</p>
+</details>
+
+<details>
+<summary>The evidence: what the three research tracks measured</summary>
+<h3>Today's client vs ThunderClap drawing our world (WebKit, iPad profile, 3 interleaved runs)</h3>
+<div class="scroll"><table>
+<tr><th></th><th>CPU / frame</th><th>GPU / frame</th><th>Full view</th><th>Terrain memory</th></tr>
+<tr><td>Forge today, bare look*</td><td>1.0 ms</td><td>2.9 ms</td><td>~1.0 s</td><td>40 MB</td></tr>
+<tr><td>Our mesher through ThunderClap's renderer</td><td>2.6 ms</td><td>5.1 ms</td><td>~1.0 s</td><td>61 MB</td></tr>
+<tr><td>ThunderClap's own voxel module</td><td>2.4 ms</td><td>6.3 ms</td><td>~4.6 s</td><td>307 MB</td></tr>
+</table></div>
+<p class="muted">* Live readings, not back to back; WebKit's 1 ms clock makes the CPU column coarse. Re-measured in phase 0.</p>
+<p>Why: ThunderClap re-records one draw per mesh every frame, with a CPU cull and sort per view and per eye; each mesh owns its index buffer; a second colour target is always written. Forge's GPU decides visibility and issues draws itself (46 calls flat), with an 8-byte vertex against ThunderClap's 48. No WebKit-specific breakage was found, and GPU timestamps work in WebKit.</p>
+<h3>ThunderClap's maturity</h3>
+<ul>
+<li>About 9 days old; 1,207 commits; 643 unit tests pass on a fake GPU. Release engineering is solid (provenance, an API-change gate).</li>
+<li>Never run on WebKit or a real device. Its 3D, voxel and VR half has no game using it; The Last Rune is 2D. No performance gate.</li>
+<li>Bundle (gzip): <code>createGame</code> 169 KB (everything); render 50; post 30; audio 26; ui 68.</li>
+</ul>
+<h3>Forge's client</h3>
+<ul>
+<li>107k lines: 40% general engine code (17k of it shelved VR), 16% voxel and model tech, 44% game. Recent churn is all in game code.</li>
+<li>Never built: anti-aliasing (the most visible gap), sun shadows, GPU particles, device-loss recovery, gamepad on screens, key rebinding.</li>
+</ul>
+<p class="muted">Full reports: A-engine.md, B-client.md, C-spike.md, D1-architecture.md, D2-parity.md beside this file.</p>
+</details>
+
+<details>
+<summary>The render core, in more depth</summary>
+<ul>
+<li><b>Draw sets.</b> Every draw lands in a set: a pipeline, an instance layout, a source of instances, a cull mode. Static sets live in render bundles; dynamic sets upload only dirty ranges; large sets are GPU-culled. The immediate API fills one transient set per material and mesh each frame.</li>
+<li><b>Arenas and layouts.</b> Shared vertex and index arenas, custom vertex and instance layouts (packed integers allowed), one shared quad index buffer.</li>
+<li><b>Indirect drawing.</b> Bundles of indirect draws are the baseline because WebKit lacks multi-draw; multi-draw is used only where the device has it.</li>
+<li><b>Passes.</b> Named passes; drawables can be opaque, cast shadows and receive each view's camera. A declared pass list, not a frame graph, until a third game needs more.</li>
+<li><b>Stereo once.</b> One cull, one upload and one shadow pass for both eyes.</li>
+<li><b>Camera-relative origin</b> so large worlds keep precision.</li>
+<li><b>The Last Rune's guarantees:</b> source-compatible (its imports checked as an allow-list), all 86 screenshots pixel-identical, a call-trace diff against 1.3, bundle at most +2 KB.</li>
+</ul>
+</details>
+
+<details>
+<summary>How the work runs</summary>
+<ul>
+<li>I'm PM for both repos for this program. ThunderClap work runs by its own PM handbook (branches, integrators, its gate, its docs owned by the PM); Forge work by its PR flow and local gate.</li>
+<li>Each phase is split into steps of 1–3 hours of agent time, in waves that own disjoint files, so agents never wait on each other's merges.</li>
+<li>Every step proves itself on the reference scenes and its counted-work tests; an evaluator agent plays Forge after each switch, in place of a playtest.</li>
+<li>Your decisions land first as small docs changes: ThunderClap's VISION.md and DECISIONS.md, and Forge's VISION.md and ROADMAP.md.</li>
+</ul>
+</details>
+
+</main>
+</body>
+</html>
