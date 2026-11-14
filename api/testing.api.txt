@@ -58,6 +58,11 @@ class FakeAudioContext {
     mediaSources: FakeAudioMediaSource[];
     onstatechange: (() => void) | null;
     stateCalls: ('suspend' | 'resume')[];
+    readonly ios: boolean;
+    gesture: boolean;
+    resumes: number;
+    refused: number;
+    silentStarts: number;
     constructor(opts?: FakeAudioContextOptions);
     advance(seconds: number): void;
     asAudioContext(): AudioContext;
@@ -85,6 +90,8 @@ class FakeAudioContext {
         data: Float32Array<ArrayBuffer>[];
         copyToChannel(src: Float32Array, ch: number): void;
     };
+    inGesture<T>(fn: () => T): T;
+    setState(state: AudioContextState | 'interrupted'): void;
     resume(): Promise<void>;
     suspend(): Promise<void>;
     close(): Promise<void>;
@@ -96,6 +103,7 @@ interface FakeAudioContextOptions {
     spatial?: boolean;
     stereoPanner?: boolean;
     sampleRate?: number;
+    ios?: boolean;
 }
 
 ## FakeAudioConvolver

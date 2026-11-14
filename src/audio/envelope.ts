@@ -138,3 +138,85 @@ export function scheduleEnvelope(
   scheduleSegments(param, segs, start);
   return start + segs[segs.length - 1]!.t;
 }
+
+/** A sound's loudness over its whole length: `env` from `at` seconds, at `peak`, let go `gate` seconds after `at`. */
+export interface EnvelopeShape {
+  env: Envelope;
+  gate: number;
+  /** Seconds into the sound the shape starts. Default 0. */
+  at?: number;
+  /** Default 1. */
+  peak?: number;
+}
+
+/** One part's own envelope, gate and level: what `envelopeWindow` cuts from a shape. */
+export interface EnvelopeWindow {
+  env: Envelope;
+  gate: number;
+  /** The shape's level where the part starts (its layer's gain scale). */
+  level: number;
+}
+
+/** The quick stop a window closing before its shape lets go ends in, seconds. */
+const QUICK = 0.006;
+
+/**
+ * The window [`start`, `start + dur`] of `shape`, as a part's own envelope: a layered sound whose
+ * parts start late or end early (a tone at 0.1 s for 0.05 s under the sound's one strike) plays each
+ * under the stretch of the shape it overlaps, not a fresh attack. Entering mid-decay starts at the
+ * shape's level and falls to its sustain on time; entering after the gate plays the rest of the
+ * release; a window closing before the gate stops quickly (6 ms).
+ */
+export function envelopeWindow(shape: EnvelopeShape, start: number, dur: number): EnvelopeWindow {
+  const e = shape.env;
+  const s = start - (shape.at ?? 0);
+  const peak = shape.peak ?? 1;
+  const a = Math.max(0, e.attack);
+  const h = Math.max(0, e.hold ?? 0);
+  const d = Math.max(0, e.decay);
+  const curve = e.curve ?? 'exp';
+  if (s >= shape.gate) {
+    // Already letting go: the rest of the release.
+    const level = envelopeValueAt(e, s, shape.gate) * peak;
+    const rest = Math.max(QUICK, Math.min(dur, shape.gate + e.release - s));
+    return {
+      env: { attack: 0.001, decay: 0, sustain: 1, release: rest, curve },
+      gate: 0.001,
+      level,
+    };
+  }
+  let env: Envelope;
+  let level = peak;
+  if (s <= 0) env = { attack: a, hold: h, decay: d, sustain: e.sustain, release: e.release, curve };
+  else if (s < a)
+    env = { attack: a - s, hold: h, decay: d, sustain: e.sustain, release: e.release, curve };
+  else if (s < a + h)
+    env = {
+      attack: 0.001,
+      hold: a + h - s,
+      decay: d,
+      sustain: e.sustain,
+      release: e.release,
+      curve,
+    };
+  else if (s < a + h + d) {
+    level = envelopeValueAt(e, s, shape.gate) * peak;
+    env = {
+      attack: 0.001,
+      decay: a + h + d - s,
+      sustain: Math.min(1, (e.sustain * peak) / Math.max(level, 1e-6)),
+      release: e.release,
+      curve,
+    };
+  } else {
+    level = e.sustain * peak;
+    env = { attack: 0.001, decay: 0, sustain: 1, release: e.release, curve };
+  }
+  const toGate = shape.gate - Math.max(0, s);
+  if (dur < toGate) return { env: { ...env, release: QUICK }, gate: dur, level };
+  return {
+    env: { ...env, release: Math.max(QUICK, Math.min(e.release, dur - toGate)) },
+    gate: toGate,
+    level,
+  };
+}

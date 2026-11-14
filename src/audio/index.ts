@@ -67,9 +67,12 @@ export {
 export { createDucker, type Ducker, type DuckerOptions } from './duck';
 export {
   type Envelope,
+  type EnvelopeShape,
+  type EnvelopeWindow,
   envelopeLength,
   envelopeSegments,
   envelopeValueAt,
+  envelopeWindow,
   pluck,
   type Segment,
   scheduleEnvelope,

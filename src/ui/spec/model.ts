@@ -102,6 +102,8 @@ export class SpecListState {
 
   /** How many rows high it stands for a count (-1: a fixed height, or a tabs' fixed width: a count never moves a box). */
   private readonly tall: (count: number) => number;
+  /** Its content's height is its count's (a list: a fixed-height one too scrolls by it). */
+  private readonly counted: boolean;
 
   constructor(
     model: SpecModel,
@@ -109,12 +111,14 @@ export class SpecListState {
     node: number,
     fields: readonly string[],
     tall: (count: number) => number,
+    counted = false,
   ) {
     this.model = model;
     this.id = id;
     this.node = node;
     this.fields = fields;
     this.tall = tall;
+    this.counted = counted;
     const index = new Map<string, number>();
     for (let i = 0; i < fields.length; i++) index.set(fields[i]!, i);
     this.fieldIndex = index;
@@ -144,8 +148,11 @@ export class SpecListState {
       }
       if (same) return false;
     }
-    // A list as tall as its rows (up to its maxRows), or tabs as wide as their options: the boxes move.
-    if (held.length !== n && this.tall(held.length) !== this.tall(n)) this.model.relayout = true;
+    // A list as tall as its rows (up to its maxRows), or tabs as wide as their options: the boxes
+    // move. A list's content is as tall as its rows, so any new count lays out again (its scroll
+    // height and a tail's end follow it, ws/ui-input-fit).
+    if (held.length !== n && (this.counted || this.tall(held.length) !== this.tall(n)))
+      this.model.relayout = true;
     this.gen++;
     for (let i = 0; i < n; i++) {
       const k = keys[i]!;
@@ -240,7 +247,14 @@ export class SpecModel {
               Math.min(maxRowsAt(spec, this, node), Math.ceil(count / cols))
           : (count: number): number => count;
 
-      const l = new SpecListState(this, spec.listIds[i]!, node, spec.fields[i]!, tall);
+      const l = new SpecListState(
+        this,
+        spec.listIds[i]!,
+        node,
+        spec.fields[i]!,
+        tall,
+        def.k === 'list',
+      );
       this.lists.push(l);
       this.byList.set(l.id, l);
     }

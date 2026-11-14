@@ -1127,6 +1127,38 @@ flat screen, a touch screen and in a headset. All additive: a spec without them 
 
 `harness/ui-fit.html` (e2e `ui-fit`) draws one such panel on the page and on a bare-device surface.
 
+### Game fit, round two (ws/ui-input-fit)
+
+- **Writes.** The page presenter keeps each part's last box and writes only what changed: a list
+  laid out again with nothing moved writes nothing. A window list rebinds only when its view comes
+  within half its `window` of the bound edge, and a pooled row goes to the end of the list, so
+  nothing after it moves. Measured in `src/ui/spec/input-fit.dom.test.ts`: a 60 px scroll of a
+  500-row window list went from 425 writes to 21.5, a chat line on a 40-row tail list from 767 to
+  48. `dom.writes` counts them.
+- **Lists.** A list's new count lays the panel out again (its content's height follows). A tail
+  list goes to its end after its rows are placed (the new end, not the old), and back to it when
+  a hidden log is shown again (WebKit resets a hidden scroller to 0); a player who scrolled up
+  stays there until they scroll back to the end.
+- **No forced layout.** `flash`, `ring` and `again` play again from their start through the
+  element's own `getAnimations()` (`currentTime = 0`, `play()`), never a class toggle with a
+  layout read in between. A flash's text set to `''` takes its class off.
+- **Keys.** Type-ahead calls `stopImmediatePropagation` on the keys it takes (a letter, `/`), so
+  the game's key handler never also sees them, skips a key already default-prevented, and asks
+  `DomOptions.holdTypeAhead(e)` first: true leaves the key to the game. A close key in the empty
+  field stops propagation too.
+- **Range.** A range says `input` while dragged and `change` once let go (a key is both at once),
+  on both presenters, and writes `--fill` (its value's share of the track, a percent) for the
+  game's CSS track.
+- **Submit.** A submit button's `tap` (a click, or its field's Enter) carries the field's text.
+- **Held.** `held` (and a held button's `up`) drops when the window loses focus or the browser
+  cancels the touches.
+- **Reduced motion.** `setSpecStill(true | false | null)` is the game's own setting (its options
+  menu) over the system's; `specStill()` reads it. Under it the host has `data-still` and no
+  transition or animation runs. `specEaseIn` is the curve a body slides out on.
+- **Classes.** `classes` maps `tcs-tab` (a tab button), `tcs-inner` (a list's content) and
+  `tcs-label` (a button's or tab's label: its own class now, styled as the label type, no longer
+  `tcs-t-label`).
+
 ## Tests
 
 `inventory.test.ts` covers the grid (shape, aria, clamping, hold to pick up, drop, cancel, `canDrop`, context hooks, the card on focus), the drag context (pad walk across grids, both-end `onMove`, pointer thresholds, the long press, `slotsTarget`), `placeCard`, the card, the radial and the context list. `hud.test.ts` covers the HUD widgets (DOM shape, aria, clamping, wrapping, heading offsets, the modal rule, pulse). `ui.test.ts` runs under happy-dom and covers theme var names, overlay mount and scaling,

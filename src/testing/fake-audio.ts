@@ -13,6 +13,12 @@ export interface FakeAudioContextOptions {
   stereoPanner?: boolean;
   /** Default 48000. */
   sampleRate?: number;
+  /**
+   * Follow iOS WebKit's gesture rule: `resume()` is refused (rejects) unless called inside a user
+   * gesture (`inGesture`, or `gesture` set), and only the silent unlock buffer started inside one
+   * counts (`silentStarts`). Default false: `resume()` always takes.
+   */
+  ios?: boolean;
 }
 
 export interface FakeAudioParamEvent {
@@ -90,6 +96,7 @@ export class FakeAudioSource extends FakeAudioNode {
     ctx.sources.push(this);
   }
   start(t = 0, offset?: number, duration?: number) {
+    if (this.ctx.gesture && this.isSilentUnlock) this.ctx.silentStarts++;
     this.startedAt = t;
     this.offset = offset ?? null;
     this.duration = duration ?? null;
@@ -197,7 +204,17 @@ export class FakeAudioContext {
   onstatechange: (() => void) | null = null;
   /** Calls to `suspend()` and `resume()`, in order (what a watchdog restart looks like). */
   stateCalls: ('suspend' | 'resume')[] = [];
+  /** It follows iOS's gesture rule (`FakeAudioContextOptions.ios`). */
+  readonly ios: boolean;
+  /** Inside a user gesture the browser honours now (`inGesture` sets it). */
+  gesture = false;
+  /** `resume()` calls, and those refused outside a gesture (`ios`). */
+  resumes = 0;
+  refused = 0;
+  /** Silent unlock buffers started inside a gesture (what unlocks iOS's output). */
+  silentStarts = 0;
   constructor(opts: FakeAudioContextOptions = {}) {
+    this.ios = opts.ios ?? false;
     if (opts.sampleRate !== undefined) this.sampleRate = opts.sampleRate;
     if (opts.stereoPanner === false) {
       (this as { createStereoPanner?: unknown }).createStereoPanner = undefined;
@@ -262,9 +279,33 @@ export class FakeAudioContext {
       },
     };
   }
-  async resume() {
+  /** Runs `fn` as a user gesture's handler (a tap, a key): `resume()` inside it takes on `ios`. */
+  inGesture<T>(fn: () => T): T {
+    const was = this.gesture;
+    this.gesture = true;
+    try {
+      return fn();
+    } finally {
+      this.gesture = was;
+    }
+  }
+  /** The state set from outside (a call, Siri: `'interrupted'`), told to `onstatechange` as a browser does. */
+  setState(state: AudioContextState | 'interrupted'): void {
+    this.state = state as AudioContextState;
+    this.onstatechange?.();
+  }
+  resume(): Promise<void> {
     this.stateCalls.push('resume');
+    this.resumes++;
+    // iOS decides at the call: inside the gesture's handler or not.
+    if (this.ios && !this.gesture) {
+      this.refused++;
+      return Promise.reject(new Error('NotAllowedError: resume() outside a user gesture'));
+    }
+    const was = this.state;
     this.state = 'running';
+    if (this.ios && was !== 'running') this.onstatechange?.();
+    return Promise.resolve();
   }
   async suspend() {
     this.stateCalls.push('suspend');

@@ -98,6 +98,12 @@ export interface DomOptions {
    * letter). Default: the last pointer that went down on the page was a touch.
    */
   touching?: () => boolean;
+  /**
+   * Holds type-ahead back for a key (true: the key is not the type-ahead field's): the game's own
+   * text input has the keys (a field drawn elsewhere). A key the field takes is stopped
+   * (`stopImmediatePropagation`): the game's key handlers never see it.
+   */
+  holdTypeAhead?: (e: KeyboardEvent) => boolean;
 }
 
 const STYLE_ID = 'tc-spec-style';
@@ -108,7 +114,8 @@ function css(): string {
   let types = '';
   for (const [style, t] of Object.entries(SPEC_TYPE)) {
     const fam = t.family === 'serif' ? 'serif' : t.family === 'mono' ? 'mono' : 'sans';
-    types += `.tcs-t-${style}{font:${t.weight} calc(${t.px}px * var(--tcs-scale) * var(--tcs-text)) var(--tcs-font-${fam})}`;
+    const sel = style === 'label' ? '.tcs-t-label,.tcs-label' : `.tcs-t-${style}`;
+    types += `${sel}{font:${t.weight} calc(${t.px}px * var(--tcs-scale) * var(--tcs-text)) var(--tcs-font-${fam})}`;
   }
   return `
 .tcs-host{position:relative;color:var(--tcs-text);font-family:var(--tcs-font-sans);box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -170,6 +177,7 @@ textarea.tcs-field{padding-top:6px}
 .tcs-host[data-given] *{pointer-events:none!important}
 .tcs-icon .tcs-ring{border-radius:50%}
 @media (prefers-reduced-motion:reduce){.tcs-host *{transition:none!important;animation-duration:1ms!important}}
+.tcs-host[data-still] *{transition:none!important;animation-duration:1ms!important}
 ${types}`;
 }
 
@@ -198,7 +206,22 @@ interface Part {
   input: HTMLInputElement | HTMLTextAreaElement | null;
   /** A text's term. */
   term: HTMLElement | null;
+  /** What was last written of its place (CSS px; NaN: nothing yet): only a change is written. */
+  readonly box: Float64Array;
 }
+
+/** `Part.box` slots. */
+const B_LEFT = 0;
+const B_TOP = 1;
+const B_W = 2;
+const B_H = 3;
+const B_LINE = 4;
+const B_LINES = 5;
+const B_ONE = 6;
+const B_INNER = 7;
+const B_TERM = 8;
+const B_FILL = 9;
+const B_N = 10;
 
 /** A view: the panel's, or a list row's (its words by node index; others null). */
 interface View {
@@ -230,6 +253,10 @@ interface ListView {
   /** The row that keeps its place on the screen through a slide, and its top before (units). */
   anchor: string | null;
   anchorY: number;
+  /** It follows its end (`SpecList.tail`), it is at its end (a player's scroll says), and it is to be put there once placed. */
+  readonly tail: boolean;
+  pinned: boolean;
+  due: boolean;
 }
 
 /** Text with `{w}…{/}` runs lit (each run's class `lit`). */
@@ -320,6 +347,22 @@ export class DomPresenter implements SpecPresenter {
   };
   /** The last pointer down on the page was a touch. */
   private lastTouch = false;
+  /** The host's size as last written (CSS px). */
+  private hostW = Number.NaN;
+  private hostH = Number.NaN;
+  /** Motion stilled (`specStill`) as last written on the host. */
+  private still = false;
+  /** Each element's `again`, flash and ring animations, kept: one that ran out plays again from its start. */
+  private readonly kept = new WeakMap<Element, Animation[]>();
+  /** Frames left putting pinned tails at their ends (WebKit drops a write to a host just shown). */
+  private settling = 0;
+  private readonly settleFrame = (): void => {
+    for (let o = 0; o < this.lists.length; o++) {
+      const lv = this.lists[o]!;
+      if (lv.tail && lv.pinned) this.toEnd(lv);
+    }
+    if (--this.settling > 0) this.raf(this.settleFrame);
+  };
 
   constructor(panel: SpecPanel, host: HTMLElement, opts: DomOptions = {}) {
     this.p = panel;
@@ -366,6 +409,9 @@ export class DomPresenter implements SpecPresenter {
         slideFrom: Number.NaN,
         anchor: null,
         anchorY: 0,
+        tail: c.kind[node] === K_LIST && (c.nodes[node] as SpecList).tail === true,
+        pinned: true,
+        due: false,
       });
     }
     this.build(0, this.top, host);
@@ -408,6 +454,13 @@ export class DomPresenter implements SpecPresenter {
     const c = this.p.spec;
     const m = this.m;
     if (this.p.given !== this.given) this.giveWay(this.p.given);
+    const still = specStill();
+    if (still !== this.still) {
+      this.still = still;
+      this.host.toggleAttribute('data-still', still);
+      this.writes++;
+    }
+    const wasShown = this.shown;
     if (this.fresh) {
       this.fresh = false;
       // Every key held, every list whole.
@@ -437,8 +490,69 @@ export class DomPresenter implements SpecPresenter {
       const lv = this.lists[o]!;
       if (!Number.isNaN(lv.slideFrom)) this.slide(lv);
       else if (relaid && lv.win >= 0) this.rebind(lv);
+      // A tail at its end goes to its new end once its content is placed (a log's new line).
+      if (lv.tail && lv.pinned && (lv.due || relaid)) this.toEnd(lv);
     }
+    // Shown again: a pinned tail is put at its end over the next frames too (WebKit's scroll reset).
+    if (this.shown && !wasShown) this.settle();
     if (m.focusing !== undefined) this.focusField(m.focusing);
+  }
+
+  /** A tail list at its end: its scroll put there (written only when it isn't). */
+  private toEnd(lv: ListView): void {
+    const i = lv.node;
+    if (!this.shown || this.p.boxes.on[i] !== 1) return;
+    const el = this.top.parts[i]!.el;
+    // Hidden by the page (a host the game hid): kept due.
+    if (el.clientHeight === 0 && el.scrollHeight > 0) return;
+    lv.due = false;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 2) return;
+    el.scrollTop = el.scrollHeight;
+    this.p.boxes.scroll[i] = el.scrollTop / this.scale;
+    this.writes++;
+  }
+
+  /** Pinned tails put at their ends for the next two frames. */
+  private settle(): void {
+    if (this.settling > 0) return;
+    let any = false;
+    for (let o = 0; o < this.lists.length; o++) if (this.lists[o]!.tail) any = true;
+    if (!any || !this.raf(this.settleFrame)) return;
+    this.settling = 2;
+  }
+
+  private raf(f: () => void): boolean {
+    const w = this.doc.defaultView;
+    if (!w || typeof w.requestAnimationFrame !== 'function') return false;
+    w.requestAnimationFrame(f);
+    return true;
+  }
+
+  /**
+   * `el`'s class `name` on, its animations (and, `subtree`, its words') played again from their
+   * start when it already was: no forced layout. Kept, one that ran out plays again too.
+   */
+  private replay(el: Element, name: string, subtree: boolean): void {
+    if (!el.classList.contains(name)) {
+      el.classList.add(name);
+      return;
+    }
+    if (typeof el.getAnimations !== 'function') return;
+    let kept = this.kept.get(el);
+    if (!kept) {
+      kept = [];
+      this.kept.set(el, kept);
+    }
+    // One the page cancelled (its class gone, hidden) is idle: dropped, so the list doesn't grow.
+    for (let j = kept.length - 1; j >= 0; j--) if (kept[j]!.playState === 'idle') kept.splice(j, 1);
+    // CSS animations only: not a slide's (a script animation).
+    for (const a of el.getAnimations(subtree ? { subtree: true } : undefined))
+      if ((typeof CSSAnimation === 'undefined' || a instanceof CSSAnimation) && !kept.includes(a))
+        kept.push(a);
+    for (const a of kept) {
+      a.currentTime = 0;
+      a.play();
+    }
   }
 
   /**
@@ -568,6 +682,7 @@ export class DomPresenter implements SpecPresenter {
       marks: null,
       input: null,
       term: null,
+      box: new Float64Array(B_N).fill(Number.NaN),
     };
   }
 
@@ -596,7 +711,7 @@ export class DomPresenter implements SpecPresenter {
         part = this.part(el);
         if (b.icon) btn.appendChild(glyph(doc, { glyph: b.icon }));
         if (b.text !== undefined) {
-          part.text = this.span('tcs-label tcs-t-label', btn);
+          part.text = this.span('tcs-label', btn);
           if (!isBind(b.text)) part.text.textContent = b.text;
         }
         if (b.keyLabel !== undefined) {
@@ -715,7 +830,7 @@ export class DomPresenter implements SpecPresenter {
         el.setAttribute('role', 'list');
         part = this.part(el);
         part.inner = doc.createElement('div');
-        part.inner.className = 'tcs-inner';
+        part.inner.className = this.cls('tcs-inner');
         el.appendChild(part.inner);
         break;
       }
@@ -730,7 +845,7 @@ export class DomPresenter implements SpecPresenter {
         if (c.scrolls[i] === 1) {
           el.classList.add('tcs-scroll');
           part.inner = doc.createElement('div');
-          part.inner.className = 'tcs-inner';
+          part.inner.className = this.cls('tcs-inner');
           el.appendChild(part.inner);
         }
         if (k === K_GRID && !node.label) el.setAttribute('role', 'group');
@@ -784,9 +899,18 @@ export class DomPresenter implements SpecPresenter {
       this.writes++;
     }
     if (this.opts.fit !== 'host') {
-      host.width = `${bx.w[0]! * s}px`;
-      host.height = `${bx.h[0]! * s}px`;
-      this.writes += 2;
+      const w = bx.w[0]! * s;
+      const h = bx.h[0]! * s;
+      if (w !== this.hostW) {
+        this.hostW = w;
+        host.width = `${w}px`;
+        this.writes++;
+      }
+      if (h !== this.hostH) {
+        this.hostH = h;
+        host.height = `${h}px`;
+        this.writes++;
+      }
     }
     this.placeView(this.top, 0, c.n);
     for (let o = 0; o < this.lists.length; o++) this.placeRows(this.lists[o]!);
@@ -813,8 +937,10 @@ export class DomPresenter implements SpecPresenter {
           this.writes++;
         }
       } else if (!on) {
-        part.el.setAttribute('data-off', '');
-        this.writes++;
+        if (!part.el.hasAttribute('data-off')) {
+          part.el.setAttribute('data-off', '');
+          this.writes++;
+        }
         continue;
       } else if (part.el.hasAttribute('data-off')) {
         part.el.removeAttribute('data-off');
@@ -823,29 +949,48 @@ export class DomPresenter implements SpecPresenter {
       const p = c.parent[i]!;
       // The row's root sits at its cell (placed by `placeRows`).
       const rowRoot = view.key !== null && (p === -1 || c.kind[p] === K_LIST);
+      const box = part.box;
       if (!rowRoot) {
         const ox = p === -1 ? 0 : bx.x[p]!;
         const oy = p === -1 ? 0 : bx.y[p]!;
-        st.left = `${(bx.x[i]! - ox) * s}px`;
-        st.top = `${(bx.y[i]! - oy) * s}px`;
-        this.writes += 2;
+        this.px(st, box, B_LEFT, (bx.x[i]! - ox) * s);
+        this.px(st, box, B_TOP, (bx.y[i]! - oy) * s);
       }
-      st.width = `${bx.w[i]! * s}px`;
-      st.height = `${bx.h[i]! * s}px`;
-      this.writes += 2;
+      this.px(st, box, B_W, bx.w[i]! * s);
+      this.px(st, box, B_H, bx.h[i]! * s);
       const k = c.kind[i]!;
       if (k === K_TEXT) {
         const lines = bx.lines[i]!;
-        st.lineHeight = `${bx.lineH[i]! * s}px`;
-        st.setProperty('-webkit-line-clamp', String(lines));
-        part.el.toggleAttribute('data-one', lines === 1 && c.termW[i] === 0);
-        if (part.term) part.term.style.width = `${bx.termW[i]! * s}px`;
-        this.writes += 3;
+        this.px(st, box, B_LINE, bx.lineH[i]! * s);
+        if (box[B_LINES] !== lines) {
+          box[B_LINES] = lines;
+          st.setProperty('-webkit-line-clamp', String(lines));
+          this.writes++;
+        }
+        const one = lines === 1 && c.termW[i] === 0 ? 1 : 0;
+        if (box[B_ONE] !== one) {
+          box[B_ONE] = one;
+          part.el.toggleAttribute('data-one', one === 1);
+          this.writes++;
+        }
+        if (part.term) this.px(part.term.style, box, B_TERM, bx.termW[i]! * s);
       } else if (part.inner && k !== K_LIST) {
-        part.inner.style.height = `${Math.max(bx.content[i]!, bx.h[i]!) * s}px`;
-        this.writes++;
+        this.px(part.inner.style, box, B_INNER, Math.max(bx.content[i]!, bx.h[i]!) * s);
       } else if (k === K_TABS) this.placeTabs(i);
     }
+  }
+
+  /** One place of a word (`Part.box` slot `slot`) at `v` CSS px: written only when it moved. */
+  private px(st: CSSStyleDeclaration, box: Float64Array, slot: number, v: number): void {
+    if (box[slot] === v) return;
+    box[slot] = v;
+    const css = `${v}px`;
+    if (slot === B_LEFT) st.left = css;
+    else if (slot === B_TOP) st.top = css;
+    else if (slot === B_W || slot === B_TERM) st.width = css;
+    else if (slot === B_H || slot === B_INNER) st.height = css;
+    else st.lineHeight = css;
+    this.writes++;
   }
 
   /** A list's content height and each row at its cell. */
@@ -856,8 +1001,7 @@ export class DomPresenter implements SpecPresenter {
     const i = lv.node;
     if (c.kind[i] === K_TABS) return;
     const part = this.top.parts[i]!;
-    part.inner!.style.height = `${bx.content[i]! * s}px`;
-    this.writes++;
+    this.px(part.inner!.style, part.box, B_INNER, bx.content[i]! * s);
     const keys = this.m.lists[lv.ord]!.keys;
     const first = c.first[i]!;
     const head = c.head[i]!;
@@ -871,12 +1015,12 @@ export class DomPresenter implements SpecPresenter {
       // Outside its window: not bound.
       if (!v) continue;
       const st = v.el!.style;
+      const box = v.parts[v.head ? head : first]!.box;
       const x = cols === 1 ? 0 : (r % cols) * (bx.cellW[i]! + gap);
       const y = tops ? tops[r]! : Math.floor(r / cols) * (bx.rowH[i]! + gap);
       v.y = y;
-      st.left = `${x * s}px`;
-      st.top = `${y * s}px`;
-      this.writes += 2;
+      this.px(st, box, B_LEFT, x * s);
+      this.px(st, box, B_TOP, y * s);
       if (v.head) this.placeView(v, head, headEnd);
       else this.placeView(v, first, end);
     }
@@ -905,11 +1049,12 @@ export class DomPresenter implements SpecPresenter {
     } else for (let j = 0; j < n; j++) out[j] = t.optionW;
     let x = 0;
     for (let j = 0; j < n; j++) {
-      const st = lv.byKey.get(l.keys[j]!)!.el!.style;
-      st.left = `${x * this.scale}px`;
-      st.width = `${cut(out[j]!) * this.scale}px`;
+      const o = lv.byKey.get(l.keys[j]!)!;
+      const st = o.el!.style;
+      const box = o.parts[i]!.box;
+      this.px(st, box, B_LEFT, x * this.scale);
+      this.px(st, box, B_W, cut(out[j]!) * this.scale);
       x += out[j]!;
-      this.writes += 2;
     }
   }
 
@@ -949,12 +1094,20 @@ export class DomPresenter implements SpecPresenter {
     return y + tall >= lv.lo && y <= lv.hi;
   }
 
-  /** The content a windowed list binds now (its view and `win` either side); true: it moved. */
+  /**
+   * The content a windowed list binds now (its view and `win` either side); true: it moved. With
+   * slack: the bound content moves only once the view comes within half a window of its edge, so
+   * a scroll rebinds a few rows now and then, not every row on every pixel.
+   */
   private windowAt(lv: ListView): boolean {
     const bx = this.p.boxes;
     const i = lv.node;
-    const lo = bx.scroll[i]! - lv.win;
-    const hi = bx.scroll[i]! + bx.h[i]! + lv.win;
+    const top = bx.scroll[i]!;
+    const bottom = top + bx.h[i]!;
+    const half = lv.win / 2;
+    if (top - half >= lv.lo && bottom + half <= lv.hi) return false;
+    const lo = top - lv.win;
+    const hi = bottom + lv.win;
     if (lo === lv.lo && hi === lv.hi) return false;
     lv.lo = lo;
     lv.hi = hi;
@@ -1033,9 +1186,8 @@ export class DomPresenter implements SpecPresenter {
     const part = this.top.parts[lv.node]!;
     const into = isTabs ? part.el : part.inner!;
     const scroller = part.el;
-    // Following its end (`tail`): at its end before, at its end after.
-    const tail = !scrolled && !isTabs && (c.nodes[lv.node] as SpecList).tail === true;
-    const atEnd = tail && scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2;
+    // Following its end (`tail`): at its end before, put at its end once placed (`apply`).
+    if (!scrolled && lv.tail && lv.pinned) lv.due = true;
     if (!scrolled && !isTabs && l.how === 'slide' && lv.byKey.size > 0) this.anchorOf(lv);
     if (!scrolled && lv.win >= 0) this.windowAt(lv);
     // Rows no longer listed (or out of the window) go back to their pools.
@@ -1050,6 +1202,11 @@ export class DomPresenter implements SpecPresenter {
         continue;
       lv.byKey.delete(key);
       v.el!.setAttribute('data-off', '');
+      // Pooled at the end: the rows listed keep their order without a move each.
+      if (v.el!.nextSibling !== null) {
+        into.appendChild(v.el!);
+        this.writes++;
+      }
       v.from = Number.NaN;
       v.y = Number.NaN;
       (v.head ? lv.headPool : lv.pool).push(v);
@@ -1098,10 +1255,11 @@ export class DomPresenter implements SpecPresenter {
       // The selected option.
       const sel = c.keyIndex.get((c.nodes[lv.node] as SpecTabs).selected.b)!;
       this.writeKey(sel);
-    } else if (!scrolled) {
-      if (l.how === 'top') scroller.scrollTop = 0;
-      else if (atEnd) scroller.scrollTop = scroller.scrollHeight;
-      if (l.how === 'top' || atEnd) this.p.boxes.scroll[lv.node] = scroller.scrollTop / this.scale;
+    } else if (!scrolled && l.how === 'top') {
+      scroller.scrollTop = 0;
+      this.p.boxes.scroll[lv.node] = 0;
+      lv.pinned = false;
+      lv.due = false;
     }
     // Rows moved: placed again (the layout may not have run: a fixed-height list).
     if (scrolled || !this.m.relayout) {
@@ -1124,12 +1282,12 @@ export class DomPresenter implements SpecPresenter {
     if (c.kind[lv.node] === K_TABS) {
       const btn = this.doc.createElement('button');
       btn.type = 'button';
-      btn.className = 'tcs-tab tcs-w';
+      btn.className = this.cls('tcs-tab tcs-w');
       btn.setAttribute('role', 'tab');
       btn.setAttribute('aria-selected', 'false');
       btn.setAttribute('data-tcs', String(lv.node));
       const part = this.part(btn);
-      part.text = this.span('tcs-label tcs-t-label', btn);
+      part.text = this.span('tcs-label', btn);
       v.parts[lv.node] = part;
       v.el = btn;
       into.appendChild(btn);
@@ -1241,11 +1399,8 @@ export class DomPresenter implements SpecPresenter {
           writeMarked(part.text!, s, this.litCls);
         else part.text!.textContent = s;
         if (k === K_TEXT && (c.nodes[i] as SpecText).flash) {
-          el.classList.remove('tcs-flash');
-          if (s !== '') {
-            void el.offsetWidth;
-            el.classList.add('tcs-flash');
-          }
+          if (s === '') el.classList.remove('tcs-flash');
+          else this.replay(el, 'tcs-flash', false);
         }
         return;
       }
@@ -1253,7 +1408,10 @@ export class DomPresenter implements SpecPresenter {
         if (k === K_METER) {
           this.writes--;
           this.meterValue(part, Number(v));
-        } else if (part.input && part.input.value !== String(v)) part.input.value = String(v);
+          return;
+        }
+        if (part.input && part.input.value !== String(v)) part.input.value = String(v);
+        if (k === K_RANGE) this.rangeFill(part, i, Number(v));
         return;
       case R_SHOW:
         // A row field's show (a top-level show moves boxes: the layout's).
@@ -1317,12 +1475,12 @@ export class DomPresenter implements SpecPresenter {
           ring.style.setProperty('--tcs-ring', String(n < 0 ? 0 : Math.min(n, 1)));
           return;
         }
-        ring.removeAttribute('data-ring');
         if (n > 0) {
           ring.style.setProperty('--tcs-ring-ms', `${n}ms`);
-          void ring.offsetWidth;
-          ring.setAttribute('data-ring', 'run');
+          if (ring.getAttribute('data-ring') === 'run') this.replay(ring, 'tcs-ring', false);
+          else ring.setAttribute('data-ring', 'run');
         } else if (n < 0) ring.setAttribute('data-ring', 'full');
+        else ring.removeAttribute('data-ring');
         return;
       }
       case R_KEY:
@@ -1335,9 +1493,7 @@ export class DomPresenter implements SpecPresenter {
         el.setAttribute('aria-valuetext', String(v));
         return;
       case R_AGAIN:
-        el.classList.remove('tcs-again');
-        void el.offsetWidth;
-        el.classList.add('tcs-again');
+        this.replay(el, 'tcs-again', true);
         return;
       default:
         if (role >= R_MARK && part.marks) {
@@ -1351,6 +1507,28 @@ export class DomPresenter implements SpecPresenter {
         // A bound line count or maxRows: the layout's.
         this.writes--;
     }
+  }
+
+  /** A range's track filled to its value: `--fill`, a percent (written only when it moves). */
+  private rangeFill(part: Part, i: number, v: number): void {
+    const r = this.p.spec.nodes[i] as SpecRange;
+    const f =
+      r.max > r.min ? (Math.min(r.max, Math.max(r.min, v || 0)) - r.min) / (r.max - r.min) : 0;
+    const pc = Math.round(f * 10000) / 100;
+    if (part.box[B_FILL] === pc) return;
+    part.box[B_FILL] = pc;
+    part.el.style.setProperty('--fill', `${pc}%`);
+    this.writes++;
+  }
+
+  /** The text of the field button `i` submits (`SpecButton.submits`), or null. */
+  private submitted(i: number): string | null {
+    const c = this.p.spec;
+    const n = c.nodes[i]!;
+    if (n.k !== 'button' || n.submits === undefined) return null;
+    const f = c.ids.indexOf(n.submits);
+    const input = f === -1 ? null : this.top.parts[f]?.input;
+    return input ? input.value : null;
   }
 
   private focusField(id: string | null): void {
@@ -1442,7 +1620,8 @@ export class DomPresenter implements SpecPresenter {
       return;
     }
     if ((node.k === 'button' || node.k === 'slot') && node.press === 'held') return;
-    this.emit(i, this.pressRow, 'tap', null, shift || undefined);
+    // A field's submit says the field's text (what it sends).
+    this.emit(i, this.pressRow, 'tap', this.submitted(i), shift || undefined);
   }
 
   private holds(i: number): boolean {
@@ -1467,7 +1646,8 @@ export class DomPresenter implements SpecPresenter {
   private typeAhead(e: KeyboardEvent): void {
     const c = this.p.spec;
     if (c.ahead === -1 || this.given || !this.shown || e.repeat || e.isComposing) return;
-    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return;
+    if (this.opts.holdTypeAhead?.(e) === true) return;
     const part = this.top.parts[c.ahead];
     const input = part?.input;
     if (!input || input.disabled || this.p.boxes.on[c.ahead] !== 1) return;
@@ -1480,7 +1660,9 @@ export class DomPresenter implements SpecPresenter {
       return;
     const f = c.nodes[c.ahead] as SpecField;
     if (e.key === '/') {
+      // The field's alone: the game's own keys never see it.
       e.preventDefault();
+      e.stopImmediatePropagation();
       input.focus();
       input.select();
       return;
@@ -1488,6 +1670,7 @@ export class DomPresenter implements SpecPresenter {
     if (e.key.length !== 1 || !/\p{L}/u.test(e.key)) return;
     if (f.closeKey !== undefined && e.code === f.closeKey) return;
     e.preventDefault();
+    e.stopImmediatePropagation();
     input.focus();
     const ch = f.kind === 'search' ? e.key.toLowerCase() : e.key;
     input.value += ch;
@@ -1500,9 +1683,34 @@ export class DomPresenter implements SpecPresenter {
     if (f.closeKey === undefined || e.code !== f.closeKey) return false;
     if (e.isComposing || e.keyCode === 229 || e.repeat) return false;
     if ((e.target as HTMLInputElement).value !== '' || this.touching()) return false;
+    // Stopped: the game's handler for the same key (the one that opens the panel) doesn't hear it.
     e.preventDefault();
+    e.stopPropagation();
     this.emit(i, row, 'close', null);
     return true;
+  }
+
+  /**
+   * A tail list scrolled: a player's scroll (shown, settled) says whether it stays at its end; a
+   * hidden one's, or one just shown (WebKit's reset to 0), is not heeded: put back at its end.
+   */
+  private tailScrolled(lv: ListView, el: HTMLElement): void {
+    if (el.clientHeight === 0) return;
+    const atEnd = el.scrollTop + el.clientHeight >= el.scrollHeight - 2;
+    if (this.settling > 0 || lv.due) {
+      if (lv.pinned && !atEnd) this.toEnd(lv);
+      return;
+    }
+    lv.pinned = atEnd;
+  }
+
+  /** Word `i`'s part in row `row` (or the panel's view), or null. */
+  private partAt(i: number, row: string | null): Part | null {
+    if (row === null) return this.top.parts[i] ?? null;
+    const lo = this.p.spec.inList[i]!;
+    if (lo === -1) return null;
+    const v = this.lists[this.p.spec.listOrd[lo]!]!.byKey.get(row);
+    return v?.parts[i] ?? null;
   }
 
   private letGo(): void {
@@ -1575,6 +1783,21 @@ export class DomPresenter implements SpecPresenter {
     };
     this.on('pointerup', release, this.doc);
     this.on('pointercancel', release, this.doc);
+    // The window lost focus, or the system took the fingers (a call, a gesture): nothing is held.
+    const drop = (): void => {
+      this.press.cancel();
+      this.letGo();
+      if (c.held && this.heldPointers > 0) {
+        this.heldPointers = 0;
+        this.emit(-1, null, 'held', false);
+      }
+    };
+    this.on('touchcancel', drop, this.doc);
+    const win = this.doc.defaultView;
+    if (win) {
+      win.addEventListener('blur', drop);
+      this.off.push(() => win.removeEventListener('blur', drop));
+    }
     this.on('click', (e) => {
       const [i, row] = this.pressTarget(e);
       if (i === -1) return;
@@ -1619,7 +1842,7 @@ export class DomPresenter implements SpecPresenter {
         for (let j = 0; j < c.n; j++) {
           const n = c.nodes[j]!;
           if (n.k === 'button' && n.submits === f.id && this.enabled(j, null)) {
-            this.emit(j, null, 'tap', null);
+            this.emit(j, null, 'tap', value);
             break;
           }
         }
@@ -1653,8 +1876,16 @@ export class DomPresenter implements SpecPresenter {
         const r = c.nodes[i] as SpecRange;
         const v = Number(input.value);
         if (!r.value.b.startsWith('row.')) this.m.follow(c.keyIndex.get(r.value.b)!, v, this);
-        this.emit(i, row, 'change', v);
+        const part = this.partAt(i, row);
+        if (part) this.rangeFill(part, i, v);
+        // While it is dragged: `input`; let go, the page's `change` says `change`.
+        this.emit(i, row, 'input', v);
       }
+    });
+    this.on('change', (e) => {
+      const [i, row] = this.target(e);
+      if (i === -1 || c.kind[i] !== K_RANGE) return;
+      this.emit(i, row, 'change', Number((e.target as HTMLInputElement).value));
     });
     // A scroll moves nothing: the boxes hear of it (a world presenter's hit test reads it).
     this.host.addEventListener(
@@ -1669,6 +1900,7 @@ export class DomPresenter implements SpecPresenter {
           if (k === K_LIST) {
             const lv = this.lists[c.listOrd[i]!]!;
             if (lv.win >= 0) this.rebind(lv);
+            if (lv.tail) this.tailScrolled(lv, e.target as HTMLElement);
           }
           this.emit(i, null, 'scroll', y);
         }

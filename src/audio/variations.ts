@@ -41,6 +41,7 @@ const SILENT: Voice = {
   sendCount: 0,
   occlusion: 0,
   doppler: 1,
+  sound: null,
 };
 
 export function createVariations(

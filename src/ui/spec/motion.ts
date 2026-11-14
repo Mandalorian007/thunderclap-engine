@@ -31,10 +31,25 @@ export function specEaseOut(t: number): number {
   return ease(t, 0, 0.58);
 }
 
-let reduce: MediaQueryList | null | undefined;
+/** CSS's `ease-in` at `t` in 0..1 (a body sliding out, a fade going). */
+export function specEaseIn(t: number): number {
+  return ease(t, 0.42, 1);
+}
 
-/** Motion is reduced (the system's setting): nothing slides. */
+let reduce: MediaQueryList | null | undefined;
+let still: boolean | null = null;
+
+/**
+ * The game's own reduced-motion setting (its options menu): true stills every panel, false moves
+ * them even with the system's set, null (the default) follows the system's.
+ */
+export function setSpecStill(on: boolean | null): void {
+  still = on;
+}
+
+/** Motion is reduced (the game's setting, `setSpecStill`, else the system's): nothing slides. */
 export function specStill(): boolean {
+  if (still !== null) return still;
   if (reduce === undefined)
     reduce =
       typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;

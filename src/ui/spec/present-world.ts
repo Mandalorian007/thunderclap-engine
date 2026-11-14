@@ -168,6 +168,8 @@ export class WorldPresenter implements SpecPresenter {
   private heldPointers = 0;
   /** A range being dragged (-1: none) and its row. */
   private dragNode = -1;
+  /** The dragged range's value when the drag began (a let-go that moved it says `change`). */
+  private dragFrom = Number.NaN;
   private dragRow: string | null = null;
   private hoverNode = -1;
   private hoverRow: string | null = null;
@@ -1569,7 +1571,16 @@ export class WorldPresenter implements SpecPresenter {
       return;
     }
     if ((node.k === 'button' || node.k === 'slot') && node.press === 'held') return;
-    this.emit(i, this.pressRow, 'tap', null, shift || undefined);
+    // A field's submit says the field's text (what it sends).
+    const sub = node.k === 'button' ? node.submits : undefined;
+    const f = sub === undefined ? -1 : this.p.spec.ids.indexOf(sub);
+    this.emit(
+      i,
+      this.pressRow,
+      'tap',
+      f === -1 ? null : this.fieldValue(f, null),
+      shift || undefined,
+    );
   }
 
   private letGo(): void {
@@ -1600,6 +1611,7 @@ export class WorldPresenter implements SpecPresenter {
       if (this.enabled(i, row)) {
         this.dragNode = i;
         this.dragRow = row;
+        this.dragFrom = this.rangeValue(i, c.nodes[i] as SpecRange, this.rowOf(i, row));
         this.dragTo(px);
       }
       return;
@@ -1641,6 +1653,11 @@ export class WorldPresenter implements SpecPresenter {
       this.emit(-1, null, 'held', false);
     const drag = this.dragNode;
     this.dragNode = -1;
+    if (drag !== -1) {
+      // Let go: `change`, as the page's range says (when the drag moved it).
+      const v = this.rangeValue(drag, c.nodes[drag] as SpecRange, this.rowOf(drag, this.dragRow));
+      if (v !== this.dragFrom) this.emit(drag, this.dragRow, 'change', v);
+    }
     this.markAt(this.pressNode, this.pressRow);
     if (drag !== -1 || !inside || Number.isNaN(px)) return;
     const i = this.hit(px, py);
@@ -1686,6 +1703,7 @@ export class WorldPresenter implements SpecPresenter {
     this.setRange(i, this.dragRow, n.min + Math.round((f * (n.max - n.min)) / n.step) * n.step);
   }
 
+  /** Range `i` set to `value` (stepped, clamped): `input`, and `change` too unless it is being dragged. */
   private setRange(i: number, row: string | null, value: number): void {
     const n = this.p.spec.nodes[i] as SpecRange;
     const v = Math.min(n.max, Math.max(n.min, Math.round(value / n.step) * n.step));
@@ -1694,7 +1712,8 @@ export class WorldPresenter implements SpecPresenter {
     if (!n.value.b.startsWith('row.'))
       this.p.model.follow(this.p.spec.keyIndex.get(n.value.b)!, v, this);
     this.markAt(i, row);
-    this.emit(i, row, 'change', v);
+    this.emit(i, row, 'input', v);
+    if (this.dragNode !== i) this.emit(i, row, 'change', v);
   }
 
   private rowIndex(i: number, row: string | null): number {
@@ -1867,7 +1886,7 @@ export class WorldPresenter implements SpecPresenter {
       for (let j = 0; j < c.n; j++) {
         const n: SpecNode = c.nodes[j]!;
         if (n.k === 'button' && n.submits === f.id && this.enabled(j, null)) {
-          this.emit(j, null, 'tap', null);
+          this.emit(j, null, 'tap', v);
           break;
         }
       }

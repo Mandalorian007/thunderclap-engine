@@ -36,7 +36,14 @@ export type {
   SpecRow,
   SpecValue,
 } from './model';
-export { SPEC_SLIDE_MAX, SPEC_SLIDE_MS, specEaseOut, specStill } from './motion';
+export {
+  SPEC_SLIDE_MAX,
+  SPEC_SLIDE_MS,
+  setSpecStill,
+  specEaseIn,
+  specEaseOut,
+  specStill,
+} from './motion';
 export {
   panel,
   SpecPanel,
