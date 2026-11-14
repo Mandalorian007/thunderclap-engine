@@ -14,6 +14,12 @@ export interface BloomSettings {
   knee: number;
   /** Multiplier on the emissive target (the main bloom source). */
   emissiveWeight: number;
+  /**
+   * Weight of the emissive target added to the scene colour in the composite (ws/post-fit;
+   * default 1). 0 skips the add (and its sample): for a game whose scene colour already holds
+   * its emissive and whose emissive target only feeds bloom.
+   */
+  emissiveAdd?: number;
   /** 0..1: how much each coarser level is added back on the way up (bigger = wider glow). */
   scatter: number;
   /** Mip levels (2..8). Changing it takes effect on next resize. */
@@ -643,6 +649,8 @@ export interface PostDepthInfo {
    * point without the divide by depth, and SSR's eye ray is the view axis.
    */
   ortho?: boolean;
+  /** The depth is reversed-Z (ws/post-fit): sky at 0, nearer is greater. */
+  reversedZ?: boolean;
 }
 
 /**
@@ -665,6 +673,14 @@ export interface PostFrameState {
   objectVelocity?: number;
   /** 1 when TAA reprojects by the frame's velocity target (ws/post-5), else 0. */
   taaVelocity?: number;
+  /**
+   * The jitter the velocity target carries (ws/post-fit; `PostView.velocityJitter`), in uv:
+   * TAA subtracts it from the motion it reads. Default 0.
+   */
+  velocityJitterX?: number;
+  velocityJitterY?: number;
+  /** 1 when the composite writes linear colour (`PostStackOptions.toSrgb: false`), else 0. */
+  linearOutput?: number;
 }
 
 /**
@@ -679,7 +695,7 @@ struct PostUniforms {
   enables: vec4f,    // bloom, fog, rays, vignette
   enables2: vec4f,   // grade, tonemap (0 none, 1 aces, 2 reinhard), dither, exposure
   bloom: vec4f,      // intensity, threshold, knee, emissiveWeight
-  bloom2: vec4f,     // scatter, -, -, -
+  bloom2: vec4f,     // scatter, emissive add weight (ws/post-fit), linear output (1: no sRGB encode), -
   fogColor: vec4f,   // rgb, density
   fog: vec4f,        // top, bottom, noiseScale, speed
   fog2: vec4f,       // lightScatter, falloff, -, -
@@ -692,7 +708,7 @@ struct PostUniforms {
   gamma: vec4f,
   gain: vec4f,
   grade: vec4f,      // saturation, contrast, -, -
-  quality: vec4f,    // ray samples, fog octaves, ortho projection (1, ws/post-4), -
+  quality: vec4f,    // ray samples, fog octaves, ortho projection (1, ws/post-4), reversed-Z depth (1, ws/post-fit)
   ao: vec4f,         // enabled (0 without depth), radius, intensity, bias
   ao2: vec4f,        // power, samples, proj x scale, proj y scale
   dof: vec4f,        // enabled (0 without depth), focus distance, focus range, max blur (uv of width)
@@ -702,7 +718,7 @@ struct PostUniforms {
   lut: vec4f,        // enabled, (size-1)/size, intensity, 0.5/size
   grain: vec4f,      // intensity, cell size (px), luminanceResponse, seed
   aberration: vec4f, // intensity (px), radialOnly, -, -
-  sharpen: vec4f,    // amount, -, -, -
+  sharpen: vec4f,    // amount, velocity-target jitter x, y (uv, TAA subtracts it; ws/post-fit), -
   outline: vec4f,    // enabled (0 without depth), thickness (scene px), depthThreshold, normalThreshold
   outlineColor: vec4f, // rgb, intensity
   // Post 3 (ws/post-3).
@@ -804,7 +820,7 @@ export function packPostUniforms(
     auto ? frame.autoExposure : g.exposure,
   );
   o = put(out, o, b.intensity, b.threshold, b.knee, b.emissiveWeight);
-  o = put(out, o, b.scatter, 0, 0, 0);
+  o = put(out, o, b.scatter, b.emissiveAdd ?? 1, frame?.linearOutput ?? 0, 0);
   o = put(out, o, f.color[0], f.color[1], f.color[2], f.density);
   o = put(out, o, f.top, f.bottom, f.noiseScale, f.speed);
   o = put(out, o, f.lightScatter, f.falloff, 0, 0);
@@ -827,7 +843,7 @@ export function packPostUniforms(
     Math.round(Math.min(64, Math.max(8, quality.raySamples))),
     Math.round(Math.min(5, Math.max(2, quality.fogOctaves))),
     depth?.ortho ? 1 : 0,
-    0,
+    depth?.reversedZ ? 1 : 0,
   );
   const a = s.ao;
   const d = s.dof;
@@ -876,7 +892,16 @@ export function packPostUniforms(
     gr.animated ? grainSeed : 0,
   );
   o = put(out, o, ab.intensity, +ab.radialOnly, 0, 0);
-  o = put(out, o, s.sharpen.amount, 0, 0, 0);
+  // Velocity-target jitter (ws/post-fit): only read by a TAA resolve on the velocity path.
+  const vj = depth !== null && frame !== null && (frame.taaVelocity ?? 0) > 0;
+  o = put(
+    out,
+    o,
+    s.sharpen.amount,
+    vj ? (frame.velocityJitterX ?? 0) : 0,
+    vj ? (frame.velocityJitterY ?? 0) : 0,
+    0,
+  );
   const outline = depth !== null && ol.enabled && quality.outline ? 1 : 0;
   // `thickness` is in output px; the outline pass runs at the scene size.
   const thick = depth ? (ol.thickness * width) / Math.max(1, depth.outputWidth) : ol.thickness;

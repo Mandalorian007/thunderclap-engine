@@ -885,6 +885,8 @@ export class RenderCore {
           auxMask & CORE_TARGET.roughMetal ? (this.auxAtt[1]!.view as GPUTextureView) : null;
         r.velocity =
           auxMask & CORE_TARGET.velocity ? (this.auxAtt[2]!.view as GPUTextureView) : null;
+        r.timestamps = target.timestamps;
+        r.reversedZ = pass.reversedZ;
         pass.resolve(encoder, r);
         resolved = true;
         first = false;
@@ -911,7 +913,8 @@ export class RenderCore {
       const depthFormat = wantsDepth ? this.depthFormat : undefined;
       const colorFormat = resolved ? (target.outputFormat ?? target.format) : target.format;
       const colorRect = resolved ? target.outputViewport : vp;
-      const aux = resolved ? 0 : auxMask;
+      // A pass that opts out of the extra targets (ws/post-fit) draws colour and depth only.
+      const aux = resolved || !pass.coreTargets ? 0 : auxMask;
       if (wantsDepth && samplesDepth && pass.depth === 'read' && !depthCleared) {
         // A drawable samples depth here, so the pass must be read-only: clear depth first.
         const d = this.depthAttachment;

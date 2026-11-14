@@ -8,8 +8,9 @@
  * frame on the CPU. `exposureHistogram` and `exposureAverage` are the same two kernels in
  * TypeScript, for tests and for a CPU reference.
  */
-import type { Renderer } from '../render/renderer';
+
 import { createShaderModule } from '../render/wgsl';
+import type { PostHost } from './host';
 
 export const EXPOSURE_BINS = 64;
 /** log2 luminance of the first bin's lower edge (2^-10 ≈ 0.001). */
@@ -218,7 +219,7 @@ export class ExposurePasses {
   private readonly onMapped: () => void;
   private readonly onMapFailed: () => void;
 
-  constructor(renderer: Renderer) {
+  constructor(renderer: PostHost) {
     const device = renderer.device;
     this.device = device;
     const compute = GPUShaderStage.COMPUTE;

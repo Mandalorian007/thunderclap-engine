@@ -41,6 +41,12 @@ export interface PassDesc {
    * Default 0 with `reversedZ`, else 1.
    */
   depthClear?: number;
+  /**
+   * Write the core's extra targets (ws/post-fit; `RenderCoreOptions.targets`: emissive,
+   * roughMetal, velocity) in this pass. Default true. False draws colour (and depth) only, so a
+   * pass whose sets do not write them (a sky, a game's own effect) leaves them as they were.
+   */
+  coreTargets?: boolean;
 }
 
 /**
@@ -76,6 +82,15 @@ export interface CoreResolveContext {
   emissive: GPUTextureView | null;
   roughMetal: GPUTextureView | null;
   velocity: GPUTextureView | null;
+  /**
+   * The target's GPU timing (ws/post-fit; `CoreTarget.timestamps`), else undefined: a resolve
+   * that encodes its own passes times them with it (`timestamps(label, passId)`).
+   */
+  timestamps:
+    | ((label: string, pass?: string) => GPURenderPassTimestampWrites | undefined)
+    | undefined;
+  /** The view's depth convention (the pass's `reversedZ`): what `depth` was drawn with. */
+  reversedZ: boolean;
 }
 
 /**
@@ -117,6 +132,8 @@ export interface CorePass {
   readonly reversedZ: boolean;
   /** What a first depth pass clears depth to (`PassDesc.depthClear`). */
   readonly depthClear: number;
+  /** The pass writes the core's extra targets (`PassDesc.coreTargets`). */
+  readonly coreTargets: boolean;
   readonly when: (() => boolean) | null;
   readonly encode: ((pass: GPURenderPassEncoder, ctx: CorePassContext) => void) | null;
   readonly resolve: ((encoder: GPUCommandEncoder, ctx: CoreResolveContext) => void) | null;
@@ -173,6 +190,7 @@ export class PassList {
       depth: desc.depth ?? 'write',
       reversedZ,
       depthClear: desc.depthClear ?? coreDepthFar(reversedZ),
+      coreTargets: desc.coreTargets ?? true,
       when: desc.when ?? null,
       encode: desc.encode ?? null,
       resolve: desc.resolve ?? null,

@@ -98,6 +98,12 @@ export interface PostInputs {
   roughMetal: TextureLike | null;
   /** The target's `rg16float` screen-space velocity attachment (`SceneTargetDesc.aux`), else null. */
   velocity: TextureLike | null;
+  /**
+   * Timestamp writes per post pass (ws/post-fit): `timestamps(label)` for the pass labelled
+   * `label` (`'taa'`, `'bloom'`, `'composite'`, …) instead of the host's `gpuTimer`. `CorePost`
+   * sets it from the core target's `timestamps`, so a resolve pass is timed. Absent: the host's.
+   */
+  timestamps?: ((label: string) => GPURenderPassTimestampWrites | undefined) | null;
 }
 
 /** A view's matrices for post passes: this frame's (with jitter) and last frame's (without). */
@@ -108,6 +114,12 @@ export interface PostView {
   previousView: Float32Array;
   /** The sub-pixel jitter applied this frame, in target pixels; `[0, 0]` without. */
   jitter: [number, number];
+  /**
+   * The jitter the velocity target carries (ws/post-fit), in target px: this frame's jitter
+   * minus last frame's, when the views were drawn jittered into it. TAA takes it out of the
+   * motion it reads. Absent (or zero): the velocity is used as written.
+   */
+  velocityJitter?: [number, number];
 }
 
 /** A frame's projection for depth-reading post passes: clip planes and the column-major matrix. */
@@ -116,6 +128,11 @@ export interface PostProjection {
   /** `Infinity` for an infinite far plane. */
   far: number;
   proj: Float32Array;
+  /**
+   * The depth is reversed-Z (ws/post-fit; `RenderCoreOptions.reversedZ`): near is 1, far 0. The
+   * depth passes then find the sky at 0 and the nearest sample by the greatest depth.
+   */
+  reversedZ?: boolean;
 }
 
 /**
