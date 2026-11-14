@@ -58,6 +58,7 @@ What a frame does, counted on the fake device by `createWorkMeter` (`@thundercla
 - Rows are the bench rungs above (the same seeded scenes on the fake device; timings are the browser's, these are counts), `2d-tiles` (harness/tiles.html's grid: a 32×18 tile layer and a flipbook walker), `2d-game` (`createGame` with one empty scene, its default post chain) and `distinct-*` (design/2.0/bar.md D2-P1: that many distinct meshes, nothing batches, the camera turning; `2views` renders an eye each with `renderer.render`).
 - `Commands` is every call on the device, queue, encoders and passes; `Draws` is `draw` + `drawIndexed`; `Passes` render + compute; `Writes` `writeBuffer` + `writeTexture`; `Creates` every `create*` call on the device during the frame (buffers, textures, bind groups, pipelines, command encoders: today's 1 is the frame's encoder); `Typed arrays` typed arrays, `ArrayBuffer`s made by the frame's code (not the device); `Clock reads` `performance.now` + `Date.now`. A fraction is a count that varies frame to frame (the turning camera sees a different set), averaged.
 - `↳ view` rows split a frame by `meter.view(name)`; `present` is `endFrame`.
+- Since ws/core-immediate (engine 2.0) the `distinct-*` rows draw their meshes as one merged run on a device with `indirect-first-instance` (as `initGpu` asks for): one cached bundle of `drawIndexedIndirect` per view, so the calls are flat in what is visible (1.5k: 1,418 → 19.2; 6k: 5,775 → 33.1; two views: 2,832 → 30.2). What rises: one `writeBuffer` per view (the run's 20-byte indirect arguments, hence the bytes), and `copies` (not in the table: about 4 a frame at 1.5k, 18 at 6k), the pool's one-time copy of each mesh the turning camera sees for the first time; the difference between the 1.5k and 6k rows is those copies only.
 
 | Scene | Commands | Draws | Pipelines | Bind groups | Vertex buffers | Passes | Dispatches | Submits | Writes | Bytes written | Creates | Typed arrays | Clock reads |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -84,12 +85,12 @@ What a frame does, counted on the fake device by `createWorkMeter` (`@thundercla
 | `particles-100k` | 29 | 3 | 5 | 6 | 0 | 4 | 2 | 1 | 2 | 2,496 | 1 | 0 | 0 |
 | `2d-tiles` | 23 | 3 | 2 | 3 | 4 | 2 | 0 | 1 | 2 | 2,256 | 1 | 0 | 0 |
 | `2d-game` | 80 | 13 | 13 | 14 | 0 | 14 | 0 | 1 | 4 | 4,336 | 1 | 0 | 0 |
-| `distinct-1.5k` | 1,418 | 352 | 2 | 2 | 702 | 2 | 0 | 1 | 2 | 41,344 | 1 | 0 | 0 |
-| ↳ view `view` | 1,411 | 351 | 1 | 1 | 702 | 1 | 0 | 0 | 2 | 41,344 | 1 | 0 | 0 |
-| `distinct-6k` | 5,775.1 | 1,441.3 | 2 | 2 | 2,880.5 | 2 | 0 | 1 | 2 | 163,341.9 | 1 | 0 | 0 |
-| `distinct-1.5k-2views` | 2,831.7 | 702.9 | 3 | 3 | 1,403.8 | 3 | 0 | 1 | 4 | 82,678.7 | 1 | 0 | 0 |
-| ↳ view `left` | 1,413 | 351 | 1 | 1 | 702 | 1 | 0 | 0 | 2 | 41,344 | 1 | 0 | 0 |
-| ↳ view `right` | 1,411.7 | 350.9 | 1 | 1 | 701.8 | 1 | 0 | 0 | 2 | 41,334.7 | 0 | 0 | 0 |
+| `distinct-1.5k` | 19.2 | 1 | 1 | 2 | 0 | 2 | 0 | 1 | 3 | 51,584 | 1 | 0 | 0 |
+| ↳ view `view` | 12.2 | 0 | 0 | 1 | 0 | 1 | 0 | 0 | 3 | 51,584 | 1 | 0 | 0 |
+| `distinct-6k` | 33.1 | 1 | 1 | 2 | 0 | 2 | 0 | 1 | 3 | 204,301.9 | 1 | 0 | 0 |
+| `distinct-1.5k-2views` | 30.2 | 1 | 1 | 3 | 0 | 3 | 0 | 1 | 6 | 103,158.7 | 1 | 0 | 0 |
+| ↳ view `left` | 13.8 | 0 | 0 | 1 | 0 | 1 | 0 | 0 | 3 | 51,584 | 1 | 0 | 0 |
+| ↳ view `right` | 9.4 | 0 | 0 | 1 | 0 | 1 | 0 | 0 | 3 | 51,574.7 | 0 | 0 | 0 |
 | ↳ view `present` | 7 | 1 | 1 | 1 | 0 | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 0 |
 
 Trace goldens (every call in order, hashed; the 2D path must not change under the render core):

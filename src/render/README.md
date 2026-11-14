@@ -1331,6 +1331,25 @@ core.draw(encoder, 0, { view: texView, format, width, height, clear: { r: 0, g: 
 
 Each slot binds its instance range with `setVertexBuffer(1, buffer, offset, size)`, so the indirect `firstInstance` stays 0 and the path runs without `indirect-first-instance` (WebKit). A stereo pair is one `CullGroup`: one view write, one cull dispatch and one bundle, executed once per eye, costs the mono frame plus 5 GPU calls (`harness/views.html`, `e2e/views.spec.ts`). Not here yet: shadow passes (a cull group is the unit they will share), occlusion, and the XR session drawing through the core (it uses `Renderer` until the immediate path moves onto the core).
 
+## Merged mesh runs
+
+Many distinct meshes drawn with `frame.mesh` under one material do not batch (each is its own
+mesh), yet they cost one GPU call per run, not per mesh (ws/core-immediate). When four or more
+consecutive scene draws share pipeline, material and uniform offset and draw different small
+indexed meshes (≤ 256 KiB of vertices and of indices), the renderer copies each mesh once into its
+mesh pool (`src/render/mesh-runs.ts`, core `Arena`s) and draws the run with:
+
+- one `multiDrawIndexedIndirect` when the device has `chromium-experimental-multi-draw-indirect`;
+- else one cached render bundle of `drawIndexedIndirect` (`indirect-first-instance`);
+- else direct `drawIndexed` with a base vertex from the pool (one buffer bind per run).
+
+`initGpu` asks for both features when the adapter has them (`drawFeatures: false` opts out). Order,
+blending and depth are the draws' own. A mesh is copied again after `update()` (`Mesh.revision`);
+room of meshes unused for 600 frames is given back. `renderer.stats.runs` counts the runs drawn;
+`drawCalls` still counts one per mesh. Batches, lists, drawables, sprites, LOD lanes, velocity
+draws, large or non-indexed meshes and the shadow pass take the per-command path. The demo is
+`harness/runs.html` (`?n=6000`, `?split` for the per-mesh path, `?still`).
+
 ## Lower-level pieces
 
 - `renderer.createFullscreenPass(desc: FullscreenPassDesc)` (`label`, `wgsl`, `targets`,
