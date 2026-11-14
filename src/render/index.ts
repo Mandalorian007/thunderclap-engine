@@ -27,6 +27,45 @@ export {
   rendererCaps,
   uploadKtx2,
 } from './compressed';
+// The retained render core (ws/core-retained, D1 §3, preview).
+export type { ArenaAlloc, ArenaDesc, ArenaKind } from './core/arena';
+export { Arena, createArena } from './core/arena';
+export type { CoreCaps, CoreTarget, RenderCoreOptions } from './core/core';
+export { createRenderCore, MULTI_DRAW_FEATURE, RenderCore } from './core/core';
+export {
+  ARGS_BYTES,
+  ARGS_WORDS,
+  CULL_WGSL,
+  cullSlotsCpu,
+  SLOT,
+  SLOT_BYTES,
+  SLOT_LIVE,
+  SLOT_WORDS,
+} from './core/cull';
+export type {
+  CoreStats,
+  DrawSetCull,
+  DrawSetDesc,
+  DrawSetKind,
+  DrawSetShader,
+  SlotDesc,
+} from './core/draw-set';
+export { DrawSet, GPU_CULL_MIN_SLOTS } from './core/draw-set';
+export type { BufferLayout, LayoutAttribute, LayoutDesc } from './core/layout';
+export { createInstanceLayout, createVertexLayout, vertexFormatBytes } from './core/layout';
+export type { CorePass, PassDepth, PassDesc } from './core/pass-list';
+export { CORE_PASSES, PassList } from './core/pass-list';
+export { QUAD_INDICES, QuadIndex, quadIndices } from './core/quad-index';
+export type { RenderView } from './core/view';
+export {
+  CORE_VIEW_WGSL,
+  createRenderView,
+  MAX_VIEWS,
+  setViewFromCamera,
+  sphereInPlanes,
+  VIEW_SLOT_BYTES,
+  VIEW_SLOT_FLOATS,
+} from './core/view';
 export { gpuDiagnostics, installGpuErrorLogging, onGpuError, reportGpuError } from './diagnostics';
 export {
   DynamicResolution,
