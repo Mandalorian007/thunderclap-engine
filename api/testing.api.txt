@@ -2,6 +2,27 @@
 // Do not edit by hand. After an intended API change run `pnpm api:update` and commit this file.
 // engine-v1.0.0 frozen surface: a change here needs a *Breaking* or *Added* line naming this module under CHANGELOG.md `## Unreleased`.
 
+## AllocCounts  (type-only)
+interface AllocCounts {
+    typedArrays: number;
+    arrayBuffers: number;
+    dataViews: number;
+    byType: Record<string, number>;
+}
+
+## BudgetError
+class BudgetError extends Error {
+    readonly name = "BudgetError";
+}
+
+## BudgetLimits  (type-only)
+type BudgetLimits = Partial<Record<Exclude<keyof GpuCounts, 'byMethod'>, number>> & {
+    typedArrays?: number;
+    arrayBuffers?: number;
+    dataViews?: number;
+    clockReads?: number;
+};
+
 ## FakeBindGroup  (type-only)
 interface FakeBindGroup {
     label?: string;
@@ -183,6 +204,33 @@ interface FixedClock extends TickClock {
     step(n?: number): void;
 }
 
+## GpuCounts  (type-only)
+interface GpuCounts {
+    commands: number;
+    draw: number;
+    drawIndexed: number;
+    drawIndirect: number;
+    drawIndexedIndirect: number;
+    setPipeline: number;
+    setBindGroup: number;
+    setVertexBuffer: number;
+    setIndexBuffer: number;
+    dispatch: number;
+    beginRenderPass: number;
+    beginComputePass: number;
+    executeBundles: number;
+    submit: number;
+    writeBuffer: number;
+    writeBufferBytes: number;
+    writeTexture: number;
+    copies: number;
+    createBuffer: number;
+    createTexture: number;
+    createBindGroup: number;
+    createOther: number;
+    byMethod: Record<string, number>;
+}
+
 ## PassCommand  (type-only)
 type PassCommand = {
     op: 'setPipeline';
@@ -216,6 +264,28 @@ type PassCommand = {
     offset?: number;
 };
 
+## ProportionalOptions  (type-only)
+interface ProportionalOptions {
+    shape?: 'flat' | 'linear';
+    slack?: number;
+    perUnit?: number;
+    label?: string;
+}
+
+## ProportionalResult  (type-only)
+interface ProportionalResult {
+    sizes: number[];
+    values: number[];
+    slope: number;
+    intercept: number;
+}
+
+## RunOptions  (type-only)
+interface RunOptions {
+    frames?: number;
+    warmup?: number;
+}
+
 ## TestGame  (type-only)
 interface TestGame<A extends string, S extends FlushableSave | null = null, C = unknown, P = unknown> {
     readonly ctx: EngineCtx<A, S, C, P>;
@@ -239,6 +309,44 @@ interface TestGameOptions<A extends string, S extends FlushableSave | null = nul
     overlay?: boolean;
 }
 
+## TraceGolden  (type-only)
+interface TraceGolden {
+    sha256: string;
+    frames: number;
+    perFrame: [number, number][];
+    first: string[];
+}
+
+## WorkMeter  (type-only)
+interface WorkMeter {
+    readonly device: GPUDevice;
+    run(frame: (i: number) => void, opts?: RunOptions): WorkReport;
+    measure(fn: () => void): WorkReport;
+    view(name: string): void;
+}
+
+## WorkMeterOptions  (type-only)
+interface WorkMeterOptions {
+    trace?: boolean;
+}
+
+## WorkReport  (type-only)
+interface WorkReport {
+    frames: number;
+    gpu: GpuCounts;
+    allocs: AllocCounts;
+    clockReads: number;
+    views: Record<string, GpuCounts>;
+    commandsPerFrame: number[];
+    trace: string[] | null;
+}
+
+## budget
+function budget(report: WorkReport, limits: BudgetLimits, label?: string): WorkReport;
+
+## countAllocs
+function countAllocs(fn: () => void): AllocCounts;
+
 ## createFakeDevice
 function createFakeDevice(limits?: Partial<Record<string, number>>, features?: Iterable<string>): FakeDevice;
 
@@ -250,6 +358,15 @@ function createFixedClock(stepMs?: number, start?: number): FixedClock;
 
 ## createTestGame
 function createTestGame<A extends string, S extends FlushableSave | null = null, C = unknown, P = unknown>(opts: TestGameOptions<A, S, P>): Promise<TestGame<A, S, C, P>>;
+
+## createWorkMeter
+function createWorkMeter(device: GPUDevice, opts?: WorkMeterOptions): WorkMeter;
+
+## diffTraceGolden
+function diffTraceGolden(got: TraceGolden, want: TraceGolden): string | null;
+
+## expectProportional
+function expectProportional(run: (size: number) => number, sizes: readonly number[], opts?: ProportionalOptions): ProportionalResult;
 
 ## fakeCanvasContext
 function fakeCanvasContext(fake: FakeDevice): GPUCanvasContext;
@@ -263,3 +380,9 @@ function fakeRendererGpu(fake: FakeDevice): {
 
 ## installGpuGlobals
 function installGpuGlobals(): void;
+
+## sha256Hex
+function sha256Hex(text: string): string;
+
+## traceGolden
+function traceGolden(trace: readonly string[]): TraceGolden;
