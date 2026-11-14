@@ -704,7 +704,7 @@ The core has three set kinds, sharing one encoding back end.
 
 | Area | Stays | Why |
 |---|---|---|
-| net/, SDK, protocol | all of it: ServerSession, interest, edit prediction and rollback, inflate worker, watches, liveness, recovery, sign-in | server-authoritative netcode is the game's (TC VISION "What is the game's job"); the SDK is Forge's mineflayer-style client |
+| net/, SDK, protocol | the game's message types, the SDK's game verbs, edit meanings | *Amended by E-041:* sessions, handshake, liveness, clock, snapshot buffers, prediction and rollback move to TC `net` (C9) and `thunderclap-server` (phase E); see [server.md](server.md) |
 | state/ | world store over ChunkStore, content table, sky and weather ports of forge-core, rune-sight and rune-match, entities, selection | content meaning and server mirrors |
 | play/ | ActionSink (as Forge's intent set), walker, controller, fight, tools, Spire, escort, finds | rules display and play |
 | life/, scene/ | deterministic ambient life, the opening, crash film | game content |

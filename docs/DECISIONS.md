@@ -259,3 +259,10 @@ ws/harden-api added `api/*.api.txt` and `check:api`, and audited the surface. Ru
   3. **Forge switches a module on a playable floor, then tuning.** The user, on approval: "The target goal will be the evolved engine running forge wilds in a parity sense. I do not care if performance is 100% matched; the flexibility of the engine will matter greatly."
 - **Authority:** the PM runs the program autonomously across both repos with up to 10 top-level agents, cuts engine releases (prereleases `2.0.0-next.N` on npm's `next` tag; `latest` stays 1.3.x until 2.0.0), and makes the minor calls. This supersedes E-001's "nothing is pushed without the user" for this program.
 - **The PM's calls:** the architecture is design/2.0/architecture.md (one renderer in two layers: a retained, GPU-driven, view-plural core under the immediate API); The Last Rune stays pixel-identical and source-compatible; VR is tested on every core change; 2.0 is one breaking release with adapters where cheap; old modules are rebuilt in place, not kept beside; Forge consumes exact `next` prereleases. The plan, phases and steps are [ROADMAP.md](ROADMAP.md).
+
+## E-042: the server foundation's shape (2026-11-14, PM)
+
+- S0's proposal is accepted: [design/2.0/server.md](design/2.0/server.md). Seven crates (`tc-wire`, `tc-tsgen`, `tc-net`, `tc-store`, `tc-sim`, `tc-stream`, `tc-admin`) behind a `thunderclap-server` facade; a game implements one `Game` trait. The engine owns the wire format, the schema hash and TS generation; `defineSchema` in TS hashes the same as Rust.
+- **Rust lives in this repo** (a Cargo workspace beside the TS package): the schema hash and generated TS must be tested against each other in one CI run, and one release cuts both sides. The npm package stays TS-only; the crates publish separately when phase E starts.
+- **The section codec moves in the same protocol bump** as the handshake. The user said Forge's world data and saves don't matter, so the proposal's top risk (keeping on-disk worlds readable) is dropped: Forge takes one bump and fresh worlds are fine.
+- C9 (`net`) follows the proposal's client API; it no longer waits on anything but B1/A3 landing.

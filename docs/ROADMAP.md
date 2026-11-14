@@ -78,7 +78,7 @@ Sizes: S under ~1k lines, M ~1–3k, L ~3–4k (split past that). Branches are `
 | C7 | **ws/intents-quality**: input actions → game-declared intents, every scheme aims by ray; quality tiers and a load governor with knobs modules register (D1 §2.12, 2.13). | — | Forge's intent and governor tests ported; a template uses intents; the governor steps a registered knob under a synthetic load. |
 | C8 | **ws/xr-merge**: Forge's XR (sessions, controllers, hands, comfort) merged with the engine's onto B3's views. | B3 | Fake-XR tests from both sides green; the stereo page on the emulator. |
 | C9 | **ws/net**: the networking client: sessions over a host-supplied transport, message schemas declared by the game, snapshot buffers, interpolation, prediction and reconciliation, interest (from S0's design). | S0 | A two-client demo over an in-page transport; Forge's SDK tests' generic half ported. |
-| S0 | **Research: the server foundation and the net seam** (scratchpad, no code): what of Forge's Rust engine is generic, the package shape, the protocol generation across Rust and TS, how C9 meets it. | — | A proposal the PM accepts. |
+| S0 | **Research: the server foundation and the net seam** (scratchpad, no code): what of Forge's Rust engine is generic, the package shape, the protocol generation across Rust and TS, how C9 meets it. | — | ✅ Accepted 2026-11-14: [server.md](design/2.0/server.md), E-042. |
 
 ### Phase D: Forge switches (forgewilds PRs)
 
@@ -112,3 +112,4 @@ Planned when S0 lands and phase D is under way.
 ## Log
 
 - 2026-11-14: program approved (E-041). Wave 2.0-1 launched: A1, A2, A3, B1, C1, C3, C5, C7, S0.
+- 2026-11-14: S0 accepted (E-042): Rust server crates live in this repo; the section codec moves in Forge's one protocol bump.
