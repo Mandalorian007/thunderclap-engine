@@ -232,6 +232,8 @@ pub struct Tally {
     /// (a test holds a replay back).
     pub hold: Arc<AtomicBool>,
     held: bool,
+    /// Keeps bases ([`Game::save`]).
+    pub saves: bool,
 }
 
 impl Tally {
@@ -243,6 +245,7 @@ impl Tally {
             steps: 0,
             hold: Arc::new(AtomicBool::new(false)),
             held: false,
+            saves: false,
         }
     }
 
@@ -448,6 +451,39 @@ impl Game for Tally {
         }
     }
 
+    fn save(&self) -> Option<Vec<u8>> {
+        if !self.saves {
+            return None;
+        }
+        let mut w = Writer::default();
+        w.u64(self.steps);
+        w.u64(self.players.len() as u64);
+        for (id, p) in &self.players {
+            w.u64(*id);
+            w.str(&p.name);
+            w.u64(p.tally);
+            w.i32(p.at);
+            w.u8(u8::from(p.present));
+        }
+        Some(w.0)
+    }
+
+    fn restore(&mut self, bytes: &[u8]) -> Result<(), String> {
+        let mut r = Reader::new(bytes);
+        self.steps = r.u64()?;
+        for _ in 0..r.u64()? {
+            let id = r.u64()?;
+            let player = Player {
+                name: r.str()?,
+                tally: r.u64()?,
+                at: r.i32()?,
+                present: r.u8()? == 1,
+            };
+            self.players.insert(id, player);
+        }
+        r.finish()
+    }
+
     fn join(
         &self,
         who: &Identity,
@@ -556,6 +592,7 @@ impl Game for Tally {
         t.multiplier = *data;
         t.hold = self.hold.clone();
         t.held = true;
+        t.saves = self.saves;
         Ok(t)
     }
 

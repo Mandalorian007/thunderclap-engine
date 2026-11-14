@@ -10,13 +10,14 @@ use std::time::{Duration, Instant, SystemTime};
 
 use tc_net::transport::Frame;
 use tc_net::{ConnId, Outbound, Protocol, ServerMsg, WallClock};
-use tc_store::{Log, LogEntry, StoreError};
+use tc_store::{ArchivePolicy, Log, LogEntry, StoreError};
 use tc_wire::Wire;
 use tracing::{error, warn};
 
 use tc_wire::schema::Schema;
 
 use crate::MAX_TIME;
+use crate::bases::Bases;
 use crate::core::{ApplyError, Core};
 use crate::entities::Stream;
 use crate::game::{Bodies, EventOf, Game, Outbox, PlayerId, To};
@@ -63,16 +64,30 @@ pub struct SimConfig {
     pub input: InputConfig,
     /// How live queries are kept.
     pub sync: SyncConfig,
+    /// Entries between two bases of a game that keeps them
+    /// ([`Game::save`]); 0 writes none. The live log holds about twice
+    /// this many entries: what's behind the older of the two bases kept
+    /// goes to the archive.
+    pub base_every: u64,
+    /// How long the archive keeps what the bases left behind, and how big
+    /// it may get.
+    pub archive: ArchivePolicy,
 }
 
+/// [`SimConfig::base_every`]'s default.
+pub const BASE_EVERY: u64 = 100_000;
+
 impl Default for SimConfig {
-    /// 50 ms steps, running, default inputs and queries.
+    /// 50 ms steps, running, default inputs and queries, a base every
+    /// [`BASE_EVERY`] entries and the default archive.
     fn default() -> Self {
         SimConfig {
             step: Duration::from_millis(50),
             paused: false,
             input: InputConfig::default(),
             sync: SyncConfig::default(),
+            base_every: BASE_EVERY,
+            archive: ArchivePolicy::default(),
         }
     }
 }
@@ -160,6 +175,7 @@ pub struct Sim<G: Game> {
     pub(crate) budgets: Budgets,
     /// Game messages dropped over a lane's budget.
     pub(crate) limited: u64,
+    pub(crate) bases: Bases<G>,
 }
 
 /// Distinct refusal reasons logged before the rest are only counted.
@@ -207,6 +223,7 @@ impl<G: Game> Sim<G> {
             lanes: G::lanes(),
             budgets: Budgets::default(),
             limited: 0,
+            bases: Bases::new(config.base_every, config.archive, flushed_version),
         };
         sim.schedule_timers(now);
         sim.publish_status(now);
@@ -226,7 +243,8 @@ impl<G: Game> Sim<G> {
     }
 
     /// Opens the store in `dir`, replays its log into `game` (a new game,
-    /// at its start), and serves it from the later of its last entry's
+    /// at its start; from its newest base, if it keeps them, see
+    /// [`Game::save`]), and serves it from the later of its last entry's
     /// time and its last clock mark, after logging what
     /// [`Game::on_open`] pushed. Returns the store's metadata too.
     pub fn open(
@@ -234,17 +252,19 @@ impl<G: Game> Sim<G> {
         game: G,
         config: SimConfig,
     ) -> Result<(Sim<G>, Vec<u8>), String> {
-        let (log, opened) = Log::open(dir, game.codec()).map_err(|e| e.to_string())?;
+        let (log, opened, mut core, from) = crate::bases::open_log(dir, game)?;
         if !opened.report.is_clean() {
             warn!(report = ?opened.report, "the log was recovered");
         }
-        let (mut core, replayed) = Core::replayed(game, &opened.entries)?;
+        let replayed = core.replay(&opened.entries)?;
         if replayed.skipped > 0 {
             warn!(skipped = replayed.skipped, "entries skipped on open");
         }
         // Time never goes back past a mark.
         core.advance_to(opened.clock);
         let mut sim = Sim::new(core, Some(log), config);
+        sim.bases.opened_from = from;
+        sim.tidy_after_open();
         // Whatever the last run left (it may have crashed): the game's
         // events that tidy it, logged like any other.
         let mut events = Vec::new();
@@ -656,6 +676,7 @@ impl<G: Game> Sim<G> {
             self.publish_status(now);
             self.next_clock_mark = Some(now + CLOCK_MARK_INTERVAL);
         }
+        self.poll_base();
         // A mark that failed on the I/O thread since: pause now, not at
         // the next mark.
         if let Some(e) = self.log.as_mut().and_then(Log::take_mark_error) {
@@ -808,6 +829,8 @@ impl<G: Game> Sim<G> {
         {
             error!("the last clock mark failed: {e}");
         }
+        // A base under way is finished, so no job outlives the store's lock.
+        self.finish_base();
         self.publish_status(Instant::now());
         tracing::info!(
             time = self.core.time(),
@@ -862,21 +885,47 @@ pub(crate) enum ReplaySource<G: Game> {
 }
 
 impl<G: Game> ReplaySource<G> {
-    pub(crate) fn entries(self) -> Result<VecDeque<LogEntry<EventOf<G>>>, String> {
+    /// `game` (new, at its start) with the entries replayed into it: on
+    /// disk, from the store's newest base if it has one (the base is the
+    /// old game's state, restored into the new one; only the log after it
+    /// is replayed).
+    pub(crate) fn replayed(self, game: G) -> Result<(Core<G>, crate::Replayed), String> {
         match self {
             ReplaySource::Disk {
                 dir,
                 codec,
                 through,
             } => {
-                let read = tc_store::read(&dir, &codec).map_err(|e| e.to_string())?;
-                Ok(read
+                let err = |e: StoreError| e.to_string();
+                // The newest base that reads back whole.
+                let newest = tc_store::bases(&dir)
+                    .map_err(err)?
+                    .into_iter()
+                    .find_map(|base| {
+                        let bytes = std::fs::read(&base.path).ok()?;
+                        crate::core::base_intact(&bytes).then_some((base, bytes))
+                    });
+                let (mut core, read) = match newest {
+                    Some((base, bytes)) => {
+                        let core = Core::from_base(game, &bytes, false)?;
+                        let read = tc_store::read_from(&dir, &codec, base.generation, base.after)
+                            .map_err(err)?;
+                        (core, read)
+                    }
+                    None => (Core::new(game), tc_store::read(&dir, &codec).map_err(err)?),
+                };
+                let entries: Vec<_> = read
                     .entries
                     .into_iter()
                     .filter(|e| e.seq <= through)
-                    .collect())
+                    .collect();
+                let replayed = core.replay(&entries)?;
+                Ok((core, replayed))
             }
-            ReplaySource::Memory(entries) => Ok(entries.into()),
+            ReplaySource::Memory(entries) => {
+                let entries: VecDeque<_> = entries.into();
+                Core::replayed(game, &entries)
+            }
         }
     }
 }

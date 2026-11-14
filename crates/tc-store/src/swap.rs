@@ -3,7 +3,8 @@
 //!
 //! In place, the new store is written whole to `.swap/` in the store
 //! directory (`store.meta` last, so a `.swap/` with it is complete). Then,
-//! under the store's lock, the old `archive/` and `log/` are moved to
+//! under the store's lock, the old `archive/`, `base/` (the game's bases,
+//! which a log holding the whole history no longer needs) and `log/` are moved to
 //! `recovered/<label>.<unix time>/` (never destroyed) and `.swap/log` is
 //! renamed to `log/`. A swap cut short is finished, or a `.swap/` left
 //! incomplete cleared, the next time the store is opened or swapped
@@ -13,6 +14,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::archive::ARCHIVE_DIR;
+use crate::base::BASE_DIR;
 use crate::durable::sync_dir;
 use crate::error::StoreError;
 use crate::lock::StoreLock;
@@ -68,7 +70,7 @@ pub(crate) fn finish_swap(dir: &Path, label: &str) -> Result<Option<PathBuf>, St
     let mut moved = None;
     if swap.join(META_FILE).exists() && new_log.exists() {
         let aside = aside_dir(dir, label)?;
-        for name in [ARCHIVE_DIR, "log"] {
+        for name in [ARCHIVE_DIR, BASE_DIR, "log"] {
             let from = dir.join(name);
             if from.exists() {
                 let to = aside.join(name);

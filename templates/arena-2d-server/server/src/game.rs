@@ -203,7 +203,7 @@ pub enum Change {
 }
 
 /// One seat's state.
-#[derive(Clone, Debug, Default)]
+#[derive(Wire, Clone, Debug, Default)]
 pub struct Seated {
     /// The name.
     pub name: String,
@@ -216,8 +216,9 @@ pub struct Seated {
     pub tags: u32,
 }
 
-/// The game state.
-#[derive(Clone, Debug, Default)]
+/// The game state. It is small and all of it goes in a base
+/// ([`Game::save`]), so the log stays bounded however long the server runs.
+#[derive(Wire, Clone, Debug, Default)]
 pub struct Arena {
     /// The seats, by player id (1..=8).
     pub seats: BTreeMap<PlayerId, Seated>,
@@ -366,6 +367,15 @@ impl Game for Arena {
         }
         h.write_u64(self.it);
         h.write_u64(self.calm_until);
+    }
+
+    fn save(&self) -> Option<Vec<u8>> {
+        Some(self.to_bytes())
+    }
+
+    fn restore(&mut self, bytes: &[u8]) -> Result<(), String> {
+        *self = Arena::from_bytes(bytes).map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     fn join(&self, who: &Identity, _: &Empty, events: &mut Vec<Event>) -> Result<Seat, String> {

@@ -5,8 +5,8 @@ use std::convert::Infallible;
 use std::fs;
 
 use tc_store::{
-    ArchivePolicy, Log, LogCodec, LogEntry, NameTable, Names, Output, RollbackTo, prepare,
-    rollback, set_clock_for_tests, summary, tidy,
+    ArchivePolicy, Log, LogCodec, LogEntry, NameTable, Names, Output, RollbackTo, backup, bases,
+    prepare, rollback, set_clock_for_tests, summary, tidy, write_base,
 };
 
 const DAY: u64 = 24 * 60 * 60;
@@ -66,12 +66,23 @@ fn the_archive_keeps_a_week_and_a_rollback_goes_back_to_a_wall_time() {
         log.wait().unwrap();
     }
     log.sync_frozen().unwrap();
+    // The game's base through entry 6, whose tail starts in generation 3.
+    write_base(&dir, 3, 6, b"state").unwrap();
     log.note_base(3);
     let week = ArchivePolicy::default();
     let tidied = tidy(&dir, &Notes, 3, &week).unwrap();
     assert_eq!((tidied.archived, tidied.pruned), (vec![0, 1, 2], vec![]));
     let walls: Vec<u64> = summary(&dir).unwrap().iter().map(|a| a.wall).collect();
     assert_eq!(walls, [start, start + DAY, start + 2 * DAY]);
+    // A backup copies the base with the log after it.
+    let out = dir.with_extension("backup");
+    let _ = fs::remove_dir_all(&out);
+    let copied = backup(&dir, &out, false).unwrap();
+    assert_eq!((copied.bases, copied.last_seq), (1, 8));
+    assert_eq!(fs::read(out.join("base/g3-6.base")).unwrap(), b"state");
+    let (_, opened) = Log::open_from(&out, Notes, 3, 6).unwrap();
+    assert_eq!(opened.entries, (7..=8).map(note).collect::<Vec<_>>());
+    let _ = fs::remove_dir_all(&out);
     drop(log);
 
     // Back to what day 1's mark covered: entry 4, in generation 1.
@@ -86,6 +97,9 @@ fn the_archive_keeps_a_week_and_a_rollback_goes_back_to_a_wall_time() {
     assert_eq!((report.kept, report.was, report.clock), (4, 8, 4));
     let moved = report.moved.unwrap();
     assert!(moved.join("archive/g2/info").is_file());
+    // The base went with the old log: it is past the rolled-back point.
+    assert!(moved.join("base/g3-6.base").is_file());
+    assert!(bases(&dir).unwrap().is_empty());
     // Generation 0 is in the new log again: it opens from the start.
     let (log, opened) = Log::open(&dir, Notes).unwrap();
     assert!(opened.report.is_clean(), "{:?}", opened.report);
