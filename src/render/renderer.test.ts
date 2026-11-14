@@ -312,8 +312,12 @@ describe('PingPong', () => {
     }
     expect(targets).toEqual([b.view, a.view, b.view, a.view, b.view, a.view]);
     expect(pp.read).toBe(a);
-    // Two, plus the managed group the pass's warm draw binds (ws/warm-voxel-fit) on its first encode.
-    expect(fake.bindGroups.length - before).toBe(3);
+    // Two, plus the scratch groups warm draws bind (ws/warm-voxel-fit) on the first encode.
+    const warmGroups = new Set(
+      fake.warmPasses.flatMap((p) => p.commands.filter((c) => c.op === 'setBindGroup')),
+    ).size;
+    expect(warmGroups).toBeGreaterThan(0);
+    expect(fake.bindGroups.length - before - warmGroups).toBe(2);
     pp.resize(32, 32);
     expect(a.texture as unknown as { destroyed: boolean }).toMatchObject({ destroyed: true });
     expect(pp.width).toBe(32);

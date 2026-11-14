@@ -66,7 +66,7 @@ export class PipelineWarmer {
   private readonly queue: WarmJob[] = [];
   private readonly textures = new Map<string, GPUTextureView>();
   private vertexScratch: GPUBuffer | null = null;
-  private readonly sampled: (GPUTextureView | null)[] = [null, null];
+  private readonly sampled = new Map<string, GPUTextureView>();
 
   constructor(device: GPUDevice) {
     this.device = device;
@@ -130,22 +130,28 @@ export class PipelineWarmer {
   }
 
   /**
-   * A 1×1 texture to bind where a warm draw's layout samples one (`depth`: a `depth32float`,
-   * else an `rgba8unorm`); it is never read, since nothing is drawn.
+   * A 1×1 texture view to bind where a warm draw's layout samples one (`depth`: a
+   * `depth32float`, else an `rgba8unorm`), of view `dimension` (default `'2d'`; depth is 2D
+   * only). It is never read, since nothing is drawn.
    */
-  scratchSampled(depth = false): GPUTextureView {
-    const i = depth ? 1 : 0;
-    let v = this.sampled[i];
+  scratchSampled(depth = false, dimension: GPUTextureViewDimension = '2d'): GPUTextureView {
+    const dim = depth ? '2d' : dimension;
+    const key = `${depth ? 'depth' : 'color'}|${dim}`;
+    let v = this.sampled.get(key);
     if (!v) {
+      const layers = dim === 'cube' || dim === 'cube-array' ? 6 : 1;
       v = this.device
         .createTexture({
-          label: `warm sampled scratch${depth ? ' depth' : ''}`,
-          size: [1, 1],
+          label: `warm sampled scratch ${key}`,
+          size: [1, 1, layers],
+          dimension: dim === '3d' ? '3d' : dim === '1d' ? '1d' : '2d',
           format: depth ? 'depth32float' : 'rgba8unorm',
-          usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+          usage:
+            GPUTextureUsage.TEXTURE_BINDING |
+            (dim === '2d' ? GPUTextureUsage.RENDER_ATTACHMENT : 0),
         })
-        .createView();
-      this.sampled[i] = v;
+        .createView({ dimension: dim });
+      this.sampled.set(key, v);
     }
     return v;
   }
@@ -201,7 +207,7 @@ export class PipelineWarmer {
   destroy(): void {
     this.queue.length = 0;
     this.textures.clear();
-    this.sampled[0] = this.sampled[1] = null;
+    this.sampled.clear();
     this.vertexScratch?.destroy();
     this.vertexScratch = null;
   }

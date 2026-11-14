@@ -275,6 +275,43 @@ describe('pipeline warming (ws/warm-voxel-fit)', () => {
     expect(fake.warmPasses.length).toBe(1);
     expect(fake.errors).toEqual([]);
   });
+
+  it("a fullscreen pass's warm binds scratch views of each slot's dimension, never its unset ones", () => {
+    const fake = createFakeDevice();
+    const device = fake.device as unknown as GPUDevice;
+    const view = device
+      .createTexture({ size: [1, 1], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING })
+      .createView();
+    const pass = new FullscreenPass(
+      device,
+      {
+        label: 'grade',
+        wgsl: '',
+        targets: ['rgba8unorm'],
+        textures: 2,
+        viewDimension: ['2d', '3d'],
+      },
+      device.createSampler(),
+      view,
+    );
+    const out = device
+      .createTexture({
+        size: [4, 4],
+        format: 'rgba8unorm',
+        usage: GPUTextureUsage.RENDER_ATTACHMENT,
+      })
+      .createView();
+    pass.encode(fake.device.createCommandEncoder(), out);
+    const bind = fake.warmPasses[0]!.commands.find((c) => c.op === 'setBindGroup') as {
+      group: { entries: GPUBindGroupEntry[] };
+    };
+    const labels = bind.group.entries
+      .filter((e) => e.binding >= 2)
+      .map((e) => (e.resource as unknown as { texture: { label: string } }).texture.label);
+    expect(labels).toEqual(['warm sampled scratch color|2d', 'warm sampled scratch color|3d']);
+    // The pass's own (cached) group is not made by the warm.
+    expect(pass.bindings!.bindGroup).not.toBe(bind.group);
+  });
 });
 
 describe('cull-group mask (ws/warm-voxel-fit)', () => {

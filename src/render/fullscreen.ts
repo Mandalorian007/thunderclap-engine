@@ -1,4 +1,4 @@
-import { type BindingDesc, BindingSet, hasBindings } from './bindings';
+import { type BindingDesc, BindingSet, hasBindings, slotViewDimension } from './bindings';
 import { blendState, type RenderBlendMode } from './blend';
 import { type PipelineWarmer, pipelineWarmer } from './core/warm';
 import type { TextureLike } from './texture';
@@ -90,12 +90,19 @@ export class FullscreenPass {
     // Its empty first draw (ws/warm-voxel-fit), encoded before the device's next real pass: a
     // pass made at load but first run when enabled mid-play compiles now, not then.
     this.warmer = pipelineWarmer(device);
+    // Its own group of scratch views, one of each slot's dimension: the pass's textures may not
+    // be set yet (a LUT slot's default view is 2D), and the group is never cached.
     const bindings = this.bindings;
+    const warmer = this.warmer;
     this.warmer.warm(this.pipeline, {
       color: desc.targets,
       bind: bindings
         ? (pass) => {
-            pass.setBindGroup(0, bindings.bindGroup);
+            const n = desc.textures ?? 0;
+            const views: GPUTextureView[] = [];
+            for (let i = 0; i < n; i++)
+              views.push(warmer.scratchSampled(false, slotViewDimension(desc, i)));
+            pass.setBindGroup(0, bindings.createGroup(views));
             return 1;
           }
         : undefined,
