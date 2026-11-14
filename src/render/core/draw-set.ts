@@ -403,7 +403,8 @@ ${desc.shader.code}`;
    * @internal Rebuild on the host's new device after a device loss (`RenderCore.restore`). The
    * slots, their bounds and the hidden bits are kept and re-uploaded; the arenas' contents are
    * the game's to write again. A set made with `bindGroups` draws nothing until `setBindGroups`
-   * hands it groups made on the new device.
+   * hands it groups made on the new device; an `'external'` set waits for its new `args` the
+   * same way.
    */
   restore(): void {
     if (this.destroyed) return;
@@ -414,7 +415,8 @@ ${desc.shader.code}`;
     this.paramsCount = -1;
     this.paramsFirst = -1;
     this.visibleFrame = -1;
-    this.waiting = this.bindGroups !== null && this.bindGroups.length > 0;
+    this.waiting =
+      (this.bindGroups !== null && this.bindGroups.length > 0) || this.cull === 'external';
     this.build();
     if (this.high > 0) {
       this.dirty(0);
@@ -430,9 +432,17 @@ ${desc.shader.code}`;
   /**
    * Replace the set's extra bind groups (at 1, 2, …) with groups of the same layouts' shape:
    * after a device loss, the ones made on the new device (`RenderCore.onDeviceRestored`).
-   * Re-records the set's bundles.
+   * Re-records the set's bundles. An `'external'` set also takes its new indirect `args` here
+   * (it waits for them after a restore).
    */
-  setBindGroups(groups: readonly { layout: GPUBindGroupLayout; group: GPUBindGroup }[]): void {
+  setBindGroups(
+    groups: readonly { layout: GPUBindGroupLayout; group: GPUBindGroup }[],
+    args?: GPUBuffer,
+  ): void {
+    if (args) {
+      if (this.cull !== 'external') throw new Error(`${this.label}: args are for an external set`);
+      this.argsBuffer = args;
+    }
     this.bindGroups = groups;
     this.waiting = false;
     this.layout = this.host.device.createPipelineLayout({

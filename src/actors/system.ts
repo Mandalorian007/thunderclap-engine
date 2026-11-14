@@ -15,7 +15,7 @@
  * - One draw set on the core (`cull: 'external'`), one slot per model mesh: a static set is one
  *   bundle of `drawIndexedIndirect`, recorded when a model is added and replayed after.
  */
-import type { Arena } from '../render/core/arena';
+import type { Arena, ArenaAlloc } from '../render/core/arena';
 import type { RenderCore } from '../render/core/core';
 import { ARGS_BYTES } from '../render/core/cull';
 import type { DrawSet } from '../render/core/draw-set';
@@ -120,13 +120,13 @@ export class ActorSystem {
   /** The draw set on the core (one slot per model mesh). */
   readonly drawSet: DrawSet;
   /** The skin matrices: `slots × bonesPerSlot` of three `vec4f` rows (the `SkinPalette` layout). */
-  readonly bones: GPUBuffer;
+  bones!: GPUBuffer;
   /** The records (`STORAGE | COPY_DST`). */
-  readonly records: GPUBuffer;
+  records!: GPUBuffer;
   /** The clock of the last `prepare`. */
   time = 0;
   private readonly core: RenderCore;
-  private readonly device: GPUDevice;
+  private device: GPUDevice;
   private readonly sampleLight: ((x: number, y: number, z: number) => number) | null;
   private readonly recU32: Uint32Array<ArrayBuffer>;
   private readonly recF32: Float32Array<ArrayBuffer>;
@@ -142,26 +142,37 @@ export class ActorSystem {
    * The indirect arguments the pose pass fills: five `u32` per (view, model mesh) at
    * `(view × maxDraws + draw) × 20` bytes, the instance count second (`COPY_SRC` for readback).
    */
-  readonly args: GPUBuffer;
-  private readonly template: GPUBuffer;
+  args!: GPUBuffer;
+  private template!: GPUBuffer;
   private readonly templateData: Uint32Array<ArrayBuffer>;
-  private readonly lists: GPUBuffer;
-  private readonly paramsBuffer: GPUBuffer;
+  private lists!: GPUBuffer;
+  private paramsBuffer!: GPUBuffer;
   private readonly params = new ArrayBuffer(ACTOR_PARAMS_BYTES);
   private readonly paramsF32 = new Float32Array(this.params);
   private readonly paramsU32 = new Uint32Array(this.params);
-  private rigBuffer: GPUBuffer;
-  private readonly poseLayout: GPUBindGroupLayout;
-  private poseGroup: GPUBindGroup;
-  private readonly posePipeline: GPUComputePipeline;
+  private rigBuffer!: GPUBuffer;
+  private poseLayout!: GPUBindGroupLayout;
+  private poseGroup!: GPUBindGroup;
+  private posePipeline!: GPUComputePipeline;
   private readonly computeDesc: GPUComputePassDescriptor;
   private readonly scratch: PoseScratch;
   private destroyed = false;
+  private readonly consts: {
+    bones: number;
+    stride: number;
+    maxDraws: number;
+    slots: number;
+    views: number;
+  };
+  private drawLayout!: GPUBindGroupLayout;
+  private drawGroup!: GPUBindGroup;
+  /** Each model mesh's arena places, to write again after a device restore. */
+  private readonly meshAllocs: { v: ArenaAlloc; ix: ArenaAlloc }[] = [];
+  private readonly offRestored: () => void;
 
   constructor(core: RenderCore, opts: ActorSystemOptions) {
     this.core = core;
     this.device = core.device;
-    const device = this.device;
     this.label = opts.label ?? 'actors';
     this.slots = Math.floor(opts.slots);
     if (!(this.slots >= 1 && this.slots <= 65535)) {
@@ -191,14 +202,55 @@ export class ActorSystem {
     this.recF32 = new Float32Array(this.recU32.buffer);
     for (let s = 0; s < this.slots; s++) this.reset(s * this.stride);
 
-    const u = U();
-    const consts = {
+    this.consts = {
       bones: this.bonesPerSlot,
       stride: this.stride,
       maxDraws: this.maxDraws,
       slots: this.slots,
       views: this.maxViews,
     };
+    const consts = this.consts;
+    // The shader compares distances; an infinite one goes up as the largest float.
+    for (let i = 0; i < ACTOR_MAX_LODS; i++) this.paramsF32[4 + i] = Math.min(lods[i] ?? 0, 3.4e38);
+    this.paramsU32[8] = lods.length;
+    this.templateData = new Uint32Array((core.maxViews * this.maxDraws * ARGS_BYTES) / 4);
+    this.computeDesc = { label: `${this.label} pose` };
+    this.build();
+    this.vertexArena = core.createArena({
+      kind: 'vertex',
+      blockBytes: 16 << 20,
+      label: `${this.label} vertices`,
+    });
+    this.indexArena = core.createArena({
+      kind: 'index',
+      blockBytes: 8 << 20,
+      label: `${this.label} indices`,
+    });
+    this.drawSet = core.createDrawSet({
+      label: this.label,
+      shader: {
+        code: actorDrawWgsl(consts, opts.lightWgsl ?? ACTOR_DEFAULT_LIGHT_WGSL, this.shape.fields),
+        cullMode: 'none',
+      },
+      vertexLayout: ACTOR_VERTEX_LAYOUT,
+      vertices: this.vertexArena,
+      indices: this.indexArena,
+      capacity: this.maxDraws,
+      kind: 'static',
+      cull: 'external',
+      args: this.args,
+      pass: opts.pass ?? 'opaque',
+      bindGroups: [{ layout: this.drawLayout, group: this.drawGroup }],
+    });
+    this.offRestored = core.onDeviceRestored((device) => this.restore(device));
+  }
+
+  /** The system's buffers, layouts and pose pipeline on `this.device`. */
+  private build(): void {
+    const device = this.device;
+    const core = this.core;
+    const consts = this.consts;
+    const u = U();
     this.records = device.createBuffer({
       label: `${this.label} records`,
       size: this.recU32.byteLength,
@@ -222,7 +274,6 @@ export class ActorSystem {
       size: argsBytes,
       usage: u.COPY_SRC | u.COPY_DST,
     });
-    this.templateData = new Uint32Array(argsBytes / 4);
     this.lists = device.createBuffer({
       label: `${this.label} lists`,
       size: this.maxViews * this.maxDraws * this.slots * 4,
@@ -233,9 +284,6 @@ export class ActorSystem {
       size: ACTOR_PARAMS_BYTES,
       usage: u.UNIFORM | u.COPY_DST,
     });
-    // The shader compares distances; an infinite one goes up as the largest float.
-    for (let i = 0; i < ACTOR_MAX_LODS; i++) this.paramsF32[4 + i] = Math.min(lods[i] ?? 0, 3.4e38);
-    this.paramsU32[8] = lods.length;
     this.rigBuffer = this.makeRigBuffer();
 
     const S = GPUShaderStage;
@@ -264,9 +312,8 @@ export class ActorSystem {
       }),
       compute: { module, entryPoint: 'pose' },
     });
-    this.computeDesc = { label: `${this.label} pose` };
 
-    const drawLayout = device.createBindGroupLayout({
+    this.drawLayout = device.createBindGroupLayout({
       label: `${this.label} draw`,
       entries: [
         { binding: 0, visibility: S.VERTEX, buffer: { type: 'read-only-storage' } },
@@ -274,41 +321,45 @@ export class ActorSystem {
         { binding: 2, visibility: S.VERTEX, buffer: { type: 'read-only-storage' } },
       ],
     });
-    const drawGroup = device.createBindGroup({
+    this.drawGroup = device.createBindGroup({
       label: `${this.label} draw`,
-      layout: drawLayout,
+      layout: this.drawLayout,
       entries: [
         { binding: 0, resource: { buffer: this.bones } },
         { binding: 1, resource: { buffer: this.lists } },
         { binding: 2, resource: { buffer: this.records } },
       ],
     });
-    this.vertexArena = core.createArena({
-      kind: 'vertex',
-      blockBytes: 16 << 20,
-      label: `${this.label} vertices`,
-    });
-    this.indexArena = core.createArena({
-      kind: 'index',
-      blockBytes: 8 << 20,
-      label: `${this.label} indices`,
-    });
-    this.drawSet = core.createDrawSet({
-      label: this.label,
-      shader: {
-        code: actorDrawWgsl(consts, opts.lightWgsl ?? ACTOR_DEFAULT_LIGHT_WGSL, this.shape.fields),
-        cullMode: 'none',
-      },
-      vertexLayout: ACTOR_VERTEX_LAYOUT,
-      vertices: this.vertexArena,
-      indices: this.indexArena,
-      capacity: this.maxDraws,
-      kind: 'static',
-      cull: 'external',
-      args: this.args,
-      pass: opts.pass ?? 'opaque',
-      bindGroups: [{ layout: drawLayout, group: drawGroup }],
-    });
+  }
+
+  /**
+   * After a device loss (`RenderCore.onDeviceRestored`): every buffer, the pipeline and the bind
+   * groups again on the new device, the records, rigs and argument template uploaded again and
+   * each model mesh written back into the core's restored arenas.
+   */
+  private restore(device: GPUDevice): void {
+    if (this.destroyed) return;
+    this.device = device;
+    this.build();
+    this.device.queue.writeBuffer(this.template, 0, this.templateData);
+    let d = 0;
+    for (const rig of this.rigs) {
+      for (const mesh of rig.meshes) {
+        const a = this.meshAllocs[d]!;
+        this.vertexArena.write(a.v, this.stampedVertices(mesh, d));
+        this.indexArena.write(a.ix, mesh.indices);
+        d++;
+      }
+    }
+    this.drawSet.setBindGroups([{ layout: this.drawLayout, group: this.drawGroup }], this.args);
+  }
+
+  /** A mesh's vertices with the draw index `d` in each vertex's last word. */
+  private stampedVertices(mesh: ActorRig['meshes'][number], d: number): Uint8Array<ArrayBuffer> {
+    const bytes = new Uint8Array(mesh.vertices);
+    const words = new Uint32Array(bytes.buffer);
+    for (let i = 0; i < mesh.vertexCount; i++) words[(i * ACTOR_VERTEX_BYTES) / 4 + 7] = d;
+    return bytes;
   }
 
   /** Models added so far. */
@@ -350,13 +401,12 @@ export class ActorSystem {
     for (let m = 0; m < rig.meshes.length; m++) {
       const mesh = rig.meshes[m]!;
       const d = drawBase + m;
-      const bytes = new Uint8Array(mesh.vertices);
-      const words = new Uint32Array(bytes.buffer);
-      for (let i = 0; i < mesh.vertexCount; i++) words[(i * ACTOR_VERTEX_BYTES) / 4 + 7] = d;
+      const bytes = this.stampedVertices(mesh, d);
       const v = this.vertexArena.alloc(bytes.byteLength, ACTOR_VERTEX_BYTES);
       this.vertexArena.write(v, bytes);
       const ix = this.indexArena.alloc(mesh.indices.byteLength, 4);
       this.indexArena.write(ix, mesh.indices);
+      this.meshAllocs[d] = { v, ix };
       const slot = this.drawSet.add({
         vertices: v,
         indices: ix,
@@ -537,6 +587,7 @@ export class ActorSystem {
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.offRestored();
     this.drawSet.destroy();
     for (const b of [
       this.records,
