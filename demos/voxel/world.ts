@@ -2,9 +2,8 @@
  * The voxel world of the voxel demo: the constants, the block ids and their texture layers, the
  * terrain (the engine's `createNoise`) and the generator that pours a world into an engine `VoxelGrid`, and the block rules
  * (what lies beyond the grid, where the player spawns). Shared by the page (`main.ts`), the
- * mesher Worker (`mesher.worker.ts`, for `blockLayer` and `outsideBlock`) and the spec
- * (`e2e/demos/voxel.spec.ts`). The grid, the mesher, the chunk meshes and the picking ray are
- * the engine's (`@thunderclap-engine/engine/voxel`); the blocks are the game's (VISION rule 5).
+ * spec (`e2e/demos/voxel.spec.ts`). The grid, the streamed world, its mesher and the picking
+ * ray are the engine's (`@thunderclap-engine/engine/voxel`); the blocks are the game's (VISION rule 5).
  *
  * Coordinates: the grid's corner is the world origin, so a voxel `(x, y, z)` occupies the world
  * cube `[x, x + 1) × [y, y + 1) × [z, z + 1)` and grid coordinates are world coordinates.
@@ -16,7 +15,11 @@ import {
   hash3f,
   type Noise,
 } from '@thunderclap-engine/engine/core';
-import type { VoxelFace, VoxelGrid } from '@thunderclap-engine/engine/voxel';
+import {
+  defineBlockTable,
+  defineVoxelFormat,
+  type VoxelGrid,
+} from '@thunderclap-engine/engine/voxel';
 
 export const CHUNK = 16;
 export const WORLD_CHUNKS_X = 8;
@@ -80,15 +83,33 @@ export const BLOCK_NAMES: readonly string[] = [
 ];
 
 /** The texture layer of `block`'s face `face` (the engine's `layerOf`; faces +x -x +y -y +z -z). */
-export function blockLayer(block: number, face: VoxelFace): number {
+export function blockLayer(block: number, face: number): number {
   if (block === Block.Grass) {
-    if (face === 2) return Layer.GrassTop;
-    if (face === 3) return Layer.Dirt;
+    if (face === 3) return Layer.GrassTop;
+    if (face === 2) return Layer.Dirt;
     return Layer.GrassSide;
   }
   // The other blocks share their id with their layer.
   return block;
 }
+
+/**
+ * The world's voxel format: every block a solid cube (leaves too, as before the move), glowstone
+ * giving full block light. Ids are the `Block` values.
+ */
+export const format = defineVoxelFormat({
+  sectionSize: CHUNK,
+  blocks: defineBlockTable([
+    { class: 'none' },
+    { class: 'opaque' },
+    { class: 'opaque' },
+    { class: 'opaque' },
+    { class: 'opaque' },
+    { class: 'opaque' },
+    { class: 'opaque' },
+    { class: 'opaque', emission: 15 },
+  ]),
+});
 
 /** What lies beyond the grid (the engine's `outside`): stone below it (no underside), air elsewhere. */
 export function outsideBlock(_x: number, y: number, _z: number): number {
@@ -280,8 +301,14 @@ export interface VoxelDemoState {
   drawCalls: number;
   /** Triangles drawn last frame (chunk meshes only). */
   triangles: number;
-  /** Last block-edit round trip: edit → every touched chunk uploaded, ms. -1 before any. */
+  /** Last block-edit round trip: edit → its first remeshed section uploaded, ms. -1 while waiting. */
   remeshMs: number;
+  /** Last block edit → the world settled (relit neighbours uploaded too), ms. -1 while waiting. */
+  settleMs: number;
+  /** The longest frame (wall clock, ms) from the last edit until the world settled. 0 before any. */
+  remeshFrameMs: number;
+  /** The longest of the 64 frames (wall clock, ms) before the last edit: the baseline for `remeshFrameMs`. */
+  idleFrameMs: number;
   /** Remeshes the engine applied so far (`VoxelChunks.stats.remeshes`). */
   remeshes: number;
   /** Block edits so far. */

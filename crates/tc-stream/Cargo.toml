@@ -1,0 +1,17 @@
+[package]
+name = "tc-stream"
+description = "ThunderClap's section stream: a game's world sent to each connection in sections by interest area, nearest first, cached, stamped, resumed after a reconnect and budgeted, over a game-supplied SectionSource"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+tc-wire.workspace = true
+tc-net.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
+
+[lints]
+workspace = true

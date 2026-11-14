@@ -58,7 +58,7 @@ Six scenes every engine change is measured on (E-041 A4): `harness/ref-<scene>.h
 - `ref-board` (S1, 2D): a 48×27 tile layer, a flipbook walker and 4,000 sprites drifting on circles under the `ortho2d` camera.
 - `ref-characters` (S2): 64 (and 256) seven-joint figures, each its own `AnimationMixer` on a walk clip, skinned through one `SkinPalette`, under a sun shadow; the camera orbits.
 - `ref-arena` (S3): standard-material spheres and pillars on a floor, a sun shadow, 8 moving point lights and 2 spots, bloom and vignette (`PostStack`).
-- `ref-voxel` (S4): an 8×2×8 (and 16×2×16) chunk world of 16³ chunks, meshed before frame 0 (in a Worker on the page), flown over.
+- `ref-voxel` (S4): an 8×2×8 (and 16×2×16) chunk world of 16³ sections in `createVoxelWorld` (fed by `feedVoxelGrid`, meshed before frame 0, in a Worker on the page), its GPU-culled core sets drawn in the renderer's frame, flown over; its counts are flat in the world's size.
 - `ref-stereo` (S5): S2's figures (32) seen by two eyes a frame (`viewIndex` 0 and 1, half the target each); `ref-stereo-mono` is the same frame through one view.
 - `ref-hud` (S6): an idle overlay (reticle, two meters, six slots, a heading) over a still scene; every frame sets the widgets to the values they hold.
 
@@ -78,11 +78,11 @@ Counted per frame (40 measured after 10 warm-up), as in "Counted work, 1.3 basel
 | `ref-arena` | 252.25 | 52.38 | 48.6 | 49.6 | 15 | 1 | 6 | 18,822.4 | 1 | 0 | 0 |
 | ↳ `view` | 177.25 | 39.38 | 35.6 | 36.6 | 2 | 0 | 3 | 16,518.4 | 1 | 0 | 0 |
 | ↳ `present` | 75 | 13 | 13 | 13 | 13 | 1 | 3 | 2,304 | 0 | 0 | 0 |
-| `ref-voxel-8` | 51.1 | 34 | 2 | 3 | 2 | 1 | 2 | 5,728 | 1 | 0.03 | 1 |
-| ↳ `view` | 44.1 | 33 | 1 | 2 | 1 | 0 | 2 | 5,728 | 1 | 0 | 0 |
+| `ref-voxel-8` | 23 | 1 | 2 | 3 | 4 | 1 | 2 | 4,336 | 1 | 0 | 2 |
+| ↳ `view` | 16 | 0 | 1 | 2 | 3 | 0 | 2 | 4,336 | 1 | 0 | 0 |
 | ↳ `present` | 7 | 1 | 1 | 1 | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
-| `ref-voxel-16` | 101.6 | 84.4 | 2 | 3 | 2 | 1 | 2 | 11,372.8 | 1 | 0.03 | 1 |
-| ↳ `view` | 94.6 | 83.4 | 1 | 2 | 1 | 0 | 2 | 11,372.8 | 1 | 0 | 0 |
+| `ref-voxel-16` | 23 | 1 | 2 | 3 | 4 | 1 | 2 | 4,336 | 1 | 0 | 2 |
+| ↳ `view` | 16 | 0 | 1 | 2 | 3 | 0 | 2 | 4,336 | 1 | 0 | 0 |
 | ↳ `present` | 7 | 1 | 1 | 1 | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
 | `ref-stereo` | 87 | 11 | 11 | 11 | 5 | 1 | 7 | 30,780 | 1 | 0 | 0 |
 | ↳ `update` | 1 | 0 | 0 | 0 | 0 | 0 | 1 | 10,752 | 0 | 0 | 0 |
@@ -105,8 +105,8 @@ Counted per frame (40 measured after 10 warm-up), as in "Counted work, 1.3 basel
 | `ref-characters-64` | 3 | 5,378 | 65 | 0 | 36 | 1 |
 | `ref-characters-256` | 3 | 21,506 | 257 | 0 | 100 | 1 |
 | `ref-arena` | 35 | 47,138 | 58 | 0 | 53 | 1 |
-| `ref-voxel-8` | 33 | 15,136 | 33 | 0 | 0 | 1 |
-| `ref-voxel-16` | 83 | 47,624 | 83 | 0 | 0 | 1 |
+| `ref-voxel-8` | 0 | 0 | 0 | 0 | 0 | 1 |
+| `ref-voxel-16` | 0 | 0 | 0 | 0 | 0 | 1 |
 | `ref-stereo` | 6 | 5,380 | 66 | 0 | 42 | 2 |
 | `ref-stereo-mono` | 3 | 2,690 | 33 | 0 | 21 | 1 |
 | `ref-hud` | 2 | 38 | 4 | 0 | 0 | 1 |

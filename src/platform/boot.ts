@@ -1,4 +1,4 @@
-import { type GpuContext, type GpuFailureReason, initGpu } from './gpu';
+import { type GpuContext, type GpuFailureReason, type GpuInitOptions, initGpu } from './gpu';
 import { showDeviceLostScreen, showUnsupportedScreen } from './screens';
 import { mountSurface, type Surface, type SurfaceOptions } from './surface';
 
@@ -9,7 +9,15 @@ export interface BootOptions extends SurfaceOptions {
   onDeviceLost?: (info: GPUDeviceLostInfo) => void;
   /** Dev aid: pretend WebGPU is missing to preview the unsupported screen. */
   forceUnsupported?: boolean;
+  /**
+   * What `initGpu` asks the adapter for (ws/kit-fit): `powerPreference`, `timestamps`,
+   * `compression`, `drawFeatures`, `xrCompatible`. Default: `initGpu`'s defaults.
+   */
+  gpuOptions?: BootGpuOptions;
 }
+
+/** `BootOptions.gpuOptions`: `GpuInitOptions` but `onLost`, which `boot` owns. */
+export type BootGpuOptions = Omit<GpuInitOptions, 'onLost'>;
 
 export type BootResult =
   | {
@@ -36,6 +44,7 @@ export async function boot(root: HTMLElement, opts: BootOptions = {}): Promise<B
   const surface = mountSurface(root, opts);
   const lostListeners = new Set<(info: GPUDeviceLostInfo) => void>();
   const res = await initGpu(surface.canvas, {
+    ...opts.gpuOptions,
     onLost: (info) => {
       showDeviceLostScreen(root, { title: opts.title, detail: info.message || undefined });
       opts.onDeviceLost?.(info);

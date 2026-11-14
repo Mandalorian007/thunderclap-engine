@@ -99,8 +99,8 @@ export interface GameLoopOptions extends FixedStepperOptions {
   frames?: FrameSource;
 }
 
-/** Early-frame tolerance for `GameLoop.maxFps`, ms. */
-const FRAME_CAP_SLACK_MS = 3;
+/** Early-frame tolerance for `GameLoop.maxFps`, ms (the kit's external frames use it too). */
+export const FRAME_CAP_SLACK_MS = 3;
 
 /** An XR session's frames (`createXrHost`'s `kind: 'xr'`): `maxFps` never applies to them. */
 function isXrSource(src: FrameSource | null): boolean {
@@ -151,7 +151,8 @@ export class GameLoop {
    * on every other vsync: a steady 30 fps instead of a GPU-bound jitter between 30 and 60.
    * Frames are skipped whole (no update, no render), so the fixed step still keeps time.
    * Ignored while frames come from an XR session (a `kind: 'xr'` source): the headset sets
-   * the rate.
+   * the rate. External frames (`createExternalFrames`) apply it too: a `frame(loop, now)` that
+   * comes too soon after the last one run is skipped.
    */
   get maxFps(): number | null {
     return this.minFrameMs > 0 ? 1000 / this.minFrameMs : null;

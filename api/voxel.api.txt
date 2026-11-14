@@ -60,25 +60,6 @@ interface CellLayout {
     fields?: readonly CellField[];
 }
 
-## ChunkMesh  (type-only)
-interface ChunkMesh extends MeshReply {
-    chunk: number;
-    buffer: ArrayBuffer;
-    vertexCount: number;
-    indexCount: number;
-    indexOffset: number;
-    bounds: MeshBounds;
-}
-
-## ChunkMeshOut  (type-only)
-interface ChunkMeshOut {
-    vertices: Float32Array;
-    indices: Uint32Array;
-    vertexCount: number;
-    indexCount: number;
-    bounds: MeshBounds;
-}
-
 ## ConnectivityFlood
 class ConnectivityFlood implements SectionConnectivity {
     bits: number;
@@ -109,14 +90,6 @@ const HEIGHT_OPEN = -2147483648;
 
 ## LIGHT_HUES
 const LIGHT_HUES = 8;
-
-## MeshChunkOptions  (type-only)
-interface MeshChunkOptions {
-    ao?: boolean;
-    aoCurve?: ArrayLike<number>;
-    layerOf?: (block: number, face: VoxelFace) => number;
-    outside?: number | ((x: number, y: number, z: number) => number);
-}
 
 ## MesherPort  (type-only)
 interface MesherPort {
@@ -390,14 +363,8 @@ interface SectionWorkerScopeLike {
 ## SourceSection  (type-only)
 type SourceSection = number | Uint8Array | Uint32Array;
 
-## VOXEL_AO_CURVE
-const VOXEL_AO_CURVE: readonly number[];
-
 ## VOXEL_DEFAULT_FRAGMENT
 const VOXEL_DEFAULT_FRAGMENT: Readonly<Record<VoxelStream, string>>;
-
-## VOXEL_FACE_NORMALS
-const VOXEL_FACE_NORMALS: readonly (readonly [number, number, number])[];
 
 ## VOXEL_VARYING_WGSL
 const VOXEL_VARYING_WGSL = "\nstruct VoxelVarying {\n  @builtin(position) clip: vec4f,\n  @location(0) world: vec3f,\n  @location(1) normal: vec3f,\n  @location(2) light: vec3f,\n  @location(3) uv: vec2f,\n  @location(4) @interpolate(flat) w0: u32,\n  @location(5) @interpolate(flat) w1: u32,\n}\n";
@@ -405,14 +372,8 @@ const VOXEL_VARYING_WGSL = "\nstruct VoxelVarying {\n  @builtin(position) clip: 
 ## VOXEL_VERTEX_DEFAULTS
 const VOXEL_VERTEX_DEFAULTS: readonly VertexFieldDef[];
 
-## VOXEL_VERTEX_FLOATS
-const VOXEL_VERTEX_FLOATS = 12;
-
 ## VOXEL_VERTEX_OPTIONAL
 const VOXEL_VERTEX_OPTIONAL: readonly VertexFieldDef[];
-
-## VOXEL_WGSL
-const VOXEL_WGSL = "\nfn voxel_layer(color: vec4f) -> u32 {\n  return u32(round(max(color.a, 0.0)));\n}\n\nfn voxel_ao(color: vec4f) -> f32 {\n  return color.r;\n}\n\nfn voxel_uv_wrap(uv: vec2f) -> vec2f {\n  return fract(uv);\n}\n";
 
 ## VertexField  (type-only)
 interface VertexField {
@@ -446,49 +407,6 @@ interface VertexSchemaWgslOptions {
     struct?: string;
     fn?: string;
 }
-
-## VoxelChunks  (type-only)
-interface VoxelChunks {
-    readonly grid: VoxelGrid;
-    readonly material: Material;
-    readonly mesher: VoxelMesher;
-    readonly meshes: readonly (Mesh | null)[];
-    readonly transforms: readonly Transform[];
-    readonly stats: VoxelChunksStats;
-    update(): number;
-    draw(frame: Frame, camera: Camera): VoxelDrawStats;
-    dispose(): void;
-}
-
-## VoxelChunksOptions  (type-only)
-interface VoxelChunksOptions extends MeshChunkOptions {
-    material: Material;
-    slack?: number;
-    minQuads?: number;
-    mesher?: VoxelMesher;
-    origin?: ArrayLike<number>;
-    params?: InstanceParams;
-    now?: () => number;
-}
-
-## VoxelChunksStats  (type-only)
-interface VoxelChunksStats extends VoxelDrawStats {
-    chunks: number;
-    growths: number;
-    pending: number;
-    remeshes: number;
-    remeshMs: number;
-}
-
-## VoxelDrawStats  (type-only)
-interface VoxelDrawStats {
-    drawn: number;
-    culled: number;
-    triangles: number;
-}
-
-## VoxelFace  (type-only)
-type VoxelFace = 0 | 1 | 2 | 3 | 4 | 5;
 
 ## VoxelFormat  (type-only)
 interface VoxelFormat {
@@ -595,62 +513,8 @@ interface VoxelMaterial {
     blend?: GPUBlendState;
 }
 
-## VoxelMesher  (type-only)
-interface VoxelMesher {
-    readonly grid: VoxelGrid;
-    readonly offThread: boolean;
-    readonly pending: number;
-    remesh(chunk: number): Promise<ChunkMesh>;
-    sync(): void;
-    dispose(): void;
-}
-
-## VoxelMesherOptions  (type-only)
-interface VoxelMesherOptions extends MeshChunkOptions {
-    worker?: VoxelWorkerLike;
-}
-
-## VoxelMesherReply  (type-only)
-type VoxelMesherReply = ChunkMesh & {
-    type: 'mesh';
-};
-
-## VoxelMesherRequest  (type-only)
-type VoxelMesherRequest = {
-    type: 'grid';
-    buffer: ArrayBuffer;
-} | {
-    type: 'set';
-    x: number;
-    y: number;
-    z: number;
-    block: number;
-} | {
-    type: 'mesh';
-    chunk: number;
-};
-
 ## VoxelStream  (type-only)
 type VoxelStream = 'opaque' | 'foliage' | 'liquid';
-
-## VoxelWorkerLike  (type-only)
-interface VoxelWorkerLike {
-    postMessage(message: VoxelMesherRequest, transfer?: Transferable[]): void;
-    addEventListener(type: 'message', listener: (e: {
-        data: unknown;
-    }) => void): void;
-    removeEventListener(type: 'message', listener: (e: {
-        data: unknown;
-    }) => void): void;
-}
-
-## VoxelWorkerScopeLike  (type-only)
-interface VoxelWorkerScopeLike {
-    postMessage(message: VoxelMesherReply, transfer?: Transferable[]): void;
-    addEventListener(type: 'message', listener: (e: {
-        data: unknown;
-    }) => void): void;
-}
 
 ## VoxelWorld  (type-only)
 interface VoxelWorld {
@@ -712,26 +576,14 @@ interface VoxelWorldStats {
     inFlight: number;
 }
 
-## countExposedFaces
-function countExposedFaces(grid: VoxelGrid, cx: number, cy: number, cz: number, outside?: MeshChunkOptions['outside']): number;
-
-## createChunkMeshOut
-function createChunkMeshOut(quads?: number): ChunkMeshOut;
-
 ## createSectionStore
 function createSectionStore(opts: SectionStoreOptions): SectionStore;
-
-## createVoxelChunks
-function createVoxelChunks(renderer: Renderer, grid: VoxelGrid, opts: VoxelChunksOptions): VoxelChunks;
 
 ## createVoxelGrid
 function createVoxelGrid(opts: VoxelGridOptions): VoxelGrid;
 
 ## createVoxelHit
 function createVoxelHit(): VoxelHit;
-
-## createVoxelMesher
-function createVoxelMesher(grid: VoxelGrid, opts?: VoxelMesherOptions): VoxelMesher;
 
 ## createVoxelWorld
 function createVoxelWorld(core: RenderCore, opts: VoxelWorldOptions): VoxelWorld;
@@ -765,17 +617,8 @@ function installSectionMesherWorker(opts: {
     codec: SectionCodec;
 }, scope?: SectionWorkerScopeLike): (req: SectionMesherRequest) => SectionMesherReply | null;
 
-## installVoxelMesherWorker
-function installVoxelMesherWorker(opts?: MeshChunkOptions, scope?: VoxelWorkerScopeLike): (req: VoxelMesherRequest) => void;
-
 ## jobTransfers
 function jobTransfers(job: SectionJob): ArrayBuffer[];
-
-## meshChunk
-function meshChunk(grid: VoxelGrid, cx: number, cy: number, cz: number, opts: MeshChunkOptions, out: ChunkMeshOut): ChunkMeshOut;
-
-## packChunkMesh
-function packChunkMesh(out: ChunkMeshOut, chunk: number): ChunkMesh;
 
 ## packSources
 function packSources(size: number, sources: readonly SourceSection[], whole?: boolean): {

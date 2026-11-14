@@ -18,6 +18,7 @@ tc-net = { path = "crates/tc-net" }
 tc-auth = { path = "crates/tc-auth" }
 tc-store = { path = "crates/tc-store" }
 tc-sim = { path = "crates/tc-sim" }
+tc-stream = { path = "crates/tc-stream" }
 
 # tc-net: the connection layer.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
