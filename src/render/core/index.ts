@@ -30,13 +30,16 @@ export { createInstanceLayout, createVertexLayout, vertexFormatBytes } from './l
 export type { CorePass, PassDepth, PassDesc } from './pass-list';
 export { CORE_PASSES, PassList } from './pass-list';
 export { QUAD_INDICES, QuadIndex, quadIndices } from './quad-index';
-export type { RenderView } from './view';
+export type { CullGroup, RenderView } from './view';
 export {
   CORE_VIEW_WGSL,
   createRenderView,
   MAX_VIEWS,
   setViewFromCamera,
+  setViewFromMatrices,
   sphereInPlanes,
+  unionPlanesInto,
+  VIEW_SLOT,
   VIEW_SLOT_BYTES,
   VIEW_SLOT_FLOATS,
 } from './view';

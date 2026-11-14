@@ -162,6 +162,8 @@ export interface FakePass {
   label?: string;
   desc: unknown;
   commands: PassCommand[];
+  /** The view marked (`markView`) when the pass began (ws/core-views); absent when none was. */
+  view?: string;
 }
 
 /**
@@ -217,6 +219,14 @@ export interface FakeDevice {
   readonly calls: number;
   /** Commands recorded into render bundles so far (ws/core-retained). */
   readonly bundleCalls: number;
+  /**
+   * The per-view hook (ws/core-views): calls after `markView(name)` count under `name` in
+   * `callsByView` (and passes begun are tagged `view: name`) until the next mark; `null` stops
+   * attributing. A renderer's `onView` hook can mark each view as it draws.
+   */
+  markView(name: string | null): void;
+  /** GPU calls per marked view so far (ws/core-views); diff it around a frame. */
+  readonly callsByView: ReadonlyMap<string, number>;
   /**
    * Stands in for the shaders (ws/render-9): called with each render or compute pass when its
    * command buffer is submitted, in order with the encoder's copies and clears, so a test can
@@ -289,6 +299,12 @@ export function createFakeDevice(
   let submits = 0;
   let calls = 0;
   let bundleCalls = 0;
+  let viewName: string | null = null;
+  const callsByView = new Map<string, number>();
+  const tick = () => {
+    calls++;
+    if (viewName !== null) callsByView.set(viewName, (callsByView.get(viewName) ?? 0) + 1);
+  };
   const bundles: FakeBundle[] = [];
   const featureSet = new Set<string>(features);
   let resolveLost: ((info: GPUDeviceLostInfo) => void) | null = null;
@@ -463,13 +479,14 @@ export function createFakeDevice(
     desc: { label?: string } | undefined,
   ) => {
     const p: FakePass = { kind, label: desc?.label, desc, commands: [] };
+    if (viewName !== null) p.view = viewName;
     passes.push(p);
     ops.push({ op: 'pass', pass: p });
-    const rec = recorder(p.commands, () => calls++);
+    const rec = recorder(p.commands, tick);
     return {
       ...rec,
       executeBundles: (list: Iterable<FakeBundle>) => {
-        calls++;
+        tick();
         p.commands.push({ op: 'executeBundles', bundles: [...list] });
       },
       multiDrawIndexedIndirect: (
@@ -486,7 +503,7 @@ export function createFakeDevice(
         if (offset + maxDrawCount * 20 > buffer.size) {
           errors.push(`multiDrawIndexedIndirect: ${buffer.label} overrun`);
         }
-        calls++;
+        tick();
         p.commands.push(
           countBuffer
             ? {
@@ -584,15 +601,15 @@ export function createFakeDevice(
       return {
         label: desc?.label,
         beginRenderPass: (d: GPURenderPassDescriptor) => {
-          calls++;
+          tick();
           return makePass(ops, 'render', d);
         },
         beginComputePass: (d?: GPUComputePassDescriptor) => {
-          calls++;
+          tick();
           return makePass(ops, 'compute', d);
         },
         copyTextureToTexture(src: { texture: FakeTexture }, dst: { texture: FakeTexture }) {
-          calls++;
+          tick();
           if (!(src.texture.usage & TEXTURE_USAGE.COPY_SRC)) {
             errors.push(`copyTextureToTexture: ${src.texture.label} lacks COPY_SRC`);
           }
@@ -613,7 +630,7 @@ export function createFakeDevice(
           c?: number,
           d?: number,
         ) {
-          calls++;
+          tick();
           // (src, srcOffset, dst, dstOffset, size?) or the short (src, dst, size?).
           const short = typeof a === 'object';
           const srcOffset = short ? 0 : (a as number);
@@ -635,7 +652,7 @@ export function createFakeDevice(
           ops.push({ op: 'copy', copy });
         },
         clearBuffer(buffer: FakeBuffer, offset = 0, size?: number) {
-          calls++;
+          tick();
           if (!(buffer.usage & BUFFER_USAGE.COPY_DST)) {
             errors.push(`clearBuffer: ${buffer.label} lacks COPY_DST`);
           }
@@ -648,7 +665,7 @@ export function createFakeDevice(
           dst: FakeBuffer,
           offset: number,
         ) {
-          calls++;
+          tick();
           needs(dst, 'QUERY_RESOLVE', 'resolveQuerySet');
           if (offset % 256) errors.push(`resolveQuerySet: offset ${offset} not 256-aligned`);
           if (first + count > set.count || offset + count * 8 > dst.size) {
@@ -668,7 +685,7 @@ export function createFakeDevice(
         dataOffset?: number,
         dataSize?: number,
       ) {
-        calls++;
+        tick();
         needs(buffer, 'COPY_DST', 'writeBuffer');
         if (buffer.destroyed) errors.push(`writeBuffer: ${buffer.label} is destroyed`);
         if (buffer.mapState !== 'unmapped') {
@@ -690,7 +707,7 @@ export function createFakeDevice(
         layout: GPUTexelCopyBufferLayout,
         size: number[],
       ) {
-        calls++;
+        tick();
         if (!(dst.texture.usage & TEXTURE_USAGE.COPY_DST)) {
           errors.push(`writeTexture: ${dst.texture.label} lacks COPY_DST`);
         }
@@ -706,7 +723,7 @@ export function createFakeDevice(
       copyExternalImageToTexture() {},
       submit(cmds: Iterable<{ ops?: BufferOp[] }>) {
         submits++;
-        calls++;
+        tick();
         for (const cb of cmds) if (cb?.ops) runOps(cb.ops);
       },
       onSubmittedWorkDone: () => Promise.resolve(),
@@ -735,6 +752,10 @@ export function createFakeDevice(
     get bundleCalls() {
       return bundleCalls;
     },
+    markView(name: string | null) {
+      viewName = name;
+    },
+    callsByView,
     runPass: null,
     errors,
     lost,
