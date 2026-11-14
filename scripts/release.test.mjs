@@ -13,6 +13,7 @@ import {
   ATTRIBUTION,
   distTag,
   headProblem,
+  notesProblem,
   pushCommand,
   releaseMessage,
   VERSION,
@@ -52,6 +53,14 @@ test('prerelease versions are accepted and go to the next dist-tag', () => {
   assert.equal(distTag('2.0.0-next.0'), 'next');
 });
 
+test('notesProblem refuses a section with no entries or none at all', () => {
+  const log = (body) =>
+    `# Changelog\n\n## Unreleased\n\n## 1.0.1 (2026-01-01)\n${body}\n## 1.0.0 (2025-12-01)\n\n- old\n`;
+  assert.equal(notesProblem(log('\n- a fix\n'), '1.0.1'), null);
+  assert.match(notesProblem(log('\n'), '1.0.1'), /1\.0\.1 would be empty/);
+  assert.match(notesProblem(log('\n- a fix\n'), '1.0.2'), /1\.0\.2 would be empty/);
+});
+
 test('publish.yml publishes a prerelease under next, never latest', () => {
   const yml = readFileSync(
     join(dirname(script), '..', '.github', 'workflows', 'publish.yml'),
@@ -88,11 +97,25 @@ const release = (...a) =>
 
 mkdirSync(join(repo, 'scripts'));
 copyFileSync(script, join(repo, 'scripts', 'release.mjs'));
+copyFileSync(
+  join(dirname(script), 'publish-notes.mjs'),
+  join(repo, 'scripts', 'publish-notes.mjs'),
+);
 writeFileSync(join(repo, 'package.json'), '{\n  "name": "x",\n  "version": "1.0.0"\n}\n');
 writeFileSync(join(repo, 'CHANGELOG.md'), '# Changelog\n\n## Unreleased\n\n- a fix\n');
 git('init', '-q', '-b', 'main');
 git('add', '.');
 git('commit', '-q', '-m', 'init');
+
+/** Adds an entry under "## Unreleased" on the current HEAD and commits it. */
+const addEntry = (text) => {
+  const p = join(repo, 'CHANGELOG.md');
+  writeFileSync(
+    p,
+    readFileSync(p, 'utf8').replace('## Unreleased\n', `## Unreleased\n\n- ${text}\n`),
+  );
+  git('commit', '-q', '-am', text);
+};
 
 test('a dry run on main and on a detached HEAD at main would go ahead', () => {
   for (const at of [
@@ -139,8 +162,23 @@ test('a release on main prints a plain push', () => {
   assert.equal(git('log', '-1', '--format=%B'), `release: 1.0.2\n\n${ATTRIBUTION}`);
 });
 
+test('an empty Unreleased section (main just cut 1.0.2) stops the release before any commit or tag', () => {
+  git('switch', '-q', 'main');
+  const before = git('rev-parse', 'HEAD');
+  assert.match(
+    release('1.0.3', '--tag', '--dry').stdout,
+    /would stop: the CHANGELOG section for 1\.0\.3 would be empty/,
+  );
+  const r = release('1.0.3', '--tag', '--skip-checks');
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /1\.0\.3 would be empty/);
+  assert.equal(git('rev-parse', 'HEAD'), before);
+  assert.equal(git('tag', '--list', 'v1.0.3'), '');
+});
+
 test('a prerelease on main is cut like any release and says it publishes to next', () => {
   git('switch', '-q', 'main');
+  addEntry('a feature');
   const r = release('2.0.0-next.0', '--tag', '--skip-checks');
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /git push origin main v2\.0\.0-next\.0/);

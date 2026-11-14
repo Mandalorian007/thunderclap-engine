@@ -14,6 +14,7 @@
 import { mat4 } from '../../core/math';
 import type { RenderCore } from './core';
 import type { CorePass } from './pass-list';
+import { coreColorFormats } from './targets';
 import { CORE_VIEW_WGSL, MAX_VIEWS, sphereInPlanes, VIEW_SLOT, VIEW_SLOT_FLOATS } from './view';
 
 /** What a drawable records into: an open pass (direct) or a bundle. */
@@ -28,8 +29,13 @@ export interface CoreDrawContext {
   viewGroup: GPUBindGroup;
   /** The layout of `viewGroup`, for the drawable's pipeline layout. */
   readonly viewLayout: GPUBindGroupLayout;
-  /** The colour target's format (one colour target). */
+  /** The colour target's format (at location 0). */
   color: GPUTextureFormat;
+  /**
+   * The pass's extra targets (ws/core-targets), a `CORE_TARGET` mask: a drawable's pipeline
+   * lists them with `coreColorTargets(color, aux, writes)` (`DrawablePipelines` keys by it).
+   */
+  aux: number;
   /** The depth attachment's format, undefined when the pass has none. */
   depth: GPUTextureFormat | undefined;
   /** The pass holds depth read-only (a pipeline must not write it). */
@@ -97,12 +103,14 @@ export interface PassMember {
     color: GPUTextureFormat,
     depth: GPUTextureFormat | undefined,
     readOnly: boolean,
+    aux: number,
   ): GPURenderBundle;
   encodeDirect(
     pass: GPURenderPassEncoder,
     group: number,
     color: GPUTextureFormat,
     depth: GPUTextureFormat | undefined,
+    aux: number,
   ): void;
 }
 
@@ -129,6 +137,7 @@ interface Recorded {
   color: GPUTextureFormat;
   depth: GPUTextureFormat | undefined;
   readOnly: boolean;
+  aux: number;
   version: number;
   targets: number;
   bundle: GPURenderBundle;
@@ -186,6 +195,7 @@ export class DrawableEntry implements PassMember {
     color: GPUTextureFormat,
     depth: GPUTextureFormat | undefined,
     readOnly: boolean,
+    aux = 0,
   ): GPURenderBundle {
     const host = this.host;
     const bind = host.drawGroup(group);
@@ -194,7 +204,13 @@ export class DrawableEntry implements PassMember {
     let entry: Recorded | undefined;
     for (let i = 0; i < this.bundles.length; i++) {
       const b = this.bundles[i]!;
-      if (b.group === group && b.color === color && b.depth === depth && b.readOnly === readOnly) {
+      if (
+        b.group === group &&
+        b.color === color &&
+        b.depth === depth &&
+        b.readOnly === readOnly &&
+        b.aux === aux
+      ) {
         entry = b;
         break;
       }
@@ -204,12 +220,12 @@ export class DrawableEntry implements PassMember {
     }
     const enc = host.device.createRenderBundleEncoder({
       label: `${this.drawable.label ?? 'drawable'} bundle`,
-      colorFormats: [color],
+      colorFormats: coreColorFormats(color, aux),
       depthStencilFormat: depth,
       depthReadOnly: readOnly,
       stencilReadOnly: readOnly,
     });
-    const n = this.drawable.record(enc, this.context(group, bind, color, depth, readOnly));
+    const n = this.drawable.record(enc, this.context(group, bind, color, depth, readOnly, aux));
     host.stats.bundleCalls += n;
     host.stats.bundleBuilds++;
     const bundle = enc.finish();
@@ -225,6 +241,7 @@ export class DrawableEntry implements PassMember {
         color,
         depth,
         readOnly,
+        aux,
         version,
         targets,
         bundle,
@@ -238,12 +255,13 @@ export class DrawableEntry implements PassMember {
     group: number,
     color: GPUTextureFormat,
     depth: GPUTextureFormat | undefined,
+    aux = 0,
   ): void {
     const host = this.host;
     const readOnly = depth !== undefined && this.pass.depth === 'read';
     const n = this.drawable.record(
       pass,
-      this.context(group, host.drawGroup(group), color, depth, readOnly),
+      this.context(group, host.drawGroup(group), color, depth, readOnly, aux),
     );
     host.stats.calls += n;
     host.stats.directDraws++;
@@ -255,8 +273,10 @@ export class DrawableEntry implements PassMember {
     color: GPUTextureFormat,
     depth: GPUTextureFormat | undefined,
     readOnly: boolean,
+    aux: number,
   ): CoreDrawContext {
     const ctx = this.host.ctx;
+    ctx.aux = aux;
     ctx.group = group;
     ctx.viewGroup = bind;
     ctx.color = color;
@@ -267,15 +287,17 @@ export class DrawableEntry implements PassMember {
 }
 
 /**
- * Render pipelines of one drawable by target: colour format × depth format × read-only, made
- * on first use by `make` (pass `depthWrite` on to `GPUDepthStencilState.depthWriteEnabled`
- * only when the pass is not read-only).
+ * Render pipelines of one drawable by target: colour format × depth format × read-only × the
+ * pass's extra targets (`aux`, ws/core-targets), made on first use by `make` (pass `depthWrite`
+ * on to `GPUDepthStencilState.depthWriteEnabled` only when the pass is not read-only; list the
+ * colour targets with `coreColorTargets(color, aux, writes)`).
  */
 export class DrawablePipelines {
   private readonly list: {
     color: GPUTextureFormat;
     depth: GPUTextureFormat | undefined;
     readOnly: boolean;
+    aux: number;
     pipeline: GPURenderPipeline;
   }[] = [];
 
@@ -284,23 +306,31 @@ export class DrawablePipelines {
       color: GPUTextureFormat,
       depth: GPUTextureFormat | undefined,
       readOnly: boolean,
+      aux: number,
     ) => GPURenderPipeline,
   ) {}
 
   /** The pipeline for `ctx`'s target. */
   get(ctx: CoreDrawContext): GPURenderPipeline {
     const l = this.list;
+    const aux = ctx.aux ?? 0;
     for (let i = 0; i < l.length; i++) {
       const e = l[i]!;
-      if (e.color === ctx.color && e.depth === ctx.depth && e.readOnly === ctx.depthReadOnly) {
+      if (
+        e.color === ctx.color &&
+        e.depth === ctx.depth &&
+        e.readOnly === ctx.depthReadOnly &&
+        e.aux === aux
+      ) {
         return e.pipeline;
       }
     }
-    const pipeline = this.make(ctx.color, ctx.depth, ctx.depthReadOnly);
+    const pipeline = this.make(ctx.color, ctx.depth, ctx.depthReadOnly, aux);
     l.push({
       color: ctx.color,
       depth: ctx.depth,
       readOnly: ctx.depthReadOnly,
+      aux,
       pipeline,
     });
     return pipeline;

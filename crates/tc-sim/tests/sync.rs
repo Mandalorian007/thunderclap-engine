@@ -261,6 +261,63 @@ fn a_returning_client_resumes_with_a_patch() {
     assert_eq!(updated(&msgs).len(), 1, "{msgs:?}");
 }
 
+/// The version and hash a client holds after these messages, for `sub`.
+fn held(msgs: &[Msg], want: u32) -> Option<(u64, String)> {
+    msgs.iter().rev().find_map(|m| match m {
+        ServerMsg::Update {
+            sub, version, hash, ..
+        }
+        | ServerMsg::Resync {
+            sub, version, hash, ..
+        } if *sub == want => Some((*version, hash.clone())),
+        _ => None,
+    })
+}
+
+#[test]
+fn a_resent_result_carries_its_hash_and_an_unchanged_resume_sends_nothing() {
+    let mut d = driver(false);
+    let (ada, mut rx) = d.connect("ada", Empty);
+    recv(&mut rx);
+    subscribe(&mut d, ada, 1, "board", Empty.to_bytes());
+    let msgs = recv(&mut rx);
+    let [ServerMsg::Resync { hash, result, .. }] = &msgs[..] else {
+        panic!("{msgs:?}")
+    };
+    let h = tc_wire::diff::hash_hex(tc_wire::diff::result_hash(&result.0));
+    assert_eq!(*hash, h, "a resync carries its result's hash");
+    // A tiny result changed: sent whole (smaller than its patch), with
+    // its hash, which is what the client resumes from.
+    command(&mut d, ada, "add 1");
+    let msgs = recv(&mut rx);
+    assert!(
+        msgs.iter()
+            .any(|m| matches!(m, ServerMsg::Resync { hash, .. } if !hash.is_empty())),
+        "{msgs:?}"
+    );
+    let (version, hash) = held(&msgs, 1).expect("held");
+    d.disconnect(ada);
+    let (ada, mut rx) = d.connect("ada", Empty);
+    recv(&mut rx);
+    let resumed = d.sim().sync_stats().resumed;
+    d.client(
+        ada,
+        ClientMsg::Subscribe {
+            sub: 1,
+            query: "board".into(),
+            args: Bytes(Empty.to_bytes()),
+            resume: Some(tc_net::Resume { version, hash }),
+        },
+    );
+    flush(&mut d);
+    let msgs = recv(&mut rx);
+    assert!(sent(&msgs).is_empty(), "unchanged: nothing sent: {msgs:?}");
+    assert_eq!(d.sim().sync_stats().resumed, resumed + 1);
+    // It is live: the next change reaches it.
+    command(&mut d, ada, "add 1");
+    assert_eq!(sent(&recv(&mut rx)).len(), 1);
+}
+
 #[test]
 fn a_slow_client_skips_to_the_latest() {
     let mut d = driver(false);

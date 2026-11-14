@@ -110,7 +110,7 @@ export function defineSchema(desc: SchemaDesc = {}): NetSchema {
         Rejected: { reason: 'String', stale_schema: 'bool' },
         CommandResult: { seq: 'u32', result: role(r.result) },
         Update: { sub: 'u32', version: 'u64', hash: 'String', patch: netType.vec('PatchOp') },
-        Resync: { sub: 'u32', version: 'u64', result: 'Bytes' },
+        Resync: { sub: 'u32', version: 'u64', hash: 'String', result: 'Bytes' },
         QueryFailed: { sub: 'u32', reason: 'String' },
         Clock: { time: 'u64', paused: 'bool' },
         Pong: { client_time: 'u64', time: 'u64', paused: 'bool' },
@@ -202,7 +202,7 @@ export type ServerMsg<GWelcome = unknown, GResult = unknown, GState = unknown, G
   | { type: 'Rejected'; reason: string; staleSchema: boolean }
   | { type: 'CommandResult'; seq: number; result: GResult }
   | { type: 'Update'; sub: number; version: number; hash: string; patch: PatchOp[] }
-  | { type: 'Resync'; sub: number; version: number; result: Uint8Array }
+  | { type: 'Resync'; sub: number; version: number; hash: string; result: Uint8Array }
   | { type: 'QueryFailed'; sub: number; reason: string }
   | { type: 'Clock'; time: number; paused: boolean }
   | { type: 'Pong'; clientTime: number; time: number; paused: boolean }

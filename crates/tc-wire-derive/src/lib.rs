@@ -1,6 +1,7 @@
 //! `#[derive(Wire)]`: gives a type its `tc_wire::Wire` codec and its
 //! schema description. See `tc_wire::wire` for the format. Re-exported as
-//! `tc_wire::Wire`; depend on `tc-wire`, not on this crate.
+//! `tc_wire::Wire` (and as `thunderclap_server::wire::Wire`); depend on
+//! `tc-wire` or the facade, not on this crate.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -25,12 +26,98 @@ use syn::{Attribute, Data, DeriveInput, Expr, Fields, GenericParam, Ident, Lit, 
 /// Fields encode in declaration order; enum variants encode as their
 /// declaration index. Doc comments are carried into the schema (and the
 /// generated TypeScript) but do not affect the schema hash.
-#[proc_macro_derive(Wire)]
+///
+/// **Where `tc_wire` is.** The generated code names the `tc_wire` crate.
+/// A crate that depends on the `thunderclap-server` facade and not on
+/// `tc-wire` gets `::thunderclap_server::wire` instead (the derive reads
+/// the crate's `Cargo.toml`); `#[wire(crate = "some::path")]` on the
+/// type names it outright.
+#[proc_macro_derive(Wire, attributes(wire))]
 pub fn derive_wire(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as DeriveInput);
-    expand(&input)
-        .unwrap_or_else(syn::Error::into_compile_error)
-        .into()
+    let krate = match crate_path(&input.attrs) {
+        Ok(Some(path)) => Some(path),
+        Ok(None) => facade_default(),
+        Err(e) => return e.into_compile_error().into(),
+    };
+    match expand(&input) {
+        Ok(out) => match krate {
+            Some(path) => rename_crate(out, &path).into(),
+            None => out.into(),
+        },
+        Err(e) => e.into_compile_error().into(),
+    }
+}
+
+/// `#[wire(crate = "path")]`, if the type has it.
+fn crate_path(attrs: &[Attribute]) -> syn::Result<Option<syn::Path>> {
+    let mut path = None;
+    for attr in attrs.iter().filter(|a| a.path().is_ident("wire")) {
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("crate") {
+                let lit: syn::LitStr = meta.value()?.parse()?;
+                path = Some(lit.parse::<syn::Path>()?);
+                Ok(())
+            } else {
+                Err(meta.error("expected `crate = \"path\"`"))
+            }
+        })?;
+    }
+    Ok(path)
+}
+
+/// `::thunderclap_server::wire` when the crate being built depends on
+/// the facade and not on `tc-wire` (its `Cargo.toml`, as Cargo gives it).
+fn facade_default() -> Option<syn::Path> {
+    let dir = std::env::var_os("CARGO_MANIFEST_DIR")?;
+    let manifest = std::fs::read_to_string(std::path::Path::new(&dir).join("Cargo.toml")).ok()?;
+    (!depends_on(&manifest, "tc-wire") && depends_on(&manifest, "thunderclap-server"))
+        .then(|| syn::parse_quote!(::thunderclap_server::wire))
+}
+
+/// True if `manifest` names `krate` as a dependency (a `krate = ...` or
+/// `krate.workspace = ...` line, or a `[...dependencies.krate]` table).
+fn depends_on(manifest: &str, krate: &str) -> bool {
+    manifest.lines().map(str::trim).any(|line| {
+        line.strip_prefix(krate)
+            .is_some_and(|rest| rest.trim_start().starts_with(['=', '.']))
+            || (line.starts_with('[') && line.trim_end_matches(']').ends_with(&format!(".{krate}")))
+    })
+}
+
+/// `out` with every `::tc_wire` replaced by `path`.
+fn rename_crate(out: TokenStream2, path: &syn::Path) -> TokenStream2 {
+    use proc_macro2::{Group, Spacing, TokenTree};
+    let tokens: Vec<TokenTree> = out.into_iter().collect();
+    let mut renamed = TokenStream2::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        if let [
+            TokenTree::Punct(a),
+            TokenTree::Punct(b),
+            TokenTree::Ident(id),
+            ..,
+        ] = &tokens[i..]
+            && a.as_char() == ':'
+            && a.spacing() == Spacing::Joint
+            && b.as_char() == ':'
+            && id == "tc_wire"
+        {
+            renamed.extend(quote!(#path));
+            i += 3;
+            continue;
+        }
+        match &tokens[i] {
+            TokenTree::Group(g) => {
+                let mut inner = Group::new(g.delimiter(), rename_crate(g.stream(), path));
+                inner.set_span(g.span());
+                renamed.extend([TokenTree::Group(inner)]);
+            }
+            t => renamed.extend([t.clone()]),
+        }
+        i += 1;
+    }
+    renamed
 }
 
 fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
@@ -466,6 +553,36 @@ mod tests {
         assert!(out.contains("type_ref_of :: < T >"), "{out}");
         expand_str("struct S where u8: Copy { x: u8 }").unwrap();
         expand_str("enum E<A, B> { L(A), R { b: B } }").unwrap();
+    }
+
+    #[test]
+    fn a_crate_path_replaces_tc_wire() {
+        let input: DeriveInput =
+            syn::parse_str("#[wire(crate = \"::thunderclap_server::wire\")] struct P<T> { x: T }")
+                .unwrap();
+        let path = crate_path(&input.attrs).unwrap().unwrap();
+        let out = rename_crate(expand(&input).unwrap(), &path).to_string();
+        assert!(!out.contains(":: tc_wire"), "{out}");
+        assert!(
+            out.contains("T : :: thunderclap_server :: wire :: Wire"),
+            "{out}"
+        );
+        let bad: DeriveInput = syn::parse_str("#[wire(krate = \"x\")] struct P { x: u8 }").unwrap();
+        assert!(crate_path(&bad.attrs).is_err());
+    }
+
+    #[test]
+    fn the_facade_is_the_default_without_tc_wire() {
+        let facade = "[dependencies]\nthunderclap-server = { path = \"../x\" }\n";
+        let both = "[dependencies]\ntc-wire.workspace = true\nthunderclap-server = \"1\"\n";
+        assert!(depends_on(facade, "thunderclap-server"));
+        assert!(!depends_on(facade, "tc-wire"));
+        assert!(depends_on(both, "tc-wire"));
+        assert!(depends_on(
+            "[dependencies.tc-wire]\npath = \"x\"",
+            "tc-wire"
+        ));
+        assert!(!depends_on("tc-wire-derive = \"1\"", "tc-wire"));
     }
 
     #[test]

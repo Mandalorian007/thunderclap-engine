@@ -366,6 +366,9 @@ type SourceSection = number | Uint8Array | Uint32Array;
 ## VOXEL_DEFAULT_FRAGMENT
 const VOXEL_DEFAULT_FRAGMENT: Readonly<Record<VoxelStream, string>>;
 
+## VOXEL_DEFAULT_WRITES
+const VOXEL_DEFAULT_WRITES: readonly CoreTargetName[];
+
 ## VOXEL_VARYING_WGSL
 const VOXEL_VARYING_WGSL = "\nstruct VoxelVarying {\n  @builtin(position) clip: vec4f,\n  @location(0) world: vec3f,\n  @location(1) normal: vec3f,\n  @location(2) light: vec3f,\n  @location(3) uv: vec2f,\n  @location(4) @interpolate(flat) w0: u32,\n  @location(5) @interpolate(flat) w1: u32,\n}\n";
 
@@ -513,6 +516,7 @@ interface VoxelMaterial {
     blend?: GPUBlendState;
     shadowFragmentEntry?: string;
     castShadow?: boolean;
+    writes?: readonly CoreTargetName[];
 }
 
 ## VoxelStream  (type-only)

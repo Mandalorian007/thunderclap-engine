@@ -45,6 +45,15 @@ export type {
 } from './pass-list';
 export { CORE_PASSES, PassList } from './pass-list';
 export { QUAD_INDICES, QuadIndex, quadIndices } from './quad-index';
+export type { CoreTargetName } from './targets';
+export {
+  CORE_TARGET,
+  CORE_TARGET_FORMATS,
+  CORE_TARGET_NAMES,
+  coreColorFormats,
+  coreColorTargets,
+  coreTargetMask,
+} from './targets';
 export type { CullGroup, RenderView } from './view';
 export {
   CORE_VIEW_WGSL,

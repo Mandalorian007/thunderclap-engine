@@ -8,7 +8,7 @@ with its own types.
 | Crate | What it is |
 | --- | --- |
 | `tc-wire` | The wire format. `Wire` (encode, decode, describe) for scalars, `String`, `Bytes`, `Vec`, `Option`, `BTreeMap` and `Fixed` (32.32); `#[derive(Wire)]` for structs, newtypes and enums, type parameters included (`Page<Slot>` is named `PageSlot`). `SchemaBuilder` collects roots and queries into a `Schema`: canonical text, its stable hash (SplitMix64, the same as `src/net/schema.ts`), `diff`/`patch` of query results, strict `DecodeError`s. |
-| `tc-wire-derive` | The `#[derive(Wire)]` proc macro; use it through `tc_wire::Wire`. |
+| `tc-wire-derive` | The `#[derive(Wire)]` proc macro; use it through `tc_wire::Wire` or `thunderclap_server::Wire`. Its code names `::tc_wire`, or `::thunderclap_server::wire` in a crate that depends on the facade and not on tc-wire; `#[wire(crate = "path")]` names another path. |
 | `tc-net` | The server connection layer, generic over a game's `Protocol` (its role types). `ClientMsg<P>`/`ServerMsg<P>`, the envelope `src/net/envelope.ts` defines, with the same variants, encoding and schema text (`schema_builder::<P>()` starts a game's schema). `Server::start(ServerConfig, Sender<Request<P>>)` binds a WebSocket listener (port 0: a free one), runs a session per connection and hands the game `Connect` / `Client` / `Disconnect` requests on one channel; the game answers on each connection's `Outbound` (a priority lane and a bulk lane). A session checks `Hello` (schema hash, else `Rejected` with `stale_schema`; the token through `Auth`, `AllowAll` for dev), rate-limits messages, packs the bulk lane into `Bulk` messages (deflated over 1 KiB on a thread pool) and paces it to the link from the client's `Ack`s, and closes with `Closed` (4000–4999 final, others reconnect). Also `EntityEncoder` (the entity stream, as `src/net/entities.ts`), `WallClock`, origin checks, ping and pong timeouts. Ported from Forge Wilds' server with its nouns removed. |
 | `tc-auth` | Accounts and auth on tc-net's `Auth` seam. `Accounts` (a `Record` per name: account id, generation, created and last-seen times; `claim` with one name per account, `seen`, `subscribe`) with `MemoryAccounts` and `FileAccounts` (one `names.json` with a backup, a writers' lock and recovery by itself; a log-backed store plugs in at the same trait). `SessionAuth`: signed session tokens `<prefix>.<name>.<perms>.<generation>.<hex HMAC-SHA256>` (`issue`, `check`/`verify`, `revoke`, `revisions()`, so tc-net closes sessions on a revoked token with 4001), and a dev guest mode (`with_guests`). `DevTokens`: signed tokens with no store. Name rules (`NameRules`), prefixes, permissions and the player-facing reasons are the game's (`TokenFormat`). Ported from Forge Wilds' sign-in, which is `TokenFormat` with `fw1`/`fw2`, `dev` and `observer`. |
 | `tc-tsgen` | TypeScript from a `Schema`: `generate(&schema, &Config)` returns `(path, contents)` pairs, the protocol module (types, codecs, `TYPES`, query descriptors) and, with `Config::sdk`, the SDK's pass-through event files. The header, imports, hash doc, constants and event lists are the game's. |
@@ -66,7 +66,8 @@ index. Decoding is strict: trailing bytes, bad tags and unsorted keys fail.
   stop work end to end, the store reopens, and the CLI backs up and rolls
   back offline.
 - `thunderclap-server/tests/turns.rs` serves tc-sim's tic-tac-toe game
-  (`tc-sim/tests/turns_game/`, E7) through the facade with `AuthMode::Open`;
+  (`tc-sim/tests/turns_game/`, E7) through the facade with dev guests (each
+  page picks its name with the token `guest:<name>`);
   `createNet` (`src/net/turns-interop.test.ts`) plays a round, watches the
   board and resumes it after a dropped link, and the store replays to the
   live state hash.
@@ -78,5 +79,14 @@ excluded from biome.
 
 `pnpm check:rust` (part of `pnpm check`) runs `cargo fmt --all --check`,
 `cargo clippy --workspace --all-targets -- -D warnings` and
-`cargo test --workspace`; it skips with a notice where cargo is absent.
+`cargo test --workspace`, then the same three for each template's server
+crate (`templates/<name>/server`, its own workspace); it skips with a notice
+where cargo is absent.
+
+## Versions
+
+The crates share the workspace version (0.2.0). A release is tagged
+`server-v<major>.<minor>`, and a game made by `pnpm create-game` depends on
+`thunderclap-server` at that tag by git; inside this repo the templates use
+path dependencies.
 Nothing here is platform-specific: the crates build on native Windows.

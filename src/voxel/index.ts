@@ -99,4 +99,9 @@ export { SectionVisibility } from './visibility';
 export type { VoxelMaterial, VoxelWorld, VoxelWorldOptions, VoxelWorldStats } from './world';
 export { createVoxelWorld } from './world';
 export type { VoxelStream } from './world-shaders';
-export { VOXEL_DEFAULT_FRAGMENT, VOXEL_VARYING_WGSL, voxelVertexWgsl } from './world-shaders';
+export {
+  VOXEL_DEFAULT_FRAGMENT,
+  VOXEL_DEFAULT_WRITES,
+  VOXEL_VARYING_WGSL,
+  voxelVertexWgsl,
+} from './world-shaders';

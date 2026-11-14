@@ -87,11 +87,12 @@ interface Board {
 
 type Reply = { type: 'Done' } | { type: 'Refused'; value: string };
 
-function open(token: string, link?: Link): Net {
+/** A guest named `name` (the server's dev guests take `guest:<name>`). */
+function open(name: string, link?: Link): Net {
   return createNet({
     schema: turnsSchema(),
     connect: wsConnect(url!, link),
-    hello: { token },
+    hello: { token: `guest:${name}` },
   });
 }
 
@@ -106,9 +107,10 @@ async function until(test: () => boolean, what: string, ms = 5000): Promise<void
   }
 }
 
-// Long names: the board must outweigh a patch's hash, or the server resends it whole.
-const X = 'xander-of-the-long-name';
-const O = 'oona-of-the-even-longer-name';
+// Long names: a new round rewrites most of the board, so the names must outweigh that patch, or
+// the server sends the board whole (smaller).
+const X = 'xander_of_the_long_name';
+const O = 'oona_of_the_longer_name';
 
 describe.skipIf(!url)('turns interop', () => {
   it('has the hash the server was built with', () => {

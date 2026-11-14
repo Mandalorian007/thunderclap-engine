@@ -307,3 +307,8 @@ ws/core-passes):
 (`harness/voxel.ts`, `harness/voxel-worker.ts`), pointer-lock look, a click breaks, the
 secondary button places, with `e2e/voxel.spec.ts` checking the world, the view, picking and
 that a place then break restores the quads.
+
+`VoxelMaterial.writes` (ws/core-targets) names the core targets a material's fragment writes
+at their fixed locations. The default fragments write roughMetal (rough, liquid smooth) and
+velocity (`core_velocity(view, in.world)`): `VOXEL_DEFAULT_WRITES`. A material without `writes`
+writes colour only.

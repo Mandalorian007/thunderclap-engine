@@ -3,8 +3,8 @@
 
 pub mod game;
 
-use tc_wire::schema::Schema;
-use thunderclap_server::{AuthMode, Builder, Game, Server};
+use thunderclap_server::wire::schema::Schema;
+use thunderclap_server::{Builder, Game, Server};
 
 pub use game::{Arena, ArenaProto};
 
@@ -14,15 +14,15 @@ pub fn schema() -> Schema {
     Arena::schema()
 }
 
-/// The arena's server, with the facade's defaults but three: the data
-/// lives in `data/arena`, it serves on port 4711 (the client's default),
-/// and a page's token is its player's name ([`AuthMode::Open`]: a dev
-/// setting, anyone can take any name). The
-/// command line (`serve`, `status`, `stop`, `backup`, ...) runs it.
+/// The arena's server, with the facade's defaults but two: the data
+/// lives in `data/arena`, and it serves on port 4711 (the client's
+/// default). Auth is the dev default, guests
+/// ([`AuthMode::DevGuests`](thunderclap_server::AuthMode::DevGuests)): a
+/// page sends `guest:<name>` and plays as that name. The command line
+/// (`serve`, `status`, `stop`, `backup`, ...) runs it.
 pub fn server() -> Builder<Arena> {
     Server::builder(Arena::new())
         .data_dir("data/arena")
         .port(4711)
-        .auth(AuthMode::Open)
         .build(concat!("arena ", env!("CARGO_PKG_VERSION")))
 }

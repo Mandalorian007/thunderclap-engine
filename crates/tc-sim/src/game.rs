@@ -24,6 +24,14 @@
 //! [`Game::presence`] when it leaves, so a game logs what of it should
 //! last (a position to come back to). A reload keeps it.
 //!
+//! **Rules that read bodies.** A rule between players' bodies (a tag, a
+//! collision, a pickup) runs in [`Game::moved`], after each input tick:
+//! it reads every present body ([`Bodies`]) and pushes the events that
+//! record what happened (a tag), which are logged and applied like any
+//! other. So the movement itself stays unlogged and a replay still
+//! reaches the same state, because it replays the events, not the bodies.
+//! [`Cx`] (apply, fire, step) never sees bodies: a replay has none.
+//!
 //! **What clients see.** Live queries ([`Game::queries`], see
 //! [`crate::Query`]) and the entity stream ([`Game::entities`], for a
 //! connection's interest, [`Game::interest`]) read the state and bodies
@@ -154,6 +162,14 @@ pub trait Game: Sized + Send + 'static {
     /// A connection passed `Hello` as `identity`: who it plays as (or
     /// that it observes), and the events that record a first join (none
     /// for a returning player). An error refuses it (`Rejected`).
+    ///
+    /// **Seat ids.** A new player's id is the one its join events will
+    /// give it when applied (the loop applies them before anything else
+    /// sees the player, then calls [`Game::body`] and
+    /// [`Game::presence`]). Derive it from the state the events change,
+    /// such as the next free seat, never from a counter outside the
+    /// state: then it is the same in every replay and after a rollback,
+    /// and a returning name maps to its old id.
     fn join(
         &self,
         identity: &Identity,
@@ -161,11 +177,23 @@ pub trait Game: Sized + Send + 'static {
         events: &mut Vec<EventOf<Self>>,
     ) -> Result<Seat, String>;
 
+    /// The store was opened and its log replayed (`time` is now), before
+    /// any connection: the events that tidy what the last run left. A
+    /// run that crashed never recorded its players leaving
+    /// ([`Game::presence`]), so a game that keeps who is here pushes
+    /// their leaving now. The events are logged, so a later replay passes
+    /// through them too. [`Sim::open`](crate::Sim::open) calls it (and
+    /// so does the thunderclap-server facade); the default pushes none.
+    fn on_open(&self, time: u64, events: &mut Vec<EventOf<Self>>) {
+        let _ = (time, events);
+    }
+
     /// `Welcome.ext` for `player` (0 for an observer).
     fn welcome(&self, player: PlayerId) -> <Self::Protocol as Protocol>::Welcome;
 
     /// `player`'s body as it arrives (its first connection opened), from
-    /// the state; `None` takes no inputs. The default has none.
+    /// the state, with its join events already applied; `None` takes no
+    /// inputs. The default has none.
     fn body(&self, player: PlayerId) -> Option<Self::Body> {
         let _ = player;
         None
@@ -216,6 +244,14 @@ pub trait Game: Sized + Send + 'static {
         events: &mut Vec<EventOf<Self>>,
     ) {
         let _ = (player, body, input, events);
+    }
+
+    /// After an input tick moved bodies: the rules that read them (see
+    /// the [crate docs](crate)). `bodies` holds every present player's
+    /// body and which of them this tick moved; the events pushed are
+    /// logged and applied at the current time. The default does nothing.
+    fn moved(&self, bodies: &Bodies<'_, Self>, events: &mut Vec<EventOf<Self>>) {
+        let _ = (bodies, events);
     }
 
     /// What `player`'s connections are told after an input tick applied
@@ -330,6 +366,36 @@ impl<G: Game> Cx<'_, G> {
     /// Marks `key` as changed (ignored in a replay).
     pub fn mark(&mut self, key: G::Change) {
         self.changes.mark(key);
+    }
+}
+
+/// Every present player's body, read by [`Game::moved`] after an input
+/// tick.
+pub struct Bodies<'a, G: Game> {
+    pub(crate) time: u64,
+    pub(crate) bodies: &'a std::collections::BTreeMap<PlayerId, G::Body>,
+    pub(crate) moved: &'a [PlayerId],
+}
+
+impl<'a, G: Game> Bodies<'a, G> {
+    /// The current time, in steps.
+    pub fn time(&self) -> u64 {
+        self.time
+    }
+
+    /// `player`'s body, if it is present.
+    pub fn get(&self, player: PlayerId) -> Option<&'a G::Body> {
+        self.bodies.get(&player)
+    }
+
+    /// Every present body, by player id.
+    pub fn iter(&self) -> impl Iterator<Item = (PlayerId, &'a G::Body)> + 'a {
+        self.bodies.iter().map(|(p, b)| (*p, b))
+    }
+
+    /// The players this tick's inputs moved, in id order, once each.
+    pub fn moved(&self) -> &'a [PlayerId] {
+        self.moved
     }
 }
 

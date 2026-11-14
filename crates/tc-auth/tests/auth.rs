@@ -294,6 +294,25 @@ fn guest_mode_lets_an_empty_token_in() {
 }
 
 #[test]
+fn guest_mode_lets_a_page_pick_its_name() {
+    let accounts = Arc::new(MemoryAccounts::default());
+    let strict = session(&accounts);
+    assert!(strict.verify("guest:bo").is_err(), "off by default");
+    let auth = session(&accounts).with_guests();
+    assert_eq!(
+        auth.verify("guest:bo").unwrap(),
+        who("bo", &[GUEST_PERMISSION])
+    );
+    assert!(accounts.get("bo").is_none(), "guests are not stored");
+    // A bad name, or one an account holds, is refused.
+    assert!(auth.verify("guest:Bo!").is_err());
+    assert!(auth.verify("guest:").is_err());
+    auth.issue(&Claim::name("ada"), &[]).unwrap();
+    let held = auth.verify("guest:ada").unwrap_err();
+    assert!(held.0.contains("has an account"), "{held:?}");
+}
+
+#[test]
 fn the_default_format_names_no_game() {
     let auth = SessionAuth::new(
         "k",

@@ -18,6 +18,7 @@ import {
   CoreViewExtras,
   DrawablePipelines,
 } from '../render/core/drawable';
+import { coreColorTargets } from '../render/core/targets';
 import { Mesh, VERTEX_LAYOUT_3D, VERTEX3D_FLOATS, VERTEX3D_STRIDE } from '../render/mesh';
 import type { TextureLike } from '../render/texture';
 import { createShaderModule } from '../render/wgsl';
@@ -178,12 +179,17 @@ export class DecalsOnCore implements CoreDrawable {
     const layout = device.createPipelineLayout({
       bindGroupLayouts: [core.viewLayout, g.layout],
     });
-    this.pipes = new DrawablePipelines((color, depth) =>
+    this.pipes = new DrawablePipelines((color, depth, _readOnly, aux) =>
       device.createRenderPipeline({
         label: `decals-core:${this.mode}`,
         layout,
         vertex: { module, entryPoint: 'vs', buffers: [POSITION_LAYOUT, INSTANCE_LAYOUT] },
-        fragment: { module, entryPoint: 'fs', targets: [{ format: color, blend: this.blend }] },
+        // Decals carry no emissive or rough-metal: they leave the core's extra targets alone.
+        fragment: {
+          module,
+          entryPoint: 'fs',
+          targets: coreColorTargets({ format: color, blend: this.blend }, aux),
+        },
         // Box: back faces only, so an eye inside the box still covers what it projects onto.
         primitive: { topology: 'triangle-list', cullMode: box ? 'front' : 'none' },
         depthStencil: depth

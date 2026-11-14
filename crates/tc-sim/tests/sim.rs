@@ -337,3 +337,51 @@ fn a_reload_asked_for_during_one_waits_its_turn() {
     assert_eq!(d.core().game().tally_of("ada"), Some(3));
     assert!(!d.sim().status().get().reloading);
 }
+
+#[test]
+fn rules_read_bodies_after_an_input_tick_and_log_only_what_they_decide() {
+    let dir = temp_dir("moved");
+    let sim = Sim::create(&dir, Tally::new(false), b"tally", paused()).unwrap();
+    let mut d = Driver::new(sim);
+    let (ada, _rx) = d.connect("ada", Empty);
+    // Its join is applied before its body is made: a new player has one.
+    assert_eq!(d.sim().body(1), Some(&0));
+    let version = d.core().version();
+    // Inputs on the driver's clock: no wall time.
+    let start = d.now();
+    d.push_input(ada, 400);
+    d.input_tick();
+    assert_eq!(d.sim().body(1), Some(&400));
+    assert_eq!(d.core().version(), version, "a move is not logged");
+    d.push_input(ada, tally::FAR);
+    d.input_tick();
+    assert!(d.now() > start);
+    assert_eq!(d.core().version(), version + 1, "the rule's event is");
+    assert_eq!(d.core().game().tally_of("ada"), Some(1));
+    let live = d.stop();
+    // The replay has no bodies, and needs none: the event is logged.
+    let read = tc_store::read(&dir, &tally::TallyLog).unwrap();
+    let (replayed, _) = Core::replayed(Tally::new(false), &read.entries).unwrap();
+    assert_eq!(replayed.game().tally_of("ada"), Some(1));
+    assert_eq!(replayed.state_hash(), live.state_hash());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn opening_after_a_crash_runs_on_open() {
+    let dir = temp_dir("on-open");
+    let sim = Sim::create(&dir, Tally::new(false), b"tally", paused()).unwrap();
+    let mut d = Driver::new(sim);
+    let (_ada, _rx) = d.connect("ada", Empty);
+    assert!(d.core().game().players[&1].present);
+    // A crash: dropped, never stopped, so nobody was logged leaving.
+    drop(d);
+    let (sim, _) = Sim::open(&dir, Tally::new(false), paused()).unwrap();
+    assert!(!sim.core().game().players[&1].present, "on_open cleared it");
+    drop(sim);
+    // It was logged: a replay passes through it too.
+    let read = tc_store::read(&dir, &tally::TallyLog).unwrap();
+    let (replayed, _) = Core::replayed(Tally::new(false), &read.entries).unwrap();
+    assert!(!replayed.game().players[&1].present);
+    let _ = std::fs::remove_dir_all(&dir);
+}

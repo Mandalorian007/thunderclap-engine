@@ -233,6 +233,7 @@ pub fn run(requests: Receiver<Request<Echo>>) {
                             ServerMsg::Resync {
                                 sub,
                                 version: 1,
+                                hash: String::new(),
                                 result: Bytes(result),
                             },
                         );

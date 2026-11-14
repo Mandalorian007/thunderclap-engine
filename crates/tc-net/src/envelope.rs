@@ -216,6 +216,8 @@ pub enum ServerMsg<P: Protocol> {
         sub: u32,
         /// Its version.
         version: u64,
+        /// The result's hash, as in `Update` (empty: unchecked).
+        hash: String,
         /// The encoded result.
         result: Bytes,
     },
@@ -497,11 +499,13 @@ impl<P: Protocol> Wire for ServerMsg<P> {
             S::Resync {
                 sub,
                 version,
+                hash,
                 result,
             } => {
                 w.write_varint(4);
                 sub.encode(w);
                 version.encode(w);
+                hash.encode(w);
                 result.encode(w);
             }
             S::QueryFailed { sub, reason } => {
@@ -590,6 +594,7 @@ impl<P: Protocol> Wire for ServerMsg<P> {
             4 => S::Resync {
                 sub: Wire::decode(r)?,
                 version: Wire::decode(r)?,
+                hash: Wire::decode(r)?,
                 result: Wire::decode(r)?,
             },
             5 => S::QueryFailed {
@@ -679,6 +684,7 @@ impl<P: Protocol> Wire for ServerMsg<P> {
                         vec![
                             field::<u32>(s, "sub"),
                             field::<u64>(s, "version"),
+                            field::<String>(s, "hash"),
                             field::<Bytes>(s, "result"),
                         ],
                     ),
@@ -820,6 +826,7 @@ pub(crate) mod tests {
             ServerMsg::Resync {
                 sub: 1,
                 version: 2,
+                hash: "00ff".into(),
                 result: Bytes(vec![3]),
             },
             ServerMsg::QueryFailed {

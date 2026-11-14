@@ -14,7 +14,8 @@
 //! - **Diffs.** A changed result goes to each subscriber as an `Update`
 //!   patching the last value that subscriber was sent
 //!   ([`tc_wire::diff`]), or as a `Resync` when the patch would not be
-//!   smaller. Subscribers holding the same old value share one diff.
+//!   smaller. Both carry the result's hash, so a small result is patched
+//!   whenever its patch is smaller. Subscribers holding the same old value share one diff.
 //! - **Flushes.** The loop flushes at most every
 //!   [`FLUSH_INTERVAL`](crate::FLUSH_INTERVAL) for everyone, and at once
 //!   for a client whose command or subscription needs it. A client over
@@ -26,7 +27,8 @@
 //!   result to resume from (at most [`MAX_IDLE_PER_CONNECTION`] left
 //!   behind per connection and [`MAX_IDLE`] in all, oldest dropped
 //!   first); idle entries are out of every index. A `Subscribe` that names
-//!   a result by hash gets a patch from it if the entry still has it.
+//!   a result by hash gets a patch from it if the entry still has it, and
+//!   nothing at all if the result has not changed since.
 //! - **Verification.** With [`SyncConfig::verify`] (on in debug builds),
 //!   every flush also reruns clean entries and counts any whose result
 //!   changed without a tracked change (a missing mark or read):
@@ -99,6 +101,8 @@ pub struct SyncStats {
     pub updates: u64,
     /// `Resync` messages made.
     pub resyncs: u64,
+    /// Resumed subscriptions whose result had not changed (nothing sent).
+    pub resumed: u64,
     /// Shared entries, idle ones included.
     pub entries: usize,
     /// Idle entries, kept for resuming.

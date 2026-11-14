@@ -13,8 +13,6 @@ license = "MIT"
 
 [dependencies]
 thunderclap-server = { path = "../../../crates/thunderclap-server" }
-# `#[derive(Wire)]` names `tc_wire` paths, so the game names the crate too.
-tc-wire = { path = "../../../crates/tc-wire" }
 
 [dev-dependencies]
 serde_json = "1"

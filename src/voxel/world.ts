@@ -16,6 +16,7 @@ import type { Arena, ArenaAlloc } from '../render/core/arena';
 import type { RenderCore } from '../render/core/core';
 import type { DrawSet } from '../render/core/draw-set';
 import { createInstanceLayout, createVertexLayout } from '../render/core/layout';
+import type { CoreTargetName } from '../render/core/targets';
 import { FACE_CLASS } from './blocks';
 import {
   RAW_SECTION_CODEC,
@@ -32,7 +33,12 @@ import type { SectionMeshResult } from './section-protocol';
 import { raycastCells, sectionRayProbe } from './section-ray';
 import { createSectionStore, type SectionStore } from './store';
 import { type SectionBox, SectionVisibility } from './visibility';
-import { VOXEL_DEFAULT_FRAGMENT, type VoxelStream, voxelVertexWgsl } from './world-shaders';
+import {
+  VOXEL_DEFAULT_FRAGMENT,
+  VOXEL_DEFAULT_WRITES,
+  type VoxelStream,
+  voxelVertexWgsl,
+} from './world-shaders';
 
 /** A stream's look: a fragment entry over `VoxelVarying`, and the bind groups it reads. */
 export interface VoxelMaterial {
@@ -53,6 +59,12 @@ export interface VoxelMaterial {
   shadowFragmentEntry?: string;
   /** Cast the sun's shadow (`DrawSetDesc.castShadow`). Default: opaque, and foliage with a `shadowFragmentEntry`. */
   castShadow?: boolean;
+  /**
+   * The core's extra targets the fragment writes (ws/core-targets, `DrawSetShader.writes`), at
+   * their fixed locations (`./render/core/targets`; `core_velocity(view, in.world)` gives the
+   * velocity). Default none: the core keeps what is behind.
+   */
+  writes?: readonly CoreTargetName[];
 }
 
 /** Options for `createVoxelWorld`. */
@@ -249,6 +261,7 @@ export function createVoxelWorld(core: RenderCore, opts: VoxelWorldOptions): Vox
         blend: m?.blend ?? (stream === 'liquid' ? ALPHA_BLEND : undefined),
         cullMode: stream === 'opaque' ? 'back' : 'none',
         shadowFragmentEntry: m?.shadowFragmentEntry,
+        writes: m ? m.writes : VOXEL_DEFAULT_WRITES,
       },
       castShadow:
         m?.castShadow ??

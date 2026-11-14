@@ -457,3 +457,7 @@ and projection, and this and the last frame's matrices of the same view index, g
 history), which writes `CoreTarget.output` at `outputViewport`. Set `time` and `dt` each frame.
 The core's passes write one colour target, so `emissive` is a black texel unless the game sets
 one, and there is no roughness/metal or velocity input yet.
+
+With extra core targets (`RenderCoreOptions.targets`, ws/core-targets), `CorePost` hands each
+view's emissive to bloom (unless `emissive` is set), velocity to TAA and object motion blur, and
+roughMetal to SSR; the ones the core lacks stay a black texel (emissive) or null.

@@ -48,15 +48,18 @@ scripts/dev.mjs          pnpm dev
 Server (Rust; `docs/guide/server-game.md` walks through them):
 
 - **`tc_sim::Game`**: the game's state and rules. `Protocol` (the message types: here `Input =
-  u8`, `State = Pos`), `Change`, `Data` (the logged events: `Joined`, `Present`, `Moved`),
-  `Body` (a player's unlogged state, moved by `input`: here `Pos`), `View` (what the entity
-  stream sends: `Player`). `apply` changes state from a logged event; `join` seats a player or an
-  observer; `presence` hears a player come and go; `input` moves a body; `player_state` is what
+  u8`, `State = Pos`), `Change`, `Data` (the logged events: `Joined`, `Present`, `Tagged`),
+  `Body` (a player's unlogged state, moved by `input`: here `Body { at, vel }`), `View` (what the
+  entity stream sends: `Player`). `apply` changes state from a logged event; `join` seats a player
+  or an observer; `presence` hears a player come and go; `on_open` clears who was here after a
+  restart; `input` moves a body; `moved` reads every body after an input tick and logs a tag; `player_state` is what
   the player hears back; `entities` streams what a page sees; `queries` serves `score`.
 - **`thunderclap_server::Server`**: `Server::builder(game)` serves the game from a data directory
   (`data/arena`: the log and snapshots on disk) at 20 steps a second over WebSocket;
   `cli::main(args, server)` is the whole binary (`serve`, `status`, `stop`, `backup`, ...).
-  `AuthMode::Open` takes the page's token as its name.
+  Dev guests (the default auth): the page's token `guest:<name>` picks its name.
+- **`src/schema.ts`** is generated from the Rust types (`TC_BLESS=1 cargo test` in `server/`
+  rewrites it); never edit it by hand.
 
 Client (`@thunderclap-engine/engine/net`, `/kit`, `/render`):
 

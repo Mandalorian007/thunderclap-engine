@@ -1600,6 +1600,12 @@ export class Renderer implements FrameSink {
     t.width = target.width;
     t.height = target.height;
     t.depth = target.depthAttachment().view as GPUTextureView;
+    // The core's extra targets (ws/core-targets) draw into the target's own, which the post
+    // stack reads: emissive always, rough-metal and velocity when the target has them.
+    const aux = core.targetMask;
+    t.emissive = aux & 1 ? target.emissive.view : undefined;
+    t.roughMetal = aux & 2 ? target.roughMetal?.view : undefined;
+    t.velocity = aux & 4 ? target.velocity?.view : undefined;
     const r = t.viewport!;
     r.x = Math.floor(vp.x);
     r.y = Math.floor(vp.y);

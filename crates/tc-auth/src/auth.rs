@@ -16,6 +16,10 @@ use crate::token::{Signer, TokenError, TokenFormat, parse_generation};
 /// The permission a guest ([`SessionAuth::with_guests`]) carries.
 pub const GUEST_PERMISSION: &str = "guest";
 
+/// In guest mode, a token `guest:<name>` joins as the guest `<name>`
+/// ([`SessionAuth::with_guests`]).
+pub const GUEST_TOKEN_PREFIX: &str = "guest:";
+
 /// Dev tokens, `<dev_prefix>.<name>.<perms>.<sig>`, signed with a secret
 /// (HMAC-SHA256) and good for as long as it is. No accounts: anyone with
 /// the secret names themselves. For development servers.
@@ -136,9 +140,11 @@ impl SessionAuth {
         }
     }
 
-    /// The dev guest mode: an empty token joins as a new `guest_<n>` with
-    /// the [`GUEST_PERMISSION`], no account and nothing stored. Never for
-    /// a server others can reach.
+    /// The dev guest mode: an empty token joins as a new `guest_<n>`, and
+    /// `guest:<name>` ([`GUEST_TOKEN_PREFIX`]) as the guest `<name>` the
+    /// page picked (a valid name no account holds), both with the
+    /// [`GUEST_PERMISSION`], no account and nothing stored. Anyone can
+    /// take any free name, so never for a server others can reach.
     pub fn with_guests(self) -> SessionAuth {
         SessionAuth {
             guests: Some(AtomicU64::new(0)),
@@ -200,6 +206,21 @@ impl SessionAuth {
             let n = guests.fetch_add(1, Ordering::Relaxed) + 1;
             return Ok(Identity {
                 name: format!("guest_{n}"),
+                permissions: vec![GUEST_PERMISSION.to_string()],
+            });
+        }
+        if self.guests.is_some()
+            && let Some(name) = token.strip_prefix(GUEST_TOKEN_PREFIX)
+        {
+            self.format.check_name(name)?;
+            if self.accounts.get(name).is_some() {
+                return Err(TokenError::Malformed(format!(
+                    "{} has an account: sign in instead",
+                    quote(name)
+                )));
+            }
+            return Ok(Identity {
+                name: name.to_string(),
                 permissions: vec![GUEST_PERMISSION.to_string()],
             });
         }

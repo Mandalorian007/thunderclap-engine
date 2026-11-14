@@ -16,6 +16,7 @@ import {
   CoreViewExtras,
   DrawablePipelines,
 } from '../render/core/drawable';
+import { CORE_TARGET, coreColorTargets } from '../render/core/targets';
 import { createShaderModule } from '../render/wgsl';
 import { PARTICLE_CORE_RENDER_WGSL } from './particles-wgsl';
 
@@ -84,12 +85,16 @@ export class ParticlesOnCore implements CoreDrawable {
     const pipelineLayout = device.createPipelineLayout({
       bindGroupLayouts: [core.viewLayout, this.layout],
     });
-    this.pipes = new DrawablePipelines((color, depth) =>
+    this.pipes = new DrawablePipelines((color, depth, _readOnly, aux) =>
       device.createRenderPipeline({
         label: 'particles-core',
         layout: pipelineLayout,
         vertex: { module, entryPoint: 'vs' },
-        fragment: { module, entryPoint: 'fs', targets: [{ format: color, blend: src.blend }] },
+        fragment: {
+          module,
+          entryPoint: 'fs',
+          targets: coreColorTargets({ format: color, blend: src.blend }, aux, CORE_TARGET.emissive),
+        },
         primitive: { topology: 'triangle-list' },
         depthStencil: depth
           ? { format: depth, depthWriteEnabled: false, depthCompare: 'less-equal' }

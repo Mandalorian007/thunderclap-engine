@@ -254,6 +254,12 @@ struct WaterOut {
   @location(1) ndc: vec4f,
 };
 
+struct WaterFrag {
+  @location(0) color: vec4f,
+  @location(2) rough_metal: vec4f,
+  @location(3) velocity: vec4f,
+};
+
 ${WGSL_NOISE}
 ${WATER_FIELD_WGSL}
 const W_PI: f32 = 3.14159265;
@@ -285,7 +291,7 @@ fn w_unproject(ndc: vec2f, d: f32) -> vec3f {
   return o;
 }
 
-@fragment fn fs(in: WaterOut) -> @location(0) vec4f {
+@fragment fn fs(in: WaterOut) -> WaterFrag {
   // This eye's viewport in framebuffer pixels (uniform control flow: derivatives first).
   let ndc = in.ndc.xy / in.ndc.w;
   let vp_size = vec2f(2.0 / max(abs(dpdx(ndc.x)), 1e-6), 2.0 / max(abs(dpdy(ndc.y)), 1e-6));
@@ -390,6 +396,11 @@ fn w_unproject(ndc: vec2f, d: f32) -> vec3f {
     col = mix(col, water.foam.rgb, foam);
     alpha = max(alpha, foam * water.shallow.w);
   }
-  return vec4f(col * alpha, alpha);
+  var o: WaterFrag;
+  o.color = vec4f(col * alpha, alpha);
+  // The core's rough-metal and velocity targets (ws/core-targets) when it has them.
+  o.rough_metal = vec4f(clamp(water.surface.y, 0.0, 1.0), 0.0, 0.0, 1.0);
+  o.velocity = vec4f(core_velocity(view, rel), 0.0, 1.0);
+  return o;
 }
 `;
