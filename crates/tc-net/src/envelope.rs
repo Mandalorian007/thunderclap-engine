@@ -227,8 +227,65 @@ pub enum HelloField {
     SchemaHash,
     /// `bulk`; left out, the client has no bulk lane (read as `None`).
     Bulk,
-    /// `ext`, the game's fields (required).
+    /// `ext`, the game's fields (required, unless they come as
+    /// [`HelloField::ExtFields`]).
     Ext,
+    /// The next `n` fields of the game's `Hello` struct, each as a field of
+    /// `Hello` under its own name: a protocol whose `Hello` mixes the
+    /// game's fields with the envelope's (Forge's `token, schema_hash,
+    /// watch, bulk, content, opening` is `[Token, SchemaHash, ExtFields(1),
+    /// Bulk, ExtFields(2)]`). In place of [`HelloField::Ext`]; together
+    /// they list every field of [`Protocol::Hello`], which must be a struct.
+    /// TypeScript's `{ ext: n }`.
+    ExtFields(u8),
+}
+
+/// A field of `Rejected`, in an [`Envelope`]'s order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RejectedField {
+    /// `reason` (required).
+    Reason,
+    /// `stale_schema`; left out, read as `false` (a client then judges a
+    /// stale schema by the reason).
+    StaleSchema,
+}
+
+/// How the client-supplied text a reason quotes (the client's schema hash
+/// when it is not the server's) is shown: cut to `clip` characters, so a
+/// client can't make the server repeat an arbitrarily long string, and
+/// optionally quoted. Not on the wire's layout: only the reason's words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ClientText {
+    /// Quoted as a Rust string literal (`"abc"`), with `... (N bytes)`
+    /// after a clipped one; else bare, clipped silently.
+    pub quoted: bool,
+    /// The most characters shown.
+    pub clip: usize,
+}
+
+impl ClientText {
+    /// The engine's: bare, at most 64 characters ([`crate::auth::clip`]).
+    pub const BARE: ClientText = ClientText {
+        quoted: false,
+        clip: 64,
+    };
+
+    /// Quoted, at most 40 characters: `tc_auth::quote`'s form.
+    pub const QUOTED: ClientText = ClientText {
+        quoted: true,
+        clip: 40,
+    };
+
+    /// `text` as shown in a reason.
+    pub fn show(&self, text: &str) -> String {
+        let cut = text.char_indices().nth(self.clip).map(|(end, _)| end);
+        match (self.quoted, cut) {
+            (false, None) => text.to_string(),
+            (false, Some(end)) => text[..end].to_string(),
+            (true, None) => format!("{text:?}"),
+            (true, Some(end)) => format!("{:?}... ({} bytes)", &text[..end], text.len()),
+        }
+    }
 }
 
 /// A field of `Welcome`, in an [`Envelope`]'s order.
@@ -254,6 +311,11 @@ pub enum AckMode {
     /// Every `Bulk`'s data bytes taken since `Hello`, cumulative
     /// (`Ack { total }`; [`ClientMsg::Ack`]'s `bytes` holds the total).
     Total,
+    /// Every `Bulk` message's whole bytes (its tag, codec, data length and
+    /// data: the WebSocket message) taken since `Hello`, cumulative
+    /// (`Ack { total }`, as [`AckMode::Total`] on the wire). The session
+    /// maps it back to data bytes for the flow. TypeScript's `'messages'`.
+    Messages,
 }
 
 impl AckMode {
@@ -261,7 +323,7 @@ impl AckMode {
     pub const fn field(self) -> &'static str {
         match self {
             AckMode::Each => "bytes",
-            AckMode::Total => "total",
+            AckMode::Total | AckMode::Messages => "total",
         }
     }
 }
@@ -329,8 +391,12 @@ pub struct Envelope {
     pub hello: &'static [HelloField],
     /// `Welcome`'s fields in wire order.
     pub welcome: &'static [WelcomeField],
+    /// `Rejected`'s fields in wire order.
+    pub rejected: &'static [RejectedField],
     /// What an `Ack` counts.
     pub ack: AckMode,
+    /// How the schema-mismatch reason shows the client's hash.
+    pub client_text: ClientText,
     /// `Closed`'s code as a game enum; `None`, a `u16`.
     pub close: Option<CloseCodes>,
 }
@@ -381,7 +447,9 @@ impl Envelope {
             WelcomeField::StepUs,
             WelcomeField::Ext,
         ],
+        rejected: &[RejectedField::Reason, RejectedField::StaleSchema],
         ack: AckMode::Each,
+        client_text: ClientText::BARE,
         close: None,
     };
 
@@ -419,8 +487,32 @@ impl Envelope {
             && self.server == e.server
             && self.hello == e.hello
             && self.welcome == e.welcome
+            && self.rejected == e.rejected
             && self.ack == e.ack
+            && self.client_text == e.client_text
             && self.close.is_none()
+    }
+
+    /// How many of the game's `Hello` fields [`HelloField::ExtFields`]
+    /// lists, if `Hello` carries them so.
+    fn hello_ext_fields(&self) -> Option<usize> {
+        let n: usize = self
+            .hello
+            .iter()
+            .map(|f| match f {
+                HelloField::ExtFields(n) => *n as usize,
+                _ => 0,
+            })
+            .sum();
+        self.hello
+            .iter()
+            .any(|f| matches!(f, HelloField::ExtFields(_)))
+            .then_some(n)
+    }
+
+    /// True if `Rejected` carries `stale_schema`.
+    pub fn has_stale_schema(&self) -> bool {
+        self.rejected.contains(&RejectedField::StaleSchema)
     }
 
     fn client_inline(&self) -> bool {
@@ -486,10 +578,27 @@ impl Envelope {
             fail("Bulk's tag must be under 128".into());
         }
         let hello = |f: HelloField| self.hello.iter().filter(|&&g| g == f).count();
-        for f in [HelloField::Token, HelloField::SchemaHash, HelloField::Ext] {
+        for f in [HelloField::Token, HelloField::SchemaHash] {
             if hello(f) != 1 {
                 fail(format!("Hello needs {f:?} once"));
             }
+        }
+        let split = self.hello_ext_fields().is_some();
+        match (hello(HelloField::Ext), split) {
+            (1, false) => {}
+            (0, true) => {}
+            (_, true) => fail("Hello has both Ext and ExtFields".into()),
+            _ => fail("Hello needs Ext once".into()),
+        }
+        if self.hello.contains(&HelloField::ExtFields(0)) {
+            fail("Hello's ExtFields(0) lists no field".into());
+        }
+        let rejected = |f: RejectedField| self.rejected.iter().filter(|&&g| g == f).count();
+        if rejected(RejectedField::Reason) != 1 {
+            fail("Rejected needs Reason once".into());
+        }
+        if rejected(RejectedField::StaleSchema) > 1 {
+            fail("Rejected lists StaleSchema twice".into());
         }
         if hello(HelloField::Bulk) > 1 {
             fail("Hello lists Bulk twice".into());
@@ -799,16 +908,64 @@ fn encode_inline<T: Wire>(msg: &T, w: &mut Writer, tag: impl Fn(u64) -> Option<u
 }
 
 fn hello_fields<P: Protocol>(s: &mut SchemaBuilder) -> Vec<Field> {
-    P::ENVELOPE
-        .hello
-        .iter()
-        .map(|f| match f {
-            HelloField::Token => field::<String>(s, "token"),
-            HelloField::SchemaHash => field::<String>(s, "schema_hash"),
-            HelloField::Bulk => field::<Option<u8>>(s, "bulk"),
-            HelloField::Ext => field::<P::Hello>(s, "ext"),
-        })
-        .collect()
+    let env = P::ENVELOPE;
+    // The game's struct itself is no type of the schema (unless something
+    // else reaches it): only its fields, laid out in `Hello`.
+    let mut ext = env.hello_ext_fields().map(|n| {
+        let (scratch, fields) = ext_struct::<P>();
+        assert!(
+            fields.len() == n,
+            "Hello: ExtFields list {n} fields of the game's {}",
+            fields.len()
+        );
+        (scratch, fields.into_iter())
+    });
+    let mut out = Vec::new();
+    for f in env.hello {
+        match f {
+            HelloField::Token => out.push(field::<String>(s, "token")),
+            HelloField::SchemaHash => out.push(field::<String>(s, "schema_hash")),
+            HelloField::Bulk => out.push(field::<Option<u8>>(s, "bulk")),
+            HelloField::Ext => out.push(field::<P::Hello>(s, "ext")),
+            HelloField::ExtFields(n) => {
+                let (scratch, fields) = ext.as_mut().expect("ExtFields");
+                for f in fields.take(*n as usize) {
+                    s.adopt(scratch, &f.ty);
+                    out.push(f);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The game's `Hello` struct's fields, and the builder that described
+/// them (their types are adopted from it as `Hello` reaches them).
+fn ext_struct<P: Protocol>() -> (SchemaBuilder, Vec<Field>) {
+    let mut scratch = SchemaBuilder::new();
+    let ty = P::Hello::describe(&mut scratch);
+    let TypeRef::Named(name) = &ty else {
+        panic!("Hello: ExtFields need the game's Hello to be a struct");
+    };
+    let fields = match scratch.defined(name).map(|d| &d.kind) {
+        Some(TypeKind::Struct(fields)) => fields.clone(),
+        _ => panic!("Hello: ExtFields need `{name}` to be a struct"),
+    };
+    (scratch, fields)
+}
+
+/// The game's `Hello` struct's schema and field types, for laying its
+/// fields out among the envelope's ([`HelloField::ExtFields`]).
+fn ext_layout<P: Protocol>() -> (tc_wire::Schema, Vec<TypeRef>) {
+    let (schema, ty) = tc_wire::Schema::for_type::<P::Hello>();
+    let fields = match &ty {
+        TypeRef::Named(name) => match schema.get(name).map(|d| &d.kind) {
+            Some(TypeKind::Struct(fields)) => fields.iter().map(|f| f.ty.clone()).collect(),
+            _ => panic!("Hello: ExtFields need `{name}` to be a struct"),
+        },
+        _ => panic!("Hello: ExtFields need the game's Hello to be a struct"),
+    };
+    (schema, fields)
 }
 
 fn welcome_fields<P: Protocol>(s: &mut SchemaBuilder) -> Vec<Field> {
@@ -846,12 +1003,33 @@ impl<P: Protocol> Wire for ClientMsg<P> {
                 bulk,
                 ext,
             } => {
+                // The game's fields, split where they are laid out apart.
+                let ext_bytes = env.hello_ext_fields().map(|_| ext.to_bytes());
+                let mut ext_spans = ext_bytes.as_deref().map(|bytes| {
+                    let (schema, types) = ext_layout::<P>();
+                    let mut r = Reader::new(bytes);
+                    let mut spans = Vec::with_capacity(types.len());
+                    for ty in &types {
+                        let start = r.position();
+                        schema
+                            .skip(ty, &mut r)
+                            .expect("the game's Hello encodes itself");
+                        spans.push(r.since(start));
+                    }
+                    spans.into_iter()
+                });
                 for f in env.hello {
                     match f {
                         HelloField::Token => token.encode(w),
                         HelloField::SchemaHash => schema_hash.encode(w),
                         HelloField::Bulk => bulk.encode(w),
                         HelloField::Ext => ext.encode(w),
+                        HelloField::ExtFields(n) => {
+                            let spans = ext_spans.as_mut().expect("ExtFields");
+                            for span in spans.take(*n as usize) {
+                                w.write_raw(span);
+                            }
+                        }
                     }
                 }
             }
@@ -894,13 +1072,29 @@ impl<P: Protocol> Wire for ClientMsg<P> {
             ClientSlot::Hello => {
                 let (mut token, mut schema_hash, mut bulk, mut ext) =
                     (String::new(), String::new(), None, None);
+                // The game's fields laid out apart, gathered to decode as one.
+                let mut layout = env.hello_ext_fields().map(|_| ext_layout::<P>());
+                let mut types = 0;
+                let mut gathered = Vec::new();
                 for f in env.hello {
                     match f {
                         HelloField::Token => token = Wire::decode(r)?,
                         HelloField::SchemaHash => schema_hash = Wire::decode(r)?,
                         HelloField::Bulk => bulk = Wire::decode(r)?,
                         HelloField::Ext => ext = Some(Wire::decode(r)?),
+                        HelloField::ExtFields(n) => {
+                            let (schema, fields) = layout.as_mut().expect("ExtFields");
+                            for ty in &fields[types..types + *n as usize] {
+                                let start = r.position();
+                                schema.skip(ty, r)?;
+                                gathered.extend_from_slice(r.since(start));
+                            }
+                            types += *n as usize;
+                        }
                     }
+                }
+                if layout.is_some() {
+                    ext = Some(P::Hello::from_bytes(&gathered)?);
                 }
                 C::Hello {
                     token,
@@ -1047,8 +1241,12 @@ impl<P: Protocol> Wire for ServerMsg<P> {
                 reason,
                 stale_schema,
             } => {
-                reason.encode(w);
-                stale_schema.encode(w);
+                for f in env.rejected {
+                    match f {
+                        RejectedField::Reason => reason.encode(w),
+                        RejectedField::StaleSchema => stale_schema.encode(w),
+                    }
+                }
             }
             S::CommandResult { seq, result } => {
                 seq.encode(w);
@@ -1148,10 +1346,19 @@ impl<P: Protocol> Wire for ServerMsg<P> {
                     ext: ext.expect("an envelope's Welcome has `ext`"),
                 }
             }
-            ServerSlot::Rejected => S::Rejected {
-                reason: Wire::decode(r)?,
-                stale_schema: Wire::decode(r)?,
-            },
+            ServerSlot::Rejected => {
+                let (mut reason, mut stale_schema) = (String::new(), false);
+                for f in env.rejected {
+                    match f {
+                        RejectedField::Reason => reason = Wire::decode(r)?,
+                        RejectedField::StaleSchema => stale_schema = Wire::decode(r)?,
+                    }
+                }
+                S::Rejected {
+                    reason,
+                    stale_schema,
+                }
+            }
             ServerSlot::CommandResult => S::CommandResult {
                 seq: Wire::decode(r)?,
                 result: Wire::decode(r)?,
@@ -1241,10 +1448,13 @@ impl<P: Protocol> Wire for ServerMsg<P> {
                         ServerSlot::Rejected => Variant::named(
                             "Rejected",
                             "",
-                            vec![
-                                field::<String>(s, "reason"),
-                                field::<bool>(s, "stale_schema"),
-                            ],
+                            env.rejected
+                                .iter()
+                                .map(|f| match f {
+                                    RejectedField::Reason => field::<String>(s, "reason"),
+                                    RejectedField::StaleSchema => field::<bool>(s, "stale_schema"),
+                                })
+                                .collect(),
                         ),
                         ServerSlot::CommandResult => Variant::named(
                             "CommandResult",
@@ -1579,6 +1789,7 @@ pub(crate) mod tests {
                 describe: <Bye as Wire>::describe,
                 codes: &[close::RESTART, 4003, 4004],
             }),
+            ..Envelope::ENGINE
         };
     }
 
@@ -1738,5 +1949,186 @@ enum Bye {
     #[should_panic(expected = "ClientMsg needs Ping")]
     fn a_layout_without_a_required_message_panics() {
         schema_builder::<NoPing>();
+    }
+
+    /// The game's `Hello` fields among the envelope's, no `stale_schema`,
+    /// acks of whole messages, a quoted client hash: an existing protocol
+    /// the engine's layout fits without a translation layer.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct Split;
+
+    #[derive(Wire, Debug, Clone, PartialEq, Default)]
+    pub struct Joining {
+        watch: bool,
+        content: String,
+        opening: Option<u32>,
+    }
+
+    impl Protocol for Split {
+        type Hello = Joining;
+        type Welcome = Empty;
+        type Command = Empty;
+        type Result = Empty;
+        type Interest = Empty;
+        type Input = Empty;
+        type State = Empty;
+        type Client = Empty;
+        type Server = Empty;
+        const ENVELOPE: &'static Envelope = &Envelope {
+            hello: &[
+                HelloField::Token,
+                HelloField::SchemaHash,
+                HelloField::ExtFields(1),
+                HelloField::Bulk,
+                HelloField::ExtFields(2),
+            ],
+            rejected: &[RejectedField::Reason],
+            ack: AckMode::Messages,
+            client_text: ClientText::QUOTED,
+            ..Envelope::ENGINE
+        };
+    }
+
+    #[test]
+    fn a_split_hello_lays_the_games_fields_among_the_envelopes() {
+        type Cm = ClientMsg<Split>;
+        type Sm = ServerMsg<Split>;
+        let hello = Cm::Hello {
+            token: "t".into(),
+            schema_hash: "h".into(),
+            bulk: Some(1),
+            ext: Joining {
+                watch: true,
+                content: "c".into(),
+                opening: Some(5),
+            },
+        };
+        let bytes = hello.to_bytes();
+        // Token, hash, watch, then bulk, then content and opening.
+        assert_eq!(bytes, [0, 1, b't', 1, b'h', 1, 1, 1, 1, b'c', 1, 5]);
+        assert_eq!(Cm::from_bytes(&bytes).unwrap(), hello);
+        // A field cut short or left over still fails as the whole would.
+        assert!(Cm::from_bytes(&bytes[..bytes.len() - 1]).is_err());
+        assert!(Cm::from_bytes(&[&bytes[..], &[0]].concat()).is_err());
+        // `Rejected` is its reason alone; `stale_schema` reads as false.
+        let rejected = Sm::Rejected {
+            reason: "no".into(),
+            stale_schema: true,
+        };
+        assert_eq!(rejected.to_bytes(), [1, 2, b'n', b'o']);
+        assert_eq!(
+            Sm::from_bytes(&rejected.to_bytes()).unwrap(),
+            Sm::Rejected {
+                reason: "no".into(),
+                stale_schema: false
+            }
+        );
+        // Acks are totals on the wire.
+        let ack_tag = Split::ENVELOPE.client_tag(ClientSlot::Ack).unwrap() as u8;
+        assert_eq!(Cm::Ack { bytes: 9 }.to_bytes(), [ack_tag, 9]);
+        let env = Split::ENVELOPE;
+        assert!(env.has_bulk() && !env.has_stale_schema() && !env.is_engine());
+        assert!(Envelope::ENGINE.has_stale_schema());
+    }
+
+    #[test]
+    fn a_split_hello_has_the_typescript_schema() {
+        let text = schema_builder::<Split>().finish().unwrap().canonical_text();
+        for line in [
+            "  Hello { token: String, schema_hash: String, watch: bool, bulk: Option<u8>, content: String, opening: Option<u32> }\n",
+            "  Rejected { reason: String }\n",
+            "  Ack { total: u64 }\n",
+        ] {
+            assert!(text.contains(line), "{line}in\n{text}");
+        }
+        // The game's struct is only its fields, not a type of the schema.
+        assert!(!text.contains("Joining"), "{text}");
+    }
+
+    #[test]
+    fn client_text_is_clipped_bare_or_quoted() {
+        let long = "é".repeat(70);
+        assert_eq!(ClientText::BARE.show("ab"), "ab");
+        assert_eq!(ClientText::BARE.show(&long), crate::auth::clip(&long));
+        assert_eq!(ClientText::QUOTED.show("ab"), "\"ab\"");
+        assert_eq!(
+            ClientText::QUOTED.show(&long),
+            format!("{:?}... (140 bytes)", "é".repeat(40))
+        );
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    struct Both;
+    #[derive(Debug, Clone, PartialEq)]
+    struct Short;
+    #[derive(Debug, Clone, PartialEq)]
+    struct NoReason;
+
+    macro_rules! with_envelope {
+        ($p:ident, $hello:ty, $env:expr) => {
+            impl Protocol for $p {
+                type Hello = $hello;
+                type Welcome = Empty;
+                type Command = Empty;
+                type Result = Empty;
+                type Interest = Empty;
+                type Input = Empty;
+                type State = Empty;
+                type Client = Empty;
+                type Server = Empty;
+                const ENVELOPE: &'static Envelope = &$env;
+            }
+        };
+    }
+    with_envelope!(
+        Both,
+        Joining,
+        Envelope {
+            hello: &[
+                HelloField::Token,
+                HelloField::SchemaHash,
+                HelloField::Ext,
+                HelloField::ExtFields(3),
+            ],
+            ..Envelope::ENGINE
+        }
+    );
+    with_envelope!(
+        Short,
+        Joining,
+        Envelope {
+            hello: &[
+                HelloField::Token,
+                HelloField::SchemaHash,
+                HelloField::ExtFields(2),
+            ],
+            ..Envelope::ENGINE
+        }
+    );
+    with_envelope!(
+        NoReason,
+        Empty,
+        Envelope {
+            rejected: &[RejectedField::StaleSchema],
+            ..Envelope::ENGINE
+        }
+    );
+
+    #[test]
+    #[should_panic(expected = "Hello has both Ext and ExtFields")]
+    fn ext_and_ext_fields_both_panic() {
+        schema_builder::<Both>();
+    }
+
+    #[test]
+    #[should_panic(expected = "ExtFields list 2 fields of the game's 3")]
+    fn ext_fields_must_cover_the_struct() {
+        schema_builder::<Short>();
+    }
+
+    #[test]
+    #[should_panic(expected = "Rejected needs Reason once")]
+    fn rejected_needs_its_reason() {
+        schema_builder::<NoReason>();
     }
 }

@@ -98,15 +98,23 @@ export interface EnvelopeSpec {
   readonly client?: readonly (EnvelopeClientVariant | Readonly<Record<string, VariantSpec>>)[];
   /** `ServerMsg`'s variants the same way; `Welcome`, `Rejected`, `Pong` and `Closed` are required. */
   readonly server?: readonly (EnvelopeServerVariant | Readonly<Record<string, VariantSpec>>)[];
-  /** `Hello`'s fields in wire order; `bulk` may be left out (no bulk lane). */
-  readonly hello?: readonly ('token' | 'schema_hash' | 'bulk' | 'ext')[];
+  /**
+   * `Hello`'s fields in wire order; `bulk` may be left out (no bulk lane). `{ ext: n }` in place of
+   * `'ext'`: the next `n` fields of the game's `Hello` struct (`roles.hello`), each a field of
+   * `Hello` under its own name, so the game's fields sit among the envelope's (together the entries
+   * list them all). The session then spreads the hello's `ext` into `Hello`.
+   */
+  readonly hello?: readonly ('token' | 'schema_hash' | 'bulk' | 'ext' | { readonly ext: number })[];
   /** `Welcome`'s fields in wire order; `step_us` may be left out (read as 0). */
   readonly welcome?: readonly ('player' | 'time' | 'paused' | 'step_us' | 'ext')[];
+  /** `Rejected`'s fields in wire order; `stale_schema` may be left out (read as false). */
+  readonly rejected?: readonly ('reason' | 'stale_schema')[];
   /**
    * What an `Ack` counts: `'each'` (default), one `Bulk`'s data bytes (`Ack { bytes }`); `'total'`,
-   * every `Bulk`'s data bytes taken since `Hello`, cumulative (`Ack { total }`).
+   * every `Bulk`'s data bytes taken since `Hello`, cumulative (`Ack { total }`); `'messages'`, every
+   * `Bulk` message's whole bytes (tag, codec, length and data) since `Hello` (`Ack { total }`).
    */
-  readonly ack?: 'each' | 'total';
+  readonly ack?: 'each' | 'total' | 'messages';
   /**
    * `Closed`'s code as the game's own enum of unit variants (`type`, one of `types`), variant `i`
    * standing for close code `codes[i]` (4000 to 4999 final, others reconnect). Default: a `u16`.
@@ -143,7 +151,9 @@ const role = (r: TypeSpec | undefined): TypeSpec => r ?? 'Empty';
 /** What a session reads off a schema's envelope (`envelopeOf`). */
 export interface EnvelopeInfo {
   /** What an `Ack` counts. */
-  readonly ack: 'each' | 'total';
+  readonly ack: 'each' | 'total' | 'messages';
+  /** Whether `Hello` carries the game's fields as its own (`{ ext: n }`), not in `ext`. */
+  readonly helloSplit: boolean;
   /** The game's inline client messages, by name (none: they go in `Game`). */
   readonly clientGame: ReadonlySet<string>;
   /** The game's inline server messages, by name (none: they come in `Game`). */
@@ -154,6 +164,7 @@ export interface EnvelopeInfo {
 
 const DEFAULT_INFO: EnvelopeInfo = {
   ack: 'each',
+  helloSplit: false,
   clientGame: new Set(),
   serverGame: new Set(),
   closeCodes: null,
@@ -210,6 +221,43 @@ function layout(
   return { variants, game };
 }
 
+/**
+ * `Hello`'s order with each `{ ext: n }` spelled out as the next `n` fields of the game's `Hello`
+ * struct, and those fields' types (null when `Hello` carries `ext` whole).
+ */
+function splitHello(
+  order: readonly (string | { readonly ext: number })[],
+  game: Readonly<Record<string, TypeDefSpec>>,
+  helloRole: TypeSpec | undefined,
+): { order: string[]; fields: Record<string, TypeSpec> | null } {
+  if (order.every((f) => typeof f === 'string')) return { order: order as string[], fields: null };
+  const def = typeof helloRole === 'string' ? game[helloRole] : undefined;
+  if (!def || !('struct' in def)) {
+    throw new SchemaError("Hello: { ext: n } needs roles.hello to be one of the game's structs");
+  }
+  const names = Object.keys(def.struct);
+  const out: string[] = [];
+  let next = 0;
+  for (const f of order) {
+    if (typeof f === 'string') {
+      if (f === 'ext') throw new SchemaError("Hello has both 'ext' and { ext: n }");
+      out.push(f);
+      continue;
+    }
+    if (!Number.isInteger(f.ext) || f.ext < 1 || next + f.ext > names.length) {
+      throw new SchemaError(`Hello: { ext: ${f.ext} } past ${helloRole}'s ${names.length} fields`);
+    }
+    out.push(...names.slice(next, next + f.ext));
+    next += f.ext;
+  }
+  if (next !== names.length) {
+    throw new SchemaError(
+      `Hello: { ext: n } list ${next} of ${helloRole}'s ${names.length} fields`,
+    );
+  }
+  return { order: out, fields: { ...def.struct } };
+}
+
 /** One message's fields in the order a layout gives, each from `fields` by wire name. */
 function fieldsIn(
   what: string,
@@ -241,7 +289,9 @@ export function defineSchema(desc: SchemaDesc = {}): NetSchema {
   const r = desc.roles ?? {};
   const e = desc.envelope ?? {};
   const ack = e.ack ?? 'each';
-  if (ack !== 'each' && ack !== 'total') throw new SchemaError(`envelope.ack: ${String(ack)}`);
+  if (ack !== 'each' && ack !== 'total' && ack !== 'messages') {
+    throw new SchemaError(`envelope.ack: ${String(ack)}`);
+  }
   let closeCode: TypeSpec = 'u16';
   let closeCodes: Map<string, number> | null = null;
   if (e.close) {
@@ -266,11 +316,17 @@ export function defineSchema(desc: SchemaDesc = {}): NetSchema {
     }
     closeCode = e.close.type;
   }
+  const split = splitHello(e.hello ?? ['token', 'schema_hash', 'bulk', 'ext'], game, r.hello);
   const hello = fieldsIn(
     'Hello',
-    e.hello ?? ['token', 'schema_hash', 'bulk', 'ext'],
-    { token: 'String', schema_hash: 'String', bulk: netType.option('u8'), ext: role(r.hello) },
-    ['token', 'schema_hash', 'ext'],
+    split.order,
+    {
+      token: 'String',
+      schema_hash: 'String',
+      bulk: netType.option('u8'),
+      ...(split.fields ?? { ext: role(r.hello) }),
+    },
+    ['token', 'schema_hash', ...(split.fields ? Object.keys(split.fields) : ['ext'])],
   );
   const welcome = fieldsIn(
     'Welcome',
@@ -302,7 +358,12 @@ export function defineSchema(desc: SchemaDesc = {}): NetSchema {
     e.server ?? ENVELOPE_SERVER,
     {
       Welcome: welcome,
-      Rejected: { reason: 'String', stale_schema: 'bool' },
+      Rejected: fieldsIn(
+        'Rejected',
+        e.rejected ?? ['reason', 'stale_schema'],
+        { reason: 'String', stale_schema: 'bool' },
+        ['reason'],
+      ),
       CommandResult: { seq: 'u32', result: role(r.result) },
       Update: { sub: 'u32', version: 'u64', hash: 'String', patch: netType.vec('PatchOp') },
       Resync: { sub: 'u32', version: 'u64', hash: 'String', result: 'Bytes' },
@@ -346,14 +407,19 @@ export function defineSchema(desc: SchemaDesc = {}): NetSchema {
   for (const name of ['Empty', 'Resume', 'PatchOp', 'PathStep']) {
     if (!reached(types, desc, name)) delete types[name];
   }
+  // A split `Hello`'s struct is only its fields, unless something else reaches it.
+  if (split.fields && typeof r.hello === 'string' && !reached(types, desc, r.hello)) {
+    delete types[r.hello];
+  }
   const schema = new NetSchema(WIRE_HEADER, {
     roots: ['ClientMsg', 'ServerMsg', ...(desc.roots ?? [])],
     types,
     queries: desc.queries,
   });
-  if (e.client || e.server || e.ack || e.close) {
+  if (e.client || e.server || e.ack || e.close || split.fields) {
     infos.set(schema, {
       ack,
+      helloSplit: split.fields !== null,
       clientGame: new Set(client.game),
       serverGame: new Set(server.game),
       closeCodes,
@@ -432,7 +498,7 @@ export type ServerMsg<GWelcome = unknown, GResult = unknown, GState = unknown, G
       stepUs: number;
       ext: GWelcome;
     }
-  | { type: 'Rejected'; reason: string; staleSchema: boolean }
+  | { type: 'Rejected'; reason: string; staleSchema?: boolean }
   | { type: 'CommandResult'; seq: number; result: GResult }
   | { type: 'Update'; sub: number; version: number; hash: string; patch: PatchOp[] }
   | { type: 'Resync'; sub: number; version: number; hash: string; result: Uint8Array }

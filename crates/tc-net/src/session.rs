@@ -41,7 +41,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot, watch};
 use tokio::time::Instant;
 use tracing::{debug, info};
 
-use crate::auth::{Auth, Identity, clip};
+use crate::auth::{Auth, Identity};
 use crate::envelope::{AckMode, ClientMsg, HelloField, Protocol, ServerMsg, close, codec};
 use crate::flow::{BULK_HIGH_WATER, Flow};
 use crate::outbound::{self, Batch, Outbound, Ready};
@@ -338,6 +338,8 @@ pub async fn run<T: Transport, P: Protocol>(
     // each `Ack` names one `Bulk`'s data.
     let mut bulk_sent: u64 = 0;
     let mut bulk_acked: u64 = 0;
+    // With `AckMode::Messages`, each `Bulk`'s whole size against its data.
+    let mut messages = WholeToData::default();
     // How many times smaller this client's bulk data is on the wire.
     let mut ratio = Ratio::default();
 
@@ -408,6 +410,7 @@ pub async fn run<T: Transport, P: Protocol>(
                             AckMode::Each => bulk_acked.saturating_add(bytes),
                             // Never back: an old total says nothing new.
                             AckMode::Total => bulk_acked.max(bytes),
+                            AckMode::Messages => bulk_acked.max(messages.data(bytes)),
                         };
                         let f = flow.get_or_insert_with(|| Flow::new(now, bulk_sent));
                         if f.acked(bulk_acked, now).is_err() {
@@ -504,9 +507,13 @@ pub async fn run<T: Transport, P: Protocol>(
                             if packed.tried {
                                 ratio.add(packed.raw, packed.data);
                             }
+                            let whole = packed.message.len();
                             batch.frames.push(packed.message.into());
                             // The `Bulk`'s data is what the client acks.
                             bulk_sent += packed.data as u64;
+                            if P::ENVELOPE.ack == AckMode::Messages {
+                                messages.wrote(whole, packed.data);
+                            }
                             if let Some(f) = &mut flow {
                                 let idle = out_rx.bulk_queued() == 0;
                                 f.wrote(packed.data, std::time::Instant::now(), idle);
@@ -635,7 +642,7 @@ fn hello<P: Protocol>(
         (
             format!(
                 "protocol schema mismatch: server {ours}, client {}; update the client",
-                clip(theirs)
+                P::ENVELOPE.client_text.show(theirs)
             ),
             true,
         )
@@ -696,10 +703,48 @@ fn old_hello_schema<P: Protocol>(frame: &[u8]) -> Option<String> {
                 Option::<u8>::decode(&mut r).ok()?;
             }
             // The game's fields, of a shape this server can't know.
-            HelloField::Ext => return None,
+            HelloField::Ext | HelloField::ExtFields(_) => return None,
         }
     }
     None
+}
+
+/// Maps an `Ack`'s count of whole `Bulk` messages' bytes
+/// ([`AckMode::Messages`]) to their data's bytes, the flow's measure.
+#[derive(Debug, Default)]
+struct WholeToData {
+    /// Whole and data bytes written since `Hello`.
+    whole: u64,
+    data: u64,
+    /// The running totals after each `Bulk` not yet acked.
+    sent: std::collections::VecDeque<(u64, u64)>,
+    /// The data bytes of the messages acked whole.
+    acked: u64,
+}
+
+impl WholeToData {
+    /// One `Bulk` of `whole` bytes, `data` of them its data.
+    fn wrote(&mut self, whole: usize, data: usize) {
+        self.whole += whole as u64;
+        self.data += data as u64;
+        self.sent.push_back((self.whole, self.data));
+    }
+
+    /// The data bytes `whole` acked bytes cover: the data of every message
+    /// acked whole (a part-acked message counts once it is all in). More
+    /// than was written stays more, so the flow can call it out.
+    fn data(&mut self, whole: u64) -> u64 {
+        if whole > self.whole {
+            return self.data + (whole - self.whole);
+        }
+        while let Some(&(w, d)) = self.sent.front()
+            && w <= whole
+        {
+            self.acked = d;
+            self.sent.pop_front();
+        }
+        self.acked
+    }
 }
 
 /// Resolves when the tokens an auth checks may have changed; never
@@ -827,6 +872,62 @@ mod tests {
             .err()
             .unwrap();
         assert_eq!((reason.as_str(), stale), ("no such account", false));
+    }
+
+    #[test]
+    fn a_split_hello_quotes_a_stale_hash_and_reads_its_fields() {
+        use crate::envelope::tests::{Joining, Split};
+        let frame = |hash: &str| {
+            ClientMsg::<Split>::Hello {
+                token: "ada".into(),
+                schema_hash: hash.into(),
+                bulk: Some(codec::DEFLATE),
+                ext: Joining::default(),
+            }
+            .to_bytes()
+        };
+        let (reason, stale) = hello::<Split>(&frame("old"), "new", &AllowAll)
+            .err()
+            .unwrap();
+        assert_eq!(
+            reason,
+            "protocol schema mismatch: server new, client \"old\"; update the client"
+        );
+        assert!(stale);
+        let long = "x".repeat(50);
+        let (reason, _) = hello::<Split>(&frame(&long), "new", &AllowAll)
+            .err()
+            .unwrap();
+        assert!(
+            reason.contains(&format!("client {:?}... (50 bytes);", "x".repeat(40))),
+            "{reason}"
+        );
+        let ok = hello::<Split>(&frame("new"), "new", &AllowAll).unwrap();
+        assert_eq!(
+            (ok.bulk, ok.ext),
+            (Some(codec::DEFLATE), Joining::default())
+        );
+    }
+
+    #[test]
+    fn whole_message_acks_map_to_data_bytes() {
+        let mut m = WholeToData::default();
+        // Messages of 10, 20 and 5 bytes whole; 7, 16 and 2 of data.
+        m.wrote(10, 7);
+        m.wrote(20, 16);
+        m.wrote(5, 2);
+        assert_eq!(m.data(0), 0);
+        // A part of a message counts nothing until it is all in.
+        assert_eq!(m.data(9), 0);
+        assert_eq!(m.data(10), 7);
+        assert_eq!(m.data(29), 7);
+        assert_eq!(m.data(30), 23);
+        assert_eq!(m.data(35), 25);
+        // An old total says what it said; more than was sent stays more.
+        assert_eq!(m.data(10), 25);
+        assert_eq!(m.data(40), 30);
+        m.wrote(4, 1);
+        assert_eq!(m.data(39), 26);
     }
 
     #[test]

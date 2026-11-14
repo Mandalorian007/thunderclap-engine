@@ -7,9 +7,12 @@
 //!   the bulk lane, reconnect and close codes. Skipped, with a notice,
 //!   where node or the repo's node_modules are missing;
 //! - both again for `talk`, a game with an envelope of its own
-//!   (`src/net/talk-interop.test.ts`).
+//!   (`src/net/talk-interop.test.ts`);
+//! - TypeScript again for `split`, an existing protocol the envelope's
+//!   options fit (`src/net/split-interop.test.ts`).
 
 mod echo;
+mod split;
 mod talk;
 
 use std::path::PathBuf;
@@ -41,6 +44,16 @@ async fn start_talk() -> Server<Talk> {
     let (requests, game) = std::sync::mpsc::channel();
     std::thread::spawn(move || talk::run(game));
     let mut config = ServerConfig::new(talk::schema().hash());
+    config.deflate_threads = Some(1);
+    Server::start(config, requests)
+        .await
+        .expect("the server starts")
+}
+
+async fn start_split() -> Server<split::Split> {
+    let (requests, game) = std::sync::mpsc::channel();
+    std::thread::spawn(move || split::run(game));
+    let mut config = ServerConfig::new(split::schema().hash());
     config.deflate_threads = Some(1);
     Server::start(config, requests)
         .await
@@ -330,6 +343,24 @@ fn typescript_talk_interop() {
         "src/net/talk-interop.test.ts",
         url,
         talk::schema().hash(),
+        3,
+    );
+    runtime.block_on(server.stop());
+}
+
+#[test]
+fn typescript_split_interop() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let server = runtime.block_on(start_split());
+    let url = format!("ws://{}", server.local_addr());
+    vitest(
+        "src/net/split-interop.test.ts",
+        url,
+        split::schema().hash(),
         3,
     );
     runtime.block_on(server.stop());

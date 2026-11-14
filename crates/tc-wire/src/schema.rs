@@ -501,6 +501,72 @@ impl Schema {
         ty
     }
 
+    /// Reads past one value of `ty` (a type of this schema), checking its
+    /// scalars and lengths as decoding does but not a map's key order: for
+    /// finding where a value's fields lie in its bytes. The type's own
+    /// decoder still judges the value.
+    ///
+    /// # Panics
+    ///
+    /// If `ty` names a type the schema doesn't hold.
+    pub fn skip(&self, ty: &TypeRef, r: &mut crate::Reader<'_>) -> Result<(), crate::DecodeError> {
+        use crate::{Bytes, Fixed};
+        match self.resolve(ty) {
+            TypeRef::Bool => drop(bool::decode(r)?),
+            TypeRef::U8 => drop(u8::decode(r)?),
+            TypeRef::U16 => drop(u16::decode(r)?),
+            TypeRef::U32 => drop(u32::decode(r)?),
+            TypeRef::U64 => drop(u64::decode(r)?),
+            TypeRef::I32 => drop(i32::decode(r)?),
+            TypeRef::I64 => drop(i64::decode(r)?),
+            TypeRef::Fixed => drop(Fixed::decode(r)?),
+            TypeRef::String => drop(String::decode(r)?),
+            TypeRef::Bytes => drop(Bytes::decode(r)?),
+            TypeRef::Vec(inner) => {
+                for _ in 0..r.read_len()? {
+                    self.skip(inner, r)?;
+                }
+            }
+            TypeRef::Option(inner) => {
+                if r.read_option_tag()? {
+                    self.skip(inner, r)?;
+                }
+            }
+            TypeRef::Map(key, value) => {
+                for _ in 0..r.read_len()? {
+                    self.skip(key, r)?;
+                    self.skip(value, r)?;
+                }
+            }
+            TypeRef::Named(name) => match self.get(name).map(|d| &d.kind) {
+                Some(TypeKind::Struct(fields)) => {
+                    for f in fields {
+                        self.skip(&f.ty, r)?;
+                    }
+                }
+                Some(TypeKind::Enum(variants)) => {
+                    let at = r.position();
+                    let index = r.read_variant()?;
+                    let variant = usize::try_from(index)
+                        .ok()
+                        .and_then(|i| variants.get(i))
+                        .ok_or_else(|| crate::DecodeError::unknown_variant(at, name, index))?;
+                    match &variant.fields {
+                        VariantFields::Unit => {}
+                        VariantFields::Named(fields) => {
+                            for f in fields {
+                                self.skip(&f.ty, r)?;
+                            }
+                        }
+                        VariantFields::Newtype(inner) => self.skip(inner, r)?,
+                    }
+                }
+                _ => panic!("the schema has no type `{name}`"),
+            },
+        }
+        Ok(())
+    }
+
     /// The canonical text the schema hash is computed from: every name, type,
     /// field, and variant in order. Doc comments are excluded.
     pub fn canonical_text(&self) -> String {
