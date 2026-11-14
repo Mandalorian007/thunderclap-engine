@@ -110,6 +110,10 @@ interface KitInputPart extends KitPart<{ readonly pointers: PointerRouter<unknow
 interface KitXrPart extends KitPart<{ readonly xr: XrControl }> {
   readonly surface: XrSurface | null;
   readonly frame: XRFrame | null;
+  /** False: the eyes are the core's alone (`XrOptions.immediate`). */
+  readonly immediate?: boolean;
+  /** Draws the eyes' core work after the renderer's frame (`XrOptions.core`). */
+  drawCore?(eyes: readonly XrEyeView[]): void;
 }
 
 /** What every composed game has, whatever services it took. */
@@ -278,13 +282,17 @@ async function buildKit(kit: KitOptions, crash: KitCrash | null): Promise<object
           const xrFrame = xr!.frame;
           const eyes = xrFrame ? xrSurface.views(xrFrame) : NO_EYES;
           stack.render(frame, xrSurface.head, alpha);
-          for (let i = 0; i < eyes.length; i++) {
-            const eye = eyes[i]!;
-            const scene = xrSurface.scene!;
-            renderer.render(frame, eye.camera, scene);
-            renderer.resolve(scene, eye.target.color.view, eye.viewport);
+          if (xr!.immediate !== false) {
+            for (let i = 0; i < eyes.length; i++) {
+              const eye = eyes[i]!;
+              const scene = xrSurface.scene!;
+              renderer.render(frame, eye.camera, scene);
+              renderer.resolve(scene, eye.target.color.view, eye.viewport);
+            }
           }
           renderer.endFrame(NO_PRESENT);
+          // The render core's eyes (ws/xr-merge): one cull for the pair, a draw per eye.
+          xr!.drawCore?.(eyes);
         } else {
           // Read each frame: `ctx.setCamera` swaps it.
           const camera = renderer.camera;

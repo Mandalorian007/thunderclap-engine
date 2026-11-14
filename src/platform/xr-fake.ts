@@ -64,6 +64,11 @@ export interface FakeXrOptions {
    * positive. Default none: both eyes get the same symmetric 90° projection.
    */
   fov?: { outer: number; inner: number; up: number; down: number } | null;
+  /**
+   * The layer textures' usage (ws/xr-merge). Default `RENDER_ATTACHMENT`; the emulator adds
+   * `COPY_SRC` to mirror the eyes onto a canvas.
+   */
+  textureUsage?: number;
 }
 
 function translation(x: number, y: number, z: number): Float32Array {
@@ -73,6 +78,50 @@ function translation(x: number, y: number, z: number): Float32Array {
   m[13] = y;
   m[14] = z;
   return m;
+}
+
+/**
+ * A rigid transform turned `yaw` radians about +y to the right (ws/xr-merge: 0 faces -z, as
+ * `headYawOf` reads it) and placed at (x, y, z), with its inverse. Yaw 0 is `fakeTransform`.
+ */
+export function fakeYawTransform(x: number, y: number, z: number, yaw: number): XRRigidTransform {
+  if (yaw === 0) return fakeTransform(x, y, z);
+  // A right turn is a rotation of -yaw about +y.
+  const c = Math.cos(-yaw);
+  const s = Math.sin(-yaw);
+  const make = (
+    px: number,
+    py: number,
+    pz: number,
+    sign: number,
+    inv: () => XRRigidTransform,
+  ): XRRigidTransform => {
+    const m = new Float32Array(16);
+    m[0] = c;
+    m[2] = -s * sign;
+    m[5] = 1;
+    m[8] = s * sign;
+    m[10] = c;
+    m[12] = px;
+    m[13] = py;
+    m[14] = pz;
+    m[15] = 1;
+    const h = (-yaw * sign) / 2;
+    return {
+      position: { x: px, y: py, z: pz, w: 1 } as DOMPointReadOnly,
+      orientation: { x: 0, y: Math.sin(h), z: 0, w: Math.cos(h) } as DOMPointReadOnly,
+      matrix: m,
+      get inverse() {
+        return inv();
+      },
+    };
+  };
+  // The inverse: R^T, and -R^T t.
+  const ix = -(c * x - s * z);
+  const iz = -(s * x + c * z);
+  const a: XRRigidTransform = make(x, y, z, 1, () => b);
+  const b: XRRigidTransform = make(ix, -y, iz, -1, () => a);
+  return a;
 }
 
 /** A rigid transform that is a pure translation, with its inverse. */
@@ -149,26 +198,56 @@ export class FakeXrInputSource implements XRInputSource {
   readonly targetRayMode: XRTargetRayMode = 'tracked-pointer';
   readonly targetRaySpace: FakeXrSpace;
   readonly gripSpace: XRSpace | null = null;
-  readonly profiles: readonly string[] = ['generic-trigger-squeeze'];
+  readonly profiles: readonly string[];
   /** Where the target ray starts, in the reference space; it points down -z. */
   position: [number, number, number] = [0, 1, 0];
-  /** `buttons[0]` trigger, `buttons[1]` squeeze. */
-  readonly buttons: { pressed: boolean; touched: boolean; value: number }[] = [
-    { pressed: false, touched: false, value: 0 },
-    { pressed: false, touched: false, value: 0 },
-  ];
+  /**
+   * `buttons[0]` trigger, `buttons[1]` squeeze; with `standard`, the whole xr-standard layout:
+   * 2 touchpad, 3 stick, 4 A/X, 5 B/Y.
+   */
+  readonly buttons: { pressed: boolean; touched: boolean; value: number }[];
+  /** The gamepad's axes: empty, or with `standard` the touchpad (0, 1) and the stick (2, 3). */
+  readonly axes: number[];
   /** Null for a source without a gamepad (events only). */
   gamepad: Gamepad | null;
   hand: FakeXrHand | null = null;
 
   constructor(
     readonly handedness: XRHandedness,
-    opts: { gamepad?: boolean; hand?: boolean } = {},
+    opts: { gamepad?: boolean; hand?: boolean; standard?: boolean } = {},
   ) {
     this.targetRaySpace = new FakeXrSpace(`${handedness}-ray`);
+    const n = opts.standard ? 6 : 2;
+    this.buttons = [];
+    for (let i = 0; i < n; i++) this.buttons.push({ pressed: false, touched: false, value: 0 });
+    this.axes = opts.standard ? [0, 0, 0, 0] : [];
+    this.profiles = opts.standard
+      ? ['generic-trigger-squeeze-thumbstick', 'generic-trigger-squeeze']
+      : ['generic-trigger-squeeze'];
     this.gamepad =
-      opts.gamepad === false ? null : ({ buttons: this.buttons, axes: [] } as unknown as Gamepad);
+      opts.gamepad === false
+        ? null
+        : ({
+            buttons: this.buttons,
+            axes: this.axes,
+            mapping: opts.standard ? 'xr-standard' : '',
+          } as unknown as Gamepad);
     if (opts.hand) this.hand = new FakeXrHand();
+  }
+
+  /** Press or release button `i` (ws/xr-merge). */
+  press(i: number, down: boolean): void {
+    const b = this.buttons[i];
+    if (!b) return;
+    b.pressed = down;
+    b.touched = down;
+    b.value = down ? 1 : 0;
+  }
+
+  /** Hold the stick at (x, y): x right, y down, as the gamepad reports (ws/xr-merge). */
+  stick(x: number, y: number): void {
+    this.axes[2] = x;
+    this.axes[3] = y;
   }
 }
 
@@ -184,6 +263,10 @@ export class FakeXrFrame implements XRFrame {
     const s = this.session;
     const [hx, hy, hz] = s.headPosition;
     const half = s.opts.ipd / 2;
+    const yaw = s.headYaw;
+    // The eyes sit along the head's right, (cos yaw, 0, sin yaw).
+    const rx = Math.cos(yaw);
+    const rz = Math.sin(yaw);
     const fov = s.opts.fov;
     const proj = perspective90(s.opts.eyeWidth / s.opts.eyeHeight);
     const view = (eye: XREye, dx: number): XRView => ({
@@ -193,10 +276,10 @@ export class FakeXrFrame implements XRFrame {
         : eye === 'left'
           ? offAxis(-fov.outer, fov.inner, -fov.down, fov.up)
           : offAxis(-fov.inner, fov.outer, -fov.down, fov.up),
-      transform: fakeTransform(hx + dx, hy, hz),
+      transform: fakeYawTransform(hx + dx * rx, hy, hz + dx * rz, yaw),
     });
     return {
-      transform: fakeTransform(hx, hy, hz),
+      transform: fakeYawTransform(hx, hy, hz, yaw),
       emulatedPosition: false,
       views: [view('left', -half), view('right', half)],
     };
@@ -255,6 +338,8 @@ export class FakeXrSession extends EventTarget implements XRSession {
   renderState: XRRenderState = { depthNear: 0.1, depthFar: 1000, layers: [] };
   visibilityState: 'visible' | 'visible-blurred' | 'hidden' = 'visible';
   headPosition: [number, number, number] = [0, 1.6, 0];
+  /** The head's yaw, radians to the right of -z (ws/xr-merge). Default 0. */
+  headYaw = 0;
   /** False makes `getViewerPose` return nothing (tracking lost). */
   tracking = true;
   ended = false;
@@ -420,7 +505,7 @@ export class FakeXrProjectionLayer implements XRProjectionLayer {
         label: 'xr-layer-color',
         size,
         format: this.init.colorFormat ?? 'rgba8unorm',
-        usage: GPUTextureUsage.RENDER_ATTACHMENT,
+        usage: this.binding.session.opts.textureUsage,
       });
       this.colorTextures.push(this.color);
       this.depth = this.init.depthStencilFormat
@@ -499,6 +584,7 @@ export function installFakeXr(opts: FakeXrOptions = {}): FakeXr {
     rotateTextures: opts.rotateTextures ?? false,
     textureRing: opts.textureRing ?? 0,
     fov: opts.fov ?? null,
+    textureUsage: opts.textureUsage ?? 0x10, // GPUTextureUsage.RENDER_ATTACHMENT
   };
   const system = new FakeXrSystem(full);
   const bindings: FakeXRGPUBinding[] = [];

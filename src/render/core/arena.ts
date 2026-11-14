@@ -73,7 +73,7 @@ export class Arena {
   usedBytes = 0;
   /** Allocations so far, and the free ranges they looked at to find room. */
   readonly stats = { allocs: 0, walked: 0, trimmed: 0 };
-  private readonly device: GPUDevice;
+  private device: GPUDevice;
   private readonly blockBytes: number;
   private readonly usage: number;
   private readonly ranges: Range[][] = [];
@@ -223,6 +223,23 @@ export class Arena {
     if (n > 0) this.version++;
     this.stats.trimmed += n;
     return n;
+  }
+
+  /**
+   * After a device loss: make every block again, the same size, on `device`. Allocations and
+   * free ranges are kept, so every `ArenaAlloc` stays valid; the bytes are gone, and the owner
+   * writes them again (`RenderCore.onDeviceRestored`). Bumps `version`.
+   */
+  restore(device: GPUDevice): void {
+    this.device = device;
+    for (let b = 0; b < this.buffers.length; b++) {
+      this.buffers[b] = device.createBuffer({
+        label: `${this.label} ${b}`,
+        size: this.capacity[b]!,
+        usage: this.usage,
+      });
+    }
+    this.version++;
   }
 
   /** Destroy every block. */

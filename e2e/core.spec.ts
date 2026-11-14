@@ -127,3 +127,24 @@ test('10,000 km from the origin, the camera-relative core draws the same picture
   expect(await offShare(page, nearShot, farShot, 24)).toBeLessThan(0.01);
   expect(errors).toEqual([]);
 });
+
+test('after device.destroy() the core is restored on a new device and draws the same picture', async ({
+  page,
+  wrapper,
+}) => {
+  // ws/core-passes: the core's rebuild list (arenas, sets, bundles, the cull) on a new device,
+  // and one `onDeviceRestored` event, in which the page writes its boxes' bytes again.
+  const before = await open(page, wrapper, 'sets=400&still');
+  const beforeShot = await shot();
+  await frame.evaluate(() => window.__harnessCore!.lose());
+  await expect
+    .poll(async () => (await read()).frames, { timeout: 15_000 })
+    .toBeGreaterThan(before.frames + 10);
+  const after = await read();
+  expect(after.restores).toBe(1);
+  expect(after.restoredEvents).toBe(1);
+  expect(after.gpuErrors).toBe(0);
+  expect(after.bundles).toBe(1);
+  expect(await offShare(page, beforeShot, await shot(), 24)).toBeLessThan(0.01);
+  expect(errors).toEqual([]);
+});

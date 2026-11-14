@@ -128,10 +128,10 @@ class ActorSystem {
     readonly shape: ActorRecordShape;
     readonly stats: ActorStats;
     readonly drawSet: DrawSet;
-    readonly bones: GPUBuffer;
-    readonly records: GPUBuffer;
+    bones: GPUBuffer;
+    records: GPUBuffer;
     time: number;
-    readonly args: GPUBuffer;
+    args: GPUBuffer;
     constructor(core: RenderCore, opts: ActorSystemOptions);
     get models(): number;
     rig(id: number): ActorRig;

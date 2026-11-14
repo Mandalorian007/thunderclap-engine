@@ -13,6 +13,7 @@ export {
   cullSlotsCpu,
   SLOT,
   SLOT_BYTES,
+  SLOT_HIDDEN,
   SLOT_LIVE,
   SLOT_WORDS,
 } from './cull';

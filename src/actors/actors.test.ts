@@ -473,3 +473,39 @@ describe('ActorSystem (ws/actors)', () => {
     expect(a.readU32(1, ACTOR_RECORD.model)).toBe(ACTOR_NONE);
   });
 });
+
+describe('device restore (ws/core-passes)', () => {
+  it('rebuilds its buffers on the new device and writes its meshes and records again', async () => {
+    const s = scene(10, 16);
+    frame(s, 0);
+    const oldTpl = s.fake.buffers.find((b) => b.label === 'actors args template')!;
+    const tplWords = new Uint32Array(oldTpl.data.buffer.slice(0));
+    s.fake.loseDevice('unknown', 'forced');
+    await s.fake.lost;
+    const next = createFakeDevice();
+    s.core.restore(next.device as unknown as GPUDevice);
+    s.fake = next;
+    s.device = next.device as unknown as GPUDevice;
+    for (const label of ['actors records', 'actors bones', 'actors args', 'actors rigs']) {
+      expect(next.buffers.some((b) => b.label === label)).toBe(true);
+    }
+    expect(s.actors.drawSet.ready).toBe(true);
+    // The meshes went back into the restored arenas; the template matches the lost one.
+    expect(next.writes.some((w) => w.buffer.label?.startsWith('actors vertices'))).toBe(true);
+    expect(next.writes.some((w) => w.buffer.label?.startsWith('actors indices'))).toBe(true);
+    next.device.queue.submit([]);
+    const tpl = next.buffers.find((b) => b.label === 'actors args template')!;
+    expect(new Uint32Array(tpl.data.buffer)).toEqual(tplWords);
+    // The records (every live slot) upload again with the next prepare.
+    s.actors.setRecord(0, { tint: 0xffffffff });
+    expect(frame(s, 0.1)).toBeGreaterThan(0);
+    const args = next.buffers.find((b) => b.label === 'actors args')!;
+    const indirect = next.passes
+      .flatMap((p) => p.commands)
+      .concat(next.bundles.flatMap((b) => b.commands))
+      .filter((c) => c.op === 'drawIndexedIndirect');
+    expect(indirect.length).toBeGreaterThan(0);
+    for (const c of indirect) expect((c as { buffer: unknown }).buffer).toBe(args);
+    expect(next.errors).toEqual([]);
+  });
+});

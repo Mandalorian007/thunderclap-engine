@@ -32,10 +32,18 @@ export interface HarnessCoreState {
   far: number;
   /** The core's frame origin (the eye snapped to the 1024 m grid when `far` > 0). */
   origin: [number, number, number];
+  /** Device restores so far (`core.restores`, ws/core-passes). */
+  restores: number;
+  /** `core.onDeviceRestored` events the page saw. */
+  restoredEvents: number;
 }
 
 declare global {
   interface Window {
-    __harnessCore?: { state: HarnessCoreState };
+    __harnessCore?: {
+      state: HarnessCoreState;
+      /** Destroy the device and restore the core on a new one (ws/core-passes). */
+      lose(): Promise<void>;
+    };
   }
 }

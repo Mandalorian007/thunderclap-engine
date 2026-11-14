@@ -1331,6 +1331,22 @@ core.draw(encoder, 0, { view: texView, format, width, height, clear: { r: 0, g: 
 
 Each slot binds its instance range with `setVertexBuffer(1, buffer, offset, size)`, so the indirect `firstInstance` stays 0 and the path runs without `indirect-first-instance` (WebKit). A stereo pair is one `CullGroup`: one view write, one cull dispatch and one bundle, executed once per eye, costs the mono frame plus 5 GPU calls (`harness/views.html`, `e2e/views.spec.ts`). Not here yet: shadow passes (a cull group is the unit they will share), occlusion, and the XR session drawing through the core (it uses `Renderer` until the immediate path moves onto the core).
 
+### Device loss, hidden slots, inside a Renderer (ws/core-passes)
+
+After a lost device, get a new one (`restoreGpu(gpu)` from `@thunderclap-engine/engine/platform`) and hand it to `core.restore(device)`. The core rebuilds what it owns: its view buffers and cull, every arena made through `core.createArena` (the same blocks, so every `ArenaAlloc` stays valid; the bytes are gone), every draw set (slots, bounds and hidden bits kept and re-uploaded; pipelines and bundles recorded again), the quad index. Then it calls each `core.onDeviceRestored(fn)` listener once: write your arenas' bytes there, and give sets made with `bindGroups` new groups (`set.setBindGroups`).
+
+```ts
+core.onDeviceRestored(() => {
+  for (const mesh of meshes) vertices.write(mesh.alloc, mesh.bytes);
+});
+const device = await restoreGpu(gpu);
+if (device) core.restore(device);
+```
+
+`set.setHidden(id, true)` hides a slot without removing it (`SLOT_HIDDEN`, flags bit 1): a GPU-culled set uploads one slot and re-records nothing. With `coalesceRebuilds` (default) at most one GPU-culled set re-records its bundle per frame when only its slots changed; the others replay their old bundle until their turn (`core.stats.deferredBuilds`).
+
+`renderer.core = createRenderCore(renderer, { depthFormat: DEPTH_FORMAT })` draws that core inside the renderer's frames (opt-in: a renderer without one does not bundle the core), in each frame's first depth-tested view: its `depthPre`, `opaque` and `cutout` passes after the view's opaque draws, its `transparent` and later passes after the view's blended draws, into the scene target's colour and depth. Any core can do the same with `CoreTarget.depth` (a depth it loads and never clears) and `CoreTarget.phase` (`'opaque'`, `'blend'`, `'all'`).
+
 ## Merged mesh runs
 
 Many distinct meshes drawn with `frame.mesh` under one material do not batch (each is its own
