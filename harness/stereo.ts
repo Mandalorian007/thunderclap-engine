@@ -9,14 +9,23 @@
  *
  * The scene is static boxes in the core (a floor, a red block straight ahead at eye height, a
  * row of grey blocks behind it), flat-coloured so pixels are easy to read.
+ *
+ * `?passes=1` (ws/core-passes): the core's passes per eye. A sun whose shadow the boxes cast
+ * (one `core shadow` pass a frame, through the sun's cull group beside the eyes') and sample
+ * (`coreSunShadowWgsl`), and post as a core pass (`createCorePost` over a `ViewPost` of
+ * `PostStack`s): each eye drawn into the HDR scene target and resolved by its own stack into its
+ * half of the layer.
  */
 import { createGame } from '@thunderclap-engine/engine';
+import { createCorePost, createViewPost, PostStack } from '@thunderclap-engine/engine/post';
 import {
+  coreSunShadowWgsl,
   createInstanceLayout,
   createRenderCore,
   createVertexLayout,
   gpuDiagnostics,
   installGpuErrorLogging,
+  Lights,
 } from '@thunderclap-engine/engine/render';
 import { emulateXr } from '@thunderclap-engine/engine/testing';
 import type { HarnessStereoState } from './stereo-state';
@@ -37,7 +46,11 @@ const state: HarnessStereoState = {
   draws: 0,
   mirror: { width: 0, height: 0 },
   gpuErrors: 0,
+  passes: false,
+  shadowPasses: 0,
+  resolves: 0,
 };
+const PASSES = new URLSearchParams(location.search).get('passes') === '1';
 window.__harnessStereo = { state };
 
 /** A unit cube centred on the origin, as six quads (4 vertices each: x, y, z, pad). */
@@ -108,6 +121,7 @@ const FLAT_WGSL = /* wgsl */ `
 struct Out {
   @builtin(position) clip: vec4f,
   @location(0) color: vec3f,
+  @location(1) world: vec3f,
 };
 @vertex fn vs(in: VertexIn) -> Out {
   // place: centre xyz, w the size (x and z), the block's height in tint.w.
@@ -117,11 +131,20 @@ struct Out {
   o.clip = view.viewProj * vec4f(w, 1.0);
   // A face shade by height so the floor is told from the blocks.
   o.color = in.tint.rgb * (0.75 + 0.25 * in.position.y);
+  o.world = w;
   return o;
 }
 @fragment fn fs(in: Out) -> @location(0) vec4f {
   return vec4f(in.color, 1.0);
 }`;
+
+/** With `?passes=1`: the same boxes, darkened where the sun's shadow falls. */
+const SHADOWED_WGSL = FLAT_WGSL.replace(
+  '@fragment fn fs(in: Out) -> @location(0) vec4f {\n  return vec4f(in.color, 1.0);',
+  `${coreSunShadowWgsl(1)}
+@fragment fn fs(in: Out) -> @location(0) vec4f {
+  return vec4f(in.color * (0.45 + 0.55 * core_sun_shadow(in.world)), 1.0);`,
+);
 
 /** Centre x, y, z, width/depth, then r, g, b, height. */
 const BOXES: readonly (readonly number[])[] = [
@@ -147,11 +170,14 @@ async function main(): Promise<void> {
   const device = ctx.gpu.device;
   installGpuErrorLogging(device);
   const core = createRenderCore(device);
+  const sunShadow = PASSES ? ctx.renderer.coreShadow : null;
+  let sunVersion = sunShadow?.version ?? 0;
   const vertices = core.createArena({ kind: 'vertex', blockBytes: 16 << 10, label: 'cube' });
   const instances = core.createArena({ kind: 'instance', blockBytes: 4 << 10, label: 'boxes' });
   const set = core.createDrawSet({
     label: 'stereo',
-    shader: { code: FLAT_WGSL },
+    shader: { code: PASSES ? SHADOWED_WGSL : FLAT_WGSL },
+    bindGroups: sunShadow ? [{ layout: sunShadow.layout, group: sunShadow.group }] : undefined,
     vertexLayout: VERTEX,
     instanceLayout: INSTANCE,
     vertices,
@@ -169,13 +195,48 @@ async function main(): Promise<void> {
     set.add({ vertices: cube, indexCount: 36, instances: inst, bounds: [b[0]!, b[1]!, b[2]!, r] });
   }
   ctx.xr.setCore(core, { immediate: false, clear: { r: 0.05, g: 0.07, b: 0.12, a: 1 } });
+  state.passes = PASSES;
+  let post: ReturnType<typeof createCorePost> | null = null;
+  if (PASSES) {
+    const lights = new Lights();
+    lights.sun.direction = [0.4, -1, -0.3];
+    lights.sun.shadow = { extent: 12, size: 1024 };
+    // The lights reach the frame through a scene, as a game's would.
+    ctx.stack.push({
+      render(frame) {
+        frame.lights = lights;
+      },
+    });
+    post = createCorePost(
+      core,
+      createViewPost(() => new PostStack(ctx.renderer)),
+    );
+  }
 
   // Count the core passes of each frame.
   let draws = 0;
+  let shadows = 0;
   const draw = core.draw.bind(core);
   core.draw = (enc, i, t) => {
     draws++;
     draw(enc, i, t);
+  };
+  const drawShadow = core.drawShadow.bind(core);
+  core.drawShadow = (enc, i, t) => {
+    shadows++;
+    drawShadow(enc, i, t);
+  };
+  let resolves = 0;
+  ctx.hooks.beforeRender = (time) => {
+    if (post) {
+      post.time = time.realTime;
+      post.dt = time.frameDt;
+    }
+    // A new shadow map (its size changed) needs the set's group re-made.
+    if (sunShadow && sunShadow.version !== sunVersion) {
+      sunVersion = sunShadow.version;
+      set.setBindGroups([{ layout: sunShadow.layout, group: sunShadow.group }]);
+    }
   };
   ctx.hooks.afterRender = () => {
     state.active = ctx.xr.active;
@@ -185,6 +246,10 @@ async function main(): Promise<void> {
     state.maxDispatches = Math.max(state.maxDispatches, core.stats.dispatches);
     state.draws = draws;
     draws = 0;
+    state.shadowPasses = shadows;
+    shadows = 0;
+    state.resolves = (post?.resolves ?? 0) - resolves;
+    resolves = post?.resolves ?? 0;
     const group = ctx.xr.surface?.group;
     state.views = group?.views.length ?? 0;
     state.eyes = (group?.views ?? []).map((v) => {

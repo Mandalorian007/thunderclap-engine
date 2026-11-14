@@ -29,6 +29,24 @@ interface BloomSettings {
     dirt?: LensDirtSettings;
 }
 
+## CorePost
+class CorePost {
+    readonly pass: CorePass;
+    readonly processor: PostProcessor;
+    time: number;
+    dt: number;
+    emissive: TextureLike | null;
+    resolves: number;
+    constructor(core: RenderCore, processor: PostProcessor, opts?: CorePostOptions);
+}
+
+## CorePostOptions  (type-only)
+interface CorePostOptions {
+    id?: string;
+    after?: string;
+    emissive?: TextureLike | null;
+}
+
 ## DofSettings  (type-only)
 interface DofSettings {
     enabled: boolean;
@@ -343,6 +361,9 @@ function cinematicPostSettings(): PostSettings;
 
 ## clonePostSettings
 function clonePostSettings(s: PostSettings): PostSettings;
+
+## createCorePost
+function createCorePost(core: RenderCore, processor: PostProcessor, opts?: CorePostOptions): CorePost;
 
 ## createLensDirtTexture
 function createLensDirtTexture(device: GPUDevice, size?: number, seed?: number): GPUTexture;

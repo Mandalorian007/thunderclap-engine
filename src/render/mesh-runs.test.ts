@@ -32,7 +32,7 @@ function tri(r: Renderer, k: number): Mesh {
   });
 }
 
-function setup(features: string[], meshes = 8) {
+function setup(features: string[], meshes = 8, shadow = false) {
   const fake = createFakeDevice({}, features);
   const meter = createWorkMeter(fake.device);
   const r = new Renderer({
@@ -50,6 +50,10 @@ function setup(features: string[], meshes = 8) {
   const draw = (only?: number) => {
     const f = r.beginFrame(0, 1 / 60);
     f.clear(0, 0, 0);
+    if (shadow) {
+      f.lights.sun.direction = [0.2, -1, 0.1];
+      f.lights.sun.shadow = { extent: 20 };
+    }
     for (let k = 0; k < (only ?? list.length); k++) f.mesh(list[k]!, mat, xs[k]!);
     r.render(f, cam);
     r.endFrame();
@@ -126,6 +130,22 @@ describe('merged mesh runs (ws/core-immediate)', () => {
     const vb = cmds.filter((c) => c.op === 'other' && c.name === 'setVertexBuffer');
     expect(vb).toHaveLength(2);
     expect(fake.errors).toEqual([]);
+  });
+
+  it('runs in the shadow pass too: one buffer bind, a drawIndexed per mesh (ws/core-passes)', () => {
+    const { fake, meter, r, draw } = setup(['indirect-first-instance'], 8, true);
+    draw();
+    const shadow = fake.passes.filter((p) => p.label === 'shadow').at(-1)!;
+    const cmds = shadow.commands;
+    expect(cmds.filter((c) => c.op === 'drawIndexed')).toHaveLength(8);
+    const binds = (name: string) => cmds.filter((c) => c.op === 'other' && c.name === name).length;
+    expect(binds('setVertexBuffer')).toBe(2);
+    expect(binds('setIndexBuffer')).toBe(1);
+    expect(r.stats.shadowDraws).toBe(8);
+    expect(r.stats.runs).toBe(2); // the scene's run and the shadow pass's
+    expect(fake.errors).toEqual([]);
+    const report = meter.run(() => draw(), { frames: 3 });
+    expect(report.gpu.copies).toBe(0);
   });
 
   it('leaves short stretches on the per-mesh path', () => {

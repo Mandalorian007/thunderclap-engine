@@ -1,6 +1,6 @@
 {
   "limits": {
-    ".": 173200,
+    ".": 174300,
     "./analytics": 1000,
     "./anim": 19900,
     "./assets": 35900,
@@ -19,12 +19,12 @@
     "./tween": 3700,
     "./ui": 92600,
     "./voxel": 27500,
-    "./testing": 185700,
+    "./testing": 186800,
     "render { Renderer }": 39900,
     "render { Renderer, Camera, Transform }": 39900,
     "render + voxel { Renderer, createVoxelGrid, createVoxelWorld }": 58900,
-    ". { createGame }": 173200,
-    "./kit": 172000,
+    ". { createGame }": 174300,
+    "./kit": 173100,
     "./models": 13200,
     "./quality": 2500,
     "./net": 16800,

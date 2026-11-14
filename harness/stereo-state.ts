@@ -24,6 +24,12 @@ export interface HarnessStereoState {
   /** The mirror canvas size (both eyes side by side). */
   mirror: { width: number; height: number };
   gpuErrors: number;
+  /** `?passes=1` (ws/core-passes): the sun's shadow and post per eye. */
+  passes: boolean;
+  /** Core shadow passes last frame (one for both eyes with `passes`). */
+  shadowPasses: number;
+  /** Post resolves last frame (one per eye with `passes`). */
+  resolves: number;
 }
 
 declare global {
