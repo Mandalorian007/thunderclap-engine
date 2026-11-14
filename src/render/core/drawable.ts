@@ -40,6 +40,11 @@ export interface CoreDrawContext {
   depth: GPUTextureFormat | undefined;
   /** The pass holds depth read-only (a pipeline must not write it). */
   depthReadOnly: boolean;
+  /**
+   * The pass's depth convention (ws/render-fit, `PassDesc.reversedZ`): reversed-Z (depth
+   * clears to 0, nearer is greater) or not. Build depth tests from it with `coreDepthCompare`.
+   */
+  reversedZ: boolean;
 }
 
 /**
@@ -282,6 +287,7 @@ export class DrawableEntry implements PassMember {
     ctx.color = color;
     ctx.depth = depth;
     ctx.depthReadOnly = readOnly;
+    ctx.reversedZ = this.pass.reversedZ;
     return ctx;
   }
 }

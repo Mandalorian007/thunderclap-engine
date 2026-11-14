@@ -11,7 +11,9 @@ import { Arena } from './arena';
 import { type CoreTarget, createRenderCore, type RenderCore, type RenderCoreOptions } from './core';
 import { ARGS_WORDS, cullSlotsCpu, sphereBeyond } from './cull';
 import type { DrawSet, DrawSetDesc } from './draw-set';
+import type { CoreDrawContext } from './drawable';
 import { createVertexLayout } from './layout';
+import { coreDepthCompare, coreDepthFar } from './pass-list';
 import { createRenderView, type RenderView, setViewFromCamera, VIEW_SLOT_FLOATS } from './view';
 
 const PACKED = createVertexLayout({
@@ -417,5 +419,31 @@ describe('pass labels and timestamps (ws/render-fit)', () => {
     frame(w, target(w));
     expect(w.begun.map((b) => b.label)).toEqual(['core opaque', 'core cutout']);
     expect(w.core.passes.get('opaque')!.label).toBe('core opaque');
+  });
+});
+
+describe('the depth convention, for drawables and effects (ws/render-fit)', () => {
+  it('drawables and pass encoders read reversedZ from their pass; the helpers turn it into tests', () => {
+    const w = world({ reversedZ: true });
+    w.core.passes.define({ id: 'plain', after: 'transparent', reversedZ: false });
+    const seen: string[] = [];
+    const drawable = (pass: string) => ({
+      label: pass,
+      pass,
+      version: 0,
+      active: true,
+      record(_enc: unknown, ctx: CoreDrawContext) {
+        seen.push(`${pass}:${ctx.reversedZ}:${coreDepthCompare(ctx.reversedZ)}`);
+        return 0;
+      },
+    });
+    w.core.addDrawable(drawable('transparent'));
+    w.core.addDrawable(drawable('plain'));
+    expect(w.core.reversedZ).toBe(true);
+    frame(w, target(w));
+    expect(seen).toEqual(['transparent:true:greater', 'plain:false:less']);
+    expect(coreDepthCompare(true, true)).toBe('greater-equal');
+    expect(coreDepthCompare(false, true)).toBe('less-equal');
+    expect([coreDepthFar(true), coreDepthFar(false)]).toEqual([0, 1]);
   });
 });

@@ -52,7 +52,7 @@ export type {
   PassDepth,
   PassDesc,
 } from './pass-list';
-export { CORE_PASSES, PassList } from './pass-list';
+export { CORE_PASSES, coreDepthCompare, coreDepthFar, PassList } from './pass-list';
 export { QUAD_INDICES, QuadIndex, quadIndices } from './quad-index';
 export type { CoreTargetName } from './targets';
 export {

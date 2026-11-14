@@ -32,7 +32,7 @@ import {
 } from './cull';
 import type { PassMember } from './drawable';
 import type { BufferLayout } from './layout';
-import type { CorePass } from './pass-list';
+import { type CorePass, coreDepthCompare } from './pass-list';
 import { type CoreTargetName, coreColorFormats, coreColorTargets, coreTargetMask } from './targets';
 import { CORE_VIEW_WGSL, sphereInPlanes, VIEW_SLOT } from './view';
 
@@ -1319,7 +1319,7 @@ ${il?.wgslDecode ?? ''}
             ? {
                 format: depth,
                 depthWriteEnabled: depthWrite,
-                depthCompare: sh.depthCompare ?? (reversed ? 'greater' : 'less'),
+                depthCompare: sh.depthCompare ?? coreDepthCompare(reversed),
               }
             : depth
               ? { format: depth, depthWriteEnabled: false, depthCompare: 'always' }
