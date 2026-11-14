@@ -47,6 +47,7 @@ if (res.ok) {
 - [Standard material](#standard-material)
 - [Custom materials](#custom-materials)
 - [Textures](#textures)
+- [Retained core (preview)](#retained-core-preview)
 - [Lower-level pieces](#lower-level-pieces)
 - [Diagnostics](#diagnostics)
 - [Resolution and timing](#resolution-and-timing)
@@ -1277,6 +1278,56 @@ of `harness/render5.html` builds a 64×64 BC1 file with seven mips in the page a
 that device, or reports the typed error.
 
 *Not yet:* a bundled Basis/UASTC transcoder and 3D (volume) KTX2 files.
+
+## Retained core (preview)
+
+*Preview (ws/core-retained, D1 §3).* A second draw path beside `Renderer`, for scenes of thousands of meshes that mostly hold still. Nothing above changes: `Renderer`, `Frame` and `renderer.render` draw exactly as before, and a game opts in by making a `RenderCore`. The names may still change before they are frozen.
+
+You keep geometry in arenas, register each mesh once as a slot in a draw set, and each frame write the views. The core culls every slot on the GPU, writes `drawIndexedIndirect` arguments and replays a cached render bundle, so a held frame costs the same GPU calls at 1,500 meshes as at 6,000: one view write, one cull dispatch and one `executeBundles` per pass (`harness/core.html?sets=N`, `e2e/core.spec.ts`), with no allocation.
+
+```ts no-check
+// A fragment: `gpu` from boot, `camera` a Camera, `encoder` this frame's encoder.
+const core = createRenderCore(gpu);
+const vertices = core.createArena({ kind: 'vertex', blockBytes: 4 << 20 });
+const instances = core.createArena({ kind: 'instance' });
+const set = core.createDrawSet({
+  shader: { code: WGSL }, // `vs` and `fs`; the core prepends `VertexIn` and `view`
+  vertexLayout: createVertexLayout({ stride: 8, attributes: [{ name: 'packed', format: 'uint32x2', offset: 0 }] }),
+  instanceLayout: createInstanceLayout({ stride: 16, attributes: [{ name: 'place', format: 'float32x4', offset: 0 }] }),
+  vertices,
+  instances,
+  capacity: 8192,
+  kind: 'static',
+  cull: 'gpu',
+});
+const v = vertices.alloc(24 * 8, 8);
+vertices.write(v, packedBox);
+const inst = instances.alloc(16, 16);
+instances.write(inst, place);
+const id = set.add({ vertices: v, indexCount: 36, instances: inst, bounds: [x, y, z, r] });
+
+const view = createRenderView();
+setViewFromCamera(view, camera);
+core.prepare(encoder, [view]); // view uniforms, dirty slots, one cull dispatch
+core.draw(encoder, 0, { view: texView, format, width, height, clear: { r: 0, g: 0, b: 0, a: 1 } });
+```
+
+| Name | What it is |
+| --- | --- |
+| `createRenderCore(gpu, opts?)` → `RenderCore` | the core over a device (or anything with `device`). `RenderCoreOptions` `{ maxViews?, depthFormat?, multiDraw? }`. `core.caps` is `CoreCaps` `{ multiDraw, firstInstance }`; `core.stats` is this frame's `CoreStats` (`calls`, `dispatches`, `passes`, `bundles`, `directDraws`, `slotBytes`, `bundleBuilds`, `bundleCalls`) |
+| `core.prepare(encoder, views)`, `core.draw(encoder, viewIndex, target)` | write the views (`RenderView[]`, one for now, up to `MAX_VIEWS`), upload dirty slots and run the cull; then encode one view into a `CoreTarget` `{ view, format, width, height, clear? }`. The depth attachment is made only when a pass that runs tests depth |
+| `core.createArena(desc)`, `createArena(device, desc)` → `Arena` | GPU buffers carved into ranges: `ArenaDesc` `{ kind: ArenaKind, blockBytes?, usage?, label? }` (`'vertex'`, `'index'`, `'instance'`, `'storage'`). `alloc(bytes, align?)` returns an `ArenaAlloc` `{ block, offset, size }`; `write`, `free` (neighbours coalesce), `trim()` drops empty blocks |
+| `createVertexLayout(desc)`, `createInstanceLayout(desc)` → `BufferLayout` | a vertex or instance buffer layout from a `LayoutDesc` `{ stride, attributes: LayoutAttribute[], wgslDecode? }`, any stride (the 8-byte packed vertex above); it writes the WGSL `VertexIn` fields. `vertexFormatBytes(format)` |
+| `core.createDrawSet(desc)` → `DrawSet` | one pipeline's meshes: `DrawSetDesc` `{ shader: DrawSetShader, vertexLayout, instanceLayout?, vertices, indices?, instances?, capacity, kind?: DrawSetKind, cull?: DrawSetCull, pass?, depth?, order?, bindGroups? }`. `set.add(SlotDesc)` → id, `update`, `setBounds`, `remove`, `has`; `core.removeDrawSet(set)` |
+| `DrawSetKind` | `'static'` sets record into a render bundle, rebuilt only when a slot or arena changes; `'dynamic'` sets encode directly and upload only dirty slot ranges |
+| `DrawSetCull` | `'gpu'` (the `CULL_WGSL` compute shader), `'cpu'` (`cullSlotsCpu`, its twin), `'none'`, or `'auto'`: GPU from `GPU_CULL_MIN_SLOTS` slots up |
+| `QuadIndex`, `quadIndices(quads, first?)`, `QUAD_INDICES` | the shared quad index (`v, v+1, v+2, v, v+2, v+3`, 6 per quad) a set without its own `indices` draws through |
+| `core.definePass(desc)`, `PassList`, `CORE_PASSES` | the pass list: `depthPre`, `opaque`, `cutout`, `transparent`, `overlay`, in order; `PassDesc` `{ id, after?, depth?: PassDepth, when? }` adds a `CorePass`. A pass encodes only when its `when` holds and a set joined it |
+| `createRenderView()`, `setViewFromCamera(view, camera)`, `sphereInPlanes(planes, at, x, y, z, r)` | a `RenderView` `{ viewProj, planes, position }`; each takes a `VIEW_SLOT_BYTES` (`VIEW_SLOT_FLOATS` floats) slot of the core's view buffer, `CORE_VIEW_WGSL` in the shader |
+| `SLOT`, `SLOT_WORDS`, `SLOT_BYTES`, `SLOT_LIVE`, `ARGS_WORDS`, `ARGS_BYTES` | the slot table's word offsets and the size of one indirect argument record, for a shader or test reading them |
+| `MULTI_DRAW_FEATURE` | `'chromium-experimental-multi-draw-indirect'`: with it, `indirect-first-instance` and single-block arenas, a set draws in one `multiDrawIndexedIndirect` instead of a bundle (`multiDraw: true`) |
+
+Each slot binds its instance range with `setVertexBuffer(1, buffer, offset, size)`, so the indirect `firstInstance` stays 0 and the path runs without `indirect-first-instance` (WebKit). Not here yet: shadow passes, occlusion, more than one view per frame and stereo cull groups.
 
 ## Lower-level pieces
 

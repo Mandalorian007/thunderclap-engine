@@ -128,6 +128,23 @@ export type PassCommand =
       firstIndex?: number;
     }
   | { op: 'dispatch'; x: number; y: number }
+  /** An indirect draw or dispatch (ws/core-retained): the argument buffer and byte offset. */
+  | {
+      op: 'drawIndexedIndirect' | 'drawIndirect' | 'dispatchIndirect';
+      buffer: unknown;
+      offset: number;
+    }
+  /** Chromium's experimental `multiDrawIndexedIndirect` (ws/core-retained). */
+  | {
+      op: 'multiDrawIndexedIndirect';
+      buffer: unknown;
+      offset: number;
+      maxDrawCount: number;
+      countBuffer?: unknown;
+      countOffset?: number;
+    }
+  /** `executeBundles` (ws/core-retained): the bundles, in order. */
+  | { op: 'executeBundles'; bundles: FakeBundle[] }
   | {
       op: 'other';
       name: string;
@@ -136,12 +153,24 @@ export type PassCommand =
       buffer?: unknown;
       /** `setVertexBuffer`'s byte offset, recorded when passed. */
       offset?: number;
+      /** `setVertexBuffer`'s byte size, recorded when passed (ws/core-retained). */
+      size?: number;
     };
 
 export interface FakePass {
   kind: 'render' | 'compute';
   label?: string;
   desc: unknown;
+  commands: PassCommand[];
+}
+
+/**
+ * A recorded render bundle (ws/core-retained): what `createRenderBundleEncoder` was given and the
+ * commands encoded into it. `executeBundles` records the bundles, not their commands.
+ */
+export interface FakeBundle {
+  label?: string;
+  desc: GPURenderBundleEncoderDescriptor;
   commands: PassCommand[];
 }
 
@@ -178,6 +207,16 @@ export interface FakeDevice {
   readonly querySets: FakeQuerySet[];
   /** `queue.submit` calls so far. */
   readonly submits: number;
+  /** Render bundles finished so far, in order (ws/core-retained). */
+  readonly bundles: FakeBundle[];
+  /**
+   * GPU API calls so far (ws/core-retained): every queue write and submit, encoder command
+   * (passes begun, copies, clears, resolves) and pass command, `end` included. Commands recorded
+   * into a bundle count in `bundleCalls` instead. Diff it around a frame to count the frame.
+   */
+  readonly calls: number;
+  /** Commands recorded into render bundles so far (ws/core-retained). */
+  readonly bundleCalls: number;
   /**
    * Stands in for the shaders (ws/render-9): called with each render or compute pass when its
    * command buffer is submitted, in order with the encoder's copies and clears, so a test can
@@ -248,6 +287,10 @@ export function createFakeDevice(
   const querySets: FakeQuerySet[] = [];
   const errors: string[] = [];
   let submits = 0;
+  let calls = 0;
+  let bundleCalls = 0;
+  const bundles: FakeBundle[] = [];
+  const featureSet = new Set<string>(features);
   let resolveLost: ((info: GPUDeviceLostInfo) => void) | null = null;
   const lost = new Promise<GPUDeviceLostInfo>((resolve) => {
     resolveLost = resolve;
@@ -361,15 +404,12 @@ export function createFakeDevice(
     }
   };
 
-  const makePass = (
-    ops: BufferOp[],
-    kind: FakePass['kind'],
-    desc: { label?: string } | undefined,
-  ) => {
-    const p: FakePass = { kind, label: desc?.label, desc, commands: [] };
-    passes.push(p);
-    ops.push({ op: 'pass', pass: p });
-    const cmd = (c: PassCommand) => p.commands.push(c);
+  /** The commands of a pass or a bundle, pushed to `commands`; `count` tallies each call. */
+  const recorder = (commands: PassCommand[], count: () => void) => {
+    const cmd = (c: PassCommand) => {
+      count();
+      commands.push(c);
+    };
     return {
       setPipeline: (pipeline: unknown) => cmd({ op: 'setPipeline', pipeline }),
       setBindGroup: (index: number, group: unknown, offsets?: Iterable<number>) =>
@@ -383,23 +423,89 @@ export function createFakeDevice(
             : { op: 'drawIndexed', indices, instances, firstInstance, firstIndex },
         ),
       dispatchWorkgroups: (x: number, y = 1) => cmd({ op: 'dispatch', x, y }),
-      setVertexBuffer: (slot: number, buffer: unknown, offset?: number) =>
+      dispatchWorkgroupsIndirect: (buffer: FakeBuffer, offset: number) => {
+        needs(buffer, 'INDIRECT', 'dispatchWorkgroupsIndirect');
+        cmd({ op: 'dispatchIndirect', buffer, offset });
+      },
+      drawIndexedIndirect: (buffer: FakeBuffer, offset: number) => {
+        needs(buffer, 'INDIRECT', 'drawIndexedIndirect');
+        if (offset % 4) errors.push(`drawIndexedIndirect: offset ${offset} not 4-byte aligned`);
+        if (offset + 20 > buffer.size) errors.push(`drawIndexedIndirect: ${buffer.label} overrun`);
+        cmd({ op: 'drawIndexedIndirect', buffer, offset });
+      },
+      drawIndirect: (buffer: FakeBuffer, offset: number) => {
+        needs(buffer, 'INDIRECT', 'drawIndirect');
+        if (offset + 16 > buffer.size) errors.push(`drawIndirect: ${buffer.label} overrun`);
+        cmd({ op: 'drawIndirect', buffer, offset });
+      },
+      setVertexBuffer: (slot: number, buffer: unknown, offset?: number, size?: number) =>
         cmd(
           offset === undefined
             ? { op: 'other', name: 'setVertexBuffer', slot, buffer }
-            : { op: 'other', name: 'setVertexBuffer', slot, buffer, offset },
+            : size === undefined
+              ? { op: 'other', name: 'setVertexBuffer', slot, buffer, offset }
+              : { op: 'other', name: 'setVertexBuffer', slot, buffer, offset, size },
         ),
       setIndexBuffer: () => cmd({ op: 'other', name: 'setIndexBuffer' }),
       setBlendConstant: () => cmd({ op: 'other', name: 'setBlendConstant' }),
       setViewport: (...args: number[]) => cmd({ op: 'other', name: 'setViewport', args }),
       setScissorRect: (...args: number[]) => cmd({ op: 'other', name: 'setScissorRect', args }),
+      pushDebugGroup: () => cmd({ op: 'other', name: 'pushDebugGroup' }),
+      popDebugGroup: () => cmd({ op: 'other', name: 'popDebugGroup' }),
+      insertDebugMarker: () => cmd({ op: 'other', name: 'insertDebugMarker' }),
       end: () => cmd({ op: 'other', name: 'end' }),
+    };
+  };
+
+  const makePass = (
+    ops: BufferOp[],
+    kind: FakePass['kind'],
+    desc: { label?: string } | undefined,
+  ) => {
+    const p: FakePass = { kind, label: desc?.label, desc, commands: [] };
+    passes.push(p);
+    ops.push({ op: 'pass', pass: p });
+    const rec = recorder(p.commands, () => calls++);
+    return {
+      ...rec,
+      executeBundles: (list: Iterable<FakeBundle>) => {
+        calls++;
+        p.commands.push({ op: 'executeBundles', bundles: [...list] });
+      },
+      multiDrawIndexedIndirect: (
+        buffer: FakeBuffer,
+        offset: number,
+        maxDrawCount: number,
+        countBuffer?: FakeBuffer,
+        countOffset?: number,
+      ) => {
+        if (!featureSet.has('chromium-experimental-multi-draw-indirect')) {
+          errors.push('multiDrawIndexedIndirect: the device lacks the multi-draw feature');
+        }
+        needs(buffer, 'INDIRECT', 'multiDrawIndexedIndirect');
+        if (offset + maxDrawCount * 20 > buffer.size) {
+          errors.push(`multiDrawIndexedIndirect: ${buffer.label} overrun`);
+        }
+        calls++;
+        p.commands.push(
+          countBuffer
+            ? {
+                op: 'multiDrawIndexedIndirect',
+                buffer,
+                offset,
+                maxDrawCount,
+                countBuffer,
+                countOffset,
+              }
+            : { op: 'multiDrawIndexedIndirect', buffer, offset, maxDrawCount },
+        );
+      },
     };
   };
 
   const device = {
     limits: { minUniformBufferOffsetAlignment: 256, maxUniformBufferBindingSize: 65536, ...limits },
-    features: new Set<string>(features),
+    features: featureSet,
     lost,
     destroy: () => loseDevice('destroyed', 'device destroyed'),
     addEventListener() {},
@@ -462,13 +568,31 @@ export function createFakeDevice(
     }),
     createRenderPipeline: (desc: GPURenderPipelineDescriptor) => ({ label: desc.label, desc }),
     createComputePipeline: (desc: GPUComputePipelineDescriptor) => ({ label: desc.label, desc }),
+    createRenderBundleEncoder(desc: GPURenderBundleEncoderDescriptor) {
+      const b: FakeBundle = { label: desc.label, desc, commands: [] };
+      const rec = recorder(b.commands, () => bundleCalls++);
+      return {
+        ...rec,
+        finish: () => {
+          bundles.push(b);
+          return b;
+        },
+      };
+    },
     createCommandEncoder: (desc?: GPUCommandEncoderDescriptor) => {
       const ops: BufferOp[] = [];
       return {
         label: desc?.label,
-        beginRenderPass: (d: GPURenderPassDescriptor) => makePass(ops, 'render', d),
-        beginComputePass: (d?: GPUComputePassDescriptor) => makePass(ops, 'compute', d),
+        beginRenderPass: (d: GPURenderPassDescriptor) => {
+          calls++;
+          return makePass(ops, 'render', d);
+        },
+        beginComputePass: (d?: GPUComputePassDescriptor) => {
+          calls++;
+          return makePass(ops, 'compute', d);
+        },
         copyTextureToTexture(src: { texture: FakeTexture }, dst: { texture: FakeTexture }) {
+          calls++;
           if (!(src.texture.usage & TEXTURE_USAGE.COPY_SRC)) {
             errors.push(`copyTextureToTexture: ${src.texture.label} lacks COPY_SRC`);
           }
@@ -489,6 +613,7 @@ export function createFakeDevice(
           c?: number,
           d?: number,
         ) {
+          calls++;
           // (src, srcOffset, dst, dstOffset, size?) or the short (src, dst, size?).
           const short = typeof a === 'object';
           const srcOffset = short ? 0 : (a as number);
@@ -510,6 +635,7 @@ export function createFakeDevice(
           ops.push({ op: 'copy', copy });
         },
         clearBuffer(buffer: FakeBuffer, offset = 0, size?: number) {
+          calls++;
           if (!(buffer.usage & BUFFER_USAGE.COPY_DST)) {
             errors.push(`clearBuffer: ${buffer.label} lacks COPY_DST`);
           }
@@ -522,6 +648,7 @@ export function createFakeDevice(
           dst: FakeBuffer,
           offset: number,
         ) {
+          calls++;
           needs(dst, 'QUERY_RESOLVE', 'resolveQuerySet');
           if (offset % 256) errors.push(`resolveQuerySet: offset ${offset} not 256-aligned`);
           if (first + count > set.count || offset + count * 8 > dst.size) {
@@ -541,6 +668,7 @@ export function createFakeDevice(
         dataOffset?: number,
         dataSize?: number,
       ) {
+        calls++;
         needs(buffer, 'COPY_DST', 'writeBuffer');
         if (buffer.destroyed) errors.push(`writeBuffer: ${buffer.label} is destroyed`);
         if (buffer.mapState !== 'unmapped') {
@@ -562,6 +690,7 @@ export function createFakeDevice(
         layout: GPUTexelCopyBufferLayout,
         size: number[],
       ) {
+        calls++;
         if (!(dst.texture.usage & TEXTURE_USAGE.COPY_DST)) {
           errors.push(`writeTexture: ${dst.texture.label} lacks COPY_DST`);
         }
@@ -577,6 +706,7 @@ export function createFakeDevice(
       copyExternalImageToTexture() {},
       submit(cmds: Iterable<{ ops?: BufferOp[] }>) {
         submits++;
+        calls++;
         for (const cb of cmds) if (cb?.ops) runOps(cb.ops);
       },
       onSubmittedWorkDone: () => Promise.resolve(),
@@ -597,6 +727,13 @@ export function createFakeDevice(
     querySets,
     get submits() {
       return submits;
+    },
+    bundles,
+    get calls() {
+      return calls;
+    },
+    get bundleCalls() {
+      return bundleCalls;
     },
     runPass: null,
     errors,

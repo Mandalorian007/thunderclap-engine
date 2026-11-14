@@ -1,6 +1,6 @@
 # engine/core
 
-The game loop, the scene stack, a typed event emitter, matrix helpers and the deterministic utilities: seeded random, hashing, noise, a scheduler and pools. `createGame` (root `@thunderclap-engine/engine`) wires these together for you; a game reaches for this subpath when it needs one of them on its own, and keeps its own state and rules.
+The game loop, the scene stack, a typed event emitter, matrix helpers and the deterministic utilities: seeded random, hashing, noise, a scheduler and pools. `createGame` (root `@thunderclap-engine/engine`) wires these together for you; `composeGame` (`@thunderclap-engine/engine/kit`, [README](../kit/README.md)) wires only the services a game passes, and `createGame` is its default kit with every service on; a game reaches for this subpath when it needs one of them on its own, and keeps its own state and rules.
 
 ## Quick use
 

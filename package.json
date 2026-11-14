@@ -37,6 +37,8 @@
     "./host": "./src/host/index.ts",
     "./i18n": "./src/i18n/index.ts",
     "./input": "./src/input/index.ts",
+    "./kit": "./src/kit/index.ts",
+    "./models": "./src/models/index.ts",
     "./nav": "./src/nav/index.ts",
     "./platform": "./src/platform/index.ts",
     "./post": "./src/post/index.ts",
@@ -103,6 +105,14 @@
       "./input": {
         "types": "./dist/input/index.d.ts",
         "import": "./dist/input/index.js"
+      },
+      "./kit": {
+        "types": "./dist/kit/index.d.ts",
+        "import": "./dist/kit/index.js"
+      },
+      "./models": {
+        "types": "./dist/models/index.d.ts",
+        "import": "./dist/models/index.js"
       },
       "./nav": {
         "types": "./dist/nav/index.d.ts",

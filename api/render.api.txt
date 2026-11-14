@@ -8,8 +8,54 @@ const ALL_LAYERS = 4294967295;
 ## ALL_LIGHT_LAYERS
 const ALL_LIGHT_LAYERS = 4294967295;
 
+## ARGS_BYTES
+const ARGS_BYTES: number;
+
+## ARGS_WORDS
+const ARGS_WORDS = 5;
+
 ## AUTO_BOUNDS_MAX_VERTICES
 const AUTO_BOUNDS_MAX_VERTICES = 65536;
+
+## Arena
+class Arena {
+    readonly kind: ArenaKind;
+    readonly label: string;
+    readonly buffers: GPUBuffer[];
+    version: number;
+    usedBytes: number;
+    readonly stats: {
+        allocs: number;
+        walked: number;
+        trimmed: number;
+    };
+    constructor(device: GPUDevice, desc: ArenaDesc);
+    get allocatedBytes(): number;
+    alloc(bytes: number, align?: number): ArenaAlloc;
+    free(a: ArenaAlloc): void;
+    write(a: ArenaAlloc, data: ArrayBufferView | ArrayBuffer, byteOffset?: number): void;
+    trim(): number;
+    destroy(): void;
+    freeRanges(b: number): [number, number][];
+}
+
+## ArenaAlloc  (type-only)
+interface ArenaAlloc {
+    readonly block: number;
+    readonly offset: number;
+    readonly size: number;
+}
+
+## ArenaDesc  (type-only)
+interface ArenaDesc {
+    kind: ArenaKind;
+    blockBytes?: number;
+    usage?: number;
+    label?: string;
+}
+
+## ArenaKind  (type-only)
+type ArenaKind = 'vertex' | 'index' | 'instance' | 'storage';
 
 ## AtlasGrid  (type-only)
 interface AtlasGrid {
@@ -28,8 +74,27 @@ interface BlockInfo {
     family: CompressionFamily | null;
 }
 
+## BufferLayout  (type-only)
+interface BufferLayout {
+    readonly stride: number;
+    readonly stepMode: GPUVertexStepMode;
+    readonly attributes: readonly LayoutAttribute[];
+    readonly wgslDecode: string;
+    buffer(firstLocation: number): GPUVertexBufferLayout;
+    wgslFields(firstLocation: number): string;
+}
+
 ## COMPRESSION_FEATURES
 const COMPRESSION_FEATURES: Readonly<Record<CompressionFamily, GPUFeatureName>>;
+
+## CORE_PASSES
+const CORE_PASSES: readonly PassDesc[];
+
+## CORE_VIEW_WGSL
+const CORE_VIEW_WGSL = "\nstruct CoreView {\n  viewProj: mat4x4f,\n  position: vec4f,\n  planes: array<vec4f, 6>,\n  index: u32,\n  _a: u32,\n  _b: u32,\n  _c: u32,\n  _pad: array<vec4f, 4>,\n};\n";
+
+## CULL_WGSL
+const CULL_WGSL = "\nstruct CoreView {\n  viewProj: mat4x4f,\n  position: vec4f,\n  planes: array<vec4f, 6>,\n  index: u32,\n  _a: u32,\n  _b: u32,\n  _c: u32,\n  _pad: array<vec4f, 4>,\n};\n\nstruct CullParams { count: u32, capacity: u32, views: u32, firstInstance: u32 };\nstruct Slot { sphere: vec4f, draw: vec4u, inst: vec4u };\n@group(0) @binding(0) var<uniform> views: array<CoreView, 8>;\n@group(0) @binding(1) var<uniform> params: CullParams;\n@group(0) @binding(2) var<storage, read> slots: array<Slot>;\n@group(0) @binding(3) var<storage, read_write> args: array<u32>;\n\n@compute @workgroup_size(64) fn cs_cull(@builtin(global_invocation_id) id: vec3u) {\n  let i = id.x;\n  let v = id.y;\n  if (i >= params.count || v >= params.views) { return; }\n  let s = slots[i];\n  var visible = (s.inst.y & 1u) != 0u;\n  for (var k = 0u; k < 6u; k++) {\n    let p = views[v].planes[k];\n    if (dot(p.xyz, s.sphere.xyz) + p.w < -s.sphere.w) { visible = false; }\n  }\n  let o = (v * params.capacity + i) * 5u;\n  args[o] = s.draw.x;\n  args[o + 1u] = select(0u, s.draw.w, visible);\n  args[o + 2u] = s.draw.y;\n  args[o + 3u] = s.draw.z;\n  args[o + 4u] = select(0u, s.inst.x, params.firstInstance != 0u);\n}\n";
 
 ## Camera
 class Camera {
@@ -118,6 +183,40 @@ interface CompressedUploadTarget {
 ## CompressionFamily  (type-only)
 type CompressionFamily = 'bc' | 'etc2' | 'astc';
 
+## CoreCaps  (type-only)
+interface CoreCaps {
+    readonly multiDraw: boolean;
+    readonly firstInstance: boolean;
+}
+
+## CorePass  (type-only)
+interface CorePass {
+    readonly id: string;
+    readonly depth: PassDepth;
+    readonly when: (() => boolean) | null;
+}
+
+## CoreStats  (type-only)
+interface CoreStats {
+    calls: number;
+    dispatches: number;
+    passes: number;
+    bundles: number;
+    directDraws: number;
+    slotBytes: number;
+    bundleBuilds: number;
+    bundleCalls: number;
+}
+
+## CoreTarget  (type-only)
+interface CoreTarget {
+    view: GPUTextureView;
+    format: GPUTextureFormat;
+    width: number;
+    height: number;
+    clear?: GPUColor;
+}
+
 ## DEFAULT_LOD_HYSTERESIS
 const DEFAULT_LOD_HYSTERESIS = 0.1;
 
@@ -165,6 +264,70 @@ interface DrawParams extends InstanceParams {
     w?: number;
     h?: number;
     rotation?: number;
+}
+
+## DrawSet
+class DrawSet {
+    readonly label: string;
+    readonly kind: DrawSetKind;
+    readonly cull: 'none' | 'cpu' | 'gpu';
+    readonly capacity: number;
+    readonly pass: CorePass;
+    readonly order: number;
+    readonly depth: boolean;
+    version: number;
+    constructor(host: DrawSetHost, desc: DrawSetDesc);
+    get count(): number;
+    get highWater(): number;
+    add(slot: SlotDesc): number;
+    update(id: number, slot: SlotDesc): void;
+    setBounds(id: number, x: number, y: number, z: number, r: number): void;
+    remove(id: number): void;
+    has(id: number): boolean;
+    destroy(): void;
+    get isDestroyed(): boolean;
+    upload(views: number): void;
+    dispatch(pass: GPUComputePassEncoder, views: number): void;
+    encoding(): Encoding;
+    bundle(view: number, color: GPUTextureFormat, depth: GPUTextureFormat | undefined, readOnly: boolean): GPURenderBundle;
+    encodeDirect(pass: GPURenderPassEncoder, view: number, color: GPUTextureFormat, depth: GPUTextureFormat | undefined): void;
+}
+
+## DrawSetCull  (type-only)
+type DrawSetCull = 'none' | 'cpu' | 'gpu' | 'auto';
+
+## DrawSetDesc  (type-only)
+interface DrawSetDesc {
+    label?: string;
+    shader: DrawSetShader;
+    vertexLayout: BufferLayout;
+    instanceLayout?: BufferLayout;
+    vertices: Arena;
+    indices?: Arena;
+    instances?: Arena;
+    capacity: number;
+    kind?: DrawSetKind;
+    cull?: DrawSetCull;
+    pass?: string;
+    depth?: boolean;
+    order?: number;
+    bindGroups?: readonly {
+        layout: GPUBindGroupLayout;
+        group: GPUBindGroup;
+    }[];
+}
+
+## DrawSetKind  (type-only)
+type DrawSetKind = 'static' | 'dynamic';
+
+## DrawSetShader  (type-only)
+interface DrawSetShader {
+    code: string;
+    vertexEntry?: string;
+    fragmentEntry?: string;
+    blend?: GPUBlendState;
+    cullMode?: GPUCullMode;
+    depthCompare?: GPUCompareFunction;
 }
 
 ## Drawable  (type-only)
@@ -343,6 +506,9 @@ interface FullscreenPassDesc extends BindingDesc {
     fragmentEntry?: string;
 }
 
+## GPU_CULL_MIN_SLOTS
+const GPU_CULL_MIN_SLOTS = 256;
+
 ## GenerateMipmapsOptions  (type-only)
 interface GenerateMipmapsOptions {
     filter?: MipFilter;
@@ -482,6 +648,20 @@ interface Ktx2LevelLayout {
     imageBytes: number;
 }
 
+## LayoutAttribute  (type-only)
+interface LayoutAttribute {
+    name: string;
+    format: GPUVertexFormat;
+    offset: number;
+}
+
+## LayoutDesc  (type-only)
+interface LayoutDesc {
+    stride: number;
+    attributes: readonly LayoutAttribute[];
+    wgslDecode?: string;
+}
+
 ## Lights
 class Lights {
     readonly ambient: Float32Array<ArrayBuffer>;
@@ -515,8 +695,14 @@ const MAX_POINT_LIGHTS = 16;
 ## MAX_SPOT_LIGHTS
 const MAX_SPOT_LIGHTS = 8;
 
+## MAX_VIEWS
+const MAX_VIEWS = 8;
+
 ## MIN_RESOLUTION_SCALE
 const MIN_RESOLUTION_SCALE = 0.25;
+
+## MULTI_DRAW_FEATURE
+const MULTI_DRAW_FEATURE = "chromium-experimental-multi-draw-indirect";
 
 ## Material
 class Material {
@@ -678,6 +864,26 @@ interface ParallaxLayerOptions {
     params?: InstanceParams;
 }
 
+## PassDepth  (type-only)
+type PassDepth = 'write' | 'read' | 'none';
+
+## PassDesc  (type-only)
+interface PassDesc {
+    id: string;
+    after?: string;
+    depth?: PassDepth;
+    when?: () => boolean;
+}
+
+## PassList
+class PassList {
+    readonly passes: CorePass[];
+    constructor(builtIn?: readonly PassDesc[]);
+    define(desc: PassDesc): CorePass;
+    get(id: string): CorePass | undefined;
+    get order(): string[];
+}
+
 ## PingPong
 class PingPong {
     constructor(device: GPUDevice, desc: TextureDesc);
@@ -758,6 +964,19 @@ interface PreludeVariant {
     prevLane?: boolean;
 }
 
+## QUAD_INDICES
+const QUAD_INDICES = 6;
+
+## QuadIndex
+class QuadIndex {
+    buffer: GPUBuffer | null;
+    quads: number;
+    version: number;
+    constructor(device: GPUDevice);
+    ensure(quads: number): GPUBuffer;
+    destroy(): void;
+}
+
 ## RGBA  (type-only)
 type RGBA = [number, number, number, number];
 
@@ -779,6 +998,38 @@ interface ReadonlyVec3 {
 ## RenderBlendMode  (type-only)
 type RenderBlendMode = 'alpha' | 'premultiplied' | 'additive' | 'opaque' | 'multiply';
 
+## RenderCore
+class RenderCore {
+    readonly device: GPUDevice;
+    readonly caps: CoreCaps;
+    readonly passes: PassList;
+    readonly maxViews: number;
+    readonly depthFormat: GPUTextureFormat;
+    readonly stats: CoreStats;
+    frame: number;
+     readonly viewLayout: GPUBindGroupLayout;
+     readonly cullLayout: GPUBindGroupLayout;
+     readonly viewBuffer: GPUBuffer;
+     readonly viewData: Float32Array;
+    constructor(device: GPUDevice, opts?: RenderCoreOptions);
+    createArena(desc: ArenaDesc): Arena;
+    createDrawSet(desc: DrawSetDesc): DrawSet;
+    removeDrawSet(set: DrawSet): void;
+    definePass(desc: PassDesc): CorePass;
+    get drawSets(): readonly DrawSet[];
+    get depth(): GPUTexture | null;
+    prepare(encoder: GPUCommandEncoder, views: readonly RenderView[]): void;
+    draw(encoder: GPUCommandEncoder, viewIndex: number, target: CoreTarget): void;
+    destroy(): void;
+}
+
+## RenderCoreOptions  (type-only)
+interface RenderCoreOptions {
+    maxViews?: number;
+    depthFormat?: GPUTextureFormat;
+    multiDraw?: boolean;
+}
+
 ## RenderStats  (type-only)
 interface RenderStats {
     drawCalls: number;
@@ -790,6 +1041,13 @@ interface RenderStats {
     shadowDraws: number;
     passes: number;
     lodCounts: number[];
+}
+
+## RenderView  (type-only)
+interface RenderView {
+    readonly viewProj: Float32Array;
+    readonly planes: Float32Array;
+    readonly position: Float32Array;
 }
 
 ## Renderer
@@ -915,6 +1173,29 @@ const SKIN_PARAM = 3;
 
 ## SKIN_WEIGHTS_BYTE_OFFSET
 const SKIN_WEIGHTS_BYTE_OFFSET = 52;
+
+## SLOT
+const SLOT: {
+    readonly x: 0;
+    readonly y: 1;
+    readonly z: 2;
+    readonly r: 3;
+    readonly indexCount: 4;
+    readonly firstIndex: 5;
+    readonly baseVertex: 6;
+    readonly instanceCount: 7;
+    readonly firstInstance: 8;
+    readonly flags: 9;
+};
+
+## SLOT_BYTES
+const SLOT_BYTES: number;
+
+## SLOT_LIVE
+const SLOT_LIVE = 1;
+
+## SLOT_WORDS
+const SLOT_WORDS = 12;
 
 ## SPOT_LIGHT_FLOATS
 const SPOT_LIGHT_FLOATS = 16;
@@ -1053,6 +1334,16 @@ interface SkinPaletteDesc {
     instances?: number;
     label?: string;
     history?: boolean;
+}
+
+## SlotDesc  (type-only)
+interface SlotDesc {
+    vertices: ArenaAlloc;
+    indices?: ArenaAlloc;
+    indexCount: number;
+    instances?: ArenaAlloc;
+    instanceCount?: number;
+    bounds: ArrayLike<number>;
 }
 
 ## SnapshotOptions  (type-only)
@@ -1342,6 +1633,12 @@ const VERTEX_SKINNED_STRIDE: number;
 ## VERTEX_STRIDE
 const VERTEX_STRIDE: number;
 
+## VIEW_SLOT_BYTES
+const VIEW_SLOT_BYTES = 256;
+
+## VIEW_SLOT_FLOATS
+const VIEW_SLOT_FLOATS: number;
+
 ## VertexLayout  (type-only)
 interface VertexLayout {
     readonly name: string;
@@ -1405,14 +1702,28 @@ function bytesPerTexel(format: GPUTextureFormat): number;
 ## compressionFeatures
 function compressionFeatures(adapter: HasFeatures): GPUFeatureName[];
 
+## createArena
+function createArena(device: GPUDevice, desc: ArenaDesc): Arena;
+
 ## createFlipbook
 function createFlipbook(opts: FlipbookOptions): Flipbook;
 
 ## createFollow2D
 function createFollow2D(camera: Follow2DCamera, opts?: Follow2DOptions): Follow2D;
 
+## createInstanceLayout
+function createInstanceLayout(desc: LayoutDesc): BufferLayout;
+
 ## createParallax
 function createParallax(_renderer: Renderer, layers: ParallaxLayerOptions[]): Parallax;
+
+## createRenderCore
+function createRenderCore(gpu: GPUDevice | {
+    readonly device: GPUDevice;
+}, opts?: RenderCoreOptions): RenderCore;
+
+## createRenderView
+function createRenderView(): RenderView;
 
 ## createShaderModule
 function createShaderModule(device: GPUDevice, code: string, label: string): GPUShaderModule;
@@ -1425,6 +1736,12 @@ function createTextureArray(device: GPUDevice, desc: TextureArrayDesc): Texture;
 
 ## createTileLayer
 function createTileLayer(renderer: Renderer, opts: TileLayerOptions): TileLayer;
+
+## createVertexLayout
+function createVertexLayout(desc: LayoutDesc): BufferLayout;
+
+## cullSlotsCpu
+function cullSlotsCpu(slotsF32: Float32Array, slotsU32: Uint32Array, count: number, capacity: number, viewData: Float32Array, views: number, firstInstance: boolean, args: Uint32Array): number;
 
 ## defaultTextures
 function defaultTextures(device: GPUDevice): DefaultTextures;
@@ -1495,6 +1812,9 @@ function quadGeometry(): {
     indices: Uint16Array;
 };
 
+## quadIndices
+function quadIndices(quads: number, first?: number): Uint32Array;
+
 ## rendererCaps
 function rendererCaps(device: HasFeatures): RendererCaps;
 
@@ -1517,6 +1837,12 @@ function sceneSize(outW: number, outH: number, opts: Required<ResolutionOptions>
 ## setVertexSkin
 function setVertexSkin(bytes: Uint8Array, vertex: number, joints: ArrayLike<number>, weights: ArrayLike<number>): void;
 
+## setViewFromCamera
+function setViewFromCamera(view: RenderView, camera: Camera): RenderView;
+
+## sphereInPlanes
+function sphereInPlanes(planes: Float32Array, at: number, x: number, y: number, z: number, r: number): boolean;
+
 ## spotCone
 function spotCone(cosTheta: number, cosOuter: number, cosInner: number): number;
 
@@ -1528,6 +1854,9 @@ function supportsTimestamps(device: GPUDevice): boolean;
 
 ## uploadKtx2
 function uploadKtx2(renderer: CompressedUploadTarget, ktx2: Ktx2Texture, opts?: UploadKtx2Options): Texture;
+
+## vertexFormatBytes
+function vertexFormatBytes(format: GPUVertexFormat): number;
 
 ## wgslLightLoop
 function wgslLightLoop(name: string, brdf: string, params?: string): string;

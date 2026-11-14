@@ -106,6 +106,11 @@ interface BarSize {
     max?: number;
 }
 
+## Bind  (type-only)
+interface Bind {
+    readonly b: string;
+}
+
 ## ButtonOptions  (type-only)
 interface ButtonOptions {
     variant?: 'default' | 'primary' | 'ghost';
@@ -318,6 +323,51 @@ interface CompassOptions {
     order?: number;
 }
 
+## CompiledSpec  (type-only)
+class CompiledSpec {
+    readonly id: string;
+    readonly held: boolean;
+    readonly nodes: readonly SpecNode[];
+    readonly n: number;
+    readonly kind: Uint8Array;
+    readonly parent: Int32Array;
+    readonly first: Int32Array;
+    readonly next: Int32Array;
+    readonly inList: Int32Array;
+    readonly head: Int32Array;
+    readonly fw: Float64Array;
+    readonly fh: Float64Array;
+    readonly grow: Float64Array;
+    readonly gap: Float64Array;
+    readonly padT: Float64Array;
+    readonly padR: Float64Array;
+    readonly padB: Float64Array;
+    readonly padL: Float64Array;
+    readonly align: Uint8Array;
+    readonly lines: Uint8Array;
+    readonly lineH: Float64Array;
+    readonly linesKey: Int32Array;
+    readonly fade: number;
+    readonly showKey: Int32Array;
+    readonly ids: readonly string[];
+    readonly keys: readonly string[];
+    readonly keyIndex: ReadonlyMap<string, number>;
+    readonly keyBinds: readonly Int32Array[];
+    readonly keyLayout: Uint8Array;
+    readonly listNodes: Int32Array;
+    readonly listIds: readonly string[];
+    readonly fields: readonly (readonly string[])[];
+    readonly fieldBinds: readonly (readonly Int32Array[])[];
+    readonly listOrd: Int32Array;
+    readonly pressables: Int32Array;
+    readonly scrolls: Uint8Array;
+    readonly scroller: Int32Array;
+    readonly wraps: Int32Array;
+    readonly textKey: Int32Array;
+    readonly termW: Float64Array;
+    constructor(spec: PanelSpec);
+}
+
 ## ContextItem  (type-only)
 interface ContextItem {
     id: string;
@@ -390,6 +440,27 @@ const DESIGN_FONT_PX: {
     fontSizeXl: number;
     fontSizeXxl: number;
 };
+
+## DomOptions  (type-only)
+interface DomOptions {
+    scale?: number;
+    theme?: SpecTheme;
+    fit?: 'content' | 'host';
+    slotArt?: (el: HTMLElement, item: string) => void;
+    timer?: SpecTimer;
+}
+
+## DomPresenter
+class DomPresenter implements SpecPresenter {
+    readonly host: HTMLElement;
+    writes: number;
+    rowsBuilt: number;
+    constructor(panel: SpecPanel, host: HTMLElement, opts?: DomOptions);
+    get unitScale(): number;
+    setScale(scale: number): void;
+    apply(relaid: boolean): void;
+    dispose(): void;
+}
 
 ## DragContext  (type-only)
 interface DragContext {
@@ -649,6 +720,26 @@ interface HudHost {
     };
     readonly layout: Layout;
     readonly stack: PanelStack;
+}
+
+## HudItem  (type-only)
+interface HudItem {
+    readonly spec: PanelSpec;
+    readonly place: WidgetOptions['place'];
+    readonly order?: number;
+    readonly w?: number;
+}
+
+## HudSpec  (type-only)
+interface HudSpec {
+    readonly items: readonly HudItem[];
+}
+
+## HudView  (type-only)
+interface HudView {
+    readonly presenters: readonly DomPresenter[];
+    readonly widgets: readonly WidgetHandle[];
+    dispose(): void;
 }
 
 ## Insets  (type-only)
@@ -1143,6 +1234,16 @@ interface PanelContext2D {
     };
 }
 
+## PanelEvent  (type-only)
+interface PanelEvent {
+    readonly panel: string;
+    readonly id: string;
+    readonly row: string | null;
+    readonly type: SpecPressKind | 'input' | 'enter' | 'pick' | 'change' | 'down' | 'up' | 'focus' | 'blur' | 'held';
+    readonly value: string | number | boolean | null;
+    readonly one?: boolean;
+}
+
 ## PanelHandle  (type-only)
 interface PanelHandle {
     readonly element: HTMLElement;
@@ -1178,6 +1279,14 @@ interface PanelRect {
     y: number;
     w: number;
     h: number;
+}
+
+## PanelSpec  (type-only)
+interface PanelSpec {
+    readonly id: string;
+    readonly body: SpecNode;
+    readonly fade?: number;
+    readonly held?: boolean;
 }
 
 ## PanelStack
@@ -1431,6 +1540,34 @@ interface RotateCardOptions {
     doc?: Document;
 }
 
+## SPEC_FAMILY
+const SPEC_FAMILY: Readonly<Record<'sans' | 'serif' | 'mono', string>>;
+
+## SPEC_HOLD_MS
+const SPEC_HOLD_MS = 450;
+
+## SPEC_HOLD_SLOP
+const SPEC_HOLD_SLOP = 8;
+
+## SPEC_LINE
+const SPEC_LINE: Readonly<Record<SpecTextStyle, number>>;
+
+## SPEC_MONO
+const SPEC_MONO = "ui-monospace, 'SF Mono', Menlo, Consolas, monospace";
+
+## SPEC_SANS
+const SPEC_SANS = "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+
+## SPEC_SERIF
+const SPEC_SERIF = "'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif";
+
+## SPEC_TYPE
+const SPEC_TYPE: Readonly<Record<SpecTextStyle, {
+    readonly px: number;
+    readonly weight: number;
+    readonly family: SpecFontFamily;
+}>>;
+
 ## SafeAreaSource  (type-only)
 interface SafeAreaSource {
     insets(): Readonly<Insets>;
@@ -1504,6 +1641,386 @@ interface SlotsTargetOptions {
     describe?: (index: number) => CardOptions | null;
     hoverMs?: number;
 }
+
+## SpecAlign  (type-only)
+type SpecAlign = 'start' | 'center' | 'end' | 'stretch';
+
+## SpecBoxes  (type-only)
+class SpecBoxes {
+    readonly n: number;
+    readonly x: Float64Array;
+    readonly y: Float64Array;
+    readonly w: Float64Array;
+    readonly h: Float64Array;
+    readonly on: Uint8Array;
+    readonly lineH: Float64Array;
+    readonly content: Float64Array;
+    readonly cellW: Float64Array;
+    readonly rowH: Float64Array;
+    readonly headH: Float64Array;
+    readonly rows: Int32Array;
+    readonly scroll: Float64Array;
+    readonly nw: Float64Array;
+    readonly nh: Float64Array;
+    readonly lines: Uint16Array;
+    readonly termW: Float64Array;
+    measure: Measure;
+    runs: number;
+    measured: number;
+    hitRow: number;
+    constructor(c: CompiledSpec, model: SpecModel);
+    tops(list: number): Float64Array;
+    rowAt(list: number, y: number): number;
+    hit(px: number, py: number): number;
+    layout(w: number, h: number, text: number): void;
+    rewrap(): boolean;
+}
+
+## SpecButton  (type-only)
+interface SpecButton extends SpecCommon {
+    readonly k: 'button';
+    readonly id: string;
+    readonly text?: SpecStr;
+    readonly icon?: string;
+    readonly press?: SpecButtonPress;
+    readonly hold?: boolean;
+    readonly on?: Bind;
+    readonly enabled?: Bind;
+    readonly badge?: Bind;
+    readonly keyLabel?: SpecStr;
+    readonly submits?: string;
+    readonly ring?: Bind;
+}
+
+## SpecButtonPress  (type-only)
+type SpecButtonPress = 'tap' | 'toggle' | 'held';
+
+## SpecCommon  (type-only)
+interface SpecCommon {
+    readonly id?: string;
+    readonly cls?: string;
+    readonly w?: number;
+    readonly h?: number;
+    readonly grow?: number;
+    readonly show?: Bind;
+    readonly state?: Bind;
+    readonly label?: SpecStr;
+    readonly tint?: SpecStr;
+    readonly again?: Bind;
+}
+
+## SpecField  (type-only)
+interface SpecField extends SpecCommon {
+    readonly k: 'field';
+    readonly id: string;
+    readonly kind: SpecFieldKind;
+    readonly placeholder?: SpecStr;
+    readonly max?: number;
+    readonly enabled?: Bind;
+    readonly value?: Bind;
+}
+
+## SpecFieldKind  (type-only)
+type SpecFieldKind = 'search' | 'name' | 'chat' | 'long' | 'url';
+
+## SpecFontFamily  (type-only)
+type SpecFontFamily = 'sans' | 'serif' | 'mono';
+
+## SpecGlyphPart  (type-only)
+interface SpecGlyphPart {
+    readonly d: string;
+    readonly cls?: string;
+    readonly line?: boolean;
+}
+
+## SpecGrid  (type-only)
+interface SpecGrid extends SpecCommon {
+    readonly k: 'grid';
+    readonly cols: number;
+    readonly cell: number;
+    readonly cellH?: number;
+    readonly gap?: number;
+    readonly children: readonly SpecNode[];
+}
+
+## SpecHud
+class SpecHud {
+    readonly items: readonly HudItem[];
+    readonly panels: readonly SpecPanel[];
+    onEvent: ((e: PanelEvent) => void) | null;
+    constructor(spec: HudSpec, opts?: SpecPanelOptions);
+    get(id: string): SpecPanel;
+    apply(): void;
+    dispose(): void;
+}
+
+## SpecIcon  (type-only)
+interface SpecIcon extends SpecCommon {
+    readonly k: 'icon';
+    readonly glyph: string | readonly SpecGlyphPart[];
+    readonly view?: number | readonly [number, number];
+    readonly size: number;
+}
+
+## SpecList  (type-only)
+interface SpecList extends SpecCommon {
+    readonly k: 'list';
+    readonly id: string;
+    readonly rowH: number;
+    readonly cols?: number;
+    readonly gap?: number;
+    readonly maxRows?: SpecNum;
+    readonly tail?: boolean;
+    readonly row: SpecNode;
+    readonly head?: SpecNode;
+}
+
+## SpecListMove  (type-only)
+type SpecListMove = 'keep' | 'top' | 'slide';
+
+## SpecListState  (type-only)
+class SpecListState {
+    readonly id: string;
+    readonly node: number;
+    readonly fields: readonly string[];
+    readonly fieldIndex: ReadonlyMap<string, number>;
+    readonly keys: string[];
+    readonly rows: Map<string, SpecRow>;
+    readonly dirtyRows: SpecRow[];
+    dirtyN: number;
+    order: boolean;
+    gen: number;
+    how: SpecListMove;
+    readonly removed: SpecRow[];
+    constructor(model: SpecModel, id: string, node: number, fields: readonly string[], tall: (count: number) => number);
+    row(key: string): SpecRow;
+    set(keys: readonly string[], how?: SpecListMove): boolean;
+    rowChanged(r: SpecRow): void;
+    clean(): void;
+}
+
+## SpecMark  (type-only)
+interface SpecMark {
+    readonly cls?: string;
+    readonly at: SpecNum;
+    readonly state?: Bind;
+    readonly label?: Bind;
+}
+
+## SpecMeasurer  (type-only)
+type SpecMeasurer = (s: string, px: number, weight: number, family: string, italic?: boolean) => number;
+
+## SpecMeter  (type-only)
+interface SpecMeter extends SpecCommon {
+    readonly k: 'meter';
+    readonly value: SpecNum;
+    readonly marks?: readonly SpecMark[];
+    readonly valueText?: Bind;
+}
+
+## SpecModal  (type-only)
+interface SpecModal {
+    readonly presenter: DomPresenter;
+    readonly handle: PanelHandle;
+}
+
+## SpecModalOptions  (type-only)
+type SpecModalOptions = Omit<PanelOptions, 'content'> & DomOptions;
+
+## SpecModel  (type-only)
+class SpecModel {
+    readonly spec: CompiledSpec;
+    readonly vals: (SpecValue | null)[];
+    readonly dirtyKeys: Int32Array;
+    dirtyN: number;
+    relayout: boolean;
+    readonly lists: SpecListState[];
+    pending: boolean;
+    onChange: (() => void) | null;
+    sets: number;
+    focusing: string | null | undefined;
+    readonly followers: ((i: number, v: SpecValue) => void)[];
+    constructor(spec: CompiledSpec);
+    index(key: string): number;
+    set(key: string, v: SpecValue): boolean;
+    setAt(i: number, v: SpecValue): boolean;
+    follow(i: number, v: SpecValue): void;
+    focus(id: string | null): void;
+    setAll(rec: Readonly<Record<string, SpecValue>>): number;
+    get(key: string): SpecValue | null;
+    list(id: string): SpecListState;
+    setList(id: string, keys: readonly string[], how?: SpecListMove): boolean;
+    row(id: string, key: string): SpecRow;
+    changed(): void;
+    clean(): void;
+}
+
+## SpecNode  (type-only)
+type SpecNode = SpecStack | SpecGrid | SpecList | SpecText | SpecSlot | SpecMeter | SpecIcon | SpecButton | SpecField | SpecTabs | SpecRange;
+
+## SpecNum  (type-only)
+type SpecNum = number | Bind;
+
+## SpecOverlay  (type-only)
+type SpecOverlay = Pick<Overlay, 'root' | 'layout' | 'units' | 'scale' | 'onResize' | 'stack'>;
+
+## SpecPanel
+class SpecPanel {
+    readonly spec: CompiledSpec;
+    readonly model: SpecModel;
+    readonly boxes: SpecBoxes;
+    readonly presenters: SpecPresenter[];
+    onEvent: ((e: PanelEvent) => void) | null;
+    onFrame: ((w: number, h: number, text: number) => void) | null;
+    w: number;
+    h: number;
+    text: number;
+    applies: number;
+    constructor(spec: PanelSpec, schedule?: SpecSchedule | null);
+    frame(w: number, h: number, text?: number): void;
+    apply(): void;
+    emit(e: PanelEvent): void;
+    dispose(): void;
+}
+
+## SpecPanelOptions  (type-only)
+interface SpecPanelOptions {
+    schedule?: SpecSchedule | null;
+}
+
+## SpecPresenter  (type-only)
+interface SpecPresenter {
+    apply(relaid: boolean): void;
+    dispose(): void;
+}
+
+## SpecPressKind  (type-only)
+type SpecPressKind = 'tap' | 'hold' | 'toggle';
+
+## SpecRange  (type-only)
+interface SpecRange extends SpecCommon {
+    readonly k: 'range';
+    readonly id: string;
+    readonly min: number;
+    readonly max: number;
+    readonly step: number;
+    readonly value: Bind;
+    readonly enabled?: Bind;
+    readonly valueText?: Bind;
+}
+
+## SpecRow  (type-only)
+class SpecRow {
+    readonly key: string;
+    readonly vals: (SpecValue | null)[];
+    dirty: number;
+    index: number;
+    gen: number;
+    queued: boolean;
+    constructor(list: SpecListState, key: string);
+    set(field: string, v: SpecValue): boolean;
+    setAt(i: number, v: SpecValue): boolean;
+    get(field: string): SpecValue | null;
+}
+
+## SpecSchedule  (type-only)
+type SpecSchedule = (f: () => void) => void;
+
+## SpecSlot  (type-only)
+interface SpecSlot extends SpecCommon {
+    readonly k: 'slot';
+    readonly id: string;
+    readonly item: Bind;
+    readonly count?: Bind;
+    readonly keyLabel?: SpecStr;
+    readonly size: number;
+    readonly hold?: boolean;
+    readonly enabled?: Bind;
+}
+
+## SpecStack  (type-only)
+interface SpecStack extends SpecCommon {
+    readonly k: 'col' | 'row';
+    readonly gap?: number;
+    readonly pad?: number | readonly [number, number, number, number];
+    readonly align?: SpecAlign;
+    readonly scroll?: boolean;
+    readonly tap?: boolean;
+    readonly role?: string;
+    readonly children: readonly SpecNode[];
+}
+
+## SpecStr  (type-only)
+type SpecStr = string | Bind;
+
+## SpecTabs  (type-only)
+interface SpecTabs extends SpecCommon {
+    readonly k: 'tabs';
+    readonly id: string;
+    readonly selected: Bind;
+    readonly optionW: number;
+    readonly fill?: boolean;
+    readonly weigh?: boolean;
+    readonly enabled?: Bind;
+}
+
+## SpecText  (type-only)
+interface SpecText extends SpecCommon {
+    readonly k: 'text';
+    readonly text: SpecStr;
+    readonly style: SpecTextStyle;
+    readonly lines?: SpecNum;
+    readonly marked?: boolean;
+    readonly flash?: boolean;
+    readonly wrap?: boolean;
+    readonly term?: string;
+    readonly termW?: number;
+    readonly textAlign?: 'start' | 'center' | 'end';
+}
+
+## SpecTextStyle  (type-only)
+type SpecTextStyle = 'head' | 'title' | 'body' | 'label' | 'note' | 'warn' | 'count' | 'display';
+
+## SpecTheme  (type-only)
+interface SpecTheme {
+    readonly tokens: SpecTokens;
+    readonly vars: readonly (readonly [string, string])[];
+}
+
+## SpecTimer  (type-only)
+interface SpecTimer {
+    set(f: () => void, ms: number): unknown;
+    clear(handle: unknown): void;
+}
+
+## SpecTokens  (type-only)
+interface SpecTokens {
+    readonly fontSans: string;
+    readonly fontSerif: string;
+    readonly fontMono: string;
+    readonly surface: string;
+    readonly surfaceAlt: string;
+    readonly surfaceOn: string;
+    readonly border: string;
+    readonly text: string;
+    readonly textMuted: string;
+    readonly accent: string;
+    readonly accentText: string;
+    readonly warn: string;
+    readonly danger: string;
+    readonly good: string;
+    readonly focus: string;
+    readonly track: string;
+    readonly radius: number;
+    readonly borderWidth: number;
+    readonly focusRing: number;
+    readonly padX: number;
+    readonly shadow: string;
+    readonly fast: number;
+}
+
+## SpecValue  (type-only)
+type SpecValue = string | number | boolean;
 
 ## Stepper  (type-only)
 interface Stepper {
@@ -1974,6 +2491,16 @@ type WorldWidgetSize = 's' | 'm' | 'l';
 ## WorldWidgetTone  (type-only)
 type WorldWidgetTone = 'text' | 'muted' | 'accent' | 'info' | 'success' | 'warn' | 'danger';
 
+## WrapOptions  (type-only)
+interface WrapOptions {
+    weight?: number;
+    family?: string;
+    italic?: boolean;
+    track?: number;
+    indent?: number;
+    most?: number;
+}
+
 ## activateLink
 function activateLink(el: HTMLElement, activation: LinkActivation): OpenResult | null;
 
@@ -1985,6 +2512,9 @@ function applyTextScale(root: HTMLElement, scale: number, setTheme?: (t: Record<
 
 ## applyTheme
 function applyTheme(el: HTMLElement, tokens: Record<string, string>): void;
+
+## b
+function b(key: string): Bind;
 
 ## bar
 function bar(label: string, value: number, opts?: BarOptions): Bar;
@@ -2084,6 +2614,9 @@ const defaultInventoryLabels: Required<InventoryLabels>;
 
 ## defaultPads
 function defaultPads(): readonly (PadLike | null)[];
+
+## defaultSpecTokens
+const defaultSpecTokens: SpecTokens;
 
 ## defaultTheme
 const defaultTheme: {
@@ -2198,6 +2731,9 @@ function h<K extends keyof HTMLElementTagNameMap>(tag: K, props?: Props | null, 
 ## headingOffset
 function headingOffset(yawRadians: number, width: number, span: number): number;
 
+## hud
+function hud(spec: HudSpec, opts?: SpecPanelOptions): SpecHud;
+
 ## iconNode
 function iconNode(icon: string | HTMLElement | HTMLCanvasElement, doc: Document): Node;
 
@@ -2222,11 +2758,17 @@ function loupeLeader(at: {
 ## makePanelCanvas
 function makePanelCanvas(width: number, height: number): PanelCanvas;
 
+## measureWith
+function measureWith(m: SpecMeasurer | null): void;
+
 ## menuNav
 function menuNav<A extends string>(input: MenuNavInput<A>, root: HTMLElement, actions?: MenuNavActions<A>): MenuNavResult;
 
 ## overlapArea
 function overlapArea(box: Rect, regions: readonly Rect[]): number;
+
+## panel
+function panel(spec: PanelSpec, opts?: SpecPanelOptions): SpecPanel;
 
 ## parseAreas
 function parseAreas(areas: readonly string[]): string[][];
@@ -2258,6 +2800,15 @@ function placementFor(place: WidgetOptions['place'], ff: FormFactor): Placement;
 
 ## prefersReducedMotionIn
 function prefersReducedMotionIn(win?: Window | undefined): boolean;
+
+## presentDom
+function presentDom(panel: SpecPanel, host: HTMLElement, opts?: DomOptions): DomPresenter;
+
+## presentHud
+function presentHud(h: SpecHud, ui: SpecOverlay, opts?: DomOptions): HudView;
+
+## presentModal
+function presentModal(ui: SpecOverlay, p: SpecPanel, opts?: SpecModalOptions): SpecModal;
 
 ## radial
 function radial(host: InventoryHost, opts: RadialOptions): Radial;
@@ -2311,11 +2862,23 @@ function slider(label: string, value: number, onInput: (v: number) => void, opts
 ## slotsTarget
 function slotsTarget(slots: Slots, onAssign: (index: number, item: CellItem, from: CellRef) => void, opts?: SlotsTargetOptions): SlotsTarget;
 
+## specScale
+function specScale(ui: Pick<Overlay, 'units' | 'scale'>): number;
+
+## specTokenVar
+function specTokenVar(name: keyof SpecTokens): string;
+
 ## stepper
 function stepper(label: string, value: number, onChange: (value: number) => void, opts: StepperOptions): Stepper;
 
 ## textScaleTokens
 function textScaleTokens(scale: number, base?: Record<string, number>): Record<string, string>;
+
+## textWidth
+function textWidth(s: string, px: number, weight?: number, family?: string): number;
+
+## theme
+function theme(tokens?: Partial<SpecTokens>): SpecTheme;
 
 ## themePx
 function themePx(n: number): string;
@@ -2357,5 +2920,11 @@ function slider(opts: WorldSliderOptions): WorldSlider;
 ## worldToggle
 function toggle(opts: WorldToggleOptions): WorldToggle;
 
+## wrapCount
+function wrapCount(text: string, width: number, px: number, opts?: WrapOptions): number;
+
 ## wrapDegrees
 function wrapDegrees(deg: number): number;
+
+## wrapText
+function wrapText(text: string, width: number, px: number, opts?: WrapOptions): string[];

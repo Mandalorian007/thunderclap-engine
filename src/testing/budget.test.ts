@@ -115,13 +115,19 @@ describe('createWorkMeter', () => {
     expect(unmarked.views).toEqual({});
   });
 
-  it('counts indirect draws and bundles even where the device lacks them', () => {
+  it('counts indirect draws and bundles', () => {
     const { meter } = setup();
+    // The fake device validates indirect draws (ws/core-retained), so they take a real INDIRECT buffer.
+    const args = meter.device.createBuffer({
+      label: 'args',
+      size: 32,
+      usage: GPUBufferUsage.INDIRECT,
+    });
     const r = meter.measure(() => {
       const enc = meter.device.createCommandEncoder();
       const pass = enc.beginRenderPass({ colorAttachments: [] });
-      pass.drawIndirect({} as GPUBuffer, 0);
-      pass.drawIndexedIndirect({} as GPUBuffer, 0);
+      pass.drawIndirect(args, 0);
+      pass.drawIndexedIndirect(args, 0);
       pass.executeBundles([]);
       pass.end();
     });
