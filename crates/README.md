@@ -93,7 +93,7 @@ long-running server's store stays bounded. The arena does; see
 
 ## Versions
 
-The crates share the workspace version (0.3.0). A release is tagged
+The crates share the workspace version (0.4.0). A release is tagged
 `server-v<major>.<minor>`, and a game made by `pnpm create-game` depends on
 `thunderclap-server` at that tag by git; inside this repo the templates use
 path dependencies.

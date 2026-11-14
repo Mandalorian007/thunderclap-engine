@@ -148,6 +148,39 @@ impl Writer {
     pub fn write_raw(&mut self, bytes: &[u8]) {
         self.buf.extend_from_slice(bytes);
     }
+
+    /// The number of bytes written so far.
+    pub fn len(&self) -> usize {
+        self.buf.len()
+    }
+
+    /// True if nothing has been written.
+    pub fn is_empty(&self) -> bool {
+        self.buf.is_empty()
+    }
+
+    /// Replaces the varint written at offset `at` (an enum's variant
+    /// index, say) with `value`, moving what follows if their lengths
+    /// differ, and returns the varint it replaced. For a protocol that
+    /// renumbers a type's variants on the wire (`tc-net`'s envelope).
+    ///
+    /// # Panics
+    ///
+    /// If no whole varint starts at `at`.
+    pub fn replace_varint(&mut self, at: usize, value: u64) -> u64 {
+        let mut end = at;
+        let old = codec::read_varint(&self.buf, &mut end, Varint::CANONICAL)
+            .expect("a varint is written at `at`");
+        let (mut new, mut len, mut v) = ([0u8; 10], 0, value);
+        while v >= 0x80 {
+            new[len] = (v as u8) | 0x80;
+            v >>= 7;
+            len += 1;
+        }
+        new[len] = v as u8;
+        self.buf.splice(at..end, new[..=len].iter().copied());
+        old
+    }
 }
 
 /// A cursor over a received message.
@@ -155,12 +188,32 @@ impl Writer {
 pub struct Reader<'a> {
     bytes: &'a [u8],
     pos: usize,
+    /// What the next [`read_variant`](Reader::read_variant) returns
+    /// instead of reading one ([`Reader::set_variant`]).
+    variant: Option<u64>,
 }
 
 impl<'a> Reader<'a> {
     /// A reader positioned at the start of `bytes`.
     pub fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, pos: 0 }
+        Self {
+            bytes,
+            pos: 0,
+            variant: None,
+        }
+    }
+
+    /// Makes the next [`read_variant`](Reader::read_variant) return
+    /// `index` without reading: for a protocol that has already read the
+    /// variant under its own number (`tc-net`'s envelope, decoding a
+    /// game message that is one of its own variants).
+    pub fn set_variant(&mut self, index: u64) {
+        self.variant = Some(index);
+    }
+
+    /// True if a variant set by [`Reader::set_variant`] is still unread.
+    pub fn variant_pending(&self) -> bool {
+        self.variant.is_some()
     }
 
     /// Offset of the next byte to read.
@@ -279,9 +332,13 @@ impl<'a> Reader<'a> {
         }
     }
 
-    /// Reads an enum variant index.
+    /// Reads an enum variant index (or takes the one
+    /// [`set_variant`](Reader::set_variant) left).
     pub fn read_variant(&mut self) -> Result<u64, DecodeError> {
-        self.read_varint()
+        match self.variant.take() {
+            Some(index) => Ok(index),
+            None => self.read_varint(),
+        }
     }
 
     /// Reads `len` raw bytes.
@@ -836,5 +893,54 @@ mod tests {
     fn error_display() {
         let err = DecodeError::unknown_variant(3, "Command", 9);
         assert_eq!(err.to_string(), "at byte 3: unknown variant 9 for Command");
+    }
+
+    #[test]
+    fn replace_varint_moves_what_follows() {
+        let mut w = Writer::new();
+        w.write_varint(3);
+        w.write_varint(300);
+        w.write_varint(1);
+        assert_eq!(w.replace_varint(1, 2), 300);
+        assert_eq!(w.as_bytes(), [3, 2, 1]);
+        assert_eq!(w.replace_varint(0, 200), 3);
+        assert_eq!(w.as_bytes(), [0xc8, 0x01, 2, 1]);
+        assert_eq!(w.len(), 4);
+        assert!(!w.is_empty());
+    }
+
+    #[test]
+    fn a_set_variant_is_read_once() {
+        let mut r = Reader::new(&[5]);
+        r.set_variant(9);
+        assert!(r.variant_pending());
+        assert_eq!(r.read_variant().unwrap(), 9);
+        assert!(!r.variant_pending());
+        assert_eq!(r.read_variant().unwrap(), 5);
+        r.finish().unwrap();
+    }
+
+    #[test]
+    fn adopt_copies_types_in_discovery_order() {
+        use crate::schema::{Field, TypeKind, Variant};
+        let mut from = SchemaBuilder::new();
+        let msg = from.define("Msg", "t::Msg", "", |s| {
+            let b = s.define("B", "t::B", "", |_| TypeKind::Struct(vec![]));
+            let a = s.define("A", "t::A", "", |s| {
+                let b = s.define("B", "t::B", "", |_| unreachable!());
+                TypeKind::Newtype(TypeRef::Vec(Box::new(b)))
+            });
+            TypeKind::Enum(vec![
+                Variant::named("One", "", vec![Field::new("a", "", a)]),
+                Variant::newtype("Two", "", b),
+            ])
+        });
+        let mut to = SchemaBuilder::new();
+        to.adopt(&from, &TypeRef::Option(Box::new(TypeRef::Named("A"))));
+        assert!(to.defined("A").is_some() && to.defined("B").is_some());
+        assert!(to.defined("Msg").is_none());
+        assert_eq!(to.defined("A"), from.defined("A"));
+        to.adopt(&from, &msg);
+        assert_eq!(to.defined("Msg"), from.defined("Msg"));
     }
 }

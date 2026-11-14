@@ -6,7 +6,9 @@
 //!   (handshake, commands, live queries, the entity stream, ping, the bulk
 //!   lane), generic over a [`Protocol`] that names the game's own messages.
 //!   [`schema_builder`] starts the game's schema with them; its hash is
-//!   what `Hello` must carry.
+//!   what `Hello` must carry. A game with a wire of its own lays them out
+//!   its way with [`Protocol::ENVELOPE`] ([`envelope::Envelope`]); the
+//!   default is the engine's layout.
 //! - [`Server`] binds a WebSocket listener and runs a
 //!   [session](session) per connection: the handshake, message rates
 //!   ([`rate`]), the [`outbound`] queue's priority and bulk lanes, flow

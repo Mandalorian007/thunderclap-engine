@@ -5,9 +5,12 @@
 //! - TypeScript's `createNet` (`src/net/interop.test.ts`, run by vitest):
 //!   the handshake, a command, a live query's patch, the entity stream,
 //!   the bulk lane, reconnect and close codes. Skipped, with a notice,
-//!   where node or the repo's node_modules are missing.
+//!   where node or the repo's node_modules are missing;
+//! - both again for `talk`, a game with an envelope of its own
+//!   (`src/net/talk-interop.test.ts`).
 
 mod echo;
+mod talk;
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -19,6 +22,7 @@ use tc_wire::{Bytes, Wire, bulk};
 use tokio_tungstenite::tungstenite::Message;
 
 use echo::Echo;
+use talk::{Heard, Speak, Talk};
 
 async fn start() -> Server<Echo> {
     let (requests, game) = std::sync::mpsc::channel();
@@ -33,7 +37,17 @@ async fn start() -> Server<Echo> {
 type Ws =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
-async fn connect(server: &Server<Echo>) -> Ws {
+async fn start_talk() -> Server<Talk> {
+    let (requests, game) = std::sync::mpsc::channel();
+    std::thread::spawn(move || talk::run(game));
+    let mut config = ServerConfig::new(talk::schema().hash());
+    config.deflate_threads = Some(1);
+    Server::start(config, requests)
+        .await
+        .expect("the server starts")
+}
+
+async fn connect<P: tc_net::Protocol>(server: &Server<P>) -> Ws {
     let url = format!("ws://{}", server.local_addr());
     tokio_tungstenite::connect_async(url)
         .await
@@ -42,6 +56,10 @@ async fn connect(server: &Server<Echo>) -> Ws {
 }
 
 async fn send(ws: &mut Ws, msg: ClientMsg<Echo>) {
+    send_of(ws, msg).await
+}
+
+async fn send_of<P: tc_net::Protocol>(ws: &mut Ws, msg: ClientMsg<P>) {
     ws.send(Message::Binary(msg.to_bytes().into()))
         .await
         .unwrap();
@@ -61,6 +79,10 @@ async fn recv(ws: &mut Ws) -> Option<Vec<u8>> {
 }
 
 async fn msg(ws: &mut Ws) -> ServerMsg<Echo> {
+    msg_of(ws).await
+}
+
+async fn msg_of<P: tc_net::Protocol>(ws: &mut Ws) -> ServerMsg<P> {
     ServerMsg::from_bytes(&recv(ws).await.expect("a message")).expect("decodes")
 }
 
@@ -173,8 +195,144 @@ async fn a_rust_client_handshakes_commands_and_acks_the_bulk_lane() {
     let _ = Bytes(Vec::new());
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_rust_client_speaks_a_wire_of_its_own() {
+    let server = start_talk().await;
+    let hash = talk::schema().hash();
+    let mut ws = connect(&server).await;
+    let hello = ClientMsg::<Talk>::Hello {
+        token: "ada".into(),
+        schema_hash: hash.clone(),
+        bulk: Some(codec::DEFLATE),
+        ext: "ada".into(),
+    };
+    // The hash first, then the token, as the layout has it.
+    assert_eq!(hello.to_bytes()[..2], [1, hash.len() as u8]);
+    send_of(&mut ws, hello).await;
+    let player = match msg_of::<Talk>(&mut ws).await {
+        ServerMsg::Welcome { player, ext, .. } => {
+            assert_eq!(ext, 3, "the name's length");
+            player
+        }
+        other => panic!("{other:?}"),
+    };
+    let say = ClientMsg::<Talk>::Game(Speak::Say { text: "hi".into() });
+    assert_eq!(say.to_bytes()[0], 2, "Say is inline, at its own tag");
+    send_of(&mut ws, say).await;
+    let frame = recv(&mut ws).await.expect("a message");
+    assert_eq!(frame[0], 2, "Said is inline, at its own tag");
+    assert_eq!(
+        ServerMsg::<Talk>::from_bytes(&frame).unwrap(),
+        ServerMsg::Game(Heard::Said {
+            text: "ada: hi".into(),
+            from: player as u32
+        })
+    );
+    // Two rounds of the bulk lane, at its own tag, acked with a running total.
+    let mut total = 0u64;
+    for seq in 1..=2u32 {
+        send_of(&mut ws, ClientMsg::<Talk>::Command { seq, command: 40 }).await;
+        assert_eq!(
+            msg_of::<Talk>(&mut ws).await,
+            ServerMsg::CommandResult {
+                seq,
+                result: "40".into()
+            }
+        );
+        let mut got = 0;
+        while got < 40 {
+            let frame = recv(&mut ws).await.expect("a Bulk");
+            assert_eq!(frame[0], 6, "Bulk's own tag");
+            let ServerMsg::<Talk>::Bulk { codec: c, data } = ServerMsg::from_bytes(&frame).unwrap()
+            else {
+                panic!("a Bulk");
+            };
+            let raw = if c == codec::DEFLATE {
+                tc_net::deflate::inflate(&data.0).expect("inflates")
+            } else {
+                data.0.clone()
+            };
+            for frame in bulk::frames(&raw) {
+                assert!(matches!(
+                    ServerMsg::<Talk>::from_bytes(frame.expect("a frame")),
+                    Ok(ServerMsg::Game(Heard::Said { .. }))
+                ));
+                got += 1;
+            }
+            total += data.0.len() as u64;
+            send_of(&mut ws, ClientMsg::<Talk>::Ack { bytes: total }).await;
+        }
+        assert_eq!(got, 40);
+    }
+    // The session took every total: it still answers.
+    send_of(&mut ws, ClientMsg::<Talk>::Ping { client_time: 5 }).await;
+    assert!(matches!(
+        msg_of::<Talk>(&mut ws).await,
+        ServerMsg::Pong { client_time: 5, .. }
+    ));
+    // Waving closes with the game's own code, as its enum.
+    send_of(&mut ws, ClientMsg::<Talk>::Game(Speak::Wave)).await;
+    let frame = recv(&mut ws).await.expect("Closed");
+    assert_eq!(frame[..2], [4, 1], "Closed, Bye::Kicked");
+    match ServerMsg::<Talk>::from_bytes(&frame).unwrap() {
+        ServerMsg::Closed { code, .. } => assert_eq!(code, talk::KICKED),
+        other => panic!("{other:?}"),
+    }
+    assert!(recv(&mut ws).await.is_none());
+    server.stop().await;
+}
+
 fn repo() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+/// Runs `file` under vitest against `url`, asserting `passed` tests ran;
+/// false (with a notice) where node or node_modules are missing.
+fn vitest(file: &str, url: String, hash: String, passed: usize) -> bool {
+    let vitest = repo().join("node_modules/vitest/vitest.mjs");
+    let node_ok = Command::new("node")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !node_ok || !vitest.exists() {
+        eprintln!("tc-net interop: node or node_modules missing; skipping the TypeScript client");
+        return false;
+    }
+    let out = Command::new("node")
+        .arg(&vitest)
+        .args(["run", file])
+        .current_dir(repo())
+        .env("TC_NET_INTEROP_URL", url)
+        .env("TC_NET_INTEROP_HASH", hash)
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("vitest runs");
+    let text = String::from_utf8_lossy(&out.stdout);
+    eprintln!("{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(out.status.success(), "vitest failed");
+    assert!(
+        text.contains(&format!("{passed} passed")),
+        "every interop test ran"
+    );
+    true
+}
+
+#[test]
+fn typescript_talk_interop() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let server = runtime.block_on(start_talk());
+    let url = format!("ws://{}", server.local_addr());
+    vitest(
+        "src/net/talk-interop.test.ts",
+        url,
+        talk::schema().hash(),
+        3,
+    );
+    runtime.block_on(server.stop());
 }
 
 #[test]
