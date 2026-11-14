@@ -96,6 +96,7 @@ interface GpuInitOptions {
     onLost?: (info: GPUDeviceLostInfo) => void;
     timestamps?: boolean;
     compression?: boolean;
+    drawFeatures?: boolean;
 }
 
 ## GpuInitResult  (type-only)

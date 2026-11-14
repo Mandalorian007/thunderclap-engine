@@ -365,6 +365,11 @@ export class Mesh {
    */
   growths = 0;
   /**
+   * Bumped by every `update()` and by `destroy()` (ws/core-immediate): the renderer's mesh pool
+   * re-copies the geometry it merges into one indirect run when this changes.
+   */
+  revision = 0;
+  /**
    * Bounding sphere in mesh space (the renderer carries it through each draw's instance matrix
    * and culls against `camera.frustum`). From `MeshDesc.bounds`, `MeshUpdate.bounds` or, with
    * `autoBounds`, the positions; `radius` Infinity when unknown (never culled). The object is
@@ -449,6 +454,7 @@ export class Mesh {
 
   private updateViews(u: MeshUpdate): boolean {
     let grew = false;
+    this.revision++;
     const { stride } = this.layout;
     if (u.vertices) {
       const count = u.vertexCount ?? Math.floor(u.vertices.byteLength / stride);
@@ -583,6 +589,7 @@ export class Mesh {
   }
 
   destroy(): void {
+    this.revision++;
     this.vertexBuffer.destroy();
     this.indexBuffer?.destroy();
   }
@@ -591,7 +598,8 @@ export class Mesh {
     return this.device.createBuffer({
       label: `${this.label}-vb`,
       size: count * this.layout.stride,
-      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      // COPY_SRC: the renderer copies small meshes into its pool for merged runs.
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
     });
   }
 
@@ -600,7 +608,7 @@ export class Mesh {
     return this.device.createBuffer({
       label: `${this.label}-ib`,
       size: Math.ceil(bytes / 4) * 4,
-      usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
+      usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
     });
   }
 }
