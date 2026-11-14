@@ -55,6 +55,7 @@ Each line names where to start and links its guide or reference. [docs/OFFERING.
 
 - **glTF 2.0.** Meshes, materials, skins, animations, morph targets and common extensions: `parseGltf`, `loadGltf` ([3D guide](docs/guide/3d-game.md#load-a-gltf-model), [assets](src/assets/README.md)).
 - **Typed asset loading.** A manifest, a progress bar and a cache: `defineManifest`, `createBundle`, `createAssetCache`, `packAtlas` ([assets](src/assets/README.md)).
+- **Part models.** Machines, creatures and props built from a part tree and a material table, animated by state channels in the shader: `compileModel`, `createModelScene` in `@thunderclap-engine/engine/models` ([models](src/models/README.md)).
 - **Procedural geometry.** Boxes, spheres, capsules, heightfields and more: `box`, `sphere`, `createHeightfield` in `@thunderclap-engine/engine/geom` ([geom](src/geom/README.md)).
 - **Collision.** A static collider and capsule or circle sliding: `createStaticCollider`, `slide`, `slide2` ([geom](src/geom/README.md)).
 - **Voxel worlds.** Greedy-meshed chunks with baked AO from a Worker, culled per chunk, with a block-picking ray: `createVoxelGrid`, `createVoxelChunks`, `raycastVoxels` ([3D guide](docs/guide/3d-game.md#voxel-worlds), [voxel](src/voxel/README.md)).
@@ -254,6 +255,7 @@ The module READMEs under `src/<module>/` are the full reference.
 | `@thunderclap-engine/engine/voxel` | `createVoxelGrid`, `meshChunk` (greedy, baked AO), `createVoxelMesher` and `installVoxelMesherWorker` (the Worker bridge), `createVoxelChunks` (one mesh per chunk, rewritten in place, frustum-culled), `raycastVoxels`, the `VOXEL_WGSL` prelude ([README](src/voxel/README.md)) |
 | `@thunderclap-engine/engine/testing` | Test doubles for unit tests (`src/testing/index.ts`): the fake GPU, a fake host and a fixed clock |
 | `@thunderclap-engine/engine/geom` | Procedural geometry: `box`, `plane`, `sphere`, `icosphere`, `capsule`, `cylinder`, `torus`, heightfields (`heightAt`, `normalAt`, `raycastHeightfield`, `heightfieldGeometry`), `mergeGeometry`, `transformGeometry`; pure, a `Geometry` is a `MeshDesc` ([README](src/geom/README.md)) |
+| `@thunderclap-engine/engine/models` | Procedural part models: `PartModel` part trees (box, cylinder, gear, ring, prism, frustum, wedge, any `Geometry`; turn, move, repeat), `compileModel` against the game's `MaterialCodeTable`, channel-driven motion and glow evaluated in the shader, `createModelScene` (a `Drawable`, one draw per unit), `ModelInstances` packing, `evaluateUnit` CPU twin ([README](src/models/README.md)) |
 
 **Templates.** Copyable games under `templates/`, each with a `CLAUDE.md` that names the engine concepts for an agent extending it: `puzzle`, `platformer`, `first-person` and `third-person` (see [Quick start](#quick-start)). `pnpm template:<name>` runs one inside this repo. `pnpm check` runs each one's typecheck and tests and scaffolds one into a temp dir (`check:create-game`); `pnpm test:e2e` boots each on the device matrix (`e2e/templates.spec.ts`).
 
