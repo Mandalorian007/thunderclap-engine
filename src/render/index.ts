@@ -30,7 +30,7 @@ export {
 // The retained render core (ws/core-retained, D1 §3, preview).
 export type { ArenaAlloc, ArenaDesc, ArenaKind } from './core/arena';
 export { Arena, createArena } from './core/arena';
-export type { CoreCaps, CoreTarget, RenderCoreOptions } from './core/core';
+export type { CoreCaps, CoreShadowTarget, CoreTarget, RenderCoreOptions } from './core/core';
 export { createRenderCore, MULTI_DRAW_FEATURE, RenderCore } from './core/core';
 export {
   ARGS_BYTES,
@@ -186,7 +186,13 @@ export {
   type SceneTargetDesc,
   VELOCITY_FORMAT,
 } from './scene-target';
-export { DEFAULT_SHADOW_SIZE, SHADOW_FORMAT, ShadowMap } from './shadow';
+export {
+  CoreSunShadow,
+  coreSunShadowWgsl,
+  DEFAULT_SHADOW_SIZE,
+  SHADOW_FORMAT,
+  ShadowMap,
+} from './shadow';
 export type { SkinPaletteDesc } from './skin';
 export { JOINT_FLOATS, SkinPalette, setVertexSkin } from './skin';
 export { type SnapshotOptions, SnapshotRenderer } from './snapshot';

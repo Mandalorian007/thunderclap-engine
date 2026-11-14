@@ -28,6 +28,7 @@ import { boot } from '@thunderclap-engine/engine/platform';
 import { PostStack } from '@thunderclap-engine/engine/post';
 import {
   Camera,
+  coreSunShadowWgsl,
   createRenderCore,
   DEPTH_FORMAT,
   gpuDiagnostics,
@@ -144,6 +145,7 @@ struct Look {
 @group(1) @binding(0) var<uniform> look: Look;
 @group(1) @binding(1) var blockSampler: sampler;
 @group(1) @binding(2) var blocks: texture_2d_array<f32>;
+${coreSunShadowWgsl(2)}
 
 fn block_layer(id: u32, face: u32) -> u32 {
   if (id == ${Block.Grass}u) {
@@ -160,7 +162,9 @@ fn block_layer(id: u32, face: u32) -> u32 {
   let albedo = textureSample(blocks, blockSampler, in.uv, layer).rgb;
   let n = in.normal;
   let sky = in.light.y;
-  let sun = look.sunColor.rgb * max(dot(n, -look.sunDir.xyz), 0.0) * smoothstep(0.3, 0.9, sky);
+  // The sun's shadow (ws/core-passes): the terrain casts into the renderer's map.
+  let lit = core_sun_shadow(in.world);
+  let sun = look.sunColor.rgb * max(dot(n, -look.sunDir.xyz), 0.0) * smoothstep(0.3, 0.9, sky) * lit;
   let amb = look.ambient.rgb * (0.65 + 0.35 * n.y) * mix(0.25, 1.0, sky);
   let torch = vec3f(1.0, 0.78, 0.5) * in.light.z * 1.4;
   let ao = mix(0.45, 1.0, in.light.x);
@@ -343,6 +347,12 @@ async function main(): Promise<void> {
   generateWorld(grid, SEED);
   const core = createRenderCore(renderer, { depthFormat: DEPTH_FORMAT });
   renderer.core = core;
+  // The opaque blocks receive the sun's shadow at group 2; re-bound when the map is remade.
+  const sunShadow = renderer.coreShadow;
+  const opaqueGroups = () => [
+    { layout: lookLayout, group: lookGroup },
+    { layout: sunShadow.layout, group: sunShadow.group },
+  ];
   // A few mesher Workers: an edit remeshes its section and the neighbours its light reaches.
   const threads = Math.max(1, Math.min(3, (navigator.hardwareConcurrency || 2) - 1));
   const workers = Array.from(
@@ -353,13 +363,14 @@ async function main(): Promise<void> {
     format,
     workers: workers.map((w) => workerMesherPort(w)),
     materials: {
-      opaque: { fragment: BLOCKS_FRAGMENT, bindGroups: [{ layout: lookLayout, group: lookGroup }] },
+      opaque: { fragment: BLOCKS_FRAGMENT, bindGroups: opaqueGroups() },
     },
     radius: Math.max(WORLD_X, WORLD_Z) / CHUNK,
     verticalRadius: WORLD_Y / CHUNK,
     label: 'voxel',
   });
   const source = feedVoxelGrid(world, grid, { outside: Block.Stone });
+  let sunShadowVersion = sunShadow.version;
   world.setInterest(WORLD_X / 2, WORLD_Y / 2, WORLD_Z / 2);
   /** An edit's round trip: set when a block changes, cleared when its remeshes are uploaded. */
   let editStart = -1;
@@ -689,6 +700,10 @@ async function main(): Promise<void> {
       device.queue.writeBuffer(lookBuffer, 0, lookData);
 
       const frame = renderer.beginFrame(time.realTime, time.frameDt);
+      if (sunShadowVersion !== sunShadow.version) {
+        world.sets.opaque.setBindGroups(opaqueGroups());
+        sunShadowVersion = sunShadow.version;
+      }
       frame.clear(0, 0, 0);
       frame.lights = lights;
       frame.drawable(sky, -1);

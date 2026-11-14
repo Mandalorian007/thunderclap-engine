@@ -46,6 +46,13 @@ export interface VoxelMaterial {
   bindGroups?: readonly { layout: GPUBindGroupLayout; group: GPUBindGroup }[];
   /** Default: none for opaque and foliage, alpha blending for liquid. */
   blend?: GPUBlendState;
+  /**
+   * The fragment entry the sun's shadow pass runs (ws/core-passes): one that `discard`s where
+   * the stream has holes. Foliage casts only with one; opaque casts without one.
+   */
+  shadowFragmentEntry?: string;
+  /** Cast the sun's shadow (`DrawSetDesc.castShadow`). Default: opaque, and foliage with a `shadowFragmentEntry`. */
+  castShadow?: boolean;
 }
 
 /** Options for `createVoxelWorld`. */
@@ -241,7 +248,11 @@ export function createVoxelWorld(core: RenderCore, opts: VoxelWorldOptions): Vox
         code: `${vertex}\n${m?.fragment ?? VOXEL_DEFAULT_FRAGMENT[stream]}`,
         blend: m?.blend ?? (stream === 'liquid' ? ALPHA_BLEND : undefined),
         cullMode: stream === 'opaque' ? 'back' : 'none',
+        shadowFragmentEntry: m?.shadowFragmentEntry,
       },
+      castShadow:
+        m?.castShadow ??
+        (stream === 'opaque' || (stream === 'foliage' && !!m?.shadowFragmentEntry)),
       vertexLayout: PACKED,
       instanceLayout: ORIGIN,
       vertices,

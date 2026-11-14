@@ -4,7 +4,7 @@
  */
 export type { ArenaAlloc, ArenaDesc, ArenaKind } from './arena';
 export { Arena, createArena } from './arena';
-export type { CoreCaps, CoreTarget, RenderCoreOptions } from './core';
+export type { CoreCaps, CoreShadowTarget, CoreTarget, RenderCoreOptions } from './core';
 export { createRenderCore, MULTI_DRAW_FEATURE, RenderCore } from './core';
 export {
   ARGS_BYTES,

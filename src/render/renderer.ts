@@ -1,7 +1,12 @@
 import type { BindingSet } from './bindings';
 import { ALL_LAYERS, CAMERA_BLOCK_FLOATS, Camera, type CameraRect, FRUSTUM_FLOATS } from './camera';
 import { type RendererCaps, rendererCaps } from './compressed';
-import { type CoreTarget, MULTI_DRAW_FEATURE, type RenderCore } from './core/core';
+import {
+  type CoreShadowTarget,
+  type CoreTarget,
+  MULTI_DRAW_FEATURE,
+  type RenderCore,
+} from './core/core';
 import { createRenderView, type RenderView, setViewFromCamera } from './core/view';
 import { installGpuErrorLogging } from './diagnostics';
 import {
@@ -54,7 +59,7 @@ import {
   type SceneTargetDesc,
   type SceneTargetViewport,
 } from './scene-target';
-import { DEFAULT_SHADOW_SIZE, SHADOW_FORMAT, ShadowMap } from './shadow';
+import { CoreSunShadow, DEFAULT_SHADOW_SIZE, SHADOW_FORMAT, ShadowMap } from './shadow';
 import {
   bytesPerTexel,
   createSamplers,
@@ -297,6 +302,16 @@ interface MultiDrawPass {
 }
 
 /** A scene command that can join a merged run: a fitting mesh from the shared instance buffer. */
+/** A shadow caster a shadow run can take: plain, indexed, small, through the shared pipeline. */
+function shadowRunnable(c: DrawCmd): boolean {
+  return (
+    runnable(c) &&
+    c.mesh!.indexBuffer !== null &&
+    !c.mesh!.layout.skinned &&
+    !c.material?.shadowFragment
+  );
+}
+
 function runnable(c: DrawCmd): boolean {
   return (
     c.drawable === null &&
@@ -626,6 +641,9 @@ export class Renderer implements FrameSink {
   private runOrd = new Int32Array(64);
   private runCap = new Int32Array(64);
   private readonly runEntries: (PoolEntry | null)[] = [];
+  /** The shadow pass's runs (ws/core-passes): run end per command (-1: none) and pool entries. */
+  private shadowRunEnd = new Int32Array(64);
+  private readonly shadowEntries: (PoolEntry | null)[] = [];
   private readonly runBundles: RunBundle[] = [];
   private readonly bundleList: GPURenderBundle[] = [];
   private runOrdinal = 0;
@@ -731,6 +749,18 @@ export class Renderer implements FrameSink {
   core: RenderCore | null = null;
   private readonly coreView: RenderView = createRenderView();
   private readonly coreViews: RenderView[] = [this.coreView];
+  /** The sun's view, a cull group of its own when the core casts shadows (ws/core-passes). */
+  private readonly coreSunView: RenderView = createRenderView();
+  private readonly coreViewsSun: RenderView[] = [this.coreView, this.coreSunView];
+  /** The core's casters draw into the sun's map this frame (`coreFor` decided). */
+  private coreCasts = false;
+  private coreShadowNow: CoreSunShadow | null = null;
+  private readonly coreShadowTarget: CoreShadowTarget = {
+    view: undefined as unknown as GPUTextureView,
+    format: SHADOW_FORMAT,
+    clear: false,
+    timestamps: (label) => this.gpuTimer?.pass(label),
+  };
   private readonly coreTarget: CoreTarget = {
     view: undefined as unknown as GPUTextureView,
     format: 'rgba8unorm',
@@ -1375,7 +1405,12 @@ export class Renderer implements FrameSink {
     }
     if (this.laneUsed) this.uploadLane(base);
 
-    const shadow = this.encodeShadow(enc, frame, camera, base);
+    // The retained core (ws/core-passes) is prepared before the shadow pass, which its casters
+    // join, and draws its opaque passes between this view's opaque and blended draws, into the
+    // same colour and depth, and its blended passes after them.
+    const core = depth ? this.coreFor(camera, target, vp, enc) : null;
+    const shadow = this.encodeShadow(enc, frame, camera, base, core);
+    if (core) this.coreShadowNow?.write(shadow !== null, core.origin);
     const slot = this.viewSlot(this.viewCount);
     this.writeView(frame, camera, target, slot, shadow);
     this.viewCount++;
@@ -1413,9 +1448,6 @@ export class Renderer implements FrameSink {
     // A view with a `readsDepth` drawable splits here: opaque draws, a copy of the depth
     // attachment, the drawables' `afterOpaque`, then the blended draws loading everything.
     const split = depth && this.splitAt >= 0 && target.canCopyDepth ? this.splitAt : -1;
-    // The retained core (ws/core-passes) draws its opaque passes between this view's opaque
-    // and blended draws, into the same colour and depth, and its blended passes after them.
-    const core = depth ? this.coreFor(camera, target, vp, enc) : null;
     const coreSplit = core && split < 0 && this.blendAt >= 0 ? this.blendAt : -1;
     const mainEnd = split >= 0 ? split : coreSplit >= 0 ? coreSplit : scene.count;
     const runs = this.planRuns(enc, mainEnd);
@@ -1480,6 +1512,16 @@ export class Renderer implements FrameSink {
     this.stats.batches += this.sceneBatches;
   }
 
+  /**
+   * The sun's shadow for `renderer.core`'s draw sets (ws/core-passes): bind `group` at the
+   * group the set's shader declares with `coreSunShadowWgsl` (layout `layout`) and re-bind when
+   * `version` changes. Sets with `castShadow` draw into the same map through the sun's view.
+   */
+  get coreShadow(): CoreSunShadow {
+    if (!this.coreShadowNow) this.coreShadowNow = new CoreSunShadow(this.device, this.shadow);
+    return this.coreShadowNow;
+  }
+
   /** The core to draw into this view, prepared, its target set; null when it has nothing. */
   private coreFor(
     camera: Camera,
@@ -1496,7 +1538,12 @@ export class Renderer implements FrameSink {
     }
     this.coreFrame = this.coreFrames;
     setViewFromCamera(this.coreView, camera);
-    core.prepare(enc, this.coreViews);
+    // The sun's view joins as a second cull group when the core has casters (ws/core-passes):
+    // `encodeShadow` draws them into the map through `core.drawShadow`.
+    const casts = !!this.frame.lights.sun.shadow && core.castsShadow;
+    this.coreCasts = casts;
+    if (casts) setViewFromCamera(this.coreSunView, this.shadow.sunCamera);
+    core.prepare(enc, casts ? this.coreViewsSun : this.coreViews);
     const t = this.coreTarget;
     t.view = target.color.view;
     t.format = target.color.format;
@@ -3285,12 +3332,14 @@ export class Renderer implements FrameSink {
     frame: Frame,
     camera: Camera,
     base: number,
+    core: RenderCore | null,
   ): ShadowUniforms | null {
     const cfg = frame.lights.sun.shadow;
     if (!cfg) return null;
     const cmds = this.shadowCmds.cmds;
     const n = this.shadowCmds.count;
-    if (n === 0) return null;
+    const coreCasts = core !== null && this.coreCasts;
+    if (n === 0 && !coreCasts) return null;
     const shadow = this.shadow;
     const size = cfg.size ?? DEFAULT_SHADOW_SIZE;
     if (shadow.ensure(size)) {
@@ -3316,6 +3365,14 @@ export class Renderer implements FrameSink {
     frame.lights.writeBlock(g, this.globalsU32, LIGHTS_OFFSET_FLOATS, null);
     this.device.queue.writeBuffer(slot.buffer, 0, g);
 
+    if (n === 0) {
+      // Only the core's casters: its pass clears the map.
+      this.encodeCoreShadow(enc, core!, true);
+      return shadow.uniforms;
+    }
+    const runs = this.planShadowRuns(enc, n);
+    const runEnd = this.shadowRunEnd;
+    const entries = this.shadowEntries;
     const desc = shadow.passDesc;
     desc.timestampWrites = this.gpuTimer?.pass('shadow');
     const pass = enc.beginRenderPass(desc);
@@ -3333,6 +3390,33 @@ export class Renderer implements FrameSink {
       if (pipeline !== curPipeline) {
         pass.setPipeline(pipeline);
         curPipeline = pipeline;
+      }
+      if (runs && runEnd[i]! > i) {
+        // A run: the meshes sit in the mesh pool's shared buffers, bound once.
+        const e = runEnd[i]!;
+        const e0 = entries[i]!;
+        pass.setVertexBuffer(0, e0.vertexBuffer);
+        pass.setVertexBuffer(1, this.instanceBuffer, base);
+        pass.setIndexBuffer(e0.indexBuffer, e0.indexFormat);
+        for (let k = i; k < e; k++) {
+          const ck = cmds[k]!;
+          const pk = entries[k]!;
+          const indices = ck.indexCount >= 0 ? ck.indexCount : ck.mesh!.indexCount;
+          if (indices === 0) continue;
+          pass.drawIndexed(
+            indices,
+            ck.count,
+            pk.firstIndex + ck.firstIndex,
+            pk.baseVertex,
+            ck.first,
+          );
+          drawn += ck.count;
+        }
+        this.stats.runs++;
+        curMesh = null;
+        curBuffer = null;
+        i = e - 1;
+        continue;
       }
       // A skinned caster's pipeline has the material group (its joint palette) as group 1, as
       // does a material's own shadow pipeline (`shadowFragmentEntry`).
@@ -3370,7 +3454,73 @@ export class Renderer implements FrameSink {
     }
     pass.end();
     this.stats.shadowDraws += drawn;
+    if (coreCasts) this.encodeCoreShadow(enc, core!, false);
     return shadow.uniforms;
+  }
+
+  /** The core's casters into the sun's map, through the sun's cull group (view 1). */
+  private encodeCoreShadow(enc: GPUCommandEncoder, core: RenderCore, clear: boolean): void {
+    const t = this.coreShadowTarget;
+    t.view = this.shadow.view;
+    t.clear = clear;
+    core.drawShadow(enc, 1, t);
+  }
+
+  /**
+   * B2's mesh runs in the shadow pass (ws/core-passes): `MIN_RUN` or more consecutive casters
+   * through one shadow pipeline, each a plain small indexed mesh (not skinned, no shadow
+   * fragment, the shared instance buffer), are copied into the mesh pool (before the pass: the
+   * copies are encoder work) and drawn from its shared buffers, bound once a run. Fills
+   * `shadowRunEnd` / `shadowEntries`; returns whether any run was found. No allocation once warm.
+   */
+  private planShadowRuns(enc: GPUCommandEncoder, n: number): boolean {
+    if (this.shadowRunEnd.length < n) {
+      let size = this.shadowRunEnd.length;
+      while (size < n) size *= 2;
+      this.shadowRunEnd = new Int32Array(size);
+    }
+    const cmds = this.shadowCmds.cmds;
+    const runEnd = this.shadowRunEnd;
+    const entries = this.shadowEntries;
+    while (entries.length < n) entries.push(null);
+    let any = false;
+    let i = 0;
+    while (i < n) {
+      const c = cmds[i]!;
+      runEnd[i] = -1;
+      if (!shadowRunnable(c)) {
+        i++;
+        continue;
+      }
+      let j = i + 1;
+      while (j < n && cmds[j]!.pipeline === c.pipeline && shadowRunnable(cmds[j]!)) {
+        runEnd[j] = -1;
+        j++;
+      }
+      if (j - i < MIN_RUN) {
+        i = j;
+        continue;
+      }
+      for (let k = i; k < j; k++) entries[k] = this.pool.get(cmds[k]!.mesh!, enc);
+      let s = i;
+      while (s < j) {
+        const e0 = entries[s]!;
+        let t = s + 1;
+        while (t < j) {
+          const e = entries[t]!;
+          if (e.vertexBuffer !== e0.vertexBuffer || e.indexBuffer !== e0.indexBuffer) break;
+          if (e.indexFormat !== e0.indexFormat) break;
+          t++;
+        }
+        if (t - s >= 2) {
+          runEnd[s] = t;
+          any = true;
+        }
+        s = t;
+      }
+      i = j;
+    }
+    return any;
   }
 
   /**

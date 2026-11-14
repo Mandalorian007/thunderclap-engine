@@ -71,6 +71,20 @@ export interface RenderCoreOptions {
   coalesceRebuilds?: boolean;
 }
 
+/**
+ * A depth-only target for `RenderCore.drawShadow` (ws/core-passes): a sun shadow map, or one
+ * cascade of one.
+ */
+export interface CoreShadowTarget {
+  view: GPUTextureView;
+  /** The map's depth format. */
+  format: GPUTextureFormat;
+  /** Clear depth to 1 first; without it the map is loaded (drawn over earlier casters). */
+  clear?: boolean;
+  /** GPU timing for the pass (see `CoreTarget.timestamps`), labelled `'shadow'`. */
+  timestamps?: (label: string) => GPURenderPassTimestampWrites | undefined;
+}
+
 /** Where a view draws: a colour view of a texture of `format` and size, cleared or loaded. */
 export interface CoreTarget {
   view: GPUTextureView;
@@ -212,6 +226,17 @@ export class RenderCore {
   private extDepth: GPUTextureView | null = null;
   /** Depth alone, cleared: before a read pass whose drawable samples depth nothing wrote yet. */
   private readonly passDescDepthClear: GPURenderPassDescriptor;
+  private readonly shadowAttachment: GPURenderPassDepthStencilAttachment = {
+    view: undefined as unknown as GPUTextureView,
+    depthLoadOp: 'clear',
+    depthStoreOp: 'store',
+    depthClearValue: 1,
+  };
+  private readonly passDescShadow: GPURenderPassDescriptor = {
+    label: 'core shadow',
+    colorAttachments: [],
+    depthStencilAttachment: this.shadowAttachment,
+  };
   /** The context handed to a pass's `encode`, rewritten per call. */
   private readonly passCtx = {} as CorePassContext;
   private readonly coalesce: boolean;
@@ -373,6 +398,16 @@ export class RenderCore {
   }
 
   /** True when some set has live slots, or some drawable is active (ws/core-passes; the `Renderer` skips the core otherwise). */
+  /** Some draw set casts the sun's shadow and has slots (`DrawSetDesc.castShadow`). */
+  get castsShadow(): boolean {
+    const sets = this.sets;
+    for (let i = 0; i < sets.length; i++) {
+      const s = sets[i]!;
+      if (s.castShadow && s.count > 0) return true;
+    }
+    return false;
+  }
+
   get hasWork(): boolean {
     const sets = this.sets;
     for (let i = 0; i < sets.length; i++) if (sets[i]!.count > 0) return true;
@@ -860,6 +895,65 @@ export class RenderCore {
       flat.push(single ? (src as RenderView) : (src as readonly RenderView[])[first + k]!);
     }
     return true;
+  }
+
+  /**
+   * Encode the shadow casters (`DrawSetDesc.castShadow`) of view `viewIndex` (of the last
+   * `prepare`) into the depth-only `target`, through the same cull and the same kind of bundles
+   * as the colour passes (ws/core-passes). The view is the light's: a sun camera set with
+   * `setViewFromCamera`, prepared with the frame's views as a cull group of its own. Cascades
+   * are one `CullGroup` with `planes: 'each'`, a view and a target per cascade. One render pass
+   * when a caster has slots or `target.clear` is set; none otherwise.
+   */
+  drawShadow(encoder: GPUCommandEncoder, viewIndex: number, target: CoreShadowTarget): void {
+    if (viewIndex < 0 || viewIndex >= this.viewsPrepared) {
+      throw new Error(`core.drawShadow: view ${viewIndex} was not prepared`);
+    }
+    const group = this.groupOf[viewIndex]!;
+    const sets = this.sets;
+    let any = false;
+    for (let i = 0; i < sets.length; i++) {
+      const s = sets[i]!;
+      if (s.castShadow && s.count > 0 && s.ready !== false) {
+        any = true;
+        break;
+      }
+    }
+    if (!any && !target.clear) return;
+    const st = this.stats;
+    if (any && this.groupSize[group]! > 1) {
+      encoder.copyBufferToBuffer(
+        this.viewBuffer,
+        viewIndex * VIEW_SLOT_BYTES,
+        this.currentBuffer,
+        0,
+        VIEW_SLOT_BYTES,
+      );
+      st.calls++;
+    }
+    const att = this.shadowAttachment;
+    att.view = target.view;
+    att.depthLoadOp = target.clear ? 'clear' : 'load';
+    const desc = this.passDescShadow;
+    desc.timestampWrites = target.timestamps?.('shadow');
+    const enc = encoder.beginRenderPass(desc);
+    st.calls++;
+    st.passes++;
+    const bundles = this.bundleList;
+    while (bundles.length > 0) bundles.pop();
+    for (let i = 0; i < sets.length; i++) {
+      const s = sets[i]!;
+      if (!s.castShadow || s.count === 0 || s.ready === false) continue;
+      if (s.encoding() === 'bundle') {
+        bundles.push(s.bundle(group, null, target.format, false));
+        continue;
+      }
+      if (bundles.length > 0) this.flushBundles(enc);
+      s.encodeDirect(enc, group, null, target.format);
+    }
+    if (bundles.length > 0) this.flushBundles(enc);
+    enc.end();
+    st.calls++;
   }
 
   private flushBundles(enc: GPURenderPassEncoder): void {

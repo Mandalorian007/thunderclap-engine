@@ -244,6 +244,14 @@ interface CorePassContext {
     depthReadOnly: boolean;
 }
 
+## CoreShadowTarget  (type-only)
+interface CoreShadowTarget {
+    view: GPUTextureView;
+    format: GPUTextureFormat;
+    clear?: boolean;
+    timestamps?: (label: string) => GPURenderPassTimestampWrites | undefined;
+}
+
 ## CoreStats  (type-only)
 interface CoreStats {
     calls: number;
@@ -255,6 +263,15 @@ interface CoreStats {
     bundleBuilds: number;
     bundleCalls: number;
     deferredBuilds: number;
+}
+
+## CoreSunShadow
+class CoreSunShadow {
+    readonly layout: GPUBindGroupLayout;
+    get version(): number;
+    constructor(device: GPUDevice, shadow: ShadowMap);
+    get group(): GPUBindGroup;
+    write(on: boolean, origin: ArrayLike<number>): void;
 }
 
 ## CoreTarget  (type-only)
@@ -349,6 +366,7 @@ class DrawSet {
     readonly pass: CorePass;
     readonly order: number;
     readonly depth: boolean;
+    readonly castShadow: boolean;
     version: number;
     staleFrame: number;
     constructor(host: DrawSetHost, desc: DrawSetDesc);
@@ -372,8 +390,8 @@ class DrawSet {
     upload(groups: number): void;
     dispatch(pass: GPUComputePassEncoder, groups: number): void;
     encoding(): Encoding;
-    bundle(group: number, color: GPUTextureFormat, depth: GPUTextureFormat | undefined, readOnly: boolean): GPURenderBundle;
-    encodeDirect(pass: GPURenderPassEncoder, group: number, color: GPUTextureFormat, depth: GPUTextureFormat | undefined): void;
+    bundle(group: number, color: GPUTextureFormat | null, depth: GPUTextureFormat | undefined, readOnly: boolean): GPURenderBundle;
+    encodeDirect(pass: GPURenderPassEncoder, group: number, color: GPUTextureFormat | null, depth: GPUTextureFormat | undefined): void;
     waitsForTurn(): boolean;
 }
 
@@ -395,6 +413,7 @@ interface DrawSetDesc {
     pass?: string;
     depth?: boolean;
     order?: number;
+    castShadow?: boolean;
     bindGroups?: readonly {
         layout: GPUBindGroupLayout;
         group: GPUBindGroup;
@@ -413,6 +432,7 @@ interface DrawSetShader {
     blend?: GPUBlendState;
     cullMode?: GPUCullMode;
     depthCompare?: GPUCompareFunction;
+    shadowFragmentEntry?: string;
 }
 
 ## Drawable  (type-only)
@@ -1113,6 +1133,7 @@ class RenderCore {
     constructor(device: GPUDevice, opts?: RenderCoreOptions);
     createArena(desc: ArenaDesc): Arena;
     restore(device: GPUDevice): void;
+    get castsShadow(): boolean;
     get hasWork(): boolean;
     onDeviceRestored(fn: (device: GPUDevice) => void): () => void;
     createDrawSet(desc: DrawSetDesc): DrawSet;
@@ -1130,6 +1151,7 @@ class RenderCore {
     prepare(encoder: GPUCommandEncoder, views: readonly RenderView[] | readonly CullGroup[]): void;
     draw(encoder: GPUCommandEncoder, viewIndex: number, target: CoreTarget): void;
     destroy(): void;
+    drawShadow(encoder: GPUCommandEncoder, viewIndex: number, target: CoreShadowTarget): void;
 }
 
 ## RenderCoreOptions  (type-only)
@@ -1235,6 +1257,7 @@ class Renderer implements FrameSink {
     lodLevelOf(batch: object, index: number, camera?: Camera): number;
     beginFrame(time: number, dt: number): Frame;
     render(frame: Frame, camera: Camera, target?: SceneTarget): void;
+    get coreShadow(): CoreSunShadow;
     resolve(target: SceneTarget, out: GPUTextureView, viewport?: SceneTargetViewport): void;
     endFrame(opts?: {
         present?: boolean;
@@ -1831,6 +1854,9 @@ function bytesPerTexel(format: GPUTextureFormat): number;
 
 ## compressionFeatures
 function compressionFeatures(adapter: HasFeatures): GPUFeatureName[];
+
+## coreSunShadowWgsl
+function coreSunShadowWgsl(group: number): string;
 
 ## createArena
 function createArena(device: GPUDevice, desc: ArenaDesc): Arena;
