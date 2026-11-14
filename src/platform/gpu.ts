@@ -110,3 +110,52 @@ export async function initGpu(
 
   return { ok: true, gpu: { adapter, device, context, format, timestamps } };
 }
+
+/**
+ * After a device loss: request a new adapter and device with the features the lost device had,
+ * configure the canvas on it, and update `gpu` in place (`adapter`, `device`). Returns the new
+ * device, or `null` when the GPU is gone for good (no adapter or no device): then the caller's
+ * reload screen stands. A lost device's adapter can't make another, so the adapter is new too.
+ * Hand the device to `RenderCore.restore`, which rebuilds the core and fires its one
+ * `onDeviceRestored` event (ws/core-passes).
+ */
+export async function restoreGpu(
+  gpu: GpuContext,
+  opts: Pick<GpuInitOptions, 'powerPreference' | 'onLost'> = {},
+): Promise<GPUDevice | null> {
+  const api = (navigator as Navigator & { gpu?: GPU }).gpu;
+  if (!api) return null;
+  let adapter: GPUAdapter | null = null;
+  try {
+    adapter = await api.requestAdapter({
+      powerPreference: opts.powerPreference ?? 'high-performance',
+    });
+  } catch {
+    return null;
+  }
+  if (!adapter) return null;
+  const had = gpu.device.features as ReadonlySet<string>;
+  const wanted = [...had].filter((f) =>
+    (adapter.features as ReadonlySet<string>).has(f),
+  ) as GPUFeatureName[];
+  let device: GPUDevice;
+  try {
+    device = await adapter.requestDevice({ label: 'engine-device', requiredFeatures: wanted });
+  } catch {
+    try {
+      device = await adapter.requestDevice({ label: 'engine-device' });
+    } catch {
+      return null;
+    }
+  }
+  device.lost.then((info) => {
+    if (info.reason === 'destroyed') return;
+    console.error(`[gpu] device lost: ${info.reason} ${info.message}`);
+    opts.onLost?.(info);
+  });
+  gpu.context.configure({ device, format: gpu.format, alphaMode: 'opaque' });
+  gpu.adapter = adapter;
+  gpu.device = device;
+  gpu.timestamps = device.features.has('timestamp-query');
+  return device;
+}

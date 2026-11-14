@@ -10,8 +10,12 @@
  * (`originGrid`, D1 §3.8): every slot's origin is the far corner, the view is written relative
  * to the snapped frame origin, and the shader adds `core_origin`, so the picture matches the one
  * at the origin. Nothing here is engine code beyond the core and `boot`.
+ *
+ * `window.__harnessCore.lose()` (ws/core-passes) destroys the device; the page gets a new one
+ * (`restoreGpu`), hands it to `core.restore`, and on the core's one `onDeviceRestored` event
+ * writes the boxes' bytes again, so the same picture comes back.
  */
-import { boot } from '@thunderclap-engine/engine/platform';
+import { boot, restoreGpu } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
   createInstanceLayout,
@@ -49,8 +53,13 @@ const state: HarnessCoreState = {
   firstInstance: false,
   far,
   origin: [0, 0, 0],
+  restores: 0,
+  restoredEvents: 0,
 };
-window.__harnessCore = { state };
+let lose: () => Promise<void> = async () => {
+  throw new Error('core page not ready');
+};
+window.__harnessCore = { state, lose: () => lose() };
 
 /**
  * The packed vertex: word 0 holds the corner (bits 0–2: x, y, z of the unit box) and the face
@@ -154,9 +163,10 @@ async function main(): Promise<void> {
   const side = Math.ceil(Math.sqrt(sets));
   const spacing = 6;
   const half = (side * spacing) / 2;
-  const place = new Float32Array(4);
   const spheres = new Float32Array(sets * 4);
   const origin = far > 0 ? [far, 0, far] : undefined;
+  /** Each box's bytes, kept to write again after a device loss. */
+  const writes: (() => void)[] = [];
   for (let i = 0; i < sets; i++) {
     const x = (i % side) * spacing - half;
     const z = Math.floor(i / side) * spacing - half;
@@ -167,10 +177,15 @@ async function main(): Promise<void> {
     const g = (shade * 190) | 0;
     const b = (shade * 170 + 40) | 0;
     const v = vertices.alloc(24 * 8, 8);
-    vertices.write(v, boxVertices(r | (g << 8) | (b << 16) | (255 << 24)));
+    const bytes = boxVertices(r | (g << 8) | (b << 16) | (255 << 24));
     const inst = instances.alloc(16, 16);
-    place.set([x, z, w, h]);
-    instances.write(inst, place);
+    const at = new Float32Array([x, z, w, h]);
+    const write = () => {
+      vertices.write(v, bytes);
+      instances.write(inst, at);
+    };
+    write();
+    writes.push(write);
     const radius = Math.hypot(w * 0.75, h / 2, w * 0.75);
     spheres.set([x, h / 2, z, radius], i * 4);
     set.add({
@@ -195,11 +210,31 @@ async function main(): Promise<void> {
     height: 1,
     clear: { r: 0.05, g: 0.06, b: 0.09, a: 1 },
   };
+  // The one event the page sees after a loss: the core is rebuilt; its arenas' bytes are ours.
+  core.onDeviceRestored((device) => {
+    installGpuErrorLogging(device);
+    for (const w of writes) w();
+    state.restoredEvents++;
+  });
+  let paused = false;
+  lose = async () => {
+    paused = true;
+    const lost = gpu.device.lost;
+    gpu.device.destroy();
+    await lost;
+    const device = await restoreGpu(gpu);
+    if (!device) throw new Error('no device after the loss');
+    core.restore(device);
+    state.restores = core.restores;
+    paused = false;
+    requestAnimationFrame(frame);
+  };
   state.gpu = 'ok';
   state.ready = true;
   const start = performance.now();
 
   const frame = () => {
+    if (paused) return;
     const t = still ? 0 : (performance.now() - start) / 1000;
     const { width, height } = surface.backbuffer;
     camera.setPerspective(Math.PI / 3, width / Math.max(1, height), 0.5, 2000);

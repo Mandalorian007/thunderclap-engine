@@ -25,7 +25,8 @@ export const CULL_WORKGROUP = 64;
 
 /**
  * Slot table word offsets: the bounding sphere (f32 × 4), then the draw (u32): index count,
- * first index, base vertex (i32), instance count, first instance, flags (bit 0: live).
+ * first index, base vertex (i32), instance count, first instance, flags (bit 0: live, bit 1:
+ * hidden).
  */
 export const SLOT = {
   x: 0,
@@ -42,6 +43,11 @@ export const SLOT = {
 
 /** `SLOT.flags` bit: the slot holds a draw. */
 export const SLOT_LIVE = 1;
+/**
+ * `SLOT.flags` bit: the slot is hidden (`DrawSet.setHidden`): it stays in the set and in its
+ * bundles but draws nothing, as if culled.
+ */
+export const SLOT_HIDDEN = 2;
 
 export const CULL_WGSL = /* wgsl */ `${CORE_VIEW_WGSL}
 struct CullParams { count: u32, capacity: u32, views: u32, firstInstance: u32 };
@@ -56,7 +62,7 @@ struct Slot { sphere: vec4f, draw: vec4u, inst: vec4u };
   let v = id.y;
   if (i >= params.count || v >= params.views) { return; }
   let s = slots[i];
-  var visible = (s.inst.y & 1u) != 0u;
+  var visible = (s.inst.y & 3u) == 1u;
   for (var k = 0u; k < 6u; k++) {
     let p = views[v].planes[k];
     if (dot(p.xyz, s.sphere.xyz) + p.w < -s.sphere.w) { visible = false; }
@@ -91,7 +97,7 @@ export function cullSlotsCpu(
     const at = v * VIEW_SLOT_FLOATS + 20;
     for (let i = 0; i < count; i++) {
       const s = i * SLOT_WORDS;
-      const live = (slotsU32[s + SLOT.flags]! & SLOT_LIVE) !== 0;
+      const live = (slotsU32[s + SLOT.flags]! & (SLOT_LIVE | SLOT_HIDDEN)) === SLOT_LIVE;
       const visible =
         live &&
         sphereInPlanes(
