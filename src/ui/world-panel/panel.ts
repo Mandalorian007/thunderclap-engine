@@ -28,7 +28,7 @@ import type { Camera } from '../../render/camera';
 import type { Drawable, Frame } from '../../render/frame';
 import type { Renderer } from '../../render/renderer';
 import { auxSuffix, ScenePipelineCache, sceneVariant } from '../../render/scene-pipelines';
-import type { Texture } from '../../render/texture';
+import { Texture } from '../../render/texture';
 import { Transform } from '../../render/transform';
 import { createShaderModule } from '../../render/wgsl';
 import type { ThemeTokens } from '../theme';
@@ -116,6 +116,19 @@ interface TrackedPointer {
   y: number;
 }
 
+/**
+ * A device without a renderer (ws/ui-fit): a `RenderCore`, or `{ device }` of a game's own. A panel
+ * made on one paints and uploads its texture each `prepare` but draws nothing itself: the game
+ * samples `panel.texture` in its own pass.
+ */
+export interface PanelGpu {
+  readonly device: GPUDevice;
+}
+
+function isRenderer(g: Renderer | PanelGpu): g is Renderer {
+  return typeof (g as Partial<Renderer>).sceneTargets === 'function';
+}
+
 export class WorldPanel implements Drawable, WorldWidgetHost {
   readonly transform = new Transform();
   /** Panel size in world units. */
@@ -171,13 +184,14 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
   private pressCount = 0;
   private readonly tracked: TrackedPointer[] = [];
   private nextTrackedId = 1;
-  private readonly uniform: GPUBuffer;
+  private readonly uniform: GPUBuffer | null;
   private readonly uniformData = new Float32Array(WORLD_PANEL_UNIFORM_FLOATS);
   private readonly uniformSent = new Float32Array(WORLD_PANEL_UNIFORM_FLOATS);
   private uniformDirty = true;
-  private readonly group: GPUBindGroup;
-  private readonly renderer: Renderer;
-  private readonly pipelineDesc: GPURenderPipelineDescriptor;
+  private readonly group: GPUBindGroup | null;
+  /** Its renderer; null on a bare device (`PanelGpu`): it draws nothing itself. */
+  private readonly renderer: Renderer | null;
+  private readonly pipelineDesc: GPURenderPipelineDescriptor | null;
   /**
    * Pipelines per (depth format, target aux key) (ws/core-8): a panel drawn into
    * `renderer.target` with aux attachments and into a plain target (an XR eye, a probe) in the
@@ -193,9 +207,10 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
   /** The camera `attach` follows, read again at draw time (`prepare`); null when not attached. */
   private followCam: (() => Camera | null) | null = null;
 
-  constructor(renderer: Renderer, opts: WorldPanelOptions) {
+  constructor(gpu: Renderer | PanelGpu, opts: WorldPanelOptions) {
+    const renderer = isRenderer(gpu) ? gpu : null;
     this.renderer = renderer;
-    this.device = renderer.device;
+    this.device = gpu.device;
     this.label = opts.label ?? 'world-panel';
     this.width = opts.width;
     this.height = opts.height;
@@ -221,52 +236,58 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
     this.painter = new Painter(ctx, this.theme);
     this.routerHit = createHit<WorldPanel>(this);
 
-    this.texture = renderer.createTexture({
+    this.texture = new Texture(this.device, {
       width: this.pxWidth,
       height: this.pxHeight,
       format: 'rgba8unorm-srgb',
       label: `${this.label}-texture`,
     });
-    const device = this.device;
-    this.uniform = device.createBuffer({
-      label: `${this.label}-uniform`,
-      size: WORLD_PANEL_UNIFORM_BYTES,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    const groupLayout = device.createBindGroupLayout({
-      label: `${this.label}-layout`,
-      entries: [
-        { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform' } },
-        { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
-        { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: {} },
-      ],
-    });
-    this.group = device.createBindGroup({
-      label: this.label,
-      layout: groupLayout,
-      entries: [
-        { binding: 0, resource: { buffer: this.uniform } },
-        { binding: 1, resource: renderer.samplers['linear-clamp'] },
-        { binding: 2, resource: this.texture.view },
-      ],
-    });
-    const mod = createShaderModule(device, WORLD_PANEL_WGSL, this.label);
-    this.pipelineDesc = {
-      label: this.label,
-      layout: device.createPipelineLayout({
-        bindGroupLayouts: [renderer.globalsLayout, groupLayout],
-      }),
-      vertex: { module: mod, entryPoint: 'vs' },
-      fragment: {
-        module: mod,
-        entryPoint: 'fs',
-        targets: renderer.sceneTargets(PREMULTIPLIED),
-      },
-      primitive: { topology: 'triangle-list', cullMode: 'none' },
-    };
     this.uniformData[12] = this.width;
     this.uniformData[13] = this.height;
     this.uniformSent.fill(Number.NaN);
+    if (!renderer) {
+      this.uniform = null;
+      this.group = null;
+      this.pipelineDesc = null;
+    } else {
+      const device = this.device;
+      this.uniform = device.createBuffer({
+        label: `${this.label}-uniform`,
+        size: WORLD_PANEL_UNIFORM_BYTES,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
+      const groupLayout = device.createBindGroupLayout({
+        label: `${this.label}-layout`,
+        entries: [
+          { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform' } },
+          { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
+          { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+        ],
+      });
+      this.group = device.createBindGroup({
+        label: this.label,
+        layout: groupLayout,
+        entries: [
+          { binding: 0, resource: { buffer: this.uniform } },
+          { binding: 1, resource: renderer.samplers['linear-clamp'] },
+          { binding: 2, resource: this.texture.view },
+        ],
+      });
+      const mod = createShaderModule(device, WORLD_PANEL_WGSL, this.label);
+      this.pipelineDesc = {
+        label: this.label,
+        layout: device.createPipelineLayout({
+          bindGroupLayouts: [renderer.globalsLayout, groupLayout],
+        }),
+        vertex: { module: mod, entryPoint: 'vs' },
+        fragment: {
+          module: mod,
+          entryPoint: 'fs',
+          targets: renderer.sceneTargets(PREMULTIPLIED),
+        },
+        primitive: { topology: 'triangle-list', cullMode: 'none' },
+      };
+    }
     this.markAllDirty();
 
     const fonts = typeof document !== 'undefined' ? document.fonts : undefined;
@@ -937,6 +958,8 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
       u.w = 0;
       u.h = 0;
     }
+    // On a bare device: the texture is the panel (the game draws it).
+    if (!this.uniform) return;
     const m = this.transform.world;
     const d = this.uniformData;
     for (let i = 0; i < 12; i++) d[i] = m[i]!;
@@ -958,7 +981,7 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
   /** Draw the quad inside the scene pass, with the pipeline for its depth format and aux key. */
   draw(pass: GPURenderPassEncoder, frame?: Frame): void {
     this.draws = 0;
-    if (this.disposed) return;
+    if (this.disposed || !this.renderer || !this.group) return;
     const fmt = frame?.depthFormat ?? null;
     const aux = frame ? (frame.auxKey ?? 0) : this.renderer.target.auxKey;
     pass.setBindGroup(1, this.group);
@@ -977,8 +1000,8 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
       aux,
       this.device.createRenderPipeline(
         sceneVariant(
-          this.pipelineDesc,
-          this.renderer.sceneTargets(PREMULTIPLIED, aux),
+          this.pipelineDesc!,
+          this.renderer!.sceneTargets(PREMULTIPLIED, aux),
           label,
           format
             ? {
@@ -1004,7 +1027,7 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
     this.presses.clear();
     this.pressCount = 0;
     this.texture.destroy();
-    this.uniform.destroy();
+    this.uniform?.destroy();
   }
 
   /** Whether a press is held on some widget. */
@@ -1016,9 +1039,12 @@ export class WorldPanel implements Drawable, WorldWidgetHost {
 /** The panel's blend (one object, so `sceneTargets` caches one list per aux key). */
 const PREMULTIPLIED = blendState('premultiplied');
 
-/** `new WorldPanel(renderer, opts)`. */
-export function createWorldPanel(renderer: Renderer, opts: WorldPanelOptions): WorldPanel {
-  return new WorldPanel(renderer, opts);
+/**
+ * `new WorldPanel(renderer, opts)`: a quad the renderer draws; on a bare device (a `RenderCore`,
+ * `{ device }`: ws/ui-fit) only its painted `texture`, for the game to draw.
+ */
+export function createWorldPanel(gpu: Renderer | PanelGpu, opts: WorldPanelOptions): WorldPanel {
+  return new WorldPanel(gpu, opts);
 }
 
 /** The pointer router's `HitTester` for `panel`: `router.addTester(worldPanelTarget(panel))`. */

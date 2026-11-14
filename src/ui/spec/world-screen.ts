@@ -10,7 +10,7 @@ import type { Renderer } from '../../render/renderer';
 import type { RegionName } from '../layout';
 import type { PanelRect } from '../world-panel/layout';
 import type { Painter, PanelCanvas } from '../world-panel/paint';
-import { WorldPanel } from '../world-panel/panel';
+import { type PanelGpu, WorldPanel } from '../world-panel/panel';
 import { WorldWidget } from '../world-panel/widgets';
 import type { SpecHud } from './hud';
 import type { SpecPanel } from './panel';
@@ -40,10 +40,11 @@ export interface WorldScreenOptions {
 /**
  * A head-following screen: a transparent, head-locked world panel with no depth test (always on
  * top of the scene), following lazily; rays pass through its empty parts. Attach it to the input (`screen.attach(input)`) for its
- * rays and its head camera; draw it as any drawable.
+ * rays and its head camera; draw it as any drawable. On a bare device (a `RenderCore`, `{ device }`:
+ * ws/ui-fit) it paints its `texture` and the game draws it.
  */
-export function worldScreen(renderer: Renderer, opts: WorldScreenOptions = {}): WorldPanel {
-  return new WorldPanel(renderer, {
+export function worldScreen(gpu: Renderer | PanelGpu, opts: WorldScreenOptions = {}): WorldPanel {
+  return new WorldPanel(gpu, {
     width: opts.width ?? 1.6,
     height: opts.height ?? 0.9,
     resolution: opts.resolution ?? 800,

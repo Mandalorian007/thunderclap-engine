@@ -91,6 +91,7 @@ export const WEBKIT_SPECS = [
   'ui',
   'ui-spec',
   'ui-world',
+  'ui-fit',
   'net',
   'input',
   'layout',
