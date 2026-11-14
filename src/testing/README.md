@@ -72,6 +72,24 @@ expect(g.ctx.loop.halted).toBe(true);    // and g.step() now runs nothing
 
 The headless game shows no reload screen (there is none without WebGPU); a game that draws its own does so in `hooks.deviceLost`. Tests: `src/testing/test-game-node.test.ts`.
 
+## Counted work: `createWorkMeter` and `budget`
+
+A frame's cost, counted rather than timed, so a shared CI machine can hold it (ws/budget, E-041). `createWorkMeter(device, opts?: WorkMeterOptions)` (`{ trace?: boolean }`) wraps a `GPUDevice` (usually `createFakeDevice().device`) in a Proxy and returns a `WorkMeter`: give `meter.device` to the code under test (`new Renderer({ device: meter.device, context: fakeCanvasContext(fake), format })`), then `meter.run(frame, opts?: RunOptions)` (`{ frames = 60, warmup = 10 }`) calls `frame(i)` for the warm-up uncounted and for the measured frames counted, and returns a `WorkReport`, averaged per frame:
+
+- `gpu`: a `GpuCounts`. `commands` is every call on the device, the queue, command encoders, passes and bundle encoders; then by kind: `draw`, `drawIndexed`, `drawIndirect`, `drawIndexedIndirect`, `setPipeline`, `setBindGroup`, `setVertexBuffer`, `setIndexBuffer`, `dispatch`, `beginRenderPass`, `beginComputePass`, `executeBundles`, `submit`, `writeBuffer` and `writeBufferBytes`, `writeTexture`, `copies`, `createBuffer`, `createTexture`, `createBindGroup`, `createOther` (any other `create*` on the device: command encoders, samplers, pipelines, layouts), and `byMethod` for any call by name. Resources the device returns are not wrapped, so `texture.createView()` is not counted. Indirect draws, `executeBundles` and debug markers the device lacks are counted no-ops.
+- `allocs`: an `AllocCounts` of typed arrays, `ArrayBuffer`s (and `SharedArrayBuffer`s) and `DataView`s the frame's code constructed (`byType` by constructor). The global constructors are proxied only while counting, and what the device allocates inside its own calls is not counted.
+- `clockReads`: `performance.now()` and `Date.now()` calls.
+- `views`: with `meter.view(name)` called inside the frame, the GPU calls after it count toward `name` (calls before the first mark toward `frame`); empty when the frame marks none.
+- `commandsPerFrame` (one entry per measured frame) and, with `trace: true`, `trace`: every call normalized as `method(args)` (numbers as written, arrays `[n]`, bytes `<bytes:n>`, GPU objects `{label}` or `{createBuffer#n}`), each frame ending in `'--'`.
+
+`meter.measure(fn)` counts one call of `fn`. `countAllocs(fn)` counts only allocations, with no device.
+
+`budget(report, limits, label?)` takes `BudgetLimits` and throws a `BudgetError` naming every counter over its limit (`{ draw: 4, commands: 40, typedArrays: 0, clockReads: 0 }`; any `GpuCounts` number plus `typedArrays`, `arrayBuffers`, `dataViews`, `clockReads`), and returns the report. `expectProportional(run, sizes, opts?: ProportionalOptions)` (`{ shape = 'linear', slack, perUnit, label }`) runs `run(size)` per size and fails unless the counts are flat (`shape: 'flat'`) or on one straight line with no negative overhead (within `slack`, at most `perUnit` per unit); it returns the fit, a `ProportionalResult` (`sizes`, `values`, `slope`, `intercept`). Use it to say "commands do not grow with what is held".
+
+`traceGolden(trace)` turns a trace into a `TraceGolden` (`sha256`, `frames`, `perFrame` as run-length `[calls, frames]` pairs, and the `first` frame's calls) to commit as JSON; `diffTraceGolden(got, want)` is `null` on a match or names the first difference. `sha256Hex(text)` is the hash, in plain TS.
+
+`src/render/baseline.budget.test.ts` uses all of this on the bench rungs and harness scenes: the 1.3 baseline in docs/BENCH.md ("Counted work, 1.3 baseline").
+
 ## Fake GPU
 
 `createFakeDevice(opts?)` returns a recording fake `GPUDevice` as a `FakeDevice`, and `fakeRendererGpu(fake)` wraps it for `new Renderer(...)`, so the renderer and its props run in Node. It checks buffer and texture usage flags such as COPY_DST, catches writes past the end of a buffer, and records pass commands such as `setBindGroup` offsets and draws. `installGpuGlobals()` defines `GPUBufferUsage`, `GPUTextureUsage`, `GPUShaderStage` and `GPUMapMode` in Node. `fakeCanvasContext(fake)` is the context `fakeRendererGpu` uses.

@@ -17,6 +17,26 @@ export {
   type PassCommand,
 } from '../render/fake-gpu';
 export {
+  type AllocCounts,
+  BudgetError,
+  type BudgetLimits,
+  budget,
+  countAllocs,
+  createWorkMeter,
+  diffTraceGolden,
+  expectProportional,
+  type GpuCounts,
+  type ProportionalOptions,
+  type ProportionalResult,
+  type RunOptions,
+  sha256Hex,
+  type TraceGolden,
+  traceGolden,
+  type WorkMeter,
+  type WorkMeterOptions,
+  type WorkReport,
+} from './budget';
+export {
   createFakeHost,
   type FakeHapticCall,
   type FakeHost,

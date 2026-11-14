@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // `pnpm bench`: runs harness/bench.html (`?rung=all`) in headless Chromium at the matrix's
-// `desktop-1280` size, prints the ladder as a Markdown table and rewrites docs/BENCH.md wholesale.
+// `desktop-1280` size, prints the ladder as a Markdown table and rewrites docs/BENCH.md (all but its counted-work section).
 //
 // Non-interactive. Exits non-zero when WebGPU does not come up, a rung throws, the page logs an
 // error or the GPU reports errors (`gpuDiagnostics.errorCount`). No dependency beyond Playwright
@@ -12,7 +12,7 @@
 // on 4179 + offset, so it never meets a running `pnpm test:e2e` of the same checkout.
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from '@playwright/test';
@@ -225,7 +225,10 @@ async function main() {
     if (write) {
       const d = new Date();
       const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-      writeFileSync(out, renderDoc(state, date));
+      // Keep the counted-work section (src/render/baseline.budget.test.ts writes it, ws/budget).
+      const prev = existsSync(out) ? readFileSync(out, 'utf8') : '';
+      const at = prev.indexOf('\n## Counted work, 1.3 baseline\n');
+      writeFileSync(out, renderDoc(state, date) + (at < 0 ? '' : prev.slice(at)));
       console.log(`wrote ${relative(root, out)}`);
     }
   } finally {

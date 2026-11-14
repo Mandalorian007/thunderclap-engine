@@ -204,14 +204,18 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 6 | VR correctness: loop survives a throwing frame, no XR frame cap, exposure once per frame, union head frustum, XR culls, no viewless page render, head-locked panels follow the head | ws/xr-fixes | brief `docs/briefs/xr-fixes.md` | E-038 | ✅ merged at 57b6cbd (e2e 2837 passed / 0 failed, snap 0 px) |
 | 3 | Doc sweep | ws/doc-sweep | ARCHITECTURE *Planned* lines that are now *Today*; module READMEs vs code; root README table; CHANGELOG grouping; superseded plans to `docs/archive/` | render-call | ✅ merged `7b1c054` (`check:docs` added, 132 names left for sweep 2) |
 | 2.0-1 | A1 rails: WebKit iPad project, check:wgsl, check:bundle + tree-shake, `next` publishing | ws/rails | brief `docs/briefs/rails.md` | E-041 | 🔨 running |
-| 2.0-1 | A2 budget: counted work in `testing`, 1.3 baseline in BENCH | ws/budget | brief `docs/briefs/budget.md` | E-041 | 🔨 running |
+| 2.0-1 | A2 budget: counted work in `testing`, 1.3 baseline in BENCH | ws/budget | brief `docs/briefs/budget.md` | E-041 | ✅ merged at 24ba6ff (check 2547 tests, snap 0 px); baseline distinct 1.5k/6k = 1,418/5,775 cmds |
 | 2.0-1 | A3 kit: createGame as a service composer, `./kit`, external loop | ws/kit | brief `docs/briefs/kit.md` | E-041 | 🔨 running |
-| 2.0-1 | B1 core-retained: arenas, DrawSets, bundles + indirect, GPU cull, pass list, views | ws/core-retained | brief `docs/briefs/core-retained.md` | E-041 | 🔨 running |
-| 2.0-1 | C1 voxel-data: section store, BlockTable, VertexSchema, mesher pool, light, raycast | ws/voxel-data | brief `docs/briefs/voxel-data.md` | E-041 | 🔨 running |
+| 2.0-1 | B1 core-retained: arenas, DrawSets, bundles + indirect, GPU cull, pass list, views | ws/core-retained | brief `docs/briefs/core-retained.md` | E-041 | ⏳ integrating (a237c57): held frame 9 GPU calls at 1.5k and 6k (was 1,418 / 5,775) |
+| 2.0-1 | C1 voxel-data: section store, BlockTable, VertexSchema, mesher pool, light, raycast | ws/voxel-data | brief `docs/briefs/voxel-data.md` | E-041 | ⏳ integrating (cd4fb11): 47 tests, Forge mesher tests ported, schema decode bit-exact |
 | 2.0-1 | C3 models: part models from data, `./models` | ws/models | brief `docs/briefs/models.md` | E-041 | 🔨 running |
 | 2.0-1 | C5 ui-spec: UI words, model, layout, DOM presenter, tokens | ws/ui-spec | brief `docs/briefs/ui-spec.md` | E-041 | 🔨 running |
 | 2.0-1 | C7 intents-quality: input intents, `./quality` tiers + governor | ws/intents-quality | brief `docs/briefs/intents-quality.md` | E-041 | 🔨 running |
 | 2.0-1 | C9 net: client sessions over a handed-in transport, schemas + hash, snapshots, prediction | ws/net | brief `docs/briefs/net.md` | E-042 | 🔨 running |
+| 2.0-1 | A4 ref-scenes: S1–S6 pages, rungs, counted budgets | ws/ref-scenes | brief `docs/briefs/ref-scenes.md` | E-041 | 🔨 running |
+| 2.0-2 | B2 core-immediate: the immediate API as transient sets on the core; per-mesh path deleted | ws/core-immediate | brief `docs/briefs/core-immediate.md` | E-041 | 🔨 running |
+| 2.0-2 | B3 core-views: views plural, stereo once, camera-relative origin | ws/core-views | brief `docs/briefs/core-views.md` | E-041 | 🔨 running |
+| 2.0-2 | C2 voxel-draw: sections on the core, cave cull, streaming budgets; old demo module replaced | ws/voxel-draw | brief `docs/briefs/voxel-draw.md` | E-041 | 🔨 running |
 | 2.0-1 | S0 server foundation + net seam research (proposal only) | — | ROADMAP S0 | E-041 | ✅ accepted: `docs/design/2.0/server.md`, E-042 |
 
 ## Gates
