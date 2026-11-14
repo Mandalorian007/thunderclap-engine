@@ -5,6 +5,10 @@
 # or secret exists anywhere. Each package needs a trusted publisher on npmjs.com pointing at
 # Mandalorian007/thunderclap-engine and publish.yml (docs/releasing.md). Provenance is attached.
 #
+# A prerelease version (any `-` suffix, e.g. 2.0.0-next.0) publishes under the npm dist-tag `next`,
+# never `latest`, so `npm install @thunderclap-engine/engine` keeps resolving the last stable
+# release; the GitHub Release is marked a pre-release. Each package's own version decides its tag.
+#
 # A package whose exact version is already on npm is skipped, so a tag that bumps only the engine
 # still succeeds; bump a host's own package.json version to publish it.
 #
@@ -76,8 +80,13 @@ jobs:
             # pnpm pack applies publishConfig (dist/ exports) and rewrites workspace: ranges;
             # npm publishes that tarball with provenance over OIDC.
             tarball=$(cd "$dir" && pnpm pack --pack-destination "$out" | tail -n 1)
-            npm publish "$tarball" --access public --provenance
-            echo "published $name@$version"
+            # A prerelease goes to `next`, never `latest` (scripts/release.mjs distTag).
+            case "$version" in
+              *-*) dist_tag=next ;;
+              *) dist_tag=latest ;;
+            esac
+            npm publish "$tarball" --access public --provenance --tag "$dist_tag"
+            echo "published $name@$version as $dist_tag"
           done
 
       # Polls every 10 s for up to 10 minutes (registry propagation is usually under a minute),

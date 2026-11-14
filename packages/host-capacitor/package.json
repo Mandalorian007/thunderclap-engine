@@ -46,7 +46,7 @@
     "main": "./dist/index.js"
   },
   "peerDependencies": {
-    "@thunderclap-engine/engine": "^1.0.0",
+    "@thunderclap-engine/engine": "^1.0.0 || >=2.0.0-next.0 <3",
     "@capacitor/core": "^8.0.0"
   },
   "peerDependenciesMeta": {

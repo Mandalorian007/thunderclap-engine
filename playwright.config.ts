@@ -1,4 +1,4 @@
-import { defineConfig } from '@playwright/test';
+import { defineConfig, devices } from '@playwright/test';
 import type { HarnessOptions } from './e2e/fixtures';
 import {
   HARNESS_PORT,
@@ -69,6 +69,40 @@ const MATRIX: MatrixEntry[] = [
   { name: 'tablet-port', width: 820, height: 1180, touch: true, testMatch: /layout\.spec\.ts/ },
 ];
 
+/**
+ * The WebKit row (D2 §2 R1, ws/rails): the engine's iPad target, Playwright's WebKit on the
+ * iPad Pro 11 landscape profile (touch, DPR 2). It runs only the specs below, which prove WebGPU
+ * boot, the draw paths, input and layout; the rest of the matrix stays Chromium. It runs on macOS,
+ * where Playwright's WebKit has WebGPU (`E2E_WEBKIT=0` drops it, `E2E_WEBKIT=1` forces it
+ * elsewhere). A test that fails only here for a reason outside the engine is
+ * `test.fixme(browserName === 'webkit', '<reason>')` in its spec, and docs/releasing.md lists it.
+ */
+export const WEBKIT_SPECS = [
+  'smoke',
+  'core',
+  'kit',
+  'models',
+  'mesh',
+  'views',
+  'stream',
+  'bench',
+  'ui',
+  'ui-spec',
+  'input',
+  'layout',
+  'lights',
+  'look',
+  'voxel',
+  'render4',
+  'post2',
+  'demos/voxel',
+  'demos/showroom',
+];
+const webkitMatch = new RegExp(`(^|/)e2e/(${WEBKIT_SPECS.join('|')})\\.spec\\.ts$`);
+const webkitOn =
+  process.env.E2E_WEBKIT === '1' ||
+  (process.env.E2E_WEBKIT !== '0' && process.platform === 'darwin');
+
 export default defineConfig<HarnessOptions>({
   testDir: 'e2e',
   timeout: 30_000,
@@ -84,20 +118,35 @@ export default defineConfig<HarnessOptions>({
   use: {
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
-    launchOptions: { args: webgpuArgs() },
   },
-  projects: MATRIX.map((m) => ({
-    name: m.name,
-    ...(m.testMatch ? { testMatch: m.testMatch } : {}),
-    use: {
-      browserName: 'chromium',
-      viewport: { width: m.width, height: m.height },
-      ...(m.touch
-        ? { isMobile: true, hasTouch: true, deviceScaleFactor: 2 }
-        : { isMobile: false, hasTouch: false, deviceScaleFactor: 1 }),
-      wrapper: m.wrapper ?? 'top',
-    },
-  })),
+  projects: [
+    ...MATRIX.map((m) => ({
+      name: m.name,
+      ...(m.testMatch ? { testMatch: m.testMatch } : {}),
+      use: {
+        browserName: 'chromium' as const,
+        launchOptions: { args: webgpuArgs() },
+        viewport: { width: m.width, height: m.height },
+        ...(m.touch
+          ? { isMobile: true, hasTouch: true, deviceScaleFactor: 2 }
+          : { isMobile: false, hasTouch: false, deviceScaleFactor: 1 }),
+        wrapper: m.wrapper ?? ('top' as const),
+      },
+    })),
+    ...(webkitOn
+      ? [
+          {
+            name: 'webkit-ipad',
+            testMatch: webkitMatch,
+            use: {
+              ...devices['iPad Pro 11 landscape'],
+              browserName: 'webkit' as const,
+              wrapper: 'top' as const,
+            },
+          },
+        ]
+      : []),
+  ],
   webServer: [
     {
       command: `pnpm exec vite --config vite.harness.config.ts --port ${HARNESS_PORT} --strictPort --host 127.0.0.1`,

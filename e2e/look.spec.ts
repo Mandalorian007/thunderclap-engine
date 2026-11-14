@@ -76,6 +76,10 @@ test('boots the cube field with no errors', async () => {
 });
 
 test('touch: a drag on the right half turns the view', async ({ page }) => {
+  test.fixme(
+    test.info().project.use.browserName === 'webkit',
+    'Playwright drives touch through CDP, which is Chromium-only',
+  );
   test.skip(!touchRow(), 'touch rows only');
   const before = await read();
   const box = await canvasBox();
@@ -97,6 +101,10 @@ test('touch: a drag on the right half turns the view', async ({ page }) => {
 });
 
 test('touch: a finger held up-stick on the left half walks forward', async ({ page }) => {
+  test.fixme(
+    test.info().project.use.browserName === 'webkit',
+    'Playwright drives touch through CDP, which is Chromium-only',
+  );
   test.skip(!touchRow(), 'touch rows only');
   const before = await read();
   const box = await canvasBox();

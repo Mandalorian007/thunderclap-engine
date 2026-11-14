@@ -125,6 +125,10 @@ test('boots the cube with no errors, in locked mode by default', async ({ page, 
 });
 
 test('orbit: a drag turns the cube without the pointer lock', async ({ page, wrapper }) => {
+  test.fixme(
+    test.info().project.use.browserName === 'webkit',
+    'Playwright drives touch through CDP, which is Chromium-only',
+  );
   await open(page, wrapper, '?orbit');
   const before = await read();
   expect(before.mode).toBe('orbit');
@@ -148,6 +152,10 @@ test('a slow drag (3 px, a 500 ms gap, 12 px) is a pan, not a long press', async
   page,
   wrapper,
 }) => {
+  test.fixme(
+    test.info().project.use.browserName === 'webkit',
+    'Playwright drives touch through CDP, which is Chromium-only',
+  );
   await open(page, wrapper);
   const from = await centre();
   await frame.evaluate(() => window.__harnessInput?.setClock(1000));
@@ -258,6 +266,10 @@ test('zones (touch): two thumbs in two zones read independently and never pinch'
   page,
   wrapper,
 }) => {
+  test.fixme(
+    test.info().project.use.browserName === 'webkit',
+    'Playwright drives touch through CDP, which is Chromium-only',
+  );
   test.skip(!touchRow(), 'touch rows only');
   await open(page, wrapper, '?zones');
   const box = await canvasBox();
@@ -331,6 +343,10 @@ test('onUpdated sees the same pressed(jump) as the tick after update()', async (
   page,
   wrapper,
 }) => {
+  test.fixme(
+    test.info().project.use.browserName === 'webkit',
+    'Playwright drives touch through CDP, which is Chromium-only',
+  );
   await open(page, wrapper);
   if (touchRow()) {
     const from = await centre();
