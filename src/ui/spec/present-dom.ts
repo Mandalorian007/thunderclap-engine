@@ -13,6 +13,7 @@
  */
 
 import type { SpecModel, SpecRow, SpecValue } from './model';
+import { SPEC_SLIDE_MAX, SPEC_SLIDE_MS, specStill } from './motion';
 import type { SpecPanel, SpecPresenter } from './panel';
 import { SpecPressable, type SpecTimer } from './press';
 import { type SpecTheme, theme } from './theme';
@@ -31,6 +32,7 @@ import {
   K_TABS,
   K_TEXT,
   R_AGAIN,
+  R_AIM,
   R_BADGE,
   R_COUNT,
   R_ENABLED,
@@ -84,6 +86,18 @@ export interface DomOptions {
   slotArt?: (el: HTMLElement, item: string) => void;
   /** A clock for holds (tests). */
   timer?: SpecTimer;
+  /**
+   * The game's own classes: each of the presenter's classes (`tcs-btn`, `tcs-text`, `tcs-t-body`,
+   * `tcs-scroll`, `tcs-given`, …) also gets the class it maps to here, so a game styles the panel
+   * with its own CSS. Every word also carries `data-id` (its id), `data-state`, `data-aim`, and a
+   * list row `data-tcs-row` (its key).
+   */
+  classes?: Readonly<Record<string, string>>;
+  /**
+   * Whether the last press was a finger's (a field's close key types then: an on-screen keyboard's
+   * letter). Default: the last pointer that went down on the page was a touch.
+   */
+  touching?: () => boolean;
 }
 
 const STYLE_ID = 'tc-spec-style';
@@ -149,6 +163,12 @@ textarea.tcs-field{padding-top:6px}
 .tcs-tab:last-child{border-radius:0 var(--tcs-radius) var(--tcs-radius) 0}
 .tcs-body[data-fade]{transition:opacity var(--tcs-fade) ease}
 .tcs-body[data-gone]{opacity:0;pointer-events:none}
+.tcs-body[data-fade][data-slide]{transition:opacity var(--tcs-fade) ease,transform var(--tcs-fade) ease}
+.tcs-body[data-gone][data-slide=up]{transform:translateY(-100%)}.tcs-body[data-gone][data-slide=down]{transform:translateY(100%)}
+.tcs-body[data-gone][data-slide=left]{transform:translateX(-100%)}.tcs-body[data-gone][data-slide=right]{transform:translateX(100%)}
+.tcs-host[data-given]{opacity:0;pointer-events:none;transition:opacity var(--tcs-fast) ease}
+.tcs-host[data-given] *{pointer-events:none!important}
+.tcs-icon .tcs-ring{border-radius:50%}
 @media (prefers-reduced-motion:reduce){.tcs-host *{transition:none!important;animation-duration:1ms!important}}
 ${types}`;
 }
@@ -189,6 +209,9 @@ interface View {
   el: HTMLElement | null;
   /** Whether it is the heading word's. */
   head: boolean;
+  /** Where its row stands in its list's content (units; NaN: not placed), and where it stood before a slide. */
+  y: number;
+  from: number;
 }
 
 /** A list's (or tabs') rows on the page. */
@@ -198,10 +221,19 @@ interface ListView {
   readonly byKey: Map<string, View>;
   readonly pool: View[];
   readonly headPool: View[];
+  /** Its window (units; -1: every row bound) and the content it binds now (units). */
+  readonly win: number;
+  lo: number;
+  hi: number;
+  /** A slide is to run once its rows are placed, from this scroll (units; NaN: none). */
+  slideFrom: number;
+  /** The row that keeps its place on the screen through a slide, and its top before (units). */
+  anchor: string | null;
+  anchorY: number;
 }
 
-/** Text with `{w}…{/}` runs lit. */
-function writeMarked(el: HTMLElement, s: string): void {
+/** Text with `{w}…{/}` runs lit (each run's class `lit`). */
+function writeMarked(el: HTMLElement, s: string, cls = 'tcs-lit'): void {
   if (!s.includes('{')) {
     el.textContent = s;
     return;
@@ -215,7 +247,7 @@ function writeMarked(el: HTMLElement, s: string): void {
     else if (piece !== '') {
       if (lit) {
         const span = doc.createElement('span');
-        span.className = 'tcs-lit';
+        span.className = cls;
         span.textContent = piece;
         el.appendChild(span);
       } else el.appendChild(doc.createTextNode(piece));
@@ -271,6 +303,13 @@ export class DomPresenter implements SpecPresenter {
   private observer: ResizeObserver | null = null;
   private readonly off: (() => void)[] = [];
   private shown = true;
+  /** The game's classes (`DomOptions.classes`), and a lit run's class with them. */
+  private readonly classes: Readonly<Record<string, string>> | null;
+  private readonly litCls: string;
+  /** It is drawn given way (`SpecPanel.given`). */
+  private given = false;
+  /** The last pointer down on the page was a touch. */
+  private lastTouch = false;
 
   constructor(panel: SpecPanel, host: HTMLElement, opts: DomOptions = {}) {
     this.p = panel;
@@ -279,25 +318,49 @@ export class DomPresenter implements SpecPresenter {
     this.doc = host.ownerDocument;
     this.opts = opts;
     this.scale = opts.scale ?? 1;
+    this.classes = opts.classes ?? null;
+    this.litCls = this.cls('tcs-lit');
     ensureSpecStyles(this.doc);
     const c = panel.spec;
     this.listOfNode = new Int32Array(c.n).fill(-1);
     host.classList.add('tcs-host');
+    this.mapCls(host);
     host.setAttribute('data-tc-page', c.id);
     host.style.setProperty('--tcs-scale', String(this.scale));
     host.style.setProperty('--tcs-text', String(panel.text));
     for (const [k, v] of (opts.theme ?? theme()).vars) host.style.setProperty(k, v);
     if (c.fade > 0) host.style.setProperty('--tcs-fade', `${c.fade}ms`);
-    this.top = { parts: new Array<Part | null>(c.n).fill(null), key: null, el: null, head: false };
+    this.top = {
+      parts: new Array<Part | null>(c.n).fill(null),
+      key: null,
+      el: null,
+      head: false,
+      y: Number.NaN,
+      from: Number.NaN,
+    };
     for (let i = 0; i < c.listNodes.length; i++) {
       const node = c.listNodes[i]!;
       this.listOfNode[node] = i;
-      this.lists.push({ ord: i, node, byKey: new Map(), pool: [], headPool: [] });
+      this.lists.push({
+        ord: i,
+        node,
+        byKey: new Map(),
+        pool: [],
+        headPool: [],
+        win: c.win[node]!,
+        lo: Number.NaN,
+        hi: Number.NaN,
+        slideFrom: Number.NaN,
+        anchor: null,
+        anchorY: 0,
+      });
     }
     this.build(0, this.top, host);
     const body = this.top.parts[0]!.el;
     body.classList.add('tcs-body');
+    this.mapCls(body);
     if (c.fade > 0) body.setAttribute('data-fade', '');
+    if (c.slide !== '') body.setAttribute('data-slide', c.slide);
     this.press = new SpecPressable(false, opts.timer);
     this.press.onTap = (shift) => this.tap(shift);
     this.press.onHold = () => this.emit(this.pressNode, this.pressRow, 'hold', null);
@@ -331,6 +394,7 @@ export class DomPresenter implements SpecPresenter {
   apply(relaid: boolean): void {
     const c = this.p.spec;
     const m = this.m;
+    if (this.p.given !== this.given) this.giveWay(this.p.given);
     if (this.fresh) {
       this.fresh = false;
       // Every key held, every list whole.
@@ -348,7 +412,111 @@ export class DomPresenter implements SpecPresenter {
       if (relaid) this.placeAll();
       for (let j = 0; j < m.dirtyN; j++) this.writeKey(m.dirtyKeys[j]!);
     }
+    // Slides run once the rows stand at their new places; a window follows its list's new size.
+    for (let o = 0; o < this.lists.length; o++) {
+      const lv = this.lists[o]!;
+      if (!Number.isNaN(lv.slideFrom)) this.slide(lv);
+      else if (relaid && lv.win >= 0) this.rebind(lv);
+    }
     if (m.focusing !== undefined) this.focusField(m.focusing);
+  }
+
+  /**
+   * Word `id`'s element (in row `row` for a word in a list's row; a tabs' option by its key), or
+   * null: no such word, or its row isn't bound (outside a window).
+   */
+  el(id: string, row: string | null = null): HTMLElement | null {
+    const c = this.p.spec;
+    const i = c.ids.indexOf(id);
+    if (i === -1) return null;
+    if (c.kind[i] === K_TABS && row !== null)
+      return this.lists[c.listOrd[i]!]!.byKey.get(row)?.el ?? null;
+    const L = c.inList[i]!;
+    if (L === -1) return this.top.parts[i]?.el ?? null;
+    if (row === null) return null;
+    return this.lists[c.listOrd[L]!]!.byKey.get(row)?.parts[i]?.el ?? null;
+  }
+
+  /** List `id`'s rows bound now (all of them, or a window's), in the list's order. */
+  rows(id: string): string[] {
+    const c = this.p.spec;
+    const ord = c.listIds.indexOf(id);
+    if (ord === -1) return [];
+    const lv = this.lists[ord]!;
+    const out: string[] = [];
+    for (const key of this.m.lists[ord]!.keys) if (lv.byKey.has(key)) out.push(key);
+    return out;
+  }
+
+  /** Scrolls list `id` so row `key` is in view (a window binds it); false: no such row listed. */
+  reveal(id: string, key: string): boolean {
+    const c = this.p.spec;
+    const ord = c.listIds.indexOf(id);
+    if (ord === -1 || c.kind[c.listNodes[ord]!] !== K_LIST) return false;
+    const r = this.m.lists[ord]!.rows.get(key);
+    if (!r || r.index < 0) return false;
+    const lv = this.lists[ord]!;
+    const i = lv.node;
+    const bx = this.p.boxes;
+    const y = this.rowY(i, r.index);
+    const tall = c.head[i] !== -1 && key.charCodeAt(0) === 35 ? bx.headH[i]! : bx.rowH[i]!;
+    const at = bx.scroll[i]!;
+    const view = bx.h[i]!;
+    const to = y < at ? y : y + tall > at + view ? y + tall - view : at;
+    if (to !== at) {
+      const el = this.top.parts[i]!.el;
+      el.scrollTop = to * this.scale;
+      bx.scroll[i] = el.scrollTop / this.scale;
+      this.writes++;
+    }
+    if (lv.win >= 0) this.rebind(lv);
+    return true;
+  }
+
+  /** The panel gives way (or comes back): hidden, inert, its look's `tcs-given`. */
+  private giveWay(on: boolean): void {
+    this.given = on;
+    this.host.toggleAttribute('data-given', on);
+    this.host.toggleAttribute('inert', on);
+    this.toggleCls(this.host, 'tcs-given', on);
+    this.writes += 2;
+    if (on) {
+      const a = this.doc.activeElement;
+      if (a instanceof HTMLElement && this.host.contains(a)) a.blur();
+    }
+  }
+
+  // Classes.
+
+  /** Class `name` and the game's class it maps to (`DomOptions.classes`). */
+  private cls(name: string): string {
+    if (!this.classes) return name;
+    let out = '';
+    for (const n of name.split(' ')) {
+      if (!n) continue;
+      const g = this.classes[n];
+      out += out ? ` ${n}` : n;
+      if (g) out += ` ${g}`;
+    }
+    return out;
+  }
+
+  /** Adds the game's classes for each of `el`'s classes. */
+  private mapCls(el: Element): void {
+    const map = this.classes;
+    if (!map) return;
+    const list = el.classList;
+    for (let j = list.length - 1; j >= 0; j--) {
+      const g = map[list[j]!];
+      if (g) for (const x of g.split(' ')) if (x) list.add(x);
+    }
+  }
+
+  /** Class `name` (and the game's for it) on or off `el`. */
+  private toggleCls(el: Element, name: string, on: boolean): void {
+    el.classList.toggle(name, on);
+    const g = this.classes?.[name];
+    if (g) for (const x of g.split(' ')) if (x) el.classList.toggle(x, on);
   }
 
   dispose(): void {
@@ -383,7 +551,7 @@ export class DomPresenter implements SpecPresenter {
 
   private span(cls: string, parent: HTMLElement): HTMLElement {
     const s = this.doc.createElement('span');
-    s.className = cls;
+    s.className = this.cls(cls);
     parent.appendChild(s);
     return s;
   }
@@ -445,7 +613,7 @@ export class DomPresenter implements SpecPresenter {
           part.text = this.span('', el);
         } else part.text = el;
         if (!isBind(t.text)) {
-          if (t.marked) writeMarked(part.text, t.text);
+          if (t.marked) writeMarked(part.text, t.text, this.litCls);
           else part.text.textContent = t.text;
         }
         break;
@@ -475,6 +643,7 @@ export class DomPresenter implements SpecPresenter {
         el.className = 'tcs-icon';
         el.appendChild(glyph(doc, ic));
         part = this.part(el);
+        if (ic.ring) part.ring = this.span('tcs-ring', el);
         if (!ic.label) el.setAttribute('aria-hidden', 'true');
         else el.setAttribute('role', 'img');
         break;
@@ -534,6 +703,8 @@ export class DomPresenter implements SpecPresenter {
         el = doc.createElement('div');
         part = this.part(el);
         if ((k === K_COL || k === K_ROW) && st.role) el.setAttribute('role', st.role);
+        if ((k === K_COL || k === K_ROW) && typeof st.aim === 'string')
+          el.setAttribute('data-aim', st.aim);
         if (c.scrolls[i] === 1) {
           el.classList.add('tcs-scroll');
           part.inner = doc.createElement('div');
@@ -545,9 +716,11 @@ export class DomPresenter implements SpecPresenter {
       }
     }
     el.classList.add('tcs-w');
+    this.mapCls(el);
     if (node.cls) for (const cl of node.cls.split(' ')) if (cl) el.classList.add(cl);
     el.setAttribute('data-tcs', String(i));
     const id = node.id;
+    if (id) el.setAttribute('data-id', id);
     if (
       id &&
       (k === K_BUTTON ||
@@ -672,10 +845,13 @@ export class DomPresenter implements SpecPresenter {
     const gap = c.gap[i]!;
     const tops = head !== -1 ? bx.tops(i) : null;
     for (let r = 0; r < keys.length; r++) {
-      const v = lv.byKey.get(keys[r]!)!;
+      const v = lv.byKey.get(keys[r]!);
+      // Outside its window: not bound.
+      if (!v) continue;
       const st = v.el!.style;
       const x = cols === 1 ? 0 : (r % cols) * (bx.cellW[i]! + gap);
       const y = tops ? tops[r]! : Math.floor(r / cols) * (bx.rowH[i]! + gap);
+      v.y = y;
       st.left = `${x * s}px`;
       st.top = `${y * s}px`;
       this.writes += 2;
@@ -731,8 +907,104 @@ export class DomPresenter implements SpecPresenter {
 
   // Lists.
 
-  /** A list's rows are its keys now: rows kept by key, new ones from the pool, gone ones back. */
-  private sync(lv: ListView): void {
+  /** Where row `r` of list `i` stands in its content (units). */
+  private rowY(i: number, r: number): number {
+    const c = this.p.spec;
+    const bx = this.p.boxes;
+    if (c.head[i] !== -1) return bx.tops(i)[r]!;
+    const cols = (c.nodes[i] as SpecList).cols ?? 1;
+    return Math.floor(r / cols) * (bx.rowH[i]! + c.gap[i]!);
+  }
+
+  /** Whether row `r` (key `key`) of `lv` is bound: every row, or the rows in its window. */
+  private inWindow(lv: ListView, r: number, key: string): boolean {
+    if (lv.win < 0) return true;
+    const c = this.p.spec;
+    const i = lv.node;
+    const bx = this.p.boxes;
+    const y = this.rowY(i, r);
+    const tall = c.head[i] !== -1 && key.charCodeAt(0) === 35 ? bx.headH[i]! : bx.rowH[i]!;
+    return y + tall >= lv.lo && y <= lv.hi;
+  }
+
+  /** The content a windowed list binds now (its view and `win` either side); true: it moved. */
+  private windowAt(lv: ListView): boolean {
+    const bx = this.p.boxes;
+    const i = lv.node;
+    const lo = bx.scroll[i]! - lv.win;
+    const hi = bx.scroll[i]! + bx.h[i]! + lv.win;
+    if (lo === lv.lo && hi === lv.hi) return false;
+    lv.lo = lo;
+    lv.hi = hi;
+    return true;
+  }
+
+  /** A windowed list scrolled: rows that left its window go back, rows that came in are bound. */
+  private rebind(lv: ListView): void {
+    if (!this.windowAt(lv)) return;
+    this.sync(lv, true);
+  }
+
+  /** The row a slide keeps in its place on the screen: the first bound row at or below the scroll. */
+  private anchorOf(lv: ListView): void {
+    const at = this.p.boxes.scroll[lv.node]!;
+    lv.anchor = null;
+    let best = Number.POSITIVE_INFINITY;
+    for (const [key, v] of lv.byKey) {
+      v.from = v.y;
+      if (v.y >= at - 0.5 && v.y < best) {
+        best = v.y;
+        lv.anchor = key;
+      }
+    }
+    lv.anchorY = best;
+    lv.slideFrom = at;
+  }
+
+  /**
+   * Rows slide from where they stood to where they stand now (`slide` moves: FLIP, the Web
+   * Animations API); the anchor row keeps its place on the screen, even with motion reduced.
+   */
+  private slide(lv: ListView): void {
+    const from = lv.slideFrom;
+    lv.slideFrom = Number.NaN;
+    const i = lv.node;
+    const scroller = this.top.parts[i]!.el;
+    const s = this.scale;
+    const anchor = lv.anchor === null ? undefined : lv.byKey.get(lv.anchor);
+    lv.anchor = null;
+    if (anchor && Number.isFinite(lv.anchorY) && !Number.isNaN(anchor.y)) {
+      const want = from + (anchor.y - lv.anchorY);
+      if (Math.abs(want - this.p.boxes.scroll[i]!) > 0.5) {
+        scroller.scrollTop = want * s;
+        this.p.boxes.scroll[i] = scroller.scrollTop / s;
+        this.writes++;
+      }
+    }
+    const to = this.p.boxes.scroll[i]!;
+    const still = specStill();
+    for (const v of lv.byKey.values()) {
+      const was = v.from;
+      v.from = Number.NaN;
+      if (still || Number.isNaN(was) || Number.isNaN(v.y)) continue;
+      const dy = was - from - (v.y - to);
+      if (Math.abs(dy) < 0.5 || Math.abs(dy) > SPEC_SLIDE_MAX) continue;
+      const el = v.el!;
+      if (typeof el.animate !== 'function') continue;
+      el.animate([{ transform: `translateY(${dy * s}px)` }, { transform: 'none' }], {
+        duration: SPEC_SLIDE_MS,
+        easing: 'ease-out',
+      });
+      this.writes++;
+    }
+    if (lv.win >= 0) this.rebind(lv);
+  }
+
+  /**
+   * A list's rows are its keys now (in its window, for a windowed list): rows kept by key, new
+   * ones from the pool, gone ones back. `scrolled`: only its window moved.
+   */
+  private sync(lv: ListView, scrolled = false): void {
     const c = this.p.spec;
     const l = this.m.lists[lv.ord]!;
     const isTabs = c.kind[lv.node] === K_TABS;
@@ -740,20 +1012,33 @@ export class DomPresenter implements SpecPresenter {
     const into = isTabs ? part.el : part.inner!;
     const scroller = part.el;
     // Following its end (`tail`): at its end before, at its end after.
-    const tail = !isTabs && (c.nodes[lv.node] as SpecList).tail === true;
+    const tail = !scrolled && !isTabs && (c.nodes[lv.node] as SpecList).tail === true;
     const atEnd = tail && scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2;
-    // Rows no longer listed go back to their pools.
+    if (!scrolled && !isTabs && l.how === 'slide' && lv.byKey.size > 0) this.anchorOf(lv);
+    if (!scrolled && lv.win >= 0) this.windowAt(lv);
+    // Rows no longer listed (or out of the window) go back to their pools.
     for (const [key, v] of lv.byKey) {
       const r = l.rows.get(key);
-      if (r !== undefined && r.index !== -1 && l.keys[r.index] === key) continue;
+      if (
+        r !== undefined &&
+        r.index !== -1 &&
+        l.keys[r.index] === key &&
+        this.inWindow(lv, r.index, key)
+      )
+        continue;
       lv.byKey.delete(key);
       v.el!.setAttribute('data-off', '');
+      v.from = Number.NaN;
+      v.y = Number.NaN;
       (v.head ? lv.headPool : lv.pool).push(v);
       this.writes++;
     }
     const head = c.head[lv.node]!;
+    let at = 0;
+    let added = false;
     for (let r = 0; r < l.keys.length; r++) {
       const key = l.keys[r]!;
+      if (!this.inWindow(lv, r, key)) continue;
       const isHead = head !== -1 && key.charCodeAt(0) === 35;
       let v = lv.byKey.get(key);
       if (!v) {
@@ -766,30 +1051,38 @@ export class DomPresenter implements SpecPresenter {
         lv.byKey.set(key, v);
         this.writes += 2;
         this.writeRowAll(lv, v, l.rows.get(key)!);
+        added = true;
       }
       // Keep the DOM order the list's (focus order, screen readers).
-      if (into.children[r] !== v.el) {
-        into.insertBefore(v.el!, into.children[r] ?? null);
+      if (into.children[at] !== v.el) {
+        into.insertBefore(v.el!, into.children[at] ?? null);
         this.writes++;
       }
+      at++;
     }
     // Top-level keys bound inside rows: written into the new rows.
-    for (let k = 0; k < c.keys.length; k++) {
-      if (this.m.vals[k] === null) continue;
-      const binds = c.keyBinds[k]!;
-      for (let j = 0; j < binds.length; j += 2)
-        if (c.inList[binds[j]!] === lv.node) this.writeKey(k);
+    if (added) {
+      for (let k = 0; k < c.keys.length; k++) {
+        if (this.m.vals[k] === null) continue;
+        const binds = c.keyBinds[k]!;
+        for (let j = 0; j < binds.length; j += 2)
+          if (c.inList[binds[j]!] === lv.node) {
+            this.writeKey(k);
+            break;
+          }
+      }
     }
     if (isTabs) {
       // The selected option.
       const sel = c.keyIndex.get((c.nodes[lv.node] as SpecTabs).selected.b)!;
       this.writeKey(sel);
-    } else {
+    } else if (!scrolled) {
       if (l.how === 'top') scroller.scrollTop = 0;
       else if (atEnd) scroller.scrollTop = scroller.scrollHeight;
+      if (l.how === 'top' || atEnd) this.p.boxes.scroll[lv.node] = scroller.scrollTop / this.scale;
     }
     // Rows moved: placed again (the layout may not have run: a fixed-height list).
-    if (!this.m.relayout) {
+    if (scrolled || !this.m.relayout) {
       if (isTabs) this.placeTabs(lv.node);
       else this.placeRows(lv);
     }
@@ -802,6 +1095,8 @@ export class DomPresenter implements SpecPresenter {
       key: '',
       el: null,
       head: isHead,
+      y: Number.NaN,
+      from: Number.NaN,
     };
     this.rowsBuilt++;
     if (c.kind[lv.node] === K_TABS) {
@@ -920,7 +1215,8 @@ export class DomPresenter implements SpecPresenter {
     switch (role) {
       case R_TEXT: {
         const s = String(v);
-        if (k === K_TEXT && (c.nodes[i] as SpecText).marked) writeMarked(part.text!, s);
+        if (k === K_TEXT && (c.nodes[i] as SpecText).marked)
+          writeMarked(part.text!, s, this.litCls);
         else part.text!.textContent = s;
         if (k === K_TEXT && (c.nodes[i] as SpecText).flash) {
           el.classList.remove('tcs-flash');
@@ -994,6 +1290,11 @@ export class DomPresenter implements SpecPresenter {
       case R_RING: {
         const ring = part.ring!;
         const n = Number(v);
+        if (k === K_ICON) {
+          // An icon's ring: a fill, 0..1.
+          ring.style.setProperty('--tcs-ring', String(n < 0 ? 0 : Math.min(n, 1)));
+          return;
+        }
         ring.removeAttribute('data-ring');
         if (n > 0) {
           ring.style.setProperty('--tcs-ring-ms', `${n}ms`);
@@ -1004,6 +1305,9 @@ export class DomPresenter implements SpecPresenter {
       }
       case R_KEY:
         part.key!.textContent = String(v);
+        return;
+      case R_AIM:
+        el.setAttribute('data-aim', String(v));
         return;
       case R_VALUETEXT:
         el.setAttribute('aria-valuetext', String(v));
@@ -1115,7 +1419,7 @@ export class DomPresenter implements SpecPresenter {
       this.emit(i, this.pressRow, 'toggle', !on, shift || undefined);
       return;
     }
-    if (node.k === 'button' && node.press === 'held') return;
+    if ((node.k === 'button' || node.k === 'slot') && node.press === 'held') return;
     this.emit(i, this.pressRow, 'tap', null, shift || undefined);
   }
 
@@ -1126,7 +1430,57 @@ export class DomPresenter implements SpecPresenter {
 
   private isHeld(i: number): boolean {
     const n = this.p.spec.nodes[i]!;
-    return n.k === 'button' && n.press === 'held';
+    return (n.k === 'button' || n.k === 'slot') && n.press === 'held';
+  }
+
+  /** The last press was a finger's (`DomOptions.touching`, or the last pointer down). */
+  private touching(): boolean {
+    return this.opts.touching ? this.opts.touching() : this.lastTouch;
+  }
+
+  /**
+   * A key the page heard while no field has focus: the type-ahead field (`SpecField.typeAhead`)
+   * takes `/` (focused, its text selected) and a plain letter (typed into it).
+   */
+  private typeAhead(e: KeyboardEvent): void {
+    const c = this.p.spec;
+    if (c.ahead === -1 || this.given || !this.shown || e.repeat || e.isComposing) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const part = this.top.parts[c.ahead];
+    const input = part?.input;
+    if (!input || input.disabled || this.p.boxes.on[c.ahead] !== 1) return;
+    const a = this.doc.activeElement;
+    if (
+      a instanceof HTMLInputElement ||
+      a instanceof HTMLTextAreaElement ||
+      (a instanceof HTMLElement && a.isContentEditable)
+    )
+      return;
+    const f = c.nodes[c.ahead] as SpecField;
+    if (e.key === '/') {
+      e.preventDefault();
+      input.focus();
+      input.select();
+      return;
+    }
+    if (e.key.length !== 1 || !/\p{L}/u.test(e.key)) return;
+    if (f.closeKey !== undefined && e.code === f.closeKey) return;
+    e.preventDefault();
+    input.focus();
+    const ch = f.kind === 'search' ? e.key.toLowerCase() : e.key;
+    input.value += ch;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  /** A field's close key (`SpecField.closeKey`) in its empty field: the panel's `close`. */
+  private closeKey(e: KeyboardEvent, i: number, row: string | null): boolean {
+    const f = this.p.spec.nodes[i] as SpecField;
+    if (f.closeKey === undefined || e.code !== f.closeKey) return false;
+    if (e.isComposing || e.keyCode === 229 || e.repeat) return false;
+    if ((e.target as HTMLInputElement).value !== '' || this.touching()) return false;
+    e.preventDefault();
+    this.emit(i, row, 'close', null);
+    return true;
   }
 
   private letGo(): void {
@@ -1148,6 +1502,18 @@ export class DomPresenter implements SpecPresenter {
 
   private listen(): void {
     const c = this.p.spec;
+    this.on(
+      'pointerdown',
+      (e) => {
+        this.lastTouch = e.pointerType === 'touch';
+      },
+      this.doc,
+    );
+    if (c.ahead !== -1) {
+      const g = (e: KeyboardEvent): void => this.typeAhead(e);
+      this.doc.addEventListener('keydown', g, true);
+      this.off.push(() => this.doc.removeEventListener('keydown', g, true));
+    }
     this.on('pointerdown', (e) => {
       if (c.held && this.heldPointers++ === 0) this.emit(-1, null, 'held', true);
       const [i, row] = this.pressTarget(e);
@@ -1158,6 +1524,15 @@ export class DomPresenter implements SpecPresenter {
       if (this.isHeld(i) && e.button === 0 && this.enabled(i, row)) {
         this.heldNode = i;
         this.heldRow = row;
+        // Its up comes even when the finger leaves it.
+        const t = e.target as Element;
+        if (typeof t.setPointerCapture === 'function') {
+          try {
+            t.setPointerCapture(e.pointerId);
+          } catch {
+            // A synthetic pointer: no capture.
+          }
+        }
         this.emit(i, row, 'down', null);
         return;
       }
@@ -1211,6 +1586,7 @@ export class DomPresenter implements SpecPresenter {
         }
         return;
       }
+      if (k === K_FIELD && this.closeKey(e, i, row)) return;
       if (k === K_FIELD && e.key === 'Enter' && !e.isComposing) {
         const f = c.nodes[i] as SpecField;
         if (f.kind === 'long' && !(e.ctrlKey || e.metaKey)) return;
@@ -1266,7 +1642,13 @@ export class DomPresenter implements SpecPresenter {
         if (i === -1) return;
         const k = c.kind[i]!;
         if (k === K_LIST || c.scrolls[i] === 1) {
-          this.p.boxes.scroll[i] = (e.target as HTMLElement).scrollTop / this.scale;
+          const y = (e.target as HTMLElement).scrollTop / this.scale;
+          this.p.boxes.scroll[i] = y;
+          if (k === K_LIST) {
+            const lv = this.lists[c.listOrd[i]!]!;
+            if (lv.win >= 0) this.rebind(lv);
+          }
+          this.emit(i, null, 'scroll', y);
         }
       },
       { capture: true, passive: true },

@@ -117,6 +117,12 @@ export interface SpecStack extends SpecCommon {
    * body's role names the panel (a modal's dialog role belongs to `ui.stack`).
    */
   readonly role?: string;
+  /**
+   * What it points at (a tip's target, a game's own key such as `hud:map`; '' for nothing): the
+   * DOM presenter writes it as `data-aim`, and `SpecPanel.aimOf(id)` reads it for a presenter
+   * that draws the pointer itself (a line to it in a headset). Nothing in the layout reads it.
+   */
+  readonly aim?: SpecStr;
   readonly children: readonly SpecNode[];
 }
 
@@ -151,6 +157,12 @@ export interface SpecList extends SpecCommon {
   readonly row: SpecNode;
   /** The headings' word: keys starting with `#` (one column only). */
   readonly head?: SpecNode;
+  /**
+   * A window: only the rows within this many units above and below its view are bound (built
+   * and written); the rest come in as it scrolls. For long lists (a catalog, a log). Unset: every
+   * row is bound.
+   */
+  readonly window?: number;
 }
 
 /**
@@ -196,6 +208,8 @@ export interface SpecSlot extends SpecCommon {
   readonly hold?: boolean;
   /** Pressable while true. */
   readonly enabled?: Bind;
+  /** What a press is: a tap (default), or held (`down` as it goes down, `up` as it lets go). */
+  readonly press?: 'tap' | 'held';
 }
 
 /** A mark on a meter: where (0..1), its state, and its words. */
@@ -228,6 +242,8 @@ export interface SpecIcon extends SpecCommon {
   readonly glyph: string | readonly SpecGlyphPart[];
   readonly view?: number | readonly [number, number];
   readonly size: number;
+  /** A ring around it, filled 0..1 (a cooldown, a charge); 0 or unset: none drawn. */
+  readonly ring?: Bind;
 }
 
 /** What a press on a button is: a tap, a toggle (flips), or held (`down` and `up`). */
@@ -269,6 +285,17 @@ export interface SpecField extends SpecCommon {
   readonly max?: number;
   readonly enabled?: Bind;
   readonly value?: Bind;
+  /**
+   * Typing ahead: a letter (or `/`) typed while the panel shows and no other field has the
+   * keyboard goes into this field (a search that opens on typing). One per panel.
+   */
+  readonly typeAhead?: boolean;
+  /**
+   * A key (a `KeyboardEvent.code`, `KeyE`) that, typed in this field while it is empty, says
+   * `close` instead of typing (the key that opened the panel closes it). From a finger's keyboard
+   * it types.
+   */
+  readonly closeKey?: string;
 }
 
 /** One of n: the options are a model list; each option's words its row's `label`. */
@@ -320,14 +347,25 @@ export interface PanelSpec {
   readonly fade?: number;
   /** It says `held` true as the first press goes down on it, false as the last lets go. */
   readonly held?: boolean;
+  /**
+   * Its body's `show` slides it in from (and out to) this side as it fades (`fade` ms; at once
+   * while motion is reduced or with no fade).
+   */
+  readonly slide?: 'up' | 'down' | 'left' | 'right';
+  /**
+   * It gives way (hides, takes no presses) while a sheet covers the screen: `always`, or only on
+   * a `small` screen. The host says when (`SpecPanel.giveWay(sheet, small)`, `SpecHud.giveWay`).
+   */
+  readonly giveWay?: 'small' | 'always';
 }
 
 /** What a press on a panel is. */
 export type SpecPressKind = 'tap' | 'hold' | 'toggle';
 
 /**
- * What a panel says happened: a press (a held button's `down` and `up`), a field's `input`,
- * `enter`, `focus` or `blur`, a `pick` (tabs), a `change` (range), or the panel `held`.
+ * What a panel says happened: a press (a held button's or slot's `down` and `up`), a field's
+ * `input`, `enter`, `focus`, `blur` or `close` (its close key), a `pick` (tabs), a `change`
+ * (range), a list's or scroll col's `scroll` (its scroll, units), or the panel `held`.
  */
 export interface PanelEvent {
   readonly panel: string;
@@ -345,8 +383,10 @@ export interface PanelEvent {
     | 'up'
     | 'focus'
     | 'blur'
-    | 'held';
-  /** A field's text, a range's value, a toggle's new state, `held`'s state. */
+    | 'held'
+    | 'scroll'
+    | 'close';
+  /** A field's text, a range's value, a toggle's new state, `held`'s state, a scroll (units). */
   readonly value: string | number | boolean | null;
   /** A press that asks for one, not all (Shift with a click on screens). */
   readonly one?: boolean;

@@ -13,8 +13,10 @@ import type { PanelRect } from '../world-panel/layout';
 import { type Painter, type PanelContext2D, roundRectPath } from '../world-panel/paint';
 import type { WorldPanel } from '../world-panel/panel';
 import { type PanelKeyEvent, WorldWidget } from '../world-panel/widgets';
+import type { SpecBoxes } from './boxes';
 import { wrapText } from './measure';
 import type { SpecRow, SpecValue } from './model';
+import { SPEC_SLIDE_MAX, SPEC_SLIDE_MS, specEaseOut, specNow, specStill } from './motion';
 import type { SpecPanel, SpecPresenter } from './panel';
 import { SpecPressable, type SpecTimer } from './press';
 import { type SpecTheme, type SpecTokens, theme as specTheme } from './theme';
@@ -77,6 +79,15 @@ export interface WorldOptions {
   timer?: SpecTimer;
   /** Escape while it has focus (a modal closes; default: the key goes on). */
   onEscape?: () => void;
+  /**
+   * Whether the last press was a finger's (a field's close key types then). Default: never (a
+   * ray or a keyboard).
+   */
+  touching?: () => boolean;
+  /** Runs `f` next frame while something moves (a slide; default `requestAnimationFrame`). */
+  frame?: (f: () => void) => void;
+  /** The clock motion reads, ms (tests; default `performance.now()`). */
+  now?: () => number;
 }
 
 const HOVER_TINT = 'rgba(255, 255, 255, 0.07)';
@@ -173,6 +184,35 @@ export class WorldPresenter implements SpecPresenter {
   private readonly follower: (i: number, v: SpecValue) => void;
   private ctx: PanelContext2D | null = null;
   private clip: PanelRect = { x: 0, y: 0, w: 0, h: 0 };
+  /** It is drawn given way (`SpecPanel.given`): not painted, not hit. */
+  private given = false;
+  /** The body's show, and when it last changed (ms; NaN: no slide running). */
+  private shown = true;
+  private bodyAt = Number.NaN;
+  /**
+   * The body's boxes when last shown (x, y, w, h, on; made at its first slide): a body sliding out
+   * paints at them, since hiding it took its words' boxes away. Swapped in for that paint only.
+   */
+  private kept: {
+    x: Float64Array;
+    y: Float64Array;
+    w: Float64Array;
+    h: Float64Array;
+    on: Uint8Array;
+  } | null = null;
+  private swap: {
+    x: Float64Array;
+    y: Float64Array;
+    w: Float64Array;
+    h: Float64Array;
+    on: Uint8Array;
+  } | null = null;
+  /** Each list's rows' tops at its last order (units, by key), and a slide's offsets (units). */
+  private readonly lastTops: (Map<string, number> | null)[] = [];
+  private readonly slideDy: (Map<string, number> | null)[] = [];
+  private readonly slideAt: Float64Array;
+  private ticking = false;
+  private readonly tick = (): void => this.moveFrame();
 
   constructor(panel: SpecPanel, surface: WorldPanel, opts: WorldOptions = {}) {
     this.p = panel;
@@ -184,6 +224,13 @@ export class WorldPresenter implements SpecPresenter {
     const r = opts.rect ?? { x: 0, y: 0, w: surface.pxWidth, h: surface.pxHeight };
     this.rect = { x: r.x, y: r.y, w: r.w, h: r.h };
     this.press = new SpecPressable(false, opts.timer, RAY_SLOP);
+    const nLists = panel.spec.listNodes.length;
+    this.slideAt = new Float64Array(nLists).fill(Number.NaN);
+    for (let o = 0; o < nLists; o++) {
+      this.lastTops.push(null);
+      this.slideDy.push(null);
+    }
+    this.shown = true;
     this.press.onTap = (shift) => this.tap(shift);
     this.press.onHold = () => this.emit(this.pressNode, this.pressRow, 'hold', null);
     const w = new SpecWidget(this);
@@ -217,6 +264,29 @@ export class WorldPresenter implements SpecPresenter {
     const c = this.p.spec;
     const m = this.p.model;
     if (relaid && this.fit === 'natural') this.placeNatural();
+    if (relaid && c.slide !== '' && this.p.boxes.on[0] === 1) this.keep(this.p.boxes);
+    if (this.p.given !== this.given) {
+      this.given = this.p.given;
+      if (this.given) {
+        this.press.cancel();
+        this.letGo();
+      }
+      this.markAll();
+    }
+    const on = this.p.boxes.on[0] === 1;
+    if (on !== this.shown) {
+      this.shown = on;
+      // The body slides in or out (`PanelSpec.slide`), unless this is its first draw.
+      if (c.slide !== '' && !this.fresh && !specStill()) {
+        this.bodyAt = this.now();
+        this.run();
+      }
+      this.markAll();
+    }
+    for (let o = 0; o < m.lists.length; o++) {
+      const l = m.lists[o]!;
+      if (l.order && c.kind[c.listNodes[o]!] === K_LIST) this.reorder(o, l.how === 'slide');
+    }
     if (this.fresh || relaid) {
       this.fresh = false;
       this.markAll();
@@ -241,6 +311,8 @@ export class WorldPresenter implements SpecPresenter {
 
   dispose(): void {
     this.press.cancel();
+    this.bodyAt = Number.NaN;
+    this.slideAt.fill(Number.NaN);
     this.surface.remove(this.widget);
     const f = this.p.model.followers.indexOf(this.follower);
     if (f !== -1) this.p.model.followers.splice(f, 1);
@@ -304,6 +376,171 @@ export class WorldPresenter implements SpecPresenter {
     const ri = c.inList[i] === -1 ? NO_ROW : this.rowIndex(i, row);
     if (c.inList[i] !== -1 && ri < 0) return null;
     return this.absRect(i, ri, out) ? out : null;
+  }
+
+  /** List `id`'s rows in its view now (a world list paints only those), in the list's order. */
+  rows(id: string): string[] {
+    const c = this.p.spec;
+    const ord = c.listIds.indexOf(id);
+    if (ord === -1) return [];
+    const L = c.listNodes[ord]!;
+    const keys = this.p.model.lists[ord]!.keys;
+    if (c.kind[L] === K_TABS) return keys.slice();
+    const bx = this.p.boxes;
+    const sc = bx.scroll[L]!;
+    const out: string[] = [];
+    for (let r = 0; r < keys.length; r++) {
+      this.cell(L, r, this.cellAt);
+      const tall = c.head[L] !== -1 && keys[r]!.charCodeAt(0) === 35 ? bx.headH[L]! : bx.rowH[L]!;
+      if (this.cellAt.y + tall > sc && this.cellAt.y < sc + bx.h[L]!) out.push(keys[r]!);
+    }
+    return out;
+  }
+
+  /** Scrolls list `id` so row `key` is in view; false: no such row listed. */
+  reveal(id: string, key: string): boolean {
+    const c = this.p.spec;
+    const ord = c.listIds.indexOf(id);
+    if (ord === -1) return false;
+    const L = c.listNodes[ord]!;
+    if (c.kind[L] !== K_LIST) return false;
+    const r = this.p.model.lists[ord]!.rows.get(key);
+    if (!r || r.index < 0) return false;
+    const bx = this.p.boxes;
+    this.cell(L, r.index, this.cellAt);
+    const y = this.cellAt.y;
+    const tall = c.head[L] !== -1 && key.charCodeAt(0) === 35 ? bx.headH[L]! : bx.rowH[L]!;
+    const at = bx.scroll[L]!;
+    const view = bx.h[L]!;
+    const to = y < at ? y : y + tall > at + view ? y + tall - view : at;
+    const max = Math.max(0, bx.content[L]! - view);
+    const v = Math.min(max, Math.max(0, to));
+    if (v !== at) {
+      bx.scroll[L] = v;
+      this.markNode(L, NO_ROW);
+      this.emit(L, null, 'scroll', v);
+    }
+    return true;
+  }
+
+  // Motion.
+
+  private now(): number {
+    return this.opts.now ? this.opts.now() : specNow();
+  }
+
+  /** Asks for the next frame while something moves. */
+  private run(): void {
+    if (this.ticking) return;
+    this.ticking = true;
+    const f =
+      this.opts.frame ??
+      (typeof requestAnimationFrame === 'function'
+        ? (g: () => void) => requestAnimationFrame(() => g())
+        : (g: () => void) => setTimeout(g, 16));
+    f(this.tick);
+  }
+
+  /** A frame while something moves: what moves is painted again; on until it stands still. */
+  private moveFrame(): void {
+    this.ticking = false;
+    const t = this.now();
+    let moving = false;
+    if (!Number.isNaN(this.bodyAt)) {
+      if (t - this.bodyAt >= this.bodyMs()) this.bodyAt = Number.NaN;
+      else moving = true;
+      this.markAll();
+    }
+    for (let o = 0; o < this.slideAt.length; o++) {
+      const at = this.slideAt[o]!;
+      if (Number.isNaN(at)) continue;
+      if (t - at >= SPEC_SLIDE_MS) {
+        this.slideAt[o] = Number.NaN;
+        this.slideDy[o]?.clear();
+      } else moving = true;
+      this.markNode(this.p.spec.listNodes[o]!, NO_ROW);
+    }
+    if (moving) this.run();
+  }
+
+  /** How long the body's slide takes (its fade's time, or a list's slide's). */
+  private bodyMs(): number {
+    const f = this.p.spec.fade;
+    return f > 0 ? f : SPEC_SLIDE_MS;
+  }
+
+  /**
+   * List ordinal `o`'s keys changed: with `slide`, its rows slide from their old tops to their new
+   * ones and the first row in view keeps its place on the surface (even with motion reduced).
+   */
+  private reorder(o: number, slide: boolean): void {
+    const c = this.p.spec;
+    const L = c.listNodes[o]!;
+    const bx = this.p.boxes;
+    const keys = this.p.model.lists[o]!.keys;
+    const was = this.lastTops[o];
+    if (slide && was && was.size > 0) {
+      // The anchor: the row at or below the old scroll nearest it.
+      const at = bx.scroll[L]!;
+      let anchor: string | null = null;
+      let best = Number.POSITIVE_INFINITY;
+      for (const [key, y] of was) {
+        if (y >= at - 0.5 && y < best && this.p.model.lists[o]!.rows.has(key)) {
+          best = y;
+          anchor = key;
+        }
+      }
+      let to = at;
+      if (anchor !== null) {
+        const r = this.p.model.lists[o]!.rows.get(anchor)!;
+        if (r.index >= 0) {
+          this.cell(L, r.index, this.cellAt);
+          const max = Math.max(0, bx.content[L]! - bx.h[L]!);
+          to = Math.min(max, Math.max(0, at + this.cellAt.y - best));
+          bx.scroll[L] = to;
+        }
+      }
+      if (!specStill()) {
+        let dy = this.slideDy[o];
+        if (!dy) {
+          dy = new Map();
+          this.slideDy[o] = dy;
+        }
+        dy.clear();
+        for (let r = 0; r < keys.length; r++) {
+          const from = was.get(keys[r]!);
+          if (from === undefined) continue;
+          this.cell(L, r, this.cellAt);
+          const d = from - at - (this.cellAt.y - to);
+          if (Math.abs(d) >= 0.5 && Math.abs(d) <= SPEC_SLIDE_MAX) dy.set(keys[r]!, d);
+        }
+        if (dy.size > 0) {
+          this.slideAt[o] = this.now();
+          this.run();
+        }
+      }
+    }
+    // Its tops now, for the next change.
+    let tops = this.lastTops[o];
+    if (!tops) {
+      tops = new Map();
+      this.lastTops[o] = tops;
+    }
+    tops.clear();
+    for (let r = 0; r < keys.length; r++) {
+      this.cell(L, r, this.cellAt);
+      tops.set(keys[r]!, this.cellAt.y);
+    }
+  }
+
+  /** How far row `key` of list ordinal `o` is still off its place (units). */
+  private slideOff(o: number, key: string): number {
+    const at = this.slideAt[o]!;
+    if (Number.isNaN(at)) return 0;
+    const d = this.slideDy[o]?.get(key);
+    if (d === undefined) return 0;
+    const t = (this.now() - at) / SPEC_SLIDE_MS;
+    return t >= 1 ? 0 : d * (1 - specEaseOut(t));
   }
 
   /** A key let go (a held button's Enter or Space ends its press). */
@@ -467,9 +704,75 @@ export class WorldPresenter implements SpecPresenter {
     this.paints++;
     this.ctx = p.ctx;
     this.clip = this.surface.paintClip;
-    if (this.p.boxes.on[0] === 0) return;
-    this.paintNode(0, 0, 0, null, null);
+    if (this.given) return;
+    const c = this.p.spec;
+    const sliding = !Number.isNaN(this.bodyAt);
+    if (this.p.boxes.on[0] === 0 && !sliding) return;
+    if (!sliding) {
+      this.paintNode(0, 0, 0, null, null);
+      this.ctx = null;
+      return;
+    }
+    // Sliding in or out from its side, faded with it.
+    const bx = this.p.boxes;
+    const t = Math.min(1, (this.now() - this.bodyAt) / this.bodyMs());
+    const e = specEaseOut(t);
+    const k = this.shown ? 1 - e : e;
+    const ox = c.slide === 'left' ? -k * bx.w[0]! : c.slide === 'right' ? k * bx.w[0]! : 0;
+    const oy = c.slide === 'up' ? -k * bx.h[0]! : c.slide === 'down' ? k * bx.h[0]! : 0;
+    const ctx = p.ctx;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(this.rect.x, this.rect.y, this.rect.w, this.rect.h);
+    ctx.clip();
+    ctx.globalAlpha *= 1 - k;
+    // Sliding out, its boxes are gone: its words paint at their boxes when it was last shown.
+    const out = bx.on[0] === 0 && this.kept !== null;
+    if (out) this.trade(bx);
+    this.paintNode(0, ox, oy, null, null);
+    if (out) this.trade(bx);
+    ctx.restore();
     this.ctx = null;
+  }
+
+  /** Keeps the body's boxes as shown now (a slide's body paints at them on its way out). */
+  private keep(bx: SpecBoxes): void {
+    if (!this.kept) {
+      const n = bx.n;
+      const make = () => ({
+        x: new Float64Array(n),
+        y: new Float64Array(n),
+        w: new Float64Array(n),
+        h: new Float64Array(n),
+        on: new Uint8Array(n),
+      });
+      this.kept = make();
+      this.swap = make();
+    }
+    const k = this.kept;
+    k.x.set(bx.x);
+    k.y.set(bx.y);
+    k.w.set(bx.w);
+    k.h.set(bx.h);
+    k.on.set(bx.on);
+  }
+
+  /** Swaps the kept boxes and the boxes now (twice: back as they were). */
+  private trade(bx: SpecBoxes): void {
+    const k = this.kept!;
+    const t = this.swap!;
+    t.x.set(bx.x);
+    t.y.set(bx.y);
+    t.w.set(bx.w);
+    t.h.set(bx.h);
+    t.on.set(bx.on);
+    bx.x.set(k.x);
+    bx.y.set(k.y);
+    bx.w.set(k.w);
+    bx.h.set(k.h);
+    bx.on.set(k.on);
+    this.kept = t;
+    this.swap = k;
   }
 
   private font(style: SpecTextStyle, scale = 1): string {
@@ -566,6 +869,7 @@ export class WorldPresenter implements SpecPresenter {
       case K_ICON: {
         const ic = node as SpecIcon;
         const tint = this.str(ic.tint, row, i);
+        if (ic.ring) this.paintRing(Number(this.val(ic.ring, row, i) ?? 0), x, y, w, h);
         this.paintGlyph(ic, x, y, w, h, tint ? tintColor(this.tokens, tint) : this.tokens.text);
         return;
       }
@@ -943,6 +1247,25 @@ export class WorldPresenter implements SpecPresenter {
     }
   }
 
+  /** An icon's ring: a wedge filled `f` (0..1) of the way round from the top. */
+  private paintRing(f: number, x: number, y: number, w: number, h: number): void {
+    const v = f < 0 ? 0 : Math.min(f, 1);
+    if (v <= 0) return;
+    const ctx = this.ctx!;
+    const cx = x + w / 2;
+    const cy = y + h / 2;
+    const r = Math.min(w, h) / 2;
+    ctx.save();
+    ctx.globalAlpha *= 0.35;
+    ctx.fillStyle = this.tokens.accent;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + v * Math.PI * 2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
   private paintGlyph(
     ic: Pick<SpecIcon, 'glyph' | 'view' | 'size' | 'k'>,
     x: number,
@@ -1084,14 +1407,17 @@ export class WorldPresenter implements SpecPresenter {
     const sc = bx.scroll[L]!;
     const heads = c.head[L] !== -1;
     const cell = this.cellAt;
+    const o = c.listOrd[L]!;
+    const sliding = !Number.isNaN(this.slideAt[o]!);
     for (let r = 0; r < n; r++) {
       this.cell(L, r, cell);
-      const top = cell.y - sc;
       const key = keys[r]!;
+      const top = cell.y - sc + (sliding ? this.slideOff(o, key) : 0);
       const isHead = heads && key.charCodeAt(0) === 35;
       const tall = isHead ? bx.headH[L]! : bx.rowH[L]!;
       if (top + tall < 0) continue;
-      if (top > h) break;
+      if (top > h && !sliding) break;
+      if (top > h) continue;
       const root = isHead ? c.head[L]! : c.first[L]!;
       this.paintNode(root, ux + cell.x, uy + top, l.rows.get(key) ?? null, key);
     }
@@ -1176,8 +1502,9 @@ export class WorldPresenter implements SpecPresenter {
     const uy = (py - this.rect.y) / this.scale;
     this.lastX = ux;
     this.lastY = uy;
-    const i = bx.hit(ux, uy);
     this.hitKey = null;
+    if (this.given) return -1;
+    const i = bx.hit(ux, uy);
     if (i === -1) return -1;
     const L = c.inList[i]!;
     if (L !== -1 && bx.hitRow >= 0) {
@@ -1201,7 +1528,7 @@ export class WorldPresenter implements SpecPresenter {
 
   private isHeld(i: number): boolean {
     const n = this.p.spec.nodes[i]!;
-    return n.k === 'button' && n.press === 'held';
+    return (n.k === 'button' || n.k === 'slot') && n.press === 'held';
   }
 
   private holds(i: number): boolean {
@@ -1239,7 +1566,7 @@ export class WorldPresenter implements SpecPresenter {
       this.emit(i, this.pressRow, 'toggle', !on, shift || undefined);
       return;
     }
-    if (node.k === 'button' && node.press === 'held') return;
+    if ((node.k === 'button' || node.k === 'slot') && node.press === 'held') return;
     this.emit(i, this.pressRow, 'tap', null, shift || undefined);
   }
 
@@ -1343,6 +1670,7 @@ export class WorldPresenter implements SpecPresenter {
     if (v === bx.scroll[best]) return false;
     bx.scroll[best] = v;
     this.markNode(best, NO_ROW);
+    this.emit(best, null, 'scroll', v);
     return true;
   }
 
@@ -1451,6 +1779,7 @@ export class WorldPresenter implements SpecPresenter {
    */
   key(e: PanelKeyEvent): boolean {
     const c = this.p.spec;
+    if (this.given) return false;
     if (e.key === 'Escape' && this.opts.onEscape) {
       this.opts.onEscape();
       return true;
@@ -1460,6 +1789,7 @@ export class WorldPresenter implements SpecPresenter {
       return true;
     }
     const i = this.focusNode;
+    if ((i === -1 || c.kind[i] !== K_FIELD) && this.typeAhead(e)) return true;
     if (i === -1) return false;
     const row = this.focusRow;
     const k = c.kind[i]!;
@@ -1492,10 +1822,42 @@ export class WorldPresenter implements SpecPresenter {
     return true;
   }
 
+  /**
+   * The page's type-ahead (`SpecField.typeAhead`) while no field has focus: `/` focuses the field,
+   * a plain letter is typed into it.
+   */
+  private typeAhead(e: PanelKeyEvent): boolean {
+    const c = this.p.spec;
+    const a = c.ahead;
+    if (a === -1 || e.repeat || e.ctrlKey || e.metaKey) return false;
+    if (this.p.boxes.on[a] !== 1 || !this.enabled(a, null)) return false;
+    const f = c.nodes[a] as SpecField;
+    if (e.key === '/') {
+      this.setFocus(a, null);
+      return true;
+    }
+    if (e.key.length !== 1 || !/\p{L}/u.test(e.key)) return false;
+    if (f.closeKey !== undefined && e.code === f.closeKey) return false;
+    this.setFocus(a, null);
+    const v = this.fieldValue(a, null);
+    if (f.max !== undefined && v.length >= f.max) return true;
+    return this.typed(a, null, v + (f.kind === 'search' ? e.key.toLowerCase() : e.key));
+  }
+
   private fieldKey(i: number, row: string | null, e: PanelKeyEvent): boolean {
     const c = this.p.spec;
     const f = c.nodes[i] as SpecField;
     const v = this.fieldValue(i, row);
+    if (
+      f.closeKey !== undefined &&
+      e.code === f.closeKey &&
+      v === '' &&
+      !e.repeat &&
+      !(this.opts.touching?.() ?? false)
+    ) {
+      this.emit(i, row, 'close', null);
+      return true;
+    }
     if (e.key === 'Enter') {
       if (f.kind === 'long' && !(e.ctrlKey || e.metaKey)) return this.typed(i, row, `${v}\n`);
       this.emit(i, row, 'enter', v);

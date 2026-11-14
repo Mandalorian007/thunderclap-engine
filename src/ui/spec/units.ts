@@ -5,7 +5,13 @@
  */
 
 import { SPEC_FAMILY, type WrapOptions, wrapCount } from './measure';
-import { SPEC_LINE, SPEC_TYPE, type SpecNode, type SpecTextStyle } from './words';
+import {
+  SPEC_LINE,
+  SPEC_TYPE,
+  type SpecFontFamily,
+  type SpecNode,
+  type SpecTextStyle,
+} from './words';
 
 // Word kinds.
 export const K_COL = 0;
@@ -50,12 +56,14 @@ export const R_ITEM = 9;
 export const R_COUNT = 10;
 export const R_SELECTED = 11;
 export const R_TINT = 12;
-/** A button's ring: ms to fill over, 0 empty, < 0 full. */
+/** A button's ring: ms to fill over, 0 empty, < 0 full. An icon's: its fill, 0..1. */
 export const R_RING = 13;
 /** A key label (`keyLabel`): a slot's (its corner) or a button's (after its words). */
 export const R_KEY = 14;
 /** A text's bound lines (a box moves: the presenter writes its line clamp). */
 export const R_LINES = 15;
+/** A stack's bound aim (`SpecStack.aim`: `data-aim` on the page). An icon's ring is `R_RING` (a fill, 0..1). */
+export const R_AIM = 16;
 /** A list's bound `maxRows` (a box moves; nothing else to write). */
 export const R_ROWS = 17;
 /** A range's value in words (for screen readers). */
@@ -169,6 +177,25 @@ export const typeMeasure: Measure = (text, style, w, lh) => {
     family: SPEC_FAMILY[t.family],
   });
 };
+
+/** A type stack per family (`SPEC_FAMILY`'s shape): what a game's own fonts are. */
+export type SpecFamilies = Readonly<Record<SpecFontFamily, string>>;
+
+/**
+ * `typeMeasure` in a game's own font stacks (`families`, each over `SPEC_FAMILY`'s): set it as a
+ * panel's measure (`panel.boxes.measure`) when its theme's fonts are not the defaults, so a wrap
+ * text's lines are counted in the type it is drawn in.
+ */
+export function typeMeasureIn(families: Partial<SpecFamilies>): Measure {
+  const fam: SpecFamilies = { ...SPEC_FAMILY, ...families };
+  return (text, style, w, lh) => {
+    const t = SPEC_TYPE[style];
+    return wrapLines(text, w, (t.px * lh) / SPEC_LINE[style], {
+      weight: t.weight,
+      family: fam[t.family],
+    });
+  };
+}
 
 /** Cuts `v` to the page's layout unit (1/64 px), down. */
 export function cut(v: number): number {

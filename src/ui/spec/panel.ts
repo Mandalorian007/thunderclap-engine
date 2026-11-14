@@ -10,6 +10,7 @@
 import { SpecBoxes } from './boxes';
 import { type CompiledSpec, compileSpec } from './compile';
 import { SpecModel } from './model';
+import { type SpecFamilies, typeMeasureIn } from './units';
 import type { PanelEvent, PanelSpec } from './words';
 
 /** What draws a panel: the page (`presentDom`), or a surface in the world. */
@@ -31,6 +32,19 @@ const nextFrame: SpecSchedule = (f) => {
   else queueMicrotask(f);
 };
 
+/**
+ * Whether a panel that gives way as `give` says (`PanelSpec.giveWay`) has given way now: a sheet
+ * covers the screen (`sheet`), on a small screen (`small`) if it says `small`. The one rule every
+ * presenter and host asks.
+ */
+export function specGivesWay(
+  give: '' | 'small' | 'always' | undefined,
+  sheet: boolean,
+  small: boolean,
+): boolean {
+  return !!give && sheet && (give === 'always' || small);
+}
+
 /** Compiled specs, one per spec object. */
 const compiled = new WeakMap<PanelSpec, CompiledSpec>();
 
@@ -41,6 +55,11 @@ export interface SpecPanelOptions {
    * host calls `apply` itself once a frame (a game loop's `onFrame`).
    */
   schedule?: SpecSchedule | null;
+  /**
+   * The game's own type stacks (ws/ui-fit; each over `SPEC_FAMILY`'s): its wrap texts' lines are
+   * counted in them (`typeMeasureIn`). Give its theme the same fonts.
+   */
+  families?: Partial<SpecFamilies>;
 }
 
 /** A panel: its compiled words, model, boxes and presenters. Made with `panel(spec)`. */
@@ -62,6 +81,8 @@ export class SpecPanel {
   text = 1;
   /** Applies that did something (for the budgets). */
   applies = 0;
+  /** It has given way (`giveWay`): its presenters hide it and take no presses. */
+  given = false;
   private framed = false;
   private scheduled = false;
   private readonly schedule: SpecSchedule | null;
@@ -91,6 +112,30 @@ export class SpecPanel {
     this.model.relayout = true;
     this.model.changed();
     this.ask();
+  }
+
+  /**
+   * A sheet covers the screen (`sheet`) or not, on a `small` screen or not: the panel gives way if
+   * its spec says so (`PanelSpec.giveWay`, `specGivesWay`), drawn at the next apply.
+   */
+  giveWay(sheet: boolean, small: boolean): void {
+    const given = specGivesWay(this.spec.giveWay, sheet, small);
+    if (given === this.given) return;
+    this.given = given;
+    this.model.changed();
+    this.ask();
+  }
+
+  /** Stack `id`'s aim now (`SpecStack.aim`: fixed, or its key's value; '' for none or no such word). */
+  aimOf(id: string): string {
+    const c = this.spec;
+    const i = c.ids.indexOf(id);
+    if (i === -1) return '';
+    const aim = (c.nodes[i] as { aim?: string | { b: string } }).aim;
+    if (aim === undefined) return '';
+    if (typeof aim === 'string') return aim;
+    const v = this.model.get(aim.b);
+    return v === null || v === undefined ? '' : String(v);
   }
 
   /** Draws what changed: nothing, at once, when nothing did. */
@@ -127,5 +172,7 @@ export class SpecPanel {
 
 /** A panel from `spec` (compiled once per spec object; it throws on a malformed spec). */
 export function panel(spec: PanelSpec, opts: SpecPanelOptions = {}): SpecPanel {
-  return new SpecPanel(spec, opts.schedule === undefined ? nextFrame : opts.schedule);
+  const p = new SpecPanel(spec, opts.schedule === undefined ? nextFrame : opts.schedule);
+  if (opts.families) p.boxes.measure = typeMeasureIn(opts.families);
+  return p;
 }

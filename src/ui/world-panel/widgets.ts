@@ -24,6 +24,10 @@ export interface PanelKeyEvent {
   /** With Ctrl or Cmd (ws/ui-world: a long field's Enter sends only so). */
   ctrlKey?: boolean;
   metaKey?: boolean;
+  /** The key's place on the keyboard (`KeyboardEvent.code`: ws/ui-fit, a field's close key). */
+  code?: string;
+  /** Held down: the key's repeat (ws/ui-fit: type-ahead takes no repeats). */
+  repeat?: boolean;
 }
 
 const HOVER_TINT = 'rgba(255, 255, 255, 0.07)';

@@ -10,6 +10,7 @@ import {
   ALIGN,
   KIND,
   R_AGAIN,
+  R_AIM,
   R_BADGE,
   R_COUNT,
   R_ENABLED,
@@ -90,11 +91,23 @@ export class CompiledSpec {
   readonly wraps: Int32Array;
   readonly textKey: Int32Array;
   readonly termW: Float64Array;
+  /** The stacks with an aim (`SpecStack.aim`), in pre-order. */
+  readonly aims: Int32Array;
+  /** A list's window (`SpecList.window`, units; -1: none, every row bound). */
+  readonly win: Float64Array;
+  /** The type-ahead field (`SpecField.typeAhead`), or -1. */
+  readonly ahead: number;
+  /** It gives way under a sheet (`PanelSpec.giveWay`; '': never). */
+  readonly giveWay: '' | 'small' | 'always';
+  /** The side its body slides from as it fades (`PanelSpec.slide`; '': none). */
+  readonly slide: '' | 'up' | 'down' | 'left' | 'right';
 
   constructor(spec: PanelSpec) {
     this.id = spec.id;
     this.held = spec.held === true;
     this.fade = spec.fade ?? 0;
+    this.giveWay = spec.giveWay ?? '';
+    this.slide = spec.slide ?? '';
     const nodes: SpecNode[] = [];
     const parents: number[] = [];
     const lists: number[] = [];
@@ -152,6 +165,9 @@ export class CompiledSpec {
     this.listOrd = new Int32Array(n).fill(-1);
     this.textKey = new Int32Array(n).fill(-1);
     this.termW = new Float64Array(n);
+    this.win = new Float64Array(n).fill(-1);
+    const aims: number[] = [];
+    let ahead = -1;
     const wraps: number[] = [];
     const last = new Int32Array(n).fill(-1);
     const keys: string[] = [];
@@ -258,6 +274,10 @@ export class CompiledSpec {
             if (!node.id) throw new Error(`a tap ${node.k} needs an id (${spec.id})`);
             pressables.push(i);
           }
+          if (node.aim !== undefined) {
+            aims.push(i);
+            if (isBind(node.aim)) bind(i, node.aim, R_AIM);
+          }
           break;
         }
         case 'grid':
@@ -266,6 +286,11 @@ export class CompiledSpec {
         case 'list':
           this.gap[i] = node.gap ?? 0;
           if (isBind(node.maxRows)) sizing(node.maxRows, R_ROWS, "a list's maxRows");
+          if (node.window !== undefined) {
+            if (!(node.window >= 0))
+              throw new Error(`list ${node.id}: a window is a margin of 0 or more units`);
+            this.win[i] = node.window;
+          }
           break;
         case 'text':
           if (isBind(node.lines)) {
@@ -300,6 +325,9 @@ export class CompiledSpec {
           });
           if (node.valueText) bind(i, node.valueText, R_VALUETEXT);
           break;
+        case 'icon':
+          if (node.ring) bind(i, node.ring, R_RING);
+          break;
         case 'button':
           if (isBind(node.text)) bind(i, node.text, R_TEXT);
           if (node.on) bind(i, node.on, R_ON);
@@ -313,6 +341,13 @@ export class CompiledSpec {
           if (isBind(node.placeholder)) bind(i, node.placeholder, R_PLACEHOLDER);
           if (node.value) bind(i, node.value, R_VALUE);
           if (node.enabled) bind(i, node.enabled, R_ENABLED);
+          if (node.typeAhead) {
+            if (ahead !== -1)
+              throw new Error(`two type-ahead fields in ${spec.id} (${node.id}): one a panel`);
+            if (this.inList[i] !== -1)
+              throw new Error(`field ${node.id}: a type-ahead field in a list's row`);
+            ahead = i;
+          }
           pressables.push(i);
           break;
         case 'tabs':
@@ -346,6 +381,8 @@ export class CompiledSpec {
     this.fieldBinds = fieldBinds.map((l) => l.map((a) => Int32Array.from(a)));
     this.pressables = Int32Array.from(pressables);
     this.wraps = Int32Array.from(wraps);
+    this.aims = Int32Array.from(aims);
+    this.ahead = ahead;
   }
 }
 
