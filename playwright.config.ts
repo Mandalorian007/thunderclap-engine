@@ -81,6 +81,7 @@ export const WEBKIT_SPECS = [
   'smoke',
   'core',
   'kit',
+  'intents-quality',
   'models',
   'actors',
   'mesh',

@@ -91,6 +91,12 @@ class Touch {
 const near = (a: number | undefined, b: number, tol = 3) => Math.abs((a ?? -1e9) - b) <= tol;
 
 test.describe('intents', () => {
+  // All four drive touch rows through CDP touches (`Touch`); webkit-ipad is a touch row.
+  test.fixme(
+    ({ browserName }) => browserName === 'webkit',
+    'Playwright drives touch through CDP, which is Chromium-only',
+  );
+
   test.beforeEach(async ({ page, wrapper }) => {
     touch = touchRow();
     frame = await open(page, wrapper, 'intents.html');
