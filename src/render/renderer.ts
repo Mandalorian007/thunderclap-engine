@@ -193,6 +193,13 @@ export interface RenderStats {
    * zeroed by `beginFrame`.
    */
   lodCounts: number[];
+  /**
+   * Merged mesh runs the scene passes drew (ws/core-immediate): stretches of distinct small
+   * meshes under one pipeline and material, each one multi-draw, one bundle of indirect draws or
+   * (without `indirect-first-instance`) direct draws from the mesh pool. Their draws still count
+   * in `drawCalls` one per mesh drawn.
+   */
+  runs: number;
 }
 
 /** Options of `Renderer.textureFromSource`. */
@@ -525,6 +532,7 @@ export class Renderer implements FrameSink {
     shadowDraws: 0,
     passes: 0,
     lodCounts: [],
+    runs: 0,
   };
   /**
    * The band around each LOD threshold an instance must cross before it changes level, as a
@@ -1227,6 +1235,7 @@ export class Renderer implements FrameSink {
     this.stats.triangles = 0;
     this.stats.instances = 0;
     this.stats.drawables = 0;
+    this.stats.runs = 0;
     this.stats.batches = 0;
     this.stats.culled = 0;
     this.stats.shadowDraws = 0;
@@ -1465,6 +1474,7 @@ export class Renderer implements FrameSink {
       if (runTarget && runEnd[i]! > i) {
         const end = runEnd[i]!;
         drawCalls += this.encodeRun(pass, slot, base, i, end, runTarget, depth);
+        this.stats.runs++;
         triangles += this.runTriangles;
         curPipeline = null;
         curMaterial = null;

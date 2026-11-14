@@ -747,6 +747,7 @@ class Mesh {
     vertexCount: number;
     indexCount: number;
     growths: number;
+    revision: number;
     readonly bounds: MeshBounds;
     readonly autoBounds: boolean;
     readonly ranges: Record<string, MeshRange> | undefined;
@@ -1041,6 +1042,7 @@ interface RenderStats {
     shadowDraws: number;
     passes: number;
     lodCounts: number[];
+    runs: number;
 }
 
 ## RenderView  (type-only)
