@@ -147,6 +147,8 @@ export class RenderCore {
   /** Some drawable samples depth / colour (rebuilt with `bySet`). */
   private wantsDepthBinding = false;
   private wantsColor = false;
+  /** The current target can be copied (`CoreTarget.texture`): `sceneColorView` is live. */
+  private colorLive = false;
   private depthUsage = 0;
   private colorTexture: GPUTexture | null = null;
   private colorView: GPUTextureView | null = null;
@@ -161,9 +163,7 @@ export class RenderCore {
   private readonly depthAttachment: GPURenderPassDepthStencilAttachment;
   private readonly passDesc: GPURenderPassDescriptor;
   private readonly passDescDepth: GPURenderPassDescriptor;
-  private readonly computeDesc: GPUComputePassDescriptor = {
-    label: 'core cull',
-  };
+  private readonly computeDesc: GPUComputePassDescriptor = { label: 'core cull' };
   private readonly copyOrigin = { x: 0, y: 0, z: 0 };
   private readonly copySrc: GPUTexelCopyTextureInfo = {
     texture: undefined as unknown as GPUTexture,
@@ -204,11 +204,7 @@ export class RenderCore {
       entries: [
         { binding: 0, visibility: S.COMPUTE, buffer: { type: 'uniform' } },
         { binding: 1, visibility: S.COMPUTE, buffer: { type: 'uniform' } },
-        {
-          binding: 2,
-          visibility: S.COMPUTE,
-          buffer: { type: 'read-only-storage' },
-        },
+        { binding: 2, visibility: S.COMPUTE, buffer: { type: 'read-only-storage' } },
         { binding: 3, visibility: S.COMPUTE, buffer: { type: 'storage' } },
       ],
     });
@@ -261,10 +257,7 @@ export class RenderCore {
       depthStoreOp: 'store',
       depthClearValue: 1,
     };
-    this.passDesc = {
-      label: 'core pass',
-      colorAttachments: [this.colorAttachment],
-    };
+    this.passDesc = { label: 'core pass', colorAttachments: [this.colorAttachment] };
     this.passDescDepth = {
       label: 'core pass',
       colorAttachments: [this.colorAttachment],
@@ -386,9 +379,12 @@ export class RenderCore {
     return this.depthView;
   }
 
-  /** The copy of the target's colour drawables that `readsColor` sample (null until made). */
+  /**
+   * The copy of the target's colour drawables that `readsColor` sample: null until made, and
+   * null while the target has no `texture` to copy from.
+   */
   get sceneColorView(): GPUTextureView | null {
-    return this.colorView;
+    return this.colorLive ? this.colorView : null;
   }
 
   /** Bumped when `sceneDepthView` or `sceneColorView` is re-made (bind groups go stale). */
@@ -511,7 +507,14 @@ export class RenderCore {
     const vp = target.viewport;
     // Effects bind depth and colour by view: make them before any bundle is recorded.
     if (this.wantsDepthBinding) this.depthFor(target.width, target.height);
-    if (this.wantsColor) this.colorFor(target);
+    if (this.wantsColor) {
+      const live = target.texture !== undefined;
+      if (live !== this.colorLive) {
+        this.colorLive = live;
+        this.targets++;
+      }
+      if (live) this.colorFor(target);
+    }
     let first = true;
     let depthCleared = false;
     let colorCopied = false;
@@ -673,15 +676,10 @@ export class RenderCore {
 
   private cullPipe(): GPUComputePipeline {
     if (this.cullPipeline) return this.cullPipeline;
-    const module = this.device.createShaderModule({
-      label: 'core cull',
-      code: CULL_WGSL,
-    });
+    const module = this.device.createShaderModule({ label: 'core cull', code: CULL_WGSL });
     this.cullPipeline = this.device.createComputePipeline({
       label: 'core cull',
-      layout: this.device.createPipelineLayout({
-        bindGroupLayouts: [this.cullLayout],
-      }),
+      layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.cullLayout] }),
       compute: { module, entryPoint: 'cs_cull' },
     });
     return this.cullPipeline;

@@ -6,6 +6,8 @@
  * stage. Soft particles sample the core's depth (`readsDepth`).
  */
 
+import type { Knob } from '../quality/governor';
+import { stepKnob } from '../quality/knobs';
 import type { RenderCore } from '../render/core/core';
 import {
   type CoreDrawable,
@@ -139,4 +141,40 @@ export class ParticlesOnCore implements CoreDrawable {
     this.dummyDepth?.destroy();
     this.group = null;
   }
+}
+
+/** Options for `particleBudgetKnob`. */
+export interface ParticleBudgetKnobOptions {
+  /** The lowest share of spawns kept. Default 0.25. */
+  min?: number;
+  /** Change per step. Default 0.25. */
+  step?: number;
+  /** Default `'particle budget'`. */
+  name?: string;
+  cost?: number;
+}
+
+/**
+ * The particle budget as a governor knob (C7): each step scales every system's `spawnScale`
+ * (from 1 down to `min`), so fewer particles live and fill. The draw call count does not move
+ * (one instanced draw a system); the fill and the simulation's live share do.
+ */
+export function particleBudgetKnob(
+  systems: readonly { spawnScale: number }[],
+  opts: ParticleBudgetKnobOptions = {},
+): Knob {
+  let scale = 1;
+  const base = systems.map((s) => s.spawnScale);
+  return stepKnob({
+    name: opts.name ?? 'particle budget',
+    cost: opts.cost,
+    get: () => scale,
+    set: (v) => {
+      scale = v;
+      for (let i = 0; i < systems.length; i++) systems[i]!.spawnScale = base[i]! * v;
+    },
+    min: opts.min ?? 0.25,
+    max: 1,
+    step: opts.step ?? 0.25,
+  });
 }

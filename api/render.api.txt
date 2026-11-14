@@ -87,8 +87,14 @@ interface BufferLayout {
 ## COMPRESSION_FEATURES
 const COMPRESSION_FEATURES: Readonly<Record<CompressionFamily, GPUFeatureName>>;
 
+## CORE_DRAWABLE_WGSL
+const CORE_DRAWABLE_WGSL = "\nstruct CoreView {\n  viewProj: mat4x4f,\n  position: vec4f,\n  planes: array<vec4f, 6>,\n  index: u32,\n  _a: u32,\n  _b: u32,\n  _c: u32,\n  origin: vec4f,\n  _pad: array<vec4f, 3>,\n};\n\n@group(0) @binding(0) var<uniform> view: CoreView;\n";
+
 ## CORE_PASSES
 const CORE_PASSES: readonly PassDesc[];
+
+## CORE_VIEW_EXTRA_WGSL
+const CORE_VIEW_EXTRA_WGSL = "\nstruct CoreViewExtra {\n  invViewProj: mat4x4f,\n  right: vec4f,\n  up: vec4f,\n  forward: vec4f,\n  _pad: vec4f,\n};\n";
 
 ## CORE_VIEW_WGSL
 const CORE_VIEW_WGSL = "\nstruct CoreView {\n  viewProj: mat4x4f,\n  position: vec4f,\n  planes: array<vec4f, 6>,\n  index: u32,\n  _a: u32,\n  _b: u32,\n  _c: u32,\n  origin: vec4f,\n  _pad: array<vec4f, 3>,\n};\n";
@@ -189,6 +195,36 @@ interface CoreCaps {
     readonly firstInstance: boolean;
 }
 
+## CoreDrawContext  (type-only)
+interface CoreDrawContext {
+    readonly core: RenderCore;
+    group: number;
+    viewGroup: GPUBindGroup;
+    readonly viewLayout: GPUBindGroupLayout;
+    color: GPUTextureFormat;
+    depth: GPUTextureFormat | undefined;
+    depthReadOnly: boolean;
+}
+
+## CoreDrawable  (type-only)
+interface CoreDrawable {
+    readonly label?: string;
+    readonly pass?: string;
+    readonly order?: number;
+    readonly depth?: boolean;
+    readonly readsDepth?: boolean;
+    readonly readsColor?: boolean;
+    readonly encoding?: 'bundle' | 'direct';
+    readonly version: number;
+    readonly active: boolean;
+    readonly bounds?: ArrayLike<number> | null;
+    prepare?(encoder: GPUCommandEncoder, core: RenderCore): void;
+    record(enc: CoreDrawableEncoder, ctx: CoreDrawContext): number;
+}
+
+## CoreDrawableEncoder  (type-only)
+type CoreDrawableEncoder = GPURenderPassEncoder | GPURenderBundleEncoder;
+
 ## CorePass  (type-only)
 interface CorePass {
     readonly id: string;
@@ -221,6 +257,16 @@ interface CoreTarget {
         width: number;
         height: number;
     };
+    texture?: GPUTexture;
+}
+
+## CoreViewExtras
+class CoreViewExtras {
+    readonly buffer: GPUBuffer;
+    private constructor();
+    static of(core: RenderCore): CoreViewExtras;
+    update(): void;
+    destroy(): void;
 }
 
 ## CullGroup  (type-only)
@@ -348,6 +394,12 @@ interface Drawable {
     draw(pass: GPURenderPassEncoder, frame: Frame): void;
     readsDepth?: boolean;
     afterOpaque?(encoder: GPUCommandEncoder, view: ViewInfo): void;
+}
+
+## DrawablePipelines
+class DrawablePipelines {
+    constructor(make: (color: GPUTextureFormat, depth: GPUTextureFormat | undefined, readOnly: boolean) => GPURenderPipeline);
+    get(ctx: CoreDrawContext): GPURenderPipeline;
 }
 
 ## DynamicResolution
@@ -1031,6 +1083,13 @@ class RenderCore {
     createArena(desc: ArenaDesc): Arena;
     createDrawSet(desc: DrawSetDesc): DrawSet;
     removeDrawSet(set: DrawSet): void;
+    addDrawable(d: CoreDrawable): void;
+    removeDrawable(d: CoreDrawable): void;
+    get coreDrawables(): readonly CoreDrawable[];
+    get viewCount(): number;
+    get sceneDepthView(): GPUTextureView | null;
+    get sceneColorView(): GPUTextureView | null;
+    get targetsVersion(): number;
     definePass(desc: PassDesc): CorePass;
     get drawSets(): readonly DrawSet[];
     get depth(): GPUTexture | null;
@@ -1654,6 +1713,9 @@ const VERTEX_SKINNED_STRIDE: number;
 
 ## VERTEX_STRIDE
 const VERTEX_STRIDE: number;
+
+## VIEW_EXTRA_FLOATS
+const VIEW_EXTRA_FLOATS = 32;
 
 ## VIEW_SLOT
 const VIEW_SLOT: {

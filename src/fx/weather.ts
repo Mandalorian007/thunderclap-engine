@@ -8,6 +8,8 @@
  * the recorded bundle stays put while counts, wind and intensity change, and both eyes of a
  * stereo pair execute it.
  */
+import type { Knob } from '../quality/governor';
+import { stepKnob } from '../quality/knobs';
 import type { RenderCore } from '../render/core/core';
 import {
   type CoreDrawable,
@@ -414,5 +416,38 @@ export class Weather implements CoreDrawable {
 }
 
 function clamp01(v: number): number {
-  return v < 0 ? 0 : v > 1 ? 1 : v;
+  return Math.max(0, Math.min(1, v));
+}
+
+/** Options for `weatherDensityKnob`. */
+export interface WeatherDensityKnobOptions {
+  /** The lowest density. Default 0.25. */
+  min?: number;
+  /** Change per step. Default 0.25. */
+  step?: number;
+  /** Default `'weather density'`. */
+  name?: string;
+  cost?: number;
+}
+
+/**
+ * Weather density as a governor knob (C7): each step moves `density` (1 down to `min`), which
+ * thins every layer's count while `intensity` stays the scene's call. Live: the indirect count
+ * changes, the bundle does not.
+ */
+export function weatherDensityKnob(
+  weather: { density: number },
+  opts: WeatherDensityKnobOptions = {},
+): Knob {
+  return stepKnob({
+    name: opts.name ?? 'weather density',
+    cost: opts.cost,
+    get: () => weather.density,
+    set: (v) => {
+      weather.density = v;
+    },
+    min: opts.min ?? 0.25,
+    max: 1,
+    step: opts.step ?? 0.25,
+  });
 }
