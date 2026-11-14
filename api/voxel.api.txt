@@ -2,6 +2,64 @@
 // Do not edit by hand. After an intended API change run `pnpm api:update` and commit this file.
 // engine-v1.0.0 frozen surface: a change here needs a *Breaking* or *Added* line naming this module under CHANGELOG.md `## Unreleased`.
 
+## ALL_FACE_PAIRS
+const ALL_FACE_PAIRS = 32767;
+
+## BlockDef  (type-only)
+interface BlockDef {
+    class: FaceClass;
+    lightCost?: number;
+    emission?: number;
+    hue?: number;
+    inset?: number;
+    quads?: number;
+    fields?: Readonly<Record<string, number>>;
+}
+
+## BlockLightFlood
+class BlockLightFlood {
+    visited: number;
+    constructor(format: VoxelFormat);
+    fill(wide: Uint32Array, sources: number, outLevel: Uint8Array, outHue: Uint8Array): boolean;
+}
+
+## BlockTable  (type-only)
+interface BlockTable {
+    readonly count: number;
+    readonly faceClass: Uint8Array;
+    readonly lightCost: Uint8Array;
+    readonly emission: Uint8Array;
+    readonly hue: Uint8Array;
+    readonly inset: Uint8Array;
+    readonly quads: Uint8Array;
+    readonly hueMix: Uint8Array;
+    readonly emissive: boolean;
+    readonly fields: readonly (Readonly<Record<string, number>> | null)[];
+}
+
+## BlockTableOptions  (type-only)
+interface BlockTableOptions {
+    hueMix?: readonly (readonly [number, number, number])[];
+}
+
+## CROSS_FACE
+const CROSS_FACE = 6;
+
+## CellField  (type-only)
+interface CellField {
+    name: string;
+    shift: number;
+    bits: number;
+    fromFacing?: boolean;
+}
+
+## CellLayout  (type-only)
+interface CellLayout {
+    idShift?: number;
+    idBits?: number;
+    fields?: readonly CellField[];
+}
+
 ## ChunkMesh  (type-only)
 interface ChunkMesh extends MeshReply {
     chunk: number;
@@ -21,6 +79,37 @@ interface ChunkMeshOut {
     bounds: MeshBounds;
 }
 
+## ConnectivityFlood
+class ConnectivityFlood implements SectionConnectivity {
+    bits: number;
+    open: number;
+    dark: boolean;
+    constructor(size: number);
+    compute(opaque: Uint8Array, light: Uint8Array, block?: Uint8Array | null): this;
+}
+
+## FACE_CLASS
+const FACE_CLASS: {
+    readonly none: 0;
+    readonly opaque: 1;
+    readonly liquid: 2;
+    readonly cutout: 3;
+    readonly foliage: 4;
+    readonly cross: 5;
+};
+
+## FaceClass  (type-only)
+type FaceClass = 'none' | 'opaque' | 'liquid' | 'cutout' | 'foliage' | 'cross';
+
+## HEIGHT_BLOCKED
+const HEIGHT_BLOCKED = 2147483647;
+
+## HEIGHT_OPEN
+const HEIGHT_OPEN = -2147483648;
+
+## LIGHT_HUES
+const LIGHT_HUES = 8;
+
 ## MeshChunkOptions  (type-only)
 interface MeshChunkOptions {
     ao?: boolean;
@@ -29,17 +118,277 @@ interface MeshChunkOptions {
     outside?: number | ((x: number, y: number, z: number) => number);
 }
 
+## MesherPort  (type-only)
+interface MesherPort {
+    post(message: SectionMesherRequest, transfer: ArrayBuffer[]): void;
+    onResult(cb: (reply: SectionMesherReply) => void): void;
+    onError?(cb: (message: string) => void): void;
+    terminate(): void;
+}
+
+## NO_HUE_MIX
+const NO_HUE_MIX = 255;
+
+## RAW_SECTION_CODEC
+const RAW_SECTION_CODEC: SectionCodec;
+
+## RAY_HIT
+const RAY_HIT = 1;
+
+## RAY_PASS
+const RAY_PASS = 0;
+
+## RAY_UNKNOWN
+const RAY_UNKNOWN = -1;
+
+## SECTION_VERTEX_WORDS
+const SECTION_VERTEX_WORDS = 2;
+
+## SectionCodec  (type-only)
+interface SectionCodec {
+    decode(bytes: Uint8Array, out: Uint32Array): number | null;
+}
+
+## SectionConnectivity  (type-only)
+interface SectionConnectivity {
+    bits: number;
+    open: number;
+    dark: boolean;
+}
+
+## SectionInput  (type-only)
+interface SectionInput {
+    sx: number;
+    sy: number;
+    sz: number;
+    blocks: Uint32Array;
+    heights: Int32Array;
+    wetTops?: Uint8Array;
+    wide?: Uint32Array;
+    glowSources?: number;
+}
+
+## SectionInputBuilder
+class SectionInputBuilder {
+    readonly pad: number;
+    constructor(format: VoxelFormat, codec: SectionCodec);
+    build(job: SectionJob): SectionInput;
+}
+
+## SectionJob  (type-only)
+interface SectionJob {
+    sx: number;
+    sy: number;
+    sz: number;
+    layout: Uint32Array;
+    data: Uint8Array;
+    air: number;
+    heights: Int32Array;
+    wetTops?: Uint8Array;
+    glow?: number;
+}
+
+## SectionMesh  (type-only)
+interface SectionMesh {
+    opaque: ArrayBuffer;
+    liquid: ArrayBuffer;
+    foliage: ArrayBuffer;
+    opaqueQuads: number;
+    liquidQuads: number;
+    foliageQuads: number;
+    faces: number;
+    bounds: [number, number, number, number, number, number];
+    connectivity: number;
+    openCells: number;
+    dark: boolean;
+}
+
+## SectionMeshOptions  (type-only)
+interface SectionMeshOptions {
+    greedy?: boolean;
+}
+
+## SectionMeshPool
+class SectionMeshPool {
+    readonly stats: SectionMeshPoolStats;
+    readonly errors: SectionMeshPoolErrors;
+    constructor(opts: SectionMeshPoolOptions);
+    get size(): number;
+    get idle(): boolean;
+    enqueue(key: number, priority: number): void;
+    isQueued(key: number): boolean;
+    cancel(key: number): void;
+    reprioritize(priority: (key: number) => number): void;
+    pump(): void;
+    terminate(): void;
+}
+
+## SectionMeshPoolErrors  (type-only)
+interface SectionMeshPoolErrors {
+    count: number;
+    restarts: number;
+    last: string | null;
+}
+
+## SectionMeshPoolOptions  (type-only)
+interface SectionMeshPoolOptions {
+    format: VoxelFormat;
+    ports: MesherPort[];
+    build: (key: number) => SectionJob | null;
+    onMesh: (key: number, result: SectionMeshResult) => void;
+    greedy?: boolean;
+    perWorker?: number;
+    respawn?: (index: number) => MesherPort;
+}
+
+## SectionMeshPoolStats  (type-only)
+interface SectionMeshPoolStats {
+    queued: number;
+    inFlight: number;
+    buildMs: number;
+}
+
+## SectionMeshResult  (type-only)
+interface SectionMeshResult {
+    type: 'mesh';
+    job: number;
+    sx: number;
+    sy: number;
+    sz: number;
+    mesh: SectionMesh;
+    ms: number;
+}
+
+## SectionMesher
+class SectionMesher {
+    readonly size: number;
+    constructor(format: VoxelFormat);
+    mesh(input: SectionInput, opts?: SectionMeshOptions): SectionMesh;
+    meshPiece(cells: Uint32Array, sx: number, sy: number, sz: number, opts?: SectionMeshOptions & {
+        air?: number;
+    }): SectionMesh;
+    get skyLevels(): Uint8Array;
+    get blockLevels(): Uint8Array;
+    get blockHues(): Uint8Array;
+    get blockLightVisited(): number;
+}
+
+## SectionMesherReply  (type-only)
+type SectionMesherReply = SectionMeshResult | {
+    type: 'error';
+    job: number;
+    sx: number;
+    sy: number;
+    sz: number;
+    message: string;
+};
+
+## SectionMesherRequest  (type-only)
+type SectionMesherRequest = {
+    type: 'init';
+    format: VoxelFormat;
+} | {
+    type: 'mesh';
+    job: number;
+    input: SectionJob;
+    greedy: boolean;
+};
+
+## SectionStore  (type-only)
+interface SectionStore {
+    readonly format: VoxelFormat;
+    putSection(sx: number, sy: number, sz: number, bytes: Uint8Array): void;
+    dropSection(key: number): void;
+    has(key: number): boolean;
+    ready(key: number): boolean;
+    cellAt(x: number, y: number, z: number): number | undefined;
+    edit(key: number, changes: ArrayLike<number>): number[];
+    setInterest(x: number, y: number, z: number): void;
+    markDirty(key: number): void;
+    takeReady(out: number[], max: number): number;
+    jobFor(key: number): SectionJob;
+    stats(): SectionStoreStats;
+}
+
+## SectionStoreOptions  (type-only)
+interface SectionStoreOptions {
+    format: VoxelFormat;
+    codec: SectionCodec;
+    air?: number;
+    minSectionY?: number;
+    maxSectionY?: number;
+    outside?: number;
+}
+
+## SectionStoreStats  (type-only)
+interface SectionStoreStats {
+    sections: number;
+    decoded: number;
+    dirty: number;
+    bytes: number;
+}
+
+## SectionWorkerScopeLike  (type-only)
+interface SectionWorkerScopeLike {
+    postMessage(message: SectionMesherReply, transfer?: Transferable[]): void;
+    addEventListener(type: 'message', listener: (e: {
+        data: unknown;
+    }) => void): void;
+}
+
+## SourceSection  (type-only)
+type SourceSection = number | Uint8Array | Uint32Array;
+
 ## VOXEL_AO_CURVE
 const VOXEL_AO_CURVE: readonly number[];
 
 ## VOXEL_FACE_NORMALS
 const VOXEL_FACE_NORMALS: readonly (readonly [number, number, number])[];
 
+## VOXEL_VERTEX_DEFAULTS
+const VOXEL_VERTEX_DEFAULTS: readonly VertexFieldDef[];
+
 ## VOXEL_VERTEX_FLOATS
 const VOXEL_VERTEX_FLOATS = 12;
 
+## VOXEL_VERTEX_OPTIONAL
+const VOXEL_VERTEX_OPTIONAL: readonly VertexFieldDef[];
+
 ## VOXEL_WGSL
 const VOXEL_WGSL = "\nfn voxel_layer(color: vec4f) -> u32 {\n  return u32(round(max(color.a, 0.0)));\n}\n\nfn voxel_ao(color: vec4f) -> f32 {\n  return color.r;\n}\n\nfn voxel_uv_wrap(uv: vec2f) -> vec2f {\n  return fract(uv);\n}\n";
+
+## VertexField  (type-only)
+interface VertexField {
+    readonly name: string;
+    readonly bits: number;
+    readonly word: 0 | 1;
+    readonly shift: number;
+    readonly mask: number;
+}
+
+## VertexFieldDef  (type-only)
+interface VertexFieldDef {
+    name: string;
+    bits: number;
+    word?: 0 | 1;
+    shift?: number;
+}
+
+## VertexSchema  (type-only)
+interface VertexSchema {
+    readonly fields: readonly VertexField[];
+}
+
+## VertexSchemaOptions  (type-only)
+interface VertexSchemaOptions {
+    defaults?: boolean;
+}
+
+## VertexSchemaWgslOptions  (type-only)
+interface VertexSchemaWgslOptions {
+    struct?: string;
+    fn?: string;
+}
 
 ## VoxelChunks  (type-only)
 interface VoxelChunks {
@@ -83,6 +432,28 @@ interface VoxelDrawStats {
 
 ## VoxelFace  (type-only)
 type VoxelFace = 0 | 1 | 2 | 3 | 4 | 5;
+
+## VoxelFormat  (type-only)
+interface VoxelFormat {
+    readonly size: number;
+    readonly blocks: BlockTable;
+    readonly vertex: VertexSchema;
+    readonly idShift: number;
+    readonly idMask: number;
+    readonly cellFields: readonly CellField[];
+    readonly skyFalloff: number;
+    readonly liquidSkyFalloff: number;
+}
+
+## VoxelFormatOptions  (type-only)
+interface VoxelFormatOptions {
+    sectionSize?: number;
+    blocks: BlockTable;
+    vertex?: VertexSchema;
+    cell?: CellLayout;
+    skyFalloff?: number;
+    liquidSkyFalloff?: number;
+}
 
 ## VoxelGrid  (type-only)
 interface VoxelGrid {
@@ -205,6 +576,9 @@ function countExposedFaces(grid: VoxelGrid, cx: number, cy: number, cz: number, 
 ## createChunkMeshOut
 function createChunkMeshOut(quads?: number): ChunkMeshOut;
 
+## createSectionStore
+function createSectionStore(opts: SectionStoreOptions): SectionStore;
+
 ## createVoxelChunks
 function createVoxelChunks(renderer: Renderer, grid: VoxelGrid, opts: VoxelChunksOptions): VoxelChunks;
 
@@ -217,11 +591,37 @@ function createVoxelHit(): VoxelHit;
 ## createVoxelMesher
 function createVoxelMesher(grid: VoxelGrid, opts?: VoxelMesherOptions): VoxelMesher;
 
+## defineBlockTable
+function defineBlockTable(blocks: readonly BlockDef[], opts?: BlockTableOptions): BlockTable;
+
+## defineVertexSchema
+function defineVertexSchema(fields?: readonly VertexFieldDef[], opts?: VertexSchemaOptions): VertexSchema;
+
+## defineVoxelFormat
+function defineVoxelFormat(opts: VoxelFormatOptions): VoxelFormat;
+
 ## deserializeVoxelGrid
 function deserializeVoxelGrid(buffer: ArrayBuffer): VoxelGrid;
 
+## encodeRawSection
+function encodeRawSection(cells: Uint32Array): Uint8Array;
+
+## facePairBit
+function facePairBit(a: number, b: number): number;
+
+## inThreadMesherPort
+function inThreadMesherPort(codec: SectionCodec): MesherPort;
+
+## installSectionMesherWorker
+function installSectionMesherWorker(opts: {
+    codec: SectionCodec;
+}, scope?: SectionWorkerScopeLike): (req: SectionMesherRequest) => SectionMesherReply | null;
+
 ## installVoxelMesherWorker
 function installVoxelMesherWorker(opts?: MeshChunkOptions, scope?: VoxelWorkerScopeLike): (req: VoxelMesherRequest) => void;
+
+## jobTransfers
+function jobTransfers(job: SectionJob): ArrayBuffer[];
 
 ## meshChunk
 function meshChunk(grid: VoxelGrid, cx: number, cy: number, cz: number, opts: MeshChunkOptions, out: ChunkMeshOut): ChunkMeshOut;
@@ -229,5 +629,59 @@ function meshChunk(grid: VoxelGrid, cx: number, cy: number, cz: number, opts: Me
 ## packChunkMesh
 function packChunkMesh(out: ChunkMeshOut, chunk: number): ChunkMesh;
 
+## packSources
+function packSources(size: number, sources: readonly SourceSection[], whole?: boolean): {
+    layout: Uint32Array;
+    data: Uint8Array;
+};
+
+## packVertexField
+function packVertexField(words: Uint32Array, at: number, f: VertexField | undefined, value: number): void;
+
+## raycastCells
+function raycastCells(probe: (x: number, y: number, z: number) => number, ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxDist: number, out: VoxelHit): number;
+
 ## raycastVoxels
 function raycastVoxels(grid: VoxelGrid, ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxDist: number, out: VoxelHit): boolean;
+
+## sectionIndex
+function sectionIndex(size: number, x: number, y: number, z: number): number;
+
+## sectionKey
+function sectionKey(sx: number, sy: number, sz: number): number;
+
+## sectionKeyX
+function sectionKeyX(key: number): number;
+
+## sectionKeyY
+function sectionKeyY(key: number): number;
+
+## sectionKeyZ
+function sectionKeyZ(key: number): number;
+
+## sectionRayProbe
+function sectionRayProbe(store: SectionStore, hits?: (cell: number) => boolean): (x: number, y: number, z: number) => number;
+
+## sectionReplyTransfers
+function sectionReplyTransfers(r: SectionMesherReply): ArrayBuffer[];
+
+## sourceIndex
+function sourceIndex(dx: number, dy: number, dz: number): number;
+
+## uniformConnectivity
+function uniformConnectivity(open: boolean, size?: number): SectionConnectivity;
+
+## unpackSectionVertex
+function unpackSectionVertex(schema: VertexSchema, w0: number, w1: number, out?: Record<string, number>): Record<string, number>;
+
+## vertexField
+function vertexField(schema: VertexSchema, name: string): VertexField | undefined;
+
+## vertexFieldValue
+function vertexFieldValue(f: VertexField | undefined, w0: number, w1: number): number;
+
+## vertexSchemaWgsl
+function vertexSchemaWgsl(schema: VertexSchema, opts?: VertexSchemaWgslOptions): string;
+
+## workerMesherPort
+function workerMesherPort(worker: Worker): MesherPort;
