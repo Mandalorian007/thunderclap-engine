@@ -35,6 +35,37 @@ export function stillHold(opts: StillHoldOptions = {}): StillHoldSpec {
   };
 }
 
+/** `mouseStill`'s options: a still hold for one mouse button (ws/input-fit). */
+export interface MouseStillOptions extends StillHoldOptions {
+  /** The button (`PointerEvent.button`: 0 left, 1 middle, 2 right). Default 0. */
+  button?: number;
+}
+
+/** A `mouseStill(...)`: a free mouse's still press on one button, read by `createIntents`. */
+export interface MouseStillSpec {
+  readonly type: 'mouse';
+  readonly button: number;
+  readonly tolerancePx: number;
+  readonly ms: number;
+}
+
+/** Defaults of `mouseStill()`: a mouse is steadier than a finger and its hold comes sooner. */
+export const MOUSE_STILL_DEFAULTS = { button: 0, tolerancePx: 5, ms: 250 } as const;
+
+/**
+ * A free (unlocked) mouse's still press on `button` (ws/input-fit): released still and soon it
+ * taps, held still for `ms` it holds and then follows the pointer, moved past `tolerancePx` first
+ * it is a drag (the look's, not an intent). A locked mouse acts through actions instead.
+ */
+export function mouseStill(opts: MouseStillOptions = {}): MouseStillSpec {
+  return {
+    type: 'mouse',
+    button: opts.button ?? MOUSE_STILL_DEFAULTS.button,
+    tolerancePx: opts.tolerancePx ?? MOUSE_STILL_DEFAULTS.tolerancePx,
+    ms: opts.ms ?? MOUSE_STILL_DEFAULTS.ms,
+  };
+}
+
 /** `stickSideHold`'s options: a still hold plus the game's test of where the thumb landed. */
 export interface StickSideHoldOptions<Aim = unknown> extends StillHoldOptions {
   /**
@@ -140,8 +171,9 @@ export type StickSide = 'left' | 'right';
 
 /**
  * Whether a touch landing at client `x` on a `width`-wide area starts the move stick: inside the
- * `zone` share of the width from the stick's `side` (default 0.5, `Look`'s half), unless another
- * touch already holds the stick.
+ * `zone` share of the width from the stick's `side` (default 0.5, `Look`'s half; `Look`'s
+ * `touch.moveZoneShare` and `createIntents`' `stickZoneShare` set it), unless another touch
+ * already holds the stick.
  */
 export function inStickZone(
   x: number,

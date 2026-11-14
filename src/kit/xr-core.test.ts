@@ -10,6 +10,8 @@ import { createGame } from '../core/game';
 import type { BootResult } from '../platform';
 import { mountSurface } from '../platform/surface';
 import { type FakeXr, installFakeXr } from '../platform/xr-fake';
+import { createCorePost } from '../post/core-post';
+import { createViewPost } from '../post/view-post';
 import { Arena } from '../render/core/arena';
 import { createRenderCore, type RenderCore } from '../render/core/core';
 import { createInstanceLayout, createVertexLayout } from '../render/core/layout';
@@ -19,6 +21,8 @@ import {
   fakeRendererGpu,
   installGpuGlobals,
 } from '../render/fake-gpu';
+import type { Frame } from '../render/frame';
+import type { PostProcessor } from '../render/renderer';
 
 let lastFake: FakeDevice | null = null;
 
@@ -188,6 +192,36 @@ describe('XR on the render core (ws/xr-merge)', () => {
     // The core's passes come after the renderer's last pass of the frame.
     const lastScene = passes.map((p) => p.label).lastIndexOf('scene');
     expect(passes.findIndex((p) => p.label === 'core pass')).toBeGreaterThan(lastScene);
+  });
+
+  it('core-only eyes with post and the sun: one shadow pass, each eye its own post into its half (ws/core-passes)', async () => {
+    const g = await game(false);
+    const core = g.core;
+    const log: string[] = [];
+    const proc = (i: number): PostProcessor => ({
+      resize: () => {},
+      encode: (_e, inputs, out, vp) =>
+        log.push(
+          `${i} ${vp?.x} ${out !== g.ctx.xr.surface!.scene!.color.view} ${inputs.depth !== null}`,
+        ),
+    });
+    createCorePost(core, createViewPost(proc));
+    const frame = (g.ctx.renderer as unknown as { frame: Frame }).frame;
+    frame.lights.sun.direction = [0.2, -1, 0.1];
+    frame.lights.sun.shadow = { extent: 20, size: 1024 };
+    xr = installFakeXr({ eyeWidth: 64, eyeHeight: 32 });
+    g.ctx.loop.start();
+    await g.ctx.xr.enter();
+    const before = g.fake.passes.length;
+    log.length = 0;
+    xr.step(1000 / 72);
+    const passes = g.fake.passes.slice(before);
+    // Both eyes and the sun: one prepare, one cull for the eyes' group and one for the sun's.
+    expect(passes.filter((p) => p.label === 'core shadow')).toHaveLength(1);
+    expect(passes.filter((p) => p.label === 'core pass')).toHaveLength(2);
+    expect(log).toEqual(['0 0 true true', '1 64 true true']);
+    expect(g.ctx.renderer.coreShadow.version).toBeGreaterThan(0);
+    expect(g.fake.errors).toEqual([]);
   });
 
   it('without a core (or after setCore(null)) nothing extra is drawn', async () => {

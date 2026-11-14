@@ -7,7 +7,10 @@
  * - Actions (keys, pad buttons, the locked mouse, XR buttons) act at once.
  * - Touches and pens go through a still-press classifier: a finger lifted soon is a `tap`, one
  *   held still is a `hold` that then follows the finger, one that moves is a drag (the look's, not
- *   an intent). A thumb on the move stick holds only through `stickSideHold`.
+ *   an intent). A thumb on the move stick holds only through `stickSideHold`. A free (unlocked)
+ *   mouse does too, per button, for the intents that declare `mouse: mouseStill(...)`.
+ * - The wheel steps a `cycle`, or reaches a `wheel` intent gated by modifiers (Alt, Ctrl) and by
+ *   an XR ray leading (a laser's sticks come to the page as a wheel).
  * - The aim is a ray (`AimRay`), or `null` for the view's centre (the crosshair). A ray made
  *   through a screen point keeps that point (`screen`) and is made again from the camera every
  *   tick, so a hold's aim follows the view as it turns.
@@ -17,7 +20,9 @@
  */
 import {
   inStickZone,
+  type MouseStillSpec,
   type StickSideHoldSpec,
+  type StillHoldOptions,
   type StillHoldSpec,
   StillPress,
   stillHold,
@@ -25,6 +30,7 @@ import {
 } from './gestures-hold';
 import type { Input } from './input';
 import {
+  eventTime,
   POINTER_PRIORITY,
   type PointerConsumer,
   type PointerDispatcher,
@@ -69,6 +75,12 @@ export interface TapIntent<A extends string> {
   readonly kind: 'tap';
   readonly actions?: readonly A[];
   readonly touch?: StillHoldSpec | false;
+  /**
+   * A free mouse's still click on `mouse.button` taps it too (ws/input-fit; default none): the
+   * button's own action press is then ignored for this intent while the mouse is free (the
+   * mouse is the last device and the view does not aim at its centre).
+   */
+  readonly mouse?: MouseStillSpec | false;
 }
 
 /**
@@ -83,6 +95,8 @@ export interface HoldIntent<A extends string> {
   readonly actions?: readonly A[];
   readonly touch?: StillHoldSpec | false;
   readonly stickSide?: StickSideHoldSpec<IntentAim>;
+  /** A free mouse's still press on `mouse.button` holds it too (ws/input-fit; see `TapIntent.mouse`). */
+  readonly mouse?: MouseStillSpec | false;
 }
 
 /** The view's aim: `handler(aim, aiming)` on every tick it changes. `aiming` is false while a touch scheme has no finger down. */
@@ -90,12 +104,51 @@ export interface AimIntent {
   readonly kind: 'aim';
 }
 
-/** Steps a selection: `handler(+1)` on `next`, `handler(-1)` on `prev`, and wheel steps when `wheel` is on (down is +1). */
+/**
+ * Steps a selection: `handler(+1)` on `next`, `handler(-1)` on `prev`, and wheel steps when `wheel`
+ * is on (down is +1). `wheel: true` steps on every wheel; a `WheelGate` steps only on the wheels
+ * it lets through (ws/input-fit).
+ */
 export interface CycleIntent<A extends string> {
   readonly kind: 'cycle';
   readonly next?: readonly A[];
   readonly prev?: readonly A[];
-  readonly wheel?: boolean;
+  readonly wheel?: boolean | WheelGate;
+}
+
+/**
+ * Modifier keys a wheel needs: `true` held, `false` not held, absent either. Read from the wheel
+ * event itself, so a trackpad's pinch (Ctrl + wheel, no key down) counts as Ctrl.
+ */
+export interface WheelModifiers {
+  readonly alt?: boolean;
+  readonly ctrl?: boolean;
+  readonly shift?: boolean;
+  readonly meta?: boolean;
+}
+
+/** Which wheel events reach an intent (ws/input-fit). */
+export interface WheelGate {
+  readonly modifiers?: WheelModifiers;
+  /**
+   * Whether the wheel acts while an XR ray leads (`IntentsOptions.pointers`' primary is an XR
+   * pointer: a headset's sticks come to the page as a wheel). Default false.
+   */
+  readonly whileRay?: boolean;
+  /** The game's own gate, read per wheel event (a laser mode, a paused view). */
+  readonly when?: () => boolean;
+}
+
+/**
+ * The wheel (ws/input-fit): `handler(delta)` once a tick the gate let wheels through. With `steps`
+ * (default true) `delta` is whole steps, at most one per event (`WheelSteps`, `pixelsPerStep`
+ * default 50); with `steps: false` it is the scroll in CSS px (lines 16, pages 400). Down is
+ * positive.
+ */
+export interface WheelIntent extends WheelGate {
+  readonly kind: 'wheel';
+  readonly steps?: boolean;
+  readonly pixelsPerStep?: number;
 }
 
 /** Picks one of several: `handler(n)` when `actions[n]` is pressed (the lowest `n` when several are). */
@@ -111,22 +164,28 @@ export type IntentDecl<A extends string> =
   | HoldIntent<A>
   | AimIntent
   | CycleIntent<A>
-  | SelectIntent<A>;
+  | SelectIntent<A>
+  | WheelIntent;
 
 /** The game's intents by name. */
 export type IntentSpec<A extends string> = Readonly<Record<string, IntentDecl<A>>>;
 
-/** A hold intent's handlers. `pressedAt` is when the press began (ms on the intents' clock), earlier than now for a still hold. */
+/**
+ * A hold intent's handlers. `pressedAt` is when the press began (ms on the intents' clock), earlier
+ * than now for a still hold. `pointer` (ws/input-fit) is the finger's or the free mouse's pointer
+ * id (`PointerEvent.pointerId`, or the id a feed method was given) for a still hold, `null` for an
+ * action's.
+ */
 export interface HoldHandler {
-  start(aim: IntentAim, pressedAt: number): void;
-  aim?(aim: IntentAim): void;
-  end(): void;
+  start(aim: IntentAim, pressedAt: number, pointer?: number | null): void;
+  aim?(aim: IntentAim, pointer?: number | null): void;
+  end(pointer?: number | null): void;
 }
 
 /** The handler an intent declaration takes. */
 export type IntentHandler<D> = D extends { kind: 'hold' }
   ? HoldHandler
-  : D extends { kind: 'cycle' }
+  : D extends { kind: 'cycle' } | { kind: 'wheel' }
     ? (delta: number) => void
     : D extends { kind: 'select' }
       ? (n: number) => void
@@ -156,8 +215,25 @@ export interface IntentsOptions<A extends string> {
   toScreen?: PointerTransform;
   /** Where touches start the move stick (`Look`'s `touch.moveZone`); those touches never tap or hold except through `stickSideHold`. Default `'none'`. */
   stickZone?: 'left' | 'right' | 'none';
+  /** The share of the width, from `stickZone`'s side, that is the stick's (`Look`'s `touch.moveZoneShare`). Default 0.5. */
+  stickZoneShare?: number;
   /** The clock (ms), the one pointer event ages are taken on. Default `performance.now`. */
   now?: () => number;
+}
+
+/**
+ * Still-press timing and the stick's share, changed live (`Intents.setTiming`, ws/input-fit). Each
+ * field given replaces that part; a press already down keeps the timing it began with.
+ */
+export interface IntentTiming {
+  /** Fingers and pens (the hold intents' `touch`, else the taps'). */
+  touch?: StillHoldOptions;
+  /** The move stick's thumb (`stickSideHold`). */
+  stickSide?: StillHoldOptions;
+  /** The free mouse, every button (`mouseStill`). */
+  mouse?: StillHoldOptions;
+  /** `IntentsOptions.stickZoneShare`. */
+  stickZoneShare?: number;
 }
 
 /** What `createIntents` returns. Call `update()` once per tick, after `input.update()`. */
@@ -174,7 +250,19 @@ export interface Intents {
   touchMove(id: number, clientX: number, clientY: number, time?: number): void;
   touchUp(id: number, clientX?: number, clientY?: number, time?: number): void;
   touchCancel(id: number): void;
-  /** Every touch lets go, with no tap; a hold in progress ends. */
+  /**
+   * Free-mouse feed methods (ws/input-fit; tests, a game's own listeners): client CSS px, `time`
+   * on the intents' clock. `id` defaults to 1. Ignored while the view aims at its centre or when
+   * no intent declares `mouse` for `button`.
+   */
+  mouseDown(button: number, clientX: number, clientY: number, time?: number, id?: number): void;
+  mouseMove(clientX: number, clientY: number, time?: number): void;
+  mouseUp(clientX?: number, clientY?: number, time?: number): void;
+  /** A wheel event (ws/input-fit feed): `deltaY` in `deltaMode` units, the modifiers held, `time` on the intents' clock. */
+  wheel(deltaY: number, deltaMode?: number, modifiers?: WheelModifiers, time?: number): void;
+  /** Change still-press timing and the stick's share without rebuilding (see `IntentTiming`). */
+  setTiming(timing: IntentTiming): void;
+  /** Every touch and the free mouse let go, with no tap; a hold in progress ends. */
   cancelAll(): void;
   /** Take touches from `dispatcher` (done for you from the input's dispatcher). */
   attach(dispatcher: PointerDispatcher): void;
@@ -269,6 +357,38 @@ interface Compiled<A extends string> {
   wasAiming: boolean;
   memo: AimMemo;
   wheel: WheelSteps | null;
+  /** A gated wheel (a `wheel` intent, a cycle's `WheelGate`): its gate, steps and what is owed. */
+  gate: WheelGate | null;
+  gateSteps: WheelSteps | null;
+  gateAcc: number;
+  /** Tap or hold: the free mouse's button that drives it, or -1. */
+  mouseButton: number;
+}
+
+const NO_MODIFIERS: WheelModifiers = {};
+
+/** Mouse buttons a `mouseStill` may name (left, middle, right, back, forward). */
+const MOUSE_BUTTONS = 5;
+
+const DEFAULT_WHEEL_PX_PER_STEP = 50;
+
+/** CSS px per wheel `deltaMode` unit: pixels, lines, pages (as `Input` normalizes them). */
+const wheelPx = (deltaMode: number): number => (deltaMode === 1 ? 16 : deltaMode === 2 ? 400 : 1);
+
+/** Whether `mods` (the event's) meet `want`. */
+function modifiersMatch(want: WheelModifiers | undefined, mods: WheelModifiers): boolean {
+  if (!want) return true;
+  if (want.alt !== undefined && want.alt !== (mods.alt ?? false)) return false;
+  if (want.ctrl !== undefined && want.ctrl !== (mods.ctrl ?? false)) return false;
+  if (want.shift !== undefined && want.shift !== (mods.shift ?? false)) return false;
+  if (want.meta !== undefined && want.meta !== (mods.meta ?? false)) return false;
+  return true;
+}
+
+/** A mutable copy of a still-press timing. */
+interface Timing {
+  tolerancePx: number;
+  ms: number;
 }
 
 /**
@@ -287,8 +407,11 @@ export function createIntents<A extends string, S extends IntentSpec<A>>(
       ? (options.camera as () => RayCamera)
       : () => options.camera as RayCamera;
   const stickZone = options.stickZone ?? 'none';
+  let stickShare = options.stickZoneShare ?? 0.5;
 
   const intents: Compiled<A>[] = [];
+  const mouseTiming: (Timing | undefined)[] = [];
+  const mouseHoldDeclared: boolean[] = [];
   let tapSpec: StillHoldSpec | null = null;
   let holdSpec: StillHoldSpec | null = null;
   let stickSpec: StickSideHoldSpec<IntentAim> | null = null;
@@ -301,6 +424,33 @@ export function createIntents<A extends string, S extends IntentSpec<A>>(
       if (decl.touch !== false) holdSpec ??= decl.touch ?? stillHold();
       if (decl.stickSide) stickSpec ??= decl.stickSide;
     }
+    let mouseButton = -1;
+    if ((decl.kind === 'tap' || decl.kind === 'hold') && decl.mouse) {
+      const m = decl.mouse;
+      if (!(m.button >= 0 && m.button < MOUSE_BUTTONS))
+        throw new Error(`createIntents: intent '${name}' names mouse button ${m.button}`);
+      mouseButton = m.button;
+      // One timing per button: the hold intents' (else the taps'), the first declared.
+      const t = mouseTiming[m.button];
+      if (!t || (decl.kind === 'hold' && !mouseHoldDeclared[m.button])) {
+        mouseTiming[m.button] = { tolerancePx: m.tolerancePx, ms: m.ms };
+      }
+      if (decl.kind === 'hold') mouseHoldDeclared[m.button] = true;
+    }
+    const gate: WheelGate | null =
+      decl.kind === 'wheel'
+        ? decl
+        : decl.kind === 'cycle' && typeof decl.wheel === 'object'
+          ? decl.wheel
+          : null;
+    const gateSteps =
+      decl.kind === 'wheel'
+        ? decl.steps === false
+          ? null
+          : new WheelSteps({ pixelsPerStep: decl.pixelsPerStep ?? DEFAULT_WHEEL_PX_PER_STEP })
+        : gate
+          ? new WheelSteps({ pixelsPerStep: DEFAULT_WHEEL_PX_PER_STEP })
+          : null;
     intents.push({
       name,
       decl,
@@ -309,13 +459,22 @@ export function createIntents<A extends string, S extends IntentSpec<A>>(
       wasAiming: true,
       memo: newMemo(),
       wheel:
-        decl.kind === 'cycle' && decl.wheel
+        decl.kind === 'cycle' && decl.wheel === true
           ? new WheelSteps({ pixelsPerStep: WHEEL_PX_PER_STEP })
           : null,
+      gate,
+      gateSteps,
+      gateAcc: 0,
+      mouseButton,
     });
   }
+  const gated = intents.some((c) => c.gate !== null);
   // One classifier per finger: the hold time is the hold intents' (else the taps'), the tolerance too.
-  const fingerSpec = holdSpec ?? tapSpec ?? stillHold();
+  const firstFinger = holdSpec ?? tapSpec ?? stillHold();
+  const fingerSpec: Timing = { tolerancePx: firstFinger.tolerancePx, ms: firstFinger.ms };
+  const stickTiming: Timing | null = stickSpec
+    ? { tolerancePx: stickSpec.tolerancePx, ms: stickSpec.ms }
+    : null;
   const takesTouch = tapSpec !== null || holdSpec !== null || stickSpec !== null;
 
   const fingers: Finger[] = [];
@@ -341,6 +500,8 @@ export function createIntents<A extends string, S extends IntentSpec<A>>(
   let holdStartDue = false;
   let holdEndDue = false;
   let holdAt = 0;
+  /** The holder's pointer id. */
+  let holdId = -1;
   /** The holder's last point, kept after it lifts so a late start still aims there. */
   let holdX = 0;
   let holdY = 0;
@@ -405,6 +566,7 @@ export function createIntents<A extends string, S extends IntentSpec<A>>(
       holdFromStick = false;
     }
     holder = f;
+    holdId = f.id;
     holdAt = f.press.t0;
     holdX = f.sx;
     holdY = f.sy;
@@ -435,7 +597,7 @@ export function createIntents<A extends string, S extends IntentSpec<A>>(
       const d = dispatcher;
       if (stickZone !== 'none' && d) {
         const b = d.bounds();
-        zone = inStickZone(clientX - b.left, b.width, stickZone, stick !== null);
+        zone = inStickZone(clientX - b.left, b.width, stickZone, stick !== null, stickShare);
       }
     }
     f.id = id;
@@ -443,7 +605,7 @@ export function createIntents<A extends string, S extends IntentSpec<A>>(
     f.role = zone && stick === null ? 'stick' : 'act';
     f.stickHold = false;
     toScreen(f, clientX, clientY, p);
-    f.press.set(f.role === 'stick' && stickSpec ? stickSpec : fingerSpec);
+    f.press.set(f.role === 'stick' && stickTiming ? stickTiming : fingerSpec);
     f.press.begin(clientX, clientY, time);
     if (f.role === 'stick') {
       stick = f;
@@ -520,26 +682,176 @@ export function createIntents<A extends string, S extends IntentSpec<A>>(
   const cancelAll = (): void => {
     for (const f of fingers) if (f.down) release(f);
     taps = 0;
+    mouseRelease();
+    mouseTaps = 0;
+  };
+
+  // ── The free mouse (ws/input-fit): one still press at a time, on a button an intent declares ──
+
+  const mousePress = new StillPress();
+  let mouseId = -1;
+  let mouseBtn = -1;
+  let mouseSx = 0;
+  let mouseSy = 0;
+  /** A free-mouse press went down or up since the last update: its button's action edges are its. */
+  let mouseSeen = false;
+  let mouseHoldBtn = -1;
+  let mouseHoldId = -1;
+  let mouseHoldAt = 0;
+  let mouseHoldLive = false;
+  let mouseHoldStartDue = false;
+  let mouseHoldEndDue = false;
+  const mouseHoldAim = newAim();
+  const mouseHoldMemo = newMemo();
+  const mouseTapX = new Float64Array(TAP_QUEUE);
+  const mouseTapY = new Float64Array(TAP_QUEUE);
+  const mouseTapB = new Int8Array(TAP_QUEUE);
+  let mouseTaps = 0;
+
+  const mouseToScreen = (clientX: number, clientY: number, p?: PointerRecord): void => {
+    const t = options.toScreen;
+    if (t) {
+      const q = t(clientX, clientY);
+      if (q) {
+        mouseSx = q.x;
+        mouseSy = q.y;
+      }
+    } else if (p) {
+      mouseSx = p.x;
+      mouseSy = p.y;
+    } else {
+      mouseSx = clientX;
+      mouseSy = clientY;
+    }
+  };
+
+  const mouseBecameHold = (): void => {
+    if (!mouseHoldDeclared[mouseBtn] || mouseHoldLive || mouseHoldStartDue) return;
+    mouseHoldBtn = mouseBtn;
+    mouseHoldId = mouseId;
+    mouseHoldAt = mousePress.t0;
+    mouseHoldStartDue = true;
+  };
+
+  const mouseRelease = (): void => {
+    if (mouseId === -1) return;
+    if (mouseHoldStartDue || mouseHoldLive) mouseHoldEndDue = true;
+    mouseId = -1;
+    mouseBtn = -1;
+  };
+
+  const mDown = (
+    button: number,
+    clientX: number,
+    clientY: number,
+    time: number,
+    id: number,
+    p?: PointerRecord,
+  ): void => {
+    const timing = button >= 0 && button < MOUSE_BUTTONS ? mouseTiming[button] : undefined;
+    if (!timing || mouseId !== -1 || input.blocked() || centred()) return;
+    mouseId = id;
+    mouseBtn = button;
+    mouseSeen = true;
+    mouseToScreen(clientX, clientY, p);
+    mousePress.set(timing);
+    mousePress.begin(clientX, clientY, time);
+  };
+
+  const mMove = (clientX: number, clientY: number, time: number, p?: PointerRecord): void => {
+    if (mouseId === -1) return;
+    const was = mousePress.move(clientX, clientY, time);
+    mouseToScreen(clientX, clientY, p);
+    if (was === 'pending' && mousePress.kind === 'hold') mouseBecameHold();
+  };
+
+  const mUp = (
+    clientX: number | undefined,
+    clientY: number | undefined,
+    time: number,
+    p?: PointerRecord,
+  ): void => {
+    if (mouseId === -1) return;
+    mouseSeen = true;
+    const pending = mousePress.kind === 'pending';
+    const result = mousePress.end(time, clientX, clientY);
+    if (clientX !== undefined && clientY !== undefined) mouseToScreen(clientX, clientY, p);
+    if (pending && result === 'hold') mouseBecameHold();
+    if (result === 'tap' && mouseTaps < TAP_QUEUE) {
+      mouseTapX[mouseTaps] = mouseSx;
+      mouseTapY[mouseTaps] = mouseSy;
+      mouseTapB[mouseTaps] = mouseBtn;
+      mouseTaps++;
+    }
+    mouseRelease();
   };
 
   const isFinger = (p: PointerRecord): boolean => p.device === 'touch' || p.device === 'pen';
   const timeOf = (p: PointerRecord): number => now() - p.age;
   const consumer: PointerConsumer = {
     pointerDown: (p) => {
+      if (p.device === 'mouse') {
+        mDown(p.button, p.clientX, p.clientY, timeOf(p), p.id, p);
+        return;
+      }
       if (!isFinger(p) || p.button !== 0) return;
       down(p.id, p.clientX, p.clientY, timeOf(p), undefined, p);
     },
     pointerMove: (p) => {
       if (isFinger(p)) move(p.id, p.clientX, p.clientY, timeOf(p), p);
+      else if (p.id === mouseId) mMove(p.clientX, p.clientY, timeOf(p), p);
     },
     pointerUp: (p) => {
       if (isFinger(p)) up(p.id, p.clientX, p.clientY, timeOf(p), p);
+      else if (p.id === mouseId) mUp(p.clientX, p.clientY, timeOf(p), p);
     },
     pointerCancel: (p) => {
       if (isFinger(p)) cancel(p.id);
+      else if (p.id === mouseId) mouseRelease();
     },
     cancelAll,
   };
+
+  // ── The wheel, gated (ws/input-fit) ──
+
+  const wheelMods: { alt: boolean; ctrl: boolean; shift: boolean; meta: boolean } = {
+    alt: false,
+    ctrl: false,
+    shift: false,
+    meta: false,
+  };
+  const rayLeads = (): boolean => options.pointers?.primary?.device === 'xr';
+  const feedWheel = (
+    deltaY: number,
+    deltaMode: number,
+    mods: WheelModifiers,
+    t: number,
+  ): boolean => {
+    if (input.blocked()) return false;
+    let took = false;
+    const ray = rayLeads();
+    for (const c of intents) {
+      const g = c.gate;
+      if (g === null) continue;
+      if (ray && !g.whileRay) continue;
+      if (!modifiersMatch(g.modifiers, mods)) continue;
+      if (g.when && !g.when()) continue;
+      took = true;
+      if (c.gateSteps) c.gateAcc += c.gateSteps.add(deltaY, deltaMode, t);
+      else c.gateAcc += deltaY * wheelPx(deltaMode);
+    }
+    return took;
+  };
+  const onWheel = (e: WheelEvent): void => {
+    wheelMods.alt = e.altKey === true;
+    wheelMods.ctrl = e.ctrlKey === true;
+    wheelMods.shift = e.shiftKey === true;
+    wheelMods.meta = e.metaKey === true;
+    // A wheel an intent took is never the page's (a trackpad's pinch would zoom it).
+    if (feedWheel(e.deltaY, e.deltaMode, wheelMods, eventTime(e.timeStamp, now)))
+      e.preventDefault();
+  };
+  let wheelTarget: HTMLElement | null = null;
 
   let dispatcher: PointerDispatcher | null = null;
   let removeConsumer: (() => void) | null = null;
@@ -548,11 +860,17 @@ export function createIntents<A extends string, S extends IntentSpec<A>>(
     dispatcher = d;
     // After the look and the gestures, before the router's screen source; claimed pointers (touch zones) are not ours.
     removeConsumer = d.add(consumer, POINTER_PRIORITY.gestures + 5);
+    if (gated) {
+      wheelTarget = d.target;
+      wheelTarget.addEventListener('wheel', onWheel, { passive: false });
+    }
   };
   const detach = (): void => {
     removeConsumer?.();
     removeConsumer = null;
     dispatcher = null;
+    wheelTarget?.removeEventListener('wheel', onWheel);
+    wheelTarget = null;
     cancelAll();
   };
   if (input.dispatcher) attach(input.dispatcher);
@@ -612,17 +930,66 @@ export function createIntents<A extends string, S extends IntentSpec<A>>(
     if (input.blocked()) {
       cancelAll();
       holdStartDue = false;
+      mouseHoldStartDue = false;
     }
     const t = now();
     // A still finger whose time is up holds.
     for (const f of fingers) {
       if (f.down && f.press.tick(t)) becameHold(f);
     }
+    if (mouseId !== -1 && mousePress.tick(t)) mouseBecameHold();
     computeViewAim();
     const aim: AimBox | null = viewIsNull ? null : viewAim;
     const lastTouch = input.lastDevice === 'touch' || input.lastDevice === 'pen';
     const touchEdge = touchSeen || lastTouch;
     touchSeen = false;
+    // The free mouse's own button presses are its still press's, not the actions'.
+    const mouseEdge = mouseSeen || (input.lastDevice === 'mouse' && !centred());
+    mouseSeen = false;
+
+    // Free-mouse clicks, in order.
+    for (let i = 0; i < mouseTaps; i++) {
+      const a = centred() ? null : rayAt(tapAim, mouseTapX[i]!, mouseTapY[i]!);
+      const b = mouseTapB[i]!;
+      for (const c of intents) {
+        if (c.decl.kind === 'tap' && c.mouseButton === b)
+          (c.handler as (aim: IntentAim) => void)(a);
+      }
+    }
+    mouseTaps = 0;
+
+    // The free mouse's hold.
+    const takesMouseHold = (c: Compiled<A>): boolean =>
+      c.decl.kind === 'hold' && c.mouseButton === mouseHoldBtn && !c.actionHeld;
+    if (mouseHoldStartDue) {
+      mouseHoldStartDue = false;
+      mouseHoldLive = true;
+      const a = centred() ? null : rayAt(mouseHoldAim, mouseSx, mouseSy);
+      changed(mouseHoldMemo, a);
+      for (const c of intents) {
+        if (takesMouseHold(c)) {
+          holdingName ??= c.name;
+          (c.handler as HoldHandler).start(a, mouseHoldAt, mouseHoldId);
+        }
+      }
+    } else if (mouseHoldLive && mouseId !== -1) {
+      const a = centred() ? null : rayAt(mouseHoldAim, mouseSx, mouseSy);
+      if (changed(mouseHoldMemo, a)) {
+        for (const c of intents)
+          if (takesMouseHold(c)) (c.handler as HoldHandler).aim?.(a, mouseHoldId);
+      }
+    }
+    if (mouseHoldEndDue) {
+      mouseHoldEndDue = false;
+      if (mouseHoldLive) {
+        mouseHoldLive = false;
+        for (const c of intents) if (takesMouseHold(c)) (c.handler as HoldHandler).end(mouseHoldId);
+        if (holdingName !== null && !holdLive && !intents.some((c) => c.actionHeld))
+          holdingName = null;
+      }
+      mouseHoldMemo.valid = false;
+      mouseHoldBtn = -1;
+    }
 
     // Touch taps, in the order the fingers lifted.
     for (let i = 0; i < taps; i++) {
@@ -646,7 +1013,7 @@ export function createIntents<A extends string, S extends IntentSpec<A>>(
       for (const c of intents) {
         if (takesThisHold(c) && !c.actionHeld) {
           holdingName ??= c.name;
-          (c.handler as HoldHandler).start(a, holdAt);
+          (c.handler as HoldHandler).start(a, holdAt, holdId);
         }
       }
     } else if (holdLive && holder) {
@@ -655,7 +1022,7 @@ export function createIntents<A extends string, S extends IntentSpec<A>>(
       const a = centred() ? null : rayAt(holdAim, holdX, holdY);
       if (changed(holdMemo, a)) {
         for (const c of intents)
-          if (takesThisHold(c) && !c.actionHeld) (c.handler as HoldHandler).aim?.(a);
+          if (takesThisHold(c) && !c.actionHeld) (c.handler as HoldHandler).aim?.(a, holdId);
       }
     }
     if (holdEndDue) {
@@ -663,8 +1030,9 @@ export function createIntents<A extends string, S extends IntentSpec<A>>(
       if (holdLive) {
         holdLive = false;
         for (const c of intents)
-          if (takesThisHold(c) && !c.actionHeld) (c.handler as HoldHandler).end();
-        if (holdingName !== null && !intents.some((c) => c.actionHeld)) holdingName = null;
+          if (takesThisHold(c) && !c.actionHeld) (c.handler as HoldHandler).end(holdId);
+        if (holdingName !== null && !mouseHoldLive && !intents.some((c) => c.actionHeld))
+          holdingName = null;
       }
       holdMemo.valid = false;
     }
@@ -680,7 +1048,11 @@ export function createIntents<A extends string, S extends IntentSpec<A>>(
           if (anyOf(d.actions, released)) (c.handler as (aim: IntentAim) => void)(aim);
           break;
         case 'tap':
-          if (!(d.touch !== false && touchEdge) && anyOf(d.actions, pressed)) {
+          if (
+            !(d.touch !== false && touchEdge) &&
+            !(c.mouseButton >= 0 && mouseEdge) &&
+            anyOf(d.actions, pressed)
+          ) {
             (c.handler as (aim: IntentAim) => void)(aim);
           }
           break;
@@ -691,16 +1063,21 @@ export function createIntents<A extends string, S extends IntentSpec<A>>(
               c.actionHeld = false;
               c.memo.valid = false;
               if (holdingName === c.name) holdingName = null;
-              h.end();
+              h.end(null);
             } else if (changed(c.memo, aim)) {
-              h.aim?.(aim);
+              h.aim?.(aim, null);
             }
-          } else if (!(d.touch !== false && touchEdge) && anyOf(d.actions, pressed)) {
+          } else if (
+            !(d.touch !== false && touchEdge) &&
+            !(c.mouseButton >= 0 && mouseEdge) &&
+            anyOf(d.actions, pressed)
+          ) {
             if (holdLive && takesThisHold(c)) break; // a finger already holds it
+            if (mouseHoldLive && c.mouseButton === mouseHoldBtn) break; // so does the free mouse
             c.actionHeld = true;
             changed(c.memo, aim);
             holdingName ??= c.name;
-            h.start(aim, t);
+            h.start(aim, t, null);
           }
           break;
         }
@@ -719,6 +1096,14 @@ export function createIntents<A extends string, S extends IntentSpec<A>>(
           if (anyOf(d.next, pressed)) delta++;
           if (anyOf(d.prev, pressed)) delta--;
           if (c.wheel) delta += c.wheel.add(input.pointer.wheelY, 0, t);
+          delta += c.gateAcc;
+          c.gateAcc = 0;
+          if (delta !== 0) (c.handler as (delta: number) => void)(delta);
+          break;
+        }
+        case 'wheel': {
+          const delta = c.gateAcc;
+          c.gateAcc = 0;
           if (delta !== 0) (c.handler as (delta: number) => void)(delta);
           break;
         }
@@ -749,6 +1134,23 @@ export function createIntents<A extends string, S extends IntentSpec<A>>(
     touchMove: (id, x, y, time) => move(id, x, y, time ?? now()),
     touchUp: (id, x, y, time) => up(id, x, y, time ?? now()),
     touchCancel: cancel,
+    mouseDown: (button, x, y, time, id) => mDown(button, x, y, time ?? now(), id ?? 1),
+    mouseMove: (x, y, time) => mMove(x, y, time ?? now()),
+    mouseUp: (x, y, time) => mUp(x, y, time ?? now()),
+    wheel: (deltaY, deltaMode = 0, modifiers = NO_MODIFIERS, time) => {
+      feedWheel(deltaY, deltaMode, modifiers, time ?? now());
+    },
+    setTiming(timing) {
+      const apply = (to: Timing | null | undefined, from: StillHoldOptions | undefined): void => {
+        if (!to || !from) return;
+        if (from.tolerancePx !== undefined) to.tolerancePx = from.tolerancePx;
+        if (from.ms !== undefined) to.ms = from.ms;
+      };
+      apply(fingerSpec, timing.touch);
+      apply(stickTiming, timing.stickSide);
+      for (let b = 0; b < MOUSE_BUTTONS; b++) apply(mouseTiming[b], timing.mouse);
+      if (timing.stickZoneShare !== undefined) stickShare = timing.stickZoneShare;
+    },
     cancelAll,
     attach,
     detach,

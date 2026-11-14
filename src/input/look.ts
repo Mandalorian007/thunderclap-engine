@@ -20,12 +20,36 @@ export interface LookTouchOptions {
    * looks). Default `'left'`.
    */
   moveZone?: MoveZone;
+  /**
+   * The share of the element's width, from `moveZone`'s side, where a touch becomes the move
+   * stick (ws/input-fit; `createIntents`' `stickZoneShare` should match). Default 0.5, the half.
+   */
+  moveZoneShare?: number;
+  /**
+   * The sprint rim (ws/input-fit; default none): pushed forward past the rim the stick sprints
+   * (`stick.sprint`, `look.sprint`). `true` takes `LookSprintRim`'s defaults.
+   */
+  sprintRim?: boolean | LookSprintRim;
   /** Stick deadzone as a fraction of `radius` (0..1). Default 0.12. */
   deadzone?: number;
   /** CSS px from the stick's origin to full deflection; the stick clamps there. Default 56. */
   radius?: number;
   /** Radians per CSS px a look touch drags. Default: `LookOptions.sensitivity`. */
   sensitivity?: number;
+}
+
+/**
+ * When the touch move stick sprints (ws/input-fit): the thumb `at` × `radius` or farther from
+ * where it landed, within `coneDeg` of straight up (forward). Once sprinting it keeps on until the
+ * stick's deflection (0..1, past the deadzone) drops under `keep` or it turns out of the cone.
+ */
+export interface LookSprintRim {
+  /** Default 1.3 (beyond the stick's travel: the thumb pushes on past the rim). */
+  at?: number;
+  /** Default 40. */
+  coneDeg?: number;
+  /** Default 0.7. */
+  keep?: number;
 }
 
 /** Key codes (`KeyboardEvent.code`) that move. No defaults: the game names them. */
@@ -146,6 +170,8 @@ export interface LookStick {
   /** Where the finger is now, clamped to `radius` from the origin. */
   x: number;
   y: number;
+  /** Pushed forward past the sprint rim (`LookTouchOptions.sprintRim`; always false without one). */
+  sprint?: boolean;
 }
 
 /** Longest gap between two ticks the stick integrates over, seconds. */
@@ -188,7 +214,14 @@ export class Look {
    */
   zoom = 0;
   /** The touch move stick (client CSS px). */
-  readonly stick: LookStick = { active: false, originX: 0, originY: 0, x: 0, y: 0 };
+  readonly stick: LookStick = {
+    active: false,
+    originX: 0,
+    originY: 0,
+    x: 0,
+    y: 0,
+    sprint: false,
+  };
   /** True while the attached element holds the pointer lock. */
   locked = false;
   blocked: () => boolean;
@@ -199,6 +232,10 @@ export class Look {
   padSensitivity: number;
   invertY: boolean;
   moveZone: MoveZone;
+  /** `LookTouchOptions.moveZoneShare`; may change at any time (from the next touch). */
+  moveZoneShare: number;
+  /** The sprint rim in force (`LookTouchOptions.sprintRim`), or null; may change at any time. */
+  sprintRim: Required<LookSprintRim> | null;
   deadzone: number;
   radius: number;
   touchSensitivity: number | undefined;
@@ -278,6 +315,15 @@ export class Look {
     this.padSensitivity = opts.padSensitivity ?? 3;
     this.invertY = opts.invertY ?? false;
     this.moveZone = opts.touch?.moveZone ?? 'left';
+    this.moveZoneShare = opts.touch?.moveZoneShare ?? 0.5;
+    const rim = opts.touch?.sprintRim;
+    this.sprintRim = rim
+      ? {
+          at: (rim === true ? undefined : rim.at) ?? 1.3,
+          coneDeg: (rim === true ? undefined : rim.coneDeg) ?? 40,
+          keep: (rim === true ? undefined : rim.keep) ?? 0.7,
+        }
+      : null;
     this.deadzone = opts.touch?.deadzone ?? 0.12;
     this.radius = opts.touch?.radius ?? 56;
     this.touchSensitivity = opts.touch?.sensitivity;
@@ -525,6 +571,7 @@ export class Look {
       this.moveId = id;
       const s = this.stick;
       s.active = true;
+      s.sprint = false;
       s.originX = s.x = x;
       s.originY = s.y = y;
     } else if (this.lookId === null) {
@@ -545,6 +592,7 @@ export class Look {
       let ox = x - s.originX;
       let oy = y - s.originY;
       const d = Math.hypot(ox, oy);
+      if (this.sprintRim) this.rimMoved(oy, d);
       if (d > this.radius && d > 0) {
         ox *= this.radius / d;
         oy *= this.radius / d;
@@ -566,10 +614,34 @@ export class Look {
     }
   }
 
+  /** The sprint rim's test for a thumb `oy` CSS px below its origin, `d` away (unclamped). */
+  private rimMoved(oy: number, d: number): void {
+    const rim = this.sprintRim!;
+    const s = this.stick;
+    const r = this.radius;
+    const dead = this.deadzone * r;
+    if (d <= dead || r <= dead) {
+      s.sprint = false;
+      return;
+    }
+    const m = Math.min(1, (d - dead) / (r - dead));
+    // Forward is up the screen.
+    const up = -oy / d;
+    const cone = Math.cos((rim.coneDeg * Math.PI) / 180);
+    if (d >= rim.at * r && up >= cone) s.sprint = true;
+    else if (m < rim.keep || up < cone) s.sprint = false;
+  }
+
+  /** True while the touch move stick is pushed past its sprint rim (`stick.sprint`). */
+  get sprint(): boolean {
+    return this.stick.sprint === true;
+  }
+
   touchUp(id: number): void {
     if (id === this.moveId) {
       this.moveId = null;
       this.stick.active = false;
+      this.stick.sprint = false;
     } else if (id === this.lookId) {
       // The pinch finger, if any, carries on as the look drag.
       this.lookId = this.pinchId;
@@ -601,6 +673,7 @@ export class Look {
     this.lookId = null;
     this.pinchId = null;
     this.stick.active = false;
+    this.stick.sprint = false;
   }
 
   // ---------------------------------------------------------------- pointer lock
@@ -735,8 +808,11 @@ export class Look {
       let inZone = false;
       if (this.moveZone !== 'none' && this.target) {
         const r = this.dispatcher ? this.dispatcher.bounds() : this.target.getBoundingClientRect();
-        const left = p.clientX < r.left + r.width / 2;
-        inZone = this.moveZone === 'left' ? left : !left;
+        const share = this.moveZoneShare;
+        inZone =
+          this.moveZone === 'left'
+            ? p.clientX < r.left + r.width * share
+            : p.clientX >= r.left + r.width * (1 - share);
       }
       this.touchDown(p.id, p.clientX, p.clientY, inZone);
       // The move stick never taps.

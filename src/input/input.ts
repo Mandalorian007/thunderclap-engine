@@ -1564,6 +1564,13 @@ export class Input<A extends string> {
         if (!p.primary && p.device === 'touch') return;
         this.buttonUp(p.button);
       },
+      // A second button pressed or let go while another is held (ws/input-fit): the recording's
+      // `b` lane sees it through `buttonDown`/`buttonUp`, as it sees a first press.
+      pointerButton: (p: PointerRecord, down: boolean) => {
+        if (this.injecting) return;
+        if (down) this.buttonDown(p.button);
+        else this.buttonUp(p.button);
+      },
       pointerCancel: (p: PointerRecord) => {
         if (notePointer('cancel', p)) return;
         if (p.primary) this.buttonUp(0);

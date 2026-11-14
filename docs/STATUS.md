@@ -563,4 +563,3 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - Numeric ids on `Mesh`/`Material` would replace the `WeakMap` sort keys in the shadow list (ws/shadow-cull wish).
 - `renderer.textureFromSource` could take `{ mips }` (wish from ws/texture-array).
 - `src/render/mesh.ts` doc comment (~L149) still says an empty indexed mesh "falls back" to a non-indexed draw; the renderer skips it.
-- src/voxel/world.test.ts held-frame alloc: 1288 vs <1024 under load (as core.test was); make it deterministic like B4's core.test fix.

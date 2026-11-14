@@ -4,7 +4,7 @@
  */
 export type { ArenaAlloc, ArenaDesc, ArenaKind } from './arena';
 export { Arena, createArena } from './arena';
-export type { CoreCaps, CoreTarget, RenderCoreOptions } from './core';
+export type { CoreCaps, CoreShadowTarget, CoreTarget, RenderCoreOptions } from './core';
 export { createRenderCore, MULTI_DRAW_FEATURE, RenderCore } from './core';
 export {
   ARGS_BYTES,
@@ -36,7 +36,13 @@ export {
 } from './drawable';
 export type { BufferLayout, LayoutAttribute, LayoutDesc } from './layout';
 export { createInstanceLayout, createVertexLayout, vertexFormatBytes } from './layout';
-export type { CorePass, CorePassContext, PassDepth, PassDesc } from './pass-list';
+export type {
+  CorePass,
+  CorePassContext,
+  CoreResolveContext,
+  PassDepth,
+  PassDesc,
+} from './pass-list';
 export { CORE_PASSES, PassList } from './pass-list';
 export { QUAD_INDICES, QuadIndex, quadIndices } from './quad-index';
 export type { CullGroup, RenderView } from './view';

@@ -511,6 +511,8 @@ interface VoxelMaterial {
         group: GPUBindGroup;
     }[];
     blend?: GPUBlendState;
+    shadowFragmentEntry?: string;
+    castShadow?: boolean;
 }
 
 ## VoxelStream  (type-only)

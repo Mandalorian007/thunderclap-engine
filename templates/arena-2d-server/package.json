@@ -1,0 +1,29 @@
+{
+  "name": "@thunderclap-engine/template-arena-2d-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A real-time 2D arena on @thunderclap-engine/engine with a Rust server (tc-sim, tc-net): 2 to 8 players move and tag, the server decides, each client predicts its own player.",
+  "license": "MIT",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "client": "vite --host 127.0.0.1 --port 4710 --strictPort",
+    "server": "cargo run --release --manifest-path server/Cargo.toml --",
+    "build": "vite build",
+    "build:server": "cargo build --release --manifest-path server/Cargo.toml",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "test": "vitest run",
+    "test:server": "cargo test --manifest-path server/Cargo.toml",
+    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm test:server"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.6.4",
+    "@thunderclap-engine/engine": "workspace:*",
+    "@types/node": "^26.6.6",
+    "@webgpu/types": "^0.1.74",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  }
+}

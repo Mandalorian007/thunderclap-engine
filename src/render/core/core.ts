@@ -25,7 +25,13 @@ import {
   type DrawableHost,
   type PassMember,
 } from './drawable';
-import { type CorePass, type CorePassContext, type PassDesc, PassList } from './pass-list';
+import {
+  type CorePass,
+  type CorePassContext,
+  type CoreResolveContext,
+  type PassDesc,
+  PassList,
+} from './pass-list';
 import { QuadIndex } from './quad-index';
 import {
   type CullGroup,
@@ -71,6 +77,20 @@ export interface RenderCoreOptions {
   coalesceRebuilds?: boolean;
 }
 
+/**
+ * A depth-only target for `RenderCore.drawShadow` (ws/core-passes): a sun shadow map, or one
+ * cascade of one.
+ */
+export interface CoreShadowTarget {
+  view: GPUTextureView;
+  /** The map's depth format. */
+  format: GPUTextureFormat;
+  /** Clear depth to 1 first; without it the map is loaded (drawn over earlier casters). */
+  clear?: boolean;
+  /** GPU timing for the pass (see `CoreTarget.timestamps`), labelled `'shadow'`. */
+  timestamps?: (label: string) => GPURenderPassTimestampWrites | undefined;
+}
+
 /** Where a view draws: a colour view of a texture of `format` and size, cleared or loaded. */
 export interface CoreTarget {
   view: GPUTextureView;
@@ -108,6 +128,14 @@ export interface CoreTarget {
    * `GpuTimer` here, so a sampled frame's GPU time counts the core's work.
    */
   timestamps?: (label: string) => GPURenderPassTimestampWrites | undefined;
+  /**
+   * Where a resolve pass (`PassDesc.resolve`: post) writes (ws/core-passes), in `outputFormat`;
+   * passes after it draw here, without depth. Without it resolve passes are skipped.
+   */
+  output?: GPUTextureView;
+  outputFormat?: GPUTextureFormat;
+  /** The view's rectangle of `output` (an eye of a shared layer), else the whole output. */
+  outputViewport?: { x: number; y: number; width: number; height: number };
 }
 
 /** What the core's device offers it. */
@@ -212,6 +240,19 @@ export class RenderCore {
   private extDepth: GPUTextureView | null = null;
   /** Depth alone, cleared: before a read pass whose drawable samples depth nothing wrote yet. */
   private readonly passDescDepthClear: GPURenderPassDescriptor;
+  private readonly shadowAttachment: GPURenderPassDepthStencilAttachment = {
+    view: undefined as unknown as GPUTextureView,
+    depthLoadOp: 'clear',
+    depthStoreOp: 'store',
+    depthClearValue: 1,
+  };
+  private readonly passDescShadow: GPURenderPassDescriptor = {
+    label: 'core shadow',
+    colorAttachments: [],
+    depthStencilAttachment: this.shadowAttachment,
+  };
+  /** The context handed to a resolve pass, rewritten per call. */
+  private readonly resolveCtx = {} as CoreResolveContext;
   /** The context handed to a pass's `encode`, rewritten per call. */
   private readonly passCtx = {} as CorePassContext;
   private readonly coalesce: boolean;
@@ -374,6 +415,26 @@ export class RenderCore {
   }
 
   /** True when some set has live slots, or some drawable is active (ws/core-passes; the `Renderer` skips the core otherwise). */
+  /** Some draw set casts the sun's shadow and has slots (`DrawSetDesc.castShadow`). */
+  /**
+   * Some pass resolves (`PassDesc.resolve`: post, ws/core-passes): draw with `CoreTarget.output`
+   * and an HDR `view` for it to run.
+   */
+  get hasResolve(): boolean {
+    const list = this.passes.passes;
+    for (let i = 0; i < list.length; i++) if (list[i]!.resolve) return true;
+    return false;
+  }
+
+  get castsShadow(): boolean {
+    const sets = this.sets;
+    for (let i = 0; i < sets.length; i++) {
+      const s = sets[i]!;
+      if (s.castShadow && s.count > 0) return true;
+    }
+    return false;
+  }
+
   get hasWork(): boolean {
     const sets = this.sets;
     for (let i = 0; i < sets.length; i++) if (sets[i]!.count > 0) return true;
@@ -603,6 +664,8 @@ export class RenderCore {
     let first = true;
     let depthCleared = target.depth !== undefined;
     let colorCopied = false;
+    /** A resolve pass ran: later passes draw into `target.output`, without depth. */
+    let resolved = false;
     const list = this.passes.passes;
     const phase = target.phase ?? 'all';
     let from = 0;
@@ -622,6 +685,26 @@ export class RenderCore {
       const pass = list[p]!;
       const sets = this.bySet[p]!;
       if (pass.when && !pass.when()) continue;
+      if (pass.resolve) {
+        if (!target.output || resolved) continue;
+        const r = this.resolveCtx;
+        r.viewIndex = viewIndex;
+        r.view = this.flat[viewIndex]!;
+        r.color = target.view;
+        r.colorTexture = target.texture;
+        r.format = target.format;
+        r.width = target.width;
+        r.height = target.height;
+        r.viewport = vp;
+        r.depth = depthCleared ? (target.depth ?? this.depthView) : null;
+        r.output = target.output;
+        r.outputFormat = target.outputFormat ?? target.format;
+        r.outputViewport = target.outputViewport;
+        pass.resolve(encoder, r);
+        resolved = true;
+        first = false;
+        continue;
+      }
       let work = pass.encode !== null;
       let wantsDepth = work && pass.depth !== 'none';
       let readsColor = false;
@@ -639,7 +722,10 @@ export class RenderCore {
         this.copyColor(encoder, target);
         colorCopied = true;
       }
+      if (resolved) wantsDepth = false;
       const depthFormat = wantsDepth ? this.depthFormat : undefined;
+      const colorFormat = resolved ? (target.outputFormat ?? target.format) : target.format;
+      const colorRect = resolved ? target.outputViewport : vp;
       if (wantsDepth && samplesDepth && pass.depth === 'read' && !depthCleared) {
         // A drawable samples depth here, so the pass must be read-only: clear depth first.
         const d = this.depthAttachment;
@@ -656,7 +742,7 @@ export class RenderCore {
       // A read pass with nothing written before it clears depth instead (nothing to read).
       const readOnly = wantsDepth && pass.depth === 'read' && depthCleared;
       const color = this.colorAttachment;
-      color.view = target.view;
+      color.view = resolved ? target.output! : target.view;
       if (first && target.clear) {
         color.loadOp = 'clear';
         color.clearValue = target.clear;
@@ -685,9 +771,9 @@ export class RenderCore {
       const enc = encoder.beginRenderPass(desc);
       st.calls++;
       st.passes++;
-      if (vp) {
-        enc.setViewport(vp.x, vp.y, vp.width, vp.height, 0, 1);
-        enc.setScissorRect(vp.x, vp.y, vp.width, vp.height);
+      if (colorRect) {
+        enc.setViewport(colorRect.x, colorRect.y, colorRect.width, colorRect.height, 0, 1);
+        enc.setScissorRect(colorRect.x, colorRect.y, colorRect.width, colorRect.height);
         st.calls += 2;
       }
       const bundles = this.bundleList;
@@ -697,11 +783,11 @@ export class RenderCore {
         const s = sets[i]!;
         if (s.count === 0 || s.ready === false || (s.inView && !s.inView(group))) continue;
         if (s.encoding() === 'bundle') {
-          bundles.push(s.bundle(group, target.format, depthFormat, readOnly));
+          bundles.push(s.bundle(group, colorFormat, depthFormat, readOnly));
           continue;
         }
         if (bundles.length > 0) this.flushBundles(enc);
-        s.encodeDirect(enc, group, target.format, depthFormat);
+        s.encodeDirect(enc, group, colorFormat, depthFormat);
       }
       if (bundles.length > 0) this.flushBundles(enc);
       if (pass.encode) {
@@ -709,7 +795,7 @@ export class RenderCore {
         ctx.viewIndex = viewIndex;
         ctx.view = this.groupSize[group]! > 1 ? this.currentGroup : this.viewGroups[viewIndex]!;
         ctx.viewLayout = this.viewLayout;
-        ctx.format = target.format;
+        ctx.format = colorFormat;
         ctx.depthFormat = depthFormat;
         ctx.depthReadOnly = readOnly;
         pass.encode(enc, ctx);
@@ -863,6 +949,65 @@ export class RenderCore {
     return true;
   }
 
+  /**
+   * Encode the shadow casters (`DrawSetDesc.castShadow`) of view `viewIndex` (of the last
+   * `prepare`) into the depth-only `target`, through the same cull and the same kind of bundles
+   * as the colour passes (ws/core-passes). The view is the light's: a sun camera set with
+   * `setViewFromCamera`, prepared with the frame's views as a cull group of its own. Cascades
+   * are one `CullGroup` with `planes: 'each'`, a view and a target per cascade. One render pass
+   * when a caster has slots or `target.clear` is set; none otherwise.
+   */
+  drawShadow(encoder: GPUCommandEncoder, viewIndex: number, target: CoreShadowTarget): void {
+    if (viewIndex < 0 || viewIndex >= this.viewsPrepared) {
+      throw new Error(`core.drawShadow: view ${viewIndex} was not prepared`);
+    }
+    const group = this.groupOf[viewIndex]!;
+    const sets = this.sets;
+    let any = false;
+    for (let i = 0; i < sets.length; i++) {
+      const s = sets[i]!;
+      if (s.castShadow && s.count > 0 && s.ready !== false) {
+        any = true;
+        break;
+      }
+    }
+    if (!any && !target.clear) return;
+    const st = this.stats;
+    if (any && this.groupSize[group]! > 1) {
+      encoder.copyBufferToBuffer(
+        this.viewBuffer,
+        viewIndex * VIEW_SLOT_BYTES,
+        this.currentBuffer,
+        0,
+        VIEW_SLOT_BYTES,
+      );
+      st.calls++;
+    }
+    const att = this.shadowAttachment;
+    att.view = target.view;
+    att.depthLoadOp = target.clear ? 'clear' : 'load';
+    const desc = this.passDescShadow;
+    desc.timestampWrites = target.timestamps?.('shadow');
+    const enc = encoder.beginRenderPass(desc);
+    st.calls++;
+    st.passes++;
+    const bundles = this.bundleList;
+    while (bundles.length > 0) bundles.pop();
+    for (let i = 0; i < sets.length; i++) {
+      const s = sets[i]!;
+      if (!s.castShadow || s.count === 0 || s.ready === false) continue;
+      if (s.encoding() === 'bundle') {
+        bundles.push(s.bundle(group, null, target.format, false));
+        continue;
+      }
+      if (bundles.length > 0) this.flushBundles(enc);
+      s.encodeDirect(enc, group, null, target.format);
+    }
+    if (bundles.length > 0) this.flushBundles(enc);
+    enc.end();
+    st.calls++;
+  }
+
   private flushBundles(enc: GPURenderPassEncoder): void {
     enc.executeBundles(this.bundleList);
     this.stats.calls++;
@@ -892,7 +1037,8 @@ export class RenderCore {
       members.sort((a, b) => a.order - b.order);
       this.bySet.push(members);
     }
-    this.wantsDepthBinding = this.drawables.some((d) => d.readsDepth);
+    this.wantsDepthBinding =
+      list.some((p) => p.resolve !== null) || this.drawables.some((d) => d.readsDepth);
     this.wantsColor = this.drawables.some((d) => d.readsColor);
     this.setsDirty = false;
   }

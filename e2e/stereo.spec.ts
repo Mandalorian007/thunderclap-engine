@@ -8,7 +8,9 @@
  *   one core pass per eye;
  * - the eyes sit ipd apart at the head's height;
  * - the mirror shows each eye in its half: the red block straight ahead in both, the clear
- *   colour above the scene.
+ *   colour above the scene;
+ * - with `?passes=1` (ws/core-passes): the sun's shadow is one core shadow pass a frame for both
+ *   eyes and post resolves each eye on its own, the red block still red in both halves.
  */
 import type { Frame, Page } from '@playwright/test';
 import type { HarnessStereoState } from '../harness/stereo-state';
@@ -19,17 +21,17 @@ type Rgb = [number, number, number];
 let frame: Frame;
 const errors: string[] = [];
 
-async function open(page: Page, wrapper: string): Promise<void> {
+async function open(page: Page, wrapper: string, query = ''): Promise<void> {
   errors.length = 0;
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => {
     if (m.type() === 'error') errors.push(m.text());
   });
   if (wrapper === 'top') {
-    await page.goto(`${HARNESS_URL}stereo.html`);
+    await page.goto(`${HARNESS_URL}stereo.html${query}`);
     frame = page.mainFrame();
   } else {
-    await page.goto(`${WRAPPER_URL}?page=${encodeURIComponent('stereo.html')}`);
+    await page.goto(`${WRAPPER_URL}?page=${encodeURIComponent(`stereo.html${query}`)}`);
     frame = await harnessFrame(page);
   }
   await expect
@@ -113,5 +115,28 @@ test('the mirror shows each eye in its half', async ({ page, wrapper }) => {
   expect(isRed(rCentre!), `right centre ${rCentre}`).toBe(true);
   expect(isClear(lTop!), `left top ${lTop}`).toBe(true);
   expect(isClear(rTop!), `right top ${rTop}`).toBe(true);
+  expect(errors).toEqual([]);
+});
+
+test('the core passes per eye: one sun shadow for both eyes, post per eye', async ({
+  page,
+  wrapper,
+}) => {
+  await open(page, wrapper, '?passes=1');
+  const s = await read();
+  expect(s.passes).toBe(true);
+  expect(s.gpuErrors).toBe(0);
+  expect(s.views).toBe(2);
+  expect(s.draws).toBe(2);
+  expect(s.shadowPasses).toBe(1);
+  expect(s.resolves).toBe(2);
+  // The eyes' group and the sun's: one cull dispatch, or one per group.
+  expect(s.dispatches).toBeLessThanOrEqual(2);
+  const [lCentre, rCentre] = await sample(page, [
+    [0.25, 0.5],
+    [0.75, 0.5],
+  ]);
+  expect(isRed(lCentre!), `left centre ${lCentre}`).toBe(true);
+  expect(isRed(rCentre!), `right centre ${rCentre}`).toBe(true);
   expect(errors).toEqual([]);
 });

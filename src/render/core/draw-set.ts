@@ -63,6 +63,13 @@ export interface DrawSetShader {
   cullMode?: GPUCullMode;
   /** Default `'less'`. */
   depthCompare?: GPUCompareFunction;
+  /**
+   * A fragment entry for the depth-only shadow pass (ws/core-passes), for casters with holes
+   * (an alpha test that `discard`s); without it the shadow pipeline has no fragment stage and
+   * binds the view group alone. With it the set's own groups are bound too, so none of them may
+   * hold the shadow map the pass draws into.
+   */
+  shadowFragmentEntry?: string;
 }
 
 export interface DrawSetDesc {
@@ -89,6 +96,11 @@ export interface DrawSetDesc {
   depth?: boolean;
   /** Order within the pass, lowest first (default 0; ties keep creation order). */
   order?: number;
+  /**
+   * Draw into the sun's shadow (`RenderCore.drawShadow`, ws/core-passes). Default: when the
+   * set tests depth in a depth-writing pass and does not blend.
+   */
+  castShadow?: boolean;
   /** Extra bind groups at 1, 2, …: the set's own textures, samplers and storage. */
   bindGroups?: readonly { layout: GPUBindGroupLayout; group: GPUBindGroup }[];
   /**
@@ -193,7 +205,7 @@ interface MultiDrawPass {
 interface BundleEntry {
   group: number;
   bind: GPUBindGroup;
-  color: GPUTextureFormat;
+  color: GPUTextureFormat | null;
   depth: GPUTextureFormat | undefined;
   readOnly: boolean;
   stamp: number;
@@ -203,7 +215,7 @@ interface BundleEntry {
 }
 
 interface PipelineEntry {
-  color: GPUTextureFormat;
+  color: GPUTextureFormat | null;
   depth: GPUTextureFormat | undefined;
   depthWrite: boolean;
   pipeline: GPURenderPipeline;
@@ -222,6 +234,8 @@ export class DrawSet {
   readonly order: number;
   /** Whether the set tests depth. */
   readonly depth: boolean;
+  /** Whether the set casts the sun's shadow (`DrawSetDesc.castShadow`). */
+  readonly castShadow: boolean;
   /** Bumped when the slot set changes (a static set's bundles are rebuilt). */
   version = 0;
   /**
@@ -267,6 +281,12 @@ export class DrawSet {
   private readonly pipelines: PipelineEntry[] = [];
   private module!: GPUShaderModule;
   private layout!: GPUPipelineLayout;
+  /**
+   * The shadow pipeline's layout without a `shadowFragmentEntry`: the view group alone, so the
+   * set's own groups (which may hold the very map being drawn) are not bound in the shadow pass.
+   */
+  private shadowLayout: GPUPipelineLayout | null = null;
+  private shadowLayoutDevice: GPUDevice | null = null;
   private bindGroups: readonly { layout: GPUBindGroupLayout; group: GPUBindGroup }[] | null;
   /** Restored with `bindGroups`: waits for `setBindGroups`. */
   private waiting = false;
@@ -293,6 +313,8 @@ export class DrawSet {
     this.pass = host.pass(desc.pass ?? 'opaque');
     this.order = desc.order ?? 0;
     this.depth = desc.depth ?? this.pass.depth !== 'none';
+    this.castShadow =
+      desc.castShadow ?? (this.depth && this.pass.depth === 'write' && !desc.shader.blend);
     const words = new ArrayBuffer(desc.capacity * SLOT_BYTES);
     this.slotF32 = new Float32Array(words);
     this.slotU32 = new Uint32Array(words);
@@ -620,7 +642,7 @@ ${desc.shader.code}`;
    */
   bundle(
     group: number,
-    color: GPUTextureFormat,
+    color: GPUTextureFormat | null,
     depth: GPUTextureFormat | undefined,
     readOnly: boolean,
   ): GPURenderBundle {
@@ -649,7 +671,7 @@ ${desc.shader.code}`;
     }
     const enc = device.createRenderBundleEncoder({
       label: `${this.label} bundle`,
-      colorFormats: [color],
+      colorFormats: color === null ? [] : [color],
       depthStencilFormat: depth,
       depthReadOnly: readOnly,
       stencilReadOnly: readOnly,
@@ -679,7 +701,7 @@ ${desc.shader.code}`;
   encodeDirect(
     pass: GPURenderPassEncoder,
     group: number,
-    color: GPUTextureFormat,
+    color: GPUTextureFormat | null,
     depth: GPUTextureFormat | undefined,
   ): void {
     if (this.useMulti()) {
@@ -928,10 +950,11 @@ ${desc.shader.code}`;
   }
 
   private pipeline(
-    color: GPUTextureFormat,
+    color: GPUTextureFormat | null,
     depth: GPUTextureFormat | undefined,
   ): GPURenderPipeline {
-    const depthWrite = this.pass.depth === 'write';
+    // A null colour is the depth-only shadow pipeline (`RenderCore.drawShadow`): depth written.
+    const depthWrite = color === null || this.pass.depth === 'write';
     for (let i = 0; i < this.pipelines.length; i++) {
       const p = this.pipelines[i]!;
       if (p.color === color && p.depth === depth && p.depthWrite === depthWrite) return p.pipeline;
@@ -956,40 +979,70 @@ ${desc.shader.code}`;
     }
     const pipeline = this.host.device.createRenderPipeline({
       label: this.label,
-      layout: this.layout,
+      layout: this.depthOnly(color) ? this.shadowPipelineLayout() : this.layout,
       vertex: { module: this.module, entryPoint: d.shader.vertexEntry ?? 'vs', buffers },
-      fragment: {
-        module: this.module,
-        entryPoint: d.shader.fragmentEntry ?? 'fs',
-        targets: [d.shader.blend ? { format: color, blend: d.shader.blend } : { format: color }],
+      fragment:
+        color === null
+          ? d.shader.shadowFragmentEntry
+            ? { module: this.module, entryPoint: d.shader.shadowFragmentEntry, targets: [] }
+            : undefined
+          : {
+              module: this.module,
+              entryPoint: d.shader.fragmentEntry ?? 'fs',
+              targets: [
+                d.shader.blend ? { format: color, blend: d.shader.blend } : { format: color },
+              ],
+            },
+      // The shadow pass draws both faces, as the renderer's own shadow pass does.
+      primitive: {
+        topology: 'triangle-list',
+        cullMode: color === null ? 'none' : (d.shader.cullMode ?? 'back'),
       },
-      primitive: { topology: 'triangle-list', cullMode: d.shader.cullMode ?? 'back' },
       depthStencil:
-        depth && this.depth
-          ? {
-              format: depth,
-              depthWriteEnabled: depthWrite,
-              depthCompare: d.shader.depthCompare ?? 'less',
-            }
-          : depth
-            ? { format: depth, depthWriteEnabled: false, depthCompare: 'always' }
-            : undefined,
+        color === null && depth
+          ? { format: depth, depthWriteEnabled: true, depthCompare: 'less' }
+          : depth && this.depth
+            ? {
+                format: depth,
+                depthWriteEnabled: depthWrite,
+                depthCompare: d.shader.depthCompare ?? 'less',
+              }
+            : depth
+              ? { format: depth, depthWriteEnabled: false, depthCompare: 'always' }
+              : undefined,
     });
     this.pipelines.push({ color, depth, depthWrite, pipeline });
     return pipeline;
   }
 
+  /** The depth-only shadow pipeline with no fragment stage: the view group alone. */
+  private depthOnly(color: GPUTextureFormat | null): boolean {
+    return color === null && !this.desc.shader.shadowFragmentEntry;
+  }
+
+  private shadowPipelineLayout(): GPUPipelineLayout {
+    const device = this.host.device;
+    if (!this.shadowLayout || this.shadowLayoutDevice !== device) {
+      this.shadowLayout = device.createPipelineLayout({
+        label: `${this.label} shadow`,
+        bindGroupLayouts: [this.host.viewLayout],
+      });
+      this.shadowLayoutDevice = device;
+    }
+    return this.shadowLayout;
+  }
+
   private bindCommon(
     enc: GPURenderPassEncoder | GPURenderBundleEncoder,
     group: number,
-    color: GPUTextureFormat,
+    color: GPUTextureFormat | null,
     depth: GPUTextureFormat | undefined,
   ): void {
     enc.setPipeline(this.pipeline(color, depth));
     enc.setBindGroup(0, this.host.drawGroup(group));
     let calls = 2;
     const extra = this.bindGroups;
-    if (extra) {
+    if (extra && !this.depthOnly(color)) {
       for (let i = 0; i < extra.length; i++) enc.setBindGroup(i + 1, extra[i]!.group);
       calls += extra.length;
     }
@@ -1000,7 +1053,7 @@ ${desc.shader.code}`;
   private record(
     enc: GPURenderPassEncoder | GPURenderBundleEncoder,
     group: number,
-    color: GPUTextureFormat,
+    color: GPUTextureFormat | null,
     depth: GPUTextureFormat | undefined,
   ): void {
     if (this.live === 0) return;
