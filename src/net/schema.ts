@@ -132,6 +132,25 @@ export interface QueryDef {
   readonly result: TypeRef;
 }
 
+/**
+ * A generated live query (tc-tsgen's `api`, the Rust crates' TypeScript): its wire name, whether
+ * it is per player, its result type and its codecs.
+ */
+export interface QueryApi<A, R> {
+  /** The wire name. */
+  readonly name: string;
+  /** True if the result depends on the asking player. */
+  readonly player: boolean;
+  /** The result type, for applying patches. */
+  readonly result: TypeRef;
+  /** Encodes arguments for `Subscribe`. */
+  encodeArgs(args: A): Uint8Array;
+  /** Decodes a whole encoded result. */
+  decodeResult(bytes: Uint8Array): R;
+  /** Encodes a result (for tests and tools). */
+  encodeResult(value: R): Uint8Array;
+}
+
 const SCALARS: ReadonlySet<string> = new Set([
   'bool',
   'u8',

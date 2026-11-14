@@ -89,6 +89,11 @@ Integers are varints, signed ones zigzag, `Fixed` the zigzag of its 64 bits, str
 length-prefixed, maps in key order (`compareKeys` on `MapKey`). `Writer` and `Reader` are the
 low-level encoder and strict decoder (`DecodeError` names the offset).
 
+The Rust crates' generator (`crates/tc-tsgen`) writes TypeScript that imports `Reader`, `Writer`,
+`Fixed`, `invalidVariant` (the error an exhaustive enum switch throws), `TypeRef` and `Types`
+from here, and types each generated query as a `QueryApi<A, R>`: its wire name, `player`, its
+`result` type and its argument and result codecs.
+
 ## Sessions
 
 `createNet({ schema, connect, hello, reconnect, liveness, inflate, entities, snapshots })` starts
