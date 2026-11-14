@@ -72,10 +72,7 @@ export function hud(spec: HudSpec, opts: SpecPanelOptions = {}): SpecHud {
 }
 
 /** What `presentHud` and `presentModal` need of the overlay. */
-export type SpecOverlay = Pick<
-  Overlay,
-  'root' | 'layout' | 'units' | 'scale' | 'onResize' | 'stack'
->;
+export type SpecOverlay = Pick<Overlay, 'layout' | 'units' | 'scale' | 'onResize' | 'stack'>;
 
 /**
  * CSS px per spec unit on `ui` now: 1 in `css` units; in `frame` units the overlay's scale (CSS
@@ -97,7 +94,7 @@ export interface HudView {
  * width, scaled with the overlay (`specScale`) on every resize and form change.
  */
 export function presentHud(h: SpecHud, ui: SpecOverlay, opts: DomOptions = {}): HudView {
-  const doc = ui.root.ownerDocument;
+  const doc = ui.layout.root.ownerDocument;
   const presenters: DomPresenter[] = [];
   const widgets: WidgetHandle[] = [];
   const scale = (): void => {
@@ -156,7 +153,7 @@ export function presentModal(
   opts: SpecModalOptions = {},
 ): SpecModal {
   const { scale, theme, fit, slotArt, timer, onClose, ...stack } = opts;
-  const host = ui.root.ownerDocument.createElement('div');
+  const host = ui.layout.root.ownerDocument.createElement('div');
   const dom: DomOptions = { scale: scale ?? specScale(ui) };
   if (theme) dom.theme = theme;
   if (fit) dom.fit = fit;

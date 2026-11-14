@@ -21,6 +21,9 @@ export type WorldWidgetAlign = 'left' | 'center' | 'right';
 export interface PanelKeyEvent {
   key: string;
   shiftKey?: boolean;
+  /** With Ctrl or Cmd (ws/ui-world: a long field's Enter sends only so). */
+  ctrlKey?: boolean;
+  metaKey?: boolean;
 }
 
 const HOVER_TINT = 'rgba(255, 255, 255, 0.07)';
@@ -166,6 +169,15 @@ export abstract class WorldWidget<O extends object = object> {
 
   /** A key on the focused widget; true when consumed. */
   key(_event: PanelKeyEvent): boolean {
+    return false;
+  }
+
+  /**
+   * A key on the focused widget before the panel's own Tab, Enter and Space (ws/ui-world): a
+   * widget with focus order of its own (a spec presenter's words) takes them here. True when
+   * consumed; the default takes nothing.
+   */
+  keyFirst(_event: PanelKeyEvent): boolean {
     return false;
   }
 

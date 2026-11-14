@@ -1,0 +1,18 @@
+[package]
+name = "tc-wire-derive"
+description = "#[derive(Wire)] for tc-wire"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn.workspace = true
+quote.workspace = true
+proc-macro2.workspace = true
+
+[lints]
+workspace = true

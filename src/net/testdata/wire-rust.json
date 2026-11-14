@@ -1,0 +1,286 @@
+{
+  "_note": "Written by crates/tc-wire/tests/net.rs (TC_BLESS=1 cargo test -p tc-wire --test net); checked by wire-rust.test.ts.",
+  "desc": {
+    "roots": ["Msg"],
+    "types": {
+      "Msg": {
+        "enum": {
+          "Hello": {
+            "player_name": "String",
+            "schema_hash": "String"
+          },
+          "Slots": ["PageSlot"],
+          "Names": ["PageString"],
+          "Pairs": [
+            {
+              "vec": "PairU8OptionString"
+            }
+          ],
+          "Shapes": [
+            {
+              "map": ["i32", "Shape"]
+            }
+          ],
+          "Choice": ["EitherItemIdVecBytes"],
+          "Raw": {
+            "data": "Bytes",
+            "at": "i64",
+            "delta": "i32",
+            "big": "u64"
+          },
+          "Bye": null
+        }
+      },
+      "PageSlot": {
+        "struct": {
+          "items": {
+            "vec": "Slot"
+          },
+          "next": {
+            "option": "u64"
+          }
+        }
+      },
+      "Slot": {
+        "struct": {
+          "item": "ItemId",
+          "count": "u16",
+          "worn": "bool"
+        }
+      },
+      "ItemId": {
+        "newtype": "u32"
+      },
+      "PageString": {
+        "struct": {
+          "items": {
+            "vec": "String"
+          },
+          "next": {
+            "option": "u64"
+          }
+        }
+      },
+      "PairU8OptionString": {
+        "struct": {
+          "left": "u8",
+          "right": {
+            "option": "String"
+          }
+        }
+      },
+      "Shape": {
+        "enum": {
+          "Empty": null,
+          "Circle": {
+            "radius": "Fixed"
+          },
+          "Tagged": ["String"]
+        }
+      },
+      "EitherItemIdVecBytes": {
+        "enum": {
+          "Left": ["ItemId"],
+          "Right": {
+            "value": {
+              "vec": "Bytes"
+            }
+          }
+        }
+      }
+    },
+    "queries": {
+      "slots_from": {
+        "args": {
+          "start": "u32"
+        },
+        "result": "PageSlot"
+      }
+    }
+  },
+  "text": "thunderclap-wire 2\nroot Msg\nquery slots_from(start: u32) -> PageSlot\nenum Msg {\n  Hello { player_name: String, schema_hash: String }\n  Slots(PageSlot)\n  Names(PageString)\n  Pairs(Vec<PairU8OptionString>)\n  Shapes(Map<i32, Shape>)\n  Choice(EitherItemIdVecBytes)\n  Raw { data: Bytes, at: i64, delta: i32, big: u64 }\n  Bye\n}\nstruct PageSlot { items: Vec<Slot>, next: Option<u64> }\nstruct Slot { item: ItemId, count: u16, worn: bool }\nnewtype ItemId(u32)\nstruct PageString { items: Vec<String>, next: Option<u64> }\nstruct PairU8OptionString { left: u8, right: Option<String> }\nenum Shape {\n  Empty\n  Circle { radius: Fixed }\n  Tagged(String)\n}\nenum EitherItemIdVecBytes {\n  Left(ItemId)\n  Right { value: Vec<Bytes> }\n}\n",
+  "hash": "dbca2956124a80a2",
+  "cases": [
+    {
+      "name": "hello",
+      "ty": "Msg",
+      "hex": "000a41646120e29c9320c3a91030313233343536373839616263646566",
+      "value": {
+        "type": "Hello",
+        "playerName": "Ada ✓ é",
+        "schemaHash": "0123456789abcdef"
+      }
+    },
+    {
+      "name": "hello_empty",
+      "ty": "Msg",
+      "hex": "000000",
+      "value": {
+        "type": "Hello",
+        "playerName": "",
+        "schemaHash": ""
+      }
+    },
+    {
+      "name": "slots",
+      "ty": "Msg",
+      "hex": "0102010000ffffffff0fffff030101ffffffffffffff0f",
+      "value": {
+        "type": "Slots",
+        "value": {
+          "items": [
+            {
+              "item": 1,
+              "count": 0,
+              "worn": false
+            },
+            {
+              "item": 4294967295,
+              "count": 65535,
+              "worn": true
+            }
+          ],
+          "next": 9007199254740991
+        }
+      }
+    },
+    {
+      "name": "slots_empty",
+      "ty": "Msg",
+      "hex": "010000",
+      "value": {
+        "type": "Slots",
+        "value": {
+          "items": [],
+          "next": null
+        }
+      }
+    },
+    {
+      "name": "names",
+      "ty": "Msg",
+      "hex": "02020161042271220a0100",
+      "value": {
+        "type": "Names",
+        "value": {
+          "items": ["a", "\"q\"\n"],
+          "next": 0
+        }
+      }
+    },
+    {
+      "name": "pairs",
+      "ty": "Msg",
+      "hex": "03020000ff010178",
+      "value": {
+        "type": "Pairs",
+        "value": [
+          {
+            "left": 0,
+            "right": null
+          },
+          {
+            "left": 255,
+            "right": "x"
+          }
+        ]
+      }
+    },
+    {
+      "name": "shapes",
+      "ty": "Msg",
+      "hex": "0404ffffffff0f000101ffffffff0f00020174feffffff0f01feffffffffffffffff01",
+      "value": {
+        "type": "Shapes",
+        "value": {
+          "$map": [
+            [
+              -2147483648,
+              {
+                "type": "Empty"
+              }
+            ],
+            [
+              -1,
+              {
+                "type": "Circle",
+                "radius": {
+                  "$fixed": "-2147483648"
+                }
+              }
+            ],
+            [
+              0,
+              {
+                "type": "Tagged",
+                "value": "t"
+              }
+            ],
+            [
+              2147483647,
+              {
+                "type": "Circle",
+                "radius": {
+                  "$fixed": "9223372036854775807"
+                }
+              }
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "name": "choice_left",
+      "ty": "Msg",
+      "hex": "0500ac02",
+      "value": {
+        "type": "Choice",
+        "value": {
+          "type": "Left",
+          "value": 300
+        }
+      }
+    },
+    {
+      "name": "choice_right",
+      "ty": "Msg",
+      "hex": "05010200030080ff",
+      "value": {
+        "type": "Choice",
+        "value": {
+          "type": "Right",
+          "value": [
+            {
+              "$bytes": ""
+            },
+            {
+              "$bytes": "0080ff"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "raw",
+      "ty": "Msg",
+      "hex": "068002000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfefffdffffffffffff1fffffffff0fffffffffffffff0f",
+      "value": {
+        "type": "Raw",
+        "data": {
+          "$bytes": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff"
+        },
+        "at": -9007199254740991,
+        "delta": -2147483648,
+        "big": 9007199254740991
+      }
+    },
+    {
+      "name": "bye",
+      "ty": "Msg",
+      "hex": "07",
+      "value": {
+        "type": "Bye"
+      }
+    }
+  ]
+}

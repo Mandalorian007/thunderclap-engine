@@ -113,3 +113,9 @@ Buffers hold bytes:
 - Nothing runs shaders. `fake.runPass` is called with each pass at submit, so a test can write into `data` what a dispatch would have written.
 
 The full rules are in the [render README](../render/README.md) under *Tests*.
+
+## Fake WebXR
+
+`installFakeXr(opts?: FakeXrOptions)` puts a fake `navigator.xr` and `XRGPUBinding` in place and returns a `FakeXr` (`system`, `bindings`, `step(dtMs)`, `uninstall()`): `createGame({ xr })`'s `ctx.xr.enter()` then runs over the fake GPU, one XR frame per `step`. The session is a `FakeXrSession` (`headPosition`, `headYaw`, `tracking`, `addInputSource`, `fire`); a `FakeXrInputSource(handedness, { standard: true })` carries an xr-standard gamepad driven with `press(i, down)` and `stick(x, y)`.
+
+`emulateXr(opts?: EmulateXrOptions)` is the same fake on a page's real GPU: it steps the session on `requestAnimationFrame` and, with `mirror`, copies the layer's two eyes side by side onto a canvas. The `XrEmulator` it returns counts `frames` and `mirrored` and `stop()`s. `harness/stereo.html` is a game in it.

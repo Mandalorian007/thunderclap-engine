@@ -89,6 +89,7 @@ export const WEBKIT_SPECS = [
   'bench',
   'ui',
   'ui-spec',
+  'ui-world',
   'net',
   'input',
   'layout',
@@ -102,6 +103,8 @@ export const WEBKIT_SPECS = [
   'decals-core',
   'demos/voxel',
   'demos/showroom',
+  'stereo',
+  'xr',
 ];
 const webkitMatch = new RegExp(`(^|/)e2e/(${WEBKIT_SPECS.join('|')})\\.spec\\.ts$`);
 const webkitOn =

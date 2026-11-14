@@ -88,6 +88,8 @@ export interface PassMember {
   readonly pass: CorePass;
   readonly readsDepth?: boolean;
   readonly readsColor?: boolean;
+  /** False while a restored draw set waits for its bind groups (ws/core-passes). */
+  readonly ready?: boolean;
   encoding(): string;
   inView?(group: number): boolean;
   bundle(

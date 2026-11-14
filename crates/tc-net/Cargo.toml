@@ -1,0 +1,21 @@
+[package]
+name = "tc-net"
+description = "ThunderClap's server connection layer: transport, WebSocket, handshake, lanes, flow control, deflate, rates, clock"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+tc-wire.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+miniz_oxide.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync", "time", "test-util"] }
+
+[lints]
+workspace = true
