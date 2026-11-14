@@ -415,6 +415,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "tc-sim"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "tc-net",
+ "tc-store",
+ "tc-wire",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+]
+
+[[package]]
 name = "tc-store"
 version = "0.1.0"
 dependencies = [
