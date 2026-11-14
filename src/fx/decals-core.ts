@@ -18,11 +18,12 @@ import {
   CoreViewExtras,
   DrawablePipelines,
 } from '../render/core/drawable';
+import { coreDepthCompare } from '../render/core/pass-list';
 import { coreColorTargets } from '../render/core/targets';
 import { Mesh, VERTEX_LAYOUT_3D, VERTEX3D_FLOATS, VERTEX3D_STRIDE } from '../render/mesh';
 import type { TextureLike } from '../render/texture';
-import { createShaderModule } from '../render/wgsl';
 import { DECAL_CORE_BOX_WGSL, DECAL_CORE_QUAD_WGSL } from './decals-core-wgsl';
+import { FxDepthModules } from './depth';
 
 /**
  * Floats per decal instance (6 × vec4f = 96 bytes):
@@ -171,7 +172,7 @@ export class DecalsOnCore implements CoreDrawable {
       }),
     };
     const g = this.gpu;
-    const module = createShaderModule(
+    const modules = new FxDepthModules(
       device,
       box ? DECAL_CORE_BOX_WGSL : DECAL_CORE_QUAD_WGSL,
       box ? 'decals-core-box' : 'decals-core-quad',
@@ -179,8 +180,9 @@ export class DecalsOnCore implements CoreDrawable {
     const layout = device.createPipelineLayout({
       bindGroupLayouts: [core.viewLayout, g.layout],
     });
-    this.pipes = new DrawablePipelines((color, depth, _readOnly, aux) =>
-      device.createRenderPipeline({
+    this.pipes = new DrawablePipelines((color, depth, _readOnly, aux, reversedZ) => {
+      const module = modules.get(reversedZ);
+      return device.createRenderPipeline({
         label: `decals-core:${this.mode}`,
         layout,
         vertex: { module, entryPoint: 'vs', buffers: [POSITION_LAYOUT, INSTANCE_LAYOUT] },
@@ -196,11 +198,11 @@ export class DecalsOnCore implements CoreDrawable {
           ? {
               format: depth,
               depthWriteEnabled: false,
-              depthCompare: box ? 'always' : 'less-equal',
+              depthCompare: box ? 'always' : coreDepthCompare(reversedZ, true),
             }
           : undefined,
-      }),
-    );
+      });
+    });
     this.group = null;
     this.groupTargets = -1;
     this.uploaded = -1;

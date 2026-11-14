@@ -15,9 +15,10 @@ import {
   CoreViewExtras,
   DrawablePipelines,
 } from '../render/core/drawable';
+import { coreDepthCompare } from '../render/core/pass-list';
 import { CORE_TARGET, coreColorTargets } from '../render/core/targets';
 import { VERTEX_LAYOUT_3D } from '../render/mesh';
-import { createShaderModule } from '../render/wgsl';
+import { FxDepthModules } from './depth';
 import type { Water } from './water';
 import { WATER_CORE_FLOATS, WATER_CORE_WGSL } from './water-wgsl';
 
@@ -91,12 +92,13 @@ export class WaterOnCore implements CoreDrawable {
         { binding: 4, visibility: F, buffer: { type: 'read-only-storage' } },
       ],
     });
-    const module = createShaderModule(device, WATER_CORE_WGSL, 'water-core');
+    const modules = new FxDepthModules(device, WATER_CORE_WGSL, 'water-core');
     const pipelineLayout = device.createPipelineLayout({
       bindGroupLayouts: [core.viewLayout, this.layout],
     });
-    this.pipes = new DrawablePipelines((color, depth, _readOnly, aux) =>
-      device.createRenderPipeline({
+    this.pipes = new DrawablePipelines((color, depth, _readOnly, aux, reversedZ) => {
+      const module = modules.get(reversedZ);
+      return device.createRenderPipeline({
         label: 'water-core',
         layout: pipelineLayout,
         vertex: { module, entryPoint: 'vs', buffers: [VERTEX_LAYOUT_3D.buffer] },
@@ -111,10 +113,14 @@ export class WaterOnCore implements CoreDrawable {
         },
         primitive: { topology: 'triangle-list', cullMode: 'none' },
         depthStencil: depth
-          ? { format: depth, depthWriteEnabled: false, depthCompare: 'less-equal' }
+          ? {
+              format: depth,
+              depthWriteEnabled: false,
+              depthCompare: coreDepthCompare(reversedZ, true),
+            }
           : undefined,
-      }),
-    );
+      });
+    });
   }
 
   prepare(encoder: GPUCommandEncoder): void {
