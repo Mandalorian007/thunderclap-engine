@@ -99,9 +99,21 @@ Seam order; each switch deletes Forge's own copy in the same PR and passes Forge
 | D9 | The networking client | C9 |
 | EV | An evaluator plays Forge on the engine against the parity checklist (every feature in [evidence/B-client.md](design/2.0/evidence/B-client.md)); its findings become fix steps | D0–D9 |
 
-### Phase E and F
+### Phase E (engine server crates)
 
-Planned when S0 lands and phase D is under way.
+E1 tc-wire, E2a tc-net, E2b tc-auth, E3a/E3b tc-store, E4a/E4b tc-sim, E5 tc-stream, E6 tc-admin + the `thunderclap-server` facade: landed (2.0.0-next.4 and main). E7 second game (arena-2d-server template, turn game): in flight. Rust releases are git tags `server-v0.N` (Forge pins one); `server-v0.1` at E6, `2.1` with E7.
+
+### Phase F: Forge's server switches (forgewilds PRs)
+
+Serial: they share `forge-server`. Each pins an exact `server-v0.N` tag, deletes Forge's copy in the same PR, keeps Forge's `forge-bench` budgets (step p99, allocations) within 10%, and passes Forge's local gate.
+
+| Id | Switch | Needs |
+| --- | --- | --- |
+| F1 | Wire, net and auth: `forge-protocol`'s framing and schema on tc-wire, the socket server on tc-net, names and sessions on tc-auth | E1, E2, D9 |
+| F2 | The store on tc-store (log, marks, recovery, archive, backup) | E3, F1 |
+| F3 | The loop on tc-sim: `ForgeGame: Game`, play families over `Sim<ForgeGame>`, queries and the entity stream | E4, F2 |
+| F4 | Sections on tc-stream (`SectionSource` over faces, climate, piles); admin, CLI and `forge serve` over the facade | E5, E6, F3 |
+| FV | An evaluator plays Forge (client and server on the engine) against the parity checklist; findings become fix steps; then `2.0.0` | EV, F4 |
 
 ## How the work runs
 
