@@ -32,6 +32,7 @@ frame.drawable(particles); // each frame, inside render
 | `Sky` | a procedural sky and stars |
 | `createDebugDraw(...)` | lines, boxes and axes for debugging |
 | `flicker / pulse` | light intensity over time, no allocation |
+| `Weather` | precipitation volumes on the render core (rain, snow, dust storm configs) |
 
 ## Contents
 
@@ -45,6 +46,7 @@ frame.drawable(particles); // each frame, inside render
 - [Decals](#decals)
 - [fx-4 demo](#fx-4-demo)
 - [Water](#water)
+- [On the render core](#on-the-render-core)
 
 ## Overview
 
@@ -694,3 +696,37 @@ const y = waterHeight(water, boat.x, boat.z); // the surface under something flo
 Tests: `water.test.ts` (fake GPU, `waterHeight` against the WGSL formula). Demo:
 `harness/water.html` (a basin with a ramp running into the water under a `Sky`; `?still` parks
 the sun on the specular probe).
+
+## On the render core
+
+ws/core-effects (B5). `ParticleSystem`, `Water` and `Weather` made on a `RenderCore` (from
+`@thunderclap-engine/engine/render`) are core drawables: they join the transparent pass, draw in
+every view the core draws, and record one cached bundle a cull group, so both eyes of a stereo
+pair execute the same bundle. Their `coreDrawable` is what `core.addDrawable` /
+`core.removeDrawable` take (the constructor adds it).
+
+- Particles (`ParticlesOnCore`): the compute runs in `core.prepare`; the draw is one instanced
+  call over the ring, so calls stay flat in particle count. Each eye faces its own image plane
+  (`CoreViewExtras`), soft particles read the core's depth.
+- Water (`WaterOnCore`): reads the core's depth (shoreline, depth fade) and, when `refraction > 0`
+  or `reflectionSteps > 0`, a per-view copy of the target's colour (the target must pass its
+  `texture` with `COPY_SRC`). `refraction`, `reflectionSteps`, `reflectionReach`, `sunDirection`,
+  `sunColor` and `skyColor` are live: the block is written each frame, no re-record.
+- Weather: up to `WEATHER_MAX_LAYERS` layers (`PrecipLayer`: `streak`, `flake` or `dust`, count,
+  radius, height, speed, length, colour) in one instanced draw. The volume follows `anchor` (or
+  the first view's eye), wraps without popping, and dies under `occlusionHeight` or an occlusion
+  map (`setOcclusionMap`: a roof, a canopy, the ground). `wind`, `intensity`, `density` and
+  `light` are live; `configure(config)` swaps configs. `WEATHER_RAIN`, `WEATHER_SNOW` and
+  `WEATHER_DUST_STORM` are configs, not code.
+- Quality knobs for the governor: `particleBudgetKnob(systems)` (spawn share 1 down to 0.25),
+  `weatherDensityKnob(weather)` (density 1 down to 0.25) and `waterReflectionKnob(waters)`
+  (reflection off and back).
+
+```ts
+const weather = new Weather(core, WEATHER_DUST_STORM);
+weather.update(dt); // each frame; core.prepare and core.draw do the rest
+weather.configure(WEATHER_SNOW);
+```
+
+Decals stay on the immediate path for now. Tests `particles-core.test.ts`, `water-core.test.ts`,
+`weather.test.ts`; demo `harness/fx-core.html` (`?weather=dust|snow|rain|off`), a stereo pair.
