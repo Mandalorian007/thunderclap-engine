@@ -122,9 +122,12 @@ type EnvelopeServerVariant = (typeof ENVELOPE_SERVER)[number];
 interface EnvelopeSpec {
     readonly client?: readonly (EnvelopeClientVariant | Readonly<Record<string, VariantSpec>>)[];
     readonly server?: readonly (EnvelopeServerVariant | Readonly<Record<string, VariantSpec>>)[];
-    readonly hello?: readonly ('token' | 'schema_hash' | 'bulk' | 'ext')[];
+    readonly hello?: readonly ('token' | 'schema_hash' | 'bulk' | 'ext' | {
+        readonly ext: number;
+    })[];
     readonly welcome?: readonly ('player' | 'time' | 'paused' | 'step_us' | 'ext')[];
-    readonly ack?: 'each' | 'total';
+    readonly rejected?: readonly ('reason' | 'stale_schema')[];
+    readonly ack?: 'each' | 'total' | 'messages';
     readonly close?: {
         readonly type: string;
         readonly codes: readonly number[];
@@ -561,7 +564,7 @@ type ServerMsg<GWelcome = unknown, GResult = unknown, GState = unknown, GServer 
 } | {
     type: 'Rejected';
     reason: string;
-    staleSchema: boolean;
+    staleSchema?: boolean;
 } | {
     type: 'CommandResult';
     seq: number;
