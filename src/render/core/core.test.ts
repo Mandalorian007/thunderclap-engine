@@ -121,7 +121,7 @@ function cullOnSubmit(s: Scene): void {
       if (c.op === 'setBindGroup') group = c.group as { entries: GPUBindGroupEntry[] };
       if (c.op !== 'dispatch' || !group) continue;
       const buf = (i: number) =>
-        (group!.entries[i]!.resource as { buffer: FakeBuffer }).buffer as FakeBuffer;
+        (group!.entries[i]!.resource as unknown as { buffer: FakeBuffer }).buffer;
       const params = new Uint32Array(buf(1).data.buffer, 0, 4);
       const slots = buf(2).data.buffer;
       const views = new Float32Array(buf(0).data.buffer);

@@ -190,7 +190,7 @@ export class Arena {
   }
 
   /** Write `data` into `a` at `byteOffset` (default 0) within it. */
-  write(a: ArenaAlloc, data: BufferSource, byteOffset = 0): void {
+  write(a: ArenaAlloc, data: ArrayBufferView | ArrayBuffer, byteOffset = 0): void {
     const n = data.byteLength;
     if (byteOffset + n > a.size) {
       throw new Error(`${this.label}: write of ${n} B at ${byteOffset} past a ${a.size} B alloc`);
