@@ -1,0 +1,715 @@
+{
+  "_note": "Every protocol enum (forge_server::schema()) and its variants by tag: a variant is sent as its position. Append only. Written by crates/forge-server/tests/variants.rs (FORGE_BLESS=1 cargo test -p forge-server --test variants), which appends and does nothing else; a retired variant is marked \"reserved\": true by hand (crates/forge-sim/src/variants.rs).",
+  "enums": {
+    "ActorClass": [
+      {"tag": 0, "name": "Humanoid"},
+      {"tag": 1, "name": "Creature"},
+      {"tag": 2, "name": "Hero"},
+      {"tag": 3, "name": "Ambient"}
+    ],
+    "ActorColor": [
+      {"tag": 0, "name": "Rgb"},
+      {"tag": 1, "name": "Slot"}
+    ],
+    "ActorMaterial": [
+      {"tag": 0, "name": "Plain"},
+      {"tag": 1, "name": "Timber"},
+      {"tag": 2, "name": "TimberDark"},
+      {"tag": 3, "name": "Stone"},
+      {"tag": 4, "name": "Brass"},
+      {"tag": 5, "name": "Iron"},
+      {"tag": 6, "name": "Rope"},
+      {"tag": 7, "name": "Canvas"},
+      {"tag": 8, "name": "Leather"},
+      {"tag": 9, "name": "Fire"},
+      {"tag": 10, "name": "Molten"},
+      {"tag": 11, "name": "Copper"},
+      {"tag": 12, "name": "Clay"},
+      {"tag": 13, "name": "Lens"},
+      {"tag": 14, "name": "Red"},
+      {"tag": 15, "name": "Skin"},
+      {"tag": 16, "name": "Suit"},
+      {"tag": 17, "name": "Cloth"},
+      {"tag": 18, "name": "Hair"},
+      {"tag": 19, "name": "Glow"},
+      {"tag": 20, "name": "Eye"},
+      {"tag": 21, "name": "Bark"},
+      {"tag": 22, "name": "Leaf"},
+      {"tag": 23, "name": "Chitin"},
+      {"tag": 24, "name": "Fur"},
+      {"tag": 25, "name": "Flame"}
+    ],
+    "AmbientKind": [
+      {"tag": 0, "name": "Swarm"},
+      {"tag": 1, "name": "Flock"},
+      {"tag": 2, "name": "Perch"},
+      {"tag": 3, "name": "Shoal"},
+      {"tag": 4, "name": "Drift"}
+    ],
+    "BasinMode": [
+      {"tag": 0, "name": "Filling"},
+      {"tag": 1, "name": "Spilling"},
+      {"tag": 2, "name": "Draining"}
+    ],
+    "BulkCodec": [
+      {"tag": 0, "name": "None"},
+      {"tag": 1, "name": "Deflate"}
+    ],
+    "CanInfo": [
+      {"tag": 0, "name": "Empty"},
+      {"tag": 1, "name": "Full"}
+    ],
+    "CharmEffect": [
+      {"tag": 0, "name": "Damage"},
+      {"tag": 1, "name": "Stagger"},
+      {"tag": 2, "name": "Heal"},
+      {"tag": 3, "name": "Ward"},
+      {"tag": 4, "name": "Dash"},
+      {"tag": 5, "name": "Cleanse"}
+    ],
+    "CharmShape": [
+      {"tag": 0, "name": "Focus"},
+      {"tag": 1, "name": "Spread"},
+      {"tag": 2, "name": "Line"},
+      {"tag": 3, "name": "Ring"}
+    ],
+    "ClientMsg": [
+      {"tag": 0, "name": "Hello"},
+      {"tag": 1, "name": "Command"},
+      {"tag": 2, "name": "Subscribe"},
+      {"tag": 3, "name": "Unsubscribe"},
+      {"tag": 4, "name": "Ping"},
+      {"tag": 5, "name": "Chat"},
+      {"tag": 6, "name": "SetInterest"},
+      {"tag": 7, "name": "Input"},
+      {"tag": 8, "name": "TakeControl"},
+      {"tag": 9, "name": "Report"},
+      {"tag": 10, "name": "Holding"},
+      {"tag": 11, "name": "EntityResync"},
+      {"tag": 12, "name": "Ack"},
+      {"tag": 13, "name": "Hold"},
+      {"tag": 14, "name": "Pose"}
+    ],
+    "ClipBlend": [
+      {"tag": 0, "name": "Add"},
+      {"tag": 1, "name": "Replace"}
+    ],
+    "ClipBy": [
+      {"tag": 0, "name": "Time"},
+      {"tag": 1, "name": "Stride"}
+    ],
+    "ClipChannel": [
+      {"tag": 0, "name": "Rot"},
+      {"tag": 1, "name": "Pos"},
+      {"tag": 2, "name": "Scale"}
+    ],
+    "ClipEase": [
+      {"tag": 0, "name": "Smooth"},
+      {"tag": 1, "name": "Linear"},
+      {"tag": 2, "name": "Step"}
+    ],
+    "CloseCode": [
+      {"tag": 0, "name": "Stopping"},
+      {"tag": 1, "name": "Kicked"},
+      {"tag": 2, "name": "Banned"},
+      {"tag": 3, "name": "Revoked"}
+    ],
+    "Command": [
+      {"tag": 0, "name": "Place"},
+      {"tag": 1, "name": "Break"},
+      {"tag": 2, "name": "Dev"},
+      {"tag": 3, "name": "Use"},
+      {"tag": 4, "name": "StoragePut"},
+      {"tag": 5, "name": "StorageTake"},
+      {"tag": 6, "name": "InventoryMove"},
+      {"tag": 7, "name": "TakePile"},
+      {"tag": 8, "name": "Drop"},
+      {"tag": 9, "name": "Recall"},
+      {"tag": 10, "name": "StopRecall"},
+      {"tag": 11, "name": "Make"},
+      {"tag": 12, "name": "BreakWith"},
+      {"tag": 13, "name": "Attack"},
+      {"tag": 14, "name": "Feed"},
+      {"tag": 15, "name": "Eat"},
+      {"tag": 16, "name": "Home"},
+      {"tag": 17, "name": "Provision"},
+      {"tag": 18, "name": "Collect"},
+      {"tag": 19, "name": "BreakThrough"},
+      {"tag": 20, "name": "Trust"},
+      {"tag": 21, "name": "Swing"},
+      {"tag": 22, "name": "Charm"},
+      {"tag": 23, "name": "Companion"},
+      {"tag": 24, "name": "Gather"},
+      {"tag": 25, "name": "SetRune"},
+      {"tag": 26, "name": "Charge"},
+      {"tag": 27, "name": "CopyFrame"},
+      {"tag": 28, "name": "WriteScroll"},
+      {"tag": 29, "name": "Party"},
+      {"tag": 30, "name": "BreakRelic"},
+      {"tag": 31, "name": "AltarFloor"},
+      {"tag": 32, "name": "AltarReroll"},
+      {"tag": 33, "name": "Pin"},
+      {"tag": 34, "name": "Seen"}
+    ],
+    "CreatureBehavior": [
+      {"tag": 0, "name": "Flee"},
+      {"tag": 1, "name": "Approach"},
+      {"tag": 2, "name": "Graze"},
+      {"tag": 3, "name": "Wander"},
+      {"tag": 4, "name": "Seek"},
+      {"tag": 5, "name": "Drift"}
+    ],
+    "CreatureCall": [
+      {"tag": 0, "name": "Chirp"},
+      {"tag": 1, "name": "Trill"},
+      {"tag": 2, "name": "Warble"},
+      {"tag": 3, "name": "Hoot"},
+      {"tag": 4, "name": "Croak"},
+      {"tag": 5, "name": "Bark"},
+      {"tag": 6, "name": "Bleat"},
+      {"tag": 7, "name": "Grunt"},
+      {"tag": 8, "name": "Buzz"},
+      {"tag": 9, "name": "Chime"}
+    ],
+    "CreatureRole": [
+      {"tag": 0, "name": "Leader"},
+      {"tag": 1, "name": "Adult"},
+      {"tag": 2, "name": "Young"}
+    ],
+    "CreatureTier": [
+      {"tag": 0, "name": "Wild"},
+      {"tag": 1, "name": "Ambient"},
+      {"tag": 2, "name": "Husk"}
+    ],
+    "DayPhase": [
+      {"tag": 0, "name": "Dawn"},
+      {"tag": 1, "name": "Day"},
+      {"tag": 2, "name": "Dusk"},
+      {"tag": 3, "name": "Night"}
+    ],
+    "DevCommand": [
+      {"tag": 0, "name": "Give"},
+      {"tag": 1, "name": "SetBlock"},
+      {"tag": 2, "name": "Teleport"},
+      {"tag": 3, "name": "Pause"},
+      {"tag": 4, "name": "Resume"},
+      {"tag": 5, "name": "Step"},
+      {"tag": 6, "name": "AdvanceTo"},
+      {"tag": 7, "name": "Present"},
+      {"tag": 8, "name": "GrowTree"},
+      {"tag": 9, "name": "SpawnHusk"},
+      {"tag": 10, "name": "ClearHusks"},
+      {"tag": 11, "name": "SpawnHuskOf"},
+      {"tag": 12, "name": "Teach"},
+      {"tag": 13, "name": "Forget"},
+      {"tag": 14, "name": "SetBar"},
+      {"tag": 15, "name": "SetPool"},
+      {"tag": 16, "name": "SetHealth"},
+      {"tag": 17, "name": "GiveRune"},
+      {"tag": 18, "name": "SetBond"},
+      {"tag": 19, "name": "KnockOut"},
+      {"tag": 20, "name": "SetCamps"},
+      {"tag": 21, "name": "SetSpring"},
+      {"tag": 22, "name": "FellGuardian"},
+      {"tag": 23, "name": "DirectFight"},
+      {"tag": 24, "name": "Reach"}
+    ],
+    "DevDirect": [
+      {"tag": 0, "name": "Zone"},
+      {"tag": 1, "name": "Order"},
+      {"tag": 2, "name": "Fix"}
+    ],
+    "Element": [
+      {"tag": 0, "name": "Fire"},
+      {"tag": 1, "name": "Water"},
+      {"tag": 2, "name": "Wind"},
+      {"tag": 3, "name": "Earth"}
+    ],
+    "EntityKind": [
+      {"tag": 0, "name": "Item"},
+      {"tag": 1, "name": "PrimedTnt"},
+      {"tag": 2, "name": "Player"},
+      {"tag": 3, "name": "Creature"},
+      {"tag": 4, "name": "Kept"}
+    ],
+    "Facing": [
+      {"tag": 0, "name": "Down"},
+      {"tag": 1, "name": "Up"},
+      {"tag": 2, "name": "North"},
+      {"tag": 3, "name": "South"},
+      {"tag": 4, "name": "West"},
+      {"tag": 5, "name": "East"}
+    ],
+    "FightEvent": [
+      {"tag": 0, "name": "Husk"},
+      {"tag": 1, "name": "Gone"},
+      {"tag": 2, "name": "Tell"},
+      {"tag": 3, "name": "Hit"},
+      {"tag": 4, "name": "Struck"},
+      {"tag": 5, "name": "Dodged"},
+      {"tag": 6, "name": "Down"},
+      {"tag": 7, "name": "Cast"},
+      {"tag": 8, "name": "Warded"},
+      {"tag": 9, "name": "Course"},
+      {"tag": 10, "name": "Companion"},
+      {"tag": 11, "name": "Harried"},
+      {"tag": 12, "name": "Cleansed"},
+      {"tag": 13, "name": "KinWord"},
+      {"tag": 14, "name": "CompanionCourse"},
+      {"tag": 15, "name": "Zone"},
+      {"tag": 16, "name": "Marked"},
+      {"tag": 17, "name": "Broken"},
+      {"tag": 18, "name": "Unzoned"}
+    ],
+    "Fizzle": [
+      {"tag": 0, "name": "Twice"},
+      {"tag": 1, "name": "NotHere"},
+      {"tag": 2, "name": "NotYet"},
+      {"tag": 3, "name": "WrongElement"}
+    ],
+    "FloorRoomKind": [
+      {"tag": 0, "name": "Entry"},
+      {"tag": 1, "name": "Fight"},
+      {"tag": 2, "name": "Test"},
+      {"tag": 3, "name": "Camp"},
+      {"tag": 4, "name": "Side"},
+      {"tag": 5, "name": "Boss"}
+    ],
+    "FrameKind": [
+      {"tag": 0, "name": "Well"},
+      {"tag": 1, "name": "Ward"},
+      {"tag": 2, "name": "Circle"},
+      {"tag": 3, "name": "Runeforge"},
+      {"tag": 4, "name": "Bed"},
+      {"tag": 5, "name": "Hearth"},
+      {"tag": 6, "name": "Altar"}
+    ],
+    "FrameStatus": [
+      {"tag": 0, "name": "Running"},
+      {"tag": 1, "name": "Dim"},
+      {"tag": 2, "name": "NotNow"},
+      {"tag": 3, "name": "NoPool"},
+      {"tag": 4, "name": "Idle"},
+      {"tag": 5, "name": "Empty"},
+      {"tag": 6, "name": "Full"},
+      {"tag": 7, "name": "NoStore"},
+      {"tag": 8, "name": "StoreFull"}
+    ],
+    "GlowLevel": [
+      {"tag": 0, "name": "Constant"},
+      {"tag": 1, "name": "Heat"}
+    ],
+    "GuardianStage": [
+      {"tag": 0, "name": "Coil"},
+      {"tag": 1, "name": "Flood"},
+      {"tag": 2, "name": "Drowning"},
+      {"tag": 3, "name": "Felled"}
+    ],
+    "HomeEvent": [
+      {"tag": 0, "name": "Homed"},
+      {"tag": 1, "name": "Provisioned"},
+      {"tag": 2, "name": "Collected"}
+    ],
+    "HomeNoBirth": [
+      {"tag": 0, "name": "Never"},
+      {"tag": 1, "name": "Alone"},
+      {"tag": 2, "name": "Crowded"},
+      {"tag": 3, "name": "Unfed"}
+    ],
+    "HomeSour": [
+      {"tag": 0, "name": "Unfed"},
+      {"tag": 1, "name": "Crowded"},
+      {"tag": 2, "name": "OutOfPlace"},
+      {"tag": 3, "name": "WrongElement"}
+    ],
+    "HomeStall": [
+      {"tag": 0, "name": "Unfed"},
+      {"tag": 1, "name": "Full"}
+    ],
+    "HuntEvent": [
+      {"tag": 0, "name": "Hit"},
+      {"tag": 1, "name": "Killed"},
+      {"tag": 2, "name": "Fed"},
+      {"tag": 3, "name": "Tamed"},
+      {"tag": 4, "name": "Lured"}
+    ],
+    "HurtCause": [
+      {"tag": 0, "name": "Fall"},
+      {"tag": 1, "name": "Drown"},
+      {"tag": 2, "name": "Creature"}
+    ],
+    "HuskPhase": [
+      {"tag": 0, "name": "Idle"},
+      {"tag": 1, "name": "Wind"},
+      {"tag": 2, "name": "Strike"},
+      {"tag": 3, "name": "Recover"},
+      {"tag": 4, "name": "Staggered"},
+      {"tag": 5, "name": "Down"},
+      {"tag": 6, "name": "Weakened"}
+    ],
+    "Interaction": [
+      {"tag": 0, "name": "Use"},
+      {"tag": 1, "name": "Storage"},
+      {"tag": 2, "name": "Runeforge"}
+    ],
+    "MachineStatus": [
+      {"tag": 0, "name": "Running"},
+      {"tag": 1, "name": "Idle"},
+      {"tag": 2, "name": "Stalled"}
+    ],
+    "MakeLearn": [
+      {"tag": 0, "name": "Start"},
+      {"tag": 1, "name": "Holding"},
+      {"tag": 2, "name": "Taught"}
+    ],
+    "MakeStation": [
+      {"tag": 0, "name": "Heat"},
+      {"tag": 1, "name": "Cold"},
+      {"tag": 2, "name": "Block"},
+      {"tag": 3, "name": "HeatedBlock"},
+      {"tag": 4, "name": "Runeforge"}
+    ],
+    "ModelAxis": [
+      {"tag": 0, "name": "X"},
+      {"tag": 1, "name": "Y"},
+      {"tag": 2, "name": "Z"}
+    ],
+    "ModelLink": [
+      {"tag": 0, "name": "Axle", "reserved": true},
+      {"tag": 1, "name": "Signal", "reserved": true}
+    ],
+    "ModelMaterial": [
+      {"tag": 0, "name": "Plain"},
+      {"tag": 1, "name": "Timber"},
+      {"tag": 2, "name": "TimberDark"},
+      {"tag": 3, "name": "Stone"},
+      {"tag": 4, "name": "Brass"},
+      {"tag": 5, "name": "Iron"},
+      {"tag": 6, "name": "Rope"},
+      {"tag": 7, "name": "Canvas"},
+      {"tag": 8, "name": "Leather"},
+      {"tag": 9, "name": "Fire"},
+      {"tag": 10, "name": "Molten"},
+      {"tag": 11, "name": "Copper"},
+      {"tag": 12, "name": "Clay"},
+      {"tag": 13, "name": "Lens"},
+      {"tag": 14, "name": "Red"}
+    ],
+    "MoveMode": [
+      {"tag": 0, "name": "Walking"},
+      {"tag": 1, "name": "Swimming"},
+      {"tag": 2, "name": "Climbing"},
+      {"tag": 3, "name": "Riding"},
+      {"tag": 4, "name": "Driving"}
+    ],
+    "Orient": [
+      {"tag": 0, "name": "None"},
+      {"tag": 1, "name": "Horizontal"},
+      {"tag": 2, "name": "NotUp"},
+      {"tag": 3, "name": "Any"},
+      {"tag": 4, "name": "Axis"}
+    ],
+    "Outcome": [
+      {"tag": 0, "name": "Ok"},
+      {"tag": 1, "name": "Rejected"}
+    ],
+    "PartColor": [
+      {"tag": 0, "name": "Rgb"},
+      {"tag": 1, "name": "Block"},
+      {"tag": 2, "name": "Secondary"}
+    ],
+    "PartMotion": [
+      {"tag": 0, "name": "Spin"},
+      {"tag": 1, "name": "Scroll", "reserved": true},
+      {"tag": 2, "name": "Toggle"}
+    ],
+    "PartShape": [
+      {"tag": 0, "name": "Box"},
+      {"tag": 1, "name": "Cylinder"},
+      {"tag": 2, "name": "Gear"},
+      {"tag": 3, "name": "Ring"},
+      {"tag": 4, "name": "Prism"},
+      {"tag": 5, "name": "Frustum"},
+      {"tag": 6, "name": "Wedge"}
+    ],
+    "PartTurn": [
+      {"tag": 0, "name": "Facing"},
+      {"tag": 1, "name": "Horizontal"},
+      {"tag": 2, "name": "None"}
+    ],
+    "PatchOp": [
+      {"tag": 0, "name": "Set"},
+      {"tag": 1, "name": "MapPut"},
+      {"tag": 2, "name": "MapRemove"}
+    ],
+    "PathStep": [
+      {"tag": 0, "name": "Field"},
+      {"tag": 1, "name": "Variant"},
+      {"tag": 2, "name": "Entry"},
+      {"tag": 3, "name": "Present"}
+    ],
+    "PlantForm": [
+      {"tag": 0, "name": "Cross"},
+      {"tag": 1, "name": "Patch"},
+      {"tag": 2, "name": "Flat"},
+      {"tag": 3, "name": "Hang"}
+    ],
+    "PlantParts": [
+      {"tag": 0, "name": "None"},
+      {"tag": 1, "name": "Blades"},
+      {"tag": 2, "name": "Bloom"},
+      {"tag": 3, "name": "Fronds"},
+      {"tag": 4, "name": "Cap"},
+      {"tag": 5, "name": "Stones"},
+      {"tag": 6, "name": "Sticks"},
+      {"tag": 7, "name": "Clump"}
+    ],
+    "RecallBreak": [
+      {"tag": 0, "name": "Moved"},
+      {"tag": 1, "name": "Acted"},
+      {"tag": 2, "name": "Hurt"},
+      {"tag": 3, "name": "Downed"},
+      {"tag": 4, "name": "Stopped"},
+      {"tag": 5, "name": "Failed"}
+    ],
+    "RecallStep": [
+      {"tag": 0, "name": "Began"},
+      {"tag": 1, "name": "Broken"},
+      {"tag": 2, "name": "Arrived"}
+    ],
+    "RecordingView": [
+      {"tag": 0, "name": "Declared", "reserved": true},
+      {"tag": 1, "name": "LiveOnly", "reserved": true},
+      {"tag": 2, "name": "Recording", "reserved": true},
+      {"tag": 3, "name": "Recorded", "reserved": true}
+    ],
+    "RelicFrom": [
+      {"tag": 0, "name": "Camp"},
+      {"tag": 1, "name": "Second"},
+      {"tag": 2, "name": "Hers"},
+      {"tag": 3, "name": "Side"},
+      {"tag": 4, "name": "Test"},
+      {"tag": 5, "name": "Floor"},
+      {"tag": 6, "name": "Boss"}
+    ],
+    "RenderMaterial": [
+      {"tag": 0, "name": "Plain"},
+      {"tag": 1, "name": "Rock"},
+      {"tag": 2, "name": "Grass"},
+      {"tag": 3, "name": "Sand"},
+      {"tag": 4, "name": "Snow"},
+      {"tag": 5, "name": "Foliage"},
+      {"tag": 6, "name": "Planks"},
+      {"tag": 7, "name": "Log"},
+      {"tag": 8, "name": "Dirt"},
+      {"tag": 9, "name": "Gravel"},
+      {"tag": 10, "name": "Cobble"},
+      {"tag": 11, "name": "Clay"},
+      {"tag": 12, "name": "Ore"},
+      {"tag": 13, "name": "Furnace"},
+      {"tag": 14, "name": "Dispenser", "reserved": true},
+      {"tag": 15, "name": "Piston", "reserved": true},
+      {"tag": 16, "name": "Sorter", "reserved": true},
+      {"tag": 17, "name": "Warehouse"},
+      {"tag": 18, "name": "Millstone", "reserved": true},
+      {"tag": 19, "name": "Tnt"},
+      {"tag": 20, "name": "Spring"},
+      {"tag": 21, "name": "Glass"},
+      {"tag": 22, "name": "Water"},
+      {"tag": 23, "name": "Flow"},
+      {"tag": 24, "name": "Needles"},
+      {"tag": 25, "name": "Tuft"},
+      {"tag": 26, "name": "Fern"},
+      {"tag": 27, "name": "Flower"},
+      {"tag": 28, "name": "Reed"},
+      {"tag": 29, "name": "Mushroom"},
+      {"tag": 30, "name": "Bush"},
+      {"tag": 31, "name": "Pad"},
+      {"tag": 32, "name": "Crystal"},
+      {"tag": 33, "name": "Ember"},
+      {"tag": 34, "name": "Kelp"},
+      {"tag": 35, "name": "Coral"},
+      {"tag": 36, "name": "Shells"},
+      {"tag": 37, "name": "Roots"},
+      {"tag": 38, "name": "Stones"},
+      {"tag": 39, "name": "Twigs"}
+    ],
+    "ReportKind": [
+      {"tag": 0, "name": "Error"},
+      {"tag": 1, "name": "Player"},
+      {"tag": 2, "name": "Telemetry"}
+    ],
+    "RoomPhase": [
+      {"tag": 0, "name": "Waiting"},
+      {"tag": 1, "name": "Fighting"},
+      {"tag": 2, "name": "Between"},
+      {"tag": 3, "name": "Cleared"}
+    ],
+    "RunClose": [
+      {"tag": 0, "name": "Cleared"},
+      {"tag": 1, "name": "Restart"},
+      {"tag": 2, "name": "Left"},
+      {"tag": 3, "name": "Wiped"}
+    ],
+    "RunEvent": [
+      {"tag": 0, "name": "Descend"},
+      {"tag": 1, "name": "Phase"},
+      {"tag": 2, "name": "Found"},
+      {"tag": 3, "name": "Out"},
+      {"tag": 4, "name": "Closed"},
+      {"tag": 5, "name": "Floor"},
+      {"tag": 6, "name": "Rooms"},
+      {"tag": 7, "name": "Stolen"},
+      {"tag": 8, "name": "Passed"},
+      {"tag": 9, "name": "Mana"},
+      {"tag": 10, "name": "Trial"},
+      {"tag": 11, "name": "Escort"},
+      {"tag": 12, "name": "Guardian"},
+      {"tag": 13, "name": "GuardianSays"},
+      {"tag": 14, "name": "Outside"}
+    ],
+    "RunOut": [
+      {"tag": 0, "name": "KnockedOut"},
+      {"tag": 1, "name": "Recalled"},
+      {"tag": 2, "name": "Away"}
+    ],
+    "RunePart": [
+      {"tag": 0, "name": "Line"},
+      {"tag": 1, "name": "Pool"},
+      {"tag": 2, "name": "Well"},
+      {"tag": 3, "name": "Stone"},
+      {"tag": 4, "name": "Socket"},
+      {"tag": 5, "name": "Core"},
+      {"tag": 6, "name": "OldStone"},
+      {"tag": 7, "name": "OldSocket"}
+    ],
+    "ServerMsg": [
+      {"tag": 0, "name": "Welcome"},
+      {"tag": 1, "name": "Rejected"},
+      {"tag": 2, "name": "CommandResult"},
+      {"tag": 3, "name": "Update"},
+      {"tag": 4, "name": "Resync"},
+      {"tag": 5, "name": "QueryFailed"},
+      {"tag": 6, "name": "Clock"},
+      {"tag": 7, "name": "Pong"},
+      {"tag": 8, "name": "Chat"},
+      {"tag": 9, "name": "Section"},
+      {"tag": 10, "name": "SectionEdit"},
+      {"tag": 11, "name": "SectionUnload"},
+      {"tag": 12, "name": "SectionTimelines"},
+      {"tag": 13, "name": "InterestRejected"},
+      {"tag": 14, "name": "EntityFrame"},
+      {"tag": 15, "name": "Movement"},
+      {"tag": 16, "name": "PlayerState"},
+      {"tag": 17, "name": "Content"},
+      {"tag": 18, "name": "ColumnClimate"},
+      {"tag": 19, "name": "TreeFall"},
+      {"tag": 20, "name": "Control"},
+      {"tag": 21, "name": "Closed"},
+      {"tag": 22, "name": "Sky"},
+      {"tag": 23, "name": "Bulk"},
+      {"tag": 24, "name": "SectionPiles"},
+      {"tag": 25, "name": "SectionPilesDelta"},
+      {"tag": 26, "name": "Weather"},
+      {"tag": 27, "name": "Vitals"},
+      {"tag": 28, "name": "Downed"},
+      {"tag": 29, "name": "EntityStream"},
+      {"tag": 30, "name": "Recall"},
+      {"tag": 31, "name": "Recipes"},
+      {"tag": 32, "name": "Trees"},
+      {"tag": 33, "name": "Story"},
+      {"tag": 34, "name": "Hunt"},
+      {"tag": 35, "name": "Home"},
+      {"tag": 36, "name": "Knowledge"},
+      {"tag": 37, "name": "Fight"},
+      {"tag": 38, "name": "Gathering"},
+      {"tag": 39, "name": "Run"},
+      {"tag": 40, "name": "RootDoor"},
+      {"tag": 41, "name": "Spire"},
+      {"tag": 42, "name": "Floors"},
+      {"tag": 43, "name": "Guide"},
+      {"tag": 44, "name": "Echo"},
+      {"tag": 45, "name": "SectionUnloadBox"},
+      {"tag": 46, "name": "Helped"},
+      {"tag": 47, "name": "Given"},
+      {"tag": 48, "name": "Trusted"}
+    ],
+    "Shape": [
+      {"tag": 0, "name": "None"},
+      {"tag": 1, "name": "Cube"},
+      {"tag": 2, "name": "Liquid"},
+      {"tag": 3, "name": "Cutout"},
+      {"tag": 4, "name": "Model"},
+      {"tag": 5, "name": "Leaves"},
+      {"tag": 6, "name": "Plant"}
+    ],
+    "ShelterFrom": [
+      {"tag": 0, "name": "Rain"},
+      {"tag": 1, "name": "Storm"},
+      {"tag": 2, "name": "Snow"}
+    ],
+    "StallCause": [
+      {"tag": 0, "name": "NoPower"},
+      {"tag": 1, "name": "OutputBlocked"},
+      {"tag": 2, "name": "NoInput"},
+      {"tag": 3, "name": "Incomplete"},
+      {"tag": 4, "name": "Unrecorded"},
+      {"tag": 5, "name": "Jammed"},
+      {"tag": 6, "name": "NoHeat"},
+      {"tag": 7, "name": "NoCold"},
+      {"tag": 8, "name": "NoCurrent"},
+      {"tag": 9, "name": "NoWind"},
+      {"tag": 10, "name": "NotBuried"},
+      {"tag": 11, "name": "Blighted"},
+      {"tag": 12, "name": "NotNow"}
+    ],
+    "StrikeShape": [
+      {"tag": 0, "name": "Arc"},
+      {"tag": 1, "name": "Line"},
+      {"tag": 2, "name": "Ring"}
+    ],
+    "TestProgress": [
+      {"tag": 0, "name": "Clear"},
+      {"tag": 1, "name": "Frame"},
+      {"tag": 2, "name": "Escort"}
+    ],
+    "Tint": [
+      {"tag": 0, "name": "None"},
+      {"tag": 1, "name": "Grass"},
+      {"tag": 2, "name": "Foliage"},
+      {"tag": 3, "name": "Water"}
+    ],
+    "ToolPower": [
+      {"tag": 0, "name": "Smelts"},
+      {"tag": 1, "name": "Reach"},
+      {"tag": 2, "name": "Glides"},
+      {"tag": 3, "name": "Breathes"},
+      {"tag": 4, "name": "Echoes"},
+      {"tag": 5, "name": "Cushions"},
+      {"tag": 6, "name": "Sweeps"}
+    ],
+    "TreePart": [
+      {"tag": 0, "name": "Wood"},
+      {"tag": 1, "name": "Leaves"}
+    ],
+    "TrialSaidKind": [
+      {"tag": 0, "name": "Pass"},
+      {"tag": 1, "name": "Fizzled"},
+      {"tag": 2, "name": "Reads"},
+      {"tag": 3, "name": "Spring"},
+      {"tag": 4, "name": "Low"}
+    ],
+    "When": [
+      {"tag": 0, "name": "AtNight"},
+      {"tag": 1, "name": "WhenFull"}
+    ],
+    "ZoneRule": [
+      {"tag": 0, "name": "Burst"},
+      {"tag": 1, "name": "Shelter"},
+      {"tag": 2, "name": "Lee"},
+      {"tag": 3, "name": "Spread"},
+      {"tag": 4, "name": "Stack"},
+      {"tag": 5, "name": "Soak"}
+    ]
+  }
+}
