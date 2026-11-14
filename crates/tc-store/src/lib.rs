@@ -20,6 +20,10 @@
 //! - `archive/g<n>/`: generation `n`, archived by [`tidy`]: each file
 //!   deflated (`<file>.z`) and an `info` file (its entries, latest wall
 //!   time, size). Pruned by age and size ([`ArchivePolicy`]: a week, 1 GiB).
+//! - `base/`: the game's bases (`g<n>-<after>.base`, [`bases`]), its state
+//!   through an entry, so it opens from generation `n` ([`Log::open_from`]).
+//!   The bytes are the game's; a backup copies them and a repair or
+//!   rollback in place moves them aside with the old log.
 //! - `.swap/`: a repair or rollback in place, while it is written; opening
 //!   finishes or clears it.
 //!
@@ -78,6 +82,7 @@
 mod archive;
 mod background;
 mod backup;
+mod base;
 mod codec;
 mod copy;
 mod crash;
@@ -110,10 +115,11 @@ use std::path::{Path, PathBuf};
 pub use archive::{ARCHIVE_DIR, ArchivePolicy, Archived, Tidied, summary, tidy};
 pub use background::Background;
 pub use backup::{BackupReport, backup};
+pub use base::{BASE_DIR, BaseFile, bases, prune_bases, write_base};
 pub use codec::{LogCodec, LogEntry, NameTable, Names};
 pub use error::StoreError;
 pub use gens::gen_dir;
-pub use load::{ReadLog, read};
+pub use load::{ReadLog, read, read_from};
 pub use lock::{HOLDER_FILE, Holder, LOCK_FILE, StoreLock, holder};
 pub use memory::{MemoryLog, Store};
 pub use rollback::{RollbackReport, RollbackTo, rollback};

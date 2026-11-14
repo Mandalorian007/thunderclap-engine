@@ -202,6 +202,27 @@ sz)` meshes a small free-standing grid (a held block). `ConnectivityFlood` repor
 `SectionConnectivity`: the 15 face pairs (`facePairBit`, `ALL_FACE_PAIRS`) the open cells
 connect, for a renderer's cave culling; `uniformConnectivity` is a uniform section's.
 
+**Block shape hooks (ws/render-fit).** These are data only, so they still cross to a Worker.
+Without them a section meshes the same as before.
+- `SectionMeshOptions.leafLod` is a level of detail for foliage and cross blocks. The game picks
+  it per section by distance: `VoxelWorldOptions.leafLod(sx, sy, sz)`, or the pool's
+  `leafLod(key)`. It reaches the Worker in the job request.
+  - At 1, a `BlockDef.lodSolid` foliage block meshes into the opaque stream. Its faces carry the
+    `solid` vertex field, and it hides the opaque faces it covers. Cross blocks drop their
+    parts.
+  - At 2, `lodSolid` faces across a one-cell gap to foliage or an opaque block are also
+    dropped, and cross blocks are dropped too.
+  - `SectionMesh.tiered` reports whether a section depends on the level at all. A tiered section
+    needs meshing again when its level changes.
+- `BlockDef.parts` (0..63) adds quads to a cross block at full detail, after its own `quads`.
+  They carry the `part` field, and `quad` keeps counting, so declare `quad` wider than 3 bits if
+  needed. With `partsReplace`, the block's own quads carry `twin`, so the shader can fade them
+  into the parts.
+- `SectionMeshOptions.insets`, or `SectionJob.insets` through Workers, overrides the inset of
+  some `cutout` or `cross` cells. It is a list of (padded index, inset) pairs, for example a
+  growing plant.
+- `solid`, `part` and `twin` are listed in `VOXEL_VERTEX_OPTIONAL`.
+
 **Workers.** The game's Worker script calls `installSectionMesherWorker({ codec })` (it answers
 `SectionMesherRequest`s with `SectionMesherReply`s, a `SectionMeshResult` or a failure, over a
 `SectionWorkerScopeLike`; `sectionReplyTransfers` lists what moves). On the page,
@@ -240,6 +261,10 @@ streams share one instance (its origin) and its mesh's bounds are its cull spher
   (`@fragment fn fs(in: VoxelVarying) -> @location(0) vec4f`; `decode_voxel_vertex`,
   `VoxelVarying` (`VOXEL_VARYING_WGSL`) and `view` are in scope), its `bindGroups` (from 1) and `blend`. A missing
   one is `VOXEL_DEFAULT_FRAGMENT[stream]`: a colour per id, sun, AO, sky and block light, haze.
+- **Vertex hook (ws/render-fit).** `VoxelMaterial.vertex` adds the material's own WGSL vertex
+  entry, and `vertexEntry` names it. The entry calls the world's `voxel_vertex(in, vi)`, then
+  moves the result (sway, shrink, shaping part quads) and sets `out.clip` again. The stream
+  draws and casts its shadow with this entry. The world's `vs` is unchanged.
 - **Reading.** `raycast(...)` (`raycastCells` over the store), `settled`, `stats`
   (`VoxelWorldStats`: sections, drawn, hidden, pending, uploads, quads per stream, vertex bytes,
   update ms) and `dispose()`.

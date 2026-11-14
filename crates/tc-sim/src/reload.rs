@@ -154,10 +154,7 @@ impl<G: Game> Sim<G> {
         let started = Instant::now();
         let thread = std::thread::Builder::new()
             .name("tc-sim-reload".into())
-            .spawn(move || {
-                let entries = source.entries()?;
-                Core::replayed(game, &entries)
-            });
+            .spawn(move || source.replayed(game));
         let thread = match thread {
             Ok(thread) => thread,
             Err(e) => return refuse(reply, format!("no replay thread: {e}")),

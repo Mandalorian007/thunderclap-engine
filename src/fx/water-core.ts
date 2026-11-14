@@ -13,9 +13,9 @@ import {
   type CoreDrawableEncoder,
   type CoreDrawContext,
   CoreViewExtras,
-  coreDepthCompare,
   DrawablePipelines,
 } from '../render/core/drawable';
+import { coreDepthCompare } from '../render/core/pass-list';
 import { CORE_TARGET, coreColorTargets } from '../render/core/targets';
 import { VERTEX_LAYOUT_3D } from '../render/mesh';
 import { FxDepthModules } from './depth';
@@ -116,7 +116,7 @@ export class WaterOnCore implements CoreDrawable {
           ? {
               format: depth,
               depthWriteEnabled: false,
-              depthCompare: coreDepthCompare('less-equal', reversedZ),
+              depthCompare: coreDepthCompare(reversedZ, true),
             }
           : undefined,
       });

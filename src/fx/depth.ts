@@ -4,7 +4,7 @@ import { createShaderModule } from '../render/wgsl';
  * ws/fx-fit: the depth convention for fx shaders. A core pass is standard (near 0, far 1) or
  * reversed-Z (near 1, far 0; `CorePass.reversedZ`, `RenderCoreOptions.reversedZ`). The fx
  * drawables read it from the pass (`CoreDrawContext.reversedZ`, `CorePassContext.reversedZ`):
- * their pipelines test depth with `coreDepthCompare`, and their WGSL, which starts from
+ * their pipelines test depth with `coreDepthCompare(reversedZ, true)` (ws/render-fit), and their WGSL, which starts from
  * `FX_DEPTH_WGSL`'s standard form, is compiled once more for a reversed pass with
  * `fxDepthCode(code, true)`. A game never sets it per drawable.
  */

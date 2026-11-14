@@ -1,6 +1,6 @@
 import type { RenderCore } from '../render/core/core';
-import { coreDepthCompare } from '../render/core/drawable';
 import type { CorePass, CorePassContext } from '../render/core/pass-list';
+import { coreDepthCompare } from '../render/core/pass-list';
 import { CORE_TARGET, coreColorTargets } from '../render/core/targets';
 import { CORE_VIEW_WGSL } from '../render/core/view';
 import { createShaderModule, WGSL_NOISE } from '../render/wgsl';
@@ -375,7 +375,7 @@ export class SkyPass {
         ? {
             format: ctx.depthFormat,
             depthWriteEnabled: false,
-            depthCompare: coreDepthCompare('less-equal', reversed),
+            depthCompare: coreDepthCompare(reversed, true),
           }
         : undefined,
     });

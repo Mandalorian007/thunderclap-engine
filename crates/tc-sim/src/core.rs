@@ -245,6 +245,122 @@ impl<G: Game> Core<G> {
     }
 }
 
+/// The magic that starts a base's bytes ([`Core::to_base`]).
+const BASE_MAGIC: &[u8; 8] = b"TCSBASE1";
+
+impl<G: Game> Core<G> {
+    /// The base of this core: its time, version, schedule and state hash
+    /// with the game's [`Game::save`] bytes, checksummed. `None` if the
+    /// game keeps no bases.
+    pub fn to_base(&self) -> Option<Vec<u8>> {
+        let game = self.game.save()?;
+        let mut out = Vec::with_capacity(game.len() + 64);
+        out.extend_from_slice(BASE_MAGIC);
+        for n in [
+            self.time,
+            self.version,
+            self.scheduler.next_seq(),
+            self.scheduler.len() as u64,
+        ] {
+            out.extend_from_slice(&n.to_le_bytes());
+        }
+        for (key, event) in self.scheduler.iter() {
+            let bytes = tc_wire::Wire::to_bytes(event);
+            out.extend_from_slice(&key.time.to_le_bytes());
+            out.extend_from_slice(&key.seq.to_le_bytes());
+            out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+            out.extend_from_slice(&bytes);
+        }
+        out.extend_from_slice(&self.state_hash().to_le_bytes());
+        out.extend_from_slice(&(game.len() as u64).to_le_bytes());
+        out.extend_from_slice(&game);
+        let sum = checksum(&out);
+        out.extend_from_slice(&sum.to_le_bytes());
+        Some(out)
+    }
+
+    /// `game` (new, at its start) set to the base `bytes`
+    /// ([`Core::to_base`]) through [`Game::restore`]. With `check`, its
+    /// state hash must be the one the base was written with (a reload
+    /// with new data may hash differently, and passes false).
+    pub fn from_base(mut game: G, bytes: &[u8], check: bool) -> Result<Core<G>, String> {
+        let bad = |why: &str| format!("a damaged base: {why}");
+        let body = base_body(bytes).ok_or_else(|| bad("its checksum doesn't match"))?;
+        let mut r = Reader { bytes: body, at: 0 };
+        if r.take(BASE_MAGIC.len()) != Some(&BASE_MAGIC[..]) {
+            return Err(bad("not a base"));
+        }
+        let mut num = || r.u64().ok_or_else(|| bad("cut short"));
+        let (time, version, next_seq, count) = (num()?, num()?, num()?, num()?);
+        let mut entries = Vec::new();
+        for _ in 0..count {
+            let (t, seq, len) = (
+                r.u64().ok_or_else(|| bad("cut short"))?,
+                r.u64().ok_or_else(|| bad("cut short"))?,
+                r.u64().ok_or_else(|| bad("cut short"))?,
+            );
+            let raw = r.take(len as usize).ok_or_else(|| bad("cut short"))?;
+            let event = <G::Scheduled as tc_wire::Wire>::from_bytes(raw)
+                .map_err(|e| bad(&format!("a scheduled event: {e:?}")))?;
+            entries.push((crate::EventKey { time: t, seq }, event));
+        }
+        let hash = r.u64().ok_or_else(|| bad("cut short"))?;
+        let len = r.u64().ok_or_else(|| bad("cut short"))?;
+        let state = r.take(len as usize).ok_or_else(|| bad("cut short"))?;
+        if r.at != body.len() {
+            return Err(bad("bytes past its end"));
+        }
+        game.restore(state)?;
+        let core = Core {
+            game,
+            time,
+            version,
+            scheduler: Scheduler::restore(next_seq, entries)?,
+            changes: Changes::new(),
+            fired: 0,
+        };
+        if check && core.state_hash() != hash {
+            return Err(format!(
+                "the base restored to state hash {}, not the {} it was written at \
+                 (Game::save and Game::restore disagree)",
+                crate::hash_hex(core.state_hash()),
+                crate::hash_hex(hash)
+            ));
+        }
+        Ok(core)
+    }
+}
+
+/// A base's bytes without their checksum, if it matches.
+fn base_body(bytes: &[u8]) -> Option<&[u8]> {
+    let split = bytes.len().checked_sub(8)?;
+    let (body, sum) = bytes.split_at(split);
+    (checksum(body).to_le_bytes() == sum).then_some(body)
+}
+
+fn checksum(bytes: &[u8]) -> u64 {
+    let mut h = StableHasher::new();
+    h.write_bytes(bytes);
+    h.finish()
+}
+
+struct Reader<'a> {
+    bytes: &'a [u8],
+    at: usize,
+}
+
+impl<'a> Reader<'a> {
+    fn take(&mut self, n: usize) -> Option<&'a [u8]> {
+        let end = self.at.checked_add(n)?;
+        let out = self.bytes.get(self.at..end)?;
+        self.at = end;
+        Some(out)
+    }
+    fn u64(&mut self) -> Option<u64> {
+        Some(u64::from_le_bytes(self.take(8)?.try_into().ok()?))
+    }
+}
+
 /// Why [`Core::apply`] didn't apply an entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ApplyError {
@@ -264,3 +380,10 @@ impl std::fmt::Display for ApplyError {
 }
 
 impl std::error::Error for ApplyError {}
+
+/// Whether `bytes` are a whole base ([`Core::to_base`]): its checksum
+/// matches. Checked before a game is handed it, since a failed
+/// [`Game::restore`] may leave the game half set.
+pub(crate) fn base_intact(bytes: &[u8]) -> bool {
+    base_body(bytes).is_some_and(|b| b.starts_with(BASE_MAGIC))
+}

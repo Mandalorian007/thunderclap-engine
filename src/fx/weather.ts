@@ -16,9 +16,9 @@ import {
   type CoreDrawableEncoder,
   type CoreDrawContext,
   CoreViewExtras,
-  coreDepthCompare,
   DrawablePipelines,
 } from '../render/core/drawable';
+import { coreDepthCompare } from '../render/core/pass-list';
 import { coreColorTargets } from '../render/core/targets';
 import { VIEW_SLOT } from '../render/core/view';
 import { createShaderModule } from '../render/wgsl';
@@ -305,7 +305,7 @@ export class Weather implements CoreDrawable {
           ? {
               format: depth,
               depthWriteEnabled: false,
-              depthCompare: coreDepthCompare('less-equal', reversedZ),
+              depthCompare: coreDepthCompare(reversedZ, true),
             }
           : undefined,
       }),

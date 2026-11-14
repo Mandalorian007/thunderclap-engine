@@ -14,9 +14,9 @@ import {
   type CoreDrawableEncoder,
   type CoreDrawContext,
   CoreViewExtras,
-  coreDepthCompare,
   DrawablePipelines,
 } from '../render/core/drawable';
+import { coreDepthCompare } from '../render/core/pass-list';
 import { CORE_TARGET, coreColorTargets } from '../render/core/targets';
 import { FxDepthModules } from './depth';
 import {
@@ -139,7 +139,7 @@ export class ParticlesOnCore implements CoreDrawable {
           ? {
               format: depth,
               depthWriteEnabled: false,
-              depthCompare: coreDepthCompare('less-equal', reversedZ),
+              depthCompare: coreDepthCompare(reversedZ, true),
             }
           : undefined,
       });

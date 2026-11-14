@@ -9,6 +9,7 @@ export {
 } from './paint';
 export {
   createWorldPanel,
+  type PanelGpu,
   WorldPanel,
   type WorldPanelHit,
   type WorldPanelInput,

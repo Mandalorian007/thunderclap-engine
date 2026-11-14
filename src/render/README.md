@@ -1626,3 +1626,38 @@ passes after a resolve draw colour only. With velocity the core keeps each view 
 `CoreView.prevRows` (`VIEW_SLOT.prevRows`; `writePrevRows`): `core_velocity(view, p)` (WGSL,
 `p` origin-relative) gives the motion, 0 on a view's first frame. Each eye of a stereo pair is
 its own view index, so its history and its cleared targets are its own.
+
+### Fitting a voxel game's renderer (ws/render-fit)
+
+All of these are off by default. Without them the core draws exactly as before.
+
+- **Depth convention.** Pass `createRenderCore(device, { reversedZ: true })` to clear depth to 0
+  and have sets test `'greater'`. `PassDesc.reversedZ` and `PassDesc.depthClear` set the
+  convention for one pass, and win over the core's. `CorePass.reversedZ` and
+  `CorePass.depthClear` hold the resolved values, and `RenderCore.reversedZ` holds the core's.
+  Drawables read their pass's convention from `CoreDrawContext.reversedZ`, and pass encoders
+  from `CorePassContext.reversedZ`. `coreDepthCompare(reversedZ, orEqual)` and
+  `coreDepthFar(reversedZ)` turn the flag into a depth test or a clear value.
+  `CoreTarget.clearDepth: true` clears a caller's `depth` view on the first depth pass, where it
+  would otherwise be loaded.
+- **Variants and extra passes.** `DrawSetDesc.variants` names alternative pipelines
+  (`DrawSetVariant`). A variant can change the `code`, the vertex or fragment entry, `blend`,
+  `cullMode`, `depthCompare` or `writes`. A `depthOnly` variant writes no colour: the core gives
+  it an empty fragment, `core_depth_only`.
+  - A view picks a variant by name with `CoreTarget.variant`, for example a forward eye. Sets
+    without that variant draw as usual.
+  - `DrawSetDesc.passes` (`DrawSetPassJoin[]`) draws the same slots in more passes with a
+    variant, for example a depth prepass. These draws share the set's cull.
+  - Pipelines and bundles are cached per variant and per pass.
+- **Distance and switching off.** `DrawSet.maxDistance` (also `DrawSetDesc.maxDistance`, 0 =
+  none) drops slots whose bounding sphere lies farther than this from the eye. The GPU cull and
+  the CPU cull apply the same test (`sphereBeyond`). The distance is measured from the cull
+  group's eye: the average position of its views, or the light's position for a shadow group.
+  `DrawSet.enabled = false` turns a set off entirely: it is not drawn, culled or used for
+  shadows, and costs nothing.
+- **Shared shaders.** Sets with the same WGSL share one shader module. `setBindGroups` with the
+  same layout objects keeps the set's pipelines and only re-records its bundles.
+- **Labels and timing.** `RenderCoreOptions.passLabels` labels each render pass `core <id>`.
+  The default label is `core pass`. `CoreTarget.timestamps` is a `CoreTimestamps` called with
+  `('core', passId)` for each pass. `prepare(encoder, views, timestamps)` times its cull pass as
+  `('prepare', 'prepare')`.

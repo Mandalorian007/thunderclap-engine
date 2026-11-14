@@ -199,3 +199,88 @@ fn opening_after_a_crash_clears_who_was_here() {
     assert_eq!(left, [1, 2]);
     d.stop();
 }
+
+/// The bytes under `dir`, and how many log generations it holds.
+fn log_size(dir: &std::path::Path) -> (u64, usize) {
+    fn bytes(path: &std::path::Path) -> u64 {
+        std::fs::read_dir(path).map_or(0, |items| {
+            items
+                .flatten()
+                .map(|i| match i.file_type() {
+                    Ok(t) if t.is_dir() => bytes(&i.path()),
+                    _ => i.metadata().map_or(0, |m| m.len()),
+                })
+                .sum()
+        })
+    }
+    let log = dir.join("log");
+    let gens = std::fs::read_dir(&log)
+        .unwrap()
+        .flatten()
+        .filter(|i| i.file_name().to_string_lossy().starts_with('g'))
+        .count();
+    let first = usize::from(log.join("main.log").exists());
+    (bytes(&log), gens + first)
+}
+
+#[test]
+fn a_long_run_keeps_its_log_bounded_and_a_restart_restores_its_base() {
+    let dir = std::env::temp_dir().join(format!("arena-soak-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let config = SimConfig {
+        paused: true,
+        base_every: 40,
+        ..SimConfig::default()
+    };
+    let sim = Sim::create(&dir, Arena::new(), &[], config).unwrap();
+    let mut d = Driver::new(sim);
+    let (mut sizes, mut most_gens) = (Vec::new(), 0);
+    let mut restarted = false;
+    for round in 0..1200u32 {
+        // Players come and go (two entries each), and "it" chases.
+        let (c, _rx) = d.connect(&format!("p{}", round % 12), Empty);
+        let (it, _rx_it) = d.connect("chaser", Empty);
+        hold(&mut d, it, if round % 2 == 0 { RIGHT } else { LEFT }, 4);
+        d.disconnect(c);
+        d.disconnect(it);
+        d.wait(std::time::Duration::from_millis(50));
+        if d.sim().base_pending() {
+            d.sim_mut().finish_base();
+            let (bytes, gens) = log_size(&dir);
+            sizes.push(bytes);
+            most_gens = most_gens.max(gens);
+        }
+        if round == 600 {
+            // A restart mid-run opens from the newest base and replays
+            // only the tail: the same state.
+            let before = d.stop();
+            let (sim, _) = Sim::open(&dir, Arena::new(), config).unwrap();
+            let (generation, after) = sim.opened_from_base().expect("opened from a base");
+            assert!(generation > 1 && after > 0);
+            assert!(before.version() - after < 2 * config.base_every);
+            assert_eq!(sim.core().version(), before.version());
+            assert_eq!(sim.core().state_hash(), before.state_hash());
+            assert_eq!(sim.core().game().seats.len(), before.game().seats.len());
+            d = Driver::new(sim);
+            restarted = true;
+        }
+    }
+    assert!(restarted);
+    let version = d.core().version();
+    let written = d.sim().bases_written();
+    d.stop();
+    assert!(version > 3000, "a long run: {version} entries");
+    assert!(written > 40, "bases written: {written}");
+    // The live log holds the last two bases' worth of entries, never more
+    // generations than the two bases' and the one appended to.
+    assert!(most_gens <= 3, "{most_gens} generations live");
+    let early = sizes[..5].iter().max().copied().unwrap();
+    let late = sizes[sizes.len() - 20..].iter().max().copied().unwrap();
+    assert!(
+        late <= 2 * early,
+        "the log grew: {early} bytes early, {late} late"
+    );
+    // What went behind the bases is in the archive, bounded by its policy.
+    assert!(!thunderclap_server::store::summary(&dir).unwrap().is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}

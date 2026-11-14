@@ -231,6 +231,10 @@ export class RenderCore {
     return this.capsNow;
   }
   readonly passes: PassList;
+  /** The core's depth convention (`RenderCoreOptions.reversedZ`); a pass may override it. */
+  get reversedZ(): boolean {
+    return this.passes.reversedZ;
+  }
   readonly maxViews: number;
   readonly depthFormat: GPUTextureFormat;
   readonly stats: CoreStats = newStats();
@@ -458,8 +462,8 @@ export class RenderCore {
       color: 'rgba8unorm',
       depth: undefined,
       depthReadOnly: false,
-      aux: 0,
       reversedZ: false,
+      aux: 0,
     };
     this.drawableHost = {
       // Live: after `restore` drawables record on the new device (ws/core-decals).
@@ -988,8 +992,8 @@ export class RenderCore {
         ctx.format = colorFormat;
         ctx.depthFormat = depthFormat;
         ctx.depthReadOnly = readOnly;
-        ctx.aux = aux;
         ctx.reversedZ = pass.reversedZ;
+        ctx.aux = aux;
         pass.encode(enc, ctx);
       }
       enc.end();

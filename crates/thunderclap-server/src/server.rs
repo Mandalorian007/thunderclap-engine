@@ -175,7 +175,8 @@ impl<G: Game> Builder<G> {
         self
     }
 
-    /// How long the store's archive and recovered files are kept.
+    /// How long the store's archive (the log behind the game's bases, see
+    /// `Game::save`) and recovered files are kept, and how big it may get.
     pub fn archive(mut self, policy: ArchivePolicy) -> Self {
         self.archive = policy;
         self
@@ -220,14 +221,19 @@ impl<G: Game> Builder<G> {
         std::fs::create_dir_all(&data).map_err(|e| format!("creating {}: {e}", data.display()))?;
         let store = data.join(STORE_DIR);
         let codec = self.game.codec();
+        // The archive the bases leave the log in keeps by the same policy.
+        let config = SimConfig {
+            archive: self.archive,
+            ..self.sim
+        };
         let sim = if store.join(META_FILE).exists() {
             match tc_store::tidy(&store, &codec, 0, &self.archive) {
                 Ok(t) => info!(?t, "store tidied"),
                 Err(e) => warn!("could not tidy {}: {e}", store.display()),
             }
-            Sim::open(&store, self.game, self.sim)?.0
+            Sim::open(&store, self.game, config)?.0
         } else {
-            Sim::create(&store, self.game, &self.meta, self.sim).map_err(|e| e.to_string())?
+            Sim::create(&store, self.game, &self.meta, config).map_err(|e| e.to_string())?
         };
         let running = sim.spawn().map_err(|e| format!("starting the loop: {e}"))?;
 

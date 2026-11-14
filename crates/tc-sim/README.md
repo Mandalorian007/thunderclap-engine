@@ -32,15 +32,20 @@ rate lanes and multi-round reload (E4b), with the game taken out.
   - `lanes()` and `lane(msg)`: rate lanes for game messages.
   - `hash_state` feeds the determinism hash; `reload(data)` makes a new
     game at its start.
+  - `save()` / `restore(bytes)` (default: none): the state for a base.
 - `Core<G>`: the deterministic part: the game, time (integer steps, at
   most `MAX_TIME` = 2^53 − 1), version (last entry applied), `Scheduler`
   (on a hierarchical `TimingWheel`) and `Changes`. `advance_to`,
-  `advance_while`, `apply`, `replay`, `Core::replayed`, `state_hash`.
+  `advance_while`, `apply`, `replay`, `Core::replayed`, `state_hash`;
+  `to_base()` / `Core::from_base(game, bytes, check)` (the time, version,
+  schedule, state hash and the game's bytes, checksummed).
 - `Sim<G>`: a core served on the wall clock. `create` / `open` (a tc-store
   directory, the log replayed) or `new(core, None, config)` (in memory).
   `handle(Request)`, `tick(now)`, `deadline()`, `pause`, `resume`,
   `advance(steps)` (sliced, within `ADVANCE_BUDGET`, stops on
-  `stopping()`), `reload(data, reply)`, `stop()`. `spawn()` runs it on a
+  `stopping()`), `reload(data, reply)`, `stop()`. Bases:
+  `SimConfig::{base_every, archive}`, `start_base`, `finish_base`,
+  `base_pending`, `bases_written`, `opened_from_base`. `spawn()` runs it on a
   thread: `Running { requests, handle, thread }`; hand `requests` to
   `tc_net::Server::start`; `SimHandle` sends `Control`s.
 - `Driver<G>`: a sim run by hand with in-process connections, for tests,
@@ -91,6 +96,17 @@ rate lanes and multi-round reload (E4b), with the game taken out.
   `SWAP_BEHIND` = 256 entries, up to `MAX_ROUNDS` = 8) and swaps it in;
   one at a time, later ones queued. Queries and streams rerun after it.
 - Live play and a replay of its log reach the same `state_hash`.
+- Bases (E8): a game whose `save` returns bytes gets one every
+  `base_every` entries (`BASE_EVERY` = 100,000). tc-store's background
+  thread prepares the next generation; the loop rotates to it and encodes
+  the base in the same tick; the background thread makes the old
+  generations durable, writes the base and prunes to `KEEP_BASES` (2); once
+  the rotation's clock mark is on disk it archives the log behind the
+  older base (`tidy`, by `SimConfig::archive`). `stop` finishes a base
+  under way. `open` restores the newest base whose checksum holds
+  (checking its state hash) and replays the tail, falling back to the base
+  before it, then the whole log; a reload restores the newest base into
+  the new game and replays the tail.
 
 ## Tests
 
@@ -101,6 +117,9 @@ rate lanes and multi-round reload (E4b), with the game taken out.
   event, one driver per body (unlogged), flush before result, a reload, a
   reload in two rounds (a body and a query across it), queued reloads, a
   log replayed to the same hash.
+- `tests/bases.rs`: opening from the newest base with a scheduled event
+  pending, older bases pruned and the log archived, a damaged base falling
+  back, a game without bases, a reload from a base.
 - `tests/sync.rs` (ported from Forge's sync, observe and unlogged tests):
   refused queries and the cap, one run shared by a hundred clients and
   reruns only for what was read, effects before a command's result,

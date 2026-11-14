@@ -80,6 +80,8 @@ Use **inputs** for things held over time: movement keys, a stick, an aim. The lo
 
 `on_open(time, events)` runs once each time the store is opened, after recovery and before any connection: its events are logged like any other. Nobody is connected then, so the arena marks every seat that was present when the last run stopped (or crashed) as gone.
 
+`save()` and `restore(bytes)` keep the store bounded. `save` returns the state as bytes (everything `hash_state` covers; the arena derives `Wire` on its state and returns `self.to_bytes()`), and `restore` sets a new game from them. A game that saves gets a **base** every `SimConfig::base_every` entries (100,000 by default): the loop starts a new log generation, writes the state through the last entry before it to the store's `base/` (off the loop's thread), keeps the newest two bases, and moves the log behind the older one to the archive (`SimConfig::archive`, or the facade's `.archive(policy)`: a week and 1 GiB by default). Opening restores the newest base that reads back whole, checks its state hash, and replays only the log after it; a damaged base falls back to the one before. A game that returns `None` (the default) keeps no bases and replays its whole log, as before. The arena's `a_long_run_keeps_its_log_bounded_and_a_restart_restores_its_base` test runs thousands of entries with a base every 40 and restarts mid-run.
+
 ## What clients see
 
 There are two ways to send state to pages.
@@ -193,4 +195,5 @@ Draw everyone else from the entity stream, a little in the past, through the sna
 
 ## Known rough edges
 
-- A long-running game's store keeps every event: log generations, a base and the archive exist in `tc-store`, but the loop doesn't write a base yet, so a store grows with what happens (not with time, once moves stay out of the log).
+- A reload with bases restores the newest base (the old game's state, through `restore`) and replays only the log after it into the new game: new data changes what happens from the base on, not what came before it. A game without bases replays its whole log, as before.
+- A rollback can reach back as far as the archive keeps (a week by default); a rollback or repair in place moves the bases aside with the old log, and the next open replays the new log from its start, then writes bases again.

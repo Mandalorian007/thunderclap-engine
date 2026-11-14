@@ -56,6 +56,14 @@ export class SpecHud {
     return p;
   }
 
+  /**
+   * A sheet covers the screen (`sheet`) or not, on a `small` screen or not: each panel whose spec
+   * gives way (`PanelSpec.giveWay`) does.
+   */
+  giveWay(sheet: boolean, small: boolean): void {
+    for (let i = 0; i < this.panels.length; i++) this.panels[i]!.giveWay(sheet, small);
+  }
+
   /** Every panel's apply (a host without a scheduler calls it once a frame). */
   apply(): void {
     for (let i = 0; i < this.panels.length; i++) this.panels[i]!.apply();
@@ -152,13 +160,15 @@ export function presentModal(
   p: SpecPanel,
   opts: SpecModalOptions = {},
 ): SpecModal {
-  const { scale, theme, fit, slotArt, timer, onClose, ...stack } = opts;
+  const { scale, theme, fit, slotArt, timer, classes, touching, onClose, ...stack } = opts;
   const host = ui.layout.root.ownerDocument.createElement('div');
   const dom: DomOptions = { scale: scale ?? specScale(ui) };
   if (theme) dom.theme = theme;
   if (fit) dom.fit = fit;
   if (slotArt) dom.slotArt = slotArt;
   if (timer) dom.timer = timer;
+  if (classes) dom.classes = classes;
+  if (touching) dom.touching = touching;
   const presenter = presentDom(p, host, dom);
   if (p.w === 0 && p.h === 0) p.frame(0, 0, p.text);
   p.apply();

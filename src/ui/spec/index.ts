@@ -2,8 +2,8 @@
 // changed, a pure allocation-free layout, `panel(spec)` / `hud(spec)`, a DOM presenter that writes
 // only what changed, a world presenter for a quad in the scene and a head-following screen
 // (ws/ui-world), and a look from `theme(tokens)`. See ./README.md.
-export type { SpecBoxes } from './boxes';
-export type { CompiledSpec } from './compile';
+export { maxRowsAt, type SpecBoxes } from './boxes';
+export { type CompiledSpec, compileSpec } from './compile';
 export {
   type HudItem,
   type HudSpec,
@@ -36,22 +36,64 @@ export type {
   SpecRow,
   SpecValue,
 } from './model';
+export { SPEC_SLIDE_MAX, SPEC_SLIDE_MS, specEaseOut, specStill } from './motion';
 export {
   panel,
   SpecPanel,
   type SpecPanelOptions,
   type SpecPresenter,
   type SpecSchedule,
+  specGivesWay,
 } from './panel';
 export { type DomOptions, DomPresenter, presentDom } from './present-dom';
 export { presentWorld, type WorldOptions, WorldPresenter } from './present-world';
-export { SPEC_HOLD_MS, SPEC_HOLD_SLOP, type SpecTimer } from './press';
+export { SPEC_HOLD_MS, SPEC_HOLD_SLOP, SpecPressable, type SpecTimer } from './press';
 export { defaultSpecTokens, type SpecTheme, type SpecTokens, specTokenVar, theme } from './theme';
+export {
+  K_BUTTON,
+  K_COL,
+  K_FIELD,
+  K_GRID,
+  K_ICON,
+  K_LIST,
+  K_METER,
+  K_RANGE,
+  K_ROW,
+  K_SLOT,
+  K_TABS,
+  K_TEXT,
+  type Measure as SpecMeasure,
+  R_AGAIN,
+  R_AIM,
+  R_BADGE,
+  R_COUNT,
+  R_ENABLED,
+  R_ITEM,
+  R_KEY,
+  R_LABEL,
+  R_LINES,
+  R_MARK,
+  R_ON,
+  R_PLACEHOLDER,
+  R_RING,
+  R_ROWS,
+  R_SELECTED,
+  R_SHOW,
+  R_STATE,
+  R_TEXT,
+  R_TINT,
+  R_VALUE,
+  R_VALUETEXT,
+  type SpecFamilies,
+  typeMeasure,
+  typeMeasureIn,
+} from './units';
 export {
   type Bind,
   b,
   type PanelEvent,
   type PanelSpec,
+  partsOf,
   SPEC_LINE,
   SPEC_TYPE,
   type SpecAlign,
@@ -77,6 +119,7 @@ export {
   type SpecTabs,
   type SpecText,
   type SpecTextStyle,
+  viewOf,
 } from './words';
 export {
   presentWorldHud,

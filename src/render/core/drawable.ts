@@ -41,34 +41,10 @@ export interface CoreDrawContext {
   /** The pass holds depth read-only (a pipeline must not write it). */
   depthReadOnly: boolean;
   /**
-   * The pass is reversed-Z (`CorePass.reversedZ`, ws/fx-fit): near is 1 and far 0. Test depth
-   * with `coreDepthCompare(compare, ctx.reversedZ)`; `DrawablePipelines` keys by it.
+   * The pass's depth convention (ws/render-fit, `PassDesc.reversedZ`): reversed-Z (depth
+   * clears to 0, nearer is greater) or not. Build depth tests from it with `coreDepthCompare`.
    */
   reversedZ: boolean;
-}
-
-/**
- * A standard depth test as the pass's depth convention wants it (ws/fx-fit): under reversed-Z
- * (`CorePass.reversedZ`) `'less'` becomes `'greater'`, `'less-equal'` `'greater-equal'` and the
- * other way round; `'always'`, `'never'`, `'equal'` and `'not-equal'` stay.
- */
-export function coreDepthCompare(
-  compare: GPUCompareFunction,
-  reversedZ: boolean,
-): GPUCompareFunction {
-  if (!reversedZ) return compare;
-  switch (compare) {
-    case 'less':
-      return 'greater';
-    case 'less-equal':
-      return 'greater-equal';
-    case 'greater':
-      return 'less';
-    case 'greater-equal':
-      return 'less-equal';
-    default:
-      return compare;
-  }
 }
 
 /**
@@ -321,7 +297,7 @@ export class DrawableEntry implements PassMember {
  * pass's extra targets (`aux`, ws/core-targets) × its depth convention (`reversedZ`, ws/fx-fit),
  * made on first use by `make` (pass `depthWrite` on to `GPUDepthStencilState.depthWriteEnabled`
  * only when the pass is not read-only; list the colour targets with
- * `coreColorTargets(color, aux, writes)`; test depth with `coreDepthCompare(c, reversedZ)`).
+ * `coreColorTargets(color, aux, writes)`; test depth with `coreDepthCompare(reversedZ, orEqual)`).
  */
 export class DrawablePipelines {
   private readonly list: {

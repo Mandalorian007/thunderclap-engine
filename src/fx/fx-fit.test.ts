@@ -12,8 +12,8 @@ import {
   type RenderCore,
   type RenderCoreOptions,
 } from '../render/core/core';
-import { coreDepthCompare } from '../render/core/drawable';
 import { createVertexLayout } from '../render/core/layout';
+import { coreDepthCompare } from '../render/core/pass-list';
 import { createRenderView, type RenderView, setViewFromCamera } from '../render/core/view';
 import { createFakeDevice, type FakeDevice, fakeRendererGpu } from '../render/fake-gpu';
 import { DEPTH_FORMAT } from '../render/material';
@@ -162,14 +162,9 @@ function everything(r: Rig) {
 }
 
 describe('the depth convention (ws/fx-fit)', () => {
-  it('coreDepthCompare flips the ordered compares under reversed-Z and keeps the rest', () => {
-    expect(coreDepthCompare('less-equal', false)).toBe('less-equal');
-    expect(coreDepthCompare('less-equal', true)).toBe('greater-equal');
-    expect(coreDepthCompare('less', true)).toBe('greater');
-    expect(coreDepthCompare('greater', true)).toBe('less');
-    expect(coreDepthCompare('greater-equal', true)).toBe('less-equal');
-    expect(coreDepthCompare('always', true)).toBe('always');
-    expect(coreDepthCompare('equal', true)).toBe('equal');
+  it("fx use the core's one compare: less-equal standard, greater-equal reversed", () => {
+    expect(coreDepthCompare(false, true)).toBe('less-equal');
+    expect(coreDepthCompare(true, true)).toBe('greater-equal');
   });
 
   it('fxDepthCode flips the WGSL constant once, and only for a reversed pass', () => {

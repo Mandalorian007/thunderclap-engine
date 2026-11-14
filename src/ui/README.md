@@ -1079,6 +1079,54 @@ const dlg = presentWorldModal(screen, dialog, { onClose: (why) => {} });   // di
   an idle quad, the screen's modal, stereo); tests `spec/present-world.dom.test.ts` (parity on the
   fake GPU, Tab order, an idle frame paints nothing, the lazy screen, the modal, the HUD).
 
+### Game fit (ws/ui-fit)
+
+Hooks a game's panels need, on both presenters unless said, so one spec stays one layout on a
+flat screen, a touch screen and in a headset. All additive: a spec without them draws as before.
+
+- **Aim.** `{ k: 'row' | 'col', aim: 'north' | b('aim') }` writes `data-aim` on the page (the
+  game's CSS turns it); `panel.aimOf(id)` reads it for a world painter. Nothing is painted for it.
+- **Ring.** `{ k: 'icon', ring: b('cool') }`: a bound fill 0..1, `--tcs-ring` on the page's
+  `.tcs-ring`, a wedge on the world surface.
+- **Windowed lists.** `{ k: 'list', window: 48 }`: the page binds only the rows within `window`
+  units of its view (and more as it scrolls); the world paints only rows in view anyway. A scroll
+  says a `scroll` event (`value`: units from the top).
+- **Slide.** `model.setList(id, keys, 'slide')` moves rows from where they stood (220 ms ease-out,
+  `SPEC_SLIDE_MS`) and keeps the top row in view where it was; `PanelSpec.slide: 'up' | 'down' |
+  'left' | 'right'` slides the body in and out with its show. Both stand still under reduced
+  motion (`specStill`). The world's motion runs on `WorldOptions.frame`/`now` (default rAF and
+  `performance.now`).
+- **Give way.** `PanelSpec.giveWay: 'small' | 'always'`; `hud.giveWay(sheet, small)` (or
+  `panel.giveWay`) hides it and takes no presses while a sheet is open (on a small screen):
+  `data-given`, `inert` and `tcs-given` on the page, nothing painted or hit on a surface.
+- **Fields.** `typeAhead: true` (one per panel): a letter typed with nothing focused goes into the
+  field (a search's lowercased), `/` focuses it. `closeKey: 'KeyE'`: that key in the empty field
+  says `close` (not while a finger last touched: a soft keyboard types it).
+- **Field text.** The model is the one truth: every presenter shows the model's value. Text typed
+  on one surface goes into the model (`SpecModel.follow(i, v, from)`) and every other presenter on
+  the panel shows it at its next apply; the game writes nothing back, and a `set` of `''` clears
+  it everywhere. Presenters never talk to each other, only through the model.
+- **Held slot.** `{ k: 'slot', press: 'held' }` says `down` and `up`, never `tap`.
+- **Automation.** `dom.el(id, row?)`, `rows(listId)` (the rows bound, in order), `reveal(listId,
+  key)`; the world presenter's `rows` (in view) and `reveal`. Every word with an id has `data-id`.
+- **Class names.** `presentDom(p, host, { classes: { 'tcs-slot': 'my-slot' } })` swaps or adds
+  the game's class for an engine one. `touching: () => boolean` overrides the touch guess.
+- **Bare device.** `createWorldPanel({ device }, opts)` and `worldScreen({ device }, opts)` paint
+  and upload the texture each `prepare`; `draw` does nothing: the game draws `panel.texture`.
+- **Type.** `panel(spec, { families: { sans: 'MyFont, sans-serif' } })` counts wrap texts' lines
+  in the game's stacks (`typeMeasureIn`); give its theme the same fonts.
+- **Public pieces**, for a game's own presenter: `compileSpec`, `SpecPressable`, `viewOf`,
+  `partsOf`, `maxRowsAt`, `typeMeasure` (a `SpecMeasure`), `SpecFamilies`, `specGivesWay` (the
+  give-way rule), `specEaseOut` (the slide's curve), `SPEC_SLIDE_MAX` (units past which a row jumps
+  instead of sliding), `PanelGpu` (a bare device's shape); the kinds `K_COL`, `K_ROW`, `K_TEXT`,
+  `K_BUTTON`, `K_FIELD`, `K_METER`, `K_RANGE`, `K_ICON`, `K_SLOT`, `K_LIST`, `K_GRID`, `K_TABS`; and
+  the roles a key binds to (`CompiledSpec.keyBinds`): `R_TEXT`, `R_LABEL`, `R_VALUE`,
+  `R_VALUETEXT`, `R_ON`, `R_SELECTED`, `R_ENABLED`, `R_SHOW`, `R_TINT`, `R_STATE`, `R_ITEM`,
+  `R_COUNT`, `R_KEY`, `R_BADGE`, `R_MARK`, `R_AGAIN`, `R_PLACEHOLDER`, `R_LINES`, `R_ROWS`,
+  `R_RING`, `R_AIM`.
+
+`harness/ui-fit.html` (e2e `ui-fit`) draws one such panel on the page and on a bare-device surface.
+
 ## Tests
 
 `inventory.test.ts` covers the grid (shape, aria, clamping, hold to pick up, drop, cancel, `canDrop`, context hooks, the card on focus), the drag context (pad walk across grids, both-end `onMove`, pointer thresholds, the long press, `slotsTarget`), `placeCard`, the card, the radial and the context list. `hud.test.ts` covers the HUD widgets (DOM shape, aria, clamping, wrapping, heading offsets, the modal rule, pulse). `ui.test.ts` runs under happy-dom and covers theme var names, overlay mount and scaling,

@@ -96,15 +96,15 @@ export interface CorePassContext {
   /** The depth attachment is read-only in this pass (a `'read'` pass after a writing one). */
   depthReadOnly: boolean;
   /**
+   * The pass's depth convention (ws/render-fit, `PassDesc.reversedZ`): reversed-Z (depth
+   * clears to 0, nearer is greater) or not. Build depth tests from it with `coreDepthCompare`.
+   */
+  reversedZ: boolean;
+  /**
    * The pass's extra targets (ws/core-targets), a `CORE_TARGET` mask: build the pipeline's
    * targets with `coreColorTargets(color, aux, writes)`. 0 after a resolve.
    */
   aux: number;
-  /**
-   * The pass is reversed-Z (`CorePass.reversedZ`, ws/fx-fit): near is 1 and far 0, so a depth
-   * test is `coreDepthCompare(compare, reversedZ)` of the standard one.
-   */
-  reversedZ: boolean;
 }
 
 /** A pass in the list; draw sets join it by id. */
@@ -135,6 +135,21 @@ export const CORE_PASSES: readonly PassDesc[] = [
 ];
 
 /** The ordered list of view passes. */
+/**
+ * The depth test that passes nearer fragments under a depth convention (ws/render-fit):
+ * `'greater'` reversed, `'less'` not; `orEqual` for `'greater-equal'` / `'less-equal'`. The
+ * one place drawables, effects and sets turn `reversedZ` into a compare.
+ */
+export function coreDepthCompare(reversedZ: boolean, orEqual = false): GPUCompareFunction {
+  if (reversedZ) return orEqual ? 'greater-equal' : 'greater';
+  return orEqual ? 'less-equal' : 'less';
+}
+
+/** The depth a pass clears to under a convention: 0 reversed, 1 not. */
+export function coreDepthFar(reversedZ: boolean): number {
+  return reversedZ ? 0 : 1;
+}
+
 export class PassList {
   /** Passes in encode order. */
   readonly passes: CorePass[] = [];
@@ -157,7 +172,7 @@ export class PassList {
       label: `core ${desc.id}`,
       depth: desc.depth ?? 'write',
       reversedZ,
-      depthClear: desc.depthClear ?? (reversedZ ? 0 : 1),
+      depthClear: desc.depthClear ?? coreDepthFar(reversedZ),
       when: desc.when ?? null,
       encode: desc.encode ?? null,
       resolve: desc.resolve ?? null,

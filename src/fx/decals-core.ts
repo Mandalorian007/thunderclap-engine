@@ -16,9 +16,9 @@ import {
   type CoreDrawableEncoder,
   type CoreDrawContext,
   CoreViewExtras,
-  coreDepthCompare,
   DrawablePipelines,
 } from '../render/core/drawable';
+import { coreDepthCompare } from '../render/core/pass-list';
 import { coreColorTargets } from '../render/core/targets';
 import { Mesh, VERTEX_LAYOUT_3D, VERTEX3D_FLOATS, VERTEX3D_STRIDE } from '../render/mesh';
 import type { TextureLike } from '../render/texture';
@@ -198,7 +198,7 @@ export class DecalsOnCore implements CoreDrawable {
           ? {
               format: depth,
               depthWriteEnabled: false,
-              depthCompare: box ? 'always' : coreDepthCompare('less-equal', reversedZ),
+              depthCompare: box ? 'always' : coreDepthCompare(reversedZ, true),
             }
           : undefined,
       });

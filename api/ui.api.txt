@@ -365,6 +365,11 @@ class CompiledSpec {
     readonly wraps: Int32Array;
     readonly textKey: Int32Array;
     readonly termW: Float64Array;
+    readonly aims: Int32Array;
+    readonly win: Float64Array;
+    readonly ahead: number;
+    readonly giveWay: '' | 'small' | 'always';
+    readonly slide: '' | 'up' | 'down' | 'left' | 'right';
     constructor(spec: PanelSpec);
 }
 
@@ -448,6 +453,8 @@ interface DomOptions {
     fit?: 'content' | 'host';
     slotArt?: (el: HTMLElement, item: string) => void;
     timer?: SpecTimer;
+    classes?: Readonly<Record<string, string>>;
+    touching?: () => boolean;
 }
 
 ## DomPresenter
@@ -459,6 +466,9 @@ class DomPresenter implements SpecPresenter {
     get unitScale(): number;
     setScale(scale: number): void;
     apply(relaid: boolean): void;
+    el(id: string, row?: string | null): HTMLElement | null;
+    rows(id: string): string[];
+    reveal(id: string, key: string): boolean;
     dispose(): void;
 }
 
@@ -768,6 +778,42 @@ interface InventoryLabels {
     rejected?: (label: string) => string;
     cancelled?: (label: string) => string;
 }
+
+## K_BUTTON
+const K_BUTTON = 8;
+
+## K_COL
+const K_COL = 0;
+
+## K_FIELD
+const K_FIELD = 9;
+
+## K_GRID
+const K_GRID = 2;
+
+## K_ICON
+const K_ICON = 7;
+
+## K_LIST
+const K_LIST = 3;
+
+## K_METER
+const K_METER = 6;
+
+## K_RANGE
+const K_RANGE = 11;
+
+## K_ROW
+const K_ROW = 1;
+
+## K_SLOT
+const K_SLOT = 5;
+
+## K_TABS
+const K_TABS = 10;
+
+## K_TEXT
+const K_TEXT = 4;
 
 ## KeyPrompt  (type-only)
 interface KeyPrompt {
@@ -1244,9 +1290,14 @@ interface PanelEvent {
     readonly panel: string;
     readonly id: string;
     readonly row: string | null;
-    readonly type: SpecPressKind | 'input' | 'enter' | 'pick' | 'change' | 'down' | 'up' | 'focus' | 'blur' | 'held';
+    readonly type: SpecPressKind | 'input' | 'enter' | 'pick' | 'change' | 'down' | 'up' | 'focus' | 'blur' | 'held' | 'scroll' | 'close';
     readonly value: string | number | boolean | null;
     readonly one?: boolean;
+}
+
+## PanelGpu  (type-only)
+interface PanelGpu {
+    readonly device: GPUDevice;
 }
 
 ## PanelHandle  (type-only)
@@ -1262,6 +1313,8 @@ interface PanelKeyEvent {
     shiftKey?: boolean;
     ctrlKey?: boolean;
     metaKey?: boolean;
+    code?: string;
+    repeat?: boolean;
 }
 
 ## PanelOptions  (type-only)
@@ -1294,6 +1347,8 @@ interface PanelSpec {
     readonly body: SpecNode;
     readonly fade?: number;
     readonly held?: boolean;
+    readonly slide?: 'up' | 'down' | 'left' | 'right';
+    readonly giveWay?: 'small' | 'always';
 }
 
 ## PanelStack
@@ -1419,6 +1474,69 @@ type Placement = RegionName | 'hidden' | FreePlacement;
 
 ## REGIONS
 const REGIONS: readonly RegionName[];
+
+## R_AGAIN
+const R_AGAIN = 19;
+
+## R_AIM
+const R_AIM = 16;
+
+## R_BADGE
+const R_BADGE = 7;
+
+## R_COUNT
+const R_COUNT = 10;
+
+## R_ENABLED
+const R_ENABLED = 6;
+
+## R_ITEM
+const R_ITEM = 9;
+
+## R_KEY
+const R_KEY = 14;
+
+## R_LABEL
+const R_LABEL = 4;
+
+## R_LINES
+const R_LINES = 15;
+
+## R_MARK
+const R_MARK = 20;
+
+## R_ON
+const R_ON = 5;
+
+## R_PLACEHOLDER
+const R_PLACEHOLDER = 8;
+
+## R_RING
+const R_RING = 13;
+
+## R_ROWS
+const R_ROWS = 17;
+
+## R_SELECTED
+const R_SELECTED = 11;
+
+## R_SHOW
+const R_SHOW = 2;
+
+## R_STATE
+const R_STATE = 3;
+
+## R_TEXT
+const R_TEXT = 0;
+
+## R_TINT
+const R_TINT = 12;
+
+## R_VALUE
+const R_VALUE = 1;
+
+## R_VALUETEXT
+const R_VALUETEXT = 18;
 
 ## Radial  (type-only)
 interface Radial {
@@ -1568,6 +1686,12 @@ const SPEC_SANS = "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
 ## SPEC_SERIF
 const SPEC_SERIF = "'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif";
 
+## SPEC_SLIDE_MAX
+const SPEC_SLIDE_MAX = 2000;
+
+## SPEC_SLIDE_MS
+const SPEC_SLIDE_MS = 220;
+
 ## SPEC_TYPE
 const SPEC_TYPE: Readonly<Record<SpecTextStyle, {
     readonly px: number;
@@ -1716,6 +1840,9 @@ interface SpecCommon {
     readonly again?: Bind;
 }
 
+## SpecFamilies  (type-only)
+type SpecFamilies = Readonly<Record<SpecFontFamily, string>>;
+
 ## SpecField  (type-only)
 interface SpecField extends SpecCommon {
     readonly k: 'field';
@@ -1725,6 +1852,8 @@ interface SpecField extends SpecCommon {
     readonly max?: number;
     readonly enabled?: Bind;
     readonly value?: Bind;
+    readonly typeAhead?: boolean;
+    readonly closeKey?: string;
 }
 
 ## SpecFieldKind  (type-only)
@@ -1757,6 +1886,7 @@ class SpecHud {
     onEvent: ((e: PanelEvent) => void) | null;
     constructor(spec: HudSpec, opts?: SpecPanelOptions);
     get(id: string): SpecPanel;
+    giveWay(sheet: boolean, small: boolean): void;
     apply(): void;
     dispose(): void;
 }
@@ -1767,6 +1897,7 @@ interface SpecIcon extends SpecCommon {
     readonly glyph: string | readonly SpecGlyphPart[];
     readonly view?: number | readonly [number, number];
     readonly size: number;
+    readonly ring?: Bind;
 }
 
 ## SpecList  (type-only)
@@ -1780,6 +1911,7 @@ interface SpecList extends SpecCommon {
     readonly tail?: boolean;
     readonly row: SpecNode;
     readonly head?: SpecNode;
+    readonly window?: number;
 }
 
 ## SpecListMove  (type-only)
@@ -1814,6 +1946,9 @@ interface SpecMark {
     readonly label?: Bind;
 }
 
+## SpecMeasure  (type-only)
+type Measure = (text: string, style: SpecTextStyle, w: number, lh: number, node: number, term: boolean) => number;
+
 ## SpecMeasurer  (type-only)
 type SpecMeasurer = (s: string, px: number, weight: number, family: string, italic?: boolean) => number;
 
@@ -1846,12 +1981,12 @@ class SpecModel {
     onChange: (() => void) | null;
     sets: number;
     focusing: string | null | undefined;
-    readonly followers: ((i: number, v: SpecValue) => void)[];
+    readonly followers: ((i: number, v: SpecValue, from: unknown) => void)[];
     constructor(spec: CompiledSpec);
     index(key: string): number;
     set(key: string, v: SpecValue): boolean;
     setAt(i: number, v: SpecValue): boolean;
-    follow(i: number, v: SpecValue): void;
+    follow(i: number, v: SpecValue, from?: unknown): void;
     focus(id: string | null): void;
     setAll(rec: Readonly<Record<string, SpecValue>>): number;
     get(key: string): SpecValue | null;
@@ -1883,8 +2018,11 @@ class SpecPanel {
     h: number;
     text: number;
     applies: number;
+    given: boolean;
     constructor(spec: PanelSpec, schedule?: SpecSchedule | null);
     frame(w: number, h: number, text?: number): void;
+    giveWay(sheet: boolean, small: boolean): void;
+    aimOf(id: string): string;
     apply(): void;
     emit(e: PanelEvent): void;
     dispose(): void;
@@ -1893,6 +2031,7 @@ class SpecPanel {
 ## SpecPanelOptions  (type-only)
 interface SpecPanelOptions {
     schedule?: SpecSchedule | null;
+    families?: Partial<SpecFamilies>;
 }
 
 ## SpecPresenter  (type-only)
@@ -1903,6 +2042,20 @@ interface SpecPresenter {
 
 ## SpecPressKind  (type-only)
 type SpecPressKind = 'tap' | 'hold' | 'toggle';
+
+## SpecPressable
+class SpecPressable {
+    holds: boolean;
+    onTap: ((shift: boolean) => void) | null;
+    onHold: (() => void) | null;
+    constructor(holds: boolean, timer?: SpecTimer, slop?: number);
+    down(x: number, y: number, button?: number): void;
+    begin(): void;
+    move(x: number, y: number): void;
+    cancel(): void;
+    click(shift?: boolean): void;
+    context(): void;
+}
 
 ## SpecRange  (type-only)
 interface SpecRange extends SpecCommon {
@@ -1943,6 +2096,7 @@ interface SpecSlot extends SpecCommon {
     readonly size: number;
     readonly hold?: boolean;
     readonly enabled?: Bind;
+    readonly press?: 'tap' | 'held';
 }
 
 ## SpecStack  (type-only)
@@ -1954,6 +2108,7 @@ interface SpecStack extends SpecCommon {
     readonly scroll?: boolean;
     readonly tap?: boolean;
     readonly role?: string;
+    readonly aim?: SpecStr;
     readonly children: readonly SpecNode[];
 }
 
@@ -2326,6 +2481,9 @@ interface WorldOptions {
     slotArt?: (ctx: PanelContext2D, item: string, r: PanelRect) => void;
     timer?: SpecTimer;
     onEscape?: () => void;
+    touching?: () => boolean;
+    frame?: (f: () => void) => void;
+    now?: () => number;
 }
 
 ## WorldPanel
@@ -2351,7 +2509,7 @@ class WorldPanel implements Drawable, WorldWidgetHost {
     hovered: WorldWidget | null;
     draws: number;
     readonly paintClip: PanelRect;
-    constructor(renderer: Renderer, opts: WorldPanelOptions);
+    constructor(gpu: Renderer | PanelGpu, opts: WorldPanelOptions);
     get dirty(): boolean;
     add<W extends WorldWidget>(widget: W): W;
     remove(widget: WorldWidget): void;
@@ -2445,6 +2603,8 @@ class WorldPresenter implements SpecPresenter {
     setRect(r: PanelRect): void;
     focusFirst(): void;
     rectOf(id: string, row?: string | null): PanelRect | null;
+    rows(id: string): string[];
+    reveal(id: string, key: string): boolean;
     keyUp(e: PanelKeyEvent): void;
     paint(p: Painter, _r: PanelRect): void;
     pointerDown(px: number, py: number): void;
@@ -2627,6 +2787,9 @@ function card(host: InventoryHost, opts: CardOptions): Card;
 ## classifyFormFactor
 function classifyFormFactor(i: ClassifyInput): FormFactor;
 
+## compileSpec
+function compileSpec(spec: PanelSpec): CompiledSpec;
+
 ## contextList
 function contextList(host: InventoryHost, items: ContextItem[], opts: ContextListOptions): ContextList;
 
@@ -2694,7 +2857,7 @@ function createSlots(host: HudHost, opts: SlotsOptions): Slots;
 function createTooltips(host: TooltipHost): Tooltips;
 
 ## createWorldPanel
-function createWorldPanel(renderer: Renderer, opts: WorldPanelOptions): WorldPanel;
+function createWorldPanel(gpu: Renderer | PanelGpu, opts: WorldPanelOptions): WorldPanel;
 
 ## cssPxTheme
 const cssPxTheme: Partial<ThemeTokens>;
@@ -2854,6 +3017,9 @@ function loupeLeader(at: {
 ## makePanelCanvas
 function makePanelCanvas(width: number, height: number): PanelCanvas;
 
+## maxRowsAt
+function maxRowsAt(c: CompiledSpec, m: SpecModel, i: number): number;
+
 ## measureWith
 function measureWith(m: SpecMeasurer | null): void;
 
@@ -2868,6 +3034,9 @@ function panel(spec: PanelSpec, opts?: SpecPanelOptions): SpecPanel;
 
 ## parseAreas
 function parseAreas(areas: readonly string[]): string[][];
+
+## partsOf
+function partsOf(icon: Pick<SpecIcon, 'glyph'>): readonly SpecGlyphPart[];
 
 ## pickTarget
 function pickTarget(from: {
@@ -2967,8 +3136,17 @@ function slider(label: string, value: number, onInput: (v: number) => void, opts
 ## slotsTarget
 function slotsTarget(slots: Slots, onAssign: (index: number, item: CellItem, from: CellRef) => void, opts?: SlotsTargetOptions): SlotsTarget;
 
+## specEaseOut
+function specEaseOut(t: number): number;
+
+## specGivesWay
+function specGivesWay(give: '' | 'small' | 'always' | undefined, sheet: boolean, small: boolean): boolean;
+
 ## specScale
 function specScale(ui: Pick<Overlay, 'units' | 'scale'>): number;
+
+## specStill
+function specStill(): boolean;
 
 ## specTokenVar
 function specTokenVar(name: keyof SpecTokens): string;
@@ -3004,6 +3182,15 @@ function toggle(label: string, checked: boolean, onChange: (v: boolean) => void)
 ## tokenVar
 function tokenVar(name: string): string;
 
+## typeMeasure
+const typeMeasure: Measure;
+
+## typeMeasureIn
+function typeMeasureIn(families: Partial<SpecFamilies>): Measure;
+
+## viewOf
+function viewOf(icon: SpecIcon): readonly [number, number];
+
 ## worldButton
 function button(opts: WorldButtonOptions): WorldButton;
 
@@ -3020,7 +3207,7 @@ function worldPanelTarget(panel: WorldPanel): HitTester<WorldPanel>;
 function progress(opts: WorldProgressOptions): WorldProgress;
 
 ## worldScreen
-function worldScreen(renderer: Renderer, opts?: WorldScreenOptions): WorldPanel;
+function worldScreen(gpu: Renderer | PanelGpu, opts?: WorldScreenOptions): WorldPanel;
 
 ## worldSlider
 function slider(opts: WorldSliderOptions): WorldSlider;

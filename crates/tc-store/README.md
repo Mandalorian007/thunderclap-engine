@@ -29,7 +29,14 @@ layout.
     `cut`, `sync_frozen`, `note_base`, `durable_below`, `to_prepare` and
     `background()` (a thread for slow jobs).
   - Also `sync_all` and `counters`.
-- `read(dir, codec)`: what opening would recover, without changing anything.
+- `read(dir, codec)`: what opening would recover, without changing anything;
+  `read_from(dir, codec, from_gen, after)` the same for a base's tail.
+- Bases (`base/`, E8): `write_base(dir, generation, after, bytes)` writes a
+  game's state through entry `after`, whose tail starts in `generation`,
+  durable (a temporary name, then a rename) or not at all; `bases(dir)`
+  lists them newest first (`BaseFile`); `prune_bases(dir, keep)`. The bytes
+  are the game's. A backup copies them before the log; a repair or
+  rollback in place moves `base/` to `recovered/` with the old log.
 - `StoreLock` and `holder(dir)`: the lock, and who holds it.
 - `format`: framing and the engine's reserved record kinds:
   - 1: name
@@ -68,8 +75,9 @@ layout.
     or in memory (`MemoryLog`: same records, appends all or none,
     `rollback_to`).
 
-Not here: game bases (a game writes its own and calls `tidy` after), and
-a reader that polls another process's store.
+Not here: when to write a base and what goes in it (`tc-sim` does both
+for a game that implements `Game::save`), and a reader that polls another
+process's store.
 
 ## Tests
 
@@ -90,7 +98,8 @@ a reader that polls another process's store.
     memory store
 - `tests/board_game.rs`: a board game's turn log round-trips through the
   public API.
-- `tests/retention.rs`: the archive's week and a rollback by wall time,
+- `tests/retention.rs`: a base copied by a backup and moved aside by a
+  rollback, the archive's week and a rollback by wall time,
   with the store's clock set by hand (its own process).
 - Lint: `clippy.toml` refuses `File::sync_all` and `File::sync_data` outside
   `src/durable.rs`.

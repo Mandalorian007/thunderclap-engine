@@ -40,7 +40,6 @@ export {
   CORE_DRAWABLE_WGSL,
   CORE_VIEW_EXTRA_WGSL,
   CoreViewExtras,
-  coreDepthCompare,
   DrawablePipelines,
   VIEW_EXTRA_FLOATS,
 } from './drawable';
@@ -53,7 +52,7 @@ export type {
   PassDepth,
   PassDesc,
 } from './pass-list';
-export { CORE_PASSES, PassList } from './pass-list';
+export { CORE_PASSES, coreDepthCompare, coreDepthFar, PassList } from './pass-list';
 export { QUAD_INDICES, QuadIndex, quadIndices } from './quad-index';
 export type { CoreTargetName } from './targets';
 export {

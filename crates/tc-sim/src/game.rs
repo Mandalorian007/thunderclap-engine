@@ -159,6 +159,24 @@ pub trait Game: Sized + Send + 'static {
     /// caches). The loop adds the time, the version and the schedule.
     fn hash_state(&self, h: &mut StableHasher);
 
+    /// The state as bytes for a base: everything [`Game::hash_state`]
+    /// covers, so [`Game::restore`] rebuilds the same hash. A game that
+    /// returns some keeps bases: its loop writes one every
+    /// [`SimConfig::base_every`](crate::SimConfig::base_every) entries and
+    /// archives the log behind it, so its store stays bounded. `None` (the
+    /// default) keeps none, and opening replays the whole log.
+    fn save(&self) -> Option<Vec<u8>> {
+        None
+    }
+
+    /// Sets the state of a new game, at its start (as built for
+    /// [`Sim::open`](crate::Sim::open) or a reload), from [`Game::save`]'s
+    /// bytes. The loop then applies the log after the base.
+    fn restore(&mut self, bytes: &[u8]) -> Result<(), String> {
+        let _ = bytes;
+        Err("this game keeps no bases".into())
+    }
+
     /// A connection passed `Hello` as `identity`: who it plays as (or
     /// that it observes), and the events that record a first join (none
     /// for a returning player). An error refuses it (`Rejected`).
