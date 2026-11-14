@@ -205,7 +205,7 @@ fn hist_catmull_rom(uv: vec2f) -> vec3f {
       m2 += s * s;
       if (velocityMode) {
         let sd = textureSampleLevel(depthTex, nearest, o, 0u);
-        if (sd < nearD) {
+        if (depth_nearer(sd, nearD)) {
           nearD = sd;
           nearUv = o;
         }
@@ -222,6 +222,11 @@ fn hist_catmull_rom(uv: vec2f) -> vec3f {
   var vel = vec2f(0.0);
   if (velocityMode) {
     vel = textureSampleLevel(velocityTex, nearest, nearUv, 0.0).xy;
+    // The jitter the target carries (ws/post-fit, P.sharpen.yz; 0 unless asked), taken out
+    // where something drew motion (an empty texel stays empty: the camera path).
+    if (dot(vel, vel) >= 1e-12) {
+      vel -= P.sharpen.yz;
+    }
   }
   let z = linear_depth(uv, d);
   var out = c;

@@ -1,12 +1,13 @@
 import { mat4 } from '../core/math';
 import type { FullscreenPass } from '../render/fullscreen';
-import type { JitterFn, PostInputs, PostProcessor, PostView, Renderer } from '../render/renderer';
+import type { JitterFn, PostInputs, PostProcessor, PostView } from '../render/renderer';
 import type { SceneTargetViewport } from '../render/scene-target';
 import { AO_BLUR_WGSL, AO_WGSL } from './ao';
 import { type Ease, easeInOut, PostBlender } from './blend';
 import { DepthPass } from './depth-pass';
 import { DOF_WGSL } from './dof';
 import { adaptExposure, ExposurePasses, exposureTarget } from './exposure';
+import type { PostHost } from './host';
 import { MOTION_BLUR_WGSL } from './motion-blur';
 import {
   applyPostPatch,
@@ -22,7 +23,7 @@ import {
   resolveGodRays,
 } from './settings';
 import {
-  COMPOSITE_WGSL,
+  compositeWgsl,
   DOWN_WGSL,
   FXAA_WGSL,
   OUTLINE_WGSL,
@@ -52,7 +53,7 @@ const COMPOSITE_DIMS: GPUTextureViewDimension[] = [
 
 /**
  * The bind groups that read one scene-colour view (the raw colour, a TAA history or the
- * motion-blur result), built on demand and dropped together when any other input changes.
+ * motion-blur result) under one `InputSet`, built on demand.
  */
 interface InputGroups {
   prefilter: GPUBindGroup | null;
@@ -66,6 +67,59 @@ interface InputGroups {
    */
   taa: (GPUBindGroup | null)[];
 }
+
+/**
+ * One set of per-frame inputs (ws/post-fit): the emissive, depth and per-surface views a frame
+ * bound, with every group built over them. The stack keeps `INPUT_SETS` of them, so views that
+ * alternate (XR eyes, a game's two targets) each keep their groups instead of rebuilding.
+ */
+interface InputSet {
+  emissive: GPUTextureView | null;
+  depth: GPUTextureView | null;
+  roughMetal: GPUTextureView | null;
+  velocity: GPUTextureView | null;
+  taaVelocity: GPUTextureView | null;
+  groups: Map<GPUTextureView, InputGroups>;
+  aoGroup: GPUBindGroup | null;
+  aoBlurGroup: GPUBindGroup | null;
+  outlineGroup: GPUBindGroup | null;
+  /** `PostStack.inputUse` when last bound: the least recent is reused. */
+  used: number;
+}
+
+/** Options for a `PostStack` (ws/post-fit), its third constructor argument. */
+export interface PostStackOptions {
+  /** The format the composite, upscale and FXAA write (default: the host's `format`). */
+  format?: GPUTextureFormat;
+  /**
+   * Encode the output as sRGB in the shader (default true). False writes linear colour: for an
+   * `-srgb` target that encodes on write, or a pass that reads the result linear.
+   */
+  toSrgb?: boolean;
+  /** Game WGSL run inside the composite (ws/post-fit). */
+  hook?: PostCompositeHook;
+}
+
+/**
+ * A composite hook (ws/post-fit): `wgsl` defines `fn post_hook(uv: vec2f, c: vec3f) -> vec3f`,
+ * called on the linear HDR scene colour after aberration and sharpen, before the outline, bloom,
+ * mist, rays, exposure and tonemap. It may call `scene_at(uv)` (the scene colour, TAA-resolved)
+ * and read the post uniforms `P`. Its textures are `hookTex0..` at `@group(0) @binding(12 + i)`
+ * (`texture_2d<f32>`, sampled with `samp`), set with `PostStack.setHookTextures`; its buffers
+ * `@binding(16 + i)` (`var<storage, read>` of the game's own type). Compiled in only when given.
+ */
+export interface PostCompositeHook {
+  wgsl: string;
+  /** How many `texture_2d<f32>` the hook reads (0..4; default 0). */
+  textures?: number;
+  /** Storage buffers (read-only) bound at `@binding(16 + i)` (at most 4). */
+  buffers?: GPUBuffer[];
+}
+
+/** Input sets kept per stack (ws/post-fit): the screen plus one per XR eye or extra target. */
+const INPUT_SETS = 5;
+/** Hook texture slots past the composite's own (`@binding(12..15)`). */
+const HOOK_TEXTURES_MAX = 4;
 
 /** The jitter a detached stack's hook returns on the frame it clears itself (ws/post-7). */
 const NO_JITTER: readonly [number, number] = [0, 0];
@@ -142,7 +196,13 @@ export class PostStack implements PostProcessor {
    */
   historyResets = 0;
 
-  private readonly renderer: Renderer;
+  private readonly renderer: PostHost;
+  /** The format the composite writes (`PostStackOptions.format`). */
+  private readonly outFormat: GPUTextureFormat;
+  private readonly linearOutput: boolean;
+  private readonly hookTextures: number;
+  /** The hook's texture views (`setHookTextures`), bound after the composite's own. */
+  private readonly hookViews: (GPUTextureView | null)[] = [];
   private readonly uniforms = new Float32Array(POST_UNIFORM_FLOATS);
   /**
    * XR eyes (ws/render-12): every eye resolves on the frame's one encoder, so a `writeBuffer`
@@ -184,10 +244,10 @@ export class PostStack implements PostProcessor {
   private requestedLevels = 0;
   private width = 0;
   private height = 0;
-  private boundEmissive: GPUTextureView | null = null;
-  private boundDepth: GPUTextureView | null = null;
-  /** Bind groups per scene-colour view; cleared whenever any other input or target changes. */
-  private readonly groups = new Map<GPUTextureView, InputGroups>();
+  /** The kept input sets (ws/post-fit) and the one this encode bound. */
+  private readonly inputSets: InputSet[] = [];
+  private cur: InputSet;
+  private inputUse = 0;
   /** Half-res AO (raw and blurred) and DoF targets, made on the first frame that needs them. */
   private aoTex: GPUTexture | null = null;
   private aoView: GPUTextureView | null = null;
@@ -195,12 +255,9 @@ export class PostStack implements PostProcessor {
   private aoBlurView: GPUTextureView | null = null;
   private dofTex: GPUTexture | null = null;
   private dofView: GPUTextureView | null = null;
-  private aoGroup: GPUBindGroup | null = null;
-  private aoBlurGroup: GPUBindGroup | null = null;
   /** Scene-size outline mask, made on the first frame that needs it; freed on resize. */
   private outlineTex: GPUTexture | null = null;
   private outlineView: GPUTextureView | null = null;
-  private outlineGroup: GPUBindGroup | null = null;
   private warnedOutline = false;
   /** Output-size FXAA input (the composite's result), made on the first frame that needs it. */
   private fxaaTex: GPUTexture | null = null;
@@ -293,9 +350,10 @@ export class PostStack implements PostProcessor {
   private jitterResolved = false;
   /** The resolved god-ray source (x, y, visibility) when `godRays.direction` placed it. */
   private readonly raySrc = new Float32Array(3);
-  private boundRoughMetal: GPUTextureView | null = null;
-  private boundVelocity: GPUTextureView | null = null;
-  private boundTaaVelocity: GPUTextureView | null = null;
+  /** Timestamp writes for one pass label: `inputs.timestamps`, else the host's timer. */
+  private stamps: ((label: string) => GPURenderPassTimestampWrites | undefined) | null = null;
+  private readonly hostStamps = (label: string): GPURenderPassTimestampWrites | undefined =>
+    this.renderer.gpuTimer?.pass(label);
 
   /** `godRays.direction` through the frame's view, or null when `x`/`y` place the rays. */
   private raySource(
@@ -310,8 +368,19 @@ export class PostStack implements PostProcessor {
     return this.raySrc;
   }
 
-  constructor(renderer: Renderer, patch: PostSettingsPatch = {}) {
+  /**
+   * `renderer` is any `PostHost`: a `Renderer`, or `createPostHost(device, format)` for a game
+   * that draws through the retained core and does not want the renderer bundled (ws/post-fit).
+   */
+  constructor(renderer: PostHost, patch: PostSettingsPatch = {}, opts: PostStackOptions = {}) {
     this.renderer = renderer;
+    this.outFormat = opts.format ?? renderer.format;
+    this.linearOutput = opts.toSrgb === false;
+    const hook = opts.hook;
+    this.hookTextures = hook ? Math.max(0, Math.min(HOOK_TEXTURES_MAX, hook.textures ?? 0)) : 0;
+    for (let i = 0; i < this.hookTextures; i++) this.hookViews.push(null);
+    for (let i = 0; i < INPUT_SETS; i++) this.inputSets.push(emptyInputSet());
+    this.cur = this.inputSets[0]!;
     this.settings = applyPostPatch(cinematicPostSettings(), patch);
     const bytes = POST_UNIFORM_FLOATS * 4;
     this.prefilter = renderer.createFullscreenPass({
@@ -344,18 +413,22 @@ export class PostStack implements PostProcessor {
       uniformBytes: bytes,
       textures: 1,
     });
+    const compositeDims = hook
+      ? [...COMPOSITE_DIMS, ...HOOK_DIMS.slice(0, this.hookTextures)]
+      : COMPOSITE_DIMS;
     this.composite = renderer.createFullscreenPass({
       label: 'post-composite',
-      wgsl: COMPOSITE_WGSL,
-      targets: [renderer.format],
+      wgsl: compositeWgsl(hook ? hookWgsl(hook, this.hookTextures) : undefined),
+      targets: [this.outFormat],
       uniformBytes: bytes,
-      textures: COMPOSITE_DIMS.length,
-      viewDimension: COMPOSITE_DIMS,
+      textures: compositeDims.length,
+      viewDimension: compositeDims,
+      buffers: hook?.buffers?.length ? hook.buffers.slice(0, HOOK_TEXTURES_MAX) : undefined,
     });
     this.fxaa = renderer.createFullscreenPass({
       label: 'post-fxaa',
       wgsl: FXAA_WGSL,
-      targets: [renderer.format],
+      targets: [this.outFormat],
       uniformBytes: bytes,
       textures: 1,
     });
@@ -407,7 +480,7 @@ export class PostStack implements PostProcessor {
     });
     this.upscale = renderer.createFullscreenPass({
       label: 'post-upscale',
-      targets: [renderer.format],
+      targets: [this.outFormat],
       textures: 1,
       wgsl: /* wgsl */ `
 @group(0) @binding(1) var samp: sampler;
@@ -630,6 +703,7 @@ export class PostStack implements PostProcessor {
       objectVelocity,
       taaVelocity,
     );
+    const set = this.cur;
     if (s.grain.animated && s.grain.intensity > 0) this.grainSeed += dt;
     let depthInfo: PostDepthInfo | null = null;
     if (depth && proj) {
@@ -640,6 +714,7 @@ export class PostStack implements PostProcessor {
       depthInfo.projY = proj.proj[5]!;
       depthInfo.outputWidth = outW;
       depthInfo.ortho = proj.proj[11] === 0;
+      depthInfo.reversedZ = proj.reversedZ === true;
       if (!mat4.invert(depthInfo.invProj as Float32Array, proj.proj)) depthInfo = null;
     }
 
@@ -660,6 +735,10 @@ export class PostStack implements PostProcessor {
     fs.roughMetal = roughMetal ? 1 : 0;
     fs.objectVelocity = objectVelocity ? 1 : 0;
     fs.taaVelocity = taaVelocity ? 1 : 0;
+    const vj = taaVelocity && view ? view.velocityJitter : undefined;
+    fs.velocityJitterX = vj ? vj[0] / iw : 0;
+    fs.velocityJitterY = vj ? vj[1] / ih : 0;
+    fs.linearOutput = this.linearOutput ? 1 : 0;
     this.updateExposure(wantAuto, dt, inputs.time);
 
     packPostUniforms(
@@ -679,18 +758,25 @@ export class PostStack implements PostProcessor {
     this.beginUploads(viewport);
     const needBloomChain = s.bloom.enabled || (s.godRays.enabled && s.godRays.bloomSource > 0);
     this.upload(encoder, this.composite.bindings!.uniformBuffer!, this.composite);
-    // GPU timing labels (undefined unless this frame is sampled; see Renderer.gpuTimer).
-    const timer = r.gpuTimer;
+    // GPU timing labels (undefined unless this frame is sampled; see Renderer.gpuTimer), or
+    // the caller's per-pass writes (ws/post-fit: `inputs.timestamps`, a core resolve's).
+    const timer = this.timerFor(inputs);
 
     if (wantOutline && depthInfo) {
       this.upload(encoder, this.outline.uniformBuffer, this.outline);
-      this.outline.encode(encoder, this.outlineView!, this.outlineGroup!, timer?.pass('outline'));
+      this.outline.encode(
+        encoder,
+        this.outlineView!,
+        this.outlineGroupOf(set, depth!.view),
+        timer?.pass('outline'),
+      );
     }
     if (wantAo && depthInfo) {
       this.upload(encoder, this.ao.uniformBuffer, this.ao);
       this.upload(encoder, this.aoBlur.uniformBuffer, this.aoBlur);
-      this.ao.encode(encoder, this.aoView!, this.aoGroup!, timer?.pass('ao'));
-      this.aoBlur.encode(encoder, this.aoBlurView!, this.aoBlurGroup!, timer?.pass('ao'));
+      this.aoGroupsOf(set, depth!.view);
+      this.ao.encode(encoder, this.aoView!, set.aoGroup!, timer?.pass('ao'));
+      this.aoBlur.encode(encoder, this.aoBlurView!, set.aoBlurGroup!, timer?.pass('ao'));
     }
 
     // The scene colour the rest of the stack reads: the raw colour, the TAA resolve, or the
@@ -945,7 +1031,7 @@ export class PostStack implements PostProcessor {
     this.fxaaTex = this.renderer.device.createTexture({
       label: 'post-fxaa',
       size: [width, height],
-      format: this.renderer.format,
+      format: this.outFormat,
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
     });
     this.fxaaView = this.fxaaTex.createView();
@@ -1094,7 +1180,7 @@ export class PostStack implements PostProcessor {
     if (texture === this.boundLut) return;
     this.boundLut = texture;
     this.lutView = texture ? texture.createView({ dimension: '3d' }) : this.lutPlaceholderView;
-    this.invalidateGroups();
+    this.invalidateComposite();
   }
 
   /** Point the composite at the lens-dirt texture (or bloom mip 0 as a placeholder). */
@@ -1102,15 +1188,57 @@ export class PostStack implements PostProcessor {
     if (texture === this.boundDirt) return;
     this.boundDirt = texture;
     this.dirtView = texture ? texture.createView() : null;
-    this.invalidateGroups();
+    this.invalidateComposite();
   }
+
+  /**
+   * Bind the composite hook's textures (ws/post-fit; `PostCompositeHook.textures`): `views[i]`
+   * is `hookTex{i}`. Unset slots read bloom mip 0. Only the composite groups are rebuilt, and
+   * only when a view changed.
+   */
+  setHookTextures(views: readonly (GPUTextureView | null)[]): this {
+    let changed = false;
+    for (let i = 0; i < this.hookTextures; i++) {
+      const v = views[i] ?? null;
+      if (v !== this.hookViews[i]) {
+        this.hookViews[i] = v;
+        changed = true;
+      }
+    }
+    if (changed) this.invalidateComposite();
+    return this;
+  }
+
+  /** Drop the composite groups only (a LUT, dirt or hook texture changed). */
+  private invalidateComposite(): void {
+    for (const set of this.inputSets) {
+      for (const g of set.groups.values()) g.composite = null;
+    }
+  }
+
+  /** The pass timer of this encode (ws/post-fit). */
+  private timerFor(
+    inputs: PostInputs,
+  ): { pass(label: string): GPURenderPassTimestampWrites | undefined } | null {
+    const own = inputs.timestamps;
+    if (own) {
+      this.stamps = own;
+      return this.stampTimer;
+    }
+    return this.renderer.gpuTimer ? this.hostTimer : null;
+  }
+
+  private readonly stampTimer = {
+    pass: (label: string): GPURenderPassTimestampWrites | undefined => this.stamps?.(label),
+  };
+  private readonly hostTimer = { pass: this.hostStamps };
 
   /** Scene-size composite target, made on first use (a resize or tier change frees it). */
   private allocLdr(): void {
     this.ldrTex = this.renderer.device.createTexture({
       label: 'post-composite-scene',
       size: [this.width, this.height],
-      format: this.renderer.format,
+      format: this.outFormat,
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
     });
     this.ldrView = this.ldrTex.createView();
@@ -1153,21 +1281,19 @@ export class PostStack implements PostProcessor {
     this.outlineTex?.destroy();
     this.aoTex = this.aoBlurTex = this.dofTex = this.outlineTex = null;
     this.aoView = this.aoBlurView = this.dofView = this.outlineView = null;
-    this.aoGroup = this.aoBlurGroup = this.outlineGroup = null;
+    for (const set of this.inputSets) set.aoGroup = set.aoBlurGroup = set.outlineGroup = null;
   }
 
   /** Drop every cached bind group: the next frame rebuilds the ones it uses. */
   private invalidateGroups(): void {
-    this.groups.clear();
-    this.boundEmissive = null;
-    this.boundDepth = null;
-    this.boundRoughMetal = null;
-    this.boundVelocity = null;
-    this.boundTaaVelocity = null;
+    for (const set of this.inputSets) resetInputSet(set);
     this.exposurePasses?.invalidate();
   }
 
-  /** Track the emissive and depth views; a change drops the cached groups and rebuilds the depth-only ones. */
+  /**
+   * Select the input set for this frame's views (ws/post-fit): a kept set with the same views
+   * keeps its groups; otherwise the least recently used set is cleared and takes them.
+   */
   private bindInputs(
     emissive: GPUTextureView,
     depth: GPUTextureView | null,
@@ -1175,33 +1301,47 @@ export class PostStack implements PostProcessor {
     velocity: GPUTextureView | null,
     taaVelocity: GPUTextureView | null,
   ): void {
-    if (
-      emissive === this.boundEmissive &&
-      depth === this.boundDepth &&
-      roughMetal === this.boundRoughMetal &&
-      velocity === this.boundVelocity &&
-      taaVelocity === this.boundTaaVelocity
-    ) {
-      return;
+    const use = ++this.inputUse;
+    let lru = this.inputSets[0]!;
+    for (const set of this.inputSets) {
+      if (
+        set.emissive === emissive &&
+        set.depth === depth &&
+        set.roughMetal === roughMetal &&
+        set.velocity === velocity &&
+        set.taaVelocity === taaVelocity
+      ) {
+        set.used = use;
+        this.cur = set;
+        return;
+      }
+      if (set.used < lru.used) lru = set;
     }
-    this.groups.clear();
-    this.boundEmissive = emissive;
-    this.boundDepth = depth;
-    this.boundRoughMetal = roughMetal;
-    this.boundVelocity = velocity;
-    this.boundTaaVelocity = taaVelocity;
-    if (depth) {
-      this.aoGroup = this.aoView ? this.ao.createBindGroup(depth, []) : null;
-      this.aoBlurGroup = this.aoView ? this.aoBlur.createBindGroup(depth, [this.aoView]) : null;
-      this.outlineGroup = this.outlineView ? this.outline.createBindGroup(depth, []) : null;
-    } else {
-      this.aoGroup = this.aoBlurGroup = this.outlineGroup = null;
-    }
+    resetInputSet(lru);
+    lru.emissive = emissive;
+    lru.depth = depth;
+    lru.roughMetal = roughMetal;
+    lru.velocity = velocity;
+    lru.taaVelocity = taaVelocity;
+    lru.used = use;
+    this.cur = lru;
+  }
+
+  /** The set's AO groups over `depth`, made on first use. */
+  private aoGroupsOf(set: InputSet, depth: GPUTextureView): void {
+    if (!set.aoGroup) set.aoGroup = this.ao.createBindGroup(depth, []);
+    if (!set.aoBlurGroup) set.aoBlurGroup = this.aoBlur.createBindGroup(depth, [this.aoView!]);
+  }
+
+  private outlineGroupOf(set: InputSet, depth: GPUTextureView): GPUBindGroup {
+    if (!set.outlineGroup) set.outlineGroup = this.outline.createBindGroup(depth, []);
+    return set.outlineGroup;
   }
 
   /** The cached groups for a scene-colour view (an empty set on first use). */
   private groupsFor(scene: GPUTextureView): InputGroups {
-    let g = this.groups.get(scene);
+    const groups = this.cur.groups;
+    let g = groups.get(scene);
     if (!g) {
       g = {
         prefilter: null,
@@ -1211,22 +1351,22 @@ export class PostStack implements PostProcessor {
         motionBlur: null,
         taa: new Array<GPUBindGroup | null>(TAA_HISTORY_SLOTS * 2).fill(null),
       };
-      this.groups.set(scene, g);
+      groups.set(scene, g);
     }
     return g;
   }
 
   private prefilterGroup(g: InputGroups, scene: GPUTextureView): GPUBindGroup {
-    if (!g.prefilter) g.prefilter = this.prefilter.createBindGroup([scene, this.boundEmissive!]);
+    if (!g.prefilter) g.prefilter = this.prefilter.createBindGroup([scene, this.cur.emissive!]);
     return g.prefilter;
   }
 
   private compositeGroup(g: InputGroups, scene: GPUTextureView): GPUBindGroup {
     if (!g.composite) {
       const mip0 = this.mipViews[0]!;
-      g.composite = this.composite.createBindGroup([
+      const views = [
         scene,
-        this.boundEmissive!,
+        this.cur.emissive!,
         mip0,
         this.raysView!,
         this.aoBlurView ?? mip0,
@@ -1235,7 +1375,9 @@ export class PostStack implements PostProcessor {
         this.lutView,
         this.ssrView ?? mip0,
         this.dirtView ?? mip0,
-      ]);
+      ];
+      for (const v of this.hookViews) views.push(v ?? mip0);
+      g.composite = this.composite.createBindGroup(views);
     }
     return g.composite;
   }
@@ -1247,7 +1389,7 @@ export class PostStack implements PostProcessor {
 
   private ssrGroup(g: InputGroups, scene: GPUTextureView, depth: GPUTextureView): GPUBindGroup {
     // Without the rough-metal target the scene colour stands in (the shader does not read it).
-    if (!g.ssr) g.ssr = this.ssrPass.createBindGroup(depth, [scene, this.boundRoughMetal ?? scene]);
+    if (!g.ssr) g.ssr = this.ssrPass.createBindGroup(depth, [scene, this.cur.roughMetal ?? scene]);
     return g.ssr;
   }
 
@@ -1257,7 +1399,7 @@ export class PostStack implements PostProcessor {
     if (!g.motionBlur) {
       g.motionBlur = this.motionBlurPass.createBindGroup(depth, [
         scene,
-        this.boundVelocity ?? scene,
+        this.cur.velocity ?? scene,
       ]);
     }
     return g.motionBlur;
@@ -1278,7 +1420,7 @@ export class PostStack implements PostProcessor {
       group = this.taaPass.createBindGroup(depth, [
         raw,
         h.views![read]!,
-        this.boundTaaVelocity ?? raw,
+        this.cur.taaVelocity ?? raw,
         h.auxViews![read]!,
       ]);
       g.taa[key] = group;
@@ -1315,4 +1457,37 @@ export class PostStack implements PostProcessor {
     this.freeLdr();
     this.upscale.destroy();
   }
+}
+
+const HOOK_DIMS: GPUTextureViewDimension[] = ['2d', '2d', '2d', '2d'];
+
+function emptyInputSet(): InputSet {
+  return {
+    emissive: null,
+    depth: null,
+    roughMetal: null,
+    velocity: null,
+    taaVelocity: null,
+    groups: new Map(),
+    aoGroup: null,
+    aoBlurGroup: null,
+    outlineGroup: null,
+    used: 0,
+  };
+}
+
+function resetInputSet(set: InputSet): void {
+  set.emissive = set.depth = set.roughMetal = set.velocity = set.taaVelocity = null;
+  set.groups.clear();
+  set.aoGroup = set.aoBlurGroup = set.outlineGroup = null;
+  set.used = 0;
+}
+
+/** The hook's declarations (its textures; buffers are the game's own) and its WGSL. */
+function hookWgsl(hook: PostCompositeHook, textures: number): string {
+  let decl = '';
+  for (let i = 0; i < textures; i++) {
+    decl += `@group(0) @binding(${12 + i}) var hookTex${i}: texture_2d<f32>;\n`;
+  }
+  return decl + hook.wgsl;
 }

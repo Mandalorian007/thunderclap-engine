@@ -129,8 +129,19 @@ fn source(uv: vec2f) -> vec3f {
 }
 `;
 
-/** Final pass: combine, SSR, mist, bloom (× dirt), rays, white balance, exposure, tonemap, grade, vignette, dither, sRGB. */
-export const COMPOSITE_WGSL = /* wgsl */ `
+/**
+ * Final pass: combine, SSR, mist, bloom (× dirt), rays, white balance, exposure, tonemap, grade,
+ * vignette, dither, sRGB. `hook` (ws/post-fit, `PostCompositeHook.wgsl`) is a game's WGSL that
+ * defines `fn post_hook(uv: vec2f, c: vec3f) -> vec3f`, called on the linear HDR colour after
+ * aberration and sharpen and before the outline, bloom and mist; it may call `scene_at(uv)`.
+ */
+export function compositeWgsl(hook?: string): string {
+  const call = hook ? '  c = post_hook(uv, c);\n' : '';
+  const defs = hook ? `\n// ---- composite hook ----\n${hook}\n` : '';
+  return COMPOSITE_HEAD + defs + COMPOSITE_MAIN_A + call + COMPOSITE_MAIN_B;
+}
+
+const COMPOSITE_HEAD = /* wgsl */ `
 ${WGSL_POST_UNIFORMS}
 @group(0) @binding(1) var samp: sampler;
 @group(0) @binding(2) var colorTex: texture_2d<f32>;
@@ -165,7 +176,11 @@ fn scene_at(uv: vec2f) -> vec3f {
     // Premultiplied by its fade and intensity in the SSR pass.
     scene += textureSampleLevel(ssrTex, samp, uv, 0.0).rgb;
   }
-  return scene + textureSampleLevel(emissiveTex, samp, uv, 0.0).rgb;
+  // The emissive's add weight (ws/post-fit, P.bloom2.y): 0 skips the sample.
+  if (P.bloom2.y != 0.0) {
+    scene += textureSampleLevel(emissiveTex, samp, uv, 0.0).rgb * P.bloom2.y;
+  }
+  return scene;
 }
 
 fn aces(x: vec3f) -> vec3f {
@@ -182,6 +197,9 @@ fn to_srgb(c: vec3f) -> vec3f {
   let hi = 1.055 * pow(c, vec3f(1.0 / 2.4)) - 0.055;
   return select(hi, lo, c <= vec3f(0.0031308));
 }
+`;
+
+const COMPOSITE_MAIN_A = /* wgsl */ `
 
 @fragment fn fs_main(in: FullscreenIn) -> @location(0) vec4f {
   let uv = in.uv;
@@ -206,7 +224,9 @@ fn to_srgb(c: vec3f) -> vec3f {
       + scene_at(uv + vec2f(0.0, texel.y)) + scene_at(uv - vec2f(0.0, texel.y))) * 0.25;
     c = max(c + (c - blur) * P.sharpen.x, vec3f(0.0));
   }
-  if (P.outline.x > 0.5) {
+`;
+
+const COMPOSITE_MAIN_B = /* wgsl */ `  if (P.outline.x > 0.5) {
     let edge = textureSampleLevel(outlineTex, samp, uv, 0.0).r;
     c = mix(c, P.outlineColor.rgb, clamp(edge * P.outlineColor.w, 0.0, 1.0));
   }
@@ -286,13 +306,20 @@ fn to_srgb(c: vec3f) -> vec3f {
     c = mix(c, P.vignetteColor.rgb, v);
   }
 
-  var outc = to_srgb(c);
+  // Linear output (ws/post-fit, P.bloom2.z): an sRGB-format target encodes on write.
+  var outc = c;
+  if (P.bloom2.z < 0.5) {
+    outc = to_srgb(c);
+  }
   if (P.enables2.z > 0.5) {
     outc += (engine_hash21(in.pos.xy) - 0.5) / 255.0;
   }
   return vec4f(outc, 1.0);
 }
 `;
+
+/** The composite without a hook. */
+export const COMPOSITE_WGSL = compositeWgsl();
 
 /**
  * FXAA 3.11, console preset (ws/post-2): one full-res pass over the composite's display-encoded
@@ -366,7 +393,7 @@ fn fetch(uv: vec2f, dim: vec2f) -> vec4f {
 }
 
 fn zof(s: vec4f) -> f32 {
-  return select(-s.z, SKY_Z, s.w >= 1.0);
+  return select(-s.z, SKY_Z, is_sky(s.w));
 }
 
 /** Normal at the texel under \`uv\` from its +x and +y neighbours (a zero vector in the sky). */
@@ -374,7 +401,7 @@ fn normal_at(uv: vec2f, dim: vec2f, t: vec2f) -> vec3f {
   let p = fetch(uv, dim);
   let px = fetch(uv + vec2f(t.x, 0.0), dim);
   let py = fetch(uv + vec2f(0.0, t.y), dim);
-  if (p.w >= 1.0 || px.w >= 1.0 || py.w >= 1.0) {
+  if (is_sky(p.w) || is_sky(px.w) || is_sky(py.w)) {
     return vec3f(0.0);
   }
   return normalize(cross(px.xyz - p.xyz, py.xyz - p.xyz));

@@ -1,5 +1,5 @@
-import type { Renderer } from '../render/renderer';
 import { createShaderModule, WGSL_FULLSCREEN_PRELUDE } from '../render/wgsl';
+import type { PostHost } from './host';
 import { POST_UNIFORM_FLOATS } from './settings';
 
 /**
@@ -32,7 +32,7 @@ export class DepthPass {
   private readonly entries: GPUBindGroupEntry[];
 
   constructor(
-    renderer: Renderer,
+    renderer: PostHost,
     desc: {
       label: string;
       wgsl: string;

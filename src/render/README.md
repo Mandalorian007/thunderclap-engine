@@ -1628,6 +1628,12 @@ passes after a resolve draw colour only. With velocity the core keeps each view 
 `p` origin-relative) gives the motion, 0 on a view's first frame. Each eye of a stereo pair is
 its own view index, so its history and its cleared targets are its own.
 
+`PassDesc.coreTargets: false` (ws/post-fit; `CorePass.coreTargets`, default true) draws one
+pass into colour and depth only, with `aux` 0, for a pass whose pipelines know nothing of the
+targets (a sky, an overlay). A resolve's `CoreResolveContext.timestamps(label, passId)` (from
+`CoreTarget.timestamps`) times the passes the resolve encodes under labels of their own, and
+`CoreResolveContext.reversedZ` is the pass's depth convention.
+
 ### Fitting a voxel game's renderer (ws/render-fit)
 
 All of these are off by default. Without them the core draws exactly as before.

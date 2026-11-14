@@ -26,7 +26,7 @@ export const HEADROOM = 1.05;
 
 /**
  * Named import sets: `from` is an `exports` key, `names` what is imported (`*` for everything).
- * `excludes` are src/ folders that must contribute no code.
+ * `excludes` are src/ folders (or src/ files, a path ending in `.ts`) that must contribute no code.
  */
 export const NAMED = [
   {
@@ -46,6 +46,14 @@ export const NAMED = [
     from: ['./render', './voxel', './voxel'],
     names: ['Renderer', 'createVoxelGrid', 'createVoxelWorld'],
     excludes: ['ui', 'audio'],
+  },
+  // A game on the retained core with the post stack (ws/post-fit): `createPostHost` stands in
+  // for the Renderer, which must not be bundled.
+  {
+    name: 'render core + post { createRenderCore, createCorePost, PostStack, createPostHost }',
+    from: ['./render', './post', './post', './post'],
+    names: ['createRenderCore', 'createCorePost', 'PostStack', 'createPostHost'],
+    excludes: ['ui', 'audio', 'voxel', 'assets', 'render/renderer.ts'],
   },
   // createGame pulls the whole engine today (ui, audio, fx, post); D2 R5 wants a feature-off
   // createGame free of ui and audio. `todo` folders are reported, not failed, until A3 (ws/kit)
@@ -100,13 +108,18 @@ export function entrySource(entry, pkg, root) {
   return `${lines.join('\n')}\n`;
 }
 
-/** src/ folders whose modules rendered code into `modules` (id -> { renderedLength }). */
+/**
+ * src/ folders whose modules rendered code into `modules` (id -> { renderedLength }), and those
+ * modules' own paths under src/ (`render/renderer.ts`), for file excludes.
+ */
 export function foldersIn(modules, root) {
   const src = `${join(root, 'src')}/`;
   const out = new Set();
   for (const [id, m] of Object.entries(modules)) {
     if (!id.startsWith(src) || m.renderedLength <= 0) continue;
-    out.add(id.slice(src.length).split('/')[0]);
+    const rel = id.slice(src.length);
+    out.add(rel.split('/')[0]);
+    out.add(rel);
   }
   return out;
 }
@@ -124,7 +137,9 @@ export function verdict(row, budget) {
   else if (row.gzip > budget)
     problems.push(`${row.name}: ${row.gzip} B gzip is over its budget of ${budget} B`);
   for (const f of row.leaked)
-    problems.push(`${row.name}: pulls code from src/${f}/ (${row.leakedFrom[f]})`);
+    problems.push(
+      `${row.name}: pulls code from src/${f}${f.endsWith('.ts') ? '' : '/'} (${row.leakedFrom[f]})`,
+    );
   return problems;
 }
 
@@ -159,9 +174,10 @@ async function measure(entry, pkg, root, dir, build) {
   const pending = entry.todo.filter((f) => folders.has(f));
   const leakedFrom = {};
   for (const f of [...leaked, ...pending]) {
-    const prefix = `${join(root, 'src', f)}/`;
+    const path = join(root, 'src', f);
+    const prefix = `${path}/`;
     leakedFrom[f] = Object.keys(modules)
-      .filter((id) => id.startsWith(prefix) && modules[id].renderedLength > 0)
+      .filter((id) => (id === path || id.startsWith(prefix)) && modules[id].renderedLength > 0)
       .map((id) => relative(root, id))
       .slice(0, 3)
       .join(', ');

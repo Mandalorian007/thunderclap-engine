@@ -12,10 +12,20 @@ export {
   exposureHistogram,
   exposureTarget,
 } from './exposure';
+export { createPostHost, type PostHost, type PostHostOptions, PostHostState } from './host';
 export { createLensDirtTexture, lensDirtTexels } from './lens-dirt';
-export { createLutTexture, identityLut, type LutFn, type LutSize, lutTexels } from './lut';
+export {
+  createLutTexture,
+  identityLut,
+  type LutFn,
+  type LutFormat,
+  type LutSize,
+  lutTexels,
+  lutTexelsHalf,
+  writeLutTexture,
+} from './lut';
 export { motionVelocity } from './motion-blur';
-export { PostStack } from './post-stack';
+export { type PostCompositeHook, PostStack, type PostStackOptions } from './post-stack';
 export type {
   AberrationSettings,
   AoSettings,

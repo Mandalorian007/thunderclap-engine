@@ -90,7 +90,7 @@ fn project(p: vec3f) -> vec2f {
 @fragment fn fs_main(in: FullscreenIn) -> @location(0) vec4f {
   let dim = vec2f(textureDimensions(depthTex));
   let c = fetch(in.uv, dim);
-  if (c.w >= 1.0) {
+  if (is_sky(c.w)) {
     return vec4f(0.0);
   }
   let uv = texel_uv(in.uv, dim);
@@ -137,7 +137,7 @@ fn project(p: vec3f) -> vec2f {
       break;
     }
     let sd = textureSampleLevel(depthTex, nearest, suv, 0u);
-    if (sd >= 1.0) {
+    if (is_sky(sd)) {
       continue;
     }
     let sz = view_pos(suv, sd).z;

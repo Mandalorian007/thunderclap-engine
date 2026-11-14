@@ -36,6 +36,14 @@ fn view_pos(uv: vec2f, depth: f32) -> vec3f {
 fn linear_depth(uv: vec2f, depth: f32) -> f32 {
   return -view_pos(uv, depth).z;
 }
+/** Nothing drew here: depth at the far plane (1, or 0 under reversed-Z: P.quality.w). */
+fn is_sky(depth: f32) -> bool {
+  return select(depth >= 1.0, depth <= 0.0, P.quality.w > 0.5);
+}
+/** \`a\` is nearer the eye than \`b\` (smaller depth, or greater under reversed-Z). */
+fn depth_nearer(a: f32, b: f32) -> bool {
+  return select((a < b), (a > b), (P.quality.w > 0.5));
+}
 /** The centre of the depth texel under \`uv\`: positions must be rebuilt where the depth was read. */
 fn texel_uv(uv: vec2f, dim: vec2f) -> vec2f {
   return (floor(clamp(uv, vec2f(0.0), vec2f(0.9999)) * dim) + 0.5) / dim;
@@ -64,7 +72,7 @@ fn ign(px: vec2f) -> f32 {
 @fragment fn fs_main(in: FullscreenIn) -> @location(0) vec4f {
   let dim = vec2f(textureDimensions(depthTex));
   let c = fetch(in.uv, dim);
-  if (c.w >= 1.0) {
+  if (is_sky(c.w)) {
     return vec4f(1.0);
   }
   let p = c.xyz;
@@ -95,7 +103,7 @@ fn ign(px: vec2f) -> f32 {
     let ang = rot + a * 6.2831853 * 3.0;
     let suv = uv + vec2f(cos(ang), sin(ang)) * ruv * sqrt(a);
     let s = fetch(suv, dim);
-    if (s.w >= 1.0) { continue; }
+    if (is_sky(s.w)) { continue; }
     let sp = s.xyz;
     let v = sp - p;
     let vv = dot(v, v);
@@ -123,7 +131,7 @@ ${WGSL_DEPTH_VIEW}
   let uv = in.uv;
   let t = 1.0 / vec2f(textureDimensions(aoTex));
   let dc = textureSampleLevel(depthTex, nearest, uv, 0u);
-  if (dc >= 1.0) {
+  if (is_sky(dc)) {
     return vec4f(1.0);
   }
   let zc = linear_depth(texel_uv(uv, dim), dc);

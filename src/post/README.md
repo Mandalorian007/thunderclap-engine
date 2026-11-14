@@ -28,6 +28,7 @@ post.blendTo({ vignette: { intensity: 0.6 } }, 2); // ease to a new look over 2 
 | `postQualityFor(...) / lowPostQuality` | quality tiers for weaker devices |
 | `neutralPostSettings()` / `cinematicPostSettings()` | a look-free preset / the tuned look `PostStack` starts from |
 | `createLutTexture(...)` | a colour-grading LUT |
+| `createPostHost(device, format, opts?: PostHostOptions)` | a stack without a `Renderer` (render-core games) |
 
 ## Contents
 
@@ -36,6 +37,7 @@ post.blendTo({ vignette: { intensity: 0.6 } }, 2); // ease to a new look over 2 
 - [Passes, in order](#passes-in-order)
 - [Notes](#notes)
 - [XR (ws/xr-post)](#xr-wsxr-post)
+- [A large 3D game on the core (ws/post-fit)](#a-large-3d-game-on-the-core-wspost-fit)
 - [Types](#types)
 
 ## Overview
@@ -352,6 +354,8 @@ feature against a reference stack with the feature off, read back from the GPU, 
   the image is the scene: `post.set(neutralPostSettings())` and add what the game wants.
 - Output is encoded to sRGB in the shader because the swapchain is a non-sRGB format
   (`navigator.gpu.getPreferredCanvasFormat()`: `bgra8unorm` or `rgba8unorm`).
+  `PostStackOptions.toSrgb: false` writes linear colour instead (for an `-srgb` target or a
+  pass after the stack), and `PostStackOptions.format` the format the output is written in.
 - All intermediate textures are reallocated only on resize (or a bloom level cap change).
 - **Quality caps** (`PostQuality`, `post.quality`, `defaultPostQuality()`) are separate from
   the look: `post.setQuality({ maxBloomLevels, raySamples, fogOctaves, compositeAtScene, aoSamples, dofTaps, fxaa, outline })`
@@ -427,6 +431,51 @@ auto exposure's adapted level, the bloom chain. Each view costs a whole stack's 
 processor and is remembered for later ones. At most `VIEW_POST_MAX` (8) views. Tests
 `view-post.test.ts`.
 
+## A large 3D game on the core (ws/post-fit)
+
+What a game drawing through the retained core (`createRenderCore` + `createCorePost`) asked of
+the stack. All additive; a stack made as before draws the same pixels.
+
+- **No Renderer.** `new PostStack(host, patch?, opts?)` takes a `PostHost`: the device, the
+  output format, two samplers, `createFullscreenPass`, the sizes, a jitter hook and an optional
+  pass timer. A `Renderer` is one. `createPostHost(device, format, { width, height, ... })`
+  (a `PostHostState`) is one without it: call `host.resize(w, h, outW?, outH?)` on resize and,
+  while TAA runs, jitter your views by `host.jitter?.(frame)`. The bundle row
+  `render core + post { createRenderCore, createCorePost, PostStack, createPostHost }` fails if
+  `src/render/renderer.ts` is bundled.
+- **Cached bind groups.** The stack keeps the groups of up to five input sets (the scene,
+  emissive, depth, roughMetal and velocity views it was handed), least recently used out, so
+  inputs that alternate (two targets, eyes, a core that ping-pongs) make no group in steady
+  state. A new LUT, dirt or hook texture rebuilds the composite groups only; a LUT rewritten in
+  place (`writeLutTexture`) rebuilds nothing.
+- **Composite hook.** `PostStackOptions.hook: PostCompositeHook` adds WGSL defining
+  `fn post_hook(uv: vec2f, c: vec3f) -> vec3f`, called after sharpen and before the outline,
+  in linear colour. `textures` (up to 4) are bound as `hookTex0..3` (`setHookTextures(views)`;
+  a white texel until set); `buffers` (up to 4) are bound at `@binding(16 + i)`, which the hook
+  declares itself with its own type (`@group(0) @binding(16) var<storage, read> tint: vec4f;`).
+  Sample with `samp`. The hook is compiled in only when given.
+- **Emissive add.** `bloom.emissiveAdd` (default 1) weights the emissive the composite adds to
+  the scene; 0 skips the add (a game that already wrote its glow into colour).
+- **Jitter on the core.** `CorePost.setJitter(x, y, view?)` (px) tells the post the jitter the
+  game put on that view's matrix: TAA gets the jittered `viewProj`, the jitter, and last frame's
+  matrix without it. `CorePostOptions.velocityJitter: 'remove'` takes the jitter delta out of the
+  velocity target (TAA's velocity path, `PostView.velocityJitter`). Default `'keep'`, jitter 0.
+- **Reversed-Z.** A pass with `reversedZ` hands `PostProjection.reversedZ` and its near/far
+  (infinite far when `proj[10]` is 0). AO, SSR, DoF, the outline and TAA's nearest-depth tap read
+  sky and nearer under that convention (`quality.w`).
+- **Origin-relative matrices.** `CorePostOptions.relativeToOrigin` hands matrices relative to
+  the core's origin (`originGrid`), last frame's moved to this frame's origin, for a far-from-zero
+  world whose depth is reconstructed in origin-relative space.
+- **Core targets per pass.** `PassDesc.coreTargets: false` draws a pass (a sky, an overlay)
+  into colour and depth only, without the extra targets.
+- **Pass timestamps.** Under `createCorePost` each post pass is timed under its own label
+  (`taa`, `bloom`, `composite`, ...) through `CoreTarget.timestamps`, with the post pass's id.
+- **Half-float LUT.** `createLutTexture(device, size, fn, 'rgba16float')` (`LutFormat`) keeps
+  the grade's precision; `lutTexelsHalf` its texels; `writeLutTexture(device, texture, fn)`
+  rewrites a LUT in place.
+- `harness/post-fit.html` measures TAA + bloom + LUT (god rays off) at the window's size: GPU
+  per pass, CPU of the frame and bind groups per frame on `window.__harnessPostFit`.
+
 ## Types
 
 - `PostSettings` has one section per pass: `bloom: BloomSettings`, `mist: MistSettings`,
@@ -456,7 +505,8 @@ and projection, and this and the last frame's matrices of the same view index, g
 `processor` (a `PostStack`, FXAA, TAA, or a `ViewPost` of them so each eye keeps its own
 history), which writes `CoreTarget.output` at `outputViewport`. Set `time` and `dt` each frame.
 The core's passes write one colour target, so `emissive` is a black texel unless the game sets
-one, and there is no roughness/metal or velocity input yet.
+one, and there is no roughness/metal or velocity input yet. For jitter, reversed-Z, origin-relative
+matrices and running without a `Renderer`, see *A large 3D game on the core*.
 
 With extra core targets (`RenderCoreOptions.targets`, ws/core-targets), `CorePost` hands each
 view's emissive to bloom (unless `emissive` is set), velocity to TAA and object motion blur, and

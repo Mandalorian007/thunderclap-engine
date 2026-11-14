@@ -1,6 +1,6 @@
 {
   "limits": {
-    ".": 176400,
+    ".": 177600,
     "./analytics": 1000,
     "./anim": 19900,
     "./assets": 35900,
@@ -13,22 +13,23 @@
     "./input": 35000,
     "./nav": 28900,
     "./platform": 14900,
-    "./post": 30900,
+    "./post": 37300,
     "./render": 69300,
     "./save": 7700,
     "./tween": 3700,
     "./ui": 95800,
     "./voxel": 27500,
-    "./testing": 189100,
+    "./testing": 190300,
     "render { Renderer }": 40400,
     "render { Renderer, Camera, Transform }": 40400,
     "render + voxel { Renderer, createVoxelGrid, createVoxelWorld }": 60000,
-    ". { createGame }": 176400,
-    "./kit": 175300,
+    ". { createGame }": 177600,
+    "./kit": 176400,
     "./models": 13400,
     "./quality": 2500,
     "./net": 18300,
     "./actors": 18600,
-    "./xr": 4200
+    "./xr": 4200,
+    "render core + post { createRenderCore, createCorePost, PostStack, createPostHost }": 50400
   }
 }

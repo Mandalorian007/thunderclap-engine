@@ -24,7 +24,7 @@ ${WGSL_DEPTH_VIEW}
 fn coc_at(uv: vec2f) -> f32 {
   let d = textureSampleLevel(depthTex, nearest, uv, 0u);
   var z = P.dof.y + P.dof.z * 4.0; // sky: past the far side of the range
-  if (d < 1.0) {
+  if (!is_sky(d)) {
     z = linear_depth(uv, d);
   }
   var c = clamp((z - P.dof.y) / P.dof.z, -1.0, 1.0);

@@ -246,6 +246,8 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 - (integrator) `demos/voxel` remesh < 50 ms and voxel-world maxStreamFrameMs fail under machine load (pass alone). Make them load-aware or move them to the bench.
 - (2.0.0-next.0) publish's npm smoke failed: hosts on npm still peer `^1.0.0`. Host patch bumps are with the integrator.
 
+- (B11) SMAA for the post stack (Forge PR #797 ask): not built in ws/post-fit. It needs the precomputed area and search textures (or a port of their generator) and three passes, which would add most of `./post`'s budget again; FXAA and TAA cover anti-aliasing today. Owner: a later post step, if a game asks again.
+
 - (C7) `core/game.ts` pointer transform calls `clientToLogical` without `out`: one allocation per pointer event. Owner: next kit/core step.
 
 - (A1, 2026-11-14) WebKit: `src/ui/stack.ts` focus trap only intercepts Tab at the ends; WebKit's Tab skips buttons, so focus escapes a panel. Fix: always preventDefault and move focus by hand; drop the ui.spec fixme. Owner: next ui step (C6).
