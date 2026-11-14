@@ -1,0 +1,424 @@
+/**
+ * Core drawables (D1 §3.6, B5): a pass member any module registers that records its own draws,
+ * next to the core's draw sets. World effects (particles, weather, water, decals) are core
+ * drawables: the core runs their `prepare` once a frame (after the views are written), walks
+ * them in their pass with the sets, and records them into one bundle per cull group (or encodes
+ * them directly), so a stereo pair draws them in both eyes from one bundle.
+ *
+ * Effects that read the scene take it from the core: `readsDepth` binds the core's depth
+ * attachment (sampled while the pass holds it read-only), `readsColor` a copy of the target's
+ * colour taken before the pass (`CoreTarget.texture`). `CoreViewExtras` adds what `CoreView`
+ * leaves out (inverse view-projection, the eye's right, up and forward), indexed by
+ * `view.index`.
+ */
+import { mat4 } from '../../core/math';
+import type { RenderCore } from './core';
+import type { CorePass } from './pass-list';
+import { CORE_VIEW_WGSL, MAX_VIEWS, sphereInPlanes, VIEW_SLOT, VIEW_SLOT_FLOATS } from './view';
+
+/** What a drawable records into: an open pass (direct) or a bundle. */
+export type CoreDrawableEncoder = GPURenderPassEncoder | GPURenderBundleEncoder;
+
+/** Where a drawable records (one object, reused: read it during `record`, do not keep it). */
+export interface CoreDrawContext {
+  readonly core: RenderCore;
+  /** The cull group being recorded (a bundle serves every view of it). */
+  group: number;
+  /** Bind this at group 0: the `CoreView` the shader reads (`CORE_DRAWABLE_WGSL`). */
+  viewGroup: GPUBindGroup;
+  /** The layout of `viewGroup`, for the drawable's pipeline layout. */
+  readonly viewLayout: GPUBindGroupLayout;
+  /** The colour target's format (one colour target). */
+  color: GPUTextureFormat;
+  /** The depth attachment's format, undefined when the pass has none. */
+  depth: GPUTextureFormat | undefined;
+  /** The pass holds depth read-only (a pipeline must not write it). */
+  depthReadOnly: boolean;
+}
+
+/**
+ * A pass member that records its own draws. `active` false (or `bounds` outside a group's
+ * frusta) leaves it out of that frame or group; a pass with no member at work is skipped.
+ */
+export interface CoreDrawable {
+  readonly label?: string;
+  /** The pass id it joins (default `'transparent'`). Fixed once added. */
+  readonly pass?: string;
+  /** Order within the pass, after sets of the same order (default 0). Fixed once added. */
+  readonly order?: number;
+  /** Tests depth (default true): the pass then has a depth attachment. */
+  readonly depth?: boolean;
+  /**
+   * Samples the core's depth (`core.sceneDepthView`): the attachment gets `TEXTURE_BINDING`.
+   * Only in a pass whose depth is `'read'` or `'none'` (a writing pass may not sample it).
+   */
+  readonly readsDepth?: boolean;
+  /**
+   * Samples the target's colour as it was before this pass (`core.sceneColorView`), copied
+   * from `CoreTarget.texture` (which needs `COPY_SRC`). Without a texture the copy is not made.
+   */
+  readonly readsColor?: boolean;
+  /** `'bundle'` (default): recorded once per group and format until `version` changes. */
+  readonly encoding?: 'bundle' | 'direct';
+  /** Bump to re-record its bundles (a new pipeline, bind group or draw count). */
+  readonly version: number;
+  /** Draws anything this frame. */
+  readonly active: boolean;
+  /** World sphere `[x, y, z, r]` it lies in (null or absent: never culled). Live. */
+  readonly bounds?: ArrayLike<number> | null;
+  /** Once a frame, in `core.prepare` after the views are written: uploads, compute. */
+  prepare?(encoder: GPUCommandEncoder, core: RenderCore): void;
+  /** Record its draws (pipeline, bind groups, draws); returns the GPU calls it made. */
+  record(enc: CoreDrawableEncoder, ctx: CoreDrawContext): number;
+}
+
+/**
+ * The WGSL prelude a drawable's shader starts with: `CoreView` bound at group 0 as `view`. With
+ * an origin grid, positions are relative to `view.origin.xyz`.
+ */
+export const CORE_DRAWABLE_WGSL = `${CORE_VIEW_WGSL}
+@group(0) @binding(0) var<uniform> view: CoreView;
+`;
+
+/** @internal What the core needs from a pass member (a draw set or a drawable). */
+export interface PassMember {
+  readonly count: number;
+  readonly depth: boolean;
+  readonly order: number;
+  readonly pass: CorePass;
+  readonly readsDepth?: boolean;
+  readonly readsColor?: boolean;
+  encoding(): string;
+  inView?(group: number): boolean;
+  bundle(
+    group: number,
+    color: GPUTextureFormat,
+    depth: GPUTextureFormat | undefined,
+    readOnly: boolean,
+  ): GPURenderBundle;
+  encodeDirect(
+    pass: GPURenderPassEncoder,
+    group: number,
+    color: GPUTextureFormat,
+    depth: GPUTextureFormat | undefined,
+  ): void;
+}
+
+/** @internal The core side the entry reads. */
+export interface DrawableHost {
+  readonly device: GPUDevice;
+  readonly ctx: CoreDrawContext;
+  readonly stats: {
+    calls: number;
+    directDraws: number;
+    bundleBuilds: number;
+    bundleCalls: number;
+  };
+  readonly viewData: Float32Array;
+  drawGroup(group: number): GPUBindGroup;
+  groupPlanes(group: number): number;
+  /** Bumped when the core's depth or colour copy is re-created. */
+  readonly targetsVersion: number;
+}
+
+interface Recorded {
+  group: number;
+  bind: GPUBindGroup;
+  color: GPUTextureFormat;
+  depth: GPUTextureFormat | undefined;
+  readOnly: boolean;
+  version: number;
+  targets: number;
+  bundle: GPURenderBundle;
+}
+
+/** @internal A drawable as a pass member. */
+export class DrawableEntry implements PassMember {
+  readonly pass: CorePass;
+  readonly order: number;
+  readonly depth: boolean;
+  readonly readsDepth: boolean;
+  readonly readsColor: boolean;
+  private readonly bundles: Recorded[] = [];
+
+  constructor(
+    readonly drawable: CoreDrawable,
+    private readonly host: DrawableHost,
+    pass: CorePass,
+  ) {
+    this.pass = pass;
+    this.order = drawable.order ?? 0;
+    this.depth = drawable.depth ?? true;
+    this.readsDepth = !!drawable.readsDepth;
+    this.readsColor = !!drawable.readsColor;
+    if (this.readsDepth && pass.depth === 'write') {
+      throw new Error(
+        `${drawable.label ?? 'drawable'}: readsDepth needs a pass whose depth is 'read' or 'none' (${pass.id} writes)`,
+      );
+    }
+  }
+
+  get count(): number {
+    return this.drawable.active ? 1 : 0;
+  }
+
+  encoding(): string {
+    return this.drawable.encoding ?? 'bundle';
+  }
+
+  inView(group: number): boolean {
+    const b = this.drawable.bounds;
+    if (!b) return true;
+    return sphereInPlanes(
+      this.host.viewData,
+      this.host.groupPlanes(group),
+      b[0]!,
+      b[1]!,
+      b[2]!,
+      b[3]!,
+    );
+  }
+
+  bundle(
+    group: number,
+    color: GPUTextureFormat,
+    depth: GPUTextureFormat | undefined,
+    readOnly: boolean,
+  ): GPURenderBundle {
+    const host = this.host;
+    const bind = host.drawGroup(group);
+    const version = this.drawable.version;
+    const targets = host.targetsVersion;
+    let entry: Recorded | undefined;
+    for (let i = 0; i < this.bundles.length; i++) {
+      const b = this.bundles[i]!;
+      if (b.group === group && b.color === color && b.depth === depth && b.readOnly === readOnly) {
+        entry = b;
+        break;
+      }
+    }
+    if (entry && entry.version === version && entry.targets === targets && entry.bind === bind) {
+      return entry.bundle;
+    }
+    const enc = host.device.createRenderBundleEncoder({
+      label: `${this.drawable.label ?? 'drawable'} bundle`,
+      colorFormats: [color],
+      depthStencilFormat: depth,
+      depthReadOnly: readOnly,
+      stencilReadOnly: readOnly,
+    });
+    const n = this.drawable.record(enc, this.context(group, bind, color, depth, readOnly));
+    host.stats.bundleCalls += n;
+    host.stats.bundleBuilds++;
+    const bundle = enc.finish();
+    if (entry) {
+      entry.bind = bind;
+      entry.version = version;
+      entry.targets = targets;
+      entry.bundle = bundle;
+    } else {
+      this.bundles.push({
+        group,
+        bind,
+        color,
+        depth,
+        readOnly,
+        version,
+        targets,
+        bundle,
+      });
+    }
+    return bundle;
+  }
+
+  encodeDirect(
+    pass: GPURenderPassEncoder,
+    group: number,
+    color: GPUTextureFormat,
+    depth: GPUTextureFormat | undefined,
+  ): void {
+    const host = this.host;
+    const readOnly = depth !== undefined && this.pass.depth === 'read';
+    const n = this.drawable.record(
+      pass,
+      this.context(group, host.drawGroup(group), color, depth, readOnly),
+    );
+    host.stats.calls += n;
+    host.stats.directDraws++;
+  }
+
+  private context(
+    group: number,
+    bind: GPUBindGroup,
+    color: GPUTextureFormat,
+    depth: GPUTextureFormat | undefined,
+    readOnly: boolean,
+  ): CoreDrawContext {
+    const ctx = this.host.ctx;
+    ctx.group = group;
+    ctx.viewGroup = bind;
+    ctx.color = color;
+    ctx.depth = depth;
+    ctx.depthReadOnly = readOnly;
+    return ctx;
+  }
+}
+
+/**
+ * Render pipelines of one drawable by target: colour format × depth format × read-only, made
+ * on first use by `make` (pass `depthWrite` on to `GPUDepthStencilState.depthWriteEnabled`
+ * only when the pass is not read-only).
+ */
+export class DrawablePipelines {
+  private readonly list: {
+    color: GPUTextureFormat;
+    depth: GPUTextureFormat | undefined;
+    readOnly: boolean;
+    pipeline: GPURenderPipeline;
+  }[] = [];
+
+  constructor(
+    private readonly make: (
+      color: GPUTextureFormat,
+      depth: GPUTextureFormat | undefined,
+      readOnly: boolean,
+    ) => GPURenderPipeline,
+  ) {}
+
+  /** The pipeline for `ctx`'s target. */
+  get(ctx: CoreDrawContext): GPURenderPipeline {
+    const l = this.list;
+    for (let i = 0; i < l.length; i++) {
+      const e = l[i]!;
+      if (e.color === ctx.color && e.depth === ctx.depth && e.readOnly === ctx.depthReadOnly) {
+        return e.pipeline;
+      }
+    }
+    const pipeline = this.make(ctx.color, ctx.depth, ctx.depthReadOnly);
+    l.push({
+      color: ctx.color,
+      depth: ctx.depth,
+      readOnly: ctx.depthReadOnly,
+      pipeline,
+    });
+    return pipeline;
+  }
+}
+
+/** Floats per view in `CoreViewExtras`: inverse view-projection, right, up, forward, spare. */
+export const VIEW_EXTRA_FLOATS = 32;
+
+/**
+ * WGSL for `CoreViewExtras`: `struct CoreViewExtra` (`invViewProj`, `right`, `up`, `forward`
+ * (xyz; unit), padding). Bind the buffer as `var<storage, read> extras:
+ * array<CoreViewExtra>` and read `extras[view.index]`.
+ */
+export const CORE_VIEW_EXTRA_WGSL = /* wgsl */ `
+struct CoreViewExtra {
+  invViewProj: mat4x4f,
+  right: vec4f,
+  up: vec4f,
+  forward: vec4f,
+  _pad: vec4f,
+};
+`;
+
+const extrasByCore = new WeakMap<RenderCore, CoreViewExtras>();
+
+/**
+ * Per-view data `CoreView` has no room for, for effects that unproject depth or face the eye:
+ * one storage buffer of `MAX_VIEWS` × `VIEW_EXTRA_FLOATS` floats, written from the core's view
+ * slots (camera-relative when the core has an origin grid). Shared per core
+ * (`CoreViewExtras.of(core)`); `update()` from a drawable's `prepare` writes it once a frame.
+ */
+export class CoreViewExtras {
+  readonly buffer: GPUBuffer;
+  private readonly data = new Float32Array(MAX_VIEWS * VIEW_EXTRA_FLOATS);
+  private readonly inv = new Float32Array(16);
+  private frame = -1;
+
+  private constructor(private readonly core: RenderCore) {
+    this.buffer = core.device.createBuffer({
+      label: 'core view extras',
+      size: this.data.byteLength,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
+  }
+
+  /** The core's shared extras (made on first use). */
+  static of(core: RenderCore): CoreViewExtras {
+    let e = extrasByCore.get(core);
+    if (!e) {
+      e = new CoreViewExtras(core);
+      extrasByCore.set(core, e);
+    }
+    return e;
+  }
+
+  /** Write this frame's views (once a frame however many drawables call it). */
+  update(): void {
+    const core = this.core;
+    if (this.frame === core.frame) return;
+    this.frame = core.frame;
+    const n = core.viewCount;
+    const src = core.viewData;
+    const d = this.data;
+    const inv = this.inv;
+    for (let i = 0; i < n; i++) {
+      const at = i * VIEW_SLOT_FLOATS + VIEW_SLOT.viewProj;
+      if (!mat4.invert(inv, src.subarray(at, at + 16))) mat4.identity(inv);
+      const o = i * VIEW_EXTRA_FLOATS;
+      d.set(inv, o);
+      // The image plane's axes: the far-plane points left of / above the centre, minus it.
+      axis(inv, 1, 0, d, o + 16);
+      axis(inv, 0, 1, d, o + 20);
+      // Forward: from the near-plane centre to the mid-depth one (an infinite far has no far plane).
+      unproject(inv, 0, 0, 0, d, o + 24);
+      const nx = d[o + 24]!;
+      const ny = d[o + 25]!;
+      const nz = d[o + 26]!;
+      unproject(inv, 0, 0, 0.5, d, o + 24);
+      norm3(d, o + 24, d[o + 24]! - nx, d[o + 25]! - ny, d[o + 26]! - nz);
+    }
+    core.device.queue.writeBuffer(this.buffer, 0, d, 0, n * VIEW_EXTRA_FLOATS);
+  }
+
+  destroy(): void {
+    this.buffer.destroy();
+    extrasByCore.delete(this.core);
+  }
+}
+
+function unproject(
+  inv: Float32Array,
+  x: number,
+  y: number,
+  z: number,
+  out: Float32Array,
+  o: number,
+): void {
+  const w = inv[3]! * x + inv[7]! * y + inv[11]! * z + inv[15]!;
+  const s = Math.abs(w) < 1e-12 ? 1 : 1 / w;
+  out[o] = (inv[0]! * x + inv[4]! * y + inv[8]! * z + inv[12]!) * s;
+  out[o + 1] = (inv[1]! * x + inv[5]! * y + inv[9]! * z + inv[13]!) * s;
+  out[o + 2] = (inv[2]! * x + inv[6]! * y + inv[10]! * z + inv[14]!) * s;
+  out[o + 3] = 0;
+}
+
+function axis(inv: Float32Array, x: number, y: number, out: Float32Array, o: number): void {
+  // At mid depth (0.5) both ends lie on one plane parallel to the image plane.
+  unproject(inv, 0, 0, 0.5, out, o);
+  const cx = out[o]!;
+  const cy = out[o + 1]!;
+  const cz = out[o + 2]!;
+  unproject(inv, x, y, 0.5, out, o);
+  norm3(out, o, out[o]! - cx, out[o + 1]! - cy, out[o + 2]! - cz);
+}
+
+function norm3(out: Float32Array, o: number, x: number, y: number, z: number): void {
+  const l = Math.hypot(x, y, z) || 1;
+  out[o] = x / l;
+  out[o + 1] = y / l;
+  out[o + 2] = z / l;
+  out[o + 3] = 0;
+}

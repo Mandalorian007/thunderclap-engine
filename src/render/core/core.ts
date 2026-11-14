@@ -18,6 +18,13 @@
 import { Arena, type ArenaDesc } from './arena';
 import { CULL_WGSL } from './cull';
 import { type CoreStats, DrawSet, type DrawSetDesc, type DrawSetHost } from './draw-set';
+import {
+  type CoreDrawable,
+  type CoreDrawContext,
+  DrawableEntry,
+  type DrawableHost,
+  type PassMember,
+} from './drawable';
 import { type CorePass, type PassDesc, PassList } from './pass-list';
 import { QuadIndex } from './quad-index';
 import {
@@ -68,6 +75,12 @@ export interface CoreTarget {
    * the target's size and is cleared whole by the view's first depth pass.
    */
   viewport?: { x: number; y: number; width: number; height: number };
+  /**
+   * The texture `view` is of, for drawables that read colour (`CoreDrawable.readsColor`): before
+   * the first pass with one, the target (its viewport) is copied into `core.sceneColorView`.
+   * Needs `COPY_SRC` (a canvas configured with `usage: RENDER_ATTACHMENT | COPY_SRC`).
+   */
+  texture?: GPUTexture;
 }
 
 /** What the core's device offers it. */
@@ -126,8 +139,18 @@ export class RenderCore {
   private readonly quads: QuadIndex;
   private cullPipeline: GPUComputePipeline | null = null;
   private readonly sets: DrawSet[] = [];
-  /** Sets per pass, in pass order then set order (rebuilt when sets come or go). */
-  private readonly bySet: DrawSet[][] = [];
+  private readonly drawables: DrawableEntry[] = [];
+  /** Sets and drawables per pass, in pass order then order (rebuilt when members come or go). */
+  private readonly bySet: PassMember[][] = [];
+  private readonly drawCtx: CoreDrawContext;
+  private readonly drawableHost: DrawableHost;
+  /** Some drawable samples depth / colour (rebuilt with `bySet`). */
+  private wantsDepthBinding = false;
+  private wantsColor = false;
+  private depthUsage = 0;
+  private colorTexture: GPUTexture | null = null;
+  private colorView: GPUTextureView | null = null;
+  private targets = 0;
   private setsDirty = true;
   private viewsPrepared = 0;
   private depthTexture: GPUTexture | null = null;
@@ -138,7 +161,19 @@ export class RenderCore {
   private readonly depthAttachment: GPURenderPassDepthStencilAttachment;
   private readonly passDesc: GPURenderPassDescriptor;
   private readonly passDescDepth: GPURenderPassDescriptor;
-  private readonly computeDesc: GPUComputePassDescriptor = { label: 'core cull' };
+  private readonly computeDesc: GPUComputePassDescriptor = {
+    label: 'core cull',
+  };
+  private readonly copyOrigin = { x: 0, y: 0, z: 0 };
+  private readonly copySrc: GPUTexelCopyTextureInfo = {
+    texture: undefined as unknown as GPUTexture,
+    origin: this.copyOrigin,
+  };
+  private readonly copyDst: GPUTexelCopyTextureInfo = {
+    texture: undefined as unknown as GPUTexture,
+    origin: this.copyOrigin,
+  };
+  private readonly copySize = { width: 1, height: 1, depthOrArrayLayers: 1 };
 
   constructor(device: GPUDevice, opts: RenderCoreOptions = {}) {
     this.device = device;
@@ -169,7 +204,11 @@ export class RenderCore {
       entries: [
         { binding: 0, visibility: S.COMPUTE, buffer: { type: 'uniform' } },
         { binding: 1, visibility: S.COMPUTE, buffer: { type: 'uniform' } },
-        { binding: 2, visibility: S.COMPUTE, buffer: { type: 'read-only-storage' } },
+        {
+          binding: 2,
+          visibility: S.COMPUTE,
+          buffer: { type: 'read-only-storage' },
+        },
         { binding: 3, visibility: S.COMPUTE, buffer: { type: 'storage' } },
       ],
     });
@@ -222,7 +261,10 @@ export class RenderCore {
       depthStoreOp: 'store',
       depthClearValue: 1,
     };
-    this.passDesc = { label: 'core pass', colorAttachments: [this.colorAttachment] };
+    this.passDesc = {
+      label: 'core pass',
+      colorAttachments: [this.colorAttachment],
+    };
     this.passDescDepth = {
       label: 'core pass',
       colorAttachments: [this.colorAttachment],
@@ -258,6 +300,26 @@ export class RenderCore {
         return p;
       },
     };
+    this.drawCtx = {
+      core: this,
+      group: 0,
+      viewGroup: this.viewGroups[0]!,
+      viewLayout: this.viewLayout,
+      color: 'rgba8unorm',
+      depth: undefined,
+      depthReadOnly: false,
+    };
+    this.drawableHost = {
+      device,
+      ctx: this.drawCtx,
+      stats: this.stats,
+      viewData: this.viewData,
+      drawGroup: this.host.drawGroup,
+      groupPlanes: (g) => (MAX_VIEWS + g) * VIEW_SLOT_FLOATS + VIEW_SLOT.planes,
+      get targetsVersion() {
+        return core.targets;
+      },
+    };
   }
 
   /** A new arena on the core's device (D1 §3.1 `renderer.arena(kind)`). */
@@ -279,6 +341,59 @@ export class RenderCore {
     if (i >= 0) this.sets.splice(i, 1);
     set.destroy();
     this.setsDirty = true;
+  }
+
+  /**
+   * Add a drawable (B5): it joins `d.pass` (default `'transparent'`) with the draw sets, its
+   * `prepare` runs in every `prepare`, and it records into one bundle per cull group (or
+   * directly). Throws if the pass is unknown, or if it `readsDepth` in a depth-writing pass.
+   */
+  addDrawable(d: CoreDrawable): void {
+    for (let i = 0; i < this.drawables.length; i++) {
+      if (this.drawables[i]!.drawable === d) return;
+    }
+    this.drawables.push(
+      new DrawableEntry(d, this.drawableHost, this.host.pass(d.pass ?? 'transparent')),
+    );
+    this.setsDirty = true;
+  }
+
+  /** Take `d` out of its pass (its bundles are dropped; nothing of it is destroyed). */
+  removeDrawable(d: CoreDrawable): void {
+    for (let i = 0; i < this.drawables.length; i++) {
+      if (this.drawables[i]!.drawable !== d) continue;
+      this.drawables.splice(i, 1);
+      this.setsDirty = true;
+      return;
+    }
+  }
+
+  /** Drawables, in the order added. */
+  get coreDrawables(): readonly CoreDrawable[] {
+    return this.drawables.map((e) => e.drawable);
+  }
+
+  /** Views of the last `prepare` (their slots are `viewData`'s first `viewCount`). */
+  get viewCount(): number {
+    return this.viewsPrepared;
+  }
+
+  /**
+   * The depth attachment as a texture view, for drawables that `readsDepth` (null until a
+   * `draw` made it). Re-made when the target's size changes (`targetsVersion` bumps).
+   */
+  get sceneDepthView(): GPUTextureView | null {
+    return this.depthView;
+  }
+
+  /** The copy of the target's colour drawables that `readsColor` sample (null until made). */
+  get sceneColorView(): GPUTextureView | null {
+    return this.colorView;
+  }
+
+  /** Bumped when `sceneDepthView` or `sceneColorView` is re-made (bind groups go stale). */
+  get targetsVersion(): number {
+    return this.targets;
   }
 
   /** Declare a pass (D1 §3.4 `definePass`); sets join it by id. */
@@ -352,6 +467,8 @@ export class RenderCore {
       (MAX_VIEWS + groups) * VIEW_SLOT_FLOATS,
     );
     st.calls++;
+    const drawables = this.drawables;
+    for (let i = 0; i < drawables.length; i++) drawables[i]!.drawable.prepare?.(encoder, this);
     let gpu = false;
     const sets = this.sets;
     for (let i = 0; i < sets.length; i++) {
@@ -392,8 +509,12 @@ export class RenderCore {
       st.calls++;
     }
     const vp = target.viewport;
+    // Effects bind depth and colour by view: make them before any bundle is recorded.
+    if (this.wantsDepthBinding) this.depthFor(target.width, target.height);
+    if (this.wantsColor) this.colorFor(target);
     let first = true;
     let depthCleared = false;
+    let colorCopied = false;
     const list = this.passes.passes;
     for (let p = 0; p < list.length; p++) {
       const pass = list[p]!;
@@ -401,13 +522,19 @@ export class RenderCore {
       if (pass.when && !pass.when()) continue;
       let work = false;
       let wantsDepth = false;
+      let readsColor = false;
       for (let i = 0; i < sets.length; i++) {
         const s = sets[i]!;
-        if (s.count === 0) continue;
+        if (s.count === 0 || (s.inView && !s.inView(group))) continue;
         work = true;
         if (s.depth && pass.depth !== 'none') wantsDepth = true;
+        if (s.readsColor) readsColor = true;
       }
       if (!work) continue;
+      if (readsColor && !colorCopied && target.texture && this.colorTexture) {
+        this.copyColor(encoder, target);
+        colorCopied = true;
+      }
       const depthFormat = wantsDepth ? this.depthFormat : undefined;
       const readOnly = wantsDepth && pass.depth === 'read';
       const color = this.colorAttachment;
@@ -449,7 +576,7 @@ export class RenderCore {
       while (bundles.length > 0) bundles.pop();
       for (let i = 0; i < sets.length; i++) {
         const s = sets[i]!;
-        if (s.count === 0) continue;
+        if (s.count === 0 || (s.inView && !s.inView(group))) continue;
         if (s.encoding() === 'bundle') {
           bundles.push(s.bundle(group, target.format, depthFormat, readOnly));
           continue;
@@ -484,6 +611,10 @@ export class RenderCore {
     this.depthTexture?.destroy();
     this.depthTexture = null;
     this.depthView = null;
+    this.colorTexture?.destroy();
+    this.colorTexture = null;
+    this.colorView = null;
+    this.drawables.length = 0;
   }
 
   // ------------------------------------------------------------------ internals
@@ -542,10 +673,15 @@ export class RenderCore {
 
   private cullPipe(): GPUComputePipeline {
     if (this.cullPipeline) return this.cullPipeline;
-    const module = this.device.createShaderModule({ label: 'core cull', code: CULL_WGSL });
+    const module = this.device.createShaderModule({
+      label: 'core cull',
+      code: CULL_WGSL,
+    });
     this.cullPipeline = this.device.createComputePipeline({
       label: 'core cull',
-      layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.cullLayout] }),
+      layout: this.device.createPipelineLayout({
+        bindGroupLayouts: [this.cullLayout],
+      }),
       compute: { module, entryPoint: 'cs_cull' },
     });
     return this.cullPipeline;
@@ -556,25 +692,74 @@ export class RenderCore {
     this.bySet.length = 0;
     for (let p = 0; p < list.length; p++) {
       const id = list[p]!.id;
-      const sets = this.sets.filter((s) => s.pass.id === id);
-      // Stable: equal orders keep creation order.
-      sets.sort((a, b) => a.order - b.order);
-      this.bySet.push(sets);
+      const members: PassMember[] = this.sets.filter((s) => s.pass.id === id);
+      for (const d of this.drawables) if (d.pass.id === id) members.push(d);
+      // Stable: equal orders keep creation order, sets before drawables.
+      members.sort((a, b) => a.order - b.order);
+      this.bySet.push(members);
     }
+    this.wantsDepthBinding = this.drawables.some((d) => d.readsDepth);
+    this.wantsColor = this.drawables.some((d) => d.readsColor);
     this.setsDirty = false;
+  }
+
+  /** The colour copy `readsColor` drawables sample: the target's size and format. */
+  private colorFor(target: CoreTarget): void {
+    const t = this.colorTexture;
+    if (t && t.width === target.width && t.height === target.height && t.format === target.format) {
+      return;
+    }
+    t?.destroy();
+    this.colorTexture = this.device.createTexture({
+      label: 'core scene colour',
+      size: [target.width, target.height],
+      format: target.format,
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    });
+    this.colorView = this.colorTexture.createView();
+    this.targets++;
+  }
+
+  private copyColor(encoder: GPUCommandEncoder, target: CoreTarget): void {
+    const vp = target.viewport;
+    const x = vp ? vp.x : 0;
+    const y = vp ? vp.y : 0;
+    const origin = this.copyOrigin;
+    origin.x = x;
+    origin.y = y;
+    this.copySrc.texture = target.texture!;
+    this.copyDst.texture = this.colorTexture!;
+    const size = this.copySize;
+    size.width = vp ? vp.width : target.width;
+    size.height = vp ? vp.height : target.height;
+    encoder.copyTextureToTexture(this.copySrc, this.copyDst, size);
+    this.stats.calls++;
   }
 
   private depthFor(width: number, height: number): GPUTextureView {
     const t = this.depthTexture;
-    if (t && t.width === width && t.height === height && this.depthView) return this.depthView;
+    const usage =
+      GPUTextureUsage.RENDER_ATTACHMENT |
+      (this.wantsDepthBinding ? GPUTextureUsage.TEXTURE_BINDING : 0);
+    if (
+      t &&
+      t.width === width &&
+      t.height === height &&
+      this.depthView &&
+      (this.depthUsage & usage) === usage
+    ) {
+      return this.depthView;
+    }
     t?.destroy();
+    this.depthUsage = usage;
     this.depthTexture = this.device.createTexture({
       label: 'core depth',
       size: [width, height],
       format: this.depthFormat,
-      usage: GPUTextureUsage.RENDER_ATTACHMENT,
+      usage,
     });
     this.depthView = this.depthTexture.createView();
+    this.targets++;
     return this.depthView;
   }
 }
