@@ -2,7 +2,7 @@
 //! the flush that sends what changed, what left and what is missing. See
 //! the [crate docs](crate).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::time::{Duration, Instant};
 
@@ -11,13 +11,13 @@ use tc_wire::{Bytes, Wire};
 
 use crate::area::{Bounds, MIN_BOXED, Offsets};
 use crate::cache::{Built, Cache};
-use crate::hash::PosMap;
+use crate::hash::{PosMap, PosSet};
 use crate::lanes::Lanes;
 use crate::msg::{Area, Claim, GroupClaim, SectionPos, Stamp, StreamInterest, StreamMsg};
 
 mod layers;
 
-use layers::{LayerHeld, Layers};
+use layers::{LayerHeld, Layers, Pick};
 
 /// The most positions one `Unload` carries.
 pub const MAX_UNLOAD_BATCH: usize = 512;
@@ -33,6 +33,101 @@ pub struct Loading {
     pub sides: u64,
     /// The longest side of any of them.
     pub widest: u32,
+    /// Of `views`, the different areas (connections sharing one view, as
+    /// players standing together do, count once).
+    pub areas: usize,
+    /// The sum of those different areas' longest sides: what a cache of
+    /// the land being loaded is sized by.
+    pub area_sides: u64,
+}
+
+/// What a client holds of a layer's state, for
+/// [`SectionSource::layer_frame`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayerFrom<'a> {
+    /// Nothing: the frame is the whole state. Never asked with an empty
+    /// state (nothing to nothing needs no frame).
+    Nothing,
+    /// Some state not known here (one it claimed that didn't match, or
+    /// kept from an earlier copy of its section): the frame is the whole
+    /// state and must replace (or, for an empty one, clear) what it holds.
+    Unknown,
+    /// This earlier state: the frame may be a change from it.
+    State(&'a [u8]),
+}
+
+/// Where a layer's whole frame goes in the bulk lane, next to the section
+/// that brings its key ([`SectionSource::layer_order`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LayerOrder {
+    /// Behind the section (the default): data on the section, that the
+    /// client puts on what it holds.
+    #[default]
+    After,
+    /// Before it: data the section's render depends on (a column's
+    /// climate tinting its grass), so it never draws without it. Its
+    /// changes go before a flush's section changes too.
+    Before,
+}
+
+/// When a section's change goes as an `Edit` rather than whole
+/// ([`StreamConfig::edit_rule`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EditRule {
+    /// While its changed cells, at 4 bytes each, are fewer than the
+    /// section's encoded bytes (the default): cheap, decided as the cells
+    /// are compared.
+    #[default]
+    Cells,
+    /// While the encoded `Edit` frame is shorter than the encoded whole
+    /// `Section` frame: exact, at the cost of encoding both.
+    Frame,
+}
+
+/// What a build found changed besides its own section: neighbours whose
+/// encoding depends on it, layer states it worked out
+/// ([`SectionSource::take_marks`]). Each is told the stream as the method
+/// of the same name on [`SectionStream`] would.
+#[derive(Clone, Debug, Default)]
+pub struct Marks {
+    sections: Vec<(SectionPos, Mark)>,
+    layers: Vec<(usize, SectionPos)>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mark {
+    Changed,
+    Bulk,
+    Derived,
+}
+
+impl Marks {
+    /// See [`SectionStream::changed`].
+    pub fn changed(&mut self, pos: SectionPos) {
+        self.sections.push((pos, Mark::Changed));
+    }
+
+    /// See [`SectionStream::changed_bulk`].
+    pub fn changed_bulk(&mut self, pos: SectionPos) {
+        self.sections.push((pos, Mark::Bulk));
+    }
+
+    /// See [`SectionStream::changed_derived`].
+    pub fn changed_derived(&mut self, pos: SectionPos) {
+        self.sections.push((pos, Mark::Derived));
+    }
+
+    /// See [`SectionStream::layer_changed`].
+    pub fn layer_changed(&mut self, layer: usize, key: SectionPos) {
+        self.layers.push((layer, key));
+    }
+
+    /// True if nothing is marked.
+    pub fn is_empty(&self) -> bool {
+        self.sections.is_empty() && self.layers.is_empty()
+    }
 }
 
 /// The game's world, as sections. Called from the stream's thread only.
@@ -46,6 +141,16 @@ pub trait SectionSource {
     /// the client's codec decodes. The same content must encode to the
     /// same bytes (stamps are of the bytes).
     fn build(&mut self, pos: SectionPos, out: &mut Vec<u8>);
+
+    /// Called right after each [`build`](Self::build): adds to `marks`
+    /// what that build found changed besides its section (a neighbour's
+    /// faces, a layer state worked out with it). A section marked while
+    /// changed sections are rebuilt (a flush, a
+    /// [`flush_conn`](SectionStream::flush_conn)) is rebuilt in the same
+    /// pass, within its budget (never twice a pass); one marked by a load
+    /// waits for the next flush. A layer marked is read again at once.
+    /// Nothing by default.
+    fn take_marks(&mut self, _marks: &mut Marks) {}
 
     /// Called before a flush, a load or a claims check builds anything,
     /// with the views loading. Nothing by default.
@@ -102,19 +207,25 @@ pub trait SectionSource {
     }
 
     /// The game's frame taking a client of layer `layer` at `key` from
-    /// `from` (an earlier state it holds; `None`: nothing, or a state no
-    /// longer known, so the frame is the whole of `to` and replaces what
-    /// it holds) to `to`, into `out` (cleared first). Left empty, nothing
-    /// is sent. The frame is the game's own message, encoded.
+    /// what it holds ([`LayerFrom`]) to `to`, into `out` (cleared first).
+    /// Left empty, nothing is sent. The frame is the game's own message,
+    /// encoded. Asked once a pass for each change, whatever the holders.
     fn layer_frame(
         &self,
         _layer: usize,
         _key: SectionPos,
-        _from: Option<&[u8]>,
+        _from: LayerFrom<'_>,
         _to: &[u8],
         out: &mut Vec<u8>,
     ) {
         out.clear();
+    }
+
+    /// Where layer `layer`'s whole frame goes next to the section that
+    /// brings its key: [`LayerOrder::After`] by default. Read at each pass;
+    /// keep it fixed.
+    fn layer_order(&self, _layer: usize) -> LayerOrder {
+        LayerOrder::After
     }
 }
 
@@ -134,10 +245,11 @@ pub struct StreamConfig {
     pub cache_bytes: usize,
     /// Earlier encodings kept a section, to send an `Edit` from.
     pub history: usize,
-    /// Time a flush spends building sections for loads, besides
-    /// `build_budget` (whichever runs out first; at least one is built).
-    /// `None` (the default): counted only.
-    pub build_time: Option<Duration>,
+    /// Time a flush's load spends, besides `build_budget` (whichever runs
+    /// out first): sections built and sections sent from the cache alike.
+    /// At least one section is sent (or kept). `None` (the default):
+    /// counted only.
+    pub load_time: Option<Duration>,
     /// Time a flush spends rebuilding changed sections, besides
     /// `rebuild_budget`. `None` (the default): counted only.
     pub rebuild_time: Option<Duration>,
@@ -148,6 +260,8 @@ pub struct StreamConfig {
     pub unload_boxes: bool,
     /// Time [`SectionStream::idle`] builds in between flushes.
     pub idle: IdleBudget,
+    /// When a change goes as an `Edit` rather than whole.
+    pub edit_rule: EditRule,
 }
 
 /// Time spent building new sections between flushes
@@ -186,10 +300,11 @@ impl Default for StreamConfig {
             rebuild_budget: 64,
             cache_bytes: 64 << 20,
             history: 3,
-            build_time: None,
+            load_time: None,
             rebuild_time: None,
             unload_boxes: false,
             idle: IdleBudget::default(),
+            edit_rule: EditRule::Cells,
         }
     }
 }
@@ -255,8 +370,9 @@ pub struct StreamStats {
     pub groups_held: u64,
     /// Groups that didn't: every section sent again.
     pub groups_different: u64,
-    /// Claims never looked at (past the area's size, overlapping, or left
-    /// when a load finished), sections and layers.
+    /// Claims never looked at (past the area's size, overlapping, outside
+    /// the area, or left when a load finished), sections (each of a group)
+    /// and layers.
     pub claims_dropped: u64,
     /// Layer states a client claimed and kept, not sent again.
     pub layer_resumed: u64,
@@ -272,6 +388,11 @@ pub struct StreamStats {
     pub idle_nanos: u64,
     /// Calls to [`SectionStream::hold_idle`].
     pub idle_holds: u64,
+    /// Queued frames withdrawn before they were written (a section that
+    /// left, a change folded in, a connection closed), sections and layers.
+    pub withdrawn: u64,
+    /// Their bytes.
+    pub withdrawn_bytes: u64,
     /// Sections in the cache now.
     pub cached: usize,
     /// Bytes the cache counts now.
@@ -306,6 +427,7 @@ pub enum FrameKind {
 #[non_exhaustive]
 pub enum StreamEvent {
     /// A frame was queued for `conn`, `bytes` long.
+    #[non_exhaustive]
     Queued {
         /// The connection.
         conn: ConnId,
@@ -313,8 +435,25 @@ pub enum StreamEvent {
         kind: FrameKind,
         /// Its length.
         bytes: usize,
+        /// The section it carries, or the layer key (`None` for unloads).
+        pos: Option<SectionPos>,
+        /// The layer, for a layer frame.
+        layer: Option<usize>,
+    },
+    /// A frame queued for `conn` was withdrawn before it was written.
+    #[non_exhaustive]
+    Withdrawn {
+        /// The connection.
+        conn: ConnId,
+        /// The section it carried, or the layer key.
+        pos: SectionPos,
+        /// The layer, for a layer frame.
+        layer: Option<usize>,
+        /// Its length.
+        bytes: usize,
     },
     /// A section was built, taking `nanos`.
+    #[non_exhaustive]
     Built {
         /// The section.
         pos: SectionPos,
@@ -322,6 +461,7 @@ pub enum StreamEvent {
         nanos: u64,
     },
     /// A claim was checked: `kept` if it matched.
+    #[non_exhaustive]
     Claimed {
         /// The connection.
         conn: ConnId,
@@ -331,12 +471,26 @@ pub enum StreamEvent {
         kept: bool,
     },
     /// A group claim was checked: `kept` if it matched.
+    #[non_exhaustive]
     Group {
         /// The connection.
         conn: ConnId,
         /// Its first section.
         start: SectionPos,
         /// It matched: none of its sections sent again.
+        kept: bool,
+    },
+    /// A group claim's digest of layer `layer` was checked: `kept` if it
+    /// matched (its states are claimed, kept as their sections are held).
+    #[non_exhaustive]
+    LayerGroup {
+        /// The connection.
+        conn: ConnId,
+        /// The group's first section.
+        start: SectionPos,
+        /// The layer.
+        layer: usize,
+        /// It matched.
         kept: bool,
     },
 }
@@ -369,18 +523,34 @@ type Encode = Box<dyn Fn(&StreamMsg) -> Vec<u8> + Send>;
 /// A section a connection holds, or will once its queued frame is
 /// written.
 struct Held {
-    /// The stamp of the encoding it holds (or will).
+    /// The stamp of the encoding it holds (or will; 0: an earlier copy,
+    /// unknown).
     stamp: u64,
     /// The bulk frame that sends it, until written.
     ticket: Option<BulkTicket>,
+    /// The length of `ticket`'s frame.
+    bytes: u32,
     /// The client held an earlier copy when that frame was queued.
     replaces: bool,
 }
 
 impl Held {
-    /// Withdraws its queued frame: true if the client then holds nothing.
-    fn withdraw(&self) -> bool {
-        self.ticket.as_ref().is_some_and(BulkTicket::withdraw) && !self.replaces
+    /// Held with nothing queued.
+    fn kept(stamp: u64) -> Held {
+        Held {
+            stamp,
+            ticket: None,
+            bytes: 0,
+            replaces: false,
+        }
+    }
+
+    /// Withdraws its queued frame: its length, if it was withdrawn.
+    fn take_back(&self) -> Option<u32> {
+        self.ticket
+            .as_ref()
+            .is_some_and(BulkTicket::withdraw)
+            .then_some(self.bytes)
     }
 }
 
@@ -391,7 +561,13 @@ struct Viewer {
     /// The next offset to look at, and where the area's offsets end.
     cursor: usize,
     end: usize,
-    unloads: BTreeSet<SectionPos>,
+    /// Positions to unload, with the stamp the client holds there (0:
+    /// unknown): one back in the area before its unload is sent is
+    /// claimed again instead.
+    unloads: BTreeMap<SectionPos, u64>,
+    /// Claims put back from `unloads`: the client may hold their layer
+    /// states, unknown, if it keeps them.
+    restored: PosSet<SectionPos>,
     /// Held sections whose content changed since they were sent.
     stale: BTreeSet<SectionPos>,
     /// Held sections a background change ([`SectionStream::changed_bulk`])
@@ -414,10 +590,12 @@ struct Viewer {
 impl Viewer {
     /// Takes group `i` apart: each section of it not held is claimed with
     /// an unknown stamp (sent again whole) if in `area`, else unloaded.
-    fn split_group(&mut self, i: usize, area: &Area) {
+    /// Returns the sections unloaded (claims dropped).
+    fn split_group(&mut self, i: usize, area: &Area) -> u64 {
         let Some(g) = self.groups.get_mut(i).and_then(Option::take) else {
-            return;
+            return 0;
         };
+        let mut dropped = 0;
         for (p, _) in g.members() {
             if self.grouped.get(&p) != Some(&i) {
                 continue;
@@ -430,28 +608,31 @@ impl Viewer {
                 self.unloads.remove(&p);
                 self.claims.entry(p).or_insert(0);
             } else {
-                self.unloads.insert(p);
+                self.unloads.insert(p, 0);
+                dropped += 1;
             }
         }
+        dropped
     }
 
     /// The load reached its end: whatever is still claimed was never
     /// looked at, so is unloaded. Returns the claims dropped.
     fn finish_claims(&mut self) -> u64 {
         let mut dropped = 0;
-        for p in self.claims.drain().map(|(p, _)| p) {
+        for (p, stamp) in self.claims.drain() {
             dropped += 1;
             if !self.held.contains_key(&p) {
-                self.unloads.insert(p);
+                self.unloads.insert(p, stamp);
             }
         }
         for (p, _) in self.grouped.drain() {
             dropped += 1;
             if !self.held.contains_key(&p) {
-                self.unloads.insert(p);
+                self.unloads.insert(p, 0);
             }
         }
         self.groups.clear();
+        self.restored.clear();
         dropped + self.layers.drop_claims() as u64
     }
 
@@ -463,33 +644,65 @@ impl Viewer {
             || self.layers.busy()
             || self.cursor < self.end
     }
+
+    /// Bytes its tables take, roughly (by capacity).
+    fn bytes(&self) -> usize {
+        let pos = size_of::<SectionPos>();
+        // A B-tree entry, with its share of the node.
+        let tree = |n: usize, entry: usize| n * (entry + entry / 2 + 8);
+        self.held.capacity() * (size_of::<(SectionPos, Held)>() + 1)
+            + self.claims.capacity() * (size_of::<(SectionPos, u64)>() + 1)
+            + self.grouped.capacity() * (size_of::<(SectionPos, usize)>() + 1)
+            + self.restored.capacity() * (pos + 1)
+            + self.groups.capacity() * size_of::<Option<GroupClaim>>()
+            + self
+                .groups
+                .iter()
+                .flatten()
+                .map(|g| g.layers.capacity() * size_of::<Option<Stamp>>())
+                .sum::<usize>()
+            + tree(self.unloads.len(), pos + 8)
+            + tree(
+                self.stale.len() + self.resend.len() + self.released.len(),
+                pos,
+            )
+            + self.layers.bytes()
+    }
 }
 
 /// Where a load stops: a count of builds, a time, or the caller.
 struct Budget<'a> {
+    /// Builds left.
     left: usize,
     until: Option<Instant>,
     interrupted: &'a mut dyn FnMut() -> bool,
-    /// Build one whatever the time (a flush always makes progress).
+    /// Send one section whatever the time and the caller (a flush, or an
+    /// idle call, always makes progress).
     one: bool,
     built: usize,
+    /// Sections sent or kept, built or from the cache.
+    placed: usize,
 }
 
 impl Budget<'_> {
-    /// True if no more may be built.
-    fn out(&mut self) -> bool {
-        if self.left == 0 {
+    /// True if no more may be sent (`build`: built first).
+    fn out(&mut self, build: bool) -> bool {
+        if build && self.left == 0 {
             return true;
         }
-        if self.one && self.built == 0 {
+        if self.one && self.placed == 0 {
             return false;
         }
         self.until.is_some_and(|u| Instant::now() >= u) || (self.interrupted)()
     }
 
-    fn spend(&mut self) {
-        self.left = self.left.saturating_sub(1);
-        self.built += 1;
+    /// One section sent (or kept); `build`: built for it.
+    fn spend(&mut self, build: bool) {
+        self.placed += 1;
+        if build {
+            self.left = self.left.saturating_sub(1);
+            self.built += 1;
+        }
     }
 }
 
@@ -512,6 +725,10 @@ pub struct SectionStream {
     /// diff is worked out once (`None`: the whole section is smaller).
     edits: PosMap<(SectionPos, u64, u64), Option<Vec<u8>>>,
     layers: Layers,
+    /// What builds marked ([`SectionSource::take_marks`]), and the
+    /// sections they marked changed this pass, for a rebuild to take.
+    marks: Marks,
+    marked: Vec<SectionPos>,
     observer: Option<Box<dyn StreamObserver>>,
     /// Of this flush interval's [`IdleBudget`]: spread and extra time
     /// spent.
@@ -556,6 +773,8 @@ impl SectionStream {
             cells: (Vec::new(), Vec::new()),
             edits: PosMap::default(),
             layers: Layers::default(),
+            marks: Marks::default(),
+            marked: Vec::new(),
             observer: None,
             spread_spent: Duration::ZERO,
             extra_spent: Duration::ZERO,
@@ -576,16 +795,23 @@ impl SectionStream {
     /// A connection closed: forgets it.
     pub fn disconnect(&mut self, conn: ConnId) {
         if let Some(mut v) = self.viewers.remove(&conn) {
-            for h in v.held.values() {
-                h.withdraw();
+            for (p, h) in &v.held {
+                if let Some(b) = h.take_back() {
+                    withdrew(&mut self.stats, &mut self.observer, conn, *p, None, b);
+                }
             }
             self.layers.drop_viewer(&mut v.layers);
+            self.layer_withdrawals(conn);
         }
     }
 
     /// Sets a connection's area, with what it holds when it resumes.
     /// Sections it holds that are now past the area (with hysteresis) are
-    /// unloaded; claims outside the area are unloaded too, never checked.
+    /// unloaded; claims outside the area are unloaded too, never checked
+    /// (counted in [`StreamStats::claims_dropped`]). A section back in the
+    /// area before its unload was sent is claimed again with what the
+    /// client holds there, so it is kept if unchanged. The unloads go at
+    /// the next flush, or at once with [`send_unloads`](Self::send_unloads).
     /// [`set_stream_interest`](Self::set_stream_interest) with no groups or
     /// layers.
     pub fn set_interest(
@@ -663,19 +889,40 @@ impl SectionStream {
             v.resend.remove(&p);
             if let Some(held) = v.held.remove(&p) {
                 v.released.insert(p);
-                if !held.withdraw() {
-                    v.unloads.insert(p);
+                match held.take_back() {
+                    // Never written: it holds what it held before, if any.
+                    Some(b) => {
+                        withdrew(&mut self.stats, &mut self.observer, conn, p, None, b);
+                        if held.replaces {
+                            v.unloads.insert(p, 0);
+                        }
+                    }
+                    None => {
+                        v.unloads.insert(p, held.stamp);
+                    }
                 }
             }
         }
         let stats = &mut self.stats;
+        // Unloads not yet sent of sections back in the area: claimed again.
+        let back: Vec<(SectionPos, u64)> = v
+            .unloads
+            .iter()
+            .filter(|(p, _)| area.contains(**p, 0))
+            .map(|(p, s)| (*p, *s))
+            .collect();
+        for (p, stamp) in back {
+            v.unloads.remove(&p);
+            v.claims.insert(p, stamp);
+            v.restored.insert(p);
+        }
         // Groups still waiting with a section now outside are taken apart.
         for i in 0..v.groups.len() {
             if v.groups[i]
                 .as_ref()
                 .is_some_and(|g| g.members().any(|(p, _)| !area.contains(p, 0)))
             {
-                v.split_group(i, &area);
+                stats.claims_dropped += v.split_group(i, &area);
             }
         }
         let mut room = end.saturating_sub(v.claims.len() + v.grouped.len());
@@ -693,7 +940,8 @@ impl SectionStream {
                     room -= 1;
                 }
             } else {
-                v.unloads.insert(c.pos);
+                v.unloads.insert(c.pos, c.stamp.get());
+                stats.claims_dropped += 1;
             }
         }
         for g in groups {
@@ -719,7 +967,7 @@ impl SectionStream {
                 v.grouped.entry(*p).or_insert(i);
             }
             if !whole {
-                v.split_group(i, &area);
+                stats.claims_dropped += v.split_group(i, &area);
                 v.groups.pop();
             } else {
                 for p in &members {
@@ -727,10 +975,12 @@ impl SectionStream {
                 }
             }
         }
-        v.claims.retain(|p, _| {
+        v.claims.retain(|p, stamp| {
             let keep = area.contains(*p, 0);
             if !keep {
-                v.unloads.insert(*p);
+                v.unloads.insert(*p, *stamp);
+                v.restored.remove(p);
+                stats.claims_dropped += 1;
             }
             keep
         });
@@ -777,7 +1027,7 @@ impl SectionStream {
         if groups.is_empty() && claims.is_empty() {
             return;
         }
-        self.begin(src);
+        self.start_pass(src);
         self.settle_layers(src);
         for i in groups {
             claims.extend(self.resolve_group(conn, i, src));
@@ -795,7 +1045,8 @@ impl SectionStream {
                 continue;
             }
             if !src.exists(pos) {
-                v.unloads.insert(pos);
+                v.unloads.insert(pos, claim);
+                v.restored.remove(&pos);
                 continue;
             }
             let built = self.current(src, pos);
@@ -820,6 +1071,45 @@ impl SectionStream {
         self.viewers.get(&conn).map_or(0, |v| v.held.len())
     }
 
+    /// Connections holding the section at `pos` (or that will once their
+    /// queued frames are written): 0 if no one would see a change to it.
+    pub fn holders(&self, pos: SectionPos) -> usize {
+        self.viewers
+            .values()
+            .filter(|v| v.held.contains_key(&pos))
+            .count()
+    }
+
+    /// Sections marked changed and not yet rebuilt.
+    pub fn changes_pending(&self) -> usize {
+        self.changed.len()
+    }
+
+    /// True if a connection still wants sections it doesn't hold.
+    pub fn loading_for(&self, conn: ConnId) -> bool {
+        self.viewers.get(&conn).is_some_and(|v| v.cursor < v.end)
+    }
+
+    /// Positions a connection has to unload, not yet sent.
+    pub fn unloads_pending(&self, conn: ConnId) -> usize {
+        self.viewers.get(&conn).map_or(0, |v| v.unloads.len())
+    }
+
+    /// The bytes the stream keeps for a connection (what it holds, claims,
+    /// changes and unloads waiting, its layer keys), roughly: its tables by
+    /// capacity. The section cache ([`StreamStats::cache_bytes`]) and the
+    /// layer states ([`layer_bytes`](Self::layer_bytes)) are shared, not
+    /// counted.
+    pub fn held_bytes(&self, conn: ConnId) -> usize {
+        self.viewers.get(&conn).map_or(0, Viewer::bytes)
+    }
+
+    /// The bytes of the layer states held, shared by every connection,
+    /// roughly.
+    pub fn layer_bytes(&self) -> usize {
+        self.layers.bytes()
+    }
+
     /// The section at `pos` changed: holders get the change on a later
     /// flush (an `Edit` or the whole section, on the priority lane), and
     /// its cached encoding is rebuilt.
@@ -839,6 +1129,15 @@ impl SectionStream {
         }
     }
 
+    /// The section at `pos` changed as a consequence of another change (a
+    /// neighbour's edit changed its faces): as [`changed`](Self::changed),
+    /// but joining a change already marked rather than overriding it, so
+    /// a section marked [`changed_bulk`](Self::changed_bulk) stays in the
+    /// bulk lane.
+    pub fn changed_derived(&mut self, pos: SectionPos) {
+        self.changed.insert(pos);
+    }
+
     /// Layer `layer`'s state at `key` (see [`SectionSource::layer_key`])
     /// may have changed: a later flush reads it again and sends its
     /// holders the change on the priority lane (or folds it into a whole
@@ -855,10 +1154,11 @@ impl SectionStream {
         self.cache.clear();
         self.changed.clear();
         self.bulk.clear();
-        for v in self.viewers.values_mut() {
+        for (&conn, v) in &mut self.viewers {
             self.layers.forget_viewer(&mut v.layers);
             for (p, h) in v.held.drain() {
-                let stamp = if h.ticket.as_ref().is_some_and(BulkTicket::withdraw) {
+                let stamp = if let Some(b) = h.take_back() {
+                    withdrew(&mut self.stats, &mut self.observer, conn, p, None, b);
                     if !h.replaces {
                         continue;
                     }
@@ -867,6 +1167,16 @@ impl SectionStream {
                     h.stamp
                 };
                 v.claims.insert(p, stamp);
+            }
+            for (layer, key, b) in self.layers.withdrawn.drain(..) {
+                withdrew(
+                    &mut self.stats,
+                    &mut self.observer,
+                    conn,
+                    key,
+                    Some(layer),
+                    b,
+                );
             }
             v.released.clear();
             v.stale.clear();
@@ -902,14 +1212,15 @@ impl SectionStream {
     /// Sends what changed, what left and what is missing (see the [crate
     /// docs](crate)). Call it once a tick, after the tick's changes.
     pub fn flush<S: SectionSource + ?Sized>(&mut self, src: &mut S, lanes: &mut impl Lanes) {
-        self.begin(src);
-        self.edits.clear();
-        self.settle_layers(src);
+        self.start_pass(src);
         self.rebuild_changed(src);
+        // After the rebuilds: the layers they marked go with them.
+        self.settle_layers(src);
         let conns: Vec<ConnId> = self.viewers.keys().copied().collect();
         for &conn in &conns {
+            self.send_layers(conn, src, lanes, Pick::Before);
             self.send_stale(conn, src, lanes);
-            self.send_layers(conn, src, lanes);
+            self.send_layers(conn, src, lanes, Pick::All);
             self.send_unloads(conn, lanes);
         }
         lanes.edits_queued();
@@ -919,10 +1230,11 @@ impl SectionStream {
         let start = Instant::now();
         let mut budget = Budget {
             left: self.config.build_budget.max(1),
-            until: self.config.build_time.map(|t| start + t),
+            until: self.config.load_time.map(|t| start + t),
             interrupted: &mut never,
             one: true,
             built: 0,
+            placed: 0,
         };
         self.load(&conns, src, lanes, &mut budget);
         if budget.built > 0 {
@@ -932,19 +1244,47 @@ impl SectionStream {
         src.end();
     }
 
-    /// Calls the source's [`begin`](SectionSource::begin) with the views
-    /// loading.
-    fn begin<S: SectionSource + ?Sized>(&self, src: &mut S) {
+    /// Starts a pass: calls the source's [`begin`](SectionSource::begin)
+    /// with the views loading, and lets go of the layer keys of sections
+    /// no longer held.
+    fn start_pass<S: SectionSource + ?Sized>(&mut self, src: &mut S) {
         let mut loading = Loading::default();
+        let mut areas = Vec::new();
         for v in self.viewers.values() {
             if let Some(a) = v.area.filter(|_| v.cursor < v.end) {
                 let side = 2 * u32::from(a.rx.max(a.ry).max(a.rz)) + 1;
                 loading.views += 1;
                 loading.sides += u64::from(side);
                 loading.widest = loading.widest.max(side);
+                areas.push((a.center, [a.rx, a.ry, a.rz], side));
             }
         }
+        areas.sort_unstable();
+        areas.dedup();
+        loading.areas = areas.len();
+        loading.area_sides = areas.iter().map(|a| u64::from(a.2)).sum();
         src.begin(&loading);
+        self.edits.clear();
+        self.marked.clear();
+        self.layers.resize(&*src);
+        self.layers.new_pass();
+        for (&conn, v) in &mut self.viewers {
+            for p in std::mem::take(&mut v.released) {
+                if !v.held.contains_key(&p) {
+                    self.layers.release(&mut v.layers, &*src, p);
+                }
+            }
+            for (layer, key, b) in self.layers.withdrawn.drain(..) {
+                withdrew(
+                    &mut self.stats,
+                    &mut self.observer,
+                    conn,
+                    key,
+                    Some(layer),
+                    b,
+                );
+            }
+        }
     }
 
     /// True if [`idle`](Self::idle) has anything to do: time left in this
@@ -983,9 +1323,10 @@ impl SectionStream {
     /// Builds and queues new sections as a flush's load does in time the
     /// caller's loop would otherwise wait (a tc-sim `Host::idle`): until
     /// `until`, until `interrupted` says something else is waiting
-    /// (checked before the first build and after each), or until this
-    /// flush interval's [`IdleBudget`] is spent (spread time first, then
-    /// extra unless [held](Self::hold_idle); counted from the last flush).
+    /// (checked after each section), or until this flush interval's
+    /// [`IdleBudget`] is spent (spread time first, then extra unless
+    /// [held](Self::hold_idle); counted from the last flush). With any time
+    /// left at all, at least one section is sent, however long it takes.
     /// Changes and unloads wait for the next flush. Returns the time it
     /// took.
     pub fn idle<S: SectionSource + ?Sized>(
@@ -997,10 +1338,10 @@ impl SectionStream {
     ) -> Duration {
         let start = Instant::now();
         let left = self.idle_budget_left(start);
-        if left.is_zero() || start >= until || !self.loading() || interrupted() {
+        if left.is_zero() || start >= until || !self.loading() {
             return Duration::ZERO;
         }
-        let built = self.load_until(src, lanes, until.min(start + left), interrupted);
+        let built = self.load_for(src, lanes, until.min(start + left), &mut interrupted, true);
         let spent = start.elapsed();
         // Spread time first: the extra is what a short machine gives up.
         let spread = spent.min(self.config.idle.spread.saturating_sub(self.spread_spent));
@@ -1024,20 +1365,30 @@ impl SectionStream {
         let Some(v) = self.viewers.get(&conn) else {
             return;
         };
-        let mine: Vec<SectionPos> = self
+        let mut work: VecDeque<SectionPos> = self
             .changed
             .iter()
             .filter(|p| v.held.contains_key(p))
             .copied()
             .collect();
-        self.begin(src);
-        self.edits.clear();
-        self.settle_layers(src);
-        for pos in mine {
+        self.start_pass(src);
+        // What it holds of what its builds mark is rebuilt too (once each).
+        let mut done = PosSet::default();
+        while let Some(pos) = work.pop_front() {
+            let held = self
+                .viewers
+                .get(&conn)
+                .is_some_and(|v| v.held.contains_key(&pos));
+            if !held || !self.changed.contains(&pos) || !done.insert(pos) {
+                continue;
+            }
             self.build(src, pos);
+            work.extend(self.marked.drain(..));
         }
+        self.settle_layers(src);
+        self.send_layers(conn, src, lanes, Pick::Before);
         self.send_stale(conn, src, lanes);
-        self.send_layers(conn, src, lanes);
+        self.send_layers(conn, src, lanes, Pick::All);
         src.end();
     }
 
@@ -1045,8 +1396,9 @@ impl SectionStream {
     /// from where the last one stopped, nearest first, within each bulk
     /// lane's high water) in time the caller's thread would otherwise wait:
     /// until `until`, or until `interrupted` says something else is
-    /// waiting (checked before the first build and after each). Changes
-    /// and unloads wait for the next flush. Returns the sections built.
+    /// waiting (checked before each section, sent from the cache or
+    /// built). Changes and unloads wait for the next flush. Returns the
+    /// sections built.
     pub fn load_until<S: SectionSource + ?Sized>(
         &mut self,
         src: &mut S,
@@ -1054,45 +1406,93 @@ impl SectionStream {
         until: Instant,
         mut interrupted: impl FnMut() -> bool,
     ) -> usize {
+        self.load_for(src, lanes, until, &mut interrupted, false)
+    }
+
+    /// A load until `until` or `interrupted`; `one`: at least one section
+    /// whatever either says. Returns the sections built.
+    fn load_for<S: SectionSource + ?Sized>(
+        &mut self,
+        src: &mut S,
+        lanes: &mut impl Lanes,
+        until: Instant,
+        interrupted: &mut dyn FnMut() -> bool,
+        one: bool,
+    ) -> usize {
         if !self.loading() {
             return 0;
         }
-        self.begin(src);
+        self.start_pass(src);
         self.settle_layers(src);
         let conns: Vec<ConnId> = self.viewers.keys().copied().collect();
         let mut budget = Budget {
             left: usize::MAX,
             until: Some(until),
-            interrupted: &mut interrupted,
-            one: false,
+            interrupted,
+            one,
             built: 0,
+            placed: 0,
         };
         self.load(&conns, src, lanes, &mut budget);
         src.end();
         budget.built
     }
 
-    /// Lets go of the layer keys of sections no longer held, and reads the
-    /// layers that changed.
+    /// Reads the layers that changed (and marks their holders).
     fn settle_layers<S: SectionSource + ?Sized>(&mut self, src: &mut S) {
-        self.layers.resize(src.layers());
-        for v in self.viewers.values_mut() {
-            for p in std::mem::take(&mut v.released) {
-                if !v.held.contains_key(&p) {
-                    self.layers.release(&mut v.layers, &*src, p);
-                }
-            }
-        }
         self.layers
             .settle(&*src, self.viewers.values_mut().map(|v| &mut v.layers));
     }
 
-    /// Records a section newly held by `conn`: its layer keys.
+    /// Counts the layer frames withdrawn for `conn`.
+    fn layer_withdrawals(&mut self, conn: ConnId) {
+        for (layer, key, b) in self.layers.withdrawn.drain(..) {
+            withdrew(
+                &mut self.stats,
+                &mut self.observer,
+                conn,
+                key,
+                Some(layer),
+                b,
+            );
+        }
+    }
+
+    /// Takes what the build just done marked
+    /// ([`SectionSource::take_marks`]): sections changed (noted in
+    /// `marked` too), and layers changed, read at once.
+    fn take_marks<S: SectionSource + ?Sized>(&mut self, src: &mut S) {
+        src.take_marks(&mut self.marks);
+        if self.marks.is_empty() {
+            return;
+        }
+        let mut marks = std::mem::take(&mut self.marks);
+        for (pos, mark) in marks.sections.drain(..) {
+            match mark {
+                Mark::Changed => self.changed(pos),
+                Mark::Bulk => self.changed_bulk(pos),
+                Mark::Derived => self.changed_derived(pos),
+            }
+            self.marked.push(pos);
+        }
+        let layers = !marks.layers.is_empty();
+        for (layer, key) in marks.layers.drain(..) {
+            self.layers.changed(layer, key);
+        }
+        self.marks = marks;
+        if layers {
+            self.settle_layers(src);
+        }
+    }
+
+    /// Records a section newly held by `conn`: its layer keys. `copy`: the
+    /// client held an earlier copy of it (and may hold its layer states).
     fn hold<S: SectionSource + ?Sized>(
         &mut self,
         conn: ConnId,
         pos: SectionPos,
         held: Held,
+        copy: bool,
         src: &mut S,
     ) {
         let Some(v) = self.viewers.get_mut(&conn) else {
@@ -1100,7 +1500,7 @@ impl SectionStream {
         };
         if v.held.insert(pos, held).is_none() && !v.released.remove(&pos) {
             // (A section let go of and held again keeps its layer keys.)
-            self.stats.layer_resumed += self.layers.hold(&mut v.layers, &*src, pos);
+            self.stats.layer_resumed += self.layers.hold(&mut v.layers, &*src, pos, copy);
         }
     }
 
@@ -1113,6 +1513,7 @@ impl SectionStream {
         v.resend.remove(&pos);
         if v.held.remove(&pos).is_some() {
             self.layers.release(&mut v.layers, &*src, pos);
+            self.layer_withdrawals(conn);
         }
     }
 
@@ -1126,27 +1527,34 @@ impl SectionStream {
     ) {
         if let Some(v) = self.viewers.get_mut(&conn) {
             self.layers.requeue(&mut v.layers, &*src, pos);
+            self.layer_withdrawals(conn);
         }
     }
 
-    /// Sends `conn` the layer frames waiting: whole ones in the bulk lane,
-    /// changes on the priority lane.
+    /// Sends `conn` the layer frames waiting (`pick` of them): whole ones in
+    /// the bulk lane, changes on the priority lane. False if the lane
+    /// refused one.
     fn send_layers<S: SectionSource + ?Sized>(
         &mut self,
         conn: ConnId,
         src: &mut S,
         lanes: &mut impl Lanes,
-    ) {
+        pick: Pick,
+    ) -> bool {
         let Some(v) = self.viewers.get_mut(&conn) else {
-            return;
+            return true;
         };
         let (stats, observer) = (&mut self.stats, &mut self.observer);
-        let mut note =
-            |bytes: usize, ok: bool| note(stats, observer, conn, FrameKind::Layer, bytes, ok);
-        let sent = self
+        let mut note = |layer: usize, key: SectionPos, bytes: usize, ok: bool| {
+            let at = (Some(key), Some(layer));
+            note(stats, observer, conn, FrameKind::Layer, bytes, at, ok);
+        };
+        let (sent, ok) = self
             .layers
-            .send(conn, &mut v.layers, &*src, lanes, &mut note);
+            .send(conn, &mut v.layers, &*src, lanes, pick, &mut note);
         self.stats.layer_frames += sent;
+        self.layer_withdrawals(conn);
+        ok
     }
 
     /// Builds `pos` into the cache, and marks it stale (or to send again
@@ -1176,6 +1584,7 @@ impl SectionStream {
                 }
             }
         }
+        self.take_marks(src);
         built
     }
 
@@ -1193,8 +1602,13 @@ impl SectionStream {
         let mut budget = self.config.rebuild_budget.max(1);
         let until = self.config.rebuild_time.map(|t| Instant::now() + t);
         let mut built = 0;
-        let changed: Vec<SectionPos> = self.changed.iter().copied().collect();
-        for pos in changed {
+        let mut work: VecDeque<SectionPos> = self.changed.iter().copied().collect();
+        // Sections the builds mark are rebuilt in the same pass, once each.
+        let mut done = PosSet::default();
+        while let Some(pos) = work.pop_front() {
+            if !self.changed.contains(&pos) || !done.insert(pos) {
+                continue;
+            }
             if !self.viewers.values().any(|v| v.held.contains_key(&pos)) {
                 // Nobody holds it: built again when someone wants it.
                 self.changed.remove(&pos);
@@ -1208,6 +1622,7 @@ impl SectionStream {
             budget -= 1;
             built += 1;
             self.build(src, pos);
+            work.extend(self.marked.drain(..));
         }
     }
 
@@ -1250,20 +1665,25 @@ impl SectionStream {
         if !src.cells(&old, a) || !src.cells(&to.bytes, b) || a.len() != b.len() {
             return None;
         }
+        let cells = self.config.edit_rule == EditRule::Cells;
         let mut changes = Vec::new();
         for (i, (x, y)) in a.iter().zip(b.iter()).enumerate() {
             if x != y {
                 changes.extend([u32::try_from(i).ok()?, *y]);
-                if changes.len() * 4 >= to.bytes.len() {
+                if cells && changes.len() * 4 >= to.bytes.len() {
                     return None;
                 }
             }
         }
-        Some((self.encode)(&StreamMsg::Edit {
+        let edit = (self.encode)(&StreamMsg::Edit {
             pos,
             changes,
             stamp: Stamp::of(to.stamp),
-        }))
+        });
+        if !cells && edit.len() >= self.section_frame(pos, to).len() {
+            return None;
+        }
+        Some(edit)
     }
 
     /// Sends a connection's stale sections: folded into a frame still
@@ -1294,22 +1714,34 @@ impl SectionStream {
                 }
                 continue;
             }
-            let queued = h.ticket.as_ref().is_some_and(BulkTicket::withdraw);
-            let (sent, ticket) = if queued {
+            let took = h.take_back();
+            if let Some(b) = took {
+                withdrew(&mut self.stats, &mut self.observer, conn, pos, None, b);
+            }
+            let queued = took.is_some();
+            let at = Some(pos);
+            let (sent, ticket, bytes) = if queued {
+                // Queued again at the back, its layers' whole frames with
+                // it (those that go before it first).
+                self.requeue_layers(conn, pos, src);
                 let ticket = BulkTicket::new();
                 let frame = self.section_frame(pos, &built);
+                let n = frame.len();
                 self.stats.folded += 1;
-                (
-                    self.send_bulk(conn, lanes, FrameKind::Folded, frame, ticket.clone()),
-                    Some(ticket),
-                )
+                let sent = self.send_layers(conn, src, lanes, Pick::BeforeOf(pos))
+                    && self.send_bulk(conn, lanes, FrameKind::Folded, at, frame, ticket.clone());
+                (sent, Some(ticket), n)
             } else if let Some(frame) = self.edit_frame(src, pos, from, &built) {
                 self.stats.edits += 1;
-                (self.send(conn, lanes, FrameKind::Edit, frame), None)
+                (self.send(conn, lanes, FrameKind::Edit, at, frame), None, 0)
             } else {
                 let frame = self.section_frame(pos, &built);
                 self.stats.sections += 1;
-                (self.send(conn, lanes, FrameKind::Changed, frame), None)
+                (
+                    self.send(conn, lanes, FrameKind::Changed, at, frame),
+                    None,
+                    0,
+                )
             };
             if sent {
                 let Some(v) = self.viewers.get_mut(&conn) else {
@@ -1322,12 +1754,20 @@ impl SectionStream {
                     Held {
                         stamp: built.stamp,
                         ticket,
+                        bytes: frame_len(bytes),
                         replaces,
                     },
                 );
-                if queued {
-                    self.requeue_layers(conn, pos, src);
-                }
+            } else if queued && replaces {
+                // Its frame is gone and the lane refused the new one, but
+                // it still holds its earlier copy (unknown): kept, and sent
+                // again whole in the bulk lane.
+                let Some(v) = self.viewers.get_mut(&conn) else {
+                    return;
+                };
+                v.held.insert(pos, Held::kept(0));
+                v.stale.remove(&pos);
+                v.resend.insert(pos);
             } else if queued {
                 // Its frame is gone and the lane refused the new one: the
                 // load loop sends it again.
@@ -1335,9 +1775,6 @@ impl SectionStream {
                 let Some(v) = self.viewers.get_mut(&conn) else {
                     return;
                 };
-                if replaces {
-                    v.unloads.insert(pos);
-                }
                 v.cursor = 0;
             } else {
                 return; // the lane is full: next flush
@@ -1345,7 +1782,11 @@ impl SectionStream {
         }
     }
 
-    fn send_unloads(&mut self, conn: ConnId, lanes: &mut impl Lanes) {
+    /// Sends a connection's unloads waiting now (a flush sends them too):
+    /// after [`set_stream_interest`](Self::set_stream_interest), so a
+    /// client that jumped frees what it left before the new area loads.
+    /// What the lane refuses waits for the next flush.
+    pub fn send_unloads(&mut self, conn: ConnId, lanes: &mut impl Lanes) {
         let Some(v) = self.viewers.get_mut(&conn) else {
             return;
         };
@@ -1356,7 +1797,7 @@ impl SectionStream {
             // Nothing is held past the area grown by the hysteresis (what
             // left it was taken out of `held`), and nothing is sent there.
             let keep = area.bounds(i64::from(self.config.hysteresis));
-            for b in Bounds::unload_boxes(&v.unloads, &keep) {
+            for b in Bounds::unload_boxes(v.unloads.keys(), &keep) {
                 let Some((min, max)) = b.corners() else {
                     continue;
                 };
@@ -1373,20 +1814,21 @@ impl SectionStream {
                     conn,
                     FrameKind::UnloadBox,
                     n,
+                    (None, None),
                     ok,
                 );
                 if !ok {
                     return;
                 }
                 let before = v.unloads.len();
-                v.unloads.retain(|p| !p.within(&min, &max));
+                v.unloads.retain(|p, _| !p.within(&min, &max));
                 self.stats.unloads += (before - v.unloads.len()) as u64;
                 self.stats.unload_boxes += 1;
             }
         }
         while !v.unloads.is_empty() {
             let positions: Vec<SectionPos> =
-                v.unloads.iter().take(MAX_UNLOAD_BATCH).copied().collect();
+                v.unloads.keys().take(MAX_UNLOAD_BATCH).copied().collect();
             let n = positions.len();
             let frame = (self.encode)(&StreamMsg::Unload { positions });
             let bytes = frame.len();
@@ -1397,6 +1839,7 @@ impl SectionStream {
                 conn,
                 FrameKind::Unload,
                 bytes,
+                (None, None),
                 ok,
             );
             if !ok {
@@ -1463,10 +1906,23 @@ impl SectionStream {
                 continue;
             }
             // A frame still queued is replaced; one written left a copy.
-            let holds = !h.withdraw();
+            let (stamp, replaces) = (h.stamp, h.replaces);
+            let took = h.take_back();
+            if let Some(b) = took {
+                withdrew(&mut self.stats, &mut self.observer, conn, pos, None, b);
+            }
+            let holds = took.is_none() || replaces;
+            if !holds {
+                // Queued again at the back, its layers' whole frames with it.
+                self.requeue_layers(conn, pos, src);
+            }
             let ticket = BulkTicket::new();
             let frame = self.section_frame(pos, &built);
-            if self.send_bulk(conn, lanes, FrameKind::Resend, frame, ticket.clone()) {
+            let n = frame.len();
+            let at = Some(pos);
+            if (holds || self.send_layers(conn, src, lanes, Pick::BeforeOf(pos)))
+                && self.send_bulk(conn, lanes, FrameKind::Resend, at, frame, ticket.clone())
+            {
                 self.stats.bulk_resends += 1;
                 if let Some(v) = self.viewers.get_mut(&conn) {
                     v.held.insert(
@@ -1474,21 +1930,27 @@ impl SectionStream {
                         Held {
                             stamp: built.stamp,
                             ticket: Some(ticket),
+                            bytes: frame_len(n),
                             replaces: holds,
                         },
                     );
                 }
                 if !holds {
-                    self.requeue_layers(conn, pos, src);
-                    self.send_layers(conn, src, lanes);
+                    self.send_layers(conn, src, lanes, Pick::All);
                 }
+            } else if holds {
+                // It keeps the copy it has (what was written, or an earlier
+                // one, unknown): sent again later.
+                if let Some(v) = self.viewers.get_mut(&conn) {
+                    let stamp = if took.is_none() { stamp } else { 0 };
+                    v.held.insert(pos, Held::kept(stamp));
+                    v.resend.insert(pos);
+                }
+                return false;
             } else {
-                // Its earlier frame may be gone: load it again.
+                // Its frame is gone: load it again.
                 self.release(conn, pos, src);
                 if let Some(v) = self.viewers.get_mut(&conn) {
-                    if holds {
-                        v.unloads.insert(pos);
-                    }
                     v.cursor = 0;
                 }
                 return false;
@@ -1535,10 +1997,10 @@ impl SectionStream {
             if let Some(&group) = v.grouped.get(&pos) {
                 // A group is looked at whole, when its first section is
                 // reached; its sections are then held, or claimed.
-                if budget.out() {
+                if budget.out(true) {
                     return served;
                 }
-                budget.spend();
+                budget.spend(true);
                 served = true;
                 self.resolve_group(conn, group, src);
                 if let Some(v) = self.viewers.get_mut(&conn) {
@@ -1547,22 +2009,23 @@ impl SectionStream {
                 continue;
             }
             if !src.exists(pos) {
-                if v.claims.remove(&pos).is_some() {
-                    v.unloads.insert(pos);
+                if let Some(stamp) = v.claims.remove(&pos) {
+                    v.unloads.insert(pos, stamp);
                 }
+                v.restored.remove(&pos);
                 v.cursor += 1;
                 continue;
             }
+            // The load's time bounds sections from the cache too.
             let cached = !self.changed.contains(&pos) && self.cache.get(pos).is_some();
-            if !cached && budget.out() {
+            if budget.out(!cached) {
                 return served;
             }
             let built = self.current(src, pos);
             if cached {
                 self.stats.cache_hits += 1;
-            } else {
-                budget.spend();
             }
+            budget.spend(!cached);
             served = true;
             let Some(v) = self.viewers.get_mut(&conn) else {
                 return served;
@@ -1593,6 +2056,7 @@ impl SectionStream {
         let Some(v) = self.viewers.get_mut(&conn) else {
             return false;
         };
+        let restored = v.restored.remove(&pos);
         let kept = claim == Some(built.stamp);
         if claim.is_some()
             && let Some(o) = &mut self.observer
@@ -1601,36 +2065,41 @@ impl SectionStream {
         }
         if kept {
             self.stats.resumed += 1;
-            let held = Held {
-                stamp: built.stamp,
-                ticket: None,
-                replaces: false,
-            };
-            self.hold(conn, pos, held, src);
-            self.send_layers(conn, src, lanes);
+            self.hold(conn, pos, Held::kept(built.stamp), restored, src);
+            self.send_layers(conn, src, lanes, Pick::All);
             return true;
         }
-        let replaces = claim.is_some() || v.unloads.remove(&pos);
+        let unloaded = v.unloads.remove(&pos);
+        let replaces = claim.is_some() || unloaded.is_some();
         let ticket = BulkTicket::new();
         let frame = self.section_frame(pos, built);
-        if !self.send_bulk(conn, lanes, FrameKind::Section, frame, ticket.clone()) {
+        let held = Held {
+            stamp: built.stamp,
+            ticket: Some(ticket.clone()),
+            bytes: frame_len(frame.len()),
+            replaces,
+        };
+        // Held first, so the layers that go before it are queued before it.
+        self.hold(conn, pos, held, replaces || restored, src);
+        let at = Some(pos);
+        if !self.send_layers(conn, src, lanes, Pick::BeforeOf(pos))
+            || !self.send_bulk(conn, lanes, FrameKind::Section, at, frame, ticket)
+        {
+            self.release(conn, pos, src);
             if let Some(v) = self.viewers.get_mut(&conn) {
                 if let Some(stamp) = claim {
                     v.claims.insert(pos, stamp);
-                } else if replaces {
-                    v.unloads.insert(pos);
+                } else if let Some(stamp) = unloaded {
+                    v.unloads.insert(pos, stamp);
+                }
+                if restored {
+                    v.restored.insert(pos);
                 }
             }
             return false;
         }
         self.stats.sections += 1;
-        let held = Held {
-            stamp: built.stamp,
-            ticket: Some(ticket),
-            replaces,
-        };
-        self.hold(conn, pos, held, src);
-        self.send_layers(conn, src, lanes);
+        self.send_layers(conn, src, lanes, Pick::All);
         true
     }
 
@@ -1676,7 +2145,7 @@ impl SectionStream {
                     .map(|(_, at, b)| (*at, b.as_ref().map_or(0, |b| b.stamp))),
             ) == g.digest;
         // Layers, each on its own digest.
-        self.layers.resize(src.layers());
+        self.layers.resize(&*src);
         for (layer, digest) in g.layers.iter().enumerate().take(src.layers()) {
             let Some(digest) = digest else {
                 continue;
@@ -1691,11 +2160,24 @@ impl SectionStream {
                 seen.push(key);
                 pairs.push((at, key, self.layers.stamp(&*src, layer, key)));
             }
-            if GroupClaim::layer_digest(pairs.iter().map(|(at, _, s)| (*at, *s))) == Some(*digest)
-                && let Some(v) = self.viewers.get_mut(&conn)
-            {
+            let matched =
+                GroupClaim::layer_digest(pairs.iter().map(|(at, _, s)| (*at, *s))) == Some(*digest);
+            if let Some(o) = &mut self.observer {
+                o.event(&StreamEvent::LayerGroup {
+                    conn,
+                    start: g.start,
+                    layer,
+                    kept: matched,
+                });
+            }
+            if let Some(v) = self.viewers.get_mut(&conn) {
                 for (_, key, stamp) in pairs {
-                    v.layers.claim(layer, key, stamp);
+                    if matched {
+                        v.layers.claim(layer, key, stamp);
+                    } else {
+                        // It holds some states there, not these.
+                        v.layers.claim_unknown(layer, key);
+                    }
                 }
             }
         }
@@ -1712,12 +2194,7 @@ impl SectionStream {
             for (p, _, b) in now {
                 let Some(b) = b else { continue };
                 self.stats.resumed += 1;
-                let held = Held {
-                    stamp: b.stamp,
-                    ticket: None,
-                    replaces: false,
-                };
-                self.hold(conn, p, held, src);
+                self.hold(conn, p, Held::kept(b.stamp), false, src);
             }
         } else {
             self.stats.groups_different += 1;
@@ -1732,7 +2209,7 @@ impl SectionStream {
                     v.claims.entry(p).or_insert(0);
                     claimed.push(p);
                 } else {
-                    v.unloads.insert(p);
+                    v.unloads.insert(p, 0);
                 }
             }
         }
@@ -1745,11 +2222,21 @@ impl SectionStream {
         conn: ConnId,
         lanes: &mut impl Lanes,
         kind: FrameKind,
+        pos: Option<SectionPos>,
         frame: Vec<u8>,
     ) -> bool {
         let bytes = frame.len();
         let ok = lanes.send(conn, frame);
-        note(&mut self.stats, &mut self.observer, conn, kind, bytes, ok);
+        let at = (pos, None);
+        note(
+            &mut self.stats,
+            &mut self.observer,
+            conn,
+            kind,
+            bytes,
+            at,
+            ok,
+        );
         ok
     }
 
@@ -1759,12 +2246,22 @@ impl SectionStream {
         conn: ConnId,
         lanes: &mut impl Lanes,
         kind: FrameKind,
+        pos: Option<SectionPos>,
         frame: Vec<u8>,
         ticket: BulkTicket,
     ) -> bool {
         let bytes = frame.len();
         let ok = lanes.send_bulk(conn, frame, Some(ticket));
-        note(&mut self.stats, &mut self.observer, conn, kind, bytes, ok);
+        let at = (pos, None);
+        note(
+            &mut self.stats,
+            &mut self.observer,
+            conn,
+            kind,
+            bytes,
+            at,
+            ok,
+        );
         ok
     }
 
@@ -1775,13 +2272,15 @@ impl SectionStream {
     }
 }
 
-/// Counts a frame queued (or refused), and tells the observer.
+/// Counts a frame queued (or refused), and tells the observer. `at`: the
+/// section (or layer key) and layer it carries.
 fn note(
     stats: &mut StreamStats,
     observer: &mut Option<Box<dyn StreamObserver>>,
     conn: ConnId,
     kind: FrameKind,
     bytes: usize,
+    at: (Option<SectionPos>, Option<usize>),
     ok: bool,
 ) {
     if !ok {
@@ -1790,8 +2289,41 @@ fn note(
     }
     stats.bytes += bytes as u64;
     if let Some(o) = observer {
-        o.event(&StreamEvent::Queued { conn, kind, bytes });
+        let (pos, layer) = at;
+        o.event(&StreamEvent::Queued {
+            conn,
+            kind,
+            bytes,
+            pos,
+            layer,
+        });
     }
+}
+
+/// Counts a frame withdrawn, and tells the observer.
+fn withdrew(
+    stats: &mut StreamStats,
+    observer: &mut Option<Box<dyn StreamObserver>>,
+    conn: ConnId,
+    pos: SectionPos,
+    layer: Option<usize>,
+    bytes: u32,
+) {
+    stats.withdrawn += 1;
+    stats.withdrawn_bytes += u64::from(bytes);
+    if let Some(o) = observer {
+        o.event(&StreamEvent::Withdrawn {
+            conn,
+            pos,
+            layer,
+            bytes: bytes as usize,
+        });
+    }
+}
+
+/// A frame's length, as [`Held`] keeps it.
+fn frame_len(n: usize) -> u32 {
+    u32::try_from(n).unwrap_or(u32::MAX)
 }
 
 /// A duration in nanoseconds, saturating.

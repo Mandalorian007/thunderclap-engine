@@ -5,11 +5,12 @@
 mod common;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::{Duration, Instant};
 
 use common::{Client, FakeLanes, World, settle, stream};
 use tc_stream::{
-    Area, Claim, SectionPos, SectionSource, SectionStream, Stamp, StreamConfig, StreamError,
-    StreamMsg,
+    Area, Claim, EditRule, PosMap, PosSet, SectionPos, SectionSource, SectionStream, Stamp,
+    StreamConfig, StreamError, StreamMsg,
 };
 
 const A: u64 = 1;
@@ -542,4 +543,163 @@ fn edits_are_queued_before_new_sections_are_built() {
     let mut lanes = BTreeMap::from([(A, out.clone())]);
     s.stream.flush(&mut s.world, &mut lanes);
     assert!(!out.is_held());
+}
+
+#[test]
+fn edit_rule_frame_sends_the_shorter_frame() {
+    // 48 of 64 cells change: an Edit is shorter than the whole section,
+    // though its cells' bytes are not.
+    let mut sent = Vec::new();
+    for rule in [EditRule::Cells, EditRule::Frame] {
+        let mut s = Setup::new(StreamConfig {
+            edit_rule: rule,
+            ..StreamConfig::default()
+        });
+        s.join(A, area(0, 0, 0, 0), &[]);
+        s.settle();
+        let mut cells = s.world.cells_of(at(0, 0, 0));
+        cells[..48].fill(1);
+        s.world.edits.borrow_mut().insert(at(0, 0, 0), cells);
+        s.stream.changed(at(0, 0, 0));
+        s.stream.flush(&mut s.world, &mut s.lanes);
+        let bytes = s.lanes.0[&A].priority[0].len();
+        sent.push((s.stream.stats().edits, bytes));
+        s.settle();
+        s.world.check(&s.clients[&A]);
+    }
+    assert_eq!(sent[0].0, 0, "cells: whole");
+    assert_eq!(sent[1].0, 1, "frame: an edit");
+    assert!(sent[1].1 < sent[0].1);
+}
+
+#[test]
+fn loading_and_unloads_are_told_per_connection() {
+    let mut s = Setup::new(StreamConfig {
+        build_budget: 4,
+        ..StreamConfig::default()
+    });
+    s.join(A, area(0, 0, 0, 1), &[]);
+    s.join(B, area(0, 0, 0, 0), &[]);
+    s.stream.flush(&mut s.world, &mut s.lanes);
+    assert!(s.stream.loading_for(A));
+    s.settle();
+    assert!(!s.stream.loading_for(A) && !s.stream.loading_for(B));
+    assert_eq!(s.stream.holders(at(0, 0, 0)), 2);
+    assert_eq!(s.stream.holders(at(1, 0, 0)), 1);
+    assert_eq!(s.stream.holders(at(9, 0, 0)), 0);
+    s.world.set(&mut s.stream, at(0, 0, 0), 0, 3);
+    assert_eq!(s.stream.changes_pending(), 1);
+    // A jump: what it left is unloaded at once, before the next flush.
+    s.stream.set_interest(A, area(50, 0, 0, 1), &[]).unwrap();
+    assert_eq!(s.stream.unloads_pending(A), 27);
+    s.stream.send_unloads(A, &mut s.lanes);
+    assert_eq!(s.stream.unloads_pending(A), 0);
+    let msgs = s.lanes.drain(A);
+    s.client(A).apply(msgs);
+    assert!(s.client(A).held.is_empty());
+    s.settle();
+    assert_eq!(s.stream.changes_pending(), 0);
+    let mut m: PosMap<SectionPos, u32> = PosMap::default();
+    m.insert(at(0, 0, 0), 1);
+    let set: PosSet<SectionPos> = m.keys().copied().collect();
+    assert!(set.contains(&at(0, 0, 0)));
+}
+
+#[test]
+fn a_view_back_before_its_unloads_went_keeps_what_it_holds() {
+    let mut s = Setup::new(StreamConfig::default());
+    s.join(A, area(0, 0, 0, 1), &[]);
+    s.settle();
+    s.client(A).reset_counts();
+    s.stream.set_interest(A, area(50, 0, 0, 1), &[]).unwrap();
+    s.stream.set_interest(A, area(0, 0, 0, 1), &[]).unwrap();
+    assert_eq!(s.stream.unloads_pending(A), 0);
+    s.settle();
+    let c = &s.clients[&A];
+    assert_eq!((c.sections, c.unloaded), (0, 0), "nothing sent again");
+    assert_eq!(s.stream.held(A), 27);
+    s.world.check(c);
+}
+
+#[test]
+fn claims_outside_the_area_are_counted_dropped() {
+    let mut s = Setup::new(StreamConfig::default());
+    let far = Claim {
+        pos: at(500, 0, 0),
+        stamp: Stamp { hi: 3, lo: 4 },
+    };
+    s.join(A, area(0, 0, 0, 1), &[far]);
+    assert_eq!(s.stream.stats().claims_dropped, 1);
+    assert_eq!(s.stream.unloads_pending(A), 1);
+}
+
+#[test]
+fn a_refused_fold_of_a_copy_it_holds_keeps_it() {
+    let mut s = Setup::new(StreamConfig::default());
+    s.join(A, area(0, 0, 0, 0), &[]);
+    s.settle();
+    let mut b = std::mem::take(s.client(A));
+    s.stream.disconnect(A);
+    // It comes back holding an earlier copy: sent again, still queued.
+    s.world.set(&mut s.stream, at(0, 0, 0), 1, 40);
+    s.stream.flush(&mut s.world, &mut s.lanes);
+    b.reset_counts();
+    s.clients.insert(B, b);
+    let claims = s.clients[&B].claims();
+    s.stream.connect(B);
+    s.stream.set_interest(B, area(0, 0, 0, 0), &claims).unwrap();
+    s.stream.flush(&mut s.world, &mut s.lanes);
+    assert_eq!(s.lanes.0[&B].bulk.len(), 1);
+    // Changed again, and the lane refuses the fold.
+    s.world.set(&mut s.stream, at(0, 0, 0), 2, 41);
+    s.lanes.lane(B).refuse_bulk = true;
+    s.stream.flush(&mut s.world, &mut s.lanes);
+    assert_eq!(s.stream.unloads_pending(B), 0, "no unload: a copy is held");
+    assert_eq!(s.stream.held(B), 1);
+    s.lanes.lane(B).refuse_bulk = false;
+    s.settle();
+    let c = &s.clients[&B];
+    assert_eq!((c.unloaded, c.sections), (0, 1));
+    s.world.check(c);
+}
+
+#[test]
+fn a_derived_change_keeps_a_bulk_one_in_the_bulk_lane() {
+    let mut s = Setup::new(StreamConfig::default());
+    s.join(A, area(0, 0, 0, 0), &[]);
+    s.settle();
+    let mut cells = s.world.cells_of(at(0, 0, 0));
+    cells[0] = 33;
+    s.world.edits.borrow_mut().insert(at(0, 0, 0), cells);
+    s.stream.changed_bulk(at(0, 0, 0));
+    s.stream.changed_derived(at(0, 0, 0));
+    s.stream.flush(&mut s.world, &mut s.lanes);
+    assert!(s.lanes.0[&A].priority.is_empty());
+    assert_eq!(s.stream.stats().bulk_resends, 1);
+    s.settle();
+    s.world.check(&s.clients[&A]);
+}
+
+#[test]
+fn load_time_bounds_sections_sent_from_the_cache() {
+    let mut s = Setup::new(StreamConfig {
+        load_time: Some(Duration::ZERO),
+        ..StreamConfig::default()
+    });
+    s.join(A, area(0, 0, 0, 1), &[]);
+    s.settle();
+    // All of B's area is cached: still one section a flush.
+    s.join(B, area(0, 0, 0, 1), &[]);
+    s.stream.flush(&mut s.world, &mut s.lanes);
+    assert_eq!(s.lanes.0[&B].bulk.len(), 1);
+    assert_eq!(s.settle(), 26, "the rest, one a flush");
+}
+
+#[test]
+fn idle_always_sends_one_section() {
+    let mut s = Setup::new(StreamConfig::default());
+    s.join(A, area(0, 0, 0, 1), &[]);
+    let far = Instant::now() + Duration::from_secs(5);
+    s.stream.idle(&mut s.world, &mut s.lanes, far, || true);
+    assert_eq!(s.stream.stats().idle_builds, 1);
 }
