@@ -259,7 +259,14 @@ describe('row fields on the page (FX2)', () => {
       children: [
         { k: 'tabs', id: 'tab', selected: b('tab'), optionW: 70, h: 32 },
         { k: 'tabs', id: 'seg', selected: b('seg'), optionW: 40, fill: true, weigh: true, h: 32 },
-        { k: 'text', id: 'line', term: 'Hold the left', text: b('does'), style: 'body', wrap: true },
+        {
+          k: 'text',
+          id: 'line',
+          term: 'Hold the left',
+          text: b('does'),
+          style: 'body',
+          wrap: true,
+        },
         {
           k: 'list',
           id: 'opts',

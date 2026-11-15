@@ -98,7 +98,17 @@ describe('wide button words in a framed panel (FX3)', () => {
     host.style.height = '160px';
     document.body.appendChild(host);
     const box = { width: 250, height: 160 };
-    host.getBoundingClientRect = () => ({ ...box, x: 0, y: 0, left: 0, top: 0, right: box.width, bottom: box.height, toJSON() {} }) as DOMRect;
+    host.getBoundingClientRect = () =>
+      ({
+        ...box,
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        right: box.width,
+        bottom: box.height,
+        toJSON() {},
+      }) as DOMRect;
     p = panel(SPEC, { schedule: null });
     presentDom(p, host, { fit: 'host' });
     const ro = observers.find((o) => o.on.includes(host!))!;

@@ -1021,6 +1021,12 @@ holds) returns a `DomPresenter` that builds one real element per word (`<button>
 `role=meter`, `tablist`, a list's pooled rows), writes only what changed keys bind (`writes`
 counts), keeps `data-tc-id` control ids (`<panel>/<word>[:<row>]`) so `PadNav`, arrow keys and
 `onControl` work, and holds after `SPEC_HOLD_MS` within `SPEC_HOLD_SLOP` px.
+A tabs' option's `label` row field is its button's words (`list.row(k).set('label', …)` or
+`setAt(0, …)`). A text with a `term` places the term at its column's start and its words a block
+beside it, both written inline (no float: WebKit ignores one in the line clamp's box), so it holds
+with the engine's sheet held off. Under `fit: 'content'` the host's inline width and height are the
+engine's: a game that places the host by its own sums gives its width another way (a custom
+property its CSS reads), or a sizer observer handing that width back loops.
 
 `hud(spec)` (`HudSpec` of `HudItem`s: a spec, a layout `place`, an order, a width) is a `SpecHud`
 of panels; `presentHud(hud, ui)` adds each panel's host through `ui.layout.add` (regions, safe

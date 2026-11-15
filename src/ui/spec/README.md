@@ -26,6 +26,8 @@ Rules that keep it cheap:
 - The DOM presenter reads nothing back from the page while applying, writes only bound words of
   dirty keys and dirty row fields, and moves pooled rows on a resort; a scroll writes only
   `boxes.scroll` (for hit tests by a world presenter).
+- Every list field a presenter shows is bound in `compile.ts` (`fieldBinds`; a tabs' `label` is its
+  option's text): `present-dom.test.ts` reads each row kind's words back from the page.
 
 Not ported from Forge Wilds: the game-specific words (item art, aim, give-way), list windowing.
 The world presenter came in ws/ui-world (see `../README.md`).
