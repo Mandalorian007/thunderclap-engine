@@ -211,6 +211,10 @@ test('a churning crowd reads back within 0.01 of its CPU twin (ws/pose-parity-fi
     );
     // The old way (`poseCpu` after the map, over the frame the page ran meanwhile) drifts.
     expect(p.naiveError).toBeGreaterThan(0.01);
+    // Two overlapping reads agree, and the body's vertex count is its instances × indices.
+    expect(p.overlapSame).toBe(true);
+    expect(p.bodyVertices).toBe(p.bodyVerticesWant);
+    expect(p.bodyVertices).toBeGreaterThan(0);
     // Sparse: every live slot changed, in runs too far apart to merge.
     expect(s.recordWrites).toBeGreaterThan(1);
   }

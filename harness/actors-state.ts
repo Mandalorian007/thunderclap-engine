@@ -85,6 +85,11 @@ export interface HarnessActorsState {
     far: number;
     /** The same GPU bones against `poseCpu` run after the map (later records): the old drift. */
     naiveError: number;
+    /** A second `readBack` overlapping the first read the same bones and arguments (ws/actor-fit-2). */
+    overlapSame: boolean;
+    /** `ActorReadBack.setVertices[0]` (the body's), and the same from the arguments by hand. */
+    bodyVertices: number;
+    bodyVerticesWant: number;
   } | null;
 }
 

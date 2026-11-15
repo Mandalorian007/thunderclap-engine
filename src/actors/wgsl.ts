@@ -49,6 +49,8 @@ export interface ActorShaderConsts {
   counters: number;
   /** A game table is bound (`ActorSystemOptions.table`). */
   table: boolean;
+  /** The table is bound into the draw sets too (`ActorSystemOptions.drawTable`). */
+  drawTable?: boolean;
   /** `ActorSystemOptions.poseWgsl`, or empty. */
   pose: string;
   /** The record fields' `ACTOR_FIELD_*` constants (for the pose hook). */
@@ -63,6 +65,14 @@ const ACTOR_MAX_DRAWS = ${c.maxDraws}u;
 const ACTOR_LIST = ${c.slots}u;
 const ACTOR_VIEWS = ${c.views}u;
 const ACTOR_NONE = 0xffffffffu;`;
+}
+
+/** The game table at `group`/`binding` and its readers (`ActorSystemOptions.tableWords`). */
+function tableWgsl(group: number, binding: number): string {
+  return `@group(${group}) @binding(${binding}) var<storage, read> actor_table: array<u32>;
+fn actor_table_word(i: u32) -> u32 { return actor_table[i]; }
+fn actor_table_f32(i: u32) -> f32 { return bitcast<f32>(actor_table[i]); }
+`;
 }
 
 /** The pose pass: place, pose, skin, cull per view, pick the LOD and append to the lists. */
@@ -87,15 +97,7 @@ struct ActorParams {
 @group(0) @binding(4) var<storage, read_write> bones: array<vec4f>;
 @group(0) @binding(5) var<storage, read_write> args: array<atomic<u32>>;
 @group(0) @binding(6) var<storage, read_write> lists: array<u32>;
-${
-  c.table
-    ? `@group(0) @binding(7) var<storage, read> actor_table: array<u32>;
-/** Word \`i\` of the game's table (\`ActorSystemOptions.table\`). */
-fn actor_table_word(i: u32) -> u32 { return actor_table[i]; }
-fn actor_table_f32(i: u32) -> f32 { return bitcast<f32>(actor_table[i]); }
-`
-    : ''
-}
+${c.table ? tableWgsl(0, 7) : ''}
 var<workgroup> wm: array<vec4f, ${c.bones * 3}>;
 
 struct Trs { t: vec3f, q: vec4f, s: vec3f };
@@ -306,7 +308,7 @@ ${names}
 @group(1) @binding(0) var<storage, read> bones: array<vec4f>;
 @group(1) @binding(1) var<storage, read> lists: array<u32>;
 @group(1) @binding(2) var<storage, read> records: array<u32>;
-
+${c.drawTable ? tableWgsl(1, 3) : ''}
 /** Word \`word\` of actor \`actor\`'s record (the header's, or a game field's \`ACTOR_FIELD_*\`). */
 fn actor_word(actor: u32, word: u32) -> u32 { return records[actor * ACTOR_STRIDE + word]; }
 ${light}
@@ -373,7 +375,7 @@ struct ActorSetParams { time: f32, high: u32, views: u32, models: u32 };
 @group(1) @binding(1) var<storage, read> lists: array<u32>;
 @group(1) @binding(2) var<storage, read> records: array<u32>;
 @group(1) @binding(3) var<uniform> actor_params: ActorSetParams;
-
+${c.drawTable ? tableWgsl(1, 4) : ''}
 /** Word \`word\` of actor \`actor\`'s record (the header's, or a game field's \`ACTOR_FIELD_*\`). */
 fn actor_word(actor: u32, word: u32) -> u32 { return records[actor * ACTOR_STRIDE + word]; }
 fn actor_f32(actor: u32, word: u32) -> f32 { return bitcast<f32>(actor_word(actor, word)); }

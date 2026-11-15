@@ -27,6 +27,7 @@ export type {
   ActorDrawSetDesc,
   ActorModelOptions,
   ActorReadBack,
+  ActorSetInfo,
   ActorStats,
   ActorSystemOptions,
 } from './system';

@@ -920,3 +920,283 @@ describe('readBack (ws/pose-parity-fix)', () => {
     expect(s.fake.errors).toEqual([]);
   });
 });
+
+describe('what Forge asked of the actors (ws/actor-fit-2)', () => {
+  const QUAD =
+    '@vertex fn vs(in: VertexIn, @builtin(instance_index) inst: u32) -> @builtin(position) vec4f {\n' +
+    '  let actor = actor_at(actor_draw_of(in.core_vertex), inst);\n' +
+    '  return view.viewProj * vec4f(actor_position(actor), actor_table_f32(actor));\n}\n' +
+    '@fragment fn fs() -> @location(0) vec4f { return vec4f(actor_table_f32(0u)); }';
+
+  /** A fake device whose async compiles wait for `finish()`. */
+  function slowCompiles() {
+    const fake = createFakeDevice();
+    const dev = fake.device as unknown as GPUDevice;
+    const waiting: (() => void)[] = [];
+    let made = 0;
+    (dev as { createComputePipelineAsync: unknown }).createComputePipelineAsync = (
+      d: GPUComputePipelineDescriptor,
+    ) =>
+      new Promise<GPUComputePipeline>((resolve) => {
+        waiting.push(() => {
+          made++;
+          resolve(dev.createComputePipeline(d));
+        });
+      });
+    const finish = () => {
+      for (const f of waiting.splice(0)) f();
+    };
+    return { fake, dev, finish, made: () => made };
+  }
+
+  it('awaits the async pose pipeline across a restore, or compiles it now', async () => {
+    const { fake, dev, finish } = slowCompiles();
+    const core = createRenderCore(dev);
+    const actors = createActorSystem(core, { slots: 8, asyncPipeline: true });
+    actors.addModel(walkerRig());
+    actors.setRecord(0, { model: 0 });
+    const s = { fake, device: dev, core, actors, views: [createRenderView()] } as unknown as Scene;
+    expect(actors.pipelineReady).toBe(false);
+    let settled = false;
+    const waited = actors.whenReady().then(() => {
+      settled = true;
+    });
+    // A restore while compiling: the old compile lands and is dropped; whenReady follows the new.
+    fake.loseDevice('unknown', 'forced');
+    await fake.lost;
+    const { fake: next, dev: nextDev, finish: finishNext } = slowCompiles();
+    core.restore(nextDev);
+    s.fake = next;
+    s.device = nextDev;
+    finish();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(actors.pipelineReady).toBe(false);
+    finishNext();
+    await waited;
+    expect(actors.pipelineReady).toBe(true);
+    frame(s, 0.016);
+    expect(actors.stats.dispatched).toBe(1);
+
+    // compileNow: the pipeline at once, the async one dropped when it lands.
+    const slow = slowCompiles();
+    const core2 = createRenderCore(slow.dev);
+    const a2 = createActorSystem(core2, { slots: 8, asyncPipeline: true });
+    a2.addModel(walkerRig());
+    a2.setRecord(0, { model: 0 });
+    const s2 = {
+      fake: slow.fake,
+      device: slow.dev,
+      core: core2,
+      actors: a2,
+      views: [createRenderView()],
+    };
+    frame(s2 as unknown as Scene, 0);
+    expect(a2.stats.dispatched).toBe(0);
+    a2.compileNow();
+    expect(a2.pipelineReady).toBe(true);
+    await a2.whenReady();
+    frame(s2 as unknown as Scene, 0.016);
+    expect(a2.stats.dispatched).toBe(1);
+    const pipe = (a2 as unknown as { posePipeline: unknown }).posePipeline;
+    slow.finish();
+    await a2.whenReady();
+    await Promise.resolve();
+    expect((a2 as unknown as { posePipeline: unknown }).posePipeline).toBe(pipe);
+    expect(slow.made()).toBe(1);
+    a2.compileNow();
+    expect(slow.fake.errors).toEqual([]);
+    expect(next.errors).toEqual([]);
+  });
+
+  it('binds the game table into the body and every added set with drawTable', async () => {
+    const fake = createFakeDevice();
+    const dev = fake.device as unknown as GPUDevice;
+    const core = createRenderCore(dev);
+    expect(() => createActorSystem(core, { slots: 4, drawTable: true })).toThrow(/tableWords/);
+    const plain = createActorSystem(core, { slots: 4, label: 'plain', actorVertices: 6 });
+    const plainSet = plain.addDrawSet({
+      label: 'plain set',
+      shader: { code: 'fn f() {}' },
+      shape: 'actor',
+    });
+    const codeOf = (set: unknown) => (set as { desc: { shader: DrawSetShader } }).desc.shader.code;
+    expect(codeOf(plain.drawSet)).not.toContain('actor_table');
+    expect(codeOf(plainSet)).not.toContain('actor_table');
+    const actors = createActorSystem(core, {
+      slots: 4,
+      tableWords: 8,
+      drawTable: true,
+      actorVertices: 6,
+      // The table reaches the lighting too.
+      lightWgsl:
+        'fn actor_light(actor: u32, world: vec3f, normal: vec3f, color: vec3f, light: u32) -> vec3f {\n' +
+        '  return color * actor_table_f32(actor);\n}',
+    });
+    const set = actors.addDrawSet({ label: 'tinted', shader: { code: QUAD }, shape: 'actor' });
+    actors.addModel(walkerRig());
+    expect(codeOf(actors.drawSet)).toContain(
+      '@group(1) @binding(3) var<storage, read> actor_table: array<u32>;',
+    );
+    expect(codeOf(set)).toContain(
+      '@group(1) @binding(4) var<storage, read> actor_table: array<u32>;',
+    );
+    const table = () => fake.buffers.filter((b) => b.label === 'actors table').at(-1);
+    const bound = (label: string, binding: number) => {
+      const g = fake.bindGroups.filter((x) => x.label === label).at(-1)!;
+      const e = g.layout.entries.find((x) => x.binding === binding)!;
+      expect(e.visibility).toBe(GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT);
+      return (g.entries.find((x) => x.binding === binding)!.resource as GPUBufferBinding).buffer;
+    };
+    expect(bound('actors draw', 3)).toBe(table());
+    expect(bound('actors sets', 4)).toBe(table());
+    actors.writeTable(new Float32Array([0.5]), 1);
+    actors.setRecord(0, { model: 0 });
+    const s = { fake, device: dev, core, actors, views: [createRenderView()] } as unknown as Scene;
+    frame(s, 0);
+    expect(set.ready).toBe(true);
+    expect(fake.errors).toEqual([]);
+    // A restore binds the new table, its words written again.
+    fake.loseDevice('unknown', 'forced');
+    await fake.lost;
+    const next = createFakeDevice();
+    core.restore(next.device as unknown as GPUDevice);
+    const t2 = next.buffers.find((b) => b.label === 'actors table')!;
+    const g = next.bindGroups.filter((x) => x.label === 'actors sets').at(-1)!;
+    expect((g.entries.find((x) => x.binding === 4)!.resource as GPUBufferBinding).buffer).toBe(t2);
+    next.device.queue.submit([]);
+    expect(new Float32Array(t2.data.buffer)[1]).toBe(0.5);
+  });
+
+  it('lists the models, draws and vertices of each set', () => {
+    const fake = createFakeDevice();
+    const dev = fake.device as unknown as GPUDevice;
+    const core = createRenderCore(dev);
+    const actors = createActorSystem(core, { slots: 8, actorVertices: [6, 36] });
+    const walker = actors.addModel(walkerRig(), { name: 'walker' });
+    const tubeM = actors.addModel(tubeRig());
+    const shadow = actors.addDrawSet({ label: 'shadow', shader: { code: QUAD }, shape: 'actor' });
+    actors.addDrawSet({
+      label: 'icon',
+      shader: { code: QUAD },
+      shape: 'actor',
+      vertices: 36,
+      showLive: false,
+    });
+    actors.setRecord(0, { model: walker });
+    actors.setRecord(1, { model: walker });
+    const s = { fake, device: dev, core, actors, views: [createRenderView()] } as unknown as Scene;
+    frame(s, 0);
+    shadow.enabled = false;
+    const wIdx = actors.rig(walker).meshes[0]!.indices.length;
+    const tIdx = actors.rig(tubeM).meshes[0]!.indices.length;
+    const info = actors.setInfo();
+    expect(info.map((i) => [i.label, i.shape, i.enabled])).toEqual([
+      ['actors', 'mesh', true],
+      ['shadow', 'actor', false],
+      ['icon', 'actor', true],
+    ]);
+    // The body and the shadow leave the tube (no live actor) out; the icon keeps every model.
+    expect(info[0]).toMatchObject({
+      models: [0],
+      names: ['walker'],
+      live: [2],
+      draws: 1,
+      vertices: wIdx,
+    });
+    expect(info[1]).toMatchObject({ models: [0], draws: 1, vertices: 6 });
+    expect(info[2]).toMatchObject({
+      models: [0, 1],
+      names: ['walker', 'model 1'],
+      live: [2, 0],
+      draws: 2,
+      vertices: 72,
+    });
+    actors.setRecord(2, { model: tubeM });
+    frame(s, 0.016);
+    expect(actors.setInfo()[0]).toMatchObject({ models: [0, 1], vertices: wIdx + tIdx });
+    expect(fake.errors).toEqual([]);
+  });
+});
+
+describe('readBack holds up (ws/actor-fit-2)', () => {
+  /** Make every map of a read-back buffer on `fake` fail as Chrome's did, at `fail()`. */
+  function failMaps(fake: FakeDevice) {
+    const pending: (() => void)[] = [];
+    const dev = fake.device as unknown as { createBuffer: (d: GPUBufferDescriptor) => GPUBuffer };
+    const make = dev.createBuffer.bind(dev);
+    const made: GPUBuffer[] = [];
+    dev.createBuffer = (d) => {
+      const b = make(d);
+      if (d.usage & GPUBufferUsage.MAP_READ) {
+        made.push(b);
+        b.mapAsync = () =>
+          new Promise((_, reject) =>
+            pending.push(() => reject(new Error('mapAsync was not successful'))),
+          );
+      }
+      return b;
+    };
+    const fail = () => {
+      for (const f of pending.splice(0)) f();
+    };
+    return { made, fail };
+  }
+
+  it('serves overlapping reads, counts each set’s vertices, and survives a restore', async () => {
+    const s = scene(4, 16);
+    frame(s, 1);
+    // The pass's instance counts, as the fake holds them: 3 walkers at LOD 0, 1 tube at LOD 1.
+    const args = s.fake.buffers.find((b) => b.label === 'actors args')!;
+    const u = new Uint32Array(args.data.buffer);
+    u[s.actors.drawOf(0, 0) * 5 + 1] = 3;
+    u[s.actors.drawOf(1, 1) * 5 + 1] = 1;
+    const [a, b] = await Promise.all([s.actors.readBack(), s.actors.readBack()]);
+    expect([...a.slots]).toEqual([0, 1, 2, 3]);
+    expect([...b.gpu]).toEqual([...a.gpu]);
+    expect([...b.args]).toEqual([...a.args]);
+    const idx = (m: number, lod: number) =>
+      s.actors.rig(m).meshes[Math.min(lod, s.actors.rig(m).meshes.length - 1)]!.indices.length;
+    expect(a.setVertices).toEqual([3 * idx(0, 0) + idx(1, 1)]);
+    // Every read-back buffer freed.
+    expect(
+      s.fake.buffers.filter((x) => x.label === 'actors read back').every((x) => x.destroyed),
+    ).toBe(true);
+
+    // A restore: no read until a frame poses on the new device.
+    s.fake.loseDevice('unknown', 'forced');
+    await s.fake.lost;
+    const next = createFakeDevice();
+    s.core.restore(next.device as unknown as GPUDevice);
+    s.fake = next;
+    s.device = next.device as unknown as GPUDevice;
+    await expect(s.actors.readBack()).rejects.toThrow(/no pose pass/);
+    frame(s, 2);
+    const c = await s.actors.readBack();
+    expect([...c.slots]).toEqual([0, 1, 2, 3]);
+    expect(next.errors).toEqual([]);
+  });
+
+  it('says why when the map fails, or the device restored while it mapped, and frees the buffer', async () => {
+    const s = scene(2, 8);
+    frame(s, 0);
+    const { made, fail } = failMaps(s.fake);
+    const first = s.actors.readBack();
+    fail();
+    await expect(first).rejects.toThrow(
+      /actors: readBack: the map failed \(mapAsync was not successful\)/,
+    );
+    expect(made.length).toBe(1);
+    expect((made[0] as unknown as { destroyed: boolean }).destroyed).toBe(true);
+    // Restored between the call and the map's failure.
+    const pending = s.actors.readBack();
+    s.fake.loseDevice('unknown', 'forced');
+    await s.fake.lost;
+    s.core.restore(createFakeDevice().device as unknown as GPUDevice);
+    fail();
+    await expect(pending).rejects.toThrow(/restored while the read mapped/);
+    s.actors.destroy();
+    await expect(s.actors.readBack()).rejects.toThrow(/destroyed/);
+  });
+});

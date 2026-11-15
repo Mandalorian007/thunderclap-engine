@@ -138,9 +138,18 @@ export interface ActorSystemOptions {
    */
   tableWords?: number;
   /**
+   * Bind the game table into every actor draw set too (ws/actor-fit-2; default false; needs
+   * `tableWords`): the body's and each `addDrawSet` shader (and `lightWgsl`) read it with the
+   * same `actor_table_word(i)` / `actor_table_f32(i)`, at group 1 (binding 3 in the body's,
+   * 4 in an added set's). For per-actor game data a draw reads (a status colour, a held item):
+   * index it by `actor_word(actor, ACTOR_FIELD_<NAME>)` or by the actor itself.
+   */
+  drawTable?: boolean;
+  /**
    * Make the pose pipeline with `createComputePipelineAsync` (ws/actor-post-fit; default false),
    * so building the system does not stall on the shader compile. Until `ready` settles (and
    * again after a device restore) `prepare` runs no pose pass and the actors draw nothing.
+   * Tests await `ActorSystem.whenReady()` or force it with `compileNow()`.
    */
   asyncPipeline?: boolean;
   label?: string;
@@ -150,6 +159,31 @@ export interface ActorSystemOptions {
 export interface ActorModelOptions {
   /** This model's LOD distances (as `ActorSystemOptions.lods`); default the system's. */
   lods?: readonly number[];
+  /** A name for inspection (`ActorSystem.setInfo`); default `model <id>`. */
+  name?: string;
+}
+
+/** One draw set of the system as `ActorSystem.setInfo` sees it (ws/actor-fit-2; dev and tests). */
+export interface ActorSetInfo {
+  /** The set's label; the body (the system's own set) is first. */
+  label: string;
+  set: DrawSet;
+  shape: 'mesh' | 'actor';
+  /** `DrawSet.enabled`. */
+  enabled: boolean;
+  /** The models whose draws are in the set's bundle, ascending (with `showLive`, those with a live actor). */
+  models: number[];
+  /** Each listed model's name (`ActorModelOptions.name`). */
+  names: string[];
+  /** Each listed model's live actors (records showing it). */
+  live: number[];
+  /** Indirect draws a view, one per listed model's mesh (LOD). */
+  draws: number;
+  /**
+   * Vertices one instance of each of those draws runs: a mesh set's index counts, an `'actor'`
+   * set's vertices per actor. `ActorReadBack.setVertices` has what a frame drew.
+   */
+  vertices: number;
 }
 
 /**
@@ -236,6 +270,11 @@ export interface ActorReadBack {
   maxError: number;
   /** The slot `maxError` is at, -1 with no slots. */
   worstSlot: number;
+  /**
+   * Vertices each set drew in view 0 that frame (ws/actor-fit-2), in `setInfo` order: instances
+   * × vertices per instance over its shown draws; 0 for a set disabled at the call.
+   */
+  setVertices: number[];
 }
 
 const U = () => GPUBufferUsage;
@@ -315,6 +354,8 @@ export class ActorSystem {
   private poseLayout!: GPUBindGroupLayout;
   private poseGroup!: GPUBindGroup;
   private posePipeline: GPUComputePipeline | null = null;
+  /** The pose pipeline's descriptor on the current device, for `compileNow`. */
+  private pipeDesc!: GPUComputePipelineDescriptor;
   /** Bumped by each build, so a slow async pipeline of an old device is dropped. */
   private buildGen = 0;
   private readonly asyncPipeline: boolean;
@@ -324,6 +365,7 @@ export class ActorSystem {
   private tableBuffer: GPUBuffer | null = null;
   /** Each model's own LOD distances (empty: the system's). */
   private readonly modelLods: (readonly number[])[] = [];
+  private readonly modelNames: string[] = [];
   private readonly computeDesc: GPUComputePassDescriptor;
   private readonly scratch: PoseScratch;
   private destroyed = false;
@@ -378,6 +420,7 @@ export class ActorSystem {
     this.vertexCap = Math.max(0, Math.floor(opts.vertexCap ?? 0));
     this.asyncPipeline = opts.asyncPipeline ?? false;
     const tw = Math.max(0, Math.floor(opts.tableWords ?? 0));
+    if (opts.drawTable && !tw) throw new Error(`${this.label}: drawTable needs tableWords`);
     this.tableData = tw > 0 ? new Uint32Array(tw) : null;
     this.tableF32 = this.tableData ? new Float32Array(this.tableData.buffer) : null;
     this.dirtyFlags = new Uint8Array(this.slots);
@@ -401,6 +444,7 @@ export class ActorSystem {
       actorVertices: this.actorVertices,
       counters: core.maxViews * this.maxDraws * this.argsWords,
       table: this.tableData !== null,
+      drawTable: !!opts.drawTable,
       pose: opts.poseWgsl ?? '',
       fieldConsts: actorFieldConsts(this.shape.fields),
     };
@@ -527,11 +571,12 @@ export class ActorSystem {
       }),
       compute: { module, entryPoint: 'pose' },
     };
+    this.pipeDesc = pipeDesc;
     const gen = ++this.buildGen;
     this.posePipeline = null;
     if (this.asyncPipeline && typeof device.createComputePipelineAsync === 'function') {
       this.ready = device.createComputePipelineAsync(pipeDesc).then((p) => {
-        if (gen === this.buildGen && !this.destroyed) {
+        if (gen === this.buildGen && !this.destroyed && !this.posePipeline) {
           this.posePipeline = p;
           this.warmPose(p);
         }
@@ -542,12 +587,24 @@ export class ActorSystem {
       this.ready = Promise.resolve();
     }
 
+    // The game table in the draws (`drawTable`): after the body's three buffers, the sets' four.
+    const VF = S.VERTEX | S.FRAGMENT;
+    const table = consts.drawTable ? this.tableBuffer : null;
+    const tableAt = (binding: number) =>
+      table
+        ? {
+            layout: [{ binding, visibility: VF, buffer: { type: 'read-only-storage' as const } }],
+            group: [{ binding, resource: { buffer: table } }],
+          }
+        : { layout: [], group: [] };
+    const bodyTable = tableAt(3);
     this.drawLayout = device.createBindGroupLayout({
       label: `${this.label} draw`,
       entries: [
         { binding: 0, visibility: S.VERTEX, buffer: { type: 'read-only-storage' } },
         { binding: 1, visibility: S.VERTEX, buffer: { type: 'read-only-storage' } },
         { binding: 2, visibility: S.VERTEX, buffer: { type: 'read-only-storage' } },
+        ...bodyTable.layout,
       ],
     });
     this.drawGroup = device.createBindGroup({
@@ -557,8 +614,10 @@ export class ActorSystem {
         { binding: 0, resource: { buffer: this.bones } },
         { binding: 1, resource: { buffer: this.lists } },
         { binding: 2, resource: { buffer: this.records } },
+        ...bodyTable.group,
       ],
     });
+    const setTable = tableAt(4);
     this.setLayout = device.createBindGroupLayout({
       label: `${this.label} sets`,
       entries: [
@@ -566,6 +625,7 @@ export class ActorSystem {
         { binding: 1, visibility: S.VERTEX | S.FRAGMENT, buffer: { type: 'read-only-storage' } },
         { binding: 2, visibility: S.VERTEX | S.FRAGMENT, buffer: { type: 'read-only-storage' } },
         { binding: 3, visibility: S.VERTEX | S.FRAGMENT, buffer: { type: 'uniform' } },
+        ...setTable.layout,
       ],
     });
     this.setGroup = device.createBindGroup({
@@ -576,6 +636,7 @@ export class ActorSystem {
         { binding: 1, resource: { buffer: this.lists } },
         { binding: 2, resource: { buffer: this.records } },
         { binding: 3, resource: { buffer: this.paramsBuffer } },
+        ...setTable.group,
       ],
     });
   }
@@ -588,6 +649,8 @@ export class ActorSystem {
   private restore(device: GPUDevice): void {
     if (this.destroyed) return;
     this.device = device;
+    // The new bones hold nothing posed until the next pass (`readBack` waits for it).
+    this.posed = false;
     this.build();
     this.device.queue.writeBuffer(this.template, 0, this.templateData);
     let d = 0;
@@ -782,6 +845,7 @@ export class ActorSystem {
     }
     this.rigs.push(rig);
     this.modelLods.push(opts.lods ?? []);
+    this.modelNames.push(opts.name ?? `model ${id}`);
     this.device.queue.writeBuffer(this.template, 0, this.templateData);
     this.rigBuffer.destroy();
     this.rigBuffer = this.makeRigBuffer();
@@ -922,20 +986,19 @@ export class ActorSystem {
    * frame's motion.) `slots` limits the read (default every slot showing a model). Rejects when
    * a record changed since `prepare` or the pass did not run. Slow (a buffer map); tests and dev
    * only.
+   *
+   * Calls may overlap: each copies into its own buffer at the call and maps it alone. After a
+   * device restore it rejects until a frame poses on the new device, and a read whose map fails
+   * (its device lost or restored while it mapped) rejects with what happened, its buffer freed
+   * (ws/actor-fit-2).
    */
   readBack(slots?: ArrayLike<number>): Promise<ActorReadBack> {
-    this.alive();
-    if (!this.posed) {
-      return Promise.reject(
-        new Error(`${this.label}: readBack: the last prepare ran no pose pass`),
-      );
-    }
+    const fail = (why: string, cause?: unknown) =>
+      Promise.reject(new Error(`${this.label}: readBack: ${why}`, { cause }));
+    if (this.destroyed) return fail('destroyed');
+    if (!this.posed) return fail('the last prepare ran no pose pass');
     if (this.dirtyHi >= this.dirtyLo) {
-      return Promise.reject(
-        new Error(
-          `${this.label}: readBack: records changed since prepare (call it right after the frame)`,
-        ),
-      );
+      return fail('records changed since prepare (call it right after the frame)');
     }
     const list: number[] = [];
     if (slots) {
@@ -959,6 +1022,11 @@ export class ActorSystem {
     const boneBytes = this.slots * per * 4;
     const argsBytes = this.templateData.byteLength;
     const device = this.device;
+    const gen = this.buildGen;
+    // What each set draws per instance of each draw, and whether it draws at all, at the call.
+    const sets = this.allSets().map((e) =>
+      e.set.enabled ? this.perDraw(e, this.modelsIn(e)) : null,
+    );
     const read = device.createBuffer({
       label: `${this.label} read back`,
       size: boneBytes + argsBytes,
@@ -972,8 +1040,12 @@ export class ActorSystem {
     const joints = (m: number): number => this.rigs[m]!.joints * 12;
     return read.mapAsync(GPUMapMode.READ).then(
       () => {
-        const data = read.getMappedRange().slice(0);
-        read.destroy();
+        let data: ArrayBuffer;
+        try {
+          data = read.getMappedRange().slice(0);
+        } finally {
+          read.destroy();
+        }
         const all = new Float32Array(data, 0, boneBytes / 4);
         const gpu = new Float32Array(list.length * per);
         let maxError = 0;
@@ -990,23 +1062,111 @@ export class ActorSystem {
           }
         });
         if (worstSlot < 0 && list.length > 0) worstSlot = list[0]!;
+        const args = new Uint32Array(data, boneBytes, argsBytes / 4);
+        const setVertices = sets.map((per) => {
+          let n = 0;
+          per?.forEach((v, d) => {
+            n += args[d * argsWords + 1]! * v;
+          });
+          return n;
+        });
         return {
           time,
           slots: Uint32Array.from(list),
           models,
           gpu,
           cpu,
-          args: new Uint32Array(data, boneBytes, argsBytes / 4),
+          args,
           argsWords,
           maxError,
           worstSlot,
+          setVertices,
         };
       },
       (e: unknown) => {
         read.destroy();
-        throw e;
+        return fail(
+          gen !== this.buildGen
+            ? 'the device was restored while the read mapped; read again after the next frame'
+            : `the map failed (${e instanceof Error ? e.message : String(e)})`,
+          e,
+        );
       },
     );
+  }
+
+  /** Is the pose pipeline made (ws/actor-fit-2)? Always with `asyncPipeline` off. */
+  get pipelineReady(): boolean {
+    return this.posePipeline !== null;
+  }
+
+  /**
+   * Settles once the pose pipeline of the current device is made (ws/actor-fit-2): `ready`,
+   * followed again when a device restore replaced it meanwhile. For tests and harnesses.
+   */
+  whenReady(): Promise<void> {
+    const p = this.ready;
+    return p.then(() => (this.ready === p || this.destroyed ? undefined : this.whenReady()));
+  }
+
+  /**
+   * Make the pose pipeline now, synchronously, if `asyncPipeline` has not made it yet
+   * (ws/actor-fit-2): the next `prepare` poses. The async compile still lands and is dropped.
+   * Stalls on the compile; for deterministic tests and harnesses.
+   */
+  compileNow(): void {
+    this.alive();
+    if (this.posePipeline) return;
+    this.posePipeline = this.device.createComputePipeline(this.pipeDesc);
+    this.warmPose(this.posePipeline);
+    this.ready = Promise.resolve();
+  }
+
+  /**
+   * Each draw set of the system (ws/actor-fit-2): the body first, then `addDrawSet`'s in order,
+   * with the models in its bundle, their live actors, and its draws and vertices per instance.
+   * Allocates; dev overlays, inspectors and tests.
+   */
+  setInfo(): ActorSetInfo[] {
+    return this.allSets().map((e) => {
+      const models = this.modelsIn(e);
+      let vertices = 0;
+      for (const v of this.perDraw(e, models)) vertices += v;
+      return {
+        label: e.set.label,
+        set: e.set,
+        shape: e.rec >= 0 ? 'actor' : 'mesh',
+        enabled: e.set.enabled,
+        models,
+        names: models.map((m) => this.modelNames[m]!),
+        live: models.map((m) => this.live[m]!),
+        draws: models.reduce((n, m) => n + this.rigs[m]!.meshes.length, 0),
+        vertices,
+      };
+    });
+  }
+
+  /** The body's set, then the added ones. */
+  private allSets(): Pick<ExtraSet, 'set' | 'rec' | 'vertices' | 'live'>[] {
+    return [{ set: this.drawSet, rec: -1, vertices: 0, live: this.bodyLive }, ...this.extra];
+  }
+
+  /** The models whose draws are in a set's bundle. */
+  private modelsIn(e: Pick<ExtraSet, 'live'>): number[] {
+    const out: number[] = [];
+    for (let m = 0; m < this.rigs.length; m++) if (!e.live || this.shown[m]) out.push(m);
+    return out;
+  }
+
+  /** Vertices per instance of each draw of a set (0 for a draw not in its bundle). */
+  private perDraw(e: Pick<ExtraSet, 'rec' | 'vertices'>, models: number[]): number[] {
+    const per = new Array<number>(this.draws).fill(0);
+    for (const m of models) {
+      this.rigs[m]!.meshes.forEach((mesh, i) => {
+        per[this.drawBases[m]! + i] = e.rec >= 0 ? e.vertices : mesh.indices.length;
+      });
+    }
+    return per;
   }
 
   /**

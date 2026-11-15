@@ -47,10 +47,13 @@ actors.prepare(encoder, [view], performance.now() / 1000);
 | `actors.prepare(encoder, views, time, timestampWrites?)` | uploads, resets the indirect counts and runs the pose pass (timed with the writes given, for example `GpuTimer.pass('actors')`) |
 | `actors.lodScale`, `actors.vertexCap` (`opts.lodScale`, `opts.vertexCap`) | scale every LOD distance, and cap the vertices of actors per view (an actor past it draws its model's coarsest mesh); read each `prepare`, so a frame governor may set them |
 | `opts.tableWords`, `actors.writeTable(data, at?)` | a game table bound to the pose pass at group 0 binding 7, read with `actor_table_word(i)` / `actor_table_f32(i)` |
+| `opts.drawTable` | the same table bound into every actor draw set too (group 1: binding 3 in the body's, 4 in an added set's), for per-actor game data a draw reads (a status colour, a held item), `lightWgsl` included (ws/actor-fit-2) |
 | `opts.asyncPipeline`, `actors.ready` | make the pose pipeline with `createComputePipelineAsync`; the actors draw nothing until `ready` settles; the pose pipeline gets an empty first dispatch at load when `core.warming` (ws/forge-asks-fit) |
+| `actors.whenReady()`, `compileNow()`, `pipelineReady` | for tests and harnesses (ws/actor-fit-2): await the current device's pose pipeline (past a restore), or make a pending one now, synchronously |
+| `actors.setInfo()` → `ActorSetInfo[]` | each set (the body first): label, shape, `enabled`, the models in its bundle with their names (`addModel(rig, { name })`) and live actors, its draws, and vertices per instance of them; `ActorReadBack.setVertices` has the vertices each drew in view 0 (ws/actor-fit-2) |
 | `opts.showLive` | false keeps every model's draws in the body's bundle from the start (no re-record on a model's first actor); `ActorDrawSetDesc.showLive` does the same for one set |
 | `actors.poseCpu(slot, out, 'world' or 'skin', time?)` | the same pose on the CPU, for hit tests, attachments and tests |
-| `actors.readBack(slots?)` → `Promise<ActorReadBack>` | the last frame's skin matrices and indirect arguments read back beside the CPU twin of the same records at the f32 clock the pass saw, posed at the call (ws/pose-parity-fix): call it right after the frame's submit. Posing with `poseCpu` after awaiting a map poses later records, and a crowd rewritten every frame drifts by a frame's motion. Tests and dev only |
+| `actors.readBack(slots?)` → `Promise<ActorReadBack>` | the last frame's skin matrices and indirect arguments read back beside the CPU twin of the same records at the f32 clock the pass saw, posed at the call (ws/pose-parity-fix): call it right after the frame's submit. Posing with `poseCpu` after awaiting a map poses later records, and a crowd rewritten every frame drifts by a frame's motion. Calls may overlap (each maps its own buffer); after a device restore it rejects until a frame poses, and a failed map rejects naming why. Tests and dev only |
 | `actors.bones`, `actors.args`, `drawOf(model, lod)` | the GPU outputs, for readback or a game's own pass |
 | `recordShape(layout)` / `opts.recordLayout` | extra per-actor fields (`f32`, `u32`, `i32`) after the 20 header words, visible to WGSL as `ACTOR_FIELD_<NAME>` |
 | `ACTOR_RECORD` | the header's word offsets |
@@ -75,7 +78,8 @@ Up to 65,535 slots, 64 bones a slot (16 by default), 4 LOD distances, `maxModels
 | Name | Kind |
 | --- | --- |
 | `ActorSystem`, `ActorSystemOptions`, `ActorStats` (`calls`, `recordBytes`, `recordWrites`, `dispatched`) | the system, its options and its per-frame counts |
-| `ActorModelOptions` | `addModel`'s per-model options (`lods`) |
+| `ActorModelOptions` | `addModel`'s per-model options (`lods`, `name`) |
+| `ActorSetInfo` | one set as `setInfo` sees it |
 | `ActorRig`, `ActorMesh`, `BakedClip` | what `defineRig` returns: bones, meshes (one per LOD) and clips baked into TRS frames |
 | `RigDesc`, `RigidRigDesc`, `RigidBoneDesc`, `LinearRigDesc`, `SkinnedMeshDesc`, `ActorClipDesc` | what `defineRig` takes |
 | `bakeClip`, `ACTOR_CLIP_FPS` | bake one `AnimationClip` at a rate (30 by default) |
