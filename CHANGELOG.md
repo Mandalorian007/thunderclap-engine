@@ -4,6 +4,8 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 
 ## Unreleased
 
+## 2.0.0-next.19 (2026-11-15)
+
 - Generated TypeScript for a game's own envelope (ws/wire-ts-fit, E13; Forge F1b's asks, forgewilds #806). Defaults unchanged. *Added* (`thunderclap-server`): `define_schema_ts_with` emits every `Protocol::ENVELOPE` option: a `Hello` with the game's fields among the envelope's (`HelloField::ExtFields`) becomes a struct of those fields as `roles.hello` with `{ ext: n }` entries, plus `rejected`, `ack: 'messages'` and the close enum. It first checks the schema's `ClientMsg`/`ServerMsg` against the layout and names every mismatch (before, it failed with `no ClientMsg::Hello.ext`); `tests/ts_envelope.rs` and `src/net/own-envelope.test.ts` check hash and frames both ways with every option. *Added* (`net`): `NetOptions.rawServer` and the `raw` event (named game server messages arrive as their whole frames, undecoded, a bulk lane's too); `FixedBits` (`Writer.fixed` takes any `{ bits }`, range-checked). *Changed* (`net`): `u64`/`i64` decode without BigInt (same values; past 2^53 still an error, now with the exact value). *Added* (`tc-auth`): `ClaimWords` and `MemoryAccounts::with_words`/`FileAccounts::with_words` (a store's claim refusals, such as "the name {name} is taken", in the game's words; the defaults are the old texts).
 - Bundle budget after E13 (ws/wire-ts-fit), set at merge to about 700 B over the merged local size: `./net` 18700 -> 18900 (18123 B, +175 B).
 
