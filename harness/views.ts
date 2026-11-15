@@ -280,7 +280,8 @@ async function main(): Promise<void> {
   }
   const { gpu } = res;
   installGpuErrorLogging(gpu.device);
-  const core = createRenderCore(gpu);
+  // E28: pinned, the counts asserted are the GPU-cull path (`'auto'` is CPU cull on WebKit).
+  const core = createRenderCore(gpu, { drawCull: 'gpu' });
 
   // One eye per half: the aspect is the half's, `screen` is the half as a fraction of the
   // surface, `viewIndex` tells the views apart.

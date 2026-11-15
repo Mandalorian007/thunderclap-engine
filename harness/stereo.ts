@@ -194,7 +194,9 @@ async function main(): Promise<void> {
   }
   const device = ctx.gpu.device;
   installGpuErrorLogging(device);
+  // E28: pinned, the counts asserted are the GPU-cull path (`'auto'` is CPU cull on WebKit).
   const core = createRenderCore(device, {
+    drawCull: 'gpu',
     targets: TARGETS ? ['emissive', 'roughMetal', 'velocity'] : undefined,
   });
   const sunShadow = PASSES ? ctx.renderer.coreShadow : null;

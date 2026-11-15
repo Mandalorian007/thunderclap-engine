@@ -185,7 +185,12 @@ async function main(): Promise<void> {
   }
   const { surface, gpu } = res;
   installGpuErrorLogging(gpu.device);
-  const core = createRenderCore(gpu, { ...(far > 0 ? { originGrid: 1024 } : {}), warm });
+  // E28: pinned, the counts asserted are the GPU-cull path (`'auto'` is CPU cull on WebKit).
+  const core = createRenderCore(gpu, {
+    ...(far > 0 ? { originGrid: 1024 } : {}),
+    warm,
+    drawCull: 'gpu',
+  });
   const sky = withSky
     ? createSkyPass(core, {
         zenith: [0.18, 0.36, 0.78],

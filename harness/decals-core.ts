@@ -320,7 +320,8 @@ async function main(): Promise<void> {
   }
   const { gpu } = res;
   installGpuErrorLogging(gpu.device);
-  const core = createRenderCore(gpu);
+  // E28: pinned, the counts asserted are the GPU-cull path (`'auto'` is CPU cull on WebKit).
+  const core = createRenderCore(gpu, { drawCull: 'gpu' });
 
   const fovY = (50 * Math.PI) / 180;
   const eyes = [0, 1].map((i) => {
