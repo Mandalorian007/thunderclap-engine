@@ -1141,10 +1141,28 @@ impl SectionStream {
     /// nothing loading and some view still loads (a moving view moves
     /// again soon: what a source reads ahead for it stays wanted). See
     /// [`view_loading`](Self::view_loading) for the parts.
+    ///
+    /// For sizing what a source reads ahead, not for holding a
+    /// connection's writes back: it stays true while its sections wait
+    /// unwritten, so a session that lingers over its bulk frames while it
+    /// holds waits on frames only its writing ends. Use
+    /// [`more_coming`](Self::more_coming) for that.
     pub fn loading_for(&self, conn: ConnId) -> bool {
         self.viewers
             .get(&conn)
             .is_some_and(|v| v.active() || (v.moved && self.any_active()))
+    }
+
+    /// True if more sections are coming for a connection soon: its area is
+    /// still scanned, or it moved while some view still is (a moving view
+    /// moves again soon). What a host lingers on before waking a session
+    /// to write its bulk frames (a tc-net `wake_lingering`): unlike
+    /// [`loading_for`](Self::loading_for) it doesn't count the sections
+    /// already queued, which wait on that write.
+    pub fn more_coming(&self, conn: ConnId) -> bool {
+        self.viewers
+            .get(&conn)
+            .is_some_and(|v| v.cursor < v.end || (v.moved && self.loading()))
     }
 
     /// Some connection is scanning or has sections in flight.
@@ -1467,8 +1485,12 @@ impl SectionStream {
 
     /// Sends one connection what changed of what it holds now, whatever
     /// the rebuild budget: before the reply to its own command, so it sees
-    /// its change first. The next [`flush`](Self::flush) sends the rest
-    /// as usual.
+    /// its change first. A changed section nobody holds next to its area
+    /// (within the hysteresis and one) is put to
+    /// [`SectionSource::unheld`] first, as a flush does: what that marks
+    /// (or, with [`Unheld::Build`], what its build marks) of what this
+    /// connection holds is rebuilt and sent too. The next
+    /// [`flush`](Self::flush) sends the rest as usual.
     pub fn flush_conn<S: SectionSource + ?Sized>(
         &mut self,
         conn: ConnId,
@@ -1478,23 +1500,46 @@ impl SectionStream {
         let Some(v) = self.viewers.get(&conn) else {
             return;
         };
+        let (area, h) = (v.area, i64::from(self.config.hysteresis) + 1);
+        let next_door = move |p: &SectionPos| area.is_some_and(|a| a.contains(*p, h));
+        // The unheld first: what they mark is rebuilt after them, once.
         let mut work: VecDeque<SectionPos> = self
             .changed
             .iter()
-            .filter(|p| v.held.contains_key(p))
+            .filter(|p| next_door(p) && !self.viewers.values().any(|v| v.held.contains_key(p)))
             .copied()
             .collect();
+        work.extend(
+            self.changed
+                .iter()
+                .filter(|p| v.held.contains_key(p))
+                .copied(),
+        );
         self.start_pass(src);
-        // What it holds of what its builds mark is rebuilt too (once each).
         let mut done = PosSet::default();
         while let Some(pos) = work.pop_front() {
-            let held = self
+            if !self.changed.contains(&pos) || done.contains(&pos) {
+                continue;
+            }
+            let ours = self
                 .viewers
                 .get(&conn)
                 .is_some_and(|v| v.held.contains_key(&pos));
-            if !held || !self.changed.contains(&pos) || !done.insert(pos) {
-                continue;
+            if !ours {
+                // Another's, or too far to reach what it holds: the flush's.
+                if !next_door(&pos) || self.viewers.values().any(|v| v.held.contains_key(&pos)) {
+                    continue;
+                }
+                done.insert(pos);
+                let near = self.near(pos);
+                if src.unheld(pos, near, &mut self.marks) == Unheld::Forget {
+                    self.forget_change(pos);
+                    self.apply_marks(src);
+                    work.extend(self.marked.drain(..));
+                    continue;
+                }
             }
+            done.insert(pos);
             self.build(src, pos);
             work.extend(self.marked.drain(..));
         }
@@ -1734,11 +1779,7 @@ impl SectionStream {
             if !self.viewers.values().any(|v| v.held.contains_key(&pos)) {
                 let near = self.near(pos);
                 if src.unheld(pos, near, &mut self.marks) == Unheld::Forget {
-                    // Built again when someone wants it.
-                    self.changed.remove(&pos);
-                    self.bulk.remove(&pos);
-                    self.derived.remove(&pos);
-                    self.cache.remove(pos);
+                    self.forget_change(pos);
                     self.apply_marks(src);
                     work.extend(self.marked.drain(..));
                     continue;
@@ -1757,6 +1798,14 @@ impl SectionStream {
             self.build(src, pos);
             work.extend(self.marked.drain(..));
         }
+    }
+
+    /// Drops a change nobody holds: built again when someone wants it.
+    fn forget_change(&mut self, pos: SectionPos) {
+        self.changed.remove(&pos);
+        self.bulk.remove(&pos);
+        self.derived.remove(&pos);
+        self.cache.remove(pos);
     }
 
     /// True if `pos` is within the hysteresis and one of some area.

@@ -98,6 +98,14 @@ export interface PostStackOptions {
   toSrgb?: boolean;
   /** Game WGSL run inside the composite (ws/post-fit). */
   hook?: PostCompositeHook;
+  /**
+   * Frames before the passes that are off are made and warmed, one a frame (E26; default 120).
+   * A pass that is on when the stack is made is made then, and one turned on in the frame it
+   * turns on; the rest wait this long, so a cold shader cache doesn't hold up the game's first
+   * view (WebKit compiles a pipeline when it is made, and the next submit waits for it).
+   * `Infinity`: only when on.
+   */
+  warmAfterFrames?: number;
 }
 
 /**
@@ -232,6 +240,12 @@ export class PostStack implements PostProcessor {
   private readonly taaPass: DepthPass;
   /** The one-output resolve (`quality.taaAux: false`, ws/pass-cost), made on first use. */
   private taaPass1: DepthPass | null = null;
+  /** `lazy` passes not made and warmed yet, with the setting that turns each on (E26). */
+  private readonly cold: { pass: FullscreenPass | DepthPass; on: (s: PostSettings) => boolean }[] =
+    [];
+  /** Frames encoded, for `warmAfterFrames`. */
+  private frames = 0;
+  private readonly warmAfter: number;
   /** The last TAA resolve wrote one target: its histories have no aux to read. */
   private taaSingle = false;
   private readonly ssrPass: DepthPass;
@@ -389,6 +403,7 @@ export class PostStack implements PostProcessor {
     const bytes = POST_UNIFORM_FLOATS * 4;
     this.prefilter = renderer.createFullscreenPass({
       label: 'post-bloom-prefilter',
+      lazy: true,
       wgsl: PREFILTER_WGSL,
       targets: [HDR],
       uniformBytes: bytes,
@@ -396,12 +411,14 @@ export class PostStack implements PostProcessor {
     });
     this.down = renderer.createFullscreenPass({
       label: 'post-bloom-down',
+      lazy: true,
       wgsl: DOWN_WGSL,
       targets: [HDR],
       textures: 1,
     });
     this.up = renderer.createFullscreenPass({
       label: 'post-bloom-up',
+      lazy: true,
       wgsl: UP_WGSL,
       targets: [HDR],
       textures: 1,
@@ -412,6 +429,7 @@ export class PostStack implements PostProcessor {
     });
     this.rays = renderer.createFullscreenPass({
       label: 'post-godrays',
+      lazy: true,
       wgsl: RAYS_WGSL,
       targets: [HDR],
       uniformBytes: bytes,
@@ -431,6 +449,7 @@ export class PostStack implements PostProcessor {
     });
     this.fxaa = renderer.createFullscreenPass({
       label: 'post-fxaa',
+      lazy: true,
       wgsl: FXAA_WGSL,
       targets: [this.outFormat],
       uniformBytes: bytes,
@@ -438,6 +457,7 @@ export class PostStack implements PostProcessor {
     });
     this.outline = new DepthPass(renderer, {
       label: 'post-outline',
+      lazy: true,
       wgsl: OUTLINE_WGSL,
       format: AO,
       textures: 0,
@@ -451,39 +471,51 @@ export class PostStack implements PostProcessor {
     });
     this.lutPlaceholderView = this.lutPlaceholder.createView({ dimension: '3d' });
     this.lutView = this.lutPlaceholderView;
-    this.ao = new DepthPass(renderer, { label: 'post-ao', wgsl: AO_WGSL, format: AO, textures: 0 });
+    this.ao = new DepthPass(renderer, {
+      label: 'post-ao',
+      lazy: true,
+      wgsl: AO_WGSL,
+      format: AO,
+      textures: 0,
+    });
     this.aoBlur = new DepthPass(renderer, {
       label: 'post-ao-blur',
+      lazy: true,
       wgsl: AO_BLUR_WGSL,
       format: AO,
       textures: 1,
     });
     this.dof = new DepthPass(renderer, {
       label: 'post-dof',
+      lazy: true,
       wgsl: DOF_WGSL,
       format: HDR,
       textures: 1,
     });
     this.taaPass = new DepthPass(renderer, {
       label: 'post-taa',
+      lazy: true,
       wgsl: TAA_WGSL,
       format: [HDR, TAA_AUX_FORMAT],
       textures: 4,
     });
     this.ssrPass = new DepthPass(renderer, {
       label: 'post-ssr',
+      lazy: true,
       wgsl: SSR_WGSL,
       format: HDR,
       textures: 2,
     });
     this.motionBlurPass = new DepthPass(renderer, {
       label: 'post-motion-blur',
+      lazy: true,
       wgsl: MOTION_BLUR_WGSL,
       format: HDR,
       textures: 2,
     });
     this.upscale = renderer.createFullscreenPass({
       label: 'post-upscale',
+      lazy: true,
       targets: [this.outFormat],
       textures: 1,
       wgsl: /* wgsl */ `
@@ -493,7 +525,60 @@ export class PostStack implements PostProcessor {
   return vec4f(textureSampleLevel(src, samp, in.uv, 0.0).rgb, 1.0);
 }`,
     });
+    this.warmAfter = opts.warmAfterFrames ?? 120;
+    const bloom = (x: PostSettings) => x.bloom.enabled;
+    this.cold.push(
+      { pass: this.prefilter, on: bloom },
+      { pass: this.down, on: bloom },
+      { pass: this.up, on: bloom },
+      { pass: this.rays, on: (x) => x.godRays.enabled },
+      { pass: this.fxaa, on: (x) => x.fxaa.enabled },
+      { pass: this.outline, on: (x) => x.outline.enabled },
+      { pass: this.ao, on: (x) => x.ao.enabled },
+      { pass: this.aoBlur, on: (x) => x.ao.enabled },
+      { pass: this.dof, on: (x) => x.dof.enabled },
+      { pass: this.taaPass, on: (x) => x.taa.enabled },
+      { pass: this.ssrPass, on: (x) => x.ssr.enabled },
+      { pass: this.motionBlurPass, on: (x) => x.motionBlur.enabled },
+      { pass: this.upscale, on: () => this.quality.compositeAtScene },
+    );
+    this.warmCold();
     this.resize(renderer.width, renderer.height);
+  }
+
+  /**
+   * Warm the passes that are off (E26): those turned on now, and, `warmAfterFrames` frames
+   * after the stack was made, one more a frame. Returns how many were queued.
+   */
+  private warmCold(): number {
+    const cold = this.cold;
+    if (cold.length === 0) return 0;
+    const s = this.settings;
+    let n = 0;
+    for (let i = cold.length - 1; i >= 0; i--) {
+      const c = cold[i]!;
+      if (c.pass.warmed || c.on(s)) {
+        if (!c.pass.warmed) n++;
+        c.pass.warm();
+        cold.splice(i, 1);
+      }
+    }
+    if (n === 0 && cold.length > 0 && this.frames >= this.warmAfter) {
+      cold.shift()!.pass.warm();
+      n++;
+    }
+    return n;
+  }
+
+  /** Warm every pass now, on or off (E26): for a game that knows it is idle (a loading screen). */
+  warmAll(): void {
+    for (const c of this.cold) c.pass.warm();
+    this.cold.length = 0;
+  }
+
+  /** Passes not warmed yet (E26; `warmAfterFrames`). */
+  get coldPasses(): number {
+    return this.cold.length;
   }
 
   /** Change the cost caps. Bloom level changes reallocate the mip chain on the next frame. */
@@ -649,6 +734,8 @@ export class PostStack implements PostProcessor {
     viewport?: SceneTargetViewport,
   ): void {
     this.advanceBlend(inputs.time);
+    this.frames++;
+    this.warmCold();
     const s = this.settings;
     const q = this.quality;
     const r = this.renderer;

@@ -106,6 +106,7 @@ pub struct RepairReport {
 
 /// Checks the store in `dir`, changing nothing (and taking no lock).
 pub fn check<C: LogCodec>(dir: &Path, codec: &C) -> Result<CheckReport, StoreError> {
+    crate::upgrade::refuse_if_due(dir, codec)?;
     read_meta(dir)?;
     let history = read_history(dir, codec)?;
     let files = summaries(&history);
@@ -156,6 +157,7 @@ pub fn repair_with<C: LogCodec>(
     output: Output<'_>,
     accept: impl FnMut(&LogEntry<C::Event>) -> Result<(), String>,
 ) -> Result<RepairReport, StoreError> {
+    crate::upgrade::refuse_if_due(dir, codec)?;
     let meta = read_meta(dir)?;
     let history = read_history(dir, codec)?;
     let (salvage, refused) = salvage(&history, accept);

@@ -494,6 +494,14 @@ A `FullscreenPass` (and a `DepthPass`) queues an empty draw of its pipeline on t
 load and enabled later then does not stall WebKit when it first draws. The render README has the
 details.
 
+The stack makes only the composite and the passes that are on (E26). WebKit compiles a pipeline
+when it is made, and the next submit waits for it, so on a cold shader cache every pass made at
+load held up the game's first view (about 1 s of Forge's join on a Mac). The others are `lazy`
+(`FullscreenPassDesc.lazy`): a pass turned on is made and warmed in that frame, and
+`PostStackOptions.warmAfterFrames` frames after the stack was made (default 120) the rest are
+made one a frame. `Infinity` makes them only when they turn on; `post.warmAll()` makes them all
+now (a loading screen); `post.coldPasses` counts those left. `post-warm.test.ts` covers it.
+
 ## Types
 
 - `PostSettings` has one section per pass: `bloom: BloomSettings`, `mist: MistSettings`,

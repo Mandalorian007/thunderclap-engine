@@ -1347,3 +1347,83 @@ fn a_moved_view_loads_until_its_area_is_written_and_the_wave_ends() {
     g.check(A);
     g.check(B);
 }
+
+#[test]
+fn flush_conn_asks_unheld_so_an_exposed_neighbour_comes_before_the_result() {
+    // `far` is next to A's area, never held; a change to it exposes
+    // `edge`, which A holds: the source reads that in `unheld` (Forget,
+    // marking the neighbour), or in `far`'s build (Build).
+    let (edge, far) = (at(1, 0, 0), at(2, 0, 0));
+    let mut g = Game::new(StreamConfig::default());
+    g.join(A, area(0, 0, 0, 1));
+    g.join(B, area(40, 0, 0, 1));
+    g.settle();
+    g.src.spills.borrow_mut().insert(far, edge);
+    g.src.unheld.set(Some(Unheld::Forget));
+    // What `edge` shows changed with `far` (its hidden faces), unmarked.
+    let mut cells = g.src.world.cells_of(edge);
+    cells[0] = 9;
+    g.src.world.edits.borrow_mut().insert(edge, cells);
+    g.stream.changed(far);
+    // Next to B only, and far from A: left for the flush.
+    g.stream.changed(at(42, 0, 0));
+    g.stream.flush_conn(A, &mut g.src, &mut g.lanes);
+    assert_eq!(g.src.asked.take(), vec![(far, true)]);
+    assert_eq!(g.stream.changes_pending(), 1, "B's waits for the flush");
+    g.deliver();
+    g.check(A);
+
+    // Built: its build spills on `edge`, which A gets with its layer.
+    g.src.unheld.set(Some(Unheld::Build));
+    let builds = g.src.world.builds.get();
+    g.stream.changed(far);
+    g.stream.flush_conn(A, &mut g.src, &mut g.lanes);
+    assert_eq!(g.src.world.builds.get(), builds + 2, "far, then edge");
+    g.deliver();
+    assert_eq!(g.player(A).layers[&(PILES, edge)], vec![1]);
+    g.check(A);
+    // A changed section another holds isn't A's to build.
+    g.src.asked.take();
+    let builds = g.src.world.builds.get();
+    g.src.world.set(&mut g.stream, at(40, 0, 0), 3, 9);
+    g.stream.flush_conn(A, &mut g.src, &mut g.lanes);
+    assert_eq!(g.src.world.builds.get(), builds);
+    assert!(g.src.asked.take().is_empty());
+    g.settle();
+    g.check(A);
+    g.check(B);
+}
+
+#[test]
+fn more_coming_ends_with_the_scan_not_with_the_frames() {
+    let mut g = Game::new(StreamConfig {
+        build_budget: 30,
+        ..StreamConfig::default()
+    });
+    g.join(A, area(0, 0, 0, 1));
+    assert!(g.stream.more_coming(A), "still to be scanned");
+    assert!(!g.stream.more_coming(C), "not connected");
+    // Scanned in one flush, its frames unwritten: loading, but nothing
+    // more is coming, so a session lingering on it writes them now.
+    g.stream.flush(&mut g.src, &mut g.lanes);
+    assert!(g.stream.loading_for(A));
+    assert!(!g.stream.more_coming(A));
+    g.join(B, area(20, 0, 0, 1));
+    g.settle();
+    assert!(!g.stream.more_coming(A) && !g.stream.more_coming(B));
+
+    // Both move; one flush's budget scans A's nine new sections, not all
+    // of B's: A is done, but moved in B's wave, so more may come for it.
+    g.stream.set_interest(A, area(1, 0, 0, 1), &[]).unwrap();
+    g.stream.set_interest(B, area(30, 0, 0, 2), &[]).unwrap();
+    g.stream.flush(&mut g.src, &mut g.lanes);
+    let v = g.stream.view_loading(A).unwrap();
+    assert!(!v.scanning && v.moved);
+    assert!(g.stream.view_loading(B).unwrap().scanning);
+    assert!(g.stream.more_coming(A), "in B's wave");
+    assert!(g.stream.more_coming(B));
+    g.settle();
+    assert!(!g.stream.more_coming(A) && !g.stream.more_coming(B));
+    g.check(A);
+    g.check(B);
+}

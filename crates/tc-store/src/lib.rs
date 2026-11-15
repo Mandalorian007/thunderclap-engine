@@ -53,6 +53,15 @@
 //! missing entry, a duplicate entry) is an error that changes nothing.
 //! What opening did is the [`OpenReport`].
 //!
+//! # Readers and writers
+//!
+//! Only a writer (an open, under the lock) changes a store: recovery,
+//! leftovers and a game's [`Upgrade`] of an older layout all happen there,
+//! and an upgrade is reported ([`OpenReport::upgraded`]). Every reader
+//! ([`read`], [`check`], [`read_archive`], a repair or rollback's source, a
+//! backup's source) changes nothing, and refuses an older layout with
+//! [`StoreError::UpgradeDue`] (the `upgrade` module).
+//!
 //! Past that: [`check`] says what is wrong, changing nothing; [`repair`]
 //! writes a new log holding what can be trusted; [`rollback`] one holding
 //! an earlier point. Both write a copy or work in place, the old log moved
@@ -102,6 +111,7 @@ mod rollback;
 mod salvage;
 mod swap;
 mod tail;
+mod upgrade;
 mod writer;
 
 #[cfg(test)]
@@ -130,6 +140,7 @@ pub use salvage::{
 };
 pub use swap::{Output, SWAP_DIR};
 pub use tail::{LogReader, ReadMark};
+pub use upgrade::{Upgrade, upgrade, upgrade_due};
 pub use writer::{Counters, CutFile, Log, LogCut, Opened, Prepared, Scan, prepare, sync_frozen};
 
 /// The most keyed log files a [`Log`] keeps open at once; the least
@@ -161,6 +172,10 @@ pub struct OpenReport {
     /// A batch (its first and last entries) a crash left incomplete: its
     /// entries that reached the disk are among `dropped`.
     pub partial_batch: Option<(u64, u64)>,
+    /// The game's [`Upgrade`] ran first, under the lock: its line. Not
+    /// recovery (`is_clean` ignores it); a game says it, so an upgrade is
+    /// never silent. Always `None` from a reader, which upgrades nothing.
+    pub upgraded: Option<String>,
 }
 
 impl OpenReport {
