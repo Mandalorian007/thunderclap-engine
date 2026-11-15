@@ -5,7 +5,7 @@ import { defineSchema } from '../envelope';
 export const SCHEMA_HASH = '76e29d7bd36c81fe';
 
 /** The game's wire schema, inside the engine envelope. */
-export const schema = defineSchema({
+export const schema = /* @__PURE__ */ defineSchema({
   types: {
     Bye: { enum: { Restart: null, Kicked: null } },
     Hello: { struct: { watch: 'bool', region: 'String', seed: 'u64' } },

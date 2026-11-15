@@ -4,6 +4,7 @@
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime};
@@ -22,9 +23,10 @@ use crate::core::{ApplyError, Core};
 use crate::counters::SimCounters;
 use crate::entities::Stream;
 use crate::game::{Bodies, EventOf, Game, Outbox, PlayerId, To};
-use crate::input::{InputConfig, InputQueue};
+use crate::input::{InputConfig, InputQueue, Stop};
 use crate::lanes::{Budgets, Lane};
 use crate::query::Key;
+use crate::record::RecordError;
 use crate::reload::Reloads;
 use crate::status::{MarkStatus, STATUS_PUBLISH, SimStatus, StatusHandle};
 use crate::sync::{SyncConfig, SyncLayer, World};
@@ -89,7 +91,14 @@ pub struct SimConfig {
     /// command applied from its queries. Off by default: the result is
     /// sent and the effects follow once the client drains.
     pub close_slow_senders: bool,
+    /// What [`Sim::run`](crate::Sim::run) keeps free before its next
+    /// deadline when it gives the game idle time ([`Game::idle`]), so the
+    /// tick isn't late. Default [`IDLE_MARGIN`].
+    pub idle_margin: Duration,
 }
+
+/// [`SimConfig::idle_margin`]'s default.
+pub const IDLE_MARGIN: Duration = Duration::from_millis(2);
 
 /// [`SimConfig::base_every`]'s default.
 pub const BASE_EVERY: u64 = 100_000;
@@ -109,6 +118,7 @@ impl Default for SimConfig {
             verify_live: cfg!(debug_assertions),
             entities_on_input: false,
             close_slow_senders: false,
+            idle_margin: IDLE_MARGIN,
         }
     }
 }
@@ -208,11 +218,21 @@ pub struct Sim<G: Game> {
     pub(crate) entities_on_input: bool,
     pub(crate) close_slow_senders: bool,
     pub(crate) counters: SimCounters,
+    pub(crate) idle_margin: Duration,
+    /// How late the loop last woke for a deadline ([`IdleCx::late`](crate::IdleCx::late)).
+    pub(crate) late: Duration,
+    /// Bulk frames were queued since the last wake pass
+    /// ([`Sim::wake_outbound`]), or some linger.
+    pub(crate) bulk_sent: Cell<bool>,
+    /// When lingering bulk frames go out at the latest.
+    pub(crate) next_linger: Option<Instant>,
+    /// The game's wall-clock timers by kind ([`LiveCx::set_timer`](crate::LiveCx::set_timer)).
+    pub(crate) timers: BTreeMap<u32, Instant>,
     /// Scratch kept between ticks, so a steady loop doesn't allocate.
     pub(crate) live_events: Vec<EventOf<G>>,
     pub(crate) live_out: Outbox<G::Protocol>,
     pub(crate) scratch_keys: BTreeSet<Key<G::Change>>,
-    pub(crate) scratch_taken: Vec<(PlayerId, <G::Protocol as Protocol>::Input)>,
+    pub(crate) scratch_players: Vec<PlayerId>,
     pub(crate) scratch_applied: Vec<(PlayerId, u32)>,
     pub(crate) scratch_moved: Vec<PlayerId>,
     pub(crate) scratch_things: Vec<(u64, G::View)>,
@@ -226,7 +246,8 @@ impl<G: Game> Sim<G> {
     /// memory, for tests and tools). The clock starts at the core's time.
     pub fn new(core: Core<G>, log: Option<Log<G::Codec>>, config: SimConfig) -> Sim<G> {
         let now = Instant::now();
-        let history = log.is_none().then(Vec::new);
+        // A game with its own record keeps its own history.
+        let history = (log.is_none() && !core.owns_record()).then(Vec::new);
         let schema = Arc::new(G::schema());
         let sync = SyncLayer::new(config.sync, schema.clone(), crate::query::registry());
         let views = ViewCache::new(&schema).map_err(|e| e.to_string());
@@ -272,10 +293,15 @@ impl<G: Game> Sim<G> {
             entities_on_input: config.entities_on_input,
             close_slow_senders: config.close_slow_senders,
             counters: SimCounters::default(),
+            idle_margin: config.idle_margin,
+            late: Duration::ZERO,
+            bulk_sent: Cell::new(false),
+            next_linger: None,
+            timers: BTreeMap::new(),
             live_events: Vec::new(),
             live_out: Outbox::new(),
             scratch_keys: BTreeSet::new(),
-            scratch_taken: Vec::new(),
+            scratch_players: Vec::new(),
             scratch_applied: Vec::new(),
             scratch_moved: Vec::new(),
             scratch_things: Vec::new(),
@@ -308,6 +334,9 @@ impl<G: Game> Sim<G> {
         game: G,
         config: SimConfig,
     ) -> Result<(Sim<G>, Vec<u8>), String> {
+        if game.record().is_some() {
+            return Err("the game keeps its own record: open it, then Sim::new".into());
+        }
         let (log, opened, mut core, from) = crate::bases::open_log(dir, game)?;
         if !opened.report.is_clean() {
             warn!(report = ?opened.report, "the log was recovered");
@@ -424,6 +453,16 @@ impl<G: Game> Sim<G> {
             );
             return Err(format!("the server can't save: {e}"));
         }
+        if self.core.owns_record() {
+            return match self.core.commit(events) {
+                Ok(()) => Ok(()),
+                Err(RecordError::Refused(reason)) => Err(self.refuse(reason)),
+                Err(RecordError::Store(e)) => {
+                    self.store_failed(&e);
+                    Err(format!("the server can't save: {e}"))
+                }
+            };
+        }
         let time = self.core.time();
         let first = self.core.version() + 1;
         let entries: Vec<LogEntry<EventOf<G>>> = events
@@ -473,6 +512,27 @@ impl<G: Game> Sim<G> {
         }
         self.publish_status(Instant::now());
         format!("refused: {reason}")
+    }
+
+    /// Fails the store from outside the loop's own writes (the game's
+    /// store, written elsewhere, failed): the clock pauses, everyone is
+    /// told, and nothing more changes the game. A second failure is
+    /// ignored; [`Sim::store_error`] keeps the first.
+    pub fn fail_store(&mut self, reason: &str) {
+        self.store_failed(reason);
+    }
+
+    /// Why the store stopped taking writes, if it did.
+    pub fn store_error(&self) -> Option<&str> {
+        self.store_error.as_deref()
+    }
+
+    /// Fails the store if the game's own record noticed a failure
+    /// ([`Record::take_error`](crate::Record::take_error)).
+    pub(crate) fn poll_record_error(&mut self) {
+        if let Some(e) = self.core.take_record_error() {
+            self.store_failed(&e);
+        }
     }
 
     /// The store failed: the clock pauses, everyone is told, and nothing
@@ -641,15 +701,23 @@ impl<G: Game> Sim<G> {
     /// Marks the clock in the log (it is written once what it covers is
     /// durable).
     pub(crate) fn mark_clock(&mut self) {
-        let Some(log) = &mut self.log else {
-            return;
-        };
+        self.mark_clock_waiting(false);
+    }
+
+    /// [`Sim::mark_clock`]; with `wait`, a game's own record makes the
+    /// mark durable before it returns (the loop is stopping).
+    pub(crate) fn mark_clock_waiting(&mut self, wait: bool) {
         if self.store_error.is_some() {
             return;
         }
         let time = self.core.time();
-        if let Err(e) = log.mark(time) {
-            self.store_failed(&e.to_string());
+        let marked = match (self.core.mark_record(wait), &mut self.log) {
+            (Some(marked), _) => marked,
+            (None, Some(log)) => log.mark(time).map_err(|e| e.to_string()),
+            (None, None) => return,
+        };
+        if let Err(e) = marked {
+            self.store_failed(&e);
             return;
         }
         let wall = SystemTime::now()
@@ -767,6 +835,7 @@ impl<G: Game> Sim<G> {
             }
         }
         self.wake_if_due(now);
+        self.timers_if_due(now);
         if self.next_input_tick.is_some_and(|t| now >= t) {
             self.input_tick(now);
         }
@@ -789,6 +858,7 @@ impl<G: Game> Sim<G> {
         if let Some(e) = self.log.as_mut().and_then(Log::take_mark_error) {
             self.store_failed(&e.to_string());
         }
+        self.poll_record_error();
         self.poll_reload(now);
         self.check_slow(now);
         self.drop_overflowed();
@@ -808,8 +878,7 @@ impl<G: Game> Sim<G> {
             self.clock.next_step_at(time)
         } else {
             self.core
-                .scheduler()
-                .next_time()
+                .next_event_time()
                 .and_then(|t| self.clock.next_step_at(t.max(time + 1) - 1))
         };
         // A query result or entity frame that runs out: flush at its time.
@@ -826,6 +895,7 @@ impl<G: Game> Sim<G> {
             self.next_clock_push,
             self.next_clock_mark,
             self.reloads.poll_at(),
+            self.next_linger,
         ]
         .into_iter()
         .flatten()
@@ -837,23 +907,40 @@ impl<G: Game> Sim<G> {
     pub(crate) fn input_tick(&mut self, now: Instant) {
         let started = Instant::now();
         let due = self.next_input_tick.unwrap_or(now);
-        let mut taken = std::mem::take(&mut self.scratch_taken);
+        let mut players = std::mem::take(&mut self.scratch_players);
         let mut applied = std::mem::take(&mut self.scratch_applied);
         let mut moved = std::mem::take(&mut self.scratch_moved);
         let mut events = std::mem::take(&mut self.live_events);
-        self.inputs
-            .tick_into(now, &mut applied, |player, _, input, _| {
-                taken.push((player, input))
-            });
-        for (player, input) in taken.drain(..) {
-            let Some(body) = self.bodies.get_mut(&player) else {
-                continue;
-            };
-            self.core.game().input(player, body, input, &mut events);
-            self.counters.inputs += 1;
-            self.moved.insert(player);
-            moved.push(player);
-            let _ = self.commit_drain(&mut events);
+        players.clear();
+        players.extend(self.inputs.players());
+        self.inputs.start_tick(now);
+        for &player in &players {
+            // Each input's events are logged before the next, so a stop
+            // (a knockout) sees what came before it.
+            while let Some((_, input, _)) = self.inputs.take(player, now) {
+                let Some(body) = self.bodies.get_mut(&player) else {
+                    continue;
+                };
+                let flow = self
+                    .core
+                    .game()
+                    .input_flow(player, body, input, &mut events);
+                self.counters.inputs += 1;
+                self.moved.insert(player);
+                moved.push(player);
+                let _ = self.commit_drain(&mut events);
+                if let ControlFlow::Break(stop) = flow {
+                    if stop == Stop::AckAll {
+                        self.inputs.ack_all(player);
+                    }
+                    break;
+                }
+            }
+            if self.inputs.taken(player) > 0
+                && let Some(seq) = self.inputs.last_applied(player)
+            {
+                applied.push((player, seq));
+            }
         }
         if !moved.is_empty() {
             self.counters.input_ticks += 1;
@@ -890,7 +977,7 @@ impl<G: Game> Sim<G> {
             self.entities_after_input(&moved);
         }
         moved.clear();
-        self.scratch_taken = taken;
+        self.scratch_players = players;
         self.scratch_applied = applied;
         self.scratch_moved = moved;
         self.live_events = events;
@@ -944,7 +1031,7 @@ impl<G: Game> Sim<G> {
         self.conns.clear();
         self.conns_of.clear();
         self.drivers.clear();
-        self.mark_clock();
+        self.mark_clock_waiting(true);
         if let Some(log) = &mut self.log
             && let Err(e) = log.wait()
         {
@@ -979,6 +1066,9 @@ impl<G: Game> Sim<G> {
     /// Entries a reload replays: the log's on disk (made durable first),
     /// or the history kept in memory.
     pub(crate) fn replay_source(&mut self) -> Result<ReplaySource<G>, String> {
+        if self.core.owns_record() {
+            return Err("the game keeps its own record and reloads itself".into());
+        }
         let through = self.core.version();
         match (&mut self.log, &self.history) {
             (Some(log), _) => {

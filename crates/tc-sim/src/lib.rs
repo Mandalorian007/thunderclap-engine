@@ -47,10 +47,12 @@ mod counters;
 mod driver;
 mod entities;
 mod game;
+mod idle;
 mod input;
 mod lanes;
 mod live;
 mod query;
+mod record;
 mod reload;
 mod run;
 mod scheduler;
@@ -65,16 +67,18 @@ pub use core::{ApplyError, Core, Replayed, STATE_HASH_VERSION};
 pub use counters::SimCounters;
 pub use driver::Driver;
 pub use game::{Bodies, Cx, EventOf, Game, InterestOf, Outbox, PlayerId, Seat, To};
-pub use input::{InputConfig, InputQueue, Taken};
+pub use idle::{Conns, IDLE_RETRY, IdleCx};
+pub use input::{InputConfig, InputQueue, Stop, Taken};
 pub use lanes::Lane;
 pub use live::LiveCx;
 pub use query::{Key, Query, QueryCtx, Reads, ViewCx, schema_of};
+pub use record::{Record, RecordError};
 pub use reload::{MAX_ROUNDS, RELOAD_POLL, ReloadReply, ReloadReport, SWAP_BEHIND};
 pub use run::{Control, Running, SimHandle};
 pub use scheduler::{EventKey, Scheduler};
 pub use sim::{
     ADVANCE_BUDGET, ADVANCE_SLICE, BASE_EVERY, CLOCK_MARK_INTERVAL, CLOCK_PUSH_INTERVAL,
-    FLUSH_INTERVAL, OUTBOUND_BUDGET, SLOW_CLIENT_GRACE, Sim, SimConfig,
+    FLUSH_INTERVAL, IDLE_MARGIN, OUTBOUND_BUDGET, SLOW_CLIENT_GRACE, Sim, SimConfig,
 };
 pub use status::{MarkStatus, STATUS_PUBLISH, SimStatus, StatusHandle};
 pub use sync::{

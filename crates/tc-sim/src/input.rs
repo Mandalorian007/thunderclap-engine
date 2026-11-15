@@ -21,6 +21,7 @@
 //! has when it starts is all it ever has.
 
 use std::collections::{BTreeMap, VecDeque};
+use std::ops::ControlFlow;
 use std::time::{Duration, Instant};
 
 use crate::game::PlayerId;
@@ -63,6 +64,19 @@ pub enum Taken {
     NoQueue,
 }
 
+/// How an input tick's `apply` stops a player's tick partway
+/// ([`InputQueue::tick_flow`], [`Game::input_flow`](crate::Game::input_flow)):
+/// the rest of its inputs spend no credit this tick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stop {
+    /// The rest wait for the next tick.
+    Wait,
+    /// The rest are acknowledged and dropped ([`InputQueue::ack_all`]):
+    /// the player was stopped (knocked out, teleported) and what it sent
+    /// before it knew no longer applies.
+    AckAll,
+}
+
 #[derive(Debug)]
 struct Queue<I> {
     /// The last input applied (0 before any).
@@ -72,11 +86,41 @@ struct Queue<I> {
     /// Credit as of `credited`.
     credit: Duration,
     credited: Option<Instant>,
+    /// Inputs taken this tick.
+    taken: u32,
 }
 
 impl<I> Queue<I> {
     fn newest(&self) -> u32 {
         self.inputs.back().map_or(self.seq, |(seq, _, _)| *seq)
+    }
+
+    /// Credits the time since the last tick and starts a new one.
+    fn credit(&mut self, now: Instant, config: &InputConfig) {
+        let earned = self
+            .credited
+            .map_or(config.tick, |t| now.saturating_duration_since(t));
+        self.credit = (self.credit + earned).min(config.max_credit);
+        self.credited = Some(now);
+        self.taken = 0;
+    }
+
+    /// The next input, if this tick has credit and room for it.
+    fn take(&mut self, now: Instant, config: &InputConfig) -> Option<(u32, I, Duration)> {
+        if self.credit < config.tick || self.taken >= config.max_per_tick {
+            return None;
+        }
+        let (seq, input, arrived) = self.inputs.pop_front()?;
+        self.credit -= config.tick;
+        self.seq = seq;
+        self.taken += 1;
+        Some((seq, input, now.saturating_duration_since(arrived)))
+    }
+
+    fn ack_all(&mut self) -> u32 {
+        self.seq = self.newest();
+        self.inputs.clear();
+        self.seq
     }
 }
 
@@ -109,6 +153,7 @@ impl<I> InputQueue<I> {
             inputs: VecDeque::new(),
             credit: full,
             credited: None,
+            taken: 0,
         });
     }
 
@@ -123,6 +168,14 @@ impl<I> InputQueue<I> {
         if let Some(q) = self.queues.get_mut(&player) {
             q.inputs.clear();
         }
+    }
+
+    /// Acknowledges every input `player` sent: the newest waiting one
+    /// counts as applied and the rest are dropped unapplied (the player
+    /// was stopped; what it sent before it knew no longer applies). The
+    /// next one taken is the one after. Returns the `seq` now applied.
+    pub fn ack_all(&mut self, player: PlayerId) -> Option<u32> {
+        self.queues.get_mut(&player).map(Queue::ack_all)
     }
 
     /// The last input applied for `player` (0 before any), if it has a
@@ -188,27 +241,64 @@ impl<I> InputQueue<I> {
         applied: &mut Vec<(PlayerId, u32)>,
         mut apply: impl FnMut(PlayerId, u32, I, Duration),
     ) {
-        let tick = self.config.tick;
+        self.tick_flow(now, applied, |player, seq, input, waited| {
+            apply(player, seq, input, waited);
+            ControlFlow::Continue(())
+        });
+    }
+
+    /// [`InputQueue::tick_into`], where `apply` may stop a player's tick
+    /// partway ([`Stop`]): its remaining inputs spend no credit, and wait
+    /// ([`Stop::Wait`]) or are acknowledged and dropped
+    /// ([`Stop::AckAll`], whose last `seq` goes to `applied`).
+    pub fn tick_flow(
+        &mut self,
+        now: Instant,
+        applied: &mut Vec<(PlayerId, u32)>,
+        mut apply: impl FnMut(PlayerId, u32, I, Duration) -> ControlFlow<Stop>,
+    ) {
+        let config = self.config;
         for (&player, q) in &mut self.queues {
-            let earned = q
-                .credited
-                .map_or(tick, |t| now.saturating_duration_since(t));
-            q.credit = (q.credit + earned).min(self.config.max_credit);
-            q.credited = Some(now);
-            let mut taken = 0;
-            while q.credit >= tick && taken < self.config.max_per_tick {
-                let Some((seq, input, arrived)) = q.inputs.pop_front() else {
+            q.credit(now, &config);
+            while let Some((seq, input, waited)) = q.take(now, &config) {
+                if let ControlFlow::Break(stop) = apply(player, seq, input, waited) {
+                    if stop == Stop::AckAll {
+                        q.ack_all();
+                    }
                     break;
-                };
-                q.credit -= tick;
-                q.seq = seq;
-                taken += 1;
-                apply(player, seq, input, now.saturating_duration_since(arrived));
+                }
             }
-            if taken > 0 {
+            if q.taken > 0 {
                 applied.push((player, q.seq));
             }
         }
+    }
+
+    /// Starts an input tick at `now` by hand: credits every player. Then
+    /// [`InputQueue::take`] each player's inputs, in id order, as the loop
+    /// does between which it logs what each input pushed.
+    pub(crate) fn start_tick(&mut self, now: Instant) {
+        let config = self.config;
+        for q in self.queues.values_mut() {
+            q.credit(now, &config);
+        }
+    }
+
+    /// `player`'s next input this tick ([`InputQueue::start_tick`]), if it
+    /// has credit and room for it.
+    pub(crate) fn take(&mut self, player: PlayerId, now: Instant) -> Option<(u32, I, Duration)> {
+        let config = self.config;
+        self.queues.get_mut(&player)?.take(now, &config)
+    }
+
+    /// Inputs `player` took this tick.
+    pub(crate) fn taken(&self, player: PlayerId) -> u32 {
+        self.queues.get(&player).map_or(0, |q| q.taken)
+    }
+
+    /// The players with a queue, in id order.
+    pub(crate) fn players(&self) -> impl Iterator<Item = PlayerId> + '_ {
+        self.queues.keys().copied()
     }
 }
 
@@ -284,5 +374,57 @@ mod tests {
         assert_eq!(q.push(1, 2, 'c', now), Taken::Queued, "seq counts from 1");
         q.leave(1);
         assert_eq!(q.push(1, 3, 'd', now), Taken::NoQueue);
+    }
+
+    #[test]
+    fn ack_all_skips_to_the_newest() {
+        let mut q = queue();
+        let now = Instant::now();
+        for seq in 1..=5 {
+            q.push(1, seq, 'a', now);
+        }
+        assert_eq!(q.ack_all(1), Some(5));
+        assert!(!q.has_inputs());
+        assert_eq!(q.last_applied(1), Some(5));
+        assert_eq!(q.push(1, 5, 'b', now), Taken::Stale);
+        assert_eq!(q.push(1, 6, 'b', now), Taken::Queued);
+        assert_eq!(q.ack_all(2), None);
+    }
+
+    #[test]
+    fn a_stopped_tick_spends_no_credit_on_the_rest() {
+        // Two ticks' credit at most, so what is left is easy to see.
+        let mut q = InputQueue::new(InputConfig {
+            max_credit: 2 * TICK,
+            ..InputConfig::default()
+        });
+        q.join(1);
+        let start = Instant::now();
+        for seq in 1..=4 {
+            q.push(1, seq, 'a', start);
+        }
+        let mut applied = Vec::new();
+        let mut got = Vec::new();
+        q.tick_flow(start, &mut applied, |_, seq, _, _| {
+            got.push(seq);
+            ControlFlow::Break(Stop::Wait)
+        });
+        assert_eq!((&got[..], &applied[..]), (&[1][..], &[(1, 1)][..]));
+        // The tick stopped with a tick's credit unspent: one more now.
+        assert_eq!(tick(&mut q, start), [(2, 'a')]);
+        // A knockout at the next: the rest are acknowledged, unapplied.
+        q.push(1, 5, 'b', start);
+        applied.clear();
+        got.clear();
+        q.tick_flow(start + 2 * TICK, &mut applied, |_, seq, _, _| {
+            got.push(seq);
+            ControlFlow::Break(Stop::AckAll)
+        });
+        assert_eq!((&got[..], &applied[..]), (&[3][..], &[(1, 5)][..]));
+        assert!(!q.has_inputs());
+        // The inputs it dropped spent nothing: a tick's credit is left.
+        q.push(1, 6, 'c', start + 2 * TICK);
+        q.push(1, 7, 'c', start + 2 * TICK);
+        assert_eq!(tick(&mut q, start + 2 * TICK), [(6, 'c')]);
     }
 }

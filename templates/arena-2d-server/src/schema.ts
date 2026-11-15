@@ -5,7 +5,7 @@ import { defineSchema } from '@thunderclap-engine/engine/net';
 export const SCHEMA_HASH = 'd51510e8aa044bd4';
 
 /** The game's wire schema, inside the engine envelope. */
-export const schema = defineSchema({
+export const schema = /* @__PURE__ */ defineSchema({
   types: {
     Pos: { struct: { x: 'i32', y: 'i32' } },
     Player: { struct: { name: 'String', x: 'i32', y: 'i32', vx: 'i32', vy: 'i32', it: 'bool' } },

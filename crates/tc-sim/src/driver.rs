@@ -111,6 +111,16 @@ impl<G: Game> Driver<G> {
         self.now
     }
 
+    /// Gives the game up to `budget` (real time) of idle work
+    /// ([`Sim::idle`]), with nothing waiting, then wakes the bulk lanes
+    /// ([`Sim::wake_outbound`]) at the driver's clock. Returns the time
+    /// spent.
+    pub fn idle(&mut self, budget: Duration) -> Duration {
+        let spent = self.sim.idle(Instant::now() + budget, &mut || false);
+        self.sim.wake_outbound(self.now);
+        spent
+    }
+
     /// Moves the driver's clock to `now` (never back) and catches up with
     /// it ([`Sim::tick`]).
     pub fn tick(&mut self, now: Instant) {

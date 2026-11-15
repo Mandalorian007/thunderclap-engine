@@ -1,5 +1,6 @@
 //! TypeScript for a game's clients, from its schema: [`generate_ts`],
-//! [`define_schema_ts`] and [`define_schema_ts_with`].
+//! [`define_schema_ts`], [`define_schema_ts_with`] and
+//! [`define_schema_ts_lazy`].
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -94,6 +95,30 @@ pub fn define_schema_ts_with(
     net_import: &str,
     envelope: &Envelope,
 ) -> Result<String, String> {
+    schema_module(schema, net_import, envelope, false)
+}
+
+/// [`define_schema_ts_with`], building the schema lazily: the module
+/// exports `schema()`, which calls `defineSchema(...)` on its first call
+/// and keeps what it made, instead of a `schema` built at import. A
+/// large game's schema then costs nothing in a module (a worker) that
+/// imports the file only for its types or `SCHEMA_HASH`.
+pub fn define_schema_ts_lazy(
+    schema: &Schema,
+    net_import: &str,
+    envelope: &Envelope,
+) -> Result<String, String> {
+    schema_module(schema, net_import, envelope, true)
+}
+
+/// The module [`define_schema_ts_with`] (or, `lazy`,
+/// [`define_schema_ts_lazy`]) writes.
+fn schema_module(
+    schema: &Schema,
+    net_import: &str,
+    envelope: &Envelope,
+    lazy: bool,
+) -> Result<String, String> {
     let engine = envelope.is_engine();
     let find = |name: &str| schema.types().iter().find(|t| t.name == name);
     let split = if engine {
@@ -109,14 +134,24 @@ pub fn define_schema_ts_with(
         "import {{ defineSchema }} from {};\n",
         js_str(net_import)
     );
-    out.push_str("/** The schema's hash: the server's, which `schema` must match. */\n");
+    out.push_str(if lazy {
+        "/** The schema's hash: the server's, which `schema()` must match. */\n"
+    } else {
+        "/** The schema's hash: the server's, which `schema` must match. */\n"
+    });
     let _ = writeln!(
         out,
         "export const SCHEMA_HASH = {};\n",
         js_str(&schema.hash())
     );
-    out.push_str("/** The game's wire schema, inside the engine envelope. */\n");
-    out.push_str("export const schema = defineSchema({\n  types: {\n");
+    if lazy {
+        out.push_str("function build() {\n  return defineSchema({\n");
+    } else {
+        out.push_str("/** The game's wire schema, inside the engine envelope. */\n");
+        // Pure: a bundler drops it from a module that doesn't use it.
+        out.push_str("export const schema = /* @__PURE__ */ defineSchema({\n");
+    }
+    out.push_str("  types: {\n");
     for t in schema.types() {
         if ENVELOPE.contains(&t.name) {
             continue;
@@ -200,6 +235,38 @@ pub fn define_schema_ts_with(
         );
     }
     out.push_str("  },\n});\n");
+    if lazy {
+        // The body was written at the eager form's depth: indent it once
+        // more inside `build`.
+        let start = out
+            .find("function build() {\n  return defineSchema({\n")
+            .unwrap_or(0);
+        let (head, body) = out.split_at(start);
+        let mut lines = body.lines();
+        let mut text = head.to_string();
+        text.push_str(lines.next().unwrap_or_default());
+        text.push('\n');
+        text.push_str(lines.next().unwrap_or_default());
+        text.push('\n');
+        for line in lines {
+            if !line.is_empty() {
+                text.push_str("  ");
+            }
+            text.push_str(line);
+            text.push('\n');
+        }
+        text.push_str(concat!(
+            "}\n\n",
+            "let built: ReturnType<typeof build> | undefined;\n\n",
+            "/** The game's wire schema, inside the engine envelope: built on the\n",
+            " * first call, then kept. */\n",
+            "export function schema(): ReturnType<typeof build> {\n",
+            "  if (built === undefined) built = build();\n",
+            "  return built;\n",
+            "}\n",
+        ));
+        return Ok(text);
+    }
     Ok(out)
 }
 

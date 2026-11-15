@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { envelopeOf } from './envelope';
 import { SCHEMA_HASH, schema } from './testdata/own-envelope.gen';
 import vectors from './testdata/own-envelope.json';
+import * as lazy from './testdata/own-envelope.lazy.gen';
 import type { Fixed } from './wire';
 
 const fromHex = (hex: string) => new Uint8Array(hex.match(/../g)!.map((b) => parseInt(b, 16)));
@@ -15,6 +16,13 @@ describe('a generated schema for an envelope of its own', () => {
   it('hashes as the server does', () => {
     expect(schema.hash).toBe(SCHEMA_HASH);
     expect([...envelopeOf(schema).serverGame]).toEqual(['Chunk', 'Note']);
+  });
+
+  it('builds lazily on the first call, then keeps it', () => {
+    expect(lazy.SCHEMA_HASH).toBe(SCHEMA_HASH);
+    const built = lazy.schema();
+    expect(built.hash).toBe(SCHEMA_HASH);
+    expect(lazy.schema()).toBe(built);
   });
 
   it('decodes and encodes every frame byte for byte', () => {

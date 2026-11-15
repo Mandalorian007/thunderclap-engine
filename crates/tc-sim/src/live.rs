@@ -14,6 +14,7 @@ use crate::changes::Changes;
 use crate::counters::micros;
 use crate::entities::Stream;
 use crate::game::{EventOf, Game, InterestOf, Outbox, PlayerId};
+use crate::idle::Conns;
 use crate::query::{Key, QueryCtx, Reads, ViewCx};
 use crate::sim::Sim;
 
@@ -41,6 +42,12 @@ use crate::sim::Sim;
 /// asked for wins); [`Game::wake`] runs when it is due, even while the
 /// game clock is paused, and re-arms for another.
 ///
+/// **Timers.** [`LiveCx::set_timer`] arms a wall-clock timer of a kind
+/// (one per kind; setting it again replaces it): [`Game::timer`] runs for
+/// each kind when it is due, also while paused. A game's periodic ticks
+/// (a movement tick, a recall, a flush of its own), each with its own
+/// deadline, the loop sleeps until the earliest of.
+///
 /// None of these run once the store failed: nothing more changes the game.
 pub struct LiveCx<'a, G: Game> {
     pub(crate) time: u64,
@@ -53,6 +60,8 @@ pub struct LiveCx<'a, G: Game> {
     pub(crate) out: &'a mut Outbox<G::Protocol>,
     pub(crate) wake: &'a mut Option<Instant>,
     pub(crate) changes: &'a mut Changes<G::Change>,
+    pub(crate) timers: &'a mut BTreeMap<u32, Instant>,
+    pub(crate) conns: Conns<'a>,
 }
 
 impl<'a, G: Game> LiveCx<'a, G> {
@@ -131,6 +140,29 @@ impl<'a, G: Game> LiveCx<'a, G> {
         *self.wake
     }
 
+    /// Arms timer `kind` at `at`, replacing the one armed:
+    /// [`Game::timer`] runs with `kind` then.
+    pub fn set_timer(&mut self, kind: u32, at: Instant) {
+        self.timers.insert(kind, at);
+    }
+
+    /// Disarms timer `kind`.
+    pub fn clear_timer(&mut self, kind: u32) {
+        self.timers.remove(&kind);
+    }
+
+    /// When timer `kind` is due, if armed.
+    pub fn timer(&self, kind: u32) -> Option<Instant> {
+        self.timers.get(&kind).copied()
+    }
+
+    /// The connections, to send to directly
+    /// ([`Conns`]): unlike [`LiveCx::out`], what is queued here goes out
+    /// whether or not the hook's events apply.
+    pub fn conns(&self) -> &Conns<'a> {
+        &self.conns
+    }
+
     /// Marks `key` as changed, so the queries and entity streams that read
     /// it rerun at the next flush (live state moved: a creature walked).
     /// The mark reaches [`Game::flush`] too.
@@ -175,6 +207,12 @@ impl<G: Game> Sim<G> {
                 out: &mut out,
                 wake: &mut self.next_wake,
                 changes,
+                timers: &mut self.timers,
+                conns: Conns {
+                    conns: &self.conns,
+                    conns_of: &self.conns_of,
+                    bulk_sent: &self.bulk_sent,
+                },
             };
             hook(game, &mut cx)
         };
@@ -197,6 +235,7 @@ impl<G: Game> Sim<G> {
         }
         self.live_events = events;
         self.live_out = out;
+        self.poll_record_error();
         (r, applied)
     }
 
@@ -233,8 +272,34 @@ impl<G: Game> Sim<G> {
         self.counters.live_us += micros(started);
     }
 
+    /// Runs [`Game::timer`] once for each timer due, earliest first (one
+    /// re-armed for now or earlier runs at the next tick).
+    pub(crate) fn timers_if_due(&mut self, now: Instant) {
+        if self.store_error.is_some() || !self.timers.values().any(|at| now >= *at) {
+            return;
+        }
+        let mut due: Vec<(Instant, u32)> = self
+            .timers
+            .iter()
+            .filter(|(_, at)| now >= **at)
+            .map(|(kind, at)| (*at, *kind))
+            .collect();
+        due.sort_unstable();
+        for (at, kind) in due {
+            // An earlier timer may have re-armed or cleared this one.
+            if self.store_error.is_some() || self.timers.get(&kind) != Some(&at) {
+                continue;
+            }
+            self.timers.remove(&kind);
+            let started = Instant::now();
+            let _ = self.run_live(now, |game, cx| game.timer(cx, kind));
+            self.counters.timers += 1;
+            self.counters.live_us += micros(started);
+        }
+    }
+
     /// When the loop next has live work: the next step while the game is
-    /// live, and the wake.
+    /// live, the wake and the timers.
     pub(crate) fn live_deadline(&self) -> Option<Instant> {
         if self.store_error.is_some() {
             return None;
@@ -243,7 +308,8 @@ impl<G: Game> Sim<G> {
         let step = (time < MAX_TIME && self.core.game().live())
             .then(|| self.clock.next_step_at(time))
             .flatten();
-        [step, self.next_wake].into_iter().flatten().min()
+        let timer = self.timers.values().min().copied();
+        [step, self.next_wake, timer].into_iter().flatten().min()
     }
 
     /// The wake armed, if any ([`LiveCx::wake_at`]).

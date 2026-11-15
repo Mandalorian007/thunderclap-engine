@@ -33,7 +33,10 @@ pub use server::{
 pub use stop::{EXIT_FORCED, REPEAT_GRACE, STOP_FILE};
 pub use tc_sim::{Game, SimConfig};
 pub use tc_wire::Wire;
-pub use typescript::{NET_IMPORT, SCHEMA_TS, define_schema_ts, define_schema_ts_with, generate_ts};
+pub use typescript::{
+    NET_IMPORT, SCHEMA_TS, define_schema_ts, define_schema_ts_lazy, define_schema_ts_with,
+    generate_ts,
+};
 pub use watch::{WATCH_POLL, WATCH_QUIET, WatchConfig, WatchEvent};
 
 pub use tc_admin as admin;

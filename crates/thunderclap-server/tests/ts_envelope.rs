@@ -13,13 +13,13 @@
 use std::path::PathBuf;
 
 use serde_json::json;
-use thunderclap_server::define_schema_ts_with;
 use thunderclap_server::net::envelope::{
     AckMode, ClientSlot, ClientText, CloseCodes, Envelope, HelloField, Protocol, RejectedField,
     ServerSlot, WelcomeField,
 };
 use thunderclap_server::net::{ClientMsg, Empty, ServerMsg, schema_builder};
 use thunderclap_server::wire::{Bytes, Fixed, Wire};
+use thunderclap_server::{define_schema_ts_lazy, define_schema_ts_with};
 
 #[derive(Debug, Clone, PartialEq)]
 struct Own;
@@ -211,6 +211,33 @@ fn an_envelope_of_its_own_generates_its_typescript() {
         vectors,
         "{stale}"
     );
+}
+
+#[test]
+fn a_lazy_schema_builds_on_first_call() {
+    let schema = schema_builder::<Own>().finish().unwrap();
+    let eager = define_schema_ts_with(&schema, "../envelope", Own::ENVELOPE).unwrap();
+    let ts = define_schema_ts_lazy(&schema, "../envelope", Own::ENVELOPE).unwrap();
+    assert!(eager.contains("export const schema = /* @__PURE__ */ defineSchema({\n"));
+    // Nothing is built at import: `defineSchema` runs inside `build`.
+    assert!(!ts.contains("export const schema"), "{ts}");
+    assert!(
+        ts.contains("function build() {\n  return defineSchema({\n"),
+        "{ts}"
+    );
+    assert!(ts.contains("export function schema(): ReturnType<typeof build> {\n"));
+    assert!(ts.contains(&format!("export const SCHEMA_HASH = '{}';", schema.hash())));
+    // The same definition, a level deeper.
+    assert!(
+        ts.contains("      Hello: { struct: { watch: 'bool', region: 'String', seed: 'u64' } },\n")
+    );
+    let gen_ts = testdata("own-envelope.lazy.gen.ts");
+    if std::env::var_os("TC_BLESS").is_some() {
+        std::fs::write(&gen_ts, &ts).unwrap();
+        return;
+    }
+    let stale = "stale: TC_BLESS=1 cargo test -p thunderclap-server --test ts_envelope";
+    assert_eq!(std::fs::read_to_string(gen_ts).expect(stale), ts, "{stale}");
 }
 
 #[test]
