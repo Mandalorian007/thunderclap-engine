@@ -64,7 +64,10 @@ world.
   `holds(conn, pos)`, `loading_for(conn)` (its area still scanned, its
   sections or their layers' whole frames still queued unwritten, or its
   area moved since the stream last had nothing loading while any view
-  still loads), `view_loading(conn)` (`ViewLoading {area, scanning,
+  still loads; for sizing what a source reads ahead: never for holding a
+  session's writes back, see below), `more_coming(conn)` (its area still
+  scanned, or it moved while some view still is: what a host passes
+  tc-net's `wake_lingering`), `view_loading(conn)` (`ViewLoading {area, scanning,
   in_flight, moved}`, `#[non_exhaustive]`, the parts, for a host's own
   rule), `last_loading()` (the `Loading` the last pass gave `begin`),
   `loading_now()` (the one the next pass would give: a host sizing its
@@ -84,7 +87,9 @@ world.
   unloads waiting, now: after a jump, before the flush),
   `flush(&mut source, &mut lanes)` once
   a tick, `flush_conn(conn, &mut source, &mut lanes)` (one connection's
-  changes now, past the rebuild budget: before a command's result),
+  changes now, past the rebuild budget: before a command's result; a
+  changed section nobody holds next to its area is put to `unheld` first,
+  as a flush does, so a neighbour it exposes comes before the result too),
   `load_until(&mut source, &mut lanes, until, interrupted)` (builds loads
   between flushes until the deadline or `interrupted()`, returning how
   many), the idle budget (below), `reload()`, `has_work()`, `loading()`
@@ -239,6 +244,11 @@ moved stays loading while any view loads (a wave: `moved` clears at the
 first pass with no view scanning and nothing in flight). This relies on
 the `Lanes` taking a bulk frame's ticket when it writes it (as tc-net's
 `Outbound` does); a view whose frames are never taken looks loading.
+So `loading_for` must not decide whether a session lingers over its bulk
+frames (`Outbound::wake_lingering(now, more)`): it stays true while those
+frames wait, and they wait for the session to be woken. `more_coming(conn)`
+is the predicate for that: the view is still scanned, or it moved while
+some view still is.
 
 The stream's maps keyed by position use a fixed multiply-rotate hasher
 (deterministic, not DoS-resistant: positions come from the server's own
@@ -275,9 +285,10 @@ of CPU over six runs against SipHash's 1.60 to 2.60 s (best wall time
   group events and memory, `Loading`'s areas, and `Queued` positions and
   withdrawals counted; a derived change joining a bulk resend still to be
   queued, `unheld` (forgotten, marking without a build, built within the
-  rebuild budget, `near`) and `holds`, and `loading_for` covering frames in
+  rebuild budget, `near`, and in `flush_conn`: a neighbour exposed
+  before the result) and `holds`, and `loading_for` covering frames in
   flight and a moved view's wave (`view_loading`, `last_loading`,
-  `loading_now`).
+  `loading_now`), and `more_coming` not.
 - `tests/memory.rs`: `held_bytes` a section in a 16/8/16 view with three
   layers, at the origin and off it (under 64).
 - `tests/stream.rs` also: `EditRule::Frame`, `loading_for`,
