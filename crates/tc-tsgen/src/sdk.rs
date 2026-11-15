@@ -33,8 +33,14 @@ pub struct SdkConfig {
     pub events_path: String,
     /// The dispatch file, relative to the output root.
     pub pass_path: String,
-    /// The module the protocol's generated types are imported from.
+    /// The module the protocol's generated types are imported from: the
+    /// events file's import, and the dispatch file's unless
+    /// [`SdkConfig::pass_protocol_import`] names its own.
     pub protocol_import: String,
+    /// The protocol module as the dispatch file imports it, when that file
+    /// sits elsewhere from the events file (another directory, or another
+    /// module path). `None` (the default) uses [`SdkConfig::protocol_import`].
+    pub pass_protocol_import: Option<String>,
     /// The events file as the dispatch file imports it.
     pub events_import: String,
     /// The module exporting `Listeners`, as the dispatch file imports it.
@@ -315,7 +321,11 @@ fn pass_ts(config: &Config, sdk: &SdkConfig, events: &[Resolved]) -> String {
             Payload::Field => named_types(&e.fields[0].ty, &mut protocol),
         }
     }
-    import_line(&mut out, &protocol, &sdk.protocol_import);
+    let protocol_import = sdk
+        .pass_protocol_import
+        .as_deref()
+        .unwrap_or(&sdk.protocol_import);
+    import_line(&mut out, &protocol, protocol_import);
     import_line(&mut out, &own, &sdk.events_import);
     let _ = writeln!(
         out,
@@ -449,6 +459,26 @@ mod tests {
         let twice = config(&["Chat"], &["Chat"], &[]);
         let err = classify(&twice, &["Chat"]).unwrap_err();
         assert!(err.contains("in both PASS and HAND"), "{err}");
+    }
+
+    #[test]
+    fn the_dispatch_file_takes_its_own_protocol_import_or_the_shared_one() {
+        let mut sdk = config(&[], &[], &[]);
+        sdk.protocol_import = "./net/wire.ts".into();
+        sdk.events_import = "./events.ts".into();
+        sdk.helpers_import = "./helpers.ts".into();
+        let shared = pass_ts(&Config::default(), &sdk, &[]);
+        assert!(
+            shared.contains("import type { Msg } from \"./net/wire.ts\";"),
+            "{shared}"
+        );
+        sdk.pass_protocol_import = Some("../net/wire.ts".into());
+        let own = pass_ts(&Config::default(), &sdk, &[]);
+        assert!(
+            own.contains("import type { Msg } from \"../net/wire.ts\";"),
+            "{own}"
+        );
+        assert!(!own.contains("\"./net/wire.ts\""), "{own}");
     }
 
     #[test]

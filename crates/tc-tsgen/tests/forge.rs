@@ -51,6 +51,7 @@ fn forge_config() -> Config {
             events_path: text(&sdk["eventsPath"]),
             pass_path: text(&sdk["passPath"]),
             protocol_import: text(&sdk["protocolImport"]),
+            pass_protocol_import: sdk["passProtocolImport"].as_str().map(String::from),
             events_import: text(&sdk["eventsImport"]),
             helpers_import: text(&sdk["helpersImport"]),
             events_preamble: text(&sdk["eventsPreamble"]),

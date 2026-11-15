@@ -772,8 +772,12 @@ const world = createVoxelWorld(core, {
   `depthFade`, `fresnel`, `roughness`, `waves`, `foam`, `opacity`, `refraction`,
   `reflectionSteps`, `reflectionReach`, sun, sky and `shade`, all live), clock (`update(dt)`)
   and blocks, and `look(group = 1)` returns the same `WaterLook` a `Water` of those settings
-  does. It joins the core as a drawable that never draws and uploads its two blocks in
-  `core.prepare`; `destroy()` leaves the core. Importing it bundles no `Mesh`, `geom`, plane
+  does. It joins the core as a drawable that never draws and uploads its blocks in
+  `core.prepare`, each only when it changed (ws/g6-asks, E21): an idle frame writes nothing.
+  `blocks: 'shade'` (the default) keeps current only the blocks `water_shade` reaches through
+  its calls (`reads`, a `WaterBlockReads`: `water` params, `wc` core, the view `extras`), so a
+  game `shade` that reads none of them costs no writes at all; a set whose own WGSL reads those
+  groups takes `blocks: 'all'`. `destroy()` leaves the core. Importing it bundles no `Mesh`, `geom`, plane
   shaders or scene pipelines (`check:bundle`'s `render core + water look` entry fails if they
   come back): about 5.8 kB gzip over the core where `Water` costs 13.6 kB. A game that draws
   its own water surface takes it in place of `new Water(core, { plane: false })`;

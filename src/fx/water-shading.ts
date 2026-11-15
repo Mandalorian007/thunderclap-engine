@@ -69,25 +69,104 @@ export interface WaterLook {
  * `segments`, `origin`, `displace`, `plane`, and the `Renderer`'s, `depthTarget` and
  * `readsDepth`, have no use without a plane). `level` is the surface's world height.
  */
-export type WaterShadingOptions = Pick<
-  WaterOptions,
-  | 'level'
-  | 'shallowColor'
-  | 'deepColor'
-  | 'depthFade'
-  | 'fresnel'
-  | 'roughness'
-  | 'waves'
-  | 'foam'
-  | 'opacity'
-  | 'refraction'
-  | 'reflectionSteps'
-  | 'reflectionReach'
-  | 'sunDirection'
-  | 'sunColor'
-  | 'skyColor'
-  | 'shade'
->;
+export interface WaterShadingOptions
+  extends Pick<
+    WaterOptions,
+    | 'level'
+    | 'shallowColor'
+    | 'deepColor'
+    | 'depthFade'
+    | 'fresnel'
+    | 'roughness'
+    | 'waves'
+    | 'foam'
+    | 'opacity'
+    | 'refraction'
+    | 'reflectionSteps'
+    | 'reflectionReach'
+    | 'sunDirection'
+    | 'sunColor'
+    | 'skyColor'
+    | 'shade'
+  > {
+  /**
+   * Which of its blocks `prepare` keeps current. `'shade'` (the default): those the water's
+   * `water_shade` reads, found in its WGSL (`WaterShading.reads`; the engine's shading reads
+   * all three), so a game's own `shade` that reads none of `water`, `wc` and `extras` costs no
+   * upload a frame. `'all'`: every block, for a set whose own WGSL reads those directly.
+   */
+  blocks?: 'shade' | 'all';
+}
+
+/** Which of a water look's blocks its shading reads (`WaterShading.reads`, ws/g6-asks). */
+export interface WaterBlockReads {
+  /** The params block (`water`: colours, foam, clock, waves). */
+  readonly params: boolean;
+  /** The core block (`wc`: sun, sky, refraction and reflection). */
+  readonly core: boolean;
+  /** The core's view extras (`extras`: each view's inverse view-projection and axes). */
+  readonly view: boolean;
+}
+
+const READS_ALL: WaterBlockReads = { params: true, core: true, view: true };
+
+/**
+ * @internal The blocks `water_shade` reaches: the functions it calls, transitively, in `shade`
+ * and the look's WGSL (the engine's water helpers), scanned for `water`, `wc` and `extras` (comments stripped;
+ * any mention counts, so it errs toward uploading). The engine's shading (`shade` undefined)
+ * reads all three.
+ */
+export function waterShadeReads(shade: string | undefined): WaterBlockReads {
+  if (shade === undefined) return READS_ALL;
+  const src = waterLookWgsl(0, shade)
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\/\/[^\n]*/g, ' ');
+  const bodies = new Map<string, string>();
+  const fn = /\bfn\s+([A-Za-z_]\w*)\s*\(/g;
+  for (let m = fn.exec(src); m; m = fn.exec(src)) {
+    let depth = 0;
+    let end = src.indexOf('{', fn.lastIndex);
+    for (; end >= 0 && end < src.length; end++) {
+      const c = src[end];
+      if (c === '{') depth++;
+      else if (c === '}' && --depth === 0) break;
+    }
+    bodies.set(m[1]!, src.slice(fn.lastIndex, end < 0 ? src.length : end + 1));
+  }
+  let params = false;
+  let core = false;
+  let view = false;
+  const seen = new Set<string>();
+  const todo = ['water_shade'];
+  while (todo.length > 0) {
+    const name = todo.pop()!;
+    if (seen.has(name)) continue;
+    seen.add(name);
+    for (const t of bodies.get(name)?.match(/[A-Za-z_]\w*/g) ?? []) {
+      if (t === 'water') params = true;
+      else if (t === 'wc') core = true;
+      else if (t === 'extras') view = true;
+      else if (bodies.has(t)) todo.push(t);
+    }
+  }
+  return { params, core, view };
+}
+
+/**
+ * @internal Copy `src` into `last` and say whether any value differed (`last` starts NaN, so a
+ * first call differs). No allocation.
+ */
+export function blockChanged(src: Float32Array, last: Float32Array): boolean {
+  let changed = false;
+  for (let i = 0; i < src.length; i++) {
+    const v = src[i]!;
+    if (last[i] !== v) {
+      last[i] = v;
+      changed = true;
+    }
+  }
+  return changed;
+}
 
 /** @internal Defaults `Water` and `WaterShading` share. */
 export const WATER_DEFAULTS = {
@@ -259,8 +338,9 @@ export function makeWaterLook(
  * A water's shading on a render core without a plane (ws/water-split, E18): the settings,
  * clock and blocks behind its looks (`look`: a game's own geometry, such as a voxel world's
  * water faces, shaded as this water). It joins the core as a drawable that never draws and
- * uploads its two blocks in `core.prepare`; `update(dt)` advances the waves. Every field is
- * live, as on `Water`. It bundles none of the plane's code: a game that draws its own water
+ * uploads its blocks in `core.prepare`: only those its shading reads (`reads`), and each only
+ * when a value in it changed (ws/g6-asks), so a still water on a still camera uploads nothing.
+ * `update(dt)` advances the waves. Every field is live, as on `Water`. It bundles none of the plane's code: a game that draws its own water
  * surface takes this, not `Water` with `plane: false`.
  */
 export class WaterShading implements CoreDrawable {
@@ -303,11 +383,18 @@ export class WaterShading implements CoreDrawable {
   readonly skyColor = new Float32Array(3);
   /** Its looks sample the core's colour copy: refraction or reflection was on when made. */
   readonly readsColor: boolean;
+  /**
+   * The blocks `prepare` keeps current: what its `water_shade` reads (all three for the
+   * engine's), or all with `blocks: 'all'`.
+   */
+  readonly reads: WaterBlockReads;
 
   private readonly shade: string | undefined;
   private readonly params = new Float32Array(WATER_PARAMS_FLOATS);
+  private readonly paramsSent = new Float32Array(WATER_PARAMS_FLOATS).fill(Number.NaN);
   private readonly paramsBuffer: GPUBuffer;
   private readonly block = new Float32Array(WATER_CORE_FLOATS);
+  private readonly blockSent = new Float32Array(WATER_CORE_FLOATS).fill(Number.NaN);
   private readonly blockBuffer: GPUBuffer;
   private readonly extras: CoreViewExtras;
   private readonly looks = new Map<number, WaterLook>();
@@ -335,6 +422,7 @@ export class WaterShading implements CoreDrawable {
     set3(this.skyColor, opts.skyColor ?? WATER_DEFAULTS.sky);
     this.readsColor = this.refraction > 0 || this.reflectionSteps > 0;
     this.shade = opts.shade;
+    this.reads = opts.blocks === 'all' ? READS_ALL : waterShadeReads(opts.shade);
     this.extras = CoreViewExtras.of(core);
     this.paramsBuffer = device.createBuffer({
       label: 'water-params',
@@ -354,14 +442,26 @@ export class WaterShading implements CoreDrawable {
     this.time += dt;
   }
 
-  /** Upload the view extras and both blocks (`core.prepare` calls it). No allocation. */
+  /**
+   * Upload the blocks its shading reads (`reads`), each only when it changed (`core.prepare`
+   * calls it). No allocation.
+   */
   prepare(): void {
-    this.extras.update();
-    packWaterParams(this, this.params, 0, true, 0);
-    packWaterCore(this, this.block, this.readsColor);
+    const reads = this.reads;
+    if (reads.view) this.extras.update();
     const queue = this.core.device.queue;
-    queue.writeBuffer(this.paramsBuffer, 0, this.params);
-    queue.writeBuffer(this.blockBuffer, 0, this.block);
+    if (reads.params) {
+      packWaterParams(this, this.params, 0, true, 0);
+      if (blockChanged(this.params, this.paramsSent)) {
+        queue.writeBuffer(this.paramsBuffer, 0, this.params);
+      }
+    }
+    if (reads.core) {
+      packWaterCore(this, this.block, this.readsColor);
+      if (blockChanged(this.block, this.blockSent)) {
+        queue.writeBuffer(this.blockBuffer, 0, this.block);
+      }
+    }
   }
 
   /** Draws nothing (never active). */

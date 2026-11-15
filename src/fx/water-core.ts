@@ -23,6 +23,7 @@ import { FxDepthModules } from './depth';
 import type { Water } from './water';
 import { WATER_CORE_FLOATS } from './water-shade-wgsl';
 import {
+  blockChanged,
   makeWaterLook,
   WATER_PREMULTIPLIED as PREMULTIPLIED,
   packWaterCore,
@@ -55,6 +56,7 @@ export class WaterOnCore implements CoreDrawable {
   private readonly pipes: DrawablePipelines;
   private readonly extras: CoreViewExtras;
   private readonly block = new Float32Array(WATER_CORE_FLOATS);
+  private readonly blockSent = new Float32Array(WATER_CORE_FLOATS).fill(Number.NaN);
   private readonly blockBuffer: GPUBuffer;
   private readonly dummyColor: GPUTexture;
   private readonly dummyDepth: GPUTexture;
@@ -139,7 +141,10 @@ export class WaterOnCore implements CoreDrawable {
     w.prepare(encoder);
     this.active = w.plane && w.mesh.indexCount > 0;
     packWaterCore(w, this.block, this.readsColor);
-    this.core.device.queue.writeBuffer(this.blockBuffer, 0, this.block);
+    // Only when it changed (ws/g6-asks): the sun, sky and screen-space settings rarely do.
+    if (blockChanged(this.block, this.blockSent)) {
+      this.core.device.queue.writeBuffer(this.blockBuffer, 0, this.block);
+    }
   }
 
   /**

@@ -1154,6 +1154,13 @@ class Water implements Drawable {
     destroy(): void;
 }
 
+## WaterBlockReads  (type-only)
+interface WaterBlockReads {
+    readonly params: boolean;
+    readonly core: boolean;
+    readonly view: boolean;
+}
+
 ## WaterFoam  (type-only)
 interface WaterFoam {
     width: number;
@@ -1249,6 +1256,7 @@ class WaterShading implements CoreDrawable {
     readonly sunColor: Float32Array<ArrayBuffer>;
     readonly skyColor: Float32Array<ArrayBuffer>;
     readonly readsColor: boolean;
+    readonly reads: WaterBlockReads;
     constructor(core: RenderCore, opts?: WaterShadingOptions);
     update(dt: number): void;
     prepare(): void;
@@ -1258,7 +1266,9 @@ class WaterShading implements CoreDrawable {
 }
 
 ## WaterShadingOptions  (type-only)
-type WaterShadingOptions = Pick<WaterOptions, 'level' | 'shallowColor' | 'deepColor' | 'depthFade' | 'fresnel' | 'roughness' | 'waves' | 'foam' | 'opacity' | 'refraction' | 'reflectionSteps' | 'reflectionReach' | 'sunDirection' | 'sunColor' | 'skyColor' | 'shade'>;
+interface WaterShadingOptions extends Pick<WaterOptions, 'level' | 'shallowColor' | 'deepColor' | 'depthFade' | 'fresnel' | 'roughness' | 'waves' | 'foam' | 'opacity' | 'refraction' | 'reflectionSteps' | 'reflectionReach' | 'sunDirection' | 'sunColor' | 'skyColor' | 'shade'> {
+    blocks?: 'shade' | 'all';
+}
 
 ## WaterWave  (type-only)
 interface WaterWave {
