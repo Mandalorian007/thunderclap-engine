@@ -17,7 +17,7 @@ use tc_net::ConnId;
 use tc_stream::{
     Area, FrameKind, GroupClaim, IdleBudget, LayerClaim, LayerFrom, LayerOrder, Loading, Marks,
     SectionPos, SectionSource, SectionStream, Stamp, StreamConfig, StreamEvent, StreamInterest,
-    StreamMsg,
+    StreamMsg, Unheld,
 };
 use tc_wire::Wire;
 
@@ -50,6 +50,11 @@ struct Voxels {
     /// worked out from a neighbour).
     spills: RefCell<HashMap<SectionPos, SectionPos>>,
     spilled: Vec<SectionPos>,
+    /// What `unheld` answers (`None`: the default); `Forget` marks the
+    /// spill without building.
+    unheld: Cell<Option<Unheld>>,
+    /// What `unheld` was asked: the section, and whether it was near.
+    asked: RefCell<Vec<(SectionPos, bool)>>,
 }
 
 impl Voxels {
@@ -63,6 +68,8 @@ impl Voxels {
             piles_before: Cell::new(false),
             spills: RefCell::default(),
             spilled: Vec::new(),
+            unheld: Cell::new(None),
+            asked: RefCell::default(),
         }
     }
 
@@ -108,6 +115,20 @@ impl SectionSource for Voxels {
         for to in self.spilled.drain(..) {
             marks.changed_derived(to);
             marks.layer_changed(PILES, to);
+        }
+    }
+
+    fn unheld(&mut self, pos: SectionPos, near: bool, marks: &mut Marks) -> Unheld {
+        self.asked.borrow_mut().push((pos, near));
+        match self.unheld.get() {
+            None => Unheld::Forget,
+            Some(Unheld::Build) => Unheld::Build,
+            Some(_) => {
+                if let Some(to) = self.spills.borrow().get(&pos) {
+                    marks.changed_derived(*to);
+                }
+                Unheld::Forget
+            }
         }
     }
 
@@ -822,8 +843,8 @@ fn idle_builds_within_its_budget_and_holds() {
     });
     let stats = g.stream.stats();
     assert_eq!(
-        stats.idle_builds, 5,
-        "the first whatever it says, then asked before each"
+        stats.idle_builds, 4,
+        "asked on entry, the first whatever it says, then asked before each"
     );
     assert_eq!(asked, 5);
     assert!(stats.idle_nanos > 0);
@@ -953,6 +974,7 @@ fn a_source_is_told_each_pass_and_the_views_loading() {
         src.begun[0],
         Loading {
             views: 2,
+            scanning: 2,
             sides: 3 + 7,
             widest: 7,
             areas: 2,
@@ -1116,6 +1138,7 @@ fn loading_counts_the_areas_once_each() {
         src.begun[0],
         Loading {
             views: 2,
+            scanning: 2,
             sides: 10,
             widest: 5,
             areas: 1,
@@ -1161,4 +1184,166 @@ fn queued_events_say_where_and_withdrawals_are_counted() {
     assert_eq!(stats.withdrawn, 27 + 9 + 1);
     assert_eq!(stats.withdrawn_bytes, stats.bytes);
     assert_eq!(seen.2, stats.bytes);
+}
+
+/// The sections a frame list carries, as stream messages.
+fn sections_in(frames: &[Frame]) -> Vec<SectionPos> {
+    frames
+        .iter()
+        .filter_map(|f| match f {
+            Frame::Stream(StreamMsg::Section { pos, .. } | StreamMsg::Edit { pos, .. }) => {
+                Some(*pos)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_derived_change_joins_a_bulk_resend_still_to_queue() {
+    // A reveal re-sends `pos` whole in the bulk lane; a neighbour rebuilt
+    // in the same flush marks it derived before that resend is queued.
+    let mut g = Game::new(StreamConfig::default());
+    g.join(A, area(0, 0, 0, 1));
+    g.settle();
+    let (pos, next) = (at(0, 0, 0), at(1, 0, 0));
+    let mut cells = g.src.world.cells_of(pos);
+    cells[5] = 3;
+    g.src.world.edits.borrow_mut().insert(pos, cells);
+    g.src.spills.borrow_mut().insert(next, pos);
+    g.stream.changed_bulk(pos);
+    g.src.world.set(&mut g.stream, next, 1, 2);
+    g.stream.flush(&mut g.src, &mut g.lanes);
+    let (priority, bulk) = drain(&mut g.lanes, A);
+    assert_eq!(
+        sections_in(&priority),
+        vec![next],
+        "only the edit is urgent"
+    );
+    assert_eq!(
+        sections_in(&bulk),
+        vec![pos],
+        "the reveal stays in the bulk lane"
+    );
+    g.player_apply(A, priority, bulk);
+    g.settle();
+    g.check(A);
+    assert_eq!(g.stream.stats().bulk_resends, 1);
+}
+
+impl Game {
+    fn player_apply(&mut self, conn: ConnId, priority: Vec<Frame>, bulk: Vec<Frame>) {
+        let p = self.players.get_mut(&conn).unwrap();
+        p.apply(priority);
+        p.apply(bulk);
+    }
+}
+
+#[test]
+fn an_unheld_change_is_built_or_marks_what_its_source_says() {
+    // `far` is next to A's area, never held; its build marks `edge`.
+    let (edge, far) = (at(1, 0, 0), at(2, 0, 0));
+    let mut g = Game::new(StreamConfig::default());
+    g.join(A, area(0, 0, 0, 1));
+    g.settle();
+    g.src.spills.borrow_mut().insert(far, edge);
+    assert!(g.stream.holds(A, edge));
+    assert!(!g.stream.holds(A, far));
+    assert!(!g.stream.holds(B, edge));
+    let builds = |g: &Game| g.src.world.builds.get();
+
+    // The default: dropped unbuilt, and asked with how near it is.
+    let before = builds(&g);
+    g.stream.changed(far);
+    g.stream.changed(at(40, 0, 0));
+    g.stream.flush(&mut g.src, &mut g.lanes);
+    assert_eq!(builds(&g), before);
+    assert_eq!(g.stream.changes_pending(), 0);
+    let mut asked = g.src.asked.take();
+    asked.sort();
+    assert_eq!(asked, vec![(far, true), (at(40, 0, 0), false)]);
+
+    // Marks made without a build: the held neighbour is rebuilt at once.
+    g.src.unheld.set(Some(Unheld::Forget));
+    g.stream.changed(far);
+    g.stream.flush(&mut g.src, &mut g.lanes);
+    assert_eq!(builds(&g), before + 1, "only the neighbour");
+    assert_eq!(g.stream.changes_pending(), 0);
+
+    // Built: its own build marks the neighbour, rebuilt in the same pass
+    // with the layer it spilt on, and the client gets it.
+    g.src.unheld.set(Some(Unheld::Build));
+    g.stream.changed(far);
+    g.stream.flush(&mut g.src, &mut g.lanes);
+    assert_eq!(builds(&g), before + 3);
+    g.deliver();
+    g.settle();
+    g.check(A);
+    assert!(!g.player(A).layers.get(&(PILES, edge)).unwrap().is_empty());
+
+    // Building counts against the rebuild budget: past it, asked again.
+    let mut g = Game::new(StreamConfig {
+        rebuild_budget: 1,
+        ..StreamConfig::default()
+    });
+    g.join(A, area(0, 0, 0, 1));
+    g.settle();
+    g.src.spills.borrow_mut().insert(far, edge);
+    g.src.unheld.set(Some(Unheld::Build));
+    let before = builds(&g);
+    g.stream.changed(far);
+    g.stream.flush(&mut g.src, &mut g.lanes);
+    assert_eq!(builds(&g), before + 1);
+    assert_eq!(g.stream.changes_pending(), 1, "the neighbour, next flush");
+    g.settle();
+    assert_eq!(builds(&g), before + 2);
+    g.check(A);
+}
+
+#[test]
+fn a_moved_view_loads_until_its_area_is_written_and_the_wave_ends() {
+    let mut g = Game::new(StreamConfig {
+        build_budget: 1000,
+        ..StreamConfig::default()
+    });
+    g.join(A, area(0, 0, 0, 1));
+    g.join(B, area(20, 0, 0, 1));
+    let now = g.stream.loading_now();
+    assert_eq!((now.views, now.scanning), (2, 2));
+    // Scanned in one flush, but nothing written yet: still loading.
+    g.stream.flush(&mut g.src, &mut g.lanes);
+    assert_eq!(g.stream.last_loading().views, 2);
+    assert!(!g.stream.loading(), "scans done");
+    assert!(g.stream.loading_for(A));
+    let v = g.stream.view_loading(A).unwrap();
+    assert!(!v.scanning && v.moved);
+    assert_eq!(v.in_flight, 27);
+    assert_eq!(v.area, Some(area(0, 0, 0, 1)));
+    assert_eq!(g.stream.view_loading(C), None);
+    g.deliver();
+    g.stream.flush(&mut g.src, &mut g.lanes);
+    assert!(!g.stream.loading_for(A) && !g.stream.loading_for(B));
+    assert_eq!(g.stream.last_loading(), Loading::default());
+    assert!(!g.stream.view_loading(A).unwrap().moved, "the wave ended");
+
+    // Both move; A's sections are written first, B's are not: A counts as
+    // loading while B does (a moving view moves again soon).
+    g.stream.set_interest(A, area(1, 0, 0, 1), &[]).unwrap();
+    g.stream.set_interest(B, area(21, 0, 0, 1), &[]).unwrap();
+    g.stream.flush(&mut g.src, &mut g.lanes);
+    let (p, b) = drain(&mut g.lanes, A);
+    g.player_apply(A, p, b);
+    g.stream.flush(&mut g.src, &mut g.lanes);
+    assert_eq!(g.stream.view_loading(A).unwrap().in_flight, 0);
+    assert!(g.stream.loading_for(A), "moved, in B's wave");
+    assert!(g.stream.loading_for(B));
+    let last = g.stream.last_loading();
+    assert_eq!((last.views, last.scanning, last.areas), (2, 0, 2));
+    // B's are written: the wave is over.
+    g.deliver();
+    g.stream.flush(&mut g.src, &mut g.lanes);
+    assert!(!g.stream.loading_for(A));
+    assert!(!g.stream.view_loading(A).unwrap().moved);
+    g.check(A);
+    g.check(B);
 }

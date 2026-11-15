@@ -8,11 +8,13 @@
 //! or what it held across a reload) keeps it when the claim matches.
 
 use std::collections::BTreeSet;
+use std::num::NonZeroU64;
 
 use tc_net::{BulkTicket, ConnId};
 
 use super::{LayerFrom, LayerOrder, SectionSource};
 use crate::hash::PosMap;
+use crate::held::RegionMap;
 use crate::lanes::Lanes;
 use crate::msg::SectionPos;
 
@@ -28,15 +30,13 @@ struct State {
     holders: usize,
 }
 
-/// What a connection holds of one key.
+/// What a connection holds of one key (its queued whole frame, if any,
+/// is in [`LayerHeld::queued`]).
 struct Have {
     /// Sections it holds under the key.
-    count: usize,
-    /// The version it holds (or will once `ticket`'s frame is written).
-    version: Option<u64>,
-    ticket: Option<BulkTicket>,
-    /// The length of `ticket`'s frame.
-    bytes: u32,
+    count: u32,
+    /// The version it holds (or will once its queued frame is written).
+    version: Option<NonZeroU64>,
     /// Until a whole frame of the key is written, the client may hold a
     /// state not known here (it claimed one that didn't match, or held an
     /// earlier copy of the section that brought the key): a whole frame is
@@ -44,10 +44,21 @@ struct Have {
     unknown: bool,
 }
 
+impl Have {
+    fn version(&self) -> Option<u64> {
+        self.version.map(NonZeroU64::get)
+    }
+}
+
+/// A key's whole frame still queued: its ticket and length.
+type Queued = PosMap<(usize, SectionPos), (BulkTicket, u32)>;
+
 /// What one connection holds of every layer.
 #[derive(Default)]
 pub(super) struct LayerHeld {
-    keys: Vec<PosMap<SectionPos, Have>>,
+    keys: Vec<RegionMap<Have>>,
+    /// Whole frames queued, until written.
+    queued: Queued,
     /// Keys whose state it may not hold yet.
     pending: BTreeSet<(usize, SectionPos)>,
     /// States it says it holds, by layer and key, with their stamps
@@ -81,15 +92,28 @@ impl LayerHeld {
 
     /// Drops the claims not looked at (a load reached its end).
     pub(super) fn drop_claims(&mut self) -> usize {
-        let n = self.claims.len();
-        self.claims.clear();
-        n
+        std::mem::take(&mut self.claims).len()
+    }
+
+    /// Lets go of the tickets of whole frames written.
+    pub(super) fn prune(&mut self) {
+        self.queued.retain(|_, (t, _)| !t.taken());
+        if self.queued.capacity() > 64 && self.queued.len() * 4 <= self.queued.capacity() {
+            self.queued.shrink_to(self.queued.len() * 2);
+        }
+    }
+
+    /// Its whole frames still waiting in the bulk lane.
+    pub(super) fn in_flight(&self) -> bool {
+        self.queued
+            .values()
+            .any(|(t, _)| !t.taken() && !t.withdrawn())
     }
 
     /// Bytes its tables take, roughly (by capacity).
     pub(super) fn bytes(&self) -> usize {
-        let key = size_of::<(SectionPos, Have)>() + 1;
-        self.keys.iter().map(|k| k.capacity() * key).sum::<usize>()
+        self.keys.iter().map(RegionMap::bytes).sum::<usize>()
+            + self.queued.capacity() * (size_of::<((usize, SectionPos), (BulkTicket, u32))>() + 1)
             + self.pending.len() * (size_of::<(usize, SectionPos)>() + 8)
             + self.claims.capacity() * (size_of::<((usize, SectionPos), Option<u64>)>() + 1)
     }
@@ -125,19 +149,20 @@ pub(super) struct Layers {
     pub(super) withdrawn: Vec<(usize, SectionPos, u32)>,
 }
 
-/// Withdraws `have`'s queued frame, logged: true if it was withdrawn.
+/// Withdraws the key's queued frame, logged: true if it was withdrawn.
 fn take_back(
-    have: &mut Have,
+    queued: &mut Queued,
     layer: usize,
     key: SectionPos,
     log: &mut Vec<(usize, SectionPos, u32)>,
 ) -> bool {
-    if have.ticket.as_ref().is_some_and(BulkTicket::withdraw) {
-        log.push((layer, key, have.bytes));
-        have.ticket = None;
-        true
-    } else {
-        false
+    match queued.get(&(layer, key)) {
+        Some((t, bytes)) if t.withdraw() => {
+            log.push((layer, key, *bytes));
+            queued.remove(&(layer, key));
+            true
+        }
+        _ => false,
     }
 }
 
@@ -194,10 +219,15 @@ impl Layers {
     /// states it has, so one the new world has the same is not sent again.
     /// Call before [`clear`](Self::clear).
     pub(super) fn forget_viewer(&mut self, held: &mut LayerHeld) {
-        let LayerHeld { keys, claims, .. } = held;
+        let LayerHeld {
+            keys,
+            claims,
+            queued,
+            ..
+        } = held;
         for (layer, keys) in keys.iter_mut().enumerate() {
-            for (key, mut h) in keys.drain() {
-                if take_back(&mut h, layer, key, &mut self.withdrawn) || h.version.is_none() {
+            for (key, h) in keys.drain() {
+                if take_back(queued, layer, key, &mut self.withdrawn) || h.version.is_none() {
                     // Never written: it holds what it held before.
                     if h.unknown {
                         claims.insert((layer, key), None);
@@ -205,7 +235,7 @@ impl Layers {
                     continue;
                 }
                 let s = self.states.get(layer).and_then(|s| s.get(&key));
-                let stamp = match (h.version, s) {
+                let stamp = match (h.version(), s) {
                     (Some(v), Some(s)) if v == s.version => Some(s.stamp),
                     (
                         Some(v),
@@ -221,17 +251,19 @@ impl Layers {
                 }
             }
         }
+        queued.clear();
         held.pending.clear();
     }
 
     /// A connection closed.
     pub(super) fn drop_viewer(&mut self, held: &mut LayerHeld) {
         for (layer, keys) in held.keys.iter_mut().enumerate() {
-            for (key, mut h) in keys.drain() {
-                take_back(&mut h, layer, key, &mut self.withdrawn);
+            for (key, _) in keys.drain() {
+                take_back(&mut held.queued, layer, key, &mut self.withdrawn);
                 self.unhold(layer, key);
             }
         }
+        held.queued.clear();
         held.pending.clear();
         held.claims.clear();
     }
@@ -260,16 +292,14 @@ impl Layers {
         copy: bool,
     ) -> u64 {
         if held.keys.len() < self.count {
-            held.keys.resize_with(self.count, PosMap::default);
+            held.keys.resize_with(self.count, RegionMap::default);
         }
         let mut kept = 0;
         for layer in 0..self.count {
             let key = src.layer_key(layer, pos);
-            let have = held.keys[layer].entry(key).or_insert_with(|| Have {
+            let have = held.keys[layer].get_or_insert_with(key, || Have {
                 count: 0,
                 version: None,
-                ticket: None,
-                bytes: 0,
                 unknown: false,
             });
             have.count += 1;
@@ -279,7 +309,7 @@ impl Layers {
                 state.holders += 1;
                 match claim {
                     Some(Some(c)) if c == state.stamp => {
-                        have.version = Some(state.version);
+                        have.version = NonZeroU64::new(state.version);
                         kept += 1;
                     }
                     Some(_) => {
@@ -327,7 +357,7 @@ impl Layers {
             if have.count > 0 {
                 continue;
             }
-            take_back(have, layer, key, &mut self.withdrawn);
+            take_back(&mut held.queued, layer, key, &mut self.withdrawn);
             held.keys[layer].remove(&key);
             held.pending.remove(&(layer, key));
             self.unhold(layer, key);
@@ -345,7 +375,7 @@ impl Layers {
         for layer in 0..self.count.min(held.keys.len()) {
             let key = src.layer_key(layer, pos);
             if let Some(have) = held.keys[layer].get_mut(&key)
-                && take_back(have, layer, key, &mut self.withdrawn)
+                && take_back(&mut held.queued, layer, key, &mut self.withdrawn)
             {
                 have.version = None;
                 held.pending.insert((layer, key));
@@ -474,12 +504,12 @@ impl Layers {
             held.pending.remove(&(layer, key));
             return Some(0);
         };
-        if have.version == Some(state.version) {
+        if have.version() == Some(state.version) {
             held.pending.remove(&(layer, key));
             return Some(0);
         }
         let mut sent = 0;
-        let queued = take_back(have, layer, key, withdrawn);
+        let queued = take_back(&mut held.queued, layer, key, withdrawn);
         if queued || have.version.is_none() {
             // Whole, in the bulk lane next to its section.
             have.version = None;
@@ -506,8 +536,8 @@ impl Layers {
                     if !ok {
                         return None;
                     }
-                    have.ticket = Some(ticket);
-                    have.bytes = u32::try_from(bytes).unwrap_or(u32::MAX);
+                    let bytes = u32::try_from(bytes).unwrap_or(u32::MAX);
+                    held.queued.insert((layer, key), (ticket, bytes));
                     sent += 1;
                 }
             }
@@ -518,7 +548,7 @@ impl Layers {
             let prev = state
                 .prev
                 .as_ref()
-                .filter(|(v, _, _)| Some(*v) == have.version);
+                .filter(|(v, _, _)| Some(*v) == have.version());
             let (from, tag, fv) = match prev {
                 Some((v, b, _)) => (LayerFrom::State(b), 2, *v),
                 None => (LayerFrom::Unknown, 1, 0),
@@ -540,10 +570,10 @@ impl Layers {
                 }
                 sent += 1;
             }
-            have.ticket = None;
+            held.queued.remove(&(layer, key));
             have.unknown = false;
         }
-        have.version = Some(state.version);
+        have.version = NonZeroU64::new(state.version);
         held.pending.remove(&(layer, key));
         Some(sent)
     }

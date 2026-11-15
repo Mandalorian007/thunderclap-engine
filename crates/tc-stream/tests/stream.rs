@@ -700,6 +700,21 @@ fn idle_always_sends_one_section() {
     let mut s = Setup::new(StreamConfig::default());
     s.join(A, area(0, 0, 0, 1), &[]);
     let far = Instant::now() + Duration::from_secs(5);
-    s.stream.idle(&mut s.world, &mut s.lanes, far, || true);
+    let mut asked = 0;
+    s.stream.idle(&mut s.world, &mut s.lanes, far, || {
+        asked += 1;
+        asked > 1
+    });
     assert_eq!(s.stream.stats().idle_builds, 1);
+}
+
+#[test]
+fn idle_does_nothing_when_interrupted_on_entry() {
+    let mut s = Setup::new(StreamConfig::default());
+    s.join(A, area(0, 0, 0, 1), &[]);
+    let far = Instant::now() + Duration::from_secs(5);
+    let spent = s.stream.idle(&mut s.world, &mut s.lanes, far, || true);
+    assert_eq!(spent, Duration::ZERO);
+    assert_eq!(s.stream.stats().idle_builds, 0);
+    assert!(s.stream.loading());
 }

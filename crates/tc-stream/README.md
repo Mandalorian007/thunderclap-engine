@@ -38,12 +38,20 @@ world.
   `changed_bulk`, `changed_derived`, `layer_changed`, as the stream's
   methods): marked sections held by anyone are rebuilt in the same pass
   (once each), and marked layers are read at once, so they go with the
-  build that changed them. `begin(&Loading)` and `end()` (default
+  build that changed them. `unheld(pos, near, &mut Marks) -> Unheld`
+  (default `Unheld::Forget`) is asked of a changed section no connection
+  holds as a flush rebuilds: `Forget` drops the change (the marks it adds
+  are applied as `take_marks`' are, so a source marks the held
+  neighbours a change next door affects), `Build` builds it within the
+  rebuild budget (its `take_marks` run; past the budget it is asked again
+  next flush); `near` says it is within the hysteresis and one of some
+  area. `begin(&Loading)` and `end()` (default
   nothing) bracket each pass that may build (a flush, `flush_conn`,
-  `load_until`, `idle`, `check_claims`): `Loading {views, sides, widest,
-  areas, area_sides}` counts the views still loading and their sides, and
-  the distinct areas among them (views sharing an area count once), so a
-  source sizes or drops its caches.
+  `load_until`, `idle`, `check_claims`): `Loading {views, scanning, sides,
+  widest, areas, area_sides}` counts the views loading (as `loading_for`
+  says) and their sides, how many are still scanned, and the distinct
+  areas among them (views sharing an area count once), so a source sizes
+  or drops its caches.
 - `SectionStream::new(StreamConfig, encode)`: `encode` turns a `StreamMsg`
   into a frame; `game_frame::<P>()` does it for a game whose
   `P::Server: From<StreamMsg>`. Called from the game's one writer thread:
@@ -53,7 +61,15 @@ world.
   layer claims), `check_claims(conn, within, &mut source, &mut lanes)`
   (looks at a connection's claims now, all or those within a box, before
   a command acts on them), `claims_pending(conn)`, `held(conn)`,
-  `loading_for(conn)`, `unloads_pending(conn)`, `holders(pos)` (the
+  `holds(conn, pos)`, `loading_for(conn)` (its area still scanned, its
+  sections or their layers' whole frames still queued unwritten, or its
+  area moved since the stream last had nothing loading while any view
+  still loads), `view_loading(conn)` (`ViewLoading {area, scanning,
+  in_flight, moved}`, `#[non_exhaustive]`, the parts, for a host's own
+  rule), `last_loading()` (the `Loading` the last pass gave `begin`),
+  `loading_now()` (the one the next pass would give: a host sizing its
+  caches right after `set_interest`), `unloads_pending(conn)`,
+  `holders(pos)` (the
   connections holding a section: 0, and no one sees a change to it),
   `changes_pending()`, `held_bytes(conn)` and `layer_bytes()` (the
   stream's memory, roughly), `changed(pos)`,
@@ -61,7 +77,9 @@ world.
   reveal: a queued frame is replaced, a held one sent again behind the
   loads), `changed_derived(pos)` (a change following from another, such
   as a neighbour's faces: as `changed`, but a `changed_bulk` of the same
-  section stays in the bulk lane, where a `changed` would win),
+  section stays in the bulk lane, where a `changed` would win, and a
+  holder whose bulk resend of it is still to be queued gets the new
+  encoding in that resend, not on the priority lane),
   `layer_changed(layer, key)`, `send_unloads(conn, &mut lanes)` (the
   unloads waiting, now: after a jump, before the flush),
   `flush(&mut source, &mut lanes)` once
@@ -69,7 +87,8 @@ world.
   changes now, past the rebuild budget: before a command's result),
   `load_until(&mut source, &mut lanes, until, interrupted)` (builds loads
   between flushes until the deadline or `interrupted()`, returning how
-  many), the idle budget (below), `reload()`, `has_work()`, `loading()`,
+  many), the idle budget (below), `reload()`, `has_work()`, `loading()`
+  (some view still scanned: what `load_until` and `idle` would send),
   `stats()` (`StreamStats`: sections, edits, unloads, `build_nanos`,
   `bulk_resends`, `layer_frames`, `bytes` and `refused` frames,
   `withdrawn` and `withdrawn_bytes` (queued bulk frames taken back unsent:
@@ -91,6 +110,9 @@ world.
   5 ms}` per flush interval: spread first, then extra); `hold_idle(until)`
   spends only `held` and no extra until then (the machine is short of
   CPU); `idle_left()` says whether there is budget and a view loading.
+  `interrupted()` is asked first: true, and it returns at once having
+  done nothing; otherwise at least one section is sent, then it is asked
+  after each.
   On tc-sim's `Host` (tc-stream doesn't depend on it): `idle_work` returns
   `stream.idle_left()`, `idle(until, interrupted)` calls `stream.idle`,
   `woke_late` calls `stream.hold_idle(now + a second or so)`.
@@ -137,9 +159,11 @@ world.
 Each flush:
 
 1. rebuilds changed sections someone holds (`rebuild_budget`, at least
-   one; one nobody holds is just forgotten), and the sections their builds
-   mark, and marks holders of an older encoding stale; then reads the
-   layers that changed (those the builds marked too);
+   one; one nobody holds is forgotten, or built, as `unheld` says), and
+   the sections their builds mark, and marks holders of an older encoding
+   stale (a section whose bulk resend is still to be queued keeps it,
+   unless a `changed` overrides it); then reads the layers that changed
+   (those the builds marked too);
 2. sends each stale section: a frame still waiting in the bulk lane is
    withdrawn and queued again with the change (folded); otherwise an
    `Edit` (the changed cells, from the earlier encoding in the cache, when
@@ -200,6 +224,22 @@ later, not unloaded. `check_claims` looks at them
 early. `reload()` turns what every connection holds, sections and layer
 states, into claims, so a new world sends only what it changed.
 
+A connection's held record is compact: the stamps of the sections it
+holds are packed by 8 x 8 x 1 region behind a bitmap (8 bytes a section
+and a table entry per region), as is what it holds of each layer key (16
+bytes a key); the tickets of frames still queued sit in their own small
+map, let go at the next pass once written. In a 16/8/16 view with two
+per-section layers and one per column, `held_bytes` is about 49 bytes a
+section (it was about 246 with a hash-map entry per section and key;
+`tests/memory.rs` measures it).
+
+`loading_for` is wider than `loading()`: a view counts as loading until
+the sections it was sent are written, not just scanned, and a view that
+moved stays loading while any view loads (a wave: `moved` clears at the
+first pass with no view scanning and nothing in flight). This relies on
+the `Lanes` taking a bulk frame's ticket when it writes it (as tc-net's
+`Outbound` does); a view whose frames are never taken looks loading.
+
 The stream's maps keyed by position use a fixed multiply-rotate hasher
 (deterministic, not DoS-resistant: positions come from the server's own
 areas, bounded per connection). On a release build streaming 8 views of
@@ -233,13 +273,20 @@ of CPU over six runs against SipHash's 1.60 to 2.60 s (best wall time
   same flush (and in `flush_conn`), one `layer_frame` for three holders,
   `LayerOrder::Before`, a whole section change keeping its layers, layer
   group events and memory, `Loading`'s areas, and `Queued` positions and
-  withdrawals counted.
+  withdrawals counted; a derived change joining a bulk resend still to be
+  queued, `unheld` (forgotten, marking without a build, built within the
+  rebuild budget, `near`) and `holds`, and `loading_for` covering frames in
+  flight and a moved view's wave (`view_loading`, `last_loading`,
+  `loading_now`).
+- `tests/memory.rs`: `held_bytes` a section in a 16/8/16 view with three
+  layers, at the origin and off it (under 64).
 - `tests/stream.rs` also: `EditRule::Frame`, `loading_for`,
   `unloads_pending`, `send_unloads`, `holders`, `changes_pending` and the
   public hasher, a view back before its unloads went, outside claims
   counted, a refused fold keeping the copy held, `changed_derived` after
   `changed_bulk`, `load_time` bounding cached sends, and `idle` sending
-  one section whatever `interrupted` says.
+  one section once past an `interrupted` check on entry (and nothing when
+  interrupted on entry).
 - `tests/tiles.rs`: a 2D tilemap source (8×8 `u16` chunks, its own
   encoding) streams, edits, moves and resumes.
 - `tests/interop.rs`: a game loop on `tc-net` streams to `createNet`
