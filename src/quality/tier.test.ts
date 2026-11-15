@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { type DeviceInfo, detectTier, gpuInfo, headsetBrowser, readDevice } from './tier';
+import {
+  type DeviceInfo,
+  detectTier,
+  gpuInfo,
+  headsetBrowser,
+  readDevice,
+  startsLean,
+  TIER_FEATURES,
+} from './tier';
 
 const desktop: DeviceInfo = {
   touch: false,
@@ -67,5 +75,30 @@ describe('device facts', () => {
     const d = readDevice();
     expect(d.gpu).toBe(null);
     expect(typeof d.cores).toBe('number');
+  });
+});
+
+describe('TIER_FEATURES and startsLean (ws/e24-gpu)', () => {
+  it('low and medium draw no sun or actor shadows and FXAA; high draws them all with TAA', () => {
+    for (const t of ['low', 'medium'] as const) {
+      expect(TIER_FEATURES[t]).toEqual({
+        sunShadows: false,
+        actorShadows: false,
+        antialias: 'fxaa',
+      });
+    }
+    expect(TIER_FEATURES.high).toEqual({ sunShadows: true, actorShadows: true, antialias: 'taa' });
+  });
+
+  it('a WebKit iPad or phone starts lean; a desktop, a Chromium tablet or a headset does not', () => {
+    const ipad = { ...desktop, ipad: true, webkit: true, touch: true };
+    expect(startsLean(ipad)).toBe(true);
+    expect(startsLean({ ...desktop, phone: true, webkit: true, touch: true })).toBe(true);
+    expect(startsLean(desktop)).toBe(false);
+    expect(startsLean({ ...desktop, webkit: true })).toBe(false);
+    expect(startsLean({ ...desktop, ipad: true, touch: true })).toBe(false);
+    expect(startsLean({ ...ipad, headset: true })).toBe(false);
+    // The tier is not lowered: an iPad stays high, lean only at the start.
+    expect(detectTier(ipad).tier).toBe('high');
   });
 });

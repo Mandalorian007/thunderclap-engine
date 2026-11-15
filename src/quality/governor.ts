@@ -12,11 +12,20 @@
  *   streaming): shedding GPU work wouldn't help, so it isn't counted (unless `cpuMisses` is on:
  *   then those frames shed too, for knobs that cut main-thread work);
  * - a window whose average latency (minus main-thread time) stayed under half a target had a GPU
- *   with time to spare, so its misses are someone else's (a capped frame rate, the compositor).
+ *   with time to spare, so its misses are someone else's (a capped frame rate, the compositor);
+ * - unless the GPU's own time says otherwise (ws/e24-gpu): a window whose frames' GPU time
+ *   (timestamp queries, `frame`'s `gpuMs`) averaged three quarters of a target or more was the
+ *   GPU's, whatever the latency read. Where there are no timestamps (WebKit), late frames alone
+ *   judge, the latency's veto aside.
  *
  * Hysteresis is asymmetric and sticky: down one step when over 10% of a window's frames missed
- * for the GPU; up one step after 20 s under 1% late; a step shed twice within 2 minutes of being
- * restored stays shed 5 minutes; at most one change every 2 s and four in a minute.
+ * for the GPU; up one step after 20 s under 1% late (and, with GPU times, the GPU under three
+ * quarters of a target: headroom for what comes back); a step shed twice within 2 minutes of
+ * being restored stays shed 5 minutes; at most one change every 2 s and four in a minute.
+ *
+ * The order knobs are shed in is the game's data (`GovernorOptions.order`, `Governor.order`):
+ * named knobs first, in that order, then the rest by `cost`. Four changes a minute make the
+ * order matter: a costly feature behind cheap ones that don't help waits a minute.
  *
  * Pure: the caller passes the clock (`frame(now, …)`), so it is tested on synthetic traces. A frame
  * costs a few comparisons and no allocation; a change allocates its record.
@@ -56,6 +65,12 @@ export interface GovernorOptions {
   targetMs?: number;
   /** Knobs to start with (more join through `register`). */
   rungs?: readonly Knob[];
+  /**
+   * Knob names shed first, in this order (ws/e24-gpu): the game's data, say the sun's shadows
+   * before anything else on a tiler where they cost the most. Knobs not named follow by `cost`,
+   * then registration. A name no knob has is skipped. Default none: by `cost` alone.
+   */
+  order?: readonly string[];
   /** One judging window, ms. Default 2000. */
   windowMs?: number;
   /** Share of a window's frames missed for the GPU that sheds a step. Default 0.1. */
@@ -89,18 +104,25 @@ export interface Governor {
   targetMs: number;
   /** Off: frames aren't judged and nothing changes. */
   enabled: boolean;
+  /**
+   * Knob names shed first, in order (`GovernorOptions.order`); setting it re-sorts the knobs.
+   * Steps already shed stay shed and come back in the order they went.
+   */
+  order: readonly string[];
   /** Adds a knob. Removing it (the returned function) first restores every step it gave up. */
   register(knob: Knob): () => void;
   /**
    * A frame was drawn at `now` (ms), `intervalMs` after the one before, the main thread busy
    * `cpuMs` for it; `latencyMs` is its submit-to-done latency when it was measured (`null` when
-   * not). Returns the change made, if any.
+   * not); `gpuMs` its GPU time from timestamp queries when there are any (`null` when not;
+   * ws/e24-gpu). Returns the change made, if any.
    */
   frame(
     now: number,
     intervalMs: number,
     cpuMs?: number,
     latencyMs?: number | null,
+    gpuMs?: number | null,
   ): GovernorChange | null;
   /** Sheds (or restores) steps until `count` are shed, at once (tests, a dev console); `now` starts the gap. */
   set(count: number, now?: number): void;
@@ -153,9 +175,14 @@ export function createGovernor(options: GovernorOptions = {}): Governor {
   let cpuMissed = 0;
   let latencySum = 0;
   let latencyN = 0;
+  let gpuSum = 0;
+  let gpuN = 0;
   let cleanSince = -1;
   let cleanFrames = 0;
   let cleanMissed = 0;
+  let cleanGpuSum = 0;
+  let cleanGpuN = 0;
+  let orderNames: readonly string[] = options.order ?? [];
   let lastChange = Number.NEGATIVE_INFINITY;
 
   const depth = (d: number): void => {
@@ -166,8 +193,15 @@ export function createGovernor(options: GovernorOptions = {}): Governor {
     }
   };
 
+  /** A knob's place in `order`, or past its end when not named. */
+  const rank = (k: Knob): number => {
+    const i = orderNames.indexOf(k.name);
+    return i < 0 ? orderNames.length : i;
+  };
   const sort = (): void => {
-    knobs.sort((a, b) => (a.cost ?? 1) - (b.cost ?? 1) || order.get(a)! - order.get(b)!);
+    knobs.sort(
+      (a, b) => rank(a) - rank(b) || (a.cost ?? 1) - (b.cost ?? 1) || order.get(a)! - order.get(b)!,
+    );
   };
 
   /** Steps the cheapest knob that can still give: the knob, or null at every limit. */
@@ -239,6 +273,13 @@ export function createGovernor(options: GovernorOptions = {}): Governor {
   const g: Governor = {
     targetMs: options.targetMs ?? 1000 / 60,
     enabled: true,
+    get order() {
+      return orderNames;
+    },
+    set order(names) {
+      orderNames = names;
+      sort();
+    },
     register(knob) {
       if (order.has(knob)) return () => {};
       order.set(knob, registered++);
@@ -256,7 +297,7 @@ export function createGovernor(options: GovernorOptions = {}): Governor {
         order.delete(knob);
       };
     },
-    frame(now, intervalMs, cpuMs = 0, latencyMs = null) {
+    frame(now, intervalMs, cpuMs = 0, latencyMs = null, gpuMs = null) {
       if (!g.enabled || knobs.length === 0) return null;
       if (intervalMs > GAP_MS || intervalMs <= 0) {
         windowStart = -1;
@@ -266,11 +307,11 @@ export function createGovernor(options: GovernorOptions = {}): Governor {
       const t = g.targetMs;
       if (windowStart < 0) {
         windowStart = now;
-        frames = missed = cpuMissed = latencySum = latencyN = 0;
+        frames = missed = cpuMissed = latencySum = latencyN = gpuSum = gpuN = 0;
       }
       if (cleanSince < 0) {
         cleanSince = now;
-        cleanFrames = cleanMissed = 0;
+        cleanFrames = cleanMissed = cleanGpuSum = cleanGpuN = 0;
       }
       frames++;
       cleanFrames++;
@@ -283,16 +324,24 @@ export function createGovernor(options: GovernorOptions = {}): Governor {
         latencySum += Math.max(0, latencyMs - cpuMs);
         latencyN++;
       }
+      if (gpuMs !== null) {
+        gpuSum += gpuMs;
+        gpuN++;
+        cleanGpuSum += gpuMs;
+        cleanGpuN++;
+      }
       let change: GovernorChange | null = null;
       if (now - windowStart >= o.windowMs) {
         const enough = frames >= MIN_FRAMES;
-        // A GPU with time to spare (latency well under a frame) didn't make the misses.
-        const gpuIdle = latencyN > 0 && latencySum / latencyN < t * 0.5;
+        // A GPU with time to spare (latency well under a frame) didn't make the misses, unless
+        // its own timestamps say it was busy (WebKit's latency can read short of the work).
+        const gpuBusy = gpuN > 0 && gpuSum / gpuN >= t * 0.75;
+        const gpuIdle = !gpuBusy && latencyN > 0 && latencySum / latencyN < t * 0.5;
         const shedGpu = enough && !gpuIdle && missed > frames * o.downShare;
         // Opt-in: the main thread's misses shed too, whatever the GPU's latency said.
         const shedCpu = o.cpuMisses && enough && !shedGpu && cpuMissed > frames * o.downShare;
         windowStart = now;
-        frames = missed = cpuMissed = latencySum = latencyN = 0;
+        frames = missed = cpuMissed = latencySum = latencyN = gpuSum = gpuN = 0;
         if (shedGpu || shedCpu) {
           cleanSince = -1;
           if (mayChange(now))
@@ -300,7 +349,10 @@ export function createGovernor(options: GovernorOptions = {}): Governor {
         }
       }
       if (!change && cleanSince >= 0 && now - cleanSince >= o.upAfterMs) {
-        const clean = cleanFrames >= MIN_FRAMES && cleanMissed <= cleanFrames * o.upShare;
+        // With GPU times, a step comes back only into headroom: the GPU under 3/4 of a target.
+        const headroom = cleanGpuN === 0 || cleanGpuSum / cleanGpuN < t * 0.75;
+        const clean =
+          headroom && cleanFrames >= MIN_FRAMES && cleanMissed <= cleanFrames * o.upShare;
         const top = stack.length - 1;
         if (
           clean &&
@@ -312,7 +364,7 @@ export function createGovernor(options: GovernorOptions = {}): Governor {
         }
         // Judge the next spell afresh either way.
         cleanSince = now;
-        cleanFrames = cleanMissed = 0;
+        cleanFrames = cleanMissed = cleanGpuSum = cleanGpuN = 0;
       }
       return change;
     },

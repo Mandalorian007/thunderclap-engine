@@ -15,7 +15,7 @@
     "./nav": 28200,
     "./platform": 14900,
     "./post": 33900,
-    "./render": 71800,
+    "./render": 72000,
     "./save": 7700,
     "./tween": 3700,
     "./ui": 95800,
@@ -27,12 +27,12 @@
     ". { createGame }": 155500,
     "./kit": 174200,
     "./models": 11200,
-    "./quality": 2500,
+    "./quality": 3300,
     "./net": 19300,
     "./actors": 21400,
     "./xr": 4200,
-    "render core + post { createRenderCore, createCorePost, PostStack, createPostHost }": 49200,
-    "render core + shadow { createRenderCore, CoreShadowMap, CoreSunShadow }": 20500,
-    "render core + water look { createRenderCore, WaterShading }": 26200
+    "render core + post { createRenderCore, createCorePost, PostStack, createPostHost }": 47900,
+    "render core + shadow { createRenderCore, CoreShadowMap, CoreSunShadow }": 20800,
+    "render core + water look { createRenderCore, WaterShading }": 26500
   }
 }

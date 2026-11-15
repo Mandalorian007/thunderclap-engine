@@ -40,8 +40,9 @@ interface DynamicResolutionKnobOptions {
 interface Governor {
     targetMs: number;
     enabled: boolean;
+    order: readonly string[];
     register(knob: Knob): () => void;
-    frame(now: number, intervalMs: number, cpuMs?: number, latencyMs?: number | null): GovernorChange | null;
+    frame(now: number, intervalMs: number, cpuMs?: number, latencyMs?: number | null, gpuMs?: number | null): GovernorChange | null;
     set(count: number, now?: number): void;
     readonly shed: number;
     readonly knobs: readonly Knob[];
@@ -63,6 +64,7 @@ interface GovernorChange {
 interface GovernorOptions {
     targetMs?: number;
     rungs?: readonly Knob[];
+    order?: readonly string[];
     windowMs?: number;
     downShare?: number;
     cpuMisses?: boolean;
@@ -108,10 +110,20 @@ interface StepKnobOptions {
     cost?: number;
 }
 
+## TIER_FEATURES
+const TIER_FEATURES: Readonly<Record<QualityTier, TierFeatures>>;
+
 ## TierChoice  (type-only)
 interface TierChoice {
     readonly tier: QualityTier;
     readonly reason: string;
+}
+
+## TierFeatures  (type-only)
+interface TierFeatures {
+    readonly sunShadows: boolean;
+    readonly actorShadows: boolean;
+    readonly antialias: 'taa' | 'fxaa';
 }
 
 ## createGovernor
@@ -131,6 +143,9 @@ function headsetBrowser(userAgent: string): boolean;
 
 ## readDevice
 function readDevice(gpu?: GpuInfo | null): DeviceInfo;
+
+## startsLean
+function startsLean(device: DeviceInfo): boolean;
 
 ## stepKnob
 function stepKnob(o: StepKnobOptions): Knob;

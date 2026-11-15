@@ -356,6 +356,8 @@ interface CoreStats {
     bundleCalls: number;
     deferredBuilds: number;
     warmed: number;
+    shadowDraws: number;
+    shadowCull: 'cpu' | 'gpu';
 }
 
 ## CoreSunShadow
@@ -514,6 +516,8 @@ class DrawSet {
     get isDestroyed(): boolean;
     upload(groups: number): void;
     dispatch(pass: GPUComputePassEncoder, groups: number): void;
+    cpuCullable(): boolean;
+    encodeCulled(pass: GPURenderPassEncoder, group: number, color: GPUTextureFormat | null, depth: GPUTextureFormat | undefined, aux?: number): void;
     encoding(): Encoding;
     bundle(group: number, color: GPUTextureFormat | null, depth: GPUTextureFormat | undefined, readOnly: boolean, aux?: number, variant?: number, pass?: CorePass): GPURenderBundle;
     inView(group: number): boolean;
@@ -1355,6 +1359,7 @@ interface RenderCoreOptions {
     passLabels?: boolean;
     warm?: boolean;
     shadowFormat?: GPUTextureFormat;
+    shadowCull?: 'auto' | 'cpu' | 'gpu';
 }
 
 ## RenderStats  (type-only)

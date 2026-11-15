@@ -269,3 +269,109 @@ describe('createGovernor: cpuMisses (ws/input-fit)', () => {
     expect(run(g, 0, 10_000, { interval: 1000 / 30, cpu: 3, latency: 5 }).changes).toEqual([]);
   });
 });
+
+/** Frames of a trace with a GPU time on every frame (timestamp queries). */
+function runGpu(
+  g: Governor,
+  t: number,
+  ms: number,
+  f: Trace & { gpu: number | null },
+): { t: number; changes: GovernorChange[] } {
+  const changes: GovernorChange[] = [];
+  const end = t + ms;
+  let i = 0;
+  while (t < end) {
+    t += f.interval;
+    const c = g.frame(t, f.interval, f.cpu, i++ % 8 === 0 ? (f.latency ?? null) : null, f.gpu);
+    if (c) changes.push(c);
+  }
+  return { t, changes };
+}
+
+/**
+ * Forge Wilds' knobs as it registered them for phase 9 (boot/scene.ts), its sun shadows the
+ * fifth by cost; `shadowsHelp`: frames back to 60 fps once the sun's shadows are shed.
+ */
+function forgeKnobs(order?: readonly string[]) {
+  const shed = new Set<string>();
+  const knobs: [string, number][] = [
+    ['precipitation halved', 1],
+    ['splashes and motes', 2],
+    ['cloud shadows and wet sheen', 3],
+    ['spire threads', 1],
+    ['smoothing temporal to fast', 2],
+    ['sun shadows', 3],
+    ['render scale 85%', 5],
+    ['near leaves', 4],
+  ];
+  const g = createGovernor({ cpuMisses: true, ...(order ? { order } : {}) });
+  for (const [name, cost] of knobs) {
+    g.register(toggleKnob(name, (on) => (on ? shed.add(name) : shed.delete(name)), cost));
+  }
+  return { g, shed };
+}
+
+/** The iPad profile with two clients (phase 9's E-041): 33 ms frames until the shadows go. */
+function ipadTwoClients(g: Governor, shed: Set<string>, t: number, ms: number) {
+  const end = t + ms;
+  let i = 0;
+  while (t < end) {
+    const interval = shed.has('sun shadows') ? 1000 / 60 : 1000 / 30;
+    t += interval;
+    // WebKit: no timestamps; the latency sampled every 8th frame, a little main-thread work.
+    g.frame(t, interval, 2, i++ % 8 === 0 ? 23 : null, null);
+  }
+  return t;
+}
+
+describe('createGovernor: shed order and GPU time (ws/e24-gpu)', () => {
+  it('reproduces phase 9: 33 ms frames on the iPad profile, by cost the shadows wait a minute', () => {
+    const { g, shed } = forgeKnobs();
+    ipadTwoClients(g, shed, 0, 30_000);
+    // Four cheap knobs went (four changes a minute) and none helped: the frame still ran at 33 ms.
+    expect(g.shed).toBe(4);
+    expect(shed.has('sun shadows')).toBe(false);
+  });
+
+  it("with the game's order, the shadows go first and frames are back to 60 fps in a window", () => {
+    const { g, shed } = forgeKnobs(['sun shadows', 'smoothing temporal to fast']);
+    ipadTwoClients(g, shed, 0, 30_000);
+    expect(g.stack.map((k) => k.name)).toEqual(['sun shadows']);
+  });
+
+  it('order is settable: it re-sorts the knobs, and steps shed stay shed', () => {
+    const { g } = forgeKnobs();
+    expect(g.knobs[0]!.name).toBe('precipitation halved');
+    g.set(1);
+    g.order = ['render scale 85%', 'sun shadows', 'not a knob'];
+    expect(g.order).toEqual(['render scale 85%', 'sun shadows', 'not a knob']);
+    expect(g.knobs.slice(0, 3).map((k) => k.name)).toEqual([
+      'render scale 85%',
+      'sun shadows',
+      'precipitation halved',
+    ]);
+    expect(g.stack.map((k) => k.name)).toEqual(['precipitation halved']);
+  });
+
+  it('a busy GPU by its timestamps sheds though a short latency would have vetoed it', () => {
+    const short: Trace = { interval: 1000 / 30, cpu: 2, latency: 4 };
+    const vetoed = ladder();
+    expect(runGpu(vetoed.g, 0, 6000, { ...short, gpu: null }).changes).toHaveLength(0);
+    const timed = ladder();
+    expect(runGpu(timed.g, 0, 6000, { ...short, gpu: 15 }).changes.length).toBeGreaterThan(0);
+    // A GPU time well under a target does not shed on its own: the latency's veto stands.
+    const idle = ladder();
+    expect(runGpu(idle.g, 0, 6000, { ...short, gpu: 5 }).changes).toHaveLength(0);
+  });
+
+  it('restores only into GPU headroom when there are GPU times', () => {
+    const { g } = ladder();
+    g.set(1);
+    // Clean frames, but the GPU at 14 ms of a 16.7 ms target: no room for what was shed.
+    const tight = runGpu(g, 0, 45_000, { interval: 1000 / 60, cpu: 4, latency: 10, gpu: 14 });
+    expect(g.shed).toBe(1);
+    const roomy = runGpu(g, tight.t, 25_000, { interval: 1000 / 60, cpu: 4, latency: 10, gpu: 8 });
+    expect(roomy.changes.map((c) => c.dir)).toEqual(['up']);
+    expect(g.shed).toBe(0);
+  });
+});

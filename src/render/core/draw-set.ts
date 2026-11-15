@@ -315,6 +315,13 @@ export interface CoreStats {
    * `RenderCoreOptions.warm`): empty or disabled sets, idle casters, inactive drawables.
    */
   warmed: number;
+  /**
+   * Draw calls `drawShadow` made directly this frame (ws/e24-gpu; also in `directDraws`): with
+   * `RenderCoreOptions.shadowCull` `'cpu'`, the casters inside the light's planes.
+   */
+  shadowDraws: number;
+  /** How `drawShadow` culls a GPU-culled caster: `RenderCoreOptions.shadowCull` resolved. */
+  shadowCull: 'cpu' | 'gpu';
 }
 
 /** The shape of `multiDrawIndexedIndirect` (Chromium's experimental feature). */
@@ -505,8 +512,11 @@ export class DrawSet {
   private originBuffer: GPUBuffer | null = null;
   private readonly originSlot: number;
   private readonly frameOrigin = new Float64Array(3);
-  /** CPU cull: the visible slots of the group last culled, and which (frame, group) that was. */
-  private readonly visible: Uint8Array | null;
+  /**
+   * CPU cull: the visible slots of the group last culled, and which (frame, group) that was. A
+   * GPU-culled caster has one too, made at its first CPU-culled shadow pass (`encodeCulled`).
+   */
+  private visible: Uint8Array | null;
   private visibleFrame = -1;
   private visibleGroup = -1;
   private visibleDistance = 0;
@@ -1033,6 +1043,33 @@ ${this.sceneGroup > 0 ? coreSceneReadWgsl(this.sceneGroup) : ''}`;
     pass.dispatchWorkgroups(Math.ceil(this.high / CULL_WORKGROUP), hi - lo);
     this.host.stats.calls += 2;
     this.host.stats.dispatches++;
+  }
+
+  /**
+   * @internal Whether `encodeCulled` may draw the set (ws/e24-gpu): a GPU-culled set, whose slot
+   * table holds every slot's draw on the CPU too. External and CPU-culled sets draw as they do.
+   */
+  cpuCullable(): boolean {
+    return this.cull === 'gpu';
+  }
+
+  /**
+   * @internal Cull group `group`'s draws from a CPU cull of its planes, drawn directly into
+   * `pass` (ws/e24-gpu; `RenderCoreOptions.shadowCull`): only the slots the group sees, rather
+   * than an indirect draw per live slot. The same slots draw as the GPU cull's would, in the
+   * same order, so the target is the same.
+   */
+  encodeCulled(
+    pass: GPURenderPassEncoder,
+    group: number,
+    color: GPUTextureFormat | null,
+    depth: GPUTextureFormat | undefined,
+    aux = 0,
+  ): void {
+    this.aux = color === null ? 0 : aux;
+    this.use(color, -1, this.pass);
+    if (!this.visible) this.visible = new Uint8Array(this.capacity);
+    this.record(pass, group, color, depth, true);
   }
 
   /** @internal How this frame draws the set. */
@@ -1684,15 +1721,17 @@ ${this.sceneGroup > 0 ? coreSceneReadWgsl(this.sceneGroup) : ''}`;
     group: number,
     color: GPUTextureFormat | null,
     depth: GPUTextureFormat | undefined,
+    culled = false,
   ): void {
     if (this.live === 0) return;
     const { stats } = this.host;
     const d = this.desc;
     this.bindCommon(enc, group, color, depth);
-    const cpu = this.cull === 'cpu';
-    const indirect = this.argsBuffer !== null;
+    // `culled`: a GPU-culled set drawn from a CPU cull (`encodeCulled`), directly.
+    const cpu = culled || this.cull === 'cpu';
+    const indirect = this.argsBuffer !== null && !culled;
     // Only the GPU cull zeroes a hidden slot's arguments: its bundle keeps every slot.
-    const keepHidden = this.cull === 'gpu';
+    const keepHidden = this.cull === 'gpu' && !culled;
     const indexed = this.indexed;
     const vSlot = this.vertexSlot;
     const instSlot = this.instanceSlot;
