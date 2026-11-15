@@ -9,7 +9,13 @@ import { type CoreTarget, createRenderCore, type RenderCore } from '../render/co
 import { createRenderView, type RenderView, setViewFromCamera } from '../render/core/view';
 import { createFakeDevice, type FakeDevice } from '../render/fake-gpu';
 import { createWorkMeter } from '../testing/budget';
-import { WEATHER_DUST_STORM, WEATHER_RAIN, WEATHER_SNOW, Weather } from './weather';
+import {
+  WEATHER_DUST_STORM,
+  WEATHER_RAIN,
+  WEATHER_SNOW,
+  Weather,
+  weatherTierDensity,
+} from './weather';
 import { WEATHER_HEAD_FLOATS, WEATHER_LAYER_FLOATS, WEATHER_WGSL } from './weather-wgsl';
 
 interface Rig {
@@ -146,6 +152,50 @@ describe('weather on the render core', () => {
     expect(WEATHER_WGSL).toContain('extras[view.index]');
     expect(WEATHER_WGSL).toContain('occlusion(p.xz)');
     expect(WEATHER_WGSL).toContain('view.position.xyz');
+  });
+
+  it('writes its motion to the velocity target (TAA follows the rain); the frame step in the uniform', () => {
+    const fake = createFakeDevice();
+    const descs: GPURenderPipelineDescriptor[] = [];
+    const make = fake.device.createRenderPipeline;
+    fake.device.createRenderPipeline = (d: GPURenderPipelineDescriptor) => {
+      descs.push(d);
+      return make(d);
+    };
+    const dev = fake.device as unknown as GPUDevice;
+    const r = rig(dev);
+    const core = createRenderCore(dev, { targets: ['velocity'] });
+    const eyes = [r.eyes[0]!];
+    const run = () => {
+      const enc = dev.createCommandEncoder();
+      core.prepare(enc, [{ views: eyes }]);
+      core.draw(enc, 0, r.target);
+      dev.queue.submit([enc.finish()]);
+    };
+    const w = new Weather(core, WEATHER_RAIN);
+    expect(w.writes).toEqual(['velocity']);
+    run();
+    w.update(1 / 60);
+    run();
+    expect(fake.errors).toEqual([]);
+    const weatherPipe = descs.filter((d) => d.label === 'weather').at(-1)!;
+    const targets = weatherPipe.fragment!.targets as (GPUColorTargetState | null)[];
+    expect(targets[3]).toMatchObject({ format: 'rg16float', writeMask: 0xf });
+    expect(uniform(fake)[19]).toBeCloseTo(1 / 60, 6);
+    // Paused: no step, no motion.
+    run();
+    expect(uniform(fake)[19]).toBe(0);
+    expect(WEATHER_WGSL).toContain('o.vel = w_velocity(q, o.clip, vel)');
+    expect(WEATHER_WGSL).toContain('@location(3) velocity: vec4f');
+    // Off: colour only, the pass attaches nothing for it.
+    const still = new Weather(core, { ...WEATHER_RAIN, velocity: false });
+    expect(still.writes).toEqual([]);
+  });
+
+  it('density by quality tier', () => {
+    expect(weatherTierDensity('low')).toBe(0.25);
+    expect(weatherTierDensity('medium')).toBe(0.5);
+    expect(weatherTierDensity('high')).toBe(1);
   });
 
   it('a held frame allocates nothing and its calls do not grow with the count', () => {
