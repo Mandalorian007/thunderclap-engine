@@ -33,6 +33,7 @@ import {
   K_SLOT,
   K_TABS,
   K_TEXT,
+  tabNeed,
   tabShares,
 } from './units';
 import {
@@ -779,7 +780,7 @@ export class WorldPresenter implements SpecPresenter {
     this.swap = k;
   }
 
-  private font(style: SpecTextStyle, scale = 1): string {
+  private font(style: SpecTextStyle, scale = 1, weight?: number): string {
     const t = SPEC_TYPE[style];
     const fam =
       t.family === 'serif'
@@ -787,7 +788,7 @@ export class WorldPresenter implements SpecPresenter {
         : t.family === 'mono'
           ? this.tokens.fontMono
           : this.tokens.fontSans;
-    return `${t.weight} ${t.px * this.p.text * this.scale * scale}px ${fam}`;
+    return `${weight ?? t.weight} ${t.px * this.p.text * this.scale * scale}px ${fam}`;
   }
 
   /** Whether canvas px rect (x, y, w, h) meets the dirty rect. */
@@ -1439,11 +1440,24 @@ export class WorldPresenter implements SpecPresenter {
     const out = n <= this.tabW.length ? this.tabW : new Float64Array(n);
     if (t.fill) {
       const labels = l.fieldIndex.get('label')!;
+      const tk = this.tokens;
+      const text = this.p.text;
+      const lw = t.labelWeight ?? SPEC_TYPE.label.weight;
       tabShares(
         n,
         t.optionW,
         this.p.boxes.w[i]!,
-        t.weigh ? (j) => String(l.rows.get(l.keys[j]!)!.vals[labels] ?? '').length || 1 : () => 1,
+        t.weigh
+          ? (j) =>
+              tabNeed(
+                String(l.rows.get(l.keys[j]!)!.vals[labels] ?? ''),
+                text,
+                lw,
+                tk.fontSans,
+                tk.padX,
+                tk.borderWidth,
+              )
+          : () => 1,
         out,
       );
     } else for (let j = 0; j < n; j++) out[j] = t.optionW;
@@ -1482,7 +1496,7 @@ export class WorldPresenter implements SpecPresenter {
         const label = labels === undefined || !row ? key : String(row.vals[labels] ?? '');
         this.line(
           label,
-          this.font('label'),
+          this.font('label', 1, t.labelWeight),
           tk.text,
           ox + tk.padX * s,
           y + h / 2,

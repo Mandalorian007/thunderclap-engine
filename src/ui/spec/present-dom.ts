@@ -16,7 +16,7 @@ import type { SpecModel, SpecRow, SpecValue } from './model';
 import { SPEC_SLIDE_MAX, SPEC_SLIDE_MS, specStill } from './motion';
 import type { SpecPanel, SpecPresenter } from './panel';
 import { SpecPressable, type SpecTimer } from './press';
-import { type SpecTheme, theme } from './theme';
+import { type SpecTheme, type SpecTokens, theme } from './theme';
 import {
   cut,
   K_BUTTON,
@@ -51,6 +51,7 @@ import {
   R_VALUE,
   R_VALUETEXT,
   TERM_GAP,
+  tabNeed,
   tabShares,
 } from './units';
 import {
@@ -330,6 +331,8 @@ export class DomPresenter implements SpecPresenter {
   private heldRow: string | null = null;
   private heldPointers = 0;
   private readonly tabW = new Float64Array(32);
+  /** The theme's tokens (a weighed tabs measures its labels in them). */
+  private readonly tokens: SpecTokens;
   private observer: ResizeObserver | null = null;
   private readonly off: (() => void)[] = [];
   private shown = true;
@@ -387,7 +390,9 @@ export class DomPresenter implements SpecPresenter {
     host.setAttribute('data-tc-page', c.id);
     host.style.setProperty('--tcs-scale', String(this.scale));
     host.style.setProperty('--tcs-text', String(panel.text));
-    for (const [k, v] of (opts.theme ?? theme()).vars) host.style.setProperty(k, v);
+    const th = opts.theme ?? theme();
+    this.tokens = th.tokens;
+    for (const [k, v] of th.vars) host.style.setProperty(k, v);
     if (c.fade > 0) host.style.setProperty('--tcs-fade', `${c.fade}ms`);
     this.top = {
       parts: new Array<Part | null>(c.n).fill(null),
@@ -1078,11 +1083,24 @@ export class DomPresenter implements SpecPresenter {
     const out = n <= this.tabW.length ? this.tabW : new Float64Array(n);
     if (t.fill) {
       const labels = l.fieldIndex.get('label')!;
+      const tk = this.tokens;
+      const text = this.p.text;
+      const lw = t.labelWeight ?? SPEC_TYPE.label.weight;
       tabShares(
         n,
         t.optionW,
         w,
-        t.weigh ? (j) => String(l.rows.get(l.keys[j]!)!.vals[labels] ?? '').length || 1 : () => 1,
+        t.weigh
+          ? (j) =>
+              tabNeed(
+                String(l.rows.get(l.keys[j]!)!.vals[labels] ?? ''),
+                text,
+                lw,
+                tk.fontSans,
+                tk.padX,
+                tk.borderWidth,
+              )
+          : () => 1,
         out,
       );
     } else for (let j = 0; j < n; j++) out[j] = t.optionW;
@@ -1327,6 +1345,8 @@ export class DomPresenter implements SpecPresenter {
       btn.setAttribute('data-tcs', String(lv.node));
       const part = this.part(btn);
       part.text = this.span('tcs-label', btn);
+      const lw = (c.nodes[lv.node] as SpecTabs).labelWeight;
+      if (lw !== undefined) part.text.style.fontWeight = String(lw);
       v.parts[lv.node] = part;
       v.el = btn;
       into.appendChild(btn);

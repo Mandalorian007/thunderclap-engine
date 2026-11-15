@@ -129,6 +129,7 @@ export {
   WATER_DEPTH_COPY_WGSL,
   WATER_MAX_WAVES,
   WATER_WGSL,
+  waterCoreWgsl,
 } from './water-wgsl';
 export type {
   PrecipLayer,

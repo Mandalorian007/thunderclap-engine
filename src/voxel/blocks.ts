@@ -275,3 +275,41 @@ export interface CellField {
     readonly z: number;
   };
 }
+
+/**
+ * A per-cell rule the mesher applies before meshing (`VoxelFormatOptions.cellRules`, B24): plain
+ * data, so it crosses to mesher Workers with the format. In the cells of `blocks` (ids) whose
+ * neighbour passes `when`, it rewrites cell fields (`set`, then `map`) and ORs vertex bits into
+ * the cell's cross quads (`quads`). Every rule that matches applies, in order; each reads the
+ * cells as they came (the ids never change). With no rules the mesher's output is unchanged.
+ */
+export interface CellRule {
+  /** The block ids it applies to. */
+  readonly blocks: readonly number[];
+  /** A test on one neighbour; none: every cell of `blocks`. */
+  readonly when?: CellRuleWhen;
+  /** Cell field name (`CellField.name`) to the value the cell meshes with. */
+  readonly set?: Readonly<Record<string, number>>;
+  /**
+   * Cell field name to a table: the field's value `v` becomes `table[v]` (past the table it
+   * stays). Applied after `set`.
+   */
+  readonly map?: Readonly<Record<string, readonly number[]>>;
+  /**
+   * Vertex field name to bits OR'ed into every quad the cell emits as a cross block (its own
+   * quads, parts and far patch, also in a wet cell; never its liquid's faces), e.g. a twin
+   * mark on `side`.
+   */
+  readonly quads?: Readonly<Record<string, number>>;
+}
+
+/** `CellRule.when`: the neighbour at `at` (each −1..1) is the cell's own block or one of `ids`. */
+export interface CellRuleWhen {
+  readonly at: readonly [number, number, number];
+  /** The neighbour holds the same block id. */
+  readonly same?: boolean;
+  /** The neighbour's id is one of these. */
+  readonly ids?: readonly number[];
+  /** Pass when the test fails instead (a neighbour past the padded section never passes). */
+  readonly not?: boolean;
+}

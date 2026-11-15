@@ -21,7 +21,7 @@ import { CORE_TARGET, type CoreTargetName, coreColorTargets } from '../render/co
 import { VERTEX_LAYOUT_3D } from '../render/mesh';
 import { FxDepthModules, fxDepthCode } from './depth';
 import type { Water } from './water';
-import { WATER_CORE_FLOATS, WATER_CORE_WGSL, waterLookWgsl } from './water-wgsl';
+import { WATER_CORE_FLOATS, waterCoreWgsl, waterLookWgsl } from './water-wgsl';
 
 const PREMULTIPLIED: GPUBlendState = {
   color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
@@ -62,6 +62,8 @@ const LOOK_WRITES: readonly CoreTargetName[] = ['roughMetal', 'velocity'];
 export interface WaterOnCoreOptions {
   /** Sample the core's colour copy (refraction, reflection). */
   readsColor: boolean;
+  /** The game's own `water_shade` (`WaterOptions.shade`, B24). Default the engine's. */
+  shade?: string;
 }
 
 /** The core drawable behind a `Water` made on a `RenderCore`. */
@@ -85,6 +87,7 @@ export class WaterOnCore implements CoreDrawable {
   private group: GPUBindGroup | null = null;
   private groupTargets = -1;
   private readonly looks = new Map<number, WaterLook>();
+  private readonly shade: string | undefined;
 
   constructor(
     readonly core: RenderCore,
@@ -94,6 +97,7 @@ export class WaterOnCore implements CoreDrawable {
   ) {
     const device = core.device;
     this.readsColor = opts.readsColor;
+    this.shade = opts.shade;
     this.extras = CoreViewExtras.of(core);
     this.blockBuffer = device.createBuffer({
       label: 'water-core',
@@ -124,7 +128,7 @@ export class WaterOnCore implements CoreDrawable {
         { binding: 4, visibility: F, buffer: { type: 'read-only-storage' } },
       ],
     });
-    const modules = new FxDepthModules(device, WATER_CORE_WGSL, 'water-core');
+    const modules = new FxDepthModules(device, waterCoreWgsl(opts.shade), 'water-core');
     const pipelineLayout = device.createPipelineLayout({
       bindGroupLayouts: [core.viewLayout, this.layout],
     });
@@ -218,7 +222,7 @@ export class WaterOnCore implements CoreDrawable {
       ],
     });
     look = {
-      wgsl: fxDepthCode(waterLookWgsl(group), this.core.passes.reversedZ),
+      wgsl: fxDepthCode(waterLookWgsl(group, this.shade), this.core.passes.reversedZ),
       bindGroup: {
         layout,
         group: device.createBindGroup({

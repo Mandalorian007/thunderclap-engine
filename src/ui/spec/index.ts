@@ -92,6 +92,7 @@ export {
   R_VALUE,
   R_VALUETEXT,
   type SpecFamilies,
+  tabNeed,
   typeMeasure,
   typeMeasureIn,
 } from './units';

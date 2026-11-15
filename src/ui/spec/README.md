@@ -5,7 +5,7 @@ The public story (words, `panel`, `hud`, `presentDom`, `theme`) is in [../README
 | File | What it holds |
 | --- | --- |
 | `words.ts` | The spec types (`PanelSpec`, every `Spec*` word), `b(key)`, `SPEC_LINE`, `SPEC_TYPE`. |
-| `units.ts` | Kinds, bind roles, alignments, `typeMeasure`, `wrapLines`, `tabShares`, `cut` (internal). |
+| `units.ts` | Kinds, bind roles, alignments, `typeMeasure`, `wrapLines`, `tabShares`, `tabNeed` (a tab label's measured width at a weight), `cut` (internal). |
 | `compile.ts` | `compileSpec`: the tree flattened to typed arrays in pre-order, binds by key and role, list fields. Throws on a typo. |
 | `boxes.ts` | `SpecBoxes`: the two-pass layout (natural sizes up, grow shares down in 1/64 px), list rows once in cell coordinates, `hit`, `rowAt`, `tops`. |
 | `model.ts` | `SpecModel`: values by key with a dirty set; lists by key with a row bitmask of dirty fields. |

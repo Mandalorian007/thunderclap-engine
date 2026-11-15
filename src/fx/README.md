@@ -737,7 +737,11 @@ pair execute the same bundle. Their `coreDrawable` is what `core.addDrawable` /
   `bindGroup`, `blend`, `writes` and `readsDepth` / `readsColor` for the set's scene-read group
   (`core.sceneRead`). The plane's own shading is the same function with up = +y.
   `WaterOptions.plane: false` (live) draws no plane, the look alone; `update(dt)` still moves
-  the waves. A voxel world's liquid takes it as its `VoxelMaterial`
+  the waves. `WaterOptions.shade` (B24) is the game's own shading: WGSL declaring
+  `fn water_shade(frag: vec2f, ndc: vec2f, world: vec3f, up: vec3f) -> WaterShade` that the
+  plane and every look call instead of the engine's, which stays in scope as
+  `water_shade_engine` to call and adjust (`waterCoreWgsl(shade?)` is the plane's WGSL); `scene_depth` / `scene_color`, `water`, `wc`,
+  `water_field` and the `w_` helpers read as in the engine's. Default output is byte-identical. A voxel world's liquid takes it as its `VoxelMaterial`
   (`harness/voxel-world.html?water`, `e2e/voxel-world.spec.ts`):
 
 ```ts

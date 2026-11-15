@@ -258,7 +258,16 @@ describe('row fields on the page (FX2)', () => {
       gap: 4,
       children: [
         { k: 'tabs', id: 'tab', selected: b('tab'), optionW: 70, h: 32 },
-        { k: 'tabs', id: 'seg', selected: b('seg'), optionW: 40, fill: true, weigh: true, h: 32 },
+        {
+          k: 'tabs',
+          id: 'seg',
+          selected: b('seg'),
+          optionW: 40,
+          fill: true,
+          weigh: true,
+          labelWeight: 600,
+          h: 32,
+        },
         {
           k: 'text',
           id: 'line',
@@ -304,6 +313,16 @@ describe('row fields on the page (FX2)', () => {
       [...h2.querySelectorAll(`[data-tc-id^="rows/${id}:"]`)].map((e) => e.textContent);
     expect(words('tab')).toEqual(['Touch', 'Keys and mouse']);
     expect(words('seg')).toEqual(['Auto', 'Low', 'High']);
+    // B24: a weighed tabs' labels are drawn in its `labelWeight` and measured in it.
+    const seg = [...h2.querySelectorAll<HTMLElement>('[data-tc-id^="rows/seg:"]')];
+    expect(seg.map((e) => e.querySelector<HTMLElement>('.tcs-label')!.style.fontWeight)).toEqual([
+      '600',
+      '600',
+      '600',
+    ]);
+    expect(
+      h2.querySelector<HTMLElement>('[data-tc-id^="rows/tab:"] .tcs-label')!.style.fontWeight,
+    ).toBe('');
     expect([...h2.querySelectorAll('.tcs-tab .tcs-label')].map((e) => e.textContent)).toEqual([
       'Touch',
       'Keys and mouse',

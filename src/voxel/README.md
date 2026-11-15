@@ -247,6 +247,12 @@ Without them a section meshes the same as before.
 - `CellField.fromNeighbours: { when, y, x, z }`: in an `axial` block's cell whose value is
   `when`, the field becomes `y` with an axial block over or under it, else `x` or `z` with one
   beside it along that axis, else `y` (a log on its side faces along its neighbours).
+- `VoxelFormatOptions.cellRules` (B24, `CellRule`, plain data that crosses to the Workers with
+  the format): per block id, an optional test on one neighbour (`when`, a `CellRuleWhen`: `{ at, same | ids, not }`),
+  then cell fields `set` and remapped by a table (`map`), and vertex bits OR'ed into the cell's
+  cross quads, parts and far patch (`quads`, also in a liquid, never into the liquid's faces).
+  Rules apply in order before meshing, over the padded volume, reading the cells as sent; the ids
+  never change. Without rules the mesher's path is untouched.
 - `SectionMeshOptions.crossLod` (default 1) is the highest `leafLod` cross blocks mesh at.
 - `SectionMeshOptions.tieredPadding` counts solid foliage and cross blocks in the padding for
   `tiered`: solid foliage beside a section hides its faces at level 1.

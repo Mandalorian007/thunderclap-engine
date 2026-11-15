@@ -14,7 +14,7 @@
  * Quads are four vertices, indexed (0, 1, 2) (0, 2, 3), counter-clockwise seen from outside;
  * the diagonal they split on follows the brighter corners so one dark corner does not streak.
  */
-import { FACE_CLASS } from './blocks';
+import { type CellRule, FACE_CLASS } from './blocks';
 import { ConnectivityFlood } from './connectivity';
 import type { VoxelFormat } from './format';
 import { BlockLightFlood } from './light';
@@ -172,6 +172,25 @@ interface CellSlot {
   toMask: number;
 }
 
+/** A `CellRule` compiled for one mesher (B24). */
+interface RuleSlot {
+  /** 0: no test; 1: the same id; 2: an id in `ids`. */
+  test: number;
+  dx: number;
+  dy: number;
+  dz: number;
+  /** The neighbour's padded index delta. */
+  at: number;
+  ids: Uint8Array | null;
+  not: boolean;
+  /** Cell bits `set` clears, then the bits it writes. */
+  clear: number;
+  bits: number;
+  maps: { shift: number; mask: number; table: Uint32Array }[];
+  q0: number;
+  q1: number;
+}
+
 /** A section mesher for one format, reusing its buffers across sections. */
 export class SectionMesher {
   readonly size: number;
@@ -255,6 +274,13 @@ export class SectionMesher {
   private other = 0;
   private otherHue = 0;
   private readonly piece: SectionInput;
+  /** Per block id: its `cellRules`, or null (B24); null when the format has none. */
+  private readonly rulesOf: (RuleSlot[] | null)[] | null = null;
+  /** The cells with the rules applied, reused. */
+  private readonly ruled: Uint32Array | null = null;
+  /** Per padded cell: the rules' `quads` bits for its cross quads; null when no rule has any. */
+  private readonly quadW0: Uint32Array | null = null;
+  private readonly quadW1: Uint32Array | null = null;
 
   constructor(format: VoxelFormat) {
     this.format = format;
@@ -357,10 +383,139 @@ export class SectionMesher {
     });
     const heights = new Int32Array(P * P).fill(HEIGHT_OPEN);
     this.piece = { sx: 0, sy: 0, sz: 0, blocks: new Uint32Array(pv), heights };
+    const rules = format.cellRules;
+    if (rules && rules.length > 0) {
+      const of: (RuleSlot[] | null)[] = [];
+      let quads = false;
+      for (const r of rules) {
+        const slot = this.compileRule(r);
+        if (slot.q0 !== 0 || slot.q1 !== 0) quads = true;
+        for (const id of r.blocks) {
+          while (of.length <= id) of.push(null);
+          const list = of[id] ?? [];
+          list.push(slot);
+          of[id] = list;
+        }
+      }
+      this.rulesOf = of;
+      this.ruled = new Uint32Array(pv);
+      if (quads) {
+        this.quadW0 = new Uint32Array(pv);
+        this.quadW1 = new Uint32Array(pv);
+      }
+    }
+  }
+
+  private compileRule(r: CellRule): RuleSlot {
+    const v = this.format.vertex;
+    const w = r.when;
+    let ids: Uint8Array | null = null;
+    if (w?.ids) {
+      ids = new Uint8Array(Math.max(0, ...w.ids) + 1);
+      for (const id of w.ids) ids[id] = 1;
+    }
+    const field = (name: string) => this.format.cellFields.find((f) => f.name === name)!;
+    const maskOf = (bits: number) => (bits >= 32 ? 0xffffffff : (1 << bits) - 1);
+    let clear = 0;
+    let bits = 0;
+    for (const [name, value] of Object.entries(r.set ?? {})) {
+      const f = field(name);
+      const m = maskOf(f.bits);
+      clear |= m << f.shift;
+      bits |= (value & m) << f.shift;
+    }
+    const maps = Object.entries(r.map ?? {}).map(([name, table]) => {
+      const f = field(name);
+      return { shift: f.shift, mask: maskOf(f.bits), table: Uint32Array.from(table) };
+    });
+    let q0 = 0;
+    let q1 = 0;
+    for (const [name, value] of Object.entries(r.quads ?? {})) {
+      const f = vertexField(v, name)!;
+      const b = ((value & f.mask) << f.shift) >>> 0;
+      if (f.word === 0) q0 |= b;
+      else q1 |= b;
+    }
+    const [dx, dy, dz] = w?.at ?? [0, 0, 0];
+    return {
+      test: !w ? 0 : w.same ? 1 : ids ? 2 : 0,
+      dx,
+      dy,
+      dz,
+      at: dx + dz * this.pad + dy * this.padArea,
+      ids,
+      not: w?.not === true,
+      clear: clear >>> 0,
+      bits: bits >>> 0,
+      maps,
+      q0,
+      q1,
+    };
+  }
+
+  /**
+   * `input` with the format's `cellRules` applied (B24) over the whole padded volume, into
+   * reused buffers; the rules read the cells as they came.
+   */
+  private applyRules(input: SectionInput): SectionInput {
+    const of = this.rulesOf!;
+    const src = input.blocks;
+    const out = this.ruled!;
+    const q0 = this.quadW0;
+    const q1 = this.quadW1;
+    const P = this.pad;
+    const PA = this.padArea;
+    const shift = this.format.idShift;
+    const mask = this.format.idMask;
+    for (let y = 0; y < P; y++) {
+      for (let z = 0; z < P; z++) {
+        for (let x = 0; x < P; x++) {
+          const i = x + z * P + y * PA;
+          const b = src[i];
+          const id = (b >>> shift) & mask;
+          const list = id < of.length ? of[id] : null;
+          if (!list) {
+            out[i] = b;
+            if (q0) q0[i] = q1![i] = 0;
+            continue;
+          }
+          let c = b;
+          let w0 = 0;
+          let w1 = 0;
+          for (const r of list) {
+            if (r.test !== 0) {
+              const nx = x + r.dx;
+              const ny = y + r.dy;
+              const nz = z + r.dz;
+              if (nx < 0 || ny < 0 || nz < 0 || nx >= P || ny >= P || nz >= P) continue;
+              const nid = (src[i + r.at] >>> shift) & mask;
+              const hit = r.test === 1 ? nid === id : nid < r.ids!.length && r.ids![nid] === 1;
+              if (hit === r.not) continue;
+            }
+            c = ((c & ~r.clear) | r.bits) >>> 0;
+            for (const m of r.maps) {
+              const val = (c >>> m.shift) & m.mask;
+              if (val < m.table.length) {
+                c = ((c & ~(m.mask << m.shift)) | ((m.table[val] & m.mask) << m.shift)) >>> 0;
+              }
+            }
+            w0 |= r.q0;
+            w1 |= r.q1;
+          }
+          out[i] = c;
+          if (q0) {
+            q0[i] = w0 >>> 0;
+            q1![i] = w1 >>> 0;
+          }
+        }
+      }
+    }
+    return { ...input, blocks: out };
   }
 
   /** Mesh a section from its padded input (`SectionInputBuilder.build`). */
   mesh(input: SectionInput, opts: SectionMeshOptions = {}): SectionMesh {
+    if (this.rulesOf) input = this.applyRules(input);
     const S = this.size;
     this.nOpaque = 0;
     this.nLiquid = 0;
@@ -1065,6 +1220,10 @@ export class SectionMesher {
       const bits = ((val & sl.toMask) << sl.to) >>> 0;
       if (sl.word === 0) e0 |= bits;
       else e1 |= bits;
+    }
+    if (this.quadW0) {
+      e0 |= this.quadW0[i];
+      e1 |= this.quadW1![i];
     }
     const l = this.light[i] * 4;
     const bl = this.hasBlock ? this.blockLevel[i] * 2 : 0;

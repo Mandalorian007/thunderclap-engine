@@ -99,6 +99,18 @@ export interface WaterOptions {
    * update each frame. Default true. Live (`Water.plane`).
    */
   plane?: boolean;
+  /**
+   * On a render core: the game's own water shading (B24), WGSL declaring
+   * `fn water_shade(frag: vec2f, ndc: vec2f, world: vec3f, up: vec3f) -> WaterShade` (and any
+   * helpers) in place of the engine's; the plane and every look (`Water.look`) call it. In scope:
+   * `WaterShade` (premultiplied `color`, `rough_metal`, `velocity`), the params `water` and core
+   * block `wc`, `scene_depth` and `scene_color` (1×1 when there is none), `extras`, `view`,
+   * `water_field`, `engine_noise`, the `fx_depth_` helpers, `w_ggx`, `w_schlick`, `w_unproject`
+   * and the engine's own shading as `water_shade_engine`. A look's set may declare groups of its
+   * own that the shading reads. Call it in uniform control flow. Fixed at construction. Default
+   * the engine's.
+   */
+  shade?: string;
 }
 
 const DEFAULT_SUN_DIR = [0.4, 0.8, 0.3] as const;
@@ -278,6 +290,7 @@ export class Water implements Drawable {
     if (core) {
       this.coreDrawable = new WaterOnCore(core, this, this.paramsBuffer, {
         readsColor: this.refraction > 0 || this.reflectionSteps > 0,
+        shade: opts.shade,
       });
       core.addDrawable(this.coreDrawable);
       return;

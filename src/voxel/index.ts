@@ -15,6 +15,8 @@ export type {
   BlockTableOptions,
   CellField,
   CellLayout,
+  CellRule,
+  CellRuleWhen,
   FaceClass,
 } from './blocks';
 export { defineBlockTable, FACE_CLASS, LIGHT_HUES, NO_HUE_MIX } from './blocks';

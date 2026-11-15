@@ -350,6 +350,7 @@ export {
   specScale,
   specStill,
   specTokenVar,
+  tabNeed,
   textWidth,
   theme,
   typeMeasure,

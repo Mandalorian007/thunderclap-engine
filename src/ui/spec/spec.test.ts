@@ -8,11 +8,11 @@ import v8 from 'node:v8';
 import { runInNewContext } from 'node:vm';
 import { afterEach, describe, expect, it } from 'vitest';
 import { compileSpec } from './compile';
-import { measureWith, wrapCount } from './measure';
+import { measureWith, SPEC_SANS, wrapCount } from './measure';
 import type { SpecValue } from './model';
 import { panel, type SpecPanel } from './panel';
 import { SPEC_HOLD_MS, SPEC_HOLD_SLOP, SpecPressable, type SpecTimer } from './press';
-import { K_TEXT, TERM_MIN, tabShares, typeMeasure } from './units';
+import { K_TEXT, TERM_MIN, tabNeed, tabShares, typeMeasure } from './units';
 import { b, type PanelSpec, SPEC_LINE, type SpecNode } from './words';
 
 /** A panel laid out in a frame (no presenter). */
@@ -424,6 +424,26 @@ describe('spec layout', () => {
     for (const i of [0, 1, 3]) expect(Math.abs(per(i) - per(5))).toBeLessThan(1);
     tabShares(4, 100, 300, () => 1, out);
     expect([...out.subarray(0, 4)]).toEqual([100, 100, 100, 100]);
+  });
+
+  it("a weighed tabs' shares by measured need: a bold label fits whenever they fit together (B24)", () => {
+    const out = new Float64Array(8);
+    const words = ['Graphics', 'Controls', 'Audio', 'Accessibility', 'HUD', 'How to play'];
+    const need = (i: number, weight: number): number =>
+      Math.max(64, tabNeed(words[i]!, 1, weight, SPEC_SANS, 10, 1));
+    // Bold is wider than regular, and padding and border count on both sides.
+    expect(tabNeed('Graphics', 1, 600, SPEC_SANS, 10, 1)).toBeGreaterThan(
+      tabNeed('Graphics', 1, 400, SPEC_SANS, 10, 1),
+    );
+    expect(tabNeed('', 1, 400, SPEC_SANS, 10, 1)).toBe(23);
+    let sum = 0;
+    for (let i = 0; i < 6; i++) sum += need(i, 600);
+    for (const w of [Math.ceil(sum), 520, 640]) {
+      tabShares(6, 64, w, (i) => need(i, 600), out);
+      const got = [...out.subarray(0, 6)];
+      expect(got.reduce((a, x) => a + x, 0)).toBe(w);
+      for (let i = 0; i < 6; i++) expect(got[i]! + 1).toBeGreaterThanOrEqual(need(i, 600));
+    }
   });
 });
 
