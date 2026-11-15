@@ -9,6 +9,7 @@ export type {
   CoreShadowTarget,
   CoreTarget,
   CoreTimestamps,
+  CoreWarmTarget,
   RenderCoreOptions,
 } from './core';
 export { createRenderCore, MULTI_DRAW_FEATURE, RenderCore } from './core';

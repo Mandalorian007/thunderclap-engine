@@ -186,7 +186,8 @@ class ActorSystem {
     lodScale: number;
     vertexCap: number;
     ready: Promise<void>;
-    readonly drawSet: DrawSet;
+    get drawSet(): DrawSet;
+    get hasDrawSet(): boolean;
     bones: GPUBuffer;
     records: GPUBuffer;
     time: number;
@@ -227,6 +228,7 @@ interface ActorSystemOptions {
     sampleLight?: (x: number, y: number, z: number) => number;
     lightWgsl?: string;
     pass?: string;
+    drawSet?: boolean;
     poseWgsl?: string;
     poseCpu?: ActorPoseCpu;
     actorVertices?: number | readonly number[];

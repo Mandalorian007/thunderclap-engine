@@ -1702,6 +1702,17 @@ first kind; on the second, the only saving is not making a pipeline before it is
   scratch compute pass. `core.warming` says whether the core warms its own (`warm` option and
   `warmer.enabled`); an actor system's pose pass and a core particle system's passes then warm
   at load.
+- A world's sets made at load but first filled mid-join make their pipelines at that first
+  world frame, a second compile batch on WebKit. `core.warmSets(target, encoder?)` (E27) makes
+  them now, as that frame would with every set holding slots: each member of each pass whose
+  `when` allows it, in `target.format` (passes after a resolve in `target.outputFormat`, when
+  given), with the pass's aux targets and depth; each caster depth-only in `target.shadowFormat`
+  (default `RenderCoreOptions.shadowFormat`); the GPU cull's compute pipeline when a set culls
+  on the GPU. `CoreWarmTarget` also takes the views' `variant`. Their empty draws go into
+  `encoder`, or the next `prepare` or `draw`; with the warmer off the pipelines are still made.
+  Call it after the sets and passes exist (`core.warmSets({ format: 'rgba16float', outputFormat:
+  canvasFormat })` at load); sets made later warm as before. `warm.test.ts` checks the first
+  world frame then makes no pipeline.
 - Warm passes are labelled `warm`. Their calls stay out of `stats.calls`; `stats.warmed`
   counts this frame's warms.
 - On `harness/core.html?stall`, a set with a large shader first drawn at frame 30 takes 425 ms

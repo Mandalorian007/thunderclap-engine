@@ -100,6 +100,66 @@ p.frame(W, 0);
 
 const dom = presentDom(p, host, { classes: { 'tcs-slot': 'fit-slot' } });
 
+const LOG: PanelSpec = {
+  id: 'log',
+  body: {
+    k: 'col',
+    children: [
+      {
+        k: 'list',
+        id: 'lines',
+        rowH: 20,
+        h: 100,
+        tail: true,
+        row: { k: 'text', id: 'line', text: b('row.line'), style: 'body' },
+      },
+    ],
+  },
+};
+
+const nextFrame = (): Promise<void> => new Promise((f) => requestAnimationFrame(() => f()));
+
+/** See `UiFitApi.resizeLoop`. */
+async function resizeLoop(): Promise<string[]> {
+  const seen: string[] = [];
+  const onError = (e: ErrorEvent): void => {
+    if (/ResizeObserver/.test(e.message)) seen.push(e.message);
+  };
+  window.addEventListener('error', onError);
+  // The log's host, shallow; the page's own observed box, deeper (a panel's sizer).
+  const logHost = document.createElement('div');
+  logHost.style.cssText = 'width:200px;height:120px';
+  const outer = document.createElement('div');
+  const sizer = document.createElement('div');
+  sizer.style.cssText = 'width:10px;height:4px';
+  outer.appendChild(document.createElement('div')).appendChild(sizer);
+  document.body.append(logHost, outer);
+  const log = panel(LOG, { schedule: null });
+  const keys = Array.from({ length: 12 }, (_, i) => `l${i}`);
+  log.model.setList('lines', keys);
+  for (const k of keys) log.model.row('lines', k).set('line', k);
+  log.frame(200, 0);
+  const shown = presentDom(log, logHost);
+  log.apply();
+  // The page moves the log aside when its panel's size changes, inside its observer's callback.
+  let n = 0;
+  const page = new ResizeObserver(() => {
+    logHost.style.height = `${120 + (++n % 2) * 40}px`;
+  });
+  page.observe(sizer);
+  for (let i = 0; i < 6; i++) {
+    sizer.style.width = `${12 + i}px`;
+    await nextFrame();
+    await nextFrame();
+  }
+  page.disconnect();
+  shown.dispose();
+  logHost.remove();
+  outer.remove();
+  window.removeEventListener('error', onError);
+  return seen;
+}
+
 /** A box (px, from `from`) in units. */
 function rel(r: DOMRect, from: DOMRect): UiFitBox {
   return { x: r.left - from.left, y: r.top - from.top, w: r.width, h: r.height };
@@ -126,6 +186,7 @@ async function boot(): Promise<void> {
   const api: UiFitApi = {
     state,
     open: (on) => p.model.set('open', on),
+    resizeLoop,
     giveWay: (sheet, small) => p.giveWay(sheet, small),
     toTop: (key) =>
       p.model.setList('things', [key, ...p.model.lists[0]!.keys.filter((k) => k !== key)], 'slide'),

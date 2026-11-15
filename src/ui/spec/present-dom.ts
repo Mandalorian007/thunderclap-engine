@@ -122,6 +122,7 @@ function css(): string {
   return `
 .tcs-host{position:relative;color:var(--tcs-text);font-family:var(--tcs-font-sans);box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 .tcs-host *{box-sizing:border-box}
+.tcs-sentinel{position:absolute;top:0;left:0;width:1px;height:1px;visibility:hidden;pointer-events:none}
 .tcs-w{position:absolute;margin:0}
 .tcs-w[data-off]{display:none!important}
 .tcs-btn,.tcs-slot,.tcs-tab,.tcs-field,.tcs-range,.tcs-scroll,.tcs-surface,.tcs-w[data-tc-id]{pointer-events:auto}
@@ -441,8 +442,20 @@ export class DomPresenter implements SpecPresenter {
         if (fit) this.fitHost();
         this.tailsToEnd();
       });
-      this.observer.observe(host);
-      if (fit) this.fitHost();
+      if (fit) {
+        this.observer.observe(host);
+        this.fitHost();
+      } else {
+        // Tails only (E27): a 1×1 sentinel of the presenter's, not the host's box. It changes
+        // size only as the host gains or loses a box, so the page's own layout moving the host
+        // inside an observer step (its other observers) leaves no notification it can't deliver
+        // ("ResizeObserver loop completed with undelivered notifications").
+        const sentinel = this.doc.createElement('div');
+        sentinel.className = 'tcs-sentinel';
+        sentinel.setAttribute('aria-hidden', 'true');
+        host.appendChild(sentinel);
+        this.observer.observe(sentinel);
+      }
     }
     panel.presenters.push(this);
     // Drawn whole at the next apply (the model may hold values set before it came).

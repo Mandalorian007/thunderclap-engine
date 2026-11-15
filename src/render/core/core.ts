@@ -232,6 +232,21 @@ export interface CoreTarget {
   velocity?: GPUTextureView;
 }
 
+/** The formats `RenderCore.warmSets` makes the draw sets' pipelines for (E27). */
+export interface CoreWarmTarget {
+  /** The colour format views are drawn into (`CoreTarget.format`). */
+  format: GPUTextureFormat;
+  /**
+   * A resolve pass's output format (`CoreTarget.outputFormat`) when views give an `output`: the
+   * passes after it are warmed in it. Without it they are warmed in `format`, as `draw` does.
+   */
+  outputFormat?: GPUTextureFormat;
+  /** The views' pipeline variant (`CoreTarget.variant`). */
+  variant?: string;
+  /** The shadow map's depth format. Default `RenderCoreOptions.shadowFormat`. */
+  shadowFormat?: GPUTextureFormat;
+}
+
 /** What the core's device offers it. */
 export interface CoreCaps {
   /** `multiDrawIndexedIndirect` (Chromium's experimental feature, and enabled in options). */
@@ -714,6 +729,58 @@ export class RenderCore {
    */
   get warming(): boolean {
     return this.autoWarm && this.warmerNow.enabled;
+  }
+
+  /**
+   * Make every draw set's pipelines now (E27), as the first `draw` into a target of these
+   * formats would with every set holding slots, and queue their empty first draws: each member
+   * of each pass whose `when` allows it (a set, its joins, a drawable with a `warm` hook), each
+   * caster's depth-only pipeline in `target.shadowFormat`, and the GPU cull's compute pipeline
+   * when a set culls on the GPU. On WebKit a pipeline compiles when it is made: a game calls this
+   * at load, beside its other pipelines, so that work is one batch and the first world frame
+   * makes no pipeline. The empty draws are encoded into `encoder` when given, else by the next
+   * `prepare` or `draw`. With the warmer off (`warmer.enabled`) the sets' pipelines are still
+   * made and nothing is queued. Returns the warms queued. Sets made later, and targets of other
+   * formats, make theirs at first use.
+   */
+  warmSets(target: CoreWarmTarget, encoder?: GPUCommandEncoder): number {
+    if (this.setsDirty) this.sortSets();
+    const variant0 = this.viewVariant;
+    this.viewVariant = target.variant ?? null;
+    const list = this.passes.passes;
+    const warmer = this.warmerNow;
+    let resolved = false;
+    let n = 0;
+    for (let p = 0; p < list.length; p++) {
+      const pass = list[p]!;
+      if (pass.when && !pass.when()) continue;
+      if (pass.resolve) {
+        if (target.outputFormat !== undefined) resolved = true;
+        continue;
+      }
+      const members = this.bySet[p]!;
+      // As a frame with every member drawing: depth when the pass encodes or a member tests it.
+      let wantsDepth = pass.encode !== null;
+      for (let i = 0; i < members.length; i++) if (members[i]!.depth) wantsDepth = true;
+      const color = resolved ? target.outputFormat! : target.format;
+      const aux = resolved ? 0 : this.auxMask & this.passAux[p]!;
+      const depth = !resolved && pass.depth !== 'none' && wantsDepth ? this.depthFormat : undefined;
+      for (let i = 0; i < members.length; i++) {
+        const m = members[i]!;
+        if (m.warm) n += m.warm(warmer, 0, color, depth, aux);
+      }
+    }
+    const shadow = target.shadowFormat ?? this.shadowFormat;
+    let gpu = false;
+    for (let i = 0; i < this.sets.length; i++) {
+      const s = this.sets[i]!;
+      if (s.castShadow) n += s.warm(warmer, 0, null, shadow);
+      if (s.cull === 'gpu') gpu = true;
+    }
+    if (gpu) this.cullPipe();
+    this.viewVariant = variant0;
+    if (encoder) this.flushWarm(encoder);
+    return n;
   }
 
   /**

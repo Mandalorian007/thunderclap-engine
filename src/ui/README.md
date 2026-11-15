@@ -1151,8 +1151,13 @@ flat screen, a touch screen and in a headset. All additive: a spec without them 
   a hidden log is shown again (WebKit resets a hidden scroller to 0); a player who scrolled up
   stays there until they scroll back to the end. A tail kept due while the embedder hid the host (`hidden`,
   `display: none`) goes to its end when the host gets a box again (the presenter's
-  `ResizeObserver` on the host, before that paint), or at once with `presenter.tailsToEnd()`
+  `ResizeObserver`, before that paint), or at once with `presenter.tailsToEnd()`
   for an embedder that shows the host and reads its scroll in the same task (ws/actor-post-fit).
+  Without `fit: 'host'` that observer watches a 1×1 sentinel of the presenter's in the host
+  (`.tcs-sentinel`, hidden, absolutely placed), not the host's box (E27): the sentinel changes
+  size only when the host gains or loses a box, so a page that moves or resizes the host in an
+  observer callback of its own raises no "ResizeObserver loop completed with undelivered
+  notifications". `fit: 'host'` still observes the host's box (it needs its size).
 - **No forced layout.** `flash`, `ring` and `again` play again from their start through the
   element's own `getAnimations()` (`currentTime = 0`, `play()`), never a class toggle with a
   layout read in between. A flash's text set to `''` takes its class off. The first `again` value

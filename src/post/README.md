@@ -500,7 +500,9 @@ load held up the game's first view (about 1 s of Forge's join on a Mac). The oth
 (`FullscreenPassDesc.lazy`): a pass turned on is made and warmed in that frame, and
 `PostStackOptions.warmAfterFrames` frames after the stack was made (default 120) the rest are
 made one a frame. `Infinity` makes them only when they turn on; `post.warmAll()` makes them all
-now (a loading screen); `post.coldPasses` counts those left. `post-warm.test.ts` covers it.
+now (a loading screen); `post.coldPasses` counts those left. `warmAfterFrames: false` (E27)
+waits for the game instead: `post.startWarming()` starts the one-a-frame warming from the next
+frame (when its world is drawn and its own compiles are done). `post-warm.test.ts` covers it.
 
 ## Types
 

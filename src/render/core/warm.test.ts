@@ -374,4 +374,65 @@ describe('cull-group mask (ws/warm-voxel-fit)', () => {
       .filter((c) => c.op === 'dispatch');
     expect(again).toEqual([]);
   });
+  it('warmSets makes every set pipeline at load: the first world frame makes none (E27)', () => {
+    for (const warm of [true, false]) {
+      const w = world();
+      // The warmer off: the pipelines are still made, nothing is queued.
+      w.core.warmer.enabled = warm;
+      let computes = 0;
+      const makeCompute = w.fake.device.createComputePipeline.bind(w.fake.device);
+      (w.fake.device as unknown as { createComputePipeline: unknown }).createComputePipeline = (
+        d: GPUComputePipelineDescriptor,
+      ) => {
+        computes++;
+        return makeCompute(d);
+      };
+      w.core.definePass({ id: 'parked', when: () => false });
+      // Empty at load, as a world's sets are before its first chunk arrives.
+      const sets = [
+        addSet(w, { castShadow: true, cull: 'gpu' }, 0),
+        addSet(w, { label: 'glass', pass: 'transparent' }, 0),
+      ];
+      const parked = addSet(w, { label: 'parked', pass: 'parked', castShadow: false }, 0);
+      const queued = w.core.warmSets({ format: 'bgra8unorm', shadowFormat: 'depth32float' });
+      const made = w.made();
+      // A colour pipeline per set (the parked pass never runs) and the caster's depth-only one.
+      expect(made).toBe(3);
+      expect(computes).toBe(1);
+      expect(queued).toBe(warm ? 3 : 0);
+      expect(w.core.warmSets({ format: 'bgra8unorm' })).toBe(0);
+      expect(w.made()).toBe(made);
+      for (const s of [...sets, parked]) {
+        for (let i = 0; i < 4; i++)
+          s.add({ vertices: w.box, indexCount: 36, bounds: [i, 0, 0, 1] });
+      }
+      const t = target(w);
+      const shadow = w.fake.device.createTexture({
+        size: [64, 64],
+        format: 'depth32float',
+        usage: GPUTextureUsage.RENDER_ATTACHMENT,
+      });
+      const enc = w.fake.device.createCommandEncoder();
+      w.core.prepare(enc, [w.view]);
+      w.core.drawShadow(enc, 0, { view: shadow.createView(), format: 'depth32float', clear: true });
+      w.core.draw(enc, 0, t);
+      w.fake.device.queue.submit([enc.finish()]);
+      expect(drawsOf(w.fake.passes).length).toBeGreaterThan(0);
+      expect(w.made()).toBe(made);
+      expect(computes).toBe(1);
+      expect(w.fake.warmPasses.length).toBe(warm ? 2 : 0);
+      expect(w.fake.errors).toEqual([]);
+    }
+  });
+
+  it('warmSets warms the passes after a resolve in the output format, and flushes into encoder', () => {
+    const w = world();
+    w.core.definePass({ id: 'post', after: 'transparent', resolve: () => {} });
+    w.core.definePass({ id: 'hud', after: 'post', depth: 'none' });
+    addSet(w, { label: 'hud', pass: 'hud', depth: false }, 0);
+    const enc = w.fake.device.createCommandEncoder();
+    expect(w.core.warmSets({ format: 'rgba16float', outputFormat: 'bgra8unorm' }, enc)).toBe(1);
+    expect(w.fake.warmPasses.map(formatsOf)).toEqual([{ color: ['bgra8unorm'], depth: undefined }]);
+    expect(w.core.warmer.pending).toBe(0);
+  });
 });
