@@ -7,7 +7,9 @@
  * reach. Once settled, a frame is one view write, three cull dispatches and three bundles at any
  * radius.
  *
- * `?radius=N` (default 16), `?workers=N` (default up to 4), `?still` parks the camera. `?water`
+ * `?radius=N` (default 16), `?workers=N` (default up to 4), `?still` parks the camera. `?stall=MS`
+ * busy-waits MS ms inside the engine's share of streaming frame 20, to check that
+ * e2e/voxel-world.spec.ts catches a real stall. `?water`
  * (ws/scene-read-fit) shades the sea's own meshed faces as a `Water` look (no plane): the liquid
  * set reads the core's scene depth and colour through the core's scene-read group, so shores
  * foam and the sea floor shows through at any height. Nothing here is engine code beyond
@@ -46,6 +48,7 @@ const workerCount = Math.max(
 );
 const still = params.has('still');
 const withWater = params.has('water');
+const stallMs = Math.max(0, Number(params.get('stall') ?? 0) || 0);
 
 const state: HarnessVoxelWorldState = {
   ready: false,
@@ -311,6 +314,12 @@ async function main(): Promise<void> {
     // The engine's share of the frame: world.update, prepare and draw.
     const t0 = performance.now();
     world.update(eye[0], eye[1], eye[2]);
+    if (stallMs > 0 && !state.settled && state.frames === 20) {
+      const until = performance.now() + stallMs;
+      while (performance.now() < until) {
+        // An injected stall (`?stall=MS`): CPU work on the main thread, like a main-thread mesh.
+      }
+    }
     const encoder = gpu.device.createCommandEncoder();
     core.prepare(encoder, views);
     core.draw(encoder, 0, target);
