@@ -64,9 +64,11 @@ export interface SectionMeshOptions {
   /**
    * Cell fields that read differently in the cells `insets` names (ws/warm-voxel-fit): field
    * name to the value those cells mesh with, e.g. `{ ripe: 0 }` (a growing plant is not ripe
-   * yet). Names that are not cell fields are ignored. Default none.
+   * yet), or (ws/forge-asks-fit) to bits of each cell's own override value, e.g.
+   * `{ ripe: { shift: 5, bits: 3 } }` (how ripe each growing plant is, packed above its inset).
+   * Names that are not cell fields are ignored. Default none.
    */
-  insetFields?: Readonly<Record<string, number>>;
+  insetFields?: Readonly<Record<string, number | InsetFieldBits>>;
   /**
    * The highest `leafLod` cross blocks still mesh at (ws/scene-read-fit). Default 1: none at 2.
    * A `farPatch` block's patch is emitted past it anyway.
@@ -89,6 +91,18 @@ export interface SectionMeshOptions {
    * `partsCap` drops the last cells' parts first).
    */
   partsOrder?: 'inline' | 'after';
+}
+
+/**
+ * A cell field read from each `SectionMeshOptions.insets` cell's own override value
+ * (`insetFields`, ws/forge-asks-fit): `(value >>> shift) & (2^bits − 1)`. The inset itself is
+ * the low 5 bits, so a game packs the field above them.
+ */
+export interface InsetFieldBits {
+  /** 0..31. */
+  shift: number;
+  /** 1..32. */
+  bits: number;
 }
 
 /** Words per vertex. */
@@ -146,8 +160,13 @@ interface CellSlot {
   fromFacing: boolean;
   /** `CellField.fromNeighbours`: when, y, x, z; null for none. */
   nb: readonly [number, number, number, number] | null;
-  /** The value `SectionMeshOptions.insetFields` gives cells `insets` names; −1: none. */
+  /**
+   * The value `SectionMeshOptions.insetFields` gives cells `insets` names; −1: none; −2: read
+   * from the cell's override value (`overShift`, `overMask`).
+   */
   over: number;
+  overShift: number;
+  overMask: number;
   word: 0 | 1;
   to: number;
   toMask: number;
@@ -174,6 +193,8 @@ export class SectionMesher {
   private readonly insets: Uint8Array;
   /** 1 on padded cells `SectionMeshOptions.insets` names, while `insetFields` applies. */
   private readonly overridden: Uint8Array;
+  /** The raw override value per padded cell `insets` names, while an `insetFields` reads bits of it. */
+  private overValue: Uint32Array | null = null;
   private overriding = false;
   // Per face of a slice.
   private readonly maskKey: Int32Array;
@@ -326,6 +347,8 @@ export class SectionMesher {
           ? [cf.fromNeighbours.when, cf.fromNeighbours.y, cf.fromNeighbours.x, cf.fromNeighbours.z]
           : null,
         over: -1,
+        overShift: 0,
+        overMask: 0,
         name: cf.name,
         word: f.word,
         to: f.shift,
@@ -359,17 +382,26 @@ export class SectionMesher {
       }
       const fields = opts.insetFields;
       if (fields) {
+        let bits = false;
         for (const sl of this.cellSlots) {
           const v = fields[sl.name];
-          if (v !== undefined) {
-            sl.over = (v & sl.mask) >>> 0;
-            this.overriding = true;
+          if (v === undefined) continue;
+          if (typeof v === 'number') sl.over = (v & sl.mask) >>> 0;
+          else {
+            sl.over = -2;
+            sl.overShift = v.shift & 31;
+            sl.overMask = v.bits >= 32 ? 0xffffffff : (1 << v.bits) - 1;
+            bits = true;
           }
+          this.overriding = true;
         }
         if (this.overriding) {
+          const values = bits ? (this.overValue ??= new Uint32Array(pv)) : null;
           for (let k = 0; k + 1 < overrides.length; k += 2) {
             const i = overrides[k];
-            if (i >= 0 && i < pv) this.overridden[i] = 1;
+            if (i < 0 || i >= pv) continue;
+            this.overridden[i] = 1;
+            if (values) values[i] = overrides[k + 1] >>> 0;
           }
         }
       }
@@ -448,8 +480,10 @@ export class SectionMesher {
 
   /**
    * The inset (0..31, 1/32 block) per padded cell of the last section meshed (ws/warm-voxel-fit):
-   * a cutout's or cross block's own, or its `insets` override; 0 elsewhere. A game that adds
-   * quads of its own around the mesh reads the insets the mesh used here.
+   * a cutout's or cross block's own, or its `insets` override; 0 elsewhere. A cross block standing
+   * in a liquid (`BlockDef.liquid`) keeps its inset here though its cell meshes as the liquid
+   * (ws/forge-asks-fit). A game that adds quads of its own around the mesh reads the insets the
+   * mesh used here.
    */
   get cellInset(): Uint8Array {
     return this.insets;
@@ -653,7 +687,7 @@ export class SectionMesher {
               if (sl.fromFacing && facingNone) val |= (blocks[n] >>> sl.shift) & sl.mask;
               if (sl.nb !== null && val === sl.nb[0] && this.axial[id] === 1)
                 val = this.fromNeighbours(i, sl.nb);
-              if (sl.over >= 0 && this.overridden[i] === 1) val = sl.over;
+              if (sl.over !== -1 && this.overridden[i] === 1) val = this.overFor(sl, i);
               const bits = ((val & sl.toMask) << sl.to) >>> 0;
               if (sl.word === 0) e0 |= bits;
               else e1 |= bits;
@@ -999,6 +1033,11 @@ export class SectionMesher {
     return n;
   }
 
+  /** An `insetFields` value for override cell `i`: the constant, or bits of its override value. */
+  private overFor(sl: CellSlot, i: number): number {
+    return sl.over === -2 ? (this.overValue![i] >>> sl.overShift) & sl.overMask : sl.over;
+  }
+
   /** Quads `from..to` of a cross block in cell `i` (own below `count`, parts past it), then its far patch when `patch`. */
   private crossQuads(
     blocks: Uint32Array,
@@ -1021,7 +1060,7 @@ export class SectionMesher {
     let e1 = id < this.blockW1.length ? this.blockW1[id] : 0;
     const over = this.overriding && this.overridden[i] === 1;
     for (const sl of slots) {
-      const val = over && sl.over >= 0 ? sl.over : (b >>> sl.shift) & sl.mask;
+      const val = over && sl.over !== -1 ? this.overFor(sl, i) : (b >>> sl.shift) & sl.mask;
       const bits = ((val & sl.toMask) << sl.to) >>> 0;
       if (sl.word === 0) e0 |= bits;
       else e1 |= bits;

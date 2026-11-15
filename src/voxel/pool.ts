@@ -12,6 +12,7 @@
 import type { SectionCodec, VoxelFormat } from './format';
 import {
   installSectionMesherWorker,
+  type PoolMeshOptions,
   type SectionMesherReply,
   type SectionMesherRequest,
   type SectionMeshResult,
@@ -79,6 +80,12 @@ export interface SectionMeshPoolOptions {
    * its job is sent (ws/render-fit). Default 0 for all.
    */
   leafLod?: (key: number) => number;
+  /**
+   * The rest of `SectionMeshOptions` every job meshes with (ws/forge-asks-fit): `crossLod`,
+   * `tieredPadding`, `partsCap`, `partsOrder`, `insetFields`. Sent with each job; change them
+   * with `setMeshOptions`. Default none (the mesher's defaults).
+   */
+  meshOptions?: PoolMeshOptions;
   /** Jobs in flight per Worker. Default 2. */
   perWorker?: number;
   /** A new port to replace port `i` when it dies; without it the slot is dropped. */
@@ -128,6 +135,7 @@ export class SectionMeshPool {
   private readonly lost = new Set<number>();
   private sorted = true;
   private nextJob = 1;
+  private meshOptions: PoolMeshOptions | undefined;
 
   constructor(private readonly opts: SectionMeshPoolOptions) {
     this.ports = [...opts.ports];
@@ -135,6 +143,7 @@ export class SectionMeshPool {
     this.generation = this.ports.map(() => 0);
     this.perWorker = opts.perWorker ?? 2;
     this.greedy = opts.greedy !== false;
+    this.meshOptions = opts.meshOptions;
     for (let i = 0; i < this.ports.length; i++) this.attach(this.ports[i], i);
   }
 
@@ -147,6 +156,15 @@ export class SectionMeshPool {
       if (this.generation[i] === gen) this.died(i, message);
     });
     port.post({ type: 'init', format: this.opts.format }, []);
+  }
+
+  /**
+   * Mesh the jobs sent from now on with `options` (ws/forge-asks-fit; replaces
+   * `SectionMeshPoolOptions.meshOptions` whole). Sections already meshed keep their meshes: the
+   * caller queues again those that should change.
+   */
+  setMeshOptions(options: PoolMeshOptions): void {
+    this.meshOptions = options;
   }
 
   get size(): number {
@@ -227,8 +245,11 @@ export class SectionMeshPool {
         this.inFlight.add(p.key);
         this.jobs.set(job, { key: p.key, priority: p.priority, worker: i });
         const leafLod = this.opts.leafLod?.(p.key) ?? 0;
+        const options = this.meshOptions;
         this.ports[i].post(
-          { type: 'mesh', job, input, greedy: this.greedy, leafLod },
+          options
+            ? { type: 'mesh', job, input, greedy: this.greedy, leafLod, options }
+            : { type: 'mesh', job, input, greedy: this.greedy, leafLod },
           jobTransfers(input),
         );
       }

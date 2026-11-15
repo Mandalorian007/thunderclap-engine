@@ -67,9 +67,10 @@ export {
   vertexFieldValue,
   vertexSchemaWgsl,
 } from './schema';
-export type { SectionMesh, SectionMeshOptions } from './section-mesher';
+export type { InsetFieldBits, SectionMesh, SectionMeshOptions } from './section-mesher';
 export { CROSS_FACE, SECTION_VERTEX_WORDS, SectionMesher } from './section-mesher';
 export type {
+  PoolMeshOptions,
   SectionMesherReply,
   SectionMesherRequest,
   SectionMeshResult,

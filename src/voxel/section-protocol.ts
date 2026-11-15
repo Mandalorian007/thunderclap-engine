@@ -4,8 +4,17 @@
  * meshes jobs; a job the mesher throws on is answered with a failure, never left unanswered.
  */
 import type { SectionCodec, VoxelFormat } from './format';
-import { type SectionMesh, SectionMesher } from './section-mesher';
+import { type SectionMesh, SectionMesher, type SectionMeshOptions } from './section-mesher';
 import { SectionInputBuilder, type SectionJob } from './sources';
+
+/**
+ * The `SectionMeshOptions` every job of a pool meshes with (ws/forge-asks-fit): plain data, so
+ * they cross to a Worker by structured clone. `greedy`, `leafLod` and `insets` go per job.
+ */
+export type PoolMeshOptions = Pick<
+  SectionMeshOptions,
+  'crossLod' | 'tieredPadding' | 'partsCap' | 'partsOrder' | 'insetFields'
+>;
 
 /** Page to Worker. */
 export type SectionMesherRequest =
@@ -17,6 +26,8 @@ export type SectionMesherRequest =
       greedy: boolean;
       /** `SectionMeshOptions.leafLod` (ws/render-fit). Default 0. */
       leafLod?: number;
+      /** The rest of the options (ws/forge-asks-fit). Default none: the mesher's defaults. */
+      options?: PoolMeshOptions;
     };
 
 /** A meshed job. */
@@ -40,6 +51,8 @@ export type SectionMesherReply =
 export function sectionReplyTransfers(r: SectionMesherReply): ArrayBuffer[] {
   return r.type === 'mesh' ? [r.mesh.opaque, r.mesh.liquid, r.mesh.foliage] : [];
 }
+
+const NO_OPTIONS: PoolMeshOptions = {};
 
 /** A Worker's global scope, as much of it as the mesher uses. */
 export interface SectionWorkerScopeLike {
@@ -68,10 +81,16 @@ export function installSectionMesherWorker(
     try {
       if (!mesher || !builder) throw new Error('mesh before init');
       const t0 = performance.now();
+      const shared = req.options ?? NO_OPTIONS;
       const mesh = mesher.mesh(builder.build(req.input), {
         greedy: req.greedy,
         leafLod: req.leafLod,
         insets: req.input.insets,
+        crossLod: shared.crossLod,
+        tieredPadding: shared.tieredPadding,
+        partsCap: shared.partsCap,
+        partsOrder: shared.partsOrder,
+        insetFields: shared.insetFields,
       });
       return { type: 'mesh', job: req.job, sx, sy, sz, mesh, ms: performance.now() - t0 };
     } catch (e) {
