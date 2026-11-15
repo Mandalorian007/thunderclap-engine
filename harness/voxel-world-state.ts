@@ -11,6 +11,10 @@ export interface HarnessVoxelWorldState {
   radius: number;
   /** Mesher Workers. */
   workers: number;
+  /** `?water`: the liquid stream shaded as a `Water` look (ws/scene-read-fit). */
+  water: boolean;
+  /** The liquid set reads the core's scene through its scene-read group. */
+  liquidReadsScene: boolean;
   /** Frames presented. */
   frames: number;
   /** `gpuDiagnostics.errorCount`. */

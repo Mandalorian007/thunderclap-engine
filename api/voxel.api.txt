@@ -16,6 +16,9 @@ interface BlockDef {
     lodSolid?: boolean;
     parts?: number;
     partsReplace?: boolean;
+    liquid?: number;
+    farPatch?: boolean;
+    axial?: boolean;
     fields?: Readonly<Record<string, number>>;
 }
 
@@ -38,6 +41,9 @@ interface BlockTable {
     readonly lodSolid?: Uint8Array;
     readonly parts?: Uint8Array;
     readonly partsReplace?: Uint8Array;
+    readonly liquidOf?: Int32Array;
+    readonly farPatch?: Uint8Array;
+    readonly axial?: Uint8Array;
     readonly hueMix: Uint8Array;
     readonly emissive: boolean;
     readonly fields: readonly (Readonly<Record<string, number>> | null)[];
@@ -57,6 +63,12 @@ interface CellField {
     shift: number;
     bits: number;
     fromFacing?: boolean;
+    fromNeighbours?: {
+        readonly when: number;
+        readonly y: number;
+        readonly x: number;
+        readonly z: number;
+    };
 }
 
 ## CellLayout  (type-only)
@@ -200,6 +212,10 @@ interface SectionMeshOptions {
     leafLod?: number;
     insets?: Int32Array;
     insetFields?: Readonly<Record<string, number>>;
+    crossLod?: number;
+    tieredPadding?: boolean;
+    partsCap?: number;
+    partsOrder?: 'inline' | 'after';
 }
 
 ## SectionMeshPool
@@ -535,7 +551,12 @@ interface VoxelMaterial {
     shadowFragmentEntry?: string;
     castShadow?: boolean;
     writes?: readonly CoreTargetName[];
+    readsDepth?: boolean;
+    readsColor?: boolean;
 }
+
+## VoxelSetDesc  (type-only)
+type VoxelSetDesc = Pick<DrawSetDesc, 'shader' | 'castShadow' | 'vertexLayout' | 'instanceLayout' | 'pass' | 'bindGroups' | 'readsDepth' | 'readsColor'>;
 
 ## VoxelStream  (type-only)
 type VoxelStream = 'opaque' | 'foliage' | 'liquid';
@@ -698,6 +719,9 @@ function vertexFieldValue(f: VertexField | undefined, w0: number, w1: number): n
 
 ## vertexSchemaWgsl
 function vertexSchemaWgsl(schema: VertexSchema, opts?: VertexSchemaWgslOptions): string;
+
+## voxelSetDesc
+function voxelSetDesc(format: VoxelFormat, stream: VoxelStream, material?: VoxelMaterial): VoxelSetDesc;
 
 ## voxelVertexWgsl
 function voxelVertexWgsl(format: VoxelFormat): string;

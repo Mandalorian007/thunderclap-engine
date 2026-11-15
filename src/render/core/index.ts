@@ -56,6 +56,8 @@ export type {
 } from './pass-list';
 export { CORE_PASSES, coreDepthCompare, coreDepthFar, PassList } from './pass-list';
 export { QUAD_INDICES, QuadIndex, quadIndices } from './quad-index';
+export type { CoreSceneRead } from './scene-read';
+export { coreSceneReadWgsl } from './scene-read';
 export type { CoreTargetName } from './targets';
 export {
   CORE_TARGET,

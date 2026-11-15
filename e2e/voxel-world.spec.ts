@@ -77,3 +77,29 @@ test('a streamed world settles at radius 8 and 16 with flat GPU calls and no hit
   console.log(`[S4] ${info.annotations.at(-1)?.description}`);
   expect(errors).toEqual([]);
 });
+
+/**
+ * ws/scene-read-fit: `?water` shades the sea's own meshed faces as a `Water` look. The liquid
+ * set reads the core's scene through the scene-read group; the look compiles and draws with no
+ * device error, the plane stays off (no extra bundle), and a held frame costs a few calls
+ * more than without the look (the colour copy), however many sections it draws.
+ */
+test('the sea as a water look over meshed liquid reads the scene with no error', async ({
+  page,
+  wrapper,
+}) => {
+  test.setTimeout(120_000);
+  const plain = await open(page, wrapper, 'radius=8&still');
+  const wet = await open(page, wrapper, 'radius=8&still&water');
+  expect(wet.water).toBe(true);
+  expect(wet.liquidReadsScene).toBe(true);
+  expect(plain.liquidReadsScene).toBe(false);
+  expect(wet.gpuErrors).toBe(0);
+  expect(wet.liquidQuads).toBeGreaterThan(0);
+  expect(wet.bundles).toBe(3);
+  expect(wet.dispatches).toBe(3);
+  // The colour copy (and the pass it splits) and the water's block upload, nothing per section.
+  expect(wet.heldCalls).toBeGreaterThan(plain.heldCalls);
+  expect(wet.heldCalls).toBeLessThanOrEqual(plain.heldCalls + 6);
+  expect(errors).toEqual([]);
+});
