@@ -61,6 +61,9 @@ function resolveMeasure(m: GpuTimerMeasure | undefined): 'overlap' | 'chain' {
     : 'overlap';
 }
 
+/** A timestamp this long before the frame's last end is another frame's (ns: 0.5 s). */
+const STALE_NS = 500_000_000n;
+
 export class GpuTimer {
   /** How pass costs are taken (`GpuTimerOptions.measure`, `'auto'` resolved). */
   readonly measure: 'overlap' | 'chain';
@@ -197,15 +200,28 @@ export class GpuTimer {
     const used = this.used;
     const sums = this.sums;
     sums.fill(0);
-    const markB = this.marked ? ts[0]! : 0n;
-    const markE = this.marked ? ts[1]! : 0n;
+    // The frame's last end, then a floor STALE_NS before it: a timestamp under the floor was not
+    // written this frame (WebKit resolves a query a pass skipped to the last value it held, an
+    // older frame's), so it is left out, as an unwritten zero is.
+    let last = 0n;
+    for (let i = this.marked ? 0 : 1; i <= used; i++) {
+      const e = ts[i * 2 + 1]!;
+      if (e > last) last = e;
+    }
+    const floor = last - STALE_NS;
+    let markB = this.marked ? ts[0]! : 0n;
+    let markE = this.marked ? ts[1]! : 0n;
+    if (markB < floor) markB = 0n;
+    if (markE < floor) markE = 0n;
     let first = markB;
     let prevEnd = markE;
     let firstPass = 0n;
     const chain = this.measure === 'chain';
     for (let i = 0; i < used; i++) {
-      const b = ts[(i + 1) * 2]!;
-      const e = ts[(i + 1) * 2 + 1]!;
+      let b = ts[(i + 1) * 2]!;
+      let e = ts[(i + 1) * 2 + 1]!;
+      if (b < floor) b = 0n;
+      if (e < floor) e = 0n;
       // A zero timestamp was never written (a skipped pass): ignore the pair. A chain reads
       // only the end (a begin past it is WebKit's, not a skipped pass).
       if (chain ? e <= 0n : b <= 0n || e < b) continue;
@@ -213,7 +229,7 @@ export class GpuTimer {
       if (firstPass === 0n) firstPass = b;
       // biome-ignore lint/complexity/useMathMinMax: bigint (Math.max takes numbers)
       const from = chain && prevEnd > 0n ? prevEnd : prevEnd > b ? prevEnd : b;
-      if (e > from) sums[this.pairLabel[i]!]! += Number(e - from) / 1e6;
+      if (from > 0n && e > from) sums[this.pairLabel[i]!]! += Number(e - from) / 1e6;
       if (e > prevEnd) prevEnd = e;
     }
     this.readBuf.unmap();

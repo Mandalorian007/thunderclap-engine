@@ -66,7 +66,8 @@ const SHADER = {
 
 /** A GPU-culled set of `n` boxes in front of the fake head (it looks down -z from 0, 1.6, 0). */
 function boxes(device: GPUDevice, n: number): RenderCore {
-  const core = createRenderCore(device);
+  // The GPU cull this file counts: happy-dom's user agent reads as WebKit, whose `'auto'` is `'cpu'` (E28).
+  const core = createRenderCore(device, { drawCull: 'gpu' });
   const vertices = new Arena(device, { kind: 'vertex', blockBytes: 1 << 20 });
   const instances = new Arena(device, { kind: 'instance', blockBytes: 1 << 20 });
   const set = core.createDrawSet({

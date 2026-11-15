@@ -26,10 +26,10 @@ test.beforeEach(async ({ page, wrapper }) => {
     if (m.type() === 'error') errors.push(m.text());
   });
   if (wrapper === 'top') {
-    await page.goto(`${HARNESS_URL}voxel.html?still`);
+    await page.goto(`${HARNESS_URL}voxel.html?still&cull=gpu`);
     frame = page.mainFrame();
   } else {
-    await page.goto(`${WRAPPER_URL}?page=${encodeURIComponent('voxel.html?still')}`);
+    await page.goto(`${WRAPPER_URL}?page=${encodeURIComponent('voxel.html?still&cull=gpu')}`);
     frame = await harnessFrame(page);
   }
   await expect

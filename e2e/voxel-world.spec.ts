@@ -32,7 +32,8 @@ async function open(page: Page, wrapper: string, query: string): Promise<Harness
   page.on('console', (m) => {
     if (m.type() === 'error') errors.push(m.text());
   });
-  const url = `voxel-world.html?${query}`;
+  // The S4 bar is the GPU cull's flat calls: pinned, as WebKit's `'auto'` culls on the CPU (E28).
+  const url = `voxel-world.html?${query.includes('cull=') ? '' : 'cull=gpu&'}${query}`;
   if (wrapper === 'top') {
     await page.goto(`${HARNESS_URL}${url}`);
     frame = page.mainFrame();
@@ -90,6 +91,21 @@ test('a streamed world settles at radius 8 and 16 with flat GPU calls and no hit
     description: `calls r8 ${small.heldCalls}, r16 ${large.heldCalls}; max stream frame r8 ${small.maxStreamFrameMs.toFixed(1)} ms, r16 ${large.maxStreamFrameMs.toFixed(1)} ms; settle r16 ${large.settleMs} ms; drawn ${large.drawn} hidden ${large.hidden}`,
   });
   console.log(`[S4] ${info.annotations.at(-1)?.description}`);
+  expect(errors).toEqual([]);
+});
+
+/**
+ * E28: on WebKit, `drawCull: 'auto'` draws the world from a CPU cull: no cull dispatch and no
+ * bundle, every set drawn directly, with no device error. Elsewhere it is the GPU cull above.
+ */
+test("'auto' draws the world from the CPU cull on WebKit", async ({ page, wrapper }, info) => {
+  test.setTimeout(120_000);
+  const s = await open(page, wrapper, 'cull=auto&radius=8&still');
+  const webkit = info.project.use.browserName === 'webkit';
+  expect(s.gpuErrors).toBe(0);
+  expect(s.drawn).toBeGreaterThan(0);
+  expect(s.dispatches).toBe(webkit ? 0 : 3);
+  expect(s.bundles).toBe(webkit ? 0 : 3);
   expect(errors).toEqual([]);
 });
 

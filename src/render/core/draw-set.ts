@@ -322,6 +322,8 @@ export interface CoreStats {
   shadowDraws: number;
   /** How `drawShadow` culls a GPU-culled caster: `RenderCoreOptions.shadowCull` resolved. */
   shadowCull: 'cpu' | 'gpu';
+  /** How a view's passes cull a GPU-culled set: `RenderCoreOptions.drawCull` resolved (E28). */
+  drawCull: 'cpu' | 'gpu';
 }
 
 /** The shape of `multiDrawIndexedIndirect` (Chromium's experimental feature). */
@@ -420,6 +422,18 @@ class SetJoin implements PassMember {
     aux: number,
   ): void {
     this.set.encodeDirect(pass, group, color, depth, aux, this.variant, this.pass);
+  }
+  cpuCullable(): boolean {
+    return this.set.cpuCullable();
+  }
+  encodeCulled(
+    pass: GPURenderPassEncoder,
+    group: number,
+    color: GPUTextureFormat,
+    depth: GPUTextureFormat | undefined,
+    aux: number,
+  ): void {
+    this.set.encodeCulled(pass, group, color, depth, aux, this.variant, this.pass);
   }
   inView(group: number): boolean {
     return this.set.inView(group);
@@ -1055,9 +1069,9 @@ ${this.sceneGroup > 0 ? coreSceneReadWgsl(this.sceneGroup) : ''}`;
 
   /**
    * @internal Cull group `group`'s draws from a CPU cull of its planes, drawn directly into
-   * `pass` (ws/e24-gpu; `RenderCoreOptions.shadowCull`): only the slots the group sees, rather
-   * than an indirect draw per live slot. The same slots draw as the GPU cull's would, in the
-   * same order, so the target is the same.
+   * `pass` (ws/e24-gpu; `RenderCoreOptions.shadowCull`, and `drawCull` for a view's passes,
+   * E28): only the slots the group sees, rather than an indirect draw per live slot. The same
+   * slots draw as the GPU cull's would, in the same order, so the target is the same.
    */
   encodeCulled(
     pass: GPURenderPassEncoder,
@@ -1065,9 +1079,11 @@ ${this.sceneGroup > 0 ? coreSceneReadWgsl(this.sceneGroup) : ''}`;
     color: GPUTextureFormat | null,
     depth: GPUTextureFormat | undefined,
     aux = 0,
+    variant = -1,
+    joined: CorePass = this.pass,
   ): void {
     this.aux = color === null ? 0 : aux;
-    this.use(color, -1, this.pass);
+    this.use(color, variant, joined);
     if (!this.visible) this.visible = new Uint8Array(this.capacity);
     this.record(pass, group, color, depth, true);
   }

@@ -44,6 +44,8 @@ const root = document.getElementById('root') as HTMLElement;
 const LOGICAL = { width: 1920, height: 1080 };
 const query = new URLSearchParams(location.search);
 const STILL = query.has('still');
+/** `?cull=gpu|cpu` pins `RenderCoreOptions.drawCull` (E28); else `'auto'` (`'cpu'` on WebKit). */
+const drawCull = ((c) => (c === 'gpu' || c === 'cpu' ? c : 'auto'))(query.get('cull'));
 
 const SIZE_X = 64;
 const SIZE_Y = 32;
@@ -228,7 +230,7 @@ async function main(): Promise<void> {
   }
   const { surface, gpu } = res;
   installGpuErrorLogging(gpu.device);
-  const core = createRenderCore(gpu);
+  const core = createRenderCore(gpu, { drawCull });
 
   const camera = Camera.perspective((60 * Math.PI) / 180, LOGICAL.width / LOGICAL.height, 0.1, 200);
   Object.assign(camera.screen, { x: 0, y: 0, ...LOGICAL });

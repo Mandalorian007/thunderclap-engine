@@ -1314,7 +1314,7 @@ core.draw(encoder, 0, { view: texView, format, width, height, clear: { r: 0, g: 
 
 | Name | What it is |
 | --- | --- |
-| `createRenderCore(gpu, opts?)` → `RenderCore` | the core over a device (or anything with `device`). `RenderCoreOptions` `{ maxViews?, depthFormat?, multiDraw?, originGrid?, onView?, shadowCull? }`. `core.caps` is `CoreCaps` `{ multiDraw, firstInstance }`; `core.stats` is this frame's `CoreStats` (`calls`, `dispatches`, `passes`, `bundles`, `directDraws`, `slotBytes`, `bundleBuilds`, `bundleCalls`, `shadowDraws`, `shadowCull`) |
+| `createRenderCore(gpu, opts?)` → `RenderCore` | the core over a device (or anything with `device`). `RenderCoreOptions` `{ maxViews?, depthFormat?, multiDraw?, originGrid?, onView?, shadowCull?, drawCull? }`. `core.caps` is `CoreCaps` `{ multiDraw, firstInstance }`; `core.stats` is this frame's `CoreStats` (`calls`, `dispatches`, `passes`, `bundles`, `directDraws`, `slotBytes`, `bundleBuilds`, `bundleCalls`, `shadowDraws`, `shadowCull`, `drawCull`) |
 | `core.prepare(encoder, views)`, `core.draw(encoder, viewIndex, target)` | write the views (`RenderView[]`, each its own cull group, or `CullGroup[]`, up to `MAX_VIEWS` views in all), upload dirty slots and run one cull dispatch for every group; then encode one view into a `CoreTarget` `{ view, format, width, height, clear?, viewport? }` (`viewport`: a pixel rectangle, set as viewport and scissor). The depth attachment is made only when a pass that runs tests depth |
 | `CullGroup` `{ views, planes?: 'union' \| 'each' }` | views that share one cull (D1 §3.5): `'union'` (the default) culls once against the union frustum of all its views (`unionPlanesInto`; views need `proj` and `view`, else nothing is culled), so a stereo pair has one args set and one bundle, and `draw` copies the eye's slot into the group's current view; `'each'` makes each view its own group |
 | `RenderCoreOptions.originGrid`, `core.origin`, `SlotDesc.origin` | the camera-relative origin (D1 §3.8): with `originGrid` (metres), the frame origin is the first view's eye snapped to the grid, in float64; views and planes are written relative to it, a slot's `origin` (float64 on the CPU, its `bounds` relative to it) reaches the vertex shader as `in.core_origin` (relative to the frame origin), and a rebase rewrites only the origins, not the bundles. `RenderCoreOptions.onView(viewIndex)` runs as each view is drawn (a test's per-view split) |
@@ -1384,6 +1384,17 @@ and replayed. Forge Wilds' iPad profile drew at 33 ms a frame with its sun's sha
 bundles and at 17 ms with the CPU cull (shadow pass 2.4 ms of GPU to 0.6 ms). The same slots
 draw in the same order either way, so the map is the same; `'cpu'` costs a sphere test per live
 caster per frame and a draw call per caster in the light.
+
+**Draw cull (E28).** `RenderCoreOptions.drawCull` does for a view's passes (`draw`) what
+`shadowCull` does for the map: `'auto'` (the default) is `'cpu'` on WebKit and `'gpu'`
+elsewhere, and `core.stats.drawCull` says which. `'cpu'` tests a GPU-culled set's slots against
+the view's planes (and `maxDistance`) on the CPU and draws only those inside, directly, with the
+pass's variant; `'gpu'` executes the set's bundle as before. On WebKit an indirect draw costs
+the GPU whether the cull zeroed it or not: Forge Wilds' iPad-profile terrain pass took
+7.5 ms of GPU time through the bundles and 5.3 ms drawn this way, and a
+forest spawn with near leaves went from 14.0 ms a frame to 6.8 ms. When `drawCull` and `shadowCull` are both `'cpu'`, nothing reads the GPU
+cull's arguments and `prepare` dispatches no cull (`stats.dispatches` 0). Chromium and the S4
+rows keep `'gpu'` and their flat call counts.
 
 **Resolve passes (ws/core-passes).** A pass with `resolve(encoder, ctx)` instead of `encode` is
 post-processing in the pass list: per view, when the `CoreTarget` has an `output`, the core
@@ -1615,6 +1626,9 @@ renderer.setLogicalSize(1280, 800);                // the 2D logical size (a fil
   first got to it, which on a tile GPU can be long before the pass's work ran, so begins read
   near the frame's start and every pass looked as long as the frame. `'auto'` (default) takes
   `'chain'` on WebKit (`isWebKitUserAgent(navigator.userAgent)`) and `'overlap'` elsewhere.
+  A timestamp over 0.5 s before the frame's last end is left out, as an unwritten 0 is (E28):
+  WebKit can resolve the frame mark's empty compute pass to an old value, which made
+  `totalMs` grow with the page's age (seconds a frame) where the passes summed to 8 ms.
   `pnpm bench` (`harness/bench.html`, `scripts/bench.mjs`) uses these to record what a frame
   affords on one machine, per scene rung, in `docs/BENCH.md`.
 - `DynamicResolution` turns GPU-time samples into a scale. It drops after 1 s over budget
