@@ -2,7 +2,8 @@
  * `createGame` (D-041 Phase 1): the noun-free wiring every ThunderClap game starts from.
  *
  * It blocks browser zoom, boots WebGPU on a surface and builds, in this order:
- * renderer, post stack, particles, host, the game's save (if any), overlay and pad navigation,
+ * renderer, post stack, particles (only with `particles`), host, the game's save (if any), overlay
+ * and pad navigation,
  * audio (mixer persisted through the host), the game's tick clock, input with its gestures (on
  * that clock) and pointer router, the scene stack and the frame loop (frames come from the
  * host). It also wires the page lifecycle (hide, pagehide and freeze stop frames and flush the
@@ -39,7 +40,6 @@
  */
 
 import type { AudioEngine } from '../audio';
-import type { ParticleSystem, ParticleSystemOptions } from '../fx';
 import type { Host } from '../host';
 import type {
   Bindings,
@@ -56,12 +56,15 @@ import { withAudio } from '../kit/audio';
 import { composeGame } from '../kit/compose';
 import { withInput } from '../kit/input';
 import { withOverlay } from '../kit/overlay';
-import { withParticles, withPost } from '../kit/post';
+import type { KitParticleFields } from '../kit/post';
+import { withPost } from '../kit/post';
 import type {
   CrashOptions,
   FlushableSave,
   GameHooks,
   GameReplay,
+  KitService,
+  KitStepPart,
   ReplayOptions,
   SimOption,
   XrControl,
@@ -149,7 +152,13 @@ export interface CreateGameOptions<
    * frames are what they were without the option. The XR scene target has none.
    */
   aux?: SceneTargetAux;
-  particles?: ParticleSystemOptions;
+  /**
+   * The shared GPU particle pool (`ctx.particles`), opt-in since 2.0 (ws/size-pass):
+   * `particles: withParticles({ capacity })` from `@thunderclap-engine/engine/kit`. Left out,
+   * `fx` is never imported (about 22 kB gzip off the root entry) and `ctx.particles` is a type
+   * error. The loop updates the pool after `hooks.update`, before the scenes.
+   */
+  particles?: ParticleService;
   /** The page the game runs in. Default `createWebHost()`. */
   host?: Host;
   /**
@@ -292,8 +301,6 @@ export interface EngineCtx<
    */
   setCamera(camera: Camera): void;
   readonly post: PostStack;
-  /** Shared GPU particle pool; updated by the loop, drawn by views. */
-  readonly particles: ParticleSystem;
   readonly input: Input<A>;
   /**
    * The game's tick clock (ws/core-4), in ms: it moves by the fixed step before each fixed
@@ -352,6 +359,12 @@ export interface EngineCtx<
 }
 
 /**
+ * The particle service `CreateGameOptions.particles` takes: `withParticles(opts)` from
+ * `@thunderclap-engine/engine/kit`. With it, `createGame` resolves `EngineCtx & KitParticleFields`.
+ */
+export type ParticleService = KitService<KitParticleFields, KitStepPart<KitParticleFields>>;
+
+/**
  * Boots WebGPU and builds the engine ctx. Resolves `null` when WebGPU is unavailable: the
  * engine has already shown the unsupported screen and there is nothing more to do.
  *
@@ -359,8 +372,23 @@ export interface EngineCtx<
  * starts the loop) and resize, which keeps the renderer and overlay in step.
  *
  * This is the default kit (ws/kit): `composeGame` from `@thunderclap-engine/engine/kit` with
- * every service passed. A game that wants fewer composes its own.
+ * every service passed but particles, which the game opts into (`particles: withParticles()`).
+ * A game that wants fewer composes its own.
  */
+export function createGame<
+  A extends string,
+  S extends FlushableSave | null = null,
+  C = unknown,
+  P = unknown,
+>(
+  opts: CreateGameOptions<A, S, P> & { particles: ParticleService },
+): Promise<(EngineCtx<A, NoInfer<S>, C, P> & KitParticleFields) | null>;
+export function createGame<
+  A extends string,
+  S extends FlushableSave | null = null,
+  C = unknown,
+  P = unknown,
+>(opts: CreateGameOptions<A, S, P>): Promise<EngineCtx<A, NoInfer<S>, C, P> | null>;
 export async function createGame<
   A extends string,
   S extends FlushableSave | null = null,
@@ -389,7 +417,7 @@ export async function createGame<
     crash: opts.crash,
     loop: { sim: opts.sim },
     post: withPost(opts.post),
-    particles: withParticles(opts.particles),
+    particles: opts.particles,
     ui: dom
       ? withOverlay({
           styles: opts.styles,

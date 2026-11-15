@@ -3,7 +3,7 @@
  * engine part; `main.ts` widens the same object with `Object.assign`, so every scene sees one ctx.
  * Devices never leak past the bindings and touch zones below.
  */
-import type { EngineCtx } from '@thunderclap-engine/engine';
+import type { EngineCtx, KitParticleFields } from '@thunderclap-engine/engine';
 import type {
   Bindings,
   TouchZoneOptions,
@@ -77,7 +77,7 @@ export interface Run {
   levelIndex: number;
 }
 
-export interface GameCtx extends EngineCtx<Action, ProgressStore, GameCtx> {
+export interface GameCtx extends EngineCtx<Action, ProgressStore, GameCtx>, KitParticleFields {
   /** The one atlas material every tile layer and sprite draws with. */
   readonly atlas: Material;
   readonly frames: Frames;

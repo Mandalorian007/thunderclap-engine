@@ -13,6 +13,7 @@ export type {
   GameHooks,
   GameReplay,
   HideReason,
+  ParticleService,
   ReplayOptions,
   ShowReason,
   SimOption,
@@ -20,3 +21,4 @@ export type {
   XrOptions,
 } from './core/game';
 export { createGame } from './core/game';
+export type { KitParticleFields } from './kit/post';

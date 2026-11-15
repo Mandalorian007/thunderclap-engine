@@ -1,6 +1,6 @@
 # engine/kit
 
-`createGame` builds everything: post stack, particles, overlay, audio, input, XR. A small 2D game, a tool, or a client whose frames come from somewhere else pays for all of it. `@thunderclap-engine/engine/kit` is the same engine as parts: `composeGame` builds the core (surface, GPU, renderer, host, save, tick clock, scene stack, loop, page lifecycle, device loss, crash screen) and then only the services passed in, each as a `with*()` factory. A service that is not passed is never imported, so the bundler drops it. The root `createGame` is the default kit: every service on, with its signature and behaviour unchanged.
+`createGame` builds everything: post stack, particles, overlay, audio, input, XR. A small 2D game, a tool, or a client whose frames come from somewhere else pays for all of it. `@thunderclap-engine/engine/kit` is the same engine as parts: `composeGame` builds the core (surface, GPU, renderer, host, save, tick clock, scene stack, loop, page lifecycle, device loss, crash screen) and then only the services passed in, each as a `with*()` factory. A service that is not passed is never imported, so the bundler drops it. The root `createGame` is the default kit: every service on but particles, which a game opts into with `particles: withParticles(opts)` (2.0, ws/size-pass; `createGame` then resolves `EngineCtx & KitParticleFields`).
 
 ## Quick use
 

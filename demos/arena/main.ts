@@ -32,6 +32,7 @@ import {
   transformGeometry,
 } from '@thunderclap-engine/engine/geom';
 import { Follow, Look } from '@thunderclap-engine/engine/input';
+import { withParticles } from '@thunderclap-engine/engine/kit';
 import {
   type Camera,
   createStandardMaterial,
@@ -126,14 +127,14 @@ async function main(): Promise<void> {
     root,
     title: 'ThunderClap demo: arena',
     design: { width: 1920, height: 1080 },
-    particles: {
+    particles: withParticles({
       space: 'world',
       blend: 'alpha',
       lit: true,
       floorY: 0,
       capacity: 2048,
       softness: 0.3,
-    },
+    }),
     input: {
       bindings: {
         swing: [{ gesture: 'tap' }, { key: 'Space' }, { padButton: 0 }],

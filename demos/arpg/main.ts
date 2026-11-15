@@ -60,6 +60,7 @@ import {
   screenRay,
   shapeStick,
 } from '@thunderclap-engine/engine/input';
+import { withParticles } from '@thunderclap-engine/engine/kit';
 import {
   bakeNavMesh,
   createCrowd,
@@ -353,14 +354,14 @@ async function main(): Promise<void> {
         gain: [1.08, 0.95, 1.02],
       },
     },
-    particles: {
+    particles: withParticles({
       space: 'world',
       blend: 'alpha',
       lit: true,
       floorY: 0,
       capacity: 1024,
       softness: 0.3,
-    },
+    }),
     input: {
       // Every tick the input is fed, from boot (`ctx.input.recorder`): "watch replay" plays it.
       record: true,

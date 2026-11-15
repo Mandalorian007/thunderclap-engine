@@ -196,7 +196,7 @@
     "check:api": "node scripts/api-surface.mjs && node --test scripts/api-surface.test.mjs",
     "api:update": "node scripts/api-surface.mjs --update",
     "check:wgsl": "node scripts/check-wgsl.mjs && node --test scripts/check-wgsl.test.mjs",
-    "check:bundle": "node scripts/check-bundle.mjs && node --test scripts/check-bundle.test.mjs",
+    "check:bundle": "node scripts/check-bundle.mjs && node --test scripts/check-bundle.test.mjs scripts/wgsl-trim.test.mjs",
     "bundle:add": "node scripts/check-bundle.mjs --add",
     "check:create-game": "node --test scripts/create-game.test.mjs",
     "check:release": "node --test scripts/release.test.mjs",

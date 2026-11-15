@@ -12,7 +12,7 @@ import type { Frame, Renderer } from '@thunderclap-engine/engine/render';
 declare const renderer: Renderer;
 declare const frame: Frame;
 
-const particles = new ParticleSystem(renderer, { capacity: 32768 }); // createGame builds ctx.particles
+const particles = new ParticleSystem(renderer, { capacity: 32768 }); // createGame({ particles: withParticles() }) builds ctx.particles
 particles.emit({ x: 960, y: 540, shape: { kind: 'circle', radius: 20 }, colorStart: [4, 2, 0.5, 1] }, 64);
 const embers = new ParticleEmitter(particles, { x: 400, y: 900, colorStart: [3, 1, 0.2, 1] }, 30);
 embers.update(1 / 60); // 30 particles per second
@@ -60,7 +60,7 @@ GPU particles and allocation-free light helpers. No dependencies.
 import { ParticleEmitter, ParticleSystem } from '@thunderclap-engine/engine/fx';
 
 const particles = new ParticleSystem(renderer, { capacity: 32768, floorY: 1000 });
-// createGame builds one as ctx.particles (options: CreateGameOptions.particles) and updates it.
+// createGame({ particles: withParticles(opts) }) builds one as ctx.particles and updates it.
 
 particles.emit({ x: 960, y: 540, shape: { kind: 'circle', radius: 20 }, colorStart: [4, 2, 0.5, 1] }, 64);
 

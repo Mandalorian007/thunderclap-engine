@@ -337,10 +337,10 @@ if (ctx) {
 
 ## Particles
 
-`ctx.particles` is a shared GPU `ParticleSystem`. The engine steps it each fixed step; you emit into it and draw it.
+`ctx.particles` is a shared GPU `ParticleSystem`, there when the game passes `particles: withParticles()` (from `@thunderclap-engine/engine/kit`) to `createGame`; a game without it never loads the particle code. The engine steps it each fixed step; you emit into it and draw it.
 
 ```ts
-import type { EngineCtx } from '@thunderclap-engine/engine';
+import type { EngineCtx, KitParticleFields } from '@thunderclap-engine/engine';
 import type { EmitParams } from '@thunderclap-engine/engine/fx';
 import { type Frame, hex } from '@thunderclap-engine/engine/render';
 
@@ -356,13 +356,15 @@ const sparkle: EmitParams = {
   emissive: 1.2,
 };
 
-export function popCoin(ctx: EngineCtx, x: number, y: number) {
+type Ctx = EngineCtx & KitParticleFields;
+
+export function popCoin(ctx: Ctx, x: number, y: number) {
   sparkle.x = x;
   sparkle.y = y;
   ctx.particles.emit(sparkle, 14);
 }
 
-export function drawParticles(ctx: EngineCtx, frame: Frame) {
+export function drawParticles(ctx: Ctx, frame: Frame) {
   frame.drawable(ctx.particles); // usually last, so they draw over the world
 }
 ```
@@ -370,7 +372,7 @@ export function drawParticles(ctx: EngineCtx, frame: Frame) {
 - Shapes: `shape: { kind: 'circle', radius }`, `rect`, `line` or the default point.
 - `blend: 'alpha'` on the params gives soft smoke and dust instead of additive light.
 - `ParticleEmitter` (from `@thunderclap-engine/engine/fx`) emits at a steady rate per second for fires and embers.
-- `createGame({ particles: { capacity: 2048 } })` sizes the pool. When it is full, the oldest particles are reused.
+- `createGame({ particles: withParticles({ capacity: 2048 }) })` sizes the pool. When it is full, the oldest particles are reused.
 
 Reuse one `EmitParams` object per effect and move it before each `emit`, as above.
 

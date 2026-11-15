@@ -10,13 +10,17 @@
 // pass makes the output plain ESM that runs without a bundler:
 //   - relative specifiers get their file extension (`./a` -> `./a.js`, `./dir` -> `./dir/index.js`,
 //     `./a.ts` -> `./a.js`), in .js and .d.ts alike, so Node, browsers and NodeNext resolution load it;
-//   - JSON imports get `with { type: 'json' }`, which native ESM requires.
+//   - JSON imports get `with { type: 'json' }`, which native ESM requires;
+//   - each `/* wgsl */` shader literal loses its comments and its lines' indentation
+//     (scripts/wgsl-trim.mjs, ws/size-pass): every line and `${…}` kept, so behaviour and WGSL
+//     error lines are unchanged.
 // Every relative specifier must resolve to an emitted file, and no .d.ts may carry a
 // `/// <reference path>` (the packages declare no globals, E-039), or the build fails.
 import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { trimWgsl } from './wgsl-trim.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const tsc = join(root, 'node_modules', '.bin', 'tsc');
@@ -50,7 +54,7 @@ function fixSpecifiers(pkg) {
     if (dts && /^\/\/\/ <reference path=/m.test(src)) {
       bad.push(`${relative(root, file)}: /// <reference path> (types must be module exports)`);
     }
-    const out = src.replace(re, (whole, lead, q, spec, close, at, str) => {
+    const fixed = src.replace(re, (whole, lead, q, spec, close, at, str) => {
       // Examples in doc comments (`import('./ru.json')`) are prose, not imports.
       const line = str.slice(str.lastIndexOf('\n', at) + 1, at).trimStart();
       if (/^(?:\*|\/\*|\/\/)/.test(line)) return whole;
@@ -65,6 +69,7 @@ function fixSpecifiers(pkg) {
       const dynAttr = json && lead.includes('(') ? `, { with: { type: 'json' } }` : '';
       return `${lead}${q}${resolved}${q}${dynAttr}${close}${attr}`;
     });
+    const out = dts ? fixed : trimWgsl(fixed);
     if (out !== src) writeFileSync(file, out);
   }
   if (bad.length) {

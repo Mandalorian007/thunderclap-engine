@@ -28,7 +28,7 @@ Each line names where to start and links its guide or reference. [docs/OFFERING.
 
 **Start and run**
 
-- **One boot call.** Canvas, renderer, post, particles, input, overlay, audio, save, host and a fixed 60 Hz loop in one ctx: `createGame(opts)` ([Getting started](docs/guide/getting-started.md#the-shape-of-a-game)).
+- **One boot call.** Canvas, renderer, post, particles (opt-in), input, overlay, audio, save, host and a fixed 60 Hz loop in one ctx: `createGame(opts)` ([Getting started](docs/guide/getting-started.md#the-shape-of-a-game)).
 - **Client mode** for a server-authoritative game: no save, the loop runs once per rendered frame: `createGame({ sim: false })`, `ctx.hooks.frame` ([Getting started](docs/guide/getting-started.md)).
 - **Every page it runs in.** A top-level tab, a cross-origin iframe (itch.io), Electron, Capacitor and an installable PWA: `Host`, `createWebHost`, `@thunderclap-engine/host-electron`, `@thunderclap-engine/host-capacitor`, `@thunderclap-engine/host-pwa` ([Ship it](docs/guide/getting-started.md#ship-it), [host](src/host/README.md)).
 - **Page lifecycle.** Hiding stops the loop and flushes the save; device loss shows a reload screen: `ctx.hooks.hide`, `ctx.hooks.deviceLost` ([platform](src/platform/README.md)).
@@ -236,7 +236,7 @@ The module READMEs under `src/<module>/` are the full reference.
 
 | Import | What it holds |
 | --- | --- |
-| `@thunderclap-engine/engine` | `createGame(opts: CreateGameOptions)` (with `aux` for the renderer's aux targets), `EngineCtx`, `GameHooks` (with `HideReason`, `ShowReason`), `SimOption`, `FlushableSave`, `GameReplay` and `ReplayOptions` (`ctx.replay`, with `onEnd`), `XrOptions` and `XrControl` (`ctx.xr`), the opt-in crash screen (`crash` with `CrashOptions`, or `installCrashScreen(opts: CrashScreenOptions): CrashScreen` on its own; see [core](src/core/README.md#crash-screen)): the top layer a game touches |
+| `@thunderclap-engine/engine` | `createGame(opts: CreateGameOptions)` (with `aux` for the renderer's aux targets), `EngineCtx`, `GameHooks` (with `HideReason`, `ShowReason`), `SimOption`, `FlushableSave`, `GameReplay` and `ReplayOptions` (`ctx.replay`, with `onEnd`), `XrOptions` and `XrControl` (`ctx.xr`), `ParticleService` and `KitParticleFields` (`particles: withParticles(opts)` from `./kit` adds `ctx.particles`; since ws/size-pass), the opt-in crash screen (`crash` with `CrashOptions`, or `installCrashScreen(opts: CrashScreenOptions): CrashScreen` on its own; see [core](src/core/README.md#crash-screen)): the top layer a game touches |
 | `@thunderclap-engine/engine/core` | `GameLoop` (fixed step, fps cap, pause, `setFrames` to swap the frame source), `Scene` and `SceneStack`, `Emitter`, `mat4`, timing ([README](src/core/README.md)) |
 | `@thunderclap-engine/engine/platform` | WebGPU boot, `Surface` (canvas, DPR, letterbox fit), `XrSurface` (a target and camera per eye), page lifecycle, device detection, the unsupported and reload screens ([README](src/platform/README.md)) |
 | `@thunderclap-engine/engine/render` | `Renderer`, `Frame`, `Camera` (`ortho2d`, `perspective`, frustum culling), `render(frame, camera, target)`, `SceneTarget`, `Lights` (sun shadow map, fog), materials and custom WGSL, meshes with bounds and streaming updates, transforms, textures and texture arrays with GPU mips, colour helpers ([README](src/render/README.md)) |

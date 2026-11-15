@@ -1306,6 +1306,8 @@ class RenderCore {
     get targetMask(): number;
     setTargets(names: readonly CoreTargetName[]): void;
     createArena(desc: ArenaDesc): Arena;
+    quadIndices(quads: number): GPUBuffer;
+    get quadIndexVersion(): number;
     restore(device: GPUDevice): void;
     get hasResolve(): boolean;
     get castsShadow(): boolean;
