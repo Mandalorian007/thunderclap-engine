@@ -21,6 +21,7 @@
 //! A deflated file is `"TCZ1" u64:len zlib(bytes)` (little-endian).
 
 use std::fs;
+use std::ops::RangeBounds;
 use std::path::{Path, PathBuf};
 
 use crate::codec::LogCodec;
@@ -28,7 +29,7 @@ use crate::durable::{self, sync_dir};
 use crate::error::StoreError;
 use crate::format::{self, KIND_ENTRY, KIND_WALL_MARK};
 use crate::gens::{self, gen_dir};
-use crate::{FileKind, MAIN_LOG, RECOVERED_DIR, io_err, log_dir, unix_now};
+use crate::{FileKind, MAIN_LOG, RECOVERED_DIR, crash, io_err, log_dir, unix_now};
 
 /// The archive's directory in a store directory.
 pub const ARCHIVE_DIR: &str = "archive";
@@ -115,14 +116,17 @@ pub fn tidy<C: LogCodec>(
     below: u64,
     policy: &ArchivePolicy,
 ) -> Result<Tidied, StoreError> {
-    let mut tidied = Tidied::default();
+    let mut tidied = Tidied {
+        leftovers: clear_leftovers(dir)?,
+        ..Tidied::default()
+    };
     let root = dir.join(ARCHIVE_DIR);
-    clear_leftovers(dir, &root, &mut tidied)?;
     let listing = gens::list(codec, dir)?;
     let below = below.min(listing.newest());
     let done: Vec<u64> = archived_dirs(&root)?.into_iter().map(|(g, _)| g).collect();
     for generation in listing.gens.iter().filter(|g| g.number < below) {
-        if generation.files.is_empty() && done.contains(&generation.number) {
+        // Nothing to archive (already archived, or archived and pruned).
+        if generation.files.is_empty() {
             continue;
         }
         let names: Vec<(String, PathBuf)> = generation
@@ -133,6 +137,7 @@ pub fn tidy<C: LogCodec>(
         if !done.contains(&generation.number) {
             archive_generation(&root, generation.number, &names)?;
         }
+        crash::point("tidy.archived");
         remove_live(dir, generation.number, &names)?;
         tidied.archived.push(generation.number);
     }
@@ -142,17 +147,34 @@ pub fn tidy<C: LogCodec>(
     Ok(tidied)
 }
 
-/// An archived file, inflated: its generation, the path it had in `log/`,
-/// its kind, and its bytes.
-pub(crate) type ArchivedFile<K> = (u64, PathBuf, FileKind<K>, Vec<u8>);
+/// An archived log file, inflated ([`read_archive`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArchivedFile<K> {
+    /// Its generation.
+    pub generation: u64,
+    /// The path it had in `log/`.
+    pub path: PathBuf,
+    /// Its key, or `None` for the generation's `main.log`.
+    pub key: Option<K>,
+    /// Its bytes, as they were in `log/` (read them with
+    /// [`crate::format::Reader`]).
+    pub bytes: Vec<u8>,
+}
 
-/// Every archived generation's files, inflated, oldest generation first.
-pub(crate) fn read_archived<C: LogCodec>(
+/// The files of the archived generations of the store in `dir` that are
+/// in `generations`, inflated: oldest generation first, each's `main.log`
+/// first, then its keyed files by name. For a game's own history or
+/// tools; [`summary`] lists the generations without inflating them.
+pub fn read_archive<C: LogCodec>(
     dir: &Path,
     codec: &C,
+    generations: impl RangeBounds<u64>,
 ) -> Result<Vec<ArchivedFile<C::Key>>, StoreError> {
     let mut out = Vec::new();
-    for (generation, path) in archived_dirs(&dir.join(ARCHIVE_DIR))? {
+    for (generation, path) in archived_dirs(&dir.join(ARCHIVE_DIR))?
+        .into_iter()
+        .filter(|(g, _)| generations.contains(g))
+    {
         let mut files = Vec::new();
         for item in fs::read_dir(&path).map_err(io_err(&path))? {
             let item = item.map_err(io_err(&path))?;
@@ -187,12 +209,15 @@ pub(crate) fn read_archived<C: LogCodec>(
                     reason,
                 }
             })?;
-            out.push((
+            out.push(ArchivedFile {
                 generation,
-                gen_dir(dir, generation).join(log_name),
-                kind,
+                path: gen_dir(dir, generation).join(log_name),
+                key: match kind {
+                    FileKind::Main => None,
+                    FileKind::Keyed(key) => Some(key),
+                },
                 bytes,
-            ));
+            });
         }
     }
     Ok(out)
@@ -313,6 +338,7 @@ fn archive_generation(
     };
     write_durable(&tmp.join("info"), write_info(&info).as_bytes())?;
     sync_dir(&tmp)?;
+    crash::point("tidy.tmp");
     let to = root.join(format!("g{generation}"));
     fs::rename(&tmp, &to).map_err(io_err(&to))?;
     sync_dir(root)
@@ -398,13 +424,16 @@ fn remove_live(dir: &Path, generation: u64, names: &[(String, PathBuf)]) -> Resu
         fs::rename(&live, &del).map_err(io_err(&del))?;
     }
     sync_dir(&logs)?;
+    crash::point("tidy.moved");
     fs::remove_dir_all(&del).map_err(io_err(&del))
 }
 
 /// Finishes or clears what a cut-short [`tidy`] left: a `.tmp` archive
 /// directory (not yet renamed: removed), `.del` directories (removed).
-fn clear_leftovers(dir: &Path, root: &Path, tidied: &mut Tidied) -> Result<(), StoreError> {
-    for parent in [root.to_path_buf(), log_dir(dir)] {
+/// Returns what it removed. Opening a store calls it too.
+pub(crate) fn clear_leftovers(dir: &Path) -> Result<Vec<PathBuf>, StoreError> {
+    let mut leftovers = Vec::new();
+    for parent in [dir.join(ARCHIVE_DIR), log_dir(dir)] {
         let Ok(items) = fs::read_dir(&parent) else {
             continue;
         };
@@ -414,11 +443,85 @@ fn clear_leftovers(dir: &Path, root: &Path, tidied: &mut Tidied) -> Result<(), S
             if name.starts_with(".g") && (name.ends_with(".tmp") || name.ends_with(".del")) {
                 let path = item.path();
                 fs::remove_dir_all(&path).map_err(io_err(&path))?;
-                tidied.leftovers.push(path);
+                leftovers.push(path);
+            }
+        }
+    }
+    Ok(leftovers)
+}
+
+/// Fails if the archive of the store in `dir` isn't the log's own (live
+/// as `listing` lists it): a store created over another's leftovers, or an
+/// archive copied in. Such an archive holds the generation appended to or
+/// a newer one, which is never archived, or a generation whose live copy
+/// (left by an archiving cut short) holds other records; reading it
+/// (history, rollback, repair) would read another log, and [`tidy`] would
+/// take the live copy for a leftover and remove it.
+pub(crate) fn check_archive_is_the_logs<K: Clone>(
+    dir: &Path,
+    listing: &gens::Listing<K>,
+) -> Result<(), StoreError> {
+    let root = dir.join(ARCHIVE_DIR);
+    let archived = archived_dirs(&root)?;
+    let Some((last, _)) = archived.last() else {
+        return Ok(());
+    };
+    let foreign = |why: String| {
+        Err(StoreError::Meta {
+            path: root.clone(),
+            reason: format!(
+                "{why}: not this log's archive (a store created over another's leftovers, or \
+                 an archive copied in?); move it aside to open the store"
+            ),
+        })
+    };
+    let newest = listing.newest();
+    if *last >= newest {
+        return foreign(format!(
+            "it holds log generation {last}, but the log is appended to in generation {newest}"
+        ));
+    }
+    for (generation, path) in &archived {
+        let Some(live) = listing.gens.iter().find(|g| g.number == *generation) else {
+            continue;
+        };
+        for (file, _) in &live.files {
+            let Some(bytes) = read_if_there(file)? else {
+                continue;
+            };
+            let z = path.join(format!("{}.z", file_name(file)));
+            if bytes.len() <= format::HEADER_LEN {
+                continue;
+            }
+            let Some(stored) = read_if_there(&z)? else {
+                continue;
+            };
+            let archived = inflate(&stored).map_err(|reason| StoreError::Corrupt {
+                path: z.clone(),
+                offset: 0,
+                reason,
+            })?;
+            if !archived.starts_with(&bytes) && !bytes.starts_with(&archived) {
+                return foreign(format!(
+                    "its log generation {generation} differs from the live copy {}",
+                    file.display()
+                ));
             }
         }
     }
     Ok(())
+}
+
+/// A file's bytes, or `None` if it isn't there.
+fn read_if_there(path: &Path) -> Result<Option<Vec<u8>>, StoreError> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(StoreError::Io {
+            path: path.to_path_buf(),
+            error,
+        }),
+    }
 }
 
 /// Removes the oldest archived generations while the oldest is past
@@ -437,6 +540,7 @@ fn prune(root: &Path, policy: &ArchivePolicy, tidied: &mut Tidied) -> Result<(),
         let del = root.join(format!(".g{}.del", info.generation));
         fs::rename(&path, &del).map_err(io_err(&del))?;
         sync_dir(root)?;
+        crash::point("tidy.prune");
         fs::remove_dir_all(&del).map_err(io_err(&del))?;
         total -= info.bytes;
         tidied.pruned.push(info.generation);

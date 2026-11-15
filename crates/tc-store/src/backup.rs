@@ -14,6 +14,9 @@
 //! The game's bases (`base/`) are read first and copied too, each one
 //! whose tail the copy holds.
 //!
+//! A live log that holds only marks (every entry archived) is copied
+//! whole: the copy holds through the last entry they cover.
+//!
 //! A file can vanish while it is read (the archive took its generation):
 //! the backup then starts again, at most [`TRIES`] times.
 
@@ -65,7 +68,8 @@ pub fn backup(dir: &Path, out: &Path, archive: bool) -> Result<BackupReport, Sto
         let read = read_bases(dir).and_then(|bases| Ok((bases, read_files(dir)?)));
         match read {
             Ok((bases, files)) => {
-                let (last_seq, files) = cut(files)?;
+                let floor = bases.iter().map(|(b, _)| b.after).max().unwrap_or(0);
+                let (last_seq, files) = cut(files, floor)?;
                 make_empty_dir(out)?;
                 let (count, bytes) = write_files(out, &files)?;
                 let mut base_files = 0;
@@ -175,7 +179,11 @@ enum Rec {
 
 /// Cuts each file just before its first record past the kept prefix (see
 /// the module docs). Returns the last entry kept.
-fn cut(mut files: Vec<Raw>) -> Result<(u64, Vec<Raw>), StoreError> {
+///
+/// With no entry live (every one archived, or behind a base), the copy
+/// holds through the last its marks cover, or `floor` (the newest base's)
+/// if that is later: what the archive or the base holds.
+fn cut(mut files: Vec<Raw>, floor: u64) -> Result<(u64, Vec<Raw>), StoreError> {
     let mut parsed: Vec<Vec<(u64, u64, Rec)>> = Vec::new();
     let mut seqs: Vec<u64> = Vec::new();
     let mut batches: BTreeMap<u64, u64> = BTreeMap::new();
@@ -234,7 +242,10 @@ fn cut(mut files: Vec<Raw>) -> Result<(u64, Vec<Raw>), StoreError> {
         parsed.push(recs);
     }
     seqs.sort_unstable();
-    let after = seqs.first().map_or(0, |s| s - 1);
+    let after = match seqs.first() {
+        Some(first) => first - 1,
+        None => marks.iter().copied().max().unwrap_or(0).max(floor),
+    };
     let mut keep = after;
     for seq in &seqs {
         if *seq != keep + 1 {

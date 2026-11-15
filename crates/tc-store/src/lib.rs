@@ -112,7 +112,9 @@ use std::fs::File;
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 
-pub use archive::{ARCHIVE_DIR, ArchivePolicy, Archived, Tidied, summary, tidy};
+pub use archive::{
+    ARCHIVE_DIR, ArchivePolicy, Archived, ArchivedFile, Tidied, read_archive, summary, tidy,
+};
 pub use background::Background;
 pub use backup::{BackupReport, backup};
 pub use base::{BASE_DIR, BaseFile, bases, prune_bases, write_base};
@@ -120,7 +122,7 @@ pub use codec::{LogCodec, LogEntry, NameTable, Names};
 pub use error::StoreError;
 pub use gens::gen_dir;
 pub use load::{ReadLog, read, read_from};
-pub use lock::{HOLDER_FILE, Holder, LOCK_FILE, StoreLock, holder};
+pub use lock::{HOLDER_FILE, Holder, LOCK_FILE, StoreLock, holder, holder_named};
 pub use memory::{MemoryLog, Store};
 pub use rollback::{RollbackReport, RollbackTo, rollback};
 pub use salvage::{
@@ -128,7 +130,7 @@ pub use salvage::{
 };
 pub use swap::{Output, SWAP_DIR};
 pub use tail::{LogReader, ReadMark};
-pub use writer::{Counters, CutFile, Log, LogCut, Opened, Prepared, prepare, sync_frozen};
+pub use writer::{Counters, CutFile, Log, LogCut, Opened, Prepared, Scan, prepare, sync_frozen};
 
 /// The most keyed log files a [`Log`] keeps open at once; the least
 /// recently written is closed (not synced) to make room.

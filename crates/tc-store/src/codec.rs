@@ -97,6 +97,17 @@ impl<'a> Names<'a> {
     }
 }
 
+impl FromIterator<(u32, String)> for NameTable {
+    /// A table defining each `(id, name)`; the first of an id wins.
+    fn from_iter<I: IntoIterator<Item = (u32, String)>>(iter: I) -> NameTable {
+        let mut table = NameTable::new();
+        for (id, name) in iter {
+            table.define(id, name);
+        }
+        table
+    }
+}
+
 /// A file's name table as it is read: the strings its name records define
 /// so far.
 #[derive(Debug, Default)]
@@ -105,13 +116,20 @@ pub struct NameTable {
 }
 
 impl NameTable {
+    /// An empty table: for a codec's tests, or a game decoding records it
+    /// read itself.
+    pub fn new() -> NameTable {
+        NameTable::default()
+    }
+
     /// The string the file's id `id` names, if a name record defined it.
     pub fn get(&self, id: u32) -> Option<&str> {
         self.names.get(&id).map(String::as_str)
     }
 
-    /// Defines `id`; false if it was already defined.
-    pub(crate) fn define(&mut self, id: u32, name: String) -> bool {
+    /// Defines `id` as `name`, as a name record does; false (and nothing
+    /// changes) if it was already defined.
+    pub fn define(&mut self, id: u32, name: String) -> bool {
         match self.names.entry(id) {
             std::collections::hash_map::Entry::Occupied(_) => false,
             std::collections::hash_map::Entry::Vacant(v) => {

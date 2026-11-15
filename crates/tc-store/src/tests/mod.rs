@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use crate::format::{self, KIND_MARK, KIND_WALL_MARK, Reader, Writer};
 use crate::{LogCodec, LogEntry, NameTable, Names};
 
+mod fit;
 mod gens;
 mod hold;
 mod log;

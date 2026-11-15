@@ -5,7 +5,13 @@
 //!
 //! The points: `rotate` (the new generation's files are made and swapped
 //! in, nothing appended to them yet) and `create` (a store's log written,
-//! its metadata not yet).
+//! its metadata not yet); and in [`crate::tidy`], `tidy.tmp` (a
+//! generation's archive written to its `.tmp` directory, not yet renamed),
+//! `tidy.archived` (renamed into the archive, its live files not yet
+//! moved), `tidy.moved` (its live files moved to a `.del` directory, not
+//! yet removed) and `tidy.prune` (an archived generation pruned to a `.del`
+//! name, not yet removed). Every one recovers: opening clears the `.tmp`
+//! and `.del` leftovers, and the next `tidy` finishes the generation.
 
 use std::sync::OnceLock;
 

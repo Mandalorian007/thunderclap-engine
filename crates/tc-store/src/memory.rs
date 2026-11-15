@@ -142,7 +142,12 @@ impl<C: LogCodec> MemoryLog<C> {
     /// Writes a clock mark at the game's time `time`, covering every entry
     /// appended so far, with the wall time now.
     pub fn mark(&mut self, time: u64) {
-        format::push_mark(&mut self.main.bytes, time, self.last_seq, Some(unix_now()));
+        self.mark_wall(time, unix_now());
+    }
+
+    /// [`MemoryLog::mark`] with the wall time `wall` ([`Log::mark_wall`]).
+    pub fn mark_wall(&mut self, time: u64, wall: u64) {
+        format::push_mark(&mut self.main.bytes, time, self.last_seq, Some(wall));
         self.clock = self.clock.max(time);
     }
 
@@ -310,6 +315,17 @@ impl<C: LogCodec> Store<C> {
             Store::Disk(log) => log.mark(time),
             Store::Memory(log) => {
                 log.mark(time);
+                Ok(())
+            }
+        }
+    }
+
+    /// [`Store::mark`] with the wall time `wall` ([`Log::mark_wall`]).
+    pub fn mark_wall(&mut self, time: u64, wall: u64) -> Result<(), StoreError> {
+        match self {
+            Store::Disk(log) => log.mark_wall(time, wall),
+            Store::Memory(log) => {
+                log.mark_wall(time, wall);
                 Ok(())
             }
         }

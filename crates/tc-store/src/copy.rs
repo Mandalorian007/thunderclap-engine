@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::archive::read_archived;
+use crate::archive::{ArchivedFile, read_archive};
 use crate::codec::{LogCodec, LogEntry};
 use crate::durable::{push_dir, sync_dir};
 use crate::error::StoreError;
@@ -17,7 +17,7 @@ use crate::hold::Hold;
 use crate::log_file::LogFile;
 use crate::read::{CodecLog, Item, read_log_prefix};
 use crate::writer::write_meta;
-use crate::{MAIN_LOG, MAX_OPEN_FILES, io_err, log_dir};
+use crate::{FileKind, MAIN_LOG, MAX_OPEN_FILES, io_err, log_dir};
 
 /// Every log file of a store, archived generations first, each read up to
 /// its first problem.
@@ -86,7 +86,14 @@ pub(crate) fn read_history<C: LogCodec>(dir: &Path, codec: &C) -> Result<History
     let mut files = Vec::new();
     let mut problems = Vec::new();
     let mut archived = Vec::new();
-    for (generation, path, kind, bytes) in read_archived(dir, codec)? {
+    for archived_file in read_archive(dir, codec, ..)? {
+        let ArchivedFile {
+            generation,
+            path,
+            key,
+            bytes,
+        } = archived_file;
+        let kind = key.map_or(FileKind::Main, FileKind::Keyed);
         if !archived.contains(&generation) {
             archived.push(generation);
         }
