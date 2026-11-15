@@ -19,6 +19,7 @@ import { createGame } from '@thunderclap-engine/engine';
 import { recipes } from '@thunderclap-engine/engine/audio';
 import { createRandom, type Scene } from '@thunderclap-engine/engine/core';
 import type { GamepadLike } from '@thunderclap-engine/engine/input';
+import { withParticles } from '@thunderclap-engine/engine/kit';
 import { createFlowField, createNavGrid } from '@thunderclap-engine/engine/nav';
 import {
   type DrawParams,
@@ -147,6 +148,7 @@ const ctx = await createGame({
   title: 'ThunderClap demo: tactics',
   design: { width: DESIGN_W, height: DESIGN_H },
   post: { mist: { enabled: false }, bloom: { enabled: false } },
+  particles: withParticles(),
   input: {
     bindings: {
       select: [{ gesture: 'tap' }, { padButton: 0 }, { key: 'Enter' }, { key: 'Space' }],

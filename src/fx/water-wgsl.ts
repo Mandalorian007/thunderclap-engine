@@ -443,7 +443,7 @@ export function waterLookWgsl(group: number): string {
     /\bscene_color\b/g,
     'core_scene_color',
   );
-  return `
+  return /* wgsl */ `
 ${CORE_VIEW_EXTRA_WGSL}
 ${FX_DEPTH_WGSL}
 ${WATER_PARAMS_WGSL}

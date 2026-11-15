@@ -109,7 +109,11 @@ fn view_row(r: u32) -> vec3f {
 }
 `;
 
-/** Insert `add` after the one occurrence of `at` in `src` (throws unless there is exactly one). */
+/**
+ * Insert `add` after the one occurrence of `at` in `src` (throws unless there is exactly one). An
+ * anchor holds no line's indentation and no comment: the published build trims both from the
+ * shader (scripts/wgsl-trim.mjs).
+ */
 function after(src: string, at: string, add: string): string {
   const i = src.indexOf(at);
   if (i < 0 || src.indexOf(at, i + 1) >= 0) throw new Error(`billboardWgsl: anchor ${at}`);
@@ -122,21 +126,21 @@ function after(src: string, at: string, add: string): string {
  * previous anchor (`xyz`, `w` = 1 when known), the vertex stage projects the same corner of
  * last frame's quad through `camera.prev_view_proj` / `prev_view`, and the fragment writes
  * `vec4f(engine_motion(..), 0, alpha)` there. Internal; `0` is the exported string itself.
+ * `base` is the shader to edit (a test passes the trimmed form).
  */
-export function billboardWgsl(velocity: number): string {
-  if (velocity <= 0) return BILLBOARD_WGSL;
-  let s = after(BILLBOARD_WGSL, WGSL_GLOBALS, WGSL_MOTION);
+export function billboardWgsl(velocity: number, base = BILLBOARD_WGSL): string {
+  if (velocity <= 0) return base;
+  let s = after(base, WGSL_GLOBALS, WGSL_MOTION);
   s = after(
     s,
     '@group(1) @binding(2) var atlas: texture_2d<f32>;',
     '\n@group(1) @binding(3) var<storage, read> billboard_prev: array<vec4f>;',
   );
-  s = after(s, '  @location(5) fraction: f32,', '\n  @location(6) prev_clip: vec4f,');
-  s = after(s, '  @location(1) emissive: vec4f,', `\n  @location(${velocity}) velocity: vec4f,`);
+  s = after(s, '@location(5) fraction: f32,', '\n  @location(6) prev_clip: vec4f,');
+  s = after(s, '@location(1) emissive: vec4f,', `\n  @location(${velocity}) velocity: vec4f,`);
   s = after(
     s,
-    `fn view_row(r: u32) -> vec3f {
-  return vec3f(camera.view[0][r], camera.view[1][r], camera.view[2][r]);
+    `return vec3f(camera.view[0][r], camera.view[1][r], camera.view[2][r]);
 }
 `,
     `
@@ -152,21 +156,21 @@ fn yaw_right(r: vec3f) -> vec3f {
   );
   s = after(
     s,
-    '  let half = b.size.xy * 0.5;',
+    'let half = b.size.xy * 0.5;',
     `
   let pv = billboard_prev[ii];
   let pa = select(b.pos.xyz, pv.xyz, pv.w > 0.5);`,
   );
   s = after(
     s,
-    '    o.clip = clip;',
+    'o.clip = clip;',
     `
     let pc = camera.prev_view_proj * vec4f(pa, 1.0);
     o.prev_clip = vec4f(pc.xy + ndc * pc.w, pc.zw);`,
   );
   s = after(
     s,
-    '    o.clip = camera.view_proj * vec4f(world, 1.0);',
+    'o.clip = camera.view_proj * vec4f(world, 1.0);',
     `
     var pr = prev_view_row(0u);
     var pu = prev_view_row(1u);
@@ -179,7 +183,7 @@ fn yaw_right(r: vec3f) -> vec3f {
   );
   return after(
     s,
-    '  o.emissive = vec4f(0.0, 0.0, 0.0, c.a);',
+    'o.emissive = vec4f(0.0, 0.0, 0.0, c.a);',
     '\n  o.velocity = vec4f(engine_motion(in.clip, in.prev_clip), 0.0, c.a);',
   );
 }

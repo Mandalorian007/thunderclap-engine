@@ -5,7 +5,8 @@
 // Each entry below is built alone with Vite (minified, ES2022, the repo's own Vite; nothing is
 // written to disk): every `exports` subpath of package.json as `export * from` it, plus a few named
 // import sets a game really makes (Renderer alone, Renderer + Camera + Transform, render with
-// voxel, createGame). The gzip size of all the JS it emits is held against
+// voxel, createGame), with its `/* wgsl */` shaders trimmed as `pnpm build` ships them
+// (scripts/wgsl-trim.mjs). The gzip size of all the JS it emits is held against
 // scripts/bundle-budgets.json. Raising a budget is a deliberate line in a PR, with the reason.
 //
 // Tree shaking: an entry may name `excludes`, engine folders none of whose code may reach its
@@ -20,6 +21,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
+import { wgslTrim } from './wgsl-trim.mjs';
 
 /** Headroom a new or reset budget gets over today's size. */
 export const HEADROOM = 1.05;
@@ -157,6 +159,7 @@ async function measure(entry, pkg, root, dir, build) {
     configFile: false,
     root,
     logLevel: 'silent',
+    plugins: [wgslTrim()],
     build: {
       write: false,
       minify: true,

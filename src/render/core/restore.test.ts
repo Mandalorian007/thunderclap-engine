@@ -230,6 +230,31 @@ describe('device restore (ws/core-passes)', () => {
     expect(old).toBeGreaterThan(0);
   });
 
+  it('the public quad index buffer grows by doubling and comes back after a restore (ws/size-pass)', () => {
+    const fake = createFakeDevice();
+    const core = createRenderCore(fake.device);
+    const small = core.quadIndices(10);
+    expect(small.size).toBe(1024 * 6 * 4);
+    expect(core.quadIndices(1024)).toBe(small);
+    const v = core.quadIndexVersion;
+    const big = core.quadIndices(3000);
+    expect(big.size).toBe(4096 * 6 * 4);
+    expect(core.quadIndexVersion).toBeGreaterThan(v);
+    expect((small as unknown as { destroyed: boolean }).destroyed).toBe(true);
+    const words = new Uint32Array(
+      fake.buffers.find((b) => b.label === 'core quad index' && !b.destroyed)!.data.buffer,
+      0,
+      12,
+    );
+    expect([...words]).toEqual([0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7]);
+    const next = createFakeDevice();
+    core.restore(next.device);
+    const again = core.quadIndices(1);
+    expect(again).not.toBe(big);
+    expect(again.size).toBe(4096 * 6 * 4);
+    expect(next.buffers.some((b) => b.label === 'core quad index')).toBe(true);
+  });
+
   it('keeps hidden bits and removals across a restore', () => {
     const s = scene(5, 1, { cull: 'cpu' });
     const set = s.sets[0]!;

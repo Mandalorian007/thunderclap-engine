@@ -15,6 +15,7 @@ import {
 } from '../render/fake-gpu';
 import type { Frame } from '../render/frame';
 import { Renderer } from '../render/renderer';
+import { WGSL_GLOBALS } from '../render/wgsl';
 import { createBillboards } from './billboard';
 import { BILLBOARD_WGSL, billboardWgsl } from './billboard-wgsl';
 import { ParticleSystem } from './particles';
@@ -133,6 +134,23 @@ describe('ws/render-11: billboards write their own motion', () => {
       }
     });
   }
+
+  it('the motion build edits the trimmed shader the published build ships (ws/size-pass)', () => {
+    // scripts/wgsl-trim.mjs drops comments and each line's indentation; WGSL_GLOBALS is its own
+    // trimmed constant there, so it stays as the anchor finds it.
+    const trim = (t: string) =>
+      t
+        .split('\n')
+        .map((l) => l.replace(/\/\/.*$/, '').trim())
+        .join('\n');
+    const at = BILLBOARD_WGSL.indexOf(WGSL_GLOBALS);
+    const end = at + WGSL_GLOBALS.length;
+    const base = trim(BILLBOARD_WGSL.slice(0, at)) + WGSL_GLOBALS + trim(BILLBOARD_WGSL.slice(end));
+    expect(base.length).toBeLessThan(BILLBOARD_WGSL.length);
+    for (const v of [2, 3]) {
+      expect(trim(billboardWgsl(v, base))).toBe(trim(billboardWgsl(v)));
+    }
+  });
 
   it('without a velocity attachment it keeps the masked pipeline and writes no prev buffer', () => {
     const { fake, bb, cam } = billboards();

@@ -563,6 +563,23 @@ export class RenderCore {
   }
 
   /**
+   * The core's shared quad index buffer (`uint32`, `0 1 2 0 2 3` per quad, see `quadIndices`),
+   * holding at least `quads` quads: a game's own quad meshes draw from it with a base vertex
+   * instead of keeping their own copy (ws/size-pass, Forge's ask). It grows by doubling and never
+   * shrinks; the buffer it returns is replaced when it grows or after `restore`, so ask again
+   * each frame (or when `quadIndexVersion` changes) rather than keeping it. Draw sets use the
+   * same buffer.
+   */
+  quadIndices(quads: number): GPUBuffer {
+    return this.quads.ensure(quads);
+  }
+
+  /** Bumped each time `quadIndices`' buffer is replaced (it grew, or the device was restored). */
+  get quadIndexVersion(): number {
+    return this.quads.version;
+  }
+
+  /**
    * Rebuild everything the core owns on `device`, after the old one was lost (D1 §3, device
    * loss). The rebuild list: the core's view buffers, layouts and cull pipeline; every arena made
    * through `createArena` (each block again, the same size, every allocation still valid, the

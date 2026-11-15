@@ -7,6 +7,7 @@
 import { createGame } from '@thunderclap-engine/engine';
 import { recipes } from '@thunderclap-engine/engine/audio';
 import { createTouchZones } from '@thunderclap-engine/engine/input';
+import { withParticles } from '@thunderclap-engine/engine/kit';
 import { createTweens } from '@thunderclap-engine/engine/tween';
 import { type Action, bindings, buttonKeys, type GameCtx, type Run, touchZones } from './ctx';
 import { createProgressStore, type ProgressStore, START_LIVES } from './save/schema';
@@ -27,7 +28,7 @@ const engine = await createGame<Action, ProgressStore, GameCtx>({
   design: { width: 1920, height: 1080 },
   save: (host) => createProgressStore({ host }),
   input: { bindings, buttonKeys },
-  particles: { capacity: 2048 },
+  particles: withParticles({ capacity: 2048 }),
 });
 
 if (engine) {
