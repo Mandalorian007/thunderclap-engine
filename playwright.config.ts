@@ -112,6 +112,7 @@ export const WEBKIT_SPECS = [
   'demos/showroom',
   'stereo',
   'xr',
+  'pass-cost',
   'audio4',
 ];
 const webkitMatch = new RegExp(`(^|/)e2e/(${WEBKIT_SPECS.join('|')})\\.spec\\.ts$`);

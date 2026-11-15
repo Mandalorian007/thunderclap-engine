@@ -571,6 +571,13 @@ export interface PostQuality {
   autoExposure: boolean;
   /** Allow camera motion blur; `false` (the low and XR tiers) keeps it off. */
   motionBlur: boolean;
+  /**
+   * TAA writes its aux history (velocity and depth, for velocity rejection) beside its colour
+   * (ws/pass-cost). Default true. `false` (the low tier) resolves into one target: half the
+   * resolve's stores and no aux pair allocated; velocity reprojection still runs, but history
+   * is never dropped where depth or velocity disagree.
+   */
+  taaAux?: boolean;
 }
 
 export function defaultPostQuality(): PostQuality {
@@ -592,7 +599,8 @@ export function defaultPostQuality(): PostQuality {
 
 /**
  * The low tier's caps: fewer bloom levels, samples and octaves; no FXAA, outline, SSR or
- * motion-blur pass. TAA and auto-exposure stay (cheap, and TAA replaces FXAA).
+ * motion-blur pass. TAA and auto-exposure stay (cheap, and TAA replaces FXAA); TAA writes one
+ * target (`taaAux: false`).
  */
 export function lowPostQuality(): PostQuality {
   return {
@@ -608,6 +616,7 @@ export function lowPostQuality(): PostQuality {
     ssr: false,
     autoExposure: true,
     motionBlur: false,
+    taaAux: false,
   };
 }
 

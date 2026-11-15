@@ -250,8 +250,10 @@ interface CorePass {
     readonly reversedZ: boolean;
     readonly depthClear: number;
     readonly coreTargets: boolean;
+    readonly targetMask: number;
     readonly when: (() => boolean) | null;
     readonly encode: ((pass: GPURenderPassEncoder, ctx: CorePassContext) => void) | null;
+    readonly encodeWhen: (() => boolean) | null;
     readonly resolve: ((encoder: GPUCommandEncoder, ctx: CoreResolveContext) => void) | null;
 }
 
@@ -1153,6 +1155,8 @@ interface PassDesc {
     reversedZ?: boolean;
     depthClear?: number;
     coreTargets?: boolean;
+    writes?: readonly CoreTargetName[];
+    encodeWhen?: () => boolean;
 }
 
 ## PassList

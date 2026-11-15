@@ -17,10 +17,11 @@ import { PostStack } from './post-stack';
 import {
   cinematicPostSettings,
   defaultPostQuality,
+  lowPostQuality,
   POST_UNIFORM_FLOATS,
   packPostUniforms,
 } from './settings';
-import { TAA_WGSL, taaRejects } from './taa';
+import { TAA_WGSL, taaRejects, taaWgsl } from './taa';
 
 function setup(aux?: SceneTargetAux) {
   const fake = createFakeDevice();
@@ -149,5 +150,31 @@ describe('post 5: TAA velocity reprojection (ws/post-5)', () => {
     expect(TAA_WGSL).toContain('var puv = in.uv - vel;');
     expect(TAA_WGSL).toMatch(/textureSampleLevel\(velocityTex, nearest, nearUv/);
     expect(TAA_WGSL).toMatch(/@location\(1\) aux/);
+  });
+
+  it('one-output TAA (quality.taaAux false, ws/pass-cost): one target, no aux pair', () => {
+    expect(lowPostQuality().taaAux).toBe(false);
+    expect(defaultPostQuality().taaAux).toBeUndefined();
+    const one = taaWgsl(false);
+    expect(one).not.toMatch(/@location\(1\)/);
+    expect(one).toContain('return TaaOut(vec4f(out, 1.0));');
+    expect(one).toContain('if (false) {');
+    expect(taaWgsl(true)).toBe(TAA_WGSL);
+    const { fake, r, post, camera } = setup({ velocity: true });
+    post.setQuality({ taaAux: false });
+    deep(r, camera);
+    deep(r, camera, 1 / 60);
+    expect(post.taaVelocityActive).toBe(true);
+    const pass = lastPass(fake, 'post-taa-1')!;
+    expect(targets(pass)).toHaveLength(1);
+    expect(targets(pass)[0]).toMatch(/^post-taa-history-/);
+    expect(groupViews(fake, pass)).toContain('scene-velocity');
+    expect(fake.textures.some((t) => t.label?.startsWith('post-taa-aux-'))).toBe(false);
+    // Back to two outputs: the aux pair comes, and the history starts over.
+    const resets = post.historyResets;
+    post.setQuality({ taaAux: true });
+    deep(r, camera, 2 / 60);
+    expect(targets(lastPass(fake, 'post-taa')!)).toHaveLength(2);
+    expect(post.historyResets).toBe(resets + 1);
   });
 });
