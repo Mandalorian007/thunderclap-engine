@@ -18,6 +18,7 @@ import { createVoxelHit } from './ray';
 import { RAY_HIT } from './section-ray';
 import { SectionVisibility } from './visibility';
 import { createVoxelWorld, type VoxelWorld } from './world';
+import { VOXEL_DEFAULT_FRAGMENT } from './world-shaders';
 
 const AIR = 0;
 const STONE = 1;
@@ -438,8 +439,8 @@ describe('voxel world casters (ws/forge-asks-fit)', () => {
     for (const materials of [
       undefined,
       {
-        foliage: { shadowFragmentEntry: 'fs' },
-        liquid: { castShadow: true },
+        foliage: { fragment: VOXEL_DEFAULT_FRAGMENT.foliage, shadowFragmentEntry: 'fs' },
+        liquid: { fragment: VOXEL_DEFAULT_FRAGMENT.liquid, castShadow: true },
       },
     ]) {
       const fake = createFakeDevice();

@@ -64,11 +64,11 @@ function frame(
   dev.queue.submit([enc.finish()]);
 }
 
-function scene(core: RenderCoreOptions = {}, opts: ActorSystemOptions = {}) {
+function scene(core: RenderCoreOptions = {}, opts: Partial<ActorSystemOptions> = {}) {
   const fake = createFakeDevice();
   const made = recordPipelines(fake);
   const c = createRenderCore(fake.device as unknown as GPUDevice, core);
-  const actors = createActorSystem(c, { slots: 8, actorVertices: 6, ...opts });
+  const actors = createActorSystem(c, { actorVertices: 6, ...opts, slots: opts.slots ?? 8 });
   actors.addModel(rig());
   return { fake, made, core: c, actors };
 }
