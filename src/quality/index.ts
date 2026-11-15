@@ -26,5 +26,8 @@ export {
   QUALITY_TIERS,
   type QualityTier,
   readDevice,
+  startsLean,
+  TIER_FEATURES,
   type TierChoice,
+  type TierFeatures,
 } from './tier';

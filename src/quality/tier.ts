@@ -148,3 +148,41 @@ export function detectTier(device: DeviceInfo = readDevice()): TierChoice {
     reason: `high: ${seen}. Nothing says it can't keep up${gpu ? '' : " (the GPU isn't known yet)"}.`,
   };
 }
+
+/**
+ * What a tier draws of the features that cost a tiler the most (ws/e24-gpu): the sun's shadow
+ * map, actors in it, and the anti-aliasing. Engine defaults a game may follow or override; each
+ * maps to one of its settings and, where it can be shed, one of its governor's knobs.
+ */
+export interface TierFeatures {
+  /** The sun's shadow map (a depth pass of every caster in the light's box). */
+  readonly sunShadows: boolean;
+  /** Actors (characters, creatures) cast into the sun's shadow map. */
+  readonly actorShadows: boolean;
+  /** `'taa'`: temporal (a history target and a velocity target); `'fxaa'`: one fast pass. */
+  readonly antialias: 'taa' | 'fxaa';
+}
+
+/**
+ * The tiers' features (ws/e24-gpu). Low and medium draw what a frame without them cost: no sun
+ * shadows and FXAA, measured on Forge Wilds' iPad profile (WebKit, 2360×1640) at about 2.4 ms of
+ * GPU for the shadow pass and 0.7 ms for TAA over FXAA, and a frame at 60 fps without them where
+ * it ran at 30 with them. High draws them all.
+ */
+export const TIER_FEATURES: Readonly<Record<QualityTier, TierFeatures>> = {
+  low: { sunShadows: false, actorShadows: false, antialias: 'fxaa' },
+  medium: { sunShadows: false, actorShadows: false, antialias: 'fxaa' },
+  high: { sunShadows: true, actorShadows: true, antialias: 'taa' },
+};
+
+/**
+ * Whether a device should start with its costliest features shed (ws/e24-gpu): a WebKit touch
+ * device (an iPad, an iPhone), whose tiler GPU shares the chip's memory and power and whose
+ * WebGPU has no timestamp queries for the governor to read. The tier stays what `detectTier`
+ * said; the game sheds the first knobs of its governor's `order` at the start
+ * (`governor.set(n)`) and the governor gives them back one at a time after clean spells, so a
+ * device that can afford them gets them without the player raising a setting.
+ */
+export function startsLean(device: DeviceInfo): boolean {
+  return device.webkit && (device.ipad || device.phone) && !device.headset;
+}

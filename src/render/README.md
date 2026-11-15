@@ -1371,6 +1371,17 @@ of their own and call `core_sun_shadow(world)` from `coreSunShadowWgsl(group)`: 
 as `engine_shadow`, its matrix moved to the core's frame origin. One map, as the renderer's: a
 cascade per `CullGroup` view (`planes: 'each'`) is what `drawShadow`'s view index is for.
 
+**Shadow cull (ws/e24-gpu).** `RenderCoreOptions.shadowCull: 'cpu'`: `drawShadow` tests a
+GPU-culled caster's slots against the light's planes on the CPU and draws only those inside,
+directly (`stats.shadowDraws` counts them, also in `directDraws`). `'gpu'`, the default,
+executes the set's bundle as before, an indirect draw per live slot, so the call count stays
+flat in the world's size (the S4 bar) and Chromium, where those draws are cheap, is unchanged. A light's box holds a small share of a
+big set's slots, and an indirect draw of a culled slot is not free: on WebKit each is validated
+and replayed. Forge Wilds' iPad profile drew at 33 ms a frame with its sun's shadow through the
+bundles and at 17 ms with the CPU cull (shadow pass 2.4 ms of GPU to 0.6 ms). The same slots
+draw in the same order either way, so the map is the same; `'cpu'` costs a sphere test per live
+caster per frame and a draw call per caster in the light. Pass `'cpu'` on WebKit.
+
 **Resolve passes (ws/core-passes).** A pass with `resolve(encoder, ctx)` instead of `encode` is
 post-processing in the pass list: per view, when the `CoreTarget` has an `output`, the core
 hands it (a `CoreResolveContext`) the colour drawn so far, the view's depth (the core's own is then made sampleable),

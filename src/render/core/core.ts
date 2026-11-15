@@ -124,6 +124,17 @@ export interface RenderCoreOptions {
    * after one, its `CoreShadowTarget.format`). Default `'depth32float'`.
    */
   shadowFormat?: GPUTextureFormat;
+  /**
+   * How `drawShadow` culls a GPU-culled caster (ws/e24-gpu). `'gpu'` (the default): the set's
+   * bundle, an indirect draw per live slot whose count the GPU cull writes, the same few calls
+   * whatever the world's size. `'cpu'`: the light's planes are tested on the CPU and only the
+   * casters inside are drawn, directly (pass it on WebKit; see `startsLean`). A light's box
+   * holds a small share of a big set's slots, and an indirect draw of a culled slot is not free:
+   * on WebKit (Metal) each one is validated and replayed, which cost Forge Wilds' iPad profile
+   * half its frame rate (33 ms frames for 17). The same slots draw either way, so the map is
+   * the same; `'cpu'` costs a sphere test per live caster per frame on the main thread.
+   */
+  shadowCull?: 'cpu' | 'gpu';
 }
 
 /**
@@ -239,6 +250,7 @@ function newStats(): CoreStats {
     bundleCalls: 0,
     deferredBuilds: 0,
     warmed: 0,
+    shadowDraws: 0,
   };
 }
 
@@ -293,6 +305,7 @@ export class RenderCore {
   private readonly autoWarm: boolean;
   /** The format idle casters warm in (`RenderCoreOptions.shadowFormat`, then the last shadow target's). */
   private shadowFormat: GPUTextureFormat;
+  private readonly shadowCpu: boolean;
   /** Per prepared view: its cull group; per group: its first view and count. */
   private readonly groupOf = new Int32Array(MAX_VIEWS);
   private readonly groupFirst = new Int32Array(MAX_VIEWS);
@@ -402,6 +415,7 @@ export class RenderCore {
     this.warmerNow = pipelineWarmer(device);
     this.autoWarm = opts.warm ?? true;
     this.shadowFormat = opts.shadowFormat ?? 'depth32float';
+    this.shadowCpu = opts.shadowCull === 'cpu';
     this.multiDrawOpt = opts.multiDraw ?? true;
     this.capsNow = this.capsOf(device);
     this.maxViews = Math.max(1, Math.min(opts.maxViews ?? MAX_VIEWS, MAX_VIEWS));
@@ -845,6 +859,7 @@ export class RenderCore {
     st.slotBytes = 0;
     st.deferredBuilds = 0;
     st.warmed = 0;
+    st.shadowDraws = 0;
     this.frame++;
     this.flushWarm(encoder);
     this.viewsPrepared = n;
@@ -1466,9 +1481,15 @@ export class RenderCore {
     st.passes++;
     const bundles = this.bundleList;
     while (bundles.length > 0) bundles.pop();
+    const draws = st.directDraws;
     for (let i = 0; i < sets.length; i++) {
       const s = sets[i]!;
       if (!s.castShadow || s.count === 0 || !s.ready || !s.inView(group)) continue;
+      if (this.shadowCpu && s.cpuCullable()) {
+        if (bundles.length > 0) this.flushBundles(enc);
+        s.encodeCulled(enc, group, null, target.format);
+        continue;
+      }
       if (s.encoding() === 'bundle') {
         bundles.push(s.bundle(group, null, target.format, false, 0));
         continue;
@@ -1477,6 +1498,7 @@ export class RenderCore {
       s.encodeDirect(enc, group, null, target.format, 0);
     }
     if (bundles.length > 0) this.flushBundles(enc);
+    st.shadowDraws += st.directDraws - draws;
     enc.end();
     st.calls++;
   }

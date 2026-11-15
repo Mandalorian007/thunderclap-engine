@@ -32,16 +32,21 @@ console.log(tier, reason, governor.line, shadows);
 | `createGovernor(options?)` | the frame governor; `frame(...)` once per drawn frame |
 | `Knob` | something the governor may turn down: `{ name, step(down), cost? }` |
 | `toggleKnob`, `stepKnob`, `dynamicResolutionKnob` | ready knobs: on/off, a number between limits, a `DynamicResolution` scale |
+| `TIER_FEATURES`, `startsLean(device)` | what each tier draws of the sun's shadows, actor shadows and anti-aliasing; whether a device starts with those shed |
 
 ## Tier
 
 - `readDevice(gpu = null)` returns `DeviceInfo`: `touch`, `ipad` (an iPad that says it is a Mac), `phone`, `webkit`, `cores` (`hardwareConcurrency`), `headset` (`headsetBrowser(userAgent)`: Quest, Pico, Wolvic), `automated` (`navigator.webdriver`) and `gpu`. `gpuInfo(adapter)` reads a `GPUAdapter` (or any `AdapterLike`) into `GpuInfo`: its `description`, `fallback` and `maxTexture`.
 - `detectTier(device)` in order: a fallback (software) adapter, a headset or an Adreno GPU → `low`; a `maxTexture` under 8192, or two honest cores on a non-WebKit browser → `medium`; else `high`. `reason` says which rule decided, for a debug overlay. A game maps the tier to its own settings, and lets the player override it.
+- `TIER_FEATURES[tier]` (ws/e24-gpu): `{ sunShadows, actorShadows, antialias }`, the engine's defaults for the features a tiler pays most for. `low` and `medium`: no sun or actor shadows, `'fxaa'`; `high`: all of them, `'taa'`. Measured on Forge Wilds' iPad profile (WebKit, 2360×1640): the sun's shadow pass about 2.4 ms of GPU and TAA 0.7 ms over FXAA.
+- `startsLean(device)` (ws/e24-gpu): true on a WebKit iPad or phone (no timestamp queries, a tiler sharing the chip's memory). The tier is not lowered; the game sheds the first knobs of its governor's `order` at the start (`governor.set(n)`), and the governor gives them back one at a time after 20 s clean spells, so a device with the headroom gets them back by itself.
 
 ## Governor
 
 - **Judging.** Frames are judged per window (`windowMs`, 2000). A frame is late when its interval is over 1.25 × `targetMs` (1000/60). A late frame whose main-thread time (`cpuMs`) took 0.6 of a target or more is the main thread's (a GC, streaming) and does not count: shedding GPU work would not help. A window whose average measured latency (less main-thread time) stayed under half a target had a GPU with time to spare, so its misses are someone else's (a capped rate, the compositor). With `cpuMisses: true` (ws/input-fit, default false) the main thread's late frames count as well, against the same `downShare` and whatever the latency said, for a game whose knobs cut main-thread work (a draw distance, meshing); each shed then records its `cause` (`'gpu'` or `'cpu'`). Intervals over 250 ms (a hidden tab, a stall) start the window over; windows of under 10 frames say nothing. No GPU timestamps are needed (WebKit has none).
 - **Stepping.** Over `downShare` (10%) of a window's frames late for the GPU: one step down on the cheapest knob that can still step (lowest `cost`, ties in registration order). After `upAfterMs` (20 s) under `upShare` (1%) late: the last step shed comes back (a LIFO stack, so a knob stepped three times comes back three times). At most one change per `minGapMs` (2 s) and `maxChanges` (4) per `rateWindowMs` (60 s). A step shed again `stickyFailures` (2) times within `stickyWithinMs` (2 min) of being restored stays shed `stickyForMs` (5 min).
+- **Order (ws/e24-gpu).** `order` (an option, and a settable property) lists knob names to shed first, in that order: the game's data, the sun's shadows first where they cost the most. Knobs not named follow by `cost`. Four changes a minute make it matter: Forge Wilds' sun shadows, fifth by cost, waited a minute at 33 ms frames behind four cheap knobs that did not help.
+- **GPU time (ws/e24-gpu).** `frame(now, interval, cpuMs, latencyMs, gpuMs)`: with timestamp queries, the frame's GPU ms. A window averaging three quarters of a target or more is the GPU's whatever the latency said (no veto); with GPU times, a step comes back only when the clean spell's GPU averaged under three quarters of a target (headroom). Without them (WebKit) late frames judge as before.
 - **Reading.** `shed` (steps shed now), `knobs` (in stepping order), `stack` (one entry per step), `changes` (the last 16, `{ at, shed, knob, dir, cause? }`) and `line` (one line for an overlay, `governor: full quality` when nothing is shed). `frame()` returns the change it made, or `null`.
 - **Knobs come and go.** `register(knob)` returns a remover that first restores every step that knob gave up. `set(count, now?)` sheds or restores to `count` steps at once (tests, a dev console). `enabled = false` stops judging; `targetMs` may change when the display's rate becomes known.
 - Pure and allocation-free per frame (a change allocates its record): the caller passes the clock, so it runs on synthetic traces (`governor.test.ts`, `harness/quality.html`).
@@ -54,7 +59,7 @@ console.log(tier, reason, governor.line, shadows);
 
 ## Types
 
-`QUALITY_TIERS` (`['low', 'medium', 'high']`), `QualityTier`, `TierChoice` (`{ tier, reason }`), `DeviceInfo`, `GpuInfo`, `AdapterLike`; `GovernorOptions` (the defaults above), `Governor`, `GovernorChange`, `Knob`; `StepKnobOptions`, `DynamicResolutionKnobOptions`.
+`QUALITY_TIERS` (`['low', 'medium', 'high']`), `QualityTier`, `TierChoice` (`{ tier, reason }`), `TierFeatures`, `DeviceInfo`, `GpuInfo`, `AdapterLike`; `GovernorOptions` (the defaults above), `Governor`, `GovernorChange`, `Knob`; `StepKnobOptions`, `DynamicResolutionKnobOptions`.
 
 ## Demo
 
