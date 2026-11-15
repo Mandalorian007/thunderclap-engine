@@ -298,6 +298,13 @@ interface CoreResolveContext {
     reversedZ: boolean;
 }
 
+## CoreSceneRead  (type-only)
+interface CoreSceneRead {
+    readonly layout: GPUBindGroupLayout;
+    readonly group: GPUBindGroup;
+    readonly version: number;
+}
+
 ## CoreShadowMap
 class CoreShadowMap implements CoreShadowSource {
     readonly sampler: GPUSampler;
@@ -473,6 +480,9 @@ class DrawSet {
     readonly order: number;
     readonly depth: boolean;
     readonly castShadow: boolean;
+    readonly readsDepth: boolean;
+    readonly readsColor: boolean;
+    readonly sceneGroup: number;
     maxDistance: number;
     enabled: boolean;
     cullGroups: number;
@@ -532,6 +542,8 @@ interface DrawSetDesc {
         layout: GPUBindGroupLayout;
         group: GPUBindGroup;
     }[];
+    readsDepth?: boolean;
+    readsColor?: boolean;
     args?: GPUBuffer;
     argsStride?: number;
     indexed?: boolean;
@@ -1310,6 +1322,7 @@ class RenderCore {
     get sceneDepthView(): GPUTextureView | null;
     get sceneColorView(): GPUTextureView | null;
     get targetsVersion(): number;
+    get sceneRead(): CoreSceneRead;
     definePass(desc: PassDesc): CorePass;
     get drawSets(): readonly DrawSet[];
     get depth(): GPUTexture | null;
@@ -2041,6 +2054,9 @@ function coreDepthCompare(reversedZ: boolean, orEqual?: boolean): GPUCompareFunc
 
 ## coreDepthFar
 function coreDepthFar(reversedZ: boolean): number;
+
+## coreSceneReadWgsl
+function coreSceneReadWgsl(group: number): string;
 
 ## coreSunShadowWgsl
 function coreSunShadowWgsl(group: number): string;

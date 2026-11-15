@@ -1674,6 +1674,23 @@ forward renderer. `CoreSunShadow` takes any `CoreShadowSource` (`generation`, `v
 `sampler`, `uniforms`). `core_sun_shadow` returns 1 (lit) before the divide when
 `params.z` is 0 (shadows off).
 
+### Scene reads (ws/scene-read-fit)
+
+`core.sceneRead` (`CoreSceneRead`) is one bind group over the scene as the passes before left
+it: `core.sceneDepthView` at binding 0 (`texture_depth_2d`) and the colour copy
+`core.sceneColorView` at binding 1 (`texture_2d<f32>`, unfilterable). A view the core has not
+made is a 1×1 stand-in (`textureDimensions(...).x == 1`). The group is re-made when
+`core.targetsVersion` moves (a resize, the first copy, a device restore); read `group` at bind
+time.
+
+A draw set with `DrawSetDesc.readsDepth` or `readsColor` reads it: the core keeps its depth
+sampleable or copies the target's colour (the target passes its `texture` with `COPY_SRC`), the
+group is bound after the set's own (`DrawSet.sceneGroup` = 1 + its `bindGroups`, −1 for a set
+that reads nothing) and declared in its prelude as `core_scene_depth` and `core_scene_color`
+(`coreSceneReadWgsl(group)` for a drawable's own WGSL), and its bundles are recorded again when
+the group is re-made. A set that reads depth may not draw in a depth-writing pass, and a set that
+reads either casts no shadow. `Water.look()` (fx) is built on it.
+
 ### Fitting a voxel game's renderer (ws/render-fit)
 
 All of these are off by default. Without them the core draws exactly as before.

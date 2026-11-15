@@ -64,6 +64,25 @@ export interface BlockDef {
    */
   partsReplace?: boolean;
   /**
+   * A `cross` block that stands in a liquid (ws/scene-read-fit): the id of that `liquid` block.
+   * Its cell meshes as the liquid (faces into the liquid stream, the liquid's light cost) and its
+   * quads still go into the foliage stream. Default none.
+   */
+  liquid?: number;
+  /**
+   * A `cross` block that also emits a far patch (ws/scene-read-fit): one more quad, with the
+   * `far` vertex field set and `quad` after its own quads, in a cell whose cell above holds a
+   * different block (a strand's top). It is emitted at every `leafLod`, alone where the block's
+   * quads are not (past `SectionMeshOptions.crossLod`), so the game's shader can keep a bed
+   * readable from afar. Default false.
+   */
+  farPatch?: boolean;
+  /**
+   * Counts as a neighbour for a cell field's `fromNeighbours` (ws/scene-read-fit), and has its
+   * own cells' field derived from its neighbours. Default false.
+   */
+  axial?: boolean;
+  /**
    * The game's vertex fields with a constant value for this block (names from its
    * `VertexSchema`), written into every vertex the block emits. Faces of blocks with different
    * values never merge; they are different ids anyway.
@@ -103,6 +122,12 @@ export interface BlockTable {
   readonly parts?: Uint8Array;
   /** 1 where the parts replace the block's quads (`BlockDef.partsReplace`). Optional: none. */
   readonly partsReplace?: Uint8Array;
+  /** The `liquid` id a `cross` block stands in (`BlockDef.liquid`), −1 for none. Optional: none. */
+  readonly liquidOf?: Int32Array;
+  /** 1 for a `cross` block with `farPatch`. Optional: none. */
+  readonly farPatch?: Uint8Array;
+  /** 1 for an `axial` block. Optional: none. */
+  readonly axial?: Uint8Array;
   /** `LIGHT_HUES²` entries, `a * LIGHT_HUES + b`, `NO_HUE_MIX` for none. */
   readonly hueMix: Uint8Array;
   /** Whether any block gives off light (a world without emitters skips the block light flood). */
@@ -141,6 +166,9 @@ export function defineBlockTable(
   const lodSolid = new Uint8Array(n);
   const parts = new Uint8Array(n);
   const partsReplace = new Uint8Array(n);
+  const liquidOf = new Int32Array(n).fill(-1);
+  const farPatch = new Uint8Array(n);
+  const axial = new Uint8Array(n);
   const fields: (Readonly<Record<string, number>> | null)[] = [];
   let emissive = false;
   for (let id = 0; id < n; id++) {
@@ -168,6 +196,17 @@ export function defineBlockTable(
       throw new RangeError(`block ${id}: parts are for cross blocks`);
     }
     partsReplace[id] = b.partsReplace ? 1 : 0;
+    if ((b.liquid !== undefined || b.farPatch) && b.class !== 'cross') {
+      throw new RangeError(`block ${id}: liquid and farPatch are for cross blocks`);
+    }
+    if (b.liquid !== undefined) {
+      const l = clampInt(b.liquid, 0, n - 1, `block ${id} liquid`);
+      if (blocks[l].class !== 'liquid')
+        throw new RangeError(`block ${id}: liquid ${l} is not a liquid block`);
+      liquidOf[id] = l;
+    }
+    farPatch[id] = b.farPatch ? 1 : 0;
+    axial[id] = b.axial ? 1 : 0;
     fields.push(b.fields ? { ...b.fields } : null);
   }
   const hueMix = new Uint8Array(LIGHT_HUES * LIGHT_HUES).fill(NO_HUE_MIX);
@@ -189,6 +228,9 @@ export function defineBlockTable(
     lodSolid,
     parts,
     partsReplace,
+    liquidOf,
+    farPatch,
+    axial,
     hueMix,
     emissive,
     fields,
@@ -220,4 +262,16 @@ export interface CellField {
   shift: number;
   bits: number;
   fromFacing?: boolean;
+  /**
+   * Derive the value from the neighbours (ws/scene-read-fit), in the cells of `axial` blocks
+   * whose own value is `when`: `y` when an `axial` block is over or under the cell, else `x`
+   * when one is beside it along x, else `z` along z, else `y` (a log laid on its side faces
+   * along the logs next to it).
+   */
+  fromNeighbours?: {
+    readonly when: number;
+    readonly y: number;
+    readonly x: number;
+    readonly z: number;
+  };
 }

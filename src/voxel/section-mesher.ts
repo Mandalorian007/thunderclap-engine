@@ -67,6 +67,28 @@ export interface SectionMeshOptions {
    * yet). Names that are not cell fields are ignored. Default none.
    */
   insetFields?: Readonly<Record<string, number>>;
+  /**
+   * The highest `leafLod` cross blocks still mesh at (ws/scene-read-fit). Default 1: none at 2.
+   * A `farPatch` block's patch is emitted past it anyway.
+   */
+  crossLod?: number;
+  /**
+   * Count `lodSolid` foliage and cross blocks in the padding too for `SectionMesh.tiered`
+   * (ws/scene-read-fit): solid foliage beside the section hides its faces at `leafLod` 1 and up.
+   * Default false: the section's own cells only.
+   */
+  tieredPadding?: boolean;
+  /**
+   * Part quads a section emits at most (ws/scene-read-fit); the ones past it are dropped, the
+   * blocks' own quads never are. Default no cap.
+   */
+  partsCap?: number;
+  /**
+   * Where cross blocks' parts go in the foliage stream (ws/scene-read-fit): `'inline'` (default)
+   * after each block's own quads, `'after'` after every cross block's own quads (then
+   * `partsCap` drops the last cells' parts first).
+   */
+  partsOrder?: 'inline' | 'after';
 }
 
 /** Words per vertex. */
@@ -122,6 +144,8 @@ interface CellSlot {
   shift: number;
   mask: number;
   fromFacing: boolean;
+  /** `CellField.fromNeighbours`: when, y, x, z; null for none. */
+  nb: readonly [number, number, number, number] | null;
   /** The value `SectionMeshOptions.insetFields` gives cells `insets` names; −1: none. */
   over: number;
   word: 0 | 1;
@@ -140,6 +164,8 @@ export class SectionMesher {
   // Per padded cell.
   private readonly cls: Uint8Array;
   private readonly ids: Uint16Array;
+  /** A wet cross block's own id + 1 in a cell meshed as its liquid, else 0. */
+  private readonly wetId: Uint32Array;
   private readonly opq: Uint8Array;
   private readonly light: Uint8Array;
   private readonly blockLevel: Uint8Array;
@@ -173,6 +199,11 @@ export class SectionMesher {
   private readonly lodSolid: Uint8Array;
   private readonly parts: Uint8Array;
   private readonly partsReplace: Uint8Array;
+  private readonly liquidOf: Int32Array | null;
+  private readonly farPatch: Uint8Array;
+  private readonly axial: Uint8Array;
+  private crossLod = 1;
+  private tieredPadding = false;
   // Vertex fields.
   private readonly fx: VertexField | undefined;
   private readonly fy: VertexField | undefined;
@@ -189,6 +220,7 @@ export class SectionMesher {
   private readonly fSolid: VertexField | undefined;
   private readonly fPart: VertexField | undefined;
   private readonly fTwin: VertexField | undefined;
+  private readonly fFar: VertexField | undefined;
   /** Per block id: its constant game fields, already in place in each word. */
   private readonly blockW0: Uint32Array;
   private readonly blockW1: Uint32Array;
@@ -215,6 +247,7 @@ export class SectionMesher {
     const pv = P * P * P;
     this.cls = new Uint8Array(pv);
     this.ids = new Uint16Array(pv);
+    this.wetId = new Uint32Array(pv);
     this.opq = new Uint8Array(pv);
     this.light = new Uint8Array(pv);
     this.blockLevel = new Uint8Array(pv);
@@ -237,9 +270,14 @@ export class SectionMesher {
     this.lodSolid = tb.lodSolid ?? new Uint8Array(tb.count);
     this.parts = tb.parts ?? new Uint8Array(tb.count);
     this.partsReplace = tb.partsReplace ?? new Uint8Array(tb.count);
+    this.liquidOf = tb.liquidOf && tb.liquidOf.some((l) => l >= 0) ? tb.liquidOf : null;
+    this.farPatch = tb.farPatch ?? new Uint8Array(tb.count);
+    this.axial = tb.axial ?? new Uint8Array(tb.count);
     let perCell = 7;
     for (let id = 0; id < tb.count; id++) {
-      if (tb.faceClass[id] === CROSS) perCell = Math.max(perCell, tb.quads[id] + this.parts[id]);
+      if (tb.faceClass[id] === CROSS) {
+        perCell = Math.max(perCell, tb.quads[id] + this.parts[id] + this.farPatch[id]);
+      }
     }
     const maxQuads = S * S * S * 6;
     const words = 4 * SECTION_VERTEX_WORDS;
@@ -263,6 +301,7 @@ export class SectionMesher {
     this.fSolid = vertexField(v, 'solid');
     this.fPart = vertexField(v, 'part');
     this.fTwin = vertexField(v, 'twin');
+    this.fFar = vertexField(v, 'far');
     const blocks = format.blocks;
     this.blockW0 = new Uint32Array(blocks.count);
     this.blockW1 = new Uint32Array(blocks.count);
@@ -283,6 +322,9 @@ export class SectionMesher {
         shift: cf.shift,
         mask: cf.bits >= 32 ? 0xffffffff : (1 << cf.bits) - 1,
         fromFacing: cf.fromFacing === true,
+        nb: cf.fromNeighbours
+          ? [cf.fromNeighbours.when, cf.fromNeighbours.y, cf.fromNeighbours.x, cf.fromNeighbours.z]
+          : null,
         over: -1,
         name: cf.name,
         word: f.word,
@@ -304,6 +346,8 @@ export class SectionMesher {
     box[0] = box[1] = box[2] = S;
     box[3] = box[4] = box[5] = 0;
     this.lod = opts.leafLod ?? 0;
+    this.crossLod = opts.crossLod ?? 1;
+    this.tieredPadding = opts.tieredPadding === true;
     this.tiered = false;
     const cross = this.classifyAndLight(input);
     const overrides = opts.insets;
@@ -345,7 +389,8 @@ export class SectionMesher {
     const greedy = opts.greedy !== false;
     let faces = 0;
     for (let face = 0; face < 6; face++) faces += this.meshDirection(input.blocks, face, greedy);
-    if (cross && this.lod < 2) faces += this.meshCross(input.blocks);
+    if (cross)
+      faces += this.meshCross(input.blocks, opts.partsCap ?? -1, opts.partsOrder === 'after');
     if (this.overriding && overrides) {
       for (let k = 0; k + 1 < overrides.length; k += 2) {
         const i = overrides[k];
@@ -442,6 +487,9 @@ export class SectionMesher {
     const { blocks, heights, wetTops } = input;
     const { idShift, idMask, skyFalloff, liquidSkyFalloff } = this.format;
     const { faceClass, lightCost, inset } = this.format.blocks;
+    const liquidOf = this.liquidOf;
+    const wetId = this.wetId;
+    const padTiers = this.tieredPadding;
     const cellInset = this.insets;
     const lodSolid = this.lodSolid;
     const S = this.size;
@@ -458,35 +506,36 @@ export class SectionMesher {
       const wy = baseY + py;
       for (let pz = 0; pz < P; pz++) {
         for (let px = 0; px < P; px++, i++) {
-          const id = (blocks[i] >>> idShift) & idMask;
-          const c = faceClass[id] ?? OPAQUE;
+          let id = (blocks[i] >>> idShift) & idMask;
+          let c: number = faceClass[id] ?? OPAQUE;
+          cellInset[i] = c === CUTOUT || c === CROSS ? (inset[id] ?? 0) : 0;
+          let wet = 0;
+          if (liquidOf !== null && c === CROSS && liquidOf[id] >= 0) {
+            // A cross block in a liquid: the cell meshes as the liquid, its quads come after.
+            wet = id + 1;
+            id = liquidOf[id];
+            c = LIQUID;
+          }
+          wetId[i] = wet;
           ids[i] = id;
           cls[i] = c;
-          cellInset[i] = c === CUTOUT || c === CROSS ? (inset[id] ?? 0) : 0;
           if (c === OPAQUE) {
             opq[i] = 1;
             light[i] = 0;
             continue;
           }
           opq[i] = 0;
-          if (
-            (c === CROSS || (c === FOLIAGE && lodSolid[id] === 1)) &&
-            px > 0 &&
-            px <= S &&
-            py > 0 &&
-            py <= S &&
-            pz > 0 &&
-            pz <= S
-          ) {
-            this.tiered = true;
-            if (c === CROSS) cross = true;
+          if (c === CROSS || wet !== 0 || (c === FOLIAGE && lodSolid[id] === 1)) {
+            const inside = px > 0 && px <= S && py > 0 && py <= S && pz > 0 && pz <= S;
+            if (inside || padTiers) this.tiered = true;
+            if (inside && c !== FOLIAGE) cross = true;
           }
           const h = heights[px + pz * P];
           if (wy > h) {
             light[i] = 15;
           } else {
-            const wet = wetTops !== undefined && wetTops[px + pz * P] === 1 && c === LIQUID;
-            const v = 15 - (wet ? liquidSkyFalloff : skyFalloff) * (h - wy);
+            const wetTop = wetTops !== undefined && wetTops[px + pz * P] === 1 && c === LIQUID;
+            const v = 15 - (wetTop ? liquidSkyFalloff : skyFalloff) * (h - wy);
             light[i] = v > 0 ? v : 0;
             dim++;
           }
@@ -602,6 +651,8 @@ export class SectionMesher {
               const sl = slots[k];
               let val = (b >>> sl.shift) & sl.mask;
               if (sl.fromFacing && facingNone) val |= (blocks[n] >>> sl.shift) & sl.mask;
+              if (sl.nb !== null && val === sl.nb[0] && this.axial[id] === 1)
+                val = this.fromNeighbours(i, sl.nb);
               if (sl.over >= 0 && this.overridden[i] === 1) val = sl.over;
               const bits = ((val & sl.toMask) << sl.to) >>> 0;
               if (sl.word === 0) e0 |= bits;
@@ -876,72 +927,137 @@ export class SectionMesher {
     }
   }
 
-  /** Cross blocks: `quads` quads standing in the cell, lit by their own cell, never merged. */
-  private meshCross(blocks: Uint32Array): number {
+  /** A cell field's value from the `axial` blocks next to cell `i` (`CellField.fromNeighbours`). */
+  private fromNeighbours(i: number, nb: readonly [number, number, number, number]): number {
+    const ax = this.axial;
+    const ids = this.ids;
+    const PA = this.padArea;
+    const P = this.pad;
+    if (ax[ids[i + PA]] === 1 || ax[ids[i - PA]] === 1) return nb[1];
+    if (ax[ids[i + 1]] === 1 || ax[ids[i - 1]] === 1) return nb[2];
+    if (ax[ids[i + P]] === 1 || ax[ids[i - P]] === 1) return nb[3];
+    return nb[1];
+  }
+
+  /**
+   * Cross blocks: `quads` quads standing in the cell, lit by their own cell, never merged, then
+   * at full detail their `parts` (inline, or all after when `after`, at most `cap` with a cap ≥
+   * 0) and a `farPatch` block's patch at a strand's top.
+   */
+  private meshCross(blocks: Uint32Array, cap: number, after: boolean): number {
     const S = this.size;
     const P = this.pad;
     const PA = this.padArea;
     const quads = this.format.blocks.quads;
-    const { insets: cellInset, parts, partsReplace } = this;
+    const { parts, farPatch, wetId, ids } = this;
     const full = this.lod === 0;
-    const slots = this.cellSlots;
-    const out = this.outFoliage;
-    const vw = this.vw;
+    const own = this.lod <= this.crossLod;
     let n = 0;
-    for (let y = 0; y < S; y++) {
-      for (let z = 0; z < S; z++) {
-        for (let x = 0; x < S; x++) {
-          const i = this.base + x + z * P + y * PA;
-          if (this.cls[i] !== CROSS) continue;
-          const id = this.ids[i];
-          const b = blocks[i];
-          let e0 = id < this.blockW0.length ? this.blockW0[id] : 0;
-          let e1 = id < this.blockW1.length ? this.blockW1[id] : 0;
-          const over = this.overriding && this.overridden[i] === 1;
-          for (const sl of slots) {
-            const val = over && sl.over >= 0 ? sl.over : (b >>> sl.shift) & sl.mask;
-            const bits = ((val & sl.toMask) << sl.to) >>> 0;
-            if (sl.word === 0) e0 |= bits;
-            else e1 |= bits;
-          }
-          const l = this.light[i] * 4;
-          const bl = this.hasBlock ? this.blockLevel[i] * 2 : 0;
-          const hue = bl ? this.blockHue[i] : 0;
-          const count = quads[id] ?? 2;
-          const extra = full ? parts[id] : 0;
-          const twin = extra > 0 && partsReplace[id] === 1 ? 1 : 0;
-          const ins = cellInset[i];
-          for (let k = 0; k < count + extra; k++) {
-            let o = this.nFoliage++ * 4 * SECTION_VERTEX_WORDS;
-            for (let c = 0; c < 4; c++) {
-              const u = c === 1 || c === 2 ? 1 : 0;
-              const v = c >= 2 ? 1 : 0;
-              vw[0] = e0;
-              vw[1] = e1;
-              this.put(this.fx, x);
-              this.put(this.fy, y);
-              this.put(this.fz, z);
-              this.put(this.fFace, CROSS_FACE);
-              this.put(this.fAo, 3);
-              this.put(this.fSky, l);
-              this.put(this.fBlock, bl);
-              this.put(this.fId, id);
-              this.put(this.fSide, u | (v << 1));
-              this.put(this.fQuad, k);
-              this.put(this.fInset, ins);
-              this.put(this.fHue, hue);
-              if (k >= count) this.put(this.fPart, 1);
-              else if (twin) this.put(this.fTwin, 1);
-              out[o++] = vw[0];
-              out[o++] = vw[1];
+    // Pass −1: own quads and parts together; with `after`, pass 0 the own quads, pass 1 the parts.
+    for (let pass = after ? 0 : -1; pass < (after ? 2 : 0); pass++) {
+      let left = cap < 0 ? Number.MAX_SAFE_INTEGER : cap;
+      for (let y = 0; y < S; y++) {
+        for (let z = 0; z < S; z++) {
+          for (let x = 0; x < S; x++) {
+            const i = this.base + x + z * P + y * PA;
+            const w = wetId[i];
+            if (w === 0 && this.cls[i] !== CROSS) continue;
+            const id = w === 0 ? ids[i] : w - 1;
+            const count = quads[id] ?? 2;
+            const patch =
+              farPatch[id] === 1 && (w === 0 ? ids[i + PA] !== id : wetId[i + PA] !== w);
+            if (!own && !patch) continue;
+            let extra = full && own ? parts[id] : 0;
+            if (extra > left) extra = left;
+            left -= extra;
+            const twin = extra > 0 && this.partsReplace[id] === 1;
+            if (pass === 1) {
+              if (extra > 0)
+                n += this.crossQuads(
+                  blocks,
+                  i,
+                  id,
+                  x,
+                  y,
+                  z,
+                  count,
+                  count,
+                  count + extra,
+                  false,
+                  false,
+                );
+              continue;
             }
-            n++;
+            const to = pass === 0 ? count : count + extra;
+            n += this.crossQuads(blocks, i, id, x, y, z, count, own ? 0 : count, to, patch, twin);
+            this.stretch(x, y, z);
+            this.stretch(x + 1, y + 1, z + 1);
           }
-          this.stretch(x, y, z);
-          this.stretch(x + 1, y + 1, z + 1);
         }
       }
     }
     return n;
+  }
+
+  /** Quads `from..to` of a cross block in cell `i` (own below `count`, parts past it), then its far patch when `patch`. */
+  private crossQuads(
+    blocks: Uint32Array,
+    i: number,
+    id: number,
+    x: number,
+    y: number,
+    z: number,
+    count: number,
+    from: number,
+    to: number,
+    patch: boolean,
+    twin: boolean,
+  ): number {
+    const b = blocks[i];
+    const slots = this.cellSlots;
+    const out = this.outFoliage;
+    const vw = this.vw;
+    let e0 = id < this.blockW0.length ? this.blockW0[id] : 0;
+    let e1 = id < this.blockW1.length ? this.blockW1[id] : 0;
+    const over = this.overriding && this.overridden[i] === 1;
+    for (const sl of slots) {
+      const val = over && sl.over >= 0 ? sl.over : (b >>> sl.shift) & sl.mask;
+      const bits = ((val & sl.toMask) << sl.to) >>> 0;
+      if (sl.word === 0) e0 |= bits;
+      else e1 |= bits;
+    }
+    const l = this.light[i] * 4;
+    const bl = this.hasBlock ? this.blockLevel[i] * 2 : 0;
+    const hue = bl ? this.blockHue[i] : 0;
+    const ins = this.insets[i];
+    const end = patch ? to + 1 : to;
+    for (let k = from; k < end; k++) {
+      const far = patch && k === to;
+      let o = this.nFoliage++ * 4 * SECTION_VERTEX_WORDS;
+      for (let c = 0; c < 4; c++) {
+        const u = c === 1 || c === 2 ? 1 : 0;
+        const v = c >= 2 ? 1 : 0;
+        vw[0] = e0;
+        vw[1] = e1;
+        this.put(this.fx, x);
+        this.put(this.fy, y);
+        this.put(this.fz, z);
+        this.put(this.fFace, CROSS_FACE);
+        this.put(this.fAo, 3);
+        this.put(this.fSky, l);
+        this.put(this.fBlock, bl);
+        this.put(this.fId, id);
+        this.put(this.fSide, u | (v << 1));
+        this.put(this.fQuad, far ? count : k);
+        this.put(this.fInset, ins);
+        this.put(this.fHue, hue);
+        if (far) this.put(this.fFar, 1);
+        else if (k >= count) this.put(this.fPart, 1);
+        else if (twin) this.put(this.fTwin, 1);
+        out[o++] = vw[0];
+        out[o++] = vw[1];
+      }
+    }
+    return end - from;
   }
 }
