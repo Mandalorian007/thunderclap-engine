@@ -1,6 +1,6 @@
 // Interop with the section stream (crates/tc-stream): `createNet` over a real WebSocket fills
-// the voxel `SectionStore` from the stream's `Section`, `Edit` and `Unload` messages, and
-// resumes after a reconnect holding what it had. Run by `cargo test -p tc-stream --test
+// the voxel `SectionStore` from the stream's `Section`, `Edit`, `Unload` and `UnloadBox`
+// messages, and resumes after a reconnect holding what it had. Run by `cargo test -p tc-stream --test
 // interop` (or `pnpm test:stream-interop`), which starts the server and sets
 // TC_STREAM_INTEROP_URL; skipped otherwise.
 import { inflateRawSync } from 'node:zlib';
@@ -45,6 +45,7 @@ const streamSchema = () =>
           Section: { pos: 'SectionPos', stamp: 'Stamp', data: 'Bytes' },
           Edit: { pos: 'SectionPos', changes: { vec: 'u32' }, stamp: 'Stamp' },
           Unload: { positions: { vec: 'SectionPos' } },
+          UnloadBox: { min: 'SectionPos', max: 'SectionPos' },
         },
       },
     },
@@ -63,7 +64,8 @@ interface Stamp {
 type StreamMsg =
   | { type: 'Section'; pos: Pos; stamp: Stamp; data: Uint8Array }
   | { type: 'Edit'; pos: Pos; changes: number[]; stamp: Stamp }
-  | { type: 'Unload'; positions: Pos[] };
+  | { type: 'Unload'; positions: Pos[] }
+  | { type: 'UnloadBox'; min: Pos; max: Pos };
 
 /** Resolves once `test` holds, polling. */
 async function until(test: () => boolean, what: string, ms = 5000): Promise<void> {
@@ -97,7 +99,7 @@ describe.skipIf(!url)('tc-stream interop', () => {
     const store = createSectionStore({ format, codec: RAW_SECTION_CODEC });
     // What it holds, with stamps: its claims on a reconnect.
     const held = new Map<number, { pos: Pos; stamp: Stamp }>();
-    const seen = { sections: 0, edits: 0, welcomes: 0 };
+    const seen = { sections: 0, edits: 0, welcomes: 0, boxes: 0 };
     net.on('game', (value) => {
       const m = value as StreamMsg;
       if (m.type === 'Section') {
@@ -110,6 +112,12 @@ describe.skipIf(!url)('tc-stream interop', () => {
         store.edit(key, m.changes);
         held.set(key, { pos: m.pos, stamp: m.stamp });
         seen.edits++;
+      } else if (m.type === 'UnloadBox') {
+        const { min, max } = m;
+        const dropped: number[] = [];
+        store.dropBox(min.x, min.y, min.z, max.x, max.y, max.z, dropped);
+        for (const key of dropped) held.delete(key);
+        seen.boxes++;
       } else {
         for (const p of m.positions) {
           const key = sectionKey(p.x, p.y, p.z);
@@ -119,7 +127,7 @@ describe.skipIf(!url)('tc-stream interop', () => {
       }
     });
     net.on('welcome', () => seen.welcomes++);
-    const area = { center: { x: 0, y: 0, z: 0 }, rx: 1, ry: 1, rz: 1 };
+    let area = { center: { x: 0, y: 0, z: 0 }, rx: 1, ry: 1, rz: 1 };
     // Dropped: ask again holding everything (sent first on the next connection).
     net.on('down', () => net.setInterest({ area, holding: [...held.values()] }));
     await net.ready;
@@ -144,8 +152,17 @@ describe.skipIf(!url)('tc-stream interop', () => {
     // Nothing else follows.
     expect(await net.command('set 0 2 0 0 0')).toBe('ok');
     await new Promise((r) => setTimeout(r, 100));
-    expect(seen).toEqual({ sections: 28, edits: 1, welcomes: 2 });
+    expect(seen).toEqual({ sections: 28, edits: 1, welcomes: 2, boxes: 0 });
     expect(held.size).toBe(27);
+
+    // Away: what it left goes in an UnloadBox, and the store holds only the new area.
+    area = { ...area, center: { x: 10, y: 0, z: 0 } };
+    net.setInterest({ area, holding: [...held.values()] });
+    await until(() => seen.sections === 28 + 27 && held.size === 27, 'the new area');
+    expect(seen.boxes).toBeGreaterThanOrEqual(1);
+    expect(store.stats().sections).toBe(27);
+    expect(store.cellAt(0, 0, 0)).toBe(undefined);
+    expect(store.cellAt(10 * SIZE, 0, 0)).toBe(1);
     net.close();
   });
 });

@@ -165,6 +165,18 @@ export interface VoxelWorld {
   putSection(sx: number, sy: number, sz: number, bytes: Uint8Array): void;
   /** Forget a section and its geometry. */
   dropSection(sx: number, sy: number, sz: number): void;
+  /**
+   * Forget every section held in the box from section (minX, minY, minZ) to (maxX, maxY,
+   * maxZ), inclusive (a stream's `UnloadBox`), and their geometry. Returns how many.
+   */
+  dropBox(
+    minX: number,
+    minY: number,
+    minZ: number,
+    maxX: number,
+    maxY: number,
+    maxZ: number,
+  ): number;
   /** Set cells of one section (`SectionStore.edit`); the changed sections mesh again. */
   edit(key: number, changes: ArrayLike<number>): number[];
   /** The point (world blocks) meshing and the visibility area centre on: usually the camera. */
@@ -499,6 +511,22 @@ export function createVoxelWorld(core: RenderCore, opts: VoxelWorldOptions): Vox
   let readyLeft = true;
   let lastNow = 0;
 
+  /** A dropped section's jobs, geometry and visibility. */
+  function forget(key: number): void {
+    const sx = sectionKeyX(key);
+    const sy = sectionKeyY(key);
+    const sz = sectionKeyZ(key);
+    pool.cancel(key);
+    pending.delete(key);
+    const sec = sections.get(key);
+    if (sec) {
+      freeSlots(sec);
+      if (sec.origin) instances.free(sec.origin);
+      sections.delete(key);
+    }
+    visibility.clear(sx, sy, sz);
+  }
+
   const world: VoxelWorld = {
     format,
     store,
@@ -515,15 +543,14 @@ export function createVoxelWorld(core: RenderCore, opts: VoxelWorldOptions): Vox
       const key = sectionKey(sx, sy, sz);
       if (store.has(key)) held--;
       store.dropSection(key);
-      pool.cancel(key);
-      pending.delete(key);
-      const sec = sections.get(key);
-      if (sec) {
-        freeSlots(sec);
-        if (sec.origin) instances.free(sec.origin);
-        sections.delete(key);
-      }
-      visibility.clear(sx, sy, sz);
+      forget(key);
+    },
+    dropBox(minX, minY, minZ, maxX, maxY, maxZ) {
+      const dropped: number[] = [];
+      store.dropBox(minX, minY, minZ, maxX, maxY, maxZ, dropped);
+      held -= dropped.length;
+      for (const key of dropped) forget(key);
+      return dropped.length;
     },
     edit(key, changes) {
       readyLeft = true;

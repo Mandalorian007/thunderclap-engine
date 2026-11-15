@@ -102,6 +102,8 @@ pub struct Client {
     pub sections: usize,
     pub edits: usize,
     pub unloaded: usize,
+    /// `UnloadBox`es applied.
+    pub boxes: usize,
 }
 
 impl Client {
@@ -140,6 +142,12 @@ impl Client {
                         self.unloaded += 1;
                     }
                 }
+                StreamMsg::UnloadBox { min, max } => {
+                    let before = self.held.len();
+                    self.held.retain(|p, _| !p.within(&min, &max));
+                    self.unloaded += before - self.held.len();
+                    self.boxes += 1;
+                }
             }
         }
     }
@@ -158,6 +166,7 @@ impl Client {
         self.sections = 0;
         self.edits = 0;
         self.unloaded = 0;
+        self.boxes = 0;
     }
 }
 

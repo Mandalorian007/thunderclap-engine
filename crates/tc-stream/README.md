@@ -41,19 +41,28 @@ world.
   `rebuild_budget` (changed sections rebuilt per flush), `cache_bytes`,
   `history` (earlier encodings kept per section, for edits; 3),
   `build_time` / `rebuild_time` (`Option<Duration>`, `None`: counts only;
-  set, a flush also stops building past the time, after at least one).
+  set, a flush also stops building past the time, after at least one),
+  `unload_boxes` (`false`; set, a jump sends what it left as
+  `UnloadBox`es, counted in `StreamStats::unload_boxes`).
 - `Lanes`: where frames go (`send` priority, `send_bulk` with a
-  `BulkTicket`, `bulk_queued`, `bulk_high_water`, `behind`). A
-  `BTreeMap`/`HashMap<ConnId, Outbound>` is lanes as it is.
+  `BulkTicket`, `bulk_queued`, `bulk_high_water`, `behind`,
+  `edits_queued`: called once a flush when every connection's changes
+  and unloads are queued, before new sections are built). A
+  `BTreeMap`/`HashMap<ConnId, Outbound>` is lanes as it is; its
+  `edits_queued` releases each `Outbound` the game `hold()`s for the
+  flush, so a session writes its priority frames in one wake.
 - Wire types (`#[derive(Wire)]`, described in the game's schema like its
   own): `SectionPos {x, y, z}` (2D: `z` = 0), `Area {center, rx, ry, rz}`,
   `Stamp {hi, lo}` (`bytes_stamp` of an encoding), `Claim {pos, stamp}`,
   `StreamInterest {area, holding}` (the game's `Interest` role) and
   `StreamMsg` (`Section {pos, stamp, data}`, `Edit {pos, changes, stamp}`
-  with `changes` = `[index, cell, ...]`, `Unload {positions}`).
+  with `changes` = `[index, cell, ...]`, `Unload {positions}`,
+  `UnloadBox {min, max}`: every held section in the inclusive box;
+  `SectionPos::within(min, max)`).
 - `encode_raw` / `decode_raw`: the voxel client's `RAW_SECTION_CODEC`
   (little-endian `u32` cells, one `u32` when uniform). `Bounds` (an
-  inclusive box; `minus`, `for_each`, `volume`).
+  inclusive box; `minus`, `for_each`, `volume`, `disjoint`, `corners`),
+  `MIN_BOXED`.
 
 ## Behaviour
 
@@ -69,7 +78,13 @@ Each flush:
    out once per flush for every holder of the same encoding. A connection
    that is `behind` waits; a refused frame is retried next flush;
    `changed_bulk` sections go whole in the bulk lane instead;
-3. sends `Unload`s in batches of `MAX_UNLOAD_BATCH`, retried when refused;
+3. sends `Unload`s in batches of `MAX_UNLOAD_BATCH`, retried when refused.
+   With `unload_boxes`, `MIN_BOXED` or more first go as `UnloadBox`es on
+   the priority lane: one box round them all when it stays clear of the
+   area grown by the hysteresis, else one per side past that margin with
+   at least `MIN_BOXED` in it; a box never covers a section still held
+   inside the margin, and what no box covers goes as `Unload`s. Then
+   `Lanes::edits_queued`;
 4. loads: each connection's area, nearest first (an offsets table sorted
    by distance), in the bulk lane up to its high water, through the shared
    LRU cache, round robin from the connection after the one served last,
@@ -97,7 +112,10 @@ a new world sends only what it changed.
   budgets shared across flushes and connections, the high water, edits as
   cells, refused changes and unloads retried, changes wait while behind,
   folding into a queued frame, resume with nothing or only the edited
-  section sent, wrong and outside claims, reload, bad areas.
+  section sent, wrong and outside claims, reload, bad areas; a jump
+  in one `UnloadBox`, a diagonal move in one per side, claims in the
+  margin as `Unload`s, and `edits_queued` called between changes and
+  loads (releasing held `Outbound`s).
 - `tests/fit.rs`: a voxel world shaped like Forge Wilds' (16³ sections, a
   column climate layer and a per-section ground layer with deltas, a
   client model checking each frame applies to what it holds): layers
@@ -110,5 +128,6 @@ a new world sends only what it changed.
 - `tests/interop.rs`: a game loop on `tc-net` streams to `createNet`
   (`src/net/stream-interop.test.ts`, through vitest), which fills the
   voxel `SectionStore`, applies an `Edit`, and after a dropped connection
-  resumes holding everything and gets only the changed section. `pnpm
+  resumes holding everything and gets only the changed section; moved
+  away, it drops what it left from an `UnloadBox` (`dropBox`). `pnpm
   test:stream-interop` runs just this test; it skips where node is missing.

@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use tc_net::{BulkTicket, ConnId, Protocol, ServerMsg};
 use tc_wire::{Bytes, Wire};
 
-use crate::area::Offsets;
+use crate::area::{Bounds, MIN_BOXED, Offsets};
 use crate::cache::{Built, Cache};
 use crate::lanes::Lanes;
 use crate::msg::{Area, Claim, SectionPos, Stamp, StreamMsg};
@@ -104,6 +104,11 @@ pub struct StreamConfig {
     /// Time a flush spends rebuilding changed sections, besides
     /// `rebuild_budget`. `None` (the default): counted only.
     pub rebuild_time: Option<Duration>,
+    /// Unloads past the area grown by `hysteresis` go as
+    /// `StreamMsg::UnloadBox`es (a view left behind in one or a few
+    /// messages), the rest as `Unload`s. Off by default: a client must
+    /// know the message.
+    pub unload_boxes: bool,
 }
 
 impl Default for StreamConfig {
@@ -117,6 +122,7 @@ impl Default for StreamConfig {
             history: 3,
             build_time: None,
             rebuild_time: None,
+            unload_boxes: false,
         }
     }
 }
@@ -154,8 +160,11 @@ pub struct StreamStats {
     /// Sections queued again in place of a withdrawn one (a change folded
     /// in before it was written).
     pub folded: u64,
-    /// Positions unloaded.
+    /// Positions unloaded (by `Unload`s, and held ones an `UnloadBox`
+    /// covered).
     pub unloads: u64,
+    /// `UnloadBox`es sent.
+    pub unload_boxes: u64,
     /// Claims that matched: sections a client kept, not sent again.
     pub resumed: u64,
     /// Sections built (loads and rebuilds).
@@ -507,6 +516,7 @@ impl SectionStream {
             self.send_layers(conn, src, lanes);
             self.send_unloads(conn, lanes);
         }
+        lanes.edits_queued();
         let mut never = || false;
         let mut budget = Budget {
             left: self.config.build_budget.max(1),
@@ -842,6 +852,31 @@ impl SectionStream {
         let Some(v) = self.viewers.get_mut(&conn) else {
             return;
         };
+        if self.config.unload_boxes
+            && let Some(area) = v.area
+            && v.unloads.len() >= MIN_BOXED
+        {
+            // Nothing is held past the area grown by the hysteresis (what
+            // left it was taken out of `held`), and nothing is sent there.
+            let keep = area.bounds(i64::from(self.config.hysteresis));
+            for b in Bounds::unload_boxes(&v.unloads, &keep) {
+                let Some((min, max)) = b.corners() else {
+                    continue;
+                };
+                debug_assert!(
+                    !v.held.keys().any(|p| p.within(&min, &max)),
+                    "an UnloadBox {min:?}..{max:?} over a held section"
+                );
+                let frame = (self.encode)(&StreamMsg::UnloadBox { min, max });
+                if !lanes.send(conn, frame) {
+                    return;
+                }
+                let before = v.unloads.len();
+                v.unloads.retain(|p| !p.within(&min, &max));
+                self.stats.unloads += (before - v.unloads.len()) as u64;
+                self.stats.unload_boxes += 1;
+            }
+        }
         while !v.unloads.is_empty() {
             let positions: Vec<SectionPos> =
                 v.unloads.iter().take(MAX_UNLOAD_BATCH).copied().collect();

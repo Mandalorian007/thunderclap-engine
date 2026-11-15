@@ -296,6 +296,7 @@ interface SectionStore {
     readonly format: VoxelFormat;
     putSection(sx: number, sy: number, sz: number, bytes: Uint8Array): void;
     dropSection(key: number): void;
+    dropBox(minX: number, minY: number, minZ: number, maxX: number, maxY: number, maxZ: number, dropped?: number[]): number;
     has(key: number): boolean;
     ready(key: number): boolean;
     cellAt(x: number, y: number, z: number): number | undefined;
@@ -550,6 +551,7 @@ interface VoxelWorld {
     readonly stats: VoxelWorldStats;
     putSection(sx: number, sy: number, sz: number, bytes: Uint8Array): void;
     dropSection(sx: number, sy: number, sz: number): void;
+    dropBox(minX: number, minY: number, minZ: number, maxX: number, maxY: number, maxZ: number): number;
     edit(key: number, changes: ArrayLike<number>): number[];
     setInterest(x: number, y: number, z: number): void;
     update(eyeX: number, eyeY: number, eyeZ: number): void;
