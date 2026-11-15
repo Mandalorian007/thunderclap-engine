@@ -181,7 +181,8 @@ store.putSection(0, 0, 0, encodeRawSection(Uint32Array.of(1))); // a uniform sec
 (`SectionStoreOptions`) is a `SectionStore` holding sections by `sectionKey(sx, sy, sz)` (`sectionKeyX`, `sectionKeyY`,
 `sectionKeyZ` take it apart; `sectionIndex` is a cell's local index) as the bytes they arrived in, decoding through
 the game's `SectionCodec` (`RAW_SECTION_CODEC` and `encodeRawSection` are the engine's trivial
-one) only to edit. `putSection` / `dropSection`, `has`, `cellAt`; a section is `ready` when all
+one) only to edit. `putSection` / `dropSection`, `dropBox(minX, minY, minZ, maxX, maxY, maxZ, dropped?)` (every held
+section in an inclusive box: a stream's `UnloadBox`), `has`, `cellAt`; a section is `ready` when all
 26 around it are known; `setInterest` and `takeReady(out, max)` hand out dirty ready sections
 nearest first; `edit(key, [index, cell, ...])` returns every section whose mesh changed (the
 neighbours sharing the edited border, sky-lit rows below a moved column top, and all 27 around
@@ -278,7 +279,7 @@ culled, the opaque pass), `foliage` (both sides, the cutout pass) and `liquid` (
 alpha-blended in the transparent pass, unsorted: depth is read, not written). A section's three
 streams share one instance (its origin) and its mesh's bounds are its cull sphere.
 
-- **Feeding.** `putSection(sx, sy, sz, bytes)`, `dropSection`, `edit(key, changes)` (the
+- **Feeding.** `putSection(sx, sy, sz, bytes)`, `dropSection`, `dropBox` (a box of them), `edit(key, changes)` (the
   remesh set), `setInterest(x, y, z)` (world blocks; the eye by default). `update(ex, ey, ez)`
   once a frame before `core.prepare`: ready sections go to the Workers nearest first (as many
   as keep `perWorker` jobs in flight each), and at most `uploadsPerFrame` (32) finished meshes

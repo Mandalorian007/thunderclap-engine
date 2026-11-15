@@ -103,6 +103,11 @@ impl View {
                         self.chunks.remove(&(p.x, p.y));
                     }
                 }
+                StreamMsg::UnloadBox { min, max } => {
+                    self.chunks.retain(|&(x, y), _| {
+                        !tc_stream::SectionPos::new(x, y, 0).within(&min, &max)
+                    });
+                }
             }
         }
     }

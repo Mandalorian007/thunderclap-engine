@@ -27,6 +27,14 @@ pub trait Lanes {
     fn behind(&self, _conn: ConnId) -> bool {
         false
     }
+    /// Called once a [`flush`](crate::SectionStream::flush) has queued
+    /// every connection's changes and unloads, before it builds new
+    /// sections. A game that holds its sessions' wakes through its flush
+    /// ([`Outbound::hold`]: query updates, entity frames and section
+    /// changes written in one wake) lets them write here, not after the
+    /// loads. Does nothing by default; tc-net's `Outbound` maps release
+    /// held wakes ([`Outbound::release`], nothing when none are held).
+    fn edits_queued(&mut self) {}
 }
 
 /// The priority lane's backlog past which changes wait.
@@ -68,6 +76,12 @@ macro_rules! outbound_lanes {
 
             fn behind(&self, conn: ConnId) -> bool {
                 self.get(&conn).is_some_and(|o| o.queued() > BEHIND_BYTES)
+            }
+
+            fn edits_queued(&mut self) {
+                for o in self.values() {
+                    o.release();
+                }
             }
         }
     };

@@ -3,7 +3,8 @@
 //! (`src/net/stream-interop.test.ts`, run by vitest; `pnpm
 //! test:stream-interop` runs just this test). The client loads its area,
 //! is dropped while a cell changes, and resumes holding what it had: only
-//! the changed section comes again. Skipped, with a notice, where node or
+//! the changed section comes again; then it moves away, and what it left
+//! goes in an `UnloadBox`. Skipped, with a notice, where node or
 //! the repo's node_modules are missing.
 
 use std::collections::BTreeMap;
@@ -86,7 +87,13 @@ impl SectionSource for World {
 /// the change is flushed (it reconnects).
 fn run(requests: Receiver<Request<Streamed>>) {
     let mut world = World::default();
-    let mut stream = SectionStream::new(StreamConfig::default(), game_frame::<Streamed>());
+    let mut stream = SectionStream::new(
+        StreamConfig {
+            unload_boxes: true,
+            ..StreamConfig::default()
+        },
+        game_frame::<Streamed>(),
+    );
     let mut lanes: BTreeMap<ConnId, Outbound> = BTreeMap::new();
     loop {
         match requests.recv_timeout(Duration::from_millis(5)) {

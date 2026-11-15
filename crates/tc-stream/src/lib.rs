@@ -41,7 +41,7 @@ mod msg;
 mod raw;
 mod stream;
 
-pub use area::Bounds;
+pub use area::{Bounds, MIN_BOXED};
 pub use cache::{MAX_CACHED_SECTIONS, SLOT_OVERHEAD};
 pub use lanes::{BEHIND_BYTES, Lanes};
 pub use msg::{Area, Claim, SectionPos, Stamp, StreamInterest, StreamMsg};

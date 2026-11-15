@@ -1,0 +1,550 @@
+//! The stream under a game shaped like Forge Wilds: a voxel world whose
+//! sections carry two layers (a climate per column, sent once for every
+//! section in it, and what lies on each section's ground, sent whole then
+//! as changes), changes no one waits for (sealed caves found, re-sent in
+//! the bulk lane), a command's sender seeing its own change first, loads
+//! between ticks, and time budgets.
+
+mod common;
+
+use std::cell::{Cell, RefCell};
+use std::collections::{BTreeMap, HashMap};
+use std::time::{Duration, Instant};
+
+use common::{Client, FakeLanes, World};
+use tc_net::ConnId;
+use tc_stream::{Area, SectionPos, SectionSource, SectionStream, StreamConfig, StreamMsg};
+use tc_wire::Wire;
+
+const A: ConnId = 1;
+const B: ConnId = 2;
+const CLIMATE: usize = 0;
+const PILES: usize = 1;
+
+fn at(x: i32, y: i32, z: i32) -> SectionPos {
+    SectionPos::new(x, y, z)
+}
+
+fn area(x: i32, y: i32, z: i32, r: u8) -> Area {
+    Area::new(at(x, y, z), r, r, r)
+}
+
+/// A voxel world with a climate per column and piles per section.
+struct Voxels {
+    world: World,
+    climate: RefCell<HashMap<(i32, i32), u8>>,
+    piles: RefCell<HashMap<SectionPos, Vec<u8>>>,
+    /// `cells` decodes, counted (an `Edit` is worked out from two).
+    decodes: Cell<usize>,
+}
+
+impl Voxels {
+    fn new() -> Voxels {
+        Voxels {
+            world: World::new(4),
+            climate: RefCell::default(),
+            piles: RefCell::default(),
+            decodes: Cell::new(0),
+        }
+    }
+
+    fn climate_of(&self, x: i32, z: i32) -> u8 {
+        self.climate
+            .borrow()
+            .get(&(x, z))
+            .copied()
+            .unwrap_or(((x * 3 + z) & 7) as u8)
+    }
+
+    fn piles_of(&self, pos: SectionPos) -> Vec<u8> {
+        self.piles.borrow().get(&pos).cloned().unwrap_or_default()
+    }
+}
+
+/// A layer frame: tag 1, layer, whole (0) or change (1), the key, the
+/// state it changes from (empty when whole), then the state.
+fn layer_bytes(layer: usize, key: SectionPos, from: Option<&[u8]>, to: &[u8], out: &mut Vec<u8>) {
+    out.clear();
+    out.extend([1, layer as u8, u8::from(from.is_some())]);
+    for c in [key.x, key.y, key.z] {
+        out.extend(c.to_le_bytes());
+    }
+    let from = from.unwrap_or(&[]);
+    out.push(from.len() as u8);
+    out.extend(from);
+    out.extend(to);
+}
+
+impl SectionSource for Voxels {
+    fn build(&self, pos: SectionPos, out: &mut Vec<u8>) {
+        self.world.build(pos, out);
+    }
+
+    fn exists(&self, pos: SectionPos) -> bool {
+        self.world.exists(pos)
+    }
+
+    fn cells(&self, bytes: &[u8], out: &mut Vec<u32>) -> bool {
+        self.decodes.set(self.decodes.get() + 1);
+        self.world.cells(bytes, out)
+    }
+
+    fn layers(&self) -> usize {
+        2
+    }
+
+    fn layer_key(&self, layer: usize, pos: SectionPos) -> SectionPos {
+        if layer == CLIMATE {
+            at(pos.x, 0, pos.z)
+        } else {
+            pos
+        }
+    }
+
+    fn layer_state(&self, layer: usize, key: SectionPos, out: &mut Vec<u8>) {
+        out.clear();
+        if layer == CLIMATE {
+            out.push(self.climate_of(key.x, key.z));
+        } else {
+            out.extend(self.piles_of(key));
+        }
+    }
+
+    fn layer_frame(
+        &self,
+        layer: usize,
+        key: SectionPos,
+        from: Option<&[u8]>,
+        to: &[u8],
+        out: &mut Vec<u8>,
+    ) {
+        if layer == PILES && from.is_none() && to.is_empty() {
+            out.clear(); // nothing lies there: nothing to send
+            return;
+        }
+        layer_bytes(layer, key, from, to, out);
+    }
+}
+
+/// What arrives: a stream message, or a layer frame.
+#[derive(Debug)]
+enum Frame {
+    Stream(StreamMsg),
+    Layer {
+        layer: usize,
+        key: SectionPos,
+        from: Option<Vec<u8>>,
+        to: Vec<u8>,
+    },
+}
+
+fn decode(f: &[u8]) -> Frame {
+    if f[0] == 0 {
+        return Frame::Stream(StreamMsg::from_bytes(&f[1..]).unwrap());
+    }
+    let c = |i: usize| i32::from_le_bytes(f[i..i + 4].try_into().unwrap());
+    let n = f[15] as usize;
+    Frame::Layer {
+        layer: f[1] as usize,
+        key: at(c(3), c(7), c(11)),
+        from: (f[2] == 1).then(|| f[16..16 + n].to_vec()),
+        to: f[16 + n..].to_vec(),
+    }
+}
+
+fn new_stream(config: StreamConfig) -> SectionStream {
+    SectionStream::new(config, |m: &StreamMsg| {
+        let mut f = vec![0];
+        f.extend(m.to_bytes());
+        f
+    })
+}
+
+/// Delivers a lane: priority first, then bulk frames not withdrawn.
+fn drain(lanes: &mut FakeLanes, conn: ConnId) -> (Vec<Frame>, Vec<Frame>) {
+    let lane = lanes.lane(conn);
+    let priority = lane.priority.drain(..).map(|f| decode(&f)).collect();
+    let bulk = lane
+        .bulk
+        .drain(..)
+        .filter(|(_, t)| t.as_ref().is_none_or(|t| t.take()))
+        .map(|(f, _)| decode(&f))
+        .collect();
+    (priority, bulk)
+}
+
+/// A client: sections and the layers it holds.
+struct Player {
+    client: Client,
+    layers: BTreeMap<(usize, SectionPos), Vec<u8>>,
+    whole: usize,
+    changes: usize,
+}
+
+impl Player {
+    fn new() -> Player {
+        Player {
+            client: Client::new(64),
+            layers: BTreeMap::new(),
+            whole: 0,
+            changes: 0,
+        }
+    }
+
+    fn apply(&mut self, frames: Vec<Frame>) {
+        for f in frames {
+            match f {
+                Frame::Stream(m) => {
+                    self.client.apply(vec![m]);
+                }
+                Frame::Layer {
+                    layer,
+                    key,
+                    from,
+                    to,
+                } => {
+                    match from {
+                        Some(from) => {
+                            // (Nothing held is an empty state: none was sent.)
+                            let held = self.layers.get(&(layer, key)).map_or(&[][..], |v| v);
+                            assert_eq!(held, from, "a change from the state held");
+                            self.changes += 1;
+                        }
+                        None => {
+                            let held = self.client.held.keys();
+                            let mut brought = held.filter(|p| {
+                                (layer == CLIMATE && p.x == key.x && p.z == key.z) || **p == key
+                            });
+                            assert!(brought.next().is_some(), "{key:?} behind its section");
+                            self.whole += 1;
+                        }
+                    }
+                    self.layers.insert((layer, key), to);
+                }
+            }
+        }
+    }
+}
+
+struct Game {
+    src: Voxels,
+    stream: SectionStream,
+    lanes: FakeLanes,
+    players: BTreeMap<ConnId, Player>,
+}
+
+impl Game {
+    fn new(config: StreamConfig) -> Game {
+        Game {
+            src: Voxels::new(),
+            stream: new_stream(config),
+            lanes: FakeLanes::default(),
+            players: BTreeMap::new(),
+        }
+    }
+
+    fn join(&mut self, conn: ConnId, a: Area) {
+        self.stream.connect(conn);
+        self.stream.set_interest(conn, a, &[]).unwrap();
+        self.players.insert(conn, Player::new());
+    }
+
+    fn deliver(&mut self) {
+        for (conn, p) in &mut self.players {
+            let (priority, bulk) = drain(&mut self.lanes, *conn);
+            p.apply(priority);
+            p.apply(bulk);
+        }
+    }
+
+    fn settle(&mut self) -> usize {
+        for i in 1..=200 {
+            self.stream.flush(&self.src, &mut self.lanes);
+            self.deliver();
+            if !self.stream.has_work() {
+                return i;
+            }
+        }
+        panic!("still busy");
+    }
+
+    fn player(&self, conn: ConnId) -> &Player {
+        &self.players[&conn]
+    }
+
+    /// The client holds every layer of its sections as the world has them.
+    fn check(&self, conn: ConnId) {
+        let p = self.player(conn);
+        self.src.world.check(&p.client);
+        let mut want = BTreeMap::new();
+        for pos in p.client.held.keys() {
+            want.insert(
+                (CLIMATE, at(pos.x, 0, pos.z)),
+                vec![self.src.climate_of(pos.x, pos.z)],
+            );
+            let piles = self.src.piles_of(*pos);
+            if !piles.is_empty() || p.layers.contains_key(&(PILES, *pos)) {
+                want.insert((PILES, *pos), piles);
+            }
+        }
+        let have: BTreeMap<_, _> = p
+            .layers
+            .iter()
+            .filter(|(k, _)| want.contains_key(k))
+            .map(|(k, v)| (*k, v.clone()))
+            .collect();
+        assert_eq!(have, want);
+    }
+}
+
+#[test]
+fn layers_come_whole_behind_their_sections_once_per_key() {
+    let mut g = Game::new(StreamConfig::default());
+    g.src.piles.borrow_mut().insert(at(0, 0, 0), vec![3, 1]);
+    g.src.piles.borrow_mut().insert(at(1, -1, 0), vec![9]);
+    g.join(A, area(0, 0, 0, 1));
+    g.settle();
+    g.check(A);
+    let p = g.player(A);
+    // 9 columns' climates and the two piles, each once.
+    assert_eq!(p.whole, 9 + 2);
+    assert_eq!(p.changes, 0);
+    assert_eq!(g.stream.stats().layer_frames, 11);
+}
+
+#[test]
+fn a_layer_change_is_sent_on_the_priority_lane() {
+    let mut g = Game::new(StreamConfig::default());
+    g.join(A, area(0, 0, 0, 1));
+    g.join(B, area(5, 0, 0, 1));
+    g.settle();
+    g.src.piles.borrow_mut().insert(at(0, 0, 0), vec![4]);
+    g.stream.layer_changed(PILES, at(0, 0, 0));
+    g.src.piles.borrow_mut().insert(at(1, 1, 0), vec![5]);
+    g.stream.layer_changed(PILES, at(1, 1, 0));
+    g.src.climate.borrow_mut().insert((1, 1), 99);
+    g.stream.layer_changed(CLIMATE, at(1, 0, 1));
+    assert!(g.stream.has_work());
+    g.stream.flush(&g.src, &mut g.lanes);
+    assert!(
+        g.lanes.lane(A).bulk.is_empty(),
+        "nothing waits behind loads"
+    );
+    assert_eq!(g.lanes.lane(A).priority.len(), 3);
+    assert!(g.lanes.lane(B).priority.is_empty(), "B holds none of them");
+    g.deliver();
+    assert_eq!(g.player(A).changes, 3);
+    g.check(A);
+    g.check(B);
+    // Nothing changed after all: nothing sent.
+    g.stream.layer_changed(PILES, at(0, 0, 0));
+    g.stream.flush(&g.src, &mut g.lanes);
+    assert!(g.lanes.lane(A).priority.is_empty());
+}
+
+#[test]
+fn a_layer_change_still_queued_is_folded_into_its_whole_frame() {
+    let mut g = Game::new(StreamConfig::default());
+    g.src.piles.borrow_mut().insert(at(0, 0, 0), vec![1]);
+    g.join(A, area(0, 0, 0, 1));
+    g.stream.flush(&g.src, &mut g.lanes);
+    g.src.piles.borrow_mut().insert(at(0, 0, 0), vec![2]);
+    g.stream.layer_changed(PILES, at(0, 0, 0));
+    g.src.climate.borrow_mut().insert((0, 0), 42);
+    g.stream.layer_changed(CLIMATE, at(0, 0, 0));
+    g.stream.flush(&g.src, &mut g.lanes);
+    assert!(
+        g.lanes.lane(A).priority.is_empty(),
+        "folded, not sent ahead"
+    );
+    g.deliver();
+    g.settle();
+    let p = g.player(A);
+    assert_eq!(p.changes, 0);
+    assert_eq!(p.whole, 9 + 1, "each key arrived whole once");
+    g.check(A);
+}
+
+#[test]
+fn layers_follow_the_sections_held() {
+    let mut g = Game::new(StreamConfig {
+        hysteresis: 0,
+        ..StreamConfig::default()
+    });
+    g.src.piles.borrow_mut().insert(at(0, 0, 0), vec![7]);
+    g.join(A, area(0, 0, 0, 1));
+    g.settle();
+    // Away and back: the column and its piles come whole again.
+    g.stream.set_interest(A, area(20, 0, 0, 1), &[]).unwrap();
+    g.settle();
+    // A change while away is not sent (no one holds it).
+    g.src.piles.borrow_mut().insert(at(0, 0, 0), vec![8]);
+    g.stream.layer_changed(PILES, at(0, 0, 0));
+    g.settle();
+    assert_eq!(g.player(A).changes, 0);
+    g.stream.set_interest(A, area(0, 0, 0, 1), &[]).unwrap();
+    g.settle();
+    g.check(A);
+    assert_eq!(g.player(A).whole, (9 + 1) + 9 + (9 + 1));
+    // Moving within a column keeps its climate: rising one section sends
+    // no climate again.
+    let before = g.player(A).whole;
+    g.stream.set_interest(A, area(0, 1, 0, 1), &[]).unwrap();
+    g.settle();
+    assert_eq!(g.player(A).whole, before);
+    g.check(A);
+}
+
+#[test]
+fn a_reload_sends_layers_whole_again() {
+    let mut g = Game::new(StreamConfig::default());
+    g.join(A, area(0, 0, 0, 1));
+    g.settle();
+    g.src.climate.borrow_mut().insert((0, 0), 77);
+    g.stream.reload();
+    g.settle();
+    let p = g.player(A);
+    assert_eq!(p.whole, 9 * 2, "every column again");
+    assert_eq!(p.client.sections, 27, "no section again");
+    g.check(A);
+}
+
+#[test]
+fn a_background_change_is_sent_again_in_the_bulk_lane() {
+    let mut g = Game::new(StreamConfig::default());
+    g.join(A, area(0, 0, 0, 1));
+    g.settle();
+    let pos = at(0, 0, 0);
+    let mut cells = g.src.world.cells_of(pos);
+    cells[5] = 3;
+    g.src.world.edits.borrow_mut().insert(pos, cells);
+    g.stream.changed_bulk(pos);
+    g.stream.flush(&g.src, &mut g.lanes);
+    assert!(g.lanes.lane(A).priority.is_empty());
+    assert_eq!(g.lanes.lane(A).bulk.len(), 1);
+    g.deliver();
+    g.check(A);
+    assert_eq!(g.stream.stats().bulk_resends, 1);
+    assert!(!g.stream.has_work());
+    // `changed` wins over `changed_bulk` before the flush.
+    g.src.world.set(&mut g.stream, pos, 6, 2);
+    g.stream.changed_bulk(pos);
+    g.stream.flush(&g.src, &mut g.lanes);
+    assert_eq!(g.lanes.lane(A).priority.len(), 1);
+    g.deliver();
+    g.check(A);
+    assert_eq!(g.stream.stats().bulk_resends, 1);
+}
+
+#[test]
+fn a_background_change_to_a_queued_section_replaces_it() {
+    let mut g = Game::new(StreamConfig::default());
+    g.join(A, area(0, 0, 0, 1));
+    g.stream.flush(&g.src, &mut g.lanes);
+    let pos = at(0, 0, 0);
+    let mut cells = g.src.world.cells_of(pos);
+    cells[1] = 4;
+    g.src.world.edits.borrow_mut().insert(pos, cells);
+    g.stream.changed_bulk(pos);
+    g.settle();
+    g.check(A);
+    assert_eq!(g.player(A).client.sections, 27, "sent once, the new one");
+}
+
+#[test]
+fn flush_conn_sends_one_connection_its_changes_past_the_budget() {
+    let mut g = Game::new(StreamConfig {
+        rebuild_budget: 1,
+        ..StreamConfig::default()
+    });
+    g.join(A, area(0, 0, 0, 1));
+    g.join(B, area(0, 0, 0, 1));
+    g.settle();
+    for x in -1..=1 {
+        g.src.world.set(&mut g.stream, at(x, 0, 0), 0, 4);
+    }
+    g.stream.flush_conn(A, &g.src, &mut g.lanes);
+    assert_eq!(
+        g.lanes.lane(A).priority.len(),
+        3,
+        "all three, past the budget"
+    );
+    assert!(g.lanes.lane(B).priority.is_empty(), "B waits for the flush");
+    g.settle();
+    g.check(A);
+    g.check(B);
+    assert_eq!(g.player(A).client.edits, 3);
+    assert_eq!(g.player(B).client.edits, 3);
+}
+
+#[test]
+fn an_edit_is_worked_out_once_for_every_holder() {
+    let mut g = Game::new(StreamConfig::default());
+    for conn in [A, B, 3, 4] {
+        g.join(conn, area(0, 0, 0, 1));
+    }
+    g.settle();
+    g.src.decodes.set(0);
+    g.src.world.set(&mut g.stream, at(0, 0, 0), 9, 7);
+    g.settle();
+    assert_eq!(g.src.decodes.get(), 2, "the old and the new, once");
+    assert_eq!(g.stream.stats().edits, 4);
+    for conn in [A, B, 3, 4] {
+        g.check(conn);
+    }
+}
+
+#[test]
+fn load_until_builds_between_ticks_until_interrupted() {
+    let mut g = Game::new(StreamConfig {
+        build_budget: 1,
+        ..StreamConfig::default()
+    });
+    g.join(A, area(0, 0, 0, 2));
+    let far = Instant::now() + Duration::from_secs(5);
+    assert_eq!(
+        g.stream.load_until(&g.src, &mut g.lanes, far, || true),
+        0,
+        "a waiting request comes first"
+    );
+    let mut asked = 0;
+    let built = g.stream.load_until(&g.src, &mut g.lanes, far, || {
+        asked += 1;
+        asked > 10
+    });
+    assert_eq!(built, 10);
+    assert!(g.stream.loading());
+    let rest = g.stream.load_until(&g.src, &mut g.lanes, far, || false);
+    assert_eq!(10 + rest, 5 * 5 * 5);
+    assert!(!g.stream.loading());
+    assert_eq!(g.stream.load_until(&g.src, &mut g.lanes, far, || false), 0);
+    g.settle();
+    g.check(A);
+    assert_eq!(g.player(A).whole, 25, "the layers came with them");
+    // A deadline passed builds nothing.
+    g.stream.set_interest(A, area(30, 0, 0, 1), &[]).unwrap();
+    let past = Instant::now();
+    assert_eq!(g.stream.load_until(&g.src, &mut g.lanes, past, || false), 0);
+}
+
+#[test]
+fn time_budgets_bound_a_flush_but_always_build_one() {
+    let mut g = Game::new(StreamConfig {
+        build_time: Some(Duration::ZERO),
+        rebuild_time: Some(Duration::ZERO),
+        ..StreamConfig::default()
+    });
+    g.join(A, area(0, 0, 0, 1));
+    let flushes = g.settle();
+    assert_eq!(flushes, 27, "one build a flush");
+    let stats = g.stream.stats();
+    assert_eq!(stats.builds, 27);
+    assert!(stats.build_nanos > 0);
+    for x in -1..=1 {
+        g.src.world.set(&mut g.stream, at(x, 0, 0), 0, 4);
+    }
+    g.stream.flush(&g.src, &mut g.lanes);
+    assert_eq!(g.lanes.lane(A).priority.len(), 1, "one rebuild");
+    g.settle();
+    g.check(A);
+}

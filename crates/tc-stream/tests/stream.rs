@@ -418,3 +418,128 @@ fn bad_areas_are_refused() {
     assert_eq!(s.set_interest(A, edge, &[]), Err(StreamError::OutOfRange));
     assert_eq!(s.set_interest(A, area(0, 0, 0, 8), &[]), Ok(()));
 }
+
+fn boxes_on() -> StreamConfig {
+    StreamConfig {
+        unload_boxes: true,
+        ..StreamConfig::default()
+    }
+}
+
+#[test]
+fn a_view_left_behind_goes_in_one_unload_box() {
+    let mut s = Setup::new(boxes_on());
+    s.join(A, area(0, 0, 0, 2), &[]);
+    s.settle();
+    let before = s.held(A).len();
+    s.client(A).reset_counts();
+    let far = area(40, 0, 0, 2);
+    s.stream.set_interest(A, far, &[]).unwrap();
+    let unloads = s.stream.stats().unloads;
+    s.settle();
+    assert_eq!(s.client(A).boxes, 1, "one box for the whole view");
+    assert_eq!(s.client(A).unloaded, before);
+    assert_eq!(s.stream.stats().unloads - unloads, before as u64);
+    assert_eq!(s.stream.stats().unload_boxes, 1);
+    assert_eq!(s.held(A), existing(&s.world, &far, 0));
+    s.world.check(&s.clients[&A]);
+
+    // Off (the default): the same jump goes as `Unload`s.
+    let mut s = Setup::new(StreamConfig::default());
+    s.join(A, area(0, 0, 0, 2), &[]);
+    s.settle();
+    s.client(A).reset_counts();
+    s.stream.set_interest(A, far, &[]).unwrap();
+    s.settle();
+    assert_eq!((s.client(A).boxes, s.client(A).unloaded), (0, before));
+    assert_eq!(s.stream.stats().unload_boxes, 0);
+}
+
+#[test]
+fn unload_boxes_stay_past_the_margin_and_leave_the_rest_in_unloads() {
+    // Diagonally: one box round all that left would reach into what stays
+    // (x < 1 or z < 1), so a box per side.
+    let mut boxed = Setup::new(boxes_on());
+    let mut plain = Setup::new(StreamConfig::default());
+    for s in [&mut boxed, &mut plain] {
+        s.join(A, area(0, 0, 0, 2), &[]);
+        s.settle();
+        s.stream.set_interest(A, area(5, 0, 5, 2), &[]).unwrap();
+        s.settle();
+    }
+    assert_eq!(boxed.client(A).boxes, 2);
+    assert_eq!(boxed.held(A), plain.held(A), "the same sections held");
+    boxed.world.check(&boxed.clients[&A]);
+
+    // Claims outside the area but inside its margin go as `Unload`s: a
+    // box there could reach what is still sent.
+    let mut s = Setup::new(boxes_on());
+    let a = area(0, 0, 0, 1);
+    let claims = [at(3, 0, 0), at(-3, 0, 0), at(0, 0, 3)].map(|pos| Claim {
+        pos,
+        stamp: Stamp::of(1),
+    });
+    s.join(A, a, &claims);
+    let len = s.world.len();
+    for c in &claims {
+        s.client(A).held.insert(c.pos, (1, vec![0; len]));
+    }
+    s.settle();
+    assert_eq!(s.client(A).boxes, 0);
+    assert_eq!(s.client(A).unloaded, 3);
+    assert_eq!(s.held(A), existing(&s.world, &a, 0));
+}
+
+/// Lanes that log what a flush does, in order: `p` a priority frame, `b`
+/// a bulk frame, `q` the edits-queued call.
+struct Logged<'a>(&'a mut FakeLanes, String);
+
+impl tc_stream::Lanes for Logged<'_> {
+    fn send(&mut self, conn: u64, frame: Vec<u8>) -> bool {
+        self.1.push('p');
+        self.0.send(conn, frame)
+    }
+
+    fn send_bulk(&mut self, conn: u64, frame: Vec<u8>, ticket: Option<tc_net::BulkTicket>) -> bool {
+        self.1.push('b');
+        self.0.send_bulk(conn, frame, ticket)
+    }
+
+    fn bulk_queued(&self, conn: u64) -> usize {
+        self.0.bulk_queued(conn)
+    }
+
+    fn edits_queued(&mut self) {
+        self.1.push('q');
+    }
+}
+
+#[test]
+fn edits_are_queued_before_new_sections_are_built() {
+    let mut s = Setup::new(StreamConfig::default());
+    s.join(A, area(0, 0, 0, 1), &[]);
+    s.settle();
+    // A change to a held section, and a move bringing new ones.
+    s.world.set(&mut s.stream, at(0, 0, 0), 0, 9);
+    s.stream.set_interest(A, area(0, 0, 4, 1), &[]).unwrap();
+    let Setup {
+        world,
+        stream,
+        lanes,
+        ..
+    } = &mut s;
+    let mut log = Logged(lanes, String::new());
+    stream.flush(world, &mut log);
+    let log = log.1;
+    let q = log.find('q').expect("called once a flush");
+    assert_eq!(log.matches('q').count(), 1);
+    assert!(log[..q].contains('p') && !log[..q].contains('b'), "{log}");
+    assert!(log[q..].contains('b') && !log[q..].contains('p'), "{log}");
+
+    // tc-net's queues: the flush lets held wakes go.
+    let (out, _rx) = tc_net::outbound::outbound();
+    out.hold();
+    let mut lanes = BTreeMap::from([(A, out.clone())]);
+    s.stream.flush(&s.world, &mut lanes);
+    assert!(!out.is_held());
+}

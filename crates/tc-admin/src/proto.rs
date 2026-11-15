@@ -62,7 +62,7 @@ pub enum Request {
 }
 
 /// A running server, as [`Request::Status`] answers.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Status {
     /// The server's process id.
     pub pid: u32,
@@ -98,6 +98,9 @@ pub struct Status {
     pub frames_sent: u64,
     /// Their bytes.
     pub bytes_sent: u64,
+    /// The game's own status ([`Live::status`](crate::Live::status)):
+    /// players by name, its world's numbers.
+    pub game: Option<Value>,
 }
 
 /// One report, as [`Reply::Reports`] lists it.
@@ -306,6 +309,7 @@ impl Reply {
                 ("limited", j!(s.limited)),
                 ("frames_sent", j!(s.frames_sent)),
                 ("bytes_sent", j!(s.bytes_sent)),
+                ("game", j!(s.game)),
             ]),
             Reply::Stopping { already } => {
                 obj(&[("type", j!("stopping")), ("already", j!(already))])
@@ -409,6 +413,7 @@ impl Reply {
                 limited: num("limited"),
                 frames_sent: num("frames_sent"),
                 bytes_sent: num("bytes_sent"),
+                game: r.get("game").filter(|g| !g.is_null()).cloned(),
             })),
             Some("stopping") => Ok(Reply::Stopping {
                 already: flag("already"),
@@ -523,6 +528,9 @@ impl std::fmt::Display for Status {
         if let Some(e) = &self.store_error {
             write!(f, " store failed: {e}")?;
         }
+        if let Some(g) = &self.game {
+            write!(f, " game {g}")?;
+        }
         Ok(())
     }
 }
@@ -584,6 +592,7 @@ mod tests {
             limited: 2,
             frames_sent: 12,
             bytes_sent: 3400,
+            game: Some(serde_json::json!({ "names": ["ada"] })),
         };
         for reply in [
             Reply::Status(status),
