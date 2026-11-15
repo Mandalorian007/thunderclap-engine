@@ -1313,6 +1313,8 @@ class RenderCore {
     onDeviceRestored(fn: (device: GPUDevice) => void): () => void;
     get warmer(): PipelineWarmer;
     warm(pipeline: GPURenderPipeline, target?: WarmTarget): void;
+    warmCompute(pipeline: GPUComputePipeline, target?: ComputeWarmTarget): void;
+    get warming(): boolean;
     createDrawSet(desc: DrawSetDesc): DrawSet;
     removeDrawSet(set: DrawSet): void;
     addDrawable(d: CoreDrawable): void;

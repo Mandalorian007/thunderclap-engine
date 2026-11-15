@@ -88,6 +88,8 @@ frame.drawable(particles);   // order and layers optional, like any draw
 - `blend: 'additive' | 'alpha'` (default additive; alpha is premultiplied, for smoke and dust).
   `countAlive: true` counts live particles on the GPU each frame and reads the count back into
   `alive` (a few frames late; -1 before the first readback).
+- On a core with `core.warming`, the compute pipelines (spawn, advance, update, sub-emission,
+  counter) get an empty first dispatch at load (ws/forge-asks-fit).
 - Box and sphere shapes (`box { width, height, depth }`, `sphere { radius }`) act as `rect` and
   `circle` in 2D, which stays pixel-identical to before.
 

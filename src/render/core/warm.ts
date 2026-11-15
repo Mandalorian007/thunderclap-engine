@@ -12,6 +12,10 @@
  * pipelines (empty draw sets, idle casters, inactive drawables) and encodes the queue in
  * `prepare` and `draw`; a `FullscreenPass` queues itself when made and encodes the queue before
  * its first pass. Nothing is queued in steady state, so a frame after the first costs nothing.
+ *
+ * Compute pipelines are compiled at their first dispatch the same way: `warmCompute` queues an
+ * empty `dispatchWorkgroups(0)` (ws/forge-asks-fit), encoded by the same `encode` into one
+ * scratch compute pass (an actor system's pose pass, a particle system's passes, at load).
  */
 
 /** The formats of the pass a pipeline draws in, and what its draw binds (`warm`). */
@@ -34,6 +38,22 @@ export interface WarmTarget {
    * pass, after `setPipeline`); returns the GPU calls it made.
    */
   bind?: (pass: GPURenderPassEncoder) => number;
+}
+
+/** What a compute pipeline's empty dispatch binds (`warmCompute`). */
+export interface ComputeWarmTarget {
+  /** Bind groups at 0, 1, … (the pipeline's layout must accept them). Default: none. */
+  groups?: readonly GPUBindGroup[];
+  /**
+   * Bind what the dispatch needs instead of `groups` (called inside the scratch pass, after
+   * `setPipeline`, so it can bind what is current then); returns the GPU calls it made.
+   */
+  bind?: (pass: GPUComputePassEncoder) => number;
+  /**
+   * Called before encoding: false drops the warm (its owner was destroyed, so its bind groups
+   * may name destroyed buffers). Default: always encode.
+   */
+  live?: () => boolean;
 }
 
 /** @internal A queued warm: formats, and what it records into the scratch pass. */
@@ -64,6 +84,7 @@ export class PipelineWarmer {
   passes = 0;
   private readonly device: GPUDevice;
   private readonly queue: WarmJob[] = [];
+  private readonly computeQueue: ((pass: GPUComputePassEncoder) => number)[] = [];
   private readonly textures = new Map<string, GPUTextureView>();
   private vertexScratch: GPUBuffer | null = null;
   private readonly sampled = new Map<string, GPUTextureView>();
@@ -74,7 +95,7 @@ export class PipelineWarmer {
 
   /** Warms waiting for the next `encode`. */
   get pending(): number {
-    return this.queue.length;
+    return this.queue.length + this.computeQueue.length;
   }
 
   /**
@@ -100,6 +121,29 @@ export class PipelineWarmer {
         }
       }
       pass.draw(0);
+      return calls;
+    });
+  }
+
+  /**
+   * Queue compute `pipeline`'s empty first dispatch (`dispatchWorkgroups(0)`, ws/forge-asks-fit),
+   * encoded by the next `encode` in one scratch compute pass with the others queued.
+   */
+  warmCompute(pipeline: GPUComputePipeline, target: ComputeWarmTarget = {}): void {
+    if (!this.enabled) return;
+    const groups = target.groups;
+    const bind = target.bind;
+    const live = target.live;
+    this.computeQueue.push((pass) => {
+      if (live && !live()) return 0;
+      pass.setPipeline(pipeline);
+      let calls = 2;
+      if (bind) calls += bind(pass);
+      else if (groups) {
+        for (let i = 0; i < groups.length; i++) pass.setBindGroup(i, groups[i]!);
+        calls += groups.length;
+      }
+      pass.dispatchWorkgroups(0);
       return calls;
     });
   }
@@ -162,8 +206,18 @@ export class PipelineWarmer {
    */
   encode(encoder: GPUCommandEncoder): number {
     const q = this.queue;
-    if (q.length === 0) return 0;
+    const cq = this.computeQueue;
+    if (q.length === 0 && cq.length === 0) return 0;
     let calls = 0;
+    if (cq.length > 0) {
+      const pass = encoder.beginComputePass({ label: 'warm' });
+      calls += 2;
+      this.passes++;
+      for (let i = 0; i < cq.length; i++) calls += cq[i]!(pass);
+      this.warmed += cq.length;
+      cq.length = 0;
+      pass.end();
+    }
     while (q.length > 0) {
       const key = q[0]!.key;
       const first = q[0]!;
@@ -206,6 +260,7 @@ export class PipelineWarmer {
   /** Drop what is queued and the scratch targets (device loss, teardown). */
   destroy(): void {
     this.queue.length = 0;
+    this.computeQueue.length = 0;
     this.textures.clear();
     this.sampled.clear();
     this.vertexScratch?.destroy();
@@ -262,4 +317,16 @@ export function warmPipeline(
   target?: WarmTarget,
 ): void {
   pipelineWarmer(device).warm(pipeline, target);
+}
+
+/**
+ * Queue compute `pipeline`'s empty first dispatch on `device`'s warmer
+ * (`PipelineWarmer.warmCompute`, ws/forge-asks-fit).
+ */
+export function warmComputePipeline(
+  device: GPUDevice,
+  pipeline: GPUComputePipeline,
+  target?: ComputeWarmTarget,
+): void {
+  pipelineWarmer(device).warmCompute(pipeline, target);
 }

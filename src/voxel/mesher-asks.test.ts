@@ -175,3 +175,76 @@ describe('section mesher asks (ws/scene-read-fit)', () => {
     expect(inlineCap.map((q) => q.part)).toEqual([0, 1, 1, 1, 0, 1, 0]);
   });
 });
+
+describe('section mesher asks (ws/forge-asks-fit)', () => {
+  const W_WATER = 1;
+  const W_REED = 2;
+  const W_BUSH = 3;
+  const W_BOX = 4;
+  const RIPE = defineVoxelFormat({
+    sectionSize: 8,
+    blocks: defineBlockTable([
+      { class: 'none' },
+      { class: 'liquid' },
+      { class: 'cross', quads: 2, liquid: W_WATER, inset: 6 },
+      { class: 'cross', quads: 2, inset: 4 },
+      { class: 'cutout', inset: 2 },
+    ]),
+    vertex: defineVertexSchema([...VOXEL_VERTEX_OPTIONAL, { name: 'ripe', bits: 3 }]),
+    cell: { idBits: 12, fields: [{ name: 'ripe', shift: 12, bits: 3 }] },
+  });
+  const ripeVerts = (buf: ArrayBuffer) => {
+    const w = new Uint32Array(buf);
+    const out: Record<string, number>[] = [];
+    for (let o = 0; o < w.length; o += 4 * SECTION_VERTEX_WORDS) {
+      out.push(unpackSectionVertex(RIPE.vertex, w[o], w[o + 1], {}));
+    }
+    return out;
+  };
+  const pad = (x: number, y: number, z: number) => x + 1 + (z + 1) * P + (y + 1) * P * P;
+
+  it('reads an insetFields field from bits of each cell’s own override value', () => {
+    const v = volume([
+      [1, 1, 1, W_BUSH | (7 << 12)],
+      [3, 1, 1, W_BUSH | (7 << 12)],
+      [5, 1, 1, W_BOX | (7 << 12)],
+    ]);
+    // Inset in the low 5 bits, ripeness above: bush 1 inset 3 ripe 2, the box inset 1 ripe 5.
+    const insets = Int32Array.of(pad(1, 1, 1), 3 | (2 << 5), pad(5, 1, 1), 1 | (5 << 5));
+    const m = new SectionMesher(RIPE);
+    const out = m.mesh(v, { greedy: false, insets, insetFields: { ripe: { shift: 5, bits: 3 } } });
+    const all = [...ripeVerts(out.foliage), ...ripeVerts(out.opaque)];
+    // One entry per quad.
+    const bush1 = all.filter((q) => q.id === W_BUSH && q.quad < 2 && q.inset === 3);
+    expect(bush1.length).toBe(2);
+    expect(bush1.every((q) => q.ripe === 2)).toBe(true);
+    // The other bush has no override: its own field and inset.
+    const bush3 = all.filter((q) => q.id === W_BUSH && q.inset === 4);
+    expect(bush3.length).toBe(2);
+    expect(bush3.every((q) => q.ripe === 7)).toBe(true);
+    const box = all.filter((q) => q.id === W_BOX);
+    expect(box.length).toBe(6);
+    expect(box.every((q) => q.ripe === 5 && q.inset === 1)).toBe(true);
+    // The next mesh without them reads the cells' own again.
+    const again = ripeVerts(m.mesh(v, { greedy: false }).foliage);
+    expect(again.every((q) => q.ripe === 7)).toBe(true);
+  });
+
+  it('cellInset holds a wet cross block’s inset in a cell meshed as its liquid', () => {
+    const cells: [number, number, number, number][] = [];
+    for (let y = 0; y <= 2; y++)
+      for (let z = 2; z <= 4; z++) for (let x = 2; x <= 4; x++) cells.push([x, y, z, W_WATER]);
+    cells.push([3, 0, 3, W_REED], [3, 1, 3, W_REED]);
+    const m = new SectionMesher(RIPE);
+    const out = m.mesh(volume(cells), {
+      greedy: false,
+      insets: Int32Array.of(pad(3, 1, 3), 9),
+    });
+    expect(m.cellInset[pad(3, 0, 3)]).toBe(6);
+    expect(m.cellInset[pad(3, 1, 3)]).toBe(9);
+    expect(m.cellInset[pad(2, 0, 3)]).toBe(0);
+    // The liquid's faces carry no inset; the quads carry the cell's.
+    expect(ripeVerts(out.liquid).every((q) => q.inset === 0)).toBe(true);
+    expect(ripeVerts(out.foliage).map((q) => q.inset)).toEqual([6, 6, 9, 9]);
+  });
+});

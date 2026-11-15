@@ -581,6 +581,8 @@ export class ParticleSystem implements Drawable {
   private readonly renderGroup: GPUBindGroup | null;
   private readonly soft: SoftDepth | null = null;
   private readonly counter: AliveCounter | null = null;
+  /** `destroy` ran (a queued warm then drops itself). */
+  private destroyed = false;
   private readonly fx: Fx | null = null;
   private readonly collider: Collider | null = null;
   /** `debug`: the staging buffer `debugReadback` copies the particles into. */
@@ -747,6 +749,7 @@ export class ParticleSystem implements Drawable {
       this.live = new LiveWindow();
       core!.addDrawable(this.coreDrawable);
       if (opts.countAlive) this.counter = this.makeCounter(fx, opts.countBelowY ?? -Infinity);
+      if (core!.warming) this.warmCompute(core!, fxs);
       return;
     }
 
@@ -1827,7 +1830,23 @@ export class ParticleSystem implements Drawable {
     return parseFields(d, this.capacity, this.extended, time, fx ? fx.curveData : null);
   }
 
+  /**
+   * The compute passes' empty first dispatches at load (ws/forge-asks-fit, on the core): WebKit
+   * compiles a compute pipeline at its first dispatch, otherwise the first frame it emits.
+   */
+  private warmCompute(core: RenderCore, fx: Fx): void {
+    const live = () => !this.destroyed;
+    const groups = [this.computeGroup];
+    core.warmCompute(this.spawnPipeline, { groups, live });
+    core.warmCompute(fx.advancePipeline, { groups, live });
+    core.warmCompute(this.updatePipeline, { groups, live });
+    core.warmCompute(fx.subPipeline, { groups, live });
+    const counter = this.counter;
+    if (counter) core.warmCompute(counter.pipeline, { groups: [counter.group], live });
+  }
+
   destroy(): void {
+    this.destroyed = true;
     if (this.coreDrawable) this.core!.removeDrawable(this.coreDrawable);
     this.coreDrawable?.destroy();
     this.debugRead?.destroy();

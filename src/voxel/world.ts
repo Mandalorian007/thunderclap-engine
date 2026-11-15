@@ -29,7 +29,7 @@ import {
 } from './format';
 import { inThreadMesherPort, type MesherPort, SectionMeshPool } from './pool';
 import type { VoxelHit } from './ray';
-import type { SectionMeshResult } from './section-protocol';
+import type { PoolMeshOptions, SectionMeshResult } from './section-protocol';
 import { raycastCells, sectionRayProbe } from './section-ray';
 import { createSectionStore, type SectionStore } from './store';
 import { type SectionBox, SectionVisibility } from './visibility';
@@ -163,6 +163,11 @@ export interface VoxelWorldOptions {
    * meshed again by the game when its level changes. Default 0 everywhere.
    */
   leafLod?: (sx: number, sy: number, sz: number) => number;
+  /**
+   * The rest of `SectionMeshOptions` every section meshes with (ws/forge-asks-fit; see
+   * `SectionMeshPoolOptions.meshOptions`); change them later with `world.pool.setMeshOptions`.
+   */
+  meshOptions?: PoolMeshOptions;
   /** Horizontal radius held around the interest point, in sections. Default 8. */
   radius?: number;
   /** Rows searched above and below the interest point. Default `radius` (at most the world's rows). */
@@ -410,6 +415,7 @@ export function createVoxelWorld(core: RenderCore, opts: VoxelWorldOptions): Vox
       if (store.has(key)) pending.set(key, result);
     },
     greedy: opts.greedy,
+    meshOptions: opts.meshOptions,
     perWorker: opts.perWorker,
     respawn: opts.respawn,
   });

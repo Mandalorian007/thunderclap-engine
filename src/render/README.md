@@ -1658,6 +1658,13 @@ blocks the page for hundreds of milliseconds. The core moves the cost to load wi
   groups and vertex slots, or a `bind(pass)` callback. `pipelineWarmer(device)` is the device's
   `PipelineWarmer` (`enabled`, `warmed`, `passes`, `pending`, `encode(encoder)`).
   `warmBindings(enc, ctx, n)` binds scratch vertex buffers in a drawable's `warm` hook.
+- Compute pipelines compile at their first dispatch the same way (ws/forge-asks-fit):
+  `core.warmCompute(pipeline, target)`, `warmer.warmCompute` or
+  `warmComputePipeline(device, pipeline, target)` queue a `dispatchWorkgroups(0)`
+  (`ComputeWarmTarget`: `groups`, or `bind(pass)`; `live()` false drops it), encoded into one
+  scratch compute pass. `core.warming` says whether the core warms its own (`warm` option and
+  `warmer.enabled`); an actor system's pose pass and a core particle system's passes then warm
+  at load.
 - Warm passes are labelled `warm`. Their calls stay out of `stats.calls`; `stats.warmed`
   counts this frame's warms.
 - On `harness/core.html?stall`, a set with a large shader first drawn at frame 30 takes 425 ms

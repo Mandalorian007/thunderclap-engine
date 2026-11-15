@@ -8,6 +8,7 @@ import v8 from 'node:v8';
 import { describe, expect, it } from 'vitest';
 import { Camera } from '../render/camera';
 import { createRenderCore, type RenderCore } from '../render/core/core';
+import { pipelineGroupErrors, recordPipelines } from '../render/core/pipeline-groups.test-util';
 import { createRenderView, type RenderView, setViewFromCamera } from '../render/core/view';
 import { createFakeDevice, type FakeDevice } from '../render/fake-gpu';
 import { expectProportional } from '../testing/budget';
@@ -17,6 +18,7 @@ import { createVoxelHit } from './ray';
 import { RAY_HIT } from './section-ray';
 import { SectionVisibility } from './visibility';
 import { createVoxelWorld, type VoxelWorld } from './world';
+import { VOXEL_DEFAULT_FRAGMENT } from './world-shaders';
 
 const AIR = 0;
 const STONE = 1;
@@ -386,5 +388,74 @@ describe('SectionVisibility (ws/voxel-draw)', () => {
     });
     expect(vis.stats.searches).toBe(n);
     expect(growth).toBeLessThan(8000);
+  });
+});
+
+describe('createVoxelWorld mesh options (ws/forge-asks-fit)', () => {
+  it('sends its meshOptions with every job, and pool.setMeshOptions changes them', () => {
+    const sent: { type: string; options?: unknown }[] = [];
+    const port = {
+      post: (m: { type: string; options?: unknown }) => sent.push(m),
+      onResult: () => {},
+      terminate: () => {},
+    };
+    const fake = createFakeDevice();
+    const core = createRenderCore(fake.device as unknown as GPUDevice);
+    const world = createVoxelWorld(core, {
+      format,
+      workers: [port],
+      minSectionY: 0,
+      maxSectionY: 0,
+      radius: 1,
+      meshOptions: { crossLod: 2, partsCap: 64, partsOrder: 'after' },
+      clock: () => clock.now,
+    });
+    for (let sz = -2; sz <= 2; sz++)
+      for (let sx = -2; sx <= 2; sx++)
+        world.putSection(sx, 0, sz, encodeRawSection(cellsOf(sx, 0, sz)));
+    world.setInterest(0, 4, 0);
+    clock.now += 2000;
+    world.update(0, 4, 0);
+    const jobs = sent.filter((m) => m.type === 'mesh');
+    expect(jobs.length).toBeGreaterThan(0);
+    expect(jobs[0]!.options).toEqual({ crossLod: 2, partsCap: 64, partsOrder: 'after' });
+    world.pool.setMeshOptions({ tieredPadding: true });
+    world.pool.enqueue(sectionKey(5, 0, 5), 0);
+    // A section that is not loaded builds no job; one that is gets the new options.
+    world.pool.enqueue(sectionKey(0, 0, 0), 0);
+    sent.length = 0;
+    world.pool.pump();
+    expect(
+      sent.every(
+        (m) => m.type !== 'mesh' || (m.options as { tieredPadding?: boolean }).tieredPadding,
+      ),
+    ).toBe(true);
+    world.dispose();
+  });
+});
+
+describe('voxel world casters (ws/forge-asks-fit)', () => {
+  it('every stream’s caster, warmed before any shadow is drawn, reaches only its groups', () => {
+    for (const materials of [
+      undefined,
+      {
+        foliage: { fragment: VOXEL_DEFAULT_FRAGMENT.foliage, shadowFragmentEntry: 'fs' },
+        liquid: { fragment: VOXEL_DEFAULT_FRAGMENT.liquid, castShadow: true },
+      },
+    ]) {
+      const fake = createFakeDevice();
+      const made = recordPipelines(fake);
+      const core = createRenderCore(fake.device as unknown as GPUDevice);
+      const world = createVoxelWorld(core, { format, workers: [], materials, radius: 1 });
+      const camera = Camera.perspective(Math.PI / 3, 16 / 9, 0.1, 1000);
+      const view = setViewFromCamera(createRenderView(), camera);
+      const r = { fake, core, world, view, camera } as unknown as Rig;
+      frame(r);
+      const casters = made.filter((p) => p.shadow).length;
+      expect(casters).toBe(materials ? 3 : 1);
+      expect(pipelineGroupErrors(made)).toEqual([]);
+      expect(fake.errors).toEqual([]);
+      world.dispose();
+    }
   });
 });

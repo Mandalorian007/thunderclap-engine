@@ -53,7 +53,12 @@ import {
   writePrevRows,
   writeViewSlot,
 } from './view';
-import { type PipelineWarmer, pipelineWarmer, type WarmTarget } from './warm';
+import {
+  type ComputeWarmTarget,
+  type PipelineWarmer,
+  pipelineWarmer,
+  type WarmTarget,
+} from './warm';
 
 /** Chromium's multi-draw feature name. */
 export const MULTI_DRAW_FEATURE = 'chromium-experimental-multi-draw-indirect';
@@ -107,9 +112,11 @@ export interface RenderCoreOptions {
    * Give each pipeline a frame may draw only sometimes its empty first draw ahead of use
    * (ws/warm-voxel-fit; `./warm`): an empty or disabled set's (in each of its passes), an idle
    * caster's (in `shadowFormat`) and an inactive drawable's with a `warm` hook, in a scratch
-   * pass at the end of `draw`. WebKit compiles a pipeline at its first draw, which on a
-   * shader-cache miss stalls the page; this moves that to load. Nothing is drawn into any
-   * target, so the picture is unchanged. Default true.
+   * pass at the end of `draw`; and the compute pipelines of systems on the core (an actor
+   * system's pose pass, a particle system's passes) an empty dispatch at load (`warming`).
+   * WebKit compiles a pipeline at its first use, which on a shader-cache miss stalls the page;
+   * this moves that to load. Nothing is drawn into any target, so the picture is unchanged.
+   * Default true.
    */
   warm?: boolean;
   /**
@@ -646,6 +653,22 @@ export class RenderCore {
    */
   warm(pipeline: GPURenderPipeline, target?: WarmTarget): void {
     this.warmerNow.warm(pipeline, target);
+  }
+
+  /**
+   * Queue compute `pipeline`'s empty first dispatch (ws/forge-asks-fit), encoded by the next
+   * `prepare` or `draw` like `warm`. A no-op while the warmer is off (`warmer.enabled`).
+   */
+  warmCompute(pipeline: GPUComputePipeline, target?: ComputeWarmTarget): void {
+    this.warmerNow.warmCompute(pipeline, target);
+  }
+
+  /**
+   * Whether the core warms its own pipelines (`RenderCoreOptions.warm` and `warmer.enabled`):
+   * systems built on it (actors, particles) warm their compute pipelines at load when it does.
+   */
+  get warming(): boolean {
+    return this.autoWarm && this.warmerNow.enabled;
   }
 
   /**
