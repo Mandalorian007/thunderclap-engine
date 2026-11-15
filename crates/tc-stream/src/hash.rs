@@ -3,18 +3,28 @@
 //! maps take a fast deterministic multiply-rotate hash (FxHash's mix with
 //! a folded 128-bit finish) over the standard library's SipHash, which
 //! was the larger share of a load's map work. See the README's numbers.
+//! Public, so a game's own maps of positions hash the same way.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasherDefault, Hasher};
 
+/// Builds [`PosHasher`]s: the hasher of [`PosMap`] and [`PosSet`].
+pub type PosBuildHasher = BuildHasherDefault<PosHasher>;
+
 /// A map keyed by positions (or tuples of them and integers).
-pub(crate) type PosMap<K, V> = HashMap<K, V, BuildHasherDefault<PosHasher>>;
+pub type PosMap<K, V> = HashMap<K, V, PosBuildHasher>;
+
+/// A set of positions (or tuples of them and integers).
+pub type PosSet<K> = HashSet<K, PosBuildHasher>;
 
 const K: u64 = 0xf135_7aea_2e62_a9c5;
 
-/// A multiply-rotate hasher over whole integer writes.
-#[derive(Default, Clone, Copy)]
-pub(crate) struct PosHasher(u64);
+/// A multiply-rotate hasher over whole integer writes: fast and
+/// deterministic (no random keys), for keys a client can't choose to
+/// collide (positions, and tuples of them and integers). Not for keys an
+/// attacker picks freely.
+#[derive(Default, Clone, Copy, Debug)]
+pub struct PosHasher(u64);
 
 impl PosHasher {
     #[inline]

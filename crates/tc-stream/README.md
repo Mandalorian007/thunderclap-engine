@@ -21,12 +21,28 @@ world.
   section, or a coarser one such as its column, sent once to a client
   holding any section under it); `layer_state(layer, key, out)` encodes
   the state (empty: none); `layer_frame(layer, key, from, to, out)` is the
-  game's own frame taking a client from `from` (`None`: the whole) to `to`
-  (empty: nothing sent); `layer_stamp(layer, key, state)` the state's
-  stamp for layer claims (default `bytes_stamp`). `begin(&Loading)` and
-  `end()` (default nothing) bracket each pass that may build (a flush,
-  `flush_conn`, `load_until`, `idle`, `check_claims`): `Loading {views,
-  sides, widest}` counts the views still loading and their sides, so a
+  game's own frame taking a client from `from` to `to` (an empty `out`:
+  nothing sent). `from` is a `LayerFrom`: `Nothing` (the client holds no
+  state there: a whole frame, and none at all when `to` is empty too),
+  `Unknown` (it may hold an earlier state, from before a reconnect or a
+  reload: a whole frame that replaces it, sent even when `to` is empty, so
+  it clears what it held) or `State(bytes)` (exactly that state: a
+  delta). It is asked once a flush for each key, `from` and `to`, however
+  many connections need it. `layer_order(layer)` (`LayerOrder::After`, the
+  default, or `Before`): whether a whole frame goes behind the section
+  that brings its key or ahead of it, and a change after or before the
+  flush's section changes. `layer_stamp(layer, key, state)` the state's
+  stamp for layer claims (default `bytes_stamp`). `take_marks(&mut
+  Marks)` (default nothing) is called right after each `build`, for what
+  the build found changed besides its section (`Marks::changed`,
+  `changed_bulk`, `changed_derived`, `layer_changed`, as the stream's
+  methods): marked sections held by anyone are rebuilt in the same pass
+  (once each), and marked layers are read at once, so they go with the
+  build that changed them. `begin(&Loading)` and `end()` (default
+  nothing) bracket each pass that may build (a flush, `flush_conn`,
+  `load_until`, `idle`, `check_claims`): `Loading {views, sides, widest,
+  areas, area_sides}` counts the views still loading and their sides, and
+  the distinct areas among them (views sharing an area count once), so a
   source sizes or drops its caches.
 - `SectionStream::new(StreamConfig, encode)`: `encode` turns a `StreamMsg`
   into a frame; `game_frame::<P>()` does it for a game whose
@@ -36,10 +52,19 @@ world.
   `set_stream_interest(conn, &StreamInterest)` (the same with group and
   layer claims), `check_claims(conn, within, &mut source, &mut lanes)`
   (looks at a connection's claims now, all or those within a box, before
-  a command acts on them), `claims_pending(conn)`, `held(conn)`, `changed(pos)`,
+  a command acts on them), `claims_pending(conn)`, `held(conn)`,
+  `loading_for(conn)`, `unloads_pending(conn)`, `holders(pos)` (the
+  connections holding a section: 0, and no one sees a change to it),
+  `changes_pending()`, `held_bytes(conn)` and `layer_bytes()` (the
+  stream's memory, roughly), `changed(pos)`,
   `changed_bulk(pos)` (a change re-sent whole in the bulk lane, for a
   reveal: a queued frame is replaced, a held one sent again behind the
-  loads), `layer_changed(layer, key)`, `flush(&mut source, &mut lanes)` once
+  loads), `changed_derived(pos)` (a change following from another, such
+  as a neighbour's faces: as `changed`, but a `changed_bulk` of the same
+  section stays in the bulk lane, where a `changed` would win),
+  `layer_changed(layer, key)`, `send_unloads(conn, &mut lanes)` (the
+  unloads waiting, now: after a jump, before the flush),
+  `flush(&mut source, &mut lanes)` once
   a tick, `flush_conn(conn, &mut source, &mut lanes)` (one connection's
   changes now, past the rebuild budget: before a command's result),
   `load_until(&mut source, &mut lanes, until, interrupted)` (builds loads
@@ -47,13 +72,19 @@ world.
   many), the idle budget (below), `reload()`, `has_work()`, `loading()`,
   `stats()` (`StreamStats`: sections, edits, unloads, `build_nanos`,
   `bulk_resends`, `layer_frames`, `bytes` and `refused` frames,
+  `withdrawn` and `withdrawn_bytes` (queued bulk frames taken back unsent:
+  `bytes - withdrawn_bytes` is what was written or still waits),
   `cache_hits`, claims resumed and resent, `group_claims`, `groups_held`,
   `groups_different`, `claims_dropped`, `layer_resumed`, flush and idle
   builds and nanos, `idle_holds`), `set_observer(Option<Box<dyn
   StreamObserver>>)` (any `FnMut(&StreamEvent) + Send`: `Queued {conn,
-  kind: FrameKind, bytes}` per frame handed to the lanes, `Built {pos,
-  nanos}`, `Claimed {conn, pos, kept}`, `Group {conn, start, kept}`; both
-  enums `#[non_exhaustive]`).
+  kind: FrameKind, bytes, pos, layer}` per frame handed to the lanes (`pos`
+  the section or layer key, `None` for unloads; `layer` for layer
+  frames), `Withdrawn {conn, pos, layer, bytes}`, `Built {pos, nanos}`,
+  `Claimed {conn, pos, kept}`, `Group {conn, start, kept}`, `LayerGroup
+  {conn, start, layer, kept}` (a group's layer digest matched or not);
+  both enums and every variant `#[non_exhaustive]`). The position hasher
+  is public: `PosHasher`, `PosBuildHasher`, `PosMap<K, V>`, `PosSet<K>`.
 - Idle building: `idle(&mut source, &mut lanes, until, interrupted)`
   builds loads in time the server's loop would wait, within
   `StreamConfig::idle` (`IdleBudget {spread: 8 ms, held: 3 ms, extra:
@@ -67,8 +98,12 @@ world.
   `build_budget` (sections built for loads per flush, shared),
   `rebuild_budget` (changed sections rebuilt per flush), `cache_bytes`,
   `history` (earlier encodings kept per section, for edits; 3),
-  `build_time` / `rebuild_time` (`Option<Duration>`, `None`: counts only;
-  set, a flush also stops building past the time, after at least one),
+  `load_time` / `rebuild_time` (`Option<Duration>`, `None`: counts only;
+  set, a flush's load stops sending past the time, sections from the
+  cache as well as built ones, after at least one; its rebuilds stop past
+  `rebuild_time`), `edit_rule` (`EditRule::Cells`, the default: an `Edit`
+  while its cells' bytes are fewer than the section's; `Frame`: while the
+  encoded `Edit` is shorter than the encoded `Section`),
   `unload_boxes` (`false`; set, a jump sends what it left as
   `UnloadBox`es, counted in `StreamStats::unload_boxes`), `idle`
   (`IdleBudget`).
@@ -102,8 +137,9 @@ world.
 Each flush:
 
 1. rebuilds changed sections someone holds (`rebuild_budget`, at least
-   one; one nobody holds is just forgotten) and marks holders of an older
-   encoding stale;
+   one; one nobody holds is just forgotten), and the sections their builds
+   mark, and marks holders of an older encoding stale; then reads the
+   layers that changed (those the builds marked too);
 2. sends each stale section: a frame still waiting in the bulk lane is
    withdrawn and queued again with the change (folded); otherwise an
    `Edit` (the changed cells, from the earlier encoding in the cache, when
@@ -124,14 +160,25 @@ Each flush:
    with at most `build_budget` builds shared;
 5. layers: each layer key a connection newly holds (through any section)
    is sent whole in the bulk lane right behind the section that brought
-   it; a changed state goes to its holders as the game's delta on the
-   priority lane, or is folded into a whole frame still queued. When a
-   section's queued frame is withdrawn and re-queued, its queued layer
-   frames follow behind it. A key is let go when no held section is under
-   it; `reload()` sends layers whole again.
+   it (`LayerOrder::Before`: right ahead of it); a changed state goes to
+   its holders as the game's delta on the priority lane (`Before` layers'
+   ahead of the section changes, the rest after them), or is folded into a
+   whole frame still queued. When a section's queued frame is withdrawn
+   and re-queued, its queued layer frames follow it. A key is let go when
+   no held section is under it; `reload()` sends layers whole again.
+
+A section frame never carries or clears layers: a section sent again
+whole (a `changed` too large for an `Edit`, a `changed_bulk`, a wrong
+claim) leaves the client's layer states under it as they are, and the
+stream sends none again for it, since they are still current. A client
+drops a key's state when it holds no section under that key (an unload,
+an `UnloadBox`); the stream lets the key go at the same point, and sends
+it whole when a section brings it back.
 
 `set_interest` unloads what is past the new area grown by the
-hysteresis (a section whose frame was withdrawn unsent needs none). On a
+hysteresis (a section whose frame was withdrawn unsent needs none); an
+unload not yet sent of a section back in the new area is undone, and the
+section claimed with what the client holds there, so it is kept. On a
 reconnect the client sets its interest with what it holds (`Claim`s): a
 claim whose stamp matches the current encoding is kept, a wrong one is
 sent again whole, one outside the area or at a position that doesn't exist
@@ -142,9 +189,14 @@ every section is kept; otherwise every section is sent again (a group
 reaching outside the area is split: what is outside unloaded, the rest
 claimed one by one). Each layer digest is checked on its own, and a
 `LayerClaim` (or a matching layer digest) keeps a state when a section
-first brings its key. Claims are capped (sections at the area's size,
-layer claims at eight times that); what the load passes without
-reaching is dropped (`claims_dropped`). `check_claims` looks at them
+first brings its key; a layer digest that doesn't match sends each of
+its keys whole from `LayerFrom::Unknown`. Claims are capped (sections at
+the area's size, layer claims at eight times that); what is outside the
+area, past the cap, or what the load passes without reaching is dropped
+(`claims_dropped`, a section each). A bulk frame of a section the client
+holds an earlier copy of that is withdrawn and refused again (a change
+folded into it while the lane is full) leaves that copy held, sent again
+later, not unloaded. `check_claims` looks at them
 early. `reload()` turns what every connection holds, sections and layer
 states, into claims, so a new world sends only what it changed.
 
@@ -176,7 +228,18 @@ of CPU over six runs against SipHash's 1.60 to 2.60 s (best wall time
   resume by groups with their layer digests, a group reaching outside
   the area, layer claims, `check_claims` before the load, groups split
   per line and at 32, idle building within its budget and held, the
-  observer, and `begin`/`end` around each pass.
+  observer, and `begin`/`end` around each pass; a layer emptied while
+  away cleared from `Unknown`, a build's marks rebuilt and sent in the
+  same flush (and in `flush_conn`), one `layer_frame` for three holders,
+  `LayerOrder::Before`, a whole section change keeping its layers, layer
+  group events and memory, `Loading`'s areas, and `Queued` positions and
+  withdrawals counted.
+- `tests/stream.rs` also: `EditRule::Frame`, `loading_for`,
+  `unloads_pending`, `send_unloads`, `holders`, `changes_pending` and the
+  public hasher, a view back before its unloads went, outside claims
+  counted, a refused fold keeping the copy held, `changed_derived` after
+  `changed_bulk`, `load_time` bounding cached sends, and `idle` sending
+  one section whatever `interrupted` says.
 - `tests/tiles.rs`: a 2D tilemap source (8×8 `u16` chunks, its own
   encoding) streams, edits, moves and resumes.
 - `tests/interop.rs`: a game loop on `tc-net` streams to `createNet`
