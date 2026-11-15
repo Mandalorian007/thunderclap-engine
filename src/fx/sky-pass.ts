@@ -2,7 +2,7 @@ import type { RenderCore } from '../render/core/core';
 import type { CoreDrawable, CoreDrawableEncoder, CoreDrawContext } from '../render/core/drawable';
 import type { CorePass, CorePassContext } from '../render/core/pass-list';
 import { coreDepthCompare } from '../render/core/pass-list';
-import { CORE_TARGET, coreColorTargets } from '../render/core/targets';
+import { type CoreTargetName, coreColorTargets, coreTargetMask } from '../render/core/targets';
 import { CORE_VIEW_WGSL } from '../render/core/view';
 import { createShaderModule, WGSL_NOISE } from '../render/wgsl';
 import { FX_DEPTH_WGSL, fxDepthCode } from './depth';
@@ -210,7 +210,17 @@ export interface SkyPassOptions {
   member?: string;
   /** With `member`: its order in that pass. Default 1000 (after the pass's own sets). */
   order?: number;
+  /**
+   * The core's extra targets the sky writes (ws/pass-actor-fit), which its pass attaches: as a
+   * member (`CoreDrawable.writes`), a pass declaring fewer (`PassDesc.writes: []`) still
+   * attaches these, so TAA reads the sky's velocity. Default `['emissive', 'velocity']`; `[]`
+   * leaves the pass as declared (the sky then writes colour only there).
+   */
+  writes?: readonly CoreTargetName[];
 }
+
+/** The extra targets the sky writes by default (`SkyPassOptions.writes`). */
+const SKY_WRITES: readonly CoreTargetName[] = ['emissive', 'velocity'];
 
 /** The look a hook-only sky packs (`createSkyPass(core, null, { shade })`): all zero, exposure 1. */
 function skyLookNone(): SkyLook {
@@ -291,6 +301,8 @@ export class SkyPass {
   private readonly hookData: Float32Array | null;
   private hookBuffer: GPUBuffer | null = null;
   private readonly groupLayoutOf: ((device: GPUDevice) => GPUBindGroupLayout) | null;
+  /** `SkyPassOptions.writes` as a mask: the targets the pipelines write. */
+  private readonly writeMask: number;
 
   constructor(
     private readonly core: RenderCore,
@@ -310,6 +322,9 @@ export class SkyPass {
     this.params = this.hookData ? this.hookData.subarray(4, 4 + 4 * n) : new Float32Array(0);
     this.groupLayoutOf = this.hook ? (opts.groupLayout ?? null) : null;
     this.build(core.device);
+    // ws/pass-cost: the dome writes these two; rough-metal stays out of the pass.
+    const writes = opts.writes ?? SKY_WRITES;
+    this.writeMask = coreTargetMask(writes);
     if (opts.member !== undefined) {
       const joined = core.passes.get(opts.member);
       if (!joined) throw new Error(`SkyPass: no pass ${opts.member} to join`);
@@ -317,15 +332,14 @@ export class SkyPass {
         throw new Error(`SkyPass: pass ${opts.member} has no depth to test the sky against`);
       }
       this.pass = joined;
-      this.member = new SkyMember(this, opts.member, opts.order ?? 1000);
+      this.member = new SkyMember(this, opts.member, opts.order ?? 1000, writes);
       core.addDrawable(this.member);
     } else {
       this.pass = core.definePass({
         id: opts.id ?? 'sky',
         after: opts.after ?? 'cutout',
         depth: 'read',
-        // ws/pass-cost: the dome writes these two; rough-metal stays out of the pass.
-        writes: ['emissive', 'velocity'],
+        writes,
         encodeWhen: () => this.ready,
         encode: (pass, ctx) => this.encode(pass, ctx),
       });
@@ -449,7 +463,7 @@ export class SkyPass {
       fragment: {
         module,
         entryPoint: 'fs',
-        targets: coreColorTargets({ format }, aux, CORE_TARGET.emissive | CORE_TARGET.velocity),
+        targets: coreColorTargets({ format }, aux, this.writeMask),
       },
       primitive: { topology: 'triangle-list', cullMode: 'none' },
       depthStencil: depthFormat
@@ -528,6 +542,7 @@ class SkyMember implements CoreDrawable {
     private readonly sky: SkyPass,
     readonly pass: string,
     readonly order: number,
+    readonly writes: readonly CoreTargetName[],
   ) {
     this.label = 'sky';
   }

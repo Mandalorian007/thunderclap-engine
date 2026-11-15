@@ -81,6 +81,7 @@ interface ActorMesh {
 interface ActorModelOptions {
     lods?: readonly number[];
     name?: string;
+    table?: Uint32Array | Float32Array;
 }
 
 ## ActorPoseCpu  (type-only)
@@ -207,6 +208,8 @@ class ActorSystem {
     whenReady(): Promise<void>;
     compileNow(): void;
     setInfo(): ActorSetInfo[];
+    showModel(model: number, show: boolean, set?: DrawSet): void;
+    modelShown(model: number, set?: DrawSet): boolean;
     prepare(encoder: GPUCommandEncoder, views: number | readonly unknown[], time: number, timestampWrites?: GPUComputePassTimestampWrites): void;
     destroy(): void;
     writeTable(data: Uint32Array | Float32Array, at?: number): void;
@@ -232,6 +235,7 @@ interface ActorSystemOptions {
     vertexCap?: number;
     tableWords?: number;
     drawTable?: boolean;
+    poseTable?: Uint32Array | Float32Array;
     asyncPipeline?: boolean;
     label?: string;
 }

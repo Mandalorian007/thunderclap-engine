@@ -958,6 +958,7 @@ interface SkyPassOptions {
     groupLayout?: (device: GPUDevice) => GPUBindGroupLayout;
     member?: string;
     order?: number;
+    writes?: readonly CoreTargetName[];
 }
 
 ## SkyStars  (type-only)
