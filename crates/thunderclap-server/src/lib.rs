@@ -22,15 +22,19 @@
 
 pub mod cli;
 mod server;
+mod stop;
 mod typescript;
+mod watch;
 
 pub use server::{
-    ACCOUNTS_DIR, AuthMode, BACKUPS_DIR, Builder, DEV_NAMES, Running, SECRET_FILE, STORE_DIR,
-    Server,
+    ACCOUNTS_DIR, AUTO_BACKUPS_DIR, AuthMode, BACKUPS_DIR, Builder, DEV_NAMES, LAST_OPEN_FILE,
+    Running, SECRET_FILE, STORE_DIR, Server,
 };
+pub use stop::{EXIT_FORCED, REPEAT_GRACE, STOP_FILE};
 pub use tc_sim::{Game, SimConfig};
 pub use tc_wire::Wire;
 pub use typescript::{NET_IMPORT, SCHEMA_TS, define_schema_ts, define_schema_ts_with, generate_ts};
+pub use watch::{WATCH_POLL, WATCH_QUIET, WatchConfig, WatchEvent};
 
 pub use tc_admin as admin;
 pub use tc_auth as auth;

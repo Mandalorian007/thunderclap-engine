@@ -17,13 +17,20 @@
 //!   [`InputQueue`]s, keeps one driver per player, pushes and marks the
 //!   clock, drops clients that don't read, reloads the game's data while
 //!   connections stay open ([`Sim::reload`]) and publishes a
-//!   [`SimStatus`]. It keeps players' unlogged bodies ([`Game::Body`]),
+//!   [`SimStatus`] with its [`SimCounters`]. It keeps players' unlogged bodies ([`Game::Body`]),
 //!   serves live queries ([`Query`]) and entity streams
 //!   ([`Game::entities`]) rerun only when what they read changed, seats
 //!   observers ([`Seat`]) and drops game messages over their rate lane
 //!   ([`Lane`]). [`Sim::spawn`] runs it on its own thread;
 //!   [`SimHandle`] controls it. [`Driver`] runs one in-process, with no
 //!   sockets, for tests and tools.
+//!
+//! - Live play (see [`LiveCx`]): a game with work
+//!   outside the log every step (things moving, timers on the wall clock)
+//!   implements [`Game::live`], [`Game::live_step`], [`Game::wake`] and
+//!   [`Game::act`], through a [`LiveCx`]; its outcomes are logged as
+//!   events, and its entity streams may follow the body
+//!   ([`Game::follow`]).
 //!
 //! **Determinism.** Time is an integer count of steps, at most
 //! [`MAX_TIME`]. Everything is ordered: scheduled events by time then by
@@ -36,11 +43,13 @@ mod bases;
 mod changes;
 mod conn;
 mod core;
+mod counters;
 mod driver;
 mod entities;
 mod game;
 mod input;
 mod lanes;
+mod live;
 mod query;
 mod reload;
 mod run;
@@ -53,11 +62,13 @@ mod wheel;
 pub use bases::{BASE_SETTLE, KEEP_BASES};
 pub use changes::Changes;
 pub use core::{ApplyError, Core, Replayed, STATE_HASH_VERSION};
+pub use counters::SimCounters;
 pub use driver::Driver;
 pub use game::{Bodies, Cx, EventOf, Game, InterestOf, Outbox, PlayerId, Seat, To};
 pub use input::{InputConfig, InputQueue, Taken};
 pub use lanes::Lane;
-pub use query::{Key, Query, QueryCtx, Reads, schema_of};
+pub use live::LiveCx;
+pub use query::{Key, Query, QueryCtx, Reads, ViewCx, schema_of};
 pub use reload::{MAX_ROUNDS, RELOAD_POLL, ReloadReply, ReloadReport, SWAP_BEHIND};
 pub use run::{Control, Running, SimHandle};
 pub use scheduler::{EventKey, Scheduler};

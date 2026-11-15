@@ -323,6 +323,20 @@ describe('createVoxelWorld (ws/voxel-draw)', () => {
     expect(hit.y).toBeLessThan(13);
     r.world.dispose();
   });
+
+  it('drops a box of sections and their geometry', async () => {
+    const r = rig(2);
+    await settle(r);
+    const bytes = r.world.stats.vertexBytes;
+    // The x ≥ 2 side: 2 columns of 7 × 5.
+    expect(r.world.dropBox(2, -2, -3, 3, 2, 3)).toBe(2 * 7 * 5);
+    expect(r.world.store.has(sectionKey(2, 0, 0))).toBe(false);
+    r.world.update(0, 30, -20);
+    expect(r.world.stats.sections).toBe(7 * 7 * 5 - 2 * 7 * 5);
+    expect(r.world.stats.vertexBytes).toBeLessThan(bytes);
+    expect(r.world.dropBox(2, -2, -3, 3, 2, 3)).toBe(0);
+    r.world.dispose();
+  });
 });
 
 describe('SectionVisibility (ws/voxel-draw)', () => {

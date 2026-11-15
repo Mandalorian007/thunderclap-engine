@@ -17,7 +17,8 @@
 //! encodings by walking the schema, then sends only the fields whose bytes
 //! changed.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::Arc;
 
 use tc_wire::schema::{Schema, TypeKind, TypeRef, VariantFields};
 use tc_wire::{DecodeError, Reader, Wire, Writer};
@@ -43,23 +44,16 @@ impl std::fmt::Display for ViewError {
 
 impl std::error::Error for ViewError {}
 
-/// Writes the entity stream for one client. Keeps what it last sent of
-/// each thing; the first frame, and the one after [`resync`](Self::resync),
-/// is a key frame.
+/// A view's layout: the schema and its fields' types, shared by every
+/// encoder and cache of one view.
 #[derive(Debug)]
-pub struct EntityEncoder<V: Wire> {
+struct Layout {
     schema: Schema,
     fields: Vec<TypeRef>,
-    sent: BTreeMap<u64, Vec<Vec<u8>>>,
-    key: bool,
-    scratch: Writer,
-    _view: std::marker::PhantomData<fn(&V)>,
 }
 
-impl<V: Wire> EntityEncoder<V> {
-    /// An encoder for view `V`, a struct of `schema` of at most
-    /// [`MAX_VIEW_FIELDS`] fields.
-    pub fn new(schema: &Schema) -> Result<EntityEncoder<V>, ViewError> {
+impl Layout {
+    fn new<V: Wire>(schema: &Schema) -> Result<Layout, ViewError> {
         let mut probe = tc_wire::schema::SchemaBuilder::new();
         let TypeRef::Named(name) = V::describe(&mut probe) else {
             return Err(ViewError("a view is a named struct".into()));
@@ -77,14 +71,154 @@ impl<V: Wire> EntityEncoder<V> {
                 fields.len()
             )));
         }
-        Ok(EntityEncoder {
+        Ok(Layout {
             schema: schema.clone(),
             fields,
+        })
+    }
+
+    /// `bytes` (a view's encoding) split into its fields.
+    fn split(&self, bytes: &[u8]) -> Encoded {
+        let mut r = Reader::new(bytes);
+        let mut ends = Vec::with_capacity(self.fields.len());
+        for ty in &self.fields {
+            skip(&self.schema, ty, &mut r).expect("a view encodes as its schema says");
+            ends.push(r.position() as u32);
+        }
+        Encoded {
+            bytes: bytes.into(),
+            ends,
+        }
+    }
+}
+
+/// One view's encoding and where each field ends in it.
+#[derive(Debug, PartialEq, Eq)]
+struct Encoded {
+    bytes: Box<[u8]>,
+    ends: Vec<u32>,
+}
+
+impl Encoded {
+    fn field(&self, i: usize) -> &[u8] {
+        let start = if i == 0 { 0 } else { self.ends[i - 1] as usize };
+        &self.bytes[start..self.ends[i] as usize]
+    }
+}
+
+/// Views encoded once and shared by every client's [`EntityEncoder`]
+/// ([`EntityEncoder::frame_shared`]): a thing's view is split into its
+/// fields once per change, however many clients see it, and a client
+/// that was sent the same encoding skips the thing at a pointer compare.
+/// The frames are the same bytes [`EntityEncoder::frame`] writes.
+///
+/// It keeps the last encoding of each thing by id; a thing seen
+/// differently by two clients (a per-client view) is split again each
+/// time it alternates, and still sent right. [`ViewCache::sweep`] after a
+/// pass drops the things no frame asked for in it or the pass before.
+#[derive(Debug)]
+pub struct ViewCache<V: Wire> {
+    layout: Arc<Layout>,
+    /// Each thing's last encoding, and the pass that last asked for it.
+    things: HashMap<u64, (u64, Arc<Encoded>)>,
+    pass: u64,
+    scratch: Writer,
+    splits: u64,
+    _view: std::marker::PhantomData<fn(&V)>,
+}
+
+impl<V: Wire> ViewCache<V> {
+    /// A cache for view `V`, a struct of `schema` of at most
+    /// [`MAX_VIEW_FIELDS`] fields.
+    pub fn new(schema: &Schema) -> Result<ViewCache<V>, ViewError> {
+        Ok(ViewCache {
+            layout: Arc::new(Layout::new::<V>(schema)?),
+            things: HashMap::new(),
+            pass: 0,
+            scratch: Writer::new(),
+            splits: 0,
+            _view: std::marker::PhantomData,
+        })
+    }
+
+    /// An encoder for one client, sharing this cache's layout.
+    pub fn encoder(&self) -> EntityEncoder<V> {
+        EntityEncoder::with_layout(self.layout.clone())
+    }
+
+    /// Views split into fields so far (once per change of a thing, not
+    /// per client).
+    pub fn splits(&self) -> u64 {
+        self.splits
+    }
+
+    /// Things held.
+    pub fn len(&self) -> usize {
+        self.things.len()
+    }
+
+    /// True if it holds nothing.
+    pub fn is_empty(&self) -> bool {
+        self.things.is_empty()
+    }
+
+    /// Ends a pass: drops the things no frame asked for in it or the one
+    /// before.
+    pub fn sweep(&mut self) {
+        let keep = self.pass.saturating_sub(1);
+        self.things.retain(|_, (pass, _)| *pass >= keep);
+        self.pass += 1;
+    }
+
+    /// Thing `id`'s encoding of `view`: the one held if it encodes the
+    /// same, else split now.
+    fn get(&mut self, id: u64, view: &V) -> Arc<Encoded> {
+        self.scratch.clear();
+        view.encode(&mut self.scratch);
+        let bytes = self.scratch.as_bytes();
+        let pass = self.pass;
+        if let Some((at, enc)) = self.things.get_mut(&id)
+            && *enc.bytes == *bytes
+        {
+            *at = pass;
+            return enc.clone();
+        }
+        self.splits += 1;
+        let enc = Arc::new(self.layout.split(bytes));
+        self.things.insert(id, (pass, enc.clone()));
+        enc
+    }
+}
+
+/// Writes the entity stream for one client. Keeps what it last sent of
+/// each thing; the first frame, and the one after [`resync`](Self::resync),
+/// is a key frame.
+#[derive(Debug)]
+pub struct EntityEncoder<V: Wire> {
+    layout: Arc<Layout>,
+    sent: BTreeMap<u64, Arc<Encoded>>,
+    key: bool,
+    scratch: Writer,
+    _view: std::marker::PhantomData<fn(&V)>,
+}
+
+impl<V: Wire> EntityEncoder<V> {
+    /// An encoder for view `V`, a struct of `schema` of at most
+    /// [`MAX_VIEW_FIELDS`] fields.
+    pub fn new(schema: &Schema) -> Result<EntityEncoder<V>, ViewError> {
+        Ok(EntityEncoder::with_layout(Arc::new(Layout::new::<V>(
+            schema,
+        )?)))
+    }
+
+    fn with_layout(layout: Arc<Layout>) -> EntityEncoder<V> {
+        EntityEncoder {
+            layout,
             sent: BTreeMap::new(),
             key: true,
             scratch: Writer::new(),
             _view: std::marker::PhantomData,
-        })
+        }
     }
 
     /// The next frame is a key frame (the client sent `EntityResync`).
@@ -102,31 +236,68 @@ impl<V: Wire> EntityEncoder<V> {
     where
         V: 'a,
     {
+        let mut scratch = std::mem::take(&mut self.scratch);
+        let layout = self.layout.clone();
+        let frame = self.write(tick, things, |_, view| {
+            scratch.clear();
+            view.encode(&mut scratch);
+            Arc::new(layout.split(scratch.as_bytes()))
+        });
+        self.scratch = scratch;
+        frame
+    }
+
+    /// [`EntityEncoder::frame`], with each view encoded through `cache`
+    /// (shared by every client's encoder of this view): the same frame,
+    /// but a thing is split into its fields once per change, not once
+    /// per client.
+    pub fn frame_shared<'a>(
+        &mut self,
+        tick: u64,
+        things: impl IntoIterator<Item = (u64, &'a V)>,
+        cache: &mut ViewCache<V>,
+    ) -> Option<Vec<u8>>
+    where
+        V: 'a,
+    {
+        self.write(tick, things, |id, view| cache.get(id, view))
+    }
+
+    fn write<'a>(
+        &mut self,
+        tick: u64,
+        things: impl IntoIterator<Item = (u64, &'a V)>,
+        mut encode: impl FnMut(u64, &V) -> Arc<Encoded>,
+    ) -> Option<Vec<u8>>
+    where
+        V: 'a,
+    {
         let key = std::mem::take(&mut self.key);
         if key {
             self.sent.clear();
         }
+        let fields = self.layout.fields.len();
         let mut body = Writer::new();
         let mut n = 0u32;
         let mut seen = BTreeSet::new();
         for (id, view) in things {
             seen.insert(id);
-            let enc = self.split(view);
-            match self.sent.insert(id, enc) {
+            let enc = encode(id, view);
+            match self.sent.insert(id, enc.clone()) {
                 None => {
-                    let enc = &self.sent[&id];
                     body.write_varint(id);
                     body.write_varint(u64::from(NEW));
-                    for f in enc {
-                        body.write_raw(f);
-                    }
+                    let end = enc.ends.last().map_or(0, |e| *e as usize);
+                    body.write_raw(&enc.bytes[..end]);
                     n += 1;
                 }
                 Some(last) => {
-                    let enc = &self.sent[&id];
+                    if Arc::ptr_eq(&last, &enc) {
+                        continue;
+                    }
                     let mut bits = 0u32;
-                    for (i, (now, was)) in enc.iter().zip(&last).enumerate() {
-                        if now != was {
+                    for i in 0..fields {
+                        if enc.field(i) != last.field(i) {
                             bits |= 4 << i;
                         }
                     }
@@ -135,9 +306,9 @@ impl<V: Wire> EntityEncoder<V> {
                     }
                     body.write_varint(id);
                     body.write_varint(u64::from(bits));
-                    for (i, f) in enc.iter().enumerate() {
+                    for i in 0..fields {
                         if bits & (4 << i) != 0 {
-                            body.write_raw(f);
+                            body.write_raw(enc.field(i));
                         }
                     }
                     n += 1;
@@ -166,21 +337,6 @@ impl<V: Wire> EntityEncoder<V> {
         w.write_varint(u64::from(n));
         w.write_raw(&body);
         Some(w.into_bytes())
-    }
-
-    /// `view`'s encoding, one piece per field.
-    fn split(&mut self, view: &V) -> Vec<Vec<u8>> {
-        self.scratch.clear();
-        view.encode(&mut self.scratch);
-        let bytes = self.scratch.as_bytes();
-        let mut r = Reader::new(bytes);
-        let mut out = Vec::with_capacity(self.fields.len());
-        for ty in &self.fields {
-            let start = r.position();
-            skip(&self.schema, ty, &mut r).expect("a view encodes as its schema says");
-            out.push(r.since(start).to_vec());
-        }
-        out
     }
 }
 
@@ -362,6 +518,54 @@ mod tests {
         enc.resync();
         let (key, _, entries) = read(&enc.frame(15, []).unwrap());
         assert!(key && entries.is_empty());
+    }
+
+    #[test]
+    fn shared_frames_are_the_same_bytes_split_once_per_change() {
+        let schema = schema();
+        let mut cache = ViewCache::<Ghost>::new(&schema).unwrap();
+        let mut own = [
+            EntityEncoder::<Ghost>::new(&schema).unwrap(),
+            EntityEncoder::<Ghost>::new(&schema).unwrap(),
+        ];
+        let mut shared = [cache.encoder(), cache.encoder()];
+        let mut a = ghost(1);
+        let b = ghost(2);
+        let mut frames = 0;
+        for tick in 0..6u64 {
+            if tick == 2 {
+                a.mood = Mood::Odd(4);
+            }
+            if tick == 4 {
+                a.x = 9;
+            }
+            for c in 0..2 {
+                // The second client loses `b` at tick 3, and gets a key
+                // frame at tick 5.
+                let things: Vec<(u64, &Ghost)> = if c == 1 && tick == 3 {
+                    vec![(1, &a)]
+                } else {
+                    vec![(1, &a), (2, &b)]
+                };
+                if c == 1 && tick == 5 {
+                    own[c].resync();
+                    shared[c].resync();
+                }
+                let want = own[c].frame(tick, things.iter().copied());
+                let got = shared[c].frame_shared(tick, things.iter().copied(), &mut cache);
+                assert_eq!(got, want, "client {c} at tick {tick}");
+                frames += usize::from(want.is_some());
+            }
+            cache.sweep();
+        }
+        assert!(frames >= 6);
+        // a, b, a's mood, a's x: four splits for two clients and six ticks.
+        assert_eq!(cache.splits(), 4);
+        assert_eq!(cache.len(), 2);
+        // Nothing asked for in two passes is dropped.
+        cache.sweep();
+        cache.sweep();
+        assert!(cache.is_empty());
     }
 
     #[test]

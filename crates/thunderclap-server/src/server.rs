@@ -1,19 +1,24 @@
 //! [`Server`]: the builder, and the [`Running`] server it starts.
 
+use std::any::Any;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use tc_admin::{
-    AdminChannel, Backups, DataLoader, GameRequests, KEEP_BACKUPS, Live, Reports, Revoke,
-    SimControls,
+    AdminChannel, Backups, DataLoader, GameRequests, GameStatus, KEEP_BACKUPS, Live, Reports,
+    Revoke, SimControls,
 };
 use tc_auth::{FileAccounts, NameRules, SessionAuth, TokenFormat};
 use tc_net::{Auth, ServerConfig};
 use tc_sim::{Core, Game, Sim, SimConfig, SimHandle};
 use tc_store::{ArchivePolicy, META_FILE};
 use tokio::sync::watch;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
+
+use crate::stop::{EXIT_FORCED, REPEAT_GRACE, STOP_FILE, STOP_POLL, Signals};
+use crate::watch::{WatchConfig, Watcher};
 
 /// The store's directory, under the data directory.
 pub const STORE_DIR: &str = "store";
@@ -23,6 +28,12 @@ pub const ACCOUNTS_DIR: &str = "accounts";
 pub const BACKUPS_DIR: &str = "backups";
 /// The file holding the dev token secret, under the data directory.
 pub const SECRET_FILE: &str = "auth.secret";
+/// The file naming the build that last opened the store, under the data
+/// directory ([`Builder::backup_on_new_build`]).
+pub const LAST_OPEN_FILE: &str = "last-open";
+/// Where [`Builder::backup_on_new_build`]'s backups go, under
+/// [`BACKUPS_DIR`] (apart from the admin channel's).
+pub const AUTO_BACKUPS_DIR: &str = "auto";
 
 /// Names [`AuthMode::DevGuests`] takes: `lower_snake`, 2 to 24.
 pub const DEV_NAMES: NameRules =
@@ -72,11 +83,16 @@ impl<G: Game> Server<G> {
             keep_backups: KEEP_BACKUPS,
             archive: ArchivePolicy::default(),
             net: Vec::new(),
+            game_status: None,
+            on_started: None,
+            auto_backups: None,
+            watch: None,
         }
     }
 }
 
 type NetTweak = Box<dyn FnOnce(&mut ServerConfig) + Send>;
+type Started<G> = Box<dyn FnOnce(&Running<G>) -> Box<dyn Any + Send> + Send>;
 
 /// How a server is set up: [`Server::builder`].
 pub struct Builder<G: Game> {
@@ -94,6 +110,10 @@ pub struct Builder<G: Game> {
     keep_backups: usize,
     archive: ArchivePolicy,
     net: Vec<NetTweak>,
+    game_status: Option<GameStatus>,
+    on_started: Option<Started<G>>,
+    auto_backups: Option<usize>,
+    watch: Option<(Vec<PathBuf>, WatchConfig)>,
 }
 
 impl<G: Game> Builder<G> {
@@ -189,6 +209,50 @@ impl<G: Game> Builder<G> {
         self
     }
 
+    /// The game's own status (players by name, its world's numbers), in
+    /// the admin channel's every status (`Status::game`). Asked on the
+    /// runtime's thread: read what the game publishes, never wait.
+    pub fn game_status(
+        mut self,
+        status: impl Fn() -> serde_json::Value + Send + Sync + 'static,
+    ) -> Self {
+        self.game_status = Some(Arc::new(status));
+        self
+    }
+
+    /// Runs `started` once the server is up (it listens, the admin channel
+    /// is open): the game's own announcement (where it listens, on stdout
+    /// for a launcher), a status writer. What it returns is kept until the
+    /// server stops, then dropped first.
+    pub fn on_started(
+        mut self,
+        started: impl FnOnce(&Running<G>) -> Box<dyn Any + Send> + Send + 'static,
+    ) -> Self {
+        self.on_started = Some(Box::new(started));
+        self
+    }
+
+    /// Backs the store up before it opens when the build (see
+    /// [`build`](Self::build); fold a content hash into it to count data
+    /// changes too) differs from the one that opened it last, into
+    /// [`AUTO_BACKUPS_DIR`] under the backups, keeping the newest `keep`
+    /// (0: every one). A backup that fails is logged and the server opens
+    /// anyway. Off by default.
+    pub fn backup_on_new_build(mut self, keep: usize) -> Self {
+        self.auto_backups = Some(keep);
+        self
+    }
+
+    /// Watches `paths` (files, or directories walked) while it runs and
+    /// reloads the game's data through [`reload_with`](Self::reload_with)'s
+    /// loader once they change and go quiet: dev hot reload. A load that
+    /// fails is logged (and handed to [`WatchConfig::on_reload`]) and the
+    /// game runs on as it was. Needs `reload_with`.
+    pub fn watch(mut self, paths: impl IntoIterator<Item = PathBuf>, config: WatchConfig) -> Self {
+        self.watch = Some((paths.into_iter().collect(), config));
+        self
+    }
+
     /// The data directory set.
     pub fn data_path(&self) -> &Path {
         &self.data_dir
@@ -220,6 +284,13 @@ impl<G: Game> Builder<G> {
         let data = self.data_dir;
         std::fs::create_dir_all(&data).map_err(|e| format!("creating {}: {e}", data.display()))?;
         let store = data.join(STORE_DIR);
+        if self.watch.is_some() && self.data.is_none() {
+            return Err("watching the game's data needs reload_with".into());
+        }
+        let open_backup = match self.auto_backups {
+            Some(keep) => backup_on_new_build(&data, &store, &self.build, keep),
+            None => None,
+        };
         let codec = self.game.codec();
         // The archive the bases leave the log in keeps by the same policy.
         let config = SimConfig {
@@ -269,6 +340,20 @@ impl<G: Game> Builder<G> {
 
         let stopping = Arc::new(AtomicBool::new(false));
         let (stop_tx, stop_rx) = watch::channel(false);
+        let watcher = match self.watch {
+            Some((paths, config)) => {
+                let load = self.data.clone().ok_or("watch needs reload_with")?;
+                match Watcher::spawn(paths, config, running.handle.clone(), load) {
+                    Ok(w) => Some(w),
+                    Err(e) => {
+                        net.stop().await;
+                        running.stop();
+                        return Err(e);
+                    }
+                }
+            }
+            None => None,
+        };
         let live = Live {
             sim: Arc::new(SimControls {
                 handle: running.handle.clone(),
@@ -276,7 +361,7 @@ impl<G: Game> Builder<G> {
             }),
             io: Some(net.io_counters()),
             port: addr.port(),
-            build: self.build,
+            build: self.build.clone(),
             stopping: stopping.clone(),
             revoke,
             backups: Some(Backups {
@@ -286,6 +371,7 @@ impl<G: Game> Builder<G> {
             }),
             reports: self.reports.clone(),
             game: self.game_requests,
+            status: self.game_status,
         };
         let admin = match AdminChannel::open(&store, live, stop_tx).await {
             Ok(a) => a,
@@ -296,7 +382,12 @@ impl<G: Game> Builder<G> {
             }
         };
         info!(%addr, data = %data.display(), "serving");
-        Ok(Running {
+        if self.auto_backups.is_some()
+            && let Err(e) = std::fs::write(data.join(LAST_OPEN_FILE), &self.build)
+        {
+            warn!("could not note the build that opened the store: {e}");
+        }
+        let mut running = Running {
             net: Some(net),
             sim: Some(running),
             admin: Some(admin),
@@ -307,37 +398,110 @@ impl<G: Game> Builder<G> {
             data_dir: data,
             store,
             addr,
-        })
+            open_backup,
+            watcher,
+            guard: None,
+        };
+        if let Some(started) = self.on_started {
+            running.guard = Some(started(&running));
+        }
+        Ok(running)
     }
 
-    /// Starts it on a runtime of its own and serves until the admin
-    /// channel's stop or Ctrl-C, then stops cleanly. Prints where it
-    /// serves.
+    /// Starts it on a runtime of its own and serves until it is asked to
+    /// stop: the admin channel's stop, a stop signal (Ctrl-C, `SIGTERM`;
+    /// on Windows Ctrl-Break and closing the console too), or
+    /// [`STOP_FILE`] appearing in the data directory; then stops cleanly.
+    /// A second signal after [`REPEAT_GRACE`] exits at once with
+    /// [`EXIT_FORCED`]. If the game's loop ends on its own (a panic), it
+    /// stops too and says so: the error. Prints where it serves.
     pub fn run(self) -> Result<(), String> {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .map_err(|e| format!("starting a runtime: {e}"))?;
+        let stop_file = self.data_dir.join(STOP_FILE);
         rt.block_on(async {
-            let mut running = self.start().await?;
+            if std::fs::remove_file(&stop_file).is_ok() {
+                info!("removed a stop file left over");
+            }
+            let mut signals = Signals::new();
+            let running = self.start().await?;
             eprintln!(
                 "serving ws://{} from {} (Ctrl-C or `stop` ends it)",
                 running.addr(),
                 running.data_dir().display()
             );
-            tokio::select! {
-                () = running.stopped() => {}
-                r = tokio::signal::ctrl_c() => {
-                    if let Err(e) = r {
-                        warn!("waiting for Ctrl-C: {e}");
-                        running.stopped().await;
+            let mut asked = running.stop.clone();
+            let mut poll = tokio::time::interval(STOP_POLL);
+            let why = loop {
+                tokio::select! {
+                    _ = asked.wait_for(|s| *s) => break "asked to",
+                    s = signals.next() => break s,
+                    _ = poll.tick() => {
+                        if std::fs::remove_file(&stop_file).is_ok() {
+                            break "the stop file";
+                        }
+                        if running.loop_ended() {
+                            break "the game's loop ended";
+                        }
                     }
                 }
+            };
+            let crashed = running.loop_ended();
+            if crashed {
+                error!("the game's loop ended on its own: stopping");
             }
-            eprintln!("stopping");
+            eprintln!("stopping ({why})");
+            let first = Instant::now();
+            let force = tokio::spawn(async move {
+                loop {
+                    let s = signals.next().await;
+                    if first.elapsed() >= REPEAT_GRACE {
+                        eprintln!("{s} again: exiting now");
+                        std::process::exit(EXIT_FORCED);
+                    }
+                }
+            });
             running.stop().await;
+            force.abort();
+            if crashed {
+                return Err("the game's loop ended on its own (see the log)".into());
+            }
             Ok(())
         })
+    }
+}
+
+/// Backs `store` up into the auto backups if `build` didn't open it last;
+/// where the backup went.
+fn backup_on_new_build(data: &Path, store: &Path, build: &str, keep: usize) -> Option<PathBuf> {
+    if !store.join(META_FILE).exists() {
+        return None;
+    }
+    let last = std::fs::read_to_string(data.join(LAST_OPEN_FILE)).ok();
+    if last.as_deref() == Some(build) {
+        return None;
+    }
+    let backups = Backups {
+        store: store.to_path_buf(),
+        dir: data.join(BACKUPS_DIR).join(AUTO_BACKUPS_DIR),
+        keep,
+    };
+    match backups.run(None) {
+        Ok(b) => {
+            info!(
+                from = last.as_deref().unwrap_or("(unknown)"),
+                to = build,
+                dir = %b.dir.display(),
+                "a new build: backed the store up before opening it"
+            );
+            Some(b.dir)
+        }
+        Err(e) => {
+            warn!("a new build, but the backup before opening failed (opening anyway): {e}");
+            None
+        }
     }
 }
 
@@ -377,6 +541,9 @@ pub struct Running<G: Game> {
     data_dir: PathBuf,
     store: PathBuf,
     addr: std::net::SocketAddr,
+    open_backup: Option<PathBuf>,
+    watcher: Option<Watcher>,
+    guard: Option<Box<dyn Any + Send>>,
 }
 
 impl<G: Game> Running<G> {
@@ -416,6 +583,18 @@ impl<G: Game> Running<G> {
         self.admin.as_ref().map(AdminChannel::addr)
     }
 
+    /// The backup [`Builder::backup_on_new_build`] made as it opened, if
+    /// it did.
+    pub fn open_backup(&self) -> Option<&Path> {
+        self.open_backup.as_deref()
+    }
+
+    /// True if the game's loop ended on its own (it panicked): the server
+    /// should stop ([`Builder::run`] does).
+    pub fn loop_ended(&self) -> bool {
+        self.sim.as_ref().is_some_and(|s| s.thread.is_finished())
+    }
+
     /// Returns once the admin channel is asked to stop.
     pub async fn stopped(&mut self) {
         let _ = self.stop.wait_for(|s| *s).await;
@@ -424,8 +603,11 @@ impl<G: Game> Running<G> {
     /// Stops: the admin channel closes, the sessions close, the loop stops
     /// (its log flushed), the reports waiting are written. The game as it
     /// stopped.
+    /// A loop that panicked is logged, and gives `None`.
     pub async fn stop(mut self) -> Option<Core<G>> {
         self.stopping.store(true, Ordering::Relaxed);
+        drop(self.guard.take());
+        drop(self.watcher.take());
         if let Some(admin) = self.admin.take() {
             admin.close();
         }
@@ -435,7 +617,21 @@ impl<G: Game> Running<G> {
         }
         // Brief blocking: the loop flushes its log and its thread ends; the
         // reports waiting are written.
-        let core = self.sim.take().map(tc_sim::Running::stop);
+        let core = self.sim.take().and_then(|sim| {
+            sim.handle.stop();
+            drop(sim.requests);
+            sim.thread
+                .join()
+                .map_err(|panic| {
+                    let why = panic
+                        .downcast_ref::<&str>()
+                        .map(|s| (*s).to_string())
+                        .or_else(|| panic.downcast_ref::<String>().cloned())
+                        .unwrap_or_default();
+                    error!("the game's loop panicked: {why}");
+                })
+                .ok()
+        });
         if let Some(r) = &self.reports {
             r.close();
         }

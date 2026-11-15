@@ -177,6 +177,11 @@ impl Outbound {
         self.shared.held.store(true, Ordering::Relaxed);
     }
 
+    /// True while wakes are held ([`Outbound::hold`]).
+    pub fn is_held(&self) -> bool {
+        self.shared.held.load(Ordering::Relaxed)
+    }
+
     /// Stops holding wakes, and wakes the session if priority frames were
     /// queued while they were held.
     pub fn release(&self) {
@@ -470,11 +475,14 @@ mod tests {
         let mut cx = std::task::Context::from_waker(&waker);
         let mut ready = Box::pin(rx.ready(false));
         assert!(ready.as_mut().poll(&mut cx).is_pending());
+        assert!(!out.is_held());
         out.hold();
+        assert!(out.is_held());
         out.try_send(vec![1]).unwrap();
         out.try_send(vec![2]).unwrap();
         assert_eq!(woken.load(Ordering::SeqCst), 0, "held");
         out.release();
+        assert!(!out.is_held());
         assert_eq!(woken.load(Ordering::SeqCst), 1, "woken once");
         assert!(ready.as_mut().poll(&mut cx).is_ready());
         // Released: each frame wakes again; nothing held, nothing to wake.
