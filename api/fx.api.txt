@@ -1225,6 +1225,41 @@ interface WaterOptions {
     shade?: string;
 }
 
+## WaterShading
+class WaterShading implements CoreDrawable {
+    readonly core: RenderCore;
+    readonly label = "water-shading";
+    readonly pass = "transparent";
+    readonly version = 0;
+    readonly active = false;
+    level: number;
+    readonly shallowColor: Float32Array<ArrayBuffer>;
+    readonly deepColor: Float32Array<ArrayBuffer>;
+    depthFade: number;
+    fresnel: number;
+    roughness: number;
+    waves: WaterWave[];
+    foam: WaterFoam | null;
+    opacity: number;
+    time: number;
+    refraction: number;
+    reflectionSteps: number;
+    reflectionReach: number;
+    readonly sunDirection: Float32Array<ArrayBuffer>;
+    readonly sunColor: Float32Array<ArrayBuffer>;
+    readonly skyColor: Float32Array<ArrayBuffer>;
+    readonly readsColor: boolean;
+    constructor(core: RenderCore, opts?: WaterShadingOptions);
+    update(dt: number): void;
+    prepare(): void;
+    record(): number;
+    look(group?: number): WaterLook;
+    destroy(): void;
+}
+
+## WaterShadingOptions  (type-only)
+type WaterShadingOptions = Pick<WaterOptions, 'level' | 'shallowColor' | 'deepColor' | 'depthFade' | 'fresnel' | 'roughness' | 'waves' | 'foam' | 'opacity' | 'refraction' | 'reflectionSteps' | 'reflectionReach' | 'sunDirection' | 'sunColor' | 'skyColor' | 'shade'>;
+
 ## WaterWave  (type-only)
 interface WaterWave {
     scale: number;
