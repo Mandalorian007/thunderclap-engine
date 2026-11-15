@@ -94,7 +94,11 @@ describe('the scene-read group (ws/scene-read-fit)', () => {
     const w = world();
     const own = w.device.createBindGroupLayout({ entries: [] });
     const ownGroup = w.device.createBindGroup({ layout: own, entries: [] });
-    const s = set(w, { readsDepth: true, readsColor: true, bindGroups: [{ layout: own, group: ownGroup }] });
+    const s = set(w, {
+      readsDepth: true,
+      readsColor: true,
+      bindGroups: [{ layout: own, group: ownGroup }],
+    });
     expect(s.sceneGroup).toBe(2);
     expect(w.modules.at(-1)).toContain(coreSceneReadWgsl(2));
     frame(w, target(w));

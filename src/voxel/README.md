@@ -248,7 +248,7 @@ Without them a section meshes the same as before.
 - `SectionMeshOptions.partsCap` caps a section's part quads; `partsOrder: 'after'` puts every
   part after every cross block's own quads, so the cap drops the last cells' parts (and their
   `twin` marks) first.
-- `voxelSetDesc(format, stream, material?)` is the draw set `createVoxelWorld` makes for a
+- `voxelSetDesc(format, stream, material?)` (a `VoxelSetDesc`) is the draw set `createVoxelWorld` makes for a
   stream (shader, layouts, pass, groups, blend, scene reads), for a game that keeps its own
   sets. A `VoxelMaterial` with `readsDepth` / `readsColor` reads the core's scene-read group: a
   liquid material that is a `Water.look()` shades a world's lakes as water

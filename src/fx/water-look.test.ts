@@ -32,7 +32,13 @@ function rig(reversedZ = false) {
   const frame = () => {
     const enc = device.createCommandEncoder();
     core.prepare(enc, [view]);
-    core.draw(enc, 0, { view: texture.createView(), texture, format: 'rgba8unorm', width: 64, height: 64 });
+    core.draw(enc, 0, {
+      view: texture.createView(),
+      texture,
+      format: 'rgba8unorm',
+      width: 64,
+      height: 64,
+    });
     device.queue.submit([enc.finish()]);
   };
   return { fake, device, core, frame };
@@ -74,7 +80,9 @@ describe('a water look (ws/scene-read-fit)', () => {
     expect(r.fake.errors).toEqual([]);
     expect(water.coreDrawable!.active).toBe(false);
     const bundle = r.fake.bundles.find((b) =>
-      b.commands.some((c) => c.op === 'setBindGroup' && (c as { group: unknown }).group === look.bindGroup.group),
+      b.commands.some(
+        (c) => c.op === 'setBindGroup' && (c as { group: unknown }).group === look.bindGroup.group,
+      ),
     )!;
     const binds = bundle.commands.filter((c: PassCommand) => c.op === 'setBindGroup') as {
       index: number;
@@ -83,7 +91,9 @@ describe('a water look (ws/scene-read-fit)', () => {
     expect(binds.map((b) => b.index)).toEqual([0, 1, 2]);
     expect(binds[2]!.group).toBe(r.core.sceneRead.group);
     // The plane draws no index buffer, the block and clock still upload.
-    expect(r.fake.writes.filter((w) => w.buffer.label === 'water-core').length).toBeGreaterThanOrEqual(2);
+    expect(
+      r.fake.writes.filter((w) => w.buffer.label === 'water-core').length,
+    ).toBeGreaterThanOrEqual(2);
   });
 
   it('a group past the set’s own, reversed depth, no colour', () => {
@@ -97,7 +107,9 @@ describe('a water look (ws/scene-read-fit)', () => {
   });
 
   it('the plane’s own shading is the shared function with up = +y', () => {
-    expect(WATER_CORE_WGSL).toContain('water_shade(in.clip.xy, in.ndc.xy / in.ndc.w, in.world, vec3f(0.0, 1.0, 0.0))');
+    expect(WATER_CORE_WGSL).toContain(
+      'water_shade(in.clip.xy, in.ndc.xy / in.ndc.w, in.world, vec3f(0.0, 1.0, 0.0))',
+    );
     expect(WATER_CORE_WGSL).toContain('normalize(up + vec3f(-f.y, 0.0, -f.z) * max(up.y, 0.0))');
   });
 });

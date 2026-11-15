@@ -10,7 +10,6 @@ import { defineVertexSchema, unpackSectionVertex, VOXEL_VERTEX_OPTIONAL } from '
 import { SECTION_VERTEX_WORDS, SectionMesher } from './section-mesher';
 import { HEIGHT_OPEN, type SectionInput } from './sources';
 
-const AIR = 0;
 const STONE = 1;
 const WATER = 2;
 const KELP = 3;
