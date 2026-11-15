@@ -204,9 +204,15 @@ fn a_reload_replays_the_log_into_the_new_game() {
         outcome.recv().unwrap().is_err(),
         "the game refused the data"
     );
+    // Held until the command is logged: a command ticks the sim first, so
+    // a replay already done would swap before it (the report one version
+    // behind).
+    let hold = d.core().game().hold.clone();
+    hold.store(true, Ordering::Relaxed);
     d.sim_mut().reload(Arc::new(10), Some(reply));
     // Logged while the replay runs: caught up before the swap.
     command(&mut d, ada, 3, "add 1");
+    hold.store(false, Ordering::Relaxed);
     let report = loop {
         d.tick(Instant::now());
         if let Ok(report) = outcome.try_recv() {
@@ -216,6 +222,7 @@ fn a_reload_replays_the_log_into_the_new_game() {
     };
     assert_eq!(report.version, d.core().version());
     assert_eq!(report.clients, 1);
+    assert_eq!(report.caught_up, 1, "{report:?}");
     assert_eq!(d.core().game().tally_of("ada"), Some(60));
     assert!(Driver::<Tally>::received(&mut rx).contains(&ServerMsg::Game("reloaded x10".into())));
     assert!(!d.sim().status().get().reloading);
