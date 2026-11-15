@@ -68,7 +68,7 @@ pub use game::{Bodies, Cx, EventOf, Game, InterestOf, Outbox, PlayerId, Seat, To
 pub use input::{InputConfig, InputQueue, Taken};
 pub use lanes::Lane;
 pub use live::LiveCx;
-pub use query::{Key, Query, QueryCtx, Reads, schema_of};
+pub use query::{Key, Query, QueryCtx, Reads, ViewCx, schema_of};
 pub use reload::{MAX_ROUNDS, RELOAD_POLL, ReloadReply, ReloadReport, SWAP_BEHIND};
 pub use run::{Control, Running, SimHandle};
 pub use scheduler::{EventKey, Scheduler};

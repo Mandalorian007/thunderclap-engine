@@ -67,7 +67,13 @@ with the game taken out.
   microseconds per phase; `since(earlier)`), `next_wake()`,
   `live_time()`. `SimConfig::verify_live` (debug builds) hashes the game
   around every live hook; `SimConfig::entities_on_input` sends the entity
-  frames of moved bodies right after the input tick.
+  frames of moved bodies right after the input tick;
+  `SimConfig::close_slow_senders` closes a command's sender that is over
+  its byte budget with query effects still to send instead of answering
+  it (off by default). `Game::after_batch(&self, batch, events, out)`
+  runs rules on each batch's change marks: its events join the batch
+  (logged right after it, before the result, not rerun on replay).
+  Counters add `entity_splits`, `rule_batches` and `closed_slow`.
 - `Driver<G>`: a sim run by hand with in-process connections, for tests,
   bots and tools; `Driver::query` runs a query once.
 - `InputQueue` (`InputConfig`, `Taken`): per-player inputs, stale ones
@@ -96,7 +102,12 @@ with the game taken out.
   anything changed; an unchanged result sends nothing. Each client gets an
   `Update` (patch, when smaller than the result) or a `Resync`, at the
   latest version: a client over 1 MiB behind is skipped and caught up
-  later. Unsubscribed results stay idle `RESUME_GRACE` (60 s) for a
+  later. A query with a view (`Query::with_view`, from a `ViewCx`: the
+  game, player and the connection's interest) is shared per (…, view);
+  `QueryCtx::view` reads it, and a subscription whose view changes with
+  the interest, the followed body or a reload moves to the new view's
+  run and gets a patch. Entity views are encoded once per change for
+  every stream (`tc_net::ViewCache`). Unsubscribed results stay idle `RESUME_GRACE` (60 s) for a
   `resume`. A query that fails sends `QueryFailed` and stays subscribed.
   At most `MAX_SUBSCRIPTIONS` (256) per connection. Debug builds rerun
   clean queries each flush and count `tracking_misses`.

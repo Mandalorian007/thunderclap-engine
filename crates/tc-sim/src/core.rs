@@ -103,6 +103,11 @@ impl<G: Game> Core<G> {
         !self.changes.is_empty()
     }
 
+    /// Puts `earlier` back under the marks made since it was taken.
+    pub(crate) fn put_back_changes(&mut self, earlier: Changes<G::Change>) {
+        self.changes.put_back(earlier);
+    }
+
     /// Stops (or resumes) change marks.
     pub fn mute_changes(&mut self, muted: bool) {
         self.changes.set_muted(muted);

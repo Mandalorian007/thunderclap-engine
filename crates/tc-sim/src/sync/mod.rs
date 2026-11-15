@@ -2,10 +2,14 @@
 //! keyed diffs.
 //!
 //! - **Shared computation.** Subscriptions are shared by `(query,
-//!   arguments, player)`, where the player counts only for per-player
-//!   queries. Each shared entry runs, encodes and hashes its result once
+//!   arguments, player, view)`, where the player counts only for per-player
+//!   queries and the view only for a query with a view function
+//!   ([`Query::with_view`](crate::Query::with_view)). Each shared entry runs, encodes and hashes its result once
 //!   per flush; a subscriber keeps only a reference to the last value it
 //!   was sent.
+//! - **Views.** When a connection's interest changes, each of its
+//!   subscriptions whose view changed moves to the entry for its new view
+//!   and gets a patch from what it was last sent.
 //! - **Dependency tracking.** A run records what it read
 //!   ([`Reads`](crate::Reads)); after a batch of changes only entries
 //!   whose reads intersect them, whose results expired (`valid_until`), or
@@ -132,13 +136,14 @@ impl Value {
 type EntryId = u64;
 
 /// What makes two subscriptions share one computation.
-type EntryKey = (&'static str, Vec<u8>, Option<PlayerId>);
+type EntryKey = (&'static str, Vec<u8>, Option<PlayerId>, u32);
 
 struct Entry<G: Game> {
     query: Arc<Query<G>>,
     result_ty: TypeRef,
     args: Vec<u8>,
     player: Option<PlayerId>,
+    view: u32,
     value: Option<Arc<Value>>,
     /// What the last run read; empty (and out of the index) while idle.
     reads: Reads<G::Change>,
@@ -202,11 +207,15 @@ pub(crate) struct SyncLayer<G: Game> {
     next_id: EntryId,
     clients: BTreeMap<ConnId, Client>,
     stats: SyncStats,
+    /// Some query has a view function.
+    views: bool,
 }
 
 impl<G: Game> SyncLayer<G> {
     pub(crate) fn new(config: SyncConfig, schema: Arc<Schema>, queries: Registry<G>) -> Self {
+        let views = queries.values().any(|q| q.view.is_some());
         SyncLayer {
+            views,
             config,
             schema,
             queries,
@@ -259,7 +268,21 @@ impl<G: Game> SyncLayer<G> {
         }
     }
 
-    /// Adds subscription `sub`, replacing any of that id; its first
+    /// True if `conn` has subscriptions waiting to be sent.
+    pub(crate) fn pending(&self, conn: ConnId) -> bool {
+        self.clients
+            .get(&conn)
+            .is_some_and(|c| !c.pending.is_empty())
+    }
+
+    /// True if some query has a view function.
+    pub(crate) fn has_views(&self) -> bool {
+        self.views
+    }
+
+    /// Adds subscription `sub` to `query` with `args`, replacing any of
+    /// that id, in the view
+    /// `view` gives it (0 without a view function); its first
     /// message goes out on the connection's next flush. Fails for an
     /// unknown query, arguments that don't decode exactly, a per-player
     /// query from an observer, or one subscription too many. A replacement
@@ -268,10 +291,10 @@ impl<G: Game> SyncLayer<G> {
         &mut self,
         conn: ConnId,
         sub: SubId,
-        query: &str,
-        args: Vec<u8>,
+        (query, args): (&str, Vec<u8>),
         resume: Option<&Resume>,
         now: Instant,
+        view: impl FnOnce(&Query<G>, &[u8]) -> u32,
     ) -> Result<(), String> {
         let player = self.clients.get(&conn).ok_or("not connected")?.player;
         self.unsubscribe(conn, sub, now);
@@ -289,7 +312,8 @@ impl<G: Game> SyncLayer<G> {
         if self.clients[&conn].subs.len() >= MAX_SUBSCRIPTIONS {
             return Err(format!("at most {MAX_SUBSCRIPTIONS} subscriptions"));
         }
-        let key = (query.name, args, player);
+        let view = view(&query, &args);
+        let key = (query.name, args, player, view);
         let id = self.entry_for(query, key);
         self.entries
             .get_mut(&id)
@@ -307,6 +331,51 @@ impl<G: Game> SyncLayer<G> {
         );
         client.pending.insert(sub);
         Ok(())
+    }
+
+    /// Works out the view of each of `conn`'s subscriptions to a query
+    /// with a view function again (`view`): one whose view changed moves
+    /// to the entry for its new view, and gets a patch from what it was
+    /// last sent at its next flush. True if any moved.
+    pub(crate) fn review(
+        &mut self,
+        conn: ConnId,
+        now: Instant,
+        mut view: impl FnMut(&Query<G>, &[u8]) -> u32,
+    ) -> bool {
+        let Some(client) = self.clients.get(&conn) else {
+            return false;
+        };
+        let moves: Vec<(SubId, EntryId, EntryKey, Arc<Query<G>>)> = client
+            .subs
+            .iter()
+            .filter_map(|(sub, cs)| {
+                let e = self.entries.get(&cs.entry)?;
+                e.query.view.as_ref()?;
+                let new = view(&e.query, &e.args);
+                (new != e.view).then(|| {
+                    let key = (e.query.name, e.args.clone(), e.player, new);
+                    (*sub, cs.entry, key, e.query.clone())
+                })
+            })
+            .collect();
+        let moved = !moves.is_empty();
+        for (sub, old, key, query) in moves {
+            let id = self.entry_for(query, key);
+            self.entries
+                .get_mut(&id)
+                .expect("just found or made")
+                .subscribers
+                .insert((conn, sub));
+            let client = self.clients.get_mut(&conn).expect("found above");
+            if let Some(cs) = client.subs.get_mut(&sub) {
+                cs.entry = id;
+                cs.resume = None;
+            }
+            client.pending.insert(sub);
+            self.detach(conn, sub, old, now);
+        }
+        moved
     }
 
     /// Removes subscription `sub`; false if there was none.
@@ -340,6 +409,7 @@ impl<G: Game> SyncLayer<G> {
                         result_ty,
                         args: key.1.clone(),
                         player: key.2,
+                        view: key.3,
                         value: None,
                         reads: Reads::default(),
                         computed_at: 0,
@@ -424,6 +494,6 @@ impl<G: Game> SyncLayer<G> {
         self.dirty.remove(&id);
         let entry = self.entries.remove(&id).expect("found above");
         self.by_key
-            .remove(&(entry.query.name, entry.args, entry.player));
+            .remove(&(entry.query.name, entry.args, entry.player, entry.view));
     }
 }

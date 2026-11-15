@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
-use tc_net::{ConnId, EntityEncoder};
+use tc_net::{ConnId, ViewCache};
 use tc_wire::Wire;
 use tc_wire::hash::StableHasher;
 use tracing::warn;
@@ -14,7 +14,7 @@ use crate::changes::Changes;
 use crate::counters::micros;
 use crate::entities::Stream;
 use crate::game::{EventOf, Game, InterestOf, Outbox, PlayerId};
-use crate::query::{Key, QueryCtx, Reads};
+use crate::query::{Key, QueryCtx, Reads, ViewCx};
 use crate::sim::Sim;
 
 /// What a live hook ([`Game::live_step`], [`Game::wake`], [`Game::act`])
@@ -277,8 +277,26 @@ impl<G: Game> Sim<G> {
         if query.player && player.is_none() {
             return Err(format!("{name} is per player: name the player"));
         }
+        let interest = player
+            .and_then(|p| self.conns_of.get(&p)?.first())
+            .and_then(|conn| self.streams.get(conn))
+            .map(|s| &s.interest);
+        let view = query.view_of(
+            &ViewCx {
+                game: self.core.game(),
+                player,
+                interest,
+            },
+            args,
+        );
         let player = if query.player { player } else { None };
-        let cx = QueryCtx::new(self.core.game(), player, self.core.time(), &self.bodies);
+        let cx = QueryCtx::new(
+            self.core.game(),
+            player,
+            view,
+            self.core.time(),
+            &self.bodies,
+        );
         (query.run)(&cx, args)
     }
 
@@ -303,12 +321,14 @@ impl<G: Game> Sim<G> {
         let Some(interest) = self.core.game().follow(player, body) else {
             return false;
         };
-        let Some(conns) = self.conns_of.get(&player) else {
-            return false;
-        };
+        let n = self.conns_of.get(&player).map_or(0, Vec::len);
         let mut changed = false;
-        for conn in conns {
-            changed |= follow_stream(&mut self.streams, &self.schema, *conn, &interest);
+        for i in 0..n {
+            let conn = self.conns_of[&player][i];
+            if follow_stream(&mut self.streams, &self.views, conn, &interest) {
+                changed = true;
+                self.review_views(conn);
+            }
         }
         changed
     }
@@ -343,7 +363,7 @@ impl<G: Game> Sim<G> {
 /// the stream if there is none). True if its interest changed.
 fn follow_stream<G: Game>(
     streams: &mut BTreeMap<ConnId, Stream<G>>,
-    schema: &tc_wire::schema::Schema,
+    views: &Result<ViewCache<G::View>, String>,
     conn: ConnId,
     interest: &InterestOf<G>,
 ) -> bool {
@@ -356,8 +376,9 @@ fn follow_stream<G: Game>(
         }
         return false;
     }
-    match EntityEncoder::new(schema) {
-        Ok(encoder) => {
+    match views {
+        Ok(views) => {
+            let encoder = views.encoder();
             streams.insert(
                 conn,
                 Stream {

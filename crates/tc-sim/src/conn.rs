@@ -25,6 +25,7 @@ use tc_wire::Wire;
 
 use crate::game::{Game, Outbox, PlayerId, Seat};
 use crate::input::Taken;
+use crate::query::{Query, ViewCx};
 use crate::sim::{Conn, Sim};
 
 impl<G: Game> Sim<G> {
@@ -183,9 +184,15 @@ impl<G: Game> Sim<G> {
                 resume,
             } => {
                 self.tick(now);
+                let cx = ViewCx {
+                    game: self.core.game(),
+                    player: seat,
+                    interest: self.streams.get(&conn).map(|s| &s.interest),
+                };
+                let view = |q: &Query<G>, args: &[u8]| q.view_of(&cx, args);
                 match self
                     .sync
-                    .subscribe(conn, sub, &query, args.0, resume.as_ref(), now)
+                    .subscribe(conn, sub, (&query, args.0), resume.as_ref(), now, view)
                 {
                     Ok(()) => self.flush(Some(conn)),
                     Err(reason) => self.send_to(conn, &ServerMsg::QueryFailed { sub, reason }),
@@ -249,6 +256,18 @@ impl<G: Game> Sim<G> {
                 // Read your writes: what the command changed goes out
                 // before its result.
                 self.flush_all();
+                if self.close_slow_senders && self.behind_with_effects(conn) {
+                    self.counters.closed_slow += 1;
+                    tracing::info!(
+                        conn,
+                        "closing: over its byte budget with a command's effects to send"
+                    );
+                    if let Some(c) = self.conns.get(&conn) {
+                        c.overflowed.set(true);
+                    }
+                    self.drop_overflowed();
+                    return;
+                }
                 self.send_to(conn, &ServerMsg::CommandResult { seq, result });
             }
             ClientMsg::Input { seq, input } => {
@@ -284,6 +303,15 @@ impl<G: Game> Sim<G> {
             // Handled above, or by the session (`Hello`, `Ack`).
             _ => {}
         }
+    }
+
+    /// True if `conn` is over its byte budget and the flush skipped live
+    /// query results it waits for.
+    fn behind_with_effects(&self, conn: ConnId) -> bool {
+        self.conns
+            .get(&conn)
+            .is_some_and(|c| c.out.queued() > crate::sim::OUTBOUND_BUDGET)
+            && self.sync.pending(conn)
     }
 
     /// Forgets `conn`. The player's last connection closing ends its

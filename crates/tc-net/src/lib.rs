@@ -43,7 +43,7 @@ pub mod ws;
 
 pub use auth::{AllowAll, Auth, AuthError, Identity};
 pub use clock::WallClock;
-pub use entity::EntityEncoder;
+pub use entity::{EntityEncoder, ViewCache};
 pub use envelope::{ClientMsg, Empty, Protocol, Resume, ServerMsg, close, codec, schema_builder};
 pub use outbound::Outbound;
 pub use rate::Rates;

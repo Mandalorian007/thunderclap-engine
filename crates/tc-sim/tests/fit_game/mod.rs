@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tc_net::{Empty, Identity, Protocol};
-use tc_sim::{Cx, EventOf, Game, LiveCx, PlayerId, Query, QueryCtx, Seat, To};
+use tc_sim::{Changes, Cx, EventOf, Game, LiveCx, Outbox, PlayerId, Query, QueryCtx, Seat, To};
 use tc_store::format::{Reader, Writer};
 use tc_store::{LogCodec, NameTable, Names};
 use tc_wire::Wire;
@@ -40,6 +40,23 @@ pub const CHANNEL: Duration = Duration::from_secs(2);
 pub const WATCH: i32 = 8;
 /// The widest interest a client may ask for.
 pub const MAX_WATCH: i32 = 16;
+
+/// A rank for every this many points.
+pub const RANK_EVERY: u64 = 2;
+
+/// `spot`'s views: the cell is in the asker's interest, or not.
+pub const VISIBLE: u32 = 1;
+pub const OUTSIDE: u32 = 2;
+/// `spot`'s answer for a cell the asker can't see, or with no token.
+pub const HIDDEN: i64 = -1;
+pub const EMPTY: i64 = -2;
+
+/// `spot`'s arguments.
+#[derive(Wire, Clone, Debug, Default, PartialEq)]
+pub struct At {
+    pub x: i32,
+    pub y: i32,
+}
 
 /// Change keys: who is present, each player (by id), the drifters, the
 /// tokens.
@@ -87,7 +104,7 @@ pub struct Area {
 }
 
 impl Area {
-    fn holds(&self, p: Pos) -> bool {
+    pub fn holds(&self, p: Pos) -> bool {
         (p.x - self.x).abs() <= self.r && (p.y - self.y).abs() <= self.r
     }
 }
@@ -132,6 +149,10 @@ pub enum Event {
     Parked {
         player: u64,
         at: Pos,
+    },
+    Ranked {
+        player: u64,
+        rank: u64,
     },
 }
 
@@ -185,6 +206,11 @@ impl LogCodec for FieldLog {
                 w.i32(at.x);
                 w.i32(at.y);
             }
+            Event::Ranked { player, rank } => {
+                w.u8(7);
+                w.u64(*player);
+                w.u64(*rank);
+            }
         }
         out.extend_from_slice(&w.0);
         Ok(())
@@ -217,6 +243,10 @@ impl LogCodec for FieldLog {
                     y: r.i32()?,
                 },
             },
+            7 => Event::Ranked {
+                player: r.u64()?,
+                rank: r.u64()?,
+            },
             tag => return Err(format!("unknown event {tag}")),
         };
         r.finish()?;
@@ -231,6 +261,7 @@ pub struct Player {
     pub score: u64,
     pub recalls: u64,
     pub parked: Pos,
+    pub rank: u64,
 }
 
 #[derive(Default)]
@@ -300,6 +331,20 @@ impl Game for Field {
                 cx.read(me);
                 Ok(cx.game().players.get(&me).map_or(0, |p| p.score))
             }),
+            Query::<Field>::new("spot", "The token at a cell.", false, |cx, at: At| {
+                if cx.view() != VISIBLE {
+                    return Ok(HIDDEN);
+                }
+                cx.read(TOKENS);
+                Ok(cx
+                    .game()
+                    .token_at(Pos { x: at.x, y: at.y })
+                    .map_or(EMPTY, i64::from))
+            })
+            .with_view(|cx, at: At| match cx.interest() {
+                Some(area) if area.holds(Pos { x: at.x, y: at.y }) => VISIBLE,
+                _ => OUTSIDE,
+            }),
         ]
     }
 
@@ -348,6 +393,10 @@ impl Game for Field {
             Event::Parked { player, at } => {
                 self.players.get_mut(player).ok_or("no player")?.parked = *at;
             }
+            Event::Ranked { player, rank } => {
+                self.players.get_mut(player).ok_or("no player")?.rank = *rank;
+                cx.mark(*player);
+            }
         }
         Ok(())
     }
@@ -362,6 +411,7 @@ impl Game for Field {
             h.write_u64(p.recalls);
             h.write_i32(p.parked.x);
             h.write_i32(p.parked.y);
+            h.write_u64(p.rank);
         }
         h.write_u64(self.tokens.len() as u64);
         for (t, p) in &self.tokens {
@@ -444,7 +494,27 @@ impl Game for Field {
                 self.bad = true;
                 "ok".into()
             }
+            Some("bulk") => {
+                let n = words.next().and_then(|w| w.parse().ok()).unwrap_or(0);
+                cx.out().game(To::Player(player), "x".repeat(n));
+                "ok".into()
+            }
             _ => format!("error: {command:?}?"),
+        }
+    }
+
+    fn after_batch(
+        &self,
+        batch: &Changes<u64>,
+        events: &mut Vec<Event>,
+        out: &mut Outbox<FieldProto>,
+    ) {
+        for (id, p) in &self.players {
+            let rank = p.score / RANK_EVERY;
+            if batch.contains(id) && rank > p.rank {
+                events.push(Event::Ranked { player: *id, rank });
+                out.game(To::Player(*id), format!("rank {rank}"));
+            }
         }
     }
 

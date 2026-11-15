@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 use tc_net::transport::Frame;
-use tc_net::{ConnId, Outbound, Protocol, ServerMsg, WallClock};
+use tc_net::{ConnId, Outbound, Protocol, ServerMsg, ViewCache, WallClock};
 use tc_store::{ArchivePolicy, Log, LogEntry, StoreError};
 use tc_wire::Wire;
 use tracing::{error, warn};
@@ -82,6 +82,13 @@ pub struct SimConfig {
     /// after the tick, not at the next flush (a game whose watchers
     /// should see movement at the input rate). Off by default.
     pub entities_on_input: bool,
+    /// A command's sender over its byte budget ([`OUTBOUND_BUDGET`]) whose
+    /// live queries have the command's effects to send is closed instead
+    /// of answered: its result must not reach it before them (read your
+    /// writes). The client reconnects, resumes, and finds out whether the
+    /// command applied from its queries. Off by default: the result is
+    /// sent and the effects follow once the client drains.
+    pub close_slow_senders: bool,
 }
 
 /// [`SimConfig::base_every`]'s default.
@@ -101,6 +108,7 @@ impl Default for SimConfig {
             archive: ArchivePolicy::default(),
             verify_live: cfg!(debug_assertions),
             entities_on_input: false,
+            close_slow_senders: false,
         }
     }
 }
@@ -176,6 +184,9 @@ pub struct Sim<G: Game> {
     /// The game's schema ([`Game::schema`]).
     pub(crate) schema: Arc<Schema>,
     pub(crate) sync: SyncLayer<G>,
+    /// Entity views encoded once for every stream (or why the game's view
+    /// can't be streamed).
+    pub(crate) views: Result<ViewCache<G::View>, String>,
     /// Each watching connection's entity stream.
     pub(crate) streams: BTreeMap<ConnId, Stream<G>>,
     /// Each present player's body ([`Game::Body`]).
@@ -195,6 +206,7 @@ pub struct Sim<G: Game> {
     pub(crate) next_wake: Option<Instant>,
     pub(crate) verify_live: bool,
     pub(crate) entities_on_input: bool,
+    pub(crate) close_slow_senders: bool,
     pub(crate) counters: SimCounters,
     /// Scratch kept between ticks, so a steady loop doesn't allocate.
     pub(crate) live_events: Vec<EventOf<G>>,
@@ -217,6 +229,7 @@ impl<G: Game> Sim<G> {
         let history = log.is_none().then(Vec::new);
         let schema = Arc::new(G::schema());
         let sync = SyncLayer::new(config.sync, schema.clone(), crate::query::registry());
+        let views = ViewCache::new(&schema).map_err(|e| e.to_string());
         let flushed_version = core.version();
         let mut sim = Sim {
             clock: WallClock::new(config.step, config.paused, now, core.time()),
@@ -245,6 +258,7 @@ impl<G: Game> Sim<G> {
             flushed_version,
             schema,
             sync,
+            views,
             streams: BTreeMap::new(),
             bodies: BTreeMap::new(),
             moved: BTreeSet::new(),
@@ -256,6 +270,7 @@ impl<G: Game> Sim<G> {
             next_wake: None,
             verify_live: config.verify_live,
             entities_on_input: config.entities_on_input,
+            close_slow_senders: config.close_slow_senders,
             counters: SimCounters::default(),
             live_events: Vec::new(),
             live_out: Outbox::new(),
@@ -368,14 +383,38 @@ impl<G: Game> Sim<G> {
     }
 
     /// Logs `events` at the current time, as one batch (all or none), and
-    /// applies them. An event the codec can't encode (or too large to
-    /// write) refuses the whole batch: nothing is logged or applied, the
-    /// refusal is counted and the loop runs on. Only a store that can't
-    /// write (I/O) fails the store. Returns why the batch wasn't applied.
+    /// applies them; then the game's rules judge what the batch changed
+    /// ([`Game::after_batch`]), and the events they push join it. An event
+    /// the codec can't encode (or too large to write) refuses the whole
+    /// batch: nothing is logged or applied, the refusal is counted and the
+    /// loop runs on. Only a store that can't write (I/O) fails the store.
+    /// Returns why the batch wasn't applied.
     pub(crate) fn commit(&mut self, events: Vec<EventOf<G>>) -> Result<(), String> {
         if events.is_empty() {
             return Ok(());
         }
+        let earlier = self.core.take_changes();
+        let applied = self.log_apply(events);
+        let batch = self.core.take_changes();
+        let mut more = Vec::new();
+        let mut out = Outbox::new();
+        if applied.is_ok() {
+            self.core.game().after_batch(&batch, &mut more, &mut out);
+        }
+        self.core.put_back_changes(earlier);
+        self.core.put_back_changes(batch);
+        if !more.is_empty() {
+            self.counters.rule_batches += 1;
+            if let Err(e) = self.log_apply(more) {
+                warn!("the events a batch's rules pushed weren't applied: {e}");
+            }
+        }
+        self.deliver_drain(&mut out);
+        applied
+    }
+
+    /// Logs `events` at the current time, as one batch, and applies them.
+    fn log_apply(&mut self, events: Vec<EventOf<G>>) -> Result<(), String> {
         self.counters.batches += 1;
         self.counters.events += events.len() as u64;
         if let Some(e) = &self.store_error {

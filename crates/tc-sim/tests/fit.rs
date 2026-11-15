@@ -3,6 +3,9 @@
 //! to the same hash, wall-clock wakes (even paused), `act` with cooldowns
 //! and news before the result, a stream that follows the body, entity
 //! frames at the input rate, `verify_live`, one-shot queries, counters,
+//! a rule that joins the batch it judges, query views that follow the
+//! interest, a slow sender closed at its command's flush, entity views
+//! split once for every stream,
 //! and a steady live tick that does nothing but step (the workspace forbids
 //! unsafe code, so allocations aren't counted here: the loop's live path
 //! reuses its buffers, and an empty batch or outbox allocates nothing).
@@ -12,10 +15,11 @@ mod fit_game;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use fit_game::{CHANNEL, COOLDOWN, Field, Move, Pos};
+use fit_game::{At, CHANNEL, COOLDOWN, Field, HIDDEN, Move, Pos};
 use tc_net::outbound::OutboundRx;
 use tc_net::{ClientMsg, Empty, ServerMsg};
-use tc_sim::{Core, Driver, Sim, SimConfig};
+use tc_sim::{Core, Driver, OUTBOUND_BUDGET, Sim, SimConfig};
+use tc_wire::{Bytes, Wire};
 
 const STEP: Duration = Duration::from_millis(50);
 
@@ -341,4 +345,175 @@ fn a_steady_live_tick_only_steps() {
         (0, 0, 0),
         "{done:?}"
     );
+}
+
+fn subscribe(d: &mut Driver<Field>, conn: u64, sub: u32, query: &str, args: Vec<u8>) {
+    d.client(
+        conn,
+        ClientMsg::Subscribe {
+            sub,
+            query: query.into(),
+            args: Bytes(args),
+            resume: None,
+        },
+    );
+}
+
+/// The `i64` results resent whole to `sub`.
+fn spots(msgs: &[ServerMsg<fit_game::FieldProto>], sub: u32) -> Vec<i64> {
+    msgs.iter()
+        .filter_map(|m| match m {
+            ServerMsg::Resync { sub: s, result, .. } if *s == sub => {
+                Some(i64::from_bytes(&result.0).unwrap())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_rule_joins_the_batch_it_judges() {
+    let dir = temp_dir("rules");
+    let paused = SimConfig {
+        paused: true,
+        ..running()
+    };
+    let sim = Sim::create(&dir, Field::new(), b"", paused).unwrap();
+    let mut d = Driver::new(sim);
+    let (conn, mut rx) = d.connect("ada", Empty);
+    command(&mut d, conn, 1, "place 0 0");
+    command(&mut d, conn, 2, "take");
+    command(&mut d, conn, 3, "place 0 0");
+    d.wait(COOLDOWN);
+    received(&mut rx);
+    let before = d.sim().counters();
+    let version = d.core().version();
+
+    command(&mut d, conn, 4, "take");
+    let msgs = received(&mut rx);
+    assert_eq!(result_of(&msgs, 4), "took 1");
+    let told = msgs
+        .iter()
+        .position(|m| *m == ServerMsg::Game("rank 1".into()))
+        .expect("told of the rank");
+    let result = msgs
+        .iter()
+        .position(|m| matches!(m, ServerMsg::CommandResult { seq: 4, .. }))
+        .unwrap();
+    assert!(told < result, "the rule's news before the result: {msgs:?}");
+    assert_eq!(d.core().game().players[&1].rank, 1);
+    assert_eq!(d.core().version(), version + 2, "the take, then its rank");
+    let c = d.sim().counters().since(&before);
+    assert_eq!((c.batches, c.rule_batches, c.events), (2, 1, 2), "{c:?}");
+
+    // A take that doesn't reach the next rank: no rule batch.
+    command(&mut d, conn, 5, "place 0 0");
+    d.wait(COOLDOWN);
+    command(&mut d, conn, 6, "take");
+    assert_eq!(d.sim().counters().rule_batches, 1);
+
+    // The rank is logged: a replay applies it, the rule doesn't rerun.
+    d.disconnect(conn);
+    let hash = d.core().state_hash();
+    drop(d.stop());
+    let (sim, _) = Sim::open(&dir, Field::new(), paused).unwrap();
+    assert_eq!(sim.core().state_hash(), hash);
+    assert_eq!(sim.core().game().players[&1].rank, 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_query_view_follows_the_interest() {
+    let mut d = driver(SimConfig {
+        paused: true,
+        ..running()
+    });
+    let (ada, mut rx) = d.connect("ada", Empty);
+    command(&mut d, ada, 1, "place 3 0");
+    let spot = At { x: 3, y: 0 }.to_bytes();
+    subscribe(&mut d, ada, 7, "spot", spot.clone());
+    d.wait(STEP * 2);
+    assert_eq!(spots(&received(&mut rx), 7), [0], "in view: the token");
+
+    // Out of her watch: hidden, without the token changing.
+    walk(&mut d, ada, &vec![Move { dx: -1, dy: 0 }; 12]);
+    d.wait(STEP * 2);
+    assert_eq!(spots(&received(&mut rx), 7), [HIDDEN]);
+    let one = |d: &Driver<Field>| {
+        d.sim()
+            .query_as::<At, i64>("spot", &At { x: 3, y: 0 }, Some(1))
+            .unwrap()
+    };
+    assert_eq!(one(&d), HIDDEN, "a one-shot query asks in her view too");
+
+    // Bob, at home, sees it; the token taken shows to him, not to her.
+    let (bob, mut bob_rx) = d.connect("bob", Empty);
+    subscribe(&mut d, bob, 1, "spot", spot.clone());
+    d.wait(STEP * 2);
+    assert_eq!(spots(&received(&mut bob_rx), 1), [0]);
+    command(&mut d, bob, 2, "place 3 0");
+    walk(&mut d, bob, &vec![Move { dx: 1, dy: 0 }; 3]);
+    command(&mut d, bob, 3, "take");
+    d.wait(STEP * 2);
+    assert_eq!(spots(&received(&mut bob_rx), 1), [1], "the second token");
+    assert!(
+        spots(&received(&mut rx), 7).is_empty(),
+        "nothing new to her"
+    );
+
+    // Back in view: she shares bob's entry and gets the difference.
+    let entries = d.sim().sync_stats().entries;
+    walk(&mut d, ada, &vec![Move { dx: 1, dy: 0 }; 12]);
+    d.wait(STEP * 2);
+    assert_eq!(spots(&received(&mut rx), 7), [1]);
+    assert_eq!(one(&d), 1);
+    assert_eq!(d.sim().sync_stats().entries, entries, "no new entry");
+}
+
+#[test]
+fn a_slow_sender_is_closed_at_its_command_flush() {
+    for close in [false, true] {
+        let mut d = driver(SimConfig {
+            paused: true,
+            close_slow_senders: close,
+            ..running()
+        });
+        let (conn, mut rx) = d.connect("ada", Empty);
+        subscribe(&mut d, conn, 1, "tokens", Empty.to_bytes());
+        d.wait(STEP * 2);
+        received(&mut rx);
+        // Her queue fills past the budget, and she doesn't read it.
+        command(&mut d, conn, 1, &format!("bulk {}", OUTBOUND_BUDGET + 1024));
+        command(&mut d, conn, 2, "place 1 1");
+        let msgs = received(&mut rx);
+        let answered = msgs
+            .iter()
+            .any(|m| matches!(m, ServerMsg::CommandResult { seq: 2, .. }));
+        assert_eq!(answered, !close, "close {close}");
+        assert_eq!(d.sim().counters().closed_slow, u64::from(close));
+        assert_eq!(d.sim().present().is_empty(), close);
+        // Placed either way: the command applied.
+        assert_eq!(d.core().game().tokens.len(), 1);
+    }
+}
+
+#[test]
+fn entity_views_are_split_once_for_every_stream() {
+    let mut d = driver(SimConfig {
+        paused: true,
+        ..running()
+    });
+    let (ada, mut rx) = d.connect("ada", Empty);
+    let (_bob, mut bob_rx) = d.connect("bob", Empty);
+    d.wait(STEP * 2);
+    received(&mut rx);
+    received(&mut bob_rx);
+    let before = d.sim().counters();
+    command(&mut d, ada, 1, "place 2 2");
+    d.wait(STEP * 2);
+    let c = d.sim().counters().since(&before);
+    assert_eq!(c.entity_frames, 2, "{c:?}");
+    assert_eq!(c.entity_splits, 1, "one new token, split once: {c:?}");
+    assert_eq!(entity_frames(&received(&mut rx)), 1);
+    assert_eq!(entity_frames(&received(&mut bob_rx)), 1);
 }

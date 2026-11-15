@@ -342,6 +342,25 @@ pub trait Game: Sized + Send + 'static {
         let _ = (bodies, events);
     }
 
+    /// After each batch of events is logged and applied (a command's or a
+    /// live hook's outcomes, a game message's, a join's, [`Game::moved`]'s):
+    /// the rules that judge what a batch changed. `batch` holds the change
+    /// keys this batch alone marked. The events pushed join the batch: they
+    /// are logged and applied right after it, at the same time, before
+    /// anything else runs or is sent, so a command's result and the next
+    /// flush see them with it. They don't run the rules again. `out`'s
+    /// messages go out once they are applied. Steps and scheduled events
+    /// are not batches: a rule that judges them runs in
+    /// [`Game::live_step`]. The default does nothing.
+    fn after_batch(
+        &self,
+        batch: &Changes<Self::Change>,
+        events: &mut Vec<EventOf<Self>>,
+        out: &mut Outbox<Self::Protocol>,
+    ) {
+        let _ = (batch, events, out);
+    }
+
     /// What `player`'s connections are told after an input tick applied
     /// its inputs (`PlayerState`), if anything.
     fn player_state(

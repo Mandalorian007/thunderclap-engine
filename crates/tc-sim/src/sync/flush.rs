@@ -136,7 +136,13 @@ impl<G: Game> SyncLayer<G> {
             if entry.idle.is_some() {
                 continue;
             }
-            let cx = QueryCtx::new(world.game, entry.player, world.time, world.bodies);
+            let cx = QueryCtx::new(
+                world.game,
+                entry.player,
+                entry.view,
+                world.time,
+                world.bodies,
+            );
             let result = (entry.query.run)(&cx, &entry.args);
             let reads = cx.into_reads();
             let value = match result {

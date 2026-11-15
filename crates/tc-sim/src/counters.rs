@@ -26,10 +26,20 @@ pub struct SimCounters {
     pub entity_runs: u64,
     /// Entity frames sent.
     pub entity_frames: u64,
+    /// Entity views split into fields: once per change of a thing,
+    /// however many streams see it ([`tc_net::ViewCache`]).
+    pub entity_splits: u64,
     /// Batches logged and applied.
     pub batches: u64,
     /// Events logged and applied.
     pub events: u64,
+    /// Batches of events [`Game::after_batch`](crate::Game::after_batch)
+    /// added to a batch (counted in `batches` too).
+    pub rule_batches: u64,
+    /// Senders closed at a command's flush, over their byte budget with
+    /// its effects to send
+    /// ([`SimConfig::close_slow_senders`](crate::SimConfig::close_slow_senders)).
+    pub closed_slow: u64,
     /// Live hooks (live step, wake, act) that changed what
     /// [`Game::hash_state`](crate::Game::hash_state) covers: a game bug,
     /// found only with [`SimConfig::verify_live`](crate::SimConfig::verify_live).
@@ -57,8 +67,11 @@ impl SimCounters {
             flushes: self.flushes.saturating_sub(earlier.flushes),
             entity_runs: self.entity_runs.saturating_sub(earlier.entity_runs),
             entity_frames: self.entity_frames.saturating_sub(earlier.entity_frames),
+            entity_splits: self.entity_splits.saturating_sub(earlier.entity_splits),
             batches: self.batches.saturating_sub(earlier.batches),
             events: self.events.saturating_sub(earlier.events),
+            rule_batches: self.rule_batches.saturating_sub(earlier.rule_batches),
+            closed_slow: self.closed_slow.saturating_sub(earlier.closed_slow),
             live_misses: self.live_misses.saturating_sub(earlier.live_misses),
             live_us: self.live_us.saturating_sub(earlier.live_us),
             input_us: self.input_us.saturating_sub(earlier.input_us),
