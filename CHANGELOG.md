@@ -4,6 +4,9 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 
 ## Unreleased
 
+- Game hooks Forge asked for (ws/game-hooks, B24). Defaults byte- and pixel-identical. *Added* (`ui`): `SpecTabs.labelWeight` (the options' label weight, drawn by both presenters) and `tabNeed`; a `weigh` tabs now shares by each label's measured width at that weight plus padding and border, not its letter count, so a bold "Graphics" no longer cuts. (`fx`): `WaterOptions.shade`, a game's own `fn water_shade(...) -> WaterShade` WGSL called by the plane and every `Water.look` in place of the engine's (kept as `water_shade_engine`), and `waterCoreWgsl(shade?)`. (`voxel`): `VoxelFormatOptions.cellRules` / `CellRule` / `CellRuleWhen`, per-block cell rules applied before meshing (a neighbour test, `set` and `map` on cell fields, `quads` bits OR'ed into the cell's cross quads and far patch), plain data that crosses to the Workers.
+- Bundle budgets after B24 (ws/game-hooks), set to about 700 B over the local sizes: `./voxel` 24500 -> 25500 (24772 B, +1042 B), `render + voxel { … }` 62100 -> 62800 (62078 B, +759 B).
+
 ## 2.0.0-next.21 (2026-11-15)
 
 - Cheaper core passes on tile GPUs (ws/pass-cost, B22). *Added* (`render`, `post`): `PassDesc.writes` / `CorePass.targetMask` (a pass attaches only the extra targets it writes; each target is cleared by its first attaching pass, or by a `core target clear` pass before a resolve or at the view's end when none attached it), `PassDesc.encodeWhen` / `CorePass.encodeWhen` (an `encode` pass with nothing to draw opens no render pass), `PostQuality.taaAux` (false: one-output TAA, history only, no aux pair or rejection). Defaults unchanged, except `lowPostQuality()` now sets `taaAux: false`. *Fixed*: a view whose first pass had `coreTargets: false` loaded the extra targets uncleared.

@@ -207,8 +207,8 @@ export const WATER_DEPTH_COPY_WGSL = /* wgsl */ `
 }
 `;
 
-/** The water's shading as a function (water_shade), shared by the plane and by water looks. */
-const WATER_SHADE_WGSL = /* wgsl */ `struct WaterShade {
+/** What every water shading has in scope: `WaterShade` and the `w_` helpers. */
+const WATER_SHADE_HEAD_WGSL = /* wgsl */ `struct WaterShade {
   color: vec4f,
   rough_metal: vec4f,
   velocity: vec4f,
@@ -230,7 +230,10 @@ fn w_unproject(ndc: vec2f, d: f32) -> vec3f {
   let h = extras[view.index].invViewProj * vec4f(ndc, d, 1.0);
   return h.xyz / h.w;
 }
+`;
 
+/** The engine's water shading as a function (water_shade), shared by the plane and by water looks. */
+const WATER_SHADE_FN_WGSL = /* wgsl */ `
 // The water's shading at one fragment: frag its framebuffer position (builtin position), ndc
 // its normalised device xy in this view, world its world position, up the surface normal the
 // waves bend (they bend only what faces up). Call it in uniform control flow: it takes screen
@@ -376,7 +379,29 @@ export const WATER_CORE_FLOATS = 16;
  * pixel's viewport (each eye's half of a stereo target) comes from screen derivatives, so a
  * march never reads the other eye.
  */
-export const WATER_CORE_WGSL = /* wgsl */ `
+export const WATER_CORE_WGSL = waterCoreWgsl();
+
+/**
+ * The engine's water shading under another name (`water_shade_engine`), beside a game's own
+ * `WaterOptions.shade` (B24): a game's shading may call it and change what it returns.
+ */
+function engineShade(): string {
+  return WATER_SHADE_FN_WGSL.replace('fn water_shade(', 'fn water_shade_engine(');
+}
+
+/** `shade`, or the engine's water shading: the `water_shade` a plane and a look call. */
+function shadeWgsl(shade: string | undefined): string {
+  return shade === undefined
+    ? `${WATER_SHADE_HEAD_WGSL}${WATER_SHADE_FN_WGSL}`
+    : `${WATER_SHADE_HEAD_WGSL}${engineShade()}\n${shade}\n`;
+}
+
+/**
+ * `WATER_CORE_WGSL` with a game's own `water_shade` (`WaterOptions.shade`, B24) in place of the
+ * engine's (which stays as `water_shade_engine`); none gives `WATER_CORE_WGSL` byte for byte.
+ */
+export function waterCoreWgsl(shade?: string): string {
+  return /* wgsl */ `
 ${CORE_DRAWABLE_WGSL}
 ${CORE_VIEW_EXTRA_WGSL}
 ${FX_DEPTH_WGSL}
@@ -408,7 +433,7 @@ struct WaterFrag {
 
 ${WGSL_NOISE}
 ${WATER_FIELD_WGSL}
-${WATER_SHADE_WGSL}
+${shadeWgsl(shade)}
 @vertex fn vs(v: VertexIn) -> WaterOut {
   let t = water.misc.x;
   let f = water_field(v.pos.xz, t);
@@ -430,6 +455,7 @@ ${WATER_SHADE_WGSL}
   return o;
 }
 `;
+}
 
 /**
  * The WGSL of a water look (`Water.look`, ws/scene-read-fit) whose group is `group`: the
@@ -437,12 +463,13 @@ ${WATER_SHADE_WGSL}
  * scene-read group (`core_scene_depth`, `core_scene_color`). It follows a draw set's prelude
  * and declares `water_look(frag, rel, up)` (`rel` the core-frame position, as a draw set's
  * vertex stage has it) and `water_look_out`, the output at the core's target locations.
+ * `shade`: a game's own `water_shade` (`WaterOptions.shade`, B24); its `scene_depth` and
+ * `scene_color` read the core's scene-read group's, as the engine's do.
  */
-export function waterLookWgsl(group: number): string {
-  const shade = WATER_SHADE_WGSL.replace(/\bscene_depth\b/g, 'core_scene_depth').replace(
-    /\bscene_color\b/g,
-    'core_scene_color',
-  );
+export function waterLookWgsl(group: number, shade?: string): string {
+  const own = shadeWgsl(shade)
+    .replace(/\bscene_depth\b/g, 'core_scene_depth')
+    .replace(/\bscene_color\b/g, 'core_scene_color');
   return /* wgsl */ `
 ${CORE_VIEW_EXTRA_WGSL}
 ${FX_DEPTH_WGSL}
@@ -453,7 +480,7 @@ ${WATER_CORE_STRUCT_WGSL}
 @group(${group}) @binding(2) var<storage, read> extras: array<CoreViewExtra>;
 ${WGSL_NOISE}
 ${WATER_FIELD_WGSL}
-${shade}
+${own}
 // The water at a fragment of the game's own geometry: frag its builtin position, rel its
 // core-frame position, up its surface normal. Uniform control flow (derivatives).
 fn water_look(frag: vec4f, rel: vec3f, up: vec3f) -> WaterShade {

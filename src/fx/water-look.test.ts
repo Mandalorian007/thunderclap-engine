@@ -10,7 +10,7 @@ import { createVertexLayout } from '../render/core/layout';
 import { createRenderView, setViewFromCamera } from '../render/core/view';
 import { createFakeDevice, type PassCommand } from '../render/fake-gpu';
 import { Water } from './water';
-import { WATER_CORE_WGSL } from './water-wgsl';
+import { WATER_CORE_WGSL, waterCoreWgsl, waterLookWgsl } from './water-wgsl';
 
 const PACKED = createVertexLayout({
   stride: 8,
@@ -104,6 +104,29 @@ describe('a water look (ws/scene-read-fit)', () => {
     expect(look.wgsl).toContain('@group(2) @binding(2) var<storage, read> extras');
     expect(look.wgsl).toContain('const FX_REVERSED_Z = true;');
     expect(water.coreDrawable!.active).toBe(true);
+  });
+
+  it('a game’s own shading replaces the engine’s in the plane and every look (B24)', () => {
+    expect(waterCoreWgsl()).toBe(WATER_CORE_WGSL);
+    const SHADE =
+      'fn water_shade(frag: vec2f, ndc: vec2f, world: vec3f, up: vec3f) -> WaterShade {\n' +
+      '  var s = water_shade_engine(frag, ndc, world, up);\n' +
+      '  s.color = vec4f(s.color.rgb * 0.5 + textureLoad(scene_depth, vec2i(frag), 0) * 0.0, s.color.a);\n' +
+      '  return s;\n}';
+    const r = rig();
+    const water = new Water(r.core, { shade: SHADE });
+    const look = water.look();
+    expect(look.wgsl).toBe(waterLookWgsl(1, SHADE));
+    expect(look.wgsl).toContain('fn water_shade_engine(');
+    expect(look.wgsl).toContain('textureLoad(core_scene_depth, vec2i(frag)');
+    expect(look.wgsl.match(/fn water_shade\(/g)).toHaveLength(1);
+    expect(look.wgsl).not.toMatch(/[^_]scene_depth/);
+    r.frame();
+    expect(r.fake.errors).toEqual([]);
+    const core = waterCoreWgsl(SHADE);
+    expect(core.match(/fn water_shade\(/g)).toHaveLength(1);
+    expect(core).toContain('s.color.rgb * 0.5');
+    expect(waterLookWgsl(1)).not.toContain('water_shade_engine');
   });
 
   it('the plane’s own shading is the shared function with up = +y', () => {

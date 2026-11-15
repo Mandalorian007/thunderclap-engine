@@ -4,7 +4,7 @@
  * falloff). It crosses to mesher Workers by structured clone; the codec, being code, is
  * imported by the Worker script instead.
  */
-import type { BlockTable, CellField, CellLayout } from './blocks';
+import type { BlockTable, CellField, CellLayout, CellRule, CellRuleWhen } from './blocks';
 import { defineVertexSchema, type VertexSchema, vertexField } from './schema';
 
 /** Options for `defineVoxelFormat`. */
@@ -19,6 +19,8 @@ export interface VoxelFormatOptions {
   skyFalloff?: number;
   /** The same through liquid under a column whose top is liquid (sea water). Default 1. */
   liquidSkyFalloff?: number;
+  /** Per-cell rules the mesher applies before meshing (B24, `CellRule`). Default none. */
+  cellRules?: readonly CellRule[];
 }
 
 /** A compiled format (see `defineVoxelFormat`). */
@@ -31,12 +33,15 @@ export interface VoxelFormat {
   readonly cellFields: readonly CellField[];
   readonly skyFalloff: number;
   readonly liquidSkyFalloff: number;
+  /** `VoxelFormatOptions.cellRules`; absent when there are none. */
+  readonly cellRules?: readonly CellRule[];
 }
 
 /**
  * Check and bundle a world's format. Throws when the schema's `x`, `y`, `z` cannot hold the
  * section size (a corner sits at 0..size), when a cell field names no vertex field, or when
- * the id bits exceed 16.
+ * the id bits exceed 16, or when a cell rule names a field that is not a cell field (`set`,
+ * `map`) or a vertex field (`quads`), or a neighbour past −1..1.
  */
 export function defineVoxelFormat(opts: VoxelFormatOptions): VoxelFormat {
   const size = opts.sectionSize ?? 16;
@@ -62,6 +67,23 @@ export function defineVoxelFormat(opts: VoxelFormatOptions): VoxelFormat {
       throw new Error(`cell field '${f.name}' names no field of the vertex schema`);
     }
   }
+  const rules = opts.cellRules ?? [];
+  for (const r of rules) {
+    for (const name of [...Object.keys(r.set ?? {}), ...Object.keys(r.map ?? {})]) {
+      if (!cellFields.some((f) => f.name === name)) {
+        throw new Error(`cell rule field '${name}' names no cell field`);
+      }
+    }
+    for (const name of Object.keys(r.quads ?? {})) {
+      if (!vertexField(vertex, name)) {
+        throw new Error(`cell rule quads field '${name}' names no field of the vertex schema`);
+      }
+    }
+    const at = r.when?.at;
+    if (at && (at.length !== 3 || at.some((d) => !Number.isInteger(d) || d < -1 || d > 1))) {
+      throw new RangeError(`cell rule neighbour must be −1..1 on each axis, got ${at.join(',')}`);
+    }
+  }
   return {
     size,
     blocks: opts.blocks,
@@ -71,6 +93,25 @@ export function defineVoxelFormat(opts: VoxelFormatOptions): VoxelFormat {
     cellFields: cellFields.map((f) => ({ ...f })),
     skyFalloff: opts.skyFalloff ?? 3,
     liquidSkyFalloff: opts.liquidSkyFalloff ?? 1,
+    ...(rules.length > 0 ? { cellRules: rules.map(copyRule) } : {}),
+  };
+}
+
+function copyWhen(w: CellRuleWhen): CellRuleWhen {
+  const at: [number, number, number] = [w.at[0], w.at[1], w.at[2]];
+  return { ...w, at, ...(w.ids ? { ids: [...w.ids] } : {}) };
+}
+
+/** A rule as plain data of its own (no shared arrays with the game's). */
+function copyRule(r: CellRule): CellRule {
+  return {
+    blocks: [...r.blocks],
+    ...(r.when ? { when: copyWhen(r.when) } : {}),
+    ...(r.set ? { set: { ...r.set } } : {}),
+    ...(r.map
+      ? { map: Object.fromEntries(Object.entries(r.map).map(([k, t]) => [k, [...t]])) }
+      : {}),
+    ...(r.quads ? { quads: { ...r.quads } } : {}),
   };
 }
 

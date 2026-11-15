@@ -78,6 +78,23 @@ interface CellLayout {
     fields?: readonly CellField[];
 }
 
+## CellRule  (type-only)
+interface CellRule {
+    readonly blocks: readonly number[];
+    readonly when?: CellRuleWhen;
+    readonly set?: Readonly<Record<string, number>>;
+    readonly map?: Readonly<Record<string, readonly number[]>>;
+    readonly quads?: Readonly<Record<string, number>>;
+}
+
+## CellRuleWhen  (type-only)
+interface CellRuleWhen {
+    readonly at: readonly [number, number, number];
+    readonly same?: boolean;
+    readonly ids?: readonly number[];
+    readonly not?: boolean;
+}
+
 ## ConnectivityFlood
 class ConnectivityFlood implements SectionConnectivity {
     bits: number;
@@ -466,6 +483,7 @@ interface VoxelFormat {
     readonly cellFields: readonly CellField[];
     readonly skyFalloff: number;
     readonly liquidSkyFalloff: number;
+    readonly cellRules?: readonly CellRule[];
 }
 
 ## VoxelFormatOptions  (type-only)
@@ -476,6 +494,7 @@ interface VoxelFormatOptions {
     cell?: CellLayout;
     skyFalloff?: number;
     liquidSkyFalloff?: number;
+    cellRules?: readonly CellRule[];
 }
 
 ## VoxelGrid  (type-only)

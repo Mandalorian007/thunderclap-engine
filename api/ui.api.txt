@@ -2125,6 +2125,7 @@ interface SpecTabs extends SpecCommon {
     readonly optionW: number;
     readonly fill?: boolean;
     readonly weigh?: boolean;
+    readonly labelWeight?: number;
     readonly enabled?: Bind;
 }
 
@@ -3161,6 +3162,9 @@ function specTokenVar(name: keyof SpecTokens): string;
 
 ## stepper
 function stepper(label: string, value: number, onChange: (value: number) => void, opts: StepperOptions): Stepper;
+
+## tabNeed
+function tabNeed(label: string, text: number, weight: number, family: string, padX: number, border: number): number;
 
 ## textScaleTokens
 function textScaleTokens(scale: number, base?: Record<string, number>): Record<string, string>;

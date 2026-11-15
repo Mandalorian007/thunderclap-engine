@@ -4,7 +4,7 @@
  * measure and the tabs' shares.
  */
 
-import { SPEC_FAMILY, type WrapOptions, wrapCount } from './measure';
+import { SPEC_FAMILY, textWidth, type WrapOptions, wrapCount } from './measure';
 import {
   SPEC_LINE,
   SPEC_TYPE,
@@ -109,7 +109,7 @@ const MARKS = /\{w\}|\{\/\}/g;
 
 /**
  * A fill tabs' options' widths in its width `w` (units), into `out`: equal
- * shares, or by `weight` (`weigh`: their words' length), none under `least`
+ * shares, or by `weight` (`weigh`: each label's measured need, `tabNeed`), none under `least`
  * (its `optionW`). One that would be under it takes `least` and the others
  * share what is left by their weights (so a short one doesn't take its room
  * from the last); each floored, the last taking what is left (at least
@@ -150,6 +150,25 @@ export function tabShares(
     out[i] = Math.max(least, share);
     x += out[i]!;
   }
+}
+
+/**
+ * A weighed tabs option's width need (units): its `label` measured in the `label` style's size at
+ * text scale `text` and weight `weight` (a bold label is measured bold) in `family`, its padding
+ * and border on both sides, rounded up with a unit's slack. As `tabShares`' weight, every option
+ * fits its words whenever the needs together fit the tabs' width.
+ */
+export function tabNeed(
+  label: string,
+  text: number,
+  weight: number,
+  family: string,
+  padX: number,
+  border: number,
+): number {
+  return (
+    Math.ceil(textWidth(label, SPEC_TYPE.label.px * text, weight, family) + 2 * (padX + border)) + 1
+  );
 }
 
 /** A text's type as a line count reads it (spec/measure.ts `WrapOptions`: its weight, family, slant and tracking). */

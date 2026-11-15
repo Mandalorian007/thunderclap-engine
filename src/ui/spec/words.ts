@@ -312,8 +312,13 @@ export interface SpecTabs extends SpecCommon {
   readonly optionW: number;
   /** Its options share its width, none under `optionW`. */
   readonly fill?: boolean;
-  /** With `fill`, each option's share goes by its words' length. */
+  /**
+   * With `fill`, each option's share goes by its label's measured width (in its `labelWeight`),
+   * its padding and border: every label fits whenever they fit together.
+   */
   readonly weigh?: boolean;
+  /** Its options' label weight (default the `label` style's, 400): drawn and measured in it. */
+  readonly labelWeight?: number;
   readonly enabled?: Bind;
 }
 
