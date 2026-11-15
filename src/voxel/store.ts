@@ -59,6 +59,20 @@ export interface SectionStore {
   putSection(sx: number, sy: number, sz: number, bytes: Uint8Array): void;
   /** Forget a section (it left the world's interest area). */
   dropSection(key: number): void;
+  /**
+   * Forget every section held in the box from section (minX, minY, minZ) to (maxX, maxY,
+   * maxZ), inclusive on each axis (a stream's `UnloadBox`). The keys dropped are pushed to
+   * `dropped` when given. Returns how many.
+   */
+  dropBox(
+    minX: number,
+    minY: number,
+    minZ: number,
+    maxX: number,
+    maxY: number,
+    maxZ: number,
+    dropped?: number[],
+  ): number;
   has(key: number): boolean;
   /** Present, and every one of the 26 around it known. */
   ready(key: number): boolean;
@@ -240,6 +254,36 @@ export function createSectionStore(opts: SectionStoreOptions): SectionStore {
       const rows = columns.get(ck);
       rows?.delete(sectionKeyY(key));
       if (rows && rows.size === 0) columns.delete(ck);
+    },
+
+    dropBox(minX, minY, minZ, maxX, maxY, maxZ, dropped) {
+      if (maxX < minX || maxY < minY || maxZ < minZ) return 0;
+      const keys: number[] = [];
+      const volume = (maxX - minX + 1) * (maxY - minY + 1) * (maxZ - minZ + 1);
+      if (volume <= entries.size) {
+        for (let x = minX; x <= maxX; x++) {
+          for (let z = minZ; z <= maxZ; z++) {
+            for (let y = minY; y <= maxY; y++) {
+              const key = sectionKey(x, y, z);
+              if (entries.has(key)) keys.push(key);
+            }
+          }
+        }
+      } else {
+        for (const key of entries.keys()) {
+          const x = sectionKeyX(key);
+          const y = sectionKeyY(key);
+          const z = sectionKeyZ(key);
+          if (x >= minX && x <= maxX && y >= minY && y <= maxY && z >= minZ && z <= maxZ) {
+            keys.push(key);
+          }
+        }
+      }
+      for (const key of keys) {
+        store.dropSection(key);
+        dropped?.push(key);
+      }
+      return keys.length;
     },
 
     has: (key) => entries.has(key),
