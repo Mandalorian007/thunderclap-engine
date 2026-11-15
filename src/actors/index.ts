@@ -26,6 +26,7 @@ export { ACTOR_CLIP_FPS, ACTOR_VERTEX_BYTES, bakeClip, defineRig } from './rig';
 export type {
   ActorDrawSetDesc,
   ActorModelOptions,
+  ActorReadBack,
   ActorStats,
   ActorSystemOptions,
 } from './system';

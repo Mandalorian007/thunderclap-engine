@@ -6,6 +6,7 @@
  * write), so a frame's GPU calls are the same at 100 actors as at 1,000.
  *
  * `?crowd=1` (ws/actor-post-fit) adds the crowd fit on top of `?fit=1`: see `HarnessActorsState.crowd`.
+ * `?parity=1` (ws/pose-parity-fix, implies `fit`): see `HarnessActorsState.parity`.
  *
  * `check()` reads back the next frame's skin matrices and indirect counts and compares them
  * with `poseCpu`. Nothing here is engine code beyond the actors, the core and `boot`.
@@ -39,7 +40,8 @@ const n = Math.max(1, Math.min(4096, Number(params.get('n') ?? 1000) | 0));
 const emptyModels = Math.max(0, Math.min(120, Number(params.get('models') ?? 0) | 0));
 const timing = params.get('timing') === '1';
 const crowd = params.get('crowd') === '1';
-const fit = crowd || params.get('fit') === '1';
+const parity = params.get('parity') === '1';
+const fit = crowd || parity || params.get('fit') === '1';
 const lodScale = Number(params.get('scale') ?? 1) || 1;
 const vertexCap = Math.max(0, Number(params.get('cap') ?? 0) | 0);
 
@@ -71,12 +73,19 @@ const state: HarnessActorsState = {
   markers: 0,
   recordWrites: 0,
   poseMs: -1,
+  parity: parity
+    ? { checks: 0, error: -1, worstSlot: -1, posed: 0, live: 0, near: 0, far: 0, naiveError: -1 }
+    : null,
 };
 let wantCheck = false;
+let wantParity = false;
 window.__harnessActors = {
   state,
   check() {
     wantCheck = true;
+  },
+  parityCheck() {
+    wantParity = true;
   },
 };
 
@@ -424,7 +433,7 @@ async function main(): Promise<void> {
   const half = (side * spacing) / 2;
   const pos = new Float32Array(3);
   const vel = new Float32Array(3);
-  for (let i = 0; i < n; i++) {
+  for (let i = 0; i < (parity ? 0 : n); i++) {
     const yaw = rand(i) * Math.PI * 2;
     const speed = 0.4 + rand(i + 31) * 0.5;
     pos[0] = (i % side) * spacing - half + rand(i + 7) * 0.8;
@@ -449,6 +458,45 @@ async function main(): Promise<void> {
       ...(crowd && i % 9 === 8 ? { cullRadius: 0.01 } : {}),
     });
   }
+
+  // `?parity=1`: actor i in slot i × PARITY_GAP (runs too far apart to merge: sparse uploads),
+  // walking a circle whose centre is near the camera or past the LOD distance (35), its record
+  // rewritten every frame (as a game moves its players: no velocity), an eighth of them gone at
+  // a time and the eighth changing every 10 frames (spawns and despawns).
+  const PARITY_GAP = 13;
+  const parityLive = new Uint8Array(n);
+  const parityFrame = (t: number, frameNo: number) => {
+    for (let i = 0; i < n; i++) {
+      const slot = i * PARITY_GAP;
+      const live = (Math.floor(frameNo / 10) + i) % 8 !== 0;
+      if (!live) {
+        if (parityLive[i]) actors.remove(slot);
+        parityLive[i] = 0;
+        continue;
+      }
+      const far = i % 3 === 2;
+      const cx = (rand(i + 5) - 0.5) * 16;
+      const cz = far ? 30 + rand(i + 9) * 15 : (rand(i + 9) - 0.5) * 10;
+      const r = 1 + rand(i + 2) * 2;
+      const a = rand(i) * 6.283 + (i % 2 ? 1 : -1) * (1 + rand(i + 4) * 3) * t;
+      pos[0] = cx + Math.cos(a) * r;
+      pos[1] = 0;
+      pos[2] = cz + Math.sin(a) * r;
+      if (!parityLive[i]) {
+        parityLive[i] = 1;
+        actors.setRecord(slot, {
+          model: i % 2 ? figureModel : robot,
+          velocity: [0, 0, 0],
+          clip: 0,
+          clipStart: t - rand(i + 3),
+          clipRate: 1 + rand(i + 31),
+          tint: 0xff40c060,
+        });
+      }
+      actors.setRecord(slot, { position: pos, yaw: a });
+    }
+  };
+  const parityOut = new Float32Array(actors.bonesPerSlot * 12);
 
   const camera = Camera.perspective(Math.PI / 3, 16 / 9, 0.3, 400);
   const view = createRenderView();
@@ -518,19 +566,22 @@ async function main(): Promise<void> {
     target.height = texture.height;
 
     const t0 = performance.now();
-    // One actor a frame turns about where it stands.
-    const k = turn++ % n;
-    const dt = t - actors.readF32(k, R.since);
-    for (let a = 0; a < 3; a++) {
-      vel[a] = -actors.readF32(k, R.vx + a);
-      pos[a] = actors.readF32(k, R.x + a) - vel[a]! * dt;
+    if (parity) parityFrame(t, state.frames);
+    if (!parity) {
+      // One actor a frame turns about where it stands.
+      const k = turn++ % n;
+      const dt = t - actors.readF32(k, R.since);
+      for (let a = 0; a < 3; a++) {
+        vel[a] = -actors.readF32(k, R.vx + a);
+        pos[a] = actors.readF32(k, R.x + a) - vel[a]! * dt;
+      }
+      actors.setRecord(k, {
+        position: pos,
+        since: t,
+        velocity: vel,
+        yaw: actors.readF32(k, R.yaw) + Math.PI,
+      });
     }
-    actors.setRecord(k, {
-      position: pos,
-      since: t,
-      velocity: vel,
-      yaw: actors.readF32(k, R.yaw) + Math.PI,
-    });
 
     const encoder = device.createCommandEncoder();
     const timed = timer?.begin() ?? false;
@@ -551,6 +602,51 @@ async function main(): Promise<void> {
     if (timed) timer!.afterSubmit();
     times.push(performance.now() - t0);
     if (times.length > 60) times.shift();
+
+    if (parity && wantParity && !checking) {
+      // Right after the submit: the CPU twin of this frame's records, at the clock the pass saw.
+      wantParity = false;
+      checking = true;
+      let live = 0;
+      for (let i = 0; i < n; i++) live += parityLive[i]!;
+      const pending = actors.readBack();
+      // A frame that runs while the copy maps (a game's next frame, under load): every record
+      // moves on (0.1 s) and the clock with it. The readback's CPU twin must not see it.
+      parityFrame(t + 0.1, state.frames + 1);
+      const extra = device.createCommandEncoder();
+      actors.prepare(extra, views, t + 0.1);
+      device.queue.submit([extra.finish()]);
+      pending.then(
+        (rb) => {
+          const p = state.parity!;
+          // The old way, for the log: `poseCpu` after the map, on records frames since have moved.
+          let naive = 0;
+          const per = actors.bonesPerSlot * 12;
+          rb.slots.forEach((slot, i) => {
+            parityOut.fill(0);
+            if (!actors.poseCpu(slot, parityOut, 'skin', rb.time)) return;
+            const j = actors.rig(rb.models[i]!).joints * 12;
+            for (let k = 0; k < j; k++) {
+              naive = Math.max(naive, Math.abs(rb.gpu[i * per + k]! - parityOut[k]!));
+            }
+          });
+          const W = rb.argsWords;
+          p.near = rb.args[actors.drawOf(robot, 0) * W + 1]!;
+          p.far = rb.args[actors.drawOf(robot, 1) * W + 1]!;
+          p.error = rb.maxError;
+          p.worstSlot = rb.worstSlot;
+          p.posed = rb.slots.length;
+          p.live = live;
+          p.naiveError = naive;
+          p.checks++;
+          checking = false;
+        },
+        (e: unknown) => {
+          state.gpu = e instanceof Error ? e.message : String(e);
+          checking = false;
+        },
+      );
+    }
 
     if (doCheck) {
       // The pose the GPU computed this frame, on the CPU, at the clock it saw (an f32).
