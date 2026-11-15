@@ -4,6 +4,8 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 
 ## Unreleased
 
+- A store lock let go while the process spawns a child is no longer "in use" (ws/store-flakes; the 2.0.0 publish CI's `tc-store` flake). *Fixed* (Rust, `tc-store`): `flock` holds while any copy of the lock's handle is open, and a child spawned on another thread holds one from its fork until its exec closes it (close-on-exec), so `StoreLock::acquire` (and `Log::create` / `Log::open`) right after a store closed could fail `InUse` naming this very process, and `holder` could name it. The process now keeps the set of lock files its `StoreLock`s hold; a lock that names this process while none of its own is on it is waited out (backoff up to `RELEASE_WAIT`, 2 s) instead of refused. A lock this process does hold, or another process's, is still refused at once. Windows is unchanged (no fork). Seen as `tests::fit::a_scan_opens_under_its_lock` and `tests::marks::marks_never_cover_less_than_the_one_before` failing while `tests::fit::a_kill_inside_tidy_recovers` spawned its children (3 of 55 lib runs before; 0 of 30 after). Test: `lock::tests::a_spawning_childs_copy_of_a_let_go_lock_is_waited_out`.
+
 ## 2.0.0 (2026-11-15)
 
 - **2.0.0 stable** (E-041). This is the 2.0 line, `2.0.0-next.0` through `2.0.0-next.34`, published to `latest`. Changes since next.34: none. ThunderClap is now one engine for 2D, varied 3D and VR on the client, and an authoritative server (the `tc-*` Rust crates). Forge Wilds runs on it at feature parity with its pre-migration build (Forge `docs/eval/phase-9.md`, FV2); The Last Rune is unchanged (`snap:check` 0 px). Upgrading from 1.x: read each `*Breaking*` entry in the 2.0.0-next.* sections below.
