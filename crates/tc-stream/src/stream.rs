@@ -19,16 +19,25 @@ mod layers;
 
 use layers::{LayerHeld, Layers, Pick};
 
+use crate::held::{Held, HeldMap};
+
 /// The most positions one `Unload` carries.
 pub const MAX_UNLOAD_BATCH: usize = 512;
 
 /// What the stream is about to load for: given to
 /// [`SectionSource::begin`], so a source sizes its own caches (meshes
 /// half-built, generated land waiting for its neighbours) to the views.
+/// It counts the connections [`SectionStream::loading_for`] (a view still
+/// scanned, its sections still in flight, or moved since the stream last
+/// had nothing loading); [`SectionStream::last_loading`] is the last one
+/// given, [`SectionStream::loading_now`] the one the next pass would give.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Loading {
-    /// Connections still loading.
+    /// Connections loading.
     pub views: usize,
+    /// Of `views`, the ones whose area is still being scanned for
+    /// sections they don't hold (what [`SectionStream::loading`] asks).
+    pub scanning: usize,
     /// The sum of their areas' longest sides, in sections (`2r + 1`).
     pub sides: u64,
     /// The longest side of any of them.
@@ -39,6 +48,22 @@ pub struct Loading {
     /// The sum of those different areas' longest sides: what a cache of
     /// the land being loaded is sized by.
     pub area_sides: u64,
+}
+
+/// Where one connection's load stands
+/// ([`SectionStream::view_loading`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ViewLoading {
+    /// Its area, once set.
+    pub area: Option<Area>,
+    /// Its area is still scanned for sections it doesn't hold.
+    pub scanning: bool,
+    /// Sections queued for it in the bulk lane, not yet written (a load or
+    /// a resend).
+    pub in_flight: usize,
+    /// Its area changed since the stream last had nothing loading.
+    pub moved: bool,
 }
 
 /// What a client holds of a layer's state, for
@@ -130,6 +155,22 @@ impl Marks {
     }
 }
 
+/// What [`SectionSource::unheld`] says of a changed section no
+/// connection holds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Unheld {
+    /// Drop the change (the default): the section is built again when
+    /// someone wants it, and its cached encoding is let go.
+    #[default]
+    Forget,
+    /// Build it now, as a held section's change is (within the rebuild
+    /// budget; left for the next flush past it): its build's
+    /// [`take_marks`](SectionSource::take_marks) reach the held sections
+    /// around it, and the encoding is cached for whoever loads it next.
+    Build,
+}
+
 /// The game's world, as sections. Called from the stream's thread only.
 ///
 /// `build`, `begin` and `end` take the source mutably: a game keeps its
@@ -151,6 +192,21 @@ pub trait SectionSource {
     /// waits for the next flush. A layer marked is read again at once.
     /// Nothing by default.
     fn take_marks(&mut self, _marks: &mut Marks) {}
+
+    /// A section marked changed that no connection holds, as a flush
+    /// rebuilds changes: build it ([`Unheld::Build`]) or drop the change
+    /// ([`Unheld::Forget`], the default). Without a build its
+    /// [`take_marks`](Self::take_marks) never runs, so a source whose
+    /// sections depend on their neighbours (faces hidden by the one next
+    /// door) marks what it must here, into `marks` (applied as
+    /// `take_marks`' are, rebuilt in the same pass); or answers `Build`
+    /// to have its build do it. `near`: the section is within the
+    /// hysteresis and one of some connection's area (what is likely loaded
+    /// soon, or held next door); a section far from every area can
+    /// usually be forgotten.
+    fn unheld(&mut self, _pos: SectionPos, _near: bool, _marks: &mut Marks) -> Unheld {
+        Unheld::Forget
+    }
 
     /// Called before a flush, a load or a claims check builds anything,
     /// with the views loading. Nothing by default.
@@ -520,44 +576,14 @@ where
 /// Encodes a stream message as a frame.
 type Encode = Box<dyn Fn(&StreamMsg) -> Vec<u8> + Send>;
 
-/// A section a connection holds, or will once its queued frame is
-/// written.
-struct Held {
-    /// The stamp of the encoding it holds (or will; 0: an earlier copy,
-    /// unknown).
-    stamp: u64,
-    /// The bulk frame that sends it, until written.
-    ticket: Option<BulkTicket>,
-    /// The length of `ticket`'s frame.
-    bytes: u32,
-    /// The client held an earlier copy when that frame was queued.
-    replaces: bool,
-}
-
-impl Held {
-    /// Held with nothing queued.
-    fn kept(stamp: u64) -> Held {
-        Held {
-            stamp,
-            ticket: None,
-            bytes: 0,
-            replaces: false,
-        }
-    }
-
-    /// Withdraws its queued frame: its length, if it was withdrawn.
-    fn take_back(&self) -> Option<u32> {
-        self.ticket
-            .as_ref()
-            .is_some_and(BulkTicket::withdraw)
-            .then_some(self.bytes)
-    }
-}
-
 #[derive(Default)]
 struct Viewer {
     area: Option<Area>,
-    held: PosMap<SectionPos, Held>,
+    /// Its area changed since the stream last had nothing loading: it
+    /// counts as loading ([`SectionStream::loading_for`]) while any view
+    /// does, as a moving view moves again soon.
+    moved: bool,
+    held: HeldMap,
     /// The next offset to look at, and where the area's offsets end.
     cursor: usize,
     end: usize,
@@ -619,21 +645,27 @@ impl Viewer {
     /// looked at, so is unloaded. Returns the claims dropped.
     fn finish_claims(&mut self) -> u64 {
         let mut dropped = 0;
-        for (p, stamp) in self.claims.drain() {
+        for (p, stamp) in std::mem::take(&mut self.claims) {
             dropped += 1;
             if !self.held.contains_key(&p) {
                 self.unloads.insert(p, stamp);
             }
         }
-        for (p, _) in self.grouped.drain() {
+        for (p, _) in std::mem::take(&mut self.grouped) {
             dropped += 1;
             if !self.held.contains_key(&p) {
                 self.unloads.insert(p, 0);
             }
         }
-        self.groups.clear();
-        self.restored.clear();
+        self.groups = Vec::new();
+        self.restored = PosSet::default();
         dropped + self.layers.drop_claims() as u64
+    }
+
+    /// Still loading: its area scanned for sections it doesn't hold, or
+    /// sections (or their layers' whole frames) queued and not yet written.
+    fn active(&self) -> bool {
+        self.cursor < self.end || self.held.any_in_flight() || self.layers.in_flight()
     }
 
     fn busy(&self) -> bool {
@@ -650,7 +682,7 @@ impl Viewer {
         let pos = size_of::<SectionPos>();
         // A B-tree entry, with its share of the node.
         let tree = |n: usize, entry: usize| n * (entry + entry / 2 + 8);
-        self.held.capacity() * (size_of::<(SectionPos, Held)>() + 1)
+        self.held.bytes()
             + self.claims.capacity() * (size_of::<(SectionPos, u64)>() + 1)
             + self.grouped.capacity() * (size_of::<(SectionPos, usize)>() + 1)
             + self.restored.capacity() * (pos + 1)
@@ -715,6 +747,11 @@ pub struct SectionStream {
     changed: BTreeSet<SectionPos>,
     /// Of `changed`, the ones changed in the background only.
     bulk: BTreeSet<SectionPos>,
+    /// Of `changed`, the ones changed only as a consequence of another
+    /// change ([`changed_derived`](SectionStream::changed_derived)).
+    derived: PosSet<SectionPos>,
+    /// What the last pass gave [`SectionSource::begin`].
+    last_loading: Loading,
     last_served: Option<ConnId>,
     encode: Encode,
     stats: StreamStats,
@@ -766,6 +803,8 @@ impl SectionStream {
             cache: Cache::new(config.cache_bytes, config.history),
             changed: BTreeSet::new(),
             bulk: BTreeSet::new(),
+            derived: PosSet::default(),
+            last_loading: Loading::default(),
             last_served: None,
             encode: Box::new(encode),
             stats: StreamStats::default(),
@@ -795,9 +834,9 @@ impl SectionStream {
     /// A connection closed: forgets it.
     pub fn disconnect(&mut self, conn: ConnId) {
         if let Some(mut v) = self.viewers.remove(&conn) {
-            for (p, h) in &v.held {
+            for (p, h) in v.held.drain() {
                 if let Some(b) = h.take_back() {
-                    withdrew(&mut self.stats, &mut self.observer, conn, *p, None, b);
+                    withdrew(&mut self.stats, &mut self.observer, conn, p, None, b);
                 }
             }
             self.layers.drop_viewer(&mut v.layers);
@@ -882,7 +921,7 @@ impl SectionStream {
                 });
             }
         } else {
-            leaving.extend(v.held.keys().filter(|p| !area.contains(**p, h)));
+            leaving.extend(v.held.keys().filter(|p| !area.contains(*p, h)));
         }
         for p in leaving {
             v.stale.remove(&p);
@@ -993,6 +1032,9 @@ impl SectionStream {
             room -= 1;
             v.layers.claim(c.layer as usize, c.key, c.stamp.get());
         }
+        if v.area != Some(area) {
+            v.moved = true;
+        }
         v.area = Some(area);
         v.cursor = 0;
         v.end = end;
@@ -1071,6 +1113,14 @@ impl SectionStream {
         self.viewers.get(&conn).map_or(0, |v| v.held.len())
     }
 
+    /// True if `conn` holds the section at `pos` (or will once its queued
+    /// frame is written).
+    pub fn holds(&self, conn: ConnId, pos: SectionPos) -> bool {
+        self.viewers
+            .get(&conn)
+            .is_some_and(|v| v.held.contains_key(&pos))
+    }
+
     /// Connections holding the section at `pos` (or that will once their
     /// queued frames are written): 0 if no one would see a change to it.
     pub fn holders(&self, pos: SectionPos) -> usize {
@@ -1085,9 +1135,68 @@ impl SectionStream {
         self.changed.len()
     }
 
-    /// True if a connection still wants sections it doesn't hold.
+    /// True if a connection is loading: its area is still scanned for
+    /// sections it doesn't hold, or sections it was sent are still queued
+    /// (not yet written), or its area moved since the stream last had
+    /// nothing loading and some view still loads (a moving view moves
+    /// again soon: what a source reads ahead for it stays wanted). See
+    /// [`view_loading`](Self::view_loading) for the parts.
     pub fn loading_for(&self, conn: ConnId) -> bool {
-        self.viewers.get(&conn).is_some_and(|v| v.cursor < v.end)
+        self.viewers
+            .get(&conn)
+            .is_some_and(|v| v.active() || (v.moved && self.any_active()))
+    }
+
+    /// Some connection is scanning or has sections in flight.
+    fn any_active(&self) -> bool {
+        self.viewers.values().any(Viewer::active)
+    }
+
+    /// Where a connection's load stands, for a host to make its own rule
+    /// of: `None` for a connection not connected.
+    pub fn view_loading(&self, conn: ConnId) -> Option<ViewLoading> {
+        let v = self.viewers.get(&conn)?;
+        Some(ViewLoading {
+            area: v.area,
+            scanning: v.cursor < v.end,
+            in_flight: v.held.in_flight(),
+            moved: v.moved,
+        })
+    }
+
+    /// What the last pass (a flush, a load, a claims check) gave
+    /// [`SectionSource::begin`].
+    pub fn last_loading(&self) -> Loading {
+        self.last_loading
+    }
+
+    /// What the next pass would give [`SectionSource::begin`], as things
+    /// stand (a host sizing its caches right after
+    /// [`set_interest`](Self::set_interest)).
+    pub fn loading_now(&self) -> Loading {
+        let wave = self.any_active();
+        let mut loading = Loading::default();
+        let mut areas = Vec::new();
+        for v in self.viewers.values() {
+            let Some(a) = v.area else {
+                continue;
+            };
+            let scanning = v.cursor < v.end;
+            if !(scanning || v.active() || (v.moved && wave)) {
+                continue;
+            }
+            let side = 2 * u32::from(a.rx.max(a.ry).max(a.rz)) + 1;
+            loading.views += 1;
+            loading.scanning += usize::from(scanning);
+            loading.sides += u64::from(side);
+            loading.widest = loading.widest.max(side);
+            areas.push((a.center, [a.rx, a.ry, a.rz], side));
+        }
+        areas.sort_unstable();
+        areas.dedup();
+        loading.areas = areas.len();
+        loading.area_sides = areas.iter().map(|a| u64::from(a.2)).sum();
+        loading
     }
 
     /// Positions a connection has to unload, not yet sent.
@@ -1116,6 +1225,7 @@ impl SectionStream {
     pub fn changed(&mut self, pos: SectionPos) {
         self.changed.insert(pos);
         self.bulk.remove(&pos);
+        self.derived.remove(&pos);
     }
 
     /// The section at `pos` changed in a way no one is waiting to see (a
@@ -1133,9 +1243,13 @@ impl SectionStream {
     /// neighbour's edit changed its faces): as [`changed`](Self::changed),
     /// but joining a change already marked rather than overriding it, so
     /// a section marked [`changed_bulk`](Self::changed_bulk) stays in the
-    /// bulk lane.
+    /// bulk lane; and a holder whose bulk resend of it is still to be
+    /// queued gets the new encoding in that resend, not on the priority
+    /// lane.
     pub fn changed_derived(&mut self, pos: SectionPos) {
-        self.changed.insert(pos);
+        if self.changed.insert(pos) {
+            self.derived.insert(pos);
+        }
     }
 
     /// Layer `layer`'s state at `key` (see [`SectionSource::layer_key`])
@@ -1154,6 +1268,7 @@ impl SectionStream {
         self.cache.clear();
         self.changed.clear();
         self.bulk.clear();
+        self.derived.clear();
         for (&conn, v) in &mut self.viewers {
             self.layers.forget_viewer(&mut v.layers);
             for (p, h) in v.held.drain() {
@@ -1248,21 +1363,19 @@ impl SectionStream {
     /// with the views loading, and lets go of the layer keys of sections
     /// no longer held.
     fn start_pass<S: SectionSource + ?Sized>(&mut self, src: &mut S) {
-        let mut loading = Loading::default();
-        let mut areas = Vec::new();
-        for v in self.viewers.values() {
-            if let Some(a) = v.area.filter(|_| v.cursor < v.end) {
-                let side = 2 * u32::from(a.rx.max(a.ry).max(a.rz)) + 1;
-                loading.views += 1;
-                loading.sides += u64::from(side);
-                loading.widest = loading.widest.max(side);
-                areas.push((a.center, [a.rx, a.ry, a.rz], side));
+        for v in self.viewers.values_mut() {
+            v.held.prune();
+            v.layers.prune();
+        }
+        if !self.any_active() {
+            // The wave is over: views that moved count as loading again
+            // only once they move again.
+            for v in self.viewers.values_mut() {
+                v.moved = false;
             }
         }
-        areas.sort_unstable();
-        areas.dedup();
-        loading.areas = areas.len();
-        loading.area_sides = areas.iter().map(|a| u64::from(a.2)).sum();
+        let loading = self.loading_now();
+        self.last_loading = loading;
         src.begin(&loading);
         self.edits.clear();
         self.marked.clear();
@@ -1338,7 +1451,7 @@ impl SectionStream {
     ) -> Duration {
         let start = Instant::now();
         let left = self.idle_budget_left(start);
-        if left.is_zero() || start >= until || !self.loading() {
+        if left.is_zero() || start >= until || !self.loading() || interrupted() {
             return Duration::ZERO;
         }
         let built = self.load_for(src, lanes, until.min(start + left), &mut interrupted, true);
@@ -1463,6 +1576,11 @@ impl SectionStream {
     /// `marked` too), and layers changed, read at once.
     fn take_marks<S: SectionSource + ?Sized>(&mut self, src: &mut S) {
         src.take_marks(&mut self.marks);
+        self.apply_marks(src);
+    }
+
+    /// Applies what is in `marks` (see [`take_marks`](Self::take_marks)).
+    fn apply_marks<S: SectionSource + ?Sized>(&mut self, src: &mut S) {
         if self.marks.is_empty() {
             return;
         }
@@ -1563,6 +1681,7 @@ impl SectionStream {
     fn build<S: SectionSource + ?Sized>(&mut self, src: &mut S, pos: SectionPos) -> Built {
         self.changed.remove(&pos);
         let background = self.bulk.remove(&pos);
+        let derived = self.derived.remove(&pos);
         let mut buf = std::mem::take(&mut self.buf);
         let start = Instant::now();
         src.build(pos, &mut buf);
@@ -1575,9 +1694,11 @@ impl SectionStream {
         self.buf = buf;
         self.stats.builds += 1;
         for v in self.viewers.values_mut() {
-            if v.held.get(&pos).is_some_and(|h| h.stamp != built.stamp) {
+            if v.held.stamp(&pos).is_some_and(|s| s != built.stamp) {
                 if background && !v.stale.contains(&pos) {
                     v.resend.insert(pos);
+                } else if derived && v.resend.contains(&pos) {
+                    // Its resend, still to be queued, takes this change.
                 } else {
                     v.resend.remove(&pos);
                     v.stale.insert(pos);
@@ -1609,14 +1730,26 @@ impl SectionStream {
             if !self.changed.contains(&pos) || !done.insert(pos) {
                 continue;
             }
+            let out = budget == 0 || (built > 0 && until.is_some_and(|u| Instant::now() >= u));
             if !self.viewers.values().any(|v| v.held.contains_key(&pos)) {
-                // Nobody holds it: built again when someone wants it.
-                self.changed.remove(&pos);
-                self.bulk.remove(&pos);
-                self.cache.remove(pos);
-                continue;
-            }
-            if budget == 0 || (built > 0 && until.is_some_and(|u| Instant::now() >= u)) {
+                let near = self.near(pos);
+                if src.unheld(pos, near, &mut self.marks) == Unheld::Forget {
+                    // Built again when someone wants it.
+                    self.changed.remove(&pos);
+                    self.bulk.remove(&pos);
+                    self.derived.remove(&pos);
+                    self.cache.remove(pos);
+                    self.apply_marks(src);
+                    work.extend(self.marked.drain(..));
+                    continue;
+                }
+                if out {
+                    // Asked again next flush.
+                    self.apply_marks(src);
+                    self.marked.clear();
+                    break;
+                }
+            } else if out {
                 break;
             }
             budget -= 1;
@@ -1624,6 +1757,14 @@ impl SectionStream {
             self.build(src, pos);
             work.extend(self.marked.drain(..));
         }
+    }
+
+    /// True if `pos` is within the hysteresis and one of some area.
+    fn near(&self, pos: SectionPos) -> bool {
+        let h = i64::from(self.config.hysteresis) + 1;
+        self.viewers
+            .values()
+            .any(|v| v.area.is_some_and(|a| a.contains(pos, h)))
     }
 
     fn section_frame(&self, pos: SectionPos, b: &Built) -> Vec<u8> {

@@ -37,6 +37,7 @@
 mod area;
 mod cache;
 mod hash;
+mod held;
 mod lanes;
 mod msg;
 mod raw;
@@ -53,5 +54,5 @@ pub use raw::{decode_raw, encode_raw};
 pub use stream::{
     EditRule, FrameKind, IdleBudget, LayerFrom, LayerOrder, Loading, MAX_UNLOAD_BATCH, Marks,
     SectionSource, SectionStream, StreamConfig, StreamError, StreamEvent, StreamObserver,
-    StreamStats, game_frame,
+    StreamStats, Unheld, ViewLoading, game_frame,
 };
