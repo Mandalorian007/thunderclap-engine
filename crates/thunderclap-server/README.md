@@ -71,6 +71,13 @@ instead of a TypeScript hash that differs. `tests/ts_envelope.rs` writes
 `src/net/testdata/own-envelope.*` for `src/net/own-envelope.test.ts`
 (`TC_BLESS=1` rewrites them).
 
+The eager module's `export const schema = /* @__PURE__ */ defineSchema(...)`
+is dropped by a bundler where unused. `define_schema_ts_lazy(schema,
+net_import, envelope)` writes instead `export function schema()`, which
+builds it on the first call and keeps it, so a module (a worker) that
+imports the file for its types or `SCHEMA_HASH` pays nothing for a large
+schema.
+
 ## The CLI
 
 `cli::main(args, make)` returns an exit code (0 done, 1 failed or refused,

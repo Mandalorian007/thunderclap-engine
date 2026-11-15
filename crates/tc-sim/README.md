@@ -45,7 +45,25 @@ with the game taken out.
     jump), `version`, `now` (the wall clock), `body`/`body_mut`/`bodies`,
     `events`/`push` (logged as one batch after the hook), `out` (sent once
     that batch applied; for `act`, before the result), `wake_at` and
-    `mark(change)`.
+    `mark(change)`, `set_timer(kind, every)` / `clear_timer` / `timer`
+    and `conns()`.
+  - The game's own record (E15): `record()` / `record_mut()` (default
+    `None`) hand the core a `Record` (`time`, `version`, `next_event`,
+    `advance(target, changes, go_on)`, `commit(time, events, changes)`
+    returning `RecordError::{Refused, Store}`, `state_hash`, `mark(time,
+    wait)`, `take_error()`), which then keeps the time, schedule, log and
+    hash instead of the core and tc-store.
+  - Idle time (E15): `idle_work()` and `idle(&mut self, cx: &mut IdleCx)`
+    (`time`, `version`, `now`, `until`, `interrupted()`, `late()`,
+    `body`/`bodies`, `conns()`); `bulk_lingers(conn)` holds a filling
+    connection's bulk wake for up to `BULK_LINGER`. `Conns`: `iter`,
+    `player`, `of`, `send` (priority lane), `send_bulk(conn, frame,
+    ticket)`, `queued`, `bulk_queued`, `bulk_high_water`, `behind`,
+    `release_all`.
+  - `timer(&mut self, cx, kind)`: a wall-clock timer of that kind is due.
+  - `input_flow(player, body, input, events) -> ControlFlow<Stop>` (the
+    default calls `input`): `Stop::Wait` ends the player's tick there,
+    `Stop::AckAll` also acknowledges every queued input unapplied.
 - `Core<G>`: the deterministic part: the game, time (integer steps, at
   most `MAX_TIME` = 2^53 − 1), version (last entry applied), `Scheduler`
   (on a hierarchical `TimingWheel`) and `Changes`. `advance_to`,
@@ -77,7 +95,15 @@ with the game taken out.
 - `Driver<G>`: a sim run by hand with in-process connections, for tests,
   bots and tools; `Driver::query` runs a query once.
 - `InputQueue` (`InputConfig`, `Taken`): per-player inputs, stale ones
-  dropped, a short buffer, credit-paced on the wall clock.
+  dropped, a short buffer, credit-paced on the wall clock. `ack_all(player)`
+  drops every queued input, acknowledging the newest; `tick_flow` is
+  `tick_into` whose `apply` may stop the player's tick (`Stop`), the inputs
+  left spending no credit.
+- `Sim::idle(until, interrupted)`, `Sim::wake_outbound(now)`,
+  `Driver::idle(budget)`, `SimConfig::idle_margin` (`IDLE_MARGIN` = 2 ms),
+  `IDLE_RETRY` (10 ms); `Sim::fail_store(reason)`, `Sim::store_error()`;
+  `Core::owns_record()`, `Core::next_event_time()`. Counters add `timers`,
+  `idles` and `idle_us`.
 - `StatusHandle` / `SimStatus`: the published status; `Display` is the
   one-line status.
 
@@ -154,6 +180,30 @@ with the game taken out.
   (checking its state hash) and replays the tail, falling back to the base
   before it, then the whole log; a reload restores the newest base into
   the new game and replays the tail.
+- A game that owns its record (E15): the core keeps no time, schedule or
+  log of its own and delegates to the `Record`; every batch (command,
+  join, live hook, rule) is `commit`ted, so a replay of the game's log
+  reaches the live `state_hash`. `RecordError::Refused` is refused like
+  an unencodable event; `RecordError::Store`, a `take_error` (polled each
+  tick and after each hook) or `Sim::fail_store` fails the store as
+  tc-store's does. Clock marks go to `Record::mark` (waiting on `stop`).
+  The game opens, replays and bases itself: `Sim::open`, `Core::apply`,
+  `replay`, bases and `reload` refuse.
+- Input with `input_flow`: the input tick goes player by player; each
+  input's events are committed before the next is applied, and a `Stop`
+  ends that player's tick with the rest still queued and their credit
+  unspent (`AckAll` drops them, acknowledged).
+- Timers: `LiveCx::set_timer(kind, every)` arms a periodic wall-clock
+  timer per kind (re-arming replaces it); each due one runs `Game::timer`
+  once per tick, earliest first, even while paused, never after a store
+  failure; `deadline()` includes the earliest.
+- Idle: when `Game::idle_work` holds, `Sim::run` calls `Game::idle` before
+  it waits, until the next deadline less `idle_margin` (at least every
+  `IDLE_RETRY`); a client message arriving sets `interrupted()`, and the
+  loop handles it, ticks and comes back. `late()` is how late the last
+  sleep woke. The idle hook may not change the hashed state (counted in
+  `live_misses` with `verify_live`). Bulk frames are woken once per pass
+  (`wake_outbound`), lingering while `bulk_lingers`.
 
 ## Tests
 
@@ -181,6 +231,11 @@ with the game taken out.
   command's result, the stream following the body, frames at the input
   tick, `verify_live`, one-shot queries, an idle live tick that only
   steps.
+- `tests/owned.rs` (a game with its own record): the core delegating
+  and a replay of its log at the live hash, store failures (a commit, a
+  noticed error, `fail_store`) pausing and reported, a knockout
+  acknowledging the rest, idle streaming under the high water, lingering
+  bulk, timers by kind while paused, `Sim::run` streaming in idle time.
 - `tests/net.rs`: two tc-net clients over WebSockets, the log replayed to
   the live hash; and `createNet` through vitest, including a live query's
   patch and the entity stream (`src/net/sim-interop.test.ts`,

@@ -52,6 +52,7 @@
 //! state, or anything else outside the state and the event.
 
 use std::fmt::Debug;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use tc_net::{Identity, Protocol, ServerMsg};
@@ -61,9 +62,12 @@ use tc_wire::hash::StableHasher;
 use tc_wire::schema::Schema;
 
 use crate::changes::Changes;
+use crate::idle::IdleCx;
+use crate::input::Stop;
 use crate::lanes::Lane;
 use crate::live::LiveCx;
 use crate::query::{Query, QueryCtx};
+use crate::record::Record;
 use crate::scheduler::{EventKey, Scheduler};
 
 /// A player, as `Welcome.player` names it: the game's own id.
@@ -303,6 +307,56 @@ pub trait Game: Sized + Send + 'static {
         let _ = cx;
     }
 
+    /// A wall-clock timer of `kind` armed with [`LiveCx::set_timer`] is
+    /// due (whether or not the game clock runs): one of the game's
+    /// periodic ticks, each kind with its own deadline. It is disarmed
+    /// before the call; re-arm it with `cx.set_timer(kind, ..)` for the
+    /// next. Due timers run earliest first (by kind when equal). Same
+    /// rules as [`Game::live_step`]. The default does nothing.
+    fn timer(&mut self, cx: &mut LiveCx<'_, Self>, kind: u32) {
+        let _ = (cx, kind);
+    }
+
+    /// True while the game has budgeted work to do between ticks
+    /// ([`Game::idle`]): sections to build, data to stream. The default
+    /// is false.
+    fn idle_work(&self) -> bool {
+        false
+    }
+
+    /// Work done in the time the loop would spend waiting
+    /// ([`Sim::run`](crate::Sim::run)), while [`Game::idle_work`] holds:
+    /// return by [`IdleCx::until`], and as soon as
+    /// [`IdleCx::interrupted`] (a client's message waits). It reads the
+    /// game and queues bytes on connections ([`IdleCx::conns`]); like a
+    /// live hook it changes only unhashed fields. The default does
+    /// nothing.
+    fn idle(&mut self, cx: &mut IdleCx<'_, Self>) {
+        let _ = cx;
+    }
+
+    /// True while more bulk frames are coming soon for `conn` (its view is
+    /// still filling): what it has queued waits up to
+    /// `tc_net::outbound::BULK_LINGER` to go out in one write. The
+    /// default is false: queued bulk frames go out before the loop waits.
+    fn bulk_lingers(&self, conn: tc_net::ConnId) -> bool {
+        let _ = conn;
+        false
+    }
+
+    /// The game's own record, if it keeps one (its time, schedule, log and
+    /// hash; see [`Record`]): the core then delegates to it. The default
+    /// (`None`) leaves them to the core and tc-store. Must agree with
+    /// [`Game::record_mut`].
+    fn record(&self) -> Option<&dyn Record<Self>> {
+        None
+    }
+
+    /// [`Game::record`], mutably.
+    fn record_mut(&mut self) -> Option<&mut dyn Record<Self>> {
+        None
+    }
+
     /// The interest `player`'s entity stream follows, from its body (a
     /// watch radius around it), if the game picks it rather than the
     /// client: then each of the player's connections gets a stream
@@ -332,6 +386,24 @@ pub trait Game: Sized + Send + 'static {
         events: &mut Vec<EventOf<Self>>,
     ) {
         let _ = (player, body, input, events);
+    }
+
+    /// [`Game::input`], which may stop `player`'s tick partway (a
+    /// knockout, a teleport): returning [`ControlFlow::Break`] leaves the
+    /// rest of its inputs unapplied, spending no credit, waiting
+    /// ([`Stop::Wait`]) or acknowledged and dropped ([`Stop::AckAll`]: its
+    /// `PlayerState` acknowledges the newest). The events pushed are
+    /// logged before the next input. The default calls [`Game::input`]
+    /// and goes on.
+    fn input_flow(
+        &self,
+        player: PlayerId,
+        body: &mut Self::Body,
+        input: <Self::Protocol as Protocol>::Input,
+        events: &mut Vec<EventOf<Self>>,
+    ) -> ControlFlow<Stop> {
+        self.input(player, body, input, events);
+        ControlFlow::Continue(())
     }
 
     /// After an input tick moved bodies: the rules that read them (see

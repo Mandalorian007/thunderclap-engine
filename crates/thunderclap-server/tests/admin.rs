@@ -318,7 +318,7 @@ fn generate_ts_writes_the_client_typescript_once() {
     // checks a generated one hashes the same in TypeScript).
     let schema = std::fs::read_to_string(&written[1]).unwrap();
     assert!(
-        schema.contains("export const schema = defineSchema({"),
+        schema.contains("export const schema = /* @__PURE__ */ defineSchema({"),
         "{schema}"
     );
     assert!(schema.contains(&tally::schema().hash()), "{schema}");

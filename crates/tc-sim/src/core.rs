@@ -7,6 +7,7 @@ use tc_wire::hash::StableHasher;
 use crate::MAX_TIME;
 use crate::changes::Changes;
 use crate::game::{Cx, EventOf, Game};
+use crate::record::RecordError;
 use crate::scheduler::Scheduler;
 
 /// Bump when what [`Core::state_hash`] feeds the hasher (its own part)
@@ -73,17 +74,56 @@ impl<G: Game> Core<G> {
         self.game
     }
 
-    /// The time, in steps.
+    /// The time, in steps (the game's own when it keeps its
+    /// [`Record`](crate::Record)).
     pub fn time(&self) -> u64 {
-        self.time
+        self.game.record().map_or(self.time, |r| r.time())
     }
 
-    /// The last log entry applied (0 before any).
+    /// The last log entry applied (0 before any; the game's own when it
+    /// keeps its [`Record`](crate::Record)).
     pub fn version(&self) -> u64 {
-        self.version
+        self.game.record().map_or(self.version, |r| r.version())
     }
 
-    /// The pending schedule.
+    /// True if the game keeps its own [`Record`](crate::Record).
+    pub fn owns_record(&self) -> bool {
+        self.game.record().is_some()
+    }
+
+    /// When the next scheduled event fires, if any: the core's schedule's,
+    /// or the game's own [`Record::next_event`](crate::Record::next_event).
+    pub fn next_event_time(&self) -> Option<u64> {
+        match self.game.record() {
+            Some(r) => r.next_event(),
+            None => self.scheduler.next_time(),
+        }
+    }
+
+    /// Logs and applies `events` at the current time through the game's
+    /// own [`Record::commit`](crate::Record::commit).
+    pub(crate) fn commit(&mut self, events: Vec<EventOf<G>>) -> Result<(), RecordError> {
+        let Some(record) = self.game.record_mut() else {
+            return Err(RecordError::Refused("the game keeps no record".into()));
+        };
+        let time = record.time();
+        record.commit(time, events, &mut self.changes)
+    }
+
+    /// A store failure the game's own record noticed, if any.
+    pub(crate) fn take_record_error(&mut self) -> Option<String> {
+        self.game.record_mut()?.take_error()
+    }
+
+    /// Marks the clock in the game's own record (`None` without one).
+    pub(crate) fn mark_record(&mut self, wait: bool) -> Option<Result<(), String>> {
+        let record = self.game.record_mut()?;
+        let time = record.time();
+        Some(record.mark(time, wait))
+    }
+
+    /// The pending schedule (empty when the game keeps its own
+    /// [`Record`](crate::Record)).
     pub fn scheduler(&self) -> &Scheduler<G::Scheduled> {
         &self.scheduler
     }
@@ -123,6 +163,25 @@ impl<G: Game> Core<G> {
     /// event, so the loop can step it one step at a time from there.
     pub(crate) fn advance_until_live(&mut self, target: u64) {
         let target = target.min(MAX_TIME);
+        if self.owns_record() {
+            // One step or event at a time, so it stops once live.
+            loop {
+                let time = self.time();
+                let next = if self.game.steps() {
+                    time + 1
+                } else {
+                    self.next_event_time().unwrap_or(u64::MAX).max(time)
+                };
+                if time >= target || next > target {
+                    self.record_advance(target, &mut || true);
+                    return;
+                }
+                self.record_advance(next, &mut || true);
+                if self.game.live() || self.time() < next {
+                    return;
+                }
+            }
+        }
         if self.game.steps() {
             while self.time < target {
                 self.time += 1;
@@ -172,6 +231,9 @@ impl<G: Game> Core<G> {
     /// budget. Returns the events fired.
     pub fn advance_while(&mut self, target: u64, mut go_on: impl FnMut() -> bool) -> u64 {
         let target = target.min(MAX_TIME);
+        if let Some(fired) = self.record_advance(target, &mut go_on) {
+            return fired;
+        }
         let before = self.fired;
         if self.game.steps() {
             while self.time < target && go_on() {
@@ -195,6 +257,14 @@ impl<G: Game> Core<G> {
         self.fired - before
     }
 
+    /// Advances the game's own record (`None` without one).
+    fn record_advance(&mut self, target: u64, go_on: &mut dyn FnMut() -> bool) -> Option<u64> {
+        let record = self.game.record_mut()?;
+        let fired = record.advance(target, &mut self.changes, go_on);
+        self.fired += fired;
+        Some(fired)
+    }
+
     fn fire_due(&mut self, now: u64) {
         while let Some((key, event)) = self.scheduler.pop_due(now) {
             self.fired += 1;
@@ -208,7 +278,14 @@ impl<G: Game> Core<G> {
     /// Applies one log entry: the next version, at or after the current
     /// time (time advances to it first). An entry the game refuses still
     /// counts as applied (the version moves) and its error is returned.
+    /// A game that keeps its own [`Record`](crate::Record) replays itself:
+    /// this refuses.
     pub fn apply(&mut self, entry: &LogEntry<EventOf<G>>) -> Result<(), ApplyError> {
+        if self.owns_record() {
+            return Err(ApplyError::Sequence(
+                "the game keeps its own record and replays itself".into(),
+            ));
+        }
         if entry.seq != self.version + 1 {
             return Err(ApplyError::Sequence(format!(
                 "entry {} follows version {}",
@@ -268,7 +345,13 @@ impl<G: Game> Core<G> {
     /// It covers the time, the version, the schedule (each event's key and
     /// wire bytes, and the next sequence number) and the game's own state
     /// ([`Game::hash_state`]); not the marks or counters.
+    ///
+    /// A game that keeps its own [`Record`](crate::Record) hashes itself
+    /// ([`Record::state_hash`](crate::Record::state_hash)).
     pub fn state_hash(&self) -> u64 {
+        if let Some(record) = self.game.record() {
+            return record.state_hash();
+        }
         let mut h = StableHasher::new();
         h.write_str(STATE_HASH_VERSION);
         h.write_u64(self.time);
@@ -291,8 +374,11 @@ const BASE_MAGIC: &[u8; 8] = b"TCSBASE1";
 impl<G: Game> Core<G> {
     /// The base of this core: its time, version, schedule and state hash
     /// with the game's [`Game::save`] bytes, checksummed. `None` if the
-    /// game keeps no bases.
+    /// game keeps no bases, or keeps its own [`Record`](crate::Record).
     pub fn to_base(&self) -> Option<Vec<u8>> {
+        if self.owns_record() {
+            return None;
+        }
         let game = self.game.save()?;
         let mut out = Vec::with_capacity(game.len() + 64);
         out.extend_from_slice(BASE_MAGIC);

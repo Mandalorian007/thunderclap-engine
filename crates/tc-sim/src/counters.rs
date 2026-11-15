@@ -51,6 +51,12 @@ pub struct SimCounters {
     pub input_us: u64,
     /// Microseconds in flushes.
     pub flush_us: u64,
+    /// Game timers run ([`Game::timer`](crate::Game::timer)).
+    pub timers: u64,
+    /// Idle passes ([`Game::idle`](crate::Game::idle)).
+    pub idles: u64,
+    /// Microseconds in idle passes.
+    pub idle_us: u64,
 }
 
 impl SimCounters {
@@ -76,6 +82,9 @@ impl SimCounters {
             live_us: self.live_us.saturating_sub(earlier.live_us),
             input_us: self.input_us.saturating_sub(earlier.input_us),
             flush_us: self.flush_us.saturating_sub(earlier.flush_us),
+            timers: self.timers.saturating_sub(earlier.timers),
+            idles: self.idles.saturating_sub(earlier.idles),
+            idle_us: self.idle_us.saturating_sub(earlier.idle_us),
         }
     }
 }
