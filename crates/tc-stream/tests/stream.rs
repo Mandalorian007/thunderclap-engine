@@ -50,7 +50,7 @@ impl Setup {
     fn settle(&mut self) -> usize {
         settle(
             &mut self.stream,
-            &self.world,
+            &mut self.world,
             &mut self.lanes,
             &mut self.clients,
             200,
@@ -81,7 +81,7 @@ fn loads_the_area_nearest_first() {
     let mut s = Setup::new(StreamConfig::default());
     let a = area(0, 3, 0, 2);
     s.join(A, a, &[]);
-    s.stream.flush(&s.world, &mut s.lanes);
+    s.stream.flush(&mut s.world, &mut s.lanes);
     let first = s.lanes.drain(A);
     let d2 = |m: &StreamMsg| match m {
         StreamMsg::Section { pos, .. } => pos.x.pow(2) + (pos.y - 3).pow(2) + pos.z.pow(2),
@@ -151,7 +151,7 @@ fn build_budget_is_shared_across_flushes_and_connections() {
     let mut served = BTreeSet::new();
     for _ in 0..4 {
         let builds = s.world.builds.get();
-        s.stream.flush(&s.world, &mut s.lanes);
+        s.stream.flush(&mut s.world, &mut s.lanes);
         assert!(s.world.builds.get() - builds <= 6, "within the budget");
         for conn in [A, B] {
             let got = s.lanes.drain(conn);
@@ -183,7 +183,7 @@ fn a_flush_into_a_fresh_area_stays_near_budget() {
     s.settle();
     s.stream.set_interest(A, area(50, 0, 0, 2), &[]).unwrap();
     let builds = s.world.builds.get();
-    s.stream.flush(&s.world, &mut s.lanes);
+    s.stream.flush(&mut s.world, &mut s.lanes);
     assert_eq!(s.world.builds.get() - builds, 8);
     s.settle();
     s.world.check(&s.clients[&A]);
@@ -194,7 +194,7 @@ fn the_bulk_high_water_holds_loads_back() {
     let mut s = Setup::new(StreamConfig::default());
     s.lanes.lane(A).high_water = Some(1000);
     s.join(A, area(0, 0, 0, 2), &[]);
-    s.stream.flush(&s.world, &mut s.lanes);
+    s.stream.flush(&mut s.world, &mut s.lanes);
     let queued: usize = s.lanes.0[&A].bulk.iter().map(|(f, _)| f.len()).sum();
     assert!(
         (1000..1300).contains(&queued),
@@ -237,7 +237,7 @@ fn a_change_refused_by_its_lane_is_retried() {
     s.client(A).reset_counts();
     s.lanes.lane(A).refuse = true;
     s.world.set(&mut s.stream, at(0, 0, 0), 1, 42);
-    s.stream.flush(&s.world, &mut s.lanes);
+    s.stream.flush(&mut s.world, &mut s.lanes);
     assert!(s.stream.has_work());
     s.lanes.lane(A).refuse = false;
     s.settle();
@@ -252,7 +252,7 @@ fn changes_wait_while_a_connection_is_behind() {
     s.settle();
     s.lanes.lane(A).behind = true;
     s.world.set(&mut s.stream, at(0, 0, 0), 1, 42);
-    s.stream.flush(&s.world, &mut s.lanes);
+    s.stream.flush(&mut s.world, &mut s.lanes);
     assert!(s.lanes.drain(A).is_empty());
     s.lanes.lane(A).behind = false;
     s.settle();
@@ -273,7 +273,7 @@ fn refused_unloads_are_retried_in_batches() {
     assert!(held > tc_stream::MAX_UNLOAD_BATCH);
     s.lanes.lane(A).refuse = true;
     s.stream.set_interest(A, area(1000, 0, 0, 1), &[]).unwrap();
-    s.stream.flush(&s.world, &mut s.lanes);
+    s.stream.flush(&mut s.world, &mut s.lanes);
     assert!(
         s.lanes
             .drain(A)
@@ -281,7 +281,7 @@ fn refused_unloads_are_retried_in_batches() {
             .all(|m| matches!(m, StreamMsg::Section { .. }))
     );
     s.lanes.lane(A).refuse = false;
-    s.stream.flush(&s.world, &mut s.lanes);
+    s.stream.flush(&mut s.world, &mut s.lanes);
     let unloads: Vec<usize> = s
         .lanes
         .drain(A)
@@ -300,10 +300,10 @@ fn refused_unloads_are_retried_in_batches() {
 fn an_edit_to_a_still_queued_section_is_folded_into_it() {
     let mut s = Setup::new(StreamConfig::default());
     s.join(A, area(0, 0, 0, 1), &[]);
-    s.stream.flush(&s.world, &mut s.lanes);
+    s.stream.flush(&mut s.world, &mut s.lanes);
     let queued = s.lanes.0[&A].bulk.len();
     s.world.set(&mut s.stream, at(0, 0, 0), 3, 77);
-    s.stream.flush(&s.world, &mut s.lanes);
+    s.stream.flush(&mut s.world, &mut s.lanes);
     assert_eq!(s.stream.stats().folded, 1);
     s.settle();
     let c = &s.clients[&A];
@@ -339,7 +339,7 @@ fn after_an_edit_only_the_edited_section_comes() {
     let mut b = std::mem::take(s.client(A));
     s.stream.disconnect(A);
     s.world.set(&mut s.stream, at(1, 0, -1), 0, 55);
-    s.stream.flush(&s.world, &mut s.lanes);
+    s.stream.flush(&mut s.world, &mut s.lanes);
     b.reset_counts();
     s.clients.insert(B, b);
     s.stream.connect(B);
@@ -540,6 +540,6 @@ fn edits_are_queued_before_new_sections_are_built() {
     let (out, _rx) = tc_net::outbound::outbound();
     out.hold();
     let mut lanes = BTreeMap::from([(A, out.clone())]);
-    s.stream.flush(&s.world, &mut lanes);
+    s.stream.flush(&mut s.world, &mut lanes);
     assert!(!out.is_held());
 }

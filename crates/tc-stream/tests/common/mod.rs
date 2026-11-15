@@ -232,7 +232,7 @@ impl World {
 }
 
 impl SectionSource for World {
-    fn build(&self, pos: SectionPos, out: &mut Vec<u8>) {
+    fn build(&mut self, pos: SectionPos, out: &mut Vec<u8>) {
         self.builds.set(self.builds.get() + 1);
         encode_raw(&self.cells_of(pos), out);
     }
@@ -254,7 +254,7 @@ pub fn stream(config: StreamConfig) -> SectionStream {
 /// returns how many it took.
 pub fn settle(
     stream: &mut SectionStream,
-    world: &dyn SectionSource,
+    world: &mut dyn SectionSource,
     lanes: &mut FakeLanes,
     clients: &mut BTreeMap<ConnId, Client>,
     max: usize,

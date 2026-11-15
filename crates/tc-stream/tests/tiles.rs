@@ -38,7 +38,7 @@ impl Tilemap {
 }
 
 impl SectionSource for Tilemap {
-    fn build(&self, pos: SectionPos, out: &mut Vec<u8>) {
+    fn build(&mut self, pos: SectionPos, out: &mut Vec<u8>) {
         out.clear();
         for t in self.tiles(pos.x, pos.y) {
             out.extend_from_slice(&t.to_le_bytes());
@@ -119,7 +119,7 @@ impl View {
     }
 }
 
-fn run(stream: &mut SectionStream, map: &Tilemap, lanes: &mut FakeLanes, view: &mut View) {
+fn run(stream: &mut SectionStream, map: &mut Tilemap, lanes: &mut FakeLanes, view: &mut View) {
     for _ in 0..50 {
         stream.flush(map, lanes);
         view.apply(lanes.drain(1));
@@ -136,13 +136,13 @@ fn around(x: i32, y: i32) -> Area {
 
 #[test]
 fn a_tilemap_streams_edits_moves_and_resumes() {
-    let map = Tilemap::default();
+    let mut map = Tilemap::default();
     let mut lanes = FakeLanes::default();
     let mut stream = SectionStream::new(StreamConfig::default(), |m: &StreamMsg| m.to_bytes());
     let mut view = View::default();
     stream.connect(1);
     stream.set_interest(1, around(0, 0), &[]).unwrap();
-    run(&mut stream, &map, &mut lanes, &mut view);
+    run(&mut stream, &mut map, &mut lanes, &mut view);
     assert_eq!(view.chunks.len(), 7 * 5, "one layer");
     view.check(&map);
 
@@ -151,13 +151,13 @@ fn a_tilemap_streams_edits_moves_and_resumes() {
     tiles[10] = 9;
     map.edits.borrow_mut().insert((1, 1), tiles);
     stream.changed(SectionPos::new(1, 1, 0));
-    run(&mut stream, &map, &mut lanes, &mut view);
+    run(&mut stream, &mut map, &mut lanes, &mut view);
     assert_eq!((view.sections, view.edits), (35, 1));
     view.check(&map);
 
     // Walk east past the hysteresis: the west edge goes, the east comes.
     stream.set_interest(1, around(6, 0), &[]).unwrap();
-    run(&mut stream, &map, &mut lanes, &mut view);
+    run(&mut stream, &mut map, &mut lanes, &mut view);
     assert!(view.chunks.keys().all(|(x, _)| *x >= 1));
     assert_eq!(view.chunks.keys().filter(|(x, _)| *x >= 3).count(), 7 * 5);
     view.check(&map);
@@ -181,7 +181,7 @@ fn a_tilemap_streams_edits_moves_and_resumes() {
     stream.connect(2);
     stream.set_interest(2, around(6, 0), &claims).unwrap();
     for _ in 0..10 {
-        stream.flush(&map, &mut lanes);
+        stream.flush(&mut map, &mut lanes);
         view.apply(lanes.drain(2));
     }
     assert_eq!(view.sections, 1);

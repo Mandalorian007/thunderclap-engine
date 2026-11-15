@@ -39,7 +39,24 @@ const streamSchema = () =>
       Area: { struct: { center: 'SectionPos', rx: 'u8', ry: 'u8', rz: 'u8' } },
       Stamp: { struct: { hi: 'u32', lo: 'u32' } },
       Claim: { struct: { pos: 'SectionPos', stamp: 'Stamp' } },
-      StreamInterest: { struct: { area: 'Area', holding: { vec: 'Claim' } } },
+      GroupClaim: {
+        struct: {
+          start: 'SectionPos',
+          axis: 'u8',
+          held: 'u32',
+          digest: 'Stamp',
+          layers: { vec: { option: 'Stamp' } },
+        },
+      },
+      LayerClaim: { struct: { layer: 'u32', key: 'SectionPos', stamp: 'Stamp' } },
+      StreamInterest: {
+        struct: {
+          area: 'Area',
+          holding: { vec: 'Claim' },
+          groups: { vec: 'GroupClaim' },
+          layers: { vec: 'LayerClaim' },
+        },
+      },
       StreamMsg: {
         enum: {
           Section: { pos: 'SectionPos', stamp: 'Stamp', data: 'Bytes' },
@@ -129,9 +146,11 @@ describe.skipIf(!url)('tc-stream interop', () => {
     net.on('welcome', () => seen.welcomes++);
     let area = { center: { x: 0, y: 0, z: 0 }, rx: 1, ry: 1, rz: 1 };
     // Dropped: ask again holding everything (sent first on the next connection).
-    net.on('down', () => net.setInterest({ area, holding: [...held.values()] }));
+    net.on('down', () =>
+      net.setInterest({ area, holding: [...held.values()], groups: [], layers: [] }),
+    );
     await net.ready;
-    net.setInterest({ area, holding: [] });
+    net.setInterest({ area, holding: [], groups: [], layers: [] });
     await until(() => held.size === 27, 'the area');
     expect(store.cellAt(0, 0, 0)).toBe(1);
     expect(store.cellAt(1, 0, 0)).toBe(0);
@@ -157,7 +176,7 @@ describe.skipIf(!url)('tc-stream interop', () => {
 
     // Away: what it left goes in an UnloadBox, and the store holds only the new area.
     area = { ...area, center: { x: 10, y: 0, z: 0 } };
-    net.setInterest({ area, holding: [...held.values()] });
+    net.setInterest({ area, holding: [...held.values()], groups: [], layers: [] });
     await until(() => seen.sections === 28 + 27 && held.size === 27, 'the new area');
     expect(seen.boxes).toBeGreaterThanOrEqual(1);
     expect(store.stats().sections).toBe(27);

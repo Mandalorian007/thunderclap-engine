@@ -3,9 +3,10 @@
 //! `Edit` from what they hold), by position, the least recently used
 //! dropped first once over its bytes or its count.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
+use crate::hash::PosMap;
 use crate::msg::SectionPos;
 
 /// Bytes counted per cached section on top of its encodings.
@@ -38,7 +39,7 @@ impl Slot {
 
 /// See the [module docs](self).
 pub(crate) struct Cache {
-    slots: HashMap<SectionPos, Slot>,
+    slots: PosMap<SectionPos, Slot>,
     lru: BTreeMap<u64, SectionPos>,
     bytes: usize,
     tick: u64,
@@ -51,7 +52,7 @@ impl Cache {
     /// encodings a section.
     pub(crate) fn new(budget: usize, history: usize) -> Cache {
         Cache {
-            slots: HashMap::new(),
+            slots: PosMap::default(),
             lru: BTreeMap::new(),
             bytes: 0,
             tick: 0,

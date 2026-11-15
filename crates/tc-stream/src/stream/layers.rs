@@ -2,13 +2,16 @@
 //! Each connection holds a layer's state at a key while it holds any
 //! section under that key; the state goes whole in the bulk lane behind the
 //! section that brings the key, then as changes on the priority lane (or
-//! folded into a whole frame still queued).
+//! folded into a whole frame still queued). A connection that claims a
+//! key's state ([`LayerClaim`](crate::LayerClaim), a group's layer digest,
+//! or what it held across a reload) keeps it when the claim matches.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 
 use tc_net::{BulkTicket, ConnId};
 
 use super::SectionSource;
+use crate::hash::PosMap;
 use crate::lanes::Lanes;
 use crate::msg::SectionPos;
 
@@ -16,8 +19,10 @@ use crate::msg::SectionPos;
 struct State {
     version: u64,
     bytes: Vec<u8>,
-    /// The state before, to send a change from.
-    prev: Option<(u64, Vec<u8>)>,
+    /// Its stamp ([`SectionSource::layer_stamp`]; 0: no state).
+    stamp: u64,
+    /// The state before, to send a change from, and its stamp.
+    prev: Option<(u64, Vec<u8>, u64)>,
     /// Connections holding it.
     holders: usize,
 }
@@ -34,14 +39,37 @@ struct Have {
 /// What one connection holds of every layer.
 #[derive(Default)]
 pub(super) struct LayerHeld {
-    keys: Vec<HashMap<SectionPos, Have>>,
+    keys: Vec<PosMap<SectionPos, Have>>,
     /// Keys whose state it may not hold yet.
     pending: BTreeSet<(usize, SectionPos)>,
+    /// States it says it holds, by layer and key, with their stamps: kept
+    /// when a section first brings the key and the stamp matches.
+    claims: PosMap<(usize, SectionPos), u64>,
 }
 
 impl LayerHeld {
     pub(super) fn busy(&self) -> bool {
         !self.pending.is_empty()
+    }
+
+    /// Claims it holds `layer`'s state at `key` with stamp `stamp` (0:
+    /// none, ignored).
+    pub(super) fn claim(&mut self, layer: usize, key: SectionPos, stamp: u64) {
+        if stamp != 0 {
+            self.claims.insert((layer, key), stamp);
+        }
+    }
+
+    /// Claims not yet looked at.
+    pub(super) fn claims(&self) -> usize {
+        self.claims.len()
+    }
+
+    /// Drops the claims not looked at (a load reached its end).
+    pub(super) fn drop_claims(&mut self) -> usize {
+        let n = self.claims.len();
+        self.claims.clear();
+        n
     }
 }
 
@@ -49,7 +77,7 @@ impl LayerHeld {
 #[derive(Default)]
 pub(super) struct Layers {
     count: usize,
-    states: Vec<HashMap<SectionPos, State>>,
+    states: Vec<PosMap<SectionPos, State>>,
     changed: BTreeSet<(usize, SectionPos)>,
     next: u64,
     buf: Vec<u8>,
@@ -60,7 +88,7 @@ impl Layers {
     pub(super) fn resize(&mut self, count: usize) {
         self.count = count;
         if self.states.len() < count {
-            self.states.resize_with(count, HashMap::new);
+            self.states.resize_with(count, PosMap::default);
         }
     }
 
@@ -81,15 +109,28 @@ impl Layers {
     }
 
     /// A connection holds nothing of any layer any more (a reload: its
-    /// sections are held again as they are looked at).
-    pub(super) fn forget_viewer(held: &mut LayerHeld) {
-        for keys in &mut held.keys {
-            for h in keys.values() {
-                if let Some(t) = &h.ticket {
-                    t.withdraw();
+    /// sections are held again as they are looked at), but claims the
+    /// states it has, so one the new world has the same is not sent again.
+    /// Call before [`clear`](Self::clear).
+    pub(super) fn forget_viewer(&self, held: &mut LayerHeld) {
+        let LayerHeld { keys, claims, .. } = held;
+        for (layer, keys) in keys.iter_mut().enumerate() {
+            for (key, h) in keys.drain() {
+                if h.ticket.as_ref().is_some_and(BulkTicket::withdraw) {
+                    continue; // never written: it holds what it held before, unknown
+                }
+                let Some(s) = self.states.get(layer).and_then(|s| s.get(&key)) else {
+                    continue;
+                };
+                let stamp = match (h.version, &s.prev) {
+                    (Some(v), _) if v == s.version => s.stamp,
+                    (Some(v), Some((pv, _, ps))) if v == *pv => *ps,
+                    _ => continue,
+                };
+                if stamp != 0 {
+                    claims.insert((layer, key), stamp);
                 }
             }
-            keys.clear();
         }
         held.pending.clear();
     }
@@ -105,6 +146,7 @@ impl Layers {
             }
         }
         held.pending.clear();
+        held.claims.clear();
     }
 
     fn unhold(&mut self, layer: usize, key: SectionPos) {
@@ -119,16 +161,18 @@ impl Layers {
         }
     }
 
-    /// A connection now holds section `pos`.
+    /// A connection now holds section `pos`; returns the keys it claimed
+    /// and keeps (not sent).
     pub(super) fn hold<S: SectionSource + ?Sized>(
         &mut self,
         held: &mut LayerHeld,
         src: &S,
         pos: SectionPos,
-    ) {
+    ) -> u64 {
         if held.keys.len() < self.count {
-            held.keys.resize_with(self.count, HashMap::new);
+            held.keys.resize_with(self.count, PosMap::default);
         }
+        let mut kept = 0;
         for layer in 0..self.count {
             let key = src.layer_key(layer, pos);
             let have = held.keys[layer].entry(key).or_insert_with(|| Have {
@@ -138,11 +182,33 @@ impl Layers {
             });
             have.count += 1;
             if have.count == 1 {
-                held.pending.insert((layer, key));
+                let claim = held.claims.remove(&(layer, key));
                 let state = self.state(src, layer, key);
                 state.holders += 1;
+                if claim.is_some_and(|c| c == state.stamp) {
+                    have.version = Some(state.version);
+                    kept += 1;
+                } else {
+                    held.pending.insert((layer, key));
+                }
             }
         }
+        kept
+    }
+
+    /// The stamp of `layer`'s state at `key` (0: none), read if no one
+    /// holds it (and not kept).
+    pub(super) fn stamp<S: SectionSource + ?Sized>(
+        &mut self,
+        src: &S,
+        layer: usize,
+        key: SectionPos,
+    ) -> u64 {
+        if let Some(s) = self.states.get(layer).and_then(|s| s.get(&key)) {
+            return s.stamp;
+        }
+        src.layer_state(layer, key, &mut self.buf);
+        stamp_of(src, layer, key, &self.buf)
     }
 
     /// A connection no longer holds section `pos`.
@@ -204,6 +270,7 @@ impl Layers {
             *next += 1;
             State {
                 version: *next,
+                stamp: stamp_of(src, layer, key, &bytes),
                 bytes,
                 prev: None,
                 holders: 0,
@@ -231,7 +298,8 @@ impl Layers {
             }
             self.next += 1;
             let old = std::mem::replace(&mut s.bytes, self.buf.clone());
-            s.prev = Some((s.version, old));
+            let stamp = stamp_of(src, layer, key, &s.bytes);
+            s.prev = Some((s.version, old, std::mem::replace(&mut s.stamp, stamp)));
             s.version = self.next;
             moved.push((layer, key));
         }
@@ -254,6 +322,7 @@ impl Layers {
         held: &mut LayerHeld,
         src: &S,
         lanes: &mut impl Lanes,
+        note: &mut dyn FnMut(usize, bool),
     ) -> u64 {
         let mut sent = 0;
         while let Some(&(layer, key)) = held.pending.first() {
@@ -278,7 +347,10 @@ impl Layers {
                 if !self.frame.is_empty() {
                     let ticket = BulkTicket::new();
                     let frame = std::mem::take(&mut self.frame);
-                    if !lanes.send_bulk(conn, frame, Some(ticket.clone())) {
+                    let bytes = frame.len();
+                    let ok = lanes.send_bulk(conn, frame, Some(ticket.clone()));
+                    note(bytes, ok);
+                    if !ok {
                         return sent;
                     }
                     have.ticket = Some(ticket);
@@ -291,12 +363,15 @@ impl Layers {
                 let from = state
                     .prev
                     .as_ref()
-                    .filter(|(v, _)| Some(*v) == have.version)
-                    .map(|(_, b)| b.as_slice());
+                    .filter(|(v, _, _)| Some(*v) == have.version)
+                    .map(|(_, b, _)| b.as_slice());
                 src.layer_frame(layer, key, from, &state.bytes, &mut self.frame);
                 if !self.frame.is_empty() {
                     let frame = std::mem::take(&mut self.frame);
-                    if !lanes.send(conn, frame) {
+                    let bytes = frame.len();
+                    let ok = lanes.send(conn, frame);
+                    note(bytes, ok);
+                    if !ok {
                         return sent;
                     }
                     sent += 1;
@@ -307,5 +382,19 @@ impl Layers {
             held.pending.pop_first();
         }
         sent
+    }
+}
+
+/// A state's stamp: 0 when there is none (empty).
+fn stamp_of<S: SectionSource + ?Sized>(
+    src: &S,
+    layer: usize,
+    key: SectionPos,
+    bytes: &[u8],
+) -> u64 {
+    if bytes.is_empty() {
+        0
+    } else {
+        src.layer_stamp(layer, key, bytes)
     }
 }
