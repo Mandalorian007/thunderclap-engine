@@ -4,6 +4,8 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 
 ## Unreleased
 
+## 2.0.0 (2026-11-15)
+
 - **2.0.0 stable** (E-041). This is the 2.0 line, `2.0.0-next.0` through `2.0.0-next.34`, published to `latest`. Changes since next.34: none. ThunderClap is now one engine for 2D, varied 3D and VR on the client, and an authoritative server (the `tc-*` Rust crates). Forge Wilds runs on it at feature parity with its pre-migration build (Forge `docs/eval/phase-9.md`, FV2); The Last Rune is unchanged (`snap:check` 0 px). Upgrading from 1.x: read each `*Breaking*` entry in the 2.0.0-next.* sections below.
 - **The npm package and the Rust crates move together.** The client protocol, the stream and store formats, and admin v2 are shared between `@thunderclap-engine/engine` and the Rust crates. A game pins both: 2.0.0 pairs with the git tag `server-v0.15` (Rust crates 0.15.0). Pin an exact npm version and the matching `server-v*` tag, and move them together. Mixing versions is not supported.
 
