@@ -357,6 +357,7 @@ interface CoreStats {
     deferredBuilds: number;
     warmed: number;
     shadowDraws: number;
+    shadowCull: 'cpu' | 'gpu';
 }
 
 ## CoreSunShadow
@@ -1358,7 +1359,7 @@ interface RenderCoreOptions {
     passLabels?: boolean;
     warm?: boolean;
     shadowFormat?: GPUTextureFormat;
-    shadowCull?: 'cpu' | 'gpu';
+    shadowCull?: 'auto' | 'cpu' | 'gpu';
 }
 
 ## RenderStats  (type-only)

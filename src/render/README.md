@@ -1314,7 +1314,7 @@ core.draw(encoder, 0, { view: texView, format, width, height, clear: { r: 0, g: 
 
 | Name | What it is |
 | --- | --- |
-| `createRenderCore(gpu, opts?)` → `RenderCore` | the core over a device (or anything with `device`). `RenderCoreOptions` `{ maxViews?, depthFormat?, multiDraw?, originGrid?, onView? }`. `core.caps` is `CoreCaps` `{ multiDraw, firstInstance }`; `core.stats` is this frame's `CoreStats` (`calls`, `dispatches`, `passes`, `bundles`, `directDraws`, `slotBytes`, `bundleBuilds`, `bundleCalls`) |
+| `createRenderCore(gpu, opts?)` → `RenderCore` | the core over a device (or anything with `device`). `RenderCoreOptions` `{ maxViews?, depthFormat?, multiDraw?, originGrid?, onView?, shadowCull? }`. `core.caps` is `CoreCaps` `{ multiDraw, firstInstance }`; `core.stats` is this frame's `CoreStats` (`calls`, `dispatches`, `passes`, `bundles`, `directDraws`, `slotBytes`, `bundleBuilds`, `bundleCalls`, `shadowDraws`, `shadowCull`) |
 | `core.prepare(encoder, views)`, `core.draw(encoder, viewIndex, target)` | write the views (`RenderView[]`, each its own cull group, or `CullGroup[]`, up to `MAX_VIEWS` views in all), upload dirty slots and run one cull dispatch for every group; then encode one view into a `CoreTarget` `{ view, format, width, height, clear?, viewport? }` (`viewport`: a pixel rectangle, set as viewport and scissor). The depth attachment is made only when a pass that runs tests depth |
 | `CullGroup` `{ views, planes?: 'union' \| 'each' }` | views that share one cull (D1 §3.5): `'union'` (the default) culls once against the union frustum of all its views (`unionPlanesInto`; views need `proj` and `view`, else nothing is culled), so a stereo pair has one args set and one bundle, and `draw` copies the eye's slot into the group's current view; `'each'` makes each view its own group |
 | `RenderCoreOptions.originGrid`, `core.origin`, `SlotDesc.origin` | the camera-relative origin (D1 §3.8): with `originGrid` (metres), the frame origin is the first view's eye snapped to the grid, in float64; views and planes are written relative to it, a slot's `origin` (float64 on the CPU, its `bounds` relative to it) reaches the vertex shader as `in.core_origin` (relative to the frame origin), and a rebase rewrites only the origins, not the bundles. `RenderCoreOptions.onView(viewIndex)` runs as each view is drawn (a test's per-view split) |
@@ -1371,16 +1371,19 @@ of their own and call `core_sun_shadow(world)` from `coreSunShadowWgsl(group)`: 
 as `engine_shadow`, its matrix moved to the core's frame origin. One map, as the renderer's: a
 cascade per `CullGroup` view (`planes: 'each'`) is what `drawShadow`'s view index is for.
 
-**Shadow cull (ws/e24-gpu).** `RenderCoreOptions.shadowCull: 'cpu'`: `drawShadow` tests a
-GPU-culled caster's slots against the light's planes on the CPU and draws only those inside,
-directly (`stats.shadowDraws` counts them, also in `directDraws`). `'gpu'`, the default,
+**Shadow cull (ws/e24-gpu).** `RenderCoreOptions.shadowCull` is `'auto'` (the default),
+`'cpu'` or `'gpu'`, and `core.stats.shadowCull` says which `'auto'` became. `'cpu'`:
+`drawShadow` tests a GPU-culled caster's slots against the light's planes on the CPU and draws
+only those inside, directly (`stats.shadowDraws` counts them, also in `directDraws`). `'gpu'`
 executes the set's bundle as before, an indirect draw per live slot, so the call count stays
-flat in the world's size (the S4 bar) and Chromium, where those draws are cheap, is unchanged. A light's box holds a small share of a
+flat in the world's size (the S4 bar). `'auto'` is `'cpu'` on WebKit
+(`isWebKitUserAgent(navigator.userAgent)`) and `'gpu'` elsewhere (Chromium, where those draws
+are cheap, the fake GPU in Node, and the S4 rows). A light's box holds a small share of a
 big set's slots, and an indirect draw of a culled slot is not free: on WebKit each is validated
 and replayed. Forge Wilds' iPad profile drew at 33 ms a frame with its sun's shadow through the
 bundles and at 17 ms with the CPU cull (shadow pass 2.4 ms of GPU to 0.6 ms). The same slots
 draw in the same order either way, so the map is the same; `'cpu'` costs a sphere test per live
-caster per frame and a draw call per caster in the light. Pass `'cpu'` on WebKit.
+caster per frame and a draw call per caster in the light.
 
 **Resolve passes (ws/core-passes).** A pass with `resolve(encoder, ctx)` instead of `encode` is
 post-processing in the pass list: per view, when the `CoreTarget` has an `output`, the core

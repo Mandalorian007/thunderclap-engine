@@ -15,6 +15,7 @@
  * one argument set and one bundle per set serve all its views; `draw` copies the view's uniforms
  * into the group's binding first (one `copyBufferToBuffer`).
  */
+import { isWebKitUserAgent } from '../gpu-timer';
 import { Arena, type ArenaDesc } from './arena';
 import { CULL_WGSL } from './cull';
 import { type CoreStats, DrawSet, type DrawSetDesc, type DrawSetHost } from './draw-set';
@@ -125,16 +126,17 @@ export interface RenderCoreOptions {
    */
   shadowFormat?: GPUTextureFormat;
   /**
-   * How `drawShadow` culls a GPU-culled caster (ws/e24-gpu). `'gpu'` (the default): the set's
-   * bundle, an indirect draw per live slot whose count the GPU cull writes, the same few calls
-   * whatever the world's size. `'cpu'`: the light's planes are tested on the CPU and only the
-   * casters inside are drawn, directly (pass it on WebKit; see `startsLean`). A light's box
+   * How `drawShadow` culls a GPU-culled caster (ws/e24-gpu). `'auto'` (the default): `'cpu'` on
+   * WebKit (`isWebKitUserAgent(navigator.userAgent)`), `'gpu'` elsewhere; `CoreStats.shadowCull`
+   * says which. `'gpu'`: the set's bundle, an indirect draw per live slot whose count the GPU
+   * cull writes, the same few calls whatever the world's size. `'cpu'`: the light's planes are
+   * tested on the CPU and only the casters inside are drawn, directly. A light's box
    * holds a small share of a big set's slots, and an indirect draw of a culled slot is not free:
    * on WebKit (Metal) each one is validated and replayed, which cost Forge Wilds' iPad profile
    * half its frame rate (33 ms frames for 17). The same slots draw either way, so the map is
    * the same; `'cpu'` costs a sphere test per live caster per frame on the main thread.
    */
-  shadowCull?: 'cpu' | 'gpu';
+  shadowCull?: 'auto' | 'cpu' | 'gpu';
 }
 
 /**
@@ -251,7 +253,15 @@ function newStats(): CoreStats {
     deferredBuilds: 0,
     warmed: 0,
     shadowDraws: 0,
+    shadowCull: 'gpu',
   };
+}
+
+/** `RenderCoreOptions.shadowCull` resolved: `'auto'` is `'cpu'` on WebKit, `'gpu'` elsewhere. */
+function resolveShadowCull(m: 'auto' | 'cpu' | 'gpu' | undefined): 'cpu' | 'gpu' {
+  if (m === 'cpu' || m === 'gpu') return m;
+  const nav = (globalThis as { navigator?: { userAgent?: string } }).navigator;
+  return typeof nav?.userAgent === 'string' && isWebKitUserAgent(nav.userAgent) ? 'cpu' : 'gpu';
 }
 
 /** The retained render core on one device. Make one with `createRenderCore`. */
@@ -415,7 +425,8 @@ export class RenderCore {
     this.warmerNow = pipelineWarmer(device);
     this.autoWarm = opts.warm ?? true;
     this.shadowFormat = opts.shadowFormat ?? 'depth32float';
-    this.shadowCpu = opts.shadowCull === 'cpu';
+    this.stats.shadowCull = resolveShadowCull(opts.shadowCull);
+    this.shadowCpu = this.stats.shadowCull === 'cpu';
     this.multiDrawOpt = opts.multiDraw ?? true;
     this.capsNow = this.capsOf(device);
     this.maxViews = Math.max(1, Math.min(opts.maxViews ?? MAX_VIEWS, MAX_VIEWS));

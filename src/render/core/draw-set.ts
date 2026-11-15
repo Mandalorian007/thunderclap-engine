@@ -320,6 +320,8 @@ export interface CoreStats {
    * `RenderCoreOptions.shadowCull` `'cpu'`, the casters inside the light's planes.
    */
   shadowDraws: number;
+  /** How `drawShadow` culls a GPU-culled caster: `RenderCoreOptions.shadowCull` resolved. */
+  shadowCull: 'cpu' | 'gpu';
 }
 
 /** The shape of `multiDrawIndexedIndirect` (Chromium's experimental feature). */

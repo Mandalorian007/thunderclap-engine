@@ -1,9 +1,9 @@
 /**
  * ws/e24-gpu: `RenderCoreOptions.shadowCull`. A GPU-culled caster with `'cpu'` draws the shadow pass
- * from a CPU cull of the light's planes, only the casters inside, directly; `'gpu'` (the default)
- * keeps the bundle of an indirect draw per live slot. On the fake GPU.
+ * from a CPU cull of the light's planes, only the casters inside, directly; `'gpu'` keeps the bundle
+ * of an indirect draw per live slot; `'auto'` (the default) is `'cpu'` on WebKit. On the fake GPU.
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Camera } from '../camera';
 import { createFakeDevice, type FakePass } from '../fake-gpu';
 import { Arena } from './arena';
@@ -70,6 +70,7 @@ describe('shadowCull (ws/e24-gpu)', () => {
     expect(pass.commands.some((c) => c.op === 'drawIndexedIndirect')).toBe(false);
     expect(pass.commands.some((c) => c.op === 'executeBundles')).toBe(false);
     expect(w.core.stats.shadowDraws).toBe(1);
+    expect(w.core.stats.shadowCull).toBe('cpu');
   });
 
   it('a hidden caster is left out, and the next frame culls afresh', () => {
@@ -81,8 +82,9 @@ describe('shadowCull (ws/e24-gpu)', () => {
     expect(w.frame().commands.filter((c) => c.op === 'drawIndexed')).toHaveLength(1);
   });
 
-  it("'gpu' (the default) executes the set's bundle: an indirect draw per live slot", () => {
-    const w = setup();
+  it("'gpu' executes the set's bundle: an indirect draw per live slot", () => {
+    const w = setup({ shadowCull: 'gpu' });
+    expect(w.core.stats.shadowCull).toBe('gpu');
     const pass = w.frame();
     const exec = pass.commands.filter((c) => c.op === 'executeBundles');
     expect(exec).toHaveLength(1);
@@ -90,5 +92,32 @@ describe('shadowCull (ws/e24-gpu)', () => {
     expect(w.core.stats.shadowDraws).toBe(0);
     const bundle = (exec[0] as { bundles: { commands: { op: string }[] }[] }).bundles[0]!;
     expect(bundle.commands.filter((c) => c.op === 'drawIndexedIndirect')).toHaveLength(8);
+  });
+
+  describe("'auto' (the default)", () => {
+    afterEach(() => vi.unstubAllGlobals());
+    const WEBKIT =
+      'Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
+    const CHROME =
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
+    it("is 'cpu' on WebKit", () => {
+      vi.stubGlobal('navigator', { userAgent: WEBKIT });
+      const w = setup();
+      expect(w.core.stats.shadowCull).toBe('cpu');
+      expect(w.frame().commands.filter((c) => c.op === 'drawIndexed')).toHaveLength(1);
+    });
+
+    it("is 'gpu' on Chromium and off the web", () => {
+      vi.stubGlobal('navigator', { userAgent: CHROME });
+      expect(setup().core.stats.shadowCull).toBe('gpu');
+      vi.stubGlobal('navigator', undefined);
+      expect(setup().core.stats.shadowCull).toBe('gpu');
+    });
+
+    it('an explicit mode overrides it', () => {
+      vi.stubGlobal('navigator', { userAgent: WEBKIT });
+      expect(setup({ shadowCull: 'gpu' }).core.stats.shadowCull).toBe('gpu');
+    });
   });
 });
