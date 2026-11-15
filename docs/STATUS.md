@@ -231,7 +231,7 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 
 ## Gates
 
-- **Gate 2.0, met 2026-11-15 at `5803857` (v2.0.0):** Forge Wilds runs client and server on the engine at feature parity (Forge phase 9, evaluator FV2; one open hitch, Forge G13). 2.0.0 published to `latest`; 2.0.1 (`ea11b50`, server-v0.15.1) the same day with the tc-store lock fix. The Last Rune 0 px.
+- **Gate 2.0, met 2026-11-15 at `5803857` (v2.0.0):** Forge Wilds runs client and server on the engine at feature parity (Forge phase 9, evaluator FV2; its last hitch fixed Forge-side in G13, forgewilds #833, on 2.0.1). 2.0.0 published to `latest`; 2.0.1 (`ea11b50`, server-v0.15.1) the same day with the tc-store lock fix. The Last Rune 0 px.
 - **Gate A (after wave 1), met 2026-11-05 at `e340ed7`:** `pnpm check` and the e2e matrix green on `main`; 2D harness pages pixel-identical before and after camera + transforms; `ARCHITECTURE.md` *Today* text matches the code.
 - **Gate C (after wave 3), met 2026-11-05, closed at `1ebca03`:** mesh page lit by the lighting block (`af36d1c`); streamed mesh updates without a main-thread copy (`bde5299`); two views per frame (`749b992`); template boots with gestures and pointers from `createGame` (`8f3cb9d`). ARCHITECTURE *Planned* lines current and principle 4 reworded (`1ebca03`).
 - **Gate B (after wave 2):** mesh demo met at `2b1032e`; template timed at 17 min (`a266b04`); client mode met at `1b09225`. Gate B met at `2b89c82` (E-010). `?demo=mesh` runs on the matrix; a template game boots from zero in under a day of agent time (timed); client mode runs the harness without a save store.

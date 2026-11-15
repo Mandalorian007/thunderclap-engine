@@ -4,7 +4,7 @@
 
 ## Where it stands (2026-11-15)
 
-**2.0 shipped.** `2.0.0` published to npm `latest` on 2026-11-15, paired with the Rust tag `server-v0.15`; `2.0.1` (`server-v0.15.1`) followed the same day with a tc-store lock fix. Phases A–D, E (crates E1–E28) and Forge's server switches F1–F4 are done; the evaluator's re-run (FV2) found parity met except one new opening hitch in Forge's hall view, owned by Forge step G13 (a Forge-side fix; any engine ask ships as an additive 2.0.x). From here: minors and fixes ship as 2.0.x / 2.x point releases, never held for a round of evaluation; phase F (the second small 3D game) is next when the user picks it up.
+**2.0 shipped.** `2.0.0` published to npm `latest` on 2026-11-15, paired with the Rust tag `server-v0.15`; `2.0.1` (`server-v0.15.1`) followed the same day with a tc-store lock fix. Phases A–D, E (crates E1–E28) and Forge's server switches F1–F4 are done; the evaluator's re-run (FV2) found parity met; the one new opening hitch in Forge's hall view was Forge-side (ambience buffers built at the audio unlock) and is fixed in Forge G13 (#833), with Forge on 2.0.1. From here: minors and fixes ship as 2.0.x / 2.x point releases, never held for a round of evaluation; phase F (the second small 3D game) is next when the user picks it up.
 
 ## The goal
 
