@@ -228,6 +228,37 @@ pub trait Game: Sized + Send + 'static {
         let _ = (player, out);
     }
 
+    /// A connection was seated (`seat`) and sent its `Welcome` and
+    /// [`Game::greet`]: the game's own per-connection state starts here
+    /// (what it streams to that connection, what it held of the last
+    /// one). `identity` is who it is (an observer's name too) and
+    /// `hello` what it asked for. What goes to [`LiveCx::out`] for
+    /// [`To::Conn`] is its own greeting, after the `Welcome`; a player's
+    /// first connection is already present ([`Game::presence`]). Runs as
+    /// a live hook: it may change live fields, never the hashed state,
+    /// and its events are logged as one batch. The default does nothing.
+    fn connected(
+        &mut self,
+        cx: &mut LiveCx<'_, Self>,
+        conn: tc_net::ConnId,
+        seat: Seat,
+        identity: &Identity,
+        hello: &<Self::Protocol as Protocol>::Hello,
+    ) {
+        let _ = (cx, conn, seat, identity, hello);
+    }
+
+    /// Connection `conn` (seated as `seat`) closed, was dropped as slow,
+    /// or the loop is stopping: forget its per-connection state. Called
+    /// before a player's last connection ends its presence
+    /// ([`Game::presence`]); when the loop stops, after every player
+    /// left and every connection was sent `Closed`. A live hook, as [`Game::connected`]; it runs
+    /// even after a store failure (its events then aren't applied). The
+    /// default does nothing.
+    fn disconnected(&mut self, cx: &mut LiveCx<'_, Self>, conn: tc_net::ConnId, seat: Seat) {
+        let _ = (cx, conn, seat);
+    }
+
     /// `player`'s first connection opened (`present`, with its new body)
     /// or its last one closed (with the body it leaves); the events record
     /// what should last. The default records nothing.
@@ -453,7 +484,8 @@ pub trait Game: Sized + Send + 'static {
     }
 
     /// A game message from `player` (`ClientMsg::Game`): the events it
-    /// makes, and anything to send. The default ignores it.
+    /// makes, and anything to send. Called by the default
+    /// [`Game::message_from`]. The default ignores it.
     fn message(
         &self,
         player: PlayerId,
@@ -462,6 +494,23 @@ pub trait Game: Sized + Send + 'static {
         out: &mut Outbox<Self::Protocol>,
     ) {
         let _ = (player, msg, events, out);
+    }
+
+    /// A game message from `player` on connection `conn`, with the
+    /// loop's live side (a live hook, as [`Game::act`]): for a game that
+    /// keeps state per connection (what it holds, what it streams). Its
+    /// events are logged as one batch; [`LiveCx::out`] is sent once they
+    /// apply (dropped if they don't). The default calls
+    /// [`Game::message`].
+    fn message_from(
+        &mut self,
+        cx: &mut LiveCx<'_, Self>,
+        conn: tc_net::ConnId,
+        player: PlayerId,
+        msg: <Self::Protocol as Protocol>::Client,
+    ) {
+        let _ = conn;
+        self.message(player, msg, cx.events, cx.out);
     }
 
     /// What changed since the last flush (never empty): sends what the

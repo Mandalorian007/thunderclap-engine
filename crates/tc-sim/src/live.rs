@@ -62,6 +62,23 @@ pub struct LiveCx<'a, G: Game> {
     pub(crate) changes: &'a mut Changes<G::Change>,
     pub(crate) timers: &'a mut BTreeMap<u32, Instant>,
     pub(crate) conns: Conns<'a>,
+    pub(crate) paused: bool,
+    pub(crate) clock: &'a mut Vec<ClockOp>,
+}
+
+/// A change to the loop's clock a live hook asks for
+/// ([`LiveCx::clock`]): a game's dev commands (pause, resume, step, jump).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClockOp {
+    /// Pause the clock ([`Sim::pause`]).
+    Pause,
+    /// Run it again ([`Sim::resume`]).
+    Resume,
+    /// Jump this many steps ahead ([`Sim::advance`]); one is a single
+    /// step, paused or not.
+    Advance(u64),
+    /// Jump to this time ([`Sim::advance_to`]).
+    AdvanceTo(u64),
 }
 
 impl<'a, G: Game> LiveCx<'a, G> {
@@ -163,6 +180,22 @@ impl<'a, G: Game> LiveCx<'a, G> {
         &self.conns
     }
 
+    /// True while the loop's clock is paused (as the hook began).
+    pub fn paused(&self) -> bool {
+        self.paused
+    }
+
+    /// Asks the loop to change its clock (a dev command). It is done
+    /// after the hook, once its events are applied (dropped if they
+    /// aren't): for a command, before its result is sent; for a hook
+    /// that runs while the clock moves (a live step, a wake, a timer), at
+    /// the end of that tick. A jump runs no live steps, as
+    /// [`Sim::advance`]'s; what it reached is the next hook's
+    /// [`LiveCx::time`].
+    pub fn clock(&mut self, op: ClockOp) {
+        self.clock.push(op);
+    }
+
     /// Marks `key` as changed, so the queries and entity streams that read
     /// it rerun at the next flush (live state moved: a creature walked).
     /// The mark reaches [`Game::flush`] too.
@@ -194,6 +227,8 @@ impl<G: Game> Sim<G> {
         let version = self.core.version();
         let mut events = std::mem::take(&mut self.live_events);
         let mut out = std::mem::take(&mut self.live_out);
+        let clock_asked = self.clock_ops.len();
+        let paused = self.clock.paused();
         let r = {
             let (game, changes) = self.core.live_parts();
             let mut cx = LiveCx {
@@ -213,6 +248,8 @@ impl<G: Game> Sim<G> {
                     conns_of: &self.conns_of,
                     bulk_sent: &self.bulk_sent,
                 },
+                paused,
+                clock: &mut self.clock_ops,
             };
             hook(game, &mut cx)
         };
@@ -232,11 +269,40 @@ impl<G: Game> Sim<G> {
             self.deliver_drain(&mut out);
         } else {
             out.msgs.clear();
+            self.clock_ops.truncate(clock_asked);
         }
         self.live_events = events;
         self.live_out = out;
         self.poll_record_error();
         (r, applied)
+    }
+
+    /// Does the clock changes live hooks asked for ([`LiveCx::clock`]),
+    /// in order.
+    pub(crate) fn run_clock_ops(&mut self) {
+        if self.clock_ops.is_empty() {
+            return;
+        }
+        for op in std::mem::take(&mut self.clock_ops) {
+            let done = match op {
+                ClockOp::Pause => {
+                    self.pause();
+                    Ok(())
+                }
+                ClockOp::Resume => {
+                    if self.resume() {
+                        Ok(())
+                    } else {
+                        Err("the store failed".to_string())
+                    }
+                }
+                ClockOp::Advance(steps) => self.advance(steps).map(drop),
+                ClockOp::AdvanceTo(time) => self.advance_to(time).map(drop),
+            };
+            if let Err(e) = done {
+                warn!(?op, "a game's clock change wasn't done: {e}");
+            }
+        }
     }
 
     /// Advances to `target`, one step at a time with a live step after

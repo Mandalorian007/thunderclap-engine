@@ -64,6 +64,15 @@ with the game taken out.
   - `input_flow(player, body, input, events) -> ControlFlow<Stop>` (the
     default calls `input`): `Stop::Wait` ends the player's tick there,
     `Stop::AckAll` also acknowledges every queued input unapplied.
+  - Per connection (E17): `connected(cx, conn, seat, identity, hello)`
+    after the connection's `Welcome` (players and observers; `cx.out`
+    with `To::Conn` greets that connection only), `disconnected(cx, conn,
+    seat)` when it closes or the sim stops, and `message_from(cx, conn,
+    player, msg)` for a game message (the default calls `message`). Each
+    runs as a live hook: its events are one batch, its outbox sent only
+    if that batch applied. `LiveCx::paused()` and `LiveCx::clock(ClockOp)`
+    (`Pause`, `Resume`, `Advance(steps)`, `AdvanceTo(time)`) ask for a
+    clock change, run after the hook (dropped with a refused batch).
 - `Core<G>`: the deterministic part: the game, time (integer steps, at
   most `MAX_TIME` = 2^53 − 1), version (last entry applied), `Scheduler`
   (on a hierarchical `TimingWheel`) and `Changes`. `advance_to`,
@@ -104,6 +113,14 @@ with the game taken out.
   `IDLE_RETRY` (10 ms); `Sim::fail_store(reason)`, `Sim::store_error()`;
   `Core::owns_record()`, `Core::next_event_time()`. Counters add `timers`,
   `idles` and `idle_us`.
+- The host loop (E17): `run_host(&mut host, &requests) -> HostExit`
+  (`Stopped`, `Disconnected`) runs any `Host` (`type Request`; `tick(now)`,
+  `deadline()` and `handle(request) -> ControlFlow<()>` required; `poll`,
+  `wake_outbound`, `idle_work`, `idle_margin`, `idle(until, interrupted)`
+  and `woke_late(late, wait)` optional). `Sim::run` is `run_host` over the
+  sim; a server that keeps its own connections, requests, presence and
+  streams implements `Host` and keeps all of it. `Sim::advance_to(time)`
+  and `Control::AdvanceTo` / `SimHandle::advance_to` jump to a time.
 - `StatusHandle` / `SimStatus`: the published status; `Display` is the
   one-line status.
 
@@ -197,6 +214,12 @@ with the game taken out.
   timer per kind (re-arming replaces it); each due one runs `Game::timer`
   once per tick, earliest first, even while paused, never after a store
   failure; `deadline()` includes the earliest.
+- The loop (`run_host`): each pass polls, ticks, wakes the outbound,
+  idles while there is idle work (until the deadline less the margin,
+  cut short by a waiting request), then waits for a request until the
+  deadline; a request and every one queued behind it are handled before
+  the next tick, and a timed-out wait reports how late it woke. The loop
+  reads nothing of the host's state, so determinism stays the host's.
 - Idle: when `Game::idle_work` holds, `Sim::run` calls `Game::idle` before
   it waits, until the next deadline less `idle_margin` (at least every
   `IDLE_RETRY`); a client message arriving sets `interrupted()`, and the
@@ -236,6 +259,16 @@ with the game taken out.
   noticed error, `fail_store`) pausing and reported, a knockout
   acknowledging the rest, idle streaming under the high water, lingering
   bulk, timers by kind while paused, `Sim::run` streaming in idle time.
+- `tests/hooks.rs` (the tally game): each connection greeted after its
+  `Welcome` and forgotten on close, an observer by name, live
+  per-connection state across a reload and emptied at stop; a game
+  message pausing, resuming, stepping and jumping the clock, a jump back
+  refused, `Sim::advance_to`.
+- `tests/host.rs` (the hall, a server with its own request enum,
+  connections, clock and log on `run_host`): idle streaming cut short by
+  a request and resumed, a running clock stepped by its deadlines, `Stopped`
+  and `Disconnected`, its log replayed and a second run reaching the same
+  hash.
 - `tests/net.rs`: two tc-net clients over WebSockets, the log replayed to
   the live hash; and `createNet` through vitest, including a live query's
   patch and the entity stream (`src/net/sim-interop.test.ts`,

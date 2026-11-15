@@ -228,6 +228,9 @@ pub struct Sim<G: Game> {
     pub(crate) next_linger: Option<Instant>,
     /// The game's wall-clock timers by kind ([`LiveCx::set_timer`](crate::LiveCx::set_timer)).
     pub(crate) timers: BTreeMap<u32, Instant>,
+    /// Clock changes live hooks asked for, not yet done
+    /// ([`LiveCx::clock`](crate::LiveCx::clock)).
+    pub(crate) clock_ops: Vec<crate::live::ClockOp>,
     /// Scratch kept between ticks, so a steady loop doesn't allocate.
     pub(crate) live_events: Vec<EventOf<G>>,
     pub(crate) live_out: Outbox<G::Protocol>,
@@ -298,6 +301,7 @@ impl<G: Game> Sim<G> {
             bulk_sent: Cell::new(false),
             next_linger: None,
             timers: BTreeMap::new(),
+            clock_ops: Vec::new(),
             live_events: Vec::new(),
             live_out: Outbox::new(),
             scratch_keys: BTreeSet::new(),
@@ -798,6 +802,17 @@ impl<G: Game> Sim<G> {
         Ok(self.core.time())
     }
 
+    /// Advances to `target` at once (a dev jump), as [`Sim::advance`]
+    /// does. Returns the time reached; an error if `target` is in the
+    /// past or past [`MAX_TIME`].
+    pub fn advance_to(&mut self, target: u64) -> Result<u64, String> {
+        let time = self.core.time();
+        let steps = target
+            .checked_sub(time)
+            .ok_or_else(|| format!("{target} is before the time now ({time})"))?;
+        self.advance(steps)
+    }
+
     /// Publishes the status now.
     pub(crate) fn publish_status(&mut self, now: Instant) {
         self.status.set(SimStatus {
@@ -862,6 +877,7 @@ impl<G: Game> Sim<G> {
         self.poll_reload(now);
         self.check_slow(now);
         self.drop_overflowed();
+        self.run_clock_ops();
         self.publish_status_if_due(now);
     }
 
@@ -1028,6 +1044,13 @@ impl<G: Game> Sim<G> {
             reason: "the server is stopping".into(),
         };
         self.broadcast(&closed);
+        // Every connection closes with the loop: the game forgets each.
+        let open: Vec<(ConnId, Option<PlayerId>)> =
+            self.conns.iter().map(|(id, c)| (*id, c.player)).collect();
+        for (conn, player) in open {
+            self.conns.remove(&conn);
+            self.disconnected(conn, player, now);
+        }
         self.conns.clear();
         self.conns_of.clear();
         self.drivers.clear();

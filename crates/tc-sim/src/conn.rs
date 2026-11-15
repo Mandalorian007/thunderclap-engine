@@ -23,7 +23,7 @@ use tc_net::transport::Frame;
 use tc_net::{ClientMsg, ConnId, Identity, Outbound, Protocol, Request, ServerMsg};
 use tc_wire::Wire;
 
-use crate::game::{Game, Outbox, PlayerId, Seat};
+use crate::game::{Game, PlayerId, Seat};
 use crate::input::Taken;
 use crate::query::{Query, ViewCx};
 use crate::sim::{Conn, Sim};
@@ -148,6 +148,13 @@ impl<G: Game> Sim<G> {
                 self.flush_entities(&Default::default(), false, Some(conn));
             }
         }
+        let (_, applied) = self.run_live(now, |game, cx| {
+            game.connected(cx, conn, seat, identity, hello);
+        });
+        if let Err(e) = applied {
+            tracing::warn!(conn, "a connection's events weren't applied: {e}");
+        }
+        self.run_clock_ops();
         tracing::info!(conn, player = id, name = %identity.name, "joined");
         self.publish_status(now);
     }
@@ -248,6 +255,7 @@ impl<G: Game> Sim<G> {
                     let (result, applied) =
                         self.run_live(now, |game, cx| game.act(cx, player, command));
                     self.counters.live_us += crate::counters::micros(started);
+                    self.run_clock_ops();
                     match applied {
                         Ok(()) => result,
                         Err(reason) => self.core.game().command_error(reason),
@@ -294,14 +302,20 @@ impl<G: Game> Sim<G> {
                     return;
                 }
                 self.tick(now);
-                let mut events = Vec::new();
-                let mut out = Outbox::new();
-                self.core.game().message(player, msg, &mut events, &mut out);
-                let _ = self.commit(events);
-                self.deliver(out);
+                let _ = self.run_live(now, |game, cx| game.message_from(cx, conn, player, msg));
+                self.run_clock_ops();
             }
             // Handled above, or by the session (`Hello`, `Ack`).
             _ => {}
+        }
+    }
+
+    /// Runs [`Game::disconnected`] for `conn` (already forgotten).
+    pub(crate) fn disconnected(&mut self, conn: ConnId, player: Option<PlayerId>, now: Instant) {
+        let seat = player.map_or(Seat::Observer, Seat::Player);
+        let (_, applied) = self.run_live(now, |game, cx| game.disconnected(cx, conn, seat));
+        if let Err(e) = applied {
+            tracing::warn!(conn, "a closed connection's events weren't applied: {e}");
         }
     }
 
@@ -323,6 +337,7 @@ impl<G: Game> Sim<G> {
         let now = Instant::now();
         self.sync.disconnect(conn, now);
         self.drop_stream(conn);
+        self.disconnected(conn, c.player, now);
         let Some(player) = c.player else {
             tracing::info!(conn, "an observer left");
             self.publish_status(now);
