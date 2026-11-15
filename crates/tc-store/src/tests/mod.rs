@@ -14,6 +14,7 @@ mod hold;
 mod log;
 mod marks;
 mod ops;
+mod read_only;
 mod recovery;
 
 /// The test game's events.

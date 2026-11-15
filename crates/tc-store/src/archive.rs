@@ -116,6 +116,7 @@ pub fn tidy<C: LogCodec>(
     below: u64,
     policy: &ArchivePolicy,
 ) -> Result<Tidied, StoreError> {
+    crate::upgrade::refuse_if_due(dir, codec)?;
     let mut tidied = Tidied {
         leftovers: clear_leftovers(dir)?,
         ..Tidied::default()
@@ -170,6 +171,7 @@ pub fn read_archive<C: LogCodec>(
     codec: &C,
     generations: impl RangeBounds<u64>,
 ) -> Result<Vec<ArchivedFile<C::Key>>, StoreError> {
+    crate::upgrade::refuse_if_due(dir, codec)?;
     let mut out = Vec::new();
     for (generation, path) in archived_dirs(&dir.join(ARCHIVE_DIR))?
         .into_iter()

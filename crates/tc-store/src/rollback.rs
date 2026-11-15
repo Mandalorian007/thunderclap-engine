@@ -55,6 +55,7 @@ pub fn rollback<C: LogCodec>(
     to: RollbackTo,
     output: Output<'_>,
 ) -> Result<RollbackReport, StoreError> {
+    crate::upgrade::refuse_if_due(dir, codec)?;
     let meta = read_meta(dir)?;
     let history = read_history(dir, codec)?;
     if let Some((_, problem)) = history.problems.into_iter().next() {

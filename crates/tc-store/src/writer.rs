@@ -462,7 +462,11 @@ impl<C: LogCodec> Log<C> {
         from_gen: u64,
         after: u64,
     ) -> Result<(Log<C>, Opened<C::Event>), StoreError> {
-        read_meta(dir)?;
+        // A directory an upgrade is due on may not have its metadata yet:
+        // the upgrade, under the lock, writes it.
+        if crate::upgrade::upgrade_due(dir, &codec).is_none() {
+            read_meta(dir)?;
+        }
         let lock = StoreLock::acquire(dir)?;
         Log::open_locked(lock, codec, from_gen, after)
     }
@@ -481,8 +485,9 @@ impl<C: LogCodec> Log<C> {
     }
 
     /// Reads the store locked by `lock` as [`Log::open_from`] would,
-    /// changing no log file: finishes a repair or rollback in place cut
-    /// short, clears what an archiving cut short left, and checks that the
+    /// changing no log file: runs the codec's [`crate::Upgrade`] if one
+    /// is due (in [`OpenReport::upgraded`](crate::OpenReport::upgraded)),
+    /// finishes a repair or rollback in place cut short, clears what an archiving cut short left, and checks that the
     /// archive is the log's own (a store created over another's leftovers
     /// fails with [`StoreError::Meta`]). [`Log::open_scanned`] then opens
     /// it under the same lock without reading it again.
@@ -499,6 +504,8 @@ impl<C: LogCodec> Log<C> {
             });
         }
         let dir = lock.dir();
+        // An older layout is the game's to convert, before anything reads.
+        let upgraded = crate::upgrade::upgrade(lock, codec)?;
         // A repair or rollback in place cut short is finished first.
         crate::swap::finish_swap(dir, "swap")?;
         let mut leftovers = clear_leftovers(dir)?;
@@ -507,7 +514,8 @@ impl<C: LogCodec> Log<C> {
             fs::remove_file(&meta_tmp).map_err(io_err(&meta_tmp))?;
             leftovers.push(meta_tmp);
         }
-        let loaded = load(dir, codec, after, from_gen)?;
+        let mut loaded = load(dir, codec, after, from_gen)?;
+        loaded.report.upgraded = upgraded;
         check_archive_is_the_logs(dir, &loaded.listing)?;
         Ok(Scan {
             last_seq: loaded.entries.last().map_or(after, |e| e.seq),

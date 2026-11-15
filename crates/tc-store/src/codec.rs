@@ -65,6 +65,14 @@ pub trait LogCodec: Send + Sync + 'static {
     /// Reads an event from all of `bytes` (what [`LogCodec::encode`]
     /// wrote), reading the strings it names from `names`.
     fn decode(&self, bytes: &[u8], names: &NameTable) -> Result<Self::Event, String>;
+
+    /// The conversion of an older layout of the game's directory onto the
+    /// store's, if the game has one ([`crate::Upgrade`]): every open runs
+    /// it under the lock, and every reader refuses a directory it is due
+    /// on, changing nothing. None by default.
+    fn upgrade(&self) -> Option<&dyn crate::Upgrade> {
+        None
+    }
 }
 
 /// A file's name table while an entry is encoded: [`Names::id`] gives the

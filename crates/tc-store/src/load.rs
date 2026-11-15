@@ -132,6 +132,7 @@ pub(crate) fn load<C: LogCodec>(
     after: u64,
     from_gen: u64,
 ) -> Result<Loaded<C::Event, C::Key>, StoreError> {
+    crate::upgrade::refuse_if_due(dir, codec)?;
     let meta = read_meta(dir)?;
     let listing = gens::list(codec, dir)?.strict()?;
     check_not_archived(dir, &listing, from_gen)?;

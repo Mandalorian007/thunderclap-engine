@@ -59,6 +59,15 @@ pub enum StoreError {
     },
     /// A store already exists in the directory.
     Exists(PathBuf),
+    /// The directory is in an older layout the game's [`crate::Upgrade`]
+    /// converts: a reader refuses it, changing nothing; opening it (a
+    /// writer) upgrades it.
+    UpgradeDue {
+        /// The store directory.
+        dir: PathBuf,
+        /// What the upgrade would do.
+        what: String,
+    },
     /// The directory isn't a store, or holds something a store can't.
     Meta {
         /// The file.
@@ -99,6 +108,12 @@ impl fmt::Display for StoreError {
                 write!(f, "entry {seq} couldn't be encoded: {reason}")
             }
             StoreError::Exists(dir) => write!(f, "a store already exists in {}", dir.display()),
+            StoreError::UpgradeDue { dir, what } => write!(
+                f,
+                "{} is in an older layout; nothing was changed, and opening it to write \
+                 upgrades it ({what})",
+                dir.display()
+            ),
             StoreError::Meta { path, reason } => write!(f, "{}: {reason}", path.display()),
         }
     }

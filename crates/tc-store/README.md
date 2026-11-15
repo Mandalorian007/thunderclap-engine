@@ -45,6 +45,22 @@ layout.
   - Also `sync_all` and `counters`.
 - `read(dir, codec)`: what opening would recover, without changing anything;
   `read_from(dir, codec, from_gen, after)` the same for a base's tail.
+- Readers and writers (E26): a reader (`read`, `read_from`, `check`,
+  `read_archive`, `summary`, `bases`, `holder`, `backup`'s source, a
+  repair's or rollback's source when the output is a copy) takes no lock and
+  changes no byte or name, whatever it finds. Only an open (a writer, under
+  the lock) recovers, clears leftovers and upgrades.
+- Upgrades (E26): a game whose directories predate the store's layout gives
+  its codec an `Upgrade` (`LogCodec::upgrade() -> Option<&dyn Upgrade>`,
+  `None` by default). `Upgrade::due(dir)` says what converting would do and
+  changes nothing; `Upgrade::apply(&lock)` converts under the lock and says
+  what it did. Every open runs it first and reports it in
+  `OpenReport::upgraded` (not recovery: `is_clean` ignores it); every reader
+  given that codec, and `tidy`, refuses such a directory with
+  `StoreError::UpgradeDue { dir, what }` ("nothing was changed"), so a check
+  can say a migration is due. `upgrade_due(dir, codec)` asks without
+  failing; `upgrade(&lock, codec)` runs it under the store's own lock for a
+  game that holds it and reads the log its own way.
 - Bases (`base/`, E8): `write_base(dir, generation, after, bytes)` writes a
   game's state through entry `after`, whose tail starts in `generation`,
   durable (a temporary name, then a rename) or not at all; `bases(dir)`
@@ -122,6 +138,12 @@ process's store.
   open, and a child process killed at each crash point in `tidy`
   (`TC_STORE_CRASH_AT=tidy.tmp|tidy.archived|tidy.moved|tidy.prune`), then
   reopened and tidied again.
+- `src/tests/read_only.rs` (E26): every reader on a store an open would
+  cut, clear and tidy (a torn tail, an archiving and a metadata write cut
+  short) leaves each file's hash and every name as it was, and the open
+  after them changes it; on an old layout every reader refuses with
+  `UpgradeDue` and changes nothing, the open upgrades once and says so, and
+  `upgrade` runs only under the store's own lock.
 - `tests/board_game.rs`: a board game's turn log round-trips through the
   public API.
 - `tests/retention.rs`: a base copied by a backup and moved aside by a
