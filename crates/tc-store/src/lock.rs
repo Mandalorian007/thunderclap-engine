@@ -14,6 +14,13 @@
 //! is never deleted: a process could otherwise lock a file another has
 //! just unlinked while a third locks its replacement.
 //!
+//! A lock is the OS's until every copy of its handle is closed, and a
+//! child process this one spawns holds a copy from its fork until its
+//! exec closes it (the handle is close-on-exec). So a lock let go while
+//! another thread spawns a process can look held, by this process, for a
+//! moment after: a lock file that names this process while no lock of its
+//! own is on it is waited on (up to [`RELEASE_WAIT`]) rather than refused.
+//!
 //! On Windows the lock is `LockFileEx` over the whole file, which keeps
 //! every other handle from reading it, so the holder is written to
 //! `store.holder` beside it ([`HOLDER_FILE`]) as well, and read from there.
@@ -92,6 +99,8 @@ pub struct StoreLock {
     file: File,
     path: PathBuf,
     dir: PathBuf,
+    /// The locked file, in this process's set of the locks it holds.
+    held: Held,
     /// Tells this lock from every other taken in the process (a scan
     /// names the lock it was taken under).
     id: u64,
@@ -123,20 +132,23 @@ impl StoreLock {
             .truncate(false)
             .open(&path)
             .map_err(io_err(&path))?;
-        match file.try_lock() {
-            Ok(()) => {}
-            Err(TryLockError::WouldBlock) => {
+        match try_lock(&file, &path) {
+            Ok(Ok(())) => {}
+            Ok(Err(holder)) => {
                 return Err(StoreError::InUse {
                     dir: dir.to_path_buf(),
-                    holder: read_holder(&path),
+                    holder,
                 });
             }
-            Err(TryLockError::Error(error)) => return Err(io_err(&path)(error)),
+            Err(error) => return Err(io_err(&path)(error)),
         }
+        let held = Held::of(&file);
+        held.mark();
         let lock = StoreLock {
             file,
             path,
             dir: dir.to_path_buf(),
+            held,
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             holder: Mutex::new(Holder {
                 pid: Some(std::process::id()),
@@ -206,9 +218,85 @@ pub fn holder(dir: &Path) -> Option<Holder> {
 pub fn holder_named(dir: &Path, name: &str) -> Option<Holder> {
     let path = dir.join(name);
     let file = File::open(&path).ok()?;
-    match file.try_lock() {
-        Err(TryLockError::WouldBlock) => Some(read_holder(&path)),
-        _ => None,
+    try_lock(&file, &path).ok()?.err()
+}
+
+/// How long a lock that names this process, but that it doesn't hold, is
+/// waited on: the copy a spawning child holds until its exec (see the
+/// module docs).
+pub const RELEASE_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Takes `file`'s lock (at `path`), or names its holder. A lock held by
+/// another process, or by a [`StoreLock`] of this one, is refused at once;
+/// one that names this process with no lock of its own on it is a copy a
+/// spawning child holds, and is waited on, up to [`RELEASE_WAIT`].
+fn try_lock(file: &File, path: &Path) -> std::io::Result<Result<(), Holder>> {
+    let start = std::time::Instant::now();
+    let mut pause = std::time::Duration::from_millis(1);
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(Ok(())),
+            Err(TryLockError::Error(error)) => return Err(error),
+            Err(TryLockError::WouldBlock) => {
+                let holder = read_holder(path);
+                let ours = cfg!(unix) && holder.pid == Some(std::process::id());
+                if !ours || Held::of(file).is_marked() || start.elapsed() >= RELEASE_WAIT {
+                    return Ok(Err(holder));
+                }
+                std::thread::sleep(pause);
+                pause = (pause * 2).min(std::time::Duration::from_millis(20));
+            }
+        }
+    }
+}
+
+/// A lock file, by identity (device and inode on Unix), in this process's
+/// set of the locks its [`StoreLock`]s hold.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Held(Option<(u64, u64)>);
+
+/// The lock files this process's [`StoreLock`]s hold.
+static HELD: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
+
+impl Held {
+    fn of(file: &File) -> Held {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            Held(file.metadata().ok().map(|m| (m.dev(), m.ino())))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = file;
+            Held(None)
+        }
+    }
+
+    fn mark(self) {
+        if let Some(id) = self.0 {
+            crate::io::lock(&HELD).push(id);
+        }
+    }
+
+    fn is_marked(self) -> bool {
+        self.0
+            .is_some_and(|id| crate::io::lock(&HELD).contains(&id))
+    }
+
+    fn unmark(self) {
+        if let Some(id) = self.0 {
+            let mut held = crate::io::lock(&HELD);
+            if let Some(i) = held.iter().position(|h| *h == id) {
+                held.swap_remove(i);
+            }
+        }
+    }
+}
+
+impl Drop for StoreLock {
+    fn drop(&mut self) {
+        // Before the file closes: one taken here meanwhile waits for it.
+        self.held.unmark();
     }
 }
 
@@ -300,6 +388,35 @@ mod tests {
             other => panic!("expected InUse, got {other:?}"),
         }
         drop(lock);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A copy of a let-go lock's handle (what a child holds between its
+    /// fork and its exec) is waited out, not taken for a holder; a lock
+    /// this process does hold is still refused at once.
+    #[cfg(unix)]
+    #[test]
+    fn a_spawning_childs_copy_of_a_let_go_lock_is_waited_out() {
+        let dir = temp("child-copy");
+        let lock = StoreLock::acquire(&dir).unwrap();
+        let copy = lock.file.try_clone().unwrap();
+        drop(lock);
+        let closer = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            drop(copy);
+        });
+        let start = std::time::Instant::now();
+        assert_eq!(holder(&dir), None);
+        assert!(start.elapsed() >= std::time::Duration::from_millis(50));
+        let again = StoreLock::acquire(&dir).unwrap();
+        closer.join().unwrap();
+        let start = std::time::Instant::now();
+        assert!(matches!(
+            StoreLock::acquire(&dir),
+            Err(StoreError::InUse { .. })
+        ));
+        assert!(start.elapsed() < std::time::Duration::from_millis(50));
+        drop(again);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
