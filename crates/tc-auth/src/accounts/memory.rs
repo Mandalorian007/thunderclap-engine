@@ -8,11 +8,13 @@ use tokio::sync::watch;
 
 use super::{AccountError, Accounts, Claim, Claimed, Clock, Record, Records, system_clock};
 use crate::names::NameRules;
+use crate::token::ClaimWords;
 
 /// Accounts in memory: the same rules as the file, no disk, and a change
 /// is seen at once.
 pub struct MemoryAccounts {
     rules: NameRules,
+    words: ClaimWords,
     clock: Clock,
     records: Mutex<Records>,
     revisions: watch::Sender<u64>,
@@ -23,6 +25,7 @@ impl MemoryAccounts {
     pub fn new(rules: NameRules) -> MemoryAccounts {
         MemoryAccounts {
             rules,
+            words: ClaimWords::default(),
             clock: system_clock(),
             records: Mutex::new(Records::default()),
             revisions: watch::Sender::new(0),
@@ -32,6 +35,11 @@ impl MemoryAccounts {
     /// The same store, stamping records with `clock` (Unix seconds).
     pub fn with_clock(self, clock: Clock) -> MemoryAccounts {
         MemoryAccounts { clock, ..self }
+    }
+
+    /// The same store, refusing claims in `words`.
+    pub fn with_words(self, words: ClaimWords) -> MemoryAccounts {
+        MemoryAccounts { words, ..self }
     }
 
     fn lock(&self) -> MutexGuard<'_, Records> {
@@ -66,7 +74,7 @@ impl Accounts for MemoryAccounts {
         let now = (self.clock)();
         let mut records = self.lock();
         let before = records.clone();
-        let claimed = records.claim(claim, &self.rules, now)?;
+        let claimed = records.claim(claim, &self.rules, &self.words, now)?;
         let changed = !records.same_keys(&before);
         drop(records);
         if changed {

@@ -45,4 +45,4 @@ pub use accounts::{
 pub use auth::{DevTokens, GUEST_PERMISSION, GUEST_TOKEN_PREFIX, Issued, SessionAuth};
 pub use live::{LiveSlot, LiveTokens, Revoked};
 pub use names::{NameRules, quote};
-pub use token::{TokenError, TokenFormat, TokenWords};
+pub use token::{ClaimWords, TokenError, TokenFormat, TokenWords};

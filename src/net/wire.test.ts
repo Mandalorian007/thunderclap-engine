@@ -77,8 +77,11 @@ describe('wire', () => {
     const twoTo53 = [0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x10];
     expect(() => read(twoTo53, (r) => r.u64())).toThrow(DecodeError);
     const u64Max = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01];
-    expect(() => read(u64Max, (r) => r.u64())).toThrow(DecodeError);
+    expect(() => read(u64Max, (r) => r.u64())).toThrow(/u64 value 18446744073709551615 exceeds/);
     expect(() => read(u64Max, (r) => r.i64())).toThrow(DecodeError);
+    // A zigzag past 2^53 that is still a safe value reads exactly.
+    const zigzag = bytes((w) => w.i64(-Number.MAX_SAFE_INTEGER + 1));
+    expect(read(zigzag, (r) => r.i64())).toBe(-Number.MAX_SAFE_INTEGER + 1);
   });
 
   it('keeps a leading byte order mark', () => {
@@ -205,6 +208,9 @@ describe('Fixed', () => {
       expect(bytes((w) => w.fixed(value))).toEqual(encoded);
       expect(read(encoded, (r) => r.fixed()).bits).toBe(value.bits);
     }
+    // A game's own class with the same bits encodes the same.
+    expect(bytes((w) => w.fixed({ bits: -1n }))).toEqual([0x01]);
+    expect(() => new Writer().fixed({ bits: 1n << 63n })).toThrow(RangeError);
     expect(() => new Writer().fixed(5 as unknown as Fixed)).toThrow(
       /Fixed: expected a Fixed, got 5/,
     );

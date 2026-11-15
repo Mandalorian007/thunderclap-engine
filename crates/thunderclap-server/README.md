@@ -60,7 +60,16 @@ failed load leaves the game running on the data it had.
 `generate_ts::<G>(out, &config)` writes the client TypeScript from
 `G::schema()` (tc-tsgen), leaving unchanged files alone. A protocol with
 its own `Protocol::ENVELOPE` gets the matching `envelope` in `schema.ts`
-(`define_schema_ts_with(schema, net_import, envelope)`).
+(`define_schema_ts_with(schema, net_import, envelope)`), every option
+included: a `Hello` with the game's fields among the envelope's
+(`HelloField::ExtFields`) gets a struct of those fields as `roles.hello`
+and `{ ext: n }` entries, then `rejected`, `ack: 'messages'` and the close
+enum (`client_text` is only the server's words). Before writing, it checks
+the schema's `ClientMsg` and `ServerMsg` are the ones the envelope lays
+out, so a schema built some other way fails with each mismatch named
+instead of a TypeScript hash that differs. `tests/ts_envelope.rs` writes
+`src/net/testdata/own-envelope.*` for `src/net/own-envelope.test.ts`
+(`TC_BLESS=1` rewrites them).
 
 ## The CLI
 

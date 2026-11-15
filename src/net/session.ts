@@ -127,6 +127,13 @@ export interface NetOptions {
    */
   readonly rawResults?: boolean;
   /**
+   * Server messages that reach the game undecoded, as `raw` events of the whole frame (its variant
+   * tag first) instead of `game` events: the game's own messages (`envelope` inline slots) or
+   * `'Game'`, by name. For large binary messages, which the generic decoder would copy (default
+   * none). Frames of a bulk lane are passed the same way.
+   */
+  readonly rawServer?: readonly string[];
+  /**
    * What a throwing listener does: `'report'` (default) keeps the other listeners going and reports
    * it as an `error` event; `'throw'` runs the others and then throws the first error out of the
    * call that emitted the event (a transport's message callback, `close()`, ...), as it is.
@@ -154,8 +161,10 @@ export interface NetEvents {
   down: [code: number, reason: string, why: NetReason];
   /** Closed for good. `why` is the reason, typed. */
   closed: [code: number, reason: string, why: NetReason];
-  /** A game server message (`ServerMsg::Game`). */
+  /** A game server message (`ServerMsg::Game`, or one of the game's own inline). */
   game: [value: unknown];
+  /** A game server message named in `NetOptions.rawServer`: its name and the whole frame, undecoded. */
+  raw: [type: string, frame: Uint8Array];
   /** An entity-stream frame was applied (`net.entities`); the changes are reused next frame. */
   entities: [changes: EntityChanges];
   /** The server refused an interest shape. */
@@ -258,6 +267,8 @@ export class Net {
   #frameBytes = 0;
   /** `CommandResult`'s tag when results are raw, else -1. */
   readonly #rawResult: number;
+  /** The names of the server messages passed raw, by tag (`rawServer`). */
+  readonly #rawServer = new Map<number, string>();
   readonly #throwListenerErrors: boolean;
   readonly #heardByTick: boolean;
   /** Something arrived since the last liveness tick (`heardBy: 'tick'`). */
@@ -321,6 +332,15 @@ export class Net {
     this.#rawResult = options.rawResults
       ? this.schema.variants('ServerMsg').indexOf('CommandResult')
       : -1;
+    const variants = this.schema.variants('ServerMsg');
+    for (const name of options.rawServer ?? []) {
+      if (name !== 'Game' && !this.#env.serverGame.has(name)) {
+        throw new NetError(`rawServer: ${name} is not one of the game's server messages`);
+      }
+      const tag = variants.indexOf(name);
+      if (tag < 0) throw new NetError(`rawServer: ServerMsg has no ${name}`);
+      this.#rawServer.set(tag, name);
+    }
     this.#throwListenerErrors = options.listenerErrors === 'throw';
     this.#heardByTick = options.liveness?.heardBy === 'tick';
     this.#timers = options.timers ?? pageTimers;
@@ -730,6 +750,7 @@ export class Net {
 
   #handleFrame(frame: Uint8Array): void {
     if (this.#rawResult >= 0 && this.#rawCommandResult(frame)) return;
+    if (this.#rawServer.size > 0 && this.#rawGame(frame)) return;
     let msg: ServerMsg;
     try {
       msg = this.schema.decode<ServerMsg>('ServerMsg', frame);
@@ -747,6 +768,23 @@ export class Net {
   }
 
   /** A `CommandResult` resolved with its result's bytes (`rawResults`); false if `frame` is not one. */
+  /** Emits `frame` as `raw` if `rawServer` names its message; false if it doesn't. */
+  #rawGame(frame: Uint8Array): boolean {
+    let type: string | undefined;
+    try {
+      type = this.#rawServer.get(new Reader(frame).variant());
+    } catch {
+      return false; // Not a well-formed message: the decoder says why.
+    }
+    if (type === undefined) return false;
+    if (!this.#welcome) {
+      this.#protocolError(`${type} before Welcome`);
+      return true;
+    }
+    this.#emit('raw', type, frame);
+    return true;
+  }
+
   #rawCommandResult(frame: Uint8Array): boolean {
     let seq: number;
     const r = new Reader(frame);

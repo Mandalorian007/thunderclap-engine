@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use super::file::{BACKUP_FILE, NAMES_FILE};
 use super::{Accounts, Claim, Claimed, Clock, FileAccounts, MemoryAccounts, Records};
 use crate::names::NameRules;
+use crate::token::ClaimWords;
 
 /// A directory under the system temp dir, removed on drop.
 struct TestDir(PathBuf);
@@ -324,4 +325,35 @@ fn a_game_sets_its_own_name_rules() {
     assert!(mem.claim(&named("Ada", None, false)).is_ok());
     let err = mem.claim(&named("ad", None, false)).unwrap_err();
     assert!(err.0.contains("3 to 8 letters"), "{err}");
+}
+
+#[test]
+fn a_game_words_the_claim_refusals_its_own_way() {
+    let words = ClaimWords {
+        name_owned: "this account already plays as {name}".into(),
+        name_taken: "{name} is someone else's".into(),
+        bad_account: "who is {name}?".into(),
+        ..ClaimWords::default()
+    };
+    let dir = TestDir::new("words");
+    let file = open(&dir.0).with_words(words.clone());
+    let memory = MemoryAccounts::new(rules()).with_words(words);
+    for store in [&file as &dyn Accounts, &memory] {
+        store.claim(&named("alice", Some("chat:1"), false)).unwrap();
+        let err = |c: &Claim| store.claim(c).unwrap_err().0;
+        assert_eq!(
+            err(&named("alicia", Some("chat:1"), false)),
+            "this account already plays as alice"
+        );
+        assert_eq!(
+            err(&named("alice", Some("chat:2"), false)),
+            "alice is someone else's"
+        );
+        assert_eq!(err(&account("a b", false)), "who is \"a b\"?");
+        // The rest keep the default words.
+        assert_eq!(
+            err(&account("chat:3", false)),
+            "this account has no name yet: give one"
+        );
+    }
 }

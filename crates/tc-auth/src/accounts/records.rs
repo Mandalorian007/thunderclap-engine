@@ -7,6 +7,7 @@ use serde_json::Value;
 
 use super::{AccountError, Claim, Claimed, Record};
 use crate::names::NameRules;
+use crate::token::{ClaimWords, TokenWords};
 
 const FORMAT: u64 = 1;
 
@@ -164,29 +165,30 @@ impl Records {
         &mut self,
         claim: &Claim,
         rules: &NameRules,
+        words: &ClaimWords,
         now: u64,
     ) -> Result<Claimed, AccountError> {
-        check(claim, rules)?;
+        check(claim, rules, words)?;
+        let refuse =
+            |template: &str, name: &str| AccountError(TokenWords::fill(template, name, ""));
         let owned = claim.account.as_deref().and_then(|a| self.name_of(a));
         let name = match (owned, &claim.name) {
             (Some(owned), Some(name)) if owned != name => {
-                return Err(AccountError(format!(
-                    "this account already has the name {owned}: a name is chosen once"
-                )));
+                return Err(refuse(&words.name_owned, owned));
             }
             (Some(owned), _) => owned.to_string(),
             (None, Some(name)) => name.clone(),
             (None, None) => {
-                return Err(AccountError(match &claim.account {
-                    Some(_) => "this account has no name yet: give one".into(),
-                    None => "missing name".into(),
-                }));
+                return Err(match &claim.account {
+                    Some(_) => refuse(&words.no_name, ""),
+                    None => refuse(&words.missing_name, ""),
+                });
             }
         };
         let owned = owned.is_some();
         let created = !self.entries.contains_key(&name);
         if claim.account.is_some() && !owned && !created {
-            return Err(AccountError(format!("the name {name} is taken")));
+            return Err(refuse(&words.name_taken, &name));
         }
         let entry = self.entries.entry(name.clone()).or_insert(Entry {
             generation: 1,
@@ -198,7 +200,7 @@ impl Records {
             entry.generation = entry
                 .generation
                 .checked_add(1)
-                .ok_or_else(|| AccountError(format!("{name}: no generations left")))?;
+                .ok_or_else(|| refuse(&words.no_generations, &name))?;
         }
         Ok(Claimed {
             name,
@@ -210,20 +212,29 @@ impl Records {
 }
 
 /// A claim's own mistakes, found before any store is touched.
-pub(crate) fn check(claim: &Claim, rules: &NameRules) -> Result<(), AccountError> {
+pub(crate) fn check(
+    claim: &Claim,
+    rules: &NameRules,
+    words: &ClaimWords,
+) -> Result<(), AccountError> {
     if let Some(account) = &claim.account
         && !valid_account(account)
     {
-        return Err(AccountError(format!(
-            "bad account {account:?}: use 1 to {MAX_ACCOUNT} printable characters, no spaces"
+        let quoted = format!("{account:?}");
+        return Err(AccountError(TokenWords::fill(
+            &words.bad_account,
+            &quoted,
+            "",
         )));
     }
     if let Some(name) = &claim.name
         && !rules.valid(name)
     {
-        return Err(AccountError(format!(
-            "bad name {name:?}: use {}",
-            rules.describe
+        let quoted = format!("{name:?}");
+        return Err(AccountError(TokenWords::fill(
+            &words.bad_name,
+            &quoted,
+            rules.describe,
         )));
     }
     Ok(())

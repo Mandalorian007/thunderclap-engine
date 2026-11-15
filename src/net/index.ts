@@ -100,6 +100,7 @@ export {
   compareKeys,
   DecodeError,
   Fixed,
+  type FixedBits,
   invalidVariant,
   type MapKey,
   Reader,

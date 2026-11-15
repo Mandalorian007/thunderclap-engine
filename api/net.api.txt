@@ -157,6 +157,11 @@ class Fixed {
     toJSON(): string;
 }
 
+## FixedBits  (type-only)
+interface FixedBits {
+    readonly bits: bigint;
+}
+
 ## Hello  (type-only)
 interface Hello {
     readonly token?: string;
@@ -265,6 +270,7 @@ interface NetEvents {
     down: [code: number, reason: string, why: NetReason];
     closed: [code: number, reason: string, why: NetReason];
     game: [value: unknown];
+    raw: [type: string, frame: Uint8Array];
     entities: [changes: EntityChanges];
     interestRejected: [reason: string];
     control: [driving: boolean];
@@ -285,6 +291,7 @@ interface NetOptions {
     readonly bulk?: number;
     readonly plainBulk?: boolean;
     readonly rawResults?: boolean;
+    readonly rawServer?: readonly string[];
     readonly listenerErrors?: 'report' | 'throw';
     readonly entities?: string;
     readonly snapshots?: SnapshotBufferOptions;
@@ -752,7 +759,7 @@ class Writer {
     u64(value: number): void;
     i32(value: number): void;
     i64(value: number): void;
-    fixed(value: Fixed): void;
+    fixed(value: Fixed | FixedBits): void;
     string(value: string): void;
     vec<T>(items: readonly T[], item: (value: T) => void): void;
     map<K extends MapKey, V>(map: ReadonlyMap<K, V>, key: (key: K) => void, value: (value: V) => void): void;
