@@ -104,6 +104,7 @@ export const WEBKIT_SPECS = [
   'fx-core',
   'decals-core',
   'fx-reversed',
+  'cull',
   'sky',
   'weather',
   'water',

@@ -4,6 +4,8 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 
 ## Unreleased
 
+- The GPU cull's bundles kept new slots undrawn (ws/cull-fix, B18; EV FX1, Forge with shadows off). Defaults unchanged. *Fixed* (render core): with `coalesceRebuilds` (the default) the one bundle rebuild a frame went to the oldest stale GPU-culled set, and a set no pass draws (a caster whose shadow pass is off, a set in a skipped pass) never re-records, so it kept that turn and every drawn set replayed its old bundle: streamed sections reached the cull but not the bundle, and whole regions stayed undrawn while `cull: 'cpu'` drew them. Only a set a pass asked for a bundle last frame now takes the turn. Tests: `restore.test.ts` (a never-drawn caster beside a streamed set), `harness/cull.html` and `e2e/cull.spec.ts` (a GPU-culled and a CPU-culled core read back over a streamed reversed-Z, camera-relative scene with off-axis and near-plane sections: the same ids, 0 px apart, on the matrix and `webkit-ipad`).
+
 ## 2.0.0-next.17 (2026-11-15)
 
 - Actor pose parity readback (ws/pose-parity-fix, B20; EV FX5). Defaults unchanged. A GPU pose read back with `poseCpu` run after the map was posing later records than the GPU had: a crowd whose records change every frame drifted by a frame's motion (0.141 in Forge's crowd of 20). *Added* (actors): `ActorSystem.readBack(slots?)` and `ActorReadBack` (`time`, `slots`, `models`, `gpu`, `cpu`, `args`, `argsWords`, `maxError`, `worstSlot`): the CPU twin is posed at the call, at the f32 clock the pass saw; it rejects when a record changed since `prepare` or no pose pass ran. Harness `actors.html?parity=1` and its e2e: 32 actors in slots 13 apart, every record rewritten every frame, two LODs, spawns and despawns, within 0.01.
