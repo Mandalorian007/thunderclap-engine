@@ -7,9 +7,13 @@
  * reach. Once settled, a frame is one view write, three cull dispatches and three bundles at any
  * radius.
  *
- * `?radius=N` (default 16), `?workers=N` (default up to 4), `?still` parks the camera. Nothing
- * here is engine code beyond `boot`, the core and the voxel world.
+ * `?radius=N` (default 16), `?workers=N` (default up to 4), `?still` parks the camera. `?water`
+ * (ws/scene-read-fit) shades the sea's own meshed faces as a `Water` look (no plane): the liquid
+ * set reads the core's scene depth and colour through the core's scene-read group, so shores
+ * foam and the sea floor shows through at any height. Nothing here is engine code beyond
+ * `boot`, the core, the water and the voxel world.
  */
+import { Water } from '@thunderclap-engine/engine/fx';
 import { boot } from '@thunderclap-engine/engine/platform';
 import {
   Camera,
@@ -41,12 +45,15 @@ const workerCount = Math.max(
   ),
 );
 const still = params.has('still');
+const withWater = params.has('water');
 
 const state: HarnessVoxelWorldState = {
   ready: false,
   gpu: 'pending',
   radius,
   workers: workerCount,
+  water: withWater,
+  liquidReadsScene: false,
   frames: 0,
   gpuErrors: 0,
   settled: false,
@@ -187,7 +194,28 @@ async function main(): Promise<void> {
   }
   const { surface, gpu } = res;
   installGpuErrorLogging(gpu.device);
+  if (withWater) {
+    // The look's refraction and reflection read a copy of the swapchain: COPY_SRC.
+    gpu.context.configure({
+      device: gpu.device,
+      format: gpu.format,
+      alphaMode: 'opaque',
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+    });
+  }
   const core = createRenderCore(gpu);
+  // The sea as a look over the liquid stream's faces: the water's waves, depth tint, foam,
+  // refraction and reflection on the game's own geometry.
+  const water = withWater
+    ? new Water(core, {
+        plane: false,
+        shallowColor: [0.2, 0.55, 0.5],
+        deepColor: [0.03, 0.12, 0.2],
+        depthFade: 6,
+        reflectionReach: 40,
+      })
+    : null;
+  const look = water?.look();
   const workers: MesherPort[] = [];
   for (let i = 0; i < workerCount; i++)
     workers.push(
@@ -203,7 +231,23 @@ async function main(): Promise<void> {
     maxSectionY: ROWS - 1,
     radius,
     label: 'S4',
+    materials: look
+      ? {
+          liquid: {
+            fragment: `${look.wgsl}
+@fragment fn fs(in: VoxelVarying) -> WaterLookOut {
+  return water_look_out(water_look(in.clip, in.world, in.normal));
+}`,
+            bindGroups: [look.bindGroup],
+            blend: look.blend,
+            writes: look.writes,
+            readsDepth: look.readsDepth,
+            readsColor: look.readsColor,
+          },
+        }
+      : undefined,
   });
+  state.liquidReadsScene = world.sets.liquid.readsDepth;
   // The columns to generate, nearest first: the radius and one ring past it, so every section
   // inside has its neighbours.
   const columns: number[] = [];
@@ -222,6 +266,7 @@ async function main(): Promise<void> {
   const times: number[] = [];
   const target = {
     view: undefined as unknown as GPUTextureView,
+    texture: undefined as GPUTexture | undefined,
     format: gpu.format,
     width: 1,
     height: 1,
@@ -231,7 +276,8 @@ async function main(): Promise<void> {
   state.ready = true;
   const start = performance.now();
   const eye = [8, 64, 8] as [number, number, number];
-  const look = [0, 0, 0] as [number, number, number];
+  const at = [0, 0, 0] as [number, number, number];
+  let last = start;
 
   const frame = () => {
     const now = performance.now();
@@ -250,13 +296,16 @@ async function main(): Promise<void> {
     const { width, height } = surface.backbuffer;
     camera.setPerspective(Math.PI / 3, width / Math.max(1, height), 0.3, 2000);
     const a = t * 0.1;
-    look[0] = eye[0] + Math.cos(a) * 10;
-    look[1] = eye[1] - 3;
-    look[2] = eye[2] + Math.sin(a) * 10;
-    camera.lookAt(eye, look);
+    at[0] = eye[0] + Math.cos(a) * 10;
+    at[1] = eye[1] - 3;
+    at[2] = eye[2] + Math.sin(a) * 10;
+    camera.lookAt(eye, at);
+    water?.update((now - last) / 1000);
+    last = now;
     setViewFromCamera(view, camera);
     const texture = gpu.context.getCurrentTexture();
     target.view = texture.createView();
+    if (withWater) target.texture = texture;
     target.width = texture.width;
     target.height = texture.height;
     // The engine's share of the frame: world.update, prepare and draw.

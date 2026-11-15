@@ -96,8 +96,14 @@ export type { SectionStore, SectionStoreOptions, SectionStoreStats } from './sto
 export { createSectionStore } from './store';
 export type { SectionBox, SectionVisibilityOptions, SectionVisibilityStats } from './visibility';
 export { SectionVisibility } from './visibility';
-export type { VoxelMaterial, VoxelWorld, VoxelWorldOptions, VoxelWorldStats } from './world';
-export { createVoxelWorld } from './world';
+export type {
+  VoxelMaterial,
+  VoxelSetDesc,
+  VoxelWorld,
+  VoxelWorldOptions,
+  VoxelWorldStats,
+} from './world';
+export { createVoxelWorld, voxelSetDesc } from './world';
 export type { VoxelStream } from './world-shaders';
 export {
   VOXEL_DEFAULT_FRAGMENT,

@@ -6,7 +6,7 @@ import type { Renderer } from '../render/renderer';
 import { auxSuffix, ScenePipelineCache, sceneVariant } from '../render/scene-pipelines';
 import type { SceneTarget } from '../render/scene-target';
 import { createShaderModule } from '../render/wgsl';
-import { WaterOnCore } from './water-core';
+import { type WaterLook, WaterOnCore } from './water-core';
 import { WATER_DEPTH_COPY_WGSL, WATER_MAX_WAVES, WATER_WGSL } from './water-wgsl';
 
 /** Floats in the water's params block: 5 vec4 + `WATER_MAX_WAVES` vec4 (144 bytes). */
@@ -93,6 +93,12 @@ export interface WaterOptions {
   sunColor?: ArrayLike<number>;
   /** On a render core: the reflected sky's horizon colour. Default a pale haze. */
   skyColor?: ArrayLike<number>;
+  /**
+   * On a render core: draw the plane (ws/scene-read-fit). False keeps the water for its looks
+   * only (`Water.look`: the game's own geometry shaded as this water); its block and clock still
+   * update each frame. Default true. Live (`Water.plane`).
+   */
+  plane?: boolean;
 }
 
 const DEFAULT_SUN_DIR = [0.4, 0.8, 0.3] as const;
@@ -177,6 +183,8 @@ export class Water implements Drawable {
   readonly sunColor = new Float32Array(3);
   /** On a render core: the reflected sky's horizon colour. Live. */
   readonly skyColor = new Float32Array(3);
+  /** On a render core: see `WaterOptions.plane`. Live. */
+  plane: boolean;
   /** On a render core (B5): the core drawable that draws the water in every view (else null). */
   readonly coreDrawable: WaterOnCore | null = null;
 
@@ -222,6 +230,7 @@ export class Water implements Drawable {
     this.refraction = opts.refraction ?? 1;
     this.reflectionSteps = opts.reflectionSteps ?? 16;
     this.reflectionReach = opts.reflectionReach ?? 30;
+    this.plane = opts.plane ?? true;
     set3(this.sunDirection, opts.sunDirection ?? DEFAULT_SUN_DIR);
     set3(this.sunColor, opts.sunColor ?? DEFAULT_SUN_COLOR);
     set3(this.skyColor, opts.skyColor ?? DEFAULT_SKY);
@@ -476,6 +485,18 @@ export class Water implements Drawable {
         ),
       ),
     );
+  }
+
+  /**
+   * On a render core (ws/scene-read-fit): this water as a look over the game's own geometry,
+   * whose bind group sits at `group` in the set's layout (`1 + ` its index in the set's
+   * `bindGroups`). The set takes the look's blend, writes, `readsDepth` and `readsColor`,
+   * draws in `'transparent'`, and its fragment returns `water_look_out(water_look(...))`.
+   * One look per group index, kept for the water's life. Throws on a `Renderer`.
+   */
+  look(group = 1): WaterLook {
+    if (!this.coreDrawable) throw new Error('Water.look: needs a render core');
+    return this.coreDrawable.look(group);
   }
 
   destroy(): void {

@@ -121,7 +121,7 @@ export { Trail, TrailBatch } from './trail';
 export { TRAIL_TEXTURED_WGSL, TRAIL_WGSL } from './trail-wgsl';
 export type { WaterFoam, WaterOptions, WaterWave } from './water';
 export { WATER_PARAMS_FLOATS, Water, waterHeight } from './water';
-export type { WaterOnCoreOptions } from './water-core';
+export type { WaterLook, WaterOnCoreOptions } from './water-core';
 export { WaterOnCore, waterReflectionKnob } from './water-core';
 export {
   WATER_CORE_FLOATS,

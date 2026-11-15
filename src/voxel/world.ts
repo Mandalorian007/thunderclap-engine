@@ -14,7 +14,7 @@
  */
 import type { Arena, ArenaAlloc } from '../render/core/arena';
 import type { RenderCore } from '../render/core/core';
-import type { DrawSet } from '../render/core/draw-set';
+import type { DrawSet, DrawSetDesc } from '../render/core/draw-set';
 import { createInstanceLayout, createVertexLayout } from '../render/core/layout';
 import type { CoreTargetName } from '../render/core/targets';
 import { FACE_CLASS } from './blocks';
@@ -75,6 +75,60 @@ export interface VoxelMaterial {
    * velocity). Default none: the core keeps what is behind.
    */
   writes?: readonly CoreTargetName[];
+  /**
+   * Read the core's scene depth through its scene-read group (`DrawSetDesc.readsDepth`,
+   * ws/scene-read-fit): `core_scene_depth` is in scope. A water look (`Water.look`) sets it.
+   * Only a stream drawn without depth writes (liquid). Default false.
+   */
+  readsDepth?: boolean;
+  /** Read the core's scene colour copy (`DrawSetDesc.readsColor`): `core_scene_color`. Default false. */
+  readsColor?: boolean;
+}
+
+/** The parts of a `DrawSetDesc` that draw a voxel stream (`voxelSetDesc`). */
+export type VoxelSetDesc = Pick<
+  DrawSetDesc,
+  | 'shader'
+  | 'castShadow'
+  | 'vertexLayout'
+  | 'instanceLayout'
+  | 'pass'
+  | 'bindGroups'
+  | 'readsDepth'
+  | 'readsColor'
+>;
+
+/**
+ * A voxel stream's shader, layouts, pass and groups as `createVoxelWorld` makes its sets
+ * (ws/scene-read-fit): for a game that keeps its own draw sets over the mesher's output (a
+ * `VoxelMaterial` outside `createVoxelWorld`). Add the arenas, capacity, kind and cull; each
+ * slot draws a section's vertices (8 bytes each, quads on 4-vertex boundaries) with one
+ * instance, the section's origin as four floats (xyz, w unused).
+ */
+export function voxelSetDesc(
+  format: VoxelFormat,
+  stream: VoxelStream,
+  material?: VoxelMaterial,
+): VoxelSetDesc {
+  const m = material;
+  return {
+    shader: {
+      code: `${voxelVertexWgsl(format)}\n${m?.vertex ? `${m.vertex}\n` : ''}${m?.fragment ?? VOXEL_DEFAULT_FRAGMENT[stream]}`,
+      vertexEntry: m?.vertexEntry,
+      blend: m?.blend ?? (stream === 'liquid' ? ALPHA_BLEND : undefined),
+      cullMode: stream === 'opaque' ? 'back' : 'none',
+      shadowFragmentEntry: m?.shadowFragmentEntry,
+      writes: m ? m.writes : VOXEL_DEFAULT_WRITES,
+    },
+    castShadow:
+      m?.castShadow ?? (stream === 'opaque' || (stream === 'foliage' && !!m?.shadowFragmentEntry)),
+    vertexLayout: PACKED,
+    instanceLayout: ORIGIN,
+    pass: stream === 'opaque' ? 'opaque' : stream === 'foliage' ? 'cutout' : 'transparent',
+    bindGroups: m?.bindGroups,
+    readsDepth: m?.readsDepth,
+    readsColor: m?.readsColor,
+  };
 }
 
 /** Options for `createVoxelWorld`. */
@@ -279,33 +333,16 @@ export function createVoxelWorld(core: RenderCore, opts: VoxelWorldOptions): Vox
     blockBytes: Math.max(1 << 16, capacity * ORIGIN_BYTES * 2),
     label: `${label} origins`,
   });
-  const vertex = voxelVertexWgsl(format);
-  const makeSet = (stream: VoxelStream): DrawSet => {
-    const m = opts.materials?.[stream];
-    return core.createDrawSet({
+  const makeSet = (stream: VoxelStream): DrawSet =>
+    core.createDrawSet({
       label: `${label} ${stream}`,
-      shader: {
-        code: `${vertex}\n${m?.vertex ? `${m.vertex}\n` : ''}${m?.fragment ?? VOXEL_DEFAULT_FRAGMENT[stream]}`,
-        vertexEntry: m?.vertexEntry,
-        blend: m?.blend ?? (stream === 'liquid' ? ALPHA_BLEND : undefined),
-        cullMode: stream === 'opaque' ? 'back' : 'none',
-        shadowFragmentEntry: m?.shadowFragmentEntry,
-        writes: m ? m.writes : VOXEL_DEFAULT_WRITES,
-      },
-      castShadow:
-        m?.castShadow ??
-        (stream === 'opaque' || (stream === 'foliage' && !!m?.shadowFragmentEntry)),
-      vertexLayout: PACKED,
-      instanceLayout: ORIGIN,
+      ...voxelSetDesc(format, stream, opts.materials?.[stream]),
       vertices,
       instances,
       capacity,
       kind: 'static',
       cull: 'gpu',
-      pass: stream === 'opaque' ? 'opaque' : stream === 'foliage' ? 'cutout' : 'transparent',
-      bindGroups: m?.bindGroups,
     });
-  };
   const sets: Record<VoxelStream, DrawSet> = {
     opaque: makeSet('opaque'),
     foliage: makeSet('foliage'),
