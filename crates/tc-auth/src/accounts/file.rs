@@ -44,6 +44,7 @@ use super::{
     AccountError, Accounts, Claim, Claimed, Clock, Record, Records, system_clock, unix_now,
 };
 use crate::names::NameRules;
+use crate::token::ClaimWords;
 
 /// The store.
 pub(super) const NAMES_FILE: &str = "names.json";
@@ -145,6 +146,7 @@ impl Stamp {
 pub struct FileAccounts {
     dir: PathBuf,
     rules: NameRules,
+    words: ClaimWords,
     clock: Clock,
     state: Mutex<Live>,
     revisions: watch::Sender<u64>,
@@ -163,6 +165,7 @@ impl FileAccounts {
         let store = FileAccounts {
             dir: dir.to_path_buf(),
             rules,
+            words: ClaimWords::default(),
             clock: system_clock(),
             state: Mutex::new(Live {
                 stamp: None,
@@ -179,6 +182,11 @@ impl FileAccounts {
     /// The same store, stamping records with `clock` (Unix seconds).
     pub fn with_clock(self, clock: Clock) -> FileAccounts {
         FileAccounts { clock, ..self }
+    }
+
+    /// The same store, refusing claims in `words`.
+    pub fn with_words(self, words: ClaimWords) -> FileAccounts {
+        FileAccounts { words, ..self }
     }
 
     /// `names.json`.
@@ -301,10 +309,13 @@ impl Accounts for FileAccounts {
     }
 
     fn claim(&self, claim: &Claim) -> Result<Claimed, AccountError> {
-        check(claim, &self.rules)?;
+        check(claim, &self.rules, &self.words)?;
         let now = (self.clock)();
-        let (claimed, warnings) =
-            self.write_locked(|records| records.claim(claim, &self.rules, now).map(Some))?;
+        let (claimed, warnings) = self.write_locked(|records| {
+            records
+                .claim(claim, &self.rules, &self.words, now)
+                .map(Some)
+        })?;
         let claimed = claimed.expect("a claim returns what it claimed");
         Ok(Claimed {
             warnings,

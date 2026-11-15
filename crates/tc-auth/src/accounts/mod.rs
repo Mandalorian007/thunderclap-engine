@@ -37,7 +37,7 @@ use tokio::sync::watch;
 
 pub use file::FileAccounts;
 pub use memory::MemoryAccounts;
-pub(crate) use records::Records;
+pub(crate) use records::{MAX_ACCOUNT, Records};
 
 /// One name's record.
 #[derive(Clone, Debug, PartialEq, Eq)]

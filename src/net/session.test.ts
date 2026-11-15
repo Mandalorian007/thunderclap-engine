@@ -508,6 +508,34 @@ describe('net session: fit options', () => {
     expect(game).toEqual([{ text: 'x' }]);
   });
 
+  it('rawServer: named game messages arrive as their frames, on a lane too', async () => {
+    expect(() => direct({ rawServer: ['Clock'] })).toThrow(/not one of the game's/);
+    const { net, timers, deliver, sentOf } = direct({ rawServer: ['Game'], plainBulk: true });
+    const raw: [string, Uint8Array][] = [];
+    const game: unknown[] = [];
+    const errors: Error[] = [];
+    net.on('raw', (type, frame) => raw.push([type, frame]));
+    net.on('game', (v) => game.push(v));
+    net.on('error', (e) => errors.push(e));
+    await timers.advance(0);
+    deliver(schema.encode('ServerMsg', { type: 'Game', value: { text: 'early' } }));
+    expect(errors[0]?.message).toMatch(/Game before Welcome/);
+    await timers.advance(60_000);
+    deliver(welcome);
+    const frame = schema.encode('ServerMsg', { type: 'Game', value: { text: 'x' } });
+    deliver(frame);
+    expect(raw).toEqual([['Game', frame]]);
+    expect(raw[0]![1]).toBe(frame); // Not copied.
+    const lane = new Writer();
+    lane.bytes(frame);
+    const data = lane.finish();
+    deliver(schema.encode('ServerMsg', { type: 'Bulk', codec: 0, data }));
+    expect(raw.length).toBe(2);
+    expect(schema.decode('ServerMsg', raw[1]![1])).toEqual({ type: 'Game', value: { text: 'x' } });
+    expect(sentOf('Ack').length).toBeGreaterThan(0);
+    expect(game).toEqual([]);
+  });
+
   it('plainBulk: an uncompressed lane is handled in the same call and acknowledged', async () => {
     const { net, timers, deliver, sentOf } = direct({ plainBulk: true });
     await timers.advance(0);

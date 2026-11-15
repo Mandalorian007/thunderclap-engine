@@ -63,7 +63,9 @@ composites `netType.vec(T)`, `netType.option(T)`, `netType.map(K, V)` (or `{ vec
 Field names are the wire names in snake_case; values in TypeScript use camelCase props
 (`propName`). A newtype is its inner value; an enum value is `{ type: 'Variant', ...fields }`, or
 `{ type, value }` for a one-value variant; an option is the value or `null`; a map is a `Map`;
-`Bytes` is a `Uint8Array`; `Fixed` is a 32.32 fixed-point `Fixed`.
+`Bytes` is a `Uint8Array`; `Fixed` is a 32.32 fixed-point `Fixed` (encoding takes any value with
+its `bits`, `FixedBits`, so a game may keep a class of its own). `u64` and `i64` are numbers, read
+without BigInt; a value past 2^53 is a decode error (split it in the schema, as two `u32`s).
 
 `defineSchema` wraps the game's types in the engine envelope, `ClientMsg` and `ServerMsg`
 (`ENVELOPE_TYPES` are reserved), whose roles the game fills (`Roles`: `hello`, `welcome`,
@@ -135,6 +137,10 @@ at once. `NetOptions` documents each; `Hello` is the token and the game's `ext`.
 - **Commands.** `net.command(cmd)` resolves with its `CommandResult`, matched by seq. With
   `rawResults: true` it resolves with the result's bytes, undecoded, for a game that reads its own
   outcome type.
+- **Raw game messages.** `rawServer: ['Section', ...]` names server messages (the game's own inline
+  ones, or `'Game'`) that skip the decoder: each arrives as a `raw` event with its name and the
+  whole frame (variant tag first, not copied), a bulk lane's frames too. Before `Welcome` one is a
+  protocol error, as a decoded one is.
 - **Live queries.** `net.query(name, args, listener, QueryOptions)` returns a `LiveQuery`. The
   server sends the result whole (`Resync`), then `Update`s whose `PatchOp`s (`PathStep` paths) the
   client applies (`applyPatch`) and checks against the result's hash (`resultHash`); a mismatch

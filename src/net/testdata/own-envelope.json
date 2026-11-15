@@ -1,0 +1,21 @@
+{
+  "ClientMsg": [
+    "00036164610110303132333435363738396162636465660101056e6f727468ffffffffffffff0f",
+    "0107ac02",
+    "028180808060",
+    "032a",
+    "04",
+    "0503"
+  ],
+  "ServerMsg": [
+    "000980d095ffbc3100026869",
+    "01026e6f",
+    "0207026f6b",
+    "0398f8ffffff7c04010203ff",
+    "042a2b01",
+    "050103627965",
+    "06046e6f7465",
+    "07010409090909"
+  ],
+  "_note": "Written by crates/thunderclap-server/tests/ts_envelope.rs (TC_BLESS=1); checked by own-envelope.test.ts."
+}

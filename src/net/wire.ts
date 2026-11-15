@@ -14,6 +14,11 @@
  */
 const MAX_SAFE = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_BIG = BigInt(Number.MAX_SAFE_INTEGER);
+
+/** A 32.32 fixed-point number as its raw bits: what a game's own `Fixed` class has to have. */
+export interface FixedBits {
+  readonly bits: bigint;
+}
 const U32_MAX = 0xffff_ffff;
 const I64_MIN = -(1n << 63n);
 const I64_MAX = (1n << 63n) - 1n;
@@ -212,11 +217,14 @@ export class Writer {
     this.#byte(Number(zigzag));
   }
 
-  fixed(value: Fixed): void {
-    if (!(value instanceof Fixed)) {
+  /** A `Fixed`, or any value with its `bits` (a game's own 32.32 class). */
+  fixed(value: Fixed | FixedBits): void {
+    if (!(value instanceof Fixed) && typeof (value as FixedBits | null)?.bits !== 'bigint') {
       throw new TypeError(`Fixed: expected a Fixed, got ${show(value)}`);
     }
     const v = value.bits;
+    if (v < I64_MIN || v > I64_MAX)
+      throw new RangeError(`Fixed: bits ${v} are outside the i64 range`);
     let zigzag = v >= 0n ? v << 1n : (-v << 1n) - 1n;
     while (zigzag >= 0x80n) {
       this.#byte(Number(zigzag & 0x7fn) | 0x80);
@@ -374,12 +382,14 @@ export class Reader {
 
   /** Throws if the value is beyond `Number.MAX_SAFE_INTEGER`. */
   u64(): number {
+    // Number arithmetic, no BigInt: a value past 2^53 rounds past it.
     const at = this.#pos;
-    const value = this.#varintBig();
-    if (value > MAX_SAFE_BIG) {
-      throw new DecodeError(at, `u64 value ${value} exceeds Number.MAX_SAFE_INTEGER`);
+    const value = this.#varint();
+    if (value > Number.MAX_SAFE_INTEGER) {
+      const exact = this.#exactVarintAt(at);
+      throw new DecodeError(at, `u64 value ${exact} exceeds Number.MAX_SAFE_INTEGER`);
     }
-    return Number(value);
+    return value;
   }
 
   i32(): number {
@@ -390,7 +400,12 @@ export class Reader {
   /** Throws if the value is outside the safe integer range. */
   i64(): number {
     const at = this.#pos;
-    const raw = this.#varintBig();
+    const zigzag = this.#varint();
+    // Below 2^53 the zigzag (and so the value) is exact as a number.
+    if (zigzag <= Number.MAX_SAFE_INTEGER) {
+      return zigzag % 2 === 0 ? zigzag / 2 : -(zigzag + 1) / 2;
+    }
+    const raw = this.#exactVarintAt(at);
     const value = (raw & 1n) === 0n ? raw >> 1n : -((raw + 1n) >> 1n);
     if (value > MAX_SAFE_BIG || value < -MAX_SAFE_BIG) {
       throw new DecodeError(at, `i64 value ${value} is not a safe integer`);

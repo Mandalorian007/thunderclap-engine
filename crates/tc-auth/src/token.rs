@@ -71,11 +71,51 @@ impl Default for TokenWords {
     }
 }
 
+/// The words of an accounts store's refusals of a claim
+/// ([`crate::Accounts::claim`]), each a template like [`TokenWords`]'s:
+/// `{name}` stands for the name (or account id) as the default words show
+/// it, `{rules}` for [`NameRules::describe`]. Given to a store with
+/// `MemoryAccounts::with_words` or `FileAccounts::with_words`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClaimWords {
+    /// The account id is not one (`{name}`: the id, Rust-quoted).
+    pub bad_account: String,
+    /// The name breaks the rules (`{name}`: Rust-quoted, `{rules}`).
+    pub bad_name: String,
+    /// The account already has another name (`{name}`: that one).
+    pub name_owned: String,
+    /// An account with no name yet claimed none.
+    pub no_name: String,
+    /// A claim with neither account nor name.
+    pub missing_name: String,
+    /// An account claimed a name someone else has (`{name}`).
+    pub name_taken: String,
+    /// A reset of a name whose generations ran out (`{name}`).
+    pub no_generations: String,
+}
+
+impl Default for ClaimWords {
+    fn default() -> ClaimWords {
+        ClaimWords {
+            bad_account: format!(
+                "bad account {{name}}: use 1 to {} printable characters, no spaces",
+                crate::accounts::MAX_ACCOUNT
+            ),
+            bad_name: "bad name {name}: use {rules}".into(),
+            name_owned: "this account already has the name {name}: a name is chosen once".into(),
+            no_name: "this account has no name yet: give one".into(),
+            missing_name: "missing name".into(),
+            name_taken: "the name {name} is taken".into(),
+            no_generations: "{name}: no generations left".into(),
+        }
+    }
+}
+
 impl TokenWords {
     /// `template` with `{name}` and `{prefix}` as `quoted` (already quoted)
     /// and `{rules}` as `rules`, in one pass: what goes in is never read
     /// as a placeholder.
-    fn fill(template: &str, quoted: &str, rules: &str) -> String {
+    pub(crate) fn fill(template: &str, quoted: &str, rules: &str) -> String {
         let mut out = String::with_capacity(template.len() + quoted.len());
         let mut rest = template;
         while let Some(at) = rest.find('{') {
