@@ -23,9 +23,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use tc_net::{Empty, Identity, Protocol};
+use tc_net::{ConnId, Empty, Identity, Protocol};
 use tc_sim::{
-    Bodies, Changes, Cx, EventOf, Game, Lane, Outbox, PlayerId, Query, QueryCtx, Seat, To,
+    Bodies, Changes, ClockOp, Cx, EventOf, Game, Lane, LiveCx, Outbox, PlayerId, Query, QueryCtx,
+    Seat, To,
 };
 use tc_store::format::{Reader, Writer};
 use tc_store::{LogCodec, NameTable, Names};
@@ -234,6 +235,11 @@ pub struct Tally {
     held: bool,
     /// Keeps bases ([`Game::save`]).
     pub saves: bool,
+    /// Live, per connection: who each open connection is (an observer's
+    /// name too), from [`Game::connected`] to [`Game::disconnected`].
+    pub conns: BTreeMap<ConnId, String>,
+    /// Greets each connection by name ([`Game::connected`]).
+    pub greets: bool,
 }
 
 impl Tally {
@@ -246,6 +252,8 @@ impl Tally {
             hold: Arc::new(AtomicBool::new(false)),
             held: false,
             saves: false,
+            conns: BTreeMap::new(),
+            greets: false,
         }
     }
 
@@ -346,6 +354,49 @@ impl Game for Tally {
 
     fn lane(&self, msg: &String) -> Option<usize> {
         (msg == "wave").then_some(0)
+    }
+
+    fn connected(
+        &mut self,
+        cx: &mut LiveCx<'_, Tally>,
+        conn: ConnId,
+        _: Seat,
+        who: &Identity,
+        _: &Empty,
+    ) {
+        self.conns.insert(conn, who.name.clone());
+        if self.greets {
+            cx.out().game(To::Conn(conn), format!("hi {}", who.name));
+        }
+    }
+
+    fn disconnected(&mut self, _: &mut LiveCx<'_, Tally>, conn: ConnId, _: Seat) {
+        self.conns.remove(&conn);
+    }
+
+    fn message_from(&mut self, cx: &mut LiveCx<'_, Tally>, conn: ConnId, player: u64, msg: String) {
+        let op = match msg.split_whitespace().collect::<Vec<_>>().as_slice() {
+            ["clock", "pause"] => Some(ClockOp::Pause),
+            ["clock", "resume"] => Some(ClockOp::Resume),
+            ["clock", "step"] => Some(ClockOp::Advance(1)),
+            ["clock", "to", t] => t.parse().ok().map(ClockOp::AdvanceTo),
+            _ => None,
+        };
+        match op {
+            Some(op) => {
+                cx.clock(op);
+                let from = self.conns.get(&conn).cloned().unwrap_or_default();
+                cx.out().game(To::Conn(conn), format!("{from}: {op:?}"));
+            }
+            None => {
+                let (events, out) = (&mut Vec::new(), &mut Outbox::new());
+                self.message(player, msg, events, out);
+                cx.events().append(events);
+                for (to, m) in out.messages() {
+                    cx.out().send(*to, m.clone());
+                }
+            }
+        }
     }
 
     fn message(&self, player: u64, msg: String, _: &mut Vec<Event>, out: &mut Outbox<TallyProto>) {
@@ -593,6 +644,9 @@ impl Game for Tally {
         t.hold = self.hold.clone();
         t.held = true;
         t.saves = self.saves;
+        // Live per-connection state moves to the new game.
+        t.conns = self.conns.clone();
+        t.greets = self.greets;
         Ok(t)
     }
 

@@ -1,17 +1,18 @@
 //! The loop: a [`Sim`] on its own thread, taking tc-net's requests and
 //! the owner's [`Control`]s, sleeping until its next deadline.
 
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::JoinHandle;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use tc_net::Request;
 
 use crate::core::Core;
 use crate::game::Game;
-use crate::idle::IDLE_RETRY;
+use crate::host::{Host, HostExit, run_host};
 use crate::reload::{ReloadReply, ReloadReport};
 use crate::sim::Sim;
 use crate::status::StatusHandle;
@@ -26,6 +27,14 @@ pub enum Control<G: Game> {
     Advance {
         /// Steps.
         steps: u64,
+        /// The time reached, or why not.
+        reply: Option<Sender<Result<u64, String>>>,
+    },
+    /// Jump to `time` ([`Sim::advance_to`]); the time reached goes to
+    /// `reply`.
+    AdvanceTo {
+        /// The time to reach.
+        time: u64,
         /// The time reached, or why not.
         reply: Option<Sender<Result<u64, String>>>,
     },
@@ -83,6 +92,16 @@ impl<G: Game> SimHandle<G> {
         let (reply, rx) = mpsc::channel();
         self.send(Control::Advance {
             steps,
+            reply: Some(reply),
+        });
+        rx
+    }
+
+    /// Jumps to `time`; receive the time reached.
+    pub fn advance_to(&self, time: u64) -> Receiver<Result<u64, String>> {
+        let (reply, rx) = mpsc::channel();
+        self.send(Control::AdvanceTo {
+            time,
             reply: Some(reply),
         });
         rx
@@ -155,85 +174,27 @@ impl<G: Game> Sim<G> {
     /// Runs the loop on this thread until a [`Control::Stop`], or until
     /// every request sender is gone. Returns the core as it stopped.
     ///
-    /// Each pass: the controls, a tick ([`Sim::tick`]), the bulk lanes'
-    /// wakes ([`Sim::wake_outbound`]), then, while the game has idle work
-    /// ([`Game::idle_work`]), its idle time up to the next deadline less
+    /// It is [`run_host`] over the sim: each pass the controls, a tick
+    /// ([`Sim::tick`]), the bulk lanes' wakes ([`Sim::wake_outbound`]),
+    /// then, while the game has idle work ([`Game::idle_work`]), its idle
+    /// time up to the next deadline less
     /// [`SimConfig::idle_margin`](crate::SimConfig::idle_margin)
     /// ([`Sim::idle`], cut short by a waiting request), then a wait for
     /// a request until the deadline.
     pub fn run(
-        mut self,
+        self,
         requests: &Receiver<Request<G::Protocol>>,
         controls: &Receiver<Control<G>>,
     ) -> Core<G> {
-        let mut waiting: Option<Request<G::Protocol>> = None;
-        loop {
-            while let Ok(control) = controls.try_recv() {
-                if !self.control(control) {
-                    return self.stop();
-                }
-            }
-            let now = Instant::now();
-            self.tick(now);
-            self.wake_outbound(now);
-            let mut deadline = self.deadline();
-            if self.core.game().idle_work() {
-                let retry = now + IDLE_RETRY;
-                let until = deadline
-                    .unwrap_or(retry)
-                    .checked_sub(self.idle_margin)
-                    .unwrap_or(now);
-                let mut interrupted = || {
-                    if waiting.is_none() {
-                        waiting = requests.try_recv().ok();
-                    }
-                    waiting.is_some()
-                };
-                self.idle(until, &mut interrupted);
-                self.wake_outbound(Instant::now());
-                if let Some(request) = waiting.take() {
-                    self.handle_waiting(request, requests);
-                    continue;
-                }
-                deadline = self.deadline();
-                if self.core.game().idle_work() {
-                    deadline = Some(deadline.map_or(retry, |d| d.min(retry)));
-                }
-            }
-            let next = match deadline {
-                Some(at) => requests.recv_timeout(at.saturating_duration_since(Instant::now())),
-                None => requests.recv().map_err(|_| RecvTimeoutError::Disconnected),
-            };
-            match next {
-                Ok(request) => self.handle_waiting(request, requests),
-                Err(RecvTimeoutError::Timeout) => {
-                    if let Some(at) = deadline {
-                        self.late = Instant::now().saturating_duration_since(at);
-                    }
-                }
-                Err(RecvTimeoutError::Disconnected) => {
-                    while let Ok(control) = controls.try_recv() {
-                        if !self.control(control) {
-                            break;
-                        }
-                    }
-                    return self.stop();
-                }
-            }
+        let mut host = SimHost {
+            sim: self,
+            controls,
+        };
+        if run_host(&mut host, requests) == HostExit::Disconnected {
+            // What the owner sent before the senders went, up to a stop.
+            let _ = host.poll();
         }
-    }
-
-    /// Handles `request` and whatever else is waiting, before the next
-    /// tick.
-    fn handle_waiting(
-        &mut self,
-        request: Request<G::Protocol>,
-        requests: &Receiver<Request<G::Protocol>>,
-    ) {
-        self.handle(request);
-        while let Ok(request) = requests.try_recv() {
-            self.handle(request);
-        }
+        host.sim.stop()
     }
 
     /// Does one control; false for [`Control::Stop`].
@@ -251,9 +212,67 @@ impl<G: Game> Sim<G> {
                     let _ = reply.send(reached);
                 }
             }
+            Control::AdvanceTo { time, reply } => {
+                let reached = self.advance_to(time);
+                if let Some(reply) = reply {
+                    let _ = reply.send(reached);
+                }
+            }
             Control::Reload { data, reply } => self.reload(data, reply),
             Control::Stop => return false,
         }
         true
+    }
+}
+
+/// A [`Sim`] as a [`Host`]: tc-net's requests, the owner's controls.
+struct SimHost<'a, G: Game> {
+    sim: Sim<G>,
+    controls: &'a Receiver<Control<G>>,
+}
+
+impl<G: Game> Host for SimHost<'_, G> {
+    type Request = Request<G::Protocol>;
+
+    fn poll(&mut self) -> ControlFlow<()> {
+        while let Ok(control) = self.controls.try_recv() {
+            if !self.sim.control(control) {
+                return ControlFlow::Break(());
+            }
+        }
+        ControlFlow::Continue(())
+    }
+
+    fn tick(&mut self, now: Instant) {
+        self.sim.tick(now);
+    }
+
+    fn wake_outbound(&mut self, now: Instant) {
+        self.sim.wake_outbound(now);
+    }
+
+    fn deadline(&self) -> Option<Instant> {
+        self.sim.deadline()
+    }
+
+    fn idle_work(&self) -> bool {
+        self.sim.core.game().idle_work()
+    }
+
+    fn idle_margin(&self) -> Duration {
+        self.sim.idle_margin
+    }
+
+    fn idle(&mut self, until: Instant, interrupted: &mut dyn FnMut() -> bool) {
+        self.sim.idle(until, interrupted);
+    }
+
+    fn handle(&mut self, request: Self::Request) -> ControlFlow<()> {
+        self.sim.handle(request);
+        ControlFlow::Continue(())
+    }
+
+    fn woke_late(&mut self, late: Duration, _wait: Duration) {
+        self.sim.late = late;
     }
 }
