@@ -416,6 +416,14 @@ class CoreViewExtras {
     destroy(): void;
 }
 
+## CoreWarmTarget  (type-only)
+interface CoreWarmTarget {
+    format: GPUTextureFormat;
+    outputFormat?: GPUTextureFormat;
+    variant?: string;
+    shadowFormat?: GPUTextureFormat;
+}
+
 ## CullGroup  (type-only)
 interface CullGroup {
     readonly views: readonly RenderView[];
@@ -1329,6 +1337,7 @@ class RenderCore {
     warm(pipeline: GPURenderPipeline, target?: WarmTarget): void;
     warmCompute(pipeline: GPUComputePipeline, target?: ComputeWarmTarget): void;
     get warming(): boolean;
+    warmSets(target: CoreWarmTarget, encoder?: GPUCommandEncoder): number;
     createDrawSet(desc: DrawSetDesc): DrawSet;
     removeDrawSet(set: DrawSet): void;
     addDrawable(d: CoreDrawable): void;

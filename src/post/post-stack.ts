@@ -103,9 +103,10 @@ export interface PostStackOptions {
    * A pass that is on when the stack is made is made then, and one turned on in the frame it
    * turns on; the rest wait this long, so a cold shader cache doesn't hold up the game's first
    * view (WebKit compiles a pipeline when it is made, and the next submit waits for it).
-   * `Infinity`: only when on.
+   * `Infinity`: only when on. `false` (E27): not by frames; the game starts it with
+   * `startWarming()` (or warms them all with `warmAll()`) from its own signal.
    */
-  warmAfterFrames?: number;
+  warmAfterFrames?: number | false;
 }
 
 /**
@@ -245,7 +246,7 @@ export class PostStack implements PostProcessor {
     [];
   /** Frames encoded, for `warmAfterFrames`. */
   private frames = 0;
-  private readonly warmAfter: number;
+  private warmAfter: number;
   /** The last TAA resolve wrote one target: its histories have no aux to read. */
   private taaSingle = false;
   private readonly ssrPass: DepthPass;
@@ -525,7 +526,8 @@ export class PostStack implements PostProcessor {
   return vec4f(textureSampleLevel(src, samp, in.uv, 0.0).rgb, 1.0);
 }`,
     });
-    this.warmAfter = opts.warmAfterFrames ?? 120;
+    const after = opts.warmAfterFrames ?? 120;
+    this.warmAfter = after === false ? Number.POSITIVE_INFINITY : after;
     const bloom = (x: PostSettings) => x.bloom.enabled;
     this.cold.push(
       { pass: this.prefilter, on: bloom },
@@ -568,6 +570,15 @@ export class PostStack implements PostProcessor {
       n++;
     }
     return n;
+  }
+
+  /**
+   * Start warming the passes that are off now (E27), one a frame from the next, as
+   * `warmAfterFrames` would: for a game that made the stack with `warmAfterFrames: false` and
+   * knows when its compile work is done (its world drawn).
+   */
+  startWarming(): void {
+    this.warmAfter = 0;
   }
 
   /** Warm every pass now, on or off (E26): for a game that knows it is idle (a loading screen). */

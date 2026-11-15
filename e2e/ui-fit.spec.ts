@@ -10,7 +10,8 @@
  *   the empty field closes the panel (it slides out), on the page and through the surface's keys;
  * - text typed through the surface's keys shows in the page's field (the model is the one truth);
  * - the held slot says down and up (no tap) on the page and on the surface;
- * - the panel gives way while a sheet is open on a small screen.
+ * - the panel gives way while a sheet is open on a small screen;
+ * - a tail list in a host the page resizes from its own observer raises no loop error (E27).
  */
 import type { Page } from '@playwright/test';
 import type { UiFitState } from '../harness/ui-fit-state';
@@ -147,4 +148,11 @@ test('it gives way while a sheet is open on a small screen', async ({ page }) =>
   await page.evaluate(() => window.__harnessUiFit!.giveWay(false, true));
   await expect(host).toHaveCSS('opacity', '1');
   await expect(host).not.toHaveAttribute('data-given');
+});
+
+test('a tail list in a host the page resizes from its own observer raises no loop error', async ({
+  page,
+}) => {
+  // E27: the presenter observes its own sentinel, not the host's box (Forge's chat log).
+  expect(await page.evaluate(() => window.__harnessUiFit!.resizeLoop())).toEqual([]);
 });

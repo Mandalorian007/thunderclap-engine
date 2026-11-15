@@ -317,6 +317,7 @@ class PostStack implements PostProcessor {
     readonly taa: Taa;
     historyResets: number;
     constructor(renderer: PostHost, patch?: PostSettingsPatch, opts?: PostStackOptions);
+    startWarming(): void;
     warmAll(): void;
     get coldPasses(): number;
     setQuality(patch: Partial<PostQuality>): this;
@@ -342,7 +343,7 @@ interface PostStackOptions {
     format?: GPUTextureFormat;
     toSrgb?: boolean;
     hook?: PostCompositeHook;
-    warmAfterFrames?: number;
+    warmAfterFrames?: number | false;
 }
 
 ## RGB  (type-only)

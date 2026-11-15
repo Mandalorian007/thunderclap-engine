@@ -150,4 +150,26 @@ describe('actor pipelines fit their layouts and warm (ws/forge-asks-fit)', () =>
       .filter((c) => c.op === 'dispatch');
     expect(dispatches).toEqual([]);
   });
+  it('drawSet: false makes no body set: no pipeline of it, and every path copes (E27)', () => {
+    const s = scene({}, { drawSet: false });
+    expect(s.actors.hasDrawSet).toBe(false);
+    expect(() => s.actors.drawSet).toThrow(/drawSet: false/);
+    expect(s.core.drawSets.length).toBe(0);
+    const outline = s.actors.addDrawSet({
+      label: 'outline',
+      shader: { code: BODY, vertexEntry: 'body', fragmentEntry: 'paint' },
+    });
+    s.actors.addModel(rig());
+    s.actors.setRecord(0, { model: 0 });
+    s.actors.setRecord(1, { model: 1 });
+    s.actors.showModel(1, false);
+    expect(s.actors.modelShown(1)).toBe(false);
+    expect(s.actors.modelShown(0, outline)).toBe(true);
+    for (let i = 0; i < 2; i++) frame(s.fake, s.core, (e) => s.actors.prepare(e, 1, 0));
+    expect(s.made.filter((p) => p.label === 'actors')).toEqual([]);
+    expect(s.made.some((p) => p.label === 'outline')).toBe(true);
+    expect(s.actors.setInfo().map((x) => x.label)).toEqual(['outline']);
+    s.actors.destroy();
+    expect(s.fake.errors).toEqual([]);
+  });
 });

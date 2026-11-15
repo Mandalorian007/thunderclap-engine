@@ -1189,7 +1189,7 @@ ${this.sceneGroup > 0 ? coreSceneReadWgsl(this.sceneGroup) : ''}`;
     variant = -1,
     pass: CorePass = this.pass,
   ): number {
-    if (this.waiting || this.destroyed || !warmer.enabled) return 0;
+    if (this.waiting || this.destroyed) return 0;
     if (color === null && this.shadowWarmed === depth) return 0;
     // The real draws' state (aux, pass, variant) is put back: a warm is not a draw.
     const aux0 = this.aux;
@@ -1201,6 +1201,8 @@ ${this.sceneGroup > 0 ? coreSceneReadWgsl(this.sceneGroup) : ''}`;
     this.aux = aux0;
     this.usePass = pass0;
     this.useVariant = variant0;
+    // The warmer off (`RenderCore.warmSets` with `warm: false`): the pipeline is made, no more.
+    if (!warmer.enabled) return 0;
     if (color === null) this.shadowWarmed = depth;
     if (e.warm) return 0;
     e.warm = true;

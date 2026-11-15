@@ -126,4 +126,19 @@ describe('PostStack warming (E26)', () => {
     frame();
     expect(warmed(fake).filter((l) => l === 'post-fxaa').length).toBe(1);
   });
+  it('warmAfterFrames false waits for startWarming, then warms one a frame (E27)', () => {
+    const { fake, post, frame, madePost } = setup({ warmAfterFrames: false });
+    for (let i = 0; i < 200; i++) frame();
+    expect(madePost()).toEqual(['post-composite']);
+    expect(post.coldPasses).toBe(ALL_OFF.length);
+    post.startWarming();
+    expect(madePost()).toEqual(['post-composite']);
+    for (let i = 0; i < ALL_OFF.length; i++) {
+      frame();
+      expect(madePost().length).toBe(2 + i);
+    }
+    expect(post.coldPasses).toBe(0);
+    expect(warmed(fake).slice(1).sort()).toEqual([...ALL_OFF].sort());
+    expect(fake.errors).toEqual([]);
+  });
 });

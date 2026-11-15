@@ -43,6 +43,12 @@ export interface UiFitApi {
   worldKey(key: string, code?: string): boolean;
   /** A press on the world presenter's word `id`: down, then up `after` ms later. */
   worldPress(id: string, after: number): Promise<void>;
+  /**
+   * A chat log (a tail list) the DOM presenter keeps at its end, in a host the page's own
+   * ResizeObserver resizes from its callback (E27); resolves to the window `error` events that
+   * named a ResizeObserver loop meanwhile.
+   */
+  resizeLoop(): Promise<string[]>;
   /** Word `id`'s box on the page and on the world surface (units). */
   boxes(id: string): { dom: UiFitBox | null; world: UiFitBox | null };
 }

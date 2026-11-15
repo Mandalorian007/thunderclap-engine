@@ -95,6 +95,12 @@ export interface ActorSystemOptions {
   /** The core pass the actors draw in (default `'opaque'`). */
   pass?: string;
   /**
+   * Make the system's own draw set, the body (default true). False (E27): none is made, so its
+   * pipelines are never compiled; the actors draw only through `addDrawSet`'s sets, or the
+   * game's own draws reading `bones` and `args`. `drawSet` then throws; `hasDrawSet` says which.
+   */
+  drawSet?: boolean;
+  /**
    * The pose hook (ws/actor-fit): WGSL defining `fn actor_pose(actor: u32, model: u32, node: u32,
    * p: Trs, time: f32) -> Trs`, called in the pose pass for every node of every actor after its
    * clips are sampled and blended, on the node's local transform (`struct Trs { t: vec3f, q:
@@ -329,8 +335,19 @@ export class ActorSystem {
    * `asyncPipeline`; replaced by a new promise when a device restore builds it again.
    */
   ready: Promise<void> = Promise.resolve();
-  /** The draw set on the core (one slot per model mesh). */
-  readonly drawSet: DrawSet;
+
+  /** The draw set on the core (one slot per model mesh). Throws when made with `drawSet: false`. */
+  get drawSet(): DrawSet {
+    if (!this.ownSet) throw new Error(`${this.label}: made with drawSet: false`);
+    return this.ownSet;
+  }
+
+  /** Whether the system has its own draw set (`ActorSystemOptions.drawSet`, E27). */
+  get hasDrawSet(): boolean {
+    return this.ownSet !== null;
+  }
+  /** The body's draw set (null: `ActorSystemOptions.drawSet: false`). */
+  private readonly ownSet: DrawSet | null;
   /** The skin matrices: `slots × bonesPerSlot` of three `vec4f` rows (the `SkinPalette` layout). */
   bones!: GPUBuffer;
   /** The records (`STORAGE | COPY_DST`). */
@@ -376,7 +393,7 @@ export class ActorSystem {
   private buildGen = 0;
   private readonly asyncPipeline: boolean;
   /** The body (the system's own set) as `setInfo` and `showModel` see it. */
-  private readonly body: ExtraSet;
+  private readonly body: ExtraSet | null;
   private readonly tableData: Uint32Array<ArrayBuffer> | null;
   private readonly tableF32: Float32Array<ArrayBuffer> | null;
   private tableBuffer: GPUBuffer | null = null;
@@ -491,28 +508,31 @@ export class ActorSystem {
       blockBytes: 8 << 20,
       label: `${this.label} indices`,
     });
-    this.drawSet = core.createDrawSet({
-      label: this.label,
-      shader: {
-        code: actorDrawWgsl(consts, this.lightWgsl, this.shape.fields),
-        cullMode: 'none',
-        shadowFragmentEntry: ACTOR_SHADOW_FS,
-      },
-      vertexLayout: ACTOR_VERTEX_LAYOUT,
-      vertices: this.vertexArena,
-      indices: this.indexArena,
-      capacity: this.maxDraws,
-      kind: 'static',
-      cull: 'external',
-      args: this.args,
-      ...(this.argsWords !== ARGS_BYTES / 4
-        ? { argsStride: this.argsWords * 4 * this.maxDraws }
-        : {}),
-      pass: opts.pass ?? 'opaque',
-      bindGroups: [{ layout: this.drawLayout, group: this.drawGroup }],
-    });
-    this.body = {
-      set: this.drawSet,
+    this.ownSet =
+      opts.drawSet === false
+        ? null
+        : core.createDrawSet({
+            label: this.label,
+            shader: {
+              code: actorDrawWgsl(consts, this.lightWgsl, this.shape.fields),
+              cullMode: 'none',
+              shadowFragmentEntry: ACTOR_SHADOW_FS,
+            },
+            vertexLayout: ACTOR_VERTEX_LAYOUT,
+            vertices: this.vertexArena,
+            indices: this.indexArena,
+            capacity: this.maxDraws,
+            kind: 'static',
+            cull: 'external',
+            args: this.args,
+            ...(this.argsWords !== ARGS_BYTES / 4
+              ? { argsStride: this.argsWords * 4 * this.maxDraws }
+              : {}),
+            pass: opts.pass ?? 'opaque',
+            bindGroups: [{ layout: this.drawLayout, group: this.drawGroup }],
+          });
+    this.body = this.ownSet && {
+      set: this.ownSet,
       rec: -1,
       vertices: 0,
       live: opts.showLive ?? true,
@@ -695,7 +715,7 @@ export class ActorSystem {
         d++;
       }
     }
-    this.drawSet.setBindGroups([{ layout: this.drawLayout, group: this.drawGroup }], this.args);
+    this.ownSet?.setBindGroups([{ layout: this.drawLayout, group: this.drawGroup }], this.args);
     for (const e of this.extra) e.set.setBindGroups(this.setGroups(e.groups), this.args);
   }
 
@@ -849,14 +869,15 @@ export class ActorSystem {
       this.indexArena.write(ix, mesh.indices);
       this.meshAllocs[d] = { v, ix };
       const W = this.argsWords;
-      const slot = this.drawSet.add({
-        vertices: v,
-        indices: ix,
-        indexCount: mesh.indices.length,
-        instanceCount: 0,
-        bounds: [0, 0, 0, Infinity],
-        ...(W !== ARGS_BYTES / 4 ? { argsOffset: d * W * 4 } : {}),
-      });
+      const slot =
+        this.ownSet?.add({
+          vertices: v,
+          indices: ix,
+          indexCount: mesh.indices.length,
+          instanceCount: 0,
+          bounds: [0, 0, 0, Infinity],
+          ...(W !== ARGS_BYTES / 4 ? { argsOffset: d * W * 4 } : {}),
+        }) ?? d;
       if (slot !== d) throw new Error(`${this.label}: draw slot ${slot} is not mesh ${d}`);
       for (let view = 0; view < this.core.maxViews; view++) {
         const a = (view * this.maxDraws + d) * W;
@@ -1212,10 +1233,12 @@ export class ActorSystem {
     }
   }
 
-  /** Whether `showModel` left model `model` shown in `set` (default the body). */
-  modelShown(model: number, set: DrawSet = this.drawSet): boolean {
+  /** Whether `showModel` left model `model` shown in `set` (default the body, else the first set). */
+  modelShown(model: number, set?: DrawSet): boolean {
     this.rig(model);
-    return this.setsOf(set)[0]!.off[model] === 0;
+    const e = set ? this.setsOf(set)[0] : (this.body ?? this.extra[0]);
+    if (!e) throw new Error(`${this.label}: no draw set`);
+    return e.off[model] === 0;
   }
 
   private setsOf(set: DrawSet | undefined): ExtraSet[] {
@@ -1232,7 +1255,7 @@ export class ActorSystem {
 
   /** The body's set, then the added ones. */
   private allSets(): ExtraSet[] {
-    return [this.body, ...this.extra];
+    return this.body ? [this.body, ...this.extra] : this.extra;
   }
 
   /** The models whose draws are in a set's bundle. */
@@ -1303,7 +1326,7 @@ export class ActorSystem {
     if (this.destroyed) return;
     this.destroyed = true;
     this.offRestored();
-    this.drawSet.destroy();
+    this.ownSet?.destroy();
     for (const e of this.extra) e.set.destroy();
     for (const b of [
       this.records,

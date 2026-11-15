@@ -159,7 +159,12 @@ describe('a tail list in a host the embedder hid (ws/actor-post-fit)', () => {
       },
     );
     const { list, show } = hiddenLine();
-    const o = observers.find((x) => x.on.includes(host!))!;
+    // E27: its own 1×1 sentinel, not the host's box, so the page moving the host in an
+    // observer step of its own leaves nothing undelivered (no "ResizeObserver loop" error).
+    const sentinel = host!.querySelector('.tcs-sentinel')!;
+    expect(sentinel).not.toBeNull();
+    expect(observers.some((x) => x.on.includes(host!))).toBe(false);
+    const o = observers.find((x) => x.on.includes(sentinel))!;
     expect(o).toBeDefined();
     show();
     o.cb();
