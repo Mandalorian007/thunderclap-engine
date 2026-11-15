@@ -163,6 +163,37 @@ describe('coalesced bundle rebuilds (ws/core-passes)', () => {
   });
 });
 
+describe('a set no pass draws never holds the rebuild turn (ws/cull-fix)', () => {
+  it('a drawn set re-records its new slots though an undrawn stale set is older', () => {
+    const s = scene(4, 1);
+    // A depth-only caster in a pass that never runs (a shadow switched off): GPU-culled, stale
+    // from its first slot, never asked for a bundle.
+    s.core.definePass({ id: 'off', when: () => false });
+    const caster = s.core.createDrawSet({
+      label: 'caster',
+      shader: SHADER,
+      vertexLayout: PACKED,
+      vertices: s.vertices,
+      capacity: 256,
+      cull: 'gpu',
+      pass: 'off',
+    });
+    caster.add({ vertices: s.box, indexCount: 36, bounds: [0, 0, 0, 1] });
+    frame(s);
+    const set = s.sets[0]!;
+    for (let k = 0; k < 4; k++) {
+      const n = set.count;
+      // Streaming: each frame a slot comes to both (the caster mirrors the drawn set).
+      set.add({ vertices: s.box, indexCount: 36, bounds: [k * 4, 0, 8, 1.8] });
+      caster.add({ vertices: s.box, indexCount: 36, bounds: [k * 4, 0, 8, 1.8] });
+      frame(s);
+      expect(s.core.stats.deferredBuilds).toBe(0);
+      // The bundle the pass executed draws every slot, the new one too.
+      expect(draws(s.fake.bundles.at(-1)!)).toBe(n + 1);
+    }
+  });
+});
+
 describe('device restore (ws/core-passes)', () => {
   it('rebuilds arenas, sets, bundles and the cull on the new device; one event', async () => {
     const s = scene(6, 2);

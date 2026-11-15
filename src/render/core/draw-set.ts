@@ -479,6 +479,8 @@ export class DrawSet {
   private readonly recorded: Int32Array;
   /** @internal The frame the set went stale (a change its bundles have not seen), or -1. */
   staleFrame = -1;
+  /** The last frame a pass asked for one of its bundles (`bundle`), or -1. */
+  private askedFrame = -1;
   private readonly host: DrawSetHost;
   private readonly desc: DrawSetDesc;
   private readonly slotF32: Float32Array;
@@ -1054,6 +1056,7 @@ ${this.sceneGroup > 0 ? coreSceneReadWgsl(this.sceneGroup) : ''}`;
     variant = -1,
     pass: CorePass = this.pass,
   ): GPURenderBundle {
+    this.askedFrame = this.host.frame;
     this.aux = color === null ? 0 : aux;
     this.use(color, variant, pass);
     const v = this.useVariant;
@@ -1349,10 +1352,17 @@ ${this.sceneGroup > 0 ? coreSceneReadWgsl(this.sceneGroup) : ''}`;
 
   /**
    * @internal Stale, and its bundles may wait for its turn (`RenderCore`'s one rebuild a frame).
+   * Only a set a pass drew last frame takes a turn (ws/cull-fix): a set no pass draws (a caster
+   * whose shadow pass is off, a set in a pass that is skipped) never re-records, so as the
+   * oldest stale set it would keep the turn and every other set's new slots would wait forever.
    */
   waitsForTurn(): boolean {
     return (
-      this.staleFrame >= 0 && this.live > 0 && this.encoding() === 'bundle' && this.deferrable()
+      this.staleFrame >= 0 &&
+      this.live > 0 &&
+      this.askedFrame >= this.host.frame - 1 &&
+      this.encoding() === 'bundle' &&
+      this.deferrable()
     );
   }
 
