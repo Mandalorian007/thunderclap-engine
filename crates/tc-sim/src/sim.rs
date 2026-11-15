@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 use tc_net::transport::Frame;
-use tc_net::{ConnId, Outbound, Protocol, ServerMsg, WallClock};
+use tc_net::{ConnId, Outbound, Protocol, ServerMsg, ViewCache, WallClock};
 use tc_store::{ArchivePolicy, Log, LogEntry, StoreError};
 use tc_wire::Wire;
 use tracing::{error, warn};
@@ -19,6 +19,7 @@ use tc_wire::schema::Schema;
 use crate::MAX_TIME;
 use crate::bases::Bases;
 use crate::core::{ApplyError, Core};
+use crate::counters::SimCounters;
 use crate::entities::Stream;
 use crate::game::{Bodies, EventOf, Game, Outbox, PlayerId, To};
 use crate::input::{InputConfig, InputQueue};
@@ -72,6 +73,22 @@ pub struct SimConfig {
     /// How long the archive keeps what the bases left behind, and how big
     /// it may get.
     pub archive: ArchivePolicy,
+    /// Hash the game's state around every live hook
+    /// ([`Game::live_step`], [`Game::wake`], [`Game::act`]) and count one
+    /// that changed it ([`SimCounters::live_misses`]): a determinism
+    /// check, on by default in debug builds.
+    pub verify_live: bool,
+    /// Entity streams that read a body an input tick moved send right
+    /// after the tick, not at the next flush (a game whose watchers
+    /// should see movement at the input rate). Off by default.
+    pub entities_on_input: bool,
+    /// A command's sender over its byte budget ([`OUTBOUND_BUDGET`]) whose
+    /// live queries have the command's effects to send is closed instead
+    /// of answered: its result must not reach it before them (read your
+    /// writes). The client reconnects, resumes, and finds out whether the
+    /// command applied from its queries. Off by default: the result is
+    /// sent and the effects follow once the client drains.
+    pub close_slow_senders: bool,
 }
 
 /// [`SimConfig::base_every`]'s default.
@@ -79,7 +96,8 @@ pub const BASE_EVERY: u64 = 100_000;
 
 impl Default for SimConfig {
     /// 50 ms steps, running, default inputs and queries, a base every
-    /// [`BASE_EVERY`] entries and the default archive.
+    /// [`BASE_EVERY`] entries, the default archive, live hooks verified in
+    /// debug builds, entity frames at flushes.
     fn default() -> Self {
         SimConfig {
             step: Duration::from_millis(50),
@@ -88,6 +106,9 @@ impl Default for SimConfig {
             sync: SyncConfig::default(),
             base_every: BASE_EVERY,
             archive: ArchivePolicy::default(),
+            verify_live: cfg!(debug_assertions),
+            entities_on_input: false,
+            close_slow_senders: false,
         }
     }
 }
@@ -163,6 +184,9 @@ pub struct Sim<G: Game> {
     /// The game's schema ([`Game::schema`]).
     pub(crate) schema: Arc<Schema>,
     pub(crate) sync: SyncLayer<G>,
+    /// Entity views encoded once for every stream (or why the game's view
+    /// can't be streamed).
+    pub(crate) views: Result<ViewCache<G::View>, String>,
     /// Each watching connection's entity stream.
     pub(crate) streams: BTreeMap<ConnId, Stream<G>>,
     /// Each present player's body ([`Game::Body`]).
@@ -176,6 +200,22 @@ pub struct Sim<G: Game> {
     /// Game messages dropped over a lane's budget.
     pub(crate) limited: u64,
     pub(crate) bases: Bases<G>,
+    /// The time of the last live step ([`LiveCx::since`]).
+    pub(crate) live_time: u64,
+    /// The wake armed ([`LiveCx::wake_at`]).
+    pub(crate) next_wake: Option<Instant>,
+    pub(crate) verify_live: bool,
+    pub(crate) entities_on_input: bool,
+    pub(crate) close_slow_senders: bool,
+    pub(crate) counters: SimCounters,
+    /// Scratch kept between ticks, so a steady loop doesn't allocate.
+    pub(crate) live_events: Vec<EventOf<G>>,
+    pub(crate) live_out: Outbox<G::Protocol>,
+    pub(crate) scratch_keys: BTreeSet<Key<G::Change>>,
+    pub(crate) scratch_taken: Vec<(PlayerId, <G::Protocol as Protocol>::Input)>,
+    pub(crate) scratch_applied: Vec<(PlayerId, u32)>,
+    pub(crate) scratch_moved: Vec<PlayerId>,
+    pub(crate) scratch_things: Vec<(u64, G::View)>,
 }
 
 /// Distinct refusal reasons logged before the rest are only counted.
@@ -189,6 +229,7 @@ impl<G: Game> Sim<G> {
         let history = log.is_none().then(Vec::new);
         let schema = Arc::new(G::schema());
         let sync = SyncLayer::new(config.sync, schema.clone(), crate::query::registry());
+        let views = ViewCache::new(&schema).map_err(|e| e.to_string());
         let flushed_version = core.version();
         let mut sim = Sim {
             clock: WallClock::new(config.step, config.paused, now, core.time()),
@@ -217,6 +258,7 @@ impl<G: Game> Sim<G> {
             flushed_version,
             schema,
             sync,
+            views,
             streams: BTreeMap::new(),
             bodies: BTreeMap::new(),
             moved: BTreeSet::new(),
@@ -224,7 +266,21 @@ impl<G: Game> Sim<G> {
             budgets: Budgets::default(),
             limited: 0,
             bases: Bases::new(config.base_every, config.archive, flushed_version),
+            live_time: 0,
+            next_wake: None,
+            verify_live: config.verify_live,
+            entities_on_input: config.entities_on_input,
+            close_slow_senders: config.close_slow_senders,
+            counters: SimCounters::default(),
+            live_events: Vec::new(),
+            live_out: Outbox::new(),
+            scratch_keys: BTreeSet::new(),
+            scratch_taken: Vec::new(),
+            scratch_applied: Vec::new(),
+            scratch_moved: Vec::new(),
+            scratch_things: Vec::new(),
         };
+        sim.live_time = sim.core.time();
         sim.schedule_timers(now);
         sim.publish_status(now);
         sim
@@ -327,14 +383,40 @@ impl<G: Game> Sim<G> {
     }
 
     /// Logs `events` at the current time, as one batch (all or none), and
-    /// applies them. An event the codec can't encode (or too large to
-    /// write) refuses the whole batch: nothing is logged or applied, the
-    /// refusal is counted and the loop runs on. Only a store that can't
-    /// write (I/O) fails the store. Returns why the batch wasn't applied.
+    /// applies them; then the game's rules judge what the batch changed
+    /// ([`Game::after_batch`]), and the events they push join it. An event
+    /// the codec can't encode (or too large to write) refuses the whole
+    /// batch: nothing is logged or applied, the refusal is counted and the
+    /// loop runs on. Only a store that can't write (I/O) fails the store.
+    /// Returns why the batch wasn't applied.
     pub(crate) fn commit(&mut self, events: Vec<EventOf<G>>) -> Result<(), String> {
         if events.is_empty() {
             return Ok(());
         }
+        let earlier = self.core.take_changes();
+        let applied = self.log_apply(events);
+        let batch = self.core.take_changes();
+        let mut more = Vec::new();
+        let mut out = Outbox::new();
+        if applied.is_ok() {
+            self.core.game().after_batch(&batch, &mut more, &mut out);
+        }
+        self.core.put_back_changes(earlier);
+        self.core.put_back_changes(batch);
+        if !more.is_empty() {
+            self.counters.rule_batches += 1;
+            if let Err(e) = self.log_apply(more) {
+                warn!("the events a batch's rules pushed weren't applied: {e}");
+            }
+        }
+        self.deliver_drain(&mut out);
+        applied
+    }
+
+    /// Logs `events` at the current time, as one batch, and applies them.
+    fn log_apply(&mut self, events: Vec<EventOf<G>>) -> Result<(), String> {
+        self.counters.batches += 1;
+        self.counters.events += events.len() as u64;
         if let Some(e) = &self.store_error {
             warn!(
                 count = events.len(),
@@ -422,6 +504,25 @@ impl<G: Game> Sim<G> {
         }
     }
 
+    /// [`Sim::commit`] of what `events` holds, leaving it empty (nothing
+    /// is allocated when it was empty).
+    pub(crate) fn commit_drain(&mut self, events: &mut Vec<EventOf<G>>) -> Result<(), String> {
+        if events.is_empty() {
+            return Ok(());
+        }
+        self.commit(std::mem::take(events))
+    }
+
+    /// [`Sim::deliver`] of what `out` holds, leaving it empty.
+    pub(crate) fn deliver_drain(&mut self, out: &mut Outbox<G::Protocol>) {
+        if out.msgs.is_empty() {
+            return;
+        }
+        self.deliver(Outbox {
+            msgs: std::mem::take(&mut out.msgs),
+        });
+    }
+
     /// Sends an outbox's messages, each encoded once.
     pub(crate) fn deliver(&self, out: Outbox<G::Protocol>) {
         for (to, msg) in out.msgs {
@@ -469,6 +570,7 @@ impl<G: Game> Sim<G> {
             self.next_flush = None;
         }
         let now = Instant::now();
+        self.counters.flushes += 1;
         let changes = self.core.take_changes();
         if !changes.is_empty() {
             let mut out = Outbox::new();
@@ -476,6 +578,7 @@ impl<G: Game> Sim<G> {
             self.deliver(out);
         }
         let moved = std::mem::take(&mut self.moved);
+        self.follow_moved(&moved);
         let version = self.core.version();
         let any = !changes.is_empty() || !moved.is_empty() || version != self.flushed_version;
         self.flushed_version = version;
@@ -508,6 +611,7 @@ impl<G: Game> Sim<G> {
             }
         }
         self.flush_entities(&changed, any, only);
+        self.counters.flush_us += crate::counters::micros(now);
     }
 
     /// The earliest time a query result or an entity frame runs out.
@@ -640,6 +744,7 @@ impl<G: Game> Sim<G> {
             refused: self.refused,
             limited: self.limited,
             sync: self.sync.stats(),
+            counters: self.counters,
         });
         self.next_status = now + STATUS_PUBLISH;
     }
@@ -654,12 +759,14 @@ impl<G: Game> Sim<G> {
     /// steps, input ticks, flushes, clock pushes and marks, slow clients,
     /// a finished reload, the status.
     pub fn tick(&mut self, now: Instant) {
+        self.counters.ticks += 1;
         if let Some(target) = self.clock.target(now) {
             let target = target.min(MAX_TIME);
             if target > self.core.time() {
-                self.core.advance_to(target);
+                self.advance_live(target, now);
             }
         }
+        self.wake_if_due(now);
         if self.next_input_tick.is_some_and(|t| now >= t) {
             self.input_tick(now);
         }
@@ -689,8 +796,9 @@ impl<G: Game> Sim<G> {
     }
 
     /// When the loop next has work, if ever: the next step the game needs
-    /// (every step for a stepping game, else its next scheduled event),
-    /// the next input tick, flush, clock push or mark, or a reload's poll.
+    /// (every step for a stepping or live game, else its next scheduled
+    /// event), a wake, the next input tick, flush, clock push or mark, or
+    /// a reload's poll.
     pub fn deadline(&self) -> Option<Instant> {
         let time = self.core.time();
         let step = if time >= MAX_TIME {
@@ -711,6 +819,7 @@ impl<G: Game> Sim<G> {
             .and_then(|t| self.clock.next_step_at(t - 1));
         [
             step,
+            self.live_deadline(),
             expiry,
             self.next_input_tick,
             self.next_flush,
@@ -728,35 +837,38 @@ impl<G: Game> Sim<G> {
     pub(crate) fn input_tick(&mut self, now: Instant) {
         let started = Instant::now();
         let due = self.next_input_tick.unwrap_or(now);
-        let mut taken = Vec::new();
-        let applied = self
-            .inputs
-            .tick(now, |player, _, input, _| taken.push((player, input)));
-        let mut moved = Vec::new();
-        for (player, input) in taken {
+        let mut taken = std::mem::take(&mut self.scratch_taken);
+        let mut applied = std::mem::take(&mut self.scratch_applied);
+        let mut moved = std::mem::take(&mut self.scratch_moved);
+        let mut events = std::mem::take(&mut self.live_events);
+        self.inputs
+            .tick_into(now, &mut applied, |player, _, input, _| {
+                taken.push((player, input))
+            });
+        for (player, input) in taken.drain(..) {
             let Some(body) = self.bodies.get_mut(&player) else {
                 continue;
             };
-            let mut events = Vec::new();
             self.core.game().input(player, body, input, &mut events);
+            self.counters.inputs += 1;
             self.moved.insert(player);
             moved.push(player);
-            let _ = self.commit(events);
+            let _ = self.commit_drain(&mut events);
         }
         if !moved.is_empty() {
+            self.counters.input_ticks += 1;
             moved.sort_unstable();
             moved.dedup();
-            let mut events = Vec::new();
             let bodies = Bodies {
                 time: self.core.time(),
                 bodies: &self.bodies,
                 moved: &moved,
             };
             self.core.game().moved(&bodies, &mut events);
-            let _ = self.commit(events);
+            let _ = self.commit_drain(&mut events);
         }
         self.input_tick_us = u32::try_from(started.elapsed().as_micros()).unwrap_or(u32::MAX);
-        for (player, seq) in applied {
+        for (player, seq) in applied.drain(..) {
             let Some(body) = self.bodies.get(&player) else {
                 continue;
             };
@@ -774,6 +886,15 @@ impl<G: Game> Sim<G> {
                 }
             }
         }
+        if self.entities_on_input {
+            self.entities_after_input(&moved);
+        }
+        moved.clear();
+        self.scratch_taken = taken;
+        self.scratch_applied = applied;
+        self.scratch_moved = moved;
+        self.live_events = events;
+        self.counters.input_us += crate::counters::micros(started);
         let tick = self.inputs.config().tick;
         let next = due + tick;
         self.last_input_tick = Some(now);

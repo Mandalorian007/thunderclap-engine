@@ -71,6 +71,10 @@ impl Area {
     }
 }
 
+/// The fewest unloads an [`StreamMsg::UnloadBox`](crate::StreamMsg::UnloadBox)
+/// replaces: one alone goes in an `Unload`, about as small.
+pub const MIN_BOXED: usize = 2;
+
 /// An inclusive box of section coordinates, per axis.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Bounds(pub [(i64, i64); 3]);
@@ -108,6 +112,71 @@ impl Bounds {
             rest.0[axis] = (a.max(oa), b.min(ob));
         }
         out
+    }
+
+    /// True if the boxes share no section.
+    pub fn disjoint(&self, other: &Bounds) -> bool {
+        (0..3).any(|i| self.0[i].1 < other.0[i].0 || other.0[i].1 < self.0[i].0)
+    }
+
+    /// Its corners as positions (`None` past `i32`).
+    pub fn corners(&self) -> Option<(SectionPos, SectionPos)> {
+        let [(x0, x1), (y0, y1), (z0, z1)] = self.0;
+        let p = |x: i64, y: i64, z: i64| {
+            Some(SectionPos {
+                x: i32::try_from(x).ok()?,
+                y: i32::try_from(y).ok()?,
+                z: i32::try_from(z).ok()?,
+            })
+        };
+        Some((p(x0, y0, z0)?, p(x1, y1, z1)?))
+    }
+
+    /// Grows `b` (or starts it) to hold `p`.
+    pub(crate) fn grow(b: &mut Option<Bounds>, p: SectionPos) {
+        let c = [p.x, p.y, p.z].map(i64::from);
+        match b {
+            Some(b) => {
+                for (i, c) in c.into_iter().enumerate() {
+                    b.0[i] = (b.0[i].0.min(c), b.0[i].1.max(c));
+                }
+            }
+            None => *b = Some(Bounds(c.map(|c| (c, c)))),
+        }
+    }
+
+    /// The boxes [`StreamMsg::UnloadBox`](crate::StreamMsg::UnloadBox)
+    /// sends for `unloads` that lie past `keep`: one box round them all
+    /// when it misses `keep`, else one per side of `keep` they lie past
+    /// (each at least [`MIN_BOXED`] of them). Every box misses `keep`.
+    pub(crate) fn unload_boxes<'a>(
+        unloads: impl IntoIterator<Item = &'a SectionPos>,
+        keep: &Bounds,
+    ) -> Vec<Bounds> {
+        let mut faces: [(Option<Bounds>, usize); 6] = [(None, 0); 6];
+        let (mut all, mut outside) = (None, 0);
+        for p in unloads {
+            let c = [p.x, p.y, p.z].map(i64::from);
+            let face = (0..3).find_map(|axis| {
+                let (lo, hi) = keep.0[axis];
+                (c[axis] < lo)
+                    .then_some(2 * axis)
+                    .or((c[axis] > hi).then_some(2 * axis + 1))
+            });
+            let Some(face) = face else { continue };
+            Bounds::grow(&mut faces[face].0, *p);
+            faces[face].1 += 1;
+            Bounds::grow(&mut all, *p);
+            outside += 1;
+        }
+        match all {
+            Some(all) if outside >= MIN_BOXED && all.disjoint(keep) => vec![all],
+            _ => faces
+                .into_iter()
+                .filter(|(_, n)| *n >= MIN_BOXED)
+                .filter_map(|(b, _)| b)
+                .collect(),
+        }
     }
 
     /// Calls `f` with every section in it that has `i32` coordinates.

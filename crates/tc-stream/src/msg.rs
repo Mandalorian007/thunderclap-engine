@@ -115,4 +115,25 @@ pub enum StreamMsg {
         /// Where.
         positions: Vec<SectionPos>,
     },
+    /// Every section the client holds from `min` to `max` (inclusive on
+    /// each axis) should be dropped, as if each were in an `Unload`: a
+    /// view left behind in one message. Sent only with
+    /// `StreamConfig::unload_boxes`, and only for a box wholly past the
+    /// area grown by its hysteresis, where nothing is held or sent.
+    UnloadBox {
+        /// The box's lowest corner.
+        min: SectionPos,
+        /// Its highest corner.
+        max: SectionPos,
+    },
+}
+
+impl SectionPos {
+    /// True if it lies in the box from `min` to `max`, inclusive on each
+    /// axis ([`StreamMsg::UnloadBox`]).
+    pub fn within(&self, min: &SectionPos, max: &SectionPos) -> bool {
+        (min.x..=max.x).contains(&self.x)
+            && (min.y..=max.y).contains(&self.y)
+            && (min.z..=max.z).contains(&self.z)
+    }
 }

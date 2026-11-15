@@ -13,6 +13,16 @@
 //! each result that changed untracked
 //! ([`SyncStats::tracking_misses`](crate::SyncStats)).
 //!
+//! **Views.** A query whose answer depends on what the asker may see (a
+//! position inside or outside its interest, say) names a view function
+//! ([`Query::with_view`]): from the asker ([`ViewCx`]: its player and its
+//! connection's interest) and the arguments, a small number of the game's
+//! choosing, which the run reads back ([`QueryCtx::view`]). Subscriptions
+//! are shared per view, and when a connection's interest changes, each of
+//! its subscriptions whose view changed moves to the shared entry for its
+//! new view and gets the difference from what it was last sent. Queries
+//! without one run in view 0.
+//!
 //! The context's [`QueryCtx::game`] and [`QueryCtx::time`] record nothing:
 //! a game wraps its reads in accessors that call [`QueryCtx::read`] first,
 //! as the entity stream's [`Game::entities`] does too.
@@ -24,7 +34,7 @@ use std::sync::Arc;
 use tc_wire::Wire;
 use tc_wire::schema::{Field, QueryDef, Schema, SchemaBuilder, TypeKind, TypeRef};
 
-use crate::game::{Game, PlayerId};
+use crate::game::{Game, InterestOf, PlayerId};
 
 /// One thing a query or an entity stream read.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -73,6 +83,7 @@ impl<C: Ord> Reads<C> {
 pub struct QueryCtx<'a, G: Game> {
     game: &'a G,
     player: Option<PlayerId>,
+    view: u32,
     time: u64,
     bodies: &'a BTreeMap<PlayerId, G::Body>,
     reads: RefCell<Reads<G::Change>>,
@@ -82,12 +93,14 @@ impl<'a, G: Game> QueryCtx<'a, G> {
     pub(crate) fn new(
         game: &'a G,
         player: Option<PlayerId>,
+        view: u32,
         time: u64,
         bodies: &'a BTreeMap<PlayerId, G::Body>,
     ) -> QueryCtx<'a, G> {
         QueryCtx {
             game,
             player,
+            view,
             time,
             bodies,
             reads: RefCell::new(Reads::default()),
@@ -104,6 +117,12 @@ impl<'a, G: Game> QueryCtx<'a, G> {
     /// entity stream of a player (an observer's is `None`).
     pub fn player(&self) -> Option<PlayerId> {
         self.player
+    }
+
+    /// The view this run answers in ([`Query::with_view`]); 0 for a query
+    /// without a view function, and for the entity stream.
+    pub fn view(&self) -> u32 {
+        self.view
     }
 
     /// The current time, in steps. Records nothing: a result that
@@ -142,6 +161,35 @@ impl<'a, G: Game> QueryCtx<'a, G> {
 
 type Run<G> = dyn Fn(&QueryCtx<'_, G>, &[u8]) -> Result<Vec<u8>, String> + Send + Sync;
 type Describe = dyn Fn(&mut SchemaBuilder) -> QueryDef + Send + Sync;
+type ViewOf<G> = dyn Fn(&ViewCx<'_, G>, &[u8]) -> u32 + Send + Sync;
+
+/// Who asks a query, for its view function ([`Query::with_view`]).
+pub struct ViewCx<'a, G: Game> {
+    pub(crate) game: &'a G,
+    pub(crate) player: Option<PlayerId>,
+    pub(crate) interest: Option<&'a InterestOf<G>>,
+}
+
+impl<'a, G: Game> ViewCx<'a, G> {
+    /// The game. A view should depend on the asker and the arguments:
+    /// it is worked out again only when the asker's interest changes (and
+    /// at a reload), not when the game does.
+    pub fn game(&self) -> &'a G {
+        self.game
+    }
+
+    /// The asking player; `None` for an observer.
+    pub fn player(&self) -> Option<PlayerId> {
+        self.player
+    }
+
+    /// The asking connection's interest: its entity stream's (set by
+    /// `SetInterest` or following its body, [`Game::follow`]), or `None`
+    /// before it has one.
+    pub fn interest(&self) -> Option<&'a InterestOf<G>> {
+        self.interest
+    }
+}
 
 /// A live query a game serves ([`Game::queries`]).
 pub struct Query<G: Game> {
@@ -150,6 +198,7 @@ pub struct Query<G: Game> {
     pub(crate) describe: Box<Describe>,
     pub(crate) check: fn(&[u8]) -> Result<(), String>,
     pub(crate) run: Box<Run<G>>,
+    pub(crate) view: Option<Box<ViewOf<G>>>,
 }
 
 impl<G: Game> std::fmt::Debug for Query<G> {
@@ -192,7 +241,29 @@ impl<G: Game> Query<G> {
                 let args = A::from_bytes(bytes).map_err(bad_args)?;
                 run(cx, args).map(|r| r.to_bytes())
             }),
+            view: None,
         }
+    }
+
+    /// Answers in views (see [`ViewCx`]): `view` gives, from
+    /// the asker and the arguments `A` (the query's own), the view a run
+    /// answers in ([`QueryCtx::view`]), a number of the game's choosing.
+    /// Subscriptions are shared per view; a connection's subscriptions
+    /// move between views as its interest changes.
+    #[must_use]
+    pub fn with_view<A: Wire + 'static>(
+        mut self,
+        view: impl Fn(&ViewCx<'_, G>, A) -> u32 + Send + Sync + 'static,
+    ) -> Query<G> {
+        self.view = Some(Box::new(move |cx, bytes| {
+            A::from_bytes(bytes).map_or(0, |args| view(cx, args))
+        }));
+        self
+    }
+
+    /// The view `cx` asks `args` in: 0 without a view function.
+    pub(crate) fn view_of(&self, cx: &ViewCx<'_, G>, args: &[u8]) -> u32 {
+        self.view.as_ref().map_or(0, |view| view(cx, args))
     }
 
     /// Its wire name.

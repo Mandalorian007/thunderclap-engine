@@ -9,6 +9,7 @@ use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use crate::counters::SimCounters;
 use crate::game::PlayerId;
 use crate::sync::SyncStats;
 
@@ -54,6 +55,8 @@ pub struct SimStatus {
     pub limited: u64,
     /// The live queries' counters.
     pub sync: SyncStats,
+    /// What the loop did so far ([`Sim::counters`](crate::Sim::counters)).
+    pub counters: SimCounters,
 }
 
 impl fmt::Display for SimStatus {

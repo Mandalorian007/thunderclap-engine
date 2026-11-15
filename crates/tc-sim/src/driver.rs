@@ -141,6 +141,16 @@ impl<G: Game> Driver<G> {
         self.wait(tick);
     }
 
+    /// Runs live query `name` once as `player` asks ([`Sim::query_as`]).
+    pub fn query<A: Wire, R: Wire>(
+        &self,
+        name: &str,
+        args: &A,
+        player: Option<crate::PlayerId>,
+    ) -> Result<R, String> {
+        self.sim.query_as(name, args, player)
+    }
+
     /// Jumps `steps` ahead ([`Sim::advance`]).
     pub fn advance(&mut self, steps: u64) -> Result<u64, String> {
         self.sim.advance(steps)

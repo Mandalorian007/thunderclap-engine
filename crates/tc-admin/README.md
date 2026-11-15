@@ -23,7 +23,7 @@ Each connection carries one JSON line each way:
 
 | Request | What it does | Reply |
 | --- | --- | --- |
-| `status` | the loop's published status, the network's counters | `Status` |
+| `status` | the loop's published status, the network's counters, and the game's own (`Status.game`, from `Live.status`) | `Status` |
 | `stop` | sets the server's stop signal | `Stopping { already }` |
 | `pause`, `resume` | the game's clock (tc-sim) | `Clock { paused, time }` |
 | `reload` | reads the game's data again and hot-reloads it (tc-sim) | `Reloaded` |

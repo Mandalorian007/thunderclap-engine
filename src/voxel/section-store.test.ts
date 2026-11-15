@@ -115,6 +115,27 @@ describe('SectionStore', () => {
     expect(store.stats().sections).toBe(8);
   });
 
+  it('drops a box of sections, walking the box or the entries, whichever is smaller', () => {
+    // 5 × 1 × 5 held, at y 0.
+    const store = world(() => AIR, 2);
+    const dropped: number[] = [];
+    // Smaller than what is held: walks the box (it reaches past what is held).
+    expect(store.dropBox(1, -1, 1, 3, 1, 3, dropped)).toBe(4);
+    expect(dropped.sort((a, b) => a - b)).toEqual(
+      [sectionKey(1, 0, 1), sectionKey(1, 0, 2), sectionKey(2, 0, 1), sectionKey(2, 0, 2)].sort(
+        (a, b) => a - b,
+      ),
+    );
+    expect(store.has(sectionKey(1, 0, 1))).toBe(false);
+    expect(store.cellAt(S + 1, 0, S + 1)).toBe(undefined);
+    // Larger: walks what is held. Inclusive on each axis.
+    expect(store.dropBox(-1000, -1000, -1000, 1000, 1000, -2)).toBe(5);
+    expect(store.dropBox(-2, 0, -1, -2, 0, -1)).toBe(1);
+    expect(store.dropBox(3, 0, 3, 1, 0, 1)).toBe(0); // empty
+    expect(store.stats().sections).toBe(25 - 4 - 5 - 1);
+    expect(store.has(sectionKey(-2, 0, 0))).toBe(true);
+  });
+
   it('hands out ready sections nearest the interest point first', () => {
     const store = world(() => AIR, 3);
     store.setInterest(2 * S + 3, 5, -S + 3);

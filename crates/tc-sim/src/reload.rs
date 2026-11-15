@@ -268,6 +268,11 @@ impl<G: Game> Sim<G> {
         self.flushed_version = self.core.version();
         self.sync.reload();
         self.streams_due();
+        // The new game may give subscriptions other views.
+        let conns: Vec<_> = self.conns.keys().copied().collect();
+        for conn in conns {
+            self.review_views(conn);
+        }
         let mut out = Outbox::new();
         let present = self.present();
         self.core.game().reloaded(&present, &mut out);
