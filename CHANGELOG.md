@@ -4,6 +4,8 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 
 ## Unreleased
 
+## 2.0.0-next.17 (2026-11-15)
+
 - Actor pose parity readback (ws/pose-parity-fix, B20; EV FX5). Defaults unchanged. A GPU pose read back with `poseCpu` run after the map was posing later records than the GPU had: a crowd whose records change every frame drifted by a frame's motion (0.141 in Forge's crowd of 20). *Added* (actors): `ActorSystem.readBack(slots?)` and `ActorReadBack` (`time`, `slots`, `models`, `gpu`, `cpu`, `args`, `argsWords`, `maxError`, `worstSlot`): the CPU twin is posed at the call, at the f32 clock the pass saw; it rejects when a record changed since `prepare` or no pose pass ran. Harness `actors.html?parity=1` and its e2e: 32 actors in slots 13 apart, every record rewritten every frame, two LODs, spawns and despawns, within 0.01.
 - Bundle budget after B20 (ws/pose-parity-fix), set at merge to about 700 B over the local size merged on 2.0.0-next.16: `./actors` 19900 -> 20500 (19746 B, +572 B, `readBack`).
 - Forge's asks after G1 (ws/forge-asks-fit, B17; forgewilds #807). Defaults unchanged. *Added* (voxel): `PoolMeshOptions`, `SectionMeshPoolOptions.meshOptions`, `SectionMeshPool.setMeshOptions` and `VoxelWorldOptions.meshOptions` (every `SectionMeshOptions` field through the Worker pool, with each job), `InsetFieldBits` (`SectionMeshOptions.insetFields` reads bits of an override value). *Added* (render): `PipelineWarmer.warmCompute`, `ComputeWarmTarget`, `warmComputePipeline`, `RenderCore.warmCompute` and `RenderCore.warming`; an actor system's pose pipeline and a core particle system's compute pipelines get an empty first dispatch at load.
