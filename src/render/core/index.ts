@@ -80,5 +80,5 @@ export {
   VIEW_SLOT_BYTES,
   VIEW_SLOT_FLOATS,
 } from './view';
-export type { WarmTarget } from './warm';
-export { PipelineWarmer, pipelineWarmer, warmPipeline } from './warm';
+export type { ComputeWarmTarget, WarmTarget } from './warm';
+export { PipelineWarmer, pipelineWarmer, warmComputePipeline, warmPipeline } from './warm';

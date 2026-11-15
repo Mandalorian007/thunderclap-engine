@@ -497,7 +497,8 @@ export function createFakeDevice(
   ) => {
     const p: FakePass = { kind, label: desc?.label, desc, commands: [] };
     if (viewName !== null) p.view = viewName;
-    const warm = kind === 'render' && desc?.label === 'warm';
+    // A pipeline warmer's scratch passes (render or compute, `render/core/warm`).
+    const warm = desc?.label === 'warm';
     (warm ? warmPasses : passes).push(p);
     ops.push({ op: 'pass', pass: p });
     const rec = recorder(p.commands, warm ? () => {} : tick);
@@ -623,7 +624,7 @@ export function createFakeDevice(
           return makePass(ops, 'render', d);
         },
         beginComputePass: (d?: GPUComputePassDescriptor) => {
-          tick();
+          if (d?.label !== 'warm') tick();
           return makePass(ops, 'compute', d);
         },
         copyTextureToTexture(src: { texture: FakeTexture }, dst: { texture: FakeTexture }) {

@@ -102,17 +102,47 @@ describe('core particles fitted (ws/fx-fit)', () => {
     expect(bundleDraws(r)).toEqual([]);
     // The core gives an inactive drawable's pipeline its empty first draw.
     expect(r.core.stats.warmed).toBeGreaterThan(0);
-    expect(r.fake.warmPasses.length).toBeGreaterThan(0);
-    const ops = r.fake.warmPasses[0]!.commands.map((c) => c.op);
+    const renderWarm = r.fake.warmPasses.find((p) => p.kind === 'render')!;
+    const ops = renderWarm.commands.map((c) => c.op);
     expect(ops).toContain('setPipeline');
-    expect(r.fake.warmPasses[0]!.commands.find((c) => c.op === 'draw')).toMatchObject({
-      vertices: 0,
-    });
+    expect(renderWarm.commands.find((c) => c.op === 'draw')).toMatchObject({ vertices: 0 });
+    // And its compute passes their empty first dispatches (ws/forge-asks-fit): spawn, advance,
+    // update and sub-emission, each bound to the compute group.
+    const computeWarm = r.fake.warmPasses.filter((p) => p.kind === 'compute');
+    expect(computeWarm.length).toBe(1);
+    const dispatches = computeWarm[0]!.commands.filter((c) => c.op === 'dispatch');
+    expect(dispatches.length).toBe(4);
+    expect(dispatches.every((c) => (c as { x: number }).x === 0)).toBe(true);
     ps.emit(burst, 10);
     ps.update(1 / 60);
     frame(r);
     expect(ps.coreDrawable!.active).toBe(true);
     expect(computes(r)).toBe(1);
+    expect(r.fake.errors).toEqual([]);
+  });
+
+  it('warms no compute pipeline when the core does not warm (ws/forge-asks-fit)', () => {
+    const r = rig();
+    r.core.warmer.enabled = false;
+    new ParticleSystem(r.core, { capacity: 64, countAlive: true });
+    frame(r);
+    expect(r.fake.warmPasses).toEqual([]);
+    r.core.warmer.enabled = true;
+    const ps = new ParticleSystem(r.core, { capacity: 64, countAlive: true });
+    ps.destroy();
+    frame(r);
+    // A system destroyed before the next frame drops its queued warms.
+    const computeWarm = r.fake.warmPasses.filter((p) => p.kind === 'compute');
+    expect(computeWarm.flatMap((p) => p.commands).filter((c) => c.op === 'dispatch')).toEqual([]);
+    expect(r.fake.errors).toEqual([]);
+  });
+
+  it('a counted system warms its counter too (ws/forge-asks-fit)', () => {
+    const r = rig();
+    new ParticleSystem(r.core, { capacity: 64, countAlive: true });
+    frame(r);
+    const cw = r.fake.warmPasses.filter((p) => p.kind === 'compute');
+    expect(cw.flatMap((p) => p.commands).filter((c) => c.op === 'dispatch').length).toBe(5);
     expect(r.fake.errors).toEqual([]);
   });
 

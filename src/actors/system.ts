@@ -501,10 +501,14 @@ export class ActorSystem {
     this.posePipeline = null;
     if (this.asyncPipeline && typeof device.createComputePipelineAsync === 'function') {
       this.ready = device.createComputePipelineAsync(pipeDesc).then((p) => {
-        if (gen === this.buildGen && !this.destroyed) this.posePipeline = p;
+        if (gen === this.buildGen && !this.destroyed) {
+          this.posePipeline = p;
+          this.warmPose(p);
+        }
       });
     } else {
       this.posePipeline = device.createComputePipeline(pipeDesc);
+      this.warmPose(this.posePipeline);
       this.ready = Promise.resolve();
     }
 
@@ -1121,6 +1125,21 @@ export class ActorSystem {
     });
     this.device.queue.writeBuffer(buffer, 0, u32);
     return buffer;
+  }
+
+  /**
+   * The pose pass's empty first dispatch at load (ws/forge-asks-fit): WebKit compiles a compute
+   * pipeline at its first dispatch, which is otherwise the first frame an actor moves.
+   */
+  private warmPose(pipeline: GPUComputePipeline): void {
+    if (!this.core.warming) return;
+    this.core.warmCompute(pipeline, {
+      live: () => !this.destroyed,
+      bind: (pass) => {
+        pass.setBindGroup(0, this.poseGroup);
+        return 1;
+      },
+    });
   }
 
   private makePoseGroup(): GPUBindGroup {
