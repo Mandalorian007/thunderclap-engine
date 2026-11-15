@@ -104,6 +104,25 @@ describe('GpuTimer', () => {
     expect(p.scene! + p.taa! + p.composite!).toBeCloseTo(t.result.totalMs - 0.1);
   });
 
+  it("leaves out a mark WebKit did not write this frame: an old frame's time (E28)", async () => {
+    const f = fakeDevice();
+    const t = new GpuTimer(f.device, 8, { measure: 'chain' });
+    t.begin();
+    t.mark(f.encoder);
+    t.pass('scene');
+    t.pass('post');
+    t.resolve(f.encoder);
+    // The empty mark pass resolved to a value seconds old; the passes are this frame's.
+    f.queries().set([ms(-90), ms(-90), ms(9000), ms(9008), ms(9009), ms(9010)]);
+    f.submit();
+    const got = new Promise((r) => t.onResult(r));
+    t.afterSubmit();
+    await got;
+    expect(t.result.passes.scene).toBeCloseTo(8);
+    expect(t.result.passes.post).toBeCloseTo(2);
+    expect(t.result.totalMs).toBeCloseTo(10);
+  });
+
   it("'auto' chains on WebKit only", () => {
     const safari =
       'Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';

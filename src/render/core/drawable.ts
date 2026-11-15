@@ -120,6 +120,15 @@ export interface PassMember {
   readonly ready?: boolean;
   encoding(): string;
   inView?(group: number): boolean;
+  /** A GPU-culled set `encodeCulled` may draw from a CPU cull (E28; `RenderCoreOptions.drawCull`). */
+  cpuCullable?(): boolean;
+  encodeCulled?(
+    pass: GPURenderPassEncoder,
+    group: number,
+    color: GPUTextureFormat,
+    depth: GPUTextureFormat | undefined,
+    aux: number,
+  ): void;
   bundle(
     group: number,
     color: GPUTextureFormat,

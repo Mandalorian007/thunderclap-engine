@@ -137,6 +137,16 @@ export interface RenderCoreOptions {
    * the same; `'cpu'` costs a sphere test per live caster per frame on the main thread.
    */
   shadowCull?: 'auto' | 'cpu' | 'gpu';
+  /**
+   * How a view's passes (`draw`) cull a GPU-culled set (E28), as `shadowCull` does the shadow
+   * map's. `'auto'` (the default): `'cpu'` on WebKit, `'gpu'` elsewhere; `CoreStats.drawCull`
+   * says which. `'gpu'`: the set's bundle of an indirect draw per live slot. `'cpu'`: the
+   * view's planes are tested on the CPU and only the slots inside are drawn, directly. On
+   * WebKit (Metal) every indirect draw is validated and replayed, culled or not: Forge Wilds'
+   * iPad profile drew its terrain in 7.5 ms of GPU time indirectly and 5.3 ms directly, the
+   * same pixels. When both this and `shadowCull` are `'cpu'` the GPU cull is not dispatched.
+   */
+  drawCull?: 'auto' | 'cpu' | 'gpu';
 }
 
 /**
@@ -269,11 +279,15 @@ function newStats(): CoreStats {
     warmed: 0,
     shadowDraws: 0,
     shadowCull: 'gpu',
+    drawCull: 'gpu',
   };
 }
 
-/** `RenderCoreOptions.shadowCull` resolved: `'auto'` is `'cpu'` on WebKit, `'gpu'` elsewhere. */
-function resolveShadowCull(m: 'auto' | 'cpu' | 'gpu' | undefined): 'cpu' | 'gpu' {
+/**
+ * `RenderCoreOptions.shadowCull` or `drawCull` resolved: `'auto'` is `'cpu'` on WebKit, `'gpu'`
+ * elsewhere.
+ */
+function resolveCull(m: 'auto' | 'cpu' | 'gpu' | undefined): 'cpu' | 'gpu' {
   if (m === 'cpu' || m === 'gpu') return m;
   const nav = (globalThis as { navigator?: { userAgent?: string } }).navigator;
   return typeof nav?.userAgent === 'string' && isWebKitUserAgent(nav.userAgent) ? 'cpu' : 'gpu';
@@ -331,6 +345,8 @@ export class RenderCore {
   /** The format idle casters warm in (`RenderCoreOptions.shadowFormat`, then the last shadow target's). */
   private shadowFormat: GPUTextureFormat;
   private readonly shadowCpu: boolean;
+  /** `RenderCoreOptions.drawCull` is `'cpu'`: views draw GPU-culled sets from a CPU cull (E28). */
+  private readonly drawCpu: boolean;
   /** Per prepared view: its cull group; per group: its first view and count. */
   private readonly groupOf = new Int32Array(MAX_VIEWS);
   private readonly groupFirst = new Int32Array(MAX_VIEWS);
@@ -440,8 +456,10 @@ export class RenderCore {
     this.warmerNow = pipelineWarmer(device);
     this.autoWarm = opts.warm ?? true;
     this.shadowFormat = opts.shadowFormat ?? 'depth32float';
-    this.stats.shadowCull = resolveShadowCull(opts.shadowCull);
+    this.stats.shadowCull = resolveCull(opts.shadowCull);
     this.shadowCpu = this.stats.shadowCull === 'cpu';
+    this.stats.drawCull = resolveCull(opts.drawCull);
+    this.drawCpu = this.stats.drawCull === 'cpu';
     this.multiDrawOpt = opts.multiDraw ?? true;
     this.capsNow = this.capsOf(device);
     this.maxViews = Math.max(1, Math.min(opts.maxViews ?? MAX_VIEWS, MAX_VIEWS));
@@ -777,7 +795,7 @@ export class RenderCore {
       if (s.castShadow) n += s.warm(warmer, 0, null, shadow);
       if (s.cull === 'gpu') gpu = true;
     }
-    if (gpu) this.cullPipe();
+    if (gpu && !(this.drawCpu && this.shadowCpu)) this.cullPipe();
     this.viewVariant = variant0;
     if (encoder) this.flushWarm(encoder);
     return n;
@@ -984,12 +1002,14 @@ export class RenderCore {
     const drawables = this.drawables;
     for (let i = 0; i < drawables.length; i++) drawables[i]!.drawable.prepare?.(encoder, this);
     let gpu = false;
+    const cpuOnly = this.drawCpu && this.shadowCpu;
     const sets = this.sets;
     let turn: DrawSet | null = null;
     for (let i = 0; i < sets.length; i++) {
       const set = sets[i]!;
       set.upload(groups);
-      if (set.cull === 'gpu' && set.highWater > 0 && set.enabled) gpu = true;
+      // With both culls on the CPU (E28) nothing reads the GPU cull's draws.
+      if (set.cull === 'gpu' && set.highWater > 0 && set.enabled && !cpuOnly) gpu = true;
       if (this.coalesce && set.waitsForTurn() && (!turn || set.staleFrame < turn.staleFrame)) {
         turn = set;
       }
@@ -1222,6 +1242,11 @@ export class RenderCore {
       for (let i = 0; i < sets.length; i++) {
         const s = sets[i]!;
         if (s.count === 0 || s.ready === false || (s.inView && !s.inView(group))) continue;
+        if (this.drawCpu && s.encodeCulled && s.cpuCullable?.()) {
+          if (bundles.length > 0) this.flushBundles(enc);
+          s.encodeCulled(enc, group, colorFormat, depthFormat, aux);
+          continue;
+        }
         if (s.encoding() === 'bundle') {
           bundles.push(s.bundle(group, colorFormat, depthFormat, readOnly, aux));
           continue;

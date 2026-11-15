@@ -48,6 +48,8 @@ const workerCount = Math.max(
 );
 const still = params.has('still');
 const withWater = params.has('water');
+/** `?cull=gpu|cpu` pins `RenderCoreOptions.drawCull` (E28); else `'auto'` (`'cpu'` on WebKit). */
+const drawCull = ((c) => (c === 'gpu' || c === 'cpu' ? c : 'auto'))(params.get('cull'));
 const stallMs = Math.max(0, Number(params.get('stall') ?? 0) || 0);
 
 const state: HarnessVoxelWorldState = {
@@ -206,7 +208,7 @@ async function main(): Promise<void> {
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
     });
   }
-  const core = createRenderCore(gpu);
+  const core = createRenderCore(gpu, { drawCull });
   // The sea as a look over the liquid stream's faces: the water's waves, depth tint, foam,
   // refraction and reflection on the game's own geometry.
   const water = withWater
