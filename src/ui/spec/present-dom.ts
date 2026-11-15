@@ -50,6 +50,7 @@ import {
   R_TINT,
   R_VALUE,
   R_VALUETEXT,
+  TERM_GAP,
   tabShares,
 } from './units';
 import {
@@ -131,7 +132,7 @@ function css(): string {
 .tcs-text[data-align=center]{text-align:center}.tcs-text[data-align=end]{text-align:end}
 .tcs-t-note,.tcs-t-count{color:var(--tcs-text-muted)}.tcs-t-warn{color:var(--tcs-warn)}
 .tcs-lit{color:var(--tcs-accent)}
-.tcs-term{float:left;color:var(--tcs-text-muted)}
+.tcs-term{position:absolute;left:0;top:0;color:var(--tcs-text-muted)}
 .tcs-flash{animation:tcs-flash 2.4s forwards}
 @keyframes tcs-flash{0%,70%{opacity:1}100%{opacity:0}}
 .tcs-again{animation:tcs-again var(--tcs-fast) ease-out}
@@ -221,7 +222,9 @@ const B_ONE = 6;
 const B_INNER = 7;
 const B_TERM = 8;
 const B_FILL = 9;
-const B_N = 10;
+/** A key line's words' start (after its term's column). */
+const B_TERMX = 10;
+const B_N = 11;
 
 /** A view: the panel's, or a list row's (its words by node index; others null). */
 interface View {
@@ -767,9 +770,17 @@ export class DomPresenter implements SpecPresenter {
         if (t.textAlign) el.setAttribute('data-align', t.textAlign);
         part = this.part(el);
         if (t.term !== undefined) {
+          // FX2: placed out of the text's flow, not floated (WebKit ignores a float in the line
+          // clamp's `-webkit-box`, which stacked the term over its words): the term at the start,
+          // its words a block beside it (`placeView` writes both widths).
           part.term = this.span('tcs-term', el);
           part.term.textContent = t.term;
+          const ts = part.term.style;
+          ts.position = 'absolute';
+          ts.left = '0';
+          ts.top = '0';
           part.text = this.span('', el);
+          part.text.style.display = 'block';
         } else part.text = el;
         if (!isBind(t.text)) {
           if (t.marked) writeMarked(part.text, t.text, this.litCls);
@@ -995,7 +1006,12 @@ export class DomPresenter implements SpecPresenter {
           part.el.toggleAttribute('data-one', one === 1);
           this.writes++;
         }
-        if (part.term) this.px(part.term.style, box, B_TERM, bx.termW[i]! * s);
+        if (part.term) {
+          // The term's column (its gap after it) and the words beside it, as the layout counted them.
+          const tw = bx.termW[i]!;
+          this.px(part.term.style, box, B_TERM, Math.max(0, tw - TERM_GAP) * s);
+          this.px(part.text!.style, box, B_TERMX, tw * s);
+        }
       } else if (part.inner && k !== K_LIST) {
         this.px(part.inner.style, box, B_INNER, Math.max(bx.content[i]!, bx.h[i]!) * s);
       } else if (k === K_TABS) this.placeTabs(i);
@@ -1011,6 +1027,7 @@ export class DomPresenter implements SpecPresenter {
     else if (slot === B_TOP) st.top = css;
     else if (slot === B_W || slot === B_TERM) st.width = css;
     else if (slot === B_H || slot === B_INNER) st.height = css;
+    else if (slot === B_TERMX) st.marginLeft = css;
     else st.lineHeight = css;
     this.writes++;
   }

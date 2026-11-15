@@ -189,7 +189,8 @@ export class CompiledSpec {
         listNodes.push(i);
         listIds.push(node.id);
         fields.push(node.k === 'tabs' ? ['label'] : []);
-        fieldBinds.push(node.k === 'tabs' ? [[]] : []);
+        // A tabs' option's `label` is its words (the option's own text; FX2: once bound to nothing).
+        fieldBinds.push(node.k === 'tabs' ? [[i, R_TEXT]] : []);
       }
     }
     /** Records that node `i` binds `v` in role `role`; returns the top-level key's index (-1 for a row field). */
