@@ -755,9 +755,11 @@ interface FullscreenEncodeOptions {
 ## FullscreenPass
 class FullscreenPass {
     readonly label: string;
-    readonly pipeline: GPURenderPipeline;
     readonly bindings: BindingSet | null;
     constructor(device: GPUDevice, desc: FullscreenPassDesc, sampler: GPUSampler, defaultView: GPUTextureView);
+    get pipeline(): GPURenderPipeline;
+    warm(): void;
+    get warmed(): boolean;
     setUniforms(data: BufferSource, byteOffset?: number): void;
     setTexture(slot: number, tex: TextureLike | GPUTextureView): void;
     createBindGroup(views: readonly GPUTextureView[]): GPUBindGroup;
@@ -772,6 +774,7 @@ interface FullscreenPassDesc extends BindingDesc {
     targets: GPUTextureFormat[];
     blend?: RenderBlendMode | GPUBlendState;
     fragmentEntry?: string;
+    lazy?: boolean;
 }
 
 ## GPU_CULL_MIN_SLOTS
