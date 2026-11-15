@@ -210,6 +210,34 @@ export interface ActorStats {
   dispatched: number;
 }
 
+/**
+ * What the last `prepare`'s pose pass wrote, read back beside its CPU twin
+ * (`ActorSystem.readBack`, ws/pose-parity-fix): for parity tests and dev tools.
+ */
+export interface ActorReadBack {
+  /** The clock the pass saw: the last `prepare`'s, as the f32 the GPU read. */
+  time: number;
+  /** The slots read, ascending: every slot showing a model, or the ones asked for that do. */
+  slots: Uint32Array;
+  /** Each read slot's model. */
+  models: Uint32Array;
+  /** The GPU's skin matrices: `bonesPerSlot × 12` floats per read slot, in `slots` order. */
+  gpu: Float32Array;
+  /** The CPU twin's (`poseCpu`, `'skin'`) of the same records at `time`, the same layout. */
+  cpu: Float32Array;
+  /**
+   * The indirect arguments the pass filled: `argsWords` per (view, model mesh) at
+   * `(view × maxDraws + draw) × argsWords`, the instance count second.
+   */
+  args: Uint32Array;
+  /** Words per argument cell (5, and 4 per `actorVertices` count). */
+  argsWords: number;
+  /** The largest |gpu − cpu| over the joints of the read slots (world units for translation). */
+  maxError: number;
+  /** The slot `maxError` is at, -1 with no slots. */
+  worstSlot: number;
+}
+
 const U = () => GPUBufferUsage;
 
 /** A set added with `addDrawSet`: an `'actor'` set's record (-1 for a mesh set) and vertices. */
@@ -254,6 +282,8 @@ export class ActorSystem {
   records!: GPUBuffer;
   /** The clock of the last `prepare`. */
   time = 0;
+  /** The last `prepare` ran the pose pass (`readBack` reads only a posed frame). */
+  private posed = false;
   private readonly core: RenderCore;
   private device: GPUDevice;
   private readonly sampleLight: ((x: number, y: number, z: number) => number) | null;
@@ -880,6 +910,102 @@ export class ActorSystem {
   }
 
   /**
+   * Read back what the last `prepare`'s pose pass wrote, with the CPU twin of the same records
+   * at the clock the pass saw (ws/pose-parity-fix). Call it after the frame's submit and before
+   * the next `setRecord`, `remove` or `writeTable`: the CPU twin is posed now, at the call, so
+   * frames that run while the copy maps cannot move it. (Posing with `poseCpu` after awaiting a
+   * map poses later records than the GPU's: a crowd whose records change every frame drifts by a
+   * frame's motion.) `slots` limits the read (default every slot showing a model). Rejects when
+   * a record changed since `prepare` or the pass did not run. Slow (a buffer map); tests and dev
+   * only.
+   */
+  readBack(slots?: ArrayLike<number>): Promise<ActorReadBack> {
+    this.alive();
+    if (!this.posed) {
+      return Promise.reject(
+        new Error(`${this.label}: readBack: the last prepare ran no pose pass`),
+      );
+    }
+    if (this.dirtyHi >= this.dirtyLo) {
+      return Promise.reject(
+        new Error(
+          `${this.label}: readBack: records changed since prepare (call it right after the frame)`,
+        ),
+      );
+    }
+    const list: number[] = [];
+    if (slots) {
+      for (let i = 0; i < slots.length; i++) {
+        const s = slots[i]!;
+        this.check(s);
+        if (this.has(s)) list.push(s);
+      }
+      list.sort((a, b) => a - b);
+    } else {
+      for (let s = 0; s < this.high; s++) if (this.has(s)) list.push(s);
+    }
+    const time = Math.fround(this.time);
+    const per = this.bonesPerSlot * 12;
+    const cpu = new Float32Array(list.length * per);
+    const models = new Uint32Array(list.length);
+    list.forEach((s, i) => {
+      models[i] = this.recU32[s * this.stride + R.model]!;
+      this.poseCpu(s, cpu.subarray(i * per, (i + 1) * per), 'skin', time);
+    });
+    const boneBytes = this.slots * per * 4;
+    const argsBytes = this.templateData.byteLength;
+    const device = this.device;
+    const read = device.createBuffer({
+      label: `${this.label} read back`,
+      size: boneBytes + argsBytes,
+      usage: U().MAP_READ | U().COPY_DST,
+    });
+    const enc = device.createCommandEncoder({ label: `${this.label} read back` });
+    enc.copyBufferToBuffer(this.bones, 0, read, 0, boneBytes);
+    enc.copyBufferToBuffer(this.args, 0, read, boneBytes, argsBytes);
+    device.queue.submit([enc.finish()]);
+    const argsWords = this.argsWords;
+    const joints = (m: number): number => this.rigs[m]!.joints * 12;
+    return read.mapAsync(GPUMapMode.READ).then(
+      () => {
+        const data = read.getMappedRange().slice(0);
+        read.destroy();
+        const all = new Float32Array(data, 0, boneBytes / 4);
+        const gpu = new Float32Array(list.length * per);
+        let maxError = 0;
+        let worstSlot = -1;
+        list.forEach((s, i) => {
+          gpu.set(all.subarray(s * per, (s + 1) * per), i * per);
+          const n = joints(models[i]!);
+          for (let k = 0; k < n; k++) {
+            const e = Math.abs(gpu[i * per + k]! - cpu[i * per + k]!);
+            if (e > maxError) {
+              maxError = e;
+              worstSlot = s;
+            }
+          }
+        });
+        if (worstSlot < 0 && list.length > 0) worstSlot = list[0]!;
+        return {
+          time,
+          slots: Uint32Array.from(list),
+          models,
+          gpu,
+          cpu,
+          args: new Uint32Array(data, boneBytes, argsBytes / 4),
+          argsWords,
+          maxError,
+          worstSlot,
+        };
+      },
+      (e: unknown) => {
+        read.destroy();
+        throw e;
+      },
+    );
+  }
+
+  /**
    * Once a frame, before `core.draw` (and in the same encoder as `core.prepare`, which writes
    * the views this pass reads): upload the clock and the dirty records, reset the indirect
    * arguments, and run the pose pass over every slot up to the highest used. `views` is the
@@ -898,6 +1024,7 @@ export class ActorSystem {
     st.recordWrites = 0;
     st.dispatched = 0;
     this.time = time;
+    this.posed = false;
     const n = typeof views === 'number' ? views : views.length;
     const q = this.device.queue;
     this.paramsF32[0] = time;
@@ -920,6 +1047,7 @@ export class ActorSystem {
     pass.end();
     st.calls += 5;
     st.dispatched = this.high;
+    this.posed = true;
   }
 
   /** Free the system's buffers and its draw set. */

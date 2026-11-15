@@ -65,6 +65,26 @@ export interface HarnessActorsState {
   recordWrites: number;
   /** With `crowd` and timestamps: median GPU ms of the pose pass ('actors'); -1 unmeasured. */
   poseMs: number;
+  /**
+   * `?parity=1` (ws/pose-parity-fix, implies `fit`): `?n=` actors in slots 13 apart (sparse
+   * uploads), every record rewritten every frame, near ones at LOD 0 and far ones at LOD 1, an
+   * eighth despawned at a time and the eighth changing every 10 frames. `parityCheck()` reads
+   * the frame back with `ActorSystem.readBack`; null without `parity`.
+   */
+  parity: {
+    checks: number;
+    /** `ActorReadBack.maxError` and its slot. */
+    error: number;
+    worstSlot: number;
+    /** Slots read back, and the live actors the page holds. */
+    posed: number;
+    live: number;
+    /** Robots the pass drew in view 0 at LOD 0 and at LOD 1. */
+    near: number;
+    far: number;
+    /** The same GPU bones against `poseCpu` run after the map (later records): the old drift. */
+    naiveError: number;
+  } | null;
 }
 
 declare global {
@@ -73,6 +93,8 @@ declare global {
       state: HarnessActorsState;
       /** Read back the next frame's skin matrices and indirect counts and compare (async; bumps `checks`). */
       check(): void;
+      /** `?parity=1`: read back the next frame with `ActorSystem.readBack` (bumps `parity.checks`). */
+      parityCheck(): void;
     };
   }
 }

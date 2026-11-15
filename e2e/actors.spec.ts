@@ -177,3 +177,44 @@ test('the crowd fit: async pipeline, game table, two set sizes, per-model LODs, 
   }
   expect(errors).toEqual([]);
 });
+
+test('a churning crowd reads back within 0.01 of its CPU twin (ws/pose-parity-fix)', async ({
+  page,
+  wrapper,
+}) => {
+  // 32 actors in slots 13 apart, every record rewritten every frame, two LODs, spawns and
+  // despawns: `readBack` poses the CPU twin at the call, so frames run while the copy maps
+  // cannot move it (EV FX5: `poseCpu` after the map drifted by a frame's motion, 0.141).
+  await open(page, wrapper, 'n=32&parity=1');
+  let near = 0;
+  let far = 0;
+  let worst = 0;
+  for (let round = 0; round < 4; round++) {
+    const before = await frame.evaluate(() => {
+      const h = window.__harnessActors!;
+      h.parityCheck();
+      return h.state.parity!.checks;
+    });
+    await expect.poll(async () => (await read()).parity!.checks).toBeGreaterThan(before);
+    const s = await read();
+    const p = s.parity!;
+    expect(s.gpu).toBe('ok');
+    expect(p.posed).toBe(p.live);
+    expect(p.live).toBeGreaterThanOrEqual(24);
+    expect(p.error).toBeGreaterThanOrEqual(0);
+    expect(p.error, `worst slot ${p.worstSlot}`).toBeLessThan(0.01);
+    near += p.near;
+    far += p.far;
+    worst = Math.max(worst, p.error);
+    console.log(
+      `[actors] parity: ${p.posed} posed, worst ${p.error.toFixed(6)} (slot ${p.worstSlot}), LOD 0 ${p.near}, LOD 1 ${p.far}, poseCpu after the map ${p.naiveError.toFixed(4)}`,
+    );
+    // Sparse: every live slot changed, in runs too far apart to merge.
+    expect(s.recordWrites).toBeGreaterThan(1);
+  }
+  expect(near).toBeGreaterThan(0);
+  expect(far).toBeGreaterThan(0);
+  expect(worst).toBeLessThan(0.01);
+  expect((await read()).gpuErrors).toBe(0);
+  expect(errors).toEqual([]);
+});

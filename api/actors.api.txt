@@ -85,6 +85,19 @@ interface ActorModelOptions {
 ## ActorPoseCpu  (type-only)
 type ActorPoseCpu = (slot: number, model: number, node: number, trs: Float32Array, at: number, time: number) => void;
 
+## ActorReadBack  (type-only)
+interface ActorReadBack {
+    time: number;
+    slots: Uint32Array;
+    models: Uint32Array;
+    gpu: Float32Array;
+    cpu: Float32Array;
+    args: Uint32Array;
+    argsWords: number;
+    maxError: number;
+    worstSlot: number;
+}
+
 ## ActorRecordInput  (type-only)
 interface ActorRecordInput {
     position?: ArrayLike<number>;
@@ -174,6 +187,7 @@ class ActorSystem {
     readF32(slot: number, word: number): number;
     readU32(slot: number, word: number): number;
     poseCpu(slot: number, out: Float32Array, space?: 'world' | 'skin', time?: number): boolean;
+    readBack(slots?: ArrayLike<number>): Promise<ActorReadBack>;
     prepare(encoder: GPUCommandEncoder, views: number | readonly unknown[], time: number, timestampWrites?: GPUComputePassTimestampWrites): void;
     destroy(): void;
     writeTable(data: Uint32Array | Float32Array, at?: number): void;

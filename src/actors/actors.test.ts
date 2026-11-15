@@ -876,3 +876,47 @@ describe('fit for a crowd (ws/actor-post-fit)', () => {
     expect(fake.errors).toEqual([]);
   });
 });
+
+describe('readBack (ws/pose-parity-fix)', () => {
+  it('poses the CPU twin at the call, so later frames cannot move it', async () => {
+    const s = scene(6, 64);
+    s.actors.remove(3);
+    await expect(s.actors.readBack()).rejects.toThrow(/no pose pass/);
+    frame(s, 10.123456789);
+    // The GPU's bones, as the fake holds them: the CPU twin's plus a known error on slot 4.
+    const bones = s.fake.buffers.find((b) => b.label === 'actors bones')!;
+    const gpuF = new Float32Array(bones.data.buffer);
+    const per = s.actors.bonesPerSlot * 12;
+    const tf = Math.fround(10.123456789);
+    const out = new Float32Array(per);
+    for (const slot of [0, 1, 2, 4, 5]) {
+      out.fill(0);
+      s.actors.poseCpu(slot, out, 'skin', tf);
+      gpuF.set(out, slot * per);
+    }
+    gpuF[4 * per + 3]! += 0.25;
+    const want = new Float32Array(per);
+    s.actors.poseCpu(2, want, 'skin', tf);
+    const pending = s.actors.readBack();
+    // A frame that runs while the copy maps: every record moves on.
+    for (const slot of [0, 1, 2, 4, 5]) {
+      s.actors.setRecord(slot, { position: [50, 0, 50], clip: -1 });
+    }
+    frame(s, 11);
+    const rb = await pending;
+    expect(rb.time).toBe(tf);
+    expect([...rb.slots]).toEqual([0, 1, 2, 4, 5]);
+    expect([...rb.models]).toEqual([0, 1, 0, 0, 1]);
+    expect([...rb.cpu.subarray(2 * per, 3 * per)]).toEqual([...want]);
+    expect(rb.maxError).toBeCloseTo(0.25, 5);
+    expect(rb.worstSlot).toBe(4);
+    expect(rb.argsWords).toBe(5);
+    expect(rb.args.length).toBe(s.core.maxViews * s.actors.maxDraws * 5 + s.actors.maxViews);
+    // Only the slots asked for, and none after a record changed since prepare.
+    const two = s.actors.readBack([5, 0, 3]);
+    expect([...(await two).slots]).toEqual([0, 5]);
+    s.actors.setRecord(0, { yaw: 1 });
+    await expect(s.actors.readBack()).rejects.toThrow(/changed since prepare/);
+    expect(s.fake.errors).toEqual([]);
+  });
+});
