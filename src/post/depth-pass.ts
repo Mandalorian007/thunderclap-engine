@@ -1,4 +1,4 @@
-import { type PipelineWarmer, pipelineWarmer } from '../render/core/warm';
+import { type PipelineWarmer, pipelineWarmer, type WarmTarget } from '../render/core/warm';
 import { createShaderModule, WGSL_FULLSCREEN_PRELUDE } from '../render/wgsl';
 import type { PostHost } from './host';
 import { POST_UNIFORM_FLOATS } from './settings';
@@ -22,7 +22,8 @@ import { POST_UNIFORM_FLOATS } from './settings';
 export class DepthPass {
   readonly label: string;
   private readonly device: GPUDevice;
-  private readonly pipeline: GPURenderPipeline;
+  private pipe: GPURenderPipeline | null = null;
+  private readonly make: () => GPURenderPipeline;
   private readonly layout: GPUBindGroupLayout;
   private readonly uniforms: GPUBuffer;
   private readonly nearest: GPUSampler;
@@ -32,6 +33,9 @@ export class DepthPass {
   private readonly passDesc: GPURenderPassDescriptor;
   private readonly entries: GPUBindGroupEntry[];
   private readonly warmer: PipelineWarmer;
+  private readonly warmTarget: WarmTarget;
+  /** Warmed or drawn: `warm()` does nothing. */
+  private primed = false;
 
   constructor(
     renderer: PostHost,
@@ -40,6 +44,8 @@ export class DepthPass {
       wgsl: string;
       format: GPUTextureFormat | readonly GPUTextureFormat[];
       textures: number;
+      /** Make the pipeline at `warm()` or the first `encode` (see `FullscreenPassDesc.lazy`). */
+      lazy?: boolean;
     },
   ) {
     const formats: readonly GPUTextureFormat[] =
@@ -66,15 +72,19 @@ export class DepthPass {
       size: POST_UNIFORM_FLOATS * 4,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
-    const code = `${WGSL_FULLSCREEN_PRELUDE}\n// ---- pass: ${desc.label} ----\n${desc.wgsl}`;
-    const module = createShaderModule(device, code, `pass:${desc.label}`);
-    this.pipeline = device.createRenderPipeline({
-      label: `pass:${desc.label}`,
-      layout: device.createPipelineLayout({ bindGroupLayouts: [this.layout] }),
-      vertex: { module, entryPoint: 'vs_fullscreen' },
-      fragment: { module, entryPoint: 'fs_main', targets: formats.map((format) => ({ format })) },
-      primitive: { topology: 'triangle-list' },
-    });
+    const layout = this.layout;
+    this.make = () => {
+      const code = `${WGSL_FULLSCREEN_PRELUDE}\n// ---- pass: ${desc.label} ----\n${desc.wgsl}`;
+      const module = createShaderModule(device, code, `pass:${desc.label}`);
+      return device.createRenderPipeline({
+        label: `pass:${desc.label}`,
+        layout: device.createPipelineLayout({ bindGroupLayouts: [layout] }),
+        vertex: { module, entryPoint: 'vs_fullscreen' },
+        fragment: { module, entryPoint: 'fs_main', targets: formats.map((format) => ({ format })) },
+        primitive: { topology: 'triangle-list' },
+      });
+    };
+    if (!desc.lazy) this.pipe = this.make();
     this.entries = [
       { binding: 0, resource: { buffer: this.uniforms } },
       { binding: 1, resource: this.nearest },
@@ -91,7 +101,7 @@ export class DepthPass {
     // next real pass: a depth pass enabled mid-play (outline, AO, DOF) compiles at load.
     const warmer = pipelineWarmer(device);
     this.warmer = warmer;
-    warmer.warm(this.pipeline, {
+    this.warmTarget = {
       color: formats,
       bind: (pass) => {
         const views: GPUTextureView[] = [];
@@ -99,7 +109,25 @@ export class DepthPass {
         pass.setBindGroup(0, this.group(warmer.scratchSampled(true), views, `warm:${this.label}`));
         return 1;
       },
-    });
+    };
+    if (!desc.lazy) this.warm();
+  }
+
+  private get pipeline(): GPURenderPipeline {
+    this.pipe ??= this.make();
+    return this.pipe;
+  }
+
+  /** Queue the empty first draw (once; a no-op after it or the first `encode`); a `lazy` pass makes its pipeline here. */
+  warm(): void {
+    if (this.primed) return;
+    this.primed = true;
+    this.warmer.warm(this.pipeline, this.warmTarget);
+  }
+
+  /** Whether the pipeline has been made and warmed, or drawn. */
+  get warmed(): boolean {
+    return this.primed;
   }
 
   /** The pass's uniform buffer, for an encoder-ordered copy (ws/render-12: one per XR eye). */
@@ -147,6 +175,7 @@ export class DepthPass {
       atts[i]!.view = view;
     }
     this.passDesc.timestampWrites = timestampWrites;
+    this.primed = true;
     this.warmer.encode(encoder);
     const pass = encoder.beginRenderPass(this.passDesc);
     pass.setPipeline(this.pipeline);

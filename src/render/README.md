@@ -1425,7 +1425,7 @@ indexed casters with no skin and no `shadowFragmentEntry`.
 ## Lower-level pieces
 
 - `renderer.createFullscreenPass(desc: FullscreenPassDesc)` (`label`, `wgsl`, `targets`,
-  `blend`, `fragmentEntry`, `uniformBytes`, `textures`, `sampler`) returns a `FullscreenPass`,
+  `blend`, `fragmentEntry`, `uniformBytes`, `textures`, `sampler`, `lazy`) returns a `FullscreenPass`,
   the building block for post effects. Its WGSL follows `WGSL_FULLSCREEN_PRELUDE`:
   `vs_fullscreen` with `FullscreenIn { pos, uv }`. `pass.encode(encoder, view, opts?:
   FullscreenEncodeOptions)` takes `clear` (`null` loads), an explicit `bindGroup`,
@@ -1660,7 +1660,11 @@ pass build their targets from `core.targetMask & core.passTargets(id)` (or `ctx.
 ### Pipeline warming (ws/warm-voxel-fit)
 
 WebKit (Metal) compiles a render pipeline at its first draw. On a shader-cache miss, that draw
-blocks the page for hundreds of milliseconds. The core moves the cost to load with an empty
+blocks the page for hundreds of milliseconds. (E26: the WebKit Playwright ships, on macOS 27,
+compiles it when it is made instead: a submit right after `createRenderPipeline` waits for the
+compile, and the first draw is then free. `createRenderPipelineAsync` compiles in the same GPU
+process queue, so it delays the frames submitted meanwhile just as much. Warming still covers the
+first kind; on the second, the only saving is not making a pipeline before it is needed.) The core moves the cost to load with an empty
 `draw(0)` in a 1×1 scratch pass of the same formats. It is on by default
 (`RenderCoreOptions.warm`), and the picture is unchanged.
 
@@ -1669,7 +1673,9 @@ blocks the page for hundreds of milliseconds. The core moves the cost to load wi
   active but have a `warm(enc, ctx)` hook. It encodes them in `prepare` and at the end of
   `draw`, on the first frame they appear, and never again.
 - A `FullscreenPass` or `DepthPass` queues itself when it is made and encodes the queue
-  before its first pass.
+  before its first pass. One made with `lazy: true` (`FullscreenPassDesc.lazy`, E26) makes its
+  shader module and pipeline only at `pass.warm()` or its first `encode`; `pass.warmed` says
+  whether it has. The post stack makes its passes that are off this way.
 - A game's own pipeline that draws only sometimes: `core.warm(pipeline, target)` or
   `warmPipeline(device, pipeline, target)`. `WarmTarget` gives the formats, sample count, bind
   groups and vertex slots, or a `bind(pass)` callback. `pipelineWarmer(device)` is the device's

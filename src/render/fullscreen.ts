@@ -1,6 +1,6 @@
 import { type BindingDesc, BindingSet, hasBindings, slotViewDimension } from './bindings';
 import { blendState, type RenderBlendMode } from './blend';
-import { type PipelineWarmer, pipelineWarmer } from './core/warm';
+import { type PipelineWarmer, pipelineWarmer, type WarmTarget } from './core/warm';
 import type { TextureLike } from './texture';
 import { createShaderModule, WGSL_FULLSCREEN_PRELUDE } from './wgsl';
 
@@ -16,6 +16,13 @@ export interface FullscreenPassDesc extends BindingDesc {
   targets: GPUTextureFormat[];
   blend?: RenderBlendMode | GPUBlendState;
   fragmentEntry?: string;
+  /**
+   * Make the shader module and pipeline at `warm()` or the first `encode`, not now (default
+   * false; E26). WebKit compiles a pipeline in the GPU process when it is made, and the next
+   * submit waits for it: a post pass that is off at load then costs nothing before the game's
+   * first view.
+   */
+  lazy?: boolean;
 }
 
 export interface FullscreenEncodeOptions {
@@ -39,11 +46,15 @@ export interface FullscreenEncodeOptions {
  */
 export class FullscreenPass {
   readonly label: string;
-  readonly pipeline: GPURenderPipeline;
+  private pipe: GPURenderPipeline | null = null;
+  private readonly make: () => GPURenderPipeline;
   readonly bindings: BindingSet | null;
   private readonly colorAttachment: GPURenderPassColorAttachment;
   private readonly passDesc: GPURenderPassDescriptor;
   private readonly warmer: PipelineWarmer;
+  private readonly warmTarget: WarmTarget;
+  /** Warmed or drawn: `warm()` does nothing. */
+  private primed = false;
 
   constructor(
     device: GPUDevice,
@@ -61,25 +72,28 @@ export class FullscreenPass {
           `pass:${desc.label}`,
         )
       : null;
-    const code = `${WGSL_FULLSCREEN_PRELUDE}\n// ---- pass: ${desc.label} ----\n${desc.wgsl}`;
-    const module = createShaderModule(device, code, `pass:${desc.label}`);
     const blend =
       typeof desc.blend === 'string' || desc.blend === undefined
         ? blendState(desc.blend ?? 'opaque')
         : desc.blend;
-    this.pipeline = device.createRenderPipeline({
-      label: `pass:${desc.label}`,
-      layout: device.createPipelineLayout({
-        bindGroupLayouts: this.bindings ? [this.bindings.layout] : [],
-      }),
-      vertex: { module, entryPoint: 'vs_fullscreen' },
-      fragment: {
-        module,
-        entryPoint: desc.fragmentEntry ?? 'fs_main',
-        targets: desc.targets.map((format) => ({ format, blend })),
-      },
-      primitive: { topology: 'triangle-list' },
-    });
+    const layout = this.bindings?.layout;
+    const targets = desc.targets.slice();
+    this.make = () => {
+      const code = `${WGSL_FULLSCREEN_PRELUDE}\n// ---- pass: ${desc.label} ----\n${desc.wgsl}`;
+      const module = createShaderModule(device, code, `pass:${desc.label}`);
+      return device.createRenderPipeline({
+        label: `pass:${desc.label}`,
+        layout: device.createPipelineLayout({ bindGroupLayouts: layout ? [layout] : [] }),
+        vertex: { module, entryPoint: 'vs_fullscreen' },
+        fragment: {
+          module,
+          entryPoint: desc.fragmentEntry ?? 'fs_main',
+          targets: targets.map((format) => ({ format, blend })),
+        },
+        primitive: { topology: 'triangle-list' },
+      });
+    };
+    if (!desc.lazy) this.pipe = this.make();
     this.colorAttachment = {
       view: defaultView,
       loadOp: 'clear',
@@ -94,8 +108,8 @@ export class FullscreenPass {
     // be set yet (a LUT slot's default view is 2D), and the group is never cached.
     const bindings = this.bindings;
     const warmer = this.warmer;
-    this.warmer.warm(this.pipeline, {
-      color: desc.targets,
+    this.warmTarget = {
+      color: targets,
       bind: bindings
         ? (pass) => {
             const n = desc.textures ?? 0;
@@ -106,7 +120,29 @@ export class FullscreenPass {
             return 1;
           }
         : undefined,
-    });
+    };
+    if (!desc.lazy) this.warm();
+  }
+
+  /** The pass's pipeline (made now if the pass is `lazy` and it wasn't yet). */
+  get pipeline(): GPURenderPipeline {
+    this.pipe ??= this.make();
+    return this.pipe;
+  }
+
+  /**
+   * Queue the pipeline's empty first draw, encoded before the device's next real pass (once; a
+   * no-op after it or the first `encode`). A `lazy` pass makes its pipeline here.
+   */
+  warm(): void {
+    if (this.primed) return;
+    this.primed = true;
+    this.warmer.warm(this.pipeline, this.warmTarget);
+  }
+
+  /** Whether the pipeline has been made and warmed, or drawn. */
+  get warmed(): boolean {
+    return this.primed;
   }
 
   setUniforms(data: BufferSource, byteOffset = 0): void {
@@ -140,6 +176,7 @@ export class FullscreenPass {
       ca.clearValue = opts.clear ?? { r: 0, g: 0, b: 0, a: 0 };
     }
     this.passDesc.timestampWrites = opts.timestampWrites;
+    this.primed = true;
     this.warmer.encode(encoder);
     const pass = encoder.beginRenderPass(this.passDesc);
     pass.setPipeline(this.pipeline);

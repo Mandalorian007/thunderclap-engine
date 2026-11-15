@@ -56,6 +56,8 @@ const groupViews = (fake: FakeDevice, p: FakePass): string[] => {
 describe('PostStack post 3 (ws/post-3)', () => {
   it('every new section is off by default and free while off, on a 2D frame and a 3D one', () => {
     const { fake, r, post } = setup();
+    // Every pass warmed up front (E26): turning one on below then makes nothing.
+    post.warmAll();
     flat(r);
     flat(r);
     let from = fake.passes.length;
