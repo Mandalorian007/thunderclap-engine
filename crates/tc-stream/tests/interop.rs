@@ -68,7 +68,7 @@ impl World {
 }
 
 impl SectionSource for World {
-    fn build(&self, pos: SectionPos, out: &mut Vec<u8>) {
+    fn build(&mut self, pos: SectionPos, out: &mut Vec<u8>) {
         encode_raw(&self.cells(pos), out);
     }
 
@@ -115,7 +115,7 @@ fn run(requests: Receiver<Request<Streamed>>) {
             }
             Ok(Request::Client { conn, msg, .. }) => match msg {
                 ClientMsg::SetInterest { interest } => {
-                    if let Err(e) = stream.set_interest(conn, interest.area, &interest.holding)
+                    if let Err(e) = stream.set_stream_interest(conn, &interest)
                         && let Some(out) = lanes.get(&conn)
                     {
                         let reason = e.to_string();
@@ -160,7 +160,7 @@ fn run(requests: Receiver<Request<Streamed>>) {
             Err(RecvTimeoutError::Disconnected) => return,
         }
         if stream.has_work() {
-            stream.flush(&world, &mut lanes);
+            stream.flush(&mut world, &mut lanes);
             for out in lanes.values() {
                 out.wake();
             }

@@ -9,11 +9,15 @@ mod common;
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use common::{Client, FakeLanes, World};
 use tc_net::ConnId;
-use tc_stream::{Area, SectionPos, SectionSource, SectionStream, StreamConfig, StreamMsg};
+use tc_stream::{
+    Area, FrameKind, GroupClaim, IdleBudget, LayerClaim, Loading, SectionPos, SectionSource,
+    SectionStream, Stamp, StreamConfig, StreamEvent, StreamInterest, StreamMsg,
+};
 use tc_wire::Wire;
 
 const A: ConnId = 1;
@@ -76,7 +80,7 @@ fn layer_bytes(layer: usize, key: SectionPos, from: Option<&[u8]>, to: &[u8], ou
 }
 
 impl SectionSource for Voxels {
-    fn build(&self, pos: SectionPos, out: &mut Vec<u8>) {
+    fn build(&mut self, pos: SectionPos, out: &mut Vec<u8>) {
         self.world.build(pos, out);
     }
 
@@ -259,7 +263,7 @@ impl Game {
 
     fn settle(&mut self) -> usize {
         for i in 1..=200 {
-            self.stream.flush(&self.src, &mut self.lanes);
+            self.stream.flush(&mut self.src, &mut self.lanes);
             self.deliver();
             if !self.stream.has_work() {
                 return i;
@@ -325,7 +329,7 @@ fn a_layer_change_is_sent_on_the_priority_lane() {
     g.src.climate.borrow_mut().insert((1, 1), 99);
     g.stream.layer_changed(CLIMATE, at(1, 0, 1));
     assert!(g.stream.has_work());
-    g.stream.flush(&g.src, &mut g.lanes);
+    g.stream.flush(&mut g.src, &mut g.lanes);
     assert!(
         g.lanes.lane(A).bulk.is_empty(),
         "nothing waits behind loads"
@@ -338,7 +342,7 @@ fn a_layer_change_is_sent_on_the_priority_lane() {
     g.check(B);
     // Nothing changed after all: nothing sent.
     g.stream.layer_changed(PILES, at(0, 0, 0));
-    g.stream.flush(&g.src, &mut g.lanes);
+    g.stream.flush(&mut g.src, &mut g.lanes);
     assert!(g.lanes.lane(A).priority.is_empty());
 }
 
@@ -347,12 +351,12 @@ fn a_layer_change_still_queued_is_folded_into_its_whole_frame() {
     let mut g = Game::new(StreamConfig::default());
     g.src.piles.borrow_mut().insert(at(0, 0, 0), vec![1]);
     g.join(A, area(0, 0, 0, 1));
-    g.stream.flush(&g.src, &mut g.lanes);
+    g.stream.flush(&mut g.src, &mut g.lanes);
     g.src.piles.borrow_mut().insert(at(0, 0, 0), vec![2]);
     g.stream.layer_changed(PILES, at(0, 0, 0));
     g.src.climate.borrow_mut().insert((0, 0), 42);
     g.stream.layer_changed(CLIMATE, at(0, 0, 0));
-    g.stream.flush(&g.src, &mut g.lanes);
+    g.stream.flush(&mut g.src, &mut g.lanes);
     assert!(
         g.lanes.lane(A).priority.is_empty(),
         "folded, not sent ahead"
@@ -396,7 +400,7 @@ fn layers_follow_the_sections_held() {
 }
 
 #[test]
-fn a_reload_sends_layers_whole_again() {
+fn a_reload_sends_only_the_layers_that_changed() {
     let mut g = Game::new(StreamConfig::default());
     g.join(A, area(0, 0, 0, 1));
     g.settle();
@@ -404,7 +408,8 @@ fn a_reload_sends_layers_whole_again() {
     g.stream.reload();
     g.settle();
     let p = g.player(A);
-    assert_eq!(p.whole, 9 * 2, "every column again");
+    assert_eq!(p.whole, 9 + 1, "only the column that changed again");
+    assert_eq!(g.stream.stats().layer_resumed, 8);
     assert_eq!(p.client.sections, 27, "no section again");
     g.check(A);
 }
@@ -419,7 +424,7 @@ fn a_background_change_is_sent_again_in_the_bulk_lane() {
     cells[5] = 3;
     g.src.world.edits.borrow_mut().insert(pos, cells);
     g.stream.changed_bulk(pos);
-    g.stream.flush(&g.src, &mut g.lanes);
+    g.stream.flush(&mut g.src, &mut g.lanes);
     assert!(g.lanes.lane(A).priority.is_empty());
     assert_eq!(g.lanes.lane(A).bulk.len(), 1);
     g.deliver();
@@ -429,7 +434,7 @@ fn a_background_change_is_sent_again_in_the_bulk_lane() {
     // `changed` wins over `changed_bulk` before the flush.
     g.src.world.set(&mut g.stream, pos, 6, 2);
     g.stream.changed_bulk(pos);
-    g.stream.flush(&g.src, &mut g.lanes);
+    g.stream.flush(&mut g.src, &mut g.lanes);
     assert_eq!(g.lanes.lane(A).priority.len(), 1);
     g.deliver();
     g.check(A);
@@ -440,7 +445,7 @@ fn a_background_change_is_sent_again_in_the_bulk_lane() {
 fn a_background_change_to_a_queued_section_replaces_it() {
     let mut g = Game::new(StreamConfig::default());
     g.join(A, area(0, 0, 0, 1));
-    g.stream.flush(&g.src, &mut g.lanes);
+    g.stream.flush(&mut g.src, &mut g.lanes);
     let pos = at(0, 0, 0);
     let mut cells = g.src.world.cells_of(pos);
     cells[1] = 4;
@@ -463,7 +468,7 @@ fn flush_conn_sends_one_connection_its_changes_past_the_budget() {
     for x in -1..=1 {
         g.src.world.set(&mut g.stream, at(x, 0, 0), 0, 4);
     }
-    g.stream.flush_conn(A, &g.src, &mut g.lanes);
+    g.stream.flush_conn(A, &mut g.src, &mut g.lanes);
     assert_eq!(
         g.lanes.lane(A).priority.len(),
         3,
@@ -503,28 +508,35 @@ fn load_until_builds_between_ticks_until_interrupted() {
     g.join(A, area(0, 0, 0, 2));
     let far = Instant::now() + Duration::from_secs(5);
     assert_eq!(
-        g.stream.load_until(&g.src, &mut g.lanes, far, || true),
+        g.stream.load_until(&mut g.src, &mut g.lanes, far, || true),
         0,
         "a waiting request comes first"
     );
     let mut asked = 0;
-    let built = g.stream.load_until(&g.src, &mut g.lanes, far, || {
+    let built = g.stream.load_until(&mut g.src, &mut g.lanes, far, || {
         asked += 1;
         asked > 10
     });
     assert_eq!(built, 10);
     assert!(g.stream.loading());
-    let rest = g.stream.load_until(&g.src, &mut g.lanes, far, || false);
+    let rest = g.stream.load_until(&mut g.src, &mut g.lanes, far, || false);
     assert_eq!(10 + rest, 5 * 5 * 5);
     assert!(!g.stream.loading());
-    assert_eq!(g.stream.load_until(&g.src, &mut g.lanes, far, || false), 0);
+    assert_eq!(
+        g.stream.load_until(&mut g.src, &mut g.lanes, far, || false),
+        0
+    );
     g.settle();
     g.check(A);
     assert_eq!(g.player(A).whole, 25, "the layers came with them");
     // A deadline passed builds nothing.
     g.stream.set_interest(A, area(30, 0, 0, 1), &[]).unwrap();
     let past = Instant::now();
-    assert_eq!(g.stream.load_until(&g.src, &mut g.lanes, past, || false), 0);
+    assert_eq!(
+        g.stream
+            .load_until(&mut g.src, &mut g.lanes, past, || false),
+        0
+    );
 }
 
 #[test]
@@ -543,8 +555,368 @@ fn time_budgets_bound_a_flush_but_always_build_one() {
     for x in -1..=1 {
         g.src.world.set(&mut g.stream, at(x, 0, 0), 0, 4);
     }
-    g.stream.flush(&g.src, &mut g.lanes);
+    g.stream.flush(&mut g.src, &mut g.lanes);
     assert_eq!(g.lanes.lane(A).priority.len(), 1, "one rebuild");
     g.settle();
     g.check(A);
+}
+
+impl Game {
+    /// `conn` drops and comes back with the same view, claiming what it
+    /// holds in groups along y (a column each), with its layers' digests.
+    fn rejoin_grouped(&mut self, conn: ConnId, a: Area) {
+        self.stream.disconnect(conn);
+        drain(&mut self.lanes, conn);
+        self.stream.connect(conn);
+        let p = self.players.get_mut(&conn).unwrap();
+        p.whole = 0;
+        p.changes = 0;
+        p.client.reset_counts();
+        let mut groups = GroupClaim::group(1, p.client.held.iter().map(|(pos, (s, _))| (*pos, *s)));
+        for g in &mut groups {
+            for layer in [CLIMATE, PILES] {
+                let mut seen = Vec::new();
+                let mut pairs = Vec::new();
+                for (pos, y) in g.members() {
+                    let key = if layer == CLIMATE {
+                        at(pos.x, 0, pos.z)
+                    } else {
+                        pos
+                    };
+                    if seen.contains(&key) {
+                        continue;
+                    }
+                    seen.push(key);
+                    let state = p.layers.get(&(layer, key)).cloned().unwrap_or_default();
+                    let stamp = if state.is_empty() {
+                        0
+                    } else {
+                        tc_wire::stamp::bytes_stamp(&state)
+                    };
+                    pairs.push((y, stamp));
+                }
+                g.layers.push(GroupClaim::layer_digest(pairs));
+            }
+        }
+        let interest = StreamInterest {
+            area: a,
+            holding: Vec::new(),
+            groups,
+            layers: Vec::new(),
+        };
+        self.stream.set_stream_interest(conn, &interest).unwrap();
+    }
+}
+
+#[test]
+fn a_client_resumes_by_groups_with_their_layers() {
+    let mut g = Game::new(StreamConfig::default());
+    g.src.piles.borrow_mut().insert(at(0, 1, 0), vec![5]);
+    g.join(A, area(0, 0, 0, 1));
+    g.settle();
+    // While it is away: a cell in column (0, 0), a pile in column (1, 1)
+    // and the climate of column (-1, -1) change.
+    g.src.world.set(&mut g.stream, at(0, 0, 0), 3, 9);
+    g.src.piles.borrow_mut().insert(at(1, -1, 1), vec![6]);
+    g.stream.layer_changed(PILES, at(1, -1, 1));
+    g.src.climate.borrow_mut().insert((-1, -1), 50);
+    g.stream.layer_changed(CLIMATE, at(-1, 0, -1));
+    g.rejoin_grouped(A, area(0, 0, 0, 1));
+    assert_eq!(g.stream.claims_pending(A), 27);
+    g.settle();
+    g.check(A);
+    let stats = g.stream.stats();
+    assert_eq!(
+        (
+            stats.group_claims,
+            stats.groups_held,
+            stats.groups_different
+        ),
+        (9, 8, 1)
+    );
+    let p = g.player(A);
+    assert_eq!(p.client.sections, 3, "only the column that changed");
+    // Climate (-1, -1) and the new pile; column (0, 0)'s pile was kept.
+    assert_eq!(p.whole, 2);
+    assert_eq!(stats.layer_resumed, 8 + 1);
+    assert_eq!(g.stream.claims_pending(A), 0);
+    assert_eq!(g.stream.held(A), 27);
+}
+
+#[test]
+fn a_group_reaching_outside_the_area_is_sent_again() {
+    let mut g = Game::new(StreamConfig::default());
+    g.join(A, area(0, 0, 0, 1));
+    g.settle();
+    g.stream.disconnect(A);
+    g.stream.connect(A);
+    let p = g.players.get_mut(&A).unwrap();
+    p.client.reset_counts();
+    // Claims the column at (0, 0) and one section above the view.
+    let mut held: Vec<(SectionPos, u64)> = (-1..=1)
+        .map(|y| (at(0, y, 0), p.client.held[&at(0, y, 0)].0))
+        .collect();
+    held.push((at(0, 2, 0), 1));
+    let groups = GroupClaim::group(1, held);
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].held, 0b1111);
+    let interest = StreamInterest {
+        area: area(0, 0, 0, 1),
+        groups,
+        ..StreamInterest::default()
+    };
+    g.stream.set_stream_interest(A, &interest).unwrap();
+    g.settle();
+    g.check(A);
+    let p = g.player(A);
+    assert_eq!(p.client.sections, 27, "the column too, whole");
+    assert_eq!(p.client.unloaded, 1, "the section outside");
+    assert_eq!(g.stream.stats().groups_held, 0);
+}
+
+#[test]
+fn layer_claims_keep_states_a_client_holds() {
+    let mut g = Game::new(StreamConfig::default());
+    g.src.piles.borrow_mut().insert(at(0, 0, 0), vec![1, 2]);
+    g.join(A, area(0, 0, 0, 0));
+    g.settle();
+    assert_eq!(g.player(A).whole, 2);
+    g.stream.disconnect(A);
+    g.stream.connect(A);
+    let p = g.players.get_mut(&A).unwrap();
+    p.whole = 0;
+    let layers = p
+        .layers
+        .iter()
+        .map(|(&(layer, key), state)| LayerClaim {
+            layer: layer as u32,
+            key,
+            stamp: Stamp::of(tc_wire::stamp::bytes_stamp(state)),
+        })
+        .collect();
+    let interest = StreamInterest {
+        area: area(0, 0, 0, 0),
+        holding: p.client.claims(),
+        layers,
+        ..StreamInterest::default()
+    };
+    g.src.piles.borrow_mut().insert(at(0, 0, 0), vec![3]);
+    g.stream.set_stream_interest(A, &interest).unwrap();
+    g.settle();
+    g.check(A);
+    // The climate kept; the piles changed, so sent again.
+    assert_eq!(g.player(A).whole, 1);
+    assert_eq!(g.stream.stats().layer_resumed, 1);
+}
+
+#[test]
+fn check_claims_looks_at_claims_before_the_load_does() {
+    let mut g = Game::new(StreamConfig {
+        build_budget: 1,
+        ..StreamConfig::default()
+    });
+    g.join(A, area(0, 0, 0, 1));
+    g.settle();
+    g.src.world.set(&mut g.stream, at(1, 1, 1), 0, 2);
+    g.rejoin_grouped(A, area(0, 0, 0, 1));
+    let claims = g.player(A).client.claims();
+    g.stream.disconnect(A);
+    g.stream.connect(A);
+    g.stream.set_interest(A, area(0, 0, 0, 1), &claims).unwrap();
+    let sections = g.stream.stats().sections;
+    // Around (1, 1, 1) only: 8 sections, whatever the build budget.
+    g.stream.check_claims(
+        A,
+        Some((at(0, 0, 0), at(1, 1, 1))),
+        &mut g.src,
+        &mut g.lanes,
+    );
+    assert_eq!(g.stream.held(A), 8);
+    assert_eq!(g.stream.claims_pending(A), 27 - 8);
+    assert_eq!(
+        g.stream.stats().sections - sections,
+        1,
+        "the one that changed, queued at once"
+    );
+    g.stream.check_claims(A, None, &mut g.src, &mut g.lanes);
+    assert_eq!(g.stream.claims_pending(A), 0);
+    g.settle();
+    g.check(A);
+    assert_eq!(g.player(A).client.sections, 1);
+}
+
+#[test]
+fn group_claims_split_runs_per_line_and_at_the_bitmap() {
+    let held = (0..40)
+        .map(|y| (at(2, y, 3), y as u64 + 1))
+        .chain([(at(5, 0, 3), 9)]);
+    let groups = GroupClaim::group(1, held);
+    assert_eq!(groups.len(), 3);
+    assert_eq!((groups[0].start, groups[0].held), (at(2, 0, 3), u32::MAX));
+    assert_eq!((groups[1].start, groups[1].held), (at(2, 32, 3), 0xff));
+    assert_eq!((groups[2].start, groups[2].held), (at(5, 0, 3), 1));
+    let members: Vec<_> = groups[1].members().collect();
+    assert_eq!(members.first(), Some(&(at(2, 32, 3), 32)));
+    assert_eq!(members.len(), 8);
+    assert_eq!(
+        groups[1].digest,
+        GroupClaim::digest_of((32..40).map(|y| (y, y as u64 + 1)))
+    );
+    assert_eq!(GroupClaim::layer_digest([(0, 0), (1, 0)]), None);
+}
+
+#[test]
+fn idle_builds_within_its_budget_and_holds() {
+    let mut g = Game::new(StreamConfig {
+        build_budget: 1,
+        ..StreamConfig::default()
+    });
+    g.join(A, area(0, 0, 0, 2));
+    let far = Instant::now() + Duration::from_secs(5);
+    assert!(g.stream.idle_left());
+    let mut asked = 0;
+    g.stream.idle(&mut g.src, &mut g.lanes, far, || {
+        asked += 1;
+        asked > 4
+    });
+    let stats = g.stream.stats();
+    assert_eq!(
+        stats.idle_builds, 3,
+        "asked before the first and after each"
+    );
+    assert!(stats.idle_nanos > 0);
+    // Held, with no held spread: no idle time.
+    let mut g = Game::new(StreamConfig {
+        idle: IdleBudget {
+            held: Duration::ZERO,
+            ..IdleBudget::default()
+        },
+        ..StreamConfig::default()
+    });
+    g.join(A, area(0, 0, 0, 2));
+    g.stream.hold_idle(far);
+    assert!(g.stream.idle_held(Instant::now()));
+    assert!(!g.stream.idle_left());
+    assert_eq!(
+        g.stream.idle(&mut g.src, &mut g.lanes, far, || false),
+        Duration::ZERO
+    );
+    assert_eq!(g.stream.stats().idle_holds, 1);
+    // No budget at all: nothing.
+    let mut g = Game::new(StreamConfig {
+        idle: IdleBudget {
+            spread: Duration::ZERO,
+            held: Duration::ZERO,
+            extra: Duration::ZERO,
+        },
+        ..StreamConfig::default()
+    });
+    g.join(A, area(0, 0, 0, 2));
+    assert!(!g.stream.idle_left());
+    // A generous one loads the view between flushes.
+    let mut g = Game::new(StreamConfig {
+        idle: IdleBudget {
+            spread: Duration::from_secs(5),
+            ..IdleBudget::default()
+        },
+        ..StreamConfig::default()
+    });
+    g.join(A, area(0, 0, 0, 2));
+    g.stream.idle(&mut g.src, &mut g.lanes, far, || false);
+    assert!(!g.stream.loading());
+    assert_eq!(g.stream.stats().idle_builds, 125);
+    g.settle();
+    g.check(A);
+}
+
+#[test]
+fn an_observer_sees_builds_and_frames() {
+    #[derive(Default)]
+    struct Seen {
+        built: u64,
+        bytes: u64,
+        sections: u64,
+        claimed: u64,
+    }
+    let seen = Arc::new(Mutex::new(Seen::default()));
+    let mut g = Game::new(StreamConfig::default());
+    let s = seen.clone();
+    g.stream.set_observer(Some(Box::new(move |e: &StreamEvent| {
+        let mut s = s.lock().unwrap();
+        match *e {
+            StreamEvent::Built { .. } => s.built += 1,
+            StreamEvent::Queued { kind, bytes, .. } => {
+                s.bytes += bytes as u64;
+                s.sections += u64::from(kind == FrameKind::Section);
+            }
+            StreamEvent::Claimed { .. } | StreamEvent::Group { .. } => s.claimed += 1,
+            _ => {}
+        }
+    })));
+    g.join(A, area(0, 0, 0, 1));
+    g.settle();
+    g.rejoin_grouped(A, area(0, 0, 0, 1));
+    g.settle();
+    let stats = g.stream.stats();
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.built, stats.builds);
+    assert_eq!(seen.bytes, stats.bytes);
+    assert_eq!(seen.sections, 27);
+    assert_eq!(seen.claimed, 9);
+    assert_eq!(
+        stats.cache_hits, 27,
+        "the groups were looked at from the cache"
+    );
+}
+
+/// A source that counts its passes.
+struct Passes {
+    world: World,
+    begun: Vec<Loading>,
+    ended: usize,
+}
+
+impl SectionSource for Passes {
+    fn build(&mut self, pos: SectionPos, out: &mut Vec<u8>) {
+        assert_eq!(self.begun.len(), self.ended + 1, "inside a pass");
+        self.world.build(pos, out);
+    }
+
+    fn begin(&mut self, loading: &Loading) {
+        self.begun.push(*loading);
+    }
+
+    fn end(&mut self) {
+        self.ended += 1;
+    }
+}
+
+#[test]
+fn a_source_is_told_each_pass_and_the_views_loading() {
+    let mut src = Passes {
+        world: World::new(4),
+        begun: Vec::new(),
+        ended: 0,
+    };
+    let mut stream = new_stream(StreamConfig::default());
+    let mut lanes = FakeLanes::default();
+    stream.connect(A);
+    stream.connect(B);
+    stream.set_interest(A, area(0, 0, 0, 1), &[]).unwrap();
+    stream
+        .set_interest(B, Area::new(at(9, 0, 0), 3, 1, 2), &[])
+        .unwrap();
+    stream.flush(&mut src, &mut lanes);
+    assert_eq!(
+        src.begun[0],
+        Loading {
+            views: 2,
+            sides: 3 + 7,
+            widest: 7
+        }
+    );
+    while stream.has_work() {
+        stream.flush(&mut src, &mut lanes);
+    }
+    assert_eq!(src.begun.len(), src.ended);
 }

@@ -36,6 +36,7 @@
 
 mod area;
 mod cache;
+mod hash;
 mod lanes;
 mod msg;
 mod raw;
@@ -44,9 +45,11 @@ mod stream;
 pub use area::{Bounds, MIN_BOXED};
 pub use cache::{MAX_CACHED_SECTIONS, SLOT_OVERHEAD};
 pub use lanes::{BEHIND_BYTES, Lanes};
-pub use msg::{Area, Claim, SectionPos, Stamp, StreamInterest, StreamMsg};
+pub use msg::{
+    Area, Claim, GROUP_MAX, GroupClaim, LayerClaim, SectionPos, Stamp, StreamInterest, StreamMsg,
+};
 pub use raw::{decode_raw, encode_raw};
 pub use stream::{
-    MAX_UNLOAD_BATCH, SectionSource, SectionStream, StreamConfig, StreamError, StreamStats,
-    game_frame,
+    FrameKind, IdleBudget, Loading, MAX_UNLOAD_BATCH, SectionSource, SectionStream, StreamConfig,
+    StreamError, StreamEvent, StreamObserver, StreamStats, game_frame,
 };
