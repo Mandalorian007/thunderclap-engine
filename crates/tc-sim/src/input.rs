@@ -173,10 +173,22 @@ impl<I> InputQueue<I> {
     pub fn tick(
         &mut self,
         now: Instant,
-        mut apply: impl FnMut(PlayerId, u32, I, Duration),
+        apply: impl FnMut(PlayerId, u32, I, Duration),
     ) -> Vec<(PlayerId, u32)> {
-        let tick = self.config.tick;
         let mut applied = Vec::new();
+        self.tick_into(now, &mut applied, apply);
+        applied
+    }
+
+    /// [`InputQueue::tick`], pushing to `applied` (a buffer the caller
+    /// keeps) instead of returning a new one.
+    pub fn tick_into(
+        &mut self,
+        now: Instant,
+        applied: &mut Vec<(PlayerId, u32)>,
+        mut apply: impl FnMut(PlayerId, u32, I, Duration),
+    ) {
+        let tick = self.config.tick;
         for (&player, q) in &mut self.queues {
             let earned = q
                 .credited
@@ -197,7 +209,6 @@ impl<I> InputQueue<I> {
                 applied.push((player, q.seq));
             }
         }
-        applied
     }
 }
 

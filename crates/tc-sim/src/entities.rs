@@ -3,12 +3,16 @@
 //! ([`tc_net::EntityEncoder`]), each the change from what that connection
 //! was last sent.
 //!
-//! A stream is made by the first accepted `SetInterest` ([`Game::interest`])
-//! and reruns at a flush only when it is due: its interest changed, its
+//! A stream is made by the first accepted `SetInterest` ([`Game::interest`]),
+//! or, for a game whose streams follow the body ([`Game::follow`]), when a
+//! player's connection joins (its interest then moves with the body and
+//! `SetInterest` is only checked). It reruns at a flush only when it is due: its interest changed, its
 //! client asked for a key frame (`EntityResync`), something it read
 //! changed (its [`Reads`]), or the game was reloaded. A client over its
 //! byte budget is skipped and stays due; its next frame skips the states
-//! between. Frames carry the game's time as their tick.
+//! between. Frames carry the game's time as their tick. Views are encoded
+//! once for every stream ([`tc_net::ViewCache`]): a thing is split into
+//! its fields once per change, however many streams see it.
 //!
 //! Games with many watchers of a large world keep their own reverse index
 //! (which watcher reads which area) in their change keys: a stream reads
@@ -21,15 +25,20 @@ use tc_net::{ConnId, EntityEncoder, ServerMsg};
 use tc_wire::{Bytes, Wire};
 
 use crate::game::{Game, InterestOf};
-use crate::query::{Key, QueryCtx, Reads};
+use std::time::Instant;
+
+use crate::query::{Key, QueryCtx, Reads, ViewCx};
 use crate::sim::{OUTBOUND_BUDGET, Sim};
 
 /// One connection's entity stream.
 pub(crate) struct Stream<G: Game> {
-    interest: InterestOf<G>,
-    encoder: EntityEncoder<G::View>,
-    reads: Reads<G::Change>,
-    due: bool,
+    pub(crate) interest: InterestOf<G>,
+    pub(crate) encoder: EntityEncoder<G::View>,
+    pub(crate) reads: Reads<G::Change>,
+    pub(crate) due: bool,
+    /// Its interest follows its player's body ([`Game::follow`]), not
+    /// `SetInterest`.
+    pub(crate) followed: bool,
 }
 
 impl<G: Game> Stream<G> {
@@ -58,12 +67,15 @@ impl<G: Game> Sim<G> {
             return;
         }
         match self.streams.get_mut(&conn) {
+            // The body leads; the client's interest is only checked.
+            Some(s) if s.followed => return,
             Some(s) => {
                 s.interest = interest;
                 s.due = true;
             }
-            None => match EntityEncoder::new(&self.schema) {
-                Ok(encoder) => {
+            None => match &self.views {
+                Ok(views) => {
+                    let encoder = views.encoder();
                     self.streams.insert(
                         conn,
                         Stream {
@@ -71,16 +83,40 @@ impl<G: Game> Sim<G> {
                             encoder,
                             reads: Reads::default(),
                             due: true,
+                            followed: false,
                         },
                     );
                 }
                 Err(e) => {
-                    self.send_to(conn, &rejected(format!("no entity stream: {e}")));
+                    let reason = format!("no entity stream: {e}");
+                    self.send_to(conn, &rejected(reason));
                     return;
                 }
             },
         }
+        self.review_views(conn);
         self.flush_entities(&BTreeSet::new(), false, Some(conn));
+    }
+
+    /// Moves `conn`'s subscriptions to the views its interest gives them
+    /// now ([`Query::with_view`](crate::Query::with_view)); one that moved
+    /// gets the difference at the next flush.
+    pub(crate) fn review_views(&mut self, conn: ConnId) {
+        if !self.sync.has_views() {
+            return;
+        }
+        let Some(c) = self.conns.get(&conn) else {
+            return;
+        };
+        let cx = ViewCx {
+            game: self.core.game(),
+            player: c.player,
+            interest: self.streams.get(&conn).map(|s| &s.interest),
+        };
+        let now = Instant::now();
+        if self.sync.review(conn, now, |q, args| q.view_of(&cx, args)) {
+            self.schedule_flush(now);
+        }
     }
 
     /// `EntityResync`: the next frame is a key frame.
@@ -102,7 +138,10 @@ impl<G: Game> Sim<G> {
     ) {
         let time = self.core.time();
         let game = self.core.game();
-        let mut things = Vec::new();
+        let Ok(views) = &mut self.views else {
+            return;
+        };
+        let mut things = std::mem::take(&mut self.scratch_things);
         for (conn, s) in &mut self.streams {
             if only.is_some_and(|o| o != *conn) {
                 continue;
@@ -117,15 +156,24 @@ impl<G: Game> Sim<G> {
                 continue;
             }
             things.clear();
-            let cx = QueryCtx::new(game, c.player, time, &self.bodies);
+            let cx = QueryCtx::new(game, c.player, 0, time, &self.bodies);
             game.entities(&cx, &s.interest, &mut things);
             s.reads = cx.into_reads();
             s.due = false;
-            if let Some(frame) = s.encoder.frame(time, things.iter().map(|(id, v)| (*id, v))) {
+            self.counters.entity_runs += 1;
+            let things = things.iter().map(|(id, v)| (*id, v));
+            if let Some(frame) = s.encoder.frame_shared(time, things, views) {
                 let msg = ServerMsg::<G::Protocol>::EntityStream { data: Bytes(frame) };
                 c.send_frame(Frame::from(msg.to_bytes()));
+                self.counters.entity_frames += 1;
             }
         }
+        if only.is_none() {
+            views.sweep();
+        }
+        self.counters.entity_splits = views.splits();
+        things.clear();
+        self.scratch_things = things;
     }
 
     /// Forgets `conn`'s stream.

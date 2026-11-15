@@ -89,6 +89,17 @@ impl<K: Ord> Changes<K> {
         }
     }
 
+    /// Puts `earlier` (taken before these were marked) back under these:
+    /// what [`Changes::take`] took, with these added.
+    pub(crate) fn put_back(&mut self, mut earlier: Changes<K>) {
+        if earlier.keys.len() < self.keys.len() {
+            std::mem::swap(&mut earlier.keys, &mut self.keys);
+        }
+        for key in std::mem::take(&mut earlier.keys) {
+            self.keys.insert(key);
+        }
+    }
+
     /// Adds everything in `other`.
     pub fn extend(&mut self, other: Changes<K>) {
         if !self.muted {
