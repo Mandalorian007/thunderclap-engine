@@ -4,6 +4,8 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 
 ## Unreleased
 
+## 2.0.0-next.18 (2026-11-15)
+
 - The GPU cull's bundles kept new slots undrawn (ws/cull-fix, B18; EV FX1, Forge with shadows off). Defaults unchanged. *Fixed* (render core): with `coalesceRebuilds` (the default) the one bundle rebuild a frame went to the oldest stale GPU-culled set, and a set no pass draws (a caster whose shadow pass is off, a set in a skipped pass) never re-records, so it kept that turn and every drawn set replayed its old bundle: streamed sections reached the cull but not the bundle, and whole regions stayed undrawn while `cull: 'cpu'` drew them. Only a set a pass asked for a bundle last frame now takes the turn. Tests: `restore.test.ts` (a never-drawn caster beside a streamed set), `harness/cull.html` and `e2e/cull.spec.ts` (a GPU-culled and a CPU-culled core read back over a streamed reversed-Z, camera-relative scene with off-axis and near-plane sections: the same ids, 0 px apart, on the matrix and `webkit-ipad`).
 
 ## 2.0.0-next.17 (2026-11-15)
