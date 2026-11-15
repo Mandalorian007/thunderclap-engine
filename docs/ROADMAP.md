@@ -2,6 +2,10 @@
 
 *The program plan, 2026-11-14 (E-041). The PM owns this file and keeps its status current; [STATUS.md](STATUS.md) tracks each workstream's branch and merge. The pitch the user approved is [design/2.0/pitch.html](design/2.0/pitch.html); the target architecture is [design/2.0/architecture.md](design/2.0/architecture.md) ("D1"); the switch bar is [design/2.0/bar.md](design/2.0/bar.md) ("D2"); the evidence is in [design/2.0/evidence/](design/2.0/evidence/).*
 
+## Where it stands (2026-11-15)
+
+**2.0 shipped.** `2.0.0` published to npm `latest` on 2026-11-15, paired with the Rust tag `server-v0.15`; `2.0.1` (`server-v0.15.1`) followed the same day with a tc-store lock fix. Phases A–D, E (crates E1–E28) and Forge's server switches F1–F4 are done; the evaluator's re-run (FV2) found parity met except one new opening hitch in Forge's hall view, owned by Forge step G13 (a Forge-side fix; any engine ask ships as an additive 2.0.x). From here: minors and fixes ship as 2.0.x / 2.x point releases, never held for a round of evaluation; phase F (the second small 3D game) is next when the user picks it up.
+
 ## The goal
 
 ThunderClap becomes the foundation for every game we make, 2D to varied 3D to VR, and Forge Wilds runs on it at **feature parity**: everything its client does today, it does on ThunderClap, with Forge's own client code reduced to its game (rules, content meaning, net and play, panels, the world's look).
@@ -27,7 +31,7 @@ So, in order of weight:
 
 - **The Last Rune stays pixel-identical** and source-compatible through 2.0; it stays on `^1.3.0` until a 2.0 release has proven itself, then moves in its own repo.
 - **VR is first-class in the core from day one.** Every render-core change runs a two-view (stereo) test on the fake GPU and the stereo harness page.
-- **2.0 is one breaking release.** 1.x APIs that the retained core replaces keep working as adapters where cheap, else are listed under *Breaking* with a migration note. During the program, `main` publishes prereleases `2.0.0-next.N` to npm's `next` tag; `latest` stays 1.3.x until 2.0.0.
+- **2.0 is one breaking release.** 1.x APIs that the retained core replaces keep working as adapters where cheap, else are listed under *Breaking* with a migration note. During the program, `main` publishes prereleases `2.0.0-next.N` to npm's `next` tag; `latest` stays 1.3.x until 2.0.0. *(Done: 2.0.0 went to `latest` on 2026-11-15.)*
 - **Forge consumes the engine from npm `next` prereleases** (exact pins), never a `link:`; an engine fix Forge needs means a new prerelease, cut by the PM the same day.
 - **Forge's client foundations are frozen** (fixes only) while they move; game work in rules, content and the server may continue but none is planned during the program.
 - **Old engine modules are replaced, not kept beside.** `voxel` (the demo grid) is rebuilt in place; its old API survives only if a template or demo still needs it after the rebuild.
@@ -39,7 +43,7 @@ So, in order of weight:
 | **A. Ground** | Rails (WebKit project, counted-work budgets, bundle budgets per subpath, tree-shaking check, `override` check, `next` publishing), the kit split of `createGame`, the reference scenes. | `2.0.0-next.0` |
 | **B. Render core** | The retained, GPU-driven, view-plural core (D1 §3); the immediate API rebuilt on it; stereo once; passes and targets from use; camera-relative origin; device-loss rebuild. Critical path. | `next.1`, `next.2` |
 | **C. Foundations** | Parallel with B: voxel worlds, models, actors, UI spec and presenters, intents and the quality governor, XR merged, the networking client. Each with a non-Forge demo. | `next.3`… |
-| **D. Forge switches** | Forge adopts the engine module by module in seam order; each PR deletes Forge's copy. Ends with an evaluator playing Forge on the engine against the parity checklist. | `2.0.0` when D is done |
+| **D. Forge switches** | Forge adopts the engine module by module in seam order; each PR deletes Forge's copy. Ends with an evaluator playing Forge on the engine against the parity checklist. | `2.0.0` ✅ 2026-11-15 |
 | **E. Server foundation** | `thunderclap-server` from Forge's Rust engine; Forge's server moves onto it. Research starts now (S0). | `2.1` |
 | **F. Proof** | A second, small 3D game built on the kit in two weeks or less, holding only rules, content, scenes and shaders. | — |
 
@@ -101,7 +105,7 @@ Seam order; each switch deletes Forge's own copy in the same PR and passes Forge
 
 ### Phase E (engine server crates)
 
-E1 tc-wire, E2a tc-net, E2b tc-auth, E3a/E3b tc-store, E4a/E4b tc-sim, E5 tc-stream, E6 tc-admin + the `thunderclap-server` facade: landed (2.0.0-next.4 and main). E7 second game (arena-2d-server template, turn game): in flight. Rust releases are git tags `server-v0.N` (Forge pins one); `server-v0.1` at E6, `2.1` with E7.
+E1 tc-wire, E2a tc-net, E2b tc-auth, E3a/E3b tc-store, E4a/E4b tc-sim, E5 tc-stream, E6 tc-admin + the `thunderclap-server` facade: landed (2.0.0-next.4 and main). E7 second game (arena-2d-server template, turn game) and E8–E28: landed. Rust releases are git tags `server-v0.N` (Forge pins one) that move with the npm version: 2.0.0 pairs with `server-v0.15`, 2.0.1 with `server-v0.15.1`.
 
 ### Phase F: Forge's server switches (forgewilds PRs)
 
@@ -126,3 +130,5 @@ Serial: they share `forge-server`. Each pins an exact `server-v0.N` tag, deletes
 
 - 2026-11-14: program approved (E-041). Wave 2.0-1 launched: A1, A2, A3, B1, C1, C3, C5, C7, S0.
 - 2026-11-14: S0 accepted (E-042): Rust server crates live in this repo; the section codec moves in Forge's one protocol bump.
+- 2026-11-15: FV2 parity re-run on next.34: parity met but one opening hitch (Forge G13). The user: ship rather than delay; minors go in point releases. **2.0.0 published to `latest`** (`5803857`, server-v0.15).
+- 2026-11-15: the 2.0.0 publish CI hit a tc-store flake, a real lock bug (a spawning child's copy of a let-go `flock`). Fixed and released as **2.0.1** (`ea11b50`, server-v0.15.1).

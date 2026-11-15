@@ -212,23 +212,26 @@ The PM keeps this current. Workstreams run on `ws/<name>` branches in their own 
 | 2.0-1 | C5 ui-spec: UI words, model, layout, DOM presenter, tokens | ws/ui-spec | brief `docs/briefs/ui-spec.md` | E-041 | ✅ 9adf4b6 |
 | 2.0-1 | C7 intents-quality: input intents, `./quality` tiers + governor | ws/intents-quality | brief `docs/briefs/intents-quality.md` | E-041 | ✅ ca78bfb |
 | 2.0-1 | C9 net: client sessions over a handed-in transport, schemas + hash, snapshots, prediction | ws/net | brief `docs/briefs/net.md` | E-042 | ✅ 603340e |
-| 2.0-1 | A4 ref-scenes: S1–S6 pages, rungs, counted budgets | ws/ref-scenes | brief `docs/briefs/ref-scenes.md` | E-041 | ⏳ integrating (7b92849): six ref scenes counted, BENCH section |
+| 2.0-1 | A4 ref-scenes: S1–S6 pages, rungs, counted budgets | ws/ref-scenes | brief `docs/briefs/ref-scenes.md` | E-041 | ✅ landed in 2.0.0 (CHANGELOG) |
 | 2.0-2 | B2 core-immediate: the immediate API as transient sets on the core; per-mesh path deleted | ws/core-immediate | brief `docs/briefs/core-immediate.md` | E-041 | ✅ 7caeb73: merged mesh runs, distinct-6k 5,775 → 33 commands |
 | 2.0-2 | B3 core-views: views plural, stereo once, camera-relative origin | ws/core-views | brief `docs/briefs/core-views.md` | E-041 | ✅ 85eb970: stereo = mono + 5 calls, one cull; camera-relative origin |
 | 2.0-2 | C2 voxel-draw: sections on the core, cave cull, streaming budgets; old demo module replaced | ws/voxel-draw | brief `docs/briefs/voxel-draw.md` | E-041 | ✅ c315702: createVoxelWorld, 19 calls at r8 and r16, cave culling; old demo API still in (B4 moves it) |
 | 2.0-2 | C4 actors: GPU-posed crowds, rigid (part models) and skinned | ws/actors | brief `docs/briefs/actors.md` | E-041 | ✅ b9844fc: 1,000 actors 12 calls, GPU pose |
-| 2.0-3 | B4 core-passes: device loss, hidden bits, Renderer.core (27c1ea9 integrating); post/AA, sky, shadows, voxel demo move | ws/core-passes | brief `docs/briefs/core-passes.md` | E-041 | 🔨 running |
-| 2.0-3 | B5 core-effects: particles, weather, water, decals on the core | ws/core-effects | brief `docs/briefs/core-effects.md` | E-041 | 🔨 running |
-| 2.0-3 | C6 ui-world: world presenter, head-follow HUD, ray aim | ws/ui-world | brief `docs/briefs/ui-world.md` | E-041 | 🔨 running |
-| 2.0-3 | C8 xr-merge: one XR on core views | ws/xr-merge | brief `docs/briefs/xr-merge.md` | E-041 | 🔨 running |
-| 2.0-3 | E2a server-net: tc-net, interop with createNet over a real WebSocket | ws/server-net | brief `docs/briefs/server-net.md` | E-042 | ⏳ integrating (ea36470) |
-| 2.0-3 | E3a server-store: tc-store log, recovery, lock | ws/server-store | brief `docs/briefs/server-store.md` | E-042 | 🔨 running |
-| 2.0-3 | D0 Forge on 2.0.0-next.0: boot, loop, GPU device (forgewilds PR) | client/tc-boot | Forge scratchpad brief | E-041 | 🔨 running |
-| 2.0-2 | E1 server-wire: Rust workspace, tc-wire + derive, tc-tsgen, Rust↔TS hash parity, check:rust | ws/server-wire | brief `docs/briefs/server-wire.md` | E-042 | ⏳ integrating (05969c6): Rust↔TS hash parity, Forge generated.ts byte-identical |
+| 2.0-3 | B4 core-passes: device loss, hidden bits, Renderer.core (27c1ea9 integrating); post/AA, sky, shadows, voxel demo move | ws/core-passes | brief `docs/briefs/core-passes.md` | E-041 | ✅ landed in 2.0.0 (CHANGELOG) |
+| 2.0-3 | B5 core-effects: particles, weather, water, decals on the core | ws/core-effects | brief `docs/briefs/core-effects.md` | E-041 | ✅ landed in 2.0.0 (CHANGELOG) |
+| 2.0-3 | C6 ui-world: world presenter, head-follow HUD, ray aim | ws/ui-world | brief `docs/briefs/ui-world.md` | E-041 | ✅ landed in 2.0.0 (CHANGELOG) |
+| 2.0-3 | C8 xr-merge: one XR on core views | ws/xr-merge | brief `docs/briefs/xr-merge.md` | E-041 | ✅ landed in 2.0.0 (CHANGELOG) |
+| 2.0-3 | E2a server-net: tc-net, interop with createNet over a real WebSocket | ws/server-net | brief `docs/briefs/server-net.md` | E-042 | ✅ landed in 2.0.0 (CHANGELOG) |
+| 2.0-3 | E3a server-store: tc-store log, recovery, lock | ws/server-store | brief `docs/briefs/server-store.md` | E-042 | ✅ landed in 2.0.0 (CHANGELOG) |
+| 2.0-3 | D0 Forge on 2.0.0-next.0: boot, loop, GPU device (forgewilds PR) | client/tc-boot | Forge scratchpad brief | E-041 | ✅ landed in 2.0.0 (CHANGELOG) |
+| 2.0-2 | E1 server-wire: Rust workspace, tc-wire + derive, tc-tsgen, Rust↔TS hash parity, check:rust | ws/server-wire | brief `docs/briefs/server-wire.md` | E-042 | ✅ landed in 2.0.0 (CHANGELOG) |
 | 2.0-1 | S0 server foundation + net seam research (proposal only) | — | ROADMAP S0 | E-041 | ✅ accepted: `docs/design/2.0/server.md`, E-042 |
+| 2.0-4…2.0-9 | B6–B8, C10–C12, E4–E28, D1–D9, F1–F4, EV/FV fixes (wave detail in CHANGELOG 2.0.0 and `forgewilds/docs/roadmap/phase-9.md`) | ws/* and forgewilds PRs #810, #812–#831 | — | E-041, E-042 | ✅ landed: 2.0.0-next.1…next.34, server-v0.1…v0.15 |
+| 2.0-10 | Store lock waits out a spawning child's handle copy (the 2.0.0 publish CI flake) | ws/store-flakes | — | E-042 | ✅ b69280b, in 2.0.1 / server-v0.15.1 |
 
 ## Gates
 
+- **Gate 2.0, met 2026-11-15 at `5803857` (v2.0.0):** Forge Wilds runs client and server on the engine at feature parity (Forge phase 9, evaluator FV2; one open hitch, Forge G13). 2.0.0 published to `latest`; 2.0.1 (`ea11b50`, server-v0.15.1) the same day with the tc-store lock fix. The Last Rune 0 px.
 - **Gate A (after wave 1), met 2026-11-05 at `e340ed7`:** `pnpm check` and the e2e matrix green on `main`; 2D harness pages pixel-identical before and after camera + transforms; `ARCHITECTURE.md` *Today* text matches the code.
 - **Gate C (after wave 3), met 2026-11-05, closed at `1ebca03`:** mesh page lit by the lighting block (`af36d1c`); streamed mesh updates without a main-thread copy (`bde5299`); two views per frame (`749b992`); template boots with gestures and pointers from `createGame` (`8f3cb9d`). ARCHITECTURE *Planned* lines current and principle 4 reworded (`1ebca03`).
 - **Gate B (after wave 2):** mesh demo met at `2b1032e`; template timed at 17 min (`a266b04`); client mode met at `1b09225`. Gate B met at `2b89c82` (E-010). `?demo=mesh` runs on the matrix; a template game boots from zero in under a day of agent time (timed); client mode runs the harness without a save store.
