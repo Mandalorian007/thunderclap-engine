@@ -10,6 +10,7 @@
  */
 import type { Knob } from '../quality/governor';
 import { stepKnob } from '../quality/knobs';
+import type { QualityTier } from '../quality/tier';
 import type { RenderCore } from '../render/core/core';
 import {
   type CoreDrawable,
@@ -19,7 +20,7 @@ import {
   DrawablePipelines,
 } from '../render/core/drawable';
 import { coreDepthCompare } from '../render/core/pass-list';
-import { coreColorTargets } from '../render/core/targets';
+import { type CoreTargetName, coreColorTargets } from '../render/core/targets';
 import { VIEW_SLOT } from '../render/core/view';
 import { createShaderModule } from '../render/wgsl';
 import {
@@ -116,9 +117,22 @@ export interface WeatherOptions extends Partial<WeatherConfig> {
   nearFade?: number;
   /** Pass to draw in. Default `'transparent'`. */
   pass?: string;
+  /**
+   * Write the core's velocity target where a piece draws (ws/e25-rain), so TAA follows what
+   * falls instead of averaging it into the background: a streak, flake or mote writes its own
+   * screen motion this frame (its fall and the wind, `time`'s step since the last `prepare`),
+   * a splash a fixed 1% of the screen down, which TAA's history test rejects (a splash is new
+   * each cycle and has no history to keep). The pass then attaches the velocity target
+   * (`CoreDrawable.writes`) when the core has one; without one nothing changes. Motion blur
+   * reads the same motion. Default true; false keeps the target what was behind (colour only).
+   * Fixed at construction.
+   */
+  velocity?: boolean;
 }
 
 const MAX_HEIGHT = 1e9;
+/** The extra targets weather writes by default (`WeatherOptions.velocity`). */
+const WEATHER_WRITES: readonly CoreTargetName[] = ['velocity'];
 
 /** Rain: fast thin streaks (Forge Wilds' rain, as a config). */
 export const WEATHER_RAIN: WeatherConfig = {
@@ -218,6 +232,8 @@ export class Weather implements CoreDrawable {
   readonly pass: string;
   readonly order = 10;
   readonly encoding = 'bundle';
+  /** `['velocity']` unless `WeatherOptions.velocity` is false (then none). */
+  readonly writes: readonly CoreTargetName[];
   version = 0;
   /** Drawn when there is anything to draw (`instances > 0`). */
   active = false;
@@ -258,6 +274,8 @@ export class Weather implements CoreDrawable {
   private map: WeatherOcclusionMap | null;
   private group: GPUBindGroup | null = null;
   private lastInstances = -1;
+  /** `time` at the last `prepare`, for the frame's step (the velocity). */
+  private prevTime = Number.NaN;
 
   constructor(core: RenderCore, opts: WeatherOptions = {}) {
     const device = core.device;
@@ -268,6 +286,8 @@ export class Weather implements CoreDrawable {
     this.density = opts.density ?? 1;
     this.light = opts.light ?? 1;
     this.nearFade = opts.nearFade ?? 0.6;
+    this.writes = opts.velocity === false ? [] : WEATHER_WRITES;
+    const writes = this.writes;
     this.extras = CoreViewExtras.of(core);
     this.uniform = device.createBuffer({
       label: 'weather',
@@ -306,7 +326,8 @@ export class Weather implements CoreDrawable {
         fragment: {
           module,
           entryPoint: 'fs',
-          // Rain and snow write colour only: the core's extra targets keep what is behind.
+          // Colour, and the velocity (`WeatherOptions.velocity`): emissive and roughMetal keep
+          // what is behind.
           targets: coreColorTargets(
             {
               format: color,
@@ -316,6 +337,7 @@ export class Weather implements CoreDrawable {
               },
             },
             aux,
+            writes,
           ),
         },
         primitive: { topology: 'triangle-list' },
@@ -401,7 +423,10 @@ export class Weather implements CoreDrawable {
     d[16] = dec?.floor ? 1 : 0;
     d[17] = dec?.scale ?? 1;
     d[18] = dec?.offset ?? 0;
-    d[19] = 0;
+    // The step since the last prepare (the velocity's): 0 the first time, paused or rewound.
+    const step = this.time - this.prevTime;
+    d[19] = step > 0 && step < 0.25 ? step : 0;
+    this.prevTime = this.time;
     const share = clamp01(this.intensity) * clamp01(this.density);
     let first = 0;
     for (let i = 0; i < WEATHER_MAX_LAYERS; i++) {
@@ -490,6 +515,16 @@ export class Weather implements CoreDrawable {
 
 function clamp01(v: number): number {
   return Math.max(0, Math.min(1, v));
+}
+
+/**
+ * The weather density a quality tier draws (ws/e25-rain): `'low'` 0.25, `'medium'` 0.5,
+ * `'high'` 1 (a game's storm at full count on a desktop GPU, a quarter of it on the low tier).
+ * Set it as `Weather.density` (or `WeatherOptions.density`) when the tier is chosen; the
+ * governor's `weatherDensityKnob` steps it down from there.
+ */
+export function weatherTierDensity(tier: QualityTier): number {
+  return tier === 'low' ? 0.25 : tier === 'medium' ? 0.5 : 1;
 }
 
 /** Options for `weatherDensityKnob`. */

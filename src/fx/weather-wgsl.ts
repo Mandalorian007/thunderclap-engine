@@ -30,7 +30,7 @@ struct Weather {
   wind: vec4f,    // x, z (units/s), intensity, layer count
   occl: vec4f,    // flat height, map (0 off, 1 on, 2 wrapping), map origin x, map origin z
   occl2: vec4f,   // map size x, map size z, near fade, light
-  decode: vec4f,  // the map's texel to a height: floor (1) or not, scale, offset, unused
+  decode: vec4f,  // the map's texel to a height: floor (1) or not, scale, offset; w: the frame's step (s)
   layers: array<Layer, ${WEATHER_MAX_LAYERS}>,
 };
 @group(1) @binding(0) var<uniform> w: Weather;
@@ -42,7 +42,24 @@ struct WOut {
   @location(0) uv: vec2f,
   @location(1) color: vec4f,
   @location(2) @interpolate(flat) shape: u32,
+  @location(3) vel: vec2f,
 };
+
+struct WFrag {
+  @location(0) color: vec4f,
+  @location(3) velocity: vec4f,
+};
+
+// The screen motion (uv, as \`core_velocity\`) of a corner at \`q\` drawn at \`clip\` that moves at
+// \`motion\` units/s: where it is less where it was the frame's step ago (w.decode.w), so TAA
+// follows the piece instead of averaging it into what is behind.
+fn w_velocity(q: vec3f, clip: vec4f, motion: vec3f) -> vec2f {
+  let qp = vec4f(q - motion * w.decode.w, 1.0);
+  let pw = dot(view.prevRows[2], qp);
+  if (pw <= 0.0 || clip.w <= 0.0) { return vec2f(0.0); }
+  let pn = vec2f(dot(view.prevRows[0], qp), dot(view.prevRows[1], qp)) / pw;
+  return (clip.xy / clip.w - pn) * vec2f(0.5, -0.5);
+}
 
 fn hash11(p: f32) -> f32 {
   var x = fract(p * 0.1031);
@@ -120,6 +137,9 @@ fn occlusion(xz: vec2f) -> f32 {
     let fade = 1.0 - smoothstep(R * 0.7, R, length(sxz));
     o.color = vec4f(L.c.rgb * w.occl2.w, L.c.a * (1.0 - sph) * fade);
     o.shape = shape;
+    // A splash is new each cycle: a fixed motion (1% of the screen down) that TAA's history test
+    // rejects, so it shows at full strength instead of fading in. Still when the clock is.
+    o.vel = vec2f(0.0, select(0.0, 0.01, w.decode.w > 0.0));
     return o;
   }
   let ground = occlusion(p.xz);
@@ -158,10 +178,11 @@ fn occlusion(xz: vec2f) -> f32 {
   let fade = smoothstep(w.occl2.z, w.occl2.z + 1.4, d) * (1.0 - smoothstep(R * 0.7, R, edge));
   o.color = vec4f(L.c.rgb * w.occl2.w, L.c.a * fade * mix(0.7, 1.0, hash11(s * 1.7)));
   o.shape = shape;
+  o.vel = w_velocity(q, o.clip, vel);
   return o;
 }
 
-@fragment fn fs(in: WOut) -> @location(0) vec4f {
+@fragment fn fs(in: WOut) -> WFrag {
   var r: f32;
   if (in.shape == 0u) {
     r = 1.0 - in.uv.x * in.uv.x;
@@ -177,6 +198,9 @@ fn occlusion(xz: vec2f) -> f32 {
   }
   if (r <= 0.0) { discard; }
   let a = clamp(in.color.a * r, 0.0, 1.0);
-  return vec4f(in.color.rgb * a, a);
+  var f: WFrag;
+  f.color = vec4f(in.color.rgb * a, a);
+  f.velocity = vec4f(in.vel, 0.0, 1.0);
+  return f;
 }
 `;

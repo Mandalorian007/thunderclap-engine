@@ -31,6 +31,7 @@ export {
   WEATHER_SNOW,
   Weather,
   weatherDensityKnob,
+  weatherTierDensity,
 } from './weather';
 export {
   WEATHER_HEAD_FLOATS,

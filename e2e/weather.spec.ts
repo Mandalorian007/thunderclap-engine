@@ -6,8 +6,13 @@
  * - both particle systems report live particles (`ParticleSystem.alive`, counted on the GPU);
  * - a pixel in the dense rain column differs from the clear sky behind it (sampled from a
  *   screenshot with the particles drawn, then skipped; no golden image).
+ *
+ * And the storm page (harness/storm.html): Forge's storm (rain and splashes over a pond, high
+ * tier) under TAA keeps most of the light the rain adds without AA. Before the weather wrote
+ * velocity, TAA averaged the moving streaks into the history and kept about a third.
  */
 import type { Frame, Page } from '@playwright/test';
+import type { HarnessStormState } from '../harness/storm-state';
 import type { HarnessWeatherState, WeatherProbe } from '../harness/weather-state';
 import { expect, harnessFrame, test } from './fixtures';
 import { HARNESS_URL, WRAPPER_URL } from './ports';
@@ -127,5 +132,44 @@ test('a pixel in the rain column differs from the clear sky', async ({ page, wra
     .toBeGreaterThan(8);
   // Behind the probe is the blue clear sky, not geometry.
   expect(sky[2]).toBeGreaterThan(sky[0] + 10);
+  expect(errors).toEqual([]);
+});
+
+/** The storm page's mean luma once `samples` reads are in, for one query. */
+async function stormLuma(page: Page, query: string, samples: number): Promise<HarnessStormState> {
+  await page.goto(`${HARNESS_URL}storm.html?luma=1&${query}`);
+  const read = () =>
+    page.evaluate(() => {
+      const s = window.__harnessStorm?.state;
+      return s ? (JSON.parse(JSON.stringify(s)) as HarnessStormState) : null;
+    });
+  await expect
+    .poll(
+      async () => {
+        const s = await read();
+        if (s?.ready && s.gpu !== 'ok') throw new Error(`storm: ${s.gpu}`);
+        return s?.lumaSamples ?? -1;
+      },
+      { timeout: 20_000 },
+    )
+    .toBeGreaterThanOrEqual(samples);
+  return (await read())!;
+}
+
+test('the storm under TAA keeps most of the rain', async ({ page, wrapper }) => {
+  test.skip(wrapper !== 'top', 'storm runs top-level only');
+  test.setTimeout(60_000);
+  errors.length = 0;
+  page.on('pageerror', (e) => errors.push(e.message));
+  const clear = await stormLuma(page, 'aa=taa&weather=off', 12);
+  const plain = await stormLuma(page, 'aa=off', 12);
+  const taa = await stormLuma(page, 'aa=taa', 12);
+  expect(taa.instances).toBe(18000);
+  expect(taa.density).toBe(1);
+  expect(clear.gpuErrors + plain.gpuErrors + taa.gpuErrors).toBe(0);
+  const added = plain.luma - clear.luma;
+  expect(added).toBeGreaterThan(0.2);
+  // Without velocity this was about 0.3 of the plain frame's; with it about 0.85.
+  expect((taa.luma - clear.luma) / added).toBeGreaterThan(0.6);
   expect(errors).toEqual([]);
 });

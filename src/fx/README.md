@@ -788,6 +788,15 @@ const world = createVoxelWorld(core, {
   map (`setOcclusionMap`: a roof, a canopy, the ground). `wind`, `intensity`, `density` and
   `light` are live; `configure(config)` swaps configs. `WEATHER_RAIN`, `WEATHER_SNOW` and
   `WEATHER_DUST_STORM` are configs, not code.
+- Weather under TAA: the particles write their screen motion to the velocity target
+  (`Weather.writes` is `['velocity']`, so the pass attaches it even with `PassDesc.writes: []`;
+  build a game pipeline drawn in that pass from `core.passTargets(id)`). TAA then reprojects a
+  falling streak to where it was and rejects the history behind it; without it, TAA blended each
+  thin moving streak into the still background and kept about a third of the rain's light
+  (`harness/storm.html`: about 0.3 of the AA-off frame before, about 0.85 after). A splash writes
+  a fixed small motion so its ring is never averaged away either. `velocity: false` writes colour
+  alone, as before. `weatherTierDensity(tier)` is the density for a quality tier (`low` 0.25,
+  `medium` 0.5, `high` 1).
 - Quality knobs for the governor: `particleBudgetKnob(systems)` (spawn share 1 down to 0.25),
   `weatherDensityKnob(weather)` (density 1 down to 0.25) and `waterReflectionKnob(waters)`
   (reflection off and back).
@@ -806,7 +815,9 @@ a layer.
 
 Decals: next section. Tests `particles-core.test.ts`, `water-core.test.ts`,
 `water-look.test.ts`, `water-shading.test.ts`,
-`weather.test.ts`; demo `harness/fx-core.html` (`?weather=dust|snow|rain|off`), a stereo pair.
+`weather.test.ts`; demo `harness/fx-core.html` (`?weather=dust|snow|rain|off`), a stereo pair;
+`harness/storm.html`, a game's storm over a pond with the rain's light, GPU ms and quality tier
+(`?aa=off|fxaa|taa`, `?tier=`, `?weather=off`, `?velocity=0`, `?luma=1`).
 
 ### Decals on the render core
 
