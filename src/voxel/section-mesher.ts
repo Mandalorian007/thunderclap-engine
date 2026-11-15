@@ -396,7 +396,8 @@ export class SectionMesher {
           this.overriding = true;
         }
         if (this.overriding) {
-          const values = bits ? (this.overValue ??= new Uint32Array(pv)) : null;
+          if (bits && !this.overValue) this.overValue = new Uint32Array(pv);
+          const values = bits ? this.overValue : null;
           for (let k = 0; k + 1 < overrides.length; k += 2) {
             const i = overrides[k];
             if (i < 0 || i >= pv) continue;
