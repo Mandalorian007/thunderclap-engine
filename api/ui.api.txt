@@ -3166,6 +3166,9 @@ function stepper(label: string, value: number, onChange: (value: number) => void
 ## tabNeed
 function tabNeed(label: string, text: number, weight: number, family: string, padX: number, border: number): number;
 
+## tabShares
+function tabShares(n: number, least: number, w: number, weight: (i: number) => number, out: Float64Array): void;
+
 ## textScaleTokens
 function textScaleTokens(scale: number, base?: Record<string, number>): Record<string, string>;
 

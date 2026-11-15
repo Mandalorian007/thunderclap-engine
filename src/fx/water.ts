@@ -6,33 +6,25 @@ import type { Renderer } from '../render/renderer';
 import { auxSuffix, ScenePipelineCache, sceneVariant } from '../render/scene-pipelines';
 import type { SceneTarget } from '../render/scene-target';
 import { createShaderModule } from '../render/wgsl';
-import { type WaterLook, WaterOnCore } from './water-core';
+import { WaterOnCore } from './water-core';
+import {
+  defaultWaterWaves,
+  WATER_PREMULTIPLIED as PREMULTIPLIED,
+  packWaterParams,
+  set3,
+  WATER_DEFAULTS,
+  WATER_PARAMS_FLOATS,
+  type WaterFoam,
+  type WaterLook,
+  type WaterWave,
+  waterFoam,
+} from './water-shading';
 import { WATER_DEPTH_COPY_WGSL, WATER_MAX_WAVES, WATER_WGSL } from './water-wgsl';
 
-/** Floats in the water's params block: 5 vec4 + `WATER_MAX_WAVES` vec4 (144 bytes). */
-export const WATER_PARAMS_FLOATS = 20 + WATER_MAX_WAVES * 4;
+export type { WaterFoam, WaterWave } from './water-shading';
+export { WATER_PARAMS_FLOATS } from './water-shading';
 
 const DEPTH_COPY_FORMAT: GPUTextureFormat = 'depth32float';
-
-/** One scrolling wave layer (`WaterOptions.waves`, `Water.waves`). */
-export interface WaterWave {
-  /** World units → field units (bigger is choppier). */
-  scale: number;
-  /** Field units scrolled per second. */
-  speed: number;
-  /** Normal strength (and, times `displace`, height) of the layer. */
-  amplitude: number;
-  /** Scroll direction in the xz plane; normalised when packed. */
-  direction: [number, number];
-}
-
-/** Foam settings (`WaterOptions.foam`, `Water.foam`); `null` for none. */
-export interface WaterFoam {
-  /** World units of water depth under which foam forms. Default 0.4. */
-  width: number;
-  /** Linear RGB. Default near white. */
-  color: ArrayLike<number>;
-}
 
 export interface WaterOptions {
   /** Plane extent along x and z (one number for a square). Default 100. Fixed at construction. */
@@ -112,23 +104,6 @@ export interface WaterOptions {
    */
   shade?: string;
 }
-
-const DEFAULT_SUN_DIR = [0.4, 0.8, 0.3] as const;
-const DEFAULT_SUN_COLOR = [1.6, 1.5, 1.3] as const;
-const DEFAULT_SKY = [0.62, 0.72, 0.9] as const;
-
-const DEFAULT_SHALLOW = [0.1, 0.45, 0.45] as const;
-const DEFAULT_DEEP = [0.01, 0.07, 0.14] as const;
-const DEFAULT_FOAM_COLOR = [0.9, 0.95, 0.97] as const;
-const DEFAULT_WAVES = (): WaterWave[] => [
-  { scale: 0.35, speed: 0.6, amplitude: 0.25, direction: [1, 0.3] },
-  { scale: 0.9, speed: 0.9, amplitude: 0.12, direction: [-0.4, 1] },
-];
-
-const PREMULTIPLIED: GPUBlendState = {
-  color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-  alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-};
 
 /**
  * An animated water surface: a plane from `geom`'s `plane` whose shader sums scrolling
@@ -243,21 +218,17 @@ export class Water implements Drawable {
     this.reflectionSteps = opts.reflectionSteps ?? 16;
     this.reflectionReach = opts.reflectionReach ?? 30;
     this.plane = opts.plane ?? true;
-    set3(this.sunDirection, opts.sunDirection ?? DEFAULT_SUN_DIR);
-    set3(this.sunColor, opts.sunColor ?? DEFAULT_SUN_COLOR);
-    set3(this.skyColor, opts.skyColor ?? DEFAULT_SKY);
+    set3(this.sunDirection, opts.sunDirection ?? WATER_DEFAULTS.sunDirection);
+    set3(this.sunColor, opts.sunColor ?? WATER_DEFAULTS.sunColor);
+    set3(this.skyColor, opts.skyColor ?? WATER_DEFAULTS.sky);
     this.level = opts.level ?? 0;
-    set3(this.shallowColor, opts.shallowColor ?? DEFAULT_SHALLOW);
-    set3(this.deepColor, opts.deepColor ?? DEFAULT_DEEP);
+    set3(this.shallowColor, opts.shallowColor ?? WATER_DEFAULTS.shallow);
+    set3(this.deepColor, opts.deepColor ?? WATER_DEFAULTS.deep);
     this.depthFade = opts.depthFade ?? 4;
     this.fresnel = opts.fresnel ?? 0.6;
     this.roughness = opts.roughness ?? 0.08;
-    this.waves = opts.waves ?? DEFAULT_WAVES();
-    const foam = opts.foam;
-    this.foam =
-      foam === null
-        ? null
-        : { width: foam?.width ?? 0.4, color: foam?.color ?? DEFAULT_FOAM_COLOR };
+    this.waves = opts.waves ?? defaultWaterWaves();
+    this.foam = waterFoam(opts.foam);
     this.displace = opts.displace ?? 0;
     this.opacity = opts.opacity ?? 0.85;
     this.depthTarget = opts.depthTarget ?? null;
@@ -377,36 +348,7 @@ export class Water implements Drawable {
         : this.copyDepth(encoder, frame);
     this.depthGroup = this.depthOn ? this.copyGroup : null;
     const p = this.params;
-    p[0] = this.shallowColor[0]!;
-    p[1] = this.shallowColor[1]!;
-    p[2] = this.shallowColor[2]!;
-    p[3] = this.opacity;
-    p[4] = this.deepColor[0]!;
-    p[5] = this.deepColor[1]!;
-    p[6] = this.deepColor[2]!;
-    p[7] = this.depthFade;
-    p[8] = this.fresnel;
-    p[9] = this.roughness;
-    p[10] = this.displace;
-    p[11] = this.level;
-    const foam = this.foam;
-    p[12] = foam ? (foam.color[0] ?? 0) : 0;
-    p[13] = foam ? (foam.color[1] ?? 0) : 0;
-    p[14] = foam ? (foam.color[2] ?? 0) : 0;
-    p[15] = foam ? foam.width : 0;
-    const count = Math.min(this.waves.length, WATER_MAX_WAVES);
-    p[16] = this.time;
-    p[17] = count;
-    p[18] = this.depthOn ? 1 : 0;
-    p[19] = this.origin[1]!;
-    for (let i = 0; i < WATER_MAX_WAVES; i++) {
-      const o = 20 + i * 4;
-      const w = i < count ? this.waves[i]! : null;
-      p[o] = w ? w.scale : 0;
-      p[o + 1] = w ? w.speed : 0;
-      p[o + 2] = w ? w.amplitude : 0;
-      p[o + 3] = w ? Math.atan2(w.direction[1], w.direction[0]) : 0;
-    }
+    packWaterParams(this, p, this.displace, this.depthOn, this.origin[1]!);
     this.device.queue.writeBuffer(this.paramsBuffer, 0, p);
   }
 
@@ -561,10 +503,4 @@ export function waterHeight(water: Water, x: number, z: number, t = water.time):
     h += w.amplitude * waveOut[0]!;
   }
   return water.origin[1]! + water.level + water.displace * h;
-}
-
-function set3(out: Float32Array, v: ArrayLike<number>): void {
-  out[0] = v[0] ?? 0;
-  out[1] = v[1] ?? 0;
-  out[2] = v[2] ?? 0;
 }

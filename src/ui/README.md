@@ -1024,7 +1024,10 @@ counts), keeps `data-tc-id` control ids (`<panel>/<word>[:<row>]`) so `PadNav`, 
 A tabs' option's `label` row field is its button's words (`list.row(k).set('label', …)` or
 `setAt(0, …)`). A `weigh` tabs shares its row by each label's measured need (`tabNeed`: the label
 in the theme's sans at the tabs' `labelWeight`, default 400, plus the padding and border), so a
-bold label fits where a letter count did not (B24); both presenters draw it at that weight. A text with a `term` places the term at its column's start and its words a block
+bold label fits where a letter count did not (B24); both presenters draw it at that weight. `tabShares(n, least, w, weight, out)` is that
+sharing on its own (exported, ws/water-split): `n` widths in `w` units into `out`, by `weight(i)`
+(or equal), none under `least`, each floored and the last taking the rest; a presenter of its own
+places tabs with it as the engine's do. A text with a `term` places the term at its column's start and its words a block
 beside it, both written inline (no float: WebKit ignores one in the line clamp's box), so it holds
 with the engine's sheet held off. Under `fit: 'content'` the host's inline width and height are the
 engine's: a game that places the host by its own sums gives its width another way (a custom

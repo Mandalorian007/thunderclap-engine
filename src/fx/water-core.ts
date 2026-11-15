@@ -17,46 +17,20 @@ import {
   warmBindings,
 } from '../render/core/drawable';
 import { coreDepthCompare } from '../render/core/pass-list';
-import { CORE_TARGET, type CoreTargetName, coreColorTargets } from '../render/core/targets';
+import { CORE_TARGET, coreColorTargets } from '../render/core/targets';
 import { VERTEX_LAYOUT_3D } from '../render/mesh';
-import { FxDepthModules, fxDepthCode } from './depth';
+import { FxDepthModules } from './depth';
 import type { Water } from './water';
-import { WATER_CORE_FLOATS, waterCoreWgsl, waterLookWgsl } from './water-wgsl';
+import { WATER_CORE_FLOATS } from './water-shade-wgsl';
+import {
+  makeWaterLook,
+  WATER_PREMULTIPLIED as PREMULTIPLIED,
+  packWaterCore,
+  type WaterLook,
+} from './water-shading';
+import { waterCoreWgsl } from './water-wgsl';
 
-const PREMULTIPLIED: GPUBlendState = {
-  color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-  alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-};
-
-/**
- * The water as a look over a game's own geometry (`Water.look`, ws/scene-read-fit): what a
- * draw set (or a `VoxelMaterial`) that shades its surfaces as this water takes. The set reads
- * the core's scene depth (and colour, with `readsColor`) through the core's scene-read group,
- * in a pass that does not write depth (`'transparent'`).
- */
-export interface WaterLook {
-  /**
-   * WGSL to put after the set's prelude, before its fragment: the water's group at the look's
-   * index, `water_look(frag, rel, up) -> WaterShade` (`frag` the fragment's builtin
-   * position, `rel` its core-frame position, `up` its normal; the waves bend what faces up)
-   * and `water_look_out(s) -> WaterLookOut` (colour, rough-metal, velocity at the core's
-   * locations). Call `water_look` in uniform control flow (it takes screen derivatives). It
-   * declares `water`, `wc`, `extras` and the engine's noise helpers.
-   */
-  readonly wgsl: string;
-  /** The water's bind group, for the set's `bindGroups` at the look's index. */
-  readonly bindGroup: { readonly layout: GPUBindGroupLayout; readonly group: GPUBindGroup };
-  /** Premultiplied alpha (the shading's colour is premultiplied). */
-  readonly blend: GPUBlendState;
-  /** The core targets `water_look_out` writes. */
-  readonly writes: readonly CoreTargetName[];
-  /** Always true: the shoreline, depth tint and foam read the scene depth. */
-  readonly readsDepth: true;
-  /** True when the water refracts or reflects the scene (`WaterOptions.refraction` > 0 or reflection steps). */
-  readonly readsColor: boolean;
-}
-
-const LOOK_WRITES: readonly CoreTargetName[] = ['roughMetal', 'velocity'];
+export type { WaterLook } from './water-shading';
 
 /** Options for `WaterOnCore`. */
 export interface WaterOnCoreOptions {
@@ -164,28 +138,18 @@ export class WaterOnCore implements CoreDrawable {
     const w = this.water;
     w.prepare(encoder);
     this.active = w.plane && w.mesh.indexCount > 0;
-    const b = this.block;
-    const s = w.sunDirection;
-    const len = Math.hypot(s[0]!, s[1]!, s[2]!) || 1;
-    b[0] = s[0]! / len;
-    b[1] = s[1]! / len;
-    b[2] = s[2]! / len;
-    b[3] = w.sunColor[0]! + w.sunColor[1]! + w.sunColor[2]! > 0 ? 1 : 0;
-    b[4] = w.sunColor[0]!;
-    b[5] = w.sunColor[1]!;
-    b[6] = w.sunColor[2]!;
-    b[8] = w.skyColor[0]!;
-    b[9] = w.skyColor[1]!;
-    b[10] = w.skyColor[2]!;
-    // Without the colour copy, refraction and reflection fall back in the shader (1×1 input).
-    b[12] = this.readsColor ? Math.max(0, w.refraction) : 0;
-    b[13] = Math.max(0, Math.floor(w.reflectionSteps));
-    b[14] = w.reflectionReach;
-    this.core.device.queue.writeBuffer(this.blockBuffer, 0, b);
+    packWaterCore(w, this.block, this.readsColor);
+    this.core.device.queue.writeBuffer(this.blockBuffer, 0, this.block);
   }
 
-  /** Its pipeline's empty first draw (`CoreDrawable.warm`, ws/warm-voxel-fit). */
+  /**
+   * Its pipeline's empty first draw (`CoreDrawable.warm`, ws/warm-voxel-fit). Nothing without
+   * the plane (`Water.plane` false, ws/water-split): the plane's pipeline is neither built nor
+   * warmed, so a game's `shade` that reads its looks' groups never compiles in the plane's
+   * layout. A water whose plane is turned on later builds it at its first draw.
+   */
   warm(enc: GPURenderPassEncoder, ctx: CoreDrawContext): number {
+    if (!this.water.plane) return 0;
     enc.setPipeline(this.pipes.get(ctx));
     enc.setBindGroup(0, ctx.viewGroup);
     enc.setBindGroup(1, this.bindGroup());
@@ -210,36 +174,15 @@ export class WaterOnCore implements CoreDrawable {
   look(group: number): WaterLook {
     let look = this.looks.get(group);
     if (look) return look;
-    const device = this.core.device;
-    const V = GPUShaderStage.VERTEX;
-    const F = GPUShaderStage.FRAGMENT;
-    const layout = device.createBindGroupLayout({
-      label: 'water-look-layout',
-      entries: [
-        { binding: 0, visibility: V | F, buffer: {} },
-        { binding: 1, visibility: F, buffer: {} },
-        { binding: 2, visibility: F, buffer: { type: 'read-only-storage' } },
-      ],
-    });
-    look = {
-      wgsl: fxDepthCode(waterLookWgsl(group, this.shade), this.core.passes.reversedZ),
-      bindGroup: {
-        layout,
-        group: device.createBindGroup({
-          label: 'water-look',
-          layout,
-          entries: [
-            { binding: 0, resource: { buffer: this.params } },
-            { binding: 1, resource: { buffer: this.blockBuffer } },
-            { binding: 2, resource: { buffer: this.extras.buffer } },
-          ],
-        }),
-      },
-      blend: PREMULTIPLIED,
-      writes: LOOK_WRITES,
-      readsDepth: true,
-      readsColor: this.readsColor,
-    };
+    look = makeWaterLook(
+      this.core,
+      group,
+      this.shade,
+      this.params,
+      this.blockBuffer,
+      this.extras.buffer,
+      this.readsColor,
+    );
     this.looks.set(group, look);
     return look;
   }

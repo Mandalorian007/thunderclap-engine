@@ -123,6 +123,8 @@ export type { WaterFoam, WaterOptions, WaterWave } from './water';
 export { WATER_PARAMS_FLOATS, Water, waterHeight } from './water';
 export type { WaterLook, WaterOnCoreOptions } from './water-core';
 export { WaterOnCore, waterReflectionKnob } from './water-core';
+export type { WaterShadingOptions } from './water-shading';
+export { WaterShading } from './water-shading';
 export {
   WATER_CORE_FLOATS,
   WATER_CORE_WGSL,

@@ -764,6 +764,20 @@ const world = createVoxelWorld(core, {
   },
 });
 ```
+- A plane-less water (`plane: false`) builds and warms no plane pipeline (ws/water-split): a
+  `shade` that reads groups only its looks' sets have never compiles in the plane's layout.
+  Turned on later, the plane builds its pipeline at its first draw.
+- The look without the plane's code (ws/water-split, E18): `new WaterShading(core, opts?:
+  WaterShadingOptions)` is a water's shading settings (`WaterOptions`' `level`, colours,
+  `depthFade`, `fresnel`, `roughness`, `waves`, `foam`, `opacity`, `refraction`,
+  `reflectionSteps`, `reflectionReach`, sun, sky and `shade`, all live), clock (`update(dt)`)
+  and blocks, and `look(group = 1)` returns the same `WaterLook` a `Water` of those settings
+  does. It joins the core as a drawable that never draws and uploads its two blocks in
+  `core.prepare`; `destroy()` leaves the core. Importing it bundles no `Mesh`, `geom`, plane
+  shaders or scene pipelines (`check:bundle`'s `render core + water look` entry fails if they
+  come back): about 5.8 kB gzip over the core where `Water` costs 13.6 kB. A game that draws
+  its own water surface takes it in place of `new Water(core, { plane: false })`;
+  `waterReflectionKnob` takes it too.
 - Weather: up to `WEATHER_MAX_LAYERS` layers (`PrecipLayer`: `streak`, `flake` or `dust`, count,
   radius, height, speed, length, colour) in one instanced draw. The volume follows `anchor` (or
   the first view's eye), wraps without popping, and dies under `occlusionHeight` or an occlusion
@@ -787,6 +801,7 @@ colour, view extras); `WeatherConfig`, `WeatherOptions`, `PrecipShape`, `Weather
 a layer.
 
 Decals: next section. Tests `particles-core.test.ts`, `water-core.test.ts`,
+`water-look.test.ts`, `water-shading.test.ts`,
 `weather.test.ts`; demo `harness/fx-core.html` (`?weather=dust|snow|rain|off`), a stereo pair.
 
 ### Decals on the render core

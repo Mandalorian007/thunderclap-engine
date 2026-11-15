@@ -146,7 +146,13 @@ export function wgslLightLoop(name: string, brdf: string, params = ''): string {
  * `engine_light_accum` is `wgslLightLoop('engine_light_accum', WGSL_LAMBERT_BRDF)`: the one
  * light loop, generated with a Lambert BRDF; `WGSL_PBR` generates the same loop with its GGX BRDF.
  */
-export const WGSL_LIGHTS = /* wgsl */ `
+export const WGSL_LIGHTS = /* @__PURE__ */ lightsWgsl(
+  /* @__PURE__ */ wgslLightLoop('engine_light_accum', WGSL_LAMBERT_BRDF),
+);
+
+/** `WGSL_LIGHTS` around its light loop (a function, so a module that leaves it out drops it). */
+function lightsWgsl(lambertLoop: string): string {
+  return /* wgsl */ `
 struct EnginePointLight {
   position: vec3f,
   radius: f32,
@@ -233,7 +239,7 @@ fn engine_spot_cone(cos_theta: f32, cos_outer: f32, cos_inner: f32) -> f32 {
 fn engine_instance_layers(flags: u32) -> u32 {
   return flags >> 1u;
 }
-${wgslLightLoop('engine_light_accum', WGSL_LAMBERT_BRDF)}
+${lambertLoop}
 fn engine_lambert_layers(normal: vec3f, world_pos: vec3f, layer_mask: u32) -> vec3f {
   return lights.ambient + engine_light_accum(world_pos, normal, layer_mask);
 }
@@ -241,6 +247,7 @@ fn engine_lambert(normal: vec3f, world_pos: vec3f) -> vec3f {
   return engine_lambert_layers(normal, world_pos, 0xffffffffu);
 }
 `;
+}
 
 /** Hash / value-noise / fbm helpers available to every material and fullscreen pass. */
 export const WGSL_NOISE = /* wgsl */ `
@@ -540,7 +547,7 @@ fn engine_write_aux(o: ptr<function, FragOut>, rough_metal: vec2f, velocity: vec
 }
 
 /** The material prelude for the 2D vertex layout (what every 2D material compiles with). */
-export const WGSL_MATERIAL_PRELUDE = materialPrelude(VERTEX_LAYOUT_2D);
+export const WGSL_MATERIAL_PRELUDE = /* @__PURE__ */ materialPrelude(VERTEX_LAYOUT_2D);
 
 /** Prelude for fullscreen passes: `vs_fullscreen` emits one triangle covering the target. */
 export const WGSL_FULLSCREEN_PRELUDE = /* wgsl */ `

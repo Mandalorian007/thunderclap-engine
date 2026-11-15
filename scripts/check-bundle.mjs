@@ -64,6 +64,28 @@ export const NAMED = [
     names: ['createRenderCore', 'CoreShadowMap', 'CoreSunShadow'],
     excludes: ['ui', 'audio', 'voxel', 'post', 'assets', 'render/renderer.ts', 'render/shadow.ts'],
   },
+  // A game that shades its own water surface with the engine's water (ws/water-split, E18):
+  // the look's settings and blocks, none of the plane (its mesh, geometry, shaders, pipelines).
+  {
+    name: 'render core + water look { createRenderCore, WaterShading }',
+    from: ['./render', './fx'],
+    names: ['createRenderCore', 'WaterShading'],
+    excludes: [
+      'ui',
+      'audio',
+      'voxel',
+      'post',
+      'assets',
+      'geom',
+      'render/renderer.ts',
+      'render/mesh.ts',
+      'render/scene-pipelines.ts',
+      'render/pbr-wgsl.ts',
+      'fx/water.ts',
+      'fx/water-core.ts',
+      'fx/water-wgsl.ts',
+    ],
+  },
   // createGame pulls the whole engine today (ui, audio, fx, post); D2 R5 wants a feature-off
   // createGame free of ui and audio. `todo` folders are reported, not failed, until A3 (ws/kit)
   // splits it; then they move to `excludes`.

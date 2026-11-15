@@ -351,6 +351,7 @@ export {
   specStill,
   specTokenVar,
   tabNeed,
+  tabShares,
   textWidth,
   theme,
   typeMeasure,
