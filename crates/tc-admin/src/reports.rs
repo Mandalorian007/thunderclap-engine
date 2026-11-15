@@ -9,13 +9,14 @@
 //! after, and past [`ReportsConfig::budget`] bytes the oldest go until it
 //! holds three quarters of it. Reports never change the game.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, TrySendError};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use tracing::{debug, info, warn};
@@ -59,16 +60,31 @@ pub struct ReportsConfig {
     pub max_report: usize,
     /// Reports waiting to be written; past this, new ones are dropped.
     pub queue: usize,
+    /// How many reports one sender (a [`Report::from`]) may send: none,
+    /// as many as it likes.
+    pub rate: Option<ReportRate>,
+}
+
+/// A sender's report budget ([`ReportsConfig::rate`]): `burst` at once,
+/// then one each `every`. Reports over it are dropped and counted
+/// ([`ReportCounts::rate_limited`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReportRate {
+    /// Reports a sender may send at once.
+    pub burst: u32,
+    /// How long one more takes to earn.
+    pub every: Duration,
 }
 
 impl Default for ReportsConfig {
-    /// 64 MiB, two weeks, 256 KiB a report, 16 waiting.
+    /// 64 MiB, two weeks, 256 KiB a report, 16 waiting, no rate.
     fn default() -> ReportsConfig {
         ReportsConfig {
             budget: 64 * 1024 * 1024,
             keep_days: 14,
             max_report: 256 * 1024,
             queue: 16,
+            rate: None,
         }
     }
 }
@@ -80,7 +96,9 @@ pub struct ReportCounts {
     pub received: u64,
     /// Written.
     pub saved: u64,
-    /// Dropped: too big, the queue full, a failed write.
+    /// Dropped over their sender's rate ([`ReportsConfig::rate`]).
+    pub rate_limited: u64,
+    /// Dropped otherwise: too big, the queue full, a failed write.
     pub dropped: u64,
     /// Removed for age or to stay in the budget.
     pub pruned: u64,
@@ -90,8 +108,38 @@ pub struct ReportCounts {
 struct Counters {
     received: AtomicU64,
     saved: AtomicU64,
+    rate_limited: AtomicU64,
     dropped: AtomicU64,
     pruned: AtomicU64,
+}
+
+/// The senders' budgets left: each one's reports in hand (a fraction
+/// earned so far) and when it last sent.
+#[derive(Debug, Default)]
+struct Budgets(HashMap<String, (f64, Instant)>);
+
+/// Senders whose budgets are kept before the full ones are forgotten.
+const MAX_SENDERS: usize = 4096;
+
+impl Budgets {
+    /// Takes one report from `from`'s budget: false if it has none left.
+    fn take(&mut self, rate: ReportRate, from: &str, now: Instant) -> bool {
+        let burst = f64::from(rate.burst.max(1));
+        let refill = |(left, at): (f64, Instant)| {
+            let earned = now.saturating_duration_since(at).as_secs_f64()
+                / rate.every.as_secs_f64().max(f64::MIN_POSITIVE);
+            (left + earned).min(burst)
+        };
+        if self.0.len() >= MAX_SENDERS && !self.0.contains_key(from) {
+            self.0.retain(|_, b| refill(*b) < burst);
+        }
+        let left = self.0.get(from).map_or(burst, |b| refill(*b));
+        if left < 1.0 {
+            return false;
+        }
+        self.0.insert(from.to_string(), (left - 1.0, now));
+        true
+    }
 }
 
 fn add(c: &AtomicU64, n: u64) {
@@ -103,6 +151,7 @@ struct Inner {
     dir: PathBuf,
     config: ReportsConfig,
     counts: Counters,
+    budgets: Mutex<Budgets>,
     tx: Mutex<Option<mpsc::SyncSender<Report>>>,
     thread: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
@@ -124,6 +173,7 @@ impl Reports {
             dir,
             config,
             counts: Counters::default(),
+            budgets: Mutex::new(Budgets::default()),
             tx: Mutex::new(Some(tx)),
             thread: Mutex::new(None),
         });
@@ -173,11 +223,19 @@ impl Reports {
         &self.0.dir
     }
 
-    /// Queues `report` to be written. False if it was dropped: too big,
-    /// the queue full, or the writer closed.
+    /// Queues `report` to be written. False if it was dropped: over its
+    /// sender's rate, too big, the queue full, or the writer closed.
     pub fn submit(&self, report: Report) -> bool {
         let c = &self.0.counts;
         add(&c.received, 1);
+        if let Some(rate) = self.0.config.rate {
+            let mut budgets = self.0.budgets.lock().unwrap_or_else(|e| e.into_inner());
+            if !budgets.take(rate, &report.from, Instant::now()) {
+                add(&c.rate_limited, 1);
+                debug!(from = %report.from, "dropped a report: over its sender's rate");
+                return false;
+            }
+        }
         let size = report.text.len() + report.image.len() + report.fields.to_string().len();
         if size > self.0.config.max_report {
             add(&c.dropped, 1);
@@ -211,6 +269,7 @@ impl Reports {
         ReportCounts {
             received: get(&c.received),
             saved: get(&c.saved),
+            rate_limited: get(&c.rate_limited),
             dropped: get(&c.dropped),
             pruned: get(&c.pruned),
         }
@@ -238,6 +297,45 @@ impl Reports {
         newest: usize,
     ) -> (u64, Vec<ReportBrief>) {
         held(&self.0.dir, since, kind, newest)
+    }
+}
+
+/// What the control channel's `reports` request reads
+/// ([`Live::reports`](crate::Live::reports)): [`Reports`], or a game's own
+/// reports kept its own way. Asked off the runtime's threads.
+pub trait ReportsSource: Send + Sync {
+    /// The reports held that arrived at or after `since` (Unix seconds)
+    /// and are of `kind`: how many, and the `newest` latest, newest first.
+    /// `Err` refuses the request (a kind the game doesn't know, say).
+    fn held(
+        &self,
+        since: Option<u64>,
+        kind: Option<&str>,
+        newest: usize,
+    ) -> Result<(u64, Vec<ReportBrief>), String>;
+
+    /// What became of the reports since the server started.
+    fn counts(&self) -> ReportCounts;
+
+    /// The game's own numbers about its reports (per player, per build,
+    /// ...), carried as [`ReportsReply::extra`](crate::ReportsReply::extra).
+    fn extra(&self) -> Option<Value> {
+        None
+    }
+}
+
+impl ReportsSource for Reports {
+    fn held(
+        &self,
+        since: Option<u64>,
+        kind: Option<&str>,
+        newest: usize,
+    ) -> Result<(u64, Vec<ReportBrief>), String> {
+        Ok(Reports::held(self, since, kind, newest))
+    }
+
+    fn counts(&self) -> ReportCounts {
+        Reports::counts(self)
     }
 }
 
@@ -490,6 +588,7 @@ mod tests {
             ReportCounts {
                 received: 5,
                 saved: 3,
+                rate_limited: 0,
                 dropped: 2,
                 pruned: 0
             }
@@ -511,6 +610,54 @@ mod tests {
             .count();
         assert_eq!(jpgs, 1);
         assert_eq!(held(&dir, Some(u64::MAX), None, 5).0, 0);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_sender_over_its_rate_is_dropped_and_counted() {
+        let rate = ReportRate {
+            burst: 2,
+            every: Duration::from_secs(10),
+        };
+        let mut b = Budgets::default();
+        let t0 = Instant::now();
+        assert!(b.take(rate, "ada", t0));
+        assert!(b.take(rate, "ada", t0));
+        assert!(!b.take(rate, "ada", t0), "the burst is spent");
+        assert!(b.take(rate, "bo", t0), "each sender has its own");
+        assert!(!b.take(rate, "ada", t0 + Duration::from_secs(9)));
+        assert!(
+            b.take(rate, "ada", t0 + Duration::from_secs(10)),
+            "one earned"
+        );
+        assert!(b.take(rate, "bo", t0 + Duration::from_secs(60)));
+        assert!(
+            b.take(rate, "bo", t0 + Duration::from_secs(60)),
+            "back to its burst"
+        );
+        assert!(
+            !b.take(rate, "bo", t0 + Duration::from_secs(60)),
+            "and no more"
+        );
+
+        let dir = temp("rate");
+        let reports = Reports::open(
+            &dir,
+            ReportsConfig {
+                rate: Some(rate),
+                ..ReportsConfig::default()
+            },
+        )
+        .unwrap();
+        for _ in 0..3 {
+            reports.submit(report("ada", "error", "again"));
+        }
+        reports.close();
+        let c = reports.counts();
+        assert_eq!(
+            (c.received, c.saved, c.rate_limited, c.dropped),
+            (3, 2, 1, 0)
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 

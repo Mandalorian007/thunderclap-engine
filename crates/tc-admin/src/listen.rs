@@ -9,6 +9,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
+use tc_auth::{LiveTokens, Revoked};
 use tc_net::stats::IoCounters;
 use tc_sim::{Game, ReloadReport, SimHandle, SimStatus};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -19,8 +20,8 @@ use tracing::{debug, info, warn};
 
 use crate::backups::Backups;
 use crate::endpoint::{Endpoint, same_token};
-use crate::proto::{MAX_LINE, Reply, ReportsReply, Request, Status, decode_request};
-use crate::reports::Reports;
+use crate::proto::{MAX_LINE, PlayerBrief, Reply, ReportsReply, Request, Status, decode_request};
+use crate::reports::ReportsSource;
 
 /// How long one exchange may take, from accepting the connection to
 /// writing the reply: a caller that sends nothing is dropped. Long enough
@@ -36,19 +37,57 @@ pub const MAX_OPEN: usize = 8;
 /// Reports [`Request::Reports`] lists.
 pub const NEWEST_REPORTS: usize = 5;
 
+/// Why the loop didn't take a control ([`SimControl`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ControlError {
+    /// The game doesn't do this (a loop with no clock to pause, no data
+    /// to reload), and why: answered [`Reply::Unsupported`].
+    Unsupported(String),
+    /// The loop has stopped.
+    Stopped,
+    /// It was tried and failed, and why (a loader's error).
+    Failed(String),
+}
+
 /// The game's loop, as the channel drives it: [`SimControls`] over a
-/// [`SimHandle`].
+/// [`SimHandle`], or a game's own loop. Only [`status`](Self::status) is
+/// needed: the controls a loop doesn't have answer
+/// [`ControlError::Unsupported`] by default.
 pub trait SimControl: Send + Sync {
     /// The game as its loop last published it.
     fn status(&self) -> SimStatus;
-    /// Pauses the clock; false if the loop has stopped.
-    fn pause(&self) -> bool;
-    /// Runs the clock again; false if the loop has stopped.
-    fn resume(&self) -> bool;
+
+    /// The players present, for [`Status::players`]: by default `status`'s
+    /// ids, each with its name ([`SimStatus::names`]).
+    fn players(&self, status: &SimStatus) -> Vec<PlayerBrief> {
+        status
+            .players
+            .iter()
+            .map(|&id| PlayerBrief::id(id, status.names.get(&id).cloned()))
+            .collect()
+    }
+
+    /// Pauses the clock.
+    fn pause(&self) -> Result<(), ControlError> {
+        Err(ControlError::Unsupported(
+            "this game's loop has no clock to pause".into(),
+        ))
+    }
+
+    /// Runs the clock again.
+    fn resume(&self) -> Result<(), ControlError> {
+        Err(ControlError::Unsupported(
+            "this game's loop has no clock to resume".into(),
+        ))
+    }
+
     /// Reads the game's data again and rebuilds the game from it; the
-    /// outcome arrives on the receiver. `Err` if there is no loader or it
-    /// failed.
-    fn reload(&self) -> Result<mpsc::Receiver<Result<ReloadReport, String>>, String>;
+    /// outcome arrives on the receiver.
+    fn reload(&self) -> Result<mpsc::Receiver<Result<ReloadReport, String>>, ControlError> {
+        Err(ControlError::Unsupported(
+            "this game's loop doesn't reload".into(),
+        ))
+    }
 }
 
 /// Reads a game's data again, for a reload.
@@ -70,33 +109,84 @@ where
         self.handle.status().get()
     }
 
-    fn pause(&self) -> bool {
-        self.handle.pause()
+    fn pause(&self) -> Result<(), ControlError> {
+        self.handle
+            .pause()
+            .then_some(())
+            .ok_or(ControlError::Stopped)
     }
 
-    fn resume(&self) -> bool {
-        self.handle.resume()
+    fn resume(&self) -> Result<(), ControlError> {
+        self.handle
+            .resume()
+            .then_some(())
+            .ok_or(ControlError::Stopped)
     }
 
-    fn reload(&self) -> Result<mpsc::Receiver<Result<ReloadReport, String>>, String> {
+    fn reload(&self) -> Result<mpsc::Receiver<Result<ReloadReport, String>>, ControlError> {
         let load = self
             .data
             .as_ref()
-            .ok_or("this server has no data to reload")?;
-        Ok(self.handle.reload(load()?))
+            .ok_or_else(|| ControlError::Unsupported("this server has no data to reload".into()))?;
+        Ok(self.handle.reload(load().map_err(ControlError::Failed)?))
     }
 }
 
-/// Revokes a name's tokens: [`tc_auth::SessionAuth`] does.
+/// How long [`SessionRevoke`] waits for the sessions it ends to close
+/// before it answers.
+pub const REVOKE_WAIT: Duration = Duration::from_secs(3);
+
+/// Revokes a name's tokens: [`SessionRevoke`], or a game's own. Runs off
+/// the runtime's threads.
 pub trait Revoke: Send + Sync {
     /// Revokes every token `name` holds so far; its open sessions close.
-    /// The name's generation now.
-    fn revoke(&self, name: &str) -> Result<u32, String>;
+    /// The name's generation now, and the sessions that closed and those
+    /// still closing.
+    fn revoke(&self, name: &str) -> Result<Revoked, String>;
 }
 
-impl Revoke for tc_auth::SessionAuth {
-    fn revoke(&self, name: &str) -> Result<u32, String> {
-        tc_auth::SessionAuth::revoke(self, name).map_err(|e| self.format().reason(&e))
+/// [`Revoke`] through [`tc_auth::SessionAuth`]: moves the name's
+/// generation on, then waits up to `wait` for the sessions on its older
+/// tokens (in `live`, which the server's Hello hook fills:
+/// [`LiveTokens::hook`]) to close, and counts them.
+pub struct SessionRevoke {
+    /// The tokens.
+    pub auth: Arc<tc_auth::SessionAuth>,
+    /// The open sessions' tokens.
+    pub live: Arc<LiveTokens>,
+    /// How long to wait for them to close ([`REVOKE_WAIT`]).
+    pub wait: Duration,
+    rt: tokio::runtime::Handle,
+}
+
+impl SessionRevoke {
+    /// Over `auth` and `live`, waiting [`REVOKE_WAIT`]. Call within a
+    /// tokio runtime (the wait runs on it).
+    pub fn new(auth: Arc<tc_auth::SessionAuth>, live: Arc<LiveTokens>) -> SessionRevoke {
+        SessionRevoke {
+            auth,
+            live,
+            wait: REVOKE_WAIT,
+            rt: tokio::runtime::Handle::current(),
+        }
+    }
+}
+
+impl Revoke for SessionRevoke {
+    fn revoke(&self, name: &str) -> Result<Revoked, String> {
+        let generation = self
+            .auth
+            .revoke(name)
+            .map_err(|e| self.auth.format().reason(&e))?;
+        // On the channel's blocking thread: waits on the runtime.
+        let seen = self
+            .rt
+            .block_on(self.live.revoke(&*self.auth, name, self.wait));
+        Ok(seen.unwrap_or(Revoked {
+            generation,
+            closed: 0,
+            closing: 0,
+        }))
     }
 }
 
@@ -104,7 +194,7 @@ impl Revoke for tc_auth::SessionAuth {
 /// why not out. Runs off the runtime's threads.
 pub type GameRequests = Arc<dyn Fn(&str, Value) -> Result<Value, String> + Send + Sync>;
 
-/// The game's own status (players by name, its world's numbers), asked at
+/// The game's own status (its world's numbers), asked at
 /// every status request on the runtime's thread: keep it quick (read what
 /// the game publishes, never wait on its loop).
 pub type GameStatus = Arc<dyn Fn() -> Value + Send + Sync>;
@@ -126,8 +216,8 @@ pub struct Live {
     pub revoke: Option<Arc<dyn Revoke>>,
     /// Backs the store up.
     pub backups: Option<Backups>,
-    /// The reports kept.
-    pub reports: Option<Reports>,
+    /// The reports kept: [`Reports`], or the game's own.
+    pub reports: Option<Arc<dyn ReportsSource>>,
     /// The game's own requests.
     pub game: Option<GameRequests>,
     /// The game's own status, in every [`Status`]'s `game`.
@@ -279,6 +369,24 @@ async fn exchange(stream: TcpStream, answerer: &Answerer) {
     let _ = write.shutdown().await;
 }
 
+/// The reply to a request the game doesn't do.
+fn unsupported(request: &str, why: &str) -> Reply {
+    info!(request, why, "admin: unsupported");
+    Reply::Unsupported {
+        request: request.into(),
+        why: why.into(),
+    }
+}
+
+/// The reply to a control the loop didn't take.
+fn control_failed(request: &Request, e: ControlError) -> Reply {
+    match e {
+        ControlError::Unsupported(why) => unsupported(request.name(), &why),
+        ControlError::Stopped => Reply::Refused("the game's loop has stopped".into()),
+        ControlError::Failed(why) => Reply::Refused(format!("{}: {why}", request.name())),
+    }
+}
+
 /// Runs `f` off the runtime's threads.
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T, String> {
     tokio::task::spawn_blocking(f)
@@ -317,8 +425,8 @@ impl Answerer {
                 } else {
                     live.sim.resume()
                 };
-                if !sent {
-                    return Reply::Refused("the game's loop has stopped".into());
+                if let Err(e) = sent {
+                    return control_failed(&request, e);
                 }
                 info!(pause, "admin: clock");
                 Reply::Clock {
@@ -331,9 +439,11 @@ impl Answerer {
                 let outcome = blocking(move || {
                     sim.reload()?
                         .recv()
-                        .map_err(|_| "the game's loop stopped".to_string())?
+                        .map_err(|_| ControlError::Stopped)?
+                        .map_err(ControlError::Failed)
                 })
                 .await
+                .map_err(ControlError::Failed)
                 .and_then(|r| r);
                 match outcome {
                     Ok(r) => {
@@ -345,12 +455,12 @@ impl Answerer {
                             replayed: r.replayed.applied,
                         }
                     }
-                    Err(why) => Reply::Refused(format!("reload: {why}")),
+                    Err(e) => control_failed(&request, e),
                 }
             }
             Request::Backup { out } => {
                 let Some(backups) = live.backups.clone() else {
-                    return Reply::Refused("this server keeps no store to back up".into());
+                    return unsupported("backup", "this server keeps no store to back up");
                 };
                 let outcome = blocking(move || backups.run(out.as_deref().map(Path::new)))
                     .await
@@ -368,15 +478,24 @@ impl Answerer {
             }
             Request::Revoke { name } => {
                 let Some(revoke) = live.revoke.clone() else {
-                    return Reply::Refused(
-                        "this server takes dev tokens: there are none to revoke".into(),
-                    );
+                    return unsupported("revoke", "this server takes no tokens it can revoke");
                 };
                 let n = name.clone();
                 match blocking(move || revoke.revoke(&n)).await.and_then(|r| r) {
-                    Ok(generation) => {
-                        info!(name, generation, "admin: revoked");
-                        Reply::Revoked { name, generation }
+                    Ok(r) => {
+                        info!(
+                            name,
+                            generation = r.generation,
+                            closed = r.closed,
+                            closing = r.closing,
+                            "admin: revoked"
+                        );
+                        Reply::Revoked {
+                            name,
+                            generation: r.generation,
+                            closed: r.closed as u64,
+                            closing: r.closing as u64,
+                        }
                     }
                     Err(why) => Reply::Refused(format!("revoke: {why}")),
                 }
@@ -385,20 +504,26 @@ impl Answerer {
                 let Some(reports) = live.reports.clone() else {
                     return Reply::Reports(ReportsReply::default());
                 };
-                let counts = reports.counts();
-                let (count, newest) =
-                    blocking(move || reports.held(since, kind.as_deref(), NEWEST_REPORTS))
-                        .await
-                        .unwrap_or_default();
-                Reply::Reports(ReportsReply {
-                    kept: true,
-                    count,
-                    newest,
-                    received: counts.received,
-                    saved: counts.saved,
-                    dropped: counts.dropped,
-                    pruned: counts.pruned,
+                let answer = blocking(move || {
+                    let (count, newest) = reports.held(since, kind.as_deref(), NEWEST_REPORTS)?;
+                    Ok((count, newest, reports.counts(), reports.extra()))
                 })
+                .await
+                .and_then(|r| r);
+                match answer {
+                    Ok((count, newest, counts, extra)) => Reply::Reports(ReportsReply {
+                        kept: true,
+                        count,
+                        newest,
+                        received: counts.received,
+                        saved: counts.saved,
+                        rate_limited: counts.rate_limited,
+                        dropped: counts.dropped,
+                        pruned: counts.pruned,
+                        extra,
+                    }),
+                    Err(why) => Reply::Refused(format!("reports: {why}")),
+                }
             }
             Request::Game { name, args } => {
                 let Some(game) = live.game.clone() else {
@@ -414,6 +539,7 @@ impl Answerer {
 
     fn status(&self) -> Status {
         let game = self.live.sim.status();
+        let players = self.live.sim.players(&game);
         let io = self
             .live
             .io
@@ -426,7 +552,7 @@ impl Answerer {
             port: self.live.port,
             started: self.started_unix,
             uptime_secs: self.started.elapsed().as_secs(),
-            players: game.players.clone(),
+            players,
             connections: game.connections as u64,
             version: game.version,
             time: game.time,
@@ -440,5 +566,103 @@ impl Answerer {
             bytes_sent: io.bytes_written,
             game: self.live.status.as_ref().map(|f| f()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Endpoint, ask_endpoint};
+
+    /// A game's own loop: a status, and none of the controls.
+    struct OwnLoop;
+
+    impl SimControl for OwnLoop {
+        fn status(&self) -> SimStatus {
+            SimStatus {
+                players: vec![4],
+                names: [(4, "ada".to_string())].into(),
+                ..SimStatus::default()
+            }
+        }
+    }
+
+    /// Reports kept the game's own way, with its numbers.
+    struct OwnReports;
+
+    impl ReportsSource for OwnReports {
+        fn held(
+            &self,
+            _since: Option<u64>,
+            kind: Option<&str>,
+            _newest: usize,
+        ) -> Result<(u64, Vec<crate::ReportBrief>), String> {
+            match kind {
+                Some("bogus") => Err("no kind bogus".into()),
+                _ => Ok((7, Vec::new())),
+            }
+        }
+
+        fn counts(&self) -> crate::ReportCounts {
+            crate::ReportCounts {
+                received: 9,
+                rate_limited: 2,
+                ..Default::default()
+            }
+        }
+
+        fn extra(&self) -> Option<Value> {
+            Some(serde_json::json!({ "per_player": { "ada": 7 } }))
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_game_s_own_loop_and_reports() {
+        let dir = std::env::temp_dir().join(format!("tc-admin-own-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut live = Live::new(Arc::new(OwnLoop));
+        live.reports = Some(Arc::new(OwnReports));
+        let (stop, _) = watch::channel(false);
+        let channel = AdminChannel::open(&dir, live, stop).await.unwrap();
+        let endpoint = Endpoint::read(&dir).unwrap();
+        let ask = |request: Request| {
+            let endpoint = endpoint.clone();
+            tokio::task::spawn_blocking(move || ask_endpoint(&endpoint, &request).unwrap())
+        };
+
+        let Reply::Status(s) = ask(Request::Status).await.unwrap() else {
+            panic!("no status");
+        };
+        assert_eq!(s.players, [PlayerBrief::id(4, Some("ada".into()))]);
+        for (request, name) in [
+            (Request::Pause, "pause"),
+            (Request::Resume, "resume"),
+            (Request::Reload, "reload"),
+            (Request::Backup { out: None }, "backup"),
+            (Request::Revoke { name: "ada".into() }, "revoke"),
+        ] {
+            let reply = ask(request).await.unwrap();
+            assert!(
+                matches!(&reply, Reply::Unsupported { request, .. } if request == name),
+                "{reply:?}"
+            );
+        }
+        let reports = |kind: Option<&str>| Request::Reports {
+            since: None,
+            kind: kind.map(String::from),
+        };
+        let Reply::Reports(r) = ask(reports(None)).await.unwrap() else {
+            panic!("no reports");
+        };
+        assert_eq!(
+            (r.kept, r.count, r.received, r.rate_limited),
+            (true, 7, 9, 2)
+        );
+        assert_eq!(r.extra.unwrap()["per_player"]["ada"], 7);
+        let refused = ask(reports(Some("bogus"))).await.unwrap();
+        assert!(matches!(refused, Reply::Refused(_)), "{refused:?}");
+
+        channel.close();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

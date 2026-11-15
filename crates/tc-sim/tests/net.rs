@@ -155,6 +155,8 @@ async fn two_clients_play_and_the_log_replays_to_the_same_hash() {
     ada.game("bo 4").await;
     let s = status.get();
     assert_eq!(s.players, vec![1, 2], "{s}");
+    assert_eq!(s.names[&1], "ada", "each player's name, as it signed in");
+    assert_eq!(s.names[&2], "bo");
     assert_eq!(s.connections, 2);
 
     server.stop().await;

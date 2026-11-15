@@ -145,7 +145,12 @@ async fn the_admin_channel_drives_a_served_game() {
     assert_eq!(command(&mut ada, 1, "add 2").await, "2");
 
     // Status.
-    let s = status_until(&store, |s| s.players == [1] && s.version >= 2).await;
+    let s = status_until(&store, |s| s.players.len() == 1 && s.version >= 2).await;
+    assert_eq!(
+        s.players,
+        [tc_admin::PlayerBrief::id(1, Some("ada".into()))],
+        "the player, by id and name"
+    );
     assert_eq!((s.connections, s.build.as_str()), (1, "tally-test"));
     assert_eq!(s.port, running.addr().port());
     assert!(s.frames_sent > 0 && !s.paused && !s.stopping, "{s}");
@@ -204,6 +209,7 @@ async fn the_admin_channel_drives_a_served_game() {
         };
         if r.count == 1 {
             assert_eq!((r.received, r.newest[0].text.as_str()), (1, "it broke"));
+            assert_eq!((r.rate_limited, r.extra.as_ref()), (0, None));
             break;
         }
         assert!(Instant::now() < deadline);
@@ -238,13 +244,18 @@ async fn the_admin_channel_drives_a_served_game() {
     assert!(matches!(bad, Ok(Reply::Refused(_))), "{bad:?}");
 
     // Revoke: ada's session closes with 4001, and the token is refused.
-    let Ok(Reply::Revoked { name, generation }) =
-        ask(&store, Request::Revoke { name: "ada".into() }).await
+    let Ok(Reply::Revoked {
+        name,
+        generation,
+        closed,
+        closing,
+    }) = ask(&store, Request::Revoke { name: "ada".into() }).await
     else {
         panic!("not revoked");
     };
     assert_eq!(name, "ada");
     assert!(generation >= 1);
+    assert_eq!(closed + closing, 1, "ada's one session is counted");
     let code = loop {
         if let Err(code) = next(&mut ada).await {
             break code;

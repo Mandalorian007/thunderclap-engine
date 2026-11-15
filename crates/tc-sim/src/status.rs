@@ -5,6 +5,7 @@
 //! resumed, after a reload, and at most once a [`STATUS_PUBLISH`] while
 //! the game advances. [`SimStatus`]'s `Display` is the one-line status.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -32,6 +33,9 @@ pub struct MarkStatus {
 pub struct SimStatus {
     /// Players present (with a connection), in order.
     pub players: Vec<PlayerId>,
+    /// Each present player's name, as its newest connection signed in
+    /// (the token's identity).
+    pub names: BTreeMap<PlayerId, String>,
     /// Open connections.
     pub connections: usize,
     /// The version: the last log entry.

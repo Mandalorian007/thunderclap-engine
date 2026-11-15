@@ -127,6 +127,7 @@ fn one_body_one_driver() {
     assert!(Driver::<Tally>::received(&mut rx1).contains(&ServerMsg::Control { driving: false }));
     assert!(Driver::<Tally>::received(&mut rx2).contains(&ServerMsg::Control { driving: true }));
     assert_eq!(d.sim().status().get().players, vec![1]);
+    assert_eq!(d.sim().name(1), Some("ada"));
 
     // The old connection's inputs are dropped; the driver's are taken.
     d.client(first, ClientMsg::Input { seq: 1, input: 7 });
@@ -162,6 +163,10 @@ fn one_body_one_driver() {
     assert_eq!(d.sim().body(1), None);
     assert_eq!(d.core().game().players[&1].at, 5, "where it left is logged");
     assert!(d.sim().status().get().players.is_empty());
+    assert!(
+        d.sim().status().get().names.is_empty(),
+        "its name goes with it"
+    );
 }
 
 #[test]

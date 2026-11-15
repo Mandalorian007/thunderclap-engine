@@ -581,15 +581,29 @@ fn show(reply: Reply) -> Result<String, Failure> {
             "backed up to {dir}: {files} files, {bytes} bytes, through entry {last_seq}{}",
             pruned(n)
         ),
-        Reply::Revoked { name, generation } => {
-            format!("revoked {name}'s tokens (generation {generation})")
+        Reply::Revoked {
+            name,
+            generation,
+            closed,
+            closing,
+        } => {
+            let mut out = format!(
+                "revoked {name}'s tokens (generation {generation}): {closed} session(s) closed"
+            );
+            if closing > 0 {
+                out.push_str(&format!(", {closing} still closing"));
+            }
+            out
         }
         Reply::Reports(r) if !r.kept => "this server keeps no reports".into(),
         Reply::Reports(r) => {
             let mut out = format!(
-                "{} held; since start {} received, {} saved, {} dropped, {} pruned",
-                r.count, r.received, r.saved, r.dropped, r.pruned
+                "{} held; since start {} received, {} saved, {} over the rate, {} dropped, {} pruned",
+                r.count, r.received, r.saved, r.rate_limited, r.dropped, r.pruned
             );
+            if let Some(extra) = r.extra {
+                out.push_str(&format!("\n  {extra}"));
+            }
             for b in r.newest {
                 out.push_str(&format!(
                     "\n  {}  {} {}: {}",
@@ -599,6 +613,11 @@ fn show(reply: Reply) -> Result<String, Failure> {
             out
         }
         Reply::Game(v) => v.to_string(),
+        Reply::Unsupported { request, why } => {
+            return Err(Failure::Failed(format!(
+                "this server doesn't support {request}: {why}"
+            )));
+        }
         Reply::Refused(why) => return Err(Failure::Failed(format!("refused: {why}"))),
         Reply::Unknown(name) => {
             return Err(Failure::Failed(format!(
