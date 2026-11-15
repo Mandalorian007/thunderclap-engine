@@ -58,6 +58,7 @@
 //!   during a sync that then couldn't be written counts the same, whichever
 //!   thread held it ([`Hold::failed`]).
 
+use std::collections::VecDeque;
 use std::fs::File;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -88,6 +89,9 @@ pub(crate) struct Mark {
     pub covers: u64,
     /// When it was asked for, in seconds since the Unix epoch.
     pub wall: u64,
+    /// True if the caller gave the wall time: the mark is written as asked,
+    /// never folded with another.
+    pub exact: bool,
     /// Every keyed file written since the last mark was asked for, and
     /// the main log it was asked under, with the files of a generation
     /// rotated away since the last mark (see the `gens` module).
@@ -129,8 +133,10 @@ fn merge_files(files: &mut Vec<ToSync>, more: Vec<ToSync>) {
 
 #[derive(Default)]
 struct State {
-    /// The mark waiting to start, if any.
-    pending: Option<Mark>,
+    /// The marks waiting to start, oldest first, each with the count of
+    /// marks asked for it finishes (marks without a wall time of their own
+    /// are folded into the one waiting behind them).
+    pending: VecDeque<(Mark, u64)>,
     /// Marks asked for, and how many of those are finished (written, or
     /// failed).
     requested: u64,
@@ -211,15 +217,19 @@ impl Io {
         })
     }
 
-    /// Asks for a mark, merging it into one still waiting to start.
-    /// Returns at once.
+    /// Asks for a mark, merging it into one still waiting to start unless
+    /// either is [`Mark::exact`]. Returns at once.
     pub fn request(&self, mark: Mark) {
         let mut state = lock(&self.shared.state);
-        match &mut state.pending {
-            Some(pending) => pending.merge(mark),
-            None => state.pending = Some(mark),
-        }
         state.requested += 1;
+        let through = state.requested;
+        match state.pending.back_mut() {
+            Some((last, done)) if !last.exact && !mark.exact => {
+                last.merge(mark);
+                *done = through;
+            }
+            _ => state.pending.push_back((mark, through)),
+        }
         self.shared.changed.notify_all();
     }
 
@@ -313,8 +323,8 @@ fn run(shared: &Shared, main: &Mutex<LogFile>, hold: &Hold) {
         let (mark, through) = {
             let mut state = lock(&shared.state);
             loop {
-                if let Some(mark) = state.pending.take() {
-                    break (mark, state.requested);
+                if let Some(next) = state.pending.pop_front() {
+                    break next;
                 }
                 if state.stop {
                     return;

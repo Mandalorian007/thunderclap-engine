@@ -19,11 +19,16 @@
 //! `store.holder` beside it ([`HOLDER_FILE`]) as well, and read from there.
 //!
 //! Reading a store ([`crate::read`]) takes no lock.
+//!
+//! The same lock can guard a directory of a game's own under another file
+//! name ([`StoreLock::acquire_named`], [`holder_named`]); a store opens only
+//! under [`LOCK_FILE`].
 
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::error::StoreError;
 use crate::io_err;
@@ -86,15 +91,31 @@ impl Holder {
 pub struct StoreLock {
     file: File,
     path: PathBuf,
+    dir: PathBuf,
+    /// Tells this lock from every other taken in the process (a scan
+    /// names the lock it was taken under).
+    id: u64,
     holder: Mutex<Holder>,
 }
+
+/// The next [`StoreLock::id`].
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 impl StoreLock {
     /// Locks the store directory `dir` (which must exist), or fails with
     /// [`StoreError::InUse`] if another process holds it (or another
     /// handle in this one).
     pub fn acquire(dir: &Path) -> Result<StoreLock, StoreError> {
-        let path = dir.join(LOCK_FILE);
+        StoreLock::acquire_named(dir, LOCK_FILE)
+    }
+
+    /// Locks directory `dir` (which must exist) through the file `name` in
+    /// it, as [`StoreLock::acquire`] does through [`LOCK_FILE`]: for a
+    /// directory of a game's own (a store opens only under its own name).
+    /// On Windows the holder is written to `<name>.holder` beside it
+    /// ([`HOLDER_FILE`] for the store's).
+    pub fn acquire_named(dir: &Path, name: &str) -> Result<StoreLock, StoreError> {
+        let path = dir.join(name);
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -115,6 +136,8 @@ impl StoreLock {
         let lock = StoreLock {
             file,
             path,
+            dir: dir.to_path_buf(),
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             holder: Mutex::new(Holder {
                 pid: Some(std::process::id()),
                 port: None,
@@ -122,6 +145,25 @@ impl StoreLock {
         };
         lock.write()?;
         Ok(lock)
+    }
+
+    /// The directory locked.
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    /// The lock file.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// True if this is a store's own lock ([`LOCK_FILE`]).
+    pub(crate) fn is_store_lock(&self) -> bool {
+        self.path.file_name().is_some_and(|n| n == LOCK_FILE)
+    }
+
+    pub(crate) fn id(&self) -> u64 {
+        self.id
     }
 
     /// Records the port this process serves the store on, so a second
@@ -144,7 +186,7 @@ impl StoreLock {
         // nobody ("pid unknown").
         #[cfg(windows)]
         {
-            let holder = self.path.with_file_name(HOLDER_FILE);
+            let holder = holder_path(&self.path);
             if std::fs::write(&holder, text.as_bytes()).is_err() {
                 let _ = std::fs::remove_file(&holder);
             }
@@ -156,7 +198,13 @@ impl StoreLock {
 /// Who holds `dir`'s lock now, if anyone: tries the lock and lets it go.
 /// Takes nothing and creates no file.
 pub fn holder(dir: &Path) -> Option<Holder> {
-    let path = dir.join(LOCK_FILE);
+    holder_named(dir, LOCK_FILE)
+}
+
+/// [`holder`] of a lock taken through the file `name`
+/// ([`StoreLock::acquire_named`]).
+pub fn holder_named(dir: &Path, name: &str) -> Option<Holder> {
+    let path = dir.join(name);
     let file = File::open(&path).ok()?;
     match file.try_lock() {
         Err(TryLockError::WouldBlock) => Some(read_holder(&path)),
@@ -168,11 +216,21 @@ pub fn holder(dir: &Path) -> Option<Holder> {
 /// beside it that names the holder.
 fn read_holder(path: &Path) -> Holder {
     #[cfg(windows)]
-    let path = &path.with_file_name(HOLDER_FILE);
+    let path = &holder_path(path);
     let mut text = String::new();
     match File::open(path).and_then(|mut f| f.read_to_string(&mut text)) {
         Ok(_) => Holder::parse(&text),
         Err(_) => Holder::default(),
+    }
+}
+
+/// The file naming the holder of the lock at `lock` on Windows:
+/// [`HOLDER_FILE`] for the store's, `<name>.holder` for another.
+#[cfg(windows)]
+fn holder_path(lock: &Path) -> PathBuf {
+    match lock.file_name().and_then(|n| n.to_str()) {
+        Some(LOCK_FILE) | None => lock.with_file_name(HOLDER_FILE),
+        Some(name) => lock.with_file_name(format!("{name}.holder")),
     }
 }
 
@@ -242,6 +300,28 @@ mod tests {
             other => panic!("expected InUse, got {other:?}"),
         }
         drop(lock);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_named_lock_is_its_own() {
+        let dir = temp("named");
+        let store = StoreLock::acquire(&dir).unwrap();
+        let other = StoreLock::acquire_named(&dir, "game.lock").unwrap();
+        assert!(store.is_store_lock() && !other.is_store_lock());
+        assert_ne!(store.id(), other.id());
+        assert_eq!(other.dir(), dir);
+        assert!(matches!(
+            StoreLock::acquire_named(&dir, "game.lock"),
+            Err(StoreError::InUse { .. })
+        ));
+        assert_eq!(
+            holder_named(&dir, "game.lock").unwrap().pid,
+            Some(std::process::id())
+        );
+        drop(other);
+        assert_eq!(holder_named(&dir, "game.lock"), None);
+        drop(store);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

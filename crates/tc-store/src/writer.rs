@@ -45,17 +45,18 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use crate::archive::{check_archive_is_the_logs, clear_leftovers};
 use crate::background::Background;
 use crate::codec::{LogCodec, LogEntry};
 use crate::durable::{self, sync_dir, syncs_here};
 use crate::error::StoreError;
 use crate::format::{self, HEADER_LEN};
-use crate::gens::{self, check_file_name};
+use crate::gens::{self, Listing, check_file_name};
 use crate::hold::Hold;
 use crate::io::{Io, Mark, ToSync, lock};
-use crate::load::{Loaded, load, read_meta};
-use crate::lock::StoreLock;
-use crate::log_file::LogFile;
+use crate::load::{load, read_meta};
+use crate::lock::{LOCK_FILE, StoreLock};
+use crate::log_file::{FileState, LogFile};
 use crate::{
     FileKind, MAIN_LOG, MAX_OPEN_FILES, META_FILE, OpenReport, RECOVERED_DIR, crash, io_err,
     log_dir, set_len, unix_now,
@@ -74,6 +75,44 @@ pub struct Opened<E> {
     pub clock: u64,
     /// What opening recovered from.
     pub report: OpenReport,
+}
+
+/// A store's log read under its lock ([`Log::scan`]), to look at before
+/// opening it with [`Log::open_scanned`] without reading it again: a game
+/// that checks or upgrades its data under the lock, then opens.
+pub struct Scan<E, K> {
+    /// The game's metadata bytes.
+    pub meta: Vec<u8>,
+    /// The durable entries, in sequence order. Taking them leaves
+    /// [`Opened::entries`] empty; the log resumes after the last anyway.
+    pub entries: Vec<LogEntry<E>>,
+    /// The latest clock mark's time (0 if none).
+    pub clock: u64,
+    /// What opening will recover from (no file is cut yet, so no
+    /// [`crate::Truncated::saved`] is set).
+    pub report: OpenReport,
+    /// What an archiving ([`crate::tidy`]) cut short left, removed.
+    pub leftovers: Vec<PathBuf>,
+    listing: Listing<K>,
+    files: Vec<FileState<K>>,
+    from_gen: u64,
+    last_seq: u64,
+    /// The [`StoreLock`] it was read under.
+    lock: u64,
+}
+
+impl<E: std::fmt::Debug, K> std::fmt::Debug for Scan<E, K> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Scan")
+            .field("meta", &self.meta)
+            .field("entries", &self.entries)
+            .field("clock", &self.clock)
+            .field("report", &self.report)
+            .field("leftovers", &self.leftovers)
+            .field("from_gen", &self.from_gen)
+            .field("last_seq", &self.last_seq)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Counts for a game's diagnostics.
@@ -424,21 +463,92 @@ impl<C: LogCodec> Log<C> {
         after: u64,
     ) -> Result<(Log<C>, Opened<C::Event>), StoreError> {
         read_meta(dir)?;
-        let lock = Arc::new(StoreLock::acquire(dir)?);
-        // A repair or rollback in place cut short is finished first.
-        crate::swap::finish_swap(dir, "swap")?;
-        let loaded = load(dir, &codec, after, from_gen)?;
-        Log::reopen(dir, codec, loaded, lock, after)
+        let lock = StoreLock::acquire(dir)?;
+        Log::open_locked(lock, codec, from_gen, after)
     }
 
-    /// Reopens the files loading found, cutting each back to the durable
+    /// [`Log::open_from`] under a lock the caller already holds
+    /// ([`StoreLock::acquire`] of the store's directory), kept until the
+    /// log is dropped.
+    pub fn open_locked(
+        lock: StoreLock,
+        codec: C,
+        from_gen: u64,
+        after: u64,
+    ) -> Result<(Log<C>, Opened<C::Event>), StoreError> {
+        let scan = Log::scan(&lock, &codec, from_gen, after)?;
+        Log::open_scanned(lock, codec, scan)
+    }
+
+    /// Reads the store locked by `lock` as [`Log::open_from`] would,
+    /// changing no log file: finishes a repair or rollback in place cut
+    /// short, clears what an archiving cut short left, and checks that the
+    /// archive is the log's own (a store created over another's leftovers
+    /// fails with [`StoreError::Meta`]). [`Log::open_scanned`] then opens
+    /// it under the same lock without reading it again.
+    pub fn scan(
+        lock: &StoreLock,
+        codec: &C,
+        from_gen: u64,
+        after: u64,
+    ) -> Result<Scan<C::Event, C::Key>, StoreError> {
+        if !lock.is_store_lock() {
+            return Err(StoreError::Meta {
+                path: lock.path().to_path_buf(),
+                reason: format!("a store opens only under its own lock, {LOCK_FILE}"),
+            });
+        }
+        let dir = lock.dir();
+        // A repair or rollback in place cut short is finished first.
+        crate::swap::finish_swap(dir, "swap")?;
+        let mut leftovers = clear_leftovers(dir)?;
+        let meta_tmp = dir.join(format!(".{META_FILE}.tmp"));
+        if meta_tmp.exists() {
+            fs::remove_file(&meta_tmp).map_err(io_err(&meta_tmp))?;
+            leftovers.push(meta_tmp);
+        }
+        let loaded = load(dir, codec, after, from_gen)?;
+        check_archive_is_the_logs(dir, &loaded.listing)?;
+        Ok(Scan {
+            last_seq: loaded.entries.last().map_or(after, |e| e.seq),
+            meta: loaded.meta,
+            entries: loaded.entries,
+            clock: loaded.clock,
+            report: loaded.report,
+            leftovers,
+            listing: loaded.listing,
+            files: loaded.files,
+            from_gen: loaded.from_gen,
+            lock: lock.id(),
+        })
+    }
+
+    /// Opens the store `scan` read ([`Log::scan`]), under the lock it was
+    /// read under, without reading it again: cuts each file back to the
+    /// durable prefix (saving what it cuts to `recovered/`) and appends
+    /// after the last entry read. Fails if `lock` isn't the scan's.
+    pub fn open_scanned(
+        lock: StoreLock,
+        codec: C,
+        scan: Scan<C::Event, C::Key>,
+    ) -> Result<(Log<C>, Opened<C::Event>), StoreError> {
+        if scan.lock != lock.id() {
+            return Err(StoreError::Meta {
+                path: lock.path().to_path_buf(),
+                reason: "a scan opens only under the lock it was read under".into(),
+            });
+        }
+        let dir = lock.dir().to_path_buf();
+        Log::reopen(&dir, codec, scan, Arc::new(lock))
+    }
+
+    /// Reopens the files a scan found, cutting each back to the durable
     /// prefix and saving what it cuts off to `recovered/` first.
     fn reopen(
         dir: &Path,
         codec: C,
-        loaded: Loaded<C::Event, C::Key>,
+        loaded: Scan<C::Event, C::Key>,
         lock: Arc<StoreLock>,
-        after: u64,
     ) -> Result<(Log<C>, Opened<C::Event>), StoreError> {
         let mut report = loaded.report;
         let recovered = dir.join(RECOVERED_DIR);
@@ -502,7 +612,7 @@ impl<C: LogCodec> Log<C> {
         log.has_entries = has_entries;
         log.frozen = frozen;
         log.durable_below = loaded.from_gen;
-        log.last_seq = loaded.entries.last().map_or(after, |e| e.seq);
+        log.last_seq = loaded.last_seq;
         let opened = Opened {
             meta: loaded.meta,
             entries: loaded.entries,
@@ -709,12 +819,25 @@ impl<C: LogCodec> Log<C> {
     /// or if the log is poisoned.
     pub fn mark(&mut self, time: u64) -> Result<(), StoreError> {
         let syncs = syncs_here();
-        let result = self.ask_for_mark(time);
+        let result = self.ask_for_mark(time, None);
         self.syncs_here += syncs_here() - syncs;
         result
     }
 
-    fn ask_for_mark(&mut self, time: u64) -> Result<(), StoreError> {
+    /// [`Log::mark`] with the wall time `wall` (seconds since the Unix
+    /// epoch) the caller gives, rather than the clock's now: a copy or a
+    /// repair keeps a mark's wall time, and the caller knows the time
+    /// without waiting for the mark. Such a mark is written as asked, never
+    /// folded into another still waiting (as marks without one are), so
+    /// every one reaches the log.
+    pub fn mark_wall(&mut self, time: u64, wall: u64) -> Result<(), StoreError> {
+        let syncs = syncs_here();
+        let result = self.ask_for_mark(time, Some(wall));
+        self.syncs_here += syncs_here() - syncs;
+        result
+    }
+
+    fn ask_for_mark(&mut self, time: u64, wall: Option<u64>) -> Result<(), StoreError> {
         if self.poisoned {
             return Err(StoreError::Poisoned);
         }
@@ -733,7 +856,8 @@ impl<C: LogCodec> Log<C> {
         self.io.request(Mark {
             time,
             covers: self.last_seq,
-            wall: unix_now(),
+            wall: wall.unwrap_or_else(unix_now),
+            exact: wall.is_some(),
             files,
             dirs: std::mem::take(&mut self.unnamed),
         });
