@@ -246,3 +246,102 @@ describe('presentDom', () => {
     h2.remove();
   });
 });
+
+// FX2 (EV, Forge on 2.0): a tabs' option's `label` never reached its button (the compiled field
+// bound no word), and a key line's term sat over its words on WebKit (a float in the line clamp's
+// box). Each row kind's fields, bound, are read back from the page.
+describe('row fields on the page (FX2)', () => {
+  const ROWS: PanelSpec = {
+    id: 'rows',
+    body: {
+      k: 'col',
+      gap: 4,
+      children: [
+        { k: 'tabs', id: 'tab', selected: b('tab'), optionW: 70, h: 32 },
+        { k: 'tabs', id: 'seg', selected: b('seg'), optionW: 40, fill: true, weigh: true, h: 32 },
+        {
+          k: 'text',
+          id: 'line',
+          term: 'Hold the left',
+          text: b('does'),
+          style: 'body',
+          wrap: true,
+        },
+        {
+          k: 'list',
+          id: 'opts',
+          rowH: 24,
+          h: 72,
+          row: { k: 'text', text: b('row.name'), style: 'body' },
+        },
+      ],
+    },
+  };
+
+  it('binds each row kind: tabs, a segmented (fill, weighed) tabs, a list, a key line', () => {
+    const h2 = document.createElement('div');
+    document.body.appendChild(h2);
+    const q = panel(ROWS, { schedule: null });
+    presentDom(q, h2);
+    q.model.setAll({ tab: 'b', seg: 'auto', does: 'Walk; push past the rim to sprint' });
+    q.model.setList('tab', ['a', 'b']);
+    // Forge's form: the label by its field's index (a tabs' one field).
+    q.model.row('tab', 'a').setAt(0, 'Touch');
+    q.model.row('tab', 'b').set('label', 'Keys and mouse');
+    q.model.setList('seg', ['auto', 'low', 'high']);
+    for (const [k, l] of [
+      ['auto', 'Auto'],
+      ['low', 'Low'],
+      ['high', 'High'],
+    ] as const)
+      q.model.row('seg', k).set('label', l);
+    q.model.setList('opts', ['x', 'y']);
+    q.model.row('opts', 'x').set('name', 'First');
+    q.model.row('opts', 'y').set('name', 'Second');
+    q.frame(320, 0);
+    q.apply();
+    const words = (id: string) =>
+      [...h2.querySelectorAll(`[data-tc-id^="rows/${id}:"]`)].map((e) => e.textContent);
+    expect(words('tab')).toEqual(['Touch', 'Keys and mouse']);
+    expect(words('seg')).toEqual(['Auto', 'Low', 'High']);
+    expect([...h2.querySelectorAll('.tcs-tab .tcs-label')].map((e) => e.textContent)).toEqual([
+      'Touch',
+      'Keys and mouse',
+      'Auto',
+      'Low',
+      'High',
+    ]);
+    const list = h2.querySelector('[data-id="opts"]')!;
+    expect([...list.querySelectorAll('[data-tcs-row]')].map((e) => e.textContent)).toEqual([
+      'First',
+      'Second',
+    ]);
+    // A label set later (a dirty row field) and on a pooled option reached anew.
+    q.model.row('tab', 'b').set('label', 'Keys');
+    q.model.row('seg', 'low').set('label', 'Lower');
+    q.apply();
+    expect(words('tab')).toEqual(['Touch', 'Keys']);
+    expect(words('seg')).toEqual(['Auto', 'Lower', 'High']);
+    q.model.setList('tab', ['a']);
+    q.apply();
+    q.model.setList('tab', ['a', 'c']);
+    q.model.row('tab', 'c').set('label', 'Pad');
+    q.apply();
+    expect(words('tab')).toEqual(['Touch', 'Pad']);
+    // The key line: its term in its column, its words beside it (out of the clamp's flow, no float).
+    const line = h2.querySelector('[data-id="line"]') as HTMLElement;
+    const term = line.querySelector('.tcs-term') as HTMLElement;
+    const does = term.nextElementSibling as HTMLElement;
+    expect(term.textContent).toBe('Hold the left');
+    expect(does.textContent).toBe('Walk; push past the rim to sprint');
+    expect(term.style.position).toBe('absolute');
+    expect(term.style.float).toBe('');
+    expect(does.style.display).toBe('block');
+    const tw = q.boxes.termW[q.spec.ids.indexOf('line')]!;
+    expect(tw).toBeGreaterThan(0);
+    expect(does.style.marginLeft).toBe(`${tw}px`);
+    expect(term.style.width).toBe(`${tw - 10}px`);
+    q.dispose();
+    h2.remove();
+  });
+});
