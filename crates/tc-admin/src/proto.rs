@@ -13,8 +13,9 @@ macro_rules! j {
 
 /// The protocol's version, in every request and reply. A new request or
 /// field doesn't change it (an older server answers a request it doesn't
-/// know with [`Reply::Unknown`]); a changed meaning does.
-pub const ADMIN_VERSION: u32 = 1;
+/// know with [`Reply::Unknown`]); a changed meaning does. 2: a status's
+/// `players` are [`PlayerBrief`]s, not ids.
+pub const ADMIN_VERSION: u32 = 2;
 
 /// The longest line either side reads; longer is refused.
 pub const MAX_LINE: usize = 16 * 1024;
@@ -75,7 +76,7 @@ pub struct Status {
     /// How long it has run, in seconds.
     pub uptime_secs: u64,
     /// Players present, in order.
-    pub players: Vec<u64>,
+    pub players: Vec<PlayerBrief>,
     /// Open connections.
     pub connections: u64,
     /// The game's version (its last log entry).
@@ -99,8 +100,45 @@ pub struct Status {
     /// Their bytes.
     pub bytes_sent: u64,
     /// The game's own status ([`Live::status`](crate::Live::status)):
-    /// players by name, its world's numbers.
+    /// its world's numbers.
     pub game: Option<Value>,
+}
+
+/// A player present, as [`Status::players`] lists it: its id, its name,
+/// or both, as the game knows it
+/// ([`SimControl::players`](crate::SimControl::players)).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PlayerBrief {
+    /// Its id in the game (tc-sim's `PlayerId`), if it has one.
+    pub id: Option<u64>,
+    /// Its name, as a person reads it.
+    pub name: Option<String>,
+}
+
+impl PlayerBrief {
+    /// A player with an id and, if known, a name.
+    pub fn id(id: u64, name: Option<String>) -> PlayerBrief {
+        PlayerBrief { id: Some(id), name }
+    }
+
+    /// A player known by its name alone.
+    pub fn named(name: impl Into<String>) -> PlayerBrief {
+        PlayerBrief {
+            id: None,
+            name: Some(name.into()),
+        }
+    }
+}
+
+impl std::fmt::Display for PlayerBrief {
+    /// Its name, else `#id`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match (&self.name, self.id) {
+            (Some(name), _) => f.write_str(name),
+            (None, Some(id)) => write!(f, "#{id}"),
+            (None, None) => f.write_str("?"),
+        }
+    }
 }
 
 /// One report, as [`Reply::Reports`] lists it.
@@ -131,10 +169,15 @@ pub struct ReportsReply {
     pub received: u64,
     /// those written,
     pub saved: u64,
-    /// those dropped (too big, the queue full, a failed write),
+    /// those dropped over their sender's rate,
+    pub rate_limited: u64,
+    /// those dropped otherwise (too big, the queue full, a failed write),
     pub dropped: u64,
     /// and older ones removed to keep the directory in its budget.
     pub pruned: u64,
+    /// The game's own numbers about its reports
+    /// ([`ReportsSource::extra`](crate::ReportsSource::extra)).
+    pub extra: Option<Value>,
 }
 
 /// What a running server answers.
@@ -186,13 +229,27 @@ pub enum Reply {
         name: String,
         /// Its generation now: tokens below it are refused.
         generation: u32,
+        /// Open sessions on the tokens it ended that closed before the
+        /// reply,
+        closed: u64,
+        /// and those still closing when the server stopped waiting.
+        closing: u64,
     },
     /// The answer to [`Request::Reports`].
     Reports(ReportsReply),
     /// The answer to [`Request::Game`].
     Game(Value),
+    /// The server knows the request but this game doesn't do it (a loop
+    /// with no clock to pause, no data to reload, no store to back up,
+    /// no tokens to revoke). Nothing changed.
+    Unsupported {
+        /// The request's name.
+        request: String,
+        /// Why not, in the game's words.
+        why: String,
+    },
     /// The request was refused (a wrong token or version, a garbled line,
-    /// something the server can't do), and why.
+    /// the loop stopped, a step that failed), and why.
     Refused(String),
     /// The server doesn't know this request: its name.
     Unknown(String),
@@ -297,7 +354,14 @@ impl Reply {
                 ("port", j!(s.port)),
                 ("started", j!(s.started)),
                 ("uptime_secs", j!(s.uptime_secs)),
-                ("players", j!(s.players)),
+                (
+                    "players",
+                    list(
+                        s.players
+                            .iter()
+                            .map(|p| obj(&[("id", j!(p.id)), ("name", j!(p.name))])),
+                    ),
+                ),
                 ("connections", j!(s.connections)),
                 ("version", j!(s.version)),
                 ("time", j!(s.time)),
@@ -345,10 +409,17 @@ impl Reply {
                 ("last_seq", j!(last_seq)),
                 ("pruned", j!(pruned)),
             ]),
-            Reply::Revoked { name, generation } => obj(&[
+            Reply::Revoked {
+                name,
+                generation,
+                closed,
+                closing,
+            } => obj(&[
                 ("type", j!("revoked")),
                 ("name", j!(name)),
                 ("generation", j!(generation)),
+                ("closed", j!(closed)),
+                ("closing", j!(closing)),
             ]),
             Reply::Reports(r) => obj(&[
                 ("type", j!("reports")),
@@ -368,10 +439,17 @@ impl Reply {
                 ),
                 ("received", j!(r.received)),
                 ("saved", j!(r.saved)),
+                ("rate_limited", j!(r.rate_limited)),
                 ("dropped", j!(r.dropped)),
                 ("pruned", j!(r.pruned)),
+                ("extra", j!(r.extra)),
             ]),
             Reply::Game(value) => obj(&[("type", j!("game")), ("value", j!(value))]),
+            Reply::Unsupported { request, why } => obj(&[
+                ("type", j!("unsupported")),
+                ("request", j!(request)),
+                ("why", j!(why)),
+            ]),
             Reply::Refused(why) => obj(&[("type", j!("refused")), ("why", j!(why))]),
             Reply::Unknown(name) => obj(&[("type", j!("unknown")), ("request", j!(name))]),
         };
@@ -397,7 +475,7 @@ impl Reply {
                 players: r
                     .get("players")
                     .and_then(Value::as_array)
-                    .map(|a| a.iter().filter_map(Value::as_u64).collect())
+                    .map(|a| a.iter().map(player).collect())
                     .unwrap_or_default(),
                 connections: num("connections"),
                 version: num("version"),
@@ -438,6 +516,8 @@ impl Reply {
             Some("revoked") => Ok(Reply::Revoked {
                 name: text("name"),
                 generation: small("generation"),
+                closed: num("closed"),
+                closing: num("closing"),
             }),
             Some("reports") => Ok(Reply::Reports(ReportsReply {
                 kept: flag("kept"),
@@ -449,10 +529,16 @@ impl Reply {
                     .unwrap_or_default(),
                 received: num("received"),
                 saved: num("saved"),
+                rate_limited: num("rate_limited"),
                 dropped: num("dropped"),
                 pruned: num("pruned"),
+                extra: r.get("extra").filter(|e| !e.is_null()).cloned(),
             })),
             Some("game") => Ok(Reply::Game(r.get("value").cloned().unwrap_or(Value::Null))),
+            Some("unsupported") => Ok(Reply::Unsupported {
+                request: text("request"),
+                why: text("why"),
+            }),
             Some("refused") => Ok(Reply::Refused(text("why"))),
             Some("unknown") => Ok(Reply::Unknown(text("request"))),
             Some(other) => Err(format!("an unknown reply type {other:?}")),
@@ -483,6 +569,13 @@ fn list(items: impl Iterator<Item = String>) -> String {
     format!("[{}]", items.collect::<Vec<_>>().join(","))
 }
 
+fn player(v: &Value) -> PlayerBrief {
+    PlayerBrief {
+        id: v.get("id").and_then(Value::as_u64),
+        name: v.get("name").and_then(Value::as_str).map(String::from),
+    }
+}
+
 fn brief(v: &Value) -> ReportBrief {
     let text = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
     ReportBrief {
@@ -505,7 +598,8 @@ fn check_version(v: &Value) -> Result<(), String> {
 }
 
 impl std::fmt::Display for Status {
-    /// One line: `pid 7 port 8080 up 5s v4 t900 running 2 players 3 conns`.
+    /// One line: `pid 7 port 8080 up 5s v4 t900 running 2 players 3 conns
+    /// (ada, #2)`.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -519,6 +613,10 @@ impl std::fmt::Display for Status {
             self.players.len(),
             self.connections,
         )?;
+        if !self.players.is_empty() {
+            let names: Vec<String> = self.players.iter().map(PlayerBrief::to_string).collect();
+            write!(f, " ({})", names.join(", "))?;
+        }
         if self.reloading {
             f.write_str(" reloading")?;
         }
@@ -580,7 +678,10 @@ mod tests {
             port: 14850,
             started: 100,
             uptime_secs: 5,
-            players: vec![1, 2],
+            players: vec![
+                PlayerBrief::id(1, Some("ada".into())),
+                PlayerBrief::named("bo"),
+            ],
             connections: 3,
             version: 4,
             time: 900,
@@ -592,7 +693,7 @@ mod tests {
             limited: 2,
             frames_sent: 12,
             bytes_sent: 3400,
-            game: Some(serde_json::json!({ "names": ["ada"] })),
+            game: Some(serde_json::json!({ "zones": 3 })),
         };
         for reply in [
             Reply::Status(status),
@@ -617,6 +718,8 @@ mod tests {
             Reply::Revoked {
                 name: "ada".into(),
                 generation: 3,
+                closed: 2,
+                closing: 1,
             },
             Reply::Reports(ReportsReply {
                 kept: true,
@@ -630,9 +733,16 @@ mod tests {
                 }],
                 received: 6,
                 saved: 4,
+                rate_limited: 1,
                 dropped: 1,
                 pruned: 1,
+                extra: Some(json!({ "per_player": { "ada": 4 } })),
             }),
+            Reply::Reports(ReportsReply::default()),
+            Reply::Unsupported {
+                request: "pause".into(),
+                why: "no clock".into(),
+            },
             Reply::Game(json!([1, 2])),
             Reply::Refused("a wrong token".into()),
             Reply::Unknown("seal".into()),
@@ -646,11 +756,11 @@ mod tests {
     fn the_lines_are_pinned() {
         assert_eq!(
             Request::Stop.encode("ab"),
-            r#"{"admin":1,"token":"ab","request":{"type":"stop"}}"#
+            r#"{"admin":2,"token":"ab","request":{"type":"stop"}}"#
         );
         assert_eq!(
             Request::Revoke { name: "al".into() }.encode("ab"),
-            r#"{"admin":1,"token":"ab","request":{"type":"revoke","name":"al"}}"#
+            r#"{"admin":2,"token":"ab","request":{"type":"revoke","name":"al"}}"#
         );
         assert_eq!(
             Reply::Clock {
@@ -658,22 +768,42 @@ mod tests {
                 time: 3
             }
             .encode(),
-            r#"{"admin":1,"reply":{"type":"clock","paused":true,"time":3}}"#
+            r#"{"admin":2,"reply":{"type":"clock","paused":true,"time":3}}"#
+        );
+        assert_eq!(
+            Reply::Unsupported {
+                request: "pause".into(),
+                why: "no clock".into()
+            }
+            .encode(),
+            r#"{"admin":2,"reply":{"type":"unsupported","request":"pause","why":"no clock"}}"#
+        );
+        let status = Reply::Status(Status {
+            players: vec![
+                PlayerBrief::id(1, Some("ada".into())),
+                PlayerBrief::named("bo"),
+            ],
+            ..Status::default()
+        })
+        .encode();
+        assert!(
+            status.contains(r#""players":[{"id":1,"name":"ada"},{"id":null,"name":"bo"}]"#),
+            "{status}"
         );
     }
 
     #[test]
     fn unknown_requests_and_versions_are_told_apart() {
-        let asked = decode_request(r#"{"admin":1,"token":"t","request":{"type":"seal"}}"#).unwrap();
+        let asked = decode_request(r#"{"admin":2,"token":"t","request":{"type":"seal"}}"#).unwrap();
         assert_eq!(asked.request, Err("seal".to_string()));
         let err =
-            decode_request(r#"{"admin":1,"token":"t","request":{"type":"revoke"}}"#).unwrap_err();
+            decode_request(r#"{"admin":2,"token":"t","request":{"type":"revoke"}}"#).unwrap_err();
         assert!(err.contains("names no one"), "{err}");
         let err =
-            decode_request(r#"{"admin":2,"token":"t","request":{"type":"stop"}}"#).unwrap_err();
-        assert!(err.contains("version 2"), "{err}");
+            decode_request(r#"{"admin":1,"token":"t","request":{"type":"stop"}}"#).unwrap_err();
+        assert!(err.contains("version 1"), "{err}");
         assert!(decode_request("stop").is_err());
-        assert!(decode_request(r#"{"admin":1,"request":{"type":"stop"}}"#).is_err());
-        assert!(Reply::decode(r#"{"admin":1,"reply":{"type":"later"}}"#).is_err());
+        assert!(decode_request(r#"{"admin":2,"request":{"type":"stop"}}"#).is_err());
+        assert!(Reply::decode(r#"{"admin":2,"reply":{"type":"later"}}"#).is_err());
     }
 }

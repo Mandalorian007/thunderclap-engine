@@ -141,6 +141,7 @@ impl<G: Game> Sim<G> {
         }
         if let Some(player) = player {
             self.conns_of.entry(player).or_default().push(conn);
+            self.names.insert(player, identity.name.clone());
             self.drive(player, conn);
             // A game whose streams follow the body: this connection's
             // starts now.
@@ -355,6 +356,7 @@ impl<G: Game> Sim<G> {
             }
             None => {
                 self.conns_of.remove(&player);
+                self.names.remove(&player);
                 self.drivers.remove(&player);
                 self.inputs.leave(player);
                 self.budgets.forget(player);

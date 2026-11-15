@@ -24,8 +24,10 @@ pub use ask::{AdminError, CONNECT_TIMEOUT, REPLY_TIMEOUT, ask, ask_endpoint};
 pub use backups::{BackedUp, Backups, KEEP_BACKUPS};
 pub use endpoint::{ENDPOINT_FILE, Endpoint, new_token, same_token};
 pub use listen::{
-    AdminChannel, DataLoader, EXCHANGE_TIMEOUT, GameRequests, GameStatus, Live, MAX_OPEN,
-    NEWEST_REPORTS, READ_TIMEOUT, Revoke, SimControl, SimControls,
+    AdminChannel, ControlError, DataLoader, EXCHANGE_TIMEOUT, GameRequests, GameStatus, Live,
+    MAX_OPEN, NEWEST_REPORTS, READ_TIMEOUT, REVOKE_WAIT, Revoke, SessionRevoke, SimControl,
+    SimControls,
 };
-pub use proto::{ADMIN_VERSION, Reply, ReportBrief, ReportsReply, Request, Status};
-pub use reports::{Report, ReportCounts, Reports, ReportsConfig};
+pub use proto::{ADMIN_VERSION, PlayerBrief, Reply, ReportBrief, ReportsReply, Request, Status};
+pub use reports::{Report, ReportCounts, ReportRate, Reports, ReportsConfig, ReportsSource};
+pub use tc_auth::Revoked;

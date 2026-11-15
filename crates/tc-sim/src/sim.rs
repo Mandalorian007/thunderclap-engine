@@ -166,6 +166,8 @@ pub struct Sim<G: Game> {
     pub(crate) conns: BTreeMap<ConnId, Conn>,
     /// Each present player's connections, in id order.
     pub(crate) conns_of: BTreeMap<PlayerId, Vec<ConnId>>,
+    /// Each present player's name, as its newest connection signed in.
+    pub(crate) names: BTreeMap<PlayerId, String>,
     /// The connection that drives each present player.
     pub(crate) drivers: BTreeMap<PlayerId, ConnId>,
     pub(crate) inputs: InputQueue<<G::Protocol as Protocol>::Input>,
@@ -262,6 +264,7 @@ impl<G: Game> Sim<G> {
             history,
             conns: BTreeMap::new(),
             conns_of: BTreeMap::new(),
+            names: BTreeMap::new(),
             drivers: BTreeMap::new(),
             inputs: InputQueue::new(config.input),
             next_input_tick: None,
@@ -408,6 +411,11 @@ impl<G: Game> Sim<G> {
     /// The players present, in order.
     pub fn present(&self) -> Vec<PlayerId> {
         self.conns_of.keys().copied().collect()
+    }
+
+    /// A present player's name, as its newest connection signed in.
+    pub fn name(&self, player: PlayerId) -> Option<&str> {
+        self.names.get(&player).map(String::as_str)
     }
 
     pub(crate) fn schedule_timers(&mut self, now: Instant) {
@@ -817,6 +825,7 @@ impl<G: Game> Sim<G> {
     pub(crate) fn publish_status(&mut self, now: Instant) {
         self.status.set(SimStatus {
             players: self.present(),
+            names: self.names.clone(),
             connections: self.conns.len(),
             version: self.core.version(),
             time: self.core.time(),
@@ -1053,6 +1062,7 @@ impl<G: Game> Sim<G> {
         }
         self.conns.clear();
         self.conns_of.clear();
+        self.names.clear();
         self.drivers.clear();
         self.mark_clock_waiting(true);
         if let Some(log) = &mut self.log

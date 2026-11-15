@@ -22,10 +22,12 @@ fn the_admin_lines_keep_their_order_without_it() {
     let line = tc_admin::Reply::Revoked {
         name: "ada".into(),
         generation: 3,
+        closed: 1,
+        closing: 0,
     }
     .encode();
     assert_eq!(
         line,
-        r#"{"admin":1,"reply":{"type":"revoked","name":"ada","generation":3}}"#
+        r#"{"admin":2,"reply":{"type":"revoked","name":"ada","generation":3,"closed":1,"closing":0}}"#
     );
 }

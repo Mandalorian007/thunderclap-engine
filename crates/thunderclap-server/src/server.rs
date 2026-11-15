@@ -8,9 +8,9 @@ use std::time::Instant;
 
 use tc_admin::{
     AdminChannel, Backups, DataLoader, GameRequests, GameStatus, KEEP_BACKUPS, Live, Reports,
-    Revoke, SimControls,
+    ReportsSource, Revoke, SessionRevoke, SimControls,
 };
-use tc_auth::{FileAccounts, NameRules, SessionAuth, TokenFormat};
+use tc_auth::{FileAccounts, LiveTokens, NameRules, SessionAuth, TokenFormat};
 use tc_net::{Auth, ServerConfig};
 use tc_sim::{Core, Game, Sim, SimConfig, SimHandle};
 use tc_store::{ArchivePolicy, META_FILE};
@@ -45,7 +45,8 @@ pub enum AuthMode {
     /// Session tokens over accounts in the data directory, with a secret
     /// kept beside them, and guests: an empty token joins as a numbered
     /// guest. Tokens come from [`Running::auth`]'s `issue`, and the admin
-    /// channel's revoke ends them. The default.
+    /// channel's revoke ends them ([`SessionRevoke`]: it says how many
+    /// sessions closed). The default.
     #[default]
     DevGuests,
     /// Every token good, the token the name: tests and tools.
@@ -79,6 +80,7 @@ impl<G: Game> Server<G> {
             data: None,
             build: String::new(),
             reports: None,
+            reports_source: None,
             game_requests: None,
             keep_backups: KEEP_BACKUPS,
             archive: ArchivePolicy::default(),
@@ -106,6 +108,7 @@ pub struct Builder<G: Game> {
     data: Option<DataLoader<G>>,
     build: String,
     reports: Option<Reports>,
+    reports_source: Option<Arc<dyn ReportsSource>>,
     game_requests: Option<GameRequests>,
     keep_backups: usize,
     archive: ArchivePolicy,
@@ -177,6 +180,14 @@ impl<G: Game> Builder<G> {
         self
     }
 
+    /// What the admin channel's `reports` lists, in place of
+    /// [`reports`](Self::reports)': the game's own reports, or `Reports`
+    /// with the game's numbers ([`ReportsSource::extra`]).
+    pub fn reports_source(mut self, source: Arc<dyn ReportsSource>) -> Self {
+        self.reports_source = Some(source);
+        self
+    }
+
     /// Answers the admin channel's game requests.
     pub fn game_requests(
         mut self,
@@ -209,7 +220,7 @@ impl<G: Game> Builder<G> {
         self
     }
 
-    /// The game's own status (players by name, its world's numbers), in
+    /// The game's own status (its world's numbers), in
     /// the admin channel's every status (`Status::game`). Asked on the
     /// runtime's thread: read what the game publishes, never wait.
     pub fn game_status(
@@ -308,6 +319,7 @@ impl<G: Game> Builder<G> {
         };
         let running = sim.spawn().map_err(|e| format!("starting the loop: {e}"))?;
 
+        let mut hooks = tc_net::hooks::Hooks::<G::Protocol>::default();
         let (auth, revoke, session): (Arc<dyn Auth>, Option<Arc<dyn Revoke>>, _) = match self.auth {
             AuthMode::DevGuests => {
                 let secret = secret(&data.join(SECRET_FILE))?;
@@ -316,7 +328,12 @@ impl<G: Game> Builder<G> {
                     SessionAuth::new(secret, TokenFormat::default(), Arc::new(accounts))
                         .with_guests(),
                 );
-                (session.clone(), Some(session.clone()), Some(session))
+                // The open sessions' tokens, so a revoke counts those it
+                // closes.
+                let live = LiveTokens::new();
+                hooks.hello = Some(live.hook());
+                let revoke = SessionRevoke::new(session.clone(), live);
+                (session.clone(), Some(Arc::new(revoke)), Some(session))
             }
             AuthMode::Open => (Arc::new(tc_net::AllowAll), None, None),
             AuthMode::Custom { auth, revoke } => (auth, revoke, None),
@@ -329,7 +346,7 @@ impl<G: Game> Builder<G> {
         for tweak in self.net {
             tweak(&mut config);
         }
-        let net = match tc_net::Server::start(config, running.requests.clone()).await {
+        let net = match tc_net::Server::start_with(config, running.requests.clone(), hooks).await {
             Ok(n) => n,
             Err(e) => {
                 running.stop();
@@ -369,7 +386,11 @@ impl<G: Game> Builder<G> {
                 dir: data.join(BACKUPS_DIR),
                 keep: self.keep_backups,
             }),
-            reports: self.reports.clone(),
+            reports: self.reports_source.or_else(|| {
+                self.reports
+                    .clone()
+                    .map(|r| Arc::new(r) as Arc<dyn ReportsSource>)
+            }),
             game: self.game_requests,
             status: self.game_status,
         };
