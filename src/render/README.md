@@ -1650,6 +1650,13 @@ view's end, so a later reader always sees a cleared target. `PassDesc.encodeWhen
 only when no set of the pass has work) returns false to skip a pass whose `encode` has nothing
 to draw this frame: no render pass opens, and the next pass clears colour and depth instead.
 
+A `CoreDrawable` declares the extra targets it writes (`CoreDrawable.writes`, ws/pass-actor-fit):
+its pass attaches them too, whatever `PassDesc.writes` says (a sky member that writes velocity
+in a water pass that writes none), unless the pass has `coreTargets: false`. The merge happens
+when drawables are added, not per frame, so attachments stay put. `core.passTargets(id)` is
+what a pass attaches (`targetMask` merged with its drawables'); a game's own pipelines in that
+pass build their targets from `core.targetMask & core.passTargets(id)` (or `ctx.aux`).
+
 ### Pipeline warming (ws/warm-voxel-fit)
 
 WebKit (Metal) compiles a render pipeline at its first draw. On a shader-cache miss, that draw

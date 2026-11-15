@@ -230,6 +230,7 @@ interface CoreDrawable {
     readonly depth?: boolean;
     readonly readsDepth?: boolean;
     readonly readsColor?: boolean;
+    readonly writes?: readonly CoreTargetName[];
     readonly encoding?: 'bundle' | 'direct';
     readonly version: number;
     readonly active: boolean;
@@ -1331,6 +1332,7 @@ class RenderCore {
     get sceneColorView(): GPUTextureView | null;
     get targetsVersion(): number;
     get sceneRead(): CoreSceneRead;
+    passTargets(id: string): number | undefined;
     definePass(desc: PassDesc): CorePass;
     get drawSets(): readonly DrawSet[];
     get depth(): GPUTexture | null;

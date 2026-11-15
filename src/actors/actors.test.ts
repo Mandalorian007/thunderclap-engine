@@ -25,7 +25,7 @@ import { actorMatrix } from './pose-cpu';
 import { ACTOR_HEADER_WORDS, ACTOR_NONE, ACTOR_RECORD, recordShape } from './record';
 import { ACTOR_VERTEX_BYTES, type ActorRig, defineRig } from './rig';
 import { type ActorSystem, createActorSystem } from './system';
-import { type ActorShaderConsts, actorPoseWgsl } from './wgsl';
+import { type ActorShaderConsts, actorPoseWgsl, RIG_HEADER_WORDS } from './wgsl';
 
 const POSE_CONSTS: ActorShaderConsts = {
   bones: 16,
@@ -748,12 +748,11 @@ describe('fit for a crowd (ws/actor-post-fit)', () => {
     s.actors.vertexCap = 5000;
     frame(s, 0);
     const rig = words(s.fake, 'actors rigs');
-    // Header of 20 words: the system's models have no LODs of their own.
-    expect(rig.u[1 * 20 + 14]).toBe(0);
-    expect(rig.u[own * 20 + 14]).toBe(3);
-    expect([...rig.f.slice(own * 20 + 16, own * 20 + 19)]).toEqual(
-      [8, 16, 3.4e38].map(Math.fround),
-    );
+    // A header of RIG_HEADER_WORDS: the system's models have no LODs of their own.
+    const H = RIG_HEADER_WORDS;
+    expect(rig.u[1 * H + 14]).toBe(0);
+    expect(rig.u[own * H + 14]).toBe(3);
+    expect([...rig.f.slice(own * H + 16, own * H + 19)]).toEqual([8, 16, 3.4e38].map(Math.fround));
     const params = words(s.fake, 'actors params');
     expect(params.f[9]).toBe(0.5);
     expect(params.u[10]).toBe(5000);
@@ -1198,5 +1197,127 @@ describe('readBack holds up (ws/actor-fit-2)', () => {
     await expect(pending).rejects.toThrow(/restored while the read mapped/);
     s.actors.destroy();
     await expect(s.actors.readBack()).rejects.toThrow(/destroyed/);
+  });
+});
+
+describe('what Forge asked of the actors (ws/pass-actor-fit)', () => {
+  const QUAD =
+    '@vertex fn vs(in: VertexIn, @builtin(instance_index) inst: u32) -> @builtin(position) vec4f {\n' +
+    '  let actor = actor_at(actor_draw_of(in.core_vertex), inst);\n' +
+    '  return view.viewProj * vec4f(actor_position(actor), 1.0);\n}\n' +
+    '@fragment fn fs() -> @location(0) vec4f { return vec4f(0.0); }';
+  const words = (fake: FakeDevice, label: string) => {
+    fake.device.queue.submit([]);
+    const b = fake.buffers.filter((x) => x.label === label).at(-1)!;
+    return { u: new Uint32Array(b.data.buffer), f: new Float32Array(b.data.buffer) };
+  };
+
+  it('packs a pose table for the set and one per model into the rig buffer', async () => {
+    const fake = createFakeDevice();
+    const modules: string[] = [];
+    const make = fake.device.createShaderModule.bind(fake.device);
+    (fake.device as unknown as { createShaderModule: unknown }).createShaderModule = (
+      d: GPUShaderModuleDescriptor,
+    ) => {
+      modules.push(d.code);
+      return make(d);
+    };
+    const core = createRenderCore(fake.device as unknown as GPUDevice);
+    const hook =
+      'fn actor_pose(actor: u32, model: u32, node: u32, p: Trs, time: f32) -> Trs {\n' +
+      '  var o = p; o.t.y += actor_pose_f32(node) + actor_model_f32(model, 0u); return o;\n}';
+    const actors = createActorSystem(core, {
+      slots: 4,
+      maxModels: 3,
+      poseWgsl: hook,
+      poseTable: new Float32Array([0.25, 0.5, 0.75]),
+    });
+    const a = actors.addModel(walkerRig(), { table: new Float32Array([2, 3]) });
+    const b = actors.addModel(walkerRig());
+    const posed = modules.filter((m) => m.includes('fn pose(')).at(-1)!;
+    expect(posed).toContain('const ACTOR_POSE_TABLE_WORDS = 3u;');
+    expect(posed).toContain(
+      `fn actor_pose_f32(i: u32) -> f32 { return bitcast<f32>(rig[${3 * RIG_HEADER_WORDS}u + i]); }`,
+    );
+    actors.setRecord(0, { model: a });
+    const s = { fake, device: fake.device, core, actors, views: [createRenderView()] };
+    frame(s as unknown as Scene, 0);
+    const check = (fake: FakeDevice) => {
+      const rig = words(fake, 'actors rigs');
+      const at = 3 * RIG_HEADER_WORDS;
+      expect([...rig.f.slice(at, at + 3)]).toEqual([0.25, 0.5, 0.75]);
+      const own = rig.u[a * RIG_HEADER_WORDS + 20]!;
+      expect(rig.u[a * RIG_HEADER_WORDS + 21]).toBe(2);
+      expect([...rig.f.slice(own, own + 2)]).toEqual([2, 3]);
+      expect(rig.u[b * RIG_HEADER_WORDS + 21]).toBe(0);
+    };
+    check(fake);
+    // The tables survive a device restore (the rig buffer rebuilt from the kept copies).
+    fake.loseDevice('unknown', 'forced');
+    await fake.lost;
+    const next = createFakeDevice();
+    core.restore(next.device as unknown as GPUDevice);
+    check(next);
+    expect(fake.errors).toEqual([]);
+    expect(next.errors).toEqual([]);
+  });
+
+  it('shows and hides a model per set, without a new set', () => {
+    const fake = createFakeDevice();
+    const dev = fake.device as unknown as GPUDevice;
+    const core = createRenderCore(dev);
+    const actors = createActorSystem(core, { slots: 8, actorVertices: [6] });
+    const walker = actors.addModel(walkerRig(), { name: 'walker' });
+    const tubeM = actors.addModel(tubeRig(), { name: 'tube' });
+    const shadow = actors.addDrawSet({ label: 'shadow', shader: { code: QUAD }, shape: 'actor' });
+    const icon = actors.addDrawSet({
+      label: 'icon',
+      shader: { code: QUAD },
+      shape: 'actor',
+      showLive: false,
+    });
+    actors.setRecord(0, { model: walker });
+    actors.setRecord(1, { model: tubeM });
+    const s = { fake, device: dev, core, actors, views: [createRenderView()] } as unknown as Scene;
+    frame(s, 0);
+    const models = () => actors.setInfo().map((i) => i.models);
+    expect(models()).toEqual([
+      [0, 1],
+      [0, 1],
+      [0, 1],
+    ]);
+    const sets = fake.bundles.length;
+    // Only the shadow drops the tube: one set re-records.
+    actors.showModel(tubeM, false, shadow);
+    frame(s, 0.016);
+    expect(models()).toEqual([[0, 1], [0], [0, 1]]);
+    expect(fake.bundles.length).toBe(sets + 1);
+    expect(actors.modelShown(tubeM, shadow)).toBe(false);
+    expect(actors.modelShown(tubeM)).toBe(true);
+    // Every set: the walker leaves all three, even the icon that keeps empty models.
+    actors.showModel(walker, false);
+    frame(s, 0.032);
+    expect(models()).toEqual([[1], [], [1]]);
+    // A hidden model stays hidden when its last actor leaves and comes back.
+    actors.remove(0);
+    actors.setRecord(0, { model: walker });
+    frame(s, 0.048);
+    expect(models()).toEqual([[1], [], [1]]);
+    actors.showModel(walker, true);
+    actors.showModel(tubeM, true, shadow);
+    frame(s, 0.064);
+    expect(models()).toEqual([
+      [0, 1],
+      [0, 1],
+      [0, 1],
+    ]);
+    // Shown with no live actor: the live sets still leave it out, the icon keeps it.
+    actors.remove(1);
+    frame(s, 0.08);
+    expect(models()).toEqual([[0], [0], [0, 1]]);
+    expect(() => actors.showModel(walker, false, icon)).not.toThrow();
+    const other = createActorSystem(core, { slots: 2, label: 'other' });
+    expect(() => actors.showModel(walker, false, other.drawSet)).toThrow(/not one of its sets/);
+    expect(fake.errors).toEqual([]);
   });
 });

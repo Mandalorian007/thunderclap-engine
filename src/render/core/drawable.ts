@@ -14,7 +14,7 @@
 import { mat4 } from '../../core/math';
 import type { RenderCore } from './core';
 import type { CorePass } from './pass-list';
-import { coreColorFormats } from './targets';
+import { type CoreTargetName, coreColorFormats, coreTargetMask } from './targets';
 import { CORE_VIEW_WGSL, MAX_VIEWS, sphereInPlanes, VIEW_SLOT, VIEW_SLOT_FLOATS } from './view';
 import { type PipelineWarmer, pipelineWarmer } from './warm';
 
@@ -70,6 +70,13 @@ export interface CoreDrawable {
    * from `CoreTarget.texture` (which needs `COPY_SRC`). Without a texture the copy is not made.
    */
   readonly readsColor?: boolean;
+  /**
+   * The core's extra targets it writes (ws/pass-actor-fit): its pass attaches them even when
+   * the pass's `PassDesc.writes` leaves them out (a sky that writes velocity in a pass that
+   * writes none), so the pass's `aux` and every pipeline drawn there list them. Fixed once
+   * added. Default none: the pass attaches what it declares.
+   */
+  readonly writes?: readonly CoreTargetName[];
   /** `'bundle'` (default): recorded once per group and format until `version` changes. */
   readonly encoding?: 'bundle' | 'direct';
   /** Bump to re-record its bundles (a new pipeline, bind group or draw count). */
@@ -176,6 +183,8 @@ export class DrawableEntry implements PassMember {
   readonly depth: boolean;
   readonly readsDepth: boolean;
   readonly readsColor: boolean;
+  /** `CoreDrawable.writes` as a mask. */
+  readonly writes: number;
   private readonly bundles: Recorded[] = [];
 
   constructor(
@@ -188,6 +197,7 @@ export class DrawableEntry implements PassMember {
     this.depth = drawable.depth ?? true;
     this.readsDepth = !!drawable.readsDepth;
     this.readsColor = !!drawable.readsColor;
+    this.writes = coreTargetMask(drawable.writes);
     if (this.readsDepth && pass.depth === 'write') {
       throw new Error(
         `${drawable.label ?? 'drawable'}: readsDepth needs a pass whose depth is 'read' or 'none' (${pass.id} writes)`,

@@ -304,6 +304,11 @@ export class RenderCore {
   private readonly drawables: DrawableEntry[] = [];
   /** Sets and drawables per pass, in pass order then order (rebuilt when members come or go). */
   private readonly bySet: PassMember[][] = [];
+  /**
+   * Per pass (list order), the extra targets it attaches (ws/pass-actor-fit): its `writes`
+   * merged with its drawables' (rebuilt with `bySet`).
+   */
+  private readonly passAux: number[] = [];
   private readonly drawCtx: CoreDrawContext;
   private readonly drawableHost: DrawableHost;
   /** Some drawable samples depth / colour (rebuilt with `bySet`). */
@@ -775,6 +780,20 @@ export class RenderCore {
     return this.sceneReadNow;
   }
 
+  /**
+   * The extra targets pass `id` attaches (ws/pass-actor-fit), a `CORE_TARGET` mask: its
+   * `PassDesc.writes` merged with the `writes` of the drawables in it, before the core's own
+   * `targetMask` narrows it. A game's own pipelines drawn in that pass list these
+   * (`coreColorTargets(color, core.targetMask & core.passTargets(id), writes)`); `encode` and
+   * drawables read the same mask as `aux`. Undefined for an unknown pass.
+   */
+  passTargets(id: string): number | undefined {
+    const list = this.passes.passes;
+    if (this.setsDirty) this.sortSets();
+    for (let p = 0; p < list.length; p++) if (list[p]!.id === id) return this.passAux[p];
+    return undefined;
+  }
+
   /** Declare a pass (D1 §3.4 `definePass`); sets join it by id. */
   definePass(desc: PassDesc): CorePass {
     const p = this.passes.define(desc);
@@ -1019,7 +1038,7 @@ export class RenderCore {
       if (warming) {
         // Members that draw nothing here now: their pipelines' empty first draws (`warm`).
         const wc = resolved ? (target.outputFormat ?? target.format) : target.format;
-        const wa = resolved ? 0 : auxMask & pass.targetMask;
+        const wa = resolved ? 0 : auxMask & this.passAux[p]!;
         for (let i = 0; i < sets.length; i++) {
           const s = sets[i]!;
           if (!s.warm || (s.count > 0 && s.ready !== false)) continue;
@@ -1040,7 +1059,7 @@ export class RenderCore {
       const colorFormat = resolved ? (target.outputFormat ?? target.format) : target.format;
       const colorRect = resolved ? target.outputViewport : vp;
       // A pass attaches only the extra targets it writes (ws/post-fit, ws/pass-cost).
-      const aux = resolved ? 0 : auxMask & pass.targetMask;
+      const aux = resolved ? 0 : auxMask & this.passAux[p]!;
       if (wantsDepth && samplesDepth && pass.depth === 'read' && !depthCleared) {
         // A drawable samples depth here, so the pass must be read-only: clear depth first.
         const d = this.depthAttachment;
@@ -1483,15 +1502,23 @@ export class RenderCore {
   private sortSets(): void {
     const list = this.passes.passes;
     this.bySet.length = 0;
+    this.passAux.length = 0;
     for (let p = 0; p < list.length; p++) {
       const id = list[p]!.id;
       const members: PassMember[] = [];
+      // A pass attaches what it writes and what its drawables declare (`CoreDrawable.writes`).
+      let mask = list[p]!.targetMask;
       for (const s of this.sets) {
         if (s.pass.id === id) members.push(s);
         // A set's extra joins (`DrawSetDesc.passes`, ws/render-fit).
         for (const j of s.joins) if (j.pass.id === id) members.push(j);
       }
-      for (const d of this.drawables) if (d.pass.id === id) members.push(d);
+      for (const d of this.drawables) {
+        if (d.pass.id !== id) continue;
+        members.push(d);
+        if (list[p]!.coreTargets) mask |= d.writes;
+      }
+      this.passAux.push(mask);
       // Stable: equal orders keep creation order, sets before drawables.
       members.sort((a, b) => a.order - b.order);
       this.bySet.push(members);

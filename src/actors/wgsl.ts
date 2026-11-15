@@ -6,7 +6,7 @@ import { CORE_VIEW_WGSL, MAX_VIEWS } from '../render/core/view';
 import { ACTOR_RECORD as R } from './record';
 
 /** Words per model in the rig table's header area. */
-export const RIG_HEADER_WORDS = 20;
+export const RIG_HEADER_WORDS = 22;
 /** Word offsets in a model's header. */
 export const RIG = {
   nodes: 0,
@@ -26,6 +26,9 @@ export const RIG = {
   /** The model's own LOD distance count (0: the system's), then four distances at 16. */
   lodCount: 14,
   lods: 16,
+  /** The model's game table (`ActorModelOptions.table`, ws/pass-actor-fit): where, and its words. */
+  tableAt: 20,
+  tableWords: 21,
 } as const;
 /** Words per clip entry: frames at, frame count, fps (f32), loop. */
 export const RIG_CLIP_WORDS = 4;
@@ -53,6 +56,13 @@ export interface ActorShaderConsts {
   drawTable?: boolean;
   /** `ActorSystemOptions.poseWgsl`, or empty. */
   pose: string;
+  /**
+   * The words of `ActorSystemOptions.poseTable` (ws/pass-actor-fit), in the rig buffer after
+   * the model headers; 0 for none.
+   */
+  poseTableWords?: number;
+  /** Models the rig buffer has headers for (where the pose table starts). */
+  maxModels?: number;
   /** The record fields' `ACTOR_FIELD_*` constants (for the pose hook). */
   fieldConsts: string;
 }
@@ -73,6 +83,20 @@ function tableWgsl(group: number, binding: number): string {
 fn actor_table_word(i: u32) -> u32 { return actor_table[i]; }
 fn actor_table_f32(i: u32) -> f32 { return bitcast<f32>(actor_table[i]); }
 `;
+}
+
+/**
+ * The pose hook's game tables in the rig buffer (ws/pass-actor-fit): the system's
+ * (`ActorSystemOptions.poseTable`) and each model's (`ActorModelOptions.table`).
+ */
+function poseTablesWgsl(c: ActorShaderConsts): string {
+  const at = (c.maxModels ?? 0) * RIG_HEADER_WORDS;
+  return `const ACTOR_POSE_TABLE_WORDS = ${c.poseTableWords ?? 0}u;
+fn actor_pose_word(i: u32) -> u32 { return rig[${at}u + i]; }
+fn actor_pose_f32(i: u32) -> f32 { return bitcast<f32>(rig[${at}u + i]); }
+fn actor_model_words(model: u32) -> u32 { return rig[model * ${RIG_HEADER_WORDS}u + ${RIG.tableWords}u]; }
+fn actor_model_word(model: u32, i: u32) -> u32 { return rig[rig[model * ${RIG_HEADER_WORDS}u + ${RIG.tableAt}u] + i]; }
+fn actor_model_f32(model: u32, i: u32) -> f32 { return bitcast<f32>(actor_model_word(model, i)); }`;
 }
 
 /** The pose pass: place, pose, skin, cull per view, pick the LOD and append to the lists. */
@@ -161,6 +185,7 @@ ${
     ? `${c.fieldConsts}
 /** Word \`word\` of actor \`actor\`'s record. */
 fn actor_word(actor: u32, word: u32) -> u32 { return records[actor * ACTOR_STRIDE + word]; }
+${poseTablesWgsl(c)}
 ${c.pose}`
     : ''
 }

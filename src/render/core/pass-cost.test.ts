@@ -208,6 +208,50 @@ describe('per-pass extra targets (ws/pass-cost)', () => {
   });
 });
 
+describe("a pass attaches its drawables' writes (ws/pass-actor-fit)", () => {
+  it('a member writing velocity in a pass declaring none gets it; coreTargets: false still wins', () => {
+    const auxSeen: number[] = [];
+    const s = scene(
+      ['emissive', 'velocity'],
+      [
+        {
+          id: 'water',
+          after: 'transparent',
+          depth: 'read',
+          writes: [],
+          encode: (_p, ctx) => auxSeen.push(ctx.aux),
+        },
+        { id: 'flat', after: 'water', coreTargets: false, encode: () => {} },
+      ],
+      'opaque',
+    );
+    expect(s.core.passTargets('water')).toBe(0);
+    const member = (pass: string) => ({
+      pass,
+      writes: ['velocity'] as const,
+      encoding: 'direct' as const,
+      version: 0,
+      active: true,
+      record: () => 0,
+    });
+    s.core.addDrawable(member('water'));
+    s.core.addDrawable(member('flat'));
+    // The declared mask is the pass's own; what it attaches merges its members'.
+    expect(s.core.passes.get('water')!.targetMask).toBe(0);
+    expect(s.core.passTargets('water')).toBe(4);
+    expect(s.core.passTargets('flat')).toBe(0);
+    expect(s.core.passTargets('opaque')).toBe(7);
+    expect(s.core.passTargets('nope')).toBeUndefined();
+    frame(s, target(s.fake));
+    const water = s.passes.find((p) => p.label === 'core water')!;
+    // Colour and velocity (emissive stays out); the opaque pass cleared both before.
+    expect(loads(water)).toEqual(['load', null, null, 'load']);
+    expect(auxSeen).toEqual([4]);
+    expect(loads(s.passes.find((p) => p.label === 'core flat'))).toEqual(['load']);
+    expect(s.fake.errors).toEqual([]);
+  });
+});
+
 describe('skipping empty passes (ws/pass-cost)', () => {
   it('encodeWhen false and no set at work: no render pass, and the next pass clears', () => {
     let has = false;

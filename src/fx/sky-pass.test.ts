@@ -189,6 +189,35 @@ fn sky_look(i: SkyInput) -> SkyShade {
     expect(fake.errors).toEqual([]);
   });
 
+  it('writes velocity in a pass that declares none, unless told it writes nothing (ws/pass-actor-fit)', () => {
+    const fake = createFakeDevice();
+    const core = createRenderCore(fake.device as unknown as GPUDevice, {
+      targets: ['emissive', 'velocity'],
+    });
+    core.definePass({ id: 'water', after: 'transparent', depth: 'read', writes: [] });
+    core.definePass({ id: 'glass', after: 'water', depth: 'read', writes: [] });
+    expect(core.passTargets('water')).toBe(0);
+    const sky = createSkyPass(core, null, { shade: SHADE, member: 'water' });
+    expect(sky.member!.writes).toEqual(['emissive', 'velocity']);
+    expect(core.passTargets('water')).toBe(5);
+    const narrow = createSkyPass(core, null, { shade: SHADE, member: 'glass', writes: [] });
+    expect(core.passTargets('glass')).toBe(0);
+    sky.prepare();
+    narrow.prepare();
+    draw(fake, core, [createRenderView()]);
+    const pipes = fake.passes
+      .filter((p) => p.kind === 'render')
+      .flatMap((p) => p.commands.filter((c) => c.op === 'setPipeline'))
+      .map(
+        (c) => (c as unknown as { pipeline: { desc: GPURenderPipelineDescriptor } }).pipeline.desc,
+      );
+    // Slots colour, emissive, rough-metal, velocity: water attaches the sky's two (rough-metal
+    // a hole); glass, colour alone.
+    const slots = pipes.map((p) => [...p.fragment!.targets].map((t) => (t ? t.format : null)));
+    expect(slots).toEqual([['rgba16float', 'rgba16float', null, 'rg16float'], ['rgba16float']]);
+    expect(fake.errors).toEqual([]);
+  });
+
   it('waits for the game group, warming its pipeline meanwhile', () => {
     const fake = createFakeDevice();
     const core = createRenderCore(fake.device as unknown as GPUDevice);

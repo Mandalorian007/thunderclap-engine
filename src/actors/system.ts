@@ -146,6 +146,14 @@ export interface ActorSystemOptions {
    */
   drawTable?: boolean;
   /**
+   * The pose hook's own game table (ws/pass-actor-fit): data the whole set shares (a game's rig
+   * table: bones, clips, keys), packed into the rig buffer the pose pass already reads, so it
+   * costs no binding. `poseWgsl` reads it with `actor_pose_word(i)` / `actor_pose_f32(i)`
+   * (`ACTOR_POSE_TABLE_WORDS` long). Fixed at creation (kept for a device restore); for data
+   * that changes, `tableWords` and `writeTable`. Per-model data: `ActorModelOptions.table`.
+   */
+  poseTable?: Uint32Array | Float32Array;
+  /**
    * Make the pose pipeline with `createComputePipelineAsync` (ws/actor-post-fit; default false),
    * so building the system does not stall on the shader compile. Until `ready` settles (and
    * again after a device restore) `prepare` runs no pose pass and the actors draw nothing.
@@ -161,6 +169,12 @@ export interface ActorModelOptions {
   lods?: readonly number[];
   /** A name for inspection (`ActorSystem.setInfo`); default `model <id>`. */
   name?: string;
+  /**
+   * The model's own game table for the pose hook (ws/pass-actor-fit): packed into the rig
+   * buffer beside its clips; `poseWgsl` reads it with `actor_model_word(model, i)` /
+   * `actor_model_f32(model, i)` (`actor_model_words(model)` long, 0 without one).
+   */
+  table?: Uint32Array | Float32Array;
 }
 
 /** One draw set of the system as `ActorSystem.setInfo` sees it (ws/actor-fit-2; dev and tests). */
@@ -286,6 +300,8 @@ interface ExtraSet {
   vertices: number;
   live: boolean;
   groups: DrawSetDesc['bindGroups'];
+  /** Models the game hid in this set (`showModel`, ws/pass-actor-fit). */
+  off: Uint8Array;
 }
 /** Unchanged record bytes between two changed runs worth sending to save an upload call. */
 const RECORD_MERGE_BYTES = 1024;
@@ -359,13 +375,17 @@ export class ActorSystem {
   /** Bumped by each build, so a slow async pipeline of an old device is dropped. */
   private buildGen = 0;
   private readonly asyncPipeline: boolean;
-  private readonly bodyLive: boolean;
+  /** The body (the system's own set) as `setInfo` and `showModel` see it. */
+  private readonly body: ExtraSet;
   private readonly tableData: Uint32Array<ArrayBuffer> | null;
   private readonly tableF32: Float32Array<ArrayBuffer> | null;
   private tableBuffer: GPUBuffer | null = null;
   /** Each model's own LOD distances (empty: the system's). */
   private readonly modelLods: (readonly number[])[] = [];
   private readonly modelNames: string[] = [];
+  /** Each model's `ActorModelOptions.table` (empty: none). */
+  private readonly modelTables: Uint32Array[] = [];
+  private readonly poseTable: Uint32Array;
   private readonly computeDesc: GPUComputePassDescriptor;
   private readonly scratch: PoseScratch;
   private destroyed = false;
@@ -415,7 +435,10 @@ export class ActorSystem {
       .map((n) => Math.max(0, Math.floor(n)))
       .filter((n) => n > 0);
     this.argsWords = (ARGS_BYTES + this.actorVertices.length * DRAW_ARGS_BYTES) / 4;
-    this.bodyLive = opts.showLive ?? true;
+    const pt = opts.poseTable;
+    this.poseTable = pt
+      ? new Uint32Array(pt.buffer, pt.byteOffset, pt.length).slice()
+      : new Uint32Array(0);
     this.lodScale = opts.lodScale ?? 1;
     this.vertexCap = Math.max(0, Math.floor(opts.vertexCap ?? 0));
     this.asyncPipeline = opts.asyncPipeline ?? false;
@@ -446,6 +469,8 @@ export class ActorSystem {
       table: this.tableData !== null,
       drawTable: !!opts.drawTable,
       pose: opts.poseWgsl ?? '',
+      poseTableWords: this.poseTable.length,
+      maxModels: this.maxModels,
       fieldConsts: actorFieldConsts(this.shape.fields),
     };
     const consts = this.consts;
@@ -486,6 +511,14 @@ export class ActorSystem {
       pass: opts.pass ?? 'opaque',
       bindGroups: [{ layout: this.drawLayout, group: this.drawGroup }],
     });
+    this.body = {
+      set: this.drawSet,
+      rec: -1,
+      vertices: 0,
+      live: opts.showLive ?? true,
+      groups: undefined,
+      off: new Uint8Array(this.maxModels),
+    };
     this.offRestored = core.onDeviceRestored((device) => this.restore(device));
   }
 
@@ -693,7 +726,7 @@ export class ActorSystem {
         ...(w !== ARGS_BYTES ? { argsOffset: d * w } : {}),
       });
     }
-    if (e.live && !this.shown[this.modelOfDraw(d)]) e.set.setHidden(d, true);
+    if (this.hidden(e, this.modelOfDraw(d))) e.set.setHidden(d, true);
   }
 
   private modelOfDraw(d: number): number {
@@ -748,7 +781,14 @@ export class ActorSystem {
       ...(desc.passes ? { passes: desc.passes } : {}),
       bindGroups: this.setGroups(desc.bindGroups),
     });
-    const e = { set, rec, vertices, live: desc.showLive ?? true, groups: desc.bindGroups };
+    const e: ExtraSet = {
+      set,
+      rec,
+      vertices,
+      live: desc.showLive ?? true,
+      groups: desc.bindGroups,
+      off: new Uint8Array(this.maxModels),
+    };
     this.extra.push(e);
     for (let d = 0; d < this.draws; d++) this.addExtraSlot(e, d);
     return set;
@@ -846,6 +886,10 @@ export class ActorSystem {
     this.rigs.push(rig);
     this.modelLods.push(opts.lods ?? []);
     this.modelNames.push(opts.name ?? `model ${id}`);
+    const t = opts.table;
+    this.modelTables.push(
+      t ? new Uint32Array(t.buffer, t.byteOffset, t.length).slice() : new Uint32Array(0),
+    );
     this.device.queue.writeBuffer(this.template, 0, this.templateData);
     this.rigBuffer.destroy();
     this.rigBuffer = this.makeRigBuffer();
@@ -1146,15 +1190,55 @@ export class ActorSystem {
     });
   }
 
+  /**
+   * Show or hide model `model`'s draws in `set` (ws/pass-actor-fit; default every set of the
+   * system, the body included): a hidden model's draws leave that set's bundle (one re-record,
+   * no new set), its actors still posed and drawn by the other sets. A showcase's per-set
+   * toggles, a set that draws only some models (a shadow only the creatures cast). Shown again,
+   * its draws come back unless `showLive` leaves them out for having no live actor.
+   */
+  showModel(model: number, show: boolean, set?: DrawSet): void {
+    this.alive();
+    this.rig(model);
+    const sets = this.setsOf(set);
+    const base = this.drawBases[model]!;
+    const end = base + this.rigs[model]!.meshes.length;
+    for (const e of sets) {
+      const off = show ? 0 : 1;
+      if (e.off[model] === off) continue;
+      e.off[model] = off;
+      const hide = this.hidden(e, model);
+      for (let d = base; d < end; d++) e.set.setHidden(d, hide);
+    }
+  }
+
+  /** Whether `showModel` left model `model` shown in `set` (default the body). */
+  modelShown(model: number, set: DrawSet = this.drawSet): boolean {
+    this.rig(model);
+    return this.setsOf(set)[0]!.off[model] === 0;
+  }
+
+  private setsOf(set: DrawSet | undefined): ExtraSet[] {
+    if (!set) return this.allSets();
+    const e = this.allSets().find((x) => x.set === set);
+    if (!e) throw new Error(`${this.label}: ${set.label} is not one of its sets`);
+    return [e];
+  }
+
+  /** Whether a set leaves model `m`'s draws out: the game hid it, or it has no live actor. */
+  private hidden(e: ExtraSet, m: number): boolean {
+    return e.off[m] !== 0 || (e.live && !this.shown[m]);
+  }
+
   /** The body's set, then the added ones. */
-  private allSets(): Pick<ExtraSet, 'set' | 'rec' | 'vertices' | 'live'>[] {
-    return [{ set: this.drawSet, rec: -1, vertices: 0, live: this.bodyLive }, ...this.extra];
+  private allSets(): ExtraSet[] {
+    return [this.body, ...this.extra];
   }
 
   /** The models whose draws are in a set's bundle. */
-  private modelsIn(e: Pick<ExtraSet, 'live'>): number[] {
+  private modelsIn(e: ExtraSet): number[] {
     const out: number[] = [];
-    for (let m = 0; m < this.rigs.length; m++) if (!e.live || this.shown[m]) out.push(m);
+    for (let m = 0; m < this.rigs.length; m++) if (!this.hidden(e, m)) out.push(m);
     return out;
   }
 
@@ -1328,9 +1412,10 @@ export class ActorSystem {
       this.shown[m] = show;
       const base = this.drawBases[m]!;
       const end = base + this.rigs[m]!.meshes.length;
-      for (let d = base; d < end; d++) {
-        if (this.bodyLive) this.drawSet.setHidden(d, !show);
-        for (const e of this.extra) if (e.live) e.set.setHidden(d, !show);
+      for (const e of this.allSets()) {
+        if (!e.live) continue;
+        const hide = this.hidden(e, m);
+        for (let d = base; d < end; d++) e.set.setHidden(d, hide);
       }
     }
   }
@@ -1353,9 +1438,13 @@ export class ActorSystem {
     this.recU32[b + R.light] = 0xffffffff;
   }
 
-  /** Pack every rig's header, clips, frames, parents, joints, inverse binds and rest pose. */
+  /**
+   * Pack every rig's header, then the pose table, then each rig's clips, frames, parents,
+   * joints, inverse binds, rest pose and own table.
+   */
   private makeRigBuffer(): GPUBuffer {
-    let words = this.maxModels * RIG_HEADER_WORDS;
+    let words = this.maxModels * RIG_HEADER_WORDS + this.poseTable.length;
+    for (const t of this.modelTables) words += t.length;
     for (const r of this.rigs) {
       words += r.clips.length * RIG_CLIP_WORDS + r.nodes * 2 + r.joints * 13;
       words += r.nodes * ACTOR_TRS_FLOATS;
@@ -1364,6 +1453,8 @@ export class ActorSystem {
     const u32 = new Uint32Array(Math.max(words, 4));
     const f32 = new Float32Array(u32.buffer);
     let at = this.maxModels * RIG_HEADER_WORDS;
+    u32.set(this.poseTable, at);
+    at += this.poseTable.length;
     let draw = 0;
     this.rigs.forEach((r, m) => {
       const h = m * RIG_HEADER_WORDS;
@@ -1405,6 +1496,11 @@ export class ActorSystem {
       u32[h + RIG.restAt] = at;
       f32.set(r.rest, at);
       at += r.nodes * ACTOR_TRS_FLOATS;
+      const t = this.modelTables[m]!;
+      u32[h + RIG.tableAt] = at;
+      u32[h + RIG.tableWords] = t.length;
+      u32.set(t, at);
+      at += t.length;
     });
     const buffer = this.device.createBuffer({
       label: `${this.label} rigs`,

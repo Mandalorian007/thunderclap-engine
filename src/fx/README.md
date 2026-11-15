@@ -902,6 +902,10 @@ B14 (the second fit, for a game's own passes and leaves, wind and weather). Defa
   one less render pass (a tile load and store on tiled GPUs). `createSkyPass(core, null, { shade
   })` takes no `SkyLook`: the game's `sky_look` draws everything (`SkyPass.sky` is then an all-zero
   look).
+  The sky writes emissive and velocity (`SkyPassOptions.writes`, ws/pass-actor-fit): as a member
+  it declares them (`CoreDrawable.writes`), so a pass that writes none (`PassDesc.writes: []`)
+  still attaches them and TAA reads the sky's velocity. `writes: []` keeps such a pass as
+  declared, the sky then writing colour alone there.
 - **Weather for a game.** `WeatherOcclusionMap.decode` (`WeatherHeightDecode`: `floor`, `scale`,
   `offset`) turns the map's texel into a height on the GPU, so a game samples its own surface
   heights without a converted copy. Shape `'leaf'`: a tapered flake that spins in the image plane
