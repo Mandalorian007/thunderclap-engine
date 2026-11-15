@@ -90,10 +90,12 @@ describe('a water look (ws/scene-read-fit)', () => {
     }[];
     expect(binds.map((b) => b.index)).toEqual([0, 1, 2]);
     expect(binds[2]!.group).toBe(r.core.sceneRead.group);
-    // The plane draws no index buffer, the block and clock still upload.
+    // The plane draws no index buffer, the params still upload each frame; the core block
+    // only when it changed (ws/g6-asks: once here).
     expect(
-      r.fake.writes.filter((w) => w.buffer.label === 'water-core').length,
+      r.fake.writes.filter((w) => w.buffer.label === 'water-params').length,
     ).toBeGreaterThanOrEqual(2);
+    expect(r.fake.writes.filter((w) => w.buffer.label === 'water-core')).toHaveLength(1);
   });
 
   it('a group past the set’s own, reversed depth, no colour', () => {

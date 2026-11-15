@@ -100,7 +100,20 @@ schemas use it): an object literal of field names shares its V8 hidden class wit
 objects of the same names, so a game's `{ x: 0.5, y: 0.5 }` would hold its numbers boxed and
 allocate on every write. Decoded structs and variants are plain objects (`Object.prototype`) built
 by a constructor per type, so every value of a type has one shape of its own, in wire order, and
-a field a game writes a fraction into stays unboxed (`schema-shape.test.ts`). A decode error names
+a field a game writes a fraction into stays unboxed (`schema-shape.test.ts`).
+
+Reading decoded numbers every frame (ws/g6-asks, E21). Integers that fit 31 bits are Smis: any
+read is free, in any code. A field that once held a fraction (a game wrote one) or a u32/u64 past
+2^30 becomes an unboxed double for every value of that type; optimized code reads it into
+arithmetic or a `Float64Array` without allocating (`schema-shape.test.ts`), but V8 boxes it, a
+heap number per read, where the read escapes: passed to a call the JIT doesn't inline, stored in
+an array or object of any value, or read in the interpreter (cold code, or after a deopt). The
+codec cannot remove both costs: a field kept tagged instead reads free but makes each fraction a
+game writes allocate. So a hot path that hands decoded doubles around converts them once (into a
+`Float64Array` or a game-owned record, at load or on change) and reads that; `Fixed` fields are
+objects, so `toNumber()` belongs in that same one-time step, never in a per-frame read. The
+first value past 2^30 also deprecates the type's earlier hidden class (a one-off reshape of older
+values on their next access), so a type that carries large counts or ids is best decoded warm. A decode error names
 the byte and, for a variant index or an integer past 2^53, the exact value.
 
 `queryApis<Api>(schema, QUERIES)` gives one `QueryApi` per live query from tc-tsgen's types-only

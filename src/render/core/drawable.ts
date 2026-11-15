@@ -464,12 +464,18 @@ const extrasByCore = new WeakMap<RenderCore, CoreViewExtras>();
  * Per-view data `CoreView` has no room for, for effects that unproject depth or face the eye:
  * one storage buffer of `MAX_VIEWS` × `VIEW_EXTRA_FLOATS` floats, written from the core's view
  * slots (camera-relative when the core has an origin grid). Shared per core
- * (`CoreViewExtras.of(core)`); `update()` from a drawable's `prepare` writes it once a frame.
+ * (`CoreViewExtras.of(core)`); `update()` from a drawable's `prepare` writes it at most once a
+ * frame, and only when a view's view-projection (or the view count, or the depth convention)
+ * changed since the last write (ws/g6-asks): a still camera costs no upload.
  */
 export class CoreViewExtras {
   readonly buffer: GPUBuffer;
   private readonly data = new Float32Array(MAX_VIEWS * VIEW_EXTRA_FLOATS);
   private readonly inv = new Float32Array(16);
+  /** The view-projections last written from (NaN until the first write). */
+  private readonly from = new Float32Array(MAX_VIEWS * 16).fill(Number.NaN);
+  private fromCount = -1;
+  private fromNear = -1;
   private frame = -1;
 
   /** The device the buffer lives on: `of` makes new extras after `core.restore` (ws/core-decals). */
@@ -494,7 +500,10 @@ export class CoreViewExtras {
     return e;
   }
 
-  /** Write this frame's views (once a frame however many drawables call it). */
+  /**
+   * Write this frame's views: once a frame however many drawables call it, and only when they
+   * changed since the last write (the buffer keeps what was written). No allocation.
+   */
   update(): void {
     const core = this.core;
     if (this.frame === core.frame) return;
@@ -504,6 +513,21 @@ export class CoreViewExtras {
     const d = this.data;
     const inv = this.inv;
     const near = core.passes.reversedZ ? 1 : 0;
+    let same = n === this.fromCount && near === this.fromNear;
+    const from = this.from;
+    for (let i = 0; i < n; i++) {
+      const at = i * VIEW_SLOT_FLOATS + VIEW_SLOT.viewProj;
+      for (let k = 0; k < 16; k++) {
+        const v = src[at + k]!;
+        if (from[i * 16 + k] !== v) {
+          same = false;
+          from[i * 16 + k] = v;
+        }
+      }
+    }
+    if (same) return;
+    this.fromCount = n;
+    this.fromNear = near;
     for (let i = 0; i < n; i++) {
       const at = i * VIEW_SLOT_FLOATS + VIEW_SLOT.viewProj;
       if (!mat4.invert(inv, src.subarray(at, at + 16))) mat4.identity(inv);

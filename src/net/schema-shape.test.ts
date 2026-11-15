@@ -250,6 +250,59 @@ describe('steady state', () => {
     expect(allocated(() => writes(p, N))).toBeLessThan(NONE);
   });
 
+  it('reading decoded numbers in a hot loop allocates nothing once warm', () => {
+    // Small integers are Smis, read straight; a u32 past 2^30 makes its field an unboxed double,
+    // read into arithmetic or a Float64Array without a box. (Passing such a double to a call the
+    // JIT doesn't inline, or storing it in an array of any value, boxes it: see the README.)
+    const s = defineTypes({
+      roots: ['Pt', 'Big'],
+      types: {
+        Pt: pts.types.Pt!,
+        Big: {
+          struct: [
+            ['bga', 'u32'],
+            ['bgb', 'u32'],
+          ],
+        },
+      },
+    });
+    const small = [
+      s.decode<Pt>('Pt', s.encode('Pt', { shx: 1, shy: -2 })),
+      s.decode<Pt>('Pt', s.encode('Pt', { shx: 300, shy: 4 })),
+    ];
+    interface Big {
+      bga: number;
+      bgb: number;
+    }
+    const big = [
+      s.decode<Big>('Big', s.encode('Big', { bga: 3_000_000_000, bgb: 5 })),
+      s.decode<Big>('Big', s.encode('Big', { bga: 7, bgb: 4_000_000_000 })),
+    ];
+    const out = new Float64Array(3);
+    const readSmall = (ps: readonly Pt[], n: number): void => {
+      let acc = 0;
+      for (let i = 0; i < n; i++) {
+        const p = ps[i & 1]!;
+        acc += p.shx * 0.5 + p.shy;
+        out[0] = p.shx;
+      }
+      out[2] = acc;
+    };
+    const readBig = (ps: readonly Big[], n: number): void => {
+      let acc = 0;
+      for (let i = 0; i < n; i++) {
+        const p = ps[i & 1]!;
+        acc += p.bga * 0.5 + p.bgb;
+        out[1] = p.bga;
+      }
+      out[2] = acc;
+    };
+    optimize(readSmall, small);
+    optimize(readBig, big);
+    expect(allocated(() => readSmall(small, N))).toBeLessThan(NONE);
+    expect(allocated(() => readBig(big, N))).toBeLessThan(NONE);
+  });
+
   it('(control) an object literal of the same names would box them', () => {
     // What a schema written as objects does to the game: the hazard the lists avoid.
     const desc = { ctx: 'i32', cty: 'i32' };

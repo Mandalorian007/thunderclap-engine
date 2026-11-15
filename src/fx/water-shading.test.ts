@@ -11,7 +11,7 @@ import { createRenderView, setViewFromCamera } from '../render/core/view';
 import { createFakeDevice } from '../render/fake-gpu';
 import { Water } from './water';
 import { waterReflectionKnob } from './water-core';
-import { WaterShading } from './water-shading';
+import { WaterShading, waterShadeReads } from './water-shading';
 
 const PACKED = createVertexLayout({
   stride: 8,
@@ -71,7 +71,7 @@ function rig() {
     });
     device.queue.submit([enc.finish()]);
   };
-  return { fake, device, core, frame, modules, pipelines };
+  return { fake, device, core, frame, modules, pipelines, view, camera: c };
 }
 
 /** The last bytes written to the buffer labelled `label`, as floats. */
@@ -158,8 +158,10 @@ describe('a water without its plane (ws/water-split)', () => {
     expect(r.fake.errors).toEqual([]);
     expect(r.modules.filter((l) => l.startsWith('water'))).toEqual([]);
     expect(r.pipelines.filter((l) => l.startsWith('water'))).toEqual([]);
-    // Both blocks upload every frame, as the Water's do.
-    expect(r.fake.writes.filter((w) => w.buffer.label === 'water-core')).toHaveLength(3);
+    // The params block uploads every frame the clock moves; the core block once (unchanged).
+    expect(r.fake.writes.filter((w) => w.buffer.label === 'water-params')).toHaveLength(3);
+    expect(r.fake.writes.filter((w) => w.buffer.label === 'water-core')).toHaveLength(1);
+    expect(ref.fake.writes.filter((w) => w.buffer.label === 'water-core')).toHaveLength(1);
     expect(lastWrite(r, 'water-params')).toEqual(lastWrite(ref, 'water-params'));
     expect(lastWrite(r, 'water-core')).toEqual(lastWrite(ref, 'water-core'));
     // The reflection knob takes it as it takes a Water.
@@ -170,5 +172,112 @@ describe('a water without its plane (ws/water-split)', () => {
     expect(shading.reflectionSteps).toBe(8);
     shading.destroy();
     expect(r.core.coreDrawables).toEqual([]);
+  });
+
+  it('uploads nothing over idle frames, and a block only when a value in it changed', () => {
+    const WATCHED = ['water-params', 'water-core', 'core view extras'];
+    const watched = (r: ReturnType<typeof rig>, from: number) =>
+      r.fake.writes.slice(from).filter((w) => WATCHED.includes(w.buffer.label ?? ''));
+    const bare = rig();
+    const r = rig();
+    const shading = new WaterShading(r.core);
+    expect(shading.reads).toEqual({ params: true, core: true, view: true });
+    bare.frame();
+    r.frame();
+    // The first frame uploads all three.
+    expect(
+      watched(r, 0)
+        .map((w) => w.buffer.label)
+        .sort(),
+    ).toEqual([...WATCHED].sort());
+    // Idle frames: no write at all beyond what the core alone makes.
+    let at = r.fake.writes.length;
+    let bareAt = bare.fake.writes.length;
+    for (let f = 0; f < 5; f++) {
+      bare.frame();
+      r.frame();
+    }
+    expect(watched(r, at)).toEqual([]);
+    expect(r.fake.writes.length - at).toBe(bare.fake.writes.length - bareAt);
+    // The clock moves: the params alone.
+    at = r.fake.writes.length;
+    shading.update(0.1);
+    r.frame();
+    expect(watched(r, at).map((w) => w.buffer.label)).toEqual(['water-params']);
+    // The sun's colour changes: the core block alone.
+    at = r.fake.writes.length;
+    shading.sunColor[0] = 2;
+    r.frame();
+    expect(watched(r, at).map((w) => w.buffer.label)).toEqual(['water-core']);
+    // The camera moves: the view extras alone.
+    at = r.fake.writes.length;
+    r.camera.lookAt([1, 4, 10], [0, 0, 0]);
+    setViewFromCamera(r.view, r.camera);
+    r.frame();
+    expect(watched(r, at).map((w) => w.buffer.label)).toEqual(['core view extras']);
+    at = r.fake.writes.length;
+    bareAt = bare.fake.writes.length;
+    r.frame();
+    bare.frame();
+    expect(r.fake.writes.length - at).toBe(bare.fake.writes.length - bareAt);
+    expect(r.fake.errors).toEqual([]);
+    shading.destroy();
+  });
+
+  it('a game’s shading that reads none of the blocks uploads none of them', () => {
+    const own =
+      'fn water_shade(frag: vec2f, ndc: vec2f, world: vec3f, up: vec3f) -> WaterShade {\n' +
+      '  // Not the engine water: no water.misc, no wc, no extras.\n' +
+      '  var s: WaterShade;\n  s.color = vec4f(0.1, 0.3, 0.5, 0.8);\n  return s;\n}';
+    const r = rig();
+    const shading = new WaterShading(r.core, { shade: own, refraction: 0, reflectionSteps: 0 });
+    expect(shading.reads).toEqual({ params: false, core: false, view: false });
+    for (let f = 0; f < 3; f++) {
+      shading.update(0.1);
+      r.camera.lookAt([f, 4, 10], [0, 0, 0]);
+      setViewFromCamera(r.view, r.camera);
+      r.frame();
+    }
+    const labels = new Set(r.fake.writes.map((w) => w.buffer.label));
+    expect(labels.has('water-params') || labels.has('water-core')).toBe(false);
+    expect(labels.has('core view extras')).toBe(false);
+    // `blocks: 'all'` keeps them all current, for a set whose own WGSL reads them.
+    const all = new WaterShading(r.core, { shade: own, blocks: 'all' });
+    expect(all.reads).toEqual({ params: true, core: true, view: true });
+    r.frame();
+    expect(r.fake.writes.some((w) => w.buffer.label === 'core view extras')).toBe(true);
+    shading.destroy();
+    all.destroy();
+  });
+
+  it('finds the blocks a shading reaches through the functions it calls', () => {
+    const shade = (body: string, extra = '') =>
+      `${extra}fn water_shade(frag: vec2f, ndc: vec2f, world: vec3f, up: vec3f) -> WaterShade {\n${body}\n}`;
+    expect(waterShadeReads(undefined)).toEqual({ params: true, core: true, view: true });
+    expect(waterShadeReads(shade('return water_shade_engine(frag, ndc, world, up);'))).toEqual({
+      params: true,
+      core: true,
+      view: true,
+    });
+    expect(
+      waterShadeReads(shade('let f = water_field(world.xz, 0.0);\nvar s: WaterShade;\nreturn s;')),
+    ).toEqual({ params: true, core: false, view: false });
+    expect(
+      waterShadeReads(
+        shade(
+          'let p = my_pos(ndc);\nvar s: WaterShade;\nreturn s;',
+          'fn my_pos(ndc: vec2f) -> vec3f { return w_unproject(ndc, 0.5); }\n',
+        ),
+      ),
+    ).toEqual({ params: false, core: false, view: true });
+    expect(
+      waterShadeReads(shade('var s: WaterShade;\ns.color = wc.sky; /* water */\nreturn s;')),
+    ).toEqual({ params: false, core: true, view: false });
+    // A helper nobody calls reads nothing.
+    expect(
+      waterShadeReads(
+        shade('var s: WaterShade;\nreturn s;', 'fn unused() -> f32 { return water.misc.x; }\n'),
+      ),
+    ).toEqual({ params: false, core: false, view: false });
   });
 });
