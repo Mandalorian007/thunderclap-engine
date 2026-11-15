@@ -80,6 +80,7 @@ interface ActorMesh {
 ## ActorModelOptions  (type-only)
 interface ActorModelOptions {
     lods?: readonly number[];
+    name?: string;
 }
 
 ## ActorPoseCpu  (type-only)
@@ -96,6 +97,7 @@ interface ActorReadBack {
     argsWords: number;
     maxError: number;
     worstSlot: number;
+    setVertices: number[];
 }
 
 ## ActorRecordInput  (type-only)
@@ -148,6 +150,19 @@ interface ActorRig {
     clip(name: string): number;
 }
 
+## ActorSetInfo  (type-only)
+interface ActorSetInfo {
+    label: string;
+    set: DrawSet;
+    shape: 'mesh' | 'actor';
+    enabled: boolean;
+    models: number[];
+    names: string[];
+    live: number[];
+    draws: number;
+    vertices: number;
+}
+
 ## ActorStats  (type-only)
 interface ActorStats {
     calls: number;
@@ -188,6 +203,10 @@ class ActorSystem {
     readU32(slot: number, word: number): number;
     poseCpu(slot: number, out: Float32Array, space?: 'world' | 'skin', time?: number): boolean;
     readBack(slots?: ArrayLike<number>): Promise<ActorReadBack>;
+    get pipelineReady(): boolean;
+    whenReady(): Promise<void>;
+    compileNow(): void;
+    setInfo(): ActorSetInfo[];
     prepare(encoder: GPUCommandEncoder, views: number | readonly unknown[], time: number, timestampWrites?: GPUComputePassTimestampWrites): void;
     destroy(): void;
     writeTable(data: Uint32Array | Float32Array, at?: number): void;
@@ -212,6 +231,7 @@ interface ActorSystemOptions {
     lodScale?: number;
     vertexCap?: number;
     tableWords?: number;
+    drawTable?: boolean;
     asyncPipeline?: boolean;
     label?: string;
 }

@@ -74,7 +74,19 @@ const state: HarnessActorsState = {
   recordWrites: 0,
   poseMs: -1,
   parity: parity
-    ? { checks: 0, error: -1, worstSlot: -1, posed: 0, live: 0, near: 0, far: 0, naiveError: -1 }
+    ? {
+        checks: 0,
+        error: -1,
+        worstSlot: -1,
+        posed: 0,
+        live: 0,
+        near: 0,
+        far: 0,
+        naiveError: -1,
+        overlapSame: false,
+        bodyVertices: -1,
+        bodyVerticesWant: -2,
+      }
     : null,
 };
 let wantCheck = false;
@@ -109,7 +121,10 @@ fn actor_pose(actor: u32, model: u32, node: u32, p: Trs, time: f32) -> Trs {
 const nodWgsl = (table: boolean) =>
   `const NOD_AMP_C = 0.4;\n${NOD_WGSL.replace('NOD_AMP', table ? 'actor_table_f32(0u)' : 'NOD_AMP_C')}`;
 
-/** `?crowd=1`: a small triangle over each visible actor's head (3 vertices a set). */
+/**
+ * `?crowd=1`: a small triangle over each visible actor's head (3 vertices a set), its green from
+ * the game table bound into the draws (`drawTable`, ws/actor-fit-2).
+ */
 const MARKER_WGSL = /* wgsl */ `
 @vertex fn vs(in: VertexIn, @builtin(instance_index) inst: u32) -> @builtin(position) vec4f {
   let actor = actor_at(actor_draw_of(in.core_vertex), inst);
@@ -118,7 +133,7 @@ const MARKER_WGSL = /* wgsl */ `
   let p = actor_position(actor) + vec3f(c.x, 2.3 + c.y, 0.0) * actor_scale(actor);
   return view.viewProj * vec4f(p, 1.0);
 }
-@fragment fn fs() -> @location(0) vec4f { return vec4f(1.0, 0.85, 0.2, 1.0); }
+@fragment fn fs() -> @location(0) vec4f { return vec4f(1.0, actor_table_f32(1u), 0.2, 1.0); }
 `;
 
 /** The CPU twin of `NOD_WGSL`: `q = nod(angle about x) · q`. */
@@ -343,10 +358,19 @@ async function main(): Promise<void> {
           actorVertices: crowd ? [6, 3] : 6,
         }
       : {}),
-    ...(crowd ? { asyncPipeline: true, tableWords: 4, showLive: false, lodScale, vertexCap } : {}),
+    ...(crowd
+      ? {
+          asyncPipeline: true,
+          tableWords: 4,
+          drawTable: true,
+          showLive: false,
+          lodScale,
+          vertexCap,
+        }
+      : {}),
   });
   if (crowd) {
-    actors.writeTable(new Float32Array([0.4, 0, 0, 0]));
+    actors.writeTable(new Float32Array([0.4, 0.85, 0, 0]));
     actors.ready.then(
       () => {
         state.pipelineReady = true;
@@ -610,15 +634,31 @@ async function main(): Promise<void> {
       let live = 0;
       for (let i = 0; i < n; i++) live += parityLive[i]!;
       const pending = actors.readBack();
+      // A second read overlapping the first (ws/actor-fit-2): its own buffer, the same frame.
+      const twin = actors.readBack();
       // A frame that runs while the copy maps (a game's next frame, under load): every record
       // moves on (0.1 s) and the clock with it. The readback's CPU twin must not see it.
       parityFrame(t + 0.1, state.frames + 1);
       const extra = device.createCommandEncoder();
       actors.prepare(extra, views, t + 0.1);
       device.queue.submit([extra.finish()]);
-      pending.then(
-        (rb) => {
+      Promise.all([pending, twin]).then(
+        ([rb, rb2]) => {
           const p = state.parity!;
+          p.overlapSame =
+            rb2.maxError === rb.maxError &&
+            rb2.gpu.length === rb.gpu.length &&
+            rb2.gpu.every((v, i) => v === rb.gpu[i]) &&
+            rb2.args.every((v, i) => v === rb.args[i]);
+          // The body's vertices that frame: its instances × each mesh's indices.
+          let want = 0;
+          for (let m = 0; m < actors.models; m++) {
+            actors.rig(m).meshes.forEach((mesh, lod) => {
+              want += rb.args[actors.drawOf(m, lod) * rb.argsWords + 1]! * mesh.indices.length;
+            });
+          }
+          p.bodyVertices = rb.setVertices[0]!;
+          p.bodyVerticesWant = want;
           // The old way, for the log: `poseCpu` after the map, on records frames since have moved.
           let naive = 0;
           const per = actors.bonesPerSlot * 12;
