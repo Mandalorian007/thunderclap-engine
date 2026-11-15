@@ -209,6 +209,8 @@ test('a churning crowd reads back within 0.01 of its CPU twin (ws/pose-parity-fi
     console.log(
       `[actors] parity: ${p.posed} posed, worst ${p.error.toFixed(6)} (slot ${p.worstSlot}), LOD 0 ${p.near}, LOD 1 ${p.far}, poseCpu after the map ${p.naiveError.toFixed(4)}`,
     );
+    // The old way (`poseCpu` after the map, over the frame the page ran meanwhile) drifts.
+    expect(p.naiveError).toBeGreaterThan(0.01);
     // Sparse: every live slot changed, in runs too far apart to merge.
     expect(s.recordWrites).toBeGreaterThan(1);
   }

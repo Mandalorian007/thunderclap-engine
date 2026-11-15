@@ -50,6 +50,7 @@ actors.prepare(encoder, [view], performance.now() / 1000);
 | `opts.asyncPipeline`, `actors.ready` | make the pose pipeline with `createComputePipelineAsync`; the actors draw nothing until `ready` settles |
 | `opts.showLive` | false keeps every model's draws in the body's bundle from the start (no re-record on a model's first actor); `ActorDrawSetDesc.showLive` does the same for one set |
 | `actors.poseCpu(slot, out, 'world' or 'skin', time?)` | the same pose on the CPU, for hit tests, attachments and tests |
+| `actors.readBack(slots?)` → `Promise<ActorReadBack>` | the last frame's skin matrices and indirect arguments read back beside the CPU twin of the same records at the f32 clock the pass saw, posed at the call (ws/pose-parity-fix): call it right after the frame's submit. Posing with `poseCpu` after awaiting a map poses later records, and a crowd rewritten every frame drifts by a frame's motion. Tests and dev only |
 | `actors.bones`, `actors.args`, `drawOf(model, lod)` | the GPU outputs, for readback or a game's own pass |
 | `recordShape(layout)` / `opts.recordLayout` | extra per-actor fields (`f32`, `u32`, `i32`) after the 20 header words, visible to WGSL as `ACTOR_FIELD_<NAME>` |
 | `ACTOR_RECORD` | the header's word offsets |

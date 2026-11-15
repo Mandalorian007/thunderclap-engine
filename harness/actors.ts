@@ -609,7 +609,14 @@ async function main(): Promise<void> {
       checking = true;
       let live = 0;
       for (let i = 0; i < n; i++) live += parityLive[i]!;
-      actors.readBack().then(
+      const pending = actors.readBack();
+      // A frame that runs while the copy maps (a game's next frame, under load): every record
+      // moves on (0.1 s) and the clock with it. The readback's CPU twin must not see it.
+      parityFrame(t + 0.1, state.frames + 1);
+      const extra = device.createCommandEncoder();
+      actors.prepare(extra, views, t + 0.1);
+      device.queue.submit([extra.finish()]);
+      pending.then(
         (rb) => {
           const p = state.parity!;
           // The old way, for the log: `poseCpu` after the map, on records frames since have moved.

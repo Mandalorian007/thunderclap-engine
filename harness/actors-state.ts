@@ -69,7 +69,8 @@ export interface HarnessActorsState {
    * `?parity=1` (ws/pose-parity-fix, implies `fit`): `?n=` actors in slots 13 apart (sparse
    * uploads), every record rewritten every frame, near ones at LOD 0 and far ones at LOD 1, an
    * eighth despawned at a time and the eighth changing every 10 frames. `parityCheck()` reads
-   * the frame back with `ActorSystem.readBack`; null without `parity`.
+   * the frame back with `ActorSystem.readBack` and runs one more frame (records and clock 0.1 s
+   * on) while the copy maps; null without `parity`.
    */
   parity: {
     checks: number;
