@@ -186,7 +186,7 @@ fn an_envelope_of_its_own_generates_its_typescript() {
     let schema = schema_builder::<Own>().finish().unwrap();
     let ts = define_schema_ts_with(&schema, "../envelope", Own::ENVELOPE).unwrap();
     for line in [
-        "    Hello: { struct: { watch: 'bool', region: 'String', seed: 'u64' } },\n",
+        "    Hello: { struct: [['watch', 'bool'], ['region', 'String'], ['seed', 'u64']] },\n",
         "    hello: 'Hello',\n",
         "    hello: ['token', { ext: 1 }, 'schema_hash', 'bulk', { ext: 2 }],\n",
         "    rejected: ['reason'],\n",
@@ -228,9 +228,9 @@ fn a_lazy_schema_builds_on_first_call() {
     assert!(ts.contains("export function schema(): ReturnType<typeof build> {\n"));
     assert!(ts.contains(&format!("export const SCHEMA_HASH = '{}';", schema.hash())));
     // The same definition, a level deeper.
-    assert!(
-        ts.contains("      Hello: { struct: { watch: 'bool', region: 'String', seed: 'u64' } },\n")
-    );
+    assert!(ts.contains(
+        "      Hello: { struct: [['watch', 'bool'], ['region', 'String'], ['seed', 'u64']] },\n"
+    ));
     let gen_ts = testdata("own-envelope.lazy.gen.ts");
     if std::env::var_os("TC_BLESS").is_some() {
         std::fs::write(&gen_ts, &ts).unwrap();

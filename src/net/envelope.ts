@@ -10,7 +10,10 @@
 
 import type { PatchOp } from './patch';
 import {
+  type FieldList,
   type FieldSpecs,
+  fieldEntries,
+  isNewtypeVariant,
   NetSchema,
   netType,
   type QuerySpec,
@@ -229,13 +232,14 @@ function splitHello(
   order: readonly (string | { readonly ext: number })[],
   game: Readonly<Record<string, TypeDefSpec>>,
   helloRole: TypeSpec | undefined,
-): { order: string[]; fields: Record<string, TypeSpec> | null } {
+): { order: string[]; fields: FieldList | null } {
   if (order.every((f) => typeof f === 'string')) return { order: order as string[], fields: null };
   const def = typeof helloRole === 'string' ? game[helloRole] : undefined;
   if (!def || !('struct' in def)) {
     throw new SchemaError("Hello: { ext: n } needs roles.hello to be one of the game's structs");
   }
-  const names = Object.keys(def.struct);
+  const fields = fieldEntries(def.struct);
+  const names = fields.map(([name]) => name);
   const out: string[] = [];
   let next = 0;
   for (const f of order) {
@@ -255,24 +259,28 @@ function splitHello(
       `Hello: { ext: n } list ${next} of ${helloRole}'s ${names.length} fields`,
     );
   }
-  return { order: out, fields: { ...def.struct } };
+  return { order: out, fields };
 }
 
 /** One message's fields in the order a layout gives, each from `fields` by wire name. */
 function fieldsIn(
   what: string,
   order: readonly string[],
-  fields: Readonly<Record<string, TypeSpec>>,
+  fields: FieldList,
   required: readonly string[],
-): Record<string, TypeSpec> {
-  const out: Record<string, TypeSpec> = {};
+): FieldList {
+  const byName = new Map(fields);
+  const out: (readonly [string, TypeSpec])[] = [];
+  const seen = new Set<string>();
   for (const name of order) {
-    if (!Object.hasOwn(fields, name)) throw new SchemaError(`${what}: no field ${name}`);
-    if (Object.hasOwn(out, name)) throw new SchemaError(`${what}: ${name} is listed twice`);
-    out[name] = fields[name] as TypeSpec;
+    const ty = byName.get(name);
+    if (ty === undefined) throw new SchemaError(`${what}: no field ${name}`);
+    if (seen.has(name)) throw new SchemaError(`${what}: ${name} is listed twice`);
+    seen.add(name);
+    out.push([name, ty]);
   }
   for (const name of required) {
-    if (!Object.hasOwn(out, name)) throw new SchemaError(`${what}: ${name} is required`);
+    if (!seen.has(name)) throw new SchemaError(`${what}: ${name} is required`);
   }
   return out;
 }
@@ -320,18 +328,24 @@ export function defineSchema(desc: SchemaDesc = {}): NetSchema {
   const hello = fieldsIn(
     'Hello',
     split.order,
-    {
-      token: 'String',
-      schema_hash: 'String',
-      bulk: netType.option('u8'),
-      ...(split.fields ?? { ext: role(r.hello) }),
-    },
-    ['token', 'schema_hash', ...(split.fields ? Object.keys(split.fields) : ['ext'])],
+    [
+      ['token', 'String'],
+      ['schema_hash', 'String'],
+      ['bulk', netType.option('u8')],
+      ...(split.fields ?? [['ext', role(r.hello)] as const]),
+    ],
+    ['token', 'schema_hash', ...(split.fields ? split.fields.map(([n]) => n) : ['ext'])],
   );
   const welcome = fieldsIn(
     'Welcome',
     e.welcome ?? ['player', 'time', 'paused', 'step_us', 'ext'],
-    { player: 'u64', time: 'u64', paused: 'bool', step_us: 'u32', ext: role(r.welcome) },
+    [
+      ['player', 'u64'],
+      ['time', 'u64'],
+      ['paused', 'bool'],
+      ['step_us', 'u32'],
+      ['ext', role(r.welcome)],
+    ],
     ['player', 'time', 'paused', 'ext'],
   );
   const client = layout(
@@ -339,15 +353,26 @@ export function defineSchema(desc: SchemaDesc = {}): NetSchema {
     e.client ?? ENVELOPE_CLIENT,
     {
       Hello: hello,
-      Command: { seq: 'u32', command: role(r.command) },
-      Subscribe: { sub: 'u32', query: 'String', args: 'Bytes', resume: netType.option('Resume') },
-      Unsubscribe: { sub: 'u32' },
-      Ping: { client_time: 'u64' },
-      SetInterest: { interest: role(r.interest) },
-      Input: { seq: 'u32', input: role(r.input) },
+      Command: [
+        ['seq', 'u32'],
+        ['command', role(r.command)],
+      ],
+      Subscribe: [
+        ['sub', 'u32'],
+        ['query', 'String'],
+        ['args', 'Bytes'],
+        ['resume', netType.option('Resume')],
+      ],
+      Unsubscribe: [['sub', 'u32']],
+      Ping: [['client_time', 'u64']],
+      SetInterest: [['interest', role(r.interest)]],
+      Input: [
+        ['seq', 'u32'],
+        ['input', role(r.input)],
+      ],
       TakeControl: null,
       EntityResync: null,
-      Ack: ack === 'each' ? { bytes: 'u64' } : { total: 'u64' },
+      Ack: [[ack === 'each' ? 'bytes' : 'total', 'u64']],
       Game: [role(r.client)],
     },
     ['Hello', 'Ping'],
@@ -361,21 +386,57 @@ export function defineSchema(desc: SchemaDesc = {}): NetSchema {
       Rejected: fieldsIn(
         'Rejected',
         e.rejected ?? ['reason', 'stale_schema'],
-        { reason: 'String', stale_schema: 'bool' },
+        [
+          ['reason', 'String'],
+          ['stale_schema', 'bool'],
+        ],
         ['reason'],
       ),
-      CommandResult: { seq: 'u32', result: role(r.result) },
-      Update: { sub: 'u32', version: 'u64', hash: 'String', patch: netType.vec('PatchOp') },
-      Resync: { sub: 'u32', version: 'u64', hash: 'String', result: 'Bytes' },
-      QueryFailed: { sub: 'u32', reason: 'String' },
-      Clock: { time: 'u64', paused: 'bool' },
-      Pong: { client_time: 'u64', time: 'u64', paused: 'bool' },
-      InterestRejected: { reason: 'String' },
-      EntityStream: { data: 'Bytes' },
-      PlayerState: { seq: 'u32', state: role(r.state), tick_us: 'u32' },
-      Control: { driving: 'bool' },
-      Closed: { code: closeCode, reason: 'String' },
-      Bulk: { codec: 'u8', data: 'Bytes' },
+      CommandResult: [
+        ['seq', 'u32'],
+        ['result', role(r.result)],
+      ],
+      Update: [
+        ['sub', 'u32'],
+        ['version', 'u64'],
+        ['hash', 'String'],
+        ['patch', netType.vec('PatchOp')],
+      ],
+      Resync: [
+        ['sub', 'u32'],
+        ['version', 'u64'],
+        ['hash', 'String'],
+        ['result', 'Bytes'],
+      ],
+      QueryFailed: [
+        ['sub', 'u32'],
+        ['reason', 'String'],
+      ],
+      Clock: [
+        ['time', 'u64'],
+        ['paused', 'bool'],
+      ],
+      Pong: [
+        ['client_time', 'u64'],
+        ['time', 'u64'],
+        ['paused', 'bool'],
+      ],
+      InterestRejected: [['reason', 'String']],
+      EntityStream: [['data', 'Bytes']],
+      PlayerState: [
+        ['seq', 'u32'],
+        ['state', role(r.state)],
+        ['tick_us', 'u32'],
+      ],
+      Control: [['driving', 'bool']],
+      Closed: [
+        ['code', closeCode],
+        ['reason', 'String'],
+      ],
+      Bulk: [
+        ['codec', 'u8'],
+        ['data', 'Bytes'],
+      ],
       Game: [role(r.server)],
     },
     ['Welcome', 'Rejected', 'Pong', 'Closed'],
@@ -383,21 +444,39 @@ export function defineSchema(desc: SchemaDesc = {}): NetSchema {
   );
   const env: Record<string, TypeDefSpec> = {
     ClientMsg: { enum: client.variants },
-    Resume: { struct: { version: 'u64', hash: 'String' } },
-    Empty: { struct: {} },
+    Resume: {
+      struct: [
+        ['version', 'u64'],
+        ['hash', 'String'],
+      ],
+    },
+    Empty: { struct: [] },
     ServerMsg: { enum: server.variants },
     PatchOp: {
       enum: {
-        Set: { path: netType.vec('PathStep'), value: 'Bytes' },
-        MapPut: { path: netType.vec('PathStep'), key: 'Bytes', value: 'Bytes' },
-        MapRemove: { path: netType.vec('PathStep'), key: 'Bytes' },
+        Set: [
+          ['path', netType.vec('PathStep')],
+          ['value', 'Bytes'],
+        ],
+        MapPut: [
+          ['path', netType.vec('PathStep')],
+          ['key', 'Bytes'],
+          ['value', 'Bytes'],
+        ],
+        MapRemove: [
+          ['path', netType.vec('PathStep')],
+          ['key', 'Bytes'],
+        ],
       },
     },
     PathStep: {
       enum: {
-        Field: { index: 'u32' },
-        Variant: { variant: 'u32', field: 'u32' },
-        Entry: { key: 'Bytes' },
+        Field: [['index', 'u32']],
+        Variant: [
+          ['variant', 'u32'],
+          ['field', 'u32'],
+        ],
+        Entry: [['key', 'Bytes']],
         Present: null,
       },
     },
@@ -444,8 +523,8 @@ function reached(
   name: string,
 ): boolean {
   const inVariant = (v: VariantSpec): boolean =>
-    v !== null && (Array.isArray(v) ? mentions(v[0] as TypeSpec, name) : inFields(v as FieldSpecs));
-  const inFields = (f: FieldSpecs): boolean => Object.values(f).some((t) => mentions(t, name));
+    v !== null && (isNewtypeVariant(v) ? mentions(v[0], name) : inFields(v));
+  const inFields = (f: FieldSpecs): boolean => fieldEntries(f).some(([, t]) => mentions(t, name));
   for (const [n, def] of Object.entries(types)) {
     if (n === name) continue;
     if ('struct' in def && inFields(def.struct)) return true;

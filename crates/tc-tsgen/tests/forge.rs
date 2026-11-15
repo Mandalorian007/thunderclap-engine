@@ -82,6 +82,7 @@ fn forge_config() -> Config {
                 .map(|(m, why)| (m, text(&why)))
                 .collect(),
         }),
+        types_preamble: "\n".into(),
     }
 }
 
@@ -129,4 +130,44 @@ fn a_forge_message_with_no_event_fails() {
     sdk.no_event.retain(|(m, _)| m != "Pong");
     let err = generate(&schema, &config).unwrap_err();
     assert!(err.contains("ServerMsg::Pong has no SDK event"), "{err}");
+}
+
+/// The types alone, as Forge's SDK has them since its codec became the
+/// engine's (`packages/sdk/src/net/wire.generated.ts`, forgewilds #815): the
+/// same types as the full module, then `QUERIES` and `Api`, and no codecs.
+#[test]
+fn types_only_as_forges_sdk_has_them() {
+    let schema = forge_schema(FORGE_HEADER);
+    let net = "@thunderclap-engine/engine/net";
+    let config = Config {
+        wire_import: net.into(),
+        patch_import: net.into(),
+        types_preamble: "//\n// The wire's types.\n\n".into(),
+        ..forge_config()
+    };
+    let ts = tc_tsgen::types_ts(&schema, &config).unwrap();
+    assert!(ts.starts_with(&format!(
+        "{}//\n// The wire's types.\n\nimport type {{ Fixed, QueryApi }} from \"{net}\";\n\n/** The least time",
+        config.header
+    )));
+    let full = tc_tsgen::generated_ts(&schema, &forge_config()).unwrap();
+    let section = |s: &str, from: &str, to: &str| {
+        let a = s.find(from).unwrap();
+        s[a..a + s[a..].find(to).unwrap()].to_string()
+    };
+    assert_eq!(
+        section(&ts, "// Types\n", "\n// Live queries\n"),
+        section(&full, "// Types\n", "\n// Message codecs\n")
+    );
+    for line in [
+        "export const QUERIES = {\n  block: [\"block\", false],\n  inventory: [\"inventory\", true],\n",
+        "export interface Api {\n",
+        "  readonly inventory: QueryApi<InventoryArgs, Map<number, SlotView>>;\n",
+    ] {
+        assert!(ts.contains(line), "{line}");
+    }
+    assert!(!ts.contains("export function") && !ts.contains("export const SCHEMA_HASH"));
+    let files = tc_tsgen::generate_types(&schema, &config).unwrap();
+    assert_eq!(files[0], (config.generated_path.clone(), ts));
+    assert_eq!(files.len(), 3);
 }

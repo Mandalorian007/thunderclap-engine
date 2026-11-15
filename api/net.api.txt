@@ -134,8 +134,11 @@ interface EnvelopeSpec {
     };
 }
 
+## FieldList  (type-only)
+type FieldList = readonly (readonly [string, TypeSpec])[];
+
 ## FieldSpecs  (type-only)
-type FieldSpecs = Readonly<Record<string, TypeSpec>>;
+type FieldSpecs = Readonly<Record<string, TypeSpec>> | FieldList;
 
 ## Fixed
 class Fixed {
@@ -821,6 +824,9 @@ const pageTimers: Timers;
 
 ## propName
 function propName(wire: string): string;
+
+## queryApis
+function queryApis<Api>(schema: () => NetSchema, queries: Readonly<Record<string, readonly [name: string, player: boolean]>>): Api;
 
 ## resultHash
 function resultHash(bytes: Uint8Array): string;

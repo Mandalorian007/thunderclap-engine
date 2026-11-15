@@ -18,7 +18,7 @@ loss. The server side of the same protocol is the server foundation's (`tc-net`,
 import { createNet, defineSchema, inPageHub, ServerEnd } from '@thunderclap-engine/engine/net';
 
 const schema = defineSchema({
-  types: { Add: { struct: { n: 'i32' } }, Total: { struct: { total: 'i32' } } },
+  types: { Add: { struct: [['n', 'i32']] }, Total: { struct: [['total', 'i32']] } },
   roles: { command: 'Add', result: 'Total' },
 });
 
@@ -94,8 +94,20 @@ hash (`NetSchema.hash`) is 16 hex digits of a SplitMix64 stable hash of the text
 `src/net/testdata/schema.json` holds descriptions with their texts and hashes for the Rust side to
 check against.
 
+Fields are written as a list of pairs, `[['x', 'i32'], ['y', 'i32']]` (`FieldList`), or as an
+object, `{ x: 'i32', y: 'i32' }`: the same schema, text and hash. Prefer the list (the generated
+schemas use it): an object literal of field names shares its V8 hidden class with the game's own
+objects of the same names, so a game's `{ x: 0.5, y: 0.5 }` would hold its numbers boxed and
+allocate on every write. Decoded structs and variants are plain objects (`Object.prototype`) built
+by a constructor per type, so every value of a type has one shape of its own, in wire order, and
+a field a game writes a fraction into stays unboxed (`schema-shape.test.ts`). A decode error names
+the byte and, for a variant index or an integer past 2^53, the exact value.
+
+`queryApis<Api>(schema, QUERIES)` gives one `QueryApi` per live query from tc-tsgen's types-only
+module (`QUERIES` and `Api`), over a schema built on first use.
+
 The types: `Scalar`, `TypeSpec` (as written), `TypeRef` (as data; `typeRef`, `displayType`),
-`FieldSpecs`, `VariantSpec`, `TypeDefSpec`, `QuerySpec`, `QueryDef`, `TypeShape` and `Types` (the
+`FieldSpecs`, `FieldList`, `VariantSpec`, `TypeDefSpec`, `QuerySpec`, `QueryDef`, `TypeShape` and `Types` (the
 shapes `applyPatch` walks), `SchemaDesc`, and `Codec` (`NetSchema.codec(ty)`). A bad schema
 throws `SchemaError`.
 

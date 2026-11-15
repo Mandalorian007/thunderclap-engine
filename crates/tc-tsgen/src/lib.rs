@@ -23,6 +23,13 @@
 //! name, argument encoder, and result codec. An optional [`SdkConfig`] adds
 //! a client SDK's pass-through events for one root message enum.
 //!
+//! A game that reads and writes with the engine's schema codec (`defineTypes`
+//! / `defineSchema` over a generated schema module) wants the types alone:
+//! [`types_ts`] writes them, the constants, each live query's argument type,
+//! `QUERIES` (every query's wire name and whether it is per player) and
+//! `Api` (the type of an object of the engine's `QueryApi`s, one per query),
+//! and [`generate_types`] adds the SDK's files.
+//!
 //! Everything a game names is configuration: the header, the runtime
 //! imports, the constants, the reserved names and the SDK's event lists. A
 //! game's own generator builds a [`Config`] and writes [`generate`]'s files.
@@ -84,6 +91,9 @@ pub struct Config {
     pub reserved: Vec<String>,
     /// The client SDK's events, if the game generates them.
     pub sdk: Option<SdkConfig>,
+    /// What [`types_ts`] writes between the header and its import: a blank
+    /// line by default, or comment lines then one.
+    pub types_preamble: String,
 }
 
 impl Default for Config {
@@ -99,6 +109,7 @@ impl Default for Config {
             constants: Vec::new(),
             reserved: Vec::new(),
             sdk: None,
+            types_preamble: "\n".into(),
         }
     }
 }
@@ -116,8 +127,97 @@ pub fn generate(schema: &Schema, config: &Config) -> Result<Vec<(String, String)
 
 /// The generated module alone: types, codecs, `TYPES` and `api`.
 pub fn generated_ts(schema: &Schema, config: &Config) -> Result<String, String> {
-    check(schema, config)?;
+    check(schema, config, &[])?;
     Ok(module_ts(schema, config))
+}
+
+/// Names a types-only module exports besides the schema's types.
+const TYPES_RESERVED: &[&str] = &["Api", "QUERIES"];
+
+/// Like [`generate`], but the module at `config.generated_path` holds the
+/// types alone ([`types_ts`]): for a game whose codec is the engine's schema
+/// codec, not generated functions.
+pub fn generate_types(schema: &Schema, config: &Config) -> Result<Vec<(String, String)>, String> {
+    let mut files = vec![(config.generated_path.clone(), types_ts(schema, config)?)];
+    if let Some(sdk) = &config.sdk {
+        files.extend(sdk::files(schema, config, sdk)?);
+    }
+    Ok(files)
+}
+
+/// The types alone, for the engine's schema codec to read and write: the
+/// constants (`SCHEMA_HASH` is the schema module's), [`Config::types_preamble`], every type, each query's argument type,
+/// `QUERIES` (`tsName: [wireName, player]`) and the `Api` interface (one
+/// `QueryApi<Args, Result>` per query). `Fixed` is imported from
+/// `config.wire_import` and `QueryApi` from `config.patch_import` (one
+/// import when they are the same module, as the engine's `./net` is).
+pub fn types_ts(schema: &Schema, config: &Config) -> Result<String, String> {
+    check(schema, config, TYPES_RESERVED)?;
+    let mut out = String::new();
+    out.push_str(&config.header);
+    out.push_str(&config.types_preamble);
+    if config.wire_import == config.patch_import {
+        let _ = writeln!(
+            out,
+            "import type {{ Fixed, QueryApi }} from \"{}\";\n",
+            config.wire_import
+        );
+    } else {
+        let _ = writeln!(
+            out,
+            "import type {{ Fixed }} from \"{}\";",
+            config.wire_import
+        );
+        let _ = writeln!(
+            out,
+            "import type {{ QueryApi }} from \"{}\";\n",
+            config.patch_import
+        );
+    }
+    for constant in &config.constants {
+        let _ = writeln!(out, "/** {} */", constant.doc);
+        let _ = writeln!(out, "export const {} = {};", constant.name, constant.value);
+    }
+    out.push_str("\n// Types\n");
+    for def in schema.types() {
+        out.push('\n');
+        type_decl(&mut out, def);
+    }
+    out.push_str("\n// Live queries\n");
+    for query in schema.queries() {
+        out.push('\n');
+        args_decl(&mut out, query);
+    }
+    out.push_str(
+        "\n/** Every live query by its TypeScript name: its wire name, and whether its result depends on the asking player. */\n",
+    );
+    out.push_str("export const QUERIES = {\n");
+    for query in schema.queries() {
+        let _ = writeln!(
+            out,
+            "  {}: [\"{}\", {}],",
+            ts_query_name(query.name),
+            query.name,
+            query.player
+        );
+    }
+    out.push_str("} as const;\n");
+    out.push_str(
+        "\n/** The live queries' codecs: subscribe with `Subscribe { query: name, args: encodeArgs(args) }`. */\n",
+    );
+    out.push_str("export interface Api {\n");
+    for query in schema.queries() {
+        doc_comment(&mut out, "  ", query.doc);
+        let _ = writeln!(
+            out,
+            "  readonly {}: QueryApi<{}, {}>;",
+            ts_query_name(query.name),
+            ts_args_name(query.name),
+            ts_type(&query.result)
+        );
+    }
+    out.push_str("}\n");
+    Ok(out)
 }
 
 /// A query's TypeScript name: its wire name in camelCase.
@@ -201,9 +301,12 @@ pub fn ts_field_name(rust_name: &str) -> String {
     out
 }
 
-fn check(schema: &Schema, config: &Config) -> Result<(), String> {
-    let reserved =
-        |name: &str| RESERVED.contains(&name) || config.reserved.iter().any(|r| r == name);
+fn check(schema: &Schema, config: &Config, also: &[&str]) -> Result<(), String> {
+    let reserved = |name: &str| {
+        RESERVED.contains(&name)
+            || also.contains(&name)
+            || config.reserved.iter().any(|r| r == name)
+    };
     let mut query_names = BTreeSet::new();
     for query in schema.queries() {
         let args = ts_args_name(query.name);

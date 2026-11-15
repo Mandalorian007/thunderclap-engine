@@ -11,10 +11,17 @@
  * `Fixed` class, `String` a string, `Bytes` a Uint8Array, `Vec` an array, `Option` the value or
  * `null`, `Map` a Map, a struct an object with camelCase field names, a newtype its inner value, and
  * an enum `{ type: 'Variant', ...fields }` (a one-value variant is `{ type, value }`).
+ *
+ * Decoded structs and variants keep one stable shape each: every type gets its own constructor
+ * (generated where the page allows `new Function`), so V8 gives its values one hidden class that
+ * no other type and none of the game's objects share. Field lists are best written as
+ * `[name, type]` pairs (`FieldList`, what generated schemas write): an object literal of field
+ * names would share its hidden class with the game's objects of the same names, and V8 would then
+ * box their numbers.
  */
 
 import { stableHash } from './hash';
-import { DecodeError, type Fixed, type MapKey, Reader, Writer } from './wire';
+import { type Fixed, type MapKey, Reader, Writer } from './wire';
 
 /** The encoding rules' own version; part of the hashed text. */
 export const WIRE_FORMAT = 2;
@@ -51,10 +58,22 @@ export type TypeSpec =
   | { readonly map: readonly [TypeSpec, TypeSpec] }
   | { readonly named: string };
 
-/** Named fields, in wire order (object key order). Names are the wire names (snake_case). */
-export type FieldSpecs = Readonly<Record<string, TypeSpec>>;
+/**
+ * Named fields as `[wire name, type]` pairs, in wire order. Unlike an object of field names, it
+ * shares no V8 hidden class with the game's objects.
+ */
+export type FieldList = readonly (readonly [string, TypeSpec])[];
 
-/** One enum variant: `null` (no payload), named fields, or `[T]` (one unnamed value). */
+/**
+ * Named fields, in wire order: a `FieldList`, or an object (key order). Names are the wire names
+ * (snake_case).
+ */
+export type FieldSpecs = Readonly<Record<string, TypeSpec>> | FieldList;
+
+/**
+ * One enum variant: `null` (no payload), named fields, or `[T]` (one unnamed value). A `FieldList`
+ * is told from `[T]` by its items being pairs.
+ */
 export type VariantSpec = null | FieldSpecs | readonly [TypeSpec];
 
 /** A named type's definition. */
@@ -151,6 +170,53 @@ export interface QueryApi<A, R> {
   encodeResult(value: R): Uint8Array;
 }
 
+/**
+ * The live queries' codecs over a schema's own definitions, for tc-tsgen's types-only module:
+ * `queryApis<Api>(schema, QUERIES)` gives one `QueryApi` per entry of `QUERIES` (`tsName:
+ * [wireName, player]`), by TypeScript name. `schema` is called on first use of a query's result
+ * or codecs (a lazy `schema()` stays unbuilt until then), and each result codec is kept.
+ */
+export function queryApis<Api>(
+  schema: () => NetSchema,
+  queries: Readonly<Record<string, readonly [name: string, player: boolean]>>,
+): Api {
+  const api: Record<string, QueryApi<unknown, unknown>> = {};
+  for (const key of Object.keys(queries)) {
+    const [name, player] = queries[key]!;
+    let result: TypeRef | null = null;
+    let codec: Codec | null = null;
+    const resultCodec = (): Codec => (codec ??= schema().codec(resultType()));
+    const resultType = (): TypeRef => {
+      if (result === null) {
+        const def = schema().queries.get(name);
+        if (!def) throw new SchemaError(`the schema has no query ${name}`);
+        result = def.result;
+      }
+      return result;
+    };
+    api[key] = {
+      name,
+      player,
+      get result() {
+        return resultType();
+      },
+      encodeArgs: (args) => schema().encodeArgs(name, args as Readonly<Record<string, unknown>>),
+      decodeResult(bytes) {
+        const r = new Reader(bytes);
+        const value = resultCodec().decode(r);
+        r.finish();
+        return value;
+      },
+      encodeResult(value) {
+        const w = new Writer();
+        resultCodec().encode(w, value);
+        return w.finish();
+      },
+    };
+  }
+  return api as Api;
+}
+
 const SCALARS: ReadonlySet<string> = new Set([
   'bool',
   'u8',
@@ -194,6 +260,16 @@ export function propName(wire: string): string {
     } else out += c;
   }
   return out;
+}
+
+/** @internal A field spec's `[wire name, type]` pairs, in wire order. */
+export function fieldEntries(specs: FieldSpecs): FieldList {
+  return Array.isArray(specs) ? (specs as FieldList) : Object.entries(specs);
+}
+
+/** @internal Whether a variant spec is `[T]`, one unnamed value (not a `FieldList`). */
+export function isNewtypeVariant(v: VariantSpec): v is readonly [TypeSpec] {
+  return Array.isArray(v) && v.length === 1 && !Array.isArray(v[0]);
 }
 
 /** Normalizes a written type to a `TypeRef`. */
@@ -349,18 +425,15 @@ export class NetSchema {
     if (kind.kind === 'struct') return this.#fields(def.name, kind.fields, null);
     const name = def.name;
     const byName = new Map<string, { index: number; codec: Codec | null }>();
-    const decoders: (Codec | null)[] = [];
+    const decoders: Codec[] = [];
     kind.variants.forEach((v, index) => {
       const codec =
-        v.shape === 'unit'
-          ? null
-          : v.shape === 'newtype'
-            ? this.#newtypeVariant(v.name, v.fields[0]!.ty)
-            : this.#fields(`${name}::${v.name}`, v.fields, v.name);
-      byName.set(v.name, { index, codec });
+        v.shape === 'newtype'
+          ? this.#newtypeVariant(v.name, v.fields[0]!.ty)
+          : this.#fields(`${name}::${v.name}`, v.fields, v.name);
+      byName.set(v.name, { index, codec: v.shape === 'unit' ? null : codec });
       decoders.push(codec);
     });
-    const names = kind.variants.map((v) => v.name);
     return {
       encode: (w, value) => {
         const tag = (value as { type?: unknown } | null)?.type;
@@ -370,21 +443,21 @@ export class NetSchema {
         entry.codec?.encode(w, value);
       },
       decode: (r) => {
-        const at = r.position;
         const index = r.variant();
-        if (index >= names.length)
-          throw new DecodeError(at, `unknown variant ${index} for ${name}`);
-        const codec = decoders[index];
-        return codec ? codec.decode(r) : { type: names[index] };
+        // The error re-reads the index exactly: past 2^53 a number would round.
+        if (index >= decoders.length) throw r.unknownVariant(name);
+        return decoders[index]!.decode(r);
       },
     };
   }
 
   #newtypeVariant(tag: string, ty: TypeRef): Codec {
     const inner = this.#codec(ty);
+    const make = valueMaker(tag, ['value']);
+    const codecs = [inner];
     return {
       encode: (w, v) => inner.encode(w, (v as { value: unknown }).value),
-      decode: (r) => ({ type: tag, value: inner.decode(r) }),
+      decode: (r) => make(r, codecs),
     };
   }
 
@@ -392,6 +465,7 @@ export class NetSchema {
     const codecs = fields.map((f) => this.#codec(f.ty));
     const props = fields.map((f) => f.prop);
     const n = fields.length;
+    const make = valueMaker(tag, props);
     return {
       encode: (w, v) => {
         if (v === null || typeof v !== 'object') {
@@ -400,13 +474,50 @@ export class NetSchema {
         const o = v as Record<string, unknown>;
         for (let i = 0; i < n; i++) codecs[i]!.encode(w, o[props[i]!]);
       },
-      decode: (r) => {
-        const o: Record<string, unknown> = tag === null ? {} : { type: tag };
-        for (let i = 0; i < n; i++) o[props[i]!] = codecs[i]!.decode(r);
-        return o;
-      },
+      decode: (r) => make(r, codecs),
     };
   }
+}
+
+/** Builds one struct's or variant's value, reading its fields from `r` with `codecs` in order. */
+type ValueMaker = (r: Reader, codecs: readonly Codec[]) => Record<string, unknown>;
+
+// Whether this page may compile code (a strict CSP refuses `new Function`); checked once.
+let compiles: boolean | undefined;
+
+/**
+ * A maker for one struct's or variant's values: `type` (when `tag` is set), then `props` in
+ * order, each assigned in a constructor of its own. Each type's values so share one V8 hidden
+ * class, never one of the game's objects (a literal's or `{}`'s), and their numbers stay unboxed.
+ * Values are plain objects (their prototype is `Object.prototype`). The constructor is generated
+ * (`this.x = c[0].decode(r)`: every field in-object); without `new Function` it assigns by key,
+ * still on its own class.
+ */
+function valueMaker(tag: string | null, props: readonly string[]): ValueMaker {
+  if (compiles === undefined) {
+    try {
+      compiles = new Function('return 1')() === 1;
+    } catch {
+      compiles = false;
+    }
+  }
+  let Value: new (r: Reader, codecs: readonly Codec[]) => Record<string, unknown>;
+  if (compiles) {
+    let body = tag === null ? '' : `this.type = ${JSON.stringify(tag)};\n`;
+    // Props are identifiers (checked when the schema was built), so each is a named store.
+    props.forEach((p, i) => {
+      body += `this.${p} = c[${i}].decode(r);\n`;
+    });
+    Value = new Function('r', 'c', body) as typeof Value;
+  } else {
+    const n = props.length;
+    Value = function (this: Record<string, unknown>, r: Reader, c: readonly Codec[]) {
+      if (tag !== null) this.type = tag;
+      for (let i = 0; i < n; i++) this[props[i]!] = c[i]!.decode(r);
+    } as unknown as typeof Value;
+  }
+  Value.prototype = Object.prototype;
+  return (r, codecs) => new Value(r, codecs);
 }
 
 const SCALAR_CODECS: Record<Scalar, Codec> = {
@@ -459,7 +570,7 @@ function build(desc: TypesDesc): {
   };
   const fieldsOf = (context: string, specs: FieldSpecs): Field[] => {
     const fields: Field[] = [];
-    for (const [wire, spec] of Object.entries(specs)) {
+    for (const [wire, spec] of fieldEntries(specs)) {
       if (!IDENT.test(wire))
         throw new SchemaError(`${context}: field name ${JSON.stringify(wire)}`);
       fields.push({ wire, prop: propName(wire), ty: typeRef(spec) });
@@ -493,8 +604,8 @@ function build(desc: TypesDesc): {
       for (const [vname, v] of Object.entries(spec.enum)) {
         if (!IDENT.test(vname)) throw new SchemaError(`${name}: variant name ${vname}`);
         if (v === null) variants.push({ name: vname, shape: 'unit', fields: [] });
-        else if (Array.isArray(v)) {
-          const ty = typeRef((v as readonly [TypeSpec])[0]);
+        else if (isNewtypeVariant(v)) {
+          const ty = typeRef(v[0]);
           variants.push({
             name: vname,
             shape: 'newtype',
@@ -502,7 +613,7 @@ function build(desc: TypesDesc): {
           });
           discover(ty, `${name}::${vname}`);
         } else {
-          const fields = fieldsOf(`${name}::${vname}`, v as FieldSpecs);
+          const fields = fieldsOf(`${name}::${vname}`, v);
           variants.push({ name: vname, shape: 'named', fields });
           for (const f of fields) discover(f.ty, `${name}::${vname}.${f.wire}`);
         }
@@ -519,7 +630,7 @@ function build(desc: TypesDesc): {
     if (!/^[a-z_][a-z0-9_]*$/.test(qname)) {
       throw new SchemaError(`query \`${qname}\`: names are snake_case identifiers`);
     }
-    const args = Object.entries(q.args ?? {}).map(([name, spec]) => ({ name, ty: typeRef(spec) }));
+    const args = fieldEntries(q.args ?? []).map(([name, spec]) => ({ name, ty: typeRef(spec) }));
     for (const a of args) discover(a.ty, `query ${qname}(${a.name})`);
     const result = typeRef(q.result);
     discover(result, `query ${qname} result`);
