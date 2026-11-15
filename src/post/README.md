@@ -232,7 +232,9 @@ and the 2D goldens are unchanged. TAA, SSR and motion blur need a frame with dep
   seed)` its bytes; `texture: null` leaves the composite path unchanged.
 - **Quality tiers**: `PostQuality` gains `taa`, `ssr`, `autoExposure`, `motionBlur`.
   `lowPostQuality()` switches SSR and motion blur off and keeps TAA (it is the cheapest
-  anti-aliasing a phone has). `postQualityFor(tier: PostQualityTier)` gives the caps for
+  anti-aliasing a phone has) in its one-output form (`taaAux: false`, ws/pass-cost: the
+  resolve writes the history only, no aux pair and no depth or velocity rejection; it still
+  reprojects by velocity). `postQualityFor(tier: PostQualityTier)` gives the caps for
   `'phone'` (the low tier), `'tablet'`, `'desktop'` and `'xr'` (see XR).
 - The uniform block is one struct, grown in place (`POST_UNIFORM_FLOATS`), and the settings
   test asserts the packed size equals the WGSL struct's for every field. `PostFrameState` is

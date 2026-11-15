@@ -1,3 +1,4 @@
+import { type CoreTargetName, coreTargetMask } from './targets';
 import type { RenderView } from './view';
 
 /**
@@ -47,6 +48,21 @@ export interface PassDesc {
    * pass whose sets do not write them (a sky, a game's own effect) leaves them as they were.
    */
   coreTargets?: boolean;
+  /**
+   * The extra targets this pass's draws write (ws/pass-cost): only these are attached, so the
+   * pass neither loads nor stores the others (a tile GPU's main cost of an extra pass). Its
+   * sets, drawables and `encode` see the narrower `aux` mask and build pipelines for it. A
+   * target first written by a later pass is cleared there; one no pass writes before a resolve
+   * (or the view's end) is cleared on its own. Default: every target the core has (none with
+   * `coreTargets: false`, which wins).
+   */
+  writes?: readonly CoreTargetName[];
+  /**
+   * Whether `encode` has anything to draw for this view (ws/pass-cost). Checked only when no
+   * set or drawable joined with work: false skips the pass, so no render pass opens for it (its
+   * clears move to the next pass that runs). Default: `encode` always draws.
+   */
+  encodeWhen?: () => boolean;
 }
 
 /**
@@ -134,8 +150,12 @@ export interface CorePass {
   readonly depthClear: number;
   /** The pass writes the core's extra targets (`PassDesc.coreTargets`). */
   readonly coreTargets: boolean;
+  /** The extra targets the pass attaches, a `CORE_TARGET` mask (`PassDesc.writes`). */
+  readonly targetMask: number;
   readonly when: (() => boolean) | null;
   readonly encode: ((pass: GPURenderPassEncoder, ctx: CorePassContext) => void) | null;
+  /** `PassDesc.encodeWhen`, else null (always). */
+  readonly encodeWhen: (() => boolean) | null;
   readonly resolve: ((encoder: GPUCommandEncoder, ctx: CoreResolveContext) => void) | null;
 }
 
@@ -191,8 +211,10 @@ export class PassList {
       reversedZ,
       depthClear: desc.depthClear ?? coreDepthFar(reversedZ),
       coreTargets: desc.coreTargets ?? true,
+      targetMask: desc.coreTargets === false ? 0 : desc.writes ? coreTargetMask(desc.writes) : 7,
       when: desc.when ?? null,
       encode: desc.encode ?? null,
+      encodeWhen: desc.encodeWhen ?? null,
       resolve: desc.resolve ?? null,
     };
     if (pass.encode && pass.resolve)

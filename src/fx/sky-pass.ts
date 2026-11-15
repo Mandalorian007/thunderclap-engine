@@ -324,6 +324,9 @@ export class SkyPass {
         id: opts.id ?? 'sky',
         after: opts.after ?? 'cutout',
         depth: 'read',
+        // ws/pass-cost: the dome writes these two; rough-metal stays out of the pass.
+        writes: ['emissive', 'velocity'],
+        encodeWhen: () => this.ready,
         encode: (pass, ctx) => this.encode(pass, ctx),
       });
     }

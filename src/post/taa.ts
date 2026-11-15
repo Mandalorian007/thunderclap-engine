@@ -295,3 +295,20 @@ fn hist_catmull_rom(uv: vec2f) -> vec3f {
   return TaaOut(vec4f(out, 1.0), vec4f(vel, z, 1.0));
 }
 `;
+
+/**
+ * The resolve's WGSL (ws/pass-cost): with `aux`, `TAA_WGSL`, it writes the aux beside the
+ * colour; without, the colour alone (`PostQuality.taaAux: false`, the low tier: one target,
+ * half the resolve's stores on a tile GPU) and velocity mode keeps its reprojection but drops
+ * no history (there is no aux to compare with).
+ */
+export function taaWgsl(aux: boolean): string {
+  return aux
+    ? TAA_WGSL
+    : TAA_WGSL.replace('  @location(1) aux: vec4f,\n', '')
+        .replace('if (keep && velocityMode) {', 'if (false) {')
+        .replace(
+          'return TaaOut(vec4f(out, 1.0), vec4f(vel, z, 1.0));',
+          'return TaaOut(vec4f(out, 1.0));',
+        );
+}

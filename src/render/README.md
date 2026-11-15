@@ -1641,6 +1641,15 @@ targets (a sky, an overlay). A resolve's `CoreResolveContext.timestamps(label, p
 `CoreTarget.timestamps`) times the passes the resolve encodes under labels of their own, and
 `CoreResolveContext.reversedZ` is the pass's depth convention.
 
+`PassDesc.writes` (ws/pass-cost; `CorePass.targetMask`) names the extra targets a pass writes:
+the pass attaches only those (and the colour), its sets and its `encode` get that `aux`, and a
+tile GPU loads and stores nothing else. Default: every target; `coreTargets: false` wins. Each
+target is cleared by the first pass of the view that attaches it; one no pass attached is
+cleared in a small pass of its own (label `core target clear`) before a resolve or at the
+view's end, so a later reader always sees a cleared target. `PassDesc.encodeWhen` (checked
+only when no set of the pass has work) returns false to skip a pass whose `encode` has nothing
+to draw this frame: no render pass opens, and the next pass clears colour and depth instead.
+
 ### Pipeline warming (ws/warm-voxel-fit)
 
 WebKit (Metal) compiles a render pipeline at its first draw. On a shader-cache miss, that draw

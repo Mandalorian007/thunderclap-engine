@@ -357,8 +357,20 @@ export class RenderCore {
   /** The core's own extra targets (when the caller gives none). */
   private readonly ownAux: (GPUTexture | null)[] = [null, null, null];
   private readonly ownAuxView: (GPUTextureView | null)[] = [null, null, null];
-  private passDescAux: GPURenderPassDescriptor;
-  private passDescAuxDepth: GPURenderPassDescriptor;
+  /**
+   * Pass descriptors by attached target mask (ws/pass-cost: a pass attaches only what it
+   * writes), without and with depth; made on first use. Index 0 is `passDesc`/`passDescDepth`.
+   */
+  private readonly descByMask: (GPURenderPassDescriptor | undefined)[] = [];
+  private readonly descByMaskDepth: (GPURenderPassDescriptor | undefined)[] = [];
+  /** The extra targets alone, the colour slot null: clears the ones no pass wrote. */
+  private readonly auxOnlyList: (GPURenderPassColorAttachment | null)[] = [null, null, null, null];
+  private readonly passDescAuxOnly: GPURenderPassDescriptor = {
+    label: 'core target clear',
+    colorAttachments: this.auxOnlyList,
+  };
+  /** This view's extra targets some pass already cleared or loaded (`CORE_TARGET` bits). */
+  private auxLive = 0;
   /** Per view index: last frame's view-projection (relative to `prevAt`), and when it was. */
   private readonly prevVP = new Float32Array(MAX_VIEWS * 16);
   private readonly prevAt = new Float64Array(MAX_VIEWS * 3);
@@ -424,8 +436,8 @@ export class RenderCore {
         clearValue: { r: 0, g: 0, b: 0, a: 0 },
       });
     }
-    this.passDescAux = this.passDesc;
-    this.passDescAuxDepth = this.passDescDepth;
+    this.descByMask[0] = this.passDesc;
+    this.descByMaskDepth[0] = this.passDescDepth;
     this.setTargets(opts.targets ?? []);
     this.passDescDepthClear = {
       label: 'core depth clear',
@@ -529,20 +541,6 @@ export class RenderCore {
     const mask = coreTargetMask(names);
     if (mask === this.auxMask) return;
     this.auxMask = mask;
-    if (mask === 0) {
-      this.passDescAux = this.passDesc;
-      this.passDescAuxDepth = this.passDescDepth;
-    } else {
-      const list: (GPURenderPassColorAttachment | null)[] = [this.colorAttachment];
-      const last = mask & 4 ? 3 : mask & 2 ? 2 : 1;
-      for (let k = 0; k < last; k++) list.push(mask & (1 << k) ? this.auxAtt[k]! : null);
-      this.passDescAux = { label: 'core pass', colorAttachments: list };
-      this.passDescAuxDepth = {
-        label: 'core pass',
-        colorAttachments: list,
-        depthStencilAttachment: this.depthAttachment,
-      };
-    }
     for (let k = 0; k < 3; k++) {
       if (mask & (1 << k)) continue;
       this.ownAux[k]?.destroy();
@@ -938,6 +936,7 @@ export class RenderCore {
     // A 'blend' draw continues an 'opaque' one: the core's own extra targets are loaded.
     if (auxMask !== 0) this.auxFor(target, target.phase === 'blend');
     let first = true;
+    this.auxLive = 0;
     let depthCleared = target.depth !== undefined && target.clearDepth !== true;
     this.viewVariant = target.variant ?? null;
     let colorCopied = false;
@@ -969,6 +968,8 @@ export class RenderCore {
           // Nothing drew before post: it still reads a cleared scene.
           this.clearOnly(encoder, target);
           first = false;
+        } else if (auxMask !== 0) {
+          this.clearPendingAux(encoder, target);
         }
         const r = this.resolveCtx;
         r.viewIndex = viewIndex;
@@ -996,8 +997,9 @@ export class RenderCore {
         first = false;
         continue;
       }
-      let work = pass.encode !== null;
-      let wantsDepth = work && pass.depth !== 'none';
+      let encodes = pass.encode !== null;
+      let work = false;
+      let wantsDepth = false;
       let readsColor = false;
       let samplesDepth = false;
       for (let i = 0; i < sets.length; i++) {
@@ -1008,10 +1010,16 @@ export class RenderCore {
         if (s.readsColor) readsColor = true;
         if (s.readsDepth) samplesDepth = true;
       }
+      // A pass's own work (ws/pass-cost): skipped when it says it has none and no set joined.
+      if (encodes && !work && pass.encodeWhen && !pass.encodeWhen()) encodes = false;
+      if (encodes) {
+        work = true;
+        if (pass.depth !== 'none') wantsDepth = true;
+      }
       if (warming) {
         // Members that draw nothing here now: their pipelines' empty first draws (`warm`).
         const wc = resolved ? (target.outputFormat ?? target.format) : target.format;
-        const wa = resolved || !pass.coreTargets ? 0 : auxMask;
+        const wa = resolved ? 0 : auxMask & pass.targetMask;
         for (let i = 0; i < sets.length; i++) {
           const s = sets[i]!;
           if (!s.warm || (s.count > 0 && s.ready !== false)) continue;
@@ -1031,8 +1039,8 @@ export class RenderCore {
       const depthFormat = wantsDepth ? this.depthFormat : undefined;
       const colorFormat = resolved ? (target.outputFormat ?? target.format) : target.format;
       const colorRect = resolved ? target.outputViewport : vp;
-      // A pass that opts out of the extra targets (ws/post-fit) draws colour and depth only.
-      const aux = resolved || !pass.coreTargets ? 0 : auxMask;
+      // A pass attaches only the extra targets it writes (ws/post-fit, ws/pass-cost).
+      const aux = resolved ? 0 : auxMask & pass.targetMask;
       if (wantsDepth && samplesDepth && pass.depth === 'read' && !depthCleared) {
         // A drawable samples depth here, so the pass must be read-only: clear depth first.
         const d = this.depthAttachment;
@@ -1058,12 +1066,17 @@ export class RenderCore {
         color.loadOp = 'load';
       }
       if (aux !== 0) {
+        // Cleared by the first pass that attaches it (not the view's first pass, which may not).
+        const live = this.auxLive;
         for (let k = 0; k < 3; k++) {
-          if (aux & (1 << k)) this.auxAtt[k]!.loadOp = first && this.auxClear[k] ? 'clear' : 'load';
+          const bit = 1 << k;
+          if (aux & bit)
+            this.auxAtt[k]!.loadOp = !(live & bit) && this.auxClear[k] ? 'clear' : 'load';
         }
+        this.auxLive = live | aux;
       }
       first = false;
-      let desc = aux !== 0 ? this.passDescAux : this.passDesc;
+      let desc = this.descFor(aux, false);
       if (wantsDepth) {
         const d = this.depthAttachment;
         d.view = target.depth ?? this.depthFor(target.width, target.height);
@@ -1079,7 +1092,7 @@ export class RenderCore {
           d.depthClearValue = pass.depthClear;
           depthCleared = true;
         }
-        desc = aux !== 0 ? this.passDescAuxDepth : this.passDescDepth;
+        desc = this.descFor(aux, true);
       }
       if (this.passLabels) desc.label = pass.label;
       desc.timestampWrites = target.timestamps?.('core', pass.id);
@@ -1105,7 +1118,7 @@ export class RenderCore {
         s.encodeDirect(enc, group, colorFormat, depthFormat, aux);
       }
       if (bundles.length > 0) this.flushBundles(enc);
-      if (pass.encode) {
+      if (encodes && pass.encode) {
         const ctx = this.passCtx;
         ctx.viewIndex = viewIndex;
         ctx.view = this.groupSize[group]! > 1 ? this.currentGroup : this.viewGroups[viewIndex]!;
@@ -1122,6 +1135,7 @@ export class RenderCore {
     }
     // Nothing drew: still clear, as a target given a clear colour expects.
     if (first && target.clear) this.clearOnly(encoder, target);
+    else if (auxMask !== 0 && !resolved) this.clearPendingAux(encoder, target);
     if (warming) {
       // Casters the shadow pass did not draw (shadows off, empty, disabled): their depth-only
       // pipelines, in the shadow map's format.
@@ -1134,6 +1148,50 @@ export class RenderCore {
     this.flushWarm(encoder);
   }
 
+  /**
+   * The pass descriptor attaching the colour and the extra targets in `aux` (laid out as
+   * `coreColorFormats`), with depth or not. Made once per mask, so a frame does not allocate.
+   */
+  private descFor(aux: number, depth: boolean): GPURenderPassDescriptor {
+    const cache = depth ? this.descByMaskDepth : this.descByMask;
+    let d = cache[aux];
+    if (!d) {
+      const list: (GPURenderPassColorAttachment | null)[] = [this.colorAttachment];
+      const last = aux & 4 ? 3 : aux & 2 ? 2 : 1;
+      for (let k = 0; k < last; k++) list.push(aux & (1 << k) ? this.auxAtt[k]! : null);
+      d = { label: 'core pass', colorAttachments: list };
+      if (depth) d.depthStencilAttachment = this.depthAttachment;
+      cache[aux] = d;
+    }
+    return d;
+  }
+
+  /**
+   * The extra targets the view clears that no pass has touched yet (ws/pass-cost: a pass
+   * attaches only what it writes): clear them in one pass of their own, so a resolve or the
+   * caller never reads last frame's.
+   */
+  private clearPendingAux(encoder: GPUCommandEncoder, target: CoreTarget): void {
+    let pending = 0;
+    for (let k = 0; k < 3; k++) {
+      const bit = 1 << k;
+      if (this.auxMask & bit && !(this.auxLive & bit) && this.auxClear[k]) pending |= bit;
+    }
+    if (pending === 0) return;
+    const list = this.auxOnlyList;
+    for (let k = 0; k < 3; k++) {
+      const att = pending & (1 << k) ? this.auxAtt[k]! : null;
+      if (att) att.loadOp = 'clear';
+      list[k + 1] = att;
+    }
+    this.auxLive |= pending;
+    const desc = this.passDescAuxOnly;
+    desc.timestampWrites = target.timestamps?.('core', 'clear');
+    encoder.beginRenderPass(desc).end();
+    this.stats.calls += 2;
+    this.stats.passes++;
+  }
+
   /** One pass that only clears the target's colour and the view's extra targets. */
   private clearOnly(encoder: GPUCommandEncoder, target: CoreTarget): void {
     const color = this.colorAttachment;
@@ -1142,7 +1200,8 @@ export class RenderCore {
     color.clearValue = target.clear!;
     const aux = this.auxMask;
     for (let k = 0; k < 3; k++) if (aux & (1 << k)) this.auxAtt[k]!.loadOp = 'clear';
-    const desc = aux !== 0 ? this.passDescAux : this.passDesc;
+    this.auxLive = aux;
+    const desc = this.descFor(aux, false);
     if (this.passLabels) desc.label = 'core clear';
     desc.timestampWrites = target.timestamps?.('core', 'clear');
     encoder.beginRenderPass(desc).end();

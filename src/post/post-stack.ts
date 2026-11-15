@@ -32,7 +32,7 @@ import {
   UP_WGSL,
 } from './shaders';
 import { SSR_WGSL } from './ssr';
-import { TAA_AUX_FORMAT, TAA_WGSL, Taa, taaReprojection } from './taa';
+import { TAA_AUX_FORMAT, TAA_WGSL, Taa, taaReprojection, taaWgsl } from './taa';
 
 const HDR: GPUTextureFormat = 'rgba16float';
 const AO: GPUTextureFormat = 'r8unorm';
@@ -62,7 +62,7 @@ interface InputGroups {
   ssr: GPUBindGroup | null;
   motionBlur: GPUBindGroup | null;
   /**
-   * TAA resolve groups (only on the raw colour's groups): `taa[slot * 2 + read]` reads history
+   * TAA resolve groups (only on the raw colour's groups): `taa[slot * 2 + read]` (one-output: `+ 2 * TAA_HISTORY_SLOTS`) reads history
    * `read` of TAA history slot `slot` (ws/xr-taa: one slot per eye).
    */
   taa: (GPUBindGroup | null)[];
@@ -230,6 +230,10 @@ export class PostStack implements PostProcessor {
   private readonly outline: DepthPass;
   /** Post 3 (ws/post-3): the TAA resolve, the half-res SSR march and the motion-blur gather. */
   private readonly taaPass: DepthPass;
+  /** The one-output resolve (`quality.taaAux: false`, ws/pass-cost), made on first use. */
+  private taaPass1: DepthPass | null = null;
+  /** The last TAA resolve wrote one target: its histories have no aux to read. */
+  private taaSingle = false;
   private readonly ssrPass: DepthPass;
   private readonly motionBlurPass: DepthPass;
   /** The auto-exposure compute passes, made on the first frame in `'auto'` mode. */
@@ -681,8 +685,14 @@ export class PostStack implements PostProcessor {
     if (wantOutline && !this.outlineTex) this.allocOutline();
     if (wantFxaa && (outW !== this.fxaaWidth || outH !== this.fxaaHeight))
       this.allocFxaa(outW, outH);
+    const single = q.taaAux === false;
+    if (wantTaa && single !== this.taaSingle) {
+      // The aux pair was not written in one-output mode: start every history over.
+      this.taaSingle = single;
+      this.invalidateHistories();
+    }
     const hist = wantTaa ? this.historyFor(viewport) : null;
-    if (hist && !hist.tex) this.allocHistory(hist);
+    if (hist && (!hist.tex || (!single && !hist.auxTex))) this.allocHistory(hist, !single);
     if (wantSsr && !this.ssrTex) this.allocSsr();
     if (wantMotionBlur && !this.motionBlurTex) this.allocMotionBlur();
     if (wantAuto && !this.exposurePasses) this.exposurePasses = new ExposurePasses(r);
@@ -789,10 +799,16 @@ export class PostStack implements PostProcessor {
       // This view's own history (ws/xr-taa): each eye reads and writes its slot's pair only.
       const read = hist.index;
       const write = 1 - read;
-      const group = this.taaGroup(raw, depthView, hist, read);
-      this.upload(encoder, this.taaPass.uniformBuffer, this.taaPass);
-      this.taaExtra[0] = hist.auxViews![write]!;
-      this.taaPass.encode(encoder, hist.views![write]!, group, timer?.pass('taa'), this.taaExtra);
+      const group = this.taaGroup(raw, depthView, hist, read, single);
+      if (single) {
+        const pass = this.taaPass1!;
+        this.upload(encoder, pass.uniformBuffer, pass);
+        pass.encode(encoder, hist.views![write]!, group, timer?.pass('taa'));
+      } else {
+        this.upload(encoder, this.taaPass.uniformBuffer, this.taaPass);
+        this.taaExtra[0] = hist.auxViews![write]!;
+        this.taaPass.encode(encoder, hist.views![write]!, group, timer?.pass('taa'), this.taaExtra);
+      }
       hist.index = write;
       hist.valid = true;
       hist.used = ++this.taaUse;
@@ -1103,7 +1119,7 @@ export class PostStack implements PostProcessor {
    * The two scene-size TAA history textures of `h` (ws/post-3) and their aux pair. The first
    * slot keeps the ws/post-3 labels (`post-taa-history-0/1`); slot `n` appends `-v<n>`.
    */
-  private allocHistory(h: TaaHistory): void {
+  private allocHistory(h: TaaHistory, withAux: boolean): void {
     const device = this.renderer.device;
     const usage = GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING;
     const size = [this.width, this.height];
@@ -1111,14 +1127,18 @@ export class PostStack implements PostProcessor {
     const tag = n > 0 ? `-v${n}` : '';
     const tex = (label: string, format: GPUTextureFormat): GPUTexture =>
       device.createTexture({ label: label + tag, size, format, usage });
-    const a = tex('post-taa-history-0', HDR);
-    const b = tex('post-taa-history-1', HDR);
-    h.tex = [a, b];
-    h.views = [a.createView(), b.createView()];
-    const auxA = tex('post-taa-aux-0', TAA_AUX_FORMAT);
-    const auxB = tex('post-taa-aux-1', TAA_AUX_FORMAT);
-    h.auxTex = [auxA, auxB];
-    h.auxViews = [auxA.createView(), auxB.createView()];
+    if (!h.tex) {
+      const a = tex('post-taa-history-0', HDR);
+      const b = tex('post-taa-history-1', HDR);
+      h.tex = [a, b];
+      h.views = [a.createView(), b.createView()];
+    }
+    if (withAux && !h.auxTex) {
+      const auxA = tex('post-taa-aux-0', TAA_AUX_FORMAT);
+      const auxB = tex('post-taa-aux-1', TAA_AUX_FORMAT);
+      h.auxTex = [auxA, auxB];
+      h.auxViews = [auxA.createView(), auxB.createView()];
+    }
     h.index = 0;
     h.valid = false;
     this.invalidateGroups();
@@ -1349,7 +1369,7 @@ export class PostStack implements PostProcessor {
         dof: null,
         ssr: null,
         motionBlur: null,
-        taa: new Array<GPUBindGroup | null>(TAA_HISTORY_SLOTS * 2).fill(null),
+        taa: new Array<GPUBindGroup | null>(TAA_HISTORY_SLOTS * 4).fill(null),
       };
       groups.set(scene, g);
     }
@@ -1411,17 +1431,27 @@ export class PostStack implements PostProcessor {
     depth: GPUTextureView,
     h: TaaHistory,
     read: number,
+    single: boolean,
   ): GPUBindGroup {
     const g = this.groupsFor(raw);
-    const key = this.histories.indexOf(h) * 2 + read;
+    const key = this.histories.indexOf(h) * 2 + read + (single ? TAA_HISTORY_SLOTS * 2 : 0);
     let group = g.taa[key];
     if (!group) {
-      // Without a velocity target the raw colour stands in (the shader does not read it).
-      group = this.taaPass.createBindGroup(depth, [
+      // Without a velocity target the raw colour stands in (the shader does not read it); the
+      // one-output resolve reads no aux, so its history stands in for that.
+      if (single && !this.taaPass1) {
+        this.taaPass1 = new DepthPass(this.renderer, {
+          label: 'post-taa-1',
+          wgsl: taaWgsl(false),
+          format: HDR,
+          textures: 4,
+        });
+      }
+      group = (single ? this.taaPass1! : this.taaPass).createBindGroup(depth, [
         raw,
         h.views![read]!,
         this.cur.taaVelocity ?? raw,
-        h.auxViews![read]!,
+        single ? h.views![read]! : h.auxViews![read]!,
       ]);
       g.taa[key] = group;
     }
@@ -1446,6 +1476,7 @@ export class PostStack implements PostProcessor {
     this.dof.destroy();
     this.outline.destroy();
     this.taaPass.destroy();
+    this.taaPass1?.destroy();
     this.ssrPass.destroy();
     this.motionBlurPass.destroy();
     this.fxaa.destroy();
