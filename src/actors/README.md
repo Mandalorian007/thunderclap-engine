@@ -47,7 +47,7 @@ actors.prepare(encoder, [view], performance.now() / 1000);
 | `actors.prepare(encoder, views, time, timestampWrites?)` | uploads, resets the indirect counts and runs the pose pass (timed with the writes given, for example `GpuTimer.pass('actors')`) |
 | `actors.lodScale`, `actors.vertexCap` (`opts.lodScale`, `opts.vertexCap`) | scale every LOD distance, and cap the vertices of actors per view (an actor past it draws its model's coarsest mesh); read each `prepare`, so a frame governor may set them |
 | `opts.tableWords`, `actors.writeTable(data, at?)` | a game table bound to the pose pass at group 0 binding 7, read with `actor_table_word(i)` / `actor_table_f32(i)` |
-| `opts.asyncPipeline`, `actors.ready` | make the pose pipeline with `createComputePipelineAsync`; the actors draw nothing until `ready` settles |
+| `opts.asyncPipeline`, `actors.ready` | make the pose pipeline with `createComputePipelineAsync`; the actors draw nothing until `ready` settles; the pose pipeline gets an empty first dispatch at load when `core.warming` (ws/forge-asks-fit) |
 | `opts.showLive` | false keeps every model's draws in the body's bundle from the start (no re-record on a model's first actor); `ActorDrawSetDesc.showLive` does the same for one set |
 | `actors.poseCpu(slot, out, 'world' or 'skin', time?)` | the same pose on the CPU, for hit tests, attachments and tests |
 | `actors.bones`, `actors.args`, `drawOf(model, lod)` | the GPU outputs, for readback or a game's own pass |

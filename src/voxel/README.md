@@ -224,7 +224,11 @@ Without them a section meshes the same as before.
   growing plant.
 - `solid`, `part` and `twin` are listed in `VOXEL_VERTEX_OPTIONAL`.
 - `SectionMeshOptions.insetFields` (ws/warm-voxel-fit) gives the cells `insets` names another
-  value for some cell fields, for example `{ ripe: 0 }`: a growing plant is not ripe yet.
+  value for some cell fields, for example `{ ripe: 0 }`: a growing plant is not ripe yet. A
+  field may instead read bits of the override value (`InsetFieldBits`, ws/forge-asks-fit):
+  `{ ripe: { shift: 5, bits: 3 } }` takes the ripeness from above the inset's low 5 bits.
+- A cross block standing in a liquid (`BlockDef.liquid`) keeps its inset in `cellInset`
+  although its cell meshes as the liquid.
 - `SectionMesher.cellInset` is the inset each padded cell of the last section meshed with (its
   block's, or its `insets` override), for a game that adds quads of its own around the mesh.
 - A vertex field with `overlaps: true` (and a `word` and `shift`) is a union member: it shares
@@ -263,6 +267,9 @@ Without them a section meshes the same as before.
 has room (`workerMesherPort(worker)`, or `inThreadMesherPort(codec)` without Workers), and
 survives failures: a job the mesher throws on is counted (`SectionMeshPoolErrors`), a dead
 Worker is replaced and its jobs rerun once. `stats` is a `SectionMeshPoolStats`.
+`meshOptions` (`PoolMeshOptions`: `crossLod`, `tieredPadding`, `partsCap`, `partsOrder`,
+`insetFields`; ws/forge-asks-fit) go with every job; `pool.setMeshOptions` changes them for the
+jobs after it (queue sections again to remesh them).
 
 **Picking.** `raycastCells(probe, ox, oy, oz, dx, dy, dz, maxDist, out)` is the DDA over a probe
 that answers `RAY_PASS`, `RAY_HIT` or `RAY_UNKNOWN` per cell; `sectionRayProbe(store, hits)`
@@ -273,7 +280,8 @@ unloaded world). Both allocate nothing per call.
 
 `createVoxelWorld(core, opts)` (`VoxelWorldOptions`) returns a `VoxelWorld` that draws a streamed world on the retained
 render core (`createRenderCore`). It owns a `SectionStore` (or takes `store`), a
-`SectionMeshPool` over `workers` (`MesherPort`s; none means one in-thread mesher), one vertex and
+`SectionMeshPool` over `workers` (`MesherPort`s; none means one in-thread mesher; `meshOptions`
+are the pool's), one vertex and
 one instance arena, and three static, GPU-culled `DrawSet`s (`sets`): `opaque` (back faces
 culled, the opaque pass), `foliage` (both sides, the cutout pass) and `liquid` (both sides,
 alpha-blended in the transparent pass, unsorted: depth is read, not written). A section's three
