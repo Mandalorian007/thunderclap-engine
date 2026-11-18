@@ -38,6 +38,11 @@ export interface WarmTarget {
    * pass, after `setPipeline`); returns the GPU calls it made.
    */
   bind?: (pass: GPURenderPassEncoder) => number;
+  /**
+   * Called before encoding: false drops the warm (its owner was destroyed before the next
+   * `encode`, so its bind groups may name destroyed buffers). Default: always encode.
+   */
+  live?: () => boolean;
 }
 
 /** What a compute pipeline's empty dispatch binds (`warmCompute`). */
@@ -62,6 +67,7 @@ interface WarmJob {
   color: (GPUTextureFormat | null)[];
   depth: GPUTextureFormat | undefined;
   samples: number;
+  live: (() => boolean) | undefined;
   run: (pass: GPURenderPassEncoder) => number;
 }
 
@@ -160,7 +166,7 @@ export class PipelineWarmer {
     const samples = target.sampleCount ?? 1;
     const depth = target.depth;
     const key = `${color.join(',')}|${depth ?? ''}|${samples}`;
-    this.queue.push({ key, color, depth, samples, run });
+    this.queue.push({ key, color, depth, samples, live: target.live, run });
   }
 
   /** A scratch buffer to bind at a vertex slot for an empty draw. */
@@ -208,6 +214,14 @@ export class PipelineWarmer {
     const q = this.queue;
     const cq = this.computeQueue;
     if (q.length === 0 && cq.length === 0) return 0;
+    // Drop warms whose owner was destroyed since they were queued: a submit naming a destroyed
+    // buffer fails validation (a pass made and destroyed between two frames).
+    let kept = 0;
+    for (let i = 0; i < q.length; i++) {
+      const j = q[i]!;
+      if (!j.live || j.live()) q[kept++] = j;
+    }
+    q.length = kept;
     let calls = 0;
     if (cq.length > 0) {
       const pass = encoder.beginComputePass({ label: 'warm' });

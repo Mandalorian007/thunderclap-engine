@@ -276,6 +276,37 @@ describe('pipeline warming (ws/warm-voxel-fit)', () => {
     expect(fake.errors).toEqual([]);
   });
 
+  it('a fullscreen pass destroyed before the next encode drops its queued warm', () => {
+    // A scene opened and closed in one task: the pass's uniform buffer is gone before any frame
+    // encodes the warm, and a warm naming it would fail the submit.
+    const fake = createFakeDevice();
+    const device = fake.device as unknown as GPUDevice;
+    const sampler = device.createSampler();
+    const view = device
+      .createTexture({ size: [1, 1], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING })
+      .createView();
+    const dead = new FullscreenPass(
+      device,
+      { label: 'gone', wgsl: '', targets: ['rgba16float'], textures: 1, uniformBytes: 16 },
+      sampler,
+      view,
+    );
+    const kept = new FullscreenPass(
+      device,
+      { label: 'kept', wgsl: '', targets: ['rgba16float'], textures: 1, uniformBytes: 16 },
+      sampler,
+      view,
+    );
+    dead.destroy();
+    const w = pipelineWarmer(device);
+    expect(w.pending).toBe(2);
+    w.encode(fake.device.createCommandEncoder() as unknown as GPUCommandEncoder);
+    expect(w.warmed).toBe(1);
+    expect(w.pending).toBe(0);
+    expect(fake.errors).toEqual([]);
+    kept.destroy();
+  });
+
   it('two colour attachments of one format get distinct scratch views', () => {
     const fake = createFakeDevice();
     const device = fake.device as unknown as GPUDevice;

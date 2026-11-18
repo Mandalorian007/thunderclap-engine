@@ -55,6 +55,8 @@ export class FullscreenPass {
   private readonly warmTarget: WarmTarget;
   /** Warmed or drawn: `warm()` does nothing. */
   private primed = false;
+  /** `destroy()` ran: a warm still queued is dropped. */
+  private dead = false;
 
   constructor(
     device: GPUDevice,
@@ -120,6 +122,7 @@ export class FullscreenPass {
             return 1;
           }
         : undefined,
+      live: () => !this.dead,
     };
     if (!desc.lazy) this.warm();
   }
@@ -193,6 +196,7 @@ export class FullscreenPass {
   }
 
   destroy(): void {
+    this.dead = true;
     this.bindings?.destroy();
   }
 }

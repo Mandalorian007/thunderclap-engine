@@ -4,6 +4,8 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 
 ## Unreleased
 
+- A `FullscreenPass` destroyed before the next frame no longer fails that frame's submit (ws/warm-live; reported by The Last Rune, whose altar scene opened and closed in one task logged `[Buffer "pass:storm-sim-uniforms"] used in submit while destroyed`). *Fixed* (`render`): a pass queues its pipeline warm when made (2.0), and the warm binds the pass's uniform buffer; a pass destroyed before the warmer's next `encode` left a job naming a destroyed buffer. *Added* (`render`): `WarmTarget.live?: () => boolean`, as `ComputeWarmTarget.live`: a render warm whose `live()` is false is dropped at `encode`. `FullscreenPass` sets it. Test: `a fullscreen pass destroyed before the next encode drops its queued warm`.
+
 ## 2.0.2 (2026-11-18)
 
 - `SnapshotRenderer.capture` returns the whole frame on WebKit (ws/snapshot-webkit; reported by The Last Rune, whose Codex gem portraits were blank on macOS Safari 27 and half black on iPad). It called `transferToImageBitmap()` on the WebGPU `OffscreenCanvas` in the same task as the submit, which WebKit answers with an incomplete image. It now copies the frame into a 2D `OffscreenCanvas` with `drawImage` in that task and returns that canvas's bitmap. Signature and pixels on Chromium are unchanged. *Fixed* (`render`).
