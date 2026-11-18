@@ -4,6 +4,8 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 
 ## Unreleased
 
+## 2.0.3 (2026-11-18)
+
 - A `FullscreenPass` destroyed before the next frame no longer fails that frame's submit (ws/warm-live; reported by The Last Rune, whose altar scene opened and closed in one task logged `[Buffer "pass:storm-sim-uniforms"] used in submit while destroyed`). *Fixed* (`render`): a pass queues its pipeline warm when made (2.0), and the warm binds the pass's uniform buffer; a pass destroyed before the warmer's next `encode` left a job naming a destroyed buffer. *Added* (`render`): `WarmTarget.live?: () => boolean`, as `ComputeWarmTarget.live`: a render warm whose `live()` is false is dropped at `encode`. `FullscreenPass` sets it. Test: `a fullscreen pass destroyed before the next encode drops its queued warm`.
 
 ## 2.0.2 (2026-11-18)
