@@ -4,6 +4,8 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 
 ## Unreleased
 
+- `SnapshotRenderer.capture` returns the whole frame on WebKit (ws/snapshot-webkit; reported by The Last Rune, whose Codex gem portraits were blank on macOS Safari 27 and half black on iPad). It called `transferToImageBitmap()` on the WebGPU `OffscreenCanvas` in the same task as the submit, which WebKit answers with an incomplete image. It now copies the frame into a 2D `OffscreenCanvas` with `drawImage` in that task and returns that canvas's bitmap. Signature and pixels on Chromium are unchanged. *Fixed* (`render`).
+
 ## 2.0.1 (2026-11-15)
 
 - The Rust crates go to 0.15.1 (tag `server-v0.15.1`), paired with this release; the store lock fix above is their only change.

@@ -12,6 +12,10 @@
  * ```
  *
  * The logical space equals the pixel size, so a draw at (x, y) lands on that pixel.
+ *
+ * `capture` copies the frame into a 2D canvas in the same task and returns that canvas's bitmap.
+ * It never calls `transferToImageBitmap()` on the WebGPU canvas: on WebKit that bitmap comes
+ * back before the frame is complete (blank on macOS Safari 27, top half missing on iPad).
  */
 import type { Frame } from './frame';
 import { Renderer } from './renderer';
@@ -28,6 +32,8 @@ export class SnapshotRenderer {
   readonly height: number;
   private readonly canvas: OffscreenCanvas;
   private readonly context: GPUCanvasContext;
+  /** The 2D canvas each capture is copied into (see the module note). */
+  private readonly copy: OffscreenCanvasRenderingContext2D;
 
   constructor(device: GPUDevice, format: GPUTextureFormat, opts: SnapshotOptions) {
     this.width = Math.max(1, Math.floor(opts.width));
@@ -42,6 +48,9 @@ export class SnapshotRenderer {
       { logicalWidth: this.width, logicalHeight: this.height, initialInstances: 64 },
     );
     this.renderer.resize(this.width, this.height);
+    const copy = new OffscreenCanvas(this.width, this.height).getContext('2d');
+    if (!copy) throw new Error('SnapshotRenderer: no 2d context for the capture copy');
+    this.copy = copy;
   }
 
   /**
@@ -52,7 +61,9 @@ export class SnapshotRenderer {
     const frame = this.renderer.beginFrame(time, 1 / 60);
     draw(frame);
     this.renderer.endFrame();
-    return this.canvas.transferToImageBitmap();
+    // Same task as the submit, while the frame is still the WebGPU canvas's current image.
+    this.copy.drawImage(this.canvas, 0, 0);
+    return this.copy.canvas.transferToImageBitmap();
   }
 
   destroy(): void {
