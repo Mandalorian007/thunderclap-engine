@@ -4,6 +4,8 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 
 ## Unreleased
 
+## 2.0.4 (2026-11-19)
+
 - The renderer survives a canvas WebKit left unconfigured (reported by The Last Rune: on iPad, coming back to a tab that sat in the background almost always showed the crash card). WebKit can drop a running page's WebGPU canvas configuration, and `getCurrentTexture` then throws `InvalidStateError: canvas is not configured` on every frame. *Fixed* (`render`): `Renderer.endFrame` catches that error, configures the context again with the renderer's device and format and the alpha mode the context had when the renderer was made (`getConfiguration()`, else `'opaque'`), and presents. Any other error still throws. Tests: `an unconfigured canvas (WebKit after a background tab)` in `renderer.test.ts`.
 
 ## 2.0.3 (2026-11-18)
