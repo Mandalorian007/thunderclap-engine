@@ -13,6 +13,7 @@ import {
   type FakeDevice,
   type FakeTexture,
   type FakeView,
+  fakeCanvasContext,
   fakeRendererGpu,
   type PassCommand,
 } from './fake-gpu';
@@ -2186,5 +2187,67 @@ describe('depth hooks (ws/render-hooks)', () => {
     expect([second.width, second.height]).toEqual([r.width, r.height]);
     r.destroy();
     expect(second.destroyed).toBe(true);
+  });
+});
+
+describe('an unconfigured canvas (WebKit after a background tab)', () => {
+  function contextThatLosesItsConfig(fake: FakeDevice) {
+    const base = fakeCanvasContext(fake);
+    let configured = true;
+    const configs: GPUCanvasConfiguration[] = [];
+    const ctx = {
+      getConfiguration: () => (configured ? { alphaMode: 'premultiplied' } : null),
+      getCurrentTexture: () => {
+        if (!configured) {
+          throw Object.assign(new Error('canvas is not configured'), { name: 'InvalidStateError' });
+        }
+        return base.getCurrentTexture();
+      },
+      configure: (c: GPUCanvasConfiguration) => {
+        configs.push(c);
+        configured = true;
+      },
+      unconfigure: () => {
+        configured = false;
+      },
+    };
+    return { ctx, configs };
+  }
+
+  it('configures the context again with its device, format and alpha mode, and the frame goes on', () => {
+    const fake = createFakeDevice();
+    const { ctx, configs } = contextThatLosesItsConfig(fake);
+    const r = new Renderer({
+      device: fake.device,
+      context: ctx as unknown as GPUCanvasContext,
+      format: 'bgra8unorm',
+    });
+    r.beginFrame(0, 1 / 60);
+    r.endFrame();
+    ctx.unconfigure();
+    r.beginFrame(1 / 60, 1 / 60);
+    expect(() => r.endFrame()).not.toThrow();
+    expect(configs).toEqual([
+      { device: fake.device, format: 'bgra8unorm', alphaMode: 'premultiplied' },
+    ]);
+    r.beginFrame(2 / 60, 1 / 60);
+    r.endFrame();
+    expect(configs).toHaveLength(1);
+  });
+
+  it('still throws any other getCurrentTexture error', () => {
+    const fake = createFakeDevice();
+    const ctx = {
+      getCurrentTexture: () => {
+        throw new TypeError('boom');
+      },
+    };
+    const r = new Renderer({
+      device: fake.device,
+      context: ctx as unknown as GPUCanvasContext,
+      format: 'bgra8unorm',
+    });
+    r.beginFrame(0, 1 / 60);
+    expect(() => r.endFrame()).toThrow('boom');
   });
 });

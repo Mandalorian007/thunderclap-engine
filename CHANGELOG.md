@@ -4,6 +4,8 @@ Versions follow semver from `engine-v1.0.0`. `pnpm release <version> [--tag] [--
 
 ## Unreleased
 
+- The renderer survives a canvas WebKit left unconfigured (reported by The Last Rune: on iPad, coming back to a tab that sat in the background almost always showed the crash card). WebKit can drop a running page's WebGPU canvas configuration, and `getCurrentTexture` then throws `InvalidStateError: canvas is not configured` on every frame. *Fixed* (`render`): `Renderer.endFrame` catches that error, configures the context again with the renderer's device and format and the alpha mode the context had when the renderer was made (`getConfiguration()`, else `'opaque'`), and presents. Any other error still throws. Tests: `an unconfigured canvas (WebKit after a background tab)` in `renderer.test.ts`.
+
 ## 2.0.3 (2026-11-18)
 
 - A `FullscreenPass` destroyed before the next frame no longer fails that frame's submit (ws/warm-live; reported by The Last Rune, whose altar scene opened and closed in one task logged `[Buffer "pass:storm-sim-uniforms"] used in submit while destroyed`). *Fixed* (`render`): a pass queues its pipeline warm when made (2.0), and the warm binds the pass's uniform buffer; a pass destroyed before the warmer's next `encode` left a job naming a destroyed buffer. *Added* (`render`): `WarmTarget.live?: () => boolean`, as `ComputeWarmTarget.live`: a render warm whose `live()` is false is dropped at `encode`. `FullscreenPass` sets it. Test: `a fullscreen pass destroyed before the next encode drops its queued warm`.

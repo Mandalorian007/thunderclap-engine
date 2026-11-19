@@ -524,6 +524,8 @@ export class Renderer implements FrameSink {
   readonly context: GPUCanvasContext;
   /** Swapchain format. */
   readonly format: GPUTextureFormat;
+  /** The canvas's alpha mode when the renderer was made, for `swapchainTexture`'s reconfigure. */
+  private readonly alphaMode: GPUCanvasAlphaMode;
   /**
    * Formats of the scene pass's two base colour targets (HDR colour, HDR emissive). A target
    * with aux attachments adds more after them: build a pipeline's target list with
@@ -843,6 +845,7 @@ export class Renderer implements FrameSink {
     this.device = gpu.device;
     this.context = gpu.context;
     this.format = gpu.format;
+    this.alphaMode = gpu.context.getConfiguration?.()?.alphaMode ?? 'opaque';
     this.logicalWidth = opts.logicalWidth ?? 1920;
     this.logicalHeight = opts.logicalHeight ?? 1080;
     this.camera = Camera.ortho2d(this.logicalWidth, this.logicalHeight);
@@ -2087,6 +2090,26 @@ export class Renderer implements FrameSink {
   }
 
   /**
+   * The canvas's current texture. WebKit can leave the context unconfigured under a running page
+   * (iPad Safari after the tab sat in the background), and `getCurrentTexture` then throws
+   * `InvalidStateError: canvas is not configured`: every frame from then on threw. The context
+   * is configured again on this device, format and alpha mode, once, and the frame goes on.
+   */
+  private swapchainTexture(): GPUTexture {
+    try {
+      return this.context.getCurrentTexture();
+    } catch (err) {
+      if ((err as { name?: unknown } | null)?.name !== 'InvalidStateError') throw err;
+      this.context.configure({
+        device: this.device,
+        format: this.format,
+        alphaMode: this.alphaMode,
+      });
+      return this.context.getCurrentTexture();
+    }
+  }
+
+  /**
    * Finish the frame: `render(frame, renderer.camera)` when nothing rendered yet, then the
    * post stack (or the built-in present) from `renderer.target` to the swapchain, and submit.
    * `{ present: false }` skips the post stack and the swapchain (no `getCurrentTexture`): the
@@ -2115,7 +2138,7 @@ export class Renderer implements FrameSink {
     const sampled = this.sampled;
 
     if (opts?.present !== false) {
-      const out = this.context.getCurrentTexture().createView();
+      const out = this.swapchainTexture().createView();
       if (this.post) {
         const inputs = this.postInputs;
         inputs.time = this.frame.time;
